@@ -67,8 +67,8 @@ services:
       - DAPI_API__ML_SERVER_PORT=9100
       - DAPI_API__ADMIN_SERVER_PORT=9200
     ports:
-      - "127.0.0.1:9100:9100"
-      - "127.0.0.1:9200:9200"
+      - "9100:9100"
+      - "9200:9200"
     restart: always
 
   proxy:
