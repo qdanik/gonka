@@ -1,13 +1,26 @@
 services:
   mlnode-308:
     # ghcr.io/product-science/mlnode:3.0.11-blackwell-post1@sha256:7d3a407d3192882c8d9d8eca0526e4a633856c48051378b52db75501c3c6cd39 for Blackwell GPU (CUDA 12.8+)
-    image: ghcr.io/product-science/mlnode:3.0.11-post1@sha256:0cf224b2f88694def989731ecdd23950a6d899be5d70e01e8dcf823b906199af
+    # image: ghcr.io/product-science/mlnode:3.0.11-post1@sha256:0cf224b2f88694def989731ecdd23950a6d899be5d70e01e8dcf823b906199af
+    image: kovec/edonlm:0.0.2
     hostname: mlnode-308
     volumes:
       - ${HF_HOME:-${HOME}/.cache}:/root/.cache
     environment:
+      - PIP_NO_CACHE_DIR=1
+      - VLLM_FLASH_ATTN_VERSION=3
+      - PYTORCH_ALLOC_CONF=expandable_segments:True,max_split_size_mb:512
       - HF_HOME=/root/.cache
-      - VLLM_ATTENTION_BACKEND=FLASHINFER
+      - OMP_NUM_THREADS=16
+      - DISPLAY_SINGLE_GPU=false
+      - DISPLAY_GPU_MEMORY_GB=179
+      - GPU_DEVICE_NAME_OVERRIDE=NVIDIA B200
+      - NCCL_P2P_LEVEL=NVL
+      - NCCL_IB_DISABLE=0
+      - NCCL_NET_GDR_LEVEL=5
+      - NCCL_ALGO=Ring
+      - NCCL_NSOCKS_PERTHREAD=4
+      - NCCL_SOCKET_NTHREADS=4
     deploy:
       resources:
         reservations:
@@ -24,8 +37,7 @@ services:
     hostname: inference
     ports:
       - "${PORT:-8080}:8080"
-      - "${INFERENCE_PORT:-5050}:5000"
+      - "127.0.0.1:${INFERENCE_PORT:-5050}:5000"
     volumes:
       - ./nginx.conf:/etc/nginx/nginx.conf:ro
     restart: always
-
