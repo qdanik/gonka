@@ -32,13 +32,13 @@ To address this, we built **Testermint**, a Kotlin-based test harness that:
 ### Running the Full Test Suite
 
 Before running tests, you’ll need to build the required Docker containers for both the Node (blockchain) and the API. This is done using the `make all` command.
-> 🔥 For MacOS 26.1 Docker Desktop needs to have Docker VMM enabled: Docker Desktop -> Settings -> General -> Virtual Machine Options -> Docker VMM -> Apply & restart
+> For MacOS 26.1 Docker Desktop needs to have Docker VMM enabled: Docker Desktop -> Settings -> General -> Virtual Machine Options -> Docker VMM -> Apply & restart
 
 To execute the full Testermint integration test suite:
 
 ```bash
 cd local-test-net
-./local-test-net/stop-rebuild.sh
+./stop-rebuild.sh
 cd ..
 make run-tests
 ```
@@ -60,7 +60,7 @@ To write or debug tests interactively:
 
    ```bash
    cd local-test-net
-   ./local-test-net/stop-rebuild.sh
+   ./stop-rebuild.sh
    ```
 
    This ensures the necessary Docker containers are built and ready.
