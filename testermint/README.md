@@ -192,7 +192,7 @@ Testermint logs are comprehensive and include:
 - API container output
 - Test execution logs
 
-> 🔥 Inference mock output is *not currently logged*.
+> Inference mock output is *not currently logged*.
 
 ### Log Location
 
