@@ -1356,19 +1356,27 @@ func (b *Broker) queryNodeStatus(node Node, state NodeState) (*statusQueryResult
 	logging.Info("queryNodeStatus. Queried node status", types.Nodes, "nodeId", nodeId, "currentStatus", currentStatus.String(), "prevStatus", prevStatus.String())
 
 	if currentStatus == types.HardwareNodeStatus_INFERENCE {
-		hctx, hcancel := context.WithTimeout(context.Background(), inferenceHealthRequestTimeout)
-		defer hcancel()
-		ok, err := client.InferenceHealth(hctx)
-		if !ok || err != nil {
-			currentStatus = types.HardwareNodeStatus_FAILED
-			logging.Info("queryNodeStatus. Node inference health check failed", types.Nodes, "nodeId", nodeId, "currentStatus", currentStatus.String(), "prevStatus", prevStatus.String(), "err", err)
+		// Check if PoC V2 is running inside inference (V2 runs within vLLM)
+		pctx, pcancel := context.WithTimeout(context.Background(), nodeStatusRequestTimeout)
+		defer pcancel()
+		if pocStatus, err := client.GetPowStatusV2(pctx); err != nil {
+			logging.Debug("queryNodeStatus. GetPowStatusV2 failed", types.Nodes, "nodeId", nodeId, "error", err)
+		} else if pocStatus != nil && (pocStatus.Status == "GENERATING" || pocStatus.Status == "VALIDATING") {
+			logging.Debug("queryNodeStatus. PoC V2 running inside inference, reporting POC status",
+				types.Nodes, "nodeId", nodeId, "pocStatus", pocStatus.Status)
+			currentStatus = types.HardwareNodeStatus_POC
+		}
+		// Health check only if still INFERENCE (not overridden to POC)
+		if currentStatus == types.HardwareNodeStatus_INFERENCE {
+			hctx, hcancel := context.WithTimeout(context.Background(), inferenceHealthRequestTimeout)
+			defer hcancel()
+			ok, err := client.InferenceHealth(hctx)
+			if !ok || err != nil {
+				currentStatus = types.HardwareNodeStatus_FAILED
+				logging.Info("queryNodeStatus. Node inference health check failed", types.Nodes, "nodeId", nodeId, "currentStatus", currentStatus.String(), "prevStatus", prevStatus.String(), "err", err)
+			}
 		}
 	}
-
-	// TODO: probably should also check PoC sub status here
-	//  but before implementing it, need to check we treat them correctly during reconciliation
-	//  for example I think we expect IDLE instead of STOPPED for PoC nodes
-	//  which is actually wrong
 
 	return &statusQueryResult{
 		PrevStatus:    prevStatus,
