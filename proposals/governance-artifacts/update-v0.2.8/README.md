@@ -27,7 +27,7 @@ source config.env && docker compose -f docker-compose.postgres.yml up -d
 
 ## Testing
 
-The on-chain upgrade from version `v0.2.7` to `v0.2.8` has been successfully deployed and verified on the testnet.
+The on-chain upgrade from version `v0.2.7` to `v0.2.8` has been successfully deployed and verified on the testnet, including the PoC V2 parameter migration.
 
 Reviewers are encouraged to request access to the testnet environment to validate the upgrade or test the on-chain upgrade process on their own private testnets.
 
@@ -38,6 +38,7 @@ The on-chain migration logic is defined in [`upgrades.go`](https://github.com/go
 Migration tasks:
 - **Burn extra community coins**: Burns all coins from the `pre_programmed_sale` module account (`gonka1rmac644w5hjsyxfggz6e4empxf02vegkt3ppec`) which were inadvertently created during genesis.
 - **Precompute BLS slot keys**: Generates and stores precomputed BLS slot public keys for the current epoch to enable the new optimized verification logic (see PR #609).
+- **Set PoC V2 migration parameters**: Configures dual-mode migration with `ConfirmationPocV2Enabled=true` and `PocV2Enabled=false`, sets model ID to `Qwen/Qwen3-235B-A22B-Instruct-2507-FP8`, sequence length to 1024, and statistical test thresholds for V2 validation.
 
 ## Changes
 
@@ -111,3 +112,10 @@ Addresses multiple security vulnerabilities:
 
 ### [PR #547](https://github.com/gonka-ai/gonka/pull/547) Updated script snippets and MacOS Tahoe 26.1 Docker settings
 *   Updates documentation and adds Docker settings for running testermint locally on MacOS Tahoe.
+
+### [PR #618](https://github.com/gonka-ai/gonka/pull/618) PoC v2 & Offchain PoC data
+*   Integrates PoC directly into vLLM, enabling immediate switch from inference to PoC without offloading the model or loading a separate PoC model.
+*   Migrates artifact storage off-chain using MMR (Merkle Mountain Range) commitments - only `root_hash` and `count` are recorded on-chain.
+*   Adds statistical test-based validation with L2-distance mismatch rule and calibrated thresholds.
+*   New chain messages: `SubmitPocValidationsV2`, `PoCV2StoreCommit`, `MLNodeWeightDistribution`.
+*   Includes dual-mode migration strategy: V1 for regular PoC, V2 tracking for Confirmation PoC during rollout.
