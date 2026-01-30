@@ -5,9 +5,9 @@ services:
     volumes:
       - ${HF_HOME:-${HOME}/.cache}:/root/.cache
     environment:
+      - HF_HUB_OFFLINE=true
       - PIP_NO_CACHE_DIR=1
       - VLLM_FLASH_ATTN_VERSION=3
-      - PYTORCH_ALLOC_CONF=expandable_segments:True,max_split_size_mb:512
       - HF_HOME=/root/.cache
       - OMP_NUM_THREADS=16
       - DISPLAY_SINGLE_GPU=false
