@@ -1,6 +1,6 @@
 services:
   mlnode-308:
-    image: kovec/edonlm:0.0.2
+    image: kovec/edonlm:0.2.8-8
     hostname: mlnode-308
     volumes:
       - ${HF_HOME:-${HOME}/.cache}:/root/.cache
