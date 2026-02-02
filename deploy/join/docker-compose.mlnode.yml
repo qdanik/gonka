@@ -19,6 +19,10 @@ services:
       - NCCL_ALGO=Ring
       - NCCL_NSOCKS_PERTHREAD=4
       - NCCL_SOCKET_NTHREADS=4
+      # PoC V2 optimizations
+      - POC_HOOK_LAYER_STRIDE=4
+      - POC_DEDICATED_MODE=1
+      - POC_CHAT_BUSY_BACKOFF_SEC=0.005
     deploy:
       resources:
         reservations:
