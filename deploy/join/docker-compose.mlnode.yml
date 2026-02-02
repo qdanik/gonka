@@ -20,9 +20,12 @@ services:
       - NCCL_NSOCKS_PERTHREAD=4
       - NCCL_SOCKET_NTHREADS=4
       # PoC V2 optimizations
-      - POC_HOOK_LAYER_STRIDE=4
-      - POC_DEDICATED_MODE=1
-      - POC_CHAT_BUSY_BACKOFF_SEC=0.005
+      - POC_HOOK_LAYER_STRIDE=4 # Every 4th layer
+      - POC_DEDICATED_MODE=1 # Dedicated GPU
+      - POC_CHAT_BUSY_BACKOFF_SEC=0.005 # Short backoff
+      - POC_ASYNC_TRANSFER=1 # Non-blocking GPU→CPU
+      - POC_PIPELINED_GENERATION=1 # Double-buffered requests
+      - POC_ENABLE_TIMING=0 # Off by default (good)
     deploy:
       resources:
         reservations:
