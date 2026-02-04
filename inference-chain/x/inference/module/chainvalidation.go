@@ -9,6 +9,7 @@ import (
 
 	mathsdk "cosmossdk.io/math"
 	"github.com/productscience/inference/x/inference/types"
+	"github.com/productscience/inference/x/inference/utils"
 )
 
 // WeightCalculator encapsulates all the data needed to calculate new weights for participants.
