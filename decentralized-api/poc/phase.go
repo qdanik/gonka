@@ -16,6 +16,10 @@ func ShouldAcceptGeneratedArtifacts(epochState *chainphase.EpochState) bool {
 	if epochState.CurrentPhase == types.PoCGeneratePhase {
 		return true
 	}
+	// Wind-down phase: still accept artifacts to allow mlnode to flush buffer
+	if epochState.CurrentPhase == types.PoCGenerateWindDownPhase {
+		return true
+	}
 	// Confirmation PoC generation during inference phase
 	if epochState.CurrentPhase == types.InferencePhase &&
 		epochState.ActiveConfirmationPoCEvent != nil &&

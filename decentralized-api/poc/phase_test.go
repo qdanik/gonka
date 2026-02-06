@@ -43,7 +43,7 @@ func TestShouldAcceptGeneratedArtifacts_RegularPoC(t *testing.T) {
 		expect bool
 	}{
 		{"generate phase accepts", types.PoCGeneratePhase, true},
-		{"generate wind down rejects", types.PoCGenerateWindDownPhase, false},
+		{"generate wind down accepts", types.PoCGenerateWindDownPhase, true},
 		{"validate phase rejects", types.PoCValidatePhase, false},
 		{"validate wind down rejects", types.PoCValidateWindDownPhase, false},
 		{"inference phase rejects", types.InferencePhase, false},
