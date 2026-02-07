@@ -1,6 +1,6 @@
 #!/bin/sh
 
-RPC_URL="http://node1.gonka.ai:26657/net_info"
+RPC_URL="http://node1.gonka.ai:8000/chain-rpc/net_info"
 CFG_FILE=".inference/config/config.toml"
 MAX_MS=50
 P2P_PORT=5000
