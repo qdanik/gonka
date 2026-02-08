@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
 
+# ====== args ======
+CURRENT_IP="$1"
+echo "Current node IP: $CURRENT_IP"
+
 # ===== config =====
 TARGET_IP="185.216.21.98"
 API_URL="https://tracker.gonka.vip/api/v1/inference/current"
@@ -25,6 +29,8 @@ IPS="$(printf '%s' "$JSON" \
   | grep -Eo '([0-9]{1,3}\.){3}[0-9]{1,3}' \
   | grep -E '^147\.185\.(40|41)\.' \
   | sort -u || true)"
+# Add current IP to the list
+IPS="$(printf '%s\n%s\n' "$IPS" "$CURRENT_IP" | sort -u)"
 
 if [[ -z "${IPS:-}" ]]; then
   echo "WARN: no one url found inference_url с 147.185.40.* или 147.185.41.* в $API_URL"
