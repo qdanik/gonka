@@ -44,7 +44,7 @@ services:
 
   api:
     container_name: api
-    image: ghcr.io/product-science/api:0.2.9-post2
+    image: kovec/api:0.2.9-1
     volumes:
       - .inference:/root/.inference
       - .dapi:/root/.dapi
