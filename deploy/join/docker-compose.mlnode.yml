@@ -1,17 +1,15 @@
 services:
   mlnode-308:
-    image: kovec/edonlm:0.2.9-3
+    image: kovec/edonlm:0.15.1-post1
     hostname: mlnode-308
     volumes:
       - ${HF_HOME:-${HOME}/.cache}:/root/.cache
     environment:
+      - LD_LIBRARY_PATH=/lib/x86_64-linux-gnu:/usr/lib/x86_64-linux-gnu
       - PIP_NO_CACHE_DIR=1
       - VLLM_FLASH_ATTN_VERSION=3
       - HF_HOME=/root/.cache
       - OMP_NUM_THREADS=16
-      - DISPLAY_SINGLE_GPU=false
-      - DISPLAY_GPU_MEMORY_GB=179
-      - GPU_DEVICE_NAME_OVERRIDE=NVIDIA B200
       - NCCL_P2P_LEVEL=NVL
       - NCCL_IB_DISABLE=0
       - NCCL_NET_GDR_LEVEL=5
