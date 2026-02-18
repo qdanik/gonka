@@ -1,6 +1,7 @@
 services:
   mlnode-308:
-    image: kovec/edonlm:0.2.9-3
+    # ghcr.io/product-science/mlnode:3.0.12-post4-blackwell
+    image: kovec/edonlm:0.2.10
     hostname: mlnode-308
     volumes:
       - ${HF_HOME:-${HOME}/.cache}:/root/.cache
@@ -9,9 +10,6 @@ services:
       - VLLM_FLASH_ATTN_VERSION=3
       - HF_HOME=/root/.cache
       - OMP_NUM_THREADS=16
-      - DISPLAY_SINGLE_GPU=false
-      - DISPLAY_GPU_MEMORY_GB=179
-      - GPU_DEVICE_NAME_OVERRIDE=NVIDIA B200
       - NCCL_P2P_LEVEL=NVL
       - NCCL_IB_DISABLE=0
       - NCCL_NET_GDR_LEVEL=5
