@@ -1,0 +1,71 @@
+# syntax=docker/dockerfile:1.7
+# Base image can be overridden at build time with --build-arg BASE_IMAGE=...
+ARG BASE_IMAGE=ghcr.io/gonka-ai/vllm:v0.9.1-poc-v2-post4-blackwell-sm120
+
+FROM ${BASE_IMAGE} AS deps
+
+ENV POETRY_VERSION=2.0.1 \
+    PYTHONUNBUFFERED=1 \
+    POETRY_NO_INTERACTION=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+RUN --mount=type=cache,target=/root/.cache/pip \
+    if ! command -v poetry >/dev/null 2>&1; then pip install "poetry==$POETRY_VERSION"; fi
+
+WORKDIR /app
+
+# Copy dependency manifests first for better layer caching.
+COPY packages/pow/pyproject.toml packages/pow/poetry.lock packages/pow/README.md \
+    /app/packages/pow/
+COPY packages/train/pyproject.toml packages/train/poetry.lock packages/train/README.md \
+    /app/packages/train/
+COPY packages/api/pyproject.toml packages/api/poetry.lock packages/api/README.md \
+    /app/packages/api/
+COPY packages/common/pyproject.toml packages/common/poetry.lock packages/common/README.md \
+    /app/packages/common/
+COPY packages/train/third_party /app/packages/train/third_party
+
+# Create minimal package skeleton for local path dependencies.
+RUN mkdir -p /app/packages/api/src/api \
+        && touch /app/packages/api/src/api/__init__.py \
+    && mkdir -p /app/packages/pow/src/pow \
+        && touch /app/packages/pow/src/pow/__init__.py \
+    && mkdir -p /app/packages/train/src/zeroband \
+        && touch /app/packages/train/src/zeroband/__init__.py \
+    && mkdir -p /app/packages/common/src/common \
+        && touch /app/packages/common/src/common/__init__.py
+
+RUN --mount=type=cache,target=/root/.cache/pip \
+    --mount=type=cache,target=/root/.cache/pypoetry \
+    python3 -m venv /app/packages/api/.venv \
+    && . /app/packages/api/.venv/bin/activate \
+    && cd /app/packages/api \
+    && poetry install --no-interaction --only main --no-root
+
+# Keep final image on the clean base instead of inheriting from `deps`,
+# so runtime doesn't include build-time tools like poetry/pip/curl.
+# We still reuse dependency work by copying only the prepared `.venv`.
+FROM ${BASE_IMAGE} AS app
+
+ENV PYTHONUNBUFFERED=1
+
+WORKDIR /app
+
+COPY --from=deps /app/packages/api/.venv /app/packages/api/.venv
+
+COPY packages/api/src /app/packages/api/src
+COPY packages/pow/src /app/packages/pow/src
+COPY packages/pow/resources /app/packages/pow/resources
+COPY packages/pow/scripts /app/packages/pow/scripts
+COPY packages/train/src /app/packages/train/src
+COPY packages/train/scripts /app/packages/train/scripts
+COPY packages/train/resources /app/packages/train/resources
+COPY packages/common/src /app/packages/common/src
+
+ENV PYTHONPATH="/app:/app/packages/api/src"
+
+COPY packages/api/entrypoint.sh /app/entrypoint.sh
+RUN chmod +x /app/entrypoint.sh
+WORKDIR /app
+
+ENTRYPOINT ["/app/entrypoint.sh"]

@@ -18,6 +18,8 @@ else
   echo "User 'appuser' already exists"
 fi
 
-source /app/packages/api/.venv/bin/activate
+if [ -f /app/packages/api/.venv/bin/activate ]; then
+  source /app/packages/api/.venv/bin/activate
+fi
 
 exec "$@"
