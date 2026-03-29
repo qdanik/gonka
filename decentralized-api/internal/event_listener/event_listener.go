@@ -11,8 +11,8 @@ import (
 	"decentralized-api/internal/startup"
 	"decentralized-api/internal/validation"
 	"decentralized-api/logging"
+	"decentralized-api/observability"
 	"decentralized-api/statsstorage"
-	"decentralized-api/telemetry"
 	"decentralized-api/upgrade"
 	"encoding/json"
 	"errors"
@@ -466,11 +466,9 @@ func (e *InferenceFinishedEventHandler) CanHandle(event *chainevents.JSONRPCResp
 }
 
 func (e *InferenceFinishedEventHandler) Handle(event *chainevents.JSONRPCResponse, el *EventListener) error {
-	eventContext, eventOp := telemetry.Inference.StartValidationEvent(context.Background(), len(event.Result.Events["inference_finished.inference_id"]))
+	eventContext, eventOp := observability.Inference.StartValidationEvent(context.Background(), len(event.Result.Events["inference_finished.inference_id"]))
 	var handlerErr error
-	defer func() {
-		eventOp.Finish(handlerErr)
-	}()
+	defer eventOp.FinishErr(&handlerErr)
 
 	if el.isNodeSynced() {
 		el.validator.SampleInferenceToValidate(eventContext, event.Result.Events["inference_finished.inference_id"], el.transactionRecorder)

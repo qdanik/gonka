@@ -5,6 +5,7 @@ import (
 	"decentralized-api/apiconfig"
 	"decentralized-api/internal/nats/server"
 	"decentralized-api/logging"
+	"decentralized-api/observability"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -768,11 +769,16 @@ func (m *manager) checkTxStatus(hash string) (bool, error) {
 	return true, nil
 }
 
-func (m *manager) WaitForResponse(txHash string) (*ctypes.ResultTx, error) {
-	ctx, cancel := context.WithTimeout(m.ctx, time.Second*15)
+func (m *manager) WaitForResponse(txHash string) (transactionAppliedResult *ctypes.ResultTx, err error) {
+	traceCtx, waitOp := observability.Chain.StartTxConfirmation(m.ctx, txHash)
+	ctx, cancel := context.WithTimeout(traceCtx, time.Second*15)
 	defer cancel()
+	defer waitOp.FinishErr(&err)
 
-	transactionAppliedResult, err := m.client.WaitForTx(ctx, txHash)
+	transactionAppliedResult, err = m.client.WaitForTx(ctx, txHash)
+	if transactionAppliedResult != nil {
+		observability.Chain.SetTxResult(waitOp, txHash, uint32(transactionAppliedResult.TxResult.Code))
+	}
 	if err != nil {
 		logging.Error("Failed to wait for transaction", types.Messages, "error", err, "result", transactionAppliedResult)
 		return nil, err
@@ -829,7 +835,12 @@ func (m *manager) BroadcastMessages(id string, msgs ...sdk.Msg) (*sdk.TxResponse
 		return nil, time.Time{}, err
 	}
 
+	_, broadcastOp := observability.Chain.StartTxBroadcast(m.ctx, "batch", len(msgs))
 	resp, err := m.client.Context().BroadcastTxSync(txBytes)
+	if resp != nil {
+		observability.Chain.SetTxResult(broadcastOp, resp.TxHash, resp.Code)
+	}
+	broadcastOp.Finish(err)
 	if err != nil {
 		return nil, time.Time{}, err
 	}
@@ -908,7 +919,12 @@ func (m *manager) broadcastMessage(id string, rawTx sdk.Msg) (*sdk.TxResponse, t
 		return nil, time.Time{}, err
 	}
 
+	_, broadcastOp := observability.Chain.StartTxBroadcast(m.ctx, originalMsgType, 1)
 	resp, err := m.client.Context().BroadcastTxSync(txBytes)
+	if resp != nil {
+		observability.Chain.SetTxResult(broadcastOp, resp.TxHash, resp.Code)
+	}
+	broadcastOp.Finish(err)
 	if err != nil {
 		return nil, time.Time{}, err
 	}

@@ -1,4 +1,4 @@
-package telemetry
+package observability
 
 import (
 	"context"
@@ -33,14 +33,14 @@ type Config struct {
 func Init(ctx context.Context, cfg Config) (func(context.Context) error, error) {
 	otel.SetTextMapPropagator(propagation.TraceContext{})
 
-	if !telemetryEnabled() {
-		logTelemetryInfo("init.disabled", "OpenTelemetry disabled", "env", envEnabled)
+	if !otelEnabled() {
+		logObservabilityInfo("init.disabled", "OpenTelemetry disabled", "env", envEnabled)
 		return func(context.Context) error { return nil }, nil
 	}
 
 	endpoint := otlpEndpoint()
 	if endpoint == "" {
-		logTelemetryWarn("init.endpoint_missing", "OpenTelemetry enabled but endpoint is empty; telemetry will stay disabled", "env", envEndpoint)
+		logObservabilityWarn("init.endpoint_missing", "OpenTelemetry enabled but endpoint is empty; observability will stay disabled", "env", envEndpoint)
 		return func(context.Context) error { return nil }, nil
 	}
 
@@ -56,17 +56,17 @@ func Init(ctx context.Context, cfg Config) (func(context.Context) error, error) 
 		),
 	)
 	if err != nil {
-		return nil, logTelemetryError("init.resource_failed", "Failed to build OpenTelemetry resource", err, "endpoint", endpoint)
+		return nil, logObservabilityError("init.resource_failed", "Failed to build OpenTelemetry resource", err, "endpoint", endpoint)
 	}
 
 	traceExporter, err := otlptracegrpc.New(ctx, newTraceExporterOptions(endpoint, headers)...)
 	if err != nil {
-		return nil, logTelemetryError("init.trace_exporter_failed", "Failed to create OTLP trace exporter", err, "endpoint", endpoint)
+		return nil, logObservabilityError("init.trace_exporter_failed", "Failed to create OTLP trace exporter", err, "endpoint", endpoint)
 	}
 
 	metricExporter, err := otlpmetricgrpc.New(ctx, newMetricExporterOptions(endpoint, headers)...)
 	if err != nil {
-		return nil, logTelemetryError("init.metric_exporter_failed", "Failed to create OTLP metric exporter", err, "endpoint", endpoint)
+		return nil, logObservabilityError("init.metric_exporter_failed", "Failed to create OTLP metric exporter", err, "endpoint", endpoint)
 	}
 
 	traceProvider := sdktrace.NewTracerProvider(
@@ -83,7 +83,7 @@ func Init(ctx context.Context, cfg Config) (func(context.Context) error, error) 
 	otel.SetTracerProvider(traceProvider)
 	otel.SetMeterProvider(meterProvider)
 	initInstruments()
-	logTelemetryInfo("init.ready", "OpenTelemetry initialized", "endpoint", endpoint, "headers_configured", len(headers) > 0)
+	logObservabilityInfo("init.ready", "OpenTelemetry initialized", "endpoint", endpoint, "headers_configured", len(headers) > 0)
 
 	return func(shutdownCtx context.Context) error {
 		shutdownErr := errors.Join(
@@ -91,7 +91,7 @@ func Init(ctx context.Context, cfg Config) (func(context.Context) error, error) 
 			traceProvider.Shutdown(shutdownCtx),
 		)
 		if shutdownErr != nil {
-			logTelemetryError("shutdown.failed", "Failed to shutdown OpenTelemetry providers", shutdownErr)
+			logObservabilityError("shutdown.failed", "Failed to shutdown OpenTelemetry providers", shutdownErr)
 		}
 		return shutdownErr
 	}, nil
@@ -104,11 +104,11 @@ func valueOrDefault(value string, fallback string) string {
 	return value
 }
 
-func telemetryEnabled() bool {
+func otelEnabled() bool {
 	enabled, err := strconv.ParseBool(strings.TrimSpace(os.Getenv(envEnabled)))
 	if err != nil {
 		if raw := strings.TrimSpace(os.Getenv(envEnabled)); raw != "" {
-			logTelemetryWarn("config.invalid_enabled", "Invalid telemetry enabled flag; telemetry will stay disabled", "env", envEnabled, "value", raw)
+			logObservabilityWarn("config.invalid_enabled", "Invalid OpenTelemetry enabled flag; observability will stay disabled", "env", envEnabled, "value", raw)
 		}
 		return false
 	}
@@ -129,14 +129,14 @@ func parseHeaders(raw string) map[string]string {
 		key, value, found := strings.Cut(strings.TrimSpace(pair), "=")
 		if !found {
 			if strings.TrimSpace(pair) != "" {
-				logTelemetryWarn("config.invalid_header", "Skipping malformed OTLP header", "raw", strings.TrimSpace(pair))
+				logObservabilityWarn("config.invalid_header", "Skipping malformed OTLP header", "raw", strings.TrimSpace(pair))
 			}
 			continue
 		}
 		key = strings.TrimSpace(key)
 		value = strings.TrimSpace(value)
 		if key == "" || value == "" {
-			logTelemetryWarn("config.invalid_header", "Skipping OTLP header with empty key or value", "raw", strings.TrimSpace(pair))
+			logObservabilityWarn("config.invalid_header", "Skipping OTLP header with empty key or value", "raw", strings.TrimSpace(pair))
 			continue
 		}
 		result[key] = value
