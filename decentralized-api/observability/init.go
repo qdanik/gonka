@@ -31,12 +31,12 @@ type Config struct {
 }
 
 func Init(ctx context.Context, cfg Config) (func(context.Context) error, error) {
-	otel.SetTextMapPropagator(propagation.TraceContext{})
-
 	if !otelEnabled() {
 		logObservabilityInfo("init.disabled", "OpenTelemetry disabled", "env", envEnabled)
 		return func(context.Context) error { return nil }, nil
 	}
+
+	otel.SetTextMapPropagator(propagation.TraceContext{})
 
 	endpoint := otlpEndpoint()
 	if endpoint == "" {
