@@ -4,8 +4,8 @@ import (
 	"context"
 	"decentralized-api/cosmosclient"
 	"decentralized-api/logging"
+	"decentralized-api/observability"
 	"decentralized-api/payloadstorage"
-	"decentralized-api/telemetry"
 	apiutils "decentralized-api/utils"
 	"encoding/json"
 	"errors"
@@ -56,11 +56,9 @@ func FetchPayloadsHTTP(
 	epochId uint64,
 	signature string,
 ) (*PayloadResponse, error) {
-	httpContext, httpOp := telemetry.Inference.StartPayloadFetch(ctx, requestUrl, validatorAddress, int64(epochId))
+	httpContext, httpOp := observability.Inference.StartPayloadFetch(ctx, requestUrl, validatorAddress, int64(epochId))
 	var requestErr error
-	defer func() {
-		httpOp.Finish(requestErr)
-	}()
+	defer httpOp.FinishErr(&requestErr)
 
 	req, err := http.NewRequestWithContext(httpContext, http.MethodGet, requestUrl, nil)
 	if err != nil {
@@ -72,7 +70,7 @@ func FetchPayloadsHTTP(
 	req.Header.Set(apiutils.XTimestampHeader, strconv.FormatInt(timestamp, 10))
 	req.Header.Set(apiutils.XEpochIdHeader, strconv.FormatUint(epochId, 10))
 	req.Header.Set(apiutils.AuthorizationHeader, signature)
-	telemetry.Inference.InjectRequestContext(httpContext, req.Header)
+	observability.Inference.InjectRequestContext(httpContext, req.Header)
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -96,7 +94,7 @@ func FetchPayloadsHTTP(
 		requestErr = fmt.Errorf("failed to decode response: %w", err)
 		return nil, requestErr
 	}
-	telemetry.Inference.SetHTTPStatus(httpOp, resp.StatusCode)
+	observability.Inference.SetHTTPStatus(httpOp, resp.StatusCode)
 
 	return &payloadResp, nil
 }

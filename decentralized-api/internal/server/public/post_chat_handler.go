@@ -7,7 +7,7 @@ import (
 	"decentralized-api/broker"
 	"decentralized-api/completionapi"
 	"decentralized-api/logging"
-	"decentralized-api/telemetry"
+	"decentralized-api/observability"
 	"decentralized-api/utils"
 	"encoding/json"
 	"errors"
@@ -220,14 +220,12 @@ func (s *Server) postChat(ctx echo.Context) error {
 }
 
 func (s *Server) postChatWithBody(ctx echo.Context, body []byte, signBodyHash string, forwardPath string, forwardBody []byte) error {
-	requestContext := telemetry.Inference.ExtractRequestContext(ctx.Request().Context(), ctx.Request().Header)
+	requestContext := observability.Inference.ExtractRequestContext(ctx.Request().Context(), ctx.Request().Header)
 	ctx.SetRequest(ctx.Request().WithContext(requestContext))
-	requestContext, requestOp := telemetry.Inference.StartRequest(requestContext, ctx.Request().Method)
+	requestContext, requestOp := observability.Inference.StartRequest(requestContext, ctx.Request().Method)
 	ctx.SetRequest(ctx.Request().WithContext(requestContext))
 	var handlerErr error
-	defer func() {
-		requestOp.Finish(handlerErr)
-	}()
+	defer requestOp.FinishErr(&handlerErr)
 
 	logging.Debug("PostChat. Received request", types.Inferences, "path", ctx.Request().URL.Path)
 
@@ -257,7 +255,7 @@ func (s *Server) postChatWithBody(ctx echo.Context, body []byte, signBodyHash st
 		return ErrNoModelSpecified
 	}
 
-	telemetry.Inference.SetRequestIdentity(requestOp, chatRequest.OpenAiRequest.Model, chatRequest.RequesterAddress)
+	observability.Inference.SetRequestIdentity(requestOp, chatRequest.OpenAiRequest.Model, chatRequest.RequesterAddress)
 
 	// Developer access gating: before a configured cutoff height, only allowlisted developers may use the public API
 	// for both transfer-agent and executor request paths.
@@ -271,12 +269,12 @@ func (s *Server) postChatWithBody(ctx echo.Context, body []byte, signBodyHash st
 
 	if chatRequest.InferenceId != "" && chatRequest.Seed != "" {
 		logging.Info("Executor request", types.Inferences, "inferenceId", chatRequest.InferenceId, "seed", chatRequest.Seed)
-		telemetry.Inference.MarkExecutorPath(requestOp, chatRequest.InferenceId)
+		observability.Inference.MarkExecutorPath(requestOp, chatRequest.InferenceId)
 		handlerErr = s.handleExecutorRequest(ctx, chatRequest, ctx.Response().Writer)
 		return handlerErr
 	} else {
 		logging.Info("Transfer request", types.Inferences, "requesterAddress", chatRequest.RequesterAddress)
-		telemetry.Inference.MarkTransferPath(requestOp)
+		observability.Inference.MarkTransferPath(requestOp)
 		handlerErr = s.handleTransferRequest(ctx, chatRequest)
 		return handlerErr
 	}
@@ -326,12 +324,10 @@ func (s *Server) enforceTransferAgentAccess(taAddress string) error {
 }
 
 func (s *Server) handleTransferRequest(ctx echo.Context, request *ChatRequest) error {
-	transferContext, transferOp := telemetry.Inference.StartTransfer(ctx.Request().Context(), request.OpenAiRequest.Model, request.RequesterAddress)
+	transferContext, transferOp := observability.Inference.StartTransfer(ctx.Request().Context(), request.OpenAiRequest.Model, request.RequesterAddress)
 	ctx.SetRequest(ctx.Request().WithContext(transferContext))
 	var handlerErr error
-	defer func() {
-		transferOp.Finish(handlerErr)
-	}()
+	defer transferOp.FinishErr(&handlerErr)
 
 	logging.Debug("GET inference requester for transfer", types.Inferences, "address", request.RequesterAddress)
 
@@ -454,7 +450,7 @@ func (s *Server) handleTransferRequest(ctx echo.Context, request *ChatRequest) e
 		return handlerErr
 	}
 
-	forwardContext, forwardOp := telemetry.Inference.StartForwardExecutor(transferContext, request.OpenAiRequest.Model, executor.Address, executor.Url)
+	forwardContext, forwardOp := observability.Inference.StartForwardExecutor(transferContext, request.OpenAiRequest.Model, executor.Address, executor.Url)
 	req, err := http.NewRequest(http.MethodPost, executor.Url+forwardPath, bytes.NewReader(forwardBody))
 	if err != nil {
 		forwardOp.Finish(err)
@@ -473,7 +469,7 @@ func (s *Server) handleTransferRequest(ctx echo.Context, request *ChatRequest) e
 	req.Header.Set(utils.XTASignatureHeader, inferenceRequest.TransferSignature)
 	req.Header.Set(utils.XPromptHashHeader, inferenceRequest.PromptHash)
 	req.Header.Set("Content-Type", request.Request.Header.Get("Content-Type"))
-	telemetry.Inference.InjectRequestContext(forwardContext, req.Header)
+	observability.Inference.InjectRequestContext(forwardContext, req.Header)
 
 	resp, err := s.httpClient.Do(req)
 	if err != nil {
@@ -482,7 +478,7 @@ func (s *Server) handleTransferRequest(ctx echo.Context, request *ChatRequest) e
 		handlerErr = err
 		return err
 	}
-	telemetry.Inference.SetHTTPStatus(forwardOp, resp.StatusCode)
+	observability.Inference.SetHTTPStatus(forwardOp, resp.StatusCode)
 	forwardOp.Finish(nil)
 	defer resp.Body.Close()
 
@@ -606,12 +602,10 @@ func (s *Server) extractPromptTextFromRequest(requestBytes []byte) (string, erro
 }
 
 func (s *Server) handleExecutorRequest(ctx echo.Context, request *ChatRequest, w http.ResponseWriter) error {
-	executorContext, executorOp := telemetry.Inference.StartExecutor(ctx.Request().Context(), request.InferenceId, request.OpenAiRequest.Model, request.RequesterAddress, request.TransferAddress)
+	executorContext, executorOp := observability.Inference.StartExecutor(ctx.Request().Context(), request.InferenceId, request.OpenAiRequest.Model, request.RequesterAddress, request.TransferAddress)
 	ctx.SetRequest(ctx.Request().WithContext(executorContext))
 	var handlerErr error
-	defer func() {
-		executorOp.Finish(handlerErr)
-	}()
+	defer executorOp.FinishErr(&handlerErr)
 
 	inferenceId := request.InferenceId
 	err := s.validateFullRequest(ctx, request)
@@ -656,7 +650,7 @@ func (s *Server) handleExecutorRequest(ctx echo.Context, request *ChatRequest, w
 		return handlerErr
 	}
 
-	responseContext, responseOp := telemetry.Inference.StartMLNodeExecution(executorContext, inferenceId, request.OpenAiRequest.Model)
+	responseContext, responseOp := observability.Inference.StartMLNodeExecution(executorContext, inferenceId, request.OpenAiRequest.Model)
 
 	logging.Info("Attempting to lock node for inference", types.Inferences,
 		"inferenceId", inferenceId, "nodeVersion", s.configManager.GetCurrentNodeVersion())
@@ -665,7 +659,7 @@ func (s *Server) handleExecutorRequest(ctx echo.Context, request *ChatRequest, w
 		inferencePath = chatCompletionsPath
 	}
 	resp, err := broker.DoWithLockedNodeHTTPRetry(s.nodeBroker, request.OpenAiRequest.Model, nil, 3, func(node *broker.Node) (*http.Response, *broker.ActionError) {
-		telemetry.Inference.SetMLNodeTarget(responseOp, node.Id, node.InferenceUrlWithVersion(s.configManager.GetCurrentNodeVersion()))
+		observability.Inference.SetMLNodeTarget(responseOp, node.Id, node.InferenceUrlWithVersion(s.configManager.GetCurrentNodeVersion()))
 		logging.Info("Successfully acquired node lock for inference", types.Inferences,
 			"inferenceId", inferenceId, "node", node.Id, "url", node.InferenceUrlWithVersion(s.configManager.GetCurrentNodeVersion()))
 
@@ -678,7 +672,7 @@ func (s *Server) handleExecutorRequest(ctx echo.Context, request *ChatRequest, w
 			return nil, broker.NewApplicationActionError(reqErr)
 		}
 		httpReq.Header.Set("Content-Type", request.Request.Header.Get("Content-Type"))
-		telemetry.Inference.InjectRequestContext(responseContext, httpReq.Header)
+		observability.Inference.InjectRequestContext(responseContext, httpReq.Header)
 		resp, postErr := s.httpClient.Do(httpReq)
 		if postErr != nil {
 			return nil, broker.NewTransportActionError(postErr)
@@ -701,7 +695,7 @@ func (s *Server) handleExecutorRequest(ctx echo.Context, request *ChatRequest, w
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		msg := getInferenceErrorMessage(resp)
-		telemetry.Inference.SetHTTPStatus(responseOp, resp.StatusCode)
+		observability.Inference.SetHTTPStatus(responseOp, resp.StatusCode)
 		responseOp.Finish(fmt.Errorf("mlnode returned status %d", resp.StatusCode))
 		logging.Warn("Inference node response with an error", types.Inferences, "code", resp.StatusCode, "msg", msg)
 		// If vLLM rejects the payload (400/422), still record a FinishInference with an empty response
@@ -736,7 +730,7 @@ func (s *Server) handleExecutorRequest(ctx echo.Context, request *ChatRequest, w
 	completionResponse, err := responseProcessor.GetResponse()
 
 	if err != nil || completionResponse == nil {
-		telemetry.Inference.SetHTTPStatus(responseOp, resp.StatusCode)
+		observability.Inference.SetHTTPStatus(responseOp, resp.StatusCode)
 		responseOp.Finish(err)
 		logging.Error("Failed to parse response data into CompletionResponse", types.Inferences, "error", err)
 		handlerErr = err
@@ -745,7 +739,7 @@ func (s *Server) handleExecutorRequest(ctx echo.Context, request *ChatRequest, w
 	if usage, usageErr := completionResponse.GetUsage(); usageErr == nil {
 		responseOp.RecordTokens(usage.PromptTokens, usage.CompletionTokens)
 	}
-	telemetry.Inference.SetHTTPStatus(responseOp, resp.StatusCode)
+	observability.Inference.SetHTTPStatus(responseOp, resp.StatusCode)
 	responseOp.Finish(nil)
 
 	err = s.sendInferenceTransaction(request.InferenceId, completionResponse, request.Body, s.recorder.GetAccountAddress(), request, promptPayload)
@@ -895,11 +889,9 @@ func (s *Server) sendInferenceTransaction(inferenceId string, response completio
 	if request != nil && request.Request != nil {
 		operationContext = request.Request.Context()
 	}
-	finishContext, finishOp := telemetry.Inference.StartFinishSubmission(operationContext, inferenceId, executorAddress, request.OpenAiRequest.Model)
+	finishContext, finishOp := observability.Inference.StartFinishSubmission(operationContext, inferenceId, executorAddress, request.OpenAiRequest.Model)
 	var finishErr error
-	defer func() {
-		finishOp.Finish(finishErr)
-	}()
+	defer finishOp.FinishErr(&finishErr)
 
 	responseHash, err := response.GetHash()
 	if err != nil || responseHash == "" {
@@ -913,7 +905,7 @@ func (s *Server) sendInferenceTransaction(inferenceId string, response completio
 		finishErr = err
 		return err
 	}
-	telemetry.Inference.SetModel(finishOp, model)
+	observability.Inference.SetModel(finishOp, model)
 	id, err := response.GetInferenceId()
 	if err != nil || id == "" {
 		logging.Error("Failed to get id from response", types.Inferences, "error", err)
@@ -993,7 +985,7 @@ func (s *Server) sendInferenceTransaction(inferenceId string, response completio
 			logging.Debug("Submitted MsgFinishInference", types.Inferences, "inferenceId", inferenceId)
 		}
 	}
-	telemetry.Inference.SetResponseHash(finishOp, responseHash)
+	observability.Inference.SetResponseHash(finishOp, responseHash)
 	return nil
 }
 

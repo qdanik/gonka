@@ -1,4 +1,4 @@
-package telemetry
+package observability
 
 import (
 	"context"
@@ -14,7 +14,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
-const meterName = "decentralized-api/telemetry"
+const meterName = "decentralized-api/observability"
 
 var (
 	instrumentOnce sync.Once
@@ -116,6 +116,14 @@ func (o *Operation) Finish(err error, attrs ...attribute.KeyValue) {
 	operationDuration.Record(o.ctx, time.Since(o.start).Seconds(), metric.WithAttributes(o.metricAttrs...))
 	activeOperations.Add(o.ctx, -1, metric.WithAttributes(o.metricAttrs...))
 	o.span.End()
+}
+
+func (o *Operation) FinishErr(err *error, attrs ...attribute.KeyValue) {
+	if err == nil {
+		o.Finish(nil, attrs...)
+		return
+	}
+	o.Finish(*err, attrs...)
 }
 
 func Extract(ctx context.Context, headers http.Header) context.Context {

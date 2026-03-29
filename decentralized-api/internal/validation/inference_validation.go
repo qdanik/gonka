@@ -10,7 +10,7 @@ import (
 	"decentralized-api/cosmosclient"
 	"decentralized-api/internal/utils"
 	"decentralized-api/logging"
-	"decentralized-api/telemetry"
+	"decentralized-api/observability"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -466,11 +466,9 @@ func (s *InferenceValidator) WaitForValidationsToBeRecorded() {
 }
 
 func (s *InferenceValidator) SampleInferenceToValidate(ctx context.Context, ids []string, transactionRecorder cosmosclient.InferenceCosmosClient) {
-	sampleContext, sampleOp := telemetry.Inference.StartValidationSample(ctx, len(ids))
+	sampleContext, sampleOp := observability.Inference.StartValidationSample(ctx, len(ids))
 	var sampleErr error
-	defer func() {
-		sampleOp.Finish(sampleErr)
-	}()
+	defer sampleOp.FinishErr(&sampleErr)
 
 	if ids == nil {
 		logging.Debug("No inferences to validate", types.Validation)
@@ -542,7 +540,7 @@ func (s *InferenceValidator) SampleInferenceToValidate(ctx context.Context, ids 
 	}
 
 	logInferencesToValidate(toValidateIds)
-	telemetry.Inference.SetSampledCount(sampleOp, len(toValidateIds))
+	observability.Inference.SetSampledCount(sampleOp, len(toValidateIds))
 	for _, inf := range toValidateIds {
 		go func() {
 			response, err := queryClient.Inference(transactionRecorder.GetContext(), &types.QueryGetInferenceRequest{Index: inf})
@@ -583,11 +581,9 @@ func logInferencesToValidate(toValidate []string) {
 }
 
 func (s *InferenceValidator) validateInferenceAndSendValMessage(ctx context.Context, inf types.Inference, transactionRecorder cosmosclient.InferenceCosmosClient, revalidation bool) {
-	validationContext, validationOp := telemetry.Inference.StartValidationExecution(ctx, inf.InferenceId, inf.Model, int64(inf.EpochId), revalidation)
+	validationContext, validationOp := observability.Inference.StartValidationExecution(ctx, inf.InferenceId, inf.Model, int64(inf.EpochId), revalidation)
 	var validationErr error
-	defer func() {
-		validationOp.Finish(validationErr)
-	}()
+	defer validationOp.FinishErr(&validationErr)
 
 	promptPayload, responsePayload, err := s.retrievePayloadsWithRetry(validationContext, inf)
 	if err != nil {
@@ -648,7 +644,7 @@ func (s *InferenceValidator) validateInferenceAndSendValMessage(ctx context.Cont
 				"maxRetries", maxRetries,
 				"error", err,
 				"nextRetryIn", retryInterval)
-			telemetry.Inference.AddValidationRetry(validationOp, attempt, err)
+			observability.Inference.AddValidationRetry(validationOp, attempt, err)
 			time.Sleep(retryInterval)
 		} else {
 			// Final attempt failed - check if it's ErrNoNodesAvailable for special handling
@@ -674,7 +670,7 @@ func (s *InferenceValidator) validateInferenceAndSendValMessage(ctx context.Cont
 		return
 	}
 	msgValidation.Revalidation = revalidation
-	telemetry.Inference.SetValidationResult(validationOp, valResult)
+	observability.Inference.SetValidationResult(validationOp, valResult)
 
 	if err = transactionRecorder.ReportValidation(msgValidation); err != nil {
 		logging.Error("Failed to report validation.", types.Validation, "id", inf.InferenceId, "error", err)
@@ -743,17 +739,15 @@ func (s *InferenceValidator) retrievePayloadsWithRetry(ctx context.Context, inf 
 	if ctx == nil {
 		ctx = s.recorder.GetContext()
 	}
-	retrievalContext, retrievalOp := telemetry.Inference.StartPayloadRetrieval(ctx, inf.InferenceId, inf.ExecutedBy, int64(inf.EpochId))
+	retrievalContext, retrievalOp := observability.Inference.StartPayloadRetrieval(ctx, inf.InferenceId, inf.ExecutedBy, int64(inf.EpochId))
 	var lastErr error
-	defer func() {
-		retrievalOp.Finish(lastErr)
-	}()
+	defer retrievalOp.FinishErr(&lastErr)
 
 	logging.Debug("Starting payload retrieval from executor", types.Validation,
 		"inferenceId", inf.InferenceId, "executedBy", inf.ExecutedBy, "epochId", inf.EpochId)
 
 	for attempt := 1; attempt <= maxRetries; attempt++ {
-		telemetry.Inference.AddPayloadAttempt(retrievalOp, attempt)
+		observability.Inference.AddPayloadAttempt(retrievalOp, attempt)
 		// Check epoch staleness before each attempt
 		if s.isEpochStale(inf.EpochId) {
 			logging.Info("Epoch stale, stopping payload retrieval", types.Validation,
@@ -910,11 +904,9 @@ func (s *InferenceValidator) submitHashMismatchInvalidation(inf types.Inference,
 
 // validateWithPayloads validates inference using provided payloads.
 func (s *InferenceValidator) validateWithPayloads(ctx context.Context, inference types.Inference, inferenceNode *broker.Node, promptPayload, responsePayload []byte) (ValidationResult, error) {
-	validationContext, validationOp := telemetry.Inference.StartValidationMLNode(ctx, inference.InferenceId, inference.Model, inferenceNode.Id)
+	validationContext, validationOp := observability.Inference.StartValidationMLNode(ctx, inference.InferenceId, inference.Model, inferenceNode.Id)
 	var validationErr error
-	defer func() {
-		validationOp.Finish(validationErr)
-	}()
+	defer validationOp.FinishErr(&validationErr)
 
 	logging.Debug("Validating inference", types.Validation, "id", inference.InferenceId)
 
@@ -980,7 +972,7 @@ func (s *InferenceValidator) validateWithPayloads(ctx context.Context, inference
 		return nil, reqErr
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
-	telemetry.Inference.InjectRequestContext(validationContext, httpReq.Header)
+	observability.Inference.InjectRequestContext(validationContext, httpReq.Header)
 	resp, err := http.DefaultClient.Do(httpReq)
 	if err != nil {
 		validationErr = err
@@ -1002,7 +994,7 @@ func (s *InferenceValidator) validateWithPayloads(ctx context.Context, inference
 			"inferenceId", inference.InferenceId,
 			"status", resp.StatusCode,
 			"body", string(respBodyBytes))
-		telemetry.Inference.SetHTTPStatus(validationOp, resp.StatusCode)
+		observability.Inference.SetHTTPStatus(validationOp, resp.StatusCode)
 		return &SimilarityValidationResult{
 			BaseValidationResult: BaseValidationResult{
 				InferenceId:   inference.InferenceId,
@@ -1042,7 +1034,7 @@ func (s *InferenceValidator) validateWithPayloads(ctx context.Context, inference
 		return nil, validationErr
 	}
 
-	telemetry.Inference.SetHTTPStatus(validationOp, resp.StatusCode)
+	observability.Inference.SetHTTPStatus(validationOp, resp.StatusCode)
 	return CompareLogitsWithContext(validationContext, originalLogits, validationLogits, baseResult), nil
 }
 
@@ -1175,11 +1167,9 @@ func CompareLogitsWithContext(
 	validationLogits []completionapi.Logprob,
 	baseComparisonResult BaseValidationResult,
 ) ValidationResult {
-	_, compareOp := telemetry.Inference.StartCompareLogits(ctx, baseComparisonResult.InferenceId)
+	_, compareOp := observability.Inference.StartCompareLogits(ctx, baseComparisonResult.InferenceId)
 	var compareErr error
-	defer func() {
-		compareOp.Finish(compareErr)
-	}()
+	defer compareOp.FinishErr(&compareErr)
 
 	if len(originalLogits) != len(validationLogits) {
 		logging.Warn("Different length of logits", types.Validation, "inferenceId", baseComparisonResult.InferenceId, "originalLogits", originalLogits, "validationLogits", validationLogits, "lengthOriginal", len(originalLogits), "lengthValidation", len(validationLogits))
@@ -1199,7 +1189,7 @@ func CompareLogitsWithContext(
 		}
 	}
 	similarity := customSimilarity(originalLogits, validationLogits)
-	telemetry.Inference.SetSimilarity(compareOp, similarity)
+	observability.Inference.SetSimilarity(compareOp, similarity)
 
 	return &SimilarityValidationResult{BaseValidationResult: baseComparisonResult, Value: similarity}
 }

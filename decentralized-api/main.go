@@ -14,11 +14,11 @@ import (
 	mlserver "decentralized-api/internal/server/mlnode"
 	pserver "decentralized-api/internal/server/public"
 	"decentralized-api/mlnodeclient"
+	"decentralized-api/observability"
 	"decentralized-api/payloadstorage"
 	"decentralized-api/poc"
 	"decentralized-api/poc/artifacts"
 	"decentralized-api/statsstorage"
-	"decentralized-api/telemetry"
 	"net"
 
 	"decentralized-api/nodemanager"
@@ -148,7 +148,7 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel() // Ensure resources are cleaned up
 
-	shutdownTelemetry, err := telemetry.Init(ctx, telemetry.Config{
+	shutdownObservability, err := observability.Init(ctx, observability.Config{
 		ServiceName:        "decentralized-api",
 		ServiceVersion:     config.GetCurrentNodeVersion(),
 		ParticipantAddress: recorder.GetAccountAddress(),
@@ -159,7 +159,7 @@ func main() {
 		defer func() {
 			shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer shutdownCancel()
-			if shutdownErr := shutdownTelemetry(shutdownCtx); shutdownErr != nil {
+			if shutdownErr := shutdownObservability(shutdownCtx); shutdownErr != nil {
 				logging.Error("Failed to shutdown OpenTelemetry", types.System, "error", shutdownErr)
 			}
 		}()
