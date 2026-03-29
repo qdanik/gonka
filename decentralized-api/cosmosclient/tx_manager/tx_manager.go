@@ -835,14 +835,17 @@ func (m *manager) BroadcastMessages(id string, msgs ...sdk.Msg) (*sdk.TxResponse
 		return nil, time.Time{}, err
 	}
 
-	_, broadcastOp := observability.Chain.StartTxBroadcast(m.ctx, "batch", len(msgs))
-	resp, err := m.client.Context().BroadcastTxSync(txBytes)
+	broadcastCtx, broadcastOp := observability.Chain.StartTxBroadcast(m.ctx, "batch", len(msgs))
+	_ = broadcastCtx
+	var broadcastErr error
+	defer broadcastOp.FinishErr(&broadcastErr)
+	var resp *sdk.TxResponse
+	resp, broadcastErr = m.client.Context().BroadcastTxSync(txBytes)
 	if resp != nil {
 		observability.Chain.SetTxResult(broadcastOp, resp.TxHash, resp.Code)
 	}
-	broadcastOp.Finish(err)
-	if err != nil {
-		return nil, time.Time{}, err
+	if broadcastErr != nil {
+		return nil, time.Time{}, broadcastErr
 	}
 	if resp.Code != 0 {
 		logging.Error("Batch broadcast failed", types.Messages, "code", resp.Code, "rawLog", resp.RawLog, "tx_id", id, "msgCount", len(msgs))
@@ -919,14 +922,17 @@ func (m *manager) broadcastMessage(id string, rawTx sdk.Msg) (*sdk.TxResponse, t
 		return nil, time.Time{}, err
 	}
 
-	_, broadcastOp := observability.Chain.StartTxBroadcast(m.ctx, originalMsgType, 1)
-	resp, err := m.client.Context().BroadcastTxSync(txBytes)
+	broadcastCtx, broadcastOp := observability.Chain.StartTxBroadcast(m.ctx, originalMsgType, 1)
+	_ = broadcastCtx
+	var broadcastErr error
+	defer broadcastOp.FinishErr(&broadcastErr)
+	var resp *sdk.TxResponse
+	resp, broadcastErr = m.client.Context().BroadcastTxSync(txBytes)
 	if resp != nil {
 		observability.Chain.SetTxResult(broadcastOp, resp.TxHash, resp.Code)
 	}
-	broadcastOp.Finish(err)
-	if err != nil {
-		return nil, time.Time{}, err
+	if broadcastErr != nil {
+		return nil, time.Time{}, broadcastErr
 	}
 	if resp.Code != 0 {
 		logging.Error("Broadcast failed immediately", types.Messages, "code", resp.Code, "rawLog", resp.RawLog, "tx_id", id, "originalMsgType", originalMsgType)

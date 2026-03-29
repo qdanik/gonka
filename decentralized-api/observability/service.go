@@ -201,3 +201,11 @@ func (s *ChainService) StartTxConfirmation(ctx context.Context, txHash string) (
 func (s *ChainService) StartStoreQuery(ctx context.Context, storeKey string, withProof bool, height int64) (context.Context, *Operation) {
 	return s.Trace().StartStoreQuery(ctx, storeKey, withProof, height)
 }
+
+func (s *ChainService) StartGRPCQuery(ctx context.Context, service string, method string) (context.Context, *Operation) {
+	return s.Trace().StartGRPCQuery(ctx, service, method)
+}
+
+func (s *ChainService) SetRPCStatus(op *Operation, code string) {
+	s.Trace().SetRPCStatus(op, code)
+}

@@ -1,16 +1,4 @@
 services:
-  jaeger:
-    container_name: jaeger
-    image: cr.jaegertracing.io/jaegertracing/jaeger:2.16.0
-    profiles:
-      - monitoring
-    ports:
-      - "127.0.0.1:16686:16686"
-    expose:
-      - "4317"
-      - "4318"
-    restart: unless-stopped
-
   tmkms:
     image: ghcr.io/product-science/tmkms-softsign-with-keygen:0.2.12-alpha1
     container_name: tmkms
@@ -30,6 +18,9 @@ services:
     environment:
       - SEED_NODE_RPC_URL=${SEED_NODE_RPC_URL}
       - SEED_NODE_P2P_URL=${SEED_NODE_P2P_URL}
+      - CHAIN_OTEL_ENABLED=${CHAIN_OTEL_ENABLED:-false}
+      - CHAIN_OTEL_ENDPOINT=${CHAIN_OTEL_ENDPOINT:-}
+      - CHAIN_OTEL_HEADERS=${CHAIN_OTEL_HEADERS:-}
       - SNAPSHOT_INTERVAL=1000
       - SNAPSHOT_KEEP_RECENT=5
       - TRUSTED_BLOCK_PERIOD=${TRUSTED_BLOCK_PERIOD:-2000}

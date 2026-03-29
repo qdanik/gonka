@@ -13,6 +13,8 @@ type ChainTraceService interface {
 	SetTxResult(op *Operation, txHash string, code uint32)
 	StartTxConfirmation(ctx context.Context, txHash string) (context.Context, *Operation)
 	StartStoreQuery(ctx context.Context, storeKey string, withProof bool, height int64) (context.Context, *Operation)
+	StartGRPCQuery(ctx context.Context, service string, method string) (context.Context, *Operation)
+	SetRPCStatus(op *Operation, code string)
 }
 
 type otelChainTraceService struct{}
@@ -86,4 +88,26 @@ func (otelChainTraceService) StartStoreQuery(ctx context.Context, storeKey strin
 		},
 		nil,
 	)
+}
+
+func (otelChainTraceService) StartGRPCQuery(ctx context.Context, service string, method string) (context.Context, *Operation) {
+	return StartOperation(
+		ctx,
+		"decentralized-api.chain",
+		"chain.grpc.query",
+		trace.SpanKindClient,
+		[]attribute.KeyValue{
+			attribute.String("rpc.system", "grpc"),
+			attribute.String("rpc.service", service),
+			attribute.String("rpc.method", method),
+		},
+		nil,
+	)
+}
+
+func (otelChainTraceService) SetRPCStatus(op *Operation, code string) {
+	if op == nil || code == "" {
+		return
+	}
+	op.Span().SetAttributes(attribute.String("rpc.grpc.status_code", code))
 }
