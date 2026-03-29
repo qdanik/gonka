@@ -5,6 +5,7 @@ import (
 	"decentralized-api/cosmosclient"
 	"decentralized-api/logging"
 	"decentralized-api/payloadstorage"
+	"decentralized-api/telemetry"
 	apiutils "decentralized-api/utils"
 	"encoding/json"
 	"errors"
@@ -55,34 +56,47 @@ func FetchPayloadsHTTP(
 	epochId uint64,
 	signature string,
 ) (*PayloadResponse, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, requestUrl, nil)
+	httpContext, httpOp := telemetry.Inference.StartPayloadFetch(ctx, requestUrl, validatorAddress, int64(epochId))
+	var requestErr error
+	defer func() {
+		httpOp.Finish(requestErr)
+	}()
+
+	req, err := http.NewRequestWithContext(httpContext, http.MethodGet, requestUrl, nil)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
+		requestErr = fmt.Errorf("failed to create request: %w", err)
+		return nil, requestErr
 	}
 
 	req.Header.Set(apiutils.XValidatorAddressHeader, validatorAddress)
 	req.Header.Set(apiutils.XTimestampHeader, strconv.FormatInt(timestamp, 10))
 	req.Header.Set(apiutils.XEpochIdHeader, strconv.FormatUint(epochId, 10))
 	req.Header.Set(apiutils.AuthorizationHeader, signature)
+	telemetry.Inference.InjectRequestContext(httpContext, req.Header)
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("request failed: %w", err)
+		requestErr = fmt.Errorf("request failed: %w", err)
+		return nil, requestErr
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode == http.StatusNotFound {
-		return nil, fmt.Errorf("payload not found on executor")
+		requestErr = fmt.Errorf("payload not found on executor")
+		return nil, requestErr
 	}
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("executor returned status %d: %s", resp.StatusCode, string(body))
+		requestErr = fmt.Errorf("executor returned status %d: %s", resp.StatusCode, string(body))
+		return nil, requestErr
 	}
 
 	var payloadResp PayloadResponse
 	if err := json.NewDecoder(resp.Body).Decode(&payloadResp); err != nil {
-		return nil, fmt.Errorf("failed to decode response: %w", err)
+		requestErr = fmt.Errorf("failed to decode response: %w", err)
+		return nil, requestErr
 	}
+	telemetry.Inference.SetHTTPStatus(httpOp, resp.StatusCode)
 
 	return &payloadResp, nil
 }

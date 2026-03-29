@@ -18,6 +18,7 @@ import (
 	"decentralized-api/poc"
 	"decentralized-api/poc/artifacts"
 	"decentralized-api/statsstorage"
+	"decentralized-api/telemetry"
 	"net"
 
 	"decentralized-api/nodemanager"
@@ -146,6 +147,23 @@ func main() {
 	// Create a cancellable context for the entire system
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel() // Ensure resources are cleaned up
+
+	shutdownTelemetry, err := telemetry.Init(ctx, telemetry.Config{
+		ServiceName:        "decentralized-api",
+		ServiceVersion:     config.GetCurrentNodeVersion(),
+		ParticipantAddress: recorder.GetAccountAddress(),
+	})
+	if err != nil {
+		logging.Error("Failed to initialize OpenTelemetry", types.System, "error", err)
+	} else {
+		defer func() {
+			shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer shutdownCancel()
+			if shutdownErr := shutdownTelemetry(shutdownCtx); shutdownErr != nil {
+				logging.Error("Failed to shutdown OpenTelemetry", types.System, "error", shutdownErr)
+			}
+		}()
+	}
 
 	// Start periodic config auto-flush of dynamic data to DB
 	configManager.StartAutoFlush(ctx, 60*time.Second)

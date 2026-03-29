@@ -12,6 +12,7 @@ import (
 	"decentralized-api/internal/validation"
 	"decentralized-api/logging"
 	"decentralized-api/statsstorage"
+	"decentralized-api/telemetry"
 	"decentralized-api/upgrade"
 	"encoding/json"
 	"errors"
@@ -465,8 +466,14 @@ func (e *InferenceFinishedEventHandler) CanHandle(event *chainevents.JSONRPCResp
 }
 
 func (e *InferenceFinishedEventHandler) Handle(event *chainevents.JSONRPCResponse, el *EventListener) error {
+	eventContext, eventOp := telemetry.Inference.StartValidationEvent(context.Background(), len(event.Result.Events["inference_finished.inference_id"]))
+	var handlerErr error
+	defer func() {
+		eventOp.Finish(handlerErr)
+	}()
+
 	if el.isNodeSynced() {
-		el.validator.SampleInferenceToValidate(event.Result.Events["inference_finished.inference_id"], el.transactionRecorder)
+		el.validator.SampleInferenceToValidate(eventContext, event.Result.Events["inference_finished.inference_id"], el.transactionRecorder)
 	}
 	if el.statsStorage == nil {
 		return nil
@@ -474,6 +481,7 @@ func (e *InferenceFinishedEventHandler) Handle(event *chainevents.JSONRPCRespons
 	records, err := parseInferenceFinishedRecords(event.Result.Events)
 	if err != nil {
 		logging.Warn("Failed to parse inference_finished records for stats storage", types.EventProcessing, "error", err)
+		handlerErr = err
 		return nil
 	}
 	for _, rec := range records {
