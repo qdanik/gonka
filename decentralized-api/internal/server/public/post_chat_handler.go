@@ -7,6 +7,7 @@ import (
 	"decentralized-api/broker"
 	"decentralized-api/completionapi"
 	"decentralized-api/logging"
+	"decentralized-api/telemetry"
 	"decentralized-api/utils"
 	"encoding/json"
 	"errors"
@@ -219,10 +220,20 @@ func (s *Server) postChat(ctx echo.Context) error {
 }
 
 func (s *Server) postChatWithBody(ctx echo.Context, body []byte, signBodyHash string, forwardPath string, forwardBody []byte) error {
+	requestContext := telemetry.Inference.ExtractRequestContext(ctx.Request().Context(), ctx.Request().Header)
+	ctx.SetRequest(ctx.Request().WithContext(requestContext))
+	requestContext, requestOp := telemetry.Inference.StartRequest(requestContext, ctx.Request().Method)
+	ctx.SetRequest(ctx.Request().WithContext(requestContext))
+	var handlerErr error
+	defer func() {
+		requestOp.Finish(handlerErr)
+	}()
+
 	logging.Debug("PostChat. Received request", types.Inferences, "path", ctx.Request().URL.Path)
 
 	chatRequest, err := readRequest(ctx.Request(), s.recorder.GetAccountAddress(), body, signBodyHash, forwardPath, forwardBody)
 	if err != nil {
+		handlerErr = err
 		return err
 	}
 
@@ -230,22 +241,28 @@ func (s *Server) postChatWithBody(ctx echo.Context, body []byte, signBodyHash st
 	// - Transfer requests: TransferAddress = this node's address (set by readRequest)
 	// - Executor requests: TransferAddress = forwarding TA's address (from X-Transfer-Address header)
 	if err := s.enforceTransferAgentAccess(chatRequest.TransferAddress); err != nil {
+		handlerErr = err
 		return err
 	}
 
 	if chatRequest.AuthKey == "" {
 		logging.Warn("Request without authorization", types.Server, "path", ctx.Request().URL.Path)
+		handlerErr = ErrRequestAuth
 		return ErrRequestAuth
 	}
 
 	if chatRequest.OpenAiRequest.Model == "" {
 		logging.Warn("Request without model", types.Server, "path", ctx.Request().URL.Path)
+		handlerErr = ErrNoModelSpecified
 		return ErrNoModelSpecified
 	}
+
+	telemetry.Inference.SetRequestIdentity(requestOp, chatRequest.OpenAiRequest.Model, chatRequest.RequesterAddress)
 
 	// Developer access gating: before a configured cutoff height, only allowlisted developers may use the public API
 	// for both transfer-agent and executor request paths.
 	if err := s.enforceDeveloperAccessGate(ctx.Request().Context(), chatRequest.RequesterAddress); err != nil {
+		handlerErr = err
 		return err
 	}
 	if err := completionapi.ValidateOpenAICompatRequestBody(chatRequest.Body); err != nil {
@@ -254,10 +271,14 @@ func (s *Server) postChatWithBody(ctx echo.Context, body []byte, signBodyHash st
 
 	if chatRequest.InferenceId != "" && chatRequest.Seed != "" {
 		logging.Info("Executor request", types.Inferences, "inferenceId", chatRequest.InferenceId, "seed", chatRequest.Seed)
-		return s.handleExecutorRequest(ctx, chatRequest, ctx.Response().Writer)
+		telemetry.Inference.MarkExecutorPath(requestOp, chatRequest.InferenceId)
+		handlerErr = s.handleExecutorRequest(ctx, chatRequest, ctx.Response().Writer)
+		return handlerErr
 	} else {
 		logging.Info("Transfer request", types.Inferences, "requesterAddress", chatRequest.RequesterAddress)
-		return s.handleTransferRequest(ctx, chatRequest)
+		telemetry.Inference.MarkTransferPath(requestOp)
+		handlerErr = s.handleTransferRequest(ctx, chatRequest)
+		return handlerErr
 	}
 }
 
@@ -305,12 +326,20 @@ func (s *Server) enforceTransferAgentAccess(taAddress string) error {
 }
 
 func (s *Server) handleTransferRequest(ctx echo.Context, request *ChatRequest) error {
+	transferContext, transferOp := telemetry.Inference.StartTransfer(ctx.Request().Context(), request.OpenAiRequest.Model, request.RequesterAddress)
+	ctx.SetRequest(ctx.Request().WithContext(transferContext))
+	var handlerErr error
+	defer func() {
+		transferOp.Finish(handlerErr)
+	}()
+
 	logging.Debug("GET inference requester for transfer", types.Inferences, "address", request.RequesterAddress)
 
 	queryClient := s.recorder.NewInferenceQueryClient()
 	requester, err := queryClient.AccountByAddress(ctx.Request().Context(), &types.QueryAccountByAddressRequest{Address: request.RequesterAddress})
 	if err != nil {
 		logging.Error("Failed to get inference requester", types.Inferences, "address", request.RequesterAddress, "error", err)
+		handlerErr = err
 		return err
 	}
 
@@ -324,22 +353,26 @@ func (s *Server) handleTransferRequest(ctx echo.Context, request *ChatRequest) e
 
 	if err != nil {
 		logging.Error("Failed to get prompt token estimation", types.Inferences, "error", err)
+		handlerErr = err
 		return err
 	}
 
 	logging.Info("Prompt token estimation", types.Inferences, "count", promptTokenCount, "model", request.OpenAiRequest.Model)
 
 	if err := s.validateRequester(ctx.Request().Context(), request, requester, promptTokenCount); err != nil {
+		handlerErr = err
 		return err
 	}
 
 	status, err := s.recorder.Status(context.Background())
 	if err != nil {
 		logging.Error("Failed to get status", types.Inferences, "error", err)
+		handlerErr = err
 		return err
 	}
 
 	if err := validateRequest(request, status, s.configManager); err != nil {
+		handlerErr = err
 		return err
 	}
 
@@ -348,7 +381,8 @@ func (s *Server) handleTransferRequest(ctx echo.Context, request *ChatRequest) e
 	if !can {
 		logging.Warn("Capacity limit exceeded", types.Inferences, "address", request.RequesterAddress)
 		url := s.configManager.GetApiConfig().PublicUrl
-		return echo.NewHTTPError(http.StatusTooManyRequests, "Transfer Agent capacity reached. Try another TA from "+url+"/v1/epochs/current/participants")
+		handlerErr = echo.NewHTTPError(http.StatusTooManyRequests, "Transfer Agent capacity reached. Try another TA from "+url+"/v1/epochs/current/participants")
+		return handlerErr
 	}
 
 	s.bandwidthLimiter.RecordRequest(requestBlockHeight, estimatedKB)
@@ -357,6 +391,7 @@ func (s *Server) handleTransferRequest(ctx echo.Context, request *ChatRequest) e
 	executor, err := s.getExecutorForRequest(ctx.Request().Context(), request.OpenAiRequest.Model)
 	if err != nil {
 		logging.Error("Failed to get executor", types.Inferences, "model", request.OpenAiRequest.Model, "error", err)
+		handlerErr = err
 		if st, ok := grpcstatus.FromError(err); ok {
 			if st.Code() == codes.NotFound {
 				return echo.NewHTTPError(http.StatusNotFound, "model not found")
@@ -376,6 +411,7 @@ func (s *Server) handleTransferRequest(ctx echo.Context, request *ChatRequest) e
 	inferenceRequest, err := createInferenceStartRequest(s, request, seed, request.AuthKey, executor, s.configManager.GetCurrentNodeVersion(), promptTokenCount, selectedLogprobsMode)
 	if err != nil {
 		logging.Error("Failed to create inference start request", types.Inferences, "error", err)
+		handlerErr = err
 		return err
 	}
 
@@ -414,12 +450,16 @@ func (s *Server) handleTransferRequest(ctx echo.Context, request *ChatRequest) e
 		request.PromptHash = inferenceRequest.PromptHash
 
 		logging.Info("Execute request on same node, fill request with extra data", types.Inferences, "inferenceId", request.InferenceId, "seed", request.Seed)
-		return s.handleExecutorRequest(ctx, request, ctx.Response().Writer)
+		handlerErr = s.handleExecutorRequest(ctx, request, ctx.Response().Writer)
+		return handlerErr
 	}
 
+	forwardContext, forwardOp := telemetry.Inference.StartForwardExecutor(transferContext, request.OpenAiRequest.Model, executor.Address, executor.Url)
 	req, err := http.NewRequest(http.MethodPost, executor.Url+forwardPath, bytes.NewReader(forwardBody))
 	if err != nil {
+		forwardOp.Finish(err)
 		logging.Error("handleTransferRequest. Failed to create request to the executor node", types.Inferences, "error", err)
+		handlerErr = err
 		return err
 	}
 
@@ -433,12 +473,17 @@ func (s *Server) handleTransferRequest(ctx echo.Context, request *ChatRequest) e
 	req.Header.Set(utils.XTASignatureHeader, inferenceRequest.TransferSignature)
 	req.Header.Set(utils.XPromptHashHeader, inferenceRequest.PromptHash)
 	req.Header.Set("Content-Type", request.Request.Header.Get("Content-Type"))
+	telemetry.Inference.InjectRequestContext(forwardContext, req.Header)
 
 	resp, err := s.httpClient.Do(req)
 	if err != nil {
+		forwardOp.Finish(err)
 		logging.Error("Failed to make http request to executor", types.Inferences, "error", err, "url", executor.Url)
+		handlerErr = err
 		return err
 	}
+	telemetry.Inference.SetHTTPStatus(forwardOp, resp.StatusCode)
+	forwardOp.Finish(nil)
 	defer resp.Body.Close()
 
 	if unsupportedErr := mapExecutorCompletionsUnsupportedError(forwardPath, resp.StatusCode); unsupportedErr != nil {
@@ -561,15 +606,24 @@ func (s *Server) extractPromptTextFromRequest(requestBytes []byte) (string, erro
 }
 
 func (s *Server) handleExecutorRequest(ctx echo.Context, request *ChatRequest, w http.ResponseWriter) error {
+	executorContext, executorOp := telemetry.Inference.StartExecutor(ctx.Request().Context(), request.InferenceId, request.OpenAiRequest.Model, request.RequesterAddress, request.TransferAddress)
+	ctx.SetRequest(ctx.Request().WithContext(executorContext))
+	var handlerErr error
+	defer func() {
+		executorOp.Finish(handlerErr)
+	}()
+
 	inferenceId := request.InferenceId
 	err := s.validateFullRequest(ctx, request)
 	if err != nil {
+		handlerErr = err
 		return err
 	}
 
 	seed, err := strconv.Atoi(request.Seed)
 	if err != nil {
 		logging.Warn("Unable to parse seed", types.Inferences, "seed", request.Seed)
+		handlerErr = echo.ErrBadRequest
 		return echo.ErrBadRequest
 	}
 
@@ -580,23 +634,29 @@ func (s *Server) handleExecutorRequest(ctx echo.Context, request *ChatRequest, w
 	modifiedRequestBody, err := completionapi.ModifyRequestBodyWithLogprobsMode(request.Body, int32(seed), logprobsMode)
 	if err != nil {
 		logging.Warn("Unable to modify request body", types.Inferences, "error", err)
+		handlerErr = err
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid chat completion request: "+err.Error())
 	}
 
 	computedPromptHash, promptPayload, err := getModifiedPromptHash(modifiedRequestBody.NewBody)
 	if err != nil {
 		logging.Error("Failed to compute prompt hash", types.Inferences, "error", err)
-		return echo.NewHTTPError(http.StatusBadRequest, "Failed to compute prompt hash")
+		handlerErr = echo.NewHTTPError(http.StatusBadRequest, "Failed to compute prompt hash")
+		return handlerErr
 	}
 	if request.PromptHash == "" {
 		logging.Error("Empty prompt hash", types.Inferences)
-		return echo.NewHTTPError(http.StatusBadRequest, "Prompt hash is missing")
+		handlerErr = echo.NewHTTPError(http.StatusBadRequest, "Prompt hash is missing")
+		return handlerErr
 	}
 	if computedPromptHash != request.PromptHash {
 		logging.Error("Prompt hash mismatch", types.Inferences,
 			"expected", request.PromptHash, "computed", computedPromptHash)
-		return echo.NewHTTPError(http.StatusBadRequest, "Prompt hash mismatch")
+		handlerErr = echo.NewHTTPError(http.StatusBadRequest, "Prompt hash mismatch")
+		return handlerErr
 	}
+
+	responseContext, responseOp := telemetry.Inference.StartMLNodeExecution(executorContext, inferenceId, request.OpenAiRequest.Model)
 
 	logging.Info("Attempting to lock node for inference", types.Inferences,
 		"inferenceId", inferenceId, "nodeVersion", s.configManager.GetCurrentNodeVersion())
@@ -605,6 +665,7 @@ func (s *Server) handleExecutorRequest(ctx echo.Context, request *ChatRequest, w
 		inferencePath = chatCompletionsPath
 	}
 	resp, err := broker.DoWithLockedNodeHTTPRetry(s.nodeBroker, request.OpenAiRequest.Model, nil, 3, func(node *broker.Node) (*http.Response, *broker.ActionError) {
+		telemetry.Inference.SetMLNodeTarget(responseOp, node.Id, node.InferenceUrlWithVersion(s.configManager.GetCurrentNodeVersion()))
 		logging.Info("Successfully acquired node lock for inference", types.Inferences,
 			"inferenceId", inferenceId, "node", node.Id, "url", node.InferenceUrlWithVersion(s.configManager.GetCurrentNodeVersion()))
 
@@ -612,19 +673,23 @@ func (s *Server) handleExecutorRequest(ctx echo.Context, request *ChatRequest, w
 		if err != nil {
 			return nil, broker.NewApplicationActionError(err)
 		}
-		resp, postErr := s.httpClient.Post(
-			completionsUrl,
-			request.Request.Header.Get("Content-Type"),
-			bytes.NewReader(modifiedRequestBody.NewBody),
-		)
+		httpReq, reqErr := http.NewRequestWithContext(responseContext, http.MethodPost, completionsUrl, bytes.NewReader(modifiedRequestBody.NewBody))
+		if reqErr != nil {
+			return nil, broker.NewApplicationActionError(reqErr)
+		}
+		httpReq.Header.Set("Content-Type", request.Request.Header.Get("Content-Type"))
+		telemetry.Inference.InjectRequestContext(responseContext, httpReq.Header)
+		resp, postErr := s.httpClient.Do(httpReq)
 		if postErr != nil {
 			return nil, broker.NewTransportActionError(postErr)
 		}
 		return resp, nil
 	})
 	if err != nil {
+		responseOp.Finish(err)
 		logging.Error("Failed to get response from inference node", types.Inferences,
 			"inferenceId", inferenceId, "error", err)
+		handlerErr = err
 		if errors.Is(err, broker.ErrNoNodesAvailable) {
 			return echo.NewHTTPError(http.StatusServiceUnavailable, "no inference nodes available")
 		}
@@ -636,6 +701,8 @@ func (s *Server) handleExecutorRequest(ctx echo.Context, request *ChatRequest, w
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		msg := getInferenceErrorMessage(resp)
+		telemetry.Inference.SetHTTPStatus(responseOp, resp.StatusCode)
+		responseOp.Finish(fmt.Errorf("mlnode returned status %d", resp.StatusCode))
 		logging.Warn("Inference node response with an error", types.Inferences, "code", resp.StatusCode, "msg", msg)
 		// If vLLM rejects the payload (400/422), still record a FinishInference with an empty response
 		// so the inference lifecycle is closed on-chain.
@@ -647,15 +714,18 @@ func (s *Server) handleExecutorRequest(ctx echo.Context, request *ChatRequest, w
 			synthetic := emptyButParseableResponsePayload(inferenceId, request.OpenAiRequest.Model, promptTokens)
 			if synthetic == nil {
 				logging.Error("Failed to create synthetic response payload", types.Inferences, "inferenceId", inferenceId)
-				return echo.NewHTTPError(http.StatusInternalServerError, "Failed to create synthetic response payload")
+				handlerErr = echo.NewHTTPError(http.StatusInternalServerError, "Failed to create synthetic response payload")
+				return handlerErr
 			}
 			if txErr := s.sendInferenceTransaction(request.InferenceId, synthetic, request.Body, s.recorder.GetAccountAddress(), request, promptPayload); txErr != nil {
 				logging.Error("Failed to record FinishInference after inference node payload error", types.Inferences,
 					"inferenceId", inferenceId, "error", txErr)
 			}
-			return echo.NewHTTPError(resp.StatusCode, msg)
+			handlerErr = echo.NewHTTPError(resp.StatusCode, msg)
+			return handlerErr
 		}
-		return echo.NewHTTPError(http.StatusInternalServerError, msg)
+		handlerErr = echo.NewHTTPError(http.StatusInternalServerError, msg)
+		return handlerErr
 	}
 
 	responseProcessor := completionapi.NewExecutorResponseProcessor(request.InferenceId)
@@ -666,14 +736,23 @@ func (s *Server) handleExecutorRequest(ctx echo.Context, request *ChatRequest, w
 	completionResponse, err := responseProcessor.GetResponse()
 
 	if err != nil || completionResponse == nil {
+		telemetry.Inference.SetHTTPStatus(responseOp, resp.StatusCode)
+		responseOp.Finish(err)
 		logging.Error("Failed to parse response data into CompletionResponse", types.Inferences, "error", err)
+		handlerErr = err
 		return err
 	}
+	if usage, usageErr := completionResponse.GetUsage(); usageErr == nil {
+		responseOp.RecordTokens(usage.PromptTokens, usage.CompletionTokens)
+	}
+	telemetry.Inference.SetHTTPStatus(responseOp, resp.StatusCode)
+	responseOp.Finish(nil)
 
 	err = s.sendInferenceTransaction(request.InferenceId, completionResponse, request.Body, s.recorder.GetAccountAddress(), request, promptPayload)
 	if err != nil {
 		// Not http.Error, because we assume we already returned everything to the client during proxyResponse execution
 		logging.Error("Failed to send inference transaction", types.Inferences, "error", err)
+		handlerErr = err
 		return nil
 	}
 	return nil
@@ -812,24 +891,39 @@ func (s *Server) calculateSignature(payload string, timestamp int64, transferAdd
 }
 
 func (s *Server) sendInferenceTransaction(inferenceId string, response completionapi.CompletionResponse, requestBody []byte, executorAddress string, request *ChatRequest, promptPayload []byte) error {
+	operationContext := context.Background()
+	if request != nil && request.Request != nil {
+		operationContext = request.Request.Context()
+	}
+	finishContext, finishOp := telemetry.Inference.StartFinishSubmission(operationContext, inferenceId, executorAddress, request.OpenAiRequest.Model)
+	var finishErr error
+	defer func() {
+		finishOp.Finish(finishErr)
+	}()
+
 	responseHash, err := response.GetHash()
 	if err != nil || responseHash == "" {
 		logging.Error("Failed to get responseHash from response", types.Inferences, "error", err)
+		finishErr = err
 		return err
 	}
 	model, err := response.GetModel()
 	if err != nil || model == "" {
 		logging.Error("Failed to get model from response", types.Inferences, "error", err)
+		finishErr = err
 		return err
 	}
+	telemetry.Inference.SetModel(finishOp, model)
 	id, err := response.GetInferenceId()
 	if err != nil || id == "" {
 		logging.Error("Failed to get id from response", types.Inferences, "error", err)
+		finishErr = err
 		return err
 	}
 	usage, err := response.GetUsage()
 	if err != nil {
 		logging.Warn("Failed to get usage from response", types.Inferences, "error", err)
+		finishErr = err
 		return err
 	}
 
@@ -850,11 +944,13 @@ func (s *Server) sendInferenceTransaction(inferenceId string, response completio
 			}
 		}
 	}
+	finishOp.RecordTokens(usage.PromptTokens, usage.CompletionTokens)
 
 	logging.Debug("Usage from response", types.Inferences, "usage", usage)
 	bodyBytes, err := response.GetBodyBytes()
 	if err != nil || bodyBytes == nil {
 		logging.Error("Failed to get body bytes from response", types.Inferences, "error", err)
+		finishErr = err
 		return err
 	}
 
@@ -886,16 +982,18 @@ func (s *Server) sendInferenceTransaction(inferenceId string, response completio
 
 		// Store payloads before broadcasting transaction
 		// If storage fails, we still proceed with broadcast (but log error)
-		s.storePayloadsToStorage(request.Request.Context(), inferenceId, promptPayload, bodyBytes)
+		s.storePayloadsToStorage(finishContext, inferenceId, promptPayload, bodyBytes)
 
 		logging.Info("Submitting MsgFinishInference", types.Inferences, "inferenceId", inferenceId)
 		err = s.recorder.FinishInference(message)
 		if err != nil {
 			logging.Error("Failed to submit MsgFinishInference", types.Inferences, "inferenceId", inferenceId, "error", err)
+			finishErr = err
 		} else {
 			logging.Debug("Submitted MsgFinishInference", types.Inferences, "inferenceId", inferenceId)
 		}
 	}
+	telemetry.Inference.SetResponseHash(finishOp, responseHash)
 	return nil
 }
 
