@@ -146,12 +146,43 @@ func initInstruments() {
 	}
 
 	meter := provider.Meter(meterName)
-	activeOperations, _ = meter.Int64UpDownCounter("decentralized_api.inference.active_operations")
-	operationDuration, _ = meter.Float64Histogram("decentralized_api.inference.operation.duration_seconds")
-	operationErrors, _ = meter.Int64Counter("decentralized_api.inference.operation.errors")
-	promptTokens, _ = meter.Int64Histogram("decentralized_api.inference.prompt_tokens")
-	completionTokens, _ = meter.Int64Histogram("decentralized_api.inference.completion_tokens")
-	totalTokens, _ = meter.Int64Histogram("decentralized_api.inference.total_tokens")
+	newActiveOperations, err := meter.Int64UpDownCounter("decentralized_api.inference.active_operations")
+	if err != nil {
+		logObservabilityError("metrics.init_active_operations_failed", "Failed to initialize active operations metric", err)
+		return
+	}
+	newOperationDuration, err := meter.Float64Histogram("decentralized_api.inference.operation.duration_seconds")
+	if err != nil {
+		logObservabilityError("metrics.init_duration_failed", "Failed to initialize operation duration metric", err)
+		return
+	}
+	newOperationErrors, err := meter.Int64Counter("decentralized_api.inference.operation.errors")
+	if err != nil {
+		logObservabilityError("metrics.init_errors_failed", "Failed to initialize operation errors metric", err)
+		return
+	}
+	newPromptTokens, err := meter.Int64Histogram("decentralized_api.inference.prompt_tokens")
+	if err != nil {
+		logObservabilityError("metrics.init_prompt_tokens_failed", "Failed to initialize prompt tokens metric", err)
+		return
+	}
+	newCompletionTokens, err := meter.Int64Histogram("decentralized_api.inference.completion_tokens")
+	if err != nil {
+		logObservabilityError("metrics.init_completion_tokens_failed", "Failed to initialize completion tokens metric", err)
+		return
+	}
+	newTotalTokens, err := meter.Int64Histogram("decentralized_api.inference.total_tokens")
+	if err != nil {
+		logObservabilityError("metrics.init_total_tokens_failed", "Failed to initialize total tokens metric", err)
+		return
+	}
+
+	activeOperations = newActiveOperations
+	operationDuration = newOperationDuration
+	operationErrors = newOperationErrors
+	promptTokens = newPromptTokens
+	completionTokens = newCompletionTokens
+	totalTokens = newTotalTokens
 	instrumentProvider = provider
 }
 
