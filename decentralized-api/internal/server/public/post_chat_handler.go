@@ -584,20 +584,20 @@ func (s *Server) extractPromptTextFromRequest(requestBytes []byte) (string, erro
 func (s *Server) handleExecutorRequest(ctx echo.Context, request *ChatRequest, w http.ResponseWriter) error {
 	executorContext, executorOp := observability.Inference.StartExecutor(ctx.Request().Context(), request.InferenceId, request.OpenAiRequest.Model, request.RequesterAddress, request.TransferAddress)
 	ctx.SetRequest(ctx.Request().WithContext(executorContext))
-	var handlerErr error
-	defer executorOp.FinishErr(&handlerErr)
+	var spanErr error
+	defer executorOp.FinishErr(&spanErr)
 
 	inferenceId := request.InferenceId
 	err := s.validateFullRequest(ctx, request)
 	if err != nil {
-		handlerErr = err
+		spanErr = err
 		return err
 	}
 
 	seed, err := strconv.Atoi(request.Seed)
 	if err != nil {
 		logging.Warn("Unable to parse seed", types.Inferences, "seed", request.Seed)
-		handlerErr = echo.ErrBadRequest
+		spanErr = echo.ErrBadRequest
 		return echo.ErrBadRequest
 	}
 
@@ -608,26 +608,26 @@ func (s *Server) handleExecutorRequest(ctx echo.Context, request *ChatRequest, w
 	modifiedRequestBody, err := completionapi.ModifyRequestBodyWithLogprobsMode(request.Body, int32(seed), logprobsMode)
 	if err != nil {
 		logging.Warn("Unable to modify request body", types.Inferences, "error", err)
-		handlerErr = err
+		spanErr = err
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid chat completion request: "+err.Error())
 	}
 
 	computedPromptHash, promptPayload, err := getModifiedPromptHash(modifiedRequestBody.NewBody)
 	if err != nil {
 		logging.Error("Failed to compute prompt hash", types.Inferences, "error", err)
-		handlerErr = echo.NewHTTPError(http.StatusBadRequest, "Failed to compute prompt hash")
-		return handlerErr
+		spanErr = echo.NewHTTPError(http.StatusBadRequest, "Failed to compute prompt hash")
+		return spanErr
 	}
 	if request.PromptHash == "" {
 		logging.Error("Empty prompt hash", types.Inferences)
-		handlerErr = echo.NewHTTPError(http.StatusBadRequest, "Prompt hash is missing")
-		return handlerErr
+		spanErr = echo.NewHTTPError(http.StatusBadRequest, "Prompt hash is missing")
+		return spanErr
 	}
 	if computedPromptHash != request.PromptHash {
 		logging.Error("Prompt hash mismatch", types.Inferences,
 			"expected", request.PromptHash, "computed", computedPromptHash)
-		handlerErr = echo.NewHTTPError(http.StatusBadRequest, "Prompt hash mismatch")
-		return handlerErr
+		spanErr = echo.NewHTTPError(http.StatusBadRequest, "Prompt hash mismatch")
+		return spanErr
 	}
 
 	responseContext, responseOp := observability.Inference.StartMLNodeExecution(executorContext, inferenceId, request.OpenAiRequest.Model)
@@ -663,7 +663,7 @@ func (s *Server) handleExecutorRequest(ctx echo.Context, request *ChatRequest, w
 		responseOp.Finish(err)
 		logging.Error("Failed to get response from inference node", types.Inferences,
 			"inferenceId", inferenceId, "error", err)
-		handlerErr = err
+		spanErr = err
 		if errors.Is(err, broker.ErrNoNodesAvailable) {
 			return echo.NewHTTPError(http.StatusServiceUnavailable, "no inference nodes available")
 		}
@@ -688,18 +688,18 @@ func (s *Server) handleExecutorRequest(ctx echo.Context, request *ChatRequest, w
 			synthetic := emptyButParseableResponsePayload(inferenceId, request.OpenAiRequest.Model, promptTokens)
 			if synthetic == nil {
 				logging.Error("Failed to create synthetic response payload", types.Inferences, "inferenceId", inferenceId)
-				handlerErr = echo.NewHTTPError(http.StatusInternalServerError, "Failed to create synthetic response payload")
-				return handlerErr
+				spanErr = echo.NewHTTPError(http.StatusInternalServerError, "Failed to create synthetic response payload")
+				return spanErr
 			}
 			if txErr := s.sendInferenceTransaction(request.InferenceId, synthetic, request.Body, s.recorder.GetAccountAddress(), request, promptPayload); txErr != nil {
 				logging.Error("Failed to record FinishInference after inference node payload error", types.Inferences,
 					"inferenceId", inferenceId, "error", txErr)
 			}
-			handlerErr = echo.NewHTTPError(resp.StatusCode, msg)
-			return handlerErr
+			spanErr = echo.NewHTTPError(resp.StatusCode, msg)
+			return spanErr
 		}
-		handlerErr = echo.NewHTTPError(http.StatusInternalServerError, msg)
-		return handlerErr
+		spanErr = echo.NewHTTPError(http.StatusInternalServerError, msg)
+		return spanErr
 	}
 
 	responseProcessor := completionapi.NewExecutorResponseProcessor(request.InferenceId)
@@ -713,7 +713,7 @@ func (s *Server) handleExecutorRequest(ctx echo.Context, request *ChatRequest, w
 		observability.Inference.SetHTTPStatus(responseOp, resp.StatusCode)
 		responseOp.Finish(err)
 		logging.Error("Failed to parse response data into CompletionResponse", types.Inferences, "error", err)
-		handlerErr = err
+		spanErr = err
 		return err
 	}
 	if usage, usageErr := completionResponse.GetUsage(); usageErr == nil {
@@ -726,7 +726,7 @@ func (s *Server) handleExecutorRequest(ctx echo.Context, request *ChatRequest, w
 	if err != nil {
 		// Not http.Error, because we assume we already returned everything to the client during proxyResponse execution
 		logging.Error("Failed to send inference transaction", types.Inferences, "error", err)
-		handlerErr = err
+		spanErr = err
 		return nil
 	}
 	return nil
@@ -870,32 +870,32 @@ func (s *Server) sendInferenceTransaction(inferenceId string, response completio
 		operationContext = request.Request.Context()
 	}
 	finishContext, finishOp := observability.Inference.StartFinishSubmission(operationContext, inferenceId, executorAddress, request.OpenAiRequest.Model)
-	var finishErr error
-	defer finishOp.FinishErr(&finishErr)
+	var spanErr error
+	defer finishOp.FinishErr(&spanErr)
 
 	responseHash, err := response.GetHash()
 	if err != nil || responseHash == "" {
 		logging.Error("Failed to get responseHash from response", types.Inferences, "error", err)
-		finishErr = err
+		spanErr = err
 		return err
 	}
 	model, err := response.GetModel()
 	if err != nil || model == "" {
 		logging.Error("Failed to get model from response", types.Inferences, "error", err)
-		finishErr = err
+		spanErr = err
 		return err
 	}
 	observability.Inference.SetModel(finishOp, model)
 	id, err := response.GetInferenceId()
 	if err != nil || id == "" {
 		logging.Error("Failed to get id from response", types.Inferences, "error", err)
-		finishErr = err
+		spanErr = err
 		return err
 	}
 	usage, err := response.GetUsage()
 	if err != nil {
 		logging.Warn("Failed to get usage from response", types.Inferences, "error", err)
-		finishErr = err
+		spanErr = err
 		return err
 	}
 
@@ -922,7 +922,7 @@ func (s *Server) sendInferenceTransaction(inferenceId string, response completio
 	bodyBytes, err := response.GetBodyBytes()
 	if err != nil || bodyBytes == nil {
 		logging.Error("Failed to get body bytes from response", types.Inferences, "error", err)
-		finishErr = err
+		spanErr = err
 		return err
 	}
 
@@ -960,7 +960,7 @@ func (s *Server) sendInferenceTransaction(inferenceId string, response completio
 		err = s.recorder.FinishInference(message)
 		if err != nil {
 			logging.Error("Failed to submit MsgFinishInference", types.Inferences, "inferenceId", inferenceId, "error", err)
-			finishErr = err
+			spanErr = err
 		} else {
 			logging.Debug("Submitted MsgFinishInference", types.Inferences, "inferenceId", inferenceId)
 		}

@@ -770,14 +770,14 @@ func (m *manager) checkTxStatus(hash string) (bool, error) {
 }
 
 func (m *manager) WaitForResponse(txHash string) (transactionAppliedResult *ctypes.ResultTx, err error) {
-	traceCtx, waitOp := observability.Chain.StartTxConfirmation(m.ctx, txHash)
-	ctx, cancel := context.WithTimeout(traceCtx, time.Second*15)
+	txCtx, txOp := observability.Chain.StartTxConfirmation(m.ctx, txHash)
+	ctx, cancel := context.WithTimeout(txCtx, time.Second*15)
 	defer cancel()
-	defer waitOp.FinishErr(&err)
+	defer txOp.FinishErr(&err)
 
 	transactionAppliedResult, err = m.client.WaitForTx(ctx, txHash)
 	if transactionAppliedResult != nil {
-		observability.Chain.SetTxResult(waitOp, txHash, uint32(transactionAppliedResult.TxResult.Code))
+		observability.Chain.SetTxResult(txOp, txHash, uint32(transactionAppliedResult.TxResult.Code))
 	}
 	if err != nil {
 		logging.Error("Failed to wait for transaction", types.Messages, "error", err, "result", transactionAppliedResult)
@@ -835,8 +835,7 @@ func (m *manager) BroadcastMessages(id string, msgs ...sdk.Msg) (resp *sdk.TxRes
 		return nil, time.Time{}, err
 	}
 
-	broadcastCtx, broadcastOp := observability.Chain.StartTxBroadcast(m.ctx, "batch", len(msgs))
-	_ = broadcastCtx
+	_, broadcastOp := observability.Chain.StartTxBroadcast(m.ctx, "batch", len(msgs))
 	defer broadcastOp.FinishErr(&err)
 	resp, err = m.client.Context().BroadcastTxSync(txBytes)
 	if resp != nil {
@@ -920,8 +919,7 @@ func (m *manager) broadcastMessage(id string, rawTx sdk.Msg) (resp *sdk.TxRespon
 		return nil, time.Time{}, err
 	}
 
-	broadcastCtx, broadcastOp := observability.Chain.StartTxBroadcast(m.ctx, originalMsgType, 1)
-	_ = broadcastCtx
+	_, broadcastOp := observability.Chain.StartTxBroadcast(m.ctx, originalMsgType, 1)
 	defer broadcastOp.FinishErr(&err)
 	resp, err = m.client.Context().BroadcastTxSync(txBytes)
 	if resp != nil {
