@@ -77,6 +77,7 @@ func FetchPayloadsHTTP(
 		return nil, err
 	}
 	defer resp.Body.Close()
+	observability.Inference.SetHTTPStatus(httpOp, resp.StatusCode)
 
 	if resp.StatusCode == http.StatusNotFound {
 		err = fmt.Errorf("payload not found on executor")
@@ -93,7 +94,6 @@ func FetchPayloadsHTTP(
 		err = fmt.Errorf("failed to decode response: %w", err)
 		return nil, err
 	}
-	observability.Inference.SetHTTPStatus(httpOp, resp.StatusCode)
 
 	return &response, nil
 }

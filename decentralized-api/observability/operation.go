@@ -17,7 +17,8 @@ import (
 const meterName = "decentralized-api/observability"
 
 var (
-	instrumentOnce sync.Once
+	instrumentsMu sync.Mutex
+	instrumentProvider metric.MeterProvider
 
 	activeOperations  metric.Int64UpDownCounter
 	operationDuration metric.Float64Histogram
@@ -135,15 +136,23 @@ func Inject(ctx context.Context, headers http.Header) {
 }
 
 func initInstruments() {
-	instrumentOnce.Do(func() {
-		meter := otel.Meter(meterName)
-		activeOperations, _ = meter.Int64UpDownCounter("decentralized_api.inference.active_operations")
-		operationDuration, _ = meter.Float64Histogram("decentralized_api.inference.operation.duration_seconds")
-		operationErrors, _ = meter.Int64Counter("decentralized_api.inference.operation.errors")
-		promptTokens, _ = meter.Int64Histogram("decentralized_api.inference.prompt_tokens")
-		completionTokens, _ = meter.Int64Histogram("decentralized_api.inference.completion_tokens")
-		totalTokens, _ = meter.Int64Histogram("decentralized_api.inference.total_tokens")
-	})
+	provider := otel.GetMeterProvider()
+
+	instrumentsMu.Lock()
+	defer instrumentsMu.Unlock()
+
+	if instrumentProvider == provider {
+		return
+	}
+
+	meter := provider.Meter(meterName)
+	activeOperations, _ = meter.Int64UpDownCounter("decentralized_api.inference.active_operations")
+	operationDuration, _ = meter.Float64Histogram("decentralized_api.inference.operation.duration_seconds")
+	operationErrors, _ = meter.Int64Counter("decentralized_api.inference.operation.errors")
+	promptTokens, _ = meter.Int64Histogram("decentralized_api.inference.prompt_tokens")
+	completionTokens, _ = meter.Int64Histogram("decentralized_api.inference.completion_tokens")
+	totalTokens, _ = meter.Int64Histogram("decentralized_api.inference.total_tokens")
+	instrumentProvider = provider
 }
 
 func withOperation(attrs []attribute.KeyValue, operation string) []attribute.KeyValue {

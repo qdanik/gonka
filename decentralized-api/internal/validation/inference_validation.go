@@ -479,7 +479,7 @@ func (s *InferenceValidator) SampleInferenceToValidate(ctx context.Context, ids 
 
 	queryClient := transactionRecorder.NewInferenceQueryClient()
 
-	r, err := queryClient.GetInferenceValidationParameters(transactionRecorder.GetContext(), &types.QueryGetInferenceValidationParametersRequest{
+	r, err := queryClient.GetInferenceValidationParameters(sampleContext, &types.QueryGetInferenceValidationParametersRequest{
 		Ids:       ids,
 		Requester: transactionRecorder.GetAddress(),
 	})
@@ -490,7 +490,7 @@ func (s *InferenceValidator) SampleInferenceToValidate(ctx context.Context, ids 
 		return
 	}
 
-	params, err := queryClient.Params(transactionRecorder.GetContext(), &types.QueryParamsRequest{})
+	params, err := queryClient.Params(sampleContext, &types.QueryParamsRequest{})
 	if err != nil {
 		logging.Error("Failed to get params", types.Validation, "error", err)
 		sampleErr = err
@@ -542,14 +542,14 @@ func (s *InferenceValidator) SampleInferenceToValidate(ctx context.Context, ids 
 	logInferencesToValidate(toValidateIds)
 	observability.Inference.SetSampledCount(sampleOp, len(toValidateIds))
 	for _, inf := range toValidateIds {
-		go func() {
-			response, err := queryClient.Inference(transactionRecorder.GetContext(), &types.QueryGetInferenceRequest{Index: inf})
+		go func(inferenceID string) {
+			response, err := queryClient.Inference(sampleContext, &types.QueryGetInferenceRequest{Index: inferenceID})
 			if err != nil {
 				logging.Error("Failed to get inference by id", types.Validation, "id", response, "error", err)
 				return
 			}
 			s.validateInferenceAndSendValMessage(sampleContext, response.Inference, transactionRecorder, false)
-		}()
+		}(inf)
 	}
 }
 
