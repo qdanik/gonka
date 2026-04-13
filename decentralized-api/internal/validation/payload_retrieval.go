@@ -55,15 +55,14 @@ func FetchPayloadsHTTP(
 	timestamp int64,
 	epochId uint64,
 	signature string,
-) (*PayloadResponse, error) {
+) (payloadResp *PayloadResponse, err error) {
 	httpContext, httpOp := observability.Inference.StartPayloadFetch(ctx, requestUrl, validatorAddress, int64(epochId))
-	var requestErr error
-	defer httpOp.FinishErr(&requestErr)
+	defer httpOp.FinishErr(&err)
 
 	req, err := http.NewRequestWithContext(httpContext, http.MethodGet, requestUrl, nil)
 	if err != nil {
-		requestErr = fmt.Errorf("failed to create request: %w", err)
-		return nil, requestErr
+		err = fmt.Errorf("failed to create request: %w", err)
+		return nil, err
 	}
 
 	req.Header.Set(apiutils.XValidatorAddressHeader, validatorAddress)
@@ -74,29 +73,29 @@ func FetchPayloadsHTTP(
 
 	resp, err := client.Do(req)
 	if err != nil {
-		requestErr = fmt.Errorf("request failed: %w", err)
-		return nil, requestErr
+		err = fmt.Errorf("request failed: %w", err)
+		return nil, err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode == http.StatusNotFound {
-		requestErr = fmt.Errorf("payload not found on executor")
-		return nil, requestErr
+		err = fmt.Errorf("payload not found on executor")
+		return nil, err
 	}
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		requestErr = fmt.Errorf("executor returned status %d: %s", resp.StatusCode, string(body))
-		return nil, requestErr
+		err = fmt.Errorf("executor returned status %d: %s", resp.StatusCode, string(body))
+		return nil, err
 	}
 
-	var payloadResp PayloadResponse
-	if err := json.NewDecoder(resp.Body).Decode(&payloadResp); err != nil {
-		requestErr = fmt.Errorf("failed to decode response: %w", err)
-		return nil, requestErr
+	var response PayloadResponse
+	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
+		err = fmt.Errorf("failed to decode response: %w", err)
+		return nil, err
 	}
 	observability.Inference.SetHTTPStatus(httpOp, resp.StatusCode)
 
-	return &payloadResp, nil
+	return &response, nil
 }
 
 // VerifyPayloadHashes checks that the actual payloads match the expected hashes.

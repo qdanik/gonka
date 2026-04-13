@@ -219,19 +219,17 @@ func (s *Server) postChat(ctx echo.Context) error {
 	return s.postChatWithBody(ctx, body, utils.GenerateSHA256Hash(string(body)), chatCompletionsPath, body)
 }
 
-func (s *Server) postChatWithBody(ctx echo.Context, body []byte, signBodyHash string, forwardPath string, forwardBody []byte) error {
+func (s *Server) postChatWithBody(ctx echo.Context, body []byte, signBodyHash string, forwardPath string, forwardBody []byte) (err error) {
 	requestContext := observability.Inference.ExtractRequestContext(ctx.Request().Context(), ctx.Request().Header)
 	ctx.SetRequest(ctx.Request().WithContext(requestContext))
 	requestContext, requestOp := observability.Inference.StartRequest(requestContext, ctx.Request().Method)
 	ctx.SetRequest(ctx.Request().WithContext(requestContext))
-	var handlerErr error
-	defer requestOp.FinishErr(&handlerErr)
+	defer requestOp.FinishErr(&err)
 
 	logging.Debug("PostChat. Received request", types.Inferences, "path", ctx.Request().URL.Path)
 
 	chatRequest, err := readRequest(ctx.Request(), s.recorder.GetAccountAddress(), body, signBodyHash, forwardPath, forwardBody)
 	if err != nil {
-		handlerErr = err
 		return err
 	}
 
@@ -239,19 +237,16 @@ func (s *Server) postChatWithBody(ctx echo.Context, body []byte, signBodyHash st
 	// - Transfer requests: TransferAddress = this node's address (set by readRequest)
 	// - Executor requests: TransferAddress = forwarding TA's address (from X-Transfer-Address header)
 	if err := s.enforceTransferAgentAccess(chatRequest.TransferAddress); err != nil {
-		handlerErr = err
 		return err
 	}
 
 	if chatRequest.AuthKey == "" {
 		logging.Warn("Request without authorization", types.Server, "path", ctx.Request().URL.Path)
-		handlerErr = ErrRequestAuth
 		return ErrRequestAuth
 	}
 
 	if chatRequest.OpenAiRequest.Model == "" {
 		logging.Warn("Request without model", types.Server, "path", ctx.Request().URL.Path)
-		handlerErr = ErrNoModelSpecified
 		return ErrNoModelSpecified
 	}
 
@@ -260,7 +255,6 @@ func (s *Server) postChatWithBody(ctx echo.Context, body []byte, signBodyHash st
 	// Developer access gating: before a configured cutoff height, only allowlisted developers may use the public API
 	// for both transfer-agent and executor request paths.
 	if err := s.enforceDeveloperAccessGate(ctx.Request().Context(), chatRequest.RequesterAddress); err != nil {
-		handlerErr = err
 		return err
 	}
 	if err := completionapi.ValidateOpenAICompatRequestBody(chatRequest.Body); err != nil {
@@ -270,13 +264,11 @@ func (s *Server) postChatWithBody(ctx echo.Context, body []byte, signBodyHash st
 	if chatRequest.InferenceId != "" && chatRequest.Seed != "" {
 		logging.Info("Executor request", types.Inferences, "inferenceId", chatRequest.InferenceId, "seed", chatRequest.Seed)
 		observability.Inference.MarkExecutorPath(requestOp, chatRequest.InferenceId)
-		handlerErr = s.handleExecutorRequest(ctx, chatRequest, ctx.Response().Writer)
-		return handlerErr
+		return s.handleExecutorRequest(ctx, chatRequest, ctx.Response().Writer)
 	} else {
 		logging.Info("Transfer request", types.Inferences, "requesterAddress", chatRequest.RequesterAddress)
 		observability.Inference.MarkTransferPath(requestOp)
-		handlerErr = s.handleTransferRequest(ctx, chatRequest)
-		return handlerErr
+		return s.handleTransferRequest(ctx, chatRequest)
 	}
 }
 
@@ -323,11 +315,10 @@ func (s *Server) enforceTransferAgentAccess(taAddress string) error {
 	return echo.NewHTTPError(http.StatusForbidden, "Transfer Agent not allowed")
 }
 
-func (s *Server) handleTransferRequest(ctx echo.Context, request *ChatRequest) error {
+func (s *Server) handleTransferRequest(ctx echo.Context, request *ChatRequest) (err error) {
 	transferContext, transferOp := observability.Inference.StartTransfer(ctx.Request().Context(), request.OpenAiRequest.Model, request.RequesterAddress)
 	ctx.SetRequest(ctx.Request().WithContext(transferContext))
-	var handlerErr error
-	defer transferOp.FinishErr(&handlerErr)
+	defer transferOp.FinishErr(&err)
 
 	logging.Debug("GET inference requester for transfer", types.Inferences, "address", request.RequesterAddress)
 
@@ -335,7 +326,6 @@ func (s *Server) handleTransferRequest(ctx echo.Context, request *ChatRequest) e
 	requester, err := queryClient.AccountByAddress(ctx.Request().Context(), &types.QueryAccountByAddressRequest{Address: request.RequesterAddress})
 	if err != nil {
 		logging.Error("Failed to get inference requester", types.Inferences, "address", request.RequesterAddress, "error", err)
-		handlerErr = err
 		return err
 	}
 
@@ -349,26 +339,22 @@ func (s *Server) handleTransferRequest(ctx echo.Context, request *ChatRequest) e
 
 	if err != nil {
 		logging.Error("Failed to get prompt token estimation", types.Inferences, "error", err)
-		handlerErr = err
 		return err
 	}
 
 	logging.Info("Prompt token estimation", types.Inferences, "count", promptTokenCount, "model", request.OpenAiRequest.Model)
 
 	if err := s.validateRequester(ctx.Request().Context(), request, requester, promptTokenCount); err != nil {
-		handlerErr = err
 		return err
 	}
 
 	status, err := s.recorder.Status(context.Background())
 	if err != nil {
 		logging.Error("Failed to get status", types.Inferences, "error", err)
-		handlerErr = err
 		return err
 	}
 
 	if err := validateRequest(request, status, s.configManager); err != nil {
-		handlerErr = err
 		return err
 	}
 
@@ -377,8 +363,7 @@ func (s *Server) handleTransferRequest(ctx echo.Context, request *ChatRequest) e
 	if !can {
 		logging.Warn("Capacity limit exceeded", types.Inferences, "address", request.RequesterAddress)
 		url := s.configManager.GetApiConfig().PublicUrl
-		handlerErr = echo.NewHTTPError(http.StatusTooManyRequests, "Transfer Agent capacity reached. Try another TA from "+url+"/v1/epochs/current/participants")
-		return handlerErr
+		return echo.NewHTTPError(http.StatusTooManyRequests, "Transfer Agent capacity reached. Try another TA from "+url+"/v1/epochs/current/participants")
 	}
 
 	s.bandwidthLimiter.RecordRequest(requestBlockHeight, estimatedKB)
@@ -387,7 +372,6 @@ func (s *Server) handleTransferRequest(ctx echo.Context, request *ChatRequest) e
 	executor, err := s.getExecutorForRequest(ctx.Request().Context(), request.OpenAiRequest.Model)
 	if err != nil {
 		logging.Error("Failed to get executor", types.Inferences, "model", request.OpenAiRequest.Model, "error", err)
-		handlerErr = err
 		if st, ok := grpcstatus.FromError(err); ok {
 			if st.Code() == codes.NotFound {
 				return echo.NewHTTPError(http.StatusNotFound, "model not found")
@@ -407,7 +391,6 @@ func (s *Server) handleTransferRequest(ctx echo.Context, request *ChatRequest) e
 	inferenceRequest, err := createInferenceStartRequest(s, request, seed, request.AuthKey, executor, s.configManager.GetCurrentNodeVersion(), promptTokenCount, selectedLogprobsMode)
 	if err != nil {
 		logging.Error("Failed to create inference start request", types.Inferences, "error", err)
-		handlerErr = err
 		return err
 	}
 
@@ -446,8 +429,7 @@ func (s *Server) handleTransferRequest(ctx echo.Context, request *ChatRequest) e
 		request.PromptHash = inferenceRequest.PromptHash
 
 		logging.Info("Execute request on same node, fill request with extra data", types.Inferences, "inferenceId", request.InferenceId, "seed", request.Seed)
-		handlerErr = s.handleExecutorRequest(ctx, request, ctx.Response().Writer)
-		return handlerErr
+		return s.handleExecutorRequest(ctx, request, ctx.Response().Writer)
 	}
 
 	forwardContext, forwardOp := observability.Inference.StartForwardExecutor(transferContext, request.OpenAiRequest.Model, executor.Address, executor.Url)
@@ -455,7 +437,6 @@ func (s *Server) handleTransferRequest(ctx echo.Context, request *ChatRequest) e
 	if err != nil {
 		forwardOp.Finish(err)
 		logging.Error("handleTransferRequest. Failed to create request to the executor node", types.Inferences, "error", err)
-		handlerErr = err
 		return err
 	}
 
@@ -475,7 +456,6 @@ func (s *Server) handleTransferRequest(ctx echo.Context, request *ChatRequest) e
 	if err != nil {
 		forwardOp.Finish(err)
 		logging.Error("Failed to make http request to executor", types.Inferences, "error", err, "url", executor.Url)
-		handlerErr = err
 		return err
 	}
 	observability.Inference.SetHTTPStatus(forwardOp, resp.StatusCode)

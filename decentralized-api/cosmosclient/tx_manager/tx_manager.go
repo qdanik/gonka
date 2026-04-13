@@ -800,7 +800,7 @@ func (m *manager) GetJetStream() nats.JetStreamContext {
 	return m.natsJetStream
 }
 
-func (m *manager) BroadcastMessages(id string, msgs ...sdk.Msg) (*sdk.TxResponse, time.Time, error) {
+func (m *manager) BroadcastMessages(id string, msgs ...sdk.Msg) (resp *sdk.TxResponse, timestamp time.Time, err error) {
 	if len(msgs) == 0 {
 		return nil, time.Time{}, nil
 	}
@@ -837,15 +837,13 @@ func (m *manager) BroadcastMessages(id string, msgs ...sdk.Msg) (*sdk.TxResponse
 
 	broadcastCtx, broadcastOp := observability.Chain.StartTxBroadcast(m.ctx, "batch", len(msgs))
 	_ = broadcastCtx
-	var broadcastErr error
-	defer broadcastOp.FinishErr(&broadcastErr)
-	var resp *sdk.TxResponse
-	resp, broadcastErr = m.client.Context().BroadcastTxSync(txBytes)
+	defer broadcastOp.FinishErr(&err)
+	resp, err = m.client.Context().BroadcastTxSync(txBytes)
 	if resp != nil {
 		observability.Chain.SetTxResult(broadcastOp, resp.TxHash, resp.Code)
 	}
-	if broadcastErr != nil {
-		return nil, time.Time{}, broadcastErr
+	if err != nil {
+		return nil, time.Time{}, err
 	}
 	if resp.Code != 0 {
 		logging.Error("Batch broadcast failed", types.Messages, "code", resp.Code, "rawLog", resp.RawLog, "tx_id", id, "msgCount", len(msgs))
@@ -894,7 +892,7 @@ func containsAny(s string, substrs ...string) bool {
 	return false
 }
 
-func (m *manager) broadcastMessage(id string, rawTx sdk.Msg) (*sdk.TxResponse, time.Time, error) {
+func (m *manager) broadcastMessage(id string, rawTx sdk.Msg) (resp *sdk.TxResponse, timestamp time.Time, err error) {
 	factory, err := m.getFactory(id)
 	if err != nil {
 		return nil, time.Time{}, err
@@ -924,15 +922,13 @@ func (m *manager) broadcastMessage(id string, rawTx sdk.Msg) (*sdk.TxResponse, t
 
 	broadcastCtx, broadcastOp := observability.Chain.StartTxBroadcast(m.ctx, originalMsgType, 1)
 	_ = broadcastCtx
-	var broadcastErr error
-	defer broadcastOp.FinishErr(&broadcastErr)
-	var resp *sdk.TxResponse
-	resp, broadcastErr = m.client.Context().BroadcastTxSync(txBytes)
+	defer broadcastOp.FinishErr(&err)
+	resp, err = m.client.Context().BroadcastTxSync(txBytes)
 	if resp != nil {
 		observability.Chain.SetTxResult(broadcastOp, resp.TxHash, resp.Code)
 	}
-	if broadcastErr != nil {
-		return nil, time.Time{}, broadcastErr
+	if err != nil {
+		return nil, time.Time{}, err
 	}
 	if resp.Code != 0 {
 		logging.Error("Broadcast failed immediately", types.Messages, "code", resp.Code, "rawLog", resp.RawLog, "tx_id", id, "originalMsgType", originalMsgType)
