@@ -12,7 +12,10 @@ import (
 
 const completionsPath = "/v1/completions"
 
-func (s *Server) postCompletions(ctx echo.Context) error {
+func (s *Server) postCompletions(ctx echo.Context) (err error) {
+	_, requestOp := startObservabilityInferenceRequestContext(ctx)
+	defer requestOp.FinishErr(&err)
+
 	body, err := readRequestBody(ctx.Request(), ctx.Response().Writer)
 	if err != nil {
 		return mapRequestBodyReadError(err)
@@ -41,7 +44,7 @@ func (s *Server) postCompletions(ctx echo.Context) error {
 	// Use the common request pipeline without local proxy recursion.
 	// Signature is always validated against the original /v1/completions body.
 	signBodyHash := utils.GenerateSHA256Hash(string(body))
-	return s.postChatWithBody(ctx, body, signBodyHash, completionsPath, body)
+	return s.postChatWithBody(ctx, requestOp, body, signBodyHash, completionsPath, body)
 }
 
 func tryBuildOpenAiRequestFromCompletionsBody(body []byte) (OpenAiRequest, bool) {

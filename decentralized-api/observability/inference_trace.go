@@ -25,6 +25,7 @@ type InferenceTraceService interface {
 	SetModel(op *Operation, model string)
 	SetResponseHash(op *Operation, responseHash string)
 	StartValidationEvent(ctx context.Context, inferenceCount int) (context.Context, *Operation)
+	StartStatusUpdateEvent(ctx context.Context, inferenceCount int) (context.Context, *Operation)
 	StartValidationSample(ctx context.Context, candidateCount int) (context.Context, *Operation)
 	SetSampledCount(op *Operation, sampledCount int)
 	StartValidationExecution(ctx context.Context, inferenceID string, model string, epochID int64, revalidation bool) (context.Context, *Operation)
@@ -197,6 +198,17 @@ func (otelInferenceTraceService) StartValidationEvent(ctx context.Context, infer
 		ctx,
 		"decentralized-api.event-listener",
 		"inference.validation.event",
+		trace.SpanKindConsumer,
+		[]attribute.KeyValue{attribute.Int("inference.count", inferenceCount)},
+		nil,
+	)
+}
+
+func (otelInferenceTraceService) StartStatusUpdateEvent(ctx context.Context, inferenceCount int) (context.Context, *Operation) {
+	return StartOperation(
+		ctx,
+		"decentralized-api.event-listener",
+		"inference.status_update.event",
 		trace.SpanKindConsumer,
 		[]attribute.KeyValue{attribute.Int("inference.count", inferenceCount)},
 		nil,
