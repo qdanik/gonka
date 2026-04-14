@@ -210,22 +210,19 @@ func cleanupExpiredAuthKeys(currentBlockHeight int64) {
 	}
 }
 
-func (s *Server) postChat(ctx echo.Context) error {
+func (s *Server) postChat(ctx echo.Context) (err error) {
+	_, requestOp := startObservabilityInferenceRequestContext(ctx)
+	defer requestOp.FinishErr(&err)
+
 	body, err := readRequestBody(ctx.Request(), ctx.Response().Writer)
 	if err != nil {
 		logging.Error("Unable to read request body", types.Server, "error", err)
 		return mapRequestBodyReadError(err)
 	}
-	return s.postChatWithBody(ctx, body, utils.GenerateSHA256Hash(string(body)), chatCompletionsPath, body)
+	return s.postChatWithBody(ctx, requestOp, body, utils.GenerateSHA256Hash(string(body)), chatCompletionsPath, body)
 }
 
-func (s *Server) postChatWithBody(ctx echo.Context, body []byte, signBodyHash string, forwardPath string, forwardBody []byte) (err error) {
-	requestContext := observability.Inference.ExtractRequestContext(ctx.Request().Context(), ctx.Request().Header)
-	ctx.SetRequest(ctx.Request().WithContext(requestContext))
-	requestContext, requestOp := observability.Inference.StartRequest(requestContext, ctx.Request().Method)
-	ctx.SetRequest(ctx.Request().WithContext(requestContext))
-	defer requestOp.FinishErr(&err)
-
+func (s *Server) postChatWithBody(ctx echo.Context, requestOp *observability.Operation, body []byte, signBodyHash string, forwardPath string, forwardBody []byte) (err error) {
 	logging.Debug("PostChat. Received request", types.Inferences, "path", ctx.Request().URL.Path)
 
 	chatRequest, err := readRequest(ctx.Request(), s.recorder.GetAccountAddress(), body, signBodyHash, forwardPath, forwardBody)
@@ -348,7 +345,7 @@ func (s *Server) handleTransferRequest(ctx echo.Context, request *ChatRequest) (
 		return err
 	}
 
-	status, err := s.recorder.Status(context.Background())
+	status, err := s.recorder.Status(ctx.Request().Context())
 	if err != nil {
 		logging.Error("Failed to get status", types.Inferences, "error", err)
 		return err
@@ -433,7 +430,7 @@ func (s *Server) handleTransferRequest(ctx echo.Context, request *ChatRequest) (
 	}
 
 	forwardContext, forwardOp := observability.Inference.StartForwardExecutor(transferContext, request.OpenAiRequest.Model, executor.Address, executor.Url)
-	req, err := http.NewRequest(http.MethodPost, executor.Url+forwardPath, bytes.NewReader(forwardBody))
+	req, err := http.NewRequestWithContext(forwardContext, http.MethodPost, executor.Url+forwardPath, bytes.NewReader(forwardBody))
 	if err != nil {
 		forwardOp.Finish(err)
 		logging.Error("handleTransferRequest. Failed to create request to the executor node", types.Inferences, "error", err)
@@ -761,15 +758,15 @@ func (s *Server) validateFullRequest(ctx echo.Context, request *ChatRequest) err
 		return echo.NewHTTPError(http.StatusUnauthorized, "Unable to validate request against TransferSignature:"+err.Error())
 	}
 
-	err = s.validateTimestampNonce(request)
+	err = s.validateTimestampNonce(ctx.Request().Context(), request)
 	if err != nil {
 		return err
 	}
 	return nil
 }
 
-func (s *Server) validateTimestampNonce(request *ChatRequest) error {
-	status, err := s.recorder.Status(context.Background())
+func (s *Server) validateTimestampNonce(ctx context.Context, request *ChatRequest) error {
+	status, err := s.recorder.Status(ctx)
 	if err != nil {
 		logging.Error("Failed to get status", types.Inferences, "error", err)
 		return err

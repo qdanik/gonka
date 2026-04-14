@@ -467,8 +467,8 @@ func (e *InferenceFinishedEventHandler) CanHandle(event *chainevents.JSONRPCResp
 
 func (e *InferenceFinishedEventHandler) Handle(event *chainevents.JSONRPCResponse, el *EventListener) error {
 	eventContext, eventOp := observability.Inference.StartValidationEvent(context.Background(), len(event.Result.Events["inference_finished.inference_id"]))
-	var handlerErr error
-	defer eventOp.FinishErr(&handlerErr)
+	var spanErr error
+	defer eventOp.FinishErr(&spanErr)
 
 	if el.isNodeSynced() {
 		el.validator.SampleInferenceToValidate(eventContext, event.Result.Events["inference_finished.inference_id"], el.transactionRecorder)
@@ -479,11 +479,11 @@ func (e *InferenceFinishedEventHandler) Handle(event *chainevents.JSONRPCRespons
 	records, err := parseInferenceFinishedRecords(event.Result.Events)
 	if err != nil {
 		logging.Warn("Failed to parse inference_finished records for stats storage", types.EventProcessing, "error", err)
-		handlerErr = err
+		spanErr = err
 		return nil
 	}
 	for _, rec := range records {
-		if err := el.statsStorage.UpsertInference(context.Background(), rec); err != nil {
+		if err := el.statsStorage.UpsertInference(eventContext, rec); err != nil {
 			logging.Error("Failed to upsert inference_finished record to stats storage", types.EventProcessing,
 				"inference_id", rec.InferenceID, "error", err)
 		}
@@ -621,17 +621,23 @@ func (e *InferenceStatusUpdatedEventHandler) CanHandle(event *chainevents.JSONRP
 }
 
 func (e *InferenceStatusUpdatedEventHandler) Handle(event *chainevents.JSONRPCResponse, el *EventListener) error {
+	eventContext, eventOp := observability.Inference.StartStatusUpdateEvent(context.Background(), len(event.Result.Events["inference_status_updated.inference_id"]))
+	var spanErr error
+	defer eventOp.FinishErr(&spanErr)
+
 	if el.statsStorage == nil {
 		return nil
 	}
 	records, err := parseInferenceStatusUpdatedRecords(event.Result.Events)
 	if err != nil {
 		logging.Warn("Failed to parse inference_status_updated records for stats storage", types.EventProcessing, "error", err)
+		spanErr = err
 		return nil
 	}
 	for _, rec := range records {
-		err := el.statsStorage.UpdateInferenceStatus(context.Background(), rec.InferenceID, rec.Status)
+		err := el.statsStorage.UpdateInferenceStatus(eventContext, rec.InferenceID, rec.Status)
 		if err != nil {
+			spanErr = err
 			if errors.Is(err, statsstorage.ErrInferenceRecordNotFound) {
 				logging.Warn("Ignoring inference_status_updated for unknown inference in stats storage", types.EventProcessing,
 					"inference_id", rec.InferenceID, "status", rec.Status)

@@ -127,6 +127,10 @@ func (s *InferenceService) StartValidationEvent(ctx context.Context, inferenceCo
 	return s.Trace().StartValidationEvent(ctx, inferenceCount)
 }
 
+func (s *InferenceService) StartStatusUpdateEvent(ctx context.Context, inferenceCount int) (context.Context, *Operation) {
+	return s.Trace().StartStatusUpdateEvent(ctx, inferenceCount)
+	}
+
 func (s *InferenceService) StartValidationSample(ctx context.Context, candidateCount int) (context.Context, *Operation) {
 	return s.Trace().StartValidationSample(ctx, candidateCount)
 }
