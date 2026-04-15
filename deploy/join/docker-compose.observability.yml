@@ -2,10 +2,20 @@ services:
   jaeger:
     container_name: jaeger
     image: cr.jaegertracing.io/jaegertracing/jaeger:2.16.0
+    user: "0:0"
+    command:
+      - --config
+      - /jaeger/config.yaml
     ports:
       # TODO: Close for public access in production or secure with auth.
       - "16686:16686"
     expose:
       - "4317"
       - "4318"
+    volumes:
+      - ./jaeger.config.yaml:/jaeger/config.yaml:ro
+      - jaeger_data:/var/lib/jaeger
     restart: unless-stopped
+
+volumes:
+  jaeger_data:
