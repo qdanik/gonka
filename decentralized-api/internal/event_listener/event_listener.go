@@ -479,13 +479,14 @@ func (e *InferenceFinishedEventHandler) Handle(event *chainevents.JSONRPCRespons
 	records, err := parseInferenceFinishedRecords(event.Result.Events)
 	if err != nil {
 		logging.Warn("Failed to parse inference_finished records for stats storage", types.EventProcessing, "error", err)
-		spanErr = err
+		spanErr = observability.Error.Fmt(err, "parse inference_finished records for stats storage")
 		return nil
 	}
 	for _, rec := range records {
 		if err := el.statsStorage.UpsertInference(eventContext, rec); err != nil {
 			logging.Error("Failed to upsert inference_finished record to stats storage", types.EventProcessing,
 				"inference_id", rec.InferenceID, "error", err)
+			spanErr = observability.Error.Fmt(err, "upsert inference_finished record to stats storage: inference_id=%s", rec.InferenceID)
 		}
 	}
 	return nil
@@ -631,20 +632,21 @@ func (e *InferenceStatusUpdatedEventHandler) Handle(event *chainevents.JSONRPCRe
 	records, err := parseInferenceStatusUpdatedRecords(event.Result.Events)
 	if err != nil {
 		logging.Warn("Failed to parse inference_status_updated records for stats storage", types.EventProcessing, "error", err)
-		spanErr = err
+		spanErr = observability.Error.Fmt(err, "parse inference_status_updated records for stats storage")
 		return nil
 	}
 	for _, rec := range records {
 		err := el.statsStorage.UpdateInferenceStatus(eventContext, rec.InferenceID, rec.Status)
 		if err != nil {
-			spanErr = err
 			if errors.Is(err, statsstorage.ErrInferenceRecordNotFound) {
 				logging.Warn("Ignoring inference_status_updated for unknown inference in stats storage", types.EventProcessing,
 					"inference_id", rec.InferenceID, "status", rec.Status)
+				spanErr = observability.Error.Fmt(err, "update inference status in stats storage: record not found, inference_id: %s", rec.InferenceID)
 				continue
 			}
 			logging.Error("Failed to update inference status in stats storage", types.EventProcessing,
 				"inference_id", rec.InferenceID, "status", rec.Status, "error", err)
+			spanErr = observability.Error.Fmt(err, "update inference status in stats storage: inference_id=%s", rec.InferenceID)
 		}
 	}
 	return nil

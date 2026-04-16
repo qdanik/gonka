@@ -20,15 +20,19 @@ func newObservedQueryClientConn(ctx client.Context) observedQueryClientConn {
 	return observedQueryClientConn{Context: ctx}
 }
 
-func (c observedQueryClientConn) Invoke(ctx context.Context, method string, args interface{}, reply interface{}, opts ...grpc.CallOption) (err error) {
+func (c observedQueryClientConn) Invoke(ctx context.Context, method string, args interface{}, reply interface{}, opts ...grpc.CallOption) error {
 	service, rpcMethod := splitGRPCMethod(method)
 	queryCtx, queryOp := observability.Chain.StartGRPCQuery(ctx, service, rpcMethod)
+	var spanErr error
 	defer func() {
-		observability.Chain.SetRPCStatus(queryOp, status.Code(err).String())
-		queryOp.FinishErr(&err)
+		observability.Chain.SetRPCStatus(queryOp, status.Code(spanErr).String())
+		queryOp.FinishErr(&spanErr)
 	}()
 	queryCtx = injectGRPCTraceContext(queryCtx)
-	err = c.Context.Invoke(queryCtx, method, args, reply, opts...)
+	err := c.Context.Invoke(queryCtx, method, args, reply, opts...)
+	if err != nil {
+		spanErr = observability.Error.Fmt(err, "grpc query: service=%s, method=%s", service, rpcMethod)
+	}
 	return err
 }
 

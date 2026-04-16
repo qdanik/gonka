@@ -769,25 +769,29 @@ func (m *manager) checkTxStatus(hash string) (bool, error) {
 	return true, nil
 }
 
-func (m *manager) WaitForResponse(txHash string) (transactionAppliedResult *ctypes.ResultTx, err error) {
+func (m *manager) WaitForResponse(txHash string) (*ctypes.ResultTx, error) {
 	txCtx, txOp := observability.Chain.StartTxConfirmation(m.ctx, txHash)
 	ctx, cancel := context.WithTimeout(txCtx, time.Second*15)
+	var spanErr error
 	defer cancel()
-	defer txOp.FinishErr(&err)
+	defer txOp.FinishErr(&spanErr)
 
-	transactionAppliedResult, err = m.client.WaitForTx(ctx, txHash)
+	transactionAppliedResult, err := m.client.WaitForTx(ctx, txHash)
 	if transactionAppliedResult != nil {
 		observability.Chain.SetTxResult(txOp, txHash, uint32(transactionAppliedResult.TxResult.Code))
 	}
 	if err != nil {
+		spanErr = observability.Error.Fmt(err, "wait for transaction %s", txHash)
 		logging.Error("Failed to wait for transaction", types.Messages, "error", err, "result", transactionAppliedResult)
 		return nil, err
 	}
 
 	txResult := transactionAppliedResult.TxResult
 	if txResult.Code != 0 {
+		transactionErr := NewTransactionErrorFromResult(transactionAppliedResult)
+		spanErr = observability.Error.Fmt(transactionErr, "transaction %s failed on-chain, code: %d", txHash, txResult.Code)
 		logging.Error("Transaction failed on-chain", types.Messages, "txHash", txHash, "code", txResult.Code, "codespace", txResult.Codespace, "rawLog", txResult.Log)
-		return nil, NewTransactionErrorFromResult(transactionAppliedResult)
+		return nil, transactionErr
 	}
 	return transactionAppliedResult, nil
 }
@@ -800,7 +804,7 @@ func (m *manager) GetJetStream() nats.JetStreamContext {
 	return m.natsJetStream
 }
 
-func (m *manager) BroadcastMessages(id string, msgs ...sdk.Msg) (resp *sdk.TxResponse, timestamp time.Time, err error) {
+func (m *manager) BroadcastMessages(id string, msgs ...sdk.Msg) (*sdk.TxResponse, time.Time, error) {
 	if len(msgs) == 0 {
 		return nil, time.Time{}, nil
 	}
@@ -836,15 +840,18 @@ func (m *manager) BroadcastMessages(id string, msgs ...sdk.Msg) (resp *sdk.TxRes
 	}
 
 	_, broadcastOp := observability.Chain.StartTxBroadcast(m.ctx, "batch", len(msgs))
-	defer broadcastOp.FinishErr(&err)
-	resp, err = m.client.Context().BroadcastTxSync(txBytes)
+	var spanErr error
+	defer broadcastOp.FinishErr(&spanErr)
+	resp, err := m.client.Context().BroadcastTxSync(txBytes)
 	if resp != nil {
 		observability.Chain.SetTxResult(broadcastOp, resp.TxHash, resp.Code)
 	}
 	if err != nil {
+		spanErr = observability.Error.Fmt(err, "broadcast tx sync: tx_id=%s, originalMsgType=batch", id)
 		return nil, time.Time{}, err
 	}
 	if resp.Code != 0 {
+		spanErr = fmt.Errorf("broadcast failed: code=%d, tx_id=%s, originalMsgType=batch", resp.Code, id)
 		logging.Error("Batch broadcast failed", types.Messages, "code", resp.Code, "rawLog", resp.RawLog, "tx_id", id, "msgCount", len(msgs))
 		logFeeRelatedHint(resp.RawLog)
 	} else {
@@ -891,7 +898,7 @@ func containsAny(s string, substrs ...string) bool {
 	return false
 }
 
-func (m *manager) broadcastMessage(id string, rawTx sdk.Msg) (resp *sdk.TxResponse, timestamp time.Time, err error) {
+func (m *manager) broadcastMessage(id string, rawTx sdk.Msg) (*sdk.TxResponse, time.Time, error) {
 	factory, err := m.getFactory(id)
 	if err != nil {
 		return nil, time.Time{}, err
@@ -920,16 +927,19 @@ func (m *manager) broadcastMessage(id string, rawTx sdk.Msg) (resp *sdk.TxRespon
 	}
 
 	_, broadcastOp := observability.Chain.StartTxBroadcast(m.ctx, originalMsgType, 1)
-	defer broadcastOp.FinishErr(&err)
-	resp, err = m.client.Context().BroadcastTxSync(txBytes)
+	var spanErr error
+	defer broadcastOp.FinishErr(&spanErr)
+	resp, err := m.client.Context().BroadcastTxSync(txBytes)
 	if resp != nil {
 		observability.Chain.SetTxResult(broadcastOp, resp.TxHash, resp.Code)
 	}
 	if err != nil {
+		spanErr = observability.Error.Fmt(err, "broadcast tx sync: tx_id=%s, originalMsgType=%s", id, originalMsgType)
 		return nil, time.Time{}, err
 	}
 	if resp.Code != 0 {
 		logging.Error("Broadcast failed immediately", types.Messages, "code", resp.Code, "rawLog", resp.RawLog, "tx_id", id, "originalMsgType", originalMsgType)
+		spanErr = fmt.Errorf("broadcast failed: code=%d, tx_id=%s, originalMsgType=%s", resp.Code, id, originalMsgType)
 	} else {
 		logging.Debug("Broadcast successful", types.Messages, "tx_id", id, "originalMsgType", originalMsgType, "resp", resp)
 	}

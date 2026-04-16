@@ -55,13 +55,15 @@ func FetchPayloadsHTTP(
 	timestamp int64,
 	epochId uint64,
 	signature string,
-) (payloadResp *PayloadResponse, err error) {
+) (*PayloadResponse, error) {
 	httpContext, httpOp := observability.Inference.StartPayloadFetch(ctx, requestUrl, validatorAddress, int64(epochId))
-	defer httpOp.FinishErr(&err)
+	var spanErr error
+	defer httpOp.FinishErr(&spanErr)
 
 	req, err := http.NewRequestWithContext(httpContext, http.MethodGet, requestUrl, nil)
 	if err != nil {
 		err = fmt.Errorf("failed to create request: %w", err)
+		spanErr = observability.Error.Fmt(err, "create payload fetch request")
 		return nil, err
 	}
 
@@ -74,6 +76,7 @@ func FetchPayloadsHTTP(
 	resp, err := client.Do(req)
 	if err != nil {
 		err = fmt.Errorf("request failed: %w", err)
+		spanErr = observability.Error.Fmt(err, "execute payload fetch request")
 		return nil, err
 	}
 	defer resp.Body.Close()
@@ -81,17 +84,23 @@ func FetchPayloadsHTTP(
 
 	if resp.StatusCode == http.StatusNotFound {
 		err = fmt.Errorf("payload not found on executor")
+		spanErr = observability.Error.Fmt(err, "payload fetch returned not found")
 		return nil, err
 	}
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
 		err = fmt.Errorf("executor returned status %d: %s", resp.StatusCode, string(body))
+		spanErr = observability.Error.Fmt(
+			fmt.Errorf("executor returned status %d, url: %s", resp.StatusCode, requestUrl), 
+			"payload fetch returned non-success status",
+		)
 		return nil, err
 	}
 
 	var response PayloadResponse
 	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
 		err = fmt.Errorf("failed to decode response: %w", err)
+		spanErr = observability.Error.Fmt(err, "decode payload fetch response")
 		return nil, err
 	}
 

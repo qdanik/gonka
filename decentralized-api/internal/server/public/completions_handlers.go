@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 
+	"decentralized-api/observability"
 	"decentralized-api/utils"
 
 	"github.com/labstack/echo/v4"
@@ -12,39 +13,57 @@ import (
 
 const completionsPath = "/v1/completions"
 
-func (s *Server) postCompletions(ctx echo.Context) (err error) {
+func (s *Server) postCompletions(ctx echo.Context) error {
 	_, requestOp := startObservabilityInferenceRequestContext(ctx)
-	defer requestOp.FinishErr(&err)
+	var spanErr error
+	defer requestOp.FinishErr(&spanErr)
 
 	body, err := readRequestBody(ctx.Request(), ctx.Response().Writer)
 	if err != nil {
-		return mapRequestBodyReadError(err)
+		chatErr := mapRequestBodyReadError(err)
+		spanErr = observability.Error.Fmt(err, "read request body: %v", chatErr)
+		return chatErr
 	}
 
 	var completionsReq CompletionsRequest
 	if err := json.Unmarshal(body, &completionsReq); err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, "invalid request format")
+		// return echo.NewHTTPError(http.StatusBadRequest, "invalid request format")
+		spanErr = observability.Error.Fmt(err, "unmarshal completions request body: %v", err)
+		return echo.NewHTTPError(http.StatusBadRequest, "invalid request format: %v", err)
 	}
 
 	if strings.TrimSpace(completionsReq.Model) == "" {
-		return echo.NewHTTPError(http.StatusBadRequest, "model is required")
+		httpErr := echo.NewHTTPError(http.StatusBadRequest, "model is required")
+		spanErr = observability.Error.Fmt(httpErr, "model is required in completions request")
+		return httpErr
 	}
 	if len(completionsReq.Prompt) == 0 {
-		return echo.NewHTTPError(http.StatusBadRequest, "prompt is required")
+		httpErr := echo.NewHTTPError(http.StatusBadRequest, "prompt is required")
+		spanErr = observability.Error.Fmt(httpErr, "prompt is required in completions request")
+		return httpErr
 	}
 	if len(completionsReq.Prompt) > 1 {
-		return echo.NewHTTPError(http.StatusBadRequest, "batch prompts are not supported")
+		httpErr := echo.NewHTTPError(http.StatusBadRequest, "batch prompts are not supported")
+		spanErr = observability.Error.Fmt(httpErr, "batch prompts are not supported in completions request")
+		return httpErr
 	}
 	for _, prompt := range completionsReq.Prompt {
 		if strings.TrimSpace(prompt) == "" {
-			return echo.NewHTTPError(http.StatusBadRequest, "prompt is required")
+			httpErr := echo.NewHTTPError(http.StatusBadRequest, "prompt is required")
+			spanErr = observability.Error.Fmt(httpErr, "prompt is required in completions request")
+			return httpErr
 		}
 	}
 
 	// Use the common request pipeline without local proxy recursion.
 	// Signature is always validated against the original /v1/completions body.
 	signBodyHash := utils.GenerateSHA256Hash(string(body))
-	return s.postChatWithBody(ctx, requestOp, body, signBodyHash, completionsPath, body)
+	responseErr := s.postChatWithBody(ctx, requestOp, body, signBodyHash, completionsPath, body)
+	if responseErr != nil {
+		spanErr = observability.Error.Fmt(responseErr, "post completion with body: %v", responseErr)
+		return responseErr
+	}
+	return nil
 }
 
 func tryBuildOpenAiRequestFromCompletionsBody(body []byte) (OpenAiRequest, bool) {

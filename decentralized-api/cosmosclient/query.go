@@ -15,24 +15,32 @@ import (
 // QueryByKeyWithOptions Query any stored value by key, e.g.:
 // storeKey: "inference",
 // dataKey: "ActiveParticipants/value/"
-func QueryByKeyWithOptions(rpcClient *http.HTTP, storeKey string, dataKey []byte, blockHeight int64, withProof bool) (result *coretypes.ResultABCIQuery, err error) {
+func QueryByKeyWithOptions(rpcClient *http.HTTP, storeKey string, dataKey []byte, blockHeight int64, withProof bool) (*coretypes.ResultABCIQuery, error) {
 	logging.Info("Querying store", types.System, "storeKey", storeKey, "dataKey", dataKey)
 
 	path := fmt.Sprintf("store/%s/key", storeKey)
 	queryCtx, queryOp := observability.Chain.StartStoreQuery(context.Background(), storeKey, withProof, blockHeight)
-	defer queryOp.FinishErr(&err)
+	var spanError error
+	defer queryOp.FinishErr(&spanError)
 
-	result, err = rpcClient.ABCIQueryWithOptions(queryCtx, path, dataKey, rpcclient.ABCIQueryOptions{Height: blockHeight, Prove: withProof})
+	result, err := rpcClient.ABCIQueryWithOptions(queryCtx, path, dataKey, rpcclient.ABCIQueryOptions{Height: blockHeight, Prove: withProof})
+	if err != nil {
+		spanError = observability.Error.Fmt(err, "query store %s with options", storeKey)
+	}
 	return result, err
 }
 
-func QueryByKey(rpcClient *http.HTTP, storeKey string, dataKey []byte) (result *coretypes.ResultABCIQuery, err error) {
+func QueryByKey(rpcClient *http.HTTP, storeKey string, dataKey []byte) (*coretypes.ResultABCIQuery, error) {
 	logging.Info("Querying store", types.System, "storeKey", storeKey, "dataKey", dataKey)
 
 	path := fmt.Sprintf("store/%s/key", storeKey)
 	queryCtx, queryOp := observability.Chain.StartStoreQuery(context.Background(), storeKey, false, 0)
-	defer queryOp.FinishErr(&err)
+	var spanError error
+	defer queryOp.FinishErr(&spanError)
 
-	result, err = rpcClient.ABCIQuery(queryCtx, path, dataKey)
+	result, err := rpcClient.ABCIQuery(queryCtx, path, dataKey)
+	if err != nil {
+		spanError = observability.Error.Fmt(err, "query store %s", storeKey)
+	}
 	return result, err
 }
