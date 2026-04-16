@@ -150,7 +150,7 @@ func main() {
 
 	shutdownObservability, err := observability.Init(ctx, observability.Config{
 		ServiceName:        "decentralized-api",
-		ServiceVersion:     config.GetCurrentNodeVersion(),
+		ServiceVersion:     configManager.GetCurrentNodeVersion(),
 		ParticipantAddress: recorder.GetAccountAddress(),
 	})
 	if err != nil {
