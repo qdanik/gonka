@@ -467,8 +467,8 @@ func (s *InferenceValidator) WaitForValidationsToBeRecorded() {
 
 func (s *InferenceValidator) SampleInferenceToValidate(ctx context.Context, ids []string, transactionRecorder cosmosclient.InferenceCosmosClient) {
 	sampleContext, sampleOp := observability.Inference.StartValidationSample(ctx, len(ids))
-	var sampleErr error
-	defer sampleOp.FinishErr(&sampleErr)
+	var spanErr error
+	defer sampleOp.FinishErr(&spanErr)
 
 	if ids == nil {
 		logging.Debug("No inferences to validate", types.Validation)
@@ -486,21 +486,21 @@ func (s *InferenceValidator) SampleInferenceToValidate(ctx context.Context, ids 
 	if err != nil {
 		// FIXME: what should we do with validating the transaction?
 		logging.Warn("Failed to query GetInferenceValidationParameters.", types.Validation, "error", err)
-		sampleErr = err
+		spanErr = observability.Error.Fmt(err, "query inference validation parameters")
 		return
 	}
 
 	params, err := queryClient.Params(sampleContext, &types.QueryParamsRequest{})
 	if err != nil {
 		logging.Error("Failed to get params", types.Validation, "error", err)
-		sampleErr = err
+		spanErr = observability.Error.Fmt(err, "query inference params")
 		return
 	}
 
 	supportedModels, err := s.getCurrentSupportedModels()
 	if err != nil {
 		logging.Error("Failed to get currently available models", types.Validation, "error", err)
-		sampleErr = err
+		spanErr = observability.Error.Fmt(err, "load supported models")
 		return
 	}
 
@@ -546,6 +546,7 @@ func (s *InferenceValidator) SampleInferenceToValidate(ctx context.Context, ids 
 			response, err := queryClient.Inference(sampleContext, &types.QueryGetInferenceRequest{Index: inferenceID})
 			if err != nil {
 				logging.Error("Failed to get inference by id", types.Validation, "id", response, "error", err)
+				// TODO: Do we need to add details to observability here?
 				return
 			}
 			s.validateInferenceAndSendValMessage(sampleContext, response.Inference, transactionRecorder, false)
@@ -582,33 +583,33 @@ func logInferencesToValidate(toValidate []string) {
 
 func (s *InferenceValidator) validateInferenceAndSendValMessage(ctx context.Context, inf types.Inference, transactionRecorder cosmosclient.InferenceCosmosClient, revalidation bool) {
 	validationContext, validationOp := observability.Inference.StartValidationExecution(ctx, inf.InferenceId, inf.Model, int64(inf.EpochId), revalidation)
-	var validationErr error
-	defer validationOp.FinishErr(&validationErr)
+	var spanErr error
+	defer validationOp.FinishErr(&spanErr)
 
-	promptPayload, responsePayload, err := s.retrievePayloadsWithRetry(validationContext, inf)
+	promptPayload, responsePayload, err := s.retrievePayloadsWithRetry(ctx, inf)
 	if err != nil {
 		if errors.Is(err, ErrPayloadUnavailable) {
 			// Post-upgrade inference: executor unavailable after 20 min of retries
-			validationErr = err
 			s.checkAndInvalidateUnavailable(inf, transactionRecorder, revalidation)
+			spanErr = observability.Error.Fmt(err, "check and invalidate unavailable inference: inference_id %s", inf.InferenceId)
 			return
 		}
 		if errors.Is(err, ErrHashMismatch) {
 			// Executor served wrong payload with valid signature - immediate invalidation
-			validationErr = err
 			s.submitHashMismatchInvalidation(inf, transactionRecorder, revalidation)
+			spanErr = observability.Error.Fmt(err, "submit hash mismatch invalidation: inference_id %s", inf.InferenceId)
 			return
 		}
 		if errors.Is(err, ErrEpochStale) {
 			// Epoch too old - validation no longer useful, just return
 			logging.Info("Validation aborted: epoch stale", types.Validation,
 				"inferenceId", inf.InferenceId, "inferenceEpoch", inf.EpochId)
-			validationErr = err
+			spanErr = observability.Error.Fmt(err, "validation aborted due to stale epoch: inference_id %s, epoch_id %d", inf.InferenceId, inf.EpochId)
 			return
 		}
 		logging.Error("Failed to retrieve payloads", types.Validation,
 			"inferenceId", inf.InferenceId, "error", err)
-		validationErr = err
+		spanErr = observability.Error.Fmt(err, "retrieve payloads: inference_id %s", inf.InferenceId)
 		return
 	}
 
@@ -650,14 +651,14 @@ func (s *InferenceValidator) validateInferenceAndSendValMessage(ctx context.Cont
 			// Final attempt failed - check if it's ErrNoNodesAvailable for special handling
 			if errors.Is(err, broker.ErrNoNodesAvailable) {
 				logging.Warn("Failed to validate inference after all retry attempts. No nodes available, probably unsupported model.", types.Validation, "id", inf.InferenceId, "attempts", maxRetries, "error", err)
-				validationErr = err
+				spanErr = observability.Error.Fmt(err, "no nodes available: inference_id %s", inf.InferenceId)
 				return
 			} else {
 				logging.Error("Failed to validate inference after all retry attempts", types.Validation,
 					"id", inf.InferenceId,
 					"attempts", maxRetries,
 					"error", err)
-				validationErr = err
+				spanErr = observability.Error.Fmt(err, "validate inference after all retry attempts: inference_id %s", inf.InferenceId)
 				return
 			}
 		}
@@ -666,7 +667,7 @@ func (s *InferenceValidator) validateInferenceAndSendValMessage(ctx context.Cont
 	msgValidation, err := ToMsgValidation(valResult)
 	if err != nil {
 		logging.Error("Failed to convert to MsgValidation.", types.Validation, "id", inf.InferenceId, "error", err)
-		validationErr = err
+		spanErr = observability.Error.Fmt(err, "failed to convert to MsgValidation: inference_id %s", inf.InferenceId)
 		return
 	}
 	msgValidation.Revalidation = revalidation
@@ -674,7 +675,7 @@ func (s *InferenceValidator) validateInferenceAndSendValMessage(ctx context.Cont
 
 	if err = transactionRecorder.ReportValidation(msgValidation); err != nil {
 		logging.Error("Failed to report validation.", types.Validation, "id", inf.InferenceId, "error", err)
-		validationErr = err
+		spanErr = observability.Error.Fmt(err, "report validation: inference_id %s", inf.InferenceId)
 		return
 	}
 
@@ -752,7 +753,7 @@ func (s *InferenceValidator) retrievePayloadsWithRetry(ctx context.Context, inf 
 		if s.isEpochStale(inf.EpochId) {
 			logging.Info("Epoch stale, stopping payload retrieval", types.Validation,
 				"inferenceId", inf.InferenceId, "inferenceEpoch", inf.EpochId)
-			lastErr = ErrEpochStale
+			lastErr = observability.Error.Fmt(ErrEpochStale, "epoch stale: inferenceId %s, epochId %d", inf.InferenceId, inf.EpochId)
 			return nil, nil, ErrEpochStale
 		}
 
@@ -770,11 +771,11 @@ func (s *InferenceValidator) retrievePayloadsWithRetry(ctx context.Context, inf 
 		if errors.Is(err, ErrHashMismatch) {
 			logging.Error("Hash mismatch detected, will invalidate immediately", types.Validation,
 				"inferenceId", inf.InferenceId, "attempt", attempt)
-			lastErr = ErrHashMismatch
+			lastErr = observability.Error.Fmt(err, "hash mismatch: inference_id %s, attempt %d", inf.InferenceId, attempt)
 			return nil, nil, ErrHashMismatch
 		}
 
-		lastErr = err
+		lastErr = observability.Error.Fmt(err, "payload retrieval failed, will retry: inferenceId %s, attempt %d", inf.InferenceId, attempt)
 		logging.Warn("Payload retrieval failed, will retry", types.Validation,
 			"inferenceId", inf.InferenceId,
 			"attempt", attempt,
@@ -794,7 +795,7 @@ func (s *InferenceValidator) retrievePayloadsWithRetry(ctx context.Context, inf 
 			select {
 			case <-retrievalContext.Done():
 				timer.Stop()
-				lastErr = retrievalContext.Err()
+				lastErr = observability.Error.Fmt(retrievalContext.Err(), "payload retrieval context done")
 				return nil, nil, retrievalContext.Err()
 			case <-timer.C:
 			}
@@ -905,32 +906,32 @@ func (s *InferenceValidator) submitHashMismatchInvalidation(inf types.Inference,
 // validateWithPayloads validates inference using provided payloads.
 func (s *InferenceValidator) validateWithPayloads(ctx context.Context, inference types.Inference, inferenceNode *broker.Node, promptPayload, responsePayload []byte) (ValidationResult, error) {
 	validationContext, validationOp := observability.Inference.StartValidationMLNode(ctx, inference.InferenceId, inference.Model, inferenceNode.Id)
-	var validationErr error
-	defer validationOp.FinishErr(&validationErr)
+	var spanErr error
+	defer validationOp.FinishErr(&spanErr)
 
 	logging.Debug("Validating inference", types.Validation, "id", inference.InferenceId)
 
 	if inference.Status == types.InferenceStatus_STARTED {
 		logging.Error("Inference not finished", types.Validation, "status", inference.Status, "inference", inference)
-		validationErr = errors.New("Inference is not finished. id = " + inference.InferenceId)
-		return nil, validationErr
+		spanErr = errors.New("validate with payloads: inference is not finished. id = " + inference.InferenceId)
+		return nil, spanErr
 	}
 
 	var requestMap map[string]interface{}
 	if err := json.Unmarshal(promptPayload, &requestMap); err != nil {
-		validationErr = err
+		spanErr = observability.Error.Fmt(err, "unmarshal prompt payload")
 		return &InvalidInferenceResult{inference.InferenceId, "Failed to unmarshal promptPayload.", err}, nil
 	}
 
 	originalResponse, err := unmarshalResponsePayload(responsePayload)
 	if err != nil {
-		validationErr = err
+		spanErr = observability.Error.Fmt(err, "unmarshal response payload")
 		return &InvalidInferenceResult{inference.InferenceId, "Failed to unmarshal responsePayload.", err}, nil
 	}
 
 	enforcedTokens, err := originalResponse.GetEnforcedTokens()
 	if err != nil {
-		validationErr = err
+		spanErr = observability.Error.Fmt(err, "extract enforced tokens")
 		return &InvalidInferenceResult{inference.InferenceId, "Failed to get enforced string.", err}, nil
 	}
 
@@ -955,34 +956,34 @@ func (s *InferenceValidator) validateWithPayloads(ctx context.Context, inference
 
 	requestBody, err := json.Marshal(requestMap)
 	if err != nil {
-		validationErr = err
+		spanErr = observability.Error.Fmt(err, "marshal validation request body")
 		return nil, err
 	}
 
 	completionsUrl, err := url.JoinPath(inferenceNode.InferenceUrlWithVersion(s.configManager.GetCurrentNodeVersion()), "v1/chat/completions")
 	if err != nil {
 		logging.Error("Failed to join url", types.Validation, "url", inferenceNode.InferenceUrlWithVersion(s.configManager.GetCurrentNodeVersion()), "error", err)
-		validationErr = err
+		spanErr = observability.Error.Fmt(err, "build validation completions URL")
 		return nil, err
 	}
 
 	httpReq, reqErr := http.NewRequestWithContext(validationContext, http.MethodPost, completionsUrl, bytes.NewReader(requestBody))
 	if reqErr != nil {
-		validationErr = reqErr
+		spanErr = observability.Error.Fmt(reqErr, "create validation HTTP request")
 		return nil, reqErr
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	observability.Inference.InjectRequestContext(validationContext, httpReq.Header)
 	resp, err := http.DefaultClient.Do(httpReq)
 	if err != nil {
-		validationErr = err
+		spanErr = observability.Error.Fmt(err, "execute validation HTTP request")
 		return nil, err
 	}
 	defer resp.Body.Close()
 
 	respBodyBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
-		validationErr = err
+		spanErr = observability.Error.Fmt(err, "read validation HTTP response")
 		return nil, err
 	}
 
@@ -1015,7 +1016,7 @@ func (s *InferenceValidator) validateWithPayloads(ctx context.Context, inference
 	responseValidation, err := completionapi.NewCompletionResponseFromBytes(respBodyBytes)
 	if err != nil {
 		logging.Error("Failed to unmarshal responseValidation", types.Validation, "id", inference.InferenceId, "error", err)
-		validationErr = err
+		spanErr = observability.Error.Fmt(err, "parse validation response payload")
 		return nil, err
 	}
 	if usage, usageErr := responseValidation.GetUsage(); usageErr == nil {
@@ -1030,8 +1031,8 @@ func (s *InferenceValidator) validateWithPayloads(ctx context.Context, inference
 	}
 	if len(originalLogits) == 0 || len(validationLogits) == 0 {
 		logging.Error("No logits found in original or validation response", types.Validation, "id", inference.InferenceId, "originalLogits", originalLogits, "validationLogits", validationLogits)
-		validationErr = errors.New("no logits found in original or validation response")
-		return nil, validationErr
+		spanErr = observability.Error.Fmt(errors.New("no logits found in original or validation response"), "inference_id=%s", inference.InferenceId)
+		return nil, spanErr
 	}
 
 	observability.Inference.SetHTTPStatus(validationOp, resp.StatusCode)
@@ -1168,8 +1169,8 @@ func CompareLogitsWithContext(
 	baseComparisonResult BaseValidationResult,
 ) ValidationResult {
 	_, compareOp := observability.Inference.StartCompareLogits(ctx, baseComparisonResult.InferenceId)
-	var compareErr error
-	defer compareOp.FinishErr(&compareErr)
+	var spanErr error
+	defer compareOp.FinishErr(&spanErr)
 
 	if len(originalLogits) != len(validationLogits) {
 		logging.Warn("Different length of logits", types.Validation, "inferenceId", baseComparisonResult.InferenceId, "originalLogits", originalLogits, "validationLogits", validationLogits, "lengthOriginal", len(originalLogits), "lengthValidation", len(validationLogits))
@@ -1184,7 +1185,7 @@ func CompareLogitsWithContext(
 		v := validationLogits[i]
 		if o.Token != v.Token {
 			logging.Error("Different tokens in logits", types.Validation, "inferenceId", baseComparisonResult.InferenceId, "originalLogits", originalLogits, "validationLogits", validationLogits)
-			compareErr = errors.New("different tokens in logits")
+			spanErr = observability.Error.Fmt(errors.New("different tokens in logits"), "inference_id=%s at position %d", baseComparisonResult.InferenceId, i)
 			return &DifferentTokensValidationResult{baseComparisonResult}
 		}
 	}

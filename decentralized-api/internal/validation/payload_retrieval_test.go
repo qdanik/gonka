@@ -1,6 +1,9 @@
 package validation
 
 import (
+	"context"
+	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"testing"
 
@@ -9,7 +12,29 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/propagation"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 )
+
+func setupPayloadTraceRecorder(t *testing.T) *tracetest.SpanRecorder {
+	t.Helper()
+	recorder := tracetest.NewSpanRecorder()
+	provider := sdktrace.NewTracerProvider()
+	provider.RegisterSpanProcessor(recorder)
+	oldProvider := otel.GetTracerProvider()
+	oldPropagator := otel.GetTextMapPropagator()
+	otel.SetTracerProvider(provider)
+	otel.SetTextMapPropagator(propagation.TraceContext{})
+	t.Cleanup(func() {
+		otel.SetTracerProvider(oldProvider)
+		otel.SetTextMapPropagator(oldPropagator)
+		_ = provider.Shutdown(context.Background())
+	})
+	return recorder
+}
 
 func TestBuildPayloadRequestURL_DevshardPath(t *testing.T) {
 	// Test with devshard session-specific path
@@ -140,4 +165,42 @@ func TestBuildPayloadRequestURL(t *testing.T) {
 			require.Equal(t, tt.inferenceId, decodedId)
 		})
 	}
+}
+
+func TestFetchPayloadsHTTP_NotFoundReturnsOriginalErrorAndFormatsSpan(t *testing.T) {
+	recorder := setupPayloadTraceRecorder(t)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	_, err := FetchPayloadsHTTP(context.Background(), server.Client(), server.URL, "validator1", 123, 7, "sig")
+	require.EqualError(t, err, "payload not found on executor")
+
+	spans := recorder.Ended()
+	require.Len(t, spans, 1)
+	require.Equal(t, "inference.payload.fetch", spans[0].Name())
+	require.Equal(t, codes.Error, spans[0].Status().Code)
+	require.Contains(t, spans[0].Status().Description, "payload fetch returned not found")
+	require.Contains(t, spans[0].Status().Description, "payload not found on executor")
+}
+
+func TestFetchPayloadsHTTP_InvalidJSONReturnsOriginalErrorAndFormatsSpan(t *testing.T) {
+	recorder := setupPayloadTraceRecorder(t)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("not-json"))
+	}))
+	defer server.Close()
+
+	_, err := FetchPayloadsHTTP(context.Background(), server.Client(), server.URL, "validator1", 123, 7, "sig")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "failed to decode response")
+
+	spans := recorder.Ended()
+	require.Len(t, spans, 1)
+	require.Equal(t, "inference.payload.fetch", spans[0].Name())
+	require.Equal(t, codes.Error, spans[0].Status().Code)
+	require.Contains(t, spans[0].Status().Description, "decode payload fetch response")
+	require.Contains(t, spans[0].Status().Description, "failed to decode response")
 }

@@ -4,9 +4,12 @@ import (
 	"context"
 	"decentralized-api/internal/nats/server"
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
+	abci "github.com/cometbft/cometbft/abci/types"
+	ctypes "github.com/cometbft/cometbft/rpc/core/types"
 	codectypes "github.com/cosmos/cosmos-sdk/codec/types"
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	"github.com/google/uuid"
@@ -17,8 +20,31 @@ import (
 	testutil "github.com/productscience/inference/testutil/cosmoclient"
 	"github.com/productscience/inference/x/inference/types"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel"
+	otelcodes "go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/propagation"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 )
+
+func setupTxManagerTraceRecorder(t *testing.T) *tracetest.SpanRecorder {
+	t.Helper()
+	recorder := tracetest.NewSpanRecorder()
+	provider := sdktrace.NewTracerProvider()
+	provider.RegisterSpanProcessor(recorder)
+	oldProvider := otel.GetTracerProvider()
+	oldPropagator := otel.GetTextMapPropagator()
+	otel.SetTracerProvider(provider)
+	otel.SetTextMapPropagator(propagation.TraceContext{})
+	t.Cleanup(func() {
+		otel.SetTracerProvider(oldProvider)
+		otel.SetTextMapPropagator(oldPropagator)
+		_ = provider.Shutdown(context.Background())
+	})
+	return recorder
+}
 
 func TestPack_Unpack_Msg(t *testing.T) {
 	const (
@@ -288,6 +314,70 @@ func TestRequeue_PublishesToSendStream(t *testing.T) {
 	assert.Equal(t, "test-tx-publish", receivedTx.TxInfo.Id)
 	assert.Equal(t, 1, receivedTx.Attempts)
 	assert.False(t, receivedTx.RequeueTime.IsZero())
+}
+
+func TestWaitForResponse_ReturnsOriginalErrorAndFormatsSpan(t *testing.T) {
+	recorder := setupTxManagerTraceRecorder(t)
+	const (
+		network     = "cosmos"
+		accountName = "cosmosaccount"
+		mnemonic    = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
+		passphrase  = "testpass"
+	)
+
+	rpc := mocks.NewRPCClient(t)
+	client := testutil.NewMockClient(t, rpc, network, accountName, mnemonic, passphrase)
+	manager := &manager{ctx: context.Background(), client: &client}
+
+	rpc.On("Tx", mock.Anything, mock.Anything, false).Return((*ctypes.ResultTx)(nil), errors.New("boom"))
+
+	result, err := manager.WaitForResponse("AA")
+	require.Nil(t, result)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "fetching tx 'AA'")
+	require.Contains(t, err.Error(), "boom")
+
+	spans := recorder.Ended()
+	require.Len(t, spans, 1)
+	require.Equal(t, "chain.tx.confirmation", spans[0].Name())
+	require.Equal(t, otelcodes.Error, spans[0].Status().Code)
+	require.Contains(t, spans[0].Status().Description, "wait for transaction AA")
+	require.Contains(t, spans[0].Status().Description, "fetching tx 'AA'")
+	require.Contains(t, spans[0].Status().Description, "boom")
+}
+
+func TestWaitForResponse_OnChainFailureReturnsTransactionErrorAndFormatsSpan(t *testing.T) {
+	recorder := setupTxManagerTraceRecorder(t)
+	const (
+		network     = "cosmos"
+		accountName = "cosmosaccount"
+		mnemonic    = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
+		passphrase  = "testpass"
+	)
+
+	rpc := mocks.NewRPCClient(t)
+	client := testutil.NewMockClient(t, rpc, network, accountName, mnemonic, passphrase)
+	manager := &manager{ctx: context.Background(), client: &client}
+
+	rpc.On("Tx", mock.Anything, mock.Anything, false).Return(&ctypes.ResultTx{
+		Hash: []byte{0xAA},
+		TxResult: abci.ExecTxResult{
+			Code: 3,
+			Log:  "failure log",
+		},
+	}, nil)
+
+	result, err := manager.WaitForResponse("AA")
+	require.Nil(t, result)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "failure log")
+
+	spans := recorder.Ended()
+	require.Len(t, spans, 1)
+	require.Equal(t, "chain.tx.confirmation", spans[0].Name())
+	require.Equal(t, otelcodes.Error, spans[0].Status().Code)
+	require.Contains(t, spans[0].Status().Description, "transaction AA failed on-chain, code: 3")
+	require.Contains(t, spans[0].Status().Description, "failure log")
 }
 
 // ============================================================================
