@@ -27,7 +27,6 @@ func (s *Server) postCompletions(ctx echo.Context) error {
 
 	var completionsReq CompletionsRequest
 	if err := json.Unmarshal(body, &completionsReq); err != nil {
-		// return echo.NewHTTPError(http.StatusBadRequest, "invalid request format")
 		spanErr = observability.Error.Fmt(err, "unmarshal completions request body: %v", err)
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid request format: %v", err)
 	}

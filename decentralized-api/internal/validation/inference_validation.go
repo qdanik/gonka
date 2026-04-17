@@ -740,8 +740,8 @@ func (s *InferenceValidator) retrievePayloadsWithRetry(ctx context.Context, inf 
 	if ctx == nil {
 		ctx = s.recorder.GetContext()
 	}
-	retrievalContext, retrievalOp := observability.Inference.StartPayloadRetrieval(ctx, inf.InferenceId, inf.ExecutedBy, int64(inf.EpochId))
 	var lastErr error
+	retrievalContext, retrievalOp := observability.Inference.StartPayloadRetrieval(ctx, inf.InferenceId, inf.ExecutedBy, int64(inf.EpochId))
 	defer retrievalOp.FinishErr(&lastErr)
 
 	logging.Debug("Starting payload retrieval from executor", types.Validation,
@@ -749,21 +749,24 @@ func (s *InferenceValidator) retrievePayloadsWithRetry(ctx context.Context, inf 
 
 	for attempt := 1; attempt <= maxRetries; attempt++ {
 		observability.Inference.AddPayloadAttempt(retrievalOp, attempt)
+		attemptContext, attemptOp := observability.Inference.StartPayloadRetrievalAttempt(retrievalContext, inf.InferenceId, inf.ExecutedBy, int64(inf.EpochId), attempt)
 		// Check epoch staleness before each attempt
 		if s.isEpochStale(inf.EpochId) {
 			logging.Info("Epoch stale, stopping payload retrieval", types.Validation,
 				"inferenceId", inf.InferenceId, "inferenceEpoch", inf.EpochId)
 			lastErr = observability.Error.Fmt(ErrEpochStale, "epoch stale: inferenceId %s, epochId %d", inf.InferenceId, inf.EpochId)
+			attemptOp.Finish(lastErr)
 			return nil, nil, ErrEpochStale
 		}
 
 		promptPayload, responsePayload, err := RetrievePayloadsFromExecutor(
-			retrievalContext, inf.InferenceId, inf.ExecutedBy, inf.EpochId, s.recorder)
+			attemptContext, inf.InferenceId, inf.ExecutedBy, inf.EpochId, s.recorder)
 
 		if err == nil {
 			logging.Debug("Successfully retrieved payloads from executor", types.Validation,
 				"inferenceId", inf.InferenceId, "attempt", attempt)
 			lastErr = nil
+			attemptOp.Finish(nil)
 			return promptPayload, responsePayload, nil
 		}
 
@@ -772,10 +775,12 @@ func (s *InferenceValidator) retrievePayloadsWithRetry(ctx context.Context, inf 
 			logging.Error("Hash mismatch detected, will invalidate immediately", types.Validation,
 				"inferenceId", inf.InferenceId, "attempt", attempt)
 			lastErr = observability.Error.Fmt(err, "hash mismatch: inference_id %s, attempt %d", inf.InferenceId, attempt)
+			attemptOp.Finish(lastErr)
 			return nil, nil, ErrHashMismatch
 		}
 
 		lastErr = observability.Error.Fmt(err, "payload retrieval failed, will retry: inferenceId %s, attempt %d", inf.InferenceId, attempt)
+		attemptOp.Finish(lastErr)
 		logging.Warn("Payload retrieval failed, will retry", types.Validation,
 			"inferenceId", inf.InferenceId,
 			"attempt", attempt,

@@ -33,8 +33,8 @@ func (otelChainTraceService) StartTxBroadcast(ctx context.Context, msgType strin
 	}
 	return StartOperation(
 		ctx,
-		"decentralized-api.chain",
-		"chain.tx.broadcast",
+		tracerName.Chain,
+		spanName.Chain.TxBroadcast,
 		trace.SpanKindClient,
 		attrs,
 		nil,
@@ -66,8 +66,8 @@ func (otelChainTraceService) StartTxConfirmation(ctx context.Context, txHash str
 	}
 	return StartOperation(
 		ctx,
-		"decentralized-api.chain",
-		"chain.tx.confirmation",
+		tracerName.Chain,
+		spanName.Chain.TxConfirmation,
 		trace.SpanKindClient,
 		attrs,
 		nil,
@@ -77,8 +77,8 @@ func (otelChainTraceService) StartTxConfirmation(ctx context.Context, txHash str
 func (otelChainTraceService) StartStoreQuery(ctx context.Context, storeKey string, withProof bool, height int64) (context.Context, *Operation) {
 	return StartOperation(
 		ctx,
-		"decentralized-api.chain",
-		"chain.store.query",
+		tracerName.Chain,
+		spanName.Chain.StoreQuery,
 		trace.SpanKindClient,
 		[]attribute.KeyValue{
 			attribute.String("blockchain.system", "cosmos"),
@@ -93,8 +93,8 @@ func (otelChainTraceService) StartStoreQuery(ctx context.Context, storeKey strin
 func (otelChainTraceService) StartGRPCQuery(ctx context.Context, service string, method string) (context.Context, *Operation) {
 	return StartOperation(
 		ctx,
-		"decentralized-api.chain",
-		"chain.grpc.query",
+		tracerName.Chain,
+		spanName.Chain.GRPCQuery,
 		trace.SpanKindClient,
 		[]attribute.KeyValue{
 			attribute.String("rpc.system", "grpc"),
