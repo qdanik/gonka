@@ -14,6 +14,7 @@ type InferenceTraceService interface {
 	InjectRequestContext(ctx context.Context, headers http.Header)
 	StartRequest(ctx context.Context, method string) (context.Context, *Operation)
 	SetRequestIdentity(op *Operation, model string, requester string)
+	SetTransferAddress(op *Operation, transferAddress string)
 	MarkTransferPath(op *Operation)
 	MarkExecutorPath(op *Operation, inferenceID string)
 	StartTransfer(ctx context.Context, model string, requester string) (context.Context, *Operation)
@@ -32,6 +33,7 @@ type InferenceTraceService interface {
 	AddValidationRetry(op *Operation, attempt int, err error)
 	SetValidationResult(op *Operation, result any)
 	StartPayloadRetrieval(ctx context.Context, inferenceID string, executorAddress string, epochID int64) (context.Context, *Operation)
+	StartPayloadRetrievalAttempt(ctx context.Context, inferenceID string, executorAddress string, epochID int64, attempt int) (context.Context, *Operation)
 	AddPayloadAttempt(op *Operation, attempt int)
 	StartPayloadFetch(ctx context.Context, requestURL string, validatorAddress string, epochID int64) (context.Context, *Operation)
 	StartValidationMLNode(ctx context.Context, inferenceID string, model string, nodeID string) (context.Context, *Operation)
@@ -57,8 +59,8 @@ func (otelInferenceTraceService) InjectRequestContext(ctx context.Context, heade
 func (otelInferenceTraceService) StartRequest(ctx context.Context, method string) (context.Context, *Operation) {
 	return StartOperation(
 		ctx,
-		"decentralized-api.public",
-		"inference.request",
+		tracerName.Public,
+		spanName.Inference.Request,
 		trace.SpanKindServer,
 		[]attribute.KeyValue{
 			attribute.String("http.method", method),
@@ -76,6 +78,13 @@ func (otelInferenceTraceService) SetRequestIdentity(op *Operation, model string,
 		attribute.String("model", model),
 		attribute.String("requester.address", requester),
 	)
+}
+
+func (otelInferenceTraceService) SetTransferAddress(op *Operation, transferAddress string) {
+	if op == nil || transferAddress == "" {
+		return
+	}
+	op.Span().SetAttributes(attribute.String("transfer.address", transferAddress))
 }
 
 func (otelInferenceTraceService) MarkTransferPath(op *Operation) {
@@ -98,8 +107,8 @@ func (otelInferenceTraceService) MarkExecutorPath(op *Operation, inferenceID str
 func (otelInferenceTraceService) StartTransfer(ctx context.Context, model string, requester string) (context.Context, *Operation) {
 	return StartOperation(
 		ctx,
-		"decentralized-api.public",
-		"inference.transfer",
+		tracerName.Public,
+		spanName.Inference.Transfer,
 		trace.SpanKindInternal,
 		[]attribute.KeyValue{
 			attribute.String("model", model),
@@ -112,8 +121,8 @@ func (otelInferenceTraceService) StartTransfer(ctx context.Context, model string
 func (otelInferenceTraceService) StartForwardExecutor(ctx context.Context, model string, executorAddress string, executorURL string) (context.Context, *Operation) {
 	return StartOperation(
 		ctx,
-		"decentralized-api.public",
-		"inference.transfer.forward_executor",
+		tracerName.Public,
+		spanName.Inference.ForwardExecutor,
 		trace.SpanKindClient,
 		[]attribute.KeyValue{
 			attribute.String("executor.address", executorAddress),
@@ -127,8 +136,8 @@ func (otelInferenceTraceService) StartForwardExecutor(ctx context.Context, model
 func (otelInferenceTraceService) StartExecutor(ctx context.Context, inferenceID string, model string, requester string, transferAddress string) (context.Context, *Operation) {
 	return StartOperation(
 		ctx,
-		"decentralized-api.public",
-		"inference.executor.execute",
+		tracerName.Public,
+		spanName.Inference.Execute,
 		trace.SpanKindInternal,
 		[]attribute.KeyValue{
 			attribute.String("inference.id", inferenceID),
@@ -143,8 +152,8 @@ func (otelInferenceTraceService) StartExecutor(ctx context.Context, inferenceID 
 func (otelInferenceTraceService) StartMLNodeExecution(ctx context.Context, inferenceID string, model string) (context.Context, *Operation) {
 	return StartOperation(
 		ctx,
-		"decentralized-api.public",
-		"mlnode.chat.completions",
+		tracerName.Public,
+		spanName.MLNode.ChatCompletions,
 		trace.SpanKindClient,
 		[]attribute.KeyValue{
 			attribute.String("inference.id", inferenceID),
@@ -167,8 +176,8 @@ func (otelInferenceTraceService) SetMLNodeTarget(op *Operation, nodeID string, n
 func (otelInferenceTraceService) StartFinishSubmission(ctx context.Context, inferenceID string, executorAddress string, model string) (context.Context, *Operation) {
 	return StartOperation(
 		ctx,
-		"decentralized-api.public",
-		"inference.finish.submit",
+		tracerName.Public,
+		spanName.Inference.FinishSubmit,
 		trace.SpanKindInternal,
 		[]attribute.KeyValue{
 			attribute.String("inference.id", inferenceID),
@@ -196,8 +205,8 @@ func (otelInferenceTraceService) SetResponseHash(op *Operation, responseHash str
 func (otelInferenceTraceService) StartValidationEvent(ctx context.Context, inferenceCount int) (context.Context, *Operation) {
 	return StartOperation(
 		ctx,
-		"decentralized-api.event-listener",
-		"inference.validation.event",
+		tracerName.EventListener,
+		spanName.Inference.ValidationEvent,
 		trace.SpanKindConsumer,
 		[]attribute.KeyValue{attribute.Int("inference.count", inferenceCount)},
 		nil,
@@ -207,8 +216,8 @@ func (otelInferenceTraceService) StartValidationEvent(ctx context.Context, infer
 func (otelInferenceTraceService) StartStatusUpdateEvent(ctx context.Context, inferenceCount int) (context.Context, *Operation) {
 	return StartOperation(
 		ctx,
-		"decentralized-api.event-listener",
-		"inference.status_update.event",
+		tracerName.EventListener,
+		spanName.Inference.StatusUpdateEvent,
 		trace.SpanKindConsumer,
 		[]attribute.KeyValue{attribute.Int("inference.count", inferenceCount)},
 		nil,
@@ -218,8 +227,8 @@ func (otelInferenceTraceService) StartStatusUpdateEvent(ctx context.Context, inf
 func (otelInferenceTraceService) StartValidationSample(ctx context.Context, candidateCount int) (context.Context, *Operation) {
 	return StartOperation(
 		ctx,
-		"decentralized-api.validation",
-		"inference.validation.sample",
+		tracerName.Validation,
+		spanName.Inference.ValidationSample,
 		trace.SpanKindInternal,
 		[]attribute.KeyValue{attribute.Int("candidate.count", candidateCount)},
 		nil,
@@ -236,8 +245,8 @@ func (otelInferenceTraceService) SetSampledCount(op *Operation, sampledCount int
 func (otelInferenceTraceService) StartValidationExecution(ctx context.Context, inferenceID string, model string, epochID int64, revalidation bool) (context.Context, *Operation) {
 	return StartOperation(
 		ctx,
-		"decentralized-api.validation",
-		"inference.validation.execute",
+		tracerName.Validation,
+		spanName.Inference.ValidationExecute,
 		trace.SpanKindInternal,
 		[]attribute.KeyValue{
 			attribute.String("inference.id", inferenceID),
@@ -269,13 +278,29 @@ func (otelInferenceTraceService) SetValidationResult(op *Operation, result any) 
 func (otelInferenceTraceService) StartPayloadRetrieval(ctx context.Context, inferenceID string, executorAddress string, epochID int64) (context.Context, *Operation) {
 	return StartOperation(
 		ctx,
-		"decentralized-api.validation",
-		"inference.payload.retrieve",
+		tracerName.Validation,
+		spanName.Inference.PayloadRetrieve,
 		trace.SpanKindInternal,
 		[]attribute.KeyValue{
 			attribute.String("inference.id", inferenceID),
 			attribute.String("executor.address", executorAddress),
 			attribute.Int64("epoch.id", epochID),
+		},
+		nil,
+	)
+}
+
+func (otelInferenceTraceService) StartPayloadRetrievalAttempt(ctx context.Context, inferenceID string, executorAddress string, epochID int64, attempt int) (context.Context, *Operation) {
+	return StartOperation(
+		ctx,
+		tracerName.Validation,
+		spanName.Inference.PayloadRetrieveAttempt,
+		trace.SpanKindInternal,
+		[]attribute.KeyValue{
+			attribute.String("inference.id", inferenceID),
+			attribute.String("executor.address", executorAddress),
+			attribute.Int64("epoch.id", epochID),
+			attribute.Int("payload.attempt", attempt),
 		},
 		nil,
 	)
@@ -291,8 +316,8 @@ func (otelInferenceTraceService) AddPayloadAttempt(op *Operation, attempt int) {
 func (otelInferenceTraceService) StartPayloadFetch(ctx context.Context, requestURL string, validatorAddress string, epochID int64) (context.Context, *Operation) {
 	return StartOperation(
 		ctx,
-		"decentralized-api.validation",
-		"inference.payload.fetch",
+		tracerName.Validation,
+		spanName.Inference.PayloadFetch,
 		trace.SpanKindClient,
 		[]attribute.KeyValue{
 			attribute.String("executor.url", requestURL),
@@ -306,8 +331,8 @@ func (otelInferenceTraceService) StartPayloadFetch(ctx context.Context, requestU
 func (otelInferenceTraceService) StartValidationMLNode(ctx context.Context, inferenceID string, model string, nodeID string) (context.Context, *Operation) {
 	return StartOperation(
 		ctx,
-		"decentralized-api.validation",
-		"mlnode.chat.completions.validation",
+		tracerName.Validation,
+		spanName.MLNode.ChatCompletionsValidation,
 		trace.SpanKindClient,
 		[]attribute.KeyValue{
 			attribute.String("inference.id", inferenceID),
@@ -321,8 +346,8 @@ func (otelInferenceTraceService) StartValidationMLNode(ctx context.Context, infe
 func (otelInferenceTraceService) StartCompareLogits(ctx context.Context, inferenceID string) (context.Context, *Operation) {
 	return StartOperation(
 		ctx,
-		"decentralized-api.validation",
-		"inference.validation.compare_logits",
+		tracerName.Validation,
+		spanName.Inference.CompareLogits,
 		trace.SpanKindInternal,
 		[]attribute.KeyValue{attribute.String("inference.id", inferenceID)},
 		nil,

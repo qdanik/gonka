@@ -238,6 +238,7 @@ func (s *Server) postChatWithBody(ctx echo.Context, requestOp *observability.Ope
 	if err != nil {
 		return err
 	}
+	observability.Inference.SetTransferAddress(requestOp, chatRequest.TransferAddress)
 
 	// Early TA whitelist check - covers both transfer and executor paths:
 	// - Transfer requests: TransferAddress = this node's address (set by readRequest)

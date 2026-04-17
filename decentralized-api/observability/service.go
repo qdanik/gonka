@@ -83,6 +83,10 @@ func (s *InferenceService) SetRequestIdentity(op *Operation, model string, reque
 	s.Trace().SetRequestIdentity(op, model, requester)
 }
 
+func (s *InferenceService) SetTransferAddress(op *Operation, transferAddress string) {
+	s.Trace().SetTransferAddress(op, transferAddress)
+}
+
 func (s *InferenceService) MarkTransferPath(op *Operation) {
 	s.Trace().MarkTransferPath(op)
 }
@@ -153,6 +157,10 @@ func (s *InferenceService) SetValidationResult(op *Operation, result any) {
 
 func (s *InferenceService) StartPayloadRetrieval(ctx context.Context, inferenceID string, executorAddress string, epochID int64) (context.Context, *Operation) {
 	return s.Trace().StartPayloadRetrieval(ctx, inferenceID, executorAddress, epochID)
+}
+
+func (s *InferenceService) StartPayloadRetrievalAttempt(ctx context.Context, inferenceID string, executorAddress string, epochID int64, attempt int) (context.Context, *Operation) {
+	return s.Trace().StartPayloadRetrievalAttempt(ctx, inferenceID, executorAddress, epochID, attempt)
 }
 
 func (s *InferenceService) AddPayloadAttempt(op *Operation, attempt int) {

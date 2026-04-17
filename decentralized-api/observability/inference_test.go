@@ -31,6 +31,7 @@ func TestInferenceRequestSpan(t *testing.T) {
 
 	ctx, op := Inference.StartRequest(context.Background(), http.MethodPost)
 	Inference.SetRequestIdentity(op, "model-a", "gonka1requester")
+	Inference.SetTransferAddress(op, "gonka1transfer")
 	Inference.MarkExecutorPath(op, "inf-1")
 	op.Finish(nil)
 
@@ -47,6 +48,7 @@ func TestInferenceRequestSpan(t *testing.T) {
 	assertHasAttr(t, attrs, "http.route", "/v1/chat/completions")
 	assertHasAttr(t, attrs, "model", "model-a")
 	assertHasAttr(t, attrs, "requester.address", "gonka1requester")
+	assertHasAttr(t, attrs, "transfer.address", "gonka1transfer")
 	assertHasAttr(t, attrs, "request.path", "executor")
 	assertHasAttr(t, attrs, "inference.id", "inf-1")
 	if trace.SpanFromContext(ctx).SpanContext().TraceID() != span.SpanContext().TraceID() {
@@ -104,6 +106,41 @@ func TestContextPropagationHelpers(t *testing.T) {
 			t.Fatalf("expected propagated trace id")
 		}
 	}
+}
+
+func TestPayloadRetrievalAttemptIsChildOfRetrieval(t *testing.T) {
+	recorder := setupTraceRecorder(t)
+
+	ctx, retrievalOp := Inference.StartPayloadRetrieval(context.Background(), "inf-3", "gonka1executor", 7)
+	Inference.AddPayloadAttempt(retrievalOp, 2)
+	_, attemptOp := Inference.StartPayloadRetrievalAttempt(ctx, "inf-3", "gonka1executor", 7, 2)
+	attemptOp.Finish(nil)
+	retrievalOp.Finish(nil)
+
+	spans := recorder.Ended()
+	if len(spans) != 2 {
+		t.Fatalf("expected 2 spans, got %d", len(spans))
+	}
+
+	var retrievalSpan, attemptSpan sdktrace.ReadOnlySpan
+	for _, span := range spans {
+		switch span.Name() {
+		case "inference.payload.retrieve":
+			retrievalSpan = span
+		case "inference.payload.retrieve.attempt":
+			attemptSpan = span
+		}
+	}
+	if retrievalSpan == nil || attemptSpan == nil {
+		t.Fatalf("expected retrieval and attempt spans to be present")
+	}
+	if attemptSpan.Parent().SpanID() != retrievalSpan.SpanContext().SpanID() {
+		t.Fatalf("expected attempt span to be a child of retrieval span")
+	}
+	if len(retrievalSpan.Events()) != 1 || retrievalSpan.Events()[0].Name != "payload.attempt" {
+		t.Fatalf("expected payload.attempt event on retrieval span")
+	}
+	assertHasAttr(t, attemptSpan.Attributes(), "payload.attempt", 2)
 }
 
 func assertHasAttr(t *testing.T, attrs []attribute.KeyValue, key string, expected any) {

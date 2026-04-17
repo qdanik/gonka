@@ -38,20 +38,20 @@ type Operation struct {
 
 func StartOperation(
 	ctx context.Context,
-	tracerName string,
-	spanName string,
+	tracerName tracerID,
+	spanName spanID,
 	kind trace.SpanKind,
 	spanAttrs []attribute.KeyValue,
 	metricAttrs []attribute.KeyValue,
 ) (context.Context, *Operation) {
 	initInstruments()
-	ctx, span := otel.Tracer(tracerName).Start(ctx, spanName, trace.WithSpanKind(kind), trace.WithAttributes(spanAttrs...))
-	attrs := withOperation(metricAttrs, spanName)
+	ctx, span := otel.Tracer(string(tracerName)).Start(ctx, string(spanName), trace.WithSpanKind(kind), trace.WithAttributes(spanAttrs...))
+	attrs := withOperation(metricAttrs, string(spanName))
 	activeOperations.Add(ctx, 1, metric.WithAttributes(attrs...))
 	return ctx, &Operation{
 		ctx:         ctx,
 		span:        span,
-		name:        spanName,
+		name:        string(spanName),
 		start:       time.Now(),
 		metricAttrs: attrs,
 	}
