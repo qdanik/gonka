@@ -20,6 +20,7 @@ extensions:
   jaeger_query:
     storage:
       traces: local_badger
+    base_path: /jaeger
     http:
       endpoint: 0.0.0.0:16686
 

@@ -11,6 +11,7 @@ The nginx proxy routes requests to different backend services based on URL paths
 - `/chain-rpc/` → Blockchain RPC endpoint (port 26657)
 - `/chain-api/` → Blockchain REST API (port 1317)
 - `/chain-grpc/` → Blockchain gRPC endpoint (port 9090)
+- `/jaeger/` → Jaeger UI when `JAEGER_ENABLED=true` and the observability overlay is running
 - `/health` → Nginx health check endpoint
 - `/` → Explorer dashboard when `DASHBOARD_PORT` is set, otherwise a simple "dashboard not configured" page
 
@@ -55,6 +56,10 @@ Key runtime environment variables:
 | `API_SERVICE_NAME` | api | Service name for API upstream |
 | `NODE_SERVICE_NAME` | node | Service name for chain node upstreams |
 | `EXPLORER_SERVICE_NAME` | explorer | Service name for explorer upstream |
+| `JAEGER_ENABLED` | false | Enables proxy routing for the Jaeger UI under `/jaeger/` |
+| `JAEGER_SERVICE_NAME` | jaeger | Service name for Jaeger UI upstream |
+| `JAEGER_PORT` | 16686 | Jaeger UI upstream port |
+| `JAEGER_BASE_PATH` | /jaeger | Base path used by proxied Jaeger UI |
 | `KEY_NAME` | - | Optional stack key; when set, service names are prefixed as `<KEY_NAME>-*` |
 | `RESOLVER` | 127.0.0.11 | DNS resolver for dynamic upstream resolution (override if needed) |
 | `PROXY_REAL_IP_FROM` | - | Space-separated trusted proxy CIDRs/IPs for nginx `set_real_ip_from` (for example `172.18.0.1/32`). Empty by default (real IP parsing disabled). |
@@ -161,7 +166,6 @@ Below are minimal environment configurations for the compose stack under `deploy
 NGINX_MODE=http
 API_PORT=8000
 ```
-
 #### HTTPS only via proxy-ssl (443 → 8443)
 
 ```
@@ -266,6 +270,13 @@ mkdir -p secrets/nginx-ssl secrets/certbot
 ```
 source ./config.env && \
 docker compose --profile "ssl" -f docker-compose.yml -f docker-compose.mlnode.yml up -d
+```
+
+- Initial start with observability overlay:
+
+```
+source ./config.env && \
+docker compose -f docker-compose.yml -f docker-compose.mlnode.yml -f docker-compose.observability.yml up -d
 ```
 
 - Update currently running node:

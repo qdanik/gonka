@@ -13,6 +13,10 @@ export NODE_SERVICE_NAME=${NODE_SERVICE_NAME:-node}
 export EXPLORER_SERVICE_NAME=${EXPLORER_SERVICE_NAME:-explorer}
 export PROXY_SSL_SERVICE_NAME=${PROXY_SSL_SERVICE_NAME:-proxy-ssl}
 export PROXY_SSL_PORT=${PROXY_SSL_PORT:-8080}
+export JAEGER_ENABLED=${JAEGER_ENABLED:-false}
+export JAEGER_SERVICE_NAME=${JAEGER_SERVICE_NAME:-jaeger}
+export JAEGER_PORT=${JAEGER_PORT:-16686}
+export JAEGER_BASE_PATH=${JAEGER_BASE_PATH:-/jaeger}
 
 export VERSIOND_SERVICE_NAME=${VERSIOND_SERVICE_NAME:-versiond}
 export VERSIOND_PORT=${VERSIOND_PORT:-8080}
@@ -51,6 +55,9 @@ if [ -n "$PROXY_REAL_IP_FROM" ]; then
         real_ip_recursive ${PROXY_REAL_IP_RECURSIVE};"
 else
     REAL_IP_CONFIG="# real_ip disabled (PROXY_REAL_IP_FROM is empty)"
+fi
+if [ "${JAEGER_ENABLED}" = "true" ]; then
+    export FINAL_JAEGER_SERVICE="${KEY_NAME_PREFIX}${JAEGER_SERVICE_NAME}"
 fi
 
 export REAL_IP_CONFIG
@@ -130,6 +137,29 @@ if [ "${DISABLE_DEVSHARD_PROXY}" != "true" ]; then
     }"
 else
     export VERSIOND_UPSTREAM="# devshard proxy disabled"
+fi
+
+if [ "${JAEGER_ENABLED}" = "true" ]; then
+    echo "   Jaeger Service: $FINAL_JAEGER_SERVICE:$JAEGER_PORT (base path: $JAEGER_BASE_PATH)"
+    export JAEGER_UPSTREAM="upstream jaeger_backend {
+        zone jaeger_backend 64k;
+        server ${FINAL_JAEGER_SERVICE}:${JAEGER_PORT} resolve;
+    }"
+
+    export JAEGER_LOCATION="location = ${JAEGER_BASE_PATH} {
+            return 301 ${JAEGER_BASE_PATH}/;
+        }
+
+        location ${JAEGER_BASE_PATH}/ {
+            proxy_pass http://jaeger_backend;
+            proxy_set_header Host \$\$host;
+            proxy_set_header X-Real-IP \$\$remote_addr;
+            proxy_set_header X-Forwarded-For \$\$proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto \$\$scheme;
+        }"
+else
+    export JAEGER_UPSTREAM="# jaeger not configured"
+    export JAEGER_LOCATION="# jaeger not configured"
 fi
 
 if [ "$DASHBOARD_ENABLED" = "true" ]; then
@@ -739,7 +769,7 @@ ENVSUBST_VARS='$KEY_NAME,$KEY_NAME_PREFIX,$SERVER_NAME,$DOMAIN_NAME,$RESOLVER_DI
 
 # Group 2: Ports & Services
 ENVSUBST_VARS="${ENVSUBST_VARS},\$GONKA_API_PORT,\$CHAIN_RPC_PORT,\$CHAIN_API_PORT,\$CHAIN_GRPC_PORT"
-ENVSUBST_VARS="${ENVSUBST_VARS},\$FINAL_API_SERVICE,\$FINAL_NODE_SERVICE,\$FINAL_EXPLORER_SERVICE"
+ENVSUBST_VARS="${ENVSUBST_VARS},\$FINAL_API_SERVICE,\$FINAL_NODE_SERVICE,\$FINAL_EXPLORER_SERVICE,\$FINAL_JAEGER_SERVICE"
 
 # Group 3: HTTP/SSL & Status
 ENVSUBST_VARS="${ENVSUBST_VARS},\$LISTEN_HTTP,\$LISTEN_HTTPS,\$SSL_CONFIG"
@@ -747,6 +777,7 @@ ENVSUBST_VARS="${ENVSUBST_VARS},\$API_STATUS,\$CHAIN_RPC_STATUS,\$CHAIN_API_STAT
 
 # Group 4: Dashboard
 ENVSUBST_VARS="${ENVSUBST_VARS},\$DASHBOARD_PORT,\$DASHBOARD_UPSTREAM,\$ROOT_LOCATION"
+ENVSUBST_VARS="${ENVSUBST_VARS},\$JAEGER_PORT,\$JAEGER_BASE_PATH,\$JAEGER_UPSTREAM,\$JAEGER_LOCATION"
 
 # Group 5: Rate Limiting Zones
 ENVSUBST_VARS="${ENVSUBST_VARS},\$LIMIT_REQ_ZONE_GLOBAL,\$LIMIT_REQ_ZONE_GONKA_API,\$LIMIT_REQ_ZONE_EXEMPT"

@@ -1,4 +1,12 @@
 services:
+  # Extend the existing services with Jaeger environment variables
+  proxy:
+    environment:
+      # Optional Jaeger UI proxying
+      - JAEGER_ENABLED=${JAEGER_ENABLED:-false}
+      - JAEGER_PORT=${JAEGER_PORT:-16686}
+      - JAEGER_BASE_PATH=${JAEGER_BASE_PATH:-/jaeger}
+
   jaeger:
     container_name: jaeger
     image: cr.jaegertracing.io/jaegertracing/jaeger:2.16.0
@@ -6,10 +14,8 @@ services:
     command:
       - --config
       - /jaeger/config.yaml
-    ports:
-      # TODO: Close for public access in production or secure with auth.
-      - "16686:16686"
     expose:
+      - "16686"
       - "4317"
       - "4318"
     volumes:
