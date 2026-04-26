@@ -125,15 +125,20 @@ func (s *Server) observabilityMiddleware(next echo.HandlerFunc) echo.HandlerFunc
 			route = c.Request().URL.Path
 		}
 		requestContext, requestOp := observability.Request.StartRequest(c.Request().Context(), c.Request().Method, route)
+		requestLogging := newRequestLogging(c, requestOp)
 		observability.Request.SetEscrowID(requestOp, s.host.EscrowID())
 		observability.Request.SetSessionID(requestOp, c.Param("id"))
+		requestLogging.logReceived(s.host.EscrowID(), c.Param("id"))
 		c.SetRequest(c.Request().WithContext(requestContext))
 
 		err := next(c)
 
-		if sender, ok := c.Get(contextKeySender).(string); ok && sender != "" {
+		sender := ""
+		if resolvedSender, ok := c.Get(contextKeySender).(string); ok && resolvedSender != "" {
+			sender = resolvedSender
 			observability.Request.SetSender(requestOp, sender)
 		}
+		requestLogging.finish(sender, err)
 
 		statusCode := c.Response().Status
 		switch httpErr := err.(type) {

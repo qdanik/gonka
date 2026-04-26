@@ -211,9 +211,9 @@ func cleanupExpiredAuthKeys(currentBlockHeight int64) {
 }
 
 func (s *Server) postChat(ctx echo.Context) error {
-	_, requestOp := startObservabilityInferenceRequestContext(ctx)
+	_, requestOp, requestLogging := startObservabilityInferenceRequestContext(ctx)
 	var spanErr error
-	defer requestOp.FinishErr(&spanErr)
+	defer requestLogging.finish(&spanErr)
 
 	body, err := readRequestBody(ctx.Request(), ctx.Response().Writer)
 	if err != nil {
@@ -223,7 +223,7 @@ func (s *Server) postChat(ctx echo.Context) error {
 		return chatErr
 	}
 
-	responseErr := s.postChatWithBody(ctx, requestOp, body, utils.GenerateSHA256Hash(string(body)), chatCompletionsPath, body)
+	responseErr := s.postChatWithBody(ctx, requestOp, requestLogging, body, utils.GenerateSHA256Hash(string(body)), chatCompletionsPath, body)
 	if responseErr != nil {
 		spanErr = observability.Error.Fmt(responseErr, "post chat with body: %v", responseErr)
 		return responseErr
@@ -231,7 +231,7 @@ func (s *Server) postChat(ctx echo.Context) error {
 	return nil
 }
 
-func (s *Server) postChatWithBody(ctx echo.Context, requestOp *observability.Operation, body []byte, signBodyHash string, forwardPath string, forwardBody []byte) (err error) {
+func (s *Server) postChatWithBody(ctx echo.Context, requestOp *observability.Operation, requestLogging *inferenceRequestLogging, body []byte, signBodyHash string, forwardPath string, forwardBody []byte) (err error) {
 	logging.Debug("PostChat. Received request", types.Inferences, "path", ctx.Request().URL.Path)
 
 	chatRequest, err := readRequest(ctx.Request(), s.recorder.GetAccountAddress(), body, signBodyHash, forwardPath, forwardBody)
@@ -258,6 +258,7 @@ func (s *Server) postChatWithBody(ctx echo.Context, requestOp *observability.Ope
 	}
 
 	observability.Inference.SetRequestIdentity(requestOp, chatRequest.OpenAiRequest.Model, chatRequest.RequesterAddress)
+	requestLogging.logClassified(chatRequest)
 
 	// Developer access gating: before a configured cutoff height, only allowlisted developers may use the public API
 	// for both transfer-agent and executor request paths.
@@ -275,7 +276,7 @@ func (s *Server) postChatWithBody(ctx echo.Context, requestOp *observability.Ope
 	} else {
 		logging.Info("Transfer request", types.Inferences, "requesterAddress", chatRequest.RequesterAddress)
 		observability.Inference.MarkTransferPath(requestOp)
-		return s.handleTransferRequest(ctx, chatRequest)
+		return s.handleTransferRequest(ctx, chatRequest, requestLogging)
 	}
 }
 
@@ -322,7 +323,7 @@ func (s *Server) enforceTransferAgentAccess(taAddress string) error {
 	return echo.NewHTTPError(http.StatusForbidden, "Transfer Agent not allowed")
 }
 
-func (s *Server) handleTransferRequest(ctx echo.Context, request *ChatRequest) error {
+func (s *Server) handleTransferRequest(ctx echo.Context, request *ChatRequest, requestLogging *inferenceRequestLogging) error {
 	transferContext, transferOp := observability.Inference.StartTransfer(ctx.Request().Context(), request.OpenAiRequest.Model, request.RequesterAddress)
 	ctx.SetRequest(ctx.Request().WithContext(transferContext))
 	var spanErr error
@@ -407,6 +408,7 @@ func (s *Server) handleTransferRequest(ctx echo.Context, request *ChatRequest) e
 		spanErr = observability.Error.Fmt(err, "create inference start request: inference_id=%s", inferenceUUID)
 		return err
 	}
+	requestLogging.withOperation(transferOp).logAssigned(inferenceRequest.InferenceId, request.RequesterAddress, request.TransferAddress)
 
 	go func() {
 		logging.Debug("Starting inference", types.Inferences, "id", inferenceRequest.InferenceId)

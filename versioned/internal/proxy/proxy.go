@@ -7,6 +7,8 @@ import (
 	"net/url"
 	"strings"
 	"sync/atomic"
+
+	"versioned/internal/observability"
 )
 
 // Handler returns an http.Handler that routes requests by version prefix.
@@ -17,6 +19,10 @@ func Handler(routes *atomic.Value) http.Handler {
 		path := strings.TrimPrefix(r.URL.Path, "/")
 		parts := strings.SplitN(path, "/", 2)
 		if len(parts) == 0 || parts[0] == "" {
+			_, requestLogging := startRequestLogging(r, "", "")
+			proxyErr := fmt.Errorf("version prefix required")
+			defer requestLogging.finish(&proxyErr)
+			requestLogging.setHTTPStatus(http.StatusBadRequest)
 			http.Error(w, "version prefix required", http.StatusBadRequest)
 			return
 		}
@@ -30,28 +36,56 @@ func Handler(routes *atomic.Value) http.Handler {
 		routeMap := routes.Load().(map[string]string)
 		target, ok := routeMap[version]
 		if !ok {
+			_, requestLogging := startRequestLogging(r, version, "")
+			proxyErr := fmt.Errorf("version %q not found", version)
+			defer requestLogging.finish(&proxyErr)
+			requestLogging.setHTTPStatus(http.StatusNotFound)
 			http.Error(w, fmt.Sprintf("version %q not found", version), http.StatusNotFound)
 			return
 		}
 
+		requestContext, requestLogging := startRequestLogging(r, version, target)
+		var proxyErr error
+		defer requestLogging.finish(&proxyErr)
+
 		targetURL, err := url.Parse("http://" + target)
 		if err != nil {
+			proxyErr = err
+			requestLogging.setHTTPStatus(http.StatusInternalServerError)
 			http.Error(w, "internal error", http.StatusInternalServerError)
 			return
 		}
 
+		recorder := &statusRecorder{ResponseWriter: w}
+
 		p := &httputil.ReverseProxy{
 			Rewrite: func(pr *httputil.ProxyRequest) {
 				pr.SetXForwarded()
+				pr.Out = pr.Out.WithContext(requestContext)
 				pr.Out.URL.Scheme = targetURL.Scheme
 				pr.Out.URL.Host = targetURL.Host
 				pr.Out.Host = targetURL.Host
 				pr.Out.URL.Path = rest
 				pr.Out.URL.RawPath = ""
+				observability.Proxy.InjectRequestContext(requestContext, pr.Out.Header)
+			},
+			ModifyResponse: func(resp *http.Response) error {
+				requestLogging.setHTTPStatus(resp.StatusCode)
+				return nil
+			},
+			ErrorHandler: func(rw http.ResponseWriter, req *http.Request, err error) {
+				proxyErr = err
+				requestLogging.setHTTPStatus(http.StatusBadGateway)
+				http.Error(rw, "bad gateway", http.StatusBadGateway)
 			},
 			FlushInterval: -1, // flush immediately for SSE
 		}
 
-		p.ServeHTTP(w, r)
+		p.ServeHTTP(recorder, r.WithContext(requestContext))
+		statusCode := recorder.statusCode()
+		requestLogging.setHTTPStatus(statusCode)
+		if statusCode >= http.StatusInternalServerError {
+			proxyErr = fmt.Errorf("proxy returned status %d", statusCode)
+		}
 	})
 }

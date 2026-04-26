@@ -13,6 +13,7 @@ import (
 
 	"versioned/internal/config"
 	"versioned/internal/health"
+	"versioned/internal/observability"
 	"versioned/internal/oracle"
 	"versioned/internal/process"
 	"versioned/internal/promsd"
@@ -34,6 +35,18 @@ func run(ctx context.Context) error {
 
 	ctx, cancel := signal.NotifyContext(ctx, syscall.SIGTERM, syscall.SIGINT)
 	defer cancel()
+
+	shutdownObservability, err := observability.Init(ctx, observability.Config{ServiceName: "versiond", ServiceVersion: "unknown"})
+	if err != nil {
+		return fmt.Errorf("initialize observability: %w", err)
+	}
+	defer func() {
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer shutdownCancel()
+		if shutdownErr := shutdownObservability(shutdownCtx); shutdownErr != nil {
+			slog.Error("observability shutdown failed", "service", "versiond", "error", shutdownErr)
+		}
+	}()
 
 	mgr := process.NewManager(cfg)
 	oracleClient := oracle.NewClient(cfg.OracleURL)

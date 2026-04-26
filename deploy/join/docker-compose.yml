@@ -88,6 +88,9 @@ services:
     environment:
       - VERSIOND_ORACLE_URL=http://api:9100/versions
       - VERSIOND_BINARY_NAME=devshardd
+      - VERSIOND_OTEL_ENABLED=${VERSIOND_OTEL_ENABLED:-false}
+      - VERSIOND_OTEL_ENDPOINT=${VERSIOND_OTEL_ENDPOINT:-}
+      - VERSIOND_OTEL_HEADERS=${VERSIOND_OTEL_HEADERS:-}
       - NODE_MANAGER_ADDR=api:9400
       - NODE_HOST=node
       - KEY_NAME=${KEY_NAME}
