@@ -18,6 +18,7 @@ import (
 	"devshard/gossip"
 	"devshard/host"
 	"devshard/logging"
+	"devshard/observability"
 	"devshard/signing"
 	"devshard/storage"
 	"devshard/types"
@@ -100,6 +101,7 @@ func (s *Server) SetGossip(g *gossip.Gossip) { s.gossip = g }
 // Register mounts all devshard routes on the given echo group.
 // The caller typically mounts this under /v1/devshard.
 func (s *Server) Register(g *echo.Group) {
+	g.Use(s.observabilityMiddleware)
 	g.Use(s.AuthMiddleware)
 	if s.rateLimit != nil {
 		g.Use(rateLimitMiddleware(s.rateLimit))
@@ -114,6 +116,42 @@ func (s *Server) Register(g *echo.Group) {
 	g.GET("/sessions/:id/diffs", s.HandleGetDiffs)
 	g.GET("/sessions/:id/mempool", s.HandleGetMempool)
 	g.GET("/sessions/:id/signatures", s.HandleGetSignatures)
+}
+
+func (s *Server) observabilityMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		route := c.Path()
+		if route == "" {
+			route = c.Request().URL.Path
+		}
+		requestContext, requestOp := observability.Request.StartRequest(c.Request().Context(), c.Request().Method, route)
+		observability.Request.SetEscrowID(requestOp, s.host.EscrowID())
+		observability.Request.SetSessionID(requestOp, c.Param("id"))
+		c.SetRequest(c.Request().WithContext(requestContext))
+
+		err := next(c)
+
+		if sender, ok := c.Get(contextKeySender).(string); ok && sender != "" {
+			observability.Request.SetSender(requestOp, sender)
+		}
+
+		statusCode := c.Response().Status
+		switch httpErr := err.(type) {
+		case *echo.HTTPError:
+			statusCode = httpErr.Code
+		case nil:
+			if statusCode == 0 {
+				statusCode = http.StatusOK
+			}
+		default:
+			if statusCode < http.StatusBadRequest {
+				statusCode = http.StatusInternalServerError
+			}
+		}
+		observability.Request.SetHTTPStatus(requestOp, statusCode)
+		requestOp.Finish(err)
+		return err
+	}
 }
 
 // writeJSON serializes v with goccy/go-json, bypassing Echo's default serializer.

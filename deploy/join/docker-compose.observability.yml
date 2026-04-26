@@ -6,6 +6,10 @@ services:
       - JAEGER_ENABLED=${JAEGER_ENABLED:-false}
       - JAEGER_PORT=${JAEGER_PORT:-16686}
       - JAEGER_BASE_PATH=${JAEGER_BASE_PATH:-/jaeger}
+      # Grafana UI proxying
+      - GRAFANA_ENABLED=${GRAFANA_ENABLED:-true}
+      - GRAFANA_PORT=${GRAFANA_PORT:-3000}
+      - GRAFANA_BASE_PATH=${GRAFANA_BASE_PATH:-/grafana}
 
   jaeger:
     container_name: jaeger
@@ -23,5 +27,62 @@ services:
       - jaeger_data:/var/lib/jaeger
     restart: unless-stopped
 
+  prometheus:
+    container_name: prometheus
+    image: prom/prometheus:v3.2.1
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=30d
+      - --web.enable-lifecycle
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "127.0.0.1:9099:9090"
+    restart: unless-stopped
+
+  cadvisor:
+    container_name: cadvisor
+    image: gcr.io/cadvisor/cadvisor:v0.51.0
+    privileged: true
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+      - /dev/disk/:/dev/disk:ro
+    ports:
+      - "127.0.0.1:8088:8080"
+    restart: unless-stopped
+
+  grafana:
+    container_name: grafana
+    image: grafana/grafana:11.5.2
+    entrypoint: [ "/bin/sh", "/entrypoint.sh" ]
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin1
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_SERVER_ROOT_URL=%(protocol)s://%(domain)s${GRAFANA_BASE_PATH:-/grafana}/
+      - GF_SERVER_SERVE_FROM_SUB_PATH=true
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards-src:ro
+      - ./grafana/entrypoint.sh:/entrypoint.sh:ro
+      - grafana_data:/var/lib/grafana
+    ports:
+      - "127.0.0.1:3000:3000"
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+
 volumes:
   jaeger_data:
+  prometheus_data:
+  grafana_data:
+
+networks:
+  default:
+    name: join_default
+    external: true

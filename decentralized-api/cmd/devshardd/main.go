@@ -46,6 +46,7 @@ import (
 	"github.com/cosmos/cosmos-sdk/crypto/keys/secp256k1"
 
 	mlnodeclient "devshard/mlnode"
+	devshardobservability "devshard/observability"
 	devshardstorage "devshard/storage"
 	devshardtypes "devshard/types"
 )
@@ -97,6 +98,26 @@ func main() {
 		log.Fatalf("api account: %v", err)
 	}
 
+	participantAddress, err := apiAccount.AccountAddressBech32()
+	if err != nil {
+		slog.Warn("failed to resolve participant address for observability", "error", err)
+	}
+	shutdownObservability, err := devshardobservability.Init(ctx, devshardobservability.Config{
+		ServiceName:        "devshardd",
+		ServiceVersion:     runtimeVersion,
+		ParticipantAddress: participantAddress,
+	})
+	if err != nil {
+		log.Fatalf("initialize devshard observability: %v", err)
+	}
+	defer func() {
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer shutdownCancel()
+		if shutdownErr := shutdownObservability(shutdownCtx); shutdownErr != nil {
+			slog.Warn("observability shutdown failed", "error", shutdownErr)
+		}
+	}()
+
 	recorder, err := newQueryOnlyCosmosClient(ctx, ignite, apiAccount)
 	if err != nil {
 		log.Fatalf("query-only cosmos client: %v", err)
@@ -146,6 +167,7 @@ func main() {
 	e.HideBanner = true
 	e.HidePort = true
 	e.GET("/healthz", func(c echo.Context) error { return c.String(http.StatusOK, "ok") })
+	e.GET("/metrics", echo.WrapHandler(devshardobservability.MetricsHandler()))
 	// Mount HostManager routes at the root. Versiond strips the /<version>/
 	// prefix before forwarding, so devshardd sees /sessions/:id/* directly.
 	manager.Register(e.Group(""))

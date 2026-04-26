@@ -10,6 +10,12 @@ import (
 	"testing"
 	"time"
 
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/propagation"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+
 	json "github.com/goccy/go-json"
 	"github.com/labstack/echo/v4"
 	"github.com/stretchr/testify/require"
@@ -23,6 +29,19 @@ import (
 	"devshard/stub"
 	"devshard/types"
 )
+
+func setupServerTraceRecorder(t *testing.T) *tracetest.SpanRecorder {
+	t.Helper()
+	recorder := tracetest.NewSpanRecorder()
+	provider := sdktrace.NewTracerProvider()
+	provider.RegisterSpanProcessor(recorder)
+	otel.SetTracerProvider(provider)
+	otel.SetTextMapPropagator(propagation.TraceContext{})
+	t.Cleanup(func() {
+		_ = provider.Shutdown(context.Background())
+	})
+	return recorder
+}
 
 type serverTestEnv struct {
 	server     *Server
@@ -150,6 +169,7 @@ func TestServer_Inference_ValidAuth(t *testing.T) {
 }
 
 func TestServer_Inference_NoAuth(t *testing.T) {
+	setupServerTraceRecorder(t)
 	env := setupServerEnv(t)
 
 	body := []byte(`{}`)
@@ -159,6 +179,76 @@ func TestServer_Inference_NoAuth(t *testing.T) {
 	rec := httptest.NewRecorder()
 	env.echo.ServeHTTP(rec, req)
 	require.Equal(t, http.StatusUnauthorized, rec.Code)
+}
+
+func TestServer_Observability_RequestSpanOnAuthFailure(t *testing.T) {
+	recorder := setupServerTraceRecorder(t)
+	env := setupServerEnv(t)
+
+	body := []byte(`{}`)
+	req := httptest.NewRequest(http.MethodPost, "/v1/devshard/sessions/escrow-1/chat/completions", strings.NewReader(string(body)))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	env.echo.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusUnauthorized, rec.Code)
+
+	spans := recorder.Ended()
+	require.Len(t, spans, 1)
+	attrs := spans[0].Attributes()
+	assertSpanAttr(t, attrs, "http.method", http.MethodPost)
+	assertSpanAttr(t, attrs, "http.route", "/v1/devshard/sessions/:id/chat/completions")
+	assertSpanAttr(t, attrs, "devshard.escrow_id", "escrow-1")
+	assertSpanAttr(t, attrs, "devshard.session_id", "escrow-1")
+	assertSpanAttr(t, attrs, "http.status_code", http.StatusUnauthorized)
+}
+
+func TestServer_Observability_RequestSpanIncludesSenderOnSuccess(t *testing.T) {
+	recorder := setupServerTraceRecorder(t)
+	env := setupServerEnv(t)
+
+	diff := testutil.SignDiff(t, env.userSigner, "escrow-1", 1, []*types.DevshardTx{testutil.StartTx(1)})
+	dj, err := DiffToJSON(diff)
+	require.NoError(t, err)
+	ir := InferenceRequest{
+		Diffs: []DiffJSON{dj},
+		Nonce: 1,
+		Payload: &PayloadJSON{
+			Prompt:      testutil.TestPrompt,
+			Model:       "llama",
+			InputLength: 100,
+			MaxTokens:   50,
+			StartedAt:   1000,
+		},
+	}
+	body, err := json.Marshal(ir)
+	require.NoError(t, err)
+
+	rec := env.doPost(t, "/v1/devshard/sessions/escrow-1/chat/completions", body)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	spans := recorder.Ended()
+	require.NotEmpty(t, spans)
+	attrs := spans[len(spans)-1].Attributes()
+	assertSpanAttr(t, attrs, "devshard.sender", env.userSigner.Address())
+	assertSpanAttr(t, attrs, "http.status_code", http.StatusOK)
+}
+
+func assertSpanAttr(t *testing.T, attrs []attribute.KeyValue, key string, expected any) {
+	t.Helper()
+	for _, attr := range attrs {
+		if string(attr.Key) != key {
+			continue
+		}
+		switch want := expected.(type) {
+		case string:
+			require.Equal(t, want, attr.Value.AsString())
+			return
+		case int:
+			require.Equal(t, want, int(attr.Value.AsInt64()))
+			return
+		}
+	}
+	t.Fatalf("missing attr %s", key)
 }
 
 func TestServer_Inference_NotInGroup(t *testing.T) {
