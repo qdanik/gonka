@@ -214,6 +214,10 @@ func (b *validationBrokerChainBridge) GetEpochGroupDataByModelId(epochIndex uint
 	}, nil
 }
 
+func (b *validationBrokerChainBridge) GetPreservedNodesSnapshot() (*infertypes.QueryPreservedNodesSnapshotResponse, error) {
+	return &infertypes.QueryPreservedNodesSnapshotResponse{Found: false}, nil
+}
+
 func (b *validationBrokerChainBridge) GetParams() (*infertypes.QueryParamsResponse, error) {
 	return &infertypes.QueryParamsResponse{}, nil
 }
