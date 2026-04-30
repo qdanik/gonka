@@ -10,8 +10,8 @@ services:
 
   node:
     container_name: node
-    image: ghcr.io/product-science/inferenced:0.2.12
-    command: ["sh", "./init-docker.sh"]
+    image: ghcr.io/product-science/inferenced:0.2.12-alpha1
+    command: [ "sh", "./init-docker.sh" ]
     volumes:
       - .inference:/root/.inference
       - ../../genesis/genesis.json:/root/genesis.json
@@ -67,6 +67,7 @@ services:
       - DAPI_API__ADMIN_SERVER_PORT=9200
       - DAPI_API__NODE_MANAGER_GRPC_PORT=${NODE_MANAGER_GRPC_PORT:-9400}
       - DAPI_API__NODE_MANAGER_LOCK_TTL_SECONDS=${NODE_MANAGER_LOCK_TTL_SECONDS:-1200}
+      # Optional OpenTelemetry configuration
       - DAPI_OTEL_ENABLED=${DAPI_OTEL_ENABLED:-false}
       - DAPI_OTEL_ENDPOINT=${DAPI_OTEL_ENDPOINT:-}
       - DAPI_OTEL_HEADERS=${DAPI_OTEL_HEADERS:-}
@@ -87,6 +88,9 @@ services:
     environment:
       - VERSIOND_ORACLE_URL=http://api:9100/versions
       - VERSIOND_BINARY_NAME=devshardd
+      - VERSIOND_OTEL_ENABLED=${VERSIOND_OTEL_ENABLED:-false}
+      - VERSIOND_OTEL_ENDPOINT=${VERSIOND_OTEL_ENDPOINT:-}
+      - VERSIOND_OTEL_HEADERS=${VERSIOND_OTEL_HEADERS:-}
       - NODE_MANAGER_ADDR=api:9400
       - NODE_HOST=node
       - KEY_NAME=${KEY_NAME}
@@ -169,7 +173,7 @@ services:
         required: false
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost/health"]
+      test: [ "CMD", "curl", "-f", "http://localhost/health" ]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -214,7 +218,7 @@ services:
       - ./secrets/certbot:/app/data
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      test: [ "CMD", "curl", "-f", "http://localhost:8080/health" ]
       interval: 30s
       timeout: 5s
       retries: 5

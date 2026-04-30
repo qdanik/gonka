@@ -3,29 +3,13 @@ package observability
 import (
 	"context"
 	"net/http"
-	"sync"
 	"time"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
-	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/trace"
-)
-
-const meterName = "decentralized-api/observability"
-
-var (
-	instrumentsMu sync.Mutex
-	instrumentProvider metric.MeterProvider
-
-	activeOperations  metric.Int64UpDownCounter
-	operationDuration metric.Float64Histogram
-	operationErrors   metric.Int64Counter
-	promptTokens      metric.Int64Histogram
-	completionTokens  metric.Int64Histogram
-	totalTokens       metric.Int64Histogram
 )
 
 type Operation struct {
@@ -47,7 +31,8 @@ func StartOperation(
 	initInstruments()
 	ctx, span := otel.Tracer(string(tracerName)).Start(ctx, string(spanName), trace.WithSpanKind(kind), trace.WithAttributes(spanAttrs...))
 	attrs := withOperation(metricAttrs, string(spanName))
-	activeOperations.Add(ctx, 1, metric.WithAttributes(attrs...))
+	recordOTelOperationStarted(ctx, attrs)
+	recordPrometheusOperationStarted(attrs)
 	return ctx, &Operation{
 		ctx:         ctx,
 		span:        span,
@@ -83,16 +68,9 @@ func (o *Operation) RecordTokens(prompt uint64, completion uint64, attrs ...attr
 		return
 	}
 	metricAttrs := append(append([]attribute.KeyValue{}, o.metricAttrs...), attrs...)
-	if prompt > 0 {
-		promptTokens.Record(o.ctx, int64(prompt), metric.WithAttributes(metricAttrs...))
-	}
-	if completion > 0 {
-		completionTokens.Record(o.ctx, int64(completion), metric.WithAttributes(metricAttrs...))
-	}
+	recordOTelOperationTokens(o.ctx, metricAttrs, prompt, completion)
+	recordPrometheusOperationTokens(metricAttrs, prompt, completion)
 	total := prompt + completion
-	if total > 0 {
-		totalTokens.Record(o.ctx, int64(total), metric.WithAttributes(metricAttrs...))
-	}
 	o.span.SetAttributes(
 		attribute.Int64("inference.tokens.prompt", int64(prompt)),
 		attribute.Int64("inference.tokens.completion", int64(completion)),
@@ -110,12 +88,11 @@ func (o *Operation) Finish(err error, attrs ...attribute.KeyValue) {
 	if err != nil {
 		o.span.RecordError(err)
 		o.span.SetStatus(codes.Error, err.Error())
-		operationErrors.Add(o.ctx, 1, metric.WithAttributes(o.metricAttrs...))
 	} else {
 		o.span.SetStatus(codes.Ok, "")
 	}
-	operationDuration.Record(o.ctx, time.Since(o.start).Seconds(), metric.WithAttributes(o.metricAttrs...))
-	activeOperations.Add(o.ctx, -1, metric.WithAttributes(o.metricAttrs...))
+	recordOTelOperationFinished(o.ctx, o.metricAttrs, o.start, err)
+	recordPrometheusOperationFinished(o.metricAttrs, o.start, err)
 	o.span.End()
 }
 
@@ -133,57 +110,6 @@ func Extract(ctx context.Context, headers http.Header) context.Context {
 
 func Inject(ctx context.Context, headers http.Header) {
 	otel.GetTextMapPropagator().Inject(ctx, propagation.HeaderCarrier(headers))
-}
-
-func initInstruments() {
-	provider := otel.GetMeterProvider()
-
-	instrumentsMu.Lock()
-	defer instrumentsMu.Unlock()
-
-	if instrumentProvider == provider {
-		return
-	}
-
-	meter := provider.Meter(meterName)
-	newActiveOperations, err := meter.Int64UpDownCounter("decentralized_api.inference.active_operations")
-	if err != nil {
-		logObservabilityError("metrics.init_active_operations_failed", "Failed to initialize active operations metric", err)
-		return
-	}
-	newOperationDuration, err := meter.Float64Histogram("decentralized_api.inference.operation.duration_seconds")
-	if err != nil {
-		logObservabilityError("metrics.init_duration_failed", "Failed to initialize operation duration metric", err)
-		return
-	}
-	newOperationErrors, err := meter.Int64Counter("decentralized_api.inference.operation.errors")
-	if err != nil {
-		logObservabilityError("metrics.init_errors_failed", "Failed to initialize operation errors metric", err)
-		return
-	}
-	newPromptTokens, err := meter.Int64Histogram("decentralized_api.inference.prompt_tokens")
-	if err != nil {
-		logObservabilityError("metrics.init_prompt_tokens_failed", "Failed to initialize prompt tokens metric", err)
-		return
-	}
-	newCompletionTokens, err := meter.Int64Histogram("decentralized_api.inference.completion_tokens")
-	if err != nil {
-		logObservabilityError("metrics.init_completion_tokens_failed", "Failed to initialize completion tokens metric", err)
-		return
-	}
-	newTotalTokens, err := meter.Int64Histogram("decentralized_api.inference.total_tokens")
-	if err != nil {
-		logObservabilityError("metrics.init_total_tokens_failed", "Failed to initialize total tokens metric", err)
-		return
-	}
-
-	activeOperations = newActiveOperations
-	operationDuration = newOperationDuration
-	operationErrors = newOperationErrors
-	promptTokens = newPromptTokens
-	completionTokens = newCompletionTokens
-	totalTokens = newTotalTokens
-	instrumentProvider = provider
 }
 
 func withOperation(attrs []attribute.KeyValue, operation string) []attribute.KeyValue {
