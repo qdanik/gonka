@@ -409,9 +409,7 @@ func (s *Server) handleTransferRequest(ctx echo.Context, request *ChatRequest, l
 		spanErr = observability.Error.Fmt(err, "create inference start request: inference_id=%s", inferenceUUID)
 		return err
 	}
-	if loggingContext != nil {
-		loggingContext.withOperation(transferOp).logAssigned(inferenceRequest.InferenceId, request.RequesterAddress, request.TransferAddress)
-	}
+	loggingContext.withOperation(transferOp).logAssigned(inferenceRequest.InferenceId, request.RequesterAddress, request.TransferAddress)
 
 	go func() {
 		logging.Debug("Starting inference", types.Inferences, "id", inferenceRequest.InferenceId)

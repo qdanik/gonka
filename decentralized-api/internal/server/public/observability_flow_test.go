@@ -226,7 +226,8 @@ func TestHandleTransferRequest_ForwardRequestUsesTraceContext(t *testing.T) {
 		SignBodyHash:     utils.GenerateSHA256Hash(body),
 	}
 
-	err = s.handleTransferRequest(ctx, request)
+	requestLogging := newInferenceRequestLogging(ctx, nil)
+	err = s.handleTransferRequest(ctx, request, requestLogging)
 	require.NoError(t, err)
 	require.True(t, sawTraceContext)
 	mockCosmos.AssertExpectations(t)

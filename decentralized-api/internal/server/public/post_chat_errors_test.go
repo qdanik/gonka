@@ -455,7 +455,8 @@ func TestHandleTransferRequest_CapacityLimit(t *testing.T) {
 	rec := httptest.NewRecorder()
 	ctx := e.NewContext(req, rec)
 
-	err = s.handleTransferRequest(ctx, request)
+	requestLogging := newInferenceRequestLogging(ctx, nil)
+	err = s.handleTransferRequest(ctx, request, requestLogging)
 	require.Error(t, err)
 
 	var httpErr *echo.HTTPError
