@@ -323,7 +323,8 @@ func (s *Server) enforceTransferAgentAccess(taAddress string) error {
 	return echo.NewHTTPError(http.StatusForbidden, "Transfer Agent not allowed")
 }
 
-func (s *Server) handleTransferRequest(ctx echo.Context, request *ChatRequest, requestLogging *inferenceRequestLogging) error {
+func (s *Server) handleTransferRequest(ctx echo.Context, request *ChatRequest, loggingContext *inferenceRequestLogging) error {
+
 	transferContext, transferOp := observability.Inference.StartTransfer(ctx.Request().Context(), request.OpenAiRequest.Model, request.RequesterAddress)
 	ctx.SetRequest(ctx.Request().WithContext(transferContext))
 	var spanErr error
@@ -408,7 +409,9 @@ func (s *Server) handleTransferRequest(ctx echo.Context, request *ChatRequest, r
 		spanErr = observability.Error.Fmt(err, "create inference start request: inference_id=%s", inferenceUUID)
 		return err
 	}
-	requestLogging.withOperation(transferOp).logAssigned(inferenceRequest.InferenceId, request.RequesterAddress, request.TransferAddress)
+	if loggingContext != nil {
+		loggingContext.withOperation(transferOp).logAssigned(inferenceRequest.InferenceId, request.RequesterAddress, request.TransferAddress)
+	}
 
 	go func() {
 		logging.Debug("Starting inference", types.Inferences, "id", inferenceRequest.InferenceId)
