@@ -3,7 +3,7 @@ apiVersion: 1
 providers:
   - name: join-observability
     orgId: 1
-    folder: Join Observability
+    folder: Operations Overview
     type: file
     disableDeletion: false
     allowUiUpdates: false

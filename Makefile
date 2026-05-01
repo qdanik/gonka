@@ -2,6 +2,9 @@
 
 VERSION ?= $(shell git describe --always)
 DEVSHARD_VERSION ?= dev
+DEVSHARDD_PLATFORM ?= linux/amd64
+DEVSHARDD_GOOS ?= $(word 1,$(subst /, ,$(DEVSHARDD_PLATFORM)))
+DEVSHARDD_GOARCH ?= $(word 2,$(subst /, ,$(DEVSHARDD_PLATFORM)))
 TAG_NAME := "release/v$(VERSION)"
 USE_REGISTRY_CACHE ?= 0
 ifeq ($(USE_REGISTRY_CACHE),1)
@@ -114,10 +117,13 @@ devshardctl-build:
 	@cd devshard && go build -ldflags "-X main.Version=$(DEVSHARD_VERSION)" -o ../build/devshardctl ./cmd/devshardctl/
 
 devshardd-build:
-	@echo "Building devshardd..."
+	@echo "Building devshardd for $(DEVSHARDD_PLATFORM)..."
 	@mkdir -p build
 	@DOCKER_BUILDKIT=1 docker build --no-cache --target builder \
+		--platform $(DEVSHARDD_PLATFORM) \
 		--build-arg BLST_PORTABLE=1 \
+		--build-arg GOOS=$(DEVSHARDD_GOOS) \
+		--build-arg GOARCH=$(DEVSHARDD_GOARCH) \
 		--build-arg DEVSHARD_VERSION=$(DEVSHARD_VERSION) \
 		-f decentralized-api/Dockerfile . \
 		-t devshardd-builder:latest -q >/dev/null

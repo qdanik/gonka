@@ -77,11 +77,11 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "up{job=\"decentralized-api\"}",
+          "expr": "up{job=\"prometheus\"}",
           "refId": "A"
         }
       ],
-      "title": "Decentralized API Up",
+      "title": "Prometheus Up",
       "type": "stat"
     },
     {
@@ -139,11 +139,73 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "count(up{job=\"devshardd\"} == 1)",
+          "expr": "up{job=\"cadvisor\"}",
           "refId": "A"
         }
       ],
-      "title": "Active Devshard Versions",
+      "title": "cAdvisor Up",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 12,
+        "y": 0
+      },
+      "id": 5,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "pluginVersion": "11.5.2",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "up{job=\"decentralized-api\"}",
+          "refId": "A"
+        }
+      ],
+      "title": "Decentralized API Up",
       "type": "stat"
     },
     {
@@ -181,10 +243,10 @@
       "gridPos": {
         "h": 5,
         "w": 6,
-        "x": 12,
+        "x": 18,
         "y": 0
       },
-      "id": 3,
+      "id": 6,
       "options": {
         "colorMode": "background",
         "graphMode": "area",
@@ -221,85 +283,18 @@
       "fieldConfig": {
         "defaults": {
           "color": {
-            "mode": "thresholds"
-          },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              },
-              {
-                "color": "orange",
-                "value": 1
-              },
-              {
-                "color": "red",
-                "value": 10
-              }
-            ]
-          },
-          "unit": "ops"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 5,
-        "w": 6,
-        "x": 18,
-        "y": 0
-      },
-      "id": 4,
-      "options": {
-        "colorMode": "background",
-        "graphMode": "area",
-        "justifyMode": "auto",
-        "orientation": "auto",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "textMode": "auto"
-      },
-      "pluginVersion": "11.5.2",
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "expr": "sum(devshard_request_active_operations)",
-          "refId": "A"
-        }
-      ],
-      "title": "Devshard Active Operations",
-      "type": "stat"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": {
             "mode": "palette-classic"
           },
           "custom": {
             "axisBorderShow": false,
             "axisCenteredZero": false,
             "axisColorMode": "text",
-            "axisLabel": "seconds",
+            "axisLabel": "cores",
             "axisPlacement": "auto",
             "barAlignment": 0,
             "drawStyle": "line",
-            "fillOpacity": 12,
-            "gradientMode": "opacity",
+            "fillOpacity": 10,
+            "gradientMode": "none",
             "hideFrom": {
               "legend": false,
               "tooltip": false,
@@ -330,26 +325,22 @@
                 "value": null
               },
               {
-                "color": "orange",
-                "value": 1
-              },
-              {
                 "color": "red",
-                "value": 3
+                "value": 0.8
               }
             ]
           },
-          "unit": "s"
+          "unit": "cores"
         },
         "overrides": []
       },
       "gridPos": {
-        "h": 8,
+        "h": 9,
         "w": 12,
         "x": 0,
         "y": 5
       },
-      "id": 5,
+      "id": 3,
       "options": {
         "legend": {
           "calcs": [],
@@ -359,7 +350,7 @@
         },
         "tooltip": {
           "mode": "multi",
-          "sort": "desc"
+          "sort": "none"
         }
       },
       "pluginVersion": "11.5.2",
@@ -369,12 +360,12 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "histogram_quantile(0.95, sum(rate(decentralized_api_inference_operation_duration_seconds_bucket[5m])) by (le, operation, model))",
-          "legendFormat": "{{operation}} / {{model}}",
+          "expr": "sum(rate(container_cpu_usage_seconds_total{name!~\"|POD\",image!=\"\"}[5m])) by (name)",
+          "legendFormat": "{{name}}",
           "refId": "A"
         }
       ],
-      "title": "API Duration p95",
+      "title": "Container CPU Usage",
       "type": "timeseries"
     },
     {
@@ -391,12 +382,12 @@
             "axisBorderShow": false,
             "axisCenteredZero": false,
             "axisColorMode": "text",
-            "axisLabel": "seconds",
+            "axisLabel": "bytes",
             "axisPlacement": "auto",
             "barAlignment": 0,
             "drawStyle": "line",
-            "fillOpacity": 12,
-            "gradientMode": "opacity",
+            "fillOpacity": 10,
+            "gradientMode": "none",
             "hideFrom": {
               "legend": false,
               "tooltip": false,
@@ -427,26 +418,22 @@
                 "value": null
               },
               {
-                "color": "orange",
-                "value": 1
-              },
-              {
                 "color": "red",
-                "value": 3
+                "value": 1
               }
             ]
           },
-          "unit": "s"
+          "unit": "bytes"
         },
         "overrides": []
       },
       "gridPos": {
-        "h": 8,
+        "h": 9,
         "w": 12,
         "x": 12,
         "y": 5
       },
-      "id": 6,
+      "id": 4,
       "options": {
         "legend": {
           "calcs": [],
@@ -456,7 +443,7 @@
         },
         "tooltip": {
           "mode": "multi",
-          "sort": "desc"
+          "sort": "none"
         }
       },
       "pluginVersion": "11.5.2",
@@ -466,12 +453,12 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "histogram_quantile(0.95, sum(rate(devshard_request_duration_seconds_bucket[5m])) by (le, version, route))",
-          "legendFormat": "{{version}} / {{route}}",
+          "expr": "sum(container_memory_working_set_bytes{name!~\"|POD\",image!=\"\"}) by (name)",
+          "legendFormat": "{{name}}",
           "refId": "A"
         }
       ],
-      "title": "Devshard Duration p95",
+      "title": "Container Memory Working Set",
       "type": "timeseries"
     },
     {
@@ -488,7 +475,7 @@
             "axisBorderShow": false,
             "axisCenteredZero": false,
             "axisColorMode": "text",
-            "axisLabel": "errors / s",
+            "axisLabel": "seconds",
             "axisPlacement": "auto",
             "barAlignment": 0,
             "drawStyle": "line",
@@ -525,15 +512,15 @@
               },
               {
                 "color": "orange",
-                "value": 0.1
+                "value": 1
               },
               {
                 "color": "red",
-                "value": 1
+                "value": 3
               }
             ]
           },
-          "unit": "reqps"
+          "unit": "s"
         },
         "overrides": []
       },
@@ -541,7 +528,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 13
+        "y": 14
       },
       "id": 7,
       "options": {
@@ -563,12 +550,12 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum(rate(decentralized_api_inference_operation_errors_total[5m])) by (operation, model)",
-          "legendFormat": "{{operation}} / {{model}}",
+          "expr": "histogram_quantile(0.95, sum(rate(decentralized_api_inference_operation_duration_seconds_bucket[5m])) by (le, operation, model))",
+          "legendFormat": "{{operation}}",
           "refId": "A"
         }
       ],
-      "title": "API Error Rate",
+      "title": "API Duration p95",
       "type": "timeseries"
     },
     {
@@ -638,7 +625,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 13
+        "y": 14
       },
       "id": 8,
       "options": {
@@ -660,12 +647,12 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum(rate(devshard_request_errors_total[5m])) by (version, route)",
-          "legendFormat": "{{version}} / {{route}}",
+          "expr": "sum(rate(decentralized_api_inference_operation_errors_total[5m])) by (operation, model)",
+          "legendFormat": "{{operation}}",
           "refId": "A"
         }
       ],
-      "title": "Devshard Error Rate",
+      "title": "API Error Rate",
       "type": "timeseries"
     }
   ],
@@ -674,8 +661,7 @@
   "style": "dark",
   "tags": [
     "join",
-    "observability",
-    "application"
+    "observability"
   ],
   "templating": {
     "list": []
@@ -686,8 +672,8 @@
   },
   "timepicker": {},
   "timezone": "browser",
-  "title": "Join Application Observability",
-  "uid": "join-application-observability",
-  "version": 1,
+  "title": "Container Resources",
+  "uid": "join-observability-overview",
+  "version": 2,
   "weekStart": ""
 }

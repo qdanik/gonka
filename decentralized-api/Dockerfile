@@ -25,8 +25,11 @@ ENV GOOS=${GOOS} \
 
 RUN apk add --no-cache make gcc musl-dev git patchelf
 
-# Use the musl libc version of wasmvm and create a symlink for the linker
-RUN if [ "$GOARCH" = "arm64" ]; then \
+# Use the musl libc version of wasmvm and create a symlink for the linker.
+# GOARCH might be unset in local docker builds, so fall back to go env.
+RUN ARCH="${GOARCH}"; \
+    if [ -z "$ARCH" ]; then ARCH="$(go env GOARCH)"; fi; \
+    if [ "$ARCH" = "arm64" ]; then \
         wget -O /lib/libwasmvm_muslc.aarch64.a https://github.com/CosmWasm/wasmvm/releases/download/v2.2.4/libwasmvm_muslc.aarch64.a \
         && echo "27fb13821dbc519119f4f98c30a42cb32429b111b0fdc883686c34a41777488f /lib/libwasmvm_muslc.aarch64.a" | sha256sum -c \
         && ln -s /lib/libwasmvm_muslc.aarch64.a /lib/libwasmvm_muslc.a \
