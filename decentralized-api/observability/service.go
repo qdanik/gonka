@@ -143,6 +143,14 @@ func (s *InferenceService) SetSampledCount(op *Operation, sampledCount int) {
 	s.Trace().SetSampledCount(op, sampledCount)
 }
 
+func (s *InferenceService) AddValidationSampleDecision(op *Operation, inferenceID string, model string, executorAddress string, validatorAddress string, shouldValidate bool, reason string, seed int64, validatorPower uint64, executorPower uint64, totalPower uint64) {
+	s.Trace().AddValidationSampleDecision(op, inferenceID, model, executorAddress, validatorAddress, shouldValidate, reason, seed, validatorPower, executorPower, totalPower)
+}
+
+func (s *InferenceService) SetValidationSampleDecisionStats(op *Operation, total int, selected int, skipped int) {
+	s.Trace().SetValidationSampleDecisionStats(op, total, selected, skipped)
+}
+
 func (s *InferenceService) StartValidationExecution(ctx context.Context, inferenceID string, model string, epochID int64, revalidation bool) (context.Context, *Operation) {
 	return s.Trace().StartValidationExecution(ctx, inferenceID, model, epochID, revalidation)
 }

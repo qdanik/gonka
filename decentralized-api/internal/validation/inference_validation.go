@@ -509,10 +509,25 @@ func (s *InferenceValidator) SampleInferenceToValidate(ctx context.Context, ids 
 	address := transactionRecorder.GetAddress()
 	currentSeed := s.configManager.GetCurrentSeed().Seed
 	var toValidateIds []string
+	var skippedCount int
 
 	for _, inferenceWithExecutor := range r.Details {
 		if !supportedModels[inferenceWithExecutor.Model] {
 			logging.Debug("Skipping inference by not supported model", types.Validation, "inferenceId", inferenceWithExecutor.InferenceId, "model", inferenceWithExecutor.Model)
+			skippedCount++
+			observability.Inference.AddValidationSampleDecision(
+				sampleOp,
+				inferenceWithExecutor.InferenceId,
+				inferenceWithExecutor.Model,
+				inferenceWithExecutor.ExecutorId,
+				address,
+				false,
+				"unsupported_model",
+				currentSeed,
+				0,
+				inferenceWithExecutor.ExecutorPower,
+				inferenceWithExecutor.TotalPower,
+			)
 			continue
 		}
 		var validatorPower uint64
@@ -532,14 +547,31 @@ func (s *InferenceValidator) SampleInferenceToValidate(ctx context.Context, ids 
 			address,
 			params.Params.ValidationParams)
 
+		observability.Inference.AddValidationSampleDecision(
+			sampleOp,
+			inferenceWithExecutor.InferenceId,
+			inferenceWithExecutor.Model,
+			inferenceWithExecutor.ExecutorId,
+			address,
+			shouldValidate,
+			message,
+			currentSeed,
+			validatorPower,
+			inferenceWithExecutor.ExecutorPower,
+			inferenceWithExecutor.TotalPower,
+		)
+
 		logging.Info(message, types.Validation, "inferenceId", inferenceWithExecutor.InferenceId, "seed", currentSeed, "validator", address)
 
 		if shouldValidate {
 			toValidateIds = append(toValidateIds, inferenceWithExecutor.InferenceId)
+		} else {
+			skippedCount++
 		}
 	}
 
 	logInferencesToValidate(toValidateIds)
+	observability.Inference.SetValidationSampleDecisionStats(sampleOp, len(r.Details), len(toValidateIds), skippedCount)
 	observability.Inference.SetSampledCount(sampleOp, len(toValidateIds))
 	for _, inf := range toValidateIds {
 		go func(inferenceID string) {

@@ -29,6 +29,8 @@ type InferenceTraceService interface {
 	StartStatusUpdateEvent(ctx context.Context, inferenceCount int) (context.Context, *Operation)
 	StartValidationSample(ctx context.Context, candidateCount int) (context.Context, *Operation)
 	SetSampledCount(op *Operation, sampledCount int)
+	AddValidationSampleDecision(op *Operation, inferenceID string, model string, executorAddress string, validatorAddress string, shouldValidate bool, reason string, seed int64, validatorPower uint64, executorPower uint64, totalPower uint64)
+	SetValidationSampleDecisionStats(op *Operation, total int, selected int, skipped int)
 	StartValidationExecution(ctx context.Context, inferenceID string, model string, epochID int64, revalidation bool) (context.Context, *Operation)
 	AddValidationRetry(op *Operation, attempt int, err error)
 	SetValidationResult(op *Operation, result any)
@@ -240,6 +242,38 @@ func (otelInferenceTraceService) SetSampledCount(op *Operation, sampledCount int
 		return
 	}
 	op.Span().SetAttributes(attribute.Int("sampled.count", sampledCount))
+}
+
+func (otelInferenceTraceService) AddValidationSampleDecision(op *Operation, inferenceID string, model string, executorAddress string, validatorAddress string, shouldValidate bool, reason string, seed int64, validatorPower uint64, executorPower uint64, totalPower uint64) {
+	if op == nil {
+		return
+	}
+
+	op.AddEvent(
+		"validation.sample.decision",
+		attribute.String("inference.id", inferenceID),
+		attribute.String("model", model),
+		attribute.String("executor.address", executorAddress),
+		attribute.String("validator.address", validatorAddress),
+		attribute.Bool("should_validate", shouldValidate),
+		attribute.String("decision.reason", reason),
+		attribute.Int64("validation.seed", seed),
+		attribute.Int64("validator.power", int64(validatorPower)),
+		attribute.Int64("executor.power", int64(executorPower)),
+		attribute.Int64("total.power", int64(totalPower)),
+	)
+}
+
+func (otelInferenceTraceService) SetValidationSampleDecisionStats(op *Operation, total int, selected int, skipped int) {
+	if op == nil {
+		return
+	}
+
+	op.Span().SetAttributes(
+		attribute.Int("validation.decisions.total", total),
+		attribute.Int("validation.decisions.true", selected),
+		attribute.Int("validation.decisions.false", skipped),
+	)
 }
 
 func (otelInferenceTraceService) StartValidationExecution(ctx context.Context, inferenceID string, model string, epochID int64, revalidation bool) (context.Context, *Operation) {
