@@ -15,6 +15,18 @@ scrape_configs:
         refresh_interval: 5s
     pipeline_stages:
       - docker: {}
+      # Parse JSON body emitted by slog (decentralized-api and devshard).
+      # Non-JSON lines (e.g. cosmos node output) are silently skipped.
+      - json:
+          expressions:
+            level: level
+            service: service
+      # Promote low-cardinality fields to Loki labels for efficient filtering.
+      # High-cardinality fields (trace_id, inference_id, model) stay in the log
+      # body; Grafana derivedFields regex extracts trace_id for Jaeger links.
+      - labels:
+          service:
+          level:
     relabel_configs:
       - source_labels: [__meta_docker_container_name]
         regex: '/(.*)'

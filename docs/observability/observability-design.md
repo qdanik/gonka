@@ -6,6 +6,8 @@ This document explains how the join observability stack works today and why each
 
 It is specifically about the join deployment overlay in `deploy/join` and the operational surface we want to support right now.
 
+It is not a migration plan to alternative backends. The current stack is the implementation.
+
 ## Design Goals
 
 The join design is built around four practical goals:
@@ -102,32 +104,62 @@ Why the `versiond` discovery endpoint matters:
 
 ## Why The Dashboards Are Structured This Way
 
-### Join Services Dashboard
+### Service Health Overview
 
-This dashboard is intended to answer basic operational questions:
+Top-level view for the service operator persona.
 
-- Are API request rates healthy?
-- Are devshard request rates healthy?
-- Are error logs rising in `api` or `versiond`?
-- What are the current runtime logs for the core services?
+Answers:
 
-### Join Logs Dashboard
+- Are API and devshard request rates healthy?
+- Are latencies (p95) within acceptable range?
+- Are error rates rising on either side?
+- Is container resource pressure contributing to degradation?
 
-This is the generic log surface for fast inspection by compose service.
+### Request Debug & Logs
 
-It exists because not every debugging path starts from a request identifier.
+Request-centric view for the investigator persona.
 
-### Join Inference Drilldown Dashboard
+Answers:
 
-This dashboard is the request-centric view.
+- What logs exist for a given `inference_id` or `requester_address`?
+- Are errors correlated across API, versiond, and devshard?
+- What was the runtime log volume in the time window?
 
-It exists to answer:
+### Infrastructure & Resources
 
-- show me API logs for a specific `inference_id`
-- show me devshard request logs for a specific `requester_address`
-- show me runtime logs connected to the same inference
+Infrastructure health view.
 
-That is why the filters are intentionally built around `inference_id` and `requester_address`, not only around container names.
+Answers:
+
+- Are Prometheus and cAdvisor healthy?
+- Are containers within CPU and memory bounds?
+
+### Inference Drilldown
+
+Request-centric log filtering.
+
+Filters by `inference_id` and `requester_address` across API and devshard logs.
+
+### System Logs
+
+Generic log surface for fast inspection by compose service.
+
+Exists because not every debugging path starts from a request identifier.
+
+## Current Gaps
+
+The current design is useful, but it is intentionally incomplete.
+
+The biggest remaining gaps are:
+
+- first-class `inference-chain` observability
+- validator and consensus health visibility
+- bridge-specific metrics and dashboards
+- richer correlation across logs, metrics, and traces
+- actor-centric views for executors, validators, ML nodes, and participants
+- alerting and SLOs
+
+These are the next steps for the current stack. They should be addressed before any broad backend migration is considered.
 
 ## Why This Matters To The Project
 
@@ -153,4 +185,6 @@ Good next steps after this stage are:
 
 1. keep dashboard queries aligned with the real log topology as services evolve
 2. extend request-level correlation where new services join the path
-3. decide which parts of this join design should graduate into broader environment standards
+3. add missing telemetry for `inference-chain`, bridge, and network actors
+4. introduce alerting only after dashboard baselines stabilize
+5. decide later which parts of this join design should graduate into broader environment standards

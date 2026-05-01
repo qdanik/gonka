@@ -3,7 +3,7 @@ package observability
 import "log/slog"
 
 const (
-	ServiceName = "decentralized-api"
+	ServiceName = "devshardd"
 	ObservabilityName = "observability"
 )
 

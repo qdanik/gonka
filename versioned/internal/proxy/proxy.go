@@ -7,8 +7,6 @@ import (
 	"net/url"
 	"strings"
 	"sync/atomic"
-
-	"versioned/internal/observability"
 )
 
 // Handler returns an http.Handler that routes requests by version prefix.
@@ -67,7 +65,6 @@ func Handler(routes *atomic.Value) http.Handler {
 				pr.Out.Host = targetURL.Host
 				pr.Out.URL.Path = rest
 				pr.Out.URL.RawPath = ""
-				observability.Proxy.InjectRequestContext(requestContext, pr.Out.Header)
 			},
 			ModifyResponse: func(resp *http.Response) error {
 				requestLogging.setHTTPStatus(resp.StatusCode)

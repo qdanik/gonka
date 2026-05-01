@@ -1,10 +1,9 @@
 package transport
 
 import (
+	"devshard/observability"
 	"log/slog"
 	"net/http"
-
-	"devshard/observability"
 
 	"github.com/labstack/echo/v4"
 	"go.opentelemetry.io/otel/trace"
@@ -23,7 +22,7 @@ func (logging *requestLogging) logReceived(escrowID string, sessionID string) {
 	spanContext := logging.spanContext()
 	slog.Info(
 		"devshard.request.received",
-		"service", "devshardd",
+		"service", observability.ServiceName,
 		"method", logging.ctx.Request().Method,
 		"route", requestRoute(logging.ctx),
 		"escrow_id", escrowID,
@@ -38,7 +37,7 @@ func (logging *requestLogging) finish(sender string, requestErr error) {
 	statusCode := requestStatusCode(logging.ctx, requestErr)
 	message := "devshard.request.completed"
 	attrs := []any{
-		"service", "devshardd",
+		"service", observability.ServiceName,
 		"method", logging.ctx.Request().Method,
 		"route", requestRoute(logging.ctx),
 		"status_code", statusCode,

@@ -149,7 +149,7 @@ func main() {
 	defer cancel() // Ensure resources are cleaned up
 
 	shutdownObservability, err := observability.Init(ctx, observability.Config{
-		ServiceName:        "decentralized-api",
+		ServiceName:        observability.ServiceName,
 		ServiceVersion:     configManager.GetCurrentNodeVersion(),
 		ParticipantAddress: recorder.GetAccountAddress(),
 	})

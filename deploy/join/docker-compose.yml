@@ -69,8 +69,8 @@ services:
       - DAPI_API__NODE_MANAGER_LOCK_TTL_SECONDS=${NODE_MANAGER_LOCK_TTL_SECONDS:-1200}
       # Optional OpenTelemetry configuration
       - DAPI_OTEL_ENABLED=${DAPI_OTEL_ENABLED:-false}
-      - DAPI_OTEL_ENDPOINT=${DAPI_OTEL_ENDPOINT:-}
-      - DAPI_OTEL_HEADERS=${DAPI_OTEL_HEADERS:-}
+      - OTEL_ENDPOINT=${OTEL_ENDPOINT:-}
+      - OTEL_HEADERS=${OTEL_HEADERS:-}
       # PostgreSQL payload storage (optional, uses file storage if not set)
       - PGHOST=${POSTGRES_HOST:-}
       - PGPORT=${POSTGRES_PORT:-5432}
@@ -96,13 +96,9 @@ services:
       - KEYRING_PASSWORD=${KEYRING_PASSWORD}
       - KEYRING_DIR=/root/.inference
       # Open Telemetry
-      - VERSIOND_OTEL_ENABLED=${VERSIOND_OTEL_ENABLED:-false}
-      - VERSIOND_OTEL_ENDPOINT=${VERSIOND_OTEL_ENDPOINT:-}
-      - VERSIOND_OTEL_HEADERS=${VERSIOND_OTEL_HEADERS:-}
-      # Dev Shard using DAIP otel envs
-      - DAPI_OTEL_ENABLED=${DAPI_OTEL_ENABLED:-false}
-      - DAPI_OTEL_ENDPOINT=${DAPI_OTEL_ENDPOINT:-}
-      - DAPI_OTEL_HEADERS=${DAPI_OTEL_HEADERS:-}
+      - DEVSHARD_OTEL_ENABLED=${DEVSHARD_OTEL_ENABLED:-false}
+      - OTEL_ENDPOINT=${OTEL_ENDPOINT:-}
+      - OTEL_HEADERS=${OTEL_HEADERS:-}
     volumes:
       - .inference:/root/.inference:ro
       - ./devshards/bin:/opt/versiond/bin

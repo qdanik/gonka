@@ -7,8 +7,6 @@ import (
 	"strconv"
 	"strings"
 
-	"devshard/logging"
-
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
@@ -19,8 +17,8 @@ import (
 
 const (
 	envEnabled  = "DEVSHARD_OTEL_ENABLED"
-	envEndpoint = "DEVSHARD_OTEL_ENDPOINT"
-	envHeaders  = "DEVSHARD_OTEL_HEADERS"
+	envEndpoint = "OTEL_ENDPOINT"
+	envHeaders  = "OTEL_HEADERS"
 )
 
 type Config struct {
@@ -39,7 +37,7 @@ func Init(ctx context.Context, cfg Config) (func(context.Context) error, error) 
 
 	endpoint := strings.TrimSpace(os.Getenv(envEndpoint))
 	if endpoint == "" {
-		logging.Warn("OpenTelemetry enabled but endpoint is empty; tracing disabled", "subsystem", "observability", "env", envEndpoint)
+		logObservabilityWarn("init.endpoint_missing", "OpenTelemetry enabled but endpoint is empty; tracing disabled", "env", envEndpoint)
 		return func(context.Context) error { return nil }, nil
 	}
 
@@ -47,7 +45,7 @@ func Init(ctx context.Context, cfg Config) (func(context.Context) error, error) 
 		ctx,
 		resource.WithFromEnv(),
 		resource.WithAttributes(
-			attribute.String("service.name", valueOrDefault(cfg.ServiceName, "devshardd")),
+			attribute.String("service.name", valueOrDefault(cfg.ServiceName, ServiceName)),
 			attribute.String("service.version", valueOrDefault(cfg.ServiceVersion, "unknown")),
 			attribute.String("participant.address", cfg.ParticipantAddress),
 		),
@@ -66,11 +64,12 @@ func Init(ctx context.Context, cfg Config) (func(context.Context) error, error) 
 		sdktrace.WithResource(res),
 	)
 	otel.SetTracerProvider(traceProvider)
+	logObservabilityInfo("init.ready", "OpenTelemetry initialized", "endpoint", endpoint)
 
 	return func(shutdownCtx context.Context) error {
 		shutdownErr := traceProvider.Shutdown(shutdownCtx)
 		if shutdownErr != nil {
-			logging.Error("Failed to shutdown OpenTelemetry providers", "subsystem", "observability", "error", shutdownErr)
+			logObservabilityError("shutdown.failed", "Failed to shutdown OpenTelemetry providers", shutdownErr)
 		}
 		return errors.Join(shutdownErr)
 	}, nil
@@ -90,7 +89,7 @@ func otelEnabled() bool {
 	}
 	enabled, err := strconv.ParseBool(raw)
 	if err != nil {
-		logging.Warn("Invalid OpenTelemetry enabled flag; tracing disabled", "subsystem", "observability", "env", envEnabled, "value", raw)
+		logObservabilityWarn("config.invalid_enabled", "Invalid OpenTelemetry enabled flag; tracing disabled", "env", envEnabled, "value", raw)
 		return false
 	}
 	return enabled
@@ -102,14 +101,14 @@ func parseHeaders(raw string) map[string]string {
 		key, value, found := strings.Cut(strings.TrimSpace(pair), "=")
 		if !found {
 			if strings.TrimSpace(pair) != "" {
-				logging.Warn("Skipping malformed OTLP header", "subsystem", "observability", "raw", strings.TrimSpace(pair))
+				logObservabilityWarn("config.invalid_header", "Skipping malformed OTLP header", "raw", strings.TrimSpace(pair))
 			}
 			continue
 		}
 		key = strings.TrimSpace(key)
 		value = strings.TrimSpace(value)
 		if key == "" || value == "" {
-			logging.Warn("Skipping OTLP header with empty key or value", "subsystem", "observability", "raw", strings.TrimSpace(pair))
+			logObservabilityWarn("config.invalid_header", "Skipping OTLP header with empty key or value", "raw", strings.TrimSpace(pair))
 			continue
 		}
 		result[key] = value

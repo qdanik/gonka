@@ -10,39 +10,7 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
-
-	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/propagation"
-	sdktrace "go.opentelemetry.io/otel/sdk/trace"
-	tracetest "go.opentelemetry.io/otel/sdk/trace/tracetest"
 )
-
-func setupTraceRecorder(t *testing.T) *tracetest.SpanRecorder {
-	t.Helper()
-	oldProvider := otel.GetTracerProvider()
-	oldPropagator := otel.GetTextMapPropagator()
-	t.Cleanup(func() {
-		otel.SetTracerProvider(oldProvider)
-		otel.SetTextMapPropagator(oldPropagator)
-	})
-
-	recorder := tracetest.NewSpanRecorder()
-	provider := sdktrace.NewTracerProvider()
-	provider.RegisterSpanProcessor(recorder)
-	otel.SetTracerProvider(provider)
-	otel.SetTextMapPropagator(propagation.TraceContext{})
-	return recorder
-}
-
-func findIntAttribute(attrs []attribute.KeyValue, key string) (int64, bool) {
-	for _, attr := range attrs {
-		if string(attr.Key) == key && attr.Value.Type() == attribute.INT64 {
-			return attr.Value.AsInt64(), true
-		}
-	}
-	return 0, false
-}
 
 func newRoutes(m map[string]string) *atomic.Value {
 	v := &atomic.Value{}
@@ -206,48 +174,7 @@ func TestProxy_SSEStreaming(t *testing.T) {
 	}
 }
 
-func TestProxy_InjectsTraceparent(t *testing.T) {
-	recorder := setupTraceRecorder(t)
-
-	var backendTraceparent string
-	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		backendTraceparent = r.Header.Get("traceparent")
-		fmt.Fprint(w, "ok")
-	}))
-	defer backend.Close()
-
-	addr := strings.TrimPrefix(backend.URL, "http://")
-	routes := newRoutes(map[string]string{"v1": addr})
-
-	handler := Handler(routes)
-	srv := httptest.NewServer(handler)
-	defer srv.Close()
-
-	req, err := http.NewRequest(http.MethodGet, srv.URL+"/v1/chat/completions", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	req.Header.Set("traceparent", "00-11111111111111111111111111111111-2222222222222222-01")
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	resp.Body.Close()
-
-	if backendTraceparent == "" {
-		t.Fatal("backend did not receive traceparent header")
-	}
-	if !strings.Contains(backendTraceparent, "11111111111111111111111111111111") {
-		t.Fatalf("backend traceparent %q does not preserve incoming trace id", backendTraceparent)
-	}
-	if got := len(recorder.Ended()); got != 1 {
-		t.Fatalf("ended spans = %d, want 1", got)
-	}
-}
-
-func TestProxy_NoVersionPrefix_CreatesSpan(t *testing.T) {
-	recorder := setupTraceRecorder(t)
+func TestProxy_NoVersionPrefix_Status(t *testing.T) {
 	routes := newRoutes(map[string]string{})
 	handler := Handler(routes)
 	srv := httptest.NewServer(handler)
@@ -262,17 +189,9 @@ func TestProxy_NoVersionPrefix_CreatesSpan(t *testing.T) {
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusBadRequest)
 	}
-	if got := len(recorder.Ended()); got != 1 {
-		t.Fatalf("ended spans = %d, want 1", got)
-	}
-	statusCode, ok := findIntAttribute(recorder.Ended()[0].Attributes(), "http.status_code")
-	if !ok || statusCode != http.StatusBadRequest {
-		t.Fatalf("http.status_code = %d, found=%t, want %d", statusCode, ok, http.StatusBadRequest)
-	}
 }
 
-func TestProxy_VersionNotFound_CreatesSpan(t *testing.T) {
-	recorder := setupTraceRecorder(t)
+func TestProxy_VersionNotFound_Status(t *testing.T) {
 	routes := newRoutes(map[string]string{})
 	handler := Handler(routes)
 	srv := httptest.NewServer(handler)
@@ -287,17 +206,9 @@ func TestProxy_VersionNotFound_CreatesSpan(t *testing.T) {
 	if resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusNotFound)
 	}
-	if got := len(recorder.Ended()); got != 1 {
-		t.Fatalf("ended spans = %d, want 1", got)
-	}
-	statusCode, ok := findIntAttribute(recorder.Ended()[0].Attributes(), "http.status_code")
-	if !ok || statusCode != http.StatusNotFound {
-		t.Fatalf("http.status_code = %d, found=%t, want %d", statusCode, ok, http.StatusNotFound)
-	}
 }
 
-func TestProxy_BackendTransportError_CreatesFailedSpan(t *testing.T) {
-	recorder := setupTraceRecorder(t)
+func TestProxy_BackendTransportError_Status(t *testing.T) {
 	routes := newRoutes(map[string]string{"v1": "127.0.0.1:1"})
 	handler := Handler(routes)
 	srv := httptest.NewServer(handler)
@@ -311,12 +222,5 @@ func TestProxy_BackendTransportError_CreatesFailedSpan(t *testing.T) {
 
 	if resp.StatusCode != http.StatusBadGateway {
 		t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusBadGateway)
-	}
-	if got := len(recorder.Ended()); got != 1 {
-		t.Fatalf("ended spans = %d, want 1", got)
-	}
-	statusCode, ok := findIntAttribute(recorder.Ended()[0].Attributes(), "http.status_code")
-	if !ok || statusCode != http.StatusBadGateway {
-		t.Fatalf("http.status_code = %d, found=%t, want %d", statusCode, ok, http.StatusBadGateway)
 	}
 }

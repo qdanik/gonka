@@ -20,8 +20,8 @@ import (
 
 const (
 	envEnabled  = "DAPI_OTEL_ENABLED"
-	envEndpoint = "DAPI_OTEL_ENDPOINT"
-	envHeaders  = "DAPI_OTEL_HEADERS"
+	envEndpoint = "OTEL_ENDPOINT"
+	envHeaders  = "OTEL_HEADERS"
 )
 
 type Config struct {
@@ -50,7 +50,7 @@ func Init(ctx context.Context, cfg Config) (func(context.Context) error, error) 
 		ctx,
 		resource.WithFromEnv(),
 		resource.WithAttributes(
-			attribute.String("service.name", valueOrDefault(cfg.ServiceName, "decentralized-api")),
+			attribute.String("service.name", valueOrDefault(cfg.ServiceName, ServiceName)),
 			attribute.String("service.version", valueOrDefault(cfg.ServiceVersion, "unknown")),
 			attribute.String("participant.address", cfg.ParticipantAddress),
 		),

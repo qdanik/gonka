@@ -1,15 +1,19 @@
 # Join Observability Overview
 
-## What We Are Proposing
+## What This Document Describes
 
-For the join deployment we propose a small but coherent observability surface that covers the request path we already operate today:
+This document describes the current observability surface for the join deployment.
+
+It is the canonical current-state overview for the repository's join stack.
+
+The current join observability surface covers the request path we already operate today:
 
 - traces for request hand-off across `decentralized-api`, `versiond`, and `devshardd`
 - metrics for API and devshard request behavior plus container-level health
 - logs in Grafana so request logs and runtime logs can be inspected without jumping between containers
 - one operator entrypoint in Grafana, with Jaeger linked from logs through `trace_id`
 
-This is intentionally not a production-grade observability platform yet. It is a practical operator surface for the join environment that makes the current system explainable.
+This is intentionally not a final production observability platform. It is a practical operator surface for the join environment that makes the current system explainable.
 
 ## Why The Project Needs It
 
@@ -33,12 +37,22 @@ The current join observability overlay adds these components:
 - `Promtail` for shipping Docker container logs into Loki
 - `cAdvisor` for container resource metrics
 
+The current dashboards include:
+
+- `Service Health Overview` — request flow, latencies, error rates, and resource pressure
+- `Request Debug & Logs` — request-centric log search and runtime log correlation
+- `Infrastructure & Resources` — container resources and observability stack health
+- `Inference Drilldown` — log filtering by `inference_id` and `requester_address`
+- `System Logs` — generic container log surface
+
 On the application side:
 
 - `decentralized-api` exports request traces and Prometheus metrics
 - `devshardd` exports request traces and Prometheus metrics
 - `versiond` exports a minimal tracing surface for the HTTP proxy path
 - `versiond` also exposes Prometheus service discovery for active devshard versions
+
+
 
 ## Why This Shape Makes Sense
 
@@ -76,6 +90,14 @@ It does not yet solve:
 - long-term storage economics
 - deep Cosmos SDK and chain-internal observability
 - a generalized observability platform for all environments
+
+It also does not yet fully solve:
+
+- bridge-first observability
+- validator and consensus health dashboards
+- strong end-to-end request correlation across every component
+- actor-centric views for executors, validators, ML nodes, and participants
+- proactive alerting and SLOs
 
 This document is intentionally narrower. It explains:
 
