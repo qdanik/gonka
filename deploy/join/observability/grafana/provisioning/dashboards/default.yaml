@@ -1,7 +1,7 @@
 apiVersion: 1
 
 providers:
-  - name: join-observability
+  - name: operations-overview
     orgId: 1
     folder: Operations Overview
     type: file

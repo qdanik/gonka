@@ -23,7 +23,7 @@ services:
       - "9464"
       - "13133"
     volumes:
-      - ./otelcol.config.yaml:/etc/otelcol/config.yaml:ro
+      - ./observability/otelcol.config.yaml:/etc/otelcol/config.yaml:ro
     networks:
       default:
         aliases:
@@ -45,7 +45,7 @@ services:
       - "4317"
       - "4318"
     volumes:
-      - ./jaeger.config.yaml:/jaeger/config.yaml:ro
+      - ./observability/jaeger.config.yaml:/jaeger/config.yaml:ro
       - jaeger_data:/var/lib/jaeger
     restart: unless-stopped
 
@@ -58,7 +58,7 @@ services:
       - --storage.tsdb.retention.time=30d
       - --web.enable-lifecycle
     volumes:
-      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus_data:/prometheus
     ports:
       - "127.0.0.1:9099:9090"
@@ -70,7 +70,7 @@ services:
     command:
       - -config.file=/etc/loki/config.yaml
     volumes:
-      - ./loki-config.yaml:/etc/loki/config.yaml:ro
+      - ./observability/loki-config.yaml:/etc/loki/config.yaml:ro
       - loki_data:/loki
     ports:
       - "127.0.0.1:3101:3100"
@@ -82,7 +82,7 @@ services:
     command:
       - -config.file=/etc/promtail/config.yaml
     volumes:
-      - ./promtail-config.yaml:/etc/promtail/config.yaml:ro
+      - ./observability/promtail-config.yaml:/etc/promtail/config.yaml:ro
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - /var/lib/docker/containers:/var/lib/docker/containers:ro
       - promtail_data:/tmp
@@ -115,9 +115,9 @@ services:
       - GF_SERVER_ROOT_URL=%(protocol)s://%(domain)s${GRAFANA_BASE_PATH:-/grafana}/
       - GF_SERVER_SERVE_FROM_SUB_PATH=true
     volumes:
-      - ./grafana/provisioning:/etc/grafana/provisioning:ro
-      - ./grafana/dashboards:/var/lib/grafana/dashboards-src:ro
-      - ./grafana/entrypoint.sh:/entrypoint.sh:ro
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./observability/grafana/dashboards:/var/lib/grafana/dashboards-src:ro
+      - ./observability/grafana/entrypoint.sh:/entrypoint.sh:ro
       - grafana_data:/var/lib/grafana
     ports:
       - "127.0.0.1:3000:3000"

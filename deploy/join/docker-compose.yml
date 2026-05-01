@@ -88,9 +88,6 @@ services:
     environment:
       - VERSIOND_ORACLE_URL=http://api:9100/versions
       - VERSIOND_BINARY_NAME=devshardd
-      - VERSIOND_OTEL_ENABLED=${VERSIOND_OTEL_ENABLED:-false}
-      - VERSIOND_OTEL_ENDPOINT=${VERSIOND_OTEL_ENDPOINT:-}
-      - VERSIOND_OTEL_HEADERS=${VERSIOND_OTEL_HEADERS:-}
       - NODE_MANAGER_ADDR=api:9400
       - NODE_HOST=node
       - KEY_NAME=${KEY_NAME}
@@ -98,6 +95,14 @@ services:
       - KEYRING_BACKEND=${KEYRING_BACKEND:-file}
       - KEYRING_PASSWORD=${KEYRING_PASSWORD}
       - KEYRING_DIR=/root/.inference
+      # Open Telemetry
+      - VERSIOND_OTEL_ENABLED=${VERSIOND_OTEL_ENABLED:-false}
+      - VERSIOND_OTEL_ENDPOINT=${VERSIOND_OTEL_ENDPOINT:-}
+      - VERSIOND_OTEL_HEADERS=${VERSIOND_OTEL_HEADERS:-}
+      # Dev Shard using DAIP otel envs
+      - DAPI_OTEL_ENABLED=${DAPI_OTEL_ENABLED:-false}
+      - DAPI_OTEL_ENDPOINT=${DAPI_OTEL_ENDPOINT:-}
+      - DAPI_OTEL_HEADERS=${DAPI_OTEL_HEADERS:-}
     volumes:
       - .inference:/root/.inference:ro
       - ./devshards/bin:/opt/versiond/bin
