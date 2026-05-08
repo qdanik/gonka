@@ -10,9 +10,13 @@ USE_REGISTRY_CACHE ?= 0
 ifeq ($(USE_REGISTRY_CACHE),1)
 _MOCK_CACHE_ARGS := --cache-from type=registry,ref=ghcr.io/gonka-ai/mock-server:buildcache --cache-to type=registry,ref=ghcr.io/gonka-ai/mock-server:buildcache,mode=min
 _MOCK_BUILD_CMD := docker buildx build --load $(_MOCK_CACHE_ARGS)
+_DEVSHARDD_CACHE_ARGS := --cache-from type=registry,ref=ghcr.io/gonka-ai/devshardd:buildcache --cache-to type=registry,ref=ghcr.io/gonka-ai/devshardd:buildcache,mode=min
+_DEVSHARDD_BUILD_CMD := docker buildx build --load $(_DEVSHARDD_CACHE_ARGS)
 else
 _MOCK_CACHE_ARGS :=
 _MOCK_BUILD_CMD := DOCKER_BUILDKIT=1 docker build
+_DEVSHARDD_CACHE_ARGS :=
+_DEVSHARDD_BUILD_CMD := DOCKER_BUILDKIT=1 docker build
 endif
 
 all: build-docker
@@ -119,8 +123,7 @@ devshardctl-build:
 devshardd-build:
 	@echo "Building devshardd for $(DEVSHARDD_PLATFORM)..."
 	@mkdir -p build
-	@DOCKER_BUILDKIT=1 docker build --no-cache --target builder \
-		--platform $(DEVSHARDD_PLATFORM) \
+	@$(_DEVSHARDD_BUILD_CMD) --platform $(DEVSHARDD_PLATFORM) --target builder \
 		--build-arg BLST_PORTABLE=1 \
 		--build-arg GOOS=$(DEVSHARDD_GOOS) \
 		--build-arg GOARCH=$(DEVSHARDD_GOARCH) \

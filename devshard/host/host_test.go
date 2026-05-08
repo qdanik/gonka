@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -712,11 +713,38 @@ func TestHost_ExecuteFailure_ReturnsReceiptNoMempool(t *testing.T) {
 type countingEngine struct {
 	inner *stub.InferenceEngine
 	calls int
+	last  devshard.ExecuteRequest
 }
 
 func (e *countingEngine) Execute(ctx context.Context, req devshard.ExecuteRequest) (*devshard.ExecuteResult, error) {
 	e.calls++
+	e.last = req
 	return e.inner.Execute(ctx, req)
+}
+
+func TestHost_ExecutionPayloadEpoch(t *testing.T) {
+	hosts := []*signing.Secp256k1Signer{testutil.MustGenerateKey(t), testutil.MustGenerateKey(t), testutil.MustGenerateKey(t)}
+	user := testutil.MustGenerateKey(t)
+	group := testutil.MakeGroup(hosts)
+	config := testutil.DefaultConfig(len(hosts))
+	verifier := signing.NewSecp256k1Verifier()
+	sm, err := state.NewStateMachine("escrow-1", config, group, 10000, user.Address(), verifier)
+	require.NoError(t, err)
+	engine := &countingEngine{inner: stub.NewInferenceEngine()}
+	h, err := NewHost(sm, hosts[1], engine, "escrow-1", group, nil, WithGrace(10), WithEpochID(42))
+	require.NoError(t, err)
+
+	diff := testutil.SignDiff(t, user, "escrow-1", 1, []*types.DevshardTx{testutil.StartTx(1)})
+	resp, err := h.HandleRequest(context.Background(), HostRequest{
+		Diffs: []types.Diff{diff}, Nonce: 1, Payload: defaultPayload(),
+	})
+	require.NoError(t, err)
+	require.NotNil(t, resp.ExecutionJob)
+	require.Equal(t, uint64(42), resp.ExecutionJob.EpochID)
+
+	_, err = h.RunExecution(context.Background(), resp.ExecutionJob)
+	require.NoError(t, err)
+	require.Equal(t, uint64(42), engine.last.EpochID)
 }
 
 func TestHost_SignReceipt_NoDuplicateExecution(t *testing.T) {
@@ -913,6 +941,39 @@ func (e *trackingValidationEngine) getCalls() []devshard.ValidateRequest {
 	return append([]devshard.ValidateRequest(nil), e.calls...)
 }
 
+type blockingValidationEngine struct {
+	started     chan struct{}
+	release     chan struct{}
+	inflight    atomic.Int64
+	maxInflight atomic.Int64
+}
+
+func newBlockingValidationEngine(totalJobs int) *blockingValidationEngine {
+	return &blockingValidationEngine{
+		started: make(chan struct{}, totalJobs),
+		release: make(chan struct{}),
+	}
+}
+
+func (e *blockingValidationEngine) Validate(ctx context.Context, _ devshard.ValidateRequest) (*devshard.ValidateResult, error) {
+	current := e.inflight.Add(1)
+	for {
+		maxSeen := e.maxInflight.Load()
+		if current <= maxSeen || e.maxInflight.CompareAndSwap(maxSeen, current) {
+			break
+		}
+	}
+	e.started <- struct{}{}
+	defer e.inflight.Add(-1)
+
+	select {
+	case <-e.release:
+		return &devshard.ValidateResult{Valid: true}, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
 func TestHost_ValidationTriggersOnFinishedInference(t *testing.T) {
 	// 2 hosts. Host 0 is the validator, host 1 is executor for inference 1.
 	// With 2 hosts and 100% ValidationRate, probability = 1/(2-1) = 1.0 (guaranteed).
@@ -934,7 +995,7 @@ func TestHost_ValidationTriggersOnFinishedInference(t *testing.T) {
 	valEngine := &trackingValidationEngine{valid: true}
 	engine := stub.NewInferenceEngine()
 	h, err := NewHost(sm, hosts[0], engine, "escrow-1", group, nil,
-		WithGrace(10), WithValidator(valEngine))
+		WithGrace(10), WithValidator(valEngine), WithEpochID(42))
 	require.NoError(t, err)
 
 	// Nonce 1: StartInference (executor = slot 1, not host 0).
@@ -979,6 +1040,7 @@ func TestHost_ValidationTriggersOnFinishedInference(t *testing.T) {
 	}, 2*time.Second, 10*time.Millisecond, "validation should have been triggered")
 
 	require.Equal(t, uint64(1), valEngine.getCalls()[0].InferenceID)
+	require.Equal(t, uint64(42), valEngine.getCalls()[0].EpochID)
 
 	// MsgValidation should appear in mempool.
 	require.Eventually(t, func() bool {
@@ -1008,6 +1070,99 @@ func TestHost_ValidationTriggersOnFinishedInference(t *testing.T) {
 		}
 	}
 	require.True(t, foundValidation, "MsgValidation should be in response mempool")
+}
+
+func TestHost_ValidationQueueLimitsConcurrentWorkers(t *testing.T) {
+	const totalJobs = defaultValidationWorkers + 5
+
+	hosts := []*signing.Secp256k1Signer{
+		testutil.MustGenerateKey(t),
+		testutil.MustGenerateKey(t),
+		testutil.MustGenerateKey(t),
+	}
+	user := testutil.MustGenerateKey(t)
+	group := testutil.MakeGroup(hosts)
+	config := types.SessionConfig{
+		RefusalTimeout:   60,
+		ExecutionTimeout: 1200,
+		TokenPrice:       1,
+		VoteThreshold:    1,
+		ValidationRate:   10000,
+	}
+	verifier := signing.NewSecp256k1Verifier()
+	sm, err := state.NewStateMachine("escrow-queue", config, group, 1_000_000, user.Address(), verifier)
+	require.NoError(t, err)
+
+	validator := newBlockingValidationEngine(totalJobs)
+	h, err := NewHost(sm, hosts[0], stub.NewInferenceEngine(), "escrow-queue", group, nil,
+		WithGrace(100), WithValidator(validator))
+	require.NoError(t, err)
+
+	var diffs []types.Diff
+	nonce := uint64(1)
+	for i := 0; i < totalJobs; i++ {
+		inferenceID := nonce // 1, 4, 7... all execute on slot 1 for a 3-host group.
+		diffs = append(diffs, testutil.SignDiff(t, user, "escrow-queue", nonce, []*types.DevshardTx{
+			testutil.StartTx(inferenceID),
+		}))
+		nonce++
+
+		confirmedAt := int64(2000 + i)
+		execSig := testutil.SignExecutorReceipt(t, hosts[1], "escrow-queue", inferenceID,
+			testutil.TestPromptHash[:], "llama", 100, 50, 1000, confirmedAt)
+		confirmTx := &types.DevshardTx{Tx: &types.DevshardTx_ConfirmStart{ConfirmStart: &types.MsgConfirmStart{
+			InferenceId: inferenceID,
+			ExecutorSig: execSig,
+			ConfirmedAt: confirmedAt,
+		}}}
+		diffs = append(diffs, testutil.SignDiff(t, user, "escrow-queue", nonce, []*types.DevshardTx{confirmTx}))
+		nonce++
+
+		finishMsg := &types.MsgFinishInference{
+			InferenceId:  inferenceID,
+			ResponseHash: []byte{byte(i)},
+			InputTokens:  80,
+			OutputTokens: 40,
+			ExecutorSlot: 1,
+			EscrowId:     "escrow-queue",
+		}
+		finishMsg.ProposerSig = testutil.SignProposerTx(t, hosts[1], finishMsg)
+		challengeMsg := &types.MsgValidation{
+			InferenceId:   inferenceID,
+			ValidatorSlot: 2,
+			Valid:         false,
+			EscrowId:      "escrow-queue",
+		}
+		challengeMsg.ProposerSig = testutil.SignProposerTx(t, hosts[2], challengeMsg)
+		diffs = append(diffs, testutil.SignDiff(t, user, "escrow-queue", nonce, []*types.DevshardTx{
+			{Tx: &types.DevshardTx_FinishInference{FinishInference: finishMsg}},
+			{Tx: &types.DevshardTx_Validation{Validation: challengeMsg}},
+		}))
+		nonce++
+	}
+
+	_, err = h.HandleRequest(context.Background(), HostRequest{Diffs: diffs})
+	require.NoError(t, err)
+
+	for i := 0; i < defaultValidationWorkers; i++ {
+		select {
+		case <-validator.started:
+		case <-time.After(2 * time.Second):
+			t.Fatalf("expected validation worker %d to start", i)
+		}
+	}
+
+	select {
+	case <-validator.started:
+		t.Fatalf("validation exceeded worker limit %d", defaultValidationWorkers)
+	case <-time.After(100 * time.Millisecond):
+	}
+	require.LessOrEqual(t, validator.maxInflight.Load(), int64(defaultValidationWorkers))
+
+	close(validator.release)
+	require.Eventually(t, func() bool {
+		return validator.inflight.Load() == 0
+	}, 2*time.Second, 10*time.Millisecond)
 }
 
 func TestHost_ResponseCache_Lifecycle(t *testing.T) {
@@ -1140,4 +1295,40 @@ func TestAccumulateGossipSig_WarmKey(t *testing.T) {
 	sigs, err := store.GetSignatures("escrow-1", 2)
 	require.NoError(t, err)
 	require.Equal(t, warmSig, sigs[1])
+}
+
+func TestHost_SavesSnapshotOnSettlement(t *testing.T) {
+	hostSigner := testutil.MustGenerateKey(t)
+	user := testutil.MustGenerateKey(t)
+	group := testutil.MakeGroup([]*signing.Secp256k1Signer{hostSigner})
+	config := testutil.DefaultConfig(len(group))
+	verifier := signing.NewSecp256k1Verifier()
+	store := storage.NewMemory()
+	require.NoError(t, store.CreateSession(storage.CreateSessionParams{
+		EscrowID:       "escrow-1",
+		Config:         config,
+		Group:          group,
+		InitialBalance: 10000,
+	}))
+
+	sm, err := state.NewStateMachine("escrow-1", config, group, 10000, user.Address(), verifier)
+	require.NoError(t, err)
+	h, err := NewHost(sm, hostSigner, stub.NewInferenceEngine(), "escrow-1", group, nil, WithStorage(store))
+	require.NoError(t, err)
+
+	finalizeTx := &types.DevshardTx{Tx: &types.DevshardTx_FinalizeRound{FinalizeRound: &types.MsgFinalizeRound{}}}
+	diff1 := testutil.SignDiff(t, user, "escrow-1", 1, []*types.DevshardTx{finalizeTx})
+	diff2 := testutil.SignDiff(t, user, "escrow-1", 2, nil)
+	_, err = h.HandleRequest(context.Background(), HostRequest{Diffs: []types.Diff{diff1, diff2}})
+	require.NoError(t, err)
+	require.Equal(t, types.PhaseSettlement, h.SnapshotState().Phase)
+
+	require.Eventually(t, func() bool {
+		nonce, data, err := store.LoadSnapshot("escrow-1")
+		if err != nil || nonce != 2 {
+			return false
+		}
+		state, err := UnmarshalStateSnapshot(data)
+		return err == nil && state.Phase == types.PhaseSettlement && state.LatestNonce == 2
+	}, time.Second, 10*time.Millisecond)
 }
