@@ -109,8 +109,8 @@ services:
     image: grafana/grafana:13.0.1
     entrypoint: [ "/bin/sh", "/entrypoint.sh" ]
     environment:
-      - GF_SECURITY_ADMIN_USER=admin
-      - GF_SECURITY_ADMIN_PASSWORD=admin1
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-admin1}
       - GF_USERS_ALLOW_SIGN_UP=false
       - GF_SERVER_ROOT_URL=%(protocol)s://%(domain)s${GRAFANA_BASE_PATH:-/grafana}/
       - GF_SERVER_SERVE_FROM_SUB_PATH=true

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"decentralized-api/apiconfig"
@@ -207,4 +208,67 @@ func TestV2ValidatedCallbackUsesPathModelID(t *testing.T) {
 	server.e.ServeHTTP(rec, req)
 	assert.Equal(t, http.StatusOK, rec.Code)
 	mockRecorder.AssertExpectations(t)
+}
+
+func TestDevshardServiceDiscoveryUsesConfiguredVersions(t *testing.T) {
+	configManager := &apiconfig.ConfigManager{}
+	configManager.SetDevshardVersions(apiconfig.DevshardVersionsCache{
+		Versions: []apiconfig.DevshardVersion{
+			{Name: "v1.7.2", Binary: "devshardd"},
+			{Name: "", Binary: "skip-me"},
+			{Name: "v1.7.0", Binary: "devshardd"},
+		},
+	})
+
+	server := NewServer(nil, nil, WithConfigManager(configManager))
+	req := httptest.NewRequest(http.MethodGet, "/sd/devshardd", nil)
+	rec := httptest.NewRecorder()
+
+	server.e.ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	var groups []prometheusTargetGroup
+	err := json.Unmarshal(rec.Body.Bytes(), &groups)
+	assert.NoError(t, err)
+	assert.Len(t, groups, 2)
+	assert.Equal(t, []string{"versiond:8080"}, groups[0].Targets)
+	assert.Equal(t, "/v1.7.0/metrics", groups[0].Labels["__metrics_path__"])
+	assert.Equal(t, "v1.7.0", groups[0].Labels["version"])
+	assert.Equal(t, "devshardd", groups[0].Labels["service"])
+	assert.Equal(t, []string{"versiond:8080"}, groups[1].Targets)
+	assert.Equal(t, "/v1.7.2/metrics", groups[1].Labels["__metrics_path__"])
+	assert.Equal(t, "v1.7.2", groups[1].Labels["version"])
+	assert.Equal(t, "devshardd", groups[1].Labels["service"])
+}
+
+func TestMetricsRouteExposesPrometheusMetrics(t *testing.T) {
+	server := NewServer(nil, nil)
+	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	rec := httptest.NewRecorder()
+
+	server.e.ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.True(t, strings.Contains(rec.Header().Get("Content-Type"), "text/plain"))
+	assert.Contains(t, rec.Body.String(), "promhttp_metric_handler_requests_in_flight")
+}
+
+func TestMetricsRouteExposesApprovedDevshardVersionMetrics(t *testing.T) {
+	configManager := &apiconfig.ConfigManager{}
+	configManager.SetDevshardVersions(apiconfig.DevshardVersionsCache{
+		Versions: []apiconfig.DevshardVersion{
+			{Name: "v1.7.2", Binary: "devshardd", SHA256: "sha-a"},
+			{Name: "v1.7.0", Binary: "devshardd", SHA256: "sha-b"},
+		},
+	})
+
+	server := NewServer(nil, nil, WithConfigManager(configManager))
+	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	rec := httptest.NewRecorder()
+
+	server.e.ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Contains(t, rec.Body.String(), "decentralized_api_devshard_approved_versions_total 2")
+	assert.Contains(t, rec.Body.String(), "decentralized_api_devshard_approved_version_info")
+	assert.Contains(t, rec.Body.String(), "version=\"v1.7.0\"")
+	assert.Contains(t, rec.Body.String(), "version=\"v1.7.2\"")
 }

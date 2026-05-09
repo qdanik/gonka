@@ -17,6 +17,7 @@ import (
 
 	devshardpkg "devshard"
 	"devshard/host"
+	"devshard/observability"
 	"devshard/signing"
 	"devshard/types"
 )
@@ -375,6 +376,7 @@ func (c *HTTPClient) doPostRaw(ctx context.Context, path string, body []byte) (*
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set(HeaderSignature, hex.EncodeToString(sig))
 	req.Header.Set(HeaderTimestamp, strconv.FormatInt(ts, 10))
+	observability.Request.InjectRequestContext(ctx, req.Header)
 
 	resp, err := c.http.Do(req)
 	if err != nil {

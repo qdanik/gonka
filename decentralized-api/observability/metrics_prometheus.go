@@ -1,6 +1,9 @@
 package observability
 
 import (
+	participantobs "decentralized-api/observability/participant"
+	setupreportobs "decentralized-api/observability/setupreport"
+	devshardobs "devshard/observability"
 	"net/http"
 	"sync"
 	"time"
@@ -81,6 +84,9 @@ func initPrometheusMetrics() {
 			prometheusPromptTokens,
 			prometheusCompletionTokens,
 			prometheusTotalTokens,
+			devshardobs.NewApprovedVersionsCollector(),
+			participantobs.NewCollector(),
+			setupreportobs.NewCollector(),
 		)
 	})
 }

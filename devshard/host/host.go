@@ -15,6 +15,7 @@ import (
 	"devshard"
 	"devshard/gossip"
 	"devshard/logging"
+	"devshard/observability"
 	"devshard/signing"
 	"devshard/state"
 	"devshard/storage"
@@ -180,7 +181,27 @@ func NewHost(
 		h.validationQueue = make(chan validateJob, defaultValidationQueueSize)
 		h.startValidationWorkers(defaultValidationWorkers)
 	}
+	observability.RecordValidationQueueDepth(h.escrowID, 0)
+	observability.RecordMempoolSize(h.escrowID, 0)
 	return h, nil
+}
+
+func (h *Host) recordValidationQueueDepth() {
+	if h == nil {
+		return
+	}
+	if h.validationQueue == nil {
+		observability.RecordValidationQueueDepth(h.escrowID, 0)
+		return
+	}
+	observability.RecordValidationQueueDepth(h.escrowID, len(h.validationQueue))
+}
+
+func (h *Host) recordMempoolSize() {
+	if h == nil {
+		return
+	}
+	observability.RecordMempoolSize(h.escrowID, h.mempool.Len())
 }
 
 // HostMempool returns the host's mempool. Use this to construct a
@@ -361,6 +382,7 @@ func (h *Host) applyAndPersist(diff types.Diff) error {
 		return fmt.Errorf("apply diff nonce %d: %w", diff.Nonce, err)
 	}
 	h.mempool.RemoveIncluded(diff.Txs)
+	h.recordMempoolSize()
 
 	// Evict cached responses for finalized or timed-out inferences.
 	for _, tx := range diff.Txs {
@@ -498,6 +520,13 @@ func (h *Host) signReceipt(req HostRequest) ([]byte, int64, *devshard.ExecuteReq
 
 		// Verify payload matches signed diff.
 		if err := VerifyPayload(req.Payload, start.PromptHash, start.Model, start.InputLength, start.MaxTokens, start.StartedAt); err != nil {
+			observability.RecordLifecycleInterruption("receipt", observability.LifecycleEvent{
+				InferenceID:     start.InferenceId,
+				Reason:          "payload_verification_failed",
+				Where:           "host.sign_receipt",
+				FailureWhere:    "host.verify_payload",
+				ReceiptExpected: true,
+			})
 			return nil, 0, nil, nil, err
 		}
 
@@ -515,10 +544,24 @@ func (h *Host) signReceipt(req HostRequest) ([]byte, int64, *devshard.ExecuteReq
 		}
 		receiptData, err := proto.Marshal(receiptContent)
 		if err != nil {
+			observability.RecordLifecycleInterruption("receipt", observability.LifecycleEvent{
+				InferenceID:     start.InferenceId,
+				Reason:          "marshal_receipt_failed",
+				Where:           "host.sign_receipt",
+				FailureWhere:    "host.marshal_executor_receipt",
+				ReceiptExpected: true,
+			})
 			return nil, 0, nil, nil, fmt.Errorf("marshal executor receipt: %w", err)
 		}
 		sig, err := h.signer.Sign(receiptData)
 		if err != nil {
+			observability.RecordLifecycleInterruption("receipt", observability.LifecycleEvent{
+				InferenceID:     start.InferenceId,
+				Reason:          "sign_receipt_failed",
+				Where:           "host.sign_receipt",
+				FailureWhere:    "host.signer.sign",
+				ReceiptExpected: true,
+			})
 			return nil, 0, nil, nil, fmt.Errorf("sign executor receipt: %w", err)
 		}
 
@@ -531,6 +574,17 @@ func (h *Host) signReceipt(req HostRequest) ([]byte, int64, *devshard.ExecuteReq
 				ConfirmedAt: confirmedAt,
 			}}},
 			ProposedAt: h.sm.LatestNonce(),
+		})
+		h.recordMempoolSize()
+
+		observability.RecordLifecycleCheckpoint(observability.LifecycleEvent{
+			InferenceID:      start.InferenceId,
+			Reason:           "receipt_signed",
+			Where:            "host.sign_receipt",
+			ReceiptExpected:  true,
+			ReceiptObserved:  true,
+			ExecutionStarted: false,
+			FinishPublished:  false,
 		})
 
 		// Dedup: return receipt (proves executor alive) but skip execution.
@@ -575,6 +629,18 @@ func (h *Host) RunExecution(ctx context.Context, job *devshard.ExecuteRequest) (
 	executorSlot := h.group[inferenceID%uint64(len(h.group))].SlotID
 	diffNonce := h.LatestNonce()
 
+	ctx, infSpan := observability.StartInferenceExecution(ctx, h.escrowID, inferenceID)
+
+	observability.RecordLifecycleCheckpoint(observability.LifecycleEvent{
+		InferenceID:      inferenceID,
+		Reason:           "execution_started",
+		Where:            "host.run_execution",
+		ReceiptExpected:  true,
+		ReceiptObserved:  true,
+		ExecutionStarted: true,
+		FinishPublished:  false,
+	})
+
 	defer func() {
 		h.mu.Lock()
 		delete(h.executing, inferenceID)
@@ -583,6 +649,17 @@ func (h *Host) RunExecution(ctx context.Context, job *devshard.ExecuteRequest) (
 
 	result, err := h.engine.Execute(ctx, *job)
 	if err != nil {
+		infSpan.FinishError(err)
+		observability.RecordLifecycleInterruption("execution", observability.LifecycleEvent{
+			InferenceID:      inferenceID,
+			Reason:           "engine_execute_failed",
+			Where:            "host.run_execution",
+			FailureWhere:     "host.engine.execute",
+			ReceiptExpected:  true,
+			ReceiptObserved:  true,
+			ExecutionStarted: true,
+			FinishPublished:  false,
+		})
 		logging.Error("execute failed", "subsystem", "host", "inference_id", inferenceID, "error", err)
 		return nil, err
 	}
@@ -604,6 +681,18 @@ func (h *Host) RunExecution(ctx context.Context, job *devshard.ExecuteRequest) (
 	}
 	proposerSig, err := h.signProposer(finishMsg)
 	if err != nil {
+		// ML execution completed — preserve token counts even though signing failed.
+		infSpan.FinishErrorWithTokens(err, result.InputTokens, result.OutputTokens)
+		observability.RecordLifecycleInterruption("execution", observability.LifecycleEvent{
+			InferenceID:      inferenceID,
+			Reason:           "sign_finish_failed",
+			Where:            "host.run_execution",
+			FailureWhere:     "host.sign_proposer",
+			ReceiptExpected:  true,
+			ReceiptObserved:  true,
+			ExecutionStarted: true,
+			FinishPublished:  false,
+		})
 		logging.Error("sign finish msg failed", "subsystem", "host", "inference_id", inferenceID, "error", err)
 		return result, err
 	}
@@ -615,6 +704,18 @@ func (h *Host) RunExecution(ctx context.Context, job *devshard.ExecuteRequest) (
 		}},
 		ProposedAt: diffNonce,
 	})
+	observability.RecordMempoolSize(h.escrowID, h.mempool.Len())
+
+	observability.RecordLifecycleTerminal("finished", observability.LifecycleEvent{
+		InferenceID:      inferenceID,
+		Reason:           "finish_published",
+		Where:            "host.run_execution",
+		ReceiptExpected:  true,
+		ReceiptObserved:  true,
+		ExecutionStarted: true,
+		FinishPublished:  true,
+	})
+	infSpan.Finish(result.InputTokens, result.OutputTokens)
 
 	return result, nil
 }
@@ -669,6 +770,7 @@ func (h *Host) maybeRevealSeed() {
 		Tx:         seedTx,
 		ProposedAt: h.sm.LatestNonce(),
 	})
+	h.recordMempoolSize()
 
 	// Eager gossip: broadcast seed reveal to ALL peers so no host can
 	// suppress it. Uses BroadcastTxs which sends to every peer (not K random).
@@ -770,6 +872,7 @@ func (h *Host) startValidationWorkers(count int) {
 	for i := 0; i < count; i++ {
 		go func() {
 			for job := range h.validationQueue {
+				h.recordValidationQueueDepth()
 				h.validateAsync(context.Background(), job)
 			}
 		}()
@@ -786,10 +889,30 @@ func (h *Host) enqueueValidation(job validateJob) {
 
 	select {
 	case h.validationQueue <- job:
+		h.recordValidationQueueDepth()
+		observability.RecordLifecycleCheckpoint(observability.LifecycleEvent{
+			InferenceID:      job.inferenceID,
+			Reason:           "validation_enqueued",
+			Where:            "host.enqueue_validation",
+			ReceiptExpected:  true,
+			ReceiptObserved:  true,
+			ExecutionStarted: true,
+			FinishPublished:  true,
+		})
 	default:
 		h.mu.Lock()
 		delete(h.validating, job.inferenceID)
 		h.mu.Unlock()
+		h.recordValidationQueueDepth()
+		observability.RecordLifecycleInterruption("validation_queue", observability.LifecycleEvent{
+			InferenceID:      job.inferenceID,
+			Reason:           "queue_full",
+			Where:            "host.enqueue_validation",
+			ReceiptExpected:  true,
+			ReceiptObserved:  true,
+			ExecutionStarted: true,
+			FinishPublished:  true,
+		})
 		logging.Debug("validation queue full; retry later", "subsystem", "host", "inference_id", job.inferenceID)
 	}
 }
@@ -822,7 +945,18 @@ func (h *Host) validateAsync(ctx context.Context, job validateJob) {
 		h.mu.Lock()
 		delete(h.validating, job.inferenceID)
 		h.mu.Unlock()
+		h.recordValidationQueueDepth()
 	}()
+
+	observability.RecordLifecycleCheckpoint(observability.LifecycleEvent{
+		InferenceID:      job.inferenceID,
+		Reason:           "validation_started",
+		Where:            "host.validate_async",
+		ReceiptExpected:  true,
+		ReceiptObserved:  true,
+		ExecutionStarted: true,
+		FinishPublished:  true,
+	})
 
 	result, err := h.validator.Validate(ctx, devshard.ValidateRequest{
 		InferenceID:     job.inferenceID,
@@ -836,17 +970,38 @@ func (h *Host) validateAsync(ctx context.Context, job validateJob) {
 		EpochID:         job.epochID,
 	})
 	if err != nil {
+		observability.RecordLifecycleInterruption("validation", observability.LifecycleEvent{
+			InferenceID:      job.inferenceID,
+			Reason:           "validator_execute_failed",
+			Where:            "host.validate_async",
+			FailureWhere:     "host.validator.validate",
+			ReceiptExpected:  true,
+			ReceiptObserved:  true,
+			ExecutionStarted: true,
+			FinishPublished:  true,
+		})
 		logging.Error("validate failed", "subsystem", "host", "inference_id", job.inferenceID, "error", err)
 		return
 	}
 
 	rec, ok := h.sm.GetInference(job.inferenceID)
 	if !ok {
+		observability.RecordLifecycleOrphan("validation", observability.LifecycleEvent{
+			InferenceID:      job.inferenceID,
+			Reason:           "inference_disappeared",
+			Where:            "host.validate_async",
+			FailureWhere:     "host.get_inference",
+			ReceiptExpected:  true,
+			ReceiptObserved:  true,
+			ExecutionStarted: true,
+			FinishPublished:  true,
+		})
 		logging.Error("validate: inference disappeared", "subsystem", "host", "inference_id", job.inferenceID)
 		return
 	}
 
 	var tx *types.DevshardTx
+	terminalReason := ""
 	switch rec.Status {
 	case types.StatusFinished:
 		// TODO: if this MsgValidation lands after another host has already
@@ -860,11 +1015,22 @@ func (h *Host) validateAsync(ctx context.Context, job validateJob) {
 		}
 		proposerSig, err := h.signProposer(msg)
 		if err != nil {
+			observability.RecordLifecycleInterruption("validation", observability.LifecycleEvent{
+				InferenceID:      job.inferenceID,
+				Reason:           "sign_validation_failed",
+				Where:            "host.validate_async",
+				FailureWhere:     "host.sign_proposer",
+				ReceiptExpected:  true,
+				ReceiptObserved:  true,
+				ExecutionStarted: true,
+				FinishPublished:  true,
+			})
 			logging.Error("sign validation msg failed", "subsystem", "host", "inference_id", job.inferenceID, "error", err)
 			return
 		}
 		msg.ProposerSig = proposerSig
 		tx = &types.DevshardTx{Tx: &types.DevshardTx_Validation{Validation: msg}}
+		terminalReason = "validation_published"
 	case types.StatusChallenged:
 		msg := &types.MsgValidationVote{
 			InferenceId: job.inferenceID,
@@ -874,12 +1040,33 @@ func (h *Host) validateAsync(ctx context.Context, job validateJob) {
 		}
 		proposerSig, err := h.signProposer(msg)
 		if err != nil {
+			observability.RecordLifecycleInterruption("validation", observability.LifecycleEvent{
+				InferenceID:      job.inferenceID,
+				Reason:           "sign_validation_vote_failed",
+				Where:            "host.validate_async",
+				FailureWhere:     "host.sign_proposer",
+				ReceiptExpected:  true,
+				ReceiptObserved:  true,
+				ExecutionStarted: true,
+				FinishPublished:  true,
+			})
 			logging.Error("sign validation vote failed", "subsystem", "host", "inference_id", job.inferenceID, "error", err)
 			return
 		}
 		msg.ProposerSig = proposerSig
 		tx = &types.DevshardTx{Tx: &types.DevshardTx_ValidationVote{ValidationVote: msg}}
+		terminalReason = "validation_vote_published"
 	default:
+		observability.RecordLifecycleOrphan("validation", observability.LifecycleEvent{
+			InferenceID:      job.inferenceID,
+			Reason:           "status_changed",
+			Where:            "host.validate_async",
+			FailureWhere:     "host.validation_status",
+			ReceiptExpected:  true,
+			ReceiptObserved:  true,
+			ExecutionStarted: true,
+			FinishPublished:  true,
+		})
 		return
 	}
 
@@ -889,6 +1076,16 @@ func (h *Host) validateAsync(ctx context.Context, job validateJob) {
 		ProposedAt: h.sm.LatestNonce(),
 	})
 	h.mu.Unlock()
+	h.recordMempoolSize()
+	observability.RecordLifecycleTerminal("validated", observability.LifecycleEvent{
+		InferenceID:      job.inferenceID,
+		Reason:           terminalReason,
+		Where:            "host.validate_async",
+		ReceiptExpected:  true,
+		ReceiptObserved:  true,
+		ExecutionStarted: true,
+		FinishPublished:  true,
+	})
 }
 
 // AccumulateGossipSig verifies and stores a signature received via gossip.
@@ -1016,16 +1213,50 @@ func (h *Host) challengeReceiptLocked(inferenceID uint64, payload *InferencePayl
 	}
 
 	rec, ok := h.sm.GetInference(inferenceID)
-	if !ok || rec.Status != types.StatusPending {
+	if !ok {
+		observability.RecordLifecycleOrphan("receipt", observability.LifecycleEvent{
+			InferenceID:     inferenceID,
+			Reason:          "inference_disappeared",
+			Where:           "host.challenge_receipt",
+			FailureWhere:    "host.get_inference",
+			ReceiptExpected: true,
+		})
+		return nil, 0, nil, nil
+	}
+	if rec.Status != types.StatusPending {
+		observability.RecordLifecycleOrphan("receipt", observability.LifecycleEvent{
+			InferenceID:      inferenceID,
+			Reason:           "inference_not_pending",
+			Where:            "host.challenge_receipt",
+			FailureWhere:     "host.inference_status",
+			ReceiptExpected:  true,
+			ReceiptObserved:  rec.Status == types.StatusStarted || rec.Status == types.StatusFinished || rec.Status == types.StatusChallenged,
+			ExecutionStarted: rec.Status == types.StatusStarted || rec.Status == types.StatusFinished || rec.Status == types.StatusChallenged,
+			FinishPublished:  rec.Status == types.StatusFinished || rec.Status == types.StatusChallenged,
+		})
 		return nil, 0, nil, nil
 	}
 	if !h.slotIDs[rec.ExecutorSlot] {
 		return nil, 0, nil, nil
 	}
 	if payload == nil {
+		observability.RecordLifecycleInterruption("receipt", observability.LifecycleEvent{
+			InferenceID:     inferenceID,
+			Reason:          "missing_payload",
+			Where:           "host.challenge_receipt",
+			FailureWhere:    "host.challenge_payload",
+			ReceiptExpected: true,
+		})
 		return nil, 0, nil, nil
 	}
 	if err := VerifyPayload(payload, rec.PromptHash, rec.Model, rec.InputLength, rec.MaxTokens, rec.StartedAt); err != nil {
+		observability.RecordLifecycleInterruption("receipt", observability.LifecycleEvent{
+			InferenceID:     inferenceID,
+			Reason:          "payload_verification_failed",
+			Where:           "host.challenge_receipt",
+			FailureWhere:    "host.verify_payload",
+			ReceiptExpected: true,
+		})
 		return nil, 0, nil, nil
 	}
 
@@ -1042,12 +1273,35 @@ func (h *Host) challengeReceiptLocked(inferenceID uint64, payload *InferencePayl
 	}
 	receiptData, err := proto.Marshal(receiptContent)
 	if err != nil {
+		observability.RecordLifecycleInterruption("receipt", observability.LifecycleEvent{
+			InferenceID:     inferenceID,
+			Reason:          "marshal_receipt_failed",
+			Where:           "host.challenge_receipt",
+			FailureWhere:    "host.marshal_executor_receipt",
+			ReceiptExpected: true,
+		})
 		return nil, 0, nil, fmt.Errorf("marshal executor receipt: %w", err)
 	}
 	sig, err := h.signer.Sign(receiptData)
 	if err != nil {
+		observability.RecordLifecycleInterruption("receipt", observability.LifecycleEvent{
+			InferenceID:     inferenceID,
+			Reason:          "sign_receipt_failed",
+			Where:           "host.challenge_receipt",
+			FailureWhere:    "host.signer.sign",
+			ReceiptExpected: true,
+		})
 		return nil, 0, nil, fmt.Errorf("sign executor receipt: %w", err)
 	}
+	observability.RecordLifecycleCheckpoint(observability.LifecycleEvent{
+		InferenceID:      inferenceID,
+		Reason:           "challenge_receipt_signed",
+		Where:            "host.challenge_receipt",
+		ReceiptExpected:  true,
+		ReceiptObserved:  true,
+		ExecutionStarted: false,
+		FinishPublished:  false,
+	})
 
 	// Dedup: return receipt (proves executor alive) but skip execution
 	// if already in-flight or already finished in mempool.

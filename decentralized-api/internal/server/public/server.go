@@ -8,7 +8,6 @@ import (
 	"decentralized-api/internal"
 	"decentralized-api/internal/authzcache"
 	"decentralized-api/internal/server/middleware"
-	"decentralized-api/observability"
 	"decentralized-api/payloadstorage"
 	"decentralized-api/poc/artifacts"
 	"decentralized-api/statsstorage"
@@ -93,7 +92,6 @@ func NewServer(
 
 	e.Use(middleware.LoggingMiddleware)
 	e.Use(echoMiddleware.BodyLimit(MaxRequestBodyLimit))
-	e.GET("/metrics", echo.WrapHandler(observability.MetricsHandler()))
 	g := e.Group("/v1/")
 
 	g.GET("status", s.getStatus)

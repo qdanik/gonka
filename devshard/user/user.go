@@ -12,6 +12,7 @@ import (
 	"devshard"
 	"devshard/host"
 	"devshard/logging"
+	"devshard/observability"
 	"devshard/signing"
 	"devshard/state"
 	"devshard/storage"
@@ -574,6 +575,17 @@ func (s *Session) AddPendingTimeoutTx(inferenceID uint64, reason types.TimeoutRe
 			Votes:       votes,
 		}},
 	})
+
+	receiptExpected, receiptObserved, executionStarted, reasonLabel := lifecycleFlagsForTimeout(reason)
+	observability.RecordLifecycleTerminal("timeout", observability.LifecycleEvent{
+		InferenceID:      inferenceID,
+		Reason:           reasonLabel,
+		Where:            "user.add_pending_timeout_tx",
+		ReceiptExpected:  receiptExpected,
+		ReceiptObserved:  receiptObserved,
+		ExecutionStarted: executionStarted,
+		FinishPublished:  false,
+	}, "votes_collected", len(votes))
 }
 
 // SendPendingDiff creates a diff from pending txs (no new MsgStartInference),
@@ -721,7 +733,53 @@ func (s *Session) CollectTimeoutVotes(
 		"reject", rejects, "errors", errors,
 		"threshold", voteThreshold, "verifiers", expected)
 
+	receiptExpected, receiptObserved, executionStarted, reasonLabel := lifecycleFlagsForTimeout(reason)
+	baseEvent := observability.LifecycleEvent{
+		InferenceID:      inferenceID,
+		Reason:           reasonLabel,
+		Where:            "user.collect_timeout_votes",
+		ReceiptExpected:  receiptExpected,
+		ReceiptObserved:  receiptObserved,
+		ExecutionStarted: executionStarted,
+		FinishPublished:  false,
+	}
+	if errors > 0 {
+		observability.RecordLifecycleInterruption("timeout_vote_collection", withFailureWhere(baseEvent, "verifier.verify_timeout"),
+			"errors", errors,
+			"rejects", rejects,
+			"votes_collected", len(votes),
+			"weight", accWeight,
+			"threshold", voteThreshold,
+		)
+	}
+	if accWeight <= voteThreshold {
+		baseEvent.Reason = "insufficient_votes"
+		observability.RecordLifecycleInterruption("timeout_vote_collection", baseEvent,
+			"errors", errors,
+			"rejects", rejects,
+			"votes_collected", len(votes),
+			"weight", accWeight,
+			"threshold", voteThreshold,
+		)
+	}
+
 	return votes, nil
+}
+
+func lifecycleFlagsForTimeout(reason types.TimeoutReason) (receiptExpected bool, receiptObserved bool, executionStarted bool, reasonLabel string) {
+	switch reason {
+	case types.TimeoutReason_TIMEOUT_REASON_REFUSED:
+		return true, false, false, "timeout_refused"
+	case types.TimeoutReason_TIMEOUT_REASON_EXECUTION:
+		return true, true, true, "timeout_execution"
+	default:
+		return true, false, false, "timeout_unknown"
+	}
+}
+
+func withFailureWhere(event observability.LifecycleEvent, failureWhere string) observability.LifecycleEvent {
+	event.FailureWhere = failureWhere
+	return event
 }
 
 // HasSufficientTimeoutVotes returns true if the accept votes exceed the vote threshold.

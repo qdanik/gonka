@@ -1,190 +1,193 @@
-# Join Observability Design
+# Observability Design
 
-## Scope
+This document describes the current observability design for the join stack and the staged dashboard/metrics changes. Older observability docs were removed because they described a dashboard layout and signal model that no longer matches the code.
 
-This document explains how the join observability stack works today and why each piece exists.
+## Goals
 
-It is specifically about the join deployment overlay in `deploy/join` and the operational surface we want to support right now.
+- Give operators three focused Grafana entry points: participant state, network/setup state, and devshard runtime state.
+- Keep application instrumentation local to the service that owns the behavior.
+- Keep Prometheus collectors pure: collectors expose snapshots, while provider packages assemble snapshots from application state.
+- Keep observability out of consensus-critical state transitions. Tracing, metrics, and dashboards must not affect chain behavior.
+- Prefer existing join observability services: Prometheus, Grafana, Loki, Promtail, Jaeger, and the OTEL collector.
 
-It is not a migration plan to alternative backends. The current stack is the implementation.
+## Local Stack
 
-## Design Goals
+The local join observability stack is provisioned under `deploy/join/observability` and is expected to run with the existing join compose setup.
 
-The join design is built around four practical goals:
+| Component | Purpose |
+| --- | --- |
+| Prometheus | Scrapes decentralized-api and devshard metric endpoints. |
+| Grafana | Provisions the three dashboards from `deploy/join/observability/grafana/dashboards`. |
+| Loki | Stores container logs collected by Promtail. |
+| Promtail | Collects join container logs and attaches compose labels such as `compose_project` and `compose_service`. |
+| Jaeger | Stores and displays OpenTelemetry traces. |
+| OTEL Collector | Receives OTLP traffic and fans out traces/metrics to the configured backends. |
 
-1. Make request movement across `decentralized-api`, `versiond`, and `devshardd` observable.
-2. Make service health and request rates visible without attaching debuggers to containers.
-3. Let operators move from logs to traces from one UI.
-4. Avoid hardcoded per-version scrape configuration for devshards.
+## Runtime Services
 
-## Components
+### decentralized-api
 
-### Jaeger
+`decentralized-api` owns public/admin API instrumentation and exports its Prometheus metrics through the existing metrics handler in `decentralized-api/observability`.
 
-Jaeger receives OTLP traces from the application services and exposes the trace UI.
+It currently exposes:
 
-Why it exists:
+- inference operation counters, duration histograms, error counters, and token counters;
+- participant snapshot metrics through `observability/participant`;
+- setup report metrics through `observability/setupreport`;
+- approved devshard version info via the devshard approved versions collector.
 
-- request tracing is the cleanest way to show where a public request was handed off
-- `versiond` proxy spans are useful only if they can be inspected next to API and devshard spans
+The participant collector follows a two-package pattern:
 
-### Prometheus
+- `observability/participant` defines the Prometheus collector and snapshot shape;
+- `observability/participantprovider` reads application state and builds the snapshot.
 
-Prometheus scrapes local metrics inside the join network.
+The setup report collector follows the same pattern:
 
-Why it exists:
+- `observability/setupreport` defines metric descriptors and snapshot shape;
+- `observability/setupreportprovider` adapts `admin.GetCachedReport()` into a Prometheus snapshot.
 
-- `decentralized-api` and `devshardd` already expose metrics that are useful for request debugging
-- service and request rate panels are much cheaper to reason about than raw logs for trend questions
+This separation prevents collector packages from importing high-level application dependencies and avoids import cycles.
 
-### Grafana
+### devshardd
 
-Grafana is the operator entrypoint.
+`devshardd` owns devshard HTTP request metrics, lifecycle metrics, queue/mempool gauges, and ML inference execution metrics.
 
-Why it exists:
+The staged inference metrics are:
 
-- the join stack needs one place where metrics, logs, and traces can be inspected together
-- dashboards are useful only if they can also drill into real request identifiers and trace links
+| Metric | Type | Labels | Meaning |
+| --- | --- | --- | --- |
+| `devshard_inference_total` | counter | `result`, `escrow_id` | Completed or failed ML engine executions. |
+| `devshard_inference_execution_duration_seconds` | histogram | `escrow_id` | Duration of the `engine.Execute` call. |
+| `devshard_inference_tokens_total` | counter | `token_type`, `escrow_id` | Input and output tokens processed by the inference engine. |
 
-### Loki and Promtail
+`devshard/observability/inference_trace.go` starts an OpenTelemetry span around each ML inference execution. Successful executions record token counts and duration. Failed executions mark the span as an error and increment the failed inference counter.
 
-Promtail ships Docker container logs into Loki.
+### Embedded devshard routes
 
-Why they exist:
+Lazy devshard session routes are wrapped with `srv.ObservabilityMiddleware`, so HTTP request duration/error metrics are emitted for payload handling. The route-level request metrics are useful in the Devshard Details dashboard for separating engine latency from HTTP and queue behavior.
 
-- join debugging still relies heavily on structured service logs
-- logs need to sit next to metrics and traces rather than in a separate workflow
-- Grafana can derive Jaeger links directly from `trace_id` fields in log lines
+## OpenTelemetry
 
-Implementation note:
+OpenTelemetry is opt-in and controlled by service-specific enable flags plus shared endpoint configuration.
 
-Promtail currently follows the host Docker log files and Docker metadata. This is a deployment detail of the current join overlay, not a statement about the long-term collection model.
+| Env var | Used by | Meaning |
+| --- | --- | --- |
+| `DAPI_OTEL_ENABLED` | decentralized-api | Enables dapi OpenTelemetry initialization. |
+| `DEVSHARD_OTEL_ENABLED` | devshardd | Enables devshard OpenTelemetry initialization. |
+| `OTEL_ENDPOINT` | both | OTLP gRPC endpoint, usually the OTEL collector. |
+| `OTEL_HEADERS` | both | Optional OTLP headers. |
 
-### cAdvisor
+`decentralized-api/observability.BuildProviders` builds reusable trace and metric providers without setting them globally. This is used by `decentralized-api/cmd/devshardd/main.go` so the devshard binary can share the same exporter setup while using `service.name="devshardd"`.
 
-cAdvisor exports container resource metrics.
+When devshard receives injected providers through `devshard/observability.WithOtelProviders`, it sets the global tracer/meter providers and skips building its own exporters. When no endpoint is configured, devshard falls back to Prometheus-only metrics.
 
-Why it exists:
+## Prometheus Metrics
 
-- not every join problem is in request logic
-- container pressure often explains symptoms that look like application faults
+### Setup Report Metrics
 
-## Data Flows
+The setup report collector exports the cached admin setup report as numeric Prometheus gauges:
 
-### Trace Flow
+| Metric | Meaning |
+| --- | --- |
+| `decentralized_api_setup_overall_status` | Encoded overall report status: `2=PASS`, `1=UNAVAILABLE`, `0=FAIL`. |
+| `decentralized_api_setup_check_status{check_id}` | Encoded status for each setup check. |
+| `decentralized_api_block_height` | Latest chain block height from the `block_sync` check details. |
+| `decentralized_api_seconds_since_block` | Seconds since the latest observed block. |
+| `decentralized_api_setup_checks_passed` | Number of passed setup checks. |
+| `decentralized_api_setup_checks_failed` | Number of failed setup checks. |
+| `decentralized_api_setup_checks_unavailable` | Number of unavailable setup checks. |
 
-1. A client request enters `decentralized-api`.
-2. `decentralized-api` starts the public request span and emits structured request logs.
-3. If the request crosses the versioned path, `versiond` creates a proxy request span and forwards trace context.
-4. `devshardd` extracts that context, starts its own request span, and emits request logs and metrics.
-5. All spans are exported to Jaeger over OTLP.
+The source report is still generated by `/admin/v1/setup/report`; the collector reads the latest cached report. This means the metrics depend on the cache being populated by the admin report path. If the report has never been generated, the collector currently emits no setup-report metrics.
 
-Result:
+### Participant Metrics
 
-- one request can be followed across the real hand-off boundaries we operate today
+Participant metrics are exported from the participant snapshot collector and are consumed by the Participant Details dashboard:
 
-### Metrics Flow
+| Metric | Used for |
+| --- | --- |
+| `decentralized_api_participant_info` | Participant identity, validator key, epoch status, chain status, and phase. |
+| `decentralized_api_participant_model_status` | Model coverage and delegation state. |
+| `decentralized_api_participant_epoch_rewarded_gnk` | Rewarded GNK for recent epochs. |
+| `decentralized_api_participant_mlnode_effective_weight` | ML node effective weight by node/model/status. |
 
-1. `decentralized-api` exposes Prometheus metrics directly.
-2. `devshardd` exposes Prometheus metrics directly.
-3. `versiond` exposes a Prometheus HTTP service-discovery endpoint for active devshard versions.
-4. Prometheus scrapes the discovered targets and stores the samples locally.
+### Devshard Runtime Metrics
 
-Why the `versiond` discovery endpoint matters:
+Devshard runtime metrics are consumed by the Devshard Details dashboard:
 
-- active devshard versions can change over time
-- Prometheus should discover them from the route table instead of relying on static port lists
+| Metric | Used for |
+| --- | --- |
+| `devshard_inference_total` | Inference throughput and success/failure rate. |
+| `devshard_inference_execution_duration_seconds_bucket` | p50/p95/p99 engine execution latency. |
+| `devshard_inference_tokens_total` | Input/output token throughput. |
+| `devshard_lifecycle_interruption_total` | Execution interruption rate by reason. |
+| `devshard_validation_queue_depth` | Pending validation queue depth. |
+| `devshard_mempool_size` | Devshard unsigned transaction queue size. |
+| `devshard_request_duration_seconds_bucket` | HTTP request latency by route. |
+| `devshard_request_errors_total` | HTTP request error rate by route/status. |
+| `decentralized_api_devshard_approved_version_info` | Approved devshard versions observed by dapi. |
 
-### Log Flow
+## Dashboards
 
-1. Join containers write structured logs to Docker stdout/stderr.
-2. Promtail reads those logs, attaches Docker metadata such as compose service labels, and pushes them to Loki.
-3. Grafana queries Loki for service logs, request logs, and drill-down views.
-4. Grafana derives Jaeger trace links from `trace_id` fields found in log lines.
+Only three dashboards should remain provisioned for this observability slice.
 
-## Why The Dashboards Are Structured This Way
+### Participant Details
 
-### Service Health Overview
+File: `deploy/join/observability/grafana/dashboards/participant-details.json`
 
-Top-level view for the service operator persona.
+Purpose: show local participant identity and business state from decentralized-api participant metrics.
 
-Answers:
+Main panels:
 
-- Are API and devshard request rates healthy?
-- Are latencies (p95) within acceptable range?
-- Are error rates rising on either side?
-- Is container resource pressure contributing to degradation?
+- Participant Identity
+- Model Coverage And Delegation
+- Rewarded GNK Last 5 Epochs
+- ML Nodes Overview
 
-### Request Debug & Logs
+### Network Details
 
-Request-centric view for the investigator persona.
+File: `deploy/join/observability/grafana/dashboards/network-details.json`
 
-Answers:
+Purpose: show setup report status and block sync health.
 
-- What logs exist for a given `inference_id` or `requester_address`?
-- Are errors correlated across API, versiond, and devshard?
-- What was the runtime log volume in the time window?
+Main panels:
 
-### Infrastructure & Resources
+- Overall Status
+- Checks Passed / Failed / Unavailable
+- Individual setup checks
+- Validator in Set visual status
+- MLNode Checks rollup
+- Block Height
+- Seconds Since Last Block
 
-Infrastructure health view.
+The `validator_in_set` panel is visually treated as informational in Grafana, but the backend setup report currently still includes all failed checks in `OverallStatus` and `FailedChecks`.
 
-Answers:
+### Devshard Details
 
-- Are Prometheus and cAdvisor healthy?
-- Are containers within CPU and memory bounds?
+File: `deploy/join/observability/grafana/dashboards/devshard-details.json`
 
-### Inference Drilldown
+Purpose: combine devshard inference health, traces, API behavior, approved versions, and log drilldown in one dashboard.
 
-Request-centric log filtering.
+Main sections:
 
-Filters by `inference_id` and `requester_address` across API and devshard logs.
+- Inference Health
+- Errors & Traces
+- API Metrics
+- Log Drilldown
 
-### System Logs
+The dashboard uses Prometheus for metrics, Jaeger for failed inference traces, and Loki for API/devshard log drilldowns.
 
-Generic log surface for fast inspection by compose service.
+## Logs
 
-Exists because not every debugging path starts from a request identifier.
+Grafana log panels query Loki with compose labels. Current dashboard queries focus on:
 
-## Current Gaps
+- API inference request logs from `compose_service="api"`;
+- devshard-tagged runtime logs emitted through the API container;
+- optional drilldown by `inference_id` and `requester_address` dashboard variables.
 
-The current design is useful, but it is intentionally incomplete.
+## Operational Notes
 
-The biggest remaining gaps are:
-
-- first-class `inference-chain` observability
-- validator and consensus health visibility
-- bridge-specific metrics and dashboards
-- richer correlation across logs, metrics, and traces
-- actor-centric views for executors, validators, ML nodes, and participants
-- alerting and SLOs
-
-These are the next steps for the current stack. They should be addressed before any broad backend migration is considered.
-
-## Why This Matters To The Project
-
-This work improves the project in three concrete ways:
-
-### Faster failure explanation
-
-The team can move from “something failed” to “this service, this request path, this version, this runtime symptom” much faster.
-
-### Safer rollout and routing visibility
-
-Because `versiond` participates in observability, version routing stops being a blind spot.
-
-### Better bridge between code changes and runtime behavior
-
-The current services already expose useful structured behavior. The join stack makes that behavior inspectable in one place instead of scattered across terminals and container logs.
-
-## Boundaries And Next Steps
-
-The current design is intentionally local and pragmatic.
-
-Good next steps after this stage are:
-
-1. keep dashboard queries aligned with the real log topology as services evolve
-2. extend request-level correlation where new services join the path
-3. add missing telemetry for `inference-chain`, bridge, and network actors
-4. introduce alerting only after dashboard baselines stabilize
-5. decide later which parts of this join design should graduate into broader environment standards
+- Run `jq empty deploy/join/observability/grafana/dashboards/*.json` after editing dashboards.
+- Run `go build ./...` in `decentralized-api` and `devshard` after changing instrumentation.
+- Run `gofmt` on Go files after observability changes.
+- Keep dashboard count small and task-oriented; avoid reintroducing broad overview dashboards unless they answer a concrete operator workflow.
+- Keep provider assembly outside collector packages when application dependencies are needed.

@@ -1,6 +1,9 @@
 package admin
 
 import (
+	"context"
+	"time"
+
 	"decentralized-api/apiconfig"
 	"decentralized-api/broker"
 	cosmos_client "decentralized-api/cosmosclient"
@@ -119,6 +122,35 @@ func getCodec() *codec.ProtoCodec {
 
 func (s *Server) Start(addr string) {
 	go s.e.Start(addr)
+}
+
+// StartPeriodicRefresh runs a background goroutine that regenerates the full
+// setup report every interval. 60s is appropriate — it aligns with CachedUntil
+// and avoids repeated chain + MLNode HTTP calls.
+// Block height / seconds_since_block metrics are populated separately from
+// ChainPhaseTracker (push-based, no polling needed).
+func (s *Server) StartPeriodicRefresh(ctx context.Context, interval time.Duration) {
+	refresh := func() {
+		report, _ := s.generateSetupReport(ctx)
+		if report != nil {
+			cachedReportMutex.Lock()
+			cachedReport = report
+			cachedReportMutex.Unlock()
+		}
+	}
+	go func() {
+		refresh() // populate cache immediately on startup
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				refresh()
+			}
+		}
+	}()
 }
 
 // getConfig returns the current configuration as JSON (unsanitized)

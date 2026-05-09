@@ -50,7 +50,9 @@ func RegisterLazySessionRoutes(g *echo.Group, resolver SessionResolver, payloadH
 			if err != nil {
 				return sessionHTTPError(err)
 			}
-			return payloadHandler.HandlePayloads(c, srv)
+			return srv.ObservabilityMiddleware(func(c echo.Context) error {
+				return payloadHandler.HandlePayloads(c, srv)
+			})(c)
 		})
 	}
 }
@@ -64,10 +66,11 @@ func withSession(
 		if err != nil {
 			return sessionHTTPError(err)
 		}
-		return pick(srv)(c)
+		return srv.ObservabilityMiddleware(pick(srv))(c)
 	}
 }
 
+// withSessionAuth resolves the session server then applies observability and auth middleware.
 func withSessionAuth(
 	resolver SessionResolver,
 	pick func(*transport.Server) echo.HandlerFunc,
@@ -77,7 +80,7 @@ func withSessionAuth(
 		if err != nil {
 			return sessionHTTPError(err)
 		}
-		return srv.AuthMiddleware(pick(srv))(c)
+		return srv.ObservabilityMiddleware(srv.AuthMiddleware(pick(srv)))(c)
 	}
 }
 

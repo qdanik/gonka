@@ -53,10 +53,6 @@ func ListenAddr() string {
 	return ":8080"
 }
 
-func PrometheusTarget() string {
-	return envOrDefault("VERSIOND_PROMETHEUS_TARGET", "versiond:8080")
-}
-
 const overridePrefix = "VERSIOND_OVERRIDE_"
 
 // loadOverrides scans env vars for VERSIOND_OVERRIDE_<name>=<path>.

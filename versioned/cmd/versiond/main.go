@@ -15,7 +15,6 @@ import (
 	"versioned/internal/health"
 	"versioned/internal/oracle"
 	"versioned/internal/process"
-	"versioned/internal/promsd"
 	"versioned/internal/proxy"
 )
 
@@ -40,7 +39,6 @@ func run(ctx context.Context) error {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", health.Handler(mgr.Status))
-	mux.Handle("/prometheus/sd", promsd.Handler(mgr.RouteTable(), config.PrometheusTarget()))
 	mux.Handle("/", proxy.Handler(mgr.RouteTable()))
 
 	listenAddr := config.ListenAddr()

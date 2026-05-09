@@ -700,9 +700,12 @@ func parseNewBlockInfo(event *chainevents.JSONRPCResponse) (*chainphase.BlockInf
 		return nil, err
 	}
 
+	blockTime, _ := getBlockTime(event.Result.Data.Value) // best-effort; zero if absent
+
 	return &chainphase.BlockInfo{
 		Height: blockHeight,
 		Hash:   blockHash,
+		Time:   blockTime,
 	}, nil
 }
 
@@ -743,4 +746,27 @@ func getBlockHash(data map[string]interface{}) (string, error) {
 	}
 
 	return hash, nil
+}
+
+// getBlockTime extracts the block header timestamp from the WebSocket event.
+// CometBFT encodes block header time as an RFC3339Nano string in block.header.time.
+// Returns zero time if the field is absent or unparseable.
+func getBlockTime(data map[string]interface{}) (time.Time, error) {
+	block, ok := data["block"].(map[string]interface{})
+	if !ok {
+		return time.Time{}, errors.New("failed to access 'block' key")
+	}
+	header, ok := block["header"].(map[string]interface{})
+	if !ok {
+		return time.Time{}, errors.New("failed to access 'header' key")
+	}
+	timeStr, ok := header["time"].(string)
+	if !ok {
+		return time.Time{}, errors.New("'time' key absent or not a string")
+	}
+	t, err := time.Parse(time.RFC3339Nano, timeStr)
+	if err != nil {
+		return time.Time{}, err
+	}
+	return t, nil
 }

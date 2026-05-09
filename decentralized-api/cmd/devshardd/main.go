@@ -65,7 +65,7 @@ func main() {
 
 	prefix := os.Getenv("DEVSHARD_LOG_PREFIX")
 	runtimeVersion, err := resolveRuntimeVersion(prefix, Version)
-	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo})))
 	slog.Info("devshardd starting",
 		"build_version", Version,
 		"selected_version", prefix,
@@ -104,14 +104,7 @@ func main() {
 	if err != nil {
 		slog.Warn("failed to resolve participant address for observability", "error", err)
 	}
-	shutdownObservability, err := devshardobservability.Init(ctx, devshardobservability.Config{
-		ServiceName:        "devshardd",
-		ServiceVersion:     runtimeVersion,
-		ParticipantAddress: participantAddress,
-	})
-	if err != nil {
-		log.Fatalf("initialize devshard observability: %v", err)
-	}
+	shutdownObservability := initObservability(ctx, runtimeVersion, participantAddress)
 	defer func() {
 		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer shutdownCancel()
@@ -216,6 +209,19 @@ func main() {
 	defer shutdownCancel()
 	_ = e.Shutdown(shutdownCtx)
 	slog.Info("devshardd stopped")
+}
+
+// initObservability initialises devshard Prometheus metrics and, when
+// DEVSHARD_OTEL_ENABLED=true, OTel traces under service.name="devshardd".
+// Returns a shutdown function to be deferred.
+func initObservability(ctx context.Context, version, participantAddress string) func(context.Context) error {
+	shutdown, err := devshardobservability.Init(ctx,
+		devshardobservability.Config{ServiceName: devshardobservability.ServiceName, ServiceVersion: version, ParticipantAddress: participantAddress},
+	)
+	if err != nil {
+		log.Fatalf("initialize observability: %v", err)
+	}
+	return shutdown
 }
 
 // loadNodeConfigFromEnv builds a ChainNodeConfig from the same env vars

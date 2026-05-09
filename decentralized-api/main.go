@@ -15,6 +15,10 @@ import (
 	pserver "decentralized-api/internal/server/public"
 	"decentralized-api/mlnodeclient"
 	"decentralized-api/observability"
+	participantobs "decentralized-api/observability/participant"
+	participantprovider "decentralized-api/observability/participantprovider"
+	setupreportobs "decentralized-api/observability/setupreport"
+	setupreportprovider "decentralized-api/observability/setupreportprovider"
 	"decentralized-api/payloadstorage"
 	"decentralized-api/poc"
 	"decentralized-api/poc/artifacts"
@@ -31,6 +35,7 @@ import (
 	"decentralized-api/internal/validation"
 	"decentralized-api/logging"
 	"decentralized-api/participant"
+	devshardlogging "devshard/logging"
 	devshardstorage "devshard/storage"
 	devshardtypes "devshard/types"
 	"encoding/json"
@@ -151,25 +156,11 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel() // Ensure resources are cleaned up
 
-	shutdownObservability, err := observability.Init(ctx, observability.Config{
-		ServiceName:        observability.ServiceName,
-		ServiceVersion:     configManager.GetCurrentNodeVersion(),
-		ParticipantAddress: recorder.GetAccountAddress(),
-	})
-	if err != nil {
-		logging.Error("Failed to initialize OpenTelemetry", types.System, "error", err)
-	} else {
-		defer func() {
-			shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer shutdownCancel()
-			if shutdownErr := shutdownObservability(shutdownCtx); shutdownErr != nil {
-				logging.Error("Failed to shutdown OpenTelemetry", types.System, "error", shutdownErr)
-			}
-		}()
-	}
+	defer initializeObservability(ctx, configManager.GetCurrentNodeVersion(), recorder.GetAccountAddress())()
 
 	// Start periodic config auto-flush of dynamic data to DB
 	configManager.StartAutoFlush(ctx, 60*time.Second)
+	participantobs.SetSnapshotProvider(participantprovider.NewSnapshotProvider(recorder, nodeBroker, chainPhaseTracker))
 
 	// Optional off-chain inference stats storage (PostgreSQL-backed when PGHOST is configured).
 	statsStore, err := statsstorage.NewStatsStorage(ctx)
@@ -254,6 +245,7 @@ func main() {
 	)
 
 	if devshardSigner != nil {
+		devshardlogging.SetLogger(devshardLogAdapter{})
 		devshardBridge := internaldevshard.NewChainBridge(recorder)
 		httpClient := pserver.NewNoRedirectClient(5 * time.Minute)
 		chainParams := &configParamsProvider{cm: configManager}
@@ -314,6 +306,8 @@ func main() {
 	logging.Info("start admin server on addr", types.Server, "addr", addr)
 	adminServer := adminserver.NewServer(recorder, nodeBroker, configManager, validator, blockQueue, payloadStore)
 	adminServer.Start(addr)
+	adminServer.StartPeriodicRefresh(ctx, 60*time.Second)  // full report: all chain + MLNode checks
+	setupreportobs.SetProvider(setupreportprovider.NewProvider(chainPhaseTracker))
 
 	nmGrpcPort := configManager.GetApiConfig().NodeManagerGrpcPort
 	if nmGrpcPort == 0 {
@@ -369,6 +363,24 @@ func returnStatus(configManager *apiconfig.ConfigManager) {
 	os.Exit(0)
 }
 
+type devshardLogAdapter struct{}
+
+func (devshardLogAdapter) Info(msg string, kv ...any) {
+	slog.Info(msg, append([]any{"service", "devshard"}, kv...)...)
+}
+
+func (devshardLogAdapter) Warn(msg string, kv ...any) {
+	slog.Warn(msg, append([]any{"service", "devshard"}, kv...)...)
+}
+
+func (devshardLogAdapter) Error(msg string, kv ...any) {
+	slog.Error(msg, append([]any{"service", "devshard"}, kv...)...)
+}
+
+func (devshardLogAdapter) Debug(msg string, kv ...any) {
+	slog.Debug(msg, append([]any{"service", "devshard"}, kv...)...)
+}
+
 func getParams(ctx context.Context, transactionRecorder cosmosclient.InferenceCosmosClient) (*types.QueryParamsResponse, error) {
 	var params *types.QueryParamsResponse
 	var err error
@@ -421,4 +433,28 @@ func (p *chainPhaseEpochProvider) CurrentEpochID() uint64 {
 		return 0
 	}
 	return st.LatestEpoch.EpochIndex
+}
+
+// initializeObservability starts OpenTelemetry and returns a shutdown function
+// to be deferred by the caller.
+//
+// isHost=true (devshardSigner != nil): builds OTel providers with
+// isHost=false: calls observability.Init as usual with service.name="decentralized-api".
+func initializeObservability(ctx context.Context, serviceVersion, participantAddress string) func() {
+	shutdown, err := observability.Init(ctx, observability.Config{
+		ServiceName:        observability.ServiceName,
+		ServiceVersion:     serviceVersion,
+		ParticipantAddress: participantAddress,
+	})
+	if err != nil {
+		logging.Error("Failed to initialize OpenTelemetry", types.System, "error", err)
+		return func() {}
+	}
+	return func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if shutdownErr := shutdown(shutdownCtx); shutdownErr != nil {
+			logging.Error("Failed to shutdown OpenTelemetry", types.System, "error", shutdownErr)
+		}
+	}
 }

@@ -101,7 +101,7 @@ func (s *Server) SetGossip(g *gossip.Gossip) { s.gossip = g }
 // Register mounts all devshard routes on the given echo group.
 // The caller typically mounts this under /v1/devshard.
 func (s *Server) Register(g *echo.Group) {
-	g.Use(s.observabilityMiddleware)
+	g.Use(s.ObservabilityMiddleware)
 	g.Use(s.AuthMiddleware)
 	if s.rateLimit != nil {
 		g.Use(rateLimitMiddleware(s.rateLimit))
@@ -118,13 +118,15 @@ func (s *Server) Register(g *echo.Group) {
 	g.GET("/sessions/:id/signatures", s.HandleGetSignatures)
 }
 
-func (s *Server) observabilityMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
+// ObservabilityMiddleware records Prometheus metrics and OTel spans for each request.
+func (s *Server) ObservabilityMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
 	return func(c echo.Context) error {
 		route := c.Path()
 		if route == "" {
 			route = c.Request().URL.Path
 		}
-		requestContext, requestOp := observability.Request.StartRequest(c.Request().Context(), c.Request().Method, route)
+		ctx := observability.Request.ExtractRequestContext(c.Request().Context(), c.Request().Header)
+		requestContext, requestOp := observability.Request.StartRequest(ctx, c.Request().Method, route)
 		requestLogging := newRequestLogging(c, requestOp)
 		observability.Request.SetEscrowID(requestOp, s.host.EscrowID())
 		observability.Request.SetSessionID(requestOp, c.Param("id"))

@@ -30,11 +30,16 @@ func StartOperation(
 	metricAttrs []attribute.KeyValue,
 ) (context.Context, *Operation) {
 	initMetrics()
-	ctx, startedSpan := otel.Tracer(string(tracer)).Start(
+	ctx, startedSpan := getTracer(string(tracer)).Start(
 		ctx,
 		string(span),
 		trace.WithSpanKind(kind),
 		trace.WithAttributes(spanAttrs...),
+	)
+	logObservabilityInfo("span.start", "started span",
+		"tracer", string(tracer),
+		"span", string(span),
+		"is_recording", startedSpan.IsRecording(),
 	)
 	recordOperationStarted(metricAttrs)
 	return ctx, &Operation{
