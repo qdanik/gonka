@@ -26,6 +26,8 @@ const MaxRequestNestingDepth = 32
 
 // Per-parameter bounds wired into the catalog. Values match docs/chat-api/README.md.
 const (
+	MinTokensFloor = 64
+	
 	MessagesMaxEntries = 2048
 
 	LogitBiasMinValue   = -100
@@ -34,8 +36,6 @@ const (
 
 	StopMaxEntries  = 16
 	StopMaxEntryLen = 256
-
-	StopTokenIdsMaxEntries = 64
 
 	BadWordsMaxEntries  = 64
 	BadWordsMaxEntryLen = 128

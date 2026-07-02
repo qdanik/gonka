@@ -947,6 +947,7 @@ func (s *InferenceValidator) validateWithPayloads(inference types.Inference, inf
 	requestMap["stream"] = false
 	requestMap["skip_special_tokens"] = false
 	delete(requestMap, "stream_options")
+	completionapi.EnforceTokenBudgetFloor(requestMap)
 
 	requestBody, err := json.Marshal(requestMap)
 	if err != nil {

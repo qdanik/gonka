@@ -17,6 +17,8 @@ type ModifiedRequest struct {
 	OriginalTopLogprobsValue *int
 }
 
+const MinTokensFloor = 64
+
 func ModifyRequestBody(requestBytes []byte, defaultSeed int32) (*ModifiedRequest, error) {
 	return ModifyRequestBodyWithLogprobsMode(requestBytes, defaultSeed, "")
 }
@@ -44,12 +46,9 @@ func ModifyRequestBodyWithLogprobsMode(requestBytes []byte, defaultSeed int32, l
 		requestMap["top_logprobs"] = 5
 	}
 
-	maxTokens := getMaxTokens(requestMap)
-
-	requestMap["max_tokens"] = maxTokens
-	requestMap["max_completion_tokens"] = maxTokens
+	EnforceTokenBudgetFloor(requestMap)
 	requestMap["skip_special_tokens"] = false
-	// return_token_ids helps to fix retokinzation drift and force vllm to 
+	// return_token_ids helps to fix retokinzation drift and force vllm to
 	// response with the correct usage.completion_tokens value
 	// Reference: https://github.com/vllm-project/vllm/pull/29074
 	requestMap["return_token_ids"] = true
@@ -158,6 +157,33 @@ func validateMessageContents(requestMap map[string]interface{}) error {
 	}
 
 	return nil
+}
+
+func EnforceTokenBudgetFloor(requestMap map[string]interface{}) {
+	maxTokens := max(getMaxTokens(requestMap), MinTokensFloor)
+	minTokens := min(max(getMinTokens(requestMap), MinTokensFloor), maxTokens)
+
+	requestMap["min_tokens"] = minTokens
+	requestMap["max_tokens"] = maxTokens
+	requestMap["max_completion_tokens"] = maxTokens
+
+	// Unsupported: min_tokens>0 makes vLLM mask stop-token logits, so an out-of-vocab id CUDA-asserts the node; the floor is always on, so drop stop_token_ids.
+	delete(requestMap, "stop_token_ids")
+}
+
+func getMinTokens(requestMap map[string]interface{}) int {
+	minTokensValue, ok := requestMap["min_tokens"]
+	if !ok {
+		return 0
+	}
+	switch value := minTokensValue.(type) {
+	case float64:
+		return int(value)
+	case int:
+		return value
+	default:
+		return 0
+	}
 }
 
 func getMaxTokens(requestMap map[string]interface{}) int {
