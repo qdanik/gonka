@@ -1213,8 +1213,9 @@ func customDistance(
 		distance += posDistance
 	}
 	totalLogprobs := max(100, len(originalLogprobs))
-	if len(originalLogprobs[0].TopLogprobs) > 0 {
-		totalLogprobs *= len(originalLogprobs[0].TopLogprobs)
+	// Normalize by the validator's width (trusted), not the executor's: a padded executor top_logprobs width inflated the denominator and shrank the distance (H1 #3853145).
+	if len(validationLogprobs) > 0 && len(validationLogprobs[0].TopLogprobs) > 0 {
+		totalLogprobs *= len(validationLogprobs[0].TopLogprobs)
 	}
 
 	return distance / float64(totalLogprobs), nil
