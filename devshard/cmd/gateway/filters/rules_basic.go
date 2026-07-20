@@ -90,7 +90,7 @@ func clampFloat(min, max float64) RuleFunc {
 
 // rejectNonPositiveThenClamp clamps ctx.Param down to max, then rejects a non-positive
 // result — an exclusive lower bound can't be enforced by clamping without producing an
-// illegal value. Non-finite/unparseable values are stripped rather than rejected.
+// illegal value.
 func rejectNonPositiveThenClamp(max float64) RuleFunc {
 	return func(ctx RuleContext) error {
 		number, ok := sanitizeFloatField(ctx.Document, ctx.Param)

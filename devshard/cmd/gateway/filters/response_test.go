@@ -85,10 +85,7 @@ func TestRewriteStreamChunk_PureContentPassthrough(t *testing.T) {
 	for _, fixture := range tests {
 		t.Run(fixture, func(t *testing.T) {
 			input := readSSEFixture(t, fixture)
-			got, err := RewriteStreamChunk(input)
-			if err != nil {
-				t.Fatalf("RewriteStreamChunk() error = %v, want nil", err)
-			}
+			got := RewriteStreamChunk(input)
 			if !bytes.Equal(got, input) {
 				t.Errorf("RewriteStreamChunk() = %q, want unchanged %q", got, input)
 			}
@@ -103,10 +100,7 @@ func TestRewriteStreamChunk_EmptyAndNilInput(t *testing.T) {
 			if name == "empty" {
 				input = []byte{}
 			}
-			got, err := RewriteStreamChunk(input)
-			if err != nil {
-				t.Fatalf("RewriteStreamChunk() error = %v, want nil", err)
-			}
+			got := RewriteStreamChunk(input)
 			if len(got) != 0 {
 				t.Errorf("RewriteStreamChunk() = %q, want empty", got)
 			}
@@ -116,10 +110,7 @@ func TestRewriteStreamChunk_EmptyAndNilInput(t *testing.T) {
 
 func TestRewriteStreamChunk_DoneMarkerPreservedExactly(t *testing.T) {
 	input := readSSEFixture(t, "logprobs_stream.sse")
-	got, err := RewriteStreamChunk(input)
-	if err != nil {
-		t.Fatalf("RewriteStreamChunk() error = %v, want nil", err)
-	}
+	got := RewriteStreamChunk(input)
 	if !bytes.HasSuffix(got, []byte("data: [DONE]\n\n")) {
 		t.Errorf("RewriteStreamChunk() does not end with an unchanged [DONE] event: %q", got)
 	}
@@ -129,10 +120,7 @@ func TestRewriteStreamChunk_DoneMarkerPreservedExactly(t *testing.T) {
 
 func TestRewriteStreamChunk_StripsLogprobsFamily(t *testing.T) {
 	input := readSSEFixture(t, "logprobs_stream.sse")
-	got, err := RewriteStreamChunk(input)
-	if err != nil {
-		t.Fatalf("RewriteStreamChunk() error = %v, want nil", err)
-	}
+	got := RewriteStreamChunk(input)
 	for _, field := range []string{`"logprobs"`, `"top_logprobs"`, `"logprob"`} {
 		if bytes.Contains(got, []byte(field)) {
 			t.Errorf("RewriteStreamChunk() output still contains %s: %q", field, got)
@@ -148,10 +136,7 @@ func TestRewriteStreamChunk_StripsLogprobsFamily(t *testing.T) {
 
 func TestRewriteStreamChunk_StripsTokenIdFamily(t *testing.T) {
 	input := readSSEFixture(t, "token_ids_stream.sse")
-	got, err := RewriteStreamChunk(input)
-	if err != nil {
-		t.Fatalf("RewriteStreamChunk() error = %v, want nil", err)
-	}
+	got := RewriteStreamChunk(input)
 	for _, field := range []string{`"token_ids"`, `"prompt_token_ids"`, `"prompt_logprobs"`} {
 		if bytes.Contains(got, []byte(field)) {
 			t.Errorf("RewriteStreamChunk() output still contains %s: %q", field, got)
@@ -166,10 +151,7 @@ func TestRewriteStreamChunk_StripsTokenIdFamily(t *testing.T) {
 
 func TestRewriteStreamChunk_MixedStreamOnlyRewritesParseableEvents(t *testing.T) {
 	input := readSSEFixture(t, "malformed_data_line.sse")
-	got, err := RewriteStreamChunk(input)
-	if err != nil {
-		t.Fatalf("RewriteStreamChunk() error = %v, want nil", err)
-	}
+	got := RewriteStreamChunk(input)
 	// The well-formed first event's logprobs must be gone.
 	if bytes.Contains(got, []byte(`"token":"ok","logprob"`)) {
 		t.Error("well-formed event's logprobs was not stripped")
@@ -187,10 +169,7 @@ func TestRewriteStreamChunk_MixedStreamOnlyRewritesParseableEvents(t *testing.T)
 
 func TestRewriteStreamChunk_CommentAndBlankLinesPassThrough(t *testing.T) {
 	input := readSSEFixture(t, "comment_and_blank_lines.sse")
-	got, err := RewriteStreamChunk(input)
-	if err != nil {
-		t.Fatalf("RewriteStreamChunk() error = %v, want nil", err)
-	}
+	got := RewriteStreamChunk(input)
 	if !bytes.HasPrefix(got, []byte(": keep-alive\n\n")) {
 		t.Errorf("comment line not preserved verbatim at head of output: %q", got)
 	}
@@ -216,17 +195,10 @@ func TestRewriteStreamChunk_ChunkByChunkMatchesWholeStream(t *testing.T) {
 	for _, name := range fixtures {
 		t.Run(name, func(t *testing.T) {
 			input := readSSEFixture(t, name)
-			whole, err := RewriteStreamChunk(input)
-			if err != nil {
-				t.Fatalf("whole-stream RewriteStreamChunk() error = %v, want nil", err)
-			}
+			whole := RewriteStreamChunk(input)
 			var chunked bytes.Buffer
 			for _, event := range splitCompleteEvents(t, input) {
-				out, err := RewriteStreamChunk(event)
-				if err != nil {
-					t.Fatalf("per-event RewriteStreamChunk() error = %v, want nil", err)
-				}
-				chunked.Write(out)
+				chunked.Write(RewriteStreamChunk(event))
 			}
 			if !bytes.Equal(whole, chunked.Bytes()) {
 				t.Errorf("chunk-by-chunk result differs from whole-stream result\n whole:   %q\n chunked: %q", whole, chunked.Bytes())
@@ -248,14 +220,8 @@ func TestRewriteStreamChunk_NonEventAlignedSplitDoesNotStripAcrossBoundary(t *te
 	}
 	firstHalf, secondHalf := target[:splitAt], target[splitAt:]
 
-	firstOut, err := RewriteStreamChunk(firstHalf)
-	if err != nil {
-		t.Fatalf("RewriteStreamChunk(firstHalf) error = %v, want nil", err)
-	}
-	secondOut, err := RewriteStreamChunk(secondHalf)
-	if err != nil {
-		t.Fatalf("RewriteStreamChunk(secondHalf) error = %v, want nil", err)
-	}
+	firstOut := RewriteStreamChunk(firstHalf)
+	secondOut := RewriteStreamChunk(secondHalf)
 
 	reassembled := append(append([]byte(nil), firstOut...), secondOut...)
 	if !bytes.Equal(reassembled, target) {
@@ -284,10 +250,7 @@ func TestStripResponseBody_RemovesAllInternalFieldsAtAnyDepth(t *testing.T) {
 		"prompt_token_ids": [9, 8, 7],
 		"prompt_logprobs": null
 	}`)
-	got, err := StripResponseBody(body)
-	if err != nil {
-		t.Fatalf("StripResponseBody() error = %v, want nil", err)
-	}
+	got := StripResponseBody(body)
 	var decoded map[string]any
 	if err := json.Unmarshal(got, &decoded); err != nil {
 		t.Fatalf("StripResponseBody() produced invalid JSON: %v (%q)", err, got)
@@ -316,10 +279,7 @@ func TestStripResponseBody_RemovesAllInternalFieldsAtAnyDepth(t *testing.T) {
 
 func TestStripResponseBody_NoChangeReturnsEquivalentBytes(t *testing.T) {
 	body := []byte(`{"id":"chatcmpl-plain","choices":[{"message":{"content":"hi"}}]}`)
-	got, err := StripResponseBody(body)
-	if err != nil {
-		t.Fatalf("StripResponseBody() error = %v, want nil", err)
-	}
+	got := StripResponseBody(body)
 	if !bytes.Equal(got, body) {
 		t.Errorf("StripResponseBody() = %q, want unchanged %q", got, body)
 	}
@@ -327,20 +287,14 @@ func TestStripResponseBody_NoChangeReturnsEquivalentBytes(t *testing.T) {
 
 func TestStripResponseBody_MalformedBodyPassesThroughUnchanged(t *testing.T) {
 	body := []byte(`this is not json`)
-	got, err := StripResponseBody(body)
-	if err != nil {
-		t.Fatalf("StripResponseBody() error = %v, want nil", err)
-	}
+	got := StripResponseBody(body)
 	if !bytes.Equal(got, body) {
 		t.Errorf("StripResponseBody() = %q, want unchanged %q", got, body)
 	}
 }
 
 func TestStripResponseBody_EmptyBodyPassesThroughUnchanged(t *testing.T) {
-	got, err := StripResponseBody([]byte{})
-	if err != nil {
-		t.Fatalf("StripResponseBody() error = %v, want nil", err)
-	}
+	got := StripResponseBody([]byte{})
 	if len(got) != 0 {
 		t.Errorf("StripResponseBody() = %q, want empty", got)
 	}
@@ -348,10 +302,7 @@ func TestStripResponseBody_EmptyBodyPassesThroughUnchanged(t *testing.T) {
 
 func TestStripResponseBody_NullValuedFieldAlsoStripped(t *testing.T) {
 	body := []byte(`{"id":"x","prompt_logprobs":null,"choices":[]}`)
-	got, err := StripResponseBody(body)
-	if err != nil {
-		t.Fatalf("StripResponseBody() error = %v, want nil", err)
-	}
+	got := StripResponseBody(body)
 	var decoded map[string]any
 	if err := json.Unmarshal(got, &decoded); err != nil {
 		t.Fatalf("invalid JSON output: %v", err)

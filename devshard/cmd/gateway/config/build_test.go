@@ -21,7 +21,7 @@ func TestBuildAppliesPrecedenceDefaultsEnvOverrides(t *testing.T) {
 	overrides := Overrides{
 		DefaultMaxTokens:                    int64Pointer(1500), // ...but admin override wins over env
 		Disabled:                            boolPointer(true),
-		MaxConcurrentRequestsPer10000Weight: float64Pointer(2.5), // per-weight is env-diet-removed; overrides is now the only source
+		MaxConcurrentRequestsPer10000Weight: float64Pointer(2.5), // per-weight has no env var; admin override is its only source
 	}
 
 	configuration, err := Build(values, overrides)

@@ -29,7 +29,7 @@ func (s *Store) LoadOverrides(ctx context.Context) (config.Overrides, error) {
 
 // SaveOverrides replaces the persisted admin overrides.
 func (s *Store) SaveOverrides(ctx context.Context, overrides config.Overrides) error {
-	encoded, err := overrides.MarshalJSONBytes()
+	encoded, err := overrides.EncodeOverrides()
 	if err != nil {
 		return fmt.Errorf("saving overrides: %w", err)
 	}

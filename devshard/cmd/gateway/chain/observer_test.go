@@ -1,0 +1,829 @@
+package chain
+
+import (
+	"context"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"reflect"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"go.uber.org/goleak"
+)
+
+// phaseObserverStub serves the public-API endpoints PhaseObserver polls plus the chain-REST
+// preserved-nodes-snapshot and miner /v1/versions endpoints; status/body are mutable mid-test to
+// simulate phase transitions and errors.
+type phaseObserverStub struct {
+	mu                 sync.Mutex
+	epochStatus        int
+	epochBody          string
+	participantsStatus int
+	participantsBody   string
+	preservedStatus    int
+	preservedBody      string
+	preservedHits      int
+	versionsStatus     int
+	versionsBody       string
+}
+
+func newPhaseObserverStub() *phaseObserverStub {
+	return &phaseObserverStub{
+		epochStatus:        http.StatusOK,
+		participantsStatus: http.StatusOK,
+		preservedStatus:    http.StatusNotFound,
+		versionsStatus:     http.StatusNotFound,
+	}
+}
+
+func (s *phaseObserverStub) handler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		switch r.URL.Path {
+		case "/v1/epochs/latest":
+			w.WriteHeader(s.epochStatus)
+			w.Write([]byte(s.epochBody))
+		case "/v1/epochs/current/participants":
+			w.WriteHeader(s.participantsStatus)
+			w.Write([]byte(s.participantsBody))
+		case "/productscience/inference/inference/preserved_nodes_snapshot":
+			s.preservedHits++
+			w.WriteHeader(s.preservedStatus)
+			w.Write([]byte(s.preservedBody))
+		case "/v1/versions":
+			w.WriteHeader(s.versionsStatus)
+			w.Write([]byte(s.versionsBody))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}
+}
+
+func (s *phaseObserverStub) setEpoch(status int, body string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.epochStatus = status
+	s.epochBody = body
+}
+
+func (s *phaseObserverStub) setParticipants(status int, body string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.participantsStatus = status
+	s.participantsBody = body
+}
+
+func (s *phaseObserverStub) setPreservedSnapshot(status int, body string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.preservedStatus = status
+	s.preservedBody = body
+}
+
+func (s *phaseObserverStub) setVersions(status int, body string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.versionsStatus = status
+	s.versionsBody = body
+}
+
+func (s *phaseObserverStub) preservedHitCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.preservedHits
+}
+
+func observerEpochJSON(blockHeight int64, epochIndex uint64, phase EpochPhase) string {
+	return fmt.Sprintf(`{
+		"block_height": %d,
+		"phase": %q,
+		"latest_epoch": {"index": %d, "poc_start_block_height": 0},
+		"is_confirmation_poc_active": false
+	}`, blockHeight, string(phase), epochIndex)
+}
+
+func observerParticipantsJSON(participantAddr, inferenceURL string, pocWeight uint64) string {
+	return fmt.Sprintf(`{
+		"active_participants": {
+			"participants": [
+				{
+					"index": %q,
+					"inference_url": %q,
+					"models": ["model-a"],
+					"ml_nodes": [{"ml_nodes": [{"node_id": "node-1", "timeslot_allocation": [true, true], "poc_weight": %d}]}]
+				}
+			]
+		}
+	}`, participantAddr, inferenceURL, pocWeight)
+}
+
+// observerEpochPoCJSON is a PoCGenerate-or-Validate epoch body with an explicit PoC start height.
+func observerEpochPoCJSON(phase EpochPhase, pocStartHeight int64) string {
+	return fmt.Sprintf(`{
+		"block_height": 1000,
+		"phase": %q,
+		"latest_epoch": {"index": 7, "poc_start_block_height": %d},
+		"is_confirmation_poc_active": false
+	}`, string(phase), pocStartHeight)
+}
+
+// observerEpochConfirmationJSON is an Inference epoch body with an active confirmation-PoC event.
+func observerEpochConfirmationJSON(confirmationPhase ConfirmationPoCPhase, triggerHeight int64) string {
+	return fmt.Sprintf(`{
+		"block_height": 1000,
+		"phase": "Inference",
+		"latest_epoch": {"index": 7, "poc_start_block_height": 900},
+		"is_confirmation_poc_active": true,
+		"active_confirmation_poc_event": {"phase": %q, "trigger_height": %d}
+	}`, string(confirmationPhase), triggerHeight)
+}
+
+// observerTwoMinerParticipantsJSON has gonka1abc with a timeslot-non-preserved node1 (weight 100)
+// and gonka1bcd with a timeslot-preserved node2 (weight 40), both serving model-a from baseURL.
+func observerTwoMinerParticipantsJSON(baseURL string) string {
+	return fmt.Sprintf(`{
+		"active_participants": {
+			"participants": [
+				{
+					"index": "gonka1abc",
+					"inference_url": %q,
+					"models": ["model-a"],
+					"ml_nodes": [{"ml_nodes": [{"node_id": "node1", "timeslot_allocation": [true, false], "poc_weight": 100}]}]
+				},
+				{
+					"index": "gonka1bcd",
+					"inference_url": %q,
+					"models": ["model-a"],
+					"ml_nodes": [{"ml_nodes": [{"node_id": "node2", "timeslot_allocation": [true, true], "poc_weight": 40}]}]
+				}
+			]
+		}
+	}`, baseURL, baseURL)
+}
+
+// observerPreservedSnapshotJSON is a found preserved-nodes snapshot listing only gonka1abc/node1
+// under model-a at the given anchor height.
+func observerPreservedSnapshotJSON(anchorHeight int64) string {
+	return fmt.Sprintf(`{
+		"found": true,
+		"snapshot": {
+			"episode_anchor_height": %d,
+			"model_preserved_nodes": [
+				{"model_id": "model-a", "participants": [{"participant_id": "gonka1abc", "node_ids": ["node1"]}]}
+			]
+		}
+	}`, anchorHeight)
+}
+
+// newPoCPhaseObserver builds an observer over the stub server with ChainRESTBaseURL wired unless
+// withChainREST is false; refresh is driven directly by the tests, never via Start.
+func newPoCPhaseObserver(t *testing.T, server *httptest.Server, withChainREST bool) *PhaseObserver {
+	t.Helper()
+	clock := newFakeClock(time.Unix(100, 0))
+	cfg := ObserverConfig{
+		PublicAPIBaseURL: server.URL,
+		PollInterval:     time.Hour,
+		HTTPClient:       server.Client(),
+		Now:              clock.Now,
+	}
+	if withChainREST {
+		cfg.ChainRESTBaseURL = server.URL
+	}
+	observer, err := NewPhaseObserver(cfg)
+	if err != nil {
+		t.Fatalf("NewPhaseObserver(): %v", err)
+	}
+	return observer
+}
+
+// waitForSnapshot drains snapshots until predicate matches, failing the test if timeout elapses first.
+func waitForSnapshot(t *testing.T, snapshots <-chan PhaseSnapshot, timeout time.Duration, predicate func(PhaseSnapshot) bool) PhaseSnapshot {
+	t.Helper()
+	deadline := time.After(timeout)
+	for {
+		select {
+		case snapshot := <-snapshots:
+			if predicate(snapshot) {
+				return snapshot
+			}
+		case <-deadline:
+			t.Fatal("timed out waiting for expected snapshot")
+			return PhaseSnapshot{}
+		}
+	}
+}
+
+func TestNewPhaseObserver_EmptyPublicAPIBaseURL_Errors(t *testing.T) {
+	_, err := NewPhaseObserver(ObserverConfig{})
+	if err == nil {
+		t.Fatal("NewPhaseObserver() error = nil, want error for empty PublicAPIBaseURL")
+	}
+}
+
+func TestNewPhaseObserver_AppliesDefaultsForZeroFields(t *testing.T) {
+	observer, err := NewPhaseObserver(ObserverConfig{PublicAPIBaseURL: "http://chain.example.invalid"})
+	if err != nil {
+		t.Fatalf("NewPhaseObserver(): %v", err)
+	}
+	if observer.pollInterval != defaultObserverPollInterval {
+		t.Errorf("pollInterval = %v, want %v", observer.pollInterval, defaultObserverPollInterval)
+	}
+	if observer.client == nil {
+		t.Error("HTTP client default not applied")
+	} else if observer.client.Timeout != 5*time.Second {
+		t.Errorf("default client timeout = %v, want 5s", observer.client.Timeout)
+	}
+	if observer.now == nil {
+		t.Error("now default not applied")
+	}
+	if observer.versions == nil {
+		t.Error("versions cache not constructed")
+	}
+}
+
+// TestPhaseObserver_StartPublishesFirstSnapshotAndNotifiesSubscribers covers the immediate first
+// refresh on Start (a long PollInterval proves this isn't waiting on the ticker), the derived
+// epoch fields, and weights/inferenceURLs folded in from participants.
+func TestPhaseObserver_StartPublishesFirstSnapshotAndNotifiesSubscribers(t *testing.T) {
+	stub := newPhaseObserverStub()
+	server := httptest.NewServer(stub.handler())
+	defer server.Close()
+	stub.setEpoch(http.StatusOK, observerEpochJSON(1000, 7, EpochPhaseInference))
+	stub.setParticipants(http.StatusOK, observerParticipantsJSON("gonka1abc", server.URL, 42))
+
+	clock := newFakeClock(time.Unix(100, 0))
+	observer, err := NewPhaseObserver(ObserverConfig{
+		PublicAPIBaseURL: server.URL,
+		PollInterval:     time.Hour,
+		HTTPClient:       server.Client(),
+		Now:              clock.Now,
+	})
+	if err != nil {
+		t.Fatalf("NewPhaseObserver(): %v", err)
+	}
+
+	snapshots := make(chan PhaseSnapshot, 16)
+	defer observer.Subscribe(func(s PhaseSnapshot) { snapshots <- s })()
+
+	observer.Start(context.Background())
+	defer observer.Stop()
+
+	first := waitForSnapshot(t, snapshots, 2*time.Second, func(PhaseSnapshot) bool { return true })
+
+	if first.BlockHeight != 1000 {
+		t.Errorf("BlockHeight = %d, want 1000", first.BlockHeight)
+	}
+	if first.EpochIndex != 7 {
+		t.Errorf("EpochIndex = %d, want 7", first.EpochIndex)
+	}
+	if first.EpochPhase != EpochPhaseInference {
+		t.Errorf("EpochPhase = %q, want %q", first.EpochPhase, EpochPhaseInference)
+	}
+	if first.RequestsBlocked {
+		t.Error("RequestsBlocked = true, want false for Inference phase")
+	}
+	if first.BlockReason != BlockReasonNone {
+		t.Errorf("BlockReason = %q, want empty", first.BlockReason)
+	}
+	if !first.LastUpdatedAt.Equal(time.Unix(100, 0)) {
+		t.Errorf("LastUpdatedAt = %v, want %v", first.LastUpdatedAt, time.Unix(100, 0))
+	}
+	wantWeights := map[string]float64{"gonka1abc": 42}
+	if !reflect.DeepEqual(first.CurrentWeights, wantWeights) {
+		t.Errorf("CurrentWeights = %v, want %v", first.CurrentWeights, wantWeights)
+	}
+	wantURLs := map[string]string{"gonka1abc": server.URL}
+	if !reflect.DeepEqual(first.InferenceURLs, wantURLs) {
+		t.Errorf("InferenceURLs = %v, want %v", first.InferenceURLs, wantURLs)
+	}
+}
+
+// TestPhaseObserver_BlockedPoCPhaseSetsRequestsBlockedAndReason covers a PoC-blocking epoch phase
+// via a single direct refresh (no ticker involved).
+func TestPhaseObserver_BlockedPoCPhaseSetsRequestsBlockedAndReason(t *testing.T) {
+	stub := newPhaseObserverStub()
+	server := httptest.NewServer(stub.handler())
+	defer server.Close()
+	stub.setEpoch(http.StatusOK, observerEpochJSON(500, 3, EpochPhasePoCGenerate))
+	stub.setParticipants(http.StatusOK, observerParticipantsJSON("gonka1abc", server.URL, 10))
+
+	clock := newFakeClock(time.Unix(0, 0))
+	observer, err := NewPhaseObserver(ObserverConfig{
+		PublicAPIBaseURL: server.URL,
+		HTTPClient:       server.Client(),
+		Now:              clock.Now,
+	})
+	if err != nil {
+		t.Fatalf("NewPhaseObserver(): %v", err)
+	}
+
+	observer.refresh(context.Background())
+	snapshot := observer.Snapshot()
+
+	if !snapshot.RequestsBlocked {
+		t.Error("RequestsBlocked = false, want true for PoCGenerate phase")
+	}
+	if snapshot.BlockReason != BlockReasonPoC {
+		t.Errorf("BlockReason = %q, want %q", snapshot.BlockReason, BlockReasonPoC)
+	}
+	if snapshot.EpochPhase != EpochPhasePoCGenerate {
+		t.Errorf("EpochPhase = %q, want %q", snapshot.EpochPhase, EpochPhasePoCGenerate)
+	}
+}
+
+// TestPhaseObserver_TickerDrivesRepeatedRefreshOnPhaseChange covers the ticker loop actually
+// re-polling: a stub phase change made after the first notification must surface in a later one.
+func TestPhaseObserver_TickerDrivesRepeatedRefreshOnPhaseChange(t *testing.T) {
+	stub := newPhaseObserverStub()
+	server := httptest.NewServer(stub.handler())
+	defer server.Close()
+	stub.setEpoch(http.StatusOK, observerEpochJSON(100, 1, EpochPhaseInference))
+	stub.setParticipants(http.StatusOK, observerParticipantsJSON("gonka1abc", server.URL, 5))
+
+	clock := newFakeClock(time.Unix(0, 0))
+	observer, err := NewPhaseObserver(ObserverConfig{
+		PublicAPIBaseURL: server.URL,
+		PollInterval:     time.Millisecond,
+		HTTPClient:       server.Client(),
+		Now:              clock.Now,
+	})
+	if err != nil {
+		t.Fatalf("NewPhaseObserver(): %v", err)
+	}
+
+	snapshots := make(chan PhaseSnapshot, 256)
+	defer observer.Subscribe(func(s PhaseSnapshot) { snapshots <- s })()
+
+	observer.Start(context.Background())
+	defer observer.Stop()
+
+	waitForSnapshot(t, snapshots, 2*time.Second, func(s PhaseSnapshot) bool { return s.EpochPhase == EpochPhaseInference })
+
+	stub.setEpoch(http.StatusOK, observerEpochJSON(200, 2, EpochPhasePoCValidate))
+
+	changed := waitForSnapshot(t, snapshots, 2*time.Second, func(s PhaseSnapshot) bool { return s.EpochPhase == EpochPhasePoCValidate })
+	if !changed.RequestsBlocked || changed.BlockReason != BlockReasonPoC {
+		t.Errorf("after phase change: RequestsBlocked=%v BlockReason=%q, want true/%q", changed.RequestsBlocked, changed.BlockReason, BlockReasonPoC)
+	}
+	if changed.BlockHeight != 200 || changed.EpochIndex != 2 {
+		t.Errorf("BlockHeight/EpochIndex = %d/%d, want 200/2", changed.BlockHeight, changed.EpochIndex)
+	}
+}
+
+// TestPhaseObserver_CancelStopsFurtherNotifications drives refresh directly (no ticker) so the
+// cancel-vs-publish ordering is deterministic instead of racing a background poll loop.
+func TestPhaseObserver_CancelStopsFurtherNotifications(t *testing.T) {
+	stub := newPhaseObserverStub()
+	server := httptest.NewServer(stub.handler())
+	defer server.Close()
+	stub.setEpoch(http.StatusOK, observerEpochJSON(1, 1, EpochPhaseInference))
+	stub.setParticipants(http.StatusOK, observerParticipantsJSON("gonka1abc", server.URL, 1))
+
+	clock := newFakeClock(time.Unix(0, 0))
+	observer, err := NewPhaseObserver(ObserverConfig{
+		PublicAPIBaseURL: server.URL,
+		HTTPClient:       server.Client(),
+		Now:              clock.Now,
+	})
+	if err != nil {
+		t.Fatalf("NewPhaseObserver(): %v", err)
+	}
+
+	cancelledCount := 0
+	cancel := observer.Subscribe(func(PhaseSnapshot) { cancelledCount++ })
+	controlCount := 0
+	observer.Subscribe(func(PhaseSnapshot) { controlCount++ })
+
+	observer.refresh(context.Background())
+	if cancelledCount != 1 || controlCount != 1 {
+		t.Fatalf("after first refresh: cancelledCount=%d controlCount=%d, want 1/1", cancelledCount, controlCount)
+	}
+
+	cancel()
+	observer.refresh(context.Background())
+	observer.refresh(context.Background())
+
+	if cancelledCount != 1 {
+		t.Errorf("cancelled subscriber invoked after cancel: count=%d, want 1 (unchanged)", cancelledCount)
+	}
+	if controlCount != 3 {
+		t.Errorf("control subscriber count=%d, want 3", controlCount)
+	}
+}
+
+// TestPhaseObserver_EpochFetchErrorKeepsPreviousSnapshotWithLastError documents the chosen
+// fetch-error behavior: republish the previous snapshot unchanged except LastError.
+func TestPhaseObserver_EpochFetchErrorKeepsPreviousSnapshotWithLastError(t *testing.T) {
+	stub := newPhaseObserverStub()
+	server := httptest.NewServer(stub.handler())
+	defer server.Close()
+	stub.setEpoch(http.StatusOK, observerEpochJSON(42, 4, EpochPhaseInference))
+	stub.setParticipants(http.StatusOK, observerParticipantsJSON("gonka1abc", server.URL, 7))
+
+	clock := newFakeClock(time.Unix(0, 0))
+	observer, err := NewPhaseObserver(ObserverConfig{
+		PublicAPIBaseURL: server.URL,
+		HTTPClient:       server.Client(),
+		Now:              clock.Now,
+	})
+	if err != nil {
+		t.Fatalf("NewPhaseObserver(): %v", err)
+	}
+
+	observer.refresh(context.Background())
+	good := observer.Snapshot()
+	if good.LastError != "" {
+		t.Fatalf("precondition: LastError = %q, want empty", good.LastError)
+	}
+
+	stub.setEpoch(http.StatusInternalServerError, "")
+	observer.refresh(context.Background())
+	after := observer.Snapshot()
+
+	if after.LastError == "" {
+		t.Error("LastError = empty, want set after epoch fetch failure")
+	}
+	after.LastError = ""
+	if !reflect.DeepEqual(after, good) {
+		t.Errorf("snapshot after fetch error = %+v, want unchanged from %+v (aside from LastError)", after, good)
+	}
+}
+
+// TestPhaseObserver_ParticipantsFetchErrorKeepsPreviousWeightsWithLastError covers the
+// participants-only failure: epoch-derived fields still advance, weights/URLs stay stale.
+func TestPhaseObserver_ParticipantsFetchErrorKeepsPreviousWeightsWithLastError(t *testing.T) {
+	stub := newPhaseObserverStub()
+	server := httptest.NewServer(stub.handler())
+	defer server.Close()
+	stub.setEpoch(http.StatusOK, observerEpochJSON(42, 4, EpochPhaseInference))
+	stub.setParticipants(http.StatusOK, observerParticipantsJSON("gonka1abc", server.URL, 7))
+
+	clock := newFakeClock(time.Unix(0, 0))
+	observer, err := NewPhaseObserver(ObserverConfig{
+		PublicAPIBaseURL: server.URL,
+		HTTPClient:       server.Client(),
+		Now:              clock.Now,
+	})
+	if err != nil {
+		t.Fatalf("NewPhaseObserver(): %v", err)
+	}
+
+	observer.refresh(context.Background())
+	good := observer.Snapshot()
+	if good.LastError != "" {
+		t.Fatalf("precondition: LastError = %q, want empty", good.LastError)
+	}
+
+	stub.setEpoch(http.StatusOK, observerEpochJSON(43, 4, EpochPhaseInference))
+	stub.setParticipants(http.StatusInternalServerError, "")
+	observer.refresh(context.Background())
+	after := observer.Snapshot()
+
+	if after.LastError == "" {
+		t.Error("LastError = empty, want set after participants fetch failure")
+	}
+	if after.BlockHeight != 43 {
+		t.Errorf("BlockHeight = %d, want 43 (epoch fetch still succeeded)", after.BlockHeight)
+	}
+	if !reflect.DeepEqual(after.CurrentWeights, good.CurrentWeights) {
+		t.Errorf("CurrentWeights = %v, want stale %v", after.CurrentWeights, good.CurrentWeights)
+	}
+	if !reflect.DeepEqual(after.InferenceURLs, good.InferenceURLs) {
+		t.Errorf("InferenceURLs = %v, want stale %v", after.InferenceURLs, good.InferenceURLs)
+	}
+}
+
+// TestPhaseObserver_ContextCancelAloneStopsAllGoroutines covers shutdown driven purely by the
+// parent context: every goroutine Start spawned must exit without Stop ever being called.
+// goleak.VerifyNone is registered first so it runs last, after server.Close().
+func TestPhaseObserver_ContextCancelAloneStopsAllGoroutines(t *testing.T) {
+	defer goleak.VerifyNone(t)
+
+	stub := newPhaseObserverStub()
+	server := httptest.NewServer(stub.handler())
+	defer server.Close()
+	stub.setEpoch(http.StatusOK, observerEpochJSON(1, 1, EpochPhaseInference))
+	stub.setParticipants(http.StatusOK, observerParticipantsJSON("gonka1abc", server.URL, 1))
+
+	clock := newFakeClock(time.Unix(0, 0))
+	observer, err := NewPhaseObserver(ObserverConfig{
+		PublicAPIBaseURL: server.URL,
+		PollInterval:     time.Millisecond,
+		HTTPClient:       server.Client(),
+		Now:              clock.Now,
+	})
+	if err != nil {
+		t.Fatalf("NewPhaseObserver(): %v", err)
+	}
+
+	snapshots := make(chan PhaseSnapshot, 16)
+	defer observer.Subscribe(func(s PhaseSnapshot) { snapshots <- s })()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	observer.Start(ctx)
+	waitForSnapshot(t, snapshots, 2*time.Second, func(PhaseSnapshot) bool { return true })
+
+	cancel()
+	select {
+	case <-observer.doneCh:
+	case <-time.After(2 * time.Second):
+		t.Fatal("goroutines did not exit within 2s of context cancel")
+	}
+}
+
+// TestPhaseObserver_StopTerminatesLoopAndVersionsLoop covers clean shutdown of both goroutines
+// Start spawns; goleak.VerifyNone is registered first so it runs last, after server.Close().
+func TestPhaseObserver_StopTerminatesLoopAndVersionsLoop(t *testing.T) {
+	defer goleak.VerifyNone(t)
+
+	stub := newPhaseObserverStub()
+	server := httptest.NewServer(stub.handler())
+	defer server.Close()
+	stub.setEpoch(http.StatusOK, observerEpochJSON(1, 1, EpochPhaseInference))
+	stub.setParticipants(http.StatusOK, observerParticipantsJSON("gonka1abc", server.URL, 1))
+
+	clock := newFakeClock(time.Unix(0, 0))
+	observer, err := NewPhaseObserver(ObserverConfig{
+		PublicAPIBaseURL: server.URL,
+		PollInterval:     time.Millisecond,
+		HTTPClient:       server.Client(),
+		Now:              clock.Now,
+	})
+	if err != nil {
+		t.Fatalf("NewPhaseObserver(): %v", err)
+	}
+
+	snapshots := make(chan PhaseSnapshot, 16)
+	defer observer.Subscribe(func(s PhaseSnapshot) { snapshots <- s })()
+
+	observer.Start(context.Background())
+	waitForSnapshot(t, snapshots, 2*time.Second, func(PhaseSnapshot) bool { return true })
+
+	observer.Stop()
+}
+
+// TestPhaseObserver_StopIsIdempotentAndConcurrentSafe covers repeated and racing Stop calls: all
+// must return without panicking and leave no goroutines behind.
+func TestPhaseObserver_StopIsIdempotentAndConcurrentSafe(t *testing.T) {
+	defer goleak.VerifyNone(t)
+
+	stub := newPhaseObserverStub()
+	server := httptest.NewServer(stub.handler())
+	defer server.Close()
+	stub.setEpoch(http.StatusOK, observerEpochJSON(1, 1, EpochPhaseInference))
+	stub.setParticipants(http.StatusOK, observerParticipantsJSON("gonka1abc", server.URL, 1))
+
+	clock := newFakeClock(time.Unix(0, 0))
+	observer, err := NewPhaseObserver(ObserverConfig{
+		PublicAPIBaseURL: server.URL,
+		PollInterval:     time.Millisecond,
+		HTTPClient:       server.Client(),
+		Now:              clock.Now,
+	})
+	if err != nil {
+		t.Fatalf("NewPhaseObserver(): %v", err)
+	}
+
+	snapshots := make(chan PhaseSnapshot, 16)
+	defer observer.Subscribe(func(s PhaseSnapshot) { snapshots <- s })()
+
+	observer.Start(context.Background())
+	waitForSnapshot(t, snapshots, 2*time.Second, func(PhaseSnapshot) bool { return true })
+
+	var stops sync.WaitGroup
+	for i := 0; i < 4; i++ {
+		stops.Add(1)
+		go func() {
+			defer stops.Done()
+			observer.Stop()
+		}()
+	}
+	stops.Wait()
+	observer.Stop()
+}
+
+// TestPhaseObserver_StopBeforeStartIsNoOp covers Stop on a never-started observer: it must return
+// immediately instead of blocking on the done latch.
+func TestPhaseObserver_StopBeforeStartIsNoOp(t *testing.T) {
+	observer, err := NewPhaseObserver(ObserverConfig{PublicAPIBaseURL: "http://chain.example.invalid"})
+	if err != nil {
+		t.Fatalf("NewPhaseObserver(): %v", err)
+	}
+	observer.Stop()
+}
+
+// TestPhaseObserver_PoCCurrentPreservedSnapshotReplacesTimeslotRule covers preservation mode
+// selection when the chain-REST snapshot is found at the expected anchor: its membership fully
+// replaces the participants' timeslot-allocation proxy in both directions.
+func TestPhaseObserver_PoCCurrentPreservedSnapshotReplacesTimeslotRule(t *testing.T) {
+	stub := newPhaseObserverStub()
+	server := httptest.NewServer(stub.handler())
+	defer server.Close()
+	stub.setEpoch(http.StatusOK, observerEpochPoCJSON(EpochPhasePoCGenerate, 950))
+	stub.setParticipants(http.StatusOK, observerTwoMinerParticipantsJSON(server.URL))
+	stub.setPreservedSnapshot(http.StatusOK, observerPreservedSnapshotJSON(950))
+
+	observer := newPoCPhaseObserver(t, server, true)
+	observer.refresh(context.Background())
+	snapshot := observer.Snapshot()
+
+	if snapshot.LastError != "" {
+		t.Fatalf("LastError = %q, want empty", snapshot.LastError)
+	}
+	if want := []string{"gonka1abc"}; !reflect.DeepEqual(snapshot.Preserved, want) {
+		t.Errorf("Preserved = %v, want %v (snapshot membership, not timeslots)", snapshot.Preserved, want)
+	}
+	if want := map[string]float64{"gonka1abc": 100, "gonka1bcd": 0}; !reflect.DeepEqual(snapshot.CurrentWeights, want) {
+		t.Errorf("CurrentWeights = %v, want %v", snapshot.CurrentWeights, want)
+	}
+	if want := map[string]float64{"gonka1abc": 100, "gonka1bcd": 40}; !reflect.DeepEqual(snapshot.FullWeights, want) {
+		t.Errorf("FullWeights = %v, want %v", snapshot.FullWeights, want)
+	}
+	if want := map[string][]string{"model-a": {"gonka1abc"}}; !reflect.DeepEqual(snapshot.PreservedByModel, want) {
+		t.Errorf("PreservedByModel = %v, want %v", snapshot.PreservedByModel, want)
+	}
+}
+
+// TestPhaseObserver_ConfirmationGraceMissingSnapshotPreservesAll covers the confirmation-PoC
+// grace period with the snapshot not published yet: every participant stays preserved.
+func TestPhaseObserver_ConfirmationGraceMissingSnapshotPreservesAll(t *testing.T) {
+	stub := newPhaseObserverStub()
+	server := httptest.NewServer(stub.handler())
+	defer server.Close()
+	stub.setEpoch(http.StatusOK, observerEpochConfirmationJSON(ConfirmationPoCGracePeriod, 555))
+	stub.setParticipants(http.StatusOK, observerTwoMinerParticipantsJSON(server.URL))
+	stub.setPreservedSnapshot(http.StatusOK, `{"found": false}`)
+
+	observer := newPoCPhaseObserver(t, server, true)
+	observer.refresh(context.Background())
+	snapshot := observer.Snapshot()
+
+	if !snapshot.RequestsBlocked || snapshot.BlockReason != BlockReasonConfirmationPoC {
+		t.Fatalf("RequestsBlocked/BlockReason = %v/%q, want true/%q", snapshot.RequestsBlocked, snapshot.BlockReason, BlockReasonConfirmationPoC)
+	}
+	if snapshot.LastError != "" {
+		t.Fatalf("LastError = %q, want empty", snapshot.LastError)
+	}
+	if want := []string{"gonka1abc", "gonka1bcd"}; !reflect.DeepEqual(snapshot.Preserved, want) {
+		t.Errorf("Preserved = %v, want all participants %v", snapshot.Preserved, want)
+	}
+	if want := map[string]float64{"gonka1abc": 100, "gonka1bcd": 40}; !reflect.DeepEqual(snapshot.CurrentWeights, want) {
+		t.Errorf("CurrentWeights = %v, want all-node %v", snapshot.CurrentWeights, want)
+	}
+}
+
+// TestPhaseObserver_PoCPreservedSnapshotMissesFallBackToLegacyRule covers every miss that must
+// keep the participants-endpoint timeslot rule: endpoint absent, endpoint erroring, stale anchor,
+// snapshot missing outside grace, and no ChainRESTBaseURL configured.
+func TestPhaseObserver_PoCPreservedSnapshotMissesFallBackToLegacyRule(t *testing.T) {
+	cases := []struct {
+		name            string
+		withChainREST   bool
+		preservedStatus int
+		preservedBody   string
+		wantErrSubstr   string
+		wantZeroHits    bool
+	}{
+		{"endpoint not found", true, http.StatusNotFound, "", "", false},
+		{"endpoint server error", true, http.StatusInternalServerError, "", "preserved snapshot", false},
+		{"anchor mismatch", true, http.StatusOK, observerPreservedSnapshotJSON(900), "", false},
+		{"missing outside grace period", true, http.StatusOK, `{"found": false}`, "", false},
+		{"no chain REST base URL", false, http.StatusOK, observerPreservedSnapshotJSON(950), "", true},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			stub := newPhaseObserverStub()
+			server := httptest.NewServer(stub.handler())
+			defer server.Close()
+			stub.setEpoch(http.StatusOK, observerEpochPoCJSON(EpochPhasePoCGenerate, 950))
+			stub.setParticipants(http.StatusOK, observerTwoMinerParticipantsJSON(server.URL))
+			stub.setPreservedSnapshot(testCase.preservedStatus, testCase.preservedBody)
+
+			observer := newPoCPhaseObserver(t, server, testCase.withChainREST)
+			observer.refresh(context.Background())
+			snapshot := observer.Snapshot()
+
+			if want := []string{"gonka1bcd"}; !reflect.DeepEqual(snapshot.Preserved, want) {
+				t.Errorf("Preserved = %v, want legacy %v", snapshot.Preserved, want)
+			}
+			if want := map[string]float64{"gonka1abc": 0, "gonka1bcd": 40}; !reflect.DeepEqual(snapshot.CurrentWeights, want) {
+				t.Errorf("CurrentWeights = %v, want legacy %v", snapshot.CurrentWeights, want)
+			}
+			if testCase.wantErrSubstr == "" && snapshot.LastError != "" {
+				t.Errorf("LastError = %q, want empty", snapshot.LastError)
+			}
+			if testCase.wantErrSubstr != "" && !strings.Contains(snapshot.LastError, testCase.wantErrSubstr) {
+				t.Errorf("LastError = %q, want substring %q", snapshot.LastError, testCase.wantErrSubstr)
+			}
+			if testCase.wantZeroHits && stub.preservedHitCount() != 0 {
+				t.Errorf("preserved endpoint hits = %d, want 0 when ChainRESTBaseURL is empty", stub.preservedHitCount())
+			}
+		})
+	}
+}
+
+// observerVersionsJSON builds a /v1/versions body advertising node1/node2 capability flags.
+func observerVersionsJSON(node1Capable, node2Capable bool) string {
+	return fmt.Sprintf(`{"mlnodes": [
+		{"node_id": "node1", "poc_validation_inference": %t},
+		{"node_id": "node2", "poc_validation_inference": %t}
+	]}`, node1Capable, node2Capable)
+}
+
+// TestPhaseObserver_ValidationMergeAddsCapableExcludedMiner covers the published validation-phase
+// view: with a cold capability cache the merge stays conservative, and after a versions poll the
+// legacy-excluded miner rejoins with its capable node's weight.
+func TestPhaseObserver_ValidationMergeAddsCapableExcludedMiner(t *testing.T) {
+	stub := newPhaseObserverStub()
+	server := httptest.NewServer(stub.handler())
+	defer server.Close()
+	stub.setEpoch(http.StatusOK, observerEpochPoCJSON(EpochPhasePoCValidate, 950))
+	stub.setParticipants(http.StatusOK, observerTwoMinerParticipantsJSON(server.URL))
+	stub.setVersions(http.StatusOK, observerVersionsJSON(true, true))
+
+	observer := newPoCPhaseObserver(t, server, true)
+
+	observer.refresh(context.Background())
+	cold := observer.Snapshot()
+	if want := []string{"gonka1bcd"}; !reflect.DeepEqual(cold.Preserved, want) {
+		t.Fatalf("cold Preserved = %v, want %v (capability unknown => fail closed)", cold.Preserved, want)
+	}
+	if cold.CurrentWeights["gonka1abc"] != 0 {
+		t.Fatalf("cold CurrentWeights[gonka1abc] = %v, want 0", cold.CurrentWeights["gonka1abc"])
+	}
+
+	observer.Versions().Poll(context.Background())
+	observer.refresh(context.Background())
+	merged := observer.Snapshot()
+
+	if want := []string{"gonka1abc", "gonka1bcd"}; !reflect.DeepEqual(merged.Preserved, want) {
+		t.Errorf("merged Preserved = %v, want %v", merged.Preserved, want)
+	}
+	if want := map[string]float64{"gonka1abc": 100, "gonka1bcd": 40}; !reflect.DeepEqual(merged.CurrentWeights, want) {
+		t.Errorf("merged CurrentWeights = %v, want %v", merged.CurrentWeights, want)
+	}
+	if want := map[string]map[string]float64{"model-a": {"gonka1abc": 100, "gonka1bcd": 40}}; !reflect.DeepEqual(merged.CurrentWeightsByModel, want) {
+		t.Errorf("merged CurrentWeightsByModel = %v, want %v", merged.CurrentWeightsByModel, want)
+	}
+	if want := map[string][]string{"model-a": {"gonka1abc", "gonka1bcd"}}; !reflect.DeepEqual(merged.PreservedByModel, want) {
+		t.Errorf("merged PreservedByModel = %v, want %v", merged.PreservedByModel, want)
+	}
+	if want := map[string]float64{"gonka1abc": 100, "gonka1bcd": 40}; !reflect.DeepEqual(merged.FullWeights, want) {
+		t.Errorf("merged FullWeights = %v, want %v", merged.FullWeights, want)
+	}
+}
+
+// TestPhaseObserver_ValidationMergeExcludesNonCapableNode covers the fail-closed side: a miner
+// whose only node is not validation-inference capable never enters the published preserved set.
+func TestPhaseObserver_ValidationMergeExcludesNonCapableNode(t *testing.T) {
+	stub := newPhaseObserverStub()
+	server := httptest.NewServer(stub.handler())
+	defer server.Close()
+	stub.setEpoch(http.StatusOK, observerEpochPoCJSON(EpochPhasePoCValidate, 950))
+	stub.setParticipants(http.StatusOK, observerTwoMinerParticipantsJSON(server.URL))
+	stub.setVersions(http.StatusOK, observerVersionsJSON(false, true))
+
+	observer := newPoCPhaseObserver(t, server, true)
+	observer.refresh(context.Background())
+	observer.Versions().Poll(context.Background())
+	observer.refresh(context.Background())
+	snapshot := observer.Snapshot()
+
+	if want := []string{"gonka1bcd"}; !reflect.DeepEqual(snapshot.Preserved, want) {
+		t.Errorf("Preserved = %v, want %v (non-capable node1 excluded)", snapshot.Preserved, want)
+	}
+	if snapshot.CurrentWeights["gonka1abc"] != 0 {
+		t.Errorf("CurrentWeights[gonka1abc] = %v, want 0", snapshot.CurrentWeights["gonka1abc"])
+	}
+	if want := map[string][]string{"model-a": {"gonka1bcd"}}; !reflect.DeepEqual(snapshot.PreservedByModel, want) {
+		t.Errorf("PreservedByModel = %v, want %v", snapshot.PreservedByModel, want)
+	}
+}
+
+// TestPhaseObserver_GenerationPhaseSkipsValidationMerge covers the merge's phase gate: outside a
+// validation stage, known capability must not add excluded miners back.
+func TestPhaseObserver_GenerationPhaseSkipsValidationMerge(t *testing.T) {
+	stub := newPhaseObserverStub()
+	server := httptest.NewServer(stub.handler())
+	defer server.Close()
+	stub.setEpoch(http.StatusOK, observerEpochPoCJSON(EpochPhasePoCGenerate, 950))
+	stub.setParticipants(http.StatusOK, observerTwoMinerParticipantsJSON(server.URL))
+	stub.setVersions(http.StatusOK, observerVersionsJSON(true, true))
+
+	observer := newPoCPhaseObserver(t, server, true)
+	observer.refresh(context.Background())
+	observer.Versions().Poll(context.Background())
+	observer.refresh(context.Background())
+	snapshot := observer.Snapshot()
+
+	if want := []string{"gonka1bcd"}; !reflect.DeepEqual(snapshot.Preserved, want) {
+		t.Errorf("Preserved = %v, want %v (no merge during generation)", snapshot.Preserved, want)
+	}
+	if snapshot.CurrentWeights["gonka1abc"] != 0 {
+		t.Errorf("CurrentWeights[gonka1abc] = %v, want 0", snapshot.CurrentWeights["gonka1abc"])
+	}
+}

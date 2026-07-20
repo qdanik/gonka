@@ -95,7 +95,7 @@ var parameterTable = []ParameterSpec{
 		{Stage: StagePreValidation, Apply: rejectNonPositiveOutputTokens()},
 	}},
 	{Name: "messages", Rules: []StagedRule{
-		{Stage: StagePreValidation, Apply: capListLength(messagesMaxEntries, 0)},
+		{Stage: StagePreValidation, Apply: validListLength(messagesMaxEntries, 0)},
 	}},
 	spec("seed", StagePreValidation, requireUint()),
 	// n's greedy rule must stay after its own cap and before "temperature" below: greedy
@@ -117,7 +117,7 @@ var parameterTable = []ParameterSpec{
 		{Stage: StagePostLimits, Apply: clampFloat(penaltyMin, penaltyMax)},
 		{Stage: StagePostLimits, Apply: forceZeroPenalty()},
 	}},
-	spec("logit_bias", StagePostLimits, capFloatMap(logitBiasMinValue, logitBiasMaxValue, logitBiasMaxEntries)),
+	spec("logit_bias", StagePostLimits, validFloatMap(logitBiasMinValue, logitBiasMaxValue, logitBiasMaxEntries)),
 	spec("skip_special_tokens", StagePreValidation, requireBool()),
 	spec("detokenize", StagePreValidation, requireBool()),
 	spec("parallel_tool_calls", StagePreValidation, requireBool()),
@@ -136,18 +136,18 @@ var parameterTable = []ParameterSpec{
 	spec("think", StagePreValidation, stripParameter()),
 	{Name: "stop", Rules: []StagedRule{
 		{Stage: StagePreValidation, Apply: requireStringElements()},
-		{Stage: StagePreValidation, Apply: capListLength(stopMaxEntries, stopMaxEntryLen)},
+		{Stage: StagePreValidation, Apply: validListLength(stopMaxEntries, stopMaxEntryLen)},
 	}},
 	// Cap runs before the element-type check here (reversed vs "stop" above): an
 	// oversized array is rejected on size alone before any element is inspected.
 	{Name: "stop_token_ids", Rules: []StagedRule{
-		{Stage: StagePreValidation, Apply: capListLength(stopTokenIdsMaxEntries, 0)},
+		{Stage: StagePreValidation, Apply: validListLength(stopTokenIdsMaxEntries, 0)},
 		{Stage: StagePreValidation, Apply: requireUintElements()},
 	}},
 	{Name: "bad_words", Rules: []StagedRule{
 		{Stage: StagePreValidation, Apply: requireStringElements()},
 		{Stage: StagePreValidation, Apply: dropBlankStringListElements()},
-		{Stage: StagePreValidation, Apply: capListLength(badWordsMaxEntries, badWordsMaxEntryLen)},
+		{Stage: StagePreValidation, Apply: validListLength(badWordsMaxEntries, badWordsMaxEntryLen)},
 	}},
 	spec("metadata", StagePreValidation, validMetadata(metadataMaxKeys, metadataMaxKeyLen, metadataMaxValueLen)),
 	spec("stream_options", StagePreValidation, validStreamOptions()),

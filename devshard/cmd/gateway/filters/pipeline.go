@@ -15,10 +15,10 @@ func runPipeline(document *Document, options Options) (Result, error) {
 	if err := applyStage(StagePreValidation, document, routedModel, profile, options.Admin); err != nil {
 		return Result{}, err
 	}
-	if err := normalizeMessages(document, routedModel); err != nil {
+	if err := normalizeMessages(document); err != nil {
 		return Result{}, err
 	}
-	if err := validateMessages(document, routedModel); err != nil {
+	if err := validateMessages(document); err != nil {
 		return Result{}, err
 	}
 	view, err := decodeRequestView(document)
