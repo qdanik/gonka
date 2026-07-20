@@ -31,7 +31,7 @@ func capOutputTokens(value uint64, bypassLimit bool, limits outputTokenLimits) u
 	if value == 0 {
 		return limits.DefaultMaxTokens
 	}
-	if !bypassLimit && limits.MaxTokensCap > 0 && value > limits.MaxTokensCap {
+	if !bypassLimit && value > limits.MaxTokensCap {
 		return limits.MaxTokensCap
 	}
 	return value
@@ -156,7 +156,7 @@ func greedySamplingForceOne() RuleFunc {
 func applyOutputTokenLimits(document *Document, view *requestView, options Options) {
 	_, hasMaxTokens := document.Get("max_tokens")
 	_, hasMaxCompletionTokens := document.Get("max_completion_tokens")
-	limits := normalizedOutputTokenLimits(outputTokenLimits{DefaultMaxTokens: options.DefaultMaxTokens, MaxTokensCap: options.MaxTokensCap})
+	limits := outputTokenLimits{DefaultMaxTokens: options.DefaultMaxTokens, MaxTokensCap: options.MaxTokensCap}
 
 	var resolved uint64
 	switch {

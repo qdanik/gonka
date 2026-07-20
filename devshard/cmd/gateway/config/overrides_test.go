@@ -23,9 +23,9 @@ func TestOverridesJSONRoundTrip(t *testing.T) {
 		},
 	}
 
-	encoded, err := original.MarshalJSONBytes()
+	encoded, err := original.EncodeOverrides()
 	if err != nil {
-		t.Fatalf("MarshalJSONBytes(): %v", err)
+		t.Fatalf("EncodeOverrides(): %v", err)
 	}
 	decoded, err := ParseOverrides(encoded)
 	if err != nil {

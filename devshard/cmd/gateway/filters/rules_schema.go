@@ -183,10 +183,46 @@ func buildStructuredOutputsKnownFields() map[string]struct{} {
 	return known
 }
 
+// structuredOutputsConstraintValidators pairs each constraint field with its validator so a new
+// field can't be added without one -- see the coverage test below.
+func structuredOutputsConstraintValidators(bounds structuredOutputsBounds) map[string]func(value any) error {
+	return map[string]func(value any) error{
+		"json": func(value any) error {
+			schema, ok := value.(map[string]any)
+			if !ok {
+				return Reject("structured_outputs.json: must be an object (string-encoded schemas are not accepted)")
+			}
+			if err := bounds.Check(schema); err != nil {
+				return Reject("structured_outputs.json: %v", err)
+			}
+			return nil
+		},
+		"regex": func(value any) error {
+			return validStructuredOutputsPattern(value, bounds.MaxPatternLen, "regex")
+		},
+		"choice": func(value any) error {
+			return validStructuredOutputsChoice(value, bounds.MaxChoiceEntries, bounds.MaxChoiceEntryLen, bounds.MaxSizeBytes)
+		},
+		"grammar": func(value any) error {
+			return validStructuredOutputsGrammar(value, bounds.MaxGrammarLen, bounds.MaxGrammarNesting)
+		},
+		"json_object": func(value any) error {
+			if _, ok := value.(bool); !ok {
+				return Reject("structured_outputs.json_object: must be a boolean")
+			}
+			return nil
+		},
+		"structural_tag": func(value any) error {
+			return validStructuredOutputsStructuralTag(value, bounds.MaxStructuralTagLen)
+		},
+	}
+}
+
 // validStructuredOutputs enforces object shape, no response_format conflict, a closed
 // sub-field whitelist, exactly one constraint field set, and each constraint's own bounds;
 // profiles with RejectStructuredOutput reject the field outright (no matching route).
 func validStructuredOutputs(bounds structuredOutputsBounds) RuleFunc {
+	constraintValidators := structuredOutputsConstraintValidators(bounds)
 	return func(ctx RuleContext) error {
 		raw, exists := ctx.Document.Get("structured_outputs")
 		if !exists {
@@ -224,37 +260,12 @@ func validStructuredOutputs(bounds structuredOutputsBounds) RuleFunc {
 			}
 			return Reject("structured_outputs: exactly one of json/regex/choice/grammar/json_object/structural_tag must be set (got %d: %s)", set, strings.Join(setNames, ", "))
 		}
-		if value, ok := object["json"]; ok && value != nil {
-			schema, ok := value.(map[string]any)
-			if !ok {
-				return Reject("structured_outputs.json: must be an object (string-encoded schemas are not accepted)")
+		for _, field := range structuredOutputsConstraintFields {
+			value, ok := object[field]
+			if !ok || value == nil {
+				continue
 			}
-			if err := bounds.Check(schema); err != nil {
-				return Reject("structured_outputs.json: %v", err)
-			}
-		}
-		if value, ok := object["regex"]; ok && value != nil {
-			if err := validStructuredOutputsPattern(value, bounds.MaxPatternLen, "regex"); err != nil {
-				return err
-			}
-		}
-		if value, ok := object["choice"]; ok && value != nil {
-			if err := validStructuredOutputsChoice(value, bounds.MaxChoiceEntries, bounds.MaxChoiceEntryLen, bounds.MaxSizeBytes); err != nil {
-				return err
-			}
-		}
-		if value, ok := object["grammar"]; ok && value != nil {
-			if err := validStructuredOutputsGrammar(value, bounds.MaxGrammarLen, bounds.MaxGrammarNesting); err != nil {
-				return err
-			}
-		}
-		if value, ok := object["json_object"]; ok && value != nil {
-			if _, ok := value.(bool); !ok {
-				return Reject("structured_outputs.json_object: must be a boolean")
-			}
-		}
-		if value, ok := object["structural_tag"]; ok && value != nil {
-			if err := validStructuredOutputsStructuralTag(value, bounds.MaxStructuralTagLen); err != nil {
+			if err := constraintValidators[field](value); err != nil {
 				return err
 			}
 		}

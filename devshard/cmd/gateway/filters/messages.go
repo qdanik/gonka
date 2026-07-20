@@ -55,8 +55,7 @@ var messageNormalizerChain = []messageNormalizer{
 }
 
 // normalizeMessages runs the hygiene chain and writes the array back only if it changed.
-// Rules are global: no per-model variant exists, so routedModel is unused.
-func normalizeMessages(document *Document, routedModel string) error {
+func normalizeMessages(document *Document) error {
 	messages, ok := document.Array("messages")
 	if !ok {
 		return nil
@@ -224,8 +223,8 @@ func flattenMessageTextParts(messages []any) ([]any, bool, error) {
 }
 
 // validateMessages enforces message shape and per-role policy, tracking which assistant
-// tool_calls are still pending a matching tool reply. Rules are global, like normalizeMessages.
-func validateMessages(document *Document, routedModel string) error {
+// tool_calls are still pending a matching tool reply.
+func validateMessages(document *Document) error {
 	rawMessages, exists := document.Array("messages")
 	if !exists {
 		return Reject("messages is required")

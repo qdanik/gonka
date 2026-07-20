@@ -23,7 +23,6 @@ import (
 // Version is stamped by the build via -ldflags "-X main.Version=...".
 var Version = "dev"
 
-// shutdownGracePeriod bounds how long in-flight HTTP work may drain.
 const shutdownGracePeriod = 10 * time.Second
 
 func main() {
@@ -99,8 +98,8 @@ func run(ctx context.Context) error {
 	return nil
 }
 
-// resolveStorageDir picks the storage directory: explicit value or the
-// platform default ~/.cache/gonka-gateway (created if it doesn't exist).
+// resolveStorageDir returns the explicit dir, or the default
+// ~/.cache/gonka-gateway.
 func resolveStorageDir(explicit *string) (string, error) {
 	if explicit != nil {
 		return *explicit, nil

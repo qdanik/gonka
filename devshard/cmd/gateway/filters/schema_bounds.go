@@ -235,8 +235,7 @@ func (b ObjectBounds) walk(value any, depth int, nodes *int) error {
 	return nil
 }
 
-// depthExceededError and nodesExceededError render identically for SchemaBounds and
-// ObjectBounds — the rejection class is the same regardless of which walker found it.
+// depthExceededError and nodesExceededError: shared so both walkers render identical rejections.
 func depthExceededError(maxDepth int) error {
 	return fmt.Errorf("nesting depth exceeded: limit %d", maxDepth)
 }

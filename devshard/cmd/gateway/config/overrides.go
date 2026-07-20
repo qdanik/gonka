@@ -7,8 +7,7 @@ import (
 )
 
 // Overrides is the admin-tunable subset of Config, persisted by the store and
-// merged over env by Build. Nil field = not overridden. This struct grows as
-// more settings become admin-tunable.
+// merged over env by Build. Nil field = not overridden.
 type Overrides struct {
 	DefaultMaxTokens                       *int64                 `json:"default_max_tokens,omitempty"`
 	MaxTokensCap                           *int64                 `json:"max_tokens_cap,omitempty"`
@@ -45,8 +44,8 @@ func ParseOverrides(raw []byte) (Overrides, error) {
 	return overrides, nil
 }
 
-// MarshalJSONBytes encodes the overrides for persistence.
-func (o Overrides) MarshalJSONBytes() ([]byte, error) {
+// EncodeOverrides encodes the overrides for persistence.
+func (o Overrides) EncodeOverrides() ([]byte, error) {
 	encoded, err := json.Marshal(o)
 	if err != nil {
 		return nil, fmt.Errorf("encoding overrides: %w", err)

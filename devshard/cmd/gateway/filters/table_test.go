@@ -18,7 +18,7 @@ func TestTableNamesAreUnique(t *testing.T) {
 	}
 }
 
-// Covers the names the framework itself depends on (see table.go's deviation note on "messages").
+// Covers the names the framework itself depends on.
 func TestTableKnownParametersContainsFrameworkFields(t *testing.T) {
 	for _, name := range []string{"model", "stream", "max_tokens", "max_completion_tokens", "messages"} {
 		if _, ok := knownParameterSet[name]; !ok {
