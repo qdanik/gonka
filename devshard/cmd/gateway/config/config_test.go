@@ -154,9 +154,8 @@ func TestValidateCatchesEveryRuleBreach(t *testing.T) {
 	}
 }
 
-// TestValidateAcceptsModelLimitsWithNilOptionalPointers carries forward a
-// review case (Amendment E): a ModelLimits entry with only the required
-// token pair set and both optional pointers nil must validate cleanly.
+// TestValidateAcceptsModelLimitsWithNilOptionalPointers: a ModelLimits entry
+// with only the required token pair set and both optional pointers nil must validate cleanly.
 func TestValidateAcceptsModelLimitsWithNilOptionalPointers(t *testing.T) {
 	configuration := Defaults()
 	configuration.Limits.ModelLimits = map[string]ModelLimits{
@@ -167,9 +166,8 @@ func TestValidateAcceptsModelLimitsWithNilOptionalPointers(t *testing.T) {
 	}
 }
 
-// TestValidateAcceptsEmptyTxQueryFallbackURLs carries forward a review case
-// (Amendment E): an empty fallback list is a valid, explicit operator choice
-// to accept weakened recovery, not a validation error.
+// TestValidateAcceptsEmptyTxQueryFallbackURLs: an empty fallback list is a
+// valid, explicit operator choice to accept weakened recovery, not a validation error.
 func TestValidateAcceptsEmptyTxQueryFallbackURLs(t *testing.T) {
 	configuration := Defaults()
 	configuration.Chain.TxQueryFallbackURLs = []string{}

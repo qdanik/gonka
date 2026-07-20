@@ -15,94 +15,81 @@ import (
 func Build(values env.Values, overrides Overrides) (*Config, error) {
 	configuration := Defaults()
 
-	applyInt := func(target *int64, source *int64) {
-		if source != nil {
-			*target = *source
-		}
-	}
-	applyFloat := func(target *float64, source *float64) {
-		if source != nil {
-			*target = *source
-		}
-	}
-	applyString := func(target *string, source *string) {
-		if source != nil {
-			*target = *source
-		}
-	}
-	applyBool := func(target *bool, source *bool) {
-		if source != nil {
-			*target = *source
-		}
-	}
-
 	// Environment layer.
-	applyInt(&configuration.Server.Port, values.Port)
-	applyString(&configuration.Server.StorageDir, values.StorageDir)
+	overrideIfSet(&configuration.Server.Port, values.Port)
+	overrideIfSet(&configuration.Server.StorageDir, values.StorageDir)
 	if values.APIKeys != nil {
 		configuration.Server.APIKeys = splitCommaSeparated(*values.APIKeys)
 	}
-	applyString(&configuration.Server.AdminAPIKey, values.AdminAPIKey)
-	applyString(&configuration.Server.DevshardsJSON, values.DevshardsJSON)
+	overrideIfSet(&configuration.Server.AdminAPIKey, values.AdminAPIKey)
+	overrideIfSet(&configuration.Server.DevshardsJSON, values.DevshardsJSON)
 
-	applyString(&configuration.Chain.RESTBaseURL, values.ChainREST)
-	applyString(&configuration.Chain.PublicAPIBaseURL, values.PublicAPI)
+	overrideIfSet(&configuration.Chain.RESTBaseURL, values.ChainREST)
+	overrideIfSet(&configuration.Chain.PublicAPIBaseURL, values.PublicAPI)
 	if values.TxQueryFallbackURLs != nil {
 		configuration.Chain.TxQueryFallbackURLs = splitCommaSeparated(*values.TxQueryFallbackURLs)
 	}
-	applyInt(&configuration.Tx.FeeAmount, values.TxFeeAmount)
-	applyInt(&configuration.Tx.GasLimit, values.TxGasLimit)
+	overrideIfSet(&configuration.Tx.FeeAmount, values.TxFeeAmount)
+	overrideIfSet(&configuration.Tx.GasLimit, values.TxGasLimit)
 
-	applyInt(&configuration.Limits.DefaultMaxTokens, values.DefaultMaxTokens)
-	applyInt(&configuration.Limits.MaxTokensCap, values.MaxTokensCap)
-	applyInt(&configuration.Limits.Concurrency.MaxRequests, values.MaxConcurrentRequests)
+	overrideIfSet(&configuration.Limits.DefaultMaxTokens, values.DefaultMaxTokens)
+	overrideIfSet(&configuration.Limits.MaxTokensCap, values.MaxTokensCap)
+	overrideIfSet(&configuration.Limits.Concurrency.MaxRequests, values.MaxConcurrentRequests)
 
-	applyString(&configuration.Modes.PoCMode, values.PoCMode)
-	applyBool(&configuration.Modes.CapacityAwareLimits, values.CapacityAwareLimits)
-	applyBool(&configuration.Modes.Disabled, values.Disabled)
-	applyString(&configuration.Modes.DisabledMessage, values.DisabledMessage)
-	applyString(&configuration.Modes.DisabledRedirectURL, values.DisabledRedirectURL)
+	overrideIfSet(&configuration.Modes.PoCMode, values.PoCMode)
+	overrideIfSet(&configuration.Modes.CapacityAwareLimits, values.CapacityAwareLimits)
+	overrideIfSet(&configuration.Modes.Disabled, values.Disabled)
+	overrideIfSet(&configuration.Modes.DisabledMessage, values.DisabledMessage)
+	overrideIfSet(&configuration.Modes.DisabledRedirectURL, values.DisabledRedirectURL)
 
-	applyBool(&configuration.Rotation.Enabled, values.RotationEnabled)
-	applyBool(&configuration.Rotation.SettlementEnabled, values.RotationSettlementEnabled)
-	applyString(&configuration.Rotation.ModelsJSON, values.RotationModelsJSON)
+	overrideIfSet(&configuration.Rotation.Enabled, values.RotationEnabled)
+	overrideIfSet(&configuration.Rotation.SettlementEnabled, values.RotationSettlementEnabled)
+	overrideIfSet(&configuration.Rotation.ModelsJSON, values.RotationModelsJSON)
 
-	applyInt(&configuration.Cache.ChatCacheMaxBytes, values.ChatCacheMaxBytes)
+	overrideIfSet(&configuration.Cache.ChatCacheMaxBytes, values.ChatCacheMaxBytes)
 
-	applyBool(&configuration.Capture.Enabled, values.CaptureEnabled)
-	applyString(&configuration.Capture.Dir, values.CaptureDir)
+	overrideIfSet(&configuration.Capture.Enabled, values.CaptureEnabled)
+	overrideIfSet(&configuration.Capture.Dir, values.CaptureDir)
 
 	// Admin-override layer (wins over env).
-	applyInt(&configuration.Limits.DefaultMaxTokens, overrides.DefaultMaxTokens)
-	applyInt(&configuration.Limits.MaxTokensCap, overrides.MaxTokensCap)
-	applyInt(&configuration.Limits.Concurrency.MaxRequests, overrides.MaxConcurrentRequests)
-	applyFloat(&configuration.Limits.Concurrency.RequestsPer10000Weight, overrides.MaxConcurrentRequestsPer10000Weight)
-	applyFloat(&configuration.Limits.Concurrency.PoCRequestsPer10000Weight, overrides.PoCMaxConcurrentRequestsPer10000Weight)
-	applyInt(&configuration.Limits.MaxInputTokensInFlight, overrides.MaxInputTokensInFlight)
-	applyInt(&configuration.Limits.AcquireWaitMS, overrides.AcquireWaitMS)
-	applyInt(&configuration.Limits.AIMD.InitialWindow, overrides.AIMDInitialWindow)
-	applyInt(&configuration.Limits.AIMD.MaxWindow, overrides.AIMDMaxWindow)
-	applyInt(&configuration.Limits.Breaker.TripThreshold, overrides.BreakerTripThreshold)
-	applyInt(&configuration.Limits.Breaker.BaseOpenMS, overrides.BreakerBaseOpenMS)
-	applyInt(&configuration.Limits.Breaker.MaxOpenMS, overrides.BreakerMaxOpenMS)
+	overrideIfSet(&configuration.Limits.DefaultMaxTokens, overrides.DefaultMaxTokens)
+	overrideIfSet(&configuration.Limits.MaxTokensCap, overrides.MaxTokensCap)
+	overrideIfSet(&configuration.Limits.Concurrency.MaxRequests, overrides.MaxConcurrentRequests)
+	overrideIfSet(&configuration.Limits.Concurrency.RequestsPer10000Weight, overrides.MaxConcurrentRequestsPer10000Weight)
+	overrideIfSet(&configuration.Limits.Concurrency.PoCRequestsPer10000Weight, overrides.PoCMaxConcurrentRequestsPer10000Weight)
+	overrideIfSet(&configuration.Limits.MaxInputTokensInFlight, overrides.MaxInputTokensInFlight)
+	overrideIfSet(&configuration.Limits.AcquireWaitMS, overrides.AcquireWaitMS)
+	overrideIfSet(&configuration.Limits.AIMD.InitialWindow, overrides.AIMDInitialWindow)
+	overrideIfSet(&configuration.Limits.AIMD.MaxWindow, overrides.AIMDMaxWindow)
+	overrideIfSet(&configuration.Limits.Breaker.TripThreshold, overrides.BreakerTripThreshold)
+	overrideIfSet(&configuration.Limits.Breaker.BaseOpenMS, overrides.BreakerBaseOpenMS)
+	overrideIfSet(&configuration.Limits.Breaker.MaxOpenMS, overrides.BreakerMaxOpenMS)
 	if overrides.ModelLimits != nil {
 		configuration.Limits.ModelLimits = maps.Clone(overrides.ModelLimits)
 	}
 	if overrides.ModelAccess != nil {
 		configuration.Limits.ModelAccess = maps.Clone(overrides.ModelAccess)
 	}
-	applyBool(&configuration.Modes.Disabled, overrides.Disabled)
-	applyString(&configuration.Modes.DisabledMessage, overrides.DisabledMessage)
-	applyString(&configuration.Modes.DisabledRedirectURL, overrides.DisabledRedirectURL)
-	applyBool(&configuration.Rotation.Enabled, overrides.RotationEnabled)
-	applyBool(&configuration.Rotation.SettlementEnabled, overrides.RotationSettlementEnabled)
-	applyInt(&configuration.Rotation.PrePoCBlocks, overrides.RotationPrePoCBlocks)
-	applyString(&configuration.Rotation.ModelsJSON, overrides.RotationModelsJSON)
+	overrideIfSet(&configuration.Modes.Disabled, overrides.Disabled)
+	overrideIfSet(&configuration.Modes.DisabledMessage, overrides.DisabledMessage)
+	overrideIfSet(&configuration.Modes.DisabledRedirectURL, overrides.DisabledRedirectURL)
+	overrideIfSet(&configuration.Rotation.Enabled, overrides.RotationEnabled)
+	overrideIfSet(&configuration.Rotation.SettlementEnabled, overrides.RotationSettlementEnabled)
+	overrideIfSet(&configuration.Rotation.PrePoCBlocks, overrides.RotationPrePoCBlocks)
+	overrideIfSet(&configuration.Rotation.ModelsJSON, overrides.RotationModelsJSON)
 
 	if err := configuration.Validate(); err != nil {
 		return nil, err
 	}
 	return &configuration, nil
+}
+
+// overrideIfSet copies *source into *target when the operator supplied a
+// value (source != nil); a nil source leaves the lower layer in place.
+func overrideIfSet[T any](target, source *T) {
+	if source != nil {
+		*target = *source
+	}
 }
 
 // splitCommaSeparated trims and drops empty elements, so it always returns a

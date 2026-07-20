@@ -1,5 +1,5 @@
 // Command gateway is the devshard gateway between the broker and race
-// participants. Design spec: cmd/gateway/specs/2026-07-17-gateway-redesign-design.md.
+// participants.
 package main
 
 import (
@@ -36,7 +36,7 @@ func main() {
 }
 
 // run wires the gateway and serves until ctx is cancelled. Shutdown order is
-// contract for later phases: stop accepting HTTP first, close the store last.
+// a fixed contract: stop accepting HTTP first, close the store last.
 func run(ctx context.Context) error {
 	values, err := env.Load()
 	if err != nil {
@@ -72,13 +72,14 @@ func run(ctx context.Context) error {
 	mux := http.NewServeMux()
 	mux.Handle("GET /metrics", gatewayMetrics.InstrumentRoute("/metrics", gatewayMetrics.Handler()))
 
+	port := configHolder.Load().Server.Port
 	server := &http.Server{
-		Addr:    fmt.Sprintf(":%d", configHolder.Load().Server.Port),
+		Addr:    fmt.Sprintf(":%d", port),
 		Handler: mux,
 	}
 	serveResult := make(chan error, 1)
 	go func() { serveResult <- server.ListenAndServe() }()
-	logging.Info("gateway started", "version", Version, "port", configHolder.Load().Server.Port, "storage_dir", storageDir)
+	logging.Info("gateway started", "version", Version, "port", port, "storage_dir", storageDir)
 
 	select {
 	case err := <-serveResult:
@@ -99,7 +100,7 @@ func run(ctx context.Context) error {
 }
 
 // resolveStorageDir picks the storage directory: explicit value or the
-// platform default ~/.cache/gonka-gateway (fresh dir, spec §16).
+// platform default ~/.cache/gonka-gateway (created if it doesn't exist).
 func resolveStorageDir(explicit *string) (string, error) {
 	if explicit != nil {
 		return *explicit, nil
