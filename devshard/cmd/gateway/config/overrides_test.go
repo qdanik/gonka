@@ -47,8 +47,8 @@ func TestOverridesJSONRoundTrip(t *testing.T) {
 	if decodedMaxConcurrentRequests == nil || *decodedMaxConcurrentRequests != 64 {
 		t.Fatalf("ModelLimits[model-a].MaxConcurrentRequests = %v, want 64", decodedMaxConcurrentRequests)
 	}
-	// Amendment E carried case: the round trip must also preserve the
-	// per-model MaxInputTokensInFlight pointer, not just MaxConcurrentRequests.
+	// The round trip must also preserve the per-model MaxInputTokensInFlight
+	// pointer, not just MaxConcurrentRequests.
 	decodedMaxInputTokensInFlight := decoded.ModelLimits["model-a"].MaxInputTokensInFlight
 	if decodedMaxInputTokensInFlight == nil || *decodedMaxInputTokensInFlight != 8192 {
 		t.Fatalf("ModelLimits[model-a].MaxInputTokensInFlight = %v, want 8192", decodedMaxInputTokensInFlight)
