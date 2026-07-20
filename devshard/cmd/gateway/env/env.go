@@ -11,8 +11,7 @@ import (
 	"strings"
 )
 
-// Values mirrors every GATEWAY_* environment variable. A nil field means the
-// variable was unset or blank; config.Build applies defaults in that case.
+// Values mirrors every GATEWAY_* environment variable; nil = unset.
 type Values struct {
 	Port          *int64
 	StorageDir    *string

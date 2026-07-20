@@ -485,8 +485,8 @@ Steps: unit tests per normalizer + per role policy → red → implement → gre
 ```go
 // response.go
 var clientStrippedFields = []string{...}   // EXACT old list (stream_rewrite.go:193-207) — declared adjacent to the force rules' values with a cross-check test
-func RewriteStreamChunk(chunk []byte) ([]byte, error)      // SSE data: line rewrite, [DONE] passthrough — old rewriteStreamingPayload semantics
-func StripResponseBody(body []byte) ([]byte, error)        // non-streaming equivalent (old filterClientInternalFields)
+func RewriteStreamChunk(chunk []byte) []byte      // SSE data: line rewrite, [DONE] passthrough — old rewriteStreamingPayload semantics
+func StripResponseBody(body []byte) []byte        // non-streaming equivalent (old filterClientInternalFields)
 func IsCacheableUpstreamError(status int, body []byte) bool // old response_cache.go:300-334 isCacheableOpenAIErrorDetails semantics
 ```
 

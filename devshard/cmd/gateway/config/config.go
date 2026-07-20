@@ -1,9 +1,7 @@
 // Package config owns the gateway's immutable configuration snapshot:
-// defaults ← environment ← admin overrides. A *Config is never mutated after
-// Build; hot reconfiguration swaps the whole snapshot (see Holder). Maps and
-// slices inside Config are part of that contract: treat them as read-only,
-// and Build must clone every map/slice it takes from its inputs so no caller
-// can mutate a published snapshot through a retained reference.
+// defaults ← environment ← admin overrides. A snapshot is never mutated after
+// Build — reconfiguration swaps the whole snapshot (see Holder) — and Build
+// clones every map/slice it takes from its inputs.
 package config
 
 import (
@@ -15,7 +13,7 @@ import (
 // Server groups process-level settings.
 type Server struct {
 	Port                       int64
-	StorageDir                 string // always the resolved absolute path; main resolves it before Build
+	StorageDir                 string // resolved by main before Build (default applied; never unset there)
 	APIKeys                    []string
 	AdminAPIKey                string
 	DevshardsJSON              string
@@ -193,18 +191,18 @@ func Defaults() Config {
 			PrePoCBlocks: 300,
 		},
 		Cache: Cache{
-			ChatCacheMaxBytes: 268_435_456,
+			ChatCacheMaxBytes: 256 << 20,
 		},
 		Capture: Capture{
 			ShortContentMinOutputChunks:  1_000,
 			ShortContentMaxContentRatio:  0.75,
-			ShortContentResponseMaxBytes: 16_777_216,
+			ShortContentResponseMaxBytes: 16 << 20,
 		},
 		Stream: Stream{
 			DrainTimeoutSeconds:         2_400,
-			ClassifyMaxAttemptBytes:     1_048_576,
-			ClassifyMaxParticipantBytes: 10_485_760,
-			ClassifyMaxGlobalBytes:      104_857_600,
+			ClassifyMaxAttemptBytes:     1 << 20,
+			ClassifyMaxParticipantBytes: 10 << 20,
+			ClassifyMaxGlobalBytes:      100 << 20,
 		},
 	}
 }

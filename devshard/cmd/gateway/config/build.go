@@ -7,11 +7,8 @@ import (
 	"devshard/cmd/gateway/env"
 )
 
-// Build produces the immutable snapshot: Defaults() ← env values ← admin
-// overrides, validated as a whole. The returned *Config must never be
-// mutated. Every map/slice taken from values/overrides is cloned into the
-// snapshot (see the no-aliasing contract in config.go) so a caller mutating
-// its own map/slice after Build cannot reach the published snapshot.
+// Build produces the validated snapshot: Defaults() ← env ← admin overrides.
+// Maps/slices from inputs are cloned (no-aliasing contract — see package doc).
 func Build(values env.Values, overrides Overrides) (*Config, error) {
 	configuration := Defaults()
 
@@ -84,16 +81,14 @@ func Build(values env.Values, overrides Overrides) (*Config, error) {
 	return &configuration, nil
 }
 
-// overrideIfSet copies *source into *target when the operator supplied a
-// value (source != nil); a nil source leaves the lower layer in place.
+// overrideIfSet: a nil source leaves the lower layer's value in place.
 func overrideIfSet[T any](target, source *T) {
 	if source != nil {
 		*target = *source
 	}
 }
 
-// splitCommaSeparated trims and drops empty elements, so it always returns a
-// freshly allocated slice — callers do not need a further clone.
+// splitCommaSeparated trims, drops empties, and always returns a fresh slice (no clone needed).
 func splitCommaSeparated(raw string) []string {
 	parts := strings.Split(raw, ",")
 	cleaned := make([]string, 0, len(parts))

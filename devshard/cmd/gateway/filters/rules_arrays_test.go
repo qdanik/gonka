@@ -8,7 +8,7 @@ import (
 	"devshard"
 )
 
-func TestArraysCapListLength(t *testing.T) {
+func TestArraysValidListLength(t *testing.T) {
 	const param = "stop"
 	tests := []struct {
 		name    string
@@ -26,18 +26,18 @@ func TestArraysCapListLength(t *testing.T) {
 	for _, testCase := range tests {
 		t.Run(testCase.name, func(t *testing.T) {
 			document := parseTestDocument(t, testCase.body)
-			err := capListLength(16, 256)(RuleContext{Document: document, Param: param})
+			err := validListLength(16, 256)(RuleContext{Document: document, Param: param})
 			if testCase.wantErr == "" {
 				if err != nil {
-					t.Fatalf("capListLength() = %v, want nil", err)
+					t.Fatalf("validListLength() = %v, want nil", err)
 				}
 				return
 			}
 			if err == nil {
-				t.Fatal("capListLength() = nil, want error")
+				t.Fatal("validListLength() = nil, want error")
 			}
 			if err.Error() != testCase.wantErr {
-				t.Errorf("capListLength() error = %q, want %q", err.Error(), testCase.wantErr)
+				t.Errorf("validListLength() error = %q, want %q", err.Error(), testCase.wantErr)
 			}
 			if got := ErrorStatus(err, 0); got != 400 {
 				t.Errorf("ErrorStatus() = %d, want 400", got)
@@ -46,14 +46,14 @@ func TestArraysCapListLength(t *testing.T) {
 	}
 	t.Run("absent is a no-op", func(t *testing.T) {
 		document := parseTestDocument(t, `{}`)
-		if err := capListLength(16, 256)(RuleContext{Document: document, Param: param}); err != nil {
-			t.Fatalf("capListLength() = %v, want nil", err)
+		if err := validListLength(16, 256)(RuleContext{Document: document, Param: param}); err != nil {
+			t.Fatalf("validListLength() = %v, want nil", err)
 		}
 	})
 	t.Run("entry cap disabled by zero", func(t *testing.T) {
 		document := parseTestDocument(t, `{"stop":["a","a","a"]}`)
-		if err := capListLength(0, 0)(RuleContext{Document: document, Param: param}); err != nil {
-			t.Fatalf("capListLength() = %v, want nil", err)
+		if err := validListLength(0, 0)(RuleContext{Document: document, Param: param}); err != nil {
+			t.Fatalf("validListLength() = %v, want nil", err)
 		}
 	})
 }
@@ -176,7 +176,7 @@ func TestArraysDropBlankStringListElements(t *testing.T) {
 	})
 }
 
-func TestArraysCapFloatMap(t *testing.T) {
+func TestArraysValidFloatMap(t *testing.T) {
 	const param = "logit_bias"
 	tests := []struct {
 		name       string
@@ -194,8 +194,8 @@ func TestArraysCapFloatMap(t *testing.T) {
 	for _, testCase := range tests {
 		t.Run(testCase.name, func(t *testing.T) {
 			document := parseTestDocument(t, testCase.body)
-			if err := capFloatMap(-100, 100, 1024)(RuleContext{Document: document, Param: param}); err != nil {
-				t.Fatalf("capFloatMap() = %v, want nil", err)
+			if err := validFloatMap(-100, 100, 1024)(RuleContext{Document: document, Param: param}); err != nil {
+				t.Fatalf("validFloatMap() = %v, want nil", err)
 			}
 			if testCase.wantDrop {
 				if document.Has(param) {
@@ -220,25 +220,25 @@ func TestArraysCapFloatMap(t *testing.T) {
 	}
 	t.Run("map size cap rejects even all-valid entries", func(t *testing.T) {
 		document := parseTestDocument(t, `{"logit_bias":{"1":10,"2":20,"3":30}}`)
-		err := capFloatMap(-100, 100, 2)(RuleContext{Document: document, Param: param})
+		err := validFloatMap(-100, 100, 2)(RuleContext{Document: document, Param: param})
 		if err == nil {
-			t.Fatal("capFloatMap() = nil, want error")
+			t.Fatal("validFloatMap() = nil, want error")
 		}
 		wantErr := "logit_bias: map size 3 exceeds limit 2"
 		if err.Error() != wantErr {
-			t.Errorf("capFloatMap() error = %q, want %q", err.Error(), wantErr)
+			t.Errorf("validFloatMap() error = %q, want %q", err.Error(), wantErr)
 		}
 	})
 	t.Run("absent is a no-op", func(t *testing.T) {
 		document := parseTestDocument(t, `{}`)
-		if err := capFloatMap(-100, 100, 1024)(RuleContext{Document: document, Param: param}); err != nil {
-			t.Fatalf("capFloatMap() = %v, want nil", err)
+		if err := validFloatMap(-100, 100, 1024)(RuleContext{Document: document, Param: param}); err != nil {
+			t.Fatalf("validFloatMap() = %v, want nil", err)
 		}
 	})
 	t.Run("non-map value passes through untouched", func(t *testing.T) {
 		document := parseTestDocument(t, `{"logit_bias":"nope"}`)
-		if err := capFloatMap(-100, 100, 1024)(RuleContext{Document: document, Param: param}); err != nil {
-			t.Fatalf("capFloatMap() = %v, want nil", err)
+		if err := validFloatMap(-100, 100, 1024)(RuleContext{Document: document, Param: param}); err != nil {
+			t.Fatalf("validFloatMap() = %v, want nil", err)
 		}
 		if got, _ := document.Get(param); got != "nope" {
 			t.Errorf("Get(%s) = %v, want unchanged", param, got)
