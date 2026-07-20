@@ -1,0 +1,5 @@
+{
+  "http_status": 400,
+  "message": "stop_token_ids[1]: must be an integer token id",
+  "status": "rejected"
+}

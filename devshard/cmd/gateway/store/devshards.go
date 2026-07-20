@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 )
@@ -93,7 +94,7 @@ func (s *Store) updateDevshardFlag(ctx context.Context, query string, flagValue 
 	return requireOneRow(result, escrowID)
 }
 
-func requireOneRow(result interface{ RowsAffected() (int64, error) }, escrowID string) error {
+func requireOneRow(result sql.Result, escrowID string) error {
 	affected, err := result.RowsAffected()
 	if err != nil {
 		return fmt.Errorf("checking affected rows for %s: %w", escrowID, err)

@@ -68,9 +68,8 @@ func TestBuildRejectsInvalidMergedConfig(t *testing.T) {
 	}
 }
 
-// TestBuildClonesOverridesModelLimits pins the Amendment E no-aliasing
-// contract: Build must clone overrides.ModelLimits, never alias it, so
-// mutating the caller's map after Build cannot reach the published snapshot.
+// TestBuildClonesOverridesModelLimits: Build must clone overrides.ModelLimits,
+// never alias it, so mutating the caller's map after Build cannot reach the published snapshot.
 func TestBuildClonesOverridesModelLimits(t *testing.T) {
 	sourceModelLimits := map[string]ModelLimits{
 		"model-a": {DefaultMaxTokens: 100, MaxTokensCap: 200},

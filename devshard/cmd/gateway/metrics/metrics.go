@@ -1,6 +1,5 @@
 // Package metrics owns the gateway's Prometheus registry. Family names are
-// frozen: dashboards and alerts depend on the devshard_* names carried over
-// from devshardctl (spec §3).
+// frozen as devshard_*: dashboards and alerts depend on them.
 package metrics
 
 import (
@@ -13,8 +12,8 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
-// Metrics bundles the registry and the HTTP instrumentation families. Later
-// phases register their own families on Registry().
+// Metrics bundles the registry and the HTTP instrumentation families. Other
+// packages register their own families via Registry().
 type Metrics struct {
 	registry            *prometheus.Registry
 	httpRequestsTotal   *prometheus.CounterVec
