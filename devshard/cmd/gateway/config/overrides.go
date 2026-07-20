@@ -7,8 +7,8 @@ import (
 )
 
 // Overrides is the admin-tunable subset of Config, persisted by the store and
-// merged over env by Build. Nil field = not overridden. Later phases extend
-// this struct as their settings become admin-tunable.
+// merged over env by Build. Nil field = not overridden. This struct grows as
+// more settings become admin-tunable.
 type Overrides struct {
 	DefaultMaxTokens                       *int64                 `json:"default_max_tokens,omitempty"`
 	MaxTokensCap                           *int64                 `json:"max_tokens_cap,omitempty"`

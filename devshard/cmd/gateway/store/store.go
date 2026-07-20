@@ -1,7 +1,7 @@
 // Package store persists gateway control-plane state in SQLite
 // (<storageDir>/gateway.db): admin config overrides and the devshard
-// registry. Later phases add escrow intent commitments, rotation status and
-// suspicious hosts here, and a separate perf.db.
+// registry, with escrow intent commitments, rotation status and suspicious
+// hosts to follow, plus a separate perf.db.
 package store
 
 import (

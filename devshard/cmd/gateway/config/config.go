@@ -147,7 +147,7 @@ const (
 	ModelAccessAdminOnly = "admin_only"
 )
 
-// Defaults returns the spec §12 default configuration.
+// Defaults returns the default configuration.
 func Defaults() Config {
 	return Config{
 		Server: Server{
