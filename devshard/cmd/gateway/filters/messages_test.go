@@ -381,7 +381,7 @@ func TestMessageNormalizerChainDropsOrphanBeforeFlatteningContent(t *testing.T) 
 		{"role":"user","content":"q"},
 		{"role":"tool","tool_call_id":"ghost","content":[{"type":"image_url","text":"x"}]}
 	]}`)
-	if err := normalizeMessages(document, ""); err != nil {
+	if err := normalizeMessages(document); err != nil {
 		t.Fatalf("normalizeMessages() = %v, want nil (orphan drop must precede the flatten error)", err)
 	}
 	messages, _ := document.Array("messages")
@@ -410,7 +410,7 @@ func TestMessageNormalizerChainOrderIsObservable(t *testing.T) {
 
 func TestNormalizeMessagesAbsentIsNoOp(t *testing.T) {
 	document := parseTestDocument(t, `{}`)
-	if err := normalizeMessages(document, ""); err != nil {
+	if err := normalizeMessages(document); err != nil {
 		t.Fatalf("normalizeMessages() = %v, want nil", err)
 	}
 	if document.Has("messages") {
@@ -420,7 +420,7 @@ func TestNormalizeMessagesAbsentIsNoOp(t *testing.T) {
 
 func TestNormalizeMessagesNoOpWhenNothingToNormalize(t *testing.T) {
 	document := parseTestDocument(t, `{"messages":[{"role":"user","content":"hi"}]}`)
-	if err := normalizeMessages(document, ""); err != nil {
+	if err := normalizeMessages(document); err != nil {
 		t.Fatalf("normalizeMessages() = %v, want nil", err)
 	}
 	messages, _ := document.Array("messages")
@@ -436,7 +436,7 @@ func TestNormalizeMessagesRunsTheFullChain(t *testing.T) {
 		{"role":"assistant","content":null,"tool_calls":[{"id":"c1","type":"function","function":{"name":"fn"}}]},
 		{"role":"tool","tool_call_id":"c1","name":"legacy","content":"4"}
 	]}`)
-	if err := normalizeMessages(document, ""); err != nil {
+	if err := normalizeMessages(document); err != nil {
 		t.Fatalf("normalizeMessages() = %v, want nil", err)
 	}
 	messages, _ := document.Array("messages")
@@ -452,7 +452,7 @@ func TestNormalizeMessagesRunsTheFullChain(t *testing.T) {
 
 func TestNormalizeMessagesPropagatesFlattenErrorAsRejection(t *testing.T) {
 	document := parseTestDocument(t, `{"messages":[{"role":"user","content":[{"type":"image_url","text":"x"}]}]}`)
-	err := normalizeMessages(document, "")
+	err := normalizeMessages(document)
 	if err == nil {
 		t.Fatal("normalizeMessages() = nil, want a rejection")
 	}
@@ -515,7 +515,7 @@ func TestValidateMessagesAcceptsEveryKnownRole(t *testing.T) {
 		{"role":"assistant","content":"d"},
 		{"role":"function","name":"fn","content":"e"}
 	]}`)
-	if err := validateMessages(document, ""); err != nil {
+	if err := validateMessages(document); err != nil {
 		t.Fatalf("validateMessages() = %v, want nil", err)
 	}
 }
@@ -625,7 +625,7 @@ func TestValidateMessagesAssistantContentRules(t *testing.T) {
 	for _, testCase := range tests {
 		t.Run(testCase.name, func(t *testing.T) {
 			document := parseTestDocument(t, testCase.body)
-			err := validateMessages(document, "")
+			err := validateMessages(document)
 			if testCase.wantMessage == "" {
 				if err != nil {
 					t.Fatalf("validateMessages() = %v, want nil", err)
@@ -683,7 +683,7 @@ func TestValidateMessagesAssistantFunctionCallShapeErrors(t *testing.T) {
 
 func TestValidateMessagesAssistantNullToolCallsAndFunctionCallTreatedAsAbsent(t *testing.T) {
 	document := parseTestDocument(t, `{"messages":[{"role":"assistant","content":"hello","tool_calls":null,"function_call":null}]}`)
-	if err := validateMessages(document, ""); err != nil {
+	if err := validateMessages(document); err != nil {
 		t.Fatalf("validateMessages() = %v, want nil", err)
 	}
 	messages, _ := document.Array("messages")
@@ -711,7 +711,7 @@ func TestValidateMessagesToolCallIDMatchesAndConsumesPending(t *testing.T) {
 		{"role":"assistant","content":null,"tool_calls":[{"id":"c1","type":"function","function":{"name":"fn"}}]},
 		{"role":"tool","tool_call_id":"c1","content":"result"}
 	]}`)
-	if err := validateMessages(document, ""); err != nil {
+	if err := validateMessages(document); err != nil {
 		t.Fatalf("validateMessages() = %v, want nil", err)
 	}
 }
@@ -806,7 +806,7 @@ func rolesOf(t *testing.T, messages []any) string {
 func assertValidateMessagesRejects(t *testing.T, body, wantMessage string) {
 	t.Helper()
 	document := parseTestDocument(t, body)
-	err := validateMessages(document, "")
+	err := validateMessages(document)
 	if err == nil || err.Error() != wantMessage {
 		t.Errorf("validateMessages() error = %v, want %q", err, wantMessage)
 	}

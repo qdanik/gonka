@@ -7,9 +7,9 @@ import (
 	"devshard"
 )
 
-// capListLength rejects ctx.Param when it holds an array longer than maxEntries, or (if
+// validListLength rejects ctx.Param when it holds an array longer than maxEntries, or (if
 // maxEntryLen > 0) a string element longer than maxEntryLen; non-array values pass through.
-func capListLength(maxEntries, maxEntryLen int) RuleFunc {
+func validListLength(maxEntries, maxEntryLen int) RuleFunc {
 	return func(ctx RuleContext) error {
 		list, ok := ctx.Document.Array(ctx.Param)
 		if !ok {
@@ -89,9 +89,9 @@ func dropBlankStringListElements() RuleFunc {
 	}
 }
 
-// capFloatMap rejects ctx.Param outright past maxEntries raw entries, drops entries
+// validFloatMap rejects ctx.Param outright past maxEntries raw entries, drops entries
 // outside [min, max] or non-finite, and drops the field entirely once none survive.
-func capFloatMap(min, max float64, maxEntries int) RuleFunc {
+func validFloatMap(min, max float64, maxEntries int) RuleFunc {
 	return func(ctx RuleContext) error {
 		object, ok := ctx.Document.Object(ctx.Param)
 		if !ok {

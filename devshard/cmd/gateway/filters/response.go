@@ -35,10 +35,10 @@ var (
 // RewriteStreamChunk strips clientStrippedFields from every complete "data: {...}" SSE event in
 // chunk; [DONE] and non-object lines pass through unchanged. Stateless per call: a trailing
 // incomplete event is left unmodified rather than buffered, so callers must pass complete-event-
-// aligned chunks (or the whole stream at once) for stripping to apply. Never errors.
-func RewriteStreamChunk(chunk []byte) ([]byte, error) {
+// aligned chunks (or the whole stream at once) for stripping to apply.
+func RewriteStreamChunk(chunk []byte) []byte {
 	if !hasStrippableField(chunk) {
-		return chunk, nil
+		return chunk
 	}
 	var out bytes.Buffer
 	changed := false
@@ -61,19 +61,19 @@ func RewriteStreamChunk(chunk []byte) ([]byte, error) {
 		changed = true
 	}
 	if !changed {
-		return chunk, nil
+		return chunk
 	}
-	return out.Bytes(), nil
+	return out.Bytes()
 }
 
 // StripResponseBody removes clientStrippedFields from a non-streaming JSON response body, at
-// any nesting depth. A malformed body passes through unchanged; never returns a non-nil error.
-func StripResponseBody(body []byte) ([]byte, error) {
+// any nesting depth. A malformed body passes through unchanged.
+func StripResponseBody(body []byte) []byte {
 	filtered, ok := stripInternalFields(body)
 	if !ok {
-		return body, nil
+		return body
 	}
-	return filtered, nil
+	return filtered
 }
 
 // stripInternalFields deletes clientStrippedFields from payload's decoded JSON. ok is false when

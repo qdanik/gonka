@@ -356,6 +356,17 @@ func testStructuredOutputsBounds() structuredOutputsBounds {
 	}
 }
 
+// TestStructuredOutputsConstraintValidatorsCoverAllFields is the lockstep test: every field in
+// structuredOutputsConstraintFields must have a validator, so the two can't drift apart.
+func TestStructuredOutputsConstraintValidatorsCoverAllFields(t *testing.T) {
+	validators := structuredOutputsConstraintValidators(testStructuredOutputsBounds())
+	for _, field := range structuredOutputsConstraintFields {
+		if validators[field] == nil {
+			t.Errorf("structured_outputs constraint %q has no validator", field)
+		}
+	}
+}
+
 func TestValidStructuredOutputsAbsent(t *testing.T) {
 	rule := validStructuredOutputs(testStructuredOutputsBounds())
 	document := parseTestDocument(t, `{"messages":[]}`)

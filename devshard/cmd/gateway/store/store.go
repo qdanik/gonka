@@ -1,7 +1,5 @@
 // Package store persists gateway control-plane state in SQLite
-// (<storageDir>/gateway.db): admin config overrides and the devshard
-// registry, with escrow intent commitments, rotation status and suspicious
-// hosts to follow, plus a separate perf.db.
+// (<storageDir>/gateway.db): admin config overrides and the devshard registry.
 package store
 
 import (
@@ -19,7 +17,6 @@ type Store struct {
 	db *sql.DB
 }
 
-// gatewayDatabaseFileName is the control-plane database inside storageDir.
 const gatewayDatabaseFileName = "gateway.db"
 
 // migrations run in order inside one transaction per version; the schema
