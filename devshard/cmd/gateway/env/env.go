@@ -43,6 +43,8 @@ type Values struct {
 
 	CaptureEnabled *bool
 	CaptureDir     *string
+
+	PerfEWMAHalfLifeSeconds *int64
 }
 
 // PoCModeOff and PoCModeRelaxed are the accepted GATEWAY_POC_MODE values.
@@ -119,6 +121,8 @@ func Load() (Values, error) {
 
 	readBool("GATEWAY_CAPTURE_ENABLED", &values.CaptureEnabled)
 	readString("GATEWAY_CAPTURE_DIR", &values.CaptureDir)
+
+	readInt("GATEWAY_PERF_EWMA_HALFLIFE_SECONDS", &values.PerfEWMAHalfLifeSeconds)
 
 	if values.PoCMode != nil && *values.PoCMode != PoCModeOff && *values.PoCMode != PoCModeRelaxed {
 		problems = append(problems, fmt.Errorf("GATEWAY_POC_MODE: %q is not %q or %q", *values.PoCMode, PoCModeOff, PoCModeRelaxed))
