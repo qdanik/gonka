@@ -48,6 +48,8 @@ func Build(values env.Values, overrides Overrides) (*Config, error) {
 	overrideIfSet(&configuration.Capture.Enabled, values.CaptureEnabled)
 	overrideIfSet(&configuration.Capture.Dir, values.CaptureDir)
 
+	overrideIfSet(&configuration.Perf.EWMAHalfLifeSeconds, values.PerfEWMAHalfLifeSeconds)
+
 	// Admin-override layer (wins over env).
 	overrideIfSet(&configuration.Limits.DefaultMaxTokens, overrides.DefaultMaxTokens)
 	overrideIfSet(&configuration.Limits.MaxTokensCap, overrides.MaxTokensCap)

@@ -28,6 +28,7 @@ func TestLoadParsesTypedValues(t *testing.T) {
 	t.Setenv("GATEWAY_ROTATION_ENABLED", "true")
 	t.Setenv("GATEWAY_DISABLED", "true")
 	t.Setenv("GATEWAY_TX_FEE_AMOUNT", "500")
+	t.Setenv("GATEWAY_PERF_EWMA_HALFLIFE_SECONDS", "900")
 
 	values, err := Load()
 	if err != nil {
@@ -47,6 +48,9 @@ func TestLoadParsesTypedValues(t *testing.T) {
 	}
 	if values.TxFeeAmount == nil || *values.TxFeeAmount != 500 {
 		t.Fatalf("TxFeeAmount = %v, want 500", values.TxFeeAmount)
+	}
+	if values.PerfEWMAHalfLifeSeconds == nil || *values.PerfEWMAHalfLifeSeconds != 900 {
+		t.Fatalf("PerfEWMAHalfLifeSeconds = %v, want 900", values.PerfEWMAHalfLifeSeconds)
 	}
 }
 
