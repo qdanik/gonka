@@ -186,8 +186,9 @@ Env naming unified under `GATEWAY_*`. Mapping (old → new):
 | `DEVSHARD_REQUEST_CAPTURE_*` / `DEVSHARD_CAPTURE_SHORT_CONTENT_*` | `GATEWAY_CAPTURE_ENABLED` / `GATEWAY_CAPTURE_DIR` survive as env; short-content thresholds are config constants |
 | `GATEWAY_CLASSIFY_MAX_*_BYTES` | dropped from env — config constants (`Stream.ClassifyMax{Attempt,Participant,Global}Bytes`) |
 | new | limiter v2 knobs (AIMD caps, breaker ladder, queue wait) exist as config defaults + admin overrides — deliberately NOT env |
+| new | `GATEWAY_PERF_WINDOW_SIZE` / `GATEWAY_PERF_WINDOW_SECONDS` — perf ring capacity and stat time-window survive as env; the rest of `Perf` tuning (failure thresholds, first-token fallback, pairwise comparator) is config-default/admin-override only |
 
-Env diet (decided 2026-07-18): only 24 variables survive as env — deployment identity (port, storage, keys, topology, endpoints, tx fee/gas escape hatches, coarse token/concurrency limits, PoC/kill-switch/rotation toggles, capture on/off+dir). Run-time tuning (AIMD, breaker, per-weight scaling, input-token budget, rotation pre-PoC blocks) is admin-override-only; plumbing (tx poll cadence, fee denom, classify caps, drain timeout, runtime-build parallelism, capture thresholds) is config-constant-only. `ROUTE_PREFIX` derives from the protocol version in code; `CHAIN_ID` is auto-discovered from node_info. Full lists: plan Amendment F.
+Env diet (decided 2026-07-18): only 26 variables survive as env — deployment identity (port, storage, keys, topology, endpoints, tx fee/gas escape hatches, coarse token/concurrency limits, PoC/kill-switch/rotation toggles, capture on/off+dir, perf window size/duration). Run-time tuning (AIMD, breaker, per-weight scaling, input-token budget, rotation pre-PoC blocks, perf failure/first-token/pairwise knobs) is admin-override-only; plumbing (tx poll cadence, fee denom, classify caps, drain timeout, runtime-build parallelism, capture thresholds) is config-constant-only. `ROUTE_PREFIX` derives from the protocol version in code; `CHAIN_ID` is auto-discovered from node_info. Full lists: plan Amendment F.
 
 ## 13. Filters (`filters/`)
 
