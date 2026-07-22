@@ -320,6 +320,9 @@ func (c *Config) Validate() error {
 	if c.Limits.Breaker.MaxOpenMS < c.Limits.Breaker.BaseOpenMS {
 		complain("breaker_max_open_ms: %d must be >= breaker_base_open_ms %d", c.Limits.Breaker.MaxOpenMS, c.Limits.Breaker.BaseOpenMS)
 	}
+	if perfEjectionMaxMS := c.Perf.EjectionMaxSeconds * 1000; c.Limits.Breaker.MaxOpenMS > perfEjectionMaxMS {
+		complain("breaker_max_open_ms: %d must be <= perf_ejection_max_seconds %d (ms) so perf stays the dominant ejection authority", c.Limits.Breaker.MaxOpenMS, perfEjectionMaxMS)
+	}
 	for model, access := range c.Limits.ModelAccess {
 		if access != ModelAccessOpen && access != ModelAccessAPIKey && access != ModelAccessAdminOnly {
 			complain("model_access[%s]: %q is not open, api_key or admin_only", model, access)
