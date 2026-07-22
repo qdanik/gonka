@@ -127,6 +127,7 @@ func TestValidateCatchesEveryRuleBreach(t *testing.T) {
 		{"breaker_trip_threshold too low", func(c *Config) { c.Limits.Breaker.TripThreshold = 0 }, "breaker_trip_threshold"},
 		{"breaker_base_open_ms too low", func(c *Config) { c.Limits.Breaker.BaseOpenMS = 0 }, "breaker_base_open_ms"},
 		{"breaker_max_open_ms below base", func(c *Config) { c.Limits.Breaker.MaxOpenMS = 1 }, "breaker_max_open_ms"},
+		{"breaker_max_open_ms above perf ejection horizon", func(c *Config) { c.Limits.Breaker.MaxOpenMS = c.Perf.EjectionMaxSeconds*1000 + 1 }, "dominant ejection authority"},
 		{"model_access bad enum", func(c *Config) { c.Limits.ModelAccess = map[string]string{"model-a": "bogus"} }, "model_access"},
 		{"model_limits default too low", func(c *Config) {
 			c.Limits.ModelLimits = map[string]ModelLimits{"model-a": {DefaultMaxTokens: 0, MaxTokensCap: 10}}
