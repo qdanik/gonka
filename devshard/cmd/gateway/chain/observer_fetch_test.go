@@ -38,10 +38,11 @@ func TestParseEpochInfoNumericFields(t *testing.T) {
 		t.Fatalf("parseEpochInfo(): %v", err)
 	}
 	want := epochInfo{
-		BlockHeight:         1000,
-		Phase:               "PoCGenerate",
-		EpochIndex:          7,
-		PoCStartBlockHeight: 950,
+		BlockHeight:            1000,
+		Phase:                  "PoCGenerate",
+		EpochIndex:             7,
+		PoCStartBlockHeight:    950,
+		EpochSwitchBlockHeight: 950,
 	}
 	if info != want {
 		t.Fatalf("parseEpochInfo() = %+v, want %+v", info, want)
@@ -59,6 +60,7 @@ func TestParseEpochInfoStringTypedScalars(t *testing.T) {
 		Phase:                        "Inference",
 		EpochIndex:                   7,
 		PoCStartBlockHeight:          950,
+		EpochSwitchBlockHeight:       950,
 		IsConfirmationPoCActive:      true,
 		ConfirmationPoCPhase:         ConfirmationPoCValidation,
 		ConfirmationPoCTriggerHeight: 555,
@@ -110,6 +112,51 @@ func TestParseEpochInfoMalformedJSONErrors(t *testing.T) {
 	_, err := parseEpochInfo([]byte(`{not-json`))
 	if err == nil {
 		t.Fatal("parseEpochInfo() error = nil, want error for malformed JSON")
+	}
+}
+
+// epochSwitchJSON builds an epoch info body with a configurable current block height and the
+// three fallback-ladder inputs; a zero argument omits that field's contribution to the ladder.
+func epochSwitchJSON(blockHeight, setNewValidators, nextSetNewValidators, nextPoCStart int64) string {
+	return fmt.Sprintf(`{
+		"block_height": %d,
+		"phase": "Inference",
+		"latest_epoch": {"index": 1, "poc_start_block_height": 900},
+		"epoch_stages": {"set_new_validators": %d, "next_poc_start": %d},
+		"next_epoch_stages": {"set_new_validators": %d},
+		"is_confirmation_poc_active": false
+	}`, blockHeight, setNewValidators, nextPoCStart, nextSetNewValidators)
+}
+
+// TestParseEpochInfoEpochSwitchBlockHeightFallbackLadder covers all four ladder rungs, including
+// the rung-1 guard that ignores a SetNewValidators height already behind the current block.
+func TestParseEpochInfoEpochSwitchBlockHeightFallbackLadder(t *testing.T) {
+	cases := []struct {
+		name                 string
+		blockHeight          int64
+		setNewValidators     int64
+		nextSetNewValidators int64
+		nextPoCStart         int64
+		want                 int64
+	}{
+		{"rung1: current epoch set_new_validators ahead of block height wins", 1000, 1200, 1300, 1100, 1200},
+		{"rung1 boundary: set_new_validators exactly at block height still wins", 1000, 1000, 1300, 1100, 1000},
+		{"rung1 stale falls to rung2: set_new_validators behind block height is ignored", 1000, 500, 1300, 1100, 1300},
+		{"rung2: next epoch set_new_validators wins when rung1 is zero", 1000, 0, 1300, 1100, 1300},
+		{"rung3: next_poc_start wins when rungs 1-2 are zero", 1000, 0, 0, 1100, 1100},
+		{"rung4: latest_epoch poc_start_block_height wins when rungs 1-3 are zero", 1000, 0, 0, 0, 900},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			body := epochSwitchJSON(testCase.blockHeight, testCase.setNewValidators, testCase.nextSetNewValidators, testCase.nextPoCStart)
+			info, err := parseEpochInfo([]byte(body))
+			if err != nil {
+				t.Fatalf("parseEpochInfo(): %v", err)
+			}
+			if info.EpochSwitchBlockHeight != testCase.want {
+				t.Fatalf("EpochSwitchBlockHeight = %d, want %d", info.EpochSwitchBlockHeight, testCase.want)
+			}
+		})
 	}
 }
 

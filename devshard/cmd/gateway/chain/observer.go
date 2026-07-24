@@ -157,13 +157,14 @@ func (o *PhaseObserver) refresh(ctx context.Context) {
 
 	blocked, reason := rawPoCBlockingState(epoch.Phase, epoch.ConfirmationPoCPhase)
 	snapshot := PhaseSnapshot{
-		BlockHeight:          epoch.BlockHeight,
-		EpochIndex:           epoch.EpochIndex,
-		EpochPhase:           epoch.Phase,
-		ConfirmationPoCPhase: epoch.ConfirmationPoCPhase,
-		RequestsBlocked:      blocked,
-		BlockReason:          reason,
-		LastUpdatedAt:        o.now(),
+		BlockHeight:            epoch.BlockHeight,
+		EpochSwitchBlockHeight: epoch.EpochSwitchBlockHeight,
+		EpochIndex:             epoch.EpochIndex,
+		EpochPhase:             epoch.Phase,
+		ConfirmationPoCPhase:   epoch.ConfirmationPoCPhase,
+		RequestsBlocked:        blocked,
+		BlockReason:            reason,
+		LastUpdatedAt:          o.now(),
 	}
 
 	participantsBody, err := o.getBody(ctx, participantsPath)
