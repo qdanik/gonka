@@ -1,0 +1,120 @@
+package escrow
+
+import (
+	"context"
+	"errors"
+	"log"
+	"time"
+
+	"devshard/cmd/gateway/config"
+)
+
+const escrowTickInterval = 15 * time.Second
+
+type Deps struct {
+	Tx         escrowTxClient
+	Store      escrowStore
+	Snapshots  snapshotSource
+	Settlement SettlementSource
+	Signer     SignerSource
+	Config     *config.Holder
+	Now        func() time.Time
+}
+
+func NewManager(d Deps) *Manager {
+	return &Manager{
+		tx:               d.Tx,
+		store:            d.Store,
+		snapshots:        d.Snapshots,
+		signer:           d.Signer,
+		breaker:          newCreateBreaker(),
+		now:              d.Now,
+		config:           d.Config,
+		settlementSource: d.Settlement,
+	}
+}
+
+// Start is idempotent: a call while already running is a no-op.
+func (m *Manager) Start(ctx context.Context) {
+	m.lifecycleMu.Lock()
+	defer m.lifecycleMu.Unlock()
+	if m.stop != nil {
+		return
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	m.stop, m.done = stop, done
+
+	go func() {
+		defer cancel()
+		defer close(done)
+		m.runTick(ctx)
+		ticker := time.NewTicker(escrowTickInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-stop:
+				return
+			case <-ticker.C:
+				m.runTick(ctx)
+			}
+		}
+	}()
+}
+
+func (m *Manager) runTick(ctx context.Context) {
+	if err := m.tick(ctx); err != nil {
+		log.Printf("escrow tick: %v", err)
+	}
+}
+
+// Stop is idempotent and blocks until the tick goroutine has exited, so a settings swap or
+// shutdown never races a live tick.
+func (m *Manager) Stop() {
+	m.lifecycleMu.Lock()
+	stop, done := m.stop, m.done
+	m.stop, m.done = nil, nil
+	m.lifecycleMu.Unlock()
+	if stop == nil {
+		return
+	}
+	close(stop)
+	<-done
+}
+
+func (m *Manager) tick(ctx context.Context) error {
+	reconcileErr := m.reconcile(ctx) // crash recovery must not depend on the rotation toggle
+
+	cfg := m.config.Load()
+	if !cfg.Rotation.Enabled {
+		return reconcileErr
+	}
+	models, err := parseModels(cfg.Rotation.ModelsJSON)
+	if err != nil {
+		return errors.Join(reconcileErr, err)
+	}
+
+	// Pulled, not subscribed: a 15s poll is equivalent at this cadence and avoids callback races.
+	snapshot := m.snapshots.Snapshot()
+	if snapshot.EpochIndex == 0 || snapshot.BlockHeight == 0 {
+		return reconcileErr // cold start, no chain data yet
+	}
+	devshards, err := m.store.ListDevshards(ctx)
+	if err != nil {
+		return errors.Join(reconcileErr, err)
+	}
+
+	var bridgeErr error
+	blocksToEpochSwitch := snapshot.EpochSwitchBlockHeight - snapshot.BlockHeight
+	if blocksToEpochSwitch >= 0 && blocksToEpochSwitch <= cfg.Rotation.PrePoCBlocks {
+		bridgeErr = m.prepareBridge(ctx, snapshot, models, devshards) // wins even when PoC is also inactive
+	} else if !snapshot.RequestsBlocked {
+		bridgeErr = m.finishBridge(ctx, snapshot, models, devshards)
+	}
+
+	depletionErr := m.checkDepletion(ctx, snapshot, models, devshards)
+	return errors.Join(reconcileErr, bridgeErr, depletionErr)
+}

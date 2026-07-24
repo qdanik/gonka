@@ -121,6 +121,19 @@ func observerParticipantsJSON(participantAddr, inferenceURL string, pocWeight ui
 	}`, participantAddr, inferenceURL, pocWeight)
 }
 
+// observerEpochSwitchJSON is an Inference-phase epoch body with configurable epoch_stages/
+// next_epoch_stages set_new_validators heights, used to drive the EpochSwitchBlockHeight ladder.
+func observerEpochSwitchJSON(blockHeight, setNewValidators, nextSetNewValidators int64) string {
+	return fmt.Sprintf(`{
+		"block_height": %d,
+		"phase": "Inference",
+		"latest_epoch": {"index": 7, "poc_start_block_height": 900},
+		"epoch_stages": {"set_new_validators": %d},
+		"next_epoch_stages": {"set_new_validators": %d},
+		"is_confirmation_poc_active": false
+	}`, blockHeight, setNewValidators, nextSetNewValidators)
+}
+
 // observerEpochPoCJSON is a PoCGenerate-or-Validate epoch body with an explicit PoC start height.
 func observerEpochPoCJSON(phase EpochPhase, pocStartHeight int64) string {
 	return fmt.Sprintf(`{
@@ -332,6 +345,30 @@ func TestPhaseObserver_BlockedPoCPhaseSetsRequestsBlockedAndReason(t *testing.T)
 	}
 	if snapshot.EpochPhase != EpochPhasePoCGenerate {
 		t.Errorf("EpochPhase = %q, want %q", snapshot.EpochPhase, EpochPhasePoCGenerate)
+	}
+}
+
+// TestPhaseObserver_EpochSwitchBlockHeightUsesFallbackLadder covers the top two ladder rungs end
+// to end through Snapshot(): the current epoch's SetNewValidators wins when present, and omitting
+// it falls through to the next epoch's SetNewValidators.
+func TestPhaseObserver_EpochSwitchBlockHeightUsesFallbackLadder(t *testing.T) {
+	stub := newPhaseObserverStub()
+	server := httptest.NewServer(stub.handler())
+	defer server.Close()
+	stub.setParticipants(http.StatusOK, observerParticipantsJSON("gonka1abc", server.URL, 42))
+
+	observer := newPoCPhaseObserver(t, server, false)
+
+	stub.setEpoch(http.StatusOK, observerEpochSwitchJSON(1000, 1200, 1300))
+	observer.refresh(context.Background())
+	if got := observer.Snapshot().EpochSwitchBlockHeight; got != 1200 {
+		t.Fatalf("EpochSwitchBlockHeight = %d, want 1200 (current epoch set_new_validators)", got)
+	}
+
+	stub.setEpoch(http.StatusOK, observerEpochSwitchJSON(1000, 0, 1300))
+	observer.refresh(context.Background())
+	if got := observer.Snapshot().EpochSwitchBlockHeight; got != 1300 {
+		t.Fatalf("EpochSwitchBlockHeight = %d, want 1300 (next epoch set_new_validators, primary omitted)", got)
 	}
 }
 

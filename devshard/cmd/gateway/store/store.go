@@ -1,5 +1,6 @@
 // Package store persists gateway control-plane state in SQLite
-// (<storageDir>/gateway.db): admin config overrides and the devshard registry.
+// (<storageDir>/gateway.db): admin config overrides, the devshard registry,
+// escrow rotation commitments, and rotation status.
 package store
 
 import (
@@ -7,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	_ "modernc.org/sqlite"
 )
@@ -14,7 +16,8 @@ import (
 // Store wraps the gateway.db handle. Access is serialized via a single
 // connection; contention waits on busy_timeout instead of failing.
 type Store struct {
-	db *sql.DB
+	db           *sql.DB
+	retryBackoff time.Duration
 }
 
 const gatewayDatabaseFileName = "gateway.db"
@@ -37,6 +40,25 @@ var migrations = []string{
 		settlement_pending INTEGER NOT NULL DEFAULT 0,
 		created_at TEXT NOT NULL DEFAULT (datetime('now')),
 		updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+	);`,
+	`CREATE TABLE IF NOT EXISTS escrow_rotation_commitments (
+		tx_hash TEXT PRIMARY KEY,
+		model TEXT NOT NULL,
+		role TEXT NOT NULL DEFAULT '',
+		private_key_env TEXT NOT NULL DEFAULT '',
+		epoch INTEGER NOT NULL DEFAULT 0,
+		block_height INTEGER NOT NULL DEFAULT 0,
+		created_at TEXT NOT NULL
+	);
+	CREATE TABLE IF NOT EXISTS gateway_rotation_status (
+		model TEXT NOT NULL,
+		role TEXT NOT NULL DEFAULT '',
+		stage TEXT NOT NULL DEFAULT '',
+		epoch INTEGER NOT NULL DEFAULT 0,
+		completed INTEGER NOT NULL DEFAULT 0,
+		create_error TEXT NOT NULL DEFAULT '',
+		updated_at TEXT NOT NULL,
+		PRIMARY KEY (model, role)
 	);`,
 }
 
@@ -65,7 +87,7 @@ func Open(storageDir string) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
-	return &Store{db: db}, nil
+	return &Store{db: db, retryBackoff: 200 * time.Millisecond}, nil
 }
 
 func migrate(db *sql.DB) error {
