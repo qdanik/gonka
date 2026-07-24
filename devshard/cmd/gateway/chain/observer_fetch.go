@@ -15,6 +15,7 @@ type epochInfo struct {
 	Phase                        EpochPhase
 	EpochIndex                   uint64
 	PoCStartBlockHeight          int64
+	EpochSwitchBlockHeight       int64
 	IsConfirmationPoCActive      bool
 	ConfirmationPoCPhase         ConfirmationPoCPhase
 	ConfirmationPoCTriggerHeight int64
@@ -25,6 +26,8 @@ type chainEpochInfoResponse struct {
 	BlockHeight             jsonInt64                         `json:"block_height"`
 	Phase                   string                            `json:"phase"`
 	LatestEpoch             chainLatestEpoch                  `json:"latest_epoch"`
+	EpochStages             chainEpochStages                  `json:"epoch_stages"`
+	NextEpochStages         chainEpochStages                  `json:"next_epoch_stages"`
 	IsConfirmationPoCActive bool                              `json:"is_confirmation_poc_active"`
 	ActiveConfirmationPoC   *chainConfirmationPoCEventPayload `json:"active_confirmation_poc_event,omitempty"`
 }
@@ -33,6 +36,12 @@ type chainEpochInfoResponse struct {
 type chainLatestEpoch struct {
 	Index               jsonUint64 `json:"index"`
 	PocStartBlockHeight jsonInt64  `json:"poc_start_block_height"`
+}
+
+// chainEpochStages is the raw epoch_stages/next_epoch_stages sub-object.
+type chainEpochStages struct {
+	SetNewValidators jsonInt64 `json:"set_new_validators"`
+	NextPoCStart     jsonInt64 `json:"next_poc_start"`
 }
 
 // chainConfirmationPoCEventPayload is the raw active_confirmation_poc_event sub-object.
@@ -53,6 +62,7 @@ func parseEpochInfo(body []byte) (epochInfo, error) {
 		Phase:                   EpochPhase(strings.TrimSpace(payload.Phase)),
 		EpochIndex:              uint64(payload.LatestEpoch.Index),
 		PoCStartBlockHeight:     int64(payload.LatestEpoch.PocStartBlockHeight),
+		EpochSwitchBlockHeight:  deriveEpochSwitchBlockHeight(payload),
 		IsConfirmationPoCActive: payload.IsConfirmationPoCActive,
 	}
 	if payload.ActiveConfirmationPoC != nil {
@@ -60,6 +70,20 @@ func parseEpochInfo(body []byte) (epochInfo, error) {
 		info.ConfirmationPoCTriggerHeight = int64(payload.ActiveConfirmationPoC.TriggerHeight)
 	}
 	return info, nil
+}
+
+func deriveEpochSwitchBlockHeight(payload chainEpochInfoResponse) int64 {
+	blockHeight := int64(payload.BlockHeight)
+	if payload.EpochStages.SetNewValidators > 0 && int64(payload.EpochStages.SetNewValidators) >= blockHeight {
+		return int64(payload.EpochStages.SetNewValidators)
+	}
+	if payload.NextEpochStages.SetNewValidators > 0 {
+		return int64(payload.NextEpochStages.SetNewValidators)
+	}
+	if payload.EpochStages.NextPoCStart > 0 {
+		return int64(payload.EpochStages.NextPoCStart)
+	}
+	return int64(payload.LatestEpoch.PocStartBlockHeight)
 }
 
 // participantNode is one ML node's (model, weight) contribution for a participant.

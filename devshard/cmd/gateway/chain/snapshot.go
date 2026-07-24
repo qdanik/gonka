@@ -35,10 +35,11 @@ const (
 // state. The observer derives and publishes raw inputs only; subscribers derive
 // scale, admission, and policy from them.
 type PhaseSnapshot struct {
-	BlockHeight          int64
-	EpochIndex           uint64
-	EpochPhase           EpochPhase
-	ConfirmationPoCPhase ConfirmationPoCPhase
+	BlockHeight            int64
+	EpochSwitchBlockHeight int64
+	EpochIndex             uint64
+	EpochPhase             EpochPhase
+	ConfirmationPoCPhase   ConfirmationPoCPhase
 	// RequestsBlocked mirrors rawPoCBlockingState as-is; relaxed-mode overrides
 	// are applied at the admission boundary, not by this observer.
 	RequestsBlocked bool

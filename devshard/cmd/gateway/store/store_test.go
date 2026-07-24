@@ -2,10 +2,12 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"devshard/cmd/gateway/config"
 )
@@ -172,5 +174,54 @@ func TestOpenIsIdempotentAcrossRestarts(t *testing.T) {
 	}
 	if len(listed) != 1 || listed[0].EscrowID != "escrow-1" {
 		t.Fatalf("data lost across reopen: %+v", listed)
+	}
+}
+
+func TestOpenUpgradesExistingV1Database(t *testing.T) {
+	dir := t.TempDir()
+	ctx := context.Background()
+
+	seed, err := sql.Open("sqlite", filepath.Join(dir, gatewayDatabaseFileName))
+	if err != nil {
+		t.Fatalf("opening seed db: %v", err)
+	}
+	for _, statement := range []string{
+		`CREATE TABLE schema_version (version INTEGER NOT NULL)`,
+		migrations[0],
+		`INSERT INTO schema_version (version) VALUES (1)`,
+		`INSERT INTO devshards (escrow_id, model) VALUES ('legacy-1', 'm')`,
+	} {
+		if _, err := seed.Exec(statement); err != nil {
+			t.Fatalf("seeding v1 db with %q: %v", statement, err)
+		}
+	}
+	if err := seed.Close(); err != nil {
+		t.Fatalf("closing seed db: %v", err)
+	}
+
+	upgraded, err := Open(dir)
+	if err != nil {
+		t.Fatalf("Open() upgrading a v1 db: %v", err)
+	}
+	t.Cleanup(func() { upgraded.Close() })
+
+	devshards, err := upgraded.ListDevshards(ctx)
+	if err != nil {
+		t.Fatalf("ListDevshards() after upgrade: %v", err)
+	}
+	if len(devshards) != 1 || devshards[0].EscrowID != "legacy-1" {
+		t.Fatalf("v1 data lost on upgrade to v2: %+v", devshards)
+	}
+
+	created := time.Unix(0, 123456789).UTC()
+	if err := upgraded.SaveCommitment(ctx, Commitment{TxHash: "tx-1", Model: "m", CreatedAt: created}); err != nil {
+		t.Fatalf("SaveCommitment() into upgraded db: %v", err)
+	}
+	commitments, err := upgraded.LoadCommitments(ctx)
+	if err != nil {
+		t.Fatalf("LoadCommitments() after upgrade: %v", err)
+	}
+	if len(commitments) != 1 || !commitments[0].CreatedAt.Equal(created) {
+		t.Fatalf("v2 table unusable after upgrade: %+v", commitments)
 	}
 }
