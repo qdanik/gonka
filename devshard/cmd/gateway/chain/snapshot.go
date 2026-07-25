@@ -53,6 +53,10 @@ type PhaseSnapshot struct {
 	PreservedByModel      map[string][]string
 	InferenceURLs         map[string]string // participant addr -> dapi base URL
 
+	// MaxNonce is devshard_escrow_params.max_nonce; 0 means not yet fetched, so the scheduler must
+	// treat the nonce cap as disabled rather than deactivating escrows on missing data.
+	MaxNonce uint64
+
 	LastUpdatedAt time.Time
 	LastError     string
 }

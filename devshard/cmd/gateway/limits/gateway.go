@@ -52,17 +52,26 @@ type modelCounter struct {
 	inputTokens int64
 }
 
+// waiter is one blocked Acquire. A releasing request hands it the slot directly and closes ready,
+// so an admitted waiter never re-competes with newly arriving requests.
+type waiter struct {
+	model    string
+	tokens   int64
+	capacity ModelCapacity
+	reason   string // why it had to queue, reported if the wait times out
+	ready    chan struct{}
+}
+
 type GatewayLimiter struct {
 	mu     sync.Mutex
-	cond   *sync.Cond
 	cfg    GatewayConfig
 	models map[string]*modelCounter
+	total  modelCounter
+	queue  []*waiter
 }
 
 func NewGatewayLimiter(cfg GatewayConfig) *GatewayLimiter {
-	l := &GatewayLimiter{cfg: cfg, models: map[string]*modelCounter{}}
-	l.cond = sync.NewCond(&l.mu)
-	return l
+	return &GatewayLimiter{cfg: cfg, models: map[string]*modelCounter{}}
 }
 
 func (l *GatewayLimiter) AcquireForModel(ctx context.Context, model string, inputTokens int64, capacity ModelCapacity) error {
@@ -75,27 +84,111 @@ func (l *GatewayLimiter) AcquireForModel(ctx context.Context, model string, inpu
 	model = strings.TrimSpace(model)
 
 	l.mu.Lock()
+	global, perModel := l.admissionsFor(model, inputTokens, capacity)
+	if reason := impossibleReason(global, perModel); reason != "" {
+		l.mu.Unlock()
+		return &RateLimitError{Reason: reason, RetryAfter: l.cfg.AcquireWait}
+	}
+	// A queued waiter is one that capacity currently cannot serve, so admitting a request that fits
+	// does not overtake it: a freed slot is handed to the queue directly, under this same lock.
+	reason := l.blockedReasonLocked(model, global, perModel)
+	if reason == "" {
+		l.takeLocked(model, inputTokens)
+		l.mu.Unlock()
+		return nil
+	}
+	if l.cfg.AcquireWait <= 0 {
+		l.mu.Unlock()
+		return &RateLimitError{Reason: reason, RetryAfter: l.cfg.AcquireWait}
+	}
+
+	blocked := &waiter{model: model, tokens: inputTokens, capacity: capacity, reason: reason, ready: make(chan struct{})}
+	l.queue = append(l.queue, blocked)
+	l.promoteLocked() // capacity may already be free; the queue only enforces order, it is not a delay
+	l.mu.Unlock()
+
+	timer := time.NewTimer(l.cfg.AcquireWait)
+	defer timer.Stop()
+	select {
+	case <-blocked.ready:
+		return nil
+	case <-timer.C:
+		if !l.dequeue(blocked) {
+			return nil // promoted as the deadline fired: the slot is already ours
+		}
+		return &RateLimitError{Reason: blocked.reason, RetryAfter: l.cfg.AcquireWait}
+	case <-ctx.Done():
+		if !l.dequeue(blocked) {
+			l.ReleaseForModel(model, inputTokens) // promoted for a caller that is already gone
+		}
+		return ctx.Err()
+	}
+}
+
+// dequeue reports whether the waiter was still queued, meaning it never received a slot.
+func (l *GatewayLimiter) dequeue(w *waiter) bool {
+	l.mu.Lock()
 	defer l.mu.Unlock()
-
-	baseMaxConcurrent, baseMaxInputTokens := l.limitsForModel(model)
-	concurrencyLimit, concurrencyLimited := effectiveConcurrencyLimit(baseMaxConcurrent, capacity)
-	inputTokenLimit, inputTokenLimited := effectiveInputTokenLimit(baseMaxInputTokens, capacity)
-	adm := admission{
-		concurrencyLimit:   concurrencyLimit,
-		concurrencyLimited: concurrencyLimited,
-		inputTokenLimit:    inputTokenLimit,
-		inputTokenLimited:  inputTokenLimited,
-		requestedTokens:    inputTokens,
+	for i, queued := range l.queue {
+		if queued == w {
+			l.queue = append(l.queue[:i], l.queue[i+1:]...)
+			return true
+		}
 	}
+	return false
+}
 
-	if err := l.admitLocked(ctx, model, adm); err != nil {
-		return err
+// promoteLocked hands freed capacity to queued waiters in arrival order. A waiter blocked only by
+// its own model's limit is skipped so it cannot stall unrelated models, but an exhausted global
+// budget stops the sweep: that capacity is shared, so queueing for it stays first-come-first-served.
+func (l *GatewayLimiter) promoteLocked() {
+	for i := 0; i < len(l.queue); {
+		w := l.queue[i]
+		global, perModel := l.admissionsFor(w.model, w.tokens, w.capacity)
+		if global.blockedReason(l.total.inFlight, l.total.inputTokens) != "" {
+			return
+		}
+		var inFlight, inputTokens int64
+		if counter, ok := l.models[w.model]; ok {
+			inFlight, inputTokens = counter.inFlight, counter.inputTokens
+		}
+		if perModel.blockedReason(inFlight, inputTokens) != "" {
+			i++
+			continue
+		}
+		l.queue = append(l.queue[:i], l.queue[i+1:]...)
+		l.takeLocked(w.model, w.tokens)
+		close(w.ready)
 	}
+}
 
+func (l *GatewayLimiter) takeLocked(model string, inputTokens int64) {
 	counter := l.counterLocked(model)
 	counter.inFlight++
 	counter.inputTokens += inputTokens
-	return nil
+	l.total.inFlight++
+	l.total.inputTokens += inputTokens
+}
+
+// The configured maxima are process-wide: an unrecognized model shares them rather than receiving a
+// fresh quota, and a per-model override only narrows one model further.
+func (l *GatewayLimiter) admissionsFor(model string, inputTokens int64, capacity ModelCapacity) (global, perModel admission) {
+	global = admission{requestedTokens: inputTokens}
+	global.concurrencyLimit, global.concurrencyLimited = effectiveConcurrencyLimit(l.cfg.MaxConcurrent, capacity)
+	global.inputTokenLimit, global.inputTokenLimited = effectiveInputTokenLimit(l.cfg.MaxInputTokens, capacity)
+
+	perModel = admission{requestedTokens: inputTokens}
+	override, ok := l.cfg.ModelLimits[model]
+	if !ok {
+		return global, perModel
+	}
+	if override.MaxConcurrent != nil {
+		perModel.concurrencyLimit, perModel.concurrencyLimited = scaleClamp(*override.MaxConcurrent, capacity.ScaleFactor), true
+	}
+	if override.MaxInputTokens != nil {
+		perModel.inputTokenLimit, perModel.inputTokenLimited = scaleClamp(*override.MaxInputTokens, capacity.ScaleFactor), true
+	}
+	return global, perModel
 }
 
 func (l *GatewayLimiter) ReleaseForModel(model string, inputTokens int64) {
@@ -106,73 +199,40 @@ func (l *GatewayLimiter) ReleaseForModel(model string, inputTokens int64) {
 
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if counter, ok := l.models[model]; ok {
-		counter.inFlight = max(counter.inFlight-1, 0)
-		counter.inputTokens = max(counter.inputTokens-inputTokens, 0)
-		if counter.inFlight == 0 && counter.inputTokens == 0 {
-			delete(l.models, model)
-		}
-	}
-	l.cond.Broadcast()
+	l.releaseLocked(model, inputTokens)
+	l.promoteLocked()
 }
 
-func (l *GatewayLimiter) admitLocked(ctx context.Context, model string, adm admission) error {
-	if reason := adm.impossible(); reason != "" {
-		return &RateLimitError{Reason: reason, RetryAfter: l.cfg.AcquireWait}
+func (l *GatewayLimiter) releaseLocked(model string, inputTokens int64) {
+	counter, ok := l.models[model]
+	if !ok {
+		return
 	}
-
-	reason := l.blockedReasonLocked(model, adm)
-	if reason == "" {
-		return nil
+	counter.inFlight = max(counter.inFlight-1, 0)
+	counter.inputTokens = max(counter.inputTokens-inputTokens, 0)
+	if counter.inFlight == 0 && counter.inputTokens == 0 {
+		delete(l.models, model)
 	}
-	if l.cfg.AcquireWait <= 0 {
-		return &RateLimitError{Reason: reason, RetryAfter: l.cfg.AcquireWait}
-	}
-
-	deadline := time.Now().Add(l.cfg.AcquireWait)
-	stop := make(chan struct{})
-	defer close(stop)
-	go l.broadcastAt(ctx, deadline, stop)
-
-	for {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		if reason = l.blockedReasonLocked(model, adm); reason == "" {
-			return nil
-		}
-		if !time.Now().Before(deadline) {
-			return &RateLimitError{Reason: reason, RetryAfter: l.cfg.AcquireWait}
-		}
-		l.cond.Wait()
-	}
+	l.total.inFlight = max(l.total.inFlight-1, 0)
+	l.total.inputTokens = max(l.total.inputTokens-inputTokens, 0)
 }
 
-func (l *GatewayLimiter) blockedReasonLocked(model string, adm admission) string {
+func (l *GatewayLimiter) blockedReasonLocked(model string, global, perModel admission) string {
+	if reason := global.blockedReason(l.total.inFlight, l.total.inputTokens); reason != "" {
+		return reason
+	}
 	var inFlight, inputTokens int64
 	if counter, ok := l.models[model]; ok {
 		inFlight, inputTokens = counter.inFlight, counter.inputTokens
 	}
-	return adm.blockedReason(inFlight, inputTokens)
+	return perModel.blockedReason(inFlight, inputTokens)
 }
 
-// mu before Broadcast avoids racing a waiter that hasn't reached cond.Wait yet (a lost wakeup).
-func (l *GatewayLimiter) broadcastAt(ctx context.Context, deadline time.Time, stop <-chan struct{}) {
-	timer := time.NewTimer(time.Until(deadline))
-	defer timer.Stop()
-	select {
-	case <-timer.C:
-		l.lockedBroadcast()
-	case <-ctx.Done():
-		l.lockedBroadcast()
-	case <-stop:
+func impossibleReason(global, perModel admission) string {
+	if reason := global.impossible(); reason != "" {
+		return reason
 	}
-}
-
-func (l *GatewayLimiter) lockedBroadcast() {
-	l.mu.Lock()
-	l.cond.Broadcast()
-	l.mu.Unlock()
+	return perModel.impossible()
 }
 
 func (l *GatewayLimiter) counterLocked(model string) *modelCounter {
@@ -204,21 +264,6 @@ func (a admission) blockedReason(inFlight, inFlightTokens int64) string {
 
 func (a admission) impossible() string {
 	return a.blockedReason(0, 0)
-}
-
-func (l *GatewayLimiter) limitsForModel(model string) (maxConcurrent, maxInputTokens int64) {
-	maxConcurrent, maxInputTokens = l.cfg.MaxConcurrent, l.cfg.MaxInputTokens
-	override, ok := l.cfg.ModelLimits[model]
-	if !ok {
-		return maxConcurrent, maxInputTokens
-	}
-	if override.MaxConcurrent != nil {
-		maxConcurrent = *override.MaxConcurrent
-	}
-	if override.MaxInputTokens != nil {
-		maxInputTokens = *override.MaxInputTokens
-	}
-	return maxConcurrent, maxInputTokens
 }
 
 func effectiveConcurrencyLimit(baseMaxConcurrent int64, capacity ModelCapacity) (limit int64, limited bool) {

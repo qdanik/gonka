@@ -2,6 +2,7 @@ package filters
 
 import (
 	"math"
+	"strconv"
 	"strings"
 
 	"devshard"
@@ -85,6 +86,32 @@ func dropBlankStringListElements() RuleFunc {
 			return nil
 		}
 		ctx.Document.Set(ctx.Param, cleaned)
+		return nil
+	}
+}
+
+// requireTokenIDKeys rejects ctx.Param's lexicographically first key that is not a
+// non-negative 32-bit integer. A key vLLM cannot read as a token id trips a device-side
+// assert that poisons the CUDA context, so the host then fails every later request too,
+// not just this one (vLLM #16529).
+func requireTokenIDKeys() RuleFunc {
+	return func(ctx RuleContext) error {
+		object, ok := ctx.Document.Object(ctx.Param)
+		if !ok {
+			return nil
+		}
+		invalidKey, found := "", false
+		for key := range object {
+			if tokenID, err := strconv.ParseInt(key, 10, 32); err == nil && tokenID >= 0 {
+				continue
+			}
+			if !found || key < invalidKey {
+				invalidKey, found = key, true
+			}
+		}
+		if found {
+			return Reject("%s: key invalid: %q is not a non-negative integer token id", ctx.Param, invalidKey)
+		}
 		return nil
 	}
 }

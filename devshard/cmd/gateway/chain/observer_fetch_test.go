@@ -621,3 +621,38 @@ func TestParsePreservedSnapshotEmptyModelsHasIsSafe(t *testing.T) {
 		t.Fatal("Has() = true against an empty snapshot, want false")
 	}
 }
+
+// TestParseMaxNonceDecodesField covers the happy-path decode (numeric and string-encoded), plus
+// the failure shapes: devshard_escrow_params missing, params missing, and malformed JSON.
+func TestParseMaxNonceDecodesField(t *testing.T) {
+	cases := []struct {
+		name    string
+		body    string
+		want    uint64
+		wantErr bool
+	}{
+		{"decodes numeric max_nonce", `{"params": {"devshard_escrow_params": {"max_nonce": 19800}}}`, 19800, false},
+		{"decodes string-encoded max_nonce", `{"params": {"devshard_escrow_params": {"max_nonce": "19800"}}}`, 19800, false},
+		{"zero max_nonce decodes to zero", `{"params": {"devshard_escrow_params": {"max_nonce": 0}}}`, 0, false},
+		{"missing devshard_escrow_params errors", `{"params": {}}`, 0, true},
+		{"missing params errors", `{}`, 0, true},
+		{"malformed json errors", `{not-json`, 0, true},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			got, err := parseMaxNonce([]byte(testCase.body))
+			if testCase.wantErr {
+				if err == nil {
+					t.Fatal("parseMaxNonce() error = nil, want error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("parseMaxNonce(): %v", err)
+			}
+			if got != testCase.want {
+				t.Fatalf("parseMaxNonce() = %d, want %d", got, testCase.want)
+			}
+		})
+	}
+}

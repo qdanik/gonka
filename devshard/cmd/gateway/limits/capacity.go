@@ -45,7 +45,7 @@ func (c *Capacity) RemoveEscrow(escrowID string) {
 func (c *Capacity) ScaleFactor(model string) float64 {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	if c.snapshot.RequestsBlocked {
+	if c.snapshot.RequestsBlocked || !c.modelServedLocked(model) {
 		return 0
 	}
 	current := c.sumAvailableLocked(c.currentWeightsLocked(model), model)
@@ -57,11 +57,27 @@ func (c *Capacity) ScaleFactor(model string) float64 {
 func (c *Capacity) EscrowWeight(escrowID, model string) float64 {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
+	if !c.modelServedLocked(model) {
+		return 0
+	}
 	var availableForModel func(string) bool
 	if c.available != nil {
 		availableForModel = func(host string) bool { return c.available(host, model) }
 	}
 	return escrowWeight(c.currentWeightsLocked(model), c.membership[escrowID], availableForModel)
+}
+
+// A model absent from a populated by-model view is served by nobody, so it gets zero capacity instead
+// of inheriting the generic all-model view; with no by-model view at all that view applies to everything.
+func (c *Capacity) modelServedLocked(model string) bool {
+	if len(c.snapshot.CurrentWeightsByModel) == 0 && len(c.snapshot.FullWeightsByModel) == 0 {
+		return true
+	}
+	if _, ok := c.snapshot.CurrentWeightsByModel[model]; ok {
+		return true
+	}
+	_, ok := c.snapshot.FullWeightsByModel[model]
+	return ok
 }
 
 // currentWeightsLocked/fullWeightsLocked fall back to the generic view independently per side, so a missing full-by-model entry doesn't suppress a present current-by-model one.

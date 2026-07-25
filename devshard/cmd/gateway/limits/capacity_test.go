@@ -41,12 +41,28 @@ func TestCapacityScaleFactor(t *testing.T) {
 		}
 	})
 
-	t.Run("model missing from both by-model maps falls back to the generic view", func(t *testing.T) {
+	t.Run("model absent from a populated by-model view gets no capacity", func(t *testing.T) {
 		t.Parallel()
 		capacity := NewCapacity(nil)
 		capacity.Update(baseSnapshot())
-		if got := capacity.ScaleFactor("modelNeverSeen"); got != 0.5 {
-			t.Errorf("ScaleFactor(modelNeverSeen) = %v, want 0.5 (generic fallback)", got)
+		if got := capacity.ScaleFactor("modelNeverSeen"); got != 0 {
+			t.Errorf("ScaleFactor(modelNeverSeen) = %v, want 0: a model nobody serves must not inherit the generic view", got)
+		}
+		capacity.SetEscrowMembership("escrow1", map[string]float64{"hostA": 1})
+		if got := capacity.EscrowWeight("escrow1", "modelNeverSeen"); got != 0 {
+			t.Errorf("EscrowWeight(escrow1, modelNeverSeen) = %v, want 0", got)
+		}
+	})
+
+	t.Run("with no by-model view at all the generic view applies to every model", func(t *testing.T) {
+		t.Parallel()
+		capacity := NewCapacity(nil)
+		capacity.Update(chain.PhaseSnapshot{
+			CurrentWeights: map[string]float64{"hostA": 40, "hostB": 60},
+			FullWeights:    map[string]float64{"hostA": 100, "hostB": 100},
+		})
+		if got := capacity.ScaleFactor("anyModel"); got != 0.5 {
+			t.Errorf("ScaleFactor(anyModel) = %v, want 0.5 (generic view, no per-model data yet)", got)
 		}
 	})
 

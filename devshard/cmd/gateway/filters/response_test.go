@@ -149,18 +149,17 @@ func TestRewriteStreamChunk_StripsTokenIdFamily(t *testing.T) {
 
 // --- RewriteStreamChunk: malformed / non-data lines pass through unchanged ---
 
-func TestRewriteStreamChunk_MixedStreamOnlyRewritesParseableEvents(t *testing.T) {
+func TestRewriteStreamChunk_MalformedEventIsDroppedNotForwarded(t *testing.T) {
 	input := readSSEFixture(t, "malformed_data_line.sse")
 	got := RewriteStreamChunk(input)
-	// The well-formed first event's logprobs must be gone.
 	if bytes.Contains(got, []byte(`"token":"ok","logprob"`)) {
 		t.Error("well-formed event's logprobs was not stripped")
 	}
-	// The malformed second event is unparseable JSON and must survive byte-for-byte,
-	// including its own raw "logprobs"/"logprob" text.
-	malformedEvent := `data: {"id":"chatcmpl-9","broken":true,"logprobs":{"content":[{"token":"partial","logprob":-0.02}]` + "\n\n"
-	if !bytes.Contains(got, []byte(malformedEvent)) {
-		t.Errorf("malformed event was altered; want it verbatim in output %q", got)
+	if bytes.Contains(got, []byte("logprob")) {
+		t.Errorf("malformed event leaked internal fields instead of being dropped: %q", got)
+	}
+	if bytes.Contains(got, []byte(`"broken":true`)) {
+		t.Errorf("malformed event was forwarded: %q", got)
 	}
 	if !bytes.HasSuffix(got, []byte("data: [DONE]\n\n")) {
 		t.Error("[DONE] marker not preserved after a malformed event")
@@ -207,28 +206,22 @@ func TestRewriteStreamChunk_ChunkByChunkMatchesWholeStream(t *testing.T) {
 	}
 }
 
-// TestRewriteStreamChunk_NonEventAlignedSplitDoesNotStripAcrossBoundary pins the documented
-// contract: RewriteStreamChunk holds no state across calls, so a mid-JSON split leaves both
-// halves unmodified (neither parses alone) rather than corrupted or silently stripped.
-func TestRewriteStreamChunk_NonEventAlignedSplitDoesNotStripAcrossBoundary(t *testing.T) {
+// TestRewriteStreamChunk_TruncatedEventIsNotForwarded covers the stateless entry point fed a
+// half event: it must drop the fragment rather than emit the internal fields it still carries.
+// StreamRewriter is what reassembles such a split, see TestStreamRewriter_SplitFrameIsRewritten.
+func TestRewriteStreamChunk_TruncatedEventIsNotForwarded(t *testing.T) {
 	input := readSSEFixture(t, "logprobs_stream.sse")
 	events := splitCompleteEvents(t, input)
-	target := events[1] // the logprobs-bearing event
+	target := events[1]
 	splitAt := bytes.Index(target, []byte("top_logprobs")) + len("top_logprobs")
 	if splitAt <= len("top_logprobs") || splitAt >= len(target) {
 		t.Fatalf("fixture no longer contains a mid-event top_logprobs split point")
 	}
-	firstHalf, secondHalf := target[:splitAt], target[splitAt:]
 
-	firstOut := RewriteStreamChunk(firstHalf)
-	secondOut := RewriteStreamChunk(secondHalf)
+	got := RewriteStreamChunk(target[:splitAt])
 
-	reassembled := append(append([]byte(nil), firstOut...), secondOut...)
-	if !bytes.Equal(reassembled, target) {
-		t.Errorf("non-aligned split must reassemble to the original event unmodified\n got:  %q\n want: %q", reassembled, target)
-	}
-	if !bytes.Contains(reassembled, []byte(`"logprob"`)) {
-		t.Error("expected the unstripped logprob text to survive a non-aligned split (documented limitation)")
+	if len(got) != 0 {
+		t.Errorf("truncated data event must be dropped, got %q", got)
 	}
 }
 

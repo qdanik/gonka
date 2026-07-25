@@ -2,7 +2,10 @@
 package perf
 
 import (
+	"slices"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"devshard/cmd/gateway/config"
@@ -19,6 +22,10 @@ type Tracker struct {
 	firstToken *firstTokenReservoir
 	inflight   *inflightGauge
 	now        func() time.Time
+	lastSweep  time.Time
+	// ejectedView answers Ejected without touching mu or scanning every host: the ejection cap is
+	// resolved once per state change, while each entry keeps its own expiry so time still decides.
+	ejectedView atomic.Pointer[map[hostKey]time.Time]
 }
 
 func NewTracker(holder *config.Holder, now func() time.Time) *Tracker {
@@ -49,10 +56,43 @@ func (t *Tracker) RecordSample(s Sample) {
 
 	host, state := t.ensureHostLocked(key, perf)
 	host.recordSample(s, now)
+	ejectedUntilBefore := state.ejectedUntil
 	newEjectionPolicyFromPerf(perf).evaluate(host, state, now)
 
-	// Full scan each call: cheap at this scale, simpler than a sweep cursor.
-	t.evictStaleLocked(now, time.Duration(perf.HostStalenessSeconds)*time.Second)
+	evicted := t.evictStaleLocked(now, time.Duration(perf.HostStalenessSeconds)*time.Second)
+	// Rebuilding is O(hosts), so it happens only when the membership the cap is computed over
+	// actually moved; entries carry their own expiry, so ageing out needs no rebuild.
+	if evicted || state.ejectedUntil != ejectedUntilBefore {
+		t.rebuildEjectedViewLocked(now, perf)
+	}
+}
+
+// rebuildEjectedViewLocked applies Envoy's max-ejection-percent cap across the hosts of each model,
+// ties breaking by participant order, and publishes the survivors with their expiries.
+func (t *Tracker) rebuildEjectedViewLocked(now time.Time, perf config.Perf) {
+	knownByModel := make(map[string]int, len(t.hosts))
+	for key := range t.hosts {
+		knownByModel[key.model]++
+	}
+	ejectedByModel := make(map[string][]hostKey)
+	for key, state := range t.ejections {
+		if state.ejected(now) {
+			ejectedByModel[key.model] = append(ejectedByModel[key.model], key)
+		}
+	}
+
+	view := make(map[hostKey]time.Time, len(t.ejections))
+	for model, keys := range ejectedByModel {
+		slices.SortFunc(keys, func(a, b hostKey) int { return strings.Compare(a.participant, b.participant) })
+		allowed := maxEjectable(perf, knownByModel[model])
+		for rank, key := range keys {
+			if rank >= allowed {
+				break
+			}
+			view[key] = t.ejections[key].ejectedUntil
+		}
+	}
+	t.ejectedView.Store(&view)
 }
 
 func (t *Tracker) ensureHostLocked(key hostKey, perf config.Perf) (*hostPerf, *ejectionState) {
@@ -69,13 +109,22 @@ func (t *Tracker) ensureHostLocked(key hostKey, perf config.Perf) (*hostPerf, *e
 	return host, state
 }
 
-func (t *Tracker) evictStaleLocked(now time.Time, staleness time.Duration) {
+// evictStaleLocked sweeps at most once per tenth of the staleness window: entries age out over
+// minutes, so scanning every host on every sample costs O(hosts) under the global lock for nothing.
+func (t *Tracker) evictStaleLocked(now time.Time, staleness time.Duration) bool {
+	if now.Sub(t.lastSweep) < staleness/10 {
+		return false
+	}
+	t.lastSweep = now
+	evicted := false
 	for key, host := range t.hosts {
 		if now.Sub(host.lastSeen) > staleness {
 			delete(t.hosts, key)
 			delete(t.ejections, key)
+			evicted = true
 		}
 	}
+	return evicted
 }
 
 func newEjectionPolicyFromPerf(perf config.Perf) ejectionPolicy {
@@ -126,37 +175,15 @@ func (t *Tracker) Inflight(participant string) int {
 	return t.inflight.count(participant)
 }
 
-// Ejected caps how many hosts of a model report ejected at once (Envoy's
-// max_ejection_percent) so failures can't empty the pool; over the cap, a
-// host keeps its internal ejected state but stops being reported, ties
-// breaking by participant order.
+// Ejected reports whether a host is currently withheld from routing. It is called once per host per
+// admission, so it reads the published view instead of scanning: the cap was applied when the view
+// was built, and the stored expiry keeps the answer correct as the ejection ages out.
 func (t *Tracker) Ejected(participant, model string) bool {
-	now := t.now()
-	key := hostKey{participant: participant, model: model}
-
-	t.mu.Lock()
-	defer t.mu.Unlock()
-
-	state, ok := t.ejections[key]
-	if !ok || !state.ejected(now) {
+	view := t.ejectedView.Load()
+	if view == nil {
 		return false
 	}
-
-	perf := t.config.Load().Perf
-	knownForModel, rank := 0, 0
-	for otherKey := range t.hosts {
-		if otherKey.model != model {
-			continue
-		}
-		knownForModel++
-		if otherKey == key {
-			continue
-		}
-		if otherState, exists := t.ejections[otherKey]; exists && otherState.ejected(now) && otherKey.participant < participant {
-			rank++
-		}
-	}
-	return rank < maxEjectable(perf, knownForModel)
+	return t.now().Before((*view)[hostKey{participant: participant, model: model}])
 }
 
 func maxEjectable(perf config.Perf, knownForModel int) int {
