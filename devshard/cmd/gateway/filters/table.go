@@ -50,6 +50,10 @@ const (
 	minPMax = 1.0
 	topPMax = 1.0
 
+	topKMax = 262144
+
+	modelMaxLen = 256
+
 	penaltyMin = -2.0
 	penaltyMax = 2.0
 
@@ -84,7 +88,7 @@ func spec(name string, stage Stage, rule RuleFunc) ParameterSpec {
 
 // parameterTable is THE single registration point; knownParameterSet derives from it.
 var parameterTable = []ParameterSpec{
-	{Name: "model"},
+	spec("model", StagePreValidation, validModelName(modelMaxLen)),
 	{Name: "stream"},
 	{Name: "max_tokens", Rules: []StagedRule{
 		{Stage: StagePreValidation, Apply: maxTokensFloor()},
@@ -108,7 +112,7 @@ var parameterTable = []ParameterSpec{
 	spec("repetition_penalty", StagePostLimits, rejectNonPositiveThenClamp(maxRepetitionPenalty)),
 	spec("top_p", StagePostLimits, rejectNonPositiveThenClamp(topPMax)),
 	spec("min_p", StagePostLimits, clampFloat(minPMin, minPMax)),
-	spec("top_k", StagePostLimits, validTopK()),
+	spec("top_k", StagePostLimits, validTopK(topKMax)),
 	{Name: "frequency_penalty", Rules: []StagedRule{
 		{Stage: StagePostLimits, Apply: clampFloat(penaltyMin, penaltyMax)},
 		{Stage: StagePostLimits, Apply: forceZeroPenalty()},
@@ -117,7 +121,12 @@ var parameterTable = []ParameterSpec{
 		{Stage: StagePostLimits, Apply: clampFloat(penaltyMin, penaltyMax)},
 		{Stage: StagePostLimits, Apply: forceZeroPenalty()},
 	}},
-	spec("logit_bias", StagePostLimits, validFloatMap(logitBiasMinValue, logitBiasMaxValue, logitBiasMaxEntries)),
+	// The key check runs before the value/size rules below: those drop offending entries,
+	// and a bad key must reject rather than be dropped along with them.
+	{Name: "logit_bias", Rules: []StagedRule{
+		{Stage: StagePostLimits, Apply: requireTokenIDKeys()},
+		{Stage: StagePostLimits, Apply: validFloatMap(logitBiasMinValue, logitBiasMaxValue, logitBiasMaxEntries)},
+	}},
 	spec("skip_special_tokens", StagePreValidation, requireBool()),
 	spec("detokenize", StagePreValidation, requireBool()),
 	spec("parallel_tool_calls", StagePreValidation, requireBool()),

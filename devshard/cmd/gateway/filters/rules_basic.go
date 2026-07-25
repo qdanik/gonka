@@ -2,9 +2,13 @@ package filters
 
 import (
 	"math"
+	"regexp"
+	"strings"
 
 	"devshard"
 )
+
+var modelNameRegex = regexp.MustCompile(`^[A-Za-z0-9._/-]+$`)
 
 // requireUint rejects ctx.Param when present and not a non-negative integer; absent/null pass.
 func requireUint() RuleFunc {
@@ -48,6 +52,31 @@ func requireString(maxBytes int) RuleFunc {
 		}
 		if len(value) > maxBytes {
 			return Reject("%s: length exceeded: %d > %d", ctx.Param, len(value), maxBytes)
+		}
+		return nil
+	}
+}
+
+// validModelName rejects ctx.Param when present and not a string, blank after trimming,
+// longer than maxBytes, or outside modelNameRegex; an absent field passes through.
+func validModelName(maxBytes int) RuleFunc {
+	return func(ctx RuleContext) error {
+		raw, exists := ctx.Document.Get(ctx.Param)
+		if !exists {
+			return nil
+		}
+		value, ok := raw.(string)
+		if !ok {
+			return Reject("%s: invalid wrapper shape: must be a string", ctx.Param)
+		}
+		if len(value) > maxBytes {
+			return Reject("%s: length exceeded: %d > %d", ctx.Param, len(value), maxBytes)
+		}
+		if strings.TrimSpace(value) == "" {
+			return Reject("%s: must not be empty", ctx.Param)
+		}
+		if !modelNameRegex.MatchString(value) {
+			return Reject("%s: invalid: must contain only letters, digits, and the characters ._-/", ctx.Param)
 		}
 		return nil
 	}
@@ -108,9 +137,9 @@ func rejectNonPositiveThenClamp(max float64) RuleFunc {
 	}
 }
 
-// validTopK strips non-finite/unparseable values, else rejects anything but -1 (disabled)
-// or a value >= 1.
-func validTopK() RuleFunc {
+// validTopK strips non-finite/unparseable values, rejects anything but -1 (disabled) or a
+// value >= 1, then clamps down to max and truncates toward zero.
+func validTopK(max float64) RuleFunc {
 	return func(ctx RuleContext) error {
 		number, ok := sanitizeFloatField(ctx.Document, ctx.Param)
 		if !ok {
@@ -119,7 +148,10 @@ func validTopK() RuleFunc {
 		if number != -1 && number < 1 {
 			return Reject("%s: must be -1 or a positive integer", ctx.Param)
 		}
-		ctx.Document.Set(ctx.Param, number)
+		if number > max {
+			number = max
+		}
+		ctx.Document.Set(ctx.Param, int64(math.Trunc(number)))
 		return nil
 	}
 }

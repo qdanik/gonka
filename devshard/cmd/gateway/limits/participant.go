@@ -73,6 +73,18 @@ func (l *ParticipantLimiter) stateLocked(k key) *hostState {
 	return state
 }
 
+func wouldAdmitLocked(state *hostState, now time.Time) bool {
+	if now.Before(state.openUntil) {
+		return false
+	}
+	halfOpen := state.halfOpen || !state.openUntil.IsZero()
+	effectiveWindow := int(math.Floor(state.window))
+	if halfOpen {
+		effectiveWindow = 1
+	}
+	return state.inflight < effectiveWindow
+}
+
 // Call order per attempt is Acquire, OnResult, Release: the utilization gate reads inflight before Release frees it.
 func (l *ParticipantLimiter) Acquire(participant, model string) bool {
 	l.mu.Lock()
@@ -87,16 +99,23 @@ func (l *ParticipantLimiter) Acquire(participant, model string) bool {
 	if !state.openUntil.IsZero() {
 		state.halfOpen = true
 	}
-
-	effectiveWindow := int(math.Floor(state.window))
-	if state.halfOpen {
-		effectiveWindow = 1
-	}
-	if state.inflight >= effectiveWindow {
+	if !wouldAdmitLocked(state, now) {
 		return false
 	}
 	state.inflight++
 	return true
+}
+
+// Available peeks Acquire's admit decision for participant/model without mutating inflight, the breaker, or creating state for a participant never seen before.
+func (l *ParticipantLimiter) Available(participant, model string) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	state, ok := l.states[key{participant: participant, model: model}]
+	if !ok {
+		state = &hostState{window: float64(l.cfg.InitialWindow)}
+	}
+	return wouldAdmitLocked(state, l.now())
 }
 
 func (l *ParticipantLimiter) Release(participant, model string) {

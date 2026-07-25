@@ -21,6 +21,9 @@ const (
 	participantsPath = "/v1/epochs/current/participants"
 	// preservedSnapshotPath is the chain REST route for the PoC preserved-nodes snapshot.
 	preservedSnapshotPath = "/productscience/inference/inference/preserved_nodes_snapshot"
+	// devshardEscrowParamsPath is the chain REST route for governance params, including
+	// devshard_escrow_params.max_nonce.
+	devshardEscrowParamsPath = "/productscience/inference/inference/params"
 )
 
 // ObserverConfig configures a PhaseObserver. Zero-value poll/client/clock fields take package
@@ -84,7 +87,6 @@ func NewPhaseObserver(cfg ObserverConfig) (*PhaseObserver, error) {
 		now:              now,
 		versions:         NewVersionsCache(client, versionsTTLPollMultiplier*pollInterval, now),
 		subscribers:      make(map[int]func(PhaseSnapshot)),
-		doneCh:           make(chan struct{}),
 	}
 	observer.current.Store(&PhaseSnapshot{})
 	return observer, nil
@@ -93,11 +95,16 @@ func NewPhaseObserver(cfg ObserverConfig) (*PhaseObserver, error) {
 // Start derives a cancelable context from ctx and spawns the poll loop and the versions poller on
 // it; doneCh closes once both have exited. It returns immediately, the first refresh happens
 // asynchronously. Call Start at most once.
+// Start is idempotent: a call while already running is a no-op rather than a second set of pollers.
 func (o *PhaseObserver) Start(ctx context.Context) {
-	ctx, cancel := context.WithCancel(ctx)
 	o.lifecycleMu.Lock()
-	o.cancel = cancel
-	o.lifecycleMu.Unlock()
+	defer o.lifecycleMu.Unlock()
+	if o.cancel != nil {
+		return
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	o.cancel, o.doneCh = cancel, done
 
 	var running sync.WaitGroup
 	running.Add(2)
@@ -111,21 +118,25 @@ func (o *PhaseObserver) Start(ctx context.Context) {
 	}()
 	go func() {
 		running.Wait()
-		close(o.doneCh)
+		close(done)
 	}()
 }
 
 // Stop cancels the context Start derived and blocks until both loops have exited. It is safe to
 // call repeatedly and concurrently, and is a no-op before Start.
+// Stop is idempotent and is a barrier for every caller: doneCh outlives cancel so a second,
+// concurrent Stop waits for the pollers to exit instead of returning while they still run.
 func (o *PhaseObserver) Stop() {
 	o.lifecycleMu.Lock()
-	cancel := o.cancel
+	cancel, done := o.cancel, o.doneCh
+	o.cancel = nil
 	o.lifecycleMu.Unlock()
-	if cancel == nil {
-		return
+	if cancel != nil {
+		cancel()
 	}
-	cancel()
-	<-o.doneCh
+	if done != nil {
+		<-done
+	}
 }
 
 // run is the poll loop: immediate refresh, then one refresh per tick until ctx is done.
@@ -165,6 +176,15 @@ func (o *PhaseObserver) refresh(ctx context.Context) {
 		RequestsBlocked:        blocked,
 		BlockReason:            reason,
 		LastUpdatedAt:          o.now(),
+	}
+
+	if maxNonce, fetched, maxNonceErr := o.fetchMaxNonce(ctx); fetched {
+		snapshot.MaxNonce = maxNonce
+	} else {
+		snapshot.MaxNonce = previous.MaxNonce
+		if maxNonceErr != nil {
+			snapshot.LastError = fmt.Sprintf("fetch devshard escrow params: %v", maxNonceErr)
+		}
 	}
 
 	participantsBody, err := o.getBody(ctx, participantsPath)
@@ -291,6 +311,40 @@ func (o *PhaseObserver) fetchPreservedSnapshot(ctx context.Context, expectedAnch
 		return preservedSnapshotState{}, preservedSnapshotUnavailable, err
 	}
 	return parsePreservedSnapshot(body, expectedAnchor)
+}
+
+// fetchMaxNonce polls the chain devshard_escrow_params.max_nonce. fetched=false with a nil error
+// means unavailable (no base URL or 404); a non-nil error means refresh should fail open.
+func (o *PhaseObserver) fetchMaxNonce(ctx context.Context) (maxNonce uint64, fetched bool, err error) {
+	if o.chainRESTBaseURL == "" {
+		return 0, false, nil
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, o.chainRESTBaseURL+devshardEscrowParamsPath, nil)
+	if err != nil {
+		return 0, false, err
+	}
+	resp, err := o.client.Do(req)
+	if err != nil {
+		return 0, false, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		io.Copy(io.Discard, resp.Body)
+		return 0, false, nil
+	}
+	if resp.StatusCode != http.StatusOK {
+		io.Copy(io.Discard, resp.Body)
+		return 0, false, fmt.Errorf("devshard escrow params status %d", resp.StatusCode)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return 0, false, err
+	}
+	maxNonce, err = parseMaxNonce(body)
+	if err != nil {
+		return 0, false, err
+	}
+	return maxNonce, true, nil
 }
 
 func (o *PhaseObserver) fetchEpochInfo(ctx context.Context) (epochInfo, error) {

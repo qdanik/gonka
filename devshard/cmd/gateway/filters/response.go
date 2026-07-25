@@ -26,71 +26,40 @@ var forcedParameterResponseField = map[string]string{
 	"return_token_ids": "token_ids",
 }
 
-var (
-	sseEventSeparator = []byte("\n\n")
-	sseDataPrefix     = []byte("data: ")
-	sseDataObjectHead = []byte("data: {")
-)
+// stripOutcome separates an unparseable payload from a parseable one with nothing to strip.
+type stripOutcome int
 
-// RewriteStreamChunk strips clientStrippedFields from every complete "data: {...}" SSE event in
-// chunk; [DONE] and non-object lines pass through unchanged. Stateless per call: a trailing
-// incomplete event is left unmodified rather than buffered, so callers must pass complete-event-
-// aligned chunks (or the whole stream at once) for stripping to apply.
-func RewriteStreamChunk(chunk []byte) []byte {
-	if !hasStrippableField(chunk) {
-		return chunk
-	}
-	var out bytes.Buffer
-	changed := false
-	for _, eventChunk := range bytes.SplitAfter(chunk, sseEventSeparator) {
-		if len(eventChunk) == 0 {
-			continue
-		}
-		event := bytes.TrimRight(eventChunk, "\r\n")
-		if len(event) == 0 || !bytes.HasPrefix(event, sseDataObjectHead) {
-			out.Write(eventChunk)
-			continue
-		}
-		payload := bytes.TrimSpace(event[len(sseDataPrefix):])
-		filtered, ok := stripInternalFields(payload)
-		if !ok {
-			out.Write(eventChunk)
-			continue
-		}
-		fmt.Fprintf(&out, "data: %s\n\n", filtered)
-		changed = true
-	}
-	if !changed {
-		return chunk
-	}
-	return out.Bytes()
-}
+const (
+	stripMalformed stripOutcome = iota
+	stripUnchanged
+	stripRewritten
+)
 
 // StripResponseBody removes clientStrippedFields from a non-streaming JSON response body, at
 // any nesting depth. A malformed body passes through unchanged.
 func StripResponseBody(body []byte) []byte {
-	filtered, ok := stripInternalFields(body)
-	if !ok {
+	filtered, outcome := stripInternalFields(body)
+	if outcome != stripRewritten {
 		return body
 	}
 	return filtered
 }
 
-// stripInternalFields deletes clientStrippedFields from payload's decoded JSON. ok is false when
-// payload isn't JSON or nothing changed; callers should keep the original bytes verbatim then.
-func stripInternalFields(payload []byte) ([]byte, bool) {
+// stripInternalFields deletes clientStrippedFields from payload's decoded JSON, reporting whether
+// the payload parsed and whether anything was removed.
+func stripInternalFields(payload []byte) ([]byte, stripOutcome) {
 	var decoded any
 	if err := json.Unmarshal(payload, &decoded); err != nil {
-		return nil, false
+		return nil, stripMalformed
 	}
 	if !deleteInternalFields(decoded) {
-		return nil, false
+		return nil, stripUnchanged
 	}
 	encoded, err := json.Marshal(decoded)
 	if err != nil {
-		return nil, false
+		return nil, stripMalformed
 	}
-	return encoded, true
+	return encoded, stripRewritten
 }
 
 // deleteInternalFields recursively removes clientStrippedFields keys from v at any depth,

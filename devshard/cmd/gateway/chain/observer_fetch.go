@@ -529,6 +529,28 @@ func newPreservedSnapshotState(snapshot *chainPreservedNodesSnapshot) preservedS
 	return state
 }
 
+// chainParamsResponse is the raw /productscience/inference/inference/params JSON envelope,
+// decoding only the devshard_escrow_params.max_nonce field.
+type chainParamsResponse struct {
+	Params *struct {
+		DevshardEscrowParams *struct {
+			MaxNonce jsonUint64 `json:"max_nonce,omitempty"`
+		} `json:"devshard_escrow_params"`
+	} `json:"params"`
+}
+
+// parseMaxNonce parses a chain params response body into devshard_escrow_params.max_nonce.
+func parseMaxNonce(body []byte) (uint64, error) {
+	var payload chainParamsResponse
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return 0, fmt.Errorf("parse devshard escrow params: %w", err)
+	}
+	if payload.Params == nil || payload.Params.DevshardEscrowParams == nil {
+		return 0, fmt.Errorf("devshard escrow params missing from chain params response")
+	}
+	return uint64(payload.Params.DevshardEscrowParams.MaxNonce), nil
+}
+
 // jsonInt64 decodes an int64 field that may arrive as a JSON number or a numeric string.
 type jsonInt64 int64
 

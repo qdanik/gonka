@@ -391,3 +391,144 @@ func TestBreakerMaxOpenDefaultStaysBelowPerfEjectionHorizon(t *testing.T) {
 		t.Fatalf("breaker MaxOpenMS default %v must stay below perf's ejection horizon %v", breakerMaxOpen, perfEjectionMax)
 	}
 }
+
+func TestAvailableTrueOnFreshParticipant(t *testing.T) {
+	t.Parallel()
+	l := newTestLimiter(testConfig(), fixedNow(testEpoch))
+
+	if !l.Available("p", "m") {
+		t.Fatal("Available() on a never-seen participant = false, want true (fresh full window)")
+	}
+	if _, exists := l.states[key{participant: "p", model: "m"}]; exists {
+		t.Fatal("Available() on a never-seen participant created state, want no-op")
+	}
+}
+
+func TestAvailableFalseWhileBreakerOpenThenTrueAfterCooldown(t *testing.T) {
+	t.Parallel()
+	cfg := testConfig()
+	clock := newMovingClock(testEpoch)
+	l := newTestLimiter(cfg, clock.now)
+
+	for i := int64(0); i < cfg.TripThreshold; i++ {
+		l.OnResult("p", "m", TransportFault)
+	}
+	if l.Available("p", "m") {
+		t.Fatal("Available() while breaker Open = true, want false")
+	}
+
+	state := l.states[key{participant: "p", model: "m"}]
+	clock.advance(state.openUntil.Sub(clock.now()) + time.Millisecond)
+
+	if !l.Available("p", "m") {
+		t.Fatal("Available() after cooldown elapsed = false, want true (half-open probe available)")
+	}
+	if !l.Acquire("p", "m") {
+		t.Fatal("Acquire() after Available() reported half-open = false, want true (peek must not consume the probe)")
+	}
+}
+
+func TestAvailableFalseDuringHalfOpenProbeInFlight(t *testing.T) {
+	t.Parallel()
+	cfg := testConfig()
+	clock := newMovingClock(testEpoch)
+	l := newTestLimiter(cfg, clock.now)
+
+	for i := int64(0); i < cfg.TripThreshold; i++ {
+		l.OnResult("p", "m", TransportFault)
+	}
+	state := l.states[key{participant: "p", model: "m"}]
+	clock.advance(state.openUntil.Sub(clock.now()) + time.Millisecond)
+	if !l.Acquire("p", "m") {
+		t.Fatal("Acquire() for the half-open probe = false, want true")
+	}
+
+	if l.Available("p", "m") {
+		t.Fatal("Available() with the half-open probe in flight (inflight==window==1) = true, want false")
+	}
+}
+
+func TestAvailableFalseAtWindowThenTrueAfterRelease(t *testing.T) {
+	t.Parallel()
+	l := newTestLimiter(testConfig(), fixedNow(testEpoch))
+	for i := 0; i < 4; i++ {
+		l.Acquire("p", "m")
+	}
+	if l.Available("p", "m") {
+		t.Fatal("Available() at inflight==window = true, want false")
+	}
+
+	l.Release("p", "m")
+
+	if !l.Available("p", "m") {
+		t.Fatal("Available() after Release() freed a slot = false, want true")
+	}
+}
+
+func TestAvailableDoesNotConsumeWindowSlots(t *testing.T) {
+	t.Parallel()
+	cfg := testConfig()
+	l := newTestLimiter(cfg, fixedNow(testEpoch))
+
+	for i := 0; i < 10; i++ {
+		l.Available("p", "m")
+	}
+	if _, exists := l.states[key{participant: "p", model: "m"}]; exists {
+		t.Fatal("Available() created participant state as a side effect, want no-op until first Acquire")
+	}
+
+	for i := 0; i < int(cfg.InitialWindow); i++ {
+		if !l.Acquire("p", "m") {
+			t.Fatalf("Acquire() call %d after repeated Available() peeks = false, want true (peeks must not consume slots)", i+1)
+		}
+	}
+	if l.Acquire("p", "m") {
+		t.Fatal("Acquire() beyond window after repeated Available() peeks = true, want false")
+	}
+}
+
+func TestAvailableLeavesExistingStateUnchanged(t *testing.T) {
+	t.Parallel()
+	l := newTestLimiter(testConfig(), fixedNow(testEpoch))
+	l.Acquire("p", "m")
+	l.OnResult("p", "m", TransportFault)
+	before := *l.states[key{participant: "p", model: "m"}]
+
+	for i := 0; i < 10; i++ {
+		l.Available("p", "m")
+	}
+
+	after := *l.states[key{participant: "p", model: "m"}]
+	if before != after {
+		t.Fatalf("Available() mutated existing state: before=%+v after=%+v", before, after)
+	}
+}
+
+func TestAvailableConcurrentWithAcquireIsRaceFree(t *testing.T) {
+	l := newTestLimiter(testConfig(), fixedNow(testEpoch))
+
+	const goroutines = 50
+	const iterationsPerGoroutine = 200
+	participants := []string{"p1", "p2", "p3"}
+	models := []string{"m1", "m2"}
+	verdicts := []Verdict{Success, Overload, TransportFault, ModelOutcome}
+
+	var wg sync.WaitGroup
+	for g := 0; g < goroutines; g++ {
+		wg.Add(1)
+		go func(seed int64) {
+			defer wg.Done()
+			source := rand.New(rand.NewSource(seed))
+			for i := 0; i < iterationsPerGoroutine; i++ {
+				participant := participants[source.Intn(len(participants))]
+				model := models[source.Intn(len(models))]
+				l.Available(participant, model)
+				if l.Acquire(participant, model) {
+					l.OnResult(participant, model, verdicts[source.Intn(len(verdicts))])
+					l.Release(participant, model)
+				}
+			}
+		}(int64(g))
+	}
+	wg.Wait()
+}
