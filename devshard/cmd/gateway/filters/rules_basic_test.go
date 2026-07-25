@@ -295,12 +295,17 @@ func TestBasicValidTopK(t *testing.T) {
 		body       string
 		wantErr    string
 		wantStrip  bool
-		wantResult float64
+		wantResult int64
 	}{
 		{"negative one disabled sentinel accepted", `{"top_k":-1}`, "", false, -1},
 		{"exactly one accepted", `{"top_k":1}`, "", false, 1},
 		{"large positive accepted", `{"top_k":50}`, "", false, 50},
-		{"fractional above one accepted despite non-integer", `{"top_k":1.5}`, "", false, 1.5},
+		{"fractional above one truncated toward zero", `{"top_k":1.5}`, "", false, 1},
+		{"fractional near an integer truncated not rounded", `{"top_k":40.7}`, "", false, 40},
+		{"one below max accepted unclamped", `{"top_k":262143}`, "", false, 262143},
+		{"exactly at max accepted unclamped", `{"top_k":262144}`, "", false, 262144},
+		{"one above max clamped down to max", `{"top_k":262145}`, "", false, 262144},
+		{"astronomically large clamped down to max", `{"top_k":1e300}`, "", false, 262144},
 		{"zero rejected", `{"top_k":0}`, "top_k: must be -1 or a positive integer", false, 0},
 		{"fraction between zero and one rejected", `{"top_k":0.5}`, "top_k: must be -1 or a positive integer", false, 0},
 		{"negative two rejected", `{"top_k":-2}`, "top_k: must be -1 or a positive integer", false, 0},
@@ -309,7 +314,7 @@ func TestBasicValidTopK(t *testing.T) {
 	for _, testCase := range tests {
 		t.Run(testCase.name, func(t *testing.T) {
 			document := parseTestDocument(t, testCase.body)
-			err := validTopK()(RuleContext{Document: document, Param: param})
+			err := validTopK(topKMax)(RuleContext{Document: document, Param: param})
 			if testCase.wantErr != "" {
 				if err == nil {
 					t.Fatal("validTopK() = nil, want error")
@@ -328,20 +333,85 @@ func TestBasicValidTopK(t *testing.T) {
 				}
 				return
 			}
-			if got := getFloat64(t, document, param); got != testCase.wantResult {
+			raw, _ := document.Get(param)
+			got, ok := raw.(int64)
+			if !ok {
+				t.Fatalf("Get(%s) = %T(%v), want int64", param, raw, raw)
+			}
+			if got != testCase.wantResult {
 				t.Errorf("Get(%s) = %v, want %v", param, got, testCase.wantResult)
 			}
 		})
 	}
 	t.Run("absent is a no-op", func(t *testing.T) {
 		document := parseTestDocument(t, `{}`)
-		if err := validTopK()(RuleContext{Document: document, Param: param}); err != nil {
+		if err := validTopK(topKMax)(RuleContext{Document: document, Param: param}); err != nil {
 			t.Fatalf("validTopK() = %v, want nil", err)
 		}
 		if document.Has(param) {
 			t.Error("Has(top_k) = true, want absent to stay absent")
 		}
 	})
+}
+
+func TestBasicValidModelName(t *testing.T) {
+	const param = "model"
+	tests := []struct {
+		name    string
+		body    string
+		wantErr string
+	}{
+		{"absent passes through", `{}`, ""},
+		{"vendor slash name accepted", `{"model":"model-a"}`, ""},
+		{"full published identifier accepted", `{"model":"Qwen/Qwen3-235B-A22B-Instruct-2507-FP8"}`, ""},
+		{"dotted version accepted", `{"model":"vendor-b/model-b.7"}`, ""},
+		{"underscore accepted", `{"model":"vendor_c/model_c"}`, ""},
+		{"exactly at length limit accepted", `{"model":"` + strings.Repeat("a", 256) + `"}`, ""},
+		{"one byte over length limit rejected", `{"model":"` + strings.Repeat("a", 257) + `"}`, "model: length exceeded: 257 > 256"},
+		{"empty string rejected", `{"model":""}`, "model: must not be empty"},
+		{"whitespace only rejected", `{"model":"   "}`, "model: must not be empty"},
+		{"null rejected as non-string", `{"model":null}`, "model: invalid wrapper shape: must be a string"},
+		{"number rejected as non-string", `{"model":7}`, "model: invalid wrapper shape: must be a string"},
+		{"object rejected as non-string", `{"model":{"name":"model-a"}}`, "model: invalid wrapper shape: must be a string"},
+		{"embedded space rejected", `{"model":"model a"}`, "model: invalid: must contain only letters, digits, and the characters ._-/"},
+		{"surrounding whitespace rejected", `{"model":" model-a "}`, "model: invalid: must contain only letters, digits, and the characters ._-/"},
+		{"newline rejected", `{"model":"model-a\nmodel-b"}`, "model: invalid: must contain only letters, digits, and the characters ._-/"},
+		{"colon rejected", `{"model":"model-a:latest"}`, "model: invalid: must contain only letters, digits, and the characters ._-/"},
+		{"non-ascii rejected", `{"model":"модель-а"}`, "model: invalid: must contain only letters, digits, and the characters ._-/"},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			document := parseTestDocument(t, testCase.body)
+			err := validModelName(modelMaxLen)(RuleContext{Document: document, Param: param})
+			if testCase.wantErr == "" {
+				if err != nil {
+					t.Fatalf("validModelName() = %v, want nil", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatal("validModelName() = nil, want error")
+			}
+			if err.Error() != testCase.wantErr {
+				t.Errorf("validModelName() error = %q, want %q", err.Error(), testCase.wantErr)
+			}
+			if got := ErrorStatus(err, 0); got != 400 {
+				t.Errorf("ErrorStatus() = %d, want 400", got)
+			}
+		})
+	}
+}
+
+func TestBasicValidModelNameRejectsMegabyteNameOnLength(t *testing.T) {
+	document := parseTestDocument(t, `{"model":"`+strings.Repeat("a", 1<<20)+`"}`)
+	err := validModelName(modelMaxLen)(RuleContext{Document: document, Param: "model"})
+	if err == nil {
+		t.Fatal("validModelName() = nil, want error")
+	}
+	want := "model: length exceeded: 1048576 > 256"
+	if err.Error() != want {
+		t.Errorf("validModelName() error = %q, want %q", err.Error(), want)
+	}
 }
 
 func TestBasicCapUint(t *testing.T) {

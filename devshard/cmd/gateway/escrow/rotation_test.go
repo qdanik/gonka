@@ -217,12 +217,8 @@ func TestPrepareBridgeTempReachesTargetRetiresRegulars(t *testing.T) {
 		t.Fatalf("prepareBridge(): %v", err)
 	}
 
-	if _, ok := testStore.devshards["reg-1"]; ok {
-		t.Fatal("reg-1 still present after prepareBridge, want retired")
-	}
-	if _, ok := testStore.devshards["reg-2"]; ok {
-		t.Fatal("reg-2 still present after prepareBridge, want retired")
-	}
+	assertParked(t, testStore, "reg-1")
+	assertParked(t, testStore, "reg-2")
 	tempCount := 0
 	for _, record := range testStore.devshards {
 		if record.Model == "model-a" && record.RotationRole == roleTemp {
@@ -393,9 +389,7 @@ func TestFinishBridgeActiveTempPresentCreatesRegularsAndRetiresTemps(t *testing.
 		t.Fatalf("finishBridge(): %v", err)
 	}
 
-	if _, ok := testStore.devshards["temp-1"]; ok {
-		t.Fatal("temp-1 still present after finishBridge, want retired")
-	}
+	assertParked(t, testStore, "temp-1")
 	regularCount := 0
 	for _, record := range testStore.devshards {
 		if record.Model == "model-a" && record.RotationRole == roleRegular && record.RotationEpoch == 9 {

@@ -129,6 +129,11 @@ func TestValidateCatchesEveryRuleBreach(t *testing.T) {
 		{"breaker_max_open_ms below base", func(c *Config) { c.Limits.Breaker.MaxOpenMS = 1 }, "breaker_max_open_ms"},
 		{"breaker_max_open_ms above perf ejection horizon", func(c *Config) { c.Limits.Breaker.MaxOpenMS = c.Perf.EjectionMaxSeconds*1000 + 1 }, "dominant ejection authority"},
 		{"model_access bad enum", func(c *Config) { c.Limits.ModelAccess = map[string]string{"model-a": "bogus"} }, "model_access"},
+		{"admin_api_key too short to be safe", func(c *Config) { c.Server.AdminAPIKey = "short" }, "admin_api_key"},
+		{"api_key model with no api keys configured", func(c *Config) {
+			c.Limits.ModelAccess = map[string]string{"model-a": ModelAccessAPIKey}
+			c.Server.APIKeys = nil
+		}, "api_keys"},
 		{"model_limits default too low", func(c *Config) {
 			c.Limits.ModelLimits = map[string]ModelLimits{"model-a": {DefaultMaxTokens: 0, MaxTokensCap: 10}}
 		}, "model_limits"},
@@ -208,5 +213,42 @@ func TestValidateAcceptsEmptyTxQueryFallbackURLs(t *testing.T) {
 	configuration.Chain.TxQueryFallbackURLs = []string{}
 	if err := configuration.Validate(); err != nil {
 		t.Fatalf("Validate() with empty TxQueryFallbackURLs: want nil, got %v", err)
+	}
+}
+
+func TestAdminEnabledDistinguishesUnsetFromConfigured(t *testing.T) {
+	if (Server{}).AdminEnabled() {
+		t.Error("AdminEnabled() = true for an unset key; admin routes would authenticate an empty credential")
+	}
+	if !(Server{AdminAPIKey: "0123456789abcdef"}).AdminEnabled() {
+		t.Error("AdminEnabled() = false for a configured key")
+	}
+}
+
+func TestAccessForFailsClosedOnceAPolicyExists(t *testing.T) {
+	tests := []struct {
+		name   string
+		access map[string]string
+		model  string
+		want   string
+	}{
+		{"no policy configured leaves every model open", nil, "model-a", ModelAccessOpen},
+		{"model listed in the policy keeps its tier", map[string]string{"model-a": ModelAccessAPIKey}, "model-a", ModelAccessAPIKey},
+		{"model outside an existing policy is admin-only", map[string]string{"model-a": ModelAccessOpen}, "model-b", ModelAccessAdminOnly},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			if got := (Limits{ModelAccess: testCase.access}).AccessFor(testCase.model); got != testCase.want {
+				t.Fatalf("AccessFor(%q) = %q, want %q", testCase.model, got, testCase.want)
+			}
+		})
+	}
+}
+
+func TestValidateAcceptsUnsetAdminKey(t *testing.T) {
+	configuration := Defaults()
+	configuration.Server.AdminAPIKey = ""
+	if err := configuration.Validate(); err != nil {
+		t.Fatalf("Validate() = %v, want nil: an unset admin key disables admin routes rather than being invalid", err)
 	}
 }

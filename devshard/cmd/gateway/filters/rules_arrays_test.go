@@ -246,6 +246,87 @@ func TestArraysValidFloatMap(t *testing.T) {
 	})
 }
 
+func TestArraysRequireTokenIDKeys(t *testing.T) {
+	const param = "logit_bias"
+	tests := []struct {
+		name    string
+		body    string
+		wantErr string
+	}{
+		{"zero accepted", `{"logit_bias":{"0":10}}`, ""},
+		{"typical token id accepted", `{"logit_bias":{"15043":10}}`, ""},
+		{"largest 32-bit id accepted", `{"logit_bias":{"2147483647":10}}`, ""},
+		{"one past largest 32-bit id rejected", `{"logit_bias":{"2147483648":10}}`, `logit_bias: key invalid: "2147483648" is not a non-negative integer token id`},
+		{"negative id rejected", `{"logit_bias":{"-1":10}}`, `logit_bias: key invalid: "-1" is not a non-negative integer token id`},
+		{"non-numeric key rejected", `{"logit_bias":{"hello":10}}`, `logit_bias: key invalid: "hello" is not a non-negative integer token id`},
+		{"empty key rejected", `{"logit_bias":{"":10}}`, `logit_bias: key invalid: "" is not a non-negative integer token id`},
+		{"fractional key rejected", `{"logit_bias":{"1.5":10}}`, `logit_bias: key invalid: "1.5" is not a non-negative integer token id`},
+		{"padded key rejected", `{"logit_bias":{" 1":10}}`, `logit_bias: key invalid: " 1" is not a non-negative integer token id`},
+		{"hex key rejected", `{"logit_bias":{"0x10":10}}`, `logit_bias: key invalid: "0x10" is not a non-negative integer token id`},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			document := parseTestDocument(t, testCase.body)
+			err := requireTokenIDKeys()(RuleContext{Document: document, Param: param})
+			if testCase.wantErr == "" {
+				if err != nil {
+					t.Fatalf("requireTokenIDKeys() = %v, want nil", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatal("requireTokenIDKeys() = nil, want error")
+			}
+			if err.Error() != testCase.wantErr {
+				t.Errorf("requireTokenIDKeys() error = %q, want %q", err.Error(), testCase.wantErr)
+			}
+			if got := ErrorStatus(err, 0); got != 400 {
+				t.Errorf("ErrorStatus() = %d, want 400", got)
+			}
+		})
+	}
+	t.Run("absent is a no-op", func(t *testing.T) {
+		document := parseTestDocument(t, `{}`)
+		if err := requireTokenIDKeys()(RuleContext{Document: document, Param: param}); err != nil {
+			t.Fatalf("requireTokenIDKeys() = %v, want nil", err)
+		}
+	})
+	t.Run("non-map value passes through untouched", func(t *testing.T) {
+		document := parseTestDocument(t, `{"logit_bias":"nope"}`)
+		if err := requireTokenIDKeys()(RuleContext{Document: document, Param: param}); err != nil {
+			t.Fatalf("requireTokenIDKeys() = %v, want nil", err)
+		}
+	})
+	// Map iteration order is random, so the reported key must be chosen deterministically.
+	t.Run("reports the lexicographically first invalid key across runs", func(t *testing.T) {
+		want := `logit_bias: key invalid: "aaa" is not a non-negative integer token id`
+		for range 64 {
+			document := parseTestDocument(t, `{"logit_bias":{"1":1,"zzz":1,"mmm":1,"aaa":1,"2":1}}`)
+			err := requireTokenIDKeys()(RuleContext{Document: document, Param: param})
+			if err == nil || err.Error() != want {
+				t.Fatalf("requireTokenIDKeys() error = %v, want %q", err, want)
+			}
+		}
+	})
+}
+
+// Pins the table's rule order: a bad key must reject even when validFloatMap would have
+// dropped that entry's out-of-range value and deleted the whole field.
+func TestArraysLogitBiasBadKeyRejectsDespiteDroppableValue(t *testing.T) {
+	result, err := NormalizeRequest([]byte(`{"model":"model-a","messages":[{"role":"user","content":"hi"}],"logit_bias":{"nope":1e30}}`), Options{
+		DefaultMaxTokens: 3072,
+		MaxTokensCap:     4096,
+		RoutedModel:      "model-a",
+	})
+	if err == nil {
+		t.Fatalf("NormalizeRequest() = nil error, want rejection; body = %s", result.Body)
+	}
+	want := `logit_bias: key invalid: "nope" is not a non-negative integer token id`
+	if err.Error() != want {
+		t.Errorf("NormalizeRequest() error = %q, want %q", err.Error(), want)
+	}
+}
+
 func TestArraysValidMetadata(t *testing.T) {
 	tests := []struct {
 		name    string

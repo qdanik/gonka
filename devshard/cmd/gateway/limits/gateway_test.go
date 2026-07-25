@@ -3,6 +3,7 @@ package limits
 import (
 	"context"
 	"errors"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -310,4 +311,87 @@ func TestGatewayLimiter_ConcurrencyRace(t *testing.T) {
 	if counter, ok := limiter.models["modelA"]; ok {
 		t.Errorf("residual counter after race = %+v, want no entry (all acquires released)", counter)
 	}
+}
+
+// The configured maximum is process-wide. Without this, every distinct model string minted a fresh
+// full quota, so a client cycling model names bypassed the limiter entirely.
+func TestAcquireForModelSharesOneGlobalCapAcrossDistinctModels(t *testing.T) {
+	limiter := NewGatewayLimiter(GatewayConfig{MaxConcurrent: 2})
+	capacity := ModelCapacity{ScaleFactor: 1}
+	ctx := context.Background()
+
+	if err := limiter.AcquireForModel(ctx, "model-a", 1, capacity); err != nil {
+		t.Fatalf("first acquire: %v", err)
+	}
+	if err := limiter.AcquireForModel(ctx, "model-b", 1, capacity); err != nil {
+		t.Fatalf("second acquire on another model: %v", err)
+	}
+
+	err := limiter.AcquireForModel(ctx, "model-c", 1, capacity)
+	var rateLimit *RateLimitError
+	if !errors.As(err, &rateLimit) {
+		t.Fatalf("third acquire = %v, want a rate-limit error: a new model string must not mint a fresh quota", err)
+	}
+
+	limiter.ReleaseForModel("model-a", 1)
+	if err := limiter.AcquireForModel(ctx, "model-c", 1, capacity); err != nil {
+		t.Fatalf("acquire after release: %v, want the freed global slot to be reusable by any model", err)
+	}
+}
+
+// waitForQueueLen polls the limiter's queue rather than sleeping, so the test is deterministic.
+func waitForQueueLen(t *testing.T, limiter *GatewayLimiter, want int) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		limiter.mu.Lock()
+		got := len(limiter.queue)
+		limiter.mu.Unlock()
+		if got == want {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("queue length = %d, want %d within 2s", got, want)
+		}
+		runtime.Gosched()
+	}
+}
+
+// A freed slot goes to whoever queued first. Without this a steady arrival stream starves an
+// existing waiter until its deadline expires, so it times out into a 429 while newer requests pass.
+func TestAcquireForModelHandsFreedSlotToTheEarlierWaiter(t *testing.T) {
+	limiter := NewGatewayLimiter(GatewayConfig{MaxConcurrent: 1, AcquireWait: 2 * time.Second})
+	capacity := ModelCapacity{ScaleFactor: 1}
+	ctx := context.Background()
+
+	if err := limiter.AcquireForModel(ctx, "model-a", 1, capacity); err != nil {
+		t.Fatalf("initial acquire: %v", err)
+	}
+
+	earlier := make(chan error, 1)
+	go func() { earlier <- limiter.AcquireForModel(ctx, "model-a", 1, capacity) }()
+	waitForQueueLen(t, limiter, 1)
+
+	later := make(chan error, 1)
+	go func() { later <- limiter.AcquireForModel(ctx, "model-a", 1, capacity) }()
+	waitForQueueLen(t, limiter, 2)
+
+	limiter.ReleaseForModel("model-a", 1)
+
+	select {
+	case err := <-earlier:
+		if err != nil {
+			t.Fatalf("earlier waiter = %v, want admission", err)
+		}
+	case <-later:
+		t.Fatal("the later arrival was admitted first; the earlier waiter can be starved past its deadline")
+	case <-time.After(2 * time.Second):
+		t.Fatal("no waiter was admitted after a slot was freed")
+	}
+
+	limiter.ReleaseForModel("model-a", 1)
+	if err := <-later; err != nil {
+		t.Fatalf("later waiter after a second release = %v, want admission", err)
+	}
+	limiter.ReleaseForModel("model-a", 1)
 }

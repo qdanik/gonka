@@ -26,6 +26,9 @@ type phaseObserverStub struct {
 	preservedStatus    int
 	preservedBody      string
 	preservedHits      int
+	maxNonceStatus     int
+	maxNonceBody       string
+	maxNonceHits       int
 	versionsStatus     int
 	versionsBody       string
 }
@@ -35,6 +38,7 @@ func newPhaseObserverStub() *phaseObserverStub {
 		epochStatus:        http.StatusOK,
 		participantsStatus: http.StatusOK,
 		preservedStatus:    http.StatusNotFound,
+		maxNonceStatus:     http.StatusNotFound,
 		versionsStatus:     http.StatusNotFound,
 	}
 }
@@ -54,6 +58,10 @@ func (s *phaseObserverStub) handler() http.HandlerFunc {
 			s.preservedHits++
 			w.WriteHeader(s.preservedStatus)
 			w.Write([]byte(s.preservedBody))
+		case "/productscience/inference/inference/params":
+			s.maxNonceHits++
+			w.WriteHeader(s.maxNonceStatus)
+			w.Write([]byte(s.maxNonceBody))
 		case "/v1/versions":
 			w.WriteHeader(s.versionsStatus)
 			w.Write([]byte(s.versionsBody))
@@ -84,6 +92,13 @@ func (s *phaseObserverStub) setPreservedSnapshot(status int, body string) {
 	s.preservedBody = body
 }
 
+func (s *phaseObserverStub) setMaxNonce(status int, body string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.maxNonceStatus = status
+	s.maxNonceBody = body
+}
+
 func (s *phaseObserverStub) setVersions(status int, body string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -95,6 +110,12 @@ func (s *phaseObserverStub) preservedHitCount() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.preservedHits
+}
+
+func (s *phaseObserverStub) maxNonceHitCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.maxNonceHits
 }
 
 func observerEpochJSON(blockHeight int64, epochIndex uint64, phase EpochPhase) string {
@@ -176,6 +197,11 @@ func observerTwoMinerParticipantsJSON(baseURL string) string {
 			]
 		}
 	}`, baseURL, baseURL)
+}
+
+// observerMaxNonceJSON is a chain params response exposing devshard_escrow_params.max_nonce.
+func observerMaxNonceJSON(maxNonce uint32) string {
+	return fmt.Sprintf(`{"params": {"devshard_escrow_params": {"max_nonce": %d}}}`, maxNonce)
 }
 
 // observerPreservedSnapshotJSON is a found preserved-nodes snapshot listing only gonka1abc/node1
@@ -534,6 +560,94 @@ func TestPhaseObserver_ParticipantsFetchErrorKeepsPreviousWeightsWithLastError(t
 	}
 }
 
+// TestPhaseObserver_DecodesMaxNonceFromDevshardEscrowParams covers the governance max_nonce fetch:
+// a successful params poll publishes it on the snapshot.
+func TestPhaseObserver_DecodesMaxNonceFromDevshardEscrowParams(t *testing.T) {
+	stub := newPhaseObserverStub()
+	server := httptest.NewServer(stub.handler())
+	defer server.Close()
+	stub.setEpoch(http.StatusOK, observerEpochJSON(42, 4, EpochPhaseInference))
+	stub.setParticipants(http.StatusOK, observerParticipantsJSON("gonka1abc", server.URL, 7))
+	stub.setMaxNonce(http.StatusOK, observerMaxNonceJSON(19_800))
+
+	observer := newPoCPhaseObserver(t, server, true)
+	observer.refresh(context.Background())
+	snapshot := observer.Snapshot()
+
+	if snapshot.LastError != "" {
+		t.Fatalf("LastError = %q, want empty", snapshot.LastError)
+	}
+	if snapshot.MaxNonce != 19_800 {
+		t.Errorf("MaxNonce = %d, want 19800", snapshot.MaxNonce)
+	}
+}
+
+// TestPhaseObserver_MaxNonceZeroBeforeFirstSuccessfulFetch covers the cold-start contract: with no
+// ChainRESTBaseURL configured, MaxNonce stays 0 (cap disabled) through active polling and the
+// params route is never dialed.
+func TestPhaseObserver_MaxNonceZeroBeforeFirstSuccessfulFetch(t *testing.T) {
+	stub := newPhaseObserverStub()
+	server := httptest.NewServer(stub.handler())
+	defer server.Close()
+	stub.setEpoch(http.StatusOK, observerEpochJSON(42, 4, EpochPhaseInference))
+	stub.setParticipants(http.StatusOK, observerParticipantsJSON("gonka1abc", server.URL, 7))
+	stub.setMaxNonce(http.StatusOK, observerMaxNonceJSON(19_800))
+
+	observer := newPoCPhaseObserver(t, server, false)
+	if observer.Snapshot().MaxNonce != 0 {
+		t.Fatalf("MaxNonce before first refresh = %d, want 0", observer.Snapshot().MaxNonce)
+	}
+
+	observer.refresh(context.Background())
+	snapshot := observer.Snapshot()
+
+	if snapshot.LastError != "" {
+		t.Fatalf("LastError = %q, want empty (no ChainRESTBaseURL is not a failure)", snapshot.LastError)
+	}
+	if snapshot.MaxNonce != 0 {
+		t.Errorf("MaxNonce = %d, want 0 (ChainRESTBaseURL unset, cap stays disabled)", snapshot.MaxNonce)
+	}
+	if hits := stub.maxNonceHitCount(); hits != 0 {
+		t.Errorf("params endpoint hits = %d, want 0 when ChainRESTBaseURL is empty", hits)
+	}
+}
+
+// TestPhaseObserver_MaxNonceFetchErrorKeepsPriorValueAndRestOfSnapshot covers fail-open: a broken
+// params endpoint keeps the last known-good MaxNonce and every other field; only LastError changes.
+func TestPhaseObserver_MaxNonceFetchErrorKeepsPriorValueAndRestOfSnapshot(t *testing.T) {
+	stub := newPhaseObserverStub()
+	server := httptest.NewServer(stub.handler())
+	defer server.Close()
+	stub.setEpoch(http.StatusOK, observerEpochJSON(42, 4, EpochPhaseInference))
+	stub.setParticipants(http.StatusOK, observerParticipantsJSON("gonka1abc", server.URL, 7))
+	stub.setMaxNonce(http.StatusOK, observerMaxNonceJSON(19_800))
+
+	observer := newPoCPhaseObserver(t, server, true)
+	observer.refresh(context.Background())
+	good := observer.Snapshot()
+	if good.LastError != "" {
+		t.Fatalf("precondition: LastError = %q, want empty", good.LastError)
+	}
+	if good.MaxNonce != 19_800 {
+		t.Fatalf("precondition: MaxNonce = %d, want 19800", good.MaxNonce)
+	}
+
+	stub.setMaxNonce(http.StatusInternalServerError, "")
+	observer.refresh(context.Background())
+	after := observer.Snapshot()
+
+	if after.LastError == "" {
+		t.Error("LastError = empty, want set after max_nonce fetch failure")
+	}
+	if after.MaxNonce != 19_800 {
+		t.Errorf("MaxNonce = %d, want prior value 19800 preserved (fail-open)", after.MaxNonce)
+	}
+	after.LastError = ""
+	if !reflect.DeepEqual(after, good) {
+		t.Errorf("snapshot after max_nonce fetch error = %+v, want unchanged from %+v (aside from LastError)", after, good)
+	}
+}
+
 // TestPhaseObserver_ContextCancelAloneStopsAllGoroutines covers shutdown driven purely by the
 // parent context: every goroutine Start spawned must exit without Stop ever being called.
 // goleak.VerifyNone is registered first so it runs last, after server.Close().
@@ -863,4 +977,24 @@ func TestPhaseObserver_GenerationPhaseSkipsValidationMerge(t *testing.T) {
 	if snapshot.CurrentWeights["gonka1abc"] != 0 {
 		t.Errorf("CurrentWeights[gonka1abc] = %v, want 0", snapshot.CurrentWeights["gonka1abc"])
 	}
+}
+
+// A second Start used to close an already-closed channel, panicking, and to orphan the first pair of
+// pollers by overwriting their cancel. goleak catches the orphan; the panic would fail outright.
+func TestPhaseObserver_StartTwiceIsANoOpAndRestartWorks(t *testing.T) {
+	defer goleak.VerifyNone(t)
+	stub := newPhaseObserverStub()
+	server := httptest.NewServer(stub.handler())
+	defer server.Close()
+	stub.setEpoch(http.StatusOK, observerEpochJSON(1000, 7, EpochPhaseInference))
+	stub.setParticipants(http.StatusOK, observerParticipantsJSON("gonka1abc", server.URL, 42))
+	observer := newPoCPhaseObserver(t, server, true)
+
+	ctx := context.Background()
+	observer.Start(ctx)
+	observer.Start(ctx)
+	observer.Stop()
+
+	observer.Start(ctx)
+	observer.Stop()
 }
