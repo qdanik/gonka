@@ -166,6 +166,25 @@ const (
 	ModelAccessAdminOnly = "admin_only"
 )
 
+const minAdminAPIKeyLength = 16
+
+// AdminEnabled reports whether admin routes are configured at all. Callers must gate on this rather
+// than comparing a presented credential against AdminAPIKey, which would authenticate an empty one.
+func (s Server) AdminEnabled() bool { return s.AdminAPIKey != "" }
+
+// AccessFor resolves a model's access tier. An empty ModelAccess means no policy is configured and
+// every model is open; once a policy exists, a model outside it is admin-only rather than open, so
+// adding a model to the network cannot silently expose it.
+func (l Limits) AccessFor(model string) string {
+	if len(l.ModelAccess) == 0 {
+		return ModelAccessOpen
+	}
+	if access, ok := l.ModelAccess[model]; ok {
+		return access
+	}
+	return ModelAccessAdminOnly
+}
+
 // Defaults returns the default configuration.
 func Defaults() Config {
 	return Config{
@@ -323,10 +342,20 @@ func (c *Config) Validate() error {
 	if perfEjectionMaxMS := c.Perf.EjectionMaxSeconds * 1000; c.Limits.Breaker.MaxOpenMS > perfEjectionMaxMS {
 		complain("breaker_max_open_ms: %d must be <= perf_ejection_max_seconds %d (ms) so perf stays the dominant ejection authority", c.Limits.Breaker.MaxOpenMS, perfEjectionMaxMS)
 	}
+	// An admin key short enough to guess is worse than none, because "none" disables admin entirely
+	// (AdminEnabled) while a weak one authenticates.
+	if c.Server.AdminAPIKey != "" && len(c.Server.AdminAPIKey) < minAdminAPIKeyLength {
+		complain("admin_api_key: must be at least %d characters when set (empty disables admin routes)", minAdminAPIKeyLength)
+	}
+	requiresAPIKey := false
 	for model, access := range c.Limits.ModelAccess {
 		if access != ModelAccessOpen && access != ModelAccessAPIKey && access != ModelAccessAdminOnly {
 			complain("model_access[%s]: %q is not open, api_key or admin_only", model, access)
 		}
+		requiresAPIKey = requiresAPIKey || access == ModelAccessAPIKey
+	}
+	if requiresAPIKey && len(c.Server.APIKeys) == 0 {
+		complain("api_keys: model_access marks a model api_key but no api keys are configured, so it is unreachable")
 	}
 	for model, limit := range c.Limits.ModelLimits {
 		if limit.DefaultMaxTokens < 1 || limit.MaxTokensCap < limit.DefaultMaxTokens {

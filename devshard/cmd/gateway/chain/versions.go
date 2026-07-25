@@ -76,19 +76,49 @@ func versionsURL(base string) string {
 	return strings.TrimSuffix(strings.TrimSpace(base), "/") + "/v1/versions"
 }
 
+const (
+	// A pass has to finish well inside the freshness window. Polling hundreds of miners one at a
+	// time does not, which leaves every entry stale and reports every node as not validation-capable
+	// — and one tarpitting miner alone can push a sequential pass past the window.
+	versionsPollConcurrency = 16
+	versionsFetchTimeout    = 2 * time.Second
+)
+
 // Poll runs one pass over the current candidate set.
 func (c *VersionsCache) Poll(ctx context.Context) {
 	c.mu.RLock()
 	candidates := make(map[string]string, len(c.candidates))
 	maps.Copy(candidates, c.candidates)
 	c.mu.RUnlock()
-
-	for miner, base := range candidates {
-		nodes := c.fetchOne(ctx, base)
-		c.mu.Lock()
-		c.entries[miner] = versionsEntry{capableNodes: nodes, fetchedAt: c.now()}
-		c.mu.Unlock()
+	if len(candidates) == 0 {
+		return
 	}
+
+	type target struct{ miner, base string }
+	work := make(chan target)
+	var workers sync.WaitGroup
+	for range min(versionsPollConcurrency, len(candidates)) {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			for next := range work {
+				if ctx.Err() != nil {
+					continue // drain without overwriting good entries with cancelled fetches
+				}
+				fetchCtx, cancelFetch := context.WithTimeout(ctx, versionsFetchTimeout)
+				nodes := c.fetchOne(fetchCtx, next.base)
+				cancelFetch()
+				c.mu.Lock()
+				c.entries[next.miner] = versionsEntry{capableNodes: nodes, fetchedAt: c.now()}
+				c.mu.Unlock()
+			}
+		}()
+	}
+	for miner, base := range candidates {
+		work <- target{miner: miner, base: base}
+	}
+	close(work)
+	workers.Wait()
 }
 
 // fetchOne returns the per-node capability map, or nil on any error (fail-closed).

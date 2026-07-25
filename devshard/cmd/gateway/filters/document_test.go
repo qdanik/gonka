@@ -42,6 +42,71 @@ func TestDocumentParseAcceptsNestingDepthAtLimit(t *testing.T) {
 	}
 }
 
+// paddedBody builds `{"user":"aaa…"}` whose total length is exactly totalBytes.
+func paddedBody(totalBytes int) []byte {
+	const envelope = `{"user":""}`
+	return []byte(`{"user":"` + strings.Repeat("a", totalBytes-len(envelope)) + `"}`)
+}
+
+// structuralNodeBody builds `{"stop":[0,0,…]}` holding exactly nodes structural tokens.
+func structuralNodeBody(nodes int) []byte {
+	var builder strings.Builder
+	builder.WriteString(`{"stop":[0`)
+	for i := 2; i < nodes; i++ {
+		builder.WriteString(",0")
+	}
+	builder.WriteString("]}")
+	return []byte(builder.String())
+}
+
+func TestDocumentParseRejectsBodySizeAboveLimit(t *testing.T) {
+	_, err := ParseDocument(paddedBody(33554433))
+	if err == nil {
+		t.Fatal("ParseDocument() at 33554433 bytes: want error, got nil")
+	}
+	want := "request body size 33554433 exceeds limit 33554432"
+	if err.Error() != want {
+		t.Errorf("ParseDocument() error = %q, want %q", err.Error(), want)
+	}
+	if got := ErrorStatus(err, 0); got != 400 {
+		t.Errorf("ErrorStatus() = %d, want 400", got)
+	}
+}
+
+func TestDocumentParseAcceptsBodySizeAtLimit(t *testing.T) {
+	if _, err := ParseDocument(paddedBody(33554432)); err != nil {
+		t.Fatalf("ParseDocument() at 33554432 bytes: want nil error, got %v", err)
+	}
+}
+
+func TestDocumentParseRejectsNodeCountAboveLimit(t *testing.T) {
+	_, err := ParseDocument(structuralNodeBody(250001))
+	if err == nil {
+		t.Fatal("ParseDocument() at 250001 nodes: want error, got nil")
+	}
+	want := "request node count exceeds limit 250000"
+	if err.Error() != want {
+		t.Errorf("ParseDocument() error = %q, want %q", err.Error(), want)
+	}
+	if got := ErrorStatus(err, 0); got != 400 {
+		t.Errorf("ErrorStatus() = %d, want 400", got)
+	}
+}
+
+func TestDocumentParseAcceptsNodeCountAtLimit(t *testing.T) {
+	if _, err := ParseDocument(structuralNodeBody(250000)); err != nil {
+		t.Fatalf("ParseDocument() at 250000 nodes: want nil error, got %v", err)
+	}
+}
+
+// Structural characters inside string literals are content, not nodes.
+func TestDocumentParseIgnoresStructuralCharactersInsideStrings(t *testing.T) {
+	body := []byte(`{"user":"` + strings.Repeat(`{[,`, 250000) + `"}`)
+	if _, err := ParseDocument(body); err != nil {
+		t.Fatalf("ParseDocument() with structural characters inside a string: want nil error, got %v", err)
+	}
+}
+
 func TestDocumentParseEmptyBodyRejectsWithEOF(t *testing.T) {
 	_, err := ParseDocument(nil)
 	if err == nil {

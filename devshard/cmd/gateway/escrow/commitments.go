@@ -29,13 +29,13 @@ type Manager struct {
 	settlements      inFlightSet
 	checks           inFlightSet
 
-	depletedMarks   map[string]bool
-	depletionMu     sync.Mutex
-	depletionCursor int
+	depletedMarks map[string]bool
+	depletionMu   sync.Mutex
 
 	lifecycleMu sync.Mutex
 	stop        chan struct{}
 	done        chan struct{}
+	cancel      context.CancelFunc
 }
 
 // A failed intent-commitment write (in onPrepared) aborts before any chain broadcast: no broadcast without durable intent.

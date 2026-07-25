@@ -2,6 +2,7 @@ package chain
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -158,5 +159,56 @@ func TestVersionsCache_Run_ExitsOnContextCancel(t *testing.T) {
 	case <-runDone:
 	case <-time.After(2 * time.Second):
 		t.Fatal("Run did not exit within 2s of context cancellation")
+	}
+}
+
+// A sequential pass over hundreds of miners takes longer than the freshness window, so every entry
+// reads as stale and no node is ever reported validation-capable. This pins that a pass overlaps:
+// every fetch must arrive before any is allowed to finish, which is impossible one at a time.
+func TestVersionsPollFetchesConcurrently(t *testing.T) {
+	defer goleak.VerifyNone(t)
+
+	const candidateCount = 8
+	arrived := make(chan struct{}, candidateCount)
+	release := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		arrived <- struct{}{}
+		<-release
+		w.Write([]byte(`{"ml_nodes":[]}`))
+	}))
+	defer server.Close()
+	// Declared after server.Close so it runs first: a failed assertion must not leave handlers
+	// parked on release, which would block Close and bury the real failure under a timeout.
+	var releaseOnce sync.Once
+	releaseAll := func() { releaseOnce.Do(func() { close(release) }) }
+	defer releaseAll()
+
+	clock := &fakeClock{now: time.Unix(0, 0)}
+	cache := NewVersionsCache(server.Client(), time.Minute, clock.Now)
+	candidates := make(map[string]string, candidateCount)
+	for i := range candidateCount {
+		candidates[fmt.Sprintf("miner-%d", i)] = server.URL
+	}
+	cache.SetCandidates(candidates)
+
+	polled := make(chan struct{})
+	go func() { defer close(polled); cache.Poll(context.Background()) }()
+
+	// One deadline for the whole set, shorter than a single fetch's timeout: serialized fetches
+	// arrive one per timeout, so they cannot all land inside this window.
+	allStarted := time.After(versionsFetchTimeout / 2)
+	for i := range candidateCount {
+		select {
+		case <-arrived:
+		case <-allStarted:
+			t.Fatalf("only %d of %d fetches had started within %v; the pass is serialized", i, candidateCount, versionsFetchTimeout/2)
+		}
+	}
+	releaseAll()
+
+	select {
+	case <-polled:
+	case <-time.After(3 * time.Second):
+		t.Fatal("Poll did not return after every fetch was released")
 	}
 }

@@ -48,8 +48,10 @@ func TestRunServesMetricsAndShutsDownGracefully(t *testing.T) {
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	if !strings.Contains(body, "devshard_http_requests_total") && !strings.Contains(body, "go_goroutines") {
-		t.Fatalf("/metrics exposition unexpected:\n%s", body)
+	// go_goroutines comes from the process collector, so it is present on the very first scrape,
+	// unlike the request counter which only appears once a route has been served.
+	if !strings.Contains(body, "go_goroutines") {
+		t.Fatalf("/metrics exposition is missing the process collector:\n%s", body)
 	}
 
 	cancel()

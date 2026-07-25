@@ -74,8 +74,8 @@ func TestTickReconcileRunsEvenWhenRotationDisabled(t *testing.T) {
 	if !hasCall(calls, "LoadCommitments") {
 		t.Fatalf("calls = %v, want LoadCommitments (reconcile must run even when rotation is disabled)", calls)
 	}
-	if hasCall(calls, "ListDevshards") {
-		t.Fatalf("calls = %v, want no ListDevshards (disabled rotation must short-circuit first)", calls)
+	if hasCall(calls, "SaveRotationStatus") {
+		t.Fatalf("calls = %v, want no rotation work while rotation is disabled", calls)
 	}
 }
 
@@ -100,8 +100,8 @@ func TestTickColdStartReturnsAfterReconcile(t *testing.T) {
 			if err := m.tick(context.Background()); err != nil {
 				t.Fatalf("tick(): %v", err)
 			}
-			if hasCall(log.snapshot(), "ListDevshards") {
-				t.Fatal("ListDevshards called on cold start, want skipped before loading devshards")
+			if hasCall(log.snapshot(), "SaveRotationStatus") {
+				t.Fatal("rotation ran on cold start, want it skipped until the chain snapshot is populated")
 			}
 		})
 	}
@@ -188,9 +188,7 @@ func TestTickPoCOverRunsFinishBridge(t *testing.T) {
 		t.Fatalf("tick(): %v", err)
 	}
 
-	if _, ok := testStore.devshards["temp-1"]; ok {
-		t.Fatal("temp-1 still present, want finishBridge to retire it")
-	}
+	assertParked(t, testStore, "temp-1")
 	regularCreated := false
 	for _, record := range testStore.devshards {
 		if record.Model == "model-a" && record.RotationRole == roleRegular {
@@ -224,9 +222,7 @@ func TestTickCheckDepletionRunsRegardlessOfBridgeBranch(t *testing.T) {
 		t.Fatalf("tick(): %v", err)
 	}
 
-	if _, ok := testStore.devshards["1"]; ok {
-		t.Fatal("depleted escrow 1 still present, want checkDepletion to replace it even when neither bridge branch runs")
-	}
+	assertParked(t, testStore, "1")
 }
 
 // --- Start/Stop lifecycle ---
@@ -314,4 +310,63 @@ func TestStartStopConcurrentCallsAreRaceFree(t *testing.T) {
 	}
 	wg.Wait()
 	m.Stop() // whichever Start last won the race must still be cleanly stoppable
+}
+
+// The sweep must not depend on the rotation toggle: a parked escrow still has to settle.
+func TestTickSettlesParkedEscrowWhileRotationDisabled(t *testing.T) {
+	testStore := newFakeStore()
+	record := parkedRecord("42")
+	testStore.devshards[record.EscrowID] = record
+	cfg := config.Defaults()
+	cfg.Rotation.Enabled = false
+	cfg.Rotation.SettlementEnabled = true
+
+	deps := testManagerDeps(t, testStore, settlingTxClient(), &fakeSnapshotSource{}, &cfg)
+	deps.Settlement = &fakeSettlementSource{}
+	m := NewManager(deps)
+
+	if err := m.tick(context.Background()); err != nil {
+		t.Fatalf("tick(): %v", err)
+	}
+	if _, ok := testStore.devshards[record.EscrowID]; ok {
+		t.Fatal("parked escrow survived the tick; nothing else will ever settle it")
+	}
+}
+
+// Stop must not return while a tick is still writing: the caller closes the store right after, so an
+// early return means a settlement write can land on a closed database. A second concurrent Stop has
+// to wait with the first rather than racing past it.
+func TestManagerStopIsABarrierForConcurrentCallers(t *testing.T) {
+	defer goleak.VerifyNone(t)
+	testStore := newFakeStore()
+	blocking := &blockingSnapshotSource{started: make(chan struct{}), release: make(chan struct{})}
+	cfg := config.Defaults()
+	cfg.Rotation.Enabled = true
+	m := NewManager(testManagerDeps(t, testStore, &fakeTxClient{createEscrowFn: failOnCreate(t)}, blocking, &cfg))
+
+	m.Start(context.Background())
+	<-blocking.started // a tick is inside Snapshot and cannot finish until released
+
+	returned := make(chan struct{}, 2)
+	var stoppers sync.WaitGroup
+	for range 2 {
+		stoppers.Add(1)
+		go func() {
+			defer stoppers.Done()
+			m.Stop()
+			returned <- struct{}{}
+		}()
+	}
+
+	select {
+	case <-returned:
+		t.Fatal("Stop returned while a tick was still running")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	close(blocking.release)
+	stoppers.Wait()
+	if len(returned) != 2 {
+		t.Fatalf("%d of 2 Stop calls returned", len(returned))
+	}
 }

@@ -191,8 +191,9 @@ func TestSettleBroadcastFailureLeavesSettlementPendingSet(t *testing.T) {
 	}
 }
 
-// retire with the toggle off never touches the chain -- deactivate and drop the row.
-func TestRetireSettlementDisabledSkipsChainDeactivatesAndDeletes(t *testing.T) {
+// retire with the toggle off never touches the chain: the escrow is parked, not dropped, because its
+// row carries the only key that can settle it later.
+func TestRetireSettlementDisabledSkipsChainAndParksEscrow(t *testing.T) {
 	testStore := newFakeStore()
 	record := store.DevshardRecord{EscrowID: "4", PrivateKeyEnv: "MODEL_A_KEY", Model: "model-a", Active: true}
 	testStore.devshards[record.EscrowID] = record
@@ -213,9 +214,7 @@ func TestRetireSettlementDisabledSkipsChainDeactivatesAndDeletes(t *testing.T) {
 	if err := m.retire(context.Background(), record); err != nil {
 		t.Fatalf("retire() = %v, want nil", err)
 	}
-	if _, ok := testStore.devshards[record.EscrowID]; ok {
-		t.Fatal("devshard still present after retire(), want deleted")
-	}
+	assertParked(t, testStore, record.EscrowID)
 }
 
 // retire with the toggle on settles first, then drops the row only after settle succeeds.
@@ -331,5 +330,112 @@ func TestSettleDedupesConcurrentCallsForSameEscrow(t *testing.T) {
 	}
 	if broadcastCount != 1 {
 		t.Fatalf("SettleEscrow called %d times, want exactly 1", broadcastCount)
+	}
+}
+
+func parkedRecord(escrowID string) store.DevshardRecord {
+	return store.DevshardRecord{EscrowID: escrowID, PrivateKeyEnv: "MODEL_A_KEY", Model: "model-a", Active: false, SettlementPending: true}
+}
+
+func settlingTxClient() *fakeTxClient {
+	return &fakeTxClient{
+		settleEscrowFn: func(ctx context.Context, signer *signing.Secp256k1Signer, input chain.SettlementInput) (chain.SettleEscrowResult, error) {
+			return chain.SettleEscrowResult{EscrowID: input.EscrowID}, nil
+		},
+	}
+}
+
+// A parked escrow is only reachable through the pending sweep, so without it the funds are stranded.
+func TestSettlePendingSettlesParkedEscrowAndDropsRow(t *testing.T) {
+	testStore := newFakeStore()
+	record := parkedRecord("9")
+	testStore.devshards[record.EscrowID] = record
+
+	m := &Manager{
+		tx:               settlingTxClient(),
+		store:            testStore,
+		signer:           &fakeSignerSource{signer: testSigner(t)},
+		settlementSource: &fakeSettlementSource{},
+		config:           holderWithSettlementEnabled(true),
+	}
+
+	if err := m.settlePending(context.Background(), []store.DevshardRecord{record}); err != nil {
+		t.Fatalf("settlePending() = %v, want nil", err)
+	}
+	if _, ok := testStore.devshards[record.EscrowID]; ok {
+		t.Fatal("row still present after a confirmed settle, want it dropped")
+	}
+}
+
+func TestSettlePendingBusyEscrowStaysParkedForTheNextTick(t *testing.T) {
+	testStore := newFakeStore()
+	record := parkedRecord("10")
+	testStore.devshards[record.EscrowID] = record
+
+	m := &Manager{
+		tx:               settlingTxClient(),
+		store:            testStore,
+		signer:           &fakeSignerSource{signer: testSigner(t)},
+		settlementSource: &fakeSettlementSource{busy: true},
+		config:           holderWithSettlementEnabled(true),
+	}
+
+	if err := m.settlePending(context.Background(), []store.DevshardRecord{record}); !errors.Is(err, errDevshardBusy) {
+		t.Fatalf("settlePending() = %v, want errDevshardBusy", err)
+	}
+	assertParked(t, testStore, record.EscrowID)
+}
+
+func TestSettlePendingIsNoOpWhileSettlementDisabled(t *testing.T) {
+	testStore := newFakeStore()
+	record := parkedRecord("11")
+	testStore.devshards[record.EscrowID] = record
+	txClient := &fakeTxClient{
+		settleEscrowFn: func(ctx context.Context, signer *signing.Secp256k1Signer, input chain.SettlementInput) (chain.SettleEscrowResult, error) {
+			t.Fatal("SettleEscrow must not be called while the settlement toggle is off")
+			return chain.SettleEscrowResult{}, nil
+		},
+	}
+
+	m := &Manager{
+		tx:               txClient,
+		store:            testStore,
+		signer:           &fakeSignerSource{signer: testSigner(t)},
+		settlementSource: &fakeSettlementSource{},
+		config:           holderWithSettlementEnabled(false),
+	}
+
+	if err := m.settlePending(context.Background(), []store.DevshardRecord{record}); err != nil {
+		t.Fatalf("settlePending() = %v, want nil", err)
+	}
+	assertParked(t, testStore, record.EscrowID)
+}
+
+// The sweep is keyed on the pending marker, not merely on being inactive: a deactivated escrow that
+// was never marked has no settlement intent and must not be settled.
+func TestSettlePendingIgnoresInactiveEscrowWithoutPendingMarker(t *testing.T) {
+	testStore := newFakeStore()
+	record := store.DevshardRecord{EscrowID: "12", PrivateKeyEnv: "MODEL_A_KEY", Model: "model-a", Active: false, SettlementPending: false}
+	testStore.devshards[record.EscrowID] = record
+	txClient := &fakeTxClient{
+		settleEscrowFn: func(ctx context.Context, signer *signing.Secp256k1Signer, input chain.SettlementInput) (chain.SettleEscrowResult, error) {
+			t.Fatal("SettleEscrow called for an escrow that was never marked settlement-pending")
+			return chain.SettleEscrowResult{}, nil
+		},
+	}
+
+	m := &Manager{
+		tx:               txClient,
+		store:            testStore,
+		signer:           &fakeSignerSource{signer: testSigner(t)},
+		settlementSource: &fakeSettlementSource{},
+		config:           holderWithSettlementEnabled(true),
+	}
+
+	if err := m.settlePending(context.Background(), []store.DevshardRecord{record}); err != nil {
+		t.Fatalf("settlePending() = %v, want nil", err)
+	}
+	if _, ok := testStore.devshards[record.EscrowID]; !ok {
+		t.Fatal("unmarked escrow was settled and dropped")
 	}
 }
