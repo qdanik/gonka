@@ -139,18 +139,26 @@ type Perf struct {
 	HostStalenessSeconds        int64 // evict host-model state unseen this long
 }
 
+// Scheduler groups routing tuning.
+type Scheduler struct {
+	// HoldGraceMS is how long a bound nonce waits for a co-arriving compatible request before it is
+	// burned; 0 burns immediately.
+	HoldGraceMS int64
+}
+
 // Config is the complete immutable gateway configuration snapshot.
 type Config struct {
-	Server   Server
-	Chain    Chain
-	Tx       Tx
-	Limits   Limits
-	Modes    Modes
-	Rotation Rotation
-	Cache    Cache
-	Capture  Capture
-	Stream   Stream
-	Perf     Perf
+	Server    Server
+	Chain     Chain
+	Tx        Tx
+	Limits    Limits
+	Modes     Modes
+	Rotation  Rotation
+	Cache     Cache
+	Capture   Capture
+	Stream    Stream
+	Perf      Perf
+	Scheduler Scheduler
 }
 
 // PoC mode values accepted in Modes.PoCMode.
@@ -260,6 +268,9 @@ func Defaults() Config {
 			FirstTokenPercentile:        0.95,
 			FirstTokenStalenessSeconds:  86_400,
 			HostStalenessSeconds:        3_600,
+		},
+		Scheduler: Scheduler{
+			HoldGraceMS: 200,
 		},
 	}
 }
@@ -444,6 +455,12 @@ func (c *Config) Validate() error {
 	}
 	if c.Perf.HostStalenessSeconds < 1 {
 		complain("perf_host_staleness_seconds: %d must be >= 1", c.Perf.HostStalenessSeconds)
+	}
+
+	// A long grace parks a committed-cost nonce on the chance of a co-arrival, so the ceiling is a
+	// budget guard, not a taste judgement.
+	if c.Scheduler.HoldGraceMS < 0 || c.Scheduler.HoldGraceMS > 5_000 {
+		complain("scheduler_hold_grace_ms: %d must be in [0, 5000]", c.Scheduler.HoldGraceMS)
 	}
 
 	if len(problems) > 0 {
