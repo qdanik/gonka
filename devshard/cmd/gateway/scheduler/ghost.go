@@ -8,6 +8,9 @@ const (
 	ghostThrottled
 	ghostCapability
 	ghostExclude
+	// ghostAbandoned accounts a nonce that was committed for a request whose caller vanished before
+	// the assignment reached it; the nonce is spent either way and must still have an owner.
+	ghostAbandoned
 )
 
 // reason returns the ghost's log/metric label.
@@ -21,6 +24,8 @@ func (k GhostKind) reason() string {
 		return "participant_capability_no_send"
 	case ghostExclude:
 		return "no_compatible_request_after_stale"
+	case ghostAbandoned:
+		return "request_abandoned_before_dispatch"
 	default:
 		return ""
 	}

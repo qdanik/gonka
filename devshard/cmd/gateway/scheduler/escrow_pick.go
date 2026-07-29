@@ -1,0 +1,84 @@
+package scheduler
+
+import (
+	"fmt"
+	"math"
+
+	"devshard/cmd/gateway/chain"
+	"devshard/types"
+)
+
+// fallbackNonceCeiling applies until governance max_nonce has been fetched. Treating an unknown cap
+// as unlimited lets an escrow run past the ceiling the host enforces, and refusing to serve stalls
+// every cold start, so the fixed ceiling the gateway ran on before the param existed is used instead.
+const fallbackNonceCeiling uint64 = 19_800
+
+// pickEscrow runs once per request; escalation attempts pin the result via profile.Escrow rather than
+// re-deriving an escrow mid-race.
+func (s *Scheduler) pickEscrow(profile RequestProfile, snapshot chain.PhaseSnapshot) (Escrow, error) {
+	candidates := s.escrows.Candidates(profile.Model)
+
+	if profile.Escrow != "" {
+		for _, candidate := range candidates {
+			if candidate.ID == profile.Escrow {
+				return candidate, nil
+			}
+		}
+		return Escrow{}, fmt.Errorf("escrow %q for model %q: %w", profile.Escrow, profile.Model, ErrEscrowGone)
+	}
+
+	bestScore := math.Inf(1)
+	var tied []Escrow
+	for _, candidate := range candidates {
+		if atNonceCap(candidate, snapshot.MaxNonce) {
+			// Routing only declines it; replacing it belongs to the rotation lifecycle, which
+			// otherwise never learns and lets the escrow drain silently into ErrNoEscrowCapacity.
+			if s.onNonceExhausted != nil {
+				s.onNonceExhausted(candidate.ID)
+			}
+			continue
+		}
+		score := loadScore(candidate.ActiveUsers, s.capacity.EscrowWeight(candidate.ID, profile.Model))
+		switch {
+		case math.IsInf(score, 1):
+			continue
+		case score < bestScore:
+			bestScore, tied = score, append(tied[:0], candidate)
+		case score == bestScore:
+			tied = append(tied, candidate)
+		}
+	}
+
+	switch len(tied) {
+	case 0:
+		return Escrow{}, ErrNoEscrowCapacity
+	case 1:
+		return tied[0], nil
+	default:
+		return tied[int(uint64(s.tieBreak.Add(1)-1)%uint64(len(tied)))], nil
+	}
+}
+
+// loadScore is the ascending utilisation ratio; a non-positive or corrupt weight scores unusable
+// rather than the perfectly-idle 0 a plain ratio would produce.
+func loadScore(activeUsers int, weight float64) float64 {
+	if weight <= 0 || math.IsNaN(weight) {
+		return math.Inf(1)
+	}
+	return float64(activeUsers) / weight
+}
+
+func atNonceCap(candidate Escrow, maxNonce uint64) bool {
+	if candidate.Session == nil {
+		return false
+	}
+	cutoff := fallbackNonceCeiling
+	if maxNonce > 0 {
+		// Clamp, never wrap: a cap wrapping to 0 makes MaxActiveNonce return ^uint64(0), disabling the gate.
+		if maxNonce > math.MaxUint32 {
+			maxNonce = math.MaxUint32
+		}
+		cutoff = types.MaxActiveNonce(uint32(maxNonce), candidate.Session.GroupSize())
+	}
+	return candidate.Session.LatestNonce() >= cutoff
+}
