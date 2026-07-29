@@ -65,6 +65,7 @@ func TestDefaultsMatchSpec(t *testing.T) {
 		{"Perf.FirstTokenPercentile", configuration.Perf.FirstTokenPercentile, 0.95},
 		{"Perf.FirstTokenStalenessSeconds", configuration.Perf.FirstTokenStalenessSeconds, int64(86_400)},
 		{"Perf.HostStalenessSeconds", configuration.Perf.HostStalenessSeconds, int64(3_600)},
+		{"Scheduler.HoldGraceMS", configuration.Scheduler.HoldGraceMS, int64(200)},
 	}
 	for _, check := range checks {
 		if check.got != check.want {
@@ -178,6 +179,8 @@ func TestValidateCatchesEveryRuleBreach(t *testing.T) {
 		{"perf_first_token_percentile above one", func(c *Config) { c.Perf.FirstTokenPercentile = 1.5 }, "perf_first_token_percentile"},
 		{"perf_first_token_staleness_seconds too low", func(c *Config) { c.Perf.FirstTokenStalenessSeconds = 0 }, "perf_first_token_staleness_seconds"},
 		{"perf_host_staleness_seconds too low", func(c *Config) { c.Perf.HostStalenessSeconds = 0 }, "perf_host_staleness_seconds"},
+		{"scheduler_hold_grace_ms negative", func(c *Config) { c.Scheduler.HoldGraceMS = -1 }, "scheduler_hold_grace_ms"},
+		{"scheduler_hold_grace_ms above ceiling", func(c *Config) { c.Scheduler.HoldGraceMS = 5_001 }, "scheduler_hold_grace_ms"},
 	}
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
