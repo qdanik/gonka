@@ -23,10 +23,15 @@ type dispatcherDeps struct {
 	session    session
 	snapshots  snapshotSource
 	predicates func(chain.PhaseSnapshot) availability
-	observer   dispatchObserver
-	now        func() time.Time
-	stale      time.Duration
-	newTimer   func(time.Duration) (<-chan time.Time, func())
+	// acquireSlot runs inside the same Advance that commits the nonce, so nothing can fill the window
+	// between admission and the commit it admits. The slot travels with the assignment and is released
+	// by whoever spends it, so releaseSlot covers only the paths that never reach a dispatch.
+	acquireSlot func(participant string) bool
+	releaseSlot func(participant string)
+	observer    dispatchObserver
+	now         func() time.Time
+	stale       time.Duration
+	newTimer    func(time.Duration) (<-chan time.Time, func())
 	// retire is asked, from inside the loop goroutine, whether an idle actor may remove itself; the
 	// registry answers under the lock that also guards claims, so a claimed dispatcher is never lost.
 	retire       func(*dispatcher) bool
@@ -199,6 +204,7 @@ func (a *armedTimer) disarm() {
 // host flipping between the sweep and the binding burns one every iteration, forever.
 func (d *dispatcher) drain() (time.Time, bool) {
 	avail := freeze(d.predicates(d.snapshots.Snapshot()))
+	acquire := admit(&avail, d.acquireSlot)
 	participants := d.session.ParticipantKeys()
 	burnBudget := d.session.GroupSize() * (len(d.waiting) + 1)
 
@@ -213,10 +219,13 @@ func (d *dispatcher) drain() (time.Time, bool) {
 		prepared, err := d.session.Advance(func(binding HostBinding) NonceIntent {
 			bound = binding.Participant
 			decision = match(binding, d.waiting, avail, d.now(), d.stale)
+			if _, serving := decision.(serve); serving && !acquire(binding.Participant) {
+				decision = burn{kind: ghostThrottled}
+			}
 			return intentFor(decision)
 		})
 		if err != nil {
-			d.failAdvance(decision, err)
+			d.failAdvance(decision, bound, err)
 			return time.Time{}, false
 		}
 
@@ -246,7 +255,7 @@ func (d *dispatcher) sweepExhausted(participants []string, avail availability) {
 		switch {
 		case queued.abandoned.Load():
 		case !servable(queued, participants, avail):
-			d.reply(queued, pickResult{err: ErrNoAvailableHost})
+			queued.deliver(pickResult{err: ErrNoAvailableHost})
 		default:
 			kept = append(kept, queued)
 		}
@@ -274,22 +283,25 @@ func servable(queued *waiter, participants []string, avail availability) bool {
 func (d *dispatcher) handOff(served *waiter, participant string, prepared Prepared) {
 	d.dequeue(served)
 	if prepared == nil {
-		d.reply(served, pickResult{err: fmt.Errorf("escrow %s: session committed no nonce", d.escrowID)})
+		d.releaseSlot(participant)
+		served.deliver(pickResult{err: fmt.Errorf("escrow %s: session committed no nonce", d.escrowID)})
 		return
 	}
 	assignment := Assignment{Escrow: d.escrowID, Host: participant, Nonce: prepared}
 	// The nonce is already committed, so a caller that vanished between the decision and the handoff
 	// would leave it accounted to nobody; it is charged to the ghost side instead.
-	if !d.reply(served, pickResult{assignment: assignment}) {
+	if !served.deliver(pickResult{assignment: assignment}) {
+		d.releaseSlot(participant)
 		d.recordGhost(ghostAbandoned.reason())
 	}
 }
 
-func (d *dispatcher) failAdvance(decision Decision, err error) {
+func (d *dispatcher) failAdvance(decision Decision, participant string, err error) {
 	failure := fmt.Errorf("escrow %s: advancing nonce: %w", d.escrowID, err)
 	if chosen, ok := decision.(serve); ok {
+		d.releaseSlot(participant)
 		d.dequeue(chosen.waiter)
-		d.reply(chosen.waiter, pickResult{err: failure})
+		chosen.waiter.deliver(pickResult{err: failure})
 		return
 	}
 	d.failWaiting(failure)
@@ -297,7 +309,7 @@ func (d *dispatcher) failAdvance(decision Decision, err error) {
 
 func (d *dispatcher) failWaiting(err error) {
 	for index, queued := range d.waiting {
-		d.reply(queued, pickResult{err: err})
+		queued.deliver(pickResult{err: err})
 		d.waiting[index] = nil
 	}
 	d.waiting = d.waiting[:0]
@@ -312,19 +324,6 @@ func (d *dispatcher) absorb() {
 		default:
 			return
 		}
-	}
-}
-
-// reply never blocks: a full or abandoned reply channel means the caller is gone.
-func (d *dispatcher) reply(target *waiter, result pickResult) bool {
-	if target.abandoned.Load() {
-		return false
-	}
-	select {
-	case target.replyCh <- result:
-		return true
-	default:
-		return false
 	}
 }
 
@@ -398,6 +397,22 @@ func freeze(live availability) availability {
 			}
 			return blocked
 		},
+	}
+}
+
+// admit couples the drain's admission to its frozen predicates: a participant whose window refused a
+// slot counts as throttled for the rest of the drain, so the sweep answers the queue rather than the
+// binding burning one more nonce every turn.
+func admit(avail *availability, acquire func(string) bool) func(string) bool {
+	refused := map[string]bool{}
+	throttled := avail.throttled
+	avail.throttled = func(participant string) bool { return refused[participant] || throttled(participant) }
+	return func(participant string) bool {
+		if acquire(participant) {
+			return true
+		}
+		refused[participant] = true
+		return false
 	}
 }
 

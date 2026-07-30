@@ -139,6 +139,17 @@ type Perf struct {
 	HostStalenessSeconds        int64 // evict host-model state unseen this long
 }
 
+// Engine groups race-escalation tuning. The safety backstops it does not carry — streaming hard
+// timeout, non-stream no-content timeout, max attempt wait, long-response exemption — are engine
+// constants: they bound a request that every tunable already failed to bound.
+type Engine struct {
+	ReceiptTimeoutMS       int64
+	FirstTokenFloorMS      int64
+	InterChunkStallMS      int64
+	LoserGraceMS           int64
+	MaxSpeculativeAttempts int64 // 0 = bounded only by the host group
+}
+
 // Scheduler groups routing tuning.
 type Scheduler struct {
 	// HoldGraceMS is how long a bound nonce waits for a co-arriving compatible request before it is
@@ -158,6 +169,7 @@ type Config struct {
 	Capture   Capture
 	Stream    Stream
 	Perf      Perf
+	Engine    Engine
 	Scheduler Scheduler
 }
 
@@ -268,6 +280,13 @@ func Defaults() Config {
 			FirstTokenPercentile:        0.95,
 			FirstTokenStalenessSeconds:  86_400,
 			HostStalenessSeconds:        3_600,
+		},
+		Engine: Engine{
+			ReceiptTimeoutMS:       5_000,
+			FirstTokenFloorMS:      1_000,
+			InterChunkStallMS:      30_000,
+			LoserGraceMS:           600_000,
+			MaxSpeculativeAttempts: 0,
 		},
 		Scheduler: Scheduler{
 			HoldGraceMS: 200,
@@ -455,6 +474,24 @@ func (c *Config) Validate() error {
 	}
 	if c.Perf.HostStalenessSeconds < 1 {
 		complain("perf_host_staleness_seconds: %d must be >= 1", c.Perf.HostStalenessSeconds)
+	}
+
+	if c.Engine.ReceiptTimeoutMS < 1 {
+		complain("engine_receipt_timeout_ms: %d must be >= 1", c.Engine.ReceiptTimeoutMS)
+	}
+	if c.Engine.FirstTokenFloorMS < 1 {
+		complain("engine_first_token_floor_ms: %d must be >= 1", c.Engine.FirstTokenFloorMS)
+	}
+	if c.Engine.InterChunkStallMS < 1 {
+		complain("engine_inter_chunk_stall_ms: %d must be >= 1", c.Engine.InterChunkStallMS)
+	}
+	// A loser is cancelled at the grace, so a grace under the stall window kills attempts that are
+	// merely between chunks — before the gateway would even call such a stream stalled.
+	if c.Engine.LoserGraceMS < c.Engine.InterChunkStallMS {
+		complain("engine_loser_grace_ms: %d must be >= engine_inter_chunk_stall_ms %d", c.Engine.LoserGraceMS, c.Engine.InterChunkStallMS)
+	}
+	if c.Engine.MaxSpeculativeAttempts < 0 {
+		complain("engine_max_speculative_attempts: %d must be >= 0 (0 = bounded only by the host group)", c.Engine.MaxSpeculativeAttempts)
 	}
 
 	// A long grace parks a committed-cost nonce on the chance of a co-arrival, so the ceiling is a

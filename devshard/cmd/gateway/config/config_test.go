@@ -1,6 +1,7 @@
 package config
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -66,6 +67,11 @@ func TestDefaultsMatchSpec(t *testing.T) {
 		{"Perf.FirstTokenStalenessSeconds", configuration.Perf.FirstTokenStalenessSeconds, int64(86_400)},
 		{"Perf.HostStalenessSeconds", configuration.Perf.HostStalenessSeconds, int64(3_600)},
 		{"Scheduler.HoldGraceMS", configuration.Scheduler.HoldGraceMS, int64(200)},
+		{"Engine.ReceiptTimeoutMS", configuration.Engine.ReceiptTimeoutMS, int64(5_000)},
+		{"Engine.FirstTokenFloorMS", configuration.Engine.FirstTokenFloorMS, int64(1_000)},
+		{"Engine.InterChunkStallMS", configuration.Engine.InterChunkStallMS, int64(30_000)},
+		{"Engine.LoserGraceMS", configuration.Engine.LoserGraceMS, int64(600_000)},
+		{"Engine.MaxSpeculativeAttempts", configuration.Engine.MaxSpeculativeAttempts, int64(0)},
 	}
 	for _, check := range checks {
 		if check.got != check.want {
@@ -181,6 +187,11 @@ func TestValidateCatchesEveryRuleBreach(t *testing.T) {
 		{"perf_host_staleness_seconds too low", func(c *Config) { c.Perf.HostStalenessSeconds = 0 }, "perf_host_staleness_seconds"},
 		{"scheduler_hold_grace_ms negative", func(c *Config) { c.Scheduler.HoldGraceMS = -1 }, "scheduler_hold_grace_ms"},
 		{"scheduler_hold_grace_ms above ceiling", func(c *Config) { c.Scheduler.HoldGraceMS = 5_001 }, "scheduler_hold_grace_ms"},
+		{"engine_receipt_timeout_ms too low", func(c *Config) { c.Engine.ReceiptTimeoutMS = 0 }, "engine_receipt_timeout_ms"},
+		{"engine_first_token_floor_ms too low", func(c *Config) { c.Engine.FirstTokenFloorMS = 0 }, "engine_first_token_floor_ms"},
+		{"engine_inter_chunk_stall_ms too low", func(c *Config) { c.Engine.InterChunkStallMS = 0 }, "engine_inter_chunk_stall_ms"},
+		{"engine_loser_grace_ms below inter-chunk stall", func(c *Config) { c.Engine.LoserGraceMS = c.Engine.InterChunkStallMS - 1 }, "engine_loser_grace_ms"},
+		{"engine_max_speculative_attempts negative", func(c *Config) { c.Engine.MaxSpeculativeAttempts = -1 }, "engine_max_speculative_attempts"},
 	}
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -216,6 +227,21 @@ func TestValidateAcceptsEmptyTxQueryFallbackURLs(t *testing.T) {
 	configuration.Chain.TxQueryFallbackURLs = []string{}
 	if err := configuration.Validate(); err != nil {
 		t.Fatalf("Validate() with empty TxQueryFallbackURLs: want nil, got %v", err)
+	}
+}
+
+// TestEngineCarriesOnlyTheLiveTunables pins the section's field set: the legacy inter-chunk stall
+// timeout, per-input-token first-token lag, minimum-samples-for-decision and non-stream response
+// floor/lag pair were never read, and must not reappear under new names.
+func TestEngineCarriesOnlyTheLiveTunables(t *testing.T) {
+	engineType := reflect.TypeOf(Engine{})
+	got := make([]string, 0, engineType.NumField())
+	for index := 0; index < engineType.NumField(); index++ {
+		got = append(got, engineType.Field(index).Name)
+	}
+	want := []string{"ReceiptTimeoutMS", "FirstTokenFloorMS", "InterChunkStallMS", "LoserGraceMS", "MaxSpeculativeAttempts"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("Engine fields = %v, want %v", got, want)
 	}
 }
 

@@ -1,0 +1,152 @@
+package engine
+
+import (
+	"bytes"
+	"sync"
+	"sync/atomic"
+
+	"devshard/cmd/gateway/config"
+)
+
+// carryBudget bounds the bytes held for SSE reassembly at three levels. The participant level is
+// what keeps one host that never terminates an event from draining the shared global pool and
+// starving every other host of classification.
+type carryBudget struct {
+	attemptLimit     int64
+	participantLimit int64
+	globalLimit      int64
+
+	global       atomic.Int64
+	mu           sync.Mutex
+	participants map[string]*atomic.Int64
+}
+
+func newCarryBudget(stream config.Stream) *carryBudget {
+	return &carryBudget{
+		attemptLimit:     stream.ClassifyMaxAttemptBytes,
+		participantLimit: stream.ClassifyMaxParticipantBytes,
+		globalLimit:      stream.ClassifyMaxGlobalBytes,
+		participants:     map[string]*atomic.Int64{},
+	}
+}
+
+// counterFor creates a participant's counter on first use and never removes it: the participant set
+// is the bounded validator set, so an idle counter costs eight bytes and a lookup no allocation.
+func (b *carryBudget) counterFor(participant string) *atomic.Int64 {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	counter := b.participants[participant]
+	if counter == nil {
+		counter = &atomic.Int64{}
+		b.participants[participant] = counter
+	}
+	return counter
+}
+
+// reserve charges n bytes to the participant and then to the global pool, undoing the participant
+// charge when the global pool trips: a charge left behind on a trip is quota nobody can return.
+func (b *carryBudget) reserve(participant *atomic.Int64, n int64) bool {
+	if participant.Add(n) > b.participantLimit {
+		participant.Add(-n)
+		return false
+	}
+	if b.global.Add(n) > b.globalLimit {
+		b.global.Add(-n)
+		participant.Add(-n)
+		return false
+	}
+	return true
+}
+
+func (b *carryBudget) refund(participant *atomic.Int64, n int64) {
+	if n <= 0 {
+		return
+	}
+	participant.Add(-n)
+	b.global.Add(-n)
+}
+
+func (b *carryBudget) usage(participant string) (participantBytes, globalBytes int64) {
+	return b.counterFor(participant).Load(), b.global.Load()
+}
+
+// carryBuffer reassembles SSE events across chunk boundaries for one attempt. It belongs to that
+// attempt's goroutine alone; only the byte charge it holds is shared.
+type carryBuffer struct {
+	budget      *carryBudget
+	participant *atomic.Int64
+	held        []byte
+	dropped     bool
+}
+
+func newCarryBuffer(budget *carryBudget, participant string) *carryBuffer {
+	return &carryBuffer{budget: budget, participant: budget.counterFor(participant)}
+}
+
+// Take returns every newline-terminated event in the held fragment plus chunk, and retains the rest.
+// A cap trip releases the fragment and yields the raw chunk instead, so classification degrades to
+// whatever parses on its own rather than stopping. The second result is true only on the first trip.
+func (c *carryBuffer) Take(chunk []byte) (parseable []byte, firstDrop bool) {
+	lastLineFeed := bytes.LastIndexByte(chunk, '\n')
+	if lastLineFeed < 0 {
+		if c.grow(chunk) {
+			return nil, false
+		}
+		return chunk, c.noteDrop()
+	}
+	parseable = chunk[:lastLineFeed+1]
+	if len(c.held) > 0 {
+		joined := make([]byte, 0, len(c.held)+lastLineFeed+1)
+		joined = append(joined, c.held...)
+		parseable = append(joined, chunk[:lastLineFeed+1]...)
+	}
+	if c.replace(chunk[lastLineFeed+1:]) {
+		return parseable, false
+	}
+	return parseable, c.noteDrop()
+}
+
+// Tail is the unterminated final fragment. A stream whose last event arrives without a newline is
+// classified from it, or it reads as having produced nothing.
+func (c *carryBuffer) Tail() []byte { return c.held }
+
+func (c *carryBuffer) Release() {
+	c.budget.refund(c.participant, int64(len(c.held)))
+	c.held = nil
+}
+
+func (c *carryBuffer) grow(tail []byte) bool {
+	if !c.charge(int64(len(tail))) {
+		return false
+	}
+	c.held = append(c.held, tail...)
+	return true
+}
+
+func (c *carryBuffer) replace(tail []byte) bool {
+	delta := int64(len(tail) - len(c.held))
+	if delta > 0 && !c.charge(delta) {
+		return false
+	}
+	if delta < 0 {
+		c.budget.refund(c.participant, -delta)
+	}
+	c.held = append(c.held[:0], tail...)
+	return true
+}
+
+func (c *carryBuffer) charge(n int64) bool {
+	if int64(len(c.held))+n > c.budget.attemptLimit || !c.budget.reserve(c.participant, n) {
+		c.Release()
+		return false
+	}
+	return true
+}
+
+func (c *carryBuffer) noteDrop() bool {
+	if c.dropped {
+		return false
+	}
+	c.dropped = true
+	return true
+}
