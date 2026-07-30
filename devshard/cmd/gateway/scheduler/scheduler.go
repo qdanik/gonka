@@ -111,8 +111,19 @@ func (s *Scheduler) Pick(ctx context.Context, profile RequestProfile) (Assignmen
 		}
 		return result.assignment, nil
 	case <-ctx.Done():
-		queued.abandoned.Store(true)
+		// Leaving and taking whatever was already handed over is one step: an assignment delivered in
+		// this same instant holds a committed nonce and a concurrency slot nobody else will give back.
+		if delivered, wasDelivered := queued.abandon(); wasDelivered && delivered.err == nil {
+			s.dropAssignment(delivered.assignment, profile.Model)
+		}
 		return Assignment{}, ctx.Err()
+	}
+}
+
+func (s *Scheduler) dropAssignment(assignment Assignment, model string) {
+	s.limiter.Release(assignment.Host, model)
+	if s.observer != nil {
+		s.observer.GhostBurned(assignment.Escrow, ghostAbandoned.reason())
 	}
 }
 
@@ -162,6 +173,8 @@ func (s *Scheduler) dispatcherFor(escrow Escrow) (*dispatcher, error) {
 			session:      escrow.Session,
 			snapshots:    s.snapshots,
 			predicates:   s.predicates(escrow),
+			acquireSlot:  s.acquireSlot(escrow),
+			releaseSlot:  s.releaseSlot(escrow),
 			observer:     s.observer,
 			now:          s.now,
 			stale:        s.holdGrace(),
@@ -208,6 +221,16 @@ func (s *Scheduler) predicates(escrow Escrow) func(chain.PhaseSnapshot) availabi
 			stateBlocked: stateBlocked,
 		}
 	}
+}
+
+func (s *Scheduler) acquireSlot(escrow Escrow) func(participant string) bool {
+	model := escrow.Model
+	return func(participant string) bool { return s.limiter.Acquire(participant, model) }
+}
+
+func (s *Scheduler) releaseSlot(escrow Escrow) func(participant string) {
+	model := escrow.Model
+	return func(participant string) { s.limiter.Release(participant, model) }
 }
 
 func (s *Scheduler) stateBlocked(escrowID string) func(string) bool {
@@ -314,10 +337,13 @@ type escrowWeights interface {
 	EscrowWeight(escrowID, model string) float64
 }
 
-// hostLimiter is satisfied by *limits.ParticipantLimiter. Available is the non-mutating peek, so
-// selection never consumes a concurrency slot on a host it may end up not dispatching to.
+// hostLimiter is satisfied by *limits.ParticipantLimiter. Acquire is the admission authority and runs
+// with the commit; Available is only a cheap pre-filter, so a stale answer from it costs nothing. A
+// slot handed to a caller is released by the engine that spends it, never here.
 type hostLimiter interface {
 	Available(participant, model string) bool
+	Acquire(participant, model string) bool
+	Release(participant, model string)
 }
 
 // hostCapability is satisfied by *perf.Tracker.

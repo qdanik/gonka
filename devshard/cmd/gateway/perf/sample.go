@@ -10,7 +10,20 @@ type Sample struct {
 	SendTime       time.Time
 	ReceiptTime    time.Time
 	FirstToken     time.Time
+	Completed      time.Time
 	InputTokens    uint64
+}
+
+// TotalMs is (Completed-SendTime) in ms, or 0 if either is zero or the gap is <=0.
+func (s Sample) TotalMs() float64 {
+	if s.SendTime.IsZero() || s.Completed.IsZero() {
+		return 0
+	}
+	ms := float64(s.Completed.Sub(s.SendTime).Milliseconds())
+	if ms <= 0 {
+		return 0
+	}
+	return ms
 }
 
 // ReceiptMs is (ReceiptTime-SendTime) in ms, or 0 if either is zero or the gap is <=0.
