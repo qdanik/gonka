@@ -33,6 +33,34 @@ func TestSampleReceiptMsZeroWhenGapNonPositive(t *testing.T) {
 	}
 }
 
+func TestSampleTotalMsComputesGapInMilliseconds(t *testing.T) {
+	s := Sample{SendTime: testEpoch, Completed: testEpoch.Add(2500 * time.Millisecond)}
+	if got := s.TotalMs(); got != 2500 {
+		t.Fatalf("TotalMs() = %v, want 2500", got)
+	}
+}
+
+func TestSampleTotalMsZeroWhenSendTimeZero(t *testing.T) {
+	s := Sample{Completed: testEpoch}
+	if got := s.TotalMs(); got != 0 {
+		t.Fatalf("TotalMs() with zero SendTime = %v, want 0", got)
+	}
+}
+
+func TestSampleTotalMsZeroWhenCompletedZero(t *testing.T) {
+	s := Sample{SendTime: testEpoch}
+	if got := s.TotalMs(); got != 0 {
+		t.Fatalf("TotalMs() with zero Completed = %v, want 0", got)
+	}
+}
+
+func TestSampleTotalMsZeroWhenGapNonPositive(t *testing.T) {
+	s := Sample{SendTime: testEpoch, Completed: testEpoch.Add(-time.Millisecond)}
+	if got := s.TotalMs(); got != 0 {
+		t.Fatalf("TotalMs() with negative gap = %v, want 0", got)
+	}
+}
+
 func TestSampleCTTFLComputesMsPerInputToken(t *testing.T) {
 	s := Sample{
 		ReceiptTime: testEpoch,
