@@ -23,16 +23,18 @@ type committedNonce struct {
 // scriptedSession binds nonce N to slot N%len(slots), the same rule the real session uses, so a test
 // picks the host sequence by choosing the slot list.
 type scriptedSession struct {
-	mu          sync.Mutex
-	slots       []string
-	nonce       uint64
-	advances    int
-	declines    int
-	commits     []committedNonce
-	failWith    error
-	gate        chan struct{}
-	entered     chan struct{}
-	afterDecide func(HostBinding)
+	mu              sync.Mutex
+	slots           []string
+	nonce           uint64
+	advances        int
+	declines        int
+	commits         []committedNonce
+	failWith        error
+	failAfterDecide error
+	swallowCommit   bool
+	gate            chan struct{}
+	entered         chan struct{}
+	afterDecide     func(HostBinding)
 }
 
 func (s *scriptedSession) Advance(decide func(HostBinding) NonceIntent) (Prepared, error) {
@@ -57,8 +59,14 @@ func (s *scriptedSession) Advance(decide func(HostBinding) NonceIntent) (Prepare
 	if s.afterDecide != nil {
 		s.afterDecide(binding)
 	}
+	if s.failAfterDecide != nil {
+		return nil, s.failAfterDecide
+	}
 	if !intent.Commit {
 		s.declines++
+		return nil, nil
+	}
+	if s.swallowCommit {
 		return nil, nil
 	}
 	s.nonce = nonce
@@ -219,16 +227,19 @@ func (f *fakeSnapshots) fetches() int {
 }
 
 type harnessConfig struct {
-	slots        []string
-	pocRequired  func(string) bool
-	throttled    func(string) bool
-	capability   func(string, RequestProfile) bool
-	stateBlocked func(string) bool
-	afterDecide  func(HostBinding)
-	failWith     error
-	gate         chan struct{}
-	submitBuffer int
-	holdStart    bool
+	slots           []string
+	pocRequired     func(string) bool
+	throttled       func(string) bool
+	capability      func(string, RequestProfile) bool
+	stateBlocked    func(string) bool
+	afterDecide     func(HostBinding)
+	failWith        error
+	failAfterDecide error
+	swallowCommit   bool
+	refused         []string
+	gate            chan struct{}
+	submitBuffer    int
+	holdStart       bool
 }
 
 type harness struct {
@@ -237,6 +248,7 @@ type harness struct {
 	clock      *testClock
 	observer   *recordingObserver
 	snapshots  *fakeSnapshots
+	limiter    *fakeLimiter
 }
 
 func newHarness(t *testing.T, cfg harnessConfig) *harness {
@@ -244,10 +256,21 @@ func newHarness(t *testing.T, cfg harnessConfig) *harness {
 	if len(cfg.slots) == 0 {
 		cfg.slots = []string{hostA, hostB}
 	}
-	session := &scriptedSession{slots: cfg.slots, failWith: cfg.failWith, gate: cfg.gate, afterDecide: cfg.afterDecide}
+	session := &scriptedSession{
+		slots:           cfg.slots,
+		failWith:        cfg.failWith,
+		failAfterDecide: cfg.failAfterDecide,
+		swallowCommit:   cfg.swallowCommit,
+		gate:            cfg.gate,
+		afterDecide:     cfg.afterDecide,
+	}
 	clock := newTestClock()
 	observer := &recordingObserver{}
 	snapshots := &fakeSnapshots{}
+	limiter := newFakeLimiter()
+	for _, participant := range cfg.refused {
+		limiter.refuse(participant)
+	}
 
 	predicates := func(snapshot chain.PhaseSnapshot) availability {
 		return availability{
@@ -271,6 +294,8 @@ func newHarness(t *testing.T, cfg harnessConfig) *harness {
 		session:      session,
 		snapshots:    snapshots,
 		predicates:   predicates,
+		acquireSlot:  func(participant string) bool { return limiter.Acquire(participant, modelA) },
+		releaseSlot:  func(participant string) { limiter.Release(participant, modelA) },
 		observer:     observer,
 		now:          clock.Now,
 		stale:        staleHold,
@@ -281,7 +306,23 @@ func newHarness(t *testing.T, cfg harnessConfig) *harness {
 	if !cfg.holdStart {
 		dispatcher.start()
 	}
-	return &harness{dispatcher: dispatcher, session: session, clock: clock, observer: observer, snapshots: snapshots}
+	return &harness{
+		dispatcher: dispatcher,
+		session:    session,
+		clock:      clock,
+		observer:   observer,
+		snapshots:  snapshots,
+		limiter:    limiter,
+	}
+}
+
+// wantSlots asserts the limiter's books: every admission that did not reach a caller was given back.
+func (h *harness) wantSlots(t *testing.T, held, admitted int) {
+	t.Helper()
+	gotHeld, gotAdmitted := h.limiter.slots()
+	if gotHeld != held || gotAdmitted != admitted {
+		t.Fatalf("slots held/admitted = %d/%d, want %d/%d", gotHeld, gotAdmitted, held, admitted)
+	}
 }
 
 func (h *harness) submit(t *testing.T, enqueued time.Time, excluded ...string) *waiter {
@@ -492,6 +533,7 @@ func TestDispatcherReclassifiesALostAssignmentAsAGhost(t *testing.T) {
 		if burns := test.observer.burns(); len(burns) != 1 || burns[0] != ghostAbandoned.reason() {
 			t.Fatalf("ghost burns = %v, want exactly one %q", burns, ghostAbandoned.reason())
 		}
+		test.wantSlots(t, 1, 2)
 	})
 
 	t.Run("a waiter whose reply buffer is already full", func(t *testing.T) {
@@ -509,7 +551,61 @@ func TestDispatcherReclassifiesALostAssignmentAsAGhost(t *testing.T) {
 		if burns := test.observer.burns(); len(burns) != 1 || burns[0] != ghostAbandoned.reason() {
 			t.Fatalf("ghost burns = %v, want exactly one %q", burns, ghostAbandoned.reason())
 		}
+		test.wantSlots(t, 1, 2)
 	})
+}
+
+// Between the admission and the dispatch that gives the slot back sit two paths that never reach a
+// caller; each has to hand the slot back itself.
+func TestDispatcherReleasesAnAdmissionThatNeverReachesACaller(t *testing.T) {
+	t.Run("the session fails after admitting the request", func(t *testing.T) {
+		sessionErr := errors.New("commit rejected")
+		test := newHarness(t, harnessConfig{failAfterDecide: sessionErr})
+
+		queued := test.submit(t, test.clock.Now())
+
+		if result := awaitReply(t, queued); !errors.Is(result.err, sessionErr) {
+			t.Fatalf("err = %v, want the session error", result.err)
+		}
+		test.wantSlots(t, 0, 1)
+	})
+
+	t.Run("the session commits no nonce", func(t *testing.T) {
+		test := newHarness(t, harnessConfig{swallowCommit: true})
+
+		queued := test.submit(t, test.clock.Now())
+
+		if result := awaitReply(t, queued); result.err == nil {
+			t.Fatalf("result = %+v, want the missing-nonce error", result)
+		}
+		test.wantSlots(t, 0, 1)
+	})
+}
+
+// A window that fills between the peek and the commit must cost one ghost, not one per turn: the
+// refusal is what tells the sweep to answer the rest of the queue.
+func TestDispatcherGhostsOnceWhenAdmissionRefusesEveryHost(t *testing.T) {
+	test := newHarness(t, harnessConfig{slots: []string{hostA}, refused: []string{hostA}, holdStart: true})
+	first := test.submit(t, test.clock.Now())
+	second := test.submit(t, test.clock.Now())
+
+	test.dispatcher.start()
+
+	for _, queued := range []*waiter{first, second} {
+		if result := awaitReply(t, queued); !errors.Is(result.err, ErrNoAvailableHost) {
+			t.Fatalf("err = %v, want ErrNoAvailableHost", result.err)
+		}
+	}
+	test.dispatcher.stop()
+
+	_, _, commits := test.session.report()
+	if len(commits) != 1 || !commits[0].ghost {
+		t.Fatalf("commits = %+v, want exactly one ghost for the nonce bound when admission refused", commits)
+	}
+	if burns := test.observer.burns(); len(burns) != 1 || burns[0] != ghostThrottled.reason() {
+		t.Fatalf("ghost burns = %v, want exactly one %q", burns, ghostThrottled.reason())
+	}
+	test.wantSlots(t, 0, 0)
 }
 
 func TestDispatcherNeverHoldsForAnAbandonedQueue(t *testing.T) {

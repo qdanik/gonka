@@ -1,0 +1,133 @@
+package engine
+
+import (
+	"io"
+	"net/http"
+
+	"devshard/cmd/gateway/filters"
+)
+
+// streamVerdict is the coordinator's answer to one attempt's claim on the client stream.
+type streamVerdict int
+
+const (
+	streamPending streamVerdict = iota
+	streamWinner
+	streamSuppressed
+)
+
+// crownRequest carries an attempt's first content chunk to the coordinator, which answers on Reply
+// exactly once. The claiming attempt blocks on that answer, so no byte reaches the client until the
+// race has settled on a single winner.
+type crownRequest struct {
+	Nonce uint64
+	Reply chan<- streamVerdict
+}
+
+type winnerWriter struct {
+	nonce    uint64
+	crown    chan<- crownRequest
+	reply    chan streamVerdict
+	raceDone <-chan struct{}
+
+	// client is the only path to the client anywhere in the writer, and withheld is the only source
+	// it is ever assigned from. A losing attempt therefore has no reachable sink at all, rather than
+	// a sink guarded by a branch somebody must remember to write.
+	client   io.Writer
+	withheld io.Writer
+
+	verdict    streamVerdict
+	prefix     []byte
+	prefixLost bool
+}
+
+func newWinnerWriter(nonce uint64, client io.Writer, crown chan<- crownRequest, raceDone <-chan struct{}) *winnerWriter {
+	return &winnerWriter{
+		nonce:    nonce,
+		crown:    crown,
+		reply:    make(chan streamVerdict, 1),
+		raceDone: raceDone,
+		withheld: client,
+	}
+}
+
+// Write claims the crown on the first content chunk and buffers everything before it. A suppressed
+// attempt reports success without writing, so its host keeps draining to its receipt.
+func (w *winnerWriter) Write(chunk []byte, hasContent bool) error {
+	switch w.verdict {
+	case streamWinner:
+		return w.forward(chunk)
+	case streamSuppressed:
+		return nil
+	}
+	if !hasContent {
+		w.buffer(chunk)
+		return nil
+	}
+	if w.claim() == streamWinner {
+		return w.forward(chunk)
+	}
+	return nil
+}
+
+// Flush needs no gate of its own: an uncrowned attempt has no client to reach.
+func (w *winnerWriter) Flush() {
+	if flusher, ok := w.client.(http.Flusher); ok {
+		flusher.Flush()
+	}
+}
+
+// Abandon forfeits this attempt's claim on the client. An attempt that ends without earning the
+// crown must never have what it buffered forwarded.
+func (w *winnerWriter) Abandon() {
+	w.verdict, w.prefix, w.client, w.withheld = streamSuppressed, nil, nil, nil
+}
+
+func (w *winnerWriter) claim() streamVerdict {
+	select {
+	case w.crown <- crownRequest{Nonce: w.nonce, Reply: w.reply}:
+	case <-w.raceDone:
+		w.Abandon()
+		return w.verdict
+	}
+	select {
+	case verdict := <-w.reply:
+		if verdict == streamWinner {
+			w.verdict, w.client, w.withheld = streamWinner, w.withheld, nil
+			return w.verdict
+		}
+		w.Abandon()
+	case <-w.raceDone:
+		w.Abandon()
+	}
+	return w.verdict
+}
+
+func (w *winnerWriter) forward(chunk []byte) error {
+	prefix := w.prefix
+	w.prefix = nil
+	if w.client == nil {
+		return nil
+	}
+	if len(prefix) > 0 {
+		if _, err := w.client.Write(prefix); err != nil {
+			return err
+		}
+	}
+	_, err := w.client.Write(chunk)
+	return err
+}
+
+// buffer holds pre-content bytes until a claim can flush them ahead of the chunk that crowned this
+// attempt. Past the cap the prefix is dropped, never the attempt: a capped attempt still wins, and
+// its client stream simply starts at the chunk that crowned it.
+func (w *winnerWriter) buffer(chunk []byte) {
+	if w.prefixLost {
+		return
+	}
+	if int64(len(w.prefix))+int64(len(chunk)) > filters.MaxStreamCarryBytes {
+		w.prefix, w.prefixLost = nil, true
+		return
+	}
+	w.prefix = append(w.prefix, chunk...)
+}

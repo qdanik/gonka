@@ -15,17 +15,52 @@ import (
 
 const escrowB = "escrow-b"
 
+// fakeLimiter keeps the peek and the authority separately settable: unavailable turns the pre-filter
+// off, refused lets a host pass the peek and still fail admission, and window is honoured by both.
 type fakeLimiter struct {
 	mu          sync.Mutex
 	unavailable map[string]bool
+	refused     map[string]bool
+	window      int
+	inflight    map[string]int
+	admitted    int
 	models      []string
+}
+
+func newFakeLimiter() *fakeLimiter {
+	return &fakeLimiter{
+		unavailable: map[string]bool{},
+		refused:     map[string]bool{},
+		inflight:    map[string]int{},
+	}
 }
 
 func (f *fakeLimiter) Available(participant, model string) bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.models = append(f.models, model)
-	return !f.unavailable[participant]
+	return !f.unavailable[participant] && f.hasRoomLocked(participant)
+}
+
+func (f *fakeLimiter) Acquire(participant, model string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.refused[participant] || !f.hasRoomLocked(participant) {
+		return false
+	}
+	f.inflight[participant]++
+	f.admitted++
+	return true
+}
+
+func (f *fakeLimiter) Release(participant, model string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.inflight[participant]--
+}
+
+func (f *fakeLimiter) hasRoomLocked(participant string) bool {
+	return f.window <= 0 || f.inflight[participant] < f.window
 }
 
 func (f *fakeLimiter) block(participant string) {
@@ -34,10 +69,28 @@ func (f *fakeLimiter) block(participant string) {
 	f.unavailable[participant] = true
 }
 
+// refuse leaves the peek saying yes, which is the window filling between selection and the commit.
+func (f *fakeLimiter) refuse(participant string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.refused[participant] = true
+}
+
 func (f *fakeLimiter) askedModels() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return append([]string(nil), f.models...)
+}
+
+// slots reports how many admissions have not been given back; a release without an acquire drives it
+// negative rather than clamping, so a double release is visible.
+func (f *fakeLimiter) slots() (held, admitted int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, count := range f.inflight {
+		held += count
+	}
+	return held, f.admitted
 }
 
 type capabilityQuery struct {
@@ -78,6 +131,7 @@ type schedulerConfig struct {
 	slots        []string
 	holdGraceMS  int64
 	submitBuffer int
+	hostWindow   int
 	gate         chan struct{}
 }
 
@@ -115,11 +169,13 @@ func newSchedulerHarness(t *testing.T, cfg schedulerConfig) *schedulerHarness {
 	settings := config.Defaults()
 	settings.Scheduler.HoldGraceMS = cfg.holdGraceMS
 
+	limiter := newFakeLimiter()
+	limiter.window = cfg.hostWindow
 	test := &schedulerHarness{
 		escrows:   escrows,
 		weights:   weights,
 		sessions:  sessions,
-		limiter:   &fakeLimiter{unavailable: map[string]bool{}},
+		limiter:   limiter,
 		perf:      &fakePerf{blocked: map[string]string{}},
 		snapshots: &fakeSnapshots{},
 		observer:  &recordingObserver{},
@@ -304,6 +360,41 @@ func TestPickReturnsTheContextErrorWhenCancelledWhileQueued(t *testing.T) {
 	test.scheduler.Stop()
 }
 
+// Every admission ends up either with the caller that will release it or given back here; a
+// cancellation racing the handoff must not be able to strand one in between.
+func TestPickReleasesTheSlotWhenCancellationRacesTheAssignment(t *testing.T) {
+	verifyNoLeaks(t)
+	test := newSchedulerHarness(t, schedulerConfig{})
+	const races = 200
+
+	takenByCallers := 0
+	for range races {
+		ctx, cancel := context.WithCancel(context.Background())
+		go cancel()
+		assignment, err := test.scheduler.Pick(ctx, RequestProfile{Model: modelA})
+		if err == nil {
+			takenByCallers++
+			test.limiter.Release(assignment.Host, modelA)
+		}
+	}
+	test.scheduler.Stop()
+
+	held, admitted := test.limiter.slots()
+	if held != 0 {
+		t.Fatalf("slots held = %d after %d races, want every admission accounted for", held, races)
+	}
+	dropped := 0
+	for _, reason := range test.observer.burns() {
+		if reason == ghostAbandoned.reason() {
+			dropped++
+		}
+	}
+	if admitted != takenByCallers+dropped {
+		t.Fatalf("admitted = %d, want the %d taken by callers plus the %d recorded as abandoned",
+			admitted, takenByCallers, dropped)
+	}
+}
+
 func TestBlockHostAppliesToOneEscrowOnly(t *testing.T) {
 	test := newSchedulerHarness(t, schedulerConfig{escrows: []string{escrowA, escrowB}})
 
@@ -369,6 +460,83 @@ func TestPickWiresEachAvailabilityPredicateToItsSource(t *testing.T) {
 				t.Fatalf("ghost burns = %v, want exactly one %q", burns, testCase.wantReason)
 			}
 		})
+	}
+}
+
+// Admission is decided inside the same step that commits the nonce, so a host that passes the peek and
+// then fails the window costs a ghost the accounting can see -- never a live nonce nobody settles.
+func TestPickGhostsTheNonceWhenAdmissionRefusesTheBoundHost(t *testing.T) {
+	test := newSchedulerHarness(t, schedulerConfig{})
+	test.limiter.refuse(hostB)
+
+	assignment, err := test.scheduler.Pick(context.Background(), RequestProfile{Model: modelA})
+
+	wantHost(t, assignment, err, escrowA, hostA, 2)
+	_, _, commits := test.session(t, escrowA).report()
+	if len(commits) != 2 || !commits[0].ghost || commits[0].participant != hostB {
+		t.Fatalf("commits = %+v, want the refused host's nonce committed as a ghost", commits)
+	}
+	if commits[1].ghost || commits[1].participant != hostA {
+		t.Fatalf("commits = %+v, want the admitted host's nonce dispatched for real", commits)
+	}
+	if burns := test.observer.burns(); len(burns) != 1 || burns[0] != ghostThrottled.reason() {
+		t.Fatalf("ghost burns = %v, want exactly one %q", burns, ghostThrottled.reason())
+	}
+	if held, admitted := test.limiter.slots(); held != 1 || admitted != 1 {
+		t.Fatalf("slots held/admitted = %d/%d, want only the served host's slot taken", held, admitted)
+	}
+}
+
+func TestPickAdmitsExactlyOneCallerThroughAWindowOfOne(t *testing.T) {
+	verifyNoLeaks(t)
+	test := newSchedulerHarness(t, schedulerConfig{slots: []string{hostA}, hostWindow: 1})
+	const callers = 8
+
+	var group sync.WaitGroup
+	served := make(chan Assignment, callers)
+	rejected := make(chan error, callers)
+	for range callers {
+		group.Add(1)
+		go func() {
+			defer group.Done()
+			assignment, err := test.scheduler.Pick(context.Background(), RequestProfile{Model: modelA})
+			if err != nil {
+				rejected <- err
+				return
+			}
+			served <- assignment
+		}()
+	}
+	group.Wait()
+	close(served)
+	close(rejected)
+
+	if len(served) != 1 {
+		t.Fatalf("served = %d callers, want exactly one through a window of one", len(served))
+	}
+	for err := range rejected {
+		if !errors.Is(err, ErrNoAvailableHost) {
+			t.Fatalf("rejected caller err = %v, want ErrNoAvailableHost", err)
+		}
+	}
+	_, _, commits := test.session(t, escrowA).report()
+	ghosts := 0
+	for _, commit := range commits {
+		if commit.ghost {
+			ghosts++
+		}
+	}
+	if burns := test.observer.burns(); ghosts != len(commits)-1 || len(burns) != ghosts {
+		t.Fatalf("commits = %+v with burns %v, want every nonce but the served one ghosted and recorded", commits, burns)
+	}
+	if held, admitted := test.limiter.slots(); held != 1 || admitted != 1 {
+		t.Fatalf("slots held/admitted = %d/%d, want the one admission still held by its caller", held, admitted)
+	}
+
+	test.limiter.Release((<-served).Host, modelA)
+
+	if held, _ := test.limiter.slots(); held != 0 {
+		t.Fatalf("slots held after the caller released = %d, want 0", held)
 	}
 }
 
