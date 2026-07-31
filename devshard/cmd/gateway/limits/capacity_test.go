@@ -240,3 +240,62 @@ func TestCapacityConcurrentUpdateAndRead(t *testing.T) {
 	wg.Wait()
 	capacity.RemoveEscrow("escrowA")
 }
+
+func TestCapacityEscrowWeightOnUnobservedChainWeights(t *testing.T) {
+	cases := []struct {
+		name     string
+		snapshot chain.PhaseSnapshot
+		shares   map[string]float64
+		want     float64
+	}{
+		{
+			name:     "no weights observed at all falls back to the escrow's available share",
+			snapshot: chain.PhaseSnapshot{LastUpdatedAt: testEpoch},
+			shares:   map[string]float64{"hostA": 0.5, "hostB": 0.25},
+			want:     0.75,
+		},
+		{
+			name:     "an unavailable host is left out of the fallback share",
+			snapshot: chain.PhaseSnapshot{LastUpdatedAt: testEpoch},
+			shares:   map[string]float64{"hostA": 0.5, "hostUnavailable": 0.25},
+			want:     0.5,
+		},
+		{
+			// A stale poll republishes the weights it last saw, so the counts stay non-zero and the
+			// escrow is judged on real data rather than on the fallback.
+			name: "a stale snapshot keeps the weights it observed",
+			snapshot: chain.PhaseSnapshot{
+				CurrentWeights: map[string]float64{"hostA": 100},
+				FullWeights:    map[string]float64{"hostA": 100},
+				LastError:      "fetch participants: connection refused",
+			},
+			shares: map[string]float64{"hostA": 0.5},
+			want:   50,
+		},
+		{
+			// Every reported host weighing zero is an answer, not a missing one: capacity really is
+			// zero and the escrow must score unusable.
+			name: "weights observed as zero stay zero",
+			snapshot: chain.PhaseSnapshot{
+				CurrentWeights: map[string]float64{"hostA": 0, "hostB": 0},
+				FullWeights:    map[string]float64{"hostA": 0, "hostB": 0},
+				LastUpdatedAt:  testEpoch,
+			},
+			shares: map[string]float64{"hostA": 0.5, "hostB": 0.25},
+			want:   0,
+		},
+	}
+
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			capacity := NewCapacity(func(participant, _ string) bool { return participant != "hostUnavailable" })
+			capacity.Update(testCase.snapshot)
+			capacity.SetEscrowMembership("escrowA", testCase.shares)
+
+			if got := capacity.EscrowWeight("escrowA", "modelX"); got != testCase.want {
+				t.Errorf("EscrowWeight() = %v, want %v", got, testCase.want)
+			}
+		})
+	}
+}

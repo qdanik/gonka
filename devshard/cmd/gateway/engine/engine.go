@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"devshard/cmd/gateway/config"
@@ -43,32 +44,58 @@ type raceMetrics interface {
 	RecordClassifyOverflow(participant, model string)
 }
 
+// raceLedger runs on the client's response path, so it must return without waiting on its storage.
+type raceLedger interface {
+	RecordRequest(outcome RaceOutcome)
+}
+
+// escrowTargets is the dispatch boundary main wires. Resolving a target also takes the escrow's
+// in-flight hold, which must outlive the race: the vote its nonces owe is posted after Run returns.
+type escrowTargets interface {
+	Target(escrowID string) (target DispatchTarget, release func(), ok bool)
+}
+
 type Deps struct {
 	Picker    picker
-	Targets   targets
+	Targets   escrowTargets
 	Windows   hostWindows
 	Perf      hostTracker
 	Snapshots snapshotSource
 	Config    *config.Holder
 	Metrics   raceMetrics
+	Ledger    raceLedger
 
-	// Timeouts yields the vote poster for one escrow and one request's payload. Escrows rotate, so it
-	// is resolved per race rather than held.
-	Timeouts func(escrowID string, body []byte) (TimeoutPoster, bool)
+	// Suspicious reports the operator's manual never-trust-this-host pins.
+	Suspicious func(participant string) bool
+
+	// Timeouts yields the vote poster for one escrow and the dispatch payload its race committed;
+	// escrows rotate, so it is resolved per race rather than held. The payload is passed because the
+	// vote must carry the prompt, which the committed record keeps only as a hash.
+	Timeouts func(escrowID string, params any) (TimeoutPoster, bool)
 
 	Now   func() time.Time
 	Timer func() raceTimer
 }
 
-// Request describes one chat-completions request. The bytes the host receives travel beside it,
-// opaque to the engine.
+// Request describes one chat-completions request.
 type Request struct {
-	RequestID     string
-	Model         string
+	RequestID string
+	Model     string
+	// Escrow, when set, fails rather than falling back if it no longer serves the model.
+	Escrow        string
 	InputTokens   uint64
 	Stream        bool
 	RequiresTools bool
 	ContextHint   uint64
+
+	// Params is built by the caller and never read here. It reaches scheduler.RequestProfile.Params
+	// and the Timeouts hook unchanged, and both ends require the concrete devshard/user.InferenceParams
+	// the escrow commits -- not the request body it was built from.
+	Params any
+
+	// OnEscrow fires once the escrow is settled on, which is before any byte reaches the client and is
+	// therefore the last moment a response header can still be set.
+	OnEscrow func(escrowID string)
 }
 
 type Engine struct {
@@ -94,21 +121,22 @@ func NewEngine(deps Deps) *Engine {
 // Run races one request to a single winner and streams that winner's bytes to client. The returned
 // outcome is the client's view: losers may still be streaming, and the race reports itself once, from
 // whichever goroutine ends it.
-func (e *Engine) Run(ctx context.Context, profile Request, body []byte, client io.Writer) (RaceOutcome, error) {
-	if !e.admit() {
+func (e *Engine) Run(ctx context.Context, request Request, client io.Writer) (RaceOutcome, error) {
+	registration := e.admit()
+	if registration == nil {
 		return RaceOutcome{}, ErrStopped
 	}
+	// A panicking race still owes the barrier its release, or Stop waits for a race nobody is running.
+	// The panic itself is re-raised: recovering it here would answer the client with an outcome no
+	// race produced.
+	defer func() {
+		if panicked := recover(); panicked != nil {
+			registration.release()
+			panic(panicked)
+		}
+	}()
 	settings := e.deps.Config.Load()
-	outcome, err := runRace(ctx, e.raceDeps(settings, profile, body), raceRequest{
-		RequestID:     profile.RequestID,
-		Model:         profile.Model,
-		InputTokens:   profile.InputTokens,
-		Stream:        profile.Stream,
-		RequiresTools: profile.RequiresTools,
-		ContextHint:   profile.ContextHint,
-		Params:        body,
-		Client:        client,
-	})
+	outcome, err := runRace(ctx, e.raceDeps(settings, request, registration), raceRequest{Request: request, Client: client})
 	if err != nil {
 		return outcome, err
 	}
@@ -125,34 +153,96 @@ func (e *Engine) Stop() {
 	e.tracked.Wait()
 }
 
-// admit registers a race before it starts. Registering here rather than when it finishes is what keeps
-// a Stop that overlaps a running race from observing the engine as idle.
-func (e *Engine) admit() bool {
+// admit registers a race before it starts, returning nil once the engine is stopped. Registering here
+// rather than when it finishes is what keeps a Stop that overlaps a running race from observing the
+// engine as idle.
+func (e *Engine) admit() *raceRegistration {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if e.stopped {
-		return false
+		return nil
 	}
 	e.tracked.Add(1)
-	return true
+	return &raceRegistration{engine: e}
 }
 
-func (e *Engine) raceDeps(settings *config.Config, profile Request, body []byte) raceDeps {
+// raceRegistration is one race's place in the Stop barrier and the holder of its escrow's in-flight
+// count. Releasing is idempotent because the settling path and a panicking request path both reach for
+// it and only one of them may be counted.
+type raceRegistration struct {
+	engine   *Engine
+	released atomic.Bool
+
+	mu         sync.Mutex
+	escrowHold func()
+}
+
+func (r *raceRegistration) holdEscrow(release func()) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.escrowHold = release
+}
+
+func (r *raceRegistration) release() {
+	if !r.released.CompareAndSwap(false, true) {
+		return
+	}
+	r.mu.Lock()
+	hold := r.escrowHold
+	r.escrowHold = nil
+	r.mu.Unlock()
+	if hold != nil {
+		hold()
+	}
+	r.engine.tracked.Done()
+}
+
+// heldTargets hands the coordinator a plain target and parks its hold on the registration.
+type heldTargets struct {
+	escrows      escrowTargets
+	registration *raceRegistration
+}
+
+func (h heldTargets) Target(escrowID string) (DispatchTarget, bool) {
+	target, release, ok := h.escrows.Target(escrowID)
+	if !ok {
+		return nil, false
+	}
+	h.registration.holdEscrow(release)
+	return target, true
+}
+
+func (e *Engine) raceDeps(settings *config.Config, request Request, registration *raceRegistration) raceDeps {
 	return raceDeps{
 		Picker:       e.deps.Picker,
-		Targets:      e.deps.Targets,
+		Targets:      heldTargets{escrows: e.deps.Targets, registration: registration},
 		Limiter:      e.deps.Windows,
 		Perf:         e.deps.Perf,
-		Crown:        e.crown,
+		Crown:        suspicionGate{pinned: e.deps.Suspicious, strikes: e.crown},
 		Snapshots:    e.deps.Snapshots,
 		Policy:       EscalationPolicyFromConfig(settings.Engine),
 		Modes:        settings.Modes,
 		DrainTimeout: DrainTimeoutFromConfig(settings.Stream),
-		Classify:     e.classify(profile.Model),
+		Classify:     e.classify(request.Model),
 		Now:          e.deps.Now,
 		Timer:        e.deps.Timer,
-		Report:       func(outcome RaceOutcome) { e.record(outcome, body) },
+		Report:       func(outcome RaceOutcome) { e.record(outcome, request.Params, registration) },
 	}
+}
+
+// suspicionGate folds the operator's manual pins into the automatic crowning penalty, so a pinned
+// host escalates and is held back from the crown however well it has been answering.
+type suspicionGate struct {
+	pinned  func(participant string) bool
+	strikes *crownStrikes
+}
+
+func (g suspicionGate) Denied(participant, model string) bool {
+	return (g.pinned != nil && g.pinned(participant)) || g.strikes.Denied(participant, model)
+}
+
+func (g suspicionGate) Observe(participant, model string, contentless bool) {
+	g.strikes.Observe(participant, model, contentless)
 }
 
 func (e *Engine) classify(model string) func(string) streamClassifier {
@@ -167,7 +257,7 @@ func (e *Engine) classify(model string) func(string) streamClassifier {
 
 // record translates one outcome into every consumer's vocabulary. The exemption ladder is applied
 // here and nowhere else, so what a host is judged on cannot differ between two recording paths.
-func (e *Engine) record(outcome RaceOutcome, body []byte) {
+func (e *Engine) record(outcome RaceOutcome, params any, registration *raceRegistration) {
 	for _, attempt := range outcome.Attempts {
 		if sample, exemption := outcome.Sample(attempt); exemption == SampleRecorded {
 			e.deps.Perf.RecordSample(sample)
@@ -182,24 +272,27 @@ func (e *Engine) record(outcome RaceOutcome, body []byte) {
 	if e.deps.Metrics != nil {
 		e.deps.Metrics.RecordRace(outcome)
 	}
-	e.settle(outcome, body)
+	if e.deps.Ledger != nil {
+		e.deps.Ledger.RecordRequest(outcome)
+	}
+	e.settle(outcome, params, registration)
 }
 
 // settle posts the chain vote for every nonce the race left unfinished and ends the race's
 // registration. The wait is the protocol's, measured in minutes, so it runs beside the race.
-func (e *Engine) settle(outcome RaceOutcome, body []byte) {
+func (e *Engine) settle(outcome RaceOutcome, params any, registration *raceRegistration) {
 	if len(outcome.TimeoutPlan()) == 0 {
-		e.tracked.Done()
+		registration.release()
 		return
 	}
 	var poster TimeoutPoster
 	if e.deps.Timeouts != nil {
-		if resolved, ok := e.deps.Timeouts(outcome.EscrowID, body); ok {
+		if resolved, ok := e.deps.Timeouts(outcome.EscrowID, params); ok {
 			poster = resolved
 		}
 	}
 	go func() {
-		defer e.tracked.Done()
+		defer registration.release()
 		for _, event := range SettleTimeouts(context.Background(), poster, outcome) {
 			if e.deps.Metrics != nil {
 				e.deps.Metrics.RecordTimeout(event)

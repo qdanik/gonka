@@ -362,3 +362,54 @@ func TestIsCacheableUpstreamError_EveryMarkerExcludes(t *testing.T) {
 		})
 	}
 }
+
+// --- IsCacheableResponse / HasNonCacheableError ---
+
+func TestIsCacheableResponseCoversSuccessesAndSSEEmbeddedFailures(t *testing.T) {
+	tests := []struct {
+		name   string
+		status int
+		body   string
+		want   bool
+	}{
+		{"a plain success is cacheable", 200, `{"choices":[{"message":{"content":"hi"}}]}`, true},
+		{"a 204 is cacheable", 204, `{"choices":[]}`, true},
+		{"an empty body is never cacheable", 200, ``, false},
+		{"a completed sse stream is cacheable", 200, "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\ndata: [DONE]\n\n", true},
+		{"a success carrying a transient error inside an sse event is not cacheable", 200, "data: {\"choices\":[]}\n\ndata: {\"error\":{\"message\":\"upstream timeout\"}}\n\n", false},
+		{"a success carrying a deterministic error inside an sse event is still not a success", 200, "data: {\"error\":{\"message\":\"temperature must be between 0 and 2\"}}\n\n", true},
+		{"a 400 carrying a deterministic error inside an sse event is cacheable", 400, "data: {\"error\":{\"type\":\"invalid_request_error\",\"message\":\"unknown parameter foo\"}}\n\n", true},
+		{"a 400 carrying a transient error inside an sse event is not cacheable", 400, "data: {\"error\":{\"message\":\"service unavailable\"}}\n\n", false},
+		{"a 500 is not cacheable", 500, `{"choices":[]}`, false},
+		{"crlf sse framing is scanned too", 200, "data: {\"error\":{\"message\":\"rate limit exceeded\"}}\r\n\r\n", false},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			if got := IsCacheableResponse(testCase.status, []byte(testCase.body)); got != testCase.want {
+				t.Errorf("IsCacheableResponse(%d, %q) = %v, want %v", testCase.status, testCase.body, got, testCase.want)
+			}
+		})
+	}
+}
+
+func TestHasNonCacheableErrorFindsFailuresRegardlessOfFraming(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want bool
+	}{
+		{"a clean completion carries none", `{"choices":[{"message":{"content":"hi"}}]}`, false},
+		{"a plain transient error", `{"error":{"message":"upstream request timeout"}}`, true},
+		{"a plain deterministic error is replayable", `{"error":{"message":"temperature must be between 0 and 2"}}`, false},
+		{"an sse-embedded transient error", "data: {\"choices\":[]}\n\ndata: {\"error\":{\"message\":\"overloaded\"}}\n\n", true},
+		{"an sse stream with no error", "data: {\"choices\":[]}\n\ndata: [DONE]\n\n", false},
+		{"a malformed body carries none", `not json`, false},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			if got := HasNonCacheableError([]byte(testCase.body)); got != testCase.want {
+				t.Errorf("HasNonCacheableError(%q) = %v, want %v", testCase.body, got, testCase.want)
+			}
+		})
+	}
+}

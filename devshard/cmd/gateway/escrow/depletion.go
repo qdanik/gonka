@@ -58,7 +58,7 @@ func (m *Manager) drainMarks() map[string]bool {
 // replaceDepleted creates the replacement before retiring the depleted escrow, so coverage never
 // drops to zero; a failed create leaves the depleted escrow in place for the next attempt.
 func (m *Manager) replaceDepleted(ctx context.Context, record store.DevshardRecord, model ModelConfig, snapshot chain.PhaseSnapshot) error {
-	if err := m.createEscrow(ctx, model, record.RotationRole, snapshot.EpochIndex, snapshot.BlockHeight); err != nil {
+	if _, err := m.createEscrow(ctx, model, record.RotationRole, snapshot.EpochIndex, snapshot.BlockHeight); err != nil {
 		return fmt.Errorf("creating replacement for depleted escrow %s: %w", record.EscrowID, err)
 	}
 	if err := m.retire(ctx, record); err != nil {

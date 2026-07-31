@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -141,7 +142,32 @@ func (t *scriptedTarget) NonceFinished(nonce uint64) bool {
 	return script != nil && script.finished
 }
 
-func (t *scriptedTarget) Target(string) (dispatchTarget, bool) { return t, true }
+func (t *scriptedTarget) Target(string) (DispatchTarget, bool) { return t, true }
+
+// simTargets is the boundary main wires: a resolved target arrives holding its escrow, and the engine
+// gives that hold back only once the race's vote is posted.
+type simTargets struct {
+	*scriptedTarget
+	panicking atomic.Bool
+	holds     atomic.Int64
+	releases  atomic.Int64
+}
+
+func (t *simTargets) Target(string) (DispatchTarget, func(), bool) {
+	t.holds.Add(1)
+	release := func() { t.releases.Add(1) }
+	if t.panicking.Load() {
+		return unusableTarget{DispatchTarget: t.scriptedTarget}, release, true
+	}
+	return t.scriptedTarget, release, true
+}
+
+func (t *simTargets) held() (holds, releases int64) { return t.holds.Load(), t.releases.Load() }
+
+// unusableTarget fails the race after the hold has been taken, on the goroutine that called Run.
+type unusableTarget struct{ DispatchTarget }
+
+func (unusableTarget) HostCount() int { panic("dispatch target is unusable") }
 
 // markerClassifier reads its verdict out of the chunk itself so a script's bytes and their
 // classification cannot drift apart.
@@ -313,11 +339,13 @@ func newRaceFixture(policy EscalationPolicy, hosts int) *raceFixture {
 		Report:    func(outcome RaceOutcome) { fixture.reported <- outcome },
 	}
 	fixture.request = raceRequest{
-		RequestID:   "request-1",
-		Model:       testModel,
-		InputTokens: 1_000,
-		Stream:      true,
-		Client:      fixture.client,
+		Request: Request{
+			RequestID:   "request-1",
+			Model:       testModel,
+			InputTokens: 1_000,
+			Stream:      true,
+		},
+		Client: fixture.client,
 	}
 	return fixture
 }
@@ -648,7 +676,7 @@ func TestRunRaceGivesBackTheSlotAndVotesForANonceItCannotDispatch(t *testing.T) 
 // missingTarget is the registry after the escrow the pick chose has already rotated out.
 type missingTarget struct{}
 
-func (missingTarget) Target(string) (dispatchTarget, bool) { return nil, false }
+func (missingTarget) Target(string) (DispatchTarget, bool) { return nil, false }
 
 // Every attempt the race starts arrives holding a slot the scheduler took for it, so the race owes one
 // release per attempt however each ended.
@@ -1333,5 +1361,29 @@ func TestRunRaceEscalatesAfterItsLastAttemptFailed(t *testing.T) {
 	}
 	if outcome.Attempts[1].StartReason != StageAttemptFailed.Reason() {
 		t.Fatalf("escalation start reason = %q, want %q", outcome.Attempts[1].StartReason, StageAttemptFailed.Reason())
+	}
+}
+
+func TestARacePinnedToAnEscrowAsksTheSchedulerForThatOne(t *testing.T) {
+	fixture := newRaceFixture(racePolicy(1), 2)
+	fixture.request.Escrow = "escrow-pinned"
+	fixture.host(10, 0, "host-0", &hostScript{
+		receipt:   true,
+		chunks:    []string{contentChunk(10)},
+		confirmed: true,
+		finished:  true,
+	})
+
+	if _, err := fixture.run(context.Background()); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+
+	fixture.picker.mu.Lock()
+	defer fixture.picker.mu.Unlock()
+	if len(fixture.picker.profiles) == 0 {
+		t.Fatal("the race made no pick")
+	}
+	if got := fixture.picker.profiles[0].Escrow; got != "escrow-pinned" {
+		t.Fatalf("first pick asked for escrow %q, want %q", got, "escrow-pinned")
 	}
 }

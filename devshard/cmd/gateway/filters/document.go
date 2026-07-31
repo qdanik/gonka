@@ -10,10 +10,10 @@ import (
 // MaxNestingDepth bounds JSON nesting before the decode.
 const MaxNestingDepth = 32
 
-// MaxBodyBytes bounds the raw request body before the decode. A million-token prompt is already
-// ~4-6 MiB of text before JSON overhead, so this is sized to reject the absurd rather than to
-// throttle load; concurrent memory is bounded by the in-flight input-token budget instead.
-const MaxBodyBytes = 32 << 20
+// MaxBodyBytes bounds the raw request body, both at ingest and before the decode. A million-token
+// prompt is ~4-6 MiB of text before JSON overhead, so this rejects the absurd rather than throttling
+// load; concurrent memory is bounded by the in-flight input-token budget instead.
+const MaxBodyBytes = 10 << 20
 
 // MaxStructuralNodes bounds the containers and elements the decode allocates; a body inside
 // MaxBodyBytes can still decode into an order of magnitude more heap than its own bytes.

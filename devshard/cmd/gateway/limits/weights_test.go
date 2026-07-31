@@ -57,55 +57,55 @@ func TestScaleFactor(t *testing.T) {
 
 func TestEscrowWeight(t *testing.T) {
 	tests := []struct {
-		name            string
-		currentWeights  map[string]float64
-		membershipShare map[string]float64
-		available       func(string) bool
-		want            float64
+		name           string
+		currentWeights map[string]float64
+		hostShares     map[string]float64
+		available      func(string) bool
+		want           float64
 	}{
 		{
-			name:            "shares sum to the hosts' participation",
-			currentWeights:  map[string]float64{"hostA": 100, "hostB": 200},
-			membershipShare: map[string]float64{"hostA": 0.5, "hostB": 0.25},
-			want:            100,
+			name:           "shares sum to the hosts' participation",
+			currentWeights: map[string]float64{"hostA": 100, "hostB": 200},
+			hostShares:     map[string]float64{"hostA": 0.5, "hostB": 0.25},
+			want:           100,
 		},
 		{
-			name:            "availability filter drops a host",
-			currentWeights:  map[string]float64{"hostA": 100, "hostB": 200},
-			membershipShare: map[string]float64{"hostA": 0.5, "hostB": 0.25},
-			available:       func(host string) bool { return host != "hostB" },
-			want:            50,
+			name:           "availability filter drops a host",
+			currentWeights: map[string]float64{"hostA": 100, "hostB": 200},
+			hostShares:     map[string]float64{"hostA": 0.5, "hostB": 0.25},
+			available:      func(host string) bool { return host != "hostB" },
+			want:           50,
 		},
 		{
-			name:            "nil available treats every host as available",
-			currentWeights:  map[string]float64{"hostA": 40},
-			membershipShare: map[string]float64{"hostA": 1},
-			want:            40,
+			name:           "nil available treats every host as available",
+			currentWeights: map[string]float64{"hostA": 40},
+			hostShares:     map[string]float64{"hostA": 1},
+			want:           40,
 		},
 		{
-			name:            "empty maps yield zero",
-			currentWeights:  map[string]float64{},
-			membershipShare: map[string]float64{},
-			want:            0,
+			name:           "empty maps yield zero",
+			currentWeights: map[string]float64{},
+			hostShares:     map[string]float64{},
+			want:           0,
 		},
 		{
-			name:            "host in currentWeights but not membership contributes nothing",
-			currentWeights:  map[string]float64{"hostA": 100, "hostC": 50},
-			membershipShare: map[string]float64{"hostA": 1},
-			want:            100,
+			name:           "host in currentWeights but not membership contributes nothing",
+			currentWeights: map[string]float64{"hostA": 100, "hostC": 50},
+			hostShares:     map[string]float64{"hostA": 1},
+			want:           100,
 		},
 		{
-			name:            "host in membership but not currentWeights contributes nothing",
-			currentWeights:  map[string]float64{"hostA": 100},
-			membershipShare: map[string]float64{"hostA": 1, "hostD": 1},
-			want:            100,
+			name:           "host in membership but not currentWeights contributes nothing",
+			currentWeights: map[string]float64{"hostA": 100},
+			hostShares:     map[string]float64{"hostA": 1, "hostD": 1},
+			want:           100,
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			if got := escrowWeight(tt.currentWeights, tt.membershipShare, tt.available); got != tt.want {
-				t.Errorf("escrowWeight(%v, %v) = %v, want %v", tt.currentWeights, tt.membershipShare, got, tt.want)
+			if got := escrowWeight(tt.currentWeights, tt.hostShares, tt.available); got != tt.want {
+				t.Errorf("escrowWeight(%v, %v) = %v, want %v", tt.currentWeights, tt.hostShares, got, tt.want)
 			}
 		})
 	}

@@ -134,6 +134,55 @@ func TestSettleTimeoutsRecordsAPostedVoteAsCompleted(t *testing.T) {
 	}
 }
 
+// Routing and settlement must both receive the caller's own params value. The engine never reads it, so
+// a payload it substituted here would fail only at the far end, where the request is already lost.
+func TestRunHandsTheCallersParamsToRoutingAndToSettlement(t *testing.T) {
+	sim := newSimulator(t, settledPolicy(), 1, qwenModel)
+	sim.host(10, 0, "host-0", &hostScript{receipt: true, err: errors.New("host refused")})
+	want := sim.profile().Params
+
+	if _, err := sim.run(context.Background()); err == nil {
+		t.Fatal("Run() error = nil, want the failed attempt's error")
+	}
+	sim.reported(t)
+	sim.settleAll()
+
+	routed := sim.picker.profiles
+	if len(routed) != 1 || routed[0].Params != want {
+		t.Fatalf("routing saw %d picks carrying %#v, want one carrying %#v", len(routed), routed, want)
+	}
+	settled := sim.poster.paramsSeen()
+	if len(settled) != 1 || settled[0] != want {
+		t.Fatalf("settlement saw params %#v, want one %#v", settled, want)
+	}
+}
+
+func TestTheRecordingPointAccountsEveryRaceExactlyOnce(t *testing.T) {
+	sim := newSimulator(t, settledPolicy(), 1, qwenModel)
+	sim.host(10, 0, "host-0", &hostScript{receipt: true, err: errors.New("host refused")})
+
+	if _, err := sim.run(context.Background()); err == nil {
+		t.Fatal("Run() error = nil, want the failed attempt's error")
+	}
+	reported := sim.reported(t)
+	sim.settleAll()
+
+	select {
+	case accounted := <-sim.ledger.rows:
+		if accounted.RequestID != reported.RequestID || accounted.WinnerNonce != reported.WinnerNonce {
+			t.Fatalf("ledger saw %+v, want the reported outcome %+v", accounted, reported)
+		}
+		if len(accounted.Attempts) != len(reported.Attempts) {
+			t.Fatalf("ledger saw %d attempts, want %d", len(accounted.Attempts), len(reported.Attempts))
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the race was never accounted")
+	}
+	if extra := len(sim.ledger.rows); extra != 0 {
+		t.Fatalf("rows accounted = %d, want 1", 1+extra)
+	}
+}
+
 func TestCrownStrikesDenyOnlyAfterRepeatedContentlessAnswers(t *testing.T) {
 	t.Parallel()
 	gate := newCrownStrikes()

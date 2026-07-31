@@ -3,6 +3,7 @@ package limits
 import (
 	"math"
 	"math/rand"
+	"sort"
 	"sync"
 	"time"
 )
@@ -116,6 +117,82 @@ func (l *ParticipantLimiter) Available(participant, model string) bool {
 		state = &hostState{window: float64(l.cfg.InitialWindow)}
 	}
 	return wouldAdmitLocked(state, l.now())
+}
+
+type BreakerState string
+
+const (
+	BreakerClosed   BreakerState = "closed"
+	BreakerOpen     BreakerState = "open"
+	BreakerHalfOpen BreakerState = "half_open"
+)
+
+// HostWindow is one tracked participant/model pair as a reader sees it.
+type HostWindow struct {
+	Participant string
+	Model       string
+	Window      float64
+	Inflight    int
+	Breaker     BreakerState
+	Available   bool
+}
+
+// Snapshot returns every tracked pair in participant/model order, taken under one lock acquisition.
+func (l *ParticipantLimiter) Snapshot() []HostWindow {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	now := l.now()
+	windows := make([]HostWindow, 0, len(l.states))
+	for tracked, state := range l.states {
+		windows = append(windows, HostWindow{
+			Participant: tracked.participant,
+			Model:       tracked.model,
+			Window:      state.window,
+			Inflight:    state.inflight,
+			Breaker:     breakerState(state, now),
+			Available:   wouldAdmitLocked(state, now),
+		})
+	}
+	sort.Slice(windows, func(first, second int) bool {
+		if windows[first].Participant != windows[second].Participant {
+			return windows[first].Participant < windows[second].Participant
+		}
+		return windows[first].Model < windows[second].Model
+	})
+	return windows
+}
+
+func breakerState(state *hostState, now time.Time) BreakerState {
+	switch {
+	case now.Before(state.openUntil):
+		return BreakerOpen
+	case state.halfOpen || !state.openUntil.IsZero():
+		return BreakerHalfOpen
+	}
+	return BreakerClosed
+}
+
+// ClearQuarantine reopens every model's breaker for one participant and restores its window to the
+// initial one, reporting whether the participant was tracked at all. Inflight is left alone: it
+// counts attempts that are still running and is not part of the penalty.
+func (l *ParticipantLimiter) ClearQuarantine(participant string) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	cleared := false
+	for tracked, state := range l.states {
+		if tracked.participant != participant {
+			continue
+		}
+		state.window = float64(l.cfg.InitialWindow)
+		state.consecutiveTransportFail = 0
+		state.openUntil = time.Time{}
+		state.backoffCount = 0
+		state.halfOpen = false
+		cleared = true
+	}
+	return cleared
 }
 
 func (l *ParticipantLimiter) Release(participant, model string) {

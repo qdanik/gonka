@@ -216,6 +216,16 @@ func (m *simMetrics) classifyOverflows() []string {
 	return append([]string(nil), m.overflows...)
 }
 
+type simLedger struct{ rows chan RaceOutcome }
+
+func newSimLedger() *simLedger { return &simLedger{rows: make(chan RaceOutcome, 4)} }
+
+func (l *simLedger) RecordRequest(outcome RaceOutcome) { l.rows <- outcome }
+
+// simDispatchParams stands in for the concrete params the caller builds. The engine must forward the
+// value unread to both routing and settlement, so a shape it could not possibly interpret is the point.
+type simDispatchParams struct{ prompt string }
+
 // simPoster stands in for the chain vote. entered/release let a test hold a vote open and observe
 // that shutdown waits for it.
 type simPoster struct {
@@ -224,8 +234,21 @@ type simPoster struct {
 	vote    string
 	err     error
 
-	mu     sync.Mutex
-	posted []uint64
+	mu       sync.Mutex
+	posted   []uint64
+	resolved []any
+}
+
+func (p *simPoster) resolvedWith(params any) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.resolved = append(p.resolved, params)
+}
+
+func (p *simPoster) paramsSeen() []any {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([]any(nil), p.resolved...)
 }
 
 func newSimPoster() *simPoster {
@@ -252,15 +275,19 @@ func (p *simPoster) settled() []uint64 {
 type simulator struct {
 	engine    *Engine
 	picker    *stubPicker
-	target    *scriptedTarget
+	target    *simTargets
 	perf      *simTracker
 	windows   *simWindows
 	metrics   *simMetrics
+	ledger    *simLedger
 	poster    *simPoster
 	snapshots *simSnapshots
 	clock     *virtualTime
 	client    *recordingSink
 	model     string
+	// pinned is the operator's suspicious list, set before run() so the engine reads it from the same
+	// dependency main supplies rather than from a policy the test built itself.
+	pinned map[string]bool
 }
 
 func engineSettings(policy EscalationPolicy, modes config.Modes) *config.Config {
@@ -298,27 +325,34 @@ func newSimulatorInPhase(
 	t.Helper()
 	sim := &simulator{
 		picker:    &stubPicker{},
-		target:    &scriptedTarget{scripts: map[uint64]*hostScript{}, hosts: hosts, labels: map[int]string{}},
+		target:    &simTargets{scriptedTarget: &scriptedTarget{scripts: map[uint64]*hostScript{}, hosts: hosts, labels: map[int]string{}}},
 		perf:      &simTracker{stubPerf: &stubPerf{ejected: map[string]bool{}}},
 		windows:   &simWindows{slotLedger: newSlotLedger()},
 		metrics:   newSimMetrics(),
+		ledger:    newSimLedger(),
 		poster:    newSimPoster(),
 		snapshots: newSimSnapshots(phase),
 		clock:     newVirtualTime(),
 		client:    &recordingSink{},
 		model:     model,
+		pinned:    map[string]bool{},
 	}
 	sim.engine = NewEngine(Deps{
-		Picker:    sim.picker,
-		Targets:   sim.target,
-		Windows:   sim.windows,
-		Perf:      sim.perf,
-		Snapshots: sim.snapshots,
-		Config:    config.NewHolder(engineSettings(policy, modes)),
-		Metrics:   sim.metrics,
-		Timeouts:  func(string, []byte) (TimeoutPoster, bool) { return sim.poster, true },
-		Now:       sim.clock.Now,
-		Timer:     func() raceTimer { return sim.clock },
+		Picker:     sim.picker,
+		Targets:    sim.target,
+		Windows:    sim.windows,
+		Perf:       sim.perf,
+		Snapshots:  sim.snapshots,
+		Config:     config.NewHolder(engineSettings(policy, modes)),
+		Metrics:    sim.metrics,
+		Ledger:     sim.ledger,
+		Suspicious: func(participant string) bool { return sim.pinned[participant] },
+		Timeouts: func(_ string, params any) (TimeoutPoster, bool) {
+			sim.poster.resolvedWith(params)
+			return sim.poster, true
+		},
+		Now:   sim.clock.Now,
+		Timer: func() raceTimer { return sim.clock },
 	})
 	t.Cleanup(sim.engine.Stop)
 	return sim
@@ -344,11 +378,23 @@ func (s *simulator) profile() Request {
 		Model:       s.model,
 		InputTokens: 1_000,
 		Stream:      true,
+		Params:      simDispatchParams{prompt: "hello"},
 	}
 }
 
+// parkVotes holds every vote inside the poster and returns the gate. Cleanup opens it too, because Stop
+// is a barrier over the vote a race owes: a failed assertion that left one parked would hang the package
+// rather than fail it.
+func (s *simulator) parkVotes(t *testing.T) func() {
+	t.Helper()
+	s.poster.release = make(chan struct{})
+	open := sync.OnceFunc(func() { close(s.poster.release) })
+	t.Cleanup(open)
+	return open
+}
+
 func (s *simulator) run(ctx context.Context) (RaceOutcome, error) {
-	return s.engine.Run(ctx, s.profile(), []byte(`{"stream":true}`), s.client)
+	return s.engine.Run(ctx, s.profile(), s.client)
 }
 
 // reported is the race's single outcome, taken from the one point that records it.
@@ -785,6 +831,58 @@ func TestSimulatorStopWaitsForTheVoteAFinishedRaceStillOwes(t *testing.T) {
 	}
 }
 
+// The escrow the race dispatched through is held past Run's return, because the vote its nonce owes is
+// posted from a goroutine that outlives the race. A hold given back at Run's return lets a rotation
+// close the session the vote still needs.
+func TestSimulatorTheEscrowStaysHeldUntilTheVoteIsPosted(t *testing.T) {
+	sim := newSimulator(t, settledPolicy(), 1, qwenModel)
+	postVote := sim.parkVotes(t)
+	sim.host(10, 0, "host-0", &hostScript{receipt: true, err: errors.New("host refused")})
+
+	if _, err := sim.run(context.Background()); err == nil {
+		t.Fatal("Run() error = nil, want the failed attempt's error")
+	}
+	sim.reported(t)
+	<-sim.poster.entered
+
+	holds, releases := sim.target.held()
+	if holds != 1 {
+		t.Fatalf("escrow holds taken = %d, want 1", holds)
+	}
+	if releases != 0 {
+		t.Fatalf("escrow holds given back while the vote is still in flight = %d, want 0", releases)
+	}
+
+	postVote()
+	sim.engine.Stop()
+
+	if _, releases := sim.target.held(); releases != 1 {
+		t.Errorf("escrow holds given back after the vote = %d, want 1", releases)
+	}
+}
+
+// A race that panics owes the escrow its hold back, or the rotation that retires it waits on a request
+// nobody is running.
+func TestSimulatorAPanickingRaceGivesTheEscrowHoldBack(t *testing.T) {
+	sim := newSimulator(t, settledPolicy(), 1, qwenModel)
+	sim.host(10, 0, "host-0", &hostScript{receipt: true})
+	sim.target.panicking.Store(true)
+
+	func() {
+		defer func() {
+			if panicked := recover(); panicked == nil {
+				t.Error("Run() recovered the panic instead of re-raising it")
+			}
+		}()
+		_, _ = sim.run(context.Background())
+	}()
+
+	holds, releases := sim.target.held()
+	if holds != 1 || releases != 1 {
+		t.Fatalf("escrow holds taken/given back = %d/%d, want 1/1", holds, releases)
+	}
+}
+
 // The shutdown invariant: a race that is still running when Stop is called owes a vote, so Stop cannot
 // return until that race has posted it. Waiting only for races that had already finished would leave
 // the nonce of an in-flight one stranded when the process exits.
@@ -1031,5 +1129,99 @@ func TestSimulatorGarbageStreamNeverCrowns(t *testing.T) {
 	}
 	if attempt := attemptFor(t, sim.reported(t), 10); attempt.Terminal != TerminalEmptyStream {
 		t.Fatalf("terminal = %v, want TerminalEmptyStream", attempt.Terminal)
+	}
+}
+
+// The suspicious list reaches Decide through the engine's own dependency, so the branch is proven
+// reachable from what main wires rather than from a policy the test constructed.
+func TestSimulatorPinnedPrimaryStartsASecondAttemptImmediately(t *testing.T) {
+	sim := newSimulator(t, racePolicy(2), 2, qwenModel)
+	sim.pinned["pinned-host"] = true
+	arrive, release := make(chan uint64, 2), make(chan struct{})
+	sim.host(10, 0, "pinned-host", &hostScript{
+		arrive: arrive, release: release,
+		receipt: true, chunks: []string{roleEvent}, confirmed: true, finished: true,
+	})
+	sim.host(11, 1, "trusted-host", &hostScript{
+		arrive: arrive, release: release,
+		receipt: true, chunks: []string{contentEvent("hi")}, confirmed: true, finished: true,
+	})
+
+	outcomes := make(chan RaceOutcome, 1)
+	go func() {
+		outcome, err := sim.run(context.Background())
+		if err != nil {
+			t.Error(err)
+		}
+		outcomes <- outcome
+	}()
+	// Both attempts arrive before either is released, which is only possible if the second was started
+	// at once rather than after the first had failed or timed out.
+	<-arrive
+	<-arrive
+	close(release)
+	<-outcomes
+
+	reported := sim.reported(t)
+	if reported.Decision != StartPrimarySuspicious {
+		t.Fatalf("decision = %q, want %q", reported.Decision, StartPrimarySuspicious)
+	}
+	if len(reported.Attempts) != 2 {
+		t.Fatalf("attempts = %d, want 2 started immediately", len(reported.Attempts))
+	}
+	if !attemptFor(t, reported, 10).Suspicious {
+		t.Error("the pinned host's attempt is not marked suspicious")
+	}
+	if attemptFor(t, reported, 11).Suspicious {
+		t.Error("the unpinned host's attempt is marked suspicious")
+	}
+	sim.assertNoSlotLeaked(t, 2)
+	sim.assertOneOutcome(t)
+}
+
+type panickingPicker struct{}
+
+func (p *panickingPicker) Pick(context.Context, scheduler.RequestProfile) (scheduler.Assignment, error) {
+	panic("picker exploded")
+}
+
+func (p *panickingPicker) BlockHost(string, string) {}
+
+// net/http recovers a handler panic per connection, so a race that panics without releasing its
+// registration leaves the process alive and Stop waiting forever. The engine is built here rather
+// than through the simulator because the simulator's cleanup is itself a Stop, which would turn a
+// failing assertion into a hung suite.
+func TestPanickingRaceReleasesTheStopBarrierAndRepanics(t *testing.T) {
+	races := NewEngine(Deps{
+		Picker:    &panickingPicker{},
+		Config:    config.NewHolder(engineSettings(settledPolicy(), config.Modes{})),
+		Snapshots: newSimSnapshots(chain.PhaseSnapshot{}),
+		Now:       func() time.Time { return testEpoch },
+	})
+
+	recovered := make(chan any, 1)
+	go func() {
+		defer func() { recovered <- recover() }()
+		_, _ = races.Run(context.Background(), Request{RequestID: "panicking", Model: qwenModel}, &bytes.Buffer{})
+	}()
+
+	select {
+	case panicked := <-recovered:
+		if panicked == nil {
+			t.Fatal("the panic was swallowed; the client would be answered with an outcome no race produced")
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("Run() neither returned nor panicked")
+	}
+
+	stopped := make(chan struct{})
+	go func() {
+		defer close(stopped)
+		races.Stop()
+	}()
+	select {
+	case <-stopped:
+	case <-time.After(10 * time.Second):
+		t.Fatal("Stop() never returned: the panicking race still holds its registration")
 	}
 }
