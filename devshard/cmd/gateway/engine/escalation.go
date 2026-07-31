@@ -11,6 +11,7 @@ const (
 	streamingHardTimeout      = 20 * time.Minute
 	nonStreamNoContentTimeout = 20 * time.Minute
 	nonStreamMaxAttemptWait   = 30 * time.Minute
+	schedulerPickTimeout      = 2 * time.Minute
 )
 
 // Admitting a very large prompt is itself work, so such a host gets twice as long to receipt.
@@ -29,6 +30,7 @@ const (
 
 const (
 	StartPrimarySuspicious = "primary_suspicious"
+	StartPrimaryDegraded   = "primary_degraded"
 	StartReceiptTimeout    = "receipt_timeout"
 )
 
@@ -105,9 +107,16 @@ type ConfirmedEscalation struct {
 	Stage   EscalationStage
 }
 
-func (p EscalationPolicy) Decide(budget int, primarySuspicious bool) StartPlan {
-	if primarySuspicious && budget > 1 {
+// Decide hedges a primary the race already has reason to distrust. Degraded is the outlier detector's
+// verdict before the routing cap, which is the case the routing gate cannot cover: the cap leaves a host
+// in rotation precisely when too many of its peers are failing at once.
+func (p EscalationPolicy) Decide(budget int, primarySuspicious, primaryDegraded bool) StartPlan {
+	switch {
+	case budget < 2:
+	case primarySuspicious:
 		return StartPlan{ImmediateAttempts: 2, Reason: StartPrimarySuspicious}
+	case primaryDegraded:
+		return StartPlan{ImmediateAttempts: 2, Reason: StartPrimaryDegraded}
 	}
 	return StartPlan{ImmediateAttempts: 1, Reason: StartReceiptTimeout}
 }

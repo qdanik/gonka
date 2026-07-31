@@ -59,7 +59,7 @@ A recorded reply keeps the **first** status the handler chose, so a write after 
 
 ## 6. Admission to capacity
 
-`limits.GatewayLimiter.AcquireForModel` takes both a concurrency slot and an input-token budget, scaled by the chain-derived capacity for that model. Input tokens are *estimated* as `len(body)/4` with a floor of one — deliberately not a tokenizer call (`api/routes.go:501-508`); it feeds the in-flight budget and the performance buckets, not billing.
+`limits.GatewayLimiter.AcquireForModel` takes both a concurrency slot and an input-token budget, scaled by the chain-derived capacity for that model. Input tokens are *estimated* as `ceil(len(body)/4)` with a floor of one — deliberately not a tokenizer call (`api/routes.go:501-508`); it feeds the in-flight budget and the performance buckets, not billing.
 
 A request that could not fit even on a completely idle gateway is rejected without queueing. Otherwise it joins a FIFO queue with a bounded wait and is either handed a slot directly by a releasing request or timed out into a 429 carrying `Retry-After`. See [gateway-capacity-and-health.md](./gateway-capacity-and-health.md).
 
@@ -95,7 +95,7 @@ Every race produces exactly one `RaceOutcome`, and it fans out from a single poi
 |---|---|
 | `perf` | One sample per attempt, unless the exemption ladder excuses it. |
 | `limits` | One verdict per attempt — or explicitly no window movement. |
-| `metrics` | Seventeen families derived from the one outcome, so two call sites cannot disagree about what a race did. |
+| `metrics` | Fourteen families updated here from the one outcome, plus two more the settle goroutine derives from the same outcome's timeout plan — so two call sites cannot disagree about what a race did. |
 | `escrow` lifecycle | A mark when a host reported the escrow missing. Set *before* the accounting row is queued, so an observer that has seen the row has also seen the mark. |
 | Accounting ledger | One row per request. |
 | Timeout votes | One posted vote per nonce the host did not finish, unless the skip ladder gives a reason. |

@@ -56,6 +56,7 @@ func cleanAttempt() AttemptOutcome {
 		Participant:   testParticipant,
 		Nonce:         7,
 		Role:          "primary",
+		StartedAt:     testEpoch,
 		SendTime:      testEpoch,
 		ReceiptTime:   testEpoch.Add(200 * time.Millisecond),
 		FirstToken:    testEpoch.Add(900 * time.Millisecond),

@@ -1,6 +1,7 @@
 package config
 
 import (
+	"os"
 	"strings"
 	"testing"
 
@@ -70,10 +71,10 @@ func TestBuildSplitsAPIKeys(t *testing.T) {
 }
 
 func TestBuildRejectsInvalidMergedConfig(t *testing.T) {
-	values := env.Values{MaxTokensCap: int64Pointer(10)} // cap below default 3072
+	values := env.Values{MaxTokensCap: int64Pointer(0)}
 	_, err := Build(values, Overrides{})
 	if err == nil || !strings.Contains(err.Error(), "max_tokens_cap") {
-		t.Fatalf("Build() with cap<default: want max_tokens_cap validation error, got %v", err)
+		t.Fatalf("Build() with an unset cap: want max_tokens_cap validation error, got %v", err)
 	}
 }
 
@@ -96,5 +97,40 @@ func TestBuildClonesOverridesModelLimits(t *testing.T) {
 	}
 	if _, present := configuration.Limits.ModelLimits["model-b"]; present {
 		t.Fatal("Limits.ModelLimits gained a key added to the source map after Build — map was aliased, not cloned")
+	}
+}
+
+// deployedEnvTemplate is the file an operator sources to start the gateway, read here rather than
+// copied so a value that drifts out of what Build accepts fails this test instead of a deploy.
+const deployedEnvTemplate = "../../../../deploy/join/config.devshard.env.template"
+
+func TestBuildAcceptsTheShippedEnvTemplate(t *testing.T) {
+	template, err := os.ReadFile(deployedEnvTemplate)
+	if err != nil {
+		t.Fatalf("reading %s: %v", deployedEnvTemplate, err)
+	}
+	exported := 0
+	for line := range strings.SplitSeq(string(template), "\n") {
+		assignment, isExport := strings.CutPrefix(strings.TrimSpace(line), "export GATEWAY_")
+		if !isExport {
+			continue
+		}
+		name, value, hasValue := strings.Cut(assignment, "=")
+		if !hasValue {
+			t.Fatalf("malformed export line: %q", line)
+		}
+		exported++
+		t.Setenv("GATEWAY_"+name, value)
+	}
+	if exported == 0 {
+		t.Fatalf("%s exports no GATEWAY_ variable, so this test asserts nothing", deployedEnvTemplate)
+	}
+
+	values, err := env.Load()
+	if err != nil {
+		t.Fatalf("env.Load() = %v, want nil", err)
+	}
+	if _, err := Build(values, Overrides{}); err != nil {
+		t.Fatalf("Build() on the shipped template = %v; the gateway refuses to boot on its own deploy file", err)
 	}
 }

@@ -18,7 +18,7 @@ Stage order is fixed (`filters/pipeline.go:5-47`):
 resolve routed model → select model profile → flatten extra_body →
 reject unknown parameters → pre-validation rules → message normalisers →
 message validation → decode token view → apply output-token limits →
-post-limit rules → marshal
+post-limit rules → write the token view back → marshal
 ```
 
 There are exactly two rule stages: pre-validation, before message hygiene and the token decode, and post-limits, after the output-token budget resolves. Every top-level parameter is declared **once**, in one table, with its stage and its rule chain (`filters/table.go`). The whitelist of known parameters is derived from that table at package initialisation, so a parameter cannot exist without a declaration, and an unknown key is a 400 naming the offending field — sorted, so the reported violation is deterministic when several are unknown.

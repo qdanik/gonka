@@ -22,7 +22,7 @@ type Deps struct {
 	Escrows          escrowSource
 	Capacity         escrowWeights
 	Limiter          hostLimiter
-	Perf             hostCapability
+	Perf             hostHealth
 	Snapshots        snapshotSource
 	Config           *config.Holder
 	Observer         dispatchObserver
@@ -37,7 +37,7 @@ type Scheduler struct {
 	escrows          escrowSource
 	capacity         escrowWeights
 	limiter          hostLimiter
-	perf             hostCapability
+	perf             hostHealth
 	snapshots        snapshotSource
 	settings         *config.Holder
 	observer         dispatchObserver
@@ -214,6 +214,7 @@ func (s *Scheduler) predicates(escrow Escrow) func(chain.PhaseSnapshot) availabi
 		return availability{
 			pocRequired: func(participant string) bool { return !preserved(participant) },
 			throttled:   func(participant string) bool { return !s.limiter.Available(participant, model) },
+			ejected:     func(participant string) bool { return s.perf.Ejected(participant, model) },
 			capability: func(participant string, profile RequestProfile) bool {
 				_, cannotServe := s.perf.CannotServe(participant, profile.RequiresTools, profile.ContextHint)
 				return cannotServe
@@ -365,7 +366,9 @@ type hostLimiter interface {
 	Release(participant, model string)
 }
 
-// hostCapability is satisfied by *perf.Tracker.
-type hostCapability interface {
+// hostHealth is satisfied by *perf.Tracker. Ejected is already capped to a fraction of the model's known
+// hosts, so honouring it here can never empty the pool.
+type hostHealth interface {
 	CannotServe(participant string, requiresTools bool, contextHint uint64) (string, bool)
+	Ejected(participant, model string) bool
 }

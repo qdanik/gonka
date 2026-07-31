@@ -43,7 +43,7 @@ func TestTimeoutLadderPostsWhenNoSkipConditionHolds(t *testing.T) {
 		t.Fatalf("posts = %d, want 1", len(poster.posts))
 	}
 	if poster.posts[0].nonce != 7 || !poster.posts[0].sentAt.Equal(testEpoch) {
-		t.Fatalf("post = %+v, want nonce 7 sent at the attempt's send time", poster.posts[0])
+		t.Fatalf("post = %+v, want nonce 7 waited out from the record's StartedAt", poster.posts[0])
 	}
 	if len(events) != 2 {
 		t.Fatalf("events = %+v, want a started and a completed event", events)

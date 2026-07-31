@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"devshard/cmd/gateway/config"
+	"devshard/cmd/gateway/perf"
 	"devshard/host"
 	"devshard/user"
 )
@@ -154,6 +156,43 @@ func TestRunHandsTheCallersParamsToRoutingAndToSettlement(t *testing.T) {
 	settled := sim.poster.paramsSeen()
 	if len(settled) != 1 || settled[0] != want {
 		t.Fatalf("settlement saw params %#v, want one %#v", settled, want)
+	}
+}
+
+// The pool-wide ejection cap deliberately leaves hosts in rotation once too many fail at once, so the
+// routing gate cannot be the whole protection: the race hedges a primary the detector wanted out. Nothing
+// else in this policy can start a second attempt — both timeouts are an hour out and the primary answers.
+func TestRunHedgesAPrimaryTheDetectorWantedOutOfRotation(t *testing.T) {
+	sim := newSimulator(t, speculativePolicy(2), 2, qwenModel)
+	settings := config.Defaults()
+	sim.perf.health = perf.NewTracker(config.NewHolder(&settings), sim.clock.Now)
+	for range settings.Perf.ConsecutiveFailThreshold {
+		for _, participant := range []string{"host-0", "host-1"} {
+			sim.perf.health.RecordSample(perf.Sample{ParticipantKey: participant, Model: qwenModel})
+		}
+	}
+	if sim.perf.health.Ejected("host-1", qwenModel) {
+		t.Fatal("host-1 was withheld from routing, so the routing gate would already have covered it")
+	}
+	sim.host(10, 1, "host-1", &hostScript{
+		receipt:   true,
+		chunks:    []string{roleEvent, contentEvent("hedged")},
+		confirmed: true,
+		finished:  true,
+	})
+	sim.host(11, 0, "host-0", &hostScript{receipt: true, err: errors.New("host refused")})
+
+	if _, err := sim.run(context.Background()); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	reported := sim.reported(t)
+	sim.settleAll()
+
+	if reported.Decision != StartPrimaryDegraded {
+		t.Fatalf("decision = %q, want %q", reported.Decision, StartPrimaryDegraded)
+	}
+	if len(reported.Attempts) != 2 {
+		t.Fatalf("attempts = %d, want the primary and the hedge it earned", len(reported.Attempts))
 	}
 }
 

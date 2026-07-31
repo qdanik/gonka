@@ -23,7 +23,7 @@ const (
 )
 
 type TimeoutPoster interface {
-	SettleTimeout(ctx context.Context, nonce uint64, sentAt time.Time) (vote string, err error)
+	SettleTimeout(ctx context.Context, nonce uint64, startedAt time.Time) (vote string, err error)
 }
 
 type TimeoutEvent struct {
@@ -36,11 +36,13 @@ type TimeoutEvent struct {
 	Vote        string
 }
 
+// TimeoutStep is one nonce's vote. StartedAt is the record's, not the attempt's dispatch, so a nonce
+// no attempt ever spent still waits out the deadline a verifier recomputes from that record.
 type TimeoutStep struct {
-	Nonce    uint64
-	SendTime time.Time
-	Post     bool
-	Event    TimeoutEvent
+	Nonce     uint64
+	StartedAt time.Time
+	Post      bool
+	Event     TimeoutEvent
 }
 
 func timeoutKind(a AttemptOutcome) string {
@@ -86,8 +88,8 @@ func (o RaceOutcome) TimeoutPlan() []TimeoutStep {
 			continue
 		}
 		step := TimeoutStep{
-			Nonce:    attempt.Nonce,
-			SendTime: attempt.SendTime,
+			Nonce:     attempt.Nonce,
+			StartedAt: attempt.StartedAt,
 			Event: TimeoutEvent{
 				Participant: attempt.Participant,
 				Model:       o.Model,
@@ -116,7 +118,7 @@ func SettleTimeouts(ctx context.Context, poster TimeoutPoster, outcome RaceOutco
 		if !step.Post || poster == nil {
 			continue
 		}
-		vote, err := poster.SettleTimeout(ctx, step.Nonce, step.SendTime)
+		vote, err := poster.SettleTimeout(ctx, step.Nonce, step.StartedAt)
 		posted := step.Event
 		posted.Vote = vote
 		posted.Kind = timeoutVoteKind(vote, posted.Kind)

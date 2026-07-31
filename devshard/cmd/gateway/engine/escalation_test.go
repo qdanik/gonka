@@ -38,11 +38,12 @@ func TestEscalationPolicyFromConfigConvertsEveryTunable(t *testing.T) {
 	}
 }
 
-func TestDecideStartsOneAttemptUnlessThePrimaryIsSuspicious(t *testing.T) {
+func TestDecideStartsOneAttemptUnlessThePrimaryIsDistrusted(t *testing.T) {
 	testCases := []struct {
 		name              string
 		budget            int
 		primarySuspicious bool
+		primaryDegraded   bool
 		want              StartPlan
 	}{
 		{
@@ -62,10 +63,29 @@ func TestDecideStartsOneAttemptUnlessThePrimaryIsSuspicious(t *testing.T) {
 			primarySuspicious: true,
 			want:              StartPlan{ImmediateAttempts: 1, Reason: StartReceiptTimeout},
 		},
+		{
+			name:            "degraded primary starts a second attempt at once",
+			budget:          2,
+			primaryDegraded: true,
+			want:            StartPlan{ImmediateAttempts: 2, Reason: StartPrimaryDegraded},
+		},
+		{
+			name:            "degraded primary with no budget for a second attempt still waits",
+			budget:          1,
+			primaryDegraded: true,
+			want:            StartPlan{ImmediateAttempts: 1, Reason: StartReceiptTimeout},
+		},
+		{
+			name:              "a primary that is both reports the crown denial it was pinned for",
+			budget:            2,
+			primarySuspicious: true,
+			primaryDegraded:   true,
+			want:              StartPlan{ImmediateAttempts: 2, Reason: StartPrimarySuspicious},
+		},
 	}
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
-			got := testPolicy.Decide(testCase.budget, testCase.primarySuspicious)
+			got := testPolicy.Decide(testCase.budget, testCase.primarySuspicious, testCase.primaryDegraded)
 			if got != testCase.want {
 				t.Fatalf("Decide = %+v, want %+v", got, testCase.want)
 			}

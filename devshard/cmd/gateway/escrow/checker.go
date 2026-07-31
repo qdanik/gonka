@@ -54,6 +54,11 @@ func (m *Manager) TriggerEscrowCheck(ctx context.Context, escrowID string) error
 	if found {
 		return nil
 	}
+	// Routing stops before the row is written: an escrow the chain confirms absent must take no
+	// further request even if that write fails.
+	if err := m.settlementSource.Retire(escrowID); err != nil {
+		return fmt.Errorf("retiring escrow %s from routing: %w", escrowID, err)
+	}
 	if err := m.store.WithRetry(ctx, func() error {
 		return m.store.SetDevshardActive(ctx, escrowID, false)
 	}); err != nil {
