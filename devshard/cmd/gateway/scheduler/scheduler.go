@@ -271,8 +271,11 @@ type RequestProfile struct {
 	RequiresTools bool
 	ContextHint   uint64
 	Exclude       []string // participant keys already raced for this request
-	Params        any      // opaque real-dispatch payload forwarded to session.Advance
-	AffinityHint  *AffinityHint
+	// Params is forwarded to session.Advance unread. The far end commits it as the escrow's inference
+	// params, so it must be exactly devshard/user.InferenceParams -- not the request body it was
+	// built from, which the adapter cannot commit and will reject.
+	Params       any
+	AffinityHint *AffinityHint
 }
 
 type Assignment struct {
@@ -297,8 +300,8 @@ type Escrow struct {
 
 // NonceIntent is what the scheduler tells a session to do with the nonce it is offering. The
 // adapter that implements session lives outside this package, so it branches on this rather than on
-// the unexported Decision; Params carries the real-dispatch payload and is set only for a non-ghost
-// commit.
+// the unexported Decision; Params is RequestProfile.Params forwarded verbatim, under the same type
+// requirement, and is set only for a non-ghost commit.
 type NonceIntent struct {
 	Commit bool
 	Ghost  bool

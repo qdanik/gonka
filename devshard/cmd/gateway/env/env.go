@@ -41,8 +41,13 @@ type Values struct {
 
 	ChatCacheMaxBytes *int64
 
-	CaptureEnabled *bool
-	CaptureDir     *string
+	AccountingRetentionHours   *int64
+	AccountingRetentionMaxRows *int64
+
+	CaptureEnabled    *bool
+	CaptureDir        *string
+	CaptureSampleRate *float64
+	CaptureMaxBytes   *int64
 
 	PerfEWMAHalfLifeSeconds *int64
 }
@@ -52,6 +57,23 @@ const (
 	PoCModeOff     = "off"
 	PoCModeRelaxed = "relaxed"
 )
+
+// ErrPrivateKeyMissing marks a devshard whose signing key the environment does not hold.
+var ErrPrivateKeyMissing = errors.New("private key missing")
+
+// PrivateKey reads the hex signing key held by the named variable. Errors name the variable and
+// never the value, so a failure can be logged without leaking key material.
+func PrivateKey(name string) (string, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return "", fmt.Errorf("%w: no environment variable named", ErrPrivateKeyMissing)
+	}
+	key := strings.TrimSpace(os.Getenv(name))
+	if key == "" {
+		return "", fmt.Errorf("%w: %s is unset", ErrPrivateKeyMissing, name)
+	}
+	return key, nil
+}
 
 // Load reads every gateway environment variable. Parse failures are
 // accumulated so the operator sees all misconfigured variables at once.
@@ -74,6 +96,18 @@ func Load() (Values, error) {
 		parsed, err := strconv.ParseInt(raw, 10, 64)
 		if err != nil {
 			problems = append(problems, fmt.Errorf("%s: %q is not an integer", name, raw))
+			return
+		}
+		*target = &parsed
+	}
+	readFloat := func(name string, target **float64) {
+		raw := strings.TrimSpace(os.Getenv(name))
+		if raw == "" {
+			return
+		}
+		parsed, err := strconv.ParseFloat(raw, 64)
+		if err != nil {
+			problems = append(problems, fmt.Errorf("%s: %q is not a number", name, raw))
 			return
 		}
 		*target = &parsed
@@ -119,8 +153,13 @@ func Load() (Values, error) {
 
 	readInt("GATEWAY_CHAT_CACHE_MAX_BYTES", &values.ChatCacheMaxBytes)
 
+	readInt("GATEWAY_ACCOUNTING_RETENTION_HOURS", &values.AccountingRetentionHours)
+	readInt("GATEWAY_ACCOUNTING_RETENTION_MAX_ROWS", &values.AccountingRetentionMaxRows)
+
 	readBool("GATEWAY_CAPTURE_ENABLED", &values.CaptureEnabled)
 	readString("GATEWAY_CAPTURE_DIR", &values.CaptureDir)
+	readFloat("GATEWAY_CAPTURE_SAMPLE_RATE", &values.CaptureSampleRate)
+	readInt("GATEWAY_CAPTURE_MAX_BYTES", &values.CaptureMaxBytes)
 
 	readInt("GATEWAY_PERF_EWMA_HALFLIFE_SECONDS", &values.PerfEWMAHalfLifeSeconds)
 

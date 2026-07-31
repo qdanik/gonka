@@ -171,6 +171,45 @@ func (t *Tracker) Estimate(participant, model string, inputTokens uint64) float6
 	return perf.ColdStartReceiptMs + perf.ColdStartCTTFLMsPerToken*float64(inputTokens)
 }
 
+// HostState is one tracked participant/model pair as a reader sees it.
+type HostState struct {
+	Participant string
+	Model       string
+	Ejected     bool
+	Inflight    int
+}
+
+// Snapshot returns every tracked pair in participant/model order. The in-flight counts are read after
+// the host lock is released, because they live behind their own.
+func (t *Tracker) Snapshot() []HostState {
+	now := t.now()
+	ejected := t.ejectedView.Load()
+
+	t.mu.Lock()
+	keys := make([]hostKey, 0, len(t.hosts))
+	for key := range t.hosts {
+		keys = append(keys, key)
+	}
+	t.mu.Unlock()
+
+	slices.SortFunc(keys, func(first, second hostKey) int {
+		if participants := strings.Compare(first.participant, second.participant); participants != 0 {
+			return participants
+		}
+		return strings.Compare(first.model, second.model)
+	})
+	states := make([]HostState, 0, len(keys))
+	for _, key := range keys {
+		states = append(states, HostState{
+			Participant: key.participant,
+			Model:       key.model,
+			Ejected:     ejected != nil && now.Before((*ejected)[key]),
+			Inflight:    t.inflight.count(key.participant),
+		})
+	}
+	return states
+}
+
 func (t *Tracker) Inflight(participant string) int {
 	return t.inflight.count(participant)
 }

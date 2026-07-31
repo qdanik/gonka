@@ -110,6 +110,25 @@ type upstreamErrorDetails struct {
 	Message string
 }
 
+// IsCacheableResponse reports whether a completed upstream response may be stored: any success
+// whose payload carries no failure, or a deterministic client-input error.
+func IsCacheableResponse(status int, body []byte) bool {
+	if len(body) == 0 || HasNonCacheableError(body) {
+		return false
+	}
+	if status >= 200 && status < 300 {
+		return true
+	}
+	return IsCacheableUpstreamError(status, body)
+}
+
+// HasNonCacheableError reports whether body carries a failure that must not be replayed, so a
+// stored response can be re-checked on read and a poisoned entry drops itself.
+func HasNonCacheableError(body []byte) bool {
+	details, ok := parseUpstreamErrorDetails(body)
+	return ok && !isCacheableErrorDetails(details)
+}
+
 // IsCacheableUpstreamError reports whether status/body is a deterministic client-input error
 // (safe to cache) rather than a transient, environmental, or model-availability failure.
 func IsCacheableUpstreamError(status int, body []byte) bool {
@@ -123,9 +142,28 @@ func IsCacheableUpstreamError(status int, body []byte) bool {
 	return isCacheableErrorDetails(details)
 }
 
-// parseUpstreamErrorDetails extracts an OpenAI-compatible top-level error from a plain JSON
-// response body, accepting both the {"error":{...}} and legacy {"object":"error",...} shapes.
+// parseUpstreamErrorDetails extracts an OpenAI-compatible top-level error from a response body,
+// accepting both the {"error":{...}} and legacy {"object":"error",...} shapes, whether the body is
+// plain JSON or an SSE stream that carries the failure inside a data event.
 func parseUpstreamErrorDetails(payload []byte) (upstreamErrorDetails, bool) {
+	if details, ok := decodeErrorPayload(payload); ok {
+		return details, true
+	}
+	for rest := payload; len(rest) > 0; {
+		var line []byte
+		line, rest, _ = bytes.Cut(rest, []byte("\n"))
+		data, isData := bytes.CutPrefix(bytes.TrimRight(line, "\r"), []byte("data:"))
+		if !isData {
+			continue
+		}
+		if details, ok := decodeErrorPayload(bytes.TrimSpace(data)); ok {
+			return details, true
+		}
+	}
+	return upstreamErrorDetails{}, false
+}
+
+func decodeErrorPayload(payload []byte) (upstreamErrorDetails, bool) {
 	var body struct {
 		Error *struct {
 			Type    string `json:"type"`

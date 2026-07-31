@@ -32,7 +32,7 @@ func (m *Manager) ensureToTarget(ctx context.Context, role string, target int, m
 	}
 
 	for i := existing; i < target; i++ {
-		if err = m.createEscrow(ctx, model, role, snapshot.EpochIndex, snapshot.BlockHeight); err != nil {
+		if _, err = m.createEscrow(ctx, model, role, snapshot.EpochIndex, snapshot.BlockHeight); err != nil {
 			m.breaker.recordFailure(model.ModelID, role)
 			return created, err
 		}

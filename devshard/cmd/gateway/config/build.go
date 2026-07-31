@@ -45,8 +45,13 @@ func Build(values env.Values, overrides Overrides) (*Config, error) {
 
 	overrideIfSet(&configuration.Cache.ChatCacheMaxBytes, values.ChatCacheMaxBytes)
 
+	overrideIfSet(&configuration.Accounting.RetentionHours, values.AccountingRetentionHours)
+	overrideIfSet(&configuration.Accounting.RetentionMaxRows, values.AccountingRetentionMaxRows)
+
 	overrideIfSet(&configuration.Capture.Enabled, values.CaptureEnabled)
 	overrideIfSet(&configuration.Capture.Dir, values.CaptureDir)
+	overrideIfSet(&configuration.Capture.SampleRate, values.CaptureSampleRate)
+	overrideIfSet(&configuration.Capture.MaxBytes, values.CaptureMaxBytes)
 
 	overrideIfSet(&configuration.Perf.EWMAHalfLifeSeconds, values.PerfEWMAHalfLifeSeconds)
 

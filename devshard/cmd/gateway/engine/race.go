@@ -28,8 +28,8 @@ type picker interface {
 	BlockHost(escrowID, participant string)
 }
 
-// dispatchTarget is one escrow's session, seen only through what a race needs from it.
-type dispatchTarget interface {
+// DispatchTarget is one escrow's session, seen only through what a race needs from it.
+type DispatchTarget interface {
 	dispatcher
 	HostCount() int
 	HostLabel(hostIdx int) string
@@ -38,7 +38,7 @@ type dispatchTarget interface {
 
 // targets is satisfied by the runtime registry. Escrows rotate, so the handle is fetched per race.
 type targets interface {
-	Target(escrowID string) (dispatchTarget, bool)
+	Target(escrowID string) (DispatchTarget, bool)
 }
 
 // hostPerf is satisfied by *perf.Tracker.
@@ -86,14 +86,8 @@ type raceDeps struct {
 }
 
 type raceRequest struct {
-	RequestID     string
-	Model         string
-	InputTokens   uint64
-	Stream        bool
-	RequiresTools bool
-	ContextHint   uint64
-	Params        any
-	Client        io.Writer
+	Request
+	Client io.Writer
 }
 
 // deadlineTrigger is what fires at a deadline. The declaration order is the tie-break precedence: a
@@ -255,7 +249,7 @@ type raceCoordinator struct {
 	timer  raceTimer
 
 	escrowID string
-	target   dispatchTarget
+	target   DispatchTarget
 	decision string
 	budget   int
 	started  time.Time
@@ -333,6 +327,7 @@ func newCoordinator(clientCtx context.Context, deps raceDeps, request raceReques
 		timer:       deps.Timer(),
 		byNonce:     map[uint64]*liveAttempt{},
 		contextHint: request.ContextHint,
+		escrowID:    request.Escrow,
 		started:     deps.Now(),
 	}
 }
@@ -348,6 +343,9 @@ func (c *raceCoordinator) begin() error {
 		return errNoDispatchTarget
 	}
 	c.escrowID, c.target = assignment.Escrow, target
+	if c.request.OnEscrow != nil {
+		c.request.OnEscrow(c.escrowID)
+	}
 
 	snapshot := c.deps.Snapshots.Snapshot()
 	c.pocBypass = pocBypassActive(snapshot, c.deps.Modes)

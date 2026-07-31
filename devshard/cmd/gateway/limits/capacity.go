@@ -27,9 +27,11 @@ func (c *Capacity) Update(s chain.PhaseSnapshot) {
 	c.snapshot = s
 }
 
-func (c *Capacity) SetEscrowMembership(escrowID string, share map[string]float64) {
-	clean := make(map[string]float64, len(share))
-	maps.Copy(clean, share)
+// hostShares[h] is slots(h,escrowID)/totalSlots(h) across every escrow h serves, so a participant
+// shared by several escrows is split rather than counted once per escrow.
+func (c *Capacity) SetEscrowMembership(escrowID string, hostShares map[string]float64) {
+	clean := make(map[string]float64, len(hostShares))
+	maps.Copy(clean, hostShares)
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.membership[escrowID] = clean
@@ -54,6 +56,8 @@ func (c *Capacity) ScaleFactor(model string) float64 {
 }
 
 // EscrowWeight is escrowWeight() over this escrow's membership share and the per-model current weights.
+// With no weight observed for either view the share alone stands in: a chain that has reported nothing
+// yet is missing data, not zero capacity, and scoring it unusable would reject every live request.
 func (c *Capacity) EscrowWeight(escrowID, model string) float64 {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -64,7 +68,28 @@ func (c *Capacity) EscrowWeight(escrowID, model string) float64 {
 	if c.available != nil {
 		availableForModel = func(host string) bool { return c.available(host, model) }
 	}
-	return escrowWeight(c.currentWeightsLocked(model), c.membership[escrowID], availableForModel)
+	shares := c.membership[escrowID]
+	if c.weightsUnobservedLocked(model) {
+		return availableShare(shares, availableForModel)
+	}
+	return escrowWeight(c.currentWeightsLocked(model), shares, availableForModel)
+}
+
+// A host the chain has reported is a key in the view whatever its weight, so an empty view means the
+// chain named nobody rather than that everybody weighs nothing.
+func (c *Capacity) weightsUnobservedLocked(model string) bool {
+	return len(c.currentWeightsLocked(model)) == 0 && len(c.fullWeightsLocked(model)) == 0
+}
+
+// Weights is ScaleFactor's numerator and denominator: the availability-filtered current weight and
+// the steady-state baseline weight for one model.
+func (c *Capacity) Weights(model string) (current, baseline float64) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if !c.modelServedLocked(model) {
+		return 0, 0
+	}
+	return c.sumAvailableLocked(c.currentWeightsLocked(model), model), sumWeights(c.fullWeightsLocked(model))
 }
 
 // A model absent from a populated by-model view is served by nobody, so it gets zero capacity instead
