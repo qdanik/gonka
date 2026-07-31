@@ -198,7 +198,7 @@ func TestRunFailsFastOnInvalidEnvironment(t *testing.T) {
 
 func TestRunFailsFastOnInvalidMergedConfig(t *testing.T) {
 	gatewayEnvironment(t)
-	t.Setenv("GATEWAY_MAX_TOKENS_CAP", "1") // below default_max_tokens 3072
+	t.Setenv("GATEWAY_MAX_TOKENS_CAP", "0")
 	if err := run(context.Background()); err == nil || !strings.Contains(err.Error(), "max_tokens_cap") {
 		t.Fatalf("run() with invalid merged config = %v, want max_tokens_cap error", err)
 	}

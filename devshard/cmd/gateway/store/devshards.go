@@ -22,7 +22,8 @@ type DevshardRecord struct {
 	SettlementPending bool
 }
 
-// UpsertDevshard inserts or fully replaces the record for its escrow.
+// UpsertDevshard replaces every field of an existing row except settlement_pending, so an unrelated
+// upsert never silently clears a queued settlement; only SetDevshardSettlementPending moves it.
 func (s *Store) UpsertDevshard(ctx context.Context, record DevshardRecord) error {
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO devshards (escrow_id, private_key_env, model, active, rotation_role, rotation_epoch, settlement_pending)
@@ -33,7 +34,6 @@ func (s *Store) UpsertDevshard(ctx context.Context, record DevshardRecord) error
 			active = excluded.active,
 			rotation_role = excluded.rotation_role,
 			rotation_epoch = excluded.rotation_epoch,
-			settlement_pending = excluded.settlement_pending,
 			updated_at = datetime('now')`,
 		record.EscrowID, record.PrivateKeyEnv, record.Model, record.Active,
 		record.RotationRole, record.RotationEpoch, record.SettlementPending)

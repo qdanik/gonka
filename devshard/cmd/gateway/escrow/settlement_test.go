@@ -31,7 +31,13 @@ func (c *callLog) snapshot() []string {
 	return append([]string(nil), c.calls...)
 }
 
+// fakeSettlementSource models the registry: Retire stops routing synchronously, and commit stands in
+// for the request path taking a nonce -- refused once retired, counted as in-flight work until then.
 type fakeSettlementSource struct {
+	mu        sync.Mutex
+	retired   bool
+	committed int
+
 	busy        bool
 	finalizeErr error
 	buildErr    error
@@ -39,11 +45,33 @@ type fakeSettlementSource struct {
 	calls       *callLog
 }
 
+func (f *fakeSettlementSource) Retire(escrowID string) error {
+	if f.calls != nil {
+		f.calls.record("Retire")
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.retired = true
+	return nil
+}
+
+func (f *fakeSettlementSource) commit() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.retired {
+		return false
+	}
+	f.committed++
+	return true
+}
+
 func (f *fakeSettlementSource) IsBusy(escrowID string) bool {
 	if f.calls != nil {
 		f.calls.record("IsBusy")
 	}
-	return f.busy
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.busy || f.committed > 0
 }
 
 func (f *fakeSettlementSource) Finalize(ctx context.Context, escrowID string) error {
@@ -104,9 +132,9 @@ func TestSettleBusyMarksPendingAndReturnsErrDevshardBusy(t *testing.T) {
 		t.Fatalf("settle() = %v, want ErrDevshardBusy", err)
 	}
 
-	want := []string{"SetDevshardActive(false)", "SetDevshardSettlementPending(true)", "IsBusy"}
+	want := []string{"SetDevshardActive(false)", "SetDevshardSettlementPending(true)", "Retire", "IsBusy"}
 	if got := log.snapshot(); !stringsEqual(got, want) {
-		t.Fatalf("call log = %v, want %v (deactivate + mark pending, then busy short-circuits before any chain call)", got, want)
+		t.Fatalf("call log = %v, want %v (deactivate + mark pending + stop routing, then busy short-circuits before any chain call)", got, want)
 	}
 	if got := testStore.devshards[record.EscrowID]; !got.SettlementPending || got.Active {
 		t.Fatalf("devshard = %+v, want SettlementPending=true and Active=false (deactivated so it can drain)", got)
@@ -141,7 +169,7 @@ func TestSettleHappyPathOrderAndClearsPendingOnSuccess(t *testing.T) {
 	}
 
 	want := []string{
-		"SetDevshardActive(false)", "SetDevshardSettlementPending(true)", "IsBusy",
+		"SetDevshardActive(false)", "SetDevshardSettlementPending(true)", "Retire", "IsBusy",
 		"Finalize", "BuildSettlement", "SettleEscrow", "SetDevshardSettlementPending(false)",
 	}
 	if got := log.snapshot(); !stringsEqual(got, want) {
@@ -204,10 +232,11 @@ func TestRetireSettlementDisabledSkipsChainAndParksEscrow(t *testing.T) {
 	}
 
 	m := &Manager{
-		tx:     txClient,
-		store:  testStore,
-		signer: &fakeSignerSource{signer: testSigner(t)},
-		config: holderWithSettlementEnabled(false),
+		tx:               txClient,
+		store:            testStore,
+		signer:           &fakeSignerSource{signer: testSigner(t)},
+		settlementSource: &fakeSettlementSource{},
+		config:           holderWithSettlementEnabled(false),
 	}
 
 	if err := m.retire(context.Background(), record); err != nil {
@@ -315,8 +344,8 @@ func TestSettleDedupesConcurrentCallsForSameEscrow(t *testing.T) {
 	}()
 
 	<-entered
-	if _, err := m.settle(context.Background(), record); err != nil {
-		t.Fatalf("second concurrent settle() = %v, want nil (already in flight is a no-op)", err)
+	if _, err := m.settle(context.Background(), record); !errors.Is(err, ErrSettlementInFlight) {
+		t.Fatalf("second concurrent settle() = %v, want ErrSettlementInFlight", err)
 	}
 	close(release)
 	wg.Wait()
@@ -329,6 +358,89 @@ func TestSettleDedupesConcurrentCallsForSameEscrow(t *testing.T) {
 	}
 	if broadcastCount != 1 {
 		t.Fatalf("SettleEscrow called %d times, want exactly 1", broadcastCount)
+	}
+}
+
+// A settlement claims the escrow's funds, so by the time it is broadcast the escrow must already be
+// out of routing: a nonce committed after that point can never be settled.
+func TestSettleRefusesNonceCommitsOnceTheSettlementIsBroadcast(t *testing.T) {
+	testStore := newFakeStore()
+	record := store.DevshardRecord{EscrowID: "20", PrivateKeyEnv: "MODEL_A_KEY", Model: "model-a", Active: true}
+	testStore.devshards[record.EscrowID] = record
+	routing := &fakeSettlementSource{}
+	committedDuringBroadcast := true
+	txClient := &fakeTxClient{
+		settleEscrowFn: func(ctx context.Context, signer *signing.Secp256k1Signer, input chain.SettlementInput) (chain.SettleEscrowResult, error) {
+			committedDuringBroadcast = routing.commit()
+			return chain.SettleEscrowResult{EscrowID: input.EscrowID}, nil
+		},
+	}
+
+	m := &Manager{
+		tx:               txClient,
+		store:            testStore,
+		signer:           &fakeSignerSource{signer: testSigner(t)},
+		settlementSource: routing,
+	}
+
+	if _, err := m.settle(context.Background(), record); err != nil {
+		t.Fatalf("settle() = %v, want nil", err)
+	}
+	if committedDuringBroadcast {
+		t.Fatal("a nonce was committed on an escrow whose settlement was already being broadcast")
+	}
+}
+
+// The deduped caller must leave the row alone: it carries the private-key env name that is the only
+// way to settle the escrow, and it belongs to the caller that is really settling.
+func TestDedupedSettleLeavesTheRowForTheCallerThatIsReallySettling(t *testing.T) {
+	testStore := newFakeStore()
+	record := store.DevshardRecord{EscrowID: "21", PrivateKeyEnv: "MODEL_A_KEY", Model: "model-a", Active: true}
+	testStore.devshards[record.EscrowID] = record
+
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	txClient := &fakeTxClient{
+		settleEscrowFn: func(ctx context.Context, signer *signing.Secp256k1Signer, input chain.SettlementInput) (chain.SettleEscrowResult, error) {
+			close(entered)
+			<-release
+			return chain.SettleEscrowResult{EscrowID: input.EscrowID}, nil
+		},
+	}
+	m := &Manager{
+		tx:               txClient,
+		store:            testStore,
+		signer:           &fakeSignerSource{signer: testSigner(t)},
+		settlementSource: &fakeSettlementSource{},
+		config:           holderWithSettlementEnabled(true),
+	}
+
+	var settling sync.WaitGroup
+	settling.Add(1)
+	go func() {
+		defer settling.Done()
+		if err := m.retire(context.Background(), record); err != nil {
+			t.Errorf("settling retire() = %v, want nil", err)
+		}
+	}()
+
+	<-entered
+	dedupedErr := m.retire(context.Background(), record)
+	kept, present := testStore.snapshotDevshard(record.EscrowID)
+	if !present {
+		t.Fatal("the deduped caller deleted the row while the real settlement was still in flight")
+	}
+	if kept.PrivateKeyEnv != record.PrivateKeyEnv {
+		t.Fatalf("kept row = %+v, want the private-key env preserved", kept)
+	}
+	if !errors.Is(dedupedErr, ErrSettlementInFlight) {
+		t.Fatalf("deduped retire() = %v, want ErrSettlementInFlight", dedupedErr)
+	}
+
+	close(release)
+	settling.Wait()
+	if _, stillPresent := testStore.snapshotDevshard(record.EscrowID); stillPresent {
+		t.Fatal("row survived the settlement that actually completed, want it dropped")
 	}
 }
 
@@ -363,6 +475,39 @@ func TestSettlePendingSettlesParkedEscrowAndDropsRow(t *testing.T) {
 	}
 	if _, ok := testStore.devshards[record.EscrowID]; ok {
 		t.Fatal("row still present after a confirmed settle, want it dropped")
+	}
+}
+
+// Re-importing a parked escrow writes the record with SettlementPending at its zero value; the sweep
+// keys on that marker, so an upsert that cleared it would strand the escrow silently.
+func TestSettlePendingStillSettlesAfterAnUnrelatedUpsert(t *testing.T) {
+	testStore := newFakeStore()
+	record := parkedRecord("13")
+	testStore.devshards[record.EscrowID] = record
+
+	m := &Manager{
+		tx:               settlingTxClient(),
+		store:            testStore,
+		signer:           &fakeSignerSource{signer: testSigner(t)},
+		settlementSource: &fakeSettlementSource{},
+		config:           holderWithSettlementEnabled(true),
+	}
+
+	reimported := record
+	reimported.SettlementPending = false
+	if err := testStore.UpsertDevshard(context.Background(), reimported); err != nil {
+		t.Fatalf("UpsertDevshard(): %v", err)
+	}
+	devshards, err := testStore.ListDevshards(context.Background())
+	if err != nil {
+		t.Fatalf("ListDevshards(): %v", err)
+	}
+
+	if err := m.settlePending(context.Background(), devshards); err != nil {
+		t.Fatalf("settlePending() = %v, want nil", err)
+	}
+	if _, ok := testStore.snapshotDevshard(record.EscrowID); ok {
+		t.Fatal("the escrow was not settled after an unrelated upsert; nothing else will ever pick it up")
 	}
 }
 

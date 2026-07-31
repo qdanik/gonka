@@ -32,6 +32,30 @@ func TestTokensCapOutputTokens(t *testing.T) {
 	}
 }
 
+// The deployed configuration pairs a 10000 default with a 4096 cap. An unset request must not be
+// granted an output budget the same gateway refuses when a client asks for it outright.
+func TestTokensADefaultAboveTheCapIsClampedToTheCap(t *testing.T) {
+	limits := outputTokenLimits{DefaultMaxTokens: 10_000, MaxTokensCap: 4_096}
+	tests := []struct {
+		name        string
+		value       uint64
+		bypassLimit bool
+		want        uint64
+	}{
+		{"an unset request takes the cap, not the larger default", 0, false, 4_096},
+		{"an admin's unset request takes the cap too", 0, true, 4_096},
+		{"an explicit ask for the default is still clamped", 10_000, false, 4_096},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			got := capOutputTokens(testCase.value, testCase.bypassLimit, limits)
+			if got != testCase.want {
+				t.Errorf("capOutputTokens(%d, %v) = %d, want %d", testCase.value, testCase.bypassLimit, got, testCase.want)
+			}
+		})
+	}
+}
+
 func TestTokensNormalizedLimitsFallBackWhenZero(t *testing.T) {
 	got := normalizedOutputTokenLimits(outputTokenLimits{})
 	want := outputTokenLimits{DefaultMaxTokens: DefaultRequestMaxTokens, MaxTokensCap: RequestMaxTokensCap}

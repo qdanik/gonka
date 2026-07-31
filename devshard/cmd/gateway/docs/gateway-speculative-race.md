@@ -30,11 +30,11 @@ Each attempt runs in its own goroutine and communicates with the coordinator onl
 
 ## Crowning
 
-**A winner is crowned by its first chunk of actual content** — not by a receipt, not by the first token, and not by HTTP 200 (`engine/classify.go:28-30`, `engine/race.go:511-521`).
+**A winner is crowned by its first chunk of actual content** — not by a receipt, not by the first token, and not by HTTP 200 (`engine/classify.go:28-30`, `engine/race.go`).
 
 That precise choice is the answer to a specific failure. A host that responds instantly with an empty stream would win on any earlier signal, and the client would get nothing while a slower, honest host was cancelled. Requiring content means the empty host loses to whoever produces tokens.
 
-The mechanics are a handshake, not a flag. An attempt's writer buffers everything it receives while it has produced no content; on the first chunk that carries content it sends a crown request and **blocks** on the reply (`engine/stream.go:54-104`). So no byte reaches the client before the coordinator has settled on a single winner. The coordinator's answer is one of three: you are the winner, you already were, or you are suppressed. A suppressed attempt's writer then discards its buffered prefix and clears its client field entirely — a loser has no reachable sink at all, rather than a sink behind a branch someone must remember to write.
+The mechanics are a handshake, not a flag. An attempt's writer buffers everything it receives while it has produced no content; on the first chunk that carries content it sends a crown request and **blocks** on the reply (`engine/stream.go:54-104`). So no byte reaches the client before the coordinator has settled on a single winner. The coordinator's answer is you are the winner or you are suppressed, and a suspicious host's claim is **held** until it can be answered honestly. A suppressed attempt's writer then discards its buffered prefix and clears its client field entirely — a loser has no reachable sink at all, rather than a sink behind a branch someone must remember to write. Suppression is permanent, which is why the claim is held rather than refused early: an attempt refused a crown can never be given one, so refusing it while a rival might still fail would throw away an answer the race has already paid for.
 
 A suppressed attempt keeps reporting successful writes to its host, so the host keeps streaming to its own receipt. Its bytes go nowhere.
 
@@ -48,7 +48,7 @@ A **capability refusal** is a third case and is kept out of the error class enti
 
 ### Crown denial
 
-A host that repeatedly answers with no content keeps receiving attempts but stops being crownable. Three content-free answers cost the crown; one content-bearing answer buys it back immediately (`engine/engine.go:23-25, 397-422`). While denied, the host is treated as suspicious: a race that starts with it launches a speculative attempt immediately, and its answer is held back from crowning **unless it is the last pending attempt** — because then its answer is the one the race committed a nonce for, and refusing it would hand the client an error for a response that exists (`engine/race.go:508-518`).
+A host that repeatedly answers with no content keeps receiving attempts but stops being crownable. Three content-free answers cost the crown; one content-bearing answer buys it back immediately (`engine/engine.go`). While denied, the host is treated as suspicious: a race that starts with it launches a speculative attempt immediately, and its claim on the client stream is held for as long as **any rival could still serve**. A rival is one already running that has not claimed, one whose pick is in flight, and one the race has committed to starting but not yet picked for — the replacement a suspicious primary earns is a rival from the moment the race decides to fetch it, not from the moment it launches. When none is left the held claim is crowned, because then its answer is the one the race committed a nonce for and refusing it would hand the client an error for a response that exists (`engine/race.go`).
 
 The operator's manual suspicious-host pins fold into the same gate, so a pinned host escalates and is held back however well it has been answering.
 
@@ -64,24 +64,26 @@ Reassembly is charged against three budgets — per attempt (1 MiB), per partici
 
 ## Escalation
 
-The escalation policy is deliberately **pure**: a function of the race's own timeline and the configured thresholds, with no host performance data, no chain snapshot and no clock of its own (`engine/escalation.go:49`).
+The escalation policy is deliberately **pure**: a function of its arguments and the configured thresholds, with no chain snapshot and no clock of its own. It reads no host performance data either — the race reads the outlier detector and hands `Decide` a boolean, so what the policy does with that fact is still testable without a tracker (`engine/escalation.go`).
 
-Stages that can trigger another attempt:
+Stages that can trigger another attempt. The reason column is the wire string, which is what `devshard_gateway_escalation_decisions_total{reason}` carries:
 
-| Stage | When |
+| Reason | When |
 |---|---|
-| `primary_suspicious` | The first attempt's host is crown-denied or operator-pinned — escalate immediately. |
+| `suspicious_host` | The first attempt's host is crown-denied or operator-pinned — escalate immediately. |
 | `receipt_timeout` | No receipt within the receipt timeout (doubled above 100 000 input tokens, because admitting a very large prompt is itself work). |
-| `first_token` | No first token within the first-token deadline. |
+| `first_token_timeout` | No first token within the first-token deadline. |
 | `attempt_failed` | An attempt ended without producing anything usable. |
+
+An attempt launched at race start beside a primary the race distrusts carries a start reason rather than an escalation reason on `devshard_gateway_attempts_started_total{reason}`, and the two vocabularies do not overlap: `primary_suspicious` for a crown-denied or operator-pinned host, `primary_degraded` for one the outlier detector wanted out of rotation. The second exists because the routing gate that withholds an ejected host is capped, and a fleet failing together stays routable by design — see [gateway-capacity-and-health.md](./gateway-capacity-and-health.md).
 
 The first-token deadline is a fixed quadratic in prompt size, `1.7 + 3e-5·T + 5e-10·T²` seconds, with a configurable floor (`engine/escalation.go:189-195`). Note that at the default floor of one second the floor is inert: the quadratic's minimum is 1.7 s, so the floor binds only if raised.
 
 **Arming is not permission.** `NextEscalation` yields an `ArmedEscalation`, which is a deadline and nothing more. The only producer of an actionable escalation is `Confirm`, which re-derives the trigger *at fire time* and rejects a trigger that has vanished, a stage that has advanced, or a timer that fired early (`engine/escalation.go:93-95, 145-154`). This exists because an attempt's stage moves while its timer runs — a receipt landing just under the receipt timeout is the common case — and escalating on the armed stage would start a needless extra attempt on *every* healthy request. Confirming re-reads state, so the type system does the enforcing: forgetting to confirm yields a value that cannot be acted on.
 
-The trigger is consumed *before* the new attempt starts, so a failed start cannot retry the same trigger (`engine/race.go:575-576`).
+The trigger is consumed *before* the new attempt starts, so a failed start cannot retry the same trigger (`engine/race.go`).
 
-The escalation pick runs on its own goroutine rather than inline in the coordinator loop (`engine/race.go:634-637`). The scheduler may hold the nonce briefly for a co-arriving request, and a crown claim is the client's first token: waiting for the pick inside the loop would spend that hold on exactly the latency escalation exists to avoid. A departing client cancels the pick, which returns the nonce and the slot.
+The escalation pick runs on its own goroutine rather than inline in the coordinator loop (`engine/race.go`). The scheduler may hold the nonce briefly for a co-arriving request, and a crown claim is the client's first token: waiting for the pick inside the loop would spend that hold on exactly the latency escalation exists to avoid. A departing client cancels the pick, which returns the nonce and the slot.
 
 **Scarcity overrides speculation.** When the chain is blocking requests and the relaxed bypass is not active, the attempt budget collapses to one: a speculative attempt spends a nonce the phase the gateway is serving through will not replace (`engine/escalation.go:114-115`).
 
@@ -111,7 +113,7 @@ Once the winner has finished, the client's request handler is released and any s
 
 Everything the race learned is folded into one `RaceOutcome`, and one field decides everything downstream: `Terminal`.
 
-There are twenty-one terminal values, and every downstream vocabulary — limiter verdict, performance sample, metric label — is a *total function* of it (`engine/outcome.go:14-16`). The HTTP-status recovery and the SSE inspection that decide the terminal therefore happen once, where the error and the bytes are, instead of being re-derived at each consumer.
+There are twenty terminal values, and every downstream vocabulary — limiter verdict, performance sample, metric label — is a *total function* of it (`engine/outcome.go:14-16`). The HTTP-status recovery and the SSE inspection that decide the terminal therefore happen once, where the error and the bytes are, instead of being re-derived at each consumer.
 
 One terminal is worth calling out: `Rejected` covers every upstream status that is neither throttling nor unavailability — 400s and 500s included — because those describe the request or the model, not the host's ability to serve, so they move nothing (`engine/outcome.go:28-29`).
 

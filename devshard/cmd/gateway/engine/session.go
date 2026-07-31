@@ -28,8 +28,8 @@ func NewSessionTimeouts(session *user.Session, payload *host.InferencePayload) *
 // success path — that error carries "the inference timed out" to the request rather than a failed
 // vote — and only its genuine failures wrap a cause, so an unwrapped error beside a reported reason is
 // a vote that reached the chain.
-func (s *SessionTimeouts) SettleTimeout(ctx context.Context, nonce uint64, sentAt time.Time) (string, error) {
-	result, err := s.handler.HandleTimeout(ctx, nonce, sentAt, s.payload)
+func (s *SessionTimeouts) SettleTimeout(ctx context.Context, nonce uint64, startedAt time.Time) (string, error) {
+	result, err := s.handler.HandleTimeout(ctx, nonce, startedAt, s.payload)
 	if result.Reason != "" && errors.Unwrap(err) == nil {
 		return result.Reason, nil
 	}

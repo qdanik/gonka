@@ -49,6 +49,7 @@ type hostPerf interface {
 	Acquire(participant string)
 	Release(participant string)
 	Ejected(participant, model string) bool
+	Degraded(participant, model string) bool
 }
 
 // crownGate carries the empty-stream crowning penalty between races: such a host keeps receiving
@@ -103,6 +104,7 @@ const (
 	triggerNone deadlineTrigger = iota
 	triggerHardTimeout
 	triggerEscalation
+	triggerPick
 	triggerStall
 )
 
@@ -112,6 +114,7 @@ type deadlineArm struct {
 	Escalation ArmedEscalation
 }
 
+// Pick is when an unanswered pick stops being worth waiting for, and is zero while none is running.
 type deadlinePlan struct {
 	Policy    EscalationPolicy
 	Request   EscalationRequest
@@ -119,6 +122,7 @@ type deadlinePlan struct {
 	Budget    int
 	Start     time.Time
 	Drain     time.Time
+	Pick      time.Time
 	Cancelled bool
 }
 
@@ -144,6 +148,7 @@ func nextDeadline(now time.Time, plan deadlinePlan) deadlineArm {
 			arm.Escalation = armed
 		}
 	}
+	consider(plan.Pick, triggerPick)
 	consider(plan.stall(), triggerStall)
 	if arm.Trigger != triggerEscalation {
 		arm.Escalation = ArmedEscalation{}
@@ -152,9 +157,9 @@ func nextDeadline(now time.Time, plan deadlinePlan) deadlineArm {
 }
 
 // A race whose client left is owed no further attempt: another attempt is another nonce to settle for
-// a response nobody will read.
+// a response nobody will read. A pick already running is the escalation, so it disarms the trigger too.
 func (p deadlinePlan) escalation(now time.Time) (ArmedEscalation, bool) {
-	if p.detached() || p.crowned() || len(p.Attempts) >= p.Budget {
+	if !p.Pick.IsZero() || p.detached() || p.crowned() || len(p.Attempts) >= p.Budget {
 		return ArmedEscalation{}, false
 	}
 	return p.Policy.NextEscalation(now, p.Attempts, p.Request)
@@ -250,6 +255,7 @@ type raceCoordinator struct {
 
 	events chan AttemptEvent
 	crown  chan crownRequest
+	picked chan pickedHost
 	done   chan struct{}
 	timer  raceTimer
 
@@ -262,9 +268,14 @@ type raceCoordinator struct {
 	attempts []*liveAttempt
 	byNonce  map[uint64]*liveAttempt
 	scratch  []EscalationAttempt
+	claims   []crownRequest
 
 	winner           *liveAttempt
 	pending          int
+	pickCancel       context.CancelFunc
+	pickStarted      time.Time
+	pickReason       string
+	moreImmediate    int
 	excluded         []string
 	contextHint      uint64
 	clientGoneAt     time.Time
@@ -329,6 +340,7 @@ func newCoordinator(clientCtx context.Context, deps raceDeps, request raceReques
 		request:     request,
 		events:      make(chan AttemptEvent, eventBuffer),
 		crown:       make(chan crownRequest),
+		picked:      make(chan pickedHost, 1),
 		done:        make(chan struct{}),
 		timer:       deps.Timer(),
 		byNonce:     map[uint64]*liveAttempt{},
@@ -345,7 +357,7 @@ func (c *raceCoordinator) begin() error {
 	}
 	target, ok := c.deps.Targets.Target(assignment.Escrow)
 	if !ok {
-		c.strand(assignment)
+		c.strand(assignment, RolePrimary)
 		return errNoDispatchTarget
 	}
 	c.escrowID, c.target = assignment.Escrow, target
@@ -357,24 +369,19 @@ func (c *raceCoordinator) begin() error {
 	c.pocBypass = pocBypassActive(snapshot, c.deps.Modes)
 	c.budget = c.deps.Policy.AttemptBudget(target.HostCount(), snapshot.RequestsBlocked && !c.pocBypass)
 
-	plan := c.deps.Policy.Decide(c.budget, c.denied(assignment.Host))
+	plan := c.deps.Policy.Decide(c.budget, c.denied(assignment.Host), c.degraded(assignment.Host))
 	c.decision = plan.Reason
 	c.launch(assignment, RolePrimary, plan.Reason)
-	for len(c.attempts) < plan.ImmediateAttempts && len(c.attempts) < c.budget {
-		extra, err := c.pick(c.drain.race)
-		if err != nil {
-			break
-		}
-		c.launch(extra, RoleSpeculative, plan.Reason)
-	}
+	c.moreImmediate = min(plan.ImmediateAttempts, c.budget) - len(c.attempts)
+	c.startNextImmediate()
 	return nil
 }
 
-// strand accounts for an assignment no attempt can spend: the scheduler committed its nonce and took
-// its host slot in the step that produced it, so the slot goes back here and the nonce is left for the
-// timeout vote rather than pinned for the process's life. Its escrow hold is kept instead of returned:
-// the escrow being retired is why there is no target, and the vote still has to reach it.
-func (c *raceCoordinator) strand(assignment scheduler.Assignment) {
+// strand accounts for an assignment no attempt can spend -- the escrow rotated out, or the race was over
+// before the scheduler answered: its nonce was committed and its host slot taken in the step that produced
+// it, so the slot goes back here and the nonce is left for the timeout vote rather than pinned for the
+// process's life. Its escrow hold is kept instead of returned, because that vote still has to reach it.
+func (c *raceCoordinator) strand(assignment scheduler.Assignment, role string) {
 	c.escrowID = assignment.Escrow
 	c.deps.Limiter.Release(assignment.Host, c.request.Model)
 	if c.deps.Hold != nil {
@@ -389,7 +396,7 @@ func (c *raceCoordinator) strand(assignment scheduler.Assignment) {
 			Participant: assignment.Host,
 			HostIdx:     assignment.Nonce.HostIdx(),
 			Nonce:       assignment.Nonce.Nonce(),
-			Role:        RolePrimary,
+			Role:        role,
 			Terminal:    TerminalNoReceipt,
 		},
 	})
@@ -407,14 +414,17 @@ func (c *raceCoordinator) fail(err error) (RaceOutcome, error) {
 func (c *raceCoordinator) await() raceExit {
 	defer c.timer.Stop()
 	for {
+		c.settleClaims()
 		arm := nextDeadline(c.deps.Now(), c.plan())
-		if c.pending == 0 && arm.Trigger != triggerEscalation {
+		if c.pending == 0 && !c.picking() && arm.Trigger != triggerEscalation {
 			return exitComplete
 		}
 		c.rearm(arm)
 		select {
 		case event := <-c.events:
 			c.apply(event)
+		case result := <-c.picked:
+			c.applyPick(result)
 		case claim := <-c.crown:
 			c.answer(claim)
 		case <-c.timer.Fired():
@@ -454,17 +464,19 @@ func (c *raceCoordinator) depart() raceExit {
 		return exitWinnerServed
 	}
 	c.detach()
-	if c.pending == 0 {
+	if c.pending == 0 && !c.picking() {
 		return exitComplete
 	}
 	return exitClientGone
 }
 
 // detach keeps every started attempt running for its receipt, its response and its nonce's vote, with
-// the drain deadline standing in for the client that is no longer waiting on any of it.
+// the drain deadline standing in for the client that is no longer waiting on any of it. The pick is the
+// exception: an attempt not yet started serves nobody, so its nonce and slot go back unspent.
 func (c *raceCoordinator) detach() {
 	c.handedOff = true
 	c.clientGoneAt = c.deps.Now()
+	c.stopPicking()
 }
 
 // clientGone is watched only while a client is still waiting on this race.
@@ -498,6 +510,8 @@ func (c *raceCoordinator) fire(arm deadlineArm) {
 	switch arm.Trigger {
 	case triggerEscalation:
 		c.escalate(arm.Escalation)
+	case triggerPick:
+		c.stopPicking()
 	case triggerStall:
 		c.markStalls()
 	case triggerHardTimeout:
@@ -505,19 +519,47 @@ func (c *raceCoordinator) fire(arm deadlineArm) {
 	}
 }
 
-// answer settles one attempt's claim on the client stream. A suspicious host is held back only while
-// a rival could still serve: alone, its answer is the one the race committed a nonce for, and refusing
-// it hands the client an error for a response that exists.
+// answer settles one attempt's claim on the client stream. A suspicious host's claim is held rather than
+// refused, because a refusal is permanent: the writer abandons the attempt, so a rival that later fails
+// would leave the client an error for a response the race already paid for.
 func (c *raceCoordinator) answer(claim crownRequest) {
-	verdict := streamSuppressed
 	switch attempt := c.byNonce[claim.Nonce]; {
-	case attempt == nil:
-	case attempt == c.winner:
-		verdict = streamWinner
-	case c.winner == nil && (!attempt.suspicious || c.pending == 1):
-		c.winner, verdict = attempt, streamWinner
+	case attempt == nil || c.winner != nil:
+		claim.Reply <- streamSuppressed
+	case attempt.suspicious:
+		c.claims = append(c.claims, claim)
+	default:
+		c.winner = attempt
+		claim.Reply <- streamWinner
 	}
-	claim.Reply <- verdict
+}
+
+// settleClaims answers the held claims once the race can tell whether a rival will serve. Alone, a
+// suspicious host is crowned: its answer is the one the race committed a nonce for.
+func (c *raceCoordinator) settleClaims() {
+	if len(c.claims) == 0 {
+		return
+	}
+	if c.winner == nil {
+		if c.rivalPossible() {
+			return
+		}
+		c.winner = c.byNonce[c.claims[0].Nonce]
+	}
+	for _, claim := range c.claims {
+		verdict := streamSuppressed
+		if c.byNonce[claim.Nonce] == c.winner {
+			verdict = streamWinner
+		}
+		claim.Reply <- verdict
+	}
+	c.claims = c.claims[:0]
+}
+
+// rivalPossible reports an attempt other than the held claimants that could still be crowned: one
+// already running and yet to claim, or one this race has already committed to starting.
+func (c *raceCoordinator) rivalPossible() bool {
+	return c.pending > len(c.claims) || c.picking() || c.moreImmediate > 0
 }
 
 func (c *raceCoordinator) apply(event AttemptEvent) {
@@ -572,14 +614,9 @@ func (c *raceCoordinator) escalate(armed ArmedEscalation) {
 	if !ok {
 		return
 	}
-	// Consumed before the new attempt is started, so a failed start cannot retry the same trigger.
+	// Consumed before the pick is started, so a pick that finds no host cannot retry the same trigger.
 	c.attempts[confirmed.Attempt].escalated = true
-	assignment, err := c.pickBesideTheRace()
-	if err != nil {
-		c.startErr = err
-		return
-	}
-	c.launch(assignment, RoleSpeculative, confirmed.Stage.Reason())
+	c.startPick(confirmed.Stage.Reason())
 }
 
 func (c *raceCoordinator) markStalls() {
@@ -594,6 +631,7 @@ func (c *raceCoordinator) markStalls() {
 
 func (c *raceCoordinator) cancelAll() {
 	c.cancelled = true
+	c.stopPicking()
 	for _, attempt := range c.attempts {
 		if !attempt.done {
 			attempt.cancel()
@@ -631,31 +669,64 @@ type pickedHost struct {
 	err        error
 }
 
-// pickBesideTheRace runs a speculative pick off the coordinator's goroutine. The scheduler holds a
-// waiter for a co-arriving request, and a crown claim is the client's first token: waiting for one
-// inside the loop would spend that hold on the latency the escalation exists to avoid. A client that
-// leaves cancels the pick, which is what returns the nonce and the slot it would have handed over.
-func (c *raceCoordinator) pickBesideTheRace() (scheduler.Assignment, error) {
-	picked := make(chan pickedHost, 1)
+func (c *raceCoordinator) picking() bool { return c.pickCancel != nil }
+
+// startPick runs a speculative pick beside the race, never on the coordinator's own goroutine: the
+// scheduler holds a waiter for a co-arriving request, and a crown claim is the client's first token, so a
+// coordinator waiting for a pick inline would starve the very winner it is racing to. At most one pick
+// runs at a time, and pickDeadline bounds it however long the scheduler's queue takes to answer.
+func (c *raceCoordinator) startPick(reason string) {
+	if c.picking() || len(c.attempts) >= c.budget {
+		return
+	}
 	ctx, cancel := context.WithCancel(c.drain.race)
-	defer cancel()
+	c.pickCancel, c.pickStarted, c.pickReason = cancel, c.deps.Now(), reason
 	profile := c.requestProfile()
 	go func() {
 		assignment, err := c.deps.Picker.Pick(ctx, profile)
-		picked <- pickedHost{assignment: assignment, err: err}
+		c.picked <- pickedHost{assignment: assignment, err: err}
 	}()
-	for {
-		select {
-		case result := <-picked:
-			return c.observePick(result.assignment, result.err)
-		case claim := <-c.crown:
-			c.answer(claim)
-		case <-c.clientGone():
-			cancel()
-			result := <-picked
-			return c.observePick(result.assignment, result.err)
-		}
+}
+
+func (c *raceCoordinator) startNextImmediate() {
+	if c.moreImmediate <= 0 {
+		return
 	}
+	c.moreImmediate--
+	c.startPick(c.decision)
+}
+
+// applyPick spends what the scheduler answered with. A race that can no longer use the assignment still
+// owes its nonce a vote, so it is stranded rather than dropped.
+func (c *raceCoordinator) applyPick(result pickedHost) {
+	c.pickCancel()
+	c.pickCancel = nil
+	assignment, err := c.observePick(result.assignment, result.err)
+	switch {
+	case err != nil:
+		c.startErr, c.moreImmediate = err, 0
+	case c.cancelled || c.handedOff || c.winner != nil:
+		c.strand(assignment, RoleSpeculative)
+	default:
+		c.launch(assignment, RoleSpeculative, c.pickReason)
+	}
+	c.startNextImmediate()
+}
+
+// stopPicking gives up on a pick the race can no longer spend. The scheduler answers a cancelled pick by
+// giving back whatever it had already handed over, so nothing is left holding a slot.
+func (c *raceCoordinator) stopPicking() {
+	c.moreImmediate = 0
+	if c.picking() {
+		c.pickCancel()
+	}
+}
+
+func (c *raceCoordinator) pickDeadline() time.Time {
+	if !c.picking() {
+		return time.Time{}
+	}
+	return c.pickStarted.Add(schedulerPickTimeout)
 }
 
 func (c *raceCoordinator) launch(assignment scheduler.Assignment, role, startReason string) {
@@ -731,6 +802,7 @@ func (c *raceCoordinator) outcome() RaceOutcome {
 			continue
 		}
 		record := *attempt.outcome
+		record.StartedAt = c.started
 		record.NonceFinished = attempt.nonceFinished
 		record.FailureRateExceeded = c.deps.Perf.Ejected(attempt.participant, c.request.Model)
 		record.PhaseTransitionAborted = phaseAborted(record, attempt.inInference, generating)
@@ -778,6 +850,7 @@ func (c *raceCoordinator) plan() deadlinePlan {
 		Budget:    c.budget,
 		Start:     c.started,
 		Drain:     c.drain.deadline(c.clientGoneAt),
+		Pick:      c.pickDeadline(),
 		Cancelled: c.cancelled,
 	}
 }
@@ -788,6 +861,10 @@ func (c *raceCoordinator) escalationRequest() EscalationRequest {
 
 func (c *raceCoordinator) denied(participant string) bool {
 	return c.deps.Crown != nil && c.deps.Crown.Denied(participant, c.request.Model)
+}
+
+func (c *raceCoordinator) degraded(participant string) bool {
+	return c.deps.Perf.Degraded(participant, c.request.Model)
 }
 
 func (c *raceCoordinator) exclude(participant string) {

@@ -119,6 +119,32 @@ func TestTrackerEjectedCapLimitsFractionAcrossManyFailingHosts(t *testing.T) {
 	}
 }
 
+// The cap pardons a host for routing only; the detector's own verdict must stay visible, because that is
+// what the race hedges on once a correlated outage puts failing hosts back in rotation.
+func TestTrackerReportsCapPardonedHostsAsDegradedButNotEjected(t *testing.T) {
+	perf := testPerf()
+	perf.MaxEjectionFraction = 0.5
+	perf.MinAvailableHosts = 1
+	tracker := newTestTracker(perf, fixedNow(testEpoch))
+
+	participants := []string{"p0", "p1", "p2", "p3"}
+	for _, participant := range participants {
+		failAllConsecutive(tracker, participant, "model-a", perf.ConsecutiveFailThreshold)
+	}
+
+	for _, participant := range participants {
+		if !tracker.Degraded(participant, "model-a") {
+			t.Fatalf("Degraded(%q) = false, want the detector's verdict before the cap", participant)
+		}
+	}
+	if tracker.Ejected("p3", "model-a") {
+		t.Fatal("p3 was withheld from routing, so the cap did not pardon it")
+	}
+	if tracker.Degraded("p0", "other-model") {
+		t.Fatal("Degraded is not keyed by model")
+	}
+}
+
 func TestTrackerEjectedCapBoundByMinAvailableHosts(t *testing.T) {
 	perf := testPerf()
 	perf.MaxEjectionFraction = 1.0 // fraction alone would allow all 3 ejected

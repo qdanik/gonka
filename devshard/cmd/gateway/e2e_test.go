@@ -34,6 +34,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -151,8 +152,14 @@ func TestEndToEndANonStreamedReplyIsJSONAndNamesItsEscrow(t *testing.T) {
 	if got := response.header.Get("X-Devshard-ID"); got != gateway.only().id {
 		t.Errorf("X-Devshard-ID = %q, want %q", got, gateway.only().id)
 	}
-	if len(response.body) == 0 {
-		t.Error("the client received no body")
+	// The host answers in SSE either way, so a body that only has to be non-empty is satisfied by the
+	// envelope the gateway is supposed to assemble away — and an unparseable body also skips the strip.
+	var assembled map[string]any
+	if err := json.Unmarshal(response.body, &assembled); err != nil {
+		t.Fatalf("the body labelled application/json does not parse as JSON: %v (%s)", err, response.body)
+	}
+	if _, answered := assembled["choices"]; !answered {
+		t.Errorf("assembled body = %s, want the host's completion payload", response.body)
 	}
 }
 

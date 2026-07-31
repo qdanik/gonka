@@ -37,12 +37,13 @@ func servedSnapshot(epoch uint64, blockHeight int64, modelID string) chain.Phase
 func newRotationManager(t *testing.T, testStore *fakeStore, txClient *fakeTxClient, settlementEnabled bool) *Manager {
 	t.Helper()
 	return &Manager{
-		tx:      txClient,
-		store:   testStore,
-		signer:  &fakeSignerSource{signer: testSigner(t)},
-		breaker: newCreateBreaker(),
-		now:     func() time.Time { return time.Date(2026, 5, 5, 0, 0, 0, 0, time.UTC) },
-		config:  holderWithSettlementEnabled(settlementEnabled),
+		tx:               txClient,
+		store:            testStore,
+		signer:           &fakeSignerSource{signer: testSigner(t)},
+		settlementSource: &fakeSettlementSource{},
+		breaker:          newCreateBreaker(),
+		now:              func() time.Time { return time.Date(2026, 5, 5, 0, 0, 0, 0, time.UTC) },
+		config:           holderWithSettlementEnabled(settlementEnabled),
 	}
 }
 

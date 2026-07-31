@@ -78,7 +78,9 @@ type RaceOutcome struct {
 }
 
 // AttemptOutcome is what one attempt ended up doing. ErrorPayload holds the host's own error event
-// verbatim, so a refusal reaches the client unrewritten.
+// verbatim, so a refusal reaches the client unrewritten. StartedAt is the race's, not the attempt's:
+// verifiers recompute a refusal deadline from the committed record, so every nonce a request commits
+// must carry the one stamp, dispatched or stranded.
 type AttemptOutcome struct {
 	Participant string
 	HostIdx     int
@@ -88,6 +90,7 @@ type AttemptOutcome struct {
 	StartReason string
 	Suspicious  bool
 
+	StartedAt   time.Time
 	SendTime    time.Time
 	ReceiptTime time.Time
 	FirstToken  time.Time

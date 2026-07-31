@@ -135,6 +135,42 @@ func TestDevshardCRUDLifecycle(t *testing.T) {
 	}
 }
 
+// Re-importing a parked escrow builds the record with SettlementPending at its zero value. Clearing
+// the marker with it would strand the escrow: no traffic, never settled, no error.
+func TestUpsertDevshardKeepsAQueuedSettlementWhileReplacingEveryOtherField(t *testing.T) {
+	testStore := openTestStore(t)
+	ctx := context.Background()
+
+	parked := DevshardRecord{EscrowID: "escrow-9", PrivateKeyEnv: "GATEWAY_KEY_9", Model: "model-a", RotationRole: "regular"}
+	if err := testStore.UpsertDevshard(ctx, parked); err != nil {
+		t.Fatalf("UpsertDevshard(): %v", err)
+	}
+	if err := testStore.SetDevshardSettlementPending(ctx, "escrow-9", true); err != nil {
+		t.Fatalf("SetDevshardSettlementPending(): %v", err)
+	}
+
+	reimported := parked
+	reimported.Model = "model-b"
+	reimported.Active = true
+	if err := testStore.UpsertDevshard(ctx, reimported); err != nil {
+		t.Fatalf("UpsertDevshard() re-import: %v", err)
+	}
+
+	listed, err := testStore.ListDevshards(ctx)
+	if err != nil {
+		t.Fatalf("ListDevshards(): %v", err)
+	}
+	if len(listed) != 1 {
+		t.Fatalf("ListDevshards() = %+v, want exactly one row", listed)
+	}
+	if !listed[0].SettlementPending {
+		t.Fatal("the re-import cleared the queued settlement; nothing will ever settle that escrow")
+	}
+	if listed[0].Model != "model-b" || !listed[0].Active {
+		t.Fatalf("re-imported row = %+v, want model-b and active (every other field replaced)", listed[0])
+	}
+}
+
 func TestMissingDevshardReturnsSentinel(t *testing.T) {
 	testStore := openTestStore(t)
 	ctx := context.Background()
