@@ -32,7 +32,7 @@ func openAvailability() availability {
 		pocRequired:  func(string) bool { return false },
 		throttled:    func(string) bool { return false },
 		ejected:      func(string) bool { return false },
-		capability:   func(string, RequestProfile) bool { return false },
+		capability:   func(string, RequestProfile) (string, bool) { return "", false },
 		stateBlocked: func(string) bool { return false },
 	}
 }
@@ -41,12 +41,53 @@ func always(blocked bool) func(string) bool {
 	return func(string) bool { return blocked }
 }
 
-func capabilityBlocksModels(models ...string) func(string, RequestProfile) bool {
+func capabilityBlocksModels(models ...string) func(string, RequestProfile) (string, bool) {
 	blocked := make(map[string]bool, len(models))
 	for _, model := range models {
 		blocked[model] = true
 	}
-	return func(_ string, profile RequestProfile) bool { return blocked[profile.Model] }
+	return func(_ string, profile RequestProfile) (string, bool) {
+		return CapabilityToolsUnsupported, blocked[profile.Model]
+	}
+}
+
+// servable is the sweep's fast answer and match is the per-nonce decision, and they must be exactly
+// as strict as each other: a stricter servable fails a request match would have served, and a laxer
+// one keeps a waiter that every drain can only answer by burning a chain-costed nonce.
+func TestServableAgreesWithMatchOverEveryFilterCombination(t *testing.T) {
+	t.Parallel()
+	participants := []string{hostA, hostB}
+
+	for combination := 0; combination < 1<<6; combination++ {
+		bit := func(index int) bool { return combination&(1<<index) != 0 }
+		availability := availability{
+			pocRequired:  func(participant string) bool { return bit(0) && participant == hostA },
+			throttled:    func(participant string) bool { return bit(1) && participant == hostB },
+			ejected:      func(participant string) bool { return bit(2) && participant == hostA },
+			stateBlocked: func(participant string) bool { return bit(3) && participant == hostB },
+			capability: func(participant string, _ RequestProfile) (string, bool) {
+				return CapabilityToolsUnsupported, bit(4) && participant == hostA
+			},
+		}
+		var excluded []string
+		if bit(5) {
+			excluded = []string{hostB}
+		}
+		queued := queuedWaiter(baseTime, "model-a", excluded...)
+
+		canServe, _ := servable(queued, participants, availability)
+		matchWouldServe := false
+		for _, participant := range participants {
+			binding := HostBinding{Nonce: 1, Participant: participant}
+			if _, serving := match(binding, []*waiter{queued}, availability, baseTime, staleHold).(serve); serving {
+				matchWouldServe = true
+			}
+		}
+
+		if canServe != matchWouldServe {
+			t.Fatalf("combination %06b: servable=%v but a match serve was %v", combination, canServe, matchWouldServe)
+		}
+	}
 }
 
 func decisionKind(decision Decision) string {
@@ -57,6 +98,8 @@ func decisionKind(decision Decision) string {
 		return "burn"
 	case hold:
 		return "hold"
+	case decline:
+		return "decline"
 	default:
 		return ""
 	}
@@ -186,7 +229,7 @@ func TestMatchBurnKindPastStaleWindow(t *testing.T) {
 	tests := []struct {
 		name       string
 		waiting    []*waiter
-		capability func(string, RequestProfile) bool
+		capability func(string, RequestProfile) (string, bool)
 		state      func(string) bool
 		wantKind   GhostKind
 	}{
@@ -266,6 +309,8 @@ func TestMatchKeysExclusionByParticipantNotSlot(t *testing.T) {
 	}
 }
 
+// A hold parks a nonce for a waiter to come back to, so an empty queue must never produce one. The
+// host filters still burn: they are facts about the host, decided before the queue is consulted at all.
 func TestMatchEmptyQueueNeverHolds(t *testing.T) {
 	t.Parallel()
 	binding := HostBinding{Nonce: 4, HostIdx: 0, Participant: hostA}
@@ -273,26 +318,33 @@ func TestMatchEmptyQueueNeverHolds(t *testing.T) {
 	tests := []struct {
 		name         string
 		availability availability
-		wantKind     GhostKind
+		wantBurnKind GhostKind
+		wantDeclined bool
 	}{
-		{name: "no filters", availability: openAvailability(), wantKind: ghostExclude},
+		{name: "no filters", availability: openAvailability(), wantDeclined: true},
 		{name: "poc required", availability: func() availability {
 			availability := openAvailability()
 			availability.pocRequired = always(true)
 			return availability
-		}(), wantKind: ghostPoC},
+		}(), wantBurnKind: ghostPoC},
 		{name: "state blocked", availability: func() availability {
 			availability := openAvailability()
 			availability.stateBlocked = always(true)
 			return availability
-		}(), wantKind: ghostExclude},
+		}(), wantDeclined: true},
 	}
 	for _, testCase := range tests {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
 			decision := match(binding, nil, testCase.availability, baseTime, staleHold)
 
-			wantBurn(t, decision, testCase.wantKind)
+			if testCase.wantDeclined {
+				if _, declined := decision.(decline); !declined {
+					t.Fatalf("decision = %T (%v), want the nonce declined", decision, decision)
+				}
+				return
+			}
+			wantBurn(t, decision, testCase.wantBurnKind)
 		})
 	}
 }
@@ -357,8 +409,8 @@ func TestMatchIsTotal(t *testing.T) {
 			throttled:    always(throttled),
 			ejected:      always(ejected),
 			stateBlocked: always(stateBlocked),
-			capability: func(_ string, profile RequestProfile) bool {
-				return capabilityBlocked || profile.Model == blockedModel
+			capability: func(_ string, profile RequestProfile) (string, bool) {
+				return CapabilityToolsUnsupported, capabilityBlocked || profile.Model == blockedModel
 			},
 		}
 
@@ -453,13 +505,17 @@ func TestMatchSkipsAbandonedWaiters(t *testing.T) {
 		}
 	})
 
-	t.Run("an entirely abandoned queue never holds", func(t *testing.T) {
+	// A nonce costs the escrow whether or not anyone is served by it, so a queue with nobody left in
+	// it must give the nonce back rather than spend one recording that nobody wanted it.
+	t.Run("an entirely abandoned queue neither holds nor burns", func(t *testing.T) {
 		t.Parallel()
 		abandoned := queuedWaiter(baseTime, "model-a", hostA)
 		abandoned.abandoned.Store(true)
 
 		decision := match(binding, []*waiter{abandoned}, openAvailability(), baseTime, staleHold)
 
-		wantBurn(t, decision, ghostExclude)
+		if _, declined := decision.(decline); !declined {
+			t.Fatalf("decision = %T (%v), want the nonce declined", decision, decision)
+		}
 	})
 }

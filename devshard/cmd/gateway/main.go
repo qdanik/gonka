@@ -350,15 +350,15 @@ func newRouting(deps routingDeps) (*registry.Registry, *scheduler.Scheduler) {
 		Now:              deps.Now,
 	})
 	router := scheduler.NewScheduler(scheduler.Deps{
-		Escrows:          escrows,
-		Capacity:         deps.Capacity,
-		Limiter:          deps.Participants,
-		Perf:             deps.Hosts,
-		Snapshots:        deps.Snapshots,
-		Config:           deps.Config,
-		Observer:         deps.Dispatches,
-		Now:              deps.Now,
-		OnNonceExhausted: escrows.NonceExhausted,
+		Escrows:           escrows,
+		Capacity:          deps.Capacity,
+		Limiter:           deps.Participants,
+		Perf:              deps.Hosts,
+		Snapshots:         deps.Snapshots,
+		Config:            deps.Config,
+		Observer:          deps.Dispatches,
+		Now:               deps.Now,
+		OnEscrowExhausted: escrows.Exhausted,
 	})
 	return escrows, router
 }

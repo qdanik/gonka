@@ -21,11 +21,12 @@ const receiptTimeoutDoubleAboveTokens = 100_000
 type EscalationStage string
 
 const (
-	StageNone           EscalationStage = ""
-	StageSuspicious     EscalationStage = "suspicious_host_immediate_escalation"
-	StageAttemptFailed  EscalationStage = "attempt_failed"
-	StageReceiptTimeout EscalationStage = "receipt_timeout_wait_elapsed"
-	StageFirstToken     EscalationStage = "first_token_timeout_wait_elapsed"
+	StageNone             EscalationStage = ""
+	StageSuspicious       EscalationStage = "suspicious_host_immediate_escalation"
+	StageAttemptFailed    EscalationStage = "attempt_failed"
+	StageReceiptTimeout   EscalationStage = "receipt_timeout_wait_elapsed"
+	StageFirstToken       EscalationStage = "first_token_timeout_wait_elapsed"
+	StageReducedMaxTokens EscalationStage = "response_timeout_wait_elapsed"
 )
 
 const (
@@ -44,32 +45,41 @@ func (s EscalationStage) Reason() string {
 		return "receipt_timeout"
 	case StageFirstToken:
 		return "first_token_timeout"
+	case StageReducedMaxTokens:
+		return "response_timeout_reduced_max_tokens"
 	}
 	return ""
 }
 
 // The ladder is pure over its arguments: no host performance, no phase snapshot, no clock of its own.
 type EscalationPolicy struct {
-	ReceiptTimeout         time.Duration
-	FirstTokenFloor        time.Duration
-	InterChunkStall        time.Duration
-	LoserGrace             time.Duration
-	MaxSpeculativeAttempts int
+	ReceiptTimeout           time.Duration
+	FirstTokenFloor          time.Duration
+	InterChunkStall          time.Duration
+	LoserGrace               time.Duration
+	NonStreamResponseFloor   time.Duration
+	PerInputTokenResponseLag time.Duration
+	MaxSpeculativeAttempts   int
 }
 
 func EscalationPolicyFromConfig(engine config.Engine) EscalationPolicy {
 	return EscalationPolicy{
-		ReceiptTimeout:         time.Duration(engine.ReceiptTimeoutMS) * time.Millisecond,
-		FirstTokenFloor:        time.Duration(engine.FirstTokenFloorMS) * time.Millisecond,
-		InterChunkStall:        time.Duration(engine.InterChunkStallMS) * time.Millisecond,
-		LoserGrace:             time.Duration(engine.LoserGraceMS) * time.Millisecond,
-		MaxSpeculativeAttempts: int(engine.MaxSpeculativeAttempts),
+		ReceiptTimeout:           time.Duration(engine.ReceiptTimeoutMS) * time.Millisecond,
+		FirstTokenFloor:          time.Duration(engine.FirstTokenFloorMS) * time.Millisecond,
+		InterChunkStall:          time.Duration(engine.InterChunkStallMS) * time.Millisecond,
+		LoserGrace:               time.Duration(engine.LoserGraceMS) * time.Millisecond,
+		NonStreamResponseFloor:   time.Duration(engine.NonStreamResponseFloorMS) * time.Millisecond,
+		PerInputTokenResponseLag: time.Duration(engine.PerInputTokenResponseLagMS) * time.Millisecond,
+		MaxSpeculativeAttempts:   int(engine.MaxSpeculativeAttempts),
 	}
 }
 
+// ReducedTokensStillOffered is the one-shot the race holds: a buffered answer reveals nothing until it
+// arrives, so exactly one retry per race may ask for half the output tokens instead.
 type EscalationRequest struct {
-	InputTokens uint64
-	Stream      bool
+	InputTokens               uint64
+	Stream                    bool
+	ReducedTokensStillOffered bool
 }
 
 type EscalationAttempt struct {
@@ -181,7 +191,11 @@ func (p EscalationPolicy) triggerFor(attempt EscalationAttempt, request Escalati
 		deadline := attempt.SendTime.Add(p.receiptTimeout(request.InputTokens))
 		return ArmedEscalation{Stage: StageReceiptTimeout, Deadline: deadline}, true
 	case !request.Stream:
-		return ArmedEscalation{}, false
+		if !request.ReducedTokensStillOffered || !attempt.FirstContent.IsZero() {
+			return ArmedEscalation{}, false
+		}
+		deadline := attempt.SendTime.Add(p.nonStreamResponseTimeout(request.InputTokens))
+		return ArmedEscalation{Stage: StageReducedMaxTokens, Deadline: deadline}, true
 	case !attempt.FirstToken.IsZero():
 		return ArmedEscalation{}, false
 	}
@@ -194,6 +208,12 @@ func (p EscalationPolicy) receiptTimeout(inputTokens uint64) time.Duration {
 		return 2 * p.ReceiptTimeout
 	}
 	return p.ReceiptTimeout
+}
+
+// A buffered answer arrives all at once, so the only signal a non-streaming host is too slow is the
+// prompt it was given: the wait grows with input size, floored so a short prompt is not retried early.
+func (p EscalationPolicy) nonStreamResponseTimeout(inputTokens uint64) time.Duration {
+	return max(p.NonStreamResponseFloor, time.Duration(inputTokens)*p.PerInputTokenResponseLag)
 }
 
 // The quadratic is the measured first-token fit over prompt size; the floor keeps a short prompt

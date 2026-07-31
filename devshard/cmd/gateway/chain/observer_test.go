@@ -518,6 +518,53 @@ func TestPhaseObserver_EpochFetchErrorKeepsPreviousSnapshotWithLastError(t *test
 
 // TestPhaseObserver_ParticipantsFetchErrorKeepsPreviousWeightsWithLastError covers the
 // participants-only failure: epoch-derived fields still advance, weights/URLs stay stale.
+// A participants fetch failing is routine, and the carry-forward path restates every participant-derived
+// field by hand. A field added to the fresh path and missed here is not published as unknown, it is
+// published as zero -- and a zero weight map means "everything weighs nothing", which stops routing with
+// no error anywhere. The second half of this test fails when a new field belongs to neither list, so the
+// omission cannot be silent.
+func TestPhaseObserver_CarriesEveryParticipantDerivedFieldForward(t *testing.T) {
+	participantDerived := []string{
+		"CurrentWeights", "FullWeights", "CurrentWeightsByModel", "FullWeightsByModel",
+		"Preserved", "PreservedByModel", "InferenceURLs",
+	}
+	phaseDerived := []string{
+		"BlockHeight", "EpochSwitchBlockHeight", "EpochIndex", "EpochPhase", "ConfirmationPoCPhase",
+		"RequestsBlocked", "BlockReason", "MaxNonce", "LastUpdatedAt", "LastError",
+	}
+
+	previous := PhaseSnapshot{
+		CurrentWeights:        map[string]float64{"participant-a": 1},
+		FullWeights:           map[string]float64{"participant-a": 2},
+		CurrentWeightsByModel: map[string]map[string]float64{"model-a": {"participant-a": 3}},
+		FullWeightsByModel:    map[string]map[string]float64{"model-a": {"participant-a": 4}},
+		Preserved:             []string{"participant-a"},
+		PreservedByModel:      map[string][]string{"model-a": {"participant-a"}},
+		InferenceURLs:         map[string]string{"participant-a": "http://host.invalid"},
+	}
+	observer := &PhaseObserver{}
+	observer.publishWithPreviousParticipants(PhaseSnapshot{BlockHeight: 9}, previous, "fetch failed")
+	carried := reflect.ValueOf(observer.Snapshot())
+	source := reflect.ValueOf(previous)
+
+	for _, name := range participantDerived {
+		if got, want := carried.FieldByName(name).Interface(), source.FieldByName(name).Interface(); !reflect.DeepEqual(got, want) {
+			t.Errorf("%s = %v, want the previous snapshot's %v", name, got, want)
+		}
+	}
+
+	known := map[string]bool{}
+	for _, name := range append(append([]string{}, participantDerived...), phaseDerived...) {
+		known[name] = true
+	}
+	snapshotType := reflect.TypeOf(PhaseSnapshot{})
+	for index := 0; index < snapshotType.NumField(); index++ {
+		if name := snapshotType.Field(index).Name; !known[name] {
+			t.Errorf("PhaseSnapshot.%s is in neither list: decide whether the failure path must carry it forward", name)
+		}
+	}
+}
+
 func TestPhaseObserver_ParticipantsFetchErrorKeepsPreviousWeightsWithLastError(t *testing.T) {
 	stub := newPhaseObserverStub()
 	server := httptest.NewServer(stub.handler())

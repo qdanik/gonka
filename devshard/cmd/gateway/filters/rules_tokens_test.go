@@ -32,9 +32,11 @@ func TestTokensCapOutputTokens(t *testing.T) {
 	}
 }
 
-// The deployed configuration pairs a 10000 default with a 4096 cap. An unset request must not be
-// granted an output budget the same gateway refuses when a client asks for it outright.
-func TestTokensADefaultAboveTheCapIsClampedToTheCap(t *testing.T) {
+// The deployed configuration pairs a 10000 default with a 4096 cap, and the two bound different
+// things: the cap bounds what a client may ASK for, the default is what an operator grants a client
+// that asks for nothing. Clamping the default to the cap would silently cut every unbounded request
+// on the shipped template from 10000 tokens to 4096.
+func TestTokensTheCapBoundsTheAskAndNotTheDefault(t *testing.T) {
 	limits := outputTokenLimits{DefaultMaxTokens: 10_000, MaxTokensCap: 4_096}
 	tests := []struct {
 		name        string
@@ -42,9 +44,10 @@ func TestTokensADefaultAboveTheCapIsClampedToTheCap(t *testing.T) {
 		bypassLimit bool
 		want        uint64
 	}{
-		{"an unset request takes the cap, not the larger default", 0, false, 4_096},
-		{"an admin's unset request takes the cap too", 0, true, 4_096},
-		{"an explicit ask for the default is still clamped", 10_000, false, 4_096},
+		{"an unset request takes the operator's default in full", 0, false, 10_000},
+		{"an admin's unset request takes it too", 0, true, 10_000},
+		{"an explicit ask for the same number is still clamped", 10_000, false, 4_096},
+		{"an admin's explicit ask bypasses the cap", 10_000, true, 10_000},
 	}
 	for _, testCase := range tests {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -540,5 +543,114 @@ func TestTokensPerModelOverrideCapClampsTheRequestedValue(t *testing.T) {
 
 	if view.MaxTokens != 50 {
 		t.Errorf("max_tokens = %d, want the per-model cap 50", view.MaxTokens)
+	}
+}
+
+func TestHalveMaxTokensRewritesTheFieldsTheBodyCarries(t *testing.T) {
+	tests := []struct {
+		name        string
+		body        string
+		maxTokens   uint64
+		routedModel string
+		wantBody    string
+		wantTokens  uint64
+	}{
+		{
+			name:       "max_tokens alone is halved",
+			body:       `{"max_tokens":800,"model":"model-a"}`,
+			maxTokens:  800,
+			wantBody:   `{"max_tokens":400,"model":"model-a"}`,
+			wantTokens: 400,
+		},
+		{
+			name:       "both fields move together",
+			body:       `{"max_completion_tokens":800,"max_tokens":800}`,
+			maxTokens:  800,
+			wantBody:   `{"max_completion_tokens":400,"max_tokens":400}`,
+			wantTokens: 400,
+		},
+		{
+			name:       "max_completion_tokens alone leaves max_tokens absent",
+			body:       `{"max_completion_tokens":800}`,
+			maxTokens:  800,
+			wantBody:   `{"max_completion_tokens":400}`,
+			wantTokens: 400,
+		},
+		{
+			name:       "a body carrying neither field still gets a bounded budget",
+			body:       `{"model":"model-a"}`,
+			maxTokens:  800,
+			wantBody:   `{"max_tokens":400,"model":"model-a"}`,
+			wantTokens: 400,
+		},
+		{
+			name:       "an odd budget rounds down",
+			body:       `{"max_tokens":9}`,
+			maxTokens:  9,
+			wantBody:   `{"max_tokens":4}`,
+			wantTokens: 4,
+		},
+		{
+			name:       "two is the smallest budget that can be halved",
+			body:       `{"max_tokens":2}`,
+			maxTokens:  2,
+			wantBody:   `{"max_tokens":1}`,
+			wantTokens: 1,
+		},
+		{
+			name:        "a profile floor stops the halving short",
+			body:        `{"max_tokens":20,"model":"` + kimiModelID + `"}`,
+			maxTokens:   20,
+			routedModel: kimiModelID,
+			wantBody:    `{"max_tokens":16,"model":"` + kimiModelID + `"}`,
+			wantTokens:  16,
+		},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			body, maxTokens, ok := HalveMaxTokens([]byte(testCase.body), testCase.maxTokens, testCase.routedModel)
+			if !ok {
+				t.Fatalf("HalveMaxTokens(%s, %d) reported no budget to halve", testCase.body, testCase.maxTokens)
+			}
+			if string(body) != testCase.wantBody {
+				t.Errorf("body = %s, want %s", body, testCase.wantBody)
+			}
+			if maxTokens != testCase.wantTokens {
+				t.Errorf("max_tokens = %d, want %d", maxTokens, testCase.wantTokens)
+			}
+		})
+	}
+}
+
+func TestHalveMaxTokensRefusesABudgetWithNothingLeftToGiveBack(t *testing.T) {
+	tests := []struct {
+		name        string
+		body        string
+		maxTokens   uint64
+		routedModel string
+	}{
+		{name: "an unset budget", body: `{"max_tokens":0}`, maxTokens: 0},
+		{name: "a single token", body: `{"max_tokens":1}`, maxTokens: 1},
+		{
+			name:        "a budget already at the profile floor",
+			body:        `{"max_tokens":16}`,
+			maxTokens:   16,
+			routedModel: kimiModelID,
+		},
+		{
+			name:        "a budget below the profile floor",
+			body:        `{"max_tokens":10}`,
+			maxTokens:   10,
+			routedModel: kimiModelID,
+		},
+		{name: "a body that is not JSON", body: `not json`, maxTokens: 800},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			body, maxTokens, ok := HalveMaxTokens([]byte(testCase.body), testCase.maxTokens, testCase.routedModel)
+			if ok {
+				t.Fatalf("HalveMaxTokens = (%s, %d, true), want a refusal", body, maxTokens)
+			}
+		})
 	}
 }

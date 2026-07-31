@@ -3,6 +3,7 @@
 package engine
 
 import (
+	"net/http"
 	"time"
 
 	"devshard/cmd/gateway/limits"
@@ -40,6 +41,34 @@ const (
 	TerminalCapabilityRefused
 	TerminalStalled
 )
+
+// terminalStatuses is the one table linking an upstream status to the terminal it produces.
+// classifyDispatchError reads it forward and metrics reads it back, so the two cannot disagree about
+// which status a label describes.
+var terminalStatuses = map[Terminal]int{
+	TerminalThrottled:      http.StatusTooManyRequests,
+	TerminalUnavailable:    http.StatusServiceUnavailable,
+	TerminalForbidden:      http.StatusForbidden,
+	TerminalNotFound:       http.StatusNotFound,
+	TerminalTimestampDrift: http.StatusUnauthorized,
+}
+
+// StatusFor reports the upstream status a terminal was recovered from, and false for the terminals
+// that never carried one.
+func StatusFor(terminal Terminal) (int, bool) {
+	status, known := terminalStatuses[terminal]
+	return status, known
+}
+
+// terminalForStatus is the inverse, built once so a status can never map to one terminal going out
+// and a different one coming back.
+var terminalForStatus = func() map[int]Terminal {
+	inverse := make(map[int]Terminal, len(terminalStatuses))
+	for terminal, status := range terminalStatuses {
+		inverse[status] = terminal
+	}
+	return inverse
+}()
 
 type SampleExemption int
 

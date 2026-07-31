@@ -1,12 +1,14 @@
 package scheduler
 
 import (
+	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"devshard/cmd/gateway/chain"
+	"devshard/types"
 )
 
 const defaultSubmitBuffer = 64
@@ -36,6 +38,7 @@ type dispatcherDeps struct {
 	retire       func(*dispatcher) bool
 	idleGrace    time.Duration
 	submitBuffer int
+	onExhausted  func(escrowID string)
 }
 
 type submitOutcome int
@@ -201,13 +204,9 @@ func (a *armedTimer) disarm() {
 	a.fired, a.cancel = nil, nil
 }
 
-// drain assigns nonces until the queue empties, a nonce is held, or the burn budget trips. The
-// freeze and the budget bound its cost in nonces -- a capped, money-backed resource: without them a
-// host flipping between the sweep and the binding burns one every iteration, forever.
-//
-// It returns with a waiter still queued only when it reports a held nonce, which is the one exit the
-// loop arms a timer for; every other exit answers whatever is left, so no waiter is ever parked on a
-// queue nothing will wake.
+// drain assigns nonces until the queue empties, a nonce is held, or the burn budget trips; the freeze
+// and the budget are what bound its cost in nonces. It returns with a waiter still queued ONLY when it
+// reports a held nonce -- the one exit the loop arms a timer for -- so nothing is parked unwoken.
 func (d *dispatcher) drain() (time.Time, bool) {
 	avail := freeze(d.predicates(d.snapshots.Snapshot()))
 	acquire := admit(&avail, d.acquireSlot)
@@ -264,6 +263,9 @@ func (d *dispatcher) drain() (time.Time, bool) {
 		case hold:
 			d.recordHold()
 			return outcome.until, true
+		case decline:
+			d.dropAbandoned()
+			return time.Time{}, false
 		default:
 			d.failWaiting(fmt.Errorf("escrow %s: session offered no binding", d.escrowID))
 			return time.Time{}, false
@@ -273,13 +275,33 @@ func (d *dispatcher) drain() (time.Time, bool) {
 
 // sweepExhausted drops waiters no available participant can serve, instantly and without touching the nonce.
 func (d *dispatcher) sweepExhausted(participants []string, avail availability) {
+	d.keepWaiting(func(queued *waiter) bool {
+		if queued.abandoned.Load() {
+			return false
+		}
+		canServe, toolsUnsupported := servable(queued, participants, avail)
+		if canServe {
+			return true
+		}
+		if toolsUnsupported {
+			queued.deliver(pickResult{err: ErrToolsUnsupported})
+			return false
+		}
+		queued.deliver(pickResult{err: ErrNoAvailableHost})
+		return false
+	})
+}
+
+// dropAbandoned answers nobody: the goroutine that left already delivered the waiter's result.
+func (d *dispatcher) dropAbandoned() {
+	d.keepWaiting(func(queued *waiter) bool { return !queued.abandoned.Load() })
+}
+
+// keepWaiting compacts the queue, clearing the tail so a departed waiter is not held by the array.
+func (d *dispatcher) keepWaiting(accept func(*waiter) bool) {
 	kept := d.waiting[:0]
 	for _, queued := range d.waiting {
-		switch {
-		case queued.abandoned.Load():
-		case !servable(queued, participants, avail):
-			queued.deliver(pickResult{err: ErrNoAvailableHost})
-		default:
+		if accept(queued) {
 			kept = append(kept, queued)
 		}
 	}
@@ -289,19 +311,21 @@ func (d *dispatcher) sweepExhausted(participants []string, avail availability) {
 	d.waiting = kept
 }
 
-func servable(queued *waiter, participants []string, avail availability) bool {
+// servable also reports the one blocking reason a caller can fix and no wait can: tool support.
+func servable(queued *waiter, participants []string, avail availability) (canServe, toolsUnsupported bool) {
+	sawToolRefusal := false
+	sawOtherReason := false
 	for _, participant := range participants {
-		if queued.exclude[participant] ||
-			avail.pocRequired(participant) ||
-			avail.throttled(participant) ||
-			avail.ejected(participant) ||
-			avail.stateBlocked(participant) ||
-			avail.capability(participant, queued.profile) {
-			continue
+		switch avail.blocks(participant, queued) {
+		case blockNone:
+			return true, false
+		case blockToolsUnsupported:
+			sawToolRefusal = true
+		default:
+			sawOtherReason = true
 		}
-		return true
 	}
-	return false
+	return false, sawToolRefusal && !sawOtherReason
 }
 
 // reservation is what a serve decision took before the nonce was committed: the participant's
@@ -336,11 +360,14 @@ func (d *dispatcher) handOff(served *waiter, taken reservation, prepared Prepare
 }
 
 // failAdvance answers the whole queue, not just the waiter a serve decision chose: the session could not
-// advance its nonce at all, so no queued request is servable on this escrow right now, and the one error
-// that brought the drain here -- an escrow out of balance -- is not one waiting resolves.
+// advance its nonce at all. A spent deposit is terminal for the escrow rather than for this request, so
+// only the exhaustion notice gets it replaced.
 func (d *dispatcher) failAdvance(decision Decision, taken reservation, err error) {
 	if _, chosen := decision.(serve); chosen {
 		d.giveBack(taken)
+	}
+	if errors.Is(err, types.ErrInsufficientBalance) && d.onExhausted != nil {
+		d.onExhausted(d.escrowID)
 	}
 	d.failWaiting(fmt.Errorf("escrow %s: advancing nonce: %w", d.escrowID, err))
 }
@@ -413,26 +440,31 @@ type capabilityKey struct {
 	contextHint   uint64
 }
 
+type capabilityVerdict struct {
+	reason  string
+	blocked bool
+}
+
 func freeze(live availability) availability {
-	capabilities := map[capabilityKey]bool{}
+	capabilities := map[capabilityKey]capabilityVerdict{}
 	return availability{
 		pocRequired:  memoise(live.pocRequired),
 		throttled:    memoise(live.throttled),
 		ejected:      memoise(live.ejected),
 		stateBlocked: memoise(live.stateBlocked),
-		capability: func(participant string, profile RequestProfile) bool {
+		capability: func(participant string, profile RequestProfile) (string, bool) {
 			key := capabilityKey{
 				participant:   participant,
 				model:         profile.Model,
 				requiresTools: profile.RequiresTools,
 				contextHint:   profile.ContextHint,
 			}
-			blocked, known := capabilities[key]
+			verdict, known := capabilities[key]
 			if !known {
-				blocked = live.capability(participant, profile)
-				capabilities[key] = blocked
+				verdict.reason, verdict.blocked = live.capability(participant, profile)
+				capabilities[key] = verdict
 			}
-			return blocked
+			return verdict.reason, verdict.blocked
 		},
 	}
 }

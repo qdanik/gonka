@@ -394,7 +394,7 @@ func TestNonceExhaustionReachesTheRotationSink(t *testing.T) {
 	})
 	mustAdd(t, registry, "1", "qwen")
 
-	registry.NonceExhausted("1")
+	registry.Exhausted("1")
 
 	if got, want := rotation.seen(), []string{"1"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("OnBalanceExhausted calls = %v, want %v", got, want)

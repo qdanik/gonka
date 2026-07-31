@@ -213,6 +213,38 @@ func TestOpenIsIdempotentAcrossRestarts(t *testing.T) {
 	}
 }
 
+// The DDL below is devshardctl's own, reduced to the colliding tables; see gateway-operations.md.
+func TestOpenRefusesADevshardctlDatabase(t *testing.T) {
+	dir := t.TempDir()
+
+	seed, err := sql.Open("sqlite", filepath.Join(dir, gatewayDatabaseFileName))
+	if err != nil {
+		t.Fatalf("opening seed db: %v", err)
+	}
+	for _, statement := range []string{
+		`CREATE TABLE gateway_settings (id INTEGER PRIMARY KEY CHECK (id = 1), chain_rest TEXT NOT NULL)`,
+		`CREATE TABLE gateway_devshards (escrow_id TEXT PRIMARY KEY, model TEXT NOT NULL)`,
+		`CREATE TABLE gateway_rotation_status (escrow_id TEXT PRIMARY KEY, state TEXT NOT NULL)`,
+		`INSERT INTO gateway_devshards (escrow_id, model) VALUES ('escrow-1', 'model-a')`,
+	} {
+		if _, err := seed.Exec(statement); err != nil {
+			t.Fatalf("seeding a devshardctl db with %q: %v", statement, err)
+		}
+	}
+	if err := seed.Close(); err != nil {
+		t.Fatalf("closing seed db: %v", err)
+	}
+
+	opened, err := Open(dir)
+	if err == nil {
+		opened.Close()
+		t.Fatal("Open() accepted a devshardctl database, want a refusal")
+	}
+	if !errors.Is(err, ErrLegacyDatabase) {
+		t.Fatalf("Open() error = %v, want ErrLegacyDatabase", err)
+	}
+}
+
 func TestOpenUpgradesExistingV1Database(t *testing.T) {
 	dir := t.TempDir()
 	ctx := context.Background()

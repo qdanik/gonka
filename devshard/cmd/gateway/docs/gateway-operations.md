@@ -158,6 +158,10 @@ There are no alerting rules in the repository, so nothing pages on any of this t
 
 Seeding leaves an escrow it already knows alone, so a restart cannot resurrect one an operator deactivated.
 
+**Environment variables accept both spellings.** The gateway reads its own `GATEWAY_*` names first and falls back to the `devshardctl` name for the seventeen settings that have one, so a deployment still running the shipped template starts without an edit. The suffixes are not a mechanical swap — rotation, the disabled switch, the PoC mode and the tx-query URLs were all renamed — so the pairs are listed explicitly in `env/env.go`. Where both are set, the `GATEWAY_*` value wins; an empty value counts as unset on both sides. Note the interaction with the paragraph below: falling back to `DEVSHARD_STORAGE_DIR` points this gateway at the directory `devshardctl` uses, which is exactly the case the database guard refuses — loudly, at start-up, rather than silently.
+
+**Point this gateway at a storage directory `devshardctl` has never used.** Both binaries name their database `<storageDir>/gateway.db`, and two table names are common to both with different columns. Because every migration here is a `CREATE TABLE IF NOT EXISTS`, opening a `devshardctl` database would silently adopt the legacy shape for those two and abandon the legacy devshard and suspicious-host registries for fresh empty ones — a start that looks clean and then fails one query at a time. The store therefore refuses to open such a file, recognising it by the absence of `schema_version` alongside a table only `devshardctl` creates. There is no migration path between the two; the escrows are re-seeded from `GATEWAY_DEVSHARDS_JSON`.
+
 Publishing builds escrow runtimes concurrently under a semaphore whose depth is also the HTTP idle-connection pool size, so bounded concurrency does not turn into connection churn. Two failures are survivable and mark the escrow inactive with a warning — the escrow is gone from chain, or its key variable is unset. **Every other failure is fatal**, so the gateway never quietly comes up with a smaller pool than intended.
 
 ## Shutdown and restart
