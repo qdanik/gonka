@@ -521,11 +521,8 @@ func TestSimulatorStreamsAHealthyRequestByteForByte(t *testing.T) {
 	sim.assertOneOutcome(t)
 }
 
-// The load-bearing invariant of the whole race: only content crowns, so a host that answers instantly
-// with nothing cannot take the client's stream from a slower host that produces tokens.
-// A crowned winner's bytes must leave the gateway as they arrive. The transport flushes per line
-// through whatever writer it was handed, so every hop from that writer to the client has to carry the
-// flush or the client sees nothing until the response is over.
+// Every hop from the transport's writer to the client must carry the flush, or the client sees
+// nothing until the response is over.
 func TestSimulatorFlushesEveryChunkThroughToTheClient(t *testing.T) {
 	sim := newSimulator(t, settledPolicy(), 1, qwenModel)
 	sim.host(10, 0, "host-0", &hostScript{

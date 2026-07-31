@@ -55,11 +55,8 @@ func (f *fakeTxClient) GetEscrow(ctx context.Context, escrowID string) (chain.Es
 	return chain.EscrowInfo{}, false, errors.New("fakeTxClient: GetEscrow not stubbed")
 }
 
-// fakeStore stubs escrowStore with in-memory tables. WithRetry calls fn once
-// (no backoff): Store's own retry timing is covered by store/retry_test.go.
-// fakeStore's upsertDevshardErrByID is a per-escrow override checked before the blanket upsertDevshardErr,
-// rotationStatuses is keyed by Model+"|"+Role, and savedCommitments records every SaveCommitment including
-// ones later deleted. A non-nil calls records call names so ordering can be asserted across fakes.
+// fakeStore stubs escrowStore in memory. WithRetry calls fn once; retry timing is store/retry_test.go's.
+// upsertDevshardErrByID overrides the blanket upsertDevshardErr, and savedCommitments keeps deleted ones.
 type fakeStore struct {
 	mu sync.Mutex
 

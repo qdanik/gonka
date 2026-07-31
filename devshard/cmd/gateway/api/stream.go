@@ -1,6 +1,7 @@
 package api
 
 import (
+	"cmp"
 	"encoding/json"
 	"net/http"
 
@@ -133,19 +134,32 @@ func errorEvent(cause error) []byte {
 	return append(append([]byte("data: "), payload...), '\n', '\n')
 }
 
+// EscrowHeader names the escrow that served a reply. A live race sets it as soon as the escrow is
+// picked, which is why writeChatHeaders takes it as an argument rather than reading it back.
+const EscrowHeader = "X-Devshard-ID"
+
+// writeChatHeaders is the only place a chat reply's headers are decided, so a replay from the cache
+// and an answer from a live race cannot hand the same request different headers -- a difference a
+// client would see intermittently, since it would depend on cache state.
+func writeChatHeaders(header http.Header, requestID, escrowID, contentType string, streaming bool) {
+	if requestID != "" {
+		header.Set("X-Request-Id", requestID)
+	}
+	if escrowID != "" {
+		header.Set(EscrowHeader, escrowID)
+	}
+	header.Set("Content-Type", cmp.Or(contentType, "application/json"))
+	if streaming {
+		header.Set("Cache-Control", "no-cache")
+		header.Set("Connection", "keep-alive")
+	}
+}
+
 func (c *clientStream) begin(contentType string) {
 	if c.started {
 		return
 	}
-	header := c.writer.Header()
-	if c.requestID != "" {
-		header.Set("X-Request-Id", c.requestID)
-	}
-	header.Set("Content-Type", contentType)
-	if c.streaming {
-		header.Set("Cache-Control", "no-cache")
-		header.Set("Connection", "keep-alive")
-	}
+	writeChatHeaders(c.writer.Header(), c.requestID, "", contentType, c.streaming)
 	c.writer.WriteHeader(http.StatusOK)
 	c.started = true
 }

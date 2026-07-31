@@ -59,6 +59,8 @@ flowchart TD
     G -->|serve| H[acquire participant slot<br/>then take escrow hold]
     G -->|burn| I[commit a ghost nonce, record the reason]
     G -->|hold| J[decline the nonce, re-arm the timer]
+    G -->|decline| M[give the nonce back,<br/>drop the abandoned waiters]
+    M --> Z
     H --> K[commit the nonce, hand the assignment to the waiter]
     I --> L{budget spent?}
     L -->|yes| Z
@@ -71,7 +73,7 @@ flowchart TD
 
 **The burn budget is `groupSize * (waiters + 1)`, computed once at drain entry.** Together with the freeze it gives the drain a termination proof: `waiting`, the availability predicates and the budget are all fixed, no waiter is appended during a drain (appends happen only in the select loop), and every iteration either returns, serves — which strictly shrinks the queue — or burns, which strictly shrinks the budget. Iterations are therefore bounded by `waiters + budget + 1`. Hold deadlines are fixed at enqueue time, so a fired timer cannot re-hold the same head.
 
-**The sweep is the second termination lever.** Before every binding it drops abandoned waiters silently and answers `ErrNoAvailableHost` to any waiter for which no participant passes all six gates (excluded, PoC-required, throttled, ejected, state-blocked, capability). This costs no nonce (`dispatcher.go:272`). It matters most in combination with admission, below.
+**The sweep is the second termination lever.** Before every binding it drops abandoned waiters silently and answers any waiter for which no participant passes all six gates (excluded, PoC-required, throttled, ejected, state-blocked, capability). This costs no nonce. The answer is normally `ErrNoAvailableHost`, which is transient — but when every participant that blocked the waiter did so *only* because it does not implement tools, the answer is `ErrToolsUnsupported` instead, which the API returns as `400` rather than a fault. That distinction is the reason the capability gate reports a reason and not merely a boolean: no amount of waiting makes a host implement tools, so telling the caller to retry would cost them another nonce for the same refusal.
 
 ### match is pure
 
@@ -82,10 +84,11 @@ flowchart TD
 | `serve{waiter}` | This nonce's host can serve this waiter. Commit and hand over. |
 | `burn{kind}` | No waiting request can use this nonce's host. Commit a ghost and record why. |
 | `hold{until}` | Nobody can use it *yet*. Decline the nonce and wait, in case a compatible request arrives. |
+| `decline{}` | Nobody is left at all. Give the nonce back uncommitted. |
 
-The exhaustiveness of that sum type is the nonce-liveness invariant made compiler-checked (`decision.go:9-10`): there is no fourth outcome in which a nonce is committed and nobody owns it, and no way to add one without changing the type.
+The exhaustiveness of that sum type is the nonce-liveness invariant made compiler-checked (`decision.go:8-9`): there is no outcome in which a nonce is committed and nobody owns it, and no way to add one without changing the type.
 
-Decision order: a host the chain requires to be preserved for proof-of-compute burns `ghostPoC`; a throttled host burns `ghostThrottled`; a host the outlier detector ejected burns `ghostEjected`; otherwise the queue is walked in arrival order and the first waiter that is not excluding this participant, is not blocked on it and passes the capability gate is served. If none matches and the oldest *live* waiter is still inside the hold grace, the nonce is held. Otherwise it burns `ghostCapability` if some waiter was blocked on the host specifically, and `ghostExclude` if the queue simply excludes it.
+Decision order: a host the chain requires to be preserved for proof-of-compute burns `ghostPoC`; a throttled host burns `ghostThrottled`; a host the outlier detector ejected burns `ghostEjected`; otherwise the queue is walked in arrival order and the first waiter that is not excluding this participant, is not blocked on it and passes the capability gate is served. If nobody live remains in the queue at all — every waiter having been abandoned between the sweep and the binding — the nonce is declined rather than burned: a burn would spend a chain-costed nonce on behalf of nobody, and would record it under a reason that never happened. Otherwise, if the oldest *live* waiter is still inside the hold grace, the nonce is held; past that it burns `ghostCapability` if some waiter was blocked on the host specifically, and `ghostExclude` if the queue simply excludes it.
 
 Two subtleties in there are worth the ink. The hold deadline is anchored on the oldest **live** waiter, never on the queue head, because an abandoned head would otherwise park a nonce for a caller who will never be served — a liveness failure in disguise (`match.go:47-48`). And the hold window is half-open (`now.Before(until)`), so the deadline always passes.
 

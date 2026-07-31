@@ -15,36 +15,35 @@ import (
 // replaced as they deplete, so actors that never retired would accumulate one dead session each.
 const idleDispatcherGrace = 5 * time.Minute
 
-// Deps wires the runtime facts routing reads. Everything is required except Observer, Now, SubmitBuffer and
-// OnNonceExhausted, which fall back to a no-op, the wall clock, the actor's default queue depth, and no
-// notification -- the last of which is how the rotation lifecycle learns to replace a spent escrow.
+// Deps wires the runtime facts routing reads. Observer, Now, SubmitBuffer and OnEscrowExhausted are
+// optional; the last is how the rotation lifecycle learns an escrow is out of nonces or out of deposit.
 type Deps struct {
-	Escrows          escrowSource
-	Capacity         escrowWeights
-	Limiter          hostLimiter
-	Perf             hostHealth
-	Snapshots        snapshotSource
-	Config           *config.Holder
-	Observer         dispatchObserver
-	Now              func() time.Time
-	SubmitBuffer     int
-	OnNonceExhausted func(escrowID string)
+	Escrows           escrowSource
+	Capacity          escrowWeights
+	Limiter           hostLimiter
+	Perf              hostHealth
+	Snapshots         snapshotSource
+	Config            *config.Holder
+	Observer          dispatchObserver
+	Now               func() time.Time
+	SubmitBuffer      int
+	OnEscrowExhausted func(escrowID string)
 }
 
 // Scheduler owns one actor per escrow. tieBreak is a single counter shared across every model and tie-set
 // shape: a pseudo-round-robin over whichever tie set exists right now, not a fair per-model rotation.
 type Scheduler struct {
-	escrows          escrowSource
-	capacity         escrowWeights
-	limiter          hostLimiter
-	perf             hostHealth
-	snapshots        snapshotSource
-	settings         *config.Holder
-	observer         dispatchObserver
-	now              func() time.Time
-	newTimer         func(time.Duration) (<-chan time.Time, func())
-	submitBuffer     int
-	onNonceExhausted func(escrowID string)
+	escrows           escrowSource
+	capacity          escrowWeights
+	limiter           hostLimiter
+	perf              hostHealth
+	snapshots         snapshotSource
+	settings          *config.Holder
+	observer          dispatchObserver
+	now               func() time.Time
+	newTimer          func(time.Duration) (<-chan time.Time, func())
+	submitBuffer      int
+	onEscrowExhausted func(escrowID string)
 
 	tieBreak atomic.Int64
 
@@ -61,18 +60,18 @@ func NewScheduler(deps Deps) *Scheduler {
 		deps.Now = time.Now
 	}
 	return &Scheduler{
-		escrows:          deps.Escrows,
-		capacity:         deps.Capacity,
-		limiter:          deps.Limiter,
-		perf:             deps.Perf,
-		snapshots:        deps.Snapshots,
-		settings:         deps.Config,
-		observer:         deps.Observer,
-		now:              deps.Now,
-		submitBuffer:     deps.SubmitBuffer,
-		onNonceExhausted: deps.OnNonceExhausted,
-		dispatchers:      map[string]*dispatcher{},
-		blockedHosts:     map[string]map[string]bool{},
+		escrows:           deps.Escrows,
+		capacity:          deps.Capacity,
+		limiter:           deps.Limiter,
+		perf:              deps.Perf,
+		snapshots:         deps.Snapshots,
+		settings:          deps.Config,
+		observer:          deps.Observer,
+		now:               deps.Now,
+		submitBuffer:      deps.SubmitBuffer,
+		onEscrowExhausted: deps.OnEscrowExhausted,
+		dispatchers:       map[string]*dispatcher{},
+		blockedHosts:      map[string]map[string]bool{},
 	}
 }
 
@@ -126,11 +125,8 @@ func (s *Scheduler) dropAssignment(assignment Assignment, model string) {
 	}
 }
 
-// BlockHost bars a participant from ever serving another real request on one escrow. The block is
-// permanent and is never cleared, by design: the host applied this escrow's state and produced a
-// diverging post-state-root, so every later dispatch on it would build on state the two no longer
-// share. It is a correctness valve rather than a performance signal, so it has no expiry, no
-// eviction, and no recovery path for the process's lifetime.
+// BlockHost permanently bars a participant from one escrow; never cleared, by design. See
+// gateway-routing-and-nonces.md.
 func (s *Scheduler) BlockHost(escrowID, participant string) {
 	s.blocksMu.Lock()
 	defer s.blocksMu.Unlock()
@@ -182,6 +178,7 @@ func (s *Scheduler) dispatcherFor(escrow Escrow) (*dispatcher, error) {
 			retire:       s.retire,
 			idleGrace:    idleDispatcherGrace,
 			submitBuffer: s.submitBuffer,
+			onExhausted:  s.onEscrowExhausted,
 		})
 		s.dispatchers[escrow.ID] = target
 		target.start()
@@ -215,9 +212,8 @@ func (s *Scheduler) predicates(escrow Escrow) func(chain.PhaseSnapshot) availabi
 			pocRequired: func(participant string) bool { return !preserved(participant) },
 			throttled:   func(participant string) bool { return !s.limiter.Available(participant, model) },
 			ejected:     func(participant string) bool { return s.perf.Ejected(participant, model) },
-			capability: func(participant string, profile RequestProfile) bool {
-				_, cannotServe := s.perf.CannotServe(participant, profile.RequiresTools, profile.ContextHint)
-				return cannotServe
+			capability: func(participant string, profile RequestProfile) (string, bool) {
+				return s.perf.CannotServe(participant, profile.RequiresTools, profile.ContextHint)
 			},
 			stateBlocked: stateBlocked,
 		}

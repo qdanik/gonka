@@ -142,11 +142,13 @@ type Perf struct {
 // attempt wait, long-response exemption — are engine constants: they bound a request that every tunable
 // already failed to bound.
 type Engine struct {
-	ReceiptTimeoutMS       int64
-	FirstTokenFloorMS      int64
-	InterChunkStallMS      int64
-	LoserGraceMS           int64
-	MaxSpeculativeAttempts int64
+	ReceiptTimeoutMS           int64
+	FirstTokenFloorMS          int64
+	InterChunkStallMS          int64
+	LoserGraceMS               int64
+	NonStreamResponseFloorMS   int64
+	PerInputTokenResponseLagMS int64
+	MaxSpeculativeAttempts     int64
 }
 
 // Scheduler groups nonce-holding tuning. HoldGraceMS is how long a bound nonce waits for a co-arriving
@@ -277,11 +279,13 @@ func Defaults() Config {
 			HostStalenessSeconds:     3_600,
 		},
 		Engine: Engine{
-			ReceiptTimeoutMS:       5_000,
-			FirstTokenFloorMS:      1_000,
-			InterChunkStallMS:      30_000,
-			LoserGraceMS:           600_000,
-			MaxSpeculativeAttempts: 0,
+			ReceiptTimeoutMS:           5_000,
+			FirstTokenFloorMS:          1_000,
+			InterChunkStallMS:          30_000,
+			LoserGraceMS:               600_000,
+			NonStreamResponseFloorMS:   20_000,
+			PerInputTokenResponseLagMS: 20,
+			MaxSpeculativeAttempts:     0,
 		},
 		Scheduler: Scheduler{
 			HoldGraceMS: 200,
@@ -469,6 +473,14 @@ func (c *Config) Validate() error {
 	// merely between chunks — before the gateway would even call such a stream stalled.
 	if c.Engine.LoserGraceMS < c.Engine.InterChunkStallMS {
 		complain("engine_loser_grace_ms: %d must be >= engine_inter_chunk_stall_ms %d", c.Engine.LoserGraceMS, c.Engine.InterChunkStallMS)
+	}
+	if c.Engine.NonStreamResponseFloorMS < 1 {
+		complain("engine_non_stream_response_floor_ms: %d must be >= 1", c.Engine.NonStreamResponseFloorMS)
+	}
+	// A zero lag is the operator asking for the floor alone, which is a supported way to disable the
+	// prompt-size term without disabling the fallback.
+	if c.Engine.PerInputTokenResponseLagMS < 0 {
+		complain("engine_per_input_token_response_lag_ms: %d must be >= 0", c.Engine.PerInputTokenResponseLagMS)
 	}
 	if c.Engine.MaxSpeculativeAttempts < 0 {
 		complain("engine_max_speculative_attempts: %d must be >= 0 (0 = bounded only by the host group)", c.Engine.MaxSpeculativeAttempts)

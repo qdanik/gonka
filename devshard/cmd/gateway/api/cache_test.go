@@ -3,6 +3,7 @@ package api
 import (
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"slices"
 	"testing"
 	"time"
@@ -237,5 +238,35 @@ func TestTheCapEvictsUntilTheCacheFits(t *testing.T) {
 	}
 	if len(cache.entries) == 0 {
 		t.Fatal("eviction emptied the cache instead of making room")
+	}
+}
+
+// A client must not be able to tell a cache replay from a live race by its headers. The two paths
+// never meet -- serveCached short-circuits above the race -- so only this test links them.
+func TestCachedReplayAndLiveStreamAgreeOnHeaders(t *testing.T) {
+	for _, streaming := range []bool{false, true} {
+		name := "non_streaming"
+		contentType := "application/json"
+		if streaming {
+			name, contentType = "streaming", "text/event-stream"
+		}
+		t.Run(name, func(t *testing.T) {
+			live := httptest.NewRecorder()
+			stream := newClientStream(live, "req-1", streaming)
+			stream.begin(contentType)
+			live.Header().Set(EscrowHeader, "escrow-1")
+
+			replay := httptest.NewRecorder()
+			serveCached(replay, "req-1", cachedResponse{
+				escrowID:    "escrow-1",
+				contentType: contentType,
+				stream:      streaming,
+				status:      http.StatusOK,
+			})
+
+			if !reflect.DeepEqual(live.Header(), replay.Header()) {
+				t.Fatalf("live headers %v != replayed headers %v", live.Header(), replay.Header())
+			}
+		})
 	}
 }

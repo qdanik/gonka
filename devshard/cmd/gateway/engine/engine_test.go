@@ -28,6 +28,9 @@ func (h *scriptedTimeoutHandler) HandleTimeout(context.Context, uint64, time.Tim
 	return h.result, h.err
 }
 
+// One case is a known overstatement: the handler returns insufficient votes with the same populated
+// result and unwrapped error as a posted vote, and only wrapping at the source -- out of this
+// package's reach -- could separate them.
 func TestSessionTimeoutsReadsAPostedVoteThroughTheHandlersSuccessError(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
@@ -43,9 +46,6 @@ func TestSessionTimeoutsReadsAPostedVoteThroughTheHandlersSuccessError(t *testin
 			err:      fmt.Errorf("inference %d timed out: %s", 7, "execution"),
 			wantVote: "execution",
 		},
-		// The handler leaves this return indistinguishable from its success one: same populated result,
-		// same unwrapped error. It reads as posted, which overstates it; wrapping it at the source is
-		// the only fix, and the source is out of this package's reach.
 		{
 			name:       "insufficient_votes_is_indistinguishable_from_a_posted_vote",
 			result:     user.TimeoutResult{Reason: "refused"},

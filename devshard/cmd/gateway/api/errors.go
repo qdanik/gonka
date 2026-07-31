@@ -134,6 +134,8 @@ func statusForError(err error) int {
 		return http.StatusTooManyRequests
 	case errors.Is(err, scheduler.ErrEscrowGone):
 		return http.StatusConflict
+	case errors.Is(err, scheduler.ErrToolsUnsupported):
+		return http.StatusBadRequest
 	case errors.Is(err, engine.ErrStopped), errors.Is(err, registry.ErrClosed):
 		return http.StatusServiceUnavailable
 	case errors.Is(err, ErrPrivateKeyEnvRequired):

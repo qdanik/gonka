@@ -26,6 +26,8 @@ const (
 	vllmToolChoiceMessage    = "tool choice requires --enable-auto-tool-choice and --tool-call-parser to be set"
 )
 
+// The host controls this text, and U+212A lowers to a one-byte k: a phrase index taken from the
+// lowered message lands two bytes early in the original.
 func TestParseCapabilityError(t *testing.T) {
 	testCases := []struct {
 		name    string
@@ -48,8 +50,6 @@ func TestParseCapabilityError(t *testing.T) {
 			want:    CapabilitySignal{ToolsUnsupported: true},
 		},
 		{
-			// U+212A lowers to a one-byte k, so a phrase index taken from the lowered message lands
-			// two bytes early in the original one. A host controls this text.
 			name:    "a_rune_that_shrinks_when_lowercased_does_not_shift_the_digits",
 			message: "Kontext: maximum context length is 131072 tokens",
 			want:    CapabilitySignal{ContextLimit: 131072},

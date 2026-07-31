@@ -12,6 +12,8 @@ var (
 	testPolicy   = EscalationPolicyFromConfig(config.Defaults().Engine)
 	streaming    = EscalationRequest{InputTokens: 1_000, Stream: true}
 	nonStreaming = EscalationRequest{InputTokens: 1_000, Stream: false}
+
+	nonStreamingWithReducedTokens = EscalationRequest{InputTokens: 1_000, Stream: false, ReducedTokensStillOffered: true}
 )
 
 func dispatched(offset time.Duration) EscalationAttempt {
@@ -20,18 +22,22 @@ func dispatched(offset time.Duration) EscalationAttempt {
 
 func TestEscalationPolicyFromConfigConvertsEveryTunable(t *testing.T) {
 	policy := EscalationPolicyFromConfig(config.Engine{
-		ReceiptTimeoutMS:       1_500,
-		FirstTokenFloorMS:      250,
-		InterChunkStallMS:      7_000,
-		LoserGraceMS:           90_000,
-		MaxSpeculativeAttempts: 4,
+		ReceiptTimeoutMS:           1_500,
+		FirstTokenFloorMS:          250,
+		InterChunkStallMS:          7_000,
+		LoserGraceMS:               90_000,
+		NonStreamResponseFloorMS:   11_000,
+		PerInputTokenResponseLagMS: 13,
+		MaxSpeculativeAttempts:     4,
 	})
 	want := EscalationPolicy{
-		ReceiptTimeout:         1_500 * time.Millisecond,
-		FirstTokenFloor:        250 * time.Millisecond,
-		InterChunkStall:        7 * time.Second,
-		LoserGrace:             90 * time.Second,
-		MaxSpeculativeAttempts: 4,
+		ReceiptTimeout:           1_500 * time.Millisecond,
+		FirstTokenFloor:          250 * time.Millisecond,
+		InterChunkStall:          7 * time.Second,
+		LoserGrace:               90 * time.Second,
+		NonStreamResponseFloor:   11 * time.Second,
+		PerInputTokenResponseLag: 13 * time.Millisecond,
+		MaxSpeculativeAttempts:   4,
 	}
 	if policy != want {
 		t.Fatalf("EscalationPolicyFromConfig = %+v, want %+v", policy, want)
@@ -183,9 +189,29 @@ func TestLadderRuleInIsolation(t *testing.T) {
 			wantDeadline: raceStart.Add(5 * time.Second),
 		},
 		{
+			name:         "rule 7 is not shadowed: a non-streaming attempt still owes its receipt first",
+			attempt:      dispatched(0),
+			request:      nonStreamingWithReducedTokens,
+			wantStage:    StageReceiptTimeout,
+			wantDeadline: raceStart.Add(5 * time.Second),
+		},
+		{
 			name:      "rule 8: a receipted non-streaming attempt has no first-token stage",
 			attempt:   receiptedNoToken,
 			request:   nonStreaming,
+			wantStage: StageNone,
+		},
+		{
+			name:         "rule 8: a spent fallback is what leaves the non-streaming attempt alone",
+			attempt:      receiptedNoToken,
+			request:      nonStreamingWithReducedTokens,
+			wantStage:    StageReducedMaxTokens,
+			wantDeadline: raceStart.Add(20 * time.Second),
+		},
+		{
+			name:      "rule 8: an answer that has started arriving is owed no shorter retry",
+			attempt:   EscalationAttempt{SendTime: raceStart, ReceiptTime: raceStart.Add(time.Second), FirstContent: raceStart.Add(2 * time.Second)},
+			request:   nonStreamingWithReducedTokens,
 			wantStage: StageNone,
 		},
 		{
@@ -262,6 +288,27 @@ func TestFirstTokenTimeoutHoldsTheFloorAndGrowsWithInput(t *testing.T) {
 		t.Run(testCase.name, func(t *testing.T) {
 			if got := testCase.policy.firstTokenTimeout(testCase.inputTokens); got != testCase.want {
 				t.Fatalf("firstTokenTimeout(%d) = %v, want %v", testCase.inputTokens, got, testCase.want)
+			}
+		})
+	}
+}
+
+func TestNonStreamResponseTimeoutHoldsTheFloorAndGrowsWithInput(t *testing.T) {
+	testCases := []struct {
+		name        string
+		policy      EscalationPolicy
+		inputTokens uint64
+		want        time.Duration
+	}{
+		{"a short prompt sits on the floor", testPolicy, 100, 20 * time.Second},
+		{"exactly on the floor", testPolicy, 1_000, 20 * time.Second},
+		{"a large prompt grows past the floor", testPolicy, 30_000, 600 * time.Second},
+		{"a zero lag leaves the floor alone", EscalationPolicy{NonStreamResponseFloor: 7 * time.Second}, 1_000_000, 7 * time.Second},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			if got := testCase.policy.nonStreamResponseTimeout(testCase.inputTokens); got != testCase.want {
+				t.Fatalf("nonStreamResponseTimeout(%d) = %v, want %v", testCase.inputTokens, got, testCase.want)
 			}
 		})
 	}
@@ -397,6 +444,7 @@ func TestStageReasonLabelsEveryTrigger(t *testing.T) {
 		{StageAttemptFailed, "attempt_failed"},
 		{StageReceiptTimeout, "receipt_timeout"},
 		{StageFirstToken, "first_token_timeout"},
+		{StageReducedMaxTokens, "response_timeout_reduced_max_tokens"},
 		{StageNone, ""},
 	}
 	for _, testCase := range testCases {

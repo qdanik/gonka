@@ -5,6 +5,10 @@ import "errors"
 // ErrNoAvailableHost reports that a request's exclude set already covers every available participant.
 var ErrNoAvailableHost = errors.New("no available host")
 
+// ErrToolsUnsupported reports the one exhaustion waiting cannot fix: every host has already said it
+// does not implement tools, so a retry buys the same refusal at the same price.
+var ErrToolsUnsupported = errors.New("no host supports tool calling")
+
 // ErrNoEscrowCapacity reports that every candidate escrow is at zero spare weight; it deliberately
 // does not name a host.
 var ErrNoEscrowCapacity = errors.New("no escrow capacity")

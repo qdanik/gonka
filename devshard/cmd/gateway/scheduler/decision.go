@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-// Decision is match's total outcome for one nonce: exactly one of serve, burn, or hold. The
+// Decision is match's total outcome for one nonce: exactly one of serve, burn, hold, or decline. The
 // exhaustiveness of this interface is the nonce-liveness invariant made compiler-checked.
 type Decision interface{ isDecision() }
 
@@ -17,9 +17,14 @@ type burn struct{ kind GhostKind }
 // compatible waiter a chance before the nonce is burned.
 type hold struct{ until time.Time }
 
-func (serve) isDecision() {}
-func (burn) isDecision()  {}
-func (hold) isDecision()  {}
+// decline gives the nonce back uncommitted: with no live waiter left, a burn would spend a
+// chain-costed nonce on nobody, under a reason that never happened.
+type decline struct{}
+
+func (serve) isDecision()   {}
+func (burn) isDecision()    {}
+func (hold) isDecision()    {}
+func (decline) isDecision() {}
 
 // waiter is one request queued on an escrow's dispatcher, waiting for a compatible nonce. abandoned is how
 // a cancelled caller leaves the queue: the dispatcher owns the queue itself, so a departure must never be a

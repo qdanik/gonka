@@ -150,16 +150,7 @@ func entrySize(entry cachedResponse) int64 {
 }
 
 func serveCached(w http.ResponseWriter, requestID string, entry cachedResponse) {
-	header := w.Header()
-	if requestID != "" {
-		header.Set("X-Request-Id", requestID)
-	}
-	header.Set("X-Devshard-ID", entry.escrowID)
-	header.Set("Content-Type", cmp.Or(entry.contentType, "application/json"))
-	if entry.stream {
-		header.Set("Cache-Control", "no-cache")
-		header.Set("Connection", "keep-alive")
-	}
+	writeChatHeaders(w.Header(), requestID, entry.escrowID, entry.contentType, entry.stream)
 	w.WriteHeader(entry.status)
 
 	controller := http.NewResponseController(w)

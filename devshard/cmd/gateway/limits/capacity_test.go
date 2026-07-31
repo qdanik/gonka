@@ -261,8 +261,6 @@ func TestCapacityEscrowWeightOnUnobservedChainWeights(t *testing.T) {
 			want:     0.5,
 		},
 		{
-			// A stale poll republishes the weights it last saw, so the counts stay non-zero and the
-			// escrow is judged on real data rather than on the fallback.
 			name: "a stale snapshot keeps the weights it observed",
 			snapshot: chain.PhaseSnapshot{
 				CurrentWeights: map[string]float64{"hostA": 100},
@@ -273,8 +271,6 @@ func TestCapacityEscrowWeightOnUnobservedChainWeights(t *testing.T) {
 			want:   50,
 		},
 		{
-			// Every reported host weighing zero is an answer, not a missing one: capacity really is
-			// zero and the escrow must score unusable.
 			name: "weights observed as zero stay zero",
 			snapshot: chain.PhaseSnapshot{
 				CurrentWeights: map[string]float64{"hostA": 0, "hostB": 0},

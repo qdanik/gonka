@@ -31,8 +31,8 @@ func (s *Scheduler) pickEscrow(profile RequestProfile, snapshot chain.PhaseSnaps
 		if atNonceCap(candidate, snapshot.MaxNonce) {
 			// Routing only declines it; replacing it belongs to the rotation lifecycle, which
 			// otherwise never learns and lets the escrow drain silently into ErrNoEscrowCapacity.
-			if s.onNonceExhausted != nil {
-				s.onNonceExhausted(candidate.ID)
+			if s.onEscrowExhausted != nil {
+				s.onEscrowExhausted(candidate.ID)
 			}
 			continue
 		}

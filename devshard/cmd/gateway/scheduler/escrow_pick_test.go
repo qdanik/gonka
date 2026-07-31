@@ -308,8 +308,6 @@ func TestPickEscrowNonceCap(t *testing.T) {
 			want: "escrow-2",
 		},
 		{
-			// A cap above math.MaxUint32 must clamp: wrapping to 0 makes MaxActiveNonce return
-			// ^uint64(0) and silently disables the gate.
 			name:     "an oversized cap clamps instead of wrapping",
 			maxNonce: uint64(math.MaxUint32) + 1,
 			candidates: []candidate{
@@ -428,7 +426,7 @@ func TestPickEscrowReportsANonceExhaustedCandidate(t *testing.T) {
 		candidate{id: "escrow-fresh", weight: 100, latestNonce: 1},
 	)
 	var reported []string
-	scheduler.onNonceExhausted = func(escrowID string) { reported = append(reported, escrowID) }
+	scheduler.onEscrowExhausted = func(escrowID string) { reported = append(reported, escrowID) }
 
 	picked, err := scheduler.pickEscrow(RequestProfile{Model: modelA}, chain.PhaseSnapshot{})
 	if err != nil {

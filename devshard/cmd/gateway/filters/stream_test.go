@@ -40,6 +40,29 @@ func assertNoInternalFields(t *testing.T, out []byte) {
 	}
 }
 
+// The streaming rewriter skips any event a cheap byte pre-check calls uninteresting, so a stripped
+// field the pre-check cannot see is forwarded verbatim. Every field must be reachable on its own,
+// because nothing guarantees a host emits it next to a sibling that happens to be recognised.
+func TestStreamRewriter_StripsEveryFieldEvenWhenItArrivesAlone(t *testing.T) {
+	for _, field := range clientStrippedFields {
+		t.Run(field, func(t *testing.T) {
+			event := []byte(`data: {"choices":[{"delta":{"content":"ok","` + field + `":[1,2]}}]}` + "\n\n")
+
+			out, err := NewStreamRewriter().Write(event)
+			if err != nil {
+				t.Fatalf("Write() = %v", err)
+			}
+
+			if bytes.Contains(out, []byte(`"`+field+`"`)) {
+				t.Fatalf("%q leaked to the client: %s", field, out)
+			}
+			if !bytes.Contains(out, []byte(`"content":"ok"`)) {
+				t.Fatalf("sibling content field was lost: %s", out)
+			}
+		})
+	}
+}
+
 func TestStreamRewriter_SplitFrameIsRewritten(t *testing.T) {
 	stream := readSSEFixture(t, "logprobs_stream.sse")
 	target := splitCompleteEvents(t, stream)[1]
