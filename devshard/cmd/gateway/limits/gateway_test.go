@@ -83,6 +83,46 @@ func TestAcquireForModel_BlocksThenAdmitsWhenSlotFreesWithinWait(t *testing.T) {
 	}
 }
 
+func TestSnapshot_CountsAWaiterAgainstItsModelsQueue(t *testing.T) {
+	t.Parallel()
+	limiter := NewGatewayLimiter(GatewayConfig{MaxConcurrent: 1, MaxInputTokens: 100, AcquireWait: time.Second})
+
+	if err := limiter.AcquireForModel(context.Background(), "modelA", 10, fullScale()); err != nil {
+		t.Fatalf("initial AcquireForModel: %v", err)
+	}
+	queued := make(chan error, 1)
+	go func() { queued <- limiter.AcquireForModel(context.Background(), "modelA", 10, fullScale()) }()
+
+	waitFor(t, func() bool { return limiter.Snapshot().Total.QueueDepth == 1 })
+	snapshot := limiter.Snapshot()
+	if got := snapshot.ByModel["modelA"]; got.Requests != 1 || got.InputTokens != 10 || got.QueueDepth != 1 {
+		t.Fatalf("ByModel[modelA] = %+v, want 1 request, 10 tokens, 1 queued", got)
+	}
+	if snapshot.EffectiveMaxConcurrentRequests != 1 || snapshot.EffectiveMaxInputTokensInFlight != 100 {
+		t.Fatalf("effective caps = %d/%d, want 1/100", snapshot.EffectiveMaxConcurrentRequests, snapshot.EffectiveMaxInputTokensInFlight)
+	}
+
+	limiter.ReleaseForModel("modelA", 10)
+	if err := <-queued; err != nil {
+		t.Fatalf("queued AcquireForModel = %v, want nil", err)
+	}
+	if got := limiter.Snapshot().Total.QueueDepth; got != 0 {
+		t.Fatalf("queue depth after promotion = %d, want 0", got)
+	}
+	limiter.ReleaseForModel("modelA", 10)
+}
+
+func waitFor(t *testing.T, holds func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for !holds() {
+		if time.Now().After(deadline) {
+			t.Fatal("condition never held")
+		}
+		runtime.Gosched()
+	}
+}
+
 func TestAcquireForModel_TimesOutWhenNoSlotFrees(t *testing.T) {
 	t.Parallel()
 	wait := 60 * time.Millisecond
@@ -394,4 +434,35 @@ func TestAcquireForModelHandsFreedSlotToTheEarlierWaiter(t *testing.T) {
 		t.Fatalf("later waiter after a second release = %v, want admission", err)
 	}
 	limiter.ReleaseForModel("model-a", 1)
+}
+
+func TestReconfigureAppliesToTheNextAcquireAndReleasesTheQueue(t *testing.T) {
+	limiter := NewGatewayLimiter(GatewayConfig{MaxConcurrent: 1, AcquireWait: 10 * time.Second})
+	if err := limiter.AcquireForModel(context.Background(), "modelX", 1, fullScale()); err != nil {
+		t.Fatalf("first AcquireForModel(): %v", err)
+	}
+
+	queued := make(chan error, 1)
+	go func() { queued <- limiter.AcquireForModel(context.Background(), "modelX", 1, fullScale()) }()
+	waitFor(t, func() bool { return limiter.Snapshot().Total.QueueDepth == 1 })
+
+	limiter.Reconfigure(GatewayConfig{MaxConcurrent: 2, AcquireWait: 10 * time.Second})
+
+	select {
+	case err := <-queued:
+		if err != nil {
+			t.Fatalf("the queued request after a raised cap = %v, want admitted", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("a raised cap never reached the queue: the waiter is still blocked")
+	}
+	if got := limiter.Snapshot().EffectiveMaxConcurrentRequests; got != 2 {
+		t.Fatalf("EffectiveMaxConcurrentRequests = %d, want 2", got)
+	}
+
+	limiter.Reconfigure(GatewayConfig{MaxConcurrent: 1, AcquireWait: 0})
+	var rateLimited *RateLimitError
+	if err := limiter.AcquireForModel(context.Background(), "modelX", 1, fullScale()); !errors.As(err, &rateLimited) {
+		t.Fatalf("AcquireForModel() after a lowered cap = %v, want a rate-limit error", err)
+	}
 }

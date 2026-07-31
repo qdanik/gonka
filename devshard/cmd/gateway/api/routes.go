@@ -1,0 +1,495 @@
+package api
+
+import (
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"slices"
+
+	"devshard/cmd/gateway/chain"
+	"devshard/cmd/gateway/config"
+	"devshard/cmd/gateway/engine"
+	"devshard/cmd/gateway/filters"
+	"devshard/cmd/gateway/scheduler"
+	"devshard/types"
+	"devshard/user"
+)
+
+// otherRouteLabel is the single label every unmatched path folds into. A raw path here would let
+// unauthenticated traffic mint one Prometheus series per probe.
+const otherRouteLabel = "other"
+
+// route is one registered pattern. An empty label means the route is not instrumented, which is how
+// /metrics stays out of its own counters; alwaysOn exempts a route from the operator kill switch.
+type route struct {
+	pattern  string
+	label    string
+	admin    bool
+	alwaysOn bool
+	handler  http.HandlerFunc
+}
+
+func (s *Server) routes() []route {
+	return []route{
+		{pattern: "/v1/models", label: "/v1/models", handler: s.handleModels},
+		{pattern: "/v1/chat/completions", label: "/v1/chat/completions", handler: s.handleChat},
+		{pattern: "/v1/status", label: "/v1/status", handler: s.handleStatus},
+		{pattern: "/metrics", alwaysOn: true, handler: s.handleMetrics},
+
+		{pattern: "/devshard/{id}/v1/models", label: "/devshard/{id}/v1/models", handler: s.handleDevshardModels},
+		{pattern: "/devshard/{id}/v1/status", label: "/devshard/{id}/v1/status", handler: s.handleDevshardStatus},
+
+		{pattern: "/devshard/{id}/v1/finalize", label: "/devshard/{id}/v1/finalize", admin: true, alwaysOn: true, handler: s.handleDevshardFinalize},
+
+		// The row names the escrow and the participant, and records no caller to authorize against.
+		{pattern: "/v1/requests/{id}", label: "/v1/requests/{id}", admin: true, alwaysOn: true, handler: s.handleRequestAccounting},
+
+		{pattern: "/v1/admin/state", label: "/v1/admin/state", admin: true, alwaysOn: true, handler: s.handleAdminState},
+		{pattern: "/v1/admin/settings", label: "/v1/admin/settings", admin: true, alwaysOn: true, handler: s.handleAdminSettings},
+		{pattern: "/v1/admin/devshards", label: "/v1/admin/devshards", admin: true, alwaysOn: true, handler: s.handleAdminDevshards},
+		// The templated label is deliberate: the established series covers this path under the same
+		// name, and a label of its own would split the panel that reads it.
+		{pattern: "/v1/admin/devshards/import", label: "/v1/admin/devshards/{id}", admin: true, alwaysOn: true, handler: s.handleAdminDevshardImport},
+		{pattern: "/v1/admin/devshards/{id}", label: "/v1/admin/devshards/{id}", admin: true, alwaysOn: true, handler: s.handleAdminDevshardDelete},
+		{pattern: "/v1/admin/devshards/{id}/activate", label: "/v1/admin/devshards/{id}/activate", admin: true, alwaysOn: true, handler: s.handleAdminDevshardActivate},
+		{pattern: "/v1/admin/devshards/{id}/deactivate", label: "/v1/admin/devshards/{id}/deactivate", admin: true, alwaysOn: true, handler: s.handleAdminDevshardDeactivate},
+		{pattern: "/v1/admin/devshards/{id}/settle", label: "/v1/admin/devshards/{id}/settle", admin: true, alwaysOn: true, handler: s.handleAdminDevshardSettle},
+		{pattern: "/v1/admin/devshards/{id}/participants", label: "/v1/admin/devshards/{id}/participants", admin: true, alwaysOn: true, handler: s.handleAdminDevshardParticipants},
+		{pattern: "/v1/admin/escrows", label: "/v1/admin/escrows", admin: true, alwaysOn: true, handler: s.handleAdminEscrows},
+		{pattern: "/v1/admin/suspicious-hosts", label: "/v1/admin/suspicious-hosts", admin: true, alwaysOn: true, handler: s.handleAdminSuspiciousHosts},
+		{pattern: "/v1/admin/participants/unquarantine", label: "/v1/admin/participants/unquarantine", admin: true, alwaysOn: true, handler: s.handleAdminUnquarantine},
+		{pattern: "/v1/debug/rotation", label: "/v1/debug/rotation", admin: true, alwaysOn: true, handler: s.handleDebugRotation},
+		{pattern: "/v1/debug/memstats", label: "/v1/debug/memstats", admin: true, alwaysOn: true, handler: s.handleDebugMemstats},
+
+		{pattern: "/", label: otherRouteLabel, alwaysOn: true, handler: s.handleUnmatched},
+	}
+}
+
+func (s *Server) handleUnmatched(w http.ResponseWriter, r *http.Request) {
+	writeError(w, http.StatusNotFound, "not found")
+}
+
+func (s *Server) buildHandler() http.Handler {
+	mux := http.NewServeMux()
+	for _, registered := range s.routes() {
+		handler := registered.handler
+		if registered.admin {
+			handler = s.requireAdmin(handler)
+		}
+		if !registered.alwaysOn {
+			handler = s.disabled(handler)
+		}
+		var wrapped http.Handler = handler
+		if registered.label != "" {
+			wrapped = s.telemetry.InstrumentRoute(registered.label, wrapped)
+		}
+		mux.Handle(registered.pattern, wrapped)
+	}
+	return mux
+}
+
+func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
+	if !allowMethods(w, r, http.MethodGet, http.MethodHead) {
+		return
+	}
+	s.telemetry.Handler().ServeHTTP(w, r)
+}
+
+type modelListResponse struct {
+	Object string            `json:"object"`
+	Data   []modelDescriptor `json:"data"`
+}
+
+type modelDescriptor struct {
+	ID                  string            `json:"id"`
+	Object              string            `json:"object"`
+	Created             int64             `json:"created"`
+	OwnedBy             string            `json:"owned_by"`
+	Name                string            `json:"name"`
+	ContextLength       uint64            `json:"context_length,omitempty"`
+	MaxCompletionTokens uint64            `json:"max_completion_tokens,omitempty"`
+	Architecture        modelArchitecture `json:"architecture"`
+	Pricing             modelPricing      `json:"pricing"`
+	TopProvider         modelTopProvider  `json:"top_provider"`
+}
+
+type modelArchitecture struct {
+	Modality         string   `json:"modality"`
+	InputModalities  []string `json:"input_modalities"`
+	OutputModalities []string `json:"output_modalities"`
+	Tokenizer        string   `json:"tokenizer,omitempty"`
+	InstructType     string   `json:"instruct_type,omitempty"`
+}
+
+type modelPricing struct {
+	Prompt     string `json:"prompt"`
+	Completion string `json:"completion"`
+	Request    string `json:"request"`
+}
+
+type modelTopProvider struct {
+	ContextLength       uint64 `json:"context_length,omitempty"`
+	MaxCompletionTokens uint64 `json:"max_completion_tokens,omitempty"`
+	IsModerated         bool   `json:"is_moderated"`
+}
+
+func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
+	if !allowMethods(w, r, http.MethodGet, http.MethodHead) {
+		return
+	}
+	writeJSON(w, http.StatusOK, s.modelList(s.escrows.Models()))
+}
+
+func (s *Server) handleDevshardModels(w http.ResponseWriter, r *http.Request) {
+	if !allowMethods(w, r, http.MethodGet, http.MethodHead) {
+		return
+	}
+	escrow, found := s.routableEscrow(r.PathValue("id"))
+	if !found {
+		writeErrorFor(w, fmt.Errorf("%w: %s", ErrUnknownDevshard, r.PathValue("id")))
+		return
+	}
+	writeJSON(w, http.StatusOK, s.modelList([]string{escrow.Model}))
+}
+
+func (s *Server) modelList(models []string) modelListResponse {
+	limits := s.config.Load().Limits
+	created := s.now().Unix()
+	data := make([]modelDescriptor, 0, len(models))
+	for _, model := range models {
+		tokenCap := uint64(limits.MaxTokensCap)
+		if perModel, ok := limits.ModelLimits[model]; ok && perModel.MaxTokensCap > 0 {
+			tokenCap = uint64(perModel.MaxTokensCap)
+		}
+		data = append(data, modelDescriptor{
+			ID:                  model,
+			Object:              "model",
+			Created:             created,
+			OwnedBy:             "gonka",
+			Name:                model,
+			ContextLength:       tokenCap,
+			MaxCompletionTokens: tokenCap,
+			Architecture: modelArchitecture{
+				Modality:         "text->text",
+				InputModalities:  []string{"text"},
+				OutputModalities: []string{"text"},
+				Tokenizer:        "Other",
+			},
+			Pricing:     modelPricing{Prompt: "0", Completion: "0", Request: "0"},
+			TopProvider: modelTopProvider{ContextLength: tokenCap, MaxCompletionTokens: tokenCap},
+		})
+	}
+	return modelListResponse{Object: "list", Data: data}
+}
+
+type statusResponse struct {
+	Mode            string            `json:"mode"`
+	Version         string            `json:"version"`
+	RequestsBlocked bool              `json:"requests_blocked"`
+	BlockReason     chain.BlockReason `json:"block_reason,omitempty"`
+	Models          []string          `json:"models"`
+	Devshards       []devshardStatus  `json:"devshards"`
+	Limiter         limiterStatus     `json:"limiter"`
+	Capacity        []capacityStatus  `json:"capacity"`
+}
+
+type devshardStatus struct {
+	EscrowID    string `json:"escrow_id"`
+	Model       string `json:"model"`
+	ActiveUsers int    `json:"active_users"`
+	Nonce       uint64 `json:"nonce"`
+	Phase       string `json:"phase"`
+	Balance     uint64 `json:"balance,omitempty"`
+}
+
+type limiterStatus struct {
+	MaxConcurrentRequests  int64 `json:"max_concurrent_requests"`
+	MaxInputTokensInFlight int64 `json:"max_input_tokens_in_flight"`
+	DefaultMaxTokens       int64 `json:"default_max_tokens"`
+	MaxTokensCap           int64 `json:"max_tokens_cap"`
+}
+
+// capacityStatus carries each weight under both spellings: the older names are what existing
+// dashboards select on, and dropping them empties those panels.
+type capacityStatus struct {
+	Model                       string  `json:"model"`
+	CurrentWeight               float64 `json:"current_weight"`
+	TotalWeight                 float64 `json:"total_weight"`
+	BaselineWeight              float64 `json:"baseline_weight"`
+	FullWeight                  float64 `json:"full_weight"`
+	ScaleFactor                 float64 `json:"scale_factor"`
+	LimitShare                  float64 `json:"limit_share"`
+	MaxConcurrentPer10000Weight float64 `json:"max_concurrent_per_10000_weight"`
+}
+
+func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
+	if !allowMethods(w, r, http.MethodGet, http.MethodHead) {
+		return
+	}
+	writeJSON(w, http.StatusOK, s.status(s.routableEscrows()))
+}
+
+func (s *Server) handleDevshardStatus(w http.ResponseWriter, r *http.Request) {
+	if !allowMethods(w, r, http.MethodGet, http.MethodHead) {
+		return
+	}
+	escrow, found := s.routableEscrow(r.PathValue("id"))
+	if !found {
+		writeErrorFor(w, fmt.Errorf("%w: %s", ErrUnknownDevshard, r.PathValue("id")))
+		return
+	}
+	writeJSON(w, http.StatusOK, s.status([]scheduler.Escrow{escrow}))
+}
+
+func (s *Server) status(escrows []scheduler.Escrow) statusResponse {
+	configuration := s.config.Load()
+	snapshot := s.snapshots.Snapshot()
+	models := make([]string, 0, len(escrows))
+	devshards := make([]devshardStatus, 0, len(escrows))
+	for _, escrow := range escrows {
+		if !slices.Contains(models, escrow.Model) {
+			models = append(models, escrow.Model)
+		}
+		devshards = append(devshards, s.devshardStatus(escrow))
+	}
+	capacity := make([]capacityStatus, 0, len(models))
+	for _, model := range models {
+		modelCapacity := s.capacity.ForModel(model)
+		capacity = append(capacity, capacityStatus{
+			Model:                       model,
+			CurrentWeight:               modelCapacity.CurrentWeight,
+			TotalWeight:                 modelCapacity.CurrentWeight,
+			BaselineWeight:              modelCapacity.BaselineWeight,
+			FullWeight:                  modelCapacity.BaselineWeight,
+			ScaleFactor:                 modelCapacity.ScaleFactor,
+			LimitShare:                  modelCapacity.ScaleFactor,
+			MaxConcurrentPer10000Weight: modelCapacity.MaxConcurrentPer10000Weight,
+		})
+	}
+	return statusResponse{
+		Mode:            configuration.Modes.PoCMode,
+		Version:         s.version,
+		RequestsBlocked: admission(snapshot, configuration.Modes) != nil,
+		BlockReason:     snapshot.BlockReason,
+		Models:          models,
+		Devshards:       devshards,
+		Limiter: limiterStatus{
+			MaxConcurrentRequests:  configuration.Limits.Concurrency.MaxRequests,
+			MaxInputTokensInFlight: configuration.Limits.MaxInputTokensInFlight,
+			DefaultMaxTokens:       configuration.Limits.DefaultMaxTokens,
+			MaxTokensCap:           configuration.Limits.MaxTokensCap,
+		},
+		Capacity: capacity,
+	}
+}
+
+func (s *Server) devshardStatus(escrow scheduler.Escrow) devshardStatus {
+	status := devshardStatus{EscrowID: escrow.ID, Model: escrow.Model, ActiveUsers: escrow.ActiveUsers}
+	session, held := s.escrows.RoutableSession(escrow.ID)
+	if !held {
+		return status
+	}
+	state := session.SnapshotState()
+	status.Nonce = session.Nonce()
+	status.Phase = phaseName(session.Phase())
+	status.Balance = state.Balance
+	return status
+}
+
+func phaseName(phase types.SessionPhase) string {
+	switch phase {
+	case types.PhaseActive:
+		return "active"
+	case types.PhaseFinalizing:
+		return "finalizing"
+	case types.PhaseSettlement:
+		return "settlement"
+	}
+	return "unknown"
+}
+
+func (s *Server) routableEscrows() []scheduler.Escrow {
+	models := s.escrows.Models()
+	escrows := make([]scheduler.Escrow, 0, len(models))
+	for _, model := range models {
+		escrows = append(escrows, s.escrows.Candidates(model)...)
+	}
+	return escrows
+}
+
+func (s *Server) routableEscrow(escrowID string) (scheduler.Escrow, bool) {
+	for _, escrow := range s.routableEscrows() {
+		if escrow.ID == escrowID {
+			return escrow, true
+		}
+	}
+	return scheduler.Escrow{}, false
+}
+
+func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
+	if !allowMethods(w, r, http.MethodPost) {
+		return
+	}
+	configuration := s.config.Load()
+	identity := s.resolveCredentials(r)
+	requestID := s.requestIDs()
+
+	body, err := readBody(w, r, chatIngestLimit)
+	if err != nil {
+		writeErrorFor(w, err)
+		return
+	}
+	normalized, err := filters.NormalizeRequest(body, filters.Options{
+		Admin:            identity.admin,
+		DefaultMaxTokens: uint64(configuration.Limits.DefaultMaxTokens),
+		MaxTokensCap:     uint64(configuration.Limits.MaxTokensCap),
+	})
+	if err != nil {
+		s.capture.filterRejected(r, requestID, body, err)
+		writeErrorFor(w, err)
+		return
+	}
+	if err := authorizeModel(configuration.Limits, normalized.Model, identity); err != nil {
+		writeErrorFor(w, err)
+		return
+	}
+	if err := s.routableModel(normalized.Model); err != nil {
+		writeErrorFor(w, err)
+		return
+	}
+	if err := admission(s.snapshots.Snapshot(), configuration.Modes); err != nil {
+		writeErrorFor(w, err)
+		return
+	}
+
+	key := cacheKeyFor(r, normalized.Model, normalized.Body)
+	if entry, hit := s.cache.get(key, s.now()); hit {
+		serveCached(w, requestID, entry)
+		return
+	}
+
+	inputTokens := estimatePromptTokens(normalized.Body)
+	if err := s.limiter.AcquireForModel(r.Context(), normalized.Model, int64(inputTokens), s.capacity.ForModel(normalized.Model)); err != nil {
+		writeErrorFor(w, err)
+		return
+	}
+	defer s.limiter.ReleaseForModel(normalized.Model, int64(inputTokens))
+
+	if s.cache == nil {
+		s.race(w, r, requestID, normalized, inputTokens)
+		return
+	}
+	recorder := &cacheRecorder{ResponseWriter: w}
+	outcome := s.race(recorder, r, requestID, normalized, inputTokens)
+	if entry, storable := recorder.entry(outcome.EscrowID, normalized.Stream, r.Context().Err()); storable {
+		s.cache.put(key, entry, s.now())
+	}
+}
+
+// routableModel rejects a model the gateway cannot serve before the request can take a limiter slot
+// or an input-token budget. An empty registry means the gateway is not ready, not that every model
+// routes, so it fails closed.
+func (s *Server) routableModel(model string) error {
+	if model == "" {
+		return filters.Reject("model is required")
+	}
+	served := s.escrows.Models()
+	if len(served) == 0 {
+		return &ModelUnavailableError{Model: model}
+	}
+	if !s.escrows.Serves(model) {
+		return &UnsupportedModelError{Model: model, Supported: served}
+	}
+	return nil
+}
+
+func authorizeModel(configured config.Limits, model string, identity credentials) error {
+	if identity.admin {
+		return nil
+	}
+	switch configured.AccessFor(model) {
+	case config.ModelAccessOpen:
+		return nil
+	case config.ModelAccessAPIKey:
+		if identity.apiKey {
+			return nil
+		}
+		return &AccessDeniedError{Model: model, Message: fmt.Sprintf("model %q requires an API key", model)}
+	default:
+		return &AccessDeniedError{Model: model, Message: fmt.Sprintf("model %q requires an admin API key", model)}
+	}
+}
+
+func (s *Server) race(w http.ResponseWriter, r *http.Request, requestID string, normalized filters.Result, inputTokens uint64) engine.RaceOutcome {
+	client := newClientStream(w, requestID, normalized.Stream)
+	outcome, err := s.inference.Run(r.Context(), engine.Request{
+		RequestID:     requestID,
+		Model:         normalized.Model,
+		InputTokens:   inputTokens,
+		Stream:        normalized.Stream,
+		RequiresTools: requiresTools(normalized.Body),
+		OnEscrow:      func(escrowID string) { client.Header().Set("X-Devshard-ID", escrowID) },
+		Params: user.InferenceParams{
+			Model:       normalized.Model,
+			Prompt:      normalized.Body,
+			InputLength: uint64(len(normalized.Body)),
+			MaxTokens:   outputTokenBudget(normalized),
+			StartedAt:   s.now().Unix(),
+			Stream:      normalized.Stream,
+		},
+	}, client)
+	if err != nil {
+		s.capture.attemptsFailed(r, requestID, normalized, err)
+		if client.Started() {
+			client.Flush()
+			return outcome
+		}
+		w.Header().Set("X-Request-Id", requestID)
+		writeErrorFor(w, err)
+		return outcome
+	}
+	// A stream has already sent its headers by now, which is why OnEscrow sets this too; this second
+	// write is the authoritative one for a reply still holding them.
+	if outcome.EscrowID != "" {
+		client.Header().Set("X-Devshard-ID", outcome.EscrowID)
+	}
+	_ = client.Close()
+	return outcome
+}
+
+// estimatePromptTokens is the limiter's and the perf buckets' input size; it is bytes/4 with a floor
+// of one, not a tokenizer call.
+func estimatePromptTokens(body []byte) uint64 {
+	if estimated := (len(body) + 3) / 4; estimated > 0 {
+		return uint64(estimated)
+	}
+	return 1
+}
+
+func outputTokenBudget(normalized filters.Result) uint64 {
+	if normalized.MaxTokens > 0 {
+		return normalized.MaxTokens
+	}
+	return normalized.MaxCompletionTokens
+}
+
+func requiresTools(body []byte) bool {
+	var request struct {
+		Tools      []json.RawMessage `json:"tools"`
+		ToolChoice *json.RawMessage  `json:"tool_choice"`
+	}
+	if err := json.Unmarshal(body, &request); err != nil {
+		return false
+	}
+	if len(request.Tools) > 0 {
+		return true
+	}
+	if request.ToolChoice == nil {
+		return false
+	}
+	var choice string
+	if err := json.Unmarshal(*request.ToolChoice, &choice); err == nil {
+		return choice != "none"
+	}
+	return true
+}

@@ -38,11 +38,18 @@ type Manager struct {
 	cancel      context.CancelFunc
 }
 
+// CreateEscrow creates one escrow on demand and registers it, on the same durable-intent path the
+// rotation lifecycle uses, so an operator-created escrow is recovered by reconcile like any other.
+func (m *Manager) CreateEscrow(ctx context.Context, model ModelConfig) (chain.CreateEscrowResult, error) {
+	snapshot := m.snapshots.Snapshot()
+	return m.createEscrow(ctx, model, roleRegular, snapshot.EpochIndex, snapshot.BlockHeight)
+}
+
 // A failed intent-commitment write (in onPrepared) aborts before any chain broadcast: no broadcast without durable intent.
-func (m *Manager) createEscrow(ctx context.Context, model ModelConfig, role string, epoch uint64, blockHeight int64) error {
+func (m *Manager) createEscrow(ctx context.Context, model ModelConfig, role string, epoch uint64, blockHeight int64) (chain.CreateEscrowResult, error) {
 	signer, err := m.signer.SignerFor(model.PrivateKeyEnv)
 	if err != nil {
-		return fmt.Errorf("resolving signer for %s: %w", model.PrivateKeyEnv, err)
+		return chain.CreateEscrowResult{}, fmt.Errorf("resolving signer for %s: %w", model.PrivateKeyEnv, err)
 	}
 
 	c := store.Commitment{
@@ -60,9 +67,9 @@ func (m *Manager) createEscrow(ctx context.Context, model ModelConfig, role stri
 
 	result, err := m.tx.CreateEscrow(ctx, signer, model.Amount, model.ModelID, onPrepared)
 	if err != nil {
-		return fmt.Errorf("creating escrow for %s/%s: %w", model.ModelID, role, err)
+		return chain.CreateEscrowResult{}, fmt.Errorf("creating escrow for %s/%s: %w", model.ModelID, role, err)
 	}
-	return m.persistEscrow(ctx, strconv.FormatUint(result.EscrowID, 10), c)
+	return result, m.persistEscrow(ctx, strconv.FormatUint(result.EscrowID, 10), c)
 }
 
 // UpsertDevshard is an idempotent upsert (duplicate registration is a no-op success); a failed

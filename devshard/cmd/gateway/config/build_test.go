@@ -17,6 +17,9 @@ func TestBuildAppliesPrecedenceDefaultsEnvOverrides(t *testing.T) {
 		Port:             int64Pointer(9000), // env overrides default 8080
 		DefaultMaxTokens: int64Pointer(2000), // env sets 2000...
 		ChainREST:        stringPointer("http://chain.test:1317"),
+
+		CaptureSampleRate: float64Pointer(0.1),
+		CaptureMaxBytes:   int64Pointer(4096),
 	}
 	overrides := Overrides{
 		DefaultMaxTokens:                    int64Pointer(1500), // ...but admin override wins over env
@@ -45,6 +48,12 @@ func TestBuildAppliesPrecedenceDefaultsEnvOverrides(t *testing.T) {
 	}
 	if configuration.Limits.Concurrency.RequestsPer10000Weight != 2.5 {
 		t.Errorf("Limits.Concurrency.RequestsPer10000Weight = %v, want override value 2.5", configuration.Limits.Concurrency.RequestsPer10000Weight)
+	}
+	if configuration.Capture.SampleRate != 0.1 {
+		t.Errorf("Capture.SampleRate = %v, want env value 0.1", configuration.Capture.SampleRate)
+	}
+	if configuration.Capture.MaxBytes != 4096 {
+		t.Errorf("Capture.MaxBytes = %d, want env value 4096", configuration.Capture.MaxBytes)
 	}
 }
 

@@ -100,10 +100,18 @@ type Cache struct {
 	ChatCacheMaxBytes int64
 }
 
+// Accounting bounds the per-request ledger on both axes; neither may be zero.
+type Accounting struct {
+	RetentionHours   int64
+	RetentionMaxRows int64
+}
+
 // Capture groups the debug request-capture settings.
 type Capture struct {
 	Enabled                      bool
-	Dir                          string // empty = <storageDir>/captured-requests
+	Dir                          string  // empty = <storageDir>/captured-requests
+	SampleRate                   float64 // 1 = every matching request, 0 = none
+	MaxBytes                     int64   // ceiling on the bytes the capture directory may hold
 	ShortContentAttempts         bool
 	ShortContentResponses        bool
 	ShortContentMinOutputChunks  int64
@@ -159,18 +167,19 @@ type Scheduler struct {
 
 // Config is the complete immutable gateway configuration snapshot.
 type Config struct {
-	Server    Server
-	Chain     Chain
-	Tx        Tx
-	Limits    Limits
-	Modes     Modes
-	Rotation  Rotation
-	Cache     Cache
-	Capture   Capture
-	Stream    Stream
-	Perf      Perf
-	Engine    Engine
-	Scheduler Scheduler
+	Server     Server
+	Chain      Chain
+	Tx         Tx
+	Limits     Limits
+	Modes      Modes
+	Rotation   Rotation
+	Cache      Cache
+	Accounting Accounting
+	Capture    Capture
+	Stream     Stream
+	Perf       Perf
+	Engine     Engine
+	Scheduler  Scheduler
 }
 
 // PoC mode values accepted in Modes.PoCMode.
@@ -253,7 +262,13 @@ func Defaults() Config {
 		Cache: Cache{
 			ChatCacheMaxBytes: 256 << 20,
 		},
+		Accounting: Accounting{
+			RetentionHours:   168,
+			RetentionMaxRows: 1_000_000,
+		},
 		Capture: Capture{
+			SampleRate:                   1,
+			MaxBytes:                     1 << 30,
 			ShortContentMinOutputChunks:  1_000,
 			ShortContentMaxContentRatio:  0.75,
 			ShortContentResponseMaxBytes: 16 << 20,
@@ -407,6 +422,18 @@ func (c *Config) Validate() error {
 	}
 	if c.Cache.ChatCacheMaxBytes < 0 {
 		complain("chat_cache_max_bytes: %d must be >= 0", c.Cache.ChatCacheMaxBytes)
+	}
+	if c.Accounting.RetentionHours < 1 {
+		complain("accounting_retention_hours: %d must be >= 1", c.Accounting.RetentionHours)
+	}
+	if c.Accounting.RetentionMaxRows < 1 {
+		complain("accounting_retention_max_rows: %d must be >= 1", c.Accounting.RetentionMaxRows)
+	}
+	if c.Capture.SampleRate < 0 || c.Capture.SampleRate > 1 {
+		complain("capture_sample_rate: %v must be in [0, 1]", c.Capture.SampleRate)
+	}
+	if c.Capture.MaxBytes < 1 {
+		complain("capture_max_bytes: %d must be >= 1", c.Capture.MaxBytes)
 	}
 	if c.Capture.ShortContentMinOutputChunks < 0 {
 		complain("capture_short_content_min_output_chunks: %d must be >= 0", c.Capture.ShortContentMinOutputChunks)

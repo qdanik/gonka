@@ -33,15 +33,28 @@ func scaleFactor(currentAvailable, full float64) float64 {
 	}
 }
 
-// escrowWeight = Σ over hosts of currentWeight[h] * membershipShare[h] * (available[h] ? 1 : 0).
-// membershipShare[h] = slots(h,escrow)/totalSlots(h), already normalized by the caller.
-func escrowWeight(currentWeights, membershipShare map[string]float64, available func(host string) bool) float64 {
+// escrowWeight = Σ over hosts of currentWeight[h] * hostShares[h] * (available[h] ? 1 : 0).
+// hostShares[h] = slots(h,escrow)/totalSlots(h), normalized by the caller; raw slot counts here
+// would count a participant once per escrow it serves instead of splitting it.
+func escrowWeight(currentWeights, hostShares map[string]float64, available func(host string) bool) float64 {
 	var sum float64
-	for host, share := range membershipShare {
+	for host, share := range hostShares {
 		if available != nil && !available(host) {
 			continue
 		}
 		sum += currentWeights[host] * share
+	}
+	return sum
+}
+
+// availableShare = Σ over available hosts of hostShares[h]: escrowWeight with every weight taken as one.
+func availableShare(hostShares map[string]float64, available func(host string) bool) float64 {
+	var sum float64
+	for host, share := range hostShares {
+		if available != nil && !available(host) {
+			continue
+		}
+		sum += share
 	}
 	return sum
 }
