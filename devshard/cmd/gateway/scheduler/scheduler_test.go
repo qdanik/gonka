@@ -9,6 +9,7 @@ import (
 
 	"devshard/cmd/gateway/chain"
 	"devshard/cmd/gateway/config"
+	"devshard/cmd/gateway/perf"
 
 	"go.uber.org/goleak"
 )
@@ -102,8 +103,15 @@ type capabilityQuery struct {
 type fakePerf struct {
 	mu       sync.Mutex
 	blocked  map[string]string
+	ejected  map[string]bool
 	queries  []capabilityQuery
 	askedFor map[string]bool
+}
+
+func (f *fakePerf) Ejected(participant, _ string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.ejected[participant]
 }
 
 func (f *fakePerf) CannotServe(participant string, requiresTools bool, contextHint uint64) (string, bool) {
@@ -112,6 +120,12 @@ func (f *fakePerf) CannotServe(participant string, requiresTools bool, contextHi
 	f.queries = append(f.queries, capabilityQuery{participant: participant, requiresTools: requiresTools, contextHint: contextHint})
 	reason, blocked := f.blocked[participant]
 	return reason, blocked
+}
+
+func (f *fakePerf) eject(participant string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.ejected[participant] = true
 }
 
 func (f *fakePerf) block(participant, reason string) {
@@ -133,6 +147,7 @@ type schedulerConfig struct {
 	submitBuffer int
 	hostWindow   int
 	gate         chan struct{}
+	health       hostHealth
 }
 
 // escrowHolds counts the in-flight holds the commit takes, so an assignment dropped without giving one
@@ -208,16 +223,20 @@ func newSchedulerHarness(t *testing.T, cfg schedulerConfig) *schedulerHarness {
 		weights:   weights,
 		sessions:  sessions,
 		limiter:   limiter,
-		perf:      &fakePerf{blocked: map[string]string{}},
+		perf:      &fakePerf{blocked: map[string]string{}, ejected: map[string]bool{}},
 		snapshots: &fakeSnapshots{},
 		observer:  &recordingObserver{},
 		clock:     newTestClock(),
+	}
+	health := cfg.health
+	if health == nil {
+		health = test.perf
 	}
 	test.scheduler = NewScheduler(Deps{
 		Escrows:      escrows,
 		Capacity:     weights,
 		Limiter:      test.limiter,
-		Perf:         test.perf,
+		Perf:         health,
 		Snapshots:    test.snapshots,
 		Config:       config.NewHolder(&settings),
 		Observer:     test.observer,
@@ -477,6 +496,12 @@ func TestPickWiresEachAvailabilityPredicateToItsSource(t *testing.T) {
 			wantReason: ghostCapability.reason(),
 		},
 		{
+			name:       "a participant the outlier detector ejected",
+			arrange:    func(test *schedulerHarness) { test.perf.eject(hostB) },
+			profile:    RequestProfile{Model: modelA},
+			wantReason: ghostEjected.reason(),
+		},
+		{
 			name:       "a participant the request already raced",
 			arrange:    func(*schedulerHarness) {},
 			profile:    RequestProfile{Model: modelA, Exclude: []string{hostB}},
@@ -496,6 +521,64 @@ func TestPickWiresEachAvailabilityPredicateToItsSource(t *testing.T) {
 				t.Fatalf("ghost burns = %v, want exactly one %q", burns, testCase.wantReason)
 			}
 		})
+	}
+}
+
+// failUntilEjected feeds one host enough consecutive failures to trip the detector, and every other host
+// one success, so the model's known membership is what the pool-wide cap is computed over.
+func failUntilEjected(tracker *perf.Tracker, healthy []string, failing ...string) {
+	for _, participant := range healthy {
+		tracker.RecordSample(perf.Sample{ParticipantKey: participant, Model: modelA, Responsive: true})
+	}
+	for range config.Defaults().Perf.ConsecutiveFailThreshold {
+		for _, participant := range failing {
+			tracker.RecordSample(perf.Sample{ParticipantKey: participant, Model: modelA})
+		}
+	}
+}
+
+// The routing gate reads the detector itself, not a predicate a test wrote: samples go into a real
+// tracker and the ejected host is simply never handed the request.
+func TestPickWithholdsAHostTheOutlierDetectorEjected(t *testing.T) {
+	verifyNoLeaks(t)
+	settings := config.Defaults()
+	tracker := perf.NewTracker(config.NewHolder(&settings), time.Now)
+	failUntilEjected(tracker, []string{hostA}, hostB)
+	test := newSchedulerHarness(t, schedulerConfig{health: tracker})
+
+	assignment, err := test.scheduler.Pick(context.Background(), RequestProfile{Model: modelA})
+
+	wantHost(t, assignment, err, escrowA, hostA, 2)
+	if burns := test.observer.burns(); len(burns) != 1 || burns[0] != ghostEjected.reason() {
+		t.Fatalf("ghost burns = %v, want exactly one %q", burns, ghostEjected.reason())
+	}
+	_, _, commits := test.session(t, escrowA).report()
+	for _, commit := range commits {
+		if commit.participant == hostB && !commit.ghost {
+			t.Fatalf("commits = %+v, want no real dispatch to the ejected host", commits)
+		}
+	}
+}
+
+// The cap inside the tracker is what makes the gate safe to honour: when every host fails at once, the
+// gate must still leave the fleet servable rather than turning an outage into a total refusal.
+func TestPickStillServesWhenEveryHostIsFailingAtOnce(t *testing.T) {
+	verifyNoLeaks(t)
+	settings := config.Defaults()
+	tracker := perf.NewTracker(config.NewHolder(&settings), time.Now)
+	failUntilEjected(tracker, nil, hostA, hostB)
+	test := newSchedulerHarness(t, schedulerConfig{health: tracker})
+
+	assignment, err := test.scheduler.Pick(context.Background(), RequestProfile{Model: modelA})
+
+	if err != nil {
+		t.Fatalf("Pick: %v, want a host the cap kept in rotation", err)
+	}
+	if tracker.Ejected(assignment.Host, modelA) {
+		t.Fatalf("assignment host = %q, which the gate reports as withheld from routing", assignment.Host)
+	}
+	if !tracker.Degraded(assignment.Host, modelA) {
+		t.Fatalf("assignment host = %q, want one the detector wanted out but the cap kept", assignment.Host)
 	}
 }
 

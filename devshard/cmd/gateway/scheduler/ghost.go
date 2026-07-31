@@ -6,6 +6,7 @@ type GhostKind int
 const (
 	ghostPoC GhostKind = iota
 	ghostThrottled
+	ghostEjected
 	ghostCapability
 	ghostExclude
 	// ghostAbandoned accounts a nonce that was committed for a request whose caller vanished before
@@ -19,6 +20,8 @@ func (k GhostKind) reason() string {
 		return "poc_unavailable_host"
 	case ghostThrottled:
 		return "participant_throttled_no_send"
+	case ghostEjected:
+		return "participant_ejected_no_send"
 	case ghostCapability:
 		return "participant_capability_no_send"
 	case ghostExclude:

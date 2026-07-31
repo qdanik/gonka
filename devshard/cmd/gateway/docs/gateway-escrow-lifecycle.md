@@ -74,7 +74,7 @@ The grace period is eleven minutes and is not arbitrary: the chain's unordered-t
 Participants are taken out of inference during proof-of-compute, so an escrow whose group is about to be preserved cannot serve. Rotation bridges the gap with short-lived `temp` escrows:
 
 - **Pre-switch window** (the epoch switch is within `rotation_pre_poc_blocks`, default 300): create `temp` escrows up to each model's temp count, then retire every active non-temp escrow for that model. Inside the window this runs even when proof-of-compute is not yet active.
-- **After the window, once the chain is no longer blocking requests**: create `regular` escrows up to each model's target count, then retire the temps of this epoch or earlier.
+- **After the window, once the chain is no longer blocking requests**: create `regular` escrows up to each model's target count, then retire the temps of this epoch or earlier. A model with no active temp from this epoch or earlier is skipped outright — there is nothing to finish (`escrow/rotation.go:93-95`). Rotation therefore never bootstraps a model from nothing: the first escrows come from `GATEWAY_DEVSHARDS_JSON` or the admin API, and rotation takes over at the first epoch switch that finds something to bridge.
 
 Outside the window while requests are blocked, neither runs.
 

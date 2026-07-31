@@ -83,13 +83,38 @@ func TestTriggerEscrowCheckNotFoundDeactivates(t *testing.T) {
 			return chain.EscrowInfo{}, false, nil
 		},
 	}
-	m := &Manager{tx: txClient, store: testStore}
+	m := &Manager{tx: txClient, store: testStore, settlementSource: &fakeSettlementSource{}}
 
 	if err := m.TriggerEscrowCheck(context.Background(), "1"); err != nil {
 		t.Fatalf("TriggerEscrowCheck() = %v, want nil", err)
 	}
 	if got := testStore.devshards["1"]; got.Active {
 		t.Fatal("devshard.Active = true, want false (chain confirmed the escrow does not exist)")
+	}
+}
+
+// INVARIANT 8: the confirmation must stop traffic, not merely record a flag -- a request arriving
+// after it must find no nonce to commit on the escrow.
+func TestTriggerEscrowCheckNotFoundStopsTraffic(t *testing.T) {
+	testStore := newFakeStore()
+	testStore.devshards["1"] = store.DevshardRecord{EscrowID: "1", Model: "model-a", Active: true}
+	routing := &fakeSettlementSource{}
+	txClient := &fakeTxClient{
+		getEscrowFn: func(ctx context.Context, escrowID string) (chain.EscrowInfo, bool, error) {
+			return chain.EscrowInfo{}, false, nil
+		},
+	}
+	m := &Manager{tx: txClient, store: testStore, settlementSource: routing}
+	if !routing.commit() {
+		t.Fatal("precondition: the escrow must accept a nonce commit before the check runs")
+	}
+
+	if err := m.TriggerEscrowCheck(context.Background(), "1"); err != nil {
+		t.Fatalf("TriggerEscrowCheck() = %v, want nil", err)
+	}
+
+	if routing.commit() {
+		t.Fatal("an escrow the chain confirmed absent still accepted a nonce commit")
 	}
 }
 
@@ -104,7 +129,7 @@ func TestTriggerEscrowCheckFoundKeepsActive(t *testing.T) {
 			return chain.EscrowInfo{EscrowID: escrowID, Balance: 500}, true, nil
 		},
 	}
-	m := &Manager{tx: txClient, store: testStore}
+	m := &Manager{tx: txClient, store: testStore, settlementSource: &fakeSettlementSource{}}
 
 	if err := m.TriggerEscrowCheck(context.Background(), "1"); err != nil {
 		t.Fatalf("TriggerEscrowCheck() = %v, want nil", err)
@@ -131,7 +156,7 @@ func TestTriggerEscrowCheckChainErrorKeepsActive(t *testing.T) {
 			return chain.EscrowInfo{}, false, chainErr
 		},
 	}
-	m := &Manager{tx: txClient, store: testStore}
+	m := &Manager{tx: txClient, store: testStore, settlementSource: &fakeSettlementSource{}}
 
 	err := m.TriggerEscrowCheck(context.Background(), "1")
 	if err == nil || !errors.Is(err, chainErr) {
@@ -164,7 +189,7 @@ func TestTriggerEscrowCheckDedupesConcurrentCallers(t *testing.T) {
 			return chain.EscrowInfo{}, false, nil
 		},
 	}
-	m := &Manager{tx: txClient, store: testStore}
+	m := &Manager{tx: txClient, store: testStore, settlementSource: &fakeSettlementSource{}}
 
 	done := make(chan struct{}, callerCount)
 	for i := 0; i < callerCount; i++ {

@@ -31,6 +31,7 @@ func openAvailability() availability {
 	return availability{
 		pocRequired:  func(string) bool { return false },
 		throttled:    func(string) bool { return false },
+		ejected:      func(string) bool { return false },
 		capability:   func(string, RequestProfile) bool { return false },
 		stateBlocked: func(string) bool { return false },
 	}
@@ -344,15 +345,17 @@ func TestMatchIsTotal(t *testing.T) {
 		{name: "past stale window", now: baseTime.Add(staleHold)},
 	}
 
-	for predicates := 0; predicates < 16; predicates++ {
+	for predicates := 0; predicates < 32; predicates++ {
 		pocRequired := predicates&1 != 0
 		throttled := predicates&2 != 0
 		capabilityBlocked := predicates&4 != 0
 		stateBlocked := predicates&8 != 0
+		ejected := predicates&16 != 0
 
 		availability := availability{
 			pocRequired:  always(pocRequired),
 			throttled:    always(throttled),
+			ejected:      always(ejected),
 			stateBlocked: always(stateBlocked),
 			capability: func(_ string, profile RequestProfile) bool {
 				return capabilityBlocked || profile.Model == blockedModel
@@ -363,7 +366,8 @@ func TestMatchIsTotal(t *testing.T) {
 			for _, clock := range clocks {
 				name := queue.name + "/" + clock.name +
 					"/poc=" + boolLabel(pocRequired) + ",throttled=" + boolLabel(throttled) +
-					",capability=" + boolLabel(capabilityBlocked) + ",state=" + boolLabel(stateBlocked)
+					",capability=" + boolLabel(capabilityBlocked) + ",state=" + boolLabel(stateBlocked) +
+					",ejected=" + boolLabel(ejected)
 				t.Run(name, func(t *testing.T) {
 					t.Parallel()
 					decision := match(binding, queue.waiting, availability, clock.now, staleHold)

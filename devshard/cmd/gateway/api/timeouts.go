@@ -32,9 +32,9 @@ type escrowVotes struct {
 
 var _ engine.TimeoutPoster = escrowVotes{}
 
-func (v escrowVotes) SettleTimeout(ctx context.Context, nonce uint64, sentAt time.Time) (string, error) {
+func (v escrowVotes) SettleTimeout(ctx context.Context, nonce uint64, startedAt time.Time) (string, error) {
 	payload := timeoutPayload(v.session.SnapshotState(), nonce, v.prompt)
-	return engine.NewSessionTimeouts(v.session.UserSession(), payload).SettleTimeout(ctx, nonce, sentAt)
+	return engine.NewSessionTimeouts(v.session.UserSession(), payload).SettleTimeout(ctx, nonce, startedAt)
 }
 
 // timeoutPayload rebuilds what the host was asked for. A verifier re-checks the payload field by field

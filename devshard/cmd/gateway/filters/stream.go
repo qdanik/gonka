@@ -18,9 +18,16 @@ var (
 // and a reader that demanded the space would classify every space-less frame as no data at all.
 var sseDataParsePrefix = []byte("data:")
 
-// EachSSEDataPayload visits the trimmed payload of every "data:" line in events, skipping empty
-// lines and [DONE], and stops as soon as visit reports the payload it wanted.
-func EachSSEDataPayload(events []byte, visit func(payload []byte) bool) {
+// SSEDoneEvent is the terminator an SSE client reads until; without it the client waits out its
+// own timeout instead of finishing.
+var SSEDoneEvent = []byte("data: [DONE]\n\n")
+
+// NoResponseDataBody is the reply a non-streaming caller gets when the stream carried no payload.
+var NoResponseDataBody = []byte(`{"error":{"message":"no response data"}}`)
+
+// eachSSELine visits the trimmed payload of every "data:" line in events, including the empty ones
+// and the terminator, and stops as soon as visit reports the line it wanted.
+func eachSSELine(events []byte, visit func(payload []byte) bool) {
 	for rest := events; len(rest) > 0; {
 		var line []byte
 		line, rest, _ = bytes.Cut(rest, []byte("\n"))
@@ -28,13 +35,54 @@ func EachSSEDataPayload(events []byte, visit func(payload []byte) bool) {
 		if !isData {
 			continue
 		}
-		payload := bytes.TrimSpace(data)
-		if len(payload) == 0 || bytes.Equal(payload, sseDoneMarker) {
-			continue
-		}
-		if visit(payload) {
+		if visit(bytes.TrimSpace(data)) {
 			return
 		}
+	}
+}
+
+// EachSSEDataPayload visits the trimmed payload of every "data:" line in events, skipping empty
+// lines and [DONE], and stops as soon as visit reports the payload it wanted.
+func EachSSEDataPayload(events []byte, visit func(payload []byte) bool) {
+	eachSSELine(events, func(payload []byte) bool {
+		if len(payload) == 0 || bytes.Equal(payload, sseDoneMarker) {
+			return false
+		}
+		return visit(payload)
+	})
+}
+
+// HasSSEDone reports whether events already carry the terminator, so it is never sent twice. The
+// check is line-anchored: "[DONE]" inside a content delta is not a terminator.
+func HasSSEDone(events []byte) bool {
+	terminated := false
+	eachSSELine(events, func(payload []byte) bool {
+		terminated = bytes.Equal(payload, sseDoneMarker)
+		return terminated
+	})
+	return terminated
+}
+
+// AssembleSSEBody reduces an SSE-framed reply to the single JSON body a non-streaming caller
+// expects: the payload of the last data event. A body carrying no data line at all is already that
+// body and passes through; an SSE-framed one carrying no payload becomes NoResponseDataBody.
+func AssembleSSEBody(body []byte) []byte {
+	var assembled []byte
+	framed := false
+	eachSSELine(body, func(payload []byte) bool {
+		framed = true
+		if len(payload) > 0 && !bytes.Equal(payload, sseDoneMarker) {
+			assembled = payload
+		}
+		return false
+	})
+	switch {
+	case len(assembled) > 0:
+		return assembled
+	case framed || len(bytes.TrimSpace(body)) == 0:
+		return NoResponseDataBody
+	default:
+		return body
 	}
 }
 

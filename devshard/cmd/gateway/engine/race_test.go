@@ -17,27 +17,48 @@ import (
 	"devshard/cmd/gateway/scheduler"
 )
 
-// stubPicker's hold parks every pick until it is closed, which is how a test observes what the coordinator
-// does while the scheduler has not answered yet.
+// stubPicker's hold parks every pick its queue cannot answer, which is the scheduler's own queue holding a
+// waiter nothing will wake; parked reports each pick that got that far.
 type stubPicker struct {
 	mu       sync.Mutex
 	queue    []scheduler.Assignment
 	blocked  [][2]string
 	profiles []scheduler.RequestProfile
 	hold     chan struct{}
+	parked   chan struct{}
 }
 
 func (p *stubPicker) Pick(ctx context.Context, profile scheduler.RequestProfile) (scheduler.Assignment, error) {
-	if p.hold != nil {
-		select {
-		case <-p.hold:
-		case <-ctx.Done():
-			return scheduler.Assignment{}, ctx.Err()
-		}
+	p.mu.Lock()
+	p.profiles = append(p.profiles, profile)
+	if len(p.queue) > 0 {
+		next := p.queue[0]
+		p.queue = p.queue[1:]
+		p.mu.Unlock()
+		return next, nil
 	}
+	hold, parked := p.hold, p.parked
+	p.mu.Unlock()
+
+	if hold == nil {
+		return scheduler.Assignment{}, scheduler.ErrNoAvailableHost
+	}
+	if parked != nil {
+		parked <- struct{}{}
+	}
+	select {
+	case <-hold:
+		return p.next()
+	case <-ctx.Done():
+		return scheduler.Assignment{}, ctx.Err()
+	}
+}
+
+// next answers a released pick with whatever was queued while it was parked, which is how a test puts a
+// replacement host in flight at a chosen moment rather than at whatever moment the race asked for one.
+func (p *stubPicker) next() (scheduler.Assignment, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.profiles = append(p.profiles, profile)
 	if len(p.queue) == 0 {
 		return scheduler.Assignment{}, scheduler.ErrNoAvailableHost
 	}
@@ -190,11 +211,30 @@ func (markerClassifier) Classify(chunk []byte) chunkFacts {
 func (markerClassifier) Flush() chunkFacts { return chunkFacts{} }
 func (markerClassifier) Release()          {}
 
+// claimWatch reports the content chunk an attempt is about to hand to its sink, which is the last point a
+// test can observe before that write claims the crown.
+type claimWatch struct {
+	streamClassifier
+	claiming chan<- struct{}
+}
+
+func (w claimWatch) Classify(chunk []byte) chunkFacts {
+	facts := w.streamClassifier.Classify(chunk)
+	if facts.Content {
+		select {
+		case w.claiming <- struct{}{}:
+		default:
+		}
+	}
+	return facts
+}
+
 type stubPerf struct {
 	mu        sync.Mutex
 	acquired  []string
 	released  []string
 	ejected   map[string]bool
+	degraded  map[string]bool
 	toolCalls []string
 	limits    []contextLimitCall
 }
@@ -215,6 +255,12 @@ func (p *stubPerf) Ejected(participant, _ string) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.ejected[participant]
+}
+
+func (p *stubPerf) Degraded(participant, _ string) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.degraded[participant]
 }
 
 func (p *stubPerf) RecordContextLimit(participant string, maxTokens uint64) {
@@ -316,7 +362,7 @@ func newRaceFixture(policy EscalationPolicy, hosts int) *raceFixture {
 	fixture := &raceFixture{
 		picker:   &stubPicker{},
 		target:   &scriptedTarget{scripts: map[uint64]*hostScript{}, hosts: hosts, labels: map[int]string{}},
-		perf:     &stubPerf{ejected: map[string]bool{}},
+		perf:     &stubPerf{ejected: map[string]bool{}, degraded: map[string]bool{}},
 		crown:    &stubCrown{denied: map[string]bool{}},
 		limiter:  newSlotLedger(),
 		clock:    newVirtualTime(),
@@ -354,11 +400,13 @@ func (f *raceFixture) host(nonce uint64, hostIdx int, participant string, script
 	f.target.scripts[nonce] = script
 	f.target.labels[hostIdx] = "label-" + participant
 	f.target.mu.Unlock()
+	f.picker.mu.Lock()
 	f.picker.queue = append(f.picker.queue, scheduler.Assignment{
 		Escrow: "escrow-1",
 		Host:   participant,
 		Nonce:  fakePrepared{nonce: nonce, hostIdx: hostIdx},
 	})
+	f.picker.mu.Unlock()
 }
 
 func (f *raceFixture) run(ctx context.Context) (RaceOutcome, error) {
@@ -667,6 +715,13 @@ func TestRunRaceGivesBackTheSlotAndVotesForANonceItCannotDispatch(t *testing.T) 
 	if len(plan) != 1 || !plan[0].Post || plan[0].Nonce != 300 {
 		t.Fatalf("timeout plan = %+v, want one posted vote for nonce 300", plan)
 	}
+	// A verifier recomputes the refusal deadline from the committed record, so a zero here posts the
+	// vote in year 1: too early to be collectable, and the nonce is stranded for good.
+	poster := &stubPoster{vote: "refused"}
+	settleEvents(reported, poster)
+	if len(poster.posts) != 1 || !poster.posts[0].sentAt.Equal(testEpoch) {
+		t.Fatalf("posted votes = %+v, want one carrying the race's start %v", poster.posts, testEpoch)
+	}
 	if _, exemption := reported.Sample(reported.Attempts[0]); exemption != ExemptNeverDispatched {
 		t.Fatalf("sample exemption = %v, want ExemptNeverDispatched", exemption)
 	}
@@ -728,20 +783,22 @@ func TestRunRaceBlocksDivergentHostAndReportsLifecycle(t *testing.T) {
 	}
 }
 
+// Both attempts report arrival before either can produce content, so the rival is provably live for the
+// whole window in which the denied host claims the crown, whichever order the two goroutines run in.
 func TestRunRaceSuppressesCrownForDeniedHostWhileARivalIsLive(t *testing.T) {
 	fixture := newRaceFixture(racePolicy(2), 2)
 	fixture.crown.denied["host-0"] = true
+	arrive := make(chan uint64, 2)
 	rivalRelease := make(chan struct{})
-	denied := make(chan uint64, 1)
 	fixture.host(90, 0, "host-0", &hostScript{
-		streaming: denied,
-		resume:    rivalRelease,
+		arrive:    arrive,
 		receipt:   true,
 		chunks:    []string{contentChunk(90), "data: tail\n\n"},
 		confirmed: true,
 		finished:  true,
 	})
 	fixture.host(91, 1, "host-1", &hostScript{
+		arrive:    arrive,
 		release:   rivalRelease,
 		receipt:   true,
 		chunks:    []string{contentChunk(91)},
@@ -758,7 +815,8 @@ func TestRunRaceSuppressesCrownForDeniedHostWhileARivalIsLive(t *testing.T) {
 		returned <- outcome
 	}()
 
-	<-denied
+	<-arrive
+	<-arrive
 	close(rivalRelease)
 	<-returned
 	reported := <-fixture.reported
@@ -768,6 +826,96 @@ func TestRunRaceSuppressesCrownForDeniedHostWhileARivalIsLive(t *testing.T) {
 	}
 	if forwarded := fixture.client.forwarded(); bytes.Contains(forwarded, []byte(contentChunk(90))) {
 		t.Fatalf("client stream %q carries the denied host's bytes", forwarded)
+	}
+}
+
+// The replacement a denied primary earns is a rival from the moment the race commits to fetching it, not
+// from the moment it launches: crowning inside that window strands the replacement's nonce unspent and
+// credits the denied host for the answer.
+func TestRunRaceSuppressesCrownForDeniedHostWhileItsReplacementIsBeingPicked(t *testing.T) {
+	fixture := newRaceFixture(racePolicy(2), 2)
+	fixture.crown.denied["host-0"] = true
+	fixture.picker.hold = make(chan struct{})
+	fixture.picker.parked = make(chan struct{}, 1)
+	claiming := make(chan struct{}, 1)
+	fixture.deps.Classify = func(string) streamClassifier {
+		return claimWatch{streamClassifier: markerClassifier{}, claiming: claiming}
+	}
+	fixture.host(90, 0, "host-0", &hostScript{
+		receipt:   true,
+		chunks:    []string{contentChunk(90), "data: tail\n\n"},
+		confirmed: true,
+		finished:  true,
+	})
+
+	returned := make(chan RaceOutcome, 1)
+	go func() {
+		outcome, err := fixture.run(context.Background())
+		if err != nil {
+			t.Error(err)
+		}
+		returned <- outcome
+	}()
+
+	<-fixture.picker.parked
+	<-claiming
+	fixture.host(91, 1, "host-1", &hostScript{
+		receipt:   true,
+		chunks:    []string{contentChunk(91)},
+		confirmed: true,
+		finished:  true,
+	})
+	close(fixture.picker.hold)
+	<-returned
+	reported := <-fixture.reported
+
+	if reported.WinnerNonce != 91 || !reported.Succeeded {
+		t.Fatalf("winner = %d succeeded = %v, want the replacement to serve", reported.WinnerNonce, reported.Succeeded)
+	}
+	if forwarded := fixture.client.forwarded(); bytes.Contains(forwarded, []byte(contentChunk(90))) {
+		t.Fatalf("client stream %q carries the denied host's bytes", forwarded)
+	}
+}
+
+// Holding the claim must not become a way to lose a paid-for answer: once the replacement pick comes back
+// empty, the denied host is the last one standing and its content is the client's response.
+func TestRunRaceCrownsADeniedHostWhenItsReplacementPickFindsNoHost(t *testing.T) {
+	fixture := newRaceFixture(racePolicy(2), 2)
+	fixture.crown.denied["host-0"] = true
+	fixture.picker.hold = make(chan struct{})
+	fixture.picker.parked = make(chan struct{}, 1)
+	arrive := make(chan uint64, 1)
+	fixture.host(90, 0, "host-0", &hostScript{
+		arrive:    arrive,
+		receipt:   true,
+		chunks:    []string{contentChunk(90)},
+		confirmed: true,
+		finished:  true,
+	})
+
+	returned := make(chan RaceOutcome, 1)
+	go func() {
+		outcome, err := fixture.run(context.Background())
+		if err != nil {
+			t.Error(err)
+		}
+		returned <- outcome
+	}()
+
+	<-fixture.picker.parked
+	<-arrive
+	close(fixture.picker.hold)
+	served := <-returned
+	reported := <-fixture.reported
+
+	if served.WinnerNonce != 90 || !served.Succeeded {
+		t.Fatalf("winner = %d succeeded = %v, want the denied host's answer", served.WinnerNonce, served.Succeeded)
+	}
+	if forwarded := string(fixture.client.forwarded()); forwarded != contentChunk(90) {
+		t.Fatalf("client stream = %q, want the answer the race paid for", forwarded)
+	}
+	if len(reported.Attempts) != 1 {
+		t.Fatalf("attempts = %d, want only the denied host's", len(reported.Attempts))
 	}
 }
 
@@ -1145,49 +1293,68 @@ func TestADeadlineIsJudgedAgainstTheEventsAlreadyDelivered(t *testing.T) {
 	})
 }
 
-// A speculative pick waits on the scheduler's queue. Waiting for it inside the loop would spend that
-// wait on the very first-token latency the escalation exists to avoid.
-func TestEscalationAnswersACrownClaimWhileItIsStillPicking(t *testing.T) {
+// An escalation's pick waits on the scheduler's queue, which can leave it unanswered for as long as that
+// queue has nothing to wake it. A coordinator that waited for it inline would answer no crown claim and
+// service no deadline, so the winner it is racing to would reach neither its client nor an outcome.
+func TestAParkedEscalationPickBlocksNeitherTheWinnerNorTheRace(t *testing.T) {
 	fixture := newRaceFixture(racePolicy(2), 2)
-	fixture.host(431, 1, "host-1", &hostScript{receipt: true})
-	held := make(chan struct{})
-	fixture.picker.hold = held
+	held, parked := make(chan struct{}), make(chan struct{}, 1)
+	fixture.picker.hold, fixture.picker.parked = held, parked
+	t.Cleanup(func() { close(held) })
 
-	dispatched := &liveAttempt{nonce: 430, participant: "host-0", sendTime: testEpoch, cancel: func() {}}
-	coordinator := pausedCoordinator(fixture, 2, dispatched)
-	arm := nextDeadline(coordinator.deps.Now(), coordinator.plan())
-	if arm.Trigger != triggerEscalation {
-		t.Fatalf("arm = %+v, want an escalation", arm)
-	}
+	dispatched, streamed := make(chan uint64, 1), make(chan uint64, 1)
+	release, resume := make(chan struct{}), make(chan struct{})
+	fixture.host(500, 0, "host-0", &hostScript{
+		arrive:    dispatched,
+		release:   release,
+		receipt:   true,
+		streaming: streamed,
+		resume:    resume,
+		chunks:    []string{contentChunk(500), "data: tail\n\n"},
+		confirmed: true,
+		finished:  true,
+	})
 
-	escalated := make(chan struct{})
+	returned := make(chan RaceOutcome, 1)
 	go func() {
-		defer close(escalated)
-		coordinator.escalate(arm.Escalation)
+		outcome, err := fixture.run(context.Background())
+		if err != nil {
+			t.Error(err)
+		}
+		returned <- outcome
 	}()
 
-	reply := make(chan streamVerdict, 1)
+	<-dispatched
 	select {
-	case coordinator.crown <- crownRequest{Nonce: 430, Reply: reply}:
+	case <-parked:
 	case <-time.After(5 * time.Second):
-		close(held)
-		t.Fatal("the coordinator never answered a crown claim while the scheduler had not answered it")
-	}
-	if verdict := <-reply; verdict != streamWinner {
-		t.Fatalf("verdict = %d, want the claim crowned", verdict)
+		t.Fatal("the escalation never reached the scheduler")
 	}
 
-	close(held)
-	<-escalated
-	if len(coordinator.attempts) != 2 {
-		t.Fatalf("attempts = %d, want the escalation started once the pick landed", len(coordinator.attempts))
+	close(release)
+	select {
+	case <-streamed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the winner's first content chunk never got past the coordinator's crown answer")
 	}
-	for range coordinator.attempts[1:] {
-		select {
-		case <-fixture.limiter.releases:
-		case <-time.After(2 * time.Second):
-			t.Fatal("the escalated attempt never released its host slot")
+	if forwarded := fixture.client.forwarded(); !bytes.Contains(forwarded, []byte(contentChunk(500))) {
+		t.Fatalf("client stream %q is missing the crowned winner's bytes", forwarded)
+	}
+	close(resume)
+
+	fixture.clock.waitArmed(t, schedulerPickTimeout)
+	fixture.clock.advance(schedulerPickTimeout)
+
+	select {
+	case outcome := <-returned:
+		if outcome.WinnerNonce != 500 || !outcome.Succeeded {
+			t.Fatalf("outcome = winner %d succeeded %v, want 500/true", outcome.WinnerNonce, outcome.Succeeded)
 		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the race never ended while its escalation pick was parked")
+	}
+	if reported := <-fixture.reported; len(reported.Attempts) != 1 {
+		t.Fatalf("reported attempts = %d, want only the one the race started", len(reported.Attempts))
 	}
 }
 

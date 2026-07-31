@@ -15,6 +15,10 @@ var (
 
 	// ErrUnknownEscrow marks a settlement asked for an escrow the registry has no row for.
 	ErrUnknownEscrow = errors.New("unknown escrow")
+
+	// ErrSettlementInFlight marks a settlement another caller is already running: not success, because
+	// the row carries the only key that can settle the escrow and belongs to that other caller.
+	ErrSettlementInFlight = errors.New("settlement already in flight")
 )
 
 // pendingSettleBudget bounds how many parked escrows one tick settles, so a large backlog cannot
@@ -60,29 +64,39 @@ func (m *Manager) Settle(ctx context.Context, escrowID string) (chain.SettleEscr
 	return chain.SettleEscrowResult{}, fmt.Errorf("settling escrow %s: %w", escrowID, ErrUnknownEscrow)
 }
 
-// settle deduplicates concurrent callers for the same escrow (a second caller
-// is a no-op, not an error) and only clears SettlementPending once the
-// broadcast is confirmed; any earlier failure leaves it set for recovery.
+// park records the intent to settle -- inactive and pending, so a crash leaves the escrow
+// recoverable -- and then stops routing to it, which is what the busy check that follows relies on.
+func (m *Manager) park(ctx context.Context, escrowID string) error {
+	if err := m.store.WithRetry(ctx, func() error {
+		return m.store.SetDevshardActive(ctx, escrowID, false)
+	}); err != nil {
+		return fmt.Errorf("deactivating escrow %s: %w", escrowID, err)
+	}
+	if err := m.store.WithRetry(ctx, func() error {
+		return m.store.SetDevshardSettlementPending(ctx, escrowID, true)
+	}); err != nil {
+		return fmt.Errorf("marking settlement pending for escrow %s: %w", escrowID, err)
+	}
+	if err := m.settlementSource.Retire(escrowID); err != nil {
+		return fmt.Errorf("retiring escrow %s from routing: %w", escrowID, err)
+	}
+	return nil
+}
+
+// settle deduplicates concurrent callers for the same escrow and only clears SettlementPending once
+// the broadcast is confirmed; any earlier failure leaves it set for recovery.
 func (m *Manager) settle(ctx context.Context, record store.DevshardRecord) (chain.SettleEscrowResult, error) {
 	leave, busy := m.settlements.enter(record.EscrowID)
 	if busy {
-		return chain.SettleEscrowResult{}, nil
+		return chain.SettleEscrowResult{}, ErrSettlementInFlight
 	}
 	defer leave()
 
-	// deactivated before any chain call: stops routing traffic without claiming funds are settled.
-	if err := m.store.WithRetry(ctx, func() error {
-		return m.store.SetDevshardActive(ctx, record.EscrowID, false)
-	}); err != nil {
-		return chain.SettleEscrowResult{}, fmt.Errorf("deactivating escrow %s: %w", record.EscrowID, err)
-	}
-	if err := m.store.WithRetry(ctx, func() error {
-		return m.store.SetDevshardSettlementPending(ctx, record.EscrowID, true)
-	}); err != nil {
-		return chain.SettleEscrowResult{}, fmt.Errorf("marking settlement pending for escrow %s: %w", record.EscrowID, err)
+	if err := m.park(ctx, record.EscrowID); err != nil {
+		return chain.SettleEscrowResult{}, err
 	}
 
-	// busy is a deferred-settle signal, not a failure: the now-deactivated escrow drains, then a retrigger settles it.
+	// busy is a deferred-settle signal, not a failure: the now-retired escrow drains, then a retrigger settles it.
 	if m.settlementSource.IsBusy(record.EscrowID) {
 		return chain.SettleEscrowResult{}, ErrDevshardBusy
 	}
@@ -118,18 +132,11 @@ func (m *Manager) retire(ctx context.Context, record store.DevshardRecord) error
 	// is the sole way to settle it later, so the row outlives retirement and is dropped only once
 	// a settlement has actually been confirmed on chain.
 	if !m.config.Load().Rotation.SettlementEnabled {
-		if err := m.store.WithRetry(ctx, func() error {
-			return m.store.SetDevshardActive(ctx, record.EscrowID, false)
-		}); err != nil {
-			return fmt.Errorf("deactivating escrow %s: %w", record.EscrowID, err)
-		}
-		return m.store.WithRetry(ctx, func() error {
-			return m.store.SetDevshardSettlementPending(ctx, record.EscrowID, true)
-		})
+		return m.park(ctx, record.EscrowID)
 	}
 
 	if _, err := m.settle(ctx, record); err != nil {
-		return err // busy or broadcast failure: stays registered, inactive, pending -- not deleted.
+		return err // busy, deduped or broadcast failure: stays registered, inactive, pending -- not deleted.
 	}
 	if err := m.store.WithRetry(ctx, func() error {
 		return m.store.DeleteDevshard(ctx, record.EscrowID)

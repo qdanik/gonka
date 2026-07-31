@@ -15,6 +15,8 @@ This document covers `scheduler/` (which escrow, which participant, which nonce)
 
 `Pick` is called once per request and once per escalation attempt inside a race. An escalation passes the escrow it is already pinned to; only a fresh request goes through escrow selection (`scheduler.go:81-82`).
 
+**A pin skips selection entirely, and that has two consequences worth knowing** (`escrow_pick.go:19-26`). A request that names an escrow — an escalation, or a client calling `/devshard/{id}/v1/chat/completions` — is matched against the candidate list by id and returned directly, so it is neither scored nor checked against the nonce ceiling below, and it does not fire the exhaustion callback that schedules a replacement. A pin that names an escrow the gateway no longer routes to is refused with `ErrEscrowGone`. A deployment served entirely through pinned requests therefore never marks a spent escrow for rotation.
+
 Selection (`escrow_pick.go:18-60`) runs over `registry.Candidates(model)`, which is already filtered to escrows whose session phase accepts new inferences, and against a single chain snapshot taken once for the call.
 
 **The nonce ceiling comes first.** An escrow whose latest nonce has reached the cap is dropped from the candidate set. The cap is `types.MaxActiveNonce(maxNonce, groupSize)` where `maxNonce` is the governance parameter read from the chain. Two details are load-bearing. The parameter arrives as a `uint64` and is *clamped* to `math.MaxUint32` rather than cast, because a value that wraps to zero makes `MaxActiveNonce` return the maximum `uint64` and silently disables the gate entirely (`escrow_pick.go:77`). And when the parameter has not been observed at all, the fallback is the raw constant 19 800 — the fixed ceiling the gateway ran on before the parameter existed. Treating an unknown cap as unlimited would let an escrow run past the ceiling the *host* enforces; refusing to serve would stall every cold start (`escrow_pick.go:11-13`).
@@ -69,7 +71,7 @@ flowchart TD
 
 **The burn budget is `groupSize * (waiters + 1)`, computed once at drain entry.** Together with the freeze it gives the drain a termination proof: `waiting`, the availability predicates and the budget are all fixed, no waiter is appended during a drain (appends happen only in the select loop), and every iteration either returns, serves — which strictly shrinks the queue — or burns, which strictly shrinks the budget. Iterations are therefore bounded by `waiters + budget + 1`. Hold deadlines are fixed at enqueue time, so a fired timer cannot re-hold the same head.
 
-**The sweep is the second termination lever.** Before every binding it drops abandoned waiters silently and answers `ErrNoAvailableHost` to any waiter for which no participant passes all five gates (excluded, PoC-required, throttled, state-blocked, capability). This costs no nonce (`dispatcher.go:272`). It matters most in combination with admission, below.
+**The sweep is the second termination lever.** Before every binding it drops abandoned waiters silently and answers `ErrNoAvailableHost` to any waiter for which no participant passes all six gates (excluded, PoC-required, throttled, ejected, state-blocked, capability). This costs no nonce (`dispatcher.go:272`). It matters most in combination with admission, below.
 
 ### match is pure
 
@@ -83,7 +85,7 @@ flowchart TD
 
 The exhaustiveness of that sum type is the nonce-liveness invariant made compiler-checked (`decision.go:9-10`): there is no fourth outcome in which a nonce is committed and nobody owns it, and no way to add one without changing the type.
 
-Decision order: a host the chain requires to be preserved for proof-of-compute burns `ghostPoC`; a throttled host burns `ghostThrottled`; otherwise the queue is walked in arrival order and the first waiter that is not excluding this participant, is not blocked on it and passes the capability gate is served. If none matches and the oldest *live* waiter is still inside the hold grace, the nonce is held. Otherwise it burns `ghostCapability` if some waiter was blocked on the host specifically, and `ghostExclude` if the queue simply excludes it.
+Decision order: a host the chain requires to be preserved for proof-of-compute burns `ghostPoC`; a throttled host burns `ghostThrottled`; a host the outlier detector ejected burns `ghostEjected`; otherwise the queue is walked in arrival order and the first waiter that is not excluding this participant, is not blocked on it and passes the capability gate is served. If none matches and the oldest *live* waiter is still inside the hold grace, the nonce is held. Otherwise it burns `ghostCapability` if some waiter was blocked on the host specifically, and `ghostExclude` if the queue simply excludes it.
 
 Two subtleties in there are worth the ink. The hold deadline is anchored on the oldest **live** waiter, never on the queue head, because an abandoned head would otherwise park a nonce for a caller who will never be served — a liveness failure in disguise (`match.go:47-48`). And the hold window is half-open (`now.Before(until)`), so the deadline always passes.
 
@@ -95,6 +97,7 @@ A ghost commits a real one-token inference into the escrow's local diff and neve
 |---|---|---|
 | `ghostPoC` | `poc_unavailable_host` | The host is preserved for proof-of-compute and must not be sent work. |
 | `ghostThrottled` | `participant_throttled_no_send` | The host's concurrency window is full or its breaker is open. |
+| `ghostEjected` | `participant_ejected_no_send` | The outlier detector ejected the host, and the pool-wide cap left room to honour it. |
 | `ghostCapability` | `participant_capability_no_send` | Every waiter is blocked on this host by capability (context too small, tools unsupported) or by a state-divergence block. |
 | `ghostExclude` | `no_compatible_request_after_stale` | The queue has already raced this host, and the hold grace expired. |
 | `ghostAbandoned` | `request_abandoned_before_dispatch` | The nonce was committed for a caller who vanished before the assignment reached it. |

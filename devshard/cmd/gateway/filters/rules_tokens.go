@@ -41,11 +41,12 @@ func resolveOutputTokenLimits(options Options, routedModel string) outputTokenLi
 	return limits
 }
 
-// capOutputTokens: 0 always means unset (use default); a nonzero value clamps unless bypassed.
+// capOutputTokens: 0 always means unset (use default, itself never above the cap); a nonzero value
+// clamps unless bypassed.
 func capOutputTokens(value uint64, bypassLimit bool, limits outputTokenLimits) uint64 {
 	limits = normalizedOutputTokenLimits(limits)
 	if value == 0 {
-		return limits.DefaultMaxTokens
+		return min(limits.DefaultMaxTokens, limits.MaxTokensCap)
 	}
 	if !bypassLimit && value > limits.MaxTokensCap {
 		return limits.MaxTokensCap

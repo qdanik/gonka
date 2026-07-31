@@ -124,6 +124,8 @@ func (f *fakeStore) DeleteCommitment(ctx context.Context, txHash string) error {
 	return nil
 }
 
+// UpsertDevshard mirrors the store's contract: every field of an existing row is replaced except
+// SettlementPending, which only SetDevshardSettlementPending moves.
 func (f *fakeStore) UpsertDevshard(ctx context.Context, record store.DevshardRecord) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -133,8 +135,18 @@ func (f *fakeStore) UpsertDevshard(ctx context.Context, record store.DevshardRec
 	if f.upsertDevshardErr != nil {
 		return f.upsertDevshardErr
 	}
+	if existing, ok := f.devshards[record.EscrowID]; ok {
+		record.SettlementPending = existing.SettlementPending
+	}
 	f.devshards[record.EscrowID] = record
 	return nil
+}
+
+func (f *fakeStore) snapshotDevshard(escrowID string) (store.DevshardRecord, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	record, ok := f.devshards[escrowID]
+	return record, ok
 }
 
 func (f *fakeStore) ListDevshards(ctx context.Context) ([]store.DevshardRecord, error) {

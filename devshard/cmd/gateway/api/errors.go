@@ -140,7 +140,8 @@ func statusForError(err error) int {
 		return http.StatusBadRequest
 	case errors.Is(err, ErrUnknownDevshard), errors.Is(err, ErrUnknownParticipant):
 		return http.StatusNotFound
-	case errors.Is(err, escrow.ErrDevshardBusy), errors.Is(err, ErrDevshardExists), errors.Is(err, registry.ErrDraining):
+	case errors.Is(err, escrow.ErrDevshardBusy), errors.Is(err, escrow.ErrSettlementInFlight),
+		errors.Is(err, ErrDevshardExists), errors.Is(err, registry.ErrDraining):
 		return http.StatusConflict
 	}
 	return engine.StatusForError(err)

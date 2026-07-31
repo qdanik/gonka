@@ -39,6 +39,8 @@ type Tx struct {
 	PollTimeoutMS  int64
 }
 
+// Concurrency caps requests in flight. A zero MaxRequests is no static cap, leaving admission to
+// the capacity-scaled per-weight limit alone.
 type Concurrency struct {
 	MaxRequests               int64
 	RequestsPer10000Weight    float64
@@ -66,8 +68,8 @@ type ModelLimits struct {
 	MaxInputTokensInFlight *int64 `json:"max_input_tokens_in_flight,omitempty"`
 }
 
-// Limits groups admission tuning. A zero MaxInputTokensInFlight is unlimited, and ModelAccess maps a model
-// to one of the tiers below.
+// Limits groups admission tuning. A zero MaxInputTokensInFlight is unlimited, MaxTokensCap is the
+// ceiling DefaultMaxTokens is itself clamped to, and ModelAccess maps a model to one of the tiers below.
 type Limits struct {
 	DefaultMaxTokens       int64
 	MaxTokensCap           int64
@@ -329,11 +331,11 @@ func (c *Config) Validate() error {
 	if c.Limits.DefaultMaxTokens < 1 {
 		complain("default_max_tokens: %d must be >= 1", c.Limits.DefaultMaxTokens)
 	}
-	if c.Limits.MaxTokensCap < c.Limits.DefaultMaxTokens {
-		complain("max_tokens_cap: %d must be >= default_max_tokens %d", c.Limits.MaxTokensCap, c.Limits.DefaultMaxTokens)
+	if c.Limits.MaxTokensCap < 1 {
+		complain("max_tokens_cap: %d must be >= 1", c.Limits.MaxTokensCap)
 	}
-	if c.Limits.Concurrency.MaxRequests < 1 {
-		complain("max_concurrent_requests: %d must be >= 1", c.Limits.Concurrency.MaxRequests)
+	if c.Limits.Concurrency.MaxRequests < 0 {
+		complain("max_concurrent_requests: %d must be >= 0", c.Limits.Concurrency.MaxRequests)
 	}
 	if c.Limits.Concurrency.RequestsPer10000Weight < 0 {
 		complain("max_concurrent_requests_per_10000_weight: %v must be >= 0", c.Limits.Concurrency.RequestsPer10000Weight)
@@ -381,7 +383,7 @@ func (c *Config) Validate() error {
 		complain("api_keys: model_access marks a model api_key but no api keys are configured, so it is unreachable")
 	}
 	for model, limit := range c.Limits.ModelLimits {
-		if limit.DefaultMaxTokens < 1 || limit.MaxTokensCap < limit.DefaultMaxTokens {
+		if limit.DefaultMaxTokens < 1 || limit.MaxTokensCap < 1 {
 			complain("model_limits[%s]: default %d / cap %d invalid", model, limit.DefaultMaxTokens, limit.MaxTokensCap)
 		}
 		if limit.MaxConcurrentRequests != nil && *limit.MaxConcurrentRequests < 1 {

@@ -80,7 +80,7 @@ func TestDefaultsMatchSpec(t *testing.T) {
 func TestValidateRejectsBrokenConfigAndNamesEveryProblem(t *testing.T) {
 	configuration := Defaults()
 	configuration.Server.Port = 0
-	configuration.Limits.MaxTokensCap = 100 // below DefaultMaxTokens 3072
+	configuration.Limits.MaxTokensCap = 0
 	configuration.Limits.AIMD.InitialWindow = 0
 	configuration.Chain.RESTBaseURL = "://not-a-url"
 
@@ -114,8 +114,8 @@ func TestValidateCatchesEveryRuleBreach(t *testing.T) {
 		{"tx_poll_interval_ms too low", func(c *Config) { c.Tx.PollIntervalMS = 0 }, "tx_poll_interval_ms"},
 		{"tx_poll_timeout_ms below interval", func(c *Config) { c.Tx.PollTimeoutMS = 100 }, "tx_poll_timeout_ms"},
 		{"default_max_tokens too low", func(c *Config) { c.Limits.DefaultMaxTokens = 0 }, "default_max_tokens"},
-		{"max_tokens_cap below default", func(c *Config) { c.Limits.MaxTokensCap = 1 }, "max_tokens_cap"},
-		{"max_concurrent_requests too low", func(c *Config) { c.Limits.Concurrency.MaxRequests = 0 }, "max_concurrent_requests"},
+		{"max_tokens_cap too low", func(c *Config) { c.Limits.MaxTokensCap = 0 }, "max_tokens_cap"},
+		{"max_concurrent_requests negative", func(c *Config) { c.Limits.Concurrency.MaxRequests = -1 }, "max_concurrent_requests"},
 		{"max_concurrent_requests_per_10000_weight negative", func(c *Config) { c.Limits.Concurrency.RequestsPer10000Weight = -1 }, "max_concurrent_requests_per_10000_weight"},
 		{"poc_max_concurrent_requests_per_10000_weight negative", func(c *Config) { c.Limits.Concurrency.PoCRequestsPer10000Weight = -1 }, "poc_max_concurrent_requests_per_10000_weight"},
 		{"max_input_tokens_in_flight negative", func(c *Config) { c.Limits.MaxInputTokensInFlight = -1 }, "max_input_tokens_in_flight"},
@@ -135,8 +135,8 @@ func TestValidateCatchesEveryRuleBreach(t *testing.T) {
 		{"model_limits default too low", func(c *Config) {
 			c.Limits.ModelLimits = map[string]ModelLimits{"model-a": {DefaultMaxTokens: 0, MaxTokensCap: 10}}
 		}, "model_limits"},
-		{"model_limits cap below default", func(c *Config) {
-			c.Limits.ModelLimits = map[string]ModelLimits{"model-a": {DefaultMaxTokens: 100, MaxTokensCap: 50}}
+		{"model_limits cap too low", func(c *Config) {
+			c.Limits.ModelLimits = map[string]ModelLimits{"model-a": {DefaultMaxTokens: 100, MaxTokensCap: 0}}
 		}, "model_limits"},
 		{"model_limits max_concurrent_requests too low", func(c *Config) {
 			tooFewRequests := int64(0)
@@ -187,6 +187,27 @@ func TestValidateCatchesEveryRuleBreach(t *testing.T) {
 				t.Fatalf("error %q does not mention %q", err.Error(), testCase.messageFragment)
 			}
 		})
+	}
+}
+
+// Zero is what the limiter reads as "no static cap"; rejecting it here left the two disagreeing and
+// the shipped template unbootable.
+func TestValidateAcceptsAnUncappedConcurrency(t *testing.T) {
+	configuration := Defaults()
+	configuration.Limits.Concurrency.MaxRequests = 0
+	if err := configuration.Validate(); err != nil {
+		t.Fatalf("Validate() with max_concurrent_requests 0 = %v, want nil", err)
+	}
+}
+
+// The cap is the ceiling and the default is clamped to it at request time, so a default above the
+// cap is a generous setting the gateway narrows, not a reason to refuse to start.
+func TestValidateAcceptsADefaultAboveTheCap(t *testing.T) {
+	configuration := Defaults()
+	configuration.Limits.DefaultMaxTokens = 10_000
+	configuration.Limits.ModelLimits = map[string]ModelLimits{"model-a": {DefaultMaxTokens: 10_000, MaxTokensCap: 4_096}}
+	if err := configuration.Validate(); err != nil {
+		t.Fatalf("Validate() with a default above the cap = %v, want nil", err)
 	}
 }
 

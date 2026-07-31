@@ -6,9 +6,11 @@ Three separate questions, three separate mechanisms:
 |---|---|
 | How many requests may the *gateway* have in flight, and for which model? | `limits.GatewayLimiter` |
 | How many concurrent sends may *this participant* receive? | `limits.ParticipantLimiter` |
-| Should this participant be taken out of rotation entirely? | `perf.Tracker` |
+| Is this participant an outlier, and what can it not serve? | `perf.Tracker` |
 
-They are deliberately not one thing. The first protects the gateway and respects the network's view of how much of the model's capacity this gateway commands; the second protects the participant from us; the third is an outlier detector.
+They are deliberately not one thing. The first protects the gateway and respects the network's view of how much of the model's capacity this gateway commands; the second protects the participant from us; the third is an outlier detector plus the sticky record of what a host has proved it cannot do.
+
+A host is removed from a pick by the participant limiter, by the capability flags, or by the ejection verdict — see [Outlier ejection](#outlier-ejection) for what the ejection verdict is capped by before routing honours it.
 
 The design principle across all three is **adaptation instead of punishment**. The legacy gateway quarantined a host for thirty to sixty minutes; here an overloaded host receives less traffic within one round trip and recovers automatically, and the worst case is minutes.
 
@@ -95,17 +97,21 @@ The call order per attempt is **acquire, then result, then release** — the AIM
 
 ## Outlier ejection
 
-`perf.Tracker` answers one question — is this participant currently ejected — and it answers it in O(1) with no lock.
+`perf.Tracker` answers two questions in O(1) with no lock: **is this participant withheld from routing** (`Ejected`), and **did the detector want it out at all** (`Degraded`). They differ only by the pool-wide cap, and each has exactly one job.
 
-**What it tracks is health, not latency.** A sample is three fields: participant, model, and whether the host was responsive. There is no latency ring, no percentile and no host score in this package; response timings are recorded by the metrics layer from the race outcome, and escrow selection scores on in-flight load over chain weight. The only decaying quantity here is an exponentially decayed count of successes and failures.
+**`Ejected` is a routing gate.** It is one of the scheduler's six host gates — excluded, proof-of-compute-required, throttled, ejected, state-blocked and capability — so a host it names receives no request and its nonces are burned as `participant_ejected_no_send` ghosts (`scheduler/match.go`, `scheduler/ghost.go`). It also drives the `devshard_gateway_host_ejected` gauge and one branch of the limiter-verdict ladder, where a `Stalled` attempt is charged to the host instead of excused as a model outcome, but only while that host is ejected (`engine/outcome.go`).
+
+**`Degraded` is why the gate is not the whole story.** The cap below refuses to honour an ejection once too many of a model's hosts are failing at once, which is exactly the moment the gate stops protecting anything: those hosts stay in rotation. `Degraded` reports the verdict *before* the cap, and the race reads it for one decision — a primary the detector wanted out starts its second attempt immediately, under `primary_degraded`, rather than waiting out the receipt or first-token deadline. That hedge is bounded by the attempt budget, so a correlated outage costs at most one extra attempt per request and never an unbounded retry storm.
+
+**What it tracks is health, not latency.** A sample is three fields: participant, model, and whether the host was responsive (`perf/sample.go:3-7`). There is no latency ring, no percentile and no host score in this package; response timings are recorded by the metrics layer from the race outcome, and escrow selection scores on in-flight load over chain weight. The only *exponentially* decayed quantities are the counts of successes and failures; the ejection count decays too, but in whole rungs rather than continuously.
 
 **Ejection triggers** (`perf/ejection.go:31-34`): a run of consecutive failures, or a failure rate above the threshold once the decayed volume is large enough. The minimum-volume gate is why a quiet host is not ejected by one bad request.
 
 **The ladder.** Only a *fresh* trigger starts an ejection — an already-ejected host rides out its current timer rather than having it pushed back. Each fresh trigger lengthens the next ejection linearly in the ejection count, capped, and resets the outcome counters so the rate restarts from zero. The count decays back one rung per full healthy window, with the anchor advancing so the ladder cannot unwind faster than that.
 
-**The pool-wide cap.** Envoy's max-ejection-percent applies per model: at most `min(fraction × known hosts, known hosts − minimum available)` ejections are honoured, resolved by sorting participant keys. Ejections beyond the cap keep their timers running but are simply absent from the published view (`perf/tracker.go:62-88`).
+**The pool-wide cap.** Envoy's max-ejection-percent applies per model: at most `min(fraction × known hosts, known hosts − minimum available)` ejections are honoured, resolved by sorting participant keys. Ejections beyond the cap keep their timers running but are absent from the routing view, so they are `Degraded` and not `Ejected` (`perf/tracker.go`). This is what makes the routing gate safe to honour: a correlated outage can never remove a whole model's fleet from routing, and the hosts it leaves in rotation are the ones the race hedges instead.
 
-**Why it is lock-free.** Ejection is consulted once per host per admission, and at five hundred hosts the old scan cost 2.35 ms per request and roughly 1 300 acquisitions of one global mutex. The tracker now publishes an atomic map of ejected keys to expiry times; a read is one atomic load and a time comparison. The cap and the tie-break are resolved once, at rebuild time, and each entry carries its own expiry so ageing out needs no rebuild at all. The rebuild itself is conditional — only when the membership the cap is computed over actually moved (`perf/tracker.go:25-27, 55-59, 191-200`).
+**Why it is lock-free.** The shape is sized for a per-host, per-admission read: at five hundred hosts the old scan cost 2.35 ms per request and roughly 1 300 acquisitions of one global mutex. The tracker publishes two atomic maps of keys to expiry times, one capped for routing and one uncapped; a read is an atomic load, a map lookup and a time comparison, with no lock. The cap and the tie-break are resolved once, at rebuild time, and each entry carries its own expiry so ageing out needs no rebuild at all. The rebuild itself is conditional — only when the membership the cap is computed over actually moved (`perf/tracker.go:25-27, 55-59, 191-200`).
 
 Stale host state is swept at most once per tenth of the staleness window, because entries age out over minutes and scanning every host on every sample costs O(hosts) under the global lock for nothing.
 
@@ -137,8 +143,10 @@ Two asymmetries worth knowing, neither of which is stated in the code:
 | `perf_consecutive_fail_threshold` | 5 | Consecutive-failure ejection trigger. |
 | `perf_failure_rate_threshold` / `perf_failure_rate_min_volume` | 0.15 / 20 | Rate-based ejection trigger and its volume gate. |
 | `perf_ejection_base_seconds` / `perf_ejection_max_seconds` | 30 / 600 | Ejection duration ladder. |
-| `perf_max_ejection_fraction` / `perf_min_available_hosts` | 0.5 / 1 | Pool-wide ejection cap. |
+| `perf_max_ejection_fraction` / `perf_min_available_hosts` | 0.5 / 1 | Pool-wide ejection cap, and the reason the routing gate cannot empty a model's fleet. |
 | `perf_host_staleness_seconds` | 3 600 | When an unseen host is forgotten. |
 | `GATEWAY_PERF_EWMA_HALFLIFE_SECONDS` | 600 | Half-life of the decayed success and failure counters. |
 
-Everything except the last is an admin override rather than an environment variable — run-time tuning is meant to happen without a redeploy. The default input-token budget of zero means unlimited, which is worth an operator's attention: with million-token contexts it is the only thing between concurrency and memory exhaustion, and the body-size cap deliberately does not throttle load.
+The rows down to `breaker_max_open_ms` are admin overrides, changeable at run time without a redeploy. The `perf_*` rows are **not**: they are neither overrides nor environment variables, only compile-time defaults, and the snake_case names above are the spellings the boot-time validator uses in its error messages, not knobs you can set. `GATEWAY_PERF_EWMA_HALFLIFE_SECONDS` is the one performance value with an environment variable, and it is read once at boot. Retuning ejection therefore means a new binary.
+
+The default input-token budget of zero means unlimited, which is worth an operator's attention: with million-token contexts it is the only thing between concurrency and memory exhaustion, and the body-size cap deliberately does not throttle load.

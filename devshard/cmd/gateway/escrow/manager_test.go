@@ -46,12 +46,13 @@ func hasCall(calls []string, name string) bool {
 func testManagerDeps(t *testing.T, testStore *fakeStore, txClient *fakeTxClient, snapshots snapshotSource, cfg *config.Config) Deps {
 	t.Helper()
 	return Deps{
-		Tx:        txClient,
-		Store:     testStore,
-		Snapshots: snapshots,
-		Signer:    &fakeSignerSource{signer: testSigner(t)},
-		Config:    config.NewHolder(cfg),
-		Now:       time.Now,
+		Tx:         txClient,
+		Store:      testStore,
+		Snapshots:  snapshots,
+		Settlement: &fakeSettlementSource{},
+		Signer:     &fakeSignerSource{signer: testSigner(t)},
+		Config:     config.NewHolder(cfg),
+		Now:        time.Now,
 	}
 }
 
@@ -316,9 +317,7 @@ func TestTickSettlesParkedEscrowWhileRotationDisabled(t *testing.T) {
 	cfg.Rotation.Enabled = false
 	cfg.Rotation.SettlementEnabled = true
 
-	deps := testManagerDeps(t, testStore, settlingTxClient(), &fakeSnapshotSource{}, &cfg)
-	deps.Settlement = &fakeSettlementSource{}
-	m := NewManager(deps)
+	m := NewManager(testManagerDeps(t, testStore, settlingTxClient(), &fakeSnapshotSource{}, &cfg))
 
 	if err := m.tick(context.Background()); err != nil {
 		t.Fatalf("tick(): %v", err)

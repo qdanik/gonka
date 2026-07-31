@@ -95,9 +95,14 @@ func TestAFailedRaceIsA502AndReturnsItsSlot(t *testing.T) {
 	}
 }
 
+// A devshard host answers in SSE whether or not the caller asked to stream, so a non-streaming reply
+// is only JSON if the gateway assembles it. Asserting the header alone passes on the raw envelope.
 func TestASuccessfulNonStreamingReplyIsJSONAndCarriesItsIdentifiers(t *testing.T) {
 	live := newHarness(t)
+	live.inference.reply = "data: {\"id\":\"first\",\"choices\":[]}\n\ndata: {\"id\":\"resp\",\"choices\":[{\"message\":{\"content\":\"hi\"}}]}\n\ndata: [DONE]\n\n"
+
 	recorder := live.request(t, http.MethodPost, "/v1/chat/completions", chatBody, nil)
+
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("status: got %d (%s)", recorder.Code, recorder.Body.String())
 	}
@@ -109,6 +114,82 @@ func TestASuccessfulNonStreamingReplyIsJSONAndCarriesItsIdentifiers(t *testing.T
 	}
 	if got := recorder.Header().Get("X-Devshard-ID"); got != "7" {
 		t.Fatalf("X-Devshard-ID: got %q", got)
+	}
+	var assembled map[string]any
+	if err := json.Unmarshal(recorder.Body.Bytes(), &assembled); err != nil {
+		t.Fatalf("the body labelled application/json does not parse as JSON: %v (%s)", err, recorder.Body.String())
+	}
+	if assembled["id"] != "resp" {
+		t.Fatalf("assembled body: got %s, want the last data event of the stream", recorder.Body.String())
+	}
+}
+
+// The strip is a privacy filter, and an unassembled body silently bypasses it: StripResponseBody
+// returns an unparseable payload unchanged.
+func TestANonStreamingReplyIsStrippedOfItsInternalFields(t *testing.T) {
+	live := newHarness(t)
+	live.inference.reply = "data: {\"id\":\"resp\",\"choices\":[{\"logprobs\":{\"content\":[]},\"message\":{\"content\":\"hi\"}}],\"prompt_token_ids\":[1,2]}\n\ndata: [DONE]\n\n"
+
+	recorder := live.request(t, http.MethodPost, "/v1/chat/completions", chatBody, nil)
+
+	body := recorder.Body.String()
+	for _, stripped := range []string{"logprobs", "prompt_token_ids"} {
+		if strings.Contains(body, stripped) {
+			t.Fatalf("%s reached the client: %s", stripped, body)
+		}
+	}
+	if !strings.Contains(body, `"content":"hi"`) {
+		t.Fatalf("the strip took the reply with it: %s", body)
+	}
+}
+
+func TestAStreamCarriesTheTerminatorOnEveryExit(t *testing.T) {
+	testCases := []struct {
+		name     string
+		chunks   []string
+		failure  error
+		want     string
+		wantOnce string
+	}{
+		{
+			name:   "a host that never terminated",
+			chunks: []string{"data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\n"},
+			want:   "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\ndata: [DONE]\n\n",
+		},
+		{
+			name:     "a host that terminated itself",
+			chunks:   []string{"data: {\"choices\":[]}\n\n", "data: [DONE]\n\n"},
+			want:     "data: {\"choices\":[]}\n\ndata: [DONE]\n\n",
+			wantOnce: "data: [DONE]\n\n",
+		},
+		{
+			name:    "a failure after the client saw bytes",
+			chunks:  []string{"data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\n"},
+			failure: errors.New("winner failed after streaming started"),
+			want:    "data: {\"error\":{\"message\":\"winner failed after streaming started\"}}\n\ndata: [DONE]\n\n",
+		},
+		{
+			name: "a winner that produced nothing",
+			want: "data: [DONE]\n\n",
+		},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			live := newHarness(t)
+			live.inference.reply = ""
+			live.inference.chunks = testCase.chunks
+			live.inference.err = testCase.failure
+
+			recorder := live.request(t, http.MethodPost, "/v1/chat/completions", streamChatBody, nil)
+
+			body := recorder.Body.String()
+			if !strings.HasSuffix(body, testCase.want) {
+				t.Fatalf("streamed body: got %q, want it to end with %q", body, testCase.want)
+			}
+			if testCase.wantOnce != "" && strings.Count(body, testCase.wantOnce) != 1 {
+				t.Fatalf("streamed body: got %q, want exactly one %q", body, testCase.wantOnce)
+			}
+		})
 	}
 }
 
@@ -130,8 +211,9 @@ func TestAStreamedReplyIsFlushedAsEventStream(t *testing.T) {
 	if !recorder.Flushed {
 		t.Fatal("the stream was never flushed; a buffered SSE response reaches the client as nothing")
 	}
-	if !strings.Contains(recorder.Body.String(), "data: ") {
-		t.Fatalf("body: %q", recorder.Body.String())
+	want := "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\ndata: [DONE]\n\n"
+	if got := recorder.Body.String(); got != want {
+		t.Fatalf("body: got %q, want %q", got, want)
 	}
 }
 
@@ -143,6 +225,9 @@ func TestAFailureAfterTheFirstByteKeepsTheStatusTheClientAlreadySaw(t *testing.T
 		`{"model":"qwen","stream":true,"messages":[{"role":"user","content":"hi"}]}`, nil)
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("status: got %d, want the 200 the client already received", recorder.Code)
+	}
+	if !strings.Contains(recorder.Body.String(), "winner failed after streaming started") {
+		t.Fatalf("body: got %q, want the failure named where the status no longer can", recorder.Body.String())
 	}
 }
 
