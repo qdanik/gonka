@@ -2,25 +2,41 @@ package filters
 
 import "devshard"
 
-// Package-default output-token limits, used only when Options passes a zero limit.
+// Package-default output-token limits, used when Options passes a zero limit and as the single
+// source config.Defaults reads.
 const (
-	defaultRequestMaxTokens uint64 = 3_072
-	requestMaxTokensCap     uint64 = 4_096
+	DefaultRequestMaxTokens uint64 = 3_072
+	RequestMaxTokensCap     uint64 = 4_096
 )
 
-// outputTokenLimits is the resolved default/cap pair for the output-token stage.
 type outputTokenLimits struct {
 	DefaultMaxTokens uint64
 	MaxTokensCap     uint64
 }
 
-// normalizedOutputTokenLimits fills a zero limit with the package default.
 func normalizedOutputTokenLimits(limits outputTokenLimits) outputTokenLimits {
 	if limits.DefaultMaxTokens == 0 {
-		limits.DefaultMaxTokens = defaultRequestMaxTokens
+		limits.DefaultMaxTokens = DefaultRequestMaxTokens
 	}
 	if limits.MaxTokensCap == 0 {
-		limits.MaxTokensCap = requestMaxTokensCap
+		limits.MaxTokensCap = RequestMaxTokensCap
+	}
+	return limits
+}
+
+// resolveOutputTokenLimits lets a per-model override replace either global limit; a zero the
+// override returns means "not set for this model" and keeps the global one.
+func resolveOutputTokenLimits(options Options, routedModel string) outputTokenLimits {
+	limits := outputTokenLimits{DefaultMaxTokens: options.DefaultMaxTokens, MaxTokensCap: options.MaxTokensCap}
+	if options.ModelTokenLimits == nil {
+		return limits
+	}
+	modelDefault, modelCap := options.ModelTokenLimits(routedModel)
+	if modelDefault > 0 {
+		limits.DefaultMaxTokens = modelDefault
+	}
+	if modelCap > 0 {
+		limits.MaxTokensCap = modelCap
 	}
 	return limits
 }
@@ -46,7 +62,6 @@ type requestView struct {
 	N                   uint64
 }
 
-// decodeRequestView reads the 5 typed fields, each rejecting with a fixed error message.
 func decodeRequestView(document *Document) (requestView, error) {
 	var view requestView
 	if raw, ok := document.Get("model"); ok && raw != nil {
@@ -153,10 +168,10 @@ func greedySamplingForceOne() RuleFunc {
 
 // applyOutputTokenLimits resolves max_tokens from whichever field(s) the client sent (the min
 // of both when both are present), then mirrors it into max_completion_tokens iff that was sent.
-func applyOutputTokenLimits(document *Document, view *requestView, options Options) {
+func applyOutputTokenLimits(document *Document, view *requestView, options Options, routedModel string) {
 	_, hasMaxTokens := document.Get("max_tokens")
 	_, hasMaxCompletionTokens := document.Get("max_completion_tokens")
-	limits := outputTokenLimits{DefaultMaxTokens: options.DefaultMaxTokens, MaxTokensCap: options.MaxTokensCap}
+	limits := resolveOutputTokenLimits(options, routedModel)
 
 	var resolved uint64
 	switch {

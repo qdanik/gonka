@@ -7,9 +7,11 @@ import (
 	"devshard/cmd/gateway/chain"
 )
 
+// Capacity scores escrows against the chain's weight views. The observer has already applied Preserved to
+// the snapshot's CurrentWeights, so nothing is re-filtered here.
 type Capacity struct {
 	mu         sync.RWMutex
-	snapshot   chain.PhaseSnapshot // Preserved is already applied to CurrentWeights by the observer; not re-filtered here.
+	snapshot   chain.PhaseSnapshot
 	available  func(participant, model string) bool
 	membership map[string]map[string]float64
 }
@@ -73,6 +75,14 @@ func (c *Capacity) EscrowWeight(escrowID, model string) float64 {
 		return availableShare(shares, availableForModel)
 	}
 	return escrowWeight(c.currentWeightsLocked(model), shares, availableForModel)
+}
+
+// WeightsUnobserved reports that EscrowWeight is scoring this model on the membership-share fallback
+// rather than on chain weights, which serves requests correctly and silently.
+func (c *Capacity) WeightsUnobserved(model string) bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.modelServedLocked(model) && c.weightsUnobservedLocked(model)
 }
 
 // A host the chain has reported is a key in the view whatever its weight, so an empty view means the

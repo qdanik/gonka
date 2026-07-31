@@ -6,8 +6,6 @@ import (
 	"testing"
 )
 
-// --- messageRolePolicies table ---
-
 func TestMessageRolePoliciesTableIsComplete(t *testing.T) {
 	want := map[string]messageRolePolicy{
 		roleDeveloper: {disallowedFields: []string{"tool_calls", "tool_call_id", "function_call"}},
@@ -31,8 +29,6 @@ func TestMessageRolePoliciesTableIsComplete(t *testing.T) {
 		}
 	}
 }
-
-// --- dropOrphanToolMessages ---
 
 func TestDropOrphanToolMessages(t *testing.T) {
 	tests := []struct {
@@ -116,8 +112,6 @@ func TestDropOrphanToolMessages(t *testing.T) {
 	}
 }
 
-// --- dropEmptyAssistantTurns ---
-
 func TestDropEmptyAssistantTurns(t *testing.T) {
 	tests := []struct {
 		name              string
@@ -172,8 +166,6 @@ func TestDropEmptyAssistantTurnsSkipsNonMapEntries(t *testing.T) {
 		t.Errorf("changed = %v, len(out) = %d, want the non-map entry passed through", changed, len(out))
 	}
 }
-
-// --- normalizeEmptyMessageContent ---
 
 func TestNormalizeEmptyMessageContentFillsToolSentinel(t *testing.T) {
 	tests := []struct {
@@ -250,8 +242,6 @@ func TestNormalizeEmptyMessageContentLeavesUserRoleAlone(t *testing.T) {
 	}
 }
 
-// --- stripLegacyToolName ---
-
 func TestStripLegacyToolName(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -280,8 +270,6 @@ func TestStripLegacyToolName(t *testing.T) {
 		})
 	}
 }
-
-// --- flattenMessageTextParts ---
 
 func TestFlattenMessageTextPartsJoinsMultipleParts(t *testing.T) {
 	message := map[string]any{"role": "user", "content": []any{
@@ -372,8 +360,6 @@ func TestFlattenMessageTextPartsReportsMessageAndPartIndexOnNonTextPart(t *testi
 	}
 }
 
-// --- normalizer chain order ---
-
 func TestMessageNormalizerChainDropsOrphanBeforeFlatteningContent(t *testing.T) {
 	// The real chain order must silently drop this orphan tool message -- including its
 	// malformed content -- rather than surface a flatten error for a message on its way out.
@@ -405,8 +391,6 @@ func TestMessageNormalizerChainOrderIsObservable(t *testing.T) {
 		t.Fatalf("flattenMessageTextParts() run before the orphan drop: error = %v, want %q", err, want)
 	}
 }
-
-// --- normalizeMessages ---
 
 func TestNormalizeMessagesAbsentIsNoOp(t *testing.T) {
 	document := parseTestDocument(t, `{}`)
@@ -465,8 +449,6 @@ func TestNormalizeMessagesPropagatesFlattenErrorAsRejection(t *testing.T) {
 	}
 }
 
-// --- validateMessages: shape ---
-
 func TestValidateMessagesRequiredWhenAbsent(t *testing.T) {
 	assertValidateMessagesRejects(t, `{}`, "messages is required")
 }
@@ -520,8 +502,6 @@ func TestValidateMessagesAcceptsEveryKnownRole(t *testing.T) {
 	}
 }
 
-// --- validateMessages: per-role disallowed fields ---
-
 func TestValidateMessagesRejectsDisallowedFieldPerRole(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -550,8 +530,6 @@ func TestValidateMessagesRejectsDisallowedFieldPerRole(t *testing.T) {
 		})
 	}
 }
-
-// --- validateMessages: content rules ---
 
 func TestValidateMessagesRequiresContentForSimpleRoles(t *testing.T) {
 	tests := []struct {
@@ -639,8 +617,6 @@ func TestValidateMessagesAssistantContentRules(t *testing.T) {
 	}
 }
 
-// --- validateMessages: assistant tool_calls / function_call shape ---
-
 func TestValidateMessagesAssistantToolCallsShapeErrors(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -696,8 +672,6 @@ func TestValidateMessagesAssistantNullToolCallsAndFunctionCallTreatedAsAbsent(t 
 	}
 }
 
-// --- validateMessages: tool_call_id pending match ---
-
 func TestValidateMessagesToolCallIDMustMatchPendingAssistantCall(t *testing.T) {
 	// Reachable only when validateMessages runs without normalizeMessages first: in the
 	// real pipeline the orphan-tool-message dropper removes this case earlier.
@@ -724,8 +698,6 @@ func TestValidateMessagesToolCallIDConsumedOnlyOnce(t *testing.T) {
 		{"role":"tool","tool_call_id":"c1","content":"second"}
 	]}`, "messages[2].tool_call_id does not match any previous assistant tool_calls")
 }
-
-// --- isEmptyContent / isAssistantTurnEmpty ---
 
 func TestIsEmptyContent(t *testing.T) {
 	tests := []struct {
@@ -775,8 +747,6 @@ func TestIsAssistantTurnEmpty(t *testing.T) {
 		})
 	}
 }
-
-// --- fixtures ---
 
 func assistantWithToolCalls(ids ...string) map[string]any {
 	calls := make([]any, 0, len(ids))

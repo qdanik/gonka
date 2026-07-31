@@ -14,7 +14,7 @@ func TestErrorsStatus(t *testing.T) {
 		want     int
 	}{
 		{"Reject defaults to 400", Reject("boom"), 999, http.StatusBadRequest},
-		{"RejectWithStatus keeps the given status", RejectWithStatus(http.StatusRequestEntityTooLarge, "too big"), 400, http.StatusRequestEntityTooLarge},
+		{"an oversized body outranks the 400 of the RejectError wrapping it", WrapReject(&http.MaxBytesError{Limit: 10}), 999, http.StatusRequestEntityTooLarge},
 		{"WrapReject defaults to 400", WrapReject(errors.New("inner")), 999, http.StatusBadRequest},
 		{"non-RejectError falls back", errors.New("plain"), 418, 418},
 		{"nil error falls back", nil, 500, 500},

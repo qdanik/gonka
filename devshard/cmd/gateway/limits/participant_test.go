@@ -380,7 +380,7 @@ func TestParticipantLimiterConcurrentAccessIsRaceFree(t *testing.T) {
 }
 
 // The breaker's cooldown must stay strictly below perf's ejection horizon so perf
-// remains the pool authority (BOUNDARY DECISION 1 in the phase-5 plan), not the breaker.
+// remains the pool authority, not the breaker.
 func TestBreakerMaxOpenDefaultStaysBelowPerfEjectionHorizon(t *testing.T) {
 	t.Parallel()
 	defaults := config.Defaults()

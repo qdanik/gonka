@@ -27,8 +27,6 @@ const (
 	chatBody  = `{"model":"qwen","messages":[{"role":"user","content":"hi"}]}`
 )
 
-// ---- fakes ----
-
 type fakeRegistry struct {
 	models   []string
 	escrows  []scheduler.Escrow
@@ -60,14 +58,14 @@ func (f *fakeRegistry) SettlementSession(escrowID string) (registry.EscrowSessio
 
 func (f *fakeRegistry) IsBusy(escrowID string) bool { return f.busy[escrowID] }
 
+// fakeEngine's ledger stands in for the real engine's recording point, which runs before Run returns.
 type fakeEngine struct {
 	runs    atomic.Int64
 	reply   string
 	chunks  []string
 	outcome engine.RaceOutcome
 	err     error
-	// ledger stands in for the real engine's recording point, which runs before Run returns.
-	ledger *RaceLedger
+	ledger  *RaceLedger
 }
 
 func (e *fakeEngine) Run(_ context.Context, request engine.Request, client io.Writer) (engine.RaceOutcome, error) {
@@ -247,7 +245,9 @@ func (t *fakeTelemetry) Handler() http.Handler {
 	})
 }
 
-// ---- harness ----
+type fixedSnapshots struct{ snapshot chain.PhaseSnapshot }
+
+func (f fixedSnapshots) Snapshot() chain.PhaseSnapshot { return f.snapshot }
 
 type harness struct {
 	server      *Server
@@ -354,8 +354,6 @@ func (h *harness) swapConfig(mutate func(*config.Config)) {
 	mutate(&next)
 	h.config.Swap(&next)
 }
-
-// ---- route table ----
 
 func TestEveryRouteAnswersItsDocumentedStatus(t *testing.T) {
 	testCases := []struct {

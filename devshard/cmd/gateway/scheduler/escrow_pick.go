@@ -13,8 +13,6 @@ import (
 // every cold start, so the fixed ceiling the gateway ran on before the param existed is used instead.
 const fallbackNonceCeiling uint64 = 19_800
 
-// pickEscrow runs once per request; escalation attempts pin the result via profile.Escrow rather than
-// re-deriving an escrow mid-race.
 func (s *Scheduler) pickEscrow(profile RequestProfile, snapshot chain.PhaseSnapshot) (Escrow, error) {
 	candidates := s.escrows.Candidates(profile.Model)
 

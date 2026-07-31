@@ -11,7 +11,6 @@ import (
 	"time"
 )
 
-// mlnodeVersionEntry is one element of the dapi public /v1/versions "mlnodes" list.
 type mlnodeVersionEntry struct {
 	NodeID                 string `json:"node_id"`
 	PoCValidationInference bool   `json:"poc_validation_inference"`
@@ -21,19 +20,21 @@ type versionsResponse struct {
 	MLNodes []mlnodeVersionEntry `json:"mlnodes"`
 }
 
+// versionsEntry is one miner's poll result: node id to validation-inference capability, as of fetchedAt.
 type versionsEntry struct {
-	capableNodes map[string]bool // node_id -> validation-inference capable
+	capableNodes map[string]bool
 	fetchedAt    time.Time
 }
 
-// VersionsCache polls each candidate miner's dapi /v1/versions and reports
-// per-node PoC-validation-inference capability; unknown/error/stale => false.
+// VersionsCache polls each candidate miner's dapi /v1/versions and reports per-node
+// PoC-validation-inference capability; unknown, errored or stale reads as false. candidates maps a miner to
+// its dapi base URL, which is the participant's inference_url.
 type VersionsCache struct {
 	client *http.Client
 	ttl    time.Duration
 
 	mu         sync.RWMutex
-	candidates map[string]string // miner -> dapi base URL (inference_url)
+	candidates map[string]string
 	entries    map[string]versionsEntry
 	now        func() time.Time
 }
@@ -84,7 +85,6 @@ const (
 	versionsFetchTimeout    = 2 * time.Second
 )
 
-// Poll runs one pass over the current candidate set.
 func (c *VersionsCache) Poll(ctx context.Context) {
 	c.mu.RLock()
 	candidates := make(map[string]string, len(c.candidates))
@@ -166,7 +166,6 @@ func (c *VersionsCache) IsNodeValidationCapable(miner, nodeID string) bool {
 	return entry.capableNodes[nodeID]
 }
 
-// Run polls on a fixed interval until ctx is cancelled.
 func (c *VersionsCache) Run(ctx context.Context, interval time.Duration) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()

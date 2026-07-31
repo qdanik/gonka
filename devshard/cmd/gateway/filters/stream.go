@@ -11,7 +11,32 @@ var (
 	sseEventSeparatorCRLF = []byte("\r\n\r\n")
 	sseDataPrefix         = []byte("data: ")
 	sseDataObjectHead     = []byte("data: {")
+	sseDoneMarker         = []byte("[DONE]")
 )
+
+// sseDataParsePrefix deliberately omits the space sseDataPrefix emits: the wire allows "data:{...}"
+// and a reader that demanded the space would classify every space-less frame as no data at all.
+var sseDataParsePrefix = []byte("data:")
+
+// EachSSEDataPayload visits the trimmed payload of every "data:" line in events, skipping empty
+// lines and [DONE], and stops as soon as visit reports the payload it wanted.
+func EachSSEDataPayload(events []byte, visit func(payload []byte) bool) {
+	for rest := events; len(rest) > 0; {
+		var line []byte
+		line, rest, _ = bytes.Cut(rest, []byte("\n"))
+		data, isData := bytes.CutPrefix(bytes.TrimRight(line, "\r"), sseDataParsePrefix)
+		if !isData {
+			continue
+		}
+		payload := bytes.TrimSpace(data)
+		if len(payload) == 0 || bytes.Equal(payload, sseDoneMarker) {
+			continue
+		}
+		if visit(payload) {
+			return
+		}
+	}
+}
 
 // MaxStreamCarryBytes bounds the unterminated tail held per stream: a host that never sends an
 // event terminator would otherwise grow it without limit. The largest legitimate frame carries
@@ -34,7 +59,6 @@ type StreamRewriter struct {
 	failed  bool
 }
 
-// NewStreamRewriter returns a rewriter with an empty carry buffer.
 func NewStreamRewriter() *StreamRewriter { return &StreamRewriter{} }
 
 // Write appends chunk to the carry buffer and returns every event it completes, rewritten.
@@ -82,22 +106,6 @@ func (r *StreamRewriter) Close() ([]byte, error) {
 		return nil, ErrStreamTruncatedEvent
 	}
 	return final, nil
-}
-
-// RewriteStreamChunk strips clientStrippedFields from every complete "data: {...}" SSE event in
-// chunk, dropping events whose payload is not valid JSON; [DONE], comments and non-object lines
-// pass through. It holds no state across calls, so streaming callers must use StreamRewriter.
-func RewriteStreamChunk(chunk []byte) []byte {
-	rewriter := NewStreamRewriter()
-	emitted, err := rewriter.Write(chunk)
-	if err != nil {
-		return emitted
-	}
-	final, err := rewriter.Close()
-	if err != nil {
-		return emitted
-	}
-	return append(emitted, final...)
 }
 
 // rewriteEvent returns event with clientStrippedFields removed, or nil when its "data: {...}"

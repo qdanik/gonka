@@ -111,6 +111,7 @@ type gateway struct {
 	participants *limits.ParticipantLimiter
 	telemetry    *metrics.Metrics
 	server       *http.Server
+	chainClient  *http.Client
 
 	builders     int
 	devshardWork chan struct{}
@@ -166,6 +167,7 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 		gatewayLimiter.Reconfigure(limits.GatewayConfigFromLimits(next.Limits))
 	})
 	hosts := perf.NewTracker(configHolder, clock)
+	telemetry := metrics.New()
 
 	devshardWork := make(chan struct{}, 1)
 	depletion := &depletionNotice{}
@@ -179,6 +181,7 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 		Snapshots:    observer,
 		Config:       configHolder,
 		Depletion:    depletion,
+		Dispatches:   metrics.NewDispatchRecorder(telemetry),
 		Now:          clock,
 	})
 	manager := escrow.NewManager(escrow.Deps{
@@ -205,7 +208,6 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 		return nil, err
 	}
 
-	telemetry := metrics.New()
 	sessions := api.NewSessions(escrows)
 	races := engine.NewEngine(engine.Deps{
 		Picker:     router,
@@ -216,6 +218,7 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 		Config:     configHolder,
 		Metrics:    metrics.NewRaceRecorder(telemetry),
 		Ledger:     api.NewRaceLedger(ledger),
+		Lifecycle:  manager,
 		Suspicious: suspicious.Suspicious,
 		Timeouts:   sessions.Poster,
 		Now:        clock,
@@ -278,6 +281,7 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 		participants: participants,
 		telemetry:    telemetry,
 		server:       server.HTTPServer(fmt.Sprintf(":%d", configuration.Server.Port)),
+		chainClient:  boot.client,
 		builders:     boot.builders,
 		devshardWork: devshardWork,
 	}, nil
@@ -331,6 +335,7 @@ type routingDeps struct {
 	Snapshots    *chain.PhaseObserver
 	Config       *config.Holder
 	Depletion    *depletionNotice
+	Dispatches   *metrics.DispatchRecorder
 	Now          func() time.Time
 }
 
@@ -351,6 +356,7 @@ func newRouting(deps routingDeps) (*registry.Registry, *scheduler.Scheduler) {
 		Perf:             deps.Hosts,
 		Snapshots:        deps.Snapshots,
 		Config:           deps.Config,
+		Observer:         deps.Dispatches,
 		Now:              deps.Now,
 		OnNonceExhausted: escrows.NonceExhausted,
 	})
@@ -368,10 +374,14 @@ type httpListener interface {
 
 type stopper interface{ Stop() }
 
+// idleConnections is satisfied by *http.Client: the pooled chain client keeps sockets open between
+// polls, and nothing above it in the order closes them.
+type idleConnections interface{ CloseIdleConnections() }
+
 // shutdownOrder is a contract: accepting stops first, then running races drain to the vote settling
 // their nonces -- which needs everything below them alive -- and the store closes last because it
 // drains the accounting ledger, whose queued rows must not outlive the connection they need.
-func shutdownOrder(listener httpListener, races, dispatchers, escrowLifecycle, chainObserver stopper, sessions, storage io.Closer) []shutdownStep {
+func shutdownOrder(listener httpListener, races, dispatchers, escrowLifecycle, chainObserver stopper, sessions, storage io.Closer, chainClient idleConnections) []shutdownStep {
 	return []shutdownStep{
 		{name: "http server", stop: listener.Shutdown},
 		{name: "races", stop: waitFor(races)},
@@ -380,6 +390,9 @@ func shutdownOrder(listener httpListener, races, dispatchers, escrowLifecycle, c
 		{name: "chain observer", stop: waitFor(chainObserver)},
 		{name: "escrow sessions", stop: closeOf(sessions)},
 		{name: "store", stop: closeOf(storage)},
+		// Last: every step above can still reach the chain, and an idle socket closed under one of them
+		// is a socket the next poll has to re-dial.
+		{name: "chain connections", stop: closeIdle(chainClient)},
 	}
 }
 
@@ -403,6 +416,13 @@ func closeOf(component io.Closer) func(context.Context) error {
 	return func(context.Context) error { return component.Close() }
 }
 
+func closeIdle(component idleConnections) func(context.Context) error {
+	return func(context.Context) error {
+		component.CloseIdleConnections()
+		return nil
+	}
+}
+
 // stopAll runs every step even after a failure: the store must be reached whatever happened above it.
 func stopAll(ctx context.Context, steps []shutdownStep) error {
 	var problems []error
@@ -417,7 +437,7 @@ func stopAll(ctx context.Context, steps []shutdownStep) error {
 func (g *gateway) shutdown(grace time.Duration) error {
 	drainCtx, cancelDrain := context.WithTimeout(context.Background(), grace)
 	defer cancelDrain()
-	return stopAll(drainCtx, shutdownOrder(g.server, g.races, g.router, g.manager, g.observer, g.escrows, g.store))
+	return stopAll(drainCtx, shutdownOrder(g.server, g.races, g.router, g.manager, g.observer, g.escrows, g.store, g.chainClient))
 }
 
 // bootBudget ties the two halves of a bounded boot: the concurrent-build limit and the idle pool
@@ -811,7 +831,7 @@ type operations struct {
 // request body would reach the commitment row, the logs, and every operator in between.
 func (o *operations) CreateEscrow(ctx context.Context, request api.CreateEscrowRequest) (chain.CreateEscrowResult, error) {
 	if strings.TrimSpace(request.PrivateKeyEnv) == "" {
-		return chain.CreateEscrowResult{}, fmt.Errorf("private_key_env is required; a raw private_key is not accepted")
+		return chain.CreateEscrowResult{}, api.ErrPrivateKeyEnvRequired
 	}
 	result, err := o.manager.CreateEscrow(ctx, escrow.ModelConfig{
 		ModelID:       request.Model,
@@ -892,11 +912,7 @@ func (o *operations) Settle(ctx context.Context, id string) (chain.SettleEscrowR
 	if err := o.escrows.Retire(id); err != nil {
 		return chain.SettleEscrowResult{}, err
 	}
-	result, err := o.manager.Settle(ctx, id)
-	if errors.Is(err, escrow.ErrDevshardBusy) {
-		return chain.SettleEscrowResult{}, fmt.Errorf("%w: %s", api.ErrDevshardBusy, id)
-	}
-	return result, err
+	return o.manager.Settle(ctx, id)
 }
 
 func (o *operations) Unquarantine(_ context.Context, participantKey string) error {

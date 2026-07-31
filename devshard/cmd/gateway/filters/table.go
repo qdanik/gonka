@@ -2,7 +2,6 @@ package filters
 
 import "sort"
 
-// Stage identifies which pipeline phase a rule runs in.
 type Stage int
 
 const (
@@ -12,7 +11,6 @@ const (
 	StagePostLimits
 )
 
-// RuleContext is the argument passed to every RuleFunc.
 type RuleContext struct {
 	Document    *Document
 	Param       string
@@ -24,13 +22,11 @@ type RuleContext struct {
 // RuleFunc is one parameter rule: inspect/mutate ctx.Document, or reject.
 type RuleFunc func(RuleContext) error
 
-// StagedRule pairs a RuleFunc with the pipeline stage it runs in.
 type StagedRule struct {
 	Stage Stage
 	Apply RuleFunc
 }
 
-// ParameterSpec declares one top-level parameter: its name and rules.
 type ParameterSpec struct {
 	Name  string
 	Rules []StagedRule
@@ -81,7 +77,6 @@ const (
 	metadataMaxValueLen = 512
 )
 
-// spec builds a ParameterSpec with a single staged rule.
 func spec(name string, stage Stage, rule RuleFunc) ParameterSpec {
 	return ParameterSpec{Name: name, Rules: []StagedRule{{Stage: stage, Apply: rule}}}
 }
@@ -239,10 +234,6 @@ func buildKnownParameterSet() map[string]struct{} {
 	}
 	return known
 }
-
-// forcedParameterNames lists request fields a forceLiteral rule always overwrites; each must
-// have a clientStrippedFields response-side counterpart.
-var forcedParameterNames = []string{"logprobs", "top_logprobs", "return_token_ids"}
 
 // unwrapExtraBody flattens an extra_body envelope into top-level fields before the whitelist
 // runs; an existing top-level key wins on conflict, the envelope key is dropped either way.

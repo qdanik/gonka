@@ -21,18 +21,17 @@ func (serve) isDecision() {}
 func (burn) isDecision()  {}
 func (hold) isDecision()  {}
 
-// waiter is one request queued on an escrow's dispatcher, waiting for a compatible nonce. abandoned
-// is how a cancelled caller leaves the queue: the dispatcher owns the queue itself, so a departure
-// must never be a message the actor has to receive.
+// waiter is one request queued on an escrow's dispatcher, waiting for a compatible nonce. abandoned is how
+// a cancelled caller leaves the queue: the dispatcher owns the queue itself, so a departure must never be a
+// message the actor has to receive. handoff orders deliver against abandon, so a committed nonce arriving
+// in the same instant as the caller's cancellation is owned by exactly one of them rather than by neither.
 type waiter struct {
 	profile   RequestProfile
-	exclude   map[string]bool // profile.Exclude as a set, participant-keyed
+	exclude   map[string]bool
 	enqueued  time.Time
 	replyCh   chan pickResult
 	abandoned atomic.Bool
 
-	// handoff orders deliver against abandon, so a committed nonce arriving in the same instant as the
-	// caller's cancellation is owned by exactly one of them rather than by neither.
 	handoff sync.Mutex
 }
 

@@ -14,7 +14,6 @@ import (
 	"go.uber.org/goleak"
 )
 
-// fakeSnapshotSource stubs snapshotSource with a fixed snapshot.
 type fakeSnapshotSource struct {
 	snapshot chain.PhaseSnapshot
 }
@@ -55,8 +54,6 @@ func testManagerDeps(t *testing.T, testStore *fakeStore, txClient *fakeTxClient,
 		Now:       time.Now,
 	}
 }
-
-// --- tick: reconcile-always-runs, cold-start, bridge branch selection, depletion ---
 
 func TestTickReconcileRunsEvenWhenRotationDisabled(t *testing.T) {
 	testStore := newFakeStore()
@@ -224,8 +221,6 @@ func TestTickCheckDepletionRunsRegardlessOfBridgeBranch(t *testing.T) {
 
 	assertParked(t, testStore, "1")
 }
-
-// --- Start/Stop lifecycle ---
 
 // If Start were not idempotent, the first goroutine's stop/done channels would be overwritten
 // and orphaned by the second call, leaking a goroutine that goleak.VerifyNone would catch.

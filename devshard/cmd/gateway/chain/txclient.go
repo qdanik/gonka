@@ -19,13 +19,13 @@ import (
 	"devshard/signing"
 )
 
-// Config-const defaults applied by NewTxClient for zero-value fields.
+// Defaults applied by NewTxClient for zero-value fields, and the single source config.Defaults reads.
 const (
-	defaultFeeDenom     = "ngonka"
-	defaultFeeAmount    = uint64(1_000_000)
-	defaultGasLimit     = uint64(500_000)
-	defaultPollInterval = 2 * time.Second
-	defaultPollTimeout  = 45 * time.Second
+	DefaultFeeDenom     = "ngonka"
+	DefaultFeeAmount    = uint64(1_000_000)
+	DefaultGasLimit     = uint64(500_000)
+	DefaultPollInterval = 2 * time.Second
+	DefaultPollTimeout  = 45 * time.Second
 	// unorderedTxTTL is how far past "now" a built tx's timeout_timestamp is set.
 	unorderedTxTTL = 9 * time.Minute
 )
@@ -65,14 +65,12 @@ type Config struct {
 	Now                 func() time.Time
 }
 
-// CreateEscrowResult is the outcome of a successful CreateEscrow call.
 type CreateEscrowResult struct {
 	EscrowID uint64
 	TxHash   string
 	Creator  string
 }
 
-// SettleEscrowResult is the outcome of a successful SettleEscrow call.
 type SettleEscrowResult struct {
 	EscrowID uint64
 	TxHash   string
@@ -88,23 +86,23 @@ func NewTxClient(cfg Config) (*TxClient, error) {
 	}
 	feeDenom := strings.TrimSpace(cfg.FeeDenom)
 	if feeDenom == "" {
-		feeDenom = defaultFeeDenom
+		feeDenom = DefaultFeeDenom
 	}
 	feeAmount := cfg.FeeAmount
 	if feeAmount == 0 {
-		feeAmount = defaultFeeAmount
+		feeAmount = DefaultFeeAmount
 	}
 	gasLimit := cfg.GasLimit
 	if gasLimit == 0 {
-		gasLimit = defaultGasLimit
+		gasLimit = DefaultGasLimit
 	}
 	pollInterval := cfg.PollInterval
 	if pollInterval <= 0 {
-		pollInterval = defaultPollInterval
+		pollInterval = DefaultPollInterval
 	}
 	pollTimeout := cfg.PollTimeout
 	if pollTimeout <= 0 {
-		pollTimeout = defaultPollTimeout
+		pollTimeout = DefaultPollTimeout
 	}
 	client := cfg.HTTPClient
 	if client == nil {
@@ -228,7 +226,6 @@ func (c *TxClient) SettleEscrow(ctx context.Context, signer *signing.Secp256k1Si
 	return SettleEscrowResult{EscrowID: input.EscrowID, TxHash: txHash, Settler: settler}, nil
 }
 
-// resolveChainID uses the configured chain ID, falling back to a live lookup.
 func (c *TxClient) resolveChainID(ctx context.Context) (string, error) {
 	if c.chainID != "" {
 		return c.chainID, nil
@@ -270,7 +267,6 @@ func (c *TxClient) GetTxEscrowID(ctx context.Context, txHash string) (uint64, bo
 	return 0, false, lastErr
 }
 
-// fetchChainID resolves the chain ID from the node's own node_info endpoint.
 func (c *TxClient) fetchChainID(ctx context.Context) (string, error) {
 	var payload any
 	if err := c.getJSONFromBaseURL(ctx, c.baseURL, "/cosmos/base/tendermint/v1beta1/node_info", &payload); err != nil {
@@ -283,7 +279,6 @@ func (c *TxClient) fetchChainID(ctx context.Context) (string, error) {
 	return chainID, nil
 }
 
-// chainAccount is the subset of an auth account response the tx builders need.
 type chainAccount struct {
 	AccountNumber uint64
 	Sequence      uint64
@@ -363,7 +358,6 @@ func (c *TxClient) waitForCreatedEscrowID(ctx context.Context, txHash string) (u
 	}
 }
 
-// chainHTTPError is returned by getJSONFromBaseURL on non-200 responses.
 type chainHTTPError struct {
 	method string
 	path   string
@@ -379,8 +373,6 @@ func (e *chainHTTPError) StatusCode() int {
 	return e.status
 }
 
-// isNotFoundError reports whether a chain GET failed with HTTP 404 rather
-// than a transient error.
 func isNotFoundError(err error) bool {
 	var httpErr *chainHTTPError
 	return errors.As(err, &httpErr) && httpErr.StatusCode() == http.StatusNotFound
@@ -484,7 +476,6 @@ func createdEscrowIDFromEvents(events []txEvent) (uint64, bool) {
 	return 0, false
 }
 
-// findStringField searches a decoded JSON tree for the first string value at key.
 func findStringField(node any, key string) string {
 	switch typed := node.(type) {
 	case map[string]any:
@@ -508,7 +499,6 @@ func findStringField(node any, key string) string {
 	return ""
 }
 
-// findUintField searches a decoded JSON tree for the first uint64-parseable value at key.
 func findUintField(node any, key string) (uint64, bool) {
 	switch typed := node.(type) {
 	case map[string]any:
@@ -532,7 +522,6 @@ func findUintField(node any, key string) (uint64, bool) {
 	return 0, false
 }
 
-// parseJSONUint accepts a uint64 encoded as a JSON string or number.
 func parseJSONUint(raw any) (uint64, bool) {
 	switch value := raw.(type) {
 	case string:

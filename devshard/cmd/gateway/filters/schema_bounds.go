@@ -201,7 +201,6 @@ type ObjectBounds struct {
 	MaxSizeBytes int
 }
 
-// Check walks obj for depth/node violations, then checks serialized size.
 func (b ObjectBounds) Check(obj map[string]any) error {
 	var nodes int
 	if err := b.walk(obj, 1, &nodes); err != nil {

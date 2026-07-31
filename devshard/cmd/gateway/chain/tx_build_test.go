@@ -92,7 +92,6 @@ func TestTruncateSignatureRealSecp256k1SignatureTruncatesTo64(t *testing.T) {
 	}
 }
 
-// TestTruncateSignatureShortSignatureErrors covers the len<64 guard.
 func TestTruncateSignatureShortSignatureErrors(t *testing.T) {
 	_, err := truncateSignature(make([]byte, 63))
 	if err == nil {
@@ -157,7 +156,6 @@ func TestBuildCreateEscrowTxStructural(t *testing.T) {
 	}
 }
 
-// TestBuildCreateEscrowTxEmptyChainIDErrors covers the chain-id guard.
 func TestBuildCreateEscrowTxEmptyChainIDErrors(t *testing.T) {
 	_, err := buildCreateEscrowTx(fixedSigner(t), "   ", fixedAccountNumber, fixedFeeDenom, fixedFeeAmount, fixedGasLimit, fixedAmount, fixedModelID, fixedTTL)
 	if err == nil {
@@ -218,7 +216,6 @@ func TestBuildSettleEscrowTxStructural(t *testing.T) {
 	}
 }
 
-// TestBuildSettleEscrowTxEmptyChainIDErrors covers the chain-id guard.
 func TestBuildSettleEscrowTxEmptyChainIDErrors(t *testing.T) {
 	_, err := buildSettleEscrowTx(fixedSigner(t), "", fixedAccountNumber, fixedFeeDenom, fixedFeeAmount, fixedGasLimit, fixedSettler, fixedSettlementFull(), fixedTTL)
 	if err == nil {

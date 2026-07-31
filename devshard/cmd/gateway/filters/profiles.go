@@ -35,7 +35,6 @@ const (
 
 var registeredProfiles = []*Profile{kimiProfile, minimaxProfile}
 
-// ProfileFor returns the profile whose Models includes routedModel, or nil for the default profile.
 func ProfileFor(routedModel string) *Profile {
 	for _, profile := range registeredProfiles {
 		if slices.Contains(profile.Models, routedModel) {

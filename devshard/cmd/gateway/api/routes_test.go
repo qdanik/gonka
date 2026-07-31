@@ -13,8 +13,6 @@ import (
 	"devshard/cmd/gateway/scheduler"
 )
 
-// ---- P0: an unroutable model must not spend the pipeline ----
-
 func TestAnUnroutableModelIsRejectedBeforeTheLimiterAndTheRace(t *testing.T) {
 	live := newHarness(t)
 	recorder := live.request(t, http.MethodPost, "/v1/chat/completions",
@@ -65,8 +63,6 @@ func TestAChatRequestWithoutAModelIsAClientError(t *testing.T) {
 		t.Fatalf("limiter slots taken: got %d, want 0", got)
 	}
 }
-
-// ---- the request path's remaining statuses ----
 
 func TestTheLimiterRejectionReachesTheClientAs429(t *testing.T) {
 	live := newHarness(t)
@@ -149,8 +145,6 @@ func TestAFailureAfterTheFirstByteKeepsTheStatusTheClientAlreadySaw(t *testing.T
 		t.Fatalf("status: got %d, want the 200 the client already received", recorder.Code)
 	}
 }
-
-// ---- models and status ----
 
 func TestTheModelListNamesEveryRoutableModel(t *testing.T) {
 	live := newHarness(t)

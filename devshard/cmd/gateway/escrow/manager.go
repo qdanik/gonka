@@ -71,12 +71,10 @@ func (m *Manager) runTick(ctx context.Context) {
 	}
 }
 
-// Stop is idempotent and blocks until the tick goroutine has exited, so a settings swap or
-// shutdown never races a live tick.
-// Stop is idempotent and is a barrier for every caller. Cancelling the context interrupts a tick
+// Stop is idempotent and is a barrier for every caller: done outlives stop, so a second concurrent
+// Stop waits for the exit rather than returning early. Cancelling the context interrupts a tick
 // already in flight — a tick can outlast the shutdown grace period, and waiting only between ticks
-// would let the process close its store while a settlement write is still running. done outlives
-// stop so a second, concurrent Stop waits for the exit rather than returning early.
+// would let the process close its store while a settlement write is still running.
 func (m *Manager) Stop() {
 	m.lifecycleMu.Lock()
 	stop, done, cancel := m.stop, m.done, m.cancel
@@ -103,20 +101,22 @@ func (m *Manager) tick(ctx context.Context) error {
 	// Parked escrows must settle whatever the rotation toggle says: their row is the only record of
 	// which key can settle them, so nothing else will ever pick them up.
 	pendingErr := m.settlePending(ctx, devshards)
+	// An escrow gone from chain must stop taking traffic whatever the rotation toggle says.
+	missingErr := m.checkMissing(ctx)
 
 	cfg := m.config.Load()
 	if !cfg.Rotation.Enabled {
-		return errors.Join(reconcileErr, pendingErr)
+		return errors.Join(reconcileErr, pendingErr, missingErr)
 	}
 	models, err := parseModels(cfg.Rotation.ModelsJSON)
 	if err != nil {
-		return errors.Join(reconcileErr, pendingErr, err)
+		return errors.Join(reconcileErr, pendingErr, missingErr, err)
 	}
 
 	// Pulled, not subscribed: a 15s poll is equivalent at this cadence and avoids callback races.
 	snapshot := m.snapshots.Snapshot()
 	if snapshot.EpochIndex == 0 || snapshot.BlockHeight == 0 {
-		return errors.Join(reconcileErr, pendingErr) // cold start, no chain data yet
+		return errors.Join(reconcileErr, pendingErr, missingErr) // cold start, no chain data yet
 	}
 
 	var bridgeErr error
@@ -128,5 +128,5 @@ func (m *Manager) tick(ctx context.Context) error {
 	}
 
 	depletionErr := m.checkDepletion(ctx, snapshot, models, devshards)
-	return errors.Join(reconcileErr, pendingErr, bridgeErr, depletionErr)
+	return errors.Join(reconcileErr, pendingErr, missingErr, bridgeErr, depletionErr)
 }

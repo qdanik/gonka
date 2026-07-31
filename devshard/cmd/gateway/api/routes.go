@@ -37,9 +37,18 @@ func (s *Server) routes() []route {
 		{pattern: "/metrics", alwaysOn: true, handler: s.handleMetrics},
 
 		{pattern: "/devshard/{id}/v1/models", label: "/devshard/{id}/v1/models", handler: s.handleDevshardModels},
+		{pattern: "/devshard/{id}/v1/chat/completions", label: "/devshard/{id}/v1/chat/completions", handler: s.handleDevshardChat},
 		{pattern: "/devshard/{id}/v1/status", label: "/devshard/{id}/v1/status", handler: s.handleDevshardStatus},
 
 		{pattern: "/devshard/{id}/v1/finalize", label: "/devshard/{id}/v1/finalize", admin: true, alwaysOn: true, handler: s.handleDevshardFinalize},
+
+		// Recovery surface: alwaysOn because the escrow an operator needs to read is the one whose
+		// trouble is why the kill switch is down.
+		{pattern: "/devshard/{id}/v1/state", label: "/devshard/{id}/v1/state", admin: true, alwaysOn: true, handler: s.handleDevshardState},
+		{pattern: "/devshard/{id}/v1/debug/state", label: "/devshard/{id}/v1/debug/state", admin: true, alwaysOn: true, handler: s.handleDevshardDebugState},
+		{pattern: "/devshard/{id}/v1/debug/inferences", label: "/devshard/{id}/v1/debug/inferences", admin: true, alwaysOn: true, handler: s.handleDevshardDebugInferences},
+		{pattern: "/devshard/{id}/v1/debug/pending", label: "/devshard/{id}/v1/debug/pending", admin: true, alwaysOn: true, handler: s.handleDevshardDebugPending},
+		{pattern: "/devshard/{id}/v1/debug/signatures", label: "/devshard/{id}/v1/debug/signatures", admin: true, alwaysOn: true, handler: s.handleDevshardDebugSignatures},
 
 		// The row names the escrow and the participant, and records no caller to authorize against.
 		{pattern: "/v1/requests/{id}", label: "/v1/requests/{id}", admin: true, alwaysOn: true, handler: s.handleRequestAccounting},
@@ -150,6 +159,18 @@ func (s *Server) handleDevshardModels(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, s.modelList([]string{escrow.Model}))
+}
+
+// modelTokenLimits closes over the per-model override map only when an operator configured one, so
+// a deployment without overrides allocates nothing on the request path.
+func modelTokenLimits(overrides map[string]config.ModelLimits) func(string) (uint64, uint64) {
+	if len(overrides) == 0 {
+		return nil
+	}
+	return func(model string) (uint64, uint64) {
+		override := overrides[model]
+		return uint64(override.DefaultMaxTokens), uint64(override.MaxTokensCap)
+	}
 }
 
 func (s *Server) modelList(models []string) modelListResponse {
@@ -330,6 +351,24 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	if !allowMethods(w, r, http.MethodPost) {
 		return
 	}
+	s.chat(w, r, "")
+}
+
+// handleDevshardChat pins the race to one escrow. A pin the gateway no longer routes to is refused
+// rather than served from another escrow, so the X-Devshard-ID a caller asked for is the one it gets.
+func (s *Server) handleDevshardChat(w http.ResponseWriter, r *http.Request) {
+	if !allowMethods(w, r, http.MethodPost) {
+		return
+	}
+	escrowID := r.PathValue("id")
+	if _, routable := s.routableEscrow(escrowID); !routable {
+		writeErrorFor(w, fmt.Errorf("%w: %s", ErrUnknownDevshard, escrowID))
+		return
+	}
+	s.chat(w, r, escrowID)
+}
+
+func (s *Server) chat(w http.ResponseWriter, r *http.Request, escrowPin string) {
 	configuration := s.config.Load()
 	identity := s.resolveCredentials(r)
 	requestID := s.requestIDs()
@@ -343,6 +382,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		Admin:            identity.admin,
 		DefaultMaxTokens: uint64(configuration.Limits.DefaultMaxTokens),
 		MaxTokensCap:     uint64(configuration.Limits.MaxTokensCap),
+		ModelTokenLimits: modelTokenLimits(configuration.Limits.ModelLimits),
 	})
 	if err != nil {
 		s.capture.filterRejected(r, requestID, body, err)
@@ -376,11 +416,11 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	defer s.limiter.ReleaseForModel(normalized.Model, int64(inputTokens))
 
 	if s.cache == nil {
-		s.race(w, r, requestID, normalized, inputTokens)
+		s.race(w, r, requestID, normalized, inputTokens, escrowPin)
 		return
 	}
 	recorder := &cacheRecorder{ResponseWriter: w}
-	outcome := s.race(recorder, r, requestID, normalized, inputTokens)
+	outcome := s.race(recorder, r, requestID, normalized, inputTokens, escrowPin)
 	if entry, storable := recorder.entry(outcome.EscrowID, normalized.Stream, r.Context().Err()); storable {
 		s.cache.put(key, entry, s.now())
 	}
@@ -420,11 +460,12 @@ func authorizeModel(configured config.Limits, model string, identity credentials
 	}
 }
 
-func (s *Server) race(w http.ResponseWriter, r *http.Request, requestID string, normalized filters.Result, inputTokens uint64) engine.RaceOutcome {
+func (s *Server) race(w http.ResponseWriter, r *http.Request, requestID string, normalized filters.Result, inputTokens uint64, escrowPin string) engine.RaceOutcome {
 	client := newClientStream(w, requestID, normalized.Stream)
 	outcome, err := s.inference.Run(r.Context(), engine.Request{
 		RequestID:     requestID,
 		Model:         normalized.Model,
+		Escrow:        escrowPin,
 		InputTokens:   inputTokens,
 		Stream:        normalized.Stream,
 		RequiresTools: requiresTools(normalized.Body),

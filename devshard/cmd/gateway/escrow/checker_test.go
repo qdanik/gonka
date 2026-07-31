@@ -6,8 +6,73 @@ import (
 	"testing"
 
 	"devshard/cmd/gateway/chain"
+	"devshard/cmd/gateway/config"
 	"devshard/cmd/gateway/store"
 )
+
+// A host's "escrow not found" must end in a deactivated escrow, without the confirming chain lookup
+// running on the request path that reported it.
+func TestOnEscrowMissingDeactivatesTheEscrowOnTheNextTick(t *testing.T) {
+	testStore := newFakeStore()
+	testStore.devshards["1"] = store.DevshardRecord{EscrowID: "1", Model: "model-a", Active: true}
+	log := &callLog{}
+	testStore.calls = log
+	txClient := &fakeTxClient{
+		calls: log,
+		getEscrowFn: func(ctx context.Context, escrowID string) (chain.EscrowInfo, bool, error) {
+			return chain.EscrowInfo{}, false, nil
+		},
+	}
+	cfg := config.Defaults()
+	cfg.Rotation.Enabled = false
+	m := NewManager(testManagerDeps(t, testStore, txClient, &fakeSnapshotSource{}, &cfg))
+
+	m.OnEscrowMissing("1")
+	if hasCall(log.snapshot(), "GetEscrow") {
+		t.Fatal("GetEscrow ran inside the hook: the report path reached the chain")
+	}
+	if err := m.tick(context.Background()); err != nil {
+		t.Fatalf("tick() = %v, want nil", err)
+	}
+
+	if got := testStore.devshards["1"]; got.Active {
+		t.Fatal("devshard.Active = true, want false: a host reported the escrow gone and it still takes traffic")
+	}
+}
+
+// A drained mark must not deactivate a second escrow's worth of traffic on the tick after it.
+func TestOnEscrowMissingChecksEachMarkOnce(t *testing.T) {
+	testStore := newFakeStore()
+	testStore.devshards["1"] = store.DevshardRecord{EscrowID: "1", Model: "model-a", Active: true}
+	log := &callLog{}
+	testStore.calls = log
+	txClient := &fakeTxClient{
+		calls: log,
+		getEscrowFn: func(ctx context.Context, escrowID string) (chain.EscrowInfo, bool, error) {
+			return chain.EscrowInfo{}, false, nil
+		},
+	}
+	cfg := config.Defaults()
+	cfg.Rotation.Enabled = false
+	m := NewManager(testManagerDeps(t, testStore, txClient, &fakeSnapshotSource{}, &cfg))
+
+	m.OnEscrowMissing("1")
+	for tick := 0; tick < 2; tick++ {
+		if err := m.tick(context.Background()); err != nil {
+			t.Fatalf("tick() = %v, want nil", err)
+		}
+	}
+
+	lookups := 0
+	for _, name := range log.snapshot() {
+		if name == "GetEscrow" {
+			lookups++
+		}
+	}
+	if lookups != 1 {
+		t.Fatalf("GetEscrow ran %d times, want exactly 1: the mark outlived the tick that drained it", lookups)
+	}
+}
 
 // INVARIANT 8: only a positive "chain confirms not found" resolves to deactivation.
 func TestTriggerEscrowCheckNotFoundDeactivates(t *testing.T) {

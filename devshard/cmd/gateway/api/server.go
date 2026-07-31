@@ -147,7 +147,6 @@ type Server struct {
 	cache      *responseCache
 	capture    *requestCapture
 
-	// verify is a field so a test can observe which routes reach a key comparison at all.
 	verify  func(authorization string) credentials
 	handler http.Handler
 }

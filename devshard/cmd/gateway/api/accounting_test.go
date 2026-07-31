@@ -174,13 +174,11 @@ func TestTheLookupReturnsTheRecordedRow(t *testing.T) {
 		InputTokens:        128,
 		WinnerOutputTokens: 256,
 		TotalOutputTokens:  381,
-		StartedAt:          "1699999999.5Z",
-		CompletedAt:        "1700000004Z",
+		StartedAt:          "2023-11-14T22:13:19.5Z",
+		CompletedAt:        "2023-11-14T22:13:24Z",
 		FirstTokenMS:       450,
 		DurationMS:         4_000,
 	}
-	expected.StartedAt = timestamp(sendTime().Add(-500 * time.Millisecond))
-	expected.CompletedAt = timestamp(sendTime().Add(4 * time.Second))
 	if body != expected {
 		t.Fatalf("body = %+v, want %+v", body, expected)
 	}

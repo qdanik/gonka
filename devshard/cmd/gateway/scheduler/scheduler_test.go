@@ -135,9 +135,39 @@ type schedulerConfig struct {
 	gate         chan struct{}
 }
 
+// escrowHolds counts the in-flight holds the commit takes, so an assignment dropped without giving one
+// back shows up as a hold that never came home.
+type escrowHolds struct {
+	mu   sync.Mutex
+	open int
+}
+
+func (h *escrowHolds) source() func() (func(), bool) {
+	return func() (func(), bool) {
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		h.open++
+		var once sync.Once
+		return func() {
+			once.Do(func() {
+				h.mu.Lock()
+				defer h.mu.Unlock()
+				h.open--
+			})
+		}, true
+	}
+}
+
+func (h *escrowHolds) outstanding() int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.open
+}
+
 type schedulerHarness struct {
 	scheduler *Scheduler
 	escrows   *fakeEscrows
+	holds     *escrowHolds
 	weights   *fakeWeights
 	sessions  map[string]*scriptedSession
 	limiter   *fakeLimiter
@@ -159,10 +189,11 @@ func newSchedulerHarness(t *testing.T, cfg schedulerConfig) *schedulerHarness {
 	escrows := &fakeEscrows{byModel: map[string][]Escrow{}}
 	weights := &fakeWeights{byEscrow: map[string]float64{}}
 	sessions := map[string]*scriptedSession{}
+	holds := &escrowHolds{}
 	for _, escrowID := range cfg.escrows {
 		session := &scriptedSession{slots: cfg.slots, gate: cfg.gate, entered: make(chan struct{}, 1)}
 		sessions[escrowID] = session
-		escrows.byModel[modelA] = append(escrows.byModel[modelA], Escrow{ID: escrowID, Model: modelA, Session: session})
+		escrows.byModel[modelA] = append(escrows.byModel[modelA], Escrow{ID: escrowID, Model: modelA, Session: session, Hold: holds.source()})
 		weights.byEscrow[escrowID] = 10
 	}
 
@@ -173,6 +204,7 @@ func newSchedulerHarness(t *testing.T, cfg schedulerConfig) *schedulerHarness {
 	limiter.window = cfg.hostWindow
 	test := &schedulerHarness{
 		escrows:   escrows,
+		holds:     holds,
 		weights:   weights,
 		sessions:  sessions,
 		limiter:   limiter,
@@ -360,8 +392,8 @@ func TestPickReturnsTheContextErrorWhenCancelledWhileQueued(t *testing.T) {
 	test.scheduler.Stop()
 }
 
-// Every admission ends up either with the caller that will release it or given back here; a
-// cancellation racing the handoff must not be able to strand one in between.
+// Every admission and every escrow hold ends up either with the caller that will release it or given
+// back here; a cancellation racing the handoff must not be able to strand one in between.
 func TestPickReleasesTheSlotWhenCancellationRacesTheAssignment(t *testing.T) {
 	verifyNoLeaks(t)
 	test := newSchedulerHarness(t, schedulerConfig{})
@@ -375,6 +407,7 @@ func TestPickReleasesTheSlotWhenCancellationRacesTheAssignment(t *testing.T) {
 		if err == nil {
 			takenByCallers++
 			test.limiter.Release(assignment.Host, modelA)
+			assignment.ReleaseEscrow()
 		}
 	}
 	test.scheduler.Stop()
@@ -382,6 +415,9 @@ func TestPickReleasesTheSlotWhenCancellationRacesTheAssignment(t *testing.T) {
 	held, admitted := test.limiter.slots()
 	if held != 0 {
 		t.Fatalf("slots held = %d after %d races, want every admission accounted for", held, races)
+	}
+	if outstanding := test.holds.outstanding(); outstanding != 0 {
+		t.Fatalf("escrow holds still out = %d after %d races, want every hold accounted for", outstanding, races)
 	}
 	dropped := 0
 	for _, reason := range test.observer.burns() {

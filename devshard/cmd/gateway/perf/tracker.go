@@ -1,4 +1,4 @@
-// Package perf tracks per-host latency (peak-EWMA), health/ejection, first-token percentiles, and capability flags.
+// Package perf tracks per-host health/ejection, in-flight load, and capability flags.
 package perf
 
 import (
@@ -11,38 +11,30 @@ import (
 	"devshard/cmd/gateway/config"
 )
 
-// Tracker composes the per-host performance primitives; sub-components own
-// their locking, so mu only guards the host/ejection maps.
+// Tracker composes the per-host performance primitives; sub-components own their locking, so mu only
+// guards the host/ejection maps. ejectedView answers Ejected without touching mu or scanning every host:
+// the ejection cap is resolved once per state change, while each entry keeps its own expiry so time still
+// decides.
 type Tracker struct {
-	mu         sync.Mutex
-	config     *config.Holder
-	hosts      map[hostKey]*hostPerf
-	ejections  map[hostKey]*ejectionState
-	capability *capabilityTracker
-	firstToken *firstTokenReservoir
-	inflight   *inflightGauge
-	now        func() time.Time
-	lastSweep  time.Time
-	// ejectedView answers Ejected without touching mu or scanning every host: the ejection cap is
-	// resolved once per state change, while each entry keeps its own expiry so time still decides.
+	mu          sync.Mutex
+	config      *config.Holder
+	hosts       map[hostKey]*hostPerf
+	ejections   map[hostKey]*ejectionState
+	capability  *capabilityTracker
+	inflight    *inflightGauge
+	now         func() time.Time
+	lastSweep   time.Time
 	ejectedView atomic.Pointer[map[hostKey]time.Time]
 }
 
 func NewTracker(holder *config.Holder, now func() time.Time) *Tracker {
-	perf := holder.Load().Perf
 	return &Tracker{
 		config:     holder,
 		now:        now,
 		hosts:      make(map[hostKey]*hostPerf),
 		ejections:  make(map[hostKey]*ejectionState),
 		capability: newCapabilityTracker(),
-		firstToken: newFirstTokenReservoir(
-			int(perf.FirstTokenReservoir),
-			int(perf.FirstTokenActivationSamples),
-			perf.FirstTokenPercentile,
-			time.Duration(perf.FirstTokenStalenessSeconds)*time.Second,
-		),
-		inflight: newInflightGauge(),
+		inflight:   newInflightGauge(),
 	}
 }
 
@@ -67,8 +59,6 @@ func (t *Tracker) RecordSample(s Sample) {
 	}
 }
 
-// rebuildEjectedViewLocked applies Envoy's max-ejection-percent cap across the hosts of each model,
-// ties breaking by participant order, and publishes the survivors with their expiries.
 func (t *Tracker) rebuildEjectedViewLocked(now time.Time, perf config.Perf) {
 	knownByModel := make(map[string]int, len(t.hosts))
 	for key := range t.hosts {
@@ -98,7 +88,7 @@ func (t *Tracker) rebuildEjectedViewLocked(now time.Time, perf config.Perf) {
 func (t *Tracker) ensureHostLocked(key hostKey, perf config.Perf) (*hostPerf, *ejectionState) {
 	host, ok := t.hosts[key]
 	if !ok {
-		host = newHostPerf(time.Duration(perf.EWMAHalfLifeSeconds)*time.Second, perf.ColdStartReceiptMs, perf.ColdStartCTTFLMsPerToken)
+		host = newHostPerf(time.Duration(perf.EWMAHalfLifeSeconds) * time.Second)
 		t.hosts[key] = host
 	}
 	state, ok := t.ejections[key]
@@ -137,10 +127,6 @@ func newEjectionPolicyFromPerf(perf config.Perf) ejectionPolicy {
 	)
 }
 
-func (t *Tracker) RecordFirstToken(model string, inputTokens uint64, firstTokenMs float64) {
-	t.firstToken.record(model, inputTokens, firstTokenMs, t.now())
-}
-
 func (t *Tracker) RecordContextLimit(participant string, maxTokens uint64) {
 	t.capability.recordContextLimit(participant, maxTokens)
 }
@@ -155,20 +141,6 @@ func (t *Tracker) Acquire(participant string) {
 
 func (t *Tracker) Release(participant string) {
 	t.inflight.release(participant)
-}
-
-func (t *Tracker) Estimate(participant, model string, inputTokens uint64) float64 {
-	now := t.now()
-	perf := t.config.Load().Perf
-	key := hostKey{participant: participant, model: model}
-
-	t.mu.Lock()
-	defer t.mu.Unlock()
-
-	if host, ok := t.hosts[key]; ok {
-		return host.estimate(inputTokens, now)
-	}
-	return perf.ColdStartReceiptMs + perf.ColdStartCTTFLMsPerToken*float64(inputTokens)
 }
 
 // HostState is one tracked participant/model pair as a reader sees it.
@@ -234,10 +206,6 @@ func maxEjectable(perf config.Perf, knownForModel int) int {
 		return 0
 	}
 	return allowed
-}
-
-func (t *Tracker) FirstTokenP95(model string, inputTokens uint64) (time.Duration, bool) {
-	return t.firstToken.p95(model, inputTokens, t.now())
 }
 
 func (t *Tracker) CannotServe(participant string, requiresTools bool, contextHint uint64) (string, bool) {

@@ -45,15 +45,10 @@ func TestDefaultsMatchSpec(t *testing.T) {
 		{"Cache.ChatCacheMaxBytes", configuration.Cache.ChatCacheMaxBytes, int64(268_435_456)},
 		{"Server.MaxConcurrentRuntimeBuilds", configuration.Server.MaxConcurrentRuntimeBuilds, int64(16)},
 		{"Stream.DrainTimeoutSeconds", configuration.Stream.DrainTimeoutSeconds, int64(2_400)},
-		{"Capture.ShortContentMinOutputChunks", configuration.Capture.ShortContentMinOutputChunks, int64(1_000)},
-		{"Capture.ShortContentMaxContentRatio", configuration.Capture.ShortContentMaxContentRatio, 0.75},
-		{"Capture.ShortContentResponseMaxBytes", configuration.Capture.ShortContentResponseMaxBytes, int64(16_777_216)},
 		{"Stream.ClassifyMaxAttemptBytes", configuration.Stream.ClassifyMaxAttemptBytes, int64(1_048_576)},
 		{"Stream.ClassifyMaxParticipantBytes", configuration.Stream.ClassifyMaxParticipantBytes, int64(10_485_760)},
 		{"Stream.ClassifyMaxGlobalBytes", configuration.Stream.ClassifyMaxGlobalBytes, int64(104_857_600)},
 		{"Perf.EWMAHalfLifeSeconds", configuration.Perf.EWMAHalfLifeSeconds, int64(600)},
-		{"Perf.ColdStartReceiptMs", configuration.Perf.ColdStartReceiptMs, 2_000.0},
-		{"Perf.ColdStartCTTFLMsPerToken", configuration.Perf.ColdStartCTTFLMsPerToken, 1.0},
 		{"Perf.ConsecutiveFailThreshold", configuration.Perf.ConsecutiveFailThreshold, int64(5)},
 		{"Perf.FailureRateThreshold", configuration.Perf.FailureRateThreshold, 0.15},
 		{"Perf.FailureRateMinVolume", configuration.Perf.FailureRateMinVolume, 20.0},
@@ -61,10 +56,6 @@ func TestDefaultsMatchSpec(t *testing.T) {
 		{"Perf.EjectionMaxSeconds", configuration.Perf.EjectionMaxSeconds, int64(600)},
 		{"Perf.MaxEjectionFraction", configuration.Perf.MaxEjectionFraction, 0.5},
 		{"Perf.MinAvailableHosts", configuration.Perf.MinAvailableHosts, int64(1)},
-		{"Perf.FirstTokenReservoir", configuration.Perf.FirstTokenReservoir, int64(100)},
-		{"Perf.FirstTokenActivationSamples", configuration.Perf.FirstTokenActivationSamples, int64(20)},
-		{"Perf.FirstTokenPercentile", configuration.Perf.FirstTokenPercentile, 0.95},
-		{"Perf.FirstTokenStalenessSeconds", configuration.Perf.FirstTokenStalenessSeconds, int64(86_400)},
 		{"Perf.HostStalenessSeconds", configuration.Perf.HostStalenessSeconds, int64(3_600)},
 		{"Scheduler.HoldGraceMS", configuration.Scheduler.HoldGraceMS, int64(200)},
 		{"Engine.ReceiptTimeoutMS", configuration.Engine.ReceiptTimeoutMS, int64(5_000)},
@@ -161,17 +152,11 @@ func TestValidateCatchesEveryRuleBreach(t *testing.T) {
 		{"capture_sample_rate negative", func(c *Config) { c.Capture.SampleRate = -0.1 }, "capture_sample_rate"},
 		{"capture_sample_rate above one", func(c *Config) { c.Capture.SampleRate = 1.1 }, "capture_sample_rate"},
 		{"capture_max_bytes uncapped", func(c *Config) { c.Capture.MaxBytes = 0 }, "capture_max_bytes"},
-		{"capture_short_content_min_output_chunks negative", func(c *Config) { c.Capture.ShortContentMinOutputChunks = -1 }, "capture_short_content_min_output_chunks"},
-		{"capture_short_content_max_content_ratio zero", func(c *Config) { c.Capture.ShortContentMaxContentRatio = 0 }, "capture_short_content_max_content_ratio"},
-		{"capture_short_content_max_content_ratio above one", func(c *Config) { c.Capture.ShortContentMaxContentRatio = 1.5 }, "capture_short_content_max_content_ratio"},
-		{"capture_short_content_response_max_bytes too low", func(c *Config) { c.Capture.ShortContentResponseMaxBytes = 0 }, "capture_short_content_response_max_bytes"},
 		{"drain_timeout_seconds too low", func(c *Config) { c.Stream.DrainTimeoutSeconds = 0 }, "drain_timeout_seconds"},
 		{"classify_max_attempt_bytes too low", func(c *Config) { c.Stream.ClassifyMaxAttemptBytes = 0 }, "classify_max_attempt_bytes"},
 		{"classify_max_participant_bytes below attempt", func(c *Config) { c.Stream.ClassifyMaxParticipantBytes = 100 }, "classify_max_participant_bytes"},
 		{"classify_max_global_bytes below participant", func(c *Config) { c.Stream.ClassifyMaxGlobalBytes = 100 }, "classify_max_global_bytes"},
 		{"perf_ewma_half_life_seconds too low", func(c *Config) { c.Perf.EWMAHalfLifeSeconds = 0 }, "perf_ewma_half_life_seconds"},
-		{"perf_cold_start_receipt_ms negative", func(c *Config) { c.Perf.ColdStartReceiptMs = -1 }, "perf_cold_start_receipt_ms"},
-		{"perf_cold_start_cttfl_ms_per_token negative", func(c *Config) { c.Perf.ColdStartCTTFLMsPerToken = -1 }, "perf_cold_start_cttfl_ms_per_token"},
 		{"perf_consecutive_fail_threshold too low", func(c *Config) { c.Perf.ConsecutiveFailThreshold = 0 }, "perf_consecutive_fail_threshold"},
 		{"perf_failure_rate_threshold zero", func(c *Config) { c.Perf.FailureRateThreshold = 0 }, "perf_failure_rate_threshold"},
 		{"perf_failure_rate_threshold above one", func(c *Config) { c.Perf.FailureRateThreshold = 1.5 }, "perf_failure_rate_threshold"},
@@ -181,12 +166,6 @@ func TestValidateCatchesEveryRuleBreach(t *testing.T) {
 		{"perf_max_ejection_fraction zero", func(c *Config) { c.Perf.MaxEjectionFraction = 0 }, "perf_max_ejection_fraction"},
 		{"perf_max_ejection_fraction above one", func(c *Config) { c.Perf.MaxEjectionFraction = 1.5 }, "perf_max_ejection_fraction"},
 		{"perf_min_available_hosts negative", func(c *Config) { c.Perf.MinAvailableHosts = -1 }, "perf_min_available_hosts"},
-		{"perf_first_token_reservoir too low", func(c *Config) { c.Perf.FirstTokenReservoir = 0 }, "perf_first_token_reservoir"},
-		{"perf_first_token_activation_samples too low", func(c *Config) { c.Perf.FirstTokenActivationSamples = 0 }, "perf_first_token_activation_samples"},
-		{"perf_first_token_activation_samples above reservoir", func(c *Config) { c.Perf.FirstTokenActivationSamples = c.Perf.FirstTokenReservoir + 1 }, "perf_first_token_activation_samples"},
-		{"perf_first_token_percentile zero", func(c *Config) { c.Perf.FirstTokenPercentile = 0 }, "perf_first_token_percentile"},
-		{"perf_first_token_percentile above one", func(c *Config) { c.Perf.FirstTokenPercentile = 1.5 }, "perf_first_token_percentile"},
-		{"perf_first_token_staleness_seconds too low", func(c *Config) { c.Perf.FirstTokenStalenessSeconds = 0 }, "perf_first_token_staleness_seconds"},
 		{"perf_host_staleness_seconds too low", func(c *Config) { c.Perf.HostStalenessSeconds = 0 }, "perf_host_staleness_seconds"},
 		{"scheduler_hold_grace_ms negative", func(c *Config) { c.Scheduler.HoldGraceMS = -1 }, "scheduler_hold_grace_ms"},
 		{"scheduler_hold_grace_ms above ceiling", func(c *Config) { c.Scheduler.HoldGraceMS = 5_001 }, "scheduler_hold_grace_ms"},
@@ -211,8 +190,6 @@ func TestValidateCatchesEveryRuleBreach(t *testing.T) {
 	}
 }
 
-// TestValidateAcceptsModelLimitsWithNilOptionalPointers: a ModelLimits entry
-// with only the required token pair set and both optional pointers nil must validate cleanly.
 func TestValidateAcceptsModelLimitsWithNilOptionalPointers(t *testing.T) {
 	configuration := Defaults()
 	configuration.Limits.ModelLimits = map[string]ModelLimits{

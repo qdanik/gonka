@@ -138,16 +138,7 @@ func TestVerdictTable(t *testing.T) {
 		{"empty stream", race(failedAttempt(TerminalEmptyStream)), failedAttempt(TerminalEmptyStream), limits.ModelOutcome, true, 4, false},
 		{"empty stream with completion tokens burned", race(cleanAttempt()), failedAttempt(TerminalBurnEmpty), limits.ModelOutcome, true, 4, false},
 		{"error event inside the SSE stream", race(cleanAttempt()), failedAttempt(TerminalErrorStream), limits.ModelOutcome, true, 4, false},
-		{"tool-choice unsupported", race(cleanAttempt()), func() AttemptOutcome {
-			attempt := failedAttempt(TerminalCapabilityRefused)
-			attempt.ToolsUnsupported = true
-			return attempt
-		}(), limits.ModelOutcome, true, 4, false},
-		{"context length exceeded", race(cleanAttempt()), func() AttemptOutcome {
-			attempt := failedAttempt(TerminalCapabilityRefused)
-			attempt.ContextLimit = 32768
-			return attempt
-		}(), limits.ModelOutcome, true, 4, false},
+		{"capability refusal another host can serve", race(cleanAttempt()), failedAttempt(TerminalCapabilityRefused), limits.ModelOutcome, true, 4, false},
 		{"winner stalled after content, failure rate exceeded", race(stalledOverThreshold), stalledOverThreshold, limits.TransportFault, true, 4, true},
 		{"winner stalled after content, failure rate not exceeded", race(stalledUnderThreshold), stalledUnderThreshold, limits.ModelOutcome, false, 4, false},
 		{"content produced, past the exemption, nonce unfinished", race(longResponse), longResponse, limits.ModelOutcome, false, 4, false},
@@ -302,17 +293,9 @@ func TestSampleFields(t *testing.T) {
 		ParticipantKey: testParticipant,
 		Model:          testModel,
 		Responsive:     true,
-		SendTime:       testEpoch,
-		ReceiptTime:    testEpoch.Add(200 * time.Millisecond),
-		FirstToken:     testEpoch.Add(900 * time.Millisecond),
-		Completed:      testEpoch.Add(3 * time.Second),
-		InputTokens:    1024,
 	}
 	if sample != want {
 		t.Fatalf("Sample() = %+v, want %+v", sample, want)
-	}
-	if got := sample.TotalMs(); got != 3000 {
-		t.Fatalf("TotalMs() = %v, want 3000", got)
 	}
 }
 

@@ -31,7 +31,6 @@ func (c *callLog) snapshot() []string {
 	return append([]string(nil), c.calls...)
 }
 
-// fakeSettlementSource stubs SettlementSource.
 type fakeSettlementSource struct {
 	busy        bool
 	finalizeErr error

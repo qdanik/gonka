@@ -19,8 +19,6 @@ const (
 // templates require some text in every tool turn.
 const emptyToolResultContent = "<empty tool result>"
 
-// messageRolePolicy is the per-role contract: fields a message of this role must not
-// carry, plus whether it must carry a name or tool_call_id.
 type messageRolePolicy struct {
 	disallowedFields  []string
 	requireName       bool
@@ -54,7 +52,6 @@ var messageNormalizerChain = []messageNormalizer{
 	flattenMessageTextParts,
 }
 
-// normalizeMessages runs the hygiene chain and writes the array back only if it changed.
 func normalizeMessages(document *Document) error {
 	messages, ok := document.Array("messages")
 	if !ok {
@@ -222,8 +219,6 @@ func flattenMessageTextParts(messages []any) ([]any, bool, error) {
 	return messages, changed, nil
 }
 
-// validateMessages enforces message shape and per-role policy, tracking which assistant
-// tool_calls are still pending a matching tool reply.
 func validateMessages(document *Document) error {
 	rawMessages, exists := document.Array("messages")
 	if !exists {
@@ -378,7 +373,6 @@ func validateNonEmptyContent(content any) error {
 	}
 }
 
-// validateRequiredContentField rejects a missing/null content field, else checks its shape.
 func validateRequiredContentField(message map[string]any) error {
 	content, exists := message["content"]
 	if !exists || content == nil {
@@ -400,7 +394,6 @@ func validateAssistantContentField(message map[string]any, canBeEmpty bool) erro
 	return validateNonEmptyContent(content)
 }
 
-// requiredTextContentPart rejects a content part that isn't type:"text" with non-empty text.
 func requiredTextContentPart(part map[string]any, partIndex int) (string, error) {
 	partType, err := requiredNonEmptyStringField(part, "type")
 	if err != nil {
@@ -416,7 +409,6 @@ func requiredTextContentPart(part map[string]any, partIndex int) (string, error)
 	return text, nil
 }
 
-// combineTextContentParts joins typed text parts with newlines; an empty slice yields "".
 func combineTextContentParts(parts []any) (string, error) {
 	texts := make([]string, 0, len(parts))
 	for partIndex, rawPart := range parts {
@@ -449,8 +441,6 @@ func isEmptyContent(content any) bool {
 	}
 }
 
-// isAssistantTurnEmpty reports whether a message has no content and no non-empty
-// tool_calls/function_call payload.
 func isAssistantTurnEmpty(message map[string]any) bool {
 	if raw, exists := message["tool_calls"]; exists && raw != nil {
 		if calls, ok := raw.([]any); ok && len(calls) > 0 {
