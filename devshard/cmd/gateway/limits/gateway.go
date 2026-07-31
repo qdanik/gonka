@@ -68,10 +68,62 @@ type GatewayLimiter struct {
 	models map[string]*modelCounter
 	total  modelCounter
 	queue  []*waiter
+	// enforced is the last gateway-wide admission computed, so a reader reports the cap actually in
+	// force rather than the configured one; before the first request that is the configured one.
+	enforced admission
+}
+
+// InFlight is what one scope of the limiter currently holds.
+type InFlight struct {
+	Requests    int64
+	InputTokens int64
+	QueueDepth  int
+}
+
+type LimiterSnapshot struct {
+	Total                           InFlight
+	ByModel                         map[string]InFlight
+	EffectiveMaxConcurrentRequests  int64
+	EffectiveMaxInputTokensInFlight int64
 }
 
 func NewGatewayLimiter(cfg GatewayConfig) *GatewayLimiter {
-	return &GatewayLimiter{cfg: cfg, models: map[string]*modelCounter{}}
+	return &GatewayLimiter{
+		cfg:      cfg,
+		models:   map[string]*modelCounter{},
+		enforced: admission{concurrencyLimit: cfg.MaxConcurrent, inputTokenLimit: cfg.MaxInputTokens},
+	}
+}
+
+// Reconfigure replaces the caps every later admission is judged against, and sweeps the queue so a
+// widened limit reaches a waiter now rather than at the next release.
+func (l *GatewayLimiter) Reconfigure(cfg GatewayConfig) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.cfg = cfg
+	l.enforced = admission{concurrencyLimit: cfg.MaxConcurrent, inputTokenLimit: cfg.MaxInputTokens}
+	l.promoteLocked()
+}
+
+func (l *GatewayLimiter) Snapshot() LimiterSnapshot {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	snapshot := LimiterSnapshot{
+		Total:                           InFlight{Requests: l.total.inFlight, InputTokens: l.total.inputTokens},
+		ByModel:                         make(map[string]InFlight, len(l.models)),
+		EffectiveMaxConcurrentRequests:  l.enforced.concurrencyLimit,
+		EffectiveMaxInputTokensInFlight: l.enforced.inputTokenLimit,
+	}
+	for model, counter := range l.models {
+		snapshot.ByModel[model] = InFlight{Requests: counter.inFlight, InputTokens: counter.inputTokens}
+	}
+	for _, blocked := range l.queue {
+		queued := snapshot.ByModel[blocked.model]
+		queued.QueueDepth++
+		snapshot.ByModel[blocked.model] = queued
+		snapshot.Total.QueueDepth++
+	}
+	return snapshot
 }
 
 func (l *GatewayLimiter) AcquireForModel(ctx context.Context, model string, inputTokens int64, capacity ModelCapacity) error {
@@ -84,10 +136,12 @@ func (l *GatewayLimiter) AcquireForModel(ctx context.Context, model string, inpu
 	model = strings.TrimSpace(model)
 
 	l.mu.Lock()
+	acquireWait := l.cfg.AcquireWait
 	global, perModel := l.admissionsFor(model, inputTokens, capacity)
+	l.enforced = global
 	if reason := impossibleReason(global, perModel); reason != "" {
 		l.mu.Unlock()
-		return &RateLimitError{Reason: reason, RetryAfter: l.cfg.AcquireWait}
+		return &RateLimitError{Reason: reason, RetryAfter: acquireWait}
 	}
 	// A queued waiter is one that capacity currently cannot serve, so admitting a request that fits
 	// does not overtake it: a freed slot is handed to the queue directly, under this same lock.
@@ -97,9 +151,9 @@ func (l *GatewayLimiter) AcquireForModel(ctx context.Context, model string, inpu
 		l.mu.Unlock()
 		return nil
 	}
-	if l.cfg.AcquireWait <= 0 {
+	if acquireWait <= 0 {
 		l.mu.Unlock()
-		return &RateLimitError{Reason: reason, RetryAfter: l.cfg.AcquireWait}
+		return &RateLimitError{Reason: reason, RetryAfter: acquireWait}
 	}
 
 	blocked := &waiter{model: model, tokens: inputTokens, capacity: capacity, reason: reason, ready: make(chan struct{})}
@@ -107,7 +161,7 @@ func (l *GatewayLimiter) AcquireForModel(ctx context.Context, model string, inpu
 	l.promoteLocked() // capacity may already be free; the queue only enforces order, it is not a delay
 	l.mu.Unlock()
 
-	timer := time.NewTimer(l.cfg.AcquireWait)
+	timer := time.NewTimer(acquireWait)
 	defer timer.Stop()
 	select {
 	case <-blocked.ready:
@@ -116,7 +170,7 @@ func (l *GatewayLimiter) AcquireForModel(ctx context.Context, model string, inpu
 		if !l.dequeue(blocked) {
 			return nil // promoted as the deadline fired: the slot is already ours
 		}
-		return &RateLimitError{Reason: blocked.reason, RetryAfter: l.cfg.AcquireWait}
+		return &RateLimitError{Reason: blocked.reason, RetryAfter: acquireWait}
 	case <-ctx.Done():
 		if !l.dequeue(blocked) {
 			l.ReleaseForModel(model, inputTokens) // promoted for a caller that is already gone

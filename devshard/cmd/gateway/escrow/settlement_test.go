@@ -100,9 +100,9 @@ func TestSettleBusyMarksPendingAndReturnsErrDevshardBusy(t *testing.T) {
 		settlementSource: settlementSource,
 	}
 
-	err := m.settle(context.Background(), record)
-	if !errors.Is(err, errDevshardBusy) {
-		t.Fatalf("settle() = %v, want errDevshardBusy", err)
+	_, err := m.settle(context.Background(), record)
+	if !errors.Is(err, ErrDevshardBusy) {
+		t.Fatalf("settle() = %v, want ErrDevshardBusy", err)
 	}
 
 	want := []string{"SetDevshardActive(false)", "SetDevshardSettlementPending(true)", "IsBusy"}
@@ -137,7 +137,7 @@ func TestSettleHappyPathOrderAndClearsPendingOnSuccess(t *testing.T) {
 		settlementSource: settlementSource,
 	}
 
-	if err := m.settle(context.Background(), record); err != nil {
+	if _, err := m.settle(context.Background(), record); err != nil {
 		t.Fatalf("settle() = %v, want nil", err)
 	}
 
@@ -178,7 +178,7 @@ func TestSettleBroadcastFailureLeavesSettlementPendingSet(t *testing.T) {
 		settlementSource: settlementSource,
 	}
 
-	err := m.settle(context.Background(), record)
+	_, err := m.settle(context.Background(), record)
 	if err == nil || !errors.Is(err, broadcastErr) {
 		t.Fatalf("settle() = %v, want wrapped %v", err, broadcastErr)
 	}
@@ -268,8 +268,8 @@ func TestRetireSettlementEnabledBusyLeavesDevshardRegistered(t *testing.T) {
 	}
 
 	err := m.retire(context.Background(), record)
-	if !errors.Is(err, errDevshardBusy) {
-		t.Fatalf("retire() = %v, want errDevshardBusy", err)
+	if !errors.Is(err, ErrDevshardBusy) {
+		t.Fatalf("retire() = %v, want ErrDevshardBusy", err)
 	}
 	got, ok := testStore.devshards[record.EscrowID]
 	if !ok {
@@ -310,13 +310,13 @@ func TestSettleDedupesConcurrentCallsForSameEscrow(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		if err := m.settle(context.Background(), record); err != nil {
+		if _, err := m.settle(context.Background(), record); err != nil {
 			t.Errorf("first settle() = %v, want nil", err)
 		}
 	}()
 
 	<-entered
-	if err := m.settle(context.Background(), record); err != nil {
+	if _, err := m.settle(context.Background(), record); err != nil {
 		t.Fatalf("second concurrent settle() = %v, want nil (already in flight is a no-op)", err)
 	}
 	close(release)
@@ -380,8 +380,8 @@ func TestSettlePendingBusyEscrowStaysParkedForTheNextTick(t *testing.T) {
 		config:           holderWithSettlementEnabled(true),
 	}
 
-	if err := m.settlePending(context.Background(), []store.DevshardRecord{record}); !errors.Is(err, errDevshardBusy) {
-		t.Fatalf("settlePending() = %v, want errDevshardBusy", err)
+	if err := m.settlePending(context.Background(), []store.DevshardRecord{record}); !errors.Is(err, ErrDevshardBusy) {
+		t.Fatalf("settlePending() = %v, want ErrDevshardBusy", err)
 	}
 	assertParked(t, testStore, record.EscrowID)
 }

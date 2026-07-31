@@ -260,7 +260,7 @@ func TestCreateEscrowAbortsWhenIntentWriteFails(t *testing.T) {
 	}
 	model := ModelConfig{ModelID: "model-a", Amount: 1000, PrivateKeyEnv: "MODEL_A_KEY"}
 
-	if err := m.createEscrow(context.Background(), model, "temp", 5, 100); err == nil {
+	if _, err := m.createEscrow(context.Background(), model, "temp", 5, 100); err == nil {
 		t.Fatal("createEscrow() = nil, want error when the intent write fails")
 	}
 
@@ -291,7 +291,7 @@ func TestCreateEscrowSignerResolutionFailureNeverCallsChain(t *testing.T) {
 	}
 	model := ModelConfig{ModelID: "model-a", Amount: 1000, PrivateKeyEnv: "MISSING_KEY"}
 
-	if err := m.createEscrow(context.Background(), model, "temp", 5, 100); err == nil {
+	if _, err := m.createEscrow(context.Background(), model, "temp", 5, 100); err == nil {
 		t.Fatal("createEscrow() = nil, want error when signer resolution fails")
 	}
 	if txClient.createCalls != 0 {
@@ -325,7 +325,7 @@ func TestCreateEscrowHappyPathPersistsDevshardAndClearsCommitment(t *testing.T) 
 	}
 	model := ModelConfig{ModelID: "model-a", Amount: 1000, PrivateKeyEnv: "MODEL_A_KEY"}
 
-	if err := m.createEscrow(context.Background(), model, "temp", 7, 500); err != nil {
+	if _, err := m.createEscrow(context.Background(), model, "temp", 7, 500); err != nil {
 		t.Fatalf("createEscrow(): %v", err)
 	}
 
@@ -385,7 +385,7 @@ func TestCreateEscrowPersistFailureRecoversViaReconcile(t *testing.T) {
 	}
 	model := ModelConfig{ModelID: "model-a", Amount: 1000, PrivateKeyEnv: "MODEL_A_KEY"}
 
-	if err := m.createEscrow(context.Background(), model, "temp", 11, 200); err == nil {
+	if _, err := m.createEscrow(context.Background(), model, "temp", 11, 200); err == nil {
 		t.Fatal("createEscrow() = nil, want error when the post-create registry write fails")
 	}
 	if devshards, _ := testStore.ListDevshards(context.Background()); len(devshards) != 0 {

@@ -1,6 +1,7 @@
 package filters
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -60,11 +61,12 @@ func structuralNodeBody(nodes int) []byte {
 }
 
 func TestDocumentParseRejectsBodySizeAboveLimit(t *testing.T) {
-	_, err := ParseDocument(paddedBody(33554433))
+	oversize := MaxBodyBytes + 1
+	_, err := ParseDocument(paddedBody(oversize))
 	if err == nil {
-		t.Fatal("ParseDocument() at 33554433 bytes: want error, got nil")
+		t.Fatalf("ParseDocument() at %d bytes: want error, got nil", oversize)
 	}
-	want := "request body size 33554433 exceeds limit 33554432"
+	want := fmt.Sprintf("request body size %d exceeds limit %d", oversize, MaxBodyBytes)
 	if err.Error() != want {
 		t.Errorf("ParseDocument() error = %q, want %q", err.Error(), want)
 	}
@@ -74,8 +76,8 @@ func TestDocumentParseRejectsBodySizeAboveLimit(t *testing.T) {
 }
 
 func TestDocumentParseAcceptsBodySizeAtLimit(t *testing.T) {
-	if _, err := ParseDocument(paddedBody(33554432)); err != nil {
-		t.Fatalf("ParseDocument() at 33554432 bytes: want nil error, got %v", err)
+	if _, err := ParseDocument(paddedBody(MaxBodyBytes)); err != nil {
+		t.Fatalf("ParseDocument() at %d bytes: want nil error, got %v", MaxBodyBytes, err)
 	}
 }
 

@@ -532,3 +532,32 @@ func TestAvailableConcurrentWithAcquireIsRaceFree(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+func TestClearQuarantineReopensEveryModelsBreakerForOneParticipant(t *testing.T) {
+	now := time.Now()
+	limiter := NewParticipantLimiter(ParticipantConfig{
+		InitialWindow: 4, MaxWindow: 8, TripThreshold: 1,
+		BaseOpen: time.Minute, MaxOpen: time.Minute,
+	}, func() time.Time { return now })
+	limiter.jitter = func(time.Duration) time.Duration { return 0 }
+
+	limiter.OnResult("host-a", "model-a", TransportFault)
+	limiter.OnResult("host-a", "model-b", TransportFault)
+	limiter.OnResult("host-b", "model-a", TransportFault)
+	if limiter.Available("host-a", "model-a") {
+		t.Fatal("host-a/model-a is available before the quarantine is cleared")
+	}
+
+	if !limiter.ClearQuarantine("host-a") {
+		t.Fatal("ClearQuarantine(host-a) = false, want true for a tracked participant")
+	}
+	if !limiter.Available("host-a", "model-a") || !limiter.Available("host-a", "model-b") {
+		t.Fatal("host-a is still unavailable after its quarantine was cleared")
+	}
+	if limiter.Available("host-b", "model-a") {
+		t.Fatal("host-b was reopened by clearing host-a's quarantine")
+	}
+	if limiter.ClearQuarantine("host-never-seen") {
+		t.Fatal("ClearQuarantine(unknown) = true, want false")
+	}
+}

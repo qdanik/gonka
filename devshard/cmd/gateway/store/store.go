@@ -1,6 +1,7 @@
 // Package store persists gateway control-plane state in SQLite
 // (<storageDir>/gateway.db): admin config overrides, the devshard registry,
-// escrow rotation commitments, and rotation status.
+// escrow rotation commitments, rotation status, the operator's suspicious-host
+// pins, and the per-request accounting ledger.
 package store
 
 import (
@@ -8,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -18,6 +20,9 @@ import (
 type Store struct {
 	db           *sql.DB
 	retryBackoff time.Duration
+
+	mu     sync.Mutex
+	ledger *Ledger
 }
 
 const gatewayDatabaseFileName = "gateway.db"
@@ -59,6 +64,34 @@ var migrations = []string{
 		create_error TEXT NOT NULL DEFAULT '',
 		updated_at TEXT NOT NULL,
 		PRIMARY KEY (model, role)
+	);`,
+	`CREATE TABLE IF NOT EXISTS request_accounting (
+		request_id TEXT PRIMARY KEY,
+		escrow_id TEXT NOT NULL DEFAULT '',
+		model TEXT NOT NULL DEFAULT '',
+		outcome TEXT NOT NULL DEFAULT '',
+		decision TEXT NOT NULL DEFAULT '',
+		stream INTEGER NOT NULL DEFAULT 0,
+		winner_nonce INTEGER NOT NULL DEFAULT 0,
+		winner_participant TEXT NOT NULL DEFAULT '',
+		winner_host TEXT NOT NULL DEFAULT '',
+		winner_host_idx INTEGER NOT NULL DEFAULT 0,
+		attempts INTEGER NOT NULL DEFAULT 0,
+		input_tokens INTEGER NOT NULL DEFAULT 0,
+		winner_output_tokens INTEGER NOT NULL DEFAULT 0,
+		total_output_tokens INTEGER NOT NULL DEFAULT 0,
+		escrow_missing INTEGER NOT NULL DEFAULT 0,
+		balance_exhausted INTEGER NOT NULL DEFAULT 0,
+		started_at TEXT NOT NULL DEFAULT '',
+		completed_at TEXT NOT NULL DEFAULT '',
+		first_token_ms INTEGER NOT NULL DEFAULT 0,
+		duration_ms INTEGER NOT NULL DEFAULT 0,
+		recorded_at TEXT NOT NULL
+	);
+	CREATE INDEX IF NOT EXISTS request_accounting_recorded_at ON request_accounting (recorded_at);`,
+	`CREATE TABLE IF NOT EXISTS suspicious_hosts (
+		participant_key TEXT PRIMARY KEY,
+		created_at TEXT NOT NULL DEFAULT (datetime('now'))
 	);`,
 }
 
@@ -119,10 +152,17 @@ func migrate(db *sql.DB) error {
 	return nil
 }
 
-// Close releases the database handle.
+// Close drains the accounting ledger first, so no queued row outlives the connection it needs.
 func (s *Store) Close() error {
+	s.mu.Lock()
+	ledger := s.ledger
+	s.mu.Unlock()
+	var ledgerErr error
+	if ledger != nil {
+		ledgerErr = ledger.Close()
+	}
 	if err := s.db.Close(); err != nil {
 		return fmt.Errorf("closing gateway store: %w", err)
 	}
-	return nil
+	return ledgerErr
 }

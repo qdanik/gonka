@@ -1,6 +1,7 @@
 package env
 
 import (
+	"errors"
 	"strings"
 	"testing"
 )
@@ -29,6 +30,8 @@ func TestLoadParsesTypedValues(t *testing.T) {
 	t.Setenv("GATEWAY_DISABLED", "true")
 	t.Setenv("GATEWAY_TX_FEE_AMOUNT", "500")
 	t.Setenv("GATEWAY_PERF_EWMA_HALFLIFE_SECONDS", "900")
+	t.Setenv("GATEWAY_CAPTURE_SAMPLE_RATE", "0.25")
+	t.Setenv("GATEWAY_CAPTURE_MAX_BYTES", "4096")
 
 	values, err := Load()
 	if err != nil {
@@ -52,6 +55,12 @@ func TestLoadParsesTypedValues(t *testing.T) {
 	if values.PerfEWMAHalfLifeSeconds == nil || *values.PerfEWMAHalfLifeSeconds != 900 {
 		t.Fatalf("PerfEWMAHalfLifeSeconds = %v, want 900", values.PerfEWMAHalfLifeSeconds)
 	}
+	if values.CaptureSampleRate == nil || *values.CaptureSampleRate != 0.25 {
+		t.Fatalf("CaptureSampleRate = %v, want 0.25", values.CaptureSampleRate)
+	}
+	if values.CaptureMaxBytes == nil || *values.CaptureMaxBytes != 4096 {
+		t.Fatalf("CaptureMaxBytes = %v, want 4096", values.CaptureMaxBytes)
+	}
 }
 
 func TestLoadWhitespaceIsTrimmedAndEmptyMeansUnset(t *testing.T) {
@@ -73,6 +82,7 @@ func TestLoadWhitespaceIsTrimmedAndEmptyMeansUnset(t *testing.T) {
 func TestLoadRejectsMalformedValuesWithVariableName(t *testing.T) {
 	t.Setenv("GATEWAY_PORT", "not-a-number")
 	t.Setenv("GATEWAY_DISABLED", "maybe")
+	t.Setenv("GATEWAY_CAPTURE_SAMPLE_RATE", "half")
 
 	_, err := Load()
 	if err == nil {
@@ -81,6 +91,9 @@ func TestLoadRejectsMalformedValuesWithVariableName(t *testing.T) {
 	message := err.Error()
 	if !strings.Contains(message, "GATEWAY_PORT") {
 		t.Fatalf("error %q does not name GATEWAY_PORT", message)
+	}
+	if !strings.Contains(message, "GATEWAY_CAPTURE_SAMPLE_RATE") {
+		t.Fatalf("error %q does not name GATEWAY_CAPTURE_SAMPLE_RATE", message)
 	}
 	if !strings.Contains(message, "GATEWAY_DISABLED") {
 		t.Fatalf("error %q does not name GATEWAY_DISABLED (errors must accumulate, not stop at first)", message)
@@ -92,5 +105,23 @@ func TestLoadRejectsInvalidPoCMode(t *testing.T) {
 	_, err := Load()
 	if err == nil || !strings.Contains(err.Error(), "GATEWAY_POC_MODE") {
 		t.Fatalf("want error naming GATEWAY_POC_MODE, got %v", err)
+	}
+}
+
+func TestPrivateKeyReadsTheNamedVariableAndNamesOnlyTheVariableOnFailure(t *testing.T) {
+	t.Setenv("DEVSHARD_KEY_A", "  deadbeef  ")
+	key, err := PrivateKey("DEVSHARD_KEY_A")
+	if err != nil || key != "deadbeef" {
+		t.Fatalf("PrivateKey() = %q, %v, want the trimmed key", key, err)
+	}
+
+	for _, name := range []string{"", "DEVSHARD_KEY_UNSET"} {
+		_, err := PrivateKey(name)
+		if !errors.Is(err, ErrPrivateKeyMissing) {
+			t.Fatalf("PrivateKey(%q) = %v, want ErrPrivateKeyMissing", name, err)
+		}
+		if strings.Contains(err.Error(), "deadbeef") {
+			t.Fatalf("PrivateKey(%q) error embeds key material: %v", name, err)
+		}
 	}
 }
