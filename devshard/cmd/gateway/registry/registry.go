@@ -293,8 +293,9 @@ func (r *Registry) IsBusy(escrowID string) bool {
 	return false
 }
 
-// NonceExhausted reports an escrow whose nonce budget routing declined, for the rotation lifecycle.
-func (r *Registry) NonceExhausted(escrowID string) {
+// Exhausted reports an escrow routing declined as spent -- out of nonces or out of deposit -- for the
+// rotation lifecycle, which is what replaces it.
+func (r *Registry) Exhausted(escrowID string) {
 	if r.exhaustion == nil {
 		return
 	}

@@ -1,11 +1,13 @@
 package engine
 
 import (
+	"context"
 	"testing"
 	"time"
 
 	"devshard/cmd/gateway/limits"
 	"devshard/cmd/gateway/perf"
+	"devshard/transport"
 )
 
 var testEpoch = time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC)
@@ -549,5 +551,27 @@ func TestLifecycleSignalsAreInert(t *testing.T) {
 	}
 	if quiet.DeniesCrowning(attempt) != signalled.DeniesCrowning(attempt) {
 		t.Error("DeniesCrowning() changed with lifecycle signals")
+	}
+}
+
+// classifyDispatchError and metrics read one table in opposite directions. A status that classifies
+// to one terminal and reports back as a different one mislabels the transport-error metric with a
+// status no host returned, and nothing else would notice.
+func TestEveryRecoveredStatusRoundTripsThroughItsTerminal(t *testing.T) {
+	for terminal, status := range terminalStatuses {
+		body := ""
+		if terminal == TerminalTimestampDrift {
+			body = "timestamp drift detected"
+		}
+		err := &transport.UpstreamStatusError{Path: "/v1/chat/completions", StatusCode: status, Body: body}
+
+		classified := classifyDispatchError(context.Background(), err)
+
+		if classified != terminal {
+			t.Errorf("status %d classified as %v, want %v", status, classified, terminal)
+		}
+		if recovered, ok := StatusFor(classified); !ok || recovered != status {
+			t.Errorf("StatusFor(%v) = %d/%v, want %d/true", classified, recovered, ok, status)
+		}
 	}
 }

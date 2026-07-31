@@ -6,6 +6,7 @@ package store
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -115,11 +116,51 @@ func Open(storageDir string) (*Store, error) {
 			return nil, fmt.Errorf("applying pragma %q: %w", pragma, err)
 		}
 	}
+	if err := refuseLegacyDatabase(db, databasePath); err != nil {
+		db.Close()
+		return nil, err
+	}
 	if err := migrate(db); err != nil {
 		db.Close()
 		return nil, err
 	}
 	return &Store{db: db, retryBackoff: 200 * time.Millisecond}, nil
+}
+
+// ErrLegacyDatabase reports a gateway.db written by devshardctl. Two table names collide at
+// different columns, so migrating would adopt the legacy shape instead of failing.
+var ErrLegacyDatabase = errors.New("storage dir holds a devshardctl database; point the gateway at an empty storage dir")
+
+// legacyOnlyTables are created by devshardctl and never here, so their presence without a
+// schema_version is proof rather than a guess.
+var legacyOnlyTables = []string{"gateway_settings", "gateway_devshards", "gateway_suspicious_hosts", "participant_throttle_state"}
+
+func refuseLegacyDatabase(db *sql.DB, databasePath string) error {
+	present, err := tableExists(db, "schema_version")
+	if err != nil || present {
+		return err
+	}
+	for _, table := range legacyOnlyTables {
+		switch present, err := tableExists(db, table); {
+		case err != nil:
+			return err
+		case present:
+			return fmt.Errorf("opening %s: %w", databasePath, ErrLegacyDatabase)
+		}
+	}
+	return nil
+}
+
+func tableExists(db *sql.DB, table string) (bool, error) {
+	var name string
+	err := db.QueryRow(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`, table).Scan(&name)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("inspecting table %q: %w", table, err)
+	}
+	return true, nil
 }
 
 func migrate(db *sql.DB) error {

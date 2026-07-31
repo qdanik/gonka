@@ -1530,6 +1530,34 @@ func TestRunRaceEscalatesAfterItsLastAttemptFailed(t *testing.T) {
 	}
 }
 
+// Redundancy is the reason a second attempt exists, so the host already asked must be off the table
+// for the escalation -- including when it failed for a reason that says nothing about its capabilities.
+func TestRunRaceExcludesEveryHostItAlreadyDispatchedTo(t *testing.T) {
+	fixture := newRaceFixture(refusalPolicy(), 3)
+	fixture.host(120, 0, "host-0", &hostScript{receipt: true, err: errors.New("connection reset")})
+	fixture.host(121, 1, "host-1", &hostScript{
+		receipt:   true,
+		chunks:    []string{contentChunk(121)},
+		confirmed: true,
+		finished:  true,
+	})
+
+	if _, err := fixture.run(context.Background()); err != nil {
+		t.Fatalf("runRace error = %v", err)
+	}
+	<-fixture.reported
+
+	fixture.picker.mu.Lock()
+	profiles := fixture.picker.profiles
+	fixture.picker.mu.Unlock()
+	if len(profiles) != 2 {
+		t.Fatalf("picks = %d, want the primary and its escalation", len(profiles))
+	}
+	if len(profiles[1].Exclude) != 1 || profiles[1].Exclude[0] != "host-0" {
+		t.Fatalf("escalation exclusions = %v, want the host already dispatched to", profiles[1].Exclude)
+	}
+}
+
 func TestARacePinnedToAnEscrowAsksTheSchedulerForThatOne(t *testing.T) {
 	fixture := newRaceFixture(racePolicy(1), 2)
 	fixture.request.Escrow = "escrow-pinned"
@@ -1552,4 +1580,147 @@ func TestARacePinnedToAnEscrowAsksTheSchedulerForThatOne(t *testing.T) {
 	if got := fixture.picker.profiles[0].Escrow; got != "escrow-pinned" {
 		t.Fatalf("first pick asked for escrow %q, want %q", got, "escrow-pinned")
 	}
+}
+
+// budgetParams stands in for the params only api can read: a race carries them to the scheduler and to
+// the reduce hook, and reads neither.
+type budgetParams struct{ maxTokens uint64 }
+
+func halveBudgetParams(params any) (any, bool) {
+	budget, isBudget := params.(budgetParams)
+	if !isBudget || budget.maxTokens < 2 {
+		return nil, false
+	}
+	return budgetParams{maxTokens: budget.maxTokens / 2}, true
+}
+
+// nonStreamingFixture races a request whose answer is buffered, so the shorter retry is the only
+// escalation left once a host has receipted.
+func nonStreamingFixture(reduce func(any) (any, bool)) *raceFixture {
+	policy := settledPolicy()
+	policy.NonStreamResponseFloor = time.Second
+	fixture := newRaceFixture(policy, 3)
+	fixture.request.Stream = false
+	fixture.request.Params = budgetParams{maxTokens: 800}
+	fixture.request.ReduceMaxTokens = reduce
+	return fixture
+}
+
+// quietHost is an attempt that receipted and has said nothing since, which is the only state a
+// non-streaming request can observe short of the answer itself.
+func quietHost(nonce uint64, participant string) *liveAttempt {
+	return &liveAttempt{
+		nonce:       nonce,
+		participant: participant,
+		sendTime:    testEpoch.Add(-2 * time.Second),
+		receiptTime: testEpoch.Add(-2 * time.Second),
+		cancel:      func() {},
+	}
+}
+
+func pickedProfiles(fixture *raceFixture) []scheduler.RequestProfile {
+	fixture.picker.mu.Lock()
+	defer fixture.picker.mu.Unlock()
+	return append([]scheduler.RequestProfile(nil), fixture.picker.profiles...)
+}
+
+func armReducedTokens(t *testing.T, coordinator *raceCoordinator) deadlineArm {
+	t.Helper()
+	arm := nextDeadline(coordinator.deps.Now(), coordinator.plan())
+	if arm.Trigger != triggerEscalation || arm.Escalation.Stage != StageReducedMaxTokens {
+		t.Fatalf("arm = %+v, want the reduced-max-tokens escalation", arm)
+	}
+	return arm
+}
+
+func awaitPick(t *testing.T, coordinator *raceCoordinator) pickedHost {
+	t.Helper()
+	select {
+	case result := <-coordinator.picked:
+		return result
+	case <-time.After(5 * time.Second):
+		t.Fatal("the escalation never reached the scheduler")
+		return pickedHost{}
+	}
+}
+
+func TestANonStreamingHostGoneQuietIsRacedWithAHalvedTokenBudget(t *testing.T) {
+	fixture := nonStreamingFixture(halveBudgetParams)
+	coordinator := pausedCoordinator(fixture, 3, quietHost(700, "host-0"))
+
+	coordinator.expire(armReducedTokens(t, coordinator))
+	awaitPick(t, coordinator)
+
+	profiles := pickedProfiles(fixture)
+	if len(profiles) != 1 {
+		t.Fatalf("picks = %d, want 1", len(profiles))
+	}
+	if profiles[0].Params != (budgetParams{maxTokens: 400}) {
+		t.Fatalf("re-pick params = %+v, want the halved budget", profiles[0].Params)
+	}
+}
+
+func TestTheHalvedTokenRetryIsOfferedOncePerRace(t *testing.T) {
+	fixture := nonStreamingFixture(halveBudgetParams)
+	coordinator := pausedCoordinator(fixture, 3, quietHost(710, "host-0"), quietHost(711, "host-1"))
+
+	coordinator.expire(armReducedTokens(t, coordinator))
+	coordinator.applyPick(awaitPick(t, coordinator))
+
+	again := nextDeadline(coordinator.deps.Now(), coordinator.plan())
+	if again.Trigger == triggerEscalation {
+		t.Fatalf("arm = %+v, want no second halved-budget retry for the same race", again)
+	}
+}
+
+// Nonce scarcity collapses the attempt budget to one, which is what stops a hedge from spending a
+// nonce the phase will not replace. The halved-token retry is exempt: it is not a hedge racing the
+// first host, it is the only escalation a buffered request has, so the budget would delete it outright.
+func TestTheHalvedTokenRetryIgnoresAnExhaustedAttemptBudget(t *testing.T) {
+	fixture := nonStreamingFixture(halveBudgetParams)
+	coordinator := pausedCoordinator(fixture, 1, quietHost(760, "host-0"))
+
+	coordinator.expire(armReducedTokens(t, coordinator))
+	coordinator.applyPick(awaitPick(t, coordinator))
+
+	if picks := len(pickedProfiles(fixture)); picks != 1 {
+		t.Fatalf("picks = %d, want 1: the retry must start even with the budget already spent", picks)
+	}
+}
+
+func TestARaceWithNoBudgetToHalveStartsNoAttemptAndStopsAsking(t *testing.T) {
+	fixture := nonStreamingFixture(func(any) (any, bool) { return nil, false })
+	coordinator := pausedCoordinator(fixture, 3, quietHost(720, "host-0"), quietHost(721, "host-1"))
+
+	coordinator.expire(armReducedTokens(t, coordinator))
+
+	if picks := len(pickedProfiles(fixture)); picks != 0 {
+		t.Fatalf("picks = %d, want 0: a nonce was spent on a retry that cannot ask for less", picks)
+	}
+	again := nextDeadline(coordinator.deps.Now(), coordinator.plan())
+	if again.Trigger == triggerEscalation {
+		t.Fatalf("arm = %+v, want the offer withdrawn rather than re-armed forever", again)
+	}
+}
+
+func TestTheHalvedTokenRetryNeedsAHookAndAnUncrownedRace(t *testing.T) {
+	t.Run("a race whose params cannot be reduced never arms it", func(t *testing.T) {
+		fixture := nonStreamingFixture(nil)
+		coordinator := pausedCoordinator(fixture, 3, quietHost(730, "host-0"))
+
+		if arm := nextDeadline(coordinator.deps.Now(), coordinator.plan()); arm.Trigger == triggerEscalation {
+			t.Fatalf("arm = %+v, want no escalation without a reduce hook", arm)
+		}
+	})
+
+	t.Run("a crowned race is owed no shorter answer", func(t *testing.T) {
+		fixture := nonStreamingFixture(halveBudgetParams)
+		crowned := quietHost(740, "host-0")
+		coordinator := pausedCoordinator(fixture, 3, crowned, quietHost(741, "host-1"))
+		coordinator.winner = crowned
+
+		if arm := nextDeadline(coordinator.deps.Now(), coordinator.plan()); arm.Trigger == triggerEscalation {
+			t.Fatalf("arm = %+v, want no escalation once an attempt has been crowned", arm)
+		}
+	})
 }

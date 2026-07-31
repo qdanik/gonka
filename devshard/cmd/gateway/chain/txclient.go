@@ -233,11 +233,9 @@ func (c *TxClient) resolveChainID(ctx context.Context) (string, error) {
 	return c.fetchChainID(ctx)
 }
 
-// GetTxEscrowID resolves a create-tx hash to its escrow_id via three-way
-// query semantics across txQueryURLs: found=false only when every reachable
-// endpoint agrees the tx is absent (ErrTxNotFound) or committed-but-failed
-// (nil error); a genuine per-endpoint error is never conflated with "not
-// found" so a caller doesn't drop a commitment that may still land.
+// GetTxEscrowID reports found=false only when every reachable endpoint agrees the tx is absent or
+// committed-but-failed: conflating a per-endpoint error with "not found" drops a commitment that may
+// still land.
 func (c *TxClient) GetTxEscrowID(ctx context.Context, txHash string) (uint64, bool, error) {
 	var lastErr error
 	sawNotFound := false

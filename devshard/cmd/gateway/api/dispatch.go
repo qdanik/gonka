@@ -65,10 +65,7 @@ func (t escrowTarget) Send(ctx context.Context, nonce scheduler.Prepared, stream
 	// assertion on it, and a wrapper would leave a crowned winner's bytes in the server's buffer.
 	reply, err := t.session.SendOnly(ctx, prepared, stream, onReceipt)
 	if reply != nil {
-		// Applying the reply is what marks the nonce finished, verifies the post state root, persists the
-		// host's signature and queues the MsgConfirmStart, so it runs for a reply that arrived beside an
-		// error too. Skipping it strands the nonce: the race then crowns a paid success as a failure,
-		// posts a timeout vote against the wrong deadline, and never stops escalating.
+		// Applies for a reply that arrived beside an error too; see gateway-invariants.md.
 		if applyErr := t.session.ProcessResponse(prepared.HostIdx(), reply, prepared.Nonce()); err == nil {
 			err = applyErr
 		}

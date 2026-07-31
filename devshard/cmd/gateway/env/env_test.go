@@ -2,6 +2,7 @@ package env
 
 import (
 	"errors"
+	"os"
 	"strings"
 	"testing"
 )
@@ -124,4 +125,53 @@ func TestPrivateKeyReadsTheNamedVariableAndNamesOnlyTheVariableOnFailure(t *test
 			t.Fatalf("PrivateKey(%q) error embeds key material: %v", name, err)
 		}
 	}
+}
+
+// The shipped deployment template still spells these the devshardctl way, so a gateway that read only
+// its own names would start on defaults: wrong port, no API keys, no chain endpoint.
+func TestLoadFallsBackToTheDevshardctlSpelling(t *testing.T) {
+	t.Run("the legacy name is read when the gateway name is unset", func(t *testing.T) {
+		t.Setenv("DEVSHARD_PORT", "9999")
+		t.Setenv("DEVSHARD_ESCROW_ROTATION_ENABLED", "true")
+		t.Setenv("DEVSHARD_GATEWAY_DISABLED_NEW_URL", "https://example.invalid/v1")
+
+		values, err := Load()
+		if err != nil {
+			t.Fatalf("Load(): %v", err)
+		}
+		if values.Port == nil || *values.Port != 9999 {
+			t.Errorf("Port = %v, want 9999 from DEVSHARD_PORT", values.Port)
+		}
+		if values.RotationEnabled == nil || !*values.RotationEnabled {
+			t.Errorf("RotationEnabled = %v, want true from the renamed legacy variable", values.RotationEnabled)
+		}
+		if values.DisabledRedirectURL == nil || *values.DisabledRedirectURL != "https://example.invalid/v1" {
+			t.Errorf("DisabledRedirectURL = %v, want the value from DEVSHARD_GATEWAY_DISABLED_NEW_URL", values.DisabledRedirectURL)
+		}
+	})
+
+	t.Run("the gateway name wins when both are set", func(t *testing.T) {
+		t.Setenv("GATEWAY_PORT", "8080")
+		t.Setenv("DEVSHARD_PORT", "9999")
+
+		values, err := Load()
+		if err != nil {
+			t.Fatalf("Load(): %v", err)
+		}
+		if values.Port == nil || *values.Port != 8080 {
+			t.Errorf("Port = %v, want 8080 from the gateway's own name", values.Port)
+		}
+	})
+
+	t.Run("every alias names a variable Load actually reads", func(t *testing.T) {
+		source, err := os.ReadFile("env.go")
+		if err != nil {
+			t.Fatalf("reading env.go: %v", err)
+		}
+		for name := range legacyNames {
+			if !strings.Contains(string(source), `("`+name+`"`) {
+				t.Errorf("legacyNames has %s, which no reader in Load asks for", name)
+			}
+		}
+	})
 }

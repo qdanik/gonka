@@ -11,6 +11,7 @@ import (
 	"devshard/cmd/gateway/config"
 	"devshard/cmd/gateway/limits"
 	"devshard/cmd/gateway/scheduler"
+	"devshard/user"
 )
 
 func TestAnUnroutableModelIsRejectedBeforeTheLimiterAndTheRace(t *testing.T) {
@@ -354,5 +355,76 @@ func TestALiveStreamCarriesTheEscrowHeader(t *testing.T) {
 	// after the first byte still shows up there and the assertion would pass on a broken stream.
 	if got := response.Header.Get("X-Devshard-ID"); got != "7" {
 		t.Fatalf("X-Devshard-ID on a live stream: got %q, want the escrow that served it", got)
+	}
+}
+
+func TestReduceMaxTokensHalvesTheCommittedBudgetAndTheBodyCarryingIt(t *testing.T) {
+	reduced, ok := reduceMaxTokens(user.InferenceParams{
+		Model:       "model-a",
+		Prompt:      []byte(`{"max_tokens":800,"model":"model-a"}`),
+		InputLength: 36,
+		MaxTokens:   800,
+	})
+	if !ok {
+		t.Fatal("reduceMaxTokens refused a budget of 800")
+	}
+	dispatched, isInference := reduced.(user.InferenceParams)
+	if !isInference {
+		t.Fatalf("reduceMaxTokens returned %T, want user.InferenceParams", reduced)
+	}
+	if dispatched.MaxTokens != 400 {
+		t.Errorf("MaxTokens = %d, want 400", dispatched.MaxTokens)
+	}
+	if want := `{"max_tokens":400,"model":"model-a"}`; string(dispatched.Prompt) != want {
+		t.Errorf("Prompt = %s, want %s", dispatched.Prompt, want)
+	}
+	if dispatched.InputLength != 36 {
+		t.Errorf("InputLength = %d, want the committed record's own 36", dispatched.InputLength)
+	}
+}
+
+func TestReduceMaxTokensRefusesParamsItCannotShorten(t *testing.T) {
+	testCases := []struct {
+		name   string
+		params any
+	}{
+		{"params of another type", struct{ MaxTokens uint64 }{MaxTokens: 800}},
+		{"a budget of one token", user.InferenceParams{Prompt: []byte(`{"max_tokens":1}`), MaxTokens: 1}},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			if reduced, ok := reduceMaxTokens(testCase.params); ok {
+				t.Fatalf("reduceMaxTokens = (%+v, true), want a refusal", reduced)
+			}
+		})
+	}
+}
+
+func TestAChatRequestHandsTheRaceItsHalvedBudgetHook(t *testing.T) {
+	live := newHarness(t)
+	recorder := live.request(t, http.MethodPost, "/v1/chat/completions",
+		`{"model":"qwen","max_tokens":800,"messages":[{"role":"user","content":"hi"}]}`,
+		map[string]string{"Authorization": "Bearer " + clientKey})
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", recorder.Code)
+	}
+
+	raced := live.inference.raced.Load()
+	if raced == nil || raced.ReduceMaxTokens == nil {
+		t.Fatal("the race was started without the halved-budget hook, so a quiet host is never retried")
+	}
+	reduced, ok := raced.ReduceMaxTokens(raced.Params)
+	if !ok {
+		t.Fatal("the wired hook refused the params of the request it was wired for")
+	}
+	dispatched, isInference := reduced.(user.InferenceParams)
+	if !isInference {
+		t.Fatalf("the wired hook returned %T, want user.InferenceParams", reduced)
+	}
+	if dispatched.MaxTokens != 400 {
+		t.Errorf("MaxTokens = %d, want 400", dispatched.MaxTokens)
+	}
+	if !strings.Contains(string(dispatched.Prompt), `"max_tokens":400`) {
+		t.Errorf("body = %s, want the halved budget", dispatched.Prompt)
 	}
 }

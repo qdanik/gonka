@@ -82,14 +82,25 @@ func deleteInternalFields(v any) bool {
 	}
 }
 
+// strippableMarkers is derived from clientStrippedFields rather than written beside it: a
+// hand-maintained marker list silently forwards any field it forgets, which is how top_logprobs
+// leaked for the lifetime of the hand-written version.
+var strippableMarkers = func() [][]byte {
+	markers := make([][]byte, 0, len(clientStrippedFields))
+	for _, field := range clientStrippedFields {
+		markers = append(markers, []byte(`"`+field+`"`))
+	}
+	return markers
+}()
+
 // hasStrippableField is a cheap pre-check so untouched chunks skip the SSE split entirely.
-// The 4 markers cover all 6 clientStrippedFields: "logprob catches logprob(s)/top_logprobs;
-// the prompt_* fields need their own check since a leading "prompt_" breaks that quote match.
 func hasStrippableField(p []byte) bool {
-	return bytes.Contains(p, []byte(`"logprob`)) ||
-		bytes.Contains(p, []byte(`"token_ids"`)) ||
-		bytes.Contains(p, []byte(`"prompt_logprobs"`)) ||
-		bytes.Contains(p, []byte(`"prompt_token_ids"`))
+	for _, marker := range strippableMarkers {
+		if bytes.Contains(p, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 // UpstreamError is the OpenAI-compatible error shape extracted from a response body or SSE event.

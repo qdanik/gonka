@@ -3,6 +3,7 @@ package scheduler
 import (
 	"errors"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -238,7 +239,7 @@ type harnessConfig struct {
 	pocRequired     func(string) bool
 	throttled       func(string) bool
 	ejected         func(string) bool
-	capability      func(string, RequestProfile) bool
+	capability      func(string, RequestProfile) (string, bool)
 	stateBlocked    func(string) bool
 	afterDecide     func(HostBinding)
 	failWith        error
@@ -257,6 +258,7 @@ type harness struct {
 	observer   *recordingObserver
 	snapshots  *fakeSnapshots
 	limiter    *fakeLimiter
+	exhausted  *atomic.Pointer[string]
 }
 
 func newHarness(t *testing.T, cfg harnessConfig) *harness {
@@ -280,6 +282,8 @@ func newHarness(t *testing.T, cfg harnessConfig) *harness {
 		limiter.refuse(participant)
 	}
 
+	var exhausted atomic.Pointer[string]
+
 	predicates := func(snapshot chain.PhaseSnapshot) availability {
 		return availability{
 			pocRequired: func(participant string) bool {
@@ -291,8 +295,11 @@ func newHarness(t *testing.T, cfg harnessConfig) *harness {
 			ejected: func(participant string) bool {
 				return cfg.ejected != nil && cfg.ejected(participant)
 			},
-			capability: func(participant string, profile RequestProfile) bool {
-				return cfg.capability != nil && cfg.capability(participant, profile)
+			capability: func(participant string, profile RequestProfile) (string, bool) {
+				if cfg.capability == nil {
+					return "", false
+				}
+				return cfg.capability(participant, profile)
 			},
 			stateBlocked: func(participant string) bool {
 				return cfg.stateBlocked != nil && cfg.stateBlocked(participant)
@@ -312,6 +319,7 @@ func newHarness(t *testing.T, cfg harnessConfig) *harness {
 		stale:        staleHold,
 		newTimer:     clock.newTimer,
 		submitBuffer: cfg.submitBuffer,
+		onExhausted:  func(escrowID string) { exhausted.Store(&escrowID) },
 	})
 	t.Cleanup(dispatcher.stop)
 	if !cfg.holdStart {
@@ -322,6 +330,7 @@ func newHarness(t *testing.T, cfg harnessConfig) *harness {
 		session:    session,
 		clock:      clock,
 		observer:   observer,
+		exhausted:  &exhausted,
 		snapshots:  snapshots,
 		limiter:    limiter,
 	}
@@ -713,6 +722,57 @@ func TestDispatcherRefetchesTheSnapshotEachDrain(t *testing.T) {
 	if fetches := test.snapshots.fetches(); fetches < 2 {
 		t.Fatalf("snapshot fetches = %d, want one per drain", fetches)
 	}
+}
+
+// A host that has answered "I do not implement tools" will answer the same way tomorrow, so telling
+// the caller to retry wastes their time and a nonce. Every other exhaustion is genuinely transient.
+func TestDispatcherSeparatesAPermanentToolRefusalFromATransientOne(t *testing.T) {
+	tests := []struct {
+		name    string
+		reason  string
+		wantErr error
+	}{
+		{name: "no host implements tools", reason: CapabilityToolsUnsupported, wantErr: ErrToolsUnsupported},
+		{name: "the hosts are merely busy", reason: "context_limit_exceeded", wantErr: ErrNoAvailableHost},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			test := newHarness(t, harnessConfig{
+				capability: func(string, RequestProfile) (string, bool) { return testCase.reason, true },
+			})
+
+			result := awaitReply(t, test.submit(t, test.clock.Now()))
+
+			if !errors.Is(result.err, testCase.wantErr) {
+				t.Fatalf("err = %v, want %v", result.err, testCase.wantErr)
+			}
+		})
+	}
+}
+
+// A spent deposit is terminal for the escrow: nothing refills it, so without this notice every later
+// request routes to the same escrow and fails identically, forever.
+func TestDispatcherReportsASpentDepositForReplacement(t *testing.T) {
+	t.Run("an exhausted deposit is reported", func(t *testing.T) {
+		test := newHarness(t, harnessConfig{failWith: types.ErrInsufficientBalance})
+
+		awaitReply(t, test.submit(t, test.clock.Now()))
+
+		reported := test.exhausted.Load()
+		if reported == nil || *reported != escrowA {
+			t.Fatalf("reported escrow = %v, want %q", reported, escrowA)
+		}
+	})
+
+	t.Run("an unrelated session failure is not", func(t *testing.T) {
+		test := newHarness(t, harnessConfig{failWith: errors.New("session broken")})
+
+		awaitReply(t, test.submit(t, test.clock.Now()))
+
+		if reported := test.exhausted.Load(); reported != nil {
+			t.Fatalf("reported escrow = %q, want no report", *reported)
+		}
+	})
 }
 
 func TestDispatcherFailsWaitersWhenTheSessionErrors(t *testing.T) {

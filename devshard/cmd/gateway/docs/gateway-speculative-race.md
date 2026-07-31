@@ -73,7 +73,8 @@ Stages that can trigger another attempt. The reason column is the wire string, w
 | `suspicious_host` | The first attempt's host is crown-denied or operator-pinned — escalate immediately. |
 | `receipt_timeout` | No receipt within the receipt timeout (doubled above 100 000 input tokens, because admitting a very large prompt is itself work). |
 | `first_token_timeout` | No first token within the first-token deadline. |
-| `attempt_failed` | An attempt ended without producing anything usable. |
+| `attempt_failed` | An attempt ended without producing anything usable. Streaming only: a non-streaming attempt that is *done* is not escalated, because there is no partial answer to improve on. |
+| `response_timeout_reduced_max_tokens` | Non-streaming only, at most once per race. The host receipted and has produced nothing after a wait proportional to the prompt (`max(non_stream_response_floor_ms, input_tokens x per_input_token_response_lag_ms)`), so one more attempt is started with the output-token budget halved. |
 
 An attempt launched at race start beside a primary the race distrusts carries a start reason rather than an escalation reason on `devshard_gateway_attempts_started_total{reason}`, and the two vocabularies do not overlap: `primary_suspicious` for a crown-denied or operator-pinned host, `primary_degraded` for one the outlier detector wanted out of rotation. The second exists because the routing gate that withholds an ejected host is capped, and a fleet failing together stays routable by design — see [gateway-capacity-and-health.md](./gateway-capacity-and-health.md).
 
@@ -85,7 +86,9 @@ The trigger is consumed *before* the new attempt starts, so a failed start canno
 
 The escalation pick runs on its own goroutine rather than inline in the coordinator loop (`engine/race.go`). The scheduler may hold the nonce briefly for a co-arriving request, and a crown claim is the client's first token: waiting for the pick inside the loop would spend that hold on exactly the latency escalation exists to avoid. A departing client cancels the pick, which returns the nonce and the slot.
 
-**Scarcity overrides speculation.** When the chain is blocking requests and the relaxed bypass is not active, the attempt budget collapses to one: a speculative attempt spends a nonce the phase the gateway is serving through will not replace (`engine/escalation.go:114-115`).
+**The halved retry is the only escalation a buffered answer can have.** A non-streaming request reveals nothing until it is complete, so neither the first-token deadline nor `attempt_failed` can help it: the first has no token to wait for and the second fires only after the attempt is over. The one signal available is the prompt itself, which is why the deadline grows with input size and is floored so a short prompt is not retried early. The retry asks for half the output tokens rather than the same again, on the theory that the wait is the length of the answer; the halving never goes below the routed model's own `MaxTokensFloor`, and a body with no budget left to halve spends the one-shot without starting anything. Both timings are operator-tunable, and the one-shot is consumed whatever the rewrite hook answers — otherwise a body that cannot be halved re-arms the same deadline forever.
+
+**Scarcity overrides speculation, with one exemption.** When the chain is blocking requests and the relaxed bypass is not active, the attempt budget collapses to one: a speculative attempt spends a nonce the phase the gateway is serving through will not replace. The halved-token retry is exempt, because it is not a hedge racing the first host — it is the only escalation a buffered request has, so applying the budget would delete it rather than trim it. The exemption is applied where the deadline is armed as well as where the pick starts; gating only the pick leaves a deadline that arms and never fires.
 
 ## Deadlines
 

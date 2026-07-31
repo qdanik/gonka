@@ -44,7 +44,6 @@ func TestGetEscrowMultiEndpointAgreement(t *testing.T) {
 			},
 		},
 		{
-			// Proves iteration continues past a not-found endpoint to a later success.
 			name:        "found on fallback after primary 404",
 			primary:     notFoundHandler.ServeHTTP,
 			fallback:    foundHandler.ServeHTTP,
