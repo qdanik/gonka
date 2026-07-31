@@ -3,6 +3,7 @@ package chain
 import (
 	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -641,5 +642,63 @@ func TestParseMaxNonceDecodesField(t *testing.T) {
 				t.Fatalf("parseMaxNonce() = %d, want %d", got, testCase.want)
 			}
 		})
+	}
+}
+
+// The public API has served these numbers both ways: protojson stringifies int64 fields, encoding/json
+// leaves them numeric, and gonka-ai/gonka#1526 switches the deployed shape back from the first to the
+// second. Parsing only one shape means a weight map that silently reads as zero, which is not "unknown"
+// downstream -- it is "everything weighs nothing", and routing stops with no error anywhere.
+func TestParseParticipantsAcceptsStringAndNumericIntegers(t *testing.T) {
+	stringified := strings.NewReplacer(
+		`"poc_weight": 100`, `"poc_weight": "100"`,
+		`"poc_weight": 50`, `"poc_weight": "50"`,
+		`"poc_weight": 30`, `"poc_weight": "30"`,
+		`"poc_weight": 20`, `"poc_weight": "20"`,
+	).Replace(participantsMultiModelJSON)
+	if stringified == participantsMultiModelJSON {
+		t.Fatal("the fixture no longer carries numeric poc_weight values to stringify")
+	}
+
+	numericState, err := parseParticipants([]byte(participantsMultiModelJSON), preservationModeLegacy, preservedSnapshotState{})
+	if err != nil {
+		t.Fatalf("parseParticipants(numeric): %v", err)
+	}
+	stringState, err := parseParticipants([]byte(stringified), preservationModeLegacy, preservedSnapshotState{})
+	if err != nil {
+		t.Fatalf("parseParticipants(stringified): %v", err)
+	}
+
+	if !reflect.DeepEqual(numericState, stringState) {
+		t.Fatalf("the two wire shapes parsed differently:\n numeric = %+v\n string  = %+v", numericState, stringState)
+	}
+}
+
+// The same flip reaches the epoch payload: block_height, poc_start_block_height and the stage heights
+// are all int64 on the wire.
+func TestParseEpochAcceptsStringAndNumericIntegers(t *testing.T) {
+	numeric := `{"block_height": 1000, "phase": "Inference",
+		"latest_epoch": {"index": 7, "poc_start_block_height": 900},
+		"epoch_stages": {"set_new_validators": 950, "next_poc_start": 1900},
+		"is_confirmation_poc_active": false}`
+	stringified := `{"block_height": "1000", "phase": "Inference",
+		"latest_epoch": {"index": "7", "poc_start_block_height": "900"},
+		"epoch_stages": {"set_new_validators": "950", "next_poc_start": "1900"},
+		"is_confirmation_poc_active": false}`
+
+	fromNumeric, err := parseEpochInfo([]byte(numeric))
+	if err != nil {
+		t.Fatalf("parseEpochInfo(numeric): %v", err)
+	}
+	fromString, err := parseEpochInfo([]byte(stringified))
+	if err != nil {
+		t.Fatalf("parseEpochInfo(stringified): %v", err)
+	}
+
+	if !reflect.DeepEqual(fromNumeric, fromString) {
+		t.Fatalf("the two wire shapes parsed differently:\n numeric = %+v\n string  = %+v", fromNumeric, fromString)
+	}
+	if fromNumeric.BlockHeight != 1000 {
+		t.Fatalf("BlockHeight = %d, want 1000", fromNumeric.BlockHeight)
 	}
 }
