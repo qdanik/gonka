@@ -482,7 +482,7 @@ func (s *Server) race(w http.ResponseWriter, r *http.Request, requestID string, 
 	if err != nil {
 		s.capture.attemptsFailed(r, requestID, normalized, err)
 		if client.Started() {
-			client.Flush()
+			_ = client.Fail(err)
 			return outcome
 		}
 		w.Header().Set("X-Request-Id", requestID)

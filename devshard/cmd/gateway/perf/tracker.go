@@ -12,19 +12,20 @@ import (
 )
 
 // Tracker composes the per-host performance primitives; sub-components own their locking, so mu only
-// guards the host/ejection maps. ejectedView answers Ejected without touching mu or scanning every host:
-// the ejection cap is resolved once per state change, while each entry keeps its own expiry so time still
-// decides.
+// guards the host/ejection maps. The two views answer Ejected and Degraded without touching mu or scanning
+// every host: the ejection cap is resolved once per state change, while each entry keeps its own expiry so
+// time still decides.
 type Tracker struct {
-	mu          sync.Mutex
-	config      *config.Holder
-	hosts       map[hostKey]*hostPerf
-	ejections   map[hostKey]*ejectionState
-	capability  *capabilityTracker
-	inflight    *inflightGauge
-	now         func() time.Time
-	lastSweep   time.Time
-	ejectedView atomic.Pointer[map[hostKey]time.Time]
+	mu           sync.Mutex
+	config       *config.Holder
+	hosts        map[hostKey]*hostPerf
+	ejections    map[hostKey]*ejectionState
+	capability   *capabilityTracker
+	inflight     *inflightGauge
+	now          func() time.Time
+	lastSweep    time.Time
+	ejectedView  atomic.Pointer[map[hostKey]time.Time]
+	degradedView atomic.Pointer[map[hostKey]time.Time]
 }
 
 func NewTracker(holder *config.Holder, now func() time.Time) *Tracker {
@@ -65,13 +66,15 @@ func (t *Tracker) rebuildEjectedViewLocked(now time.Time, perf config.Perf) {
 		knownByModel[key.model]++
 	}
 	ejectedByModel := make(map[string][]hostKey)
+	degraded := make(map[hostKey]time.Time, len(t.ejections))
 	for key, state := range t.ejections {
 		if state.ejected(now) {
 			ejectedByModel[key.model] = append(ejectedByModel[key.model], key)
+			degraded[key] = state.ejectedUntil
 		}
 	}
 
-	view := make(map[hostKey]time.Time, len(t.ejections))
+	view := make(map[hostKey]time.Time, len(degraded))
 	for model, keys := range ejectedByModel {
 		slices.SortFunc(keys, func(a, b hostKey) int { return strings.Compare(a.participant, b.participant) })
 		allowed := maxEjectable(perf, knownByModel[model])
@@ -83,6 +86,7 @@ func (t *Tracker) rebuildEjectedViewLocked(now time.Time, perf config.Perf) {
 		}
 	}
 	t.ejectedView.Store(&view)
+	t.degradedView.Store(&degraded)
 }
 
 func (t *Tracker) ensureHostLocked(key hostKey, perf config.Perf) (*hostPerf, *ejectionState) {
@@ -190,11 +194,20 @@ func (t *Tracker) Inflight(participant string) int {
 // admission, so it reads the published view instead of scanning: the cap was applied when the view
 // was built, and the stored expiry keeps the answer correct as the ejection ages out.
 func (t *Tracker) Ejected(participant, model string) bool {
-	view := t.ejectedView.Load()
+	return ejectedIn(t.ejectedView.Load(), participant, model, t.now())
+}
+
+// Degraded reports the ejection verdict before the pool-wide cap, so a host the cap had to leave in
+// rotation is still known to be the one the detector wanted out.
+func (t *Tracker) Degraded(participant, model string) bool {
+	return ejectedIn(t.degradedView.Load(), participant, model, t.now())
+}
+
+func ejectedIn(view *map[hostKey]time.Time, participant, model string, now time.Time) bool {
 	if view == nil {
 		return false
 	}
-	return t.now().Before((*view)[hostKey{participant: participant, model: model}])
+	return now.Before((*view)[hostKey{participant: participant, model: model}])
 }
 
 func maxEjectable(perf config.Perf, knownForModel int) int {

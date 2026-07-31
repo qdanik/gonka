@@ -40,8 +40,10 @@ type SignerSource interface {
 	SignerFor(privateKeyEnv string) (*signing.Secp256k1Signer, error)
 }
 
-// api/ wires this to the live engine runtime; escrow only consumes it.
+// api/ wires this to the live engine runtime; escrow only consumes it. Retire is what makes IsBusy
+// monotone, so an idle answer stays true until the settlement it gates is broadcast.
 type SettlementSource interface {
+	Retire(escrowID string) error // synchronous: no nonce can be committed on the escrow after it returns
 	IsBusy(escrowID string) bool
 	Finalize(ctx context.Context, escrowID string) error // idempotent: no-op if already finalized
 	BuildSettlement(ctx context.Context, escrowID string) (chain.SettlementInput, error)

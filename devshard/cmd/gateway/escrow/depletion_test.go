@@ -23,12 +23,13 @@ func workingCreateEscrowFn(newEscrowID uint64) func(context.Context, *signing.Se
 func depletionManager(t *testing.T, testStore *fakeStore, txClient *fakeTxClient) *Manager {
 	t.Helper()
 	return &Manager{
-		tx:      txClient,
-		store:   testStore,
-		signer:  &fakeSignerSource{signer: testSigner(t)},
-		breaker: newCreateBreaker(),
-		now:     func() time.Time { return time.Unix(0, 0) },
-		config:  holderWithSettlementEnabled(false),
+		tx:               txClient,
+		store:            testStore,
+		signer:           &fakeSignerSource{signer: testSigner(t)},
+		settlementSource: &fakeSettlementSource{},
+		breaker:          newCreateBreaker(),
+		now:              func() time.Time { return time.Unix(0, 0) },
+		config:           holderWithSettlementEnabled(false),
 	}
 }
 

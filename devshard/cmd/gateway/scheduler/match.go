@@ -8,6 +8,7 @@ import "time"
 type availability struct {
 	pocRequired  func(participant string) bool
 	throttled    func(participant string) bool
+	ejected      func(participant string) bool
 	capability   func(participant string, profile RequestProfile) bool
 	stateBlocked func(participant string) bool
 }
@@ -22,6 +23,9 @@ func match(binding HostBinding, waiting []*waiter, avail availability, now time.
 	}
 	if avail.throttled(participant) {
 		return burn{kind: ghostThrottled}
+	}
+	if avail.ejected(participant) {
+		return burn{kind: ghostEjected}
 	}
 
 	blockedByHost := avail.stateBlocked(participant)

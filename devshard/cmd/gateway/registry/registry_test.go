@@ -580,6 +580,34 @@ func TestAcquireRefusesARetiredEscrow(t *testing.T) {
 	}
 }
 
+// The scheduler takes Hold in the step that commits a nonce, holding a candidate published before the
+// retire. Refusing it there is what makes IsBusy monotone for the settlement that follows.
+func TestRetireRefusesTheNonceCommitHoldTakenBeforeIt(t *testing.T) {
+	t.Parallel()
+	registry := New(Deps{
+		ServingSessions: newSessions(map[string]*fakeSession{"1": newFakeSession("hostA")}).open,
+		Now:             fixedClock(),
+	})
+	mustAdd(t, registry, "1", "qwen")
+	candidate := registry.Candidates("qwen")[0]
+
+	if release, held := candidate.Hold(); !held {
+		t.Fatal("Hold() before retire = false, want true")
+	} else {
+		release()
+	}
+	if err := registry.Retire("1"); err != nil {
+		t.Fatalf("Retire(1) = %v, want nil", err)
+	}
+
+	if _, held := candidate.Hold(); held {
+		t.Error("Hold() after retire = true, want false: a nonce was committed on a retired escrow")
+	}
+	if registry.IsBusy("1") {
+		t.Error("IsBusy(1) = true, want false: nothing is in flight after the refused commit")
+	}
+}
+
 func TestActiveUsersFeedsTheLoadScore(t *testing.T) {
 	t.Parallel()
 	registry := New(Deps{

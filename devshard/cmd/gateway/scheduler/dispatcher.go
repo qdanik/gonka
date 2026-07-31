@@ -204,6 +204,10 @@ func (a *armedTimer) disarm() {
 // drain assigns nonces until the queue empties, a nonce is held, or the burn budget trips. The
 // freeze and the budget bound its cost in nonces -- a capped, money-backed resource: without them a
 // host flipping between the sweep and the binding burns one every iteration, forever.
+//
+// It returns with a waiter still queued only when it reports a held nonce, which is the one exit the
+// loop arms a timer for; every other exit answers whatever is left, so no waiter is ever parked on a
+// queue nothing will wake.
 func (d *dispatcher) drain() (time.Time, bool) {
 	avail := freeze(d.predicates(d.snapshots.Snapshot()))
 	acquire := admit(&avail, d.acquireSlot)
@@ -254,12 +258,14 @@ func (d *dispatcher) drain() (time.Time, bool) {
 			burnBudget--
 			if burnBudget <= 0 {
 				d.recordBudgetTrip()
+				d.failWaiting(ErrNoAvailableHost)
 				return time.Time{}, false
 			}
 		case hold:
 			d.recordHold()
 			return outcome.until, true
 		default:
+			d.failWaiting(fmt.Errorf("escrow %s: session offered no binding", d.escrowID))
 			return time.Time{}, false
 		}
 	}
@@ -288,6 +294,7 @@ func servable(queued *waiter, participants []string, avail availability) bool {
 		if queued.exclude[participant] ||
 			avail.pocRequired(participant) ||
 			avail.throttled(participant) ||
+			avail.ejected(participant) ||
 			avail.stateBlocked(participant) ||
 			avail.capability(participant, queued.profile) {
 			continue
@@ -328,15 +335,14 @@ func (d *dispatcher) handOff(served *waiter, taken reservation, prepared Prepare
 	}
 }
 
+// failAdvance answers the whole queue, not just the waiter a serve decision chose: the session could not
+// advance its nonce at all, so no queued request is servable on this escrow right now, and the one error
+// that brought the drain here -- an escrow out of balance -- is not one waiting resolves.
 func (d *dispatcher) failAdvance(decision Decision, taken reservation, err error) {
-	failure := fmt.Errorf("escrow %s: advancing nonce: %w", d.escrowID, err)
-	if chosen, ok := decision.(serve); ok {
+	if _, chosen := decision.(serve); chosen {
 		d.giveBack(taken)
-		d.dequeue(chosen.waiter)
-		chosen.waiter.deliver(pickResult{err: failure})
-		return
 	}
-	d.failWaiting(failure)
+	d.failWaiting(fmt.Errorf("escrow %s: advancing nonce: %w", d.escrowID, err))
 }
 
 func (d *dispatcher) failWaiting(err error) {
@@ -412,6 +418,7 @@ func freeze(live availability) availability {
 	return availability{
 		pocRequired:  memoise(live.pocRequired),
 		throttled:    memoise(live.throttled),
+		ejected:      memoise(live.ejected),
 		stateBlocked: memoise(live.stateBlocked),
 		capability: func(participant string, profile RequestProfile) bool {
 			key := capabilityKey{

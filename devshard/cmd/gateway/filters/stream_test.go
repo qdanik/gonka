@@ -315,3 +315,55 @@ func TestStreamRewriter_ParseableFrameMentioningLogprobsInTextSurvives(t *testin
 		t.Errorf("Write() = %q, want the event verbatim", got)
 	}
 }
+
+func TestAssembleSSEBody(t *testing.T) {
+	testCases := []struct {
+		name string
+		body string
+		want string
+	}{
+		{
+			name: "the last data event wins",
+			body: "data: {\"id\":\"first\"}\n\ndata: {\"id\":\"last\"}\n\ndata: [DONE]\n\n",
+			want: `{"id":"last"}`,
+		},
+		{name: "a space-less data line", body: "data:{\"id\":\"tight\"}\n\n", want: `{"id":"tight"}`},
+		{name: "crlf framing", body: "data: {\"id\":\"crlf\"}\r\n\r\ndata: [DONE]\r\n\r\n", want: `{"id":"crlf"}`},
+		{
+			name: "comment and event lines are not payloads",
+			body: ": keep-alive\nevent: message\ndata: {\"id\":\"only\"}\n\n",
+			want: `{"id":"only"}`,
+		},
+		{name: "a plain json body is already assembled", body: `{"id":"plain"}`, want: `{"id":"plain"}`},
+		{name: "a terminator and nothing else", body: "data: [DONE]\n\n", want: `{"error":{"message":"no response data"}}`},
+		{name: "an empty body", body: "", want: `{"error":{"message":"no response data"}}`},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			if got := AssembleSSEBody([]byte(testCase.body)); string(got) != testCase.want {
+				t.Fatalf("AssembleSSEBody(%q) = %s, want %s", testCase.body, got, testCase.want)
+			}
+		})
+	}
+}
+
+func TestHasSSEDone(t *testing.T) {
+	testCases := []struct {
+		name   string
+		events string
+		want   bool
+	}{
+		{name: "the terminator", events: "data: [DONE]\n\n", want: true},
+		{name: "the terminator over crlf", events: "data: [DONE]\r\n\r\n", want: true},
+		{name: "a payload", events: "data: {\"id\":\"x\"}\n\n"},
+		{name: "the marker inside a content delta", events: "data: {\"delta\":{\"content\":\"data: [DONE]\"}}\n\n"},
+		{name: "nothing", events: ""},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			if got := HasSSEDone([]byte(testCase.events)); got != testCase.want {
+				t.Fatalf("HasSSEDone(%q) = %v, want %v", testCase.events, got, testCase.want)
+			}
+		})
+	}
+}

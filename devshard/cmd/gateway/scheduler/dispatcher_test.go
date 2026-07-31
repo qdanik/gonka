@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"devshard/cmd/gateway/chain"
+	"devshard/types"
 
 	"go.uber.org/goleak"
 )
@@ -104,6 +105,12 @@ func (s *scriptedSession) LatestNonce() uint64 {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.nonce
+}
+
+func (s *scriptedSession) stopFailing() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.failAfterDecide = nil
 }
 
 func (s *scriptedSession) report() (advances, declines int, commits []committedNonce) {
@@ -230,6 +237,7 @@ type harnessConfig struct {
 	slots           []string
 	pocRequired     func(string) bool
 	throttled       func(string) bool
+	ejected         func(string) bool
 	capability      func(string, RequestProfile) bool
 	stateBlocked    func(string) bool
 	afterDecide     func(HostBinding)
@@ -279,6 +287,9 @@ func newHarness(t *testing.T, cfg harnessConfig) *harness {
 			},
 			throttled: func(participant string) bool {
 				return cfg.throttled != nil && cfg.throttled(participant)
+			},
+			ejected: func(participant string) bool {
+				return cfg.ejected != nil && cfg.ejected(participant)
 			},
 			capability: func(participant string, profile RequestProfile) bool {
 				return cfg.capability != nil && cfg.capability(participant, profile)
@@ -713,6 +724,60 @@ func TestDispatcherFailsWaitersWhenTheSessionErrors(t *testing.T) {
 	result := awaitReply(t, queued)
 	if !errors.Is(result.err, sessionErr) {
 		t.Fatalf("err = %v, want the session error", result.err)
+	}
+}
+
+// Every drain that ends without holding a nonce must leave the queue empty: a waiter left behind has no
+// timer of its own, so its only wake-up would be a later arrival -- which is served ahead of it.
+func TestDispatcherLeavesNoWaiterWithoutAWakeUp(t *testing.T) {
+	t.Run("an advance that failed on the chosen waiter answers the rest too", func(t *testing.T) {
+		test := newHarness(t, harnessConfig{failAfterDecide: types.ErrInsufficientBalance, holdStart: true})
+		first := test.submit(t, test.clock.Now())
+		second := test.submit(t, test.clock.Now())
+
+		test.dispatcher.start()
+
+		for index, queued := range []*waiter{first, second} {
+			if result := awaitReply(t, queued); !errors.Is(result.err, types.ErrInsufficientBalance) {
+				t.Fatalf("waiter %d err = %v, want the depleted escrow's error", index, result.err)
+			}
+		}
+		test.wantSlots(t, 0, 1)
+	})
+
+	t.Run("a tripped burn budget answers the queue it stopped serving", func(t *testing.T) {
+		test := newHarness(t, harnessConfig{swallowCommit: true})
+
+		queued := test.submit(t, test.clock.Now().Add(-2*staleHold), hostB)
+
+		if result := awaitReply(t, queued); !errors.Is(result.err, ErrNoAvailableHost) {
+			t.Fatalf("err = %v, want ErrNoAvailableHost", result.err)
+		}
+		if _, trips := test.observer.counts(); trips != 1 {
+			t.Fatalf("burn budget trips = %d, want 1", trips)
+		}
+	})
+}
+
+// The actor wakes on the next submit, so a queue it left behind is served after the request that woke it.
+func TestDispatcherServesNoLaterArrivalAheadOfAFailedQueue(t *testing.T) {
+	test := newHarness(t, harnessConfig{failAfterDecide: types.ErrInsufficientBalance, holdStart: true})
+	queued := []*waiter{
+		test.submit(t, test.clock.Now()),
+		test.submit(t, test.clock.Now()),
+		test.submit(t, test.clock.Now()),
+	}
+
+	test.dispatcher.start()
+
+	for index, waiting := range queued {
+		if result := awaitReply(t, waiting); result.err == nil {
+			t.Fatalf("waiter %d was served, want the failed advance reported to it", index)
+		}
+	}
+	test.session.stopFailing()
+	if result := awaitReply(t, test.submit(t, test.clock.Now())); result.err != nil {
+		t.Fatalf("later arrival err = %v, want an assignment once the escrow advances again", result.err)
 	}
 }
 

@@ -53,7 +53,7 @@ All admin, all always-on.
 
 Two operator-facing rules that surprise people:
 
-- **A private key is never accepted in a request body.** Escrow creation and import take the *name* of the environment variable holding the key. A raw key is rejected with 400, because it would otherwise reach the commitment row, the logs, and every operator in between.
+- **A private key is never accepted in a request body.** Escrow creation, registration and import all take `private_key_env`, the *name* of the environment variable holding the key; there is no `private_key` field on any of the three request types. A body that omits the variable name is rejected with 400, because a key sent instead would otherwise reach the commitment row, the logs, and every operator in between.
 - **Deactivate and settle stop routing before the record changes**, so nothing new is admitted while the write runs, and a settle that fails leaves the escrow retired rather than re-added — its record is already inactive and settlement-pending, which is where the rotation tick picks it up again.
 - **Deleting an escrow deletes its session storage**, on a path derived from a client-supplied escrow id. Sessions and the delete route must derive that path the same way or a delete removes a directory nothing was using, and the delete refuses any path that escapes the gateway's own storage directory or is the base directory itself. The `escrow-` filename prefix already neutralises a simple `../`, but an id containing a separator does escape without the guard.
 - **Import copies session storage rather than referencing it**, so the gateway owns the only handle to what it serves.
@@ -99,7 +99,9 @@ The maximum active nonce count is a chain governance parameter, polled by the ob
 
 ## Metrics
 
-All families are `devshard_*` and the names are frozen: dashboards and alerts depend on them. `/metrics` is deliberately *not* instrumented, so the scrape does not count itself.
+The gateway's own families are all `devshard_*` and the names are frozen: dashboards and alerts depend on them. The scrape also carries the standard `go_*` and `process_*` families, because the registry is built with the Go and process collectors registered alongside them. `/metrics` is deliberately *not* instrumented, so the scrape does not count itself.
+
+Most of the gateway's families share the prefix `devshard_gateway_`; the exceptions are `devshard_http_*`, `devshard_runtime_*`, `devshard_host_transport_*` and `devshard_inference_timeouts_total`. Where a list below writes a short name, the full wire name carries the `devshard_gateway_` prefix.
 
 **Race and inference** (from the engine's single recording point, so two call sites cannot disagree about what a race did):
 
@@ -129,14 +131,14 @@ All families are `devshard_*` and the names are frozen: dashboards and alerts de
 
 **Chain** — `chain_block_height`, `chain_epoch_index`, `chain_epoch_switch_block_height`, `chain_max_nonce` (0 means not yet fetched), `chain_requests_blocked`, `chain_snapshot_age_seconds`, `chain_snapshot_healthy`, plus `chain_epoch_phase{phase}` and `chain_block_reason{reason}` as one series per enum member.
 
-**Scheduler** — `devshard_gateway_ghost_nonces_burned_total{devshard_id,reason}`, `nonce_holds_total{devshard_id}`, `burn_budget_exhausted_total{devshard_id}`. A nonce is money whichever way it is spent, so a burn, a hold and an exhausted budget each get their own family.
+**Scheduler** — `devshard_gateway_ghost_nonces_burned_total{devshard_id,reason}`, `devshard_gateway_nonce_holds_total{devshard_id}`, `devshard_gateway_burn_budget_exhausted_total{devshard_id}`. A nonce is money whichever way it is spent, so a burn, a hold and an exhausted budget each get their own family.
 
 **Host and process** — `devshard_gateway_host_ejected{participant_key,model}`, `devshard_gateway_host_inflight_requests{participant_key}`, `devshard_host_transport_open_connections{address}`, `devshard_host_transport_connections{address,state}`, `devshard_gateway_accounting_rows_written_total`, `devshard_gateway_accounting_rows_lost_total{cause}`, `devshard_http_requests_total{path,method,status}`, `devshard_http_request_duration_seconds{path,method}`.
 
 ### Cardinality rules
 
 - A route label is always a route *pattern*, never a raw path; every unmatched path folds into the single label `other`. A raw path would let unauthenticated traffic mint one series per probe.
-- Escrow ids appear on gauges, where stale series expire, and never on counters — escrows rotate every epoch and old ids never return.
+- Escrow ids appear freely on gauges, where stale series expire, and on counters only for the three scheduler nonce families above — escrows rotate every epoch and old ids never return, so those three counters accumulate one dead series per retired escrow for as long as the retention window keeps them. That cost is accepted there and nowhere else, because a spent nonce that cannot be attributed to the escrow that paid for it is money the operator cannot account for.
 - A `reason` label is a constant chosen at the branch, never derived from an error string. Terminals with no recovered upstream status report `status="0"` rather than minting one label per error message.
 - An empty label value is never emitted: it reads on a dashboard as "does not apply", which is indistinguishable from a broken emit site.
 - Enumerations are emitted as one series per member with 1 on the active one (chain phase, block reason, breaker state), which keeps the label set closed.

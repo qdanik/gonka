@@ -130,16 +130,36 @@ func (s *simSnapshots) Snapshot() chain.PhaseSnapshot { return *s.current.Load()
 
 func (s *simSnapshots) set(next chain.PhaseSnapshot) { s.current.Store(&next) }
 
+// simTracker records what the engine reported and, when a test sets health, answers the health questions
+// from the real tracker so an escalation is driven by the detector rather than by a flag the test set.
 type simTracker struct {
 	*stubPerf
+	health  *perf.Tracker
 	mu      sync.Mutex
 	samples []perf.Sample
 }
 
 func (p *simTracker) RecordSample(sample perf.Sample) {
 	p.mu.Lock()
-	defer p.mu.Unlock()
 	p.samples = append(p.samples, sample)
+	p.mu.Unlock()
+	if p.health != nil {
+		p.health.RecordSample(sample)
+	}
+}
+
+func (p *simTracker) Ejected(participant, model string) bool {
+	if p.health != nil {
+		return p.health.Ejected(participant, model)
+	}
+	return p.stubPerf.Ejected(participant, model)
+}
+
+func (p *simTracker) Degraded(participant, model string) bool {
+	if p.health != nil {
+		return p.health.Degraded(participant, model)
+	}
+	return p.stubPerf.Degraded(participant, model)
 }
 
 func (p *simTracker) recorded() []perf.Sample {
@@ -311,7 +331,7 @@ func newSimulatorInPhase(
 	sim := &simulator{
 		picker:    &stubPicker{},
 		target:    &simTargets{scriptedTarget: &scriptedTarget{scripts: map[uint64]*hostScript{}, hosts: hosts, labels: map[int]string{}}},
-		perf:      &simTracker{stubPerf: &stubPerf{ejected: map[string]bool{}}},
+		perf:      &simTracker{stubPerf: &stubPerf{ejected: map[string]bool{}, degraded: map[string]bool{}}},
 		windows:   &simWindows{slotLedger: newSlotLedger()},
 		metrics:   newSimMetrics(),
 		ledger:    newSimLedger(),

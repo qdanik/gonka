@@ -21,28 +21,28 @@ This document is the map: what each package owns, which package may call which, 
 
 ## Packages
 
-Sizes are non-blank, non-test lines as of this writing; they are indicative of weight, not a target.
+Sizes are total lines of non-test Go as of this writing; they are indicative of weight, not a target.
 
 | Package | Lines | Owns |
 |---|---:|---|
 | `env/` | 172 | The only place that reads environment variables. One typed table: name, type, default. |
-| `config/` | 708 | The immutable configuration snapshot — defaults merged with environment and admin overrides, validated fail-fast — plus the atomic holder that publishes replacements. |
-| `store/` | 812 | SQLite: devshard records, admin overrides, intent commitments, rotation status, suspicious hosts, and the asynchronous request-accounting ledger. |
-| `chain/` | 2 186 | All chain input and output: the transaction client (build, sign, broadcast, confirm) and the phase observer that polls the public API and publishes an immutable `PhaseSnapshot`. |
-| `filters/` | 3 252 | The request and response boundary: one rule table for every top-level parameter, per-model profiles, schema bounds, the streaming response rewriter, and the vLLM capability-error parser. |
-| `perf/` | 442 | Per-participant performance rings, peak-EWMA scoring, and Envoy-style outlier ejection. |
-| `limits/` | 844 | Three limiters: the gateway-wide FIFO admission limiter, the per-participant AIMD window with circuit breaker, and the chain-weight capacity model. |
-| `registry/` | 705 | The live escrow set: escrow id to session, model, group and in-flight count, published and draining, behind a copy-on-write snapshot. |
-| `scheduler/` | 1 118 | Target selection: which escrow, which participant, which nonce — including burning the nonces bound to participants that cannot serve. |
-| `engine/` | 3 034 | The speculative race: attempts, escalation, crowning, streaming, drain, and the single point where a race outcome is recorded. |
-| `escrow/` | 904 | The escrow lifecycle: creation, crash-recovery reconciliation, rotation across the proof-of-compute boundary, depletion, settlement and retirement. |
-| `api/` | 2 575 | The HTTP boundary: routes, authentication, admission, the response cache, request capture, error mapping and the streaming writer. |
-| `metrics/` | 860 | The Prometheus registry and every collector; the only package that knows Prometheus exists. |
+| `config/` | 699 | The immutable configuration snapshot — defaults merged with environment and admin overrides, validated fail-fast — plus the atomic holder that publishes replacements. |
+| `store/` | 805 | SQLite: devshard records, admin overrides, intent commitments, rotation status, suspicious hosts, and the asynchronous request-accounting ledger. |
+| `chain/` | 2 129 | All chain input and output: the transaction client (build, sign, broadcast, confirm) and the phase observer that polls the public API and publishes an immutable `PhaseSnapshot`. |
+| `filters/` | 3 199 | The request and response boundary: one rule table for every top-level parameter, per-model profiles, schema bounds, the streaming response rewriter, and the vLLM capability-error parser. |
+| `perf/` | 450 | Per-participant decayed success and failure counts, Envoy-style outlier ejection, and the sticky host-capability flags. |
+| `limits/` | 847 | Three limiters: the gateway-wide FIFO admission limiter, the per-participant AIMD window with circuit breaker, and the chain-weight capacity model. |
+| `registry/` | 704 | The live escrow set: escrow id to session, model, group and in-flight count, published and draining, behind a copy-on-write snapshot. |
+| `scheduler/` | 1 126 | Target selection: which escrow, which participant, which nonce — including burning the nonces bound to participants that cannot serve. |
+| `engine/` | 3 129 | The speculative race: attempts, escalation, crowning, streaming, drain, and the single point where a race outcome is recorded. |
+| `escrow/` | 902 | The escrow lifecycle: creation, crash-recovery reconciliation, rotation across the proof-of-compute boundary, depletion, settlement and retirement. |
+| `api/` | 2 572 | The HTTP boundary: routes, authentication, admission, the response cache, request capture, error mapping and the streaming writer. |
+| `metrics/` | 857 | The Prometheus registry and every collector; the only package that knows Prometheus exists. |
 | `main.go` | 959 | The composition root. No policy, only wiring, boot and shutdown. |
 
 ## Dependency rules
 
-Arrows are one-way and the graph is acyclic. It is verified mechanically by `go list`, not by convention.
+Arrows are one-way and the graph is acyclic. Acyclicity is enforced by the Go compiler — an import cycle does not build — so the shape below cannot silently rot into a cycle. The *direction* of each arrow is convention: no test asserts the layering, and `go list -f '{{join .Imports "\n"}}' ./cmd/gateway/...` is how you check it.
 
 ```mermaid
 graph TD
@@ -62,6 +62,7 @@ graph TD
     engine --> filters
     engine --> chain
     registry --> scheduler
+    registry --> chain
     scheduler --> chain
     escrow --> chain
     escrow --> store
@@ -77,7 +78,7 @@ graph TD
     config --> filters
 ```
 
-Every package except `env` and `filters` also reads `config`; those two edges are omitted above for legibility.
+Every package except `env`, `filters` and `chain` also reads `config`; those edges are omitted above for legibility, as are `main`'s edges to everything it wires.
 
 Three rules hold this shape in place.
 
