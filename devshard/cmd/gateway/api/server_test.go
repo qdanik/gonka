@@ -61,6 +61,7 @@ func (f *fakeRegistry) IsBusy(escrowID string) bool { return f.busy[escrowID] }
 // fakeEngine's ledger stands in for the real engine's recording point, which runs before Run returns.
 type fakeEngine struct {
 	runs    atomic.Int64
+	raced   atomic.Pointer[engine.Request]
 	reply   string
 	chunks  []string
 	outcome engine.RaceOutcome
@@ -70,6 +71,7 @@ type fakeEngine struct {
 
 func (e *fakeEngine) Run(_ context.Context, request engine.Request, client io.Writer) (engine.RaceOutcome, error) {
 	e.runs.Add(1)
+	e.raced.Store(&request)
 	// The real engine settles on an escrow before it writes, which is the only moment a streaming
 	// reply can still take a header.
 	if request.OnEscrow != nil && e.outcome.EscrowID != "" {
@@ -417,9 +419,7 @@ func TestEveryRouteAnswersItsDocumentedStatus(t *testing.T) {
 		{name: "admin escrows", method: http.MethodPost, target: "/v1/admin/escrows", body: `{"model":"qwen","amount":10,"private_key_env":"KEY"}`, headers: adminHeaders(), want: http.StatusOK},
 		{name: "admin escrows without key", method: http.MethodPost, target: "/v1/admin/escrows", body: `{"model":"qwen","amount":10}`, headers: adminHeaders(), want: http.StatusBadRequest},
 		{name: "admin escrows without amount", method: http.MethodPost, target: "/v1/admin/escrows", body: `{"model":"qwen"}`, headers: adminHeaders(), want: http.StatusBadRequest},
-		// A raw key would reach the commitment row and the logs, so the boundary rejects it rather than
-		// letting the implementation refuse it as a server error.
-		{name: "admin escrows with a raw private key", method: http.MethodPost, target: "/v1/admin/escrows", body: `{"model":"qwen","amount":10,"private_key":"deadbeef"}`, headers: adminHeaders(), want: http.StatusBadRequest},
+		{name: "admin escrows with a raw private key are refused at the boundary, not as a server error", method: http.MethodPost, target: "/v1/admin/escrows", body: `{"model":"qwen","amount":10,"private_key":"deadbeef"}`, headers: adminHeaders(), want: http.StatusBadRequest},
 
 		{name: "suspicious list", method: http.MethodGet, target: "/v1/admin/suspicious-hosts", headers: adminHeaders(), want: http.StatusOK},
 		{name: "suspicious add", method: http.MethodPost, target: "/v1/admin/suspicious-hosts", body: `{"participant_key":"gonka1abc"}`, headers: adminHeaders(), want: http.StatusOK},

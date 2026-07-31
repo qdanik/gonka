@@ -159,10 +159,16 @@ func nextDeadline(now time.Time, plan deadlinePlan) deadlineArm {
 // A race whose client left is owed no further attempt: another attempt is another nonce to settle for
 // a response nobody will read. A pick already running is the escalation, so it disarms the trigger too.
 func (p deadlinePlan) escalation(now time.Time) (ArmedEscalation, bool) {
-	if !p.Pick.IsZero() || p.detached() || p.crowned() || len(p.Attempts) >= p.Budget {
+	if !p.Pick.IsZero() || p.detached() || p.crowned() {
 		return ArmedEscalation{}, false
 	}
-	return p.Policy.NextEscalation(now, p.Attempts, p.Request)
+	armed, found := p.Policy.NextEscalation(now, p.Attempts, p.Request)
+	// The budget bounds hedging. The halved-token retry is not a hedge -- it is the only escalation a
+	// buffered request that produced nothing has -- so a spent budget must not delete it.
+	if found && armed.Stage != StageReducedMaxTokens && len(p.Attempts) >= p.Budget {
+		return ArmedEscalation{}, false
+	}
+	return armed, found
 }
 
 func (p deadlinePlan) hardTimeout() time.Time {
@@ -270,20 +276,21 @@ type raceCoordinator struct {
 	scratch  []EscalationAttempt
 	claims   []crownRequest
 
-	winner           *liveAttempt
-	pending          int
-	pickCancel       context.CancelFunc
-	pickStarted      time.Time
-	pickReason       string
-	moreImmediate    int
-	excluded         []string
-	contextHint      uint64
-	clientGoneAt     time.Time
-	cancelled        bool
-	handedOff        bool
-	pocBypass        bool
-	balanceExhausted bool
-	startErr         error
+	winner             *liveAttempt
+	pending            int
+	reducedTokensSpent bool
+	pickCancel         context.CancelFunc
+	pickStarted        time.Time
+	pickReason         string
+	moreImmediate      int
+	excluded           []string
+	contextHint        uint64
+	clientGoneAt       time.Time
+	cancelled          bool
+	handedOff          bool
+	pocBypass          bool
+	balanceExhausted   bool
+	startErr           error
 }
 
 // raceExit is why await stopped. Only exitComplete means the race is over; the other two hand a race
@@ -614,9 +621,24 @@ func (c *raceCoordinator) escalate(armed ArmedEscalation) {
 	if !ok {
 		return
 	}
+	params, ok := c.escalationParams(confirmed.Stage)
+	if !ok {
+		return
+	}
 	// Consumed before the pick is started, so a pick that finds no host cannot retry the same trigger.
 	c.attempts[confirmed.Attempt].escalated = true
-	c.startPick(confirmed.Stage.Reason())
+	c.startPickWithinBudget(confirmed.Stage.Reason(), params, confirmed.Stage != StageReducedMaxTokens)
+}
+
+// escalationParams hands the reduced-max-tokens stage a halved output-token budget and every other stage
+// the request's own params. The one-shot is spent whatever the hook answers, so a body with no budget to
+// halve costs the race one evaluation rather than a deadline it re-arms forever.
+func (c *raceCoordinator) escalationParams(stage EscalationStage) (any, bool) {
+	if stage != StageReducedMaxTokens {
+		return c.request.Params, true
+	}
+	c.reducedTokensSpent = true
+	return c.request.ReduceMaxTokens(c.request.Params)
 }
 
 func (c *raceCoordinator) markStalls() {
@@ -640,7 +662,7 @@ func (c *raceCoordinator) cancelAll() {
 }
 
 func (c *raceCoordinator) pick(ctx context.Context) (scheduler.Assignment, error) {
-	return c.observePick(c.deps.Picker.Pick(ctx, c.requestProfile()))
+	return c.observePick(c.deps.Picker.Pick(ctx, c.requestProfile(c.request.Params)))
 }
 
 // observePick latches the out-of-funds fact a declined nonce carries. The balance is spent composing
@@ -652,7 +674,7 @@ func (c *raceCoordinator) observePick(assignment scheduler.Assignment, err error
 	return assignment, err
 }
 
-func (c *raceCoordinator) requestProfile() scheduler.RequestProfile {
+func (c *raceCoordinator) requestProfile(params any) scheduler.RequestProfile {
 	return scheduler.RequestProfile{
 		Model:         c.request.Model,
 		Escrow:        c.escrowID,
@@ -660,7 +682,7 @@ func (c *raceCoordinator) requestProfile() scheduler.RequestProfile {
 		RequiresTools: c.request.RequiresTools,
 		ContextHint:   c.contextHint,
 		Exclude:       c.excluded,
-		Params:        c.request.Params,
+		Params:        params,
 	}
 }
 
@@ -675,13 +697,21 @@ func (c *raceCoordinator) picking() bool { return c.pickCancel != nil }
 // scheduler holds a waiter for a co-arriving request, and a crown claim is the client's first token, so a
 // coordinator waiting for a pick inline would starve the very winner it is racing to. At most one pick
 // runs at a time, and pickDeadline bounds it however long the scheduler's queue takes to answer.
-func (c *raceCoordinator) startPick(reason string) {
-	if c.picking() || len(c.attempts) >= c.budget {
+func (c *raceCoordinator) startPick(reason string, params any) {
+	c.startPickWithinBudget(reason, params, true)
+}
+
+// startPickWithinBudget exists because the halved-token retry is exempt from the attempt budget. It is
+// not a hedge racing the first host: it is the only way a buffered request that has produced nothing
+// can be given a shorter answer, so a budget of one -- which is what nonce scarcity collapses it to --
+// would delete the escalation rather than trim it.
+func (c *raceCoordinator) startPickWithinBudget(reason string, params any, honourBudget bool) {
+	if c.picking() || (honourBudget && len(c.attempts) >= c.budget) {
 		return
 	}
 	ctx, cancel := context.WithCancel(c.drain.race)
 	c.pickCancel, c.pickStarted, c.pickReason = cancel, c.deps.Now(), reason
-	profile := c.requestProfile()
+	profile := c.requestProfile(params)
 	go func() {
 		assignment, err := c.deps.Picker.Pick(ctx, profile)
 		c.picked <- pickedHost{assignment: assignment, err: err}
@@ -693,7 +723,7 @@ func (c *raceCoordinator) startNextImmediate() {
 		return
 	}
 	c.moreImmediate--
-	c.startPick(c.decision)
+	c.startPick(c.decision, c.request.Params)
 }
 
 // applyPick spends what the scheduler answered with. A race that can no longer use the assignment still
@@ -748,6 +778,9 @@ func (c *raceCoordinator) launch(assignment scheduler.Assignment, role, startRea
 	c.attempts = append(c.attempts, attempt)
 	c.byNonce[nonce] = attempt
 	c.pending++
+	// Excluded on dispatch, not on failure: otherwise an escalation can be answered with this same
+	// host through a sibling slot -- a second nonce for one host's opinion.
+	c.exclude(attempt.participant)
 	c.deps.Perf.Acquire(attempt.participant)
 
 	go runAttempt(attemptCtx, AttemptSpec{
@@ -856,7 +889,11 @@ func (c *raceCoordinator) plan() deadlinePlan {
 }
 
 func (c *raceCoordinator) escalationRequest() EscalationRequest {
-	return EscalationRequest{InputTokens: c.request.InputTokens, Stream: c.request.Stream}
+	return EscalationRequest{
+		InputTokens:               c.request.InputTokens,
+		Stream:                    c.request.Stream,
+		ReducedTokensStillOffered: c.request.ReduceMaxTokens != nil && !c.reducedTokensSpent,
+	}
 }
 
 func (c *raceCoordinator) denied(participant string) bool {

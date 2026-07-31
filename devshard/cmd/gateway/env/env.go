@@ -74,6 +74,42 @@ func PrivateKey(name string) (string, error) {
 	return key, nil
 }
 
+// legacyNames is the devshardctl spelling each variable falls back to, so a deployment still running
+// the shipped template starts without an edit. The suffixes do not match mechanically -- rotation, the
+// disabled switch, the PoC mode and the tx-query URLs were all renamed -- so the pairs are listed
+// rather than derived. Variables absent here have no devshardctl equivalent.
+var legacyNames = map[string]string{
+	"GATEWAY_PORT":                        "DEVSHARD_PORT",
+	"GATEWAY_STORAGE_DIR":                 "DEVSHARD_STORAGE_DIR",
+	"GATEWAY_API_KEYS":                    "DEVSHARD_API_KEYS",
+	"GATEWAY_ADMIN_API_KEY":               "DEVSHARD_ADMIN_API_KEY",
+	"GATEWAY_CHAIN_REST":                  "DEVSHARD_CHAIN_REST",
+	"GATEWAY_PUBLIC_API":                  "DEVSHARD_PUBLIC_API",
+	"GATEWAY_TX_QUERY_FALLBACK_URLS":      "DEVSHARD_TX_QUERY_REST",
+	"GATEWAY_TX_FEE_AMOUNT":               "DEVSHARD_TX_FEE_AMOUNT",
+	"GATEWAY_TX_GAS_LIMIT":                "DEVSHARD_TX_GAS_LIMIT",
+	"GATEWAY_POC_MODE":                    "DEVSHARD_POC_REQUEST_MODE",
+	"GATEWAY_DISABLED":                    "DEVSHARD_GATEWAY_DISABLED",
+	"GATEWAY_DISABLED_MESSAGE":            "DEVSHARD_GATEWAY_DISABLED_MESSAGE",
+	"GATEWAY_DISABLED_REDIRECT_URL":       "DEVSHARD_GATEWAY_DISABLED_NEW_URL",
+	"GATEWAY_ROTATION_ENABLED":            "DEVSHARD_ESCROW_ROTATION_ENABLED",
+	"GATEWAY_ROTATION_SETTLEMENT_ENABLED": "DEVSHARD_ESCROW_ROTATION_SETTLEMENT_ENABLED",
+	"GATEWAY_ROTATION_MODELS_JSON":        "DEVSHARD_ESCROW_ROTATION_MODELS_JSON",
+	"GATEWAY_CHAT_CACHE_MAX_BYTES":        "DEVSHARD_CHAT_CACHE_MAX_BYTES",
+}
+
+// lookup prefers the gateway's own spelling and falls back to devshardctl's. An empty value counts as
+// unset on both, so an operator can blank a legacy variable without the fallback resurrecting it.
+func lookup(name string) string {
+	if raw := strings.TrimSpace(os.Getenv(name)); raw != "" {
+		return raw
+	}
+	if legacy, aliased := legacyNames[name]; aliased {
+		return strings.TrimSpace(os.Getenv(legacy))
+	}
+	return ""
+}
+
 // Load reads every gateway environment variable. Parse failures are
 // accumulated so the operator sees all misconfigured variables at once.
 func Load() (Values, error) {
@@ -81,14 +117,14 @@ func Load() (Values, error) {
 	var problems []error
 
 	readString := func(name string, target **string) {
-		raw := strings.TrimSpace(os.Getenv(name))
+		raw := lookup(name)
 		if raw == "" {
 			return
 		}
 		*target = &raw
 	}
 	readInt := func(name string, target **int64) {
-		raw := strings.TrimSpace(os.Getenv(name))
+		raw := lookup(name)
 		if raw == "" {
 			return
 		}
@@ -100,7 +136,7 @@ func Load() (Values, error) {
 		*target = &parsed
 	}
 	readFloat := func(name string, target **float64) {
-		raw := strings.TrimSpace(os.Getenv(name))
+		raw := lookup(name)
 		if raw == "" {
 			return
 		}
@@ -112,7 +148,7 @@ func Load() (Values, error) {
 		*target = &parsed
 	}
 	readBool := func(name string, target **bool) {
-		raw := strings.TrimSpace(os.Getenv(name))
+		raw := lookup(name)
 		if raw == "" {
 			return
 		}

@@ -2,6 +2,7 @@ package metrics
 
 import (
 	"devshard/cmd/gateway/engine"
+	"strconv"
 
 	"github.com/prometheus/client_golang/prometheus"
 )
@@ -199,17 +200,10 @@ func raceFailureReason(outcome engine.RaceOutcome, firstFailure string) string {
 // transportStatus maps a terminal back to the upstream status the host answered with. Terminals that
 // carry no recovered code report legacy's no-status label rather than minting one per error string.
 func transportStatus(terminal engine.Terminal) (string, bool) {
+	if status, recovered := engine.StatusFor(terminal); recovered {
+		return strconv.Itoa(status), true
+	}
 	switch terminal {
-	case engine.TerminalThrottled:
-		return "429", true
-	case engine.TerminalUnavailable:
-		return "503", true
-	case engine.TerminalForbidden:
-		return "403", true
-	case engine.TerminalNotFound:
-		return "404", true
-	case engine.TerminalTimestampDrift:
-		return "401", true
 	case engine.TerminalRejected, engine.TerminalDialFailure, engine.TerminalStreamTruncated,
 		engine.TerminalUnexpectedEOF, engine.TerminalStalled:
 		return statusNoCode, true

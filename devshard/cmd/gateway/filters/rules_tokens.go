@@ -41,12 +41,13 @@ func resolveOutputTokenLimits(options Options, routedModel string) outputTokenLi
 	return limits
 }
 
-// capOutputTokens: 0 always means unset (use default, itself never above the cap); a nonzero value
-// clamps unless bypassed.
+// capOutputTokens: 0 means the client named no budget and gets the configured default, which the cap
+// deliberately does not clamp -- the cap bounds what a client may ASK for, and an operator raising the
+// default above it is granting more than that, not misconfiguring. A nonzero value clamps unless bypassed.
 func capOutputTokens(value uint64, bypassLimit bool, limits outputTokenLimits) uint64 {
 	limits = normalizedOutputTokenLimits(limits)
 	if value == 0 {
-		return min(limits.DefaultMaxTokens, limits.MaxTokensCap)
+		return limits.DefaultMaxTokens
 	}
 	if !bypassLimit && value > limits.MaxTokensCap {
 		return limits.MaxTokensCap
@@ -196,6 +197,41 @@ func applyOutputTokenLimits(document *Document, view *requestView, options Optio
 	} else {
 		view.MaxCompletionTokens = 0
 	}
+}
+
+// HalveMaxTokens rewrites body's output-token budget to half of maxTokens, never below the routed
+// model's own floor, and reports the value it wrote. A false reports a budget with nothing left to
+// give back, which is the caller's signal to skip the shorter retry entirely.
+func HalveMaxTokens(body []byte, maxTokens uint64, routedModel string) ([]byte, uint64, bool) {
+	floor := max(outputTokenFloor(routedModel), 1)
+	if maxTokens <= floor {
+		return nil, 0, false
+	}
+	halved := max(maxTokens/2, floor)
+	document, err := ParseDocument(body)
+	if err != nil {
+		return nil, 0, false
+	}
+	hasMaxCompletionTokens := document.Has("max_completion_tokens")
+	if hasMaxCompletionTokens {
+		document.Set("max_completion_tokens", halved)
+	}
+	// A body carrying neither field still gets max_tokens, so the retry is bounded rather than open.
+	if document.Has("max_tokens") || !hasMaxCompletionTokens {
+		document.Set("max_tokens", halved)
+	}
+	rewritten, err := document.Marshal()
+	if err != nil {
+		return nil, 0, false
+	}
+	return rewritten, halved, true
+}
+
+func outputTokenFloor(routedModel string) uint64 {
+	if profile := ProfileFor(routedModel); profile != nil {
+		return profile.MaxTokensFloor
+	}
+	return 0
 }
 
 // maxTokensFloor lifts ctx.Param up to the profile's floor when the parsed value falls below it.

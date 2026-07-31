@@ -445,8 +445,6 @@ func TestGetTxEscrowIDThreeWaySemantics(t *testing.T) {
 			},
 		},
 		{
-			// Proves fallback iteration continues past a primary 404 to a
-			// later success, not just that a lone endpoint can find it.
 			name:    "found on fallback after primary 404 -> escrow id",
 			primary: notFoundHandler.ServeHTTP,
 			fallback: func(w http.ResponseWriter, r *http.Request) {
@@ -484,8 +482,6 @@ func TestGetTxEscrowIDThreeWaySemantics(t *testing.T) {
 			},
 		},
 		{
-			// isNotFoundError must key off HTTP status only: a 500 whose body
-			// happens to contain "not found" must not be misread as a 404.
 			name:    "one 404 one 500-with-not-found-body -> transient error, not ErrTxNotFound",
 			primary: notFoundHandler.ServeHTTP,
 			fallback: func(w http.ResponseWriter, r *http.Request) {

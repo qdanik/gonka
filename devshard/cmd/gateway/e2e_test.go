@@ -1,34 +1,6 @@
-// End-to-end suite: the composed gateway, its real engine, scheduler, registry, limits and store, and
-// real devshard sessions talking to real in-process hosts — real diffs, real state roots, real
-// signatures, a real MsgFinishInference — with no network and no chain.
-//
-// WHAT GREEN HERE DOES NOT MEAN. These are not gaps to be closed by more of this suite; they are
-// outside what any in-process test can reach, and reading green as "verified" would be wrong:
-//
-//   - That the real chain accepts our transactions. Every chain response here is one we wrote.
-//     Protobuf field numbers, unordered-tx TTL semantics, gas, fee denom, sequence handling under
-//     contention and the escrow-created event shape are checked against our model of the chain, not
-//     the chain. One wrong field number is a green suite and a rejected transaction. This is the
-//     largest irreducible risk in the rewrite and nothing below touches it.
-//   - That real hosts behave like these. The hosts are real host.Host state machines, but their
-//     inference engine is a stub: a vLLM version emitting a new SSE field, a valid receipt followed
-//     by a stream truncated at an unscripted byte boundary, or TCP behaviour under packet loss are
-//     all unrepresented. The non-streaming reply here is SSE-shaped because the in-process client
-//     writes SSE either way, so non-streaming BODY bytes are not evidence about a real host.
-//   - Any tuning threshold. Peak-EWMA, the first-token hedging trigger, outlier ejection and the AIMD
-//     window take a latency distribution as input. "Given these numbers, this decision" is asserted
-//     in the owning packages; "these thresholds are right for the fleet" is unanswerable here.
-//   - Real concurrency at real scale. The widest race below is single digits. The two known scale
-//     hazards need load: ProcessResponse serialising a wide race on one Session.mu, and the
-//     registry's read lock on Candidates.
-//   - Settlement money end to end. The suite can assert the payload we build; whether the chain then
-//     pays the right participants the right amounts is chain-side.
-//   - Byte-for-byte compatibility with real clients. The frames are pinned here; whether an
-//     OpenAI-SDK or aiohttp client in the field parses them as it parsed legacy's is an assumption.
-//
-// The honest boundary in one sentence: this suite verifies every decision the gateway makes given a
-// set of inputs, and the wiring that makes those decisions reachable — not that our model of the
-// chain or of a real host is correct, and not any tuning.
+// End-to-end suite: the composed gateway with real devshard sessions and real in-process hosts -- real
+// diffs, state roots, signatures and a real MsgFinishInference, with no network and no chain. What green
+// here does NOT mean is documented in docs/gateway-verification-limits.md; read it before trusting this.
 
 package main
 

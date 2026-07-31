@@ -256,19 +256,13 @@ func classifyDispatchError(ctx context.Context, err error) Terminal {
 		if !strings.Contains(status.Path, "/chat/completions") {
 			return TerminalOffPath
 		}
-		switch status.StatusCode {
-		case http.StatusTooManyRequests:
-			return TerminalThrottled
-		case http.StatusServiceUnavailable:
-			return TerminalUnavailable
-		case http.StatusForbidden:
-			return TerminalForbidden
-		case http.StatusNotFound:
-			return TerminalNotFound
-		case http.StatusUnauthorized:
-			if strings.Contains(strings.ToLower(status.Body), "timestamp drift") {
-				return TerminalTimestampDrift
-			}
+		// A 401 is only drift when the host says so; every other recovered status stands on its own.
+		if status.StatusCode == http.StatusUnauthorized &&
+			!strings.Contains(strings.ToLower(status.Body), "timestamp drift") {
+			return TerminalRejected
+		}
+		if terminal, recovered := terminalForStatus[status.StatusCode]; recovered {
+			return terminal
 		}
 		return TerminalRejected
 	}
