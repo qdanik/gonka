@@ -92,10 +92,9 @@ func NewPhaseObserver(cfg ObserverConfig) (*PhaseObserver, error) {
 	return observer, nil
 }
 
-// Start derives a cancelable context from ctx and spawns the poll loop and the versions poller on
-// it; doneCh closes once both have exited. It returns immediately, the first refresh happens
-// asynchronously. Call Start at most once.
-// Start is idempotent: a call while already running is a no-op rather than a second set of pollers.
+// Start spawns the poll loop and the versions poller on a context derived from ctx; doneCh closes
+// once both have exited. It returns immediately, and is idempotent: a call while already running is
+// a no-op rather than a second set of pollers.
 func (o *PhaseObserver) Start(ctx context.Context) {
 	o.lifecycleMu.Lock()
 	defer o.lifecycleMu.Unlock()
@@ -122,10 +121,9 @@ func (o *PhaseObserver) Start(ctx context.Context) {
 	}()
 }
 
-// Stop cancels the context Start derived and blocks until both loops have exited. It is safe to
-// call repeatedly and concurrently, and is a no-op before Start.
-// Stop is idempotent and is a barrier for every caller: doneCh outlives cancel so a second,
-// concurrent Stop waits for the pollers to exit instead of returning while they still run.
+// Stop cancels the context Start derived and blocks until both loops have exited; it is a no-op
+// before Start. It is a barrier for every caller: doneCh outlives cancel, so a second concurrent
+// Stop waits for the pollers to exit instead of returning while they still run.
 func (o *PhaseObserver) Stop() {
 	o.lifecycleMu.Lock()
 	cancel, done := o.cancel, o.doneCh
@@ -139,7 +137,6 @@ func (o *PhaseObserver) Stop() {
 	}
 }
 
-// run is the poll loop: immediate refresh, then one refresh per tick until ctx is done.
 func (o *PhaseObserver) run(ctx context.Context) {
 	o.refresh(ctx)
 	ticker := time.NewTicker(o.pollInterval)
@@ -230,8 +227,6 @@ func (o *PhaseObserver) refresh(ctx context.Context) {
 	o.publish(snapshot)
 }
 
-// publishWithPreviousParticipants publishes snapshot with the previous poll's participant-derived
-// fields carried over and LastError set.
 func (o *PhaseObserver) publishWithPreviousParticipants(snapshot, previous PhaseSnapshot, lastError string) {
 	snapshot.CurrentWeights = previous.CurrentWeights
 	snapshot.FullWeights = previous.FullWeights
@@ -372,7 +367,6 @@ func (o *PhaseObserver) getBody(ctx context.Context, path string) ([]byte, error
 	return io.ReadAll(resp.Body)
 }
 
-// Snapshot returns the most recently published snapshot (atomic load).
 func (o *PhaseObserver) Snapshot() PhaseSnapshot {
 	return *o.current.Load()
 }
@@ -408,7 +402,6 @@ func (o *PhaseObserver) publish(snapshot PhaseSnapshot) {
 	}
 }
 
-// Versions returns the version-capability cache this observer feeds via SetCandidates.
 func (o *PhaseObserver) Versions() *VersionsCache {
 	return o.versions
 }

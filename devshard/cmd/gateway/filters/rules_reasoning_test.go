@@ -5,8 +5,6 @@ import (
 	"testing"
 )
 
-// --- reasoningWrapper ---
-
 func TestReasoningWrapperLiftsEffort(t *testing.T) {
 	document := parseTestDocument(t, `{"reasoning":{"effort":"high"}}`)
 	if err := reasoningWrapper()(RuleContext{Document: document}); err != nil {
@@ -61,8 +59,6 @@ func TestReasoningWrapperAbsentIsNoOp(t *testing.T) {
 	}
 }
 
-// --- reasoningEffortValidate ---
-
 func TestReasoningEffortValidateAccepts(t *testing.T) {
 	for _, value := range []string{"none", "minimal", "low", "medium", "high", "xhigh"} {
 		t.Run(value, func(t *testing.T) {
@@ -106,8 +102,6 @@ func TestReasoningEffortValidateRejectsUnknownValue(t *testing.T) {
 		t.Errorf("ErrorStatus() = %d, want 400", got)
 	}
 }
-
-// --- enableThinking ---
 
 func TestEnableThinkingStripsForThinkingStripProfile(t *testing.T) {
 	document := parseTestDocument(t, `{"enable_thinking":true}`)
@@ -196,8 +190,6 @@ func TestEnableThinkingAbsentIsNoOp(t *testing.T) {
 		t.Error("chat_template_kwargs must not be created when enable_thinking is absent")
 	}
 }
-
-// --- thinking ---
 
 func TestThinkingStripsForThinkingStripProfile(t *testing.T) {
 	document := parseTestDocument(t, `{"thinking":{"type":"enabled"}}`)
@@ -309,8 +301,6 @@ func TestThinkingAbsentIsNoOp(t *testing.T) {
 		t.Fatalf("thinking() = %v, want nil", err)
 	}
 }
-
-// --- thinkingTokenBudgetStrip / thinkingTokenBudgetResolve ---
 
 func TestThinkingTokenBudgetStrip(t *testing.T) {
 	for _, profile := range []*Profile{nil, minimaxProfile} {
@@ -451,8 +441,6 @@ func TestThinkingTokenBudgetResolveSkipsWhenMaxTokensZero(t *testing.T) {
 	}
 }
 
-// --- safetyIdentifier ---
-
 func TestSafetyIdentifierKeepsAndValidatesForHookProfile(t *testing.T) {
 	document := parseTestDocument(t, `{"safety_identifier":"hashed-user-abc"}`)
 	if err := safetyIdentifier()(RuleContext{Document: document, Param: "safety_identifier", Profile: kimiProfile}); err != nil {
@@ -487,8 +475,6 @@ func TestSafetyIdentifierStripsWithoutHook(t *testing.T) {
 	}
 }
 
-// --- reasoningSplit ---
-
 func TestReasoningSplitPassesThroughForHookProfile(t *testing.T) {
 	document := parseTestDocument(t, `{"reasoning_split":false}`)
 	if err := reasoningSplit()(RuleContext{Document: document, Param: "reasoning_split", Profile: minimaxProfile}); err != nil {
@@ -510,8 +496,6 @@ func TestReasoningSplitStripsWithoutHook(t *testing.T) {
 		}
 	}
 }
-
-// --- forceZeroPenalty ---
 
 func TestForceZeroPenaltyOverwritesPresentFieldForHookProfile(t *testing.T) {
 	document := parseTestDocument(t, `{"frequency_penalty":0.5}`)

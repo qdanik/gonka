@@ -11,21 +11,15 @@ import (
 
 func testPerf() config.Perf {
 	return config.Perf{
-		EWMAHalfLifeSeconds:         600,
-		ColdStartReceiptMs:          200,
-		ColdStartCTTFLMsPerToken:    1,
-		ConsecutiveFailThreshold:    3,
-		FailureRateThreshold:        0.5,
-		FailureRateMinVolume:        5,
-		EjectionBaseSeconds:         30,
-		EjectionMaxSeconds:          600,
-		MaxEjectionFraction:         0.5,
-		MinAvailableHosts:           1,
-		FirstTokenReservoir:         20,
-		FirstTokenActivationSamples: 5,
-		FirstTokenPercentile:        0.95,
-		FirstTokenStalenessSeconds:  3600,
-		HostStalenessSeconds:        60,
+		EWMAHalfLifeSeconds:      600,
+		ConsecutiveFailThreshold: 3,
+		FailureRateThreshold:     0.5,
+		FailureRateMinVolume:     5,
+		EjectionBaseSeconds:      30,
+		EjectionMaxSeconds:       600,
+		MaxEjectionFraction:      0.5,
+		MinAvailableHosts:        1,
+		HostStalenessSeconds:     60,
 	}
 }
 
@@ -40,53 +34,6 @@ func fixedNow(instant time.Time) func() time.Time {
 func failAllConsecutive(tracker *Tracker, participant, model string, count int64) {
 	for i := int64(0); i < count; i++ {
 		tracker.RecordSample(Sample{ParticipantKey: participant, Model: model, Responsive: false})
-	}
-}
-
-func TestTrackerRecordSampleUpdatesEstimate(t *testing.T) {
-	tracker := newTestTracker(testPerf(), fixedNow(testEpoch))
-
-	tracker.RecordSample(Sample{
-		ParticipantKey: "participant-a",
-		Model:          "model-a",
-		Responsive:     true,
-		SendTime:       testEpoch,
-		ReceiptTime:    testEpoch.Add(300 * time.Millisecond),
-	})
-
-	if got := tracker.Estimate("participant-a", "model-a", 0); got != 300 {
-		t.Fatalf("Estimate() after a 300ms receipt sample = %v, want 300", got)
-	}
-}
-
-func TestTrackerEstimateUnknownHostReturnsColdPrior(t *testing.T) {
-	perf := testPerf()
-	tracker := newTestTracker(perf, fixedNow(testEpoch))
-
-	got := tracker.Estimate("never-seen", "model-a", 50)
-	want := perf.ColdStartReceiptMs + perf.ColdStartCTTFLMsPerToken*50
-	if got != want {
-		t.Fatalf("Estimate() for an unknown host = %v, want cold prior %v", got, want)
-	}
-}
-
-func TestTrackerNewHostUsesLiveConfigPriorsAtCreationTime(t *testing.T) {
-	perf := testPerf()
-	perf.ColdStartReceiptMs = 111
-	holder := config.NewHolder(&config.Config{Perf: perf})
-	tracker := NewTracker(holder, fixedNow(testEpoch))
-
-	swapped := perf
-	swapped.ColdStartReceiptMs = 999
-	holder.Swap(&config.Config{Perf: swapped})
-
-	// Zero-value SendTime/ReceiptTime -> ReceiptMs()==0, so recordSample never
-	// touches ewmaReceipt; Estimate() is left reading the cold prior baked in
-	// when this hostPerf was first created (after the swap above).
-	tracker.RecordSample(Sample{ParticipantKey: "participant-a", Model: "model-a", Responsive: false})
-
-	if got := tracker.Estimate("participant-a", "model-a", 0); got != 999 {
-		t.Fatalf("Estimate() for a host created after a config swap = %v, want the swapped prior 999", got)
 	}
 }
 
@@ -203,28 +150,6 @@ func TestTrackerEjectedCapNeverEjectsTheOnlyKnownHost(t *testing.T) {
 	}
 }
 
-func TestTrackerFirstTokenP95DelegatesToReservoir(t *testing.T) {
-	perf := testPerf()
-	perf.FirstTokenActivationSamples = 3
-	tracker := newTestTracker(perf, fixedNow(testEpoch))
-
-	if _, ok := tracker.FirstTokenP95("model-a", 500); ok {
-		t.Fatal("FirstTokenP95() before any sample ok = true, want false")
-	}
-
-	for i := 1; i <= 3; i++ {
-		tracker.RecordFirstToken("model-a", 500, float64(i*10))
-	}
-
-	got, ok := tracker.FirstTokenP95("model-a", 500)
-	if !ok {
-		t.Fatal("FirstTokenP95() after the activation count ok = false, want true")
-	}
-	if want := 30 * time.Millisecond; got != want {
-		t.Fatalf("FirstTokenP95() = %v, want %v", got, want)
-	}
-}
-
 func TestTrackerCannotServeDelegatesToCapability(t *testing.T) {
 	tracker := newTestTracker(testPerf(), fixedNow(testEpoch))
 
@@ -263,13 +188,13 @@ func TestTrackerRecordSampleLazilyEvictsHostsUnseenPastStaleness(t *testing.T) {
 	current := testEpoch
 	tracker := newTestTracker(perf, func() time.Time { return current })
 
-	tracker.RecordSample(Sample{ParticipantKey: "stale-host", Model: "model-a", Responsive: true, SendTime: current, ReceiptTime: current.Add(time.Millisecond)})
+	tracker.RecordSample(Sample{ParticipantKey: "stale-host", Model: "model-a", Responsive: true})
 	if got := len(tracker.hosts); got != 1 {
 		t.Fatalf("hosts map len after the first sample = %d, want 1", got)
 	}
 
 	current = current.Add(61 * time.Second) // past HostStalenessSeconds
-	tracker.RecordSample(Sample{ParticipantKey: "fresh-host", Model: "model-a", Responsive: true, SendTime: current, ReceiptTime: current.Add(time.Millisecond)})
+	tracker.RecordSample(Sample{ParticipantKey: "fresh-host", Model: "model-a", Responsive: true})
 
 	if got := len(tracker.hosts); got != 1 {
 		t.Fatalf("hosts map len after the stale sweep = %d, want 1 (only fresh-host)", got)
@@ -291,11 +216,11 @@ func TestTrackerConcurrentRecordAndQueryNoRace(t *testing.T) {
 		wg.Add(4)
 		go func() {
 			defer wg.Done()
-			tracker.RecordSample(Sample{ParticipantKey: participant, Model: "model-a", Responsive: true, SendTime: testEpoch, ReceiptTime: testEpoch.Add(time.Millisecond)})
+			tracker.RecordSample(Sample{ParticipantKey: participant, Model: "model-a", Responsive: true})
 		}()
 		go func() {
 			defer wg.Done()
-			tracker.Estimate(participant, "model-a", 100)
+			tracker.Inflight(participant)
 		}()
 		go func() {
 			defer wg.Done()

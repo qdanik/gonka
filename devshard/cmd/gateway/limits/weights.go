@@ -20,17 +20,7 @@ func scaleFactor(currentAvailable, full float64) float64 {
 	if full <= 0 {
 		return 1
 	}
-	ratio := currentAvailable / full
-	switch {
-	case math.IsNaN(ratio): // fail closed like clampUnit: a corrupt ratio grants no capacity (>1 and <0 already cover ±Inf)
-		return 0
-	case ratio < 0:
-		return 0
-	case ratio > 1:
-		return 1
-	default:
-		return ratio
-	}
+	return clampUnit(currentAvailable / full)
 }
 
 // escrowWeight = Σ over hosts of currentWeight[h] * hostShares[h] * (available[h] ? 1 : 0).

@@ -247,3 +247,28 @@ var _ interface {
 	RecordTimeout(engine.TimeoutEvent)
 	RecordClassifyOverflow(participant, model string)
 } = (*RaceRecorder)(nil)
+
+// The label values below reach dashboards verbatim. Changing one empties the panel that reads it
+// without failing a build or a query, so the wire strings are pinned here rather than inferred.
+func TestEmittedLabelValuesMatchTheirWireStrings(t *testing.T) {
+	pinned := []struct{ emitted, want string }{
+		{engine.AttemptOutcomeSuccess, "success"},
+		{engine.AttemptOutcomeFailed, "failed"},
+		{engine.VisibilityWinner, "user_visible_winner"},
+		{engine.VisibilityNoWinner, "no_winner"},
+		{engine.VisibilitySuppressedLoser, "suppressed_loser"},
+		{engine.VisibilityFailedNotFinished, "failed_not_finished"},
+		{engine.RolePrimary, "primary"},
+		{engine.RoleSpeculative, "speculative"},
+		{engine.TimeoutActionSkipped, "skipped"},
+		{engine.TimeoutActionStarted, "started"},
+		{engine.TimeoutActionCompleted, "completed"},
+		{engine.TimeoutActionFailed, "failed"},
+		{outcomeFailure, "failure"},
+	}
+	for _, label := range pinned {
+		if label.emitted != label.want {
+			t.Errorf("label value %q no longer matches the string dashboards read, %q", label.emitted, label.want)
+		}
+	}
+}

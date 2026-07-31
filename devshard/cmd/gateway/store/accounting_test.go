@@ -14,6 +14,15 @@ type testClock struct {
 	current time.Time
 }
 
+func countAccountingRows(t *testing.T, testStore *Store) int64 {
+	t.Helper()
+	var count int64
+	if err := testStore.db.QueryRow(`SELECT COUNT(*) FROM request_accounting`).Scan(&count); err != nil {
+		t.Fatalf("counting accounting rows: %v", err)
+	}
+	return count
+}
+
 func newTestClock(at time.Time) *testClock { return &testClock{current: at} }
 
 // verifyNoLeaks registers the leak check before any store cleanup, so cleanups run LIFO and the
@@ -116,12 +125,9 @@ func TestLedgerWritesExactlyOneRowPerRequestID(t *testing.T) {
 		t.Fatalf("Close(): %v", err)
 	}
 
-	count, err := testStore.CountRequests(context.Background())
-	if err != nil {
-		t.Fatalf("CountRequests(): %v", err)
-	}
+	count := countAccountingRows(t, testStore)
 	if count != 1 {
-		t.Fatalf("CountRequests() = %d, want 1", count)
+		t.Fatalf("accounting rows = %d, want 1", count)
 	}
 }
 
@@ -241,12 +247,9 @@ func TestRetentionEvictsTheOldestRowsPastMaxRows(t *testing.T) {
 		t.Fatalf("Close(): %v", err)
 	}
 
-	count, err := testStore.CountRequests(context.Background())
-	if err != nil {
-		t.Fatalf("CountRequests(): %v", err)
-	}
+	count := countAccountingRows(t, testStore)
 	if count != 2 {
-		t.Fatalf("CountRequests() = %d, want 2", count)
+		t.Fatalf("accounting rows = %d, want 2", count)
 	}
 	if _, found, _ := testStore.FindRequest(context.Background(), "oldest"); found {
 		t.Fatal("oldest row survived the row-count bound")

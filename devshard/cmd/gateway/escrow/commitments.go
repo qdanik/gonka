@@ -32,6 +32,9 @@ type Manager struct {
 	depletedMarks map[string]bool
 	depletionMu   sync.Mutex
 
+	missingMarks map[string]bool
+	missingMu    sync.Mutex
+
 	lifecycleMu sync.Mutex
 	stop        chan struct{}
 	done        chan struct{}

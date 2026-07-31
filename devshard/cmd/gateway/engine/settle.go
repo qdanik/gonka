@@ -9,10 +9,10 @@ const (
 	timeoutKindRefused   = "refused"
 	timeoutKindExecution = "execution"
 
-	timeoutActionSkipped   = "skipped"
-	timeoutActionStarted   = "started"
-	timeoutActionCompleted = "completed"
-	timeoutActionFailed    = "failed"
+	TimeoutActionSkipped   = "skipped"
+	TimeoutActionStarted   = "started"
+	TimeoutActionCompleted = "completed"
+	TimeoutActionFailed    = "failed"
 
 	timeoutReasonNone            = "none"
 	timeoutReasonPhaseAborted    = "phase_transition_aborted"
@@ -93,14 +93,14 @@ func (o RaceOutcome) TimeoutPlan() []TimeoutStep {
 				Model:       o.Model,
 				Nonce:       attempt.Nonce,
 				Kind:        timeoutKind(attempt),
-				Action:      timeoutActionSkipped,
+				Action:      TimeoutActionSkipped,
 			},
 		}
 		if reason, skip := o.timeoutSkipReason(attempt); skip {
 			step.Event.Reason = reason
 		} else {
 			step.Post = true
-			step.Event.Action = timeoutActionStarted
+			step.Event.Action = TimeoutActionStarted
 			step.Event.Reason = timeoutReasonNone
 		}
 		steps = append(steps, step)
@@ -120,9 +120,9 @@ func SettleTimeouts(ctx context.Context, poster TimeoutPoster, outcome RaceOutco
 		posted := step.Event
 		posted.Vote = vote
 		posted.Kind = timeoutVoteKind(vote, posted.Kind)
-		posted.Action = timeoutActionCompleted
+		posted.Action = TimeoutActionCompleted
 		if err != nil {
-			posted.Action = timeoutActionFailed
+			posted.Action = TimeoutActionFailed
 			posted.Reason = timeoutReasonCollectionError
 		}
 		events = append(events, posted)

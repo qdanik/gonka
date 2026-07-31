@@ -1,7 +1,6 @@
 package engine
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -97,39 +96,6 @@ func TestHostApplicationErrorMessage(t *testing.T) {
 				t.Fatalf("message = %q, want %q", got, testCase.wantMessage)
 			}
 		})
-	}
-}
-
-func TestHostApplicationErrorPayloadIsForwardedVerbatim(t *testing.T) {
-	const upstream = `{"error":{"message":"upstream said so","type":"BadRequestError","code":400}}`
-	hostErr := &HostApplicationError{Payload: upstream, Message: "upstream said so"}
-
-	payload := hostErr.JSONPayload()
-
-	if string(payload) != upstream {
-		t.Fatalf("payload = %s, want it byte-for-byte %s", payload, upstream)
-	}
-	payload[0] = 'X'
-	if hostErr.Payload[0] == 'X' {
-		t.Fatalf("mutating the returned payload changed the error's own copy")
-	}
-}
-
-func TestHostApplicationErrorSynthesisesAPayload(t *testing.T) {
-	hostErr := &HostApplicationError{Code: "400", Type: "BadRequestError", Message: "tool choice unsupported"}
-
-	var decoded struct {
-		Error struct {
-			Message string `json:"message"`
-			Type    string `json:"type"`
-			Code    string `json:"code"`
-		} `json:"error"`
-	}
-	if err := json.Unmarshal(hostErr.JSONPayload(), &decoded); err != nil {
-		t.Fatalf("payload does not parse as JSON: %v", err)
-	}
-	if decoded.Error.Message != "tool choice unsupported" || decoded.Error.Type != "BadRequestError" || decoded.Error.Code != "400" {
-		t.Fatalf("payload = %+v, want the error's own fields", decoded.Error)
 	}
 }
 

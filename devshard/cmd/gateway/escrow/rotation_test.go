@@ -53,8 +53,6 @@ func failOnCreate(t *testing.T) func(context.Context, *signing.Secp256k1Signer, 
 	}
 }
 
-// --- ensureToTarget ---
-
 func TestEnsureToTargetCreatesExactlyTheShortfall(t *testing.T) {
 	testStore := newFakeStore()
 	existing := store.DevshardRecord{EscrowID: "existing-1", Model: "model-a", Active: true, RotationRole: roleTemp, RotationEpoch: 5}
@@ -198,8 +196,6 @@ func TestEnsureToTargetStopsOnFirstErrorAndGatesBreaker(t *testing.T) {
 		t.Fatalf("createCalls after the gated call = %d, want still 1", txClient.createCalls)
 	}
 }
-
-// --- prepareBridge ---
 
 func TestPrepareBridgeTempReachesTargetRetiresRegulars(t *testing.T) {
 	testStore := newFakeStore()
@@ -373,8 +369,6 @@ func TestPrepareBridgeSettlementEnabledSettlesRegularsBeforeRetiring(t *testing.
 	}
 }
 
-// --- finishBridge ---
-
 func TestFinishBridgeActiveTempPresentCreatesRegularsAndRetiresTemps(t *testing.T) {
 	testStore := newFakeStore()
 	temp := store.DevshardRecord{EscrowID: "temp-1", Model: "model-a", Active: true, RotationRole: roleTemp, RotationEpoch: 5, PrivateKeyEnv: "MODEL_A_KEY"}
@@ -428,8 +422,6 @@ func TestFinishBridgeSkipsModelWithNoActiveTemp(t *testing.T) {
 		t.Fatal("reg-1 removed by finishBridge, want it untouched (no temp existed to finish)")
 	}
 }
-
-// --- promoteRegularsToTemp ---
 
 func TestPromoteRegularsToTempRelabelsActiveRegularsOnly(t *testing.T) {
 	testStore := newFakeStore()

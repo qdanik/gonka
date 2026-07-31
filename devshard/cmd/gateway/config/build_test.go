@@ -77,8 +77,6 @@ func TestBuildRejectsInvalidMergedConfig(t *testing.T) {
 	}
 }
 
-// TestBuildClonesOverridesModelLimits: Build must clone overrides.ModelLimits,
-// never alias it, so mutating the caller's map after Build cannot reach the published snapshot.
 func TestBuildClonesOverridesModelLimits(t *testing.T) {
 	sourceModelLimits := map[string]ModelLimits{
 		"model-a": {DefaultMaxTokens: 100, MaxTokensCap: 200},
@@ -90,7 +88,6 @@ func TestBuildClonesOverridesModelLimits(t *testing.T) {
 		t.Fatalf("Build(): %v", err)
 	}
 
-	// Mutate the source map after Build returns.
 	sourceModelLimits["model-a"] = ModelLimits{DefaultMaxTokens: 999, MaxTokensCap: 999}
 	sourceModelLimits["model-b"] = ModelLimits{DefaultMaxTokens: 1, MaxTokensCap: 2}
 

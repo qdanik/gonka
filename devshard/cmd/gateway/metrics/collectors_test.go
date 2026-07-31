@@ -13,8 +13,6 @@ import (
 	"devshard/cmd/gateway/store"
 )
 
-// ---- limits ----
-
 func newLimitsHarness(clock *time.Time) (*limits.GatewayLimiter, *limits.Capacity, *limits.ParticipantLimiter) {
 	limiter := limits.NewGatewayLimiter(limits.GatewayConfig{MaxConcurrent: 8, MaxInputTokens: 4000})
 	participants := limits.NewParticipantLimiter(limits.ParticipantConfig{
@@ -84,6 +82,34 @@ func TestTheLimitsCollectorReportsCapacityPerModel(t *testing.T) {
 	expectGauge(t, telemetry, "devshard_gateway_capacity_scale_by_model", labels{"model": "qwen"}, 0.5)
 }
 
+// Routing on the membership-share fallback serves requests and looks like health; the gauge is the
+// only thing that separates it from routing on real chain weights.
+func TestTheLimitsCollectorReportsWhileEscrowScoringRunsOnTheMembershipFallback(t *testing.T) {
+	clock := time.Unix(1700000000, 0)
+	limiter, capacity, participants := newLimitsHarness(&clock)
+	capacity.SetEscrowMembership("7", map[string]float64{"gonka1a": 0.5, "gonka1b": 0.25})
+	telemetry := New()
+	telemetry.Register(NewLimitsCollector(LimitsSources{
+		Limiter: limiter, Capacity: capacity, Participants: participants,
+		Models: func() []string { return []string{"qwen"} },
+	}))
+
+	if weight := capacity.EscrowWeight("7", "qwen"); weight != 0.75 {
+		t.Fatalf("EscrowWeight with no chain weights = %v, want the 0.75 membership share: this test never reached the fallback", weight)
+	}
+	expectGauge(t, telemetry, "devshard_gateway_capacity_weights_unobserved_by_model", labels{"model": "qwen"}, 1)
+
+	capacity.Update(chain.PhaseSnapshot{
+		CurrentWeightsByModel: map[string]map[string]float64{"qwen": {"gonka1a": 30, "gonka1b": 20}},
+		FullWeightsByModel:    map[string]map[string]float64{"qwen": {"gonka1a": 60, "gonka1b": 40}},
+	})
+
+	if weight := capacity.EscrowWeight("7", "qwen"); weight != 20 {
+		t.Fatalf("EscrowWeight after the chain reported = %v, want 20: scoring is still on the fallback", weight)
+	}
+	expectGauge(t, telemetry, "devshard_gateway_capacity_weights_unobserved_by_model", labels{"model": "qwen"}, 0)
+}
+
 func TestTheLimitsCollectorReportsAnOpenBreakerAsExhausted(t *testing.T) {
 	clock := time.Unix(1700000000, 0)
 	limiter, capacity, participants := newLimitsHarness(&clock)
@@ -106,8 +132,6 @@ func TestTheLimitsCollectorReportsAnOpenBreakerAsExhausted(t *testing.T) {
 		labels{"participant_key": "gonka1down", "model": "qwen", "state": "closed"}, 0)
 }
 
-// ---- perf ----
-
 func TestThePerfCollectorMatchesTheTracker(t *testing.T) {
 	configuration := config.Defaults()
 	clock := time.Unix(1700000000, 0)
@@ -117,18 +141,12 @@ func TestThePerfCollectorMatchesTheTracker(t *testing.T) {
 
 	expectSeriesCount(t, telemetry, "devshard_gateway_host_ejected", 0)
 
-	tracker.RecordSample(perf.Sample{
-		ParticipantKey: "gonka1host", Model: "qwen", Responsive: true,
-		SendTime: clock, ReceiptTime: clock.Add(100 * time.Millisecond),
-		FirstToken: clock.Add(300 * time.Millisecond), Completed: clock.Add(time.Second), InputTokens: 100,
-	})
+	tracker.RecordSample(perf.Sample{ParticipantKey: "gonka1host", Model: "qwen", Responsive: true})
 	tracker.Acquire("gonka1host")
 
 	expectGauge(t, telemetry, "devshard_gateway_host_ejected", labels{"participant_key": "gonka1host", "model": "qwen"}, 0)
 	expectGauge(t, telemetry, "devshard_gateway_host_inflight_requests", labels{"participant_key": "gonka1host"}, 1)
 }
-
-// ---- registry ----
 
 type fixedEscrows struct{ states []registry.EscrowState }
 
@@ -167,8 +185,6 @@ func TestTheRegistryCollectorIsSilentOnAnEmptyRegistry(t *testing.T) {
 	expectSeriesCount(t, telemetry, "devshard_runtime_active", 0)
 	expectSeriesCount(t, telemetry, "devshard_gateway_escrow_weight", 0)
 }
-
-// ---- chain ----
 
 type fixedPhases struct{ snapshot chain.PhaseSnapshot }
 
@@ -213,8 +229,6 @@ func TestTheChainCollectorReportsTheZeroSnapshot(t *testing.T) {
 	expectGauge(t, telemetry, "devshard_gateway_chain_snapshot_healthy", labels{}, 1)
 	expectGauge(t, telemetry, "devshard_gateway_chain_block_reason", labels{"reason": "none"}, 1)
 }
-
-// ---- accounting ----
 
 type fixedLedger struct{ stats store.LedgerStats }
 

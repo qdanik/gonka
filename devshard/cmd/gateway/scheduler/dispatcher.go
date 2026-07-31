@@ -11,29 +11,28 @@ import (
 
 const defaultSubmitBuffer = 64
 
-// dispatchObserver reports the nonce accounting: burns by reason, holds, and exhausted burn budgets.
 type dispatchObserver interface {
 	GhostBurned(escrowID, reason string)
 	NonceHeld(escrowID string)
 	BurnBudgetExhausted(escrowID string)
 }
 
+// dispatcherDeps wires one escrow's actor. acquireSlot and holdEscrow run inside the same Advance that
+// commits the nonce -- holdEscrow on the serve path only, so a ghost commits unprotected against a
+// concurrent retire. The slot travels with the assignment, so releaseSlot covers only the paths that never
+// reach a dispatch; retire is answered under the lock that guards claims, so a claimed actor is never lost.
 type dispatcherDeps struct {
-	escrowID   string
-	session    session
-	snapshots  snapshotSource
-	predicates func(chain.PhaseSnapshot) availability
-	// acquireSlot runs inside the same Advance that commits the nonce, so nothing can fill the window
-	// between admission and the commit it admits. The slot travels with the assignment and is released
-	// by whoever spends it, so releaseSlot covers only the paths that never reach a dispatch.
-	acquireSlot func(participant string) bool
-	releaseSlot func(participant string)
-	observer    dispatchObserver
-	now         func() time.Time
-	stale       time.Duration
-	newTimer    func(time.Duration) (<-chan time.Time, func())
-	// retire is asked, from inside the loop goroutine, whether an idle actor may remove itself; the
-	// registry answers under the lock that also guards claims, so a claimed dispatcher is never lost.
+	escrowID     string
+	session      session
+	snapshots    snapshotSource
+	predicates   func(chain.PhaseSnapshot) availability
+	acquireSlot  func(participant string) bool
+	releaseSlot  func(participant string)
+	holdEscrow   func() (func(), bool)
+	observer     dispatchObserver
+	now          func() time.Time
+	stale        time.Duration
+	newTimer     func(time.Duration) (<-chan time.Time, func())
 	retire       func(*dispatcher) bool
 	idleGrace    time.Duration
 	submitBuffer int
@@ -74,6 +73,9 @@ func newDispatcher(deps dispatcherDeps) *dispatcher {
 	}
 	if deps.submitBuffer <= 0 {
 		deps.submitBuffer = defaultSubmitBuffer
+	}
+	if deps.holdEscrow == nil {
+		deps.holdEscrow = func() (func(), bool) { return nil, true }
 	}
 	return &dispatcher{
 		dispatcherDeps: deps,
@@ -215,23 +217,38 @@ func (d *dispatcher) drain() (time.Time, bool) {
 		}
 
 		var decision Decision
-		var bound string
+		var taken reservation
+		escrowRetired := false
 		prepared, err := d.session.Advance(func(binding HostBinding) NonceIntent {
-			bound = binding.Participant
+			taken.participant = binding.Participant
 			decision = match(binding, d.waiting, avail, d.now(), d.stale)
-			if _, serving := decision.(serve); serving && !acquire(binding.Participant) {
+			if _, serving := decision.(serve); !serving {
+				return intentFor(decision)
+			}
+			if !acquire(binding.Participant) {
 				decision = burn{kind: ghostThrottled}
+				return intentFor(decision)
+			}
+			var held bool
+			if taken.escrowHold, held = d.holdEscrow(); !held {
+				d.releaseSlot(binding.Participant)
+				escrowRetired = true
+				return NonceIntent{}
 			}
 			return intentFor(decision)
 		})
-		if err != nil {
-			d.failAdvance(decision, bound, err)
+		switch {
+		case escrowRetired:
+			d.failWaiting(ErrEscrowGone)
+			return time.Time{}, false
+		case err != nil:
+			d.failAdvance(decision, taken, err)
 			return time.Time{}, false
 		}
 
 		switch outcome := decision.(type) {
 		case serve:
-			d.handOff(outcome.waiter, bound, prepared)
+			d.handOff(outcome.waiter, taken, prepared)
 		case burn:
 			d.recordGhost(outcome.kind.reason())
 			burnBudget--
@@ -280,26 +297,41 @@ func servable(queued *waiter, participants []string, avail availability) bool {
 	return false
 }
 
-func (d *dispatcher) handOff(served *waiter, participant string, prepared Prepared) {
+// reservation is what a serve decision took before the nonce was committed: the participant's
+// concurrency slot and the escrow's in-flight hold. Every path that cannot spend the assignment gives
+// both back together; a path that hands it over gives neither back.
+type reservation struct {
+	participant string
+	escrowHold  func()
+}
+
+func (d *dispatcher) giveBack(taken reservation) {
+	d.releaseSlot(taken.participant)
+	if taken.escrowHold != nil {
+		taken.escrowHold()
+	}
+}
+
+func (d *dispatcher) handOff(served *waiter, taken reservation, prepared Prepared) {
 	d.dequeue(served)
 	if prepared == nil {
-		d.releaseSlot(participant)
+		d.giveBack(taken)
 		served.deliver(pickResult{err: fmt.Errorf("escrow %s: session committed no nonce", d.escrowID)})
 		return
 	}
-	assignment := Assignment{Escrow: d.escrowID, Host: participant, Nonce: prepared}
+	assignment := Assignment{Escrow: d.escrowID, Host: taken.participant, Nonce: prepared, EscrowHold: taken.escrowHold}
 	// The nonce is already committed, so a caller that vanished between the decision and the handoff
 	// would leave it accounted to nobody; it is charged to the ghost side instead.
 	if !served.deliver(pickResult{assignment: assignment}) {
-		d.releaseSlot(participant)
+		d.giveBack(taken)
 		d.recordGhost(ghostAbandoned.reason())
 	}
 }
 
-func (d *dispatcher) failAdvance(decision Decision, participant string, err error) {
+func (d *dispatcher) failAdvance(decision Decision, taken reservation, err error) {
 	failure := fmt.Errorf("escrow %s: advancing nonce: %w", d.escrowID, err)
 	if chosen, ok := decision.(serve); ok {
-		d.releaseSlot(participant)
+		d.giveBack(taken)
 		d.dequeue(chosen.waiter)
 		chosen.waiter.deliver(pickResult{err: failure})
 		return
@@ -375,8 +407,6 @@ type capabilityKey struct {
 	contextHint   uint64
 }
 
-// freeze memoises each predicate for the length of one drain, so a host cannot look usable to the
-// sweep and unusable to the binding that follows it.
 func freeze(live availability) availability {
 	capabilities := map[capabilityKey]bool{}
 	return availability{

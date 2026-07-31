@@ -6,8 +6,6 @@ import (
 	"testing"
 )
 
-// TestGetEscrowMultiEndpointAgreement covers found, endpoint-agreed-absent (via both a 404 status
-// and a 200 found:false body), and ambiguous-error outcomes across primary+fallback endpoints.
 func TestGetEscrowMultiEndpointAgreement(t *testing.T) {
 	const escrowID = "77"
 	notFoundHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { http.NotFound(w, r) })

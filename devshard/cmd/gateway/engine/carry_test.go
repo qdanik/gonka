@@ -19,7 +19,7 @@ func testBudget(attempt, participant, global int64) *carryBudget {
 
 func assertUsage(t *testing.T, budget *carryBudget, participant string, wantParticipant, wantGlobal int64) {
 	t.Helper()
-	participantBytes, globalBytes := budget.usage(participant)
+	participantBytes, globalBytes := budget.counterFor(participant).Load(), budget.global.Load()
 	if participantBytes != wantParticipant || globalBytes != wantGlobal {
 		t.Fatalf("usage(%q) = (%d, %d), want (%d, %d)", participant, participantBytes, globalBytes, wantParticipant, wantGlobal)
 	}

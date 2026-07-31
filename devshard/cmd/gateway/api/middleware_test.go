@@ -9,8 +9,6 @@ import (
 	"devshard/cmd/gateway/config"
 )
 
-// ---- P0: ingest bounds ----
-
 func TestAnOversizedAdminBodyIsRejectedAndTheConnectionIsClosed(t *testing.T) {
 	live := newHarness(t)
 	upstream := httptest.NewServer(live.server.Handler())
@@ -63,8 +61,6 @@ func TestAnOversizedChatBodyIsRejectedBeforeAnythingRuns(t *testing.T) {
 		t.Fatalf("an oversized body started %d races", got)
 	}
 }
-
-// ---- P0: the admin key comparison ----
 
 func TestThePublicRoutesNeverReachTheKeyComparison(t *testing.T) {
 	probes := []struct {

@@ -77,6 +77,8 @@ type RaceOutcome struct {
 	Lifecycle       Lifecycle
 }
 
+// AttemptOutcome is what one attempt ended up doing. ErrorPayload holds the host's own error event
+// verbatim, so a refusal reaches the client unrewritten.
 type AttemptOutcome struct {
 	Participant string
 	HostIdx     int
@@ -91,10 +93,7 @@ type AttemptOutcome struct {
 	FirstToken  time.Time
 	Completed   time.Time
 
-	OutputChunks          int64
 	ContentChunks         int64
-	OutputBytes           int64
-	StreamBytes           int64
 	UsageCompletionTokens int64
 
 	Terminal            Terminal
@@ -107,11 +106,7 @@ type AttemptOutcome struct {
 	ErrorCode     string
 	ErrorType     string
 	ErrorMessage  string
-	// ErrorPayload is the host's own error event, verbatim, so a refusal reaches the client unrewritten.
-	ErrorPayload string
-
-	ContextLimit     uint64
-	ToolsUnsupported bool
+	ErrorPayload  string
 
 	PhaseTransitionAborted bool
 	StateDivergent         bool
@@ -241,11 +236,6 @@ func (o RaceOutcome) Sample(a AttemptOutcome) (perf.Sample, SampleExemption) {
 		ParticipantKey: a.Participant,
 		Model:          o.Model,
 		Responsive:     o.responsive(a),
-		SendTime:       a.SendTime,
-		ReceiptTime:    a.ReceiptTime,
-		FirstToken:     a.FirstToken,
-		Completed:      a.Completed,
-		InputTokens:    o.InputTokens,
 	}, SampleRecorded
 }
 
@@ -284,27 +274,39 @@ func (o RaceOutcome) Labels(a AttemptOutcome) AttemptLabels {
 		Participant: a.Participant,
 		Model:       o.Model,
 		Role:        role,
-		Outcome:     "failed",
+		Outcome:     AttemptOutcomeFailed,
 		Visibility:  o.visibility(a, served),
 		Reason:      o.failureReason(a),
 	}
 	if served {
-		labels.Outcome = "success"
+		labels.Outcome = AttemptOutcomeSuccess
 		labels.Reason = ""
 	}
 	return labels
 }
 
+// Label values the engine emits. metrics reads these rather than restating them, so a rename here
+// cannot silently empty a dashboard panel.
+const (
+	AttemptOutcomeSuccess = "success"
+	AttemptOutcomeFailed  = "failed"
+
+	VisibilityWinner            = "user_visible_winner"
+	VisibilityNoWinner          = "no_winner"
+	VisibilitySuppressedLoser   = "suppressed_loser"
+	VisibilityFailedNotFinished = "failed_not_finished"
+)
+
 func (o RaceOutcome) visibility(a AttemptOutcome, served bool) string {
 	switch {
 	case served && o.WinnerNonce != 0 && a.Nonce == o.WinnerNonce:
-		return "user_visible_winner"
+		return VisibilityWinner
 	case a.Suspicious:
-		return "no_winner"
+		return VisibilityNoWinner
 	case served:
-		return "suppressed_loser"
+		return VisibilitySuppressedLoser
 	}
-	return "failed_not_finished"
+	return VisibilityFailedNotFinished
 }
 
 func (o RaceOutcome) failureReason(a AttemptOutcome) string {

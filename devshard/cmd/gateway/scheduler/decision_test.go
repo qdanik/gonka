@@ -14,7 +14,7 @@ func TestWaiterHandsOffToExactlyOneSide(t *testing.T) {
 		}
 		delivered, wasDelivered := queued.abandon()
 
-		if !wasDelivered || delivered.assignment != assignment {
+		if !wasDelivered || delivered.assignment.Escrow != assignment.Escrow || delivered.assignment.Host != assignment.Host {
 			t.Fatalf("abandon = %+v/%v, want the assignment already handed over", delivered, wasDelivered)
 		}
 	})

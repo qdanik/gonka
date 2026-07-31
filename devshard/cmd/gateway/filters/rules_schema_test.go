@@ -29,8 +29,6 @@ func runRule(t *testing.T, document *Document, param string, rule RuleFunc) erro
 	return rule(RuleContext{Document: document, Param: param})
 }
 
-// --- validTools ---
-
 func TestValidToolsAccepts(t *testing.T) {
 	rule := validTools(testToolsBounds(), "auto")
 	tests := []struct {
@@ -209,8 +207,6 @@ func TestValidToolsStripsFunctionStrictAcrossMultipleTools(t *testing.T) {
 	}
 }
 
-// --- validToolChoice ---
-
 func TestValidToolChoiceAccepts(t *testing.T) {
 	rule := validToolChoice(toolChoiceMaxNameLen)
 	tests := []struct {
@@ -264,8 +260,6 @@ func TestValidToolChoiceRejects(t *testing.T) {
 		})
 	}
 }
-
-// --- validResponseFormat ---
 
 func testResponseFormatBounds() SchemaBounds {
 	return SchemaBounds{MaxDepth: responseFormatMaxDepth, MaxNodes: responseFormatMaxNodes, MaxSizeBytes: responseFormatMaxSizeBytes, MaxBranch: responseFormatMaxBranch, MaxEnum: responseFormatMaxEnum, MaxPatternLen: responseFormatMaxPatternLen}
@@ -342,8 +336,6 @@ func TestValidResponseFormatAppliesBoundsWithFieldPathPrefix(t *testing.T) {
 		t.Fatalf("validResponseFormat() = %v, want %q", err, want)
 	}
 }
-
-// --- validStructuredOutputs ---
 
 func testStructuredOutputsBounds() structuredOutputsBounds {
 	return structuredOutputsBounds{
@@ -753,8 +745,6 @@ func TestValidStructuredOutputsBoolFlags(t *testing.T) {
 		}
 	})
 }
-
-// --- validChatTemplateKwargs ---
 
 func testChatTemplateKwargsBounds() ObjectBounds {
 	return ObjectBounds{MaxDepth: chatTemplateKwargsMaxDepth, MaxNodes: chatTemplateKwargsMaxNodes, MaxSizeBytes: chatTemplateKwargsMaxSizeBytes}

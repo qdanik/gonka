@@ -32,32 +32,29 @@ func (c *decayedCounter) value(now time.Time) float64 {
 	return c.count * decayWeight(now.Sub(c.lastTouch), c.halfLife)
 }
 
+func decayWeight(elapsed, halfLife time.Duration) float64 {
+	if elapsed < 0 {
+		elapsed = 0
+	}
+	return math.Exp2(-float64(elapsed) / float64(halfLife))
+}
+
 // hostPerf is not goroutine-safe; the Tracker locks around all access.
 type hostPerf struct {
-	ewmaReceipt     *peakEWMA
-	ewmaCTTFL       *peakEWMA
 	success         decayedCounter
 	fail            decayedCounter
 	consecutiveFail int
 	lastSeen        time.Time
 }
 
-func newHostPerf(halfLife time.Duration, priorReceiptMs, priorCTTFL float64) *hostPerf {
+func newHostPerf(halfLife time.Duration) *hostPerf {
 	return &hostPerf{
-		ewmaReceipt: newPeakEWMA(halfLife, priorReceiptMs),
-		ewmaCTTFL:   newPeakEWMA(halfLife, priorCTTFL),
-		success:     newDecayedCounter(halfLife),
-		fail:        newDecayedCounter(halfLife),
+		success: newDecayedCounter(halfLife),
+		fail:    newDecayedCounter(halfLife),
 	}
 }
 
 func (h *hostPerf) recordSample(s Sample, now time.Time) {
-	if receiptMs := s.ReceiptMs(); receiptMs > 0 {
-		h.ewmaReceipt.Add(receiptMs, now)
-	}
-	if cttfl := s.CTTFL(); cttfl > 0 && !math.IsNaN(cttfl) && !math.IsInf(cttfl, 0) {
-		h.ewmaCTTFL.Add(cttfl, now)
-	}
 	if s.Responsive {
 		h.success.add(now)
 		h.consecutiveFail = 0
@@ -71,10 +68,6 @@ func (h *hostPerf) recordSample(s Sample, now time.Time) {
 func (h *hostPerf) resetOutcomeCounters() {
 	h.success = newDecayedCounter(h.success.halfLife)
 	h.fail = newDecayedCounter(h.fail.halfLife)
-}
-
-func (h *hostPerf) estimate(inputTokens uint64, now time.Time) float64 {
-	return h.ewmaReceipt.Value(now) + h.ewmaCTTFL.Value(now)*float64(inputTokens)
 }
 
 func (h *hostPerf) failureRate(now time.Time) (rate, volume float64) {

@@ -82,7 +82,6 @@ func validModelName(maxBytes int) RuleFunc {
 	}
 }
 
-// stripParameter unconditionally deletes ctx.Param.
 func stripParameter() RuleFunc {
 	return func(ctx RuleContext) error {
 		ctx.Document.Delete(ctx.Param)

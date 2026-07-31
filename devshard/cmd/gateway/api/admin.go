@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"devshard/cmd/gateway/config"
+	"devshard/cmd/gateway/escrow"
 	"devshard/cmd/gateway/filters"
 	"devshard/cmd/gateway/store"
 	"devshard/types"
@@ -138,7 +139,7 @@ func (s *Server) handleAdminDevshardDelete(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	if record.Active || s.escrows.IsBusy(escrowID) {
-		writeErrorFor(w, fmt.Errorf("%w: %s", ErrDevshardBusy, escrowID))
+		writeErrorFor(w, fmt.Errorf("%w: %s", escrow.ErrDevshardBusy, escrowID))
 		return
 	}
 	if err := s.control.DeleteDevshard(r.Context(), escrowID); err != nil {
@@ -196,7 +197,7 @@ func (s *Server) handleAdminDevshardSettle(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	if s.escrows.IsBusy(escrowID) {
-		writeErrorFor(w, fmt.Errorf("%w: %s", ErrDevshardBusy, escrowID))
+		writeErrorFor(w, fmt.Errorf("%w: %s", escrow.ErrDevshardBusy, escrowID))
 		return
 	}
 	result, err := s.operations.Settle(r.Context(), escrowID)
@@ -238,7 +239,7 @@ func (s *Server) handleAdminEscrows(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if strings.TrimSpace(request.PrivateKeyEnv) == "" {
-		writeError(w, http.StatusBadRequest, "private_key_env is required; a raw private_key is not accepted")
+		writeError(w, http.StatusBadRequest, ErrPrivateKeyEnvRequired.Error())
 		return
 	}
 	result, err := s.operations.CreateEscrow(r.Context(), request)
@@ -364,7 +365,7 @@ func (s *Server) handleDevshardFinalize(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if s.escrows.IsBusy(escrowID) {
-		writeErrorFor(w, fmt.Errorf("%w: %s", ErrDevshardBusy, escrowID))
+		writeErrorFor(w, fmt.Errorf("%w: %s", escrow.ErrDevshardBusy, escrowID))
 		return
 	}
 	if err := session.Finalize(r.Context()); err != nil {

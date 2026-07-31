@@ -48,7 +48,7 @@ func TestTimeoutLadderPostsWhenNoSkipConditionHolds(t *testing.T) {
 	if len(events) != 2 {
 		t.Fatalf("events = %+v, want a started and a completed event", events)
 	}
-	if events[0].Action != timeoutActionStarted || events[1].Action != timeoutActionCompleted {
+	if events[0].Action != TimeoutActionStarted || events[1].Action != TimeoutActionCompleted {
 		t.Fatalf("actions = %q then %q, want started then completed", events[0].Action, events[1].Action)
 	}
 }
@@ -196,7 +196,7 @@ func TestTimeoutPostFailureIsReported(t *testing.T) {
 
 	events := settleEvents(race(unsettledAttempt()), poster)
 
-	if events[1].Action != timeoutActionFailed || events[1].Reason != timeoutReasonCollectionError {
+	if events[1].Action != TimeoutActionFailed || events[1].Reason != timeoutReasonCollectionError {
 		t.Fatalf("failure event = %+v, want a failed action with the collection reason", events[1])
 	}
 }

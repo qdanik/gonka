@@ -34,7 +34,7 @@ func TestTokensCapOutputTokens(t *testing.T) {
 
 func TestTokensNormalizedLimitsFallBackWhenZero(t *testing.T) {
 	got := normalizedOutputTokenLimits(outputTokenLimits{})
-	want := outputTokenLimits{DefaultMaxTokens: defaultRequestMaxTokens, MaxTokensCap: requestMaxTokensCap}
+	want := outputTokenLimits{DefaultMaxTokens: DefaultRequestMaxTokens, MaxTokensCap: RequestMaxTokensCap}
 	if got != want {
 		t.Errorf("normalizedOutputTokenLimits({}) = %+v, want %+v", got, want)
 	}
@@ -59,7 +59,7 @@ func applyLimits(t *testing.T, body string, options Options) (*Document, request
 	if err != nil {
 		t.Fatalf("decodeRequestView: %v", err)
 	}
-	applyOutputTokenLimits(document, &view, options)
+	applyOutputTokenLimits(document, &view, options, view.Model)
 	return document, view
 }
 
@@ -373,8 +373,6 @@ func TestTokensGreedySamplingCapInterplay(t *testing.T) {
 	}
 }
 
-// --- maxTokensFloor ---
-
 func TestMaxTokensFloorLiftsBelowFloorForHookProfile(t *testing.T) {
 	document := parseTestDocument(t, `{"max_tokens":1}`)
 	if err := maxTokensFloor()(RuleContext{Document: document, Param: "max_tokens", Profile: kimiProfile}); err != nil {
@@ -441,8 +439,6 @@ func TestMaxTokensFloorSkipsMissingField(t *testing.T) {
 	}
 }
 
-// --- rejectNonPositiveOutputTokens ---
-
 func TestRejectNonPositiveOutputTokensRejectsZeroAndNegative(t *testing.T) {
 	for _, value := range []string{"0", "-1", "-100"} {
 		t.Run(value, func(t *testing.T) {
@@ -483,5 +479,42 @@ func TestRejectNonPositiveOutputTokensNonNumericIsNoOp(t *testing.T) {
 	document := parseTestDocument(t, `{"max_tokens":"abc"}`)
 	if err := rejectNonPositiveOutputTokens()(RuleContext{Document: document, Param: "max_tokens"}); err != nil {
 		t.Fatalf("rejectNonPositiveOutputTokens() = %v, want nil (type-checked elsewhere)", err)
+	}
+}
+
+func TestTokensPerModelOverrideBeatsTheGlobalDefaultAndCap(t *testing.T) {
+	options := Options{
+		DefaultMaxTokens: 100,
+		MaxTokensCap:     200,
+		ModelTokenLimits: func(model string) (uint64, uint64) {
+			if model == "qwen" {
+				return 1_000, 2_000
+			}
+			return 0, 0
+		},
+	}
+
+	_, overridden := applyLimits(t, `{"model":"qwen"}`, options)
+	_, global := applyLimits(t, `{"model":"other"}`, options)
+
+	if overridden.MaxTokens != 1_000 {
+		t.Errorf("qwen default = %d, want the per-model 1000", overridden.MaxTokens)
+	}
+	if global.MaxTokens != 100 {
+		t.Errorf("unlisted model default = %d, want the global 100", global.MaxTokens)
+	}
+}
+
+func TestTokensPerModelOverrideCapClampsTheRequestedValue(t *testing.T) {
+	options := Options{
+		DefaultMaxTokens: 100,
+		MaxTokensCap:     200,
+		ModelTokenLimits: func(string) (uint64, uint64) { return 0, 50 },
+	}
+
+	_, view := applyLimits(t, `{"model":"qwen","max_tokens":180}`, options)
+
+	if view.MaxTokens != 50 {
+		t.Errorf("max_tokens = %d, want the per-model cap 50", view.MaxTokens)
 	}
 }

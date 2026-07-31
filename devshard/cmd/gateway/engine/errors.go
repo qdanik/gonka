@@ -1,9 +1,7 @@
 package engine
 
 import (
-	"encoding/json"
 	"errors"
-	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -54,27 +52,6 @@ func (e *HostApplicationError) HTTPStatus() int {
 		return http.StatusBadRequest
 	}
 	return http.StatusBadGateway
-}
-
-func (e *HostApplicationError) JSONPayload() []byte {
-	if e == nil {
-		return nil
-	}
-	if e.Payload != "" {
-		return []byte(e.Payload)
-	}
-	body := map[string]any{"message": e.Error()}
-	if e.Type != "" {
-		body["type"] = e.Type
-	}
-	if e.Code != "" {
-		body["code"] = e.Code
-	}
-	encoded, err := json.Marshal(map[string]any{"error": body})
-	if err != nil {
-		return []byte(fmt.Sprintf(`{"error":{"message":%q}}`, e.Error()))
-	}
-	return encoded
 }
 
 // UpstreamStatus reports the HTTP status a transport error carries, which is the only place the

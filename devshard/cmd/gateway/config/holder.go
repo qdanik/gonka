@@ -15,7 +15,6 @@ type Holder struct {
 	nextID      int
 }
 
-// NewHolder creates a Holder with the initial snapshot.
 func NewHolder(initial *Config) *Holder {
 	holder := &Holder{subscribers: make(map[int]func(*Config))}
 	holder.current.Store(initial)
@@ -40,8 +39,6 @@ func (h *Holder) Swap(next *Config) {
 	}
 }
 
-// Subscribe registers a callback invoked on every Swap. The returned cancel
-// removes the subscription.
 func (h *Holder) Subscribe(callback func(*Config)) (cancel func()) {
 	h.mutex.Lock()
 	defer h.mutex.Unlock()

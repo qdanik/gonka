@@ -49,7 +49,5 @@ func (c *sseClassifier) facts(signal chunkSignal) chunkFacts {
 	facts.ErrorType = signal.Error.Type
 	facts.ErrorMessage = signal.Error.Message
 	facts.ErrorPayload = signal.Error.Payload
-	facts.ContextLimit = capability.ContextLimit
-	facts.ToolsUnsupported = capability.ToolsUnsupported
 	return facts
 }

@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -304,8 +305,6 @@ func TestEveryOwnerCollectorIsRegisteredOnTheGatewaysRegistry(t *testing.T) {
 	}
 }
 
-// --- the boot budget ---------------------------------------------------------------------------
-
 func TestBootBudgetSizesTheIdlePoolToTheBuilderLimit(t *testing.T) {
 	for _, builders := range []int{1, 4, 16, 64} {
 		t.Run(fmt.Sprintf("%d builders", builders), func(t *testing.T) {
@@ -333,8 +332,6 @@ func TestBootBudgetRefusesANonPositiveBuilderLimit(t *testing.T) {
 		t.Fatalf("newBootBudget(0).builders = %d, want 1", budget.builders)
 	}
 }
-
-// --- the boot ladder ---------------------------------------------------------------------------
 
 type escrowPublisher struct {
 	mu          sync.Mutex
@@ -492,8 +489,6 @@ func TestPublishEscrowsBuildsNoMoreThanTheBuilderLimitAtOnce(t *testing.T) {
 	}
 }
 
-// --- shutdown ----------------------------------------------------------------------------------
-
 type shutdownRecorder struct {
 	mu       sync.Mutex
 	sequence *[]string
@@ -510,6 +505,7 @@ func (r *shutdownRecorder) note() {
 func (r *shutdownRecorder) Shutdown(context.Context) error { r.note(); return r.err }
 func (r *shutdownRecorder) Stop()                          { r.note() }
 func (r *shutdownRecorder) Close() error                   { r.note(); return r.err }
+func (r *shutdownRecorder) CloseIdleConnections()          { r.note() }
 
 func TestShutdownStopsAcceptingFirstAndClosesTheStoreLast(t *testing.T) {
 	var sequence []string
@@ -520,12 +516,12 @@ func TestShutdownStopsAcceptingFirstAndClosesTheStoreLast(t *testing.T) {
 	steps := shutdownOrder(
 		recorder("http server"), recorder("races"), recorder("dispatchers"),
 		recorder("escrow lifecycle"), recorder("chain observer"),
-		recorder("escrow sessions"), recorder("store"))
+		recorder("escrow sessions"), recorder("store"), recorder("chain connections"))
 	if err := stopAll(context.Background(), steps); err != nil {
 		t.Fatalf("stopAll(): %v", err)
 	}
 
-	want := []string{"http server", "races", "dispatchers", "escrow lifecycle", "chain observer", "escrow sessions", "store"}
+	want := []string{"http server", "races", "dispatchers", "escrow lifecycle", "chain observer", "escrow sessions", "store", "chain connections"}
 	assertSame(t, "shutdown sequence", sequence, want)
 }
 
@@ -539,13 +535,13 @@ func TestShutdownReachesTheStoreEvenWhenAnEarlierStepFails(t *testing.T) {
 	steps := shutdownOrder(
 		failing, recorder("races"), recorder("dispatchers"),
 		recorder("escrow lifecycle"), recorder("chain observer"),
-		recorder("escrow sessions"), recorder("store"))
+		recorder("escrow sessions"), recorder("store"), recorder("chain connections"))
 	err := stopAll(context.Background(), steps)
 
 	if err == nil || !strings.Contains(err.Error(), "listener stuck") {
 		t.Fatalf("stopAll() = %v, want the listener failure reported", err)
 	}
-	if len(sequence) == 0 || sequence[len(sequence)-1] != "store" {
+	if !slices.Contains(sequence, "store") {
 		t.Fatalf("shutdown sequence = %v, want the store closed despite the earlier failure", sequence)
 	}
 }
@@ -591,8 +587,6 @@ func TestWaitForReportsNothingWhenTheDrainFinishesInTime(t *testing.T) {
 	}
 	assertSame(t, "drained components", sequence, []string{"races"})
 }
-
-// --- the operator settle path --------------------------------------------------------------------
 
 // settleObserver reports what routing still offered at the moment the chain settlement began.
 type settleObserver struct {
@@ -667,8 +661,6 @@ func TestUnquarantiningAnUntrackedParticipantIsNotReportedAsDone(t *testing.T) {
 		t.Fatalf("Unquarantine(tracked) = %v, want nil", err)
 	}
 }
-
-// --- membership reaching the capacity model ------------------------------------------------------
 
 // weightlessSession is enough of an escrow for the registry to publish it and push its membership;
 // it cannot commit a nonce, because *user.PreparedInference has no constructor outside its package.

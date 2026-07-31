@@ -23,7 +23,7 @@ type fakeTxClient struct {
 	settleEscrowFn  func(ctx context.Context, signer *signing.Secp256k1Signer, input chain.SettlementInput) (chain.SettleEscrowResult, error)
 	getEscrowFn     func(ctx context.Context, escrowID string) (chain.EscrowInfo, bool, error)
 	createCalls     int
-	calls           *callLog // optional: records call names for cross-fake ordering assertions
+	calls           *callLog
 }
 
 func (f *fakeTxClient) CreateEscrow(ctx context.Context, signer *signing.Secp256k1Signer, amount uint64, modelID string, onPrepared func(string) error) (chain.CreateEscrowResult, error) {
@@ -57,12 +57,15 @@ func (f *fakeTxClient) GetEscrow(ctx context.Context, escrowID string) (chain.Es
 
 // fakeStore stubs escrowStore with in-memory tables. WithRetry calls fn once
 // (no backoff): Store's own retry timing is covered by store/retry_test.go.
+// fakeStore's upsertDevshardErrByID is a per-escrow override checked before the blanket upsertDevshardErr,
+// rotationStatuses is keyed by Model+"|"+Role, and savedCommitments records every SaveCommitment including
+// ones later deleted. A non-nil calls records call names so ordering can be asserted across fakes.
 type fakeStore struct {
 	mu sync.Mutex
 
 	saveCommitmentErr     error
 	upsertDevshardErr     error
-	upsertDevshardErrByID map[string]error // per-escrow override: checked before the blanket upsertDevshardErr
+	upsertDevshardErrByID map[string]error
 	deleteCommitmentErr   error
 	setActiveErr          error
 	setPendingErr         error
@@ -72,9 +75,9 @@ type fakeStore struct {
 
 	commitments      map[string]store.Commitment
 	devshards        map[string]store.DevshardRecord
-	rotationStatuses map[string]store.RotationStatus // keyed by Model+"|"+Role
-	savedCommitments []store.Commitment              // audit trail: records every SaveCommitment, including ones later deleted
-	calls            *callLog                        // optional: records call names for cross-fake ordering assertions
+	rotationStatuses map[string]store.RotationStatus
+	savedCommitments []store.Commitment
+	calls            *callLog
 }
 
 func newFakeStore() *fakeStore {

@@ -16,7 +16,6 @@ import (
 	"devshard/signing"
 )
 
-// writeJSONResponse encodes value as the stub server's JSON response body.
 func writeJSONResponse(t *testing.T, w http.ResponseWriter, value any) {
 	t.Helper()
 	w.Header().Set("Content-Type", "application/json")
@@ -51,20 +50,20 @@ func TestNewTxClientAppliesDefaultsForZeroFields(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewTxClient: %v", err)
 	}
-	if client.feeDenom != defaultFeeDenom {
-		t.Errorf("feeDenom = %q, want %q", client.feeDenom, defaultFeeDenom)
+	if client.feeDenom != DefaultFeeDenom {
+		t.Errorf("feeDenom = %q, want %q", client.feeDenom, DefaultFeeDenom)
 	}
-	if client.feeAmount != defaultFeeAmount {
-		t.Errorf("feeAmount = %d, want %d", client.feeAmount, defaultFeeAmount)
+	if client.feeAmount != DefaultFeeAmount {
+		t.Errorf("feeAmount = %d, want %d", client.feeAmount, DefaultFeeAmount)
 	}
-	if client.gasLimit != defaultGasLimit {
-		t.Errorf("gasLimit = %d, want %d", client.gasLimit, defaultGasLimit)
+	if client.gasLimit != DefaultGasLimit {
+		t.Errorf("gasLimit = %d, want %d", client.gasLimit, DefaultGasLimit)
 	}
-	if client.pollInterval != defaultPollInterval {
-		t.Errorf("pollInterval = %v, want %v", client.pollInterval, defaultPollInterval)
+	if client.pollInterval != DefaultPollInterval {
+		t.Errorf("pollInterval = %v, want %v", client.pollInterval, DefaultPollInterval)
 	}
-	if client.pollTimeout != defaultPollTimeout {
-		t.Errorf("pollTimeout = %v, want %v", client.pollTimeout, defaultPollTimeout)
+	if client.pollTimeout != DefaultPollTimeout {
+		t.Errorf("pollTimeout = %v, want %v", client.pollTimeout, DefaultPollTimeout)
 	}
 	if client.client == nil {
 		t.Error("HTTP client default not applied")
@@ -251,7 +250,6 @@ func TestCreateEscrowOnPreparedErrorAbortsBeforeBroadcast(t *testing.T) {
 	}
 }
 
-// TestCreateEscrowHashMismatchErrors covers the node-echoed-hash verification.
 func TestCreateEscrowHashMismatchErrors(t *testing.T) {
 	signer := fixedSigner(t)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -592,8 +590,6 @@ func TestBroadcastTxCodeNonzeroReturnsError(t *testing.T) {
 	}
 }
 
-// TestWaitForCreatedEscrowIDTimesOutWhenNeverFound bounds the poll loop by
-// PollTimeout when the tx is never indexed.
 func TestWaitForCreatedEscrowIDTimesOutWhenNeverFound(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r) // tx never gets indexed

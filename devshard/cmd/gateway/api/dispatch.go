@@ -92,5 +92,4 @@ type hostReply struct{ reply *host.HostResponse }
 
 var _ engine.Response = hostReply{}
 
-func (r hostReply) Confirmed() bool    { return r.reply.ConfirmedAt > 0 }
-func (r hostReply) StreamBytes() int64 { return r.reply.StreamBytesRead }
+func (r hostReply) Confirmed() bool { return r.reply.ConfirmedAt > 0 }

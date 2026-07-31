@@ -18,7 +18,6 @@ type RotationStatus struct {
 	UpdatedAt   time.Time
 }
 
-// SaveRotationStatus inserts or replaces the status for its (Model, Role).
 func (s *Store) SaveRotationStatus(ctx context.Context, st RotationStatus) error {
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO gateway_rotation_status (model, role, stage, epoch, completed, create_error, updated_at)

@@ -31,7 +31,6 @@ func epochInfoWithConfirmationPhase(phaseJSON string) string {
 	}`, phaseJSON)
 }
 
-// TestParseEpochInfoNumericFields covers the all-numeric happy path with no active confirmation event.
 func TestParseEpochInfoNumericFields(t *testing.T) {
 	info, err := parseEpochInfo([]byte(epochInfoNumericJSON))
 	if err != nil {
@@ -49,7 +48,6 @@ func TestParseEpochInfoNumericFields(t *testing.T) {
 	}
 }
 
-// TestParseEpochInfoStringTypedScalars covers jsonInt64/jsonUint64 accepting string-typed JSON numbers, including inside the confirmation event.
 func TestParseEpochInfoStringTypedScalars(t *testing.T) {
 	info, err := parseEpochInfo([]byte(epochInfoStringScalarsJSON))
 	if err != nil {
@@ -70,7 +68,6 @@ func TestParseEpochInfoStringTypedScalars(t *testing.T) {
 	}
 }
 
-// TestParseEpochInfoConfirmationPhaseFlexibleDecode covers confirmationPoCPhaseValue accepting int 0-4, an unknown int, a string, and rejecting an unsupported type.
 func TestParseEpochInfoConfirmationPhaseFlexibleDecode(t *testing.T) {
 	cases := []struct {
 		name      string
@@ -107,7 +104,6 @@ func TestParseEpochInfoConfirmationPhaseFlexibleDecode(t *testing.T) {
 	}
 }
 
-// TestParseEpochInfoMalformedJSONErrors covers the decode-failure path.
 func TestParseEpochInfoMalformedJSONErrors(t *testing.T) {
 	_, err := parseEpochInfo([]byte(`{not-json`))
 	if err == nil {
@@ -200,9 +196,6 @@ const participantsMultiModelJSON = `{
 	}
 }`
 
-// TestParseParticipantsPoCActiveWeightsAndPreservation covers index-keyed weights, per-model
-// weights, inference URLs, poc_weight summation, preserved/excluded partition, and per-node
-// extraction, all under the legacy timeslot-allocation preservation rule.
 func TestParseParticipantsPoCActiveWeightsAndPreservation(t *testing.T) {
 	state, err := parseParticipants([]byte(participantsMultiModelJSON), preservationModeLegacy, preservedSnapshotState{})
 	if err != nil {
@@ -268,8 +261,6 @@ func TestParseParticipantsPoCActiveWeightsAndPreservation(t *testing.T) {
 	}
 }
 
-// TestParseParticipantsPoCInactiveTreatsAllNodesAsPreserved covers preservationModeAll: every
-// node counts, current weights equal full weights, and nobody is excluded.
 func TestParseParticipantsPoCInactiveTreatsAllNodesAsPreserved(t *testing.T) {
 	state, err := parseParticipants([]byte(participantsMultiModelJSON), preservationModeAll, preservedSnapshotState{})
 	if err != nil {
@@ -513,7 +504,6 @@ func TestParseParticipantsEmptyArrayYieldsEmptyMapsNotNil(t *testing.T) {
 	}
 }
 
-// TestParseParticipantsMalformedJSONErrors covers the decode-failure path.
 func TestParseParticipantsMalformedJSONErrors(t *testing.T) {
 	_, err := parseParticipants([]byte(`{not-json`), preservationModeLegacy, preservedSnapshotState{})
 	if err == nil {
@@ -577,7 +567,6 @@ func TestParsePreservedSnapshotStatusMatrix(t *testing.T) {
 	}
 }
 
-// TestParsePreservedSnapshotHasLooksUpByModelParticipantNode covers Has()'s three-level lookup.
 func TestParsePreservedSnapshotHasLooksUpByModelParticipantNode(t *testing.T) {
 	state, status, err := parsePreservedSnapshot([]byte(preservedSnapshotFoundJSON), 950)
 	if err != nil {
@@ -622,8 +611,6 @@ func TestParsePreservedSnapshotEmptyModelsHasIsSafe(t *testing.T) {
 	}
 }
 
-// TestParseMaxNonceDecodesField covers the happy-path decode (numeric and string-encoded), plus
-// the failure shapes: devshard_escrow_params missing, params missing, and malformed JSON.
 func TestParseMaxNonceDecodesField(t *testing.T) {
 	cases := []struct {
 		name    string

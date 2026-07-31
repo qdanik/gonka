@@ -3,6 +3,7 @@
 package registry
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -30,6 +31,10 @@ type Deps struct {
 	Now              func() time.Time
 }
 
+// Registry owns the live escrow set. live is written only under mu and read without it, so Candidates costs
+// one atomic load. draining holds escrows removed from routing whose requests have not finished; the last
+// release closes them, so a rotation cannot pull storage from under a race still writing signatures. It is
+// keyed by entry, not id: one id can be re-added while an earlier session of it still drains.
 type Registry struct {
 	servingSessions  SessionFactory
 	readOnlySessions SessionFactory
@@ -37,13 +42,9 @@ type Registry struct {
 	exhaustion       exhaustion
 	now              func() time.Time
 
-	// live is written only under mu and read without it, so Candidates costs one atomic load.
 	live atomic.Pointer[liveSet]
 
-	mu sync.Mutex
-	// draining holds escrows removed from routing whose requests have not finished; the last release
-	// closes them, so a rotation cannot pull storage out from under a race still writing signatures.
-	// Keyed by entry, not id: one id can be re-added while an earlier session of it still drains.
+	mu       sync.Mutex
 	draining map[*escrowEntry]struct{}
 	closed   bool
 }
@@ -97,7 +98,9 @@ func (r *Registry) Add(ctx context.Context, escrowID, model string) error {
 	if _, alreadyLive := published.byID[escrowID]; alreadyLive {
 		return session.Close()
 	}
-	r.live.Store(published.with(newEscrowEntry(escrowID, model, session, r.now)))
+	entry := newEscrowEntry(escrowID, model, session, r.now)
+	entry.hold = r.holdFor(entry)
+	r.live.Store(published.with(entry))
 	r.pushMembershipLocked()
 	return nil
 }
@@ -151,12 +154,12 @@ func (r *Registry) Candidates(model string) []scheduler.Escrow {
 			Model:       entry.model,
 			Session:     entry.stream,
 			ActiveUsers: int(entry.inFlight.Load()),
+			Hold:        entry.hold,
 		})
 	}
 	return candidates
 }
 
-// EscrowState is one published escrow as a reader sees it.
 type EscrowState struct {
 	ID           string
 	Model        string
@@ -238,9 +241,27 @@ func (r *Registry) Acquire(escrowID string) (session EscrowSession, release func
 	if !known {
 		return nil, nil, false
 	}
+	return entry.session, r.holdLocked(entry), true
+}
+
+// holdFor is the scheduler's view of the same count, taken in the step that commits a nonce so a
+// Retire arriving right after cannot close the escrow that nonce still owes a vote to. It is bound to
+// the entry rather than to its id, so it can never land on a later session published under that id.
+func (r *Registry) holdFor(entry *escrowEntry) func() (func(), bool) {
+	return func() (func(), bool) {
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		if r.live.Load().byID[entry.id] != entry {
+			return nil, false
+		}
+		return r.holdLocked(entry), true
+	}
+}
+
+func (r *Registry) holdLocked(entry *escrowEntry) func() {
 	entry.inFlight.Add(1)
 	var once sync.Once
-	return entry.session, func() { once.Do(func() { r.release(entry) }) }, true
+	return func() { once.Do(func() { r.release(entry) }) }
 }
 
 func (r *Registry) release(entry *escrowEntry) {
@@ -325,11 +346,11 @@ func (r *Registry) pushMembershipLocked() {
 	}
 }
 
-func sortedKeys[V any](entries map[string]V) []string {
-	keys := make([]string, 0, len(entries))
+func sortedKeys[K cmp.Ordered, V any](entries map[K]V) []K {
+	keys := make([]K, 0, len(entries))
 	for key := range entries {
 		keys = append(keys, key)
 	}
-	sort.Strings(keys)
+	slices.Sort(keys)
 	return keys
 }
