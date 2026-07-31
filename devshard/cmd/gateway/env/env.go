@@ -30,7 +30,6 @@ type Values struct {
 	MaxConcurrentRequests *int64
 
 	PoCMode             *string
-	CapacityAwareLimits *bool
 	Disabled            *bool
 	DisabledMessage     *string
 	DisabledRedirectURL *string
@@ -142,7 +141,6 @@ func Load() (Values, error) {
 	readInt("GATEWAY_MAX_CONCURRENT_REQUESTS", &values.MaxConcurrentRequests)
 
 	readString("GATEWAY_POC_MODE", &values.PoCMode)
-	readBool("GATEWAY_CAPACITY_AWARE_LIMITS", &values.CapacityAwareLimits)
 	readBool("GATEWAY_DISABLED", &values.Disabled)
 	readString("GATEWAY_DISABLED_MESSAGE", &values.DisabledMessage)
 	readString("GATEWAY_DISABLED_REDIRECT_URL", &values.DisabledRedirectURL)

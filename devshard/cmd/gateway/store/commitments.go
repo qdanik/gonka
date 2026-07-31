@@ -19,7 +19,6 @@ type Commitment struct {
 	CreatedAt     time.Time
 }
 
-// SaveCommitment inserts or replaces the commitment for its TxHash.
 func (s *Store) SaveCommitment(ctx context.Context, c Commitment) error {
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO escrow_rotation_commitments (tx_hash, model, role, private_key_env, epoch, block_height, created_at)

@@ -22,7 +22,6 @@ func TestGhostKindReason(t *testing.T) {
 	}
 }
 
-// Compile-time check: serve, burn, and hold satisfy Decision.
 var (
 	_ Decision = serve{}
 	_ Decision = burn{}

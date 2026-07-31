@@ -15,6 +15,7 @@ type LimiterSource interface {
 type CapacitySource interface {
 	ScaleFactor(model string) float64
 	Weights(model string) (current, baseline float64)
+	WeightsUnobserved(model string) bool
 }
 
 type ParticipantSource interface {
@@ -43,6 +44,7 @@ type LimitsCollector struct {
 	capacityScale              *prometheus.Desc
 	capacityTotalWeight        *prometheus.Desc
 	capacityBaselineWeight     *prometheus.Desc
+	capacityWeightsUnobserved  *prometheus.Desc
 	participantsTracked        *prometheus.Desc
 	participantsExhausted      *prometheus.Desc
 	windowSize                 *prometheus.Desc
@@ -64,6 +66,7 @@ func NewLimitsCollector(sources LimitsSources) *LimitsCollector {
 		capacityScale:              gaugeDesc("devshard_gateway_capacity_scale_by_model", "Ratio of current to baseline host weight per model (1.0 = full capacity).", "model"),
 		capacityTotalWeight:        gaugeDesc("devshard_gateway_capacity_total_weight_by_model", "Current availability-filtered host weight per model.", "model"),
 		capacityBaselineWeight:     gaugeDesc("devshard_gateway_capacity_baseline_weight_by_model", "Baseline steady-state host weight per model.", "model"),
+		capacityWeightsUnobserved:  gaugeDesc("devshard_gateway_capacity_weights_unobserved_by_model", "1 while escrow scoring for a model runs on the membership-share fallback because the chain has reported no weights.", "model"),
 
 		participantsTracked:   gaugeDesc("devshard_gateway_participants_tracked", "Participant/model pairs the per-host limiter is tracking."),
 		participantsExhausted: gaugeDesc("devshard_gateway_participants_exhausted", "Tracked participant/model pairs that would currently refuse an attempt."),
@@ -77,7 +80,7 @@ func (c *LimitsCollector) Describe(ch chan<- *prometheus.Desc) {
 	for _, desc := range []*prometheus.Desc{
 		c.inflightRequests, c.inflightInputTokens, c.effectiveMaxConcurrent, c.effectiveMaxTokens,
 		c.inflightRequestsByModel, c.inflightInputTokensByModel, c.queueDepth,
-		c.capacityScale, c.capacityTotalWeight, c.capacityBaselineWeight,
+		c.capacityScale, c.capacityTotalWeight, c.capacityBaselineWeight, c.capacityWeightsUnobserved,
 		c.participantsTracked, c.participantsExhausted, c.windowSize, c.windowInflight, c.breakerState,
 	} {
 		ch <- desc
@@ -100,6 +103,7 @@ func (c *LimitsCollector) Collect(ch chan<- prometheus.Metric) {
 		current, baseline := c.sources.Capacity.Weights(model)
 		gauge(ch, c.capacityTotalWeight, current, model)
 		gauge(ch, c.capacityBaselineWeight, baseline, model)
+		gauge(ch, c.capacityWeightsUnobserved, boolGauge(c.sources.Capacity.WeightsUnobserved(model)), model)
 	}
 
 	windows := c.sources.Participants.Snapshot()

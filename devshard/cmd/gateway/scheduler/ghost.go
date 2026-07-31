@@ -13,7 +13,6 @@ const (
 	ghostAbandoned
 )
 
-// reason returns the ghost's log/metric label.
 func (k GhostKind) reason() string {
 	switch k {
 	case ghostPoC:

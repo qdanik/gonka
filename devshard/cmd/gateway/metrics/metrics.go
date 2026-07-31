@@ -20,7 +20,6 @@ type Metrics struct {
 	httpRequestDuration *prometheus.HistogramVec
 }
 
-// New builds the registry with Go/process collectors and the HTTP families.
 func New() *Metrics {
 	registry := prometheus.NewRegistry()
 	registry.MustRegister(
@@ -52,7 +51,6 @@ func New() *Metrics {
 	}
 }
 
-// Registry exposes the underlying registry for other packages' families.
 func (m *Metrics) Registry() *prometheus.Registry { return m.registry }
 
 // Register adds collectors at construction time, where a duplicate family is a wiring bug that must
@@ -61,7 +59,6 @@ func (m *Metrics) Register(collectors ...prometheus.Collector) {
 	m.registry.MustRegister(collectors...)
 }
 
-// Handler serves the Prometheus exposition.
 func (m *Metrics) Handler() http.Handler {
 	return promhttp.HandlerFor(m.registry, promhttp.HandlerOpts{})
 }

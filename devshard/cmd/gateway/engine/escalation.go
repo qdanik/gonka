@@ -85,8 +85,9 @@ type EscalationAttempt struct {
 	Completed     time.Time
 }
 
+// StartPlan is how a race begins; ImmediateAttempts counts the primary.
 type StartPlan struct {
-	ImmediateAttempts int // including the primary
+	ImmediateAttempts int
 	Reason            string
 }
 

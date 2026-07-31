@@ -2,8 +2,6 @@ package filters
 
 import "strings"
 
-// runPipeline runs the fixed normalization stage order: whitelist, pre-validation rules,
-// message hygiene, output-token limits, post-limit rules, then marshal.
 func runPipeline(document *Document, options Options) (Result, error) {
 	routedModel := resolveRoutedModel(document, options.RoutedModel)
 	profile := ProfileFor(routedModel)
@@ -25,7 +23,7 @@ func runPipeline(document *Document, options Options) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
-	applyOutputTokenLimits(document, &view, options)
+	applyOutputTokenLimits(document, &view, options, routedModel)
 	if err := applyStage(StagePostLimits, document, routedModel, profile, options.Admin); err != nil {
 		return Result{}, err
 	}
@@ -46,7 +44,6 @@ func runPipeline(document *Document, options Options) (Result, error) {
 	}, nil
 }
 
-// resolveRoutedModel: trimmed body.model wins, else fallback.
 func resolveRoutedModel(document *Document, fallback string) string {
 	if raw, ok := document.Get("model"); ok {
 		if modelName, isString := raw.(string); isString {
@@ -58,7 +55,6 @@ func resolveRoutedModel(document *Document, fallback string) string {
 	return fallback
 }
 
-// applyStage runs every rule registered for stage, in table order.
 func applyStage(stage Stage, document *Document, routedModel string, profile *Profile, admin bool) error {
 	for _, spec := range parameterTable {
 		for _, rule := range spec.Rules {

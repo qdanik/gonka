@@ -33,6 +33,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -43,6 +44,7 @@ import (
 
 	"devshard/cmd/gateway/config"
 	"devshard/cmd/gateway/store"
+	"devshard/transport"
 	"devshard/user"
 )
 
@@ -633,4 +635,209 @@ func lastIndexOfEventPrefix(events []string, prefix string) int {
 		}
 	}
 	return found
+}
+
+// A burned nonce is spent money. Production had no accounting for it at all: the scheduler's observer
+// was implemented only in a test file, so this asserts the counter off the gateway's own exposition.
+func TestEndToEndABurnedNonceIsCountedUnderItsOwnReason(t *testing.T) {
+	gateway := bootGateway(t, e2eOptions{tune: func(settings *config.Config) {
+		settings.Scheduler.HoldGraceMS = 0
+	}})
+	fixture := gateway.only()
+	// nonce%3 binds host 1 on nonces 1 and 4: the first blocks it, the second has to burn past it.
+	fixture.hosts[1].divergent = true
+
+	for request := 0; request < 4; request++ {
+		gateway.send(t, e2eRequest{path: "/v1/chat/completions", body: distinctChatBody(request)})
+	}
+
+	burned := fmt.Sprintf("devshard_gateway_ghost_nonces_burned_total{devshard_id=%q,reason=%q} 1", fixture.id, "participant_capability_no_send")
+	if scrape := gateway.scrapeMetrics(t); !strings.Contains(scrape, burned) {
+		t.Fatalf("scrape is missing %s: a nonce was burned and nothing in production counted it", burned)
+	}
+}
+
+// A host reporting "escrow not found" must end with that escrow no longer accepting traffic. The
+// confirming chain lookup is the escrow lifecycle's, never the request's.
+func TestEndToEndAnEscrowAHostCannotFindIsCheckedAndDeactivated(t *testing.T) {
+	gateway := bootGateway(t, e2eOptions{})
+	fixture := gateway.only()
+	fixture.failHosts(&transport.UpstreamStatusError{
+		Path:       "/v1/chat/completions",
+		StatusCode: http.StatusInternalServerError,
+		Body:       `{"error":"escrow not found"}`,
+	})
+
+	response := gateway.chat(t, true)
+
+	record := gateway.awaitAccounting(t, response.header.Get("X-Request-Id"))
+	if !record.EscrowMissing {
+		t.Fatalf("accounting row = %+v, want escrow_missing: the host's report never reached the outcome", record)
+	}
+	gateway.gateway.manager.Start(context.Background())
+	awaitDevshardInactive(t, gateway, fixture.id)
+}
+
+// An escrow that cannot fund another nonce must say so where an operator reads it. The escrow refuses
+// to commit the nonce before any host is contacted, so this is the only path that can report it.
+func TestEndToEndAnEscrowThatCannotFundANonceIsAccountedAsBalanceExhausted(t *testing.T) {
+	gateway := bootGateway(t, e2eOptions{balance: 1})
+	fixture := gateway.only()
+
+	response := gateway.chat(t, true)
+
+	if response.status == http.StatusOK {
+		t.Fatalf("status = %d, want a failure: the escrow cannot fund this request", response.status)
+	}
+	if got := fixture.dispatches(); got != 0 {
+		t.Fatalf("dispatches = %d, want 0: an exhausted escrow must not reach a host", got)
+	}
+	record := gateway.awaitAccounting(t, response.header.Get("X-Request-Id"))
+	if !record.BalanceExhausted {
+		t.Fatalf("accounting row = %+v, want balance_exhausted: the column cannot report an escrow running dry", record)
+	}
+	scrape := gateway.scrapeMetrics(t)
+	if !strings.Contains(scrape, `devshard_gateway_requests_total{model="e2e-model",outcome="failure",reason="balance_exhausted"} 1`) {
+		t.Error("scrape has no balance_exhausted failure reason: the metric arm is still unreachable")
+	}
+}
+
+func awaitDevshardInactive(t *testing.T, gateway *e2eGateway, escrowID string) {
+	t.Helper()
+	deadline := time.Now().Add(e2eSettleWait)
+	for {
+		records, err := gateway.gateway.store.ListDevshards(context.Background())
+		if err != nil {
+			t.Fatalf("ListDevshards = %v, want nil", err)
+		}
+		for _, record := range records {
+			if record.EscrowID == escrowID && !record.Active {
+				return
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("escrow %s is still active: a host reported it gone from chain and it keeps taking traffic", escrowID)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+// A pinned request is served by the escrow it names, however routing would have scored it: two
+// requests that would otherwise rotate across the tie both land on the escrow they name. A pin the
+// gateway no longer routes to is refused rather than quietly served by whichever escrow is left.
+func TestEndToEndAPinnedRequestReachesItsEscrowAndARefusedPinDoesNotFallBack(t *testing.T) {
+	gateway := bootGateway(t, e2eOptions{escrows: []string{"1", "2"}, adminKey: operatorKey})
+	pinned, unnamed := gateway.fixtures["1"], gateway.fixtures["2"]
+
+	for caller := range 2 {
+		served := gateway.send(t, e2eRequest{path: "/devshard/1/v1/chat/completions", body: distinctChatBody(caller)})
+		if served.status != http.StatusOK {
+			t.Fatalf("pinned request %d = %d %s, want 200", caller, served.status, served.body)
+		}
+		if got := served.header.Get("X-Devshard-ID"); got != "1" {
+			t.Fatalf("X-Devshard-ID = %q, want the escrow the request pinned", got)
+		}
+	}
+	if got := unnamed.dispatches(); got != 0 {
+		t.Fatalf("dispatches on the escrow no request named = %d, want 0: routing overrode the pin", got)
+	}
+
+	deactivated := gateway.send(t, e2eRequest{path: "/v1/admin/devshards/2/deactivate", bearer: operatorKey})
+	if deactivated.status != http.StatusOK {
+		t.Fatalf("deactivate = %d %s, want 200", deactivated.status, deactivated.body)
+	}
+	refused := gateway.send(t, e2eRequest{path: "/devshard/2/v1/chat/completions", body: distinctChatBody(2)})
+
+	if refused.status == http.StatusOK {
+		t.Fatalf("a pin to an escrow that no longer serves the model = 200 %s, want a refusal", refused.body)
+	}
+	if got := pinned.dispatches(); got != 2 {
+		t.Fatalf("dispatches on the live escrow = %d, want 2: the refused pin fell back onto it", got)
+	}
+}
+
+// The cache is keyed on the escrow as well as on the caller and the body. Without that dimension one
+// escrow's reply is replayed for another under an X-Devshard-ID that never served it.
+func TestEndToEndACacheEntryOnOneEscrowIsAMissOnAnother(t *testing.T) {
+	gateway := bootGateway(t, e2eOptions{escrows: []string{"1", "2"}})
+	first, second := gateway.fixtures["1"], gateway.fixtures["2"]
+	body := chatBody(e2eModel, false)
+
+	served := gateway.send(t, e2eRequest{path: "/devshard/1/v1/chat/completions", body: body})
+	replayed := gateway.send(t, e2eRequest{path: "/devshard/1/v1/chat/completions", body: body})
+	elsewhere := gateway.send(t, e2eRequest{path: "/devshard/2/v1/chat/completions", body: body})
+
+	if string(replayed.body) != string(served.body) || replayed.status != served.status {
+		t.Fatalf("the repeated pinned request = %d %s, want the first reply replayed", replayed.status, replayed.body)
+	}
+	if got := first.dispatches(); got != 1 {
+		t.Fatalf("dispatches on the pinned escrow = %d, want 1: the replay reached a host", got)
+	}
+	if elsewhere.status != http.StatusOK {
+		t.Fatalf("the same body on another escrow = %d %s, want 200", elsewhere.status, elsewhere.body)
+	}
+	if got := elsewhere.header.Get("X-Devshard-ID"); got != "2" {
+		t.Fatalf("X-Devshard-ID = %q, want 2: the reply came from the entry another escrow cached", got)
+	}
+	if got := second.dispatches(); got != 1 {
+		t.Fatalf("dispatches on the other escrow = %d, want 1: the cache answered for an escrow it never ran on", got)
+	}
+}
+
+// The stuck-escrow recovery surface. It reads through settlement rather than through routing, so it
+// still answers for an escrow already retired from routing — the state an operator reaches for it in.
+func TestEndToEndTheRecoveryRoutesReadALiveEscrowAndADrainingOne(t *testing.T) {
+	gateway := bootGateway(t, e2eOptions{adminKey: operatorKey})
+	fixture := gateway.only()
+	if served := gateway.chat(t, false); served.status != http.StatusOK {
+		t.Fatalf("chat = %d %s, want 200", served.status, served.body)
+	}
+
+	unauthenticated := gateway.send(t, e2eRequest{method: http.MethodGet, path: "/devshard/" + fixture.id + "/v1/state"})
+	if unauthenticated.status != http.StatusUnauthorized {
+		t.Fatalf("state without the operator key = %d, want 401", unauthenticated.status)
+	}
+	unknown := gateway.send(t, e2eRequest{method: http.MethodGet, path: "/devshard/404/v1/state", bearer: operatorKey})
+	if unknown.status != http.StatusNotFound {
+		t.Fatalf("state for an escrow the gateway does not hold = %d, want 404", unknown.status)
+	}
+	for _, path := range []string{"/v1/state", "/v1/debug/state", "/v1/debug/inferences", "/v1/debug/pending", "/v1/debug/signatures"} {
+		read := gateway.send(t, e2eRequest{method: http.MethodGet, path: "/devshard/" + fixture.id + path, bearer: operatorKey})
+		if read.status != http.StatusOK {
+			t.Fatalf("%s = %d %s, want 200", path, read.status, read.body)
+		}
+		if !strings.Contains(string(read.body), `"escrow_id":"`+fixture.id+`"`) {
+			t.Errorf("%s = %s, want the escrow it names", path, read.body)
+		}
+	}
+
+	state := gateway.send(t, e2eRequest{method: http.MethodGet, path: "/devshard/" + fixture.id + "/v1/state", bearer: operatorKey})
+	if !strings.Contains(string(state.body), `"nonce":1`) || !strings.Contains(string(state.body), `"inferences":1`) {
+		t.Errorf("state = %s, want the one nonce the served request committed", state.body)
+	}
+	inferences := gateway.send(t, e2eRequest{method: http.MethodGet, path: "/devshard/" + fixture.id + "/v1/debug/inferences", bearer: operatorKey})
+	if !strings.Contains(string(inferences.body), `"nonce":1`) {
+		t.Errorf("inferences = %s, want the record nonce 1 committed", inferences.body)
+	}
+
+	fixture.parkHosts(t)
+	draining := make(chan clientResponse, 1)
+	go func() { draining <- gateway.chat(t, true) }()
+	fixture.awaitDispatch(t)
+	deactivated := gateway.send(t, e2eRequest{path: "/v1/admin/devshards/" + fixture.id + "/deactivate", bearer: operatorKey})
+	if deactivated.status != http.StatusOK {
+		t.Fatalf("deactivate = %d %s, want 200", deactivated.status, deactivated.body)
+	}
+	if _, routable := gateway.gateway.escrows.RoutableSession(fixture.id); routable {
+		t.Fatal("the escrow is still routable, so this test never reached the state it is about")
+	}
+	pending := gateway.send(t, e2eRequest{method: http.MethodGet, path: "/devshard/" + fixture.id + "/v1/debug/pending", bearer: operatorKey})
+	if pending.status != http.StatusOK {
+		t.Fatalf("pending on a draining escrow = %d %s, want 200", pending.status, pending.body)
+	}
+	if !strings.Contains(string(pending.body), `"nonce":2`) {
+		t.Errorf("pending = %s, want the nonce the draining request is still holding", pending.body)
+	}
+	fixture.releaseHosts()
+	<-draining
 }

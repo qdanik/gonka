@@ -49,12 +49,10 @@ func requireListElements(valid func(any) bool, message string) RuleFunc {
 	}
 }
 
-// requireStringElements rejects the first non-string element of ctx.Param.
 func requireStringElements() RuleFunc {
 	return requireListElements(isJSONString, "must be a string")
 }
 
-// requireUintElements rejects the first non-uint element of ctx.Param.
 func requireUintElements() RuleFunc {
 	return requireListElements(isJSONUint, "must be an integer token id")
 }

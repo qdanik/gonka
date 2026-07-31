@@ -67,17 +67,14 @@ func (s *Store) ListDevshards(ctx context.Context) ([]DevshardRecord, error) {
 	return records, nil
 }
 
-// SetDevshardActive flips the active flag.
 func (s *Store) SetDevshardActive(ctx context.Context, escrowID string, active bool) error {
 	return s.updateDevshardFlag(ctx, `UPDATE devshards SET active = ?, updated_at = datetime('now') WHERE escrow_id = ?`, active, escrowID)
 }
 
-// SetDevshardSettlementPending flips the settlement_pending flag.
 func (s *Store) SetDevshardSettlementPending(ctx context.Context, escrowID string, pending bool) error {
 	return s.updateDevshardFlag(ctx, `UPDATE devshards SET settlement_pending = ?, updated_at = datetime('now') WHERE escrow_id = ?`, pending, escrowID)
 }
 
-// DeleteDevshard removes the record.
 func (s *Store) DeleteDevshard(ctx context.Context, escrowID string) error {
 	result, err := s.db.ExecContext(ctx, `DELETE FROM devshards WHERE escrow_id = ?`, escrowID)
 	if err != nil {

@@ -157,8 +157,6 @@ func mirrorFieldIntoKwargs(document *Document, field string, value bool) error {
 	return nil
 }
 
-// thinkingTokenBudgetStrip removes thinking_token_budget for profiles without the
-// ThinkingTokenBudget hook.
 func thinkingTokenBudgetStrip() RuleFunc {
 	return stripParamUnlessHook(func(profile *Profile) bool {
 		return profile != nil && profile.ThinkingTokenBudget
@@ -234,8 +232,6 @@ func stripParamUnlessHook(hook func(*Profile) bool) RuleFunc {
 	}
 }
 
-// reasoningSplit passes ctx.Param through unmodified for profiles with KeepReasoningSplit;
-// strips it for every other profile.
 func reasoningSplit() RuleFunc {
 	return stripParamUnlessHook(func(profile *Profile) bool {
 		return profile != nil && profile.KeepReasoningSplit

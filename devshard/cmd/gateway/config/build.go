@@ -34,7 +34,6 @@ func Build(values env.Values, overrides Overrides) (*Config, error) {
 	overrideIfSet(&configuration.Limits.Concurrency.MaxRequests, values.MaxConcurrentRequests)
 
 	overrideIfSet(&configuration.Modes.PoCMode, values.PoCMode)
-	overrideIfSet(&configuration.Modes.CapacityAwareLimits, values.CapacityAwareLimits)
 	overrideIfSet(&configuration.Modes.Disabled, values.Disabled)
 	overrideIfSet(&configuration.Modes.DisabledMessage, values.DisabledMessage)
 	overrideIfSet(&configuration.Modes.DisabledRedirectURL, values.DisabledRedirectURL)

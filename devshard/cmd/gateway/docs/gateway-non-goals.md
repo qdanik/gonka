@@ -1,0 +1,65 @@
+# Devshard gateway — what it deliberately does not do
+
+Every entry here is a decision, not an omission. They fall into three groups: capabilities the legacy gateway (`cmd/devshardctl`) had and this one intentionally dropped, mechanisms that were considered and refused, and boundaries the gateway declines to cross because another component owns them.
+
+An operator reading this should be able to answer "is this missing or is this on purpose?" without reading code.
+
+## Dropped from the legacy gateway
+
+**Single-escrow mode, and the ten top-level routes that existed only for it.** `DEVSHARD_ESCROW_ID` plus `DEVSHARD_PRIVATE_KEY` are gone; there is no configuration in which the gateway serves exactly one escrow through unprefixed paths. Everything a single-mode deployment reached at `/v1/finalize`, `/v1/state` and top-level `/v1/debug/*` is reachable at `/devshard/{id}/...`. One escrow is now simply a pool of one. Operator scripts that use the bare paths need the escrow id added.
+
+**The hand-written OpenAPI document and the Swagger UI page.** Both had drifted from the routes they described, neither was tested, and the UI pulled its assets from a CDN. Nothing in the tree serves `openapi.json` or `/devshard/{id}/` today. The design wanted a generated document; nobody wrote the generator, and shipping a stale hand-written one is worse than shipping none.
+
+**`/debug/pprof/*`.** The legacy gateway mounted the profiling handlers on the same mux as public traffic, where a single unauthenticated request can stall the process. No listener in this gateway serves pprof. Adding it back belongs with a decision about where it is exposed, not as a default.
+
+**The quarantine state machine.** `probe`, `shadow` and `probation` modes, with their 30–60 minute sentences, are replaced by the AIMD window plus a circuit breaker whose worst case is minutes — see [gateway-capacity-and-health.md](./gateway-capacity-and-health.md). Adaptation instead of punishment: an overloaded participant receives less traffic immediately and recovers automatically. The one piece of the old machinery that survives is the operator escape hatch, `POST /v1/admin/participants/unquarantine`, which now clears breaker state for one participant key and reports an error for a key the gateway is not tracking.
+
+The metric families that described the deleted mechanism went with it: `devshard_gateway_participant_quarantine_state` and `..._quarantine_transitions_total` have no successor. The in-repo Grafana dashboard still references `participant_quarantine_state`, so there is no swap-the-binary-and-the-dashboard-keeps-working path; the dashboard needs an edit either way.
+
+**The pairwise speed comparator, and the winner hold it existed for.** The legacy race gave a *pairwise-preferred* host up to 500 ms to catch up before crowning someone else. Pairwise routing is gone, so there is no preference signal left to hold for — and inline in the writer, the hold stalled the eventual winner's own socket for half a second while buying nothing. Crowning is now unconditionally first-content-wins.
+
+**Host-index-keyed performance metrics.** `devshard_host_{receipt,first_token,cttfl,total}_seconds{devshard_id,host_idx}` are dropped: `host_idx` is not an identity any more, performance is keyed by participant, and the four families duplicated the participant-keyed twins emitted from the same call site.
+
+**`devshard_runtime_reserved_tokens`.** Token reservation moved into the gateway limiter; the escrow registry deliberately holds no reserved-token counter. The legacy load formula that consumed it (`reservedTokens * 1000 + activeUserRequests`) was already documented in legacy as misleading.
+
+**Probe attempts inside the race engine.** Every probe field and the seven guards that read them were deleted, not left unset. They were unreachable: `scheduler.Pick` returns either a real assignment or an error, and a nonce that cannot be served is burned inside the scheduler and never becomes an attempt. The guards gated settlement, sample exemption, limiter verdict and crown denial on a state no code path could produce. The concept survives where it belongs, as ghost burns in `scheduler/ghost.go`.
+
+**The non-streaming reduced-max-tokens retry.** Sixty lines that rewrote the caller's body and retried with a smaller `max_tokens`. Hosts are now ejected on failure rate and the no-content backstop still applies, so the retry was buying a second chance for a host the router has already stopped choosing. This is a deliberate reduction of the behaviour surface.
+
+**Two of the three escalation rules.** Rule 1 (unresponsive primary triggers an immediate parallel attempt) is redundant: host ejection is a scheduler filter recomputed on state change, so an unresponsive host is not picked as primary in the first place. Rule 3 (a secondary that is measurably faster) read performance data, and the escalation policy is deliberately pure — a function of the race's own timeline and the configured thresholds, with no performance input. See [gateway-speculative-race.md](./gateway-speculative-race.md).
+
+**Persisted participant health.** AIMD windows, breaker state and the performance rings all start empty after a restart. Minute-scale backoff self-heals faster than replaying stale penalties is worth, and a persisted score after a long idle asserts something about a host that may no longer be true. The cost is honest and small: a genuinely bad host gets one free window after every deploy, and there is no percentile-based hedging for the first samples per host.
+
+**The legacy `state.db` migration.** State starts fresh on cutover, bootstrapped from `GATEWAY_DEVSHARDS_JSON` and the admin import endpoint.
+
+**The `capacity_aware_limits` toggle.** The environment variable was read and never used. Making it real would mean *adding* a code path that disables capacity scaling — new behaviour, not a restored one. It is gone from the gateway. `deploy/join/config.devshard.env.template` still ships the line because `cmd/devshardctl` still implements it; that line becomes removable when devshardctl retires.
+
+## Refused mechanisms
+
+**No panic-recovery middleware.** `net/http` already recovers a per-connection panic, so the process survives one, and a recovery wrapper would be free to write a JSON error object into a half-written SSE stream. The one hazard recovery would genuinely fix — a panic between a race registering itself and releasing that registration, which would hang graceful shutdown forever — is fixed inside the engine instead, by a deferred recover that releases the registration through an idempotent token and then re-panics with the same value. Nothing fabricated reaches the client, the ledger, the metrics or the performance tracker, and `net/http` sees the panic exactly as it would have.
+
+**No per-request cost accounting.** The request ledger records tokens and topology — which escrow, which participant, which nonce, output tokens summed over every attempt — and no monetary cost. This is not a gap that was closed badly: the legacy tables had no cost column either. Legacy computed its three-way breakdown as a read-time join against live session state, so it already printed zeros once an escrow settled. Money lives in chain settlement; the ledger answers "what did this request do", not "what did it cost".
+
+**No KV-cache affinity routing.** `scheduler.AffinityHint` is an empty struct and a field on the request profile: the extension point exists so that adding affinity later is a local change inside the scheduler, rather than a fourth selection mechanism bolted beside the three the legacy gateway had. The feature itself is a separate project.
+
+**No data-driven first-token escalation.** The escalation curve is a hardcoded quadratic. An earlier design fed it a measured first-token percentile; that reader is gone, and nothing collects a measurement for it, no half-built seam dangles toward it, and no operator knob implies it exists. A future version is a deliberate design task from a blank sheet, not a wire someone should reconnect.
+
+**No caching during proof-of-compute.** The response cache is probed *after* the admission gate, so while requests are blocked the gateway serves nothing at all rather than serving cache hits. Legacy probed the cache first. The divergence is deliberate and two lines to reverse: the admission gate's contract is that it rejects a request before it can take a cache lookup, a limiter slot or a token budget, and probing first would make that claim false.
+
+## Boundaries the gateway declines to cross
+
+**The engine never acts on escrow lifecycle facts; it reports them.** An escrow reported missing by a host, or a balance found exhausted while preparing an inference, is recorded on the race outcome and handed to the escrow manager through a narrow interface. The manager verifies against the chain and decides. This is what keeps `engine` from importing `escrow`, and it is why a vanished escrow is confirmed before anything is deactivated.
+
+**The gateway does not enforce the economics.** It caps `max_tokens`, so the reservation taken at inference start is bounded by what it asked for, and the chain clamps actual cost to that reservation. Within the reservation a host can still over-claim; the defences there are on-chain response-hash validation and the gateway's permanent state-root-divergence block, not the gateway's accounting.
+
+**The gateway does not restate chain policy locally.** The maximum active nonce count comes from a governance parameter read from the chain. If that read fails the gateway falls back to a conservative constant rather than treating the cap as disabled, but it never invents a policy of its own.
+
+**No changes to the shared `devshard/` packages.** `user`, `state`, `bridge`, `signing`, `types`, `transport` and the host-side stack are consumed as they are. Where one of them has a defect the gateway must live with — the timeout handler that returns a non-nil error on its success path, for example — the gateway normalises at the boundary and pins the behaviour with a test, rather than editing a package shared with the host and with devshardctl.
+
+## Known gaps, stated rather than hidden
+
+Two per-escrow recovery tools that legacy had are not restored: `signatures/collect`, which actively polls hosts to gather a signature quorum, and `sync-hosts`, which forces a resync. The read-only half of the recovery surface *is* served (`state`, `debug/state`, `debug/pending`, `debug/inferences`, `debug/signatures`, `finalize`), and deliberately reads through the settlement lookup, so a draining escrow still answers — which is the point, since the escrow an operator needs to inspect is usually the one in trouble.
+
+The in-repo Grafana dashboard queries six families this gateway does not emit, and the repository defines no alerting rules at all. Both are named in [gateway-operations.md](./gateway-operations.md); neither is a code gap, but a binary swap without a dashboard edit leaves panels blank.
+
+Three smaller residuals are recorded rather than papered over: a ghost burn commits its nonce without taking the escrow's in-flight hold, so it is not protected against a concurrent retire the way a served commit is; the per-participant limiter's state map never evicts, unlike the performance tracker's; and a per-participant decay half-life is captured when a host is first seen, so changing it at run time reaches only hosts seen afterwards.

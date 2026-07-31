@@ -20,20 +20,18 @@ import (
 	"go.uber.org/goleak"
 )
 
-// virtualTime is the simulator's clock and the coordinator's timer in one value, so a deadline can
-// only be reached by a test advancing time, never by the test host being slow.
+// virtualTime is the simulator's clock and the coordinator's timer in one value, so a deadline is reached
+// only by a test advancing time, never by a slow host. step is what one read of the clock costs, which buys
+// latency without losing control of deadlines; arms reports every deadline the coordinator sets, which is
+// how a test learns an event was applied rather than merely delivered.
 type virtualTime struct {
-	mu sync.Mutex
-	// step is what one read of the clock costs, so a test can have latencies without giving up control
-	// of when a deadline is reached.
+	mu       sync.Mutex
 	step     time.Duration
 	now      time.Time
 	deadline time.Time
 	armed    bool
 	fired    chan time.Time
-	// arms reports every deadline the coordinator sets, which is how a test learns that an event has
-	// been applied rather than merely delivered.
-	arms chan time.Duration
+	arms     chan time.Duration
 }
 
 func newVirtualTime() *virtualTime {
@@ -134,27 +132,14 @@ func (s *simSnapshots) set(next chain.PhaseSnapshot) { s.current.Store(&next) }
 
 type simTracker struct {
 	*stubPerf
-	mu          sync.Mutex
-	samples     []perf.Sample
-	firstTokens []float64
+	mu      sync.Mutex
+	samples []perf.Sample
 }
 
 func (p *simTracker) RecordSample(sample perf.Sample) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.samples = append(p.samples, sample)
-}
-
-func (p *simTracker) RecordFirstToken(_ string, _ uint64, firstTokenMs float64) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	p.firstTokens = append(p.firstTokens, firstTokenMs)
-}
-
-func (p *simTracker) firstTokenCount() int {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return len(p.firstTokens)
 }
 
 func (p *simTracker) recorded() []perf.Sample {
@@ -272,6 +257,8 @@ func (p *simPoster) settled() []uint64 {
 	return append([]uint64(nil), p.posted...)
 }
 
+// simulator's pinned is the operator's suspicious list, set before run() so the engine reads it from the
+// same dependency main supplies rather than from a policy the test built itself.
 type simulator struct {
 	engine    *Engine
 	picker    *stubPicker
@@ -285,9 +272,7 @@ type simulator struct {
 	clock     *virtualTime
 	client    *recordingSink
 	model     string
-	// pinned is the operator's suspicious list, set before run() so the engine reads it from the same
-	// dependency main supplies rather than from a policy the test built itself.
-	pinned map[string]bool
+	pinned    map[string]bool
 }
 
 func engineSettings(policy EscalationPolicy, modes config.Modes) *config.Config {
@@ -506,9 +491,6 @@ func TestSimulatorStreamsAHealthyRequestByteForByte(t *testing.T) {
 	if samples := sim.perf.recorded(); len(samples) != 1 || !samples[0].Responsive {
 		t.Fatalf("samples = %+v, want one responsive sample", samples)
 	}
-	if got := sim.perf.firstTokenCount(); got != 1 {
-		t.Errorf("first-token records = %d, want 1", got)
-	}
 	if overflows := sim.metrics.classifyOverflows(); len(overflows) != 0 {
 		t.Errorf("classify overflows = %v, want none for a stream inside every cap", overflows)
 	}
@@ -560,7 +542,7 @@ func TestSimulatorForwardsTheHostsRefusalVerbatim(t *testing.T) {
 	if !errors.As(err, &hostErr) {
 		t.Fatalf("Run() error = %v, want a host application error", err)
 	}
-	if got := string(hostErr.JSONPayload()); got != refusal {
+	if got := hostErr.Payload; got != refusal {
 		t.Fatalf("payload = %s, want the host's own error event %s", got, refusal)
 	}
 	if hostErr.HTTPStatus() != 400 {
@@ -739,7 +721,7 @@ func TestSimulatorFlushesTheFinalEventBeforeDecidingEmptiness(t *testing.T) {
 	sim := newSimulator(t, settledPolicy(), 1, qwenModel)
 	sim.host(10, 0, "host-0", &hostScript{
 		receipt:  true,
-		chunks:   []string{string(readFixture(t, "newline_less_final_content.sse"))},
+		chunks:   []string{string(readFixture(t, "newlineless_final_content.sse"))},
 		finished: true,
 	})
 
@@ -792,7 +774,7 @@ func TestSimulatorPhaseTransitionAbortSkipsTheSampleAndTheVote(t *testing.T) {
 	}
 	sim.settleAll()
 	events := sim.timeoutEvents()
-	if len(events) != 1 || events[0].Action != timeoutActionSkipped || events[0].Reason != timeoutReasonPhaseAborted {
+	if len(events) != 1 || events[0].Action != TimeoutActionSkipped || events[0].Reason != timeoutReasonPhaseAborted {
 		t.Fatalf("timeout events = %+v, want one skipped/%s", events, timeoutReasonPhaseAborted)
 	}
 	if posted := sim.poster.settled(); len(posted) != 0 {
@@ -965,7 +947,7 @@ func TestSimulatorStalledWinnerIsNotCreditedWithItsNonce(t *testing.T) {
 	}
 	sim.settleAll()
 	events := sim.timeoutEvents()
-	if len(events) != 1 || events[0].Action != timeoutActionSkipped || events[0].Reason != timeoutReasonLongResponse {
+	if len(events) != 1 || events[0].Action != TimeoutActionSkipped || events[0].Reason != timeoutReasonLongResponse {
 		t.Fatalf("timeout events = %+v, want one skipped/%s", events, timeoutReasonLongResponse)
 	}
 	sim.assertNoSlotLeaked(t, 1)

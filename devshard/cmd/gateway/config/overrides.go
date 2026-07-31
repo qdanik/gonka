@@ -44,7 +44,6 @@ func ParseOverrides(raw []byte) (Overrides, error) {
 	return overrides, nil
 }
 
-// EncodeOverrides encodes the overrides for persistence.
 func (o Overrides) EncodeOverrides() ([]byte, error) {
 	encoded, err := json.Marshal(o)
 	if err != nil {

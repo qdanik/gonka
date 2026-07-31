@@ -66,10 +66,6 @@ func (b *carryBudget) refund(participant *atomic.Int64, n int64) {
 	b.global.Add(-n)
 }
 
-func (b *carryBudget) usage(participant string) (participantBytes, globalBytes int64) {
-	return b.counterFor(participant).Load(), b.global.Load()
-}
-
 // carryBuffer reassembles SSE events across chunk boundaries for one attempt. It belongs to that
 // attempt's goroutine alone; only the byte charge it holds is shared.
 type carryBuffer struct {

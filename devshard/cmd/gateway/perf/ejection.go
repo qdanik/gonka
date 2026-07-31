@@ -26,8 +26,6 @@ func newEjectionPolicy(consecutiveFailThreshold int, failureRateThreshold, failu
 	}
 }
 
-// evaluate only starts an ejection on a fresh trigger; a host already ejected
-// rides out its current timer rather than having it pushed back further.
 func (p ejectionPolicy) evaluate(h *hostPerf, state *ejectionState, now time.Time) {
 	rate, volume := h.failureRate(now)
 	triggered := h.consecutiveFail >= p.consecutiveFailThreshold ||

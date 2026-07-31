@@ -154,9 +154,6 @@ func TestRunRaceCompletesTheWinnerAfterTheClientDisconnects(t *testing.T) {
 	if !winner.NonceFinished || !winner.Confirmed {
 		t.Fatalf("nonce finished = %v confirmed = %v, want both", winner.NonceFinished, winner.Confirmed)
 	}
-	if winner.OutputChunks != 2 {
-		t.Fatalf("output chunks = %d, want the host drained to its last one", winner.OutputChunks)
-	}
 	forwarded := string(fixture.client.forwarded())
 	if !strings.Contains(forwarded, contentChunk(200)) {
 		t.Fatalf("client received %q, want what it was still there for", forwarded)

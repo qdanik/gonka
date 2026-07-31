@@ -100,7 +100,6 @@ func (f *fakeSession) UserSession() *user.Session { return nil }
 
 func (f *fakeSession) setPhase(phase types.SessionPhase) { f.phase.Store(int32(phase)) }
 
-// recordingMembership captures what the registry pushes into the capacity model.
 type recordingMembership struct {
 	mu       sync.Mutex
 	shares   map[string]map[string]float64

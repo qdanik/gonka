@@ -17,14 +17,14 @@ import (
 	"devshard/cmd/gateway/scheduler"
 )
 
+// stubPicker's hold parks every pick until it is closed, which is how a test observes what the coordinator
+// does while the scheduler has not answered yet.
 type stubPicker struct {
 	mu       sync.Mutex
 	queue    []scheduler.Assignment
 	blocked  [][2]string
 	profiles []scheduler.RequestProfile
-	// hold parks every pick until it is closed, which is how a test observes what the coordinator does
-	// while the scheduler has not answered yet.
-	hold chan struct{}
+	hold     chan struct{}
 }
 
 func (p *stubPicker) Pick(ctx context.Context, profile scheduler.RequestProfile) (scheduler.Assignment, error) {
@@ -52,9 +52,10 @@ func (p *stubPicker) BlockHost(escrowID, participant string) {
 	p.blocked = append(p.blocked, [2]string{escrowID, participant})
 }
 
-// hostScript is one nonce's scripted host. arrive/release let several attempts be held at the same
-// point so their first content chunks contend for the crown; streaming/resume hold one mid-stream,
-// after its first chunk and before the rest.
+// hostScript is one nonce's scripted host. arrive/release let several attempts be held at the same point so
+// their first content chunks contend for the crown; streaming/resume hold one mid-stream, after its first
+// chunk and before the rest. flush makes the script assert the transport's own contract on the writer it
+// was handed and flush per chunk, which is how a client learns a token arrived before the response is over.
 type hostScript struct {
 	arrive    chan<- uint64
 	release   <-chan struct{}
@@ -62,8 +63,6 @@ type hostScript struct {
 	resume    <-chan struct{}
 	receipt   bool
 	chunks    []string
-	// flush makes the script assert the transport's own contract on the writer it was handed and flush
-	// per chunk, which is how a client learns a token arrived before the response is over.
 	flush     bool
 	hold      bool
 	confirmed bool

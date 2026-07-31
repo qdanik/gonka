@@ -107,8 +107,11 @@ type escrowFixture struct {
 	opening       func()
 }
 
-func newEscrowFixture(t *testing.T, storageDir, escrowID, model string, index int, refusalTimeoutSeconds int64) *escrowFixture {
+func newEscrowFixture(t *testing.T, storageDir, escrowID, model string, index int, refusalTimeoutSeconds int64, balance uint64) *escrowFixture {
 	t.Helper()
+	if balance == 0 {
+		balance = e2eBalance
+	}
 	creator, err := signing.SignerFromHex(e2eCreatorKeys[index])
 	if err != nil {
 		t.Fatalf("SignerFromHex = %v, want nil", err)
@@ -138,7 +141,7 @@ func newEscrowFixture(t *testing.T, storageDir, escrowID, model string, index in
 		CreatorAddr:    creator.Address(),
 		Config:         sessionConfig,
 		Group:          group,
-		InitialBalance: e2eBalance,
+		InitialBalance: balance,
 	}); err != nil {
 		t.Fatalf("CreateSession = %v, want nil", err)
 	}
@@ -147,8 +150,8 @@ func newEscrowFixture(t *testing.T, storageDir, escrowID, model string, index in
 	clients := make([]user.HostClient, e2eHostCount)
 	participants := make([]string, e2eHostCount)
 	for slot := range signers {
-		hostStore := testutil.MustMemoryStore(t, escrowID, creator.Address(), sessionConfig, group, e2eBalance)
-		hostMachine, err := state.NewStateMachine(escrowID, sessionConfig, group, e2eBalance, creator.Address(), verifier, hostStore)
+		hostStore := testutil.MustMemoryStore(t, escrowID, creator.Address(), sessionConfig, group, balance)
+		hostMachine, err := state.NewStateMachine(escrowID, sessionConfig, group, balance, creator.Address(), verifier, hostStore)
 		if err != nil {
 			t.Fatalf("NewStateMachine(host %d) = %v, want nil", slot, err)
 		}
@@ -162,7 +165,7 @@ func newEscrowFixture(t *testing.T, storageDir, escrowID, model string, index in
 		participants[slot] = signers[slot].Address()
 	}
 
-	machine, err := state.NewStateMachine(escrowID, sessionConfig, group, e2eBalance, creator.Address(), verifier, sessionStore)
+	machine, err := state.NewStateMachine(escrowID, sessionConfig, group, balance, creator.Address(), verifier, sessionStore)
 	if err != nil {
 		t.Fatalf("NewStateMachine(session) = %v, want nil", err)
 	}
@@ -251,15 +254,16 @@ type e2eGateway struct {
 	stopped bool
 }
 
+// e2eOptions tunes one fixture. A set epochPhase starts the observer against a fake chain reporting it, so
+// admission is judged on a polled snapshot rather than one a test wrote in; a 0 balance takes e2eBalance.
 type e2eOptions struct {
-	escrows  []string
-	adminKey string
-	apiKeys  string
-	pocMode  string
-	// epochPhase makes the fake chain report a phase and starts the observer, so admission is judged on
-	// a snapshot the gateway polled rather than on one a test wrote into it.
+	escrows               []string
+	adminKey              string
+	apiKeys               string
+	pocMode               string
 	epochPhase            string
 	refusalTimeoutSeconds int64
+	balance               uint64
 	tune                  func(*config.Config)
 }
 
@@ -300,7 +304,7 @@ func bootGateway(t *testing.T, options e2eOptions) *e2eGateway {
 	fixtures := map[string]*escrowFixture{}
 	var participants []string
 	for index, escrowID := range options.escrows {
-		fixtures[escrowID] = newEscrowFixture(t, storageDir, escrowID, e2eModel, index, options.refusalTimeoutSeconds)
+		fixtures[escrowID] = newEscrowFixture(t, storageDir, escrowID, e2eModel, index, options.refusalTimeoutSeconds, options.balance)
 		participants = append(participants, fixtures[escrowID].participants...)
 	}
 

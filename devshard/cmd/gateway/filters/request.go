@@ -1,11 +1,13 @@
 package filters
 
-// Options carries NormalizeRequest's per-call configuration: admin bypass, token limits, routed model.
+// Options carries NormalizeRequest's per-call configuration. A set ModelTokenLimits overrides the global
+// token limits for the routed model, and a zero value it returns leaves the corresponding global one alone.
 type Options struct {
 	Admin            bool
 	DefaultMaxTokens uint64
 	MaxTokensCap     uint64
 	RoutedModel      string
+	ModelTokenLimits func(model string) (defaultMaxTokens, maxTokensCap uint64)
 }
 
 // Result is the normalized body plus the typed fields callers need without re-parsing it.
@@ -18,7 +20,6 @@ type Result struct {
 	N                   uint64
 }
 
-// NormalizeRequest is the package's public entry point.
 func NormalizeRequest(body []byte, options Options) (Result, error) {
 	document, err := ParseDocument(body)
 	if err != nil {

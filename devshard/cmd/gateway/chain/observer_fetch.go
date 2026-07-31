@@ -9,7 +9,6 @@ import (
 	"strings"
 )
 
-// epochInfo is the parsed /v1/epochs/latest response.
 type epochInfo struct {
 	BlockHeight                  int64
 	Phase                        EpochPhase
@@ -21,7 +20,6 @@ type epochInfo struct {
 	ConfirmationPoCTriggerHeight int64
 }
 
-// chainEpochInfoResponse is the raw /v1/epochs/latest JSON envelope.
 type chainEpochInfoResponse struct {
 	BlockHeight             jsonInt64                         `json:"block_height"`
 	Phase                   string                            `json:"phase"`
@@ -32,25 +30,21 @@ type chainEpochInfoResponse struct {
 	ActiveConfirmationPoC   *chainConfirmationPoCEventPayload `json:"active_confirmation_poc_event,omitempty"`
 }
 
-// chainLatestEpoch is the raw latest_epoch sub-object.
 type chainLatestEpoch struct {
 	Index               jsonUint64 `json:"index"`
 	PocStartBlockHeight jsonInt64  `json:"poc_start_block_height"`
 }
 
-// chainEpochStages is the raw epoch_stages/next_epoch_stages sub-object.
 type chainEpochStages struct {
 	SetNewValidators jsonInt64 `json:"set_new_validators"`
 	NextPoCStart     jsonInt64 `json:"next_poc_start"`
 }
 
-// chainConfirmationPoCEventPayload is the raw active_confirmation_poc_event sub-object.
 type chainConfirmationPoCEventPayload struct {
 	Phase         confirmationPoCPhaseValue `json:"phase"`
 	TriggerHeight jsonInt64                 `json:"trigger_height"`
 }
 
-// parseEpochInfo parses a /v1/epochs/latest response body into epochInfo.
 func parseEpochInfo(body []byte) (epochInfo, error) {
 	var payload chainEpochInfoResponse
 	if err := json.Unmarshal(body, &payload); err != nil {
@@ -86,16 +80,13 @@ func deriveEpochSwitchBlockHeight(payload chainEpochInfoResponse) int64 {
 	return int64(payload.LatestEpoch.PocStartBlockHeight)
 }
 
-// participantNode is one ML node's (model, weight) contribution for a participant.
 type participantNode struct {
 	Model  string
 	NodeID string
 	Weight float64
 }
 
-// participantsState is the parsed current-participants response keyed by gonka address: weights
-// (current/full, per-model), preserved/excluded sets, inference URLs, and the per-node data
-// backing the validation-capable merge.
+// participantsState is the parsed current-participants response, keyed throughout by gonka address.
 type participantsState struct {
 	Weights            map[string]float64
 	WeightsByModel     map[string]map[string]float64
@@ -108,17 +99,14 @@ type participantsState struct {
 	NodesByParticipant map[string][]participantNode
 }
 
-// chainCurrentParticipantsResponse is the raw /v1/epochs/current/participants JSON envelope.
 type chainCurrentParticipantsResponse struct {
 	ActiveParticipants chainActiveParticipantsGroup `json:"active_participants"`
 }
 
-// chainActiveParticipantsGroup is the raw active_participants sub-object.
 type chainActiveParticipantsGroup struct {
 	Participants []chainActiveParticipant `json:"participants"`
 }
 
-// chainActiveParticipant is one raw participant entry.
 type chainActiveParticipant struct {
 	Index        string              `json:"index"`
 	InferenceURL string              `json:"inference_url"`
@@ -131,7 +119,6 @@ type chainModelMLNodes struct {
 	MLNodes []chainMLNodeInfo `json:"ml_nodes"`
 }
 
-// chainMLNodeInfo is one raw ML node entry.
 type chainMLNodeInfo struct {
 	NodeID             string     `json:"node_id"`
 	TimeslotAllocation []bool     `json:"timeslot_allocation"`
@@ -222,7 +209,6 @@ func parseParticipants(body []byte, preservation preservationMode, preservedNode
 	return state, nil
 }
 
-// addModelWeights folds one participant's per-model weights into the model -> participant -> weight map.
 func addModelWeights(dst map[string]map[string]float64, key string, weights map[string]float64) {
 	for model, weight := range weights {
 		modelWeights := dst[model]
@@ -234,7 +220,6 @@ func addModelWeights(dst map[string]map[string]float64, key string, weights map[
 	}
 }
 
-// nodePreserved reports whether one ML node counts as preserved under the given rule.
 func nodePreserved(participantID, model string, node chainMLNodeInfo, preservation preservationMode, preservedNodes preservedSnapshotState) bool {
 	switch preservation {
 	case preservationModeAll:
@@ -246,7 +231,6 @@ func nodePreserved(participantID, model string, node chainMLNodeInfo, preservati
 	}
 }
 
-// participantModelAt returns the trimmed model name of one ml_nodes slot; empty when out of range.
 func participantModelAt(participant chainActiveParticipant, index int) string {
 	if index < 0 || index >= len(participant.Models) {
 		return ""
@@ -254,7 +238,6 @@ func participantModelAt(participant chainActiveParticipant, index int) string {
 	return strings.TrimSpace(participant.Models[index])
 }
 
-// modelNodePoCWeight sums PoCWeight over the preserved nodes of one model slot.
 func modelNodePoCWeight(participantID, model string, modelNodes chainModelMLNodes, preservation preservationMode, preservedNodes preservedSnapshotState) uint64 {
 	var weight uint64
 	for _, node := range modelNodes.MLNodes {
@@ -265,7 +248,6 @@ func modelNodePoCWeight(participantID, model string, modelNodes chainModelMLNode
 	return weight
 }
 
-// participantWeight sums preserved-node PoCWeight across all of a participant's model slots.
 func participantWeight(participant chainActiveParticipant, preservation preservationMode, preservedNodes preservedSnapshotState) float64 {
 	var weight uint64
 	for i, modelNodes := range participant.MLNodes {
@@ -274,7 +256,6 @@ func participantWeight(participant chainActiveParticipant, preservation preserva
 	return float64(weight)
 }
 
-// participantWeightsByModel is participantWeight split out per model slot.
 func participantWeightsByModel(participant chainActiveParticipant, preservation preservationMode, preservedNodes preservedSnapshotState) map[string]float64 {
 	weights := make(map[string]float64, len(participant.Models))
 	for i, rawModel := range participant.Models {
@@ -291,7 +272,6 @@ func participantWeightsByModel(participant chainActiveParticipant, preservation 
 	return weights
 }
 
-// participantHasPreservedNode reports whether any of a participant's ML nodes count as preserved.
 func participantHasPreservedNode(participant chainActiveParticipant, preservation preservationMode, preservedNodes preservedSnapshotState) bool {
 	if preservation == preservationModeAll {
 		return true
@@ -352,7 +332,6 @@ func extractParticipantNodes(participant chainActiveParticipant) []participantNo
 	return nodes
 }
 
-// cloneModelWeights deep-copies a model -> participant -> weight map.
 func cloneModelWeights(weights map[string]map[string]float64) map[string]map[string]float64 {
 	cloned := make(map[string]map[string]float64, len(weights))
 	for model, modelWeights := range weights {
@@ -363,8 +342,6 @@ func cloneModelWeights(weights map[string]map[string]float64) map[string]map[str
 	return cloned
 }
 
-// participantValidationInferenceWeights sums, per model and in total, the chain weight of a
-// participant's validation-inference-capable nodes.
 func participantValidationInferenceWeights(nodes []participantNode, miner string, capable func(miner, nodeID string) bool) (map[string]float64, float64) {
 	weights := map[string]float64{}
 	if capable == nil {
@@ -421,7 +398,6 @@ func mergePreservedWithValidationCapable(
 	return preserved, preservedByModel, currentWeights, currentWeightsByModel
 }
 
-// preservedSnapshotStatus reports whether a preserved-nodes snapshot parse yielded usable data for the requested anchor height.
 type preservedSnapshotStatus int
 
 const (
@@ -430,7 +406,6 @@ const (
 	preservedSnapshotMissingCurrent
 )
 
-// preservedSnapshotState indexes preserved node IDs by model then participant.
 type preservedSnapshotState struct {
 	byModel map[string]map[string]map[string]struct{}
 }
@@ -455,25 +430,21 @@ func (s preservedSnapshotState) Has(model, participantID, nodeID string) bool {
 	return ok
 }
 
-// chainPreservedNodesSnapshotResponse is the raw preserved-nodes-snapshot JSON envelope.
 type chainPreservedNodesSnapshotResponse struct {
 	Snapshot *chainPreservedNodesSnapshot `json:"snapshot,omitempty"`
 	Found    bool                         `json:"found"`
 }
 
-// chainPreservedNodesSnapshot is the raw snapshot sub-object.
 type chainPreservedNodesSnapshot struct {
 	EpisodeAnchorHeight jsonInt64                  `json:"episode_anchor_height"`
 	ModelPreservedNodes []chainModelPreservedNodes `json:"model_preserved_nodes"`
 }
 
-// chainModelPreservedNodes is one raw per-model preserved-participants entry.
 type chainModelPreservedNodes struct {
 	ModelID      string                           `json:"model_id"`
 	Participants []chainParticipantPreservedNodes `json:"participants"`
 }
 
-// chainParticipantPreservedNodes is one raw per-participant preserved-node-ID list.
 type chainParticipantPreservedNodes struct {
 	ParticipantID string   `json:"participant_id"`
 	NodeIDs       []string `json:"node_ids"`
@@ -495,7 +466,6 @@ func parsePreservedSnapshot(body []byte, expectedAnchor int64) (preservedSnapsho
 	return newPreservedSnapshotState(payload.Snapshot), preservedSnapshotCurrent, nil
 }
 
-// newPreservedSnapshotState indexes a decoded snapshot by model then participant then node ID.
 func newPreservedSnapshotState(snapshot *chainPreservedNodesSnapshot) preservedSnapshotState {
 	state := preservedSnapshotState{byModel: map[string]map[string]map[string]struct{}{}}
 	for _, modelNodes := range snapshot.ModelPreservedNodes {
@@ -539,7 +509,6 @@ type chainParamsResponse struct {
 	} `json:"params"`
 }
 
-// parseMaxNonce parses a chain params response body into devshard_escrow_params.max_nonce.
 func parseMaxNonce(body []byte) (uint64, error) {
 	var payload chainParamsResponse
 	if err := json.Unmarshal(body, &payload); err != nil {
@@ -607,7 +576,6 @@ func (p *confirmationPoCPhaseValue) UnmarshalJSON(data []byte) error {
 	return fmt.Errorf("unsupported confirmation PoC phase %s", string(data))
 }
 
-// parseFlexibleInt64 accepts either a JSON number or a numeric JSON string.
 func parseFlexibleInt64(data []byte) (int64, error) {
 	var asInt int64
 	if err := json.Unmarshal(data, &asInt); err == nil {
@@ -622,7 +590,6 @@ func parseFlexibleInt64(data []byte) (int64, error) {
 	return 0, fmt.Errorf("unsupported int64 value %s", string(data))
 }
 
-// parseFlexibleUint64 accepts either a JSON number or a numeric JSON string.
 func parseFlexibleUint64(data []byte) (uint64, error) {
 	var asUint uint64
 	if err := json.Unmarshal(data, &asUint); err == nil {

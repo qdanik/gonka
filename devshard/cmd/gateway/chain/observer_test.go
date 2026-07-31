@@ -560,8 +560,6 @@ func TestPhaseObserver_ParticipantsFetchErrorKeepsPreviousWeightsWithLastError(t
 	}
 }
 
-// TestPhaseObserver_DecodesMaxNonceFromDevshardEscrowParams covers the governance max_nonce fetch:
-// a successful params poll publishes it on the snapshot.
 func TestPhaseObserver_DecodesMaxNonceFromDevshardEscrowParams(t *testing.T) {
 	stub := newPhaseObserverStub()
 	server := httptest.NewServer(stub.handler())
@@ -907,7 +905,7 @@ func TestPhaseObserver_ValidationMergeAddsCapableExcludedMiner(t *testing.T) {
 		t.Fatalf("cold CurrentWeights[gonka1abc] = %v, want 0", cold.CurrentWeights["gonka1abc"])
 	}
 
-	observer.Versions().Poll(context.Background())
+	observer.versions.Poll(context.Background())
 	observer.refresh(context.Background())
 	merged := observer.Snapshot()
 
@@ -940,7 +938,7 @@ func TestPhaseObserver_ValidationMergeExcludesNonCapableNode(t *testing.T) {
 
 	observer := newPoCPhaseObserver(t, server, true)
 	observer.refresh(context.Background())
-	observer.Versions().Poll(context.Background())
+	observer.versions.Poll(context.Background())
 	observer.refresh(context.Background())
 	snapshot := observer.Snapshot()
 
@@ -967,7 +965,7 @@ func TestPhaseObserver_GenerationPhaseSkipsValidationMerge(t *testing.T) {
 
 	observer := newPoCPhaseObserver(t, server, true)
 	observer.refresh(context.Background())
-	observer.Versions().Poll(context.Background())
+	observer.versions.Poll(context.Background())
 	observer.refresh(context.Background())
 	snapshot := observer.Snapshot()
 

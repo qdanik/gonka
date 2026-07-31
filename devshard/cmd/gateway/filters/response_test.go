@@ -3,6 +3,7 @@ package filters
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -20,6 +21,22 @@ func readSSEFixture(t *testing.T, name string) []byte {
 	return data
 }
 
+// rewriteWholeStream drives one StreamRewriter over the whole stream and returns everything it
+// emits, so the fixtures assert against the rewriter production streams through.
+func rewriteWholeStream(t *testing.T, stream []byte) []byte {
+	t.Helper()
+	rewriter := NewStreamRewriter()
+	emitted, err := rewriter.Write(stream)
+	if err != nil {
+		t.Fatalf("Write() = %v", err)
+	}
+	final, err := rewriter.Close()
+	if err != nil {
+		t.Fatalf("Close() = %v", err)
+	}
+	return append(emitted, final...)
+}
+
 // splitCompleteEvents splits an SSE stream into its "\n\n"-terminated events, dropping the
 // trailing empty piece SplitAfter produces when the input ends on the separator.
 func splitCompleteEvents(t *testing.T, stream []byte) [][]byte {
@@ -33,8 +50,6 @@ func splitCompleteEvents(t *testing.T, stream []byte) [][]byte {
 	}
 	return events
 }
-
-// --- clientStrippedFields ---
 
 func TestClientStrippedFieldsExactList(t *testing.T) {
 	want := []string{
@@ -50,19 +65,48 @@ func TestClientStrippedFieldsExactList(t *testing.T) {
 	}
 }
 
-// --- pairing test: the design's point ---
+// forcedParameterNames derives the forced set from parameterTable itself by running every rule
+// against an empty document: only a force rule writes its own parameter with nothing to act on.
+func forcedParameterNames(t *testing.T) []string {
+	t.Helper()
+	var forced []string
+	for _, parameter := range parameterTable {
+		for _, rule := range parameter.Rules {
+			document, err := ParseDocument([]byte(`{}`))
+			if err != nil {
+				t.Fatalf("ParseDocument: %v", err)
+			}
+			if rule.Apply(RuleContext{Document: document, Param: parameter.Name}) != nil {
+				continue
+			}
+			if _, written := document.Get(parameter.Name); written {
+				forced = append(forced, parameter.Name)
+				break
+			}
+		}
+	}
+	return forced
+}
 
-// TestForcedRequestParametersHaveResponseStripCounterpart is the pairing test: every forced
-// request field must have a matching clientStrippedFields entry, so the two can't drift apart.
+// forcedParameterResponseField maps a forced request parameter to its response field, for the one
+// case where the names differ: return_token_ids (request) makes vLLM emit token_ids.
+var forcedParameterResponseField = map[string]string{
+	"return_token_ids": "token_ids",
+}
+
+// TestForcedRequestParametersHaveResponseStripCounterpart is the pairing test: every field
+// parameterTable forces on must have a matching clientStrippedFields entry, so a force rule added
+// without a strip counterpart leaks internal fields to the client.
 func TestForcedRequestParametersHaveResponseStripCounterpart(t *testing.T) {
 	stripped := make(map[string]bool, len(clientStrippedFields))
 	for _, field := range clientStrippedFields {
 		stripped[field] = true
 	}
-	if len(forcedParameterNames) == 0 {
-		t.Fatal("forcedParameterNames is empty; the pairing test would pass vacuously")
+	forced := forcedParameterNames(t)
+	if len(forced) == 0 {
+		t.Fatal("parameterTable declares no forced parameter; the pairing test would pass vacuously")
 	}
-	for _, name := range forcedParameterNames {
+	for _, name := range forced {
 		responseField := name
 		if mapped, ok := forcedParameterResponseField[name]; ok {
 			responseField = mapped
@@ -73,9 +117,7 @@ func TestForcedRequestParametersHaveResponseStripCounterpart(t *testing.T) {
 	}
 }
 
-// --- RewriteStreamChunk: fixtures with nothing to strip pass through byte-identical ---
-
-func TestRewriteStreamChunk_PureContentPassthrough(t *testing.T) {
+func TestStreamRewriterFixture_PureContentPassthrough(t *testing.T) {
 	tests := []string{
 		"content_stream.sse",
 		"tool_calls_stream.sse",
@@ -85,73 +127,69 @@ func TestRewriteStreamChunk_PureContentPassthrough(t *testing.T) {
 	for _, fixture := range tests {
 		t.Run(fixture, func(t *testing.T) {
 			input := readSSEFixture(t, fixture)
-			got := RewriteStreamChunk(input)
+			got := rewriteWholeStream(t, input)
 			if !bytes.Equal(got, input) {
-				t.Errorf("RewriteStreamChunk() = %q, want unchanged %q", got, input)
+				t.Errorf("rewritten stream = %q, want unchanged %q", got, input)
 			}
 		})
 	}
 }
 
-func TestRewriteStreamChunk_EmptyAndNilInput(t *testing.T) {
+func TestStreamRewriterFixture_EmptyAndNilInput(t *testing.T) {
 	for _, name := range []string{"nil", "empty"} {
 		t.Run(name, func(t *testing.T) {
 			var input []byte
 			if name == "empty" {
 				input = []byte{}
 			}
-			got := RewriteStreamChunk(input)
+			got := rewriteWholeStream(t, input)
 			if len(got) != 0 {
-				t.Errorf("RewriteStreamChunk() = %q, want empty", got)
+				t.Errorf("rewritten stream = %q, want empty", got)
 			}
 		})
 	}
 }
 
-func TestRewriteStreamChunk_DoneMarkerPreservedExactly(t *testing.T) {
+func TestStreamRewriterFixture_DoneMarkerPreservedExactly(t *testing.T) {
 	input := readSSEFixture(t, "logprobs_stream.sse")
-	got := RewriteStreamChunk(input)
+	got := rewriteWholeStream(t, input)
 	if !bytes.HasSuffix(got, []byte("data: [DONE]\n\n")) {
-		t.Errorf("RewriteStreamChunk() does not end with an unchanged [DONE] event: %q", got)
+		t.Errorf("rewritten stream does not end with an unchanged [DONE] event: %q", got)
 	}
 }
 
-// --- RewriteStreamChunk: field stripping is the point of the function ---
-
-func TestRewriteStreamChunk_StripsLogprobsFamily(t *testing.T) {
+func TestStreamRewriterFixture_StripsLogprobsFamily(t *testing.T) {
 	input := readSSEFixture(t, "logprobs_stream.sse")
-	got := RewriteStreamChunk(input)
+	got := rewriteWholeStream(t, input)
 	for _, field := range []string{`"logprobs"`, `"top_logprobs"`, `"logprob"`} {
 		if bytes.Contains(got, []byte(field)) {
-			t.Errorf("RewriteStreamChunk() output still contains %s: %q", field, got)
+			t.Errorf("rewritten stream output still contains %s: %q", field, got)
 		}
 	}
 	if !bytes.Contains(got, []byte(`"content":"ok"`)) {
-		t.Error("RewriteStreamChunk() dropped sibling content field it must preserve")
+		t.Error("rewritten stream dropped sibling content field it must preserve")
 	}
 	if !bytes.Contains(got, []byte(`"finish_reason":"stop"`)) {
-		t.Error("RewriteStreamChunk() dropped sibling finish_reason field it must preserve")
+		t.Error("rewritten stream dropped sibling finish_reason field it must preserve")
 	}
 }
 
-func TestRewriteStreamChunk_StripsTokenIdFamily(t *testing.T) {
+func TestStreamRewriterFixture_StripsTokenIdFamily(t *testing.T) {
 	input := readSSEFixture(t, "token_ids_stream.sse")
-	got := RewriteStreamChunk(input)
+	got := rewriteWholeStream(t, input)
 	for _, field := range []string{`"token_ids"`, `"prompt_token_ids"`, `"prompt_logprobs"`} {
 		if bytes.Contains(got, []byte(field)) {
-			t.Errorf("RewriteStreamChunk() output still contains %s: %q", field, got)
+			t.Errorf("rewritten stream output still contains %s: %q", field, got)
 		}
 	}
 	if !bytes.Contains(got, []byte(`"content":"ok"`)) {
-		t.Error("RewriteStreamChunk() dropped sibling content field it must preserve")
+		t.Error("rewritten stream dropped sibling content field it must preserve")
 	}
 }
 
-// --- RewriteStreamChunk: malformed / non-data lines pass through unchanged ---
-
-func TestRewriteStreamChunk_MalformedEventIsDroppedNotForwarded(t *testing.T) {
+func TestStreamRewriterFixture_MalformedEventIsDroppedNotForwarded(t *testing.T) {
 	input := readSSEFixture(t, "malformed_data_line.sse")
-	got := RewriteStreamChunk(input)
+	got := rewriteWholeStream(t, input)
 	if bytes.Contains(got, []byte(`"token":"ok","logprob"`)) {
 		t.Error("well-formed event's logprobs was not stripped")
 	}
@@ -166,9 +204,9 @@ func TestRewriteStreamChunk_MalformedEventIsDroppedNotForwarded(t *testing.T) {
 	}
 }
 
-func TestRewriteStreamChunk_CommentAndBlankLinesPassThrough(t *testing.T) {
+func TestStreamRewriterFixture_CommentAndBlankLinesPassThrough(t *testing.T) {
 	input := readSSEFixture(t, "comment_and_blank_lines.sse")
-	got := RewriteStreamChunk(input)
+	got := rewriteWholeStream(t, input)
 	if !bytes.HasPrefix(got, []byte(": keep-alive\n\n")) {
 		t.Errorf("comment line not preserved verbatim at head of output: %q", got)
 	}
@@ -180,9 +218,7 @@ func TestRewriteStreamChunk_CommentAndBlankLinesPassThrough(t *testing.T) {
 	}
 }
 
-// --- RewriteStreamChunk: chunk framing contract ---
-
-func TestRewriteStreamChunk_ChunkByChunkMatchesWholeStream(t *testing.T) {
+func TestStreamRewriterFixture_ChunkByChunkMatchesWholeStream(t *testing.T) {
 	fixtures := []string{
 		"content_stream.sse",
 		"tool_calls_stream.sse",
@@ -194,11 +230,21 @@ func TestRewriteStreamChunk_ChunkByChunkMatchesWholeStream(t *testing.T) {
 	for _, name := range fixtures {
 		t.Run(name, func(t *testing.T) {
 			input := readSSEFixture(t, name)
-			whole := RewriteStreamChunk(input)
+			whole := rewriteWholeStream(t, input)
+			rewriter := NewStreamRewriter()
 			var chunked bytes.Buffer
 			for _, event := range splitCompleteEvents(t, input) {
-				chunked.Write(RewriteStreamChunk(event))
+				emitted, err := rewriter.Write(event)
+				if err != nil {
+					t.Fatalf("Write() = %v", err)
+				}
+				chunked.Write(emitted)
 			}
+			final, err := rewriter.Close()
+			if err != nil {
+				t.Fatalf("Close() = %v", err)
+			}
+			chunked.Write(final)
 			if !bytes.Equal(whole, chunked.Bytes()) {
 				t.Errorf("chunk-by-chunk result differs from whole-stream result\n whole:   %q\n chunked: %q", whole, chunked.Bytes())
 			}
@@ -206,10 +252,9 @@ func TestRewriteStreamChunk_ChunkByChunkMatchesWholeStream(t *testing.T) {
 	}
 }
 
-// TestRewriteStreamChunk_TruncatedEventIsNotForwarded covers the stateless entry point fed a
-// half event: it must drop the fragment rather than emit the internal fields it still carries.
-// StreamRewriter is what reassembles such a split, see TestStreamRewriter_SplitFrameIsRewritten.
-func TestRewriteStreamChunk_TruncatedEventIsNotForwarded(t *testing.T) {
+// A stream ending mid-event must drop the fragment rather than emit the internal fields it still
+// carries, and must report the truncation so the response fails instead of completing short.
+func TestStreamRewriterFixture_TruncatedEventIsDroppedAndReported(t *testing.T) {
 	input := readSSEFixture(t, "logprobs_stream.sse")
 	events := splitCompleteEvents(t, input)
 	target := events[1]
@@ -218,14 +263,23 @@ func TestRewriteStreamChunk_TruncatedEventIsNotForwarded(t *testing.T) {
 		t.Fatalf("fixture no longer contains a mid-event top_logprobs split point")
 	}
 
-	got := RewriteStreamChunk(target[:splitAt])
+	rewriter := NewStreamRewriter()
+	emitted, err := rewriter.Write(target[:splitAt])
+	if err != nil {
+		t.Fatalf("Write() = %v", err)
+	}
+	if len(emitted) != 0 {
+		t.Errorf("truncated data event must be held, not emitted, got %q", emitted)
+	}
 
-	if len(got) != 0 {
-		t.Errorf("truncated data event must be dropped, got %q", got)
+	final, err := rewriter.Close()
+	if !errors.Is(err, ErrStreamTruncatedEvent) {
+		t.Errorf("Close() error = %v, want ErrStreamTruncatedEvent", err)
+	}
+	if len(final) != 0 {
+		t.Errorf("truncated data event must be dropped, got %q", final)
 	}
 }
-
-// --- StripResponseBody ---
 
 func TestStripResponseBody_RemovesAllInternalFieldsAtAnyDepth(t *testing.T) {
 	body := []byte(`{
@@ -305,8 +359,6 @@ func TestStripResponseBody_NullValuedFieldAlsoStripped(t *testing.T) {
 	}
 }
 
-// --- IsCacheableUpstreamError ---
-
 func TestIsCacheableUpstreamError(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -338,8 +390,6 @@ func TestIsCacheableUpstreamError(t *testing.T) {
 	}
 }
 
-// TestIsCacheableUpstreamError_EveryMarkerExcludes is table-driven over every entry in
-// nonCacheableErrorMarkers, proving each is individually caught in message, type, and code.
 func TestIsCacheableUpstreamError_EveryMarkerExcludes(t *testing.T) {
 	for _, marker := range nonCacheableErrorMarkers {
 		t.Run("marker in message: "+marker, func(t *testing.T) {
@@ -362,8 +412,6 @@ func TestIsCacheableUpstreamError_EveryMarkerExcludes(t *testing.T) {
 		})
 	}
 }
-
-// --- IsCacheableResponse / HasNonCacheableError ---
 
 func TestIsCacheableResponseCoversSuccessesAndSSEEmbeddedFailures(t *testing.T) {
 	tests := []struct {

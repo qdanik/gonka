@@ -15,24 +15,24 @@ import (
 // replaced as they deplete, so actors that never retired would accumulate one dead session each.
 const idleDispatcherGrace = 5 * time.Minute
 
-// Deps wires the runtime facts routing reads. Escrows, Capacity, Limiter, Perf, Snapshots and Config
-// are required; Observer, Now and SubmitBuffer fall back to a no-op, the wall clock, and the actor's
-// default queue depth.
+// Deps wires the runtime facts routing reads. Everything is required except Observer, Now, SubmitBuffer and
+// OnNonceExhausted, which fall back to a no-op, the wall clock, the actor's default queue depth, and no
+// notification -- the last of which is how the rotation lifecycle learns to replace a spent escrow.
 type Deps struct {
-	Escrows      escrowSource
-	Capacity     escrowWeights
-	Limiter      hostLimiter
-	Perf         hostCapability
-	Snapshots    snapshotSource
-	Config       *config.Holder
-	Observer     dispatchObserver
-	Now          func() time.Time
-	SubmitBuffer int
-	// OnNonceExhausted reports an escrow declined because its nonce budget is spent, so the rotation
-	// lifecycle can schedule a replacement. Optional; nil disables the notification.
+	Escrows          escrowSource
+	Capacity         escrowWeights
+	Limiter          hostLimiter
+	Perf             hostCapability
+	Snapshots        snapshotSource
+	Config           *config.Holder
+	Observer         dispatchObserver
+	Now              func() time.Time
+	SubmitBuffer     int
 	OnNonceExhausted func(escrowID string)
 }
 
+// Scheduler owns one actor per escrow. tieBreak is a single counter shared across every model and tie-set
+// shape: a pseudo-round-robin over whichever tie set exists right now, not a fair per-model rotation.
 type Scheduler struct {
 	escrows          escrowSource
 	capacity         escrowWeights
@@ -46,8 +46,6 @@ type Scheduler struct {
 	submitBuffer     int
 	onNonceExhausted func(escrowID string)
 
-	// tieBreak is one counter shared across every model and tie-set shape: a pseudo-round-robin over
-	// whichever tie set exists right now, not a fair per-model rotation.
 	tieBreak atomic.Int64
 
 	registryMu  sync.Mutex
@@ -122,6 +120,7 @@ func (s *Scheduler) Pick(ctx context.Context, profile RequestProfile) (Assignmen
 
 func (s *Scheduler) dropAssignment(assignment Assignment, model string) {
 	s.limiter.Release(assignment.Host, model)
+	assignment.ReleaseEscrow()
 	if s.observer != nil {
 		s.observer.GhostBurned(assignment.Escrow, ghostAbandoned.reason())
 	}
@@ -175,6 +174,7 @@ func (s *Scheduler) dispatcherFor(escrow Escrow) (*dispatcher, error) {
 			predicates:   s.predicates(escrow),
 			acquireSlot:  s.acquireSlot(escrow),
 			releaseSlot:  s.releaseSlot(escrow),
+			holdEscrow:   escrow.Hold,
 			observer:     s.observer,
 			now:          s.now,
 			stale:        s.holdGrace(),
@@ -263,25 +263,35 @@ func pocPreserved(snapshot chain.PhaseSnapshot, model string) func(string) bool 
 	return func(participant string) bool { return loaded[participant] }
 }
 
-// RequestProfile describes one request, or one escalation attempt within the same request.
+// RequestProfile is one request as routing reads it; an empty Escrow picks one, a set Escrow is an
+// escalation reusing the pinned one. Params is forwarded to session.Advance unread and committed there as
+// the escrow's inference params, so it must be exactly devshard/user.InferenceParams -- not the request
+// body it was built from, which the adapter cannot commit and will reject.
 type RequestProfile struct {
 	Model         string
-	Escrow        string // pinned escrow for escalation; "" = pick one
+	Escrow        string
 	InputTokens   int
 	RequiresTools bool
 	ContextHint   uint64
-	Exclude       []string // participant keys already raced for this request
-	// Params is forwarded to session.Advance unread. The far end commits it as the escrow's inference
-	// params, so it must be exactly devshard/user.InferenceParams -- not the request body it was
-	// built from, which the adapter cannot commit and will reject.
-	Params       any
-	AffinityHint *AffinityHint
+	Exclude       []string
+	Params        any
 }
 
+// Assignment is a committed nonce ready to spend. EscrowHold gives back the escrow's in-flight count the
+// commit took; it is idempotent, and nil when the escrow source counts nothing.
 type Assignment struct {
-	Escrow string
-	Host   string
-	Nonce  Prepared
+	Escrow     string
+	Host       string
+	Nonce      Prepared
+	EscrowHold func()
+}
+
+// ReleaseEscrow gives the hold back. A caller that has taken its own hold on the escrow calls this as
+// soon as it has one; a caller that never dispatches calls it instead of dispatching.
+func (a Assignment) ReleaseEscrow() {
+	if a.EscrowHold != nil {
+		a.EscrowHold()
+	}
 }
 
 // escrowSource is the candidate-escrow registry; api wires it over the live runtime map.
@@ -291,11 +301,15 @@ type escrowSource interface {
 	Candidates(model string) []Escrow
 }
 
+// Escrow is one candidate. ActiveUsers is the in-flight user request count the W(e) load score reads. Hold
+// counts one in-flight request against the escrow and yields its release; it is taken with the nonce commit
+// and refused once the escrow has been retired, and a nil Hold counts nothing.
 type Escrow struct {
 	ID          string
 	Model       string
 	Session     session
-	ActiveUsers int // in-flight user requests, for the W(e) load score
+	ActiveUsers int
+	Hold        func() (release func(), ok bool)
 }
 
 // NonceIntent is what the scheduler tells a session to do with the nonce it is offering. The
@@ -319,10 +333,12 @@ type session interface {
 	LatestNonce() uint64       // for the nonce-cap gate
 }
 
+// HostBinding is the nonce the session is offering and the host it is bound to; Participant is that host's
+// participant key, deduped across the slots one validator holds.
 type HostBinding struct {
 	Nonce       uint64
 	HostIdx     int
-	Participant string // participant key for HostIdx (slot-deduped)
+	Participant string
 }
 
 // Prepared is a committed nonce ready for dispatch. *user.PreparedInference already satisfies this
