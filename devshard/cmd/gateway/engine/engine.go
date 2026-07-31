@@ -28,7 +28,6 @@ const crownDenialStrikes = 3
 type hostTracker interface {
 	hostPerf
 	RecordSample(sample perf.Sample)
-	RecordFirstToken(model string, inputTokens uint64, firstTokenMs float64)
 }
 
 // hostWindows is satisfied by *limits.ParticipantLimiter. Acquire is absent on purpose: the scheduler
@@ -49,12 +48,21 @@ type raceLedger interface {
 	RecordRequest(outcome RaceOutcome)
 }
 
+// escrowLifecycle receives the escrow facts a race observed but must not act on. It is called on the
+// response path, so an implementation must mark and return rather than reach the chain.
+type escrowLifecycle interface {
+	OnEscrowMissing(escrowID string)
+}
+
 // escrowTargets is the dispatch boundary main wires. Resolving a target also takes the escrow's
 // in-flight hold, which must outlive the race: the vote its nonces owe is posted after Run returns.
 type escrowTargets interface {
 	Target(escrowID string) (target DispatchTarget, release func(), ok bool)
 }
 
+// Deps is what an engine is wired to. Timeouts is resolved per race rather than held, because escrows
+// rotate, and it is handed the params because the vote must carry the prompt the committed record keeps
+// only as a hash. Suspicious reports the operator's manual never-trust-this-host pins.
 type Deps struct {
 	Picker    picker
 	Targets   escrowTargets
@@ -64,40 +72,37 @@ type Deps struct {
 	Config    *config.Holder
 	Metrics   raceMetrics
 	Ledger    raceLedger
+	Lifecycle escrowLifecycle
 
-	// Suspicious reports the operator's manual never-trust-this-host pins.
 	Suspicious func(participant string) bool
 
-	// Timeouts yields the vote poster for one escrow and the dispatch payload its race committed;
-	// escrows rotate, so it is resolved per race rather than held. The payload is passed because the
-	// vote must carry the prompt, which the committed record keeps only as a hash.
 	Timeouts func(escrowID string, params any) (TimeoutPoster, bool)
 
 	Now   func() time.Time
 	Timer func() raceTimer
 }
 
-// Request describes one chat-completions request.
+// Request is one client request as a race sees it. A set Escrow fails rather than falling back once it no
+// longer serves the model. Params is never read here: it reaches scheduler.RequestProfile.Params and the
+// Timeouts hook unchanged, and both ends require the concrete devshard/user.InferenceParams the escrow
+// commits. OnEscrow fires once the escrow is settled on, the last moment a header can still be set.
 type Request struct {
-	RequestID string
-	Model     string
-	// Escrow, when set, fails rather than falling back if it no longer serves the model.
+	RequestID     string
+	Model         string
 	Escrow        string
 	InputTokens   uint64
 	Stream        bool
 	RequiresTools bool
 	ContextHint   uint64
 
-	// Params is built by the caller and never read here. It reaches scheduler.RequestProfile.Params
-	// and the Timeouts hook unchanged, and both ends require the concrete devshard/user.InferenceParams
-	// the escrow commits -- not the request body it was built from.
 	Params any
 
-	// OnEscrow fires once the escrow is settled on, which is before any byte reaches the client and is
-	// therefore the last moment a response header can still be set.
 	OnEscrow func(escrowID string)
 }
 
+// Engine admits races and is the barrier that outlives them: tracked counts the races whose vote has not
+// been posted, registered under mu before a race starts and released only once its vote is settled, so no
+// nonce can ever be observed as nobody's.
 type Engine struct {
 	deps  Deps
 	carry *carryBudget
@@ -105,8 +110,6 @@ type Engine struct {
 
 	mu      sync.Mutex
 	stopped bool
-	// tracked counts the races whose vote has not been posted yet. A race is registered under mu before
-	// it starts and released only once its vote is settled, so no nonce can be observed as nobody's.
 	tracked sync.WaitGroup
 }
 
@@ -177,10 +180,20 @@ type raceRegistration struct {
 	escrowHold func()
 }
 
+// holdEscrow keeps the first hold for as long as the race's vote is owed. Every hold a race is offered
+// counts the same escrow, so a later one goes straight back rather than displacing the one being kept.
 func (r *raceRegistration) holdEscrow(release func()) {
+	if release == nil {
+		return
+	}
 	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.escrowHold = release
+	if r.escrowHold == nil && !r.released.Load() {
+		r.escrowHold, release = release, nil
+	}
+	r.mu.Unlock()
+	if release != nil {
+		release()
+	}
 }
 
 func (r *raceRegistration) release() {
@@ -226,6 +239,7 @@ func (e *Engine) raceDeps(settings *config.Config, request Request, registration
 		Classify:     e.classify(request.Model),
 		Now:          e.deps.Now,
 		Timer:        e.deps.Timer,
+		Hold:         registration.holdEscrow,
 		Report:       func(outcome RaceOutcome) { e.record(outcome, request.Params, registration) },
 	}
 }
@@ -261,9 +275,6 @@ func (e *Engine) record(outcome RaceOutcome, params any, registration *raceRegis
 	for _, attempt := range outcome.Attempts {
 		if sample, exemption := outcome.Sample(attempt); exemption == SampleRecorded {
 			e.deps.Perf.RecordSample(sample)
-			if firstTokenMs := firstTokenLatencyMs(attempt); firstTokenMs > 0 {
-				e.deps.Perf.RecordFirstToken(outcome.Model, outcome.InputTokens, firstTokenMs)
-			}
 		}
 		if verdict, moves := outcome.Verdict(attempt); moves {
 			e.deps.Windows.OnResult(attempt.Participant, outcome.Model, verdict)
@@ -271,6 +282,10 @@ func (e *Engine) record(outcome RaceOutcome, params any, registration *raceRegis
 	}
 	if e.deps.Metrics != nil {
 		e.deps.Metrics.RecordRace(outcome)
+	}
+	// Marked before the row is queued, so an observer that has seen the row has also seen the mark.
+	if e.deps.Lifecycle != nil && outcome.Lifecycle.EscrowMissing && outcome.EscrowID != "" {
+		e.deps.Lifecycle.OnEscrowMissing(outcome.EscrowID)
 	}
 	if e.deps.Ledger != nil {
 		e.deps.Ledger.RecordRequest(outcome)
@@ -299,13 +314,6 @@ func (e *Engine) settle(outcome RaceOutcome, params any, registration *raceRegis
 			}
 		}
 	}()
-}
-
-func firstTokenLatencyMs(a AttemptOutcome) float64 {
-	if a.SendTime.IsZero() || a.FirstToken.IsZero() {
-		return 0
-	}
-	return float64(a.FirstToken.Sub(a.SendTime).Milliseconds())
 }
 
 func (o RaceOutcome) failure() error {

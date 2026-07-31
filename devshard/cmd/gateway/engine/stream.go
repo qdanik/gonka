@@ -24,15 +24,15 @@ type crownRequest struct {
 	Reply chan<- streamVerdict
 }
 
+// winnerWriter is one attempt's claim on the client stream. client is the only path to the client anywhere
+// in the writer and withheld is the only source it is ever assigned from, so a losing attempt has no
+// reachable sink at all rather than a sink guarded by a branch somebody must remember to write.
 type winnerWriter struct {
 	nonce    uint64
 	crown    chan<- crownRequest
 	reply    chan streamVerdict
 	raceDone <-chan struct{}
 
-	// client is the only path to the client anywhere in the writer, and withheld is the only source
-	// it is ever assigned from. A losing attempt therefore has no reachable sink at all, rather than
-	// a sink guarded by a branch somebody must remember to write.
 	client   io.Writer
 	withheld io.Writer
 

@@ -157,9 +157,6 @@ func TestSendDispatchesThenAppliesTheReply(t *testing.T) {
 	if !response.Confirmed() {
 		t.Error("Confirmed() = false, want true for a reply carrying a ConfirmedAt")
 	}
-	if got, want := response.StreamBytes(), int64(4096); got != want {
-		t.Errorf("StreamBytes() = %d, want %d", got, want)
-	}
 }
 
 func TestSendAppliesEveryReplyTheHostProduced(t *testing.T) {
@@ -389,7 +386,7 @@ func TestSendLeavesTheClientWriterFlushable(t *testing.T) {
 	target := escrowTarget{session: session}
 	sink := &clientSink{}
 
-	response, err := target.Send(context.Background(), prepared, sink, nil)
+	_, err := target.Send(context.Background(), prepared, sink, nil)
 
 	if err != nil {
 		t.Fatalf("Send = %v, want nil", err)
@@ -402,9 +399,6 @@ func TestSendLeavesTheClientWriterFlushable(t *testing.T) {
 	}
 	if got, want := string(sink.written), upstream.line; got != want {
 		t.Errorf("bytes reaching the client = %q, want %q", got, want)
-	}
-	if got, want := response.StreamBytes(), int64(len(upstream.line)); got != want {
-		t.Errorf("StreamBytes() = %d, want %d", got, want)
 	}
 }
 

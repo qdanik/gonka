@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"strconv"
 	"testing"
+
+	"devshard/cmd/gateway/filters"
 )
 
 func newTestClassifier(model string, overflow func()) *sseClassifier {
@@ -54,20 +56,18 @@ func TestClassifierMapsOneChunkToItsFacts(t *testing.T) {
 				ErrorMessage:      vllmContextTotalMessage,
 				ErrorPayload:      `{"error":{"code":400,"message":"` + vllmContextTotalMessage + `","type":"BadRequestError"}}`,
 				CapabilityRefused: true,
-				ContextLimit:      40960,
 			},
 		},
 		{
 			name:  "tool_refusal_is_retriable_not_an_error_chunk",
 			model: qwenModel,
-			chunk: `data: {"object":"error","message":"` + toolChoiceUnsupportedPhrase + `","type":"BadRequestError"}` + "\n\n",
+			chunk: `data: {"object":"error","message":"` + filters.ToolChoiceUnsupportedMessage + `","type":"BadRequestError"}` + "\n\n",
 			want: chunkFacts{
 				ErrorSource:       "error.BadRequestError",
 				ErrorType:         "BadRequestError",
-				ErrorMessage:      toolChoiceUnsupportedPhrase,
-				ErrorPayload:      `{"object":"error","message":"` + toolChoiceUnsupportedPhrase + `","type":"BadRequestError"}`,
+				ErrorMessage:      filters.ToolChoiceUnsupportedMessage,
+				ErrorPayload:      `{"object":"error","message":"` + filters.ToolChoiceUnsupportedMessage + `","type":"BadRequestError"}`,
 				CapabilityRefused: true,
-				ToolsUnsupported:  true,
 			},
 		},
 		{

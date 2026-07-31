@@ -1,14 +1,9 @@
 package engine
 
 import (
-	"strconv"
 	"strings"
-)
 
-const (
-	toolChoiceUnsupportedPhrase = "tool choice requires --enable-auto-tool-choice and --tool-call-parser to be set"
-	contextLimitPhrase          = "maximum context length is "
-	contextRequestedPhrase      = "for a total of at least "
+	"devshard/cmd/gateway/filters"
 )
 
 type CapabilitySignal struct {
@@ -24,13 +19,11 @@ func (s CapabilitySignal) Retriable() bool {
 }
 
 func ParseCapabilityError(message string) CapabilitySignal {
-	if strings.Contains(message, toolChoiceUnsupportedPhrase) {
+	if strings.Contains(message, filters.ToolChoiceUnsupportedMessage) {
 		return CapabilitySignal{ToolsUnsupported: true}
 	}
-	return CapabilitySignal{
-		ContextLimit:     uintAfterPhrase(message, contextLimitPhrase),
-		ContextRequested: uintAfterPhrase(message, contextRequestedPhrase),
-	}
+	contextLimit, contextRequested := filters.CapabilityLimits(message)
+	return CapabilitySignal{ContextLimit: contextLimit, ContextRequested: contextRequested}
 }
 
 func CapabilityOf(a AttemptOutcome) CapabilitySignal {
@@ -64,27 +57,4 @@ func GrowContextHint(hint uint64, signal CapabilitySignal) uint64 {
 		return signal.ContextRequested
 	}
 	return hint
-}
-
-// Both the search and the slice run on the lowered copy: lowercasing can shorten a string (U+212A
-// lowers to a one-byte k), and an index taken from one string but applied to the other lands mid-word.
-func uintAfterPhrase(message, phrase string) uint64 {
-	lowered := strings.ToLower(message)
-	_, after, ok := strings.Cut(lowered, phrase)
-	if !ok {
-		return 0
-	}
-	digits := after
-	end := strings.IndexFunc(digits, func(r rune) bool { return r < '0' || r > '9' })
-	if end < 0 {
-		end = len(digits)
-	}
-	if end == 0 {
-		return 0
-	}
-	parsed, err := strconv.ParseUint(digits[:end], 10, 64)
-	if err != nil {
-		return 0
-	}
-	return parsed
 }

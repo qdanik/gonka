@@ -7,12 +7,8 @@ import (
 )
 
 const (
-	outcomeSuccess = "success"
-	outcomeFailed  = "failed"
+	// The request-level "failure" has no engine counterpart: attempts report failed, requests failure.
 	outcomeFailure = "failure"
-
-	visibilityWinner   = "user_visible_winner"
-	visibilityNoWinner = "no_winner"
 
 	pathKindInference = "inference"
 	// statusNoCode is legacy's label for an attempt that failed without an upstream status.
@@ -25,9 +21,6 @@ const (
 	reasonNoAttempts       = "no_attempts"
 	reasonEscrowMissing    = "escrow_missing"
 	reasonBalanceExhausted = "balance_exhausted"
-
-	timeoutActionCompleted = "completed"
-	timeoutActionFailed    = "failed"
 )
 
 var latencyBuckets = prometheus.ExponentialBuckets(0.01, 2, 12)
@@ -156,7 +149,7 @@ func (r *RaceRecorder) RecordRace(outcome engine.RaceOutcome) {
 		}
 		r.attemptsTerminal.WithLabelValues(participant, model, role, labels.Outcome, labels.Visibility).Inc()
 
-		if labels.Outcome == outcomeFailed {
+		if labels.Outcome == engine.AttemptOutcomeFailed {
 			reason := metricLabel(labels.Reason, labelUnknown)
 			r.attemptFailures.WithLabelValues(participant, model, role, reason, labels.Visibility).Inc()
 			if status, upstream := transportStatus(attempt.Terminal); upstream {
@@ -167,9 +160,9 @@ func (r *RaceRecorder) RecordRace(outcome engine.RaceOutcome) {
 			}
 		}
 		switch labels.Visibility {
-		case visibilityWinner:
+		case engine.VisibilityWinner:
 			r.userVisibleWins.WithLabelValues(participant, model).Inc()
-		case visibilityNoWinner:
+		case engine.VisibilityNoWinner:
 			r.noWinnerAttempts.WithLabelValues(participant, model, metricLabel(labels.Reason, labelUnknown)).Inc()
 		}
 		r.observeAttemptLatency(participant, model, outcome.InputTokens, attempt)
@@ -180,7 +173,7 @@ func (r *RaceRecorder) RecordRace(outcome engine.RaceOutcome) {
 
 func (r *RaceRecorder) recordRequest(model string, outcome engine.RaceOutcome, firstFailure string) {
 	if outcome.Succeeded {
-		r.requests.WithLabelValues(model, outcomeSuccess, reasonNone).Inc()
+		r.requests.WithLabelValues(model, engine.AttemptOutcomeSuccess, reasonNone).Inc()
 		if firstFailure != "" {
 			r.hiddenFailures.WithLabelValues(model, hiddenFailureSeverity, firstFailure).Inc()
 		}
@@ -246,7 +239,7 @@ func (r *RaceRecorder) RecordTimeout(event engine.TimeoutEvent) {
 	r.timeoutActions.WithLabelValues(
 		participant, model, metricLabel(event.Kind, labelUnknown), metricLabel(event.Action, labelUnknown), reason,
 	).Inc()
-	if event.Action == timeoutActionCompleted || event.Action == timeoutActionFailed {
+	if event.Action == engine.TimeoutActionCompleted || event.Action == engine.TimeoutActionFailed {
 		r.inferenceTimeouts.WithLabelValues(reason).Inc()
 	}
 }

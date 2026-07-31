@@ -19,6 +19,7 @@ type escrowEntry struct {
 	slots    map[string]int
 	stream   nonceStream
 	inFlight atomic.Int64
+	hold     func() (func(), bool)
 }
 
 func newEscrowEntry(escrowID, model string, session EscrowSession, now func() time.Time) *escrowEntry {

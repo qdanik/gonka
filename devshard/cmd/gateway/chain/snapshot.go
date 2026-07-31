@@ -31,30 +31,27 @@ const (
 	BlockReasonConfirmationPoC BlockReason = "confirmation_poc"
 )
 
-// PhaseSnapshot is an immutable, published view of chain phase and participant
-// state. The observer derives and publishes raw inputs only; subscribers derive
-// scale, admission, and policy from them.
+// PhaseSnapshot is an immutable, published view of chain phase and participant state. The observer folds
+// raw inputs only: RequestsBlocked mirrors rawPoCBlockingState as-is, and relaxed mode overrides it at the
+// admission boundary. A nil Preserved means not loaded, so everyone counts as preserved; a 0 MaxNonce means
+// not yet fetched, so the nonce cap is disabled rather than escrows deactivated on missing data.
 type PhaseSnapshot struct {
 	BlockHeight            int64
 	EpochSwitchBlockHeight int64
 	EpochIndex             uint64
 	EpochPhase             EpochPhase
 	ConfirmationPoCPhase   ConfirmationPoCPhase
-	// RequestsBlocked mirrors rawPoCBlockingState as-is; relaxed-mode overrides
-	// are applied at the admission boundary, not by this observer.
-	RequestsBlocked bool
-	BlockReason     BlockReason
+	RequestsBlocked        bool
+	BlockReason            BlockReason
 
-	CurrentWeights        map[string]float64 // participant addr -> weight; preservation-filtered, validation-capable-merged during PoC validation
-	FullWeights           map[string]float64 // participant addr -> steady-state weight
+	CurrentWeights        map[string]float64
+	FullWeights           map[string]float64
 	CurrentWeightsByModel map[string]map[string]float64
 	FullWeightsByModel    map[string]map[string]float64
-	Preserved             []string // PoC-preserved participant addrs; nil = not loaded, treat all preserved
+	Preserved             []string
 	PreservedByModel      map[string][]string
-	InferenceURLs         map[string]string // participant addr -> dapi base URL
+	InferenceURLs         map[string]string
 
-	// MaxNonce is devshard_escrow_params.max_nonce; 0 means not yet fetched, so the scheduler must
-	// treat the nonce cap as disabled rather than deactivating escrows on missing data.
 	MaxNonce uint64
 
 	LastUpdatedAt time.Time
@@ -75,7 +72,6 @@ func rawPoCBlockingState(epochPhase EpochPhase, confirmationPhase ConfirmationPo
 	return false, BlockReasonNone
 }
 
-// rawPoCValidationState reports whether the raw chain phase is a PoC validation stage.
 func rawPoCValidationState(epochPhase EpochPhase, confirmationPhase ConfirmationPoCPhase) bool {
 	switch epochPhase {
 	case EpochPhasePoCValidate, EpochPhasePoCValidateWindDown:

@@ -9,11 +9,13 @@ import (
 	"devshard/cmd/gateway/chain"
 	"devshard/cmd/gateway/config"
 	"devshard/cmd/gateway/scheduler"
+	"devshard/types"
 )
 
+// RolePrimary and RoleSpeculative are the attempt role label values.
 const (
-	rolePrimary     = "primary"
-	roleSpeculative = "speculative"
+	RolePrimary     = "primary"
+	RoleSpeculative = "speculative"
 )
 
 // eventBuffer keeps a host's chunk progress from parking its goroutine between the coordinator's
@@ -66,6 +68,9 @@ type raceTimer interface {
 	Fired() <-chan time.Time
 }
 
+// raceDeps is what one coordinator is wired to. Hold parks an escrow hold on the race, given back only
+// once the race's vote is posted; Report receives the race's single outcome from whichever goroutine ends
+// the race, which is not always the one that called runRace.
 type raceDeps struct {
 	Picker       picker
 	Targets      targets
@@ -80,8 +85,8 @@ type raceDeps struct {
 	Now          func() time.Time
 	Timer        func() raceTimer
 
-	// Report receives the race's single outcome, from whichever goroutine ends the race — which is not
-	// always the one that called runRace.
+	Hold func(release func())
+
 	Report func(RaceOutcome)
 }
 
@@ -258,15 +263,16 @@ type raceCoordinator struct {
 	byNonce  map[uint64]*liveAttempt
 	scratch  []EscalationAttempt
 
-	winner       *liveAttempt
-	pending      int
-	excluded     []string
-	contextHint  uint64
-	clientGoneAt time.Time
-	cancelled    bool
-	handedOff    bool
-	pocBypass    bool
-	startErr     error
+	winner           *liveAttempt
+	pending          int
+	excluded         []string
+	contextHint      uint64
+	clientGoneAt     time.Time
+	cancelled        bool
+	handedOff        bool
+	pocBypass        bool
+	balanceExhausted bool
+	startErr         error
 }
 
 // raceExit is why await stopped. Only exitComplete means the race is over; the other two hand a race
@@ -353,23 +359,27 @@ func (c *raceCoordinator) begin() error {
 
 	plan := c.deps.Policy.Decide(c.budget, c.denied(assignment.Host))
 	c.decision = plan.Reason
-	c.launch(assignment, rolePrimary, plan.Reason)
+	c.launch(assignment, RolePrimary, plan.Reason)
 	for len(c.attempts) < plan.ImmediateAttempts && len(c.attempts) < c.budget {
 		extra, err := c.pick(c.drain.race)
 		if err != nil {
 			break
 		}
-		c.launch(extra, roleSpeculative, plan.Reason)
+		c.launch(extra, RoleSpeculative, plan.Reason)
 	}
 	return nil
 }
 
 // strand accounts for an assignment no attempt can spend: the scheduler committed its nonce and took
 // its host slot in the step that produced it, so the slot goes back here and the nonce is left for the
-// timeout vote rather than pinned for the process's life.
+// timeout vote rather than pinned for the process's life. Its escrow hold is kept instead of returned:
+// the escrow being retired is why there is no target, and the vote still has to reach it.
 func (c *raceCoordinator) strand(assignment scheduler.Assignment) {
 	c.escrowID = assignment.Escrow
 	c.deps.Limiter.Release(assignment.Host, c.request.Model)
+	if c.deps.Hold != nil {
+		c.deps.Hold(assignment.EscrowHold)
+	}
 	c.attempts = append(c.attempts, &liveAttempt{
 		nonce:       assignment.Nonce.Nonce(),
 		hostIdx:     assignment.Nonce.HostIdx(),
@@ -379,7 +389,7 @@ func (c *raceCoordinator) strand(assignment scheduler.Assignment) {
 			Participant: assignment.Host,
 			HostIdx:     assignment.Nonce.HostIdx(),
 			Nonce:       assignment.Nonce.Nonce(),
-			Role:        rolePrimary,
+			Role:        RolePrimary,
 			Terminal:    TerminalNoReceipt,
 		},
 	})
@@ -569,7 +579,7 @@ func (c *raceCoordinator) escalate(armed ArmedEscalation) {
 		c.startErr = err
 		return
 	}
-	c.launch(assignment, roleSpeculative, confirmed.Stage.Reason())
+	c.launch(assignment, RoleSpeculative, confirmed.Stage.Reason())
 }
 
 func (c *raceCoordinator) markStalls() {
@@ -592,7 +602,16 @@ func (c *raceCoordinator) cancelAll() {
 }
 
 func (c *raceCoordinator) pick(ctx context.Context) (scheduler.Assignment, error) {
-	return c.deps.Picker.Pick(ctx, c.requestProfile())
+	return c.observePick(c.deps.Picker.Pick(ctx, c.requestProfile()))
+}
+
+// observePick latches the out-of-funds fact a declined nonce carries. The balance is spent composing
+// the diff, so no host reports it and no attempt is ever started against an escrow that ran dry.
+func (c *raceCoordinator) observePick(assignment scheduler.Assignment, err error) (scheduler.Assignment, error) {
+	if errors.Is(err, types.ErrInsufficientBalance) {
+		c.balanceExhausted = true
+	}
+	return assignment, err
 }
 
 func (c *raceCoordinator) requestProfile() scheduler.RequestProfile {
@@ -628,18 +647,20 @@ func (c *raceCoordinator) pickBesideTheRace() (scheduler.Assignment, error) {
 	for {
 		select {
 		case result := <-picked:
-			return result.assignment, result.err
+			return c.observePick(result.assignment, result.err)
 		case claim := <-c.crown:
 			c.answer(claim)
 		case <-c.clientGone():
 			cancel()
 			result := <-picked
-			return result.assignment, result.err
+			return c.observePick(result.assignment, result.err)
 		}
 	}
 }
 
 func (c *raceCoordinator) launch(assignment scheduler.Assignment, role, startReason string) {
+	// The race holds the escrow for as long as its vote is owed, so the commit's own hold goes back.
+	assignment.ReleaseEscrow()
 	nonce := assignment.Nonce.Nonce()
 	writer := newWinnerWriter(nonce, c.request.Client, c.crown, c.done)
 	sink := &attemptSink{winner: writer}
@@ -702,6 +723,7 @@ func (c *raceCoordinator) outcome() RaceOutcome {
 		Stream:          c.request.Stream,
 		Decision:        c.decision,
 		PoCBypassActive: c.pocBypass,
+		Lifecycle:       Lifecycle{BalanceExhausted: c.balanceExhausted},
 		Attempts:        make([]AttemptOutcome, 0, len(c.attempts)),
 	}
 	for _, attempt := range c.attempts {

@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sort"
 	"strconv"
 
 	"devshard/cmd/gateway/chain"
@@ -95,7 +94,7 @@ func statsPerPresentSlot(perSlot map[uint32]*types.HostStats) map[uint32]*types.
 
 func settlementHostStats(perSlot map[uint32]*types.HostStats) []chain.SettlementHostStat {
 	stats := make([]chain.SettlementHostStat, 0, len(perSlot))
-	for _, slotID := range sortedSlots(perSlot) {
+	for _, slotID := range sortedKeys(perSlot) {
 		hostStats := perSlot[slotID]
 		stats = append(stats, chain.SettlementHostStat{
 			SlotID:               uint64(slotID),
@@ -111,17 +110,8 @@ func settlementHostStats(perSlot map[uint32]*types.HostStats) []chain.Settlement
 
 func settlementSlotSigs(perSlot map[uint32][]byte) []chain.SettlementSlotSig {
 	sigs := make([]chain.SettlementSlotSig, 0, len(perSlot))
-	for _, slotID := range sortedSlots(perSlot) {
+	for _, slotID := range sortedKeys(perSlot) {
 		sigs = append(sigs, chain.SettlementSlotSig{SlotID: uint64(slotID), Signature: perSlot[slotID]})
 	}
 	return sigs
-}
-
-func sortedSlots[V any](perSlot map[uint32]V) []uint32 {
-	slots := make([]uint32, 0, len(perSlot))
-	for slotID := range perSlot {
-		slots = append(slots, slotID)
-	}
-	sort.Slice(slots, func(i, j int) bool { return slots[i] < slots[j] })
-	return slots
 }

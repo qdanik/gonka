@@ -9,6 +9,7 @@ import (
 
 	"devshard/cmd/gateway/chain"
 	"devshard/cmd/gateway/engine"
+	"devshard/cmd/gateway/escrow"
 	"devshard/cmd/gateway/filters"
 	"devshard/cmd/gateway/limits"
 	"devshard/cmd/gateway/registry"
@@ -87,16 +88,15 @@ func (e *BlockedError) phaseName() string {
 	return "chain admission controls"
 }
 
-// ErrUnknownDevshard reports a devshard id this gateway does not hold.
 var ErrUnknownDevshard = errors.New("unknown devshard")
 
 // ErrUnknownParticipant reports a participant key no limiter state is tracked under.
 var ErrUnknownParticipant = errors.New("unknown participant")
 
-// ErrDevshardBusy reports a devshard whose in-flight requests block the operation.
-var ErrDevshardBusy = errors.New("devshard busy")
+// ErrPrivateKeyEnvRequired refuses a create that names no key variable; the raw key a client could
+// send instead would reach the commitment row, the logs, and every operator in between.
+var ErrPrivateKeyEnvRequired = errors.New("private_key_env is required; a raw private_key is not accepted")
 
-// ErrDevshardExists reports a devshard already registered under the requested id.
 var ErrDevshardExists = errors.New("devshard already registered")
 
 // statusForError maps every rejection the request path can produce onto its HTTP status. Cases the
@@ -106,9 +106,8 @@ func statusForError(err error) int {
 	if err == nil {
 		return http.StatusOK
 	}
-	var oversized *http.MaxBytesError
-	if errors.As(err, &oversized) {
-		return http.StatusRequestEntityTooLarge
+	if status := filters.ErrorStatus(err, 0); status != 0 {
+		return status
 	}
 	var unsupported *UnsupportedModelError
 	if errors.As(err, &unsupported) {
@@ -126,10 +125,6 @@ func statusForError(err error) int {
 	if errors.As(err, &blocked) {
 		return http.StatusServiceUnavailable
 	}
-	var rejected *filters.RejectError
-	if errors.As(err, &rejected) {
-		return rejected.Status
-	}
 	var throttled *limits.RateLimitError
 	if errors.As(err, &throttled) {
 		return http.StatusTooManyRequests
@@ -141,9 +136,11 @@ func statusForError(err error) int {
 		return http.StatusConflict
 	case errors.Is(err, engine.ErrStopped), errors.Is(err, registry.ErrClosed):
 		return http.StatusServiceUnavailable
+	case errors.Is(err, ErrPrivateKeyEnvRequired):
+		return http.StatusBadRequest
 	case errors.Is(err, ErrUnknownDevshard), errors.Is(err, ErrUnknownParticipant):
 		return http.StatusNotFound
-	case errors.Is(err, ErrDevshardBusy), errors.Is(err, ErrDevshardExists), errors.Is(err, registry.ErrDraining):
+	case errors.Is(err, escrow.ErrDevshardBusy), errors.Is(err, ErrDevshardExists), errors.Is(err, registry.ErrDraining):
 		return http.StatusConflict
 	}
 	return engine.StatusForError(err)

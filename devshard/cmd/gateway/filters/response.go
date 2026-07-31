@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"strconv"
 	"strings"
 )
 
@@ -18,12 +17,6 @@ var clientStrippedFields = []string{
 	"token_ids",
 	"prompt_token_ids",
 	"prompt_logprobs",
-}
-
-// forcedParameterResponseField maps a forced request parameter to its response field, for the
-// one case where the names differ: return_token_ids (request) makes vLLM emit token_ids.
-var forcedParameterResponseField = map[string]string{
-	"return_token_ids": "token_ids",
 }
 
 // stripOutcome separates an unparseable payload from a parseable one with nothing to strip.
@@ -45,8 +38,6 @@ func StripResponseBody(body []byte) []byte {
 	return filtered
 }
 
-// stripInternalFields deletes clientStrippedFields from payload's decoded JSON, reporting whether
-// the payload parsed and whether anything was removed.
 func stripInternalFields(payload []byte) ([]byte, stripOutcome) {
 	var decoded any
 	if err := json.Unmarshal(payload, &decoded); err != nil {
@@ -62,8 +53,6 @@ func stripInternalFields(payload []byte) ([]byte, stripOutcome) {
 	return encoded, stripRewritten
 }
 
-// deleteInternalFields recursively removes clientStrippedFields keys from v at any depth,
-// reporting whether it deleted anything.
 func deleteInternalFields(v any) bool {
 	switch typed := v.(type) {
 	case map[string]any:
@@ -103,8 +92,8 @@ func hasStrippableField(p []byte) bool {
 		bytes.Contains(p, []byte(`"prompt_token_ids"`))
 }
 
-// upstreamErrorDetails is the OpenAI-compatible error shape extracted from a response body.
-type upstreamErrorDetails struct {
+// UpstreamError is the OpenAI-compatible error shape extracted from a response body or SSE event.
+type UpstreamError struct {
 	Type    string
 	Code    string
 	Message string
@@ -143,27 +132,23 @@ func IsCacheableUpstreamError(status int, body []byte) bool {
 }
 
 // parseUpstreamErrorDetails extracts an OpenAI-compatible top-level error from a response body,
-// accepting both the {"error":{...}} and legacy {"object":"error",...} shapes, whether the body is
-// plain JSON or an SSE stream that carries the failure inside a data event.
-func parseUpstreamErrorDetails(payload []byte) (upstreamErrorDetails, bool) {
-	if details, ok := decodeErrorPayload(payload); ok {
+// whether the body is plain JSON or an SSE stream carrying the failure inside a data event.
+func parseUpstreamErrorDetails(payload []byte) (UpstreamError, bool) {
+	if details, ok := DecodeUpstreamError(payload); ok {
 		return details, true
 	}
-	for rest := payload; len(rest) > 0; {
-		var line []byte
-		line, rest, _ = bytes.Cut(rest, []byte("\n"))
-		data, isData := bytes.CutPrefix(bytes.TrimRight(line, "\r"), []byte("data:"))
-		if !isData {
-			continue
-		}
-		if details, ok := decodeErrorPayload(bytes.TrimSpace(data)); ok {
-			return details, true
-		}
-	}
-	return upstreamErrorDetails{}, false
+	var found UpstreamError
+	EachSSEDataPayload(payload, func(data []byte) bool {
+		details, ok := DecodeUpstreamError(data)
+		found = details
+		return ok
+	})
+	return found, found != UpstreamError{}
 }
 
-func decodeErrorPayload(payload []byte) (upstreamErrorDetails, bool) {
+// DecodeUpstreamError reads one JSON payload as an OpenAI-compatible error, accepting both the
+// nested {"error":{...}} shape and the flat {"object":"error",...} one vLLM still emits.
+func DecodeUpstreamError(payload []byte) (UpstreamError, bool) {
 	var body struct {
 		Error *struct {
 			Type    string `json:"type"`
@@ -176,15 +161,15 @@ func decodeErrorPayload(payload []byte) (upstreamErrorDetails, bool) {
 		Message string `json:"message"`
 	}
 	if err := json.Unmarshal(payload, &body); err != nil {
-		return upstreamErrorDetails{}, false
+		return UpstreamError{}, false
 	}
 	if body.Error != nil {
-		return upstreamErrorDetails{Type: body.Error.Type, Code: codeString(body.Error.Code), Message: body.Error.Message}, true
+		return UpstreamError{Type: body.Error.Type, Code: codeString(body.Error.Code), Message: body.Error.Message}, true
 	}
 	if body.Object == "error" && body.Message != "" {
-		return upstreamErrorDetails{Type: body.Type, Code: codeString(body.Code), Message: body.Message}, true
+		return UpstreamError{Type: body.Type, Code: codeString(body.Code), Message: body.Message}, true
 	}
-	return upstreamErrorDetails{}, false
+	return UpstreamError{}, false
 }
 
 // codeString renders an error code field as a string, treating JSON null as absent rather than
@@ -218,9 +203,7 @@ var nonCacheableErrorMarkers = []string{
 	"not supported on this model",
 }
 
-// isCacheableErrorDetails excludes transient, environmental, and model-availability errors;
-// everything else (typically a fixed validation failure) is cacheable.
-func isCacheableErrorDetails(details upstreamErrorDetails) bool {
+func isCacheableErrorDetails(details UpstreamError) bool {
 	msg := strings.ToLower(details.Message)
 	if strings.TrimSpace(msg) == "" {
 		return false
@@ -238,33 +221,9 @@ func isCacheableErrorDetails(details upstreamErrorDetails) bool {
 	return true
 }
 
-// toolChoiceUnsupportedMessage is emitted when a host lacks --enable-auto-tool-choice: a host
-// capability gap, not a deterministic client error, so it's excluded from caching.
-const toolChoiceUnsupportedMessage = "tool choice requires --enable-auto-tool-choice and --tool-call-parser to be set"
-
 // isRetriableCapabilityError reports host-capability failures (tool-choice support, context
 // window size) that are excluded from caching because a different host may serve them fine.
 func isRetriableCapabilityError(msg string) bool {
-	return strings.Contains(msg, toolChoiceUnsupportedMessage) || contextLengthLimit(msg) > 0
-}
-
-// contextLengthLimit extracts the token count from a message like "maximum context length is
-// 131072 tokens"; returns 0 when the marker or a following number is absent.
-func contextLengthLimit(msg string) uint64 {
-	const marker = "maximum context length is "
-	lower := strings.ToLower(msg)
-	idx := strings.Index(lower, marker)
-	if idx < 0 {
-		return 0
-	}
-	rest := msg[idx+len(marker):]
-	end := strings.IndexFunc(rest, func(r rune) bool { return r < '0' || r > '9' })
-	if end <= 0 {
-		return 0
-	}
-	limit, err := strconv.ParseUint(rest[:end], 10, 64)
-	if err != nil {
-		return 0
-	}
-	return limit
+	contextLimit, _ := CapabilityLimits(msg)
+	return strings.Contains(msg, ToolChoiceUnsupportedMessage) || contextLimit > 0
 }

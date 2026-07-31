@@ -13,7 +13,6 @@ type SettlementInput struct {
 	Version   string
 }
 
-// SettlementHostStat is one host's per-slot settlement accounting.
 type SettlementHostStat struct {
 	SlotID               uint64
 	Missed               uint64

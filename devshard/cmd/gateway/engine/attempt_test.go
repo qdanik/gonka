@@ -209,10 +209,8 @@ func TestRunAttempt_HealthyAttemptEmitsEveryEventInOrder(t *testing.T) {
 		t.Fatalf("terminal = %v, want TerminalLost", outcome.Terminal)
 	case outcome.Nonce != 77 || outcome.HostIdx != 3 || outcome.Participant != testParticipant:
 		t.Fatalf("identity not carried: %+v", outcome)
-	case outcome.OutputChunks != 2 || outcome.ContentChunks != 1:
-		t.Fatalf("chunk counts = %d/%d, want 2/1", outcome.OutputChunks, outcome.ContentChunks)
-	case outcome.OutputBytes != 25 || outcome.StreamBytes != 512:
-		t.Fatalf("byte counts = %d/%d, want 25/512", outcome.OutputBytes, outcome.StreamBytes)
+	case outcome.ContentChunks != 1:
+		t.Fatalf("content chunks = %d, want 1", outcome.ContentChunks)
 	case !outcome.Confirmed || outcome.ContentSource != "delta.content":
 		t.Fatalf("response facts not carried: %+v", outcome)
 	case outcome.ReceiptTime.IsZero() || outcome.FirstToken.IsZero() || outcome.Completed.IsZero():
@@ -290,7 +288,7 @@ func TestRunAttempt_TerminalClassification(t *testing.T) {
 			dispatch: &fakeDispatcher{receipt: true, chunks: []string{"data: err\n\n"}, response: fakeResponse{confirmed: true}},
 			classifier: &fakeClassifier{perChunk: []chunkFacts{{
 				ErrorSource: "sse", ErrorMessage: "maximum context length is 8192",
-				CapabilityRefused: true, ContextLimit: 8192,
+				CapabilityRefused: true,
 			}}},
 			want: TerminalCapabilityRefused,
 		},

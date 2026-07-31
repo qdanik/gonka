@@ -40,8 +40,6 @@ func assertNoInternalFields(t *testing.T, out []byte) {
 	}
 }
 
-// --- the leak: an event split across Write calls ---
-
 func TestStreamRewriter_SplitFrameIsRewritten(t *testing.T) {
 	stream := readSSEFixture(t, "logprobs_stream.sse")
 	target := splitCompleteEvents(t, stream)[1]
@@ -97,7 +95,7 @@ func TestStreamRewriter_ChunkSizeDoesNotChangeOutput(t *testing.T) {
 		for _, chunkSize := range []int{1, 3, 17, 4096} {
 			t.Run(fmt.Sprintf("%s/chunk=%d", name, chunkSize), func(t *testing.T) {
 				stream := readSSEFixture(t, name)
-				want := RewriteStreamChunk(stream)
+				want := rewriteWholeStream(t, stream)
 
 				got := feedInChunks(t, NewStreamRewriter(), stream, chunkSize)
 
@@ -164,8 +162,6 @@ func TestStreamRewriter_CRLFTerminatedEventIsRewritten(t *testing.T) {
 	}
 }
 
-// --- carry cap ---
-
 func TestStreamRewriter_CarryOverflowFailsInsteadOfGrowing(t *testing.T) {
 	rewriter := NewStreamRewriter()
 	atCap, err := rewriter.Write(bytes.Repeat([]byte("x"), MaxStreamCarryBytes))
@@ -205,8 +201,6 @@ func TestStreamRewriter_StaysFailedAfterOverflow(t *testing.T) {
 		t.Errorf("Close() after overflow = %q, %v; want no output and ErrStreamCarryOverflow", closed, closeErr)
 	}
 }
-
-// --- Close ---
 
 func TestStreamRewriter_CloseOnCleanEndEmitsNothing(t *testing.T) {
 	rewriter := NewStreamRewriter()
@@ -293,8 +287,6 @@ func TestStreamRewriter_CloseKeepsUnterminatedNonDataLine(t *testing.T) {
 		t.Errorf("Close() = %q, want the comment line verbatim", final)
 	}
 }
-
-// --- malformed payloads ---
 
 func TestStreamRewriter_MalformedFrameIsDropped(t *testing.T) {
 	stream := readSSEFixture(t, "malformed_data_line.sse")

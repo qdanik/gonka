@@ -95,7 +95,6 @@ var migrations = []string{
 	);`,
 }
 
-// Open creates storageDir if needed, opens gateway.db and migrates it.
 func Open(storageDir string) (*Store, error) {
 	if err := os.MkdirAll(storageDir, 0o755); err != nil {
 		return nil, fmt.Errorf("creating storage dir: %w", err)

@@ -24,7 +24,6 @@ type dispatcher interface {
 // Response is one host's reply, forwarded untouched: only the session that produced it can apply the rest.
 type Response interface {
 	Confirmed() bool
-	StreamBytes() int64
 }
 
 // hostLimiter is satisfied by *limits.ParticipantLimiter. The scheduler took the host's concurrency
@@ -33,12 +32,13 @@ type hostLimiter interface {
 	Release(participant, model string)
 }
 
+// chunkFacts is what one SSE chunk carried. Error excludes the capability refusals a different host can
+// still serve, which travel as CapabilityRefused instead; TokensBurned separates a model that produced
+// nothing from a host that carried nothing.
 type chunkFacts struct {
 	Content       bool
 	ContentSource string
 
-	// Error excludes the capability refusals a different host can still serve, which are reported
-	// through ErrorSource and CapabilityRefused instead.
 	Error             bool
 	ErrorSource       string
 	ErrorCode         string
@@ -46,12 +46,9 @@ type chunkFacts struct {
 	ErrorMessage      string
 	ErrorPayload      string
 	CapabilityRefused bool
-	ContextLimit      uint64
-	ToolsUnsupported  bool
 
 	UsageCompletionTokens int64
-	// TokensBurned separates a model that produced nothing from a host that carried nothing.
-	TokensBurned bool
+	TokensBurned          bool
 }
 
 // streamClassifier reassembles one attempt's SSE bytes and reports what they contained. Release frees
@@ -62,7 +59,9 @@ type streamClassifier interface {
 	Release()
 }
 
-// AttemptSpec is everything one attempt needs, fixed at construction and never written afterwards.
+// AttemptSpec is everything one attempt needs, fixed at construction and never written afterwards. Events
+// must be drained until every started attempt has delivered its AttemptDone: that delivery is what lets a
+// committed nonce be settled, so the attempt goroutine waits for it rather than dropping it.
 type AttemptSpec struct {
 	Escrow      string
 	Model       string
@@ -81,9 +80,6 @@ type AttemptSpec struct {
 	Sink       io.Writer
 	Now        func() time.Time
 
-	// Events must be drained until every started attempt has delivered its AttemptDone: that delivery
-	// is what lets a committed nonce be settled, so the attempt goroutine waits for it rather than
-	// dropping it.
 	Events chan<- AttemptEvent
 }
 
@@ -116,10 +112,7 @@ type attemptState struct {
 	firstContent time.Time
 	completed    time.Time
 
-	outputChunks  int64
 	contentChunks int64
-	outputBytes   int64
-	streamBytes   int64
 
 	usageCompletionTokens int64
 	tokensBurned          bool
@@ -130,8 +123,6 @@ type attemptState struct {
 	errorMessage          string
 	errorPayload          string
 	capabilityRefused     bool
-	contextLimit          uint64
-	toolsUnsupported      bool
 
 	confirmed      bool
 	stateDivergent bool
@@ -159,7 +150,6 @@ func runAttempt(ctx context.Context, spec AttemptSpec) {
 	state.completed = spec.Now()
 	if response != nil {
 		state.confirmed = response.Confirmed()
-		state.streamBytes = response.StreamBytes()
 	}
 	state.classify(ctx, spec, err)
 
@@ -180,8 +170,6 @@ type attemptWriter struct {
 
 func (w *attemptWriter) Write(chunk []byte) (int, error) {
 	now := w.spec.Now()
-	w.state.outputChunks++
-	w.state.outputBytes += int64(len(chunk))
 
 	if w.state.firstToken.IsZero() {
 		w.state.firstToken = now
@@ -226,8 +214,6 @@ func (s *attemptState) record(facts chunkFacts) {
 		s.errorMessage = facts.ErrorMessage
 		s.errorPayload = facts.ErrorPayload
 		s.capabilityRefused = facts.CapabilityRefused
-		s.contextLimit = facts.ContextLimit
-		s.toolsUnsupported = facts.ToolsUnsupported
 	}
 	if facts.UsageCompletionTokens > 0 {
 		s.usageCompletionTokens = facts.UsageCompletionTokens
@@ -311,10 +297,7 @@ func (s *attemptState) outcome(spec AttemptSpec) *AttemptOutcome {
 		FirstToken:  s.firstToken,
 		Completed:   s.completed,
 
-		OutputChunks:          s.outputChunks,
 		ContentChunks:         s.contentChunks,
-		OutputBytes:           s.outputBytes,
-		StreamBytes:           s.streamBytes,
 		UsageCompletionTokens: s.usageCompletionTokens,
 
 		Terminal:  s.terminal,
@@ -326,9 +309,6 @@ func (s *attemptState) outcome(spec AttemptSpec) *AttemptOutcome {
 		ErrorType:     s.errorType,
 		ErrorMessage:  s.errorMessage,
 		ErrorPayload:  s.errorPayload,
-
-		ContextLimit:     s.contextLimit,
-		ToolsUnsupported: s.toolsUnsupported,
 
 		StateDivergent: s.stateDivergent,
 	}

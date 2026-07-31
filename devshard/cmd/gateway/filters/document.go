@@ -7,7 +7,6 @@ import (
 	"devshard"
 )
 
-// MaxNestingDepth bounds JSON nesting before the decode.
 const MaxNestingDepth = 32
 
 // MaxBodyBytes bounds the raw request body, both at ingest and before the decode. A million-token
@@ -41,41 +40,34 @@ func ParseDocument(body []byte) (*Document, error) {
 	return &Document{raw: raw}, nil
 }
 
-// Get returns the raw value stored at key.
 func (d *Document) Get(key string) (any, bool) {
 	value, ok := d.raw[key]
 	return value, ok
 }
 
-// Set writes value at key, overwriting any existing value.
 func (d *Document) Set(key string, value any) {
 	d.raw[key] = value
 }
 
-// Delete removes key, if present.
 func (d *Document) Delete(key string) {
 	delete(d.raw, key)
 }
 
-// Has reports whether key is present.
 func (d *Document) Has(key string) bool {
 	_, ok := d.raw[key]
 	return ok
 }
 
-// Object returns the value at key as a JSON object, if it is one.
 func (d *Document) Object(key string) (map[string]any, bool) {
 	value, ok := d.raw[key].(map[string]any)
 	return value, ok
 }
 
-// Array returns the value at key as a JSON array, if it is one.
 func (d *Document) Array(key string) ([]any, bool) {
 	value, ok := d.raw[key].([]any)
 	return value, ok
 }
 
-// Uint returns the value at key coerced to uint64, if present and integer-valued.
 func (d *Document) Uint(key string) (uint64, bool) {
 	value, ok := d.raw[key]
 	if !ok {
@@ -94,7 +86,6 @@ func (d *Document) ObjectField(key string) (obj map[string]any, present, isObjec
 	return obj, true, ok
 }
 
-// Raw exposes the underlying map for rule funcs that need direct access.
 func (d *Document) Raw() map[string]any {
 	return d.raw
 }

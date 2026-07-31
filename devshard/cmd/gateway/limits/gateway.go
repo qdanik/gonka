@@ -52,24 +52,25 @@ type modelCounter struct {
 	inputTokens int64
 }
 
-// waiter is one blocked Acquire. A releasing request hands it the slot directly and closes ready,
-// so an admitted waiter never re-competes with newly arriving requests.
+// waiter is one blocked Acquire. A releasing request hands it the slot directly and closes ready, so an
+// admitted waiter never re-competes with newly arriving requests; reason is why it had to queue and is what
+// a timed-out wait reports.
 type waiter struct {
 	model    string
 	tokens   int64
 	capacity ModelCapacity
-	reason   string // why it had to queue, reported if the wait times out
+	reason   string
 	ready    chan struct{}
 }
 
+// GatewayLimiter is the gateway-wide FIFO admission limiter. enforced is the last admission it computed, so
+// a reader reports the cap in force rather than the configured one; before the first request they agree.
 type GatewayLimiter struct {
-	mu     sync.Mutex
-	cfg    GatewayConfig
-	models map[string]*modelCounter
-	total  modelCounter
-	queue  []*waiter
-	// enforced is the last gateway-wide admission computed, so a reader reports the cap actually in
-	// force rather than the configured one; before the first request that is the configured one.
+	mu       sync.Mutex
+	cfg      GatewayConfig
+	models   map[string]*modelCounter
+	total    modelCounter
+	queue    []*waiter
 	enforced admission
 }
 

@@ -134,17 +134,10 @@ func accountingResponse(record store.RequestRecord) requestAccountingResponse {
 		TotalOutputTokens:  record.TotalOutputTokens,
 		EscrowMissing:      record.EscrowMissing,
 		BalanceExhausted:   record.BalanceExhausted,
-		StartedAt:          timestamp(record.StartedAt),
-		CompletedAt:        timestamp(record.CompletedAt),
+		StartedAt:          store.FormatTime(record.StartedAt),
+		CompletedAt:        store.FormatTime(record.CompletedAt),
 		FirstTokenMS:       record.FirstTokenMS,
 		DurationMS:         record.DurationMS,
-		RecordedAt:         timestamp(record.RecordedAt),
+		RecordedAt:         store.FormatTime(record.RecordedAt),
 	}
-}
-
-func timestamp(value time.Time) string {
-	if value.IsZero() {
-		return ""
-	}
-	return value.UTC().Format(time.RFC3339Nano)
 }

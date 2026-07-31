@@ -8,26 +8,29 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+
+	"devshard/cmd/gateway/chain"
+	"devshard/cmd/gateway/env"
+	"devshard/cmd/gateway/filters"
 )
 
-// Server groups process-level settings.
+// Server is the listener's own configuration. StorageDir is resolved by main before Build, which applies
+// the default and never unsets it there.
 type Server struct {
 	Port                       int64
-	StorageDir                 string // resolved by main before Build (default applied; never unset there)
+	StorageDir                 string
 	APIKeys                    []string
 	AdminAPIKey                string
 	DevshardsJSON              string
 	MaxConcurrentRuntimeBuilds int64
 }
 
-// Chain groups chain-facing endpoints.
 type Chain struct {
 	RESTBaseURL         string
 	PublicAPIBaseURL    string
 	TxQueryFallbackURLs []string
 }
 
-// Tx groups transaction parameters.
 type Tx struct {
 	FeeDenom       string
 	FeeAmount      int64
@@ -36,7 +39,6 @@ type Tx struct {
 	PollTimeoutMS  int64
 }
 
-// Concurrency bounds in-flight requests: absolute cap + weight-scaled allowance.
 type Concurrency struct {
 	MaxRequests               int64
 	RequestsPer10000Weight    float64
@@ -49,7 +51,6 @@ type AIMD struct {
 	MaxWindow     int64
 }
 
-// Breaker is the participant circuit-breaker ladder tuning.
 type Breaker struct {
 	TripThreshold int64
 	BaseOpenMS    int64
@@ -65,29 +66,27 @@ type ModelLimits struct {
 	MaxInputTokensInFlight *int64 `json:"max_input_tokens_in_flight,omitempty"`
 }
 
-// Limits groups admission and participant-protection tuning.
+// Limits groups admission tuning. A zero MaxInputTokensInFlight is unlimited, and ModelAccess maps a model
+// to one of the tiers below.
 type Limits struct {
 	DefaultMaxTokens       int64
 	MaxTokensCap           int64
 	Concurrency            Concurrency
-	MaxInputTokensInFlight int64 // 0 = unlimited
+	MaxInputTokensInFlight int64
 	AcquireWaitMS          int64
 	AIMD                   AIMD
 	Breaker                Breaker
 	ModelLimits            map[string]ModelLimits
-	ModelAccess            map[string]string // model → open|api_key|admin_only
+	ModelAccess            map[string]string
 }
 
-// Modes groups operational switches.
 type Modes struct {
-	PoCMode             string // off|relaxed
-	CapacityAwareLimits bool
+	PoCMode             string
 	Disabled            bool
 	DisabledMessage     string
 	DisabledRedirectURL string
 }
 
-// Rotation groups escrow-rotation settings.
 type Rotation struct {
 	Enabled           bool
 	SettlementEnabled bool
@@ -95,7 +94,6 @@ type Rotation struct {
 	ModelsJSON        string
 }
 
-// Cache groups response-cache settings.
 type Cache struct {
 	ChatCacheMaxBytes int64
 }
@@ -106,20 +104,15 @@ type Accounting struct {
 	RetentionMaxRows int64
 }
 
-// Capture groups the debug request-capture settings.
+// Capture bounds the request-capture sink. An empty Dir means <storageDir>/captured-requests, SampleRate
+// runs from 1 (every matching request) to 0 (none), and MaxBytes ceilings what the directory may hold.
 type Capture struct {
-	Enabled                      bool
-	Dir                          string  // empty = <storageDir>/captured-requests
-	SampleRate                   float64 // 1 = every matching request, 0 = none
-	MaxBytes                     int64   // ceiling on the bytes the capture directory may hold
-	ShortContentAttempts         bool
-	ShortContentResponses        bool
-	ShortContentMinOutputChunks  int64
-	ShortContentMaxContentRatio  float64
-	ShortContentResponseMaxBytes int64
+	Enabled    bool
+	Dir        string
+	SampleRate float64
+	MaxBytes   int64
 }
 
-// Stream groups streaming/classification bounds.
 type Stream struct {
 	DrainTimeoutSeconds         int64
 	ClassifyMaxAttemptBytes     int64
@@ -127,41 +120,36 @@ type Stream struct {
 	ClassifyMaxGlobalBytes      int64
 }
 
-// Perf groups host-performance tuning: peak-EWMA latency estimate, Envoy-style
-// ejection (consecutive-fail + rate-with-min-volume, timed backoff), and first-token p95.
+// Perf groups Envoy-style host ejection tuning: consecutive-fail and rate-with-min-volume triggers, timed
+// backoff, and the pool-wide ejection cap. MinAvailableHosts is a floor kept routable regardless of that
+// cap, and host-model state unseen for the staleness window is evicted.
 type Perf struct {
-	EWMAHalfLifeSeconds         int64
-	ColdStartReceiptMs          float64 // prior used before a host's first sample
-	ColdStartCTTFLMsPerToken    float64 // prior used before a host's first sample
-	ConsecutiveFailThreshold    int64
-	FailureRateThreshold        float64
-	FailureRateMinVolume        float64 // decayed-volume gate before the rate threshold applies
-	EjectionBaseSeconds         int64
-	EjectionMaxSeconds          int64
-	MaxEjectionFraction         float64 // cap on the pool fraction ejected at once
-	MinAvailableHosts           int64   // floor kept routable regardless of the ejection cap
-	FirstTokenReservoir         int64
-	FirstTokenActivationSamples int64 // samples required before FirstTokenP95 is trusted
-	FirstTokenPercentile        float64
-	FirstTokenStalenessSeconds  int64 // samples older than this are excluded from the p95
-	HostStalenessSeconds        int64 // evict host-model state unseen this long
+	EWMAHalfLifeSeconds      int64
+	ConsecutiveFailThreshold int64
+	FailureRateThreshold     float64
+	FailureRateMinVolume     float64
+	EjectionBaseSeconds      int64
+	EjectionMaxSeconds       int64
+	MaxEjectionFraction      float64
+	MinAvailableHosts        int64
+	HostStalenessSeconds     int64
 }
 
-// Engine groups race-escalation tuning. The safety backstops it does not carry — streaming hard
-// timeout, non-stream no-content timeout, max attempt wait, long-response exemption — are engine
-// constants: they bound a request that every tunable already failed to bound.
+// Engine groups race-escalation tuning; a zero MaxSpeculativeAttempts is bounded only by the host group.
+// The safety backstops it does not carry — streaming hard timeout, non-stream no-content timeout, max
+// attempt wait, long-response exemption — are engine constants: they bound a request that every tunable
+// already failed to bound.
 type Engine struct {
 	ReceiptTimeoutMS       int64
 	FirstTokenFloorMS      int64
 	InterChunkStallMS      int64
 	LoserGraceMS           int64
-	MaxSpeculativeAttempts int64 // 0 = bounded only by the host group
+	MaxSpeculativeAttempts int64
 }
 
-// Scheduler groups routing tuning.
+// Scheduler groups nonce-holding tuning. HoldGraceMS is how long a bound nonce waits for a co-arriving
+// compatible request before it is burned; 0 burns immediately.
 type Scheduler struct {
-	// HoldGraceMS is how long a bound nonce waits for a co-arriving compatible request before it is
-	// burned; 0 burns immediately.
 	HoldGraceMS int64
 }
 
@@ -184,8 +172,8 @@ type Config struct {
 
 // PoC mode values accepted in Modes.PoCMode.
 const (
-	PoCModeOff     = "off"
-	PoCModeRelaxed = "relaxed"
+	PoCModeOff     = env.PoCModeOff
+	PoCModeRelaxed = env.PoCModeRelaxed
 )
 
 // Model access values accepted in Limits.ModelAccess.
@@ -214,7 +202,6 @@ func (l Limits) AccessFor(model string) string {
 	return ModelAccessAdminOnly
 }
 
-// Defaults returns the default configuration.
 func Defaults() Config {
 	return Config{
 		Server: Server{
@@ -227,15 +214,15 @@ func Defaults() Config {
 			TxQueryFallbackURLs: []string{"http://node1.gonka.ai:8000/chain-api"},
 		},
 		Tx: Tx{
-			FeeDenom:       "ngonka",
-			FeeAmount:      1_000_000,
-			GasLimit:       500_000,
-			PollIntervalMS: 2_000,
-			PollTimeoutMS:  45_000,
+			FeeDenom:       chain.DefaultFeeDenom,
+			FeeAmount:      int64(chain.DefaultFeeAmount),
+			GasLimit:       int64(chain.DefaultGasLimit),
+			PollIntervalMS: chain.DefaultPollInterval.Milliseconds(),
+			PollTimeoutMS:  chain.DefaultPollTimeout.Milliseconds(),
 		},
 		Limits: Limits{
-			DefaultMaxTokens: 3072,
-			MaxTokensCap:     4096,
+			DefaultMaxTokens: int64(filters.DefaultRequestMaxTokens),
+			MaxTokensCap:     int64(filters.RequestMaxTokensCap),
 			Concurrency: Concurrency{
 				MaxRequests:               512,
 				RequestsPer10000Weight:    5.0,
@@ -267,11 +254,8 @@ func Defaults() Config {
 			RetentionMaxRows: 1_000_000,
 		},
 		Capture: Capture{
-			SampleRate:                   1,
-			MaxBytes:                     1 << 30,
-			ShortContentMinOutputChunks:  1_000,
-			ShortContentMaxContentRatio:  0.75,
-			ShortContentResponseMaxBytes: 16 << 20,
+			SampleRate: 1,
+			MaxBytes:   1 << 30,
 		},
 		Stream: Stream{
 			DrainTimeoutSeconds:         2_400,
@@ -280,21 +264,15 @@ func Defaults() Config {
 			ClassifyMaxGlobalBytes:      100 << 20,
 		},
 		Perf: Perf{
-			EWMAHalfLifeSeconds:         600,
-			ColdStartReceiptMs:          2_000,
-			ColdStartCTTFLMsPerToken:    1.0,
-			ConsecutiveFailThreshold:    5,
-			FailureRateThreshold:        0.15,
-			FailureRateMinVolume:        20,
-			EjectionBaseSeconds:         30,
-			EjectionMaxSeconds:          600,
-			MaxEjectionFraction:         0.5,
-			MinAvailableHosts:           1,
-			FirstTokenReservoir:         100,
-			FirstTokenActivationSamples: 20,
-			FirstTokenPercentile:        0.95,
-			FirstTokenStalenessSeconds:  86_400,
-			HostStalenessSeconds:        3_600,
+			EWMAHalfLifeSeconds:      600,
+			ConsecutiveFailThreshold: 5,
+			FailureRateThreshold:     0.15,
+			FailureRateMinVolume:     20,
+			EjectionBaseSeconds:      30,
+			EjectionMaxSeconds:       600,
+			MaxEjectionFraction:      0.5,
+			MinAvailableHosts:        1,
+			HostStalenessSeconds:     3_600,
 		},
 		Engine: Engine{
 			ReceiptTimeoutMS:       5_000,
@@ -435,15 +413,6 @@ func (c *Config) Validate() error {
 	if c.Capture.MaxBytes < 1 {
 		complain("capture_max_bytes: %d must be >= 1", c.Capture.MaxBytes)
 	}
-	if c.Capture.ShortContentMinOutputChunks < 0 {
-		complain("capture_short_content_min_output_chunks: %d must be >= 0", c.Capture.ShortContentMinOutputChunks)
-	}
-	if c.Capture.ShortContentMaxContentRatio <= 0 || c.Capture.ShortContentMaxContentRatio > 1 {
-		complain("capture_short_content_max_content_ratio: %v must be in (0, 1]", c.Capture.ShortContentMaxContentRatio)
-	}
-	if c.Capture.ShortContentResponseMaxBytes < 1 {
-		complain("capture_short_content_response_max_bytes: %d must be >= 1", c.Capture.ShortContentResponseMaxBytes)
-	}
 	if c.Stream.DrainTimeoutSeconds < 1 {
 		complain("drain_timeout_seconds: %d must be >= 1", c.Stream.DrainTimeoutSeconds)
 	}
@@ -459,12 +428,6 @@ func (c *Config) Validate() error {
 
 	if c.Perf.EWMAHalfLifeSeconds < 1 {
 		complain("perf_ewma_half_life_seconds: %d must be >= 1", c.Perf.EWMAHalfLifeSeconds)
-	}
-	if c.Perf.ColdStartReceiptMs < 0 {
-		complain("perf_cold_start_receipt_ms: %v must be >= 0", c.Perf.ColdStartReceiptMs)
-	}
-	if c.Perf.ColdStartCTTFLMsPerToken < 0 {
-		complain("perf_cold_start_cttfl_ms_per_token: %v must be >= 0", c.Perf.ColdStartCTTFLMsPerToken)
 	}
 	if c.Perf.ConsecutiveFailThreshold < 1 {
 		complain("perf_consecutive_fail_threshold: %d must be >= 1", c.Perf.ConsecutiveFailThreshold)
@@ -486,18 +449,6 @@ func (c *Config) Validate() error {
 	}
 	if c.Perf.MinAvailableHosts < 0 {
 		complain("perf_min_available_hosts: %d must be >= 0", c.Perf.MinAvailableHosts)
-	}
-	if c.Perf.FirstTokenReservoir < 1 {
-		complain("perf_first_token_reservoir: %d must be >= 1", c.Perf.FirstTokenReservoir)
-	}
-	if c.Perf.FirstTokenActivationSamples < 1 || c.Perf.FirstTokenActivationSamples > c.Perf.FirstTokenReservoir {
-		complain("perf_first_token_activation_samples: %d must be in [1, perf_first_token_reservoir %d]", c.Perf.FirstTokenActivationSamples, c.Perf.FirstTokenReservoir)
-	}
-	if c.Perf.FirstTokenPercentile <= 0 || c.Perf.FirstTokenPercentile > 1 {
-		complain("perf_first_token_percentile: %v must be in (0, 1]", c.Perf.FirstTokenPercentile)
-	}
-	if c.Perf.FirstTokenStalenessSeconds < 1 {
-		complain("perf_first_token_staleness_seconds: %d must be >= 1", c.Perf.FirstTokenStalenessSeconds)
 	}
 	if c.Perf.HostStalenessSeconds < 1 {
 		complain("perf_host_staleness_seconds: %d must be >= 1", c.Perf.HostStalenessSeconds)

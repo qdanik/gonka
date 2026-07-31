@@ -183,17 +183,17 @@ func (l *Ledger) insert(record RequestRecord) error {
 		record.WinnerNonce, record.WinnerParticipant, record.WinnerHost, record.WinnerHostIdx,
 		record.Attempts, record.InputTokens, record.WinnerOutputTokens, record.TotalOutputTokens,
 		boolToInt(record.EscrowMissing), boolToInt(record.BalanceExhausted),
-		formatTime(record.StartedAt), formatTime(record.CompletedAt),
-		record.FirstTokenMS, record.DurationMS, formatTime(record.RecordedAt))
+		FormatTime(record.StartedAt), FormatTime(record.CompletedAt),
+		record.FirstTokenMS, record.DurationMS, FormatTime(record.RecordedAt))
 	return err
 }
 
 func (l *Ledger) sweep(now time.Time) {
 	l.lastSweep = now
-	cutoff := formatTime(now.Add(-l.retention.MaxAge))
-	if _, err := l.store.db.Exec(`DELETE FROM request_accounting WHERE recorded_at < ?`, cutoff); err != nil {
-		return
-	}
+	cutoff := FormatTime(now.Add(-l.retention.MaxAge))
+	// The two bounds are attempted independently: the row cap is the disk-fill guard, and a busy lock
+	// on the age delete must not be what stops it running.
+	_, _ = l.store.db.Exec(`DELETE FROM request_accounting WHERE recorded_at < ?`, cutoff)
 	_, _ = l.store.db.Exec(`
 		DELETE FROM request_accounting WHERE request_id IN (
 			SELECT request_id FROM request_accounting
@@ -244,15 +244,9 @@ func (s *Store) FindRequest(ctx context.Context, requestID string) (RequestRecor
 	return record, true, nil
 }
 
-func (s *Store) CountRequests(ctx context.Context) (int64, error) {
-	var count int64
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM request_accounting`).Scan(&count); err != nil {
-		return 0, fmt.Errorf("counting requests: %w", err)
-	}
-	return count, nil
-}
-
-func formatTime(value time.Time) string {
+// FormatTime renders a timestamp for storage and for the accounting API, so the retention cutoff
+// and the rows it compares against can never drift in precision or zone.
+func FormatTime(value time.Time) string {
 	if value.IsZero() {
 		return ""
 	}

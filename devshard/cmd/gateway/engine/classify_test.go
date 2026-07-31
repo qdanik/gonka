@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"devshard/cmd/gateway/filters"
 )
 
 const kimiModel = "moonshotai/Kimi-K2.6"
@@ -267,7 +269,7 @@ func TestRetriableCapability(t *testing.T) {
 		wantRetriable bool
 		wantLimit     uint64
 	}{
-		{name: "tool_choice_unsupported", message: toolChoiceUnsupportedPhrase, wantRetriable: true},
+		{name: "tool_choice_unsupported", message: filters.ToolChoiceUnsupportedMessage, wantRetriable: true},
 		{
 			name:          "context_length_with_trailing_text",
 			message:       "This model's maximum context length is 131072 tokens. However, you requested 150000 tokens.",
@@ -352,7 +354,7 @@ func TestAccumulatorCountsErrorEventsWithoutCrowningThem(t *testing.T) {
 		},
 		{
 			name:            "tool_choice_refusal_neither_counts_nor_crowns",
-			body:            `data: {"error":{"code":400,"message":"` + toolChoiceUnsupportedPhrase + `","type":"BadRequestError"}}` + "\n\n",
+			body:            `data: {"error":{"code":400,"message":"` + filters.ToolChoiceUnsupportedMessage + `","type":"BadRequestError"}}` + "\n\n",
 			wantErrorSource: "error.BadRequestError",
 			wantTerminal:    TerminalCapabilityRefused,
 		},
@@ -511,13 +513,13 @@ type fixtureExpectation struct {
 var sseFixtures = []fixtureExpectation{
 	{file: "content_stream.sse", wantSource: "delta.content", wantUsage: 2},
 	{file: "tool_calls_stream.sse", wantSource: "delta.tool_calls", wantUsage: 20},
-	{file: "newline_less_final_content.sse", wantSource: "delta.content", newlineLess: true},
-	{file: "newline_less_final_error.sse", wantErrorSource: "error.server_error", newlineLess: true},
+	{file: "newlineless_final_content.sse", wantSource: "delta.content", newlineLess: true},
+	{file: "newlineless_final_error.sse", wantErrorSource: "error.server_error", newlineLess: true},
 }
 
 func readFixture(t *testing.T, file string) []byte {
 	t.Helper()
-	body, err := os.ReadFile(filepath.Join("testdata", "sse", file))
+	body, err := os.ReadFile(filepath.Join("..", "filters", "testdata", "sse", file))
 	if err != nil {
 		t.Fatalf("reading fixture: %v", err)
 	}
@@ -583,7 +585,7 @@ func TestFixtureStreamsClassifyIdenticallyUnderRandomChunking(t *testing.T) {
 
 func TestNewlineLessFinalEventLooksEmptyUntilTheStreamCloses(t *testing.T) {
 	t.Parallel()
-	body := readFixture(t, "newline_less_final_content.sse")
+	body := readFixture(t, "newlineless_final_content.sse")
 	classifier := newTestClassifier(qwenModel, nil)
 	defer classifier.Release()
 

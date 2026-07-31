@@ -3,16 +3,11 @@ package engine
 import (
 	"bytes"
 	"encoding/json"
-	"fmt"
 
 	"devshard/cmd/gateway/filters"
 )
 
-var (
-	sseDataPrefix = []byte("data:")
-	sseDoneMarker = []byte("[DONE]")
-	sseUsageKey   = []byte(`"usage"`)
-)
+var sseUsageKey = []byte(`"usage"`)
 
 type sseError struct {
 	Source  string
@@ -59,7 +54,7 @@ func classifyChunk(events []byte) chunkSignal {
 // is excluded: the gateway serves only /v1/chat/completions, where a host emitting it renders nothing.
 func contentSource(events []byte) (string, bool) {
 	var source string
-	eachSSEPayload(events, func(payload []byte) bool {
+	filters.EachSSEDataPayload(events, func(payload []byte) bool {
 		var event struct {
 			Choices []struct {
 				FinishReason string        `json:"finish_reason"`
@@ -117,53 +112,25 @@ func (p renderedParts) source(shape string) (string, bool) {
 // {"error":{...}} shape and the flat {"object":"error",...} one vLLM still emits.
 func errorPayload(events []byte) (sseError, bool) {
 	var found sseError
-	eachSSEPayload(events, func(payload []byte) bool {
-		var event struct {
-			Error *struct {
-				Type    string `json:"type"`
-				Code    any    `json:"code"`
-				Message string `json:"message"`
-			} `json:"error"`
-			Object  string `json:"object"`
-			Type    string `json:"type"`
-			Code    any    `json:"code"`
-			Message string `json:"message"`
-		}
-		if json.Unmarshal(payload, &event) != nil {
+	filters.EachSSEDataPayload(events, func(payload []byte) bool {
+		upstream, ok := filters.DecodeUpstreamError(payload)
+		if !ok {
 			return false
 		}
-		switch {
-		case event.Error != nil:
-			found = newSSEError(event.Error.Type, event.Error.Code, event.Error.Message, payload)
-		case event.Object == "error" && event.Message != "":
-			found = newSSEError(event.Type, event.Code, event.Message, payload)
-		default:
-			return false
+		source := "error"
+		if upstream.Type != "" {
+			source = "error." + upstream.Type
+		}
+		found = sseError{
+			Source:  source,
+			Code:    upstream.Code,
+			Type:    upstream.Type,
+			Message: upstream.Message,
+			Payload: string(payload),
 		}
 		return true
 	})
 	return found, found.present()
-}
-
-func newSSEError(errorType string, code any, message string, payload []byte) sseError {
-	source := "error"
-	if errorType != "" {
-		source = "error." + errorType
-	}
-	return sseError{
-		Source:  source,
-		Code:    jsonCodeText(code),
-		Type:    errorType,
-		Message: message,
-		Payload: string(payload),
-	}
-}
-
-func jsonCodeText(code any) string {
-	if code == nil {
-		return ""
-	}
-	return fmt.Sprint(code)
 }
 
 // usageCompletionTokens reads usage.completion_tokens, which counts tokens vLLM stripped from
@@ -173,7 +140,7 @@ func usageCompletionTokens(events []byte) (int64, bool) {
 		return 0, false
 	}
 	var tokens int64
-	eachSSEPayload(events, func(payload []byte) bool {
+	filters.EachSSEDataPayload(events, func(payload []byte) bool {
 		var event struct {
 			Usage *struct {
 				CompletionTokens int64 `json:"completion_tokens"`
@@ -189,22 +156,6 @@ func usageCompletionTokens(events []byte) (int64, bool) {
 		return true
 	})
 	return tokens, tokens > 0
-}
-
-func eachSSEPayload(events []byte, visit func(payload []byte) bool) {
-	for _, line := range bytes.Split(events, []byte("\n")) {
-		line = bytes.TrimRight(line, "\r")
-		if !bytes.HasPrefix(line, sseDataPrefix) {
-			continue
-		}
-		payload := bytes.TrimSpace(line[len(sseDataPrefix):])
-		if len(payload) == 0 || bytes.Equal(payload, sseDoneMarker) {
-			continue
-		}
-		if visit(payload) {
-			return
-		}
-	}
 }
 
 func jsonArrayHasElements(raw json.RawMessage) bool {
