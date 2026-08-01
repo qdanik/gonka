@@ -1,7 +1,6 @@
 package api
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -17,6 +16,8 @@ import (
 	"devshard/cmd/gateway/limits"
 	"devshard/cmd/gateway/registry"
 	"devshard/cmd/gateway/scheduler"
+
+	json "github.com/goccy/go-json"
 )
 
 var (

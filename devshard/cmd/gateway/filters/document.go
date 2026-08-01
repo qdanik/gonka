@@ -2,9 +2,12 @@ package filters
 
 import (
 	"bytes"
-	"encoding/json"
 
 	"devshard"
+
+	stdjson "encoding/json"
+
+	json "github.com/goccy/go-json"
 )
 
 const (
@@ -32,8 +35,11 @@ func ParseDocument(body []byte) (*Document, error) {
 	if err := ensureStructuralBounds(body, MaxNestingDepth, MaxStructuralNodes); err != nil {
 		return nil, err
 	}
+	// The decoder here is the standard library's on purpose, alone in this package. Its error text goes
+	// to the client verbatim and the golden corpus pins it against the gateway this replaces, so a
+	// faster library with different wording would change what every malformed request sees.
 	var raw map[string]any
-	decoder := json.NewDecoder(bytes.NewReader(body))
+	decoder := stdjson.NewDecoder(bytes.NewReader(body))
 	decoder.UseNumber()
 	if err := decoder.Decode(&raw); err != nil {
 		return nil, Reject("parse request: %v", err)

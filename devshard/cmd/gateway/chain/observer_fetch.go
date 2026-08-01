@@ -1,12 +1,13 @@
 package chain
 
 import (
-	"encoding/json"
 	"fmt"
 	"maps"
 	"sort"
 	"strconv"
 	"strings"
+
+	json "github.com/goccy/go-json"
 )
 
 type epochInfo struct {

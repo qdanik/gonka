@@ -4,7 +4,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -38,6 +37,8 @@ import (
 	"devshard/signing"
 	"devshard/transport"
 	"devshard/user"
+
+	json "github.com/goccy/go-json"
 )
 
 // Version is stamped by the build via -ldflags "-X main.Version=...".
