@@ -211,7 +211,10 @@ func TestCaptureCountsWhatItRefusesAtTheCap(t *testing.T) {
 		}
 	}
 
-	written, refused, held := capture.stats()
+	written, refused, failed, held := capture.stats()
+	if failed != 0 {
+		t.Fatalf("failed = %d, want 0: a writable directory must not report write failures", failed)
+	}
 	if refused == 0 {
 		t.Fatal("the sink refused nothing at a 512-byte cap")
 	}
@@ -220,5 +223,36 @@ func TestCaptureCountsWhatItRefusesAtTheCap(t *testing.T) {
 	}
 	if held > 512 {
 		t.Fatalf("held = %d bytes, want no more than the 512-byte cap", held)
+	}
+}
+
+// An unwritable capture directory is the other way the sink goes dark, and it needs its own count:
+// refusal is the byte cap doing its job, but a failed write means nobody is capturing anything and
+// no operator has been told.
+func TestCaptureCountsWritesItCouldNotMake(t *testing.T) {
+	storageDir := t.TempDir()
+	capture, err := newRequestCapture(config.Capture{Enabled: true, SampleRate: 1, MaxBytes: 1 << 20}, storageDir, time.Now)
+	if err != nil {
+		t.Fatalf("newRequestCapture(): %v", err)
+	}
+	blocker := filepath.Join(storageDir, captureDirName, captureFilterRejected)
+	if err := os.MkdirAll(filepath.Dir(blocker), 0o755); err != nil {
+		t.Fatalf("preparing the capture directory: %v", err)
+	}
+	if err := os.WriteFile(blocker, []byte("not a directory"), 0o644); err != nil {
+		t.Fatalf("blocking the capture subdirectory: %v", err)
+	}
+
+	capture.filterRejected(chatRequest(t), "request-1", []byte(chatBody), engine.ErrStopped)
+
+	written, refused, failed, _ := capture.stats()
+	if failed != 1 {
+		t.Fatalf("failed = %d, want 1: an unwritable directory must be counted", failed)
+	}
+	if written != 0 {
+		t.Fatalf("written = %d, want 0: nothing reached the disk", written)
+	}
+	if refused != 0 {
+		t.Fatalf("refused = %d, want 0: the cap was not the reason", refused)
 	}
 }

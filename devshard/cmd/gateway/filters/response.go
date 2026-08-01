@@ -20,13 +20,23 @@ var (
 		"prompt_logprobs",
 	}
 
-	// strippableMarkers is derived from clientStrippedFields rather than written beside it: a
-	// hand-maintained marker list silently forwards any field it forgets, which is how top_logprobs
-	// leaked for the lifetime of the hand-written version.
+	// strippableMarkers keeps only the fields no other field contains, unquoted, so two scans cover all
+	// six: "top_logprobs" contains "logprob", so finding the short one cannot miss the long one. Still
+	// derived from the list -- a hand-written marker set is exactly how top_logprobs once leaked, and
+	// the quote that set relied on is what hid it, since the quote sits before "top_", not "logprob".
 	strippableMarkers = func() [][]byte {
 		markers := make([][]byte, 0, len(clientStrippedFields))
 		for _, field := range clientStrippedFields {
-			markers = append(markers, []byte(`"`+field+`"`))
+			contained := false
+			for _, other := range clientStrippedFields {
+				if other != field && strings.Contains(field, other) {
+					contained = true
+					break
+				}
+			}
+			if !contained {
+				markers = append(markers, []byte(field))
+			}
 		}
 		return markers
 	}()
@@ -74,47 +84,14 @@ func StripResponseBody(body []byte) []byte {
 }
 
 func stripInternalFields(payload []byte) ([]byte, stripOutcome) {
-	var decoded any
-	if err := json.Unmarshal(payload, &decoded); err != nil {
+	stripped, changed, err := stripFields(payload)
+	switch {
+	case err != nil:
 		return nil, stripMalformed
-	}
-	if !deleteInternalFields(decoded) {
+	case !changed:
 		return nil, stripUnchanged
 	}
-	encoded, err := json.Marshal(decoded)
-	if err != nil {
-		return nil, stripMalformed
-	}
-	return encoded, stripRewritten
-}
-
-func deleteInternalFields(v any) bool {
-	switch typed := v.(type) {
-	case map[string]any:
-		changed := false
-		for _, key := range clientStrippedFields {
-			if _, ok := typed[key]; ok {
-				delete(typed, key)
-				changed = true
-			}
-		}
-		for _, child := range typed {
-			if deleteInternalFields(child) {
-				changed = true
-			}
-		}
-		return changed
-	case []any:
-		changed := false
-		for _, child := range typed {
-			if deleteInternalFields(child) {
-				changed = true
-			}
-		}
-		return changed
-	default:
-		return false
-	}
+	return stripped, stripRewritten
 }
 
 // hasStrippableField is a cheap pre-check so untouched chunks skip the SSE split entirely.
