@@ -8,7 +8,9 @@ import (
 	"go.uber.org/goleak"
 )
 
-func TestMain(m *testing.M) { goleak.VerifyTestMain(m) }
+func TestMain(m *testing.M) {
+	goleak.VerifyTestMain(m, goleak.IgnoreTopFunction("github.com/desertbit/timer.timerRoutine"))
+}
 
 type labels map[string]string
 

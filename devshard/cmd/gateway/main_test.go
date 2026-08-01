@@ -41,6 +41,10 @@ func TestMain(m *testing.M) {
 		// own finalizer goroutine outlives every handle we close.
 		goleak.IgnoreTopFunction("database/sql.(*DB).connectionOpener"),
 		goleak.IgnoreTopFunction("modernc.org/sqlite.(*conn).interruptOnDone.func1"),
+		// The chain client is dialed once and lives for the process: common/chain exposes no Close, and
+		// its grpc connection and desertbit/timer's wheel both outlive every gateway this test composes.
+		goleak.IgnoreTopFunction("github.com/desertbit/timer.timerRoutine"),
+		goleak.IgnoreTopFunction("google.golang.org/grpc/internal/grpcsync.(*CallbackSerializer).run"),
 	)
 }
 
