@@ -153,6 +153,27 @@ Most of the gateway's families share the prefix `devshard_gateway_`; the excepti
 
 There are no alerting rules in the repository, so nothing pages on any of this today.
 
+## Logs
+
+The gateway logs through `devshard/logging`, the same package the rest of devshard uses, so its lines land in the operator's existing format. There are nine call sites, against roughly three hundred in the legacy binary — a difference of kind rather than degree. The legacy names a `stage=` on every step of a failing operation; here the error carries that itself, wrapped as `resolving signer for escrow X` or `building settlement for escrow X`, and the escrow tick logs the joined result once. Adding stage labels beside errors that already name their step would restate the same fact twice.
+
+### The request record
+
+`request finished` is one line per completed race, at Info when it went out clean and Warn when it did not. Its fields answer the one question a finished request can no longer be asked:
+
+| Field | What it settles |
+|---|---|
+| `bytes` | how much actually reached the client, counted at the socket rather than at the caller, because the strip rewrites events on the way out |
+| `terminated` | whether the SSE terminator went with them; without it a client waits out its own timeout on a reply it already has |
+| `outcome` | `served`, `failed_mid_stream`, or `failed_before_first_byte` — the last distinguishes a reply the client can retry from one it cannot |
+| `deliver_error` | the failure that reached the client instead of the last bytes, which is the case no status code can express: a stream commits 200 on its first byte |
+
+The record deliberately carries no request or response body. Capture files exist for that, are sampled, and are bounded.
+
+### What is still unanswerable
+
+Nothing records per-stage timing inside a request, so "where did the latency go" needs the metrics, which are per-gateway rather than per-request. The record also cannot say whether a client read what it was sent — only that the gateway wrote it.
+
 ## Start-up
 
 1. Read the environment, resolve the storage directory (default `$HOME/.cache/gonka-gateway`), open the store.

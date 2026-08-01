@@ -4,10 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 
 	"devshard/cmd/gateway/chain"
 	"devshard/cmd/gateway/store"
+	"devshard/logging"
 )
 
 // OnBalanceExhausted marks an escrow for replacement; the work happens in the next tick, so this
@@ -47,7 +47,7 @@ func (m *Manager) retireDepleted(ctx context.Context, record store.DevshardRecor
 	if replaceable {
 		return m.replaceDepleted(ctx, record, model, snapshot)
 	}
-	log.Printf("escrow %s depleted: retiring with no replacement, rotation configures none for model %q", record.EscrowID, record.Model)
+	logging.Warn("escrow depleted with no replacement configured", "escrow", record.EscrowID, "model", record.Model)
 	if err := m.retire(ctx, record); err != nil {
 		return fmt.Errorf("retiring depleted escrow %s: %w", record.EscrowID, err)
 	}
