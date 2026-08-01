@@ -2,11 +2,12 @@ package api
 
 import (
 	"cmp"
-	"encoding/json"
 	"fmt"
 	"net/http"
 
 	"devshard/cmd/gateway/filters"
+
+	json "github.com/goccy/go-json"
 )
 
 const (

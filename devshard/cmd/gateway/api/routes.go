@@ -2,7 +2,6 @@ package api
 
 import (
 	"cmp"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"slices"
@@ -15,6 +14,8 @@ import (
 	"devshard/logging"
 	"devshard/types"
 	"devshard/user"
+
+	json "github.com/goccy/go-json"
 )
 
 // otherRouteLabel is the single label every unmatched path folds into. See gateway-operations.md,

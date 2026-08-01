@@ -2,8 +2,8 @@ package filters
 
 import (
 	"bytes"
-	"encoding/json"
 	"fmt"
+	json "github.com/goccy/go-json"
 	"net/http"
 	"strings"
 )
@@ -83,15 +83,52 @@ func StripResponseBody(body []byte) []byte {
 	return filtered
 }
 
+// stripInternalFields decodes, deletes and re-encodes. UseNumber keeps an integer past 2^53 exactly --
+// a client's seed among them -- which a plain decode into any would round. More() keeps a body with
+// trailing junk malformed, which a Decoder alone would accept by reading only its first value.
 func stripInternalFields(payload []byte) ([]byte, stripOutcome) {
-	stripped, changed, err := stripFields(payload)
-	switch {
-	case err != nil:
+	decoder := json.NewDecoder(bytes.NewReader(payload))
+	decoder.UseNumber()
+	var decoded any
+	if err := decoder.Decode(&decoded); err != nil || decoder.More() {
 		return nil, stripMalformed
-	case !changed:
+	}
+	if !deleteInternalFields(decoded) {
 		return nil, stripUnchanged
 	}
-	return stripped, stripRewritten
+	// DisableHTMLEscape keeps the host's bytes: the default turns every < > & in generated content into
+	// a six-byte escape, which is the same string to a decoder and a much larger one on the wire.
+	encoded, err := json.MarshalWithOption(decoded, json.DisableHTMLEscape())
+	if err != nil {
+		return nil, stripMalformed
+	}
+	return encoded, stripRewritten
+}
+
+// deleteInternalFields removes clientStrippedFields at any depth, reporting whether anything went.
+func deleteInternalFields(value any) bool {
+	switch typed := value.(type) {
+	case map[string]any:
+		changed := false
+		for _, field := range clientStrippedFields {
+			if _, held := typed[field]; held {
+				delete(typed, field)
+				changed = true
+			}
+		}
+		for _, child := range typed {
+			changed = deleteInternalFields(child) || changed
+		}
+		return changed
+	case []any:
+		changed := false
+		for _, child := range typed {
+			changed = deleteInternalFields(child) || changed
+		}
+		return changed
+	default:
+		return false
+	}
 }
 
 // hasStrippableField is a cheap pre-check so untouched chunks skip the SSE split entirely.

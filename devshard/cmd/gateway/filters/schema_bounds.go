@@ -1,9 +1,10 @@
 package filters
 
 import (
-	"encoding/json"
 	"fmt"
 	"regexp"
+
+	json "github.com/goccy/go-json"
 )
 
 // Bound families for each schema-carrying field, kept separate per field even where the values
