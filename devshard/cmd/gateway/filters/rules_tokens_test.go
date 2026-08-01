@@ -180,7 +180,7 @@ func TestTokensApplyLimitsBothSet(t *testing.T) {
 		maxTokens           uint64
 		maxCompletionTokens uint64
 		admin               bool
-		want                uint64 // both fields always converge to the same value
+		want                uint64
 	}{
 		{"both under cap, completion smaller wins", 180, 120, false, 120},
 		{"both under cap, max_tokens smaller wins", 120, 180, false, 120},

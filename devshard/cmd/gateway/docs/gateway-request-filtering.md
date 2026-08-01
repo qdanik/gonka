@@ -12,7 +12,7 @@ The gateway also forces three fields on every request so that it can judge the a
 
 ## The pipeline
 
-Stage order is fixed (`filters/pipeline.go:5-47`):
+Stage order is fixed (`filters/pipeline.go`, `runPipeline`):
 
 ```
 resolve routed model → select model profile → flatten extra_body →
@@ -25,7 +25,7 @@ There are exactly two rule stages: pre-validation, before message hygiene and th
 
 Rules compose from four verbs: **reject**, **clamp** (rewrite into range), **strip** (delete the key), and **force** (overwrite unconditionally).
 
-`extra_body` is flattened into the top level *before* the whitelist runs, an existing top-level key wins on conflict, and the envelope is dropped either way (`filters/table.go:243-261`).
+`extra_body` is flattened into the top level *before* the whitelist runs, an existing top-level key wins on conflict, and the envelope is dropped either way (`filters/table.go`, `unwrapExtraBody`).
 
 ### Registration order is semantics
 
@@ -47,7 +47,7 @@ Rules run in table order, then in chain order. Five orderings are load-bearing a
 | Nesting depth | 32 | |
 | Structural nodes | 250 000 | A body inside the byte cap can still decode into an order of magnitude more heap than its own bytes. |
 
-The depth and node checks are one byte-wise pass outside string literals, which is cheaper than decoding first and measuring after (`filters/document.go:111-159`). The same 10 MiB constant is what the HTTP layer hands to `MaxBytesReader`, so ingest and decode share one number.
+The depth and node checks are one byte-wise pass outside string literals, which is cheaper than decoding first and measuring after (`filters/document.go`, `ensureStructuralBounds`). The same 10 MiB constant is what the HTTP layer hands to `MaxBytesReader`, so ingest and decode share one number.
 
 ## What the gateway forces, and the paired strip
 
@@ -57,9 +57,9 @@ Set on every request, present or not:
 - `top_logprobs = 5`
 - `return_token_ids = true`
 
-The gateway needs them to classify an answer — whether the host produced content, whether it burned tokens producing nothing. The client never asked for them, so the response side removes `logprob`, `logprobs`, `top_logprobs`, `token_ids`, `prompt_token_ids` and `prompt_logprobs` at any nesting depth. The two lists are held together by a test that fails if a forced field gains no strip counterpart (`filters/response.go:11-20`).
+The gateway needs them to classify an answer — whether the host produced content, whether it burned tokens producing nothing. The client never asked for them, so the response side removes `logprob`, `logprobs`, `top_logprobs`, `token_ids`, `prompt_token_ids` and `prompt_logprobs` at any nesting depth. The two lists are held together by a test that fails if a forced field gains no strip counterpart (`filters/response.go`, `clientStrippedFields`).
 
-`max_tokens` is also always written, even when the client sent neither token field. Zero always means "unset", so it resolves to the operator's default **in full**: the cap bounds what a client may ask for, not what an operator grants a client that asks for nothing, so a default above the cap is honoured rather than trimmed. A non-zero value is clamped to the cap unless the caller is an administrator, which is the only cap bypass. When both fields are present the result is the minimum of the two, mirrored back into `max_completion_tokens` only if the client sent it (`filters/rules_tokens.go:172-201`). Per-model overrides can replace either limit; a zero from an override means "not set for this model", so the global limit stands.
+`max_tokens` is also always written, even when the client sent neither token field. Zero always means "unset", so it resolves to the operator's default **in full**: the cap bounds what a client may ask for, not what an operator grants a client that asks for nothing, so a default above the cap is honoured rather than trimmed. A non-zero value is clamped to the cap unless the caller is an administrator, which is the only cap bypass. When both fields are present the result is the minimum of the two, mirrored back into `max_completion_tokens` only if the client sent it (`filters/rules_tokens.go`, `applyOutputTokenLimits`). Per-model overrides can replace either limit; a zero from an override means "not set for this model", so the global limit stands.
 
 ## Bounds that exist because a host dies without them
 
@@ -77,13 +77,13 @@ The gateway needs them to classify an answer — whether the host produced conte
 
 The forbidden `chat_template_kwargs` keys are those that override the chat-template helper's *positional arguments* instead of becoming template variables. `add_generation_prompt` is explicitly **not** banned, because it is a genuine template variable.
 
-Schema bound families are kept separate per field even where the numbers currently match, so that tuning one never silently retunes another (`filters/schema_bounds.go:11-12`). Walking happens before the size measurement, so a deep or wide attack payload never pays for a full marshal.
+Schema bound families are kept separate per field even where the numbers currently match, so that tuning one never silently retunes another (`filters/schema_bounds.go`, the per-field bound constants). Walking happens before the size measurement, so a deep or wide attack payload never pays for a full marshal.
 
 Two subtleties in the schema walker: data-carrying keys (`enum`, `const`, `default`, `examples`, `required`, `dependentRequired`) are *not* recursed into, because a `$ref` inside a default value is data rather than a reference; and the wrapper maps of `properties`/`patternProperties`/`dependentSchemas` are not counted as extra nodes.
 
 ## Message hygiene
 
-The normaliser chain is fixed and order-sensitive — dropping orphaned and empty turns first keeps their malformed content from ever reaching the shape checks (`filters/messages.go:47-55`):
+The normaliser chain is fixed and order-sensitive — dropping orphaned and empty turns first keeps their malformed content from ever reaching the shape checks (`filters/messages.go`, `messageNormalizerChain`):
 
 1. Drop `tool` messages whose `tool_call_id` has no matching prior assistant tool call.
 2. Drop assistant turns with no content and no call payload — informationless placeholders some clients resend.
@@ -97,7 +97,7 @@ One accommodation worth knowing: a `null` `tool_calls` or `function_call` is tre
 
 ## Model profiles
 
-Per-model behaviour is expressed as *hooks on a profile*, and rules consult the hooks rather than comparing model identifiers (`filters/profiles.go:15-17`). A nil profile is the default. This replaced three different model-scoping conventions in the legacy gateway.
+Per-model behaviour is expressed as *hooks on a profile*, and rules consult the hooks rather than comparing model identifiers (`filters/profiles.go`, `Profile`). A nil profile is the default. This replaced three different model-scoping conventions in the legacy gateway.
 
 | Profile | Deltas |
 |---|---|
@@ -105,7 +105,7 @@ Per-model behaviour is expressed as *hooks on a profile*, and rules consult the 
 | MiniMax | `enable_thinking` and `thinking` stripped — there is no chat-template knob, reasoning is interleaved and structural to the template; `reasoning_split` is a native passthrough field. |
 | Default (Qwen and others) | No deltas. |
 
-One documented hole: a `thinking_token_budget` sent as a *string* fails the numeric coercion and is left completely untouched, bypassing every clamp below it (`filters/rules_reasoning.go:170-171`). It is acknowledged in the code rather than being an oversight.
+One documented hole: a `thinking_token_budget` sent as a *string* fails the numeric coercion and is left completely untouched, bypassing every clamp below it (`filters/rules_reasoning.go`, `thinkingTokenBudgetResolve`). It is acknowledged in the code rather than being an oversight.
 
 `reasoning_effort` is validated and then stripped: no route serves it today, but rejecting a valid value would break clients that send it harmlessly.
 
@@ -115,7 +115,7 @@ One documented hole: a `thinking_token_budget` sent as a *string* fails the nume
 
 **Streaming replies** go through a stateful `StreamRewriter`, which is the part that must not be got wrong. A stateless per-chunk rewriter is what the gateway had first, and TCP does not deliver event-aligned chunks: any frame split across a read boundary was emitted verbatim, leaking exactly the token ids and log-probabilities the strip exists to hide.
 
-The rewriter (`filters/stream.go:54-134`):
+The rewriter (`filters/stream.go`, `StreamRewriter`):
 
 - Emits only complete events and holds the trailing partial.
 - Terminates on both `\n\n` and `\r\n\r\n`, preferring the earliest.
@@ -126,19 +126,29 @@ The rewriter (`filters/stream.go:54-134`):
 
 The 32 MiB carry cap has arithmetic behind it, and the arithmetic depends on the gateway's own forcing: `return_token_ids` makes hosts emit `prompt_token_ids`, roughly seven bytes per prompt token, so a million-token context already needs about 6.7 MiB in a single frame. 32 MiB covers roughly 4.8 million tokens. An earlier 4 MiB cap, sized from a 131 072-token assumption, would have broken legitimate maximum-context streams from around 600 000 tokens.
 
+### A complete reply on a streaming request is rewritten into chunks
+
+Some hosts answer a streaming request with one whole `chat.completion` instead of a sequence of `chat.completion.chunk` events. The two shapes differ exactly where a client reads them: a completion carries `choices[].message`, a chunk carries `choices[].delta`. Forwarded as-is, an OpenAI streaming client renders nothing — while the receipt lands, the nonce settles and the money is spent. So the rewriter converts it instead of passing it on.
+
+The conversion sits inside the same event rewrite that does the stripping (`filters/stream.go`, `rewriteEvent` and `completionAsChunks`). A substring test for `"message"` decides whether an event is worth trying at all, the strip runs first so a converted chunk can never carry the token ids the strip exists to hide, and an event whose payload does not parse is still dropped rather than converted.
+
+Each choice is emitted as the separate chunks a real stream would have sent, in that order: the role on its own if the message named one, then everything else in the message as one delta, then a terminating chunk with an empty delta carrying `finish_reason` and `stop_reason`. A host-reported `usage` object follows as a final chunk with no choices. A JSON `null` counts as absent throughout, so a field the host spelled out as null is not re-sent as one the client has to interpret.
+
+Conversion is deliberately best-effort. A payload that does not unmarshal into a completion, or one whose choices produce no chunk at all, falls through to the ordinary stripped event rather than costing the client an answer the race has already paid for.
+
 ### Two `data:` prefixes that must not be unified
 
-`filters/stream.go` declares both `"data: "` (with the space, used for **emitting**) and `"data:"` (without, used for **reading**). They look like a duplication bug, and unifying them would break classification of every space-less frame — the SSE wire format allows `data:{...}`, and a reader that demanded the space would classify such a frame as carrying no data at all (`filters/stream.go:17-18`).
+`filters/stream.go` declares both `"data: "` (with the space, used for **emitting**) and `"data:"` (without, used for **reading**). They look like a duplication bug, and unifying them would break classification of every space-less frame — the SSE wire format allows `data:{...}`, and a reader that demanded the space would classify such a frame as carrying no data at all (`filters/stream.go`, `sseDataPrefix` and `sseDataParsePrefix`).
 
 ### Cacheability
 
-Whether an upstream response may be cached is response policy, so it lives here (`filters/response.go:99-235`). A response is cacheable when it has a body, no non-cacheable error, and either a 2xx status or a cacheable 400. Seventeen error-message markers — transient, environmental and model-availability classes — make a response non-cacheable, matched case-insensitively against message, type and code. Both vLLM error shapes are decoded: the nested `{"error":{…}}` and the flat `{"object":"error",…}` one it still emits. The check is re-run on *read* as well as write, so a poisoned entry drops itself.
+Whether an upstream response may be cached is response policy, so it lives here (`filters/response.go`, `nonCacheableErrorMarkers`, `IsCacheableResponse` and `isCacheableErrorDetails`). A response is cacheable when it has a body, no non-cacheable error, and either a 2xx status or a cacheable 400. Seventeen error-message markers — transient, environmental and model-availability classes — make a response non-cacheable, matched case-insensitively against message, type and code. Both vLLM error shapes are decoded: the nested `{"error":{…}}` and the flat `{"object":"error",…}` one it still emits. The check is re-run on *read* as well as write, so a poisoned entry drops itself.
 
 Capability refusals are explicitly not cacheable, because a different host may serve the same request fine.
 
 ### The vLLM capability-error parser lives here
 
-The phrases vLLM emits for a capability refusal — the tool-choice message and the "maximum context length is " marker — are an external contract, matched in exactly one place in the tree (`filters/capability.go:8-14`). It sits in `filters` because the engine may import `filters` and `filters` imports nothing from the gateway, so this is the only package both sides reach, and it is already the layer that reads upstream response bodies.
+The phrases vLLM emits for a capability refusal — the tool-choice message and the "maximum context length is " marker — are an external contract, matched in exactly one place in the tree (`filters/capability.go`, `CapabilityLimits`). It sits in `filters` because the engine may import `filters` and `filters` imports nothing from the gateway, so this is the only package both sides reach, and it is already the layer that reads upstream response bodies.
 
 It used to exist twice, and the copies had already drifted into a bug. One took its index from a lowercased string and sliced the original — and lowercasing can *shorten* a string, since U+212A (KELVIN SIGN) lowers to a one-byte `k`. The slice then lands mid-word, so `"maximum context length is 131072 tokens"` parsed as zero, and a retriable capability refusal became a hard failure. Both the search and the slice now run on the lowered copy, and the surviving copy is the only one.
 
@@ -148,4 +158,4 @@ The other half of that bug: the drifted copy also mis-parsed a message whose num
 
 A rejection is a `RejectError` carrying an HTTP status, defaulting to 400, and the message is operator-facing prose that names the network, points at the API documentation and the issue tracker, and says why: some non-standard parameters can crash the vLLM engine on Gonka host nodes.
 
-One status subtlety: `ErrorStatus` checks for the oversized-body error *first*, so a body refused for its size stays **413** even when a 400-carrying rejection wraps it (`filters/errors.go:35-36`). The API layer delegates to this function, so the request classifier and the filter package's own oracle are literally the same code.
+One status subtlety: `ErrorStatus` checks for the oversized-body error *first*, so a body refused for its size stays **413** even when a 400-carrying rejection wraps it (`filters/errors.go`, `ErrorStatus`). The API layer delegates to this function, so the request classifier and the filter package's own oracle are literally the same code.

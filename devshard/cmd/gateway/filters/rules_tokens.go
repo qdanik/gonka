@@ -42,8 +42,8 @@ func resolveOutputTokenLimits(options Options, routedModel string) outputTokenLi
 }
 
 // capOutputTokens: 0 means the client named no budget and gets the configured default, which the cap
-// deliberately does not clamp -- the cap bounds what a client may ASK for, and an operator raising the
-// default above it is granting more than that, not misconfiguring. A nonzero value clamps unless bypassed.
+// deliberately does not clamp; a nonzero value clamps unless bypassed. See
+// gateway-request-filtering.md, "What the gateway forces, and the paired strip".
 func capOutputTokens(value uint64, bypassLimit bool, limits outputTokenLimits) uint64 {
 	limits = normalizedOutputTokenLimits(limits)
 	if value == 0 {
@@ -147,8 +147,8 @@ func stripWhenFieldPresent(fieldName string) RuleFunc {
 	}
 }
 
-// greedySamplingForceOne coerces n to 1 when temperature reads as exactly 0 (vLLM rejects n>1
-// under greedy); must run before temperature's own clamp rule so it reads the raw client value.
+// greedySamplingForceOne coerces n to 1 when temperature reads as exactly 0; must run before
+// temperature's own clamp rule. See gateway-request-filtering.md, "Registration order is semantics".
 func greedySamplingForceOne() RuleFunc {
 	return func(ctx RuleContext) error {
 		n, ok := ctx.Document.Uint("n")
@@ -216,7 +216,6 @@ func HalveMaxTokens(body []byte, maxTokens uint64, routedModel string) ([]byte, 
 	if hasMaxCompletionTokens {
 		document.Set("max_completion_tokens", halved)
 	}
-	// A body carrying neither field still gets max_tokens, so the retry is bounded rather than open.
 	if document.Has("max_tokens") || !hasMaxCompletionTokens {
 		document.Set("max_tokens", halved)
 	}

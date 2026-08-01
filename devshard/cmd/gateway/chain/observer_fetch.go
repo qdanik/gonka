@@ -163,7 +163,6 @@ func parseParticipants(body []byte, preservation preservationMode, preservedNode
 	for _, participant := range participants {
 		key := strings.TrimSpace(participant.Index)
 		if key == "" {
-			// No chain address means no downstream identity to key weights or routing by -- drop it.
 			continue
 		}
 		if url := strings.TrimSpace(participant.InferenceURL); url != "" {

@@ -16,8 +16,8 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-// Store wraps the gateway.db handle. Access is serialized via a single
-// connection; contention waits on busy_timeout instead of failing.
+// Store wraps the gateway.db handle; access is serialized via a single connection. See
+// gateway-escrow-lifecycle.md, "What the store holds".
 type Store struct {
 	db           *sql.DB
 	retryBackoff time.Duration
@@ -96,6 +96,19 @@ var migrations = []string{
 	);`,
 }
 
+// The legacy-database guard is kept out of the migrations block above because it decides whether
+// this storage dir may be migrated at all, and because those entries are raw SQL whose indentation
+// is part of the literal.
+var (
+	// ErrLegacyDatabase reports a gateway.db written by devshardctl. Two table names collide at
+	// different columns, so migrating would adopt the legacy shape instead of failing.
+	ErrLegacyDatabase = errors.New("storage dir holds a devshardctl database; point the gateway at an empty storage dir")
+
+	// legacyOnlyTables are created by devshardctl and never here, so their presence without a
+	// schema_version is proof rather than a guess.
+	legacyOnlyTables = []string{"gateway_settings", "gateway_devshards", "gateway_suspicious_hosts", "participant_throttle_state"}
+)
+
 func Open(storageDir string) (*Store, error) {
 	if err := os.MkdirAll(storageDir, 0o755); err != nil {
 		return nil, fmt.Errorf("creating storage dir: %w", err)
@@ -126,14 +139,6 @@ func Open(storageDir string) (*Store, error) {
 	}
 	return &Store{db: db, retryBackoff: 200 * time.Millisecond}, nil
 }
-
-// ErrLegacyDatabase reports a gateway.db written by devshardctl. Two table names collide at
-// different columns, so migrating would adopt the legacy shape instead of failing.
-var ErrLegacyDatabase = errors.New("storage dir holds a devshardctl database; point the gateway at an empty storage dir")
-
-// legacyOnlyTables are created by devshardctl and never here, so their presence without a
-// schema_version is proof rather than a guess.
-var legacyOnlyTables = []string{"gateway_settings", "gateway_devshards", "gateway_suspicious_hosts", "participant_throttle_state"}
 
 func refuseLegacyDatabase(db *sql.DB, databasePath string) error {
 	present, err := tableExists(db, "schema_version")

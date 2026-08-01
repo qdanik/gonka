@@ -38,8 +38,8 @@ type ObserverConfig struct {
 }
 
 // PhaseObserver polls chain phase and participant state, derives an immutable PhaseSnapshot, and
-// publishes it to subscribers. It observes and folds raw inputs only -- scale, admission, and
-// speculative-attempt policy are derived by subscribers, not here.
+// publishes it to subscribers; it folds raw inputs only. See gateway-escrow-lifecycle.md, "What the
+// chain observer provides".
 type PhaseObserver struct {
 	publicAPIBaseURL string
 	chainRESTBaseURL string
@@ -151,8 +151,8 @@ func (o *PhaseObserver) run(ctx context.Context) {
 	}
 }
 
-// refresh runs one poll and publishes a snapshot; a fetch error republishes the previous
-// fields with LastError set so subscribers keep the last known-good view.
+// refresh runs one poll and publishes a snapshot; a fetch error republishes the previous fields with
+// LastError set. See gateway-escrow-lifecycle.md, "What the chain observer provides".
 func (o *PhaseObserver) refresh(ctx context.Context) {
 	previous := o.Snapshot()
 
@@ -400,8 +400,4 @@ func (o *PhaseObserver) publish(snapshot PhaseSnapshot) {
 	for _, cb := range callbacks {
 		cb(snapshot)
 	}
-}
-
-func (o *PhaseObserver) Versions() *VersionsCache {
-	return o.versions
 }

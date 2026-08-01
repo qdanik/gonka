@@ -26,8 +26,8 @@ const (
 
 var latencyBuckets = prometheus.ExponentialBuckets(0.01, 2, 12)
 
-// RaceRecorder satisfies the engine's metrics hook. Every family here is derived from one outcome at
-// the engine's single recording point, so two call sites cannot disagree about what a race did.
+// RaceRecorder satisfies the engine's metrics hook; every family here derives from one race outcome.
+// See gateway-operations.md, "Metrics".
 type RaceRecorder struct {
 	attemptsStarted   *prometheus.CounterVec
 	attemptsTerminal  *prometheus.CounterVec
@@ -197,8 +197,8 @@ func raceFailureReason(outcome engine.RaceOutcome, firstFailure string) string {
 	return metricLabel(firstFailure, labelUnknown)
 }
 
-// transportStatus maps a terminal back to the upstream status the host answered with. Terminals that
-// carry no recovered code report legacy's no-status label rather than minting one per error string.
+// transportStatus maps a terminal back to the upstream status the host answered with, reporting
+// statusNoCode when none was recovered. See gateway-operations.md, "Cardinality rules".
 func transportStatus(terminal engine.Terminal) (string, bool) {
 	if status, recovered := engine.StatusFor(terminal); recovered {
 		return strconv.Itoa(status), true

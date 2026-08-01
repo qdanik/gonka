@@ -11,8 +11,10 @@ import (
 	"devshard/cmd/gateway/filters"
 )
 
-const kimiModel = "moonshotai/Kimi-K2.6"
-const qwenModel = "Qwen/Qwen3-235B-A22B-Instruct-2507"
+const (
+	kimiModel = "moonshotai/Kimi-K2.6"
+	qwenModel = "Qwen/Qwen3-235B-A22B-Instruct-2507"
+)
 
 func TestContentSource(t *testing.T) {
 	t.Parallel()

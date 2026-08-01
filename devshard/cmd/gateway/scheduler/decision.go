@@ -6,8 +6,8 @@ import (
 	"time"
 )
 
-// Decision is match's total outcome for one nonce: exactly one of serve, burn, hold, or decline. The
-// exhaustiveness of this interface is the nonce-liveness invariant made compiler-checked.
+// Decision is match's total outcome for one nonce: exactly one of serve, burn, hold, or decline. See
+// gateway-invariants.md, "1. A committed nonce is always settled".
 type Decision interface{ isDecision() }
 
 type serve struct{ waiter *waiter }
@@ -26,10 +26,9 @@ func (burn) isDecision()    {}
 func (hold) isDecision()    {}
 func (decline) isDecision() {}
 
-// waiter is one request queued on an escrow's dispatcher, waiting for a compatible nonce. abandoned is how
-// a cancelled caller leaves the queue: the dispatcher owns the queue itself, so a departure must never be a
-// message the actor has to receive. handoff orders deliver against abandon, so a committed nonce arriving
-// in the same instant as the caller's cancellation is owned by exactly one of them rather than by neither.
+// waiter is one request queued on an escrow's dispatcher, waiting for a compatible nonce. abandoned is how a
+// cancelled caller leaves the queue, never a message the actor has to receive; handoff orders deliver against
+// abandon. See gateway-routing-and-nonces.md, "The per-escrow dispatcher".
 type waiter struct {
 	profile   RequestProfile
 	exclude   map[string]bool

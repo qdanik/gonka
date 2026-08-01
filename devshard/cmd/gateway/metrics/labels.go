@@ -9,8 +9,7 @@ import (
 
 const labelUnknown = "unknown"
 
-// metricLabel keeps a label value non-empty: an empty label reads as "the series does not apply"
-// on a dashboard, which is indistinguishable from a broken emit site.
+// metricLabel keeps a label value non-empty. See gateway-operations.md, "Cardinality rules".
 func metricLabel(value, fallback string) string {
 	if trimmed := strings.TrimSpace(value); trimmed != "" {
 		return trimmed

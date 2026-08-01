@@ -26,8 +26,8 @@ const (
 	DefaultGasLimit     = uint64(500_000)
 	DefaultPollInterval = 2 * time.Second
 	DefaultPollTimeout  = 45 * time.Second
-	// unorderedTxTTL is how far past "now" a built tx's timeout_timestamp is set.
-	unorderedTxTTL = 9 * time.Minute
+	// UnorderedTxTTL is how far past "now" a built tx's timeout_timestamp is set.
+	UnorderedTxTTL = 9 * time.Minute
 )
 
 // ErrTxNotFound marks a tx absent from every reachable query endpoint —
@@ -145,10 +145,9 @@ func buildTxQueryURLs(baseURL string, fallbacks []string) []string {
 	return urls
 }
 
-// CreateEscrow builds, signs, and broadcasts a MsgCreateDevshardEscrow tx.
-// onPrepared records the precomputed tx hash before the irreversible
-// broadcast; broadcast never runs if onPrepared returns an error, so a crash
-// between intent-write and broadcast is always recoverable from the intent.
+// CreateEscrow builds, signs, and broadcasts a MsgCreateDevshardEscrow tx; onPrepared records the
+// precomputed tx hash before the irreversible broadcast, and an error from it aborts the broadcast.
+// See gateway-escrow-lifecycle.md, "Creating an escrow, and surviving a crash mid-creation".
 func (c *TxClient) CreateEscrow(ctx context.Context, signer *signing.Secp256k1Signer, amount uint64, modelID string, onPrepared func(txHash string) error) (CreateEscrowResult, error) {
 	if signer == nil {
 		return CreateEscrowResult{}, fmt.Errorf("signer is required")
@@ -169,7 +168,7 @@ func (c *TxClient) CreateEscrow(ctx context.Context, signer *signing.Secp256k1Si
 	if err != nil {
 		return CreateEscrowResult{}, err
 	}
-	ttl := c.now().Add(unorderedTxTTL)
+	ttl := c.now().Add(UnorderedTxTTL)
 	txBytes, err := buildCreateEscrowTx(signer, chainID, account.AccountNumber, c.feeDenom, c.feeAmount, c.gasLimit, amount, modelID, ttl)
 	if err != nil {
 		return CreateEscrowResult{}, err
@@ -194,9 +193,9 @@ func (c *TxClient) CreateEscrow(ctx context.Context, signer *signing.Secp256k1Si
 	return CreateEscrowResult{EscrowID: escrowID, TxHash: txHash, Creator: creator}, nil
 }
 
-// SettleEscrow builds, signs, broadcasts and confirms a MsgSettleDevshardEscrow tx. Unlike
-// CreateEscrow it needs no intent hook, because settlement creates no chain-side id to recover -- but
-// it waits for the same commit, because its caller destroys the means to retry.
+// SettleEscrow builds, signs, broadcasts and confirms a MsgSettleDevshardEscrow tx; unlike CreateEscrow
+// it takes no intent hook, and it waits for the commit rather than CheckTx. See
+// gateway-escrow-lifecycle.md, "Transaction encoding".
 func (c *TxClient) SettleEscrow(ctx context.Context, signer *signing.Secp256k1Signer, input SettlementInput) (SettleEscrowResult, error) {
 	if signer == nil {
 		return SettleEscrowResult{}, fmt.Errorf("signer is required")
@@ -213,7 +212,7 @@ func (c *TxClient) SettleEscrow(ctx context.Context, signer *signing.Secp256k1Si
 	if err != nil {
 		return SettleEscrowResult{}, err
 	}
-	ttl := c.now().Add(unorderedTxTTL)
+	ttl := c.now().Add(UnorderedTxTTL)
 	txBytes, err := buildSettleEscrowTx(signer, chainID, account.AccountNumber, c.feeDenom, c.feeAmount, c.gasLimit, settler, input, ttl)
 	if err != nil {
 		return SettleEscrowResult{}, err
@@ -222,10 +221,8 @@ func (c *TxClient) SettleEscrow(ctx context.Context, signer *signing.Secp256k1Si
 	if err != nil {
 		return SettleEscrowResult{}, err
 	}
-	// Waiting is what makes the result mean "settled". The caller clears the pending marker and
-	// deletes the record holding the only key that can settle this escrow, so returning on CheckTx
-	// alone would strand the deposit whenever DeliverTx rejects -- a late settle past the two-epoch
-	// window, or a host-reported cost that pushes the payout above the escrow amount.
+	// Waiting is what makes the result mean "settled": the caller destroys the means to retry. See
+	// gateway-escrow-lifecycle.md, "Transaction encoding".
 	if err := c.waitForCommit(ctx, txHash); err != nil {
 		return SettleEscrowResult{}, fmt.Errorf("settling escrow %d: %w", input.EscrowID, err)
 	}
@@ -240,8 +237,8 @@ func (c *TxClient) resolveChainID(ctx context.Context) (string, error) {
 }
 
 // GetTxEscrowID reports found=false only when every reachable endpoint agrees the tx is absent or
-// committed-but-failed: conflating a per-endpoint error with "not found" drops a commitment that may
-// still land.
+// committed-but-failed; a per-endpoint error is never read as absence. See
+// gateway-escrow-lifecycle.md, "Creating an escrow, and surviving a crash mid-creation".
 func (c *TxClient) GetTxEscrowID(ctx context.Context, txHash string) (uint64, bool, error) {
 	var lastErr error
 	sawNotFound := false

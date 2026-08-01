@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"devshard/cmd/gateway/chain"
+	"devshard/cmd/gateway/perf"
 	"devshard/types"
 
 	"go.uber.org/goleak"
@@ -739,7 +740,7 @@ func TestDispatcherSeparatesAPermanentToolRefusalFromATransientOne(t *testing.T)
 		reason  string
 		wantErr error
 	}{
-		{name: "no host implements tools", reason: CapabilityToolsUnsupported, wantErr: ErrToolsUnsupported},
+		{name: "no host implements tools", reason: perf.CapabilityToolsUnsupported, wantErr: ErrToolsUnsupported},
 		{name: "the hosts are merely busy", reason: "context_limit_exceeded", wantErr: ErrNoAvailableHost},
 	}
 	for _, testCase := range tests {

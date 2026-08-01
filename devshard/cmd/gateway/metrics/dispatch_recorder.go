@@ -2,8 +2,8 @@ package metrics
 
 import "github.com/prometheus/client_golang/prometheus"
 
-// DispatchRecorder satisfies the scheduler's nonce-accounting hook. A nonce is money whichever way it
-// is spent, so a burn, a hold and an exhausted burn budget each get their own family.
+// DispatchRecorder satisfies the scheduler's nonce-accounting hook, with a burn, a hold and an
+// exhausted burn budget each in their own family. See gateway-operations.md, "Metrics".
 type DispatchRecorder struct {
 	ghostBurns          *prometheus.CounterVec
 	nonceHolds          *prometheus.CounterVec

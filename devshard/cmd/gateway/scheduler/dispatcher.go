@@ -52,9 +52,8 @@ const (
 	submitFull
 )
 
-// dispatcher turns one escrow's sequential nonce stream into request assignments. The loop goroutine
-// is the sole owner of waiting and of the session, so nothing else may touch either: a waiter leaves
-// by setting its own abandoned flag, never by sending the actor a message that could block.
+// dispatcher turns one escrow's sequential nonce stream into request assignments; its loop goroutine is the
+// sole owner of waiting and of the session. See gateway-routing-and-nonces.md, "The per-escrow dispatcher".
 type dispatcher struct {
 	dispatcherDeps
 
@@ -127,8 +126,8 @@ func (d *dispatcher) stop() {
 }
 
 // submitWaiter never blocks: a submit arriving before start, or faster than the actor drains, must
-// not stall its caller or pin the lifecycle lock. A full queue is back-pressure and a stopped
-// dispatcher is a lost race, and only the second is worth retrying, so they are reported apart.
+// not stall its caller or pin the lifecycle lock. A full queue and a stopped dispatcher are reported
+// apart. See gateway-routing-and-nonces.md, "The per-escrow dispatcher".
 func (d *dispatcher) submitWaiter(queued *waiter) submitOutcome {
 	d.lifecycleMu.RLock()
 	defer d.lifecycleMu.RUnlock()
@@ -149,8 +148,8 @@ func (d *dispatcher) isStopped() bool {
 	return d.stopped
 }
 
-// markStopped shuts the actor down from inside its own goroutine. It refuses once a waiter is in the
-// submit buffer, which is the one arrival an empty queue cannot see.
+// markStopped shuts the actor down from inside its own goroutine, refusing once a waiter is in the submit
+// buffer. See gateway-routing-and-nonces.md, "Idle dispatchers are reaped".
 func (d *dispatcher) markStopped() bool {
 	d.lifecycleMu.Lock()
 	defer d.lifecycleMu.Unlock()
@@ -331,9 +330,9 @@ func servable(queued *waiter, participants []string, avail availability) (canSer
 	return false, sawToolRefusal && !sawOtherReason
 }
 
-// reservation is what a serve decision took before the nonce was committed: the participant's
-// concurrency slot and the escrow's in-flight hold. Every path that cannot spend the assignment gives
-// both back together; a path that hands it over gives neither back.
+// reservation is what a serve decision took before the nonce was committed: the participant's concurrency
+// slot and the escrow's in-flight hold, given back together or not at all. See
+// gateway-routing-and-nonces.md, "Where the nonce, the slot and the hold are taken".
 type reservation struct {
 	participant string
 	escrowHold  func()
@@ -354,8 +353,6 @@ func (d *dispatcher) handOff(served *waiter, taken reservation, prepared Prepare
 		return
 	}
 	assignment := Assignment{Escrow: d.escrowID, Host: taken.participant, Nonce: prepared, EscrowHold: taken.escrowHold}
-	// The nonce is already committed, so a caller that vanished between the decision and the handoff
-	// would leave it accounted to nobody; it is charged to the ghost side instead.
 	if !served.deliver(pickResult{assignment: assignment}) {
 		d.giveBack(taken)
 		d.recordGhost(ghostAbandoned.reason())
@@ -472,9 +469,9 @@ func freeze(live availability) availability {
 	}
 }
 
-// admit couples the drain's admission to its frozen predicates: a participant whose window refused a
-// slot counts as throttled for the rest of the drain, so the sweep answers the queue rather than the
-// binding burning one more nonce every turn.
+// admit couples the drain's admission to its frozen predicates: a participant whose window refused a slot
+// counts as throttled for the rest of the drain. See
+// gateway-routing-and-nonces.md, "Where the nonce, the slot and the hold are taken".
 func admit(avail *availability, acquire func(string) bool) func(string) bool {
 	refused := map[string]bool{}
 	throttled := avail.throttled

@@ -8,9 +8,8 @@ import (
 	"devshard/types"
 )
 
-// fallbackNonceCeiling applies until governance max_nonce has been fetched. Treating an unknown cap
-// as unlimited lets an escrow run past the ceiling the host enforces, and refusing to serve stalls
-// every cold start, so the fixed ceiling the gateway ran on before the param existed is used instead.
+// fallbackNonceCeiling applies until governance max_nonce has been fetched: the fixed ceiling the gateway
+// ran on before the param existed. See gateway-routing-and-nonces.md, "Picking an escrow".
 const fallbackNonceCeiling uint64 = 19_800
 
 func (s *Scheduler) pickEscrow(profile RequestProfile, snapshot chain.PhaseSnapshot) (Escrow, error) {
@@ -57,8 +56,8 @@ func (s *Scheduler) pickEscrow(profile RequestProfile, snapshot chain.PhaseSnaps
 	}
 }
 
-// loadScore is the ascending utilisation ratio; a non-positive or corrupt weight scores unusable
-// rather than the perfectly-idle 0 a plain ratio would produce.
+// loadScore is the ascending utilisation ratio; a non-positive or corrupt weight scores unusable. See
+// gateway-routing-and-nonces.md, "Picking an escrow".
 func loadScore(activeUsers int, weight float64) float64 {
 	if weight <= 0 || math.IsNaN(weight) {
 		return math.Inf(1)

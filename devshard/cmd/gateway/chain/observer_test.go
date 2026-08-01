@@ -627,9 +627,9 @@ func TestPhaseObserver_DecodesMaxNonceFromDevshardEscrowParams(t *testing.T) {
 	}
 }
 
-// TestPhaseObserver_MaxNonceZeroBeforeFirstSuccessfulFetch covers the cold-start contract: with no
-// ChainRESTBaseURL configured, MaxNonce stays 0 (cap disabled) through active polling and the
-// params route is never dialed.
+// The cold-start contract: with no ChainRESTBaseURL configured, MaxNonce stays 0 through active
+// polling and the params route is never dialed. Zero means "not fetched", never "no cap" -- routing
+// falls back to a conservative ceiling rather than treating the budget as unlimited.
 func TestPhaseObserver_MaxNonceZeroBeforeFirstSuccessfulFetch(t *testing.T) {
 	stub := newPhaseObserverStub()
 	server := httptest.NewServer(stub.handler())
@@ -650,7 +650,7 @@ func TestPhaseObserver_MaxNonceZeroBeforeFirstSuccessfulFetch(t *testing.T) {
 		t.Fatalf("LastError = %q, want empty (no ChainRESTBaseURL is not a failure)", snapshot.LastError)
 	}
 	if snapshot.MaxNonce != 0 {
-		t.Errorf("MaxNonce = %d, want 0 (ChainRESTBaseURL unset, cap stays disabled)", snapshot.MaxNonce)
+		t.Errorf("MaxNonce = %d, want 0 (ChainRESTBaseURL unset, so nothing was fetched)", snapshot.MaxNonce)
 	}
 	if hits := stub.maxNonceHitCount(); hits != 0 {
 		t.Errorf("params endpoint hits = %d, want 0 when ChainRESTBaseURL is empty", hits)

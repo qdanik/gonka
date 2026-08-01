@@ -10,10 +10,12 @@ import (
 	"devshard/transport"
 )
 
-var testEpoch = time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC)
+const (
+	testParticipant = "gonka1host"
+	testModel       = "Qwen/Qwen3-235B"
+)
 
-const testParticipant = "gonka1host"
-const testModel = "Qwen/Qwen3-235B"
+var testEpoch = time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC)
 
 func limiterConfig(tripThreshold int64) limits.ParticipantConfig {
 	return limits.ParticipantConfig{

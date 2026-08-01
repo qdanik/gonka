@@ -12,9 +12,8 @@ import (
 )
 
 // Tracker composes the per-host performance primitives; sub-components own their locking, so mu only
-// guards the host/ejection maps. The two views answer Ejected and Degraded without touching mu or scanning
-// every host: the ejection cap is resolved once per state change, while each entry keeps its own expiry so
-// time still decides.
+// guards the host/ejection maps. The two published views answer Ejected and Degraded without taking mu.
+// See gateway-capacity-and-health.md, "Outlier ejection".
 type Tracker struct {
 	mu           sync.Mutex
 	config       *config.Holder
@@ -53,8 +52,6 @@ func (t *Tracker) RecordSample(s Sample) {
 	newEjectionPolicyFromPerf(perf).evaluate(host, state, now)
 
 	evicted := t.evictStaleLocked(now, time.Duration(perf.HostStalenessSeconds)*time.Second)
-	// Rebuilding is O(hosts), so it happens only when the membership the cap is computed over
-	// actually moved; entries carry their own expiry, so ageing out needs no rebuild.
 	if evicted || state.ejectedUntil != ejectedUntilBefore {
 		t.rebuildEjectedViewLocked(now, perf)
 	}
@@ -103,8 +100,8 @@ func (t *Tracker) ensureHostLocked(key hostKey, perf config.Perf) (*hostPerf, *e
 	return host, state
 }
 
-// evictStaleLocked sweeps at most once per tenth of the staleness window: entries age out over
-// minutes, so scanning every host on every sample costs O(hosts) under the global lock for nothing.
+// evictStaleLocked sweeps at most once per tenth of the staleness window.
+// See gateway-capacity-and-health.md, "Outlier ejection".
 func (t *Tracker) evictStaleLocked(now time.Time, staleness time.Duration) bool {
 	if now.Sub(t.lastSweep) < staleness/10 {
 		return false
@@ -186,9 +183,8 @@ func (t *Tracker) Snapshot() []HostState {
 	return states
 }
 
-// Ejected reports whether a host is currently withheld from routing. It is called once per host per
-// admission, so it reads the published view instead of scanning: the cap was applied when the view
-// was built, and the stored expiry keeps the answer correct as the ejection ages out.
+// Ejected reports whether a host is currently withheld from routing, reading the capped view published
+// at rebuild time rather than scanning. See gateway-capacity-and-health.md, "Outlier ejection".
 func (t *Tracker) Ejected(participant, model string) bool {
 	return ejectedIn(t.ejectedView.Load(), participant, model, t.now())
 }

@@ -561,3 +561,43 @@ func TestClearQuarantineReopensEveryModelsBreakerForOneParticipant(t *testing.T)
 		t.Fatal("ClearQuarantine(unknown) = true, want false")
 	}
 }
+
+// The engine releases an attempt's slot in a defer and reports its verdict afterwards, so a growth gate
+// reading the live count sees the slot already given back and refuses to grow a window that was
+// genuinely saturated. The decision must come out the same whichever call lands first.
+func TestWindowGrowthDoesNotDependOnReleaseOrder(t *testing.T) {
+	base := time.Unix(0, 0)
+	grow := func(releaseFirst bool) float64 {
+		// Four slots wide, two taken: the peak reaches exactly window/2 and passes the gate, while the
+		// live count after a release is one short of it. A window of two would pass either way and prove
+		// nothing.
+		limiter := newTestLimiter(ParticipantConfig{InitialWindow: 4, MaxWindow: 8}, func() time.Time { return base })
+		for range 2 {
+			if !limiter.Acquire("host-a", "model-a") {
+				t.Fatal("Acquire refused inside the initial window")
+			}
+		}
+		if releaseFirst {
+			limiter.Release("host-a", "model-a")
+			limiter.OnResult("host-a", "model-a", Success)
+		} else {
+			limiter.OnResult("host-a", "model-a", Success)
+			limiter.Release("host-a", "model-a")
+		}
+		for _, host := range limiter.Snapshot() {
+			if host.Participant == "host-a" && host.Model == "model-a" {
+				return host.Window
+			}
+		}
+		t.Fatal("the limiter reported no window for the host it just admitted")
+		return 0
+	}
+
+	released, reported := grow(true), grow(false)
+	if released != reported {
+		t.Fatalf("window = %v when Release ran first and %v when OnResult did; the order must not matter", released, reported)
+	}
+	if released <= 4 {
+		t.Fatalf("window = %v, want growth past the initial 4: half a four-slot window is the growth threshold", released)
+	}
+}

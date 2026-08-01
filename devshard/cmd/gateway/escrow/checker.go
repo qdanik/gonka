@@ -11,31 +11,18 @@ import (
 // OnEscrowMissing marks an escrow a host reported as absent from chain; the confirming lookup happens
 // in the next tick, so this hook does no I/O and never reaches the chain from the request path.
 func (m *Manager) OnEscrowMissing(escrowID string) {
-	m.missingMu.Lock()
-	defer m.missingMu.Unlock()
-	if m.missingMarks == nil {
-		m.missingMarks = make(map[string]bool)
-	}
-	m.missingMarks[escrowID] = true
+	m.missing.mark(escrowID)
 }
 
 func (m *Manager) checkMissing(ctx context.Context) error {
 	var errs []error
-	for _, escrowID := range slices.Sorted(maps.Keys(m.drainMissingMarks())) {
+	for _, escrowID := range slices.Sorted(maps.Keys(m.missing.drain())) {
 		if err := m.TriggerEscrowCheck(ctx, escrowID); err != nil {
 			m.OnEscrowMissing(escrowID) // a failed check must not un-schedule itself
 			errs = append(errs, err)
 		}
 	}
 	return errors.Join(errs...)
-}
-
-func (m *Manager) drainMissingMarks() map[string]bool {
-	m.missingMu.Lock()
-	defer m.missingMu.Unlock()
-	marks := m.missingMarks
-	m.missingMarks = nil
-	return marks
 }
 
 // Only a confirmed not-found deactivates the escrow; a lookup error or a found escrow both keep it

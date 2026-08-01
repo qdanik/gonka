@@ -130,8 +130,8 @@ func (c *requestCapture) record(kind string, r *http.Request, requestID, model s
 	_ = c.write(record)
 }
 
-// admit passes a deterministic share of what it sees rather than a random one, so a rate is honoured
-// exactly instead of in expectation and needs no seeded generator to be reproducible.
+// admit passes a deterministic stride of what it sees rather than a random sample. See
+// gateway-request-lifecycle.md, "Request capture".
 func (c *requestCapture) admit() bool {
 	switch {
 	case c.sampleRate >= 1:

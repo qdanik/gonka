@@ -529,9 +529,8 @@ func TestShutdownStopsAcceptingFirstAndClosesTheStoreLast(t *testing.T) {
 	assertSame(t, "shutdown sequence", sequence, want)
 }
 
-// An escrow session closes without taking its own lock, so it is safe only once the work that reaches
-// it has stopped. A drain that overran is left running rather than cancelled, which means the session
-// is still in use -- closing it there would race a nonce commit for a vote already being dropped.
+// An escrow session is closed only once the work that reaches it has stopped. See
+// gateway-invariants.md, "6. Shutdown order is a contract".
 func TestShutdownSkipsEscrowSessionsWhenADrainOverran(t *testing.T) {
 	var sequence []string
 	record := func(name string) func(context.Context) error {
@@ -600,8 +599,8 @@ func (b *blockingStopper) Stop() {
 	close(b.returned)
 }
 
-// A drain that cannot finish inside the budget must yield it: waiting on the vote forfeits the store,
-// the queued ledger rows and the escrow snapshots below it to the SIGKILL that follows.
+// A drain that cannot finish inside the budget must yield it to the steps below. See
+// gateway-architecture.md, "Shutdown".
 func TestWaitForYieldsTheBudgetToTheStepsBelowADrainThatOutlastsIt(t *testing.T) {
 	drainCtx, cancelDrain := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancelDrain()

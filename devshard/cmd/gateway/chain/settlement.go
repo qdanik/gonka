@@ -1,7 +1,7 @@
 package chain
 
-// SettlementInput is a settle payload with binary fields already decoded
-// (caller base64-decodes); it maps 1:1 onto MsgSettleDevshardEscrow.
+// SettlementInput is a settle payload with binary fields already decoded; it maps 1:1 onto
+// MsgSettleDevshardEscrow.
 type SettlementInput struct {
 	EscrowID  uint64
 	StateRoot []byte

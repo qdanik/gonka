@@ -8,7 +8,7 @@ import (
 
 func GatewayConfigFromLimits(l config.Limits) GatewayConfig {
 	modelLimits := make(map[string]ModelOverride, len(l.ModelLimits))
-	for model, modelLimit := range l.ModelLimits { // DefaultMaxTokens/MaxTokensCap are filter concerns, not limiter ones
+	for model, modelLimit := range l.ModelLimits {
 		modelLimits[model] = ModelOverride{
 			MaxConcurrent:  modelLimit.MaxConcurrentRequests,
 			MaxInputTokens: modelLimit.MaxInputTokensInFlight,

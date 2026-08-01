@@ -13,8 +13,11 @@ import (
 	"devshard/cmd/gateway/store"
 )
 
-// commitmentReconcileGrace = chain's 9-minute unordered-tx TTL + a 2-minute index-lag margin.
-const commitmentReconcileGrace = 11 * time.Minute
+// commitmentIndexLagMargin is how long a landed tx may stay unqueryable past the chain's
+// unordered-tx TTL before the commitment record can be cleared.
+const commitmentIndexLagMargin = 2 * time.Minute
+
+const commitmentReconcileGrace = chain.UnorderedTxTTL + commitmentIndexLagMargin
 
 type Manager struct {
 	tx        escrowTxClient
@@ -29,11 +32,8 @@ type Manager struct {
 	settlements      inFlightSet
 	checks           inFlightSet
 
-	depletedMarks map[string]bool
-	depletionMu   sync.Mutex
-
-	missingMarks map[string]bool
-	missingMu    sync.Mutex
+	depleted markSet
+	missing  markSet
 
 	lifecycleMu sync.Mutex
 	stop        chan struct{}

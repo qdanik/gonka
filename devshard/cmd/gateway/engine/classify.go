@@ -25,13 +25,13 @@ type chunkSignal struct {
 	UsageCompletionTokens int64
 }
 
-// crownsWinner admits content and nothing else. An error event still counts as a chunk, but a host
-// answering instantly with one must never beat a slower host that goes on to produce real tokens.
+// crownsWinner admits content and nothing else. See gateway-speculative-race.md, "An SSE error event
+// counts as a chunk but never crowns".
 func (s chunkSignal) crownsWinner() bool { return s.ContentSource != "" }
 
-// A thinking-budget route is the only one whose host-reported completion_tokens may separate a model
-// that produced nothing from a host that carried nothing; elsewhere any host could fake usage to
-// escape the empty-stream penalty and take the crown from a host that answered.
+// thinkingBudgetRoute reports the only route whose host-reported completion_tokens may separate a model
+// that produced nothing from a host that carried nothing. See gateway-speculative-race.md, "Crown
+// denial".
 func thinkingBudgetRoute(model string) bool {
 	profile := filters.ProfileFor(model)
 	return profile != nil && profile.ThinkingTokenBudget
