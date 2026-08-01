@@ -82,18 +82,3 @@ stress-test:
 
 fault-test:
 	go test ./user/ -tags stress -run TestFault -v -timeout 10m -count=1
-
-# DEVSHARD_VERSION is stamped into types.buildStateRootProtocolVersion, which is hashed into the
-# state-root preimage and written into every settlement payload. A binary built without it falls back
-# to the plain-`go test` default and signs settlements the network computes differently, so the
-# release build must always pass the same name as approved_versions.name.
-DEVSHARD_VERSION ?= dev
-
-gateway:
-	go build -ldflags "\
-		-X main.Version=$$(git describe --tags --always 2>/dev/null || echo dev) \
-		-X devshard/types.buildStateRootProtocolVersion=$(DEVSHARD_VERSION)" \
-		-o bin/gateway ./cmd/gateway
-
-gateway-test:
-	go test ./cmd/gateway/... -race -count=1
