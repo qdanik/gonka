@@ -901,3 +901,27 @@ func TestSchedulerReapsAnIdleDispatcherAndRecreatesItOnDemand(t *testing.T) {
 	}
 	test.scheduler.Stop()
 }
+
+// blockedHosts is keyed by an escrow id the chain never reuses, so an entry that outlives its escrow is
+// never read again and never freed. One per escrow that saw a divergent host, for the process lifetime.
+func TestRetiringAnEscrowForgetsItsBlockedHosts(t *testing.T) {
+	verifyNoLeaks(t)
+	test := newSchedulerHarness(t, schedulerConfig{})
+	escrow := test.escrow(t, escrowA)
+	claimed, err := test.scheduler.dispatcherFor(escrow)
+	if err != nil {
+		t.Fatalf("dispatcherFor: %v", err)
+	}
+	claimed.pendingSubmits.Add(-1)
+	test.scheduler.BlockHost(escrowA, "host-a")
+
+	if !test.scheduler.retire(claimed) {
+		t.Fatal("refused to retire an unclaimed idle dispatcher")
+	}
+
+	test.scheduler.blocksMu.RLock()
+	defer test.scheduler.blocksMu.RUnlock()
+	if _, held := test.scheduler.blockedHosts[escrowA]; held {
+		t.Fatal("the retired escrow's block list is still held")
+	}
+}

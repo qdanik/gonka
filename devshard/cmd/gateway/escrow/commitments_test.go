@@ -22,6 +22,8 @@ type fakeTxClient struct {
 	getTxEscrowIDFn func(ctx context.Context, txHash string) (uint64, bool, error)
 	settleEscrowFn  func(ctx context.Context, signer *signing.Secp256k1Signer, input chain.SettlementInput) (chain.SettleEscrowResult, error)
 	getEscrowFn     func(ctx context.Context, escrowID string) (chain.EscrowInfo, bool, error)
+	txCommittedFn   func(txHash string) (bool, error)
+	settleTxHash    string
 	createCalls     int
 	calls           *callLog
 }
@@ -31,14 +33,31 @@ func (f *fakeTxClient) CreateEscrow(ctx context.Context, signer *signing.Secp256
 	return f.createEscrowFn(ctx, signer, amount, modelID, onPrepared)
 }
 
-func (f *fakeTxClient) SettleEscrow(ctx context.Context, signer *signing.Secp256k1Signer, input chain.SettlementInput) (chain.SettleEscrowResult, error) {
+func (f *fakeTxClient) SettleEscrow(ctx context.Context, signer *signing.Secp256k1Signer, input chain.SettlementInput, onPrepared func(string) error) (chain.SettleEscrowResult, error) {
 	if f.calls != nil {
 		f.calls.record("SettleEscrow")
+	}
+	if onPrepared != nil {
+		if err := onPrepared(f.settleTxHash); err != nil {
+			return chain.SettleEscrowResult{}, err
+		}
 	}
 	if f.settleEscrowFn != nil {
 		return f.settleEscrowFn(ctx, signer, input)
 	}
 	return chain.SettleEscrowResult{}, errors.New("fakeTxClient: SettleEscrow not stubbed")
+}
+
+// TxCommitted answers for a settle already broadcast. The zero value reports "not on chain", which is
+// what a fake with no recorded settle should say.
+func (f *fakeTxClient) TxCommitted(_ context.Context, txHash string) (bool, error) {
+	if f.calls != nil {
+		f.calls.record("TxCommitted")
+	}
+	if f.txCommittedFn != nil {
+		return f.txCommittedFn(txHash)
+	}
+	return false, chain.ErrTxNotFound
 }
 
 func (f *fakeTxClient) GetTxEscrowID(ctx context.Context, txHash string) (uint64, bool, error) {
@@ -194,6 +213,21 @@ func (f *fakeStore) SetDevshardSettlementPending(ctx context.Context, escrowID s
 		return store.ErrDevshardNotFound
 	}
 	record.SettlementPending = pending
+	f.devshards[escrowID] = record
+	return nil
+}
+
+func (f *fakeStore) SetDevshardSettleTxHash(_ context.Context, escrowID, txHash string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.calls != nil {
+		f.calls.record(fmt.Sprintf("SetDevshardSettleTxHash(%q)", txHash))
+	}
+	record, held := f.devshards[escrowID]
+	if !held {
+		return store.ErrDevshardNotFound
+	}
+	record.SettleTxHash = txHash
 	f.devshards[escrowID] = record
 	return nil
 }

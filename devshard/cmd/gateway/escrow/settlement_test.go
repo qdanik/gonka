@@ -151,7 +151,8 @@ func TestSettleHappyPathOrderAndClearsPendingOnSuccess(t *testing.T) {
 	testStore.calls = log
 	settlementSource := &fakeSettlementSource{busy: false, calls: log, buildInput: chain.SettlementInput{EscrowID: 2}}
 	txClient := &fakeTxClient{
-		calls: log,
+		calls:        log,
+		settleTxHash: "SETTLE-TX",
 		settleEscrowFn: func(ctx context.Context, signer *signing.Secp256k1Signer, input chain.SettlementInput) (chain.SettleEscrowResult, error) {
 			return chain.SettleEscrowResult{EscrowID: input.EscrowID}, nil
 		},
@@ -168,9 +169,12 @@ func TestSettleHappyPathOrderAndClearsPendingOnSuccess(t *testing.T) {
 		t.Fatalf("settle() = %v, want nil", err)
 	}
 
+	// The hash is recorded inside SettleEscrow, before the broadcast: a settle that commits while the
+	// gateway is not looking must be recognisable on the next tick rather than rebuilt.
 	want := []string{
 		"SetDevshardActive(false)", "SetDevshardSettlementPending(true)", "Retire", "IsBusy",
-		"Finalize", "BuildSettlement", "SettleEscrow", "SetDevshardSettlementPending(false)",
+		"Finalize", "BuildSettlement", "SettleEscrow", `SetDevshardSettleTxHash("SETTLE-TX")`,
+		"SetDevshardSettlementPending(false)",
 	}
 	if got := log.snapshot(); !stringsEqual(got, want) {
 		t.Fatalf("call log = %v, want %v", got, want)
@@ -581,5 +585,61 @@ func TestSettlePendingIgnoresInactiveEscrowWithoutPendingMarker(t *testing.T) {
 	}
 	if _, ok := testStore.devshards[record.EscrowID]; !ok {
 		t.Fatal("unmarked escrow was settled and dropped")
+	}
+}
+
+// A settle whose wait times out may commit moments later. Building a fresh transaction on the next
+// tick produces a new hash the keeper rejects as already-settled, and the tick burns a fee for it
+// every fifteen seconds forever. Asking the chain about the recorded hash first is what stops that.
+func TestASettleAlreadyOnChainIsReconciledInsteadOfRebroadcast(t *testing.T) {
+	log := &callLog{}
+	record := store.DevshardRecord{EscrowID: "7", Model: "model-a", SettlementPending: true, SettleTxHash: "SETTLE-TX"}
+	testStore := newFakeStore()
+	testStore.devshards[record.EscrowID] = record
+	testStore.calls = log
+	txClient := &fakeTxClient{
+		calls:         log,
+		txCommittedFn: func(string) (bool, error) { return true, nil },
+	}
+	m := &Manager{tx: txClient, store: testStore, signer: &fakeSignerSource{signer: testSigner(t)},
+		settlementSource: &fakeSettlementSource{}}
+
+	result, err := m.settle(context.Background(), record)
+
+	if err != nil {
+		t.Fatalf("settle() = %v, want the recorded settlement recognised", err)
+	}
+	if result.TxHash != "SETTLE-TX" {
+		t.Fatalf("TxHash = %q, want the transaction already on chain", result.TxHash)
+	}
+	for _, call := range log.snapshot() {
+		if call == "SettleEscrow" {
+			t.Fatal("a second settlement was broadcast for an escrow the chain had already settled")
+		}
+	}
+}
+
+// The mirror case: a recorded transaction that never landed must not block a genuine retry, and the
+// stale hash has to go so the next attempt is judged on its own.
+func TestASettleThatNeverLandedIsRetried(t *testing.T) {
+	record := store.DevshardRecord{EscrowID: "7", Model: "model-a", SettlementPending: true, SettleTxHash: "GONE"}
+	testStore := newFakeStore()
+	testStore.devshards[record.EscrowID] = record
+	txClient := &fakeTxClient{
+		settleTxHash:  "FRESH-TX",
+		txCommittedFn: func(string) (bool, error) { return false, chain.ErrTxNotFound },
+		settleEscrowFn: func(_ context.Context, _ *signing.Secp256k1Signer, input chain.SettlementInput) (chain.SettleEscrowResult, error) {
+			return chain.SettleEscrowResult{EscrowID: input.EscrowID}, nil
+		},
+	}
+	m := &Manager{tx: txClient, store: testStore, signer: &fakeSignerSource{signer: testSigner(t)},
+		settlementSource: &fakeSettlementSource{}}
+
+	if _, err := m.settle(context.Background(), record); err != nil {
+		t.Fatalf("settle() = %v, want a fresh settlement", err)
+	}
+
+	if got := testStore.devshards["7"].SettleTxHash; got != "FRESH-TX" {
+		t.Fatalf("recorded hash = %q, want the new transaction's", got)
 	}
 }

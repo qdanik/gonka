@@ -217,3 +217,22 @@ func TestReplaceDepletedCreateFailureLeavesOldEscrow(t *testing.T) {
 		t.Fatalf("depleted escrow = %+v ok=%v, want it kept active until a replacement exists", got, ok)
 	}
 }
+
+// A depleted temp replaced by another temp is coverage the next bridge immediately retires, so the
+// model loses the escrow the replacement was meant to preserve.
+func TestADepletedTempIsReplacedByARegular(t *testing.T) {
+	testStore := newFakeStore()
+	depleted := activeRecord("1", "model-a")
+	depleted.RotationRole = roleTemp
+	testStore.devshards["1"] = depleted
+	txClient := &fakeTxClient{createEscrowFn: workingCreateEscrowFn(999)}
+	m := depletionManager(t, testStore, txClient)
+
+	if err := m.replaceDepleted(context.Background(), depleted, depletionModels()[0], chain.PhaseSnapshot{}); err != nil {
+		t.Fatalf("replaceDepleted() = %v, want nil", err)
+	}
+
+	if got := testStore.devshards["999"].RotationRole; got != roleRegular {
+		t.Fatalf("replacement role = %q, want %q", got, roleRegular)
+	}
+}

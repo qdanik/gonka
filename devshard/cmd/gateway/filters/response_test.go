@@ -505,3 +505,33 @@ func TestStripLeavesABodyWithTrailingJunkAlone(t *testing.T) {
 		t.Fatalf("a malformed body was rewritten:\n got %s\nwant %s", got, body)
 	}
 }
+
+// A host controls the response body, so nesting is an input it chooses. A recursive strip with no depth
+// bound answers that with a stack overflow, which runtime.throw makes uncatchable: the process dies and
+// takes every in-flight race and pending settlement with it. The decoder's own limit is what prevents
+// it, and this pins that the limit is still there.
+func TestADeeplyNestedResponseCannotCrashTheProcess(t *testing.T) {
+	for _, depth := range []int{1_000, 1_000_000, 3_000_000} {
+		body := []byte(`{"logprobs":1,"a":` + strings.Repeat("[", depth) + strings.Repeat("]", depth) + `}`)
+
+		if got := StripResponseBody(body); len(got) == 0 {
+			t.Fatalf("depth %d produced nothing", depth)
+		}
+	}
+}
+
+// Past the decoder's depth limit the body is unparseable, so it goes to the client whole -- internal
+// fields included. The gateway that this replaces behaves the same way, and the alternative is dropping
+// a reply a client is waiting for, but a host wanting its logprobs seen can nest its way there.
+func TestPastTheDepthLimitTheStripIsBypassed(t *testing.T) {
+	shallow := []byte(`{"logprobs":1,"a":[[]]}`)
+	if strings.Contains(string(StripResponseBody(shallow)), "logprobs") {
+		t.Fatal("a shallow body kept its internal field")
+	}
+
+	deep := []byte(`{"logprobs":1,"a":` + strings.Repeat("[", 100_000) + strings.Repeat("]", 100_000) + `}`)
+
+	if !strings.Contains(string(StripResponseBody(deep)), "logprobs") {
+		t.Fatal("the deep body was stripped after all -- then this test, and the bypass it documents, are stale")
+	}
+}

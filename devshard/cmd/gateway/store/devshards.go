@@ -11,14 +11,15 @@ import (
 // carries: a field added to DevshardRecord that nobody adds here is inserted once and never updated
 // again, and nothing else in the package fails when that happens.
 const upsertDevshardStatement = `
-		INSERT INTO devshards (escrow_id, private_key_env, model, active, rotation_role, rotation_epoch, settlement_pending)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO devshards (escrow_id, private_key_env, model, active, rotation_role, rotation_epoch, settlement_pending, settle_tx_hash)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(escrow_id) DO UPDATE SET
 			private_key_env = excluded.private_key_env,
 			model = excluded.model,
 			active = excluded.active,
 			rotation_role = excluded.rotation_role,
 			rotation_epoch = excluded.rotation_epoch,
+			settle_tx_hash = excluded.settle_tx_hash,
 			updated_at = datetime('now')`
 
 // ErrDevshardNotFound is returned by updates/deletes that match no row.
@@ -34,6 +35,7 @@ type DevshardRecord struct {
 	RotationRole      string
 	RotationEpoch     int64
 	SettlementPending bool
+	SettleTxHash      string
 }
 
 // UpsertDevshard replaces every field of an existing row except settlement_pending, so an unrelated
@@ -41,7 +43,7 @@ type DevshardRecord struct {
 func (s *Store) UpsertDevshard(ctx context.Context, record DevshardRecord) error {
 	_, err := s.db.ExecContext(ctx, upsertDevshardStatement,
 		record.EscrowID, record.PrivateKeyEnv, record.Model, record.Active,
-		record.RotationRole, record.RotationEpoch, record.SettlementPending)
+		record.RotationRole, record.RotationEpoch, record.SettlementPending, record.SettleTxHash)
 	if err != nil {
 		return fmt.Errorf("upserting devshard %s: %w", record.EscrowID, err)
 	}
@@ -51,7 +53,7 @@ func (s *Store) UpsertDevshard(ctx context.Context, record DevshardRecord) error
 // ListDevshards returns every record ordered by escrow id.
 func (s *Store) ListDevshards(ctx context.Context) ([]DevshardRecord, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT escrow_id, private_key_env, model, active, rotation_role, rotation_epoch, settlement_pending
+		SELECT escrow_id, private_key_env, model, active, rotation_role, rotation_epoch, settlement_pending, settle_tx_hash
 		FROM devshards ORDER BY escrow_id`)
 	if err != nil {
 		return nil, fmt.Errorf("listing devshards: %w", err)
@@ -61,7 +63,8 @@ func (s *Store) ListDevshards(ctx context.Context) ([]DevshardRecord, error) {
 	for rows.Next() {
 		var record DevshardRecord
 		if err := rows.Scan(&record.EscrowID, &record.PrivateKeyEnv, &record.Model,
-			&record.Active, &record.RotationRole, &record.RotationEpoch, &record.SettlementPending); err != nil {
+			&record.Active, &record.RotationRole, &record.RotationEpoch, &record.SettlementPending,
+			&record.SettleTxHash); err != nil {
 			return nil, fmt.Errorf("scanning devshard row: %w", err)
 		}
 		records = append(records, record)
@@ -73,11 +76,11 @@ func (s *Store) ListDevshards(ctx context.Context) ([]DevshardRecord, error) {
 }
 
 func (s *Store) SetDevshardActive(ctx context.Context, escrowID string, active bool) error {
-	return s.updateDevshardFlag(ctx, `UPDATE devshards SET active = ?, updated_at = datetime('now') WHERE escrow_id = ?`, active, escrowID)
+	return s.updateDevshardField(ctx, `UPDATE devshards SET active = ?, updated_at = datetime('now') WHERE escrow_id = ?`, active, escrowID)
 }
 
 func (s *Store) SetDevshardSettlementPending(ctx context.Context, escrowID string, pending bool) error {
-	return s.updateDevshardFlag(ctx, `UPDATE devshards SET settlement_pending = ?, updated_at = datetime('now') WHERE escrow_id = ?`, pending, escrowID)
+	return s.updateDevshardField(ctx, `UPDATE devshards SET settlement_pending = ?, updated_at = datetime('now') WHERE escrow_id = ?`, pending, escrowID)
 }
 
 func (s *Store) DeleteDevshard(ctx context.Context, escrowID string) error {
@@ -88,8 +91,8 @@ func (s *Store) DeleteDevshard(ctx context.Context, escrowID string) error {
 	return requireOneRow(result, escrowID)
 }
 
-func (s *Store) updateDevshardFlag(ctx context.Context, query string, flagValue bool, escrowID string) error {
-	result, err := s.db.ExecContext(ctx, query, flagValue, escrowID)
+func (s *Store) updateDevshardField(ctx context.Context, query string, value any, escrowID string) error {
+	result, err := s.db.ExecContext(ctx, query, value, escrowID)
 	if err != nil {
 		return fmt.Errorf("updating devshard %s: %w", escrowID, err)
 	}
@@ -105,4 +108,10 @@ func requireOneRow(result sql.Result, escrowID string) error {
 		return fmt.Errorf("%s: %w", escrowID, ErrDevshardNotFound)
 	}
 	return nil
+}
+
+// SetDevshardSettleTxHash records the transaction a settle broadcast, so a tick that finds the row
+// still pending can ask the chain what happened to it instead of building a second one.
+func (s *Store) SetDevshardSettleTxHash(ctx context.Context, escrowID, txHash string) error {
+	return s.updateDevshardField(ctx, `UPDATE devshards SET settle_tx_hash = ?, updated_at = datetime('now') WHERE escrow_id = ?`, txHash, escrowID)
 }

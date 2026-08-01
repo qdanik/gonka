@@ -297,7 +297,7 @@ func TestSettleEscrowValidatesInput(t *testing.T) {
 	}
 	for _, testCase := range tests {
 		t.Run(testCase.name, func(t *testing.T) {
-			_, err := client.SettleEscrow(t.Context(), testCase.signer, testCase.input)
+			_, err := client.SettleEscrow(t.Context(), testCase.signer, testCase.input, nil)
 			if err == nil {
 				t.Fatal("want validation error, got nil")
 			}
@@ -311,15 +311,18 @@ func TestSettleEscrowValidatesInput(t *testing.T) {
 func TestSettleEscrowWaitsForTheTransactionToCommit(t *testing.T) {
 	signer := fixedSigner(t)
 	var polled atomic.Bool
+	var broadcastHash atomic.Value
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.URL.Path == "/cosmos/auth/v1beta1/accounts/"+signer.Address():
 			writeJSONResponse(t, w, map[string]any{"account": map[string]any{"account_number": "9", "sequence": "0"}})
 		case r.Method == http.MethodPost && r.URL.Path == "/cosmos/tx/v1beta1/txs":
-			writeJSONResponse(t, w, map[string]any{"tx_response": map[string]any{"code": 0, "txhash": "DEF456"}})
+			hash := broadcastHashOf(t, r)
+			broadcastHash.Store(hash)
+			writeJSONResponse(t, w, map[string]any{"tx_response": map[string]any{"code": 0, "txhash": hash}})
 		case strings.HasPrefix(r.URL.Path, "/cosmos/tx/v1beta1/txs/"):
 			polled.Store(true)
-			writeJSONResponse(t, w, map[string]any{"tx_response": map[string]any{"code": 0, "txhash": "DEF456"}})
+			writeJSONResponse(t, w, map[string]any{"tx_response": map[string]any{"code": 0, "txhash": broadcastHash.Load()}})
 		default:
 			http.NotFound(w, r)
 		}
@@ -332,15 +335,15 @@ func TestSettleEscrowWaitsForTheTransactionToCommit(t *testing.T) {
 	}
 
 	input := fixedSettlementFull()
-	result, err := client.SettleEscrow(t.Context(), signer, input)
+	result, err := client.SettleEscrow(t.Context(), signer, input, nil)
 	if err != nil {
 		t.Fatalf("SettleEscrow: %v", err)
 	}
 	if !polled.Load() {
 		t.Error("settlement returned without confirming the transaction executed")
 	}
-	if result.TxHash != "DEF456" {
-		t.Errorf("TxHash = %q, want %q", result.TxHash, "DEF456")
+	if want, _ := broadcastHash.Load().(string); result.TxHash != want {
+		t.Errorf("TxHash = %q, want the hash the node acknowledged %q", result.TxHash, want)
 	}
 	if result.EscrowID != input.EscrowID {
 		t.Errorf("EscrowID = %d, want %d", result.EscrowID, input.EscrowID)
@@ -691,10 +694,10 @@ func TestSettleEscrowFailsWhenTheChainRejectsTheCommittedTransaction(t *testing.
 		case r.URL.Path == "/cosmos/auth/v1beta1/accounts/"+signer.Address():
 			writeJSONResponse(t, w, map[string]any{"account": map[string]any{"account_number": "9", "sequence": "0"}})
 		case r.Method == http.MethodPost && r.URL.Path == "/cosmos/tx/v1beta1/txs":
-			writeJSONResponse(t, w, map[string]any{"tx_response": map[string]any{"code": 0, "txhash": "DEF456"}})
+			writeJSONResponse(t, w, map[string]any{"tx_response": map[string]any{"code": 0, "txhash": broadcastHashOf(t, r)}})
 		case strings.HasPrefix(r.URL.Path, "/cosmos/tx/v1beta1/txs/"):
 			writeJSONResponse(t, w, map[string]any{"tx_response": map[string]any{
-				"code": 18, "codespace": "inference", "txhash": "DEF456", "raw_log": "payout exceeds escrow amount",
+				"code": 18, "codespace": "inference", "txhash": "", "raw_log": "payout exceeds escrow amount",
 			}})
 		default:
 			http.NotFound(w, r)
@@ -707,7 +710,7 @@ func TestSettleEscrowFailsWhenTheChainRejectsTheCommittedTransaction(t *testing.
 		t.Fatalf("NewTxClient: %v", err)
 	}
 
-	_, err = client.SettleEscrow(t.Context(), signer, fixedSettlementFull())
+	_, err = client.SettleEscrow(t.Context(), signer, fixedSettlementFull(), nil)
 
 	if err == nil {
 		t.Fatal("SettleEscrow returned success for a transaction the chain rejected")
@@ -715,4 +718,21 @@ func TestSettleEscrowFailsWhenTheChainRejectsTheCommittedTransaction(t *testing.
 	if !strings.Contains(err.Error(), "payout exceeds escrow amount") {
 		t.Fatalf("error = %v, want the chain's rejection reason", err)
 	}
+}
+
+// broadcastHashOf computes the hash of the transaction a request carries, so a fake node acknowledges
+// what was actually sent. A canned hash would exercise the mismatch guard instead of the path.
+func broadcastHashOf(t *testing.T, r *http.Request) string {
+	t.Helper()
+	var req struct {
+		TxBytes string `json:"tx_bytes"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		t.Fatalf("decode broadcast body: %v", err)
+	}
+	txBytes, err := base64.StdEncoding.DecodeString(req.TxBytes)
+	if err != nil {
+		t.Fatalf("decode tx_bytes: %v", err)
+	}
+	return txHashFromBytes(txBytes)
 }

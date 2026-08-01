@@ -44,6 +44,7 @@ var migrations = []string{
 		rotation_role TEXT NOT NULL DEFAULT 'regular',
 		rotation_epoch INTEGER NOT NULL DEFAULT 0,
 		settlement_pending INTEGER NOT NULL DEFAULT 0,
+		settle_tx_hash TEXT NOT NULL DEFAULT '',
 		created_at TEXT NOT NULL DEFAULT (datetime('now')),
 		updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 	);`,
