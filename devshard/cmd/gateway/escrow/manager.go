@@ -3,10 +3,10 @@ package escrow
 import (
 	"context"
 	"errors"
-	"log"
 	"time"
 
 	"devshard/cmd/gateway/config"
+	"devshard/logging"
 )
 
 const escrowTickInterval = 15 * time.Second
@@ -67,7 +67,7 @@ func (m *Manager) Start(ctx context.Context) {
 
 func (m *Manager) runTick(ctx context.Context) {
 	if err := m.tick(ctx); err != nil {
-		log.Printf("escrow tick: %v", err)
+		logging.Error("escrow tick failed", "error", err)
 	}
 }
 

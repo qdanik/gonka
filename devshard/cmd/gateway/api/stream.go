@@ -36,6 +36,7 @@ type clientStream struct {
 	streaming  bool
 	rewriter   *filters.StreamRewriter
 	buffered   []byte
+	written    int64
 	started    bool
 	terminated bool
 }
@@ -57,6 +58,12 @@ func (c *clientStream) Header() http.Header { return c.writer.Header() }
 
 // Started reports whether the client has already seen a status, after which no error can replace it.
 func (c *clientStream) Started() bool { return c.started }
+
+// delivered reports what actually left for the client: bytes written and whether the terminator the
+// client waits for went with them. Nothing downstream can reconstruct this once the request is over.
+func (c *clientStream) delivered() (written int64, terminated bool) {
+	return c.written, c.terminated
+}
 
 func (c *clientStream) Write(chunk []byte) (int, error) {
 	if !c.streaming {
@@ -98,7 +105,8 @@ func (c *clientStream) Close() error {
 		return tailErr
 	}
 	c.begin("application/json")
-	_, err := c.writer.Write(filters.StripResponseBody(filters.AssembleSSEBody(c.buffered)))
+	written, err := c.writer.Write(filters.StripResponseBody(filters.AssembleSSEBody(c.buffered)))
+	c.written += int64(written)
 	return err
 }
 
@@ -143,7 +151,9 @@ func (c *clientStream) terminate() error {
 func (c *clientStream) emit(events []byte) (int, error) {
 	c.begin("text/event-stream")
 	c.terminated = c.terminated || filters.HasSSEDone(events)
-	return c.writer.Write(events)
+	written, err := c.writer.Write(events)
+	c.written += int64(written)
+	return written, err
 }
 
 // errorEvent renders a failure as the single SSE data event an OpenAI-compatible client decodes.

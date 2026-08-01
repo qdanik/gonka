@@ -51,3 +51,46 @@ func TestNonStreamingRepliesUnderTheBoundAreKept(t *testing.T) {
 		t.Fatalf("body = %q, want the assembled reply", recorder.Body.String())
 	}
 }
+
+// A finished request cannot be asked afterwards how much of it the client actually received, so the
+// stream has to count as it goes. Byte counts come from the recorder, not from what the caller handed
+// in: the strip rewrites events on the way out, so the two differ.
+func TestAStreamCountsWhatReachedTheClient(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	stream := newClientStream(recorder, "req-1", true)
+
+	if _, err := stream.Write([]byte(`data: {"choices":[{"delta":{"content":"ok"}}]}` + "\n\n")); err != nil {
+		t.Fatalf("Write(): %v", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close(): %v", err)
+	}
+
+	written, terminated := stream.delivered()
+	if want := int64(recorder.Body.Len()); written != want {
+		t.Fatalf("delivered %d bytes, but %d reached the recorder", written, want)
+	}
+	if !terminated {
+		t.Fatal("the terminator never went out, so a client would wait out its own timeout")
+	}
+}
+
+func TestANonStreamingReplyCountsItsBody(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	stream := newClientStream(recorder, "req-1", false)
+
+	if _, err := stream.Write([]byte(`data: {"choices":[{"message":{"content":"ok"}}]}` + "\n\n")); err != nil {
+		t.Fatalf("Write(): %v", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close(): %v", err)
+	}
+
+	written, _ := stream.delivered()
+	if want := int64(recorder.Body.Len()); written != want {
+		t.Fatalf("delivered %d bytes, but %d reached the recorder", written, want)
+	}
+	if written == 0 {
+		t.Fatal("a served reply reported nothing delivered")
+	}
+}
