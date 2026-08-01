@@ -12,6 +12,7 @@ import (
 	"devshard/cmd/gateway/engine"
 	"devshard/cmd/gateway/filters"
 	"devshard/cmd/gateway/scheduler"
+	"devshard/logging"
 	"devshard/types"
 	"devshard/user"
 )
@@ -488,9 +489,10 @@ func (s *Server) race(w http.ResponseWriter, r *http.Request, requestID string, 
 	if err != nil {
 		s.capture.attemptsFailed(r, requestID, normalized, err)
 		if client.Started() {
-			_ = client.Fail(err)
+			logRequestFinished(requestID, normalized, outcome, "failed_mid_stream", client, err, client.Fail(err))
 			return outcome, err
 		}
+		logRequestFinished(requestID, normalized, outcome, "failed_before_first_byte", client, err, nil)
 		w.Header().Set(RequestIDHeader, requestID)
 		writeErrorFor(w, err)
 		return outcome, nil
@@ -500,8 +502,35 @@ func (s *Server) race(w http.ResponseWriter, r *http.Request, requestID string, 
 	if outcome.EscrowID != "" {
 		client.Header().Set(EscrowHeader, outcome.EscrowID)
 	}
-	_ = client.Close()
+	logRequestFinished(requestID, normalized, outcome, "served", client, nil, client.Close())
 	return outcome, nil
+}
+
+// logRequestFinished answers the one question a finished request can no longer be asked: how much
+// reached the client and whether the terminator went with it. A delivery error is the difference
+// between a reply the client read and one it is still waiting out its own timeout for.
+func logRequestFinished(requestID string, normalized filters.Result, outcome engine.RaceOutcome, verdict string, stream *clientStream, raceErr, deliverErr error) {
+	written, terminated := stream.delivered()
+	fields := []any{
+		"request", requestID,
+		"model", normalized.Model,
+		"escrow", outcome.EscrowID,
+		"stream", normalized.Stream,
+		"outcome", verdict,
+		"bytes", written,
+		"terminated", terminated,
+	}
+	if raceErr != nil {
+		fields = append(fields, "error", raceErr.Error())
+	}
+	if deliverErr != nil {
+		fields = append(fields, "deliver_error", deliverErr.Error())
+	}
+	if raceErr != nil || deliverErr != nil {
+		logging.Warn("request finished", fields...)
+		return
+	}
+	logging.Info("request finished", fields...)
 }
 
 // estimatePromptTokens is the limiter's and the perf buckets' input size, not a tokenizer call. See
