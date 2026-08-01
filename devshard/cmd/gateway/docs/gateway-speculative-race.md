@@ -92,7 +92,7 @@ The escalation pick runs on its own goroutine rather than inline in the coordina
 
 ## Deadlines
 
-One re-armed timer carries every deadline. `nextDeadline` takes the earliest of three families, and the declaration order of the trigger constants breaks *exact* ties only (`engine/race.go`, the `deadlineTrigger` constants and `nextDeadline`):
+One re-armed timer carries every deadline. `nextDeadline` takes the earliest of four families — the hard timeout, the escalation, the pick and the stall — and the declaration order of the trigger constants breaks *exact* ties only (`engine/race.go`, the `deadlineTrigger` constants and `nextDeadline`):
 
 1. **Hard timeout** — the minimum of: the drain deadline once the client has left; 30 minutes of total wait and 20 minutes without content for a non-streaming race; the loser grace after a crowned attempt finishes; and 20 minutes per live attempt.
 2. **Escalation** — the next armed trigger, suppressed once the race is crowned, detached, or at its attempt budget.
@@ -188,4 +188,4 @@ Not configurable, on purpose — these bound a request that every tunable alread
 | Event channel capacity | 32 |
 | Crown prefix carry cap | 32 MiB |
 
-One divergence follows from those numbers and is recorded rather than hidden: because the streaming hard timeout (20 minutes) always exceeds the long-response exemption (280 seconds), a stalled winner is always past the exemption — so `Stalled` can never itself move a limiter window or post a vote.
+One divergence follows from those numbers and is recorded rather than hidden: because the streaming hard timeout (20 minutes) always exceeds the long-response exemption (280 seconds), a stalled winner is always past the exemption. `Stalled` therefore does not move a limiter window **while the host is still within its failure-rate budget** — `verdictFor` exempts it as a model outcome. Once the host is already ejected the exemption stops applying and `Stalled` falls through to a transport fault, which does move the window; the escape hatch is deliberate, and a maintainer reading the shorter claim would be entitled to delete the guard that implements it.

@@ -4,6 +4,14 @@ An escrow is a funded on-chain account with a fixed participant group, serving o
 
 This document covers `escrow/`, plus the parts of `chain/` and `store/` it depends on. How escrows are chosen for a request is in [gateway-routing-and-nonces.md](./gateway-routing-and-nonces.md).
 
+### A settle that commits while nobody is watching
+
+A settle waits for its transaction to execute before the key that could retry it is destroyed. The wait has a deadline, and the chain does not respect it: a transaction can commit after the gateway stops looking, or the write clearing `settlement_pending` can fail after a settle that already succeeded. Either leaves a row indistinguishable from a genuine failure.
+
+Rebuilding from that row produces a *different* transaction — a fresh unordered-transaction timestamp means a fresh hash, so nothing dedupes it — and the keeper rejects it as already settled while the fee is spent. Every tick, forever, until enough of these accumulate to saturate the settlement budget and starve escrows that really are waiting.
+
+So the settle records its transaction hash before broadcasting, exactly as escrow creation records its own, and a later attempt asks the chain about that hash first. Committed and successful means the settlement happened and the row is cleared; committed and rejected, or past the point where it could still land, clears the hash so the retry is judged on its own. An unreachable endpoint is not an answer and fails the tick rather than concluding either way.
+
 ## The tick
 
 One goroutine, one fifteen-second tick, everything in a fixed order (`escrow/manager.go`, `Manager.tick`). Errors are joined; nothing aborts the rest of the tick.
