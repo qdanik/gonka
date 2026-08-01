@@ -226,7 +226,7 @@ func (c *TxClient) SettleEscrow(ctx context.Context, signer *signing.Secp256k1Si
 	// Waiting is what makes the result mean "settled": the caller destroys the means to retry. See
 	// gateway-escrow-lifecycle.md, "Transaction encoding".
 	if err := c.waitForCommit(ctx, txHash); err != nil {
-		return SettleEscrowResult{}, fmt.Errorf("settling escrow %d: %w", input.EscrowID, err)
+		return SettleEscrowResult{}, fmt.Errorf("awaiting settlement commit for tx %s: %w", txHash, err)
 	}
 	return SettleEscrowResult{EscrowID: input.EscrowID, TxHash: txHash, Settler: settler}, nil
 }

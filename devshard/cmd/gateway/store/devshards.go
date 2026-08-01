@@ -7,6 +7,20 @@ import (
 	"fmt"
 )
 
+// upsertDevshardStatement lives apart from its caller so a test can read which columns the update
+// carries: a field added to DevshardRecord that nobody adds here is inserted once and never updated
+// again, and nothing else in the package fails when that happens.
+const upsertDevshardStatement = `
+		INSERT INTO devshards (escrow_id, private_key_env, model, active, rotation_role, rotation_epoch, settlement_pending)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(escrow_id) DO UPDATE SET
+			private_key_env = excluded.private_key_env,
+			model = excluded.model,
+			active = excluded.active,
+			rotation_role = excluded.rotation_role,
+			rotation_epoch = excluded.rotation_epoch,
+			updated_at = datetime('now')`
+
 // ErrDevshardNotFound is returned by updates/deletes that match no row.
 var ErrDevshardNotFound = errors.New("devshard not found")
 
@@ -25,16 +39,7 @@ type DevshardRecord struct {
 // UpsertDevshard replaces every field of an existing row except settlement_pending, so an unrelated
 // upsert never silently clears a queued settlement; only SetDevshardSettlementPending moves it.
 func (s *Store) UpsertDevshard(ctx context.Context, record DevshardRecord) error {
-	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO devshards (escrow_id, private_key_env, model, active, rotation_role, rotation_epoch, settlement_pending)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(escrow_id) DO UPDATE SET
-			private_key_env = excluded.private_key_env,
-			model = excluded.model,
-			active = excluded.active,
-			rotation_role = excluded.rotation_role,
-			rotation_epoch = excluded.rotation_epoch,
-			updated_at = datetime('now')`,
+	_, err := s.db.ExecContext(ctx, upsertDevshardStatement,
 		record.EscrowID, record.PrivateKeyEnv, record.Model, record.Active,
 		record.RotationRole, record.RotationEpoch, record.SettlementPending)
 	if err != nil {
