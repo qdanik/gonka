@@ -7,6 +7,7 @@ import (
 
 	"devshard/cmd/gateway/chain"
 	"devshard/cmd/gateway/store"
+	"devshard/logging"
 )
 
 var (
@@ -80,6 +81,7 @@ func (m *Manager) park(ctx context.Context, escrowID string) error {
 	if err := m.settlementSource.Retire(escrowID); err != nil {
 		return fmt.Errorf("retiring escrow %s from routing: %w", escrowID, err)
 	}
+	logging.Info("escrow parked for settlement", "escrow", escrowID)
 	return nil
 }
 
@@ -116,6 +118,7 @@ func (m *Manager) settle(ctx context.Context, record store.DevshardRecord) (chai
 	if err != nil {
 		return chain.SettleEscrowResult{}, fmt.Errorf("settling escrow %s: %w", record.EscrowID, err)
 	}
+	logging.Info("escrow settled", "escrow", record.EscrowID, "model", record.Model, "tx", result.TxHash, "settler", result.Settler)
 
 	if err := m.store.WithRetry(ctx, func() error {
 		return m.store.SetDevshardSettlementPending(ctx, record.EscrowID, false)
@@ -147,5 +150,6 @@ func (m *Manager) deleteSettled(ctx context.Context, escrowID string) error {
 	if err := m.store.WithRetry(ctx, func() error { return m.store.DeleteDevshard(ctx, escrowID) }); err != nil {
 		return fmt.Errorf("deleting settled escrow %s: %w", escrowID, err)
 	}
+	logging.Info("settled escrow record dropped", "escrow", escrowID)
 	return nil
 }
