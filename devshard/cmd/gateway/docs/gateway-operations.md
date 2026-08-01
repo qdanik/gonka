@@ -176,6 +176,7 @@ What it does write is every event that moves money, changes what the gateway wil
 | `settle tx broadcast` | for the confirm window the transaction hash lives nowhere else; if the process dies there, money moved under a name nobody recorded |
 | `chain snapshot stale` / `chain snapshot recovered` | the health gauge says the view went stale, not which of four reads went dark, and a failed refresh keeps routing on the previous participants |
 | `attempt crowned` | which host actually served a request is in no metric, and the crown was once decided by a random `select` |
+| `attempt finished` | carries the terminal **the attempt itself reported**. A goroutine sees only its own cancellation, so the coordinator reclassifies two cases at the end of the race — a host that went silent mid-stream, and every attempt still running when the backstop fired with a client waiting and nobody crowned. Both become `stalled` in the outcome while the line still reads `client_cancelled` |
 | `host blocked for state divergence` | the block never lifts while the process runs, and no metric exposes it, so "why is this host never picked" is answerable only here |
 | `escalation unfilled` | an escalation that committed no nonce; the error reaches a caller only when no attempt ever started |
 | `nonce burned for nobody` | a nonce cost money on chain and will serve nobody, with the reason it was burned |

@@ -620,7 +620,7 @@ func (c *raceCoordinator) complete(attempt *liveAttempt, event AttemptEvent) {
 	}
 	logging.Info("attempt finished",
 		"request", c.request.RequestID, "escrow", c.escrowID, "nonce", attempt.nonce,
-		"participant", attempt.participant, "terminal", attempt.outcome.Terminal,
+		"participant", attempt.participant, "terminal", attempt.outcome.Terminal.reason(),
 		"nonce_finished", attempt.nonceFinished, "state_divergent", attempt.outcome.StateDivergent)
 	if signal := CapabilityOf(*attempt.outcome); signal.Retriable() {
 		RecordCapability(c.deps.Perf, attempt.participant, signal)
@@ -675,6 +675,13 @@ func (c *raceCoordinator) markStalls() {
 		}
 		attempt.stalled = true
 	}
+}
+
+// abandonedByHosts reports the backstop firing while a client was still waiting and no host had been
+// crowned: every attempt it cancels answered nothing. The same backstop also ends the losers' grace
+// after a win and the drain after a client leaves, and neither is the hosts' fault.
+func (c *raceCoordinator) abandonedByHosts() bool {
+	return c.cancelled && c.winner == nil && !c.handedOff
 }
 
 func (c *raceCoordinator) cancelAll() {
@@ -877,9 +884,11 @@ func (c *raceCoordinator) outcome() RaceOutcome {
 		record.NonceFinished = attempt.nonceFinished
 		record.FailureRateExceeded = c.deps.Perf.Ejected(attempt.participant, c.request.Model)
 		record.PhaseTransitionAborted = phaseAborted(record, attempt.inInference, generating)
-		// The attempt goroutine can only see its own cancellation; the coordinator knows it cancelled a
-		// host that had gone silent, and TerminalStalled is what the verdict ladder gates on.
-		if attempt.stalled && record.Terminal == TerminalClientCancelled && record.ContentChunks > 0 {
+		// The attempt goroutine can only see its own cancellation. The coordinator knows two things it
+		// cannot: that the host had gone silent mid-stream, and that the backstop fired with nobody
+		// crowned, which makes every attempt still running a host that answered nothing rather than a
+		// loser the race cancelled. Both are TerminalStalled, which is what the ladders gate on.
+		if record.Terminal == TerminalClientCancelled && (attempt.stalled && record.ContentChunks > 0 || c.abandonedByHosts()) {
 			record.Terminal = TerminalStalled
 		}
 		if attempt == c.winner {
