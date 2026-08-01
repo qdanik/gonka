@@ -1,6 +1,7 @@
 package api
 
 import (
+	"cmp"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -419,9 +420,9 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request, escrowPin string) 
 		s.race(w, r, requestID, normalized, inputTokens, escrowPin)
 		return
 	}
-	recorder := &cacheRecorder{ResponseWriter: w}
-	outcome := s.race(recorder, r, requestID, normalized, inputTokens, escrowPin)
-	if entry, storable := recorder.entry(outcome.EscrowID, normalized.Stream, r.Context().Err()); storable {
+	recorder := &cacheRecorder{ResponseWriter: w, limit: s.cache.entryLimit()}
+	outcome, hiddenFailure := s.race(recorder, r, requestID, normalized, inputTokens, escrowPin)
+	if entry, storable := recorder.entry(outcome.EscrowID, normalized.Stream, cmp.Or(r.Context().Err(), hiddenFailure)); storable {
 		s.cache.put(key, entry, s.now())
 	}
 }
@@ -460,7 +461,11 @@ func authorizeModel(configured config.Limits, model string, identity credentials
 	}
 }
 
-func (s *Server) race(w http.ResponseWriter, r *http.Request, requestID string, normalized filters.Result, inputTokens uint64, escrowPin string) engine.RaceOutcome {
+// race runs one request to its winner and returns the outcome together with the failure the reply's
+// status could not carry. A stream commits 200 on its first byte, so a race that fails after that
+// leaves an SSE error event under a success status; the caller needs the error itself to tell that
+// response apart from one worth replaying.
+func (s *Server) race(w http.ResponseWriter, r *http.Request, requestID string, normalized filters.Result, inputTokens uint64, escrowPin string) (engine.RaceOutcome, error) {
 	client := newClientStream(w, requestID, normalized.Stream)
 	outcome, err := s.inference.Run(r.Context(), engine.Request{
 		RequestID:     requestID,
@@ -485,11 +490,11 @@ func (s *Server) race(w http.ResponseWriter, r *http.Request, requestID string, 
 		s.capture.attemptsFailed(r, requestID, normalized, err)
 		if client.Started() {
 			_ = client.Fail(err)
-			return outcome
+			return outcome, err
 		}
 		w.Header().Set("X-Request-Id", requestID)
 		writeErrorFor(w, err)
-		return outcome
+		return outcome, nil
 	}
 	// A stream has already sent its headers by now, which is why OnEscrow sets this too; this second
 	// write is the authoritative one for a reply still holding them.
@@ -497,7 +502,7 @@ func (s *Server) race(w http.ResponseWriter, r *http.Request, requestID string, 
 		client.Header().Set(EscrowHeader, outcome.EscrowID)
 	}
 	_ = client.Close()
-	return outcome
+	return outcome, nil
 }
 
 // estimatePromptTokens is the limiter's and the perf buckets' input size; it is bytes/4 with a floor

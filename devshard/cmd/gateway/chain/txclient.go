@@ -194,10 +194,9 @@ func (c *TxClient) CreateEscrow(ctx context.Context, signer *signing.Secp256k1Si
 	return CreateEscrowResult{EscrowID: escrowID, TxHash: txHash, Creator: creator}, nil
 }
 
-// SettleEscrow builds, signs, and broadcasts a MsgSettleDevshardEscrow tx.
-// Unlike CreateEscrow, it returns the node's hash directly with no intent
-// hook and no confirmation wait: settlement doesn't create a chain-side
-// resource whose id must be recovered, so there's nothing to reconcile.
+// SettleEscrow builds, signs, broadcasts and confirms a MsgSettleDevshardEscrow tx. Unlike
+// CreateEscrow it needs no intent hook, because settlement creates no chain-side id to recover -- but
+// it waits for the same commit, because its caller destroys the means to retry.
 func (c *TxClient) SettleEscrow(ctx context.Context, signer *signing.Secp256k1Signer, input SettlementInput) (SettleEscrowResult, error) {
 	if signer == nil {
 		return SettleEscrowResult{}, fmt.Errorf("signer is required")
@@ -222,6 +221,13 @@ func (c *TxClient) SettleEscrow(ctx context.Context, signer *signing.Secp256k1Si
 	txHash, err := c.broadcastTx(ctx, txBytes)
 	if err != nil {
 		return SettleEscrowResult{}, err
+	}
+	// Waiting is what makes the result mean "settled". The caller clears the pending marker and
+	// deletes the record holding the only key that can settle this escrow, so returning on CheckTx
+	// alone would strand the deposit whenever DeliverTx rejects -- a late settle past the two-epoch
+	// window, or a host-reported cost that pushes the payout above the escrow amount.
+	if err := c.waitForCommit(ctx, txHash); err != nil {
+		return SettleEscrowResult{}, fmt.Errorf("settling escrow %d: %w", input.EscrowID, err)
 	}
 	return SettleEscrowResult{EscrowID: input.EscrowID, TxHash: txHash, Settler: settler}, nil
 }
@@ -320,40 +326,59 @@ func (c *TxClient) broadcastTx(ctx context.Context, txBytes []byte) (string, err
 	return txHash, nil
 }
 
-// waitForCreatedEscrowID polls txQueryURLs for the escrow_id event until
-// pollTimeout elapses or ctx is done; 404 is treated as "not indexed yet",
-// not as a terminal "not found" (unlike GetTxEscrowID's one-shot semantics).
-func (c *TxClient) waitForCreatedEscrowID(ctx context.Context, txHash string) (uint64, error) {
+// awaitTx polls txQueryURLs until a committed response satisfies ready, pollTimeout elapses, or ctx is
+// done; a 404 is "not indexed yet" rather than the terminal not-found GetTxEscrowID reports. A non-zero
+// code is returned as an error, and it is the only way to learn a DeliverTx failure: broadcasting in
+// BROADCAST_MODE_SYNC reports CheckTx alone, so a transaction can be accepted and still never execute.
+func (c *TxClient) awaitTx(ctx context.Context, txHash string, ready func(txResponse) bool) (txResponse, error) {
 	deadline := c.now().Add(c.pollTimeout)
 	var lastErr error
 	for {
 		for _, baseURL := range c.txQueryURLs {
 			var payload txResponseEnvelope
 			err := c.getJSONFromBaseURL(ctx, baseURL, "/cosmos/tx/v1beta1/txs/"+url.PathEscape(txHash), &payload)
-			if err == nil {
-				if payload.TxResponse.Code != 0 {
-					return 0, fmt.Errorf("tx %s failed code=%d codespace=%s raw_log=%s", txHash, payload.TxResponse.Code, payload.TxResponse.Codespace, payload.TxResponse.RawLog)
-				}
-				if escrowID, ok := payload.TxResponse.createdEscrowID(); ok {
-					return escrowID, nil
-				}
-				lastErr = fmt.Errorf("tx %s committed via %s but escrow_id event was not found", txHash, baseURL)
-			} else {
+			if err != nil {
 				lastErr = fmt.Errorf("%s: %w", baseURL, err)
+				continue
 			}
+			if payload.TxResponse.Code != 0 {
+				return txResponse{}, fmt.Errorf("tx %s failed code=%d codespace=%s raw_log=%s", txHash, payload.TxResponse.Code, payload.TxResponse.Codespace, payload.TxResponse.RawLog)
+			}
+			if ready(payload.TxResponse) {
+				return payload.TxResponse, nil
+			}
+			lastErr = fmt.Errorf("tx %s committed via %s but is not yet complete", txHash, baseURL)
 		}
 		if c.now().After(deadline) {
 			if lastErr != nil {
-				return 0, fmt.Errorf("wait for tx %s: %w", txHash, lastErr)
+				return txResponse{}, fmt.Errorf("wait for tx %s: %w", txHash, lastErr)
 			}
-			return 0, fmt.Errorf("wait for tx %s timed out", txHash)
+			return txResponse{}, fmt.Errorf("wait for tx %s timed out", txHash)
 		}
 		select {
 		case <-ctx.Done():
-			return 0, ctx.Err()
+			return txResponse{}, ctx.Err()
 		case <-time.After(c.pollInterval):
 		}
 	}
+}
+
+func (c *TxClient) waitForCreatedEscrowID(ctx context.Context, txHash string) (uint64, error) {
+	committed, err := c.awaitTx(ctx, txHash, func(response txResponse) bool {
+		_, found := response.createdEscrowID()
+		return found
+	})
+	if err != nil {
+		return 0, err
+	}
+	escrowID, _ := committed.createdEscrowID()
+	return escrowID, nil
+}
+
+// waitForCommit reports that a transaction executed, not merely that it was accepted.
+func (c *TxClient) waitForCommit(ctx context.Context, txHash string) error {
+	_, err := c.awaitTx(ctx, txHash, func(txResponse) bool { return true })
+	return err
 }
 
 type chainHTTPError struct {

@@ -17,6 +17,11 @@ const (
 	stageFinishRegular = "finish_regular"
 )
 
+// errCreateSuppressed marks a create the breaker refused. It is not "nothing needed": the breaker is
+// gated exactly when creation has been failing, so the bridge must take its degrade path and keep the
+// escrows it has instead of retiring them for replacements that were never created.
+var errCreateSuppressed = errors.New("escrow creation suppressed by the create breaker")
+
 // ensureToTarget creates escrows up to target for (model, role, epoch). devshards is the
 // snapshot the caller already loaded once this tick; it is only filtered here, never reloaded.
 func (m *Manager) ensureToTarget(ctx context.Context, role string, target int, model ModelConfig, snapshot chain.PhaseSnapshot, devshards []store.DevshardRecord) (created int, err error) {
@@ -28,7 +33,7 @@ func (m *Manager) ensureToTarget(ctx context.Context, role string, target int, m
 		return 0, nil
 	}
 	if m.breaker.gated(model.ModelID, role) {
-		return 0, nil
+		return 0, errCreateSuppressed
 	}
 
 	for i := existing; i < target; i++ {

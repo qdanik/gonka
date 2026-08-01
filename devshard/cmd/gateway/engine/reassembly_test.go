@@ -82,6 +82,23 @@ func TestClassifierMapsOneChunkToItsFacts(t *testing.T) {
 			chunk: `data: {"choices":[{"delta":{}}],"usage":{"completion_tokens":90}}` + "\n\n",
 			want:  chunkFacts{UsageCompletionTokens: 90},
 		},
+		{
+			name:  "an_empty_stop_with_usage_crowns_on_a_thinking_budget_route",
+			model: kimiModel,
+			chunk: `data: {"choices":[{"message":{"content":""},"finish_reason":"stop"}],"usage":{"completion_tokens":90}}` + "\n\n",
+			want: chunkFacts{
+				Content:               true,
+				ContentSource:         "message.empty_stop_completion_tokens",
+				UsageCompletionTokens: 90,
+				TokensBurned:          true,
+			},
+		},
+		{
+			name:  "an_empty_stop_with_usage_crowns_nobody_off_that_route",
+			model: qwenModel,
+			chunk: `data: {"choices":[{"message":{"content":""},"finish_reason":"stop"}],"usage":{"completion_tokens":90}}` + "\n\n",
+			want:  chunkFacts{UsageCompletionTokens: 90},
+		},
 	}
 
 	for _, testCase := range cases {

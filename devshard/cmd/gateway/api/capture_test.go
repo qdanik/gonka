@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -193,5 +194,31 @@ func TestSamplingHonoursItsRate(t *testing.T) {
 				t.Fatalf("captured %d of %d at rate %v, want %d", got, testCase.total, testCase.rate, testCase.want)
 			}
 		})
+	}
+}
+
+// Nothing evicts capture files, so once the directory reaches its cap the sink is off until an
+// operator empties it. The refusal count is the only signal that has happened.
+func TestCaptureCountsWhatItRefusesAtTheCap(t *testing.T) {
+	capture, err := newRequestCapture(config.Capture{Enabled: true, SampleRate: 1, MaxBytes: 512}, t.TempDir(), time.Now)
+	if err != nil {
+		t.Fatalf("newRequestCapture(): %v", err)
+	}
+
+	for range 20 {
+		if err := capture.write(capturedRequest{Kind: "chat", RequestID: strings.Repeat("r", 64)}); err != nil {
+			t.Fatalf("write(): %v", err)
+		}
+	}
+
+	written, refused, held := capture.stats()
+	if refused == 0 {
+		t.Fatal("the sink refused nothing at a 512-byte cap")
+	}
+	if written == 0 {
+		t.Fatal("the sink wrote nothing at all")
+	}
+	if held > 512 {
+		t.Fatalf("held = %d bytes, want no more than the 512-byte cap", held)
 	}
 }

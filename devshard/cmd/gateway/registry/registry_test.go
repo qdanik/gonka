@@ -50,6 +50,7 @@ type fakeSession struct {
 	escrowState   types.EscrowState
 	finalizeErr   error
 	finalizeCalls atomic.Int64
+	flushErr      error
 	flushCalls    atomic.Int64
 	closeCalls    atomic.Int64
 	prepare       func(user.ParamsForHost) (*user.PreparedInference, error)
@@ -90,7 +91,7 @@ func (f *fakeSession) Finalize(context.Context) error {
 
 func (f *fakeSession) FlushSnapshot() error {
 	f.flushCalls.Add(1)
-	return nil
+	return f.flushErr
 }
 
 func (f *fakeSession) Close() error {
@@ -446,6 +447,33 @@ func TestRetireDefersCloseUntilInFlightRequestsDrain(t *testing.T) {
 	}
 	if registry.IsBusy("1") {
 		t.Error("IsBusy(1) after the last release = true, want false")
+	}
+}
+
+// The last release closes a drained escrow with nobody left to hand a failure to: the request that
+// held it open has already been answered. An unflushed escrow replays its whole diff tail when it is
+// rehydrated, so the failure is counted rather than lost.
+func TestADrainedEscrowThatFailsToCloseIsCounted(t *testing.T) {
+	t.Parallel()
+	session := newFakeSession("hostA")
+	session.flushErr = errors.New("disk full")
+	registry := New(Deps{
+		ServingSessions: newSessions(map[string]*fakeSession{"1": session}).open,
+		Now:             fixedClock(),
+	})
+	mustAdd(t, registry, "1", "qwen")
+	_, release, acquired := registry.Acquire("1")
+	if !acquired {
+		t.Fatal("Acquire(1) = false, want true")
+	}
+	if err := registry.Retire("1"); err != nil {
+		t.Fatalf("Retire(1) = %v, want nil", err)
+	}
+
+	release()
+
+	if got := registry.DrainCloseFailures(); got != 1 {
+		t.Fatalf("DrainCloseFailures() = %d, want 1", got)
 	}
 }
 

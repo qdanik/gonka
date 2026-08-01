@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 )
 
@@ -63,6 +64,85 @@ func TestStreamRewriter_StripsEveryFieldEvenWhenItArrivesAlone(t *testing.T) {
 	}
 }
 
+// The space after "data:" is optional on the wire, and an event may carry lines of its own, so a
+// framing the strip does not recognise would forward every field the non-streaming path removes.
+func TestStreamRewriter_StripsEveryDataLineFraming(t *testing.T) {
+	payload := `{"choices":[{"delta":{"content":"ok"},"token_ids":[7]}]}`
+	cases := []struct {
+		name  string
+		event string
+	}{
+		{name: "with_a_space", event: "data: " + payload + "\n\n"},
+		{name: "without_a_space", event: "data:" + payload + "\n\n"},
+		{name: "after_an_event_line", event: "event: message\ndata: " + payload + "\n\n"},
+		{name: "after_an_id_line", event: "id: 42\ndata: " + payload + "\n\n"},
+		{name: "after_a_comment_line", event: ": keep-alive\ndata: " + payload + "\n\n"},
+		{name: "crlf_framed_without_a_space", event: "id: 42\r\ndata:" + payload + "\r\n\r\n"},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			got := feedInChunks(t, NewStreamRewriter(), []byte(testCase.event), len(testCase.event))
+
+			assertNoInternalFields(t, got)
+			if !bytes.Contains(got, []byte(`"content":"ok"`)) {
+				t.Errorf("sibling content field was lost: %s", got)
+			}
+		})
+	}
+}
+
+// A host may answer a streaming request with one SSE-wrapped complete response. An OpenAI streaming
+// client reads choices[].delta, so it renders nothing from the message the completion carries.
+func TestStreamRewriter_WrappedCompletionBecomesChunks(t *testing.T) {
+	stream := readSSEFixture(t, "completion_wrapped_stream.sse")
+
+	got := rewriteWholeStream(t, stream)
+
+	assertNoInternalFields(t, got)
+	if bytes.Contains(got, []byte(`"message"`)) {
+		t.Errorf("the client was handed a message where it reads a delta: %s", got)
+	}
+	want := strings.Join([]string{
+		`data: {"id":"chatcmpl-cw1","object":"chat.completion.chunk","created":13,"model":"model-a","choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}]}`,
+		`data: {"id":"chatcmpl-cw1","object":"chat.completion.chunk","created":13,"model":"model-a","choices":[{"index":0,"delta":{"content":"ok"},"finish_reason":null}]}`,
+		`data: {"id":"chatcmpl-cw1","object":"chat.completion.chunk","created":13,"model":"model-a","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`,
+		`data: {"id":"chatcmpl-cw1","object":"chat.completion.chunk","created":13,"model":"model-a","choices":[],"usage":{"completion_tokens":2,"prompt_tokens":3,"total_tokens":5}}`,
+		`data: [DONE]`,
+		``,
+	}, "\n\n")
+	if string(got) != want {
+		t.Errorf("synthesised stream\n got:  %s\n want: %s", got, want)
+	}
+}
+
+func TestStreamRewriter_ChunkEventsAndErrorsAreNotConverted(t *testing.T) {
+	cases := []struct {
+		name  string
+		event string
+	}{
+		{
+			name:  "a_chunk_quoting_the_word_message",
+			event: `data: {"choices":[{"delta":{"content":"the \"message\" field"}}]}` + "\n\n",
+		},
+		{
+			name:  "an_error_carrying_a_message_field",
+			event: `data: {"error":{"message":"boom","type":"server_error"}}` + "\n\n",
+		},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			got, err := NewStreamRewriter().Write([]byte(testCase.event))
+			if err != nil {
+				t.Fatalf("Write() = %v", err)
+			}
+
+			if string(got) != testCase.event {
+				t.Errorf("Write() = %s, want the event verbatim", got)
+			}
+		})
+	}
+}
+
 func TestStreamRewriter_SplitFrameIsRewritten(t *testing.T) {
 	stream := readSSEFixture(t, "logprobs_stream.sse")
 	target := splitCompleteEvents(t, stream)[1]
@@ -113,6 +193,7 @@ func TestStreamRewriter_ChunkSizeDoesNotChangeOutput(t *testing.T) {
 		"token_ids_stream.sse",
 		"comment_and_blank_lines.sse",
 		"newlineless_final_content.sse",
+		"completion_wrapped_stream.sse",
 	}
 	for _, name := range fixtures {
 		for _, chunkSize := range []int{1, 3, 17, 4096} {

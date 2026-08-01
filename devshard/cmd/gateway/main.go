@@ -246,9 +246,10 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 		}),
 		metrics.NewPerfCollector(hosts),
 		metrics.NewRegistryCollector(metrics.RegistrySources{
-			Escrows:      escrows,
-			EscrowWeight: capacity.EscrowWeight,
-			Available:    participants.Available,
+			Escrows:            escrows,
+			EscrowWeight:       capacity.EscrowWeight,
+			Available:          participants.Available,
+			DrainCloseFailures: escrows.DrainCloseFailures,
 		}),
 		metrics.NewChainCollector(observer, clock),
 		metrics.NewTransportCollector(transport.DefaultHostConnectionTracker()),
@@ -282,6 +283,9 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 	if err != nil {
 		return nil, err
 	}
+	// Registered after the server, which owns the capture sink. Nothing evicts capture files, so the
+	// refusal count is the only signal that capture has turned itself off at its byte cap.
+	telemetry.Register(metrics.NewCaptureCollector(server))
 
 	return &gateway{
 		config:       configHolder,
@@ -377,9 +381,12 @@ func newRouting(deps routingDeps) (*registry.Registry, *scheduler.Scheduler) {
 	return escrows, router
 }
 
+// needsQuiesced marks a step that destroys state the steps above it may still be using. Closing an
+// escrow session takes no lock, so it is safe only once the work that reaches it has actually stopped.
 type shutdownStep struct {
-	name string
-	stop func(context.Context) error
+	name          string
+	stop          func(context.Context) error
+	needsQuiesced bool
 }
 
 type httpListener interface {
@@ -402,7 +409,7 @@ func shutdownOrder(listener httpListener, races, dispatchers, escrowLifecycle, c
 		{name: "dispatchers", stop: waitFor(dispatchers)},
 		{name: "escrow lifecycle", stop: waitFor(escrowLifecycle)},
 		{name: "chain observer", stop: waitFor(chainObserver)},
-		{name: "escrow sessions", stop: closeOf(sessions)},
+		{name: "escrow sessions", stop: closeOf(sessions), needsQuiesced: true},
 		{name: "store", stop: closeOf(storage)},
 		// Last: every step above can still reach the chain, and an idle socket closed under one of them
 		// is a socket the next poll has to re-dial.
@@ -437,12 +444,22 @@ func closeIdle(component idleConnections) func(context.Context) error {
 	}
 }
 
-// stopAll runs every step even after a failure: the store must be reached whatever happened above it.
+// stopAll runs every step even after a failure -- the store must be reached whatever happened above
+// it, because it drains the accounting ledger and holds no escrow state. The exception is a step that
+// destroys what a still-running step is using: an escrow session closes without taking its own lock,
+// so closing one under a drain that overran races a nonce commit, trading a vote this shutdown was
+// already going to drop for on-disk state nothing can repair.
 func stopAll(ctx context.Context, steps []shutdownStep) error {
 	var problems []error
+	quiesced := true
 	for _, step := range steps {
+		if step.needsQuiesced && !quiesced {
+			problems = append(problems, fmt.Errorf("skipping %s: work above it is still running", step.name))
+			continue
+		}
 		if err := step.stop(ctx); err != nil {
 			problems = append(problems, fmt.Errorf("stopping %s: %w", step.name, err))
+			quiesced = false
 		}
 	}
 	return errors.Join(problems...)

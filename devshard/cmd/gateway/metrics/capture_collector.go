@@ -1,0 +1,43 @@
+package metrics
+
+import "github.com/prometheus/client_golang/prometheus"
+
+// CaptureSource is the request-capture sink's own account of itself; *api.Server satisfies it. The
+// counts travel as plain integers rather than a shared struct because api's own tests read this
+// package, and importing it back would close a cycle.
+type CaptureSource interface {
+	CaptureStats() (written, refused, held int64)
+}
+
+type CaptureCollector struct {
+	capture CaptureSource
+
+	written *prometheus.Desc
+	refused *prometheus.Desc
+	held    *prometheus.Desc
+}
+
+func NewCaptureCollector(capture CaptureSource) *CaptureCollector {
+	return &CaptureCollector{
+		capture: capture,
+		written: counterDesc("devshard_gateway_captured_requests_total", "Requests written to the capture directory."),
+		refused: counterDesc("devshard_gateway_captured_requests_refused_total", "Captures refused because the directory is at its byte cap. Nothing evicts capture files, so a rising count means capture is off until an operator empties the directory."),
+		held:    gaugeDesc("devshard_gateway_capture_bytes_held", "Bytes the capture directory holds."),
+	}
+}
+
+func (c *CaptureCollector) Describe(ch chan<- *prometheus.Desc) {
+	ch <- c.written
+	ch <- c.refused
+	ch <- c.held
+}
+
+func (c *CaptureCollector) Collect(ch chan<- prometheus.Metric) {
+	if c.capture == nil {
+		return
+	}
+	written, refused, held := c.capture.CaptureStats()
+	counter(ch, c.written, float64(written))
+	counter(ch, c.refused, float64(refused))
+	gauge(ch, c.held, float64(held))
+}

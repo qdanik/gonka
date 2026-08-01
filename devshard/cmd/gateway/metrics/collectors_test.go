@@ -165,7 +165,8 @@ func TestTheRegistryCollectorReportsEveryPublishedEscrow(t *testing.T) {
 			}
 			return 0
 		},
-		Available: func(participant, _ string) bool { return participant != "gonka1b" },
+		Available:          func(participant, _ string) bool { return participant != "gonka1b" },
+		DrainCloseFailures: func() int64 { return 4 },
 	}))
 
 	expectGauge(t, telemetry, "devshard_runtime_active", labels{"devshard_id": "7", "model": "qwen"}, 1)
@@ -176,6 +177,7 @@ func TestTheRegistryCollectorReportsEveryPublishedEscrow(t *testing.T) {
 	expectGauge(t, telemetry, "devshard_gateway_escrow_participant_limited", labels{"devshard_id": "7", "model": "qwen"}, 1)
 	expectGauge(t, telemetry, "devshard_gateway_escrow_blocked_participants", labels{"devshard_id": "9", "model": "qwen"}, 0)
 	expectGauge(t, telemetry, "devshard_gateway_escrow_participant_limited", labels{"devshard_id": "9", "model": "qwen"}, 0)
+	expectCounter(t, telemetry, "devshard_gateway_escrow_drain_close_failures_total", labels{}, 4)
 }
 
 func TestTheRegistryCollectorIsSilentOnAnEmptyRegistry(t *testing.T) {
@@ -239,10 +241,11 @@ func (f fixedLedger) Stats() store.LedgerStats { return f.stats }
 func TestTheAccountingCollectorReportsEveryRowTheLedgerLost(t *testing.T) {
 	telemetry := New()
 	telemetry.Register(NewAccountingCollector(fixedLedger{
-		stats: store.LedgerStats{Written: 91, Dropped: 7, Failed: 2},
+		stats: store.LedgerStats{Written: 91, Dropped: 7, Failed: 2, SweepFailed: 3},
 	}))
 
 	expectCounter(t, telemetry, "devshard_gateway_accounting_rows_written_total", labels{}, 91)
 	expectCounter(t, telemetry, "devshard_gateway_accounting_rows_lost_total", labels{"cause": "shed"}, 7)
 	expectCounter(t, telemetry, "devshard_gateway_accounting_rows_lost_total", labels{"cause": "write_failed"}, 2)
+	expectCounter(t, telemetry, "devshard_gateway_accounting_retention_sweeps_failed_total", labels{}, 3)
 }

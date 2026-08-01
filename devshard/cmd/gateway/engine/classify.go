@@ -31,15 +31,15 @@ func (s chunkSignal) crownsWinner() bool { return s.ContentSource != "" }
 
 // A thinking-budget route is the only one whose host-reported completion_tokens may separate a model
 // that produced nothing from a host that carried nothing; elsewhere any host could fake usage to
-// escape the empty-stream penalty.
+// escape the empty-stream penalty and take the crown from a host that answered.
 func thinkingBudgetRoute(model string) bool {
 	profile := filters.ProfileFor(model)
 	return profile != nil && profile.ThinkingTokenBudget
 }
 
-func classifyChunk(events []byte) chunkSignal {
+func classifyChunk(events []byte, thinkingBudget bool) chunkSignal {
 	var signal chunkSignal
-	if source, ok := contentSource(events); ok {
+	if source, ok := contentSource(events, thinkingBudget); ok {
 		signal.ContentSource = source
 	} else if failure, ok := errorPayload(events); ok {
 		signal.Error = failure
@@ -52,7 +52,8 @@ func classifyChunk(events []byte) chunkSignal {
 
 // contentSource names the field carrying the first client-renderable output in events. choices[].text
 // is excluded: the gateway serves only /v1/chat/completions, where a host emitting it renders nothing.
-func contentSource(events []byte) (string, bool) {
+// A stop with host-reported completion tokens and no output counts only on a thinking-budget route.
+func contentSource(events []byte, thinkingBudget bool) (string, bool) {
 	var source string
 	filters.EachSSEDataPayload(events, func(payload []byte) bool {
 		var event struct {
@@ -77,7 +78,7 @@ func contentSource(events []byte) (string, bool) {
 				source = found
 				return true
 			}
-			if choice.FinishReason == "stop" && event.Usage.CompletionTokens > 0 {
+			if thinkingBudget && choice.FinishReason == "stop" && event.Usage.CompletionTokens > 0 {
 				source = "message.empty_stop_completion_tokens"
 				return true
 			}

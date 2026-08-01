@@ -50,6 +50,14 @@ type responseCache struct {
 	lastSweep  time.Time
 }
 
+// entryLimit is the largest reply put would accept, so a recorder past it is recording for nothing.
+func (c *responseCache) entryLimit() int64 {
+	if c == nil {
+		return 0
+	}
+	return c.maxBytes
+}
+
 func newResponseCache(maxBytes int64) *responseCache {
 	if maxBytes <= 0 {
 		return nil
@@ -167,13 +175,17 @@ func serveCached(w http.ResponseWriter, requestID string, entry cachedResponse) 
 }
 
 // cacheRecorder mirrors what the client receives; it keeps the first status the handler chose, so a
-// write after the response has begun cannot turn a recorded failure into a 200.
+// write after the response has begun cannot turn a recorded failure into a 200. limit is what the cache
+// could ever store, so a reply that passes it is dropped as it streams rather than held to the end and
+// rejected by put -- one buffer per request in flight is the memory this bounds.
 type cacheRecorder struct {
 	http.ResponseWriter
-	status   int
-	body     bytes.Buffer
-	bounds   []int
-	writeErr error
+	limit      int64
+	status     int
+	body       bytes.Buffer
+	bounds     []int
+	writeErr   error
+	overflowed bool
 }
 
 func (w *cacheRecorder) WriteHeader(status int) {
@@ -189,17 +201,25 @@ func (w *cacheRecorder) Write(chunk []byte) (int, error) {
 	if err != nil && w.writeErr == nil {
 		w.writeErr = err
 	}
-	if written > 0 {
-		w.body.Write(chunk[:written])
-		w.bounds = append(w.bounds, w.body.Len())
+	if written > 0 && !w.overflowed {
+		if int64(w.body.Len()+written) > w.limit {
+			w.overflowed = true
+			w.body = bytes.Buffer{}
+			w.bounds = nil
+		} else {
+			w.body.Write(chunk[:written])
+			w.bounds = append(w.bounds, w.body.Len())
+		}
 	}
 	return written, err
 }
 
 func (w *cacheRecorder) Unwrap() http.ResponseWriter { return w.ResponseWriter }
 
-func (w *cacheRecorder) entry(escrowID string, stream bool, abandoned error) (cachedResponse, bool) {
-	if w.writeErr != nil || abandoned != nil || w.body.Len() == 0 || strings.TrimSpace(escrowID) == "" {
+// entry is the recorded reply as a replay would send it. unstorable carries the reasons the recorded
+// bytes cannot state themselves: a client that left, and a failure a committed 200 hid.
+func (w *cacheRecorder) entry(escrowID string, stream bool, unstorable error) (cachedResponse, bool) {
+	if w.overflowed || w.writeErr != nil || unstorable != nil || w.body.Len() == 0 || strings.TrimSpace(escrowID) == "" {
 		return cachedResponse{}, false
 	}
 	return cachedResponse{
