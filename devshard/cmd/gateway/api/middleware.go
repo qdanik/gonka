@@ -3,13 +3,14 @@ package api
 import (
 	"crypto/sha256"
 	"crypto/subtle"
-	"encoding/json"
 	"io"
 	"net/http"
 	"strings"
 	"time"
 
 	"devshard/cmd/gateway/filters"
+
+	json "github.com/goccy/go-json"
 )
 
 const (

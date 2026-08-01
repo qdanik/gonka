@@ -2,9 +2,10 @@ package engine
 
 import (
 	"bytes"
-	"encoding/json"
 
 	"devshard/cmd/gateway/filters"
+
+	json "github.com/goccy/go-json"
 )
 
 var sseUsageKey = []byte(`"usage"`)

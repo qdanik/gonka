@@ -2,8 +2,9 @@ package config
 
 import (
 	"bytes"
-	"encoding/json"
 	"fmt"
+
+	json "github.com/goccy/go-json"
 )
 
 // Overrides is the admin-tunable subset of Config, persisted by the store and

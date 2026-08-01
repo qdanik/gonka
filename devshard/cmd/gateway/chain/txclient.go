@@ -6,7 +6,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -18,6 +17,8 @@ import (
 
 	"devshard/logging"
 	"devshard/signing"
+
+	json "github.com/goccy/go-json"
 )
 
 // Defaults applied by NewTxClient for zero-value fields, and the single source config.Defaults reads.

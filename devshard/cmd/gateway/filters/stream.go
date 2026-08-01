@@ -2,9 +2,10 @@ package filters
 
 import (
 	"bytes"
-	"encoding/json"
 	"errors"
 	"fmt"
+
+	json "github.com/goccy/go-json"
 )
 
 const (
@@ -176,38 +177,24 @@ func rewriteEvent(event []byte) []byte {
 		return event
 	}
 	payload := event[start:end]
+	filtered, outcome := stripInternalFields(payload)
+	switch outcome {
+	case stripMalformed:
+		return nil
+	case stripUnchanged:
+		filtered = payload
+	}
 	if convertible {
-		filtered, outcome := stripInternalFields(payload)
-		switch outcome {
-		case stripMalformed:
-			return nil
-		case stripUnchanged:
-			filtered = payload
-		}
 		if chunks, converted := completionAsChunks(filtered); converted {
 			return chunks
 		}
-		if outcome != stripRewritten {
-			return event
-		}
-		return spliceEvent(event, start, end, filtered)
 	}
-
-	rewritten := append(make([]byte, 0, len(event)), event[:start]...)
-	rewritten, changed, err := appendStripped(rewritten, payload)
-	switch {
-	case err != nil:
-		return nil
-	case !changed:
+	if outcome != stripRewritten {
 		return event
 	}
-	return append(rewritten, event[end:]...)
-}
-
-func spliceEvent(event []byte, start, end int, payload []byte) []byte {
-	rewritten := make([]byte, 0, len(event)-(end-start)+len(payload))
+	rewritten := make([]byte, 0, len(event)-(end-start)+len(filtered))
 	rewritten = append(rewritten, event[:start]...)
-	rewritten = append(rewritten, payload...)
+	rewritten = append(rewritten, filtered...)
 	return append(rewritten, event[end:]...)
 }
 

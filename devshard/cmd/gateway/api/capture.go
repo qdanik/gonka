@@ -3,7 +3,6 @@ package api
 import (
 	"cmp"
 	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -17,6 +16,8 @@ import (
 
 	"devshard/cmd/gateway/config"
 	"devshard/cmd/gateway/filters"
+
+	json "github.com/goccy/go-json"
 )
 
 const (
