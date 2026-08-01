@@ -198,7 +198,10 @@ func (c *TxClient) CreateEscrow(ctx context.Context, signer *signing.Secp256k1Si
 // SettleEscrow builds, signs, broadcasts and confirms a MsgSettleDevshardEscrow tx; unlike CreateEscrow
 // it takes no intent hook, and it waits for the commit rather than CheckTx. See
 // gateway-escrow-lifecycle.md, "Transaction encoding".
-func (c *TxClient) SettleEscrow(ctx context.Context, signer *signing.Secp256k1Signer, input SettlementInput) (SettleEscrowResult, error) {
+// SettleEscrow takes onPrepared for the same reason CreateEscrow does: the hash has to be durable
+// before the broadcast, or a settle that commits while the gateway is not looking is money moved under
+// a name nothing recorded.
+func (c *TxClient) SettleEscrow(ctx context.Context, signer *signing.Secp256k1Signer, input SettlementInput, onPrepared func(txHash string) error) (SettleEscrowResult, error) {
 	if signer == nil {
 		return SettleEscrowResult{}, fmt.Errorf("signer is required")
 	}
@@ -219,9 +222,18 @@ func (c *TxClient) SettleEscrow(ctx context.Context, signer *signing.Secp256k1Si
 	if err != nil {
 		return SettleEscrowResult{}, err
 	}
-	txHash, err := c.broadcastTx(ctx, txBytes)
+	txHash := txHashFromBytes(txBytes)
+	if onPrepared != nil {
+		if err := onPrepared(txHash); err != nil {
+			return SettleEscrowResult{}, fmt.Errorf("record settle intent before broadcast: %w", err)
+		}
+	}
+	nodeHash, err := c.broadcastTx(ctx, txBytes)
 	if err != nil {
 		return SettleEscrowResult{}, err
+	}
+	if !strings.EqualFold(nodeHash, txHash) {
+		return SettleEscrowResult{}, fmt.Errorf("tx hash mismatch: precomputed %s, node returned %s", txHash, nodeHash)
 	}
 	logging.Info("settle tx broadcast", "escrow", input.EscrowID, "tx", txHash, "settler", settler)
 	// Waiting is what makes the result mean "settled": the caller destroys the means to retry. See
@@ -269,6 +281,31 @@ func (c *TxClient) GetTxEscrowID(ctx context.Context, txHash string) (uint64, bo
 		return 0, false, ErrTxNotFound
 	}
 	return 0, false, lastErr
+}
+
+// TxCommitted reports whether a transaction reached the chain and succeeded there. It keeps
+// GetTxEscrowID's discipline: a per-endpoint error is never read as absence, and only agreement across
+// every reachable endpoint concludes the transaction is not on chain.
+func (c *TxClient) TxCommitted(ctx context.Context, txHash string) (succeeded bool, err error) {
+	var lastErr error
+	sawNotFound := false
+	for _, baseURL := range c.txQueryURLs {
+		var payload txResponseEnvelope
+		fetchErr := c.getJSONFromBaseURL(ctx, baseURL, "/cosmos/tx/v1beta1/txs/"+url.PathEscape(txHash), &payload)
+		if fetchErr != nil {
+			if isNotFoundError(fetchErr) {
+				sawNotFound = true
+				continue
+			}
+			lastErr = fmt.Errorf("%s: %w", baseURL, fetchErr)
+			continue
+		}
+		return payload.TxResponse.Code == 0, nil
+	}
+	if lastErr == nil && sawNotFound {
+		return false, ErrTxNotFound
+	}
+	return false, lastErr
 }
 
 func (c *TxClient) fetchChainID(ctx context.Context) (string, error) {

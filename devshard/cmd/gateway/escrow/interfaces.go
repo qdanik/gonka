@@ -8,10 +8,12 @@ import (
 	"devshard/signing"
 )
 
-// Satisfied by *chain.TxClient.
+// Satisfied by *chain.TxClient. TxCommitted is what tells a row still marked pending apart from one
+// whose settle genuinely failed: the settle may have reached the chain after the wait gave up.
 type escrowTxClient interface {
 	CreateEscrow(ctx context.Context, signer *signing.Secp256k1Signer, amount uint64, modelID string, onPrepared func(txHash string) error) (chain.CreateEscrowResult, error)
-	SettleEscrow(ctx context.Context, signer *signing.Secp256k1Signer, input chain.SettlementInput) (chain.SettleEscrowResult, error)
+	SettleEscrow(ctx context.Context, signer *signing.Secp256k1Signer, input chain.SettlementInput, onPrepared func(txHash string) error) (chain.SettleEscrowResult, error)
+	TxCommitted(ctx context.Context, txHash string) (bool, error)
 	GetTxEscrowID(ctx context.Context, txHash string) (escrowID uint64, found bool, err error)
 	GetEscrow(ctx context.Context, escrowID string) (chain.EscrowInfo, bool, error)
 }
@@ -22,6 +24,7 @@ type escrowStore interface {
 	UpsertDevshard(ctx context.Context, record store.DevshardRecord) error
 	SetDevshardActive(ctx context.Context, escrowID string, active bool) error
 	SetDevshardSettlementPending(ctx context.Context, escrowID string, pending bool) error
+	SetDevshardSettleTxHash(ctx context.Context, escrowID, txHash string) error
 	DeleteDevshard(ctx context.Context, escrowID string) error
 	SaveCommitment(ctx context.Context, c store.Commitment) error
 	LoadCommitments(ctx context.Context) ([]store.Commitment, error)

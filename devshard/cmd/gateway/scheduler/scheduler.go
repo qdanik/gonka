@@ -201,6 +201,11 @@ func (s *Scheduler) retire(idle *dispatcher) bool {
 	if s.observer != nil {
 		s.observer.EscrowRetired(idle.escrowID)
 	}
+	// Escrow ids are chain-monotonic and never reused, so a block list kept past retirement is one entry
+	// per escrow that ever saw a divergent host, held for the life of the process.
+	s.blocksMu.Lock()
+	delete(s.blockedHosts, idle.escrowID)
+	s.blocksMu.Unlock()
 	return true
 }
 
@@ -294,10 +299,9 @@ func (a Assignment) ReleaseEscrow() {
 	}
 }
 
-// escrowSource is the candidate-escrow registry; api wires it over the live runtime map.
+// escrowSource is the candidate-escrow registry; api wires it over the live runtime map. Candidates
+// returns escrows in a stable order with active/phase already filtered to accepts-new-inferences.
 type escrowSource interface {
-	// Candidates returns the escrows that could serve model, each with its Session handle, in a
-	// stable order, with active/phase already filtered to accepts-new-inferences==true.
 	Candidates(model string) []Escrow
 }
 
@@ -323,10 +327,10 @@ type NonceIntent struct {
 }
 
 // session is the narrow view of devshard/user.Session the scheduler needs; api wires an adapter.
+// Advance is the one atomic nonce-peek->decide->commit unit: it computes the next candidate binding,
+// calls decide, and commits the nonce only if the returned intent says to; a declined nonce is left
+// untouched and yields a nil Prepared.
 type session interface {
-	// Advance is the one atomic nonce-peek->decide->commit unit: it computes the next candidate
-	// binding, calls decide(binding), and commits the nonce (composing the real-or-ghost diff) IFF
-	// the returned intent commits. A declined nonce is left untouched and yields a nil Prepared.
 	Advance(decide func(HostBinding) NonceIntent) (Prepared, error)
 	ParticipantKeys() []string // distinct participants (slots deduped) -- the exclusion universe
 	GroupSize() int            // len(group); nonce % GroupSize == hostIdx

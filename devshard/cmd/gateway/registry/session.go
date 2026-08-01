@@ -23,8 +23,11 @@ var (
 	errNonceDeclined = errors.New("nonce declined")
 )
 
-// EscrowSession is one escrow's session as the registry uses it. sessionHandle binds a *user.Session
-// to its state machine to satisfy it.
+// EscrowSession is one escrow's session as the registry uses it; sessionHandle binds a *user.Session to
+// its state machine to satisfy it. Two methods carry a trap. SealedInferences counts what sealing has
+// drained out of SnapshotState().Inferences, which holds only the live tail, so a reader without it
+// mistakes that tail for the escrow's whole history. UserSession is the concrete handle the dispatch
+// boundary needs, and one rehydrated read-only has no host clients, so sending through it is a bug.
 type EscrowSession interface {
 	ParticipantKeys() []string
 	HostParticipantKeyList() []string
@@ -33,14 +36,10 @@ type EscrowSession interface {
 	PrepareInferenceFn(chooser user.ParamsForHost) (*user.PreparedInference, error)
 	Signatures() map[uint64]map[uint32][]byte
 	SnapshotState() types.EscrowState
-	// SealedInferences counts the records sealing has already drained out of SnapshotState().Inferences,
-	// which holds only the live tail. Without it a reader mistakes that tail for the escrow's whole history.
 	SealedInferences() int
 	Finalize(ctx context.Context) error
 	FlushSnapshot() error
 	Close() error
-	// UserSession is the concrete handle the dispatch boundary needs; one rehydrated read-only has no
-	// host clients, so sending through it is a bug.
 	UserSession() *user.Session
 }
 

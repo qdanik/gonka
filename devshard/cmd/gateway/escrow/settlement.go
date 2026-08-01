@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 
 	"devshard/cmd/gateway/chain"
 	"devshard/cmd/gateway/store"
@@ -94,6 +95,12 @@ func (m *Manager) settle(ctx context.Context, record store.DevshardRecord) (chai
 	}
 	defer leave()
 
+	if settled, err := m.alreadySettled(ctx, record); err != nil {
+		return chain.SettleEscrowResult{}, err
+	} else if settled {
+		return chain.SettleEscrowResult{EscrowID: numericEscrowID(record.EscrowID), TxHash: record.SettleTxHash}, nil
+	}
+
 	if err := m.park(ctx, record.EscrowID); err != nil {
 		return chain.SettleEscrowResult{}, err
 	}
@@ -114,7 +121,10 @@ func (m *Manager) settle(ctx context.Context, record store.DevshardRecord) (chai
 	if err != nil {
 		return chain.SettleEscrowResult{}, fmt.Errorf("building settlement for escrow %s: %w", record.EscrowID, err)
 	}
-	result, err := m.tx.SettleEscrow(ctx, signer, input)
+	recordHash := func(txHash string) error {
+		return m.store.WithRetry(ctx, func() error { return m.store.SetDevshardSettleTxHash(ctx, record.EscrowID, txHash) })
+	}
+	result, err := m.tx.SettleEscrow(ctx, signer, input, recordHash)
 	if err != nil {
 		return chain.SettleEscrowResult{}, fmt.Errorf("settling escrow %s: %w", record.EscrowID, err)
 	}
@@ -126,6 +136,41 @@ func (m *Manager) settle(ctx context.Context, record store.DevshardRecord) (chai
 		return result, fmt.Errorf("clearing settlement pending for escrow %s: %w", record.EscrowID, err)
 	}
 	return result, nil
+}
+
+// alreadySettled reports whether the transaction this escrow last broadcast reached the chain and
+// succeeded. An unreachable endpoint is not an answer, so it fails the tick rather than concluding the
+// settle never happened. See gateway-escrow-lifecycle.md, "Settling an escrow, and surviving a crash".
+func (m *Manager) alreadySettled(ctx context.Context, record store.DevshardRecord) (bool, error) {
+	if record.SettleTxHash == "" {
+		return false, nil
+	}
+	succeeded, err := m.tx.TxCommitted(ctx, record.SettleTxHash)
+	switch {
+	case errors.Is(err, chain.ErrTxNotFound):
+		return false, m.clearSettleTxHash(ctx, record.EscrowID) // never landed: a fresh transaction is right
+	case err != nil:
+		return false, fmt.Errorf("checking settle tx %s for escrow %s: %w", record.SettleTxHash, record.EscrowID, err)
+	case !succeeded:
+		return false, m.clearSettleTxHash(ctx, record.EscrowID) // committed and rejected: retry is right
+	}
+	logging.Info("settle already on chain, reconciled", "escrow", record.EscrowID, "tx", record.SettleTxHash)
+	return true, nil
+}
+
+func (m *Manager) clearSettleTxHash(ctx context.Context, escrowID string) error {
+	if err := m.store.WithRetry(ctx, func() error { return m.store.SetDevshardSettleTxHash(ctx, escrowID, "") }); err != nil {
+		return fmt.Errorf("clearing settle tx hash for escrow %s: %w", escrowID, err)
+	}
+	return nil
+}
+
+func numericEscrowID(escrowID string) uint64 {
+	parsed, err := strconv.ParseUint(escrowID, 10, 64)
+	if err != nil {
+		return 0
+	}
+	return parsed
 }
 
 // retire honors the SettlementEnabled toggle: off skips the chain call
