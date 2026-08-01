@@ -392,7 +392,7 @@ func (g *e2eGateway) awaitChainPhase(t *testing.T, phase string) {
 
 // sessions is the composition seam: the gateway opens each escrow over in-process hosts instead of over
 // the chain and the hosts' HTTP endpoints, and over the same on-disk storage either way.
-func (g *e2eGateway) sessions(_, _ string, _ *http.Client) (registry.SessionFactory, registry.SessionFactory) {
+func (g *e2eGateway) sessions(config.Chain, string) (registry.SessionFactory, registry.SessionFactory, error) {
 	serving := func(_ context.Context, escrowID string) (registry.EscrowSession, error) {
 		fixture, known := g.fixtures[escrowID]
 		if !known {
@@ -415,7 +415,7 @@ func (g *e2eGateway) sessions(_, _ string, _ *http.Client) (registry.SessionFact
 		}
 		return registry.NewSessionHandle(session, machine), nil
 	}
-	return serving, readOnly
+	return serving, readOnly, nil
 }
 
 func (g *e2eGateway) only() *escrowFixture {

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"strings"
 
 	"devshard/cmd/gateway/chain"
 	"devshard/cmd/gateway/env"
@@ -25,9 +26,14 @@ type Server struct {
 	MaxConcurrentRuntimeBuilds int64
 }
 
+// GRPCEndpoint is what the escrow bridge dials. RPCEndpoint is optional: empty lets common/chain
+// derive the CometBFT RPC host from the gRPC one, which is the query fallback every escrow read
+// inherits.
 type Chain struct {
 	RESTBaseURL         string
 	PublicAPIBaseURL    string
+	GRPCEndpoint        string
+	RPCEndpoint         string
 	TxQueryFallbackURLs []string
 }
 
@@ -214,6 +220,7 @@ func Defaults() Config {
 		},
 		Chain: Chain{
 			RESTBaseURL:         "http://localhost:1317",
+			GRPCEndpoint:        "localhost:9090",
 			PublicAPIBaseURL:    "http://localhost:9000",
 			TxQueryFallbackURLs: []string{"http://node1.gonka.ai:8000/chain-api"},
 		},
@@ -314,6 +321,9 @@ func (c *Config) Validate() error {
 		}
 	}
 	checkBaseURL("chain_rest", c.Chain.RESTBaseURL)
+	if strings.TrimSpace(c.Chain.GRPCEndpoint) == "" {
+		complain("chain_grpc: required, the escrow bridge dials it")
+	}
 	checkBaseURL("public_api", c.Chain.PublicAPIBaseURL)
 	for index, fallbackURL := range c.Chain.TxQueryFallbackURLs {
 		checkBaseURL(fmt.Sprintf("tx_query_fallback_urls[%d]", index), fallbackURL)

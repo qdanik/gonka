@@ -18,7 +18,9 @@ import (
 	"syscall"
 	"time"
 
+	commonchain "common/chain"
 	devshardpkg "devshard"
+
 	"devshard/bridge"
 	"devshard/cmd/gateway/api"
 	"devshard/cmd/gateway/chain"
@@ -77,14 +79,23 @@ func run(ctx context.Context) error {
 	return gateway.serve(ctx)
 }
 
-// sessionSources opens the two kinds of escrow session, given the chain endpoint, host route prefix and
-// pooled client compose resolves. It is a parameter so the transport an escrow is served over is chosen
-// once, at the composition root.
-type sessionSources func(chainREST, routePrefix string, client *http.Client) (serving, readOnly registry.SessionFactory)
+// sessionSources opens the two kinds of escrow session, given the chain bridge and host route prefix
+// compose resolves. It is a parameter so the transport an escrow is served over is chosen once, at the
+// composition root.
+type sessionSources func(endpoints config.Chain, routePrefix string) (serving, readOnly registry.SessionFactory, err error)
 
+// chainBackedSessions owns the chain connection because it is the only provider that needs one: an
+// in-process provider dials nothing, which is what keeps a test from carrying a live gRPC client.
 func chainBackedSessions(records devshardLookup, storageDir string) sessionSources {
-	return func(chainREST, routePrefix string, client *http.Client) (registry.SessionFactory, registry.SessionFactory) {
-		return servingSessions(records, storageDir, chainREST, routePrefix, client), readOnlySessions(records, storageDir)
+	return func(endpoints config.Chain, routePrefix string) (registry.SessionFactory, registry.SessionFactory, error) {
+		// NewGRPCBridgeFromURL is upstream's test constructor; production builds the bridge over a client
+		// carrying the CometBFT RPC query fallback, so an escrow read survives the gRPC query path failing.
+		chainClient, err := commonchain.NewWithQueryFallback(endpoints.GRPCEndpoint, endpoints.RPCEndpoint)
+		if err != nil {
+			return nil, nil, fmt.Errorf("dialing chain grpc %s: %w", endpoints.GRPCEndpoint, err)
+		}
+		escrowBridge := bridge.NewGRPCBridge(chainClient)
+		return servingSessions(records, storageDir, escrowBridge, routePrefix), readOnlySessions(records, storageDir), nil
 	}
 }
 
@@ -171,7 +182,10 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 
 	devshardWork := make(chan struct{}, 1)
 	depletion := &depletionNotice{}
-	serving, readOnly := openSessions(configuration.Chain.RESTBaseURL, routePrefix, boot.client)
+	serving, readOnly, err := openSessions(configuration.Chain, routePrefix)
+	if err != nil {
+		return nil, err
+	}
 	escrows, router := newRouting(routingDeps{
 		Sessions:     serving,
 		ReadOnly:     readOnly,
@@ -651,7 +665,9 @@ func findDevshard(ctx context.Context, records devshardLookup, escrowID string) 
 	return store.DevshardRecord{}, fmt.Errorf("devshard %s: %w", escrowID, escrow.ErrUnknownEscrow)
 }
 
-func servingSessions(records devshardLookup, storageDir, chainREST, routePrefix string, client *http.Client) registry.SessionFactory {
+// The bridge is one object for the process: it holds the chain client every session reads escrow state
+// through, so building one per session would open a connection per escrow and lose the client's cache.
+func servingSessions(records devshardLookup, storageDir string, escrowBridge bridge.MainnetBridge, routePrefix string) registry.SessionFactory {
 	return func(ctx context.Context, escrowID string) (registry.EscrowSession, error) {
 		record, err := findDevshard(ctx, records, escrowID)
 		if err != nil {
@@ -668,7 +684,7 @@ func servingSessions(records devshardLookup, storageDir, chainREST, routePrefix 
 		session, machine, err := user.NewHTTPSession(user.HTTPSessionConfig{
 			PrivateKeyHex: keyHex,
 			EscrowID:      escrowID,
-			Bridge:        bridge.NewRESTBridge(chainREST, bridge.WithHTTPClient(client)),
+			Bridge:        escrowBridge,
 			StoragePath:   storagePath,
 			RoutePrefix:   routePrefix,
 		})

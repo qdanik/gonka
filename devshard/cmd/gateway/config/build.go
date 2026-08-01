@@ -22,6 +22,8 @@ func Build(values env.Values, overrides Overrides) (*Config, error) {
 	overrideIfSet(&configuration.Server.DevshardsJSON, values.DevshardsJSON)
 
 	overrideIfSet(&configuration.Chain.RESTBaseURL, values.ChainREST)
+	overrideIfSet(&configuration.Chain.GRPCEndpoint, values.ChainGRPC)
+	overrideIfSet(&configuration.Chain.RPCEndpoint, values.ChainRPC)
 	overrideIfSet(&configuration.Chain.PublicAPIBaseURL, values.PublicAPI)
 	if values.TxQueryFallbackURLs != nil {
 		configuration.Chain.TxQueryFallbackURLs = splitCommaSeparated(*values.TxQueryFallbackURLs)
