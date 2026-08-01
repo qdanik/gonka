@@ -2,6 +2,11 @@ package perf
 
 import "sync"
 
+// CapabilityToolsUnsupported is the refusal reason for a host that cannot serve tool calls. Routing
+// reads it to tell a permanent refusal from one that waiting fixes, so it is the one capability
+// reason that crosses a package boundary by value.
+const CapabilityToolsUnsupported = "tool_choice_unsupported"
+
 // capabilityTracker is goroutine-safe: it owns its mutex, unlike hostPerf
 // where the caller must hold the lock.
 type capabilityTracker struct {
@@ -36,7 +41,7 @@ func (c *capabilityTracker) cannotServe(participant string, requiresTools bool, 
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	if requiresTools && c.toolUnsupported[participant] {
-		return "tool_choice_unsupported", true
+		return CapabilityToolsUnsupported, true
 	}
 	if limit := c.contextLimits[participant]; limit > 0 && contextHint > limit {
 		return "context_limit_exceeded", true

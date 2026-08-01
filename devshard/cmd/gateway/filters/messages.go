@@ -5,19 +5,44 @@ import (
 	"strings"
 )
 
-// Message role wire values; the only roles validateMessages accepts.
 const (
+	// Message role wire values; the only roles validateMessages accepts.
 	roleDeveloper = "developer"
 	roleSystem    = "system"
 	roleUser      = "user"
 	roleAssistant = "assistant"
 	roleTool      = "tool"
 	roleFunction  = "function"
+
+	// emptyToolResultContent fills a role:"tool" message left with no content -- vLLM chat
+	// templates require some text in every tool turn.
+	emptyToolResultContent = "<empty tool result>"
 )
 
-// emptyToolResultContent fills a role:"tool" message left with no content -- vLLM chat
-// templates require some text in every tool turn.
-const emptyToolResultContent = "<empty tool result>"
+var (
+	// disallowedAgenticFields are fields a plain-text role (no tool/function agency) must never carry.
+	disallowedAgenticFields = []string{"tool_calls", "tool_call_id", "function_call"}
+
+	// messageRolePolicies is keyed by wire role value; a role missing from this map is rejected.
+	messageRolePolicies = map[string]messageRolePolicy{
+		roleDeveloper: {disallowedFields: disallowedAgenticFields},
+		roleSystem:    {disallowedFields: disallowedAgenticFields},
+		roleUser:      {disallowedFields: disallowedAgenticFields},
+		roleAssistant: {disallowedFields: []string{"tool_call_id"}},
+		roleTool:      {disallowedFields: []string{"tool_calls", "function_call"}, requireToolCallID: true},
+		roleFunction:  {disallowedFields: disallowedAgenticFields, requireName: true},
+	}
+
+	// messageNormalizerChain is fixed and order-sensitive. See gateway-request-filtering.md,
+	// "Message hygiene".
+	messageNormalizerChain = []messageNormalizer{
+		dropOrphanToolMessages,
+		dropEmptyAssistantTurns,
+		normalizeEmptyMessageContent,
+		stripLegacyToolName,
+		flattenMessageTextParts,
+	}
+)
 
 type messageRolePolicy struct {
 	disallowedFields  []string
@@ -25,32 +50,9 @@ type messageRolePolicy struct {
 	requireToolCallID bool
 }
 
-// disallowedAgenticFields are fields a plain-text role (no tool/function agency) must never carry.
-var disallowedAgenticFields = []string{"tool_calls", "tool_call_id", "function_call"}
-
-// messageRolePolicies is keyed by wire role value; a role missing from this map is rejected.
-var messageRolePolicies = map[string]messageRolePolicy{
-	roleDeveloper: {disallowedFields: disallowedAgenticFields},
-	roleSystem:    {disallowedFields: disallowedAgenticFields},
-	roleUser:      {disallowedFields: disallowedAgenticFields},
-	roleAssistant: {disallowedFields: []string{"tool_call_id"}},
-	roleTool:      {disallowedFields: []string{"tool_calls", "function_call"}, requireToolCallID: true},
-	roleFunction:  {disallowedFields: disallowedAgenticFields, requireName: true},
-}
-
 // messageNormalizer rewrites the messages array before validateMessages runs, reporting
 // whether anything changed.
 type messageNormalizer func(messages []any) ([]any, bool, error)
-
-// messageNormalizerChain is fixed and order-sensitive: dropping orphaned/empty turns first
-// keeps their malformed content from ever reaching the shape checks below.
-var messageNormalizerChain = []messageNormalizer{
-	dropOrphanToolMessages,
-	dropEmptyAssistantTurns,
-	normalizeEmptyMessageContent,
-	stripLegacyToolName,
-	flattenMessageTextParts,
-}
 
 func normalizeMessages(document *Document) error {
 	messages, ok := document.Array("messages")

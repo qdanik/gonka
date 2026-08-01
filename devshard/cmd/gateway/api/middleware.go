@@ -15,8 +15,15 @@ import (
 const (
 	// chatIngestLimit stops a body at the socket that filters would reject after buffering it.
 	chatIngestLimit = filters.MaxBodyBytes
+
 	// adminIngestLimit bounds every operator body. The largest of them is a settings patch.
 	adminIngestLimit = 64 << 10
+
+	// bodyReadTimeout bounds how long a caller may take to deliver a body it has already announced. It
+	// is armed per request rather than as http.Server.ReadTimeout, which stays armed for the whole
+	// exchange: there it would expire mid-response and cancel the request a long stream is still
+	// writing for.
+	bodyReadTimeout = 30 * time.Second
 )
 
 // credentials is one request's resolved identity. It is computed only where an answer is used, so a
@@ -26,8 +33,8 @@ type credentials struct {
 	apiKey bool
 }
 
-// keyGate compares a presented bearer against configured keys. Both sides are hashed first, so the
-// comparison reveals neither the configured key's length nor any prefix of its bytes.
+// keyGate compares a presented bearer against configured keys, hashing both sides first. See
+// gateway-request-lifecycle.md, "3. Authorisation and routability".
 type keyGate struct {
 	digests    [][sha256.Size]byte
 	configured bool
@@ -61,8 +68,8 @@ func (g keyGate) authenticate(authorization string) bool {
 	return matched == 1
 }
 
-// requireAdmin gates the operator routes. The key comparison lives here rather than in a blanket
-// middleware so an unauthenticated request to a cheap public route never reaches it.
+// requireAdmin gates the operator routes, and is where the admin key comparison lives rather than in a
+// blanket middleware. See gateway-request-lifecycle.md, "3. Authorisation and routability".
 func (s *Server) requireAdmin(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !s.adminEnabled() {
@@ -111,8 +118,8 @@ func (s *Server) compareKeys(authorization string) credentials {
 	}
 }
 
-// disabled is the operator kill switch. /metrics and the operator routes stay reachable: monitoring
-// and remediation are what a turned-off gateway still needs.
+// disabled is the operator kill switch; /metrics and the operator routes stay reachable. See
+// gateway-operations.md, "The kill switch".
 func (s *Server) disabled(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		modes := s.config.Load().Modes
@@ -136,11 +143,6 @@ func (s *Server) disabled(next http.HandlerFunc) http.HandlerFunc {
 		writeError(w, http.StatusServiceUnavailable, message)
 	}
 }
-
-// bodyReadTimeout bounds how long a caller may take to deliver a body it has already announced. It is
-// armed per request rather than as http.Server.ReadTimeout, which stays armed for the whole exchange:
-// there it would expire mid-response and cancel the request a long stream is still writing for.
-const bodyReadTimeout = 30 * time.Second
 
 // readBody bounds ingest with MaxBytesReader rather than LimitReader: it returns a typed error the
 // status mapper recognises, and it marks the connection so the server stops reading a hostile body

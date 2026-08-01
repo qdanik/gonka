@@ -65,8 +65,8 @@ func (o RaceOutcome) nonceSettled(a AttemptOutcome) bool {
 		a.Terminal != TerminalErrorStream && a.Terminal != TerminalCapabilityRefused
 }
 
-// A host whose escrow state diverged still gets its timeout posted: divergence is a routing fact,
-// while an unposted vote leaves an orphaned MsgStart that settlement can never resolve.
+// timeoutSkipReason names every skip; a host whose escrow state diverged is deliberately not one of
+// them. See gateway-speculative-race.md, "Timeout votes".
 func (o RaceOutcome) timeoutSkipReason(a AttemptOutcome) (string, bool) {
 	switch {
 	case a.PhaseTransitionAborted:

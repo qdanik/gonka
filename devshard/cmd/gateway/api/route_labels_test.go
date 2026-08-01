@@ -12,44 +12,46 @@ import (
 	dto "github.com/prometheus/client_model/go"
 )
 
-// legacyRouteLabels is the label domain the existing dashboards select on. A string that differs here
-// empties every panel filtered on it, with no error anywhere.
-var legacyRouteLabels = []string{
-	"/v1/models",
-	"/v1/chat/completions",
-	"/v1/status",
-	"/v1/admin/state",
-	"/v1/admin/settings",
-	"/v1/admin/devshards",
-	"/v1/admin/devshards/{id}",
-	"/v1/admin/devshards/{id}/activate",
-	"/v1/admin/devshards/{id}/deactivate",
-	"/v1/admin/devshards/{id}/settle",
-	"/v1/admin/devshards/{id}/participants",
-	"/v1/admin/escrows",
-	"/v1/admin/suspicious-hosts",
-	"/v1/admin/participants/unquarantine",
-	"/v1/debug/rotation",
-	"/v1/debug/memstats",
-	"/devshard/{id}/",
-	"/devshard/{id}/openapi.json",
-	"/devshard/{id}/v1/models",
-	"/devshard/{id}/v1/chat/completions",
-	"/devshard/{id}/v1/status",
-	"/devshard/{id}/v1/state",
-	"/devshard/{id}/v1/finalize",
-	"/devshard/{id}/v1/debug/pending",
-	"/devshard/{id}/v1/debug/state",
-	"/devshard/{id}/v1/debug/inferences",
-	"/devshard/{id}/v1/debug/perf",
-	"/devshard/{id}/v1/debug/pairwise",
-	"/devshard/{id}/v1/debug/signatures",
-	"/devshard/{id}/v1/debug/signatures/collect",
-	"/devshard/{id}/v1/debug/sync-hosts",
-}
+var (
+	// legacyRouteLabels is the label domain the existing dashboards select on. A string that differs here
+	// empties every panel filtered on it, with no error anywhere.
+	legacyRouteLabels = []string{
+		"/v1/models",
+		"/v1/chat/completions",
+		"/v1/status",
+		"/v1/admin/state",
+		"/v1/admin/settings",
+		"/v1/admin/devshards",
+		"/v1/admin/devshards/{id}",
+		"/v1/admin/devshards/{id}/activate",
+		"/v1/admin/devshards/{id}/deactivate",
+		"/v1/admin/devshards/{id}/settle",
+		"/v1/admin/devshards/{id}/participants",
+		"/v1/admin/escrows",
+		"/v1/admin/suspicious-hosts",
+		"/v1/admin/participants/unquarantine",
+		"/v1/debug/rotation",
+		"/v1/debug/memstats",
+		"/devshard/{id}/",
+		"/devshard/{id}/openapi.json",
+		"/devshard/{id}/v1/models",
+		"/devshard/{id}/v1/chat/completions",
+		"/devshard/{id}/v1/status",
+		"/devshard/{id}/v1/state",
+		"/devshard/{id}/v1/finalize",
+		"/devshard/{id}/v1/debug/pending",
+		"/devshard/{id}/v1/debug/state",
+		"/devshard/{id}/v1/debug/inferences",
+		"/devshard/{id}/v1/debug/perf",
+		"/devshard/{id}/v1/debug/pairwise",
+		"/devshard/{id}/v1/debug/signatures",
+		"/devshard/{id}/v1/debug/signatures/collect",
+		"/devshard/{id}/v1/debug/sync-hosts",
+	}
 
-// deliberateDivergences are the only labels allowed to sit outside the legacy domain.
-var deliberateDivergences = []string{otherRouteLabel, "/v1/requests/{id}"}
+	// deliberateDivergences are the only labels allowed to sit outside the legacy domain.
+	deliberateDivergences = []string{otherRouteLabel, "/v1/requests/{id}"}
+)
 
 func TestEveryRouteCarriesItsExactMetricLabel(t *testing.T) {
 	expected := map[string]string{

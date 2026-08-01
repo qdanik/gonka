@@ -72,8 +72,9 @@ type ModelLimits struct {
 	MaxInputTokensInFlight *int64 `json:"max_input_tokens_in_flight,omitempty"`
 }
 
-// Limits groups admission tuning. A zero MaxInputTokensInFlight is unlimited, MaxTokensCap is the
-// ceiling DefaultMaxTokens is itself clamped to, and ModelAccess maps a model to one of the tiers below.
+// Limits groups admission tuning. A zero MaxInputTokensInFlight is unlimited, MaxTokensCap bounds
+// what a client may ask for and deliberately does not clamp DefaultMaxTokens, and ModelAccess maps a
+// model to one of the tiers below.
 type Limits struct {
 	DefaultMaxTokens       int64
 	MaxTokensCap           int64
@@ -141,10 +142,9 @@ type Perf struct {
 	HostStalenessSeconds     int64
 }
 
-// Engine groups race-escalation tuning; a zero MaxSpeculativeAttempts is bounded only by the host group.
-// The safety backstops it does not carry — streaming hard timeout, non-stream no-content timeout, max
-// attempt wait, long-response exemption — are engine constants: they bound a request that every tunable
-// already failed to bound.
+// Engine groups race-escalation tuning; a zero MaxSpeculativeAttempts is bounded only by the host
+// group, and the backstops it does not carry are engine constants. See gateway-speculative-race.md,
+// "Tunables and backstops".
 type Engine struct {
 	ReceiptTimeoutMS           int64
 	FirstTokenFloorMS          int64
@@ -178,28 +178,25 @@ type Config struct {
 	Scheduler  Scheduler
 }
 
-// PoC mode values accepted in Modes.PoCMode.
 const (
+	// PoC mode values accepted in Modes.PoCMode.
 	PoCModeOff     = env.PoCModeOff
 	PoCModeRelaxed = env.PoCModeRelaxed
-)
 
-// Model access values accepted in Limits.ModelAccess.
-const (
+	// Model access values accepted in Limits.ModelAccess.
 	ModelAccessOpen      = "open"
 	ModelAccessAPIKey    = "api_key"
 	ModelAccessAdminOnly = "admin_only"
-)
 
-const minAdminAPIKeyLength = 16
+	minAdminAPIKeyLength = 16
+)
 
 // AdminEnabled reports whether admin routes are configured at all. Callers must gate on this rather
 // than comparing a presented credential against AdminAPIKey, which would authenticate an empty one.
 func (s Server) AdminEnabled() bool { return s.AdminAPIKey != "" }
 
-// AccessFor resolves a model's access tier. An empty ModelAccess means no policy is configured and
-// every model is open; once a policy exists, a model outside it is admin-only rather than open, so
-// adding a model to the network cannot silently expose it.
+// AccessFor resolves a model's access tier; a model outside a populated ModelAccess is admin-only, not
+// open. See gateway-request-lifecycle.md, "3. Authorisation and routability".
 func (l Limits) AccessFor(model string) string {
 	if len(l.ModelAccess) == 0 {
 		return ModelAccessOpen

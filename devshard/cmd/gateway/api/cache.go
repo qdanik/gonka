@@ -20,10 +20,8 @@ const (
 	cacheEntryOverhead = 256
 )
 
-// An entry is pinned to the caller and to the escrow scope as well as to the request, and a streamed
-// reply is held as the writes it arrived in. Without the first two, one caller is served another's
-// reply and a devshard-pinned request is answered from an escrow that never saw it while
-// X-Devshard-ID still names that escrow; without the third, a replay is not the stream that was cached.
+// cacheKey pins an entry to the caller and to the escrow scope as well as to the request. See
+// gateway-request-lifecycle.md, "5. Response cache".
 type cacheKey struct {
 	caller string
 	escrow string
@@ -140,8 +138,7 @@ func (c *responseCache) sweepLocked(now time.Time) {
 	}
 }
 
-// evictToFitLocked drops entries in map order: a wrong choice costs one re-run, which is cheaper
-// than the list an age order would have to maintain on every hit.
+// evictToFitLocked drops entries in map order. See gateway-request-lifecycle.md, "5. Response cache".
 func (c *responseCache) evictToFitLocked(keep cacheKey) {
 	for key := range c.entries {
 		if c.totalBytes <= c.maxBytes {

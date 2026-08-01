@@ -12,7 +12,7 @@ This document exists because reading that suite as green and concluding "verifie
 
 **Any tuning threshold.** Peak-EWMA, the first-token hedging trigger, outlier ejection and the AIMD window all take a latency distribution as input. "Given these numbers, this decision" is asserted in the owning packages. "These thresholds are right for the fleet" is unanswerable without production traffic.
 
-**Real concurrency at real scale.** The widest race in the suite is single digits. Two scale hazards are known and need load to observe: `ProcessResponse` serialising a wide race on one `Session.mu`, and the registry's read lock on `Candidates`.
+**Real concurrency at real scale.** The widest race in the suite is single digits. One scale hazard is known and needs load to observe: `ProcessResponse` serialising a wide race on one `Session.mu`. The registry's `Candidates` used to be a second; it is now a lock-free read of a copy-on-write set, so it is no longer one.
 
 **Settlement money end to end.** The suite asserts the payload the gateway builds. Whether the chain then pays the right participants the right amounts is chain-side.
 

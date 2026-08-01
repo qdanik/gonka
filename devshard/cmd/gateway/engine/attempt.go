@@ -26,8 +26,9 @@ type Response interface {
 	Confirmed() bool
 }
 
-// hostLimiter is satisfied by *limits.ParticipantLimiter. The scheduler took the host's concurrency
-// slot in the same step that committed the nonce; the attempt that spends the nonce gives it back.
+// hostLimiter is satisfied by *limits.ParticipantLimiter; the attempt that spends the nonce gives the
+// host's concurrency slot back. See gateway-invariants.md, "5. The slot and the escrow hold are taken
+// with the nonce, and given back after the vote".
 type hostLimiter interface {
 	Release(participant, model string)
 }
@@ -60,8 +61,8 @@ type streamClassifier interface {
 }
 
 // AttemptSpec is everything one attempt needs, fixed at construction and never written afterwards. Events
-// must be drained until every started attempt has delivered its AttemptDone: that delivery is what lets a
-// committed nonce be settled, so the attempt goroutine waits for it rather than dropping it.
+// must be drained until every started attempt has delivered its AttemptDone. See gateway-invariants.md,
+// "1. A committed nonce is always settled".
 type AttemptSpec struct {
 	Escrow      string
 	Model       string
@@ -256,7 +257,6 @@ func classifyDispatchError(ctx context.Context, err error) Terminal {
 		if !strings.Contains(status.Path, "/chat/completions") {
 			return TerminalOffPath
 		}
-		// A 401 is only drift when the host says so; every other recovered status stands on its own.
 		if status.StatusCode == http.StatusUnauthorized &&
 			!strings.Contains(strings.ToLower(status.Body), "timestamp drift") {
 			return TerminalRejected
@@ -312,8 +312,8 @@ func (spec AttemptSpec) emit(event AttemptEvent) {
 	spec.Events <- event
 }
 
-// offer drops progress the coordinator is too busy to take: a full channel means it is already awake,
-// and the next delivered event carries the same running totals.
+// offer drops progress the coordinator is too busy to take, where emit blocks. See
+// gateway-invariants.md, "3. No field crosses a goroutine except through the event channel".
 func (spec AttemptSpec) offer(event AttemptEvent) {
 	select {
 	case spec.Events <- event:

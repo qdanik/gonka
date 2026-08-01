@@ -116,8 +116,8 @@ func (s *Server) writeInferences(w http.ResponseWriter, r *http.Request, keep fu
 	writeJSON(w, http.StatusOK, map[string]any{"escrow_id": escrowID, "inferences": entries})
 }
 
-// inspectable resolves a settling handle, so an escrow already retired for routing is still readable:
-// that is the one an operator most needs to look at.
+// inspectable resolves a settling handle, so an escrow already retired for routing is still readable.
+// See gateway-operations.md, "Per-escrow recovery surface".
 func (s *Server) inspectable(w http.ResponseWriter, r *http.Request) (registry.EscrowSession, string, bool) {
 	if !allowMethods(w, r, http.MethodGet, http.MethodHead) {
 		return nil, "", false

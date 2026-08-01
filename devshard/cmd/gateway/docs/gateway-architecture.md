@@ -21,24 +21,24 @@ This document is the map: what each package owns, which package may call which, 
 
 ## Packages
 
-Sizes are total lines of non-test Go as of this writing; they are indicative of weight, not a target.
+Weight is carried by four packages — `filters`, `engine`, `api` and `chain` — and everything else is small enough to hold in one reading. Exact line counts are deliberately not listed: they were stale in every row within days of being written, and which packages are heavy changes far more slowly than how many lines they contain.
 
-| Package | Lines | Owns |
-|---|---:|---|
-| `env/` | 172 | The only place that reads environment variables. One typed table: name, type, default. |
-| `config/` | 699 | The immutable configuration snapshot — defaults merged with environment and admin overrides, validated fail-fast — plus the atomic holder that publishes replacements. |
-| `store/` | 805 | SQLite: devshard records, admin overrides, intent commitments, rotation status, suspicious hosts, and the asynchronous request-accounting ledger. |
-| `chain/` | 2 129 | All chain input and output: the transaction client (build, sign, broadcast, confirm) and the phase observer that polls the public API and publishes an immutable `PhaseSnapshot`. |
-| `filters/` | 3 199 | The request and response boundary: one rule table for every top-level parameter, per-model profiles, schema bounds, the streaming response rewriter, and the vLLM capability-error parser. |
-| `perf/` | 450 | Per-participant decayed success and failure counts, Envoy-style outlier ejection, and the sticky host-capability flags. |
-| `limits/` | 847 | Three limiters: the gateway-wide FIFO admission limiter, the per-participant AIMD window with circuit breaker, and the chain-weight capacity model. |
-| `registry/` | 704 | The live escrow set: escrow id to session, model, group and in-flight count, published and draining, behind a copy-on-write snapshot. |
-| `scheduler/` | 1 126 | Target selection: which escrow, which participant, which nonce — including burning the nonces bound to participants that cannot serve. |
-| `engine/` | 3 129 | The speculative race: attempts, escalation, crowning, streaming, drain, and the single point where a race outcome is recorded. |
-| `escrow/` | 902 | The escrow lifecycle: creation, crash-recovery reconciliation, rotation across the proof-of-compute boundary, depletion, settlement and retirement. |
-| `api/` | 2 572 | The HTTP boundary: routes, authentication, admission, the response cache, request capture, error mapping and the streaming writer. |
-| `metrics/` | 857 | The Prometheus registry and every collector; the only package that knows Prometheus exists. |
-| `main.go` | 959 | The composition root. No policy, only wiring, boot and shutdown. |
+| Package | Owns |
+|---|---|
+| `env/` | The only place that reads environment variables. One typed table: name, type, default. |
+| `config/` | The immutable configuration snapshot — defaults merged with environment and admin overrides, validated fail-fast — plus the atomic holder that publishes replacements. |
+| `store/` | SQLite: devshard records, admin overrides, intent commitments, rotation status, suspicious hosts, and the asynchronous request-accounting ledger. |
+| `chain/` | All chain input and output: the transaction client (build, sign, broadcast, confirm) and the phase observer that polls the public API and publishes an immutable `PhaseSnapshot`. |
+| `filters/` | The request and response boundary: one rule table for every top-level parameter, per-model profiles, schema bounds, the streaming response rewriter, and the vLLM capability-error parser. |
+| `perf/` | Per-participant decayed success and failure counts, Envoy-style outlier ejection, and the sticky host-capability flags. |
+| `limits/` | Three limiters: the gateway-wide FIFO admission limiter, the per-participant AIMD window with circuit breaker, and the chain-weight capacity model. |
+| `registry/` | The live escrow set: escrow id to session, model, group and in-flight count, published and draining, behind a copy-on-write snapshot. |
+| `scheduler/` | Target selection: which escrow, which participant, which nonce — including burning the nonces bound to participants that cannot serve. |
+| `engine/` | The speculative race: attempts, escalation, crowning, streaming, drain, and the single point where a race outcome is recorded. |
+| `escrow/` | The escrow lifecycle: creation, crash-recovery reconciliation, rotation across the proof-of-compute boundary, depletion, settlement and retirement. |
+| `api/` | The HTTP boundary: routes, authentication, admission, the response cache, request capture, error mapping and the streaming writer. |
+| `metrics/` | The Prometheus registry and every collector; the only package that knows Prometheus exists. |
+| `main.go` | The composition root. No policy, only wiring, boot and shutdown. |
 
 ## Dependency rules
 
@@ -105,13 +105,13 @@ Everything else is per-request and finishes with the request.
 
 Two details in `compose` are load-bearing.
 
-**The boot budget ties two numbers together.** Building escrow runtimes at boot is bounded by a semaphore, and the pooled HTTP client those builders share has `MaxIdleConns` and `MaxIdleConnsPerHost` set to the same number (`bootBudget`, main.go:443). Bounding only the concurrency trades a request storm for connection churn: Go's default idle pool is two per host, so a bounded-but-unmatched builder pool would open and discard sockets instead of reusing keep-alives. The legacy gateway got this right as two independent numbers that happened to agree; here it is one number, so they cannot drift.
+**The boot budget ties two numbers together.** Building escrow runtimes at boot is bounded by a semaphore, and the pooled HTTP client those builders share has `MaxIdleConns` and `MaxIdleConnsPerHost` set to the same number (`main.go`, `bootBudget` and `newBootBudget`). Bounding only the concurrency trades a request storm for connection churn: Go's default idle pool is two per host, so a bounded-but-unmatched builder pool would open and discard sockets instead of reusing keep-alives. The legacy gateway got this right as two independent numbers that happened to agree; here it is one number, so they cannot drift.
 
 **Escrow runtimes are rehydrated lazily.** Nothing iterates the escrow set at boot spawning a goroutine per escrow. With a hundred escrows that pattern is a hundred concurrent chain reads at the moment the process is least able to absorb them. All chain reads are centralised in the phase observer's fixed pollers plus the escrow tick, so the chain request rate is a constant, independent of how many escrows exist.
 
 ## Shutdown
 
-Shutdown order is a contract, not an implementation detail (`shutdownOrder`, main.go:381). Eight steps, in this order:
+Shutdown order is a contract, not an implementation detail (`main.go`, `shutdownOrder`). Eight steps, in this order:
 
 1. **HTTP server** — stop accepting, so nothing new enters.
 2. **Races** — in-flight races drain to the vote that settles their nonces. This needs every step below it still alive.
@@ -124,8 +124,8 @@ Shutdown order is a contract, not an implementation detail (`shutdownOrder`, mai
 
 Two properties of the runner matter as much as the order.
 
-`stopAll` (main.go:426) runs every step even after one fails, and joins the errors. The store must be reached whatever happened above it.
+`stopAll` (`main.go`) runs every step even after one fails, and joins the errors — except a step marked `needsQuiesced`, which is skipped and the skip reported. The store must be reached whatever happened above it, so it carries no guard; the escrow sessions do, because closing a session takes no lock and closing one under a drain that overran races a nonce commit.
 
-`waitFor` (main.go:399) bounds a drain by the shutdown budget **without cancelling the work inside it**. Cancelling would abort the very vote the drain exists to protect; waiting forever would forfeit every step below to the SIGKILL that follows. So an overrunning drain is left running and reported. This was found the hard way: an earlier version discarded the context entirely, so the grace period reached only the listener. One unanswered request plus SIGTERM meant the drain blocked for minutes and the orchestrator killed the process mid-vote — losing exactly the vote the drain exists to protect, plus queued ledger rows and the escrow snapshot flush.
+`waitFor` (`main.go`) bounds a drain by the shutdown budget **without cancelling the work inside it**. Cancelling would abort the very vote the drain exists to protect; waiting forever would forfeit every step below to the SIGKILL that follows. So an overrunning drain is left running and reported. This was found the hard way: an earlier version discarded the context entirely, so the grace period reached only the listener. One unanswered request plus SIGTERM meant the drain blocked for minutes and the orchestrator killed the process mid-vote — losing exactly the vote the drain exists to protect, plus queued ledger rows and the escrow snapshot flush.
 
 Restart behaviour follows from what is and is not persisted. Escrow records, intent commitments, rotation status, admin overrides, suspicious hosts and the accounting ledger survive a restart. Participant health does not: AIMD windows, breaker state and performance rings start clean. That is deliberate — see [gateway-non-goals.md](./gateway-non-goals.md).

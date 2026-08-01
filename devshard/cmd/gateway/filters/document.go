@@ -7,16 +7,17 @@ import (
 	"devshard"
 )
 
-const MaxNestingDepth = 32
+const (
+	MaxNestingDepth = 32
 
-// MaxBodyBytes bounds the raw request body, both at ingest and before the decode. A million-token
-// prompt is ~4-6 MiB of text before JSON overhead, so this rejects the absurd rather than throttling
-// load; concurrent memory is bounded by the in-flight input-token budget instead.
-const MaxBodyBytes = 10 << 20
+	// MaxBodyBytes bounds the raw request body, both at ingest and before the decode. See
+	// gateway-request-filtering.md, "Structural bounds before anything is decoded".
+	MaxBodyBytes = 10 << 20
 
-// MaxStructuralNodes bounds the containers and elements the decode allocates; a body inside
-// MaxBodyBytes can still decode into an order of magnitude more heap than its own bytes.
-const MaxStructuralNodes = 250_000
+	// MaxStructuralNodes bounds the containers and elements the decode allocates. See
+	// gateway-request-filtering.md, "Structural bounds before anything is decoded".
+	MaxStructuralNodes = 250_000
+)
 
 // Document wraps a decoded request body. No mutex: the pipeline runs single-goroutine per request.
 type Document struct {
@@ -99,9 +100,9 @@ func (d *Document) Marshal() ([]byte, error) {
 	return body, nil
 }
 
-// ensureStructuralBounds scans body byte-by-byte outside string literals, rejecting it once
-// nesting exceeds maxDepth or the container/element count exceeds maxNodes -- one pass,
-// cheaper than a full decode upfront.
+// ensureStructuralBounds scans body byte-by-byte outside string literals in one pass, rejecting it
+// once nesting exceeds maxDepth or the container/element count exceeds maxNodes. See
+// gateway-request-filtering.md, "Structural bounds before anything is decoded".
 func ensureStructuralBounds(body []byte, maxDepth, maxNodes int) error {
 	depth := 0
 	nodes := 0
@@ -133,7 +134,6 @@ func ensureStructuralBounds(body []byte, maxDepth, maxNodes int) error {
 		case '}', ']':
 			depth--
 			if depth < 0 {
-				// Rebase an imbalanced-closer body to 0; the decoder rejects it later.
 				depth = 0
 			}
 			continue

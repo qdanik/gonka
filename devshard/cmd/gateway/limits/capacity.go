@@ -45,11 +45,14 @@ func (c *Capacity) RemoveEscrow(escrowID string) {
 	delete(c.membership, escrowID)
 }
 
-// ScaleFactor is the availability-filtered W_tot(model)/W_ref(model) via scaleFactor(); 0 when RequestsBlocked.
-func (c *Capacity) ScaleFactor(model string) float64 {
+// ScaleFactor is the availability-filtered W_tot(model)/W_ref(model) via scaleFactor(). blocked is the
+// EFFECTIVE blocking state, not the chain's raw one: relaxed mode is the operator's override of that
+// fact, so a capacity that read the snapshot itself would zero the scale exactly when the override was
+// meant to keep serving -- and a zero scale clamps every weight-derived cap to nothing.
+func (c *Capacity) ScaleFactor(model string, blocked bool) float64 {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	if c.snapshot.RequestsBlocked || !c.modelServedLocked(model) {
+	if blocked || !c.modelServedLocked(model) {
 		return 0
 	}
 	current := c.sumAvailableLocked(c.currentWeightsLocked(model), model)
@@ -57,9 +60,9 @@ func (c *Capacity) ScaleFactor(model string) float64 {
 	return scaleFactor(current, full)
 }
 
-// EscrowWeight is escrowWeight() over this escrow's membership share and the per-model current weights.
-// With no weight observed for either view the share alone stands in: a chain that has reported nothing
-// yet is missing data, not zero capacity, and scoring it unusable would reject every live request.
+// EscrowWeight is escrowWeight() over this escrow's membership share and the per-model current weights,
+// falling back to the share alone when neither view has been observed. See
+// gateway-capacity-and-health.md, "Two fail-safes with opposite directions".
 func (c *Capacity) EscrowWeight(escrowID, model string) float64 {
 	c.mu.RLock()
 	defer c.mu.RUnlock()

@@ -15,9 +15,8 @@ import (
 	"devshard/user"
 )
 
-// escrows is satisfied by *registry.Registry. The two lookups differ on a retired escrow on purpose:
-// only the acquiring one refuses it, because a race already committed nonces the settling one must
-// still reach.
+// escrows is satisfied by *registry.Registry; its two lookups differ on a retired escrow on purpose.
+// See gateway-invariants.md, "4. Routing and settlement read the escrow set asymmetrically, on purpose".
 type escrows interface {
 	Acquire(escrowID string) (registry.EscrowSession, func(), bool)
 	SettlementSession(escrowID string) (registry.EscrowSession, bool)

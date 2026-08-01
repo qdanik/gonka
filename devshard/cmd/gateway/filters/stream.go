@@ -7,26 +7,43 @@ import (
 	"fmt"
 )
 
+const (
+	// MaxStreamCarryBytes bounds the unterminated tail held per stream: a host that never sends an
+	// event terminator would otherwise grow it without limit. The size is derived, not picked — see
+	// gateway-request-filtering.md, "The response side".
+	MaxStreamCarryBytes = 32 << 20
+
+	// chunkObject is the object name every synthesised event carries; it is what tells a streaming
+	// client to read choices[].delta instead of choices[].message.
+	chunkObject = "chat.completion.chunk"
+)
+
 var (
 	sseEventSeparator     = []byte("\n\n")
 	sseEventSeparatorCRLF = []byte("\r\n\r\n")
 	sseDataPrefix         = []byte("data: ")
 	sseDoneMarker         = []byte("[DONE]")
+
 	// sseMessageKey is the cheap pre-check for a complete chat.completion: only a completion carries
 	// choices[].message, and only such an event has to be converted into chunks.
 	sseMessageKey = []byte(`"message"`)
+
+	// sseDataParsePrefix deliberately omits the space sseDataPrefix emits; the two must not be
+	// unified. See gateway-request-filtering.md, "Two `data:` prefixes that must not be unified".
+	sseDataParsePrefix = []byte("data:")
+
+	// SSEDoneEvent is the terminator an SSE client reads until; without it the client waits out its
+	// own timeout instead of finishing.
+	SSEDoneEvent = []byte("data: [DONE]\n\n")
+
+	// NoResponseDataBody is the reply a non-streaming caller gets when the stream carried no payload.
+	NoResponseDataBody = []byte(`{"error":{"message":"no response data"}}`)
+
+	// ErrStreamCarryOverflow reports an unterminated SSE event larger than MaxStreamCarryBytes.
+	ErrStreamCarryOverflow = errors.New("sse event exceeds carry limit")
+	// ErrStreamTruncatedEvent reports a trailing partial event dropped at end of stream.
+	ErrStreamTruncatedEvent = errors.New("sse stream ended mid-event")
 )
-
-// sseDataParsePrefix deliberately omits the space sseDataPrefix emits: the wire allows "data:{...}"
-// and a reader that demanded the space would classify every space-less frame as no data at all.
-var sseDataParsePrefix = []byte("data:")
-
-// SSEDoneEvent is the terminator an SSE client reads until; without it the client waits out its
-// own timeout instead of finishing.
-var SSEDoneEvent = []byte("data: [DONE]\n\n")
-
-// NoResponseDataBody is the reply a non-streaming caller gets when the stream carried no payload.
-var NoResponseDataBody = []byte(`{"error":{"message":"no response data"}}`)
 
 // eachSSELine visits the trimmed payload of every "data:" line in events, including the empty ones
 // and the terminator, and stops as soon as visit reports the line it wanted.
@@ -88,19 +105,6 @@ func AssembleSSEBody(body []byte) []byte {
 		return body
 	}
 }
-
-// MaxStreamCarryBytes bounds the unterminated tail held per stream: a host that never sends an
-// event terminator would otherwise grow it without limit. The largest legitimate frame carries
-// prompt_token_ids, which the gateway forces on with return_token_ids — roughly 7 bytes per prompt
-// token, so a million-token context already needs ~6.7 MiB. This covers ~4.8M tokens.
-const MaxStreamCarryBytes = 32 << 20
-
-var (
-	// ErrStreamCarryOverflow reports an unterminated SSE event larger than MaxStreamCarryBytes.
-	ErrStreamCarryOverflow = errors.New("sse event exceeds carry limit")
-	// ErrStreamTruncatedEvent reports a trailing partial event dropped at end of stream.
-	ErrStreamTruncatedEvent = errors.New("sse stream ended mid-event")
-)
 
 // StreamRewriter strips clientStrippedFields from an SSE stream delivered in arbitrary chunks,
 // emitting complete events only and holding the trailing partial until it completes.
@@ -216,10 +220,6 @@ func soleDataObject(event []byte) (start, end int, ok bool) {
 	}
 	return start, end, found && end > start && event[start] == '{'
 }
-
-// chunkObject is the object name every synthesised event carries; it is what tells a streaming client
-// to read choices[].delta instead of choices[].message.
-const chunkObject = "chat.completion.chunk"
 
 // sseCompletion is the complete chat.completion some hosts answer a streaming request with, and
 // sseChunk is the chat.completion.chunk an OpenAI streaming client actually reads.

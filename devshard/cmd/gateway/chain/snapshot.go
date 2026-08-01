@@ -13,6 +13,18 @@ const (
 	EpochPhasePoCValidateWindDown EpochPhase = "PoCValidateWindDown"
 )
 
+// AllEpochPhases lists every phase, so a reader that must enumerate them (a per-phase metric series)
+// stays beside the const block instead of restating it in another package.
+func AllEpochPhases() []EpochPhase {
+	return []EpochPhase{
+		EpochPhaseInference,
+		EpochPhasePoCGenerate,
+		EpochPhasePoCGenerateWindDown,
+		EpochPhasePoCValidate,
+		EpochPhasePoCValidateWindDown,
+	}
+}
+
 type ConfirmationPoCPhase string
 
 const (
@@ -31,10 +43,14 @@ const (
 	BlockReasonConfirmationPoC BlockReason = "confirmation_poc"
 )
 
-// PhaseSnapshot is an immutable, published view of chain phase and participant state. The observer folds
-// raw inputs only: RequestsBlocked mirrors rawPoCBlockingState as-is, and relaxed mode overrides it at the
-// admission boundary. A nil Preserved means not loaded, so everyone counts as preserved; a 0 MaxNonce means
-// not yet fetched, so the nonce cap is disabled rather than escrows deactivated on missing data.
+// AllBlockReasons lists every block reason, for the same reason AllEpochPhases exists.
+func AllBlockReasons() []BlockReason {
+	return []BlockReason{BlockReasonNone, BlockReasonPoC, BlockReasonConfirmationPoC}
+}
+
+// PhaseSnapshot is an immutable, published view of chain phase and participant state, folded from raw
+// chain inputs only. The absent-value semantics of RequestsBlocked, Preserved and MaxNonce are
+// load-bearing: see gateway-escrow-lifecycle.md, "What the chain observer provides".
 type PhaseSnapshot struct {
 	BlockHeight            int64
 	EpochSwitchBlockHeight int64

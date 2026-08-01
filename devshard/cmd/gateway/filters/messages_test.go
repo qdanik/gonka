@@ -572,7 +572,7 @@ func TestValidateMessagesAssistantContentRules(t *testing.T) {
 	tests := []struct {
 		name        string
 		body        string
-		wantMessage string // empty means accepted
+		wantMessage string
 	}{
 		{
 			"content required without tool_calls or function_call",

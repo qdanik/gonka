@@ -1,5 +1,5 @@
-// Package metrics owns the gateway's Prometheus registry. Family names are
-// frozen as devshard_*: dashboards and alerts depend on them.
+// Package metrics owns the gateway's Prometheus registry; family names are frozen as devshard_*.
+// See gateway-operations.md, "Metrics".
 package metrics
 
 import (
@@ -12,8 +12,6 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
-// Metrics bundles the registry and the HTTP instrumentation families. Other
-// packages register their own families via Registry().
 // otherMethodLabel absorbs every method outside knownMethods. net/http hands the handler any RFC 7230
 // token the client sent, so labelling with r.Method directly lets one unauthenticated caller mint a
 // permanent Prometheus series per probe -- the same hazard the route label already avoids by never

@@ -1,10 +1,13 @@
 package scheduler
 
-import "time"
+import (
+	"time"
 
-// availability is a frozen per-drain snapshot of the host predicates: reading them live lets a host
-// flip between decision and commit, burning a nonce every iteration. capability reports why, not just
-// whether -- only the reason separates a refusal that waiting fixes from one it never will.
+	"devshard/cmd/gateway/perf"
+)
+
+// availability is a frozen per-drain snapshot of the host predicates; capability reports why a host is
+// blocked, not merely whether. See gateway-routing-and-nonces.md, "The drain".
 type availability struct {
 	pocRequired  func(participant string) bool
 	throttled    func(participant string) bool
@@ -12,9 +15,6 @@ type availability struct {
 	capability   func(participant string, profile RequestProfile) (reason string, blocked bool)
 	stateBlocked func(participant string) bool
 }
-
-// CapabilityToolsUnsupported is the one permanent capability reason; perf writes it, routing reads it.
-const CapabilityToolsUnsupported = "tool_choice_unsupported"
 
 type blockReason int
 
@@ -49,7 +49,7 @@ func (a availability) blocks(participant string, queued *waiter) blockReason {
 	switch reason, blocked := a.capability(participant, queued.profile); {
 	case !blocked:
 		return blockNone
-	case reason == CapabilityToolsUnsupported:
+	case reason == perf.CapabilityToolsUnsupported:
 		return blockToolsUnsupported
 	}
 	return blockCapability
@@ -88,7 +88,6 @@ func match(binding HostBinding, waiting []*waiter, avail availability, now time.
 		}
 	}
 
-	// The hold is anchored on the oldest LIVE waiter; with none, the nonce goes back uncommitted.
 	if oldestLive == nil {
 		return decline{}
 	}

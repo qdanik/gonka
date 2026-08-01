@@ -12,14 +12,16 @@ import (
 	"devshard/user"
 )
 
-// ghostPrompt is the synthetic MsgStart a burned nonce commits so every nonce the escrow advances
-// through has an owner; it is composed into the diff but never sent to a host.
-var ghostPrompt = []byte(`{"messages":[{"role":"user","content":"."}],"max_tokens":1}`)
-
 const ghostMaxTokens = 1
 
-// errNonceDeclined leaves the bound nonce unconsumed, so the next caller sees the same nonce.
-var errNonceDeclined = errors.New("nonce declined")
+var (
+	// ghostPrompt is the synthetic MsgStart a burned nonce commits: composed into the diff, never sent to
+	// a host. See gateway-routing-and-nonces.md, "Ghost burns".
+	ghostPrompt = []byte(`{"messages":[{"role":"user","content":"."}],"max_tokens":1}`)
+
+	// errNonceDeclined leaves the bound nonce unconsumed, so the next caller sees the same nonce.
+	errNonceDeclined = errors.New("nonce declined")
+)
 
 // EscrowSession is one escrow's session as the registry uses it. sessionHandle binds a *user.Session
 // to its state machine to satisfy it.

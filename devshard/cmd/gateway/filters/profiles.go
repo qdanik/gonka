@@ -12,9 +12,9 @@ const (
 	ThinkingStrip                                       // MiniMax
 )
 
-// Profile captures one routed model's deltas from the default parameter pipeline. Rules
-// consult these hooks instead of comparing model IDs. A nil *Profile is the default profile
-// (e.g. Qwen): no deltas apply.
+// Profile captures one routed model's deltas from the default parameter pipeline; a nil *Profile
+// is the default profile (e.g. Qwen), with no deltas. See gateway-request-filtering.md,
+// "Model profiles".
 type Profile struct {
 	Models []string
 

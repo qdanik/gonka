@@ -21,8 +21,8 @@ var (
 	ErrSettlementInFlight = errors.New("settlement already in flight")
 )
 
-// pendingSettleBudget bounds how many parked escrows one tick settles, so a large backlog cannot
-// stretch a single tick across minutes of chain round-trips.
+// pendingSettleBudget bounds how many parked escrows one tick settles. See
+// gateway-escrow-lifecycle.md, "Settlement and retirement".
 const pendingSettleBudget = 4
 
 // settlePending drains escrows parked by retire: deactivated, still registered because their row
@@ -42,8 +42,8 @@ func (m *Manager) settlePending(ctx context.Context, devshards []store.DevshardR
 			errs = append(errs, err)
 			continue
 		}
-		if err := m.store.WithRetry(ctx, func() error { return m.store.DeleteDevshard(ctx, record.EscrowID) }); err != nil {
-			errs = append(errs, fmt.Errorf("deleting settled escrow %s: %w", record.EscrowID, err))
+		if err := m.deleteSettled(ctx, record.EscrowID); err != nil {
+			errs = append(errs, err)
 		}
 	}
 	return errors.Join(errs...)
@@ -138,10 +138,14 @@ func (m *Manager) retire(ctx context.Context, record store.DevshardRecord) error
 	if _, err := m.settle(ctx, record); err != nil {
 		return err // busy, deduped or broadcast failure: stays registered, inactive, pending -- not deleted.
 	}
-	if err := m.store.WithRetry(ctx, func() error {
-		return m.store.DeleteDevshard(ctx, record.EscrowID)
-	}); err != nil {
-		return fmt.Errorf("deleting settled escrow %s: %w", record.EscrowID, err)
+	return m.deleteSettled(ctx, record.EscrowID)
+}
+
+// deleteSettled drops the row that named the only key able to settle the escrow, so it runs on both
+// settle paths only once the settlement itself succeeded.
+func (m *Manager) deleteSettled(ctx context.Context, escrowID string) error {
+	if err := m.store.WithRetry(ctx, func() error { return m.store.DeleteDevshard(ctx, escrowID) }); err != nil {
+		return fmt.Errorf("deleting settled escrow %s: %w", escrowID, err)
 	}
 	return nil
 }

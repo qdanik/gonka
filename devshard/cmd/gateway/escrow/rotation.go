@@ -63,7 +63,7 @@ func (m *Manager) prepareBridge(ctx context.Context, snapshot chain.PhaseSnapsho
 	for _, model := range models {
 		if _, err := m.ensureToTarget(ctx, roleTemp, model.TempCount, model, snapshot, devshards); err != nil {
 			// degrade, don't abort: relabel existing regulars as temp so this epoch still has bridge coverage.
-			if _, promoteErr := m.promoteRegularsToTemp(ctx, model, snapshot, devshards); promoteErr != nil {
+			if _, promoteErr := m.promoteRegularsToTemp(ctx, model, devshards); promoteErr != nil {
 				errs = append(errs, promoteErr)
 			}
 			status := store.RotationStatus{Model: model.ModelID, Role: roleTemp, Stage: stagePrepareTemp, Epoch: snapshot.EpochIndex, CreateError: err.Error()}
@@ -110,7 +110,7 @@ func (m *Manager) finishBridge(ctx context.Context, snapshot chain.PhaseSnapshot
 
 		settleFailed := 0
 		for _, record := range devshards {
-			if record.Active && record.RotationRole == roleTemp && record.Model == model.ModelID && record.RotationEpoch <= int64(snapshot.EpochIndex) {
+			if isActiveTemp(record, model.ModelID, int64(snapshot.EpochIndex)) {
 				if err := m.retire(ctx, record); err != nil {
 					settleFailed++
 				}
@@ -124,9 +124,15 @@ func (m *Manager) finishBridge(ctx context.Context, snapshot chain.PhaseSnapshot
 	return errors.Join(errs...)
 }
 
+// isActiveTemp selects the rows finishBridge retires; hasActiveTemp is the same predicate folded
+// over the set, so the gate and the retirement can never disagree about which rows are bridged.
+func isActiveTemp(record store.DevshardRecord, modelID string, epoch int64) bool {
+	return record.Active && record.RotationRole == roleTemp && record.Model == modelID && record.RotationEpoch <= epoch
+}
+
 func hasActiveTemp(devshards []store.DevshardRecord, modelID string, epoch int64) bool {
 	for _, record := range devshards {
-		if record.Active && record.RotationRole == roleTemp && record.Model == modelID && record.RotationEpoch <= epoch {
+		if isActiveTemp(record, modelID, epoch) {
 			return true
 		}
 	}
@@ -136,7 +142,7 @@ func hasActiveTemp(devshards []store.DevshardRecord, modelID string, epoch int64
 // promoteRegularsToTemp is the prepareBridge degrade path: it relabels every active regular
 // escrow for the model to temp, in place. It keeps going past a write failure to promote as
 // many as it can, surfacing only the first error.
-func (m *Manager) promoteRegularsToTemp(ctx context.Context, model ModelConfig, snapshot chain.PhaseSnapshot, devshards []store.DevshardRecord) (promoted int, err error) {
+func (m *Manager) promoteRegularsToTemp(ctx context.Context, model ModelConfig, devshards []store.DevshardRecord) (promoted int, err error) {
 	for _, record := range devshards {
 		if !record.Active || record.RotationRole == roleTemp || record.Model != model.ModelID {
 			continue

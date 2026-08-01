@@ -101,11 +101,10 @@ type capabilityQuery struct {
 }
 
 type fakePerf struct {
-	mu       sync.Mutex
-	blocked  map[string]string
-	ejected  map[string]bool
-	queries  []capabilityQuery
-	askedFor map[string]bool
+	mu      sync.Mutex
+	blocked map[string]string
+	ejected map[string]bool
+	queries []capabilityQuery
 }
 
 func (f *fakePerf) Ejected(participant, _ string) bool {

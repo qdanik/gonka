@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"devshard/cmd/gateway/chain"
@@ -14,6 +16,19 @@ import (
 	"devshard/cmd/gateway/limits"
 	"devshard/cmd/gateway/registry"
 	"devshard/cmd/gateway/scheduler"
+)
+
+var (
+	ErrUnknownDevshard = errors.New("unknown devshard")
+
+	// ErrUnknownParticipant reports a participant key no limiter state is tracked under.
+	ErrUnknownParticipant = errors.New("unknown participant")
+
+	// ErrPrivateKeyEnvRequired refuses a create that names no key variable. See gateway-operations.md,
+	// "Operator".
+	ErrPrivateKeyEnvRequired = errors.New("private_key_env is required; a raw private_key is not accepted")
+
+	ErrDevshardExists = errors.New("devshard already registered")
 )
 
 // UnsupportedModelError names a model no live escrow serves, listing the ones that are routable so a
@@ -88,17 +103,6 @@ func (e *BlockedError) phaseName() string {
 	return "chain admission controls"
 }
 
-var ErrUnknownDevshard = errors.New("unknown devshard")
-
-// ErrUnknownParticipant reports a participant key no limiter state is tracked under.
-var ErrUnknownParticipant = errors.New("unknown participant")
-
-// ErrPrivateKeyEnvRequired refuses a create that names no key variable; the raw key a client could
-// send instead would reach the commitment row, the logs, and every operator in between.
-var ErrPrivateKeyEnvRequired = errors.New("private_key_env is required; a raw private_key is not accepted")
-
-var ErrDevshardExists = errors.New("devshard already registered")
-
 // statusForError maps every rejection the request path can produce onto its HTTP status. Cases the
 // packages below already own are delegated to them; the ones this boundary owns are the model,
 // admission and per-escrow-phase rejections nothing under it can express.
@@ -159,13 +163,21 @@ type errorDetail struct {
 	Code    string `json:"code,omitempty"`
 }
 
-// writeError is the package's only error writer, so no rejection can reach a client as the
-// text/plain body http.Error would give it.
+// writeError renders a rejection as the JSON envelope, never as the text/plain http.Error gives. See
+// gateway-request-lifecycle.md, "What can end a request, and with what status".
 func writeError(w http.ResponseWriter, status int, message string) {
 	writeJSON(w, status, errorEnvelope{Error: errorDetail{Message: message}})
 }
 
+// writeErrorFor is the one place every rejection is written, so Retry-After is set here rather than at
+// each 429's own call site. The value is rounded up: a zero would tell a client to retry immediately,
+// which is the opposite of what a queue timeout means.
 func writeErrorFor(w http.ResponseWriter, err error) {
+	var throttled *limits.RateLimitError
+	if errors.As(err, &throttled) && throttled.RetryAfter > 0 {
+		seconds := int64(math.Ceil(throttled.RetryAfter.Seconds()))
+		w.Header().Set("Retry-After", strconv.FormatInt(seconds, 10))
+	}
 	writeError(w, statusForError(err), err.Error())
 }
 

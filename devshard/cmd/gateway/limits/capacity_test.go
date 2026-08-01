@@ -25,7 +25,7 @@ func TestCapacityScaleFactor(t *testing.T) {
 		t.Parallel()
 		capacity := NewCapacity(nil)
 		capacity.Update(baseSnapshot())
-		if got := capacity.ScaleFactor("modelX"); got != 0.6 {
+		if got := capacity.ScaleFactor("modelX", false); got != 0.6 {
 			t.Errorf("ScaleFactor(modelX) = %v, want 0.6", got)
 		}
 	})
@@ -36,7 +36,7 @@ func TestCapacityScaleFactor(t *testing.T) {
 			return participant != "hostB" || model != "modelX"
 		})
 		capacity.Update(baseSnapshot())
-		if got := capacity.ScaleFactor("modelX"); got != 0.4 {
+		if got := capacity.ScaleFactor("modelX", false); got != 0.4 {
 			t.Errorf("ScaleFactor(modelX) = %v, want 0.4", got)
 		}
 	})
@@ -45,7 +45,7 @@ func TestCapacityScaleFactor(t *testing.T) {
 		t.Parallel()
 		capacity := NewCapacity(nil)
 		capacity.Update(baseSnapshot())
-		if got := capacity.ScaleFactor("modelNeverSeen"); got != 0 {
+		if got := capacity.ScaleFactor("modelNeverSeen", false); got != 0 {
 			t.Errorf("ScaleFactor(modelNeverSeen) = %v, want 0: a model nobody serves must not inherit the generic view", got)
 		}
 		capacity.SetEscrowMembership("escrow1", map[string]float64{"hostA": 1})
@@ -61,7 +61,7 @@ func TestCapacityScaleFactor(t *testing.T) {
 			CurrentWeights: map[string]float64{"hostA": 40, "hostB": 60},
 			FullWeights:    map[string]float64{"hostA": 100, "hostB": 100},
 		})
-		if got := capacity.ScaleFactor("anyModel"); got != 0.5 {
+		if got := capacity.ScaleFactor("anyModel", false); got != 0.5 {
 			t.Errorf("ScaleFactor(anyModel) = %v, want 0.5 (generic view, no per-model data yet)", got)
 		}
 	})
@@ -74,26 +74,32 @@ func TestCapacityScaleFactor(t *testing.T) {
 		capacity.Update(snapshot)
 		// full falls back to the generic FullWeights sum (200) since FullWeightsByModel has no
 		// "modelPartial" entry; current stays the real per-model 50, not the generic sum of 100.
-		if got := capacity.ScaleFactor("modelPartial"); got != 0.25 {
+		if got := capacity.ScaleFactor("modelPartial", false); got != 0.25 {
 			t.Errorf("ScaleFactor(modelPartial) = %v, want 0.25 (real current 50 / generic full 200)", got)
 		}
 	})
 
-	t.Run("RequestsBlocked forces scale to zero regardless of weights", func(t *testing.T) {
+	// The caller passes the EFFECTIVE blocking state, not the chain's raw one: relaxed mode is the
+	// operator's override, and a scale of zero clamps every weight-derived cap to nothing, so reading
+	// the raw fact here would kill relaxed mode in exactly the deployments that configured a cap.
+	t.Run("a blocked caller forces scale to zero regardless of weights", func(t *testing.T) {
 		t.Parallel()
 		capacity := NewCapacity(nil)
 		snapshot := baseSnapshot()
 		snapshot.RequestsBlocked = true
 		capacity.Update(snapshot)
-		if got := capacity.ScaleFactor("modelX"); got != 0 {
-			t.Errorf("ScaleFactor(modelX) = %v, want 0 when RequestsBlocked", got)
+		if got := capacity.ScaleFactor("modelX", true); got != 0 {
+			t.Errorf("ScaleFactor(modelX, blocked) = %v, want 0", got)
+		}
+		if got := capacity.ScaleFactor("modelX", false); got == 0 {
+			t.Error("ScaleFactor(modelX, not blocked) = 0 while the chain says blocked: relaxed mode cannot serve")
 		}
 	})
 
 	t.Run("zero baseline before any Update means unlimited", func(t *testing.T) {
 		t.Parallel()
 		capacity := NewCapacity(nil)
-		if got := capacity.ScaleFactor("modelX"); got != 1 {
+		if got := capacity.ScaleFactor("modelX", false); got != 1 {
 			t.Errorf("ScaleFactor(modelX) = %v, want 1 (unlimited) before any Update", got)
 		}
 	})
@@ -102,7 +108,7 @@ func TestCapacityScaleFactor(t *testing.T) {
 		t.Parallel()
 		capacity := NewCapacity(nil)
 		capacity.Update(baseSnapshot())
-		if got := capacity.ScaleFactor("modelX"); got != 0.6 {
+		if got := capacity.ScaleFactor("modelX", false); got != 0.6 {
 			t.Errorf("ScaleFactor(modelX) = %v, want 0.6 with nil availability", got)
 		}
 	})
@@ -119,7 +125,7 @@ func TestCapacityUpdateReplacesPriorSnapshot(t *testing.T) {
 		CurrentWeights: map[string]float64{"hostZ": 50},
 		FullWeights:    map[string]float64{"hostZ": 100},
 	})
-	if got := capacity.ScaleFactor("modelX"); got != 0.5 {
+	if got := capacity.ScaleFactor("modelX", false); got != 0.5 {
 		t.Errorf("ScaleFactor(modelX) = %v, want 0.5 from the second snapshot only", got)
 	}
 }
@@ -232,7 +238,7 @@ func TestCapacityConcurrentUpdateAndRead(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for iteration := 0; iteration < iterationsPerGoroutine; iteration++ {
-				_ = capacity.ScaleFactor("modelX")
+				_ = capacity.ScaleFactor("modelX", false)
 			}
 		}()
 	}

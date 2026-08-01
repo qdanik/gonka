@@ -3,6 +3,8 @@ package scheduler
 import (
 	"testing"
 	"time"
+
+	"devshard/cmd/gateway/perf"
 )
 
 const (
@@ -47,7 +49,7 @@ func capabilityBlocksModels(models ...string) func(string, RequestProfile) (stri
 		blocked[model] = true
 	}
 	return func(_ string, profile RequestProfile) (string, bool) {
-		return CapabilityToolsUnsupported, blocked[profile.Model]
+		return perf.CapabilityToolsUnsupported, blocked[profile.Model]
 	}
 }
 
@@ -66,7 +68,7 @@ func TestServableAgreesWithMatchOverEveryFilterCombination(t *testing.T) {
 			ejected:      func(participant string) bool { return bit(2) && participant == hostA },
 			stateBlocked: func(participant string) bool { return bit(3) && participant == hostB },
 			capability: func(participant string, _ RequestProfile) (string, bool) {
-				return CapabilityToolsUnsupported, bit(4) && participant == hostA
+				return perf.CapabilityToolsUnsupported, bit(4) && participant == hostA
 			},
 		}
 		var excluded []string
@@ -410,7 +412,7 @@ func TestMatchIsTotal(t *testing.T) {
 			ejected:      always(ejected),
 			stateBlocked: always(stateBlocked),
 			capability: func(_ string, profile RequestProfile) (string, bool) {
-				return CapabilityToolsUnsupported, capabilityBlocked || profile.Model == blockedModel
+				return perf.CapabilityToolsUnsupported, capabilityBlocked || profile.Model == blockedModel
 			},
 		}
 

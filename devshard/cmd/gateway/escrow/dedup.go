@@ -25,3 +25,28 @@ func (s *inFlightSet) enter(key string) (leave func(), busy bool) {
 		s.mu.Unlock()
 	}, false
 }
+
+// markSet is the request-path-to-tick handoff: a hook marks a key without doing I/O and the next
+// tick takes the whole set at once. drain steals the map rather than copying it, so a key marked
+// while the tick is running belongs to the following tick and cannot be dropped.
+type markSet struct {
+	mu   sync.Mutex
+	keys map[string]bool
+}
+
+func (s *markSet) mark(key string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.keys == nil {
+		s.keys = make(map[string]bool)
+	}
+	s.keys[key] = true
+}
+
+func (s *markSet) drain() map[string]bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	marks := s.keys
+	s.keys = nil
+	return marks
+}

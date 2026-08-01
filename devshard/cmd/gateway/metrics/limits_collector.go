@@ -114,7 +114,7 @@ func (c *LimitsCollector) Collect(ch chan<- prometheus.Metric) {
 		}
 		gauge(ch, c.windowSize, window.Window, window.Participant, window.Model)
 		gauge(ch, c.windowInflight, float64(window.Inflight), window.Participant, window.Model)
-		for _, state := range []limits.BreakerState{limits.BreakerClosed, limits.BreakerOpen, limits.BreakerHalfOpen} {
+		for _, state := range limits.AllBreakerStates() {
 			gauge(ch, c.breakerState, boolGauge(window.Breaker == state), window.Participant, window.Model, string(state))
 		}
 	}

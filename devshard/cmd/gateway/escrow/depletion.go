@@ -13,16 +13,11 @@ import (
 // OnBalanceExhausted marks an escrow for replacement; the work happens in the next tick, so this
 // hook does no I/O and never fans out a per-escrow chain call.
 func (m *Manager) OnBalanceExhausted(escrowID string) {
-	m.depletionMu.Lock()
-	defer m.depletionMu.Unlock()
-	if m.depletedMarks == nil {
-		m.depletedMarks = make(map[string]bool)
-	}
-	m.depletedMarks[escrowID] = true
+	m.depleted.mark(escrowID)
 }
 
 func (m *Manager) checkDepletion(ctx context.Context, snapshot chain.PhaseSnapshot, models []ModelConfig, devshards []store.DevshardRecord) error {
-	marked := m.drainMarks()
+	marked := m.depleted.drain()
 	if len(marked) == 0 {
 		return nil
 	}
@@ -37,7 +32,7 @@ func (m *Manager) checkDepletion(ctx context.Context, snapshot chain.PhaseSnapsh
 			continue
 		}
 		if err := m.retireDepleted(ctx, record, modelByID, snapshot); err != nil {
-			m.OnBalanceExhausted(record.EscrowID) // a failed retirement must not un-schedule itself
+			m.OnBalanceExhausted(record.EscrowID)
 			errs = append(errs, err)
 		}
 	}
@@ -57,14 +52,6 @@ func (m *Manager) retireDepleted(ctx context.Context, record store.DevshardRecor
 		return fmt.Errorf("retiring depleted escrow %s: %w", record.EscrowID, err)
 	}
 	return nil
-}
-
-func (m *Manager) drainMarks() map[string]bool {
-	m.depletionMu.Lock()
-	defer m.depletionMu.Unlock()
-	marks := m.depletedMarks
-	m.depletedMarks = nil
-	return marks
 }
 
 // replaceDepleted creates the replacement before retiring the depleted escrow, so coverage never

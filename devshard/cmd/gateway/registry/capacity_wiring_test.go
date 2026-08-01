@@ -1,7 +1,7 @@
 // This is the one black-box test in the package: it reaches for limits and scheduler, which the
-// registry itself must never import, to pin the wiring an in-package test cannot see. Without the
-// membership push, EscrowWeight is 0, every candidate's load score is +Inf, and routing rejects every
-// request while the process still looks healthy.
+// registry itself must never import, to pin the wiring an in-package test cannot see. Missing that
+// wiring makes the gateway boot green and serve nothing. See gateway-routing-and-nonces.md,
+// "Membership: what the capacity model is told".
 package registry_test
 
 import (

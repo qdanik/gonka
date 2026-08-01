@@ -8,16 +8,51 @@ import (
 	"strings"
 )
 
-// clientStrippedFields are response-body keys, at any nesting depth, hidden from the client.
-// Paired with parameterTable's force rules by TestForcedRequestParametersHaveResponseStripCounterpart.
-var clientStrippedFields = []string{
-	"logprob",
-	"logprobs",
-	"top_logprobs",
-	"token_ids",
-	"prompt_token_ids",
-	"prompt_logprobs",
-}
+var (
+	// clientStrippedFields are response-body keys, at any nesting depth, hidden from the client.
+	// Paired with parameterTable's force rules by TestForcedRequestParametersHaveResponseStripCounterpart.
+	clientStrippedFields = []string{
+		"logprob",
+		"logprobs",
+		"top_logprobs",
+		"token_ids",
+		"prompt_token_ids",
+		"prompt_logprobs",
+	}
+
+	// strippableMarkers is derived from clientStrippedFields rather than written beside it: a
+	// hand-maintained marker list silently forwards any field it forgets, which is how top_logprobs
+	// leaked for the lifetime of the hand-written version.
+	strippableMarkers = func() [][]byte {
+		markers := make([][]byte, 0, len(clientStrippedFields))
+		for _, field := range clientStrippedFields {
+			markers = append(markers, []byte(`"`+field+`"`))
+		}
+		return markers
+	}()
+
+	// nonCacheableErrorMarkers identify transient, environmental, or model-availability failures
+	// excluded from caching regardless of which of message/type/code carries them.
+	nonCacheableErrorMarkers = []string{
+		"context canceled",
+		"context cancelled",
+		"client disconnected",
+		"request canceled",
+		"request cancelled",
+		"timeout",
+		"timed out",
+		"rate limit",
+		"overloaded",
+		"temporarily unavailable",
+		"service unavailable",
+		"internal server error",
+		"unsupported model",
+		"model not found",
+		"model_not_found",
+		"does not exist",
+		"not supported on this model",
+	}
+)
 
 // stripOutcome separates an unparseable payload from a parseable one with nothing to strip.
 type stripOutcome int
@@ -81,17 +116,6 @@ func deleteInternalFields(v any) bool {
 		return false
 	}
 }
-
-// strippableMarkers is derived from clientStrippedFields rather than written beside it: a
-// hand-maintained marker list silently forwards any field it forgets, which is how top_logprobs
-// leaked for the lifetime of the hand-written version.
-var strippableMarkers = func() [][]byte {
-	markers := make([][]byte, 0, len(clientStrippedFields))
-	for _, field := range clientStrippedFields {
-		markers = append(markers, []byte(`"`+field+`"`))
-	}
-	return markers
-}()
 
 // hasStrippableField is a cheap pre-check so untouched chunks skip the SSE split entirely.
 func hasStrippableField(p []byte) bool {
@@ -190,28 +214,6 @@ func codeString(code any) string {
 		return ""
 	}
 	return fmt.Sprint(code)
-}
-
-// nonCacheableErrorMarkers identify transient, environmental, or model-availability failures
-// excluded from caching regardless of which of message/type/code carries them.
-var nonCacheableErrorMarkers = []string{
-	"context canceled",
-	"context cancelled",
-	"client disconnected",
-	"request canceled",
-	"request cancelled",
-	"timeout",
-	"timed out",
-	"rate limit",
-	"overloaded",
-	"temporarily unavailable",
-	"service unavailable",
-	"internal server error",
-	"unsupported model",
-	"model not found",
-	"model_not_found",
-	"does not exist",
-	"not supported on this model",
 }
 
 func isCacheableErrorDetails(details UpstreamError) bool {
