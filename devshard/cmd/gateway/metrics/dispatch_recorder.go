@@ -40,3 +40,14 @@ func (r *DispatchRecorder) NonceHeld(escrowID string) {
 func (r *DispatchRecorder) BurnBudgetExhausted(escrowID string) {
 	r.burnBudgetExhausted.WithLabelValues(metricLabel(escrowID, labelUnknown)).Inc()
 }
+
+// EscrowRetired drops every series the escrow left behind. Escrow ids are monotonic and never reused,
+// so without this each rotation leaves one nonce-holds series, one budget series and one ghost series
+// per reason, permanently -- the sibling registry collector avoids the same growth by rebuilding from
+// the live set on every scrape.
+func (r *DispatchRecorder) EscrowRetired(escrowID string) {
+	labels := prometheus.Labels{"devshard_id": escrowID}
+	r.ghostBurns.DeletePartialMatch(labels)
+	r.nonceHolds.DeletePartialMatch(labels)
+	r.burnBudgetExhausted.DeletePartialMatch(labels)
+}

@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"devshard/cmd/gateway/config"
 )
@@ -59,6 +60,44 @@ func TestAnOversizedChatBodyIsRejectedBeforeAnythingRuns(t *testing.T) {
 	}
 	if got := live.inference.runs.Load(); got != 0 {
 		t.Fatalf("an oversized body started %d races", got)
+	}
+}
+
+// deadlineRecorder is a recorder that also carries the read deadline a real connection would take.
+type deadlineRecorder struct {
+	*httptest.ResponseRecorder
+	readDeadlines []time.Time
+}
+
+func (w *deadlineRecorder) SetReadDeadline(deadline time.Time) error {
+	w.readDeadlines = append(w.readDeadlines, deadline)
+	return nil
+}
+
+// A dripped body holds a goroutine before admission and before the limiter, so the read carries its
+// own deadline. It has to be cleared again: a deadline left armed expires mid-stream and cancels the
+// request the response is still being written for.
+func TestAReadDeadlineBoundsTheBodyAndIsClearedBeforeTheResponse(t *testing.T) {
+	writer := &deadlineRecorder{ResponseRecorder: httptest.NewRecorder()}
+	request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(chatBody))
+	readStarted := time.Now()
+
+	body, err := readBody(writer, request, chatIngestLimit)
+
+	if err != nil {
+		t.Fatalf("readBody() = %v", err)
+	}
+	if string(body) != chatBody {
+		t.Fatalf("readBody() = %q, want the request body", body)
+	}
+	if len(writer.readDeadlines) != 2 {
+		t.Fatalf("read deadlines set: %v, want one armed and one cleared", writer.readDeadlines)
+	}
+	if armed := writer.readDeadlines[0]; armed.Before(readStarted.Add(bodyReadTimeout)) {
+		t.Errorf("the read was armed until %v, want at least %v past the moment it began", armed, bodyReadTimeout)
+	}
+	if left := writer.readDeadlines[1]; !left.IsZero() {
+		t.Errorf("the deadline outlived the read as %v, so a longer response would be cut by it", left)
 	}
 }
 

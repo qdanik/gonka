@@ -14,6 +14,29 @@ import (
 
 // Metrics bundles the registry and the HTTP instrumentation families. Other
 // packages register their own families via Registry().
+// otherMethodLabel absorbs every method outside knownMethods. net/http hands the handler any RFC 7230
+// token the client sent, so labelling with r.Method directly lets one unauthenticated caller mint a
+// permanent Prometheus series per probe -- the same hazard the route label already avoids by never
+// carrying a raw path.
+const otherMethodLabel = "other"
+
+var knownMethods = map[string]bool{
+	http.MethodGet:     true,
+	http.MethodHead:    true,
+	http.MethodPost:    true,
+	http.MethodPut:     true,
+	http.MethodPatch:   true,
+	http.MethodDelete:  true,
+	http.MethodOptions: true,
+}
+
+func methodLabel(method string) string {
+	if knownMethods[method] {
+		return method
+	}
+	return otherMethodLabel
+}
+
 type Metrics struct {
 	registry            *prometheus.Registry
 	httpRequestsTotal   *prometheus.CounterVec
@@ -71,8 +94,9 @@ func (m *Metrics) InstrumentRoute(routeLabel string, next http.Handler) http.Han
 		startedAt := time.Now()
 		recorder := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
 		next.ServeHTTP(recorder, r)
-		m.httpRequestsTotal.WithLabelValues(routeLabel, r.Method, strconv.Itoa(recorder.status)).Inc()
-		m.httpRequestDuration.WithLabelValues(routeLabel, r.Method).Observe(time.Since(startedAt).Seconds())
+		method := methodLabel(r.Method)
+		m.httpRequestsTotal.WithLabelValues(routeLabel, method, strconv.Itoa(recorder.status)).Inc()
+		m.httpRequestDuration.WithLabelValues(routeLabel, method).Observe(time.Since(startedAt).Seconds())
 	})
 }
 

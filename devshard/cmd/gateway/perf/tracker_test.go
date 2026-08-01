@@ -195,16 +195,17 @@ func TestTrackerCannotServeDelegatesToCapability(t *testing.T) {
 
 func TestTrackerAcquireReleaseTracksInflight(t *testing.T) {
 	tracker := newTestTracker(testPerf(), fixedNow(testEpoch))
+	tracker.RecordSample(Sample{ParticipantKey: "participant-a", Model: "model-a", Responsive: true})
 
 	tracker.Acquire("participant-a")
 	tracker.Acquire("participant-a")
-	if got := tracker.Inflight("participant-a"); got != 2 {
-		t.Fatalf("Inflight() after 2 acquires = %d, want 2", got)
+	if got := tracker.Snapshot()[0].Inflight; got != 2 {
+		t.Fatalf("in flight after 2 acquires = %d, want 2", got)
 	}
 
 	tracker.Release("participant-a")
-	if got := tracker.Inflight("participant-a"); got != 1 {
-		t.Fatalf("Inflight() after 1 release = %d, want 1", got)
+	if got := tracker.Snapshot()[0].Inflight; got != 1 {
+		t.Fatalf("in flight after 1 release = %d, want 1", got)
 	}
 }
 
@@ -246,7 +247,7 @@ func TestTrackerConcurrentRecordAndQueryNoRace(t *testing.T) {
 		}()
 		go func() {
 			defer wg.Done()
-			tracker.Inflight(participant)
+			tracker.Snapshot()
 		}()
 		go func() {
 			defer wg.Done()
@@ -255,7 +256,7 @@ func TestTrackerConcurrentRecordAndQueryNoRace(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			tracker.Acquire(participant)
-			tracker.Inflight(participant)
+			tracker.Snapshot()
 			tracker.Release(participant)
 		}()
 	}

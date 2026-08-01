@@ -186,10 +186,6 @@ func (t *Tracker) Snapshot() []HostState {
 	return states
 }
 
-func (t *Tracker) Inflight(participant string) int {
-	return t.inflight.count(participant)
-}
-
 // Ejected reports whether a host is currently withheld from routing. It is called once per host per
 // admission, so it reads the published view instead of scanning: the cap was applied when the view
 // was built, and the stored expiry keeps the answer correct as the ejection ages out.

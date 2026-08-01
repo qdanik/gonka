@@ -305,10 +305,12 @@ func TestSettleEscrowValidatesInput(t *testing.T) {
 	}
 }
 
-// TestSettleEscrowReturnsNodeHashWithoutPolling pins the create/settle
-// asymmetry: settlement has no intent hook and never polls tx-query.
-func TestSettleEscrowReturnsNodeHashWithoutPolling(t *testing.T) {
+// Settlement waits for the transaction to execute, not merely to be accepted. BROADCAST_MODE_SYNC
+// reports CheckTx alone, and the caller destroys the key that could retry, so returning early would
+// strand the deposit of every settle the chain later rejects.
+func TestSettleEscrowWaitsForTheTransactionToCommit(t *testing.T) {
 	signer := fixedSigner(t)
+	var polled atomic.Bool
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.URL.Path == "/cosmos/auth/v1beta1/accounts/"+signer.Address():
@@ -316,8 +318,8 @@ func TestSettleEscrowReturnsNodeHashWithoutPolling(t *testing.T) {
 		case r.Method == http.MethodPost && r.URL.Path == "/cosmos/tx/v1beta1/txs":
 			writeJSONResponse(t, w, map[string]any{"tx_response": map[string]any{"code": 0, "txhash": "DEF456"}})
 		case strings.HasPrefix(r.URL.Path, "/cosmos/tx/v1beta1/txs/"):
-			t.Errorf("settlement must not poll the tx-query endpoint: %s", r.URL.Path)
-			http.NotFound(w, r)
+			polled.Store(true)
+			writeJSONResponse(t, w, map[string]any{"tx_response": map[string]any{"code": 0, "txhash": "DEF456"}})
 		default:
 			http.NotFound(w, r)
 		}
@@ -333,6 +335,9 @@ func TestSettleEscrowReturnsNodeHashWithoutPolling(t *testing.T) {
 	result, err := client.SettleEscrow(t.Context(), signer, input)
 	if err != nil {
 		t.Fatalf("SettleEscrow: %v", err)
+	}
+	if !polled.Load() {
+		t.Error("settlement returned without confirming the transaction executed")
 	}
 	if result.TxHash != "DEF456" {
 		t.Errorf("TxHash = %q, want %q", result.TxHash, "DEF456")
@@ -674,5 +679,40 @@ func TestWaitForCreatedEscrowIDSucceedsViaFallbackURL(t *testing.T) {
 	}
 	if escrowID != 88 {
 		t.Errorf("escrowID = %d, want 88", escrowID)
+	}
+}
+
+// A transaction that passes CheckTx and fails DeliverTx must be an error, because the caller treats
+// success as permission to delete the only key that could settle this escrow.
+func TestSettleEscrowFailsWhenTheChainRejectsTheCommittedTransaction(t *testing.T) {
+	signer := fixedSigner(t)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/cosmos/auth/v1beta1/accounts/"+signer.Address():
+			writeJSONResponse(t, w, map[string]any{"account": map[string]any{"account_number": "9", "sequence": "0"}})
+		case r.Method == http.MethodPost && r.URL.Path == "/cosmos/tx/v1beta1/txs":
+			writeJSONResponse(t, w, map[string]any{"tx_response": map[string]any{"code": 0, "txhash": "DEF456"}})
+		case strings.HasPrefix(r.URL.Path, "/cosmos/tx/v1beta1/txs/"):
+			writeJSONResponse(t, w, map[string]any{"tx_response": map[string]any{
+				"code": 18, "codespace": "inference", "txhash": "DEF456", "raw_log": "payout exceeds escrow amount",
+			}})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	client, err := NewTxClient(Config{RESTBaseURL: server.URL, ChainID: "gonka-test", PollInterval: time.Millisecond, PollTimeout: time.Second})
+	if err != nil {
+		t.Fatalf("NewTxClient: %v", err)
+	}
+
+	_, err = client.SettleEscrow(t.Context(), signer, fixedSettlementFull())
+
+	if err == nil {
+		t.Fatal("SettleEscrow returned success for a transaction the chain rejected")
+	}
+	if !strings.Contains(err.Error(), "payout exceeds escrow amount") {
+		t.Fatalf("error = %v, want the chain's rejection reason", err)
 	}
 }

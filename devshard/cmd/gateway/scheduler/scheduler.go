@@ -198,6 +198,9 @@ func (s *Scheduler) retire(idle *dispatcher) bool {
 	if s.dispatchers[idle.escrowID] == idle {
 		delete(s.dispatchers, idle.escrowID)
 	}
+	if s.observer != nil {
+		s.observer.EscrowRetired(idle.escrowID)
+	}
 	return true
 }
 

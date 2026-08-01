@@ -259,6 +259,30 @@ func TestRetentionEvictsTheOldestRowsPastMaxRows(t *testing.T) {
 	}
 }
 
+// A sweep that cannot delete leaves the ledger growing past both of its bounds, so the two deletes
+// report rather than pass. They are attempted independently, which is why both are counted.
+func TestAFailedRetentionSweepIsCountedPerBound(t *testing.T) {
+	verifyNoLeaks(t)
+
+	testStore := openTestStore(t)
+	clock := newTestClock(time.Unix(1700000000, 0).UTC())
+	ledger := openLedger(t, testStore, generousRetention(), clock)
+	t.Cleanup(func() {
+		if err := ledger.Close(); err != nil {
+			t.Fatalf("Close(): %v", err)
+		}
+	})
+	if _, err := testStore.db.Exec(`DROP TABLE request_accounting`); err != nil {
+		t.Fatalf("dropping the table the sweep deletes from: %v", err)
+	}
+
+	ledger.sweep(clock.Now())
+
+	if got := ledger.Stats().SweepFailed; got != 2 {
+		t.Fatalf("SweepFailed = %d, want 2 (the age bound and the row bound)", got)
+	}
+}
+
 func TestNewLedgerRejectsAnUnboundedOrClocklessLedger(t *testing.T) {
 	verifyNoLeaks(t)
 

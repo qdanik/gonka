@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 
 	"devshard/cmd/gateway/chain"
 	"devshard/cmd/gateway/store"
@@ -35,16 +36,27 @@ func (m *Manager) checkDepletion(ctx context.Context, snapshot chain.PhaseSnapsh
 		if !record.Active || !marked[record.EscrowID] {
 			continue
 		}
-		model, ok := modelByID[record.Model]
-		if !ok {
-			continue
-		}
-		if err := m.replaceDepleted(ctx, record, model, snapshot); err != nil {
-			m.OnBalanceExhausted(record.EscrowID) // a failed replacement must not un-schedule itself
+		if err := m.retireDepleted(ctx, record, modelByID, snapshot); err != nil {
+			m.OnBalanceExhausted(record.EscrowID) // a failed retirement must not un-schedule itself
 			errs = append(errs, err)
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// retireDepleted stops routing to an exhausted escrow, whose low in-flight count is exactly what makes
+// the load score prefer it while it fails every request. A replacement is created first where one is
+// configured, so coverage never drops; where none is, the escrow is retired anyway.
+func (m *Manager) retireDepleted(ctx context.Context, record store.DevshardRecord, modelByID map[string]ModelConfig, snapshot chain.PhaseSnapshot) error {
+	model, replaceable := modelByID[record.Model]
+	if replaceable {
+		return m.replaceDepleted(ctx, record, model, snapshot)
+	}
+	log.Printf("escrow %s depleted: retiring with no replacement, rotation configures none for model %q", record.EscrowID, record.Model)
+	if err := m.retire(ctx, record); err != nil {
+		return fmt.Errorf("retiring depleted escrow %s: %w", record.EscrowID, err)
+	}
+	return nil
 }
 
 func (m *Manager) drainMarks() map[string]bool {

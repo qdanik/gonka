@@ -105,18 +105,19 @@ func (m *Manager) tick(ctx context.Context) error {
 	missingErr := m.checkMissing(ctx)
 
 	cfg := m.config.Load()
-	if !cfg.Rotation.Enabled {
-		return errors.Join(reconcileErr, pendingErr, missingErr)
-	}
-	models, err := parseModels(cfg.Rotation.ModelsJSON)
-	if err != nil {
-		return errors.Join(reconcileErr, pendingErr, missingErr, err)
-	}
-
 	// Pulled, not subscribed: a 15s poll is equivalent at this cadence and avoids callback races.
 	snapshot := m.snapshots.Snapshot()
+	models, modelsErr := rotationModels(cfg.Rotation)
+	// An exhausted escrow must stop taking traffic whatever the rotation toggle says; only creating
+	// its replacement is rotation's business, so models is empty unless rotation can supply one.
+	depletionErr := m.checkDepletion(ctx, snapshot, models, devshards)
+	lifecycleErr := errors.Join(reconcileErr, pendingErr, missingErr, modelsErr, depletionErr)
+
+	if !cfg.Rotation.Enabled || modelsErr != nil {
+		return lifecycleErr
+	}
 	if snapshot.EpochIndex == 0 || snapshot.BlockHeight == 0 {
-		return errors.Join(reconcileErr, pendingErr, missingErr) // cold start, no chain data yet
+		return lifecycleErr // cold start, no chain data yet
 	}
 
 	var bridgeErr error
@@ -126,7 +127,14 @@ func (m *Manager) tick(ctx context.Context) error {
 	} else if !snapshot.RequestsBlocked {
 		bridgeErr = m.finishBridge(ctx, snapshot, models, devshards)
 	}
+	return errors.Join(lifecycleErr, bridgeErr)
+}
 
-	depletionErr := m.checkDepletion(ctx, snapshot, models, devshards)
-	return errors.Join(reconcileErr, pendingErr, missingErr, bridgeErr, depletionErr)
+// rotationModels is the set of models rotation can create a replacement for; empty when rotation is
+// off, so no caller downstream has to re-read the toggle to know whether a replacement is available.
+func rotationModels(rotation config.Rotation) ([]ModelConfig, error) {
+	if !rotation.Enabled {
+		return nil, nil
+	}
+	return parseModels(rotation.ModelsJSON)
 }

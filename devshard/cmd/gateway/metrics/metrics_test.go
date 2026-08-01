@@ -1,6 +1,7 @@
 package metrics
 
 import (
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -62,4 +63,35 @@ func scrape(t *testing.T, gatewayMetrics *Metrics) string {
 		t.Fatalf("reading exposition: %v", err)
 	}
 	return string(body)
+}
+
+// net/http hands the handler whatever RFC 7230 token the client sent, and InstrumentRoute wraps the
+// catch-all route outside authentication. A raw method label would let one unauthenticated caller mint
+// a permanent series per probe -- the hazard the route label already avoids by never carrying a path.
+func TestInstrumentRouteBoundsTheMethodLabel(t *testing.T) {
+	telemetry := New()
+	handler := telemetry.InstrumentRoute("other", http.HandlerFunc(
+		func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNotFound) }))
+
+	for probe := range 200 {
+		request := httptest.NewRequest(http.MethodGet, "/", nil)
+		request.Method = fmt.Sprintf("PROBE%d", probe)
+		handler.ServeHTTP(httptest.NewRecorder(), request)
+	}
+	handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/", nil))
+
+	families, err := telemetry.Registry().Gather()
+	if err != nil {
+		t.Fatalf("Gather(): %v", err)
+	}
+	for _, family := range families {
+		if family.GetName() != "devshard_http_requests_total" {
+			continue
+		}
+		if series := len(family.GetMetric()); series != 2 {
+			t.Fatalf("200 client-chosen methods produced %d series, want 2 (other + GET)", series)
+		}
+		return
+	}
+	t.Fatal("devshard_http_requests_total was not registered")
 }

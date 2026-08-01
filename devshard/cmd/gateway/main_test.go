@@ -529,6 +529,35 @@ func TestShutdownStopsAcceptingFirstAndClosesTheStoreLast(t *testing.T) {
 	assertSame(t, "shutdown sequence", sequence, want)
 }
 
+// An escrow session closes without taking its own lock, so it is safe only once the work that reaches
+// it has stopped. A drain that overran is left running rather than cancelled, which means the session
+// is still in use -- closing it there would race a nonce commit for a vote already being dropped.
+func TestShutdownSkipsEscrowSessionsWhenADrainOverran(t *testing.T) {
+	var sequence []string
+	record := func(name string) func(context.Context) error {
+		return func(context.Context) error { sequence = append(sequence, name); return nil }
+	}
+	steps := []shutdownStep{
+		{name: "races", stop: func(context.Context) error { return errors.New("abandoned with work still running") }},
+		{name: "escrow sessions", stop: record("escrow sessions"), needsQuiesced: true},
+		{name: "store", stop: record("store")},
+	}
+
+	err := stopAll(context.Background(), steps)
+
+	if err == nil {
+		t.Fatal("stopAll reported success after abandoning a drain")
+	}
+	for _, name := range sequence {
+		if name == "escrow sessions" {
+			t.Fatal("escrow sessions were closed while a drain was still running")
+		}
+	}
+	if len(sequence) != 1 || sequence[0] != "store" {
+		t.Fatalf("sequence = %v, want the store still reached", sequence)
+	}
+}
+
 func TestShutdownReachesTheStoreEvenWhenAnEarlierStepFails(t *testing.T) {
 	var sequence []string
 	recorder := func(name string) *shutdownRecorder {

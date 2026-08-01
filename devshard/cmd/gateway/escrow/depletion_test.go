@@ -116,6 +116,27 @@ func TestCheckDepletionUnmarkedEscrowIsLeftAlone(t *testing.T) {
 	}
 }
 
+// An exhausted escrow fails every request routed to it, and its idle in-flight count is what makes the
+// load score prefer it, so it must stop taking traffic even where no replacement can be created.
+func TestCheckDepletionRetiresEscrowWhoseModelHasNoReplacementConfigured(t *testing.T) {
+	testStore := newFakeStore()
+	testStore.devshards["1"] = activeRecord("1", "model-a")
+	txClient := &fakeTxClient{createEscrowFn: workingCreateEscrowFn(999)}
+	m := depletionManager(t, testStore, txClient)
+	devshards := []store.DevshardRecord{testStore.devshards["1"]}
+
+	m.OnBalanceExhausted("1")
+	otherModelOnly := []ModelConfig{{ModelID: "model-b", TargetCount: 1, Amount: 1000, PrivateKeyEnv: "MODEL_B_KEY"}}
+	if err := m.checkDepletion(context.Background(), chain.PhaseSnapshot{}, otherModelOnly, devshards); err != nil {
+		t.Fatalf("checkDepletion() = %v, want nil", err)
+	}
+
+	assertParked(t, testStore, "1")
+	if txClient.createCalls != 0 {
+		t.Fatalf("createCalls = %d, want 0: no replacement is configured for model-a", txClient.createCalls)
+	}
+}
+
 func TestCheckDepletionFailedReplacementKeepsMarkForNextTick(t *testing.T) {
 	testStore := newFakeStore()
 	testStore.devshards["1"] = activeRecord("1", "model-a")

@@ -50,9 +50,10 @@ type Retention struct {
 }
 
 type LedgerStats struct {
-	Written int64
-	Dropped int64
-	Failed  int64
+	Written     int64
+	Dropped     int64
+	Failed      int64
+	SweepFailed int64
 }
 
 const (
@@ -72,10 +73,11 @@ type Ledger struct {
 	mu     sync.RWMutex
 	closed bool
 
-	written   atomic.Int64
-	dropped   atomic.Int64
-	failed    atomic.Int64
-	lastSweep time.Time
+	written     atomic.Int64
+	dropped     atomic.Int64
+	failed      atomic.Int64
+	sweepFailed atomic.Int64
+	lastSweep   time.Time
 }
 
 // NewLedger registers the writer with the store, whose Close drains it before the database handle goes.
@@ -128,7 +130,12 @@ func (l *Ledger) Find(ctx context.Context, requestID string) (RequestRecord, boo
 }
 
 func (l *Ledger) Stats() LedgerStats {
-	return LedgerStats{Written: l.written.Load(), Dropped: l.dropped.Load(), Failed: l.failed.Load()}
+	return LedgerStats{
+		Written:     l.written.Load(),
+		Dropped:     l.dropped.Load(),
+		Failed:      l.failed.Load(),
+		SweepFailed: l.sweepFailed.Load(),
+	}
 }
 
 // Close drains what is queued. A row shed under load or lost to a write failure is counted in Stats
@@ -158,9 +165,12 @@ func (l *Ledger) run() {
 	for record := range l.queue {
 		if err := l.insert(record); err != nil {
 			l.failed.Add(1)
-			continue
+		} else {
+			l.written.Add(1)
 		}
-		l.written.Add(1)
+		// Swept whatever the insert did: a persistently failing insert is exactly when rows are least
+		// likely to be deleted and most likely to need it, and gating retention behind success turns a
+		// write problem into an unbounded table.
 		if now := l.now(); l.lastSweep.IsZero() || now.Sub(l.lastSweep) >= retentionSweepEvery {
 			l.sweep(now)
 		}
@@ -192,12 +202,17 @@ func (l *Ledger) sweep(now time.Time) {
 	l.lastSweep = now
 	cutoff := FormatTime(now.Add(-l.retention.MaxAge))
 	// The two bounds are attempted independently: the row cap is the disk-fill guard, and a busy lock
-	// on the age delete must not be what stops it running.
-	_, _ = l.store.db.Exec(`DELETE FROM request_accounting WHERE recorded_at < ?`, cutoff)
-	_, _ = l.store.db.Exec(`
+	// on the age delete must not be what stops it running. A sweep that cannot delete leaves the
+	// ledger growing past both bounds, so each failure is counted rather than dropped.
+	if _, err := l.store.db.Exec(`DELETE FROM request_accounting WHERE recorded_at < ?`, cutoff); err != nil {
+		l.sweepFailed.Add(1)
+	}
+	if _, err := l.store.db.Exec(`
 		DELETE FROM request_accounting WHERE request_id IN (
 			SELECT request_id FROM request_accounting
-			ORDER BY recorded_at DESC, request_id DESC LIMIT -1 OFFSET ?)`, l.retention.MaxRows)
+			ORDER BY recorded_at DESC, request_id DESC LIMIT -1 OFFSET ?)`, l.retention.MaxRows); err != nil {
+		l.sweepFailed.Add(1)
+	}
 }
 
 func (s *Store) FindRequest(ctx context.Context, requestID string) (RequestRecord, bool, error) {
