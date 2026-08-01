@@ -52,9 +52,8 @@ type modelCounter struct {
 	inputTokens int64
 }
 
-// waiter is one blocked Acquire. A releasing request hands it the slot directly and closes ready, so an
-// admitted waiter never re-competes with newly arriving requests; reason is why it had to queue and is what
-// a timed-out wait reports.
+// waiter is one blocked Acquire; reason is why it had to queue and is what a timed-out wait reports.
+// See gateway-capacity-and-health.md, "The queue".
 type waiter struct {
 	model    string
 	tokens   int64
@@ -96,8 +95,8 @@ func NewGatewayLimiter(cfg GatewayConfig) *GatewayLimiter {
 	}
 }
 
-// Reconfigure replaces the caps every later admission is judged against, and sweeps the queue so a
-// widened limit reaches a waiter now rather than at the next release.
+// Reconfigure replaces the caps every later admission is judged against and sweeps the queue.
+// See gateway-capacity-and-health.md, "The queue".
 func (l *GatewayLimiter) Reconfigure(cfg GatewayConfig) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -193,9 +192,8 @@ func (l *GatewayLimiter) dequeue(w *waiter) bool {
 	return false
 }
 
-// promoteLocked hands freed capacity to queued waiters in arrival order, which is first-come-first-served
-// within a model. A waiter its own model still cannot serve is skipped rather than ending the sweep,
-// because budgets are per model and a saturated one must not stall the others.
+// promoteLocked hands freed capacity to queued waiters in arrival order, skipping — rather than stopping
+// at — a waiter its own model still cannot serve. See gateway-capacity-and-health.md, "The queue".
 func (l *GatewayLimiter) promoteLocked() {
 	for i := 0; i < len(l.queue); {
 		waiting := l.queue[i]
@@ -217,9 +215,9 @@ func (l *GatewayLimiter) takeLocked(model string, inputTokens int64) {
 	l.total.inputTokens += inputTokens
 }
 
-// The configured maxima are each model's own budget: capacity is measured per model, so a cap derived
-// from one model's weight cannot be charged against another model's traffic. An override replaces the
-// configured maximum for its model; the model set is the escrow registry's, not the client's.
+// admissionFor computes one model's caps: the configured maxima are each model's own budget, and an
+// override replaces the configured maximum for its model rather than narrowing it further.
+// See gateway-capacity-and-health.md, "The gateway limiter".
 func (l *GatewayLimiter) admissionFor(model string, inputTokens int64, capacity ModelCapacity) admission {
 	maxConcurrent, maxInputTokens := l.cfg.MaxConcurrent, l.cfg.MaxInputTokens
 	if override, ok := l.cfg.ModelLimits[model]; ok {
@@ -320,8 +318,7 @@ func effectiveInputTokenLimit(baseMaxInputTokens int64, capacity ModelCapacity) 
 	return scaleClamp(baseMaxInputTokens, capacity.ScaleFactor), true
 }
 
-// scaleClamp rounds to nearest rather than flooring: at a small configured maximum, flooring turns a
-// partially available network into a total outage, taking a cap of 1 at half capacity down to 0.
+// scaleClamp rounds to nearest rather than flooring. See gateway-capacity-and-health.md, "The gateway limiter".
 func scaleClamp(base int64, scale float64) int64 {
 	if base <= 0 {
 		return 0

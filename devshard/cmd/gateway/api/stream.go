@@ -9,9 +9,26 @@ import (
 	"devshard/cmd/gateway/filters"
 )
 
-// clientStream is the sink the race writes its winner into. It holds the status open until the
-// first byte, so a failure before any content still returns a real status instead of a 200 with an
-// error body, and it strips the gateway's internal response fields on the way out.
+const (
+	// EscrowHeader names the escrow that served a reply. A live race sets it as soon as the escrow is
+	// picked, which is why writeChatHeaders takes it as an argument rather than reading it back.
+	EscrowHeader = "X-Devshard-ID"
+
+	// RequestIDHeader carries the correlation id a caller reconciles against the accounting ledger. The
+	// pre-stream failure path sets it without the rest of the reply headers, so the name lives here
+	// rather than inside writeChatHeaders.
+	RequestIDHeader = "X-Request-Id"
+
+	// maxBufferedResponseBytes bounds what a non-streaming reply accumulates in memory. The streaming
+	// path forwards bytes as they arrive and only bounds an unterminated tail; a buffered reply holds
+	// the whole response until Close, so without this a host that wins the race by producing one token
+	// first can then send unlimited valid SSE and take the process out.
+	maxBufferedResponseBytes = filters.MaxStreamCarryBytes
+)
+
+// clientStream is the sink the race writes its winner into: it holds the status open until the first
+// byte and strips the gateway's internal response fields on the way out. See
+// gateway-request-lifecycle.md, "9. Streaming out".
 type clientStream struct {
 	writer     http.ResponseWriter
 	controller *http.ResponseController
@@ -40,12 +57,6 @@ func (c *clientStream) Header() http.Header { return c.writer.Header() }
 
 // Started reports whether the client has already seen a status, after which no error can replace it.
 func (c *clientStream) Started() bool { return c.started }
-
-// maxBufferedResponseBytes bounds what a non-streaming reply accumulates in memory. The streaming path
-// forwards bytes as they arrive and only bounds an unterminated tail; a buffered reply holds the whole
-// response until Close, so without this a host that wins the race by producing one token first can then
-// send unlimited valid SSE and take the process out.
-const maxBufferedResponseBytes = filters.MaxStreamCarryBytes
 
 func (c *clientStream) Write(chunk []byte) (int, error) {
 	if !c.streaming {
@@ -144,16 +155,13 @@ func errorEvent(cause error) []byte {
 	return append(append([]byte("data: "), payload...), '\n', '\n')
 }
 
-// EscrowHeader names the escrow that served a reply. A live race sets it as soon as the escrow is
-// picked, which is why writeChatHeaders takes it as an argument rather than reading it back.
-const EscrowHeader = "X-Devshard-ID"
-
-// writeChatHeaders is the only place a chat reply's headers are decided, so a replay from the cache
-// and an answer from a live race cannot hand the same request different headers -- a difference a
-// client would see intermittently, since it would depend on cache state.
+// writeChatHeaders decides every header of a chat reply that reached the engine, so a replay from
+// the cache and an answer from a live race cannot hand the same request different headers -- a
+// difference a client would see intermittently, since it would depend on cache state. A request
+// that failed before the stream started never gets here and carries RequestIDHeader alone.
 func writeChatHeaders(header http.Header, requestID, escrowID, contentType string, streaming bool) {
 	if requestID != "" {
-		header.Set("X-Request-Id", requestID)
+		header.Set(RequestIDHeader, requestID)
 	}
 	if escrowID != "" {
 		header.Set(EscrowHeader, escrowID)

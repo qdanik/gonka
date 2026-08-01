@@ -50,8 +50,8 @@ func RecordCapability(recorder CapabilityRecorder, participant string, signal Ca
 	}
 }
 
-// GrowContextHint raises the token count the next Pick screens hosts against, so a retry skips
-// every host already known to be too small for this request.
+// GrowContextHint raises the token count the next Pick screens hosts against. See
+// gateway-speculative-race.md, "An SSE error event counts as a chunk but never crowns".
 func GrowContextHint(hint uint64, signal CapabilitySignal) uint64 {
 	if signal.ContextRequested > hint {
 		return signal.ContextRequested

@@ -61,8 +61,6 @@ func buildSettlement(escrowID string, session EscrowSession) (chain.SettlementIn
 	if err != nil {
 		return chain.SettlementInput{}, fmt.Errorf("building settlement for escrow %s: %w", escrowID, err)
 	}
-	// The state root the chain recomputes comes from the stats carried in the message, so the hash and
-	// the encoded slice must be taken from the same slot set.
 	hostStats := statsPerPresentSlot(payload.HostStats)
 	hostStatsHash, err := state.ComputeHostStatsHash(hostStats)
 	if err != nil {

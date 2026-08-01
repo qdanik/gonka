@@ -33,6 +33,7 @@ type key struct {
 type hostState struct {
 	window                   float64
 	inflight                 int
+	peakInflight             int
 	consecutiveTransportFail int
 	openUntil                time.Time
 	backoffCount             int
@@ -75,18 +76,17 @@ func (l *ParticipantLimiter) stateLocked(k key) *hostState {
 }
 
 func wouldAdmitLocked(state *hostState, now time.Time) bool {
-	if now.Before(state.openUntil) {
+	breaker := breakerState(state, now)
+	if breaker == BreakerOpen {
 		return false
 	}
-	halfOpen := state.halfOpen || !state.openUntil.IsZero()
 	effectiveWindow := int(math.Floor(state.window))
-	if halfOpen {
+	if breaker == BreakerHalfOpen {
 		effectiveWindow = 1
 	}
 	return state.inflight < effectiveWindow
 }
 
-// Call order per attempt is Acquire, OnResult, Release: the utilization gate reads inflight before Release frees it.
 func (l *ParticipantLimiter) Acquire(participant, model string) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -104,6 +104,9 @@ func (l *ParticipantLimiter) Acquire(participant, model string) bool {
 		return false
 	}
 	state.inflight++
+	if state.inflight > state.peakInflight {
+		state.peakInflight = state.inflight
+	}
 	return true
 }
 
@@ -126,6 +129,12 @@ const (
 	BreakerOpen     BreakerState = "open"
 	BreakerHalfOpen BreakerState = "half_open"
 )
+
+// AllBreakerStates lists every breaker state for the metrics layer to enumerate, beside the const block
+// rather than restated there. See gateway-invariants.md, "10. Labels, ordering and determinism".
+func AllBreakerStates() []BreakerState {
+	return []BreakerState{BreakerClosed, BreakerOpen, BreakerHalfOpen}
+}
 
 // HostWindow is one tracked participant/model pair as a reader sees it.
 type HostWindow struct {
@@ -173,9 +182,9 @@ func breakerState(state *hostState, now time.Time) BreakerState {
 	return BreakerClosed
 }
 
-// ClearQuarantine reopens every model's breaker for one participant and restores its window to the
-// initial one, reporting whether the participant was tracked at all. Inflight is left alone: it
-// counts attempts that are still running and is not part of the penalty.
+// ClearQuarantine reopens every model's breaker for one participant, restores its initial window and
+// leaves inflight alone, reporting whether the participant was tracked at all. See
+// gateway-capacity-and-health.md, "The participant limiter: AIMD plus a breaker".
 func (l *ParticipantLimiter) ClearQuarantine(participant string) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -219,7 +228,12 @@ func (l *ParticipantLimiter) OnResult(participant, model string, verdict Verdict
 
 	switch verdict {
 	case Success:
-		if float64(state.inflight) >= state.window/2 {
+		// Peak since the last adjustment, not the live count: the engine releases an attempt's slot in a
+		// defer and reports its verdict afterwards, so a live read would see the slot already given back
+		// and refuse to grow a window that was genuinely saturated. The peak is set when the slot is
+		// taken and nothing can undo it, which is what makes this independent of who is called first.
+		if float64(state.peakInflight) >= state.window/2 {
+			state.peakInflight = state.inflight
 			state.window = math.Min(state.window+1, float64(l.cfg.MaxWindow))
 		}
 		state.consecutiveTransportFail = 0

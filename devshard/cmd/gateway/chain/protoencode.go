@@ -66,7 +66,7 @@ func encodeFee(denom string, amount uint64, gasLimit uint64) []byte {
 // encodeSignerInfo builds a SignerInfo with a single SIGN_MODE_DIRECT mode.
 func encodeSignerInfo(pubKeyAny []byte, sequence uint64) []byte {
 	var single []byte
-	single = appendVarintField(single, 1, 1) // SIGN_MODE_DIRECT
+	single = appendVarintField(single, 1, 1)
 	var modeInfo []byte
 	modeInfo = appendBytesField(modeInfo, 1, single)
 	var out []byte

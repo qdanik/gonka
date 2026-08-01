@@ -63,8 +63,8 @@ func TestOnBalanceExhaustedMarksAndDedups(t *testing.T) {
 	m.OnBalanceExhausted("1")
 	m.OnBalanceExhausted("2")
 
-	if len(m.depletedMarks) != 2 || !m.depletedMarks["1"] || !m.depletedMarks["2"] {
-		t.Fatalf("depletedMarks = %v, want {1,2} deduped", m.depletedMarks)
+	if len(m.depleted.keys) != 2 || !m.depleted.keys["1"] || !m.depleted.keys["2"] {
+		t.Fatalf("depletedMarks = %v, want {1,2} deduped", m.depleted.keys)
 	}
 }
 
@@ -87,8 +87,8 @@ func TestCheckDepletionReplacesMarkedEscrowThenClearsMark(t *testing.T) {
 	if _, ok := testStore.devshards["999"]; !ok {
 		t.Fatal("replacement escrow 999 not registered")
 	}
-	if len(m.depletedMarks) != 0 {
-		t.Fatalf("depletedMarks = %v, want cleared after a successful replacement", m.depletedMarks)
+	if len(m.depleted.keys) != 0 {
+		t.Fatalf("depletedMarks = %v, want cleared after a successful replacement", m.depleted.keys)
 	}
 	if err := m.checkDepletion(context.Background(), chain.PhaseSnapshot{}, depletionModels(), devshards); err != nil {
 		t.Fatalf("second checkDepletion() = %v, want nil", err)
@@ -153,7 +153,7 @@ func TestCheckDepletionFailedReplacementKeepsMarkForNextTick(t *testing.T) {
 		t.Fatal("checkDepletion() = nil, want the replacement failure surfaced")
 	}
 
-	if !m.depletedMarks["1"] {
+	if !m.depleted.keys["1"] {
 		t.Fatal("mark for escrow 1 was dropped by a failed replacement; nothing would ever retry it")
 	}
 	if record := testStore.devshards["1"]; !record.Active {

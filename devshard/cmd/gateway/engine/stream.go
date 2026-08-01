@@ -16,9 +16,9 @@ const (
 	streamSuppressed
 )
 
-// crownRequest carries an attempt's first content chunk to the coordinator, which answers on Reply
-// exactly once. The claiming attempt blocks on that answer, so no byte reaches the client until the
-// race has settled on a single winner.
+// crownRequest is an attempt's claim on the client stream, raised when it has its first content
+// chunk in hand; the coordinator answers on Reply exactly once and the claimant blocks on that answer.
+// See gateway-speculative-race.md, "Crowning".
 type crownRequest struct {
 	Nonce uint64
 	Reply chan<- streamVerdict
@@ -51,8 +51,8 @@ func newWinnerWriter(nonce uint64, client io.Writer, crown chan<- crownRequest, 
 	}
 }
 
-// Write claims the crown on the first content chunk and buffers everything before it. A suppressed
-// attempt reports success without writing, so its host keeps draining to its receipt.
+// Write claims the crown on the first content chunk and buffers everything before it; a suppressed
+// attempt reports success without writing. See gateway-speculative-race.md, "Crowning".
 func (w *winnerWriter) Write(chunk []byte, hasContent bool) error {
 	switch w.verdict {
 	case streamWinner:
@@ -119,8 +119,8 @@ func (w *winnerWriter) forward(chunk []byte) error {
 }
 
 // buffer holds pre-content bytes until a claim can flush them ahead of the chunk that crowned this
-// attempt. Past the cap the prefix is dropped, never the attempt: a capped attempt still wins, and
-// its client stream simply starts at the chunk that crowned it.
+// attempt; past the cap the prefix is dropped, never the attempt. See gateway-speculative-race.md,
+// "Crowning".
 func (w *winnerWriter) buffer(chunk []byte) {
 	if w.prefixLost {
 		return

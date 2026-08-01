@@ -11,8 +11,8 @@ import (
 	"devshard/cmd/gateway/config"
 )
 
-// idleDispatcherGrace is how long an escrow's actor stays alive with an empty queue. Escrows are
-// replaced as they deplete, so actors that never retired would accumulate one dead session each.
+// idleDispatcherGrace is how long an escrow's actor stays alive with an empty queue. See
+// gateway-routing-and-nonces.md, "Idle dispatchers are reaped".
 const idleDispatcherGrace = 5 * time.Minute
 
 // Deps wires the runtime facts routing reads. Observer, Now, SubmitBuffer and OnEscrowExhausted are
@@ -31,7 +31,7 @@ type Deps struct {
 }
 
 // Scheduler owns one actor per escrow. tieBreak is a single counter shared across every model and tie-set
-// shape: a pseudo-round-robin over whichever tie set exists right now, not a fair per-model rotation.
+// shape. See gateway-routing-and-nonces.md, "Picking an escrow".
 type Scheduler struct {
 	escrows           escrowSource
 	capacity          escrowWeights
@@ -245,9 +245,9 @@ func (s *Scheduler) holdGrace() time.Duration {
 	return time.Duration(s.settings.Load().Scheduler.HoldGraceMS) * time.Millisecond
 }
 
-// pocPreserved reads the PoC-preserved set, preferring the model's own. A nil set means the observer
-// has not loaded one yet and every participant counts as preserved: reading absent data as "nobody is
-// preserved" would ghost every nonce the escrow owns.
+// pocPreserved reads the PoC-preserved set, preferring the model's own; a nil set means not loaded yet, so
+// every participant counts as preserved. See
+// gateway-invariants.md, "8. Fail-closed and fail-open are chosen per signal, and each choice is deliberate".
 func pocPreserved(snapshot chain.PhaseSnapshot, model string) func(string) bool {
 	preserved := snapshot.PreservedByModel[model]
 	if preserved == nil {
@@ -314,7 +314,7 @@ type Escrow struct {
 
 // NonceIntent is what the scheduler tells a session to do with the nonce it is offering. The
 // adapter that implements session lives outside this package, so it branches on this rather than on
-// the unexported Decision; Params is RequestProfile.Params forwarded verbatim, under the same type
+// Decision, whose variants are unexported; Params is RequestProfile.Params forwarded verbatim, under the same type
 // requirement, and is set only for a non-ghost commit.
 type NonceIntent struct {
 	Commit bool

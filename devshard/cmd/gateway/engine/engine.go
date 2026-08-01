@@ -20,8 +20,8 @@ var (
 	ErrAllAttemptsFailed = errors.New("every attempt failed")
 )
 
-// crownDenialStrikes is how many content-free answers cost a host the crown. One content-bearing
-// answer buys it back, so the denial lasts only as long as the host keeps producing nothing.
+// crownDenialStrikes is how many content-free answers cost a host the crown. See
+// gateway-speculative-race.md, "Crown denial".
 const crownDenialStrikes = 3
 
 // hostTracker is satisfied by *perf.Tracker.
@@ -30,8 +30,9 @@ type hostTracker interface {
 	RecordSample(sample perf.Sample)
 }
 
-// hostWindows is satisfied by *limits.ParticipantLimiter. Acquire is absent on purpose: the scheduler
-// takes the slot in the same step that commits the nonce, and the attempt spending it gives it back.
+// hostWindows is satisfied by *limits.ParticipantLimiter. Acquire is absent on purpose. See
+// gateway-invariants.md, "5. The slot and the escrow hold are taken with the nonce, and given back after
+// the vote".
 type hostWindows interface {
 	hostLimiter
 	OnResult(participant, model string, verdict limits.Verdict)
@@ -101,8 +102,7 @@ type Request struct {
 }
 
 // Engine admits races and is the barrier that outlives them: tracked counts the races whose vote has not
-// been posted, registered under mu before a race starts and released only once its vote is settled, so no
-// nonce can ever be observed as nobody's.
+// been posted, registered under mu before a race starts. See gateway-speculative-race.md, "Stop".
 type Engine struct {
 	deps  Deps
 	carry *carryBudget
@@ -129,9 +129,8 @@ func (e *Engine) Run(ctx context.Context, request Request, client io.Writer) (Ra
 	if registration == nil {
 		return RaceOutcome{}, ErrStopped
 	}
-	// A panicking race still owes the barrier its release, or Stop waits for a race nobody is running.
-	// The panic itself is re-raised: recovering it here would answer the client with an outcome no
-	// race produced.
+	// A panicking race still owes the barrier its release, and the panic itself is re-raised unchanged.
+	// See gateway-speculative-race.md, "Stop".
 	defer func() {
 		if panicked := recover(); panicked != nil {
 			registration.release()
@@ -147,8 +146,7 @@ func (e *Engine) Run(ctx context.Context, request Request, client io.Writer) (Ra
 }
 
 // Stop refuses new races and is a barrier over the ones already running: it returns once every race it
-// admitted has posted the vote that settles its nonces. A race bounds itself, so the wait is bounded by
-// the deadlines the race arms rather than by a host.
+// admitted has posted the vote that settles its nonces. See gateway-speculative-race.md, "Stop".
 func (e *Engine) Stop() {
 	e.mu.Lock()
 	e.stopped = true
@@ -156,9 +154,8 @@ func (e *Engine) Stop() {
 	e.tracked.Wait()
 }
 
-// admit registers a race before it starts, returning nil once the engine is stopped. Registering here
-// rather than when it finishes is what keeps a Stop that overlaps a running race from observing the
-// engine as idle.
+// admit registers a race before it starts, returning nil once the engine is stopped. See
+// gateway-speculative-race.md, "Stop".
 func (e *Engine) admit() *raceRegistration {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -244,8 +241,8 @@ func (e *Engine) raceDeps(settings *config.Config, request Request, registration
 	}
 }
 
-// suspicionGate folds the operator's manual pins into the automatic crowning penalty, so a pinned
-// host escalates and is held back from the crown however well it has been answering.
+// suspicionGate folds the operator's manual pins into the automatic crowning penalty. See
+// gateway-speculative-race.md, "Crown denial".
 type suspicionGate struct {
 	pinned  func(participant string) bool
 	strikes *crownStrikes
@@ -269,8 +266,9 @@ func (e *Engine) classify(model string) func(string) streamClassifier {
 	}
 }
 
-// record translates one outcome into every consumer's vocabulary. The exemption ladder is applied
-// here and nowhere else, so what a host is judged on cannot differ between two recording paths.
+// record translates one outcome into every consumer's vocabulary; the exemption ladder is applied here
+// and nowhere else. See gateway-invariants.md, "2. Exactly one outcome and exactly one winner per race,
+// on every path".
 func (e *Engine) record(outcome RaceOutcome, params any, registration *raceRegistration) {
 	for _, attempt := range outcome.Attempts {
 		if sample, exemption := outcome.Sample(attempt); exemption == SampleRecorded {
@@ -294,7 +292,7 @@ func (e *Engine) record(outcome RaceOutcome, params any, registration *raceRegis
 }
 
 // settle posts the chain vote for every nonce the race left unfinished and ends the race's
-// registration. The wait is the protocol's, measured in minutes, so it runs beside the race.
+// registration, on its own goroutine. See gateway-speculative-race.md, "Timeout votes".
 func (e *Engine) settle(outcome RaceOutcome, params any, registration *raceRegistration) {
 	if len(outcome.TimeoutPlan()) == 0 {
 		registration.release()
@@ -392,8 +390,8 @@ func cancelledWithoutContent(a AttemptOutcome) bool {
 type crownKey struct{ participant, model string }
 
 // crownStrikes withholds the crown from a host that answers without content, while leaving it in the
-// scheduler's rotation. The participant set is the bounded validator set, so entries are never
-// evicted; a content-bearing answer removes one.
+// scheduler's rotation. Entries are never evicted; a content-bearing answer removes one. See
+// gateway-invariants.md, "9. Bounded by construction".
 type crownStrikes struct {
 	mu      sync.Mutex
 	strikes map[crownKey]int

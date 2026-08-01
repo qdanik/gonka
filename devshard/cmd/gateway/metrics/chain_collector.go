@@ -13,18 +13,8 @@ type PhaseSource interface {
 }
 
 var (
-	epochPhases = []chain.EpochPhase{
-		chain.EpochPhaseInference,
-		chain.EpochPhasePoCGenerate,
-		chain.EpochPhasePoCGenerateWindDown,
-		chain.EpochPhasePoCValidate,
-		chain.EpochPhasePoCValidateWindDown,
-	}
-	blockReasons = []chain.BlockReason{
-		chain.BlockReasonNone,
-		chain.BlockReasonPoC,
-		chain.BlockReasonConfirmationPoC,
-	}
+	epochPhases  = chain.AllEpochPhases()
+	blockReasons = chain.AllBlockReasons()
 )
 
 type ChainCollector struct {

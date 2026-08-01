@@ -9,8 +9,7 @@ const (
 	kimiThinkingBudgetContentHeadroom uint64 = 64
 )
 
-// kimiProfile: thinking is chat-template-only (mirrored, never sent top-level), penalties are
-// fixed at 0 on the wire, and structured_outputs has no route (use response_format instead).
+// kimiProfile is Kimi's delta set. See gateway-request-filtering.md, "Model profiles".
 var kimiProfile = &Profile{
 	Models:                 []string{kimiModelID},
 	MaxTokensFloor:         kimiMaxTokensFloor,

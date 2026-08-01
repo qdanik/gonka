@@ -77,155 +77,157 @@ const (
 	metadataMaxValueLen = 512
 )
 
+var (
+	// parameterTable is THE single registration point; knownParameterSet derives from it.
+	parameterTable = []ParameterSpec{
+		spec("model", StagePreValidation, validModelName(modelMaxLen)),
+		{Name: "stream"},
+		{Name: "max_tokens", Rules: []StagedRule{
+			{Stage: StagePreValidation, Apply: maxTokensFloor()},
+			{Stage: StagePreValidation, Apply: rejectNonPositiveOutputTokens()},
+		}},
+		{Name: "max_completion_tokens", Rules: []StagedRule{
+			{Stage: StagePreValidation, Apply: maxTokensFloor()},
+			{Stage: StagePreValidation, Apply: rejectNonPositiveOutputTokens()},
+		}},
+		{Name: "messages", Rules: []StagedRule{
+			{Stage: StagePreValidation, Apply: validListLength(messagesMaxEntries, 0)},
+		}},
+		spec("seed", StagePreValidation, requireUint()),
+		// n's greedy rule must stay after its own cap and before "temperature" below: greedy
+		// reads temperature's raw wire value, ahead of temperature's own clamp rule.
+		{Name: "n", Rules: []StagedRule{
+			{Stage: StagePostLimits, Apply: capUint(minChatChoices, maxChatChoices)},
+			{Stage: StagePostLimits, Apply: greedySamplingForceOne()},
+		}},
+		spec("temperature", StagePostLimits, clampFloat(minTemperature, maxTemperature)),
+		spec("repetition_penalty", StagePostLimits, rejectNonPositiveThenClamp(maxRepetitionPenalty)),
+		spec("top_p", StagePostLimits, rejectNonPositiveThenClamp(topPMax)),
+		spec("min_p", StagePostLimits, clampFloat(minPMin, minPMax)),
+		spec("top_k", StagePostLimits, validTopK(topKMax)),
+		{Name: "frequency_penalty", Rules: []StagedRule{
+			{Stage: StagePostLimits, Apply: clampFloat(penaltyMin, penaltyMax)},
+			{Stage: StagePostLimits, Apply: forceZeroPenalty()},
+		}},
+		{Name: "presence_penalty", Rules: []StagedRule{
+			{Stage: StagePostLimits, Apply: clampFloat(penaltyMin, penaltyMax)},
+			{Stage: StagePostLimits, Apply: forceZeroPenalty()},
+		}},
+		// The key check must run before the value/size rules below. See
+		// gateway-request-filtering.md, "Registration order is semantics".
+		{Name: "logit_bias", Rules: []StagedRule{
+			{Stage: StagePostLimits, Apply: requireTokenIDKeys()},
+			{Stage: StagePostLimits, Apply: validFloatMap(logitBiasMinValue, logitBiasMaxValue, logitBiasMaxEntries)},
+		}},
+		spec("skip_special_tokens", StagePreValidation, requireBool()),
+		spec("detokenize", StagePreValidation, requireBool()),
+		spec("parallel_tool_calls", StagePreValidation, requireBool()),
+		spec("user", StagePreValidation, requireString(userMaxLen)),
+		spec("logprobs", StagePostLimits, forceLiteral(true)),
+		spec("top_logprobs", StagePostLimits, forceLiteral(topLogprobsForcedValue)),
+		spec("return_token_ids", StagePostLimits, forceLiteral(true)),
+		spec("service_tier", StagePreValidation, stripParameter()),
+		spec("store", StagePreValidation, stripParameter()),
+		spec("provider", StagePreValidation, stripParameter()),
+		spec("plugins", StagePreValidation, stripParameter()),
+		spec("prompt_cache_key", StagePreValidation, stripParameter()),
+		spec("cache_key", StagePreValidation, stripParameter()),
+		spec("extra_headers", StagePreValidation, stripParameter()),
+		spec("thinking_config", StagePreValidation, stripParameter()),
+		spec("think", StagePreValidation, stripParameter()),
+		{Name: "stop", Rules: []StagedRule{
+			{Stage: StagePreValidation, Apply: requireStringElements()},
+			{Stage: StagePreValidation, Apply: validListLength(stopMaxEntries, stopMaxEntryLen)},
+		}},
+		// Cap runs before the element-type check here, reversed vs "stop" above. See
+		// gateway-request-filtering.md, "Registration order is semantics".
+		{Name: "stop_token_ids", Rules: []StagedRule{
+			{Stage: StagePreValidation, Apply: validListLength(stopTokenIdsMaxEntries, 0)},
+			{Stage: StagePreValidation, Apply: requireUintElements()},
+		}},
+		{Name: "bad_words", Rules: []StagedRule{
+			{Stage: StagePreValidation, Apply: requireStringElements()},
+			{Stage: StagePreValidation, Apply: dropBlankStringListElements()},
+			{Stage: StagePreValidation, Apply: validListLength(badWordsMaxEntries, badWordsMaxEntryLen)},
+		}},
+		spec("metadata", StagePreValidation, validMetadata(metadataMaxKeys, metadataMaxKeyLen, metadataMaxValueLen)),
+		spec("stream_options", StagePreValidation, validStreamOptions()),
+		// min_tokens strips when stop_token_ids is present (Pre), then clamps to max_tokens
+		// once the output-token stage has resolved it (Post).
+		{Name: "min_tokens", Rules: []StagedRule{
+			{Stage: StagePreValidation, Apply: requireUint()},
+			{Stage: StagePreValidation, Apply: stripWhenFieldPresent("stop_token_ids")},
+			{Stage: StagePostLimits, Apply: clampUintToField("max_tokens")},
+		}},
+		// tools must precede tool_choice below. See gateway-request-filtering.md,
+		// "Registration order is semantics".
+		spec("tools", StagePreValidation, validTools(SchemaBounds{
+			MaxDepth:      toolsMaxDepth,
+			MaxNodes:      toolsMaxNodes,
+			MaxSizeBytes:  toolsMaxSizeBytes,
+			MaxBranch:     toolsMaxBranch,
+			MaxEnum:       toolsMaxEnum,
+			MaxPatternLen: toolsMaxPatternLen,
+		}, "auto")),
+		spec("tool_choice", StagePreValidation, validToolChoice(toolChoiceMaxNameLen)),
+		spec("response_format", StagePreValidation, validResponseFormat(SchemaBounds{
+			MaxDepth:      responseFormatMaxDepth,
+			MaxNodes:      responseFormatMaxNodes,
+			MaxSizeBytes:  responseFormatMaxSizeBytes,
+			MaxBranch:     responseFormatMaxBranch,
+			MaxEnum:       responseFormatMaxEnum,
+			MaxPatternLen: responseFormatMaxPatternLen,
+		}, responseFormatMaxNameLen)),
+		spec("structured_outputs", StagePreValidation, validStructuredOutputs(structuredOutputsBounds{
+			SchemaBounds: SchemaBounds{
+				MaxDepth:      structuredOutputsMaxDepth,
+				MaxNodes:      structuredOutputsMaxNodes,
+				MaxSizeBytes:  structuredOutputsMaxSizeBytes,
+				MaxBranch:     structuredOutputsMaxBranch,
+				MaxEnum:       structuredOutputsMaxEnum,
+				MaxPatternLen: structuredOutputsMaxPatternLen,
+			},
+			MaxChoiceEntries:    structuredOutputsMaxChoiceEntries,
+			MaxChoiceEntryLen:   structuredOutputsMaxChoiceEntryLen,
+			MaxGrammarLen:       structuredOutputsMaxGrammarLen,
+			MaxGrammarNesting:   structuredOutputsMaxGrammarNesting,
+			MaxStructuralTagLen: structuredOutputsMaxStructuralTagLen,
+		})),
+		{Name: "reasoning", Rules: []StagedRule{
+			{Stage: StagePreValidation, Apply: reasoningWrapper()},
+		}},
+		{Name: "reasoning_effort", Rules: []StagedRule{
+			{Stage: StagePreValidation, Apply: reasoningEffortValidate()},
+			{Stage: StagePreValidation, Apply: stripParameter()},
+		}},
+		{Name: "enable_thinking", Rules: []StagedRule{
+			{Stage: StagePreValidation, Apply: enableThinking()},
+		}},
+		// thinking must run before chat_template_kwargs below. See gateway-request-filtering.md,
+		// "Registration order is semantics".
+		{Name: "thinking", Rules: []StagedRule{
+			{Stage: StagePreValidation, Apply: thinking()},
+		}},
+		{Name: "thinking_token_budget", Rules: []StagedRule{
+			{Stage: StagePreValidation, Apply: thinkingTokenBudgetStrip()},
+			{Stage: StagePostLimits, Apply: thinkingTokenBudgetResolve()},
+		}},
+		spec("safety_identifier", StagePreValidation, safetyIdentifier()),
+		spec("reasoning_split", StagePreValidation, reasoningSplit()),
+		spec("chat_template_kwargs", StagePreValidation, validChatTemplateKwargs(ObjectBounds{
+			MaxDepth:     chatTemplateKwargsMaxDepth,
+			MaxNodes:     chatTemplateKwargsMaxNodes,
+			MaxSizeBytes: chatTemplateKwargsMaxSizeBytes,
+		})),
+	}
+
+	// knownParameterSet is the whitelist, derived from parameterTable once at package init.
+	knownParameterSet = buildKnownParameterSet()
+)
+
 func spec(name string, stage Stage, rule RuleFunc) ParameterSpec {
 	return ParameterSpec{Name: name, Rules: []StagedRule{{Stage: stage, Apply: rule}}}
 }
-
-// parameterTable is THE single registration point; knownParameterSet derives from it.
-var parameterTable = []ParameterSpec{
-	spec("model", StagePreValidation, validModelName(modelMaxLen)),
-	{Name: "stream"},
-	{Name: "max_tokens", Rules: []StagedRule{
-		{Stage: StagePreValidation, Apply: maxTokensFloor()},
-		{Stage: StagePreValidation, Apply: rejectNonPositiveOutputTokens()},
-	}},
-	{Name: "max_completion_tokens", Rules: []StagedRule{
-		{Stage: StagePreValidation, Apply: maxTokensFloor()},
-		{Stage: StagePreValidation, Apply: rejectNonPositiveOutputTokens()},
-	}},
-	{Name: "messages", Rules: []StagedRule{
-		{Stage: StagePreValidation, Apply: validListLength(messagesMaxEntries, 0)},
-	}},
-	spec("seed", StagePreValidation, requireUint()),
-	// n's greedy rule must stay after its own cap and before "temperature" below: greedy
-	// reads temperature's raw wire value, ahead of temperature's own clamp rule.
-	{Name: "n", Rules: []StagedRule{
-		{Stage: StagePostLimits, Apply: capUint(minChatChoices, maxChatChoices)},
-		{Stage: StagePostLimits, Apply: greedySamplingForceOne()},
-	}},
-	spec("temperature", StagePostLimits, clampFloat(minTemperature, maxTemperature)),
-	spec("repetition_penalty", StagePostLimits, rejectNonPositiveThenClamp(maxRepetitionPenalty)),
-	spec("top_p", StagePostLimits, rejectNonPositiveThenClamp(topPMax)),
-	spec("min_p", StagePostLimits, clampFloat(minPMin, minPMax)),
-	spec("top_k", StagePostLimits, validTopK(topKMax)),
-	{Name: "frequency_penalty", Rules: []StagedRule{
-		{Stage: StagePostLimits, Apply: clampFloat(penaltyMin, penaltyMax)},
-		{Stage: StagePostLimits, Apply: forceZeroPenalty()},
-	}},
-	{Name: "presence_penalty", Rules: []StagedRule{
-		{Stage: StagePostLimits, Apply: clampFloat(penaltyMin, penaltyMax)},
-		{Stage: StagePostLimits, Apply: forceZeroPenalty()},
-	}},
-	// The key check runs before the value/size rules below: those drop offending entries,
-	// and a bad key must reject rather than be dropped along with them.
-	{Name: "logit_bias", Rules: []StagedRule{
-		{Stage: StagePostLimits, Apply: requireTokenIDKeys()},
-		{Stage: StagePostLimits, Apply: validFloatMap(logitBiasMinValue, logitBiasMaxValue, logitBiasMaxEntries)},
-	}},
-	spec("skip_special_tokens", StagePreValidation, requireBool()),
-	spec("detokenize", StagePreValidation, requireBool()),
-	spec("parallel_tool_calls", StagePreValidation, requireBool()),
-	spec("user", StagePreValidation, requireString(userMaxLen)),
-	spec("logprobs", StagePostLimits, forceLiteral(true)),
-	spec("top_logprobs", StagePostLimits, forceLiteral(topLogprobsForcedValue)),
-	spec("return_token_ids", StagePostLimits, forceLiteral(true)),
-	spec("service_tier", StagePreValidation, stripParameter()),
-	spec("store", StagePreValidation, stripParameter()),
-	spec("provider", StagePreValidation, stripParameter()),
-	spec("plugins", StagePreValidation, stripParameter()),
-	spec("prompt_cache_key", StagePreValidation, stripParameter()),
-	spec("cache_key", StagePreValidation, stripParameter()),
-	spec("extra_headers", StagePreValidation, stripParameter()),
-	spec("thinking_config", StagePreValidation, stripParameter()),
-	spec("think", StagePreValidation, stripParameter()),
-	{Name: "stop", Rules: []StagedRule{
-		{Stage: StagePreValidation, Apply: requireStringElements()},
-		{Stage: StagePreValidation, Apply: validListLength(stopMaxEntries, stopMaxEntryLen)},
-	}},
-	// Cap runs before the element-type check here (reversed vs "stop" above): an
-	// oversized array is rejected on size alone before any element is inspected.
-	{Name: "stop_token_ids", Rules: []StagedRule{
-		{Stage: StagePreValidation, Apply: validListLength(stopTokenIdsMaxEntries, 0)},
-		{Stage: StagePreValidation, Apply: requireUintElements()},
-	}},
-	{Name: "bad_words", Rules: []StagedRule{
-		{Stage: StagePreValidation, Apply: requireStringElements()},
-		{Stage: StagePreValidation, Apply: dropBlankStringListElements()},
-		{Stage: StagePreValidation, Apply: validListLength(badWordsMaxEntries, badWordsMaxEntryLen)},
-	}},
-	spec("metadata", StagePreValidation, validMetadata(metadataMaxKeys, metadataMaxKeyLen, metadataMaxValueLen)),
-	spec("stream_options", StagePreValidation, validStreamOptions()),
-	// min_tokens strips when stop_token_ids is present (Pre), then clamps to max_tokens
-	// once the output-token stage has resolved it (Post).
-	{Name: "min_tokens", Rules: []StagedRule{
-		{Stage: StagePreValidation, Apply: requireUint()},
-		{Stage: StagePreValidation, Apply: stripWhenFieldPresent("stop_token_ids")},
-		{Stage: StagePostLimits, Apply: clampUintToField("max_tokens")},
-	}},
-	// tools must precede tool_choice: it coerces/defaults tool_choice before
-	// tool_choice's own shape check runs.
-	spec("tools", StagePreValidation, validTools(SchemaBounds{
-		MaxDepth:      toolsMaxDepth,
-		MaxNodes:      toolsMaxNodes,
-		MaxSizeBytes:  toolsMaxSizeBytes,
-		MaxBranch:     toolsMaxBranch,
-		MaxEnum:       toolsMaxEnum,
-		MaxPatternLen: toolsMaxPatternLen,
-	}, "auto")),
-	spec("tool_choice", StagePreValidation, validToolChoice(toolChoiceMaxNameLen)),
-	spec("response_format", StagePreValidation, validResponseFormat(SchemaBounds{
-		MaxDepth:      responseFormatMaxDepth,
-		MaxNodes:      responseFormatMaxNodes,
-		MaxSizeBytes:  responseFormatMaxSizeBytes,
-		MaxBranch:     responseFormatMaxBranch,
-		MaxEnum:       responseFormatMaxEnum,
-		MaxPatternLen: responseFormatMaxPatternLen,
-	}, responseFormatMaxNameLen)),
-	spec("structured_outputs", StagePreValidation, validStructuredOutputs(structuredOutputsBounds{
-		SchemaBounds: SchemaBounds{
-			MaxDepth:      structuredOutputsMaxDepth,
-			MaxNodes:      structuredOutputsMaxNodes,
-			MaxSizeBytes:  structuredOutputsMaxSizeBytes,
-			MaxBranch:     structuredOutputsMaxBranch,
-			MaxEnum:       structuredOutputsMaxEnum,
-			MaxPatternLen: structuredOutputsMaxPatternLen,
-		},
-		MaxChoiceEntries:    structuredOutputsMaxChoiceEntries,
-		MaxChoiceEntryLen:   structuredOutputsMaxChoiceEntryLen,
-		MaxGrammarLen:       structuredOutputsMaxGrammarLen,
-		MaxGrammarNesting:   structuredOutputsMaxGrammarNesting,
-		MaxStructuralTagLen: structuredOutputsMaxStructuralTagLen,
-	})),
-	{Name: "reasoning", Rules: []StagedRule{
-		{Stage: StagePreValidation, Apply: reasoningWrapper()},
-	}},
-	{Name: "reasoning_effort", Rules: []StagedRule{
-		{Stage: StagePreValidation, Apply: reasoningEffortValidate()},
-		{Stage: StagePreValidation, Apply: stripParameter()},
-	}},
-	{Name: "enable_thinking", Rules: []StagedRule{
-		{Stage: StagePreValidation, Apply: enableThinking()},
-	}},
-	// thinking must run before chat_template_kwargs below: its mirror path writes into
-	// chat_template_kwargs, and that object's own bounds must validate the merged result.
-	{Name: "thinking", Rules: []StagedRule{
-		{Stage: StagePreValidation, Apply: thinking()},
-	}},
-	{Name: "thinking_token_budget", Rules: []StagedRule{
-		{Stage: StagePreValidation, Apply: thinkingTokenBudgetStrip()},
-		{Stage: StagePostLimits, Apply: thinkingTokenBudgetResolve()},
-	}},
-	spec("safety_identifier", StagePreValidation, safetyIdentifier()),
-	spec("reasoning_split", StagePreValidation, reasoningSplit()),
-	spec("chat_template_kwargs", StagePreValidation, validChatTemplateKwargs(ObjectBounds{
-		MaxDepth:     chatTemplateKwargsMaxDepth,
-		MaxNodes:     chatTemplateKwargsMaxNodes,
-		MaxSizeBytes: chatTemplateKwargsMaxSizeBytes,
-	})),
-}
-
-// knownParameterSet is the whitelist, derived from parameterTable once at package init.
-var knownParameterSet = buildKnownParameterSet()
 
 func buildKnownParameterSet() map[string]struct{} {
 	known := make(map[string]struct{}, len(parameterTable))

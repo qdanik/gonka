@@ -11,6 +11,13 @@ import (
 	"time"
 )
 
+const (
+	// Concurrency and per-fetch timeout together keep one pass well inside the freshness window. See
+	// gateway-escrow-lifecycle.md, "What the chain observer provides".
+	versionsPollConcurrency = 16
+	versionsFetchTimeout    = 2 * time.Second
+)
+
 type mlnodeVersionEntry struct {
 	NodeID                 string `json:"node_id"`
 	PoCValidationInference bool   `json:"poc_validation_inference"`
@@ -77,14 +84,6 @@ func versionsURL(base string) string {
 	return strings.TrimSuffix(strings.TrimSpace(base), "/") + "/v1/versions"
 }
 
-const (
-	// A pass has to finish well inside the freshness window. Polling hundreds of miners one at a
-	// time does not, which leaves every entry stale and reports every node as not validation-capable
-	// — and one tarpitting miner alone can push a sequential pass past the window.
-	versionsPollConcurrency = 16
-	versionsFetchTimeout    = 2 * time.Second
-)
-
 func (c *VersionsCache) Poll(ctx context.Context) {
 	c.mu.RLock()
 	candidates := make(map[string]string, len(c.candidates))
@@ -103,7 +102,7 @@ func (c *VersionsCache) Poll(ctx context.Context) {
 			defer workers.Done()
 			for next := range work {
 				if ctx.Err() != nil {
-					continue // drain without overwriting good entries with cancelled fetches
+					continue
 				}
 				fetchCtx, cancelFetch := context.WithTimeout(ctx, versionsFetchTimeout)
 				nodes := c.fetchOne(fetchCtx, next.base)

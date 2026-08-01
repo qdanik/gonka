@@ -6,8 +6,9 @@ import (
 	"regexp"
 )
 
-// Bound families for each schema-carrying field. Kept separate per field even where
-// values currently match, so tuning one never silently retunes another.
+// Bound families for each schema-carrying field, kept separate per field even where the values
+// currently match. See gateway-request-filtering.md, "Bounds that exist because a host dies
+// without them".
 const (
 	chatTemplateKwargsMaxDepth     = 16
 	chatTemplateKwargsMaxSizeBytes = 16 * 1024
@@ -43,26 +44,28 @@ const (
 	structuredOutputsMaxStructuralTagLen = 4 * 1024
 )
 
-// validSchemaTypes are the JSON-Schema primitives; anything else crashes xgrammar's
-// grammar compiler (CVE-2025-48944).
-var validSchemaTypes = map[string]struct{}{
-	"string": {}, "number": {}, "integer": {}, "object": {}, "boolean": {}, "array": {}, "null": {},
-}
+var (
+	// validSchemaTypes are the JSON-Schema primitives; anything else crashes xgrammar's
+	// grammar compiler (CVE-2025-48944).
+	validSchemaTypes = map[string]struct{}{
+		"string": {}, "number": {}, "integer": {}, "object": {}, "boolean": {}, "array": {}, "null": {},
+	}
 
-var forbiddenSchemaKeys = []string{"$ref", "$defs", "definitions"}
-var branchSchemaKeys = []string{"anyOf", "oneOf", "allOf"}
+	forbiddenSchemaKeys = []string{"$ref", "$defs", "definitions"}
+	branchSchemaKeys    = []string{"anyOf", "oneOf", "allOf"}
 
-// schemaDataKeys hold literal data, not child schemas — the walker must not recurse into
-// them (a $ref hidden inside an enum/default value is just data, not a real reference).
-var schemaDataKeys = map[string]struct{}{
-	"enum": {}, "const": {}, "default": {}, "examples": {}, "required": {}, "dependentRequired": {},
-}
+	// schemaDataKeys hold literal data, not child schemas — the walker must not recurse into them.
+	// See gateway-request-filtering.md, "Bounds that exist because a host dies without them".
+	schemaDataKeys = map[string]struct{}{
+		"enum": {}, "const": {}, "default": {}, "examples": {}, "required": {}, "dependentRequired": {},
+	}
 
-// schemaChildMapKeys hold name->schema maps; each value is walked as its own child schema
-// and the wrapper map itself is not counted as an extra node.
-var schemaChildMapKeys = map[string]struct{}{
-	"properties": {}, "patternProperties": {}, "dependentSchemas": {},
-}
+	// schemaChildMapKeys hold name->schema maps; each value is walked as its own child schema
+	// and the wrapper map itself is not counted as an extra node.
+	schemaChildMapKeys = map[string]struct{}{
+		"properties": {}, "patternProperties": {}, "dependentSchemas": {},
+	}
+)
 
 // SchemaBounds bounds a JSON-Schema payload's depth, node count, serialized size,
 // anyOf/oneOf/allOf arm count, and enum size; bans $ref/$defs/definitions; and validates `type`/`pattern`.
@@ -75,8 +78,8 @@ type SchemaBounds struct {
 	MaxPatternLen int
 }
 
-// Check walks schema for structural violations, then checks serialized size — walk runs
-// first so a deep/wide attack payload never pays for a full json.Marshal.
+// Check walks schema for structural violations before measuring its serialized size. See
+// gateway-request-filtering.md, "Bounds that exist because a host dies without them".
 func (b SchemaBounds) Check(schema map[string]any) error {
 	var nodes int
 	if err := b.walk(schema, 1, &nodes); err != nil {

@@ -97,6 +97,10 @@ func (s *Server) handleAdminDevshards(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "escrow_id and model are required")
 		return
 	}
+	if strings.TrimSpace(request.PrivateKeyEnv) == "" {
+		writeErrorFor(w, ErrPrivateKeyEnvRequired)
+		return
+	}
 	if err := s.operations.AddDevshard(r.Context(), request); err != nil {
 		writeErrorFor(w, err)
 		return
@@ -115,6 +119,10 @@ func (s *Server) handleAdminDevshardImport(w http.ResponseWriter, r *http.Reques
 	}
 	if strings.TrimSpace(request.EscrowID) == "" || strings.TrimSpace(request.SourcePath) == "" {
 		writeError(w, http.StatusBadRequest, "escrow_id and source_path are required")
+		return
+	}
+	if strings.TrimSpace(request.PrivateKeyEnv) == "" {
+		writeErrorFor(w, ErrPrivateKeyEnvRequired)
 		return
 	}
 	if err := s.operations.ImportDevshard(r.Context(), request); err != nil {
@@ -398,14 +406,14 @@ func badRequestUnlessOversized(err error) error {
 	return filters.WrapReject(err)
 }
 
-// DevshardStoragePath is where one escrow's session keeps its SQLite files; sessions and the delete
-// route must derive it the same way or a delete removes a directory nothing was using.
+// DevshardStoragePath is where one escrow's session keeps its SQLite files, and sessions and the
+// delete route must derive it the same way. See gateway-operations.md, "Operator".
 func DevshardStoragePath(baseStorageDir, escrowID string) string {
 	return filepath.Join(baseStorageDir, "escrow-"+escrowID)
 }
 
-// removeDevshardStorage guards os.RemoveAll on a path derived from a client-supplied escrow id: a
-// crafted id would otherwise delete a directory outside the gateway's own storage.
+// removeDevshardStorage guards os.RemoveAll on a path derived from a client-supplied escrow id. See
+// gateway-operations.md, "Operator".
 func removeDevshardStorage(storagePath, baseStorageDir string) error {
 	if strings.TrimSpace(storagePath) == "" {
 		return nil

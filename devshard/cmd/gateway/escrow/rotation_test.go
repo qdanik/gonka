@@ -485,7 +485,7 @@ func TestPromoteRegularsToTempRelabelsActiveRegularsOnly(t *testing.T) {
 	model := ModelConfig{ModelID: "model-a"}
 	devshards := []store.DevshardRecord{regularOne, regularEmpty, alreadyTemp, otherModel, inactive}
 
-	promoted, err := m.promoteRegularsToTemp(context.Background(), model, chain.PhaseSnapshot{EpochIndex: 9}, devshards)
+	promoted, err := m.promoteRegularsToTemp(context.Background(), model, devshards)
 	if err != nil {
 		t.Fatalf("promoteRegularsToTemp(): %v", err)
 	}
@@ -518,7 +518,7 @@ func TestPromoteRegularsToTempContinuesPastErrorReturnsFirst(t *testing.T) {
 	model := ModelConfig{ModelID: "model-a"}
 	devshards := []store.DevshardRecord{regularOne, regularTwo}
 
-	promoted, err := m.promoteRegularsToTemp(context.Background(), model, chain.PhaseSnapshot{EpochIndex: 9}, devshards)
+	promoted, err := m.promoteRegularsToTemp(context.Background(), model, devshards)
 	if err == nil {
 		t.Fatal("promoteRegularsToTemp() error = nil, want reg-1's write failure surfaced")
 	}

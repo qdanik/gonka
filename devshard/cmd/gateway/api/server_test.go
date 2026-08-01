@@ -396,12 +396,14 @@ func TestEveryRouteAnswersItsDocumentedStatus(t *testing.T) {
 		{name: "admin settings wrong method", method: http.MethodDelete, target: "/v1/admin/settings", headers: adminHeaders(), want: http.StatusMethodNotAllowed},
 
 		{name: "admin devshards list", method: http.MethodGet, target: "/v1/admin/devshards", headers: adminHeaders(), want: http.StatusOK},
-		{name: "admin devshards add", method: http.MethodPost, target: "/v1/admin/devshards", body: `{"escrow_id":"11","model":"qwen"}`, headers: adminHeaders(), want: http.StatusOK},
+		{name: "admin devshards add", method: http.MethodPost, target: "/v1/admin/devshards", body: `{"escrow_id":"11","model":"qwen","private_key_env":"GATEWAY_KEY_11"}`, headers: adminHeaders(), want: http.StatusOK},
 		{name: "admin devshards add without model", method: http.MethodPost, target: "/v1/admin/devshards", body: `{"escrow_id":"11"}`, headers: adminHeaders(), want: http.StatusBadRequest},
+		{name: "admin devshards add without a key variable", method: http.MethodPost, target: "/v1/admin/devshards", body: `{"escrow_id":"11","model":"qwen"}`, headers: adminHeaders(), want: http.StatusBadRequest},
 		{name: "admin devshards wrong method", method: http.MethodDelete, target: "/v1/admin/devshards", headers: adminHeaders(), want: http.StatusMethodNotAllowed},
 
-		{name: "admin import", method: http.MethodPost, target: "/v1/admin/devshards/import", body: `{"escrow_id":"11","source_path":"/tmp/x"}`, headers: adminHeaders(), want: http.StatusOK},
+		{name: "admin import", method: http.MethodPost, target: "/v1/admin/devshards/import", body: `{"escrow_id":"11","source_path":"/tmp/x","private_key_env":"GATEWAY_KEY_11"}`, headers: adminHeaders(), want: http.StatusOK},
 		{name: "admin import without source", method: http.MethodPost, target: "/v1/admin/devshards/import", body: `{"escrow_id":"11"}`, headers: adminHeaders(), want: http.StatusBadRequest},
+		{name: "admin import without a key variable", method: http.MethodPost, target: "/v1/admin/devshards/import", body: `{"escrow_id":"11","source_path":"/tmp/x"}`, headers: adminHeaders(), want: http.StatusBadRequest},
 
 		{name: "admin delete inactive", method: http.MethodDelete, target: "/v1/admin/devshards/7", headers: adminHeaders(), want: http.StatusOK},
 		{name: "admin delete active", method: http.MethodDelete, target: "/v1/admin/devshards/9", headers: adminHeaders(), want: http.StatusConflict},

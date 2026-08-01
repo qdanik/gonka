@@ -12,15 +12,15 @@ import (
 	"devshard/types"
 )
 
-// RolePrimary and RoleSpeculative are the attempt role label values.
 const (
+	// RolePrimary and RoleSpeculative are the attempt role label values.
 	RolePrimary     = "primary"
 	RoleSpeculative = "speculative"
-)
 
-// eventBuffer keeps a host's chunk progress from parking its goroutine between the coordinator's
-// selects. Terminal events block regardless of it, which is what settles a committed nonce.
-const eventBuffer = 32
+	// eventBuffer keeps a host's chunk progress from parking its goroutine between the coordinator's
+	// selects. Terminal events block regardless of it, which is what settles a committed nonce.
+	eventBuffer = 32
+)
 
 var errNoDispatchTarget = errors.New("assigned escrow has no dispatch target")
 
@@ -52,8 +52,8 @@ type hostPerf interface {
 	Degraded(participant, model string) bool
 }
 
-// crownGate carries the empty-stream crowning penalty between races: such a host keeps receiving
-// attempts and simply cannot be crowned until it produces content again.
+// crownGate carries the empty-stream crowning penalty between races. See gateway-speculative-race.md,
+// "Crown denial".
 type crownGate interface {
 	Denied(participant, model string) bool
 	Observe(participant, model string, contentless bool)
@@ -96,8 +96,8 @@ type raceRequest struct {
 	Client io.Writer
 }
 
-// deadlineTrigger is what fires at a deadline. The declaration order is the tie-break precedence: a
-// race that must stop gains nothing from spending a nonce, and a stall flag is telemetry either way.
+// deadlineTrigger is what fires at a deadline; the declaration order is the tie-break precedence. See
+// gateway-speculative-race.md, "Deadlines".
 type deadlineTrigger int
 
 const (
@@ -126,8 +126,8 @@ type deadlinePlan struct {
 	Cancelled bool
 }
 
-// nextDeadline is the earliest armed deadline and what fires there. Ties resolve by trigger
-// precedence; an earlier deadline of any kind still wins over a later one.
+// nextDeadline is the earliest armed deadline and what fires there, with trigger precedence breaking
+// exact ties. See gateway-speculative-race.md, "Deadlines".
 func nextDeadline(now time.Time, plan deadlinePlan) deadlineArm {
 	var arm deadlineArm
 	consider := func(at time.Time, trigger deadlineTrigger) {
@@ -163,8 +163,8 @@ func (p deadlinePlan) escalation(now time.Time) (ArmedEscalation, bool) {
 		return ArmedEscalation{}, false
 	}
 	armed, found := p.Policy.NextEscalation(now, p.Attempts, p.Request)
-	// The budget bounds hedging. The halved-token retry is not a hedge -- it is the only escalation a
-	// buffered request that produced nothing has -- so a spent budget must not delete it.
+	// The halved-token retry is exempt from the attempt budget here as well as at the pick. See
+	// gateway-speculative-race.md, "Escalation".
 	if found && armed.Stage != StageReducedMaxTokens && len(p.Attempts) >= p.Budget {
 		return ArmedEscalation{}, false
 	}
@@ -229,7 +229,8 @@ func (p deadlinePlan) crowned() bool {
 	return false
 }
 
-// liveAttempt is the coordinator's own record of one attempt, written only from AttemptEvents.
+// liveAttempt is the coordinator's own record of one attempt, written only by the coordinator: from
+// AttemptEvents, and from its own deadline firings for the escalated and stalled marks.
 type liveAttempt struct {
 	nonce       uint64
 	hostIdx     int
@@ -293,8 +294,8 @@ type raceCoordinator struct {
 	startErr           error
 }
 
-// raceExit is why await stopped. Only exitComplete means the race is over; the other two hand a race
-// that still owes work to a second await on another goroutine.
+// raceExit is why await stopped; only exitComplete means the race is over. See gateway-invariants.md,
+// "2. Exactly one outcome and exactly one winner per race, on every path".
 type raceExit int
 
 const (
@@ -384,10 +385,10 @@ func (c *raceCoordinator) begin() error {
 	return nil
 }
 
-// strand accounts for an assignment no attempt can spend -- the escrow rotated out, or the race was over
-// before the scheduler answered: its nonce was committed and its host slot taken in the step that produced
-// it, so the slot goes back here and the nonce is left for the timeout vote rather than pinned for the
-// process's life. Its escrow hold is kept instead of returned, because that vote still has to reach it.
+// strand accounts for an assignment no attempt can spend: the host slot goes back, the escrow hold is
+// kept, and the nonce is carried into the timeout plan. See gateway-invariants.md, "1. A committed nonce
+// is always settled" and "5. The slot and the escrow hold are taken with the nonce, and given back after
+// the vote".
 func (c *raceCoordinator) strand(assignment scheduler.Assignment, role string) {
 	c.escrowID = assignment.Escrow
 	c.deps.Limiter.Release(assignment.Host, c.request.Model)
@@ -409,8 +410,8 @@ func (c *raceCoordinator) strand(assignment scheduler.Assignment, role string) {
 	})
 }
 
-// fail reports a race that never got as far as its first attempt, so a nonce it committed and cannot
-// spend is still owed a vote and every race reports exactly once whatever ended it.
+// fail reports a race that never got as far as its first attempt. See gateway-invariants.md, "1. A
+// committed nonce is always settled".
 func (c *raceCoordinator) fail(err error) (RaceOutcome, error) {
 	return c.report(), err
 }
@@ -445,10 +446,9 @@ func (c *raceCoordinator) await() raceExit {
 	}
 }
 
-// catchUp applies every event already queued. A buffered event and a fired timer are equally ready in
-// the select, so anything that reads the race's state rather than adding to it starts here: acting on
-// a deadline the newer state has already cleared spends a nonce, mislabels a healthy host, or reports
-// a completed winner as cancelled.
+// catchUp applies every event already queued, so every select arm that reads race state rather than
+// adding to it starts here. See gateway-invariants.md, "3. No field crosses a goroutine except through
+// the event channel".
 func (c *raceCoordinator) catchUp() {
 	for {
 		select {
@@ -494,9 +494,8 @@ func (c *raceCoordinator) clientGone() <-chan struct{} {
 	return c.drain.clientGone()
 }
 
-// release hands the still-pending losers to a second await on another goroutine. Nothing they can do
-// changes what the client received, and the client's response is not complete until its handler
-// returns.
+// release hands the still-pending losers to a second await on another goroutine. See
+// gateway-speculative-race.md, "Client departure and the drain".
 func (c *raceCoordinator) release() bool {
 	if c.handedOff || c.pending == 0 || c.winner == nil || !c.winner.done {
 		return false
@@ -526,9 +525,8 @@ func (c *raceCoordinator) fire(arm deadlineArm) {
 	}
 }
 
-// answer settles one attempt's claim on the client stream. A suspicious host's claim is held rather than
-// refused, because a refusal is permanent: the writer abandons the attempt, so a rival that later fails
-// would leave the client an error for a response the race already paid for.
+// answer settles one attempt's claim on the client stream; a suspicious host's claim is held rather than
+// refused, because a refusal is permanent. See gateway-speculative-race.md, "Crowning".
 func (c *raceCoordinator) answer(claim crownRequest) {
 	switch attempt := c.byNonce[claim.Nonce]; {
 	case attempt == nil || c.winner != nil:
@@ -541,8 +539,8 @@ func (c *raceCoordinator) answer(claim crownRequest) {
 	}
 }
 
-// settleClaims answers the held claims once the race can tell whether a rival will serve. Alone, a
-// suspicious host is crowned: its answer is the one the race committed a nonce for.
+// settleClaims answers the held claims once the race can tell whether a rival will serve; alone, a
+// suspicious host is crowned. See gateway-speculative-race.md, "Crown denial".
 func (c *raceCoordinator) settleClaims() {
 	if len(c.claims) == 0 {
 		return
@@ -563,8 +561,8 @@ func (c *raceCoordinator) settleClaims() {
 	c.claims = c.claims[:0]
 }
 
-// rivalPossible reports an attempt other than the held claimants that could still be crowned: one
-// already running and yet to claim, or one this race has already committed to starting.
+// rivalPossible reports an attempt other than the held claimants that could still be crowned. See
+// gateway-speculative-race.md, "Crown denial".
 func (c *raceCoordinator) rivalPossible() bool {
 	return c.pending > len(c.claims) || c.picking() || c.moreImmediate > 0
 }
@@ -631,8 +629,8 @@ func (c *raceCoordinator) escalate(armed ArmedEscalation) {
 }
 
 // escalationParams hands the reduced-max-tokens stage a halved output-token budget and every other stage
-// the request's own params. The one-shot is spent whatever the hook answers, so a body with no budget to
-// halve costs the race one evaluation rather than a deadline it re-arms forever.
+// the request's own params; the one-shot is spent whatever the hook answers. See
+// gateway-speculative-race.md, "Escalation".
 func (c *raceCoordinator) escalationParams(stage EscalationStage) (any, bool) {
 	if stage != StageReducedMaxTokens {
 		return c.request.Params, true
@@ -693,18 +691,15 @@ type pickedHost struct {
 
 func (c *raceCoordinator) picking() bool { return c.pickCancel != nil }
 
-// startPick runs a speculative pick beside the race, never on the coordinator's own goroutine: the
-// scheduler holds a waiter for a co-arriving request, and a crown claim is the client's first token, so a
-// coordinator waiting for a pick inline would starve the very winner it is racing to. At most one pick
-// runs at a time, and pickDeadline bounds it however long the scheduler's queue takes to answer.
+// startPick runs a speculative pick beside the race, never on the coordinator's own goroutine. At most
+// one pick runs at a time, and pickDeadline bounds it however long the scheduler's queue takes to
+// answer. See gateway-speculative-race.md, "Escalation".
 func (c *raceCoordinator) startPick(reason string, params any) {
 	c.startPickWithinBudget(reason, params, true)
 }
 
-// startPickWithinBudget exists because the halved-token retry is exempt from the attempt budget. It is
-// not a hedge racing the first host: it is the only way a buffered request that has produced nothing
-// can be given a shorter answer, so a budget of one -- which is what nonce scarcity collapses it to --
-// would delete the escalation rather than trim it.
+// startPickWithinBudget exists because the halved-token retry is exempt from the attempt budget. See
+// gateway-speculative-race.md, "Escalation".
 func (c *raceCoordinator) startPickWithinBudget(reason string, params any, honourBudget bool) {
 	if c.picking() || (honourBudget && len(c.attempts) >= c.budget) {
 		return

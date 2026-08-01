@@ -138,9 +138,8 @@ func (l *Ledger) Stats() LedgerStats {
 	}
 }
 
-// Close drains what is queued. A row shed under load or lost to a write failure is counted in Stats
-// and never fails the close: telemetry the ledger dropped is a load condition, and reporting it here
-// would tell an orchestrator that a clean exit was a crash.
+// Close drains what is queued; a row shed under load or lost to a write failure is counted in Stats
+// and never fails the close. See gateway-request-lifecycle.md, "10. Recording".
 func (l *Ledger) Close() error {
 	l.mu.Lock()
 	alreadyClosed := l.closed

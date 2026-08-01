@@ -1,7 +1,6 @@
 package filters
 
-// minimaxProfile: no chat-template knob for enable_thinking/thinking (reasoning is
-// interleaved and structural to the template); reasoning_split is a native passthrough field.
+// minimaxProfile is MiniMax's delta set. See gateway-request-filtering.md, "Model profiles".
 var minimaxProfile = &Profile{
 	Models:             []string{minimaxModelID},
 	Thinking:           ThinkingStrip,

@@ -36,8 +36,7 @@ func (e *escrowEntry) accepting() bool { return e.session.Phase() == types.Phase
 
 func (e *escrowEntry) busy() bool { return e.inFlight.Load() > 0 }
 
-// close flushes before releasing storage: Finalize advances the nonce, so an unflushed escrow replays
-// its whole diff tail the next time it is rehydrated.
+// close flushes before releasing storage. See gateway-routing-and-nonces.md, "The escrow registry".
 func (e *escrowEntry) close() error {
 	var flushErr error
 	if err := e.session.FlushSnapshot(); err != nil {
@@ -50,8 +49,8 @@ func (e *escrowEntry) close() error {
 	return errors.Join(flushErr, closeErr)
 }
 
-// liveSet is the published escrow set, replaced rather than mutated: readers take it with one atomic
-// load, so a pick never contends with a rotation nor holds a lock across the session work that follows.
+// liveSet is the published escrow set, replaced rather than mutated, so readers take it with one atomic
+// load. See gateway-routing-and-nonces.md, "The escrow registry".
 type liveSet struct {
 	byID    map[string]*escrowEntry
 	byModel map[string][]*escrowEntry

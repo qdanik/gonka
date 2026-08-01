@@ -23,12 +23,21 @@ func newLimitsHarness(clock *time.Time) (*limits.GatewayLimiter, *limits.Capacit
 	return limiter, capacity, participants
 }
 
+// servingCapacity is the composition root's wrapper reduced to what a collector reads: production
+// applies the operator's relaxed-mode override before asking for the ratio, and these tests are never
+// blocked, so the answer is always the unblocked one.
+type servingCapacity struct{ *limits.Capacity }
+
+func (c servingCapacity) ScaleFactor(model string) float64 {
+	return c.Capacity.ScaleFactor(model, false)
+}
+
 func TestTheLimitsCollectorReportsTheConfiguredCapsBeforeAnyTraffic(t *testing.T) {
 	clock := time.Unix(1700000000, 0)
 	limiter, capacity, participants := newLimitsHarness(&clock)
 	telemetry := New()
 	telemetry.Register(NewLimitsCollector(LimitsSources{
-		Limiter: limiter, Capacity: capacity, Participants: participants,
+		Limiter: limiter, Capacity: servingCapacity{capacity}, Participants: participants,
 		Models: func() []string { return []string{"qwen"} },
 	}))
 
@@ -47,7 +56,7 @@ func TestTheLimitsCollectorMatchesTheLimiterAfterTraffic(t *testing.T) {
 	limiter, capacity, participants := newLimitsHarness(&clock)
 	telemetry := New()
 	telemetry.Register(NewLimitsCollector(LimitsSources{
-		Limiter: limiter, Capacity: capacity, Participants: participants,
+		Limiter: limiter, Capacity: servingCapacity{capacity}, Participants: participants,
 		Models: func() []string { return []string{"qwen"} },
 	}))
 
@@ -73,7 +82,7 @@ func TestTheLimitsCollectorReportsCapacityPerModel(t *testing.T) {
 	})
 	telemetry := New()
 	telemetry.Register(NewLimitsCollector(LimitsSources{
-		Limiter: limiter, Capacity: capacity, Participants: participants,
+		Limiter: limiter, Capacity: servingCapacity{capacity}, Participants: participants,
 		Models: func() []string { return []string{"qwen"} },
 	}))
 
@@ -90,7 +99,7 @@ func TestTheLimitsCollectorReportsWhileEscrowScoringRunsOnTheMembershipFallback(
 	capacity.SetEscrowMembership("7", map[string]float64{"gonka1a": 0.5, "gonka1b": 0.25})
 	telemetry := New()
 	telemetry.Register(NewLimitsCollector(LimitsSources{
-		Limiter: limiter, Capacity: capacity, Participants: participants,
+		Limiter: limiter, Capacity: servingCapacity{capacity}, Participants: participants,
 		Models: func() []string { return []string{"qwen"} },
 	}))
 
@@ -115,7 +124,7 @@ func TestTheLimitsCollectorReportsAnOpenBreakerAsExhausted(t *testing.T) {
 	limiter, capacity, participants := newLimitsHarness(&clock)
 	telemetry := New()
 	telemetry.Register(NewLimitsCollector(LimitsSources{
-		Limiter: limiter, Capacity: capacity, Participants: participants,
+		Limiter: limiter, Capacity: servingCapacity{capacity}, Participants: participants,
 		Models: func() []string { return nil },
 	}))
 

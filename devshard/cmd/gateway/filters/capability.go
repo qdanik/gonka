@@ -5,8 +5,8 @@ import (
 	"strings"
 )
 
-// The phrases vLLM emits for a capability refusal, verbatim. They are an external contract, so they
-// are matched here and nowhere else.
+// The phrases vLLM emits for a capability refusal, verbatim; matched here and nowhere else. See
+// gateway-request-filtering.md, "The vLLM capability-error parser lives here".
 const (
 	ToolChoiceUnsupportedMessage = "tool choice requires --enable-auto-tool-choice and --tool-call-parser to be set"
 	contextLimitPhrase           = "maximum context length is "

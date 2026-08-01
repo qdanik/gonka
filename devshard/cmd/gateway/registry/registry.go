@@ -16,12 +16,14 @@ import (
 	"devshard/cmd/gateway/scheduler"
 )
 
-// ErrClosed rejects work on a registry whose sessions have already been released.
-var ErrClosed = errors.New("registry closed")
+var (
+	// ErrClosed rejects work on a registry whose sessions have already been released.
+	ErrClosed = errors.New("registry closed")
 
-// ErrDraining refuses an escrow id whose earlier entry has not finished: that entry owns the nonces
-// still awaiting votes and holds the storage they settle through.
-var ErrDraining = errors.New("escrow is still draining")
+	// ErrDraining refuses an escrow id whose earlier entry has not finished: that entry owns the nonces
+	// still awaiting votes and holds the storage they settle through.
+	ErrDraining = errors.New("escrow is still draining")
+)
 
 type Deps struct {
 	ServingSessions  SessionFactory
@@ -32,9 +34,8 @@ type Deps struct {
 }
 
 // Registry owns the live escrow set. live is written only under mu and read without it, so Candidates costs
-// one atomic load. draining holds escrows removed from routing whose requests have not finished; the last
-// release closes them, so a rotation cannot pull storage from under a race still writing signatures. It is
-// keyed by entry, not id: one id can be re-added while an earlier session of it still drains.
+// one atomic load; draining holds escrows removed from routing whose requests have not finished, keyed by
+// entry rather than id. See gateway-routing-and-nonces.md, "The escrow registry".
 type Registry struct {
 	servingSessions  SessionFactory
 	readOnlySessions SessionFactory
@@ -67,9 +68,8 @@ func New(deps Deps) *Registry {
 	return registry
 }
 
-// Add publishes one escrow for routing, and refuses an id an earlier entry is still draining. A
-// session that is not published is released without flushing: it served nothing, and its snapshot
-// would land on the storage the entry that did serve is still advancing.
+// Add publishes one escrow for routing, refuses an id an earlier entry is still draining, and releases an
+// unpublished session without flushing. See gateway-routing-and-nonces.md, "The escrow registry".
 func (r *Registry) Add(ctx context.Context, escrowID, model string) error {
 	switch {
 	case escrowID == "":
@@ -188,9 +188,9 @@ func (r *Registry) Snapshot() []EscrowState {
 	return states
 }
 
-// RoutableSession resolves the dispatch handle for an escrow a race was assigned, from the published
-// set alone. It is fetched per race because an escrow published by Candidates can be retired before
-// the race reaches it.
+// RoutableSession is the read-only handle the status routes read. It takes no in-flight count and is
+// deliberately not the dispatch path: a race resolves its escrow through Acquire, which returns the
+// session and its release together so a handle cannot be held without the hold.
 func (r *Registry) RoutableSession(escrowID string) (EscrowSession, bool) {
 	entry, known := r.live.Load().byID[escrowID]
 	if !known {
@@ -199,10 +199,9 @@ func (r *Registry) RoutableSession(escrowID string) (EscrowSession, bool) {
 	return entry.session, true
 }
 
-// SettlementSession resolves the handle this process still holds, published or draining. The two
-// lookups are deliberately asymmetric: routing must refuse a retired escrow so it takes no further
-// request, while the nonces it already committed still owe their votes -- and a draining entry keeps
-// the storage handle, so rehydrating a second session over the same files would fight it.
+// SettlementSession resolves the handle this process still holds, published or draining -- deliberately
+// asymmetric with routing's published-only lookup. See gateway-invariants.md,
+// "4. Routing and settlement read the escrow set asymmetrically, on purpose".
 func (r *Registry) SettlementSession(escrowID string) (EscrowSession, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -233,9 +232,9 @@ func (r *Registry) Serves(model string) bool {
 	return slices.ContainsFunc(r.live.Load().byModel[model], (*escrowEntry).accepting)
 }
 
-// Acquire resolves the dispatch handle and counts one in-flight request against it in the same step;
-// ok is false when the escrow is gone and the caller must not dispatch to it. The release is bound to
-// the session acquired, so a rotation that re-adds the same escrow id cannot cross the two counts.
+// Acquire resolves the dispatch handle and counts one in-flight request against it in the same locked step;
+// ok is false when the escrow is gone and the caller must not dispatch to it. See
+// gateway-routing-and-nonces.md, "The escrow registry".
 func (r *Registry) Acquire(escrowID string) (session EscrowSession, release func(), ok bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -246,9 +245,9 @@ func (r *Registry) Acquire(escrowID string) (session EscrowSession, release func
 	return entry.session, r.holdLocked(entry), true
 }
 
-// holdFor is the scheduler's view of the same count, taken in the step that commits a nonce so a
-// Retire arriving right after cannot close the escrow that nonce still owes a vote to. It is bound to
-// the entry rather than to its id, so it can never land on a later session published under that id.
+// holdFor is the scheduler's view of the same count, taken in the step that commits a nonce and bound to
+// the entry rather than to its id. See gateway-routing-and-nonces.md, "Where the nonce, the slot and the
+// hold are taken".
 func (r *Registry) holdFor(entry *escrowEntry) func() (func(), bool) {
 	return func() (func(), bool) {
 		r.mu.Lock()
@@ -338,8 +337,8 @@ func drainingInIDOrder(draining map[*escrowEntry]struct{}) []*escrowEntry {
 	return entries
 }
 
-// pushMembershipLocked republishes every live escrow's share, not just the one that changed: a
-// participant's total slot count moves whenever any escrow it serves is added or retired.
+// pushMembershipLocked republishes every live escrow's share, not just the one that changed. See
+// gateway-routing-and-nonces.md, "Membership: what the capacity model is told".
 func (r *Registry) pushMembershipLocked() {
 	if r.membership == nil {
 		return

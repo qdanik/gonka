@@ -25,9 +25,8 @@ func slotCounts(perSlotKeys []string) map[string]int {
 	return counts
 }
 
-// hostShares is slots(participant, escrow)/totalSlots(participant), the per-host multiplier
-// limits.Capacity expects. Raw slot counts would count a participant once per escrow it serves
-// instead of splitting it, over-weighting every escrow that shares a host.
+// hostShares is slots(participant, escrow)/totalSlots(participant), the normalised per-host multiplier
+// limits.Capacity expects. See gateway-routing-and-nonces.md, "Membership: what the capacity model is told".
 func hostShares(escrowSlots, totalSlots map[string]int) map[string]float64 {
 	shares := make(map[string]float64, len(escrowSlots))
 	for participant, count := range escrowSlots {

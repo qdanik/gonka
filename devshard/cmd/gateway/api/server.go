@@ -61,7 +61,7 @@ type ControlStore interface {
 }
 
 // CreateEscrowRequest is the body of POST /v1/admin/escrows. It names the variable holding the signing
-// key, never the key: a raw key in a request body would reach the commitment row and the logs.
+// key, never the key. See gateway-operations.md, "Operator".
 type CreateEscrowRequest struct {
 	Model         string `json:"model"`
 	Amount        uint64 `json:"amount"`
@@ -109,7 +109,8 @@ type Telemetry interface {
 	Handler() http.Handler
 }
 
-// Deps is everything the HTTP boundary reads or calls. Every field is required.
+// Deps is everything the HTTP boundary reads or calls. New requires every field except Version and
+// RequestIDs, which default to empty and to a random id generator.
 type Deps struct {
 	Config     *config.Holder
 	Escrows    EscrowRegistry

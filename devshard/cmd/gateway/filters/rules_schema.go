@@ -5,7 +5,37 @@ import (
 	"strings"
 )
 
-var responseFormatNameRegex = regexp.MustCompile(`^[A-Za-z0-9_.-]+$`)
+var (
+	responseFormatNameRegex = regexp.MustCompile(`^[A-Za-z0-9_.-]+$`)
+
+	// structuredOutputsConstraintFields are mutually exclusive per vLLM's
+	// StructuredOutputsParams.__post_init__ rule: exactly one must be set.
+	structuredOutputsConstraintFields = []string{"json", "regex", "choice", "grammar", "json_object", "structural_tag"}
+
+	// structuredOutputsAuxiliaryFields may accompany any single constraint field.
+	structuredOutputsAuxiliaryFields = []string{"whitespace_pattern", "disable_any_whitespace", "disable_additional_properties"}
+
+	// structuredOutputsPrivateFields are internal backend state, never client-settable; stripped silently.
+	structuredOutputsPrivateFields = []string{"_backend", "_backend_was_auto"}
+
+	structuredOutputsKnownFields = buildStructuredOutputsKnownFields()
+
+	// forbiddenChatTemplateKwargsKeys override apply_hf_chat_template's positional arguments
+	// instead of becoming template variables — known CVE vectors; add_generation_prompt is not banned.
+	forbiddenChatTemplateKwargsKeys = map[string]struct{}{
+		"chat_template":          {}, // CVE-2025-61620: arbitrary Jinja template
+		"tokenize":               {}, // CVE-2025-62426: stalls the request handler
+		"tools":                  {},
+		"documents":              {},
+		"conversation":           {},
+		"continue_final_message": {},
+		"padding":                {},
+		"truncation":             {},
+		"max_length":             {},
+		"return_tensors":         {},
+		"return_dict":            {},
+	}
+)
 
 // validTools enforces the OpenAI tool contract plus tool_choice cross-field cleanup:
 // "required" collapses to defaultToolChoice, an empty tools array drops both fields, and function.strict is stripped silently.
@@ -159,18 +189,6 @@ type structuredOutputsBounds struct {
 	MaxGrammarNesting   int
 	MaxStructuralTagLen int
 }
-
-// structuredOutputsConstraintFields are mutually exclusive per vLLM's
-// StructuredOutputsParams.__post_init__ rule: exactly one must be set.
-var structuredOutputsConstraintFields = []string{"json", "regex", "choice", "grammar", "json_object", "structural_tag"}
-
-// structuredOutputsAuxiliaryFields may accompany any single constraint field.
-var structuredOutputsAuxiliaryFields = []string{"whitespace_pattern", "disable_any_whitespace", "disable_additional_properties"}
-
-// structuredOutputsPrivateFields are internal backend state, never client-settable; stripped silently.
-var structuredOutputsPrivateFields = []string{"_backend", "_backend_was_auto"}
-
-var structuredOutputsKnownFields = buildStructuredOutputsKnownFields()
 
 func buildStructuredOutputsKnownFields() map[string]struct{} {
 	known := make(map[string]struct{}, len(structuredOutputsConstraintFields)+len(structuredOutputsAuxiliaryFields))
@@ -371,22 +389,6 @@ func validStructuredOutputsStructuralTag(value any, maxLen int) error {
 		return Reject("structured_outputs.structural_tag: length exceeded: %d > %d", size, maxLen)
 	}
 	return nil
-}
-
-// forbiddenChatTemplateKwargsKeys override apply_hf_chat_template's positional arguments
-// instead of becoming template variables — known CVE vectors; add_generation_prompt is not banned.
-var forbiddenChatTemplateKwargsKeys = map[string]struct{}{
-	"chat_template":          {}, // CVE-2025-61620: arbitrary Jinja template
-	"tokenize":               {}, // CVE-2025-62426: stalls the request handler
-	"tools":                  {},
-	"documents":              {},
-	"conversation":           {},
-	"continue_final_message": {},
-	"padding":                {},
-	"truncation":             {},
-	"max_length":             {},
-	"return_tensors":         {},
-	"return_dict":            {},
 }
 
 // validChatTemplateKwargs rejects forbidden keys before checking plain object bounds — no

@@ -8,9 +8,8 @@ import (
 	"devshard/cmd/gateway/config"
 )
 
-// carryBudget bounds the bytes held for SSE reassembly at three levels. The participant level is
-// what keeps one host that never terminates an event from draining the shared global pool and
-// starving every other host of classification.
+// carryBudget bounds the bytes held for SSE reassembly at three levels: attempt, participant and
+// global. See gateway-speculative-race.md, "Classification and reassembly".
 type carryBudget struct {
 	attemptLimit     int64
 	participantLimit int64
@@ -30,8 +29,8 @@ func newCarryBudget(stream config.Stream) *carryBudget {
 	}
 }
 
-// counterFor creates a participant's counter on first use and never removes it: the participant set
-// is the bounded validator set, so an idle counter costs eight bytes and a lookup no allocation.
+// counterFor creates a participant's counter on first use and never removes it. See
+// gateway-invariants.md, "9. Bounded by construction".
 func (b *carryBudget) counterFor(participant string) *atomic.Int64 {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -44,7 +43,7 @@ func (b *carryBudget) counterFor(participant string) *atomic.Int64 {
 }
 
 // reserve charges n bytes to the participant and then to the global pool, undoing the participant
-// charge when the global pool trips: a charge left behind on a trip is quota nobody can return.
+// charge when the global pool trips. See gateway-invariants.md, "9. Bounded by construction".
 func (b *carryBudget) reserve(participant *atomic.Int64, n int64) bool {
 	if participant.Add(n) > b.participantLimit {
 		participant.Add(-n)

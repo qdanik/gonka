@@ -16,8 +16,8 @@ import (
 	"devshard/user"
 )
 
-// otherRouteLabel is the single label every unmatched path folds into. A raw path here would let
-// unauthenticated traffic mint one Prometheus series per probe.
+// otherRouteLabel is the single label every unmatched path folds into. See gateway-operations.md,
+// "Cardinality rules".
 const otherRouteLabel = "other"
 
 // route is one registered pattern. An empty label means the route is not instrumented, which is how
@@ -43,15 +43,14 @@ func (s *Server) routes() []route {
 
 		{pattern: "/devshard/{id}/v1/finalize", label: "/devshard/{id}/v1/finalize", admin: true, alwaysOn: true, handler: s.handleDevshardFinalize},
 
-		// Recovery surface: alwaysOn because the escrow an operator needs to read is the one whose
-		// trouble is why the kill switch is down.
+		// Recovery surface: admin and alwaysOn. See gateway-operations.md, "Per-escrow recovery surface".
 		{pattern: "/devshard/{id}/v1/state", label: "/devshard/{id}/v1/state", admin: true, alwaysOn: true, handler: s.handleDevshardState},
 		{pattern: "/devshard/{id}/v1/debug/state", label: "/devshard/{id}/v1/debug/state", admin: true, alwaysOn: true, handler: s.handleDevshardDebugState},
 		{pattern: "/devshard/{id}/v1/debug/inferences", label: "/devshard/{id}/v1/debug/inferences", admin: true, alwaysOn: true, handler: s.handleDevshardDebugInferences},
 		{pattern: "/devshard/{id}/v1/debug/pending", label: "/devshard/{id}/v1/debug/pending", admin: true, alwaysOn: true, handler: s.handleDevshardDebugPending},
 		{pattern: "/devshard/{id}/v1/debug/signatures", label: "/devshard/{id}/v1/debug/signatures", admin: true, alwaysOn: true, handler: s.handleDevshardDebugSignatures},
 
-		// The row names the escrow and the participant, and records no caller to authorize against.
+		// Admin-only: the row has no caller to authorise against. See gateway-operations.md, "Operator".
 		{pattern: "/v1/requests/{id}", label: "/v1/requests/{id}", admin: true, alwaysOn: true, handler: s.handleRequestAccounting},
 
 		{pattern: "/v1/admin/state", label: "/v1/admin/state", admin: true, alwaysOn: true, handler: s.handleAdminState},
@@ -231,8 +230,8 @@ type limiterStatus struct {
 	MaxTokensCap           int64 `json:"max_tokens_cap"`
 }
 
-// capacityStatus carries each weight under both spellings: the older names are what existing
-// dashboards select on, and dropping them empties those panels.
+// capacityStatus carries each weight under both spellings, old and new. See gateway-operations.md,
+// "Reading the gateway's state".
 type capacityStatus struct {
 	Model                       string  `json:"model"`
 	CurrentWeight               float64 `json:"current_weight"`
@@ -355,8 +354,8 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	s.chat(w, r, "")
 }
 
-// handleDevshardChat pins the race to one escrow. A pin the gateway no longer routes to is refused
-// rather than served from another escrow, so the X-Devshard-ID a caller asked for is the one it gets.
+// handleDevshardChat pins the race to one escrow, and refuses a pin the gateway no longer routes to.
+// See gateway-operations.md, "Client".
 func (s *Server) handleDevshardChat(w http.ResponseWriter, r *http.Request) {
 	if !allowMethods(w, r, http.MethodPost) {
 		return
@@ -427,9 +426,9 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request, escrowPin string) 
 	}
 }
 
-// routableModel rejects a model the gateway cannot serve before the request can take a limiter slot
-// or an input-token budget. An empty registry means the gateway is not ready, not that every model
-// routes, so it fails closed.
+// routableModel refuses an unroutable model before it can take a limiter slot or an input-token
+// budget, and fails closed on an empty registry. See gateway-request-lifecycle.md, "3. Authorisation
+// and routability".
 func (s *Server) routableModel(model string) error {
 	if model == "" {
 		return filters.Reject("model is required")
@@ -492,12 +491,12 @@ func (s *Server) race(w http.ResponseWriter, r *http.Request, requestID string, 
 			_ = client.Fail(err)
 			return outcome, err
 		}
-		w.Header().Set("X-Request-Id", requestID)
+		w.Header().Set(RequestIDHeader, requestID)
 		writeErrorFor(w, err)
 		return outcome, nil
 	}
-	// A stream has already sent its headers by now, which is why OnEscrow sets this too; this second
-	// write is the authoritative one for a reply still holding them.
+	// The second of the two X-Devshard-ID writes, authoritative for a reply still holding its headers.
+	// See gateway-request-lifecycle.md, "9. Streaming out".
 	if outcome.EscrowID != "" {
 		client.Header().Set(EscrowHeader, outcome.EscrowID)
 	}
@@ -505,8 +504,8 @@ func (s *Server) race(w http.ResponseWriter, r *http.Request, requestID string, 
 	return outcome, nil
 }
 
-// estimatePromptTokens is the limiter's and the perf buckets' input size; it is bytes/4 with a floor
-// of one, not a tokenizer call.
+// estimatePromptTokens is the limiter's and the perf buckets' input size, not a tokenizer call. See
+// gateway-request-lifecycle.md, "6. Admission to capacity".
 func estimatePromptTokens(body []byte) uint64 {
 	if estimated := (len(body) + 3) / 4; estimated > 0 {
 		return uint64(estimated)

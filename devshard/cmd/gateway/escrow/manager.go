@@ -71,10 +71,8 @@ func (m *Manager) runTick(ctx context.Context) {
 	}
 }
 
-// Stop is idempotent and is a barrier for every caller: done outlives stop, so a second concurrent
-// Stop waits for the exit rather than returning early. Cancelling the context interrupts a tick
-// already in flight — a tick can outlast the shutdown grace period, and waiting only between ticks
-// would let the process close its store while a settlement write is still running.
+// Stop is idempotent and a barrier for every caller: done outlives stop, and cancelling the context
+// interrupts a tick already in flight. See gateway-escrow-lifecycle.md, "The tick".
 func (m *Manager) Stop() {
 	m.lifecycleMu.Lock()
 	stop, done, cancel := m.stop, m.done, m.cancel

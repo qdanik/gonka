@@ -237,10 +237,13 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 		Timeouts:   sessions.Poster,
 		Now:        clock,
 	})
+	// One wrapper for both readers: the gauge must report the scale admission actually applies, and
+	// only this type knows the operator's relaxed-mode override of the chain's raw blocking state.
+	modelCapacities := modelCapacity{capacity: capacity, snapshots: observer, config: configHolder}
 	telemetry.Register(
 		metrics.NewLimitsCollector(metrics.LimitsSources{
 			Limiter:      gatewayLimiter,
-			Capacity:     capacity,
+			Capacity:     modelCapacities,
 			Participants: participants,
 			Models:       escrows.Models,
 		}),
@@ -261,7 +264,7 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 		Escrows:    escrows,
 		Inference:  races,
 		Limiter:    gatewayLimiter,
-		Capacity:   modelCapacity{capacity: capacity, snapshots: observer, config: configHolder},
+		Capacity:   modelCapacities,
 		Snapshots:  observer,
 		Control:    gatewayStore,
 		Accounting: ledger,
@@ -381,8 +384,8 @@ func newRouting(deps routingDeps) (*registry.Registry, *scheduler.Scheduler) {
 	return escrows, router
 }
 
-// needsQuiesced marks a step that destroys state the steps above it may still be using. Closing an
-// escrow session takes no lock, so it is safe only once the work that reaches it has actually stopped.
+// needsQuiesced marks a step that destroys state the steps above it may still be using. See
+// gateway-invariants.md, "6. Shutdown order is a contract".
 type shutdownStep struct {
 	name          string
 	stop          func(context.Context) error
@@ -399,9 +402,8 @@ type stopper interface{ Stop() }
 // polls, and nothing above it in the order closes them.
 type idleConnections interface{ CloseIdleConnections() }
 
-// shutdownOrder is a contract: accepting stops first, then running races drain to the vote settling
-// their nonces -- which needs everything below them alive -- and the store closes last because it
-// drains the accounting ledger, whose queued rows must not outlive the connection they need.
+// shutdownOrder is the eight-step contract every shutdown follows. See gateway-architecture.md,
+// "Shutdown" and gateway-invariants.md, "6. Shutdown order is a contract".
 func shutdownOrder(listener httpListener, races, dispatchers, escrowLifecycle, chainObserver stopper, sessions, storage io.Closer, chainClient idleConnections) []shutdownStep {
 	return []shutdownStep{
 		{name: "http server", stop: listener.Shutdown},
@@ -417,9 +419,8 @@ func shutdownOrder(listener httpListener, races, dispatchers, escrowLifecycle, c
 	}
 }
 
-// waitFor bounds a drain by the shutdown budget without cancelling the work inside it: cancelling
-// aborts the vote the drain exists to protect, and waiting for it forfeits every step below to the
-// SIGKILL that follows, so an overrunning drain is left running and reported instead.
+// waitFor bounds a drain by the shutdown budget without cancelling the work inside it. See
+// gateway-architecture.md, "Shutdown".
 func waitFor(component stopper) func(context.Context) error {
 	return func(ctx context.Context) error {
 		stopped := make(chan struct{})
@@ -444,11 +445,8 @@ func closeIdle(component idleConnections) func(context.Context) error {
 	}
 }
 
-// stopAll runs every step even after a failure -- the store must be reached whatever happened above
-// it, because it drains the accounting ledger and holds no escrow state. The exception is a step that
-// destroys what a still-running step is using: an escrow session closes without taking its own lock,
-// so closing one under a drain that overran races a nonce commit, trading a vote this shutdown was
-// already going to drop for on-disk state nothing can repair.
+// stopAll runs every step even after a failure, except one marked needsQuiesced, which is skipped and
+// the skip reported. See gateway-architecture.md, "Shutdown".
 func stopAll(ctx context.Context, steps []shutdownStep) error {
 	var problems []error
 	quiesced := true
@@ -471,8 +469,8 @@ func (g *gateway) shutdown(grace time.Duration) error {
 	return stopAll(drainCtx, shutdownOrder(g.server, g.races, g.router, g.manager, g.observer, g.escrows, g.store, g.chainClient))
 }
 
-// bootBudget ties the two halves of a bounded boot: the concurrent-build limit and the idle pool
-// those builds reuse. Bounding one alone trades a request storm for churn -- the pool defaults to two.
+// bootBudget ties the two halves of a bounded boot: the concurrent-build limit and the idle pool those
+// builds reuse. See gateway-architecture.md, "Boot".
 type bootBudget struct {
 	builders int
 	client   *http.Client
@@ -491,8 +489,8 @@ func newBootBudget(builders int) bootBudget {
 	}
 }
 
-// publishEscrows brings the registry to what the store calls active, builders at a time. A missing
-// escrow or key is marked inactive and skipped; any other failure is fatal rather than a smaller pool.
+// publishEscrows brings the registry to what the store calls active, builders at a time. See
+// gateway-operations.md, "Start-up".
 func (g *gateway) publishEscrows(ctx context.Context) error {
 	records, err := g.store.ListDevshards(ctx)
 	if err != nil {
@@ -772,11 +770,33 @@ func (m modelCapacity) ForModel(model string) limits.ModelCapacity {
 		perWeight = concurrency.PoCRequestsPer10000Weight
 	}
 	return limits.ModelCapacity{
-		ScaleFactor:                 m.capacity.ScaleFactor(model),
+		ScaleFactor:                 m.ScaleFactor(model),
 		CurrentWeight:               current,
 		BaselineWeight:              baseline,
 		MaxConcurrentPer10000Weight: perWeight,
 	}
+}
+
+// ScaleFactor applies the operator's relaxed-mode override before asking for the ratio. Reading the
+// chain's raw blocking state instead would zero the scale during PoC, and a zero scale clamps every
+// weight-derived cap to nothing -- so relaxed mode would go dead in exactly the deployments that set
+// an input-token cap or a per-model override, which are the ones that need it.
+func (m modelCapacity) ScaleFactor(model string) float64 {
+	return m.capacity.ScaleFactor(model, blockedFor(m.snapshots.Snapshot(), m.config.Load().Modes))
+}
+
+func (m modelCapacity) Weights(model string) (current, baseline float64) {
+	return m.capacity.Weights(model)
+}
+
+func (m modelCapacity) WeightsUnobserved(model string) bool {
+	return m.capacity.WeightsUnobserved(model)
+}
+
+// blockedFor is the effective blocking state: the chain's raw fact, unless the operator's relaxed mode
+// overrides it. api.admission folds the same override in for the pre-queue gate.
+func blockedFor(snapshot chain.PhaseSnapshot, modes config.Modes) bool {
+	return snapshot.RequestsBlocked && modes.PoCMode != config.PoCModeRelaxed
 }
 
 // suspiciousHosts is the operator's manual pin list, cached in memory because every race reads it and
@@ -860,8 +880,8 @@ type operations struct {
 	storageDir   string
 }
 
-// CreateEscrow takes the name of the variable holding the signing key, never the key: one in a
-// request body would reach the commitment row, the logs, and every operator in between.
+// CreateEscrow takes the name of the variable holding the signing key, never the key. See
+// gateway-operations.md, "Operator".
 func (o *operations) CreateEscrow(ctx context.Context, request api.CreateEscrowRequest) (chain.CreateEscrowResult, error) {
 	if strings.TrimSpace(request.PrivateKeyEnv) == "" {
 		return chain.CreateEscrowResult{}, api.ErrPrivateKeyEnvRequired
@@ -932,8 +952,7 @@ func (o *operations) Activate(ctx context.Context, id string) error {
 }
 
 // Deactivate and Settle stop routing before the row changes, so nothing new is admitted while the
-// write runs. A settle that fails leaves the escrow retired rather than re-adding it: its row is
-// already inactive and settlement-pending, which is where the lifecycle picks it up again.
+// write runs. See gateway-operations.md, "Operator".
 func (o *operations) Deactivate(ctx context.Context, id string) error {
 	if err := o.escrows.Retire(id); err != nil {
 		return err

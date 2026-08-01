@@ -6,16 +6,20 @@ import (
 	"devshard/cmd/gateway/config"
 )
 
-// Backstops bound a request every tunable already failed to bound, so they are not tunable.
 const (
+	// Backstops bound a request every tunable already failed to bound, so they are not tunable.
 	streamingHardTimeout      = 20 * time.Minute
 	nonStreamNoContentTimeout = 20 * time.Minute
 	nonStreamMaxAttemptWait   = 30 * time.Minute
 	schedulerPickTimeout      = 2 * time.Minute
-)
 
-// Admitting a very large prompt is itself work, so such a host gets twice as long to receipt.
-const receiptTimeoutDoubleAboveTokens = 100_000
+	// Admitting a very large prompt is itself work, so such a host gets twice as long to receipt.
+	receiptTimeoutDoubleAboveTokens = 100_000
+
+	StartPrimarySuspicious = "primary_suspicious"
+	StartPrimaryDegraded   = "primary_degraded"
+	StartReceiptTimeout    = "receipt_timeout"
+)
 
 // EscalationStage names the condition that earned an attempt one more attempt beside it.
 type EscalationStage string
@@ -27,12 +31,6 @@ const (
 	StageReceiptTimeout   EscalationStage = "receipt_timeout_wait_elapsed"
 	StageFirstToken       EscalationStage = "first_token_timeout_wait_elapsed"
 	StageReducedMaxTokens EscalationStage = "response_timeout_wait_elapsed"
-)
-
-const (
-	StartPrimarySuspicious = "primary_suspicious"
-	StartPrimaryDegraded   = "primary_degraded"
-	StartReceiptTimeout    = "receipt_timeout"
 )
 
 func (s EscalationStage) Reason() string {
@@ -74,8 +72,8 @@ func EscalationPolicyFromConfig(engine config.Engine) EscalationPolicy {
 	}
 }
 
-// ReducedTokensStillOffered is the one-shot the race holds: a buffered answer reveals nothing until it
-// arrives, so exactly one retry per race may ask for half the output tokens instead.
+// ReducedTokensStillOffered is the one-shot the race holds: exactly one retry per race may ask for half
+// the output tokens instead. See gateway-speculative-race.md, "Escalation".
 type EscalationRequest struct {
 	InputTokens               uint64
 	Stream                    bool
@@ -103,9 +101,8 @@ type StartPlan struct {
 	Reason            string
 }
 
-// ArmedEscalation is a deadline to arm, deliberately not a permission to escalate: an attempt's
-// stage advances while its timer runs (a receipt landing under the receipt timeout), and escalating
-// on the armed stage would start a needless attempt on every healthy request. Confirm converts it.
+// ArmedEscalation is a deadline to arm, deliberately not a permission to escalate; Confirm is the only
+// thing that converts it. See gateway-speculative-race.md, "Escalation".
 type ArmedEscalation struct {
 	Attempt  int
 	Stage    EscalationStage
@@ -117,9 +114,9 @@ type ConfirmedEscalation struct {
 	Stage   EscalationStage
 }
 
-// Decide hedges a primary the race already has reason to distrust. Degraded is the outlier detector's
-// verdict before the routing cap, which is the case the routing gate cannot cover: the cap leaves a host
-// in rotation precisely when too many of its peers are failing at once.
+// Decide hedges a primary the race already has reason to distrust; degraded is the outlier detector's
+// verdict before the routing cap. See gateway-speculative-race.md, "Escalation" and
+// gateway-capacity-and-health.md, "Outlier ejection".
 func (p EscalationPolicy) Decide(budget int, primarySuspicious, primaryDegraded bool) StartPlan {
 	switch {
 	case budget < 2:
@@ -131,8 +128,8 @@ func (p EscalationPolicy) Decide(budget int, primarySuspicious, primaryDegraded 
 	return StartPlan{ImmediateAttempts: 1, Reason: StartReceiptTimeout}
 }
 
-// AttemptBudget caps how many attempts one race may hold. Scarce nonces force a single attempt: a
-// speculative one spends a nonce the chain phase the gateway is serving through will not replace.
+// AttemptBudget caps how many attempts one race may hold; scarce nonces force a single attempt. See
+// gateway-speculative-race.md, "Escalation".
 func (p EscalationPolicy) AttemptBudget(hostCount int, nonceScarce bool) int {
 	if hostCount < 1 {
 		return 1
@@ -210,14 +207,14 @@ func (p EscalationPolicy) receiptTimeout(inputTokens uint64) time.Duration {
 	return p.ReceiptTimeout
 }
 
-// A buffered answer arrives all at once, so the only signal a non-streaming host is too slow is the
-// prompt it was given: the wait grows with input size, floored so a short prompt is not retried early.
+// nonStreamResponseTimeout grows with input size and is floored so a short prompt is not retried early.
+// See gateway-speculative-race.md, "Escalation".
 func (p EscalationPolicy) nonStreamResponseTimeout(inputTokens uint64) time.Duration {
 	return max(p.NonStreamResponseFloor, time.Duration(inputTokens)*p.PerInputTokenResponseLag)
 }
 
-// The quadratic is the measured first-token fit over prompt size; the floor keeps a short prompt
-// from escalating before a healthy host has plausibly started.
+// firstTokenTimeout is the measured first-token fit over prompt size, with a configurable floor. See
+// gateway-speculative-race.md, "Escalation".
 func (p EscalationPolicy) firstTokenTimeout(inputTokens uint64) time.Duration {
 	tokens := float64(inputTokens)
 	seconds := 1.7 + 0.00003*tokens + 0.0000000005*tokens*tokens

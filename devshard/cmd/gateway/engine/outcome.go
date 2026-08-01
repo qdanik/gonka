@@ -10,11 +10,22 @@ import (
 	"devshard/cmd/gateway/perf"
 )
 
-const longResponseExemption = 280 * time.Second
+const (
+	// Label values the engine emits. metrics reads these rather than restating them. See
+	// gateway-invariants.md, "10. Labels, ordering and determinism".
+	AttemptOutcomeSuccess = "success"
+	AttemptOutcomeFailed  = "failed"
+
+	VisibilityWinner            = "user_visible_winner"
+	VisibilityNoWinner          = "no_winner"
+	VisibilitySuppressedLoser   = "suppressed_loser"
+	VisibilityFailedNotFinished = "failed_not_finished"
+
+	longResponseExemption = 280 * time.Second
+)
 
 // Terminal is an attempt's classified end state. Every downstream vocabulary — limiter verdict,
-// perf sample, metric label — is a total function of it, so the HTTP status recovery and SSE
-// inspection that decide it happen once, where the error and the bytes are.
+// perf sample, metric label — is a total function of it. See gateway-speculative-race.md, "The outcome".
 type Terminal int
 
 const (
@@ -26,8 +37,8 @@ const (
 	TerminalForbidden
 	TerminalNotFound
 	TerminalTimestampDrift
-	// TerminalRejected is every other upstream status, 400 and 500 included: those describe the
-	// request or the model, not the host's ability to serve, so they move nothing.
+	// TerminalRejected is every other upstream status, 400 and 500 included. See
+	// gateway-speculative-race.md, "The outcome".
 	TerminalRejected
 	TerminalOffPath
 	TerminalDialFailure
@@ -42,16 +53,28 @@ const (
 	TerminalStalled
 )
 
-// terminalStatuses is the one table linking an upstream status to the terminal it produces.
-// classifyDispatchError reads it forward and metrics reads it back, so the two cannot disagree about
-// which status a label describes.
-var terminalStatuses = map[Terminal]int{
-	TerminalThrottled:      http.StatusTooManyRequests,
-	TerminalUnavailable:    http.StatusServiceUnavailable,
-	TerminalForbidden:      http.StatusForbidden,
-	TerminalNotFound:       http.StatusNotFound,
-	TerminalTimestampDrift: http.StatusUnauthorized,
-}
+var (
+	// terminalStatuses is the one table linking an upstream status to the terminal it produces.
+	// StatusFor reads it forward for metrics and classifyDispatchError reads the derived inverse, so
+	// the two cannot disagree about which status a label describes.
+	terminalStatuses = map[Terminal]int{
+		TerminalThrottled:      http.StatusTooManyRequests,
+		TerminalUnavailable:    http.StatusServiceUnavailable,
+		TerminalForbidden:      http.StatusForbidden,
+		TerminalNotFound:       http.StatusNotFound,
+		TerminalTimestampDrift: http.StatusUnauthorized,
+	}
+
+	// terminalForStatus is the inverse, built once so a status can never map to one terminal going out
+	// and a different one coming back.
+	terminalForStatus = func() map[int]Terminal {
+		inverse := make(map[int]Terminal, len(terminalStatuses))
+		for terminal, status := range terminalStatuses {
+			inverse[status] = terminal
+		}
+		return inverse
+	}()
+)
 
 // StatusFor reports the upstream status a terminal was recovered from, and false for the terminals
 // that never carried one.
@@ -59,16 +82,6 @@ func StatusFor(terminal Terminal) (int, bool) {
 	status, known := terminalStatuses[terminal]
 	return status, known
 }
-
-// terminalForStatus is the inverse, built once so a status can never map to one terminal going out
-// and a different one coming back.
-var terminalForStatus = func() map[int]Terminal {
-	inverse := make(map[int]Terminal, len(terminalStatuses))
-	for terminal, status := range terminalStatuses {
-		inverse[status] = terminal
-	}
-	return inverse
-}()
 
 type SampleExemption int
 
@@ -252,8 +265,8 @@ func (o RaceOutcome) sampleExemption(a AttemptOutcome) SampleExemption {
 		return ExemptPoCSuppressed
 	case a.emptyStream() && !o.Succeeded:
 		return ExemptEmptyStreamNoWinner
-	// The race cancels its own losers, and Verdict already refuses to move a window for that. A sample
-	// would say the host was unresponsive when it was told to stop.
+	// The race cancels its own losers; the sample and verdict ladders deliberately disagree here. See
+	// gateway-speculative-race.md, "The exemption ladder".
 	case a.Terminal == TerminalClientCancelled:
 		return ExemptClientCancelled
 	}
@@ -287,8 +300,8 @@ func (o RaceOutcome) Verdict(a AttemptOutcome) (limits.Verdict, bool) {
 	return a.Terminal.verdict()
 }
 
-// DeniesCrowning reports that a host produced nothing while claiming to serve, and so may keep
-// receiving attempts but must not be crowned until it produces content again.
+// DeniesCrowning reports that a host produced nothing while claiming to serve. See
+// gateway-speculative-race.md, "Crown denial".
 func (o RaceOutcome) DeniesCrowning(a AttemptOutcome) bool {
 	if a.PhaseTransitionAborted || o.PoCBypassActive {
 		return false
@@ -299,7 +312,7 @@ func (o RaceOutcome) DeniesCrowning(a AttemptOutcome) bool {
 func (o RaceOutcome) Labels(a AttemptOutcome) AttemptLabels {
 	role := a.Role
 	if role == "" {
-		role = "primary"
+		role = RolePrimary
 	}
 	served := (a.Terminal == TerminalWon || a.Terminal == TerminalLost) && o.responsive(a)
 	labels := AttemptLabels{
@@ -317,18 +330,6 @@ func (o RaceOutcome) Labels(a AttemptOutcome) AttemptLabels {
 	return labels
 }
 
-// Label values the engine emits. metrics reads these rather than restating them, so a rename here
-// cannot silently empty a dashboard panel.
-const (
-	AttemptOutcomeSuccess = "success"
-	AttemptOutcomeFailed  = "failed"
-
-	VisibilityWinner            = "user_visible_winner"
-	VisibilityNoWinner          = "no_winner"
-	VisibilitySuppressedLoser   = "suppressed_loser"
-	VisibilityFailedNotFinished = "failed_not_finished"
-)
-
 func (o RaceOutcome) visibility(a AttemptOutcome, served bool) string {
 	switch {
 	case served && o.WinnerNonce != 0 && a.Nonce == o.WinnerNonce:
@@ -343,7 +344,7 @@ func (o RaceOutcome) visibility(a AttemptOutcome, served bool) string {
 
 func (o RaceOutcome) failureReason(a AttemptOutcome) string {
 	if a.PhaseTransitionAborted {
-		return "phase_transition_aborted"
+		return timeoutReasonPhaseAborted
 	}
 	if reason := a.Terminal.reason(); reason != "" {
 		return reason

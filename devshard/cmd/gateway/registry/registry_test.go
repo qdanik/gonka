@@ -351,8 +351,8 @@ func TestCandidatesAreOrderedByEscrowID(t *testing.T) {
 	}
 }
 
-// A nonce committed against an escrow that rotated out between the pick and the dispatch is stranded:
-// nobody settles it. The routable lookup is therefore resolved per race and must report the escrow is gone.
+// An escrow can be retired between the moment Candidates named it and the moment anything asks for it,
+// so the routable lookup must report it gone rather than hand back a session nothing will settle.
 func TestRetiredEscrowVanishesBetweenCandidatesAndTheRoutableLookup(t *testing.T) {
 	t.Parallel()
 	session := newFakeSession("hostA")

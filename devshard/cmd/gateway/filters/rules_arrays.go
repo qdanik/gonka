@@ -8,6 +8,9 @@ import (
 	"devshard"
 )
 
+// streamOptionsWhitelist is the only stream_options sub-field forwarded upstream.
+var streamOptionsWhitelist = map[string]struct{}{"include_usage": {}}
+
 // validListLength rejects ctx.Param when it holds an array longer than maxEntries, or (if
 // maxEntryLen > 0) a string element longer than maxEntryLen; non-array values pass through.
 func validListLength(maxEntries, maxEntryLen int) RuleFunc {
@@ -88,10 +91,9 @@ func dropBlankStringListElements() RuleFunc {
 	}
 }
 
-// requireTokenIDKeys rejects ctx.Param's lexicographically first key that is not a
-// non-negative 32-bit integer. A key vLLM cannot read as a token id trips a device-side
-// assert that poisons the CUDA context, so the host then fails every later request too,
-// not just this one (vLLM #16529).
+// requireTokenIDKeys rejects ctx.Param's lexicographically first key that is not a non-negative
+// 32-bit integer (vLLM #16529). See gateway-request-filtering.md, "Bounds that exist because a
+// host dies without them".
 func requireTokenIDKeys() RuleFunc {
 	return func(ctx RuleContext) error {
 		object, ok := ctx.Document.Object(ctx.Param)
@@ -172,9 +174,6 @@ func validMetadata(maxKeys, maxKeyLen, maxValueLen int) RuleFunc {
 		return nil
 	}
 }
-
-// streamOptionsWhitelist is the only stream_options sub-field forwarded upstream.
-var streamOptionsWhitelist = map[string]struct{}{"include_usage": {}}
 
 // validStreamOptions strips ctx.Param entirely unless stream is exactly true, then keeps
 // only whitelisted sub-fields, dropping the field when nothing survives.
