@@ -802,3 +802,45 @@ func TestValidChatTemplateKwargsRejects(t *testing.T) {
 		})
 	}
 }
+
+// An auxiliary field is what a client sends alongside its one constraint, and the known-field set is
+// the only thing keeping it from being rejected as an unknown sub-field. Drop a name from that list
+// and every request carrying it starts failing, with nothing else in the package noticing.
+func TestStructuredOutputsAcceptsEveryAuxiliaryFieldBesideAConstraint(t *testing.T) {
+	// Each field needs a value of its own type, so the table is written out rather than derived. The
+	// coverage check below is what keeps it honest when the list grows.
+	valueByField := map[string]string{
+		"whitespace_pattern":            `" "`,
+		"disable_any_whitespace":        `true`,
+		"disable_additional_properties": `true`,
+	}
+	for _, field := range structuredOutputsAuxiliaryFields {
+		if _, covered := valueByField[field]; !covered {
+			t.Fatalf("auxiliary field %q has no value in this test, so nothing checks that it is accepted", field)
+		}
+	}
+
+	rule := validStructuredOutputs(testStructuredOutputsBounds())
+	for _, field := range structuredOutputsAuxiliaryFields {
+		t.Run(field, func(t *testing.T) {
+			body := `{"structured_outputs":{"regex":"a+","` + field + `":` + valueByField[field] + `}}`
+			document := parseTestDocument(t, body)
+
+			if err := runRule(t, document, "structured_outputs", rule); err != nil {
+				t.Fatalf("validStructuredOutputs(%s) = %v, want the auxiliary field accepted", body, err)
+			}
+		})
+	}
+}
+
+func TestStructuredOutputsRejectsAFieldThatIsNeitherConstraintNorAuxiliary(t *testing.T) {
+	rule := validStructuredOutputs(testStructuredOutputsBounds())
+	document := parseTestDocument(t, `{"structured_outputs":{"regex":"a+","invented":true}}`)
+
+	err := runRule(t, document, "structured_outputs", rule)
+
+	want := `structured_outputs: invalid wrapper shape: unknown sub-field "invented"`
+	if err == nil || err.Error() != want {
+		t.Fatalf("validStructuredOutputs() = %v, want %q", err, want)
+	}
+}

@@ -246,6 +246,9 @@ func (l *GatewayLimiter) ReleaseForModel(model string, inputTokens int64) {
 	l.promoteLocked()
 }
 
+// releaseLocked leaves an idle counter in place. Deleting it cost an allocation on the next acquire for
+// the same model, and a model that goes quiet now reads zero in the snapshot instead of disappearing,
+// which a reader cannot tell apart from the gateway being gone. The map is bounded by routable models.
 func (l *GatewayLimiter) releaseLocked(model string, inputTokens int64) {
 	counter, ok := l.models[model]
 	if !ok {
@@ -253,9 +256,6 @@ func (l *GatewayLimiter) releaseLocked(model string, inputTokens int64) {
 	}
 	counter.inFlight = max(counter.inFlight-1, 0)
 	counter.inputTokens = max(counter.inputTokens-inputTokens, 0)
-	if counter.inFlight == 0 && counter.inputTokens == 0 {
-		delete(l.models, model)
-	}
 	l.total.inFlight = max(l.total.inFlight-1, 0)
 	l.total.inputTokens = max(l.total.inputTokens-inputTokens, 0)
 }
