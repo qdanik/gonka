@@ -44,6 +44,10 @@ type EscrowSession interface {
 // ServingSessions opens a chain-backed session with host clients (user.NewHTTPSession) — the only kind
 // that can dispatch. ReadOnlySessions rehydrates from local storage alone (user.NewLocalSession): no
 // chain, no host clients, so it can build a settlement but can neither serve nor finalize.
+//
+// An escrow with no record must fail with an error wrapping escrow.ErrUnknownEscrow. Callers tell that
+// apart from a load failure to answer 404 rather than 502, and a factory that returns its own error for
+// a missing escrow turns "no such escrow" into "the gateway is broken".
 type SessionFactory func(ctx context.Context, escrowID string) (EscrowSession, error)
 
 type sessionHandle struct {

@@ -44,6 +44,23 @@ func (r *Registry) BuildSettlement(ctx context.Context, escrowID string) (chain.
 	return input, errors.Join(buildErr, session.Close())
 }
 
+// Inspect resolves a session for reading alone. A live or draining escrow answers from its own session;
+// one already retired is rehydrated from local storage, which is exactly when an operator asks these
+// questions. The returned release closes a rehydrated session and does nothing for a resident one.
+func (r *Registry) Inspect(ctx context.Context, escrowID string) (EscrowSession, func(), error) {
+	if session, held := r.SettlementSession(escrowID); held {
+		return session, func() {}, nil
+	}
+	if r.readOnlySessions == nil {
+		return nil, nil, fmt.Errorf("escrow %s: no read-only session factory", escrowID)
+	}
+	session, err := r.readOnlySessions(ctx, escrowID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("inspecting escrow %s: %w", escrowID, err)
+	}
+	return session, func() { _ = session.Close() }, nil
+}
+
 func finalize(ctx context.Context, session EscrowSession) error {
 	if session.Phase() == types.PhaseSettlement {
 		return nil

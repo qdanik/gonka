@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -15,6 +16,7 @@ import (
 	"devshard/cmd/gateway/chain"
 	"devshard/cmd/gateway/config"
 	"devshard/cmd/gateway/engine"
+	"devshard/cmd/gateway/escrow"
 	"devshard/cmd/gateway/limits"
 	"devshard/cmd/gateway/registry"
 	"devshard/cmd/gateway/scheduler"
@@ -54,6 +56,16 @@ func (f *fakeRegistry) RoutableSession(escrowID string) (registry.EscrowSession,
 
 func (f *fakeRegistry) SettlementSession(escrowID string) (registry.EscrowSession, bool) {
 	return f.RoutableSession(escrowID)
+}
+
+// Inspect mirrors the production contract: a resident escrow answers, an absent one reports the
+// sentinel so the boundary can answer 404 rather than 502. This fake holds no storage to rehydrate.
+func (f *fakeRegistry) Inspect(_ context.Context, escrowID string) (registry.EscrowSession, func(), error) {
+	session, held := f.SettlementSession(escrowID)
+	if !held {
+		return nil, nil, fmt.Errorf("escrow %s: %w", escrowID, escrow.ErrUnknownEscrow)
+	}
+	return session, func() {}, nil
 }
 
 func (f *fakeRegistry) IsBusy(escrowID string) bool { return f.busy[escrowID] }

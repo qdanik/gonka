@@ -11,6 +11,7 @@ import (
 	"devshard/cmd/gateway/chain"
 	"devshard/cmd/gateway/config"
 	"devshard/cmd/gateway/store"
+	"devshard/logging"
 )
 
 // commitmentIndexLagMargin is how long a landed tx may stay unqueryable past the chain's
@@ -72,6 +73,7 @@ func (m *Manager) createEscrow(ctx context.Context, model ModelConfig, role stri
 	if err != nil {
 		return chain.CreateEscrowResult{}, fmt.Errorf("creating escrow for %s/%s: %w", model.ModelID, role, err)
 	}
+	logging.Info("escrow created", "escrow", result.EscrowID, "model", model.ModelID, "role", role, "epoch", epoch, "tx", result.TxHash)
 	return result, m.persistEscrow(ctx, strconv.FormatUint(result.EscrowID, 10), c)
 }
 
