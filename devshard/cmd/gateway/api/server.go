@@ -215,8 +215,9 @@ func New(deps Deps) (*Server, error) {
 // Handler is the process handler: one mux, no wrapper above it.
 func (s *Server) Handler() http.Handler { return s.handler }
 
-// HTTPServer builds the listener's server. WriteTimeout is deliberately left unset — it is an
-// absolute deadline on the whole response and would cut every SSE stream at it.
+// HTTPServer builds the listener's server. Neither ReadTimeout nor WriteTimeout is set: both are
+// absolute deadlines over an exchange that outlives the request, and either would cut an SSE stream
+// mid-answer. Reading the body carries its own deadline, armed and cleared per request in readBody.
 func (s *Server) HTTPServer(address string) *http.Server {
 	return &http.Server{
 		Addr:              address,
@@ -234,3 +235,6 @@ func randomRequestID() string {
 	}
 	return hex.EncodeToString(raw)
 }
+
+// CaptureStats reports the request-capture sink's own account of itself, for the metrics collector.
+func (s *Server) CaptureStats() (written, refused, held int64) { return s.capture.stats() }

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -177,6 +178,27 @@ func TestAFailedRaceIsNotCached(t *testing.T) {
 	}
 }
 
+// A stream commits 200 on its first byte, so a race that fails afterwards is recorded as a success
+// carrying an SSE error event. Replaying it would freeze one transient host failure for the whole TTL.
+func TestAStreamThatFailsAfterItStartedIsNotCached(t *testing.T) {
+	live := newHarness(t)
+	live.inference.reply = ""
+	live.inference.chunks = []string{"data: {\"choices\":[{\"delta\":{\"content\":\"one\"}}]}\n\n"}
+	live.inference.err = engine.ErrAllAttemptsFailed
+	live.inference.outcome = engine.RaceOutcome{EscrowID: "7"}
+
+	first := newChunkRecorder()
+	live.requestInto(t, first, http.MethodPost, "/v1/chat/completions", streamChatBody, callerHeaders("caller-a"))
+	live.requestInto(t, newChunkRecorder(), http.MethodPost, "/v1/chat/completions", streamChatBody, callerHeaders("caller-a"))
+
+	if first.status != http.StatusOK {
+		t.Fatalf("a started stream must keep its status: got %d, want 200", first.status)
+	}
+	if got := live.inference.runs.Load(); got != 2 {
+		t.Fatalf("races: got %d, want 2 (a failed stream must not be replayed)", got)
+	}
+}
+
 func TestZeroMaxBytesDisablesTheCache(t *testing.T) {
 	live := newHarness(t, func(next *config.Config) { next.Cache.ChatCacheMaxBytes = 0 })
 
@@ -268,5 +290,43 @@ func TestCachedReplayAndLiveStreamAgreeOnHeaders(t *testing.T) {
 				t.Fatalf("live headers %v != replayed headers %v", live.Header(), replay.Header())
 			}
 		})
+	}
+}
+
+// The recorder holds one buffer per request in flight for the request's whole life, and put would
+// reject anything larger than the cache itself. Recording past that point costs memory for nothing,
+// and at full concurrency it is the difference between bounded and not.
+func TestCacheRecorderStopsBufferingPastWhatTheCacheCouldStore(t *testing.T) {
+	const limit = 4096
+	recorder := &cacheRecorder{ResponseWriter: httptest.NewRecorder(), limit: limit}
+	chunk := bytes.Repeat([]byte("x"), 1024)
+
+	for range 12 {
+		if _, err := recorder.Write(chunk); err != nil {
+			t.Fatalf("Write(): %v", err)
+		}
+	}
+
+	if !recorder.overflowed {
+		t.Fatal("recorder kept buffering past the cache's own limit")
+	}
+	if buffered := recorder.body.Len(); buffered != 0 {
+		t.Fatalf("buffered %d bytes after overflow, want the buffer released", buffered)
+	}
+	if _, storable := recorder.entry("escrow-1", true, nil); storable {
+		t.Fatal("an overflowed recording was offered to the cache")
+	}
+}
+
+func TestCacheRecorderKeepsARecordingInsideTheLimit(t *testing.T) {
+	recorder := &cacheRecorder{ResponseWriter: httptest.NewRecorder(), limit: 1 << 20}
+	recorder.WriteHeader(http.StatusOK)
+
+	if _, err := recorder.Write([]byte(`data: {"choices":[]}` + "\n\n")); err != nil {
+		t.Fatalf("Write(): %v", err)
+	}
+
+	if _, storable := recorder.entry("escrow-1", true, nil); !storable {
+		t.Fatal("a recording inside the limit was refused")
 	}
 }

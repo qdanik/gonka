@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"devshard/cmd/gateway/filters"
 )
@@ -136,12 +137,23 @@ func (s *Server) disabled(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
+// bodyReadTimeout bounds how long a caller may take to deliver a body it has already announced. It is
+// armed per request rather than as http.Server.ReadTimeout, which stays armed for the whole exchange:
+// there it would expire mid-response and cancel the request a long stream is still writing for.
+const bodyReadTimeout = 30 * time.Second
+
 // readBody bounds ingest with MaxBytesReader rather than LimitReader: it returns a typed error the
 // status mapper recognises, and it marks the connection so the server stops reading a hostile body
-// instead of draining it.
+// instead of draining it. The deadline is cleared again before the response begins, so only the read
+// is bounded. A writer with no deadline of its own -- a recorder, a wrapper -- reports ErrNotSupported
+// and keeps the size bound alone.
 func readBody(w http.ResponseWriter, r *http.Request, limit int64) ([]byte, error) {
+	deadlines := http.NewResponseController(w)
+	_ = deadlines.SetReadDeadline(time.Now().Add(bodyReadTimeout))
 	r.Body = http.MaxBytesReader(w, r.Body, limit)
-	return io.ReadAll(r.Body)
+	body, err := io.ReadAll(r.Body)
+	_ = deadlines.SetReadDeadline(time.Time{})
+	return body, err
 }
 
 func decodeAdminBody(w http.ResponseWriter, r *http.Request, target any) error {

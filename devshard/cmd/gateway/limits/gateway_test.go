@@ -301,7 +301,7 @@ func TestAcquireForModel_PerModelOverride(t *testing.T) {
 
 	for i := 0; i < 5; i++ {
 		if err := limiter.AcquireForModel(context.Background(), "other-model", 1, fullScale()); err != nil {
-			t.Fatalf("AcquireForModel(other-model) %d = %v, want nil (uses the global cap of 10, not the override)", i, err)
+			t.Fatalf("AcquireForModel(other-model) %d = %v, want nil (its own budget of 10, not the override)", i, err)
 		}
 	}
 }
@@ -353,29 +353,57 @@ func TestGatewayLimiter_ConcurrencyRace(t *testing.T) {
 	}
 }
 
-// The configured maximum is process-wide. Without this, every distinct model string minted a fresh
-// full quota, so a client cycling model names bypassed the limiter entirely.
-func TestAcquireForModelSharesOneGlobalCapAcrossDistinctModels(t *testing.T) {
-	limiter := NewGatewayLimiter(GatewayConfig{MaxConcurrent: 2})
+// The configured maximum is each model's own budget, as it was before the rewrite: an operator running
+// two models configured headroom for each, not one budget they contend over.
+func TestAcquireForModelGivesEachModelItsOwnBudget(t *testing.T) {
+	limiter := NewGatewayLimiter(GatewayConfig{MaxConcurrent: 1})
 	capacity := ModelCapacity{ScaleFactor: 1}
 	ctx := context.Background()
 
 	if err := limiter.AcquireForModel(ctx, "model-a", 1, capacity); err != nil {
-		t.Fatalf("first acquire: %v", err)
+		t.Fatalf("acquire on model-a: %v", err)
 	}
 	if err := limiter.AcquireForModel(ctx, "model-b", 1, capacity); err != nil {
-		t.Fatalf("second acquire on another model: %v", err)
+		t.Fatalf("acquire on model-b = %v, want nil: model-a's traffic must not spend model-b's budget", err)
 	}
 
-	err := limiter.AcquireForModel(ctx, "model-c", 1, capacity)
 	var rateLimit *RateLimitError
-	if !errors.As(err, &rateLimit) {
-		t.Fatalf("third acquire = %v, want a rate-limit error: a new model string must not mint a fresh quota", err)
+	if err := limiter.AcquireForModel(ctx, "model-a", 1, capacity); !errors.As(err, &rateLimit) {
+		t.Fatalf("second acquire on model-a = %v, want a rate-limit error: its own budget of 1 is spent", err)
+	}
+}
+
+// A weight-derived cap is computed from one model's chain weight, so charging it against another
+// model's traffic makes the enforced cap depend on which model's request happens to arrive first.
+func TestAcquireForModelWeightDerivedCapIsNotSpentByAnotherModel(t *testing.T) {
+	limiter := NewGatewayLimiter(GatewayConfig{MaxConcurrent: 1000})
+	ctx := context.Background()
+	perModelCapacity := ModelCapacity{CurrentWeight: 4000, BaselineWeight: 4000, MaxConcurrentPer10000Weight: 5} // floor(4000*5/10000) = 2
+
+	for i := 0; i < 2; i++ {
+		if err := limiter.AcquireForModel(ctx, "model-a", 1, perModelCapacity); err != nil {
+			t.Fatalf("acquire %d on model-a = %v, want nil under its weight-derived cap of 2", i, err)
+		}
 	}
 
-	limiter.ReleaseForModel("model-a", 1)
-	if err := limiter.AcquireForModel(ctx, "model-c", 1, capacity); err != nil {
-		t.Fatalf("acquire after release: %v, want the freed global slot to be reusable by any model", err)
+	for i := 0; i < 2; i++ {
+		if err := limiter.AcquireForModel(ctx, "model-b", 1, perModelCapacity); err != nil {
+			t.Fatalf("acquire %d on model-b = %v, want nil: model-b's weight buys model-b two slots of its own", i, err)
+		}
+	}
+	var rateLimit *RateLimitError
+	if err := limiter.AcquireForModel(ctx, "model-b", 1, perModelCapacity); !errors.As(err, &rateLimit) {
+		t.Fatalf("third acquire on model-b = %v, want a rate-limit error at its weight-derived cap of 2", err)
+	}
+}
+
+// Flooring a cap of 1 at anything below full capacity yields 0, which refuses every request for the
+// model rather than degrading it. The original rounded to nearest for exactly that reason.
+func TestAcquireForModelSmallCapSurvivesPartialCapacity(t *testing.T) {
+	limiter := NewGatewayLimiter(GatewayConfig{MaxConcurrent: 1})
+
+	if err := limiter.AcquireForModel(context.Background(), "model-a", 1, ModelCapacity{ScaleFactor: 0.5}); err != nil {
+		t.Fatalf("acquire at half capacity under a cap of 1 = %v, want nil (rounded to 1, not floored to 0)", err)
 	}
 }
 

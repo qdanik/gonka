@@ -13,10 +13,13 @@ import (
 
 const defaultSubmitBuffer = 64
 
+// EscrowRetired lets an observer forget an escrow: ids are monotonic chain identifiers and are never
+// reused, so a per-escrow metric series that outlives its escrow grows with uptime and nothing else.
 type dispatchObserver interface {
 	GhostBurned(escrowID, reason string)
 	NonceHeld(escrowID string)
 	BurnBudgetExhausted(escrowID string)
+	EscrowRetired(escrowID string)
 }
 
 // dispatcherDeps wires one escrow's actor. acquireSlot and holdEscrow run inside the same Advance that

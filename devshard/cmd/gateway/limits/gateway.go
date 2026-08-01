@@ -138,15 +138,15 @@ func (l *GatewayLimiter) AcquireForModel(ctx context.Context, model string, inpu
 
 	l.mu.Lock()
 	acquireWait := l.cfg.AcquireWait
-	global, perModel := l.admissionsFor(model, inputTokens, capacity)
-	l.enforced = global
-	if reason := impossibleReason(global, perModel); reason != "" {
+	admitted := l.admissionFor(model, inputTokens, capacity)
+	l.enforced = admitted
+	if reason := admitted.impossible(); reason != "" {
 		l.mu.Unlock()
 		return &RateLimitError{Reason: reason, RetryAfter: acquireWait}
 	}
 	// A queued waiter is one that capacity currently cannot serve, so admitting a request that fits
 	// does not overtake it: a freed slot is handed to the queue directly, under this same lock.
-	reason := l.blockedReasonLocked(model, global, perModel)
+	reason := l.blockedReasonLocked(model, admitted)
 	if reason == "" {
 		l.takeLocked(model, inputTokens)
 		l.mu.Unlock()
@@ -193,27 +193,19 @@ func (l *GatewayLimiter) dequeue(w *waiter) bool {
 	return false
 }
 
-// promoteLocked hands freed capacity to queued waiters in arrival order. A waiter blocked only by
-// its own model's limit is skipped so it cannot stall unrelated models, but an exhausted global
-// budget stops the sweep: that capacity is shared, so queueing for it stays first-come-first-served.
+// promoteLocked hands freed capacity to queued waiters in arrival order, which is first-come-first-served
+// within a model. A waiter its own model still cannot serve is skipped rather than ending the sweep,
+// because budgets are per model and a saturated one must not stall the others.
 func (l *GatewayLimiter) promoteLocked() {
 	for i := 0; i < len(l.queue); {
-		w := l.queue[i]
-		global, perModel := l.admissionsFor(w.model, w.tokens, w.capacity)
-		if global.blockedReason(l.total.inFlight, l.total.inputTokens) != "" {
-			return
-		}
-		var inFlight, inputTokens int64
-		if counter, ok := l.models[w.model]; ok {
-			inFlight, inputTokens = counter.inFlight, counter.inputTokens
-		}
-		if perModel.blockedReason(inFlight, inputTokens) != "" {
+		waiting := l.queue[i]
+		if l.blockedReasonLocked(waiting.model, l.admissionFor(waiting.model, waiting.tokens, waiting.capacity)) != "" {
 			i++
 			continue
 		}
 		l.queue = append(l.queue[:i], l.queue[i+1:]...)
-		l.takeLocked(w.model, w.tokens)
-		close(w.ready)
+		l.takeLocked(waiting.model, waiting.tokens)
+		close(waiting.ready)
 	}
 }
 
@@ -225,25 +217,23 @@ func (l *GatewayLimiter) takeLocked(model string, inputTokens int64) {
 	l.total.inputTokens += inputTokens
 }
 
-// The configured maxima are process-wide: an unrecognized model shares them rather than receiving a
-// fresh quota, and a per-model override only narrows one model further.
-func (l *GatewayLimiter) admissionsFor(model string, inputTokens int64, capacity ModelCapacity) (global, perModel admission) {
-	global = admission{requestedTokens: inputTokens}
-	global.concurrencyLimit, global.concurrencyLimited = effectiveConcurrencyLimit(l.cfg.MaxConcurrent, capacity)
-	global.inputTokenLimit, global.inputTokenLimited = effectiveInputTokenLimit(l.cfg.MaxInputTokens, capacity)
-
-	perModel = admission{requestedTokens: inputTokens}
-	override, ok := l.cfg.ModelLimits[model]
-	if !ok {
-		return global, perModel
+// The configured maxima are each model's own budget: capacity is measured per model, so a cap derived
+// from one model's weight cannot be charged against another model's traffic. An override replaces the
+// configured maximum for its model; the model set is the escrow registry's, not the client's.
+func (l *GatewayLimiter) admissionFor(model string, inputTokens int64, capacity ModelCapacity) admission {
+	maxConcurrent, maxInputTokens := l.cfg.MaxConcurrent, l.cfg.MaxInputTokens
+	if override, ok := l.cfg.ModelLimits[model]; ok {
+		if override.MaxConcurrent != nil {
+			maxConcurrent = *override.MaxConcurrent
+		}
+		if override.MaxInputTokens != nil {
+			maxInputTokens = *override.MaxInputTokens
+		}
 	}
-	if override.MaxConcurrent != nil {
-		perModel.concurrencyLimit, perModel.concurrencyLimited = scaleClamp(*override.MaxConcurrent, capacity.ScaleFactor), true
-	}
-	if override.MaxInputTokens != nil {
-		perModel.inputTokenLimit, perModel.inputTokenLimited = scaleClamp(*override.MaxInputTokens, capacity.ScaleFactor), true
-	}
-	return global, perModel
+	admitted := admission{requestedTokens: inputTokens}
+	admitted.concurrencyLimit, admitted.concurrencyLimited = effectiveConcurrencyLimit(maxConcurrent, capacity)
+	admitted.inputTokenLimit, admitted.inputTokenLimited = effectiveInputTokenLimit(maxInputTokens, capacity)
+	return admitted
 }
 
 func (l *GatewayLimiter) ReleaseForModel(model string, inputTokens int64) {
@@ -272,22 +262,12 @@ func (l *GatewayLimiter) releaseLocked(model string, inputTokens int64) {
 	l.total.inputTokens = max(l.total.inputTokens-inputTokens, 0)
 }
 
-func (l *GatewayLimiter) blockedReasonLocked(model string, global, perModel admission) string {
-	if reason := global.blockedReason(l.total.inFlight, l.total.inputTokens); reason != "" {
-		return reason
-	}
+func (l *GatewayLimiter) blockedReasonLocked(model string, admitted admission) string {
 	var inFlight, inputTokens int64
 	if counter, ok := l.models[model]; ok {
 		inFlight, inputTokens = counter.inFlight, counter.inputTokens
 	}
-	return perModel.blockedReason(inFlight, inputTokens)
-}
-
-func impossibleReason(global, perModel admission) string {
-	if reason := global.impossible(); reason != "" {
-		return reason
-	}
-	return perModel.impossible()
+	return admitted.blockedReason(inFlight, inputTokens)
 }
 
 func (l *GatewayLimiter) counterLocked(model string) *modelCounter {
@@ -340,11 +320,13 @@ func effectiveInputTokenLimit(baseMaxInputTokens int64, capacity ModelCapacity) 
 	return scaleClamp(baseMaxInputTokens, capacity.ScaleFactor), true
 }
 
+// scaleClamp rounds to nearest rather than flooring: at a small configured maximum, flooring turns a
+// partially available network into a total outage, taking a cap of 1 at half capacity down to 0.
 func scaleClamp(base int64, scale float64) int64 {
 	if base <= 0 {
 		return 0
 	}
-	return int64(math.Floor(float64(base) * clampUnit(scale)))
+	return min(int64(math.Round(float64(base)*clampUnit(scale))), base)
 }
 
 func clampUnit(scale float64) float64 {

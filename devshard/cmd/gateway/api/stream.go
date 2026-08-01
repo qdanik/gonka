@@ -3,6 +3,7 @@ package api
 import (
 	"cmp"
 	"encoding/json"
+	"fmt"
 	"net/http"
 
 	"devshard/cmd/gateway/filters"
@@ -40,8 +41,17 @@ func (c *clientStream) Header() http.Header { return c.writer.Header() }
 // Started reports whether the client has already seen a status, after which no error can replace it.
 func (c *clientStream) Started() bool { return c.started }
 
+// maxBufferedResponseBytes bounds what a non-streaming reply accumulates in memory. The streaming path
+// forwards bytes as they arrive and only bounds an unterminated tail; a buffered reply holds the whole
+// response until Close, so without this a host that wins the race by producing one token first can then
+// send unlimited valid SSE and take the process out.
+const maxBufferedResponseBytes = filters.MaxStreamCarryBytes
+
 func (c *clientStream) Write(chunk []byte) (int, error) {
 	if !c.streaming {
+		if len(c.buffered)+len(chunk) > maxBufferedResponseBytes {
+			return 0, fmt.Errorf("buffered response exceeds %d bytes", maxBufferedResponseBytes)
+		}
 		c.buffered = append(c.buffered, chunk...)
 		return len(chunk), nil
 	}

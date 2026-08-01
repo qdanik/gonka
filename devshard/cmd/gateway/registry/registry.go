@@ -44,6 +44,8 @@ type Registry struct {
 
 	live atomic.Pointer[liveSet]
 
+	drainCloseFailures atomic.Int64
+
 	mu       sync.Mutex
 	draining map[*escrowEntry]struct{}
 	closed   bool
@@ -274,8 +276,15 @@ func (r *Registry) release(entry *escrowEntry) {
 		return
 	}
 	delete(r.draining, entry)
-	_ = entry.close()
+	if err := entry.close(); err != nil {
+		r.drainCloseFailures.Add(1)
+	}
 }
+
+// DrainCloseFailures counts the drained escrows whose flush or close failed. Retire and Close hand
+// that error to their caller; here the request that kept the escrow open has already been answered
+// and there is nobody left to return it to, so it is counted instead of lost.
+func (r *Registry) DrainCloseFailures() int64 { return r.drainCloseFailures.Load() }
 
 // IsBusy satisfies escrow.SettlementSource: a settlement must not claim funds while a request is
 // still spending nonces on the escrow, including one still draining from an earlier session of it.

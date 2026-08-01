@@ -50,6 +50,7 @@ type requestCapture struct {
 	seen       atomic.Int64
 	written    atomic.Int64
 	held       atomic.Int64
+	refused    atomic.Int64
 }
 
 func newRequestCapture(settings config.Capture, storageDir string, now func() time.Time) (*requestCapture, error) {
@@ -151,6 +152,7 @@ func (c *requestCapture) write(record capturedRequest) error {
 	size := int64(len(payload))
 	if c.held.Add(size) > c.maxBytes {
 		c.held.Add(-size)
+		c.refused.Add(1)
 		return nil
 	}
 
@@ -201,4 +203,14 @@ func chatRequestHints(body []byte) (model string, stream bool) {
 		return "", false
 	}
 	return request.Model, request.Stream
+}
+
+// stats is what the sink can say about itself. refused only ever grows: nothing deletes capture files,
+// so once the directory reaches its cap the sink is off until an operator empties it, and this count is
+// the only signal that has happened.
+func (c *requestCapture) stats() (written, refused, held int64) {
+	if c == nil {
+		return 0, 0, 0
+	}
+	return c.written.Load(), c.refused.Load(), c.held.Load()
 }

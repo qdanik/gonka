@@ -52,9 +52,9 @@ That fallback serves requests correctly and silently, which is its own hazard �
 
 Two dimensions — in-flight requests and in-flight input tokens — at two scopes.
 
-**The configured maxima are process-wide.** A model without an override *shares* them rather than receiving a fresh quota; a per-model override can only narrow (`limits/gateway.go:227-228`). This was a real hole: without a global counter, N distinct model strings meant N × the per-model cap in flight, and the limiter was bypassable by cycling model names.
+**The configured maxima are each model's own budget.** Two models under `max_concurrent_requests: 512` get 512 each, not 512 between them, and a per-model override replaces the configured maximum for its model rather than narrowing it further (`limits/gateway.go:227-229`). This is forced by the dimension the cap is derived from: the effective limit below comes from *one model's* chain weight, so charging it against another model's in-flight count would make the enforced cap depend on which model's request happened to arrive first. Nothing here bounds the process across models — the escrow registry does, by rejecting an unserved model before it can reach the limiter (`api/routes.go:396`, `routableModel`), so the model set is the operator's and not the client's, and cycling model strings mints nothing.
 
-**Effective limits come from weight when weight is known** (`limits/gateway.go:323-341`). With a per-10 000-weight rate configured and a baseline weight observed, the configured absolute maximum is ignored and the limit becomes the minimum of the current-weight-derived and baseline-derived caps — current weight can lower the cap, never lift it above the baseline. Otherwise the configured maximum is scaled by the scale factor. A NaN or out-of-range scale clamps to **zero**, never to one: a corrupted scale must not grant unlimited capacity.
+**Effective limits come from weight when weight is known** (`limits/gateway.go:323-341`). With a per-10 000-weight rate configured and a baseline weight observed, the configured absolute maximum is ignored and the limit becomes the minimum of the current-weight-derived and baseline-derived caps — current weight can lower the cap, never lift it above the baseline. Otherwise the configured maximum is scaled by the scale factor, **rounded to nearest**: flooring would take a configured cap of 1 to 0 at any partial capacity, refusing every request for that model instead of degrading it. A NaN or out-of-range scale clamps to **zero**, never to one: a corrupted scale must not grant unlimited capacity.
 
 A scale factor of zero therefore means an immediate 429 rather than a queue — which is what happens while the chain is blocking requests, if a request somehow reaches the limiter at all.
 
@@ -66,10 +66,7 @@ If the request does not fit, it joins a FIFO queue and its own goroutine parks i
 
 The earlier design used a condition variable and woke every waiter on each release; measured, a single waiter was overtaken 1.67 million times in 1.2 seconds and timed out into a 429 while newer arrivals sailed past.
 
-Two rules govern the promotion sweep (`limits/gateway.go:195-217`):
-
-- A waiter blocked only by *its own model's* override is skipped, so one model cannot stall unrelated models.
-- A waiter blocked by the *global* budget stops the sweep entirely, so shared capacity stays strictly first-come-first-served.
+The promotion sweep walks the queue in arrival order and skips — rather than stops at — a waiter its own model still cannot serve (`limits/gateway.go:195-210`). Admission is therefore first-come-first-served within a model, and a saturated model cannot stall the others, which is the whole point of the budgets being per model.
 
 A new arrival that fits may pass a queued waiter without unfairness, because a queued waiter is by definition one that current capacity cannot serve.
 
@@ -132,8 +129,8 @@ Two asymmetries worth knowing, neither of which is stated in the code:
 
 | Knob | Default | Effect |
 |---|---|---|
-| `max_concurrent_requests` | 512 | Process-wide in-flight request cap, scaled by capacity. |
-| `max_input_tokens_in_flight` | 0 (unlimited) | Process-wide input-token budget, scaled by capacity. |
+| `max_concurrent_requests` | 512 | Per-model in-flight request cap, scaled by capacity. |
+| `max_input_tokens_in_flight` | 0 (unlimited) | Per-model input-token budget, scaled by capacity. |
 | `max_concurrent_requests_per_10000_weight` | 5.0 | Weight-derived cap; when set with an observed baseline it replaces the absolute cap. |
 | `poc_max_concurrent_requests_per_10000_weight` | 10.0 | The same, used while the chain reports requests blocked. |
 | `acquire_wait_ms` | 500 | Bounded queue wait before a 429. |

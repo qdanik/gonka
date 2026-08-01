@@ -146,7 +146,7 @@ func TestEnsureToTargetSkipsWhenModelNotServedByNetwork(t *testing.T) {
 	}
 }
 
-func TestEnsureToTargetSkipsWhenBreakerGated(t *testing.T) {
+func TestEnsureToTargetReportsSuppressionWhenBreakerGated(t *testing.T) {
 	testStore := newFakeStore()
 	m := newRotationManager(t, testStore, &fakeTxClient{createEscrowFn: failOnCreate(t)}, false)
 	m.breaker.recordFailure("model-a", roleTemp)
@@ -154,8 +154,8 @@ func TestEnsureToTargetSkipsWhenBreakerGated(t *testing.T) {
 	snapshot := servedSnapshot(5, 100, "model-a")
 
 	created, err := m.ensureToTarget(context.Background(), roleTemp, 3, model, snapshot, nil)
-	if err != nil {
-		t.Fatalf("ensureToTarget(): %v", err)
+	if !errors.Is(err, errCreateSuppressed) {
+		t.Fatalf("ensureToTarget() = %v, want errCreateSuppressed: a gated create is not a success the bridge may retire against", err)
 	}
 	if created != 0 {
 		t.Fatalf("created = %d, want 0", created)
@@ -187,8 +187,8 @@ func TestEnsureToTargetStopsOnFirstErrorAndGatesBreaker(t *testing.T) {
 	}
 
 	created2, err2 := m.ensureToTarget(context.Background(), roleTemp, 3, model, snapshot, nil)
-	if err2 != nil {
-		t.Fatalf("second ensureToTarget() = %v, want nil (suppressed by the now-gated breaker)", err2)
+	if !errors.Is(err2, errCreateSuppressed) {
+		t.Fatalf("second ensureToTarget() = %v, want errCreateSuppressed (the now-gated breaker)", err2)
 	}
 	if created2 != 0 {
 		t.Fatalf("created on the gated call = %d, want 0", created2)
@@ -273,6 +273,53 @@ func TestPrepareBridgeTempCreateFailsPromotesRegularsInstead(t *testing.T) {
 	}
 	if status.CreateError == "" {
 		t.Fatal("rotation status CreateError is empty, want the create failure message")
+	}
+}
+
+// The breaker is gated only after creation has been failing, so a gated pass has no replacement to
+// show for the escrows it would retire. Retiring them there settles away the coverage that is left.
+func TestPrepareBridgeGatedBreakerPromotesRegularsInsteadOfRetiringThem(t *testing.T) {
+	testStore := newFakeStore()
+	regular := store.DevshardRecord{EscrowID: "reg-1", Model: "model-a", Active: true, RotationRole: roleRegular, PrivateKeyEnv: "MODEL_A_KEY"}
+	testStore.devshards[regular.EscrowID] = regular
+	m := newRotationManager(t, testStore, &fakeTxClient{createEscrowFn: failOnCreate(t)}, false)
+	m.breaker.recordFailure("model-a", roleTemp)
+	models := []ModelConfig{{ModelID: "model-a", TempCount: 1, TargetCount: 1, Amount: 1000, PrivateKeyEnv: "MODEL_A_KEY"}}
+	snapshot := servedSnapshot(9, 500, "model-a")
+	devshards := []store.DevshardRecord{regular}
+
+	err := m.prepareBridge(context.Background(), snapshot, models, devshards)
+
+	got, ok := testStore.devshards["reg-1"]
+	if !ok || !got.Active {
+		t.Fatalf("reg-1 = %+v ok=%v, want it kept serving: no temp was created to take over from it", got, ok)
+	}
+	if got.RotationRole != roleTemp {
+		t.Fatalf("reg-1.RotationRole = %q, want %q (promoted by the degrade path)", got.RotationRole, roleTemp)
+	}
+	if !errors.Is(err, errCreateSuppressed) {
+		t.Fatalf("prepareBridge() = %v, want the suppressed create surfaced", err)
+	}
+}
+
+func TestFinishBridgeGatedBreakerKeepsTempsInsteadOfRetiringThem(t *testing.T) {
+	testStore := newFakeStore()
+	temp := store.DevshardRecord{EscrowID: "temp-1", Model: "model-a", Active: true, RotationRole: roleTemp, RotationEpoch: 9, PrivateKeyEnv: "MODEL_A_KEY"}
+	testStore.devshards[temp.EscrowID] = temp
+	m := newRotationManager(t, testStore, &fakeTxClient{createEscrowFn: failOnCreate(t)}, false)
+	m.breaker.recordFailure("model-a", roleRegular)
+	models := []ModelConfig{{ModelID: "model-a", TargetCount: 1, Amount: 1000, PrivateKeyEnv: "MODEL_A_KEY"}}
+	snapshot := servedSnapshot(9, 700, "model-a")
+	devshards := []store.DevshardRecord{temp}
+
+	err := m.finishBridge(context.Background(), snapshot, models, devshards)
+
+	got, ok := testStore.devshards["temp-1"]
+	if !ok || !got.Active {
+		t.Fatalf("temp-1 = %+v ok=%v, want it kept serving: no regular was created to take over from it", got, ok)
+	}
+	if !errors.Is(err, errCreateSuppressed) {
+		t.Fatalf("finishBridge() = %v, want the suppressed create surfaced", err)
 	}
 }
 

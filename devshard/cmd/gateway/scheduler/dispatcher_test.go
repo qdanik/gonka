@@ -129,10 +129,11 @@ func (p preparedNonce) Nonce() uint64 { return p.nonce }
 func (p preparedNonce) HostIdx() int  { return p.hostIdx }
 
 type recordingObserver struct {
-	mu     sync.Mutex
-	ghosts []string
-	holds  int
-	trips  int
+	mu      sync.Mutex
+	retired []string
+	ghosts  []string
+	holds   int
+	trips   int
 }
 
 func (o *recordingObserver) GhostBurned(_, reason string) {
@@ -151,6 +152,12 @@ func (o *recordingObserver) BurnBudgetExhausted(string) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	o.trips++
+}
+
+func (o *recordingObserver) EscrowRetired(escrowID string) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.retired = append(o.retired, escrowID)
 }
 
 func (o *recordingObserver) burns() []string {

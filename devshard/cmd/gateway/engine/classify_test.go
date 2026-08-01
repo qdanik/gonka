@@ -17,22 +17,29 @@ const qwenModel = "Qwen/Qwen3-235B-A22B-Instruct-2507"
 func TestContentSource(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
-		name       string
-		body       string
-		wantSource string
+		name           string
+		body           string
+		thinkingBudget bool
+		wantSource     string
 	}{
 		{name: "empty", body: ""},
 		{name: "done_only", body: "data: [DONE]\n\n"},
 		{name: "role_chunk_only", body: `data: {"id":"a","choices":[{"delta":{"role":"assistant"},"index":0,"finish_reason":null}]}` + "\n\n"},
 		{name: "finish_only", body: `data: {"id":"a","choices":[{"delta":{},"index":0,"finish_reason":"stop"}]}` + "\n\n"},
 		{
-			name:       "empty_stop_with_completion_tokens",
-			body:       `data: {"id":"a","choices":[{"message":{"content":""},"index":0,"finish_reason":"stop"}],"usage":{"completion_tokens":1}}` + "\n\n",
-			wantSource: "message.empty_stop_completion_tokens",
+			name:           "empty_stop_with_completion_tokens_on_a_thinking_budget_route",
+			body:           `data: {"id":"a","choices":[{"message":{"content":""},"index":0,"finish_reason":"stop"}],"usage":{"completion_tokens":1}}` + "\n\n",
+			thinkingBudget: true,
+			wantSource:     "message.empty_stop_completion_tokens",
 		},
 		{
-			name: "empty_stop_without_completion_tokens",
-			body: `data: {"id":"a","choices":[{"message":{"content":""},"index":0,"finish_reason":"stop"}],"usage":{"completion_tokens":0}}` + "\n\n",
+			name: "empty_stop_with_completion_tokens_off_a_thinking_budget_route",
+			body: `data: {"id":"a","choices":[{"message":{"content":""},"index":0,"finish_reason":"stop"}],"usage":{"completion_tokens":1}}` + "\n\n",
+		},
+		{
+			name:           "empty_stop_without_completion_tokens",
+			body:           `data: {"id":"a","choices":[{"message":{"content":""},"index":0,"finish_reason":"stop"}],"usage":{"completion_tokens":0}}` + "\n\n",
+			thinkingBudget: true,
 		},
 		{
 			name:       "delta_content",
@@ -108,7 +115,7 @@ func TestContentSource(t *testing.T) {
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
-			source, ok := contentSource([]byte(testCase.body))
+			source, ok := contentSource([]byte(testCase.body), testCase.thinkingBudget)
 			if source != testCase.wantSource {
 				t.Errorf("contentSource = %q, want %q", source, testCase.wantSource)
 			}
@@ -648,7 +655,7 @@ func TestGarbageAndTruncatedInputClassifyWithoutPanicking(t *testing.T) {
 
 func TestInvalidUTF8ContentStillCountsAsContent(t *testing.T) {
 	t.Parallel()
-	source, ok := contentSource([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"\xff\xfe\"}}]}\n\n"))
+	source, ok := contentSource([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"\xff\xfe\"}}]}\n\n"), false)
 
 	if !ok || source != "delta.content" {
 		t.Errorf("contentSource = %q/%v, want delta.content/true", source, ok)
@@ -660,7 +667,7 @@ func TestClassifyIsPureOverItsInput(t *testing.T) {
 	body := []byte(`data: {"choices":[{"delta":{"content":"hi"}}],"usage":{"completion_tokens":5}}` + "\n\n")
 	original := bytes.Clone(body)
 
-	classifyChunk(body)
+	classifyChunk(body, true)
 
 	if !bytes.Equal(body, original) {
 		t.Errorf("classifyChunk mutated its input: %q", body)

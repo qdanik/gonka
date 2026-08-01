@@ -3,16 +3,16 @@ package engine
 // sseClassifier joins one attempt's bounded reassembly to the SSE verdicts, so an event split across
 // chunk boundaries is classified once, when its final line arrives.
 type sseClassifier struct {
-	model    string
-	carry    *carryBuffer
-	overflow func()
+	thinkingBudget bool
+	carry          *carryBuffer
+	overflow       func()
 }
 
 func newSSEClassifier(budget *carryBudget, participant, model string, overflow func()) *sseClassifier {
 	return &sseClassifier{
-		model:    model,
-		carry:    newCarryBuffer(budget, participant),
-		overflow: overflow,
+		thinkingBudget: thinkingBudgetRoute(model),
+		carry:          newCarryBuffer(budget, participant),
+		overflow:       overflow,
 	}
 }
 
@@ -21,11 +21,13 @@ func (c *sseClassifier) Classify(chunk []byte) chunkFacts {
 	if firstDrop && c.overflow != nil {
 		c.overflow()
 	}
-	return c.facts(classifyChunk(events))
+	return c.facts(classifyChunk(events, c.thinkingBudget))
 }
 
 // Flush classifies the unterminated final event, which reads as nothing at all until it does.
-func (c *sseClassifier) Flush() chunkFacts { return c.facts(classifyChunk(c.carry.Tail())) }
+func (c *sseClassifier) Flush() chunkFacts {
+	return c.facts(classifyChunk(c.carry.Tail(), c.thinkingBudget))
+}
 
 func (c *sseClassifier) Release() { c.carry.Release() }
 
@@ -36,7 +38,7 @@ func (c *sseClassifier) facts(signal chunkSignal) chunkFacts {
 		Content:               signal.crownsWinner(),
 		ContentSource:         signal.ContentSource,
 		UsageCompletionTokens: signal.UsageCompletionTokens,
-		TokensBurned:          signal.UsageCompletionTokens > 0 && thinkingBudgetRoute(c.model),
+		TokensBurned:          signal.UsageCompletionTokens > 0 && c.thinkingBudget,
 	}
 	if !signal.Error.present() {
 		return facts

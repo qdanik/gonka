@@ -327,6 +327,25 @@ func TestTickSettlesParkedEscrowWhileRotationDisabled(t *testing.T) {
 	}
 }
 
+// Rotation off is the default, and an exhausted escrow left in the live set scores best on load
+// precisely because it serves nothing, so it attracts traffic and fails it.
+func TestTickRetiresDepletedEscrowWhileRotationDisabled(t *testing.T) {
+	testStore := newFakeStore()
+	depleted := store.DevshardRecord{EscrowID: "1", Model: "model-a", Active: true, RotationRole: roleRegular, PrivateKeyEnv: "MODEL_A_KEY"}
+	testStore.devshards[depleted.EscrowID] = depleted
+	cfg := config.Defaults()
+	cfg.Rotation.Enabled = false
+	cfg.Rotation.ModelsJSON = `[{"model_id":"model-a","target_count":1,"amount":1000,"private_key_env":"MODEL_A_KEY"}]`
+	m := NewManager(testManagerDeps(t, testStore, &fakeTxClient{createEscrowFn: failOnCreate(t)}, &fakeSnapshotSource{}, &cfg))
+	m.OnBalanceExhausted("1")
+
+	if err := m.tick(context.Background()); err != nil {
+		t.Fatalf("tick(): %v", err)
+	}
+
+	assertParked(t, testStore, "1")
+}
+
 // Stop must not return while a tick is still writing: the caller closes the store right after, so an
 // early return means a settlement write can land on a closed database. A second concurrent Stop has
 // to wait with the first rather than racing past it.
