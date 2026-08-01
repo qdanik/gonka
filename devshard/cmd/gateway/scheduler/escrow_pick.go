@@ -24,9 +24,11 @@ func (s *Scheduler) pickEscrow(profile RequestProfile, snapshot chain.PhaseSnaps
 		return Escrow{}, fmt.Errorf("escrow %q for model %q: %w", profile.Escrow, profile.Model, ErrEscrowGone)
 	}
 
+	// Ties hold indices rather than candidates: an index does not escape the way a returned Escrow does,
+	// so the common case picks without touching the heap at all.
 	bestScore := math.Inf(1)
-	var tied []Escrow
-	for _, candidate := range candidates {
+	var tied []int
+	for index, candidate := range candidates {
 		if atNonceCap(candidate, snapshot.MaxNonce) {
 			// Routing only declines it; replacing it belongs to the rotation lifecycle, which
 			// otherwise never learns and lets the escrow drain silently into ErrNoEscrowCapacity.
@@ -40,9 +42,9 @@ func (s *Scheduler) pickEscrow(profile RequestProfile, snapshot chain.PhaseSnaps
 		case math.IsInf(score, 1):
 			continue
 		case score < bestScore:
-			bestScore, tied = score, append(tied[:0], candidate)
+			bestScore, tied = score, append(tied[:0], index)
 		case score == bestScore:
-			tied = append(tied, candidate)
+			tied = append(tied, index)
 		}
 	}
 
@@ -50,9 +52,9 @@ func (s *Scheduler) pickEscrow(profile RequestProfile, snapshot chain.PhaseSnaps
 	case 0:
 		return Escrow{}, ErrNoEscrowCapacity
 	case 1:
-		return tied[0], nil
+		return candidates[tied[0]], nil
 	default:
-		return tied[int(uint64(s.tieBreak.Add(1)-1)%uint64(len(tied)))], nil
+		return candidates[tied[int(uint64(s.tieBreak.Add(1)-1)%uint64(len(tied)))]], nil
 	}
 }
 
