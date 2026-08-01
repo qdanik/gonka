@@ -106,7 +106,9 @@ func TestStreamRewriter_WrappedCompletionBecomesChunks(t *testing.T) {
 		`data: {"id":"chatcmpl-cw1","object":"chat.completion.chunk","created":13,"model":"model-a","choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}]}`,
 		`data: {"id":"chatcmpl-cw1","object":"chat.completion.chunk","created":13,"model":"model-a","choices":[{"index":0,"delta":{"content":"ok"},"finish_reason":null}]}`,
 		`data: {"id":"chatcmpl-cw1","object":"chat.completion.chunk","created":13,"model":"model-a","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`,
-		`data: {"id":"chatcmpl-cw1","object":"chat.completion.chunk","created":13,"model":"model-a","choices":[],"usage":{"completion_tokens":2,"prompt_tokens":3,"total_tokens":5}}`,
+		// usage keeps the fixture's own key order: the strip copies the bytes it keeps rather than
+		// rebuilding the object from a map, which used to hand the client an alphabetised rewrite.
+		`data: {"id":"chatcmpl-cw1","object":"chat.completion.chunk","created":13,"model":"model-a","choices":[],"usage":{"prompt_tokens":3,"total_tokens":5,"completion_tokens":2}}`,
 		`data: [DONE]`,
 		``,
 	}, "\n\n")

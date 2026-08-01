@@ -238,4 +238,4 @@ func randomRequestID() string {
 }
 
 // CaptureStats reports the request-capture sink's own account of itself, for the metrics collector.
-func (s *Server) CaptureStats() (written, refused, held int64) { return s.capture.stats() }
+func (s *Server) CaptureStats() (written, refused, failed, held int64) { return s.capture.stats() }
