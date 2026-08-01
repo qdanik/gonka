@@ -48,9 +48,11 @@ type requestCapture struct {
 	maxBytes   int64
 	now        func() time.Time
 	seen       atomic.Int64
+	sequence   atomic.Int64
 	written    atomic.Int64
 	held       atomic.Int64
 	refused    atomic.Int64
+	failed     atomic.Int64
 }
 
 func newRequestCapture(settings config.Capture, storageDir string, now func() time.Time) (*requestCapture, error) {
@@ -127,7 +129,9 @@ func (c *requestCapture) record(kind string, r *http.Request, requestID, model s
 	} else {
 		record.BodyBase64 = base64.StdEncoding.EncodeToString(body)
 	}
-	_ = c.write(record)
+	if err := c.write(record); err != nil {
+		c.failed.Add(1)
+	}
 }
 
 // admit passes a deterministic stride of what it sees rather than a random sample. See
@@ -159,7 +163,7 @@ func (c *requestCapture) write(record capturedRequest) error {
 	dir := filepath.Join(c.dir, record.Kind)
 	name := fmt.Sprintf("%s_%09d_%s_%s.json",
 		c.now().UTC().Format(captureFileNameLayout),
-		c.written.Add(1),
+		c.sequence.Add(1),
 		safeFileNameComponent(cmp.Or(record.RequestID, "no-request-id")),
 		record.Kind,
 	)
@@ -176,6 +180,7 @@ func (c *requestCapture) write(record capturedRequest) error {
 		c.held.Add(-size)
 		return err
 	}
+	c.written.Add(1)
 	return nil
 }
 
@@ -207,10 +212,11 @@ func chatRequestHints(body []byte) (model string, stream bool) {
 
 // stats is what the sink can say about itself. refused only ever grows: nothing deletes capture files,
 // so once the directory reaches its cap the sink is off until an operator empties it, and this count is
-// the only signal that has happened.
-func (c *requestCapture) stats() (written, refused, held int64) {
+// the only signal that has happened. failed is the other way capture goes dark -- an unwritable or full
+// directory -- and is separate because it needs an operator, not a cleanup.
+func (c *requestCapture) stats() (written, refused, failed, held int64) {
 	if c == nil {
-		return 0, 0, 0
+		return 0, 0, 0, 0
 	}
-	return c.written.Load(), c.refused.Load(), c.held.Load()
+	return c.written.Load(), c.refused.Load(), c.failed.Load(), c.held.Load()
 }

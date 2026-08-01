@@ -461,3 +461,47 @@ func TestHasNonCacheableErrorFindsFailuresRegardlessOfFraming(t *testing.T) {
 		})
 	}
 }
+
+// Every stripped field must survive the pre-check, or the streaming rewriter forwards it untouched.
+// The markers are two of the six field names, so this is the test that the other four are reachable
+// through them -- and the one that fails first if a field is added that neither marker contains.
+func TestEveryStrippedFieldSurvivesThePreCheck(t *testing.T) {
+	for _, field := range clientStrippedFields {
+		event := []byte(`{"choices":[{"index":0,"` + field + `":{"content":[]}}]}`)
+		if !hasStrippableField(event) {
+			t.Fatalf("field %q is invisible to the pre-check, so it reaches the client untouched", field)
+		}
+	}
+}
+
+func TestThePreCheckIgnoresACleanEvent(t *testing.T) {
+	if hasStrippableField([]byte(`{"choices":[{"index":0,"delta":{"content":"hello"}}]}`)) {
+		t.Fatal("a clean event took the slow path")
+	}
+}
+
+// The strip must not rewrite numbers it was not asked to touch. Decoding into any turns every number
+// into a float64, and seed is the one field a client uses to make a completion reproducible: handing
+// back a different seed than the host reported breaks exactly the guarantee seed exists for.
+func TestStripKeepsIntegersTooLargeForFloat64(t *testing.T) {
+	body := []byte(`{"id":"c","seed":9007199254740993,"logprobs":{"content":[]},"choices":[]}`)
+
+	stripped := string(StripResponseBody(body))
+
+	if !strings.Contains(stripped, `"seed":9007199254740993`) {
+		t.Fatalf("seed was rewritten: %s", stripped)
+	}
+	if strings.Contains(stripped, "logprobs") {
+		t.Fatalf("the strip did not run at all, so the seed was never at risk: %s", stripped)
+	}
+}
+
+// A body with a second value after the first is malformed and must pass through untouched, the way
+// json.Unmarshal treated it. A Decoder alone would read the first value and drop the rest.
+func TestStripLeavesABodyWithTrailingJunkAlone(t *testing.T) {
+	body := []byte(`{"logprobs":{"content":[]}} {"and":"more"}`)
+
+	if got := string(StripResponseBody(body)); got != string(body) {
+		t.Fatalf("a malformed body was rewritten:\n got %s\nwant %s", got, body)
+	}
+}
