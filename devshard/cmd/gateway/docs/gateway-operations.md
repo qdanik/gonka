@@ -168,9 +168,15 @@ What it does write is every event that moves money, changes what the gateway wil
 | `settled escrow record dropped` | the row was deleted | that row named the only key able to settle the escrow, so its removal is irreversible |
 | `escrow depleted with no replacement configured` | nonces exhausted, rotation has no model for it | capacity left the fleet and nothing replaces it |
 | `escrow tick failed` | the lifecycle tick returned | one line carrying every joined failure, each naming its own step and escrow |
+| `escrow serving` / `escrow retired` / `draining escrow closed` | an escrow started taking traffic, stopped, and finally let go of its storage — the last is asynchronous and invisible otherwise |
+| `nonce burned for nobody` | a nonce cost money on chain and will serve nobody, with the reason it was burned |
+| `escrow stopped burning nonces at its budget` | the escrow now queues callers rather than spending on requests it cannot serve |
+| `chain epoch` / `chain blocked requests` / `chain unblocked requests` | only on change: the observer republishes every five seconds whether or not anything moved |
 | `admin: …` | eight operator mutations | settings replaced, escrow registered, imported, deleted, activated, deactivated, participant added to or removed from the never-trust list, breaker cleared |
 
 The admin lines carry the action and its subject, never the request body: an override payload can hold the admin key.
+
+A participant's breaker is deliberately not logged. Its state is already a per-participant metric with history, so a dashboard shows both that traffic stopped and when; a line would add only the cause, at the price of a push contract in a package that is otherwise pure algorithm. If the cause turns out to be the thing that is actually needed, that is the moment to pay for it.
 
 Failures on the money path are not logged separately, because every one of them is returned as a wrapped error that names its own step, and the tick logs the joined result. A success has no such carrier, which is why the successful transitions are the ones written down.
 
