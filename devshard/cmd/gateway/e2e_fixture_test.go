@@ -16,6 +16,7 @@ import (
 	"devshard/cmd/gateway/api"
 	"devshard/cmd/gateway/config"
 	"devshard/cmd/gateway/env"
+	"devshard/cmd/gateway/escrow"
 	"devshard/cmd/gateway/registry"
 	"devshard/cmd/gateway/store"
 	"devshard/host"
@@ -403,7 +404,7 @@ func (g *e2eGateway) sessions(config.Chain, string) (registry.SessionFactory, re
 	readOnly := func(_ context.Context, escrowID string) (registry.EscrowSession, error) {
 		fixture, known := g.fixtures[escrowID]
 		if !known {
-			return nil, fmt.Errorf("escrow %s has no in-process fixture", escrowID)
+			return nil, fmt.Errorf("escrow %s has no in-process fixture: %w", escrowID, escrow.ErrUnknownEscrow)
 		}
 		session, machine, err := user.NewLocalSession(user.LocalSessionConfig{
 			PrivateKeyHex: fixture.privateKeyHex,

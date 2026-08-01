@@ -9,6 +9,7 @@ import (
 	"devshard/cmd/gateway/chain"
 	"devshard/cmd/gateway/config"
 	"devshard/cmd/gateway/scheduler"
+	"devshard/logging"
 	"devshard/types"
 )
 
@@ -389,7 +390,12 @@ func (c *raceCoordinator) begin() error {
 // kept, and the nonce is carried into the timeout plan. See gateway-invariants.md, "1. A committed nonce
 // is always settled" and "5. The slot and the escrow hold are taken with the nonce, and given back after
 // the vote".
+// A stranded nonce is committed, paid for, and answered by nobody -- the shape every recurring
+// settlement defect in this gateway has taken. It is traced at Warn because it is never routine.
 func (c *raceCoordinator) strand(assignment scheduler.Assignment, role string) {
+	logging.Warn("nonce stranded",
+		"request", c.request.RequestID, "escrow", assignment.Escrow,
+		"nonce", assignment.Nonce.Nonce(), "participant", assignment.Host, "role", role)
 	c.escrowID = assignment.Escrow
 	c.deps.Limiter.Release(assignment.Host, c.request.Model)
 	if c.deps.Hold != nil {
@@ -595,8 +601,15 @@ func (c *raceCoordinator) complete(attempt *liveAttempt, event AttemptEvent) {
 	c.retire(attempt)
 
 	if attempt.outcome == nil {
+		logging.Info("attempt finished with no outcome",
+			"request", c.request.RequestID, "escrow", c.escrowID, "nonce", attempt.nonce,
+			"participant", attempt.participant, "nonce_finished", attempt.nonceFinished)
 		return
 	}
+	logging.Info("attempt finished",
+		"request", c.request.RequestID, "escrow", c.escrowID, "nonce", attempt.nonce,
+		"participant", attempt.participant, "terminal", attempt.outcome.Terminal,
+		"nonce_finished", attempt.nonceFinished, "state_divergent", attempt.outcome.StateDivergent)
 	if signal := CapabilityOf(*attempt.outcome); signal.Retriable() {
 		RecordCapability(c.deps.Perf, attempt.participant, signal)
 		c.contextHint = GrowContextHint(c.contextHint, signal)
@@ -777,6 +790,9 @@ func (c *raceCoordinator) launch(assignment scheduler.Assignment, role, startRea
 	// host through a sibling slot -- a second nonce for one host's opinion.
 	c.exclude(attempt.participant)
 	c.deps.Perf.Acquire(attempt.participant)
+	logging.Info("nonce committed",
+		"request", c.request.RequestID, "escrow", assignment.Escrow, "nonce", nonce,
+		"participant", attempt.participant, "slot", attempt.hostIdx, "role", role, "reason", startReason)
 
 	go runAttempt(attemptCtx, AttemptSpec{
 		Escrow:      assignment.Escrow,

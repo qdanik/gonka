@@ -14,6 +14,7 @@ import (
 	"devshard/cmd/gateway/escrow"
 	"devshard/cmd/gateway/filters"
 	"devshard/cmd/gateway/store"
+	"devshard/logging"
 	"devshard/types"
 )
 
@@ -72,6 +73,7 @@ func (s *Server) handleAdminSettings(w http.ResponseWriter, r *http.Request) {
 		writeErrorFor(w, err)
 		return
 	}
+	auditAdmin("settings replaced")
 	writeJSON(w, http.StatusOK, overrides)
 }
 
@@ -105,6 +107,7 @@ func (s *Server) handleAdminDevshards(w http.ResponseWriter, r *http.Request) {
 		writeErrorFor(w, err)
 		return
 	}
+	auditAdmin("escrow registered", "escrow", request.EscrowID, "model", request.Model)
 	writeJSON(w, http.StatusOK, map[string]any{"escrow_id": request.EscrowID})
 }
 
@@ -129,6 +132,7 @@ func (s *Server) handleAdminDevshardImport(w http.ResponseWriter, r *http.Reques
 		writeErrorFor(w, err)
 		return
 	}
+	auditAdmin("escrow imported", "escrow", request.EscrowID, "model", request.Model)
 	writeJSON(w, http.StatusOK, map[string]any{"escrow_id": request.EscrowID})
 }
 
@@ -158,18 +162,19 @@ func (s *Server) handleAdminDevshardDelete(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	auditAdmin("escrow deleted with its session storage", "escrow", escrowID, "model", record.Model)
 	writeJSON(w, http.StatusOK, map[string]any{"escrow_id": escrowID, "deleted": true})
 }
 
 func (s *Server) handleAdminDevshardActivate(w http.ResponseWriter, r *http.Request) {
-	s.lifecycle(w, r, s.operations.Activate)
+	s.lifecycle(w, r, "escrow activated", s.operations.Activate)
 }
 
 func (s *Server) handleAdminDevshardDeactivate(w http.ResponseWriter, r *http.Request) {
-	s.lifecycle(w, r, s.operations.Deactivate)
+	s.lifecycle(w, r, "escrow deactivated", s.operations.Deactivate)
 }
 
-func (s *Server) lifecycle(w http.ResponseWriter, r *http.Request, apply func(ctx context.Context, escrowID string) error) {
+func (s *Server) lifecycle(w http.ResponseWriter, r *http.Request, action string, apply func(ctx context.Context, escrowID string) error) {
 	if !allowMethods(w, r, http.MethodPost) {
 		return
 	}
@@ -187,6 +192,7 @@ func (s *Server) lifecycle(w http.ResponseWriter, r *http.Request, apply func(ct
 		writeErrorFor(w, err)
 		return
 	}
+	auditAdmin(action, "escrow", escrowID)
 	writeJSON(w, http.StatusOK, map[string]any{"escrow_id": escrowID})
 }
 
@@ -214,6 +220,12 @@ func (s *Server) handleAdminDevshardSettle(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	writeJSON(w, http.StatusOK, result)
+}
+
+// auditAdmin records an operator action that changed state the gateway serves or settles from. It
+// carries the action and its subject, never the body: an override payload can hold the admin key.
+func auditAdmin(action string, fields ...any) {
+	logging.Info("admin: "+action, fields...)
 }
 
 func (s *Server) handleAdminDevshardParticipants(w http.ResponseWriter, r *http.Request) {
@@ -280,14 +292,15 @@ func (s *Server) handleAdminSuspiciousHosts(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusBadRequest, "participant_key is required")
 		return
 	}
-	apply := s.suspicious.Add
+	apply, action := s.suspicious.Add, "participant added to the never-trust list"
 	if r.Method == http.MethodDelete {
-		apply = s.suspicious.Remove
+		apply, action = s.suspicious.Remove, "participant removed from the never-trust list"
 	}
 	if err := apply(r.Context(), participantKey); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	auditAdmin(action, "participant", participantKey)
 	writeJSON(w, http.StatusOK, map[string]any{"hosts": s.suspicious.List()})
 }
 
@@ -309,6 +322,7 @@ func (s *Server) handleAdminUnquarantine(w http.ResponseWriter, r *http.Request)
 		writeErrorFor(w, err)
 		return
 	}
+	auditAdmin("participant breaker cleared", "participant", participantKey)
 	writeJSON(w, http.StatusOK, map[string]any{"participant_key": participantKey})
 }
 

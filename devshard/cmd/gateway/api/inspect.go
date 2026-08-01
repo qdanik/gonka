@@ -1,11 +1,13 @@
 package api
 
 import (
+	"errors"
 	"fmt"
 	"maps"
 	"net/http"
 	"slices"
 
+	"devshard/cmd/gateway/escrow"
 	"devshard/cmd/gateway/registry"
 	"devshard/types"
 )
@@ -49,18 +51,20 @@ type signatureEntry struct {
 }
 
 func (s *Server) handleDevshardState(w http.ResponseWriter, r *http.Request) {
-	session, escrowID, held := s.inspectable(w, r)
+	session, escrowID, release, held := s.inspectable(w, r)
 	if !held {
 		return
 	}
+	defer release()
 	writeJSON(w, http.StatusOK, inspect(escrowID, session))
 }
 
 func (s *Server) handleDevshardDebugState(w http.ResponseWriter, r *http.Request) {
-	session, escrowID, held := s.inspectable(w, r)
+	session, escrowID, release, held := s.inspectable(w, r)
 	if !held {
 		return
 	}
+	defer release()
 	state := session.SnapshotState()
 	detail := escrowInspectionDetail{
 		escrowInspection: inspect(escrowID, session),
@@ -87,10 +91,11 @@ func (s *Server) handleDevshardDebugPending(w http.ResponseWriter, r *http.Reque
 }
 
 func (s *Server) handleDevshardDebugSignatures(w http.ResponseWriter, r *http.Request) {
-	session, escrowID, held := s.inspectable(w, r)
+	session, escrowID, release, held := s.inspectable(w, r)
 	if !held {
 		return
 	}
+	defer release()
 	signatures := session.Signatures()
 	entries := make([]signatureEntry, 0, len(signatures))
 	for _, nonce := range slices.Sorted(maps.Keys(signatures)) {
@@ -100,10 +105,11 @@ func (s *Server) handleDevshardDebugSignatures(w http.ResponseWriter, r *http.Re
 }
 
 func (s *Server) writeInferences(w http.ResponseWriter, r *http.Request, keep func(types.InferenceStatus) bool) {
-	session, escrowID, held := s.inspectable(w, r)
+	session, escrowID, release, held := s.inspectable(w, r)
 	if !held {
 		return
 	}
+	defer release()
 	records := session.SnapshotState().Inferences
 	entries := make([]inferenceEntry, 0, len(records))
 	for _, nonce := range slices.Sorted(maps.Keys(records)) {
@@ -116,19 +122,24 @@ func (s *Server) writeInferences(w http.ResponseWriter, r *http.Request, keep fu
 	writeJSON(w, http.StatusOK, map[string]any{"escrow_id": escrowID, "inferences": entries})
 }
 
-// inspectable resolves a settling handle, so an escrow already retired for routing is still readable.
-// See gateway-operations.md, "Per-escrow recovery surface".
-func (s *Server) inspectable(w http.ResponseWriter, r *http.Request) (registry.EscrowSession, string, bool) {
+// inspectable resolves a handle for reading. A resident escrow answers from its own session and an
+// already-settled one is rehydrated from local storage, because "what did this escrow do" is a question
+// asked after it stopped serving, not while. See gateway-operations.md, "Per-escrow recovery surface".
+func (s *Server) inspectable(w http.ResponseWriter, r *http.Request) (registry.EscrowSession, string, func(), bool) {
 	if !allowMethods(w, r, http.MethodGet, http.MethodHead) {
-		return nil, "", false
+		return nil, "", nil, false
 	}
 	escrowID := r.PathValue("id")
-	session, held := s.escrows.SettlementSession(escrowID)
-	if !held {
-		writeErrorFor(w, fmt.Errorf("%w: %s", ErrUnknownDevshard, escrowID))
-		return nil, "", false
+	session, release, err := s.escrows.Inspect(r.Context(), escrowID)
+	if err != nil {
+		if errors.Is(err, escrow.ErrUnknownEscrow) {
+			writeErrorFor(w, fmt.Errorf("%w: %s", ErrUnknownDevshard, escrowID))
+			return nil, "", nil, false
+		}
+		writeError(w, http.StatusBadGateway, err.Error())
+		return nil, "", nil, false
 	}
-	return session, escrowID, true
+	return session, escrowID, release, true
 }
 
 func inspect(escrowID string, session registry.EscrowSession) escrowInspection {

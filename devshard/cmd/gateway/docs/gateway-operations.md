@@ -155,7 +155,38 @@ There are no alerting rules in the repository, so nothing pages on any of this t
 
 ## Logs
 
-The gateway logs through `devshard/logging`, the same package the rest of devshard uses, so its lines land in the operator's existing format. There are nine call sites, against roughly three hundred in the legacy binary — a difference of kind rather than degree. The legacy names a `stage=` on every step of a failing operation; here the error carries that itself, wrapped as `resolving signer for escrow X` or `building settlement for escrow X`, and the escrow tick logs the joined result once. Adding stage labels beside errors that already name their step would restate the same fact twice.
+The gateway logs through `devshard/logging`, the same package the rest of devshard uses, so its lines land in the operator's existing format. It writes far less than the legacy binary's roughly three hundred call sites, and the difference is one of kind: the legacy names a `stage=` on every step of a failing operation, while here the error carries that itself, wrapped as `resolving signer for escrow X` or `building settlement for escrow X`. The escrow tick logs the joined result once. Adding stage labels beside errors that already name their step would restate the same fact twice.
+
+What it does write is every event that moves money, changes what the gateway will serve, or is an operator's own doing.
+
+| Event | When | Why it is worth a line |
+|---|---|---|
+| `request finished` | every completed race | the delivery record, below |
+| `escrow created` | a create transaction landed | carries the escrow id, model, role, epoch and tx hash — the moment funds were committed |
+| `escrow settled` | a settle transaction landed | carries the tx hash and the settling address; this is the audit line for money leaving |
+| `escrow parked for settlement` | routing stopped, row marked pending | the escrow stopped taking traffic and is now waiting to settle |
+| `settled escrow record dropped` | the row was deleted | that row named the only key able to settle the escrow, so its removal is irreversible |
+| `escrow depleted with no replacement configured` | nonces exhausted, rotation has no model for it | capacity left the fleet and nothing replaces it |
+| `escrow tick failed` | the lifecycle tick returned | one line carrying every joined failure, each naming its own step and escrow |
+| `admin: …` | eight operator mutations | settings replaced, escrow registered, imported, deleted, activated, deactivated, participant added to or removed from the never-trust list, breaker cleared |
+
+The admin lines carry the action and its subject, never the request body: an override payload can hold the admin key.
+
+Failures on the money path are not logged separately, because every one of them is returned as a wrapped error that names its own step, and the tick logs the joined result. A success has no such carrier, which is why the successful transitions are the ones written down.
+
+### The trace
+
+The trace is always on. There is no level knob, deliberately: a trace that ships off by default is not there for the incident that already happened, and turning it on afterwards cannot recover what was not written.
+
+| Line | Carries |
+|---|---|
+| `nonce committed` | request, escrow, nonce, participant, slot, role, and why this attempt started |
+| `attempt finished` | the same identity plus the terminal verdict, whether the nonce was finished, and whether the host diverged on state |
+| `nonce stranded` | at Warn: a committed nonce nobody will answer for is the shape every recurring settlement defect here has taken |
+
+Following one request means grepping its request id; following one nonce through commit, dispatch and verdict means grepping the nonce.
+
+Volume is roughly five lines per request — one per attempt commit, one per attempt verdict, one on completion. If that ever becomes the problem, the answer is a level knob added then, against a measured number, rather than one shipped now with the trace defaulted off.
 
 ### The request record
 
@@ -172,7 +203,7 @@ The record deliberately carries no request or response body. Capture files exist
 
 ### What is still unanswerable
 
-Nothing records per-stage timing inside a request, so "where did the latency go" needs the metrics, which are per-gateway rather than per-request. The record also cannot say whether a client read what it was sent — only that the gateway wrote it.
+Nothing records per-stage timing inside a request, so "where did the latency go" needs the metrics, which are per-gateway rather than per-request. The record cannot say whether a client read what it was sent — only that the gateway wrote it. And nothing logs the moment a participant's breaker opens: the state is a metric, so a dashboard shows that traffic stopped, but not when it stopped or after which fault.
 
 ## Start-up
 
