@@ -18,7 +18,7 @@ Every nonce the gateway commits therefore ends up in exactly one of three states
 
 **What enforces it.**
 
-- The decision type has no fourth case. `scheduler.Decision` is a closed sum of `serve`, `burn` and `hold` (`scheduler/decision.go:9-22`); a committed nonce is either handed to a waiter or accounted as a ghost, and there is no way to express "committed and nobody's" without changing the type.
+- The decision type is closed. `scheduler.Decision` is a sum of `serve`, `burn`, `hold` and `decline` (`scheduler/decision.go:8-27`); a nonce is handed to a waiter, accounted as a ghost, parked, or given back uncommitted, and there is no way to express "committed and nobody's" without changing the type.
 - Every started attempt must deliver its terminal event. `AttemptDone` is sent with a **blocking** send, unlike progress events which are dropped when the coordinator is busy (`engine/attempt.go:318-324`). That delivery is what lets a committed nonce be settled, so the attempt goroutine waits for it.
 - An assignment with no dispatch target is *stranded*, not dropped: `strand` releases the host slot, keeps the escrow hold, and appends a synthetic attempt with `TerminalNoReceipt` so the outcome carries it into `TimeoutPlan` (`engine/race.go:373-395`).
 - A race that fails before its first attempt still reports (`engine/race.go:398-402`).

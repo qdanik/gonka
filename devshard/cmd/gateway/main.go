@@ -90,7 +90,7 @@ func chainBackedSessions(records devshardLookup, storageDir string) sessionSourc
 	return func(endpoints config.Chain, routePrefix string) (registry.SessionFactory, registry.SessionFactory, error) {
 		// NewGRPCBridgeFromURL is upstream's test constructor; production builds the bridge over a client
 		// carrying the CometBFT RPC query fallback, so an escrow read survives the gRPC query path failing.
-		chainClient, err := commonchain.NewWithQueryFallback(endpoints.GRPCEndpoint, endpoints.RPCEndpoint)
+		chainClient, err := commonchain.NewWithQueryFallback(endpoints.GRPCEndpoint, "")
 		if err != nil {
 			return nil, nil, fmt.Errorf("dialing chain grpc %s: %w", endpoints.GRPCEndpoint, err)
 		}
