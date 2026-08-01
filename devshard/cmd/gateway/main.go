@@ -290,6 +290,7 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 	// Registered after the server, which owns the capture sink. Nothing evicts capture files, so the
 	// refusal count is the only signal that capture has turned itself off at its byte cap.
 	telemetry.Register(metrics.NewCaptureCollector(server))
+	telemetry.Register(metrics.NewCacheCollector(server))
 
 	return &gateway{
 		config:       configHolder,

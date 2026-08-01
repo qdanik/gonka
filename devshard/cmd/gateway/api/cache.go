@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"devshard/cmd/gateway/filters"
@@ -46,6 +47,19 @@ type responseCache struct {
 	entries    map[cacheKey]cachedResponse
 	totalBytes int64
 	lastSweep  time.Time
+	hits       atomic.Int64
+	misses     atomic.Int64
+}
+
+// stats is the only account of whether the cache earns the memory it is given: a hit serves a reply
+// without a race, so it appears in no attempt, no nonce and no escrow.
+func (c *responseCache) stats() (hits, misses, entries int64, bytes int64) {
+	if c == nil {
+		return 0, 0, 0, 0
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.hits.Load(), c.misses.Load(), int64(len(c.entries)), c.totalBytes
 }
 
 // entryLimit is the largest reply put would accept, so a recorder past it is recording for nothing.
@@ -89,12 +103,15 @@ func (c *responseCache) get(key cacheKey, now time.Time) (cachedResponse, bool) 
 	defer c.mu.Unlock()
 	entry, held := c.entries[key]
 	if !held {
+		c.misses.Add(1)
 		return cachedResponse{}, false
 	}
 	if !entry.expiresAt.After(now) || filters.HasNonCacheableError(entry.body) {
 		c.dropLocked(key)
+		c.misses.Add(1)
 		return cachedResponse{}, false
 	}
+	c.hits.Add(1)
 	return entry, true
 }
 
