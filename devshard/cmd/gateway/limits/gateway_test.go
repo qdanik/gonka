@@ -348,8 +348,13 @@ func TestGatewayLimiter_ConcurrencyRace(t *testing.T) {
 
 	limiter.mu.Lock()
 	defer limiter.mu.Unlock()
-	if counter, ok := limiter.models["modelA"]; ok {
-		t.Errorf("residual counter after race = %+v, want no entry (all acquires released)", counter)
+	// The invariant is that every acquire was released, not that the entry was cleaned up: idle
+	// counters are kept so a model that goes quiet reads zero instead of vanishing from the snapshot.
+	if counter, held := limiter.models["modelA"]; held && (counter.inFlight != 0 || counter.inputTokens != 0) {
+		t.Errorf("residual counter after race = %+v, want zero on both", counter)
+	}
+	if limiter.total.inFlight != 0 || limiter.total.inputTokens != 0 {
+		t.Errorf("residual total after race = %+v, want zero on both", limiter.total)
 	}
 }
 
