@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+
+	"devshard/logging"
 )
 
 // OnEscrowMissing marks an escrow a host reported as absent from chain; the confirming lookup happens
@@ -51,5 +53,6 @@ func (m *Manager) TriggerEscrowCheck(ctx context.Context, escrowID string) error
 	}); err != nil {
 		return fmt.Errorf("deactivating escrow %s: %w", escrowID, err)
 	}
+	logging.Warn("escrow gone from chain, taken out of service", "escrow", escrowID)
 	return nil
 }

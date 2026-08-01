@@ -169,6 +169,15 @@ What it does write is every event that moves money, changes what the gateway wil
 | `escrow depleted with no replacement configured` | nonces exhausted, rotation has no model for it | capacity left the fleet and nothing replaces it |
 | `escrow tick failed` | the lifecycle tick returned | one line carrying every joined failure, each naming its own step and escrow |
 | `escrow serving` / `escrow retired` / `draining escrow closed` | an escrow started taking traffic, stopped, and finally let go of its storage — the last is asynchronous and invisible otherwise |
+| `escrow gone from chain, taken out of service` | `escrow retired` fires for settlement parking too; this is the only carrier of the cause |
+| `escrow recovered from commitment` | a create landed while the gateway was down, so `escrow created` never ran and the escrow exists in no other line |
+| `commitment cleared` | a create the gateway durably intended is abandoned; one of its two reasons is a transaction that may in fact have landed |
+| `bridge prepared` / `bridge finished` / `regular escrows promoted to temp` | which phase of the epoch dance asked for the escrows that just appeared and left, and whether the bridge is made of fresh temps or relabelled regulars |
+| `settle tx broadcast` | for the confirm window the transaction hash lives nowhere else; if the process dies there, money moved under a name nobody recorded |
+| `chain snapshot stale` / `chain snapshot recovered` | the health gauge says the view went stale, not which of four reads went dark, and a failed refresh keeps routing on the previous participants |
+| `attempt crowned` | which host actually served a request is in no metric, and the crown was once decided by a random `select` |
+| `host blocked for state divergence` | the block never lifts while the process runs, and no metric exposes it, so "why is this host never picked" is answerable only here |
+| `escalation unfilled` | an escalation that committed no nonce; the error reaches a caller only when no attempt ever started |
 | `nonce burned for nobody` | a nonce cost money on chain and will serve nobody, with the reason it was burned |
 | `escrow stopped burning nonces at its budget` | the escrow now queues callers rather than spending on requests it cannot serve |
 | `chain epoch` / `chain blocked requests` / `chain unblocked requests` | only on change: the observer republishes every five seconds whether or not anything moved |
@@ -206,6 +215,8 @@ Volume is roughly five lines per request — one per attempt commit, one per att
 | `deliver_error` | the failure that reached the client instead of the last bytes, which is the case no status code can express: a stream commits 200 on its first byte |
 
 The record deliberately carries no request or response body. Capture files exist for that, are sampled, and are bounded.
+
+Its `error` field is truncated at 256 bytes, and that is not tidiness. A `HostApplicationError` renders its raw upstream payload as the error text when the host sent no message, so an untruncated field would write a whole SSE event — generated tokens included — once per failed request. The other lines carrying an error text are bounded by cadence instead: the chain's staleness line fires twice per outage rather than per request, and the escrow tick logs at most once every fifteen seconds.
 
 ### What is still unanswerable
 

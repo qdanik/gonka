@@ -405,7 +405,9 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request, escrowPin string) 
 
 	key := cacheKeyFor(r, normalized.Model, normalized.Body)
 	if entry, hit := s.cache.get(key, s.now()); hit {
-		serveCached(w, requestID, entry)
+		written := serveCached(w, requestID, entry)
+		logging.Info("request finished", "request", requestID, "model", normalized.Model,
+			"escrow", entry.escrowID, "stream", entry.stream, "outcome", "cache_hit", "bytes", written)
 		return
 	}
 
@@ -521,10 +523,10 @@ func logRequestFinished(requestID string, normalized filters.Result, outcome eng
 		"terminated", terminated,
 	}
 	if raceErr != nil {
-		fields = append(fields, "error", raceErr.Error())
+		fields = append(fields, "error", loggedError(raceErr))
 	}
 	if deliverErr != nil {
-		fields = append(fields, "deliver_error", deliverErr.Error())
+		fields = append(fields, "deliver_error", loggedError(deliverErr))
 	}
 	if raceErr != nil || deliverErr != nil {
 		logging.Warn("request finished", fields...)

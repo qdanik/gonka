@@ -9,6 +9,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"devshard/logging"
 )
 
 const (
@@ -49,6 +51,7 @@ type PhaseObserver struct {
 	versions         *VersionsCache
 
 	current atomic.Pointer[PhaseSnapshot]
+	health  snapshotHealth
 
 	mu          sync.Mutex
 	subscribers map[int]func(PhaseSnapshot)
@@ -387,10 +390,45 @@ func (o *PhaseObserver) Subscribe(cb func(PhaseSnapshot)) (cancel func()) {
 	}
 }
 
+// snapshotHealth remembers the last publish's health so a five-second poll speaks only on the turn.
+type snapshotHealth struct {
+	mu       sync.Mutex
+	degraded bool
+}
+
+// healthChange is what one publish is worth saying about, separated from saying it so the decision can
+// be tested: the whole value of this type is writing nothing while a failure persists.
+type healthChange struct {
+	degraded  bool
+	recovered bool
+}
+
+func (h *snapshotHealth) advance(lastError string) healthChange {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	failed := lastError != ""
+	change := healthChange{degraded: failed && !h.degraded, recovered: !failed && h.degraded}
+	h.degraded = failed
+	return change
+}
+
+// narrateHealth carries the cause the health gauge cannot: LastError names which of four reads failed.
+func (o *PhaseObserver) narrateHealth(snapshot PhaseSnapshot) {
+	change := o.health.advance(snapshot.LastError)
+	switch {
+	case change.degraded:
+		logging.Warn("chain snapshot stale", "error", snapshot.LastError,
+			"epoch", snapshot.EpochIndex, "height", snapshot.BlockHeight)
+	case change.recovered:
+		logging.Info("chain snapshot recovered", "epoch", snapshot.EpochIndex, "height", snapshot.BlockHeight)
+	}
+}
+
 // publish stores snapshot then synchronously notifies the current subscribers, in no particular
 // order.
 func (o *PhaseObserver) publish(snapshot PhaseSnapshot) {
 	o.current.Store(&snapshot)
+	o.narrateHealth(snapshot)
 	o.mu.Lock()
 	callbacks := make([]func(PhaseSnapshot), 0, len(o.subscribers))
 	for _, cb := range o.subscribers {
