@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"devshard/logging"
 	"devshard/signing"
 )
 
@@ -221,6 +222,7 @@ func (c *TxClient) SettleEscrow(ctx context.Context, signer *signing.Secp256k1Si
 	if err != nil {
 		return SettleEscrowResult{}, err
 	}
+	logging.Info("settle tx broadcast", "escrow", input.EscrowID, "tx", txHash, "settler", settler)
 	// Waiting is what makes the result mean "settled": the caller destroys the means to retry. See
 	// gateway-escrow-lifecycle.md, "Transaction encoding".
 	if err := c.waitForCommit(ctx, txHash); err != nil {

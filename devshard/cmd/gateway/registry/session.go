@@ -33,6 +33,9 @@ type EscrowSession interface {
 	PrepareInferenceFn(chooser user.ParamsForHost) (*user.PreparedInference, error)
 	Signatures() map[uint64]map[uint32][]byte
 	SnapshotState() types.EscrowState
+	// SealedInferences counts the records sealing has already drained out of SnapshotState().Inferences,
+	// which holds only the live tail. Without it a reader mistakes that tail for the escrow's whole history.
+	SealedInferences() int
 	Finalize(ctx context.Context) error
 	FlushSnapshot() error
 	Close() error
@@ -61,6 +64,7 @@ func NewSessionHandle(session *user.Session, machine *state.StateMachine) Escrow
 
 func (h sessionHandle) Phase() types.SessionPhase        { return h.machine.Phase() }
 func (h sessionHandle) SnapshotState() types.EscrowState { return h.machine.SnapshotState() }
+func (h sessionHandle) SealedInferences() int            { return len(h.machine.ExportSealedNonces()) }
 func (h sessionHandle) UserSession() *user.Session       { return h.Session }
 
 type nonceStream struct {

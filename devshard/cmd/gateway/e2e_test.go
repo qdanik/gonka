@@ -791,8 +791,11 @@ func TestEndToEndTheRecoveryRoutesReadALiveEscrowAndADrainingOne(t *testing.T) {
 	}
 
 	state := gateway.send(t, e2eRequest{method: http.MethodGet, path: "/devshard/" + fixture.id + "/v1/state", bearer: operatorKey})
-	if !strings.Contains(string(state.body), `"nonce":1`) || !strings.Contains(string(state.body), `"inferences":1`) {
+	if !strings.Contains(string(state.body), `"nonce":1`) || !strings.Contains(string(state.body), `"live_inferences":1`) {
 		t.Errorf("state = %s, want the one nonce the served request committed", state.body)
+	}
+	if !strings.Contains(string(state.body), `"sealed_inferences":0`) {
+		t.Errorf("state = %s, want the sealed count reported beside the live one", state.body)
 	}
 	inferences := gateway.send(t, e2eRequest{method: http.MethodGet, path: "/devshard/" + fixture.id + "/v1/debug/inferences", bearer: operatorKey})
 	if !strings.Contains(string(inferences.body), `"nonce":1`) {

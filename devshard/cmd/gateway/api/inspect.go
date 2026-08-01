@@ -13,18 +13,21 @@ import (
 )
 
 // escrowInspection is one escrow's state as an operator reads it while recovering a stuck devshard.
+// Live and sealed inferences are counted apart because sealing drains records out of the live map, so
+// the live tail alone reads as a whole history and is off by the escrow's entire lifetime.
 type escrowInspection struct {
-	EscrowID      string   `json:"escrow_id"`
-	Phase         string   `json:"phase"`
-	Nonce         uint64   `json:"nonce"`
-	LatestNonce   uint64   `json:"latest_nonce"`
-	FinalizeNonce uint64   `json:"finalize_nonce,omitempty"`
-	Balance       uint64   `json:"balance"`
-	Fees          uint64   `json:"fees"`
-	Participants  []string `json:"participants"`
-	Slots         []string `json:"slots"`
-	Inferences    int      `json:"inferences"`
-	Pending       int      `json:"pending"`
+	EscrowID         string   `json:"escrow_id"`
+	Phase            string   `json:"phase"`
+	Nonce            uint64   `json:"nonce"`
+	LatestNonce      uint64   `json:"latest_nonce"`
+	FinalizeNonce    uint64   `json:"finalize_nonce,omitempty"`
+	Balance          uint64   `json:"balance"`
+	Fees             uint64   `json:"fees"`
+	Participants     []string `json:"participants"`
+	Slots            []string `json:"slots"`
+	LiveInferences   int      `json:"live_inferences"`
+	SealedInferences int      `json:"sealed_inferences"`
+	Pending          int      `json:"pending"`
 }
 
 type escrowInspectionDetail struct {
@@ -151,17 +154,18 @@ func inspect(escrowID string, session registry.EscrowSession) escrowInspection {
 		}
 	}
 	return escrowInspection{
-		EscrowID:      escrowID,
-		Phase:         phaseName(state.Phase),
-		Nonce:         session.Nonce(),
-		LatestNonce:   state.LatestNonce,
-		FinalizeNonce: state.FinalizeNonce,
-		Balance:       state.Balance,
-		Fees:          state.Fees,
-		Participants:  session.ParticipantKeys(),
-		Slots:         session.HostParticipantKeyList(),
-		Inferences:    len(state.Inferences),
-		Pending:       pending,
+		EscrowID:         escrowID,
+		Phase:            phaseName(state.Phase),
+		Nonce:            session.Nonce(),
+		LatestNonce:      state.LatestNonce,
+		FinalizeNonce:    state.FinalizeNonce,
+		Balance:          state.Balance,
+		Fees:             state.Fees,
+		Participants:     session.ParticipantKeys(),
+		Slots:            session.HostParticipantKeyList(),
+		LiveInferences:   len(state.Inferences),
+		SealedInferences: session.SealedInferences(),
+		Pending:          pending,
 	}
 }
 

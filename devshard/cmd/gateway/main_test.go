@@ -706,6 +706,7 @@ func (s weightlessSession) Signatures() map[uint64]map[uint32][]byte {
 	return map[uint64]map[uint32][]byte{}
 }
 func (s weightlessSession) SnapshotState() types.EscrowState { return types.EscrowState{} }
+func (s weightlessSession) SealedInferences() int            { return 0 }
 func (s weightlessSession) Finalize(context.Context) error   { return nil }
 func (s weightlessSession) FlushSnapshot() error             { return nil }
 func (s weightlessSession) Close() error                     { return nil }

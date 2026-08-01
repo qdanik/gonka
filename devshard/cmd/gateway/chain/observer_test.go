@@ -1043,3 +1043,34 @@ func TestPhaseObserver_StartTwiceIsANoOpAndRestartWorks(t *testing.T) {
 	observer.Start(ctx)
 	observer.Stop()
 }
+
+// The narration's whole value is silence while a failure persists, so the detector is tested apart
+// from the line it drives.
+func TestSnapshotHealth_AdvanceSpeaksOnlyOnChange(t *testing.T) {
+	t.Parallel()
+	steps := []struct {
+		name          string
+		lastError     string
+		wantDegraded  bool
+		wantRecovered bool
+	}{
+		{name: "first healthy poll says nothing", lastError: ""},
+		{name: "first failure degrades", lastError: "fetch epoch info: 503", wantDegraded: true},
+		{name: "same failure again stays silent", lastError: "fetch epoch info: 503"},
+		{name: "a different failure stays silent", lastError: "fetch participants: parse"},
+		{name: "success recovers", lastError: "", wantRecovered: true},
+		{name: "still healthy stays silent", lastError: ""},
+	}
+	var health snapshotHealth
+	for _, step := range steps {
+		t.Run(step.name, func(t *testing.T) {
+			change := health.advance(step.lastError)
+			if change.degraded != step.wantDegraded {
+				t.Errorf("degraded = %v, want %v", change.degraded, step.wantDegraded)
+			}
+			if change.recovered != step.wantRecovered {
+				t.Errorf("recovered = %v, want %v", change.recovered, step.wantRecovered)
+			}
+		})
+	}
+}

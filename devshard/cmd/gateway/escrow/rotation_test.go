@@ -535,3 +535,30 @@ func TestPromoteRegularsToTempContinuesPastErrorReturnsFirst(t *testing.T) {
 		t.Fatalf("reg-1.RotationRole = %q, want unchanged %q (write failed)", got, roleRegular)
 	}
 }
+
+// A retire that fails for a reason the next tick will not fix must reach the tick's error. Draining and
+// an in-flight settlement are the two that resolve themselves; anything else is a bridge that silently
+// never completes, visible only as Completed=false in a row nobody watches.
+func TestDeferredRetireSeparatesNotYetFromFailed(t *testing.T) {
+	testCases := []struct {
+		name     string
+		err      error
+		deferred bool
+	}{
+		{name: "a draining escrow is retried", err: ErrDevshardBusy, deferred: true},
+		{name: "a settlement already running is retried", err: ErrSettlementInFlight, deferred: true},
+		{name: "wrapped, still retried", err: fmt.Errorf("retiring escrow 7: %w", ErrDevshardBusy), deferred: true},
+		{name: "a missing signing key is not", err: errors.New("resolving signer for escrow 7"), deferred: false},
+		{name: "an unknown escrow is not", err: ErrUnknownEscrow, deferred: false},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := deferredRetire(testCase.err); got != testCase.deferred {
+				t.Fatalf("deferredRetire(%v) = %v, want %v", testCase.err, got, testCase.deferred)
+			}
+		})
+	}
+}
