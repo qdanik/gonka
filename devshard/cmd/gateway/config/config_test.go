@@ -176,6 +176,8 @@ func TestValidateCatchesEveryRuleBreach(t *testing.T) {
 		{"engine_non_stream_response_floor_ms too low", func(c *Config) { c.Engine.NonStreamResponseFloorMS = 0 }, "engine_non_stream_response_floor_ms"},
 		{"engine_per_input_token_response_lag_ms negative", func(c *Config) { c.Engine.PerInputTokenResponseLagMS = -1 }, "engine_per_input_token_response_lag_ms"},
 		{"engine_max_speculative_attempts negative", func(c *Config) { c.Engine.MaxSpeculativeAttempts = -1 }, "engine_max_speculative_attempts"},
+		{"chain_grpc without a port", func(c *Config) { c.Chain.GRPCEndpoint = "node.example" }, "chain_grpc"},
+		{"chain_grpc as a URL", func(c *Config) { c.Chain.GRPCEndpoint = "http://node.example:9090" }, "chain_grpc"},
 	}
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {

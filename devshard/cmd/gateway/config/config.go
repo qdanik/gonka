@@ -7,8 +7,8 @@ package config
 import (
 	"errors"
 	"fmt"
+	"net"
 	"net/url"
-	"strings"
 
 	"devshard/cmd/gateway/chain"
 	"devshard/cmd/gateway/env"
@@ -26,14 +26,12 @@ type Server struct {
 	MaxConcurrentRuntimeBuilds int64
 }
 
-// GRPCEndpoint is what the escrow bridge dials. RPCEndpoint is optional: empty lets common/chain
-// derive the CometBFT RPC host from the gRPC one, which is the query fallback every escrow read
-// inherits.
+// GRPCEndpoint is what the escrow bridge dials. common/chain derives the CometBFT RPC host from it
+// at the standard port, and that derived endpoint is the query fallback every escrow read inherits.
 type Chain struct {
 	RESTBaseURL         string
 	PublicAPIBaseURL    string
 	GRPCEndpoint        string
-	RPCEndpoint         string
 	TxQueryFallbackURLs []string
 }
 
@@ -321,10 +319,11 @@ func (c *Config) Validate() error {
 		}
 	}
 	checkBaseURL("chain_rest", c.Chain.RESTBaseURL)
-	if strings.TrimSpace(c.Chain.GRPCEndpoint) == "" {
-		complain("chain_grpc: required, the escrow bridge dials it")
-	}
 	checkBaseURL("public_api", c.Chain.PublicAPIBaseURL)
+	// A gRPC target is host:port with no scheme, so the URL check above would pass anything.
+	if _, _, err := net.SplitHostPort(c.Chain.GRPCEndpoint); err != nil {
+		complain("chain_grpc: %q is not host:port", c.Chain.GRPCEndpoint)
+	}
 	for index, fallbackURL := range c.Chain.TxQueryFallbackURLs {
 		checkBaseURL(fmt.Sprintf("tx_query_fallback_urls[%d]", index), fallbackURL)
 	}
