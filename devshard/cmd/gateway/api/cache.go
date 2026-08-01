@@ -154,21 +154,25 @@ func entrySize(entry cachedResponse) int64 {
 	return int64(len(entry.body)+len(entry.contentType)+len(entry.escrowID)+8*len(entry.bounds)) + cacheEntryOverhead
 }
 
-func serveCached(w http.ResponseWriter, requestID string, entry cachedResponse) {
+// serveCached reports what it managed to write, so a cache hit carries the same delivery record as a race.
+func serveCached(w http.ResponseWriter, requestID string, entry cachedResponse) (written int64) {
 	writeChatHeaders(w.Header(), requestID, entry.escrowID, entry.contentType, entry.stream)
 	w.WriteHeader(entry.status)
 
 	controller := http.NewResponseController(w)
 	start := 0
 	for _, end := range entry.bounds {
-		if _, err := w.Write(entry.body[start:end]); err != nil {
-			return
+		sent, err := w.Write(entry.body[start:end])
+		written += int64(sent)
+		if err != nil {
+			return written
 		}
 		if entry.stream {
 			_ = controller.Flush()
 		}
 		start = end
 	}
+	return written
 }
 
 // cacheRecorder mirrors what the client receives; it keeps the first status the handler chose, so a

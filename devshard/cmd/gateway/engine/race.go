@@ -21,6 +21,10 @@ const (
 	// eventBuffer keeps a host's chunk progress from parking its goroutine between the coordinator's
 	// selects. Terminal events block regardless of it, which is what settles a committed nonce.
 	eventBuffer = 32
+
+	// Why an attempt holds the client stream: it claimed first, or it was the last claimant standing.
+	crownFirstClaim = "first_claim"
+	crownNoRival    = "no_rival"
 )
 
 var errNoDispatchTarget = errors.New("assigned escrow has no dispatch target")
@@ -540,7 +544,7 @@ func (c *raceCoordinator) answer(claim crownRequest) {
 	case attempt.suspicious:
 		c.claims = append(c.claims, claim)
 	default:
-		c.winner = attempt
+		c.crownWinner(attempt, crownFirstClaim)
 		claim.Reply <- streamWinner
 	}
 }
@@ -555,7 +559,7 @@ func (c *raceCoordinator) settleClaims() {
 		if c.rivalPossible() {
 			return
 		}
-		c.winner = c.byNonce[c.claims[0].Nonce]
+		c.crownWinner(c.byNonce[c.claims[0].Nonce], crownNoRival)
 	}
 	for _, claim := range c.claims {
 		verdict := streamSuppressed
@@ -565,6 +569,14 @@ func (c *raceCoordinator) settleClaims() {
 		claim.Reply <- verdict
 	}
 	c.claims = c.claims[:0]
+}
+
+// crownWinner is the single place one attempt becomes the client's answer, so the reason travels with it.
+func (c *raceCoordinator) crownWinner(attempt *liveAttempt, reason string) {
+	c.winner = attempt
+	logging.Info("attempt crowned",
+		"request", c.request.RequestID, "escrow", c.escrowID, "nonce", attempt.nonce,
+		"participant", attempt.participant, "reason", reason)
 }
 
 // rivalPossible reports an attempt other than the held claimants that could still be crowned. See
@@ -616,6 +628,9 @@ func (c *raceCoordinator) complete(attempt *liveAttempt, event AttemptEvent) {
 		c.exclude(attempt.participant)
 	}
 	if attempt.outcome.StateDivergent {
+		logging.Warn("host blocked for state divergence",
+			"request", c.request.RequestID, "escrow", c.escrowID,
+			"nonce", attempt.nonce, "participant", attempt.participant)
 		c.deps.Picker.BlockHost(c.escrowID, attempt.participant)
 		c.exclude(attempt.participant)
 	}
@@ -742,6 +757,7 @@ func (c *raceCoordinator) applyPick(result pickedHost) {
 	assignment, err := c.observePick(result.assignment, result.err)
 	switch {
 	case err != nil:
+		c.reportUnfilledPick(err)
 		c.startErr, c.moreImmediate = err, 0
 	case c.cancelled || c.handedOff || c.winner != nil:
 		c.strand(assignment, RoleSpeculative)
@@ -749,6 +765,17 @@ func (c *raceCoordinator) applyPick(result pickedHost) {
 		c.launch(assignment, RoleSpeculative, c.pickReason)
 	}
 	c.startNextImmediate()
+}
+
+// reportUnfilledPick traces an escalation that was given no host: no nonce is committed, and the error
+// reaches a caller only when no attempt ever started. The race's own cancellation is not a refusal.
+func (c *raceCoordinator) reportUnfilledPick(err error) {
+	if c.cancelled || c.handedOff {
+		return
+	}
+	logging.Info("escalation unfilled",
+		"request", c.request.RequestID, "escrow", c.escrowID, "reason", c.pickReason,
+		"attempts", len(c.attempts), "error", err)
 }
 
 // stopPicking gives up on a pick the race can no longer spend. The scheduler answers a cancelled pick by

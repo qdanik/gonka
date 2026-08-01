@@ -41,6 +41,7 @@ var (
 )
 
 type fakeSession struct {
+	sealed       int
 	perSlotKeys  []string
 	participants []string
 
@@ -83,6 +84,7 @@ func (f *fakeSession) PrepareInferenceFn(chooser user.ParamsForHost) (*user.Prep
 
 func (f *fakeSession) Signatures() map[uint64]map[uint32][]byte { return f.signatures }
 func (f *fakeSession) SnapshotState() types.EscrowState         { return f.escrowState }
+func (f *fakeSession) SealedInferences() int                    { return f.sealed }
 
 func (f *fakeSession) Finalize(context.Context) error {
 	f.finalizeCalls.Add(1)

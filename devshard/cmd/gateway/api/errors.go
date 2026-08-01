@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"devshard/cmd/gateway/chain"
 	"devshard/cmd/gateway/engine"
@@ -191,4 +192,20 @@ func writeJSON(w http.ResponseWriter, status int, payload any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_, _ = w.Write(append(body, '\n'))
+}
+
+// maxLoggedErrorBytes bounds host-controlled text reaching a log line: a HostApplicationError with no
+// message renders its whole upstream payload. See gateway-operations.md, "The request record".
+const maxLoggedErrorBytes = 256
+
+func loggedError(err error) string {
+	text := err.Error()
+	if len(text) <= maxLoggedErrorBytes {
+		return text
+	}
+	cut := maxLoggedErrorBytes
+	for cut > 0 && !utf8.RuneStart(text[cut]) {
+		cut--
+	}
+	return text[:cut] + "…(truncated)"
 }

@@ -117,23 +117,29 @@ func (m *Manager) reconcileOne(ctx context.Context, c store.Commitment) error {
 	escrowID, found, err := m.tx.GetTxEscrowID(ctx, c.TxHash)
 	switch {
 	case err == nil && found:
-		return m.persistEscrow(ctx, strconv.FormatUint(escrowID, 10), c)
+		if persistErr := m.persistEscrow(ctx, strconv.FormatUint(escrowID, 10), c); persistErr != nil {
+			return persistErr
+		}
+		logging.Info("escrow recovered from commitment", "escrow", escrowID, "model", c.Model, "role", c.Role, "epoch", c.Epoch, "tx", c.TxHash)
+		return nil
 	case err == nil && !found:
-		return m.clearCommitment(ctx, c.TxHash) // committed but produced no escrow event: terminal
+		return m.clearCommitment(ctx, c, "transaction created no escrow") // committed but produced no escrow event: terminal
 	case errors.Is(err, chain.ErrTxNotFound):
 		if m.txMayStillLand(c) {
 			return nil // unordered tx may still land: keep, retry next tick
 		}
-		return m.clearCommitment(ctx, c.TxHash) // past its TTL: can never land
+		return m.clearCommitment(ctx, c, "transaction can no longer land") // past its TTL
 	default:
 		return fmt.Errorf("querying tx %s: %w", c.TxHash, err) // endpoint unreachable: keep, retry next tick
 	}
 }
 
-func (m *Manager) clearCommitment(ctx context.Context, txHash string) error {
-	if err := m.store.WithRetry(ctx, func() error { return m.store.DeleteCommitment(ctx, txHash) }); err != nil {
-		return fmt.Errorf("clearing commitment %s: %w", txHash, err)
+// clearCommitment takes the reason rather than deriving it: the two callers know it, the row does not.
+func (m *Manager) clearCommitment(ctx context.Context, c store.Commitment, reason string) error {
+	if err := m.store.WithRetry(ctx, func() error { return m.store.DeleteCommitment(ctx, c.TxHash) }); err != nil {
+		return fmt.Errorf("clearing commitment %s: %w", c.TxHash, err)
 	}
+	logging.Warn("commitment cleared", "tx", c.TxHash, "model", c.Model, "role", c.Role, "epoch", c.Epoch, "reason", reason)
 	return nil
 }
 

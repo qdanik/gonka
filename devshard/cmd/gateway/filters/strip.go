@@ -9,9 +9,9 @@ import (
 // errMalformedJSON ends a scan; the caller then passes the body through untouched.
 var errMalformedJSON = errors.New("filters: malformed json")
 
-// stripScanner removes clientStrippedFields at any depth in one pass over the input, copying the bytes
-// it keeps instead of decoding them. Decoding into any was the earlier approach and it rewrote numbers
-// it was never asked to touch. See gateway-request-filtering.md, "The response side".
+// stripScanner removes clientStrippedFields at any depth in one pass, copying the bytes it keeps rather
+// than decoding them, so every number it passes through survives exactly as the host wrote it. See
+// gateway-request-filtering.md, "The response side".
 type stripScanner struct {
 	input   []byte
 	pos     int
@@ -92,7 +92,8 @@ func (s *stripScanner) scalar() error {
 	return nil
 }
 
-// stringValue returns the raw quoted string, escapes and all, and leaves pos just past it.
+// stringValue returns the string with its quotes and escapes intact, since anything it copies goes out
+// to the client byte for byte.
 func (s *stripScanner) stringValue() ([]byte, error) {
 	if s.pos >= len(s.input) || s.input[s.pos] != '"' {
 		return nil, errMalformedJSON
@@ -256,8 +257,8 @@ func (s *stripScanner) skipContainer() error {
 	return errMalformedJSON
 }
 
-// isStrippedKey compares the raw quoted key, decoding it only when it carries an escape: "logprob"
-// is a valid spelling of a stripped field, and a byte comparison alone would forward it.
+// isStrippedKey decodes the key only when it carries a backslash: "logpro\u0062" spells a stripped
+// field too, and comparing raw bytes alone would hand a host that trick past the filter.
 func isStrippedKey(rawKey []byte) bool {
 	if !slices.Contains(rawKey, '\\') {
 		if len(rawKey) < 2 {
