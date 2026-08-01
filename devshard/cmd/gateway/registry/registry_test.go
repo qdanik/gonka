@@ -19,7 +19,9 @@ import (
 )
 
 func TestMain(m *testing.M) {
-	goleak.VerifyTestMain(m)
+	// desertbit/timer starts its wheel from a package-level init, so it exists for the life of any
+	// binary that links the chain client and is never ours to stop.
+	goleak.VerifyTestMain(m, goleak.IgnoreTopFunction("github.com/desertbit/timer.timerRoutine"))
 }
 
 // settlementSource mirrors escrow.SettlementSource so a signature drift in this package fails here

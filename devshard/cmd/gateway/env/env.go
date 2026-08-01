@@ -20,6 +20,8 @@ type Values struct {
 	DevshardsJSON *string
 
 	ChainREST           *string
+	ChainGRPC           *string
+	ChainRPC            *string
 	PublicAPI           *string
 	TxQueryFallbackURLs *string
 	TxFeeAmount         *int64
@@ -84,6 +86,8 @@ var legacyNames = map[string]string{
 	"GATEWAY_API_KEYS":                    "DEVSHARD_API_KEYS",
 	"GATEWAY_ADMIN_API_KEY":               "DEVSHARD_ADMIN_API_KEY",
 	"GATEWAY_CHAIN_REST":                  "DEVSHARD_CHAIN_REST",
+	"GATEWAY_CHAIN_GRPC":                  "DEVSHARD_CHAIN_GRPC",
+	"GATEWAY_CHAIN_RPC":                   "DEVSHARD_CHAIN_RPC",
 	"GATEWAY_PUBLIC_API":                  "DEVSHARD_PUBLIC_API",
 	"GATEWAY_TX_QUERY_FALLBACK_URLS":      "DEVSHARD_TX_QUERY_REST",
 	"GATEWAY_TX_FEE_AMOUNT":               "DEVSHARD_TX_FEE_AMOUNT",
@@ -167,6 +171,8 @@ func Load() (Values, error) {
 	readString("GATEWAY_DEVSHARDS_JSON", &values.DevshardsJSON)
 
 	readString("GATEWAY_CHAIN_REST", &values.ChainREST)
+	readString("GATEWAY_CHAIN_GRPC", &values.ChainGRPC)
+	readString("GATEWAY_CHAIN_RPC", &values.ChainRPC)
 	readString("GATEWAY_PUBLIC_API", &values.PublicAPI)
 	readString("GATEWAY_TX_QUERY_FALLBACK_URLS", &values.TxQueryFallbackURLs)
 	readInt("GATEWAY_TX_FEE_AMOUNT", &values.TxFeeAmount)
