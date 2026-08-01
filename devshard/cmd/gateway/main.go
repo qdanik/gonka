@@ -173,6 +173,7 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 	participants := limits.NewParticipantLimiter(limits.ParticipantConfigFromLimits(configuration.Limits), clock)
 	capacity := limits.NewCapacity(participants.Available)
 	observer.Subscribe(capacity.Update)
+	observer.Subscribe((&phaseNarrator{}).observe)
 	gatewayLimiter := limits.NewGatewayLimiter(limits.GatewayConfigFromLimits(configuration.Limits))
 	configHolder.Subscribe(func(next *config.Config) {
 		gatewayLimiter.Reconfigure(limits.GatewayConfigFromLimits(next.Limits))
@@ -377,7 +378,7 @@ func newRouting(deps routingDeps) (*registry.Registry, *scheduler.Scheduler) {
 		Perf:              deps.Hosts,
 		Snapshots:         deps.Snapshots,
 		Config:            deps.Config,
-		Observer:          deps.Dispatches,
+		Observer:          tracedDispatches{recorder: deps.Dispatches},
 		Now:               deps.Now,
 		OnEscrowExhausted: escrows.Exhausted,
 	})

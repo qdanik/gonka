@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"devshard/cmd/gateway/scheduler"
+	"devshard/logging"
 )
 
 var (
@@ -104,6 +105,7 @@ func (r *Registry) Add(ctx context.Context, escrowID, model string) error {
 	entry.hold = r.holdFor(entry)
 	r.live.Store(published.with(entry))
 	r.pushMembershipLocked()
+	logging.Info("escrow serving", "escrow", escrowID, "model", model)
 	return nil
 }
 
@@ -138,8 +140,10 @@ func (r *Registry) Retire(escrowID string) error {
 	r.pushMembershipLocked()
 	if entry.busy() {
 		r.draining[entry] = struct{}{}
+		logging.Info("escrow retired, draining", "escrow", escrowID, "in_flight", entry.inFlight.Load())
 		return nil
 	}
+	logging.Info("escrow retired", "escrow", escrowID)
 	return entry.close()
 }
 
@@ -277,7 +281,10 @@ func (r *Registry) release(entry *escrowEntry) {
 	delete(r.draining, entry)
 	if err := entry.close(); err != nil {
 		r.drainCloseFailures.Add(1)
+		logging.Error("draining escrow failed to close, its storage stays held", "escrow", entry.id, "error", err)
+		return
 	}
+	logging.Info("draining escrow closed", "escrow", entry.id)
 }
 
 // DrainCloseFailures counts the drained escrows whose flush or close failed. Retire and Close hand
