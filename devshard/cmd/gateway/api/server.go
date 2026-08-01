@@ -240,3 +240,6 @@ func randomRequestID() string {
 
 // CaptureStats reports the request-capture sink's own account of itself, for the metrics collector.
 func (s *Server) CaptureStats() (written, refused, failed, held int64) { return s.capture.stats() }
+
+// CacheStats reports the response cache's own account of itself, for the metrics collector.
+func (s *Server) CacheStats() (hits, misses, entries, bytes int64) { return s.cache.stats() }
