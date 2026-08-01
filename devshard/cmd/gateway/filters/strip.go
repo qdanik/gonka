@@ -20,7 +20,13 @@ type stripScanner struct {
 }
 
 func stripFields(payload []byte) ([]byte, bool, error) {
-	scanner := &stripScanner{input: payload, out: make([]byte, 0, len(payload))}
+	return appendStripped(make([]byte, 0, len(payload)), payload)
+}
+
+// appendStripped writes the stripped payload onto dst, so a caller rebuilding an SSE event around it
+// pays one allocation instead of one for the payload and another for the event.
+func appendStripped(dst, payload []byte) ([]byte, bool, error) {
+	scanner := &stripScanner{input: payload, out: dst}
 	scanner.skipSpace()
 	if err := scanner.value(); err != nil {
 		return nil, false, err
