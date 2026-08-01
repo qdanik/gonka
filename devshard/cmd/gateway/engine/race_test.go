@@ -669,8 +669,11 @@ func TestRunRaceReportsOneOutcomeOnHardTimeoutWithPendingAttempts(t *testing.T) 
 	if len(reported.Attempts) != 1 || len(outcome.Attempts) != 1 {
 		t.Fatalf("attempts = %d, want 1", len(reported.Attempts))
 	}
-	if reported.Attempts[0].Terminal != TerminalClientCancelled {
-		t.Fatalf("terminal = %v, want client cancelled", reported.Attempts[0].Terminal)
+	// The host receipted and then held until the backstop, with a client still waiting and nobody
+	// crowned. Reported as cancelled it would be exempt from the sample ladder like a loser the race
+	// outran, and a host that hangs for the whole timeout would cost its own health nothing.
+	if reported.Attempts[0].Terminal != TerminalStalled {
+		t.Fatalf("terminal = %v, want stalled", reported.Attempts[0].Terminal)
 	}
 }
 
@@ -1723,4 +1726,71 @@ func TestTheHalvedTokenRetryNeedsAHookAndAnUncrownedRace(t *testing.T) {
 			t.Fatalf("arm = %+v, want no escalation once an attempt has been crowned", arm)
 		}
 	})
+}
+
+// A host that receipts and then goes silent is cancelled by the hard-timeout backstop, and the attempt
+// goroutine can only report that its own context was cancelled. Left as TerminalClientCancelled it is
+// exempt from the sample ladder as though it were a loser the race cancelled after someone won — so a
+// host that hangs for the whole timeout costs the client twenty minutes and its own health nothing.
+func TestABackstopCancelWithNoWinnerIsNotACancelledLoser(t *testing.T) {
+	base := time.Now()
+	hung := &liveAttempt{
+		nonce:   1,
+		done:    true,
+		outcome: &AttemptOutcome{Nonce: 1, Terminal: TerminalClientCancelled, SendTime: base},
+	}
+
+	coordinator := stalledFixtureCoordinator(settledPolicy(), hung)
+	coordinator.cancelled = true
+	outcome := coordinator.outcome()
+
+	if got := outcome.Attempts[0].Terminal; got != TerminalStalled {
+		t.Fatalf("terminal = %v, want %v: nobody won, so this host answered nothing", got, TerminalStalled)
+	}
+}
+
+// The same backstop fires as the losers' grace period once a winner is crowned. Those are cancelled
+// losers in the proper sense and must stay exempt, or every race penalises the hosts it outran.
+func TestABackstopCancelAfterAWinnerLeavesLosersExempt(t *testing.T) {
+	base := time.Now()
+	loser := &liveAttempt{
+		nonce:   1,
+		done:    true,
+		outcome: &AttemptOutcome{Nonce: 1, Terminal: TerminalClientCancelled, SendTime: base},
+	}
+	winner := &liveAttempt{
+		nonce:         2,
+		done:          true,
+		nonceFinished: true,
+		outcome:       &AttemptOutcome{Nonce: 2, Terminal: TerminalLost, ContentChunks: 2, SendTime: base},
+	}
+
+	coordinator := stalledFixtureCoordinator(settledPolicy(), loser, winner)
+	coordinator.winner = winner
+	coordinator.cancelled = true
+	outcome := coordinator.outcome()
+
+	if got := outcome.Attempts[0].Terminal; got != TerminalClientCancelled {
+		t.Fatalf("terminal = %v, want %v: this host lost a race, it did not fail one", got, TerminalClientCancelled)
+	}
+}
+
+// The drain deadline after a client leaves is the same backstop, so a departure must not be charged to
+// the hosts still finishing their nonces for it.
+func TestABackstopCancelAfterTheClientLeftLeavesHostsExempt(t *testing.T) {
+	base := time.Now()
+	draining := &liveAttempt{
+		nonce:   1,
+		done:    true,
+		outcome: &AttemptOutcome{Nonce: 1, Terminal: TerminalClientCancelled, SendTime: base},
+	}
+
+	coordinator := stalledFixtureCoordinator(settledPolicy(), draining)
+	coordinator.handedOff = true
+	coordinator.cancelled = true
+	outcome := coordinator.outcome()
+
+	if got := outcome.Attempts[0].Terminal; got != TerminalClientCancelled {
+		t.Fatalf("terminal = %v, want %v: the client left, the hosts did not fail", got, TerminalClientCancelled)
+	}
 }
