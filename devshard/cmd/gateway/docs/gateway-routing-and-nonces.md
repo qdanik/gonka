@@ -98,7 +98,7 @@ A ghost commits a real one-token inference into the escrow's local diff and neve
 
 | Kind | Recorded reason | Cause |
 |---|---|---|
-| `ghostPoC` | `poc_unavailable_host` | The host is preserved for proof-of-compute and must not be sent work. |
+| `ghostPoC` | `poc_unavailable_host` | The host is **not** in the preserved set, so proof-of-compute is required of it and it cannot take work. Preserved means kept in service: `pocRequired` is the negation of `pocPreserved`, and a nil set counts everyone as preserved so an unloaded snapshot fails open rather than ghosting every nonce. |
 | `ghostThrottled` | `participant_throttled_no_send` | The host's concurrency window is full or its breaker is open. |
 | `ghostEjected` | `participant_ejected_no_send` | The outlier detector ejected the host, and the pool-wide cap left room to honour it. |
 | `ghostCapability` | `participant_capability_no_send` | Every waiter is blocked on this host by capability (context too small, tools unsupported) or by a state-divergence block. |

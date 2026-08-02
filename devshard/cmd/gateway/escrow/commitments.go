@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"sync"
 	"time"
@@ -77,9 +78,19 @@ func (m *Manager) createEscrow(ctx context.Context, model ModelConfig, role stri
 	return result, m.persistEscrow(ctx, strconv.FormatUint(result.EscrowID, 10), c)
 }
 
-// UpsertDevshard is an idempotent upsert (duplicate registration is a no-op success); a failed
-// registry write leaves the commitment in place so the next reconcile retries from durable intent.
+// persistEscrow registers the escrow a commitment created, then drops the commitment. A row that
+// already exists is left exactly as it is: a commitment can outlive its own create when the gateway
+// dies between the two writes, and by the time reconcile finds it that escrow may have been parked for
+// settlement. Re-registering would flip it active again and wipe the settle hash its reconciliation
+// depends on. See gateway-escrow-lifecycle.md, "Creating an escrow, and surviving a crash mid-creation".
 func (m *Manager) persistEscrow(ctx context.Context, escrowID string, c store.Commitment) error {
+	registered, err := m.escrowRegistered(ctx, escrowID)
+	if err != nil {
+		return err
+	}
+	if registered {
+		return m.clearCommitmentRow(ctx, escrowID, c.TxHash)
+	}
 	record := store.DevshardRecord{
 		EscrowID:      escrowID,
 		PrivateKeyEnv: c.PrivateKeyEnv,
@@ -91,10 +102,27 @@ func (m *Manager) persistEscrow(ctx context.Context, escrowID string, c store.Co
 	if err := m.store.WithRetry(ctx, func() error { return m.store.UpsertDevshard(ctx, record) }); err != nil {
 		return fmt.Errorf("registering escrow %s: %w", escrowID, err)
 	}
-	if err := m.store.WithRetry(ctx, func() error { return m.store.DeleteCommitment(ctx, c.TxHash) }); err != nil {
-		return fmt.Errorf("clearing commitment for escrow %s: %w", escrowID, err)
+	if err := m.clearCommitmentRow(ctx, escrowID, c.TxHash); err != nil {
+		return err
 	}
 	m.breaker.reset(c.Model, c.Role)
+	return nil
+}
+
+func (m *Manager) escrowRegistered(ctx context.Context, escrowID string) (bool, error) {
+	records, err := m.store.ListDevshards(ctx)
+	if err != nil {
+		return false, fmt.Errorf("listing devshards for escrow %s: %w", escrowID, err)
+	}
+	return slices.ContainsFunc(records, func(record store.DevshardRecord) bool {
+		return record.EscrowID == escrowID
+	}), nil
+}
+
+func (m *Manager) clearCommitmentRow(ctx context.Context, escrowID, txHash string) error {
+	if err := m.store.WithRetry(ctx, func() error { return m.store.DeleteCommitment(ctx, txHash) }); err != nil {
+		return fmt.Errorf("clearing commitment for escrow %s: %w", escrowID, err)
+	}
 	return nil
 }
 

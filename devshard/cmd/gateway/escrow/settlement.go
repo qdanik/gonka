@@ -59,9 +59,16 @@ func (m *Manager) Settle(ctx context.Context, escrowID string) (chain.SettleEscr
 		return chain.SettleEscrowResult{}, fmt.Errorf("listing devshards: %w", err)
 	}
 	for _, record := range devshards {
-		if record.EscrowID == escrowID {
-			return m.settle(ctx, record)
+		if record.EscrowID != escrowID {
+			continue
 		}
+		result, err := m.settle(ctx, record)
+		if err != nil {
+			return result, err
+		}
+		// The row holds the only name of the key that could settle this escrow, and the settlement it
+		// was kept for has happened. Retirement drops it on its own paths; this one has to as well.
+		return result, m.deleteSettled(ctx, escrowID)
 	}
 	return chain.SettleEscrowResult{}, fmt.Errorf("settling escrow %s: %w", escrowID, ErrUnknownEscrow)
 }

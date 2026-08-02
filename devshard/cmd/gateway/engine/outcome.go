@@ -232,18 +232,21 @@ func (a AttemptOutcome) elapsed() time.Duration {
 	return a.Completed.Sub(a.SendTime)
 }
 
+// longResponseExempt gates on ContentSource, not ContentChunks, which counts error events too. See
+// gateway-invariants.md, "1. A committed nonce is always settled".
 func (o RaceOutcome) longResponseExempt(a AttemptOutcome) bool {
-	return !a.NonceFinished && a.ContentChunks > 0 && a.elapsed() >= longResponseExemption
+	return !a.NonceFinished && a.ContentSource != "" && a.elapsed() >= longResponseExemption
 }
 
 func (o RaceOutcome) longNonStreamEmptyExempt(a AttemptOutcome) bool {
 	return !o.Stream && a.emptyStream() && a.elapsed() >= longResponseExemption
 }
 
+// responsive decides whether a host earns a positive perf sample. A long non-stream reply is exempt
+// from being judged slow, but an empty one earns nothing: crediting a host that held the request for
+// the whole window and returned no content teaches the router to prefer it. See
+// gateway-speculative-race.md, "The exemption ladder".
 func (o RaceOutcome) responsive(a AttemptOutcome) bool {
-	if o.longNonStreamEmptyExempt(a) {
-		return true
-	}
 	return a.Confirmed && a.NonceFinished && !a.emptyStream()
 }
 
