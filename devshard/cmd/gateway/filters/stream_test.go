@@ -643,3 +643,24 @@ func TestAnEscapedMessageKeyStillConvertsToChunks(t *testing.T) {
 	}
 	assertNoInternalFields(t, rewritten)
 }
+
+// An event whose payload spans two data lines and carries nothing to strip must come back out as the
+// same object. Written after one prefix, its embedded newline starts a line with no data: prefix, and
+// a client drops that line and rejoins a truncated object.
+func TestAMultiLineEventWithNothingToStripSurvivesIntact(t *testing.T) {
+	event := []byte("data: {\"choices\":[{\"delta\":{\"content\":\n" + "data: \"hi\"}}]}\n\n")
+
+	rewritten := rewriteEvent(event, LogprobIntent{})
+
+	_, payload, held := eventPayload(rewritten)
+	if !held {
+		t.Fatalf("the rewritten event carries no data line: %q", rewritten)
+	}
+	var decoded map[string]any
+	if err := stdjson.Unmarshal(payload, &decoded); err != nil {
+		t.Fatalf("a client cannot rejoin the event into an object: %v (%q)", err, rewritten)
+	}
+	if !bytes.Contains(rewritten, []byte(`"hi"`)) {
+		t.Fatalf("the content was lost: %q", rewritten)
+	}
+}

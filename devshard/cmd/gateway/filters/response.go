@@ -117,7 +117,19 @@ func stripInternalFields(payload []byte, intent LogprobIntent) ([]byte, stripOut
 	decoder.UseNumber()
 	var decoded any
 	if err := decoder.Decode(&decoded); err != nil || decoder.More() {
-		return nil, stripMalformed
+		// A backend writes NaN and Infinity as barewords for a probability of zero. Neither is JSON, so
+		// without this the body is inspected by nobody: the buffered path forwards it with every
+		// internal field in it, and the streaming path drops the event and the client's answer with it.
+		normalized, replaced := replaceNonFiniteNumbers(payload)
+		if !replaced {
+			return nil, stripMalformed
+		}
+		decoder = stdjson.NewDecoder(bytes.NewReader(normalized))
+		decoder.UseNumber()
+		decoded = nil
+		if err := decoder.Decode(&decoded); err != nil || decoder.More() {
+			return nil, stripMalformed
+		}
 	}
 	changed := deleteFields(decoded, intent.strippedFields())
 	if intent.Keep && !intent.KeepTop {
@@ -207,10 +219,15 @@ func parseUpstreamErrorDetails(payload []byte) (UpstreamError, bool) {
 		return details, true
 	}
 	var found UpstreamError
+	// An empty {"error":{}} decodes without carrying anything, so stopping on it would leave a real
+	// error in a later event unseen and the stream readable as cacheable.
 	EachSSEDataPayload(payload, func(data []byte) bool {
 		details, ok := DecodeUpstreamError(data)
+		if !ok || details == (UpstreamError{}) {
+			return false
+		}
 		found = details
-		return ok
+		return true
 	})
 	return found, found != UpstreamError{}
 }
@@ -323,4 +340,59 @@ func decodeLogprobIntent(document *Document) LogprobIntent {
 		}
 	}
 	return intent
+}
+
+// nonFiniteLiterals are the three barewords a backend writes for a probability of zero or an overflow.
+// None is valid JSON, so a body carrying one parses nowhere: the strip cannot inspect it and the
+// streaming path cannot forward it.
+var nonFiniteLiterals = [][]byte{[]byte("-Infinity"), []byte("Infinity"), []byte("NaN")}
+
+// replaceNonFiniteNumbers rewrites those barewords to null outside string literals, so a body carrying
+// one can be inspected and delivered instead of leaking its internal fields or being dropped whole. It
+// returns ok=false when the body carries none, so the ordinary path allocates nothing.
+func replaceNonFiniteNumbers(body []byte) ([]byte, bool) {
+	carries := false
+	for _, literal := range nonFiniteLiterals {
+		if bytes.Contains(body, literal) {
+			carries = true
+			break
+		}
+	}
+	if !carries {
+		return nil, false
+	}
+	out := make([]byte, 0, len(body))
+	inString, escaped, replaced := false, false, false
+	for index := 0; index < len(body); {
+		current := body[index]
+		switch {
+		case escaped:
+			escaped = false
+		case inString && current == '\\':
+			escaped = true
+		case current == '"':
+			inString = !inString
+		case !inString:
+			if literal := matchNonFinite(body[index:]); literal > 0 {
+				out = append(out, []byte("null")...)
+				index += literal
+				replaced = true
+				continue
+			}
+		}
+		out = append(out, current)
+		index++
+	}
+	return out, replaced
+}
+
+// matchNonFinite reports the length of a bareword at the start of tail, and 0 when there is none. The
+// longest form is tried first so -Infinity is not read as a minus sign followed by Infinity.
+func matchNonFinite(tail []byte) int {
+	for _, literal := range nonFiniteLiterals {
+		if bytes.HasPrefix(tail, literal) {
+			return len(literal)
+		}
+	}
+	return 0
 }

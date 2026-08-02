@@ -53,6 +53,9 @@ func isLockedError(err error) bool {
 	if !errors.As(err, &sqliteErr) {
 		return false
 	}
-	code := sqliteErr.Code()
+	// Masked to the primary code: with one connection a lock surfaces as the primary form, but the
+	// driver enables extended codes, and a comparison that only matches the primary would stop
+	// retrying the moment the connection model changed.
+	code := sqliteErr.Code() & 0xFF
 	return code == sqlite3.SQLITE_BUSY || code == sqlite3.SQLITE_LOCKED
 }

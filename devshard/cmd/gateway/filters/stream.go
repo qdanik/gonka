@@ -227,8 +227,8 @@ func eventPayload(event []byte) (dataLines []int, payload []byte, held bool) {
 	return dataLines, joined, true
 }
 
-// rebuildEvent emits the event with its data lines replaced by one carrying payload, keeping every
-// other line where it was: a client reads event, id and retry from the lines around the data.
+// rebuildEvent emits the event with its data lines replaced by the payload, keeping every other line
+// where it was: a client reads event, id and retry from the lines around the data.
 func rebuildEvent(event, payload []byte) []byte {
 	rewritten := make([]byte, 0, len(event)+len(payload))
 	emitted := false
@@ -243,8 +243,16 @@ func rebuildEvent(event, payload []byte) []byte {
 			continue
 		}
 		if !emitted {
-			rewritten = append(rewritten, sseDataPrefix...)
-			rewritten = append(rewritten, payload...)
+			// One data line per segment, the inverse of the join eventPayload did. A payload written
+			// after a single prefix would put its embedded newlines at the start of lines carrying no
+			// data: prefix, and a client drops those -- it would rejoin a truncated object.
+			for index, segment := range bytes.Split(payload, []byte("\n")) {
+				if index > 0 {
+					rewritten = append(rewritten, '\n')
+				}
+				rewritten = append(rewritten, sseDataPrefix...)
+				rewritten = append(rewritten, segment...)
+			}
 			rewritten = append(rewritten, event[offset+len(line):lineEnd]...)
 			emitted = true
 		}
