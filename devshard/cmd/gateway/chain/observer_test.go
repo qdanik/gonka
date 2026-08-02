@@ -2,6 +2,7 @@ package chain
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -23,11 +24,13 @@ type phaseObserverStub struct {
 	epochBody          string
 	participantsStatus int
 	participantsBody   string
-	preservedStatus    int
-	preservedBody      string
+	preserved          *PreservedNodes
+	preservedFound     bool
+	preservedErr       error
 	preservedHits      int
-	maxNonceStatus     int
-	maxNonceBody       string
+	maxNonce           uint64
+	maxNonceHeld       bool
+	maxNonceErr        error
 	maxNonceHits       int
 	versionsStatus     int
 	versionsBody       string
@@ -37,8 +40,6 @@ func newPhaseObserverStub() *phaseObserverStub {
 	return &phaseObserverStub{
 		epochStatus:        http.StatusOK,
 		participantsStatus: http.StatusOK,
-		preservedStatus:    http.StatusNotFound,
-		maxNonceStatus:     http.StatusNotFound,
 		versionsStatus:     http.StatusNotFound,
 	}
 }
@@ -54,14 +55,6 @@ func (s *phaseObserverStub) handler() http.HandlerFunc {
 		case "/v1/epochs/current/participants":
 			w.WriteHeader(s.participantsStatus)
 			w.Write([]byte(s.participantsBody))
-		case "/productscience/inference/inference/preserved_nodes_snapshot":
-			s.preservedHits++
-			w.WriteHeader(s.preservedStatus)
-			w.Write([]byte(s.preservedBody))
-		case "/productscience/inference/inference/params":
-			s.maxNonceHits++
-			w.WriteHeader(s.maxNonceStatus)
-			w.Write([]byte(s.maxNonceBody))
 		case "/v1/versions":
 			w.WriteHeader(s.versionsStatus)
 			w.Write([]byte(s.versionsBody))
@@ -85,18 +78,32 @@ func (s *phaseObserverStub) setParticipants(status int, body string) {
 	s.participantsBody = body
 }
 
-func (s *phaseObserverStub) setPreservedSnapshot(status int, body string) {
+// PreservedNodes and MaxNonce make the stub the observer's chain reader, so a test programs both the
+// public API and the chain from one place and still counts what was asked for.
+func (s *phaseObserverStub) PreservedNodes(context.Context) (*PreservedNodes, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.preservedStatus = status
-	s.preservedBody = body
+	s.preservedHits++
+	return s.preserved, s.preservedFound, s.preservedErr
 }
 
-func (s *phaseObserverStub) setMaxNonce(status int, body string) {
+func (s *phaseObserverStub) MaxNonce(context.Context) (uint64, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.maxNonceStatus = status
-	s.maxNonceBody = body
+	s.maxNonceHits++
+	return s.maxNonce, s.maxNonceHeld, s.maxNonceErr
+}
+
+func (s *phaseObserverStub) setPreservedNodes(snapshot *PreservedNodes, found bool, failure error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.preserved, s.preservedFound, s.preservedErr = snapshot, found, failure
+}
+
+func (s *phaseObserverStub) setMaxNonceValue(value uint64, held bool, failure error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.maxNonce, s.maxNonceHeld, s.maxNonceErr = value, held, failure
 }
 
 func (s *phaseObserverStub) setVersions(status int, body string) {
@@ -199,28 +206,21 @@ func observerTwoMinerParticipantsJSON(baseURL string) string {
 	}`, baseURL, baseURL)
 }
 
-// observerMaxNonceJSON is a chain params response exposing devshard_escrow_params.max_nonce.
-func observerMaxNonceJSON(maxNonce uint32) string {
-	return fmt.Sprintf(`{"params": {"devshard_escrow_params": {"max_nonce": %d}}}`, maxNonce)
-}
-
 // observerPreservedSnapshotJSON is a found preserved-nodes snapshot listing only gonka1abc/node1
 // under model-a at the given anchor height.
-func observerPreservedSnapshotJSON(anchorHeight int64) string {
-	return fmt.Sprintf(`{
-		"found": true,
-		"snapshot": {
-			"episode_anchor_height": %d,
-			"model_preserved_nodes": [
-				{"model_id": "model-a", "participants": [{"participant_id": "gonka1abc", "node_ids": ["node1"]}]}
-			]
-		}
-	}`, anchorHeight)
+func observerPreservedSnapshot(anchorHeight int64) *PreservedNodes {
+	return &PreservedNodes{
+		EpisodeAnchorHeight: anchorHeight,
+		Models: []PreservedModel{{
+			ModelID:      "model-a",
+			Participants: []PreservedParticipant{{ParticipantID: "gonka1abc", NodeIDs: []string{"node1"}}},
+		}},
+	}
 }
 
-// newPoCPhaseObserver builds an observer over the stub server with ChainRESTBaseURL wired unless
-// withChainREST is false; refresh is driven directly by the tests, never via Start.
-func newPoCPhaseObserver(t *testing.T, server *httptest.Server, withChainREST bool) *PhaseObserver {
+// newPoCPhaseObserver builds an observer over the stub server; a nil chainReader is the shape of a
+// gateway with no chain access, and refresh is driven directly by the tests, never via Start.
+func newPoCPhaseObserver(t *testing.T, server *httptest.Server, chainReader Reader) *PhaseObserver {
 	t.Helper()
 	clock := newFakeClock(time.Unix(100, 0))
 	cfg := ObserverConfig{
@@ -229,8 +229,8 @@ func newPoCPhaseObserver(t *testing.T, server *httptest.Server, withChainREST bo
 		HTTPClient:       server.Client(),
 		Now:              clock.Now,
 	}
-	if withChainREST {
-		cfg.ChainRESTBaseURL = server.URL
+	if chainReader != nil {
+		cfg.Chain = chainReader
 	}
 	observer, err := NewPhaseObserver(cfg)
 	if err != nil {
@@ -383,7 +383,7 @@ func TestPhaseObserver_EpochSwitchBlockHeightUsesFallbackLadder(t *testing.T) {
 	defer server.Close()
 	stub.setParticipants(http.StatusOK, observerParticipantsJSON("gonka1abc", server.URL, 42))
 
-	observer := newPoCPhaseObserver(t, server, false)
+	observer := newPoCPhaseObserver(t, server, nil)
 
 	stub.setEpoch(http.StatusOK, observerEpochSwitchJSON(1000, 1200, 1300))
 	observer.refresh(context.Background())
@@ -613,9 +613,9 @@ func TestPhaseObserver_DecodesMaxNonceFromDevshardEscrowParams(t *testing.T) {
 	defer server.Close()
 	stub.setEpoch(http.StatusOK, observerEpochJSON(42, 4, EpochPhaseInference))
 	stub.setParticipants(http.StatusOK, observerParticipantsJSON("gonka1abc", server.URL, 7))
-	stub.setMaxNonce(http.StatusOK, observerMaxNonceJSON(19_800))
+	stub.setMaxNonceValue(19_800, true, nil)
 
-	observer := newPoCPhaseObserver(t, server, true)
+	observer := newPoCPhaseObserver(t, server, stub)
 	observer.refresh(context.Background())
 	snapshot := observer.Snapshot()
 
@@ -627,7 +627,7 @@ func TestPhaseObserver_DecodesMaxNonceFromDevshardEscrowParams(t *testing.T) {
 	}
 }
 
-// The cold-start contract: with no ChainRESTBaseURL configured, MaxNonce stays 0 through active
+// The cold-start contract: with no chain access configured, MaxNonce stays 0 through active
 // polling and the params route is never dialed. Zero means "not fetched", never "no cap" -- routing
 // falls back to a conservative ceiling rather than treating the budget as unlimited.
 func TestPhaseObserver_MaxNonceZeroBeforeFirstSuccessfulFetch(t *testing.T) {
@@ -636,9 +636,9 @@ func TestPhaseObserver_MaxNonceZeroBeforeFirstSuccessfulFetch(t *testing.T) {
 	defer server.Close()
 	stub.setEpoch(http.StatusOK, observerEpochJSON(42, 4, EpochPhaseInference))
 	stub.setParticipants(http.StatusOK, observerParticipantsJSON("gonka1abc", server.URL, 7))
-	stub.setMaxNonce(http.StatusOK, observerMaxNonceJSON(19_800))
+	stub.setMaxNonceValue(19_800, true, nil)
 
-	observer := newPoCPhaseObserver(t, server, false)
+	observer := newPoCPhaseObserver(t, server, nil)
 	if observer.Snapshot().MaxNonce != 0 {
 		t.Fatalf("MaxNonce before first refresh = %d, want 0", observer.Snapshot().MaxNonce)
 	}
@@ -647,13 +647,13 @@ func TestPhaseObserver_MaxNonceZeroBeforeFirstSuccessfulFetch(t *testing.T) {
 	snapshot := observer.Snapshot()
 
 	if snapshot.LastError != "" {
-		t.Fatalf("LastError = %q, want empty (no ChainRESTBaseURL is not a failure)", snapshot.LastError)
+		t.Fatalf("LastError = %q, want empty (no chain access is not a failure)", snapshot.LastError)
 	}
 	if snapshot.MaxNonce != 0 {
-		t.Errorf("MaxNonce = %d, want 0 (ChainRESTBaseURL unset, so nothing was fetched)", snapshot.MaxNonce)
+		t.Errorf("MaxNonce = %d, want 0 (no chain access, so nothing was fetched)", snapshot.MaxNonce)
 	}
 	if hits := stub.maxNonceHitCount(); hits != 0 {
-		t.Errorf("params endpoint hits = %d, want 0 when ChainRESTBaseURL is empty", hits)
+		t.Errorf("params reads = %d, want 0 when no chain access is configured", hits)
 	}
 }
 
@@ -665,9 +665,9 @@ func TestPhaseObserver_MaxNonceFetchErrorKeepsPriorValueAndRestOfSnapshot(t *tes
 	defer server.Close()
 	stub.setEpoch(http.StatusOK, observerEpochJSON(42, 4, EpochPhaseInference))
 	stub.setParticipants(http.StatusOK, observerParticipantsJSON("gonka1abc", server.URL, 7))
-	stub.setMaxNonce(http.StatusOK, observerMaxNonceJSON(19_800))
+	stub.setMaxNonceValue(19_800, true, nil)
 
-	observer := newPoCPhaseObserver(t, server, true)
+	observer := newPoCPhaseObserver(t, server, stub)
 	observer.refresh(context.Background())
 	good := observer.Snapshot()
 	if good.LastError != "" {
@@ -677,7 +677,7 @@ func TestPhaseObserver_MaxNonceFetchErrorKeepsPriorValueAndRestOfSnapshot(t *tes
 		t.Fatalf("precondition: MaxNonce = %d, want 19800", good.MaxNonce)
 	}
 
-	stub.setMaxNonce(http.StatusInternalServerError, "")
+	stub.setMaxNonceValue(0, false, errors.New("chain unreachable"))
 	observer.refresh(context.Background())
 	after := observer.Snapshot()
 
@@ -821,9 +821,9 @@ func TestPhaseObserver_PoCCurrentPreservedSnapshotReplacesTimeslotRule(t *testin
 	defer server.Close()
 	stub.setEpoch(http.StatusOK, observerEpochPoCJSON(EpochPhasePoCGenerate, 950))
 	stub.setParticipants(http.StatusOK, observerTwoMinerParticipantsJSON(server.URL))
-	stub.setPreservedSnapshot(http.StatusOK, observerPreservedSnapshotJSON(950))
+	stub.setPreservedNodes(observerPreservedSnapshot(950), true, nil)
 
-	observer := newPoCPhaseObserver(t, server, true)
+	observer := newPoCPhaseObserver(t, server, stub)
 	observer.refresh(context.Background())
 	snapshot := observer.Snapshot()
 
@@ -852,9 +852,9 @@ func TestPhaseObserver_ConfirmationGraceMissingSnapshotPreservesAll(t *testing.T
 	defer server.Close()
 	stub.setEpoch(http.StatusOK, observerEpochConfirmationJSON(ConfirmationPoCGracePeriod, 555))
 	stub.setParticipants(http.StatusOK, observerTwoMinerParticipantsJSON(server.URL))
-	stub.setPreservedSnapshot(http.StatusOK, `{"found": false}`)
+	stub.setPreservedNodes(nil, false, nil)
 
-	observer := newPoCPhaseObserver(t, server, true)
+	observer := newPoCPhaseObserver(t, server, stub)
 	observer.refresh(context.Background())
 	snapshot := observer.Snapshot()
 
@@ -872,23 +872,23 @@ func TestPhaseObserver_ConfirmationGraceMissingSnapshotPreservesAll(t *testing.T
 	}
 }
 
-// TestPhaseObserver_PoCPreservedSnapshotMissesFallBackToLegacyRule covers every miss that must
-// keep the participants-endpoint timeslot rule: endpoint absent, endpoint erroring, stale anchor,
-// snapshot missing outside grace, and no ChainRESTBaseURL configured.
+// TestPhaseObserver_PoCPreservedSnapshotMissesFallBackToLegacyRule covers every miss that must keep
+// the participants-endpoint timeslot rule: the chain has no snapshot, the read fails, the anchor is
+// stale, and no chain access is configured at all.
 func TestPhaseObserver_PoCPreservedSnapshotMissesFallBackToLegacyRule(t *testing.T) {
 	cases := []struct {
-		name            string
-		withChainREST   bool
-		preservedStatus int
-		preservedBody   string
-		wantErrSubstr   string
-		wantZeroHits    bool
+		name          string
+		withChain     bool
+		preserved     *PreservedNodes
+		preservedHeld bool
+		preservedErr  error
+		wantErrSubstr string
+		wantZeroHits  bool
 	}{
-		{"endpoint not found", true, http.StatusNotFound, "", "", false},
-		{"endpoint server error", true, http.StatusInternalServerError, "", "preserved snapshot", false},
-		{"anchor mismatch", true, http.StatusOK, observerPreservedSnapshotJSON(900), "", false},
-		{"missing outside grace period", true, http.StatusOK, `{"found": false}`, "", false},
-		{"no chain REST base URL", false, http.StatusOK, observerPreservedSnapshotJSON(950), "", true},
+		{name: "chain has no snapshot", withChain: true},
+		{name: "read failed", withChain: true, preservedErr: errors.New("chain unreachable"), wantErrSubstr: "chain unreachable"},
+		{name: "anchor mismatch", withChain: true, preserved: observerPreservedSnapshot(900), preservedHeld: true},
+		{name: "no chain access", preserved: observerPreservedSnapshot(950), preservedHeld: true, wantZeroHits: true},
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -897,9 +897,13 @@ func TestPhaseObserver_PoCPreservedSnapshotMissesFallBackToLegacyRule(t *testing
 			defer server.Close()
 			stub.setEpoch(http.StatusOK, observerEpochPoCJSON(EpochPhasePoCGenerate, 950))
 			stub.setParticipants(http.StatusOK, observerTwoMinerParticipantsJSON(server.URL))
-			stub.setPreservedSnapshot(testCase.preservedStatus, testCase.preservedBody)
+			stub.setPreservedNodes(testCase.preserved, testCase.preservedHeld, testCase.preservedErr)
 
-			observer := newPoCPhaseObserver(t, server, testCase.withChainREST)
+			var chainReader Reader
+			if testCase.withChain {
+				chainReader = stub
+			}
+			observer := newPoCPhaseObserver(t, server, chainReader)
 			observer.refresh(context.Background())
 			snapshot := observer.Snapshot()
 
@@ -916,7 +920,7 @@ func TestPhaseObserver_PoCPreservedSnapshotMissesFallBackToLegacyRule(t *testing
 				t.Errorf("LastError = %q, want substring %q", snapshot.LastError, testCase.wantErrSubstr)
 			}
 			if testCase.wantZeroHits && stub.preservedHitCount() != 0 {
-				t.Errorf("preserved endpoint hits = %d, want 0 when ChainRESTBaseURL is empty", stub.preservedHitCount())
+				t.Errorf("preserved reads = %d, want 0 when no chain access is configured", stub.preservedHitCount())
 			}
 		})
 	}
@@ -941,7 +945,7 @@ func TestPhaseObserver_ValidationMergeAddsCapableExcludedMiner(t *testing.T) {
 	stub.setParticipants(http.StatusOK, observerTwoMinerParticipantsJSON(server.URL))
 	stub.setVersions(http.StatusOK, observerVersionsJSON(true, true))
 
-	observer := newPoCPhaseObserver(t, server, true)
+	observer := newPoCPhaseObserver(t, server, stub)
 
 	observer.refresh(context.Background())
 	cold := observer.Snapshot()
@@ -983,7 +987,7 @@ func TestPhaseObserver_ValidationMergeExcludesNonCapableNode(t *testing.T) {
 	stub.setParticipants(http.StatusOK, observerTwoMinerParticipantsJSON(server.URL))
 	stub.setVersions(http.StatusOK, observerVersionsJSON(false, true))
 
-	observer := newPoCPhaseObserver(t, server, true)
+	observer := newPoCPhaseObserver(t, server, stub)
 	observer.refresh(context.Background())
 	observer.versions.Poll(context.Background())
 	observer.refresh(context.Background())
@@ -1010,7 +1014,7 @@ func TestPhaseObserver_GenerationPhaseSkipsValidationMerge(t *testing.T) {
 	stub.setParticipants(http.StatusOK, observerTwoMinerParticipantsJSON(server.URL))
 	stub.setVersions(http.StatusOK, observerVersionsJSON(true, true))
 
-	observer := newPoCPhaseObserver(t, server, true)
+	observer := newPoCPhaseObserver(t, server, stub)
 	observer.refresh(context.Background())
 	observer.versions.Poll(context.Background())
 	observer.refresh(context.Background())
@@ -1033,7 +1037,7 @@ func TestPhaseObserver_StartTwiceIsANoOpAndRestartWorks(t *testing.T) {
 	defer server.Close()
 	stub.setEpoch(http.StatusOK, observerEpochJSON(1000, 7, EpochPhaseInference))
 	stub.setParticipants(http.StatusOK, observerParticipantsJSON("gonka1abc", server.URL, 42))
-	observer := newPoCPhaseObserver(t, server, true)
+	observer := newPoCPhaseObserver(t, server, stub)
 
 	ctx := context.Background()
 	observer.Start(ctx)

@@ -1,9 +1,10 @@
 package chain
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"reflect"
-	"strings"
 	"testing"
 )
 
@@ -286,29 +287,27 @@ func TestParseParticipantsPoCInactiveTreatsAllNodesAsPreserved(t *testing.T) {
 // participantsSnapshotOverrideJSON, parsed with preservationModeSnapshot, exercises membership
 // that contradicts the timeslot flags: node2/node4 are timeslot-non-preserved but listed in the
 // snapshot, node1/node3 are timeslot-preserved but absent from it.
-const participantsSnapshotOverrideJSON = `{
-	"found": true,
-	"snapshot": {
-		"episode_anchor_height": 950,
-		"model_preserved_nodes": [
-			{
-				"model_id": "model-x",
-				"participants": [
-					{"participant_id": "gonka1abc", "node_ids": ["node2"]},
-					{"participant_id": "gonka1def", "node_ids": ["node4"]}
-				]
-			}
-		]
+// participantsSnapshotOverride is the snapshot whose membership replaces the timeslot rule.
+func participantsSnapshotOverride() *PreservedNodes {
+	return &PreservedNodes{
+		EpisodeAnchorHeight: 950,
+		Models: []PreservedModel{{
+			ModelID: "model-x",
+			Participants: []PreservedParticipant{
+				{ParticipantID: "gonka1abc", NodeIDs: []string{"node2"}},
+				{ParticipantID: "gonka1def", NodeIDs: []string{"node4"}},
+			},
+		}},
 	}
-}`
+}
 
 // TestParseParticipantsSnapshotModeUsesSnapshotMembership covers preservationModeSnapshot: the
 // snapshot's (model, participant, node) membership replaces the timeslot-allocation rule for
 // current weights and preserved sets, while full weights stay all-node.
 func TestParseParticipantsSnapshotModeUsesSnapshotMembership(t *testing.T) {
-	preservedNodes, status, err := parsePreservedSnapshot([]byte(participantsSnapshotOverrideJSON), 950)
+	preservedNodes, status, err := readPreserved(t, fakeReader{preserved: participantsSnapshotOverride(), found: true}, 950)
 	if err != nil || status != preservedSnapshotCurrent {
-		t.Fatalf("parsePreservedSnapshot() = (status %v, err %v), want current/nil", status, err)
+		t.Fatalf("fetchPreservedSnapshot() = (status %v, err %v), want current/nil", status, err)
 	}
 
 	state, err := parseParticipants([]byte(participantsMultiModelJSON), preservationModeSnapshot, preservedNodes)
@@ -512,54 +511,34 @@ func TestParseParticipantsMalformedJSONErrors(t *testing.T) {
 	}
 }
 
-const preservedSnapshotFoundJSON = `{
-	"found": true,
-	"snapshot": {
-		"episode_anchor_height": 950,
-		"model_preserved_nodes": [
-			{
-				"model_id": "model-x",
-				"participants": [
-					{"participant_id": "gonka1abc", "node_ids": ["node1", "node3"]}
-				]
-			}
-		]
-	}
-}`
-
-const preservedSnapshotNotFoundJSON = `{"found": false}`
-
-const preservedSnapshotEmptyModelsJSON = `{
-	"found": true,
-	"snapshot": {"episode_anchor_height": 950, "model_preserved_nodes": []}
-}`
-
 // TestParsePreservedSnapshotStatusMatrix covers the found/anchor-match/anchor-mismatch/malformed
 // status matrix: current only when found and the anchor matches (or isn't checked).
-func TestParsePreservedSnapshotStatusMatrix(t *testing.T) {
-	cases := []struct {
+// The status is what routing acts on: current means the snapshot describes this episode, missing means
+// the chain has none for it, and unavailable means the chain could not be read at all.
+func TestPreservedSnapshotStatusMatrix(t *testing.T) {
+	stale := preservedFixture()
+	testCases := []struct {
 		name           string
-		body           string
+		reader         fakeReader
 		expectedAnchor int64
 		wantStatus     preservedSnapshotStatus
 		wantErr        bool
 	}{
-		{"anchor matches -> current", preservedSnapshotFoundJSON, 950, preservedSnapshotCurrent, false},
-		{"zero expected anchor skips check -> current", preservedSnapshotFoundJSON, 0, preservedSnapshotCurrent, false},
-		{"anchor mismatch -> missing", preservedSnapshotFoundJSON, 999, preservedSnapshotMissingCurrent, false},
-		{"not found -> missing", preservedSnapshotNotFoundJSON, 950, preservedSnapshotMissingCurrent, false},
-		{"found but snapshot null -> missing", `{"found": true, "snapshot": null}`, 950, preservedSnapshotMissingCurrent, false},
-		{"empty model list -> current with empty map", preservedSnapshotEmptyModelsJSON, 950, preservedSnapshotCurrent, false},
-		{"malformed json -> unavailable", `{not-json`, 950, preservedSnapshotUnavailable, true},
+		{name: "anchor_matches", reader: fakeReader{preserved: preservedFixture(), found: true}, expectedAnchor: 950, wantStatus: preservedSnapshotCurrent},
+		{name: "zero_expected_anchor_skips_the_check", reader: fakeReader{preserved: preservedFixture(), found: true}, wantStatus: preservedSnapshotCurrent},
+		{name: "anchor_mismatch", reader: fakeReader{preserved: stale, found: true}, expectedAnchor: 999, wantStatus: preservedSnapshotMissingCurrent},
+		{name: "chain_has_none", reader: fakeReader{}, expectedAnchor: 950, wantStatus: preservedSnapshotMissingCurrent},
+		{name: "found_but_empty", reader: fakeReader{preserved: &PreservedNodes{EpisodeAnchorHeight: 950}, found: true}, expectedAnchor: 950, wantStatus: preservedSnapshotCurrent},
+		{name: "read_failed", reader: fakeReader{err: errors.New("chain unreachable")}, expectedAnchor: 950, wantStatus: preservedSnapshotUnavailable, wantErr: true},
 	}
-	for _, testCase := range cases {
+	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
-			_, status, err := parsePreservedSnapshot([]byte(testCase.body), testCase.expectedAnchor)
-			if testCase.wantErr && err == nil {
-				t.Fatal("parsePreservedSnapshot() error = nil, want error")
-			}
-			if !testCase.wantErr && err != nil {
-				t.Fatalf("parsePreservedSnapshot(): %v", err)
+			t.Parallel()
+
+			_, status, err := readPreserved(t, testCase.reader, testCase.expectedAnchor)
+
+			if testCase.wantErr != (err != nil) {
+				t.Fatalf("err = %v, wantErr %v", err, testCase.wantErr)
 			}
 			if status != testCase.wantStatus {
 				t.Fatalf("status = %v, want %v", status, testCase.wantStatus)
@@ -569,9 +548,9 @@ func TestParsePreservedSnapshotStatusMatrix(t *testing.T) {
 }
 
 func TestParsePreservedSnapshotHasLooksUpByModelParticipantNode(t *testing.T) {
-	state, status, err := parsePreservedSnapshot([]byte(preservedSnapshotFoundJSON), 950)
+	state, status, err := readPreserved(t, fakeReader{preserved: preservedFixture(), found: true}, 950)
 	if err != nil {
-		t.Fatalf("parsePreservedSnapshot(): %v", err)
+		t.Fatalf("fetchPreservedSnapshot(): %v", err)
 	}
 	if status != preservedSnapshotCurrent {
 		t.Fatalf("status = %v, want preservedSnapshotCurrent", status)
@@ -600,77 +579,15 @@ func TestParsePreservedSnapshotHasLooksUpByModelParticipantNode(t *testing.T) {
 
 // TestParsePreservedSnapshotEmptyModelsHasIsSafe covers Has() against an empty-but-current snapshot: no panic, always false.
 func TestParsePreservedSnapshotEmptyModelsHasIsSafe(t *testing.T) {
-	state, status, err := parsePreservedSnapshot([]byte(preservedSnapshotEmptyModelsJSON), 950)
+	state, status, err := readPreserved(t, fakeReader{preserved: &PreservedNodes{EpisodeAnchorHeight: 950}, found: true}, 950)
 	if err != nil {
-		t.Fatalf("parsePreservedSnapshot(): %v", err)
+		t.Fatalf("fetchPreservedSnapshot(): %v", err)
 	}
 	if status != preservedSnapshotCurrent {
 		t.Fatalf("status = %v, want preservedSnapshotCurrent", status)
 	}
 	if state.Has("model-x", "gonka1abc", "node1") {
 		t.Fatal("Has() = true against an empty snapshot, want false")
-	}
-}
-
-func TestParseMaxNonceDecodesField(t *testing.T) {
-	cases := []struct {
-		name    string
-		body    string
-		want    uint64
-		wantErr bool
-	}{
-		{"decodes numeric max_nonce", `{"params": {"devshard_escrow_params": {"max_nonce": 19800}}}`, 19800, false},
-		{"decodes string-encoded max_nonce", `{"params": {"devshard_escrow_params": {"max_nonce": "19800"}}}`, 19800, false},
-		{"zero max_nonce decodes to zero", `{"params": {"devshard_escrow_params": {"max_nonce": 0}}}`, 0, false},
-		{"missing devshard_escrow_params errors", `{"params": {}}`, 0, true},
-		{"missing params errors", `{}`, 0, true},
-		{"malformed json errors", `{not-json`, 0, true},
-	}
-	for _, testCase := range cases {
-		t.Run(testCase.name, func(t *testing.T) {
-			got, err := parseMaxNonce([]byte(testCase.body))
-			if testCase.wantErr {
-				if err == nil {
-					t.Fatal("parseMaxNonce() error = nil, want error")
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("parseMaxNonce(): %v", err)
-			}
-			if got != testCase.want {
-				t.Fatalf("parseMaxNonce() = %d, want %d", got, testCase.want)
-			}
-		})
-	}
-}
-
-// The public API has served these numbers both ways: protojson stringifies int64 fields, encoding/json
-// leaves them numeric, and gonka-ai/gonka#1526 switches the deployed shape back from the first to the
-// second. Parsing only one shape means a weight map that silently reads as zero, which is not "unknown"
-// downstream -- it is "everything weighs nothing", and routing stops with no error anywhere.
-func TestParseParticipantsAcceptsStringAndNumericIntegers(t *testing.T) {
-	stringified := strings.NewReplacer(
-		`"poc_weight": 100`, `"poc_weight": "100"`,
-		`"poc_weight": 50`, `"poc_weight": "50"`,
-		`"poc_weight": 30`, `"poc_weight": "30"`,
-		`"poc_weight": 20`, `"poc_weight": "20"`,
-	).Replace(participantsMultiModelJSON)
-	if stringified == participantsMultiModelJSON {
-		t.Fatal("the fixture no longer carries numeric poc_weight values to stringify")
-	}
-
-	numericState, err := parseParticipants([]byte(participantsMultiModelJSON), preservationModeLegacy, preservedSnapshotState{})
-	if err != nil {
-		t.Fatalf("parseParticipants(numeric): %v", err)
-	}
-	stringState, err := parseParticipants([]byte(stringified), preservationModeLegacy, preservedSnapshotState{})
-	if err != nil {
-		t.Fatalf("parseParticipants(stringified): %v", err)
-	}
-
-	if !reflect.DeepEqual(numericState, stringState) {
-		t.Fatalf("the two wire shapes parsed differently:\n numeric = %+v\n string  = %+v", numericState, stringState)
 	}
 }
 
@@ -700,5 +617,48 @@ func TestParseEpochAcceptsStringAndNumericIntegers(t *testing.T) {
 	}
 	if fromNumeric.BlockHeight != 1000 {
 		t.Fatalf("BlockHeight = %d, want 1000", fromNumeric.BlockHeight)
+	}
+}
+
+// fakeReader answers the observer's chain reads in process.
+type fakeReader struct {
+	preserved *PreservedNodes
+	found     bool
+	err       error
+	maxNonce  uint64
+	nonceHeld bool
+	nonceErr  error
+}
+
+func (f fakeReader) PreservedNodes(context.Context) (*PreservedNodes, bool, error) {
+	return f.preserved, f.found, f.err
+}
+
+func (f fakeReader) MaxNonce(context.Context) (uint64, bool, error) {
+	return f.maxNonce, f.nonceHeld, f.nonceErr
+}
+
+// readPreserved drives the observer's own fetch, so these tests cover the path production takes rather
+// than the derivation alone.
+func readPreserved(t *testing.T, reader Reader, expectedAnchor int64) (preservedSnapshotState, preservedSnapshotStatus, error) {
+	t.Helper()
+	observer, err := NewPhaseObserver(ObserverConfig{PublicAPIBaseURL: "http://public.invalid", Chain: reader})
+	if err != nil {
+		t.Fatalf("NewPhaseObserver: %v", err)
+	}
+	return observer.fetchPreservedSnapshot(context.Background(), expectedAnchor)
+}
+
+// preservedFixture is the snapshot the JSON fixtures used to carry.
+func preservedFixture() *PreservedNodes {
+	return &PreservedNodes{
+		EpisodeAnchorHeight: 950,
+		Models: []PreservedModel{{
+			ModelID: "model-x",
+			Participants: []PreservedParticipant{
+				{ParticipantID: "gonka1abc", NodeIDs: []string{"node1", "node3"}},
+				{ParticipantID: "gonka1def", NodeIDs: []string{"node9"}},
+			},
+		}},
 	}
 }

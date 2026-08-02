@@ -430,45 +430,9 @@ func (s preservedSnapshotState) Has(model, participantID, nodeID string) bool {
 	return ok
 }
 
-type chainPreservedNodesSnapshotResponse struct {
-	Snapshot *chainPreservedNodesSnapshot `json:"snapshot,omitempty"`
-	Found    bool                         `json:"found"`
-}
-
-type chainPreservedNodesSnapshot struct {
-	EpisodeAnchorHeight jsonInt64                  `json:"episode_anchor_height"`
-	ModelPreservedNodes []chainModelPreservedNodes `json:"model_preserved_nodes"`
-}
-
-type chainModelPreservedNodes struct {
-	ModelID      string                           `json:"model_id"`
-	Participants []chainParticipantPreservedNodes `json:"participants"`
-}
-
-type chainParticipantPreservedNodes struct {
-	ParticipantID string   `json:"participant_id"`
-	NodeIDs       []string `json:"node_ids"`
-}
-
-// parsePreservedSnapshot parses a preserved-nodes-snapshot body: current only when found and the
-// anchor matches (or isn't checked); otherwise missingCurrent, or unavailable if decode fails.
-func parsePreservedSnapshot(body []byte, expectedAnchor int64) (preservedSnapshotState, preservedSnapshotStatus, error) {
-	var payload chainPreservedNodesSnapshotResponse
-	if err := json.Unmarshal(body, &payload); err != nil {
-		return preservedSnapshotState{}, preservedSnapshotUnavailable, fmt.Errorf("parse preserved snapshot: %w", err)
-	}
-	if !payload.Found || payload.Snapshot == nil {
-		return preservedSnapshotState{}, preservedSnapshotMissingCurrent, nil
-	}
-	if expectedAnchor > 0 && int64(payload.Snapshot.EpisodeAnchorHeight) != expectedAnchor {
-		return preservedSnapshotState{}, preservedSnapshotMissingCurrent, nil
-	}
-	return newPreservedSnapshotState(payload.Snapshot), preservedSnapshotCurrent, nil
-}
-
-func newPreservedSnapshotState(snapshot *chainPreservedNodesSnapshot) preservedSnapshotState {
+func newPreservedSnapshotState(snapshot *PreservedNodes) preservedSnapshotState {
 	state := preservedSnapshotState{byModel: map[string]map[string]map[string]struct{}{}}
-	for _, modelNodes := range snapshot.ModelPreservedNodes {
+	for _, modelNodes := range snapshot.Models {
 		model := strings.TrimSpace(modelNodes.ModelID)
 		if model == "" {
 			continue
@@ -501,24 +465,6 @@ func newPreservedSnapshotState(snapshot *chainPreservedNodesSnapshot) preservedS
 
 // chainParamsResponse is the raw /productscience/inference/inference/params JSON envelope,
 // decoding only the devshard_escrow_params.max_nonce field.
-type chainParamsResponse struct {
-	Params *struct {
-		DevshardEscrowParams *struct {
-			MaxNonce jsonUint64 `json:"max_nonce,omitempty"`
-		} `json:"devshard_escrow_params"`
-	} `json:"params"`
-}
-
-func parseMaxNonce(body []byte) (uint64, error) {
-	var payload chainParamsResponse
-	if err := json.Unmarshal(body, &payload); err != nil {
-		return 0, fmt.Errorf("parse devshard escrow params: %w", err)
-	}
-	if payload.Params == nil || payload.Params.DevshardEscrowParams == nil {
-		return 0, fmt.Errorf("devshard escrow params missing from chain params response")
-	}
-	return uint64(payload.Params.DevshardEscrowParams.MaxNonce), nil
-}
 
 // jsonInt64 decodes an int64 field that may arrive as a JSON number or a numeric string.
 type jsonInt64 int64

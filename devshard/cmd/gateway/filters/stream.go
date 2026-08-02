@@ -108,15 +108,16 @@ func AssembleSSEBody(body []byte) []byte {
 	}
 }
 
-// StreamRewriter strips clientStrippedFields from an SSE stream delivered in arbitrary chunks,
-// emitting complete events only and holding the trailing partial until it completes.
+// StreamRewriter strips the fields a client must not see from an SSE stream delivered in arbitrary
+// chunks, emitting complete events only and holding the trailing partial until it completes.
 type StreamRewriter struct {
+	intent  LogprobIntent
 	carry   []byte
 	scanned int
 	failed  bool
 }
 
-func NewStreamRewriter() *StreamRewriter { return &StreamRewriter{} }
+func NewStreamRewriter(intent LogprobIntent) *StreamRewriter { return &StreamRewriter{intent: intent} }
 
 // Write appends chunk to the carry buffer and returns every event it completes, rewritten.
 // Once the carry exceeds MaxStreamCarryBytes the rewriter fails permanently.
@@ -133,7 +134,7 @@ func (r *StreamRewriter) Write(chunk []byte) ([]byte, error) {
 			break
 		}
 		eventEnd := searchFrom + offset
-		out.Write(rewriteEvent(r.carry[eventStart:eventEnd]))
+		out.Write(rewriteEvent(r.carry[eventStart:eventEnd], r.intent))
 		eventStart, searchFrom = eventEnd, eventEnd
 	}
 	r.carry = append(r.carry[:0], r.carry[eventStart:]...)
@@ -158,7 +159,7 @@ func (r *StreamRewriter) Close() ([]byte, error) {
 	if len(carry) == 0 {
 		return nil, nil
 	}
-	final := rewriteEvent(carry)
+	final := rewriteEvent(carry, r.intent)
 	if final == nil {
 		return nil, ErrStreamTruncatedEvent
 	}
@@ -168,17 +169,17 @@ func (r *StreamRewriter) Close() ([]byte, error) {
 // rewriteEvent returns the event as the client must read it: a complete chat.completion becomes the
 // chunk events an OpenAI streaming client renders, and clientStrippedFields are removed from the JSON
 // payload. It returns nil when that payload does not parse and must be dropped rather than forwarded.
-func rewriteEvent(event []byte) []byte {
+func rewriteEvent(event []byte, intent LogprobIntent) []byte {
 	convertible := bytes.Contains(event, sseMessageKey)
 	if !convertible && !hasStrippableField(event) {
 		return event
 	}
 	start, end, isObject := soleDataObject(event)
 	if !isObject {
-		return stripEachDataLine(event)
+		return stripEachDataLine(event, intent)
 	}
 	payload := event[start:end]
-	filtered, outcome := stripInternalFields(payload)
+	filtered, outcome := stripInternalFields(payload, intent)
 	switch outcome {
 	case stripMalformed:
 		return nil
@@ -201,7 +202,7 @@ func rewriteEvent(event []byte) []byte {
 
 // stripEachDataLine strips each data line on its own, so a host cannot put a renderable delta on one
 // line and its internal fields on the next. See gateway-request-filtering.md, "The response side".
-func stripEachDataLine(event []byte) []byte {
+func stripEachDataLine(event []byte, intent LogprobIntent) []byte {
 	rewritten := make([]byte, 0, len(event))
 	changed := false
 	for offset := 0; offset < len(event); {
@@ -217,7 +218,7 @@ func stripEachDataLine(event []byte) []byte {
 		}
 		leading := bytes.TrimLeft(data, " \t")
 		payload := bytes.TrimRight(leading, " \t\r")
-		filtered, outcome := stripInternalFields(payload)
+		filtered, outcome := stripInternalFields(payload, intent)
 		if outcome != stripRewritten {
 			rewritten = append(rewritten, event[offset:lineEnd]...)
 			offset = lineEnd

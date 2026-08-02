@@ -2,12 +2,7 @@ package chain
 
 import (
 	"context"
-	"encoding/base64"
-	"encoding/json"
 	"errors"
-	"net/http"
-	"net/http/httptest"
-	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -16,37 +11,31 @@ import (
 	"devshard/signing"
 )
 
-func writeJSONResponse(t *testing.T, w http.ResponseWriter, value any) {
+// newFakeTxClient wires a client to a transport that answers in process. Nothing here reaches a
+// connection, so a test that expects no call can prove it by the transport's own records.
+func newFakeTxClient(t *testing.T, transport *fakeTransport) *TxClient {
 	t.Helper()
-	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(value); err != nil {
-		t.Errorf("encode stub response: %v", err)
-	}
-}
-
-// newUnreachableTxClient returns a client pointed at a closed server, so any
-// call that reaches the network fails fast — used to prove input-validation
-// guards short-circuit before a request is attempted.
-func newUnreachableTxClient(t *testing.T) *TxClient {
-	t.Helper()
-	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
-	server.Close()
-	client, err := NewTxClient(Config{RESTBaseURL: server.URL})
+	client, err := NewTxClient(Config{
+		Transport:    transport,
+		PollInterval: time.Millisecond,
+		PollTimeout:  time.Second,
+		Now:          func() time.Time { return time.Unix(1_800_000_000, 0).UTC() },
+	})
 	if err != nil {
 		t.Fatalf("NewTxClient: %v", err)
 	}
 	return client
 }
 
-func TestNewTxClientRequiresRESTBaseURL(t *testing.T) {
+func TestNewTxClientRequiresATransport(t *testing.T) {
 	_, err := NewTxClient(Config{})
 	if err == nil {
-		t.Fatal("want error for empty RESTBaseURL, got nil")
+		t.Fatal("want an error when no transport is given, got nil")
 	}
 }
 
 func TestNewTxClientAppliesDefaultsForZeroFields(t *testing.T) {
-	client, err := NewTxClient(Config{RESTBaseURL: "http://chain.example.invalid"})
+	client, err := NewTxClient(Config{Transport: newFakeTransport()})
 	if err != nil {
 		t.Fatalf("NewTxClient: %v", err)
 	}
@@ -65,674 +54,315 @@ func TestNewTxClientAppliesDefaultsForZeroFields(t *testing.T) {
 	if client.pollTimeout != DefaultPollTimeout {
 		t.Errorf("pollTimeout = %v, want %v", client.pollTimeout, DefaultPollTimeout)
 	}
-	if client.client == nil {
-		t.Error("HTTP client default not applied")
-	}
 	if client.now == nil {
 		t.Error("now default not applied")
 	}
 }
 
-func TestBuildTxQueryURLsDedupesWithBaseURLFirst(t *testing.T) {
-	got := buildTxQueryURLs("http://primary/", []string{"http://fallback/", "http://primary", "", "http://fallback/"})
-	want := []string{"http://primary", "http://fallback"}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("buildTxQueryURLs = %v, want %v", got, want)
-	}
-}
-
-// TestCreateEscrowValidatesInput asserts the guards reject before any network call.
+// The guards reject before anything is signed or sent, which the transport's empty record proves.
 func TestCreateEscrowValidatesInput(t *testing.T) {
-	client := newUnreachableTxClient(t)
 	validSigner := fixedSigner(t)
 
-	tests := []struct {
+	testCases := []struct {
 		name    string
 		signer  *signing.Secp256k1Signer
 		amount  uint64
 		modelID string
 	}{
-		{"nil signer", nil, 1_000_000, fixedModelID},
-		{"zero amount", validSigner, 0, fixedModelID},
-		{"blank model id", validSigner, 1_000_000, "   "},
+		{name: "nil_signer", amount: 1_000_000, modelID: fixedModelID},
+		{name: "zero_amount", signer: validSigner, modelID: fixedModelID},
+		{name: "blank_model_id", signer: validSigner, amount: 1_000_000, modelID: "   "},
 	}
-	for _, testCase := range tests {
+	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			transport := newFakeTransport()
+			client := newFakeTxClient(t, transport)
+
 			_, err := client.CreateEscrow(t.Context(), testCase.signer, testCase.amount, testCase.modelID, nil)
+
 			if err == nil {
-				t.Fatal("want validation error, got nil")
+				t.Fatal("want a validation error, got nil")
+			}
+			if len(transport.broadcasts()) != 0 {
+				t.Fatal("a rejected request still reached the chain")
 			}
 		})
 	}
 }
 
-// TestCreateEscrowHappyPath drives the full node_info+account+broadcast+tx-query
-// flow and asserts onPrepared runs strictly before broadcast is ever attempted.
-func TestCreateEscrowHappyPath(t *testing.T) {
+// The intent is recorded before the broadcast, because the broadcast cannot be taken back: a crash
+// between the two leaves an escrow on chain that the gateway can still find by its hash.
+func TestCreateEscrowRecordsTheIntentBeforeItBroadcasts(t *testing.T) {
 	signer := fixedSigner(t)
+	transport := newFakeTransport()
+	transport.account = Account{Number: 7}
+	client := newFakeTxClient(t, transport)
 
-	var onPreparedCalled atomic.Bool
-	var broadcastCalled atomic.Bool
-	var broadcastSawOnPreparedDone atomic.Bool
-	var broadcastTxHash atomic.Value
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.URL.Path == "/cosmos/base/tendermint/v1beta1/node_info":
-			writeJSONResponse(t, w, map[string]any{
-				"default_node_info": map[string]any{"network": "gonka-test"},
-			})
-		case r.URL.Path == "/cosmos/auth/v1beta1/accounts/"+signer.Address():
-			writeJSONResponse(t, w, map[string]any{
-				"account": map[string]any{"account_number": "7", "sequence": "0"},
-			})
-		case r.Method == http.MethodPost && r.URL.Path == "/cosmos/tx/v1beta1/txs":
-			broadcastCalled.Store(true)
-			broadcastSawOnPreparedDone.Store(onPreparedCalled.Load())
-			var req struct {
-				TxBytes string `json:"tx_bytes"`
-				Mode    string `json:"mode"`
-			}
-			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-				t.Errorf("decode broadcast request: %v", err)
-			}
-			if req.Mode != "BROADCAST_MODE_SYNC" {
-				t.Errorf("mode = %q, want BROADCAST_MODE_SYNC", req.Mode)
-			}
-			txBytes, err := base64.StdEncoding.DecodeString(req.TxBytes)
-			if err != nil {
-				t.Errorf("decode tx_bytes: %v", err)
-			}
-			hash := txHashFromBytes(txBytes)
-			broadcastTxHash.Store(hash)
-			writeJSONResponse(t, w, map[string]any{"tx_response": map[string]any{"code": 0, "txhash": hash}})
-		case strings.HasPrefix(r.URL.Path, "/cosmos/tx/v1beta1/txs/"):
-			writeJSONResponse(t, w, map[string]any{
-				"tx_response": map[string]any{
-					"code": 0,
-					"events": []map[string]any{{
-						"type":       "devshard_escrow_created",
-						"attributes": []map[string]string{{"key": "escrow_id", "value": "42"}},
-					}},
-				},
-			})
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	defer server.Close()
-
-	client, err := NewTxClient(Config{
-		RESTBaseURL:  server.URL,
-		PollInterval: time.Millisecond,
-		PollTimeout:  time.Second,
-		Now:          func() time.Time { return time.Unix(1_800_000_000, 0).UTC() },
-	})
-	if err != nil {
-		t.Fatalf("NewTxClient: %v", err)
-	}
-
+	var recordedHash string
+	var recordedBeforeBroadcast bool
 	onPrepared := func(txHash string) error {
-		if txHash == "" {
-			t.Error("onPrepared called with empty tx hash")
-		}
-		onPreparedCalled.Store(true)
+		recordedHash = txHash
+		recordedBeforeBroadcast = len(transport.broadcasts()) == 0
+		transport.setTx(txHash, escrowCreatedResult("42"))
 		return nil
 	}
 
 	result, err := client.CreateEscrow(t.Context(), signer, 1_000_000, fixedModelID, onPrepared)
+
 	if err != nil {
 		t.Fatalf("CreateEscrow: %v", err)
 	}
-	if !onPreparedCalled.Load() {
-		t.Fatal("onPrepared was never called")
+	if !recordedBeforeBroadcast {
+		t.Fatal("the intent was recorded after the broadcast, so a crash between them loses the escrow")
 	}
-	if !broadcastCalled.Load() {
-		t.Fatal("broadcast was never called")
-	}
-	if !broadcastSawOnPreparedDone.Load() {
-		t.Fatal("broadcast ran before onPrepared completed")
+	if result.TxHash != recordedHash {
+		t.Fatalf("TxHash = %q, want the hash the intent was recorded under %q", result.TxHash, recordedHash)
 	}
 	if result.EscrowID != 42 {
-		t.Errorf("EscrowID = %d, want 42", result.EscrowID)
+		t.Fatalf("EscrowID = %d, want the id from the commit event", result.EscrowID)
 	}
 	if result.Creator != signer.Address() {
-		t.Errorf("Creator = %q, want %q", result.Creator, signer.Address())
-	}
-	wantHash, _ := broadcastTxHash.Load().(string)
-	if result.TxHash != wantHash {
-		t.Errorf("TxHash = %q, want %q", result.TxHash, wantHash)
+		t.Fatalf("Creator = %q, want %q", result.Creator, signer.Address())
 	}
 }
 
-// TestCreateEscrowOnPreparedErrorAbortsBeforeBroadcast pins the crash-recovery
-// ordering: a failed intent write must prevent the irreversible broadcast.
 func TestCreateEscrowOnPreparedErrorAbortsBeforeBroadcast(t *testing.T) {
-	signer := fixedSigner(t)
-	var broadcastCalled atomic.Bool
+	transport := newFakeTransport()
+	client := newFakeTxClient(t, transport)
 
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.URL.Path == "/cosmos/base/tendermint/v1beta1/node_info":
-			writeJSONResponse(t, w, map[string]any{"default_node_info": map[string]any{"network": "gonka-test"}})
-		case r.URL.Path == "/cosmos/auth/v1beta1/accounts/"+signer.Address():
-			writeJSONResponse(t, w, map[string]any{"account": map[string]any{"account_number": "7", "sequence": "0"}})
-		case r.Method == http.MethodPost && r.URL.Path == "/cosmos/tx/v1beta1/txs":
-			broadcastCalled.Store(true)
-			writeJSONResponse(t, w, map[string]any{"tx_response": map[string]any{"code": 0, "txhash": "UNUSED"}})
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	defer server.Close()
+	_, err := client.CreateEscrow(t.Context(), fixedSigner(t), 1_000_000, fixedModelID, func(string) error {
+		return errors.New("store unavailable")
+	})
 
-	client, err := NewTxClient(Config{RESTBaseURL: server.URL, PollInterval: time.Millisecond, PollTimeout: time.Second})
-	if err != nil {
-		t.Fatalf("NewTxClient: %v", err)
-	}
-
-	wantErr := errors.New("store failed")
-	onPrepared := func(string) error { return wantErr }
-
-	_, err = client.CreateEscrow(t.Context(), signer, 1_000_000, fixedModelID, onPrepared)
 	if err == nil {
-		t.Fatal("want error, got nil")
+		t.Fatal("want the intent failure to abort the create, got nil")
 	}
-	if !errors.Is(err, wantErr) {
-		t.Fatalf("err = %v, want wrapping %v", err, wantErr)
-	}
-	const wantPrefix = "record escrow create intent before broadcast:"
-	if !strings.Contains(err.Error(), wantPrefix) {
-		t.Fatalf("err = %q, want to contain %q", err.Error(), wantPrefix)
-	}
-	if broadcastCalled.Load() {
-		t.Fatal("broadcast must not be called when onPrepared fails")
+	if len(transport.broadcasts()) != 0 {
+		t.Fatal("an escrow was created on chain after the intent write failed")
 	}
 }
 
+// The hash is computed before the broadcast and must match what the node acknowledges: the intent is
+// filed under the local one, so a divergence means recovery would look for a transaction nobody has.
 func TestCreateEscrowHashMismatchErrors(t *testing.T) {
-	signer := fixedSigner(t)
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.URL.Path == "/cosmos/base/tendermint/v1beta1/node_info":
-			writeJSONResponse(t, w, map[string]any{"default_node_info": map[string]any{"network": "gonka-test"}})
-		case r.URL.Path == "/cosmos/auth/v1beta1/accounts/"+signer.Address():
-			writeJSONResponse(t, w, map[string]any{"account": map[string]any{"account_number": "7", "sequence": "0"}})
-		case r.Method == http.MethodPost && r.URL.Path == "/cosmos/tx/v1beta1/txs":
-			// Node echoes back an unrelated hash instead of the precomputed one.
-			writeJSONResponse(t, w, map[string]any{"tx_response": map[string]any{"code": 0, "txhash": strings.Repeat("0", 64)}})
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	defer server.Close()
+	transport := newFakeTransport()
+	transport.broadcastHash = "0000000000000000000000000000000000000000000000000000000000000000"
+	client := newFakeTxClient(t, transport)
 
-	client, err := NewTxClient(Config{RESTBaseURL: server.URL, PollInterval: time.Millisecond, PollTimeout: time.Second})
-	if err != nil {
-		t.Fatalf("NewTxClient: %v", err)
-	}
+	_, err := client.CreateEscrow(t.Context(), fixedSigner(t), 1_000_000, fixedModelID, nil)
 
-	_, err = client.CreateEscrow(t.Context(), signer, 1_000_000, fixedModelID, nil)
-	if err == nil {
-		t.Fatal("want error, got nil")
-	}
-	if !strings.Contains(err.Error(), "tx hash mismatch") {
-		t.Fatalf("err = %q, want to contain %q", err.Error(), "tx hash mismatch")
+	if err == nil || !strings.Contains(err.Error(), "hash mismatch") {
+		t.Fatalf("CreateEscrow = %v, want a hash mismatch", err)
 	}
 }
 
-// TestSettleEscrowValidatesInput asserts the guards reject before any network call.
 func TestSettleEscrowValidatesInput(t *testing.T) {
-	client := newUnreachableTxClient(t)
 	validSigner := fixedSigner(t)
-	validInput := fixedSettlementFull()
 
-	tests := []struct {
+	testCases := []struct {
 		name   string
 		signer *signing.Secp256k1Signer
 		input  SettlementInput
 	}{
-		{"nil signer", nil, validInput},
-		{"zero escrow id", validSigner, SettlementInput{EscrowID: 0}},
+		{name: "nil_signer", input: fixedSettlementFull()},
+		{name: "zero_escrow_id", signer: validSigner, input: SettlementInput{}},
 	}
-	for _, testCase := range tests {
+	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			transport := newFakeTransport()
+			client := newFakeTxClient(t, transport)
+
 			_, err := client.SettleEscrow(t.Context(), testCase.signer, testCase.input, nil)
+
 			if err == nil {
-				t.Fatal("want validation error, got nil")
+				t.Fatal("want a validation error, got nil")
+			}
+			if len(transport.broadcasts()) != 0 {
+				t.Fatal("a rejected settlement still reached the chain")
 			}
 		})
 	}
 }
 
-// Settlement waits for the transaction to execute, not merely to be accepted. BROADCAST_MODE_SYNC
-// reports CheckTx alone, and the caller destroys the key that could retry, so returning early would
-// strand the deposit of every settle the chain later rejects.
+// Settlement waits for the transaction to execute, not merely to be accepted. Sync broadcast reports
+// only that the transaction entered the queue, and the caller destroys the key that could retry, so
+// returning early would strand the deposit of every settle the chain later rejects.
 func TestSettleEscrowWaitsForTheTransactionToCommit(t *testing.T) {
 	signer := fixedSigner(t)
-	var polled atomic.Bool
-	var broadcastHash atomic.Value
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.URL.Path == "/cosmos/auth/v1beta1/accounts/"+signer.Address():
-			writeJSONResponse(t, w, map[string]any{"account": map[string]any{"account_number": "9", "sequence": "0"}})
-		case r.Method == http.MethodPost && r.URL.Path == "/cosmos/tx/v1beta1/txs":
-			hash := broadcastHashOf(t, r)
-			broadcastHash.Store(hash)
-			writeJSONResponse(t, w, map[string]any{"tx_response": map[string]any{"code": 0, "txhash": hash}})
-		case strings.HasPrefix(r.URL.Path, "/cosmos/tx/v1beta1/txs/"):
-			polled.Store(true)
-			writeJSONResponse(t, w, map[string]any{"tx_response": map[string]any{"code": 0, "txhash": broadcastHash.Load()}})
-		default:
-			http.NotFound(w, r)
+	transport := newFakeTransport()
+	transport.account = Account{Number: 9}
+	// The transaction appears only on the second poll, so a client that did not wait would miss it.
+	var polls atomic.Int64
+	transport.onTx = func(call int) {
+		polls.Store(int64(call))
+		if call >= 2 {
+			for _, sent := range transport.broadcasts() {
+				transport.setTx(txHashFromBytes(sent), TxResult{})
+			}
 		}
-	}))
-	defer server.Close()
-
-	client, err := NewTxClient(Config{RESTBaseURL: server.URL, ChainID: "gonka-test", PollInterval: time.Millisecond, PollTimeout: time.Second})
-	if err != nil {
-		t.Fatalf("NewTxClient: %v", err)
 	}
-
+	client := newFakeTxClient(t, transport)
 	input := fixedSettlementFull()
+
 	result, err := client.SettleEscrow(t.Context(), signer, input, nil)
+
 	if err != nil {
 		t.Fatalf("SettleEscrow: %v", err)
 	}
-	if !polled.Load() {
-		t.Error("settlement returned without confirming the transaction executed")
-	}
-	if want, _ := broadcastHash.Load().(string); result.TxHash != want {
-		t.Errorf("TxHash = %q, want the hash the node acknowledged %q", result.TxHash, want)
+	if polls.Load() < 2 {
+		t.Fatalf("polls = %d, want the settle to wait past the first answer", polls.Load())
 	}
 	if result.EscrowID != input.EscrowID {
-		t.Errorf("EscrowID = %d, want %d", result.EscrowID, input.EscrowID)
+		t.Fatalf("EscrowID = %d, want %d", result.EscrowID, input.EscrowID)
 	}
 	if result.Settler != signer.Address() {
-		t.Errorf("Settler = %q, want %q", result.Settler, signer.Address())
+		t.Fatalf("Settler = %q, want %q", result.Settler, signer.Address())
 	}
 }
 
-// TestFetchAccountFindsNestedAccountFields covers vesting/wrapped account
-// shapes where account_number/sequence sit several levels deep.
-func TestFetchAccountFindsNestedAccountFields(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		writeJSONResponse(t, w, map[string]any{
-			"account": map[string]any{
-				"base_vesting_account": map[string]any{
-					"base_account": map[string]any{
-						"account_number": "9",
-						"sequence":       "13",
-					},
-				},
-			},
-		})
-	}))
-	defer server.Close()
+// A settlement the chain accepted and then rejected must reach the caller as a failure: it is the only
+// signal that the deposit is still there and the row must not be cleared.
+func TestSettleEscrowFailsWhenTheChainRejectsTheCommittedTransaction(t *testing.T) {
+	transport := newFakeTransport()
+	transport.onTx = func(int) {
+		for _, sent := range transport.broadcasts() {
+			transport.setTx(txHashFromBytes(sent), TxResult{Code: 11, Codespace: "inference", RawLog: "settlement window closed"})
+		}
+	}
+	client := newFakeTxClient(t, transport)
 
-	client, err := NewTxClient(Config{RESTBaseURL: server.URL})
-	if err != nil {
-		t.Fatalf("NewTxClient: %v", err)
-	}
+	_, err := client.SettleEscrow(t.Context(), fixedSigner(t), fixedSettlementFull(), nil)
 
-	account, err := client.fetchAccount(t.Context(), "gonka1nested")
-	if err != nil {
-		t.Fatalf("fetchAccount: %v", err)
-	}
-	if account.AccountNumber != 9 {
-		t.Errorf("AccountNumber = %d, want 9", account.AccountNumber)
-	}
-	if account.Sequence != 13 {
-		t.Errorf("Sequence = %d, want 13", account.Sequence)
+	if err == nil || !strings.Contains(err.Error(), "settlement window closed") {
+		t.Fatalf("SettleEscrow = %v, want the chain's rejection", err)
 	}
 }
 
-// TestGetTxEscrowIDThreeWaySemantics pins the multi-endpoint resolution rules:
-// ErrTxNotFound only when every endpoint agrees the tx is absent; a genuine
-// error from any endpoint is never conflated with "not found".
+// The three answers a caller must tell apart: the escrow id of a create that worked, "no escrow" for a
+// transaction that committed and failed, and "not on chain" for one the chain does not have.
 func TestGetTxEscrowIDThreeWaySemantics(t *testing.T) {
-	const stubTxHash = "ABC123"
-	notFoundHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { http.NotFound(w, r) })
-	transientErrorHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Error(w, "transaction indexing is disabled", http.StatusInternalServerError)
-	})
-
-	tests := []struct {
-		name         string
-		primary      http.HandlerFunc
-		fallback     http.HandlerFunc
-		wantEscrowID uint64
-		wantFound    bool
-		checkErr     func(t *testing.T, err error)
+	testCases := []struct {
+		name       string
+		result     TxResult
+		present    bool
+		wantID     uint64
+		wantFound  bool
+		wantErr    error
+		wantNoErr  bool
+		transports func(*fakeTransport)
 	}{
-		{
-			name:     "all endpoints 404 -> ErrTxNotFound",
-			primary:  notFoundHandler.ServeHTTP,
-			fallback: notFoundHandler.ServeHTTP,
-			checkErr: func(t *testing.T, err error) {
-				t.Helper()
-				if !errors.Is(err, ErrTxNotFound) {
-					t.Fatalf("err = %v, want ErrTxNotFound", err)
-				}
-			},
-		},
-		{
-			name: "committed but failed -> not found, no error",
-			primary: func(w http.ResponseWriter, r *http.Request) {
-				writeJSONResponse(t, w, map[string]any{"tx_response": map[string]any{"code": 5}})
-			},
-			fallback: notFoundHandler.ServeHTTP,
-			checkErr: func(t *testing.T, err error) {
-				t.Helper()
-				if err != nil {
-					t.Fatalf("err = %v, want nil", err)
-				}
-			},
-		},
-		{
-			name: "found on primary -> escrow id",
-			primary: func(w http.ResponseWriter, r *http.Request) {
-				writeJSONResponse(t, w, map[string]any{
-					"tx_response": map[string]any{
-						"code": 0,
-						"events": []map[string]any{{
-							"type":       "devshard_escrow_created",
-							"attributes": []map[string]string{{"key": "escrow_id", "value": "77"}},
-						}},
-					},
-				})
-			},
-			fallback:     notFoundHandler.ServeHTTP,
-			wantEscrowID: 77,
-			wantFound:    true,
-			checkErr: func(t *testing.T, err error) {
-				t.Helper()
-				if err != nil {
-					t.Fatalf("err = %v, want nil", err)
-				}
-			},
-		},
-		{
-			name:    "found on fallback after primary 404 -> escrow id",
-			primary: notFoundHandler.ServeHTTP,
-			fallback: func(w http.ResponseWriter, r *http.Request) {
-				writeJSONResponse(t, w, map[string]any{
-					"tx_response": map[string]any{
-						"code": 0,
-						"events": []map[string]any{{
-							"type":       "devshard_escrow_created",
-							"attributes": []map[string]string{{"key": "escrow_id", "value": "99"}},
-						}},
-					},
-				})
-			},
-			wantEscrowID: 99,
-			wantFound:    true,
-			checkErr: func(t *testing.T, err error) {
-				t.Helper()
-				if err != nil {
-					t.Fatalf("err = %v, want nil", err)
-				}
-			},
-		},
-		{
-			name:     "one 404 one transient -> inconclusive, not ErrTxNotFound",
-			primary:  notFoundHandler.ServeHTTP,
-			fallback: transientErrorHandler.ServeHTTP,
-			checkErr: func(t *testing.T, err error) {
-				t.Helper()
-				if err == nil {
-					t.Fatal("want non-nil error")
-				}
-				if errors.Is(err, ErrTxNotFound) {
-					t.Fatalf("err = %v, must not be ErrTxNotFound (inconclusive)", err)
-				}
-			},
-		},
-		{
-			name:    "one 404 one 500-with-not-found-body -> transient error, not ErrTxNotFound",
-			primary: notFoundHandler.ServeHTTP,
-			fallback: func(w http.ResponseWriter, r *http.Request) {
-				http.Error(w, `{"message":"tx not found"}`, http.StatusInternalServerError)
-			},
-			checkErr: func(t *testing.T, err error) {
-				t.Helper()
-				if err == nil {
-					t.Fatal("want non-nil error")
-				}
-				if errors.Is(err, ErrTxNotFound) {
-					t.Fatalf("err = %v, must not be ErrTxNotFound (status-only 404 check)", err)
-				}
-			},
-		},
+		{name: "created", result: escrowCreatedResult("42"), present: true, wantID: 42, wantFound: true, wantNoErr: true},
+		{name: "committed_but_failed", result: TxResult{Code: 5}, present: true, wantNoErr: true},
+		{name: "not_on_chain", wantErr: ErrTxNotFound},
 	}
-
-	for _, testCase := range tests {
+	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
-			primaryServer := httptest.NewServer(testCase.primary)
-			defer primaryServer.Close()
-			fallbackServer := httptest.NewServer(testCase.fallback)
-			defer fallbackServer.Close()
+			t.Parallel()
+			transport := newFakeTransport()
+			if testCase.present {
+				transport.setTx("HASH", testCase.result)
+			}
+			client := newFakeTxClient(t, transport)
 
-			client, err := NewTxClient(Config{
-				RESTBaseURL:         primaryServer.URL,
-				TxQueryFallbackURLs: []string{fallbackServer.URL},
-			})
+			escrowID, found, err := client.GetTxEscrowID(t.Context(), "HASH")
+
+			if testCase.wantErr != nil {
+				if !errors.Is(err, testCase.wantErr) {
+					t.Fatalf("err = %v, want %v", err, testCase.wantErr)
+				}
+				return
+			}
 			if err != nil {
-				t.Fatalf("NewTxClient: %v", err)
+				t.Fatalf("GetTxEscrowID: %v", err)
 			}
-
-			escrowID, found, err := client.GetTxEscrowID(t.Context(), stubTxHash)
-			testCase.checkErr(t, err)
-			if found != testCase.wantFound {
-				t.Errorf("found = %v, want %v", found, testCase.wantFound)
-			}
-			if escrowID != testCase.wantEscrowID {
-				t.Errorf("escrowID = %d, want %d", escrowID, testCase.wantEscrowID)
+			if escrowID != testCase.wantID || found != testCase.wantFound {
+				t.Fatalf("got (%d, %v), want (%d, %v)", escrowID, found, testCase.wantID, testCase.wantFound)
 			}
 		})
 	}
 }
 
-// TestGetTxEscrowIDParsesOlderNodeLogsEventsShape pins support for older-node
-// responses that nest the escrow-created event under logs[].events[] instead
-// of the top-level events[].
-func TestGetTxEscrowIDParsesOlderNodeLogsEventsShape(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		writeJSONResponse(t, w, map[string]any{
-			"tx_response": map[string]any{
-				"code": 0,
-				"logs": []map[string]any{{
-					"events": []map[string]any{{
-						"type":       "devshard_escrow_created",
-						"attributes": []map[string]string{{"key": "escrow_id", "value": "55"}},
-					}},
-				}},
-			},
-		})
-	}))
-	defer server.Close()
+// A read that failed is not an absent transaction. Reading it as absence would rebuild and rebroadcast
+// a settlement that already moved the money.
+func TestATransportFailureIsNeverReadAsAbsence(t *testing.T) {
+	transport := newFakeTransport()
+	transport.txErr = errTransportRefused
+	client := newFakeTxClient(t, transport)
 
-	client, err := NewTxClient(Config{RESTBaseURL: server.URL})
-	if err != nil {
-		t.Fatalf("NewTxClient: %v", err)
+	if _, _, err := client.GetTxEscrowID(t.Context(), "HASH"); !errors.Is(err, errTransportRefused) {
+		t.Fatalf("GetTxEscrowID = %v, want the transport failure", err)
 	}
-
-	escrowID, found, err := client.GetTxEscrowID(t.Context(), "ABC123")
-	if err != nil {
-		t.Fatalf("GetTxEscrowID: %v", err)
-	}
-	if !found {
-		t.Fatal("found = false, want true")
-	}
-	if escrowID != 55 {
-		t.Errorf("escrowID = %d, want 55", escrowID)
+	if _, err := client.TxCommitted(t.Context(), "HASH"); !errors.Is(err, errTransportRefused) {
+		t.Fatalf("TxCommitted = %v, want the transport failure", err)
 	}
 }
 
-// TestBroadcastTxCodeNonzeroReturnsError pins the broadcast failure message shape.
-func TestBroadcastTxCodeNonzeroReturnsError(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		writeJSONResponse(t, w, map[string]any{
-			"tx_response": map[string]any{"code": 5, "codespace": "sdk", "raw_log": "insufficient funds"},
+func TestTxCommittedReportsExecution(t *testing.T) {
+	testCases := []struct {
+		name          string
+		result        TxResult
+		present       bool
+		wantSucceeded bool
+		wantErr       error
+	}{
+		{name: "executed", present: true, wantSucceeded: true},
+		{name: "committed_but_failed", result: TxResult{Code: 3}, present: true},
+		{name: "not_on_chain", wantErr: ErrTxNotFound},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			transport := newFakeTransport()
+			if testCase.present {
+				transport.setTx("HASH", testCase.result)
+			}
+			client := newFakeTxClient(t, transport)
+
+			succeeded, err := client.TxCommitted(t.Context(), "HASH")
+
+			if testCase.wantErr != nil {
+				if !errors.Is(err, testCase.wantErr) {
+					t.Fatalf("err = %v, want %v", err, testCase.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("TxCommitted: %v", err)
+			}
+			if succeeded != testCase.wantSucceeded {
+				t.Fatalf("succeeded = %v, want %v", succeeded, testCase.wantSucceeded)
+			}
 		})
-	}))
-	defer server.Close()
-
-	client, err := NewTxClient(Config{RESTBaseURL: server.URL})
-	if err != nil {
-		t.Fatalf("NewTxClient: %v", err)
-	}
-
-	_, err = client.broadcastTx(t.Context(), []byte("tx-bytes"))
-	if err == nil {
-		t.Fatal("want error, got nil")
-	}
-	const wantMsg = "broadcast tx failed code=5 codespace=sdk raw_log=insufficient funds"
-	if !strings.Contains(err.Error(), wantMsg) {
-		t.Fatalf("err = %q, want to contain %q", err.Error(), wantMsg)
 	}
 }
 
+// The wait is bounded: a create whose transaction never lands must fail rather than hold the caller.
 func TestWaitForCreatedEscrowIDTimesOutWhenNeverFound(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.NotFound(w, r) // tx never gets indexed
-	}))
-	defer server.Close()
-
-	client, err := NewTxClient(Config{
-		RESTBaseURL:  server.URL,
-		PollInterval: time.Millisecond,
-		PollTimeout:  10 * time.Millisecond,
-	})
+	transport := newFakeTransport()
+	client, err := NewTxClient(Config{Transport: transport, PollInterval: time.Millisecond, PollTimeout: 10 * time.Millisecond})
 	if err != nil {
 		t.Fatalf("NewTxClient: %v", err)
 	}
 
-	_, err = client.waitForCreatedEscrowID(t.Context(), "ABC123")
-	if err == nil {
-		t.Fatal("want timeout error, got nil")
-	}
-	if !strings.Contains(err.Error(), "wait for tx ABC123") {
-		t.Fatalf("err = %q, want to contain %q", err.Error(), "wait for tx ABC123")
+	_, err = client.waitForCreatedEscrowID(t.Context(), "HASH")
+
+	if err == nil || !strings.Contains(err.Error(), "wait for tx") {
+		t.Fatalf("waitForCreatedEscrowID = %v, want a bounded wait to give up", err)
 	}
 }
 
-// TestWaitForCreatedEscrowIDReturnsOnContextCancel ends the poll loop as soon
-// as ctx is done, independent of PollTimeout — proven with a long PollTimeout
-// so a timeout-path bug would fail slow rather than pass by accident.
 func TestWaitForCreatedEscrowIDReturnsOnContextCancel(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.NotFound(w, r)
-	}))
-	defer server.Close()
-
-	client, err := NewTxClient(Config{
-		RESTBaseURL:  server.URL,
-		PollInterval: time.Second,
-		PollTimeout:  time.Minute,
-	})
+	transport := newFakeTransport()
+	client, err := NewTxClient(Config{Transport: transport, PollInterval: time.Hour, PollTimeout: time.Hour})
 	if err != nil {
 		t.Fatalf("NewTxClient: %v", err)
 	}
-
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
-	_, err = client.waitForCreatedEscrowID(ctx, "ABC123")
-	if !errors.Is(err, context.Canceled) {
-		t.Fatalf("err = %v, want context.Canceled", err)
+	if _, err := client.waitForCreatedEscrowID(ctx, "HASH"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("waitForCreatedEscrowID = %v, want context.Canceled", err)
 	}
-}
-
-// TestWaitForCreatedEscrowIDSucceedsViaFallbackURL pins the poll loop's use of
-// every configured query URL, not just the first: the primary never indexes
-// the tx, but the fallback does on the very first poll.
-func TestWaitForCreatedEscrowIDSucceedsViaFallbackURL(t *testing.T) {
-	primary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.NotFound(w, r) // primary never indexes the tx
-	}))
-	defer primary.Close()
-	fallback := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		writeJSONResponse(t, w, map[string]any{
-			"tx_response": map[string]any{
-				"code": 0,
-				"events": []map[string]any{{
-					"type":       "devshard_escrow_created",
-					"attributes": []map[string]string{{"key": "escrow_id", "value": "88"}},
-				}},
-			},
-		})
-	}))
-	defer fallback.Close()
-
-	client, err := NewTxClient(Config{
-		RESTBaseURL:         primary.URL,
-		TxQueryFallbackURLs: []string{fallback.URL},
-		PollInterval:        time.Millisecond,
-		PollTimeout:         time.Second,
-	})
-	if err != nil {
-		t.Fatalf("NewTxClient: %v", err)
-	}
-
-	escrowID, err := client.waitForCreatedEscrowID(t.Context(), "ABC123")
-	if err != nil {
-		t.Fatalf("waitForCreatedEscrowID: %v", err)
-	}
-	if escrowID != 88 {
-		t.Errorf("escrowID = %d, want 88", escrowID)
-	}
-}
-
-// A transaction that passes CheckTx and fails DeliverTx must be an error, because the caller treats
-// success as permission to delete the only key that could settle this escrow.
-func TestSettleEscrowFailsWhenTheChainRejectsTheCommittedTransaction(t *testing.T) {
-	signer := fixedSigner(t)
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.URL.Path == "/cosmos/auth/v1beta1/accounts/"+signer.Address():
-			writeJSONResponse(t, w, map[string]any{"account": map[string]any{"account_number": "9", "sequence": "0"}})
-		case r.Method == http.MethodPost && r.URL.Path == "/cosmos/tx/v1beta1/txs":
-			writeJSONResponse(t, w, map[string]any{"tx_response": map[string]any{"code": 0, "txhash": broadcastHashOf(t, r)}})
-		case strings.HasPrefix(r.URL.Path, "/cosmos/tx/v1beta1/txs/"):
-			writeJSONResponse(t, w, map[string]any{"tx_response": map[string]any{
-				"code": 18, "codespace": "inference", "txhash": "", "raw_log": "payout exceeds escrow amount",
-			}})
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	defer server.Close()
-
-	client, err := NewTxClient(Config{RESTBaseURL: server.URL, ChainID: "gonka-test", PollInterval: time.Millisecond, PollTimeout: time.Second})
-	if err != nil {
-		t.Fatalf("NewTxClient: %v", err)
-	}
-
-	_, err = client.SettleEscrow(t.Context(), signer, fixedSettlementFull(), nil)
-
-	if err == nil {
-		t.Fatal("SettleEscrow returned success for a transaction the chain rejected")
-	}
-	if !strings.Contains(err.Error(), "payout exceeds escrow amount") {
-		t.Fatalf("error = %v, want the chain's rejection reason", err)
-	}
-}
-
-// broadcastHashOf computes the hash of the transaction a request carries, so a fake node acknowledges
-// what was actually sent. A canned hash would exercise the mismatch guard instead of the path.
-func broadcastHashOf(t *testing.T, r *http.Request) string {
-	t.Helper()
-	var req struct {
-		TxBytes string `json:"tx_bytes"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		t.Fatalf("decode broadcast body: %v", err)
-	}
-	txBytes, err := base64.StdEncoding.DecodeString(req.TxBytes)
-	if err != nil {
-		t.Fatalf("decode tx_bytes: %v", err)
-	}
-	return txHashFromBytes(txBytes)
 }

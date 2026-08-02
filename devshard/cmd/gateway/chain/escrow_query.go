@@ -3,47 +3,24 @@ package chain
 import (
 	"context"
 	"fmt"
-	"net/url"
+	"strconv"
+	"strings"
 )
 
-const devshardEscrowPath = "/productscience/inference/inference/devshard_escrow/"
-
+// EscrowInfo is the escrow as the gateway reads it: the id it was asked about and the balance that
+// decides whether it can still pay for work.
 type EscrowInfo struct {
 	EscrowID string
 	Balance  uint64
 }
 
-type devshardEscrowResponse struct {
-	Escrow struct {
-		Amount jsonUint64 `json:"amount"`
-	} `json:"escrow"`
-	Found bool `json:"found"`
-}
-
-// found=false only when every reachable endpoint agrees the escrow is absent; any per-endpoint
-// error is returned as-is, never read as absence.
+// GetEscrow reports found=false only when the chain says the escrow is absent. A read that failed is
+// returned as an error and never as absence: absence retires an escrow, and retiring one that still
+// holds funds strands them.
 func (c *TxClient) GetEscrow(ctx context.Context, escrowID string) (EscrowInfo, bool, error) {
-	var lastErr error
-	sawNotFound := false
-	for _, baseURL := range c.txQueryURLs {
-		var payload devshardEscrowResponse
-		err := c.getJSONFromBaseURL(ctx, baseURL, devshardEscrowPath+url.PathEscape(escrowID), &payload)
-		if err != nil {
-			if isNotFoundError(err) {
-				sawNotFound = true
-				continue
-			}
-			lastErr = fmt.Errorf("%s: %w", baseURL, err)
-			continue
-		}
-		if !payload.Found {
-			sawNotFound = true
-			continue
-		}
-		return EscrowInfo{EscrowID: escrowID, Balance: uint64(payload.Escrow.Amount)}, true, nil
+	numericID, err := strconv.ParseUint(strings.TrimSpace(escrowID), 10, 64)
+	if err != nil {
+		return EscrowInfo{}, false, fmt.Errorf("escrow id %q is not a number: %w", escrowID, err)
 	}
-	if lastErr == nil && sawNotFound {
-		return EscrowInfo{}, false, nil
-	}
-	return EscrowInfo{}, false, lastErr
+	return c.transport.Escrow(ctx, numericID)
 }

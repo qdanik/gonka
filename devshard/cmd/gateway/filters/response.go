@@ -5,14 +5,18 @@ import (
 	stdjson "encoding/json"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
+
+	"devshard"
 
 	json "github.com/goccy/go-json"
 )
 
 var (
-	// clientStrippedFields are response-body keys, at any nesting depth, hidden from the client.
-	// Paired with parameterTable's force rules by TestForcedRequestParametersHaveResponseStripCounterpart.
+	// clientStrippedFields are response-body keys, at any nesting depth, hidden from a client that asked
+	// for none of them. Paired with parameterTable's force rules by
+	// TestForcedRequestParametersHaveResponseStripCounterpart.
 	clientStrippedFields = []string{
 		"logprob",
 		"logprobs",
@@ -21,6 +25,26 @@ var (
 		"prompt_token_ids",
 		"prompt_logprobs",
 	}
+
+	// requestableFields are the ones a client can ask for, so they survive the strip when it did.
+	requestableFields = []string{
+		"logprob",
+		"logprobs",
+		"top_logprobs",
+	}
+
+	// alwaysStrippedFields is what remains: internals no request can ask for. Derived rather than
+	// written out, so a field added to the list above cannot be left out of this one and reach a client
+	// that asked for nothing -- the same reason strippableMarkers is derived.
+	alwaysStrippedFields = func() []string {
+		fields := make([]string, 0, len(clientStrippedFields))
+		for _, field := range clientStrippedFields {
+			if !slices.Contains(requestableFields, field) {
+				fields = append(fields, field)
+			}
+		}
+		return fields
+	}()
 
 	// strippableMarkers keeps only the fields no other field contains, unquoted, so two scans cover all
 	// six: "top_logprobs" contains "logprob", so finding the short one cannot miss the long one. Still
@@ -78,10 +102,28 @@ const (
 	stripRewritten
 )
 
-// StripResponseBody removes clientStrippedFields from a non-streaming JSON response body, at
-// any nesting depth. A malformed body passes through unchanged.
-func StripResponseBody(body []byte) []byte {
-	filtered, outcome := stripInternalFields(body)
+// LogprobIntent is what the client's own request asked for, read before the force rules overwrite it.
+// The gateway turns logprobs on upstream for validation whatever the client sent, so without this the
+// response strip cannot tell a client who asked for logprobs from one who did not, and answers both by
+// removing them. See gateway-request-filtering.md, "The response side".
+type LogprobIntent struct {
+	Keep    bool
+	KeepTop bool
+}
+
+// strippedFields is what this client must not see. A client that asked for logprobs keeps them; one
+// that did not loses the whole family, including a top_logprobs a host placed outside them.
+func (intent LogprobIntent) strippedFields() []string {
+	if intent.Keep {
+		return alwaysStrippedFields
+	}
+	return clientStrippedFields
+}
+
+// StripResponseBody removes the fields this client must not see from a non-streaming JSON response
+// body, at any nesting depth. A malformed body passes through unchanged.
+func StripResponseBody(body []byte, intent LogprobIntent) []byte {
+	filtered, outcome := stripInternalFields(body, intent)
 	if outcome != stripRewritten {
 		return body
 	}
@@ -91,14 +133,18 @@ func StripResponseBody(body []byte) []byte {
 // stripInternalFields stays on the standard library: goccy's UseNumber parses the token anyway and
 // errors past float64 range, which fails this open -- a body carrying 1e999 keeps every internal field.
 // See gateway-request-filtering.md, "The response side".
-func stripInternalFields(payload []byte) ([]byte, stripOutcome) {
+func stripInternalFields(payload []byte, intent LogprobIntent) ([]byte, stripOutcome) {
 	decoder := stdjson.NewDecoder(bytes.NewReader(payload))
 	decoder.UseNumber()
 	var decoded any
 	if err := decoder.Decode(&decoded); err != nil || decoder.More() {
 		return nil, stripMalformed
 	}
-	if !deleteInternalFields(decoded) {
+	changed := deleteFields(decoded, intent.strippedFields())
+	if intent.Keep && !intent.KeepTop {
+		changed = emptyTopLogprobs(decoded) || changed
+	}
+	if !changed {
 		return nil, stripUnchanged
 	}
 	var encoded bytes.Buffer
@@ -110,25 +156,25 @@ func stripInternalFields(payload []byte) ([]byte, stripOutcome) {
 	return bytes.TrimRight(encoded.Bytes(), "\n"), stripRewritten
 }
 
-// deleteInternalFields removes clientStrippedFields at any depth, reporting whether anything went.
-func deleteInternalFields(value any) bool {
+// deleteFields removes the named keys at any depth, reporting whether anything went.
+func deleteFields(value any, fields []string) bool {
 	switch typed := value.(type) {
 	case map[string]any:
 		changed := false
-		for _, field := range clientStrippedFields {
+		for _, field := range fields {
 			if _, held := typed[field]; held {
 				delete(typed, field)
 				changed = true
 			}
 		}
 		for _, child := range typed {
-			changed = deleteInternalFields(child) || changed
+			changed = deleteFields(child, fields) || changed
 		}
 		return changed
 	case []any:
 		changed := false
 		for _, child := range typed {
-			changed = deleteInternalFields(child) || changed
+			changed = deleteFields(child, fields) || changed
 		}
 		return changed
 	default:
@@ -263,4 +309,54 @@ func isCacheableErrorDetails(details UpstreamError) bool {
 func isRetriableCapabilityError(msg string) bool {
 	contextLimit, _ := CapabilityLimits(msg)
 	return strings.Contains(msg, ToolChoiceUnsupportedMessage) || contextLimit > 0
+}
+
+// emptyTopLogprobs replaces every top_logprobs array with an empty one, which is the shape OpenAI
+// returns to a client that asked for logprobs without alternatives. The gateway forces the
+// alternatives on upstream for validation, so leaving them would hand the client a request it never
+// made; removing the key would drop a field its schema expects to be present.
+func emptyTopLogprobs(value any) bool {
+	switch typed := value.(type) {
+	case map[string]any:
+		changed := false
+		if existing, held := typed["top_logprobs"]; held {
+			if list, isList := existing.([]any); !isList || len(list) > 0 {
+				typed["top_logprobs"] = []any{}
+				changed = true
+			}
+		}
+		for _, child := range typed {
+			changed = emptyTopLogprobs(child) || changed
+		}
+		return changed
+	case []any:
+		changed := false
+		for _, child := range typed {
+			changed = emptyTopLogprobs(child) || changed
+		}
+		return changed
+	default:
+		return false
+	}
+}
+
+// decodeLogprobIntent reads what the client asked for, leniently: only an explicit true counts as a
+// request, so a value of the wrong shape is read as "not asked" rather than rejecting a request the
+// gateway would otherwise have accepted -- the force rules overwrite both fields regardless of type.
+func decodeLogprobIntent(document *Document) LogprobIntent {
+	var intent LogprobIntent
+	if raw, held := document.Get("logprobs"); held {
+		if asked, isBool := raw.(bool); isBool {
+			intent.Keep = asked
+		}
+	}
+	if !intent.Keep {
+		return intent
+	}
+	if raw, held := document.Get("top_logprobs"); held {
+		if count, isNumber := devshard.JSONNumericUint64(raw); isNumber && count > 0 {
+			intent.KeepTop = true
+		}
+	}
+	return intent
 }

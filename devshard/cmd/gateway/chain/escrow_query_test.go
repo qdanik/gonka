@@ -1,133 +1,68 @@
 package chain
 
 import (
-	"net/http"
-	"net/http/httptest"
+	"errors"
 	"testing"
 )
 
-func TestGetEscrowMultiEndpointAgreement(t *testing.T) {
-	const escrowID = "77"
-	notFoundHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { http.NotFound(w, r) })
-	notFoundBodyHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		writeJSONResponse(t, w, map[string]any{"found": false})
-	})
-	transientErrorHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Error(w, "internal error", http.StatusInternalServerError)
-	})
-	foundHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		writeJSONResponse(t, w, map[string]any{
-			"found":  true,
-			"escrow": map[string]any{"amount": "12345"},
-		})
-	})
-
-	tests := []struct {
-		name        string
-		primary     http.HandlerFunc
-		fallback    http.HandlerFunc
-		wantBalance uint64
-		wantFound   bool
-		checkErr    func(t *testing.T, err error)
+// found=false retires an escrow, so it must mean the chain said the escrow is absent and nothing else.
+// A read that failed is returned as an error: retiring an escrow that still holds funds strands them.
+func TestGetEscrowSeparatesAbsenceFromFailure(t *testing.T) {
+	testCases := []struct {
+		name      string
+		escrow    EscrowInfo
+		present   bool
+		failure   error
+		wantFound bool
+		wantErr   bool
 	}{
-		{
-			name:        "found on primary",
-			primary:     foundHandler.ServeHTTP,
-			fallback:    notFoundHandler.ServeHTTP,
-			wantBalance: 12345,
-			wantFound:   true,
-			checkErr: func(t *testing.T, err error) {
-				t.Helper()
-				if err != nil {
-					t.Fatalf("err = %v, want nil", err)
-				}
-			},
-		},
-		{
-			name:        "found on fallback after primary 404",
-			primary:     notFoundHandler.ServeHTTP,
-			fallback:    foundHandler.ServeHTTP,
-			wantBalance: 12345,
-			wantFound:   true,
-			checkErr: func(t *testing.T, err error) {
-				t.Helper()
-				if err != nil {
-					t.Fatalf("err = %v, want nil", err)
-				}
-			},
-		},
-		{
-			name:     "all endpoints 404 -> not found, no error",
-			primary:  notFoundHandler.ServeHTTP,
-			fallback: notFoundHandler.ServeHTTP,
-			checkErr: func(t *testing.T, err error) {
-				t.Helper()
-				if err != nil {
-					t.Fatalf("err = %v, want nil", err)
-				}
-			},
-		},
-		{
-			name:     "all endpoints report found:false -> not found, no error",
-			primary:  notFoundBodyHandler.ServeHTTP,
-			fallback: notFoundBodyHandler.ServeHTTP,
-			checkErr: func(t *testing.T, err error) {
-				t.Helper()
-				if err != nil {
-					t.Fatalf("err = %v, want nil", err)
-				}
-			},
-		},
-		{
-			name:     "one 404 one transient error -> ambiguous, non-nil error",
-			primary:  notFoundHandler.ServeHTTP,
-			fallback: transientErrorHandler.ServeHTTP,
-			checkErr: func(t *testing.T, err error) {
-				t.Helper()
-				if err == nil {
-					t.Fatal("want non-nil error, got nil")
-				}
-			},
-		},
-		{
-			name:     "one found:false one transient error -> ambiguous, non-nil error",
-			primary:  notFoundBodyHandler.ServeHTTP,
-			fallback: transientErrorHandler.ServeHTTP,
-			checkErr: func(t *testing.T, err error) {
-				t.Helper()
-				if err == nil {
-					t.Fatal("want non-nil error, got nil")
-				}
-			},
-		},
+		{name: "present", escrow: EscrowInfo{EscrowID: "7", Balance: 500}, present: true, wantFound: true},
+		{name: "absent"},
+		{name: "read_failed", failure: errTransportRefused, wantErr: true},
 	}
-
-	for _, testCase := range tests {
+	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
-			primaryServer := httptest.NewServer(testCase.primary)
-			defer primaryServer.Close()
-			fallbackServer := httptest.NewServer(testCase.fallback)
-			defer fallbackServer.Close()
+			t.Parallel()
+			transport := newFakeTransport()
+			transport.escrow = testCase.escrow
+			transport.escrowRaw = testCase.present
+			transport.escrowErr = testCase.failure
+			client := newFakeTxClient(t, transport)
 
-			client, err := NewTxClient(Config{
-				RESTBaseURL:         primaryServer.URL,
-				TxQueryFallbackURLs: []string{fallbackServer.URL},
-			})
+			info, found, err := client.GetEscrow(t.Context(), "7")
+
+			if testCase.wantErr {
+				if !errors.Is(err, errTransportRefused) {
+					t.Fatalf("err = %v, want the transport failure", err)
+				}
+				if found {
+					t.Fatal("a failed read reported the escrow as present")
+				}
+				return
+			}
 			if err != nil {
-				t.Fatalf("NewTxClient: %v", err)
+				t.Fatalf("GetEscrow: %v", err)
 			}
-
-			info, found, err := client.GetEscrow(t.Context(), escrowID)
-			testCase.checkErr(t, err)
 			if found != testCase.wantFound {
-				t.Errorf("found = %v, want %v", found, testCase.wantFound)
+				t.Fatalf("found = %v, want %v", found, testCase.wantFound)
 			}
-			if found && info.Balance != testCase.wantBalance {
-				t.Errorf("Balance = %d, want %d", info.Balance, testCase.wantBalance)
-			}
-			if found && info.EscrowID != escrowID {
-				t.Errorf("EscrowID = %q, want %q", info.EscrowID, escrowID)
+			if found && info.Balance != testCase.escrow.Balance {
+				t.Fatalf("balance = %d, want %d", info.Balance, testCase.escrow.Balance)
 			}
 		})
+	}
+}
+
+// An id the chain cannot be asked about is a caller error, not an absent escrow.
+func TestGetEscrowRejectsANonNumericID(t *testing.T) {
+	client := newFakeTxClient(t, newFakeTransport())
+
+	_, found, err := client.GetEscrow(t.Context(), "not-a-number")
+
+	if err == nil {
+		t.Fatal("want an error for an unusable escrow id, got nil")
+	}
+	if found {
+		t.Fatal("an unusable id reported an escrow as present")
 	}
 }

@@ -82,21 +82,36 @@ func run(ctx context.Context) error {
 
 // sessionSources opens the two kinds of escrow session, given the chain bridge and host route prefix
 // compose resolves. It is a parameter so the transport an escrow is served over is chosen once, at the
-// composition root.
-type sessionSources func(endpoints config.Chain, routePrefix string) (serving, readOnly registry.SessionFactory, err error)
+// composition root. The chain access travels with the sessions because it rides the same connection.
+type sessionSources func(endpoints config.Chain, routePrefix string) (chainSources, error)
+
+// chainSources is what one dial yields: the two kinds of escrow session and the chain access every
+// other consumer needs. Reader and Transport are interfaces so a provider that dials nothing can
+// answer them in process, which is what keeps a test off the network.
+type chainSources struct {
+	Serving   registry.SessionFactory
+	ReadOnly  registry.SessionFactory
+	Reader    chain.Reader
+	Transport chain.Transport
+}
 
 // chainBackedSessions owns the chain connection because it is the only provider that needs one: an
 // in-process provider dials nothing, which is what keeps a test from carrying a live gRPC client.
 func chainBackedSessions(records devshardLookup, storageDir string) sessionSources {
-	return func(endpoints config.Chain, routePrefix string) (registry.SessionFactory, registry.SessionFactory, error) {
+	return func(endpoints config.Chain, routePrefix string) (chainSources, error) {
 		// NewGRPCBridgeFromURL is upstream's test constructor; production builds the bridge over a client
 		// carrying the CometBFT RPC query fallback, so an escrow read survives the gRPC query path failing.
 		chainClient, err := commonchain.NewWithQueryFallback(endpoints.GRPCEndpoint, "")
 		if err != nil {
-			return nil, nil, fmt.Errorf("dialing chain grpc %s: %w", endpoints.GRPCEndpoint, err)
+			return chainSources{}, fmt.Errorf("dialing chain grpc %s: %w", endpoints.GRPCEndpoint, err)
 		}
-		escrowBridge := bridge.NewGRPCBridge(chainClient)
-		return servingSessions(records, storageDir, escrowBridge, routePrefix), readOnlySessions(records, storageDir), nil
+		grpcChain := chain.NewGRPCChain(chainClient, endpoints.ChainID)
+		return chainSources{
+			Serving:   servingSessions(records, storageDir, bridge.NewGRPCBridge(chainClient), routePrefix),
+			ReadOnly:  readOnlySessions(records, storageDir),
+			Reader:    grpcChain,
+			Transport: grpcChain,
+		}, nil
 	}
 }
 
@@ -147,9 +162,13 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 		return nil, fmt.Errorf("resolving host route prefix from version %q: %w", Version, err)
 	}
 
+	sources, err := openSessions(configuration.Chain, routePrefix)
+	if err != nil {
+		return nil, err
+	}
 	observer, err := chain.NewPhaseObserver(chain.ObserverConfig{
 		PublicAPIBaseURL: configuration.Chain.PublicAPIBaseURL,
-		ChainRESTBaseURL: configuration.Chain.RESTBaseURL,
+		Chain:            sources.Reader,
 		HTTPClient:       boot.client,
 		Now:              clock,
 	})
@@ -157,15 +176,13 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 		return nil, err
 	}
 	txClient, err := chain.NewTxClient(chain.Config{
-		RESTBaseURL:         configuration.Chain.RESTBaseURL,
-		TxQueryFallbackURLs: configuration.Chain.TxQueryFallbackURLs,
-		FeeDenom:            configuration.Tx.FeeDenom,
-		FeeAmount:           uint64(configuration.Tx.FeeAmount),
-		GasLimit:            uint64(configuration.Tx.GasLimit),
-		PollInterval:        time.Duration(configuration.Tx.PollIntervalMS) * time.Millisecond,
-		PollTimeout:         time.Duration(configuration.Tx.PollTimeoutMS) * time.Millisecond,
-		HTTPClient:          boot.client,
-		Now:                 clock,
+		Transport:    sources.Transport,
+		FeeDenom:     configuration.Tx.FeeDenom,
+		FeeAmount:    uint64(configuration.Tx.FeeAmount),
+		GasLimit:     uint64(configuration.Tx.GasLimit),
+		PollInterval: time.Duration(configuration.Tx.PollIntervalMS) * time.Millisecond,
+		PollTimeout:  time.Duration(configuration.Tx.PollTimeoutMS) * time.Millisecond,
+		Now:          clock,
 	})
 	if err != nil {
 		return nil, err
@@ -184,13 +201,9 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 
 	devshardWork := make(chan struct{}, 1)
 	depletion := &depletionNotice{}
-	serving, readOnly, err := openSessions(configuration.Chain, routePrefix)
-	if err != nil {
-		return nil, err
-	}
 	escrows, router := newRouting(routingDeps{
-		Sessions:     serving,
-		ReadOnly:     readOnly,
+		Sessions:     sources.Serving,
+		ReadOnly:     sources.ReadOnly,
 		Capacity:     capacity,
 		Participants: participants,
 		Hosts:        hosts,
