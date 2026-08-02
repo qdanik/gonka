@@ -2,6 +2,7 @@ package filters
 
 import (
 	"bytes"
+	stdjson "encoding/json"
 	"errors"
 	"fmt"
 
@@ -261,36 +262,39 @@ func soleDataObject(event []byte) (start, end int, ok bool) {
 
 // sseCompletion is the complete chat.completion some hosts answer a streaming request with, and
 // sseChunk is the chat.completion.chunk an OpenAI streaming client actually reads.
+// Every field the host controls is carried raw. Decoding one into a typed field lets a host fail the
+// conversion with a value of the wrong type -- a numeric id, a created past the float range -- and the
+// client then reads a message where it renders a delta while the nonce is settled all the same.
 type sseCompletion struct {
-	ID                string                `json:"id"`
-	Created           int64                 `json:"created"`
-	Model             string                `json:"model"`
-	SystemFingerprint string                `json:"system_fingerprint,omitempty"`
+	ID                json.RawMessage       `json:"id"`
+	Created           json.RawMessage       `json:"created"`
+	Model             json.RawMessage       `json:"model"`
+	SystemFingerprint json.RawMessage       `json:"system_fingerprint,omitempty"`
 	Choices           []sseCompletionChoice `json:"choices"`
 	Usage             json.RawMessage       `json:"usage"`
 }
 
 type sseCompletionChoice struct {
-	Index        int                        `json:"index"`
+	Index        json.RawMessage            `json:"index"`
 	Message      map[string]json.RawMessage `json:"message"`
-	FinishReason *string                    `json:"finish_reason"`
+	FinishReason json.RawMessage            `json:"finish_reason"`
 	StopReason   json.RawMessage            `json:"stop_reason"`
 }
 
 type sseChunk struct {
-	ID                string           `json:"id"`
+	ID                json.RawMessage  `json:"id"`
 	Object            string           `json:"object"`
-	Created           int64            `json:"created"`
-	Model             string           `json:"model"`
-	SystemFingerprint string           `json:"system_fingerprint,omitempty"`
+	Created           json.RawMessage  `json:"created"`
+	Model             json.RawMessage  `json:"model"`
+	SystemFingerprint json.RawMessage  `json:"system_fingerprint,omitempty"`
 	Choices           []sseChunkChoice `json:"choices"`
 	Usage             json.RawMessage  `json:"usage,omitempty"`
 }
 
 type sseChunkChoice struct {
-	Index        int                        `json:"index"`
+	Index        json.RawMessage            `json:"index"`
 	Delta        map[string]json.RawMessage `json:"delta"`
-	FinishReason *string                    `json:"finish_reason"`
+	FinishReason json.RawMessage            `json:"finish_reason"`
 	StopReason   json.RawMessage            `json:"stop_reason,omitempty"`
 }
 
@@ -299,8 +303,10 @@ type sseChunkChoice struct {
 // reads a delta, so the client renders nothing while the nonce is settled and the money is spent.
 // The role, the payload and the finish reason travel as separate chunks, as a real stream sends them.
 func completionAsChunks(payload []byte) ([]byte, bool) {
+	// The standard library here, as in stripInternalFields: goccy parses a number token even into a raw
+	// message and errors past the float64 range, so a created of 1e999 would fail the conversion.
 	var completion sseCompletion
-	if json.Unmarshal(payload, &completion) != nil {
+	if stdjson.Unmarshal(payload, &completion) != nil {
 		return nil, false
 	}
 	var events bytes.Buffer
@@ -310,7 +316,7 @@ func completionAsChunks(payload []byte) ([]byte, bool) {
 		}
 		if role, named := choice.Message["role"]; named {
 			emitChunk(&events, completion, []sseChunkChoice{{
-				Index: choice.Index,
+				Index: rawOr(choice.Index, "0"),
 				Delta: map[string]json.RawMessage{"role": role},
 			}}, nil)
 		}
@@ -321,13 +327,13 @@ func completionAsChunks(payload []byte) ([]byte, bool) {
 			}
 		}
 		if len(delta) > 0 {
-			emitChunk(&events, completion, []sseChunkChoice{{Index: choice.Index, Delta: delta}}, nil)
+			emitChunk(&events, completion, []sseChunkChoice{{Index: rawOr(choice.Index, "0"), Delta: delta}}, nil)
 		}
-		if stopReason := presentValue(choice.StopReason); choice.FinishReason != nil || stopReason != nil {
+		if stopReason := presentValue(choice.StopReason); presentValue(choice.FinishReason) != nil || stopReason != nil {
 			emitChunk(&events, completion, []sseChunkChoice{{
-				Index:        choice.Index,
+				Index:        rawOr(choice.Index, "0"),
 				Delta:        map[string]json.RawMessage{},
-				FinishReason: choice.FinishReason,
+				FinishReason: rawOr(choice.FinishReason, "null"),
 				StopReason:   stopReason,
 			}}, nil)
 		}
@@ -342,21 +348,33 @@ func completionAsChunks(payload []byte) ([]byte, bool) {
 }
 
 func emitChunk(events *bytes.Buffer, completion sseCompletion, choices []sseChunkChoice, usage json.RawMessage) {
-	encoded, err := json.Marshal(sseChunk{
-		ID:                completion.ID,
+	var encoded bytes.Buffer
+	encoder := stdjson.NewEncoder(&encoded)
+	encoder.SetEscapeHTML(false) // the default inflates every < > & in generated content to six bytes
+	if err := encoder.Encode(sseChunk{
+		ID:                rawOr(completion.ID, `""`),
 		Object:            chunkObject,
-		Created:           completion.Created,
-		Model:             completion.Model,
+		Created:           rawOr(completion.Created, "0"),
+		Model:             rawOr(completion.Model, `""`),
 		SystemFingerprint: completion.SystemFingerprint,
 		Choices:           choices,
 		Usage:             usage,
-	})
-	if err != nil {
+	}); err != nil {
 		return
 	}
 	events.Write(sseDataPrefix)
-	events.Write(encoded)
+	events.Write(bytes.TrimRight(encoded.Bytes(), "\n"))
 	events.Write(sseEventSeparator)
+}
+
+// rawOr keeps a field the host sent verbatim; an absent one takes the fallback, since an empty raw
+// message is not JSON and would fail the encode this conversion exists to produce. The fallbacks are
+// the zero values the typed fields used to encode, so an ordinary response converts byte for byte.
+func rawOr(raw json.RawMessage, fallback string) json.RawMessage {
+	if len(bytes.TrimSpace(raw)) == 0 {
+		return json.RawMessage(fallback)
+	}
+	return raw
 }
 
 // presentValue returns a raw JSON field only when it was sent with a value, JSON null counting as

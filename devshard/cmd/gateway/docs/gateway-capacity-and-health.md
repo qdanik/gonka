@@ -8,7 +8,7 @@ Three separate questions, three separate mechanisms:
 | How many concurrent sends may *this participant* receive? | `limits.ParticipantLimiter` |
 | Is this participant an outlier, and what can it not serve? | `perf.Tracker` |
 
-They are deliberately not one thing. The first protects the gateway and respects the network's view of how much of the model's capacity this gateway commands; the second protects the participant from us; the third is an outlier detector plus the sticky record of what a host has proved it cannot do.
+They are deliberately not one thing. The first protects the gateway and respects the network's view of how much of the model's capacity this gateway commands; the second protects the participant from the gateway; the third is an outlier detector plus the sticky record of what a host has proved it cannot do.
 
 A host is removed from a pick by the participant limiter, by the capability flags, or by the ejection verdict — see [Outlier ejection](#outlier-ejection) for what the ejection verdict is capped by before routing honours it.
 
@@ -18,7 +18,7 @@ The design principle across all three is **adaptation instead of punishment**. T
 
 `limits.Capacity` holds the latest chain snapshot and the escrow membership pushed by the registry, and answers two questions.
 
-**Scale factor for a model** — the fraction of the network's reference weight for that model that is currently available to us:
+**Scale factor for a model** — the fraction of the network's reference weight for that model that is currently available to this gateway:
 
 ```
 scaleFactor(model) = clamp( Σ availableCurrentWeight / Σ fullWeight , 0, 1 )
@@ -70,7 +70,7 @@ The promotion sweep walks the queue in arrival order and skips — rather than s
 
 A new arrival that fits may pass a queued waiter without unfairness, because a queued waiter is by definition one that current capacity cannot serve.
 
-Both races at the edges are handled explicitly. If the timer fires but the waiter was already promoted, the acquire *succeeds* — the slot is already ours. If the context is cancelled but the waiter was already promoted, the slot was handed to a caller that is gone, so it is released (`limits/gateway.go`, the `select` in `GatewayLimiter.AcquireForModel`).
+Both races at the edges are handled explicitly. If the timer fires but the waiter was already promoted, the acquire *succeeds* — the slot is already held, and refusing it would leak the transfer. If the context is cancelled but the waiter was already promoted, the slot was handed to a caller that is gone, so it is released (`limits/gateway.go`, the `select` in `GatewayLimiter.AcquireForModel`).
 
 `Reconfigure` swaps the caps and sweeps the queue, so a widened limit reaches a waiting request immediately rather than at the next release.
 
@@ -80,7 +80,7 @@ State is per `{participant, model}`.
 
 **Additive increase, multiplicative decrease.** A success widens the window by one, up to the maximum — but only when the host is actually being used, so an idle host does not accumulate an imaginary window. The utilisation test is `peakInflight ≥ window/2`, where the peak is the highest concurrent count the host has reached since the last widening; a widening resets it to the live count so the next rung has to be earned again. A 429 or 503 halves the window, with a floor of one, unconditionally (`limits/participant.go`, `ParticipantLimiter.OnResult`).
 
-Only host-attributable verdicts move the window. A model outcome — an empty stream, a burn-empty, an error stream, a capability refusal — returns before the lock is even taken and does not create state (`limits/participant.go`, the `Verdict` constants and the `ModelOutcome` early return in `ParticipantLimiter.OnResult`). "An empty stream is what the model produced, not what the host failed to carry."
+Only host-attributable verdicts move the window. A model outcome — an empty stream, a burn-empty, an error stream, a capability refusal — returns before the lock is even taken and does not create state (`limits/participant.go`, the `Verdict` constants and the `ModelOutcome` early return in `ParticipantLimiter.OnResult`). An empty stream is what the model produced, not what the host failed to carry, so narrowing the host's window for it would penalise the wrong party.
 
 **The breaker** trips after a configured number of consecutive transport faults, or immediately if a half-open probe fails — a probe gets exactly one try. Backoff is `base × 1.6^count` with up to 20% jitter, clamped to the maximum; the count stops incrementing once saturated so the exponent cannot overflow (`limits/participant.go`, the `TransportFault` branch of `ParticipantLimiter.OnResult`). The jitter is gRPC's connection-backoff constant, and it exists so that breakers that opened together do not retry in lockstep.
 
@@ -144,6 +144,6 @@ Two asymmetries worth knowing, neither of which is stated in the code:
 | `perf_host_staleness_seconds` | 3 600 | When an unseen host is forgotten. |
 | `GATEWAY_PERF_EWMA_HALFLIFE_SECONDS` | 600 | Half-life of the decayed success and failure counters. |
 
-The rows down to `breaker_max_open_ms` are admin overrides, changeable at run time without a redeploy. The `perf_*` rows are **not**: they are neither overrides nor environment variables, only compile-time defaults, and the snake_case names above are the spellings the boot-time validator uses in its error messages, not knobs you can set. `GATEWAY_PERF_EWMA_HALFLIFE_SECONDS` is the one performance value with an environment variable, and it is read once at boot. Retuning ejection therefore means a new binary.
+The rows down to `breaker_max_open_ms` are admin overrides, changeable at run time without a redeploy. The `perf_*` rows are **not**: they are neither overrides nor environment variables, only compile-time defaults, and the snake_case names above are the spellings the boot-time validator uses in its error messages, not knobs an operator can set. `GATEWAY_PERF_EWMA_HALFLIFE_SECONDS` is the one performance value with an environment variable, and it is read once at boot. Retuning ejection therefore means a new binary.
 
 The default input-token budget of zero means unlimited, which is worth an operator's attention: with million-token contexts it is the only thing between concurrency and memory exhaustion, and the body-size cap deliberately does not throttle load.

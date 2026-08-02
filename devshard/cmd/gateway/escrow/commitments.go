@@ -88,23 +88,24 @@ func (m *Manager) persistEscrow(ctx context.Context, escrowID string, c store.Co
 	if err != nil {
 		return err
 	}
-	if registered {
-		return m.clearCommitmentRow(ctx, escrowID, c.TxHash)
-	}
-	record := store.DevshardRecord{
-		EscrowID:      escrowID,
-		PrivateKeyEnv: c.PrivateKeyEnv,
-		Model:         c.Model,
-		Active:        true,
-		RotationRole:  c.Role,
-		RotationEpoch: int64(c.Epoch),
-	}
-	if err := m.store.WithRetry(ctx, func() error { return m.store.UpsertDevshard(ctx, record) }); err != nil {
-		return fmt.Errorf("registering escrow %s: %w", escrowID, err)
+	if !registered {
+		record := store.DevshardRecord{
+			EscrowID:      escrowID,
+			PrivateKeyEnv: c.PrivateKeyEnv,
+			Model:         c.Model,
+			Active:        true,
+			RotationRole:  c.Role,
+			RotationEpoch: int64(c.Epoch),
+		}
+		if err := m.store.WithRetry(ctx, func() error { return m.store.UpsertDevshard(ctx, record) }); err != nil {
+			return fmt.Errorf("registering escrow %s: %w", escrowID, err)
+		}
 	}
 	if err := m.clearCommitmentRow(ctx, escrowID, c.TxHash); err != nil {
 		return err
 	}
+	// The reset belongs to both paths: an escrow found already registered is a create that succeeded,
+	// and leaving the breaker tripped backs off the next create for a failure that did not happen.
 	m.breaker.reset(c.Model, c.Role)
 	return nil
 }

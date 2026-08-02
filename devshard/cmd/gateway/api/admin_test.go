@@ -196,6 +196,67 @@ func TestAnAdminListReflectsTheStore(t *testing.T) {
 	}
 }
 
+// The failure log is the contract here: an operator action that returns 5xx is otherwise invisible,
+// since auditAdmin only records the successful path.
+func TestAFailedAdminOperationIsLogged(t *testing.T) {
+	entries := captureLogging(t)
+	live := newHarness(t)
+	live.control.listErr = errStoreUnavailable
+
+	live.request(t, http.MethodGet, "/v1/admin/devshards", "", adminHeaders())
+
+	entry, found := entries.find("admin request failed")
+	if !found {
+		t.Fatalf("a 500 on an admin route left no log line: %+v", entries.all())
+	}
+	if entry.level != "error" {
+		t.Fatalf("level = %q, want error", entry.level)
+	}
+	if got := logField(entry, "status"); got != http.StatusInternalServerError {
+		t.Fatalf("status field = %v, want 500", got)
+	}
+	if got := logField(entry, "route"); got != "/v1/admin/devshards" {
+		t.Fatalf("route field = %v", got)
+	}
+	if got, _ := logField(entry, "error").(string); !strings.Contains(got, errStoreUnavailable.Error()) {
+		t.Fatalf("error field = %q, want the store failure", got)
+	}
+}
+
+// An unkeyed call on an admin route is the shape an intrusion attempt takes, so the refusal is
+// recorded even though nothing failed.
+func TestAnUnkeyedAdminCallIsLogged(t *testing.T) {
+	entries := captureLogging(t)
+	live := newHarness(t)
+
+	live.request(t, http.MethodGet, "/v1/admin/devshards", "", nil)
+
+	entry, found := entries.find("admin request refused")
+	if !found {
+		t.Fatalf("an unkeyed admin call left no log line: %+v", entries.all())
+	}
+	if entry.level != "warn" {
+		t.Fatalf("level = %q, want warn", entry.level)
+	}
+	if got := logField(entry, "status"); got != http.StatusUnauthorized {
+		t.Fatalf("status field = %v, want 401", got)
+	}
+}
+
+func TestASuccessfulAdminOperationIsNotLoggedAsAFailure(t *testing.T) {
+	entries := captureLogging(t)
+	live := newHarness(t)
+
+	live.request(t, http.MethodGet, "/v1/admin/devshards", "", adminHeaders())
+
+	if _, found := entries.find("admin request failed"); found {
+		t.Fatalf("a 200 was logged as a failure: %+v", entries.all())
+	}
+	if _, found := entries.find("admin request refused"); found {
+		t.Fatalf("a 200 was logged as a refusal: %+v", entries.all())
+	}
+}
+
 func mustUnescape(t *testing.T, encoded string) string {
 	t.Helper()
 	decoded, err := url.PathUnescape(encoded)

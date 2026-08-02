@@ -54,6 +54,7 @@ type fakeSession struct {
 	flushErr      error
 	flushCalls    atomic.Int64
 	closeCalls    atomic.Int64
+	onFlush       func()
 	prepare       func(user.ParamsForHost) (*user.PreparedInference, error)
 }
 
@@ -93,6 +94,9 @@ func (f *fakeSession) Finalize(context.Context) error {
 
 func (f *fakeSession) FlushSnapshot() error {
 	f.flushCalls.Add(1)
+	if f.onFlush != nil {
+		f.onFlush()
+	}
 	return f.flushErr
 }
 
@@ -159,17 +163,28 @@ func (e *recordingExhaustion) seen() []string {
 
 // sessions hands out a pre-registered session per escrow and counts how often each factory was asked.
 type sessions struct {
-	byEscrow map[string]*fakeSession
-	err      error
-	calls    atomic.Int64
+	byEscrow             map[string]*fakeSession
+	err                  error
+	calls                atomic.Int64
+	refuseConcurrentOpen bool
+	openInFlight         atomic.Bool
 }
 
 func newSessions(byEscrow map[string]*fakeSession) *sessions {
 	return &sessions{byEscrow: byEscrow}
 }
 
+// open stands in for a SQLite session: with refuseConcurrentOpen set, a second open that overlaps the
+// first fails the way a locked database file does.
 func (s *sessions) open(_ context.Context, escrowID string) (EscrowSession, error) {
 	s.calls.Add(1)
+	if s.refuseConcurrentOpen {
+		if !s.openInFlight.CompareAndSwap(false, true) {
+			return nil, errors.New("database is locked (5) (SQLITE_BUSY)")
+		}
+		defer s.openInFlight.Store(false)
+		time.Sleep(5 * time.Millisecond)
+	}
 	if s.err != nil {
 		return nil, s.err
 	}
@@ -683,7 +698,9 @@ func TestReleasingTwiceCountsOnce(t *testing.T) {
 	}
 }
 
-func TestAddIsIdempotentAndReleasesTheRedundantSession(t *testing.T) {
+// A published escrow is not opened a second time: the session is a SQLite file, and the open would
+// fail against the live one rather than produce a handle to discard.
+func TestAddIsIdempotentAndOpensNoSecondSession(t *testing.T) {
 	t.Parallel()
 	session := newFakeSession("hostA")
 	factory := newSessions(map[string]*fakeSession{"1": session})
@@ -692,14 +709,48 @@ func TestAddIsIdempotentAndReleasesTheRedundantSession(t *testing.T) {
 
 	mustAdd(t, registry, "1", "qwen")
 
-	if got := factory.calls.Load(); got != 2 {
-		t.Fatalf("factory calls = %d, want 2", got)
+	if got := factory.calls.Load(); got != 1 {
+		t.Fatalf("factory calls = %d, want 1", got)
 	}
-	if got := session.closeCalls.Load(); got != 1 {
-		t.Errorf("Close calls on the redundant session = %d, want 1", got)
+	if got := session.closeCalls.Load(); got != 0 {
+		t.Errorf("Close calls on the live session = %d, want 0", got)
 	}
 	if got := len(registry.Candidates("qwen")); got != 1 {
 		t.Errorf("len(Candidates(qwen)) = %d, want 1", got)
+	}
+}
+
+// Two callers publish the same escrow at once whenever an operator creates one: the create path adds
+// it, and the devshard row it writes wakes the republish watcher, which adds it again. A session
+// factory that refuses a concurrent open -- which is what SQLite does to a second writer -- must not
+// turn that into a failure for either caller.
+func TestConcurrentAddsOfOneEscrowOpenItOnce(t *testing.T) {
+	t.Parallel()
+	factory := newSessions(map[string]*fakeSession{"1": newFakeSession("hostA")})
+	factory.refuseConcurrentOpen = true
+	registry := New(Deps{ServingSessions: factory.open, Now: fixedClock()})
+
+	var adding sync.WaitGroup
+	failures := make([]error, 2)
+	for caller := range failures {
+		adding.Add(1)
+		go func() {
+			defer adding.Done()
+			failures[caller] = registry.Add(context.Background(), "1", "qwen")
+		}()
+	}
+	adding.Wait()
+
+	for caller, err := range failures {
+		if err != nil {
+			t.Fatalf("caller %d: Add = %v, want both callers to succeed", caller, err)
+		}
+	}
+	if got := factory.calls.Load(); got != 1 {
+		t.Fatalf("factory calls = %d, want 1", got)
+	}
+	if got := len(registry.Candidates("qwen")); got != 1 {
+		t.Fatalf("len(Candidates(qwen)) = %d, want 1", got)
 	}
 }
 
@@ -810,4 +861,44 @@ func mustAdd(t *testing.T, registry *Registry, escrowID, model string) {
 	if err := registry.Add(context.Background(), escrowID, model); err != nil {
 		t.Fatalf("Add(%s, %s) = %v, want nil", escrowID, model, err)
 	}
+}
+
+// A real session flushes its snapshot under its own lock, and a dispatch holds that lock while it asks
+// the registry for a hold -- session lock, then registry lock. Retiring under the registry lock takes
+// the same two in the opposite order, and the two orders together freeze every later route and every
+// settlement of an already-committed nonce, process-wide, until a restart.
+func TestRetireClosesTheSessionOutsideTheRegistryLock(t *testing.T) {
+	t.Parallel()
+	session := newFakeSession("hostA")
+	var sessionLock sync.Mutex
+	flushing := make(chan struct{})
+	session.onFlush = func() {
+		close(flushing)
+		sessionLock.Lock()
+		defer sessionLock.Unlock()
+	}
+	registry := New(Deps{ServingSessions: newSessions(map[string]*fakeSession{"1": session}).open, Now: fixedClock()})
+	mustAdd(t, registry, "1", "qwen")
+
+	sessionLock.Lock()
+	defer sessionLock.Unlock()
+	retired := make(chan error, 1)
+	go func() { retired <- registry.Retire("1") }()
+	<-flushing
+
+	// The dispatch side: any registry call needing the registry lock while the retire waits on the
+	// session lock. It returns promptly or the two locks are held in opposite orders.
+	answered := make(chan bool, 1)
+	go func() { answered <- registry.IsBusy("1") }()
+
+	select {
+	case <-answered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the registry lock is held across the session flush: routing and settlement are wedged behind one retirement")
+	}
+	sessionLock.Unlock()
+	if err := <-retired; err != nil {
+		t.Fatalf("Retire = %v", err)
+	}
+	sessionLock.Lock()
 }

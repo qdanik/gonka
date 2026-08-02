@@ -85,7 +85,7 @@ func (s *Server) buildHandler() http.Handler {
 	for _, registered := range s.routes() {
 		handler := registered.handler
 		if registered.admin {
-			handler = s.requireAdmin(handler)
+			handler = adminFailure(registered.label, s.requireAdmin(handler))
 		}
 		if !registered.alwaysOn {
 			handler = s.disabled(handler)

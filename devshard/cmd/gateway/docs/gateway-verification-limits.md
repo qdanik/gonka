@@ -6,7 +6,7 @@ This document exists because reading that suite as green and concluding "verifie
 
 ## Outside the reach of any in-process test
 
-**That the real chain accepts our transactions.** Every chain response in the suite is one we wrote. Protobuf field numbers, unordered-transaction TTL semantics, gas, fee denomination, sequence handling under contention and the escrow-created event shape are all checked against *our model of the chain*, not the chain. One wrong field number is a green suite and a rejected transaction. This is the largest irreducible risk in the rewrite, and nothing in the suite touches it.
+**That the real chain accepts the gateway's transactions.** Every chain response in the suite is written by the suite. Protobuf field numbers, unordered-transaction TTL semantics, gas, fee denomination, sequence handling under contention and the escrow-created event shape are all checked against the suite's *model* of the chain, not the chain. One wrong field number is a green suite and a rejected transaction. This is the largest irreducible risk in the rewrite, and nothing in the suite touches it.
 
 **That real hosts behave like these.** The hosts are real `host.Host` state machines, but their inference engine is a stub. A vLLM version emitting a new SSE field, a valid receipt followed by a stream truncated at an unscripted byte boundary, and TCP behaviour under packet loss are all unrepresented. The non-streaming reply is SSE-shaped because the in-process client writes SSE either way, so non-streaming *body* bytes are not evidence about a real host.
 
@@ -20,4 +20,4 @@ This document exists because reading that suite as green and concluding "verifie
 
 ## The boundary in one sentence
 
-The suite verifies every decision the gateway makes given a set of inputs, and the wiring that makes those decisions reachable — not that our model of the chain or of a real host is correct, and not any tuning.
+The suite verifies every decision the gateway makes given a set of inputs, and the wiring that makes those decisions reachable — not that its model of the chain or of a real host is correct, and not any tuning.

@@ -98,8 +98,9 @@ func (m *Metrics) InstrumentRoute(routeLabel string, next http.Handler) http.Han
 	})
 }
 
-// statusRecorder captures the response status for labeling. Flush is
-// forwarded so streaming handlers keep working when wrapped.
+// statusRecorder captures the response status for labeling. Flush is forwarded so streaming handlers
+// keep working when wrapped, and Unwrap exposes the server's own writer to the standard library calls
+// that reach it by type assertion.
 type statusRecorder struct {
 	http.ResponseWriter
 	status int
@@ -109,6 +110,8 @@ func (r *statusRecorder) WriteHeader(status int) {
 	r.status = status
 	r.ResponseWriter.WriteHeader(status)
 }
+
+func (r *statusRecorder) Unwrap() http.ResponseWriter { return r.ResponseWriter }
 
 func (r *statusRecorder) Flush() {
 	if flusher, ok := r.ResponseWriter.(http.Flusher); ok {

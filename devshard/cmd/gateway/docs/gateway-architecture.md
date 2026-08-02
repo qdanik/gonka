@@ -42,7 +42,7 @@ Weight is carried by four packages — `filters`, `engine`, `api` and `chain` �
 
 ## Dependency rules
 
-Arrows are one-way and the graph is acyclic. Acyclicity is enforced by the Go compiler — an import cycle does not build — so the shape below cannot silently rot into a cycle. The *direction* of each arrow is convention: no test asserts the layering, and `go list -f '{{join .Imports "\n"}}' ./cmd/gateway/...` is how you check it.
+Arrows are one-way and the graph is acyclic. Acyclicity is enforced by the Go compiler — an import cycle does not build — so the shape below cannot silently rot into a cycle. The *direction* of each arrow is convention rather than a guarantee: nothing rejects an upward import that still compiles, and `go list -f '{{join .Imports "\n"}}' ./cmd/gateway/...` reports what each package actually imports.
 
 ```mermaid
 graph TD
@@ -82,7 +82,7 @@ Every package except `env`, `filters` and `chain` also reads `config`; those edg
 
 Three rules hold this shape in place.
 
-**Interfaces are declared by the consumer, never by the producer.** `engine` does not import `escrow`; it declares a two-method `escrowLifecycle` interface and `main` passes the escrow manager into it. `escrow` does not import `registry`; it declares `SettlementSource`. This is what keeps the two genuinely circular pressures — settlement needs a live session, routing needs the escrow set — from becoming import cycles. It also has a practical benefit that showed up during the build: a narrow interface makes a whole class of mistake unrepresentable. An attempt to reproduce a settlement bug by swapping `SettlementSession` for `Target` in `api` did not compile, because `api`'s interface declares only the former.
+**Interfaces are declared by the consumer, never by the producer.** `engine` does not import `escrow`; it declares a one-method `escrowLifecycle` interface — `OnEscrowMissing` — and `main` passes the escrow manager into it (`engine/engine.go`, `escrowLifecycle`). `escrow` does not import `registry`; it declares the four-method `SettlementSource` (`escrow/interfaces.go`, `SettlementSource`). This is what keeps the two genuinely circular pressures — settlement needs a live session, routing needs the escrow set — from becoming import cycles. It also has a practical benefit that showed up during the build: a narrow interface makes a whole class of mistake unrepresentable. An attempt to reproduce a settlement bug by swapping `SettlementSession` for `Target` in `api` did not compile, because `api`'s interface declares only the former.
 
 **No mutable package-level state.** The only process-wide mutability is the configuration snapshot pointer (`config.Holder`, an `atomic.Pointer`) and the contents of the store. Everything else is owned by a struct with an explicit lifetime.
 

@@ -16,6 +16,7 @@ import (
 	"devshard/cmd/gateway/limits"
 	"devshard/cmd/gateway/registry"
 	"devshard/cmd/gateway/scheduler"
+	"devshard/logging"
 
 	json "github.com/goccy/go-json"
 )
@@ -198,6 +199,62 @@ func writeJSON(w http.ResponseWriter, status int, payload any) {
 // maxLoggedErrorBytes bounds host-controlled text reaching a log line: a HostApplicationError with no
 // message renders its whole upstream payload. See gateway-operations.md, "The request record".
 const maxLoggedErrorBytes = 256
+
+// adminFailure logs an admin response the gateway refused or failed to serve. auditAdmin records only
+// the successful path, so without this a failed operator action leaves no trace at all.
+func adminFailure(label string, next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		recorder := &failureRecorder{ResponseWriter: w, status: http.StatusOK}
+		next(recorder, r)
+		if recorder.status < http.StatusBadRequest {
+			return
+		}
+		fields := []any{"route", label, "method", r.Method, "status", recorder.status, "error", recorder.reason()}
+		if recorder.status >= http.StatusInternalServerError {
+			logging.Error("admin request failed", fields...)
+			return
+		}
+		logging.Warn("admin request refused", fields...)
+	}
+}
+
+// failureRecorder keeps the status and the start of an error body so the failure log can carry the
+// message the caller was given. Flush is forwarded so a wrapped handler keeps streaming.
+type failureRecorder struct {
+	http.ResponseWriter
+	status int
+	body   []byte
+}
+
+func (rec *failureRecorder) WriteHeader(status int) {
+	rec.status = status
+	rec.ResponseWriter.WriteHeader(status)
+}
+
+func (rec *failureRecorder) Write(data []byte) (int, error) {
+	if rec.status >= http.StatusBadRequest && len(rec.body) < maxLoggedErrorBytes {
+		rec.body = append(rec.body, data[:min(len(data), maxLoggedErrorBytes-len(rec.body))]...)
+	}
+	return rec.ResponseWriter.Write(data)
+}
+
+func (rec *failureRecorder) Unwrap() http.ResponseWriter { return rec.ResponseWriter }
+
+func (rec *failureRecorder) Flush() {
+	if flusher, ok := rec.ResponseWriter.(http.Flusher); ok {
+		flusher.Flush()
+	}
+}
+
+// reason prefers the envelope message; a body truncated at the cap no longer parses, so the raw text
+// is the fallback rather than an empty field.
+func (rec *failureRecorder) reason() string {
+	var envelope errorEnvelope
+	if err := json.Unmarshal(rec.body, &envelope); err == nil && envelope.Error.Message != "" {
+		return envelope.Error.Message
+	}
+	return strings.TrimSpace(string(rec.body))
+}
 
 func loggedError(err error) string {
 	text := err.Error()

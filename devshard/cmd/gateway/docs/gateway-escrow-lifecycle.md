@@ -80,7 +80,7 @@ The grace period is eleven minutes and is not arbitrary: the chain's unordered-t
 
 ## Rotation across the proof-of-compute boundary
 
-Participants are taken out of inference during proof-of-compute, so an escrow whose group is about to be preserved cannot serve. Rotation bridges the gap with short-lived `temp` escrows:
+Proof-of-compute takes participants out of inference unless the chain preserves them, so an escrow whose group is about to fall out of the preserved set cannot serve. Rotation bridges the gap with short-lived `temp` escrows:
 
 - **Pre-switch window** (the epoch switch is within `rotation_pre_poc_blocks`, default 300): create `temp` escrows up to each model's temp count, then retire every active non-temp escrow for that model. Inside the window this runs even when proof-of-compute is not yet active.
 - **After the window, once the chain is no longer blocking requests**: create `regular` escrows up to each model's target count, then retire the temps of this epoch or earlier. A model with no active temp from this epoch or earlier is skipped outright — there is nothing to finish (`escrow/rotation.go`, `Manager.finishBridge` and `hasActiveTemp`). Rotation therefore never bootstraps a model from nothing: the first escrows come from `GATEWAY_DEVSHARDS_JSON` or the admin API, and rotation takes over at the first epoch switch that finds something to bridge.
@@ -89,7 +89,7 @@ Outside the window while requests are blocked, neither runs.
 
 Failure handling is per model and deliberately degrades rather than aborting (`escrow/rotation.go`, `Manager.prepareBridge`): if creating temps fails, the existing regulars are relabelled as temp in place so the epoch still has bridge coverage, the failure is recorded in the rotation status, and the next model is processed. A relabelling write that fails does not stop the loop either; only the first error is surfaced.
 
-Creation counts are keyed by `(model, role, epoch)`, so escrows from a previous epoch never count toward this epoch's target — every new epoch creates fresh regulars from zero (`escrow/rotation.go`, `Manager.ensureToTarget` and `countActive`). Note the asymmetry that follows: preparing the bridge retires *all* active non-temp escrows for a model regardless of epoch, while finishing it filters temps by epoch.
+Creation counts are keyed by `(model, role, epoch)`, so escrows from a previous epoch never count toward this epoch's target — every new epoch creates fresh regulars from zero (`escrow/rotation.go`, `Manager.ensureToTarget` and `countActive`). An asymmetry follows: preparing the bridge retires *all* active non-temp escrows for a model regardless of epoch, while finishing it filters temps by epoch.
 
 A model the chain reports nobody serving is skipped — but only when the chain has reported *something*. With both per-model weight views empty (cold start), the model is not skipped, because "no data" is not "nobody serves it" (`escrow/models.go`, `servedByNetwork`).
 
@@ -97,7 +97,7 @@ A model the chain reports nobody serving is skipped — but only when the chain 
 
 Repeatedly failing to create an escrow for a model must not become a per-tick chain hammer. A breaker keyed by `model|role` gates creation with a cooldown ladder of 1, 2, 4, 4, 4… ticks (`escrow/breaker.go`). "Ticks" here are **call counts, not durations** — the cooldown decrements once per call, and the call only happens on ticks where a creation would otherwise be attempted. At a fifteen-second tick the cap is about a minute. The breaker resets only when a creation succeeds and the escrow is registered.
 
-The reading side has a trap worth naming: the gate function *mutates* the cooldown as a side effect of being read, so nothing that merely observes state may call it.
+The reading side has a trap: the gate function *mutates* the cooldown as a side effect of being read, so nothing that merely observes state may call it.
 
 ## Depletion and replacement
 
@@ -151,7 +151,7 @@ Fields the rest of the gateway depends on, and their absent-value semantics:
 |---|---|
 | `RequestsBlocked` | Mirrors the chain's raw state. Relaxed mode is applied at the admission boundary, never here. |
 | `MaxNonce` | 0 means *not fetched*, so the scheduler falls back to a conservative ceiling rather than disabling the cap. |
-| `Preserved` | nil means *not loaded*, so everyone counts as preserved — reading it as "nobody is preserved" would ghost every nonce an escrow owns. |
+| `Preserved` | The participants kept in inference service through proof-of-compute. nil means *not loaded*, so everyone counts as preserved — reading it as "nobody is preserved" would ghost every nonce an escrow owns. |
 | `CurrentWeights` | Already preservation-filtered, and merged with validation-capable nodes during proof-of-compute validation. Not re-filtered downstream. |
 | `EpochSwitchBlockHeight` | Derived by a four-rung ladder over the epoch stages, first match wins. |
 
