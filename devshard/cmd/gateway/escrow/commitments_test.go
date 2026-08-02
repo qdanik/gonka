@@ -217,6 +217,30 @@ func (f *fakeStore) SetDevshardSettlementPending(ctx context.Context, escrowID s
 	return nil
 }
 
+// ParkForSettlement writes both fields at once, the way the store does: a fake that wrote them
+// separately would let a test pass against the shape the real one cannot produce.
+func (f *fakeStore) ParkForSettlement(_ context.Context, escrowID string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.calls != nil {
+		f.calls.record("ParkForSettlement")
+	}
+	if f.setActiveErr != nil {
+		return f.setActiveErr
+	}
+	if f.setPendingErr != nil {
+		return f.setPendingErr
+	}
+	record, held := f.devshards[escrowID]
+	if !held {
+		return store.ErrDevshardNotFound
+	}
+	record.Active = false
+	record.SettlementPending = true
+	f.devshards[escrowID] = record
+	return nil
+}
+
 func (f *fakeStore) SetDevshardSettleTxHash(_ context.Context, escrowID, txHash string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()

@@ -132,9 +132,9 @@ func TestSettleBusyMarksPendingAndReturnsErrDevshardBusy(t *testing.T) {
 		t.Fatalf("settle() = %v, want ErrDevshardBusy", err)
 	}
 
-	want := []string{"SetDevshardActive(false)", "SetDevshardSettlementPending(true)", "Retire", "IsBusy"}
+	want := []string{"ParkForSettlement", "Retire", "IsBusy"}
 	if got := log.snapshot(); !stringsEqual(got, want) {
-		t.Fatalf("call log = %v, want %v (deactivate + mark pending + stop routing, then busy short-circuits before any chain call)", got, want)
+		t.Fatalf("call log = %v, want %v (park + stop routing, then busy short-circuits before any chain call)", got, want)
 	}
 	if got := testStore.devshards[record.EscrowID]; !got.SettlementPending || got.Active {
 		t.Fatalf("devshard = %+v, want SettlementPending=true and Active=false (deactivated so it can drain)", got)
@@ -172,7 +172,7 @@ func TestSettleHappyPathOrderAndClearsPendingOnSuccess(t *testing.T) {
 	// The hash is recorded inside SettleEscrow, before the broadcast: a settle that commits while the
 	// gateway is not looking must be recognisable on the next tick rather than rebuilt.
 	want := []string{
-		"SetDevshardActive(false)", "SetDevshardSettlementPending(true)", "Retire", "IsBusy",
+		"ParkForSettlement", "Retire", "IsBusy",
 		"Finalize", "BuildSettlement", "SettleEscrow", `SetDevshardSettleTxHash("SETTLE-TX")`,
 		"SetDevshardSettlementPending(false)",
 	}

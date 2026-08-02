@@ -167,98 +167,90 @@ func (r *StreamRewriter) Close() ([]byte, error) {
 }
 
 // rewriteEvent returns the event as the client must read it: a complete chat.completion becomes the
-// chunk events an OpenAI streaming client renders, and clientStrippedFields are removed from the JSON
-// payload. It returns nil when that payload does not parse and must be dropped rather than forwarded.
+// chunk events an OpenAI streaming client renders, and the fields this client must not see are removed
+// from the JSON payload. It returns nil when the payload does not parse and must be dropped rather
+// than forwarded.
+//
+// Both decisions are taken on the decoded payload, never on the event's raw bytes. A host controls
+// those bytes: it can spell a key with a \u escape, or split one object across two data lines, and
+// either defeats a byte-wise check while the client's own decoder reads the object whole. See
+// gateway-request-filtering.md, "The response side".
 func rewriteEvent(event []byte, intent LogprobIntent) []byte {
-	convertible := bytes.Contains(event, sseMessageKey)
-	if !convertible && !hasStrippableField(event) {
+	lines, payload, held := eventPayload(event)
+	if !held {
 		return event
 	}
-	start, end, isObject := soleDataObject(event)
-	if !isObject {
-		return stripEachDataLine(event, intent)
-	}
-	payload := event[start:end]
 	filtered, outcome := stripInternalFields(payload, intent)
 	switch outcome {
 	case stripMalformed:
-		return nil
+		// A payload that opens as an object and does not parse is a host sending something no client
+		// can read; forwarding it would carry whatever it hides.
+		if bytes.HasPrefix(bytes.TrimLeft(payload, " \t"), []byte("{")) {
+			return nil
+		}
+		return event
 	case stripUnchanged:
 		filtered = payload
 	}
-	if convertible {
-		if chunks, converted := completionAsChunks(filtered); converted {
-			return chunks
-		}
+	if chunks, converted := completionAsChunks(filtered); converted {
+		return chunks
 	}
-	if outcome != stripRewritten {
+	if outcome != stripRewritten && len(lines) == 1 {
 		return event
 	}
-	rewritten := make([]byte, 0, len(event)-(end-start)+len(filtered))
-	rewritten = append(rewritten, event[:start]...)
-	rewritten = append(rewritten, filtered...)
-	return append(rewritten, event[end:]...)
+	return rebuildEvent(event, filtered)
 }
 
-// stripEachDataLine strips each data line on its own, so a host cannot put a renderable delta on one
-// line and its internal fields on the next. See gateway-request-filtering.md, "The response side".
-func stripEachDataLine(event []byte, intent LogprobIntent) []byte {
-	rewritten := make([]byte, 0, len(event))
-	changed := false
+// eventPayload joins the event's data lines the way a client does -- with a newline, per the SSE spec
+// -- and reports where they were. One object split across two lines reaches the client as one object,
+// so it must reach the strip as one too.
+func eventPayload(event []byte) (dataLines []int, payload []byte, held bool) {
+	var joined []byte
 	for offset := 0; offset < len(event); {
 		line, lineEnd := event[offset:], len(event)
 		if breakAt := bytes.IndexByte(line, '\n'); breakAt >= 0 {
 			line, lineEnd = line[:breakAt], offset+breakAt+1
 		}
-		data, isData := bytes.CutPrefix(line, sseDataParsePrefix)
-		if !isData {
-			rewritten = append(rewritten, event[offset:lineEnd]...)
-			offset = lineEnd
-			continue
+		data, isData := bytes.CutPrefix(bytes.TrimRight(line, "\r"), sseDataParsePrefix)
+		if isData {
+			dataLines = append(dataLines, offset)
+			if len(joined) > 0 {
+				joined = append(joined, '\n')
+			}
+			joined = append(joined, bytes.TrimLeft(data, " \t")...)
 		}
-		leading := bytes.TrimLeft(data, " \t")
-		payload := bytes.TrimRight(leading, " \t\r")
-		filtered, outcome := stripInternalFields(payload, intent)
-		if outcome != stripRewritten {
-			rewritten = append(rewritten, event[offset:lineEnd]...)
-			offset = lineEnd
-			continue
-		}
-		changed = true
-		prefixLen := len(line) - len(leading)
-		rewritten = append(rewritten, event[offset:offset+prefixLen]...)
-		rewritten = append(rewritten, filtered...)
-		rewritten = append(rewritten, event[offset+prefixLen+len(payload):lineEnd]...)
 		offset = lineEnd
 	}
-	if !changed {
-		return event
+	if len(dataLines) == 0 {
+		return nil, nil, false
+	}
+	return dataLines, joined, true
+}
+
+// rebuildEvent emits the event with its data lines replaced by one carrying payload, keeping every
+// other line where it was: a client reads event, id and retry from the lines around the data.
+func rebuildEvent(event, payload []byte) []byte {
+	rewritten := make([]byte, 0, len(event)+len(payload))
+	emitted := false
+	for offset := 0; offset < len(event); {
+		line, lineEnd := event[offset:], len(event)
+		if breakAt := bytes.IndexByte(line, '\n'); breakAt >= 0 {
+			line, lineEnd = line[:breakAt], offset+breakAt+1
+		}
+		if _, isData := bytes.CutPrefix(bytes.TrimRight(line, "\r"), sseDataParsePrefix); !isData {
+			rewritten = append(rewritten, event[offset:lineEnd]...)
+			offset = lineEnd
+			continue
+		}
+		if !emitted {
+			rewritten = append(rewritten, sseDataPrefix...)
+			rewritten = append(rewritten, payload...)
+			rewritten = append(rewritten, event[offset+len(line):lineEnd]...)
+			emitted = true
+		}
+		offset = lineEnd
 	}
 	return rewritten
-}
-
-// soleDataObject locates the JSON object an event carries, accepting "data:" with or without the
-// space the wire only recommends, and whatever event/id/comment lines precede it. An event with no
-// data line, with more than one, or whose payload is not an object is left to stripEachDataLine.
-func soleDataObject(event []byte) (start, end int, ok bool) {
-	found := false
-	for offset := 0; offset < len(event); {
-		line, lineEnd := event[offset:], len(event)
-		if breakAt := bytes.IndexByte(line, '\n'); breakAt >= 0 {
-			line, lineEnd = line[:breakAt], offset+breakAt+1
-		}
-		if data, isData := bytes.CutPrefix(line, sseDataParsePrefix); isData {
-			if found {
-				return 0, 0, false
-			}
-			found = true
-			leading := bytes.TrimLeft(data, " \t")
-			start = offset + len(line) - len(leading)
-			end = start + len(bytes.TrimRight(leading, " \t\r"))
-		}
-		offset = lineEnd
-	}
-	return start, end, found && end > start && event[start] == '{'
 }
 
 // sseCompletion is the complete chat.completion some hosts answer a streaming request with, and

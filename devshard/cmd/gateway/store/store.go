@@ -21,6 +21,7 @@ import (
 type Store struct {
 	db           *sql.DB
 	retryBackoff time.Duration
+	retryable    func(error) bool
 
 	mu     sync.Mutex
 	ledger *Ledger
@@ -110,26 +111,26 @@ var (
 	legacyOnlyTables = []string{"gateway_settings", "gateway_devshards", "gateway_suspicious_hosts", "participant_throttle_state"}
 )
 
+// connectionPragmas is appended to the database path so every connection opens with them applied.
+const connectionPragmas = "?_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=busy_timeout(5000)"
+
 func Open(storageDir string) (*Store, error) {
 	if err := os.MkdirAll(storageDir, 0o755); err != nil {
 		return nil, fmt.Errorf("creating storage dir: %w", err)
 	}
 	databasePath := filepath.Join(storageDir, gatewayDatabaseFileName)
-	db, err := sql.Open("sqlite", databasePath)
+	// The pragmas travel in the DSN, not as statements after the open: they are per-connection, and a
+	// connection the pool recreates would come back without them -- silently, with busy_timeout at 0
+	// and synchronous back at FULL. In the DSN every connection carries them by construction.
+	db, err := sql.Open("sqlite", databasePath+connectionPragmas)
 	if err != nil {
 		return nil, fmt.Errorf("opening gateway store: %w", err)
 	}
+	// One writer, kept for the life of the process: SQLite serializes writes anyway, and a second
+	// connection would only add the lock contention the single connection makes impossible.
 	db.SetMaxOpenConns(1)
-	for _, pragma := range []string{
-		"PRAGMA journal_mode=WAL",
-		"PRAGMA synchronous=NORMAL",
-		"PRAGMA busy_timeout=5000",
-	} {
-		if _, err := db.Exec(pragma); err != nil {
-			db.Close()
-			return nil, fmt.Errorf("applying pragma %q: %w", pragma, err)
-		}
-	}
+	db.SetMaxIdleConns(1)
+	db.SetConnMaxLifetime(0)
 	if err := refuseLegacyDatabase(db, databasePath); err != nil {
 		db.Close()
 		return nil, err
@@ -138,7 +139,7 @@ func Open(storageDir string) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
-	return &Store{db: db, retryBackoff: 200 * time.Millisecond}, nil
+	return &Store{db: db, retryBackoff: 200 * time.Millisecond, retryable: isLockedError}, nil
 }
 
 func refuseLegacyDatabase(db *sql.DB, databasePath string) error {

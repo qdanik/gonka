@@ -463,24 +463,6 @@ func TestHasNonCacheableErrorFindsFailuresRegardlessOfFraming(t *testing.T) {
 	}
 }
 
-// Every stripped field must survive the pre-check, or the streaming rewriter forwards it untouched.
-// The markers are two of the six field names, so this is the test that the other four are reachable
-// through them -- and the one that fails first if a field is added that neither marker contains.
-func TestEveryStrippedFieldSurvivesThePreCheck(t *testing.T) {
-	for _, field := range clientStrippedFields {
-		event := []byte(`{"choices":[{"index":0,"` + field + `":{"content":[]}}]}`)
-		if !hasStrippableField(event) {
-			t.Fatalf("field %q is invisible to the pre-check, so it reaches the client untouched", field)
-		}
-	}
-}
-
-func TestThePreCheckIgnoresACleanEvent(t *testing.T) {
-	if hasStrippableField([]byte(`{"choices":[{"index":0,"delta":{"content":"hello"}}]}`)) {
-		t.Fatal("a clean event took the slow path")
-	}
-}
-
 // The strip must not rewrite numbers it was not asked to touch. Decoding into any turns every number
 // into a float64, and seed is the one field a client uses to make a completion reproducible: handing
 // back a different seed than the host reported breaks exactly the guarantee seed exists for.
@@ -653,6 +635,20 @@ func TestTheStripSetsPartitionTheFullList(t *testing.T) {
 		if requestable == always {
 			t.Fatalf("%q is in %s, want exactly one of requestable and always-stripped",
 				field, map[bool]string{true: "both sets", false: "neither set"}[requestable])
+		}
+	}
+}
+
+// Every field in the list must actually leave a response that carries it; the strip decides on the
+// decoded payload, so this is the test that a field added to the list is reachable by the delete.
+func TestEveryStrippedFieldIsRemoved(t *testing.T) {
+	for _, field := range clientStrippedFields {
+		body := []byte(`{"choices":[{"index":0,"` + field + `":{"content":[]}}]}`)
+
+		stripped := StripResponseBody(body, LogprobIntent{})
+
+		if bytes.Contains(stripped, []byte(field)) {
+			t.Fatalf("field %q survived the strip: %s", field, stripped)
 		}
 	}
 }
