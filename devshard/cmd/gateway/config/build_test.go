@@ -130,3 +130,18 @@ func TestBuildAcceptsTheShippedEnvTemplate(t *testing.T) {
 		t.Fatalf("Build() on the shipped template = %v; the gateway refuses to boot on its own deploy file", err)
 	}
 }
+
+// The CometBFT RPC endpoint is what every chain read falls back to when the gRPC query path fails.
+// Left to derivation it lands on the standard port of the gRPC host, which is right for a default
+// deployment and wrong for one that moved it -- and wrong there means a fallback nobody is listening
+// on, which fails only when it is needed.
+func TestTheChainRPCFallbackIsConfigurable(t *testing.T) {
+	configuration, err := Build(env.Values{ChainRPC: stringPointer("http://cometbft.internal:26657")}, Overrides{})
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	if configuration.Chain.RPCEndpoint != "http://cometbft.internal:26657" {
+		t.Fatalf("Chain.RPCEndpoint = %q, want the configured endpoint", configuration.Chain.RPCEndpoint)
+	}
+}

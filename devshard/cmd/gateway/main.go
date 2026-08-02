@@ -101,7 +101,10 @@ func chainBackedSessions(records devshardLookup, storageDir string) sessionSourc
 	return func(endpoints config.Chain, routePrefix string) (chainSources, error) {
 		// NewGRPCBridgeFromURL is upstream's test constructor; production builds the bridge over a client
 		// carrying the CometBFT RPC query fallback, so an escrow read survives the gRPC query path failing.
-		chainClient, err := commonchain.NewWithQueryFallback(endpoints.GRPCEndpoint, "")
+		// An empty RPC endpoint lets common/chain derive one from the gRPC host at the standard port,
+		// which is how a default deployment is laid out; a deployment that moved it has to say so, or
+		// the query fallback resolves to a host nobody is listening on and dies silently.
+		chainClient, err := commonchain.NewWithQueryFallback(endpoints.GRPCEndpoint, endpoints.RPCEndpoint)
 		if err != nil {
 			return chainSources{}, fmt.Errorf("dialing chain grpc %s: %w", endpoints.GRPCEndpoint, err)
 		}
@@ -138,7 +141,7 @@ type gateway struct {
 	participants *limits.ParticipantLimiter
 	telemetry    *metrics.Metrics
 	server       *http.Server
-	chainClient  *http.Client
+	publicAPI    *http.Client
 
 	builders     int
 	devshardWork chan struct{}
@@ -318,7 +321,7 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 		participants: participants,
 		telemetry:    telemetry,
 		server:       server.HTTPServer(fmt.Sprintf(":%d", configuration.Server.Port)),
-		chainClient:  boot.client,
+		publicAPI:    boot.client,
 		builders:     boot.builders,
 		devshardWork: devshardWork,
 	}, nil
@@ -420,7 +423,7 @@ type idleConnections interface{ CloseIdleConnections() }
 
 // shutdownOrder is the eight-step contract every shutdown follows. See gateway-architecture.md,
 // "Shutdown" and gateway-invariants.md, "6. Shutdown order is a contract".
-func shutdownOrder(listener httpListener, races, dispatchers, escrowLifecycle, chainObserver stopper, sessions, storage io.Closer, chainClient idleConnections) []shutdownStep {
+func shutdownOrder(listener httpListener, races, dispatchers, escrowLifecycle, chainObserver stopper, sessions, storage io.Closer, publicAPI idleConnections) []shutdownStep {
 	return []shutdownStep{
 		{name: "http server", stop: listener.Shutdown},
 		{name: "races", stop: waitFor(races)},
@@ -429,9 +432,11 @@ func shutdownOrder(listener httpListener, races, dispatchers, escrowLifecycle, c
 		{name: "chain observer", stop: waitFor(chainObserver)},
 		{name: "escrow sessions", stop: closeOf(sessions), needsQuiesced: true},
 		{name: "store", stop: closeOf(storage)},
-		// Last: every step above can still reach the chain, and an idle socket closed under one of them
-		// is a socket the next poll has to re-dial.
-		{name: "chain connections", stop: closeIdle(chainClient)},
+		// Last: every step above can still reach the public API, and an idle socket closed under one of
+		// them is a socket the next poll has to re-dial. The chain's own gRPC connection is not closed
+		// here and cannot be: common/chain owns it and exposes no Close, so it lives until the process
+		// exits. That is why the tests ignore its goroutines rather than waiting for them.
+		{name: "public api connections", stop: closeIdle(publicAPI)},
 	}
 }
 
@@ -482,7 +487,7 @@ func stopAll(ctx context.Context, steps []shutdownStep) error {
 func (g *gateway) shutdown(grace time.Duration) error {
 	drainCtx, cancelDrain := context.WithTimeout(context.Background(), grace)
 	defer cancelDrain()
-	return stopAll(drainCtx, shutdownOrder(g.server, g.races, g.router, g.manager, g.observer, g.escrows, g.store, g.chainClient))
+	return stopAll(drainCtx, shutdownOrder(g.server, g.races, g.router, g.manager, g.observer, g.escrows, g.store, g.publicAPI))
 }
 
 // bootBudget ties the two halves of a bounded boot: the concurrent-build limit and the idle pool those
