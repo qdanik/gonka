@@ -116,6 +116,7 @@ func stripInternalFields(payload []byte, intent LogprobIntent) ([]byte, stripOut
 	decoder := stdjson.NewDecoder(bytes.NewReader(payload))
 	decoder.UseNumber()
 	var decoded any
+	rewritten := false
 	if err := decoder.Decode(&decoded); err != nil || decoder.More() {
 		// A backend writes NaN and Infinity as barewords for a probability of zero. Neither is JSON, so
 		// without this the body is inspected by nobody: the buffered path forwards it with every
@@ -130,12 +131,17 @@ func stripInternalFields(payload []byte, intent LogprobIntent) ([]byte, stripOut
 		if err := decoder.Decode(&decoded); err != nil || decoder.More() {
 			return nil, stripMalformed
 		}
+		// The caller must receive the re-encoded bytes even when nothing was deleted. Handed the
+		// original, everything downstream meets the barewords again: the completion-to-chunks
+		// conversion fails on them and forwards a response a streaming client renders nothing from,
+		// while the attempt is crowned on its content and the nonce is paid for.
+		rewritten = true
 	}
 	changed := deleteFields(decoded, intent.strippedFields())
 	if intent.Keep && !intent.KeepTop {
 		changed = emptyTopLogprobs(decoded) || changed
 	}
-	if !changed {
+	if !changed && !rewritten {
 		return nil, stripUnchanged
 	}
 	var encoded bytes.Buffer

@@ -664,3 +664,24 @@ func TestAMultiLineEventWithNothingToStripSurvivesIntact(t *testing.T) {
 		t.Fatalf("the content was lost: %q", rewritten)
 	}
 }
+
+// A completion carrying a non-finite bareword must still convert. Normalisation makes it parseable,
+// but only if the parseable bytes are what travels on: handed the original, the conversion fails on
+// the barewords and forwards a response a streaming client renders nothing from -- while the attempt
+// is crowned on its content, because the content detector is lenient where the conversion is strict.
+func TestACompletionWithNonFiniteNumbersStillConvertsToChunks(t *testing.T) {
+	event := []byte(`data: {"id":"x","object":"chat.completion","choices":[{"index":0,"message":{"content":"hi"},` +
+		`"logprobs":{"content":[{"token":"hi","logprob":-Infinity,"top_logprobs":[{"token":"hi","logprob":-Infinity}]}]}}]}` + "\n\n")
+
+	rewritten := rewriteEvent(event, LogprobIntent{Keep: true, KeepTop: true})
+
+	if !bytes.Contains(rewritten, []byte(`"chat.completion.chunk"`)) {
+		t.Fatalf("forwarded unconverted, so a streaming client renders nothing while the nonce is paid: %s", rewritten)
+	}
+	if !bytes.Contains(rewritten, []byte(`"content":"hi"`)) {
+		t.Fatalf("the client's answer was lost: %s", rewritten)
+	}
+	if bytes.Contains(rewritten, []byte("Infinity")) {
+		t.Fatalf("a bareword no client can parse reached the client: %s", rewritten)
+	}
+}
