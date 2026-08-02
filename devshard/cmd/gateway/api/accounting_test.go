@@ -174,8 +174,8 @@ func TestTheLookupReturnsTheRecordedRow(t *testing.T) {
 		InputTokens:        128,
 		WinnerOutputTokens: 256,
 		TotalOutputTokens:  381,
-		StartedAt:          "2023-11-14T22:13:19.5Z",
-		CompletedAt:        "2023-11-14T22:13:24Z",
+		StartedAt:          "2023-11-14T22:13:19.500000000Z",
+		CompletedAt:        "2023-11-14T22:13:24.000000000Z",
 		FirstTokenMS:       450,
 		DurationMS:         4_000,
 	}

@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"go.uber.org/goleak"
+	"devshard/cmd/gateway/internal/leakcheck"
 )
 
 func fullScale() ModelCapacity { return ModelCapacity{ScaleFactor: 1} }
@@ -322,7 +322,7 @@ func TestRateLimitError_Error(t *testing.T) {
 }
 
 func TestGatewayLimiter_ConcurrencyRace(t *testing.T) {
-	defer goleak.VerifyNone(t)
+	defer leakcheck.VerifyNone(t)
 
 	limiter := NewGatewayLimiter(GatewayConfig{MaxConcurrent: 3, MaxInputTokens: 30, AcquireWait: 20 * time.Millisecond})
 

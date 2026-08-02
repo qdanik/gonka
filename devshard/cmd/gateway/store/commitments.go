@@ -31,7 +31,7 @@ func (s *Store) SaveCommitment(ctx context.Context, c Commitment) error {
 			block_height = excluded.block_height,
 			created_at = excluded.created_at`,
 		c.TxHash, c.Model, c.Role, c.PrivateKeyEnv, c.Epoch, c.BlockHeight,
-		c.CreatedAt.UTC().Format(time.RFC3339Nano))
+		FormatTime(c.CreatedAt))
 	if err != nil {
 		return fmt.Errorf("saving commitment %s: %w", c.TxHash, err)
 	}
