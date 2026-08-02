@@ -10,6 +10,10 @@ import (
 	"time"
 )
 
+// storedTimeLayout is fixed-width where RFC3339Nano is not: retention compares and orders timestamps
+// as text, and a trimmed fraction makes byte order disagree with time order.
+const storedTimeLayout = "2006-01-02T15:04:05.000000000Z07:00"
+
 type RequestOutcome string
 
 const (
@@ -258,13 +262,15 @@ func (s *Store) FindRequest(ctx context.Context, requestID string) (RequestRecor
 	return record, true, nil
 }
 
-// FormatTime renders a timestamp for storage and for the accounting API, so the retention cutoff
-// and the rows it compares against can never drift in precision or zone.
+// FormatTime renders a timestamp for storage and for the accounting API, so the retention cutoff and
+// the rows it compares against can never drift in precision or zone. The fraction is fixed-width
+// because retention compares and orders these as text: RFC3339Nano trims trailing zeros, so a whole
+// second sorts after the same second plus a tenth, and the sweep prunes by the wrong order.
 func FormatTime(value time.Time) string {
 	if value.IsZero() {
 		return ""
 	}
-	return value.UTC().Format(time.RFC3339Nano)
+	return value.UTC().Format(storedTimeLayout)
 }
 
 func parseTime(raw string) (time.Time, error) {

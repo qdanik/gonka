@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"go.uber.org/goleak"
+	"devshard/cmd/gateway/internal/leakcheck"
 )
 
 // phaseObserverStub serves the public-API endpoints PhaseObserver polls plus the chain-REST
@@ -695,9 +695,9 @@ func TestPhaseObserver_MaxNonceFetchErrorKeepsPriorValueAndRestOfSnapshot(t *tes
 
 // TestPhaseObserver_ContextCancelAloneStopsAllGoroutines covers shutdown driven purely by the
 // parent context: every goroutine Start spawned must exit without Stop ever being called.
-// goleak.VerifyNone is registered first so it runs last, after server.Close().
+// leakcheck.VerifyNone is registered first so it runs last, after server.Close().
 func TestPhaseObserver_ContextCancelAloneStopsAllGoroutines(t *testing.T) {
-	defer goleak.VerifyNone(t)
+	defer leakcheck.VerifyNone(t)
 
 	stub := newPhaseObserverStub()
 	server := httptest.NewServer(stub.handler())
@@ -732,9 +732,9 @@ func TestPhaseObserver_ContextCancelAloneStopsAllGoroutines(t *testing.T) {
 }
 
 // TestPhaseObserver_StopTerminatesLoopAndVersionsLoop covers clean shutdown of both goroutines
-// Start spawns; goleak.VerifyNone is registered first so it runs last, after server.Close().
+// Start spawns; leakcheck.VerifyNone is registered first so it runs last, after server.Close().
 func TestPhaseObserver_StopTerminatesLoopAndVersionsLoop(t *testing.T) {
-	defer goleak.VerifyNone(t)
+	defer leakcheck.VerifyNone(t)
 
 	stub := newPhaseObserverStub()
 	server := httptest.NewServer(stub.handler())
@@ -765,7 +765,7 @@ func TestPhaseObserver_StopTerminatesLoopAndVersionsLoop(t *testing.T) {
 // TestPhaseObserver_StopIsIdempotentAndConcurrentSafe covers repeated and racing Stop calls: all
 // must return without panicking and leave no goroutines behind.
 func TestPhaseObserver_StopIsIdempotentAndConcurrentSafe(t *testing.T) {
-	defer goleak.VerifyNone(t)
+	defer leakcheck.VerifyNone(t)
 
 	stub := newPhaseObserverStub()
 	server := httptest.NewServer(stub.handler())
@@ -1027,7 +1027,7 @@ func TestPhaseObserver_GenerationPhaseSkipsValidationMerge(t *testing.T) {
 // A second Start used to close an already-closed channel, panicking, and to orphan the first pair of
 // pollers by overwriting their cancel. goleak catches the orphan; the panic would fail outright.
 func TestPhaseObserver_StartTwiceIsANoOpAndRestartWorks(t *testing.T) {
-	defer goleak.VerifyNone(t)
+	defer leakcheck.VerifyNone(t)
 	stub := newPhaseObserverStub()
 	server := httptest.NewServer(stub.handler())
 	defer server.Close()

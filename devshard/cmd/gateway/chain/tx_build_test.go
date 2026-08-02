@@ -3,6 +3,8 @@ package chain
 import (
 	"bytes"
 	"testing"
+
+	inferencetypes "github.com/productscience/inference/x/inference/types"
 )
 
 // Fixed message-encoder inputs; must match the values chain_txgold_test.go used
@@ -48,15 +50,37 @@ func fixedSettlementEmptyOptional() SettlementInput {
 // TestMessageEncodersMatchGoldens pins the escrow message encoders byte-for-byte
 // against the goldens recorded from the reference implementation.
 func TestMessageEncodersMatchGoldens(t *testing.T) {
+	hostStats, err := (&inferencetypes.DevshardSettlementHostStats{
+		SlotId: 42, Missed: 3, Invalid: 1, Cost: 555, RequiredValidations: 10, CompletedValidations: 9,
+	}).Marshal()
+	if err != nil {
+		t.Fatalf("marshal host stats: %v", err)
+	}
+	slotSignature, err := (&inferencetypes.DevshardSlotSignature{
+		SlotId: 42, Signature: []byte("standalone-fixed-signature"),
+	}).Marshal()
+	if err != nil {
+		t.Fatalf("marshal slot signature: %v", err)
+	}
+	createMsg := mustEncode(t, func() ([]byte, error) {
+		return encodeMsgCreateDevshardEscrow(fixedCreator, fixedAmount, fixedModelID)
+	})
+	settleFull := mustEncode(t, func() ([]byte, error) {
+		return encodeMsgSettleDevshardEscrow(fixedSettler, fixedSettlementFull())
+	})
+	settleEmptyOptional := mustEncode(t, func() ([]byte, error) {
+		return encodeMsgSettleDevshardEscrow(fixedSettler, fixedSettlementEmptyOptional())
+	})
+
 	cases := []struct {
 		name string
 		got  []byte
 	}{
-		{"create_msg", encodeMsgCreateDevshardEscrow(fixedCreator, fixedAmount, fixedModelID)},
-		{"settle_msg_full", encodeMsgSettleDevshardEscrow(fixedSettler, fixedSettlementFull())},
-		{"settle_msg_empty_optional", encodeMsgSettleDevshardEscrow(fixedSettler, fixedSettlementEmptyOptional())},
-		{"settlement_host_stats", encodeSettlementHostStats(SettlementHostStat{SlotID: 42, Missed: 3, Invalid: 1, Cost: 555, RequiredValidations: 10, CompletedValidations: 9})},
-		{"slot_signature", encodeSlotSignature(SettlementSlotSig{SlotID: 42, Signature: []byte("standalone-fixed-signature")})},
+		{"create_msg", createMsg},
+		{"settle_msg_full", settleFull},
+		{"settle_msg_empty_optional", settleEmptyOptional},
+		{"settlement_host_stats", hostStats},
+		{"slot_signature", slotSignature},
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -66,6 +90,15 @@ func TestMessageEncodersMatchGoldens(t *testing.T) {
 			}
 		})
 	}
+}
+
+func mustEncode(t *testing.T, encode func() ([]byte, error)) []byte {
+	t.Helper()
+	encoded, err := encode()
+	if err != nil {
+		t.Fatalf("encoding: %v", err)
+	}
+	return encoded
 }
 
 // TestTruncateSignatureRealSecp256k1SignatureTruncatesTo64 feeds a genuine
@@ -132,7 +165,9 @@ func TestBuildCreateEscrowTxStructural(t *testing.T) {
 		t.Fatalf("signature length = %d, want 64", len(sigBytes))
 	}
 
-	wantMsg := encodeMsgCreateDevshardEscrow(signer.Address(), fixedAmount, fixedModelID)
+	wantMsg := mustEncode(t, func() ([]byte, error) {
+		return encodeMsgCreateDevshardEscrow(signer.Address(), fixedAmount, fixedModelID)
+	})
 	wantBody := encodeUnorderedTxBody(encodeAny(createEscrowMsgTypeURL, wantMsg), fixedTTL)
 	if !bytes.Equal(bodyBytes, wantBody) {
 		t.Fatalf("body = %x, want %x", bodyBytes, wantBody)
@@ -192,7 +227,9 @@ func TestBuildSettleEscrowTxStructural(t *testing.T) {
 		t.Fatalf("signature length = %d, want 64", len(sigBytes))
 	}
 
-	wantMsg := encodeMsgSettleDevshardEscrow(fixedSettler, input)
+	wantMsg := mustEncode(t, func() ([]byte, error) {
+		return encodeMsgSettleDevshardEscrow(fixedSettler, input)
+	})
 	wantBody := encodeUnorderedTxBody(encodeAny(settleEscrowMsgTypeURL, wantMsg), fixedTTL)
 	if !bytes.Equal(bodyBytes, wantBody) {
 		t.Fatalf("body = %x, want %x", bodyBytes, wantBody)
