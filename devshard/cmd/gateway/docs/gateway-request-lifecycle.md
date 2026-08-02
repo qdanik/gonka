@@ -27,6 +27,8 @@ The order of the first six stages is deliberate: everything cheap and everything
 
 The body is read through `http.MaxBytesReader` at 10 MiB for chat and 64 KiB for every operator route (`api/middleware.go`, `chatIngestLimit`, `adminIngestLimit` and `readBody`). `MaxBytesReader` rather than `io.LimitReader` for two reasons: it yields a typed error the status mapper turns into 413, and it marks the connection so the server stops reading a hostile body instead of draining it.
 
+The mark is made by type-asserting the writer, which is why `readBody` hands `MaxBytesReader` the writer the server owns rather than the one the handler holds (`api/middleware.go`, `baseWriter`). Every route runs behind the metrics wrapper, and a writer the standard library cannot see through takes the mark silently: the refusal still returns 413 while the connection stays open and the body keeps arriving. Unwrapping restores the read deadline too, which `http.NewResponseController` reaches the same way.
+
 The listener sets `ReadHeaderTimeout` (5 s), `IdleTimeout` (120 s) and `MaxHeaderBytes` (1 MiB), and deliberately sets **no `WriteTimeout`** (`api/server.go`, `Server.HTTPServer`). `WriteTimeout` is an absolute deadline on the whole response, so any value truncates every SSE stream at it. That is why per-attempt deadlines live in the engine rather than in the listener — and why "hardening" the server by adding a write timeout would break streaming.
 
 ## 2. Filters
@@ -47,7 +49,7 @@ Credentials are compared by hashing both sides and running `subtle.ConstantTimeC
 
 The chain blocks inference during proof-of-compute. Admission is a pure predicate over the published chain snapshot, evaluated here rather than as a per-escrow gate call (`api/admission.go`, `admission`).
 
-Relaxed proof-of-compute mode is applied at this boundary and nowhere else. The observer publishes the chain's *raw* blocking state; relaxed mode is the operator's override of it, not a chain fact. Note the deliberate counterpart: the per-weight concurrency allowance in the capacity adapter follows the **raw** phase rather than the override, because it bounds what the hosts can actually do (`main.go`, `modelCapacity.ForModel` and `modelCapacity.ScaleFactor`).
+The observer publishes the chain's *raw* blocking state; relaxed proof-of-compute mode is the operator's override of it, not a chain fact. This gate is the only place the override decides whether a request is refused, but it is not the only reader, and the readers deliberately disagree. The per-weight concurrency allowance follows the **raw** phase, because it bounds what the hosts can physically do (`main.go`, `modelCapacity.ForModel`). The scale factor follows the override: reading the raw state there would zero the scale during proof-of-compute, and a zero scale clamps every weight-derived cap to nothing, so relaxed mode would go dead in exactly the deployments that set an input-token cap or a per-model override (`main.go`, `blockedFor` and `modelCapacity.ScaleFactor`). The engine reads it a third time, to separate an attempt the phase transition ended from one the host ended (`engine/race.go`, `pocBypassActive` and `pocGenerating`).
 
 ## 5. Response cache
 

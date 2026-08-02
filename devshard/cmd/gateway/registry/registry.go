@@ -46,6 +46,8 @@ type Registry struct {
 
 	live atomic.Pointer[liveSet]
 
+	openings sync.Map
+
 	drainCloseFailures atomic.Int64
 
 	mu       sync.Mutex
@@ -84,6 +86,13 @@ func (r *Registry) Add(ctx context.Context, escrowID, model string) error {
 		return err
 	}
 
+	opening := r.openingLock(escrowID)
+	opening.Lock()
+	defer opening.Unlock()
+	if _, alreadyLive := r.live.Load().byID[escrowID]; alreadyLive {
+		return nil
+	}
+
 	session, err := r.servingSessions(ctx, escrowID)
 	if err != nil {
 		return fmt.Errorf("opening serving session for escrow %s: %w", escrowID, err)
@@ -109,6 +118,16 @@ func (r *Registry) Add(ctx context.Context, escrowID, model string) error {
 	return nil
 }
 
+// openingLock serializes opens of one escrow. A session is a SQLite file: two concurrent opens fail
+// with SQLITE_BUSY before either reaches the already-published check below, so the escrow an operator
+// just created can report a failure while another caller serves it. Locks are kept for the life of the
+// process -- one small mutex per escrow id ever published -- because removing one a waiter still holds
+// would let the next caller take a fresh lock and race it.
+func (r *Registry) openingLock(escrowID string) *sync.Mutex {
+	lock, _ := r.openings.LoadOrStore(escrowID, &sync.Mutex{})
+	return lock.(*sync.Mutex)
+}
+
 func (r *Registry) refuseIfDraining(escrowID string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -126,25 +145,48 @@ func (r *Registry) refuseIfDrainingLocked(escrowID string) error {
 
 // Retire stops routing to an escrow; its session is released once the requests already running end.
 func (r *Registry) Retire(escrowID string) error {
+	entry, closing := r.unpublish(escrowID)
+	if !closing {
+		return nil
+	}
+	return r.closeDraining(entry)
+}
+
+// unpublish takes an escrow out of routing and reports whether the caller owns its close. An entry
+// stays in draining until the close finishes, whether or not requests were running, so Add refuses the
+// id for the whole close rather than opening a second session over storage the first still holds.
+func (r *Registry) unpublish(escrowID string) (*escrowEntry, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	published := r.live.Load()
 	entry, known := published.byID[escrowID]
 	if !known {
-		return nil
+		return nil, false
 	}
 	r.live.Store(published.without(escrowID))
 	if r.membership != nil {
 		r.membership.RemoveEscrow(escrowID)
 	}
 	r.pushMembershipLocked()
+	r.draining[entry] = struct{}{}
 	if entry.busy() {
-		r.draining[entry] = struct{}{}
 		logging.Info("escrow retired, draining", "escrow", escrowID, "in_flight", entry.inFlight.Load())
-		return nil
+		return nil, false
 	}
 	logging.Info("escrow retired", "escrow", escrowID)
-	return entry.close()
+	return entry, true
+}
+
+// closeDraining releases the session with the registry lock free. Closing flushes the snapshot, which
+// takes the session lock, and a dispatch takes the session lock before the registry lock: holding the
+// two in the opposite order here wedges every later route and settlement behind one retirement. It
+// also keeps the snapshot write and the storage close off the path of every pick.
+func (r *Registry) closeDraining(entry *escrowEntry) error {
+	err := entry.close()
+	r.mu.Lock()
+	delete(r.draining, entry)
+	r.mu.Unlock()
+	return err
 }
 
 // Candidates satisfies scheduler.escrowSource.
@@ -270,21 +312,27 @@ func (r *Registry) holdLocked(entry *escrowEntry) func() {
 }
 
 func (r *Registry) release(entry *escrowEntry) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if entry.inFlight.Add(-1) > 0 {
+	if !r.lastHoldDropped(entry) {
 		return
 	}
-	if _, isDraining := r.draining[entry]; !isDraining {
-		return
-	}
-	delete(r.draining, entry)
-	if err := entry.close(); err != nil {
+	if err := r.closeDraining(entry); err != nil {
 		r.drainCloseFailures.Add(1)
 		logging.Error("draining escrow failed to close, its storage stays held", "escrow", entry.id, "error", err)
 		return
 	}
 	logging.Info("draining escrow closed", "escrow", entry.id)
+}
+
+// lastHoldDropped reports that this release ended the final in-flight request of a retired escrow, so
+// exactly one caller closes it. The count reaches zero once, and only a retired entry is in draining.
+func (r *Registry) lastHoldDropped(entry *escrowEntry) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if entry.inFlight.Add(-1) > 0 {
+		return false
+	}
+	_, isDraining := r.draining[entry]
+	return isDraining
 }
 
 // DrainCloseFailures counts the drained escrows whose flush or close failed. Retire and Close hand
@@ -320,18 +368,21 @@ func (r *Registry) Exhausted(escrowID string) {
 // Close releases every session still held, including the escrows still draining.
 func (r *Registry) Close() error {
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	r.closed = true
 	published := r.live.Load()
-	var errs []error
+	closing := make([]*escrowEntry, 0, len(published.byID)+len(r.draining))
 	for _, id := range sortedKeys(published.byID) {
-		errs = append(errs, published.byID[id].close())
+		closing = append(closing, published.byID[id])
 	}
-	for _, entry := range drainingInIDOrder(r.draining) {
-		errs = append(errs, entry.close())
-	}
+	closing = append(closing, drainingInIDOrder(r.draining)...)
 	r.live.Store(emptyLiveSet())
 	clear(r.draining)
+	r.mu.Unlock()
+
+	var errs []error
+	for _, entry := range closing {
+		errs = append(errs, entry.close())
+	}
 	return errors.Join(errs...)
 }
 

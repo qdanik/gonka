@@ -54,7 +54,7 @@ The metric families that described the deleted mechanism went with it: `devshard
 
 **The gateway does not restate chain policy locally.** The maximum active nonce count comes from a governance parameter read from the chain. If that read fails the gateway falls back to a conservative constant rather than treating the cap as disabled, but it never invents a policy of its own.
 
-**No changes to the shared `devshard/` packages.** `user`, `state`, `bridge`, `signing`, `types`, `transport` and the host-side stack are consumed as they are. Where one of them has a defect the gateway must live with — the timeout handler that returns a non-nil error on its success path, for example — the gateway normalises at the boundary and pins the behaviour with a test, rather than editing a package shared with the host and with devshardctl.
+**No changes to the shared `devshard/` packages.** `user`, `state`, `bridge`, `signing`, `types`, `transport` and the host-side stack are consumed as they are. Where one of them has a defect the gateway must live with, the gateway normalises at the boundary rather than editing a package shared with the host and with devshardctl. The timeout handler is the standing example: it returns a non-nil error on its own success path, because that error is how "the inference timed out" reaches the request. Only its genuine failures wrap a cause, so a reported reason beside an unwrapped error is a vote that reached the chain, and `SettleTimeout` translates exactly that pair into success (`engine/session.go`, `SessionTimeouts.SettleTimeout`). Reading the raw error instead would record every posted timeout vote as a failed one.
 
 ## Known gaps, stated rather than hidden
 

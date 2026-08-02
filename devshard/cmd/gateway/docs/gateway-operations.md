@@ -25,7 +25,7 @@ The per-model tier is `open`, `api_key` or `admin_only`. A pinned chat request w
 
 ### Per-escrow recovery surface
 
-All admin, all always-on: these are the tools an operator needs precisely when something is wrong, which is the worst moment to discover the kill switch hid them. They resolve through the *settlement* lookup, so a draining escrow still answers — that is usually the one in trouble.
+All admin, all always-on. An operator reaches for these precisely when something is wrong, so the kill switch must not be what hides them. They resolve through the *settlement* lookup, so a draining escrow still answers — and a draining escrow is usually the one in trouble.
 
 `GET|POST /devshard/{id}/v1/finalize`, `GET /devshard/{id}/v1/state`, `GET /devshard/{id}/v1/debug/state`, `GET /devshard/{id}/v1/debug/inferences`, `GET /devshard/{id}/v1/debug/pending`, `GET /devshard/{id}/v1/debug/signatures`.
 
@@ -51,7 +51,7 @@ All admin, all always-on.
 | `/v1/debug/rotation` | GET | Rotation status per model and role. |
 | `/v1/debug/memstats` | GET, HEAD | Go memory statistics. |
 
-Two operator-facing rules that surprise people:
+Four operator-facing behaviours the route table does not show:
 
 - **A private key is never accepted in a request body.** Escrow creation, registration and import all take `private_key_env`, the *name* of the environment variable holding the key; there is no `private_key` field on any of the three request types. A body that omits the variable name is rejected with 400, because a key sent instead would otherwise reach the commitment row, the logs, and every operator in between.
 - **Deactivate and settle stop routing before the record changes**, so nothing new is admitted while the write runs, and a settle that fails leaves the escrow retired rather than re-added — its record is already inactive and settlement-pending, which is where the rotation tick picks it up again.
@@ -78,7 +78,7 @@ Deployment identity only. `Load` returns what is *set*; defaults live in the con
 
 Plus the per-escrow signing keys, read from arbitrarily named variables referenced by each escrow record. Errors from those name the variable and never the value, so a failure can be logged without leaking key material.
 
-**Three settings are environment-only and take effect at start-up.** `GATEWAY_CHAT_CACHE_MAX_BYTES`, the `GATEWAY_CAPTURE_*` group and the classify byte budgets are read once when their component is built and are not rebuilt on a settings change. They are deliberately absent from the override list below, and an override document naming one is rejected rather than accepted and ignored — the decoder refuses unknown fields.
+**Two settings are environment-only and take effect at start-up.** `GATEWAY_CHAT_CACHE_MAX_BYTES` and the `GATEWAY_CAPTURE_*` group are read once when their component is built and are not rebuilt on a settings change. Both are deliberately absent from the override list below, and an override document naming one is rejected rather than accepted and ignored — the decoder refuses unknown fields.
 
 ### Admin overrides (21)
 
@@ -135,7 +135,7 @@ Most of the gateway's families share the prefix `devshard_gateway_`; the excepti
 
 **Scheduler** — `devshard_gateway_ghost_nonces_burned_total{devshard_id,reason}`, `devshard_gateway_nonce_holds_total{devshard_id}`, `devshard_gateway_burn_budget_exhausted_total{devshard_id}`. A nonce is money whichever way it is spent, so a burn, a hold and an exhausted budget each get their own family.
 
-**Host and process** — `devshard_gateway_host_ejected{participant_key,model}`, `devshard_gateway_host_inflight_requests{participant_key}`, `devshard_host_transport_open_connections{address}`, `devshard_host_transport_connections{address,state}`, `devshard_gateway_accounting_rows_written_total`, `devshard_gateway_accounting_rows_lost_total{cause}`, `devshard_gateway_accounting_retention_sweeps_failed_total`, `devshard_http_requests_total{path,method,status}`, `devshard_http_request_duration_seconds{path,method}`. A non-zero retention-sweep failure count means a retention delete did not run, so the ledger is past the age or row bound it was configured with — the bound is enforced, not merely declared, so its enforcement failing is worth seeing.
+**Host and process** — `devshard_gateway_host_ejected{participant_key,model}`, `devshard_gateway_host_inflight_requests{participant_key}`, `devshard_host_transport_open_connections{address}`, `devshard_host_transport_connections{address,state}`, `devshard_gateway_accounting_rows_written_total`, `devshard_gateway_accounting_rows_lost_total{cause}`, `devshard_gateway_accounting_retention_sweeps_failed_total`, `devshard_http_requests_total{path,method,status}`, `devshard_http_request_duration_seconds{path,method}`. A non-zero retention-sweep failure count means a retention delete did not run, so the ledger is past the age or row bound it was configured with. That sweep is the only thing enforcing the bound, so a failure there means the bound is now merely declared.
 
 **Request capture** — `devshard_gateway_captured_requests_total`, `devshard_gateway_captured_requests_refused_total`, `devshard_gateway_capture_bytes_held`. A rising refusal count is not a sampling artefact: nothing evicts capture files, so once the directory reaches its byte cap the sink turns itself off and stays off until an operator empties the directory. `capture_bytes_held` against the configured cap is the gauge that says how close that is.
 
@@ -168,23 +168,26 @@ What it does write is every event that moves money, changes what the gateway wil
 | `settled escrow record dropped` | the row was deleted | that row named the only key able to settle the escrow, so its removal is irreversible |
 | `escrow depleted with no replacement configured` | nonces exhausted, rotation has no model for it | capacity left the fleet and nothing replaces it |
 | `escrow tick failed` | the lifecycle tick returned | one line carrying every joined failure, each naming its own step and escrow |
-| `escrow serving` / `escrow retired` / `draining escrow closed` | an escrow started taking traffic, stopped, and finally let go of its storage — the last is asynchronous and invisible otherwise |
-| `escrow gone from chain, taken out of service` | `escrow retired` fires for settlement parking too; this is the only carrier of the cause |
-| `escrow recovered from commitment` | a create landed while the gateway was down, so `escrow created` never ran and the escrow exists in no other line |
-| `commitment cleared` | a create the gateway durably intended is abandoned; one of its two reasons is a transaction that may in fact have landed |
-| `bridge prepared` / `bridge finished` / `regular escrows promoted to temp` | which phase of the epoch dance asked for the escrows that just appeared and left, and whether the bridge is made of fresh temps or relabelled regulars |
-| `settle tx broadcast` | for the confirm window the transaction hash lives nowhere else; if the process dies there, money moved under a name nobody recorded |
-| `chain snapshot stale` / `chain snapshot recovered` | the health gauge says the view went stale, not which of four reads went dark, and a failed refresh keeps routing on the previous participants |
-| `attempt crowned` | which host actually served a request is in no metric, and the crown was once decided by a random `select` |
-| `attempt finished` | carries the terminal **the attempt itself reported**. A goroutine sees only its own cancellation, so the coordinator reclassifies two cases at the end of the race — a host that went silent mid-stream, and every attempt still running when the backstop fired with a client waiting and nobody crowned. Both become `stalled` in the outcome while the line still reads `client_cancelled` |
-| `host blocked for state divergence` | the block never lifts while the process runs, and no metric exposes it, so "why is this host never picked" is answerable only here |
-| `escalation unfilled` | an escalation that committed no nonce; the error reaches a caller only when no attempt ever started |
-| `nonce burned for nobody` | a nonce cost money on chain and will serve nobody, with the reason it was burned |
-| `escrow stopped burning nonces at its budget` | the escrow now queues callers rather than spending on requests it cannot serve |
-| `chain epoch` / `chain blocked requests` / `chain unblocked requests` | only on change: the observer republishes every five seconds whether or not anything moved |
-| `admin: …` | eight operator mutations | settings replaced, escrow registered, imported, deleted, activated, deactivated, participant added to or removed from the never-trust list, breaker cleared |
+| `escrow serving` / `escrow retired` / `draining escrow closed` | an escrow entered the published set, left it, and finally let go of its storage | the close runs after the last in-flight request, on nobody's request path, and is invisible otherwise |
+| `escrow gone from chain, taken out of service` | a lookup confirmed the escrow no longer exists on chain | `escrow retired` fires for settlement parking too, so this is the only line carrying the cause |
+| `escrow recovered from commitment` | reconciliation resolved a durable creation intent to an escrow id | the create landed while the gateway was down, so `escrow created` never ran and the escrow exists in no other line |
+| `commitment cleared` | a durable creation intent was abandoned | it names the reason, and one of the two — `transaction created no escrow` — means the transaction did commit |
+| `bridge prepared` / `bridge finished` / `regular escrows promoted to temp` | one phase of the epoch rotation completed | which phase asked for the escrows that just appeared and left, and whether the bridge is made of fresh temps or relabelled regulars |
+| `settle tx broadcast` | a settlement transaction reached the node, before the wait for its commit | for the confirm window the transaction hash lives nowhere else; if the process dies there, money moved under a name nobody recorded |
+| `chain snapshot stale` / `chain snapshot recovered` | a poll started or stopped failing — on the edge only | the health gauge says the view went stale, not which of four reads went dark, and a failed refresh keeps routing on the previous participants |
+| `attempt crowned` | one attempt became the client's answer | which host actually served a request is in no metric, and the crown was once decided by a random `select` |
+| `attempt finished` | an attempt reached a terminal | carries the terminal **the attempt itself reported**. A goroutine sees only its own cancellation, so the coordinator reclassifies two cases at the end of the race — a host that went silent mid-stream, and every attempt still running when the backstop fired with a client waiting and nobody crowned. Both become `stalled` in the outcome while the line still reads `client_cancelled` |
+| `host blocked for state divergence` | a host returned a post-state-root the escrow does not share | the block never lifts while the process runs, and no metric exposes it, so "why is this host never picked" is answerable only here |
+| `escalation unfilled` | an escalation pick was given no host | no nonce is committed, and the error reaches a caller only when no attempt ever started |
+| `nonce burned for nobody` | a ghost nonce was committed | the nonce cost money on chain and will serve nobody; the line names the escrow and the reason |
+| `escrow stopped burning nonces at its budget` | a drain reached its burn budget | the escrow now queues callers rather than spending on requests it cannot serve |
+| `chain epoch` / `chain blocked requests` / `chain unblocked requests` | the epoch or the blocked verdict changed | the observer republishes every five seconds whether or not anything moved, so only the change is written |
+| `admin: …` | nine operator mutations | settings replaced; escrow registered, imported, deleted, activated, deactivated; participant added to the never-trust list, removed from it; breaker cleared |
+| `admin request failed` / `admin request refused` | an operator route answered 5xx, or refused with a 4xx | the mutation lines above are written on the successful path only, so a failed operator action was invisible: the route, method, status and the message the caller was given |
 
-The admin lines carry the action and its subject, never the request body: an override payload can hold the admin key.
+The admin lines carry the action and its subject, never the request body: an override payload can hold the admin key. The failure line carries the response message, which the gateway wrote itself, truncated at the same bound as every other logged error.
+
+An unkeyed call on an operator route is refused with a 401 and written down: that is the shape an intrusion attempt takes, and it is worth a line even though nothing failed.
 
 A participant's breaker is deliberately not logged. Its state is already a per-participant metric with history, so a dashboard shows both that traffic stopped and when; a line would add only the cause, at the price of a push contract in a package that is otherwise pure algorithm. If the cause turns out to be the thing that is actually needed, that is the moment to pay for it.
 
@@ -202,7 +205,7 @@ The trace is always on. There is no level knob, deliberately: a trace that ships
 
 Following one request means grepping its request id; following one nonce through commit, dispatch and verdict means grepping the nonce.
 
-Volume is roughly five lines per request — one per attempt commit, one per attempt verdict, one on completion. If that ever becomes the problem, the answer is a level knob added then, against a measured number, rather than one shipped now with the trace defaulted off.
+Volume is roughly five lines per request — one per attempt commit, one per attempt verdict, one on completion. A level knob belongs here only once a measured volume demands it; adding one now would mean shipping the trace off by default.
 
 ### The request record
 
@@ -234,7 +237,7 @@ Seeding leaves an escrow it already knows alone, so a restart cannot resurrect o
 
 **The gateway reaches the chain over two transports, and they are not interchangeable.** REST (`chain_rest`, plus `public_api` for epochs and participants) serves the phase observer and the transaction client, which hand-encodes its own protobuf and falls back across `tx_query_fallback_urls`. gRPC (`chain_grpc`) serves one thing only: the escrow bridge, which upstream made gRPC-only when it deleted the REST bridge. Its own fallback needs no setting — `common/chain` derives the CometBFT RPC endpoint from the gRPC host at the standard port, which is how every deployment is laid out. Collapsing the two transports would mean moving the transaction client onto `common/chain` and giving up its own encoding and fallback; that is a deliberate future decision, not an oversight.
 
-**Environment variables accept both spellings.** The gateway reads its own `GATEWAY_*` names first and falls back to the `devshardctl` name for the eighteen settings that have one, so a deployment still running the shipped template starts without an edit. The suffixes are not a mechanical swap — rotation, the disabled switch, the PoC mode and the tx-query URLs were all renamed — so the pairs are listed explicitly in `env/env.go`. Where both are set, the `GATEWAY_*` value wins; an empty value counts as unset on both sides. Note the interaction with the paragraph below: falling back to `DEVSHARD_STORAGE_DIR` points this gateway at the directory `devshardctl` uses, which is exactly the case the database guard refuses — loudly, at start-up, rather than silently.
+**Environment variables accept both spellings.** The gateway reads its own `GATEWAY_*` names first and falls back to the `devshardctl` name for the eighteen settings that have one, so a deployment still running the shipped template starts without an edit. The suffixes are not a mechanical swap — rotation, the disabled switch, the PoC mode and the tx-query URLs were all renamed — so the pairs are listed explicitly in `env/env.go`. Where both are set, the `GATEWAY_*` value wins; an empty value counts as unset on both sides. This interacts with the storage rule below: falling back to `DEVSHARD_STORAGE_DIR` points this gateway at the directory `devshardctl` uses, which is exactly the case the database guard refuses — loudly, at start-up, rather than silently.
 
 **Point this gateway at a storage directory `devshardctl` has never used.** Both binaries name their database `<storageDir>/gateway.db`, and two table names are common to both with different columns. Because every migration here is a `CREATE TABLE IF NOT EXISTS`, opening a `devshardctl` database would silently adopt the legacy shape for those two and abandon the legacy devshard and suspicious-host registries for fresh empty ones — a start that looks clean and then fails one query at a time. The store therefore refuses to open such a file, recognising it by the absence of `schema_version` alongside a table only `devshardctl` creates. There is no migration path between the two; the escrows are re-seeded from `GATEWAY_DEVSHARDS_JSON`.
 
@@ -245,7 +248,7 @@ Publishing builds escrow runtimes concurrently under a semaphore whose depth is 
 Shutdown is eight ordered steps under a ten-second grace period; see [gateway-invariants.md](./gateway-invariants.md) for the contract and the reasoning. What matters operationally:
 
 - The listener stops accepting immediately; in-flight races continue to the vote that settles their nonces.
-- If the grace period expires, the overrunning drain is **left running** and reported rather than cancelled. The store and the chain connections still close; the escrow sessions deliberately do **not**, because closing a session takes no lock and closing one under a drain still committing nonces corrupts on-disk state to save a vote this shutdown was already going to drop. If your orchestrator then sends SIGKILL, votes can be lost — a longer grace period buys real safety here, because the protocol wait a vote may block on is measured in minutes.
+- If the grace period expires, the overrunning drain is **left running** and reported rather than cancelled. The store and the chain connections still close; the escrow sessions deliberately do **not**, because closing a session takes no lock and closing one under a drain still committing nonces corrupts on-disk state to save a vote this shutdown was already going to drop. If the orchestrator then sends SIGKILL, votes can be lost — a longer grace period buys real safety here, because the protocol wait a vote may block on is measured in minutes.
 - Queued accounting rows are drained before the database handle closes.
 
 What survives a restart: escrow records, creation commitments, rotation status, admin overrides, suspicious-host pins, the accounting ledger.
