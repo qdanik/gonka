@@ -3,6 +3,7 @@ package filters
 import (
 	"bytes"
 	"encoding/json"
+	stdjson "encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -650,5 +651,61 @@ func TestEveryStrippedFieldIsRemoved(t *testing.T) {
 		if bytes.Contains(stripped, []byte(field)) {
 			t.Fatalf("field %q survived the strip: %s", field, stripped)
 		}
+	}
+}
+
+// A backend writes NaN and Infinity as barewords for a probability of zero, and neither is JSON. Left
+// alone the body is inspected by nobody: the buffered path forwards it with every internal field in
+// it, and the streaming path drops the event, taking the client's answer with it.
+func TestABodyCarryingNonFiniteNumbersIsStillStrippedAndDelivered(t *testing.T) {
+	body := []byte(`{"choices":[{"message":{"content":"hi"},"logprobs":{"content":[{"logprob":-Infinity}]}}],"token_ids":[7],"prompt_logprobs":[1]}`)
+
+	stripped := StripResponseBody(body, LogprobIntent{})
+
+	for _, internal := range []string{"token_ids", "prompt_logprobs", "logprob"} {
+		if bytes.Contains(stripped, []byte(internal)) {
+			t.Fatalf("%s reached the client: %s", internal, stripped)
+		}
+	}
+	if !bytes.Contains(stripped, []byte(`"content":"hi"`)) {
+		t.Fatalf("the client's answer was lost: %s", stripped)
+	}
+	var decoded any
+	if err := stdjson.Unmarshal(stripped, &decoded); err != nil {
+		t.Fatalf("the delivered body is not JSON: %v (%s)", err, stripped)
+	}
+}
+
+// A bareword inside a string is content, not a number. The body must also fail to parse on its own,
+// or normalisation never runs and the test proves nothing about what it leaves alone.
+func TestNonFiniteWordsInsideStringsAreLeftAlone(t *testing.T) {
+	body := []byte(`{"choices":[{"message":{"content":"the value is NaN, or -Infinity"},"logprobs":{"content":[{"logprob":NaN}]}}],"token_ids":[7]}`)
+	var probe any
+	if stdjson.Unmarshal(body, &probe) == nil {
+		t.Fatal("the body parses on its own, so normalisation never runs and this test is vacuous")
+	}
+
+	stripped := StripResponseBody(body, LogprobIntent{})
+
+	if !bytes.Contains(stripped, []byte(`the value is NaN, or -Infinity`)) {
+		t.Fatalf("content was rewritten: %s", stripped)
+	}
+	if bytes.Contains(stripped, []byte("token_ids")) {
+		t.Fatalf("an internal field survived: %s", stripped)
+	}
+}
+
+// A real error in a later event must still be found. An empty {"error":{}} decodes without carrying
+// anything, and stopping on it would leave the stream readable as cacheable.
+func TestAnEmptyErrorEventDoesNotStopTheScan(t *testing.T) {
+	payload := []byte("data: {\"error\":{}}\n\n" + "data: {\"object\":\"error\",\"message\":\"service unavailable\"}\n\n")
+
+	details, found := parseUpstreamErrorDetails(payload)
+
+	if !found {
+		t.Fatal("the scan stopped at the empty error and never saw the real one")
+	}
+	if details.Message != "service unavailable" {
+		t.Fatalf("message = %q, want the later event's", details.Message)
 	}
 }
