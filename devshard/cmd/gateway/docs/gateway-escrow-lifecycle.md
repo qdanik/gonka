@@ -161,8 +161,9 @@ Node capability — whether a participant can run validation inference — is th
 
 ## Transaction encoding
 
-The transaction messages are hand-encoded protobuf. The field numbers are a frozen wire contract with the chain's message types, and `buf`-generated code is deliberately not used here. Three details are easy to lose:
+The two escrow messages are marshalled by the types generated from the chain's `.proto` (`chain/tx_build.go`, `encodeMsgCreateDevshardEscrow` and `encodeMsgSettleDevshardEscrow`), so their field numbers cannot drift from the chain's. The transaction envelope around them -- body, auth info, sign doc, `TxRaw` -- is still hand-encoded, because it is the unordered form with a timeout timestamp and that shape is pinned byte-for-byte by goldens (`chain/protoencode.go`). Three details are easy to lose:
 
+- The generated types name two fields differently from the gateway: `SlotSigs` is `signatures` on the wire, and `Version` is `state_root_and_protocol_version`. The slot counters are `uint32` there and `uint64` here, so the conversion narrows them; slot ids are bounded by the participant group and the counters by the nonce ceiling.
 - The signature sent is `r‖s` — the recovery byte is validated and dropped (`chain/tx_build.go`, `truncateSignature`).
 - Transactions are *unordered* with a nine-minute timeout timestamp, so the account sequence is fetched but signed as zero: an unordered transaction does not consume a sequence.
 - Older nodes nest transaction events under `logs` only, and vesting accounts nest the base account several levels deep — both are why the response walkers look over-defensive (`chain/txclient.go`, `TxClient.fetchAccount` and `txResponse.createdEscrowID`).

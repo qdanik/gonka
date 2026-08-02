@@ -11,7 +11,7 @@ import (
 	"devshard/cmd/gateway/config"
 	"devshard/cmd/gateway/store"
 
-	"go.uber.org/goleak"
+	"devshard/cmd/gateway/internal/leakcheck"
 )
 
 type fakeSnapshotSource struct {
@@ -224,9 +224,9 @@ func TestTickCheckDepletionRunsRegardlessOfBridgeBranch(t *testing.T) {
 }
 
 // If Start were not idempotent, the first goroutine's stop/done channels would be overwritten
-// and orphaned by the second call, leaking a goroutine that goleak.VerifyNone would catch.
+// and orphaned by the second call, leaking a goroutine that the leak check would catch.
 func TestStartStopIdempotent(t *testing.T) {
-	defer goleak.VerifyNone(t)
+	defer leakcheck.VerifyNone(t)
 
 	cfg := config.Defaults()
 	m := NewManager(testManagerDeps(t, newFakeStore(), &fakeTxClient{}, &fakeSnapshotSource{}, &cfg))
@@ -239,7 +239,7 @@ func TestStartStopIdempotent(t *testing.T) {
 }
 
 func TestStopBlocksUntilInFlightTickExits(t *testing.T) {
-	defer goleak.VerifyNone(t)
+	defer leakcheck.VerifyNone(t)
 
 	started := make(chan struct{})
 	release := make(chan struct{})
@@ -275,7 +275,7 @@ func TestStopBlocksUntilInFlightTickExits(t *testing.T) {
 // ever calling Stop, must still terminate the tick goroutine (accessing m.done directly, same
 // package as chain/observer_test.go does with doneCh).
 func TestContextCancelAloneStopsTickGoroutine(t *testing.T) {
-	defer goleak.VerifyNone(t)
+	defer leakcheck.VerifyNone(t)
 
 	cfg := config.Defaults()
 	m := NewManager(testManagerDeps(t, newFakeStore(), &fakeTxClient{}, &fakeSnapshotSource{}, &cfg))
@@ -293,7 +293,7 @@ func TestContextCancelAloneStopsTickGoroutine(t *testing.T) {
 }
 
 func TestStartStopConcurrentCallsAreRaceFree(t *testing.T) {
-	defer goleak.VerifyNone(t)
+	defer leakcheck.VerifyNone(t)
 
 	cfg := config.Defaults()
 	m := NewManager(testManagerDeps(t, newFakeStore(), &fakeTxClient{}, &fakeSnapshotSource{}, &cfg))
@@ -350,7 +350,7 @@ func TestTickRetiresDepletedEscrowWhileRotationDisabled(t *testing.T) {
 // early return means a settlement write can land on a closed database. A second concurrent Stop has
 // to wait with the first rather than racing past it.
 func TestManagerStopIsABarrierForConcurrentCallers(t *testing.T) {
-	defer goleak.VerifyNone(t)
+	defer leakcheck.VerifyNone(t)
 	testStore := newFakeStore()
 	blocking := &blockingSnapshotSource{started: make(chan struct{}), release: make(chan struct{})}
 	cfg := config.Defaults()

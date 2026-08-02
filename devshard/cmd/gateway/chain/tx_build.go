@@ -6,54 +6,51 @@ import (
 	"time"
 
 	"devshard/signing"
+
+	inferencetypes "github.com/productscience/inference/x/inference/types"
 )
 
-// encodeMsgCreateDevshardEscrow builds inference.inference.MsgCreateDevshardEscrow.
-func encodeMsgCreateDevshardEscrow(creator string, amount uint64, modelID string) []byte {
-	var out []byte
-	out = appendBytesField(out, 1, []byte(creator))
-	out = appendVarintField(out, 2, amount)
-	out = appendBytesField(out, 3, []byte(modelID))
-	return out
+// The two escrow messages are marshalled by the types generated from the chain's own .proto, so their
+// wire layout tracks the chain by construction. Hand-laying the fields put a money transaction's
+// layout in a third place that had to be edited in lockstep with the proto or the settlement
+// mis-encodes silently. Marshal cannot fail for these messages -- neither carries an Any or a custom
+// type -- and an error is returned rather than dropped so a future field cannot make it silent.
+func encodeMsgCreateDevshardEscrow(creator string, amount uint64, modelID string) ([]byte, error) {
+	message := &inferencetypes.MsgCreateDevshardEscrow{Creator: creator, Amount: amount, ModelId: modelID}
+	return message.Marshal()
 }
 
-// encodeMsgSettleDevshardEscrow builds inference.inference.MsgSettleDevshardEscrow.
-func encodeMsgSettleDevshardEscrow(settler string, input SettlementInput) []byte {
-	var out []byte
-	out = appendBytesField(out, 1, []byte(settler))
-	out = appendVarintField(out, 2, input.EscrowID)
-	out = appendBytesField(out, 3, input.StateRoot)
-	out = appendVarintField(out, 4, input.Nonce)
-	out = appendBytesField(out, 5, input.RestHash)
+func encodeMsgSettleDevshardEscrow(settler string, input SettlementInput) ([]byte, error) {
+	hostStats := make([]*inferencetypes.DevshardSettlementHostStats, 0, len(input.HostStats))
 	for _, hostStat := range input.HostStats {
-		out = appendBytesField(out, 6, encodeSettlementHostStats(hostStat))
+		hostStats = append(hostStats, &inferencetypes.DevshardSettlementHostStats{
+			SlotId:               uint32(hostStat.SlotID),
+			Missed:               uint32(hostStat.Missed),
+			Invalid:              uint32(hostStat.Invalid),
+			Cost:                 hostStat.Cost,
+			RequiredValidations:  uint32(hostStat.RequiredValidations),
+			CompletedValidations: uint32(hostStat.CompletedValidations),
+		})
 	}
+	signatures := make([]*inferencetypes.DevshardSlotSignature, 0, len(input.SlotSigs))
 	for _, slotSig := range input.SlotSigs {
-		out = appendBytesField(out, 7, encodeSlotSignature(slotSig))
+		signatures = append(signatures, &inferencetypes.DevshardSlotSignature{
+			SlotId:    uint32(slotSig.SlotID),
+			Signature: slotSig.Signature,
+		})
 	}
-	out = appendVarintField(out, 8, input.Fees)
-	out = appendBytesField(out, 9, []byte(input.Version))
-	return out
-}
-
-// encodeSettlementHostStats builds one embedded HostStats entry (field 6 of MsgSettleDevshardEscrow).
-func encodeSettlementHostStats(hostStat SettlementHostStat) []byte {
-	var out []byte
-	out = appendVarintField(out, 1, hostStat.SlotID)
-	out = appendVarintField(out, 2, hostStat.Missed)
-	out = appendVarintField(out, 3, hostStat.Invalid)
-	out = appendVarintField(out, 4, hostStat.Cost)
-	out = appendVarintField(out, 5, hostStat.RequiredValidations)
-	out = appendVarintField(out, 6, hostStat.CompletedValidations)
-	return out
-}
-
-// encodeSlotSignature builds one embedded slot signature entry (field 7 of MsgSettleDevshardEscrow).
-func encodeSlotSignature(slotSig SettlementSlotSig) []byte {
-	var out []byte
-	out = appendVarintField(out, 1, slotSig.SlotID)
-	out = appendBytesField(out, 2, slotSig.Signature)
-	return out
+	message := &inferencetypes.MsgSettleDevshardEscrow{
+		Settler:                     settler,
+		EscrowId:                    input.EscrowID,
+		StateRoot:                   input.StateRoot,
+		Nonce:                       input.Nonce,
+		RestHash:                    input.RestHash,
+		HostStats:                   hostStats,
+		Signatures:                  signatures,
+		Fees:                        input.Fees,
+		StateRootAndProtocolVersion: input.Version,
+	}
+	return message.Marshal()
 }
 
 // truncateSignature validates and drops the recovery byte from a secp256k1
@@ -70,7 +67,10 @@ func buildCreateEscrowTx(signer *signing.Secp256k1Signer, chainID string, accoun
 	if strings.TrimSpace(chainID) == "" {
 		return nil, fmt.Errorf("chain id is required")
 	}
-	msg := encodeMsgCreateDevshardEscrow(signer.Address(), amount, modelID)
+	msg, err := encodeMsgCreateDevshardEscrow(signer.Address(), amount, modelID)
+	if err != nil {
+		return nil, fmt.Errorf("encode create-escrow message: %w", err)
+	}
 	bodyBytes := encodeUnorderedTxBody(encodeAny(createEscrowMsgTypeURL, msg), ttl)
 	pubKeyAny := encodeAny(secp256k1PubKeyTypeURL, encodeSecp256k1PubKey(signer.CompressedPublicKeyBytes()))
 	authInfoBytes := encodeAuthInfo(pubKeyAny, 0, feeDenom, feeAmount, gasLimit)
@@ -91,7 +91,10 @@ func buildSettleEscrowTx(signer *signing.Secp256k1Signer, chainID string, accoun
 	if strings.TrimSpace(chainID) == "" {
 		return nil, fmt.Errorf("chain id is required")
 	}
-	msg := encodeMsgSettleDevshardEscrow(settler, input)
+	msg, err := encodeMsgSettleDevshardEscrow(settler, input)
+	if err != nil {
+		return nil, fmt.Errorf("encode settle-escrow message: %w", err)
+	}
 	bodyBytes := encodeUnorderedTxBody(encodeAny(settleEscrowMsgTypeURL, msg), ttl)
 	pubKeyAny := encodeAny(secp256k1PubKeyTypeURL, encodeSecp256k1PubKey(signer.CompressedPublicKeyBytes()))
 	authInfoBytes := encodeAuthInfo(pubKeyAny, 0, feeDenom, feeAmount, gasLimit)

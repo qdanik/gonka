@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"go.uber.org/goleak"
+
+	"devshard/cmd/gateway/internal/leakcheck"
 )
 
 type testClock struct {
@@ -83,7 +85,7 @@ func openLedger(t *testing.T, testStore *Store, retention Retention, clock *test
 }
 
 func TestLedgerWritesEveryFieldItWasGiven(t *testing.T) {
-	verifyNoLeaks(t)
+	leakcheck.VerifyNone(t)
 
 	testStore := openTestStore(t)
 	clock := newTestClock(time.Unix(1700000010, 0).UTC())
@@ -113,7 +115,7 @@ func TestLedgerWritesEveryFieldItWasGiven(t *testing.T) {
 }
 
 func TestLedgerWritesExactlyOneRowPerRequestID(t *testing.T) {
-	verifyNoLeaks(t)
+	leakcheck.VerifyNone(t)
 
 	testStore := openTestStore(t)
 	clock := newTestClock(time.Unix(1700000010, 0).UTC())
@@ -132,7 +134,7 @@ func TestLedgerWritesExactlyOneRowPerRequestID(t *testing.T) {
 }
 
 func TestLedgerFindReportsUnknownAndBlankIDs(t *testing.T) {
-	verifyNoLeaks(t)
+	leakcheck.VerifyNone(t)
 
 	testStore := openTestStore(t)
 	clock := newTestClock(time.Unix(1700000010, 0).UTC())
@@ -153,7 +155,7 @@ func TestLedgerFindReportsUnknownAndBlankIDs(t *testing.T) {
 }
 
 func TestRecordDoesNotBlockWhileTheWriterIsStalled(t *testing.T) {
-	verifyNoLeaks(t)
+	leakcheck.VerifyNone(t)
 
 	testStore := openTestStore(t)
 	clock := newTestClock(time.Unix(1700000010, 0).UTC())
@@ -196,7 +198,7 @@ func TestRecordDoesNotBlockWhileTheWriterIsStalled(t *testing.T) {
 }
 
 func TestRetentionEvictsRowsPastTheMaxAge(t *testing.T) {
-	verifyNoLeaks(t)
+	leakcheck.VerifyNone(t)
 
 	storageDir := t.TempDir()
 	retention := Retention{MaxAge: 24 * time.Hour, MaxRows: 1_000}
@@ -233,7 +235,7 @@ func TestRetentionEvictsRowsPastTheMaxAge(t *testing.T) {
 }
 
 func TestRetentionEvictsTheOldestRowsPastMaxRows(t *testing.T) {
-	verifyNoLeaks(t)
+	leakcheck.VerifyNone(t)
 
 	testStore := openTestStore(t)
 	clock := newTestClock(time.Unix(1700000000, 0).UTC())
@@ -262,7 +264,7 @@ func TestRetentionEvictsTheOldestRowsPastMaxRows(t *testing.T) {
 // A sweep that cannot delete leaves the ledger growing past both of its bounds, so the two deletes
 // report rather than pass. They are attempted independently, which is why both are counted.
 func TestAFailedRetentionSweepIsCountedPerBound(t *testing.T) {
-	verifyNoLeaks(t)
+	leakcheck.VerifyNone(t)
 
 	testStore := openTestStore(t)
 	clock := newTestClock(time.Unix(1700000000, 0).UTC())
@@ -284,7 +286,7 @@ func TestAFailedRetentionSweepIsCountedPerBound(t *testing.T) {
 }
 
 func TestNewLedgerRejectsAnUnboundedOrClocklessLedger(t *testing.T) {
-	verifyNoLeaks(t)
+	leakcheck.VerifyNone(t)
 
 	testStore := openTestStore(t)
 	clock := newTestClock(time.Unix(1700000000, 0).UTC())
@@ -307,7 +309,7 @@ func TestNewLedgerRejectsAnUnboundedOrClocklessLedger(t *testing.T) {
 }
 
 func TestStoreCloseDrainsAPendingLedgerWrite(t *testing.T) {
-	verifyNoLeaks(t)
+	leakcheck.VerifyNone(t)
 
 	storageDir := t.TempDir()
 	testStore, err := Open(storageDir)
@@ -333,7 +335,7 @@ func TestStoreCloseDrainsAPendingLedgerWrite(t *testing.T) {
 }
 
 func TestRecordAfterCloseIsCountedNotPanicked(t *testing.T) {
-	verifyNoLeaks(t)
+	leakcheck.VerifyNone(t)
 
 	testStore := openTestStore(t)
 	clock := newTestClock(time.Unix(1700000000, 0).UTC())
@@ -348,5 +350,26 @@ func TestRecordAfterCloseIsCountedNotPanicked(t *testing.T) {
 	}
 	if err := ledger.Close(); err != nil {
 		t.Fatalf("second Close(): %v", err)
+	}
+}
+
+// Retention compares and orders these timestamps as text, so byte order has to agree with time order.
+// RFC3339Nano trims a trailing zero fraction, which puts a whole second after the same second plus a
+// tenth and prunes the wrong rows.
+func TestStoredTimestampsSortInTimeOrder(t *testing.T) {
+	base := time.Date(2026, 8, 2, 3, 0, 5, 0, time.UTC)
+	ascending := []time.Time{
+		base,
+		base.Add(time.Nanosecond),
+		base.Add(100 * time.Millisecond),
+		base.Add(time.Second),
+		base.Add(time.Minute),
+	}
+
+	for index := 1; index < len(ascending); index++ {
+		earlier, later := FormatTime(ascending[index-1]), FormatTime(ascending[index])
+		if earlier >= later {
+			t.Fatalf("%q does not sort before %q, so a text-ordered sweep prunes out of order", earlier, later)
+		}
 	}
 }

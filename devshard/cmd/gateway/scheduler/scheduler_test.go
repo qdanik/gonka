@@ -12,6 +12,8 @@ import (
 	"devshard/cmd/gateway/perf"
 
 	"go.uber.org/goleak"
+
+	"devshard/cmd/gateway/internal/leakcheck"
 )
 
 const escrowB = "escrow-b"
@@ -370,7 +372,7 @@ func TestPickEscalationReusesTheEscrowsDispatcher(t *testing.T) {
 }
 
 func TestPickReturnsTheContextErrorWhenCancelledWhileQueued(t *testing.T) {
-	verifyNoLeaks(t)
+	leakcheck.VerifyNone(t)
 	test := newSchedulerHarness(t, schedulerConfig{holdGraceMS: 200})
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -413,7 +415,7 @@ func TestPickReturnsTheContextErrorWhenCancelledWhileQueued(t *testing.T) {
 // Every admission and every escrow hold ends up either with the caller that will release it or given
 // back here; a cancellation racing the handoff must not be able to strand one in between.
 func TestPickReleasesTheSlotWhenCancellationRacesTheAssignment(t *testing.T) {
-	verifyNoLeaks(t)
+	leakcheck.VerifyNone(t)
 	test := newSchedulerHarness(t, schedulerConfig{})
 	const races = 200
 
@@ -539,7 +541,7 @@ func failUntilEjected(tracker *perf.Tracker, healthy []string, failing ...string
 // The routing gate reads the detector itself, not a predicate a test wrote: samples go into a real
 // tracker and the ejected host is simply never handed the request.
 func TestPickWithholdsAHostTheOutlierDetectorEjected(t *testing.T) {
-	verifyNoLeaks(t)
+	leakcheck.VerifyNone(t)
 	settings := config.Defaults()
 	tracker := perf.NewTracker(config.NewHolder(&settings), time.Now)
 	failUntilEjected(tracker, []string{hostA}, hostB)
@@ -562,7 +564,7 @@ func TestPickWithholdsAHostTheOutlierDetectorEjected(t *testing.T) {
 // The cap inside the tracker is what makes the gate safe to honour: when every host fails at once, the
 // gate must still leave the fleet servable rather than turning an outage into a total refusal.
 func TestPickStillServesWhenEveryHostIsFailingAtOnce(t *testing.T) {
-	verifyNoLeaks(t)
+	leakcheck.VerifyNone(t)
 	settings := config.Defaults()
 	tracker := perf.NewTracker(config.NewHolder(&settings), time.Now)
 	failUntilEjected(tracker, nil, hostA, hostB)
@@ -606,7 +608,7 @@ func TestPickGhostsTheNonceWhenAdmissionRefusesTheBoundHost(t *testing.T) {
 }
 
 func TestPickAdmitsExactlyOneCallerThroughAWindowOfOne(t *testing.T) {
-	verifyNoLeaks(t)
+	leakcheck.VerifyNone(t)
 	test := newSchedulerHarness(t, schedulerConfig{slots: []string{hostA}, hostWindow: 1})
 	const callers = 8
 
@@ -819,7 +821,7 @@ func TestPickSurfacesBackPressureWhenTheQueueIsFull(t *testing.T) {
 // A caller claims its escrow's dispatcher under the registry lock and submits after releasing it, so
 // the window this covers is the one an idle actor could otherwise retire underneath the caller.
 func TestClaimedDispatcherOutlivesTheIdleReaper(t *testing.T) {
-	verifyNoLeaks(t)
+	leakcheck.VerifyNone(t)
 	test := newSchedulerHarness(t, schedulerConfig{})
 	escrow := test.escrow(t, escrowA)
 
@@ -843,7 +845,7 @@ func TestClaimedDispatcherOutlivesTheIdleReaper(t *testing.T) {
 }
 
 func TestPickReplacesAStoppedDispatcher(t *testing.T) {
-	verifyNoLeaks(t)
+	leakcheck.VerifyNone(t)
 	test := newSchedulerHarness(t, schedulerConfig{})
 
 	stale, err := test.scheduler.dispatcherFor(test.escrow(t, escrowA))
@@ -865,7 +867,7 @@ func TestPickReplacesAStoppedDispatcher(t *testing.T) {
 }
 
 func TestSchedulerStopIsIdempotent(t *testing.T) {
-	verifyNoLeaks(t)
+	leakcheck.VerifyNone(t)
 	test := newSchedulerHarness(t, schedulerConfig{})
 
 	if _, err := test.scheduler.Pick(context.Background(), RequestProfile{Model: modelA}); err != nil {
@@ -881,7 +883,7 @@ func TestSchedulerStopIsIdempotent(t *testing.T) {
 }
 
 func TestSchedulerReapsAnIdleDispatcherAndRecreatesItOnDemand(t *testing.T) {
-	verifyNoLeaks(t)
+	leakcheck.VerifyNone(t)
 	test := newSchedulerHarness(t, schedulerConfig{})
 
 	first, err := test.scheduler.Pick(context.Background(), RequestProfile{Model: modelA})
@@ -905,7 +907,7 @@ func TestSchedulerReapsAnIdleDispatcherAndRecreatesItOnDemand(t *testing.T) {
 // blockedHosts is keyed by an escrow id the chain never reuses, so an entry that outlives its escrow is
 // never read again and never freed. One per escrow that saw a divergent host, for the process lifetime.
 func TestRetiringAnEscrowForgetsItsBlockedHosts(t *testing.T) {
-	verifyNoLeaks(t)
+	leakcheck.VerifyNone(t)
 	test := newSchedulerHarness(t, schedulerConfig{})
 	escrow := test.escrow(t, escrowA)
 	claimed, err := test.scheduler.dispatcherFor(escrow)

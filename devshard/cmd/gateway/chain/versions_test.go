@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"go.uber.org/goleak"
+	"devshard/cmd/gateway/internal/leakcheck"
 )
 
 // fakeClock is a mutex-guarded injectable clock so TTL/staleness tests never
@@ -135,7 +135,7 @@ func TestVersionsCache_Run_ExitsOnContextCancel(t *testing.T) {
 	// Registered first so it runs last: after the server (and its client
 	// connections) are closed below, so the httptest listener goroutine
 	// isn't mistaken for a leak.
-	defer goleak.VerifyNone(t)
+	defer leakcheck.VerifyNone(t)
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(`{"mlnodes":[{"node_id":"node-1","poc_validation_inference":true}]}`))
@@ -166,7 +166,7 @@ func TestVersionsCache_Run_ExitsOnContextCancel(t *testing.T) {
 // reads as stale and no node is ever reported validation-capable. This pins that a pass overlaps:
 // every fetch must arrive before any is allowed to finish, which is impossible one at a time.
 func TestVersionsPollFetchesConcurrently(t *testing.T) {
-	defer goleak.VerifyNone(t)
+	defer leakcheck.VerifyNone(t)
 
 	const candidateCount = 8
 	arrived := make(chan struct{}, candidateCount)
