@@ -35,7 +35,7 @@ var (
 
 	// alwaysStrippedFields is what remains: internals no request can ask for. Derived rather than
 	// written out, so a field added to the list above cannot be left out of this one and reach a client
-	// that asked for nothing -- the same reason strippableMarkers is derived.
+	// that asked for nothing -- a hand-written second list is exactly how top_logprobs once leaked.
 	alwaysStrippedFields = func() []string {
 		fields := make([]string, 0, len(clientStrippedFields))
 		for _, field := range clientStrippedFields {
@@ -44,27 +44,6 @@ var (
 			}
 		}
 		return fields
-	}()
-
-	// strippableMarkers keeps only the fields no other field contains, unquoted, so two scans cover all
-	// six: "top_logprobs" contains "logprob", so finding the short one cannot miss the long one. Still
-	// derived from the list -- a hand-written marker set is exactly how top_logprobs once leaked, and
-	// the quote that set relied on is what hid it, since the quote sits before "top_", not "logprob".
-	strippableMarkers = func() [][]byte {
-		markers := make([][]byte, 0, len(clientStrippedFields))
-		for _, field := range clientStrippedFields {
-			contained := false
-			for _, other := range clientStrippedFields {
-				if other != field && strings.Contains(field, other) {
-					contained = true
-					break
-				}
-			}
-			if !contained {
-				markers = append(markers, []byte(field))
-			}
-		}
-		return markers
 	}()
 
 	// unicodeEscape is the only escape that can encode a letter of a field name.
@@ -180,21 +159,6 @@ func deleteFields(value any, fields []string) bool {
 	default:
 		return false
 	}
-}
-
-// hasStrippableField is a cheap pre-check so untouched chunks skip the SSE split entirely. A \u escape
-// sends the payload down the full strip regardless: the scan reads raw bytes, while the client's
-// decoder reads "\u006cogprobs" as logprobs, and only that escape form can spell a letter in a key.
-func hasStrippableField(p []byte) bool {
-	if bytes.Contains(p, unicodeEscape) {
-		return true
-	}
-	for _, marker := range strippableMarkers {
-		if bytes.Contains(p, marker) {
-			return true
-		}
-	}
-	return false
 }
 
 // UpstreamError is the OpenAI-compatible error shape extracted from a response body or SSE event.

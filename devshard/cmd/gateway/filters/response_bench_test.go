@@ -27,18 +27,6 @@ func repeatJSON(payload string, count int) []byte {
 	return append(out, ']')
 }
 
-func BenchmarkHasStrippableFieldClean(b *testing.B) {
-	for _, size := range []int{1, 10, 100, 1000} {
-		payload := repeatJSON(benchCleanChoice, size)
-		b.Run(fmt.Sprint(size), func(b *testing.B) {
-			b.ReportAllocs()
-			for i := 0; i < b.N; i++ {
-				_ = hasStrippableField(payload)
-			}
-		})
-	}
-}
-
 func BenchmarkStripResponseBody(b *testing.B) {
 	for _, size := range []int{1, 10, 100} {
 		payload := repeatJSON(benchDirtyChoice, size)

@@ -29,7 +29,7 @@ func (s *Store) SaveRotationStatus(ctx context.Context, st RotationStatus) error
 			create_error = excluded.create_error,
 			updated_at = excluded.updated_at`,
 		st.Model, st.Role, st.Stage, st.Epoch, st.Completed, st.CreateError,
-		st.UpdatedAt.UTC().Format(time.RFC3339Nano))
+		FormatTime(st.UpdatedAt))
 	if err != nil {
 		return fmt.Errorf("saving rotation status %s/%s: %w", st.Model, st.Role, err)
 	}

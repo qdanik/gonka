@@ -73,18 +73,13 @@ func (m *Manager) Settle(ctx context.Context, escrowID string) (chain.SettleEscr
 	return chain.SettleEscrowResult{}, fmt.Errorf("settling escrow %s: %w", escrowID, ErrUnknownEscrow)
 }
 
-// park records the intent to settle -- inactive and pending, so a crash leaves the escrow
+// park records the intent to settle -- inactive and pending in one write, so a crash leaves the escrow
 // recoverable -- and then stops routing to it, which is what the busy check that follows relies on.
 func (m *Manager) park(ctx context.Context, escrowID string) error {
 	if err := m.store.WithRetry(ctx, func() error {
-		return m.store.SetDevshardActive(ctx, escrowID, false)
+		return m.store.ParkForSettlement(ctx, escrowID)
 	}); err != nil {
-		return fmt.Errorf("deactivating escrow %s: %w", escrowID, err)
-	}
-	if err := m.store.WithRetry(ctx, func() error {
-		return m.store.SetDevshardSettlementPending(ctx, escrowID, true)
-	}); err != nil {
-		return fmt.Errorf("marking settlement pending for escrow %s: %w", escrowID, err)
+		return fmt.Errorf("parking escrow %s for settlement: %w", escrowID, err)
 	}
 	if err := m.settlementSource.Retire(escrowID); err != nil {
 		return fmt.Errorf("retiring escrow %s from routing: %w", escrowID, err)
