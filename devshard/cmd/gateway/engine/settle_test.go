@@ -54,12 +54,15 @@ func TestTimeoutLadderPostsWhenNoSkipConditionHolds(t *testing.T) {
 }
 
 func TestTimeoutLadderSkipConditions(t *testing.T) {
+	// ContentSource is what makes these "after content": ContentChunks alone counts error events too.
 	longResponse := unsettledAttempt()
 	longResponse.ContentChunks = 3
+	longResponse.ContentSource = "delta.content"
 	longResponse.Completed = testEpoch.Add(longResponseExemption)
 
 	justUnderLongResponse := unsettledAttempt()
 	justUnderLongResponse.ContentChunks = 3
+	justUnderLongResponse.ContentSource = "delta.content"
 	justUnderLongResponse.Completed = testEpoch.Add(longResponseExemption - time.Nanosecond)
 
 	stateDivergent := unsettledAttempt()
@@ -228,5 +231,42 @@ func TestTimeoutEventCarriesRaceIdentity(t *testing.T) {
 
 	if events[0].Participant != testParticipant || events[0].Model != testModel || events[0].Nonce != 7 {
 		t.Fatalf("event = %+v, want the attempt's participant, the race model and the nonce", events[0])
+	}
+}
+
+// A host that emits one SSE error event and then holds the stream open past the long-response exemption
+// leaves its nonce committed, unfinished, and unvoted: the exemption counts error chunks as content, so
+// the timeout vote it exists to defer is dropped instead. Nothing else sweeps an unfinished nonce, so
+// the escrow can never reclaim what that nonce cost. See gateway-invariants.md, invariant 1.
+func TestAnErrorOnlyStreamStillVotesItsTimeout(t *testing.T) {
+	attempt := failedAttempt(TerminalErrorStream)
+	attempt.ContentChunks = 1 // the error event itself, counted as a chunk
+	attempt.ContentSource = ""
+	attempt.Completed = attempt.StartedAt.Add(longResponseExemption)
+	outcome := RaceOutcome{Attempts: []AttemptOutcome{attempt}}
+
+	plan := outcome.TimeoutPlan()
+
+	if len(plan) != 1 {
+		t.Fatalf("plan has %d steps, want the unfinished nonce in it", len(plan))
+	}
+	if !plan[0].Post {
+		t.Fatal("timeout vote skipped: the nonce is committed, unfinished and now unreclaimable")
+	}
+}
+
+// The exemption it must not break: a host genuinely streaming content for longer than the window is
+// still working, and voting a timeout against it would settle a race that has not finished.
+func TestALongRunningContentStreamKeepsItsExemption(t *testing.T) {
+	attempt := failedAttempt(TerminalStreamTruncated)
+	attempt.ContentChunks = 40
+	attempt.ContentSource = "delta.content"
+	attempt.Completed = attempt.StartedAt.Add(longResponseExemption)
+	outcome := RaceOutcome{Attempts: []AttemptOutcome{attempt}}
+
+	plan := outcome.TimeoutPlan()
+
+	if len(plan) != 1 || plan[0].Post {
+		t.Fatalf("a long content stream lost its exemption: %+v", plan)
 	}
 }

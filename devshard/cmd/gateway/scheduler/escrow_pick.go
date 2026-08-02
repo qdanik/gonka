@@ -17,9 +17,19 @@ func (s *Scheduler) pickEscrow(profile RequestProfile, snapshot chain.PhaseSnaps
 
 	if profile.Escrow != "" {
 		for _, candidate := range candidates {
-			if candidate.ID == profile.Escrow {
-				return candidate, nil
+			if candidate.ID != profile.Escrow {
+				continue
 			}
+			// The cap is checked here too: a client picks this escrow by id, and the nonce ceiling is
+			// what reserves room for the finalize and settlement that follow. See
+			// gateway-routing-and-nonces.md, "Picking an escrow".
+			if atNonceCap(candidate, snapshot.MaxNonce) {
+				if s.onEscrowExhausted != nil {
+					s.onEscrowExhausted(candidate.ID)
+				}
+				return Escrow{}, ErrNoEscrowCapacity
+			}
+			return candidate, nil
 		}
 		return Escrow{}, fmt.Errorf("escrow %q for model %q: %w", profile.Escrow, profile.Model, ErrEscrowGone)
 	}

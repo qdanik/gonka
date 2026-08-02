@@ -452,3 +452,28 @@ func TestPickEscrowWithoutANonceExhaustedReporterStillPicks(t *testing.T) {
 		t.Fatalf("pickEscrow() = %q, %v; want escrow-fresh with a nil reporter", picked.ID, err)
 	}
 }
+
+// A client names the escrow on the per-escrow route, so the pinned path takes untrusted input. The
+// nonce ceiling reserves room for the finalize and settlement that follow; past it the chain rejects
+// the settlement and the escrow's funds can never be reclaimed.
+func TestAPinnedEscrowStillHonoursTheNonceCeiling(t *testing.T) {
+	t.Parallel()
+	scheduler, _, _ := newScheduler(candidate{id: "escrow-1", weight: 1, latestNonce: 19_900})
+
+	_, err := scheduler.pickEscrow(RequestProfile{Model: modelA, Escrow: "escrow-1"}, chain.PhaseSnapshot{})
+
+	if !errors.Is(err, ErrNoEscrowCapacity) {
+		t.Fatalf("pickEscrow() = %v, want the exhausted escrow refused", err)
+	}
+}
+
+func TestAPinnedEscrowUnderTheCeilingIsServed(t *testing.T) {
+	t.Parallel()
+	scheduler, _, _ := newScheduler(candidate{id: "escrow-1", weight: 1, latestNonce: 10})
+
+	picked, err := scheduler.pickEscrow(RequestProfile{Model: modelA, Escrow: "escrow-1"}, chain.PhaseSnapshot{})
+
+	if err != nil || picked.ID != "escrow-1" {
+		t.Fatalf("pickEscrow() = %v, %v, want the pinned escrow served", picked.ID, err)
+	}
+}

@@ -473,3 +473,24 @@ func TestHasSSEDone(t *testing.T) {
 		})
 	}
 }
+
+// The wire format lets one event carry several data lines, and declining to rewrite those forwards
+// whatever the extra lines hold: a host puts a renderable delta on the first and its internal fields
+// on the second, and the second reaches the client verbatim.
+func TestStreamRewriter_StripsEveryDataLineOfAMultiLineEvent(t *testing.T) {
+	event := []byte("data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n" +
+		"data: {\"prompt_logprobs\":[1,2],\"token_ids\":[7]}\n\n")
+
+	got, err := NewStreamRewriter().Write(event)
+	if err != nil {
+		t.Fatalf("Write() = %v", err)
+	}
+
+	assertNoInternalFields(t, got)
+	if !bytes.Contains(got, []byte(`"content":"ok"`)) {
+		t.Fatalf("the renderable line was lost: %s", got)
+	}
+	if bytes.Count(got, []byte("data:")) != 2 {
+		t.Fatalf("an event line went missing: %s", got)
+	}
+}

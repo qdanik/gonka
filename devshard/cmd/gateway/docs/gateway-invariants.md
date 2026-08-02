@@ -40,6 +40,9 @@ Every nonce the gateway commits therefore ends up in exactly one of three states
 
 **Known residual.** A ghost burn commits without taking the escrow hold, because a ghost is never dispatched and owes no vote (`scheduler/dispatcher.go`, `dispatcherDeps` and the serve branch of `dispatcher.drain`). This is consistent, but it means ghost commits are not protected against a concurrent retire the way served commits are.
 
+
+The long-response exemption is where this last went wrong. A host still producing content past 280 seconds should not have a timeout voted against it, so the vote is deferred. The predicate first read `ContentChunks > 0` — but that counter increments on error events as well as content, so a host that emitted a single SSE error and then held the stream open for 280 seconds was exempted too. Its nonce ended neither host-finished nor timeout-voted, and nothing else sweeps an unfinished nonce: the escrow could never reclaim what the nonce cost. The predicate now reads `ContentSource != ""`, which is set only by a rendered content, reasoning or tool-call field, so the exemption covers the case it was written for and nothing else.
+
 ## 2. Exactly one outcome and exactly one winner per race, on every path
 
 A race has several attempts running concurrently, may be abandoned by its client mid-flight, and continues after its caller has returned. Every exit path must still produce exactly one `RaceOutcome` and crown at most one winner.
