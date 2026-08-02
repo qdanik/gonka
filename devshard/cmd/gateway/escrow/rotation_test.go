@@ -10,6 +10,8 @@ import (
 	"devshard/cmd/gateway/chain"
 	"devshard/cmd/gateway/store"
 	"devshard/signing"
+
+	"devshard/cmd/gateway/internal/logcapture"
 )
 
 // succeedingCreateEscrowFn always succeeds, assigning sequential escrow ids/tx hashes from startID.
@@ -560,5 +562,31 @@ func TestDeferredRetireSeparatesNotYetFromFailed(t *testing.T) {
 				t.Fatalf("deferredRetire(%v) = %v, want %v", testCase.err, got, testCase.deferred)
 			}
 		})
+	}
+}
+
+// A rotation that creates nothing because the chain serves no such model is a decision, not an idle
+// tick. Unwritten, an operator looking for the escrow that never appeared finds no reason anywhere.
+func TestASkippedRotationIsWrittenDown(t *testing.T) {
+	entries := logcapture.Install(t)
+	manager := &Manager{}
+	snapshot := chain.PhaseSnapshot{
+		EpochIndex:            4,
+		FullWeightsByModel:    map[string]map[string]float64{"other-model": {"gonka1host": 1}},
+		CurrentWeightsByModel: map[string]map[string]float64{"other-model": {"gonka1host": 1}},
+	}
+
+	created, err := manager.ensureToTarget(context.Background(), roleRegular, 1,
+		ModelConfig{ModelID: "qwen"}, snapshot, nil)
+
+	if err != nil || created != 0 {
+		t.Fatalf("ensureToTarget = (%d, %v), want (0, nil)", created, err)
+	}
+	entry, found := entries.Find("rotation skipped, the network serves no such model")
+	if !found {
+		t.Fatalf("the skip left no trace: %+v", entries.All())
+	}
+	if got := logcapture.Field(entry, "model"); got != "qwen" {
+		t.Fatalf("model field = %v, want the model that was skipped", got)
 	}
 }

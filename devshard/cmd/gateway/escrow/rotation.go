@@ -31,6 +31,10 @@ func (m *Manager) ensureToTarget(ctx context.Context, role string, target int, m
 		return 0, nil
 	}
 	if served, known := servedByNetwork(snapshot, model.ModelID); known && !served {
+		// Written down because it is a rotation that produced nothing on purpose: without it an
+		// operator looking for the escrow that never appeared finds no reason anywhere.
+		logging.Warn("rotation skipped, the network serves no such model",
+			"model", model.ModelID, "role", role, "epoch", snapshot.EpochIndex)
 		return 0, nil
 	}
 	if m.breaker.gated(model.ModelID, role) {

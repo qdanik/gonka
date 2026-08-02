@@ -22,6 +22,7 @@ type Values struct {
 	ChainGRPC   *string
 	PublicAPI   *string
 	ChainID     *string
+	ChainRPC    *string
 	TxFeeAmount *int64
 	TxGasLimit  *int64
 
@@ -71,6 +72,7 @@ var (
 		"GATEWAY_CHAIN_GRPC":                  "DEVSHARD_CHAIN_GRPC",
 		"GATEWAY_PUBLIC_API":                  "DEVSHARD_PUBLIC_API",
 		"GATEWAY_CHAIN_ID":                    "DEVSHARD_CHAIN_ID",
+		"GATEWAY_CHAIN_RPC":                   "DEVSHARD_CHAIN_RPC",
 		"GATEWAY_TX_FEE_AMOUNT":               "DEVSHARD_TX_FEE_AMOUNT",
 		"GATEWAY_TX_GAS_LIMIT":                "DEVSHARD_TX_GAS_LIMIT",
 		"GATEWAY_POC_MODE":                    "DEVSHARD_POC_REQUEST_MODE",
@@ -169,6 +171,7 @@ func Load() (Values, error) {
 	readString("GATEWAY_CHAIN_GRPC", &values.ChainGRPC)
 	readString("GATEWAY_PUBLIC_API", &values.PublicAPI)
 	readString("GATEWAY_CHAIN_ID", &values.ChainID)
+	readString("GATEWAY_CHAIN_RPC", &values.ChainRPC)
 	readInt("GATEWAY_TX_FEE_AMOUNT", &values.TxFeeAmount)
 	readInt("GATEWAY_TX_GAS_LIMIT", &values.TxGasLimit)
 

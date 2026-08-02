@@ -11,6 +11,8 @@ import (
 	"testing"
 
 	"devshard/cmd/gateway/store"
+
+	"devshard/cmd/gateway/internal/logcapture"
 )
 
 // guardedTree lays out a base storage dir and a sibling directory nothing may reach.
@@ -199,26 +201,26 @@ func TestAnAdminListReflectsTheStore(t *testing.T) {
 // The failure log is the contract here: an operator action that returns 5xx is otherwise invisible,
 // since auditAdmin only records the successful path.
 func TestAFailedAdminOperationIsLogged(t *testing.T) {
-	entries := captureLogging(t)
+	entries := logcapture.Install(t)
 	live := newHarness(t)
 	live.control.listErr = errStoreUnavailable
 
 	live.request(t, http.MethodGet, "/v1/admin/devshards", "", adminHeaders())
 
-	entry, found := entries.find("admin request failed")
+	entry, found := entries.Find("admin request failed")
 	if !found {
-		t.Fatalf("a 500 on an admin route left no log line: %+v", entries.all())
+		t.Fatalf("a 500 on an admin route left no log line: %+v", entries.All())
 	}
-	if entry.level != "error" {
-		t.Fatalf("level = %q, want error", entry.level)
+	if entry.Level != "error" {
+		t.Fatalf("level = %q, want error", entry.Level)
 	}
-	if got := logField(entry, "status"); got != http.StatusInternalServerError {
+	if got := logcapture.Field(entry, "status"); got != http.StatusInternalServerError {
 		t.Fatalf("status field = %v, want 500", got)
 	}
-	if got := logField(entry, "route"); got != "/v1/admin/devshards" {
+	if got := logcapture.Field(entry, "route"); got != "/v1/admin/devshards" {
 		t.Fatalf("route field = %v", got)
 	}
-	if got, _ := logField(entry, "error").(string); !strings.Contains(got, errStoreUnavailable.Error()) {
+	if got, _ := logcapture.Field(entry, "error").(string); !strings.Contains(got, errStoreUnavailable.Error()) {
 		t.Fatalf("error field = %q, want the store failure", got)
 	}
 }
@@ -226,34 +228,34 @@ func TestAFailedAdminOperationIsLogged(t *testing.T) {
 // An unkeyed call on an admin route is the shape an intrusion attempt takes, so the refusal is
 // recorded even though nothing failed.
 func TestAnUnkeyedAdminCallIsLogged(t *testing.T) {
-	entries := captureLogging(t)
+	entries := logcapture.Install(t)
 	live := newHarness(t)
 
 	live.request(t, http.MethodGet, "/v1/admin/devshards", "", nil)
 
-	entry, found := entries.find("admin request refused")
+	entry, found := entries.Find("admin request refused")
 	if !found {
-		t.Fatalf("an unkeyed admin call left no log line: %+v", entries.all())
+		t.Fatalf("an unkeyed admin call left no log line: %+v", entries.All())
 	}
-	if entry.level != "warn" {
-		t.Fatalf("level = %q, want warn", entry.level)
+	if entry.Level != "warn" {
+		t.Fatalf("level = %q, want warn", entry.Level)
 	}
-	if got := logField(entry, "status"); got != http.StatusUnauthorized {
+	if got := logcapture.Field(entry, "status"); got != http.StatusUnauthorized {
 		t.Fatalf("status field = %v, want 401", got)
 	}
 }
 
 func TestASuccessfulAdminOperationIsNotLoggedAsAFailure(t *testing.T) {
-	entries := captureLogging(t)
+	entries := logcapture.Install(t)
 	live := newHarness(t)
 
 	live.request(t, http.MethodGet, "/v1/admin/devshards", "", adminHeaders())
 
-	if _, found := entries.find("admin request failed"); found {
-		t.Fatalf("a 200 was logged as a failure: %+v", entries.all())
+	if _, found := entries.Find("admin request failed"); found {
+		t.Fatalf("a 200 was logged as a failure: %+v", entries.All())
 	}
-	if _, found := entries.find("admin request refused"); found {
-		t.Fatalf("a 200 was logged as a refusal: %+v", entries.all())
+	if _, found := entries.Find("admin request refused"); found {
+		t.Fatalf("a 200 was logged as a refusal: %+v", entries.All())
 	}
 }
 

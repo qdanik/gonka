@@ -31,6 +31,7 @@ type Server struct {
 type Chain struct {
 	PublicAPIBaseURL string
 	GRPCEndpoint     string
+	RPCEndpoint      string
 	ChainID          string
 }
 

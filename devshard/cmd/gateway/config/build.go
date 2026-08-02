@@ -24,6 +24,7 @@ func Build(values env.Values, overrides Overrides) (*Config, error) {
 	overrideIfSet(&configuration.Chain.GRPCEndpoint, values.ChainGRPC)
 	overrideIfSet(&configuration.Chain.PublicAPIBaseURL, values.PublicAPI)
 	overrideIfSet(&configuration.Chain.ChainID, values.ChainID)
+	overrideIfSet(&configuration.Chain.RPCEndpoint, values.ChainRPC)
 	overrideIfSet(&configuration.Tx.FeeAmount, values.TxFeeAmount)
 	overrideIfSet(&configuration.Tx.GasLimit, values.TxGasLimit)
 
