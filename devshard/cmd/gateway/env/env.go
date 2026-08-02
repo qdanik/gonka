@@ -19,12 +19,11 @@ type Values struct {
 	AdminAPIKey   *string
 	DevshardsJSON *string
 
-	ChainREST           *string
-	ChainGRPC           *string
-	PublicAPI           *string
-	TxQueryFallbackURLs *string
-	TxFeeAmount         *int64
-	TxGasLimit          *int64
+	ChainGRPC   *string
+	PublicAPI   *string
+	ChainID     *string
+	TxFeeAmount *int64
+	TxGasLimit  *int64
 
 	DefaultMaxTokens      *int64
 	MaxTokensCap          *int64
@@ -69,10 +68,9 @@ var (
 		"GATEWAY_STORAGE_DIR":                 "DEVSHARD_STORAGE_DIR",
 		"GATEWAY_API_KEYS":                    "DEVSHARD_API_KEYS",
 		"GATEWAY_ADMIN_API_KEY":               "DEVSHARD_ADMIN_API_KEY",
-		"GATEWAY_CHAIN_REST":                  "DEVSHARD_CHAIN_REST",
 		"GATEWAY_CHAIN_GRPC":                  "DEVSHARD_CHAIN_GRPC",
 		"GATEWAY_PUBLIC_API":                  "DEVSHARD_PUBLIC_API",
-		"GATEWAY_TX_QUERY_FALLBACK_URLS":      "DEVSHARD_TX_QUERY_REST",
+		"GATEWAY_CHAIN_ID":                    "DEVSHARD_CHAIN_ID",
 		"GATEWAY_TX_FEE_AMOUNT":               "DEVSHARD_TX_FEE_AMOUNT",
 		"GATEWAY_TX_GAS_LIMIT":                "DEVSHARD_TX_GAS_LIMIT",
 		"GATEWAY_POC_MODE":                    "DEVSHARD_POC_REQUEST_MODE",
@@ -168,10 +166,9 @@ func Load() (Values, error) {
 	readString("GATEWAY_ADMIN_API_KEY", &values.AdminAPIKey)
 	readString("GATEWAY_DEVSHARDS_JSON", &values.DevshardsJSON)
 
-	readString("GATEWAY_CHAIN_REST", &values.ChainREST)
 	readString("GATEWAY_CHAIN_GRPC", &values.ChainGRPC)
 	readString("GATEWAY_PUBLIC_API", &values.PublicAPI)
-	readString("GATEWAY_TX_QUERY_FALLBACK_URLS", &values.TxQueryFallbackURLs)
+	readString("GATEWAY_CHAIN_ID", &values.ChainID)
 	readInt("GATEWAY_TX_FEE_AMOUNT", &values.TxFeeAmount)
 	readInt("GATEWAY_TX_GAS_LIMIT", &values.TxGasLimit)
 

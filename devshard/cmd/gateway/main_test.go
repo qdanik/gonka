@@ -43,8 +43,12 @@ func TestMain(m *testing.M) {
 		goleak.IgnoreTopFunction("modernc.org/sqlite.(*conn).interruptOnDone.func1"),
 		// The chain client is dialed once and lives for the process: common/chain exposes no Close, and
 		// its grpc connection and desertbit/timer's wheel both outlive every gateway this test composes.
+		// The connection now carries every chain read, so its resolver and transport goroutines start
+		// where before only the bridge held an idle handle.
 		goleak.IgnoreTopFunction("github.com/desertbit/timer.timerRoutine"),
 		goleak.IgnoreTopFunction("google.golang.org/grpc/internal/grpcsync.(*CallbackSerializer).run"),
+		goleak.IgnoreTopFunction("google.golang.org/grpc/internal/resolver/dns.(*dnsResolver).watcher"),
+		goleak.IgnoreTopFunction("google.golang.org/grpc.(*addrConn).resetTransportAndUnlock"),
 	)
 }
 
@@ -74,7 +78,6 @@ func gatewayEnvironment(t *testing.T) {
 	t.Helper()
 	chainURL := fakeChain(t)
 	t.Setenv("GATEWAY_STORAGE_DIR", t.TempDir())
-	t.Setenv("GATEWAY_CHAIN_REST", chainURL)
 	t.Setenv("GATEWAY_PUBLIC_API", chainURL)
 }
 

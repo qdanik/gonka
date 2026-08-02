@@ -18,6 +18,7 @@ type Result struct {
 	MaxTokens           uint64
 	MaxCompletionTokens uint64
 	N                   uint64
+	Logprobs            LogprobIntent
 }
 
 func NormalizeRequest(body []byte, options Options) (Result, error) {

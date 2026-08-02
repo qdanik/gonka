@@ -129,3 +129,9 @@ Two properties of the runner matter as much as the order.
 `waitFor` (`main.go`) bounds a drain by the shutdown budget **without cancelling the work inside it**. Cancelling would abort the very vote the drain exists to protect; waiting forever would forfeit every step below to the SIGKILL that follows. So an overrunning drain is left running and reported. This was found the hard way: an earlier version discarded the context entirely, so the grace period reached only the listener. One unanswered request plus SIGTERM meant the drain blocked for minutes and the orchestrator killed the process mid-vote — losing exactly the vote the drain exists to protect, plus queued ledger rows and the escrow snapshot flush.
 
 Restart behaviour follows from what is and is not persisted. Escrow records, intent commitments, rotation status, admin overrides, suspicious hosts and the accounting ledger survive a restart. Participant health does not: AIMD windows, breaker state and performance rings start clean. That is deliberate — see [gateway-non-goals.md](./gateway-non-goals.md).
+
+## What one dial yields
+
+The gateway dials the chain once, in the provider that opens escrow sessions (`main.go`, `chainBackedSessions`). That provider returns a `chainSources`: the two session factories plus the chain access every other consumer needs, as two interfaces rather than the client itself. `chain.Reader` is what the phase observer polls; `chain.Transport` is what a transaction needs. The split is not cosmetic -- the observer has no business broadcasting, and a test of it should not have to answer a broadcast.
+
+Keeping the dial inside the provider is what keeps the gateway's own tests off the network: an in-process provider returns fixtures for the sessions and answers the two interfaces from memory, so composing a whole gateway in a test still reaches no socket.

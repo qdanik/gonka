@@ -24,6 +24,9 @@ func runPipeline(document *Document, options Options) (Result, error) {
 		return Result{}, err
 	}
 	applyOutputTokenLimits(document, &view, options, routedModel)
+	// Read before StagePostLimits: that stage forces logprobs on for validation, so afterwards the
+	// document says what the gateway wants, not what the client asked for.
+	logprobs := decodeLogprobIntent(document)
 	if err := applyStage(StagePostLimits, document, routedModel, profile, options.Admin); err != nil {
 		return Result{}, err
 	}
@@ -41,6 +44,7 @@ func runPipeline(document *Document, options Options) (Result, error) {
 		MaxTokens:           view.MaxTokens,
 		MaxCompletionTokens: view.MaxCompletionTokens,
 		N:                   view.N,
+		Logprobs:            logprobs,
 	}, nil
 }
 

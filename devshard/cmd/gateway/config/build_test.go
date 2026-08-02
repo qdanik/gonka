@@ -17,7 +17,6 @@ func TestBuildAppliesPrecedenceDefaultsEnvOverrides(t *testing.T) {
 	values := env.Values{
 		Port:             int64Pointer(9000), // env overrides default 8080
 		DefaultMaxTokens: int64Pointer(2000), // env sets 2000...
-		ChainREST:        stringPointer("http://chain.test:1317"),
 
 		CaptureSampleRate: float64Pointer(0.1),
 		CaptureMaxBytes:   int64Pointer(4096),
@@ -37,9 +36,6 @@ func TestBuildAppliesPrecedenceDefaultsEnvOverrides(t *testing.T) {
 	}
 	if configuration.Limits.DefaultMaxTokens != 1500 {
 		t.Errorf("Limits.DefaultMaxTokens = %d, want override value 1500", configuration.Limits.DefaultMaxTokens)
-	}
-	if configuration.Chain.RESTBaseURL != "http://chain.test:1317" {
-		t.Errorf("Chain.RESTBaseURL = %q, want env value", configuration.Chain.RESTBaseURL)
 	}
 	if !configuration.Modes.Disabled {
 		t.Error("Modes.Disabled = false, want override value true")

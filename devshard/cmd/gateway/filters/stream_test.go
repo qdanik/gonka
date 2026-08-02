@@ -50,7 +50,7 @@ func TestStreamRewriter_StripsEveryFieldEvenWhenItArrivesAlone(t *testing.T) {
 		t.Run(field, func(t *testing.T) {
 			event := []byte(`data: {"choices":[{"delta":{"content":"ok","` + field + `":[1,2]}}]}` + "\n\n")
 
-			out, err := NewStreamRewriter().Write(event)
+			out, err := NewStreamRewriter(LogprobIntent{}).Write(event)
 			if err != nil {
 				t.Fatalf("Write() = %v", err)
 			}
@@ -82,7 +82,7 @@ func TestStreamRewriter_StripsEveryDataLineFraming(t *testing.T) {
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
-			got := feedInChunks(t, NewStreamRewriter(), []byte(testCase.event), len(testCase.event))
+			got := feedInChunks(t, NewStreamRewriter(LogprobIntent{}), []byte(testCase.event), len(testCase.event))
 
 			assertNoInternalFields(t, got)
 			if !bytes.Contains(got, []byte(`"content":"ok"`)) {
@@ -134,7 +134,7 @@ func TestStreamRewriter_ChunkEventsAndErrorsAreNotConverted(t *testing.T) {
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
-			got, err := NewStreamRewriter().Write([]byte(testCase.event))
+			got, err := NewStreamRewriter(LogprobIntent{}).Write([]byte(testCase.event))
 			if err != nil {
 				t.Fatalf("Write() = %v", err)
 			}
@@ -153,7 +153,7 @@ func TestStreamRewriter_SplitFrameIsRewritten(t *testing.T) {
 	if splitAt <= len("top_logprobs") || splitAt >= len(target) {
 		t.Fatalf("fixture no longer contains a mid-event top_logprobs split point")
 	}
-	rewriter := NewStreamRewriter()
+	rewriter := NewStreamRewriter(LogprobIntent{})
 
 	firstOut, err := rewriter.Write(target[:splitAt])
 	if err != nil {
@@ -177,7 +177,7 @@ func TestStreamRewriter_SplitFrameIsRewritten(t *testing.T) {
 func TestStreamRewriter_ByteByByteFeedStripsLogprobs(t *testing.T) {
 	stream := readSSEFixture(t, "logprobs_stream.sse")
 
-	got := feedInChunks(t, NewStreamRewriter(), stream, 1)
+	got := feedInChunks(t, NewStreamRewriter(LogprobIntent{}), stream, 1)
 
 	assertNoInternalFields(t, got)
 	if !bytes.Contains(got, []byte(`"content":"ok"`)) {
@@ -204,7 +204,7 @@ func TestStreamRewriter_ChunkSizeDoesNotChangeOutput(t *testing.T) {
 				stream := readSSEFixture(t, name)
 				want := rewriteWholeStream(t, stream)
 
-				got := feedInChunks(t, NewStreamRewriter(), stream, chunkSize)
+				got := feedInChunks(t, NewStreamRewriter(LogprobIntent{}), stream, chunkSize)
 
 				if !bytes.Equal(got, want) {
 					t.Errorf("chunked output differs from whole-stream output\n got:  %q\n want: %q", got, want)
@@ -216,7 +216,7 @@ func TestStreamRewriter_ChunkSizeDoesNotChangeOutput(t *testing.T) {
 
 func TestStreamRewriter_SeveralFramesInOneChunk(t *testing.T) {
 	stream := readSSEFixture(t, "token_ids_stream.sse")
-	rewriter := NewStreamRewriter()
+	rewriter := NewStreamRewriter(LogprobIntent{})
 
 	got, err := rewriter.Write(stream)
 	if err != nil {
@@ -232,7 +232,7 @@ func TestStreamRewriter_SeveralFramesInOneChunk(t *testing.T) {
 func TestStreamRewriter_RetainsPartialUntilTerminatorArrives(t *testing.T) {
 	stream := readSSEFixture(t, "logprobs_stream.sse")
 	target := splitCompleteEvents(t, stream)[1]
-	rewriter := NewStreamRewriter()
+	rewriter := NewStreamRewriter(LogprobIntent{})
 
 	withoutTerminator, err := rewriter.Write(bytes.TrimRight(target, "\n"))
 	if err != nil {
@@ -256,7 +256,7 @@ func TestStreamRewriter_CRLFTerminatedEventIsRewritten(t *testing.T) {
 	event := []byte("data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"logprobs\":{\"content\":[]}}]}\r\n\r\ndata: [DONE]\r\n\r\n")
 	for _, chunkSize := range []int{1, 3, len(event)} {
 		t.Run(fmt.Sprintf("chunk=%d", chunkSize), func(t *testing.T) {
-			got := feedInChunks(t, NewStreamRewriter(), event, chunkSize)
+			got := feedInChunks(t, NewStreamRewriter(LogprobIntent{}), event, chunkSize)
 
 			assertNoInternalFields(t, got)
 			if !bytes.Contains(got, []byte(`"content":"ok"`)) {
@@ -270,7 +270,7 @@ func TestStreamRewriter_CRLFTerminatedEventIsRewritten(t *testing.T) {
 }
 
 func TestStreamRewriter_CarryOverflowFailsInsteadOfGrowing(t *testing.T) {
-	rewriter := NewStreamRewriter()
+	rewriter := NewStreamRewriter(LogprobIntent{})
 	atCap, err := rewriter.Write(bytes.Repeat([]byte("x"), MaxStreamCarryBytes))
 	if err != nil {
 		t.Fatalf("Write() at the cap = %v, want no error", err)
@@ -293,7 +293,7 @@ func TestStreamRewriter_CarryOverflowFailsInsteadOfGrowing(t *testing.T) {
 }
 
 func TestStreamRewriter_StaysFailedAfterOverflow(t *testing.T) {
-	rewriter := NewStreamRewriter()
+	rewriter := NewStreamRewriter(LogprobIntent{})
 	if _, err := rewriter.Write(bytes.Repeat([]byte("x"), MaxStreamCarryBytes+1)); !errors.Is(err, ErrStreamCarryOverflow) {
 		t.Fatalf("Write() past the cap = %v, want ErrStreamCarryOverflow", err)
 	}
@@ -310,7 +310,7 @@ func TestStreamRewriter_StaysFailedAfterOverflow(t *testing.T) {
 }
 
 func TestStreamRewriter_CloseOnCleanEndEmitsNothing(t *testing.T) {
-	rewriter := NewStreamRewriter()
+	rewriter := NewStreamRewriter(LogprobIntent{})
 	if _, err := rewriter.Write(readSSEFixture(t, "logprobs_stream.sse")); err != nil {
 		t.Fatalf("Write() = %v", err)
 	}
@@ -327,7 +327,7 @@ func TestStreamRewriter_CloseOnCleanEndEmitsNothing(t *testing.T) {
 
 func TestStreamRewriter_CloseEmitsUnterminatedFinalEvent(t *testing.T) {
 	stream := readSSEFixture(t, "newlineless_final_content.sse")
-	rewriter := NewStreamRewriter()
+	rewriter := NewStreamRewriter(LogprobIntent{})
 	emitted, err := rewriter.Write(stream)
 	if err != nil {
 		t.Fatalf("Write() = %v", err)
@@ -345,7 +345,7 @@ func TestStreamRewriter_CloseEmitsUnterminatedFinalEvent(t *testing.T) {
 
 func TestStreamRewriter_CloseRewritesUnterminatedFinalEvent(t *testing.T) {
 	event := []byte(`data: {"choices":[{"delta":{"content":"ok"},"token_ids":[7]}]}`)
-	rewriter := NewStreamRewriter()
+	rewriter := NewStreamRewriter(LogprobIntent{})
 	if _, err := rewriter.Write(event); err != nil {
 		t.Fatalf("Write() = %v", err)
 	}
@@ -363,7 +363,7 @@ func TestStreamRewriter_CloseRewritesUnterminatedFinalEvent(t *testing.T) {
 
 func TestStreamRewriter_CloseDropsTruncatedFinalEvent(t *testing.T) {
 	truncated := []byte(`data: {"choices":[{"delta":{"content":"ok"},"logprobs":{"content":[{"logprob":-0.1`)
-	rewriter := NewStreamRewriter()
+	rewriter := NewStreamRewriter(LogprobIntent{})
 	if _, err := rewriter.Write(truncated); err != nil {
 		t.Fatalf("Write() = %v", err)
 	}
@@ -380,7 +380,7 @@ func TestStreamRewriter_CloseDropsTruncatedFinalEvent(t *testing.T) {
 
 func TestStreamRewriter_CloseKeepsUnterminatedNonDataLine(t *testing.T) {
 	comment := []byte(": keep-alive")
-	rewriter := NewStreamRewriter()
+	rewriter := NewStreamRewriter(LogprobIntent{})
 	if _, err := rewriter.Write(comment); err != nil {
 		t.Fatalf("Write() = %v", err)
 	}
@@ -398,7 +398,7 @@ func TestStreamRewriter_CloseKeepsUnterminatedNonDataLine(t *testing.T) {
 func TestStreamRewriter_MalformedFrameIsDropped(t *testing.T) {
 	stream := readSSEFixture(t, "malformed_data_line.sse")
 
-	got := feedInChunks(t, NewStreamRewriter(), stream, 1)
+	got := feedInChunks(t, NewStreamRewriter(LogprobIntent{}), stream, 1)
 
 	assertNoInternalFields(t, got)
 	if bytes.Contains(got, []byte(`"broken":true`)) {
@@ -411,7 +411,7 @@ func TestStreamRewriter_MalformedFrameIsDropped(t *testing.T) {
 
 func TestStreamRewriter_ParseableFrameMentioningLogprobsInTextSurvives(t *testing.T) {
 	event := []byte(`data: {"choices":[{"delta":{"content":"the \"logprobs\" field"}}]}` + "\n\n")
-	rewriter := NewStreamRewriter()
+	rewriter := NewStreamRewriter(LogprobIntent{})
 
 	got, err := rewriter.Write(event)
 	if err != nil {
@@ -482,7 +482,7 @@ func TestStreamRewriter_StripsEveryDataLineOfAMultiLineEvent(t *testing.T) {
 	event := []byte("data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n" +
 		"data: {\"prompt_logprobs\":[1,2],\"token_ids\":[7]}\n\n")
 
-	got, err := NewStreamRewriter().Write(event)
+	got, err := NewStreamRewriter(LogprobIntent{}).Write(event)
 	if err != nil {
 		t.Fatalf("Write() = %v", err)
 	}
@@ -504,7 +504,7 @@ func TestAnEscapedInternalKeyIsStrippedFromAStreamedDelta(t *testing.T) {
 		t.Fatal("the key is spelled in plain bytes, so the raw-byte scan finds it and the escape is never exercised")
 	}
 
-	rewritten := rewriteEvent(event)
+	rewritten := rewriteEvent(event, LogprobIntent{})
 
 	if rewritten == nil {
 		t.Fatal("the event was dropped, not stripped")
@@ -544,7 +544,7 @@ func TestAPoisonedIdentityFieldStillConvertsToChunks(t *testing.T) {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
 
-			rewritten := rewriteEvent([]byte(testCase.event + "\n\n"))
+			rewritten := rewriteEvent([]byte(testCase.event+"\n\n"), LogprobIntent{})
 
 			if rewritten == nil {
 				t.Fatal("the event was dropped")
@@ -565,9 +565,44 @@ func TestAPoisonedIdentityFieldStillConvertsToChunks(t *testing.T) {
 func TestConvertedChunksCarryGeneratedContentUnescaped(t *testing.T) {
 	event := []byte(`data: {"id":"x","object":"chat.completion","choices":[{"index":0,"message":{"content":"a < b & c"}}]}` + "\n\n")
 
-	rewritten := rewriteEvent(event)
+	rewritten := rewriteEvent(event, LogprobIntent{})
 
 	if !bytes.Contains(rewritten, []byte(`"content":"a < b & c"`)) {
 		t.Fatalf("generated content was escaped on the way to the client: %s", rewritten)
+	}
+}
+
+// The streaming path strips separately from the buffered one, so the client's intent has to reach it
+// too: a client that asked for logprobs and streams would otherwise get them only when it does not.
+func TestTheStreamStripFollowsWhatTheClientAskedFor(t *testing.T) {
+	event := []byte(`data: {"choices":[{"delta":{"content":"hi","logprobs":{"content":[{"token":"hi","logprob":-0.5,"top_logprobs":[{"token":"hello"}]}]}},"index":0}],"token_ids":[7]}` + "\n\n")
+
+	testCases := []struct {
+		name          string
+		intent        LogprobIntent
+		wantLogprobs  bool
+		wantTopFilled bool
+	}{
+		{name: "asked_for_neither", intent: LogprobIntent{}},
+		{name: "asked_for_logprobs_only", intent: LogprobIntent{Keep: true}, wantLogprobs: true},
+		{name: "asked_for_alternatives_too", intent: LogprobIntent{Keep: true, KeepTop: true}, wantLogprobs: true, wantTopFilled: true},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			rewritten := string(rewriteEvent(event, testCase.intent))
+
+			if held := strings.Contains(rewritten, `"logprob"`); held != testCase.wantLogprobs {
+				t.Fatalf("logprob present = %v, want %v: %s", held, testCase.wantLogprobs, rewritten)
+			}
+			if filled := strings.Contains(rewritten, `"hello"`); filled != testCase.wantTopFilled {
+				t.Fatalf("alternatives present = %v, want %v: %s", filled, testCase.wantTopFilled, rewritten)
+			}
+			if strings.Contains(rewritten, "token_ids") {
+				t.Fatalf("an internal field reached the client: %s", rewritten)
+			}
+		})
 	}
 }

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"devshard/cmd/gateway/api"
+	"devshard/cmd/gateway/chain"
 	"devshard/cmd/gateway/config"
 	"devshard/cmd/gateway/env"
 	"devshard/cmd/gateway/escrow"
@@ -314,7 +315,6 @@ func bootGateway(t *testing.T, options e2eOptions) *e2eGateway {
 		chainURL = fakeChainInPhase(t, options.epochPhase, participants)
 	}
 	t.Setenv("GATEWAY_STORAGE_DIR", storageDir)
-	t.Setenv("GATEWAY_CHAIN_REST", chainURL)
 	t.Setenv("GATEWAY_PUBLIC_API", chainURL)
 	if options.adminKey != "" {
 		t.Setenv("GATEWAY_ADMIN_API_KEY", options.adminKey)
@@ -393,7 +393,36 @@ func (g *e2eGateway) awaitChainPhase(t *testing.T, phase string) {
 
 // sessions is the composition seam: the gateway opens each escrow over in-process hosts instead of over
 // the chain and the hosts' HTTP endpoints, and over the same on-disk storage either way.
-func (g *e2eGateway) sessions(config.Chain, string) (registry.SessionFactory, registry.SessionFactory, error) {
+// inProcessChain answers the chain reads without dialing, the way the fake chain server's empty bodies
+// used to: no params, no preserved snapshot, no escrow on chain. A broadcast is refused outright --
+// an e2e fixture that reached one would be signing against a chain that is not there.
+type inProcessChain struct{}
+
+func (inProcessChain) MaxNonce(context.Context) (uint64, bool, error) { return 0, false, nil }
+
+func (inProcessChain) PreservedNodes(context.Context) (*chain.PreservedNodes, bool, error) {
+	return nil, false, nil
+}
+
+func (inProcessChain) ChainID(context.Context) (string, error) { return "gonka-e2e", nil }
+
+func (inProcessChain) Account(context.Context, string) (chain.Account, error) {
+	return chain.Account{}, nil
+}
+
+func (inProcessChain) Broadcast(context.Context, []byte) (string, error) {
+	return "", fmt.Errorf("in-process chain broadcasts nothing")
+}
+
+func (inProcessChain) Tx(context.Context, string) (chain.TxResult, bool, error) {
+	return chain.TxResult{}, false, nil
+}
+
+func (inProcessChain) Escrow(context.Context, uint64) (chain.EscrowInfo, bool, error) {
+	return chain.EscrowInfo{}, false, nil
+}
+
+func (g *e2eGateway) sessions(config.Chain, string) (chainSources, error) {
 	serving := func(_ context.Context, escrowID string) (registry.EscrowSession, error) {
 		fixture, known := g.fixtures[escrowID]
 		if !known {
@@ -416,7 +445,7 @@ func (g *e2eGateway) sessions(config.Chain, string) (registry.SessionFactory, re
 		}
 		return registry.NewSessionHandle(session, machine), nil
 	}
-	return serving, readOnly, nil
+	return chainSources{Serving: serving, ReadOnly: readOnly, Reader: inProcessChain{}, Transport: inProcessChain{}}, nil
 }
 
 func (g *e2eGateway) only() *escrowFixture {

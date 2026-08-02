@@ -35,6 +35,7 @@ type clientStream struct {
 	controller *http.ResponseController
 	requestID  string
 	streaming  bool
+	logprobs   filters.LogprobIntent
 	rewriter   *filters.StreamRewriter
 	buffered   []byte
 	written    int64
@@ -42,15 +43,16 @@ type clientStream struct {
 	terminated bool
 }
 
-func newClientStream(w http.ResponseWriter, requestID string, streaming bool) *clientStream {
+func newClientStream(w http.ResponseWriter, requestID string, streaming bool, logprobs filters.LogprobIntent) *clientStream {
 	stream := &clientStream{
 		writer:     w,
 		controller: http.NewResponseController(w),
 		requestID:  requestID,
 		streaming:  streaming,
+		logprobs:   logprobs,
 	}
 	if streaming {
-		stream.rewriter = filters.NewStreamRewriter()
+		stream.rewriter = filters.NewStreamRewriter(logprobs)
 	}
 	return stream
 }
@@ -106,7 +108,7 @@ func (c *clientStream) Close() error {
 		return tailErr
 	}
 	c.begin("application/json")
-	written, err := c.writer.Write(filters.StripResponseBody(filters.AssembleSSEBody(c.buffered)))
+	written, err := c.writer.Write(filters.StripResponseBody(filters.AssembleSSEBody(c.buffered), c.logprobs))
 	c.written += int64(written)
 	return err
 }
