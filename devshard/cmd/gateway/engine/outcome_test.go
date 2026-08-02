@@ -104,8 +104,11 @@ func TestVerdictTable(t *testing.T) {
 	stalledUnderThreshold := failedAttempt(TerminalStalled)
 	stalledUnderThreshold.ContentChunks = 5
 
+	// ContentSource is what makes this a long response rather than a long silence: ContentChunks
+	// counts error events too, and an error-only attempt must keep its timeout vote.
 	longResponse := cleanAttempt()
 	longResponse.NonceFinished = false
+	longResponse.ContentSource = "delta.content"
 	longResponse.Completed = testEpoch.Add(longResponseExemption)
 
 	longNonStreamEmpty := failedAttempt(TerminalEmptyStream)
@@ -197,8 +200,11 @@ func TestVerdictTable(t *testing.T) {
 }
 
 func TestSampleExemptionLadderRungs(t *testing.T) {
+	// ContentSource is what makes this a long response rather than a long silence: ContentChunks
+	// counts error events too, and an error-only attempt must keep its timeout vote.
 	longResponse := cleanAttempt()
 	longResponse.NonceFinished = false
+	longResponse.ContentSource = "delta.content"
 	longResponse.Completed = testEpoch.Add(longResponseExemption)
 
 	tests := []struct {
@@ -331,11 +337,13 @@ func TestSampleResponsive(t *testing.T) {
 			attempt.NonceFinished = true
 			return attempt
 		}(), false},
+		// Held the request for the whole window and returned nothing: exempt from being judged slow,
+		// but not credited as responsive, or the router learns to prefer it.
 		{"non-stream empty past the exemption", func() RaceOutcome {
 			outcome := race(longNonStreamEmpty)
 			outcome.Stream = false
 			return outcome
-		}(), longNonStreamEmpty, true},
+		}(), longNonStreamEmpty, false},
 	}
 
 	for _, testCase := range tests {

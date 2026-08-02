@@ -2,10 +2,12 @@ package filters
 
 import (
 	"bytes"
+	stdjson "encoding/json"
 	"fmt"
-	json "github.com/goccy/go-json"
 	"net/http"
 	"strings"
+
+	json "github.com/goccy/go-json"
 )
 
 var (
@@ -83,11 +85,11 @@ func StripResponseBody(body []byte) []byte {
 	return filtered
 }
 
-// stripInternalFields decodes, deletes and re-encodes. UseNumber keeps an integer past 2^53 exactly --
-// a client's seed among them -- which a plain decode into any would round. More() keeps a body with
-// trailing junk malformed, which a Decoder alone would accept by reading only its first value.
+// stripInternalFields stays on the standard library: goccy's UseNumber parses the token anyway and
+// errors past float64 range, which fails this open -- a body carrying 1e999 keeps every internal field.
+// See gateway-request-filtering.md, "The response side".
 func stripInternalFields(payload []byte) ([]byte, stripOutcome) {
-	decoder := json.NewDecoder(bytes.NewReader(payload))
+	decoder := stdjson.NewDecoder(bytes.NewReader(payload))
 	decoder.UseNumber()
 	var decoded any
 	if err := decoder.Decode(&decoded); err != nil || decoder.More() {
@@ -96,13 +98,13 @@ func stripInternalFields(payload []byte) ([]byte, stripOutcome) {
 	if !deleteInternalFields(decoded) {
 		return nil, stripUnchanged
 	}
-	// DisableHTMLEscape keeps the host's bytes: the default turns every < > & in generated content into
-	// a six-byte escape, which is the same string to a decoder and a much larger one on the wire.
-	encoded, err := json.MarshalWithOption(decoded, json.DisableHTMLEscape())
-	if err != nil {
+	var encoded bytes.Buffer
+	encoder := stdjson.NewEncoder(&encoded)
+	encoder.SetEscapeHTML(false) // the default inflates every < > & in generated content to six bytes
+	if err := encoder.Encode(decoded); err != nil {
 		return nil, stripMalformed
 	}
-	return encoded, stripRewritten
+	return bytes.TrimRight(encoded.Bytes(), "\n"), stripRewritten
 }
 
 // deleteInternalFields removes clientStrippedFields at any depth, reporting whether anything went.

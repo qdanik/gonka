@@ -535,3 +535,28 @@ func TestPastTheDepthLimitTheStripIsBypassed(t *testing.T) {
 		t.Fatal("the deep body was stripped after all -- then this test, and the bypass it documents, are stale")
 	}
 }
+
+// A number past float64 range is well-formed JSON a client parses fine. Treating it as unparseable
+// forwards the whole body, internal fields and all -- the strip failing open on input the host chooses.
+func TestAnOutOfRangeNumberDoesNotDisableTheStrip(t *testing.T) {
+	body := []byte(`{"choices":[{"message":{"content":"hi"},"logprobs":{"a":1}}],"seed":1e999}`)
+
+	stripped := string(StripResponseBody(body))
+
+	if strings.Contains(stripped, "logprobs") {
+		t.Fatalf("one out-of-range number turned the strip off: %s", stripped)
+	}
+	if !strings.Contains(stripped, "1e999") {
+		t.Fatalf("the number was rewritten rather than passed through: %s", stripped)
+	}
+}
+
+// The host's own bytes reach the client: the encoder's default would inflate every < > & in generated
+// content to a six-byte escape, which is the same string to a decoder and a much larger one on the wire.
+func TestGeneratedMarkupIsNotEscaped(t *testing.T) {
+	body := []byte(`{"choices":[{"message":{"content":"<div> a & b"}}],"logprobs":{}}`)
+
+	if got := string(StripResponseBody(body)); !strings.Contains(got, "<div> a & b") {
+		t.Fatalf("markup was escaped on the way out: %s", got)
+	}
+}

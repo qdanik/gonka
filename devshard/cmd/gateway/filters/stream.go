@@ -174,7 +174,7 @@ func rewriteEvent(event []byte) []byte {
 	}
 	start, end, isObject := soleDataObject(event)
 	if !isObject {
-		return event
+		return stripEachDataLine(event)
 	}
 	payload := event[start:end]
 	filtered, outcome := stripInternalFields(payload)
@@ -198,9 +198,46 @@ func rewriteEvent(event []byte) []byte {
 	return append(rewritten, event[end:]...)
 }
 
+// stripEachDataLine strips each data line on its own, so a host cannot put a renderable delta on one
+// line and its internal fields on the next. See gateway-request-filtering.md, "The response side".
+func stripEachDataLine(event []byte) []byte {
+	rewritten := make([]byte, 0, len(event))
+	changed := false
+	for offset := 0; offset < len(event); {
+		line, lineEnd := event[offset:], len(event)
+		if breakAt := bytes.IndexByte(line, '\n'); breakAt >= 0 {
+			line, lineEnd = line[:breakAt], offset+breakAt+1
+		}
+		data, isData := bytes.CutPrefix(line, sseDataParsePrefix)
+		if !isData {
+			rewritten = append(rewritten, event[offset:lineEnd]...)
+			offset = lineEnd
+			continue
+		}
+		leading := bytes.TrimLeft(data, " \t")
+		payload := bytes.TrimRight(leading, " \t\r")
+		filtered, outcome := stripInternalFields(payload)
+		if outcome != stripRewritten {
+			rewritten = append(rewritten, event[offset:lineEnd]...)
+			offset = lineEnd
+			continue
+		}
+		changed = true
+		prefixLen := len(line) - len(leading)
+		rewritten = append(rewritten, event[offset:offset+prefixLen]...)
+		rewritten = append(rewritten, filtered...)
+		rewritten = append(rewritten, event[offset+prefixLen+len(payload):lineEnd]...)
+		offset = lineEnd
+	}
+	if !changed {
+		return event
+	}
+	return rewritten
+}
+
 // soleDataObject locates the JSON object an event carries, accepting "data:" with or without the
 // space the wire only recommends, and whatever event/id/comment lines precede it. An event with no
-// data line, with more than one, or whose payload is not an object has nothing to rewrite.
+// data line, with more than one, or whose payload is not an object is left to stripEachDataLine.
 func soleDataObject(event []byte) (start, end int, ok bool) {
 	found := false
 	for offset := 0; offset < len(event); {

@@ -622,3 +622,36 @@ func TestPersistEscrowSameEscrowIDTwiceIsSuccessNoOp(t *testing.T) {
 		t.Fatalf("ListDevshards() = %+v, want exactly 1 record (duplicate registration must not create a second row)", devshards)
 	}
 }
+
+// A commitment can outlive its own create: the gateway dies between registering the escrow and
+// dropping the commitment. By the time reconcile finds it, that escrow may already be parked with a
+// settle transaction recorded — and re-registering it would flip it active and wipe the hash the
+// settlement reconciliation depends on.
+func TestReconcileLeavesAnAlreadyRegisteredEscrowAlone(t *testing.T) {
+	testStore := newFakeStore()
+	parked := store.DevshardRecord{
+		EscrowID: "42", Model: "model-a", Active: false,
+		SettlementPending: true, SettleTxHash: "SETTLE-TX",
+	}
+	testStore.devshards["42"] = parked
+	testStore.commitments["CREATE-TX"] = store.Commitment{TxHash: "CREATE-TX", Model: "model-a", Role: "regular"}
+	txClient := &fakeTxClient{
+		getTxEscrowIDFn: func(context.Context, string) (uint64, bool, error) { return 42, true, nil },
+	}
+	m := &Manager{tx: txClient, store: testStore, breaker: newCreateBreaker(), now: time.Now}
+
+	if err := m.reconcile(context.Background()); err != nil {
+		t.Fatalf("reconcile() = %v, want nil", err)
+	}
+
+	got := testStore.devshards["42"]
+	if got.Active {
+		t.Fatal("a parked escrow was resurrected as active")
+	}
+	if got.SettleTxHash != "SETTLE-TX" {
+		t.Fatalf("settle hash = %q, want it untouched: its reconciliation depends on it", got.SettleTxHash)
+	}
+	if _, held := testStore.commitments["CREATE-TX"]; held {
+		t.Fatal("the commitment was left behind, so this repeats every tick")
+	}
+}
