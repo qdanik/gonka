@@ -404,7 +404,7 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request, escrowPin string) 
 		return
 	}
 
-	key := cacheKeyFor(r, normalized.Model, normalized.Body)
+	key := cacheKeyFor(r, normalized.Model, normalized.Body, normalized.Logprobs)
 	if entry, hit := s.cache.get(key, s.now()); hit {
 		written := serveCached(w, requestID, entry)
 		logging.Info("request finished", "request", requestID, "model", normalized.Model,
@@ -469,7 +469,7 @@ func authorizeModel(configured config.Limits, model string, identity credentials
 // leaves an SSE error event under a success status; the caller needs the error itself to tell that
 // response apart from one worth replaying.
 func (s *Server) race(w http.ResponseWriter, r *http.Request, requestID string, normalized filters.Result, inputTokens uint64, escrowPin string) (engine.RaceOutcome, error) {
-	client := newClientStream(w, requestID, normalized.Stream)
+	client := newClientStream(w, requestID, normalized.Stream, normalized.Logprobs)
 	outcome, err := s.inference.Run(r.Context(), engine.Request{
 		RequestID:     requestID,
 		Model:         normalized.Model,

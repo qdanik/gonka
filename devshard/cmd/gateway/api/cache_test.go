@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"devshard/cmd/gateway/filters"
+
 	"devshard/cmd/gateway/config"
 	"devshard/cmd/gateway/engine"
 )
@@ -91,7 +93,7 @@ func TestTheSameCallerOnADifferentEscrowIsAMiss(t *testing.T) {
 		request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
 		request.Header.Set("Authorization", "Bearer caller-a")
 		request.SetPathValue("id", escrowID)
-		return cacheKeyFor(request, "qwen", []byte(chatBody))
+		return cacheKeyFor(request, "qwen", []byte(chatBody), filters.LogprobIntent{})
 	}
 	cache := newResponseCache(1 << 20)
 	now := time.Unix(1700000000, 0)
@@ -274,7 +276,7 @@ func TestCachedReplayAndLiveStreamAgreeOnHeaders(t *testing.T) {
 		}
 		t.Run(name, func(t *testing.T) {
 			live := httptest.NewRecorder()
-			stream := newClientStream(live, "req-1", streaming)
+			stream := newClientStream(live, "req-1", streaming, filters.LogprobIntent{})
 			stream.begin(contentType)
 			live.Header().Set(EscrowHeader, "escrow-1")
 
@@ -328,5 +330,25 @@ func TestCacheRecorderKeepsARecordingInsideTheLimit(t *testing.T) {
 
 	if _, storable := recorder.entry("escrow-1", true, nil); !storable {
 		t.Fatal("a recording inside the limit was refused")
+	}
+}
+
+// The force rules make one client's normalized body identical to another's, so the intent has to be
+// part of the key: without it a request that asked for logprobs is answered from an entry stripped of
+// them, or the reverse hands a client a shape it never asked for.
+func TestTheCacheKeySeparatesRequestsByWhatTheyAskedFor(t *testing.T) {
+	request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	request.Header.Set("Authorization", "Bearer one-caller")
+	body := []byte(`{"model":"qwen","logprobs":true}`)
+
+	asked := cacheKeyFor(request, "qwen", body, filters.LogprobIntent{Keep: true})
+	askedForAlternatives := cacheKeyFor(request, "qwen", body, filters.LogprobIntent{Keep: true, KeepTop: true})
+	askedForNeither := cacheKeyFor(request, "qwen", body, filters.LogprobIntent{})
+
+	if asked == askedForNeither {
+		t.Fatal("a request that asked for logprobs shares an entry with one that did not")
+	}
+	if asked == askedForAlternatives {
+		t.Fatal("a request that asked for alternatives shares an entry with one that did not")
 	}
 }

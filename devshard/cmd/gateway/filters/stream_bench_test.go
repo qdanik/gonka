@@ -15,7 +15,7 @@ func BenchmarkStreamRewriterRealChunk(b *testing.B) {
 	b.ReportAllocs()
 	b.SetBytes(int64(len(chunk)))
 	for i := 0; i < b.N; i++ {
-		rewriter := NewStreamRewriter()
+		rewriter := NewStreamRewriter(LogprobIntent{})
 		if _, err := rewriter.Write(chunk); err != nil {
 			b.Fatal(err)
 		}
@@ -26,6 +26,6 @@ func BenchmarkRewriteEventRealChunk(b *testing.B) {
 	event := []byte(realChunk[:len(realChunk)-2])
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		_ = rewriteEvent(event)
+		_ = rewriteEvent(event, LogprobIntent{})
 	}
 }

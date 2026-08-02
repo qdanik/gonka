@@ -24,10 +24,11 @@ const (
 // cacheKey pins an entry to the caller and to the escrow scope as well as to the request. See
 // gateway-request-lifecycle.md, "5. Response cache".
 type cacheKey struct {
-	caller string
-	escrow string
-	model  string
-	body   string
+	caller   string
+	escrow   string
+	model    string
+	body     string
+	logprobs filters.LogprobIntent
 }
 
 type cachedResponse struct {
@@ -81,12 +82,15 @@ func newResponseCache(maxBytes int64) *responseCache {
 	}
 }
 
-func cacheKeyFor(r *http.Request, model string, body []byte) cacheKey {
+// The logprob intent is part of the key because the normalized body is not: the force rules make one
+// client's request identical to another's, and the two are answered with differently stripped bodies.
+func cacheKeyFor(r *http.Request, model string, body []byte, logprobs filters.LogprobIntent) cacheKey {
 	return cacheKey{
-		caller: digest([]byte(strings.TrimSpace(r.Header.Get("Authorization")))),
-		escrow: r.PathValue("id"),
-		model:  strings.TrimSpace(model),
-		body:   digest(body),
+		caller:   digest([]byte(strings.TrimSpace(r.Header.Get("Authorization")))),
+		escrow:   r.PathValue("id"),
+		model:    strings.TrimSpace(model),
+		body:     digest(body),
+		logprobs: logprobs,
 	}
 }
 

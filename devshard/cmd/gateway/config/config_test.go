@@ -21,7 +21,7 @@ func TestDefaultsMatchSpec(t *testing.T) {
 		want any
 	}{
 		{"Server.Port", configuration.Server.Port, int64(8080)},
-		{"Chain.RESTBaseURL", configuration.Chain.RESTBaseURL, "http://localhost:1317"},
+		{"Chain.GRPCEndpoint", configuration.Chain.GRPCEndpoint, "localhost:9090"},
 		{"Chain.PublicAPIBaseURL", configuration.Chain.PublicAPIBaseURL, "http://localhost:9000"},
 		{"Tx.FeeDenom", configuration.Tx.FeeDenom, "ngonka"},
 		{"Tx.FeeAmount", configuration.Tx.FeeAmount, int64(1_000_000)},
@@ -70,11 +70,6 @@ func TestDefaultsMatchSpec(t *testing.T) {
 		}
 	}
 
-	// TxQueryFallbackURLs is a slice, not comparable via != like the table above.
-	fallbackURLs := configuration.Chain.TxQueryFallbackURLs
-	if len(fallbackURLs) != 1 || fallbackURLs[0] != "http://node1.gonka.ai:8000/chain-api" {
-		t.Errorf("Chain.TxQueryFallbackURLs = %v, want single-element [http://node1.gonka.ai:8000/chain-api]", fallbackURLs)
-	}
 }
 
 func TestValidateRejectsBrokenConfigAndNamesEveryProblem(t *testing.T) {
@@ -82,13 +77,13 @@ func TestValidateRejectsBrokenConfigAndNamesEveryProblem(t *testing.T) {
 	configuration.Server.Port = 0
 	configuration.Limits.MaxTokensCap = 0
 	configuration.Limits.AIMD.InitialWindow = 0
-	configuration.Chain.RESTBaseURL = "://not-a-url"
+	configuration.Chain.GRPCEndpoint = "not-host-port"
 
 	err := configuration.Validate()
 	if err == nil {
 		t.Fatal("Validate() on broken config: want error, got nil")
 	}
-	for _, fragment := range []string{"port", "max_tokens_cap", "aimd_initial_window", "chain_rest"} {
+	for _, fragment := range []string{"port", "max_tokens_cap", "aimd_initial_window", "chain_grpc"} {
 		if !strings.Contains(err.Error(), fragment) {
 			t.Errorf("Validate() error %q does not mention %q", err.Error(), fragment)
 		}
@@ -106,9 +101,7 @@ func TestValidateCatchesEveryRuleBreach(t *testing.T) {
 		{"port too low", func(c *Config) { c.Server.Port = 0 }, "port"},
 		{"port too high", func(c *Config) { c.Server.Port = 65536 }, "port"},
 		{"max_concurrent_runtime_builds too low", func(c *Config) { c.Server.MaxConcurrentRuntimeBuilds = 0 }, "max_concurrent_runtime_builds"},
-		{"chain_rest not a url", func(c *Config) { c.Chain.RESTBaseURL = "://not-a-url" }, "chain_rest"},
 		{"public_api not a url", func(c *Config) { c.Chain.PublicAPIBaseURL = "://not-a-url" }, "public_api"},
-		{"tx_query_fallback_urls element not a url", func(c *Config) { c.Chain.TxQueryFallbackURLs[0] = "://not-a-url" }, "tx_query_fallback_urls"},
 		{"tx_fee_amount negative", func(c *Config) { c.Tx.FeeAmount = -1 }, "tx_fee_amount"},
 		{"tx_gas_limit too low", func(c *Config) { c.Tx.GasLimit = 0 }, "tx_gas_limit"},
 		{"tx_poll_interval_ms too low", func(c *Config) { c.Tx.PollIntervalMS = 0 }, "tx_poll_interval_ms"},
@@ -231,16 +224,6 @@ func TestValidateAcceptsModelLimitsWithNilOptionalPointers(t *testing.T) {
 	}
 	if err := configuration.Validate(); err != nil {
 		t.Fatalf("Validate() on ModelLimits entry with nil optional pointers: want nil, got %v", err)
-	}
-}
-
-// TestValidateAcceptsEmptyTxQueryFallbackURLs: an empty fallback list is a
-// valid, explicit operator choice to accept weakened recovery, not a validation error.
-func TestValidateAcceptsEmptyTxQueryFallbackURLs(t *testing.T) {
-	configuration := Defaults()
-	configuration.Chain.TxQueryFallbackURLs = []string{}
-	if err := configuration.Validate(); err != nil {
-		t.Fatalf("Validate() with empty TxQueryFallbackURLs: want nil, got %v", err)
 	}
 }
 

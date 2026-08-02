@@ -29,10 +29,9 @@ type Server struct {
 // GRPCEndpoint is what the escrow bridge dials. common/chain derives the CometBFT RPC host from it
 // at the standard port, and that derived endpoint is the query fallback every escrow read inherits.
 type Chain struct {
-	RESTBaseURL         string
-	PublicAPIBaseURL    string
-	GRPCEndpoint        string
-	TxQueryFallbackURLs []string
+	PublicAPIBaseURL string
+	GRPCEndpoint     string
+	ChainID          string
 }
 
 type Tx struct {
@@ -214,10 +213,8 @@ func Defaults() Config {
 			MaxConcurrentRuntimeBuilds: 16,
 		},
 		Chain: Chain{
-			RESTBaseURL:         "http://localhost:1317",
-			GRPCEndpoint:        "localhost:9090",
-			PublicAPIBaseURL:    "http://localhost:9000",
-			TxQueryFallbackURLs: []string{"http://node1.gonka.ai:8000/chain-api"},
+			GRPCEndpoint:     "localhost:9090",
+			PublicAPIBaseURL: "http://localhost:9000",
 		},
 		Tx: Tx{
 			FeeDenom:       chain.DefaultFeeDenom,
@@ -315,16 +312,11 @@ func (c *Config) Validate() error {
 			complain("%s: %q is not an absolute URL", name, value)
 		}
 	}
-	checkBaseURL("chain_rest", c.Chain.RESTBaseURL)
 	checkBaseURL("public_api", c.Chain.PublicAPIBaseURL)
 	// A gRPC target is host:port with no scheme, so the URL check above would pass anything.
 	if _, _, err := net.SplitHostPort(c.Chain.GRPCEndpoint); err != nil {
 		complain("chain_grpc: %q is not host:port", c.Chain.GRPCEndpoint)
 	}
-	for index, fallbackURL := range c.Chain.TxQueryFallbackURLs {
-		checkBaseURL(fmt.Sprintf("tx_query_fallback_urls[%d]", index), fallbackURL)
-	}
-
 	if c.Tx.FeeAmount < 0 {
 		complain("tx_fee_amount: %d must be >= 0", c.Tx.FeeAmount)
 	}

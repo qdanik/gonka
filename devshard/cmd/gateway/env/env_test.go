@@ -10,7 +10,6 @@ import (
 func TestLoadReturnsNilForUnsetVariables(t *testing.T) {
 	// t.Setenv only clears the two probes (empty = unset); the test asserts pristine-environment behavior.
 	t.Setenv("GATEWAY_PORT", "")
-	t.Setenv("GATEWAY_CHAIN_REST", "")
 
 	values, err := Load()
 	if err != nil {
@@ -19,14 +18,10 @@ func TestLoadReturnsNilForUnsetVariables(t *testing.T) {
 	if values.Port != nil {
 		t.Fatalf("Port = %v, want nil for unset variable", *values.Port)
 	}
-	if values.ChainREST != nil {
-		t.Fatalf("ChainREST = %q, want nil for unset variable", *values.ChainREST)
-	}
 }
 
 func TestLoadParsesTypedValues(t *testing.T) {
 	t.Setenv("GATEWAY_PORT", "9191")
-	t.Setenv("GATEWAY_CHAIN_REST", "http://example.test:1317")
 	t.Setenv("GATEWAY_ROTATION_ENABLED", "true")
 	t.Setenv("GATEWAY_DISABLED", "true")
 	t.Setenv("GATEWAY_TX_FEE_AMOUNT", "500")
@@ -40,9 +35,6 @@ func TestLoadParsesTypedValues(t *testing.T) {
 	}
 	if values.Port == nil || *values.Port != 9191 {
 		t.Fatalf("Port = %v, want 9191", values.Port)
-	}
-	if values.ChainREST == nil || *values.ChainREST != "http://example.test:1317" {
-		t.Fatalf("ChainREST = %v, want set", values.ChainREST)
 	}
 	if values.RotationEnabled == nil || *values.RotationEnabled != true {
 		t.Fatalf("RotationEnabled = %v, want true", values.RotationEnabled)

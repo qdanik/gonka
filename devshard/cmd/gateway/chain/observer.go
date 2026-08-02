@@ -21,19 +21,14 @@ const (
 
 	epochInfoPath    = "/v1/epochs/latest"
 	participantsPath = "/v1/epochs/current/participants"
-	// preservedSnapshotPath is the chain REST route for the PoC preserved-nodes snapshot.
-	preservedSnapshotPath = "/productscience/inference/inference/preserved_nodes_snapshot"
-	// devshardEscrowParamsPath is the chain REST route for governance params, including
-	// devshard_escrow_params.max_nonce.
-	devshardEscrowParamsPath = "/productscience/inference/inference/params"
 )
 
 // ObserverConfig configures a PhaseObserver. Zero-value poll/client/clock fields take package
-// defaults; PublicAPIBaseURL is required. ChainRESTBaseURL serves the preserved-nodes-snapshot
-// fetch during PoC; when empty that fetch is skipped and the legacy preservation rule applies.
+// defaults; PublicAPIBaseURL is required. Chain serves the preserved-nodes snapshot during PoC and the
+// nonce ceiling; when nil both are skipped and the legacy preservation rule applies.
 type ObserverConfig struct {
 	PublicAPIBaseURL string
-	ChainRESTBaseURL string
+	Chain            Reader
 	PollInterval     time.Duration
 	HTTPClient       *http.Client
 	Now              func() time.Time
@@ -44,7 +39,7 @@ type ObserverConfig struct {
 // chain observer provides".
 type PhaseObserver struct {
 	publicAPIBaseURL string
-	chainRESTBaseURL string
+	chain            Reader
 	client           *http.Client
 	pollInterval     time.Duration
 	now              func() time.Time
@@ -84,7 +79,7 @@ func NewPhaseObserver(cfg ObserverConfig) (*PhaseObserver, error) {
 
 	observer := &PhaseObserver{
 		publicAPIBaseURL: baseURL,
-		chainRESTBaseURL: strings.TrimRight(strings.TrimSpace(cfg.ChainRESTBaseURL), "/"),
+		chain:            cfg.Chain,
 		client:           client,
 		pollInterval:     pollInterval,
 		now:              now,
@@ -281,68 +276,33 @@ func allowAllParticipantsUntilSnapshot(epoch epochInfo, reason BlockReason) bool
 	return reason == BlockReasonConfirmationPoC && epoch.ConfirmationPoCPhase == ConfirmationPoCGracePeriod
 }
 
-// fetchPreservedSnapshot polls the chain REST preserved-nodes snapshot. Unavailability (no base
-// URL, 404/501, transport or decode failure) is reported via the status so callers fall back.
+// fetchPreservedSnapshot reads the chain's preserved-nodes snapshot. A chain that answers no snapshot
+// for the current episode is a different thing from one that could not be reached, and only the second
+// is an error: the first makes routing fall back to the epoch group.
 func (o *PhaseObserver) fetchPreservedSnapshot(ctx context.Context, expectedAnchor int64) (preservedSnapshotState, preservedSnapshotStatus, error) {
-	if o.chainRESTBaseURL == "" {
+	if o.chain == nil {
 		return preservedSnapshotState{}, preservedSnapshotUnavailable, nil
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, o.chainRESTBaseURL+preservedSnapshotPath, nil)
+	snapshot, found, err := o.chain.PreservedNodes(ctx)
 	if err != nil {
 		return preservedSnapshotState{}, preservedSnapshotUnavailable, err
 	}
-	resp, err := o.client.Do(req)
-	if err != nil {
-		return preservedSnapshotState{}, preservedSnapshotUnavailable, err
+	if !found {
+		return preservedSnapshotState{}, preservedSnapshotMissingCurrent, nil
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusNotImplemented {
-		io.Copy(io.Discard, resp.Body)
-		return preservedSnapshotState{}, preservedSnapshotUnavailable, nil
+	if expectedAnchor > 0 && snapshot.EpisodeAnchorHeight != expectedAnchor {
+		return preservedSnapshotState{}, preservedSnapshotMissingCurrent, nil
 	}
-	if resp.StatusCode != http.StatusOK {
-		io.Copy(io.Discard, resp.Body)
-		return preservedSnapshotState{}, preservedSnapshotUnavailable, fmt.Errorf("preserved snapshot status %d", resp.StatusCode)
-	}
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return preservedSnapshotState{}, preservedSnapshotUnavailable, err
-	}
-	return parsePreservedSnapshot(body, expectedAnchor)
+	return newPreservedSnapshotState(snapshot), preservedSnapshotCurrent, nil
 }
 
-// fetchMaxNonce polls the chain devshard_escrow_params.max_nonce. fetched=false with a nil error
-// means unavailable (no base URL or 404); a non-nil error means refresh should fail open.
+// fetchMaxNonce reads the chain's devshard escrow nonce ceiling. fetched=false with a nil error means
+// the chain carries no devshard escrow params at all.
 func (o *PhaseObserver) fetchMaxNonce(ctx context.Context) (maxNonce uint64, fetched bool, err error) {
-	if o.chainRESTBaseURL == "" {
+	if o.chain == nil {
 		return 0, false, nil
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, o.chainRESTBaseURL+devshardEscrowParamsPath, nil)
-	if err != nil {
-		return 0, false, err
-	}
-	resp, err := o.client.Do(req)
-	if err != nil {
-		return 0, false, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode == http.StatusNotFound {
-		io.Copy(io.Discard, resp.Body)
-		return 0, false, nil
-	}
-	if resp.StatusCode != http.StatusOK {
-		io.Copy(io.Discard, resp.Body)
-		return 0, false, fmt.Errorf("devshard escrow params status %d", resp.StatusCode)
-	}
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return 0, false, err
-	}
-	maxNonce, err = parseMaxNonce(body)
-	if err != nil {
-		return 0, false, err
-	}
-	return maxNonce, true, nil
+	return o.chain.MaxNonce(ctx)
 }
 
 func (o *PhaseObserver) fetchEpochInfo(ctx context.Context) (epochInfo, error) {
