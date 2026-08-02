@@ -47,6 +47,10 @@ Rules run in table order, then in chain order. Five orderings are load-bearing a
 | Nesting depth | 32 | |
 | Structural nodes | 250 000 | A body inside the byte cap can still decode into an order of magnitude more heap than its own bytes. |
 
+A host can spell an internal field with a `\u` escape, which the raw-byte pre-check does not match while the client's decoder reads it back as the field itself, so any payload carrying that escape goes down the full strip regardless of what the markers find (`filters/response.go`, `hasStrippableField`). Only `\uXXXX` can encode a letter of a key, so the widened gate costs the strip path nothing on ordinary content.
+
+The completion-to-chunks conversion carries every host-controlled field as raw JSON and decodes with the standard library (`filters/stream.go`, `sseCompletion`). A typed field is a way for a host to fail the conversion — a numeric `id`, a `created` past the float range — and a failed conversion forwards a `chat.completion` where the client renders a delta: it displays nothing while the nonce settles all the same. The re-encode turns HTML escaping off for the same reason the strip does.
+
 The depth and node checks are one byte-wise pass outside string literals, which is cheaper than decoding first and measuring after (`filters/document.go`, `ensureStructuralBounds`). The same 10 MiB constant is what the HTTP layer hands to `MaxBytesReader`, so ingest and decode share one number.
 
 ## What the gateway forces, and the paired strip
@@ -57,7 +61,7 @@ Set on every request, present or not:
 - `top_logprobs = 5`
 - `return_token_ids = true`
 
-The gateway needs them to classify an answer — whether the host produced content, whether it burned tokens producing nothing. The client never asked for them, so the response side removes `logprob`, `logprobs`, `top_logprobs`, `token_ids`, `prompt_token_ids` and `prompt_logprobs` at any nesting depth. The two lists are held together by a test that fails if a forced field gains no strip counterpart (`filters/response.go`, `clientStrippedFields`).
+The gateway needs them to classify an answer — whether the host produced content, whether it burned tokens producing nothing. The client never asked for them, so the response side removes `logprob`, `logprobs`, `top_logprobs`, `token_ids`, `prompt_token_ids` and `prompt_logprobs` at any nesting depth. The two lists move as one, because every field the gateway forces on comes back in the host's answer: a force rule added without its strip counterpart hands a client an internal field it never requested. `return_token_ids` is the one pair whose names differ — the request parameter makes vLLM emit `token_ids` (`filters/response.go`, `clientStrippedFields`).
 
 `max_tokens` is also always written, even when the client sent neither token field. Zero always means "unset", so it resolves to the operator's default **in full**: the cap bounds what a client may ask for, not what an operator grants a client that asks for nothing, so a default above the cap is honoured rather than trimmed. A non-zero value is clamped to the cap unless the caller is an administrator, which is the only cap bypass. When both fields are present the result is the minimum of the two, mirrored back into `max_completion_tokens` only if the client sent it (`filters/rules_tokens.go`, `applyOutputTokenLimits`). Per-model overrides can replace either limit; a zero from an override means "not set for this model", so the global limit stands.
 
@@ -130,7 +134,7 @@ The 32 MiB carry cap has arithmetic behind it, and the arithmetic depends on the
 
 Some hosts answer a streaming request with one whole `chat.completion` instead of a sequence of `chat.completion.chunk` events. The two shapes differ exactly where a client reads them: a completion carries `choices[].message`, a chunk carries `choices[].delta`. Forwarded as-is, an OpenAI streaming client renders nothing — while the receipt lands, the nonce settles and the money is spent. So the rewriter converts it instead of passing it on.
 
-The conversion sits inside the same event rewrite that does the stripping (`filters/stream.go`, `rewriteEvent` and `completionAsChunks`). A substring test for `"message"` decides whether an event is worth trying at all, the strip runs first so a converted chunk can never carry the token ids the strip exists to hide, and an event whose payload does not parse is still dropped rather than converted.
+The conversion sits inside the same event rewrite that does the stripping (`filters/stream.go`, `rewriteEvent` and `completionAsChunks`). A substring check for `"message"` decides whether an event is worth trying at all, the strip runs first so a converted chunk can never carry the token ids the strip exists to hide, and an event whose payload does not parse is still dropped rather than converted.
 
 Each choice is emitted as the separate chunks a real stream would have sent, in that order: the role on its own if the message named one, then everything else in the message as one delta, then a terminating chunk with an empty delta carrying `finish_reason` and `stop_reason`. A host-reported `usage` object follows as a final chunk with no choices. A JSON `null` counts as absent throughout, so a field the host spelled out as null is not re-sent as one the client has to interpret.
 

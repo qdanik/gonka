@@ -43,6 +43,9 @@ var (
 		return markers
 	}()
 
+	// unicodeEscape is the only escape that can encode a letter of a field name.
+	unicodeEscape = []byte(`\u`)
+
 	// nonCacheableErrorMarkers identify transient, environmental, or model-availability failures
 	// excluded from caching regardless of which of message/type/code carries them.
 	nonCacheableErrorMarkers = []string{
@@ -133,8 +136,13 @@ func deleteInternalFields(value any) bool {
 	}
 }
 
-// hasStrippableField is a cheap pre-check so untouched chunks skip the SSE split entirely.
+// hasStrippableField is a cheap pre-check so untouched chunks skip the SSE split entirely. A \u escape
+// sends the payload down the full strip regardless: the scan reads raw bytes, while the client's
+// decoder reads "\u006cogprobs" as logprobs, and only that escape form can spell a letter in a key.
 func hasStrippableField(p []byte) bool {
+	if bytes.Contains(p, unicodeEscape) {
+		return true
+	}
 	for _, marker := range strippableMarkers {
 		if bytes.Contains(p, marker) {
 			return true

@@ -148,15 +148,28 @@ func (s *Server) disabled(next http.HandlerFunc) http.HandlerFunc {
 // readBody bounds ingest with MaxBytesReader rather than LimitReader: it returns a typed error the
 // status mapper recognises, and it marks the connection so the server stops reading a hostile body
 // instead of draining it. The deadline is cleared again before the response begins, so only the read
-// is bounded. A writer with no deadline of its own -- a recorder, a wrapper -- reports ErrNotSupported
-// and keeps the size bound alone.
+// is bounded. A writer that neither carries a deadline nor unwraps to one reports ErrNotSupported and
+// keeps the size bound alone.
 func readBody(w http.ResponseWriter, r *http.Request, limit int64) ([]byte, error) {
 	deadlines := http.NewResponseController(w)
 	_ = deadlines.SetReadDeadline(time.Now().Add(bodyReadTimeout))
-	r.Body = http.MaxBytesReader(w, r.Body, limit)
+	r.Body = http.MaxBytesReader(baseWriter(w), r.Body, limit)
 	body, err := io.ReadAll(r.Body)
 	_ = deadlines.SetReadDeadline(time.Time{})
 	return body, err
+}
+
+// baseWriter walks the Unwrap chain to the writer the server owns. MaxBytesReader marks a connection
+// by type-asserting its writer, so handed a wrapper it cannot see through it leaves the server
+// draining a hostile body it has already refused.
+func baseWriter(w http.ResponseWriter) http.ResponseWriter {
+	for {
+		unwrapper, ok := w.(interface{ Unwrap() http.ResponseWriter })
+		if !ok {
+			return w
+		}
+		w = unwrapper.Unwrap()
+	}
 }
 
 func decodeAdminBody(w http.ResponseWriter, r *http.Request, target any) error {

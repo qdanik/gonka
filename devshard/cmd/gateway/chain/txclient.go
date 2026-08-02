@@ -67,16 +67,18 @@ type Config struct {
 	Now                 func() time.Time
 }
 
+// The tags are what the operator API returns: without them the two results are the only responses in
+// the gateway rendered with Go field names.
 type CreateEscrowResult struct {
-	EscrowID uint64
-	TxHash   string
-	Creator  string
+	EscrowID uint64 `json:"escrow_id"`
+	TxHash   string `json:"tx_hash"`
+	Creator  string `json:"creator"`
 }
 
 type SettleEscrowResult struct {
-	EscrowID uint64
-	TxHash   string
-	Settler  string
+	EscrowID uint64 `json:"escrow_id"`
+	TxHash   string `json:"tx_hash"`
+	Settler  string `json:"settler"`
 }
 
 // NewTxClient validates cfg and applies defaults for unset fields; it errors

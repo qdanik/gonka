@@ -2,6 +2,7 @@ package filters
 
 import (
 	"bytes"
+	stdjson "encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -492,5 +493,81 @@ func TestStreamRewriter_StripsEveryDataLineOfAMultiLineEvent(t *testing.T) {
 	}
 	if bytes.Count(got, []byte("data:")) != 2 {
 		t.Fatalf("an event line went missing: %s", got)
+	}
+}
+
+// A host can spell an internal field with a \u escape. The pre-check reads raw bytes, so the key
+// matches no marker, while the client's decoder turns it back into logprobs and renders it.
+func TestAnEscapedInternalKeyIsStrippedFromAStreamedDelta(t *testing.T) {
+	event := []byte(`data: {"choices":[{"delta":{"content":"hi","\u006cogprobs":{"x":1}}}]}` + "\n\n")
+	if bytes.Contains(event, []byte("logprobs")) {
+		t.Fatal("the key is spelled in plain bytes, so the raw-byte scan finds it and the escape is never exercised")
+	}
+
+	rewritten := rewriteEvent(event)
+
+	if rewritten == nil {
+		t.Fatal("the event was dropped, not stripped")
+	}
+	var decoded map[string]any
+	payload := rewritten[len("data: "):]
+	if err := stdjson.Unmarshal(bytes.TrimSpace(payload), &decoded); err != nil {
+		t.Fatalf("rewritten event does not parse: %v (%s)", err, rewritten)
+	}
+	choices, _ := decoded["choices"].([]any)
+	if len(choices) != 1 {
+		t.Fatalf("choices = %v", decoded)
+	}
+	choice, _ := choices[0].(map[string]any)
+	delta, _ := choice["delta"].(map[string]any)
+	if _, leaked := delta["logprobs"]; leaked {
+		t.Fatalf("an escaped internal key reached the client: %s", rewritten)
+	}
+	if delta["content"] != "hi" {
+		t.Fatalf("the renderable content did not survive the strip: %s", rewritten)
+	}
+}
+
+// A host answering a stream with a whole chat.completion has its response converted into the chunks a
+// streaming client renders. Typing any host-controlled field lets the host fail that conversion with a
+// value of the wrong shape, and the client then renders nothing while the nonce is settled regardless.
+func TestAPoisonedIdentityFieldStillConvertsToChunks(t *testing.T) {
+	for _, testCase := range []struct {
+		name  string
+		event string
+	}{
+		{name: "numeric_id", event: `data: {"id":123,"object":"chat.completion","choices":[{"index":0,"message":{"content":"hi"}}]}`},
+		{name: "created_past_float_range", event: `data: {"id":"x","created":1e999,"object":"chat.completion","choices":[{"index":0,"message":{"content":"hi"}}]}`},
+		{name: "string_index", event: `data: {"id":"x","object":"chat.completion","choices":[{"index":"0","message":{"content":"hi"}}]}`},
+		{name: "numeric_model", event: `data: {"id":"x","model":7,"object":"chat.completion","choices":[{"index":0,"message":{"content":"hi"}}]}`},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			rewritten := rewriteEvent([]byte(testCase.event + "\n\n"))
+
+			if rewritten == nil {
+				t.Fatal("the event was dropped")
+			}
+			if !bytes.Contains(rewritten, []byte(`"chat.completion.chunk"`)) {
+				t.Fatalf("the response was forwarded unconverted, so a streaming client renders nothing: %s", rewritten)
+			}
+			if !bytes.Contains(rewritten, []byte(`"content":"hi"`)) {
+				t.Fatalf("the content did not survive the conversion: %s", rewritten)
+			}
+		})
+	}
+}
+
+// The conversion re-encodes the delta, so the encoder it uses decides how generated content reaches
+// the client. Escaping is lossless but inflates every < > & to six bytes on a path that carries whole
+// model responses.
+func TestConvertedChunksCarryGeneratedContentUnescaped(t *testing.T) {
+	event := []byte(`data: {"id":"x","object":"chat.completion","choices":[{"index":0,"message":{"content":"a < b & c"}}]}` + "\n\n")
+
+	rewritten := rewriteEvent(event)
+
+	if !bytes.Contains(rewritten, []byte(`"content":"a < b & c"`)) {
+		t.Fatalf("generated content was escaped on the way to the client: %s", rewritten)
 	}
 }

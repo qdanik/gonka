@@ -249,9 +249,15 @@ func (t *fakeTelemetry) InstrumentRoute(routeLabel string, next http.Handler) ht
 	t.labels = append(t.labels, routeLabel)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.served = routeLabel
-		next.ServeHTTP(w, r)
+		next.ServeHTTP(&instrumentedWriter{ResponseWriter: w}, r)
 	})
 }
+
+// instrumentedWriter mirrors the wrapper metrics.InstrumentRoute puts in front of every route, so the
+// handlers under test see the writer chain production hands them rather than a bare recorder.
+type instrumentedWriter struct{ http.ResponseWriter }
+
+func (w *instrumentedWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
 
 func (t *fakeTelemetry) Handler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
