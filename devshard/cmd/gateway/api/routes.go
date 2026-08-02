@@ -216,13 +216,17 @@ type statusResponse struct {
 	Capacity        []capacityStatus  `json:"capacity"`
 }
 
+// SessionVersion is the protocol tag the session was created under and the one every settlement payload
+// carries. An operator reading this endpoint has no other way to see which version an escrow is bound
+// to, and a mismatch with the host it dispatches to is what makes a settlement unacceptable.
 type devshardStatus struct {
-	EscrowID    string `json:"escrow_id"`
-	Model       string `json:"model"`
-	ActiveUsers int    `json:"active_users"`
-	Nonce       uint64 `json:"nonce"`
-	Phase       string `json:"phase"`
-	Balance     uint64 `json:"balance,omitempty"`
+	EscrowID       string `json:"escrow_id"`
+	Model          string `json:"model"`
+	ActiveUsers    int    `json:"active_users"`
+	Nonce          uint64 `json:"nonce"`
+	Phase          string `json:"phase"`
+	Balance        uint64 `json:"balance,omitempty"`
+	SessionVersion string `json:"session_version,omitempty"`
 }
 
 type limiterStatus struct {
@@ -316,6 +320,7 @@ func (s *Server) devshardStatus(escrow scheduler.Escrow) devshardStatus {
 	status.Nonce = session.Nonce()
 	status.Phase = phaseName(session.Phase())
 	status.Balance = state.Balance
+	status.SessionVersion = state.StateRootAndProtocolVersion
 	return status
 }
 

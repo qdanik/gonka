@@ -478,7 +478,10 @@ func TestHasSSEDone(t *testing.T) {
 // The wire format lets one event carry several data lines, and declining to rewrite those forwards
 // whatever the extra lines hold: a host puts a renderable delta on the first and its internal fields
 // on the second, and the second reaches the client verbatim.
-func TestStreamRewriter_StripsEveryDataLineOfAMultiLineEvent(t *testing.T) {
+// A client joins an event's data lines with a newline before parsing, so one object split across two
+// lines is one object to the client and must be one to the strip. Two objects on two lines join into
+// something no client can parse, and forwarding it would carry whatever the second line hides.
+func TestStreamRewriter_DropsAMultiLineEventNoClientCouldParse(t *testing.T) {
 	event := []byte("data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n" +
 		"data: {\"prompt_logprobs\":[1,2],\"token_ids\":[7]}\n\n")
 
@@ -488,11 +491,25 @@ func TestStreamRewriter_StripsEveryDataLineOfAMultiLineEvent(t *testing.T) {
 	}
 
 	assertNoInternalFields(t, got)
-	if !bytes.Contains(got, []byte(`"content":"ok"`)) {
-		t.Fatalf("the renderable line was lost: %s", got)
+	if len(bytes.TrimSpace(got)) != 0 {
+		t.Fatalf("an unparseable event reached the client: %s", got)
 	}
-	if bytes.Count(got, []byte("data:")) != 2 {
-		t.Fatalf("an event line went missing: %s", got)
+}
+
+// The split a host would actually use: one object across two lines, so neither half parses alone and a
+// byte-wise gate sees nothing to do, while the client rejoins it and reads every field.
+func TestStreamRewriter_StripsAnObjectSplitAcrossDataLines(t *testing.T) {
+	event := []byte("data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}],\n" +
+		"data: \"prompt_logprobs\":[1,2],\"token_ids\":[7]}\n\n")
+
+	got, err := NewStreamRewriter(LogprobIntent{}).Write(event)
+	if err != nil {
+		t.Fatalf("Write() = %v", err)
+	}
+
+	assertNoInternalFields(t, got)
+	if !bytes.Contains(got, []byte(`"content":"ok"`)) {
+		t.Fatalf("the renderable content was lost: %s", got)
 	}
 }
 
@@ -605,4 +622,24 @@ func TestTheStreamStripFollowsWhatTheClientAskedFor(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A host controls the bytes of its own response, so it can spell "message" with a \u escape. A gate
+// that reads raw bytes sees no completion to convert and forwards it whole, and a streaming client
+// reading choices[].delta renders nothing -- while the nonce settles and the client pays for it.
+func TestAnEscapedMessageKeyStillConvertsToChunks(t *testing.T) {
+	event := []byte(`data: {"object":"chat.completion","choices":[{"index":0,"\u006dessage":{"content":"hi","\u006cogprobs":{"x":1}}}]}` + "\n\n")
+	if bytes.Contains(event, []byte(`"message"`)) {
+		t.Fatal("the key is spelled plainly, so the escape is never exercised")
+	}
+
+	rewritten := rewriteEvent(event, LogprobIntent{})
+
+	if !bytes.Contains(rewritten, []byte(`"chat.completion.chunk"`)) {
+		t.Fatalf("the response was forwarded unconverted, so a streaming client renders nothing: %s", rewritten)
+	}
+	if !bytes.Contains(rewritten, []byte(`"content":"hi"`)) {
+		t.Fatalf("the content did not survive: %s", rewritten)
+	}
+	assertNoInternalFields(t, rewritten)
 }

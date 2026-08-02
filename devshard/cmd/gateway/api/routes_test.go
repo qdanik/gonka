@@ -12,6 +12,8 @@ import (
 	"devshard/cmd/gateway/limits"
 	"devshard/cmd/gateway/scheduler"
 	"devshard/user"
+
+	"devshard/cmd/gateway/registry"
 )
 
 func TestAnUnroutableModelIsRejectedBeforeTheLimiterAndTheRace(t *testing.T) {
@@ -426,5 +428,24 @@ func TestAChatRequestHandsTheRaceItsHalvedBudgetHook(t *testing.T) {
 	}
 	if !strings.Contains(string(dispatched.Prompt), `"max_tokens":400`) {
 		t.Errorf("body = %s, want the halved budget", dispatched.Prompt)
+	}
+}
+
+// The version a session was created under is the tag every settlement payload carries. It appears in
+// no other place an operator can read, and a settlement whose version disagrees with the host that
+// served the nonce is one the chain will not take.
+func TestTheStatusReportsTheSessionVersion(t *testing.T) {
+	live := newHarness(t)
+	session, machine := newLiveSession(t)
+	live.escrows.escrows = []scheduler.Escrow{{ID: liveEscrowID, Model: "qwen"}}
+	live.escrows.sessions[liveEscrowID] = registry.NewSessionHandle(session, machine)
+
+	recorder := live.request(t, http.MethodGet, "/v1/status", "", nil)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status: got %d", recorder.Code)
+	}
+	if !strings.Contains(recorder.Body.String(), `"session_version":"v2"`) {
+		t.Fatalf("the status carries no session version: %s", recorder.Body.String())
 	}
 }

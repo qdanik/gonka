@@ -10,6 +10,9 @@ import (
 func TestWithRetry(t *testing.T) {
 	testStore := openTestStore(t)
 	testStore.retryBackoff = time.Millisecond
+	// The ladder is for a locked database; these cases drive its mechanics, so every error they
+	// return counts as one.
+	testStore.retryable = func(error) bool { return true }
 
 	t.Run("succeeds on first try", func(t *testing.T) {
 		calls := 0
@@ -92,5 +95,25 @@ func TestWithRetryAlreadyCancelledNeverCallsFn(t *testing.T) {
 	}
 	if calls != 0 {
 		t.Fatalf("fn called %d times, want 0 (ctx was already cancelled)", calls)
+	}
+}
+
+// An error that answers the same way on every attempt is returned at once. Riding the whole ladder for
+// it costs the caller seconds to receive the answer the first call already had.
+func TestWithRetryReturnsAPermanentErrorImmediately(t *testing.T) {
+	testStore := openTestStore(t)
+	testStore.retryBackoff = time.Millisecond
+	calls := 0
+
+	err := testStore.WithRetry(context.Background(), func() error {
+		calls++
+		return testStore.SetDevshardActive(context.Background(), "no-such-escrow", false)
+	})
+
+	if !errors.Is(err, ErrDevshardNotFound) {
+		t.Fatalf("WithRetry = %v, want ErrDevshardNotFound", err)
+	}
+	if calls != 1 {
+		t.Fatalf("fn called %d times, want 1: a missing row answers the same way every time", calls)
 	}
 }

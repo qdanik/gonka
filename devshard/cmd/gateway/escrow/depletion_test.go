@@ -187,7 +187,7 @@ func TestReplaceDepletedCreatesReplacementBeforeRetiringOld(t *testing.T) {
 		switch name {
 		case "CreateReplacement":
 			createIndex = i
-		case "SetDevshardActive(false)":
+		case "ParkForSettlement":
 			if deactivateIndex == -1 {
 				deactivateIndex = i
 			}

@@ -166,7 +166,6 @@ The two escrow messages are marshalled by the types generated from the chain's `
 - The generated types name two fields differently from the gateway: `SlotSigs` is `signatures` on the wire, and `Version` is `state_root_and_protocol_version`. The slot counters are `uint32` there and `uint64` here, so the conversion narrows them; slot ids are bounded by the participant group and the counters by the nonce ceiling.
 - The signature sent is `r‖s` — the recovery byte is validated and dropped (`chain/tx_build.go`, `truncateSignature`).
 - Transactions are *unordered* with a nine-minute timeout timestamp, so the account sequence is fetched but signed as zero: an unordered transaction does not consume a sequence.
-- Older nodes nest transaction events under `logs` only, and vesting accounts nest the base account several levels deep — both are why the response walkers look over-defensive (`chain/txclient.go`, `TxClient.fetchAccount` and `txResponse.createdEscrowID`).
 
 Settlement transactions have no intent hook, because settlement creates no chain-side resource whose id must be recovered — but they *do* wait for the commit, not merely for `CheckTx` (`chain/txclient.go`, `TxClient.SettleEscrow`). The caller clears the pending marker and deletes the row holding the only key that can settle this escrow, so returning on `CheckTx` alone would strand the deposit whenever `DeliverTx` rejects: a late settle past the two-epoch window, or a host-reported cost that pushes the payout above the escrow amount.
 

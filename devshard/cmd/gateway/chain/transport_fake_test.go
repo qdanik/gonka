@@ -7,8 +7,8 @@ import (
 )
 
 // fakeTransport answers a TxClient without a connection. It records what it was asked to broadcast so
-// a test can assert on the signed bytes, and serves transactions from a table a test fills in, which
-// is how the poll paths are driven without timing.
+// a test can assert on the signed bytes, serves transactions from a table a test fills in, and runs
+// onTx before each answer so a test can make a transaction appear after a chosen number of polls.
 type fakeTransport struct {
 	mu sync.Mutex
 
@@ -30,7 +30,6 @@ type fakeTransport struct {
 	escrowRaw bool
 	escrowErr error
 
-	// onTx runs before each Tx answer, so a test can make a transaction appear after N polls.
 	onTx func(call int)
 }
 

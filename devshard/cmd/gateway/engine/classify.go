@@ -112,6 +112,10 @@ func (p renderedParts) source(shape string) (string, bool) {
 
 // errorPayload extracts the first OpenAI-compatible error in events, in both the nested
 // {"error":{...}} shape and the flat {"object":"error",...} one vLLM still emits.
+//
+// Deliberately without a byte-wise pre-filter: the host writes these bytes, and a key spelled with a
+// \u escape would pass the scan while the decoder reads it as the error it is, leaving the attempt
+// classified as something it is not. The saved parse is not worth reopening that.
 func errorPayload(events []byte) (sseError, bool) {
 	var found sseError
 	filters.EachSSEDataPayload(events, func(payload []byte) bool {

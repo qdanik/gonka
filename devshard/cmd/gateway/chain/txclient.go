@@ -110,25 +110,6 @@ func NewTxClient(cfg Config) (*TxClient, error) {
 	}, nil
 }
 
-// buildTxQueryURLs dedupes fallbacks against baseURL, keeping baseURL first.
-func buildTxQueryURLs(baseURL string, fallbacks []string) []string {
-	urls := make([]string, 0, len(fallbacks)+1)
-	seen := make(map[string]bool, len(fallbacks)+1)
-	add := func(raw string) {
-		trimmed := strings.TrimRight(strings.TrimSpace(raw), "/")
-		if trimmed == "" || seen[trimmed] {
-			return
-		}
-		seen[trimmed] = true
-		urls = append(urls, trimmed)
-	}
-	add(baseURL)
-	for _, fallback := range fallbacks {
-		add(fallback)
-	}
-	return urls
-}
-
 // CreateEscrow builds, signs, and broadcasts a MsgCreateDevshardEscrow tx; onPrepared records the
 // precomputed tx hash before the irreversible broadcast, and an error from it aborts the broadcast.
 // See gateway-escrow-lifecycle.md, "Creating an escrow, and surviving a crash mid-creation".

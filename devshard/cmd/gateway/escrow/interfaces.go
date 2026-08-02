@@ -24,6 +24,7 @@ type escrowStore interface {
 	UpsertDevshard(ctx context.Context, record store.DevshardRecord) error
 	SetDevshardActive(ctx context.Context, escrowID string, active bool) error
 	SetDevshardSettlementPending(ctx context.Context, escrowID string, pending bool) error
+	ParkForSettlement(ctx context.Context, escrowID string) error
 	SetDevshardSettleTxHash(ctx context.Context, escrowID, txHash string) error
 	DeleteDevshard(ctx context.Context, escrowID string) error
 	SaveCommitment(ctx context.Context, c store.Commitment) error

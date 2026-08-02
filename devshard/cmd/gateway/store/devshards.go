@@ -83,6 +83,19 @@ func (s *Store) SetDevshardSettlementPending(ctx context.Context, escrowID strin
 	return s.updateDevshardField(ctx, `UPDATE devshards SET settlement_pending = ?, updated_at = datetime('now') WHERE escrow_id = ?`, pending, escrowID)
 }
 
+// ParkForSettlement takes the escrow out of service and marks it pending in one statement. Written as
+// two, a crash between them leaves the row inactive and not pending, which no recovery path picks up:
+// settlePending looks for pending rows, so the escrow would be out of service and never settled.
+func (s *Store) ParkForSettlement(ctx context.Context, escrowID string) error {
+	result, err := s.db.ExecContext(ctx,
+		`UPDATE devshards SET active = 0, settlement_pending = 1, updated_at = datetime('now') WHERE escrow_id = ?`,
+		escrowID)
+	if err != nil {
+		return fmt.Errorf("parking devshard %s: %w", escrowID, err)
+	}
+	return requireOneRow(result, escrowID)
+}
+
 func (s *Store) DeleteDevshard(ctx context.Context, escrowID string) error {
 	result, err := s.db.ExecContext(ctx, `DELETE FROM devshards WHERE escrow_id = ?`, escrowID)
 	if err != nil {
