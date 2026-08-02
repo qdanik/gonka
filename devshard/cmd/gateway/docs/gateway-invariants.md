@@ -111,7 +111,7 @@ flowchart LR
     D --> E[5 chain observer]
     E --> F[6 escrow sessions]
     F --> G[7 store]
-    G --> H[8 chain connections]
+    G --> H[8 public api connections]
 ```
 
 The ordering encodes three dependencies. Races drain to the vote that settles their nonces, and that vote needs the escrow sessions, the chain observer and the chain client still alive — so races stop second, and everything they depend on stops below them. The store is second to last because closing it drains the accounting ledger, and a queued row must not outlive its connection; the registry closes just above it for the same reason one level down, since each escrow session holds its own SQLite handle. Chain connections close last because every step above can still reach the chain, and a socket closed earlier is one the next poll must re-dial.
