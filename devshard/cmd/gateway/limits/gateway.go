@@ -12,6 +12,7 @@ import (
 const (
 	reasonTooManyConcurrentRequests = "too many concurrent requests"
 	reasonTooManyInputTokens        = "too many input tokens in flight"
+	reasonQueueTooDeep              = "queue is deeper than the wait budget can clear"
 )
 
 type RateLimitError struct {
@@ -41,10 +42,11 @@ type ModelOverride struct {
 }
 
 type GatewayConfig struct {
-	MaxConcurrent  int64
-	MaxInputTokens int64
-	AcquireWait    time.Duration
-	ModelLimits    map[string]ModelOverride
+	MaxConcurrent     int64
+	MaxInputTokens    int64
+	AcquireWait       time.Duration
+	QueueDepthPerSlot int64
+	ModelLimits       map[string]ModelOverride
 }
 
 type modelCounter struct {
@@ -164,6 +166,11 @@ func (l *GatewayLimiter) AcquireForModel(ctx context.Context, model string, inpu
 		return &RateLimitError{Reason: reason, RetryAfter: acquireWait}
 	}
 
+	if l.queueTooDeepLocked(model, admitted) {
+		l.mu.Unlock()
+		return &RateLimitError{Reason: reasonQueueTooDeep, RetryAfter: acquireWait}
+	}
+
 	blocked := &waiter{model: model, tokens: inputTokens, capacity: capacity, reason: reason, ready: make(chan struct{})}
 	l.queue = append(l.queue, blocked)
 	l.promoteLocked() // capacity may already be free; the queue only enforces order, it is not a delay
@@ -215,6 +222,22 @@ func (l *GatewayLimiter) promoteLocked() {
 		l.takeLocked(waiting.model, waiting.tokens)
 		close(waiting.ready)
 	}
+}
+
+// queueTooDeepLocked reports a queue this request cannot reach the front of in time. See
+// gateway-capacity-and-health.md, "The wait budget".
+func (l *GatewayLimiter) queueTooDeepLocked(model string, admitted admission) bool {
+	perSlot := l.cfg.QueueDepthPerSlot
+	if perSlot <= 0 || admitted.concurrencyLimit <= 0 {
+		return false
+	}
+	queued := int64(0)
+	for _, waiting := range l.queue {
+		if waiting.model == model {
+			queued++
+		}
+	}
+	return queued >= admitted.concurrencyLimit*perSlot
 }
 
 func (l *GatewayLimiter) takeLocked(model string, inputTokens int64) {

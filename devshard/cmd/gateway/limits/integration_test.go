@@ -21,8 +21,8 @@ func TestGatewayConfigFromLimits_MapsFieldsFromDefaults(t *testing.T) {
 	if got.MaxInputTokens != limits.MaxInputTokensInFlight {
 		t.Errorf("MaxInputTokens = %d, want %d", got.MaxInputTokens, limits.MaxInputTokensInFlight)
 	}
-	if got.AcquireWait != 500*time.Millisecond {
-		t.Errorf("AcquireWait = %v, want 500ms (default AcquireWaitMS=500)", got.AcquireWait)
+	if want := time.Duration(limits.AcquireWaitMS) * time.Millisecond; got.AcquireWait != want {
+		t.Errorf("AcquireWait = %v, want %v", got.AcquireWait, want)
 	}
 }
 

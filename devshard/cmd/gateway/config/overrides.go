@@ -17,6 +17,7 @@ type Overrides struct {
 	PoCMaxConcurrentRequestsPer10000Weight *float64               `json:"poc_max_concurrent_requests_per_10000_weight,omitempty"`
 	MaxInputTokensInFlight                 *int64                 `json:"max_input_tokens_in_flight,omitempty"`
 	AcquireWaitMS                          *int64                 `json:"acquire_wait_ms,omitempty"`
+	QueueDepthPerSlot                      *int64                 `json:"queue_depth_per_slot,omitempty"`
 	AIMDInitialWindow                      *int64                 `json:"aimd_initial_window,omitempty"`
 	AIMDMaxWindow                          *int64                 `json:"aimd_max_window,omitempty"`
 	BreakerTripThreshold                   *int64                 `json:"breaker_trip_threshold,omitempty"`

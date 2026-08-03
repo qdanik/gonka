@@ -81,6 +81,7 @@ type Limits struct {
 	Concurrency            Concurrency
 	MaxInputTokensInFlight int64
 	AcquireWaitMS          int64
+	QueueDepthPerSlot      int64
 	AIMD                   AIMD
 	Breaker                Breaker
 	ModelLimits            map[string]ModelLimits
@@ -235,7 +236,12 @@ func Defaults() Config {
 				PoCRequestsPer10000Weight: 10.0,
 			},
 			MaxInputTokensInFlight: 0,
-			AcquireWaitMS:          500,
+			// The wait budget a request spends looking for capacity. A shard that refuses on the first
+			// hiccup is what 429 meant to a client that had exceeded nothing.
+			AcquireWaitMS: 120_000,
+			// Wait budget divided by the measured time one request holds a slot (~10 s): deeper than this
+			// and the queue provably cannot reach the newcomer before its budget runs out.
+			QueueDepthPerSlot: 12,
 			// A window opens near what a host is known to take rather than discovering it: starting at 4
 			// capped three participants at twelve concurrent requests, whatever the group size.
 			AIMD: AIMD{
