@@ -53,6 +53,7 @@ type fakeSession struct {
 	finalizeCalls atomic.Int64
 	flushErr      error
 	flushCalls    atomic.Int64
+	closeErr      error
 	closeCalls    atomic.Int64
 	onFlush       func()
 	prepare       func(user.ParamsForHost) (*user.PreparedInference, error)
@@ -102,7 +103,7 @@ func (f *fakeSession) FlushSnapshot() error {
 
 func (f *fakeSession) Close() error {
 	f.closeCalls.Add(1)
-	return nil
+	return f.closeErr
 }
 
 func (f *fakeSession) UserSession() *user.Session { return nil }
@@ -608,6 +609,31 @@ func TestRetireClosesAnIdleEscrowImmediately(t *testing.T) {
 
 	if got := session.closeCalls.Load(); got != 1 {
 		t.Errorf("Close calls = %d, want 1", got)
+	}
+}
+
+// The whole point of holding a retired entry in draining is that Add refuses its id until the storage
+// is actually released. A close that failed released nothing, so the refusal has to outlive it --
+// otherwise a second session opens over storage the first still holds, and two state machines drive one
+// escrow's nonces.
+func TestAddRefusesAnEscrowWhoseCloseFailed(t *testing.T) {
+	t.Parallel()
+	session := newFakeSession("hostA")
+	session.closeErr = errors.New("storage refused to close")
+	sessions := newSessions(map[string]*fakeSession{"1": session})
+	registry := New(Deps{ServingSessions: sessions.open, Now: fixedClock()})
+	mustAdd(t, registry, "1", "qwen")
+
+	if err := registry.Retire("1"); err == nil {
+		t.Fatal("Retire(1) = nil, want the close failure")
+	}
+
+	err := registry.Add(context.Background(), "1", "qwen")
+	if !errors.Is(err, ErrDraining) {
+		t.Fatalf("Add(1) after a failed close = %v, want ErrDraining", err)
+	}
+	if got := session.closeCalls.Load(); got != 1 {
+		t.Fatalf("Close calls = %d, want the failed close not to be retried by Add", got)
 	}
 }
 

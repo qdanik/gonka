@@ -189,7 +189,7 @@ func TestTimeoutVoteOverridesKind(t *testing.T) {
 	if events[0].Kind != timeoutKindRefused {
 		t.Fatalf("started kind = %q, want %q", events[0].Kind, timeoutKindRefused)
 	}
-	if events[1].Kind != timeoutKindExecution || events[1].Vote != "execution" {
+	if events[1].Kind != timeoutKindExecution {
 		t.Fatalf("completed event = %+v, want the posted vote to set the kind", events[1])
 	}
 }

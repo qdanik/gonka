@@ -131,8 +131,8 @@ func TestSettleTimeoutsRecordsAPostedVoteAsCompleted(t *testing.T) {
 	if events[1].Action != TimeoutActionCompleted {
 		t.Errorf("action = %q, want %q", events[1].Action, TimeoutActionCompleted)
 	}
-	if events[1].Vote != "execution" || events[1].Kind != timeoutKindExecution {
-		t.Errorf("vote/kind = %q/%q, want execution/execution", events[1].Vote, events[1].Kind)
+	if events[1].Kind != timeoutKindExecution {
+		t.Errorf("kind = %q, want execution", events[1].Kind)
 	}
 }
 

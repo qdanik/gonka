@@ -40,7 +40,7 @@ func newLiveStream(t *testing.T, slotsPerSigner ...int) (nonceStream, EscrowSess
 	t.Cleanup(func() { _ = session.Close() })
 
 	handle := NewSessionHandle(session, machine)
-	return nonceStream{session: handle, model: "qwen", now: fixedClock()}, handle, group
+	return newNonceStream(handle, "qwen", fixedClock()), handle, group
 }
 
 func TestAdvanceCommitsTheServeParams(t *testing.T) {
@@ -133,7 +133,7 @@ func TestAdvanceReportsASessionFailure(t *testing.T) {
 	failure := errors.New("storage gone")
 	session := newFakeSession("hostA")
 	session.prepare = func(user.ParamsForHost) (*user.PreparedInference, error) { return nil, failure }
-	stream := nonceStream{session: session, model: "qwen", now: fixedClock()}
+	stream := newNonceStream(session, "qwen", fixedClock())
 
 	_, err := stream.Advance(func(scheduler.HostBinding) scheduler.NonceIntent {
 		return scheduler.NonceIntent{Commit: true, Params: user.InferenceParams{}}
@@ -172,7 +172,7 @@ func TestStreamReportsTheGroupAndTheLatestNonce(t *testing.T) {
 
 func TestGhostParamsCarryTheEscrowModelAndTheInjectedClock(t *testing.T) {
 	t.Parallel()
-	stream := nonceStream{session: newFakeSession("hostA"), model: "kimi", now: fixedClock()}
+	stream := newNonceStream(newFakeSession("hostA"), "kimi", fixedClock())
 
 	params := stream.ghostParams()
 

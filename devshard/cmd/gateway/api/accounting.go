@@ -41,7 +41,7 @@ func requestRecord(outcome engine.RaceOutcome) store.RequestRecord {
 		if attempt.Completed.After(record.CompletedAt) {
 			record.CompletedAt = attempt.Completed
 		}
-		if outcome.WinnerNonce == 0 || attempt.Nonce != outcome.WinnerNonce {
+		if !outcome.IsWinner(attempt) {
 			continue
 		}
 		record.WinnerParticipant = attempt.Participant

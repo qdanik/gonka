@@ -12,11 +12,9 @@ const (
 )
 
 type RuleContext struct {
-	Document    *Document
-	Param       string
-	RoutedModel string
-	Admin       bool
-	Profile     *Profile
+	Document *Document
+	Param    string
+	Profile  *Profile
 }
 
 // RuleFunc is one parameter rule: inspect/mutate ctx.Document, or reject.

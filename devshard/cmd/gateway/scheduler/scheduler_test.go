@@ -11,8 +11,6 @@ import (
 	"devshard/cmd/gateway/config"
 	"devshard/cmd/gateway/perf"
 
-	"go.uber.org/goleak"
-
 	"devshard/cmd/gateway/internal/leakcheck"
 )
 
@@ -287,12 +285,6 @@ func (h *schedulerHarness) queueDepth(escrowID string) int {
 		return 0
 	}
 	return len(active.submit)
-}
-
-func verifyNoLeaks(t *testing.T) {
-	t.Helper()
-	ignoreExisting := goleak.IgnoreCurrent()
-	t.Cleanup(func() { goleak.VerifyNone(t, ignoreExisting) })
 }
 
 func eventually(t *testing.T, description string, condition func() bool) {

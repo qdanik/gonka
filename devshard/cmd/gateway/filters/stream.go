@@ -26,10 +26,6 @@ var (
 	sseDataPrefix         = []byte("data: ")
 	sseDoneMarker         = []byte("[DONE]")
 
-	// sseMessageKey is the cheap pre-check for a complete chat.completion: only a completion carries
-	// choices[].message, and only such an event has to be converted into chunks.
-	sseMessageKey = []byte(`"message"`)
-
 	// sseDataParsePrefix deliberately omits the space sseDataPrefix emits; the two must not be
 	// unified. See gateway-request-filtering.md, "Two `data:` prefixes that must not be unified".
 	sseDataParsePrefix = []byte("data:")

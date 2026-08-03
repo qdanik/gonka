@@ -9,6 +9,7 @@ const (
 	ghostEjected
 	ghostCapability
 	ghostExclude
+	// ghostAbandoned is the one kind that is not a probe: the nonce carries the caller's real params.
 	// ghostAbandoned accounts a nonce that was committed for a request whose caller vanished before
 	// the assignment reached it; the nonce is spent either way and must still have an owner.
 	ghostAbandoned
