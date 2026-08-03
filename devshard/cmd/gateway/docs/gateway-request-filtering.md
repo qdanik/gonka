@@ -51,7 +51,7 @@ The strip is not the same for every client. The gateway forces `logprobs` on and
 
 The intent is part of the response-cache key (`api/cache.go`, `cacheKeyFor`). The normalized body is not enough to separate these clients: the force rules make one request byte-identical to the other, so without the intent in the key a client that asked for logprobs is answered from an entry stripped of them.
 
-A host can spell an internal field with a `\u` escape, which the raw-byte pre-check does not match while the client's decoder reads it back as the field itself, so any payload carrying that escape goes down the full strip regardless of what the markers find (`filters/response.go`, `hasStrippableField`). Only `\uXXXX` can encode a letter of a key, so the widened gate costs the strip path nothing on ordinary content.
+A host can spell an internal field with a `\u` escape, which no byte-level scan matches while the client's decoder reads it back as the field itself. That is why the strip decodes every payload rather than looking for markers first: the pre-check that skipped parsing was the hole, and removing it closed the class instead of widening the gate (`filters/response.go`, `stripInternalFields`).
 
 The completion-to-chunks conversion carries every host-controlled field as raw JSON and decodes with the standard library (`filters/stream.go`, `sseCompletion`). A typed field is a way for a host to fail the conversion — a numeric `id`, a `created` past the float range — and a failed conversion forwards a `chat.completion` where the client renders a delta: it displays nothing while the nonce settles all the same. The re-encode turns HTML escaping off for the same reason the strip does.
 

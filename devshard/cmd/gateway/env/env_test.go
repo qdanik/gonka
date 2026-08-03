@@ -167,3 +167,62 @@ func TestLoadFallsBackToTheDevshardctlSpelling(t *testing.T) {
 		}
 	})
 }
+
+// The fallback is the devshardctl spelling, as every other entry in the table is. A node still on the
+// gateway's own former name must be migrated: nothing reads it, and the gateway starts serving nothing.
+func TestTheEscrowListStillAnswersToItsFormerName(t *testing.T) {
+	t.Setenv("DEVSHARDS_JSON", `[{"escrow_id":"1"}]`)
+
+	values, err := Load()
+
+	if err != nil {
+		t.Fatalf("Load() = %v, want nil", err)
+	}
+	if values.DevshardsJSON == nil || *values.DevshardsJSON != `[{"escrow_id":"1"}]` {
+		t.Fatalf("escrow list = %v, want the value read from the former name", values.DevshardsJSON)
+	}
+}
+
+// Three of the four rotation knobs were reachable from the environment and this one was not, so an
+// operator reading the deployment file concluded it did not exist while it quietly ran on its default.
+func TestEveryRotationKnobIsReachableFromTheEnvironment(t *testing.T) {
+	t.Setenv("GATEWAY_ROTATION_ENABLED", "true")
+	t.Setenv("GATEWAY_ROTATION_SETTLEMENT_ENABLED", "true")
+	t.Setenv("GATEWAY_ROTATION_PRE_POC_BLOCKS", "42")
+	t.Setenv("GATEWAY_ROTATION_MODELS_JSON", "[]")
+
+	values, err := Load()
+
+	if err != nil {
+		t.Fatalf("Load() = %v, want nil", err)
+	}
+	if values.RotationPrePoCBlocks == nil || *values.RotationPrePoCBlocks != 42 {
+		t.Fatalf("RotationPrePoCBlocks = %v, want the value the environment set", values.RotationPrePoCBlocks)
+	}
+	if values.RotationEnabled == nil || values.RotationSettlementEnabled == nil || values.RotationModelsJSON == nil {
+		t.Fatal("a rotation knob stopped reading its variable")
+	}
+}
+
+// An escrow records the name of its key variable when it is created, so renaming the variable in the
+// deployment leaves the stored record pointing at a name nothing sets and the escrow goes inactive.
+func TestASigningKeyFallsBackToItsRenamedVariable(t *testing.T) {
+	t.Setenv("GATEWAY_PRIVATE_KEY", "deadbeef")
+
+	key, err := PrivateKey("DEVSHARD_PRIVATE_KEY")
+
+	if err != nil {
+		t.Fatalf("PrivateKey() = %v, want the key read from the renamed variable", err)
+	}
+	if key != "deadbeef" {
+		t.Fatalf("key = %q, want the value the renamed variable holds", key)
+	}
+}
+
+// The fallback must not invent a key: an unset pair still fails, and the error names the recorded
+// variable so an operator fixes the record rather than guessing.
+func TestASigningKeyWithNeitherNameSetStillFails(t *testing.T) {
+	if _, err := PrivateKey("DEVSHARD_PRIVATE_KEY"); !errors.Is(err, ErrPrivateKeyMissing) {
+		t.Fatalf("PrivateKey() = %v, want ErrPrivateKeyMissing", err)
+	}
+}
