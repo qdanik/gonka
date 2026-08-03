@@ -287,14 +287,14 @@ func (d *dispatcher) sweepExhausted(participants []string, avail availability) {
 		if queued.abandoned.Load() {
 			return false
 		}
-		canServe, toolsUnsupported, busy := servable(queued, participants, avail)
+		canServe, toolsUnsupported, busy, chainBlocked := servable(queued, participants, avail)
 		if canServe {
 			return true
 		}
 		switch {
 		case toolsUnsupported:
 			queued.deliver(pickResult{err: ErrToolsUnsupported})
-		case busy:
+		case busy, chainBlocked:
 			queued.deliver(pickResult{err: ErrHostsBusy})
 		default:
 			queued.deliver(pickResult{err: ErrNoAvailableHost})
@@ -322,22 +322,26 @@ func (d *dispatcher) keepWaiting(accept func(*waiter) bool) {
 	d.waiting = kept
 }
 
-// servable also reports the one blocking reason a caller can fix and no wait can: tool support.
-func servable(queued *waiter, participants []string, avail availability) (canServe, toolsUnsupported, busy bool) {
-	sawToolRefusal, sawOtherReason, sawBusy := false, false, false
+// servable also reports the one blocking reason a caller can fix and no wait can: tool support. It
+// separates a busy host from one the chain has stopped -- the first passes on its own and is what a
+// waiter may be held for, the second lasts an epoch phase.
+func servable(queued *waiter, participants []string, avail availability) (canServe, toolsUnsupported, busy, chainBlocked bool) {
+	anyToolRefusal, anyOtherReason, anyBusy, anyChainBlocked := false, false, false, false
 	for _, participant := range participants {
 		switch reason := avail.blocks(participant, queued); reason {
 		case blockNone:
-			return true, false, false
+			return true, false, false, false
 		case blockToolsUnsupported:
-			sawToolRefusal = true
-		case blockThrottled, blockPoCRequired:
-			sawOtherReason, sawBusy = true, true
+			anyToolRefusal = true
+		case blockThrottled:
+			anyOtherReason, anyBusy = true, true
+		case blockPoCRequired:
+			anyOtherReason, anyChainBlocked = true, true
 		default:
-			sawOtherReason = true
+			anyOtherReason = true
 		}
 	}
-	return false, sawToolRefusal && !sawOtherReason, sawBusy
+	return false, anyToolRefusal && !anyOtherReason, anyBusy, anyChainBlocked
 }
 
 // reservation is what a serve decision took before the nonce was committed: the participant's concurrency

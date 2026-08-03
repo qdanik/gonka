@@ -4,6 +4,7 @@
 package env
 
 import (
+	"devshard/logging"
 	"errors"
 	"fmt"
 	"os"
@@ -38,6 +39,7 @@ type Values struct {
 	DisabledRedirectURL *string
 
 	RotationEnabled           *bool
+	RotationPrePoCBlocks      *int64
 	RotationSettlementEnabled *bool
 	RotationModelsJSON        *string
 
@@ -67,6 +69,7 @@ var (
 	// legacyNames is the devshardctl spelling each variable falls back to; a variable absent here has no
 	// devshardctl equivalent. See gateway-operations.md, "Start-up".
 	legacyNames = map[string]string{
+		"GATEWAY_ESCROWS_JSON":                "DEVSHARDS_JSON",
 		"GATEWAY_PORT":                        "DEVSHARD_PORT",
 		"GATEWAY_STORAGE_DIR":                 "DEVSHARD_STORAGE_DIR",
 		"GATEWAY_API_KEYS":                    "DEVSHARD_API_KEYS",
@@ -88,18 +91,25 @@ var (
 	}
 )
 
-// PrivateKey reads the hex signing key held by the named variable. Errors name the variable and
-// never the value, so a failure can be logged without leaking key material.
+// PrivateKey reads the hex signing key held by the named variable, falling back to the GATEWAY_ spelling
+// of a name recorded before the rename. Errors and the fallback name the variable and never the value.
 func PrivateKey(name string) (string, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return "", fmt.Errorf("%w: no environment variable named", ErrPrivateKeyMissing)
 	}
-	key := strings.TrimSpace(os.Getenv(name))
-	if key == "" {
-		return "", fmt.Errorf("%w: %s is unset", ErrPrivateKeyMissing, name)
+	if key := strings.TrimSpace(os.Getenv(name)); key != "" {
+		return key, nil
 	}
-	return key, nil
+	if renamed, aliased := strings.CutPrefix(name, "DEVSHARD_"); aliased {
+		renamed = "GATEWAY_" + renamed
+		if key := strings.TrimSpace(os.Getenv(renamed)); key != "" {
+			logging.Warn("signing key read from the renamed variable",
+				"subsystem", "env", "recorded", name, "used", renamed)
+			return key, nil
+		}
+	}
+	return "", fmt.Errorf("%w: %s is unset", ErrPrivateKeyMissing, name)
 }
 
 // lookup prefers the gateway's own spelling and falls back to devshardctl's. An empty value counts as
@@ -168,7 +178,7 @@ func Load() (Values, error) {
 	readString("GATEWAY_STORAGE_DIR", &values.StorageDir)
 	readString("GATEWAY_API_KEYS", &values.APIKeys)
 	readString("GATEWAY_ADMIN_API_KEY", &values.AdminAPIKey)
-	readString("GATEWAY_DEVSHARDS_JSON", &values.DevshardsJSON)
+	readString("GATEWAY_ESCROWS_JSON", &values.DevshardsJSON)
 
 	readString("GATEWAY_CHAIN_GRPC", &values.ChainGRPC)
 	readString("GATEWAY_PUBLIC_API", &values.PublicAPI)
@@ -189,6 +199,7 @@ func Load() (Values, error) {
 	readString("GATEWAY_DISABLED_REDIRECT_URL", &values.DisabledRedirectURL)
 
 	readBool("GATEWAY_ROTATION_ENABLED", &values.RotationEnabled)
+	readInt("GATEWAY_ROTATION_PRE_POC_BLOCKS", &values.RotationPrePoCBlocks)
 	readBool("GATEWAY_ROTATION_SETTLEMENT_ENABLED", &values.RotationSettlementEnabled)
 	readString("GATEWAY_ROTATION_MODELS_JSON", &values.RotationModelsJSON)
 

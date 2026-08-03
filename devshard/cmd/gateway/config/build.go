@@ -40,6 +40,7 @@ func Build(values env.Values, overrides Overrides) (*Config, error) {
 	overrideIfSet(&configuration.Modes.DisabledRedirectURL, values.DisabledRedirectURL)
 
 	overrideIfSet(&configuration.Rotation.Enabled, values.RotationEnabled)
+	overrideIfSet(&configuration.Rotation.PrePoCBlocks, values.RotationPrePoCBlocks)
 	overrideIfSet(&configuration.Rotation.SettlementEnabled, values.RotationSettlementEnabled)
 	overrideIfSet(&configuration.Rotation.ModelsJSON, values.RotationModelsJSON)
 

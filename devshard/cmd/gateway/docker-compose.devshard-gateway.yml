@@ -1,0 +1,28 @@
+services:
+  devshard-gateway:
+    container_name: ${GATEWAY_INSTANCE_NAME:-devshard-gateway}
+    image: ${GATEWAY_IMAGE:-kovec/devshard-gateway:v3}
+    env_file:
+      - ${GATEWAY_ENV_FILE:-./config.devshard-gateway.env}
+    volumes:
+      - ${GATEWAY_STORAGE_HOST_DIR:-.devshard-gateway}:${GATEWAY_STORAGE_DIR:-/root/.devshard-gateway}
+    expose:
+      - "8080"
+    ports:
+      - "127.0.0.1:${GATEWAY_HOST_PORT:-18080}:8080"
+    networks:
+      join_default:
+        aliases:
+          - ${GATEWAY_INSTANCE_NAME:-devshard-gateway}
+          - devshard-pool
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/v1/status"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+networks:
+  join_default:
+    external: true
