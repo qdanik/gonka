@@ -93,6 +93,7 @@ A name the gateway does not read is ignored in silence, so a typo costs a debugg
 | `GATEWAY_MAX_TOKENS_CAP` | ceiling a client's own budget is clamped to |
 | `GATEWAY_MAX_CONCURRENT_REQUESTS` | gateway-wide concurrency cap before capacity scaling |
 | `GATEWAY_ACQUIRE_WAIT_MS` | how long a request may wait for capacity before it is refused |
+| `GATEWAY_HOLD_GRACE_MS` | how long a bound nonce waits for a request that has not excluded its participant, before it is burned |
 | `GATEWAY_QUEUE_DEPTH_PER_SLOT` | how deep the queue may grow per slot before arrivals are refused on sight |
 | `GATEWAY_POC_MODE` | whether proof-of-compute blocking is honoured or bypassed |
 | `GATEWAY_DISABLED` | takes the shard out of service without stopping it |
@@ -117,7 +118,7 @@ Plus the per-escrow signing keys, read from arbitrarily named variables referenc
 
 ### Admin overrides (21)
 
-Run-time tuning, changeable without a redeploy: `default_max_tokens`, `max_tokens_cap`, `max_concurrent_requests`, `max_concurrent_requests_per_10000_weight`, `poc_max_concurrent_requests_per_10000_weight`, `max_input_tokens_in_flight`, `acquire_wait_ms`, `queue_depth_per_slot`, `aimd_initial_window`, `aimd_max_window`, `breaker_trip_threshold`, `breaker_base_open_ms`, `breaker_max_open_ms`, `model_limits`, `model_access`, `disabled`, `disabled_message`, `disabled_redirect_url`, `rotation_enabled`, `rotation_settlement_enabled`, `rotation_pre_poc_blocks`, `rotation_models_json`.
+Run-time tuning, changeable without a redeploy: `default_max_tokens`, `max_tokens_cap`, `max_concurrent_requests`, `max_concurrent_requests_per_10000_weight`, `poc_max_concurrent_requests_per_10000_weight`, `max_input_tokens_in_flight`, `acquire_wait_ms`, `queue_depth_per_slot`, `hold_grace_ms`, `aimd_initial_window`, `aimd_max_window`, `breaker_trip_threshold`, `breaker_base_open_ms`, `breaker_max_open_ms`, `model_limits`, `model_access`, `disabled`, `disabled_message`, `disabled_redirect_url`, `rotation_enabled`, `rotation_settlement_enabled`, `rotation_pre_poc_blocks`, `rotation_models_json`.
 
 An unknown field in an override document is an **error**, not a silently ignored key: a typo in an admin PUT must be reported.
 

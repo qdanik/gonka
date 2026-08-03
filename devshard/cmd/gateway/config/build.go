@@ -33,6 +33,7 @@ func Build(values env.Values, overrides Overrides) (*Config, error) {
 	overrideIfSet(&configuration.Limits.Concurrency.MaxRequests, values.MaxConcurrentRequests)
 	overrideIfSet(&configuration.Limits.AcquireWaitMS, values.AcquireWaitMS)
 	overrideIfSet(&configuration.Limits.QueueDepthPerSlot, values.QueueDepthPerSlot)
+	overrideIfSet(&configuration.Scheduler.HoldGraceMS, values.HoldGraceMS)
 
 	overrideIfSet(&configuration.Modes.PoCMode, values.PoCMode)
 	overrideIfSet(&configuration.Modes.Disabled, values.Disabled)
@@ -65,6 +66,7 @@ func Build(values env.Values, overrides Overrides) (*Config, error) {
 	overrideIfSet(&configuration.Limits.MaxInputTokensInFlight, overrides.MaxInputTokensInFlight)
 	overrideIfSet(&configuration.Limits.AcquireWaitMS, overrides.AcquireWaitMS)
 	overrideIfSet(&configuration.Limits.QueueDepthPerSlot, overrides.QueueDepthPerSlot)
+	overrideIfSet(&configuration.Scheduler.HoldGraceMS, overrides.HoldGraceMS)
 	overrideIfSet(&configuration.Limits.AIMD.InitialWindow, overrides.AIMDInitialWindow)
 	overrideIfSet(&configuration.Limits.AIMD.MaxWindow, overrides.AIMDMaxWindow)
 	overrideIfSet(&configuration.Limits.Breaker.TripThreshold, overrides.BreakerTripThreshold)
