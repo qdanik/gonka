@@ -1599,13 +1599,12 @@ func halveBudgetParams(params any) (any, bool) {
 
 // nonStreamingFixture races a request whose answer is buffered, so the shorter retry is the only
 // escalation left once a host has receipted.
-func nonStreamingFixture(reduce func(any) (any, bool)) *raceFixture {
+func nonStreamingFixture() *raceFixture {
 	policy := settledPolicy()
 	policy.NonStreamResponseFloor = time.Second
 	fixture := newRaceFixture(policy, 3)
 	fixture.request.Stream = false
 	fixture.request.Params = budgetParams{maxTokens: 800}
-	fixture.request.ReduceMaxTokens = reduce
 	return fixture
 }
 
@@ -1627,10 +1626,10 @@ func pickedProfiles(fixture *raceFixture) []scheduler.RequestProfile {
 	return append([]scheduler.RequestProfile(nil), fixture.picker.profiles...)
 }
 
-func armReducedTokens(t *testing.T, coordinator *raceCoordinator) deadlineArm {
+func armResponseTimeout(t *testing.T, coordinator *raceCoordinator) deadlineArm {
 	t.Helper()
 	arm := nextDeadline(coordinator.deps.Now(), coordinator.plan())
-	if arm.Trigger != triggerEscalation || arm.Escalation.Stage != StageReducedMaxTokens {
+	if arm.Trigger != triggerEscalation || arm.Escalation.Stage != StageResponseTimeout {
 		t.Fatalf("arm = %+v, want the reduced-max-tokens escalation", arm)
 	}
 	return arm
@@ -1647,27 +1646,27 @@ func awaitPick(t *testing.T, coordinator *raceCoordinator) pickedHost {
 	}
 }
 
-func TestANonStreamingHostGoneQuietIsRacedWithAHalvedTokenBudget(t *testing.T) {
-	fixture := nonStreamingFixture(halveBudgetParams)
+func TestANonStreamingHostGoneQuietIsRacedWithTheFullBudget(t *testing.T) {
+	fixture := nonStreamingFixture()
 	coordinator := pausedCoordinator(fixture, 3, quietHost(700, "host-0"))
 
-	coordinator.expire(armReducedTokens(t, coordinator))
+	coordinator.expire(armResponseTimeout(t, coordinator))
 	awaitPick(t, coordinator)
 
 	profiles := pickedProfiles(fixture)
 	if len(profiles) != 1 {
 		t.Fatalf("picks = %d, want 1", len(profiles))
 	}
-	if profiles[0].Params != (budgetParams{maxTokens: 400}) {
-		t.Fatalf("re-pick params = %+v, want the halved budget", profiles[0].Params)
+	if profiles[0].Params != (budgetParams{maxTokens: 800}) {
+		t.Fatalf("re-pick params = %+v, want the client's own budget", profiles[0].Params)
 	}
 }
 
-func TestTheHalvedTokenRetryIsOfferedOncePerRace(t *testing.T) {
-	fixture := nonStreamingFixture(halveBudgetParams)
+func TestTheResponseTimeoutRetryIsOfferedOncePerRace(t *testing.T) {
+	fixture := nonStreamingFixture()
 	coordinator := pausedCoordinator(fixture, 3, quietHost(710, "host-0"), quietHost(711, "host-1"))
 
-	coordinator.expire(armReducedTokens(t, coordinator))
+	coordinator.expire(armResponseTimeout(t, coordinator))
 	coordinator.applyPick(awaitPick(t, coordinator))
 
 	again := nextDeadline(coordinator.deps.Now(), coordinator.plan())
@@ -1679,11 +1678,11 @@ func TestTheHalvedTokenRetryIsOfferedOncePerRace(t *testing.T) {
 // Nonce scarcity collapses the attempt budget to one, which is what stops a hedge from spending a
 // nonce the phase will not replace. The halved-token retry is exempt: it is not a hedge racing the
 // first host, it is the only escalation a buffered request has, so the budget would delete it outright.
-func TestTheHalvedTokenRetryIgnoresAnExhaustedAttemptBudget(t *testing.T) {
-	fixture := nonStreamingFixture(halveBudgetParams)
+func TestTheResponseTimeoutRetryIgnoresAnExhaustedAttemptBudget(t *testing.T) {
+	fixture := nonStreamingFixture()
 	coordinator := pausedCoordinator(fixture, 1, quietHost(760, "host-0"))
 
-	coordinator.expire(armReducedTokens(t, coordinator))
+	coordinator.expire(armResponseTimeout(t, coordinator))
 	coordinator.applyPick(awaitPick(t, coordinator))
 
 	if picks := len(pickedProfiles(fixture)); picks != 1 {
@@ -1691,47 +1690,18 @@ func TestTheHalvedTokenRetryIgnoresAnExhaustedAttemptBudget(t *testing.T) {
 	}
 }
 
-func TestARaceWithNoBudgetToHalveStartsNoAttemptAndStopsAsking(t *testing.T) {
-	fixture := nonStreamingFixture(func(any) (any, bool) { return nil, false })
-	coordinator := pausedCoordinator(fixture, 3, quietHost(720, "host-0"), quietHost(721, "host-1"))
-
-	coordinator.expire(armReducedTokens(t, coordinator))
-
-	if picks := len(pickedProfiles(fixture)); picks != 0 {
-		t.Fatalf("picks = %d, want 0: a nonce was spent on a retry that cannot ask for less", picks)
-	}
-	again := nextDeadline(coordinator.deps.Now(), coordinator.plan())
-	if again.Trigger == triggerEscalation {
-		t.Fatalf("arm = %+v, want the offer withdrawn rather than re-armed forever", again)
-	}
-}
-
-func TestTheHalvedTokenRetryNeedsAHookAndAnUncrownedRace(t *testing.T) {
-	t.Run("a race whose params cannot be reduced never arms it", func(t *testing.T) {
-		fixture := nonStreamingFixture(nil)
-		coordinator := pausedCoordinator(fixture, 3, quietHost(730, "host-0"))
+func TestTheRetryNeedsAnUncrownedRace(t *testing.T) {
+	t.Run("a crowned race stops asking", func(t *testing.T) {
+		fixture := nonStreamingFixture()
+		coordinator := pausedCoordinator(fixture, 3, quietHost(731, "host-0"))
+		coordinator.winner = coordinator.attempts[0]
 
 		if arm := nextDeadline(coordinator.deps.Now(), coordinator.plan()); arm.Trigger == triggerEscalation {
-			t.Fatalf("arm = %+v, want no escalation without a reduce hook", arm)
-		}
-	})
-
-	t.Run("a crowned race is owed no shorter answer", func(t *testing.T) {
-		fixture := nonStreamingFixture(halveBudgetParams)
-		crowned := quietHost(740, "host-0")
-		coordinator := pausedCoordinator(fixture, 3, crowned, quietHost(741, "host-1"))
-		coordinator.winner = crowned
-
-		if arm := nextDeadline(coordinator.deps.Now(), coordinator.plan()); arm.Trigger == triggerEscalation {
-			t.Fatalf("arm = %+v, want no escalation once an attempt has been crowned", arm)
+			t.Fatalf("arm = %+v, want no escalation once someone is crowned", arm)
 		}
 	})
 }
 
-// A host that receipts and then goes silent is cancelled by the hard-timeout backstop, and the attempt
-// goroutine can only report that its own context was cancelled. Left as TerminalClientCancelled it is
-// exempt from the sample ladder as though it were a loser the race cancelled after someone won — so a
-// host that hangs for the whole timeout costs the client twenty minutes and its own health nothing.
 func TestABackstopCancelWithNoWinnerIsNotACancelledLoser(t *testing.T) {
 	base := time.Now()
 	hung := &liveAttempt{

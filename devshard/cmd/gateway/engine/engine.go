@@ -83,9 +83,8 @@ type Deps struct {
 	Timer func() raceTimer
 }
 
-// Request is one client request as a race sees it. Params passes through unread; ReduceMaxTokens lets
-// the non-streaming fallback halve the token budget without the engine parsing a body, and OnEscrow
-// fires at the last moment a response header can still be set.
+// Request is one client request as a race sees it. Params passes through unread; OnEscrow fires at
+// the last moment a response header can still be set.
 type Request struct {
 	RequestID     string
 	Model         string
@@ -96,8 +95,7 @@ type Request struct {
 	RequiresTools bool
 	ContextHint   uint64
 
-	Params          any
-	ReduceMaxTokens func(params any) (any, bool)
+	Params any
 
 	OnEscrow func(escrowID string)
 }

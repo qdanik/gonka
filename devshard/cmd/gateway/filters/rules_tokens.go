@@ -199,33 +199,6 @@ func applyOutputTokenLimits(document *Document, view *requestView, options Optio
 	}
 }
 
-// HalveMaxTokens rewrites body's output-token budget to half of maxTokens, never below the routed
-// model's own floor, and reports the value it wrote. A false reports a budget with nothing left to
-// give back, which is the caller's signal to skip the shorter retry entirely.
-func HalveMaxTokens(body []byte, maxTokens uint64, routedModel string) ([]byte, uint64, bool) {
-	floor := max(outputTokenFloor(routedModel), 1)
-	if maxTokens <= floor {
-		return nil, 0, false
-	}
-	halved := max(maxTokens/2, floor)
-	document, err := ParseDocument(body)
-	if err != nil {
-		return nil, 0, false
-	}
-	hasMaxCompletionTokens := document.Has("max_completion_tokens")
-	if hasMaxCompletionTokens {
-		document.Set("max_completion_tokens", halved)
-	}
-	if document.Has("max_tokens") || !hasMaxCompletionTokens {
-		document.Set("max_tokens", halved)
-	}
-	rewritten, err := document.Marshal()
-	if err != nil {
-		return nil, 0, false
-	}
-	return rewritten, halved, true
-}
-
 func outputTokenFloor(routedModel string) uint64 {
 	if profile := ProfileFor(routedModel); profile != nil {
 		return profile.MaxTokensFloor
