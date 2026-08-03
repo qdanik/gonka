@@ -627,8 +627,8 @@ func TestPickAdmitsExactlyOneCallerThroughAWindowOfOne(t *testing.T) {
 		t.Fatalf("served = %d callers, want exactly one through a window of one", len(served))
 	}
 	for err := range rejected {
-		if !errors.Is(err, ErrNoAvailableHost) {
-			t.Fatalf("rejected caller err = %v, want ErrNoAvailableHost", err)
+		if !errors.Is(err, ErrHostsBusy) {
+			t.Fatalf("rejected caller err = %v, want ErrHostsBusy", err)
 		}
 	}
 	_, _, commits := test.session(t, escrowA).report()
@@ -695,8 +695,8 @@ func TestPickTreatsAnUnloadedPreservedSetAsAllPreserved(t *testing.T) {
 
 		_, err := test.scheduler.Pick(context.Background(), RequestProfile{Model: modelA})
 
-		if !errors.Is(err, ErrNoAvailableHost) {
-			t.Fatalf("err = %v, want ErrNoAvailableHost", err)
+		if !errors.Is(err, ErrHostsBusy) {
+			t.Fatalf("err = %v, want ErrHostsBusy", err)
 		}
 	})
 

@@ -514,6 +514,17 @@ func (s *Server) race(w http.ResponseWriter, r *http.Request, requestID string, 
 	return outcome, nil
 }
 
+// winnerOutputTokens is what the client actually received, which with the line's own timestamp is what
+// a measured output rate is computed from.
+func winnerOutputTokens(outcome engine.RaceOutcome) int64 {
+	for _, attempt := range outcome.Attempts {
+		if outcome.IsWinner(attempt) {
+			return attempt.UsageCompletionTokens
+		}
+	}
+	return 0
+}
+
 // logRequestFinished answers the one question a finished request can no longer be asked: how much
 // reached the client and whether the terminator went with it. A delivery error is the difference
 // between a reply the client read and one it is still waiting out its own timeout for.
@@ -526,6 +537,7 @@ func logRequestFinished(requestID string, normalized filters.Result, outcome eng
 		"escrow", outcome.EscrowID,
 		"stream", normalized.Stream,
 		"input_tokens", outcome.InputTokens,
+		"output_tokens", winnerOutputTokens(outcome),
 		"outcome", verdict,
 		"bytes", written,
 		"terminated", terminated,

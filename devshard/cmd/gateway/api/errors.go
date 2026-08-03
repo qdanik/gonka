@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"devshard/cmd/gateway/chain"
@@ -20,6 +21,10 @@ import (
 
 	json "github.com/goccy/go-json"
 )
+
+// noHostRetryAfter is what a client is told to wait when every participant is at capacity: a window
+// frees as soon as one in-flight request completes, so the hint is short rather than a backoff ladder.
+const noHostRetryAfter = time.Second
 
 var (
 	ErrUnknownDevshard = errors.New("unknown devshard")
@@ -139,6 +144,10 @@ func statusForError(err error) int {
 	switch {
 	case errors.Is(err, scheduler.ErrNoEscrowCapacity), errors.Is(err, scheduler.ErrEscrowBusy):
 		return http.StatusTooManyRequests
+	// Our own admission refused this, so it is not the 502 an upstream failure earns: no host was asked,
+	// and capacity returns on its own.
+	case errors.Is(err, scheduler.ErrHostsBusy):
+		return http.StatusServiceUnavailable
 	case errors.Is(err, scheduler.ErrEscrowGone):
 		return http.StatusConflict
 	case errors.Is(err, scheduler.ErrToolsUnsupported):
@@ -177,9 +186,12 @@ func writeError(w http.ResponseWriter, status int, message string) {
 // which is the opposite of what a queue timeout means.
 func writeErrorFor(w http.ResponseWriter, err error) {
 	var throttled *limits.RateLimitError
-	if errors.As(err, &throttled) && throttled.RetryAfter > 0 {
+	switch {
+	case errors.As(err, &throttled) && throttled.RetryAfter > 0:
 		seconds := int64(math.Ceil(throttled.RetryAfter.Seconds()))
 		w.Header().Set("Retry-After", strconv.FormatInt(seconds, 10))
+	case errors.Is(err, scheduler.ErrHostsBusy):
+		w.Header().Set("Retry-After", strconv.FormatInt(int64(noHostRetryAfter.Seconds()), 10))
 	}
 	writeError(w, statusForError(err), err.Error())
 }

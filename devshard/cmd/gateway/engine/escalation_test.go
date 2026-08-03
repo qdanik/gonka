@@ -11,9 +11,9 @@ var (
 	raceStart    = time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC)
 	testPolicy   = EscalationPolicyFromConfig(config.Defaults().Engine)
 	streaming    = EscalationRequest{InputTokens: 1_000, Stream: true}
-	nonStreaming = EscalationRequest{InputTokens: 1_000, OutputTokens: 2_000, Stream: false}
+	nonStreaming = EscalationRequest{InputTokens: 1_000, OutputTokens: 1_000, Stream: false}
 
-	nonStreamingWithReducedTokens = EscalationRequest{InputTokens: 1_000, OutputTokens: 2_000, Stream: false, ReducedTokensStillOffered: true}
+	nonStreamingWithReducedTokens = EscalationRequest{InputTokens: 1_000, OutputTokens: 1_000, Stream: false, ReducedTokensStillOffered: true}
 )
 
 func dispatched(offset time.Duration) EscalationAttempt {
@@ -311,9 +311,9 @@ func TestNonStreamResponseTimeoutTracksTheOutputBudget(t *testing.T) {
 		worthRetrying bool
 	}{
 		{"a small budget sits on the floor", testPolicy, 100, 20 * time.Second, true},
-		{"exactly on the floor", testPolicy, 1_000, 20 * time.Second, true},
-		{"a larger budget grows past the floor", testPolicy, 2_000, 40 * time.Second, true},
-		{"a budget due after the ceiling is not retried at all", testPolicy, 3_072, 0, false},
+		{"exactly on the floor", testPolicy, 500, 20 * time.Second, true},
+		{"a larger budget grows past the floor", testPolicy, 1_000, 40 * time.Second, true},
+		{"a budget due after the ceiling is not retried at all", testPolicy, 2_000, 0, false},
 		{"a huge budget is not retried either", testPolicy, 30_000, 0, false},
 		{"a zero ceiling never withholds the retry", uncapped, 1_000_000, 1_000 * time.Second, true},
 		{"a zero lag leaves the floor alone", EscalationPolicy{NonStreamResponseFloor: 7 * time.Second}, 1_000_000, 7 * time.Second, true},
@@ -333,7 +333,7 @@ func TestNonStreamResponseTimeoutTracksTheOutputBudget(t *testing.T) {
 // past the point a client waits. Prefill is the receipt timeout's job; this stage waits on the answer.
 func TestNonStreamRetryDeadlineIgnoresPromptSize(t *testing.T) {
 	receipted := EscalationAttempt{SendTime: raceStart, ReceiptTime: raceStart.Add(time.Second)}
-	hugePrompt := EscalationRequest{InputTokens: 6_000, OutputTokens: 512, Stream: false, ReducedTokensStillOffered: true}
+	hugePrompt := EscalationRequest{InputTokens: 6_000, OutputTokens: 256, Stream: false, ReducedTokensStillOffered: true}
 
 	armed, ok := testPolicy.triggerFor(receipted, hugePrompt, raceStart)
 
@@ -497,7 +497,7 @@ func TestAHostStillOnScheduleIsNotRetried(t *testing.T) {
 		t.Fatal("triggerFor armed a retry for a budget the host is still within its own time for")
 	}
 
-	dueBeforeTheCeiling := EscalationRequest{OutputTokens: 2_000, Stream: false, ReducedTokensStillOffered: true}
+	dueBeforeTheCeiling := EscalationRequest{OutputTokens: 1_000, Stream: false, ReducedTokensStillOffered: true}
 	armed, ok := testPolicy.triggerFor(receipted, dueBeforeTheCeiling, raceStart)
 	if !ok || !armed.Deadline.Equal(raceStart.Add(40*time.Second)) {
 		t.Fatalf("triggerFor = (%v, %v), want the retry armed at 40s", armed.Deadline, ok)
