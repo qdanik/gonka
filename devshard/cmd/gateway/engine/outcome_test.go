@@ -602,3 +602,30 @@ func TestEveryTerminalHasAName(t *testing.T) {
 		t.Fatal("a win or a loss reported a failure reason, which failureReason would report as the cause")
 	}
 }
+
+// A committed nonce whose attempt never reported used to be dropped from the outcome entirely: no log
+// line, no ledger row, and -- because TimeoutPlan reads only the outcome -- no timeout vote for a nonce
+// already spent on chain. Production logs showed 8 of 255 nonces leaving no trace at all.
+func TestAnAttemptThatNeverReportedStillOwesAVote(t *testing.T) {
+	outcome := RaceOutcome{
+		Model: testModel,
+		Attempts: []AttemptOutcome{{
+			Nonce:       557,
+			Participant: testParticipant,
+			SendTime:    raceStart,
+			Terminal:    TerminalUnclassified,
+		}},
+	}
+
+	plan := outcome.TimeoutPlan()
+
+	if len(plan) != 1 || plan[0].Nonce != 557 {
+		t.Fatalf("TimeoutPlan() = %+v, want one step for nonce 557", plan)
+	}
+	if !plan[0].Post {
+		t.Fatalf("step = %+v, want the vote posted: the nonce was spent and never finished", plan[0])
+	}
+	if _, exemption := outcome.Sample(outcome.Attempts[0]); exemption != ExemptNeverReported {
+		t.Fatalf("exemption = %v, want the host judged for nothing it never answered", exemption)
+	}
+}

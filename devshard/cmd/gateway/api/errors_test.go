@@ -11,6 +11,7 @@ import (
 
 	"devshard/cmd/gateway/engine"
 	"devshard/cmd/gateway/limits"
+	"devshard/cmd/gateway/scheduler"
 )
 
 // Two documents promise a 429 carries Retry-After, and RateLimitError computes the wait, but nothing
@@ -72,5 +73,21 @@ func TestLoggedErrorCutsOnARuneBoundary(t *testing.T) {
 
 	if !utf8.ValidString(logged) {
 		t.Fatalf("logged error is not valid UTF-8: %q", logged)
+	}
+}
+
+// A request refused because every host is at capacity is the gateway's own admission refusing, not an upstream answering badly. It used
+// to render as 502 with no Retry-After, so a client read it as a broken node and retried at once --
+// which is what a load test measured as 35 of 100 requests failing.
+func TestAHostlessRequestIsOurRefusalNotAnUpstreamFailure(t *testing.T) {
+	recorder := httptest.NewRecorder()
+
+	writeErrorFor(recorder, scheduler.ErrHostsBusy)
+
+	if recorder.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusServiceUnavailable)
+	}
+	if got := recorder.Header().Get("Retry-After"); got != "1" {
+		t.Fatalf("Retry-After = %q, want a wait the client can act on", got)
 	}
 }

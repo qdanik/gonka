@@ -98,6 +98,7 @@ const (
 	ExemptEmptyStreamNoWinner
 	ExemptNeverDispatched
 	ExemptClientCancelled
+	ExemptNeverReported
 )
 
 // Lifecycle carries escrow facts the engine observes and must not act on.
@@ -277,6 +278,10 @@ func (o RaceOutcome) sampleExemption(a AttemptOutcome) SampleExemption {
 	switch {
 	case a.SendTime.IsZero():
 		return ExemptNeverDispatched
+	// An attempt that never reported is one the race stopped listening for, so it says nothing about
+	// the host: judging it would charge a host for our own cancellation.
+	case a.Terminal == TerminalUnclassified:
+		return ExemptNeverReported
 	case a.PhaseTransitionAborted:
 		return ExemptPhaseAborted
 	case a.Terminal == TerminalErrorStream || a.Terminal == TerminalCapabilityRefused:

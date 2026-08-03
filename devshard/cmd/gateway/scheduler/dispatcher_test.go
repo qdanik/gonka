@@ -130,17 +130,19 @@ func (p preparedNonce) Nonce() uint64 { return p.nonce }
 func (p preparedNonce) HostIdx() int  { return p.hostIdx }
 
 type recordingObserver struct {
-	mu      sync.Mutex
-	retired []string
-	ghosts  []string
-	holds   int
-	trips   int
+	mu          sync.Mutex
+	retired     []string
+	ghosts      []string
+	holds       int
+	trips       int
+	ghostNonces []uint64
 }
 
-func (o *recordingObserver) GhostBurned(_, reason string) {
+func (o *recordingObserver) GhostBurned(_ string, nonce uint64, reason string) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	o.ghosts = append(o.ghosts, reason)
+	o.ghostNonces = append(o.ghostNonces, nonce)
 }
 
 func (o *recordingObserver) NonceHeld(string) {
@@ -165,6 +167,12 @@ func (o *recordingObserver) burns() []string {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	return append([]string(nil), o.ghosts...)
+}
+
+func (o *recordingObserver) burnedNonces() []uint64 {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return append([]uint64(nil), o.ghostNonces...)
 }
 
 func (o *recordingObserver) counts() (holds, trips int) {
@@ -620,8 +628,8 @@ func TestDispatcherGhostsOnceWhenAdmissionRefusesEveryHost(t *testing.T) {
 	test.dispatcher.start()
 
 	for _, queued := range []*waiter{first, second} {
-		if result := awaitReply(t, queued); !errors.Is(result.err, ErrNoAvailableHost) {
-			t.Fatalf("err = %v, want ErrNoAvailableHost", result.err)
+		if result := awaitReply(t, queued); !errors.Is(result.err, ErrHostsBusy) {
+			t.Fatalf("err = %v, want ErrHostsBusy", result.err)
 		}
 	}
 	test.dispatcher.stop()
@@ -632,6 +640,11 @@ func TestDispatcherGhostsOnceWhenAdmissionRefusesEveryHost(t *testing.T) {
 	}
 	if burns := test.observer.burns(); len(burns) != 1 || burns[0] != ghostThrottled.reason() {
 		t.Fatalf("ghost burns = %v, want exactly one %q", burns, ghostThrottled.reason())
+	}
+	// The burn leaves an inference record on chain that stays started forever, so the observer has to
+	// name the nonce: nothing downstream can tell it apart from work still running without the number.
+	if nonces := test.observer.burnedNonces(); len(nonces) != 1 || nonces[0] != commits[0].nonce {
+		t.Fatalf("burned nonces = %v, want the committed nonce %d", nonces, commits[0].nonce)
 	}
 	test.wantSlots(t, 0, 0)
 }
@@ -722,8 +735,8 @@ func TestDispatcherRefetchesTheSnapshotEachDrain(t *testing.T) {
 	test.snapshots.set(chain.PhaseSnapshot{RequestsBlocked: true})
 	blocked := test.submit(t, test.clock.Now())
 
-	if result := awaitReply(t, blocked); !errors.Is(result.err, ErrNoAvailableHost) {
-		t.Fatalf("err = %v, want ErrNoAvailableHost from the refetched snapshot", result.err)
+	if result := awaitReply(t, blocked); !errors.Is(result.err, ErrHostsBusy) {
+		t.Fatalf("err = %v, want ErrHostsBusy from the refetched snapshot", result.err)
 	}
 	test.dispatcher.stop()
 

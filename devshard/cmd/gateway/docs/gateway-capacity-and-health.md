@@ -134,7 +134,7 @@ Two asymmetries worth knowing, neither of which is stated in the code:
 | `max_concurrent_requests_per_10000_weight` | 5.0 | Weight-derived cap; when set with an observed baseline it replaces the absolute cap. |
 | `poc_max_concurrent_requests_per_10000_weight` | 10.0 | The same, used while the chain reports requests blocked. |
 | `acquire_wait_ms` | 500 | Bounded queue wait before a 429. |
-| `aimd_initial_window` / `aimd_max_window` | 4 / 64 | Per-participant concurrency window bounds. |
+| `aimd_initial_window` / `aimd_max_window` | 64 / 256 | Per-participant concurrency window bounds. The window opens near a host's known capacity and AIMD is left to back off from it, rather than discovering it upward from a cold start. |
 | `breaker_trip_threshold` | 3 | Consecutive transport faults before the breaker opens. |
 | `breaker_base_open_ms` / `breaker_max_open_ms` | 5 000 / 300 000 | Backoff ladder bounds. The maximum must not exceed the performance ejection maximum, so ejection stays the dominant authority. |
 | `perf_consecutive_fail_threshold` | 5 | Consecutive-failure ejection trigger. |

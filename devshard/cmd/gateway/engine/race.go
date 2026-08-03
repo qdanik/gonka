@@ -618,11 +618,18 @@ func (c *raceCoordinator) complete(attempt *liveAttempt, event AttemptEvent) {
 			"participant", attempt.participant, "nonce_finished", attempt.nonceFinished)
 		return
 	}
-	logging.Info("attempt finished",
+	// The phase abort is the difference between a host that answered nothing and one the PoC transition
+	// cut off, and every other reader already tells them apart. See gateway-capacity-and-health.md.
+	fields := []any{
 		"request", c.request.RequestID, "escrow", c.escrowID, "nonce", attempt.nonce,
 		"participant", attempt.participant,
 		"terminal", c.racedTerminal(attempt, *attempt.outcome).String(),
-		"nonce_finished", attempt.nonceFinished, "state_divergent", attempt.outcome.StateDivergent)
+		"nonce_finished", attempt.nonceFinished, "state_divergent", attempt.outcome.StateDivergent,
+	}
+	if c.phaseAborted(attempt, *attempt.outcome) {
+		fields = append(fields, "phase_aborted", true)
+	}
+	logging.Info("attempt finished", fields...)
 	if signal := CapabilityOf(*attempt.outcome); signal.Retriable() {
 		RecordCapability(c.deps.Perf, attempt.participant, signal)
 		c.contextHint = GrowContextHint(c.contextHint, signal)
@@ -639,6 +646,25 @@ func (c *raceCoordinator) complete(attempt *liveAttempt, event AttemptEvent) {
 
 // racedTerminal is the attempt's terminal as the race sees it: an attempt goroutine knows only its own
 // cancellation, not the crown, the silence or the backstop. Every reader promotes through here.
+// unreportedOutcome stands in for an attempt whose goroutine never reported: the race stopped listening
+// before it finished. Dropping it left a committed nonce with no log line, no ledger row and no timeout
+// vote -- a nonce spent on chain that nothing downstream could see. See gateway-invariants.md, "1".
+func (c *raceCoordinator) unreportedOutcome(attempt *liveAttempt) AttemptOutcome {
+	hostLabel := ""
+	if c.target != nil {
+		hostLabel = c.target.HostLabel(attempt.hostIdx)
+	}
+	return AttemptOutcome{
+		Nonce:       attempt.nonce,
+		Participant: attempt.participant,
+		HostIdx:     attempt.hostIdx,
+		HostLabel:   hostLabel,
+		SendTime:    attempt.sendTime,
+		ReceiptTime: attempt.receiptTime,
+		Terminal:    TerminalUnclassified,
+	}
+}
+
 func (c *raceCoordinator) racedTerminal(attempt *liveAttempt, outcome AttemptOutcome) Terminal {
 	terminal := outcome.Terminal
 	if terminal == TerminalClientCancelled && (attempt.stalled && outcome.ContentChunks > 0 || c.abandonedByHosts()) {
@@ -877,7 +903,6 @@ func (c *raceCoordinator) report() RaceOutcome {
 }
 
 func (c *raceCoordinator) outcome() RaceOutcome {
-	generating := pocGenerating(c.deps.Snapshots.Snapshot(), c.deps.Modes)
 	outcome := RaceOutcome{
 		RequestID:       c.request.RequestID,
 		EscrowID:        c.escrowID,
@@ -890,14 +915,14 @@ func (c *raceCoordinator) outcome() RaceOutcome {
 		Attempts:        make([]AttemptOutcome, 0, len(c.attempts)),
 	}
 	for _, attempt := range c.attempts {
-		if attempt.outcome == nil {
-			continue
+		record := c.unreportedOutcome(attempt)
+		if attempt.outcome != nil {
+			record = *attempt.outcome
 		}
-		record := *attempt.outcome
 		record.StartedAt = c.started
 		record.NonceFinished = attempt.nonceFinished
 		record.FailureRateExceeded = c.deps.Perf.Ejected(attempt.participant, c.request.Model)
-		record.PhaseTransitionAborted = phaseAborted(record, attempt.inInference, generating)
+		record.PhaseTransitionAborted = c.phaseAborted(attempt, record)
 		record.Terminal = c.racedTerminal(attempt, record)
 		if attempt == c.winner {
 			outcome.WinnerNonce = attempt.nonce
@@ -1007,6 +1032,12 @@ func pocGenerating(snapshot chain.PhaseSnapshot, modes config.Modes) bool {
 	}
 	return snapshot.EpochPhase == chain.EpochPhasePoCGenerate ||
 		snapshot.ConfirmationPoCPhase == chain.ConfirmationPoCGeneration
+}
+
+// phaseAborted asks the shared rule with the phase the coordinator sees, so the log line and the
+// ladders cannot disagree about who ended the attempt.
+func (c *raceCoordinator) phaseAborted(attempt *liveAttempt, outcome AttemptOutcome) bool {
+	return phaseAborted(outcome, attempt.inInference, pocGenerating(c.deps.Snapshots.Snapshot(), c.deps.Modes))
 }
 
 // phaseAborted reports an attempt the phase transition ended rather than the host. A no-receipt

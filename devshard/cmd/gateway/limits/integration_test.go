@@ -67,8 +67,8 @@ func TestParticipantConfigFromLimits_MapsFieldsFromDefaults(t *testing.T) {
 	if got.InitialWindow != limits.AIMD.InitialWindow {
 		t.Errorf("InitialWindow = %d, want %d", got.InitialWindow, limits.AIMD.InitialWindow)
 	}
-	if got.MaxWindow != 64 {
-		t.Errorf("MaxWindow = %d, want 64", got.MaxWindow)
+	if got.MaxWindow != limits.AIMD.MaxWindow {
+		t.Errorf("MaxWindow = %d, want %d", got.MaxWindow, limits.AIMD.MaxWindow)
 	}
 	if got.TripThreshold != limits.Breaker.TripThreshold {
 		t.Errorf("TripThreshold = %d, want %d", got.TripThreshold, limits.Breaker.TripThreshold)

@@ -16,7 +16,7 @@ const defaultSubmitBuffer = 64
 // EscrowRetired lets an observer forget an escrow: ids are monotonic chain identifiers and are never
 // reused, so a per-escrow metric series that outlives its escrow grows with uptime and nothing else.
 type dispatchObserver interface {
-	GhostBurned(escrowID, reason string)
+	GhostBurned(escrowID string, nonce uint64, reason string)
 	NonceHeld(escrowID string)
 	BurnBudgetExhausted(escrowID string)
 	EscrowRetired(escrowID string)
@@ -255,7 +255,13 @@ func (d *dispatcher) drain() (time.Time, bool) {
 		case serve:
 			d.handOff(outcome.waiter, taken, prepared)
 		case burn:
-			d.recordGhost(outcome.kind.reason())
+			// A burn decided before the session could commit has no nonce to name: the escrow is out of
+			// them, or the decision was made without one being taken.
+			ghostNonce := uint64(0)
+			if prepared != nil {
+				ghostNonce = prepared.Nonce()
+			}
+			d.recordGhost(ghostNonce, outcome.kind.reason())
 			burnBudget--
 			if burnBudget <= 0 {
 				d.recordBudgetTrip()
@@ -281,15 +287,18 @@ func (d *dispatcher) sweepExhausted(participants []string, avail availability) {
 		if queued.abandoned.Load() {
 			return false
 		}
-		canServe, toolsUnsupported := servable(queued, participants, avail)
+		canServe, toolsUnsupported, busy := servable(queued, participants, avail)
 		if canServe {
 			return true
 		}
-		if toolsUnsupported {
+		switch {
+		case toolsUnsupported:
 			queued.deliver(pickResult{err: ErrToolsUnsupported})
-			return false
+		case busy:
+			queued.deliver(pickResult{err: ErrHostsBusy})
+		default:
+			queued.deliver(pickResult{err: ErrNoAvailableHost})
 		}
-		queued.deliver(pickResult{err: ErrNoAvailableHost})
 		return false
 	})
 }
@@ -314,20 +323,21 @@ func (d *dispatcher) keepWaiting(accept func(*waiter) bool) {
 }
 
 // servable also reports the one blocking reason a caller can fix and no wait can: tool support.
-func servable(queued *waiter, participants []string, avail availability) (canServe, toolsUnsupported bool) {
-	sawToolRefusal := false
-	sawOtherReason := false
+func servable(queued *waiter, participants []string, avail availability) (canServe, toolsUnsupported, busy bool) {
+	sawToolRefusal, sawOtherReason, sawBusy := false, false, false
 	for _, participant := range participants {
-		switch avail.blocks(participant, queued) {
+		switch reason := avail.blocks(participant, queued); reason {
 		case blockNone:
-			return true, false
+			return true, false, false
 		case blockToolsUnsupported:
 			sawToolRefusal = true
+		case blockThrottled, blockPoCRequired:
+			sawOtherReason, sawBusy = true, true
 		default:
 			sawOtherReason = true
 		}
 	}
-	return false, sawToolRefusal && !sawOtherReason
+	return false, sawToolRefusal && !sawOtherReason, sawBusy
 }
 
 // reservation is what a serve decision took before the nonce was committed: the participant's concurrency
@@ -355,7 +365,7 @@ func (d *dispatcher) handOff(served *waiter, taken reservation, prepared Prepare
 	assignment := Assignment{Escrow: d.escrowID, Host: taken.participant, Nonce: prepared, EscrowHold: taken.escrowHold}
 	if !served.deliver(pickResult{assignment: assignment}) {
 		d.giveBack(taken)
-		d.recordGhost(ghostAbandoned.reason())
+		d.recordGhost(prepared.Nonce(), ghostAbandoned.reason())
 	}
 }
 
@@ -404,9 +414,9 @@ func (d *dispatcher) dequeue(target *waiter) {
 	}
 }
 
-func (d *dispatcher) recordGhost(reason string) {
+func (d *dispatcher) recordGhost(nonce uint64, reason string) {
 	if d.observer != nil {
-		d.observer.GhostBurned(d.escrowID, reason)
+		d.observer.GhostBurned(d.escrowID, nonce, reason)
 	}
 }
 

@@ -1813,3 +1813,38 @@ func TestRacedTerminalPromotesAStalledHostForEveryReader(t *testing.T) {
 		t.Fatalf("racedTerminal = %v, want the cancellation left alone", got)
 	}
 }
+
+// An attempt whose goroutine never reported used to vanish from the outcome, taking its committed nonce
+// with it: no ledger row and, since TimeoutPlan reads only the outcome, no vote for a nonce already
+// spent. Production logs showed 8 of 255 nonces leaving no trace beyond the line that committed them.
+func TestAnUnreportedAttemptStaysInTheOutcome(t *testing.T) {
+	t.Parallel()
+	base := raceStart
+	silent := &liveAttempt{nonce: 557, participant: "host-silent", sendTime: base}
+	answered := &liveAttempt{
+		nonce:         558,
+		done:          true,
+		nonceFinished: true,
+		outcome:       &AttemptOutcome{Nonce: 558, Terminal: TerminalLost, ContentChunks: 2, SendTime: base},
+	}
+
+	coordinator := stalledFixtureCoordinator(settledPolicy(), silent, answered)
+	coordinator.winner = answered
+	outcome := coordinator.outcome()
+
+	if len(outcome.Attempts) != 2 {
+		t.Fatalf("attempts = %d, want the silent one kept: its nonce was committed", len(outcome.Attempts))
+	}
+	var kept AttemptOutcome
+	for _, attempt := range outcome.Attempts {
+		if attempt.Nonce == 557 {
+			kept = attempt
+		}
+	}
+	if kept.Participant != "host-silent" || kept.Terminal != TerminalUnclassified {
+		t.Fatalf("silent attempt = %+v, want it named and unclassified", kept)
+	}
+	if plan := outcome.TimeoutPlan(); len(plan) != 1 || plan[0].Nonce != 557 || !plan[0].Post {
+		t.Fatalf("TimeoutPlan() = %+v, want a posted vote for 557", plan)
+	}
+}
