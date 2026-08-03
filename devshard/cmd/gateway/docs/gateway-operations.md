@@ -70,13 +70,48 @@ Three layers, later wins: **defaults ← environment ← admin overrides**. The 
 
 A configuration snapshot is immutable. Reconfiguration builds and validates a *new* snapshot, persists the overrides, then swaps an atomic pointer. Readers load the pointer on each use, so they pick up a change on their next call.
 
-### Environment variables (29)
+### Environment variables
 
-Deployment identity only. `Load` returns what is *set*; defaults live in the configuration package, never in the environment layer, and every parse failure is accumulated so an operator sees all of them at once.
+Deployment identity only. `Load` returns what is *set*; defaults live in `config.Defaults()`, never in the environment layer, and every parse failure is accumulated so an operator sees all of them at once. An unset variable takes the default; an empty one is treated as unset.
 
-`GATEWAY_PORT`, `GATEWAY_STORAGE_DIR`, `GATEWAY_API_KEYS`, `GATEWAY_ADMIN_API_KEY`, `GATEWAY_DEVSHARDS_JSON`, `GATEWAY_CHAIN_GRPC`, `GATEWAY_CHAIN_ID`, `GATEWAY_PUBLIC_API`, `GATEWAY_TX_FEE_AMOUNT`, `GATEWAY_TX_GAS_LIMIT`, `GATEWAY_DEFAULT_MAX_TOKENS`, `GATEWAY_MAX_TOKENS_CAP`, `GATEWAY_MAX_CONCURRENT_REQUESTS`, `GATEWAY_POC_MODE`, `GATEWAY_DISABLED`, `GATEWAY_DISABLED_MESSAGE`, `GATEWAY_DISABLED_REDIRECT_URL`, `GATEWAY_ROTATION_ENABLED`, `GATEWAY_ROTATION_SETTLEMENT_ENABLED`, `GATEWAY_ROTATION_MODELS_JSON`, `GATEWAY_CHAT_CACHE_MAX_BYTES`, `GATEWAY_ACCOUNTING_RETENTION_HOURS`, `GATEWAY_ACCOUNTING_RETENTION_MAX_ROWS`, `GATEWAY_CAPTURE_ENABLED`, `GATEWAY_CAPTURE_DIR`, `GATEWAY_CAPTURE_SAMPLE_RATE`, `GATEWAY_CAPTURE_MAX_BYTES`, `GATEWAY_PERF_EWMA_HALFLIFE_SECONDS`.
+A name the gateway does not read is ignored in silence, so a typo costs a debugging session — the table below is the whole list it reads.
 
-Plus the per-escrow signing keys, read from arbitrarily named variables referenced by each escrow record. Errors from those name the variable and never the value, so a failure can be logged without leaking key material.
+| variable | what it controls |
+|---|---|
+| `GATEWAY_PORT` | the port the HTTP server listens on |
+| `GATEWAY_STORAGE_DIR` | where the SQLite state, ledger and per-escrow session files live |
+| `GATEWAY_API_KEYS` | keys that may call the chat routes |
+| `GATEWAY_ADMIN_API_KEY` | key that may call `/v1/admin/*`; absent disables the admin surface |
+| `GATEWAY_ESCROWS_JSON` | escrows to serve at startup; empty starts with none and they are added through the admin API. |
+| `GATEWAY_CHAIN_GRPC` | chain gRPC endpoint — every chain read and every broadcast |
+| `GATEWAY_CHAIN_RPC` | CometBFT RPC endpoint |
+| `GATEWAY_CHAIN_ID` | chain id signatures are bound to; a mismatch invalidates every transaction |
+| `GATEWAY_PUBLIC_API` | the network's public API, used to resolve host addresses |
+| `GATEWAY_TX_FEE_AMOUNT` | fee attached to a chain transaction |
+| `GATEWAY_TX_GAS_LIMIT` | gas limit for a chain transaction |
+| `GATEWAY_DEFAULT_MAX_TOKENS` | output budget given to a request that names none |
+| `GATEWAY_MAX_TOKENS_CAP` | ceiling a client's own budget is clamped to |
+| `GATEWAY_MAX_CONCURRENT_REQUESTS` | gateway-wide concurrency cap before capacity scaling |
+| `GATEWAY_ACQUIRE_WAIT_MS` | how long a request may wait for capacity before it is refused |
+| `GATEWAY_QUEUE_DEPTH_PER_SLOT` | how deep the queue may grow per slot before arrivals are refused on sight |
+| `GATEWAY_POC_MODE` | whether proof-of-compute blocking is honoured or bypassed |
+| `GATEWAY_DISABLED` | takes the shard out of service without stopping it |
+| `GATEWAY_DISABLED_MESSAGE` | what a client is told while disabled |
+| `GATEWAY_DISABLED_REDIRECT_URL` | where a client is pointed while disabled |
+| `GATEWAY_ROTATION_ENABLED` | whether spent escrows are replaced automatically |
+| `GATEWAY_ROTATION_PRE_POC_BLOCKS` | how many blocks before an epoch switch the bridge escrows are prepared |
+| `GATEWAY_ROTATION_SETTLEMENT_ENABLED` | whether a replaced escrow is also settled |
+| `GATEWAY_ROTATION_MODELS_JSON` | per-model rotation targets |
+| `GATEWAY_CHAT_CACHE_MAX_BYTES` | memory the response cache may hold |
+| `GATEWAY_ACCOUNTING_RETENTION_HOURS` | how long request records are kept |
+| `GATEWAY_ACCOUNTING_RETENTION_MAX_ROWS` | how many request records are kept |
+| `GATEWAY_CAPTURE_ENABLED` | whether request/response capture is on |
+| `GATEWAY_CAPTURE_DIR` | where captures are written |
+| `GATEWAY_CAPTURE_SAMPLE_RATE` | fraction of requests captured |
+| `GATEWAY_CAPTURE_MAX_BYTES` | disk the capture may use |
+| `GATEWAY_PERF_EWMA_HALFLIFE_SECONDS` | how fast a host's measured history decays |
+
+Plus the per-escrow signing keys, read from arbitrarily named variables referenced by each escrow record. Errors from those name the variable and never the value, so a failure can be logged without leaking key material. A record created before the variables were renamed keeps the old name; the lookup falls back to the  spelling of it and logs which variable it actually read, so the drift is visible rather than silent. A record created before the variables were renamed keeps the old name; the lookup falls back to the `GATEWAY_` spelling of it and logs which variable it actually read, so the drift is visible rather than silent.
 
 **Two settings are environment-only and take effect at start-up.** `GATEWAY_CHAT_CACHE_MAX_BYTES` and the `GATEWAY_CAPTURE_*` group are read once when their component is built and are not rebuilt on a settings change. Both are deliberately absent from the override list below, and an override document naming one is rejected rather than accepted and ignored — the decoder refuses unknown fields.
 
