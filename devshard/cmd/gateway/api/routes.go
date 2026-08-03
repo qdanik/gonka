@@ -484,7 +484,6 @@ func (s *Server) race(w http.ResponseWriter, r *http.Request, requestID string, 
 		RequiresTools: normalized.RequiresTools,
 		OnEscrow:      func(escrowID string) { client.Header().Set(EscrowHeader, escrowID) },
 
-		ReduceMaxTokens: reduceMaxTokens,
 		Params: user.InferenceParams{
 			Model:       normalized.Model,
 			Prompt:      normalized.Body,
@@ -562,22 +561,6 @@ func estimatePromptTokens(body []byte) uint64 {
 		return uint64(estimated)
 	}
 	return 1
-}
-
-// reduceMaxTokens is engine.Request's body-shaped hook: the non-streaming fallback retries a host that
-// went quiet with half the output-token budget, and the escrow commits that halved budget alongside the
-// body carrying it. InputLength is left on the original prompt, as the committed record's own value.
-func reduceMaxTokens(params any) (any, bool) {
-	dispatched, isInference := params.(user.InferenceParams)
-	if !isInference {
-		return nil, false
-	}
-	prompt, maxTokens, ok := filters.HalveMaxTokens(dispatched.Prompt, dispatched.MaxTokens, dispatched.Model)
-	if !ok {
-		return nil, false
-	}
-	dispatched.Prompt, dispatched.MaxTokens = prompt, maxTokens
-	return dispatched, true
 }
 
 func outputTokenBudget(normalized filters.Result) uint64 {

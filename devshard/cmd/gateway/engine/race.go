@@ -170,7 +170,7 @@ func (p deadlinePlan) escalation(now time.Time) (ArmedEscalation, bool) {
 	armed, found := p.Policy.NextEscalation(now, p.Attempts, p.Request)
 	// The halved-token retry is exempt from the attempt budget here as well as at the pick. See
 	// gateway-speculative-race.md, "Escalation".
-	if found && armed.Stage != StageReducedMaxTokens && len(p.Attempts) >= p.Budget {
+	if found && armed.Stage != StageResponseTimeout && len(p.Attempts) >= p.Budget {
 		return ArmedEscalation{}, false
 	}
 	return armed, found
@@ -282,21 +282,21 @@ type raceCoordinator struct {
 	scratch  []EscalationAttempt
 	claims   []crownRequest
 
-	winner             *liveAttempt
-	pending            int
-	reducedTokensSpent bool
-	pickCancel         context.CancelFunc
-	pickStarted        time.Time
-	pickReason         string
-	moreImmediate      int
-	excluded           []string
-	contextHint        uint64
-	clientGoneAt       time.Time
-	cancelled          bool
-	handedOff          bool
-	pocBypass          bool
-	balanceExhausted   bool
-	startErr           error
+	winner           *liveAttempt
+	pending          int
+	retrySpent       bool
+	pickCancel       context.CancelFunc
+	pickStarted      time.Time
+	pickReason       string
+	moreImmediate    int
+	excluded         []string
+	contextHint      uint64
+	clientGoneAt     time.Time
+	cancelled        bool
+	handedOff        bool
+	pocBypass        bool
+	balanceExhausted bool
+	startErr         error
 }
 
 // raceExit is why await stopped; only exitComplete means the race is over. See gateway-invariants.md,
@@ -697,18 +697,14 @@ func (c *raceCoordinator) escalate(armed ArmedEscalation) {
 	}
 	// Consumed before the pick is started, so a pick that finds no host cannot retry the same trigger.
 	c.attempts[confirmed.Attempt].escalated = true
-	c.startPickWithinBudget(confirmed.Stage.Reason(), params, confirmed.Stage != StageReducedMaxTokens)
+	c.startPickWithinBudget(confirmed.Stage.Reason(), params, confirmed.Stage != StageResponseTimeout)
 }
 
-// escalationParams hands the reduced-max-tokens stage a halved output-token budget and every other stage
-// the request's own params; the one-shot is spent whatever the hook answers. See
-// gateway-speculative-race.md, "Escalation".
 func (c *raceCoordinator) escalationParams(stage EscalationStage) (any, bool) {
-	if stage != StageReducedMaxTokens {
-		return c.request.Params, true
+	if stage == StageResponseTimeout {
+		c.retrySpent = true
 	}
-	c.reducedTokensSpent = true
-	return c.request.ReduceMaxTokens(c.request.Params)
+	return c.request.Params, true
 }
 
 func (c *raceCoordinator) markStalls() {
@@ -971,10 +967,10 @@ func (c *raceCoordinator) plan() deadlinePlan {
 
 func (c *raceCoordinator) escalationRequest() EscalationRequest {
 	return EscalationRequest{
-		InputTokens:               c.request.InputTokens,
-		OutputTokens:              c.request.OutputTokens,
-		Stream:                    c.request.Stream,
-		ReducedTokensStillOffered: c.request.ReduceMaxTokens != nil && !c.reducedTokensSpent,
+		InputTokens:       c.request.InputTokens,
+		OutputTokens:      c.request.OutputTokens,
+		Stream:            c.request.Stream,
+		RetryStillOffered: !c.retrySpent,
 	}
 }
 
