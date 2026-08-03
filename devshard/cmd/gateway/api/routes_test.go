@@ -307,29 +307,6 @@ func TestEstimatePromptTokensHasAFloorOfOne(t *testing.T) {
 	}
 }
 
-func TestRequiresToolsReadsTheRequestOnce(t *testing.T) {
-	testCases := []struct {
-		name string
-		body string
-		want bool
-	}{
-		{name: "no tools", body: `{"model":"qwen"}`},
-		{name: "empty tools", body: `{"tools":[]}`},
-		{name: "tools present", body: `{"tools":[{"type":"function"}]}`, want: true},
-		{name: "tool_choice none", body: `{"tool_choice":"none"}`},
-		{name: "tool_choice auto", body: `{"tool_choice":"auto"}`, want: true},
-		{name: "tool_choice object", body: `{"tool_choice":{"type":"function"}}`, want: true},
-		{name: "unparsable", body: `{`},
-	}
-	for _, testCase := range testCases {
-		t.Run(testCase.name, func(t *testing.T) {
-			if got := requiresTools([]byte(testCase.body)); got != testCase.want {
-				t.Fatalf("got %v, want %v", got, testCase.want)
-			}
-		})
-	}
-}
-
 func TestALiveStreamCarriesTheEscrowHeader(t *testing.T) {
 	live := newHarness(t)
 	live.inference.chunks = []string{

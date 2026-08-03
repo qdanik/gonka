@@ -91,6 +91,7 @@ type Request struct {
 	Model         string
 	Escrow        string
 	InputTokens   uint64
+	OutputTokens  uint64
 	Stream        bool
 	RequiresTools bool
 	ContextHint   uint64
@@ -339,7 +340,7 @@ func (o RaceOutcome) failure() error {
 
 func (o RaceOutcome) winnerStreamed() bool {
 	for _, attempt := range o.Attempts {
-		if attempt.Nonce == o.WinnerNonce && o.WinnerNonce != 0 && attempt.ContentChunks > 0 {
+		if o.IsWinner(attempt) && attempt.ContentChunks > 0 {
 			return true
 		}
 	}
@@ -358,7 +359,7 @@ func (o RaceOutcome) hostError() *HostApplicationError {
 		if found == nil {
 			found = attempt
 		}
-		if o.WinnerNonce != 0 && attempt.Nonce == o.WinnerNonce {
+		if o.IsWinner(*attempt) {
 			found = attempt
 			break
 		}

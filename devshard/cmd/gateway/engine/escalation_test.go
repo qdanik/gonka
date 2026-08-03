@@ -11,9 +11,9 @@ var (
 	raceStart    = time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC)
 	testPolicy   = EscalationPolicyFromConfig(config.Defaults().Engine)
 	streaming    = EscalationRequest{InputTokens: 1_000, Stream: true}
-	nonStreaming = EscalationRequest{InputTokens: 1_000, Stream: false}
+	nonStreaming = EscalationRequest{InputTokens: 1_000, OutputTokens: 2_000, Stream: false}
 
-	nonStreamingWithReducedTokens = EscalationRequest{InputTokens: 1_000, Stream: false, ReducedTokensStillOffered: true}
+	nonStreamingWithReducedTokens = EscalationRequest{InputTokens: 1_000, OutputTokens: 2_000, Stream: false, ReducedTokensStillOffered: true}
 )
 
 func dispatched(offset time.Duration) EscalationAttempt {
@@ -22,22 +22,26 @@ func dispatched(offset time.Duration) EscalationAttempt {
 
 func TestEscalationPolicyFromConfigConvertsEveryTunable(t *testing.T) {
 	policy := EscalationPolicyFromConfig(config.Engine{
-		ReceiptTimeoutMS:           1_500,
-		FirstTokenFloorMS:          250,
-		InterChunkStallMS:          7_000,
-		LoserGraceMS:               90_000,
-		NonStreamResponseFloorMS:   11_000,
-		PerInputTokenResponseLagMS: 13,
-		MaxSpeculativeAttempts:     4,
+		ReceiptTimeoutMS:            1_500,
+		FirstTokenFloorMS:           250,
+		FirstTokenCeilingMS:         70_000,
+		InterChunkStallMS:           7_000,
+		LoserGraceMS:                90_000,
+		NonStreamResponseFloorMS:    11_000,
+		NonStreamResponseCeilingMS:  90_000,
+		PerOutputTokenResponseLagMS: 13,
+		MaxSpeculativeAttempts:      4,
 	})
 	want := EscalationPolicy{
-		ReceiptTimeout:           1_500 * time.Millisecond,
-		FirstTokenFloor:          250 * time.Millisecond,
-		InterChunkStall:          7 * time.Second,
-		LoserGrace:               90 * time.Second,
-		NonStreamResponseFloor:   11 * time.Second,
-		PerInputTokenResponseLag: 13 * time.Millisecond,
-		MaxSpeculativeAttempts:   4,
+		ReceiptTimeout:            1_500 * time.Millisecond,
+		FirstTokenFloor:           250 * time.Millisecond,
+		FirstTokenCeiling:         70 * time.Second,
+		InterChunkStall:           7 * time.Second,
+		LoserGrace:                90 * time.Second,
+		NonStreamResponseFloor:    11 * time.Second,
+		NonStreamResponseCeiling:  90 * time.Second,
+		PerOutputTokenResponseLag: 13 * time.Millisecond,
+		MaxSpeculativeAttempts:    4,
 	}
 	if policy != want {
 		t.Fatalf("EscalationPolicyFromConfig = %+v, want %+v", policy, want)
@@ -55,7 +59,7 @@ func TestDecideStartsOneAttemptUnlessThePrimaryIsDistrusted(t *testing.T) {
 		{
 			name:   "healthy primary starts alone and waits for the ladder",
 			budget: 4,
-			want:   StartPlan{ImmediateAttempts: 1, Reason: StartReceiptTimeout},
+			want:   StartPlan{ImmediateAttempts: 1, Reason: StartPrimary},
 		},
 		{
 			name:              "suspicious primary starts a second attempt at once",
@@ -67,7 +71,7 @@ func TestDecideStartsOneAttemptUnlessThePrimaryIsDistrusted(t *testing.T) {
 			name:              "suspicious primary with no budget for a second attempt still waits",
 			budget:            1,
 			primarySuspicious: true,
-			want:              StartPlan{ImmediateAttempts: 1, Reason: StartReceiptTimeout},
+			want:              StartPlan{ImmediateAttempts: 1, Reason: StartPrimary},
 		},
 		{
 			name:            "degraded primary starts a second attempt at once",
@@ -79,7 +83,7 @@ func TestDecideStartsOneAttemptUnlessThePrimaryIsDistrusted(t *testing.T) {
 			name:            "degraded primary with no budget for a second attempt still waits",
 			budget:          1,
 			primaryDegraded: true,
-			want:            StartPlan{ImmediateAttempts: 1, Reason: StartReceiptTimeout},
+			want:            StartPlan{ImmediateAttempts: 1, Reason: StartPrimary},
 		},
 		{
 			name:              "a primary that is both reports the crown denial it was pinned for",
@@ -206,7 +210,7 @@ func TestLadderRuleInIsolation(t *testing.T) {
 			attempt:      receiptedNoToken,
 			request:      nonStreamingWithReducedTokens,
 			wantStage:    StageReducedMaxTokens,
-			wantDeadline: raceStart.Add(20 * time.Second),
+			wantDeadline: raceStart.Add(40 * time.Second),
 		},
 		{
 			name:      "rule 8: an answer that has started arriving is owed no shorter retry",
@@ -221,11 +225,13 @@ func TestLadderRuleInIsolation(t *testing.T) {
 			wantStage: StageNone,
 		},
 		{
+			// The curve puts this at 1.7305s, only 0.73s after the receipt landed; the floor is what the
+			// host is owed from the moment it acknowledged, so the deadline moves out to 2s.
 			name:         "rule 10: a receipted streaming attempt waits the first-token deadline",
 			attempt:      receiptedNoToken,
 			request:      streaming,
 			wantStage:    StageFirstToken,
-			wantDeadline: raceStart.Add(1_730_500 * time.Microsecond),
+			wantDeadline: raceStart.Add(2 * time.Second),
 		},
 	}
 	for _, testCase := range testCases {
@@ -282,7 +288,9 @@ func TestFirstTokenTimeoutHoldsTheFloorAndGrowsWithInput(t *testing.T) {
 		{"curve just over the floor", floored, 44_001, 3_988_074 * time.Microsecond},
 		{"empty prompt sits on the curve", testPolicy, 0, 1_700 * time.Millisecond},
 		{"linear term grows the wait", testPolicy, 1_000, 1_730_500 * time.Microsecond},
-		{"quadratic term dominates at a million tokens", testPolicy, 1_000_000, 531_700 * time.Millisecond},
+		// The curve reaches 8m51s at a million tokens -- past the streaming backstop that cancels the
+		// attempt, so an uncapped rung would never fire on a body the ingest limit still admits.
+		{"a prompt no retry could beat stops at the ceiling", testPolicy, 1_000_000, 60 * time.Second},
 	}
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -293,24 +301,47 @@ func TestFirstTokenTimeoutHoldsTheFloorAndGrowsWithInput(t *testing.T) {
 	}
 }
 
-func TestNonStreamResponseTimeoutHoldsTheFloorAndGrowsWithInput(t *testing.T) {
+func TestNonStreamResponseTimeoutTracksTheOutputBudget(t *testing.T) {
+	uncapped := EscalationPolicy{NonStreamResponseFloor: 7 * time.Second, PerOutputTokenResponseLag: time.Millisecond}
 	testCases := []struct {
-		name        string
-		policy      EscalationPolicy
-		inputTokens uint64
-		want        time.Duration
+		name          string
+		policy        EscalationPolicy
+		outputTokens  uint64
+		want          time.Duration
+		worthRetrying bool
 	}{
-		{"a short prompt sits on the floor", testPolicy, 100, 20 * time.Second},
-		{"exactly on the floor", testPolicy, 1_000, 20 * time.Second},
-		{"a large prompt grows past the floor", testPolicy, 30_000, 600 * time.Second},
-		{"a zero lag leaves the floor alone", EscalationPolicy{NonStreamResponseFloor: 7 * time.Second}, 1_000_000, 7 * time.Second},
+		{"a small budget sits on the floor", testPolicy, 100, 20 * time.Second, true},
+		{"exactly on the floor", testPolicy, 1_000, 20 * time.Second, true},
+		{"a larger budget grows past the floor", testPolicy, 2_000, 40 * time.Second, true},
+		{"a budget due after the ceiling is not retried at all", testPolicy, 3_072, 0, false},
+		{"a huge budget is not retried either", testPolicy, 30_000, 0, false},
+		{"a zero ceiling never withholds the retry", uncapped, 1_000_000, 1_000 * time.Second, true},
+		{"a zero lag leaves the floor alone", EscalationPolicy{NonStreamResponseFloor: 7 * time.Second}, 1_000_000, 7 * time.Second, true},
 	}
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
-			if got := testCase.policy.nonStreamResponseTimeout(testCase.inputTokens); got != testCase.want {
-				t.Fatalf("nonStreamResponseTimeout(%d) = %v, want %v", testCase.inputTokens, got, testCase.want)
+			got, worthRetrying := testCase.policy.nonStreamResponseTimeout(testCase.outputTokens)
+			if got != testCase.want || worthRetrying != testCase.worthRetrying {
+				t.Fatalf("nonStreamResponseTimeout(%d) = (%v, %v), want (%v, %v)",
+					testCase.outputTokens, got, worthRetrying, testCase.want, testCase.worthRetrying)
 			}
 		})
+	}
+}
+
+// The prompt used to set this deadline, which put a 6k-token request's only retry two minutes out --
+// past the point a client waits. Prefill is the receipt timeout's job; this stage waits on the answer.
+func TestNonStreamRetryDeadlineIgnoresPromptSize(t *testing.T) {
+	receipted := EscalationAttempt{SendTime: raceStart, ReceiptTime: raceStart.Add(time.Second)}
+	hugePrompt := EscalationRequest{InputTokens: 6_000, OutputTokens: 512, Stream: false, ReducedTokensStillOffered: true}
+
+	armed, ok := testPolicy.triggerFor(receipted, hugePrompt, raceStart)
+
+	if !ok || armed.Stage != StageReducedMaxTokens {
+		t.Fatalf("triggerFor = (%q, %v), want the halved retry armed", armed.Stage, ok)
+	}
+	if want := raceStart.Add(20 * time.Second); !armed.Deadline.Equal(want) {
+		t.Fatalf("deadline = %v, want %v -- the prompt must not move it", armed.Deadline, want)
 	}
 }
 
@@ -453,5 +484,38 @@ func TestStageReasonLabelsEveryTrigger(t *testing.T) {
 				t.Fatalf("%q.Reason() = %q, want %q", testCase.stage, got, testCase.want)
 			}
 		})
+	}
+}
+
+// The ceiling used to cut the deadline below the budget's own expected time, so a host still on
+// schedule was retried at half the tokens and the client was served the halved answer.
+func TestAHostStillOnScheduleIsNotRetried(t *testing.T) {
+	receipted := EscalationAttempt{SendTime: raceStart, ReceiptTime: raceStart.Add(time.Second)}
+	dueAfterTheCeiling := EscalationRequest{OutputTokens: 3_072, Stream: false, ReducedTokensStillOffered: true}
+
+	if _, armed := testPolicy.triggerFor(receipted, dueAfterTheCeiling, raceStart); armed {
+		t.Fatal("triggerFor armed a retry for a budget the host is still within its own time for")
+	}
+
+	dueBeforeTheCeiling := EscalationRequest{OutputTokens: 2_000, Stream: false, ReducedTokensStillOffered: true}
+	armed, ok := testPolicy.triggerFor(receipted, dueBeforeTheCeiling, raceStart)
+	if !ok || !armed.Deadline.Equal(raceStart.Add(40*time.Second)) {
+		t.Fatalf("triggerFor = (%v, %v), want the retry armed at 40s", armed.Deadline, ok)
+	}
+}
+
+// Both rungs measure from dispatch, and the receipt allowance is the larger of the two. A receipt that
+// used more than the first-token curve allows left the next rung already past due, so the host was
+// hedged the instant it acknowledged the request -- with no time to answer it.
+func TestAReceiptAlwaysBuysItsHostFirstTokenGrace(t *testing.T) {
+	slowReceipt := EscalationAttempt{SendTime: raceStart, ReceiptTime: raceStart.Add(4 * time.Second)}
+
+	armed, ok := testPolicy.triggerFor(slowReceipt, streaming, raceStart.Add(4*time.Second))
+
+	if !ok || armed.Stage != StageFirstToken {
+		t.Fatalf("triggerFor = (%q, %v), want the first-token rung", armed.Stage, ok)
+	}
+	if !armed.Deadline.After(raceStart.Add(4 * time.Second)) {
+		t.Fatalf("deadline = %v, want it after the receipt rather than already due", armed.Deadline)
 	}
 }

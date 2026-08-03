@@ -46,9 +46,6 @@ var (
 		return fields
 	}()
 
-	// unicodeEscape is the only escape that can encode a letter of a field name.
-	unicodeEscape = []byte(`\u`)
-
 	// nonCacheableErrorMarkers identify transient, environmental, or model-availability failures
 	// excluded from caching regardless of which of message/type/code carries them.
 	nonCacheableErrorMarkers = []string{

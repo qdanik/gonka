@@ -273,6 +273,7 @@ func FormatTime(value time.Time) string {
 	return value.UTC().Format(storedTimeLayout)
 }
 
+// parseTime is the only reader of what FormatTime writes, the empty zero timestamp included.
 func parseTime(raw string) (time.Time, error) {
 	if raw == "" {
 		return time.Time{}, nil

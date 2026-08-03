@@ -55,7 +55,7 @@ func (s *Store) LoadCommitments(ctx context.Context) ([]Commitment, error) {
 			&c.Epoch, &c.BlockHeight, &createdAt); err != nil {
 			return nil, fmt.Errorf("scanning commitment row: %w", err)
 		}
-		parsedCreatedAt, err := time.Parse(time.RFC3339Nano, createdAt)
+		parsedCreatedAt, err := parseTime(createdAt)
 		if err != nil {
 			return nil, fmt.Errorf("parsing commitment created_at %q: %w", createdAt, err)
 		}

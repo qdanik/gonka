@@ -1794,3 +1794,22 @@ func TestABackstopCancelAfterTheClientLeftLeavesHostsExempt(t *testing.T) {
 		t.Fatalf("terminal = %v, want %v: the client left, the hosts did not fail", got, TerminalClientCancelled)
 	}
 }
+
+// TerminalStalled is assigned in one place, inside the outcome assembly, so a log line that reads the
+// attempt goroutine's own terminal can never show it: a host that hangs for the whole backstop reads as
+// an ordinary cancelled loser while the metric, the limiter and the sample ladder all call it stalled.
+func TestRacedTerminalPromotesAStalledHostForEveryReader(t *testing.T) {
+	t.Parallel()
+	coordinator := &raceCoordinator{}
+	attempt := &liveAttempt{stalled: true}
+	hung := AttemptOutcome{Terminal: TerminalClientCancelled, ContentChunks: 3}
+
+	if got := coordinator.racedTerminal(attempt, hung); got != TerminalStalled {
+		t.Fatalf("racedTerminal = %v, want stalled -- the log must name what the ladders name", got)
+	}
+
+	cancelled := AttemptOutcome{Terminal: TerminalClientCancelled}
+	if got := coordinator.racedTerminal(&liveAttempt{}, cancelled); got != TerminalClientCancelled {
+		t.Fatalf("racedTerminal = %v, want the cancellation left alone", got)
+	}
+}

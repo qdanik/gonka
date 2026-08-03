@@ -14,8 +14,6 @@ import (
 	"devshard/logging"
 	"devshard/types"
 	"devshard/user"
-
-	json "github.com/goccy/go-json"
 )
 
 // otherRouteLabel is the single label every unmatched path folds into. See gateway-operations.md,
@@ -475,13 +473,15 @@ func authorizeModel(configured config.Limits, model string, identity credentials
 // response apart from one worth replaying.
 func (s *Server) race(w http.ResponseWriter, r *http.Request, requestID string, normalized filters.Result, inputTokens uint64, escrowPin string) (engine.RaceOutcome, error) {
 	client := newClientStream(w, requestID, normalized.Stream, normalized.Logprobs)
+	outputTokens := outputTokenBudget(normalized)
 	outcome, err := s.inference.Run(r.Context(), engine.Request{
 		RequestID:     requestID,
 		Model:         normalized.Model,
 		Escrow:        escrowPin,
 		InputTokens:   inputTokens,
+		OutputTokens:  outputTokens,
 		Stream:        normalized.Stream,
-		RequiresTools: requiresTools(normalized.Body),
+		RequiresTools: normalized.RequiresTools,
 		OnEscrow:      func(escrowID string) { client.Header().Set(EscrowHeader, escrowID) },
 
 		ReduceMaxTokens: reduceMaxTokens,
@@ -489,7 +489,7 @@ func (s *Server) race(w http.ResponseWriter, r *http.Request, requestID string, 
 			Model:       normalized.Model,
 			Prompt:      normalized.Body,
 			InputLength: uint64(len(normalized.Body)),
-			MaxTokens:   outputTokenBudget(normalized),
+			MaxTokens:   outputTokens,
 			StartedAt:   s.now().Unix(),
 			Stream:      normalized.Stream,
 		},
@@ -517,6 +517,7 @@ func (s *Server) race(w http.ResponseWriter, r *http.Request, requestID string, 
 // logRequestFinished answers the one question a finished request can no longer be asked: how much
 // reached the client and whether the terminator went with it. A delivery error is the difference
 // between a reply the client read and one it is still waiting out its own timeout for.
+// Input tokens ride along because every escalation deadline is computed from them.
 func logRequestFinished(requestID string, normalized filters.Result, outcome engine.RaceOutcome, verdict string, stream *clientStream, raceErr, deliverErr error) {
 	written, terminated := stream.delivered()
 	fields := []any{
@@ -524,6 +525,7 @@ func logRequestFinished(requestID string, normalized filters.Result, outcome eng
 		"model", normalized.Model,
 		"escrow", outcome.EscrowID,
 		"stream", normalized.Stream,
+		"input_tokens", outcome.InputTokens,
 		"outcome", verdict,
 		"bytes", written,
 		"terminated", terminated,
@@ -571,25 +573,4 @@ func outputTokenBudget(normalized filters.Result) uint64 {
 		return normalized.MaxTokens
 	}
 	return normalized.MaxCompletionTokens
-}
-
-func requiresTools(body []byte) bool {
-	var request struct {
-		Tools      []json.RawMessage `json:"tools"`
-		ToolChoice *json.RawMessage  `json:"tool_choice"`
-	}
-	if err := json.Unmarshal(body, &request); err != nil {
-		return false
-	}
-	if len(request.Tools) > 0 {
-		return true
-	}
-	if request.ToolChoice == nil {
-		return false
-	}
-	var choice string
-	if err := json.Unmarshal(*request.ToolChoice, &choice); err == nil {
-		return choice != "none"
-	}
-	return true
 }

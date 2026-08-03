@@ -34,22 +34,24 @@ type LimitsSources struct {
 type LimitsCollector struct {
 	sources LimitsSources
 
-	inflightRequests           *prometheus.Desc
-	inflightInputTokens        *prometheus.Desc
-	effectiveMaxConcurrent     *prometheus.Desc
-	effectiveMaxTokens         *prometheus.Desc
-	inflightRequestsByModel    *prometheus.Desc
-	inflightInputTokensByModel *prometheus.Desc
-	queueDepth                 *prometheus.Desc
-	capacityScale              *prometheus.Desc
-	capacityTotalWeight        *prometheus.Desc
-	capacityBaselineWeight     *prometheus.Desc
-	capacityWeightsUnobserved  *prometheus.Desc
-	participantsTracked        *prometheus.Desc
-	participantsExhausted      *prometheus.Desc
-	windowSize                 *prometheus.Desc
-	windowInflight             *prometheus.Desc
-	breakerState               *prometheus.Desc
+	inflightRequests             *prometheus.Desc
+	inflightInputTokens          *prometheus.Desc
+	effectiveMaxConcurrent       *prometheus.Desc
+	effectiveMaxTokens           *prometheus.Desc
+	enforcedMaxConcurrentByModel *prometheus.Desc
+	enforcedMaxTokensByModel     *prometheus.Desc
+	inflightRequestsByModel      *prometheus.Desc
+	inflightInputTokensByModel   *prometheus.Desc
+	queueDepth                   *prometheus.Desc
+	capacityScale                *prometheus.Desc
+	capacityTotalWeight          *prometheus.Desc
+	capacityBaselineWeight       *prometheus.Desc
+	capacityWeightsUnobserved    *prometheus.Desc
+	participantsTracked          *prometheus.Desc
+	participantsExhausted        *prometheus.Desc
+	windowSize                   *prometheus.Desc
+	windowInflight               *prometheus.Desc
+	breakerState                 *prometheus.Desc
 }
 
 func NewLimitsCollector(sources LimitsSources) *LimitsCollector {
@@ -57,8 +59,11 @@ func NewLimitsCollector(sources LimitsSources) *LimitsCollector {
 		sources:                sources,
 		inflightRequests:       gaugeDesc("devshard_gateway_inflight_requests", "Current in-flight requests tracked by the gateway limiter."),
 		inflightInputTokens:    gaugeDesc("devshard_gateway_inflight_input_tokens", "Current in-flight input tokens tracked by the gateway limiter."),
-		effectiveMaxConcurrent: gaugeDesc("devshard_gateway_effective_max_concurrent_requests", "Concurrent-request cap currently enforced after capacity scaling."),
-		effectiveMaxTokens:     gaugeDesc("devshard_gateway_effective_max_input_tokens_in_flight", "Input-token cap currently enforced after capacity scaling."),
+		effectiveMaxConcurrent: gaugeDesc("devshard_gateway_effective_max_concurrent_requests", "Configured concurrent-request cap, before per-model overrides and capacity scaling."),
+		effectiveMaxTokens:     gaugeDesc("devshard_gateway_effective_max_input_tokens_in_flight", "Configured input-token cap, before per-model overrides and capacity scaling."),
+
+		enforcedMaxConcurrentByModel: gaugeDesc("devshard_gateway_enforced_max_concurrent_requests_by_model", "Concurrent-request cap a model's requests are judged against, after its overrides and capacity scaling.", "model"),
+		enforcedMaxTokensByModel:     gaugeDesc("devshard_gateway_enforced_max_input_tokens_by_model", "Input-token cap a model's requests are judged against, after its overrides and capacity scaling.", "model"),
 
 		inflightRequestsByModel:    gaugeDesc("devshard_gateway_inflight_requests_by_model", "Current in-flight requests per model.", "model"),
 		inflightInputTokensByModel: gaugeDesc("devshard_gateway_inflight_input_tokens_by_model", "Current in-flight input tokens per model.", "model"),
@@ -80,6 +85,7 @@ func (c *LimitsCollector) Describe(ch chan<- *prometheus.Desc) {
 	for _, desc := range []*prometheus.Desc{
 		c.inflightRequests, c.inflightInputTokens, c.effectiveMaxConcurrent, c.effectiveMaxTokens,
 		c.inflightRequestsByModel, c.inflightInputTokensByModel, c.queueDepth,
+		c.enforcedMaxConcurrentByModel, c.enforcedMaxTokensByModel,
 		c.capacityScale, c.capacityTotalWeight, c.capacityBaselineWeight, c.capacityWeightsUnobserved,
 		c.participantsTracked, c.participantsExhausted, c.windowSize, c.windowInflight, c.breakerState,
 	} {
@@ -91,14 +97,17 @@ func (c *LimitsCollector) Collect(ch chan<- prometheus.Metric) {
 	snapshot := c.sources.Limiter.Snapshot()
 	gauge(ch, c.inflightRequests, float64(snapshot.Total.Requests))
 	gauge(ch, c.inflightInputTokens, float64(snapshot.Total.InputTokens))
-	gauge(ch, c.effectiveMaxConcurrent, float64(snapshot.EffectiveMaxConcurrentRequests))
-	gauge(ch, c.effectiveMaxTokens, float64(snapshot.EffectiveMaxInputTokensInFlight))
+	gauge(ch, c.effectiveMaxConcurrent, float64(snapshot.ConfiguredMaxConcurrentRequests))
+	gauge(ch, c.effectiveMaxTokens, float64(snapshot.ConfiguredMaxInputTokensInFlight))
 
 	for _, model := range c.reportedModels(snapshot) {
 		inFlight := snapshot.ByModel[model]
 		gauge(ch, c.inflightRequestsByModel, float64(inFlight.Requests), model)
 		gauge(ch, c.inflightInputTokensByModel, float64(inFlight.InputTokens), model)
 		gauge(ch, c.queueDepth, float64(inFlight.QueueDepth), model)
+		enforced := snapshot.EnforcedByModel[model]
+		gauge(ch, c.enforcedMaxConcurrentByModel, float64(enforced.MaxConcurrentRequests), model)
+		gauge(ch, c.enforcedMaxTokensByModel, float64(enforced.MaxInputTokensInFlight), model)
 		gauge(ch, c.capacityScale, c.sources.Capacity.ScaleFactor(model), model)
 		current, baseline := c.sources.Capacity.Weights(model)
 		gauge(ch, c.capacityTotalWeight, current, model)

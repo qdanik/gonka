@@ -21,6 +21,9 @@ const (
 	VisibilitySuppressedLoser   = "suppressed_loser"
 	VisibilityFailedNotFinished = "failed_not_finished"
 
+	// reasonCrownDenied names an answer that arrived complete and was given to nobody.
+	reasonCrownDenied = "crown_denied"
+
 	longResponseExemption = 280 * time.Second
 )
 
@@ -183,6 +186,24 @@ func (t Terminal) verdict() (limits.Verdict, bool) {
 	return limits.ModelOutcome, false
 }
 
+// String names the terminal. reason() answers a different question -- why an attempt failed -- and is
+// empty for the two outcomes that are not failures, which failureReason relies on to fall through.
+// The failure names come from reason() rather than a second list, so the two cannot drift apart.
+func (t Terminal) String() string {
+	switch t {
+	case TerminalWon:
+		return "won"
+	case TerminalLost:
+		return "lost"
+	case TerminalUnclassified:
+		return "unclassified"
+	}
+	if reason := t.reason(); reason != "" {
+		return reason
+	}
+	return "unnamed"
+}
+
 func (t Terminal) reason() string {
 	switch t {
 	case TerminalWon, TerminalLost:
@@ -329,13 +350,17 @@ func (o RaceOutcome) Labels(a AttemptOutcome) AttemptLabels {
 	if served {
 		labels.Outcome = AttemptOutcomeSuccess
 		labels.Reason = ""
+		// Blanking this reason rendered the panel's own headline case as "unknown".
+		if labels.Visibility == VisibilityNoWinner {
+			labels.Reason = reasonCrownDenied
+		}
 	}
 	return labels
 }
 
 func (o RaceOutcome) visibility(a AttemptOutcome, served bool) string {
 	switch {
-	case served && o.WinnerNonce != 0 && a.Nonce == o.WinnerNonce:
+	case served && o.IsWinner(a):
 		return VisibilityWinner
 	case a.Suspicious:
 		return VisibilityNoWinner
@@ -343,6 +368,11 @@ func (o RaceOutcome) visibility(a AttemptOutcome, served bool) string {
 		return VisibilitySuppressedLoser
 	}
 	return VisibilityFailedNotFinished
+}
+
+// IsWinner is the one test for "this attempt is the answer the client got".
+func (o RaceOutcome) IsWinner(a AttemptOutcome) bool {
+	return o.WinnerNonce != 0 && a.Nonce == o.WinnerNonce
 }
 
 func (o RaceOutcome) failureReason(a AttemptOutcome) string {

@@ -50,6 +50,7 @@ type GatewayConfig struct {
 type modelCounter struct {
 	inFlight    int64
 	inputTokens int64
+	enforced    admission
 }
 
 // waiter is one blocked Acquire; reason is why it had to queue and is what a timed-out wait reports.
@@ -62,15 +63,14 @@ type waiter struct {
 	ready    chan struct{}
 }
 
-// GatewayLimiter is the gateway-wide FIFO admission limiter. enforced is the last admission it computed, so
-// a reader reports the cap in force rather than the configured one; before the first request they agree.
+// GatewayLimiter is the gateway-wide FIFO admission limiter. Each model records the admission it was
+// last judged against, because overrides and capacity weights make the cap a per-model answer.
 type GatewayLimiter struct {
-	mu       sync.Mutex
-	cfg      GatewayConfig
-	models   map[string]*modelCounter
-	total    modelCounter
-	queue    []*waiter
-	enforced admission
+	mu     sync.Mutex
+	cfg    GatewayConfig
+	models map[string]*modelCounter
+	total  modelCounter
+	queue  []*waiter
 }
 
 // InFlight is what one scope of the limiter currently holds.
@@ -80,19 +80,23 @@ type InFlight struct {
 	QueueDepth  int
 }
 
+// Enforced is the pair a model's requests are actually judged against, after its own overrides and its
+// own capacity weights. There is no gateway-wide answer: two models rarely share one cap.
+type Enforced struct {
+	MaxConcurrentRequests  int64
+	MaxInputTokensInFlight int64
+}
+
 type LimiterSnapshot struct {
-	Total                           InFlight
-	ByModel                         map[string]InFlight
-	EffectiveMaxConcurrentRequests  int64
-	EffectiveMaxInputTokensInFlight int64
+	Total                            InFlight
+	ByModel                          map[string]InFlight
+	EnforcedByModel                  map[string]Enforced
+	ConfiguredMaxConcurrentRequests  int64
+	ConfiguredMaxInputTokensInFlight int64
 }
 
 func NewGatewayLimiter(cfg GatewayConfig) *GatewayLimiter {
-	return &GatewayLimiter{
-		cfg:      cfg,
-		models:   map[string]*modelCounter{},
-		enforced: admission{concurrencyLimit: cfg.MaxConcurrent, inputTokenLimit: cfg.MaxInputTokens},
-	}
+	return &GatewayLimiter{cfg: cfg, models: map[string]*modelCounter{}}
 }
 
 // Reconfigure replaces the caps every later admission is judged against and sweeps the queue.
@@ -101,7 +105,6 @@ func (l *GatewayLimiter) Reconfigure(cfg GatewayConfig) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.cfg = cfg
-	l.enforced = admission{concurrencyLimit: cfg.MaxConcurrent, inputTokenLimit: cfg.MaxInputTokens}
 	l.promoteLocked()
 }
 
@@ -109,13 +112,18 @@ func (l *GatewayLimiter) Snapshot() LimiterSnapshot {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	snapshot := LimiterSnapshot{
-		Total:                           InFlight{Requests: l.total.inFlight, InputTokens: l.total.inputTokens},
-		ByModel:                         make(map[string]InFlight, len(l.models)),
-		EffectiveMaxConcurrentRequests:  l.enforced.concurrencyLimit,
-		EffectiveMaxInputTokensInFlight: l.enforced.inputTokenLimit,
+		Total:                            InFlight{Requests: l.total.inFlight, InputTokens: l.total.inputTokens},
+		ByModel:                          make(map[string]InFlight, len(l.models)),
+		EnforcedByModel:                  make(map[string]Enforced, len(l.models)),
+		ConfiguredMaxConcurrentRequests:  l.cfg.MaxConcurrent,
+		ConfiguredMaxInputTokensInFlight: l.cfg.MaxInputTokens,
 	}
 	for model, counter := range l.models {
 		snapshot.ByModel[model] = InFlight{Requests: counter.inFlight, InputTokens: counter.inputTokens}
+		snapshot.EnforcedByModel[model] = Enforced{
+			MaxConcurrentRequests:  counter.enforced.concurrencyLimit,
+			MaxInputTokensInFlight: counter.enforced.inputTokenLimit,
+		}
 	}
 	for _, blocked := range l.queue {
 		queued := snapshot.ByModel[blocked.model]
@@ -138,7 +146,7 @@ func (l *GatewayLimiter) AcquireForModel(ctx context.Context, model string, inpu
 	l.mu.Lock()
 	acquireWait := l.cfg.AcquireWait
 	admitted := l.admissionFor(model, inputTokens, capacity)
-	l.enforced = admitted
+	l.counterLocked(model).enforced = admitted
 	if reason := admitted.impossible(); reason != "" {
 		l.mu.Unlock()
 		return &RateLimitError{Reason: reason, RetryAfter: acquireWait}
@@ -197,7 +205,9 @@ func (l *GatewayLimiter) dequeue(w *waiter) bool {
 func (l *GatewayLimiter) promoteLocked() {
 	for i := 0; i < len(l.queue); {
 		waiting := l.queue[i]
-		if l.blockedReasonLocked(waiting.model, l.admissionFor(waiting.model, waiting.tokens, waiting.capacity)) != "" {
+		admitted := l.admissionFor(waiting.model, waiting.tokens, waiting.capacity)
+		l.counterLocked(waiting.model).enforced = admitted
+		if l.blockedReasonLocked(waiting.model, admitted) != "" {
 			i++
 			continue
 		}

@@ -146,13 +146,15 @@ type Perf struct {
 // group, and the backstops it does not carry are engine constants. See gateway-speculative-race.md,
 // "Tunables and backstops".
 type Engine struct {
-	ReceiptTimeoutMS           int64
-	FirstTokenFloorMS          int64
-	InterChunkStallMS          int64
-	LoserGraceMS               int64
-	NonStreamResponseFloorMS   int64
-	PerInputTokenResponseLagMS int64
-	MaxSpeculativeAttempts     int64
+	ReceiptTimeoutMS            int64
+	FirstTokenFloorMS           int64
+	FirstTokenCeilingMS         int64
+	InterChunkStallMS           int64
+	LoserGraceMS                int64
+	NonStreamResponseFloorMS    int64
+	NonStreamResponseCeilingMS  int64
+	PerOutputTokenResponseLagMS int64
+	MaxSpeculativeAttempts      int64
 }
 
 // Scheduler groups nonce-holding tuning. HoldGraceMS is how long a bound nonce waits for a co-arriving
@@ -279,13 +281,15 @@ func Defaults() Config {
 			HostStalenessSeconds:     3_600,
 		},
 		Engine: Engine{
-			ReceiptTimeoutMS:           5_000,
-			FirstTokenFloorMS:          1_000,
-			InterChunkStallMS:          30_000,
-			LoserGraceMS:               600_000,
-			NonStreamResponseFloorMS:   20_000,
-			PerInputTokenResponseLagMS: 20,
-			MaxSpeculativeAttempts:     0,
+			ReceiptTimeoutMS:            5_000,
+			FirstTokenFloorMS:           1_000,
+			FirstTokenCeilingMS:         60_000,
+			InterChunkStallMS:           30_000,
+			LoserGraceMS:                600_000,
+			NonStreamResponseFloorMS:    20_000,
+			NonStreamResponseCeilingMS:  45_000,
+			PerOutputTokenResponseLagMS: 20,
+			MaxSpeculativeAttempts:      0,
 		},
 		Scheduler: Scheduler{
 			HoldGraceMS: 200,
@@ -478,8 +482,16 @@ func (c *Config) Validate() error {
 	}
 	// A zero lag is the operator asking for the floor alone, which is a supported way to disable the
 	// prompt-size term without disabling the fallback.
-	if c.Engine.PerInputTokenResponseLagMS < 0 {
-		complain("engine_per_input_token_response_lag_ms: %d must be >= 0", c.Engine.PerInputTokenResponseLagMS)
+	if c.Engine.FirstTokenCeilingMS < c.Engine.FirstTokenFloorMS {
+		complain("engine_first_token_ceiling_ms: %d must be >= engine_first_token_floor_ms %d",
+			c.Engine.FirstTokenCeilingMS, c.Engine.FirstTokenFloorMS)
+	}
+	if c.Engine.NonStreamResponseCeilingMS < c.Engine.NonStreamResponseFloorMS {
+		complain("engine_non_stream_response_ceiling_ms: %d must be >= engine_non_stream_response_floor_ms %d",
+			c.Engine.NonStreamResponseCeilingMS, c.Engine.NonStreamResponseFloorMS)
+	}
+	if c.Engine.PerOutputTokenResponseLagMS < 0 {
+		complain("engine_per_output_token_response_lag_ms: %d must be >= 0", c.Engine.PerOutputTokenResponseLagMS)
 	}
 	if c.Engine.MaxSpeculativeAttempts < 0 {
 		complain("engine_max_speculative_attempts: %d must be >= 0 (0 = bounded only by the host group)", c.Engine.MaxSpeculativeAttempts)

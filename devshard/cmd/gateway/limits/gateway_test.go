@@ -98,8 +98,8 @@ func TestSnapshot_CountsAWaiterAgainstItsModelsQueue(t *testing.T) {
 	if got := snapshot.ByModel["modelA"]; got.Requests != 1 || got.InputTokens != 10 || got.QueueDepth != 1 {
 		t.Fatalf("ByModel[modelA] = %+v, want 1 request, 10 tokens, 1 queued", got)
 	}
-	if snapshot.EffectiveMaxConcurrentRequests != 1 || snapshot.EffectiveMaxInputTokensInFlight != 100 {
-		t.Fatalf("effective caps = %d/%d, want 1/100", snapshot.EffectiveMaxConcurrentRequests, snapshot.EffectiveMaxInputTokensInFlight)
+	if enforced := snapshot.EnforcedByModel["modelA"]; enforced.MaxConcurrentRequests != 1 || enforced.MaxInputTokensInFlight != 100 {
+		t.Fatalf("EnforcedByModel[modelA] = %+v, want 1/100", enforced)
 	}
 
 	limiter.ReleaseForModel("modelA", 10)
@@ -489,8 +489,8 @@ func TestReconfigureAppliesToTheNextAcquireAndReleasesTheQueue(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("a raised cap never reached the queue: the waiter is still blocked")
 	}
-	if got := limiter.Snapshot().EffectiveMaxConcurrentRequests; got != 2 {
-		t.Fatalf("EffectiveMaxConcurrentRequests = %d, want 2", got)
+	if got := limiter.Snapshot().EnforcedByModel["modelX"].MaxConcurrentRequests; got != 2 {
+		t.Fatalf("EnforcedByModel[modelX] concurrency = %d, want 2", got)
 	}
 
 	limiter.Reconfigure(GatewayConfig{MaxConcurrent: 1, AcquireWait: 0})

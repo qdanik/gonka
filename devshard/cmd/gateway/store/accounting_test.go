@@ -6,8 +6,6 @@ import (
 	"testing"
 	"time"
 
-	"go.uber.org/goleak"
-
 	"devshard/cmd/gateway/internal/leakcheck"
 )
 
@@ -26,14 +24,6 @@ func countAccountingRows(t *testing.T, testStore *Store) int64 {
 }
 
 func newTestClock(at time.Time) *testClock { return &testClock{current: at} }
-
-// verifyNoLeaks registers the leak check before any store cleanup, so cleanups run LIFO and the
-// database handles are closed before the goroutines are counted.
-func verifyNoLeaks(t *testing.T) {
-	t.Helper()
-	ignoreExisting := goleak.IgnoreCurrent()
-	t.Cleanup(func() { goleak.VerifyNone(t, ignoreExisting) })
-}
 
 func (c *testClock) Now() time.Time {
 	c.mu.Lock()

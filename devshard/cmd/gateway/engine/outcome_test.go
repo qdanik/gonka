@@ -458,7 +458,7 @@ func TestLabels(t *testing.T) {
 		}},
 		{"shadow-quarantined host another attempt served for", race(cleanAttempt()), suspicious, AttemptLabels{
 			Participant: testParticipant, Model: testModel, Role: "primary",
-			Outcome: "success", Visibility: "no_winner",
+			Outcome: "success", Visibility: "no_winner", Reason: reasonCrownDenied,
 		}},
 		{"shadow-quarantined host that served alone", race(suspiciousWinner), suspiciousWinner, AttemptLabels{
 			Participant: testParticipant, Model: testModel, Role: "primary",
@@ -583,5 +583,22 @@ func TestEveryRecoveredStatusRoundTripsThroughItsTerminal(t *testing.T) {
 		if recovered, ok := StatusFor(classified); !ok || recovered != status {
 			t.Errorf("StatusFor(%v) = %d/%v, want %d/true", classified, recovered, ok, status)
 		}
+	}
+}
+
+// The log field is called terminal, so it carries the terminal's name. reason() answers why an attempt
+// failed and is empty for the two outcomes that are not failures -- an empty log field reads as missing
+// data, and failureReason depends on that same emptiness to fall through.
+func TestEveryTerminalHasAName(t *testing.T) {
+	for terminal := TerminalUnclassified; terminal <= TerminalStalled; terminal++ {
+		if terminal.String() == "" {
+			t.Fatalf("terminal %d has no name", terminal)
+		}
+		if terminal.String() == "unnamed" {
+			t.Fatalf("terminal %d fell through to the placeholder, so a new terminal was added without one", terminal)
+		}
+	}
+	if TerminalWon.reason() != "" || TerminalLost.reason() != "" {
+		t.Fatal("a win or a loss reported a failure reason, which failureReason would report as the cause")
 	}
 }

@@ -178,7 +178,7 @@ func (o *PhaseObserver) refresh(ctx context.Context) {
 	} else {
 		snapshot.MaxNonce = previous.MaxNonce
 		if maxNonceErr != nil {
-			snapshot.LastError = fmt.Sprintf("fetch devshard escrow params: %v", maxNonceErr)
+			snapshot.LastError = joinSnapshotError(snapshot.LastError, fmt.Sprintf("fetch devshard escrow params: %v", maxNonceErr))
 		}
 	}
 
@@ -191,7 +191,7 @@ func (o *PhaseObserver) refresh(ctx context.Context) {
 	preservation, preservedNodes, preservationErr := o.resolvePreservation(ctx, epoch, blocked, reason)
 	if preservationErr != nil {
 		// Non-fatal: the preserved-set view falls back to the legacy rule for this poll.
-		snapshot.LastError = fmt.Sprintf("fetch preserved snapshot: %v", preservationErr)
+		snapshot.LastError = joinSnapshotError(snapshot.LastError, fmt.Sprintf("fetch preserved snapshot: %v", preservationErr))
 	}
 
 	participants, err := parseParticipants(participantsBody, preservation, preservedNodes)
@@ -233,7 +233,7 @@ func (o *PhaseObserver) publishWithPreviousParticipants(snapshot, previous Phase
 	snapshot.Preserved = previous.Preserved
 	snapshot.PreservedByModel = previous.PreservedByModel
 	snapshot.InferenceURLs = previous.InferenceURLs
-	snapshot.LastError = lastError
+	snapshot.LastError = joinSnapshotError(snapshot.LastError, lastError)
 	o.publish(snapshot)
 }
 
@@ -370,6 +370,18 @@ func (h *snapshotHealth) advance(lastError string) healthChange {
 	change := healthChange{degraded: failed && !h.degraded, recovered: !failed && h.degraded}
 	h.degraded = failed
 	return change
+}
+
+// joinSnapshotError keeps every failed read of one poll. Overwriting left the operator reading the last
+// failure only, so a frozen MaxNonce -- the ceiling nonces are issued against -- went unnamed.
+func joinSnapshotError(existing, added string) string {
+	switch {
+	case added == "":
+		return existing
+	case existing == "":
+		return added
+	}
+	return existing + "; " + added
 }
 
 // narrateHealth carries the cause the health gauge cannot: LastError names which of four reads failed.

@@ -128,3 +128,23 @@ func TestDeleteCommitmentAbsentIsNoOp(t *testing.T) {
 		t.Fatalf("DeleteCommitment(absent) = %v, want nil (idempotent no-op)", err)
 	}
 }
+
+// FormatTime renders the zero time as "", so a row with no created_at is something the writer can
+// produce. A raw time.Parse rejects it and fails the whole load, which took the reconcile pass with it
+// and made the manager's own zero-CreatedAt defence unreachable.
+func TestLoadCommitmentsAcceptsARowWithNoCreatedAt(t *testing.T) {
+	testStore := openTestStore(t)
+	ctx := context.Background()
+
+	if err := testStore.SaveCommitment(ctx, Commitment{TxHash: "tx-zero", Model: "model-a", Role: "regular"}); err != nil {
+		t.Fatalf("SaveCommitment(): %v", err)
+	}
+
+	loaded, err := testStore.LoadCommitments(ctx)
+	if err != nil {
+		t.Fatalf("LoadCommitments() = %v, want a zero created_at to load", err)
+	}
+	if len(loaded) != 1 || !loaded[0].CreatedAt.IsZero() {
+		t.Fatalf("loaded = %+v, want one row with a zero CreatedAt", loaded)
+	}
+}

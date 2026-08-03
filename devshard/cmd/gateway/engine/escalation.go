@@ -16,9 +16,15 @@ const (
 	// Admitting a very large prompt is itself work, so such a host gets twice as long to receipt.
 	receiptTimeoutDoubleAboveTokens = 100_000
 
+	// The measured first-token curve over prompt size: a fixed cost to start answering, a per-token cost
+	// to read the prompt, and a quadratic term that only matters on very large ones.
+	firstTokenBaseSeconds      = 1.7
+	firstTokenPerTokenSeconds  = 3e-5
+	firstTokenQuadraticSeconds = 5e-10
+
 	StartPrimarySuspicious = "primary_suspicious"
 	StartPrimaryDegraded   = "primary_degraded"
-	StartReceiptTimeout    = "receipt_timeout"
+	StartPrimary           = "primary"
 )
 
 // EscalationStage names the condition that earned an attempt one more attempt beside it.
@@ -51,24 +57,28 @@ func (s EscalationStage) Reason() string {
 
 // The ladder is pure over its arguments: no host performance, no phase snapshot, no clock of its own.
 type EscalationPolicy struct {
-	ReceiptTimeout           time.Duration
-	FirstTokenFloor          time.Duration
-	InterChunkStall          time.Duration
-	LoserGrace               time.Duration
-	NonStreamResponseFloor   time.Duration
-	PerInputTokenResponseLag time.Duration
-	MaxSpeculativeAttempts   int
+	ReceiptTimeout            time.Duration
+	FirstTokenFloor           time.Duration
+	FirstTokenCeiling         time.Duration
+	InterChunkStall           time.Duration
+	LoserGrace                time.Duration
+	NonStreamResponseFloor    time.Duration
+	NonStreamResponseCeiling  time.Duration
+	PerOutputTokenResponseLag time.Duration
+	MaxSpeculativeAttempts    int
 }
 
 func EscalationPolicyFromConfig(engine config.Engine) EscalationPolicy {
 	return EscalationPolicy{
-		ReceiptTimeout:           time.Duration(engine.ReceiptTimeoutMS) * time.Millisecond,
-		FirstTokenFloor:          time.Duration(engine.FirstTokenFloorMS) * time.Millisecond,
-		InterChunkStall:          time.Duration(engine.InterChunkStallMS) * time.Millisecond,
-		LoserGrace:               time.Duration(engine.LoserGraceMS) * time.Millisecond,
-		NonStreamResponseFloor:   time.Duration(engine.NonStreamResponseFloorMS) * time.Millisecond,
-		PerInputTokenResponseLag: time.Duration(engine.PerInputTokenResponseLagMS) * time.Millisecond,
-		MaxSpeculativeAttempts:   int(engine.MaxSpeculativeAttempts),
+		ReceiptTimeout:            time.Duration(engine.ReceiptTimeoutMS) * time.Millisecond,
+		FirstTokenFloor:           time.Duration(engine.FirstTokenFloorMS) * time.Millisecond,
+		FirstTokenCeiling:         time.Duration(engine.FirstTokenCeilingMS) * time.Millisecond,
+		InterChunkStall:           time.Duration(engine.InterChunkStallMS) * time.Millisecond,
+		LoserGrace:                time.Duration(engine.LoserGraceMS) * time.Millisecond,
+		NonStreamResponseFloor:    time.Duration(engine.NonStreamResponseFloorMS) * time.Millisecond,
+		NonStreamResponseCeiling:  time.Duration(engine.NonStreamResponseCeilingMS) * time.Millisecond,
+		PerOutputTokenResponseLag: time.Duration(engine.PerOutputTokenResponseLagMS) * time.Millisecond,
+		MaxSpeculativeAttempts:    int(engine.MaxSpeculativeAttempts),
 	}
 }
 
@@ -76,6 +86,7 @@ func EscalationPolicyFromConfig(engine config.Engine) EscalationPolicy {
 // the output tokens instead. See gateway-speculative-race.md, "Escalation".
 type EscalationRequest struct {
 	InputTokens               uint64
+	OutputTokens              uint64
 	Stream                    bool
 	ReducedTokensStillOffered bool
 }
@@ -125,7 +136,7 @@ func (p EscalationPolicy) Decide(budget int, primarySuspicious, primaryDegraded 
 	case primaryDegraded:
 		return StartPlan{ImmediateAttempts: 2, Reason: StartPrimaryDegraded}
 	}
-	return StartPlan{ImmediateAttempts: 1, Reason: StartReceiptTimeout}
+	return StartPlan{ImmediateAttempts: 1, Reason: StartPrimary}
 }
 
 // AttemptBudget caps how many attempts one race may hold; scarce nonces force a single attempt. See
@@ -188,15 +199,20 @@ func (p EscalationPolicy) triggerFor(attempt EscalationAttempt, request Escalati
 		deadline := attempt.SendTime.Add(p.receiptTimeout(request.InputTokens))
 		return ArmedEscalation{Stage: StageReceiptTimeout, Deadline: deadline}, true
 	case !request.Stream:
-		if !request.ReducedTokensStillOffered || !attempt.FirstContent.IsZero() {
+		wait, worthRetrying := p.nonStreamResponseTimeout(request.OutputTokens)
+		if !worthRetrying || !request.ReducedTokensStillOffered || !attempt.FirstContent.IsZero() {
 			return ArmedEscalation{}, false
 		}
-		deadline := attempt.SendTime.Add(p.nonStreamResponseTimeout(request.InputTokens))
-		return ArmedEscalation{Stage: StageReducedMaxTokens, Deadline: deadline}, true
+		return ArmedEscalation{Stage: StageReducedMaxTokens, Deadline: attempt.SendTime.Add(wait)}, true
 	case !attempt.FirstToken.IsZero():
 		return ArmedEscalation{}, false
 	}
+	// The curve is measured from dispatch, but a receipt that used more than the curve allows would leave
+	// the rung already due: the host owes a first token, not the time its receipt took.
 	deadline := attempt.SendTime.Add(p.firstTokenTimeout(request.InputTokens))
+	if graceFromReceipt := attempt.ReceiptTime.Add(p.FirstTokenFloor); graceFromReceipt.After(deadline) {
+		deadline = graceFromReceipt
+	}
 	return ArmedEscalation{Stage: StageFirstToken, Deadline: deadline}, true
 }
 
@@ -207,16 +223,27 @@ func (p EscalationPolicy) receiptTimeout(inputTokens uint64) time.Duration {
 	return p.ReceiptTimeout
 }
 
-// nonStreamResponseTimeout grows with input size and is floored so a short prompt is not retried early.
+// nonStreamResponseTimeout waits on the output budget, not the prompt, which the receipt timeout already
+// bounds. It reports false when the ceiling would fire before the budget is even due: cutting a host
+// short of its own expected time retries one that is on schedule and hands the client half an answer.
 // See gateway-speculative-race.md, "Escalation".
-func (p EscalationPolicy) nonStreamResponseTimeout(inputTokens uint64) time.Duration {
-	return max(p.NonStreamResponseFloor, time.Duration(inputTokens)*p.PerInputTokenResponseLag)
+func (p EscalationPolicy) nonStreamResponseTimeout(outputTokens uint64) (time.Duration, bool) {
+	expected := time.Duration(outputTokens) * p.PerOutputTokenResponseLag
+	if p.NonStreamResponseCeiling > 0 && expected > p.NonStreamResponseCeiling {
+		return 0, false
+	}
+	return max(p.NonStreamResponseFloor, expected), true
 }
 
-// firstTokenTimeout is the measured first-token fit over prompt size, with a configurable floor. See
+// firstTokenTimeout is the measured first-token fit over prompt size, floored and capped: the curve is
+// quadratic, and uncapped it outgrows the backstop that cancels the attempt. See
 // gateway-speculative-race.md, "Escalation".
 func (p EscalationPolicy) firstTokenTimeout(inputTokens uint64) time.Duration {
 	tokens := float64(inputTokens)
-	seconds := 1.7 + 0.00003*tokens + 0.0000000005*tokens*tokens
-	return max(p.FirstTokenFloor, time.Duration(seconds*float64(time.Second)))
+	seconds := firstTokenBaseSeconds + firstTokenPerTokenSeconds*tokens + firstTokenQuadraticSeconds*tokens*tokens
+	wait := max(p.FirstTokenFloor, time.Duration(seconds*float64(time.Second)))
+	if p.FirstTokenCeiling > 0 && wait > p.FirstTokenCeiling {
+		return p.FirstTokenCeiling
+	}
+	return wait
 }

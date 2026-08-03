@@ -52,7 +52,7 @@ func (s *Store) LoadRotationStatuses(ctx context.Context) ([]RotationStatus, err
 		if err := rows.Scan(&st.Model, &st.Role, &st.Stage, &st.Epoch, &st.Completed, &st.CreateError, &updatedAt); err != nil {
 			return nil, fmt.Errorf("scanning rotation status row: %w", err)
 		}
-		parsedUpdatedAt, err := time.Parse(time.RFC3339Nano, updatedAt)
+		parsedUpdatedAt, err := parseTime(updatedAt)
 		if err != nil {
 			return nil, fmt.Errorf("parsing rotation status updated_at %q: %w", updatedAt, err)
 		}

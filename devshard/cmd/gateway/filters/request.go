@@ -15,9 +15,9 @@ type Result struct {
 	Body                []byte
 	Model               string
 	Stream              bool
+	RequiresTools       bool
 	MaxTokens           uint64
 	MaxCompletionTokens uint64
-	N                   uint64
 	Logprobs            LogprobIntent
 }
 
