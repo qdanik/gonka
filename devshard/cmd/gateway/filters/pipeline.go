@@ -10,7 +10,7 @@ func runPipeline(document *Document, options Options) (Result, error) {
 	if err := rejectUnknownParameters(document); err != nil {
 		return Result{}, err
 	}
-	if err := applyStage(StagePreValidation, document, routedModel, profile, options.Admin); err != nil {
+	if err := applyStage(StagePreValidation, document, profile); err != nil {
 		return Result{}, err
 	}
 	if err := normalizeMessages(document); err != nil {
@@ -27,7 +27,7 @@ func runPipeline(document *Document, options Options) (Result, error) {
 	// Read before StagePostLimits: that stage forces logprobs on for validation, so afterwards the
 	// document says what the gateway wants, not what the client asked for.
 	logprobs := decodeLogprobIntent(document)
-	if err := applyStage(StagePostLimits, document, routedModel, profile, options.Admin); err != nil {
+	if err := applyStage(StagePostLimits, document, profile); err != nil {
 		return Result{}, err
 	}
 	if err := syncRequestView(document, &view); err != nil {
@@ -39,11 +39,11 @@ func runPipeline(document *Document, options Options) (Result, error) {
 	}
 	return Result{
 		Body:                body,
+		RequiresTools:       requiresTools(document),
 		Model:               view.Model,
 		Stream:              view.Stream,
 		MaxTokens:           view.MaxTokens,
 		MaxCompletionTokens: view.MaxCompletionTokens,
-		N:                   view.N,
 		Logprobs:            logprobs,
 	}, nil
 }
@@ -59,18 +59,16 @@ func resolveRoutedModel(document *Document, fallback string) string {
 	return fallback
 }
 
-func applyStage(stage Stage, document *Document, routedModel string, profile *Profile, admin bool) error {
+func applyStage(stage Stage, document *Document, profile *Profile) error {
 	for _, spec := range parameterTable {
 		for _, rule := range spec.Rules {
 			if rule.Stage != stage || rule.Apply == nil {
 				continue
 			}
 			ruleContext := RuleContext{
-				Document:    document,
-				Param:       spec.Name,
-				RoutedModel: routedModel,
-				Admin:       admin,
-				Profile:     profile,
+				Document: document,
+				Param:    spec.Name,
+				Profile:  profile,
 			}
 			if err := rule.Apply(ruleContext); err != nil {
 				return err
@@ -78,4 +76,20 @@ func applyStage(stage Stage, document *Document, routedModel string, profile *Pr
 		}
 	}
 	return nil
+}
+
+// requiresTools reads the decoded document the pipeline already holds. The answer used to come from a
+// second full unmarshal of the finished body, on every request, to produce one boolean.
+func requiresTools(document *Document) bool {
+	if tools, exists := document.Array("tools"); exists && len(tools) > 0 {
+		return true
+	}
+	choice, exists := document.Get("tool_choice")
+	if !exists {
+		return false
+	}
+	if named, isString := choice.(string); isString {
+		return named != "none"
+	}
+	return true
 }

@@ -182,11 +182,15 @@ func (r *Registry) unpublish(escrowID string) (*escrowEntry, bool) {
 // two in the opposite order here wedges every later route and settlement behind one retirement. It
 // also keeps the snapshot write and the storage close off the path of every pick.
 func (r *Registry) closeDraining(entry *escrowEntry) error {
-	err := entry.close()
+	// A close that failed leaves the entry in draining on purpose: its storage is still held, and Add
+	// must keep refusing that id rather than open a second session over it.
+	if err := entry.close(); err != nil {
+		return err
+	}
 	r.mu.Lock()
 	delete(r.draining, entry)
 	r.mu.Unlock()
-	return err
+	return nil
 }
 
 // Candidates satisfies scheduler.escrowSource.

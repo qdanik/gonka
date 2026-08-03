@@ -69,8 +69,12 @@ func TestTheLimitsCollectorMatchesTheLimiterAfterTraffic(t *testing.T) {
 	expectGauge(t, telemetry, "devshard_gateway_inflight_requests_by_model", labels{"model": "qwen"}, 1)
 	expectGauge(t, telemetry, "devshard_gateway_inflight_input_tokens_by_model", labels{"model": "qwen"}, 250)
 	expectGauge(t, telemetry, "devshard_gateway_limiter_queue_depth", labels{"model": "qwen"}, 0)
-	expectGauge(t, telemetry, "devshard_gateway_effective_max_concurrent_requests", labels{}, 4)
-	expectGauge(t, telemetry, "devshard_gateway_effective_max_input_tokens_in_flight", labels{}, 2000)
+	// The unlabelled pair reports what was configured; the caps a model is actually judged against are
+	// per model, because overrides and capacity weights apply per model.
+	expectGauge(t, telemetry, "devshard_gateway_effective_max_concurrent_requests", labels{}, 8)
+	expectGauge(t, telemetry, "devshard_gateway_effective_max_input_tokens_in_flight", labels{}, 4000)
+	expectGauge(t, telemetry, "devshard_gateway_enforced_max_concurrent_requests_by_model", labels{"model": "qwen"}, 4)
+	expectGauge(t, telemetry, "devshard_gateway_enforced_max_input_tokens_by_model", labels{"model": "qwen"}, 2000)
 }
 
 func TestTheLimitsCollectorReportsCapacityPerModel(t *testing.T) {

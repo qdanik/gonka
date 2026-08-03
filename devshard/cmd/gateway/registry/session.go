@@ -66,14 +66,22 @@ func (h sessionHandle) SnapshotState() types.EscrowState { return h.machine.Snap
 func (h sessionHandle) SealedInferences() int            { return len(h.machine.ExportSealedNonces()) }
 func (h sessionHandle) UserSession() *user.Session       { return h.Session }
 
+// groupSize is taken once: the group is fixed for the escrow's life, and asking the session takes the
+// lock a nonce commit holds.
 type nonceStream struct {
-	session EscrowSession
-	model   string
-	now     func() time.Time
+	session   EscrowSession
+	model     string
+	groupSize int
+	now       func() time.Time
+}
+
+// newNonceStream is the only way to build one, so the cached group size cannot disagree.
+func newNonceStream(session EscrowSession, model string, now func() time.Time) nonceStream {
+	return nonceStream{session: session, model: model, groupSize: len(session.HostParticipantKeyList()), now: now}
 }
 
 func (s nonceStream) ParticipantKeys() []string { return s.session.ParticipantKeys() }
-func (s nonceStream) GroupSize() int            { return len(s.session.HostParticipantKeyList()) }
+func (s nonceStream) GroupSize() int            { return s.groupSize }
 func (s nonceStream) LatestNonce() uint64       { return s.session.Nonce() }
 
 func (s nonceStream) Advance(decide func(scheduler.HostBinding) scheduler.NonceIntent) (scheduler.Prepared, error) {

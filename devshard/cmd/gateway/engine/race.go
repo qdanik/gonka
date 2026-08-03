@@ -620,7 +620,8 @@ func (c *raceCoordinator) complete(attempt *liveAttempt, event AttemptEvent) {
 	}
 	logging.Info("attempt finished",
 		"request", c.request.RequestID, "escrow", c.escrowID, "nonce", attempt.nonce,
-		"participant", attempt.participant, "terminal", attempt.outcome.Terminal.reason(),
+		"participant", attempt.participant,
+		"terminal", c.racedTerminal(attempt, *attempt.outcome).String(),
 		"nonce_finished", attempt.nonceFinished, "state_divergent", attempt.outcome.StateDivergent)
 	if signal := CapabilityOf(*attempt.outcome); signal.Retriable() {
 		RecordCapability(c.deps.Perf, attempt.participant, signal)
@@ -634,6 +635,19 @@ func (c *raceCoordinator) complete(attempt *liveAttempt, event AttemptEvent) {
 		c.deps.Picker.BlockHost(c.escrowID, attempt.participant)
 		c.exclude(attempt.participant)
 	}
+}
+
+// racedTerminal is the attempt's terminal as the race sees it: an attempt goroutine knows only its own
+// cancellation, not the crown, the silence or the backstop. Every reader promotes through here.
+func (c *raceCoordinator) racedTerminal(attempt *liveAttempt, outcome AttemptOutcome) Terminal {
+	terminal := outcome.Terminal
+	if terminal == TerminalClientCancelled && (attempt.stalled && outcome.ContentChunks > 0 || c.abandonedByHosts()) {
+		terminal = TerminalStalled
+	}
+	if attempt == c.winner && terminal == TerminalLost {
+		return TerminalWon
+	}
+	return terminal
 }
 
 func (c *raceCoordinator) retire(attempt *liveAttempt) {
@@ -774,8 +788,8 @@ func (c *raceCoordinator) applyPick(result pickedHost) {
 	c.startNextImmediate()
 }
 
-// reportUnfilledPick traces an escalation that was given no host: no nonce is committed, and the error
-// reaches a caller only when no attempt ever started. The race's own cancellation is not a refusal.
+// reportUnfilledPick traces an escalation that reached no attempt; on the cancellation path a nonce was
+// committed and the scheduler accounts it as an abandoned ghost. A race's own cancellation is no refusal.
 func (c *raceCoordinator) reportUnfilledPick(err error) {
 	if c.cancelled || c.handedOff {
 		return
@@ -884,19 +898,10 @@ func (c *raceCoordinator) outcome() RaceOutcome {
 		record.NonceFinished = attempt.nonceFinished
 		record.FailureRateExceeded = c.deps.Perf.Ejected(attempt.participant, c.request.Model)
 		record.PhaseTransitionAborted = phaseAborted(record, attempt.inInference, generating)
-		// The attempt goroutine can only see its own cancellation. The coordinator knows two things it
-		// cannot: that the host had gone silent mid-stream, and that the backstop fired with nobody
-		// crowned, which makes every attempt still running a host that answered nothing rather than a
-		// loser the race cancelled. Both are TerminalStalled, which is what the ladders gate on.
-		if record.Terminal == TerminalClientCancelled && (attempt.stalled && record.ContentChunks > 0 || c.abandonedByHosts()) {
-			record.Terminal = TerminalStalled
-		}
+		record.Terminal = c.racedTerminal(attempt, record)
 		if attempt == c.winner {
 			outcome.WinnerNonce = attempt.nonce
-			if record.Terminal == TerminalLost {
-				record.Terminal = TerminalWon
-				outcome.Succeeded = true
-			}
+			outcome.Succeeded = record.Terminal == TerminalWon
 		}
 		outcome.Lifecycle.EscrowMissing = outcome.Lifecycle.EscrowMissing || attempt.lifecycle.EscrowMissing
 		outcome.Lifecycle.BalanceExhausted = outcome.Lifecycle.BalanceExhausted || attempt.lifecycle.BalanceExhausted
@@ -938,6 +943,7 @@ func (c *raceCoordinator) plan() deadlinePlan {
 func (c *raceCoordinator) escalationRequest() EscalationRequest {
 	return EscalationRequest{
 		InputTokens:               c.request.InputTokens,
+		OutputTokens:              c.request.OutputTokens,
 		Stream:                    c.request.Stream,
 		ReducedTokensStillOffered: c.request.ReduceMaxTokens != nil && !c.reducedTokensSpent,
 	}

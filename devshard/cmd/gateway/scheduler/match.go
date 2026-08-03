@@ -29,11 +29,15 @@ const (
 	blockToolsUnsupported
 )
 
-// blocks is the one definition of "this participant cannot serve this waiter". match and servable both
-// read it because they must be exactly as strict as each other: a servable that is stricter fails a
-// request match would have served, and one that is laxer keeps a waiter queued that every drain can
-// only answer by burning a chain-costed nonce.
-func (a availability) blocks(participant string, queued *waiter) blockReason {
+// ghostFor names the burn each participant-only block earns, as one mapping rather than two switches.
+var ghostFor = map[blockReason]GhostKind{
+	blockPoCRequired: ghostPoC,
+	blockThrottled:   ghostThrottled,
+	blockEjected:     ghostEjected,
+}
+
+// participantBlocked is the half of blocks that needs no waiter, so match and blocks share one ladder.
+func (a availability) participantBlocked(participant string) blockReason {
 	switch {
 	case a.pocRequired(participant):
 		return blockPoCRequired
@@ -41,6 +45,19 @@ func (a availability) blocks(participant string, queued *waiter) blockReason {
 		return blockThrottled
 	case a.ejected(participant):
 		return blockEjected
+	}
+	return blockNone
+}
+
+// blocks is the one definition of "this participant cannot serve this waiter". match and servable both
+// read it because they must be exactly as strict as each other: a servable that is stricter fails a
+// request match would have served, and one that is laxer keeps a waiter queued that every drain can
+// only answer by burning a chain-costed nonce.
+func (a availability) blocks(participant string, queued *waiter) blockReason {
+	if reason := a.participantBlocked(participant); reason != blockNone {
+		return reason
+	}
+	switch {
 	case queued.exclude[participant]:
 		return blockExcluded
 	case a.stateBlocked(participant):
@@ -60,14 +77,8 @@ func (a availability) blocks(participant string, queued *waiter) blockReason {
 // re-served to it through a sibling slot of the same validator.
 func match(binding HostBinding, waiting []*waiter, avail availability, now time.Time, stale time.Duration) Decision {
 	participant := binding.Participant
-	if avail.pocRequired(participant) {
-		return burn{kind: ghostPoC}
-	}
-	if avail.throttled(participant) {
-		return burn{kind: ghostThrottled}
-	}
-	if avail.ejected(participant) {
-		return burn{kind: ghostEjected}
+	if reason := avail.participantBlocked(participant); reason != blockNone {
+		return burn{kind: ghostFor[reason]}
 	}
 
 	sawBlockedWaiter := false

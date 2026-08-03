@@ -28,7 +28,7 @@ func newEscrowEntry(escrowID, model string, session EscrowSession, now func() ti
 		model:   model,
 		session: session,
 		slots:   slotCounts(session.HostParticipantKeyList()),
-		stream:  nonceStream{session: session, model: model, now: now},
+		stream:  newNonceStream(session, model, now),
 	}
 }
 

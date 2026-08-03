@@ -14,6 +14,9 @@ const (
 	TimeoutActionCompleted = "completed"
 	TimeoutActionFailed    = "failed"
 
+	// timeoutReasonNoPoster names a step whose escrow no longer has a session to vote through.
+	timeoutReasonNoPoster = "no_poster"
+
 	timeoutReasonNone            = "none"
 	timeoutReasonPhaseAborted    = "phase_transition_aborted"
 	timeoutReasonEmptyStream     = "empty_stream_without_non_empty_winner"
@@ -33,7 +36,6 @@ type TimeoutEvent struct {
 	Kind        string
 	Action      string
 	Reason      string
-	Vote        string
 }
 
 // TimeoutStep is one nonce's vote. StartedAt is the record's, not the attempt's dispatch, so a nonce
@@ -114,13 +116,19 @@ func SettleTimeouts(ctx context.Context, poster TimeoutPoster, outcome RaceOutco
 	steps := outcome.TimeoutPlan()
 	events := make([]TimeoutEvent, 0, len(steps))
 	for _, step := range steps {
-		events = append(events, step.Event)
+		// A started event for a vote nobody attempts reads as a hung settle when no completion follows.
 		if !step.Post || poster == nil {
+			skipped := step.Event
+			skipped.Action = TimeoutActionSkipped
+			if skipped.Reason == timeoutReasonNone {
+				skipped.Reason = timeoutReasonNoPoster
+			}
+			events = append(events, skipped)
 			continue
 		}
+		events = append(events, step.Event)
 		vote, err := poster.SettleTimeout(ctx, step.Nonce, step.StartedAt)
 		posted := step.Event
-		posted.Vote = vote
 		posted.Kind = timeoutVoteKind(vote, posted.Kind)
 		posted.Action = TimeoutActionCompleted
 		if err != nil {
