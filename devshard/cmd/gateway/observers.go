@@ -13,10 +13,11 @@ import (
 // because counting and narrating are different jobs, and the scheduler stays free of a logger.
 type tracedDispatches struct{ recorder *metrics.DispatchRecorder }
 
-// GhostBurned is a nonce that cost money on chain and will serve nobody. The counter says how many;
-// this says which escrow and why, which is what decides whether it is a bad host or a routing bug.
-func (t tracedDispatches) GhostBurned(escrowID, reason string) {
-	logging.Warn("nonce burned for nobody", "escrow", escrowID, "reason", reason)
+// GhostBurned is a nonce that cost money on chain and will serve nobody. The nonce is logged and never
+// labelled: it leaves an inference record on chain that stays started forever, so an operator needs the
+// number to tell it apart from work still running -- and a counter keyed by it would grow without end.
+func (t tracedDispatches) GhostBurned(escrowID string, nonce uint64, reason string) {
+	logging.Warn("nonce burned for nobody", "escrow", escrowID, "nonce", nonce, "reason", reason)
 	t.recorder.GhostBurned(escrowID, reason)
 }
 

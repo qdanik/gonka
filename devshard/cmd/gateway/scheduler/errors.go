@@ -7,6 +7,10 @@ var (
 	// throttled, ejected, state-blocked, or the drain's burn budget tripped. Waiting may fix it.
 	ErrNoAvailableHost = errors.New("no available host")
 
+	// ErrHostsBusy separates "every host is at capacity right now" from a host that is broken or
+	// excluded: the first passes on its own, the second does not, and a client retries them differently.
+	ErrHostsBusy = errors.New("all hosts are at capacity")
+
 	// ErrToolsUnsupported reports the one exhaustion waiting cannot fix: every host has already said it
 	// does not implement tools, so a retry buys the same refusal at the same price.
 	ErrToolsUnsupported = errors.New("no host supports tool calling")

@@ -236,9 +236,11 @@ func Defaults() Config {
 			},
 			MaxInputTokensInFlight: 0,
 			AcquireWaitMS:          500,
+			// A window opens near what a host is known to take rather than discovering it: starting at 4
+			// capped three participants at twelve concurrent requests, whatever the group size.
 			AIMD: AIMD{
-				InitialWindow: 4,
-				MaxWindow:     64,
+				InitialWindow: 64,
+				MaxWindow:     256,
 			},
 			Breaker: Breaker{
 				TripThreshold: 3,
@@ -281,14 +283,16 @@ func Defaults() Config {
 			HostStalenessSeconds:     3_600,
 		},
 		Engine: Engine{
-			ReceiptTimeoutMS:            5_000,
-			FirstTokenFloorMS:           1_000,
-			FirstTokenCeilingMS:         60_000,
-			InterChunkStallMS:           30_000,
-			LoserGraceMS:                600_000,
-			NonStreamResponseFloorMS:    20_000,
-			NonStreamResponseCeilingMS:  45_000,
-			PerOutputTokenResponseLagMS: 20,
+			ReceiptTimeoutMS:           5_000,
+			FirstTokenFloorMS:          1_000,
+			FirstTokenCeilingMS:        60_000,
+			InterChunkStallMS:          30_000,
+			LoserGraceMS:               600_000,
+			NonStreamResponseFloorMS:   20_000,
+			NonStreamResponseCeilingMS: 45_000,
+			// 40ms is 25 output tokens a second, measured on the fleet. At 20 the modelled time came out
+			// half of real, so the floor decided instead and a fifth of healthy requests were retried.
+			PerOutputTokenResponseLagMS: 40,
 			MaxSpeculativeAttempts:      0,
 		},
 		Scheduler: Scheduler{

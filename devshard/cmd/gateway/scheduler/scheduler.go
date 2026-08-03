@@ -121,7 +121,7 @@ func (s *Scheduler) dropAssignment(assignment Assignment, model string) {
 	s.limiter.Release(assignment.Host, model)
 	assignment.ReleaseEscrow()
 	if s.observer != nil {
-		s.observer.GhostBurned(assignment.Escrow, ghostAbandoned.reason())
+		s.observer.GhostBurned(assignment.Escrow, assignment.Nonce.Nonce(), ghostAbandoned.reason())
 	}
 }
 
