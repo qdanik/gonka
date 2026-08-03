@@ -22,8 +22,8 @@ func TestARateLimitRejectionCarriesRetryAfter(t *testing.T) {
 
 	writeErrorFor(recorder, &limits.RateLimitError{Reason: "queue timeout", RetryAfter: 1500 * time.Millisecond})
 
-	if recorder.Code != http.StatusTooManyRequests {
-		t.Fatalf("status = %d, want 429", recorder.Code)
+	if recorder.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503", recorder.Code)
 	}
 	if got := recorder.Header().Get("Retry-After"); got != "2" {
 		t.Fatalf("Retry-After = %q, want %q (1.5s rounded up)", got, "2")
@@ -89,5 +89,26 @@ func TestAHostlessRequestIsOurRefusalNotAnUpstreamFailure(t *testing.T) {
 	}
 	if got := recorder.Header().Get("Retry-After"); got != "1" {
 		t.Fatalf("Retry-After = %q, want a wait the client can act on", got)
+	}
+}
+
+// The chat path must not answer 429: it means "you exceeded a quota", and a client that ran into the
+// shard's own capacity exceeded nothing. Every capacity refusal is 503 with a hint of when to return.
+func TestNoCapacityRefusalReachesTheClientAs429(t *testing.T) {
+	refusals := []error{
+		&limits.RateLimitError{Reason: "too many concurrent requests"},
+		scheduler.ErrHostsBusy,
+		scheduler.ErrNoEscrowCapacity,
+		scheduler.ErrEscrowBusy,
+	}
+	for _, refusal := range refusals {
+		recorder := httptest.NewRecorder()
+		writeErrorFor(recorder, refusal)
+		if recorder.Code == http.StatusTooManyRequests {
+			t.Fatalf("%v answered 429", refusal)
+		}
+		if recorder.Header().Get("Retry-After") == "" {
+			t.Fatalf("%v carried no Retry-After: a client cannot tell when to come back", refusal)
+		}
 	}
 }

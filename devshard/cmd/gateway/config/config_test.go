@@ -34,7 +34,7 @@ func TestDefaultsMatchSpec(t *testing.T) {
 		{"Limits.Concurrency.RequestsPer10000Weight", configuration.Limits.Concurrency.RequestsPer10000Weight, 5.0},
 		{"Limits.Concurrency.PoCRequestsPer10000Weight", configuration.Limits.Concurrency.PoCRequestsPer10000Weight, 10.0},
 		{"Limits.MaxInputTokensInFlight", configuration.Limits.MaxInputTokensInFlight, int64(0)},
-		{"Limits.AcquireWaitMS", configuration.Limits.AcquireWaitMS, int64(500)},
+		{"Limits.AcquireWaitMS", configuration.Limits.AcquireWaitMS, int64(120_000)},
 		{"Limits.AIMD.InitialWindow", configuration.Limits.AIMD.InitialWindow, int64(64)},
 		{"Limits.AIMD.MaxWindow", configuration.Limits.AIMD.MaxWindow, int64(256)},
 		{"Limits.Breaker.TripThreshold", configuration.Limits.Breaker.TripThreshold, int64(3)},

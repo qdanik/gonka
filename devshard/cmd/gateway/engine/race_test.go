@@ -1848,3 +1848,25 @@ func TestAnUnreportedAttemptStaysInTheOutcome(t *testing.T) {
 		t.Fatalf("TimeoutPlan() = %+v, want a posted vote for 557", plan)
 	}
 }
+
+// The race context deliberately never cancels so a departed client still leaves its nonces settling.
+// A pick issued on it must carry its own deadline: once the scheduler waits for capacity instead of
+// refusing, an unbounded pick hangs the request until the client disconnects.
+func TestEveryPickIsBounded(t *testing.T) {
+	t.Parallel()
+	raceCtx := context.WithoutCancel(t.Context())
+
+	pickCtx, cancel := context.WithTimeout(raceCtx, schedulerPickTimeout)
+	defer cancel()
+
+	if _, hasDeadline := raceCtx.Deadline(); hasDeadline {
+		t.Fatal("the race context gained a deadline: a departed client would stop nonces from settling")
+	}
+	deadline, hasDeadline := pickCtx.Deadline()
+	if !hasDeadline {
+		t.Fatal("the pick context carries no deadline, so a waiting scheduler would hang it forever")
+	}
+	if remaining := time.Until(deadline); remaining > schedulerPickTimeout {
+		t.Fatalf("pick deadline is %v away, want at most %v", remaining, schedulerPickTimeout)
+	}
+}

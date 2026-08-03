@@ -363,8 +363,12 @@ func newCoordinator(clientCtx context.Context, deps raceDeps, request raceReques
 	}
 }
 
+// begin bounds its pick: the race context deliberately never cancels, so a scheduler that waits for
+// capacity would hang here forever. See specs/2026-08-03-request-queue-design.md.
 func (c *raceCoordinator) begin() error {
-	assignment, err := c.pick(c.drain.race)
+	pickCtx, cancelPick := context.WithTimeout(c.drain.race, schedulerPickTimeout)
+	defer cancelPick()
+	assignment, err := c.pick(pickCtx)
 	if err != nil {
 		return err
 	}
@@ -779,7 +783,7 @@ func (c *raceCoordinator) startPickWithinBudget(reason string, params any, honou
 	if c.picking() || (honourBudget && len(c.attempts) >= c.budget) {
 		return
 	}
-	ctx, cancel := context.WithCancel(c.drain.race)
+	ctx, cancel := context.WithTimeout(c.drain.race, schedulerPickTimeout)
 	c.pickCancel, c.pickStarted, c.pickReason = cancel, c.deps.Now(), reason
 	profile := c.requestProfile(params)
 	go func() {

@@ -31,6 +31,8 @@ func Build(values env.Values, overrides Overrides) (*Config, error) {
 	overrideIfSet(&configuration.Limits.DefaultMaxTokens, values.DefaultMaxTokens)
 	overrideIfSet(&configuration.Limits.MaxTokensCap, values.MaxTokensCap)
 	overrideIfSet(&configuration.Limits.Concurrency.MaxRequests, values.MaxConcurrentRequests)
+	overrideIfSet(&configuration.Limits.AcquireWaitMS, values.AcquireWaitMS)
+	overrideIfSet(&configuration.Limits.QueueDepthPerSlot, values.QueueDepthPerSlot)
 
 	overrideIfSet(&configuration.Modes.PoCMode, values.PoCMode)
 	overrideIfSet(&configuration.Modes.Disabled, values.Disabled)
@@ -61,6 +63,7 @@ func Build(values env.Values, overrides Overrides) (*Config, error) {
 	overrideIfSet(&configuration.Limits.Concurrency.PoCRequestsPer10000Weight, overrides.PoCMaxConcurrentRequestsPer10000Weight)
 	overrideIfSet(&configuration.Limits.MaxInputTokensInFlight, overrides.MaxInputTokensInFlight)
 	overrideIfSet(&configuration.Limits.AcquireWaitMS, overrides.AcquireWaitMS)
+	overrideIfSet(&configuration.Limits.QueueDepthPerSlot, overrides.QueueDepthPerSlot)
 	overrideIfSet(&configuration.Limits.AIMD.InitialWindow, overrides.AIMDInitialWindow)
 	overrideIfSet(&configuration.Limits.AIMD.MaxWindow, overrides.AIMDMaxWindow)
 	overrideIfSet(&configuration.Limits.Breaker.TripThreshold, overrides.BreakerTripThreshold)

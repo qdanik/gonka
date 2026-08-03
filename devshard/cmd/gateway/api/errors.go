@@ -22,8 +22,8 @@ import (
 	json "github.com/goccy/go-json"
 )
 
-// noHostRetryAfter is what a client is told to wait when every participant is at capacity: a window
-// frees as soon as one in-flight request completes, so the hint is short rather than a backoff ladder.
+// noHostRetryAfter is the wait a capacity refusal reports. See gateway-capacity-and-health.md,
+// "The wait budget".
 const noHostRetryAfter = time.Second
 
 var (
@@ -139,13 +139,11 @@ func statusForError(err error) int {
 	}
 	var throttled *limits.RateLimitError
 	if errors.As(err, &throttled) {
-		return http.StatusTooManyRequests
+		return http.StatusServiceUnavailable
 	}
 	switch {
 	case errors.Is(err, scheduler.ErrNoEscrowCapacity), errors.Is(err, scheduler.ErrEscrowBusy):
-		return http.StatusTooManyRequests
-	// Our own admission refused this, so it is not the 502 an upstream failure earns: no host was asked,
-	// and capacity returns on its own.
+		return http.StatusServiceUnavailable
 	case errors.Is(err, scheduler.ErrHostsBusy):
 		return http.StatusServiceUnavailable
 	case errors.Is(err, scheduler.ErrEscrowGone):
@@ -190,7 +188,8 @@ func writeErrorFor(w http.ResponseWriter, err error) {
 	case errors.As(err, &throttled) && throttled.RetryAfter > 0:
 		seconds := int64(math.Ceil(throttled.RetryAfter.Seconds()))
 		w.Header().Set("Retry-After", strconv.FormatInt(seconds, 10))
-	case errors.Is(err, scheduler.ErrHostsBusy):
+	case errors.As(err, &throttled), errors.Is(err, scheduler.ErrHostsBusy),
+		errors.Is(err, scheduler.ErrNoEscrowCapacity), errors.Is(err, scheduler.ErrEscrowBusy):
 		w.Header().Set("Retry-After", strconv.FormatInt(int64(noHostRetryAfter.Seconds()), 10))
 	}
 	writeError(w, statusForError(err), err.Error())
