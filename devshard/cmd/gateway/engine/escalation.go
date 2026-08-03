@@ -31,12 +31,12 @@ const (
 type EscalationStage string
 
 const (
-	StageNone             EscalationStage = ""
-	StageSuspicious       EscalationStage = "suspicious_host_immediate_escalation"
-	StageAttemptFailed    EscalationStage = "attempt_failed"
-	StageReceiptTimeout   EscalationStage = "receipt_timeout_wait_elapsed"
-	StageFirstToken       EscalationStage = "first_token_timeout_wait_elapsed"
-	StageReducedMaxTokens EscalationStage = "response_timeout_wait_elapsed"
+	StageNone            EscalationStage = ""
+	StageSuspicious      EscalationStage = "suspicious_host_immediate_escalation"
+	StageAttemptFailed   EscalationStage = "attempt_failed"
+	StageReceiptTimeout  EscalationStage = "receipt_timeout_wait_elapsed"
+	StageFirstToken      EscalationStage = "first_token_timeout_wait_elapsed"
+	StageResponseTimeout EscalationStage = "response_timeout_wait_elapsed"
 )
 
 func (s EscalationStage) Reason() string {
@@ -49,8 +49,8 @@ func (s EscalationStage) Reason() string {
 		return "receipt_timeout"
 	case StageFirstToken:
 		return "first_token_timeout"
-	case StageReducedMaxTokens:
-		return "response_timeout_reduced_max_tokens"
+	case StageResponseTimeout:
+		return "response_timeout_retry"
 	}
 	return ""
 }
@@ -82,13 +82,13 @@ func EscalationPolicyFromConfig(engine config.Engine) EscalationPolicy {
 	}
 }
 
-// ReducedTokensStillOffered is the one-shot the race holds: exactly one retry per race may ask for half
-// the output tokens instead. See gateway-speculative-race.md, "Escalation".
+// RetryStillOffered is the one-shot the race holds: exactly one extra attempt per race. See
+// gateway-speculative-race.md, "Escalation".
 type EscalationRequest struct {
-	InputTokens               uint64
-	OutputTokens              uint64
-	Stream                    bool
-	ReducedTokensStillOffered bool
+	InputTokens       uint64
+	OutputTokens      uint64
+	Stream            bool
+	RetryStillOffered bool
 }
 
 type EscalationAttempt struct {
@@ -200,10 +200,10 @@ func (p EscalationPolicy) triggerFor(attempt EscalationAttempt, request Escalati
 		return ArmedEscalation{Stage: StageReceiptTimeout, Deadline: deadline}, true
 	case !request.Stream:
 		wait, worthRetrying := p.nonStreamResponseTimeout(request.OutputTokens)
-		if !worthRetrying || !request.ReducedTokensStillOffered || !attempt.FirstContent.IsZero() {
+		if !worthRetrying || !request.RetryStillOffered || !attempt.FirstContent.IsZero() {
 			return ArmedEscalation{}, false
 		}
-		return ArmedEscalation{Stage: StageReducedMaxTokens, Deadline: attempt.SendTime.Add(wait)}, true
+		return ArmedEscalation{Stage: StageResponseTimeout, Deadline: attempt.SendTime.Add(wait)}, true
 	case !attempt.FirstToken.IsZero():
 		return ArmedEscalation{}, false
 	}

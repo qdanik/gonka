@@ -13,7 +13,7 @@ var (
 	streaming    = EscalationRequest{InputTokens: 1_000, Stream: true}
 	nonStreaming = EscalationRequest{InputTokens: 1_000, OutputTokens: 1_000, Stream: false}
 
-	nonStreamingWithReducedTokens = EscalationRequest{InputTokens: 1_000, OutputTokens: 1_000, Stream: false, ReducedTokensStillOffered: true}
+	nonStreamingWithReducedTokens = EscalationRequest{InputTokens: 1_000, OutputTokens: 1_000, Stream: false, RetryStillOffered: true}
 )
 
 func dispatched(offset time.Duration) EscalationAttempt {
@@ -209,7 +209,7 @@ func TestLadderRuleInIsolation(t *testing.T) {
 			name:         "rule 8: a spent fallback is what leaves the non-streaming attempt alone",
 			attempt:      receiptedNoToken,
 			request:      nonStreamingWithReducedTokens,
-			wantStage:    StageReducedMaxTokens,
+			wantStage:    StageResponseTimeout,
 			wantDeadline: raceStart.Add(40 * time.Second),
 		},
 		{
@@ -333,11 +333,11 @@ func TestNonStreamResponseTimeoutTracksTheOutputBudget(t *testing.T) {
 // past the point a client waits. Prefill is the receipt timeout's job; this stage waits on the answer.
 func TestNonStreamRetryDeadlineIgnoresPromptSize(t *testing.T) {
 	receipted := EscalationAttempt{SendTime: raceStart, ReceiptTime: raceStart.Add(time.Second)}
-	hugePrompt := EscalationRequest{InputTokens: 6_000, OutputTokens: 256, Stream: false, ReducedTokensStillOffered: true}
+	hugePrompt := EscalationRequest{InputTokens: 6_000, OutputTokens: 256, Stream: false, RetryStillOffered: true}
 
 	armed, ok := testPolicy.triggerFor(receipted, hugePrompt, raceStart)
 
-	if !ok || armed.Stage != StageReducedMaxTokens {
+	if !ok || armed.Stage != StageResponseTimeout {
 		t.Fatalf("triggerFor = (%q, %v), want the halved retry armed", armed.Stage, ok)
 	}
 	if want := raceStart.Add(20 * time.Second); !armed.Deadline.Equal(want) {
@@ -475,7 +475,7 @@ func TestStageReasonLabelsEveryTrigger(t *testing.T) {
 		{StageAttemptFailed, "attempt_failed"},
 		{StageReceiptTimeout, "receipt_timeout"},
 		{StageFirstToken, "first_token_timeout"},
-		{StageReducedMaxTokens, "response_timeout_reduced_max_tokens"},
+		{StageResponseTimeout, "response_timeout_retry"},
 		{StageNone, ""},
 	}
 	for _, testCase := range testCases {
@@ -491,13 +491,13 @@ func TestStageReasonLabelsEveryTrigger(t *testing.T) {
 // schedule was retried at half the tokens and the client was served the halved answer.
 func TestAHostStillOnScheduleIsNotRetried(t *testing.T) {
 	receipted := EscalationAttempt{SendTime: raceStart, ReceiptTime: raceStart.Add(time.Second)}
-	dueAfterTheCeiling := EscalationRequest{OutputTokens: 3_072, Stream: false, ReducedTokensStillOffered: true}
+	dueAfterTheCeiling := EscalationRequest{OutputTokens: 3_072, Stream: false, RetryStillOffered: true}
 
 	if _, armed := testPolicy.triggerFor(receipted, dueAfterTheCeiling, raceStart); armed {
 		t.Fatal("triggerFor armed a retry for a budget the host is still within its own time for")
 	}
 
-	dueBeforeTheCeiling := EscalationRequest{OutputTokens: 1_000, Stream: false, ReducedTokensStillOffered: true}
+	dueBeforeTheCeiling := EscalationRequest{OutputTokens: 1_000, Stream: false, RetryStillOffered: true}
 	armed, ok := testPolicy.triggerFor(receipted, dueBeforeTheCeiling, raceStart)
 	if !ok || !armed.Deadline.Equal(raceStart.Add(40*time.Second)) {
 		t.Fatalf("triggerFor = (%v, %v), want the retry armed at 40s", armed.Deadline, ok)
