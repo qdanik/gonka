@@ -29,6 +29,8 @@ type Values struct {
 	DefaultMaxTokens      *int64
 	MaxTokensCap          *int64
 	MaxConcurrentRequests *int64
+	AcquireWaitMS         *int64
+	QueueDepthPerSlot     *int64
 
 	PoCMode             *string
 	Disabled            *bool
@@ -178,6 +180,8 @@ func Load() (Values, error) {
 	readInt("GATEWAY_DEFAULT_MAX_TOKENS", &values.DefaultMaxTokens)
 	readInt("GATEWAY_MAX_TOKENS_CAP", &values.MaxTokensCap)
 	readInt("GATEWAY_MAX_CONCURRENT_REQUESTS", &values.MaxConcurrentRequests)
+	readInt("GATEWAY_ACQUIRE_WAIT_MS", &values.AcquireWaitMS)
+	readInt("GATEWAY_QUEUE_DEPTH_PER_SLOT", &values.QueueDepthPerSlot)
 
 	readString("GATEWAY_POC_MODE", &values.PoCMode)
 	readBool("GATEWAY_DISABLED", &values.Disabled)

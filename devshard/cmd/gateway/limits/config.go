@@ -15,10 +15,11 @@ func GatewayConfigFromLimits(l config.Limits) GatewayConfig {
 		}
 	}
 	return GatewayConfig{
-		MaxConcurrent:  l.Concurrency.MaxRequests,
-		MaxInputTokens: l.MaxInputTokensInFlight,
-		AcquireWait:    time.Duration(l.AcquireWaitMS) * time.Millisecond,
-		ModelLimits:    modelLimits,
+		MaxConcurrent:     l.Concurrency.MaxRequests,
+		MaxInputTokens:    l.MaxInputTokensInFlight,
+		QueueDepthPerSlot: l.QueueDepthPerSlot,
+		AcquireWait:       time.Duration(l.AcquireWaitMS) * time.Millisecond,
+		ModelLimits:       modelLimits,
 	}
 }
 

@@ -147,3 +147,13 @@ Two asymmetries worth knowing, neither of which is stated in the code:
 The rows down to `breaker_max_open_ms` are admin overrides, changeable at run time without a redeploy. The `perf_*` rows are **not**: they are neither overrides nor environment variables, only compile-time defaults, and the snake_case names above are the spellings the boot-time validator uses in its error messages, not knobs an operator can set. `GATEWAY_PERF_EWMA_HALFLIFE_SECONDS` is the one performance value with an environment variable, and it is read once at boot. Retuning ejection therefore means a new binary.
 
 The default input-token budget of zero means unlimited, which is worth an operator's attention: with million-token contexts it is the only thing between concurrency and memory exhaustion, and the body-size cap deliberately does not throttle load.
+
+## The wait budget
+
+A shard should not answer 429. That status means the client exceeded a quota, and a client that ran into the shard's own capacity exceeded nothing — it carries no hint of when to return, so a well-behaved client retries immediately and deepens the shortage it just hit. Every capacity refusal answers 503 instead, and every one of them carries `Retry-After`: the wait already spent when that is known, a default otherwise.
+
+`acquire_wait_ms` is the budget a request may spend looking for capacity, not a delay. A queued waiter is promoted the instant a slot frees. The default is two minutes; at a measured ~10 s per request on a slot that is a queue roughly twelve deep.
+
+That number is where `queue_depth_per_slot` comes from. Waiting the whole budget out and being refused anyway costs the client the wait and the shard the connection, so a request that provably cannot reach the front in time is refused on arrival instead. Depth is counted per model against that model's own concurrency, because the caps are per model: a heavy model does not shrink a light one's queue.
+
+Two gates can refuse, and they answer different questions. The gateway limiter asks whether there is budget — concurrency, input tokens, chain weights. The scheduler asks whether a live host will take it — participant windows, breakers, chain phase. A request can pass the first and stall at the second; production has shown exactly that, with zero limiter refusals and nine scheduler refusals in one burst. The budget is meant to bound the whole path, and the scheduler side of it is not built yet: it still refuses immediately rather than waiting. See `specs/2026-08-03-request-queue-design.md`.
