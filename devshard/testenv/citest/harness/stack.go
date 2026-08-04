@@ -39,6 +39,7 @@ type Endpoints struct {
 	MockOpenAIHTTP string
 	RouterHTTP     string
 	GatewayHTTP    string
+	RewriteHTTP    string
 }
 
 // NewStack creates a temp workdir under testenv and registers cleanup.
@@ -112,6 +113,7 @@ func (s *Stack) Endpoints(t *testing.T, cfg *config.File) Endpoints {
 	eps.MockOpenAIHTTP = "http://" + s.composePublishedAddr(t, "mock-openai", cfg.MockOpenAI.HTTPPort)
 	eps.RouterHTTP = "http://" + s.composePublishedAddr(t, "versiond-router", 8080)
 	eps.GatewayHTTP = "http://" + s.composePublishedAddr(t, "devshardctl", cfg.Devshardctl.Port)
+	eps.RewriteHTTP = "http://" + s.composePublishedAddr(t, "gateway", cfg.Gateway.Port)
 	return eps
 }
 

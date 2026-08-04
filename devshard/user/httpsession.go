@@ -30,6 +30,17 @@ type HTTPSessionConfig struct {
 	Escrow *bridge.EscrowInfo
 }
 
+// hostClientConfig builds one host's client config. The participant key names the host every log line
+// and every admission call is about, so it is set whichever of the two features is on.
+func hostClientConfig(cfg HTTPSessionConfig, routePrefix, participantKey string) transport.ClientConfig {
+	clientConfig := transport.DefaultClientConfig()
+	clientConfig.RoutePrefix = routePrefix
+	clientConfig.ParticipantKey = participantKey
+	clientConfig.StreamCallback = cfg.StreamCallback
+	clientConfig.Admission = cfg.RequestAdmission
+	return clientConfig
+}
+
 func deferredWarmKeyResolver(resolve state.WarmKeyResolver) (state.WarmKeyResolver, func()) {
 	var recoveryComplete atomic.Bool
 	resolver := func(warmAddr, coldAddr string) (bool, error) {
@@ -159,20 +170,8 @@ func NewHTTPSession(cfg HTTPSessionConfig) (*Session, *state.StateMachine, error
 			sqlStore.Close()
 			return nil, nil, fmt.Errorf("get host info for %s: %w", slot.ValidatorAddress, err)
 		}
-		var clientCfgs []transport.ClientConfig
-		if cfg.StreamCallback != nil || routePrefix != "" || cfg.RequestAdmission != nil {
-			cc := transport.DefaultClientConfig()
-			if cfg.StreamCallback != nil {
-				cc.StreamCallback = cfg.StreamCallback
-			}
-			cc.RoutePrefix = routePrefix
-			if cfg.RequestAdmission != nil {
-				cc.ParticipantKey = slot.ValidatorAddress
-				cc.Admission = cfg.RequestAdmission
-			}
-			clientCfgs = append(clientCfgs, cc)
-		}
-		c := transport.NewHTTPClient(info.URL, cfg.EscrowID, signer, clientCfgs...)
+		c := transport.NewHTTPClient(info.URL, cfg.EscrowID, signer,
+			hostClientConfig(cfg, routePrefix, slot.ValidatorAddress))
 		clientCache[slot.ValidatorAddress] = c
 		clients[i] = c
 	}

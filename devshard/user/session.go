@@ -121,6 +121,13 @@ type nonceOutcome struct {
 // TimeoutResult reports what happened during timeout handling.
 type TimeoutResult struct {
 	Reason string // "execution", "refused", or "" if deadline not reached
+
+	// Applied reports that the timeout diff reached the chain. It exists because every path out of
+	// HandleTimeout returns an error -- the successful one carries "this inference timed out" to the
+	// caller -- so an applied timeout and one that never gathered enough votes are otherwise the same
+	// non-nil error. A nonce whose timeout did not apply still settles as a completed inference for the
+	// participant that never answered, which is the one outcome an accounting caller must not miss.
+	Applied bool
 }
 
 // HasMsgFinish returns true if mempool contains MsgFinishInference for the given nonce.
@@ -1898,6 +1905,7 @@ func (s *Session) HandleTimeout(ctx context.Context, nonce uint64, sendTime time
 			return result, fmt.Errorf("send timeout diff: %w", err)
 		}
 		logging.Stage(ctx, "timeout_completed", logFields("reason", result.Reason)...)
+		result.Applied = true
 		return result, fmt.Errorf("inference %d timed out: %s", nonce, reason)
 	}
 

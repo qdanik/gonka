@@ -77,7 +77,7 @@ list-citest-targets: ## Print runnable citest suite targets (one per line) for t
 		| sort -u
 .PHONY: obs-up obs-down
 # versiond-0 produces devshard-versiond:latest shared by all versiond-* hosts.
-CITEST_BUILD_SERVICES := mock-chain mock-dapi mock-openai devshardctl versiond-router versiond-0
+CITEST_BUILD_SERVICES := mock-chain mock-dapi mock-openai devshardctl gateway versiond-router versiond-0
 STACK_CITEST_PATTERN := ^Test(StackSmoke|RouterStickiness|ParamsLongPoll|EpochSwitch|GatewayChat|Versiond.*|HAStaleStandbyCatchupIdempotent|LegacyVersionPinnedToSingleHost|SQLiteToPostgresHAMigration|ValidationLeaseRace.*)$$
 
 citest-images: ## Pull hub images and build all compose images required for citest.
@@ -124,6 +124,9 @@ citest-stack-build: dev-build ## Build dev images then run full stack citests.
 
 test-gateway-smoke: ## Full-stack gateway smoke (TESTENV_GATEWAY_SMOKE=1; needs Docker + build-devshardd).
 	TESTENV_GATEWAY_SMOKE=1 go test ./citest/ -run TestGatewayPhase7_Smoke -count=1 -v
+
+test-rewrite-smoke: ## Full-stack smoke for cmd/gateway beside devshardctl (needs Docker + build-devshardd).
+	TESTENV_GATEWAY_SMOKE=1 go test ./citest/ -run TestRewriteSmoke -count=1 -v -timeout 30m
 
 dev-restart-mock-chain: ## Restart mock-chain under dev overlay.
 	docker compose $(DEV_OVERLAY) restart mock-chain

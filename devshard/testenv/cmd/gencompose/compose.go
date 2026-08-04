@@ -249,6 +249,50 @@ services:
       retries: 12
       start_period: 30s
     restart: unless-stopped
+
+  # The rewrite, beside the binary in production rather than instead of it, so the existing
+  # scenarios keep exercising devshardctl while new ones drive this one.
+  gateway:
+    build:
+      context: ../..
+      dockerfile: devshard/Dockerfile
+      target: gateway-runtime
+      args:
+        DEVSHARD_VERSION: "{{ .Versiond.VersionName }}"
+    image: devshard-gateway-runtime:latest
+    entrypoint: ["gateway"]
+    environment:
+      DEVSHARD_PORT: "{{ .Gateway.Port }}"
+      DEVSHARD_CHAIN_GRPC: {{ .MockChain.Host }}:{{ .MockChain.GRPCPort }}
+      DEVSHARD_NODE_MANAGER_ADDR: {{ .MockDapi.Host }}:{{ .MockDapi.GRPCPort }}
+      DEVSHARD_CHAIN_ID: "{{ .ChainID }}"
+      DEVSHARD_PUBLIC_API: http://{{ .MockDapi.Host }}:{{ .MockDapi.HTTPPort }}
+      GATEWAY_DEVSHARDS_JSON: '[{"escrow_id":"{{ primaryEscrowID . }}","private_key_env":"DEVSHARD_PRIVATE_KEY","model":"{{ primaryModelID . }}"}]'
+      DEVSHARD_PRIVATE_KEY: ${TESTENV_USER_PRIVATE_KEY}
+      DEVSHARD_ADMIN_API_KEY: ${TESTENV_ADMIN_API_KEY}
+      DEVSHARD_STORAGE_DIR: /var/lib/gateway
+      GATEWAY_MAX_TOKENS_CAP: "4096"
+    volumes:
+      - ./data/gateway:/var/lib/gateway
+    ports:
+      - "{{ .Gateway.Port }}:{{ .Gateway.Port }}"
+    networks:
+      testenv:
+        ipv4_address: {{ .Gateway.IP }}
+    depends_on:
+      mock-chain:
+        condition: service_healthy
+      mock-dapi:
+        condition: service_started
+      versiond-router:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:{{ .Gateway.Port }}/v1/status"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 30s
+    restart: unless-stopped
 `
 
 func writeCompose(cfg *config.File, outPath string) error {

@@ -3,6 +3,7 @@ package grpcface
 import (
 	"context"
 
+	p2p "github.com/cometbft/cometbft/proto/tendermint/p2p"
 	"github.com/cosmos/cosmos-sdk/client/grpc/cmtservice"
 	inferencetypes "github.com/productscience/inference/x/inference/types"
 	"google.golang.org/grpc/codes"
@@ -104,5 +105,13 @@ func (s *CometServer) GetLatestBlock(_ context.Context, _ *cmtservice.GetLatestB
 				ChainID: s.store.GetChainID(),
 			},
 		},
+	}, nil
+}
+
+// GetNodeInfo answers the chain id the way a node does, which is what a client falls back to when its
+// own configuration names none.
+func (s *CometServer) GetNodeInfo(_ context.Context, _ *cmtservice.GetNodeInfoRequest) (*cmtservice.GetNodeInfoResponse, error) {
+	return &cmtservice.GetNodeInfoResponse{
+		DefaultNodeInfo: &p2p.DefaultNodeInfo{Network: s.store.GetChainID()},
 	}, nil
 }

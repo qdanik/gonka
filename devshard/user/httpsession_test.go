@@ -8,6 +8,7 @@ import (
 
 	"devshard/bridge"
 	"devshard/storage"
+	"devshard/transport"
 	"devshard/types"
 
 	"github.com/stretchr/testify/require"
@@ -142,4 +143,23 @@ func (httpsessionTestBridge) GetValidationThreshold(uint64, string) (*bridge.Dec
 func (httpsessionTestBridge) VerifyWarmKey(string, string) (bool, error) { return true, nil }
 func (httpsessionTestBridge) SubmitDisputeState(string, []byte, uint64, map[uint32][]byte) error {
 	return nil
+}
+
+// The participant key names the host in a receipt log line, not only in an admission call. Tying it to
+// admission is what printed host="" on every receipt the gateway served.
+func TestHostClientConfigNamesTheHostWithoutAdmission(t *testing.T) {
+	config := hostClientConfig(HTTPSessionConfig{}, "/devshard/v4", "gonka1host")
+
+	if config.ParticipantKey != "gonka1host" {
+		t.Fatalf("participant key = %q, want the host it was built for", config.ParticipantKey)
+	}
+	if config.Admission != nil {
+		t.Fatal("admission was invented for a session that asked for none")
+	}
+	if config.RoutePrefix != "/devshard/v4" {
+		t.Fatalf("route prefix = %q, want the one passed in", config.RoutePrefix)
+	}
+	if config.InferenceTimeout != transport.DefaultClientConfig().InferenceTimeout {
+		t.Fatal("a default timeout was lost")
+	}
 }

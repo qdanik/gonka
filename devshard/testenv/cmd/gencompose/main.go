@@ -236,6 +236,9 @@ func fillNetworkDefaults(cfg *config.File) {
 	if cfg.Devshardctl.IP == "" {
 		cfg.Devshardctl.IP = fmt.Sprintf("%s.6", base)
 	}
+	if cfg.Gateway.IP == "" {
+		cfg.Gateway.IP = fmt.Sprintf("%s.8", base)
+	}
 	if cfg.Postgres.Enabled && cfg.Postgres.IP == "" {
 		cfg.Postgres.IP = fmt.Sprintf("%s.7", base)
 	}

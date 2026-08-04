@@ -132,3 +132,90 @@ func PostJSON(client *http.Client, url string, payload any, dest any) error {
 	}
 	return json.Unmarshal(body, dest)
 }
+
+// PostJSONStatus posts with an optional bearer key and returns the status and body rather than
+// turning a non-2xx into an error, so a caller can assert that a route refuses an unkeyed request and
+// report what a rejection said.
+func PostJSONStatus(client *http.Client, url, bearer string, payload, dest any) (int, []byte, error) {
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return 0, nil, err
+	}
+	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(data))
+	if err != nil {
+		return 0, nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if bearer != "" {
+		req.Header.Set("Authorization", "Bearer "+bearer)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return 0, nil, err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return resp.StatusCode, nil, err
+	}
+	if dest != nil && resp.StatusCode/100 == 2 {
+		if err := json.Unmarshal(body, dest); err != nil {
+			return resp.StatusCode, body, fmt.Errorf("%s: decode %s: %w", url, body, err)
+		}
+	}
+	return resp.StatusCode, body, nil
+}
+
+// GetJSONAuth fetches with a bearer key, for the operator routes that answer 401 without one.
+func GetJSONAuth(client *http.Client, url, bearer string, dest any) error {
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		return err
+	}
+	if bearer != "" {
+		req.Header.Set("Authorization", "Bearer "+bearer)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return err
+	}
+	if resp.StatusCode/100 != 2 {
+		return fmt.Errorf("%s: status %d: %s", url, resp.StatusCode, body)
+	}
+	if dest == nil {
+		return nil
+	}
+	if err := json.Unmarshal(body, dest); err != nil {
+		return fmt.Errorf("%s: decode %s: %w", url, body, err)
+	}
+	return nil
+}
+
+// PostJSONRequestID posts and returns the correlation id the gateway assigns, which is how a caller
+// reconciles a completion against the accounting ledger.
+func PostJSONRequestID(client *http.Client, url string, payload any) (string, int, []byte, error) {
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return "", 0, nil, err
+	}
+	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(data))
+	if err != nil {
+		return "", 0, nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", 0, nil, err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", resp.StatusCode, nil, err
+	}
+	return resp.Header.Get("X-Request-Id"), resp.StatusCode, body, nil
+}
