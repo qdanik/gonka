@@ -198,6 +198,7 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 	gatewayLimiter := limits.NewGatewayLimiter(limits.GatewayConfigFromLimits(configuration.Limits))
 	configHolder.Subscribe(func(next *config.Config) {
 		gatewayLimiter.Reconfigure(limits.GatewayConfigFromLimits(next.Limits))
+		participants.Reconfigure(limits.ParticipantConfigFromLimits(next.Limits))
 	})
 	hosts := perf.NewTracker(configHolder, clock)
 	telemetry := metrics.New()

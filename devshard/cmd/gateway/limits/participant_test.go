@@ -601,3 +601,53 @@ func TestWindowGrowthDoesNotDependOnReleaseOrder(t *testing.T) {
 		t.Fatalf("window = %v, want growth past the initial 4: half a four-slot window is the growth threshold", released)
 	}
 }
+
+// windowOf reads one participant's current window out of the snapshot the collector also reads.
+func windowOf(t *testing.T, limiter *ParticipantLimiter, participant string) float64 {
+	t.Helper()
+	for _, window := range limiter.Snapshot() {
+		if window.Participant == participant {
+			return window.Window
+		}
+	}
+	t.Fatalf("participant %q absent from the snapshot", participant)
+	return 0
+}
+
+// An operator raising the initial window after a bad episode expects the raise to reach participants
+// already tracked. Without that the setting only ever applies to a restarted gateway.
+func TestReconfigureLiftsAWindowThatCollapsedBelowTheNewInitial(t *testing.T) {
+	t.Parallel()
+	limiter := newTestLimiter(testConfig(), fixedNow(testEpoch))
+	limiter.Acquire("host-a", "model-a")
+	limiter.OnResult("host-a", "model-a", Overload)
+	if collapsed := windowOf(t, limiter, "host-a"); collapsed >= 4 {
+		t.Fatalf("window = %v, want it shrunk below the initial 4 by the overload", collapsed)
+	}
+
+	limiter.Reconfigure(ParticipantConfig{InitialWindow: 32, MaxWindow: 256, TripThreshold: 3})
+
+	if lifted := windowOf(t, limiter, "host-a"); lifted != 32 {
+		t.Fatalf("window = %v, want the new initial 32", lifted)
+	}
+}
+
+// Lowering the ceiling has to reach a window that already grew past it, or the limiter keeps admitting
+// beyond what the operator just allowed.
+func TestReconfigureClampsAWindowAboveTheNewCeiling(t *testing.T) {
+	t.Parallel()
+	limiter := newTestLimiter(testConfig(), fixedNow(testEpoch))
+	for range 40 {
+		limiter.Acquire("host-a", "model-a")
+		limiter.OnResult("host-a", "model-a", Success)
+	}
+	if grown := windowOf(t, limiter, "host-a"); grown <= 8 {
+		t.Fatalf("window = %v, want it grown well past 8 by the successes", grown)
+	}
+
+	limiter.Reconfigure(ParticipantConfig{InitialWindow: 1, MaxWindow: 8, TripThreshold: 3})
+
+	if clamped := windowOf(t, limiter, "host-a"); clamped != 8 {
+		t.Fatalf("window = %v, want the new ceiling 8", clamped)
+	}
+}
