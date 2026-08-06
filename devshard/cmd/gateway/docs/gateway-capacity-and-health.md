@@ -92,6 +92,8 @@ Recovery walks the ladder back down: a success while half-open clears the trip *
 
 **Manual reset.** `POST /v1/admin/participants/unquarantine` clears every model's breaker for one participant and restores the initial window, and reports "not found" for a participant the gateway is not tracking. In-flight counts are deliberately left alone: they count attempts still running, not penalty.
 
+Both limiters take a settings change without a restart. The gateway limiter swaps its whole configuration; the participant limiter keeps what it has learned, clamping any window above the new ceiling and lifting any that sits below the new initial. That lift is deliberate: an operator raising the initial window after a bad episode means it for the participants already tracked, and a limiter that applied it only to a restarted process would make the knob useless exactly when it is reached for. Nothing is lost by being generous — a participant that is still failing shrinks again within seconds, and the breaker is what protects against one that is failing badly.
+
 ## Outlier ejection
 
 `perf.Tracker` answers two questions in O(1) with no lock: **is this participant withheld from routing** (`Ejected`), and **did the detector want it out at all** (`Degraded`). They differ only by the pool-wide cap, and each has exactly one job.

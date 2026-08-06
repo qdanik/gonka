@@ -66,6 +66,23 @@ func defaultJitter(base time.Duration) time.Duration {
 	return time.Duration(rand.Int63n(span))
 }
 
+// Reconfigure swaps the tuning on a running limiter. A window already earned stays, clamped to the new
+// ceiling, and one that sits below the new initial is lifted to it. See gateway-capacity-and-health.md,
+// "The participant limiter".
+func (l *ParticipantLimiter) Reconfigure(cfg ParticipantConfig) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.cfg = cfg
+	for _, state := range l.states {
+		if cfg.MaxWindow > 0 && state.window > float64(cfg.MaxWindow) {
+			state.window = float64(cfg.MaxWindow)
+		}
+		if state.window < float64(cfg.InitialWindow) {
+			state.window = float64(cfg.InitialWindow)
+		}
+	}
+}
+
 func (l *ParticipantLimiter) stateLocked(k key) *hostState {
 	state, ok := l.states[k]
 	if !ok {
