@@ -488,3 +488,38 @@ func TestRunAttempt_ReleasesTheHostSlotOnEveryExitPath(t *testing.T) {
 		})
 	}
 }
+
+func TestRunAttemptCountsEveryChunkEvenWhenNoneCarriedContent(t *testing.T) {
+	t.Parallel()
+	testCases := []struct {
+		name             string
+		chunks           []string
+		wantStreamChunks int64
+	}{
+		{name: "a host that sent nothing at all"},
+		{
+			name:             "a host that sent only empty events",
+			chunks:           []string{"data: {}\n\n", "data: {}\n\n", "data: [DONE]\n\n"},
+			wantStreamChunks: 3,
+		},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			fixture := newAttemptFixture(
+				&fakeDispatcher{receipt: true, chunks: testCase.chunks, response: fakeResponse{confirmed: true}},
+				&fakeClassifier{},
+			)
+
+			runAttempt(context.Background(), fixture.spec)
+			done := doneEvent(t, fixture.drain())
+
+			if done.Outcome.Terminal != TerminalEmptyStream {
+				t.Fatalf("terminal = %v, want TerminalEmptyStream", done.Outcome.Terminal)
+			}
+			if done.Outcome.StreamChunks != testCase.wantStreamChunks {
+				t.Errorf("StreamChunks = %d, want %d", done.Outcome.StreamChunks, testCase.wantStreamChunks)
+			}
+		})
+	}
+}

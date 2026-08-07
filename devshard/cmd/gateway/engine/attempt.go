@@ -115,6 +115,7 @@ type attemptState struct {
 	completed    time.Time
 
 	contentChunks int64
+	streamChunks  int64
 
 	usageCompletionTokens int64
 	hostCreated           int64
@@ -174,6 +175,7 @@ type attemptWriter struct {
 func (w *attemptWriter) Write(chunk []byte) (int, error) {
 	now := w.spec.Now()
 
+	w.state.streamChunks++
 	if w.state.firstToken.IsZero() {
 		w.state.firstToken = now
 		w.spec.emit(w.progress(AttemptFirstToken, now))
@@ -297,6 +299,7 @@ func (s *attemptState) outcome(spec AttemptSpec) *AttemptOutcome {
 		Completed:   s.completed,
 
 		ContentChunks:         s.contentChunks,
+		StreamChunks:          s.streamChunks,
 		UsageCompletionTokens: s.usageCompletionTokens,
 		HostCreated:           s.hostCreated,
 
