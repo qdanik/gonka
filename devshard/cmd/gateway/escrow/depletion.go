@@ -12,8 +12,10 @@ import (
 
 // OnBalanceExhausted marks an escrow for replacement; the work happens in the next tick, so this
 // hook does no I/O and never fans out a per-escrow chain call.
-func (m *Manager) OnBalanceExhausted(escrowID string) {
-	m.depleted.mark(escrowID)
+func (m *Manager) OnBalanceExhausted(escrowID, reason string) {
+	if m.depleted.mark(escrowID) {
+		logging.Warn("escrow left routing", "escrow", escrowID, "reason", reason)
+	}
 }
 
 func (m *Manager) checkDepletion(ctx context.Context, snapshot chain.PhaseSnapshot, models []ModelConfig, devshards []store.DevshardRecord) error {
@@ -32,7 +34,7 @@ func (m *Manager) checkDepletion(ctx context.Context, snapshot chain.PhaseSnapsh
 			continue
 		}
 		if err := m.retireDepleted(ctx, record, modelByID, snapshot); err != nil {
-			m.OnBalanceExhausted(record.EscrowID)
+			m.OnBalanceExhausted(record.EscrowID, "retire_failed")
 			errs = append(errs, err)
 		}
 	}

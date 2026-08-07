@@ -1286,6 +1286,11 @@ func (s *Session) Nonce() uint64 {
 	return s.nonce
 }
 
+// Balance reads the escrow balance without the deep copy SnapshotState makes.
+func (s *Session) Balance() uint64 {
+	return s.sm.Balance()
+}
+
 func (s *Session) Diffs() []types.Diff {
 	s.mu.Lock()
 	defer s.mu.Unlock()

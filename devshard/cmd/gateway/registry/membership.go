@@ -9,7 +9,7 @@ type membership interface {
 // exhaustion is satisfied by *escrow.Manager. It is called from the request path, once per spent
 // candidate per pick, so it must mark and return rather than do I/O.
 type exhaustion interface {
-	OnBalanceExhausted(escrowID string)
+	OnBalanceExhausted(escrowID, reason string)
 }
 
 // slotCounts counts the slots each participant occupies in one escrow: a validator holding several

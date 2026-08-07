@@ -32,6 +32,7 @@ type EscrowSession interface {
 	ParticipantKeys() []string
 	HostParticipantKeyList() []string
 	Nonce() uint64
+	Balance() uint64
 	Phase() types.SessionPhase
 	PrepareInferenceFn(chooser user.ParamsForHost) (*user.PreparedInference, error)
 	Signatures() map[uint64]map[uint32][]byte
@@ -83,6 +84,7 @@ func newNonceStream(session EscrowSession, model string, now func() time.Time) n
 func (s nonceStream) ParticipantKeys() []string { return s.session.ParticipantKeys() }
 func (s nonceStream) GroupSize() int            { return s.groupSize }
 func (s nonceStream) LatestNonce() uint64       { return s.session.Nonce() }
+func (s nonceStream) Balance() uint64           { return s.session.Balance() }
 
 func (s nonceStream) Advance(decide func(scheduler.HostBinding) scheduler.NonceIntent) (scheduler.Prepared, error) {
 	prepared, err := s.session.PrepareInferenceFn(func(binding user.HostBinding) (user.InferenceParams, bool, error) {

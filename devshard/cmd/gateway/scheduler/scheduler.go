@@ -27,7 +27,7 @@ type Deps struct {
 	Observer          dispatchObserver
 	Now               func() time.Time
 	SubmitBuffer      int
-	OnEscrowExhausted func(escrowID string)
+	OnEscrowExhausted func(escrowID, reason string)
 }
 
 // Scheduler owns one actor per escrow. tieBreak is a single counter shared across every model and tie-set
@@ -43,7 +43,7 @@ type Scheduler struct {
 	now               func() time.Time
 	newTimer          func(time.Duration) (<-chan time.Time, func())
 	submitBuffer      int
-	onEscrowExhausted func(escrowID string)
+	onEscrowExhausted func(escrowID, reason string)
 
 	tieBreak atomic.Int64
 
@@ -250,6 +250,13 @@ func (s *Scheduler) holdGrace() time.Duration {
 	return time.Duration(s.settings.Load().Scheduler.HoldGraceMS) * time.Millisecond
 }
 
+func (s *Scheduler) balanceFloorPerRequest() int64 {
+	if s.settings == nil {
+		return 0
+	}
+	return s.settings.Load().Scheduler.BalanceFloorPerRequest
+}
+
 // pocPreserved reads the PoC-preserved set, preferring the model's own; a nil set means not loaded yet, so
 // every participant counts as preserved. See
 // gateway-invariants.md, "8. Fail-closed and fail-open are chosen per signal, and each choice is deliberate".
@@ -335,6 +342,7 @@ type session interface {
 	ParticipantKeys() []string // distinct participants (slots deduped) -- the exclusion universe
 	GroupSize() int            // len(group); nonce % GroupSize == hostIdx
 	LatestNonce() uint64       // for the nonce-cap gate
+	Balance() uint64           // for the balance floor
 }
 
 // HostBinding is the nonce the session is offering and the host it is bound to; Participant is that host's

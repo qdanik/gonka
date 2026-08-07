@@ -75,6 +75,7 @@ func newFakeSession(perSlotKeys ...string) *fakeSession {
 func (f *fakeSession) ParticipantKeys() []string        { return f.participants }
 func (f *fakeSession) HostParticipantKeyList() []string { return f.perSlotKeys }
 func (f *fakeSession) Nonce() uint64                    { return f.nonce.Load() }
+func (f *fakeSession) Balance() uint64                  { return 1 << 40 }
 func (f *fakeSession) Phase() types.SessionPhase        { return types.SessionPhase(f.phase.Load()) }
 
 func (f *fakeSession) PrepareInferenceFn(chooser user.ParamsForHost) (*user.PreparedInference, error) {
@@ -150,7 +151,7 @@ type recordingExhaustion struct {
 	exhausted []string
 }
 
-func (e *recordingExhaustion) OnBalanceExhausted(escrowID string) {
+func (e *recordingExhaustion) OnBalanceExhausted(escrowID, reason string) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.exhausted = append(e.exhausted, escrowID)
@@ -415,7 +416,7 @@ func TestNonceExhaustionReachesTheRotationSink(t *testing.T) {
 	})
 	mustAdd(t, registry, "1", "qwen")
 
-	registry.Exhausted("1")
+	registry.Exhausted("1", "test")
 
 	if got, want := rotation.seen(), []string{"1"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("OnBalanceExhausted calls = %v, want %v", got, want)

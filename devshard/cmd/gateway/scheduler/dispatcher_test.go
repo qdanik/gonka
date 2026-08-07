@@ -26,6 +26,7 @@ type committedNonce struct {
 // scriptedSession binds nonce N to slot N%len(slots), the same rule the real session uses, so a test
 // picks the host sequence by choosing the slot list.
 type scriptedSession struct {
+	balance         uint64
 	mu              sync.Mutex
 	slots           []string
 	nonce           uint64
@@ -335,7 +336,7 @@ func newHarness(t *testing.T, cfg harnessConfig) *harness {
 		stale:        staleHold,
 		newTimer:     clock.newTimer,
 		submitBuffer: cfg.submitBuffer,
-		onExhausted:  func(escrowID string) { exhausted.Store(&escrowID) },
+		onExhausted:  func(escrowID, reason string) { exhausted.Store(&escrowID) },
 	})
 	t.Cleanup(dispatcher.stop)
 	if !cfg.holdStart {
@@ -882,3 +883,5 @@ func TestDispatcherLifecycleIsIdempotent(t *testing.T) {
 		t.Fatalf("submitWaiter after stop = %v, want submitStopped", outcome)
 	}
 }
+
+func (s *scriptedSession) Balance() uint64 { return s.balance }

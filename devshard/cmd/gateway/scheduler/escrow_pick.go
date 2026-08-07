@@ -23,9 +23,9 @@ func (s *Scheduler) pickEscrow(profile RequestProfile, snapshot chain.PhaseSnaps
 			// The cap is checked here too: a client picks this escrow by id, and the nonce ceiling is
 			// what reserves room for the finalize and settlement that follow. See
 			// gateway-routing-and-nonces.md, "Picking an escrow".
-			if atNonceCap(candidate, snapshot.MaxNonce) {
+			if reason := exhaustionReason(candidate, snapshot.MaxNonce, s.balanceFloorPerRequest()); reason != "" {
 				if s.onEscrowExhausted != nil {
-					s.onEscrowExhausted(candidate.ID)
+					s.onEscrowExhausted(candidate.ID, reason)
 				}
 				return Escrow{}, ErrNoEscrowCapacity
 			}
@@ -39,11 +39,11 @@ func (s *Scheduler) pickEscrow(profile RequestProfile, snapshot chain.PhaseSnaps
 	bestScore := math.Inf(1)
 	var tied []int
 	for index, candidate := range candidates {
-		if atNonceCap(candidate, snapshot.MaxNonce) {
+		if reason := exhaustionReason(candidate, snapshot.MaxNonce, s.balanceFloorPerRequest()); reason != "" {
 			// Routing only declines it; replacing it belongs to the rotation lifecycle, which
 			// otherwise never learns and lets the escrow drain silently into ErrNoEscrowCapacity.
 			if s.onEscrowExhausted != nil {
-				s.onEscrowExhausted(candidate.ID)
+				s.onEscrowExhausted(candidate.ID, reason)
 			}
 			continue
 		}
@@ -90,4 +90,23 @@ func atNonceCap(candidate Escrow, maxNonce uint64) bool {
 		cutoff = types.MaxActiveNonce(uint32(maxNonce), candidate.Session.GroupSize())
 	}
 	return candidate.Session.LatestNonce() >= cutoff
+}
+
+// exhaustionReason is empty while the escrow may still be picked.
+func exhaustionReason(candidate Escrow, maxNonce uint64, perRequestReserve int64) string {
+	switch {
+	case atNonceCap(candidate, maxNonce):
+		return "nonce_cap"
+	case belowBalanceFloor(candidate, perRequestReserve):
+		return "balance_floor"
+	}
+	return ""
+}
+
+func belowBalanceFloor(candidate Escrow, perRequestReserve int64) bool {
+	if candidate.Session == nil || perRequestReserve <= 0 {
+		return false
+	}
+	floor := uint64(perRequestReserve) * uint64(candidate.ActiveUsers+1)
+	return candidate.Session.Balance() < floor
 }

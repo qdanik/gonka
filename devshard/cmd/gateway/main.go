@@ -632,7 +632,9 @@ func (w devshardWrites) report(err error) error {
 // cannot also be constructed before it.
 type depletionNotice struct{ manager *escrow.Manager }
 
-func (d *depletionNotice) OnBalanceExhausted(escrowID string) { d.manager.OnBalanceExhausted(escrowID) }
+func (d *depletionNotice) OnBalanceExhausted(escrowID, reason string) {
+	d.manager.OnBalanceExhausted(escrowID, reason)
+}
 
 type seedDevshard struct {
 	EscrowID      string `json:"escrow_id"`

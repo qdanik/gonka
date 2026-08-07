@@ -19,6 +19,7 @@ func (b *benchSession) Advance(func(HostBinding) NonceIntent) (Prepared, error) 
 func (b *benchSession) ParticipantKeys() []string                               { return nil }
 func (b *benchSession) GroupSize() int                                          { return b.groupSize }
 func (b *benchSession) LatestNonce() uint64                                     { return b.latestNonce }
+func (b *benchSession) Balance() uint64                                         { return 1 << 40 }
 
 type benchEscrows struct{ byModel map[string][]Escrow }
 
