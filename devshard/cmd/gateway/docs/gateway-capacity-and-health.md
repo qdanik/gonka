@@ -96,6 +96,14 @@ Both limiters take a settings change without a restart. The gateway limiter swap
 
 The three admission defaults are set from what a day of production spent rather than from what looked reasonable. In 24 hours the shard burned 1618 nonces for nobody against 1607 client requests — one wasted nonce per request — and 35% of those burns were a nonce arriving at a participant whose window was full, with another 21% a nonce held for a host no queued request would accept. A hold grace of 200ms is shorter than the gap between arrivals at that load, so the nonce burned before its request could turn up; it is 2s now. An initial window of 64 per participant left three participants carrying sixteen slots at a fleet-wide 12 concurrent until AIMD grew it, which under 200-second requests takes hours; it is 128. Queue depth follows the wait budget: at two minutes and a measured ten seconds per request, a slot drains about twelve deep, so twenty-four holds a burst without refusing on sight.
 
+## The balance floor
+
+An escrow that runs to zero does not stop serving — it starts failing. In one production minute three depleted escrows produced 178 client errors reading `insufficient escrow balance`, over half of that day's client-facing failures, because routing kept choosing an escrow that could no longer pay for what it was being handed.
+
+The floor takes an escrow out of selection while it can still refuse cleanly. It scales with load rather than being a fixed reserve: the requests already in flight are what the escrow is about to owe, and one more covers the arrival being decided, so a fresh escrow must still afford a single request. `balance_floor_per_request` carries the one number the gateway cannot derive — what a request may cost this escrow — because that depends on the escrow's own token price, which routing never reads. Read it as `token_price × max_tokens_cap` from `GET /devshard/{id}/v1/state`.
+
+It is zero by default, which disables it. A floor sized in the wrong unit would retire every escrow at once, so the gateway declines to guess.
+
 ## Outlier ejection
 
 `perf.Tracker` answers two questions in O(1) with no lock: **is this participant withheld from routing** (`Ejected`), and **did the detector want it out at all** (`Degraded`). They differ only by the pool-wide cap, and each has exactly one job.

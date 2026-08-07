@@ -701,6 +701,8 @@ func TestUnquarantiningAnUntrackedParticipantIsNotReportedAsDone(t *testing.T) {
 // it cannot commit a nonce, because *user.PreparedInference has no constructor outside its package.
 type weightlessSession struct{ participants []string }
 
+func (weightlessSession) Balance() uint64 { return 1 << 40 }
+
 func (s weightlessSession) ParticipantKeys() []string        { return s.participants }
 func (s weightlessSession) HostParticipantKeyList() []string { return s.participants }
 func (s weightlessSession) Nonce() uint64                    { return 1 }

@@ -41,7 +41,7 @@ type dispatcherDeps struct {
 	retire       func(*dispatcher) bool
 	idleGrace    time.Duration
 	submitBuffer int
-	onExhausted  func(escrowID string)
+	onExhausted  func(escrowID, reason string)
 }
 
 type submitOutcome int
@@ -381,7 +381,7 @@ func (d *dispatcher) failAdvance(decision Decision, taken reservation, err error
 		d.giveBack(taken)
 	}
 	if errors.Is(err, types.ErrInsufficientBalance) && d.onExhausted != nil {
-		d.onExhausted(d.escrowID)
+		d.onExhausted(d.escrowID, "insufficient_balance")
 	}
 	d.failWaiting(fmt.Errorf("escrow %s: advancing nonce: %w", d.escrowID, err))
 }

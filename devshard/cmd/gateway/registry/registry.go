@@ -362,11 +362,11 @@ func (r *Registry) IsBusy(escrowID string) bool {
 
 // Exhausted reports an escrow routing declined as spent -- out of nonces or out of deposit -- for the
 // rotation lifecycle, which is what replaces it.
-func (r *Registry) Exhausted(escrowID string) {
+func (r *Registry) Exhausted(escrowID, reason string) {
 	if r.exhaustion == nil {
 		return
 	}
-	r.exhaustion.OnBalanceExhausted(escrowID)
+	r.exhaustion.OnBalanceExhausted(escrowID, reason)
 }
 
 // Close releases every session still held, including the escrows still draining.

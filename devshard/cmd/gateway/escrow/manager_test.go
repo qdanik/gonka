@@ -214,7 +214,7 @@ func TestTickCheckDepletionRunsRegardlessOfBridgeBranch(t *testing.T) {
 		FullWeightsByModel: map[string]map[string]float64{"model-a": {"p": 1}},
 	}
 	m := NewManager(testManagerDeps(t, testStore, txClient, &fakeSnapshotSource{snapshot: snapshot}, &cfg))
-	m.OnBalanceExhausted("1")
+	m.OnBalanceExhausted("1", "test")
 
 	if err := m.tick(context.Background()); err != nil {
 		t.Fatalf("tick(): %v", err)
@@ -337,7 +337,7 @@ func TestTickRetiresDepletedEscrowWhileRotationDisabled(t *testing.T) {
 	cfg.Rotation.Enabled = false
 	cfg.Rotation.ModelsJSON = `[{"model_id":"model-a","target_count":1,"amount":1000,"private_key_env":"MODEL_A_KEY"}]`
 	m := NewManager(testManagerDeps(t, testStore, &fakeTxClient{createEscrowFn: failOnCreate(t)}, &fakeSnapshotSource{}, &cfg))
-	m.OnBalanceExhausted("1")
+	m.OnBalanceExhausted("1", "test")
 
 	if err := m.tick(context.Background()); err != nil {
 		t.Fatalf("tick(): %v", err)

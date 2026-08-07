@@ -59,9 +59,9 @@ func depletionModels() []ModelConfig {
 
 func TestOnBalanceExhaustedMarksAndDedups(t *testing.T) {
 	m := &Manager{}
-	m.OnBalanceExhausted("1")
-	m.OnBalanceExhausted("1")
-	m.OnBalanceExhausted("2")
+	m.OnBalanceExhausted("1", "test")
+	m.OnBalanceExhausted("1", "test")
+	m.OnBalanceExhausted("2", "test")
 
 	if len(m.depleted.keys) != 2 || !m.depleted.keys["1"] || !m.depleted.keys["2"] {
 		t.Fatalf("depletedMarks = %v, want {1,2} deduped", m.depleted.keys)
@@ -75,7 +75,7 @@ func TestCheckDepletionReplacesMarkedEscrowThenClearsMark(t *testing.T) {
 	m := depletionManager(t, testStore, txClient)
 	devshards := []store.DevshardRecord{testStore.devshards["1"]}
 
-	m.OnBalanceExhausted("1")
+	m.OnBalanceExhausted("1", "test")
 	if err := m.checkDepletion(context.Background(), chain.PhaseSnapshot{}, depletionModels(), devshards); err != nil {
 		t.Fatalf("checkDepletion() = %v, want nil", err)
 	}
@@ -125,7 +125,7 @@ func TestCheckDepletionRetiresEscrowWhoseModelHasNoReplacementConfigured(t *test
 	m := depletionManager(t, testStore, txClient)
 	devshards := []store.DevshardRecord{testStore.devshards["1"]}
 
-	m.OnBalanceExhausted("1")
+	m.OnBalanceExhausted("1", "test")
 	otherModelOnly := []ModelConfig{{ModelID: "model-b", TargetCount: 1, Amount: 1000, PrivateKeyEnv: "MODEL_B_KEY"}}
 	if err := m.checkDepletion(context.Background(), chain.PhaseSnapshot{}, otherModelOnly, devshards); err != nil {
 		t.Fatalf("checkDepletion() = %v, want nil", err)
@@ -148,7 +148,7 @@ func TestCheckDepletionFailedReplacementKeepsMarkForNextTick(t *testing.T) {
 	m := depletionManager(t, testStore, txClient)
 	devshards := []store.DevshardRecord{testStore.devshards["1"]}
 
-	m.OnBalanceExhausted("1")
+	m.OnBalanceExhausted("1", "test")
 	if err := m.checkDepletion(context.Background(), chain.PhaseSnapshot{}, depletionModels(), devshards); err == nil {
 		t.Fatal("checkDepletion() = nil, want the replacement failure surfaced")
 	}
@@ -234,5 +234,28 @@ func TestADepletedTempIsReplacedByARegular(t *testing.T) {
 
 	if got := testStore.devshards["999"].RotationRole; got != roleRegular {
 		t.Fatalf("replacement role = %q, want %q", got, roleRegular)
+	}
+}
+
+// The picker rediscovers an exhausted escrow on every request; the operator hears it once.
+func TestExhaustionIsAnnouncedOncePerTick(t *testing.T) {
+	t.Parallel()
+	var marks markSet
+
+	first := marks.mark("escrow-1")
+	second := marks.mark("escrow-1")
+	other := marks.mark("escrow-2")
+
+	if !first || second {
+		t.Fatalf("mark returned %v then %v, want the first to be new and the second not", first, second)
+	}
+	if !other {
+		t.Fatal("a different escrow was treated as already marked")
+	}
+	if drained := marks.drain(); len(drained) != 2 {
+		t.Fatalf("drain returned %d escrows, want both", len(drained))
+	}
+	if marks.mark("escrow-1") != true {
+		t.Fatal("a drained escrow was not announceable again on the next tick")
 	}
 }

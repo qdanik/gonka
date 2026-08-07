@@ -13,6 +13,7 @@ import (
 const modelA = "model-a"
 
 type fakeSession struct {
+	balance     uint64
 	latestNonce uint64
 	groupSize   int
 	calls       []string
@@ -426,7 +427,7 @@ func TestPickEscrowReportsANonceExhaustedCandidate(t *testing.T) {
 		candidate{id: "escrow-fresh", weight: 100, latestNonce: 1},
 	)
 	var reported []string
-	scheduler.onEscrowExhausted = func(escrowID string) { reported = append(reported, escrowID) }
+	scheduler.onEscrowExhausted = func(escrowID, reason string) { reported = append(reported, escrowID) }
 
 	picked, err := scheduler.pickEscrow(RequestProfile{Model: modelA}, chain.PhaseSnapshot{})
 	if err != nil {
@@ -475,5 +476,32 @@ func TestAPinnedEscrowUnderTheCeilingIsServed(t *testing.T) {
 
 	if err != nil || picked.ID != "escrow-1" {
 		t.Fatalf("pickEscrow() = %v, %v, want the pinned escrow served", picked.ID, err)
+	}
+}
+
+func (f *fakeSession) Balance() uint64 { return f.balance }
+
+// An escrow must leave routing while it can still refuse cleanly, not once it fails requests.
+func TestPickEscrowSkipsAnEscrowBelowItsBalanceFloor(t *testing.T) {
+	t.Parallel()
+	poor := Escrow{ID: "poor", Session: &fakeSession{balance: 500}, ActiveUsers: 4}
+	rich := Escrow{ID: "rich", Session: &fakeSession{balance: 1 << 30}, ActiveUsers: 4}
+
+	if !belowBalanceFloor(poor, 200) {
+		t.Fatal("an escrow holding 500 with four requests in flight and 200 apiece was kept in routing")
+	}
+	if belowBalanceFloor(rich, 200) {
+		t.Fatal("a funded escrow was taken out of routing")
+	}
+	if !belowBalanceFloor(Escrow{ID: "empty", Session: &fakeSession{balance: 100}, ActiveUsers: 0}, 200) {
+		t.Fatal("an escrow that cannot afford one request was kept in routing")
+	}
+}
+
+// The floor is off until an operator sizes it.
+func TestBalanceFloorIsInertUntilConfigured(t *testing.T) {
+	t.Parallel()
+	if belowBalanceFloor(Escrow{ID: "any", Session: &fakeSession{balance: 0}, ActiveUsers: 99}, 0) {
+		t.Fatal("an unconfigured floor took an escrow out of routing")
 	}
 }

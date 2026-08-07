@@ -34,13 +34,18 @@ type markSet struct {
 	keys map[string]bool
 }
 
-func (s *markSet) mark(key string) {
+// mark reports whether the key was new to this tick.
+func (s *markSet) mark(key string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.keys == nil {
 		s.keys = make(map[string]bool)
 	}
+	if s.keys[key] {
+		return false
+	}
 	s.keys[key] = true
+	return true
 }
 
 func (s *markSet) drain() map[string]bool {
