@@ -535,3 +535,48 @@ func boolLiteral(value bool) string {
 	}
 	return "false"
 }
+
+func TestASmallBudgetSilencesKimiInTheTemplateToo(t *testing.T) {
+	t.Parallel()
+	testCases := []struct {
+		name         string
+		body         string
+		wantThinking any
+	}{
+		{
+			name:         "below the cutoff the template is told not to think",
+			body:         `{"max_tokens":144}`,
+			wantThinking: false,
+		},
+		{
+			name: "at the cutoff the template is left alone",
+			body: `{"max_tokens":256}`,
+		},
+		{
+			name:         "a client that asked to think keeps its own answer",
+			body:         `{"max_tokens":144,"chat_template_kwargs":{"thinking":true}}`,
+			wantThinking: true,
+		},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			document := parseTestDocument(t, testCase.body)
+
+			if err := thinkingTokenBudgetResolve()(RuleContext{Document: document, Param: "thinking_token_budget", Profile: kimiProfile}); err != nil {
+				t.Fatalf("resolve = %v, want nil", err)
+			}
+
+			kwargs, _, _ := document.ObjectField("chat_template_kwargs")
+			if testCase.wantThinking == nil {
+				if _, held := kwargs["thinking"]; held {
+					t.Fatalf("chat_template_kwargs = %v, want no thinking flag", kwargs)
+				}
+				return
+			}
+			if kwargs["thinking"] != testCase.wantThinking {
+				t.Fatalf("chat_template_kwargs.thinking = %v, want %v", kwargs["thinking"], testCase.wantThinking)
+			}
+		})
+	}
+}

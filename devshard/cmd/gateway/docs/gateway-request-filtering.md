@@ -77,6 +77,23 @@ The forcing is applied after every validation stage, so the rules judge the requ
 
 `max_tokens` is also always written, even when the client sent neither token field. Zero always means "unset", so it resolves to the operator's default **in full**: the cap bounds what a client may ask for, not what an operator grants a client that asks for nothing, so a default above the cap is honoured rather than trimmed. A non-zero value is clamped to the cap unless the caller is an administrator, which is the only cap bypass. When both fields are present the result is the minimum of the two, mirrored back into `max_completion_tokens` only if the client sent it (`filters/rules_tokens.go`, `applyOutputTokenLimits`). Per-model overrides can replace either limit; a zero from an override means "not set for this model", so the global limit stands.
 
+### Silencing Kimi's reasoning
+
+Kimi reasons by default, and `max_tokens` is the budget for reasoning **and** answer together. Below `kimiThinkingBudgetForceZeroBelow` there is not enough room for both, so the gateway asks for no reasoning at all — twice, because neither mechanism alone is reliable.
+
+`thinking_token_budget: 0` is a real top-level vLLM parameter ([protocol.py](https://github.com/vllm-project/vllm/blob/v0.20.0/vllm/entrypoints/openai/chat_completion/protocol.py#L183)), and `0` means "close the reasoning block now" — unlimited is expressed by omitting the field. But it is implemented as a logits processor, and vLLM **discards every logits processor when speculative decoding is on** ([logits_processor/__init__.py](https://github.com/vllm-project/vllm/blob/v0.20.0/vllm/v1/sample/logits_processor/__init__.py#L202)), without naming this one in the warning. Two hosts of one group answered the same request differently for exactly this reason: one closed its reasoning after a single token, the other spent all 144 on it and returned an empty `content`.
+
+`chat_template_kwargs: {"thinking": false}` goes through the chat template instead, which no logits processor can drop:
+
+```jinja
+{%- if thinking is defined and thinking is false -%}
+<think></think>
+```
+
+vLLM also builds the reasoning parser from the same kwargs, so it falls back to identity and the whole answer lands in `content`. The test is an identity test against the literal boolean — Moonshot's hosted-API shape `{"thinking": {"type": "disabled"}}` is a dict, not `false`, and leaves reasoning on. A client that put its own `thinking` in `chat_template_kwargs` keeps it: the gateway fills the field, never overwrites it.
+
+Two caveats worth knowing. `Kimi-K2-Thinking` has no `thinking` variable in its template at all, so nothing disables its reasoning. And `enable_thinking`, which the gateway mirrors into the kwargs for every non-strip profile, is read by **no** Kimi template — it is a no-op there, kept because Qwen does read it.
+
 ## Bounds that exist because a host dies without them
 
 | Field | Rule | Consequence of removing it |

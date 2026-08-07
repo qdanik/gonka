@@ -182,7 +182,9 @@ func thinkingTokenBudgetResolve() RuleFunc {
 		}
 		if maxTokens < kimiThinkingBudgetForceZeroBelow {
 			ctx.Document.Set("thinking_token_budget", uint64(0))
-			return nil
+			// The budget alone is a logits processor, which speculative decoding discards. See
+			// gateway-request-filtering.md, "Silencing Kimi's reasoning".
+			return mirrorFieldIntoKwargs(ctx.Document, "thinking", false)
 		}
 		if !ctx.Document.Has("thinking_token_budget") {
 			ctx.Document.Set("thinking_token_budget", maxTokens/kimiThinkingBudgetDivisor)

@@ -73,9 +73,8 @@ func TestGoldenParity(t *testing.T) {
 				if decodeErr != nil {
 					t.Fatalf("decoding golden body: %v", decodeErr)
 				}
-				// Forcing the stream is the one deliberate divergence from the old pipeline, so both
-				// sides drop it and parity covers the rest.
-				if got, want := withoutStreamFields(t, result.Body), withoutStreamFields(t, wantBody); !bytes.Equal(got, want) {
+				// Both sides drop what the new pipeline deliberately forces, so parity covers the rest.
+				if got, want := withoutForcedFields(t, result.Body), withoutForcedFields(t, wantBody); !bytes.Equal(got, want) {
 					t.Fatalf("body mismatch\n golden: %s\n got: %s", want, got)
 				}
 			case "rejected":
@@ -95,7 +94,7 @@ func TestGoldenParity(t *testing.T) {
 	}
 }
 
-func withoutStreamFields(t *testing.T, body []byte) []byte {
+func withoutForcedFields(t *testing.T, body []byte) []byte {
 	t.Helper()
 	document, err := ParseDocument(body)
 	if err != nil {
@@ -103,6 +102,12 @@ func withoutStreamFields(t *testing.T, body []byte) []byte {
 	}
 	document.Delete("stream")
 	document.Delete("stream_options")
+	if kwargs, present, isObject := document.ObjectField("chat_template_kwargs"); present && isObject {
+		delete(kwargs, "thinking")
+		if len(kwargs) == 0 {
+			document.Delete("chat_template_kwargs")
+		}
+	}
 	stripped, err := document.Marshal()
 	if err != nil {
 		t.Fatalf("marshalling body %s: %v", body, err)
