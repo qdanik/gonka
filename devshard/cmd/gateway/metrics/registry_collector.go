@@ -34,7 +34,7 @@ func NewRegistryCollector(sources RegistrySources) *RegistryCollector {
 	return &RegistryCollector{
 		sources:             sources,
 		active:              gaugeDesc("devshard_runtime_active", "Whether an escrow runtime is accepting requests.", "devshard_id", "model"),
-		activeRequests:      gaugeDesc("devshard_runtime_active_requests", "Requests currently assigned to an escrow runtime.", "devshard_id", "model"),
+		activeRequests:      gaugeDesc("devshard_runtime_active_requests", "Nonces an escrow is still answerable for: the client may already have its reply while the chain vote is owed.", "devshard_id", "model"),
 		escrowWeight:        gaugeDesc("devshard_gateway_escrow_weight", "Per-escrow effective host weight used by the capacity-aware picker.", "devshard_id"),
 		participantLimited:  gaugeDesc("devshard_gateway_escrow_participant_limited", "Whether at least one of an escrow's participants is currently unavailable.", "devshard_id", "model"),
 		blockedParticipants: gaugeDesc("devshard_gateway_escrow_blocked_participants", "Participants of an escrow that are currently unavailable.", "devshard_id", "model"),

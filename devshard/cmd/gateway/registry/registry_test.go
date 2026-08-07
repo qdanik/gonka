@@ -929,3 +929,80 @@ func TestRetireClosesTheSessionOutsideTheRegistryLock(t *testing.T) {
 	}
 	sessionLock.Lock()
 }
+
+func TestSnapshotKeepsARetiredEscrowUntilItDrains(t *testing.T) {
+	t.Parallel()
+	session := newFakeSession("hostA")
+	registry := New(Deps{
+		ServingSessions: newSessions(map[string]*fakeSession{"1": session}).open,
+		Now:             fixedClock(),
+	})
+	mustAdd(t, registry, "1", "qwen")
+	_, release, acquired := registry.Acquire("1")
+	if !acquired {
+		t.Fatal("Acquire(1) = false, want true")
+	}
+
+	if err := registry.Retire("1"); err != nil {
+		t.Fatalf("Retire(1) = %v, want nil", err)
+	}
+
+	draining := registry.Snapshot()
+	if len(draining) != 1 {
+		t.Fatalf("Snapshot() while draining = %+v, want the retired escrow still reported", draining)
+	}
+	if draining[0].InFlight != 1 {
+		t.Errorf("InFlight while draining = %d, want 1", draining[0].InFlight)
+	}
+	if draining[0].Accepting {
+		t.Error("Accepting while draining = true, want false")
+	}
+
+	release()
+
+	if drained := registry.Snapshot(); len(drained) != 0 {
+		t.Fatalf("Snapshot() after the last request drained = %+v, want the escrow gone", drained)
+	}
+}
+
+func TestSnapshotDropsADrainedEscrowWhoseCloseFailed(t *testing.T) {
+	t.Parallel()
+	session := newFakeSession("hostA")
+	session.closeErr = errors.New("flush failed")
+	registry := New(Deps{
+		ServingSessions: newSessions(map[string]*fakeSession{"1": session}).open,
+		Now:             fixedClock(),
+	})
+	mustAdd(t, registry, "1", "qwen")
+	_, release, _ := registry.Acquire("1")
+	if err := registry.Retire("1"); err != nil {
+		t.Fatalf("Retire(1) = %v, want nil", err)
+	}
+
+	release()
+
+	if drained := registry.Snapshot(); len(drained) != 0 {
+		t.Fatalf("Snapshot() after a failed close = %+v, want no series for an escrow with nothing left", drained)
+	}
+}
+
+func TestTheDrainingViewShrinksWhenAnEscrowFinishes(t *testing.T) {
+	t.Parallel()
+	sessions := map[string]*fakeSession{"1": newFakeSession("hostA"), "2": newFakeSession("hostB")}
+	registry := New(Deps{
+		ServingSessions: newSessions(sessions).open,
+		Now:             fixedClock(),
+	})
+	for _, escrowID := range []string{"1", "2"} {
+		mustAdd(t, registry, escrowID, "qwen")
+		_, release, _ := registry.Acquire(escrowID)
+		if err := registry.Retire(escrowID); err != nil {
+			t.Fatalf("Retire(%s) = %v, want nil", escrowID, err)
+		}
+		release()
+	}
+
+	if view := registry.drainingView.Load(); view != nil && len(*view) != 0 {
+		t.Fatalf("draining view holds %d entries after both drained, want none", len(*view))
+	}
+}

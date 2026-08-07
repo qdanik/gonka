@@ -12,6 +12,8 @@ const (
 	hostB = "participant-b"
 )
 
+var soleHost = []string{hostA}
+
 var (
 	baseTime  = time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 	staleHold = 200 * time.Millisecond
@@ -81,7 +83,7 @@ func TestServableAgreesWithMatchOverEveryFilterCombination(t *testing.T) {
 		matchWouldServe := false
 		for _, participant := range participants {
 			binding := HostBinding{Nonce: 1, Participant: participant}
-			if _, serving := match(binding, []*waiter{queued}, availability, baseTime, staleHold).(serve); serving {
+			if _, serving := match(binding, []*waiter{queued}, soleHost, availability, baseTime, staleHold).(serve); serving {
 				matchWouldServe = true
 			}
 		}
@@ -153,7 +155,7 @@ func TestMatchHostLevelFilters(t *testing.T) {
 			availability.pocRequired = always(testCase.pocRequired)
 			availability.throttled = always(testCase.throttled)
 
-			decision := match(binding, []*waiter{queued}, availability, baseTime, staleHold)
+			decision := match(binding, []*waiter{queued}, soleHost, availability, baseTime, staleHold)
 
 			if testCase.wantServed {
 				wantServe(t, decision, queued)
@@ -171,7 +173,7 @@ func TestMatchServesOldestCompatibleWaiter(t *testing.T) {
 	newest := queuedWaiter(baseTime.Add(20*time.Millisecond), "model-c")
 	binding := HostBinding{Nonce: 4, HostIdx: 0, Participant: hostA}
 
-	decision := match(binding, []*waiter{oldest, middle, newest}, openAvailability(), baseTime, staleHold)
+	decision := match(binding, []*waiter{oldest, middle, newest}, soleHost, openAvailability(), baseTime, staleHold)
 
 	wantServe(t, decision, oldest)
 }
@@ -182,7 +184,7 @@ func TestMatchConservesNonceForLaterWaiter(t *testing.T) {
 	compatible := queuedWaiter(baseTime.Add(10*time.Millisecond), "model-b")
 	binding := HostBinding{Nonce: 4, HostIdx: 0, Participant: hostA}
 
-	decision := match(binding, []*waiter{excluding, compatible}, openAvailability(), baseTime, staleHold)
+	decision := match(binding, []*waiter{excluding, compatible}, soleHost, openAvailability(), baseTime, staleHold)
 
 	wantServe(t, decision, compatible)
 }
@@ -200,16 +202,19 @@ func TestMatchHoldsInsideStaleWindow(t *testing.T) {
 	}{
 		{name: "well inside the window holds", now: baseTime.Add(50 * time.Millisecond), wantHold: true},
 		{name: "one nanosecond before expiry holds", now: baseTime.Add(staleHold - time.Nanosecond), wantHold: true},
-		{name: "exactly at expiry burns", now: baseTime.Add(staleHold)},
-		{name: "past expiry burns", now: baseTime.Add(staleHold + time.Millisecond)},
+		{name: "exactly at expiry serves the excluded waiter", now: baseTime.Add(staleHold)},
+		{name: "past expiry serves the excluded waiter", now: baseTime.Add(staleHold + time.Millisecond)},
 	}
 	for _, testCase := range tests {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
-			decision := match(binding, []*waiter{oldest, newer}, openAvailability(), testCase.now, staleHold)
+			decision := match(binding, []*waiter{oldest, newer}, soleHost, openAvailability(), testCase.now, staleHold)
 
 			if !testCase.wantHold {
-				wantBurn(t, decision, ghostExclude)
+				outcome, served := decision.(serve)
+				if !served || !outcome.despiteExclusion {
+					t.Fatalf("decision = %T, want the excluded waiter served once the window expired", decision)
+				}
 				return
 			}
 			held, ok := decision.(hold)
@@ -236,9 +241,10 @@ func TestMatchBurnKindPastStaleWindow(t *testing.T) {
 		wantKind   GhostKind
 	}{
 		{
-			name:     "every waiter excludes the host",
-			waiting:  []*waiter{queuedWaiter(baseTime, "model-a", hostA)},
-			wantKind: ghostExclude,
+			name:       "every waiter excludes the host and the host cannot serve it anyway",
+			waiting:    []*waiter{queuedWaiter(baseTime, "model-a", hostA)},
+			capability: capabilityBlocksModels("model-a"),
+			wantKind:   ghostExclude,
 		},
 		{
 			name:       "a scanned waiter is capability blocked",
@@ -253,25 +259,10 @@ func TestMatchBurnKindPastStaleWindow(t *testing.T) {
 			wantKind: ghostCapability,
 		},
 		{
-			name:       "exclusion is checked before capability",
-			waiting:    []*waiter{queuedWaiter(baseTime, "model-a", hostA)},
-			capability: capabilityBlocksModels("model-a"),
-			wantKind:   ghostExclude,
-		},
-		{
-			name:     "exclusion is checked before the state block",
+			name:     "an excluded waiter the host cannot serve either way",
 			waiting:  []*waiter{queuedWaiter(baseTime, "model-a", hostA)},
 			state:    always(true),
 			wantKind: ghostExclude,
-		},
-		{
-			name: "an excluding waiter does not mask a later blocked one",
-			waiting: []*waiter{
-				queuedWaiter(baseTime, "model-a", hostA),
-				queuedWaiter(baseTime.Add(time.Millisecond), "model-b"),
-			},
-			capability: capabilityBlocksModels("model-b"),
-			wantKind:   ghostCapability,
 		},
 	}
 	for _, testCase := range tests {
@@ -285,7 +276,7 @@ func TestMatchBurnKindPastStaleWindow(t *testing.T) {
 				availability.stateBlocked = testCase.state
 			}
 
-			decision := match(binding, testCase.waiting, availability, expired, staleHold)
+			decision := match(binding, testCase.waiting, soleHost, availability, expired, staleHold)
 
 			wantBurn(t, decision, testCase.wantKind)
 		})
@@ -299,15 +290,18 @@ func TestMatchKeysExclusionByParticipantNotSlot(t *testing.T) {
 		{Nonce: 4, HostIdx: 0, Participant: hostA},
 		{Nonce: 9, HostIdx: 5, Participant: hostA},
 	}
-	expired := baseTime.Add(staleHold)
 
 	for _, binding := range siblingSlots {
-		decision := match(binding, []*waiter{excluding}, openAvailability(), expired, staleHold)
-
-		if _, served := decision.(serve); served {
-			t.Fatalf("slot %d served a waiter that excluded participant %q", binding.HostIdx, binding.Participant)
+		inside := match(binding, []*waiter{excluding}, soleHost, openAvailability(), baseTime, staleHold)
+		if _, held := inside.(hold); !held {
+			t.Fatalf("slot %d gave %T inside the stale window, want the nonce held", binding.HostIdx, inside)
 		}
-		wantBurn(t, decision, ghostExclude)
+
+		past := match(binding, []*waiter{excluding}, soleHost, openAvailability(), baseTime.Add(staleHold), staleHold)
+		outcome, served := past.(serve)
+		if !served || !outcome.despiteExclusion {
+			t.Fatalf("slot %d gave %T past the stale window, want the excluded waiter served", binding.HostIdx, past)
+		}
 	}
 }
 
@@ -338,7 +332,7 @@ func TestMatchEmptyQueueNeverHolds(t *testing.T) {
 	for _, testCase := range tests {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
-			decision := match(binding, nil, testCase.availability, baseTime, staleHold)
+			decision := match(binding, nil, soleHost, testCase.availability, baseTime, staleHold)
 
 			if testCase.wantDeclined {
 				if _, declined := decision.(decline); !declined {
@@ -357,7 +351,7 @@ func TestMatchDoesNotMutateItsInputs(t *testing.T) {
 	second := queuedWaiter(baseTime.Add(time.Millisecond), "model-b")
 	waiting := []*waiter{first, second}
 
-	match(HostBinding{Nonce: 4, HostIdx: 0, Participant: hostA}, waiting, openAvailability(), baseTime, staleHold)
+	match(HostBinding{Nonce: 4, HostIdx: 0, Participant: hostA}, waiting, soleHost, openAvailability(), baseTime, staleHold)
 
 	if len(waiting) != 2 || waiting[0] != first || waiting[1] != second {
 		t.Fatalf("waiting queue was reordered or resized: %v", waiting)
@@ -424,7 +418,7 @@ func TestMatchIsTotal(t *testing.T) {
 					",ejected=" + boolLabel(ejected)
 				t.Run(name, func(t *testing.T) {
 					t.Parallel()
-					decision := match(binding, queue.waiting, availability, clock.now, staleHold)
+					decision := match(binding, queue.waiting, soleHost, availability, clock.now, staleHold)
 
 					if decision == nil {
 						t.Fatal("match returned a nil Decision")
@@ -437,8 +431,11 @@ func TestMatchIsTotal(t *testing.T) {
 						if pocRequired || throttled || stateBlocked || capabilityBlocked {
 							t.Fatalf("served through an active filter: %+v", availability)
 						}
-						if outcome.waiter.exclude[hostA] || outcome.waiter.profile.Model == blockedModel {
+						if outcome.waiter.profile.Model == blockedModel {
 							t.Fatalf("served an incompatible waiter %+v", outcome.waiter.profile)
+						}
+						if outcome.waiter.exclude[hostA] && !outcome.despiteExclusion {
+							t.Fatalf("served an excluded waiter without saying so %+v", outcome.waiter.profile)
 						}
 					case hold:
 						if pocRequired || throttled {
@@ -484,7 +481,7 @@ func TestMatchSkipsAbandonedWaiters(t *testing.T) {
 		abandoned.abandoned.Store(true)
 		live := queuedWaiter(baseTime.Add(time.Millisecond), "model-b")
 
-		decision := match(binding, []*waiter{abandoned, live}, openAvailability(), baseTime, staleHold)
+		decision := match(binding, []*waiter{abandoned, live}, soleHost, openAvailability(), baseTime, staleHold)
 
 		wantServe(t, decision, live)
 	})
@@ -496,7 +493,7 @@ func TestMatchSkipsAbandonedWaiters(t *testing.T) {
 		live := queuedWaiter(baseTime.Add(150*time.Millisecond), "model-b", hostA)
 		past := baseTime.Add(250 * time.Millisecond)
 
-		decision := match(binding, []*waiter{abandoned, live}, openAvailability(), past, staleHold)
+		decision := match(binding, []*waiter{abandoned, live}, soleHost, openAvailability(), past, staleHold)
 
 		held, ok := decision.(hold)
 		if !ok {
@@ -514,7 +511,7 @@ func TestMatchSkipsAbandonedWaiters(t *testing.T) {
 		abandoned := queuedWaiter(baseTime, "model-a", hostA)
 		abandoned.abandoned.Store(true)
 
-		decision := match(binding, []*waiter{abandoned}, openAvailability(), baseTime, staleHold)
+		decision := match(binding, []*waiter{abandoned}, soleHost, openAvailability(), baseTime, staleHold)
 
 		if _, declined := decision.(decline); !declined {
 			t.Fatalf("decision = %T (%v), want the nonce declined", decision, decision)

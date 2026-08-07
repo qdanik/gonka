@@ -104,6 +104,12 @@ The floor takes an escrow out of selection while it can still refuse cleanly. It
 
 It is zero by default, which disables it. A floor sized in the wrong unit would retire every escrow at once, so the gateway declines to guess.
 
+## What in-flight actually counts
+
+`devshard_runtime_active_requests` is not the number of clients waiting. The escrow hold a race takes is kept "for as long as the race's vote is owed" (`engine/engine.go`, `raceRegistration.holdEscrow`), and it is released on the goroutine that posts the timeout vote for every nonce the race left unfinished — after the losers have been given their grace, which defaults to ten minutes. So a request whose answer was delivered long ago keeps its escrow's count up until the chain has been told what became of each of its nonces. Reading the gauge as "requests still generating" overstates load by however much settlement is behind.
+
+A retired escrow stays in `Snapshot` until that count reaches zero, reporting `devshard_runtime_active` as 0 while it drains (`registry/registry.go`). Dropping it at retirement ended the series mid-drain: the graph broke off at whatever the count happened to be — 208 in one production case — rather than falling to zero, so the most interesting minutes of an escrow's life were the ones no panel could show.
+
 ## Outlier ejection
 
 `perf.Tracker` answers two questions in O(1) with no lock: **is this participant withheld from routing** (`Ejected`), and **did the detector want it out at all** (`Degraded`). They differ only by the pool-wide cap, and each has exactly one job.

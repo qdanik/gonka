@@ -44,7 +44,8 @@ type Registry struct {
 	exhaustion       exhaustion
 	now              func() time.Time
 
-	live atomic.Pointer[liveSet]
+	live         atomic.Pointer[liveSet]
+	drainingView atomic.Pointer[[]*escrowEntry]
 
 	openings sync.Map
 
@@ -169,6 +170,7 @@ func (r *Registry) unpublish(escrowID string) (*escrowEntry, bool) {
 	}
 	r.pushMembershipLocked()
 	r.draining[entry] = struct{}{}
+	r.publishDrainingLocked()
 	if entry.busy() {
 		logging.Info("escrow retired, draining", "escrow", escrowID, "in_flight", entry.inFlight.Load())
 		return nil, false
@@ -189,8 +191,19 @@ func (r *Registry) closeDraining(entry *escrowEntry) error {
 	}
 	r.mu.Lock()
 	delete(r.draining, entry)
+	r.publishDrainingLocked()
 	r.mu.Unlock()
 	return nil
+}
+
+// publishDrainingLocked keeps Snapshot lock-free: a scrape cannot wait on a retirement.
+func (r *Registry) publishDrainingLocked() {
+	entries := make([]*escrowEntry, 0, len(r.draining))
+	for entry := range r.draining {
+		entries = append(entries, entry)
+	}
+	sort.Slice(entries, func(first, second int) bool { return entries[first].id < entries[second].id })
+	r.drainingView.Store(&entries)
 }
 
 // Candidates satisfies scheduler.escrowSource.
@@ -220,22 +233,32 @@ type EscrowState struct {
 	Participants []string
 }
 
-// Snapshot returns every published escrow in id order, including those no longer accepting. It costs
-// one atomic load and takes no lock.
+// Snapshot returns every published escrow in id order, plus the retired ones still draining. It takes
+// no lock. See gateway-capacity-and-health.md, "What in-flight actually counts".
 func (r *Registry) Snapshot() []EscrowState {
 	published := r.live.Load()
 	states := make([]EscrowState, 0, len(published.byID))
 	for _, id := range sortedKeys(published.byID) {
-		entry := published.byID[id]
-		states = append(states, EscrowState{
-			ID:           entry.id,
-			Model:        entry.model,
-			Accepting:    entry.accepting(),
-			InFlight:     entry.inFlight.Load(),
-			Participants: sortedKeys(entry.slots),
-		})
+		states = append(states, stateOf(published.byID[id], false))
+	}
+	if draining := r.drainingView.Load(); draining != nil {
+		for _, entry := range *draining {
+			if entry.busy() {
+				states = append(states, stateOf(entry, true))
+			}
+		}
 	}
 	return states
+}
+
+func stateOf(entry *escrowEntry, draining bool) EscrowState {
+	return EscrowState{
+		ID:           entry.id,
+		Model:        entry.model,
+		Accepting:    !draining && entry.accepting(),
+		InFlight:     entry.inFlight.Load(),
+		Participants: sortedKeys(entry.slots),
+	}
 }
 
 // RoutableSession is the read-only handle the status routes read. It takes no in-flight count and is

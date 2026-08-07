@@ -140,6 +140,18 @@ The escrow hold is idempotent (a `sync.Once` around the release, `registry.go`, 
 
 One asymmetry has no comment stating it: **a ghost burn takes no escrow hold**. The burn branch returns from the intent before the acquire-and-hold block. That is consistent — a ghost is never dispatched and owes no vote, so it needs nothing kept alive on its behalf — but it means a ghost commit is not protected against a concurrent retire the way a serve is.
 
+## Serving a host the request excluded
+
+A request that escalated past a host excludes it, so the race does not hand it back the same host it just gave up on. The exclusion is keyed by participant, not by slot, and lasts as long as the request waits.
+
+That exclusion is expensive in a way nothing about it suggests, because **the host is the nonce's own position**: `hostIdx = nonce % groupSize`, and `PrepareInferenceFn` returns the same nonce to the next caller if the chooser declines it (`user/session.go`). Declining an excluded host therefore does not move to another one — the only way to reach the next host is to spend the nonce standing in front of it. And a validator may hold several slots of the group, so excluding **one** participant with ten of sixteen slots costs ten nonces to walk past, every time.
+
+So past the stale window, when a host is blocked by nothing except the waiting requests' own refusal, the dispatcher serves the oldest such request instead of burning (`scheduler/match.go`, `match`). Both cost exactly one nonce; burning buys nothing, serving buys an attempt.
+
+**Only when there is no alternative.** If any other participant could serve that waiter, the nonce is burned as before and the walk continues — otherwise a request would be handed straight back to the host it escalated away from while a healthy host sat idle (`availability.onlyThisHostIsLeft`). The serve is marked, so an operator can tell it apart from an ordinary one.
+
+Every burn names its participant, in the log line and on `devshard_gateway_ghost_nonces_burned_total`. Without it the count says nonces are being spent and not which host's slots are eating them, which is the only thing that makes the number actionable.
+
 ## Host blocking is permanent
 
 `BlockHost(escrowID, participant)` is called by the engine when a host returns a post-state-root that diverges from the local one. It is per-escrow, has no expiry, no eviction and no recovery for the lifetime of the process (`scheduler.go`, `Scheduler.BlockHost`). That is deliberate, though an unbounded map with no cleanup reads like an oversight: the host demonstrated it is building on state the escrow does not share, so every later dispatch to it would compound the divergence. It is a correctness valve, not a performance signal.

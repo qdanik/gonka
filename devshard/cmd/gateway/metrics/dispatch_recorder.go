@@ -14,8 +14,8 @@ func NewDispatchRecorder(telemetry *Metrics) *DispatchRecorder {
 	recorder := &DispatchRecorder{
 		ghostBurns: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "devshard_gateway_ghost_nonces_burned_total",
-			Help: "Total nonces burned as silent ghost probes by escrow and reason.",
-		}, []string{"devshard_id", "reason"}),
+			Help: "Total nonces burned as silent ghost probes by escrow, host and reason.",
+		}, []string{"devshard_id", "participant", "reason"}),
 		nonceHolds: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "devshard_gateway_nonce_holds_total",
 			Help: "Total times an escrow parked its next nonce instead of burning or serving it.",
@@ -29,8 +29,12 @@ func NewDispatchRecorder(telemetry *Metrics) *DispatchRecorder {
 	return recorder
 }
 
-func (r *DispatchRecorder) GhostBurned(escrowID, reason string) {
-	r.ghostBurns.WithLabelValues(metricLabel(escrowID, labelUnknown), metricLabel(reason, labelUnknown)).Inc()
+func (r *DispatchRecorder) GhostBurned(escrowID, participant, reason string) {
+	r.ghostBurns.WithLabelValues(
+		metricLabel(escrowID, labelUnknown),
+		metricLabel(participant, labelUnknown),
+		metricLabel(reason, labelUnknown),
+	).Inc()
 }
 
 func (r *DispatchRecorder) NonceHeld(escrowID string) {
