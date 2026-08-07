@@ -43,7 +43,7 @@ type clientStream struct {
 	terminated bool
 }
 
-func newClientStream(w http.ResponseWriter, requestID string, streaming bool, logprobs filters.LogprobIntent) *clientStream {
+func newClientStream(w http.ResponseWriter, requestID string, streaming, usage bool, logprobs filters.LogprobIntent) *clientStream {
 	stream := &clientStream{
 		writer:     w,
 		controller: http.NewResponseController(w),
@@ -52,7 +52,7 @@ func newClientStream(w http.ResponseWriter, requestID string, streaming bool, lo
 		logprobs:   logprobs,
 	}
 	if streaming {
-		stream.rewriter = filters.NewStreamRewriter(logprobs)
+		stream.rewriter = filters.NewStreamRewriter(logprobs, usage)
 	}
 	return stream
 }

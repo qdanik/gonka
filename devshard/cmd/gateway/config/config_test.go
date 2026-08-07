@@ -166,9 +166,6 @@ func TestValidateCatchesEveryRuleBreach(t *testing.T) {
 		{"engine_first_token_floor_ms too low", func(c *Config) { c.Engine.FirstTokenFloorMS = 0 }, "engine_first_token_floor_ms"},
 		{"engine_inter_chunk_stall_ms too low", func(c *Config) { c.Engine.InterChunkStallMS = 0 }, "engine_inter_chunk_stall_ms"},
 		{"engine_loser_grace_ms below inter-chunk stall", func(c *Config) { c.Engine.LoserGraceMS = c.Engine.InterChunkStallMS - 1 }, "engine_loser_grace_ms"},
-		{"engine_non_stream_response_floor_ms too low", func(c *Config) { c.Engine.NonStreamResponseFloorMS = 0 }, "engine_non_stream_response_floor_ms"},
-		{"engine_per_output_token_response_lag_ms negative", func(c *Config) { c.Engine.PerOutputTokenResponseLagMS = -1 }, "engine_per_output_token_response_lag_ms"},
-		{"engine_non_stream_response_ceiling_ms below the floor", func(c *Config) { c.Engine.NonStreamResponseCeilingMS = c.Engine.NonStreamResponseFloorMS - 1 }, "engine_non_stream_response_ceiling_ms"},
 		{"engine_max_speculative_attempts negative", func(c *Config) { c.Engine.MaxSpeculativeAttempts = -1 }, "engine_max_speculative_attempts"},
 		{"chain_grpc without a port", func(c *Config) { c.Chain.GRPCEndpoint = "node.example" }, "chain_grpc"},
 		{"chain_grpc as a URL", func(c *Config) { c.Chain.GRPCEndpoint = "http://node.example:9090" }, "chain_grpc"},
@@ -185,15 +182,6 @@ func TestValidateCatchesEveryRuleBreach(t *testing.T) {
 				t.Fatalf("error %q does not mention %q", err.Error(), testCase.messageFragment)
 			}
 		})
-	}
-}
-
-// A zero lag is how an operator asks for the response floor alone, so it must not be a startup error.
-func TestValidateAcceptsAZeroPerOutputTokenResponseLag(t *testing.T) {
-	configuration := Defaults()
-	configuration.Engine.PerOutputTokenResponseLagMS = 0
-	if err := configuration.Validate(); err != nil {
-		t.Fatalf("Validate() with engine_per_output_token_response_lag_ms 0 = %v, want nil", err)
 	}
 }
 
@@ -239,7 +227,7 @@ func TestEngineCarriesOnlyTheLiveTunables(t *testing.T) {
 	}
 	want := []string{
 		"ReceiptTimeoutMS", "FirstTokenFloorMS", "FirstTokenCeilingMS", "InterChunkStallMS", "LoserGraceMS",
-		"NonStreamResponseFloorMS", "NonStreamResponseCeilingMS", "PerOutputTokenResponseLagMS", "MaxSpeculativeAttempts",
+		"MaxSpeculativeAttempts",
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("Engine fields = %v, want %v", got, want)

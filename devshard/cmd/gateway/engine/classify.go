@@ -8,7 +8,10 @@ import (
 	json "github.com/goccy/go-json"
 )
 
-var sseUsageKey = []byte(`"usage"`)
+var (
+	sseUsageKey   = []byte(`"usage"`)
+	sseCreatedKey = []byte(`"created"`)
+)
 
 type sseError struct {
 	Source  string
@@ -49,6 +52,26 @@ func classifyChunk(events []byte, thinkingBudget bool) chunkSignal {
 		signal.UsageCompletionTokens = tokens
 	}
 	return signal
+}
+
+// createdSeconds reads the stamp upstream sets once, when it accepts the request. It restates the same
+// value on every chunk, so the classifier stops calling this after the first one carries it.
+func createdSeconds(events []byte) int64 {
+	if !bytes.Contains(events, sseCreatedKey) {
+		return 0
+	}
+	var created int64
+	filters.EachSSEDataPayload(events, func(payload []byte) bool {
+		var event struct {
+			Created int64 `json:"created"`
+		}
+		if json.Unmarshal(payload, &event) != nil || event.Created <= 0 {
+			return false
+		}
+		created = event.Created
+		return true
+	})
+	return created
 }
 
 // contentSource names the field carrying the first client-renderable output in events. choices[].text

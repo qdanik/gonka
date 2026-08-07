@@ -21,14 +21,14 @@ func sendTime() time.Time { return time.Unix(1700000000, 0).UTC() }
 
 func completedRace() engine.RaceOutcome {
 	return engine.RaceOutcome{
-		RequestID:   "request-1",
-		EscrowID:    "escrow-7",
-		Model:       "qwen",
-		InputTokens: 128,
-		Stream:      true,
-		Decision:    "hedged",
-		WinnerNonce: 42,
-		Succeeded:   true,
+		RequestID:    "request-1",
+		EscrowID:     "escrow-7",
+		Model:        "qwen",
+		InputTokens:  128,
+		ClientStream: true,
+		Decision:     "hedged",
+		WinnerNonce:  42,
+		Succeeded:    true,
 		Attempts: []engine.AttemptOutcome{
 			{
 				Participant:           "gonka1loser",

@@ -15,8 +15,6 @@ var (
 	// ErrWinnerIncomplete: the client already saw this attempt's bytes, so no other attempt's
 	// completion can be substituted for it.
 	ErrWinnerIncomplete = errors.New("winner failed after streaming started")
-
-	ErrNonStreamTimeout = errors.New("no content before the non-streaming deadline")
 )
 
 // HostApplicationError is an upstream refusal the client must see verbatim: the host answered, and
@@ -71,9 +69,6 @@ func StatusForError(err error) int {
 	var hostErr *HostApplicationError
 	if errors.As(err, &hostErr) {
 		return hostErr.HTTPStatus()
-	}
-	if errors.Is(err, ErrNonStreamTimeout) {
-		return http.StatusGatewayTimeout
 	}
 	if status, ok := UpstreamStatus(err); ok && isThrottleStatus(status) {
 		return http.StatusTooManyRequests

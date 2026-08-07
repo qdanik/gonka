@@ -382,7 +382,6 @@ func (s *simulator) profile() Request {
 		RequestID:   "request-1",
 		Model:       s.model,
 		InputTokens: 1_000,
-		Stream:      true,
 		Params:      simDispatchParams{prompt: "hello"},
 	}
 }

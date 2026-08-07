@@ -407,7 +407,7 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request, escrowPin string) 
 		return
 	}
 
-	key := cacheKeyFor(r, normalized.Model, normalized.Body, normalized.Logprobs)
+	key := cacheKeyFor(r, normalized.Model, normalized.Body, normalized.Logprobs, normalized.ClientStream)
 	if entry, hit := s.cache.get(key, s.now()); hit {
 		written := serveCached(w, requestID, entry)
 		logging.Info("request finished", "request", requestID, "model", normalized.Model,
@@ -428,7 +428,7 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request, escrowPin string) 
 	}
 	recorder := &cacheRecorder{ResponseWriter: w, limit: s.cache.entryLimit()}
 	outcome, hiddenFailure := s.race(recorder, r, requestID, normalized, inputTokens, escrowPin)
-	if entry, storable := recorder.entry(outcome.EscrowID, normalized.Stream, cmp.Or(r.Context().Err(), hiddenFailure)); storable {
+	if entry, storable := recorder.entry(outcome.EscrowID, normalized.ClientStream, cmp.Or(r.Context().Err(), hiddenFailure)); storable {
 		s.cache.put(key, entry, s.now())
 	}
 }
@@ -472,15 +472,14 @@ func authorizeModel(configured config.Limits, model string, identity credentials
 // leaves an SSE error event under a success status; the caller needs the error itself to tell that
 // response apart from one worth replaying.
 func (s *Server) race(w http.ResponseWriter, r *http.Request, requestID string, normalized filters.Result, inputTokens uint64, escrowPin string) (engine.RaceOutcome, error) {
-	client := newClientStream(w, requestID, normalized.Stream, normalized.Logprobs)
+	client := newClientStream(w, requestID, normalized.ClientStream, normalized.ClientUsage, normalized.Logprobs)
 	outputTokens := outputTokenBudget(normalized)
 	outcome, err := s.inference.Run(r.Context(), engine.Request{
 		RequestID:     requestID,
 		Model:         normalized.Model,
 		Escrow:        escrowPin,
 		InputTokens:   inputTokens,
-		OutputTokens:  outputTokens,
-		Stream:        normalized.Stream,
+		ClientStream:  normalized.ClientStream,
 		RequiresTools: normalized.RequiresTools,
 		OnEscrow:      func(escrowID string) { client.Header().Set(EscrowHeader, escrowID) },
 
@@ -490,7 +489,7 @@ func (s *Server) race(w http.ResponseWriter, r *http.Request, requestID string, 
 			InputLength: uint64(len(normalized.Body)),
 			MaxTokens:   outputTokens,
 			StartedAt:   s.now().Unix(),
-			Stream:      normalized.Stream,
+			Stream:      true,
 		},
 	}, client)
 	if err != nil {
@@ -511,6 +510,20 @@ func (s *Server) race(w http.ResponseWriter, r *http.Request, requestID string, 
 	}
 	logRequestFinished(requestID, normalized, outcome, "served", client, nil, client.Close())
 	return outcome, nil
+}
+
+// hostClockOffset is the winner's own stamp minus the moment the gateway dispatched to it. Upstream
+// stamps a reply when it accepts the request, so a negative value is a host whose clock runs behind
+// ours and a value past the first token is one running ahead: neither is reachable by a late answer.
+// The stamp has one-second resolution, so this reads drift, not latency.
+func hostClockOffset(outcome engine.RaceOutcome) (int64, bool) {
+	for _, attempt := range outcome.Attempts {
+		if !outcome.IsWinner(attempt) || attempt.HostCreated == 0 || attempt.SendTime.IsZero() {
+			continue
+		}
+		return attempt.HostCreated - attempt.SendTime.Unix(), true
+	}
+	return 0, false
 }
 
 // winnerOutputTokens is what the client actually received, which with the line's own timestamp is what
@@ -534,12 +547,15 @@ func logRequestFinished(requestID string, normalized filters.Result, outcome eng
 		"request", requestID,
 		"model", normalized.Model,
 		"escrow", outcome.EscrowID,
-		"stream", normalized.Stream,
+		"stream", normalized.ClientStream,
 		"input_tokens", outcome.InputTokens,
 		"output_tokens", winnerOutputTokens(outcome),
 		"outcome", verdict,
 		"bytes", written,
 		"terminated", terminated,
+	}
+	if offset, stamped := hostClockOffset(outcome); stamped {
+		fields = append(fields, "host_clock_offset_s", offset)
 	}
 	if raceErr != nil {
 		fields = append(fields, "error", loggedError(raceErr))

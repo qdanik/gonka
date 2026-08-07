@@ -33,6 +33,8 @@ func runPipeline(document *Document, options Options) (Result, error) {
 	if err := syncRequestView(document, &view); err != nil {
 		return Result{}, err
 	}
+	usage := decodeUsageIntent(document)
+	forceUpstreamStreaming(document)
 	body, err := document.Marshal()
 	if err != nil {
 		return Result{}, err
@@ -41,11 +43,32 @@ func runPipeline(document *Document, options Options) (Result, error) {
 		Body:                body,
 		RequiresTools:       requiresTools(document),
 		Model:               view.Model,
-		Stream:              view.Stream,
+		ClientStream:        view.Stream,
+		ClientUsage:         usage,
 		MaxTokens:           view.MaxTokens,
 		MaxCompletionTokens: view.MaxCompletionTokens,
 		Logprobs:            logprobs,
 	}, nil
+}
+
+// forcedStreamOptions is shared rather than built per request: the document is marshalled and dropped
+// straight after, so nothing can mutate it.
+var forcedStreamOptions = map[string]any{"include_usage": true}
+
+// forceUpstreamStreaming makes every host request a streamed one. See gateway-request-filtering.md,
+// "Streaming is forced upstream".
+func forceUpstreamStreaming(document *Document) {
+	document.Set("stream", true)
+	document.Set("stream_options", forcedStreamOptions)
+}
+
+func decodeUsageIntent(document *Document) bool {
+	options, present, isObject := document.ObjectField("stream_options")
+	if !present || !isObject {
+		return false
+	}
+	asked, isBool := options["include_usage"].(bool)
+	return isBool && asked
 }
 
 func resolveRoutedModel(document *Document, fallback string) string {

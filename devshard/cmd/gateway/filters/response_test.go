@@ -27,7 +27,7 @@ func readSSEFixture(t *testing.T, name string) []byte {
 // emits, so the fixtures assert against the rewriter production streams through.
 func rewriteWholeStream(t *testing.T, stream []byte) []byte {
 	t.Helper()
-	rewriter := NewStreamRewriter(LogprobIntent{})
+	rewriter := NewStreamRewriter(LogprobIntent{}, true)
 	emitted, err := rewriter.Write(stream)
 	if err != nil {
 		t.Fatalf("Write() = %v", err)
@@ -233,7 +233,7 @@ func TestStreamRewriterFixture_ChunkByChunkMatchesWholeStream(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			input := readSSEFixture(t, name)
 			whole := rewriteWholeStream(t, input)
-			rewriter := NewStreamRewriter(LogprobIntent{})
+			rewriter := NewStreamRewriter(LogprobIntent{}, true)
 			var chunked bytes.Buffer
 			for _, event := range splitCompleteEvents(t, input) {
 				emitted, err := rewriter.Write(event)
@@ -265,7 +265,7 @@ func TestStreamRewriterFixture_TruncatedEventIsDroppedAndReported(t *testing.T) 
 		t.Fatalf("fixture no longer contains a mid-event top_logprobs split point")
 	}
 
-	rewriter := NewStreamRewriter(LogprobIntent{})
+	rewriter := NewStreamRewriter(LogprobIntent{}, true)
 	emitted, err := rewriter.Write(target[:splitAt])
 	if err != nil {
 		t.Fatalf("Write() = %v", err)

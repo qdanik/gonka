@@ -675,3 +675,90 @@ func TestClassifyIsPureOverItsInput(t *testing.T) {
 		t.Errorf("classifyChunk mutated its input: %q", body)
 	}
 }
+
+func TestTheClassifierReadsTheHostStampOnce(t *testing.T) {
+	t.Parallel()
+	testCases := []struct {
+		name  string
+		event string
+		want  int64
+	}{
+		{
+			name:  "a stamped chunk",
+			event: `data: {"created":1786114584,"choices":[{"delta":{"content":"hi"}}]}` + "\n\n",
+			want:  1786114584,
+		},
+		{
+			name:  "a chunk with no stamp",
+			event: `data: {"choices":[{"delta":{"content":"hi"}}]}` + "\n\n",
+		},
+		{
+			name:  "a stamp of zero is no stamp",
+			event: `data: {"created":0,"choices":[{"delta":{"content":"hi"}}]}` + "\n\n",
+		},
+		{
+			name: "an unstamped event does not end the search",
+			event: `data: {"created":0,"choices":[{"delta":{"content":"hi"}}]}` + "\n\n" +
+				`data: {"created":1786114584,"choices":[{"delta":{"content":"there"}}]}` + "\n\n",
+			want: 1786114584,
+		},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			classifier := newSSEClassifier(testBudget(1<<20, 1<<20, 1<<20), "participant", "model", nil)
+
+			facts := classifier.Classify([]byte(testCase.event))
+
+			if facts.Created != testCase.want {
+				t.Fatalf("Created = %d, want %d", facts.Created, testCase.want)
+			}
+		})
+	}
+}
+
+// The stamp is the one upstream put on the reply when it accepted the request, so a later chunk
+// restating it must not overwrite what the first one carried.
+func TestAnAttemptKeepsTheFirstHostStamp(t *testing.T) {
+	t.Parallel()
+	state := &attemptState{}
+
+	state.record(chunkFacts{Content: true, ContentSource: "delta.content", Created: 1786114584})
+	state.record(chunkFacts{Content: true, ContentSource: "delta.content", Created: 1786114999})
+
+	if state.hostCreated != 1786114584 {
+		t.Fatalf("hostCreated = %d, want the first stamp kept", state.hostCreated)
+	}
+}
+
+// Every chunk restates the same stamp, so only the first may carry it: reading it again would put a
+// decode on the path every chunk of every request takes.
+func TestTheClassifierStopsReadingTheStampAfterTheFirstChunk(t *testing.T) {
+	t.Parallel()
+	classifier := newSSEClassifier(testBudget(1<<20, 1<<20, 1<<20), "participant", "model", nil)
+	stamped := `data: {"created":1786114584,"choices":[{"delta":{"content":"hi"}}]}` + "\n\n"
+
+	first := classifier.Classify([]byte(stamped))
+	second := classifier.Classify([]byte(stamped))
+
+	if first.Created != 1786114584 {
+		t.Fatalf("first chunk Created = %d, want the stamp", first.Created)
+	}
+	if second.Created != 0 {
+		t.Errorf("second chunk Created = %d, want the stamp read only once", second.Created)
+	}
+}
+
+// A reply that arrives as one unterminated event carries its stamp only there, so Flush must read it.
+func TestTheClassifierReadsTheStampFromAnUnterminatedTail(t *testing.T) {
+	t.Parallel()
+	classifier := newSSEClassifier(testBudget(1<<20, 1<<20, 1<<20), "participant", "model", nil)
+	classifier.Classify([]byte(`data: {"created":1786114584,"choices":[{"delta":{"content":"hi"}}]}`))
+
+	facts := classifier.Flush()
+
+	if facts.Created != 1786114584 {
+		t.Fatalf("Created = %d, want the stamp read from the tail", facts.Created)
+	}
+}

@@ -87,7 +87,6 @@ func race(attempt AttemptOutcome) RaceOutcome {
 		EscrowID:    "escrow-1",
 		Model:       testModel,
 		InputTokens: 1024,
-		Stream:      true,
 		WinnerNonce: 7,
 		Succeeded:   true,
 		Attempts:    []AttemptOutcome{attempt},
@@ -110,9 +109,6 @@ func TestVerdictTable(t *testing.T) {
 	longResponse.NonceFinished = false
 	longResponse.ContentSource = "delta.content"
 	longResponse.Completed = testEpoch.Add(longResponseExemption)
-
-	longNonStreamEmpty := failedAttempt(TerminalEmptyStream)
-	longNonStreamEmpty.Completed = testEpoch.Add(longResponseExemption)
 
 	unfinished := cleanAttempt()
 	unfinished.NonceFinished = false
@@ -150,11 +146,6 @@ func TestVerdictTable(t *testing.T) {
 		{"winner stalled after content, failure rate exceeded", race(stalledOverThreshold), stalledOverThreshold, limits.TransportFault, true, 4, true},
 		{"winner stalled after content, failure rate not exceeded", race(stalledUnderThreshold), stalledUnderThreshold, limits.ModelOutcome, false, 4, false},
 		{"content produced, past the exemption, nonce unfinished", race(longResponse), longResponse, limits.ModelOutcome, false, 4, false},
-		{"non-stream empty past the exemption", func() RaceOutcome {
-			outcome := race(longNonStreamEmpty)
-			outcome.Stream = false
-			return outcome
-		}(), longNonStreamEmpty, limits.ModelOutcome, false, 4, false},
 		{"empty stream while the PoC bypass is active", func() RaceOutcome {
 			outcome := race(failedAttempt(TerminalEmptyStream))
 			outcome.PoCBypassActive = true
@@ -337,13 +328,6 @@ func TestSampleResponsive(t *testing.T) {
 			attempt.NonceFinished = true
 			return attempt
 		}(), false},
-		// Held the request for the whole window and returned nothing: exempt from being judged slow,
-		// but not credited as responsive, or the router learns to prefer it.
-		{"non-stream empty past the exemption", func() RaceOutcome {
-			outcome := race(longNonStreamEmpty)
-			outcome.Stream = false
-			return outcome
-		}(), longNonStreamEmpty, false},
 	}
 
 	for _, testCase := range tests {
@@ -402,11 +386,6 @@ func TestDeniesCrowning(t *testing.T) {
 			outcome.PoCBypassActive = true
 			return outcome
 		}(), failedAttempt(TerminalEmptyStream), false},
-		{"non-stream empty past the exemption", func() RaceOutcome {
-			outcome := race(longNonStreamEmpty)
-			outcome.Stream = false
-			return outcome
-		}(), longNonStreamEmpty, false},
 	}
 
 	for _, testCase := range tests {

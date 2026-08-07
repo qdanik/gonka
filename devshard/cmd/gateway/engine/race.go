@@ -125,7 +125,6 @@ type deadlinePlan struct {
 	Request   EscalationRequest
 	Attempts  []EscalationAttempt
 	Budget    int
-	Start     time.Time
 	Drain     time.Time
 	Pick      time.Time
 	Cancelled bool
@@ -168,9 +167,7 @@ func (p deadlinePlan) escalation(now time.Time) (ArmedEscalation, bool) {
 		return ArmedEscalation{}, false
 	}
 	armed, found := p.Policy.NextEscalation(now, p.Attempts, p.Request)
-	// The halved-token retry is exempt from the attempt budget here as well as at the pick. See
-	// gateway-speculative-race.md, "Escalation".
-	if found && armed.Stage != StageResponseTimeout && len(p.Attempts) >= p.Budget {
+	if found && len(p.Attempts) >= p.Budget {
 		return ArmedEscalation{}, false
 	}
 	return armed, found
@@ -185,12 +182,6 @@ func (p deadlinePlan) hardTimeout() time.Time {
 	}
 	if p.detached() {
 		consider(p.Drain)
-	}
-	if !p.Request.Stream && !p.Start.IsZero() {
-		consider(p.Start.Add(nonStreamMaxAttemptWait))
-		if !p.crowned() {
-			consider(p.Start.Add(nonStreamNoContentTimeout))
-		}
 	}
 	for _, attempt := range p.Attempts {
 		switch {
@@ -284,7 +275,6 @@ type raceCoordinator struct {
 
 	winner           *liveAttempt
 	pending          int
-	retrySpent       bool
 	pickCancel       context.CancelFunc
 	pickStarted      time.Time
 	pickReason       string
@@ -691,20 +681,9 @@ func (c *raceCoordinator) escalate(armed ArmedEscalation) {
 	if !ok {
 		return
 	}
-	params, ok := c.escalationParams(confirmed.Stage)
-	if !ok {
-		return
-	}
 	// Consumed before the pick is started, so a pick that finds no host cannot retry the same trigger.
 	c.attempts[confirmed.Attempt].escalated = true
-	c.startPickWithinBudget(confirmed.Stage.Reason(), params, confirmed.Stage != StageResponseTimeout)
-}
-
-func (c *raceCoordinator) escalationParams(stage EscalationStage) (any, bool) {
-	if stage == StageResponseTimeout {
-		c.retrySpent = true
-	}
-	return c.request.Params, true
+	c.startPick(confirmed.Stage.Reason(), c.request.Params)
 }
 
 func (c *raceCoordinator) markStalls() {
@@ -770,13 +749,7 @@ func (c *raceCoordinator) picking() bool { return c.pickCancel != nil }
 // one pick runs at a time, and pickDeadline bounds it however long the scheduler's queue takes to
 // answer. See gateway-speculative-race.md, "Escalation".
 func (c *raceCoordinator) startPick(reason string, params any) {
-	c.startPickWithinBudget(reason, params, true)
-}
-
-// startPickWithinBudget exists because the halved-token retry is exempt from the attempt budget. See
-// gateway-speculative-race.md, "Escalation".
-func (c *raceCoordinator) startPickWithinBudget(reason string, params any, honourBudget bool) {
-	if c.picking() || (honourBudget && len(c.attempts) >= c.budget) {
+	if c.picking() || len(c.attempts) >= c.budget {
 		return
 	}
 	ctx, cancel := context.WithTimeout(c.drain.race, schedulerPickTimeout)
@@ -908,7 +881,7 @@ func (c *raceCoordinator) outcome() RaceOutcome {
 		EscrowID:        c.escrowID,
 		Model:           c.request.Model,
 		InputTokens:     c.request.InputTokens,
-		Stream:          c.request.Stream,
+		ClientStream:    c.request.ClientStream,
 		Decision:        c.decision,
 		PoCBypassActive: c.pocBypass,
 		Lifecycle:       Lifecycle{BalanceExhausted: c.balanceExhausted},
@@ -958,7 +931,6 @@ func (c *raceCoordinator) plan() deadlinePlan {
 		Request:   c.escalationRequest(),
 		Attempts:  c.scratch,
 		Budget:    c.budget,
-		Start:     c.started,
 		Drain:     c.drain.deadline(c.clientGoneAt),
 		Pick:      c.pickDeadline(),
 		Cancelled: c.cancelled,
@@ -966,12 +938,7 @@ func (c *raceCoordinator) plan() deadlinePlan {
 }
 
 func (c *raceCoordinator) escalationRequest() EscalationRequest {
-	return EscalationRequest{
-		InputTokens:       c.request.InputTokens,
-		OutputTokens:      c.request.OutputTokens,
-		Stream:            c.request.Stream,
-		RetryStillOffered: !c.retrySpent,
-	}
+	return EscalationRequest{InputTokens: c.request.InputTokens}
 }
 
 func (c *raceCoordinator) denied(participant string) bool {

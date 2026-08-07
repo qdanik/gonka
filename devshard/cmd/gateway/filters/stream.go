@@ -30,6 +30,9 @@ var (
 	// unified. See gateway-request-filtering.md, "Two `data:` prefixes that must not be unified".
 	sseDataParsePrefix = []byte("data:")
 
+	// usageKey spares every other event a decode it has nothing to gain from.
+	usageKey = []byte(`"usage"`)
+
 	// SSEDoneEvent is the terminator an SSE client reads until; without it the client waits out its
 	// own timeout instead of finishing.
 	SSEDoneEvent = []byte("data: [DONE]\n\n")
@@ -81,39 +84,20 @@ func HasSSEDone(events []byte) bool {
 	return terminated
 }
 
-// AssembleSSEBody reduces an SSE-framed reply to the single JSON body a non-streaming caller
-// expects: the payload of the last data event. A body carrying no data line at all is already that
-// body and passes through; an SSE-framed one carrying no payload becomes NoResponseDataBody.
-func AssembleSSEBody(body []byte) []byte {
-	var assembled []byte
-	framed := false
-	eachSSELine(body, func(payload []byte) bool {
-		framed = true
-		if len(payload) > 0 && !bytes.Equal(payload, sseDoneMarker) {
-			assembled = payload
-		}
-		return false
-	})
-	switch {
-	case len(assembled) > 0:
-		return assembled
-	case framed || len(bytes.TrimSpace(body)) == 0:
-		return NoResponseDataBody
-	default:
-		return body
-	}
-}
-
 // StreamRewriter strips the fields a client must not see from an SSE stream delivered in arbitrary
 // chunks, emitting complete events only and holding the trailing partial until it completes.
 type StreamRewriter struct {
-	intent  LogprobIntent
-	carry   []byte
-	scanned int
-	failed  bool
+	intent    LogprobIntent
+	keepUsage bool
+	carry     []byte
+	scanned   int
+	failed    bool
 }
 
-func NewStreamRewriter(intent LogprobIntent) *StreamRewriter { return &StreamRewriter{intent: intent} }
+// NewStreamRewriter drops the forced usage event unless keepUsage says the client asked for it.
+func NewStreamRewriter(intent LogprobIntent, keepUsage bool) *StreamRewriter {
+	return &StreamRewriter{intent: intent, keepUsage: keepUsage}
+}
 
 // Write appends chunk to the carry buffer and returns every event it completes, rewritten.
 // Once the carry exceeds MaxStreamCarryBytes the rewriter fails permanently.
@@ -130,7 +114,8 @@ func (r *StreamRewriter) Write(chunk []byte) ([]byte, error) {
 			break
 		}
 		eventEnd := searchFrom + offset
-		out.Write(rewriteEvent(r.carry[eventStart:eventEnd], r.intent))
+		rewritten, _ := rewriteEvent(r.carry[eventStart:eventEnd], r.intent, r.keepUsage)
+		out.Write(rewritten)
 		eventStart, searchFrom = eventEnd, eventEnd
 	}
 	r.carry = append(r.carry[:0], r.carry[eventStart:]...)
@@ -155,26 +140,26 @@ func (r *StreamRewriter) Close() ([]byte, error) {
 	if len(carry) == 0 {
 		return nil, nil
 	}
-	final := rewriteEvent(carry, r.intent)
-	if final == nil {
+	final, malformed := rewriteEvent(carry, r.intent, r.keepUsage)
+	if malformed {
 		return nil, ErrStreamTruncatedEvent
 	}
 	return final, nil
 }
 
 // rewriteEvent returns the event as the client must read it: a complete chat.completion becomes the
-// chunk events an OpenAI streaming client renders, and the fields this client must not see are removed
-// from the JSON payload. It returns nil when the payload does not parse and must be dropped rather
-// than forwarded.
+// chunk events an OpenAI streaming client renders, and the fields this client must not see -- the
+// internal ones, and the usage it did not ask for -- are removed from the JSON payload. It reports
+// malformed for a payload that does not parse, which must be dropped rather than forwarded.
 //
-// Both decisions are taken on the decoded payload, never on the event's raw bytes. A host controls
+// Every decision is taken on the decoded payload, never on the event's raw bytes. A host controls
 // those bytes: it can spell a key with a \u escape, or split one object across two data lines, and
 // either defeats a byte-wise check while the client's own decoder reads the object whole. See
 // gateway-request-filtering.md, "The response side".
-func rewriteEvent(event []byte, intent LogprobIntent) []byte {
+func rewriteEvent(event []byte, intent LogprobIntent, keepUsage bool) (rewritten []byte, malformed bool) {
 	lines, payload, held := eventPayload(event)
 	if !held {
-		return event
+		return event, false
 	}
 	filtered, outcome := stripInternalFields(payload, intent)
 	switch outcome {
@@ -182,19 +167,71 @@ func rewriteEvent(event []byte, intent LogprobIntent) []byte {
 		// A payload that opens as an object and does not parse is a host sending something no client
 		// can read; forwarding it would carry whatever it hides.
 		if bytes.HasPrefix(bytes.TrimLeft(payload, " \t"), []byte("{")) {
-			return nil
+			return nil, true
 		}
-		return event
+		return event, false
 	case stripUnchanged:
 		filtered = payload
 	}
+	if !keepUsage {
+		withoutUsage, emptied, changed := stripUsage(filtered)
+		if emptied {
+			return nil, false
+		}
+		if changed {
+			filtered, outcome = withoutUsage, stripRewritten
+		}
+	}
 	if chunks, converted := completionAsChunks(filtered); converted {
-		return chunks
+		return chunks, false
 	}
 	if outcome != stripRewritten && len(lines) == 1 {
-		return event
+		return event, false
 	}
-	return rebuildEvent(event, filtered)
+	return rebuildEvent(event, filtered), false
+}
+
+// chunkHousekeepingFields are what the final usage event carries besides its usage.
+var chunkHousekeepingFields = map[string]bool{
+	"id": true, "object": true, "created": true, "model": true, "system_fingerprint": true,
+	"service_tier": true, "choices": true,
+}
+
+// onlyHousekeepingLeft reports an event with nothing left to deliver. Testing for empty choices instead
+// would delete a host's error event, which carries none either.
+func onlyHousekeepingLeft(decoded map[string]any) bool {
+	for field := range decoded {
+		if !chunkHousekeepingFields[field] {
+			return false
+		}
+	}
+	choices, _ := decoded["choices"].([]any)
+	return len(choices) == 0
+}
+
+// stripUsage removes a usage the client never asked for, reporting emptied for an event left with none.
+func stripUsage(payload []byte) (rewritten []byte, emptied, changed bool) {
+	if !bytes.Contains(payload, usageKey) {
+		return payload, false, false
+	}
+	decoded, parsed := decodeStreamedEvent(payload)
+	if !parsed {
+		return payload, false, false
+	}
+	if _, held := decoded["usage"]; !held {
+		return payload, false, false
+	}
+	delete(decoded, "usage")
+	if onlyHousekeepingLeft(decoded) {
+		return nil, true, true
+	}
+	var encoded bytes.Buffer
+	encoder := stdjson.NewEncoder(&encoded)
+	encoder.SetEscapeHTML(false) // the default inflates every < > & in generated content to six bytes
+	if err := encoder.Encode(decoded); err != nil {
+		return payload, false, false
+	}
+	return bytes.TrimRight(encoded.Bytes(), "\n"), false, true
 }
 
 // eventPayload joins the event's data lines the way a client does -- with a newline, per the SSE spec
@@ -384,16 +421,38 @@ func presentValue(raw json.RawMessage) json.RawMessage {
 	return trimmed
 }
 
-// indexEventEnd returns the offset just past the first LF or CRLF event terminator in buf, or -1.
-func indexEventEnd(buf []byte) int {
-	lineFeedIndex := bytes.Index(buf, sseEventSeparator)
-	carriageReturnIndex := bytes.Index(buf, sseEventSeparatorCRLF)
-	switch {
-	case lineFeedIndex < 0 && carriageReturnIndex < 0:
-		return -1
-	case carriageReturnIndex < 0 || (lineFeedIndex >= 0 && lineFeedIndex <= carriageReturnIndex):
-		return lineFeedIndex + len(sseEventSeparator)
-	default:
-		return carriageReturnIndex + len(sseEventSeparatorCRLF)
+// forEachSSEEvent visits each complete event and then whatever trailing bytes carried no terminator.
+func forEachSSEEvent(stream []byte, visit func(event []byte) bool) {
+	for rest := stream; len(rest) > 0; {
+		offset := indexEventEnd(rest)
+		if offset < 0 {
+			visit(rest)
+			return
+		}
+		if visit(rest[:offset]) {
+			return
+		}
+		rest = rest[offset:]
 	}
+}
+
+// indexEventEnd returns the offset just past the first LF or CRLF event terminator in buf, or -1. It
+// walks line by line: searching for a CRLF terminator an LF-framed stream never carries scanned to the
+// end of the buffer for every event.
+func indexEventEnd(buf []byte) int {
+	for offset := 0; offset < len(buf); {
+		lineEnd := bytes.IndexByte(buf[offset:], '\n')
+		if lineEnd < 0 {
+			return -1
+		}
+		next := offset + lineEnd + 1
+		switch {
+		case next < len(buf) && buf[next] == '\n':
+			return next + 1
+		case next+1 < len(buf) && buf[next] == '\r' && buf[next+1] == '\n':
+			return next + 2
+		}
+		offset = next
+	}
+	return -1
 }

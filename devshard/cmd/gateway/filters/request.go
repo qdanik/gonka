@@ -10,11 +10,13 @@ type Options struct {
 	ModelTokenLimits func(model string) (defaultMaxTokens, maxTokensCap uint64)
 }
 
-// Result is the normalized body plus the typed fields callers need without re-parsing it.
+// Result is the normalized body plus the typed fields callers need without re-parsing it. Body always
+// asks the host to stream; ClientStream and ClientUsage are what the caller asked for.
 type Result struct {
 	Body                []byte
 	Model               string
-	Stream              bool
+	ClientStream        bool
+	ClientUsage         bool
 	RequiresTools       bool
 	MaxTokens           uint64
 	MaxCompletionTokens uint64

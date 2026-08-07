@@ -1,0 +1,326 @@
+package filters
+
+import (
+	"bytes"
+	stdjson "encoding/json"
+	"sort"
+	"strings"
+)
+
+const (
+	completionObject = "chat.completion"
+
+	// The three bounds a host must not exceed. See gateway-request-filtering.md, "The response side".
+	maxIndexedElements = 256
+	maxTopLevelFields  = 64
+	maxAssembledEvents = 65_536
+)
+
+// growingText keeps the join off the per-chunk path, where it would be quadratic in the answer's length.
+type growingText struct{ parts strings.Builder }
+
+func newGrowingText(head string) *growingText {
+	text := &growingText{}
+	text.parts.WriteString(head)
+	return text
+}
+
+func (t *growingText) String() string { return t.parts.String() }
+
+// MarshalJSON encodes rather than Marshals: Marshal always escapes HTML, which would inflate every
+// < > & the model generated to six bytes, the very thing encodeCompletion turns off.
+func (t *growingText) MarshalJSON() ([]byte, error) {
+	var encoded bytes.Buffer
+	encoder := stdjson.NewEncoder(&encoded)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(t.parts.String()); err != nil {
+		return nil, err
+	}
+	return bytes.TrimRight(encoded.Bytes(), "\n"), nil
+}
+
+// AssembleSSEBody merges the streamed chunks into the single JSON body a non-streaming caller
+// expects. See gateway-request-filtering.md, "Streaming is forced upstream".
+func AssembleSSEBody(body []byte) []byte {
+	var merged map[string]any
+	var complete []byte
+	framed, assembled := false, 0
+	forEachSSEEvent(body, func(event []byte) bool {
+		if assembled >= maxAssembledEvents {
+			return true
+		}
+		// Joined the way a client joins them: a host may split one object across two data lines.
+		_, payload, held := eventPayload(event)
+		if !held {
+			return false
+		}
+		framed = true
+		payload = bytes.TrimSpace(payload)
+		if len(payload) == 0 || bytes.Equal(payload, sseDoneMarker) {
+			return false
+		}
+		decoded, parsed := decodeStreamedEvent(payload)
+		if !parsed {
+			return false
+		}
+		if name, isString := decoded["object"].(string); isString && name == completionObject {
+			complete = payload
+			return true
+		}
+		merged = mergeChunk(merged, decoded)
+		assembled++
+		return false
+	})
+	switch {
+	case len(complete) > 0:
+		return complete
+	case merged != nil:
+		return encodeCompletion(merged)
+	case framed || len(bytes.TrimSpace(body)) == 0:
+		return NoResponseDataBody
+	default:
+		return body
+	}
+}
+
+// decodeStreamedEvent stays on the standard library with UseNumber, as stripInternalFields does.
+func decodeStreamedEvent(payload []byte) (map[string]any, bool) {
+	decoder := stdjson.NewDecoder(bytes.NewReader(payload))
+	decoder.UseNumber()
+	var decoded any
+	// More() matches the strip: a payload carrying a second object is one no client can read.
+	if err := decoder.Decode(&decoded); err != nil || decoder.More() {
+		normalized, replaced := replaceNonFiniteNumbers(payload)
+		if !replaced {
+			return nil, false
+		}
+		decoder = stdjson.NewDecoder(bytes.NewReader(normalized))
+		decoder.UseNumber()
+		decoded = nil
+		if err := decoder.Decode(&decoded); err != nil || decoder.More() {
+			return nil, false
+		}
+	}
+	object, isObject := decoded.(map[string]any)
+	return object, isObject
+}
+
+// encodeCompletion turns each choice's accumulated delta into its message, ordered by index.
+func encodeCompletion(merged map[string]any) []byte {
+	merged["object"] = completionObject
+	choices, _ := merged["choices"].([]any)
+	for _, entry := range choices {
+		choice, isObject := entry.(map[string]any)
+		if !isObject {
+			continue
+		}
+		if delta, held := choice["delta"]; held {
+			delete(choice, "delta")
+			choice["message"] = delta
+			// Upstream answers a tool call with a null content, never with the field absent.
+			if message, isObject := delta.(map[string]any); isObject {
+				if _, carries := message["content"]; !carries {
+					message["content"] = nil
+				}
+			}
+		}
+	}
+	sort.SliceStable(choices, func(first, second int) bool {
+		left, leftKnown := choiceIndex(choices[first])
+		right, rightKnown := choiceIndex(choices[second])
+		if leftKnown != rightKnown {
+			return leftKnown
+		}
+		return leftKnown && left < right
+	})
+	var encoded bytes.Buffer
+	encoder := stdjson.NewEncoder(&encoded)
+	encoder.SetEscapeHTML(false) // the default inflates every < > & in generated content to six bytes
+	if err := encoder.Encode(merged); err != nil {
+		return NoResponseDataBody
+	}
+	return bytes.TrimRight(encoded.Bytes(), "\n")
+}
+
+// mergeChunk folds one chunk in. Everything outside choices is a restated header, so it replaces.
+func mergeChunk(accumulated, chunk map[string]any) map[string]any {
+	if accumulated == nil {
+		accumulated = make(map[string]any, len(chunk))
+	}
+	for key, value := range chunk {
+		if key == "choices" || value == nil {
+			continue
+		}
+		if _, known := accumulated[key]; !known && len(accumulated) >= maxTopLevelFields {
+			continue
+		}
+		accumulated[key] = value
+	}
+	incoming, _ := chunk["choices"].([]any)
+	if len(incoming) == 0 {
+		return accumulated
+	}
+	existing, _ := accumulated["choices"].([]any)
+	accumulated["choices"] = mergeIndexedElements(existing, incoming, mergeChoice)
+	return accumulated
+}
+
+// What grows across chunks; everything else is a restated fact that replaces. See
+// gateway-request-filtering.md, "The response side".
+var (
+	accumulatedChoiceFields = map[string]bool{"delta": true, "logprobs": true, "token_ids": true}
+
+	accumulatedTextFields = map[string]bool{
+		"content": true, "reasoning": true, "reasoning_content": true, "refusal": true, "arguments": true,
+	}
+)
+
+// mergeChoice grows the delta and the logprobs beside it; finish_reason and the rest replace.
+func mergeChoice(target, incoming map[string]any) {
+	for key, value := range incoming {
+		if value == nil {
+			continue
+		}
+		if accumulatedChoiceFields[key] {
+			target[key] = mergeStreamedValue(key, target[key], value)
+			continue
+		}
+		target[key] = value
+	}
+}
+
+// mergeStreamedValue accumulates a delta by field name, never by Go type: a host restates its identity
+// fields, and growing those hands the client a tool call it cannot answer.
+func mergeStreamedValue(field string, accumulated, incoming any) any {
+	switch typed := incoming.(type) {
+	case nil:
+		return accumulated
+	case string:
+		if !accumulatedTextFields[field] {
+			return typed
+		}
+		return growText(field, accumulated, typed)
+	case map[string]any:
+		previous, isObject := accumulated.(map[string]any)
+		if !isObject {
+			return typed
+		}
+		for key, value := range typed {
+			previous[key] = mergeStreamedValue(key, previous[key], value)
+		}
+		return previous
+	case []any:
+		previous, isArray := accumulated.([]any)
+		if !isArray {
+			return typed
+		}
+		if leadsWithAnIndex(previous) && indexedElements(typed) {
+			return mergeIndexedElements(previous, typed, mergeDeltaElement)
+		}
+		return append(previous, typed...)
+	}
+	return incoming
+}
+
+// growText appends to the accumulator, and replaces instead when a host re-sends arguments whole.
+func growText(field string, accumulated any, incoming string) any {
+	switch previous := accumulated.(type) {
+	case *growingText:
+		if field == "arguments" && strings.HasPrefix(incoming, previous.String()) {
+			return newGrowingText(incoming)
+		}
+		previous.parts.WriteString(incoming)
+		return previous
+	case string:
+		if field == "arguments" && previous != "" && strings.HasPrefix(incoming, previous) {
+			return newGrowingText(incoming)
+		}
+		return newGrowingText(previous + incoming)
+	}
+	return newGrowingText(incoming)
+}
+
+func mergeDeltaElement(target, incoming map[string]any) {
+	for key, value := range incoming {
+		target[key] = mergeStreamedValue(key, target[key], value)
+	}
+}
+
+// mergeIndexedElements folds incoming into existing by index, appending the unclaimed ones.
+func mergeIndexedElements(existing, incoming []any, merge func(target, incoming map[string]any)) []any {
+	for _, entry := range incoming {
+		if len(existing) >= maxIndexedElements {
+			return existing
+		}
+		element, isObject := entry.(map[string]any)
+		if !isObject {
+			existing = append(existing, entry)
+			continue
+		}
+		if target := elementAtIndex(existing, element["index"]); target != nil {
+			merge(target, element)
+			continue
+		}
+		existing = append(existing, element)
+	}
+	return existing
+}
+
+func elementAtIndex(elements []any, wanted any) map[string]any {
+	position, known := numericIndex(wanted)
+	if !known {
+		return nil
+	}
+	for _, entry := range elements {
+		element, isObject := entry.(map[string]any)
+		if !isObject {
+			continue
+		}
+		if held, ok := numericIndex(element["index"]); ok && held == position {
+			return element
+		}
+	}
+	return nil
+}
+
+// leadsWithAnIndex decides an accumulated array by its first element: scanning all of it per chunk was
+// what made the merge quadratic.
+func leadsWithAnIndex(elements []any) bool {
+	if len(elements) == 0 {
+		return false
+	}
+	return indexedElements(elements[:1])
+}
+
+// indexedElements reports the shape that merges by index.
+func indexedElements(elements []any) bool {
+	for _, entry := range elements {
+		element, isObject := entry.(map[string]any)
+		if !isObject {
+			return false
+		}
+		if _, known := numericIndex(element["index"]); !known {
+			return false
+		}
+	}
+	return len(elements) > 0
+}
+
+func choiceIndex(entry any) (int64, bool) {
+	choice, isObject := entry.(map[string]any)
+	if !isObject {
+		return 0, false
+	}
+	return numericIndex(choice["index"])
+}
+
+func numericIndex(value any) (int64, bool) {
+	switch typed := value.(type) {
+	case stdjson.Number:
+		position, err := typed.Int64()
+		return position, err == nil
+	case float64:
+		return int64(typed), typed == float64(int64(typed))
+	}
+	return 0, false
+}

@@ -388,7 +388,6 @@ func newRaceFixture(policy EscalationPolicy, hosts int) *raceFixture {
 			RequestID:   "request-1",
 			Model:       testModel,
 			InputTokens: 1_000,
-			Stream:      true,
 		},
 		Client: fixture.client,
 	}
@@ -1022,7 +1021,6 @@ func TestNextDeadlinePrecedence(t *testing.T) {
 		receipt     time.Duration
 		stall       time.Duration
 		loserGrace  time.Duration
-		stream      bool
 		budget      int
 		drain       time.Time
 		cancelled   bool
@@ -1031,43 +1029,43 @@ func TestNextDeadlinePrecedence(t *testing.T) {
 		wantTrigger deadlineTrigger
 	}{
 		{
-			name: "escalation earliest", receipt: time.Second, stall: 2 * time.Second, stream: true, budget: 4,
+			name: "escalation earliest", receipt: time.Second, stall: 2 * time.Second, budget: 4,
 			attempts:    []EscalationAttempt{pendingAttempt(base), streamingAttempt(base, base)},
 			wantAt:      base.Add(time.Second),
 			wantTrigger: triggerEscalation,
 		},
 		{
-			name: "stall earliest", receipt: 2 * time.Second, stall: time.Second, stream: true, budget: 4,
+			name: "stall earliest", receipt: 2 * time.Second, stall: time.Second, budget: 4,
 			attempts:    []EscalationAttempt{pendingAttempt(base), streamingAttempt(base, base)},
 			wantAt:      base.Add(time.Second),
 			wantTrigger: triggerStall,
 		},
 		{
-			name: "hard timeout earliest", receipt: 25 * time.Minute, stall: 30 * time.Minute, stream: true, budget: 4,
+			name: "hard timeout earliest", receipt: 25 * time.Minute, stall: 30 * time.Minute, budget: 4,
 			attempts:    []EscalationAttempt{pendingAttempt(base), streamingAttempt(base, base)},
 			wantAt:      base.Add(hard),
 			wantTrigger: triggerHardTimeout,
 		},
 		{
-			name: "hard timeout wins a tie with escalation", receipt: hard, stall: 30 * time.Minute, stream: true, budget: 4,
+			name: "hard timeout wins a tie with escalation", receipt: hard, stall: 30 * time.Minute, budget: 4,
 			attempts:    []EscalationAttempt{pendingAttempt(base), streamingAttempt(base, base)},
 			wantAt:      base.Add(hard),
 			wantTrigger: triggerHardTimeout,
 		},
 		{
-			name: "hard timeout wins a tie with stall", receipt: 30 * time.Minute, stall: hard, stream: true, budget: 4,
+			name: "hard timeout wins a tie with stall", receipt: 30 * time.Minute, stall: hard, budget: 4,
 			attempts:    []EscalationAttempt{pendingAttempt(base), streamingAttempt(base, base)},
 			wantAt:      base.Add(hard),
 			wantTrigger: triggerHardTimeout,
 		},
 		{
-			name: "escalation wins a tie with stall", receipt: 5 * time.Second, stall: 5 * time.Second, stream: true, budget: 4,
+			name: "escalation wins a tie with stall", receipt: 5 * time.Second, stall: 5 * time.Second, budget: 4,
 			attempts:    []EscalationAttempt{pendingAttempt(base), streamingAttempt(base, base)},
 			wantAt:      base.Add(5 * time.Second),
 			wantTrigger: triggerEscalation,
 		},
 		{
-			name: "a crowned winner ends escalation", receipt: time.Second, stall: 2 * time.Second, stream: true, budget: 4,
+			name: "a crowned winner ends escalation", receipt: time.Second, stall: 2 * time.Second, budget: 4,
 			attempts: []EscalationAttempt{
 				pendingAttempt(base),
 				func() EscalationAttempt {
@@ -1080,13 +1078,13 @@ func TestNextDeadlinePrecedence(t *testing.T) {
 			wantTrigger: triggerStall,
 		},
 		{
-			name: "an exhausted budget ends escalation", receipt: time.Second, stall: 2 * time.Second, stream: true, budget: 2,
+			name: "an exhausted budget ends escalation", receipt: time.Second, stall: 2 * time.Second, budget: 2,
 			attempts:    []EscalationAttempt{pendingAttempt(base), streamingAttempt(base, base)},
 			wantAt:      base.Add(2 * time.Second),
 			wantTrigger: triggerStall,
 		},
 		{
-			name: "an already stalled attempt is not re-armed", receipt: time.Hour, stall: time.Second, stream: true, budget: 1,
+			name: "an already stalled attempt is not re-armed", receipt: time.Hour, stall: time.Second, budget: 1,
 			attempts: []EscalationAttempt{
 				func() EscalationAttempt {
 					attempt := streamingAttempt(base, base)
@@ -1098,23 +1096,16 @@ func TestNextDeadlinePrecedence(t *testing.T) {
 			wantTrigger: triggerHardTimeout,
 		},
 		{
-			name: "no stall knob leaves escalation", receipt: time.Second, stall: 0, stream: true, budget: 4,
+			name: "no stall knob leaves escalation", receipt: time.Second, stall: 0, budget: 4,
 			attempts:    []EscalationAttempt{pendingAttempt(base), streamingAttempt(base, base)},
 			wantAt:      base.Add(time.Second),
 			wantTrigger: triggerEscalation,
-		},
-		{
-			name: "non-stream no-content backstop", receipt: 25 * time.Minute, stall: time.Hour, budget: 4,
-			attempts:    []EscalationAttempt{pendingAttempt(base.Add(10 * time.Minute))},
-			wantAt:      base.Add(nonStreamNoContentTimeout),
-			wantTrigger: triggerHardTimeout,
 		},
 		{
 			name:       "loser grace bounds a finished winner",
 			receipt:    time.Hour,
 			stall:      time.Hour,
 			loserGrace: time.Minute,
-			stream:     true,
 			budget:     4,
 			attempts: []EscalationAttempt{
 				pendingAttempt(base),
@@ -1131,27 +1122,27 @@ func TestNextDeadlinePrecedence(t *testing.T) {
 			wantTrigger: triggerHardTimeout,
 		},
 		{
-			name: "the drain deadline bounds a departed client's race", receipt: time.Second, stall: time.Hour, stream: true, budget: 4,
+			name: "the drain deadline bounds a departed client's race", receipt: time.Second, stall: time.Hour, budget: 4,
 			drain:       base.Add(time.Minute),
 			attempts:    []EscalationAttempt{pendingAttempt(base), streamingAttempt(base, base)},
 			wantAt:      base.Add(time.Minute),
 			wantTrigger: triggerHardTimeout,
 		},
 		{
-			name: "a departed client is owed no escalation", receipt: time.Second, stall: time.Second, stream: true, budget: 4,
+			name: "a departed client is owed no escalation", receipt: time.Second, stall: time.Second, budget: 4,
 			drain:       base.Add(time.Hour),
 			attempts:    []EscalationAttempt{pendingAttempt(base), streamingAttempt(base, base)},
 			wantAt:      base.Add(time.Second),
 			wantTrigger: triggerStall,
 		},
 		{
-			name: "cancellation disarms everything", receipt: time.Second, stall: time.Second, stream: true, budget: 4,
+			name: "cancellation disarms everything", receipt: time.Second, stall: time.Second, budget: 4,
 			cancelled:   true,
 			attempts:    []EscalationAttempt{pendingAttempt(base), streamingAttempt(base, base)},
 			wantTrigger: triggerNone,
 		},
 		{
-			name: "nothing armed before dispatch", receipt: time.Second, stall: time.Second, stream: true, budget: 4,
+			name: "nothing armed before dispatch", receipt: time.Second, stall: time.Second, budget: 4,
 			attempts:    []EscalationAttempt{{}},
 			wantTrigger: triggerNone,
 		},
@@ -1166,10 +1157,8 @@ func TestNextDeadlinePrecedence(t *testing.T) {
 					InterChunkStall: testCase.stall,
 					LoserGrace:      testCase.loserGrace,
 				},
-				Request:   EscalationRequest{Stream: testCase.stream},
 				Attempts:  testCase.attempts,
 				Budget:    testCase.budget,
-				Start:     base,
 				Drain:     testCase.drain,
 				Cancelled: testCase.cancelled,
 			}
@@ -1583,123 +1572,6 @@ func TestARacePinnedToAnEscrowAsksTheSchedulerForThatOne(t *testing.T) {
 	if got := fixture.picker.profiles[0].Escrow; got != "escrow-pinned" {
 		t.Fatalf("first pick asked for escrow %q, want %q", got, "escrow-pinned")
 	}
-}
-
-// budgetParams stands in for the params only api can read: a race carries them to the scheduler and to
-// the reduce hook, and reads neither.
-type budgetParams struct{ maxTokens uint64 }
-
-func halveBudgetParams(params any) (any, bool) {
-	budget, isBudget := params.(budgetParams)
-	if !isBudget || budget.maxTokens < 2 {
-		return nil, false
-	}
-	return budgetParams{maxTokens: budget.maxTokens / 2}, true
-}
-
-// nonStreamingFixture races a request whose answer is buffered, so the shorter retry is the only
-// escalation left once a host has receipted.
-func nonStreamingFixture() *raceFixture {
-	policy := settledPolicy()
-	policy.NonStreamResponseFloor = time.Second
-	fixture := newRaceFixture(policy, 3)
-	fixture.request.Stream = false
-	fixture.request.Params = budgetParams{maxTokens: 800}
-	return fixture
-}
-
-// quietHost is an attempt that receipted and has said nothing since, which is the only state a
-// non-streaming request can observe short of the answer itself.
-func quietHost(nonce uint64, participant string) *liveAttempt {
-	return &liveAttempt{
-		nonce:       nonce,
-		participant: participant,
-		sendTime:    testEpoch.Add(-2 * time.Second),
-		receiptTime: testEpoch.Add(-2 * time.Second),
-		cancel:      func() {},
-	}
-}
-
-func pickedProfiles(fixture *raceFixture) []scheduler.RequestProfile {
-	fixture.picker.mu.Lock()
-	defer fixture.picker.mu.Unlock()
-	return append([]scheduler.RequestProfile(nil), fixture.picker.profiles...)
-}
-
-func armResponseTimeout(t *testing.T, coordinator *raceCoordinator) deadlineArm {
-	t.Helper()
-	arm := nextDeadline(coordinator.deps.Now(), coordinator.plan())
-	if arm.Trigger != triggerEscalation || arm.Escalation.Stage != StageResponseTimeout {
-		t.Fatalf("arm = %+v, want the reduced-max-tokens escalation", arm)
-	}
-	return arm
-}
-
-func awaitPick(t *testing.T, coordinator *raceCoordinator) pickedHost {
-	t.Helper()
-	select {
-	case result := <-coordinator.picked:
-		return result
-	case <-time.After(5 * time.Second):
-		t.Fatal("the escalation never reached the scheduler")
-		return pickedHost{}
-	}
-}
-
-func TestANonStreamingHostGoneQuietIsRacedWithTheFullBudget(t *testing.T) {
-	fixture := nonStreamingFixture()
-	coordinator := pausedCoordinator(fixture, 3, quietHost(700, "host-0"))
-
-	coordinator.expire(armResponseTimeout(t, coordinator))
-	awaitPick(t, coordinator)
-
-	profiles := pickedProfiles(fixture)
-	if len(profiles) != 1 {
-		t.Fatalf("picks = %d, want 1", len(profiles))
-	}
-	if profiles[0].Params != (budgetParams{maxTokens: 800}) {
-		t.Fatalf("re-pick params = %+v, want the client's own budget", profiles[0].Params)
-	}
-}
-
-func TestTheResponseTimeoutRetryIsOfferedOncePerRace(t *testing.T) {
-	fixture := nonStreamingFixture()
-	coordinator := pausedCoordinator(fixture, 3, quietHost(710, "host-0"), quietHost(711, "host-1"))
-
-	coordinator.expire(armResponseTimeout(t, coordinator))
-	coordinator.applyPick(awaitPick(t, coordinator))
-
-	again := nextDeadline(coordinator.deps.Now(), coordinator.plan())
-	if again.Trigger == triggerEscalation {
-		t.Fatalf("arm = %+v, want no second halved-budget retry for the same race", again)
-	}
-}
-
-// Nonce scarcity collapses the attempt budget to one, which is what stops a hedge from spending a
-// nonce the phase will not replace. The halved-token retry is exempt: it is not a hedge racing the
-// first host, it is the only escalation a buffered request has, so the budget would delete it outright.
-func TestTheResponseTimeoutRetryIgnoresAnExhaustedAttemptBudget(t *testing.T) {
-	fixture := nonStreamingFixture()
-	coordinator := pausedCoordinator(fixture, 1, quietHost(760, "host-0"))
-
-	coordinator.expire(armResponseTimeout(t, coordinator))
-	coordinator.applyPick(awaitPick(t, coordinator))
-
-	if picks := len(pickedProfiles(fixture)); picks != 1 {
-		t.Fatalf("picks = %d, want 1: the retry must start even with the budget already spent", picks)
-	}
-}
-
-func TestTheRetryNeedsAnUncrownedRace(t *testing.T) {
-	t.Run("a crowned race stops asking", func(t *testing.T) {
-		fixture := nonStreamingFixture()
-		coordinator := pausedCoordinator(fixture, 3, quietHost(731, "host-0"))
-		coordinator.winner = coordinator.attempts[0]
-
-		if arm := nextDeadline(coordinator.deps.Now(), coordinator.plan()); arm.Trigger == triggerEscalation {
-			t.Fatalf("arm = %+v, want no escalation once someone is crowned", arm)
-		}
-	})
 }
 
 func TestABackstopCancelWithNoWinnerIsNotACancelledLoser(t *testing.T) {

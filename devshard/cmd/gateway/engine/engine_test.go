@@ -266,7 +266,7 @@ func TestOutcomeFailureNamesWhatTheClientLost(t *testing.T) {
 		{name: "a_served_race_has_no_failure", outcome: race(cleanAttempt())},
 		{
 			name:    "no_attempt_ever_started",
-			outcome: RaceOutcome{Model: testModel, Stream: true},
+			outcome: RaceOutcome{Model: testModel},
 			want:    ErrAllAttemptsFailed,
 		},
 		{
@@ -283,11 +283,6 @@ func TestOutcomeFailureNamesWhatTheClientLost(t *testing.T) {
 			name:    "every_host_answered_with_nothing",
 			outcome: failedRace(failedAttempt(TerminalEmptyStream)),
 			want:    ErrEmptyStream,
-		},
-		{
-			name:    "a_non_streaming_request_ran_out_of_time",
-			outcome: nonStreamRace(failedAttempt(TerminalClientCancelled)),
-			want:    ErrNonStreamTimeout,
 		},
 		{
 			name:    "nothing_upstream_explained_itself",
@@ -319,11 +314,5 @@ func TestOutcomeFailureNamesWhatTheClientLost(t *testing.T) {
 func failedRace(attempt AttemptOutcome) RaceOutcome {
 	outcome := race(attempt)
 	outcome.Succeeded = false
-	return outcome
-}
-
-func nonStreamRace(attempt AttemptOutcome) RaceOutcome {
-	outcome := failedRace(attempt)
-	outcome.Stream = false
 	return outcome
 }

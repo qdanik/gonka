@@ -108,12 +108,12 @@ type Lifecycle struct {
 }
 
 type RaceOutcome struct {
-	RequestID   string
-	EscrowID    string
-	Model       string
-	InputTokens uint64
-	Stream      bool
-	Decision    string
+	RequestID    string
+	EscrowID     string
+	Model        string
+	InputTokens  uint64
+	Decision     string
+	ClientStream bool
 
 	WinnerNonce uint64
 	Succeeded   bool
@@ -144,6 +144,7 @@ type AttemptOutcome struct {
 
 	ContentChunks         int64
 	UsageCompletionTokens int64
+	HostCreated           int64
 
 	Terminal            Terminal
 	Confirmed           bool
@@ -260,10 +261,6 @@ func (o RaceOutcome) longResponseExempt(a AttemptOutcome) bool {
 	return !a.NonceFinished && a.ContentSource != "" && a.elapsed() >= longResponseExemption
 }
 
-func (o RaceOutcome) longNonStreamEmptyExempt(a AttemptOutcome) bool {
-	return !o.Stream && a.emptyStream() && a.elapsed() >= longResponseExemption
-}
-
 // responsive decides whether a host earns a positive perf sample. A long non-stream reply is exempt
 // from being judged slow, but an empty one earns nothing: crediting a host that held the request for
 // the whole window and returned no content teaches the router to prefer it. See
@@ -317,7 +314,7 @@ func (o RaceOutcome) Verdict(a AttemptOutcome) (limits.Verdict, bool) {
 	switch {
 	case a.PhaseTransitionAborted || a.StateDivergent:
 		return limits.ModelOutcome, false
-	case o.longResponseExempt(a) || o.longNonStreamEmptyExempt(a):
+	case o.longResponseExempt(a):
 		return limits.ModelOutcome, false
 	case a.emptyStream() && o.PoCBypassActive:
 		return limits.ModelOutcome, false
@@ -335,7 +332,7 @@ func (o RaceOutcome) DeniesCrowning(a AttemptOutcome) bool {
 	if a.PhaseTransitionAborted || o.PoCBypassActive {
 		return false
 	}
-	return a.Terminal == TerminalEmptyStream && !o.longNonStreamEmptyExempt(a)
+	return a.Terminal == TerminalEmptyStream
 }
 
 func (o RaceOutcome) Labels(a AttemptOutcome) AttemptLabels {
