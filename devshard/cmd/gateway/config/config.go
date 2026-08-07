@@ -241,11 +241,11 @@ func Defaults() Config {
 			AcquireWaitMS: 120_000,
 			// Wait budget divided by the measured time one request holds a slot (~10 s): deeper than this
 			// and the queue provably cannot reach the newcomer before its budget runs out.
-			QueueDepthPerSlot: 12,
+			QueueDepthPerSlot: 24,
 			// A window opens near what a host is known to take rather than discovering it: starting at 4
 			// capped three participants at twelve concurrent requests, whatever the group size.
 			AIMD: AIMD{
-				InitialWindow: 64,
+				InitialWindow: 128,
 				MaxWindow:     256,
 			},
 			Breaker: Breaker{
@@ -302,7 +302,7 @@ func Defaults() Config {
 			MaxSpeculativeAttempts:      0,
 		},
 		Scheduler: Scheduler{
-			HoldGraceMS: 200,
+			HoldGraceMS: 2_000,
 		},
 	}
 }
