@@ -143,6 +143,7 @@ type AttemptOutcome struct {
 	Completed   time.Time
 
 	ContentChunks         int64
+	StreamChunks          int64
 	UsageCompletionTokens int64
 	HostCreated           int64
 

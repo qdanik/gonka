@@ -623,6 +623,13 @@ func (c *raceCoordinator) complete(attempt *liveAttempt, event AttemptEvent) {
 	if c.phaseAborted(attempt, *attempt.outcome) {
 		fields = append(fields, "phase_aborted", true)
 	}
+	// An empty stream has degrees: a host that sent nothing at all, one that sent only empty events,
+	// and one that reported tokens it never delivered. See gateway-capacity-and-health.md.
+	if attempt.outcome.emptyStream() {
+		fields = append(fields,
+			"stream_chunks", attempt.outcome.StreamChunks,
+			"usage_tokens", attempt.outcome.UsageCompletionTokens)
+	}
 	logging.Info("attempt finished", fields...)
 	if signal := CapabilityOf(*attempt.outcome); signal.Retriable() {
 		RecordCapability(c.deps.Perf, attempt.participant, signal)

@@ -104,6 +104,22 @@ The floor takes an escrow out of selection while it can still refuse cleanly. It
 
 It is zero by default, which disables it. A floor sized in the wrong unit would retire every escrow at once, so the gateway declines to guess.
 
+## An empty stream has degrees
+
+`empty_stream` is the bottom of the classification ladder: a receipt arrived, no error came, and nothing the client could render did either — not `content`, not `reasoning`, not `reasoning_content`, not a tool call. An empty string does not count, because upstream opens every reply with `{"delta":{"content":"","role":"assistant"}}` and crowning on that would hand the client a winner chosen for sending a preamble first.
+
+That one label covers three very different hosts, so the finished-attempt line carries `stream_chunks` and `usage_tokens` whenever it fires:
+
+| stream_chunks | usage_tokens | what it was |
+|---|---|---|
+| 0 | 0 | nothing after the receipt — the host took the nonce and never wrote a byte |
+| > 0 | 0 | events arrived and all of them were empty |
+| > 0 | > 0 | the host reported tokens it never delivered |
+
+`stream_chunks` counts every write, not the content-bearing ones, which is what separates the first row from the second. On a thinking-budget route the third row is classified as `burn_empty` instead, because there the host's own token count is the one signal that separates a model producing nothing from a host carrying nothing.
+
+The distinction matters for what it costs. A host that answers empty after a receipt cannot have its nonce closed early: the timeout vote is only accepted once the chain's execution deadline has passed, around thirty minutes from the receipt, and the escrow's in-flight count carries it the whole time.
+
 ## What in-flight actually counts
 
 `devshard_runtime_active_requests` is not the number of clients waiting. The escrow hold a race takes is kept "for as long as the race's vote is owed" (`engine/engine.go`, `raceRegistration.holdEscrow`), and it is released on the goroutine that posts the timeout vote for every nonce the race left unfinished — after the losers have been given their grace, which defaults to ten minutes. So a request whose answer was delivered long ago keeps its escrow's count up until the chain has been told what became of each of its nonces. Reading the gauge as "requests still generating" overstates load by however much settlement is behind.
