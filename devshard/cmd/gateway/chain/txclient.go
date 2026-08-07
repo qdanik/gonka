@@ -245,6 +245,12 @@ func (c *TxClient) TxCommitted(ctx context.Context, txHash string) (succeeded bo
 	return result.Code == 0, nil
 }
 
+// errUnconfirmed says what the caller must not conclude: the transaction was broadcast, so it may yet
+// commit, and its commitment row is reconciled rather than abandoned. See gateway-escrow-lifecycle.md.
+func errUnconfirmed(txHash string, within time.Duration) error {
+	return fmt.Errorf("tx %s was broadcast but not confirmed within %s; its commitment is kept and reconciled, so do not create another", txHash, within)
+}
+
 // awaitTx polls the chain until a committed transaction satisfies ready, pollTimeout elapses, or ctx is
 // done; a 404 is "not indexed yet" rather than the terminal not-found GetTxEscrowID reports. A non-zero
 // code is returned as an error, and it is the only way to learn a DeliverTx failure: broadcasting in
@@ -258,7 +264,7 @@ func (c *TxClient) awaitTx(ctx context.Context, txHash string, ready func(TxResu
 		case err != nil:
 			lastErr = err
 		case !found:
-			lastErr = fmt.Errorf("tx %s is not on chain yet", txHash)
+			lastErr = fmt.Errorf("tx %s is not visible on chain yet", txHash)
 		case result.Code != 0:
 			return TxResult{}, fmt.Errorf("tx %s failed code=%d codespace=%s raw_log=%s", txHash, result.Code, result.Codespace, result.RawLog)
 		case ready(result):
@@ -268,9 +274,9 @@ func (c *TxClient) awaitTx(ctx context.Context, txHash string, ready func(TxResu
 		}
 		if c.now().After(deadline) {
 			if lastErr != nil {
-				return TxResult{}, fmt.Errorf("wait for tx %s: %w", txHash, lastErr)
+				return TxResult{}, fmt.Errorf("%w: %w", errUnconfirmed(txHash, c.pollTimeout), lastErr)
 			}
-			return TxResult{}, fmt.Errorf("wait for tx %s timed out", txHash)
+			return TxResult{}, errUnconfirmed(txHash, c.pollTimeout)
 		}
 		select {
 		case <-ctx.Done():
