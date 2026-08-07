@@ -348,8 +348,13 @@ func TestWaitForCreatedEscrowIDTimesOutWhenNeverFound(t *testing.T) {
 
 	_, err = client.waitForCreatedEscrowID(t.Context(), "HASH")
 
-	if err == nil || !strings.Contains(err.Error(), "wait for tx") {
-		t.Fatalf("waitForCreatedEscrowID = %v, want a bounded wait to give up", err)
+	// The wording matters as much as the giving up: an operator who reads this as "the transaction
+	// failed" creates a second escrow while the first is still landing.
+	if err == nil || !strings.Contains(err.Error(), "not confirmed within") {
+		t.Fatalf("waitForCreatedEscrowID = %v, want a bounded wait that reports the broadcast", err)
+	}
+	if !strings.Contains(err.Error(), "do not create another") {
+		t.Fatalf("waitForCreatedEscrowID = %v, want the caller told not to retry the creation", err)
 	}
 }
 
