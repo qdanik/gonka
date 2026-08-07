@@ -7,8 +7,10 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"devshard/cmd/gateway/config"
+	"devshard/cmd/gateway/engine"
 	"devshard/cmd/gateway/limits"
 	"devshard/cmd/gateway/scheduler"
 
@@ -351,5 +353,62 @@ func TestTheStatusReportsTheSessionVersion(t *testing.T) {
 	}
 	if !strings.Contains(recorder.Body.String(), `"session_version":"v2"`) {
 		t.Fatalf("the status carries no session version: %s", recorder.Body.String())
+	}
+}
+
+func TestHostClockOffsetReadsTheWinnersStamp(t *testing.T) {
+	t.Parallel()
+	dispatchedAt := time.Unix(1786114580, 0)
+	testCases := []struct {
+		name       string
+		outcome    engine.RaceOutcome
+		wantOffset int64
+		wantFound  bool
+	}{
+		{
+			name: "a host whose clock agrees with ours",
+			outcome: engine.RaceOutcome{WinnerNonce: 7, Attempts: []engine.AttemptOutcome{
+				{Nonce: 7, SendTime: dispatchedAt, HostCreated: 1786114584},
+			}},
+			wantOffset: 4,
+			wantFound:  true,
+		},
+		{
+			name: "a host stamping before we dispatched, which only a drifted clock can do",
+			outcome: engine.RaceOutcome{WinnerNonce: 7, Attempts: []engine.AttemptOutcome{
+				{Nonce: 7, SendTime: dispatchedAt, HostCreated: 1786114550},
+			}},
+			wantOffset: -30,
+			wantFound:  true,
+		},
+		{
+			name: "the loser's stamp is not the winner's",
+			outcome: engine.RaceOutcome{WinnerNonce: 7, Attempts: []engine.AttemptOutcome{
+				{Nonce: 9, SendTime: dispatchedAt, HostCreated: 1786114999},
+				{Nonce: 7, SendTime: dispatchedAt, HostCreated: 1786114584},
+			}},
+			wantOffset: 4,
+			wantFound:  true,
+		},
+		{
+			name: "an unstamped reply reports nothing rather than an epoch offset",
+			outcome: engine.RaceOutcome{WinnerNonce: 7, Attempts: []engine.AttemptOutcome{
+				{Nonce: 7, SendTime: dispatchedAt},
+			}},
+		},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			offset, found := hostClockOffset(testCase.outcome)
+
+			if found != testCase.wantFound {
+				t.Fatalf("found = %v, want %v", found, testCase.wantFound)
+			}
+			if offset != testCase.wantOffset {
+				t.Errorf("offset = %d, want %d", offset, testCase.wantOffset)
+			}
+		})
 	}
 }

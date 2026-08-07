@@ -93,7 +93,7 @@ func TestTheSameCallerOnADifferentEscrowIsAMiss(t *testing.T) {
 		request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
 		request.Header.Set("Authorization", "Bearer caller-a")
 		request.SetPathValue("id", escrowID)
-		return cacheKeyFor(request, "qwen", []byte(chatBody), filters.LogprobIntent{})
+		return cacheKeyFor(request, "qwen", []byte(chatBody), filters.LogprobIntent{}, false)
 	}
 	cache := newResponseCache(1 << 20)
 	now := time.Unix(1700000000, 0)
@@ -276,7 +276,7 @@ func TestCachedReplayAndLiveStreamAgreeOnHeaders(t *testing.T) {
 		}
 		t.Run(name, func(t *testing.T) {
 			live := httptest.NewRecorder()
-			stream := newClientStream(live, "req-1", streaming, filters.LogprobIntent{})
+			stream := newClientStream(live, "req-1", streaming, true, filters.LogprobIntent{})
 			stream.begin(contentType)
 			live.Header().Set(EscrowHeader, "escrow-1")
 
@@ -341,14 +341,29 @@ func TestTheCacheKeySeparatesRequestsByWhatTheyAskedFor(t *testing.T) {
 	request.Header.Set("Authorization", "Bearer one-caller")
 	body := []byte(`{"model":"qwen","logprobs":true}`)
 
-	asked := cacheKeyFor(request, "qwen", body, filters.LogprobIntent{Keep: true})
-	askedForAlternatives := cacheKeyFor(request, "qwen", body, filters.LogprobIntent{Keep: true, KeepTop: true})
-	askedForNeither := cacheKeyFor(request, "qwen", body, filters.LogprobIntent{})
+	asked := cacheKeyFor(request, "qwen", body, filters.LogprobIntent{Keep: true}, false)
+	askedForAlternatives := cacheKeyFor(request, "qwen", body, filters.LogprobIntent{Keep: true, KeepTop: true}, false)
+	askedForNeither := cacheKeyFor(request, "qwen", body, filters.LogprobIntent{}, false)
 
 	if asked == askedForNeither {
 		t.Fatal("a request that asked for logprobs shares an entry with one that did not")
 	}
 	if asked == askedForAlternatives {
 		t.Fatal("a request that asked for alternatives shares an entry with one that did not")
+	}
+}
+
+// TestTheCacheSeparatesReplyShapes guards the key against the forced upstream stream: two callers whose
+// bodies are now identical must not share an entry when they asked for different reply shapes.
+func TestTheCacheSeparatesReplyShapes(t *testing.T) {
+	t.Parallel()
+	request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	body := []byte(chatBody)
+
+	buffered := cacheKeyFor(request, "qwen", body, filters.LogprobIntent{}, false)
+	streamed := cacheKeyFor(request, "qwen", body, filters.LogprobIntent{}, true)
+
+	if buffered == streamed {
+		t.Fatal("a buffered and a streamed caller share one cache key")
 	}
 }

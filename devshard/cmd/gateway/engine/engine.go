@@ -90,9 +90,8 @@ type Request struct {
 	Model         string
 	Escrow        string
 	InputTokens   uint64
-	OutputTokens  uint64
-	Stream        bool
 	RequiresTools bool
+	ClientStream  bool
 	ContextHint   uint64
 
 	Params any
@@ -327,11 +326,8 @@ func (o RaceOutcome) failure() error {
 	if hostErr := o.hostError(); hostErr != nil {
 		return hostErr
 	}
-	switch {
-	case o.everyAttempt(AttemptOutcome.emptyStream):
+	if o.everyAttempt(AttemptOutcome.emptyStream) {
 		return ErrEmptyStream
-	case !o.Stream && o.everyAttempt(cancelledWithoutContent):
-		return ErrNonStreamTimeout
 	}
 	return ErrAllAttemptsFailed
 }
@@ -380,10 +376,6 @@ func (o RaceOutcome) everyAttempt(holds func(AttemptOutcome) bool) bool {
 		}
 	}
 	return true
-}
-
-func cancelledWithoutContent(a AttemptOutcome) bool {
-	return a.Terminal == TerminalClientCancelled && a.ContentChunks == 0
 }
 
 type crownKey struct{ participant, model string }

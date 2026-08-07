@@ -67,6 +67,14 @@ Set on every request, present or not:
 
 The gateway needs them to classify an answer — whether the host produced content, whether it burned tokens producing nothing. The client never asked for them, so the response side removes `logprob`, `logprobs`, `top_logprobs`, `token_ids`, `prompt_token_ids` and `prompt_logprobs` at any nesting depth. The two lists move as one, because every field the gateway forces on comes back in the host's answer: a force rule added without its strip counterpart hands a client an internal field it never requested. `return_token_ids` is the one pair whose names differ — the request parameter makes vLLM emit `token_ids` (`filters/response.go`, `clientStrippedFields`).
 
+## Streaming is forced upstream
+
+`stream = true` and `stream_options = {"include_usage": true}` are set on every request to a host, whatever the client asked for, and the client's own intent is carried beside the body as `Result.ClientStream` and `Result.ClientUsage` — read before the forcing, exactly as `LogprobIntent` is (`filters/pipeline.go`, `forceUpstreamStreaming`).
+
+A buffered reply says nothing until it is whole. That left the race with no first-token signal for the traffic that needed it most: production ran entirely non-streaming, and its second-largest failure was a host finishing with no content at all — indistinguishable, until the end, from one still working. It also cost the escalation ladder a rung of its own, whose deadline was modelled at twice the fleet's measured output rate and therefore never decided anything ([gateway-speculative-race.md](./gateway-speculative-race.md), "Escalation"). With the stream forced, an empty answer is a first token that never came, caught in seconds and raced against another host.
+
+The forcing is applied after every validation stage, so the rules judge the request the client sent: a non-streaming client's `stream_options` is dropped by its own whitelist before the gateway sets its own. Both forced fields are paired with a strip, like every other forced field: a client that did not ask for usage does not receive the final usage event, and one that asked for no stream at all gets the chunks merged back into a single reply (`filters/assemble.go`, `AssembleSSEBody`).
+
 `max_tokens` is also always written, even when the client sent neither token field. Zero always means "unset", so it resolves to the operator's default **in full**: the cap bounds what a client may ask for, not what an operator grants a client that asks for nothing, so a default above the cap is honoured rather than trimmed. A non-zero value is clamped to the cap unless the caller is an administrator, which is the only cap bypass. When both fields are present the result is the minimum of the two, mirrored back into `max_completion_tokens` only if the client sent it (`filters/rules_tokens.go`, `applyOutputTokenLimits`). Per-model overrides can replace either limit; a zero from an override means "not set for this model", so the global limit stands.
 
 ## Bounds that exist because a host dies without them
@@ -119,7 +127,13 @@ One documented hole: a `thinking_token_budget` sent as a *string* fails the nume
 
 ## The response side
 
-**Non-streaming replies** are buffered whole and stripped at any nesting depth. A body that does not parse passes through unchanged rather than being dropped.
+**Non-streaming replies** are what the gateway assembles rather than what a host sends: the events are deltas, so they are merged into one completion before the strip runs at any nesting depth (`filters/assemble.go`). A host that answers with a whole `chat.completion` anyway is passed through untouched, and a body carrying no data line at all is already the reply.
+
+What accumulates is decided by field name, never by Go type. Only `content`, `reasoning` (`reasoning_content` on upstream versions before the rename), `refusal`, `function.arguments`, `logprobs.content` and `token_ids` grow; `id`, `type`, `role` and `function.name` are identity fields that replace. Deciding by type instead grows every string a host repeats, and upstream repeats them: vLLM's `qwen3_xml` parser restates a tool call's id and type in every delta, and its finish chunk restates the function name. The client would be handed a tool call it cannot answer, its `tool_call_id` doubled. Arguments re-sent whole after being streamed in fragments — an upstream behaviour on the versions in service — are replaced rather than appended.
+
+Arrays whose every element carries an `index` merge by it, which is how a tool call's arguments arrive; every other array concatenates, which is how logprobs do. Everything outside `choices` is a header the host restates in every chunk, so it replaces: merging it the same way would render the id as itself repeated once per chunk.
+
+**The merge is bounded, because a host is not trusted with the shape of its own reply.** One merged array stops at 256 elements, the assembled object at 64 keys, and the assembly itself at 65 536 events — all far past any reply the forced output budget permits. Without them a host that invents an index, a key or an event per chunk turns the merge quadratic: measured at six minutes of pinned CPU for four megabytes before the bounds, and 170 ms for the same input after. Events are framed the way the rewriter frames them, so a payload the host split across two data lines is rejoined rather than lost, and a payload carrying a second object is rejected exactly as the strip rejects it.
 
 **Streaming replies** go through a stateful `StreamRewriter`, which is the part that must not be got wrong. A stateless per-chunk rewriter is what the gateway had first, and TCP does not deliver event-aligned chunks: any frame split across a read boundary was emitted verbatim, leaking exactly the token ids and log-probabilities the strip exists to hide.
 

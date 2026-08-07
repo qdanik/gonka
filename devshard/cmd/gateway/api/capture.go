@@ -107,7 +107,7 @@ func (c *requestCapture) attemptsFailed(r *http.Request, requestID string, norma
 	if c == nil {
 		return
 	}
-	c.record(captureAttemptsFailed, r, requestID, normalized.Model, normalized.Stream, normalized.Body, cause)
+	c.record(captureAttemptsFailed, r, requestID, normalized.Model, normalized.ClientStream, normalized.Body, cause)
 }
 
 func (c *requestCapture) record(kind string, r *http.Request, requestID, model string, stream bool, body []byte, cause error) {

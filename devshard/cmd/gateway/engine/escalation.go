@@ -8,10 +8,8 @@ import (
 
 const (
 	// Backstops bound a request every tunable already failed to bound, so they are not tunable.
-	streamingHardTimeout      = 20 * time.Minute
-	nonStreamNoContentTimeout = 20 * time.Minute
-	nonStreamMaxAttemptWait   = 30 * time.Minute
-	schedulerPickTimeout      = 2 * time.Minute
+	streamingHardTimeout = 20 * time.Minute
+	schedulerPickTimeout = 2 * time.Minute
 
 	// Admitting a very large prompt is itself work, so such a host gets twice as long to receipt.
 	receiptTimeoutDoubleAboveTokens = 100_000
@@ -31,12 +29,11 @@ const (
 type EscalationStage string
 
 const (
-	StageNone            EscalationStage = ""
-	StageSuspicious      EscalationStage = "suspicious_host_immediate_escalation"
-	StageAttemptFailed   EscalationStage = "attempt_failed"
-	StageReceiptTimeout  EscalationStage = "receipt_timeout_wait_elapsed"
-	StageFirstToken      EscalationStage = "first_token_timeout_wait_elapsed"
-	StageResponseTimeout EscalationStage = "response_timeout_wait_elapsed"
+	StageNone           EscalationStage = ""
+	StageSuspicious     EscalationStage = "suspicious_host_immediate_escalation"
+	StageAttemptFailed  EscalationStage = "attempt_failed"
+	StageReceiptTimeout EscalationStage = "receipt_timeout_wait_elapsed"
+	StageFirstToken     EscalationStage = "first_token_timeout_wait_elapsed"
 )
 
 func (s EscalationStage) Reason() string {
@@ -49,46 +46,33 @@ func (s EscalationStage) Reason() string {
 		return "receipt_timeout"
 	case StageFirstToken:
 		return "first_token_timeout"
-	case StageResponseTimeout:
-		return "response_timeout_retry"
 	}
 	return ""
 }
 
 // The ladder is pure over its arguments: no host performance, no phase snapshot, no clock of its own.
 type EscalationPolicy struct {
-	ReceiptTimeout            time.Duration
-	FirstTokenFloor           time.Duration
-	FirstTokenCeiling         time.Duration
-	InterChunkStall           time.Duration
-	LoserGrace                time.Duration
-	NonStreamResponseFloor    time.Duration
-	NonStreamResponseCeiling  time.Duration
-	PerOutputTokenResponseLag time.Duration
-	MaxSpeculativeAttempts    int
+	ReceiptTimeout         time.Duration
+	FirstTokenFloor        time.Duration
+	FirstTokenCeiling      time.Duration
+	InterChunkStall        time.Duration
+	LoserGrace             time.Duration
+	MaxSpeculativeAttempts int
 }
 
 func EscalationPolicyFromConfig(engine config.Engine) EscalationPolicy {
 	return EscalationPolicy{
-		ReceiptTimeout:            time.Duration(engine.ReceiptTimeoutMS) * time.Millisecond,
-		FirstTokenFloor:           time.Duration(engine.FirstTokenFloorMS) * time.Millisecond,
-		FirstTokenCeiling:         time.Duration(engine.FirstTokenCeilingMS) * time.Millisecond,
-		InterChunkStall:           time.Duration(engine.InterChunkStallMS) * time.Millisecond,
-		LoserGrace:                time.Duration(engine.LoserGraceMS) * time.Millisecond,
-		NonStreamResponseFloor:    time.Duration(engine.NonStreamResponseFloorMS) * time.Millisecond,
-		NonStreamResponseCeiling:  time.Duration(engine.NonStreamResponseCeilingMS) * time.Millisecond,
-		PerOutputTokenResponseLag: time.Duration(engine.PerOutputTokenResponseLagMS) * time.Millisecond,
-		MaxSpeculativeAttempts:    int(engine.MaxSpeculativeAttempts),
+		ReceiptTimeout:         time.Duration(engine.ReceiptTimeoutMS) * time.Millisecond,
+		FirstTokenFloor:        time.Duration(engine.FirstTokenFloorMS) * time.Millisecond,
+		FirstTokenCeiling:      time.Duration(engine.FirstTokenCeilingMS) * time.Millisecond,
+		InterChunkStall:        time.Duration(engine.InterChunkStallMS) * time.Millisecond,
+		LoserGrace:             time.Duration(engine.LoserGraceMS) * time.Millisecond,
+		MaxSpeculativeAttempts: int(engine.MaxSpeculativeAttempts),
 	}
 }
 
-// RetryStillOffered is the one-shot the race holds: exactly one extra attempt per race. See
-// gateway-speculative-race.md, "Escalation".
 type EscalationRequest struct {
-	InputTokens       uint64
-	OutputTokens      uint64
-	Stream            bool
-	RetryStillOffered bool
+	InputTokens uint64
 }
 
 type EscalationAttempt struct {
@@ -189,8 +173,6 @@ func (p EscalationPolicy) triggerFor(attempt EscalationAttempt, request Escalati
 		return ArmedEscalation{Stage: StageSuspicious, Deadline: now}, true
 	case attempt.Done && attempt.NonceFinished:
 		return ArmedEscalation{}, false
-	case attempt.Done && !request.Stream:
-		return ArmedEscalation{}, false
 	case attempt.Done:
 		return ArmedEscalation{Stage: StageAttemptFailed, Deadline: now}, true
 	case attempt.SendTime.IsZero():
@@ -198,12 +180,6 @@ func (p EscalationPolicy) triggerFor(attempt EscalationAttempt, request Escalati
 	case attempt.ReceiptTime.IsZero():
 		deadline := attempt.SendTime.Add(p.receiptTimeout(request.InputTokens))
 		return ArmedEscalation{Stage: StageReceiptTimeout, Deadline: deadline}, true
-	case !request.Stream:
-		wait, worthRetrying := p.nonStreamResponseTimeout(request.OutputTokens)
-		if !worthRetrying || !request.RetryStillOffered || !attempt.FirstContent.IsZero() {
-			return ArmedEscalation{}, false
-		}
-		return ArmedEscalation{Stage: StageResponseTimeout, Deadline: attempt.SendTime.Add(wait)}, true
 	case !attempt.FirstToken.IsZero():
 		return ArmedEscalation{}, false
 	}
@@ -221,18 +197,6 @@ func (p EscalationPolicy) receiptTimeout(inputTokens uint64) time.Duration {
 		return 2 * p.ReceiptTimeout
 	}
 	return p.ReceiptTimeout
-}
-
-// nonStreamResponseTimeout waits on the output budget, not the prompt, which the receipt timeout already
-// bounds. It reports false when the ceiling would fire before the budget is even due: cutting a host
-// short of its own expected time retries one that is on schedule and hands the client half an answer.
-// See gateway-speculative-race.md, "Escalation".
-func (p EscalationPolicy) nonStreamResponseTimeout(outputTokens uint64) (time.Duration, bool) {
-	expected := time.Duration(outputTokens) * p.PerOutputTokenResponseLag
-	if p.NonStreamResponseCeiling > 0 && expected > p.NonStreamResponseCeiling {
-		return 0, false
-	}
-	return max(p.NonStreamResponseFloor, expected), true
 }
 
 // firstTokenTimeout is the measured first-token fit over prompt size, floored and capped: the curve is

@@ -50,6 +50,7 @@ type chunkFacts struct {
 
 	UsageCompletionTokens int64
 	TokensBurned          bool
+	Created               int64
 }
 
 // streamClassifier reassembles one attempt's SSE bytes and reports what they contained. Release frees
@@ -116,6 +117,7 @@ type attemptState struct {
 	contentChunks int64
 
 	usageCompletionTokens int64
+	hostCreated           int64
 	tokensBurned          bool
 	contentSource         string
 	errorSource           string
@@ -219,6 +221,9 @@ func (s *attemptState) record(facts chunkFacts) {
 	if facts.UsageCompletionTokens > 0 {
 		s.usageCompletionTokens = facts.UsageCompletionTokens
 	}
+	if facts.Created > 0 && s.hostCreated == 0 {
+		s.hostCreated = facts.Created
+	}
 	s.tokensBurned = s.tokensBurned || facts.TokensBurned
 }
 
@@ -293,6 +298,7 @@ func (s *attemptState) outcome(spec AttemptSpec) *AttemptOutcome {
 
 		ContentChunks:         s.contentChunks,
 		UsageCompletionTokens: s.usageCompletionTokens,
+		HostCreated:           s.hostCreated,
 
 		Terminal:  s.terminal,
 		Confirmed: s.confirmed,

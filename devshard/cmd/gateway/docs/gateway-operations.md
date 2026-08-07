@@ -299,3 +299,11 @@ What does not: participant windows, breaker state, host ejections, capability fl
 - `GET /v1/debug/rotation` for what rotation did last, per model and role, including the last creation error.
 - `GET /v1/requests/{id}` for one request: which escrow and participant served it, which nonce, the winner's timings, and output tokens summed over every attempt. No monetary cost — that lives in chain settlement.
 - `devshard_gateway_capacity_weights_unobserved_by_model` for the one silent degradation: escrow scoring running on membership share because the chain reported no weights.
+
+## Host clock offset
+
+Every `request finished` line for a stamped reply carries `host_clock_offset_s`: the `created` the winning host put on its answer, minus the second the gateway dispatched to it. Upstream stamps a reply once, when it accepts the request, and repeats that stamp on every chunk — so the value is bounded from both sides by facts the gateway already knows.
+
+A small positive number is ordinary: the host accepted the request shortly after we sent it. **A negative number is not reachable by any slow host** — it says the reply was accepted before we dispatched it, which only a clock running behind ours can produce. A value larger than the request's own time to first token says the opposite: a clock running ahead.
+
+The stamp has one-second resolution, so this reads drift, not latency. It is not a substitute for the first-token measurement, which the gateway takes on its own clock and which is what the escalation ladder acts on.

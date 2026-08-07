@@ -16,7 +16,6 @@ func TestSentinelsSurviveWrapping(t *testing.T) {
 	}{
 		{name: "empty_stream", sentinel: ErrEmptyStream},
 		{name: "winner_incomplete", sentinel: ErrWinnerIncomplete},
-		{name: "non_stream_timeout", sentinel: ErrNonStreamTimeout},
 	}
 
 	for _, testCase := range testCases {
@@ -120,7 +119,6 @@ func TestStatusForError(t *testing.T) {
 		{name: "success", err: nil, wantStatus: http.StatusOK},
 		{name: "host_application_error", err: &HostApplicationError{Code: "400"}, wantStatus: http.StatusBadRequest},
 		{name: "wrapped_host_application_error", err: fmt.Errorf("race: %w", &HostApplicationError{Code: "404"}), wantStatus: http.StatusNotFound},
-		{name: "non_stream_timeout", err: fmt.Errorf("race: %w", ErrNonStreamTimeout), wantStatus: http.StatusGatewayTimeout},
 		{name: "upstream_throttled", err: &transport.UpstreamStatusError{StatusCode: http.StatusTooManyRequests}, wantStatus: http.StatusTooManyRequests},
 		{name: "upstream_unavailable", err: &transport.UpstreamStatusError{StatusCode: http.StatusServiceUnavailable}, wantStatus: http.StatusTooManyRequests},
 		{name: "upstream_server_error", err: &transport.UpstreamStatusError{StatusCode: http.StatusInternalServerError}, wantStatus: http.StatusBadGateway},

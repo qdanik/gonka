@@ -13,7 +13,7 @@ import (
 // first could otherwise send unlimited valid SSE and take the process out. The streaming path forwards
 // as it goes and needs no such bound.
 func TestNonStreamingRepliesAreBoundedInMemory(t *testing.T) {
-	stream := newClientStream(httptest.NewRecorder(), "req-1", false, filters.LogprobIntent{})
+	stream := newClientStream(httptest.NewRecorder(), "req-1", false, true, filters.LogprobIntent{})
 	chunk := bytes.Repeat([]byte("x"), 1<<20)
 
 	written := 0
@@ -40,7 +40,7 @@ func TestNonStreamingRepliesAreBoundedInMemory(t *testing.T) {
 
 func TestNonStreamingRepliesUnderTheBoundAreKept(t *testing.T) {
 	recorder := httptest.NewRecorder()
-	stream := newClientStream(recorder, "req-1", false, filters.LogprobIntent{})
+	stream := newClientStream(recorder, "req-1", false, true, filters.LogprobIntent{})
 
 	if _, err := stream.Write([]byte(`data: {"choices":[{"message":{"content":"ok"}}]}` + "\n\n")); err != nil {
 		t.Fatalf("Write(): %v", err)
@@ -59,7 +59,7 @@ func TestNonStreamingRepliesUnderTheBoundAreKept(t *testing.T) {
 // in: the strip rewrites events on the way out, so the two differ.
 func TestAStreamCountsWhatReachedTheClient(t *testing.T) {
 	recorder := httptest.NewRecorder()
-	stream := newClientStream(recorder, "req-1", true, filters.LogprobIntent{})
+	stream := newClientStream(recorder, "req-1", true, true, filters.LogprobIntent{})
 
 	if _, err := stream.Write([]byte(`data: {"choices":[{"delta":{"content":"ok"}}]}` + "\n\n")); err != nil {
 		t.Fatalf("Write(): %v", err)
@@ -79,7 +79,7 @@ func TestAStreamCountsWhatReachedTheClient(t *testing.T) {
 
 func TestANonStreamingReplyCountsItsBody(t *testing.T) {
 	recorder := httptest.NewRecorder()
-	stream := newClientStream(recorder, "req-1", false, filters.LogprobIntent{})
+	stream := newClientStream(recorder, "req-1", false, true, filters.LogprobIntent{})
 
 	if _, err := stream.Write([]byte(`data: {"choices":[{"message":{"content":"ok"}}]}` + "\n\n")); err != nil {
 		t.Fatalf("Write(): %v", err)
