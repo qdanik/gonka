@@ -14,11 +14,11 @@ import (
 type tracedDispatches struct{ recorder *metrics.DispatchRecorder }
 
 // GhostBurned is a nonce that cost money on chain and will serve nobody. The nonce is logged and never
-// labelled: it leaves an inference record on chain that stays started forever, so an operator needs the
-// number to tell it apart from work still running -- and a counter keyed by it would grow without end.
-func (t tracedDispatches) GhostBurned(escrowID string, nonce uint64, reason string) {
-	logging.Warn("nonce burned for nobody", "escrow", escrowID, "nonce", nonce, "reason", reason)
-	t.recorder.GhostBurned(escrowID, reason)
+// labelled: a counter keyed by it would grow without end.
+func (t tracedDispatches) GhostBurned(escrowID string, nonce uint64, participant, reason string) {
+	logging.Warn("nonce burned for nobody",
+		"escrow", escrowID, "nonce", nonce, "host", participant, "reason", reason)
+	t.recorder.GhostBurned(escrowID, participant, reason)
 }
 
 // BurnBudgetExhausted means the escrow stopped burning nonces to answer requests it cannot serve, so

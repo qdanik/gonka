@@ -630,9 +630,18 @@ func TestEndToEndABurnedNonceIsCountedUnderItsOwnReason(t *testing.T) {
 		gateway.send(t, e2eRequest{path: "/v1/chat/completions", body: distinctChatBody(request)})
 	}
 
-	burned := fmt.Sprintf("devshard_gateway_ghost_nonces_burned_total{devshard_id=%q,reason=%q} 1", fixture.id, "participant_capability_no_send")
-	if scrape := gateway.scrapeMetrics(t); !strings.Contains(scrape, burned) {
-		t.Fatalf("scrape is missing %s: a nonce was burned and nothing in production counted it", burned)
+	escrow := fmt.Sprintf("devshard_id=%q", fixture.id)
+	reason := fmt.Sprintf("reason=%q", "participant_capability_no_send")
+	counted := false
+	for _, line := range strings.Split(gateway.scrapeMetrics(t), "\n") {
+		if strings.HasPrefix(line, "devshard_gateway_ghost_nonces_burned_total{") &&
+			strings.Contains(line, escrow) && strings.Contains(line, reason) {
+			counted = true
+			break
+		}
+	}
+	if !counted {
+		t.Fatalf("scrape has no ghost burn for %s %s: a nonce was burned and nothing in production counted it", escrow, reason)
 	}
 }
 

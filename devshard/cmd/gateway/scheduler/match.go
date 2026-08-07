@@ -57,10 +57,26 @@ func (a availability) blocks(participant string, queued *waiter) blockReason {
 	if reason := a.participantBlocked(participant); reason != blockNone {
 		return reason
 	}
-	switch {
-	case queued.exclude[participant]:
+	if queued.exclude[participant] {
 		return blockExcluded
-	case a.stateBlocked(participant):
+	}
+	return a.blocksApartFromExclusion(participant, queued)
+}
+
+func (a availability) onlyThisHostIsLeft(participant string, participants []string, queued *waiter) bool {
+	if a.blocksApartFromExclusion(participant, queued) != blockNone {
+		return false
+	}
+	for _, other := range participants {
+		if other != participant && a.blocks(other, queued) == blockNone {
+			return false
+		}
+	}
+	return true
+}
+
+func (a availability) blocksApartFromExclusion(participant string, queued *waiter) blockReason {
+	if a.stateBlocked(participant) {
 		return blockStateDiverged
 	}
 	switch reason, blocked := a.capability(participant, queued.profile); {
@@ -75,14 +91,14 @@ func (a availability) blocks(participant string, queued *waiter) blockReason {
 // match is pure and total: it reads nothing, mutates nothing, and every path yields a Decision.
 // Filters are keyed by participant, never by slot, so a host a request excluded once can never be
 // re-served to it through a sibling slot of the same validator.
-func match(binding HostBinding, waiting []*waiter, avail availability, now time.Time, stale time.Duration) Decision {
+func match(binding HostBinding, waiting []*waiter, participants []string, avail availability, now time.Time, stale time.Duration) Decision {
 	participant := binding.Participant
 	if reason := avail.participantBlocked(participant); reason != blockNone {
 		return burn{kind: ghostFor[reason]}
 	}
 
 	sawBlockedWaiter := false
-	var oldestLive *waiter
+	var oldestLive, excludedOnly *waiter
 	for _, queued := range waiting {
 		if queued.abandoned.Load() {
 			continue
@@ -94,6 +110,9 @@ func match(binding HostBinding, waiting []*waiter, avail availability, now time.
 		case blockNone:
 			return serve{waiter: queued}
 		case blockExcluded:
+			if excludedOnly == nil && avail.onlyThisHostIsLeft(participant, participants, queued) {
+				excludedOnly = queued
+			}
 		default:
 			sawBlockedWaiter = true
 		}
@@ -104,6 +123,10 @@ func match(binding HostBinding, waiting []*waiter, avail availability, now time.
 	}
 	if until := oldestLive.enqueued.Add(stale); now.Before(until) {
 		return hold{until: until}
+	}
+	// See gateway-routing-and-nonces.md, "Serving a host the request excluded".
+	if excludedOnly != nil {
+		return serve{waiter: excludedOnly, despiteExclusion: true}
 	}
 	if sawBlockedWaiter {
 		return burn{kind: ghostCapability}

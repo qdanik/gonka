@@ -139,7 +139,7 @@ type recordingObserver struct {
 	ghostNonces []uint64
 }
 
-func (o *recordingObserver) GhostBurned(_ string, nonce uint64, reason string) {
+func (o *recordingObserver) GhostBurned(_ string, nonce uint64, _, reason string) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	o.ghosts = append(o.ghosts, reason)

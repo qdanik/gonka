@@ -10,7 +10,10 @@ import (
 // gateway-invariants.md, "1. A committed nonce is always settled".
 type Decision interface{ isDecision() }
 
-type serve struct{ waiter *waiter }
+type serve struct {
+	waiter           *waiter
+	despiteExclusion bool
+}
 type burn struct{ kind GhostKind }
 
 // hold declines the bound nonce without committing it until until, giving a co-arriving

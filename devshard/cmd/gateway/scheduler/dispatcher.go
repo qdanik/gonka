@@ -16,7 +16,7 @@ const defaultSubmitBuffer = 64
 // EscrowRetired lets an observer forget an escrow: ids are monotonic chain identifiers and are never
 // reused, so a per-escrow metric series that outlives its escrow grows with uptime and nothing else.
 type dispatchObserver interface {
-	GhostBurned(escrowID string, nonce uint64, reason string)
+	GhostBurned(escrowID string, nonce uint64, participant, reason string)
 	NonceHeld(escrowID string)
 	BurnBudgetExhausted(escrowID string)
 	EscrowRetired(escrowID string)
@@ -226,7 +226,7 @@ func (d *dispatcher) drain() (time.Time, bool) {
 		escrowRetired := false
 		prepared, err := d.session.Advance(func(binding HostBinding) NonceIntent {
 			taken.participant = binding.Participant
-			decision = match(binding, d.waiting, avail, d.now(), d.stale)
+			decision = match(binding, d.waiting, participants, avail, d.now(), d.stale)
 			if _, serving := decision.(serve); !serving {
 				return intentFor(decision)
 			}
@@ -261,7 +261,7 @@ func (d *dispatcher) drain() (time.Time, bool) {
 			if prepared != nil {
 				ghostNonce = prepared.Nonce()
 			}
-			d.recordGhost(ghostNonce, outcome.kind.reason())
+			d.recordGhost(ghostNonce, taken.participant, outcome.kind.reason())
 			burnBudget--
 			if burnBudget <= 0 {
 				d.recordBudgetTrip()
@@ -369,7 +369,7 @@ func (d *dispatcher) handOff(served *waiter, taken reservation, prepared Prepare
 	assignment := Assignment{Escrow: d.escrowID, Host: taken.participant, Nonce: prepared, EscrowHold: taken.escrowHold}
 	if !served.deliver(pickResult{assignment: assignment}) {
 		d.giveBack(taken)
-		d.recordGhost(prepared.Nonce(), ghostAbandoned.reason())
+		d.recordGhost(prepared.Nonce(), taken.participant, ghostAbandoned.reason())
 	}
 }
 
@@ -418,9 +418,9 @@ func (d *dispatcher) dequeue(target *waiter) {
 	}
 }
 
-func (d *dispatcher) recordGhost(nonce uint64, reason string) {
+func (d *dispatcher) recordGhost(nonce uint64, participant, reason string) {
 	if d.observer != nil {
-		d.observer.GhostBurned(d.escrowID, nonce, reason)
+		d.observer.GhostBurned(d.escrowID, nonce, participant, reason)
 	}
 }
 
