@@ -372,7 +372,7 @@ func TestHostClockOffsetReadsTheWinnersStamp(t *testing.T) {
 			outcome: engine.RaceOutcome{WinnerNonce: 7, Attempts: []engine.AttemptOutcome{
 				{Nonce: 7, SendTime: dispatchedAt, ReceiptTime: confirmedAt, ConfirmedAt: 1786114584},
 			}},
-			wantOffsetMS: 3940,
+			wantOffsetMS: 4440,
 			wantRoundTri: 120,
 			wantFound:    true,
 		},
@@ -381,7 +381,7 @@ func TestHostClockOffsetReadsTheWinnersStamp(t *testing.T) {
 			outcome: engine.RaceOutcome{WinnerNonce: 7, Attempts: []engine.AttemptOutcome{
 				{Nonce: 7, SendTime: dispatchedAt, ReceiptTime: confirmedAt, ConfirmedAt: 1786114550},
 			}},
-			wantOffsetMS: -30060,
+			wantOffsetMS: -29560,
 			wantRoundTri: 120,
 			wantFound:    true,
 		},
@@ -394,7 +394,7 @@ func TestHostClockOffsetReadsTheWinnersStamp(t *testing.T) {
 					ReceiptTime: dispatchedAt.Add(4 * time.Second), ConfirmedAt: 1786114584,
 				},
 			}},
-			wantOffsetMS: 2000,
+			wantOffsetMS: 2500,
 			wantRoundTri: 4000,
 			wantFound:    true,
 		},
@@ -404,7 +404,7 @@ func TestHostClockOffsetReadsTheWinnersStamp(t *testing.T) {
 				{Nonce: 9, SendTime: dispatchedAt, ReceiptTime: confirmedAt, ConfirmedAt: 1786114999},
 				{Nonce: 7, SendTime: dispatchedAt, ReceiptTime: confirmedAt, ConfirmedAt: 1786114584},
 			}},
-			wantOffsetMS: 3940,
+			wantOffsetMS: 4440,
 			wantRoundTri: 120,
 			wantFound:    true,
 		},
@@ -437,5 +437,28 @@ func TestHostClockOffsetReadsTheWinnersStamp(t *testing.T) {
 				t.Errorf("roundTripMS = %d, want %d", roundTripMS, testCase.wantRoundTri)
 			}
 		})
+	}
+}
+
+// The executor stamps whole seconds by truncation, so a host dispatched to late in a second signs a
+// stamp that reads a full second behind however well its clock agrees with ours.
+func TestHostClockOffsetDoesNotReadTruncationAsDrift(t *testing.T) {
+	t.Parallel()
+	dispatchedAt := time.Unix(1786114580, 0).Add(900 * time.Millisecond)
+
+	offsetMS, _, stamped := hostClockOffset(engine.RaceOutcome{
+		WinnerNonce: 7,
+		Attempts: []engine.AttemptOutcome{{
+			Nonce: 7, SendTime: dispatchedAt,
+			ReceiptTime: dispatchedAt.Add(200 * time.Millisecond),
+			ConfirmedAt: 1786114580,
+		}},
+	})
+
+	if !stamped {
+		t.Fatal("a signed receipt must be readable")
+	}
+	if offsetMS < -600 || offsetMS > 600 {
+		t.Errorf("offsetMS = %d, want a synchronised host inside the truncated second", offsetMS)
 	}
 }
