@@ -205,9 +205,6 @@ func (p EscalationPolicy) receiptTimeout(inputTokens uint64) time.Duration {
 	return p.ReceiptTimeout
 }
 
-// firstTokenTimeout is the measured first-token fit over prompt size, floored and capped: the curve is
-// quadratic, and uncapped it outgrows the backstop that cancels the attempt. See
-// gateway-speculative-race.md, "Escalation".
 // firstTokenBudget only ever extends: a host slower than the curve keeps it, because waiting out its
 // own history would delay the attempt that rescues the request.
 func (p EscalationPolicy) firstTokenBudget(inputTokens uint64, observed time.Duration) time.Duration {
@@ -225,6 +222,9 @@ func (p EscalationPolicy) firstTokenBudget(inputTokens uint64, observed time.Dur
 	return budget
 }
 
+// firstTokenTimeout is the measured first-token fit over prompt size, floored and capped: the curve is
+// quadratic, and uncapped it outgrows the backstop that cancels the attempt. See
+// gateway-speculative-race.md, "Escalation".
 func (p EscalationPolicy) firstTokenTimeout(inputTokens uint64) time.Duration {
 	tokens := float64(inputTokens)
 	seconds := firstTokenBaseSeconds + firstTokenPerTokenSeconds*tokens + firstTokenQuadraticSeconds*tokens*tokens

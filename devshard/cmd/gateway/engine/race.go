@@ -672,8 +672,6 @@ func (c *raceCoordinator) complete(attempt *liveAttempt, event AttemptEvent) {
 	}
 }
 
-// racedTerminal is the attempt's terminal as the race sees it: an attempt goroutine knows only its own
-// cancellation, not the crown, the silence or the backstop. Every reader promotes through here.
 // unreportedOutcome stands in for an attempt whose goroutine never reported: the race stopped listening
 // before it finished. Dropping it left a committed nonce with no log line, no ledger row and no timeout
 // vote -- a nonce spent on chain that nothing downstream could see. See gateway-invariants.md, "1".
@@ -693,6 +691,8 @@ func (c *raceCoordinator) unreportedOutcome(attempt *liveAttempt) AttemptOutcome
 	}
 }
 
+// racedTerminal is the attempt's terminal as the race sees it: an attempt goroutine knows only its own
+// cancellation, not the crown, the silence or the backstop. Every reader promotes through here.
 func (c *raceCoordinator) racedTerminal(attempt *liveAttempt, outcome AttemptOutcome) Terminal {
 	terminal := outcome.Terminal
 	if terminal == TerminalClientCancelled && (attempt.stalled && outcome.ContentChunks > 0 || c.abandonedByHosts()) {
