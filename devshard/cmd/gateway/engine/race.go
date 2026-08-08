@@ -600,6 +600,29 @@ func (c *raceCoordinator) apply(event AttemptEvent) {
 	}
 }
 
+// attemptDeliveryFields reads the same for a winner and a loser; every duration is from the dispatch.
+func attemptDeliveryFields(outcome AttemptOutcome) []any {
+	fields := []any{
+		"content_chunks", outcome.ContentChunks,
+		"stream_chunks", outcome.StreamChunks,
+		"usage_tokens", outcome.UsageCompletionTokens,
+	}
+	for _, span := range []struct {
+		name  string
+		until time.Time
+	}{
+		{"receipt_ms", outcome.ReceiptTime},
+		{"first_token_ms", outcome.FirstToken},
+		{"attempt_ms", outcome.Completed},
+	} {
+		if outcome.SendTime.IsZero() || span.until.IsZero() {
+			continue
+		}
+		fields = append(fields, span.name, span.until.Sub(outcome.SendTime).Milliseconds())
+	}
+	return fields
+}
+
 func (c *raceCoordinator) complete(attempt *liveAttempt, event AttemptEvent) {
 	attempt.done, attempt.completed = true, event.At
 	attempt.outcome, attempt.lifecycle = event.Outcome, event.Lifecycle
@@ -620,15 +643,9 @@ func (c *raceCoordinator) complete(attempt *liveAttempt, event AttemptEvent) {
 		"terminal", c.racedTerminal(attempt, *attempt.outcome).String(),
 		"nonce_finished", attempt.nonceFinished, "state_divergent", attempt.outcome.StateDivergent,
 	}
+	fields = append(fields, attemptDeliveryFields(*attempt.outcome)...)
 	if c.phaseAborted(attempt, *attempt.outcome) {
 		fields = append(fields, "phase_aborted", true)
-	}
-	// An empty stream has degrees: a host that sent nothing at all, one that sent only empty events,
-	// and one that reported tokens it never delivered. See gateway-capacity-and-health.md.
-	if attempt.outcome.emptyStream() {
-		fields = append(fields,
-			"stream_chunks", attempt.outcome.StreamChunks,
-			"usage_tokens", attempt.outcome.UsageCompletionTokens)
 	}
 	logging.Info("attempt finished", fields...)
 	if signal := CapabilityOf(*attempt.outcome); signal.Retriable() {

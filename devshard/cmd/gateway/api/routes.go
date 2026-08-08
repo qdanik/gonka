@@ -512,18 +512,20 @@ func (s *Server) race(w http.ResponseWriter, r *http.Request, requestID string, 
 	return outcome, nil
 }
 
-// hostClockOffset is the winner's own stamp minus the moment the gateway dispatched to it. Upstream
-// stamps a reply when it accepts the request, so a negative value is a host whose clock runs behind
-// ours and a value past the first token is one running ahead: neither is reachable by a late answer.
-// The stamp has one-second resolution, so this reads drift, not latency.
-func hostClockOffset(outcome engine.RaceOutcome) (int64, bool) {
+// hostClockOffset reads the receipt, which the executor signs before inference: `created` would carry
+// a busy host's admission and prefill delay too. The stamp lands inside the round trip beside it.
+func hostClockOffset(outcome engine.RaceOutcome) (offset, roundTripMS int64, stamped bool) {
 	for _, attempt := range outcome.Attempts {
-		if !outcome.IsWinner(attempt) || attempt.HostCreated == 0 || attempt.SendTime.IsZero() {
+		if !outcome.IsWinner(attempt) || attempt.ConfirmedAt == 0 {
 			continue
 		}
-		return attempt.HostCreated - attempt.SendTime.Unix(), true
+		if attempt.SendTime.IsZero() || attempt.ReceiptTime.IsZero() {
+			continue
+		}
+		return attempt.ConfirmedAt - attempt.SendTime.Unix(),
+			attempt.ReceiptTime.Sub(attempt.SendTime).Milliseconds(), true
 	}
-	return 0, false
+	return 0, 0, false
 }
 
 // winnerOutputTokens is what the client actually received, which with the line's own timestamp is what
@@ -554,8 +556,8 @@ func logRequestFinished(requestID string, normalized filters.Result, outcome eng
 		"bytes", written,
 		"terminated", terminated,
 	}
-	if offset, stamped := hostClockOffset(outcome); stamped {
-		fields = append(fields, "host_clock_offset_s", offset)
+	if offset, roundTripMS, stamped := hostClockOffset(outcome); stamped {
+		fields = append(fields, "host_clock_offset_s", offset, "host_receipt_ms", roundTripMS)
 	}
 	if raceErr != nil {
 		fields = append(fields, "error", loggedError(raceErr))

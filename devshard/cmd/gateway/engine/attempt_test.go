@@ -53,11 +53,13 @@ func (c *fakeClassifier) Flush() chunkFacts { return c.tail }
 func (c *fakeClassifier) Release()          { c.releases++ }
 
 type fakeResponse struct {
-	confirmed bool
-	bytesRead int64
+	confirmed   bool
+	confirmedAt int64
+	bytesRead   int64
 }
 
 func (r fakeResponse) Confirmed() bool    { return r.confirmed }
+func (r fakeResponse) ConfirmedAt() int64 { return r.confirmedAt }
 func (r fakeResponse) StreamBytes() int64 { return r.bytesRead }
 
 // fakeDispatcher runs a script in place of a host: it writes the scripted chunks into the attempt's

@@ -149,6 +149,7 @@ type AttemptOutcome struct {
 
 	Terminal            Terminal
 	Confirmed           bool
+	ConfirmedAt         int64
 	NonceFinished       bool
 	FailureRateExceeded bool
 
