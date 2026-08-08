@@ -71,23 +71,29 @@ func EscalationPolicyFromConfig(engine config.Engine) EscalationPolicy {
 	}
 }
 
+const (
+	firstTokenObservedLimit = 4
+	firstTokenObservedSlack = 3
+)
+
 type EscalationRequest struct {
 	InputTokens uint64
 }
 
 type EscalationAttempt struct {
-	Suspicious    bool
-	Escalated     bool
-	Done          bool
-	Crowned       bool
-	Stalled       bool
-	NonceFinished bool
-	SendTime      time.Time
-	ReceiptTime   time.Time
-	FirstToken    time.Time
-	FirstContent  time.Time
-	LastChunk     time.Time
-	Completed     time.Time
+	FirstContentP75 time.Duration
+	Suspicious      bool
+	Escalated       bool
+	Done            bool
+	Crowned         bool
+	Stalled         bool
+	NonceFinished   bool
+	SendTime        time.Time
+	ReceiptTime     time.Time
+	FirstToken      time.Time
+	FirstContent    time.Time
+	LastChunk       time.Time
+	Completed       time.Time
 }
 
 // StartPlan is how a race begins; ImmediateAttempts counts the primary.
@@ -185,7 +191,7 @@ func (p EscalationPolicy) triggerFor(attempt EscalationAttempt, request Escalati
 	}
 	// The curve is measured from dispatch, but a receipt that used more than the curve allows would leave
 	// the rung already due: the host owes a first token, not the time its receipt took.
-	deadline := attempt.SendTime.Add(p.firstTokenTimeout(request.InputTokens))
+	deadline := attempt.SendTime.Add(p.firstTokenBudget(request.InputTokens, attempt.FirstContentP75))
 	if graceFromReceipt := attempt.ReceiptTime.Add(p.FirstTokenFloor); graceFromReceipt.After(deadline) {
 		deadline = graceFromReceipt
 	}
@@ -202,6 +208,23 @@ func (p EscalationPolicy) receiptTimeout(inputTokens uint64) time.Duration {
 // firstTokenTimeout is the measured first-token fit over prompt size, floored and capped: the curve is
 // quadratic, and uncapped it outgrows the backstop that cancels the attempt. See
 // gateway-speculative-race.md, "Escalation".
+// firstTokenBudget only ever extends: a host slower than the curve keeps it, because waiting out its
+// own history would delay the attempt that rescues the request.
+func (p EscalationPolicy) firstTokenBudget(inputTokens uint64, observed time.Duration) time.Duration {
+	curve := p.firstTokenTimeout(inputTokens)
+	if observed <= 0 || observed > firstTokenObservedLimit*curve {
+		return curve
+	}
+	budget := observed * firstTokenObservedSlack / 2
+	if budget < curve {
+		return curve
+	}
+	if p.FirstTokenCeiling > 0 && budget > p.FirstTokenCeiling {
+		return p.FirstTokenCeiling
+	}
+	return budget
+}
+
 func (p EscalationPolicy) firstTokenTimeout(inputTokens uint64) time.Duration {
 	tokens := float64(inputTokens)
 	seconds := firstTokenBaseSeconds + firstTokenPerTokenSeconds*tokens + firstTokenQuadraticSeconds*tokens*tokens

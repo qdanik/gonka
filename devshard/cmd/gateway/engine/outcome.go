@@ -316,6 +316,7 @@ func (o RaceOutcome) Sample(a AttemptOutcome) (perf.Sample, SampleExemption) {
 		ParticipantKey: a.Participant,
 		Model:          o.Model,
 		Responsive:     o.responsive(a),
+		FirstContent:   a.firstContentDelay(),
 	}, SampleRecorded
 }
 
@@ -397,4 +398,11 @@ func (o RaceOutcome) failureReason(a AttemptOutcome) string {
 		return "not_finished"
 	}
 	return "unknown"
+}
+
+func (a AttemptOutcome) firstContentDelay() time.Duration {
+	if a.SendTime.IsZero() || !a.FirstContent.After(a.SendTime) {
+		return 0
+	}
+	return a.FirstContent.Sub(a.SendTime)
 }

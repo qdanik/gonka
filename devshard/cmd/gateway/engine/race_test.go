@@ -237,6 +237,14 @@ type stubPerf struct {
 	degraded  map[string]bool
 	toolCalls []string
 	limits    []contextLimitCall
+	observed  map[string]time.Duration
+}
+
+func (p *stubPerf) FirstContentP75(participant, _ string) (time.Duration, bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	observed, known := p.observed[participant]
+	return observed, known
 }
 
 func (p *stubPerf) Acquire(participant string) {

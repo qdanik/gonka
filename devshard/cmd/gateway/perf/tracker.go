@@ -38,6 +38,16 @@ func NewTracker(holder *config.Holder, now func() time.Time) *Tracker {
 	}
 }
 
+func (t *Tracker) FirstContentP75(participant, model string) (time.Duration, bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	host := t.hosts[hostKey{participant: participant, model: model}]
+	if host == nil {
+		return 0, false
+	}
+	return host.firstContent.p75(latencyWindowMinimum)
+}
+
 func (t *Tracker) RecordSample(s Sample) {
 	now := t.now()
 	perf := t.config.Load().Perf
