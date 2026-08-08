@@ -199,13 +199,6 @@ func applyOutputTokenLimits(document *Document, view *requestView, options Optio
 	}
 }
 
-func outputTokenFloor(routedModel string) uint64 {
-	if profile := ProfileFor(routedModel); profile != nil {
-		return profile.MaxTokensFloor
-	}
-	return 0
-}
-
 // maxTokensFloor lifts ctx.Param up to the profile's floor when the parsed value falls below it.
 func maxTokensFloor() RuleFunc {
 	return func(ctx RuleContext) error {

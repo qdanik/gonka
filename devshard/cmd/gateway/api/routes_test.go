@@ -359,41 +359,52 @@ func TestTheStatusReportsTheSessionVersion(t *testing.T) {
 func TestHostClockOffsetReadsTheWinnersStamp(t *testing.T) {
 	t.Parallel()
 	dispatchedAt := time.Unix(1786114580, 0)
+	confirmedAt := dispatchedAt.Add(120 * time.Millisecond)
 	testCases := []struct {
-		name       string
-		outcome    engine.RaceOutcome
-		wantOffset int64
-		wantFound  bool
+		name         string
+		outcome      engine.RaceOutcome
+		wantOffset   int64
+		wantRoundTri int64
+		wantFound    bool
 	}{
 		{
 			name: "a host whose clock agrees with ours",
 			outcome: engine.RaceOutcome{WinnerNonce: 7, Attempts: []engine.AttemptOutcome{
-				{Nonce: 7, SendTime: dispatchedAt, HostCreated: 1786114584},
+				{Nonce: 7, SendTime: dispatchedAt, ReceiptTime: confirmedAt, ConfirmedAt: 1786114584},
 			}},
-			wantOffset: 4,
-			wantFound:  true,
+			wantOffset:   4,
+			wantRoundTri: 120,
+			wantFound:    true,
 		},
 		{
 			name: "a host stamping before we dispatched, which only a drifted clock can do",
 			outcome: engine.RaceOutcome{WinnerNonce: 7, Attempts: []engine.AttemptOutcome{
-				{Nonce: 7, SendTime: dispatchedAt, HostCreated: 1786114550},
+				{Nonce: 7, SendTime: dispatchedAt, ReceiptTime: confirmedAt, ConfirmedAt: 1786114550},
 			}},
-			wantOffset: -30,
-			wantFound:  true,
+			wantOffset:   -30,
+			wantRoundTri: 120,
+			wantFound:    true,
 		},
 		{
 			name: "the loser's stamp is not the winner's",
 			outcome: engine.RaceOutcome{WinnerNonce: 7, Attempts: []engine.AttemptOutcome{
-				{Nonce: 9, SendTime: dispatchedAt, HostCreated: 1786114999},
-				{Nonce: 7, SendTime: dispatchedAt, HostCreated: 1786114584},
+				{Nonce: 9, SendTime: dispatchedAt, ReceiptTime: confirmedAt, ConfirmedAt: 1786114999},
+				{Nonce: 7, SendTime: dispatchedAt, ReceiptTime: confirmedAt, ConfirmedAt: 1786114584},
 			}},
-			wantOffset: 4,
-			wantFound:  true,
+			wantOffset:   4,
+			wantRoundTri: 120,
+			wantFound:    true,
 		},
 		{
-			name: "an unstamped reply reports nothing rather than an epoch offset",
+			name: "a completion stamp is not a receipt stamp",
 			outcome: engine.RaceOutcome{WinnerNonce: 7, Attempts: []engine.AttemptOutcome{
-				{Nonce: 7, SendTime: dispatchedAt},
+				{Nonce: 7, SendTime: dispatchedAt, ReceiptTime: confirmedAt, HostCreated: 1786114999},
+			}},
+		},
+		{
+			name: "a reply that never carried a receipt reports nothing rather than an epoch offset",
+			outcome: engine.RaceOutcome{WinnerNonce: 7, Attempts: []engine.AttemptOutcome{
+				{Nonce: 7, SendTime: dispatchedAt, ReceiptTime: confirmedAt},
 			}},
 		},
 	}
@@ -401,13 +412,16 @@ func TestHostClockOffsetReadsTheWinnersStamp(t *testing.T) {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
 
-			offset, found := hostClockOffset(testCase.outcome)
+			offset, roundTripMS, found := hostClockOffset(testCase.outcome)
 
 			if found != testCase.wantFound {
 				t.Fatalf("found = %v, want %v", found, testCase.wantFound)
 			}
 			if offset != testCase.wantOffset {
 				t.Errorf("offset = %d, want %d", offset, testCase.wantOffset)
+			}
+			if roundTripMS != testCase.wantRoundTri {
+				t.Errorf("roundTripMS = %d, want %d", roundTripMS, testCase.wantRoundTri)
 			}
 		})
 	}

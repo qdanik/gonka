@@ -24,6 +24,8 @@ type dispatcher interface {
 // Response is one host's reply, forwarded untouched: only the session that produced it can apply the rest.
 type Response interface {
 	Confirmed() bool
+	// ConfirmedAt is the executor's wall clock in seconds when it signed; 0 when not an executor.
+	ConfirmedAt() int64
 }
 
 // hostLimiter is satisfied by *limits.ParticipantLimiter; the attempt that spends the nonce gives the
@@ -129,6 +131,7 @@ type attemptState struct {
 	capabilityRefused     bool
 
 	confirmed      bool
+	confirmedAt    int64
 	stateDivergent bool
 	terminal       Terminal
 	lifecycle      Lifecycle
@@ -153,7 +156,7 @@ func runAttempt(ctx context.Context, spec AttemptSpec) {
 
 	state.completed = spec.Now()
 	if response != nil {
-		state.confirmed = response.Confirmed()
+		state.confirmed, state.confirmedAt = response.Confirmed(), response.ConfirmedAt()
 	}
 	state.classify(ctx, spec, err)
 
@@ -303,8 +306,9 @@ func (s *attemptState) outcome(spec AttemptSpec) *AttemptOutcome {
 		UsageCompletionTokens: s.usageCompletionTokens,
 		HostCreated:           s.hostCreated,
 
-		Terminal:  s.terminal,
-		Confirmed: s.confirmed,
+		Terminal:    s.terminal,
+		Confirmed:   s.confirmed,
+		ConfirmedAt: s.confirmedAt,
 
 		ContentSource: s.contentSource,
 		ErrorSource:   s.errorSource,
