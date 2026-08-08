@@ -55,6 +55,7 @@ type hostPerf interface {
 	Release(participant string)
 	Ejected(participant, model string) bool
 	Degraded(participant, model string) bool
+	FirstContentP75(participant, model string) (time.Duration, bool)
 }
 
 // crownGate carries the empty-stream crowning penalty between races. See gateway-speculative-race.md,
@@ -241,6 +242,7 @@ type liveAttempt struct {
 	lastChunk    time.Time
 	completed    time.Time
 
+	observedFirst time.Duration
 	escalated     bool
 	done          bool
 	stalled       bool
@@ -846,6 +848,11 @@ func (c *raceCoordinator) pickDeadline() time.Time {
 	return c.pickStarted.Add(schedulerPickTimeout)
 }
 
+func (c *raceCoordinator) observedFirstContent(participant string) time.Duration {
+	observed, _ := c.deps.Perf.FirstContentP75(participant, c.request.Model)
+	return observed
+}
+
 func (c *raceCoordinator) launch(assignment scheduler.Assignment, role, startReason string) {
 	// The race holds the escrow for as long as its vote is owed, so the commit's own hold goes back.
 	assignment.ReleaseEscrow()
@@ -861,6 +868,8 @@ func (c *raceCoordinator) launch(assignment scheduler.Assignment, role, startRea
 		suspicious:  c.denied(assignment.Host),
 		cancel:      cancel,
 		inInference: !pocGenerating(c.deps.Snapshots.Snapshot(), c.deps.Modes),
+		// Read once: plan() runs on every event, and the quantile cannot move mid-attempt.
+		observedFirst: c.observedFirstContent(assignment.Host),
 	}
 	c.attempts = append(c.attempts, attempt)
 	c.byNonce[nonce] = attempt
@@ -956,6 +965,8 @@ func (c *raceCoordinator) plan() deadlinePlan {
 			FirstContent:  attempt.firstContent,
 			LastChunk:     attempt.lastChunk,
 			Completed:     attempt.completed,
+
+			FirstContentP75: attempt.observedFirst,
 		})
 	}
 	return deadlinePlan{

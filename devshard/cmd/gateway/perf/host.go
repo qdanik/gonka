@@ -2,7 +2,13 @@ package perf
 
 import (
 	"math"
+	"slices"
 	"time"
+)
+
+const (
+	latencyWindowSize    = 64
+	latencyWindowMinimum = 10
 )
 
 type hostKey struct {
@@ -45,6 +51,7 @@ type hostPerf struct {
 	fail            decayedCounter
 	consecutiveFail int
 	lastSeen        time.Time
+	firstContent    latencyWindow
 }
 
 func newHostPerf(halfLife time.Duration) *hostPerf {
@@ -63,6 +70,9 @@ func (h *hostPerf) recordSample(s Sample, now time.Time) {
 		h.consecutiveFail++
 	}
 	h.lastSeen = now
+	if s.FirstContent > 0 {
+		h.firstContent.add(s.FirstContent)
+	}
 }
 
 func (h *hostPerf) resetOutcomeCounters() {
@@ -77,4 +87,29 @@ func (h *hostPerf) failureRate(now time.Time) (rate, volume float64) {
 		return 0, volume
 	}
 	return failValue / volume, volume
+}
+
+// latencyWindow is a ring, not a decayed counter: the escalation needs a quantile, not a rate.
+type latencyWindow struct {
+	samples [latencyWindowSize]time.Duration
+	next    int
+	filled  int
+}
+
+func (w *latencyWindow) add(sample time.Duration) {
+	w.samples[w.next] = sample
+	w.next = (w.next + 1) % latencyWindowSize
+	if w.filled < latencyWindowSize {
+		w.filled++
+	}
+}
+
+func (w *latencyWindow) p75(minimum int) (time.Duration, bool) {
+	if w.filled < minimum {
+		return 0, false
+	}
+	sorted := make([]time.Duration, w.filled)
+	copy(sorted, w.samples[:w.filled])
+	slices.Sort(sorted)
+	return sorted[(len(sorted)*3)/4], true
 }
