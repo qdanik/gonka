@@ -19,7 +19,8 @@ func winningAttempt() engine.AttemptOutcome {
 		StartReason:   "primary",
 		SendTime:      at(0),
 		ReceiptTime:   at(200 * time.Millisecond),
-		FirstToken:    at(600 * time.Millisecond),
+		FirstToken:    at(500 * time.Millisecond),
+		FirstContent:  at(600 * time.Millisecond),
 		Completed:     at(2 * time.Second),
 		ContentChunks: 4,
 		Terminal:      engine.TerminalWon,
@@ -62,6 +63,43 @@ func TestAWonRaceEmitsTheWinnerFamiliesWithTheirValues(t *testing.T) {
 		labels{"participant_key": "gonka1winner", "model": "qwen"}, 1, 0.004)
 	expectHistogram(t, telemetry, "devshard_gateway_participant_total_attempt_seconds",
 		labels{"participant_key": "gonka1winner", "model": "qwen"}, 1, 2)
+}
+
+// A role-only chunk is a token, not content: charging its arrival to the content metrics reports a
+// prefill no client ever waited for.
+func TestAContentlessStreamLeavesTheContentLatenciesUnobserved(t *testing.T) {
+	telemetry := New()
+	recorder := NewRaceRecorder(telemetry)
+
+	attempt := winningAttempt()
+	attempt.FirstContent = time.Time{}
+	recorder.RecordRace(engine.RaceOutcome{
+		Model: "qwen", InputTokens: 100, Decision: "primary", WinnerNonce: 11,
+		Succeeded: true, Attempts: []engine.AttemptOutcome{attempt},
+	})
+
+	expectAbsent(t, telemetry, "devshard_gateway_participant_first_content_seconds")
+	expectAbsent(t, telemetry, "devshard_gateway_participant_prefill_seconds_per_input_token")
+	expectHistogram(t, telemetry, "devshard_gateway_participant_receipt_seconds",
+		labels{"participant_key": "gonka1winner", "model": "qwen"}, 1, 0.2)
+}
+
+// A stalled host and a slow one carry the same chunk count; the longest silence is what parts them.
+func TestAStalledAttemptReportsItsLongestSilence(t *testing.T) {
+	telemetry := New()
+	recorder := NewRaceRecorder(telemetry)
+
+	attempt := winningAttempt()
+	attempt.MaxChunkGap, attempt.MeanChunkGap = 55*time.Second, 40*time.Millisecond
+	recorder.RecordRace(engine.RaceOutcome{
+		Model: "qwen", InputTokens: 100, Decision: "primary", WinnerNonce: 11,
+		Succeeded: true, Attempts: []engine.AttemptOutcome{attempt},
+	})
+
+	expectHistogram(t, telemetry, "devshard_gateway_participant_max_inter_chunk_seconds",
+		labels{"participant_key": "gonka1winner", "model": "qwen"}, 1, 55)
+	expectHistogram(t, telemetry, "devshard_gateway_participant_inter_chunk_seconds",
+		labels{"participant_key": "gonka1winner", "model": "qwen"}, 1, 0.04)
 }
 
 func TestAHiddenLoserFailureIsCountedAgainstASuccessfulRequest(t *testing.T) {

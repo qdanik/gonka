@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"devshard/cmd/gateway/filters"
 	"devshard/cmd/gateway/scheduler"
 	"devshard/transport"
 )
@@ -118,6 +119,12 @@ type attemptState struct {
 
 	contentChunks int64
 	streamChunks  int64
+	outputBytes   int64
+
+	lastChunk     time.Time
+	maxChunkGap   time.Duration
+	maxGapChunk   int64
+	droppedEvents int64
 
 	usageCompletionTokens int64
 	hostCreated           int64
@@ -179,6 +186,8 @@ func (w *attemptWriter) Write(chunk []byte) (int, error) {
 	now := w.spec.Now()
 
 	w.state.streamChunks++
+	w.state.outputBytes += int64(len(chunk))
+	w.state.recordChunkGap(now, chunk)
 	if w.state.firstToken.IsZero() {
 		w.state.firstToken = now
 		w.spec.emit(w.progress(AttemptFirstToken, now))
@@ -190,7 +199,9 @@ func (w *attemptWriter) Write(chunk []byte) (int, error) {
 		w.state.firstContent = now
 		w.spec.emit(w.progress(AttemptContent, now))
 	}
-	w.spec.offer(w.progress(AttemptChunk, now))
+	if !w.spec.offer(w.progress(AttemptChunk, now)) {
+		w.state.droppedEvents++
+	}
 
 	return w.spec.Sink.Write(chunk)
 }
@@ -205,6 +216,27 @@ func (w *attemptWriter) Flush() {
 
 func (w *attemptWriter) progress(kind AttemptEventKind, at time.Time) AttemptEvent {
 	return AttemptEvent{Kind: kind, Nonce: w.nonce, At: at}
+}
+
+// recordChunkGap keeps the longest silence a host left mid-stream, which a chunk count cannot show.
+// The silence before [DONE] is the end of the stream, not a host that went quiet.
+func (s *attemptState) recordChunkGap(now time.Time, chunk []byte) {
+	previous := s.lastChunk
+	s.lastChunk = now
+	if previous.IsZero() || filters.HasSSEDone(chunk) {
+		return
+	}
+	if gap := now.Sub(previous); gap > s.maxChunkGap {
+		s.maxChunkGap, s.maxGapChunk = gap, s.streamChunks
+	}
+}
+
+// meanChunkGap is the average silence between chunks, which is the inverse of the delivered rate.
+func (s *attemptState) meanChunkGap() time.Duration {
+	if s.streamChunks < 2 || s.firstToken.IsZero() || !s.lastChunk.After(s.firstToken) {
+		return 0
+	}
+	return s.lastChunk.Sub(s.firstToken) / time.Duration(s.streamChunks-1)
 }
 
 func (s *attemptState) record(facts chunkFacts) {
@@ -296,15 +328,22 @@ func (s *attemptState) outcome(spec AttemptSpec) *AttemptOutcome {
 		StartReason: spec.StartReason,
 		Suspicious:  spec.Suspicious,
 
-		SendTime:    s.sendTime,
-		ReceiptTime: s.receiptTime,
-		FirstToken:  s.firstToken,
-		Completed:   s.completed,
+		SendTime:     s.sendTime,
+		ReceiptTime:  s.receiptTime,
+		FirstToken:   s.firstToken,
+		FirstContent: s.firstContent,
+		LastChunk:    s.lastChunk,
+		Completed:    s.completed,
 
 		ContentChunks:         s.contentChunks,
 		StreamChunks:          s.streamChunks,
 		UsageCompletionTokens: s.usageCompletionTokens,
 		HostCreated:           s.hostCreated,
+		OutputBytes:           s.outputBytes,
+		MaxChunkGap:           s.maxChunkGap,
+		MaxChunkGapAt:         s.maxGapChunk,
+		MeanChunkGap:          s.meanChunkGap(),
+		DroppedEvents:         s.droppedEvents,
 
 		Terminal:    s.terminal,
 		Confirmed:   s.confirmed,
@@ -325,11 +364,13 @@ func (spec AttemptSpec) emit(event AttemptEvent) {
 	spec.Events <- event
 }
 
-// offer drops progress the coordinator is too busy to take, where emit blocks. See
-// gateway-invariants.md, "3. No field crosses a goroutine except through the event channel".
-func (spec AttemptSpec) offer(event AttemptEvent) {
+// offer drops progress the coordinator is too busy to take, where emit blocks; expire drains the
+// queue before reading lastChunk, so a drop only ever ages it between reads.
+func (spec AttemptSpec) offer(event AttemptEvent) bool {
 	select {
 	case spec.Events <- event:
+		return true
 	default:
+		return false
 	}
 }

@@ -605,7 +605,14 @@ func attemptDeliveryFields(outcome AttemptOutcome) []any {
 	fields := []any{
 		"content_chunks", outcome.ContentChunks,
 		"stream_chunks", outcome.StreamChunks,
+		"output_bytes", outcome.OutputBytes,
 		"usage_tokens", outcome.UsageCompletionTokens,
+	}
+	if outcome.MaxChunkGap > 0 {
+		fields = append(fields,
+			"max_gap_ms", outcome.MaxChunkGap.Milliseconds(),
+			"max_gap_at_chunk", outcome.MaxChunkGapAt,
+			"mean_gap_ms", outcome.MeanChunkGap.Milliseconds())
 	}
 	for _, span := range []struct {
 		name  string
@@ -613,6 +620,7 @@ func attemptDeliveryFields(outcome AttemptOutcome) []any {
 	}{
 		{"receipt_ms", outcome.ReceiptTime},
 		{"first_token_ms", outcome.FirstToken},
+		{"first_content_ms", outcome.FirstContent},
 		{"attempt_ms", outcome.Completed},
 	} {
 		if outcome.SendTime.IsZero() || span.until.IsZero() {

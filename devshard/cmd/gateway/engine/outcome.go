@@ -136,16 +136,23 @@ type AttemptOutcome struct {
 	StartReason string
 	Suspicious  bool
 
-	StartedAt   time.Time
-	SendTime    time.Time
-	ReceiptTime time.Time
-	FirstToken  time.Time
-	Completed   time.Time
+	StartedAt    time.Time
+	SendTime     time.Time
+	ReceiptTime  time.Time
+	FirstToken   time.Time
+	FirstContent time.Time
+	LastChunk    time.Time
+	Completed    time.Time
 
 	ContentChunks         int64
 	StreamChunks          int64
+	OutputBytes           int64
 	UsageCompletionTokens int64
 	HostCreated           int64
+	MaxChunkGap           time.Duration
+	MaxChunkGapAt         int64
+	MeanChunkGap          time.Duration
+	DroppedEvents         int64
 
 	Terminal            Terminal
 	Confirmed           bool
