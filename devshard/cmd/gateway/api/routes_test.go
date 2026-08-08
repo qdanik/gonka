@@ -363,7 +363,7 @@ func TestHostClockOffsetReadsTheWinnersStamp(t *testing.T) {
 	testCases := []struct {
 		name         string
 		outcome      engine.RaceOutcome
-		wantOffset   int64
+		wantOffsetMS int64
 		wantRoundTri int64
 		wantFound    bool
 	}{
@@ -372,7 +372,7 @@ func TestHostClockOffsetReadsTheWinnersStamp(t *testing.T) {
 			outcome: engine.RaceOutcome{WinnerNonce: 7, Attempts: []engine.AttemptOutcome{
 				{Nonce: 7, SendTime: dispatchedAt, ReceiptTime: confirmedAt, ConfirmedAt: 1786114584},
 			}},
-			wantOffset:   4,
+			wantOffsetMS: 3940,
 			wantRoundTri: 120,
 			wantFound:    true,
 		},
@@ -381,8 +381,21 @@ func TestHostClockOffsetReadsTheWinnersStamp(t *testing.T) {
 			outcome: engine.RaceOutcome{WinnerNonce: 7, Attempts: []engine.AttemptOutcome{
 				{Nonce: 7, SendTime: dispatchedAt, ReceiptTime: confirmedAt, ConfirmedAt: 1786114550},
 			}},
-			wantOffset:   -30,
+			wantOffsetMS: -30060,
 			wantRoundTri: 120,
+			wantFound:    true,
+		},
+		{
+			// The stamp landed inside the round trip, so half of it is ours, not the host's drift.
+			name: "a slow round trip is not charged to the host as drift",
+			outcome: engine.RaceOutcome{WinnerNonce: 7, Attempts: []engine.AttemptOutcome{
+				{
+					Nonce: 7, SendTime: dispatchedAt,
+					ReceiptTime: dispatchedAt.Add(4 * time.Second), ConfirmedAt: 1786114584,
+				},
+			}},
+			wantOffsetMS: 2000,
+			wantRoundTri: 4000,
 			wantFound:    true,
 		},
 		{
@@ -391,7 +404,7 @@ func TestHostClockOffsetReadsTheWinnersStamp(t *testing.T) {
 				{Nonce: 9, SendTime: dispatchedAt, ReceiptTime: confirmedAt, ConfirmedAt: 1786114999},
 				{Nonce: 7, SendTime: dispatchedAt, ReceiptTime: confirmedAt, ConfirmedAt: 1786114584},
 			}},
-			wantOffset:   4,
+			wantOffsetMS: 3940,
 			wantRoundTri: 120,
 			wantFound:    true,
 		},
@@ -412,13 +425,13 @@ func TestHostClockOffsetReadsTheWinnersStamp(t *testing.T) {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
 
-			offset, roundTripMS, found := hostClockOffset(testCase.outcome)
+			offsetMS, roundTripMS, found := hostClockOffset(testCase.outcome)
 
 			if found != testCase.wantFound {
 				t.Fatalf("found = %v, want %v", found, testCase.wantFound)
 			}
-			if offset != testCase.wantOffset {
-				t.Errorf("offset = %d, want %d", offset, testCase.wantOffset)
+			if offsetMS != testCase.wantOffsetMS {
+				t.Errorf("offsetMS = %d, want %d", offsetMS, testCase.wantOffsetMS)
 			}
 			if roundTripMS != testCase.wantRoundTri {
 				t.Errorf("roundTripMS = %d, want %d", roundTripMS, testCase.wantRoundTri)

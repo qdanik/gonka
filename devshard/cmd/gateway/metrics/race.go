@@ -26,6 +26,10 @@ const (
 
 var latencyBuckets = prometheus.ExponentialBuckets(0.01, 2, 12)
 
+// chunkGapBuckets reach past the stall timeout: latencyBuckets stop at 20s, so every stall would
+// land in +Inf, which is the one case these exist to separate.
+var chunkGapBuckets = prometheus.ExponentialBuckets(0.005, 2, 15)
+
 // RaceRecorder satisfies the engine's metrics hook; every family here derives from one race outcome.
 // See gateway-operations.md, "Metrics".
 type RaceRecorder struct {
@@ -47,6 +51,8 @@ type RaceRecorder struct {
 	firstContent    *prometheus.HistogramVec
 	prefillPerToken *prometheus.HistogramVec
 	totalAttempt    *prometheus.HistogramVec
+	maxChunkGap     *prometheus.HistogramVec
+	meanChunkGap    *prometheus.HistogramVec
 }
 
 func NewRaceRecorder(telemetry *Metrics) *RaceRecorder {
@@ -118,6 +124,16 @@ func NewRaceRecorder(telemetry *Metrics) *RaceRecorder {
 			Help:    "Receipt-to-first-content time divided by input tokens, by participant and model.",
 			Buckets: prometheus.ExponentialBuckets(0.0001, 2, 12),
 		}, []string{"participant_key", "model"}),
+		maxChunkGap: prometheus.NewHistogramVec(prometheus.HistogramOpts{
+			Name:    "devshard_gateway_participant_max_inter_chunk_seconds",
+			Help:    "Longest silence between two streamed chunks within one attempt, by participant and model.",
+			Buckets: chunkGapBuckets,
+		}, []string{"participant_key", "model"}),
+		meanChunkGap: prometheus.NewHistogramVec(prometheus.HistogramOpts{
+			Name:    "devshard_gateway_participant_inter_chunk_seconds",
+			Help:    "Mean silence between streamed chunks within one attempt, by participant and model.",
+			Buckets: chunkGapBuckets,
+		}, []string{"participant_key", "model"}),
 		totalAttempt: prometheus.NewHistogramVec(prometheus.HistogramOpts{
 			Name:    "devshard_gateway_participant_total_attempt_seconds",
 			Help:    "Total inference attempt time by participant and model.",
@@ -134,6 +150,7 @@ func (r *RaceRecorder) collectors() []prometheus.Collector {
 		r.userVisibleWins, r.transportErrors, r.requests, r.criticalFailures, r.hiddenFailures,
 		r.escalations, r.timeoutActions, r.inferenceTimeouts, r.carryOverflows,
 		r.receiptSeconds, r.firstContent, r.prefillPerToken, r.totalAttempt,
+		r.maxChunkGap, r.meanChunkGap,
 	}
 }
 
@@ -215,11 +232,15 @@ func (r *RaceRecorder) observeAttemptLatency(participant, model string, inputTok
 	if seconds := elapsedSeconds(attempt.SendTime, attempt.ReceiptTime); seconds > 0 {
 		r.receiptSeconds.WithLabelValues(participant, model).Observe(seconds)
 	}
-	if seconds := elapsedSeconds(attempt.SendTime, attempt.FirstToken); seconds > 0 {
+	if seconds := elapsedSeconds(attempt.SendTime, attempt.FirstContent); seconds > 0 {
 		r.firstContent.WithLabelValues(participant, model).Observe(seconds)
 	}
-	if prefill := elapsedSeconds(attempt.ReceiptTime, attempt.FirstToken); prefill > 0 && inputTokens > 0 {
+	if prefill := elapsedSeconds(attempt.ReceiptTime, attempt.FirstContent); prefill > 0 && inputTokens > 0 {
 		r.prefillPerToken.WithLabelValues(participant, model).Observe(prefill / float64(inputTokens))
+	}
+	if attempt.MaxChunkGap > 0 {
+		r.maxChunkGap.WithLabelValues(participant, model).Observe(attempt.MaxChunkGap.Seconds())
+		r.meanChunkGap.WithLabelValues(participant, model).Observe(attempt.MeanChunkGap.Seconds())
 	}
 	if seconds := elapsedSeconds(attempt.SendTime, attempt.Completed); seconds > 0 {
 		r.totalAttempt.WithLabelValues(participant, model).Observe(seconds)

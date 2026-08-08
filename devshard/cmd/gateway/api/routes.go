@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"slices"
+	"time"
 
 	"devshard/cmd/gateway/chain"
 	"devshard/cmd/gateway/config"
@@ -513,17 +514,21 @@ func (s *Server) race(w http.ResponseWriter, r *http.Request, requestID string, 
 }
 
 // hostClockOffset reads the receipt, which the executor signs before inference: `created` would carry
-// a busy host's admission and prefill delay too. The stamp lands inside the round trip beside it.
-func hostClockOffset(outcome engine.RaceOutcome) (offset, roundTripMS int64, stamped bool) {
+// a busy host's admission and prefill delay too. The stamp landed somewhere inside the round trip, so
+// it is compared against that window's midpoint rather than against the dispatch, which would charge
+// the host for the outbound leg. The executor stamps whole seconds, leaving under a second of it.
+func hostClockOffset(outcome engine.RaceOutcome) (offsetMS, roundTripMS int64, stamped bool) {
 	for _, attempt := range outcome.Attempts {
 		if !outcome.IsWinner(attempt) || attempt.ConfirmedAt == 0 {
 			continue
 		}
-		if attempt.SendTime.IsZero() || attempt.ReceiptTime.IsZero() {
+		if attempt.SendTime.IsZero() || !attempt.ReceiptTime.After(attempt.SendTime) {
 			continue
 		}
-		return attempt.ConfirmedAt - attempt.SendTime.Unix(),
-			attempt.ReceiptTime.Sub(attempt.SendTime).Milliseconds(), true
+		roundTrip := attempt.ReceiptTime.Sub(attempt.SendTime)
+		midpoint := attempt.SendTime.Add(roundTrip / 2)
+		return time.Unix(attempt.ConfirmedAt, 0).Sub(midpoint).Milliseconds(),
+			roundTrip.Milliseconds(), true
 	}
 	return 0, 0, false
 }
@@ -556,8 +561,8 @@ func logRequestFinished(requestID string, normalized filters.Result, outcome eng
 		"bytes", written,
 		"terminated", terminated,
 	}
-	if offset, roundTripMS, stamped := hostClockOffset(outcome); stamped {
-		fields = append(fields, "host_clock_offset_s", offset, "host_receipt_ms", roundTripMS)
+	if offsetMS, roundTripMS, stamped := hostClockOffset(outcome); stamped {
+		fields = append(fields, "host_clock_offset_ms", offsetMS, "host_receipt_ms", roundTripMS)
 	}
 	if raceErr != nil {
 		fields = append(fields, "error", loggedError(raceErr))
