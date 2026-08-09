@@ -7,6 +7,7 @@ import (
 	"maps"
 	"slices"
 
+	"devshard/cmd/gateway/internal/logkey"
 	"devshard/logging"
 )
 
@@ -53,6 +54,6 @@ func (m *Manager) TriggerEscrowCheck(ctx context.Context, escrowID string) error
 	}); err != nil {
 		return fmt.Errorf("deactivating escrow %s: %w", escrowID, err)
 	}
-	logging.Warn("escrow gone from chain, taken out of service", "escrow", escrowID)
+	logging.Warn("escrow gone from chain, taken out of service", logkey.Escrow, escrowID)
 	return nil
 }

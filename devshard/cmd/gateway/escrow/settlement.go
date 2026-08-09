@@ -7,6 +7,7 @@ import (
 	"strconv"
 
 	"devshard/cmd/gateway/chain"
+	"devshard/cmd/gateway/internal/logkey"
 	"devshard/cmd/gateway/store"
 	"devshard/logging"
 )
@@ -84,7 +85,7 @@ func (m *Manager) park(ctx context.Context, escrowID string) error {
 	if err := m.settlementSource.Retire(escrowID); err != nil {
 		return fmt.Errorf("retiring escrow %s from routing: %w", escrowID, err)
 	}
-	logging.Info("escrow parked for settlement", "escrow", escrowID)
+	logging.Info("escrow parked for settlement", logkey.Escrow, escrowID)
 	return nil
 }
 
@@ -130,7 +131,7 @@ func (m *Manager) settle(ctx context.Context, record store.DevshardRecord) (chai
 	if err != nil {
 		return chain.SettleEscrowResult{}, fmt.Errorf("settling escrow %s: %w", record.EscrowID, err)
 	}
-	logging.Info("escrow settled", "escrow", record.EscrowID, "model", record.Model, "tx", result.TxHash, "settler", result.Settler)
+	logging.Info("escrow settled", logkey.Escrow, record.EscrowID, logkey.Model, record.Model, logkey.Tx, result.TxHash, logkey.Settler, result.Settler)
 
 	if err := m.store.WithRetry(ctx, func() error {
 		return m.store.SetDevshardSettlementPending(ctx, record.EscrowID, false)
@@ -156,7 +157,7 @@ func (m *Manager) alreadySettled(ctx context.Context, record store.DevshardRecor
 	case !succeeded:
 		return false, m.clearSettleTxHash(ctx, record.EscrowID) // committed and rejected: retry is right
 	}
-	logging.Info("settle already on chain, reconciled", "escrow", record.EscrowID, "tx", record.SettleTxHash)
+	logging.Info("settle already on chain, reconciled", logkey.Escrow, record.EscrowID, logkey.Tx, record.SettleTxHash)
 	return true, nil
 }
 
@@ -197,6 +198,6 @@ func (m *Manager) deleteSettled(ctx context.Context, escrowID string) error {
 	if err := m.store.WithRetry(ctx, func() error { return m.store.DeleteDevshard(ctx, escrowID) }); err != nil {
 		return fmt.Errorf("deleting settled escrow %s: %w", escrowID, err)
 	}
-	logging.Info("settled escrow record dropped", "escrow", escrowID)
+	logging.Info("settled escrow record dropped", logkey.Escrow, escrowID)
 	return nil
 }

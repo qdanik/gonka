@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"time"
 
+	"devshard/cmd/gateway/internal/logkey"
 	"devshard/logging"
 )
 
@@ -29,8 +30,8 @@ func (g *gateway) serve(ctx context.Context) error {
 	serveResult := make(chan error, 1)
 	go func() { serveResult <- g.server.ListenAndServe() }()
 	logging.Info("gateway started",
-		"version", Version, "port", configuration.Server.Port,
-		"storage_dir", configuration.Server.StorageDir, "escrow_builders", g.builders)
+		logkey.Version, Version, logkey.Port, configuration.Server.Port,
+		logkey.StorageDir, configuration.Server.StorageDir, logkey.EscrowBuilders, g.builders)
 
 	var listenErr error
 	select {

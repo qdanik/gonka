@@ -19,6 +19,7 @@ import (
 	"devshard/cmd/gateway/engine"
 	"devshard/cmd/gateway/env"
 	"devshard/cmd/gateway/escrow"
+	"devshard/cmd/gateway/internal/logkey"
 	"devshard/cmd/gateway/limits"
 	"devshard/cmd/gateway/metrics"
 	"devshard/cmd/gateway/perf"
@@ -42,7 +43,7 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	if err := run(ctx); err != nil {
-		logging.Error("gateway exited", "error", err)
+		logging.Error("gateway exited", logkey.Error, err)
 		os.Exit(1)
 	}
 }

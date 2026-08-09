@@ -5,6 +5,7 @@ import (
 
 	"devshard/cmd/gateway/chain"
 	"devshard/cmd/gateway/config"
+	"devshard/cmd/gateway/internal/logkey"
 	"devshard/logging"
 )
 
@@ -32,16 +33,16 @@ func (c *raceCoordinator) apply(event AttemptEvent) {
 // attemptDeliveryFields reads the same for a winner and a loser; every duration is from the dispatch.
 func attemptDeliveryFields(outcome AttemptOutcome) []any {
 	fields := []any{
-		"content_chunks", outcome.ContentChunks,
-		"stream_chunks", outcome.StreamChunks,
-		"output_bytes", outcome.OutputBytes,
-		"usage_tokens", outcome.UsageCompletionTokens,
+		logkey.ContentChunks, outcome.ContentChunks,
+		logkey.StreamChunks, outcome.StreamChunks,
+		logkey.OutputBytes, outcome.OutputBytes,
+		logkey.UsageTokens, outcome.UsageCompletionTokens,
 	}
 	if outcome.MaxChunkGap > 0 {
 		fields = append(fields,
-			"max_gap_ms", outcome.MaxChunkGap.Milliseconds(),
-			"max_gap_at_chunk", outcome.MaxChunkGapAt,
-			"mean_gap_ms", outcome.MeanChunkGap.Milliseconds())
+			logkey.MaxGapMS, outcome.MaxChunkGap.Milliseconds(),
+			logkey.MaxGapAtChunk, outcome.MaxChunkGapAt,
+			logkey.MeanGapMS, outcome.MeanChunkGap.Milliseconds())
 	}
 	for _, span := range []struct {
 		name  string
@@ -67,21 +68,21 @@ func (c *raceCoordinator) complete(attempt *liveAttempt, event AttemptEvent) {
 
 	if attempt.outcome == nil {
 		logging.Info("attempt finished with no outcome",
-			"request", c.request.RequestID, "escrow", c.escrowID, "nonce", attempt.nonce,
-			"participant", attempt.participant, "nonce_finished", attempt.nonceFinished)
+			logkey.Request, c.request.RequestID, logkey.Escrow, c.escrowID, logkey.Nonce, attempt.nonce,
+			logkey.Participant, attempt.participant, logkey.NonceFinished, attempt.nonceFinished)
 		return
 	}
 	// The phase abort is the difference between a host that answered nothing and one the PoC transition
 	// cut off, and every other reader already tells them apart. See gateway-capacity-and-health.md.
 	fields := []any{
-		"request", c.request.RequestID, "escrow", c.escrowID, "nonce", attempt.nonce,
-		"participant", attempt.participant,
-		"terminal", c.racedTerminal(attempt, *attempt.outcome).String(),
-		"nonce_finished", attempt.nonceFinished, "state_divergent", attempt.outcome.StateDivergent,
+		logkey.Request, c.request.RequestID, logkey.Escrow, c.escrowID, logkey.Nonce, attempt.nonce,
+		logkey.Participant, attempt.participant,
+		logkey.Terminal, c.racedTerminal(attempt, *attempt.outcome).String(),
+		logkey.NonceFinished, attempt.nonceFinished, logkey.StateDivergent, attempt.outcome.StateDivergent,
 	}
 	fields = append(fields, attemptDeliveryFields(*attempt.outcome)...)
 	if c.phaseAborted(attempt, *attempt.outcome) {
-		fields = append(fields, "phase_aborted", true)
+		fields = append(fields, logkey.PhaseAborted, true)
 	}
 	logging.Info("attempt finished", fields...)
 	if signal := CapabilityOf(*attempt.outcome); signal.Retriable() {
@@ -91,8 +92,8 @@ func (c *raceCoordinator) complete(attempt *liveAttempt, event AttemptEvent) {
 	}
 	if attempt.outcome.StateDivergent {
 		logging.Warn("host blocked for state divergence",
-			"request", c.request.RequestID, "escrow", c.escrowID,
-			"nonce", attempt.nonce, "participant", attempt.participant)
+			logkey.Request, c.request.RequestID, logkey.Escrow, c.escrowID,
+			logkey.Nonce, attempt.nonce, logkey.Participant, attempt.participant)
 		c.deps.Picker.BlockHost(c.escrowID, attempt.participant)
 		c.exclude(attempt.participant)
 	}

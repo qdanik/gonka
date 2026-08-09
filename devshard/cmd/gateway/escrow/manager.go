@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"devshard/cmd/gateway/config"
+	"devshard/cmd/gateway/internal/logkey"
 	"devshard/logging"
 )
 
@@ -67,7 +68,7 @@ func (m *Manager) Start(ctx context.Context) {
 
 func (m *Manager) runTick(ctx context.Context) {
 	if err := m.tick(ctx); err != nil {
-		logging.Error("escrow tick failed", "error", err)
+		logging.Error("escrow tick failed", logkey.Error, err)
 	}
 }
 

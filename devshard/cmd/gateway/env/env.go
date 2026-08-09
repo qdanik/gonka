@@ -4,6 +4,7 @@
 package env
 
 import (
+	"devshard/cmd/gateway/internal/logkey"
 	"devshard/logging"
 	"errors"
 	"fmt"
@@ -106,7 +107,7 @@ func PrivateKey(name string) (string, error) {
 		renamed = "GATEWAY_" + renamed
 		if key := strings.TrimSpace(os.Getenv(renamed)); key != "" {
 			logging.Warn("signing key read from the renamed variable",
-				"subsystem", "env", "recorded", name, "used", renamed)
+				logkey.Subsystem, "env", logkey.Recorded, name, logkey.Used, renamed)
 			return key, nil
 		}
 	}

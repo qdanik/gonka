@@ -5,6 +5,7 @@ import (
 
 	"devshard/cmd/gateway/engine"
 	"devshard/cmd/gateway/filters"
+	"devshard/cmd/gateway/internal/logkey"
 	"devshard/logging"
 )
 
@@ -60,26 +61,26 @@ func winnerOutputTokens(outcome engine.RaceOutcome) int64 {
 func logRequestFinished(requestID string, normalized filters.Result, outcome engine.RaceOutcome, verdict string, stream *clientStream, elapsed time.Duration, raceErr, deliverErr error) {
 	written, terminated := stream.delivered()
 	fields := []any{
-		"request", requestID,
-		"model", normalized.Model,
-		"escrow", outcome.EscrowID,
-		"stream", normalized.ClientStream,
-		"input_tokens", outcome.InputTokens,
-		"output_tokens", winnerOutputTokens(outcome),
-		"host", winnerParticipant(outcome),
-		"outcome", verdict,
-		"bytes", written,
-		"terminated", terminated,
-		"duration_ms", elapsed.Milliseconds(),
+		logkey.Request, requestID,
+		logkey.Model, normalized.Model,
+		logkey.Escrow, outcome.EscrowID,
+		logkey.Stream, normalized.ClientStream,
+		logkey.InputTokens, outcome.InputTokens,
+		logkey.OutputTokens, winnerOutputTokens(outcome),
+		logkey.Host, winnerParticipant(outcome),
+		logkey.Outcome, verdict,
+		logkey.Bytes, written,
+		logkey.Terminated, terminated,
+		logkey.DurationMS, elapsed.Milliseconds(),
 	}
 	if offsetMS, roundTripMS, stamped := hostClockOffset(outcome); stamped {
-		fields = append(fields, "host_clock_offset_ms", offsetMS, "host_receipt_ms", roundTripMS)
+		fields = append(fields, logkey.HostClockOffsetMS, offsetMS, logkey.HostReceiptMS, roundTripMS)
 	}
 	if raceErr != nil {
-		fields = append(fields, "error", loggedError(raceErr))
+		fields = append(fields, logkey.Error, loggedError(raceErr))
 	}
 	if deliverErr != nil {
-		fields = append(fields, "deliver_error", loggedError(deliverErr))
+		fields = append(fields, logkey.DeliverError, loggedError(deliverErr))
 	}
 	if raceErr != nil || deliverErr != nil {
 		logging.Warn("request finished", fields...)

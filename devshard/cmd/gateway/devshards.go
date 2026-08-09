@@ -17,6 +17,7 @@ import (
 	"devshard/cmd/gateway/config"
 	"devshard/cmd/gateway/env"
 	"devshard/cmd/gateway/escrow"
+	"devshard/cmd/gateway/internal/logkey"
 	"devshard/cmd/gateway/registry"
 	"devshard/cmd/gateway/store"
 	"devshard/logging"
@@ -108,7 +109,7 @@ func publishEscrows(
 		switch {
 		case err == nil:
 		case errors.Is(err, bridge.ErrEscrowNotFound), errors.Is(err, env.ErrPrivateKeyMissing):
-			logging.Warn("devshard cannot be served, marking inactive", "escrow_id", escrowID, "error", err)
+			logging.Warn("devshard cannot be served, marking inactive", logkey.Escrow, escrowID, logkey.Error, err)
 			if deactivateErr := deactivate(escrowID); deactivateErr != nil {
 				problems = append(problems, fmt.Errorf("deactivating escrow %s: %w", escrowID, deactivateErr))
 			}
@@ -131,7 +132,7 @@ func (g *gateway) republishOnDevshardWrites(ctx context.Context) <-chan struct{}
 				return
 			case <-g.devshardWork:
 				if err := g.publishEscrows(ctx); err != nil && ctx.Err() == nil {
-					logging.Error("republishing escrows", "error", err)
+					logging.Error("republishing escrows", logkey.Error, err)
 				}
 			}
 		}

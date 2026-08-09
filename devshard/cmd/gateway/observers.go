@@ -4,6 +4,7 @@ import (
 	"sync"
 
 	"devshard/cmd/gateway/chain"
+	"devshard/cmd/gateway/internal/logkey"
 	"devshard/cmd/gateway/metrics"
 	"devshard/logging"
 )
@@ -17,14 +18,14 @@ type tracedDispatches struct{ recorder *metrics.DispatchRecorder }
 // labelled: a counter keyed by it would grow without end.
 func (t tracedDispatches) GhostBurned(escrowID string, nonce uint64, participant, reason string) {
 	logging.Warn("nonce burned for nobody",
-		"escrow", escrowID, "nonce", nonce, "host", participant, "reason", reason)
+		logkey.Escrow, escrowID, logkey.Nonce, nonce, logkey.Host, participant, logkey.Reason, reason)
 	t.recorder.GhostBurned(escrowID, participant, reason)
 }
 
 // BurnBudgetExhausted means the escrow stopped burning nonces to answer requests it cannot serve, so
 // queued callers now wait rather than spend. Rare, and it changes what the escrow does.
 func (t tracedDispatches) BurnBudgetExhausted(escrowID string) {
-	logging.Warn("escrow stopped burning nonces at its budget", "escrow", escrowID)
+	logging.Warn("escrow stopped burning nonces at its budget", logkey.Escrow, escrowID)
 	t.recorder.BurnBudgetExhausted(escrowID)
 }
 
@@ -75,17 +76,17 @@ func (n *phaseNarrator) observe(snapshot chain.PhaseSnapshot) {
 
 	if first || epochChanged {
 		logging.Info("chain epoch",
-			"epoch", snapshot.EpochIndex, "phase", snapshot.EpochPhase,
-			"height", snapshot.BlockHeight, "switch_height", snapshot.EpochSwitchBlockHeight)
+			logkey.Epoch, snapshot.EpochIndex, logkey.Phase, snapshot.EpochPhase,
+			logkey.Height, snapshot.BlockHeight, logkey.SwitchHeight, snapshot.EpochSwitchBlockHeight)
 	}
 	if !first && !blockChanged {
 		return
 	}
 	if snapshot.RequestsBlocked {
-		logging.Warn("chain blocked requests", "reason", snapshot.BlockReason, "epoch", snapshot.EpochIndex, "height", snapshot.BlockHeight)
+		logging.Warn("chain blocked requests", logkey.Reason, snapshot.BlockReason, logkey.Epoch, snapshot.EpochIndex, logkey.Height, snapshot.BlockHeight)
 		return
 	}
 	if !first {
-		logging.Info("chain unblocked requests", "epoch", snapshot.EpochIndex, "height", snapshot.BlockHeight)
+		logging.Info("chain unblocked requests", logkey.Epoch, snapshot.EpochIndex, logkey.Height, snapshot.BlockHeight)
 	}
 }

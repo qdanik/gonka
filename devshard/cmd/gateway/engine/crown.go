@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"devshard/cmd/gateway/internal/logkey"
 	"devshard/logging"
 )
 
@@ -44,8 +45,8 @@ func (c *raceCoordinator) settleClaims() {
 func (c *raceCoordinator) crownWinner(attempt *liveAttempt, reason string) {
 	c.winner = attempt
 	logging.Info("attempt crowned",
-		"request", c.request.RequestID, "escrow", c.escrowID, "nonce", attempt.nonce,
-		"participant", attempt.participant, "reason", reason)
+		logkey.Request, c.request.RequestID, logkey.Escrow, c.escrowID, logkey.Nonce, attempt.nonce,
+		logkey.Participant, attempt.participant, logkey.Reason, reason)
 }
 
 // rivalPossible reports an attempt other than the held claimants that could still be crowned. See
