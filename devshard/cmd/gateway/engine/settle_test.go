@@ -5,6 +5,8 @@ import (
 	"errors"
 	"testing"
 	"time"
+
+	"devshard/user"
 )
 
 type recordedPost struct {
@@ -268,5 +270,17 @@ func TestALongRunningContentStreamKeepsItsExemption(t *testing.T) {
 
 	if len(plan) != 1 || plan[0].Post {
 		t.Fatalf("a long content stream lost its exemption: %+v", plan)
+	}
+}
+
+// A nonce the host finished during the wait owes no timeout. Reported as a collection failure it
+// would read as a broken vote, and the verifiers that refused it were right to.
+func TestANonceFinishedWhileWaitingIsSkippedRatherThanFailed(t *testing.T) {
+	poster := &stubPoster{vote: "execution", err: user.ErrNonceFinishedWhileWaiting}
+
+	events := settleEvents(race(unsettledAttempt()), poster)
+
+	if events[1].Action != TimeoutActionSkipped || events[1].Reason != timeoutReasonNonceFinished {
+		t.Fatalf("event = %+v, want skipped/%s", events[1], timeoutReasonNonceFinished)
 	}
 }

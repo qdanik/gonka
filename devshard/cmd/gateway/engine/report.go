@@ -122,6 +122,9 @@ func (c *raceCoordinator) unreportedOutcome(attempt *liveAttempt) AttemptOutcome
 // cancellation, not the crown, the silence or the backstop. Every reader promotes through here.
 func (c *raceCoordinator) racedTerminal(attempt *liveAttempt, outcome AttemptOutcome) Terminal {
 	terminal := outcome.Terminal
+	if terminal == TerminalClientCancelled && attempt.backstopped {
+		terminal = TerminalHardTimeout
+	}
 	if terminal == TerminalClientCancelled && (attempt.stalled && outcome.ContentChunks > 0 || c.abandonedByHosts()) {
 		terminal = TerminalStalled
 	}

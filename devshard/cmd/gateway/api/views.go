@@ -2,10 +2,12 @@ package api
 
 import (
 	"slices"
+	"time"
 
 	"devshard/cmd/gateway/chain"
 	"devshard/cmd/gateway/config"
 	"devshard/cmd/gateway/scheduler"
+	"devshard/cmd/gateway/store"
 	"devshard/types"
 )
 
@@ -98,6 +100,62 @@ type statusResponse struct {
 	Devshards       []devshardStatus  `json:"devshards"`
 	Limiter         limiterStatus     `json:"limiter"`
 	Capacity        []capacityStatus  `json:"capacity"`
+}
+
+// The two views below keep the storage rows out of the response: without them a column rename in the
+// store silently changes the API, and the record's own field names reach the client as written.
+type devshardView struct {
+	EscrowID          string `json:"escrow_id"`
+	PrivateKeyEnv     string `json:"private_key_env"`
+	Model             string `json:"model"`
+	Active            bool   `json:"active"`
+	RotationRole      string `json:"rotation_role"`
+	RotationEpoch     int64  `json:"rotation_epoch"`
+	SettlementPending bool   `json:"settlement_pending"`
+	SettleTxHash      string `json:"settle_tx_hash,omitempty"`
+}
+
+type rotationView struct {
+	Model       string    `json:"model"`
+	Role        string    `json:"role"`
+	Stage       string    `json:"stage"`
+	Epoch       uint64    `json:"epoch"`
+	Completed   bool      `json:"completed"`
+	CreateError string    `json:"create_error,omitempty"`
+	UpdatedAt   time.Time `json:"updated_at"`
+}
+
+func devshardViews(records []store.DevshardRecord) []devshardView {
+	views := make([]devshardView, 0, len(records))
+	for _, record := range records {
+		views = append(views, devshardView{
+			EscrowID:          record.EscrowID,
+			PrivateKeyEnv:     record.PrivateKeyEnv,
+			Model:             record.Model,
+			Active:            record.Active,
+			RotationRole:      record.RotationRole,
+			RotationEpoch:     record.RotationEpoch,
+			SettlementPending: record.SettlementPending,
+			SettleTxHash:      record.SettleTxHash,
+		})
+	}
+	return views
+}
+
+func rotationViews(statuses []store.RotationStatus) []rotationView {
+	views := make([]rotationView, 0, len(statuses))
+	for _, status := range statuses {
+		views = append(views, rotationView{
+			Model:       status.Model,
+			Role:        status.Role,
+			Stage:       status.Stage,
+			Epoch:       status.Epoch,
+			Completed:   status.Completed,
+			CreateError: status.CreateError,
+			UpdatedAt:   status.UpdatedAt,
+		})
+	}
+	return views
 }
 
 // SessionVersion is the protocol tag the session was created under and the one every settlement payload

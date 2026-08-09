@@ -54,6 +54,7 @@ const (
 	TerminalErrorStream
 	TerminalCapabilityRefused
 	TerminalStalled
+	TerminalHardTimeout
 )
 
 var (
@@ -184,7 +185,7 @@ func (t Terminal) verdict() (limits.Verdict, bool) {
 	switch t {
 	case TerminalWon, TerminalLost:
 		return limits.Success, true
-	case TerminalThrottled, TerminalUnavailable:
+	case TerminalThrottled, TerminalUnavailable, TerminalHardTimeout:
 		return limits.Overload, true
 	case TerminalForbidden, TerminalNotFound, TerminalTimestampDrift,
 		TerminalDialFailure, TerminalStreamTruncated, TerminalUnexpectedEOF, TerminalStalled:
@@ -249,6 +250,8 @@ func (t Terminal) reason() string {
 		return "error_stream"
 	case TerminalStalled:
 		return "stalled"
+	case TerminalHardTimeout:
+		return "hard_timeout"
 	}
 	return "unknown"
 }
@@ -267,6 +270,9 @@ func (a AttemptOutcome) elapsed() time.Duration {
 // longResponseExempt gates on ContentSource, not ContentChunks, which counts error events too. See
 // gateway-invariants.md, "1. A committed nonce is always settled".
 func (o RaceOutcome) longResponseExempt(a AttemptOutcome) bool {
+	if a.Terminal == TerminalHardTimeout {
+		return false
+	}
 	return !a.NonceFinished && a.ContentSource != "" && a.elapsed() >= longResponseExemption
 }
 

@@ -3,6 +3,7 @@ package user
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"sort"
@@ -119,6 +120,10 @@ type nonceOutcome struct {
 }
 
 // TimeoutResult reports what happened during timeout handling.
+// ErrNonceFinishedWhileWaiting reports a nonce the host completed during the wait for the chain's
+// deadline. It is not a failure: the work exists, and no timeout is owed.
+var ErrNonceFinishedWhileWaiting = errors.New("nonce finished while waiting for the timeout deadline")
+
 type TimeoutResult struct {
 	Reason       string // "execution", "refused", or "" if deadline not reached
 	Outcome      string // how handling ended: skipped, vote_collection_failed, insufficient_votes, diff_send_failed, applied
@@ -1935,6 +1940,11 @@ func (s *Session) HandleTimeout(ctx context.Context, nonce uint64, sendTime time
 	}
 
 	result := TimeoutResult{Reason: timeoutReasonLogLabel(reason)}
+
+	if s.IsNonceFinished(nonce) {
+		logging.Stage(ctx, "timeout_skipped", logFields("reason", "nonce_finished_while_waiting")...)
+		return result, ErrNonceFinishedWhileWaiting
+	}
 
 	logging.Stage(ctx, "timeout_started", logFields("reason", result.Reason)...)
 

@@ -180,10 +180,15 @@ func (c *raceCoordinator) markStalls() {
 func (c *raceCoordinator) cancelAll() {
 	c.cancelled = true
 	c.stopPicking()
+	now := c.deps.Now()
 	for _, attempt := range c.attempts {
-		if !attempt.done {
-			attempt.cancel()
+		if attempt.done {
+			continue
 		}
+		if !attempt.sendTime.IsZero() && !now.Before(attempt.sendTime.Add(streamingHardTimeout)) {
+			attempt.backstopped = true
+		}
+		attempt.cancel()
 	}
 }
 func (c *raceCoordinator) plan() deadlinePlan {

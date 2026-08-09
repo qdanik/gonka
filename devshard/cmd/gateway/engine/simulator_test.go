@@ -926,7 +926,10 @@ func TestSimulatorStopWaitsForARaceThatIsStillRunning(t *testing.T) {
 // with one. Its own attempt is still cancelled and accounted for, and because reaching the streaming
 // hard timeout puts it past the long-response exemption, the vote is skipped for that reason rather
 // than dropped unrecorded.
-func TestSimulatorStalledWinnerIsNotCreditedWithItsNonce(t *testing.T) {
+// A host the backstop cut answers for it: it held the request for twenty minutes and finished
+// nothing, so its window contracts and its nonce goes to a timeout vote rather than being excused as
+// a long response still in progress.
+func TestSimulatorAHostCutAtTheBackstopAnswersForIt(t *testing.T) {
 	policy := settledPolicy()
 	policy.InterChunkStall = 500 * time.Millisecond
 	sim := newSimulator(t, policy, 1, qwenModel)
@@ -952,19 +955,26 @@ func TestSimulatorStalledWinnerIsNotCreditedWithItsNonce(t *testing.T) {
 
 	reported := sim.reported(t)
 	attempt := attemptFor(t, reported, 10)
-	if attempt.Terminal != TerminalStalled {
-		t.Fatalf("terminal = %v, want TerminalStalled", attempt.Terminal)
+	if attempt.Terminal != TerminalHardTimeout {
+		t.Fatalf("terminal = %v, want TerminalHardTimeout", attempt.Terminal)
 	}
 	if attempt.NonceFinished || attempt.Confirmed {
-		t.Fatal("a stalled host was credited with the nonce it never finished")
+		t.Fatal("a host cut at the backstop was credited with the nonce it never finished")
 	}
-	if moves := sim.windows.recorded(); len(moves) != 0 {
-		t.Errorf("window moves = %+v, want none for a host that is not over its failure rate", moves)
+	if moves := sim.windows.recorded(); len(moves) == 0 {
+		t.Error("window did not move for a host that held the request past the backstop")
 	}
 	sim.settleAll()
 	events := sim.timeoutEvents()
-	if len(events) != 1 || events[0].Action != TimeoutActionSkipped || events[0].Reason != timeoutReasonLongResponse {
-		t.Fatalf("timeout events = %+v, want one skipped/%s", events, timeoutReasonLongResponse)
+	voted := false
+	for _, event := range events {
+		if event.Action == TimeoutActionSkipped {
+			t.Fatalf("timeout events = %+v, want the vote to run rather than be skipped", events)
+		}
+		voted = voted || event.Action == TimeoutActionCompleted
+	}
+	if !voted {
+		t.Fatalf("timeout events = %+v, want the vote carried through to a miss", events)
 	}
 	sim.assertNoSlotLeaked(t, 1)
 }
