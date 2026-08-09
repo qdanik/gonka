@@ -1,0 +1,328 @@
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+
+	commonchain "common/chain"
+	"devshard/bridge"
+	"devshard/cmd/gateway/api"
+	"devshard/cmd/gateway/chain"
+	"devshard/cmd/gateway/config"
+	"devshard/cmd/gateway/env"
+	"devshard/cmd/gateway/escrow"
+	"devshard/cmd/gateway/registry"
+	"devshard/cmd/gateway/store"
+	"devshard/logging"
+	"devshard/user"
+)
+
+// chainBackedSessions owns the chain connection because it is the only provider that needs one: an
+// in-process provider dials nothing, which is what keeps a test from carrying a live gRPC client.
+func chainBackedSessions(records devshardLookup, storageDir string) sessionSources {
+	return func(endpoints config.Chain, routePrefix string) (chainSources, error) {
+		// NewGRPCBridgeFromURL is upstream's test constructor; production builds the bridge over a client
+		// carrying the CometBFT RPC query fallback, so an escrow read survives the gRPC query path failing.
+		// An empty RPC endpoint lets common/chain derive one from the gRPC host at the standard port,
+		// which is how a default deployment is laid out; a deployment that moved it has to say so, or
+		// the query fallback resolves to a host nobody is listening on and dies silently.
+		chainClient, err := commonchain.NewWithQueryFallback(endpoints.GRPCEndpoint, endpoints.RPCEndpoint)
+		if err != nil {
+			return chainSources{}, fmt.Errorf("dialing chain grpc %s: %w", endpoints.GRPCEndpoint, err)
+		}
+		grpcChain := chain.NewGRPCChain(chainClient, endpoints.ChainID)
+		return chainSources{
+			Serving:   servingSessions(records, storageDir, bridge.NewGRPCBridge(chainClient), routePrefix),
+			ReadOnly:  readOnlySessions(records, storageDir),
+			Reader:    grpcChain,
+			Transport: grpcChain,
+		}, nil
+	}
+}
+func resolveStorageDir(explicit *string) (string, error) {
+	if explicit != nil {
+		return *explicit, nil
+	}
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("resolving home dir for storage: %w", err)
+	}
+	return filepath.Join(homeDir, ".cache", "gonka-gateway"), nil
+}
+
+// publishEscrows brings the registry to what the store calls active, builders at a time. See
+// gateway-operations.md, "Start-up".
+func (g *gateway) publishEscrows(ctx context.Context) error {
+	records, err := g.store.ListDevshards(ctx)
+	if err != nil {
+		return fmt.Errorf("listing devshards: %w", err)
+	}
+	return publishEscrows(ctx, records, g.builders, g.escrows.Add, g.escrows.Retire, func(escrowID string) error {
+		return g.store.SetDevshardActive(ctx, escrowID, false)
+	})
+}
+func publishEscrows(
+	ctx context.Context,
+	records []store.DevshardRecord,
+	builders int,
+	add func(ctx context.Context, escrowID, model string) error,
+	retire func(escrowID string) error,
+	deactivate func(escrowID string) error,
+) error {
+	var (
+		active   []store.DevshardRecord
+		problems []error
+	)
+	for _, record := range records {
+		if record.Active {
+			active = append(active, record)
+			continue
+		}
+		if err := retire(record.EscrowID); err != nil {
+			problems = append(problems, fmt.Errorf("retiring inactive escrow %s: %w", record.EscrowID, err))
+		}
+	}
+
+	built := make([]error, len(active))
+	semaphore := make(chan struct{}, builders)
+	var building sync.WaitGroup
+	for index, record := range active {
+		building.Add(1)
+		go func() {
+			defer building.Done()
+			semaphore <- struct{}{}
+			defer func() { <-semaphore }()
+			built[index] = add(ctx, record.EscrowID, record.Model)
+		}()
+	}
+	building.Wait()
+
+	for index, err := range built {
+		escrowID := active[index].EscrowID
+		switch {
+		case err == nil:
+		case errors.Is(err, bridge.ErrEscrowNotFound), errors.Is(err, env.ErrPrivateKeyMissing):
+			logging.Warn("devshard cannot be served, marking inactive", "escrow_id", escrowID, "error", err)
+			if deactivateErr := deactivate(escrowID); deactivateErr != nil {
+				problems = append(problems, fmt.Errorf("deactivating escrow %s: %w", escrowID, deactivateErr))
+			}
+		default:
+			problems = append(problems, err)
+		}
+	}
+	return errors.Join(problems...)
+}
+
+// republishOnDevshardWrites keeps routing in step with the rotation lifecycle, which owns the rows
+// and knows nothing about the registry. The returned channel closes once the watcher has exited.
+func (g *gateway) republishOnDevshardWrites(ctx context.Context) <-chan struct{} {
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-g.devshardWork:
+				if err := g.publishEscrows(ctx); err != nil && ctx.Err() == nil {
+					logging.Error("republishing escrows", "error", err)
+				}
+			}
+		}
+	}()
+	return done
+}
+func notify(work chan struct{}) {
+	select {
+	case work <- struct{}{}:
+	default:
+	}
+}
+
+// devshardWrites reports the rows the rotation lifecycle changes, so a replacement escrow routes
+// without waiting for a poll and a retired one stops taking requests at once.
+type devshardWrites struct {
+	*store.Store
+	changed func()
+}
+
+func (w devshardWrites) UpsertDevshard(ctx context.Context, record store.DevshardRecord) error {
+	return w.report(w.Store.UpsertDevshard(ctx, record))
+}
+func (w devshardWrites) SetDevshardActive(ctx context.Context, escrowID string, active bool) error {
+	return w.report(w.Store.SetDevshardActive(ctx, escrowID, active))
+}
+func (w devshardWrites) DeleteDevshard(ctx context.Context, escrowID string) error {
+	return w.report(w.Store.DeleteDevshard(ctx, escrowID))
+}
+func (w devshardWrites) report(err error) error {
+	if err == nil {
+		w.changed()
+	}
+	return err
+}
+
+// depletionNotice breaks the registry/manager cycle: the manager settles through the registry, so it
+// cannot also be constructed before it.
+type depletionNotice struct{ manager *escrow.Manager }
+
+func (d *depletionNotice) OnBalanceExhausted(escrowID, reason string) {
+	d.manager.OnBalanceExhausted(escrowID, reason)
+}
+
+type seedDevshard struct {
+	EscrowID      string `json:"escrow_id"`
+	PrivateKeyEnv string `json:"private_key_env"`
+	Model         string `json:"model"`
+}
+type devshardRegistry interface {
+	ListDevshards(ctx context.Context) ([]store.DevshardRecord, error)
+	UpsertDevshard(ctx context.Context, record store.DevshardRecord) error
+}
+
+// seedDevshards leaves a devshard it already knows alone, so a restart cannot resurrect one an
+// operator deactivated.
+func seedDevshards(ctx context.Context, records devshardRegistry, raw string) error {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	var seeds []seedDevshard
+	if err := json.Unmarshal([]byte(raw), &seeds); err != nil {
+		return fmt.Errorf("parsing seed devshards: %w", err)
+	}
+	known, err := records.ListDevshards(ctx)
+	if err != nil {
+		return fmt.Errorf("listing devshards: %w", err)
+	}
+	registered := make(map[string]bool, len(known))
+	for _, record := range known {
+		registered[record.EscrowID] = true
+	}
+	for _, seed := range seeds {
+		switch {
+		case strings.TrimSpace(seed.EscrowID) == "":
+			return fmt.Errorf("seed devshard: escrow_id is required")
+		case strings.TrimSpace(seed.Model) == "":
+			return fmt.Errorf("seed devshard %s: model is required", seed.EscrowID)
+		case registered[seed.EscrowID]:
+			continue
+		}
+		record := store.DevshardRecord{
+			EscrowID:      seed.EscrowID,
+			PrivateKeyEnv: seed.PrivateKeyEnv,
+			Model:         seed.Model,
+			Active:        true,
+		}
+		if err := records.UpsertDevshard(ctx, record); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+type devshardLookup interface {
+	ListDevshards(ctx context.Context) ([]store.DevshardRecord, error)
+}
+
+func findDevshard(ctx context.Context, records devshardLookup, escrowID string) (store.DevshardRecord, error) {
+	known, err := records.ListDevshards(ctx)
+	if err != nil {
+		return store.DevshardRecord{}, fmt.Errorf("listing devshards: %w", err)
+	}
+	for _, record := range known {
+		if record.EscrowID == escrowID {
+			return record, nil
+		}
+	}
+	return store.DevshardRecord{}, fmt.Errorf("devshard %s: %w", escrowID, escrow.ErrUnknownEscrow)
+}
+
+// The bridge is one object for the process: it holds the chain client every session reads escrow state
+// through, so building one per session would open a connection per escrow and lose the client's cache.
+func servingSessions(records devshardLookup, storageDir string, escrowBridge bridge.MainnetBridge, routePrefix string) registry.SessionFactory {
+	return func(ctx context.Context, escrowID string) (registry.EscrowSession, error) {
+		record, err := findDevshard(ctx, records, escrowID)
+		if err != nil {
+			return nil, err
+		}
+		keyHex, err := env.PrivateKey(record.PrivateKeyEnv)
+		if err != nil {
+			return nil, err
+		}
+		storagePath, err := escrowStorage(storageDir, escrowID)
+		if err != nil {
+			return nil, err
+		}
+		session, machine, err := user.NewHTTPSession(user.HTTPSessionConfig{
+			PrivateKeyHex: keyHex,
+			EscrowID:      escrowID,
+			Bridge:        escrowBridge,
+			StoragePath:   storagePath,
+			RoutePrefix:   routePrefix,
+		})
+		if err != nil {
+			return nil, err
+		}
+		return registry.NewSessionHandle(session, machine), nil
+	}
+}
+func readOnlySessions(records devshardLookup, storageDir string) registry.SessionFactory {
+	return func(ctx context.Context, escrowID string) (registry.EscrowSession, error) {
+		record, err := findDevshard(ctx, records, escrowID)
+		if err != nil {
+			return nil, err
+		}
+		keyHex, err := env.PrivateKey(record.PrivateKeyEnv)
+		if err != nil {
+			return nil, err
+		}
+		storagePath, err := escrowStorage(storageDir, escrowID)
+		if err != nil {
+			return nil, err
+		}
+		session, machine, err := user.NewLocalSession(user.LocalSessionConfig{
+			PrivateKeyHex: keyHex,
+			EscrowID:      escrowID,
+			StoragePath:   storagePath,
+		})
+		if err != nil {
+			return nil, err
+		}
+		return registry.NewSessionHandle(session, machine), nil
+	}
+}
+func escrowStorage(storageDir, escrowID string) (string, error) {
+	storagePath := api.DevshardStoragePath(storageDir, escrowID)
+	if err := os.MkdirAll(storagePath, 0o755); err != nil {
+		return "", fmt.Errorf("creating storage for escrow %s: %w", escrowID, err)
+	}
+	return storagePath, nil
+}
+
+// copySessionStorage copies regular files only: session storage is a flat set of SQLite files, so a
+// directory below it is not part of the escrow.
+func copySessionStorage(sourceDir, targetDir string) error {
+	entries, err := os.ReadDir(sourceDir)
+	if err != nil {
+		return fmt.Errorf("reading session storage %s: %w", sourceDir, err)
+	}
+	for _, entry := range entries {
+		if !entry.Type().IsRegular() {
+			continue
+		}
+		contents, err := os.ReadFile(filepath.Join(sourceDir, entry.Name()))
+		if err != nil {
+			return fmt.Errorf("reading %s: %w", entry.Name(), err)
+		}
+		if err := os.WriteFile(filepath.Join(targetDir, entry.Name()), contents, 0o600); err != nil {
+			return fmt.Errorf("writing %s: %w", entry.Name(), err)
+		}
+	}
+	return nil
+}
