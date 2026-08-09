@@ -8,6 +8,7 @@ import (
 
 	"devshard/cmd/gateway/chain"
 	"devshard/cmd/gateway/config"
+	"devshard/cmd/gateway/internal/logkey"
 	"devshard/cmd/gateway/scheduler"
 	"devshard/logging"
 )
@@ -270,8 +271,8 @@ func (c *raceCoordinator) begin() error {
 // settlement defect in this gateway has taken. It is traced at Warn because it is never routine.
 func (c *raceCoordinator) strand(assignment scheduler.Assignment, role string) {
 	logging.Warn("nonce stranded",
-		"request", c.request.RequestID, "escrow", assignment.Escrow,
-		"nonce", assignment.Nonce.Nonce(), "participant", assignment.Host, "role", role)
+		logkey.Request, c.request.RequestID, logkey.Escrow, assignment.Escrow,
+		logkey.Nonce, assignment.Nonce.Nonce(), logkey.Participant, assignment.Host, logkey.Role, role)
 	c.escrowID = assignment.Escrow
 	c.deps.Limiter.Release(assignment.Host, c.request.Model)
 	if c.deps.Hold != nil {

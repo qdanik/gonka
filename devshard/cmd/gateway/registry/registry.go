@@ -13,6 +13,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"devshard/cmd/gateway/internal/logkey"
 	"devshard/logging"
 )
 
@@ -114,7 +115,7 @@ func (r *Registry) Add(ctx context.Context, escrowID, model string) error {
 	entry.hold = r.holdFor(entry)
 	r.live.Store(published.with(entry))
 	r.pushMembershipLocked()
-	logging.Info("escrow serving", "escrow", escrowID, "model", model)
+	logging.Info("escrow serving", logkey.Escrow, escrowID, logkey.Model, model)
 	return nil
 }
 
@@ -171,10 +172,10 @@ func (r *Registry) unpublish(escrowID string) (*escrowEntry, bool) {
 	r.draining[entry] = struct{}{}
 	r.publishDrainingLocked()
 	if entry.busy() {
-		logging.Info("escrow retired, draining", "escrow", escrowID, "in_flight", entry.inFlight.Load())
+		logging.Info("escrow retired, draining", logkey.Escrow, escrowID, logkey.InFlight, entry.inFlight.Load())
 		return nil, false
 	}
-	logging.Info("escrow retired", "escrow", escrowID)
+	logging.Info("escrow retired", logkey.Escrow, escrowID)
 	return entry, true
 }
 
@@ -211,10 +212,10 @@ func (r *Registry) release(entry *escrowEntry) {
 	}
 	if err := r.closeDraining(entry); err != nil {
 		r.drainCloseFailures.Add(1)
-		logging.Error("draining escrow failed to close, its storage stays held", "escrow", entry.id, "error", err)
+		logging.Error("draining escrow failed to close, its storage stays held", logkey.Escrow, entry.id, logkey.Error, err)
 		return
 	}
-	logging.Info("draining escrow closed", "escrow", entry.id)
+	logging.Info("draining escrow closed", logkey.Escrow, entry.id)
 }
 
 // lastHoldDropped reports that this release ended the final in-flight request of a retired escrow, so

@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"devshard/cmd/gateway/internal/logkey"
 	"devshard/logging"
 )
 
@@ -389,10 +390,10 @@ func (o *PhaseObserver) narrateHealth(snapshot PhaseSnapshot) {
 	change := o.health.advance(snapshot.LastError)
 	switch {
 	case change.degraded:
-		logging.Warn("chain snapshot stale", "error", snapshot.LastError,
-			"epoch", snapshot.EpochIndex, "height", snapshot.BlockHeight)
+		logging.Warn("chain snapshot stale", logkey.Error, snapshot.LastError,
+			logkey.Epoch, snapshot.EpochIndex, logkey.Height, snapshot.BlockHeight)
 	case change.recovered:
-		logging.Info("chain snapshot recovered", "epoch", snapshot.EpochIndex, "height", snapshot.BlockHeight)
+		logging.Info("chain snapshot recovered", logkey.Epoch, snapshot.EpochIndex, logkey.Height, snapshot.BlockHeight)
 	}
 }
 

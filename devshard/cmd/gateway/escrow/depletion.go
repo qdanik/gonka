@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"devshard/cmd/gateway/chain"
+	"devshard/cmd/gateway/internal/logkey"
 	"devshard/cmd/gateway/store"
 	"devshard/logging"
 )
@@ -14,7 +15,7 @@ import (
 // hook does no I/O and never fans out a per-escrow chain call.
 func (m *Manager) OnBalanceExhausted(escrowID, reason string) {
 	if m.depleted.mark(escrowID) {
-		logging.Warn("escrow left routing", "escrow", escrowID, "reason", reason)
+		logging.Warn("escrow left routing", logkey.Escrow, escrowID, logkey.Reason, reason)
 	}
 }
 
@@ -49,7 +50,7 @@ func (m *Manager) retireDepleted(ctx context.Context, record store.DevshardRecor
 	if replaceable {
 		return m.replaceDepleted(ctx, record, model, snapshot)
 	}
-	logging.Warn("escrow depleted with no replacement configured", "escrow", record.EscrowID, "model", record.Model)
+	logging.Warn("escrow depleted with no replacement configured", logkey.Escrow, record.EscrowID, logkey.Model, record.Model)
 	if err := m.retire(ctx, record); err != nil {
 		return fmt.Errorf("retiring depleted escrow %s: %w", record.EscrowID, err)
 	}

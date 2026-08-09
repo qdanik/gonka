@@ -5,6 +5,7 @@ import (
 	"errors"
 	"time"
 
+	"devshard/cmd/gateway/internal/logkey"
 	"devshard/cmd/gateway/scheduler"
 	"devshard/logging"
 	"devshard/types"
@@ -89,8 +90,8 @@ func (c *raceCoordinator) reportUnfilledPick(err error) {
 		return
 	}
 	logging.Info("escalation unfilled",
-		"request", c.request.RequestID, "escrow", c.escrowID, "reason", c.pickReason,
-		"attempts", len(c.attempts), "error", err)
+		logkey.Request, c.request.RequestID, logkey.Escrow, c.escrowID, logkey.Reason, c.pickReason,
+		logkey.Attempts, len(c.attempts), logkey.Error, err)
 }
 
 // stopPicking gives up on a pick the race can no longer spend. The scheduler answers a cancelled pick by
@@ -137,8 +138,8 @@ func (c *raceCoordinator) launch(assignment scheduler.Assignment, role, startRea
 	c.exclude(attempt.participant)
 	c.deps.Perf.Acquire(attempt.participant)
 	logging.Info("nonce committed",
-		"request", c.request.RequestID, "escrow", assignment.Escrow, "nonce", nonce,
-		"participant", attempt.participant, "slot", attempt.hostIdx, "role", role, "reason", startReason)
+		logkey.Request, c.request.RequestID, logkey.Escrow, assignment.Escrow, logkey.Nonce, nonce,
+		logkey.Participant, attempt.participant, logkey.Slot, attempt.hostIdx, logkey.Role, role, logkey.Reason, startReason)
 
 	go runAttempt(attemptCtx, AttemptSpec{
 		Escrow:      assignment.Escrow,

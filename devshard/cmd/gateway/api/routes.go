@@ -8,6 +8,7 @@ import (
 	"devshard/cmd/gateway/config"
 	"devshard/cmd/gateway/engine"
 	"devshard/cmd/gateway/filters"
+	"devshard/cmd/gateway/internal/logkey"
 	"devshard/cmd/gateway/scheduler"
 	"devshard/logging"
 	"devshard/user"
@@ -215,8 +216,8 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request, escrowPin string) 
 	key := cacheKeyFor(r, normalized.Model, normalized.Body, normalized.Logprobs, normalized.ClientStream)
 	if entry, hit := s.cache.get(key, s.now()); hit {
 		written := serveCached(w, requestID, entry)
-		logging.Info("request finished", "request", requestID, "model", normalized.Model,
-			"escrow", entry.escrowID, "stream", entry.stream, "outcome", "cache_hit", "bytes", written)
+		logging.Info("request finished", logkey.Request, requestID, logkey.Model, normalized.Model,
+			logkey.Escrow, entry.escrowID, logkey.Stream, entry.stream, logkey.Outcome, "cache_hit", logkey.Bytes, written)
 		return
 	}
 

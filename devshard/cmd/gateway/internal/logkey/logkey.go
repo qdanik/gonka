@@ -1,0 +1,79 @@
+// Package logkey is the gateway's log vocabulary: every key a log line may carry, declared once and
+// referenced by name, so a rename reaches every emitter through the compiler.
+package logkey
+
+const (
+	Request = "request"
+	Escrow  = "escrow"
+	Nonce   = "nonce"
+	Model   = "model"
+	Host    = "host"
+	Slot    = "slot"
+	Role    = "role"
+	Reason  = "reason"
+	Outcome = "outcome"
+	Error   = "error"
+)
+
+// What an attempt delivered and how long each stage took.
+const (
+	Terminal       = "terminal"
+	NonceFinished  = "nonce_finished"
+	StateDivergent = "state_divergent"
+	PhaseAborted   = "phase_aborted"
+	Participant    = "participant"
+	ContentChunks  = "content_chunks"
+	StreamChunks   = "stream_chunks"
+	OutputBytes    = "output_bytes"
+	UsageTokens    = "usage_tokens"
+	DroppedEvents  = "dropped_events"
+	MaxGapMS       = "max_gap_ms"
+	MaxGapAtChunk  = "max_gap_at_chunk"
+	MeanGapMS      = "mean_gap_ms"
+	ReceiptMS      = "receipt_ms"
+	FirstTokenMS   = "first_token_ms"
+	FirstContentMS = "first_content_ms"
+	AttemptMS      = "attempt_ms"
+)
+
+// What the client asked for and what it got.
+const (
+	Stream            = "stream"
+	InputTokens       = "input_tokens"
+	OutputTokens      = "output_tokens"
+	Bytes             = "bytes"
+	Terminated        = "terminated"
+	DurationMS        = "duration_ms"
+	DeliverError      = "deliver_error"
+	HostClockOffsetMS = "host_clock_offset_ms"
+	HostReceiptMS     = "host_receipt_ms"
+)
+
+// The chain and the escrow set behind the request.
+const (
+	Epoch          = "epoch"
+	Height         = "height"
+	SwitchHeight   = "switch_height"
+	Phase          = "phase"
+	Tx             = "tx"
+	Settler        = "settler"
+	Created        = "created"
+	Retired        = "retired"
+	Promoted       = "promoted"
+	Recorded       = "recorded"
+	Used           = "used"
+	InFlight       = "in_flight"
+	Attempts       = "attempts"
+	EscrowBuilders = "escrow_builders"
+)
+
+// Process and transport.
+const (
+	Port       = "port"
+	StorageDir = "storage_dir"
+	Version    = "version"
+	Subsystem  = "subsystem"
+	Route      = "route"
+	Method     = "method"
+	Status     = "status"
+)

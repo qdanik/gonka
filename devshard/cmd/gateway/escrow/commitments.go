@@ -11,6 +11,7 @@ import (
 
 	"devshard/cmd/gateway/chain"
 	"devshard/cmd/gateway/config"
+	"devshard/cmd/gateway/internal/logkey"
 	"devshard/cmd/gateway/store"
 	"devshard/logging"
 )
@@ -74,7 +75,7 @@ func (m *Manager) createEscrow(ctx context.Context, model ModelConfig, role stri
 	if err != nil {
 		return chain.CreateEscrowResult{}, fmt.Errorf("creating escrow for %s/%s: %w", model.ModelID, role, err)
 	}
-	logging.Info("escrow created", "escrow", result.EscrowID, "model", model.ModelID, "role", role, "epoch", epoch, "tx", result.TxHash)
+	logging.Info("escrow created", logkey.Escrow, result.EscrowID, logkey.Model, model.ModelID, logkey.Role, role, logkey.Epoch, epoch, logkey.Tx, result.TxHash)
 	return result, m.persistEscrow(ctx, strconv.FormatUint(result.EscrowID, 10), c)
 }
 
@@ -149,7 +150,7 @@ func (m *Manager) reconcileOne(ctx context.Context, c store.Commitment) error {
 		if persistErr := m.persistEscrow(ctx, strconv.FormatUint(escrowID, 10), c); persistErr != nil {
 			return persistErr
 		}
-		logging.Info("escrow recovered from commitment", "escrow", escrowID, "model", c.Model, "role", c.Role, "epoch", c.Epoch, "tx", c.TxHash)
+		logging.Info("escrow recovered from commitment", logkey.Escrow, escrowID, logkey.Model, c.Model, logkey.Role, c.Role, logkey.Epoch, c.Epoch, logkey.Tx, c.TxHash)
 		return nil
 	case err == nil && !found:
 		return m.clearCommitment(ctx, c, "transaction created no escrow") // committed but produced no escrow event: terminal
@@ -168,7 +169,7 @@ func (m *Manager) clearCommitment(ctx context.Context, c store.Commitment, reaso
 	if err := m.store.WithRetry(ctx, func() error { return m.store.DeleteCommitment(ctx, c.TxHash) }); err != nil {
 		return fmt.Errorf("clearing commitment %s: %w", c.TxHash, err)
 	}
-	logging.Warn("commitment cleared", "tx", c.TxHash, "model", c.Model, "role", c.Role, "epoch", c.Epoch, "reason", reason)
+	logging.Warn("commitment cleared", logkey.Tx, c.TxHash, logkey.Model, c.Model, logkey.Role, c.Role, logkey.Epoch, c.Epoch, logkey.Reason, reason)
 	return nil
 }
 

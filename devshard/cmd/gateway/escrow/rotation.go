@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"devshard/cmd/gateway/chain"
+	"devshard/cmd/gateway/internal/logkey"
 	"devshard/cmd/gateway/store"
 	"devshard/logging"
 )
@@ -34,7 +35,7 @@ func (m *Manager) ensureToTarget(ctx context.Context, role string, target int, m
 		// Written down because it is a rotation that produced nothing on purpose: without it an
 		// operator looking for the escrow that never appeared finds no reason anywhere.
 		logging.Warn("rotation skipped, the network serves no such model",
-			"model", model.ModelID, "role", role, "epoch", snapshot.EpochIndex)
+			logkey.Model, model.ModelID, logkey.Role, role, logkey.Epoch, snapshot.EpochIndex)
 		return 0, nil
 	}
 	if m.breaker.gated(model.ModelID, role) {
@@ -71,7 +72,7 @@ func (m *Manager) prepareBridge(ctx context.Context, snapshot chain.PhaseSnapsho
 			// degrade, don't abort: relabel existing regulars as temp so this epoch still has bridge coverage.
 			promoted, promoteErr := m.promoteRegularsToTemp(ctx, model, devshards)
 			if promoted > 0 {
-				logging.Warn("regular escrows promoted to temp", "model", model.ModelID, "epoch", snapshot.EpochIndex, "promoted", promoted)
+				logging.Warn("regular escrows promoted to temp", logkey.Model, model.ModelID, logkey.Epoch, snapshot.EpochIndex, logkey.Promoted, promoted)
 			}
 			if promoteErr != nil {
 				errs = append(errs, promoteErr)
@@ -99,7 +100,7 @@ func (m *Manager) prepareBridge(ctx context.Context, snapshot chain.PhaseSnapsho
 			}
 		}
 		if created > 0 || retired > 0 {
-			logging.Info("bridge prepared", "model", model.ModelID, "epoch", snapshot.EpochIndex, "created", created, "retired", retired)
+			logging.Info("bridge prepared", logkey.Model, model.ModelID, logkey.Epoch, snapshot.EpochIndex, logkey.Created, created, logkey.Retired, retired)
 		}
 		status := store.RotationStatus{Model: model.ModelID, Role: roleTemp, Stage: stagePrepareTemp, Epoch: snapshot.EpochIndex, Completed: settleFailed == 0}
 		if err := m.saveRotationStatus(ctx, status); err != nil {
@@ -141,7 +142,7 @@ func (m *Manager) finishBridge(ctx context.Context, snapshot chain.PhaseSnapshot
 			}
 		}
 		if created > 0 || retired > 0 {
-			logging.Info("bridge finished", "model", model.ModelID, "epoch", snapshot.EpochIndex, "created", created, "retired", retired)
+			logging.Info("bridge finished", logkey.Model, model.ModelID, logkey.Epoch, snapshot.EpochIndex, logkey.Created, created, logkey.Retired, retired)
 		}
 		status := store.RotationStatus{Model: model.ModelID, Role: roleRegular, Stage: stageFinishRegular, Epoch: snapshot.EpochIndex, Completed: settleFailed == 0}
 		if err := m.saveRotationStatus(ctx, status); err != nil {

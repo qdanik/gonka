@@ -19,6 +19,7 @@ import (
 	"devshard/cmd/gateway/scheduler"
 	"devshard/logging"
 
+	"devshard/cmd/gateway/internal/logkey"
 	json "github.com/goccy/go-json"
 )
 
@@ -220,7 +221,7 @@ func adminFailure(label string, next http.HandlerFunc) http.HandlerFunc {
 		if recorder.status < http.StatusBadRequest {
 			return
 		}
-		fields := []any{"route", label, "method", r.Method, "status", recorder.status, "error", recorder.reason()}
+		fields := []any{logkey.Route, label, logkey.Method, r.Method, logkey.Status, recorder.status, logkey.Error, recorder.reason()}
 		if recorder.status >= http.StatusInternalServerError {
 			logging.Error("admin request failed", fields...)
 			return
