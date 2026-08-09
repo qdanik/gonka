@@ -679,8 +679,8 @@ func TestRunRaceReportsOneOutcomeOnHardTimeoutWithPendingAttempts(t *testing.T) 
 	// The host receipted and then held until the backstop, with a client still waiting and nobody
 	// crowned. Reported as cancelled it would be exempt from the sample ladder like a loser the race
 	// outran, and a host that hangs for the whole timeout would cost its own health nothing.
-	if reported.Attempts[0].Terminal != TerminalStalled {
-		t.Fatalf("terminal = %v, want stalled", reported.Attempts[0].Terminal)
+	if reported.Attempts[0].Terminal != TerminalHardTimeout {
+		t.Fatalf("terminal = %v, want hard_timeout", reported.Attempts[0].Terminal)
 	}
 }
 

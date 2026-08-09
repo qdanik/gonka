@@ -138,7 +138,7 @@ Whether an attempt contributes a performance sample at all is decided by one ord
 2. Ended by a proof-of-compute phase transition — blame the transition, not the host.
 3. Error stream or capability refusal.
 4. State-divergent.
-5. Long response: content produced, nonce not finished, at least 280 seconds elapsed.
+5. Long response: content produced, nonce not finished, at least 280 seconds elapsed — **unless the backstop ended it**. The exemption exists to leave a host alone while it is still writing; a `hard_timeout` is the gateway declaring that it no longer is, so such an attempt contributes its sample, contracts the host's window as an overload, and goes to a timeout vote rather than being excused.
 6. Empty stream while the proof-of-compute bypass is active.
 7. Empty stream in a race nobody won.
 8. Cancelled by the race itself — a sample would say the host was unresponsive when it was told to stop.

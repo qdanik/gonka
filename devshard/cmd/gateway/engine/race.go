@@ -123,6 +123,7 @@ type liveAttempt struct {
 	escalated     bool
 	done          bool
 	stalled       bool
+	backstopped   bool
 	nonceFinished bool
 	inInference   bool
 

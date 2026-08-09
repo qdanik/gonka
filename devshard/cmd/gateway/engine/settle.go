@@ -2,7 +2,10 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"time"
+
+	"devshard/user"
 )
 
 const (
@@ -131,7 +134,11 @@ func SettleTimeouts(ctx context.Context, poster TimeoutPoster, outcome RaceOutco
 		posted := step.Event
 		posted.Kind = timeoutVoteKind(vote, posted.Kind)
 		posted.Action = TimeoutActionCompleted
-		if err != nil {
+		switch {
+		case errors.Is(err, user.ErrNonceFinishedWhileWaiting):
+			posted.Action = TimeoutActionSkipped
+			posted.Reason = timeoutReasonNonceFinished
+		case err != nil:
 			posted.Action = TimeoutActionFailed
 			posted.Reason = timeoutReasonCollectionError
 		}

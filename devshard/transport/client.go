@@ -66,6 +66,7 @@ type ClientConfig struct {
 	GossipTimeout    time.Duration                   // gossip/nonce, gossip/txs, default 10s
 	VerifyTimeout    time.Duration                   // verify-timeout, default 3m
 	QueryTimeout     time.Duration                   // diffs, mempool GETs, default 30s
+	MaxSSELineBytes  int                             // cap on one SSE line, default 16MB
 	StreamCallback   func(nonce uint64, line string) // if set, receives raw SSE data lines during inference
 	RoutePrefix      string                          // path prefix for all session routes; default /devshard/<version>
 	// ParticipantKey is the canonical participant identifier passed to
@@ -108,6 +109,8 @@ type requestAdmissionBodyObserver interface {
 // distinguish from a normal end-of-response.
 var ErrSSEStreamTruncated = errors.New("sse stream ended without [DONE] or devshard_receipt")
 
+var ErrSSELineTooLarge = errors.New("sse line exceeds the maximum size")
+
 type UpstreamStatusError struct {
 	Path       string
 	StatusCode int
@@ -141,9 +144,12 @@ func DefaultClientConfig() ClientConfig {
 		GossipTimeout:    10 * time.Second,
 		VerifyTimeout:    3 * time.Minute,
 		QueryTimeout:     30 * time.Second,
+		MaxSSELineBytes:  DefaultMaxSSELineBytes,
 		RoutePrefix:      DefaultRoutePrefix(),
 	}
 }
+
+const DefaultMaxSSELineBytes = 16 << 20
 
 // HTTPClient implements user.HostClient over HTTP.
 type HTTPClient struct {
@@ -299,8 +305,12 @@ func (c *HTTPClient) parseSSEResponse(ctx context.Context, r io.Reader, stream i
 	var unexpectedLineLogged bool
 	var sawTerminator bool // true once we observe [DONE] or a devshard_receipt event
 
+	limit := c.config.MaxSSELineBytes
+	if limit <= 0 {
+		limit = DefaultMaxSSELineBytes
+	}
 	for {
-		raw, readErr := br.ReadBytes('\n')
+		raw, readErr := readLimitedLine(br, limit)
 		if len(raw) > 0 {
 			line := string(bytes.TrimRight(raw, "\r\n"))
 			c.handleSSELine(line, stream, receiptHandler, &result, &writeErrLogged, &unexpectedLineLogged, &sawTerminator)
@@ -324,6 +334,21 @@ func (c *HTTPClient) parseSSEResponse(ctx context.Context, r io.Reader, stream i
 			}
 			return &result, fmt.Errorf("read SSE stream: %w", readErr)
 		}
+	}
+}
+
+func readLimitedLine(br *bufio.Reader, limit int) ([]byte, error) {
+	var line []byte
+	for {
+		chunk, err := br.ReadSlice('\n')
+		if len(line)+len(chunk) > limit {
+			return nil, ErrSSELineTooLarge
+		}
+		line = append(line, chunk...)
+		if errors.Is(err, bufio.ErrBufferFull) {
+			continue
+		}
+		return line, err
 	}
 }
 

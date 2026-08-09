@@ -31,8 +31,8 @@ func (s *Server) handleAdminState(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"version":   s.version,
-		"devshards": records,
-		"rotation":  statuses,
+		"devshards": devshardViews(records),
+		"rotation":  rotationViews(statuses),
 		"overrides": overrides,
 		"status":    s.status(s.routableEscrows()),
 	})

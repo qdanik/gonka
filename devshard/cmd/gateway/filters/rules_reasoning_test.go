@@ -2,6 +2,7 @@ package filters
 
 import (
 	"encoding/json"
+	"reflect"
 	"testing"
 )
 
@@ -356,6 +357,55 @@ func TestThinkingTokenBudgetResolveForcesZeroBelowThreshold(t *testing.T) {
 	}
 }
 
+func TestThinkingTokenBudgetResolveForceZeroOverwritesCallerThinking(t *testing.T) {
+	document := parseTestDocument(t, `{"max_tokens":100,"chat_template_kwargs":{"thinking":true,"enable_thinking":true}}`)
+	if err := thinkingTokenBudgetResolve()(RuleContext{Document: document, Profile: kimiProfile}); err != nil {
+		t.Fatalf("thinkingTokenBudgetResolve() = %v, want nil", err)
+	}
+	kwargs, _ := document.Get("chat_template_kwargs")
+	want := map[string]any{"thinking": false, "enable_thinking": true}
+	if !reflect.DeepEqual(kwargs, want) {
+		t.Errorf("chat_template_kwargs = %v, want %v", kwargs, want)
+	}
+}
+
+// The rule tests above cannot reach this: the thinking rule mirrors the caller's answer into the kwargs
+// during PreValidation, so by the time the budget is forced to zero at PostLimits the key already exists.
+// A fill-only write there leaves the template thinking with no budget to think in, which is the
+// empty-content burn the force-zero exists to prevent.
+func TestNormalizeRequestKimiForceZeroSilencesThinkingThroughEveryEntryPoint(t *testing.T) {
+	for _, testCase := range []struct {
+		name string
+		body string
+	}{
+		{"top-level thinking", `{"messages":[{"role":"user","content":"x"}],"max_tokens":100,"thinking":{"type":"enabled"}}`},
+		{"template kwargs directly", `{"messages":[{"role":"user","content":"x"}],"max_tokens":100,"chat_template_kwargs":{"thinking":true}}`},
+		{"adaptive from the CLI", `{"messages":[{"role":"user","content":"x"}],"max_tokens":100,"thinking":{"type":"adaptive"}}`},
+		{"nothing asked at all", `{"messages":[{"role":"user","content":"x"}],"max_tokens":100}`},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			result, err := NormalizeRequest([]byte(testCase.body), Options{RoutedModel: kimiModelID})
+			if err != nil {
+				t.Fatalf("NormalizeRequest() = %v, want nil", err)
+			}
+			var document map[string]any
+			if err := json.Unmarshal(result.Body, &document); err != nil {
+				t.Fatalf("unmarshal normalized body: %v", err)
+			}
+			kwargs, ok := document["chat_template_kwargs"].(map[string]any)
+			if !ok {
+				t.Fatalf("chat_template_kwargs missing from %s", result.Body)
+			}
+			if kwargs["thinking"] != false {
+				t.Errorf("chat_template_kwargs.thinking = %v, want false: a zero budget with a thinking template is the burn being fixed", kwargs["thinking"])
+			}
+			if budget := document["thinking_token_budget"]; budget != float64(0) {
+				t.Errorf("thinking_token_budget = %v, want 0", budget)
+			}
+		})
+	}
+}
+
 // max_tokens==255 IS below the 256 force-zero threshold: the budget is forced to 0.
 func TestThinkingTokenBudgetResolveJustBelowThresholdForcesZero(t *testing.T) {
 	document := parseTestDocument(t, `{"max_tokens":255}`)
@@ -553,9 +603,9 @@ func TestASmallBudgetSilencesKimiInTheTemplateToo(t *testing.T) {
 			body: `{"max_tokens":256}`,
 		},
 		{
-			name:         "a client that asked to think keeps its own answer",
+			name:         "a client that asked to think is overruled",
 			body:         `{"max_tokens":144,"chat_template_kwargs":{"thinking":true}}`,
-			wantThinking: true,
+			wantThinking: false,
 		},
 	}
 	for _, testCase := range testCases {

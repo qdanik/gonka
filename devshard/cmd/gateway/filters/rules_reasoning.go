@@ -157,6 +157,17 @@ func mirrorFieldIntoKwargs(document *Document, field string, value bool) error {
 	return nil
 }
 
+// silenceThinkingInKwargs overrules the caller, the way the forced budget already does: a request that
+// cannot afford thinking cannot afford it in the template either.
+func silenceThinkingInKwargs(document *Document) error {
+	kwargs, err := getOrCreateChatTemplateKwargs(document)
+	if err != nil {
+		return err
+	}
+	kwargs["thinking"] = false
+	return nil
+}
+
 func thinkingTokenBudgetStrip() RuleFunc {
 	return stripParamUnlessHook(func(profile *Profile) bool {
 		return profile != nil && profile.ThinkingTokenBudget
@@ -182,9 +193,10 @@ func thinkingTokenBudgetResolve() RuleFunc {
 		}
 		if maxTokens < kimiThinkingBudgetForceZeroBelow {
 			ctx.Document.Set("thinking_token_budget", uint64(0))
-			// The budget alone is a logits processor, which speculative decoding discards. See
-			// gateway-request-filtering.md, "Silencing Kimi's reasoning".
-			return mirrorFieldIntoKwargs(ctx.Document, "thinking", false)
+			// The budget alone is a logits processor, which speculative decoding discards, and the
+			// thinking rule has already mirrored the caller's answer here -- so this overwrites rather
+			// than fills. See gateway-request-filtering.md, "Silencing Kimi's reasoning".
+			return silenceThinkingInKwargs(ctx.Document)
 		}
 		if !ctx.Document.Has("thinking_token_budget") {
 			ctx.Document.Set("thinking_token_budget", maxTokens/kimiThinkingBudgetDivisor)
