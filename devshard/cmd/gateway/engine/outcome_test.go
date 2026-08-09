@@ -634,8 +634,8 @@ func TestTimePerOutputTokenMeasuresTheDecodeWindowAlone(t *testing.T) {
 	attempt.LastChunk = testEpoch.Add(15 * time.Second)
 	attempt.UsageCompletionTokens = 100
 
-	if got, want := attempt.timePerOutputToken(), 100*time.Millisecond; got != want {
-		t.Fatalf("timePerOutputToken() = %v, want %v", got, want)
+	if got, want := TimePerOutputToken(attempt), 100*time.Millisecond; got != want {
+		t.Fatalf("TimePerOutputToken() = %v, want %v", got, want)
 	}
 }
 
@@ -663,8 +663,8 @@ func TestTimePerOutputTokenIsUnreportedWithoutAMeasurableWindow(t *testing.T) {
 			attempt := measurable
 			testCase.mutate(&attempt)
 
-			if got := attempt.timePerOutputToken(); got != 0 {
-				t.Fatalf("timePerOutputToken() = %v, want 0", got)
+			if got := TimePerOutputToken(attempt); got != 0 {
+				t.Fatalf("TimePerOutputToken() = %v, want 0", got)
 			}
 		})
 	}

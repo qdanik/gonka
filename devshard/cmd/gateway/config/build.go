@@ -2,6 +2,7 @@ package config
 
 import (
 	"maps"
+	"slices"
 	"strings"
 
 	"devshard/cmd/gateway/env"
@@ -50,6 +51,11 @@ func Build(values env.Values, overrides Overrides) (*Config, error) {
 	overrideIfSet(&configuration.Accounting.RetentionHours, values.AccountingRetentionHours)
 	overrideIfSet(&configuration.Accounting.RetentionMaxRows, values.AccountingRetentionMaxRows)
 
+	overrideIfSet(&configuration.NonceAccounting.Enabled, values.NonceAccountingEnabled)
+	overrideIfSet(&configuration.NonceAccounting.ListenAddr, values.NonceAccountingListenAddr)
+	overrideIfSet(&configuration.NonceAccounting.RetentionEpochs, values.NonceAccountingRetentionEpochs)
+	overrideIfSet(&configuration.NonceAccounting.SnapshotSeconds, values.NonceAccountingSnapshotSeconds)
+
 	overrideIfSet(&configuration.Capture.Enabled, values.CaptureEnabled)
 	overrideIfSet(&configuration.Capture.Dir, values.CaptureDir)
 	overrideIfSet(&configuration.Capture.SampleRate, values.CaptureSampleRate)
@@ -67,6 +73,9 @@ func Build(values env.Values, overrides Overrides) (*Config, error) {
 	overrideIfSet(&configuration.Limits.AcquireWaitMS, overrides.AcquireWaitMS)
 	overrideIfSet(&configuration.Limits.QueueDepthPerSlot, overrides.QueueDepthPerSlot)
 	overrideIfSet(&configuration.Scheduler.HoldGraceMS, overrides.HoldGraceMS)
+	if overrides.ParticipantAllowlist != nil {
+		configuration.Scheduler.ParticipantAllowlist = slices.Clone(*overrides.ParticipantAllowlist)
+	}
 	overrideIfSet(&configuration.Limits.AIMD.InitialWindow, overrides.AIMDInitialWindow)
 	overrideIfSet(&configuration.Limits.AIMD.MaxWindow, overrides.AIMDMaxWindow)
 	overrideIfSet(&configuration.Limits.Breaker.TripThreshold, overrides.BreakerTripThreshold)

@@ -15,6 +15,11 @@ var (
 	// does not implement tools, so a retry buys the same refusal at the same price.
 	ErrToolsUnsupported = errors.New("no host supports tool calling")
 
+	// ErrAllowlistUnreachable reports that no escrow this gateway serves holds a participant the
+	// allowlist admits. It is separated from ErrNoAvailableHost because waiting cannot fix it: the
+	// operator narrowed routing to participants none of these escrow groups contains.
+	ErrAllowlistUnreachable = errors.New("no escrow holds an allowed participant")
+
 	// ErrNoEscrowCapacity reports that every candidate escrow is at zero spare weight; it deliberately
 	// does not name a host.
 	ErrNoEscrowCapacity = errors.New("no escrow capacity")

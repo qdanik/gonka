@@ -169,16 +169,33 @@ type AttemptOutcome struct {
 	FailureRateExceeded bool
 
 	// Capability is a refusal read off the dispatch error, where the SSE error fields stay empty.
-	Capability    CapabilitySignal
-	ContentSource string
-	ErrorSource   string
-	ErrorCode     string
-	ErrorType     string
-	ErrorMessage  string
-	ErrorPayload  string
+	Capability     CapabilitySignal
+	ContentSource  string
+	UpstreamStatus int
+	UpstreamBody   string
+
+	ErrorSource  string
+	ErrorCode    string
+	ErrorType    string
+	ErrorMessage string
+	ErrorPayload string
 
 	PhaseTransitionAborted bool
 	StateDivergent         bool
+}
+
+const executorStampTruncation = time.Second
+
+// The stamp landed somewhere inside the round trip, so it is compared against that window's midpoint
+// rather than the dispatch, which would charge the host for the outbound leg; half a second is added
+// back because the executor stamps whole seconds downward.
+func ClockOffset(attempt AttemptOutcome) (time.Duration, bool) {
+	if attempt.ConfirmedAt == 0 || attempt.SendTime.IsZero() || !attempt.ReceiptTime.After(attempt.SendTime) {
+		return 0, false
+	}
+	midpoint := attempt.SendTime.Add(attempt.ReceiptTime.Sub(attempt.SendTime) / 2)
+	stamped := time.Unix(attempt.ConfirmedAt, 0).Add(executorStampTruncation / 2)
+	return stamped.Sub(midpoint), true
 }
 
 type AttemptLabels struct {
@@ -331,7 +348,7 @@ func (o RaceOutcome) Sample(a AttemptOutcome) (perf.Sample, SampleExemption) {
 		Responsive:     o.responsive(a),
 		FirstContent:   a.firstContentDelay(),
 
-		TimePerOutputToken: a.timePerOutputToken(),
+		TimePerOutputToken: TimePerOutputToken(a),
 	}, SampleRecorded
 }
 
@@ -420,8 +437,8 @@ func (o RaceOutcome) failureReason(a AttemptOutcome) string {
 	return "unknown"
 }
 
-// timePerOutputToken starts at the first content chunk, so prefill is not charged to decode speed.
-func (a AttemptOutcome) timePerOutputToken() time.Duration {
+// TimePerOutputToken starts at the first content chunk, so prefill is not charged to decode speed.
+func TimePerOutputToken(a AttemptOutcome) time.Duration {
 	if a.UsageCompletionTokens <= 0 || a.FirstContent.IsZero() || !a.LastChunk.After(a.FirstContent) {
 		return 0
 	}

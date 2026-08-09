@@ -3,6 +3,7 @@ package scheduler
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -216,7 +217,9 @@ func (s *Scheduler) predicates(escrow Escrow) func(chain.PhaseSnapshot) availabi
 	stateBlocked := s.stateBlocked(escrow.ID)
 	return func(snapshot chain.PhaseSnapshot) availability {
 		preserved := pocPreserved(snapshot, model)
+		allowed := allowedParticipants(s.settings.Load().Scheduler.ParticipantAllowlist)
 		return availability{
+			notAllowed:  func(participant string) bool { return !allowed(participant) },
 			pocRequired: func(participant string) bool { return !preserved(participant) },
 			throttled:   func(participant string) bool { return !s.limiter.Available(participant, model) },
 			ejected:     func(participant string) bool { return s.perf.Ejected(participant, model) },
@@ -385,4 +388,17 @@ type hostLimiter interface {
 type hostHealth interface {
 	CannotServe(participant string, requiresTools bool, contextHint uint64) (string, bool)
 	Ejected(participant, model string) bool
+}
+
+// allowedParticipants answers true for everybody when the list is empty, so the narrowing exists only
+// where an operator asked for it.
+func allowedParticipants(allowlist []string) func(participant string) bool {
+	if len(allowlist) == 0 {
+		return func(string) bool { return true }
+	}
+	allowed := make(map[string]bool, len(allowlist))
+	for _, participant := range allowlist {
+		allowed[strings.TrimSpace(participant)] = true
+	}
+	return func(participant string) bool { return allowed[participant] }
 }

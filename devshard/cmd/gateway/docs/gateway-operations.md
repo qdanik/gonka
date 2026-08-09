@@ -106,6 +106,10 @@ A name the gateway does not read is ignored in silence, so a typo costs a debugg
 | `GATEWAY_CHAT_CACHE_MAX_BYTES` | memory the response cache may hold |
 | `GATEWAY_ACCOUNTING_RETENTION_HOURS` | how long request records are kept |
 | `GATEWAY_ACCOUNTING_RETENTION_MAX_ROWS` | how many request records are kept |
+| `GATEWAY_NONCE_ACCOUNTING_ENABLED` | whether the per-nonce ledger runs and exports its metrics |
+| `GATEWAY_NONCE_ACCOUNTING_LISTEN_ADDR` | port for the ledger's private JSON API; empty serves none |
+| `GATEWAY_NONCE_ACCOUNTING_RETENTION_EPOCHS` | how far back retired escrows are kept, counted from the current epoch: 2 keeps the current one and the two before it; 0 keeps every one |
+| `GATEWAY_NONCE_ACCOUNTING_SNAPSHOT_SECONDS` | how often the ledger is written to disk |
 | `GATEWAY_CAPTURE_ENABLED` | whether request/response capture is on |
 | `GATEWAY_CAPTURE_DIR` | where captures are written |
 | `GATEWAY_CAPTURE_SAMPLE_RATE` | fraction of requests captured |
@@ -114,11 +118,54 @@ A name the gateway does not read is ignored in silence, so a typo costs a debugg
 
 Plus the per-escrow signing keys, read from arbitrarily named variables referenced by each escrow record. Errors from those name the variable and never the value, so a failure can be logged without leaking key material. A record created before the variables were renamed keeps the old name; the lookup falls back to the  spelling of it and logs which variable it actually read, so the drift is visible rather than silent. A record created before the variables were renamed keeps the old name; the lookup falls back to the `GATEWAY_` spelling of it and logs which variable it actually read, so the drift is visible rather than silent.
 
+### Nonce accounting
+
+Two ledgers with similar names answer different questions, and confusing them wastes an investigation. The **request ledger** (`GATEWAY_ACCOUNTING_*`, served at `/v1/requests/{id}`) records what became of one client request. The **nonce ledger** (`GATEWAY_NONCE_ACCOUNTING_*`) records where every committed nonce went — a request burns several, and some nonces belong to no request at all. Settlement counts nonces, not requests, which is why the second ledger exists.
+
+`GATEWAY_NONCE_ACCOUNTING_ENABLED` builds the ledger and exports it as `devshard_gateway_nonces_*` on the gateway's ordinary metrics endpoint. There is no second port and nothing else to configure: a Prometheus that already scrapes the gateway picks the series up on its next scrape, and `deploy/join/observability/grafana/dashboards/gonka-gateway-escrows.json` reads them.
+
+`GATEWAY_NONCE_ACCOUNTING_LISTEN_ADDR` additionally serves the ledger as JSON on its own port, for a reader that needs what a metric cannot carry: escrow ids and slots are unbounded labels and stay out of Prometheus deliberately.
+
+| Route | Answers |
+| --- | --- |
+| `GET /api/v1/epochs` | every epoch the ledger holds, summed across participants |
+| `GET /api/v1/epochs/{epoch}/participants` | every participant of one epoch |
+| `GET /api/v1/epochs/{epoch}/participants/{address}` | one participant, addressed by its own chain address |
+| `GET /api/v1/escrows` | the escrow ids the ledger holds |
+
+`current` stands in for an epoch index and resolves against the chain's phase snapshot. Epoch `0` is refused rather than served: a zero epoch means "unconstrained" inside the ledger, so answering it would report every epoch as though it were one. `?model=` and `?escrow_id=` narrow the first three routes, and `escrow_id` accepts both repetition and commas.
+
+The participant route is the one the surface exists for: a host operator can ask what this gateway saw of its own participant. An address the epoch holds no record of is a 404 rather than an empty list, so "nothing went wrong" stays distinguishable from "this gateway never routed to you". Every route is read-only and serves one gateway's view of public network behaviour, so the listener carries no authentication; it is still a separate port, and whether it is reachable beyond the deployment is the operator's choice.
+
+**Findings.** Every participant record carries a `findings` array beside its counters: this gateway's reading of what the counters mean, for an operator who needs to know what to look at rather than what was counted. A finding names a stable `code`, a `severity` of `warning` or `critical`, the `observed` numbers behind the reading, and a `detail` that says what the behaviour costs and where to look. Findings are derived on every read and never stored — the counters are the fact, the finding is only an interpretation of them.
+
+| Code | Reads |
+| --- | --- |
+| `execution_timeouts` | acknowledged and never finished — the expensive failure, held to the execution deadline |
+| `refusals` | never acknowledged — the cheap failure, freed at the refusal deadline |
+| `answers_unused` | finished after another host had already answered the client |
+| `throttled_by_gateway` | burned without being sent because this gateway's own window was shut |
+| `ledger_disagrees_with_chain` | more nonces classified than the chain assigned; no host behaviour produces this |
+
+Two rules keep a finding honest. Burned nonces are excluded from every host-behaviour rate, because a burn is this gateway's decision and charging it to the host would report our own throttling as its failure. And a rate is only read once its sample passes a volume floor, mirroring the perf ejector: over a handful of nonces a rate describes the sample rather than the host. The thresholds are constants rather than configuration, so two gateways cannot report the same host differently and a host comparing two reports can tell that the host moved, not the ruler.
+
+What the ledger cannot say: it holds nonce dispositions, not timings, so no finding speaks to prefill or decode rate. The nearest thing it offers is `answers_unused`, where losing races consistently points at throughput.
+
+The metrics are gauges, not counters. A nonce's disposition moves when it is reclassified, so a series goes down as well as up and `rate()` over one reports nonsense. Every `devshard_gateway_nonces_*` series carries an `epoch` label: the ledger holds several epochs at once and a participant keeps its slot across a rotation, so the epoch is what separates two otherwise identical series — and it, not the dashboard's time range, is what a panel must filter on. A cumulative gauge does not respond to a time picker.
+
+**Storage.** The ledger lives in memory and is written whole to `accounting.db` under the storage directory every `GATEWAY_NONCE_ACCOUNTING_SNAPSHOT_SECONDS` and once more at shutdown. Nothing queries that database except the ledger's own load at start-up, so its tables mirror the in-memory shape one for one and a write is a single transaction that empties and refills them. The transaction is what makes a half-written ledger impossible: a crash or a failed insert rolls back to the previous contents rather than leaving the tables empty.
+
+A snapshot that cannot be read is reported and the gateway starts with an empty ledger: refusing to start over an unreadable observability file would trade a gateway for a graph.
+
+Only the nonces whose disposition can still move are written down — those awaiting a timeout, and those an unfinished disposition might yet be lifted from. A burned or finished nonce is already counted and nothing lifts it, so the file stays close to the size of the trouble rather than the size of the history. Two things follow. A nonce whose race died with the process is named `abandoned_by_restart` rather than left pending for ever: no timeout was ever voted on it, and it will still settle as a completed inference nobody checked. And an unfinished nonce is re-asked on every sweep — if the protocol finished it after the race gave up, it leaves the unfinished bucket, because that bucket is what settlement reads as work the participant failed to do.
+
+See gateway-capacity-and-health.md, "Nonce dispositions", for which gateway decision feeds which fact and for what the ledger cannot see.
+
 **Two settings are environment-only and take effect at start-up.** `GATEWAY_CHAT_CACHE_MAX_BYTES` and the `GATEWAY_CAPTURE_*` group are read once when their component is built and are not rebuilt on a settings change. Both are deliberately absent from the override list below, and an override document naming one is rejected rather than accepted and ignored — the decoder refuses unknown fields.
 
-### Admin overrides (21)
+### Admin overrides (24)
 
-Run-time tuning, changeable without a redeploy: `default_max_tokens`, `max_tokens_cap`, `max_concurrent_requests`, `max_concurrent_requests_per_10000_weight`, `poc_max_concurrent_requests_per_10000_weight`, `max_input_tokens_in_flight`, `acquire_wait_ms`, `queue_depth_per_slot`, `hold_grace_ms`, `aimd_initial_window`, `aimd_max_window`, `breaker_trip_threshold`, `breaker_base_open_ms`, `breaker_max_open_ms`, `model_limits`, `model_access`, `disabled`, `disabled_message`, `disabled_redirect_url`, `rotation_enabled`, `rotation_settlement_enabled`, `rotation_pre_poc_blocks`, `rotation_models_json`.
+Run-time tuning, changeable without a redeploy: `default_max_tokens`, `max_tokens_cap`, `max_concurrent_requests`, `max_concurrent_requests_per_10000_weight`, `poc_max_concurrent_requests_per_10000_weight`, `max_input_tokens_in_flight`, `acquire_wait_ms`, `queue_depth_per_slot`, `hold_grace_ms`, `participant_allowlist`, `aimd_initial_window`, `aimd_max_window`, `breaker_trip_threshold`, `breaker_base_open_ms`, `breaker_max_open_ms`, `model_limits`, `model_access`, `disabled`, `disabled_message`, `disabled_redirect_url`, `rotation_enabled`, `rotation_settlement_enabled`, `rotation_pre_poc_blocks`, `rotation_models_json`.
 
 An unknown field in an override document is an **error**, not a silently ignored key: a typo in an admin PUT must be reported.
 

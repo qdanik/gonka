@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -523,5 +525,64 @@ func TestRunAttemptCountsEveryChunkEvenWhenNoneCarriedContent(t *testing.T) {
 				t.Errorf("StreamChunks = %d, want %d", done.Outcome.StreamChunks, testCase.wantStreamChunks)
 			}
 		})
+	}
+}
+
+func TestUpstreamRefusalKeepsTheHostsOwnWords(t *testing.T) {
+	t.Parallel()
+
+	status, body := upstreamRefusal(statusError("/v1/chat/completions", http.StatusServiceUnavailable, "  no healthy upstream  "))
+
+	if status != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want the one the host answered with", status)
+	}
+	if body != "no healthy upstream" {
+		t.Fatalf("body = %q, want the host's reason trimmed", body)
+	}
+}
+
+// A log line needs the reason, not the payload: an unbounded body would put a host's whole error
+// document into every line that carried it.
+func TestUpstreamRefusalTruncatesALongBody(t *testing.T) {
+	t.Parallel()
+
+	_, body := upstreamRefusal(statusError("/v1/chat/completions", http.StatusServiceUnavailable,
+		strings.Repeat("x", maxUpstreamBodyLogged*3)))
+
+	if len(body) != maxUpstreamBodyLogged {
+		t.Fatalf("body length = %d, want it capped at %d", len(body), maxUpstreamBodyLogged)
+	}
+}
+
+func TestUpstreamRefusalIsEmptyForANonStatusError(t *testing.T) {
+	t.Parallel()
+
+	status, body := upstreamRefusal(io.EOF)
+
+	if status != 0 || body != "" {
+		t.Fatalf("got status %d body %q, want nothing for an error that carries no status", status, body)
+	}
+}
+
+// The refusal must survive the whole attempt, not just the helper that reads it: without this the
+// wiring can be removed and only the isolated unit test would still pass.
+func TestRunAttempt_CarriesTheRefusalIntoTheOutcome(t *testing.T) {
+	t.Parallel()
+
+	fixture := newAttemptFixture(
+		&fakeDispatcher{err: statusError("/v1/devshard/chat/completions", http.StatusServiceUnavailable, "no healthy upstream")},
+		&fakeClassifier{})
+
+	runAttempt(context.Background(), fixture.spec)
+	done := doneEvent(t, fixture.drain())
+
+	if done.Outcome.Terminal != TerminalUnavailable {
+		t.Fatalf("terminal = %v, want %v", done.Outcome.Terminal, TerminalUnavailable)
+	}
+	if done.Outcome.UpstreamStatus != http.StatusServiceUnavailable {
+		t.Fatalf("upstream status = %d, want the host's own", done.Outcome.UpstreamStatus)
+	}
+	if done.Outcome.UpstreamBody != "no healthy upstream" {
+		t.Fatalf("upstream body = %q, want the host's reason", done.Outcome.UpstreamBody)
 	}
 }

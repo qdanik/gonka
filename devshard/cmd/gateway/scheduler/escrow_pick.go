@@ -3,6 +3,7 @@ package scheduler
 import (
 	"fmt"
 	"math"
+	"slices"
 
 	"devshard/cmd/gateway/chain"
 	"devshard/types"
@@ -34,13 +35,21 @@ func (s *Scheduler) pickEscrow(profile RequestProfile, snapshot chain.PhaseSnaps
 		}
 		return Escrow{}, fmt.Errorf("escrow %q for model %q: %w", profile.Escrow, profile.Model, ErrEscrowGone)
 	}
+	// The allowlist is read here as well as at dispatch: an escrow whose whole group it refuses can
+	// never serve, and picking it by load alone spends the request on a group holding nobody.
+	reachable := reachableByAllowlist(s.participantAllowlist())
 
 	// Ties hold indices rather than candidates: an index does not escape the way a returned Escrow does,
 	// so the common case picks without touching the heap at all.
 	bestScore := math.Inf(1)
 	var tied []int
+	admitted := 0
 	declined := ""
 	for index, candidate := range candidates {
+		if !reachable(candidate) {
+			continue
+		}
+		admitted++
 		if reason := exhaustionReason(candidate, snapshot.MaxNonce, reserveTokens); reason != "" {
 			declined = reason
 			// Routing only declines it; replacing it belongs to the rotation lifecycle, which
@@ -59,6 +68,10 @@ func (s *Scheduler) pickEscrow(profile RequestProfile, snapshot chain.PhaseSnaps
 		case score == bestScore:
 			tied = append(tied, index)
 		}
+	}
+
+	if admitted == 0 && len(candidates) > 0 {
+		return Escrow{}, ErrAllowlistUnreachable
 	}
 
 	switch len(tied) {
@@ -140,4 +153,24 @@ func safeMul(left, right uint64) (uint64, bool) {
 	}
 	product := left * right
 	return product, product/left == right
+}
+
+// reachableByAllowlist is built once per pick rather than per candidate, and an empty allowlist skips
+// the walk entirely: narrowing exists only where an operator asked for it.
+func reachableByAllowlist(allowlist []string) func(Escrow) bool {
+	if len(allowlist) == 0 {
+		return func(Escrow) bool { return true }
+	}
+	allowed := allowedParticipants(allowlist)
+	return func(candidate Escrow) bool {
+		return candidate.Session != nil &&
+			slices.ContainsFunc(candidate.Session.ParticipantKeys(), allowed)
+	}
+}
+
+func (s *Scheduler) participantAllowlist() []string {
+	if s.settings == nil {
+		return nil
+	}
+	return s.settings.Load().Scheduler.ParticipantAllowlist
 }

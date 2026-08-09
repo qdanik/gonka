@@ -523,12 +523,13 @@ func TestShutdownStopsAcceptingFirstAndClosesTheStoreLast(t *testing.T) {
 	steps := shutdownOrder(
 		recorder("http server"), recorder("races"), recorder("dispatchers"),
 		recorder("escrow lifecycle"), recorder("chain observer"),
-		recorder("escrow sessions"), recorder("store"), recorder("public api connections"))
+		recorder("escrow sessions"), recorder("nonce accounting"), recorder("store"),
+		recorder("public api connections"))
 	if err := stopAll(context.Background(), steps); err != nil {
 		t.Fatalf("stopAll(): %v", err)
 	}
 
-	want := []string{"http server", "races", "dispatchers", "escrow lifecycle", "chain observer", "escrow sessions", "store", "public api connections"}
+	want := []string{"http server", "races", "dispatchers", "escrow lifecycle", "chain observer", "escrow sessions", "nonce accounting", "store", "public api connections"}
 	assertSame(t, "shutdown sequence", sequence, want)
 }
 
@@ -570,7 +571,8 @@ func TestShutdownReachesTheStoreEvenWhenAnEarlierStepFails(t *testing.T) {
 	steps := shutdownOrder(
 		failing, recorder("races"), recorder("dispatchers"),
 		recorder("escrow lifecycle"), recorder("chain observer"),
-		recorder("escrow sessions"), recorder("store"), recorder("public api connections"))
+		recorder("escrow sessions"), recorder("nonce accounting"), recorder("store"),
+		recorder("public api connections"))
 	err := stopAll(context.Background(), steps)
 
 	if err == nil || !strings.Contains(err.Error(), "listener stuck") {

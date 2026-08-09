@@ -44,6 +44,12 @@ func attemptDeliveryFields(outcome AttemptOutcome) []any {
 			logkey.MaxGapAtChunk, outcome.MaxChunkGapAt,
 			logkey.MeanGapMS, outcome.MeanChunkGap.Milliseconds())
 	}
+	if outcome.UpstreamStatus != 0 {
+		fields = append(fields, logkey.UpstreamStatus, outcome.UpstreamStatus)
+		if outcome.UpstreamBody != "" {
+			fields = append(fields, logkey.UpstreamBody, outcome.UpstreamBody)
+		}
+	}
 	for _, span := range []struct {
 		name  string
 		until time.Time

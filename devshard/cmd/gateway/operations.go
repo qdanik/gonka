@@ -90,6 +90,7 @@ type operations struct {
 	manager      escrowLifecycle
 	participants *limits.ParticipantLimiter
 	storageDir   string
+	nonces       *nonceAccounting
 }
 
 // CreateEscrow takes the name of the variable holding the signing key, never the key. See
@@ -180,6 +181,10 @@ func (o *operations) Unquarantine(_ context.Context, participantKey string) erro
 	}
 	return nil
 }
+func (o *operations) ResetNonceAccounting(context.Context) error {
+	return o.nonces.reset()
+}
+
 func (o *operations) Reconfigure(ctx context.Context, overrides config.Overrides) error {
 	next, err := config.Build(o.values, overrides)
 	if err != nil {

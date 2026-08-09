@@ -62,6 +62,9 @@ func Defaults() Config {
 			RetentionHours:   168,
 			RetentionMaxRows: 1_000_000,
 		},
+		NonceAccounting: NonceAccounting{
+			SnapshotSeconds: 300,
+		},
 		Capture: Capture{
 			SampleRate: 0.01,
 			MaxBytes:   1 << 30,

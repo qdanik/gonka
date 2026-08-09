@@ -12,6 +12,7 @@ type availability struct {
 	pocRequired  func(participant string) bool
 	throttled    func(participant string) bool
 	ejected      func(participant string) bool
+	notAllowed   func(participant string) bool
 	capability   func(participant string, profile RequestProfile) (reason string, blocked bool)
 	stateBlocked func(participant string) bool
 }
@@ -23,6 +24,7 @@ const (
 	blockPoCRequired
 	blockThrottled
 	blockEjected
+	blockNotAllowed
 	blockExcluded
 	blockStateDiverged
 	blockCapability
@@ -34,11 +36,20 @@ var ghostFor = map[blockReason]GhostKind{
 	blockPoCRequired: ghostPoC,
 	blockThrottled:   ghostThrottled,
 	blockEjected:     ghostEjected,
+	blockNotAllowed:  ghostNotAllowed,
+}
+
+// outsideAllowlist reads a missing predicate as no allowlist at all, so a caller that builds an
+// availability without one narrows dispatch to nobody by accident.
+func (a availability) outsideAllowlist(participant string) bool {
+	return a.notAllowed != nil && a.notAllowed(participant)
 }
 
 // participantBlocked is the half of blocks that needs no waiter, so match and blocks share one ladder.
 func (a availability) participantBlocked(participant string) blockReason {
 	switch {
+	case a.outsideAllowlist(participant):
+		return blockNotAllowed
 	case a.pocRequired(participant):
 		return blockPoCRequired
 	case a.throttled(participant):

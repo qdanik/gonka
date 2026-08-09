@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"net/url"
+	"strings"
 )
 
 // Validate reports every problem in the snapshot at once. Field names in
@@ -126,6 +127,12 @@ func (c *Config) Validate() error {
 	if c.Accounting.RetentionMaxRows < 1 {
 		complain("accounting_retention_max_rows: %d must be >= 1", c.Accounting.RetentionMaxRows)
 	}
+	if c.NonceAccounting.RetentionEpochs < 0 {
+		complain("nonce_accounting_retention_epochs: %d must be >= 0", c.NonceAccounting.RetentionEpochs)
+	}
+	if c.NonceAccounting.SnapshotSeconds < 1 {
+		complain("nonce_accounting_snapshot_seconds: %d must be >= 1", c.NonceAccounting.SnapshotSeconds)
+	}
 	if c.Capture.SampleRate < 0 || c.Capture.SampleRate > 1 {
 		complain("capture_sample_rate: %v must be in [0, 1]", c.Capture.SampleRate)
 	}
@@ -199,6 +206,11 @@ func (c *Config) Validate() error {
 	// budget guard, not a taste judgement.
 	if c.Scheduler.HoldGraceMS < 0 || c.Scheduler.HoldGraceMS > 5_000 {
 		complain("scheduler_hold_grace_ms: %d must be in [0, 5000]", c.Scheduler.HoldGraceMS)
+	}
+	for index, participant := range c.Scheduler.ParticipantAllowlist {
+		if strings.TrimSpace(participant) == "" {
+			complain("scheduler_participant_allowlist[%d]: must not be blank", index)
+		}
 	}
 
 	if len(problems) > 0 {

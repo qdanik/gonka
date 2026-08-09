@@ -111,7 +111,7 @@ Two details in `compose` are load-bearing.
 
 ## Shutdown
 
-Shutdown order is a contract, not an implementation detail (`main.go`, `shutdownOrder`). Eight steps, in this order:
+Shutdown order is a contract, not an implementation detail (`main.go`, `shutdownOrder`). Nine steps, in this order:
 
 1. **HTTP server** — stop accepting, so nothing new enters.
 2. **Races** — in-flight races drain to the vote that settles their nonces. This needs every step below it still alive.
@@ -119,8 +119,9 @@ Shutdown order is a contract, not an implementation detail (`main.go`, `shutdown
 4. **Escrow lifecycle** — the rotation and settlement tick.
 5. **Chain observer** — the pollers.
 6. **Escrow sessions** — the registry, which holds every escrow session's SQLite handle.
-7. **Store** — second to last, because closing it drains the accounting ledger, and a queued row must not outlive the connection it needs. Closing the gateway store while escrow sessions still hold their own handles is the same bug one level down, which is why the registry closes first.
-8. **Chain connections** — last. Every step above can still reach the chain, and a socket closed earlier is a socket the next poll must re-dial.
+7. **Nonce accounting** — the per-nonce ledger's listener and its retention loop, stopped once every emitter above has stopped. Absent unless the ledger is configured, in which case the step is a no-op.
+8. **Store** — second to last, because closing it drains the accounting ledger, and a queued row must not outlive the connection it needs. Closing the gateway store while escrow sessions still hold their own handles is the same bug one level down, which is why the registry closes first.
+9. **Chain connections** — last. Every step above can still reach the chain, and a socket closed earlier is a socket the next poll must re-dial.
 
 Two properties of the runner matter as much as the order.
 

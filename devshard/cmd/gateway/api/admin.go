@@ -156,6 +156,18 @@ func (s *Server) handleAdminUnquarantine(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusOK, map[string]any{"participant_key": participantKey})
 }
 
+func (s *Server) handleAdminResetNonceAccounting(w http.ResponseWriter, r *http.Request) {
+	if !allowMethods(w, r, http.MethodPost) {
+		return
+	}
+	if err := s.operations.ResetNonceAccounting(r.Context()); err != nil {
+		writeErrorFor(w, err)
+		return
+	}
+	auditAdmin("nonce accounting reset")
+	writeJSON(w, http.StatusOK, map[string]any{"reset": true})
+}
+
 func (s *Server) handleDebugRotation(w http.ResponseWriter, r *http.Request) {
 	if !allowMethods(w, r, http.MethodGet) {
 		return

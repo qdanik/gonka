@@ -280,12 +280,22 @@ type capabilityVerdict struct {
 	blocked bool
 }
 
+// memoiseOrNil keeps a predicate nobody set nil rather than wrapping it, so the reader above can tell
+// "no allowlist" from "an allowlist that refuses everybody".
+func memoiseOrNil(predicate func(string) bool) func(string) bool {
+	if predicate == nil {
+		return nil
+	}
+	return memoise(predicate)
+}
+
 func freeze(live availability) availability {
 	capabilities := map[capabilityKey]capabilityVerdict{}
 	return availability{
 		pocRequired:  memoise(live.pocRequired),
 		throttled:    memoise(live.throttled),
 		ejected:      memoise(live.ejected),
+		notAllowed:   memoiseOrNil(live.notAllowed),
 		stateBlocked: memoise(live.stateBlocked),
 		capability: func(participant string, profile RequestProfile) (string, bool) {
 			key := capabilityKey{

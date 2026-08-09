@@ -4,6 +4,7 @@ import (
 	"sync"
 
 	"devshard/cmd/gateway/chain"
+	"devshard/cmd/gateway/engine"
 	"devshard/cmd/gateway/internal/logkey"
 	"devshard/cmd/gateway/metrics"
 	"devshard/logging"
@@ -12,7 +13,10 @@ import (
 // tracedDispatches narrates the dispatch events an operator would otherwise have to infer from a
 // counter's slope, and forwards every one to the recorder. It wraps rather than living inside metrics
 // because counting and narrating are different jobs, and the scheduler stays free of a logger.
-type tracedDispatches struct{ recorder *metrics.DispatchRecorder }
+type tracedDispatches struct {
+	recorder *metrics.DispatchRecorder
+	ledger   *nonceAccounting
+}
 
 // GhostBurned is a nonce that cost money on chain and will serve nobody. The nonce is logged and never
 // labelled: a counter keyed by it would grow without end.
@@ -20,6 +24,7 @@ func (t tracedDispatches) GhostBurned(escrowID string, nonce uint64, participant
 	logging.Warn("nonce burned for nobody",
 		logkey.Escrow, escrowID, logkey.Nonce, nonce, logkey.Host, participant, logkey.Reason, reason)
 	t.recorder.GhostBurned(escrowID, participant, reason)
+	t.ledger.recordGhost(escrowID, nonce, reason)
 }
 
 // BurnBudgetExhausted means the escrow stopped burning nonces to answer requests it cannot serve, so
@@ -89,4 +94,27 @@ func (n *phaseNarrator) observe(snapshot chain.PhaseSnapshot) {
 	if !first {
 		logging.Info("chain unblocked requests", logkey.Epoch, snapshot.EpochIndex, logkey.Height, snapshot.BlockHeight)
 	}
+}
+
+// nonceAccountedRaces hands one race outcome to both readers of it. The recorder asks how the fleet
+// performed; the ledger asks where each nonce went. Neither question belongs inside the other, and the
+// engine should know about neither.
+type nonceAccountedRaces struct {
+	recorder *metrics.RaceRecorder
+	ledger   *nonceAccounting
+}
+
+func (r nonceAccountedRaces) RecordRace(outcome engine.RaceOutcome) {
+	r.recorder.RecordRace(outcome)
+	r.ledger.recordRace(outcome)
+}
+
+func (r nonceAccountedRaces) RecordTimeout(event engine.TimeoutEvent) {
+	r.recorder.RecordTimeout(event)
+	r.ledger.recordTimeout(event)
+}
+
+// RecordClassifyOverflow passes straight through: an overflowing classifier says nothing about a nonce.
+func (r nonceAccountedRaces) RecordClassifyOverflow(participant, model string) {
+	r.recorder.RecordClassifyOverflow(participant, model)
 }

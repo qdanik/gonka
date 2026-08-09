@@ -28,6 +28,8 @@ const (
 	UsageTokens    = "usage_tokens"
 	DroppedEvents  = "dropped_events"
 	MaxGapMS       = "max_gap_ms"
+	UpstreamStatus = "upstream_status"
+	UpstreamBody   = "upstream_body"
 	MaxGapAtChunk  = "max_gap_at_chunk"
 	MeanGapMS      = "mean_gap_ms"
 	ReceiptMS      = "receipt_ms"
@@ -70,6 +72,7 @@ const (
 // Process and transport.
 const (
 	Port       = "port"
+	Addr       = "addr"
 	StorageDir = "storage_dir"
 	Version    = "version"
 	Subsystem  = "subsystem"

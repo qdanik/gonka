@@ -37,6 +37,7 @@ type TimeoutPoster interface {
 }
 
 type TimeoutEvent struct {
+	EscrowID    string
 	Participant string
 	Model       string
 	Nonce       uint64
@@ -100,6 +101,7 @@ func (o RaceOutcome) TimeoutPlan() []TimeoutStep {
 			Nonce:     attempt.Nonce,
 			StartedAt: attempt.StartedAt,
 			Event: TimeoutEvent{
+				EscrowID:    o.EscrowID,
 				Participant: attempt.Participant,
 				Model:       o.Model,
 				Nonce:       attempt.Nonce,

@@ -13,6 +13,8 @@ import (
 	"devshard/transport"
 )
 
+const maxUpstreamBodyLogged = 256
+
 // ErrStateRootDivergence is wrapped by the dispatcher adapter around the session's own detection, so
 // the race can branch on a diverging post state root without reading upstream error text.
 var ErrStateRootDivergence = errors.New("post state root divergence")
@@ -143,6 +145,9 @@ type attemptState struct {
 	stateDivergent bool
 	terminal       Terminal
 	lifecycle      Lifecycle
+
+	upstreamStatus int
+	upstreamBody   string
 }
 
 func runAttempt(ctx context.Context, spec AttemptSpec) {
@@ -269,6 +274,7 @@ func (s *attemptState) classify(ctx context.Context, spec AttemptSpec, err error
 	if err != nil {
 		s.lifecycle.EscrowMissing = transport.IsUpstreamEscrowNotFound(err)
 		s.stateDivergent = errors.Is(err, ErrStateRootDivergence)
+		s.upstreamStatus, s.upstreamBody = upstreamRefusal(err)
 		s.terminal = classifyDispatchError(ctx, err)
 		s.capability = capabilityOfDispatchError(err)
 		return
@@ -289,6 +295,20 @@ func (s *attemptState) classify(ctx context.Context, spec AttemptSpec, err error
 	default:
 		s.terminal = TerminalEmptyStream
 	}
+}
+
+// upstreamRefusal keeps what the host said when it refused. The body is truncated because a log line
+// needs the reason, not the payload.
+func upstreamRefusal(err error) (int, string) {
+	var status *transport.UpstreamStatusError
+	if !errors.As(err, &status) {
+		return 0, ""
+	}
+	body := strings.TrimSpace(status.Body)
+	if len(body) > maxUpstreamBodyLogged {
+		body = body[:maxUpstreamBodyLogged]
+	}
+	return status.StatusCode, body
 }
 
 func classifyDispatchError(ctx context.Context, err error) Terminal {
@@ -350,6 +370,9 @@ func (s *attemptState) outcome(spec AttemptSpec) *AttemptOutcome {
 		Terminal:    s.terminal,
 		Confirmed:   s.confirmed,
 		ConfirmedAt: s.confirmedAt,
+
+		UpstreamStatus: s.upstreamStatus,
+		UpstreamBody:   s.upstreamBody,
 
 		ContentSource: s.contentSource,
 		Capability:    s.capability,

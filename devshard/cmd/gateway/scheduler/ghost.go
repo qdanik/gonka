@@ -7,11 +7,9 @@ const (
 	ghostPoC GhostKind = iota
 	ghostThrottled
 	ghostEjected
+	ghostNotAllowed
 	ghostCapability
 	ghostExclude
-	// ghostAbandoned is the one kind that is not a probe: the nonce carries the caller's real params.
-	// ghostAbandoned accounts a nonce that was committed for a request whose caller vanished before
-	// the assignment reached it; the nonce is spent either way and must still have an owner.
 	ghostAbandoned
 )
 
@@ -23,6 +21,8 @@ func (k GhostKind) reason() string {
 		return "participant_throttled_no_send"
 	case ghostEjected:
 		return "participant_ejected_no_send"
+	case ghostNotAllowed:
+		return "participant_outside_allowlist"
 	case ghostCapability:
 		return "participant_capability_no_send"
 	case ghostExclude:

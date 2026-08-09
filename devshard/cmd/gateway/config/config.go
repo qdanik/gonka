@@ -105,6 +105,17 @@ type Accounting struct {
 	RetentionMaxRows int64
 }
 
+// NonceAccounting configures the per-nonce ledger, which answers a different question than Accounting:
+// where every committed nonce went, rather than what became of one client request. It reaches an
+// operator as devshard_gateway_nonces_* on the gateway's own metrics endpoint. RetentionEpochs of 0
+// keeps every epoch.
+type NonceAccounting struct {
+	Enabled         bool
+	ListenAddr      string
+	RetentionEpochs int64
+	SnapshotSeconds int64
+}
+
 // Capture bounds the request-capture sink. An empty Dir means <storageDir>/captured-requests, SampleRate
 // runs from 1 (every matching request) to 0 (none), and MaxBytes ceilings what the directory may hold.
 type Capture struct {
@@ -151,7 +162,8 @@ type Engine struct {
 // Scheduler groups nonce-holding tuning. HoldGraceMS is how long a bound nonce waits for a co-arriving
 // compatible request before it is burned; 0 burns immediately.
 type Scheduler struct {
-	HoldGraceMS int64
+	HoldGraceMS          int64
+	ParticipantAllowlist []string
 }
 
 // Config is the complete immutable gateway configuration snapshot.
@@ -169,6 +181,8 @@ type Config struct {
 	Perf       Perf
 	Engine     Engine
 	Scheduler  Scheduler
+
+	NonceAccounting NonceAccounting
 }
 
 const (

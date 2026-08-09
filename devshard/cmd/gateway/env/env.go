@@ -50,6 +50,11 @@ type Values struct {
 	AccountingRetentionHours   *int64
 	AccountingRetentionMaxRows *int64
 
+	NonceAccountingEnabled         *bool
+	NonceAccountingListenAddr      *string
+	NonceAccountingRetentionEpochs *int64
+	NonceAccountingSnapshotSeconds *int64
+
 	CaptureEnabled    *bool
 	CaptureDir        *string
 	CaptureSampleRate *float64
@@ -210,6 +215,11 @@ func Load() (Values, error) {
 
 	readInt("GATEWAY_ACCOUNTING_RETENTION_HOURS", &values.AccountingRetentionHours)
 	readInt("GATEWAY_ACCOUNTING_RETENTION_MAX_ROWS", &values.AccountingRetentionMaxRows)
+
+	readBool("GATEWAY_NONCE_ACCOUNTING_ENABLED", &values.NonceAccountingEnabled)
+	readString("GATEWAY_NONCE_ACCOUNTING_LISTEN_ADDR", &values.NonceAccountingListenAddr)
+	readInt("GATEWAY_NONCE_ACCOUNTING_RETENTION_EPOCHS", &values.NonceAccountingRetentionEpochs)
+	readInt("GATEWAY_NONCE_ACCOUNTING_SNAPSHOT_SECONDS", &values.NonceAccountingSnapshotSeconds)
 
 	readBool("GATEWAY_CAPTURE_ENABLED", &values.CaptureEnabled)
 	readString("GATEWAY_CAPTURE_DIR", &values.CaptureDir)

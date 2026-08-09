@@ -9,27 +9,16 @@ import (
 	"devshard/logging"
 )
 
-// executorStampTruncation is the second the executor's Unix() stamp rounds away, always downward, so
-// half of it is added back before the comparison: without it a correct clock reads half a second slow.
-const executorStampTruncation = time.Second
-
-// hostClockOffset reads the receipt, which the executor signs before inference: `created` would carry
-// a busy host's admission and prefill delay too. The stamp landed somewhere inside the round trip, so
-// it is compared against that window's midpoint rather than against the dispatch, which would charge
-// the host for the outbound leg. The executor stamps whole seconds, leaving under a second of it.
 func hostClockOffset(outcome engine.RaceOutcome) (offsetMS, roundTripMS int64, stamped bool) {
 	for _, attempt := range outcome.Attempts {
-		if !outcome.IsWinner(attempt) || attempt.ConfirmedAt == 0 {
+		if !outcome.IsWinner(attempt) {
 			continue
 		}
-		if attempt.SendTime.IsZero() || !attempt.ReceiptTime.After(attempt.SendTime) {
+		offset, measured := engine.ClockOffset(attempt)
+		if !measured {
 			continue
 		}
-		roundTrip := attempt.ReceiptTime.Sub(attempt.SendTime)
-		midpoint := attempt.SendTime.Add(roundTrip / 2)
-		stamped := time.Unix(attempt.ConfirmedAt, 0).Add(executorStampTruncation / 2)
-		return stamped.Sub(midpoint).Milliseconds(),
-			roundTrip.Milliseconds(), true
+		return offset.Milliseconds(), attempt.ReceiptTime.Sub(attempt.SendTime).Milliseconds(), true
 	}
 	return 0, 0, false
 }

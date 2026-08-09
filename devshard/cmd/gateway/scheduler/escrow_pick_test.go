@@ -2,7 +2,9 @@ package scheduler
 
 import (
 	"errors"
+	"maps"
 	"math"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -14,11 +16,12 @@ import (
 const modelA = "model-a"
 
 type fakeSession struct {
-	balance     uint64
-	tokenPrice  uint64
-	latestNonce uint64
-	groupSize   int
-	calls       []string
+	balance      uint64
+	tokenPrice   uint64
+	latestNonce  uint64
+	groupSize    int
+	participants []string
+	calls        []string
 }
 
 func (f *fakeSession) Advance(func(HostBinding) NonceIntent) (Prepared, error) {
@@ -28,7 +31,7 @@ func (f *fakeSession) Advance(func(HostBinding) NonceIntent) (Prepared, error) {
 
 func (f *fakeSession) ParticipantKeys() []string {
 	f.calls = append(f.calls, "ParticipantKeys")
-	return nil
+	return f.participants
 }
 
 func (f *fakeSession) GroupSize() int {
@@ -554,5 +557,66 @@ func TestReserveTokensCountsThePromptAndTheAnswerCap(t *testing.T) {
 	}
 	if got := (&Scheduler{}).reserveTokens(RequestProfile{InputTokens: 1_000}); got != 0 {
 		t.Fatalf("reserveTokens = %d before any configuration loaded, want an unpriced 0", got)
+	}
+}
+
+// schedulerWithAllowlist wires the settings the picker reads, which the plain constructor leaves nil.
+func schedulerWithAllowlist(t *testing.T, allowlist []string, groups map[string][]string) *Scheduler {
+	t.Helper()
+	configuration := config.Defaults()
+	configuration.Scheduler.ParticipantAllowlist = allowlist
+	holder := &config.Holder{}
+	holder.Swap(&configuration)
+
+	escrows := &fakeEscrows{byModel: map[string][]Escrow{}}
+	weights := &fakeWeights{byEscrow: map[string]float64{}}
+	for _, escrowID := range slices.Sorted(maps.Keys(groups)) {
+		escrows.byModel[modelA] = append(escrows.byModel[modelA], Escrow{
+			ID:      escrowID,
+			Model:   modelA,
+			Session: &fakeSession{groupSize: 4, participants: groups[escrowID]},
+		})
+		weights.byEscrow[escrowID] = 1
+	}
+	return &Scheduler{escrows: escrows, capacity: weights, settings: holder}
+}
+
+// The escrow is chosen before its participants are consulted, so an escrow whose whole group the
+// allowlist refuses must not be a candidate at all: picking it by load spends the request on a group
+// holding nobody, and the caller sees "no available host" for a routing decision it cannot influence.
+func TestPickEscrowSkipsAnEscrowHoldingNoAllowedParticipant(t *testing.T) {
+	scheduler := schedulerWithAllowlist(t, []string{"allowed"}, map[string][]string{
+		"crowded": {"someone-else", "another"},
+		"lonely":  {"allowed"},
+	})
+
+	picked, err := scheduler.pickEscrow(RequestProfile{Model: modelA}, chain.PhaseSnapshot{})
+
+	if err != nil {
+		t.Fatalf("pickEscrow(): %v", err)
+	}
+	if picked.ID != "lonely" {
+		t.Fatalf("picked %q, want the only escrow whose group holds an allowed participant", picked.ID)
+	}
+}
+
+func TestPickEscrowReportsAnAllowlistNoEscrowCanReach(t *testing.T) {
+	scheduler := schedulerWithAllowlist(t, []string{"nobody-holds-this"}, map[string][]string{
+		"one": {"someone-else"},
+		"two": {"another"},
+	})
+
+	_, err := scheduler.pickEscrow(RequestProfile{Model: modelA}, chain.PhaseSnapshot{})
+
+	if !errors.Is(err, ErrAllowlistUnreachable) {
+		t.Fatalf("pickEscrow() = %v, want ErrAllowlistUnreachable", err)
+	}
+}
+
+func TestPickEscrowIgnoresTheAllowlistWhenItIsEmpty(t *testing.T) {
+	scheduler := schedulerWithAllowlist(t, nil, map[string][]string{"one": {"anybody"}})
+
+	if _, err := scheduler.pickEscrow(RequestProfile{Model: modelA}, chain.PhaseSnapshot{}); err != nil {
+		t.Fatalf("pickEscrow() with no allowlist: %v", err)
 	}
 }

@@ -24,7 +24,10 @@ const (
 	reasonBalanceExhausted = "balance_exhausted"
 )
 
-var latencyBuckets = prometheus.ExponentialBuckets(0.01, 2, 12)
+// The top bucket has to clear the slowest attempt the engine permits, not the fastest it expects:
+// a quantile cannot report above the highest finite bound, so a short ladder silently pins p95
+// there. Nineteen buckets reach 2621s, past the 2400s drain timeout.
+var latencyBuckets = prometheus.ExponentialBuckets(0.01, 2, 19)
 
 // chunkGapBuckets reach past the stall timeout: latencyBuckets stop at 20s, so every stall would
 // land in +Inf, which is the one case these exist to separate.

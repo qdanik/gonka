@@ -98,6 +98,7 @@ type gateway struct {
 	telemetry    *metrics.Metrics
 	server       *http.Server
 	publicAPI    *http.Client
+	nonces       *nonceAccounting
 
 	builders     int
 	devshardWork chan struct{}
@@ -147,6 +148,8 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 		return nil, err
 	}
 
+	nonces := openNonceAccounting(configuration.NonceAccounting, storageDir, observer, clock)
+
 	participants := limits.NewParticipantLimiter(limits.ParticipantConfigFromLimits(configuration.Limits), clock)
 	capacity := limits.NewCapacity(participants.Available)
 	observer.Subscribe(capacity.Update)
@@ -171,6 +174,7 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 		Config:       configHolder,
 		Depletion:    depletion,
 		Dispatches:   metrics.NewDispatchRecorder(telemetry),
+		Ledger:       nonces,
 		Now:          clock,
 	})
 	manager := escrow.NewManager(escrow.Deps{
@@ -205,7 +209,7 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 		Perf:       hosts,
 		Snapshots:  observer,
 		Config:     configHolder,
-		Metrics:    metrics.NewRaceRecorder(telemetry),
+		Metrics:    nonceAccountedRaces{recorder: metrics.NewRaceRecorder(telemetry), ledger: nonces},
 		Ledger:     api.NewRaceLedger(ledger),
 		Lifecycle:  manager,
 		Suspicious: suspicious.Suspicious,
@@ -215,6 +219,7 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 	// One wrapper for both readers: the gauge must report the scale admission actually applies, and
 	// only this type knows the operator's relaxed-mode override of the chain's raw blocking state.
 	modelCapacities := modelCapacity{capacity: capacity, snapshots: observer, config: configHolder}
+	telemetry.Register(nonces.collectors()...)
 	telemetry.Register(
 		metrics.NewLimitsCollector(metrics.LimitsSources{
 			Limiter:      gatewayLimiter,
@@ -251,6 +256,7 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 			manager:      manager,
 			participants: participants,
 			storageDir:   storageDir,
+			nonces:       nonces,
 		},
 		Suspicious: suspicious,
 		Telemetry:  telemetry,
@@ -279,6 +285,7 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 		telemetry:    telemetry,
 		server:       server.HTTPServer(fmt.Sprintf(":%d", configuration.Server.Port)),
 		publicAPI:    boot.client,
+		nonces:       nonces,
 		builders:     boot.builders,
 		devshardWork: devshardWork,
 	}, nil
@@ -294,6 +301,7 @@ type routingDeps struct {
 	Config       *config.Holder
 	Depletion    *depletionNotice
 	Dispatches   *metrics.DispatchRecorder
+	Ledger       *nonceAccounting
 	Now          func() time.Time
 }
 
@@ -314,7 +322,7 @@ func newRouting(deps routingDeps) (*registry.Registry, *scheduler.Scheduler) {
 		Perf:              deps.Hosts,
 		Snapshots:         deps.Snapshots,
 		Config:            deps.Config,
-		Observer:          tracedDispatches{recorder: deps.Dispatches},
+		Observer:          tracedDispatches{recorder: deps.Dispatches, ledger: deps.Ledger},
 		Now:               deps.Now,
 		OnEscrowExhausted: escrows.Exhausted,
 	})

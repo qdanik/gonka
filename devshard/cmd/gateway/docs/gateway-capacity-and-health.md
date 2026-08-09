@@ -193,3 +193,32 @@ That ratio is where `queue_depth_per_slot` comes from: five minutes against a 10
 Two gates can refuse, and they answer different questions. The gateway limiter asks whether there is budget — concurrency, input tokens, chain weights. The scheduler asks whether a live host will take it — participant windows, breakers, chain phase. A request can pass the first and stall at the second; production has shown exactly that, with zero limiter refusals and nine scheduler refusals in one burst. The budget is meant to bound the whole path, and the scheduler side of it is not built yet: it still refuses immediately rather than waiting. See `specs/2026-08-03-request-queue-design.md`.
 
 Escrow membership must reach this layer: without it `EscrowWeight` returns zero for every escrow, escrow selection fails on every request, and the gateway serves nothing while every health check stays green.
+
+## Nonce dispositions
+
+Settlement credits each slot with `assigned_nonces - protocol_misses` completed inferences, whatever GNK those nonces paid. Three gateway behaviours break that count: policy burns nonces without sending work, a sent request can go unfinished while its timeout never applies, and overscheduling turns one client request into several completed inferences. The nonce ledger exists to say which of those happened and how often; the accounting model is `proposals/gateway-dashboard`.
+
+The disposition model is taken from that proposal. The event vocabulary is not: it is built from the facts this gateway already produces, which are coarser than the reference's and carry the same information in fewer events.
+
+| what the ledger folds | where it comes from |
+|---|---|
+| escrow membership, its latest nonce, and what the chain recorded per slot | a ten-second sweep of the published escrow set: `Snapshot` names the escrows, each session's `SnapshotState` carries the slot group, the latest nonce, and `HostStats` |
+| a burned nonce and its reason | `tracedDispatches.GhostBurned`, which carries the nonce and one of six reasons |
+| every attempt of one race | `nonceAccountedRaces.RecordRace`: per attempt the nonce, whether it was sent, whether the protocol finished it, and whether the client got its answer |
+| a timeout's kind, action and reason | `nonceAccountedRaces.RecordTimeout` |
+
+Three of those are pushed and three are swept. Membership and host stats have no event of their own and change slowly, so reading them on a timer is both simpler and less invasive than a callback on every nonce; a race and a burn are single moments and must be told.
+
+One race outcome replaces six of the reference's events, because it already aggregates what they report separately: a send, a winner, a loser, an unknowable usage, and the finish. One timeout event replaces two.
+
+**A nonce names its own slot.** The reference reads applied diffs to learn which slot spent a nonce. That is unnecessary here: the chain's own convention makes the executor the slot at nonce modulo group size, so the ledger attributes a nonce arithmetically and needs no protocol-transition channel at all.
+
+Two consequences follow from folding coarser events. The reference deduplicates replayed callbacks by using each event as its own map key, which requires every event to be a comparable struct; a race outcome carries a slice of attempts and cannot be one. It does not need to be: a race reports itself once, a burn is recorded once, and swept facts are idempotent by construction because each observation replaces the last. The dedup map and the comparability constraint both go.
+
+**An unapplied timeout is not a settled one.** Every path out of `user.HandleTimeout` returns an error, including its own success — that error carries "this inference timed out" back to the request. So the error says nothing about whether the vote reached the chain, and `TimeoutResult.Applied` is what the ledger reads instead. The distinction is the whole point: a nonce whose timeout never gathered enough votes still settles as a completed inference for a participant that never answered, and recording it as a posted vote hides exactly that.
+
+**An unfinished nonce is not a verdict.** The protocol can finish a nonce after the race that gave up on it, so the sweep re-asks the session about every nonce still counted as unfinished and lifts the ones that landed. The session's own outcome map survives sealing, so a negative answer means "not finished", never "no longer known" — the correction only ever moves a nonce out of the bucket settlement reads as failure, never into it.
+
+**What the ledger cannot see.** A nonce is invisible to it between commitment and the end of the race that spent it, because a race reports only when it ends. Those nonces fall into `unobserved` alongside genuinely protocol-only ones, so that number is a floor on protocol overhead rather than a measurement of it; a baseline that grows while traffic is steady is the signal worth watching. `pending` is the separate case of a nonce seen unfinished whose timeout has not settled, and `overcounted` — classified beyond what the chain assigned — should never be anything but zero.
+
+The vocabulary is ours where ours is richer. Six ghost reasons, not five: `participant_ejected_no_send` and `request_abandoned_before_dispatch` are first-class rather than an unknown reason with a detail string. Timeout reasons likewise — `phase_transition_aborted` and `long_response_after_content` happen to match the reference verbatim, while `empty_stream_without_non_empty_winner`, `nonce_already_finished` and `no_poster` are ours alone.
