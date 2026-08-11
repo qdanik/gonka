@@ -2,7 +2,6 @@ package engine
 
 import (
 	"context"
-	"errors"
 	"time"
 
 	"devshard/host"
@@ -24,13 +23,12 @@ func NewSessionTimeouts(session *user.Session, payload *host.InferencePayload) *
 	return &SessionTimeouts{handler: session, payload: payload}
 }
 
-// SettleTimeout reads a posted vote as a success. The handler returns a non-nil error on its own
-// success path — that error carries "the inference timed out" to the request rather than a failed
-// vote — and only its genuine failures wrap a cause, so an unwrapped error beside a reported reason is
-// a vote that reached the chain.
+// SettleTimeout reads the handler's own record of whether the timeout reached the escrow state. The
+// handler returns a non-nil error on its success path too -- that error carries "the inference timed out"
+// to the request -- so the error alone cannot tell a settled vote from an unsettled one.
 func (s *SessionTimeouts) SettleTimeout(ctx context.Context, nonce uint64, startedAt time.Time) (string, error) {
 	result, err := s.handler.HandleTimeout(ctx, nonce, startedAt, s.payload)
-	if result.Reason != "" && errors.Unwrap(err) == nil {
+	if result.Applied {
 		return result.Reason, nil
 	}
 	return result.Reason, err

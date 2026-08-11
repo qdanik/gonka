@@ -159,6 +159,16 @@ func TestThePerfCollectorMatchesTheTracker(t *testing.T) {
 
 	expectGauge(t, telemetry, "devshard_gateway_host_ejected", labels{"participant_key": "gonka1host", "model": "qwen"}, 0)
 	expectGauge(t, telemetry, "devshard_gateway_host_inflight_requests", labels{"participant_key": "gonka1host"}, 1)
+
+	// Unmeasured hosts publish no series at all, so a scrape never shows an invented zero.
+	expectSeriesCount(t, telemetry, "devshard_gateway_host_seconds_per_output_token", 0)
+
+	for range 10 {
+		tracker.RecordSample(perf.Sample{ParticipantKey: "gonka1host", Model: "qwen", Responsive: true, TimePerOutputToken: 25 * time.Millisecond})
+	}
+
+	expectGauge(t, telemetry, "devshard_gateway_host_seconds_per_output_token",
+		labels{"participant_key": "gonka1host", "model": "qwen"}, 0.025)
 }
 
 type fixedEscrows struct{ states []registry.EscrowState }

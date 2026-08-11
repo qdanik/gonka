@@ -262,3 +262,62 @@ func TestTrackerConcurrentRecordAndQueryNoRace(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+// A quantile off two samples would rank hosts on noise.
+func TestTimePerOutputTokenP75NeedsAFullEnoughWindow(t *testing.T) {
+	tracker := newTestTracker(testPerf(), fixedNow(time.Unix(1700000000, 0)))
+
+	for range latencyWindowMinimum - 1 {
+		tracker.RecordSample(Sample{ParticipantKey: "host", Model: "qwen", Responsive: true, TimePerOutputToken: 20 * time.Millisecond})
+	}
+	if _, ok := tracker.TimePerOutputTokenP75("host", "qwen"); ok {
+		t.Fatal("a quantile was reported before the window held enough samples")
+	}
+
+	tracker.RecordSample(Sample{ParticipantKey: "host", Model: "qwen", Responsive: true, TimePerOutputToken: 20 * time.Millisecond})
+
+	got, ok := tracker.TimePerOutputTokenP75("host", "qwen")
+	if !ok {
+		t.Fatal("the window filled and still reported nothing")
+	}
+	if got != 20*time.Millisecond {
+		t.Fatalf("TimePerOutputTokenP75() = %v, want 20ms", got)
+	}
+}
+
+// The measure ranks hosts against each other, so the ratio has to survive.
+func TestTimePerOutputTokenP75SeparatesASlowDecoderFromAFastOne(t *testing.T) {
+	tracker := newTestTracker(testPerf(), fixedNow(time.Unix(1700000000, 0)))
+
+	for range latencyWindowMinimum {
+		tracker.RecordSample(Sample{ParticipantKey: "quick", Model: "qwen", Responsive: true, TimePerOutputToken: 10 * time.Millisecond})
+		tracker.RecordSample(Sample{ParticipantKey: "slow", Model: "qwen", Responsive: true, TimePerOutputToken: 20 * time.Millisecond})
+	}
+
+	quick, _ := tracker.TimePerOutputTokenP75("quick", "qwen")
+	slow, _ := tracker.TimePerOutputTokenP75("slow", "qwen")
+
+	if quick != 10*time.Millisecond || slow != 20*time.Millisecond {
+		t.Fatalf("p75 quick = %v, slow = %v, want 10ms and 20ms", quick, slow)
+	}
+}
+
+// A zero folded into the window would report a speed no host achieved. The unmeasured runs outnumber the
+// measured ones far enough that a folded zero lands on the quantile itself, not merely below it.
+func TestAnUnmeasuredDecodeIsNotFoldedIntoTheWindow(t *testing.T) {
+	const measured, unmeasured = latencyWindowMinimum, 4 * latencyWindowMinimum
+	tracker := newTestTracker(testPerf(), fixedNow(time.Unix(1700000000, 0)))
+
+	for range measured {
+		tracker.RecordSample(Sample{ParticipantKey: "host", Model: "qwen", Responsive: true, TimePerOutputToken: 20 * time.Millisecond})
+	}
+	for range unmeasured {
+		tracker.RecordSample(Sample{ParticipantKey: "host", Model: "qwen", Responsive: true})
+	}
+
+	got, ok := tracker.TimePerOutputTokenP75("host", "qwen")
+
+	if !ok || got != 20*time.Millisecond {
+		t.Fatalf("TimePerOutputTokenP75() = (%v, %v), want (20ms, true): an unmeasured attempt entered the window", got, ok)
+	}
+}

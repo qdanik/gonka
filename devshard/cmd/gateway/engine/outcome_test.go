@@ -113,6 +113,15 @@ func TestVerdictTable(t *testing.T) {
 	unfinished := cleanAttempt()
 	unfinished.NonceFinished = false
 
+	heldEmpty := failedAttempt(TerminalEmptyStream)
+	heldEmpty.Completed = testEpoch.Add(emptyStreamHeldTooLong)
+
+	heldBurnEmpty := failedAttempt(TerminalBurnEmpty)
+	heldBurnEmpty.Completed = testEpoch.Add(15 * time.Minute)
+
+	briefEmpty := failedAttempt(TerminalEmptyStream)
+	briefEmpty.Completed = testEpoch.Add(emptyStreamHeldTooLong - time.Millisecond)
+
 	tests := []struct {
 		name         string
 		outcome      RaceOutcome
@@ -146,6 +155,14 @@ func TestVerdictTable(t *testing.T) {
 		{"winner stalled after content, failure rate exceeded", race(stalledOverThreshold), stalledOverThreshold, limits.TransportFault, true, 4, true},
 		{"winner stalled after content, failure rate not exceeded", race(stalledUnderThreshold), stalledUnderThreshold, limits.ModelOutcome, false, 4, false},
 		{"content produced, past the exemption, nonce unfinished", race(longResponse), longResponse, limits.ModelOutcome, false, 4, false},
+		{"empty stream that held the request past the refusal point", race(heldEmpty), heldEmpty, limits.Overload, true, 2, false},
+		{"empty stream that burned tokens and held the request", race(heldBurnEmpty), heldBurnEmpty, limits.Overload, true, 2, false},
+		{"empty stream one millisecond inside the refusal point", race(briefEmpty), briefEmpty, limits.ModelOutcome, true, 4, false},
+		{"empty stream that held the request while the PoC bypass is active", func() RaceOutcome {
+			outcome := race(heldEmpty)
+			outcome.PoCBypassActive = true
+			return outcome
+		}(), heldEmpty, limits.ModelOutcome, false, 4, false},
 		{"empty stream while the PoC bypass is active", func() RaceOutcome {
 			outcome := race(failedAttempt(TerminalEmptyStream))
 			outcome.PoCBypassActive = true
@@ -606,5 +623,67 @@ func TestAnAttemptThatNeverReportedStillOwesAVote(t *testing.T) {
 	}
 	if _, exemption := outcome.Sample(outcome.Attempts[0]); exemption != ExemptNeverReported {
 		t.Fatalf("exemption = %v, want the host judged for nothing it never answered", exemption)
+	}
+}
+
+// Prefill must not be charged to decode speed; first-content already measures it.
+func TestTimePerOutputTokenMeasuresTheDecodeWindowAlone(t *testing.T) {
+	t.Parallel()
+	attempt := cleanAttempt()
+	attempt.FirstContent = testEpoch.Add(5 * time.Second)
+	attempt.LastChunk = testEpoch.Add(15 * time.Second)
+	attempt.UsageCompletionTokens = 100
+
+	if got, want := attempt.timePerOutputToken(), 100*time.Millisecond; got != want {
+		t.Fatalf("timePerOutputToken() = %v, want %v", got, want)
+	}
+}
+
+// A missing input leaves the measure unreported rather than wrong.
+func TestTimePerOutputTokenIsUnreportedWithoutAMeasurableWindow(t *testing.T) {
+	t.Parallel()
+	measurable := cleanAttempt()
+	measurable.FirstContent = testEpoch.Add(5 * time.Second)
+	measurable.LastChunk = testEpoch.Add(15 * time.Second)
+	measurable.UsageCompletionTokens = 100
+
+	cases := []struct {
+		name   string
+		mutate func(*AttemptOutcome)
+	}{
+		{"the host reported no completion tokens", func(a *AttemptOutcome) { a.UsageCompletionTokens = 0 }},
+		{"content never arrived", func(a *AttemptOutcome) { a.FirstContent = time.Time{} }},
+		{"the answer was one chunk wide", func(a *AttemptOutcome) { a.LastChunk = a.FirstContent }},
+		{"the last chunk predates the first", func(a *AttemptOutcome) { a.LastChunk = testEpoch }},
+	}
+
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			attempt := measurable
+			testCase.mutate(&attempt)
+
+			if got := attempt.timePerOutputToken(); got != 0 {
+				t.Fatalf("timePerOutputToken() = %v, want 0", got)
+			}
+		})
+	}
+}
+
+// The sample is the only route from a finished attempt to the tracker.
+func TestSampleCarriesTheDecodeMeasure(t *testing.T) {
+	t.Parallel()
+	attempt := cleanAttempt()
+	attempt.FirstContent = testEpoch.Add(time.Second)
+	attempt.LastChunk = testEpoch.Add(3 * time.Second)
+	attempt.UsageCompletionTokens = 40
+
+	sample, exemption := race(attempt).Sample(attempt)
+
+	if exemption != SampleRecorded {
+		t.Fatalf("Sample() exemption = %v, want it recorded", exemption)
+	}
+	if got, want := sample.TimePerOutputToken, 50*time.Millisecond; got != want {
+		t.Fatalf("sample.TimePerOutputToken = %v, want %v", got, want)
 	}
 }
