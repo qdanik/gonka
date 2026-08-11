@@ -1,6 +1,10 @@
 package filters
 
-import "devshard"
+import (
+	"common/completionapi"
+
+	"devshard"
+)
 
 // Package-default output-token limits, used when Options passes a zero limit and as the single
 // source config.Defaults reads.
@@ -189,14 +193,21 @@ func applyOutputTokenLimits(document *Document, view *requestView, options Optio
 	default:
 		resolved = capOutputTokens(0, options.Admin, limits)
 	}
+	resolved = max(resolved, completionapi.MinTokensFloor)
 	document.Set("max_tokens", resolved)
 	view.MaxTokens = resolved
+	document.Set("min_tokens", floorMinTokens(document, resolved))
 	if hasMaxCompletionTokens {
 		document.Set("max_completion_tokens", resolved)
 		view.MaxCompletionTokens = resolved
 	} else {
 		view.MaxCompletionTokens = 0
 	}
+}
+
+func floorMinTokens(document *Document, maxTokens uint64) uint64 {
+	requested, _ := document.Uint("min_tokens")
+	return min(max(requested, completionapi.MinTokensFloor), maxTokens)
 }
 
 // maxTokensFloor lifts ctx.Param up to the profile's floor when the parsed value falls below it.
