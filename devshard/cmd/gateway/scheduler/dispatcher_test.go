@@ -884,4 +884,5 @@ func TestDispatcherLifecycleIsIdempotent(t *testing.T) {
 	}
 }
 
-func (s *scriptedSession) Balance() uint64 { return s.balance }
+func (s *scriptedSession) Balance() uint64    { return s.balance }
+func (s *scriptedSession) TokenPrice() uint64 { return 1 }

@@ -14,6 +14,7 @@ const fallbackNonceCeiling uint64 = 19_800
 
 func (s *Scheduler) pickEscrow(profile RequestProfile, snapshot chain.PhaseSnapshot) (Escrow, error) {
 	candidates := s.escrows.Candidates(profile.Model)
+	reserveTokens := s.reserveTokens(profile)
 
 	if profile.Escrow != "" {
 		for _, candidate := range candidates {
@@ -23,11 +24,11 @@ func (s *Scheduler) pickEscrow(profile RequestProfile, snapshot chain.PhaseSnaps
 			// The cap is checked here too: a client picks this escrow by id, and the nonce ceiling is
 			// what reserves room for the finalize and settlement that follow. See
 			// gateway-routing-and-nonces.md, "Picking an escrow".
-			if reason := exhaustionReason(candidate, snapshot.MaxNonce, s.balanceFloorPerRequest()); reason != "" {
+			if reason := exhaustionReason(candidate, snapshot.MaxNonce, reserveTokens); reason != "" {
 				if s.onEscrowExhausted != nil {
 					s.onEscrowExhausted(candidate.ID, reason)
 				}
-				return Escrow{}, ErrNoEscrowCapacity
+				return Escrow{}, noCapacity(reason)
 			}
 			return candidate, nil
 		}
@@ -38,8 +39,10 @@ func (s *Scheduler) pickEscrow(profile RequestProfile, snapshot chain.PhaseSnaps
 	// so the common case picks without touching the heap at all.
 	bestScore := math.Inf(1)
 	var tied []int
+	declined := ""
 	for index, candidate := range candidates {
-		if reason := exhaustionReason(candidate, snapshot.MaxNonce, s.balanceFloorPerRequest()); reason != "" {
+		if reason := exhaustionReason(candidate, snapshot.MaxNonce, reserveTokens); reason != "" {
+			declined = reason
 			// Routing only declines it; replacing it belongs to the rotation lifecycle, which
 			// otherwise never learns and lets the escrow drain silently into ErrNoEscrowCapacity.
 			if s.onEscrowExhausted != nil {
@@ -60,12 +63,21 @@ func (s *Scheduler) pickEscrow(profile RequestProfile, snapshot chain.PhaseSnaps
 
 	switch len(tied) {
 	case 0:
-		return Escrow{}, ErrNoEscrowCapacity
+		return Escrow{}, noCapacity(declined)
 	case 1:
 		return candidates[tied[0]], nil
 	default:
 		return candidates[tied[int(uint64(s.tieBreak.Add(1)-1)%uint64(len(tied)))]], nil
 	}
+}
+
+// noCapacity carries why the last candidate was declined, so an escrow the floor caught while it could
+// still refuse cleanly is accounted as the running dry it is, not as a model nobody serves.
+func noCapacity(reason string) error {
+	if reason == "balance_floor" {
+		return fmt.Errorf("%w: %w", ErrNoEscrowCapacity, types.ErrInsufficientBalance)
+	}
+	return ErrNoEscrowCapacity
 }
 
 // loadScore is the ascending utilisation ratio; a non-positive or corrupt weight scores unusable. See
@@ -93,20 +105,39 @@ func atNonceCap(candidate Escrow, maxNonce uint64) bool {
 }
 
 // exhaustionReason is empty while the escrow may still be picked.
-func exhaustionReason(candidate Escrow, maxNonce uint64, perRequestReserve int64) string {
+func exhaustionReason(candidate Escrow, maxNonce uint64, reserveTokens uint64) string {
 	switch {
 	case atNonceCap(candidate, maxNonce):
 		return "nonce_cap"
-	case belowBalanceFloor(candidate, perRequestReserve):
+	case belowBalanceFloor(candidate, reserveTokens):
 		return "balance_floor"
 	}
 	return ""
 }
 
-func belowBalanceFloor(candidate Escrow, perRequestReserve int64) bool {
-	if candidate.Session == nil || perRequestReserve <= 0 {
+// belowBalanceFloor prices the reserve the way the chain does, (input+max_tokens)*token_price, and asks
+// whether the escrow still covers everything in flight plus this arrival.
+func belowBalanceFloor(candidate Escrow, reserveTokens uint64) bool {
+	if candidate.Session == nil || reserveTokens == 0 {
 		return false
 	}
-	floor := uint64(perRequestReserve) * uint64(candidate.ActiveUsers+1)
+	reserve, ok := safeMul(reserveTokens, candidate.Session.TokenPrice())
+	if !ok {
+		return true
+	}
+	floor, ok := safeMul(reserve, uint64(candidate.ActiveUsers+1))
+	if !ok {
+		return true
+	}
 	return candidate.Session.Balance() < floor
+}
+
+// safeMul reports the product only when it did not wrap: a price this escrow cannot afford must not read
+// as an affordable small one.
+func safeMul(left, right uint64) (uint64, bool) {
+	if left == 0 || right == 0 {
+		return 0, true
+	}
+	product := left * right
+	return product, product/left == right
 }

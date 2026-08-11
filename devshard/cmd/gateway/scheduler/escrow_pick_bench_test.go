@@ -20,6 +20,7 @@ func (b *benchSession) ParticipantKeys() []string                               
 func (b *benchSession) GroupSize() int                                          { return b.groupSize }
 func (b *benchSession) LatestNonce() uint64                                     { return b.latestNonce }
 func (b *benchSession) Balance() uint64                                         { return 1 << 40 }
+func (b *benchSession) TokenPrice() uint64                                      { return 1 }
 
 type benchEscrows struct{ byModel map[string][]Escrow }
 

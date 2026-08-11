@@ -224,9 +224,14 @@ func TestEndToEndAnEscrowRetiredMidRaceStillPostsTheVoteItsNonceOwes(t *testing.
 	if fixture.session.IsNonceFinished(1) {
 		t.Fatal("nonce 1 is finished, so nothing owed a vote and this test asserts nothing")
 	}
-	posted := timeoutActions(gateway.scrapeMetrics(t), "completed")
-	if len(posted) != 1 {
-		t.Fatalf("timeout votes posted = %v, want one for the nonce the retired escrow committed", posted)
+	// Every host in this fixture is gone, so the tally cannot clear the threshold: the vote is attempted
+	// and reported short, never as one the chain accepted.
+	attempted := timeoutActions(gateway.scrapeMetrics(t), "failed")
+	if len(attempted) != 1 {
+		t.Fatalf("timeout votes attempted = %v, want one for the nonce the retired escrow committed", attempted)
+	}
+	if posted := timeoutActions(gateway.scrapeMetrics(t), "completed"); len(posted) != 0 {
+		t.Fatalf("timeout votes posted = %v, want none: no verifier was reachable to vote", posted)
 	}
 	if gateway.gateway.escrows.IsBusy(fixture.id) {
 		t.Error("IsBusy once the vote is posted = true: the escrow is never released for settlement")

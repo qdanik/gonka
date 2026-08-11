@@ -2,6 +2,8 @@ package engine
 
 import (
 	"testing"
+
+	"devshard/types"
 	"time"
 
 	"devshard/cmd/gateway/config"
@@ -242,7 +244,7 @@ func TestFirstTokenTimeoutHoldsTheFloorAndGrowsWithInput(t *testing.T) {
 		{"linear term grows the wait", testPolicy, 1_000, 1_730_500 * time.Microsecond},
 		// The curve reaches 8m51s at a million tokens -- past the streaming backstop that cancels the
 		// attempt, so an uncapped rung would never fire on a body the ingest limit still admits.
-		{"a prompt no retry could beat stops at the ceiling", testPolicy, 1_000_000, 60 * time.Second},
+		{"a prompt no retry could beat stops at the ceiling", testPolicy, 1_000_000, testPolicy.FirstTokenCeiling},
 	}
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -407,5 +409,17 @@ func TestAReceiptAlwaysBuysItsHostFirstTokenGrace(t *testing.T) {
 	}
 	if !armed.Deadline.After(raceStart.Add(4 * time.Second)) {
 		t.Fatalf("deadline = %v, want it after the receipt rather than already due", armed.Deadline)
+	}
+}
+
+// A stream held past the chain's execution deadline is work nobody can be paid for, so the backstop has to
+// fire inside that deadline however either number is later retuned.
+func TestTheStreamingBackstopFiresInsideTheChainsExecutionDeadline(t *testing.T) {
+	t.Parallel()
+	settlementDeadline := types.DefaultExecutionTimeoutSeconds * time.Second
+
+	if streamingHardTimeout >= settlementDeadline {
+		t.Fatalf("streamingHardTimeout = %s, want it inside the chain's %s execution deadline",
+			streamingHardTimeout, settlementDeadline)
 	}
 }

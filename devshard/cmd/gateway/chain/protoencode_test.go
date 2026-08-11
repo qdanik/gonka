@@ -162,7 +162,7 @@ func TestEncodeAnySelfConsistency(t *testing.T) {
 func TestAppendVarintFieldTag(t *testing.T) {
 	for _, field := range []int{1, 2, 3, 4, 5, 8, 9} {
 		got := appendVarintField(nil, field, 0)
-		wantTag := byte(field<<3 | 0)
+		wantTag := byte(field << 3)
 		if len(got) == 0 || got[0] != wantTag {
 			t.Fatalf("field %d: tag byte = %v, want %#x", field, got, wantTag)
 		}

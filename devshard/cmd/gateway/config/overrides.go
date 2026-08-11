@@ -19,7 +19,6 @@ type Overrides struct {
 	AcquireWaitMS                          *int64                 `json:"acquire_wait_ms,omitempty"`
 	QueueDepthPerSlot                      *int64                 `json:"queue_depth_per_slot,omitempty"`
 	HoldGraceMS                            *int64                 `json:"hold_grace_ms,omitempty"`
-	BalanceFloorPerRequest                 *int64                 `json:"balance_floor_per_request,omitempty"`
 	AIMDInitialWindow                      *int64                 `json:"aimd_initial_window,omitempty"`
 	AIMDMaxWindow                          *int64                 `json:"aimd_max_window,omitempty"`
 	BreakerTripThreshold                   *int64                 `json:"breaker_trip_threshold,omitempty"`

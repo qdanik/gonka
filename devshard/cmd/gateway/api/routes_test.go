@@ -15,6 +15,7 @@ import (
 	"devshard/cmd/gateway/scheduler"
 
 	"devshard/cmd/gateway/registry"
+	"devshard/types"
 )
 
 func TestAnUnroutableModelIsRejectedBeforeTheLimiterAndTheRace(t *testing.T) {
@@ -351,7 +352,7 @@ func TestTheStatusReportsTheSessionVersion(t *testing.T) {
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("status: got %d", recorder.Code)
 	}
-	if !strings.Contains(recorder.Body.String(), `"session_version":"v2"`) {
+	if !strings.Contains(recorder.Body.String(), `"session_version":"`+types.EffectiveStateRootAndProtocolVersion+`"`) {
 		t.Fatalf("the status carries no session version: %s", recorder.Body.String())
 	}
 }

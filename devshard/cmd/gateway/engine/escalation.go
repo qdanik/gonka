@@ -4,11 +4,14 @@ import (
 	"time"
 
 	"devshard/cmd/gateway/config"
+	"devshard/types"
 )
 
 const (
-	// Backstops bound a request every tunable already failed to bound, so they are not tunable.
-	streamingHardTimeout = 20 * time.Minute
+	// Backstops bound a request every tunable already failed to bound, so they are not tunable. A stream
+	// held past the chain's execution deadline is work nobody can be paid for, so the tuned 20 minutes
+	// gives way if that deadline ever moves below it.
+	streamingHardTimeout = min(20*time.Minute, types.DefaultExecutionTimeoutSeconds*time.Second-time.Minute)
 	schedulerPickTimeout = 2 * time.Minute
 
 	// Admitting a very large prompt is itself work, so such a host gets twice as long to receipt.

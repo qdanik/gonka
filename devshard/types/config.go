@@ -12,6 +12,9 @@ const (
 	DefaultAutoSealEveryNNonces uint32 = 150
 	// DefaultValidationRate matches inference-chain DefaultDevshardValidationRate.
 	DefaultValidationRate uint32 = 5000
+	// DefaultExecutionTimeoutSeconds is how long the chain still settles an inference. Work held past it
+	// can no longer be paid for, so callers bound their own waits by it.
+	DefaultExecutionTimeoutSeconds = 32 * 60
 )
 
 // DefaultInferenceSealGraceNonces returns the canonical seal grace for a session group.
@@ -48,7 +51,7 @@ func NormalizeSessionConfig(cfg SessionConfig, groupSize int) SessionConfig {
 func DefaultSessionConfig(groupSize int) SessionConfig {
 	return NormalizeSessionConfig(SessionConfig{
 		RefusalTimeout:    60,
-		ExecutionTimeout:  32 * 60,
+		ExecutionTimeout:  DefaultExecutionTimeoutSeconds,
 		TokenPrice:        1,
 		CreateDevshardFee: 10_000,
 		FeePerNonce:       1_000,
@@ -61,14 +64,14 @@ func DefaultSessionConfig(groupSize int) SessionConfig {
 // at create. Every field is "zero means use the compiled default" so callers can
 // populate only what the chain returned.
 type EscrowSessionFields struct {
-	TokenPrice                  uint64
-	CreateDevshardFee           uint64
-	FeePerNonce                 uint64
-	InferenceSealGraceNonces    uint32
-	InferenceSealGraceSeconds   uint32
-	AutoSealEveryNNonces        uint32
-	ValidationRate              uint32
-	VoteThresholdFactor         uint32 // percent; 0 == legacy groupSize/2
+	TokenPrice                uint64
+	CreateDevshardFee         uint64
+	FeePerNonce               uint64
+	InferenceSealGraceNonces  uint32
+	InferenceSealGraceSeconds uint32
+	AutoSealEveryNNonces      uint32
+	ValidationRate            uint32
+	VoteThresholdFactor       uint32 // percent; 0 == legacy groupSize/2
 }
 
 // ComputeVoteThreshold derives the slot-majority vote threshold from group
