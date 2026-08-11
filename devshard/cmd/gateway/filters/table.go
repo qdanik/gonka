@@ -1,6 +1,10 @@
 package filters
 
-import "sort"
+import (
+	"sort"
+
+	"common/completionapi"
+)
 
 type Stage int
 
@@ -51,8 +55,6 @@ const (
 	penaltyMin = -2.0
 	penaltyMax = 2.0
 
-	topLogprobsForcedValue = 5
-
 	userMaxLen             = 512
 	safetyIdentifierMaxLen = 512
 
@@ -60,8 +62,6 @@ const (
 
 	stopMaxEntries  = 16
 	stopMaxEntryLen = 256
-
-	stopTokenIdsMaxEntries = 64
 
 	badWordsMaxEntries  = 64
 	badWordsMaxEntryLen = 128
@@ -122,7 +122,7 @@ var (
 		spec("parallel_tool_calls", StagePreValidation, requireBool()),
 		spec("user", StagePreValidation, requireString(userMaxLen)),
 		spec("logprobs", StagePostLimits, forceLiteral(true)),
-		spec("top_logprobs", StagePostLimits, forceLiteral(topLogprobsForcedValue)),
+		spec("top_logprobs", StagePostLimits, forceLiteral(completionapi.ForcedTopLogprobs)),
 		spec("return_token_ids", StagePostLimits, forceLiteral(true)),
 		spec("service_tier", StagePreValidation, stripParameter()),
 		spec("store", StagePreValidation, stripParameter()),
@@ -137,12 +137,7 @@ var (
 			{Stage: StagePreValidation, Apply: requireStringElements()},
 			{Stage: StagePreValidation, Apply: validListLength(stopMaxEntries, stopMaxEntryLen)},
 		}},
-		// Cap runs before the element-type check here, reversed vs "stop" above. See
-		// gateway-request-filtering.md, "Registration order is semantics".
-		{Name: "stop_token_ids", Rules: []StagedRule{
-			{Stage: StagePreValidation, Apply: validListLength(stopTokenIdsMaxEntries, 0)},
-			{Stage: StagePreValidation, Apply: requireUintElements()},
-		}},
+		spec("stop_token_ids", StagePreValidation, stripParameter()),
 		{Name: "bad_words", Rules: []StagedRule{
 			{Stage: StagePreValidation, Apply: requireStringElements()},
 			{Stage: StagePreValidation, Apply: dropBlankStringListElements()},
@@ -150,13 +145,7 @@ var (
 		}},
 		spec("metadata", StagePreValidation, validMetadata(metadataMaxKeys, metadataMaxKeyLen, metadataMaxValueLen)),
 		spec("stream_options", StagePreValidation, validStreamOptions()),
-		// min_tokens strips when stop_token_ids is present (Pre), then clamps to max_tokens
-		// once the output-token stage has resolved it (Post).
-		{Name: "min_tokens", Rules: []StagedRule{
-			{Stage: StagePreValidation, Apply: requireUint()},
-			{Stage: StagePreValidation, Apply: stripWhenFieldPresent("stop_token_ids")},
-			{Stage: StagePostLimits, Apply: clampUintToField("max_tokens")},
-		}},
+		spec("min_tokens", StagePreValidation, requireUint()),
 		// tools must precede tool_choice below. See gateway-request-filtering.md,
 		// "Registration order is semantics".
 		spec("tools", StagePreValidation, validTools(SchemaBounds{

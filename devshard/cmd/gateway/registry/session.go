@@ -6,18 +6,20 @@ import (
 	"fmt"
 	"time"
 
+	"common/completionapi"
+
 	"devshard/cmd/gateway/scheduler"
 	"devshard/state"
 	"devshard/types"
 	"devshard/user"
 )
 
-const ghostMaxTokens = 1
+const ghostMaxTokens = uint64(completionapi.MinTokensFloor)
 
 var (
 	// ghostPrompt is the synthetic MsgStart a burned nonce commits: composed into the diff, never sent to
 	// a host. See gateway-routing-and-nonces.md, "Ghost burns".
-	ghostPrompt = []byte(`{"messages":[{"role":"user","content":"."}],"max_tokens":1}`)
+	ghostPrompt = fmt.Appendf(nil, `{"messages":[{"role":"user","content":"."}],"max_tokens":%d}`, ghostMaxTokens)
 
 	// errNonceDeclined leaves the bound nonce unconsumed, so the next caller sees the same nonce.
 	errNonceDeclined = errors.New("nonce declined")

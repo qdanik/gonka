@@ -1,9 +1,12 @@
 package registry
 
 import (
+	"encoding/json"
 	"errors"
 	"reflect"
 	"testing"
+
+	"common/completionapi"
 
 	"devshard/cmd/gateway/scheduler"
 	"devshard/internal/testutil"
@@ -197,5 +200,22 @@ func TestSessionHandleReportsThePhaseOfItsOwnStateMachine(t *testing.T) {
 	}
 	if session.UserSession() == nil {
 		t.Error("UserSession() = nil, want the concrete handle the dispatch boundary needs")
+	}
+}
+
+// The burn's body and its reservation are one fact written twice. They never meet a host today, but a
+// probe that starts being sent would be refused for declaring less than it reserved.
+func TestGhostPromptAgreesWithItsReservation(t *testing.T) {
+	var body struct {
+		MaxTokens uint64 `json:"max_tokens"`
+	}
+	if err := json.Unmarshal(ghostPrompt, &body); err != nil {
+		t.Fatalf("parsing ghostPrompt: %v", err)
+	}
+	if body.MaxTokens != ghostMaxTokens {
+		t.Errorf("ghostPrompt max_tokens = %d, reservation = %d", body.MaxTokens, ghostMaxTokens)
+	}
+	if ghostMaxTokens < completionapi.MinTokensFloor {
+		t.Errorf("ghostMaxTokens = %d, below the floor %d the chain refuses", ghostMaxTokens, completionapi.MinTokensFloor)
 	}
 }

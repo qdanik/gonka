@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"net/http"
 	"testing"
+
+	"common/completionapi"
 )
 
 // Pins capOutputTokens's contract directly: 0 always means "unset, use default".
@@ -536,12 +538,45 @@ func TestTokensPerModelOverrideCapClampsTheRequestedValue(t *testing.T) {
 	options := Options{
 		DefaultMaxTokens: 100,
 		MaxTokensCap:     200,
+		ModelTokenLimits: func(string) (uint64, uint64) { return 0, 150 },
+	}
+
+	_, view := applyLimits(t, `{"model":"qwen","max_tokens":180}`, options)
+
+	if view.MaxTokens != 150 {
+		t.Errorf("max_tokens = %d, want the per-model cap 150", view.MaxTokens)
+	}
+}
+
+// A cap under the chain's floor cannot be honoured and served at the same time: the reservation is
+// refused below the floor, so the floor wins and the operator's cap is the one that gives way.
+func TestTokensCapBelowTheChainFloorLosesToIt(t *testing.T) {
+	options := Options{
+		DefaultMaxTokens: 100,
+		MaxTokensCap:     200,
 		ModelTokenLimits: func(string) (uint64, uint64) { return 0, 50 },
 	}
 
 	_, view := applyLimits(t, `{"model":"qwen","max_tokens":180}`, options)
 
-	if view.MaxTokens != 50 {
-		t.Errorf("max_tokens = %d, want the per-model cap 50", view.MaxTokens)
+	if view.MaxTokens != completionapi.MinTokensFloor {
+		t.Errorf("max_tokens = %d, want the floor %d", view.MaxTokens, completionapi.MinTokensFloor)
+	}
+}
+
+// Every route, not just a profile that declares its own floor: MiniMax and the default profile have
+// none, and a reservation under the floor is refused for them exactly the same.
+func TestTokensFloorAppliesToEveryRoute(t *testing.T) {
+	for _, model := range []string{kimiModelID, minimaxModelID, "Qwen/Test"} {
+		t.Run(model, func(t *testing.T) {
+			result, err := NormalizeRequest([]byte(`{"messages":[{"role":"user","content":"x"}],"max_tokens":8}`),
+				Options{RoutedModel: model, DefaultMaxTokens: 3072, MaxTokensCap: 4096})
+			if err != nil {
+				t.Fatalf("NormalizeRequest() = %v, want nil", err)
+			}
+			if result.MaxTokens < completionapi.MinTokensFloor {
+				t.Errorf("MaxTokens = %d, below the floor %d the chain refuses", result.MaxTokens, completionapi.MinTokensFloor)
+			}
+		})
 	}
 }

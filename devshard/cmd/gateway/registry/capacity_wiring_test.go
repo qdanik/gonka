@@ -5,6 +5,8 @@
 package registry_test
 
 import (
+	"common/completionapi"
+
 	"context"
 	"errors"
 	"testing"
@@ -100,7 +102,7 @@ func TestPushedMembershipIsWhatMakesTheGatewayRouteAtAll(t *testing.T) {
 
 	assignment, err := router.Pick(context.Background(), scheduler.RequestProfile{
 		Model:  wiredModel,
-		Params: user.InferenceParams{Model: wiredModel, Prompt: []byte(`{"messages":[]}`), InputLength: 15, MaxTokens: 8},
+		Params: user.InferenceParams{Model: wiredModel, Prompt: []byte(`{"messages":[]}`), InputLength: 15, MaxTokens: completionapi.MinTokensFloor},
 	})
 
 	if err != nil {
