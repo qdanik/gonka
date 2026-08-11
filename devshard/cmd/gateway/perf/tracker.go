@@ -48,6 +48,16 @@ func (t *Tracker) FirstContentP75(participant, model string) (time.Duration, boo
 	return host.firstContent.p75(latencyWindowMinimum)
 }
 
+func (t *Tracker) TimePerOutputTokenP75(participant, model string) (time.Duration, bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	host := t.hosts[hostKey{participant: participant, model: model}]
+	if host == nil {
+		return 0, false
+	}
+	return host.decode.p75(latencyWindowMinimum)
+}
+
 func (t *Tracker) RecordSample(s Sample) {
 	now := t.now()
 	perf := t.config.Load().Perf
@@ -156,10 +166,11 @@ func (t *Tracker) Release(participant string) {
 
 // HostState is one tracked participant/model pair as a reader sees it.
 type HostState struct {
-	Participant string
-	Model       string
-	Ejected     bool
-	Inflight    int
+	Participant        string
+	Model              string
+	Ejected            bool
+	Inflight           int
+	TimePerOutputToken time.Duration
 }
 
 // Snapshot returns every tracked pair in participant/model order. The in-flight counts are read after
@@ -183,11 +194,13 @@ func (t *Tracker) Snapshot() []HostState {
 	})
 	states := make([]HostState, 0, len(keys))
 	for _, key := range keys {
+		decode, _ := t.TimePerOutputTokenP75(key.participant, key.model)
 		states = append(states, HostState{
-			Participant: key.participant,
-			Model:       key.model,
-			Ejected:     ejected != nil && now.Before((*ejected)[key]),
-			Inflight:    t.inflight.count(key.participant),
+			Participant:        key.participant,
+			Model:              key.model,
+			Ejected:            ejected != nil && now.Before((*ejected)[key]),
+			Inflight:           t.inflight.count(key.participant),
+			TimePerOutputToken: decode,
 		})
 	}
 	return states

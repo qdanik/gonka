@@ -8,6 +8,7 @@ import (
 
 	"devshard/cmd/gateway/limits"
 	"devshard/cmd/gateway/perf"
+	"devshard/types"
 )
 
 const (
@@ -25,6 +26,10 @@ const (
 	reasonCrownDenied = "crown_denied"
 
 	longResponseExemption = 280 * time.Second
+
+	// Below this an empty stream is the model's output; at or above it the host held the request past the
+	// refusal point and returned nothing.
+	emptyStreamHeldTooLong = types.DefaultRefusalTimeoutSeconds * time.Second
 )
 
 // Terminal is an attempt's classified end state. Every downstream vocabulary — limiter verdict,
@@ -190,8 +195,6 @@ func (t Terminal) verdict() (limits.Verdict, bool) {
 	case TerminalForbidden, TerminalNotFound, TerminalTimestampDrift,
 		TerminalDialFailure, TerminalStreamTruncated, TerminalUnexpectedEOF, TerminalStalled:
 		return limits.TransportFault, true
-	// An empty stream is what the model produced, not what the host failed to carry, so the host's
-	// window must not contract for it; DeniesCrowning is where the host still answers for it.
 	case TerminalEmptyStream, TerminalBurnEmpty, TerminalErrorStream, TerminalCapabilityRefused:
 		return limits.ModelOutcome, true
 	}
@@ -323,6 +326,8 @@ func (o RaceOutcome) Sample(a AttemptOutcome) (perf.Sample, SampleExemption) {
 		Model:          o.Model,
 		Responsive:     o.responsive(a),
 		FirstContent:   a.firstContentDelay(),
+
+		TimePerOutputToken: a.timePerOutputToken(),
 	}, SampleRecorded
 }
 
@@ -334,6 +339,8 @@ func (o RaceOutcome) Verdict(a AttemptOutcome) (limits.Verdict, bool) {
 		return limits.ModelOutcome, false
 	case a.emptyStream() && o.PoCBypassActive:
 		return limits.ModelOutcome, false
+	case a.emptyStream() && a.elapsed() >= emptyStreamHeldTooLong:
+		return limits.Overload, true
 	case a.Terminal == TerminalStalled && !a.FailureRateExceeded:
 		return limits.ModelOutcome, false
 	case (a.Terminal == TerminalWon || a.Terminal == TerminalLost) && !o.responsive(a):
@@ -404,6 +411,14 @@ func (o RaceOutcome) failureReason(a AttemptOutcome) string {
 		return "not_finished"
 	}
 	return "unknown"
+}
+
+// timePerOutputToken starts at the first content chunk, so prefill is not charged to decode speed.
+func (a AttemptOutcome) timePerOutputToken() time.Duration {
+	if a.UsageCompletionTokens <= 0 || a.FirstContent.IsZero() || !a.LastChunk.After(a.FirstContent) {
+		return 0
+	}
+	return a.LastChunk.Sub(a.FirstContent) / time.Duration(a.UsageCompletionTokens)
 }
 
 func (a AttemptOutcome) firstContentDelay() time.Duration {

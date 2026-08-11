@@ -52,6 +52,7 @@ type hostPerf struct {
 	consecutiveFail int
 	lastSeen        time.Time
 	firstContent    latencyWindow
+	decode          latencyWindow
 }
 
 func newHostPerf(halfLife time.Duration) *hostPerf {
@@ -72,6 +73,9 @@ func (h *hostPerf) recordSample(s Sample, now time.Time) {
 	h.lastSeen = now
 	if s.FirstContent > 0 {
 		h.firstContent.add(s.FirstContent)
+	}
+	if s.TimePerOutputToken > 0 {
+		h.decode.add(s.TimePerOutputToken)
 	}
 }
 

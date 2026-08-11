@@ -28,9 +28,9 @@ func (h *scriptedTimeoutHandler) HandleTimeout(context.Context, uint64, time.Tim
 	return h.result, h.err
 }
 
-// A posted vote and a refused one both arrive with a populated result, so the wrapping is what
-// separates them: an unwrapped error means the vote reached the chain.
-func TestSessionTimeoutsReadsAPostedVoteThroughTheHandlersSuccessError(t *testing.T) {
+// Every one of these returns carries a non-nil error, including the settled one, so only the handler's
+// own Applied flag separates a vote that reached the escrow state from one that did not.
+func TestSessionTimeoutsReadsAPostedVoteThroughTheHandlersAppliedFlag(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
 		name       string
@@ -40,10 +40,25 @@ func TestSessionTimeoutsReadsAPostedVoteThroughTheHandlersSuccessError(t *testin
 		wantFailed bool
 	}{
 		{
-			name:     "vote_posted_returns_the_timeout_error_unwrapped",
-			result:   user.TimeoutResult{Reason: "execution"},
+			name:     "vote_reached_the_escrow_state",
+			result:   user.TimeoutResult{Reason: "execution", Applied: true},
 			err:      fmt.Errorf("inference %d timed out: %s", 7, "execution"),
 			wantVote: "execution",
+		},
+		{
+			// The shape a settled vote has, minus the settlement: trusting the error here is the whole bug.
+			name:       "unsettled_but_shaped_like_a_settled_vote",
+			result:     user.TimeoutResult{Reason: "execution"},
+			err:        fmt.Errorf("inference %d timed out: %s", 7, "execution"),
+			wantVote:   "execution",
+			wantFailed: true,
+		},
+		{
+			name:       "votes_sufficed_but_the_diff_landed_no_timeout",
+			result:     user.TimeoutResult{Reason: "execution"},
+			err:        fmt.Errorf("inference %d: %w: diff landed no timeout", 7, user.ErrTimeoutNotApplied),
+			wantVote:   "execution",
+			wantFailed: true,
 		},
 		{
 			name:       "insufficient_votes_reads_as_a_failure",
@@ -117,7 +132,7 @@ func TestNewSessionTimeoutsWiresTheSessionAndItsPayload(t *testing.T) {
 func TestSettleTimeoutsRecordsAPostedVoteAsCompleted(t *testing.T) {
 	t.Parallel()
 	handler := &scriptedTimeoutHandler{
-		result: user.TimeoutResult{Reason: "execution"},
+		result: user.TimeoutResult{Reason: "execution", Applied: true},
 		err:    fmt.Errorf("inference %d timed out: %s", 7, "execution"),
 	}
 	outcome := race(failedAttempt(TerminalDialFailure))
@@ -132,6 +147,26 @@ func TestSettleTimeoutsRecordsAPostedVoteAsCompleted(t *testing.T) {
 	}
 	if events[1].Kind != timeoutKindExecution {
 		t.Errorf("kind = %q, want execution", events[1].Kind)
+	}
+}
+
+// A timeout the diff never carried is not a collection failure, and an operator reading the reason has
+// only this label to tell the two apart.
+func TestSettleTimeoutsNamesADiffThatCarriedNoTimeout(t *testing.T) {
+	t.Parallel()
+	handler := &scriptedTimeoutHandler{
+		result: user.TimeoutResult{Reason: "execution"},
+		err:    fmt.Errorf("inference %d: %w: diff landed no timeout", 7, user.ErrTimeoutNotApplied),
+	}
+
+	events := SettleTimeouts(context.Background(), &SessionTimeouts{handler: handler}, race(failedAttempt(TerminalDialFailure)))
+
+	settled := events[len(events)-1]
+	if settled.Action != TimeoutActionFailed {
+		t.Fatalf("action = %q, want %q", settled.Action, TimeoutActionFailed)
+	}
+	if settled.Reason != timeoutReasonNotApplied {
+		t.Fatalf("reason = %q, want %q", settled.Reason, timeoutReasonNotApplied)
 	}
 }
 
