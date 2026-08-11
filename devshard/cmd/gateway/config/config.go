@@ -151,8 +151,7 @@ type Engine struct {
 // Scheduler groups nonce-holding tuning. HoldGraceMS is how long a bound nonce waits for a co-arriving
 // compatible request before it is burned; 0 burns immediately.
 type Scheduler struct {
-	HoldGraceMS            int64
-	BalanceFloorPerRequest int64
+	HoldGraceMS int64
 }
 
 // Config is the complete immutable gateway configuration snapshot.

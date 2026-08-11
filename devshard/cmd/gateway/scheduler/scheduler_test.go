@@ -205,7 +205,8 @@ func newSchedulerHarness(t *testing.T, cfg schedulerConfig) *schedulerHarness {
 	sessions := map[string]*scriptedSession{}
 	holds := &escrowHolds{}
 	for _, escrowID := range cfg.escrows {
-		session := &scriptedSession{slots: cfg.slots, gate: cfg.gate, entered: make(chan struct{}, 1)}
+		// Funded: routing now prices every candidate against its balance, and a penniless escrow is not one.
+		session := &scriptedSession{balance: 1 << 40, slots: cfg.slots, gate: cfg.gate, entered: make(chan struct{}, 1)}
 		sessions[escrowID] = session
 		escrows.byModel[modelA] = append(escrows.byModel[modelA], Escrow{ID: escrowID, Model: modelA, Session: session, Hold: holds.source()})
 		weights.byEscrow[escrowID] = 10

@@ -26,6 +26,7 @@ const (
 	timeoutReasonNonceFinished   = "nonce_already_finished"
 	timeoutReasonLongResponse    = "long_response_after_content"
 	timeoutReasonCollectionError = "timeout_collection_error"
+	timeoutReasonVotesShort      = "timeout_votes_below_threshold"
 )
 
 type TimeoutPoster interface {
@@ -138,6 +139,9 @@ func SettleTimeouts(ctx context.Context, poster TimeoutPoster, outcome RaceOutco
 		case errors.Is(err, user.ErrNonceFinishedWhileWaiting):
 			posted.Action = TimeoutActionSkipped
 			posted.Reason = timeoutReasonNonceFinished
+		case errors.Is(err, user.ErrTimeoutNotApplied):
+			posted.Action = TimeoutActionFailed
+			posted.Reason = timeoutReasonVotesShort
 		case err != nil:
 			posted.Action = TimeoutActionFailed
 			posted.Reason = timeoutReasonCollectionError

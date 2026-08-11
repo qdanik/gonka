@@ -94,13 +94,13 @@ Recovery walks the ladder back down: a success while half-open clears the trip *
 
 Both limiters take a settings change without a restart. The gateway limiter swaps its whole configuration; the participant limiter keeps what it has learned, clamping any window above the new ceiling and lifting any that sits below the new initial. That lift is deliberate: an operator raising the initial window after a bad episode means it for the participants already tracked, and a limiter that applied it only to a restarted process would make the knob useless exactly when it is reached for. Nothing is lost by being generous — a participant that is still failing shrinks again within seconds, and the breaker is what protects against one that is failing badly.
 
-The three admission defaults are set from what a day of production spent rather than from what looked reasonable. In 24 hours the shard burned 1618 nonces for nobody against 1607 client requests — one wasted nonce per request — and 35% of those burns were a nonce arriving at a participant whose window was full, with another 21% a nonce held for a host no queued request would accept. A hold grace of 200ms is shorter than the gap between arrivals at that load, so the nonce burned before its request could turn up; it is 2s now. An initial window of 64 per participant left three participants carrying sixteen slots at a fleet-wide 12 concurrent until AIMD grew it, which under 200-second requests takes hours; it is 128. Queue depth follows the wait budget: at two minutes and a measured ten seconds per request, a slot drains about twelve deep, so twenty-four holds a burst without refusing on sight.
+The three admission defaults are set from what a day of production spent rather than from what looked reasonable. In 24 hours the shard burned 1618 nonces for nobody against 1607 client requests — one wasted nonce per request — and 35% of those burns were a nonce arriving at a participant whose window was full, with another 21% a nonce held for a host no queued request would accept. A hold grace of 200ms is shorter than the gap between arrivals at that load, so the nonce burned before its request could turn up; it is 2s now. An initial window of 64 per participant left three participants carrying sixteen slots at a fleet-wide 12 concurrent until AIMD grew it, which under 200-second requests takes hours; it was raised to 128 and then settled back at 64, because across three days no host sustained more than 59 concurrent streams. Queue depth follows the wait budget, and both were re-measured after that day: a slot is held 105 s at the median rather than ten, so at a five-minute budget it drains about three deep and the depth is four.
 
 ## The balance floor
 
 An escrow that runs to zero does not stop serving — it starts failing. In one production minute three depleted escrows produced 178 client errors reading `insufficient escrow balance`, over half of that day's client-facing failures, because routing kept choosing an escrow that could no longer pay for what it was being handed.
 
-The floor takes an escrow out of selection while it can still refuse cleanly. It scales with load rather than being a fixed reserve: the requests already in flight are what the escrow is about to owe, and one more covers the arrival being decided, so a fresh escrow must still afford a single request. `balance_floor_per_request` carries the one number the gateway cannot derive — what a request may cost this escrow — because that depends on the escrow's own token price, which routing never reads. Read it as `token_price × max_tokens_cap` from `GET /devshard/{id}/v1/state`.
+The floor takes an escrow out of selection while it can still refuse cleanly. It scales with load rather than being a fixed reserve: the requests already in flight are what the escrow is about to owe, and one more covers the arrival being decided, so a fresh escrow must still afford a single request. There is nothing to tune: routing prices the request the way the chain does, `(input_tokens + max_tokens_cap) × token_price`, reading the price off the escrow's own session. An escrow whose price the gateway cannot yet read prices at zero and is never ejected on this rule.
 
 It is zero by default, which disables it. A floor sized in the wrong unit would retire every escrow at once, so the gateway declines to guess.
 
@@ -163,14 +163,14 @@ Two asymmetries worth knowing, neither of which is stated in the code:
 
 | Knob | Default | Effect |
 |---|---|---|
-| `max_concurrent_requests` | 512 | Per-model in-flight request cap, scaled by capacity. |
+| `max_concurrent_requests` | 1 536 | Per-model in-flight request cap, scaled by capacity. |
 | `max_input_tokens_in_flight` | 0 (unlimited) | Per-model input-token budget, scaled by capacity. |
-| `max_concurrent_requests_per_10000_weight` | 5.0 | Weight-derived cap; when set with an observed baseline it replaces the absolute cap. |
-| `poc_max_concurrent_requests_per_10000_weight` | 10.0 | The same, used while the chain reports requests blocked. |
-| `acquire_wait_ms` | 500 | Bounded queue wait before a 429. |
+| `max_concurrent_requests_per_10000_weight` | 24.0 | Weight-derived cap; when set with an observed baseline it replaces the absolute cap. |
+| `poc_max_concurrent_requests_per_10000_weight` | 48.0 | The same, used while the chain reports requests blocked. |
+| `acquire_wait_ms` | 300 000 | Bounded queue wait before a 503. |
 | `aimd_initial_window` / `aimd_max_window` | 64 / 256 | Per-participant concurrency window bounds. The window opens near a host's known capacity and AIMD is left to back off from it, rather than discovering it upward from a cold start. |
 | `breaker_trip_threshold` | 3 | Consecutive transport faults before the breaker opens. |
-| `breaker_base_open_ms` / `breaker_max_open_ms` | 5 000 / 300 000 | Backoff ladder bounds. The maximum must not exceed the performance ejection maximum, so ejection stays the dominant authority. |
+| `breaker_base_open_ms` / `breaker_max_open_ms` | 5 000 / 60 000 | Backoff ladder bounds. The maximum must not exceed the performance ejection maximum, so ejection stays the dominant authority. |
 | `perf_consecutive_fail_threshold` | 5 | Consecutive-failure ejection trigger. |
 | `perf_failure_rate_threshold` / `perf_failure_rate_min_volume` | 0.15 / 20 | Rate-based ejection trigger and its volume gate. |
 | `perf_ejection_base_seconds` / `perf_ejection_max_seconds` | 30 / 600 | Ejection duration ladder. |
@@ -186,9 +186,9 @@ The default input-token budget of zero means unlimited, which is worth an operat
 
 A shard should not answer 429. That status means the client exceeded a quota, and a client that ran into the shard's own capacity exceeded nothing — it carries no hint of when to return, so a well-behaved client retries immediately and deepens the shortage it just hit. Every capacity refusal answers 503 instead, and every one of them carries `Retry-After`: the wait already spent when that is known, a default otherwise.
 
-`acquire_wait_ms` is the budget a request may spend looking for capacity, not a delay. A queued waiter is promoted the instant a slot frees. The default is two minutes; at a measured ~10 s per request on a slot that is a queue roughly twelve deep.
+`acquire_wait_ms` is the budget a request may spend looking for capacity, not a delay. A queued waiter is promoted the instant a slot frees. The default is five minutes, and it is set from what a slot actually costs: across three days of load the median winning attempt held its slot 105 s and the p90 held it 317 s. A two-minute budget was shorter than the p90 hold, so most waiters could not be reached before their budget ran out.
 
-That number is where `queue_depth_per_slot` comes from. Waiting the whole budget out and being refused anyway costs the client the wait and the shard the connection, so a request that provably cannot reach the front in time is refused on arrival instead. Depth is counted per model against that model's own concurrency, because the caps are per model: a heavy model does not shrink a light one's queue.
+That ratio is where `queue_depth_per_slot` comes from: five minutes against a 105 s median hold drains about three deep, so four holds a burst without admitting waiters that provably cannot be served. Waiting the whole budget out and being refused anyway costs the client the wait and the shard the connection, so a request that provably cannot reach the front in time is refused on arrival instead. Depth is counted per model against that model's own concurrency, because the caps are per model: a heavy model does not shrink a light one's queue.
 
 Two gates can refuse, and they answer different questions. The gateway limiter asks whether there is budget — concurrency, input tokens, chain weights. The scheduler asks whether a live host will take it — participant windows, breakers, chain phase. A request can pass the first and stall at the second; production has shown exactly that, with zero limiter refusals and nine scheduler refusals in one burst. The budget is meant to bound the whole path, and the scheduler side of it is not built yet: it still refuses immediately rather than waiting. See `specs/2026-08-03-request-queue-design.md`.
 

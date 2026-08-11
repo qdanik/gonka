@@ -26,6 +26,7 @@ func chatRequest(t *testing.T) *http.Request {
 func capturing(tune ...func(*config.Capture)) func(*config.Config) {
 	return func(next *config.Config) {
 		next.Capture.Enabled = true
+		next.Capture.SampleRate = 1
 		for _, adjust := range tune {
 			adjust(&next.Capture)
 		}

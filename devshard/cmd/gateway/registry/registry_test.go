@@ -76,6 +76,7 @@ func (f *fakeSession) ParticipantKeys() []string        { return f.participants 
 func (f *fakeSession) HostParticipantKeyList() []string { return f.perSlotKeys }
 func (f *fakeSession) Nonce() uint64                    { return f.nonce.Load() }
 func (f *fakeSession) Balance() uint64                  { return 1 << 40 }
+func (f *fakeSession) TokenPrice() uint64               { return 1 }
 func (f *fakeSession) Phase() types.SessionPhase        { return types.SessionPhase(f.phase.Load()) }
 
 func (f *fakeSession) PrepareInferenceFn(chooser user.ParamsForHost) (*user.PreparedInference, error) {

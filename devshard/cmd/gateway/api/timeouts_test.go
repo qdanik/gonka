@@ -12,6 +12,7 @@ import (
 	"devshard/cmd/gateway/registry"
 	"devshard/host"
 	"devshard/types"
+	"devshard/user"
 )
 
 // fixedEscrows publishes one escrow. retired takes it out of the acquirable set while leaving it
@@ -160,10 +161,9 @@ func TestSettleTimeoutReportsACancelledWaitAsNoVote(t *testing.T) {
 	}
 }
 
-// The handler reports an insufficient-vote tally exactly the way it reports a posted vote — a populated
-// result beside an unwrapped error — so this reads as posted. Distinguishing the two needs a sentinel on
-// the handler's side; message text is not a discriminator.
-func TestSettleTimeoutCannotDistinguishInsufficientVotesFromAPostedVote(t *testing.T) {
+// An insufficient tally is a timeout the group never applied, and it reaches the poster looking like a
+// posted vote: same populated result, same non-nil error. Only the handler's sentinel separates them.
+func TestSettleTimeoutReportsAnInsufficientVoteTallyAsAFailure(t *testing.T) {
 	t.Parallel()
 	session, machine := newLiveSession(t)
 	prepared := prepareNonce(t, session)
@@ -177,8 +177,8 @@ func TestSettleTimeoutCannotDistinguishInsufficientVotesFromAPostedVote(t *testi
 
 	vote, err := poster.SettleTimeout(context.Background(), prepared.Nonce(), elapsedDeadline)
 
-	if err != nil {
-		t.Errorf("SettleTimeout error = %v, want nil", err)
+	if !errors.Is(err, user.ErrTimeoutNotApplied) {
+		t.Errorf("SettleTimeout error = %v, want it to match user.ErrTimeoutNotApplied", err)
 	}
 	if got, want := vote, "refused"; got != want {
 		t.Errorf("vote = %q, want %q", got, want)

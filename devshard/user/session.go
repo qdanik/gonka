@@ -124,6 +124,10 @@ type nonceOutcome struct {
 // deadline. It is not a failure: the work exists, and no timeout is owed.
 var ErrNonceFinishedWhileWaiting = errors.New("nonce finished while waiting for the timeout deadline")
 
+// ErrTimeoutNotApplied reports a timeout the group would not carry. Callers separate a settled vote
+// from an unsettled one by unwrapping, so this has to arrive wrapped or it reads as success.
+var ErrTimeoutNotApplied = errors.New("timeout was not applied")
+
 type TimeoutResult struct {
 	Reason       string // "execution", "refused", or "" if deadline not reached
 	Outcome      string // how handling ended: skipped, vote_collection_failed, insufficient_votes, diff_send_failed, applied
@@ -1296,6 +1300,11 @@ func (s *Session) Balance() uint64 {
 	return s.sm.Balance()
 }
 
+// TokenPrice reads the escrow's own price, which is what one request's reserve is measured in.
+func (s *Session) TokenPrice() uint64 {
+	return s.sm.Config().TokenPrice
+}
+
 func (s *Session) Diffs() []types.Diff {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -2001,7 +2010,7 @@ func (s *Session) HandleTimeout(ctx context.Context, nonce uint64, sendTime time
 		result.Outcome = "insufficient_votes"
 	}
 	logging.Stage(ctx, "timeout_insufficient_votes", logFields("reason", result.Reason)...)
-	return result, fmt.Errorf("inference %d timed out but insufficient votes", nonce)
+	return result, fmt.Errorf("inference %d: %w: insufficient votes", nonce, ErrTimeoutNotApplied)
 }
 
 func (s *Session) TimeoutDeadline(nonce uint64, sendTime time.Time) (string, time.Time) {

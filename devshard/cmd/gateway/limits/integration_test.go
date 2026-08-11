@@ -76,8 +76,8 @@ func TestParticipantConfigFromLimits_MapsFieldsFromDefaults(t *testing.T) {
 	if got.BaseOpen != 5*time.Second {
 		t.Errorf("BaseOpen = %v, want 5s (default BaseOpenMS=5000)", got.BaseOpen)
 	}
-	if got.MaxOpen != 300*time.Second {
-		t.Errorf("MaxOpen = %v, want 300s (default MaxOpenMS=300000)", got.MaxOpen)
+	if got.MaxOpen != 60*time.Second {
+		t.Errorf("MaxOpen = %v, want 60s (default MaxOpenMS=60000)", got.MaxOpen)
 	}
 }
 

@@ -67,7 +67,6 @@ func Build(values env.Values, overrides Overrides) (*Config, error) {
 	overrideIfSet(&configuration.Limits.AcquireWaitMS, overrides.AcquireWaitMS)
 	overrideIfSet(&configuration.Limits.QueueDepthPerSlot, overrides.QueueDepthPerSlot)
 	overrideIfSet(&configuration.Scheduler.HoldGraceMS, overrides.HoldGraceMS)
-	overrideIfSet(&configuration.Scheduler.BalanceFloorPerRequest, overrides.BalanceFloorPerRequest)
 	overrideIfSet(&configuration.Limits.AIMD.InitialWindow, overrides.AIMDInitialWindow)
 	overrideIfSet(&configuration.Limits.AIMD.MaxWindow, overrides.AIMDMaxWindow)
 	overrideIfSet(&configuration.Limits.Breaker.TripThreshold, overrides.BreakerTripThreshold)

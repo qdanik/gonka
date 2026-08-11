@@ -26,22 +26,22 @@ func Defaults() Config {
 			DefaultMaxTokens: int64(filters.DefaultRequestMaxTokens),
 			MaxTokensCap:     int64(filters.RequestMaxTokensCap),
 			Concurrency: Concurrency{
-				MaxRequests:               2048,
-				RequestsPer10000Weight:    32,
-				PoCRequestsPer10000Weight: 64,
+				MaxRequests:               1536,
+				RequestsPer10000Weight:    24,
+				PoCRequestsPer10000Weight: 48,
 			},
 			MaxInputTokensInFlight: 0,
 			// The wait budget a request spends looking for capacity. A shard that refuses on the first
 			// hiccup is what 429 meant to a client that had exceeded nothing.
-			AcquireWaitMS: 120_000,
-			// Wait budget divided by the measured time one request holds a slot (~10 s): deeper than this
-			// and the queue provably cannot reach the newcomer before its budget runs out.
-			QueueDepthPerSlot: 32,
+			AcquireWaitMS: 300_000,
+			// Wait budget divided by the measured time one request holds a slot (~105 s at p50): deeper
+			// than this and the queue provably cannot reach the newcomer before its budget runs out.
+			QueueDepthPerSlot: 4,
 			// A window opens near what a host is known to take rather than discovering it: starting at 4
 			// capped three participants at twelve concurrent requests, whatever the group size.
 			AIMD: AIMD{
-				InitialWindow: 128,
-				MaxWindow:     512,
+				InitialWindow: 64,
+				MaxWindow:     256,
 			},
 			Breaker: Breaker{
 				TripThreshold: 3,
@@ -63,7 +63,7 @@ func Defaults() Config {
 			RetentionMaxRows: 1_000_000,
 		},
 		Capture: Capture{
-			SampleRate: 1,
+			SampleRate: 0.01,
 			MaxBytes:   1 << 30,
 		},
 		Stream: Stream{
@@ -86,7 +86,7 @@ func Defaults() Config {
 		Engine: Engine{
 			ReceiptTimeoutMS:       5_000,
 			FirstTokenFloorMS:      1_000,
-			FirstTokenCeilingMS:    60_000,
+			FirstTokenCeilingMS:    30_000,
 			InterChunkStallMS:      30_000,
 			LoserGraceMS:           600_000,
 			MaxSpeculativeAttempts: 0,

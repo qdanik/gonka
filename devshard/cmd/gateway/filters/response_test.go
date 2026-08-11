@@ -3,7 +3,6 @@ package filters
 import (
 	"bytes"
 	"encoding/json"
-	stdjson "encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -671,7 +670,7 @@ func TestABodyCarryingNonFiniteNumbersIsStillStrippedAndDelivered(t *testing.T) 
 		t.Fatalf("the client's answer was lost: %s", stripped)
 	}
 	var decoded any
-	if err := stdjson.Unmarshal(stripped, &decoded); err != nil {
+	if err := json.Unmarshal(stripped, &decoded); err != nil {
 		t.Fatalf("the delivered body is not JSON: %v (%s)", err, stripped)
 	}
 }
@@ -681,7 +680,7 @@ func TestABodyCarryingNonFiniteNumbersIsStillStrippedAndDelivered(t *testing.T) 
 func TestNonFiniteWordsInsideStringsAreLeftAlone(t *testing.T) {
 	body := []byte(`{"choices":[{"message":{"content":"the value is NaN, or -Infinity"},"logprobs":{"content":[{"logprob":NaN}]}}],"token_ids":[7]}`)
 	var probe any
-	if stdjson.Unmarshal(body, &probe) == nil {
+	if json.Unmarshal(body, &probe) == nil {
 		t.Fatal("the body parses on its own, so normalisation never runs and this test is vacuous")
 	}
 

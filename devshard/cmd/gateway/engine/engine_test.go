@@ -28,9 +28,8 @@ func (h *scriptedTimeoutHandler) HandleTimeout(context.Context, uint64, time.Tim
 	return h.result, h.err
 }
 
-// One case is a known overstatement: the handler returns insufficient votes with the same populated
-// result and unwrapped error as a posted vote, and only wrapping at the source -- out of this
-// package's reach -- could separate them.
+// A posted vote and a refused one both arrive with a populated result, so the wrapping is what
+// separates them: an unwrapped error means the vote reached the chain.
 func TestSessionTimeoutsReadsAPostedVoteThroughTheHandlersSuccessError(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
@@ -47,11 +46,11 @@ func TestSessionTimeoutsReadsAPostedVoteThroughTheHandlersSuccessError(t *testin
 			wantVote: "execution",
 		},
 		{
-			name:       "insufficient_votes_is_indistinguishable_from_a_posted_vote",
+			name:       "insufficient_votes_reads_as_a_failure",
 			result:     user.TimeoutResult{Reason: "refused"},
-			err:        fmt.Errorf("inference %d timed out but insufficient votes", 7),
+			err:        fmt.Errorf("inference %d: %w: insufficient votes", 7, user.ErrTimeoutNotApplied),
 			wantVote:   "refused",
-			wantFailed: false,
+			wantFailed: true,
 		},
 		{
 			name:       "diff_send_failure_wraps_its_cause",

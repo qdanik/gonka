@@ -250,11 +250,13 @@ func (s *Scheduler) holdGrace() time.Duration {
 	return time.Duration(s.settings.Load().Scheduler.HoldGraceMS) * time.Millisecond
 }
 
-func (s *Scheduler) balanceFloorPerRequest() int64 {
+// reserveTokens is the token count one request may cost: what it already sent, plus the most this gateway
+// will let the host answer with.
+func (s *Scheduler) reserveTokens(profile RequestProfile) uint64 {
 	if s.settings == nil {
 		return 0
 	}
-	return s.settings.Load().Scheduler.BalanceFloorPerRequest
+	return uint64(max(profile.InputTokens, 0)) + uint64(max(s.settings.Load().Limits.MaxTokensCap, 0))
 }
 
 // pocPreserved reads the PoC-preserved set, preferring the model's own; a nil set means not loaded yet, so
@@ -343,6 +345,7 @@ type session interface {
 	GroupSize() int            // len(group); nonce % GroupSize == hostIdx
 	LatestNonce() uint64       // for the nonce-cap gate
 	Balance() uint64           // for the balance floor
+	TokenPrice() uint64        // for the balance floor
 }
 
 // HostBinding is the nonce the session is offering and the host it is bound to; Participant is that host's

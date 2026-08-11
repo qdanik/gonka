@@ -8,12 +8,14 @@ import (
 	"testing"
 
 	"devshard/cmd/gateway/chain"
+	"devshard/cmd/gateway/config"
 )
 
 const modelA = "model-a"
 
 type fakeSession struct {
 	balance     uint64
+	tokenPrice  uint64
 	latestNonce uint64
 	groupSize   int
 	calls       []string
@@ -479,29 +481,78 @@ func TestAPinnedEscrowUnderTheCeilingIsServed(t *testing.T) {
 	}
 }
 
-func (f *fakeSession) Balance() uint64 { return f.balance }
+func (f *fakeSession) Balance() uint64    { return f.balance }
+func (f *fakeSession) TokenPrice() uint64 { return f.tokenPrice }
 
 // An escrow must leave routing while it can still refuse cleanly, not once it fails requests.
 func TestPickEscrowSkipsAnEscrowBelowItsBalanceFloor(t *testing.T) {
 	t.Parallel()
-	poor := Escrow{ID: "poor", Session: &fakeSession{balance: 500}, ActiveUsers: 4}
-	rich := Escrow{ID: "rich", Session: &fakeSession{balance: 1 << 30}, ActiveUsers: 4}
+	const reserveTokens, price = 20, 10 // one request reserves 200
 
-	if !belowBalanceFloor(poor, 200) {
+	poor := Escrow{ID: "poor", Session: &fakeSession{balance: 500, tokenPrice: price}, ActiveUsers: 4}
+	rich := Escrow{ID: "rich", Session: &fakeSession{balance: 1 << 30, tokenPrice: price}, ActiveUsers: 4}
+	single := Escrow{ID: "empty", Session: &fakeSession{balance: 100, tokenPrice: price}, ActiveUsers: 0}
+
+	if !belowBalanceFloor(poor, reserveTokens) {
 		t.Fatal("an escrow holding 500 with four requests in flight and 200 apiece was kept in routing")
 	}
-	if belowBalanceFloor(rich, 200) {
+	if belowBalanceFloor(rich, reserveTokens) {
 		t.Fatal("a funded escrow was taken out of routing")
 	}
-	if !belowBalanceFloor(Escrow{ID: "empty", Session: &fakeSession{balance: 100}, ActiveUsers: 0}, 200) {
+	if !belowBalanceFloor(single, reserveTokens) {
 		t.Fatal("an escrow that cannot afford one request was kept in routing")
 	}
 }
 
-// The floor is off until an operator sizes it.
-func TestBalanceFloorIsInertUntilConfigured(t *testing.T) {
+// The reserve is priced by the escrow itself rather than by a number an operator had to guess, so a dearer
+// escrow leaves routing on a balance a cheaper one still serves from.
+func TestTheBalanceFloorIsPricedByTheEscrowsOwnTokenPrice(t *testing.T) {
 	t.Parallel()
-	if belowBalanceFloor(Escrow{ID: "any", Session: &fakeSession{balance: 0}, ActiveUsers: 99}, 0) {
-		t.Fatal("an unconfigured floor took an escrow out of routing")
+	const reserveTokens = 100
+
+	cheap := Escrow{ID: "cheap", Session: &fakeSession{balance: 5_000, tokenPrice: 10}, ActiveUsers: 0}
+	dear := Escrow{ID: "dear", Session: &fakeSession{balance: 5_000, tokenPrice: 100}, ActiveUsers: 0}
+
+	if belowBalanceFloor(cheap, reserveTokens) {
+		t.Fatal("an escrow that affords ten more requests at its own price was taken out of routing")
+	}
+	if !belowBalanceFloor(dear, reserveTokens) {
+		t.Fatal("an escrow that cannot afford one request at its own price was kept in routing")
+	}
+}
+
+// A price that overflows the reserve is one no balance could ever cover, and it must not wrap into a small
+// affordable number.
+func TestABalanceFloorThatOverflowsTakesTheEscrowOutOfRouting(t *testing.T) {
+	t.Parallel()
+	ruinous := Escrow{ID: "ruinous", Session: &fakeSession{balance: math.MaxUint64, tokenPrice: math.MaxUint64}, ActiveUsers: 0}
+
+	if !belowBalanceFloor(ruinous, 1<<62) {
+		t.Fatal("a reserve too large to represent was read as affordable")
+	}
+}
+
+// Without a token cap loaded the gateway cannot price a request at all, and a floor it cannot price must
+// not eject anyone.
+func TestBalanceFloorIsInertWithoutAReserve(t *testing.T) {
+	t.Parallel()
+	if belowBalanceFloor(Escrow{ID: "any", Session: &fakeSession{balance: 0, tokenPrice: 10}, ActiveUsers: 99}, 0) {
+		t.Fatal("an unpriced floor took an escrow out of routing")
+	}
+}
+
+// One request's reserve is what it already sent plus the most this gateway will let a host answer with:
+// pricing the answer alone would admit a prompt the escrow cannot pay for.
+func TestReserveTokensCountsThePromptAndTheAnswerCap(t *testing.T) {
+	t.Parallel()
+	settings := config.Defaults()
+	settings.Limits.MaxTokensCap = 4_096
+	priced := &Scheduler{settings: config.NewHolder(&settings)}
+
+	if got := priced.reserveTokens(RequestProfile{InputTokens: 1_000}); got != 5_096 {
+		t.Fatalf("reserveTokens = %d, want the prompt and the answer cap together", got)
+	}
+	if got := (&Scheduler{}).reserveTokens(RequestProfile{InputTokens: 1_000}); got != 0 {
+		t.Fatalf("reserveTokens = %d before any configuration loaded, want an unpriced 0", got)
 	}
 }

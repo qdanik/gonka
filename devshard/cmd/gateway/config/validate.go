@@ -197,9 +197,6 @@ func (c *Config) Validate() error {
 
 	// A long grace parks a committed-cost nonce on the chance of a co-arrival, so the ceiling is a
 	// budget guard, not a taste judgement.
-	if c.Scheduler.BalanceFloorPerRequest < 0 {
-		complain("balance_floor_per_request: %d must be >= 0", c.Scheduler.BalanceFloorPerRequest)
-	}
 	if c.Scheduler.HoldGraceMS < 0 || c.Scheduler.HoldGraceMS > 5_000 {
 		complain("scheduler_hold_grace_ms: %d must be in [0, 5000]", c.Scheduler.HoldGraceMS)
 	}
