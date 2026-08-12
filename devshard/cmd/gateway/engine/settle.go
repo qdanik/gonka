@@ -27,6 +27,9 @@ const (
 	timeoutReasonLongResponse    = "long_response_after_content"
 	timeoutReasonCollectionError = "timeout_collection_error"
 	timeoutReasonNotApplied      = "timeout_not_applied"
+	// timeoutReasonEscrowGone names a vote no retry can win: the hosts have dropped the escrow, so the
+	// nonce it would have settled is now unsettleable and will pay its full reserve.
+	timeoutReasonEscrowGone = "escrow_gone_from_hosts"
 )
 
 type TimeoutPoster interface {
@@ -142,6 +145,11 @@ func SettleTimeouts(ctx context.Context, poster TimeoutPoster, outcome RaceOutco
 		case errors.Is(err, user.ErrTimeoutNotApplied):
 			posted.Action = TimeoutActionFailed
 			posted.Reason = timeoutReasonNotApplied
+		case err != nil && outcome.Lifecycle.EscrowMissing:
+			// The verifier error itself never reaches here -- vote collection reports only a count -- so
+			// the escrow's absence is read from the attempts that were told the same thing.
+			posted.Action = TimeoutActionFailed
+			posted.Reason = timeoutReasonEscrowGone
 		case err != nil:
 			posted.Action = TimeoutActionFailed
 			posted.Reason = timeoutReasonCollectionError

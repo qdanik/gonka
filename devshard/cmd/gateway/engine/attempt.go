@@ -130,6 +130,7 @@ type attemptState struct {
 	hostCreated           int64
 	tokensBurned          bool
 	contentSource         string
+	capability            CapabilitySignal
 	errorSource           string
 	errorCode             string
 	errorType             string
@@ -269,6 +270,7 @@ func (s *attemptState) classify(ctx context.Context, spec AttemptSpec, err error
 		s.lifecycle.EscrowMissing = transport.IsUpstreamEscrowNotFound(err)
 		s.stateDivergent = errors.Is(err, ErrStateRootDivergence)
 		s.terminal = classifyDispatchError(ctx, err)
+		s.capability = capabilityOfDispatchError(err)
 		return
 	}
 	s.record(spec.Classifier.Flush())
@@ -350,6 +352,7 @@ func (s *attemptState) outcome(spec AttemptSpec) *AttemptOutcome {
 		ConfirmedAt: s.confirmedAt,
 
 		ContentSource: s.contentSource,
+		Capability:    s.capability,
 		ErrorSource:   s.errorSource,
 		ErrorCode:     s.errorCode,
 		ErrorType:     s.errorType,

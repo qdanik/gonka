@@ -8,8 +8,9 @@ type contextLimitCall struct {
 }
 
 type stubCapabilityRecorder struct {
-	contextLimits    []contextLimitCall
-	toolsUnsupported []string
+	contextLimits       []contextLimitCall
+	toolsUnsupported    []string
+	versionsUnsupported []string
 }
 
 func (r *stubCapabilityRecorder) RecordContextLimit(participant string, maxTokens uint64) {
@@ -18,6 +19,10 @@ func (r *stubCapabilityRecorder) RecordContextLimit(participant string, maxToken
 
 func (r *stubCapabilityRecorder) RecordToolUnsupported(participant string) {
 	r.toolsUnsupported = append(r.toolsUnsupported, participant)
+}
+
+func (r *stubCapabilityRecorder) RecordVersionUnsupported(participant string) {
+	r.versionsUnsupported = append(r.versionsUnsupported, participant)
 }
 
 const (
@@ -241,5 +246,70 @@ func TestContextHintIgnoresANonCapabilityFailure(t *testing.T) {
 
 	if hint := GrowContextHint(4096, CapabilityOf(attempt)); hint != 4096 {
 		t.Fatalf("hint = %d, want it unchanged at 4096", hint)
+	}
+}
+
+// Both refusals arrive as the same status with the same two words in the body. One is the host's build
+// and waiting cannot fix it; the other is an escrow being torn down and waiting is exactly the fix.
+// Confusing them bans a healthy host for the life of the process.
+func TestOnlyAVersionRefusalIsReadAsAPermanentCapability(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		body string
+		want bool
+	}{
+		{name: "the host's build is too old", body: `version "v3" not found`, want: true},
+		{name: "the refusal as the host sends it, newline and all", body: "version \"v3\" not found\n", want: true},
+		{name: "an escrow torn down mid-flight", body: `{"message":"get escrow: escrow not found"}`},
+		{name: "a plain missing route", body: `404 page not found`},
+		{name: "a model that is not served", body: `{"message":"model not found"}`},
+		{name: "some other quoted thing missing", body: `model "kimi" not found`},
+		{name: "a quoted escrow missing", body: `escrow "49247" not found`},
+		{name: "the word version alone", body: `unsupported version`},
+		{name: "nothing at all", body: ""},
+	}
+
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			if got := ParseVersionRefusal(testCase.body).VersionUnsupported; got != testCase.want {
+				t.Fatalf("ParseVersionRefusal(%q).VersionUnsupported = %v, want %v", testCase.body, got, testCase.want)
+			}
+		})
+	}
+}
+
+// The refusal reaches the capability path only through the dispatch error: a 404 carries no SSE error
+// event, so the fields CapabilityOf used to read are empty.
+func TestAVersionRefusalReachesCapabilityOfThroughTheDispatchError(t *testing.T) {
+	t.Parallel()
+	refused := AttemptOutcome{Capability: ParseVersionRefusal(`version "v3" not found`)}
+
+	signal := CapabilityOf(refused)
+
+	if !signal.VersionUnsupported {
+		t.Fatal("a version refusal carried on the dispatch error did not reach CapabilityOf")
+	}
+	if !signal.Retriable() {
+		t.Fatal("a version refusal must let the race try another host")
+	}
+	if CapabilityOf(AttemptOutcome{}).Retriable() {
+		t.Fatal("an attempt with no refusal at all reported one")
+	}
+}
+
+// The recorder is the only route from a refusal to the tracker that blocks routing.
+func TestAVersionRefusalIsRecordedAgainstTheParticipant(t *testing.T) {
+	t.Parallel()
+	recorder := &stubCapabilityRecorder{}
+
+	RecordCapability(recorder, "host-0", ParseVersionRefusal(`version "v3" not found`))
+
+	if len(recorder.versionsUnsupported) != 1 || recorder.versionsUnsupported[0] != "host-0" {
+		t.Fatalf("versions recorded = %v, want one for host-0", recorder.versionsUnsupported)
+	}
+	if len(recorder.toolsUnsupported) != 0 || len(recorder.contextLimits) != 0 {
+		t.Error("a version refusal was recorded as some other capability")
 	}
 }

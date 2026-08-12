@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"context"
 	"math/rand/v2"
+	"net/http"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"devshard/cmd/gateway/filters"
+	"devshard/transport"
 )
 
 const (
@@ -760,5 +762,38 @@ func TestTheClassifierReadsTheStampFromAnUnterminatedTail(t *testing.T) {
 
 	if facts.Created != 1786114584 {
 		t.Fatalf("Created = %d, want the stamp read from the tail", facts.Created)
+	}
+}
+
+// classify is the only place a dispatch error is read, and a 404 carries no SSE error event, so this is
+// the sole path by which a permanent refusal can reach the capability tracker.
+func TestClassifyCarriesAVersionRefusalOffTheDispatchError(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		body string
+		want bool
+	}{
+		{name: "the host's build is too old", body: `version "v3" not found`, want: true},
+		{name: "an escrow torn down mid-flight", body: `{"message":"get escrow: escrow not found"}`},
+	}
+
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			state := attemptState{}
+			refusal := &transport.UpstreamStatusError{
+				Path: "/v1/chat/completions", StatusCode: http.StatusNotFound, Body: testCase.body,
+			}
+
+			state.classify(context.Background(), AttemptSpec{Classifier: &fakeClassifier{}}, refusal)
+
+			if state.terminal != TerminalNotFound {
+				t.Fatalf("terminal = %v, want %v", state.terminal, TerminalNotFound)
+			}
+			if got := state.capability.VersionUnsupported; got != testCase.want {
+				t.Fatalf("capability.VersionUnsupported = %v, want %v", got, testCase.want)
+			}
+		})
 	}
 }

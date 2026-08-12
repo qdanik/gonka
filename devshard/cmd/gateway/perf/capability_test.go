@@ -163,3 +163,38 @@ func TestCapabilityTrackerConcurrentAccessIsRaceFree(t *testing.T) {
 		}
 	}
 }
+
+// The point of recording it: routing must skip the host with no timer, unlike an ejection that expires.
+func TestAVersionRefusalBlocksTheHostForEveryRequestShape(t *testing.T) {
+	t.Parallel()
+	tracker := newCapabilityTracker()
+
+	if _, blocked := tracker.cannotServe("host-0", false, 0); blocked {
+		t.Fatal("a host with no recorded refusal was blocked")
+	}
+	tracker.recordVersionUnsupported("host-0")
+
+	for _, shape := range []struct {
+		name          string
+		requiresTools bool
+		contextHint   uint64
+	}{
+		{name: "a plain request"},
+		{name: "a request needing tools", requiresTools: true},
+		{name: "a large request", contextHint: 100_000},
+	} {
+		t.Run(shape.name, func(t *testing.T) {
+			reason, blocked := tracker.cannotServe("host-0", shape.requiresTools, shape.contextHint)
+			if !blocked {
+				t.Fatal("a host whose build cannot serve the protocol version was admitted")
+			}
+			if reason != CapabilityVersionUnsupported {
+				t.Fatalf("reason = %q, want %q", reason, CapabilityVersionUnsupported)
+			}
+		})
+	}
+
+	if _, blocked := tracker.cannotServe("host-1", false, 0); blocked {
+		t.Error("the refusal of one host blocked another")
+	}
+}

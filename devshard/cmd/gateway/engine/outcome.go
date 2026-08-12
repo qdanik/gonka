@@ -18,6 +18,7 @@ const (
 	AttemptOutcomeFailed  = "failed"
 
 	VisibilityWinner            = "user_visible_winner"
+	VisibilityWinnerClientGone  = "winner_client_gone"
 	VisibilityNoWinner          = "no_winner"
 	VisibilitySuppressedLoser   = "suppressed_loser"
 	VisibilityFailedNotFinished = "failed_not_finished"
@@ -111,6 +112,7 @@ const (
 type Lifecycle struct {
 	EscrowMissing    bool
 	BalanceExhausted bool
+	ClientGone       bool
 }
 
 type RaceOutcome struct {
@@ -166,6 +168,8 @@ type AttemptOutcome struct {
 	NonceFinished       bool
 	FailureRateExceeded bool
 
+	// Capability is a refusal read off the dispatch error, where the SSE error fields stay empty.
+	Capability    CapabilitySignal
 	ContentSource string
 	ErrorSource   string
 	ErrorCode     string
@@ -385,6 +389,8 @@ func (o RaceOutcome) Labels(a AttemptOutcome) AttemptLabels {
 
 func (o RaceOutcome) visibility(a AttemptOutcome, served bool) string {
 	switch {
+	case served && o.IsWinner(a) && o.Lifecycle.ClientGone:
+		return VisibilityWinnerClientGone
 	case served && o.IsWinner(a):
 		return VisibilityWinner
 	case a.Suspicious:
@@ -395,7 +401,8 @@ func (o RaceOutcome) visibility(a AttemptOutcome, served bool) string {
 	return VisibilityFailedNotFinished
 }
 
-// IsWinner is the one test for "this attempt is the answer the client got".
+// IsWinner is the one test for "this attempt won the race". Whether a client was still there to receive
+// it is Lifecycle.ClientGone, which visibility reads: the race outlives the client on purpose.
 func (o RaceOutcome) IsWinner(a AttemptOutcome) bool {
 	return o.WinnerNonce != 0 && a.Nonce == o.WinnerNonce
 }

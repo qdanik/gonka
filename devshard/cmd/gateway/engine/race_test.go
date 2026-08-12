@@ -230,14 +230,15 @@ func (w claimWatch) Classify(chunk []byte) chunkFacts {
 }
 
 type stubPerf struct {
-	mu        sync.Mutex
-	acquired  []string
-	released  []string
-	ejected   map[string]bool
-	degraded  map[string]bool
-	toolCalls []string
-	limits    []contextLimitCall
-	observed  map[string]time.Duration
+	mu           sync.Mutex
+	acquired     []string
+	released     []string
+	ejected      map[string]bool
+	degraded     map[string]bool
+	toolCalls    []string
+	versionCalls []string
+	limits       []contextLimitCall
+	observed     map[string]time.Duration
 }
 
 func (p *stubPerf) FirstContentP75(participant, _ string) (time.Duration, bool) {
@@ -275,6 +276,12 @@ func (p *stubPerf) RecordContextLimit(participant string, maxTokens uint64) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.limits = append(p.limits, contextLimitCall{participant: participant, maxTokens: maxTokens})
+}
+
+func (p *stubPerf) RecordVersionUnsupported(participant string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.versionCalls = append(p.versionCalls, participant)
 }
 
 func (p *stubPerf) RecordToolUnsupported(participant string) {
@@ -1718,5 +1725,77 @@ func TestEveryPickIsBounded(t *testing.T) {
 	}
 	if remaining := time.Until(deadline); remaining > schedulerPickTimeout {
 		t.Fatalf("pick deadline is %v away, want at most %v", remaining, schedulerPickTimeout)
+	}
+}
+
+// The race outlives the client on purpose, to settle the nonce it committed. What must not outlive the
+// client is the claim that the answer reached one: production crowned 64 attempts after telling their
+// clients the request had failed, and every one was labelled user-visible.
+func TestAWinnerCrownedAfterTheClientLeftIsNotLabelledUserVisible(t *testing.T) {
+	fixture := newRaceFixture(racePolicy(1), 1)
+	fixture.deps.DrainTimeout = time.Minute
+	fixture.clock.step = time.Second
+	arrive := make(chan uint64, 1)
+	release := make(chan struct{})
+	fixture.host(50, 0, "host-0", &hostScript{
+		arrive:    arrive,
+		release:   release,
+		receipt:   true,
+		chunks:    []string{roleEvent, contentEvent("answered anyway")},
+		confirmed: true,
+		finished:  true,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		if _, err := fixture.run(ctx); !errors.Is(err, context.Canceled) {
+			t.Errorf("runRace error = %v, want context.Canceled", err)
+		}
+	}()
+
+	<-arrive
+	cancel()
+	close(release)
+
+	reported := <-fixture.reported
+
+	if !reported.Lifecycle.ClientGone {
+		t.Fatal("the outcome does not record that the client left, so nothing downstream can know")
+	}
+	for _, attempt := range reported.Attempts {
+		if !reported.IsWinner(attempt) {
+			continue
+		}
+		if got := reported.Labels(attempt).Visibility; got != VisibilityWinnerClientGone {
+			t.Fatalf("winner visibility = %q, want %q", got, VisibilityWinnerClientGone)
+		}
+	}
+}
+
+// A winner served to a client that stayed keeps the label that says so.
+func TestAWinnerServedToAWaitingClientStaysUserVisible(t *testing.T) {
+	fixture := newRaceFixture(settledPolicy(), 1)
+	fixture.host(60, 0, "host-0", &hostScript{
+		receipt:   true,
+		chunks:    []string{roleEvent, contentEvent("delivered")},
+		confirmed: true,
+		finished:  true,
+	})
+
+	if _, err := fixture.run(context.Background()); err != nil {
+		t.Fatalf("runRace error = %v", err)
+	}
+	reported := <-fixture.reported
+
+	if reported.Lifecycle.ClientGone {
+		t.Fatal("the client never left, so the outcome must not say it did")
+	}
+	for _, attempt := range reported.Attempts {
+		if !reported.IsWinner(attempt) {
+			continue
+		}
+		if got := reported.Labels(attempt).Visibility; got != VisibilityWinner {
+			t.Fatalf("winner visibility = %q, want %q", got, VisibilityWinner)
+		}
 	}
 }

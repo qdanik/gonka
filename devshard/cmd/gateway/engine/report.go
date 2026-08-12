@@ -162,7 +162,7 @@ func (c *raceCoordinator) outcome() RaceOutcome {
 		ClientStream:    c.request.ClientStream,
 		Decision:        c.decision,
 		PoCBypassActive: c.pocBypass,
-		Lifecycle:       Lifecycle{BalanceExhausted: c.balanceExhausted},
+		Lifecycle:       Lifecycle{BalanceExhausted: c.balanceExhausted, ClientGone: !c.clientGoneAt.IsZero()},
 		Attempts:        make([]AttemptOutcome, 0, len(c.attempts)),
 	}
 	for _, attempt := range c.attempts {

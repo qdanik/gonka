@@ -156,6 +156,10 @@ func (t *Tracker) RecordToolUnsupported(participant string) {
 	t.capability.recordToolUnsupported(participant)
 }
 
+func (t *Tracker) RecordVersionUnsupported(participant string) {
+	t.capability.recordVersionUnsupported(participant)
+}
+
 func (t *Tracker) Acquire(participant string) {
 	t.inflight.acquire(participant)
 }

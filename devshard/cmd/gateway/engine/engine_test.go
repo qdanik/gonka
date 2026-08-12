@@ -350,3 +350,61 @@ func failedRace(attempt AttemptOutcome) RaceOutcome {
 	outcome.Succeeded = false
 	return outcome
 }
+
+// A vote can fail because the network blinked or because the hosts no longer have the escrow. Only the
+// second is permanent, and it is the one that leaves the nonce paying its full reserve at settlement.
+// The verifier's own error never reaches this far, so the fact comes from the attempts instead.
+func TestSettleTimeoutsSeparatesAGoneEscrowFromACollectionFailure(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name          string
+		escrowMissing bool
+		wantReason    string
+	}{
+		{name: "the hosts still have the escrow", wantReason: timeoutReasonCollectionError},
+		{name: "the hosts have dropped the escrow", escrowMissing: true, wantReason: timeoutReasonEscrowGone},
+	}
+
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			handler := &scriptedTimeoutHandler{
+				result: user.TimeoutResult{Reason: "refused"},
+				err:    fmt.Errorf("collect timeout votes: %w", errVoteCause),
+			}
+			outcome := race(failedAttempt(TerminalDialFailure))
+			outcome.Lifecycle.EscrowMissing = testCase.escrowMissing
+
+			events := SettleTimeouts(context.Background(), &SessionTimeouts{handler: handler}, outcome)
+
+			settled := events[len(events)-1]
+			if settled.Action != TimeoutActionFailed {
+				t.Fatalf("action = %q, want %q", settled.Action, TimeoutActionFailed)
+			}
+			if settled.Reason != testCase.wantReason {
+				t.Fatalf("reason = %q, want %q", settled.Reason, testCase.wantReason)
+			}
+		})
+	}
+}
+
+// A vote that succeeded must not be renamed by an escrow that went missing for some other attempt.
+func TestAGoneEscrowDoesNotRenameASettledVote(t *testing.T) {
+	t.Parallel()
+	handler := &scriptedTimeoutHandler{
+		result: user.TimeoutResult{Reason: "execution", Applied: true},
+		err:    fmt.Errorf("inference %d timed out: %s", 7, "execution"),
+	}
+	outcome := race(failedAttempt(TerminalDialFailure))
+	outcome.Lifecycle.EscrowMissing = true
+
+	events := SettleTimeouts(context.Background(), &SessionTimeouts{handler: handler}, outcome)
+
+	settled := events[len(events)-1]
+	if settled.Action != TimeoutActionCompleted {
+		t.Fatalf("action = %q, want %q", settled.Action, TimeoutActionCompleted)
+	}
+	if settled.Reason == timeoutReasonEscrowGone {
+		t.Fatal("a settled vote was named as a gone escrow")
+	}
+}
