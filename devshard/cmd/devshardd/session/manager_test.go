@@ -3,8 +3,9 @@ package session
 import (
 	"testing"
 
-	"github.com/stretchr/testify/require"
 	"path/filepath"
+
+	"github.com/stretchr/testify/require"
 
 	"devshard/bridge"
 	"devshard/internal/testutil"
@@ -13,6 +14,7 @@ import (
 	"devshard/storage"
 	"devshard/stub"
 	"devshard/types"
+
 	"google.golang.org/protobuf/proto"
 )
 

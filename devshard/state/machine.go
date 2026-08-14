@@ -316,9 +316,8 @@ func (sm *StateMachine) ApplyLocal(nonce uint64, txs []*types.DevshardTx) ([]byt
 	return sm.applyCore(nonce, txs, nil, "user")
 }
 
-// ApplyLocalPersisted applies txs without signature verification, replaying a diff this node already
-// accepted. Used by recovery: a diff is part of a recorded state root, so a rule that tightened since
-// it was written cannot undo it by refusing it, only fail to start.
+// ApplyLocalPersisted replays a diff this node already accepted. A diff is part of a recorded state root,
+// so a rule that tightened since it was written cannot undo it by refusing it, only fail to start.
 func (sm *StateMachine) ApplyLocalPersisted(nonce uint64, txs []*types.DevshardTx) ([]byte, error) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
