@@ -4,48 +4,53 @@ import (
 	"fmt"
 	"sync"
 	"testing"
+	"time"
 )
+
+var capabilityNow = time.Unix(1_700_000_000, 0)
+
+const capabilityWindow = time.Hour
 
 func TestCapabilityTrackerRecordContextLimitBlocksAboveStoredValue(t *testing.T) {
 	c := newCapabilityTracker()
-	c.recordContextLimit("participant-a", 4096)
+	c.recordContextLimit("participant-a", 4096, capabilityNow)
 
-	if reason, blocked := c.cannotServe("participant-a", false, 5000); !blocked || reason != "context_limit_exceeded" {
+	if reason, blocked := c.cannotServe("participant-a", false, 5000, capabilityNow, capabilityWindow); !blocked || reason != "context_limit_exceeded" {
 		t.Fatalf("cannotServe() over the stored limit = (%q, %v), want (context_limit_exceeded, true)", reason, blocked)
 	}
-	if _, blocked := c.cannotServe("participant-a", false, 100); blocked {
+	if _, blocked := c.cannotServe("participant-a", false, 100, capabilityNow, capabilityWindow); blocked {
 		t.Fatal("cannotServe() under the stored limit = true, want false")
 	}
 }
 
 func TestCapabilityTrackerRecordContextLimitIgnoresZero(t *testing.T) {
 	c := newCapabilityTracker()
-	c.recordContextLimit("participant-a", 0)
+	c.recordContextLimit("participant-a", 0, capabilityNow)
 
-	if _, blocked := c.cannotServe("participant-a", false, 999999); blocked {
+	if _, blocked := c.cannotServe("participant-a", false, 999999, capabilityNow, capabilityWindow); blocked {
 		t.Fatal("cannotServe() after a zero-value record = true, want false (no limit stored)")
 	}
 }
 
 func TestCapabilityTrackerRecordContextLimitUpdatesOnChange(t *testing.T) {
 	c := newCapabilityTracker()
-	c.recordContextLimit("participant-a", 4096)
-	c.recordContextLimit("participant-a", 8192)
+	c.recordContextLimit("participant-a", 4096, capabilityNow)
+	c.recordContextLimit("participant-a", 8192, capabilityNow)
 
-	if _, blocked := c.cannotServe("participant-a", false, 8000); blocked {
+	if _, blocked := c.cannotServe("participant-a", false, 8000, capabilityNow, capabilityWindow); blocked {
 		t.Fatal("cannotServe() under the updated limit = true, want false")
 	}
-	if reason, blocked := c.cannotServe("participant-a", false, 8193); !blocked || reason != "context_limit_exceeded" {
+	if reason, blocked := c.cannotServe("participant-a", false, 8193, capabilityNow, capabilityWindow); !blocked || reason != "context_limit_exceeded" {
 		t.Fatalf("cannotServe() over the updated limit = (%q, %v), want (context_limit_exceeded, true)", reason, blocked)
 	}
 }
 
 func TestCapabilityTrackerRecordToolUnsupportedIsIdempotent(t *testing.T) {
 	c := newCapabilityTracker()
-	c.recordToolUnsupported("participant-a")
-	c.recordToolUnsupported("participant-a")
+	c.recordToolUnsupported("participant-a", capabilityNow)
+	c.recordToolUnsupported("participant-a", capabilityNow)
 
-	if reason, blocked := c.cannotServe("participant-a", true, 0); !blocked || reason != "tool_choice_unsupported" {
+	if reason, blocked := c.cannotServe("participant-a", true, 0, capabilityNow, capabilityWindow); !blocked || reason != "tool_choice_unsupported" {
 		t.Fatalf("cannotServe() after two recordToolUnsupported calls = (%q, %v), want (tool_choice_unsupported, true)", reason, blocked)
 	}
 }
@@ -110,13 +115,13 @@ func TestCapabilityTrackerCannotServe(t *testing.T) {
 		t.Run(testCase.name, func(t *testing.T) {
 			c := newCapabilityTracker()
 			if testCase.toolUnsupported {
-				c.recordToolUnsupported("participant-a")
+				c.recordToolUnsupported("participant-a", capabilityNow)
 			}
 			if testCase.contextLimit > 0 {
-				c.recordContextLimit("participant-a", testCase.contextLimit)
+				c.recordContextLimit("participant-a", testCase.contextLimit, capabilityNow)
 			}
 
-			reason, blocked := c.cannotServe("participant-a", testCase.requiresTools, testCase.contextHint)
+			reason, blocked := c.cannotServe("participant-a", testCase.requiresTools, testCase.contextHint, capabilityNow, capabilityWindow)
 			if reason != testCase.wantReason || blocked != testCase.wantBlocked {
 				t.Fatalf("cannotServe() = (%q, %v), want (%q, %v)", reason, blocked, testCase.wantReason, testCase.wantBlocked)
 			}
@@ -138,19 +143,19 @@ func TestCapabilityTrackerConcurrentAccessIsRaceFree(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for j := range iterations {
-				c.recordContextLimit(participant, uint64(1000+j))
+				c.recordContextLimit(participant, uint64(1000+j), capabilityNow)
 			}
 		}()
 		go func() {
 			defer wg.Done()
 			for range iterations {
-				c.recordToolUnsupported(participant)
+				c.recordToolUnsupported(participant, capabilityNow)
 			}
 		}()
 		go func() {
 			defer wg.Done()
 			for range iterations {
-				_, _ = c.cannotServe(participant, true, 500)
+				_, _ = c.cannotServe(participant, true, 500, capabilityNow, capabilityWindow)
 			}
 		}()
 	}
@@ -158,21 +163,20 @@ func TestCapabilityTrackerConcurrentAccessIsRaceFree(t *testing.T) {
 
 	for i := range participantCount {
 		participant := fmt.Sprintf("participant-%d", i)
-		if reason, blocked := c.cannotServe(participant, true, 0); !blocked || reason != "tool_choice_unsupported" {
+		if reason, blocked := c.cannotServe(participant, true, 0, capabilityNow, capabilityWindow); !blocked || reason != "tool_choice_unsupported" {
 			t.Fatalf("cannotServe(%s) after concurrent recordToolUnsupported = (%q, %v), want (tool_choice_unsupported, true)", participant, reason, blocked)
 		}
 	}
 }
 
-// The point of recording it: routing must skip the host with no timer, unlike an ejection that expires.
-func TestAVersionRefusalBlocksTheHostForEveryRequestShape(t *testing.T) {
+func TestAVersionRefusalBlocksEveryRequestShapeWhileItIsFresh(t *testing.T) {
 	t.Parallel()
 	tracker := newCapabilityTracker()
 
-	if _, blocked := tracker.cannotServe("host-0", false, 0); blocked {
+	if _, blocked := tracker.cannotServe("host-0", false, 0, capabilityNow, capabilityWindow); blocked {
 		t.Fatal("a host with no recorded refusal was blocked")
 	}
-	tracker.recordVersionUnsupported("host-0")
+	tracker.recordVersionUnsupported("host-0", capabilityNow)
 
 	for _, shape := range []struct {
 		name          string
@@ -184,7 +188,7 @@ func TestAVersionRefusalBlocksTheHostForEveryRequestShape(t *testing.T) {
 		{name: "a large request", contextHint: 100_000},
 	} {
 		t.Run(shape.name, func(t *testing.T) {
-			reason, blocked := tracker.cannotServe("host-0", shape.requiresTools, shape.contextHint)
+			reason, blocked := tracker.cannotServe("host-0", shape.requiresTools, shape.contextHint, capabilityNow, capabilityWindow)
 			if !blocked {
 				t.Fatal("a host whose build cannot serve the protocol version was admitted")
 			}
@@ -194,7 +198,48 @@ func TestAVersionRefusalBlocksTheHostForEveryRequestShape(t *testing.T) {
 		})
 	}
 
-	if _, blocked := tracker.cannotServe("host-1", false, 0); blocked {
+	if _, blocked := tracker.cannotServe("host-1", false, 0, capabilityNow, capabilityWindow); blocked {
 		t.Error("the refusal of one host blocked another")
+	}
+}
+
+func TestCapabilityVerdictsStopBlockingOnceStale(t *testing.T) {
+	t.Parallel()
+	tracker := newCapabilityTracker()
+	tracker.recordVersionUnsupported("host-0", capabilityNow)
+	tracker.recordToolUnsupported("host-1", capabilityNow)
+	tracker.recordContextLimit("host-2", 1000, capabilityNow)
+
+	later := capabilityNow.Add(capabilityWindow + time.Second)
+	for _, probe := range []struct {
+		participant   string
+		requiresTools bool
+		contextHint   uint64
+	}{
+		{participant: "host-0"},
+		{participant: "host-1", requiresTools: true},
+		{participant: "host-2", contextHint: 5000},
+	} {
+		if reason, blocked := tracker.cannotServe(probe.participant, probe.requiresTools, probe.contextHint, later, capabilityWindow); blocked {
+			t.Errorf("%s still blocked past the window with reason %q", probe.participant, reason)
+		}
+	}
+}
+
+func TestCapabilityEvictStaleDropsForgottenVerdicts(t *testing.T) {
+	t.Parallel()
+	tracker := newCapabilityTracker()
+	tracker.recordVersionUnsupported("gone", capabilityNow)
+	tracker.recordVersionUnsupported("current", capabilityNow.Add(capabilityWindow))
+
+	tracker.evictStale(capabilityNow.Add(capabilityWindow+time.Second), capabilityWindow)
+
+	tracker.mu.RLock()
+	defer tracker.mu.RUnlock()
+	if _, held := tracker.versionUnsupported["gone"]; held {
+		t.Error("a verdict past the window survived the sweep")
+	}
+	if _, held := tracker.versionUnsupported["current"]; !held {
+		t.Error("the sweep dropped a verdict that is still fresh")
 	}
 }

@@ -25,15 +25,17 @@ type Profile struct {
 	Thinking               ThinkingDisposition
 	KeepReasoningSplit     bool
 	ThinkingTokenBudget    bool
+	ReasoningEffortDefault string
 }
 
 // Exact routed-model identifiers the parameter table dispatches on.
 const (
-	kimiModelID    = "moonshotai/Kimi-K2.6"
-	minimaxModelID = "MiniMaxAI/MiniMax-M2.7"
+	kimiModelID     = "moonshotai/Kimi-K2.6"
+	minimaxModelID  = "MiniMaxAI/MiniMax-M2.7"
+	deepseekModelID = "deepseek-ai/DeepSeek-V4-Flash-0731"
 )
 
-var registeredProfiles = []*Profile{kimiProfile, minimaxProfile}
+var registeredProfiles = []*Profile{kimiProfile, minimaxProfile, deepseekProfile}
 
 func ProfileFor(routedModel string) *Profile {
 	for _, profile := range registeredProfiles {

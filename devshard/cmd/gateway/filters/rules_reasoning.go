@@ -3,7 +3,7 @@ package filters
 import "devshard"
 
 var allowedReasoningEffortValues = map[string]struct{}{
-	"none": {}, "minimal": {}, "low": {}, "medium": {}, "high": {}, "xhigh": {},
+	"none": {}, "minimal": {}, "low": {}, "medium": {}, "high": {}, "xhigh": {}, "max": {},
 }
 
 // reasoningWrapper strips the reasoning wrapper, lifting .effort into a not-yet-present
@@ -20,6 +20,7 @@ func reasoningWrapper() RuleFunc {
 			return nil
 		}
 		if enabled, ok := wrapper["enabled"].(bool); ok && !enabled {
+			ctx.Document.Set("reasoning_effort", "none")
 			return nil
 		}
 		effort, hasEffort := wrapper["effort"]
@@ -32,7 +33,7 @@ func reasoningWrapper() RuleFunc {
 }
 
 // reasoningEffortValidate rejects reasoning_effort when present and not one of the allowed
-// enum values. The field is stripped by a separate table rule (no route serves it today).
+// enum values. Scoping to the routes that read it is a separate table rule.
 func reasoningEffortValidate() RuleFunc {
 	return func(ctx RuleContext) error {
 		raw, exists := ctx.Document.Get("reasoning_effort")
@@ -45,6 +46,19 @@ func reasoningEffortValidate() RuleFunc {
 		}
 		if _, allowed := allowedReasoningEffortValues[value]; !allowed {
 			return Reject("reasoning_effort: unsupported value: got %q", value)
+		}
+		return nil
+	}
+}
+
+func reasoningEffortScope() RuleFunc {
+	return func(ctx RuleContext) error {
+		if ctx.Profile == nil || ctx.Profile.ReasoningEffortDefault == "" {
+			ctx.Document.Delete(ctx.Param)
+			return nil
+		}
+		if !ctx.Document.Has(ctx.Param) {
+			ctx.Document.Set(ctx.Param, ctx.Profile.ReasoningEffortDefault)
 		}
 		return nil
 	}

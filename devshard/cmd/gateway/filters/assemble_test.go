@@ -1,6 +1,7 @@
 package filters
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -199,7 +200,7 @@ func TestAssembleSSEBodyAccumulatesTokenIds(t *testing.T) {
 	}
 }
 
-func TestAssembleSSEBodyStopsAtTheEventBound(t *testing.T) {
+func TestAssembleSSEBodyRefusesRatherThanTruncate(t *testing.T) {
 	t.Parallel()
 	events := make([]string, 0, maxAssembledEvents+16)
 	for range maxAssembledEvents + 16 {
@@ -207,6 +208,19 @@ func TestAssembleSSEBodyStopsAtTheEventBound(t *testing.T) {
 	}
 
 	assembled := AssembleSSEBody(sseStream(events...))
+
+	if !bytes.Equal(assembled, TruncatedResponseBody) {
+		t.Fatalf("assembled = %s, want the truncation error: a prefix is indistinguishable from a complete answer", assembled)
+	}
+}
+
+func TestAssembleSSEBodyKeepsFoldedDeltasWhenACompletionFollows(t *testing.T) {
+	t.Parallel()
+	assembled := AssembleSSEBody(sseStream(
+		`{"choices":[{"index":0,"delta":{"content":"hello "}}]}`,
+		`{"choices":[{"index":0,"delta":{"content":"world"}}]}`,
+		`{"object":"chat.completion","choices":[{"index":0,"message":{"content":"discarded"}}]}`,
+	))
 
 	var decoded struct {
 		Choices []struct {
@@ -218,12 +232,25 @@ func TestAssembleSSEBodyStopsAtTheEventBound(t *testing.T) {
 	if err := json.Unmarshal(assembled, &decoded); err != nil {
 		t.Fatalf("unmarshalling the assembled body: %v", err)
 	}
-	if got := len(decoded.Choices[0].Message.Content); got != maxAssembledEvents {
-		t.Fatalf("content length = %d, want the assembly stopped at %d events", got, maxAssembledEvents)
+	if len(decoded.Choices) == 0 {
+		t.Fatal("no choices survived")
+	}
+	if got := decoded.Choices[0].Message.Content; got != "hello world" {
+		t.Fatalf("content = %q, want the folded deltas: a trailing completion must not discard them", got)
 	}
 }
 
-// The strip rejects the same bytes; the two must not disagree about what the host sent.
+func TestAssembleSSEBodyPassesASoleCompletionThrough(t *testing.T) {
+	t.Parallel()
+	payload := `{"object":"chat.completion","choices":[{"index":0,"message":{"content":"whole"}}]}`
+
+	assembled := AssembleSSEBody(sseStream(payload))
+
+	if string(assembled) != payload {
+		t.Fatalf("assembled = %s, want the already-complete payload unchanged", assembled)
+	}
+}
+
 func TestAssembleSSEBodyRejectsAPayloadCarryingTwoObjects(t *testing.T) {
 	t.Parallel()
 

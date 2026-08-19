@@ -185,7 +185,7 @@ var (
 		}},
 		{Name: "reasoning_effort", Rules: []StagedRule{
 			{Stage: StagePreValidation, Apply: reasoningEffortValidate()},
-			{Stage: StagePreValidation, Apply: stripParameter()},
+			{Stage: StagePreValidation, Apply: reasoningEffortScope()},
 		}},
 		{Name: "enable_thinking", Rules: []StagedRule{
 			{Stage: StagePreValidation, Apply: enableThinking()},

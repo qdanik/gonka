@@ -7,7 +7,7 @@
         "content": "hi"
       }
     ],
-    "reasoning_effort": "max"
+    "reasoning_effort": "maximum"
   },
   "default_max_tokens": 3072,
   "max_tokens_cap": 4096,
