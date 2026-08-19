@@ -19,13 +19,16 @@ func TestReasoningWrapperLiftsEffort(t *testing.T) {
 	}
 }
 
-func TestReasoningWrapperEnabledFalseBlocksLift(t *testing.T) {
+func TestReasoningWrapperEnabledFalseRecordsTheRefusal(t *testing.T) {
 	document := parseTestDocument(t, `{"reasoning":{"enabled":false,"effort":"high"}}`)
 	if err := reasoningWrapper()(RuleContext{Document: document}); err != nil {
 		t.Fatalf("reasoningWrapper() = %v, want nil", err)
 	}
-	if document.Has("reasoning") || document.Has("reasoning_effort") {
-		t.Error("enabled:false must drop the wrapper without lifting effort")
+	if document.Has("reasoning") {
+		t.Error("the wrapper must be dropped")
+	}
+	if got, _ := document.Get("reasoning_effort"); got != "none" {
+		t.Errorf("reasoning_effort = %v, want %q: a dropped wrapper is indistinguishable from silence, which a defaulting route fills in", got, "none")
 	}
 }
 
@@ -61,7 +64,7 @@ func TestReasoningWrapperAbsentIsNoOp(t *testing.T) {
 }
 
 func TestReasoningEffortValidateAccepts(t *testing.T) {
-	for _, value := range []string{"none", "minimal", "low", "medium", "high", "xhigh"} {
+	for _, value := range []string{"none", "minimal", "low", "medium", "high", "xhigh", "max"} {
 		t.Run(value, func(t *testing.T) {
 			document := parseTestDocument(t, `{"reasoning_effort":"`+value+`"}`)
 			if err := reasoningEffortValidate()(RuleContext{Document: document}); err != nil {
@@ -93,9 +96,9 @@ func TestReasoningEffortValidateRejectsWrongShape(t *testing.T) {
 
 // Exact message is golden-pinned by profile_reasoning_effort_invalid_value_rejected.
 func TestReasoningEffortValidateRejectsUnknownValue(t *testing.T) {
-	document := parseTestDocument(t, `{"reasoning_effort":"max"}`)
+	document := parseTestDocument(t, `{"reasoning_effort":"maximum"}`)
 	err := reasoningEffortValidate()(RuleContext{Document: document})
-	want := `reasoning_effort: unsupported value: got "max"`
+	want := `reasoning_effort: unsupported value: got "maximum"`
 	if err == nil || err.Error() != want {
 		t.Fatalf("reasoningEffortValidate() = %v, want %q", err, want)
 	}
@@ -628,5 +631,42 @@ func TestASmallBudgetSilencesKimiInTheTemplateToo(t *testing.T) {
 				t.Fatalf("chat_template_kwargs.thinking = %v, want %v", kwargs["thinking"], testCase.wantThinking)
 			}
 		})
+	}
+}
+
+func TestReasoningEffortScopeStripsOffTheConsumingRoutes(t *testing.T) {
+	for _, profile := range []*Profile{nil, kimiProfile, minimaxProfile} {
+		document := parseTestDocument(t, `{"reasoning_effort":"high"}`)
+		ctx := RuleContext{Document: document, Profile: profile, Param: "reasoning_effort"}
+		if err := reasoningEffortScope()(ctx); err != nil {
+			t.Fatalf("reasoningEffortScope() = %v, want nil", err)
+		}
+		if document.Has("reasoning_effort") {
+			t.Errorf("profile %v kept a field no route of it reads", profile)
+		}
+	}
+}
+
+func TestReasoningEffortScopeFillsTheRouteDefault(t *testing.T) {
+	document := parseTestDocument(t, `{"messages":[]}`)
+	ctx := RuleContext{Document: document, Profile: deepseekProfile, Param: "reasoning_effort"}
+	if err := reasoningEffortScope()(ctx); err != nil {
+		t.Fatalf("reasoningEffortScope() = %v, want nil", err)
+	}
+	if got, _ := document.Get("reasoning_effort"); got != "max" {
+		t.Errorf("reasoning_effort = %v, want %q: an omitted field renders as high, which is the level the loop reports name", got, "max")
+	}
+}
+
+func TestReasoningEffortScopeKeepsAnExplicitValue(t *testing.T) {
+	for _, effort := range []string{"none", "minimal", "low", "medium", "high", "xhigh", "max"} {
+		document := parseTestDocument(t, `{"reasoning_effort":"`+effort+`"}`)
+		ctx := RuleContext{Document: document, Profile: deepseekProfile, Param: "reasoning_effort"}
+		if err := reasoningEffortScope()(ctx); err != nil {
+			t.Fatalf("reasoningEffortScope() = %v, want nil", err)
+		}
+		if got, _ := document.Get("reasoning_effort"); got != effort {
+			t.Errorf("reasoning_effort = %v, want %q: the route default must never overrule the caller", got, effort)
+		}
 	}
 }

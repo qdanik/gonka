@@ -377,7 +377,7 @@ func TestBasicValidModelName(t *testing.T) {
 		{"surrounding whitespace rejected", `{"model":" model-a "}`, "model: invalid: must contain only letters, digits, and the characters ._-/"},
 		{"newline rejected", `{"model":"model-a\nmodel-b"}`, "model: invalid: must contain only letters, digits, and the characters ._-/"},
 		{"colon rejected", `{"model":"model-a:latest"}`, "model: invalid: must contain only letters, digits, and the characters ._-/"},
-		{"non-ascii rejected", `{"model":"модель-а"}`, "model: invalid: must contain only letters, digits, and the characters ._-/"},
+		{"non-ascii rejected", `{"model":"modèle-à"}`, "model: invalid: must contain only letters, digits, and the characters ._-/"},
 	}
 	for _, testCase := range tests {
 		t.Run(testCase.name, func(t *testing.T) {

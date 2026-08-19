@@ -1,5 +1,5 @@
 {
   "http_status": 400,
-  "message": "reasoning_effort: unsupported value: got \"max\"",
+  "message": "reasoning_effort: unsupported value: got \"maximum\"",
   "status": "rejected"
 }

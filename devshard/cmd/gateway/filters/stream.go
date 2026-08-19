@@ -40,6 +40,10 @@ var (
 	// NoResponseDataBody is the reply a non-streaming caller gets when the stream carried no payload.
 	NoResponseDataBody = []byte(`{"error":{"message":"no response data"}}`)
 
+	// TruncatedResponseBody replaces a fold that ran past maxAssembledEvents. Returning the prefix
+	// would be a complete-looking answer missing its tail.
+	TruncatedResponseBody = []byte(`{"error":{"message":"response exceeded the assembler's event budget"}}`)
+
 	// ErrStreamCarryOverflow reports an unterminated SSE event larger than MaxStreamCarryBytes.
 	ErrStreamCarryOverflow = errors.New("sse event exceeds carry limit")
 	// ErrStreamTruncatedEvent reports a trailing partial event dropped at end of stream.

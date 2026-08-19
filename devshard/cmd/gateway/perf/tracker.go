@@ -71,7 +71,9 @@ func (t *Tracker) RecordSample(s Sample) {
 	ejectedUntilBefore := state.ejectedUntil
 	newEjectionPolicyFromPerf(perf).evaluate(host, state, now)
 
-	evicted := t.evictStaleLocked(now, time.Duration(perf.HostStalenessSeconds)*time.Second)
+	staleness := time.Duration(perf.HostStalenessSeconds) * time.Second
+	evicted := t.evictStaleLocked(now, staleness)
+	t.capability.evictStale(now, staleness)
 	if evicted || state.ejectedUntil != ejectedUntilBefore {
 		t.rebuildEjectedViewLocked(now, perf)
 	}
@@ -149,15 +151,15 @@ func newEjectionPolicyFromPerf(perf config.Perf) ejectionPolicy {
 }
 
 func (t *Tracker) RecordContextLimit(participant string, maxTokens uint64) {
-	t.capability.recordContextLimit(participant, maxTokens)
+	t.capability.recordContextLimit(participant, maxTokens, t.now())
 }
 
 func (t *Tracker) RecordToolUnsupported(participant string) {
-	t.capability.recordToolUnsupported(participant)
+	t.capability.recordToolUnsupported(participant, t.now())
 }
 
 func (t *Tracker) RecordVersionUnsupported(participant string) {
-	t.capability.recordVersionUnsupported(participant)
+	t.capability.recordVersionUnsupported(participant, t.now())
 }
 
 func (t *Tracker) Acquire(participant string) {
@@ -241,5 +243,9 @@ func maxEjectable(perf config.Perf, knownForModel int) int {
 }
 
 func (t *Tracker) CannotServe(participant string, requiresTools bool, contextHint uint64) (string, bool) {
-	return t.capability.cannotServe(participant, requiresTools, contextHint)
+	return t.capability.cannotServe(participant, requiresTools, contextHint, t.now(), t.hostStaleness())
+}
+
+func (t *Tracker) hostStaleness() time.Duration {
+	return time.Duration(t.config.Load().Perf.HostStalenessSeconds) * time.Second
 }

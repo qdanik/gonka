@@ -44,9 +44,10 @@ func (t *growingText) MarshalJSON() ([]byte, error) {
 func AssembleSSEBody(body []byte) []byte {
 	var merged map[string]any
 	var complete []byte
-	framed, assembled := false, 0
+	framed, assembled, truncated := false, 0, false
 	forEachSSEEvent(body, func(event []byte) bool {
 		if assembled >= maxAssembledEvents {
+			truncated = true
 			return true
 		}
 		// Joined the way a client joins them: a host may split one object across two data lines.
@@ -64,14 +65,19 @@ func AssembleSSEBody(body []byte) []byte {
 			return false
 		}
 		if name, isString := decoded["object"].(string); isString && name == completionObject {
-			complete = payload
-			return true
+			if merged == nil {
+				complete = payload
+				return true
+			}
+			return false
 		}
 		merged = mergeChunk(merged, decoded)
 		assembled++
 		return false
 	})
 	switch {
+	case truncated:
+		return TruncatedResponseBody
 	case len(complete) > 0:
 		return complete
 	case merged != nil:
