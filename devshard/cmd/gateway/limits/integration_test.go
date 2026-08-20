@@ -21,7 +21,7 @@ func TestGatewayConfigFromLimits_MapsFieldsFromDefaults(t *testing.T) {
 	if got.MaxInputTokens != limits.MaxInputTokensInFlight {
 		t.Errorf("MaxInputTokens = %d, want %d", got.MaxInputTokens, limits.MaxInputTokensInFlight)
 	}
-	if want := time.Duration(limits.AcquireWaitMS) * time.Millisecond; got.AcquireWait != want {
+	if want := time.Duration(limits.AdmissionQueueWaitMS) * time.Millisecond; got.AcquireWait != want {
 		t.Errorf("AcquireWait = %v, want %v", got.AcquireWait, want)
 	}
 }
@@ -64,20 +64,20 @@ func TestParticipantConfigFromLimits_MapsFieldsFromDefaults(t *testing.T) {
 
 	got := ParticipantConfigFromLimits(limits)
 
-	if got.InitialWindow != limits.AIMD.InitialWindow {
-		t.Errorf("InitialWindow = %d, want %d", got.InitialWindow, limits.AIMD.InitialWindow)
+	if got.Initial != limits.HostInflight.Initial {
+		t.Errorf("Initial = %d, want %d", got.Initial, limits.HostInflight.Initial)
 	}
-	if got.MaxWindow != limits.AIMD.MaxWindow {
-		t.Errorf("MaxWindow = %d, want %d", got.MaxWindow, limits.AIMD.MaxWindow)
+	if got.Max != limits.HostInflight.Max {
+		t.Errorf("Max = %d, want %d", got.Max, limits.HostInflight.Max)
 	}
-	if got.TripThreshold != limits.Breaker.TripThreshold {
-		t.Errorf("TripThreshold = %d, want %d", got.TripThreshold, limits.Breaker.TripThreshold)
+	if got.AfterFailures != limits.HostCutoff.AfterFailures {
+		t.Errorf("AfterFailures = %d, want %d", got.AfterFailures, limits.HostCutoff.AfterFailures)
 	}
 	if got.BaseOpen != 5*time.Second {
-		t.Errorf("BaseOpen = %v, want 5s (default BaseOpenMS=5000)", got.BaseOpen)
+		t.Errorf("BaseOpen = %v, want 5s (default BaseMS=5000)", got.BaseOpen)
 	}
 	if got.MaxOpen != 60*time.Second {
-		t.Errorf("MaxOpen = %v, want 60s (default MaxOpenMS=60000)", got.MaxOpen)
+		t.Errorf("MaxOpen = %v, want 60s (default MaxMS=60000)", got.MaxOpen)
 	}
 }
 
@@ -111,12 +111,12 @@ func TestCapacityGatewayParticipantLimiterComposeEndToEnd(t *testing.T) {
 	}
 	gatewayLimiter.ReleaseForModel("modelA", 128)
 
-	for i := int64(0); i < limits.AIMD.InitialWindow; i++ {
+	for i := int64(0); i < limits.HostInflight.Initial; i++ {
 		if !participantLimiter.Acquire("hostA", "modelA") {
-			t.Fatalf("ParticipantLimiter.Acquire call %d = false, want true (InitialWindow=%d)", i+1, limits.AIMD.InitialWindow)
+			t.Fatalf("ParticipantLimiter.Acquire call %d = false, want true (Initial=%d)", i+1, limits.HostInflight.Initial)
 		}
 	}
 	if participantLimiter.Acquire("hostA", "modelA") {
-		t.Fatal("ParticipantLimiter.Acquire beyond InitialWindow = true, want false (per-host window must gate the host)")
+		t.Fatal("ParticipantLimiter.Acquire beyond Initial = true, want false (per-host window must gate the host)")
 	}
 }

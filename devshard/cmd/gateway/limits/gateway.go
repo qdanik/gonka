@@ -42,11 +42,11 @@ type ModelOverride struct {
 }
 
 type GatewayConfig struct {
-	MaxConcurrent     int64
-	MaxInputTokens    int64
-	AcquireWait       time.Duration
-	QueueDepthPerSlot int64
-	ModelLimits       map[string]ModelOverride
+	MaxConcurrent         int64
+	MaxInputTokens        int64
+	AcquireWait           time.Duration
+	AdmissionQueuePerSlot int64
+	ModelLimits           map[string]ModelOverride
 }
 
 type modelCounter struct {
@@ -227,7 +227,7 @@ func (l *GatewayLimiter) promoteLocked() {
 // queueTooDeepLocked reports a queue this request cannot reach the front of in time. See
 // gateway-capacity-and-health.md, "The wait budget".
 func (l *GatewayLimiter) queueTooDeepLocked(model string, admitted admission) bool {
-	perSlot := l.cfg.QueueDepthPerSlot
+	perSlot := l.cfg.AdmissionQueuePerSlot
 	if perSlot <= 0 || admitted.concurrencyLimit <= 0 {
 		return false
 	}

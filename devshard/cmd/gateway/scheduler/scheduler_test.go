@@ -142,7 +142,7 @@ func (f *fakePerf) asked() []capabilityQuery {
 type schedulerConfig struct {
 	escrows      []string
 	slots        []string
-	holdGraceMS  int64
+	matchWaitMS  int64
 	submitBuffer int
 	hostWindow   int
 	gate         chan struct{}
@@ -213,7 +213,7 @@ func newSchedulerHarness(t *testing.T, cfg schedulerConfig) *schedulerHarness {
 	}
 
 	settings := config.Defaults()
-	settings.Scheduler.HoldGraceMS = cfg.holdGraceMS
+	settings.Scheduler.MatchWaitMS = cfg.matchWaitMS
 
 	limiter := newFakeLimiter()
 	limiter.window = cfg.hostWindow
@@ -366,7 +366,7 @@ func TestPickEscalationReusesTheEscrowsDispatcher(t *testing.T) {
 
 func TestPickReturnsTheContextErrorWhenCancelledWhileQueued(t *testing.T) {
 	leakcheck.VerifyNone(t)
-	test := newSchedulerHarness(t, schedulerConfig{holdGraceMS: 200})
+	test := newSchedulerHarness(t, schedulerConfig{matchWaitMS: 200})
 	ctx, cancel := context.WithCancel(context.Background())
 
 	// The nonce binds the one host this request excludes, so it is held rather than served or burned.

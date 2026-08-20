@@ -31,8 +31,8 @@ type Values struct {
 	DefaultMaxTokens      *int64
 	MaxTokensCap          *int64
 	MaxConcurrentRequests *int64
-	AcquireWaitMS         *int64
-	QueueDepthPerSlot     *int64
+	AdmissionQueueWaitMS  *int64
+	AdmissionQueuePerSlot *int64
 
 	PoCMode             *string
 	Disabled            *bool
@@ -41,7 +41,7 @@ type Values struct {
 
 	RotationEnabled           *bool
 	RotationPrePoCBlocks      *int64
-	HoldGraceMS               *int64
+	MatchWaitMS               *int64
 	RotationSettlementEnabled *bool
 	RotationModelsJSON        *string
 
@@ -197,8 +197,8 @@ func Load() (Values, error) {
 	readInt("GATEWAY_DEFAULT_MAX_TOKENS", &values.DefaultMaxTokens)
 	readInt("GATEWAY_MAX_TOKENS_CAP", &values.MaxTokensCap)
 	readInt("GATEWAY_MAX_CONCURRENT_REQUESTS", &values.MaxConcurrentRequests)
-	readInt("GATEWAY_ACQUIRE_WAIT_MS", &values.AcquireWaitMS)
-	readInt("GATEWAY_QUEUE_DEPTH_PER_SLOT", &values.QueueDepthPerSlot)
+	readInt("GATEWAY_ADMISSION_QUEUE_WAIT_MS", &values.AdmissionQueueWaitMS)
+	readInt("GATEWAY_ADMISSION_QUEUE_PER_SLOT", &values.AdmissionQueuePerSlot)
 
 	readString("GATEWAY_POC_MODE", &values.PoCMode)
 	readBool("GATEWAY_DISABLED", &values.Disabled)
@@ -207,7 +207,7 @@ func Load() (Values, error) {
 
 	readBool("GATEWAY_ROTATION_ENABLED", &values.RotationEnabled)
 	readInt("GATEWAY_ROTATION_PRE_POC_BLOCKS", &values.RotationPrePoCBlocks)
-	readInt("GATEWAY_HOLD_GRACE_MS", &values.HoldGraceMS)
+	readInt("GATEWAY_MATCH_WAIT_MS", &values.MatchWaitMS)
 	readBool("GATEWAY_ROTATION_SETTLEMENT_ENABLED", &values.RotationSettlementEnabled)
 	readString("GATEWAY_ROTATION_MODELS_JSON", &values.RotationModelsJSON)
 

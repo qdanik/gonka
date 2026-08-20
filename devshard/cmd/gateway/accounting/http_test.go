@@ -12,7 +12,7 @@ func serve(t *testing.T, book *Book, target string) *httptest.ResponseRecorder {
 	t.Helper()
 	currentEpoch := func(context.Context) (uint64, error) { return testEpoch, nil }
 	recorder := httptest.NewRecorder()
-	NewHandler(book, currentEpoch).ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, target, nil))
+	NewHandler(book, currentEpoch, nil).ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, target, nil))
 	return recorder
 }
 

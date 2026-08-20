@@ -32,9 +32,9 @@ func Build(values env.Values, overrides Overrides) (*Config, error) {
 	overrideIfSet(&configuration.Limits.DefaultMaxTokens, values.DefaultMaxTokens)
 	overrideIfSet(&configuration.Limits.MaxTokensCap, values.MaxTokensCap)
 	overrideIfSet(&configuration.Limits.Concurrency.MaxRequests, values.MaxConcurrentRequests)
-	overrideIfSet(&configuration.Limits.AcquireWaitMS, values.AcquireWaitMS)
-	overrideIfSet(&configuration.Limits.QueueDepthPerSlot, values.QueueDepthPerSlot)
-	overrideIfSet(&configuration.Scheduler.HoldGraceMS, values.HoldGraceMS)
+	overrideIfSet(&configuration.Limits.AdmissionQueueWaitMS, values.AdmissionQueueWaitMS)
+	overrideIfSet(&configuration.Limits.AdmissionQueuePerSlot, values.AdmissionQueuePerSlot)
+	overrideIfSet(&configuration.Scheduler.MatchWaitMS, values.MatchWaitMS)
 
 	overrideIfSet(&configuration.Modes.PoCMode, values.PoCMode)
 	overrideIfSet(&configuration.Modes.Disabled, values.Disabled)
@@ -70,17 +70,17 @@ func Build(values env.Values, overrides Overrides) (*Config, error) {
 	overrideIfSet(&configuration.Limits.Concurrency.RequestsPer10000Weight, overrides.MaxConcurrentRequestsPer10000Weight)
 	overrideIfSet(&configuration.Limits.Concurrency.PoCRequestsPer10000Weight, overrides.PoCMaxConcurrentRequestsPer10000Weight)
 	overrideIfSet(&configuration.Limits.MaxInputTokensInFlight, overrides.MaxInputTokensInFlight)
-	overrideIfSet(&configuration.Limits.AcquireWaitMS, overrides.AcquireWaitMS)
-	overrideIfSet(&configuration.Limits.QueueDepthPerSlot, overrides.QueueDepthPerSlot)
-	overrideIfSet(&configuration.Scheduler.HoldGraceMS, overrides.HoldGraceMS)
+	overrideIfSet(&configuration.Limits.AdmissionQueueWaitMS, overrides.AdmissionQueueWaitMS)
+	overrideIfSet(&configuration.Limits.AdmissionQueuePerSlot, overrides.AdmissionQueuePerSlot)
+	overrideIfSet(&configuration.Scheduler.MatchWaitMS, overrides.MatchWaitMS)
 	if overrides.ParticipantAllowlist != nil {
 		configuration.Scheduler.ParticipantAllowlist = slices.Clone(*overrides.ParticipantAllowlist)
 	}
-	overrideIfSet(&configuration.Limits.AIMD.InitialWindow, overrides.AIMDInitialWindow)
-	overrideIfSet(&configuration.Limits.AIMD.MaxWindow, overrides.AIMDMaxWindow)
-	overrideIfSet(&configuration.Limits.Breaker.TripThreshold, overrides.BreakerTripThreshold)
-	overrideIfSet(&configuration.Limits.Breaker.BaseOpenMS, overrides.BreakerBaseOpenMS)
-	overrideIfSet(&configuration.Limits.Breaker.MaxOpenMS, overrides.BreakerMaxOpenMS)
+	overrideIfSet(&configuration.Limits.HostInflight.Initial, overrides.HostInitialInflight)
+	overrideIfSet(&configuration.Limits.HostInflight.Max, overrides.HostMaxInflight)
+	overrideIfSet(&configuration.Limits.HostCutoff.AfterFailures, overrides.HostCutoffAfterFailures)
+	overrideIfSet(&configuration.Limits.HostCutoff.BaseMS, overrides.HostCutoffMS)
+	overrideIfSet(&configuration.Limits.HostCutoff.MaxMS, overrides.HostCutoffMaxMS)
 	if overrides.ModelLimits != nil {
 		configuration.Limits.ModelLimits = maps.Clone(overrides.ModelLimits)
 	}

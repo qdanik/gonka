@@ -15,7 +15,7 @@ func fixedNow(instant time.Time) func() time.Time {
 	return func() time.Time { return instant }
 }
 
-// movingClock lets a test advance time between calls to cross a breaker's openUntil deterministically.
+// movingClock lets a test advance time between calls to cross a cutoff's openUntil deterministically.
 type movingClock struct {
 	mu sync.Mutex
 	t  time.Time
@@ -41,9 +41,9 @@ func zeroJitter(time.Duration) time.Duration { return 0 }
 
 func testConfig() ParticipantConfig {
 	return ParticipantConfig{
-		InitialWindow: 4,
-		MaxWindow:     64,
-		TripThreshold: 3,
+		Initial:       4,
+		Max:           64,
+		AfterFailures: 3,
 		BaseOpen:      1 * time.Second,
 		MaxOpen:       10 * time.Second,
 	}
@@ -70,7 +70,7 @@ func TestAcquireAdmitsUpToWindowThenBlocks(t *testing.T) {
 
 	for i := 0; i < 4; i++ {
 		if !l.Acquire("p", "m") {
-			t.Fatalf("Acquire() call %d = false, want true (InitialWindow=4)", i+1)
+			t.Fatalf("Acquire() call %d = false, want true (Initial=4)", i+1)
 		}
 	}
 	if l.Acquire("p", "m") {
@@ -134,7 +134,7 @@ func TestSuccessAtUtilizationGateIncrementsWindow(t *testing.T) {
 	}
 }
 
-func TestSuccessCapsAtMaxWindow(t *testing.T) {
+func TestSuccessCapsAtMax(t *testing.T) {
 	t.Parallel()
 	l := newTestLimiter(testConfig(), fixedNow(testEpoch))
 	l.Acquire("p", "m")
@@ -145,7 +145,7 @@ func TestSuccessCapsAtMaxWindow(t *testing.T) {
 	l.OnResult("p", "m", Success)
 
 	if state.window != 64 {
-		t.Fatalf("window after Success at MaxWindow = %v, want capped at 64", state.window)
+		t.Fatalf("window after Success at Max = %v, want capped at 64", state.window)
 	}
 }
 
@@ -164,7 +164,7 @@ func TestOverloadHalvesWindow(t *testing.T) {
 func TestOverloadFloorsWindowAtOne(t *testing.T) {
 	t.Parallel()
 	cfg := testConfig()
-	cfg.InitialWindow = 1
+	cfg.Initial = 1
 	l := newTestLimiter(cfg, fixedNow(testEpoch))
 	l.Acquire("p", "m")
 
@@ -175,7 +175,7 @@ func TestOverloadFloorsWindowAtOne(t *testing.T) {
 	}
 }
 
-func TestOverloadNeverTripsBreaker(t *testing.T) {
+func TestOverloadNeverTripsCutoff(t *testing.T) {
 	t.Parallel()
 	l := newTestLimiter(testConfig(), fixedNow(testEpoch))
 	for i := 0; i < 10; i++ {
@@ -185,36 +185,36 @@ func TestOverloadNeverTripsBreaker(t *testing.T) {
 	}
 
 	if !l.Acquire("p", "m") {
-		t.Fatal("Acquire() after repeated Overload verdicts = false, want true (breaker must stay closed)")
+		t.Fatal("Acquire() after repeated Overload verdicts = false, want true (cutoff must stay closed)")
 	}
 }
 
 func TestTransportFaultTripsAtExactThreshold(t *testing.T) {
 	t.Parallel()
-	cfg := testConfig() // TripThreshold=3
+	cfg := testConfig() // AfterFailures=3
 	l := newTestLimiter(cfg, fixedNow(testEpoch))
 
-	for i := int64(0); i < cfg.TripThreshold-1; i++ {
+	for i := int64(0); i < cfg.AfterFailures-1; i++ {
 		l.OnResult("p", "m", TransportFault)
 	}
 	if !l.Acquire("p", "m") {
-		t.Fatal("Acquire() before TripThreshold reached = false, want true (breaker not yet open)")
+		t.Fatal("Acquire() before AfterFailures reached = false, want true (cutoff not yet open)")
 	}
 	l.Release("p", "m")
 
-	l.OnResult("p", "m", TransportFault) // the TripThreshold-th consecutive fault
+	l.OnResult("p", "m", TransportFault) // the AfterFailures-th consecutive fault
 
 	if l.Acquire("p", "m") {
-		t.Fatal("Acquire() at TripThreshold = true, want false (breaker must open)")
+		t.Fatal("Acquire() at AfterFailures = true, want false (cutoff must open)")
 	}
 }
 
 func TestTransportFaultBackoffLadderGrowsThenCaps(t *testing.T) {
 	t.Parallel()
 	cfg := ParticipantConfig{
-		InitialWindow: 4,
-		MaxWindow:     64,
-		TripThreshold: 1,
+		Initial:       4,
+		Max:           64,
+		AfterFailures: 1,
 		BaseOpen:      1 * time.Second,
 		MaxOpen:       3 * time.Second,
 	}
@@ -227,7 +227,7 @@ func TestTransportFaultBackoffLadderGrowsThenCaps(t *testing.T) {
 		3 * time.Second, // base * 1.6^3 = 4.096s, capped at MaxOpen
 	}
 	for i, wantBackoff := range want {
-		l.OnResult("p", "m", TransportFault) // TripThreshold=1: every call re-trips
+		l.OnResult("p", "m", TransportFault) // AfterFailures=1: every call re-trips
 		got := l.states[key{participant: "p", model: "m"}].openUntil.Sub(testEpoch)
 		if !withinTolerance(got, wantBackoff) {
 			t.Fatalf("trip %d: openUntil-now = %v, want %v", i+1, got, wantBackoff)
@@ -241,11 +241,11 @@ func TestHalfOpenAllowsExactlyOneProbeAfterCooldown(t *testing.T) {
 	clock := newMovingClock(testEpoch)
 	l := newTestLimiter(cfg, clock.now)
 
-	for i := int64(0); i < cfg.TripThreshold; i++ {
+	for i := int64(0); i < cfg.AfterFailures; i++ {
 		l.OnResult("p", "m", TransportFault)
 	}
 	if l.Acquire("p", "m") {
-		t.Fatal("Acquire() immediately after trip = true, want false (breaker open)")
+		t.Fatal("Acquire() immediately after trip = true, want false (cutoff open)")
 	}
 
 	state := l.states[key{participant: "p", model: "m"}]
@@ -259,13 +259,13 @@ func TestHalfOpenAllowsExactlyOneProbeAfterCooldown(t *testing.T) {
 	}
 }
 
-func TestHalfOpenSuccessClosesBreakerAndDecaysBackoff(t *testing.T) {
+func TestHalfOpenSuccessClosesCutoffAndDecaysBackoff(t *testing.T) {
 	t.Parallel()
 	cfg := testConfig()
 	clock := newMovingClock(testEpoch)
 	l := newTestLimiter(cfg, clock.now)
 
-	for i := int64(0); i < cfg.TripThreshold; i++ {
+	for i := int64(0); i < cfg.AfterFailures; i++ {
 		l.OnResult("p", "m", TransportFault)
 	}
 	state := l.states[key{participant: "p", model: "m"}]
@@ -276,17 +276,17 @@ func TestHalfOpenSuccessClosesBreakerAndDecaysBackoff(t *testing.T) {
 	l.OnResult("p", "m", Success)
 
 	if state.halfOpen {
-		t.Fatal("halfOpen after probe Success = true, want false (breaker closed)")
+		t.Fatal("halfOpen after probe Success = true, want false (cutoff closed)")
 	}
 	if !state.openUntil.IsZero() {
-		t.Fatalf("openUntil after probe Success = %v, want zero (breaker fully closed)", state.openUntil)
+		t.Fatalf("openUntil after probe Success = %v, want zero (cutoff fully closed)", state.openUntil)
 	}
 	if state.backoffCount != backoffCountAfterTrip-1 {
 		t.Fatalf("backoffCount after probe Success = %d, want %d (decayed by one)", state.backoffCount, backoffCountAfterTrip-1)
 	}
 	l.Release("p", "m")
 	if !l.Acquire("p", "m") {
-		t.Fatal("Acquire() after breaker closed = false, want true")
+		t.Fatal("Acquire() after cutoff closed = false, want true")
 	}
 }
 
@@ -296,7 +296,7 @@ func TestHalfOpenTransportFaultReopensWithLongerCooldown(t *testing.T) {
 	clock := newMovingClock(testEpoch)
 	l := newTestLimiter(cfg, clock.now)
 
-	for i := int64(0); i < cfg.TripThreshold; i++ {
+	for i := int64(0); i < cfg.AfterFailures; i++ {
 		l.OnResult("p", "m", TransportFault)
 	}
 	state := l.states[key{participant: "p", model: "m"}]
@@ -305,7 +305,7 @@ func TestHalfOpenTransportFaultReopensWithLongerCooldown(t *testing.T) {
 	l.Acquire("p", "m") // half-open probe admitted
 	probeTime := clock.now()
 
-	l.OnResult("p", "m", TransportFault) // the probe itself fails: a single fault, not TripThreshold-many
+	l.OnResult("p", "m", TransportFault) // the probe itself fails: a single fault, not AfterFailures-many
 
 	if state.halfOpen {
 		t.Fatal("halfOpen after failed probe = true, want false (fully reopened)")
@@ -336,7 +336,7 @@ func TestModelOutcomeNeverPenalizes(t *testing.T) {
 		t.Fatalf("window after ModelOutcome verdicts = %v, want unchanged 4", state.window)
 	}
 	if !state.openUntil.IsZero() || state.halfOpen || state.consecutiveTransportFail != 0 || state.backoffCount != 0 {
-		t.Fatal("breaker state moved after ModelOutcome verdicts, want fully unchanged")
+		t.Fatal("cutoff state moved after ModelOutcome verdicts, want fully unchanged")
 	}
 }
 
@@ -379,16 +379,16 @@ func TestParticipantLimiterConcurrentAccessIsRaceFree(t *testing.T) {
 	wg.Wait()
 }
 
-// The breaker's cooldown must stay strictly below perf's ejection horizon so perf
-// remains the pool authority, not the breaker.
-func TestBreakerMaxOpenDefaultStaysBelowPerfEjectionHorizon(t *testing.T) {
+// The cutoff's cooldown must stay strictly below perf's ejection horizon so perf
+// remains the pool authority, not the cutoff.
+func TestCutoffMaxOpenDefaultStaysBelowPerfEjectionHorizon(t *testing.T) {
 	t.Parallel()
 	defaults := config.Defaults()
-	breakerMaxOpen := time.Duration(defaults.Limits.Breaker.MaxOpenMS) * time.Millisecond
+	cutoffMaxOpen := time.Duration(defaults.Limits.HostCutoff.MaxMS) * time.Millisecond
 	perfEjectionMax := time.Duration(defaults.Perf.EjectionMaxSeconds) * time.Second
 
-	if breakerMaxOpen >= perfEjectionMax {
-		t.Fatalf("breaker MaxOpenMS default %v must stay below perf's ejection horizon %v", breakerMaxOpen, perfEjectionMax)
+	if cutoffMaxOpen >= perfEjectionMax {
+		t.Fatalf("cutoff MaxMS default %v must stay below perf's ejection horizon %v", cutoffMaxOpen, perfEjectionMax)
 	}
 }
 
@@ -404,17 +404,17 @@ func TestAvailableTrueOnFreshParticipant(t *testing.T) {
 	}
 }
 
-func TestAvailableFalseWhileBreakerOpenThenTrueAfterCooldown(t *testing.T) {
+func TestAvailableFalseWhileCutoffOpenThenTrueAfterCooldown(t *testing.T) {
 	t.Parallel()
 	cfg := testConfig()
 	clock := newMovingClock(testEpoch)
 	l := newTestLimiter(cfg, clock.now)
 
-	for i := int64(0); i < cfg.TripThreshold; i++ {
+	for i := int64(0); i < cfg.AfterFailures; i++ {
 		l.OnResult("p", "m", TransportFault)
 	}
 	if l.Available("p", "m") {
-		t.Fatal("Available() while breaker Open = true, want false")
+		t.Fatal("Available() while cutoff Open = true, want false")
 	}
 
 	state := l.states[key{participant: "p", model: "m"}]
@@ -434,7 +434,7 @@ func TestAvailableFalseDuringHalfOpenProbeInFlight(t *testing.T) {
 	clock := newMovingClock(testEpoch)
 	l := newTestLimiter(cfg, clock.now)
 
-	for i := int64(0); i < cfg.TripThreshold; i++ {
+	for i := int64(0); i < cfg.AfterFailures; i++ {
 		l.OnResult("p", "m", TransportFault)
 	}
 	state := l.states[key{participant: "p", model: "m"}]
@@ -477,7 +477,7 @@ func TestAvailableDoesNotConsumeWindowSlots(t *testing.T) {
 		t.Fatal("Available() created participant state as a side effect, want no-op until first Acquire")
 	}
 
-	for i := 0; i < int(cfg.InitialWindow); i++ {
+	for i := 0; i < int(cfg.Initial); i++ {
 		if !l.Acquire("p", "m") {
 			t.Fatalf("Acquire() call %d after repeated Available() peeks = false, want true (peeks must not consume slots)", i+1)
 		}
@@ -533,10 +533,10 @@ func TestAvailableConcurrentWithAcquireIsRaceFree(t *testing.T) {
 	wg.Wait()
 }
 
-func TestClearQuarantineReopensEveryModelsBreakerForOneParticipant(t *testing.T) {
+func TestClearQuarantineReopensEveryModelsCutoffForOneParticipant(t *testing.T) {
 	now := time.Now()
 	limiter := NewParticipantLimiter(ParticipantConfig{
-		InitialWindow: 4, MaxWindow: 8, TripThreshold: 1,
+		Initial: 4, Max: 8, AfterFailures: 1,
 		BaseOpen: time.Minute, MaxOpen: time.Minute,
 	}, func() time.Time { return now })
 	limiter.jitter = func(time.Duration) time.Duration { return 0 }
@@ -571,7 +571,7 @@ func TestWindowGrowthDoesNotDependOnReleaseOrder(t *testing.T) {
 		// Four slots wide, two taken: the peak reaches exactly window/2 and passes the gate, while the
 		// live count after a release is one short of it. A window of two would pass either way and prove
 		// nothing.
-		limiter := newTestLimiter(ParticipantConfig{InitialWindow: 4, MaxWindow: 8}, func() time.Time { return base })
+		limiter := newTestLimiter(ParticipantConfig{Initial: 4, Max: 8}, func() time.Time { return base })
 		for range 2 {
 			if !limiter.Acquire("host-a", "model-a") {
 				t.Fatal("Acquire refused inside the initial window")
@@ -625,7 +625,7 @@ func TestReconfigureLiftsAWindowThatCollapsedBelowTheNewInitial(t *testing.T) {
 		t.Fatalf("window = %v, want it shrunk below the initial 4 by the overload", collapsed)
 	}
 
-	limiter.Reconfigure(ParticipantConfig{InitialWindow: 32, MaxWindow: 256, TripThreshold: 3})
+	limiter.Reconfigure(ParticipantConfig{Initial: 32, Max: 256, AfterFailures: 3})
 
 	if lifted := windowOf(t, limiter, "host-a"); lifted != 32 {
 		t.Fatalf("window = %v, want the new initial 32", lifted)
@@ -645,7 +645,7 @@ func TestReconfigureClampsAWindowAboveTheNewCeiling(t *testing.T) {
 		t.Fatalf("window = %v, want it grown well past 8 by the successes", grown)
 	}
 
-	limiter.Reconfigure(ParticipantConfig{InitialWindow: 1, MaxWindow: 8, TripThreshold: 3})
+	limiter.Reconfigure(ParticipantConfig{Initial: 1, Max: 8, AfterFailures: 3})
 
 	if clamped := windowOf(t, limiter, "host-a"); clamped != 8 {
 		t.Fatalf("window = %v, want the new ceiling 8", clamped)

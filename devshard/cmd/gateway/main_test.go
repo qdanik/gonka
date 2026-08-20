@@ -859,7 +859,7 @@ func TestReconfiguringTheGatewayChangesTheCapTheNextRequestIsJudgedAgainst(t *te
 
 	widened := config.Defaults()
 	widened.Limits.Concurrency.MaxRequests = 1
-	widened.Limits.AcquireWaitMS = 0
+	widened.Limits.AdmissionQueueWaitMS = 0
 	composed.config.Swap(&widened)
 
 	if err := composed.limiter.AcquireForModel(context.Background(), "model-a", 1, limits.ModelCapacity{ScaleFactor: 1}); err != nil {

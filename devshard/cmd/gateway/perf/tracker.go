@@ -249,3 +249,7 @@ func (t *Tracker) CannotServe(participant string, requiresTools bool, contextHin
 func (t *Tracker) hostStaleness() time.Duration {
 	return time.Duration(t.config.Load().Perf.HostStalenessSeconds) * time.Second
 }
+
+func (t *Tracker) Capability(participant string) (versionBlocked, toolBlocked bool, contextLimit, versionRefusals, toolRefusals, contextRefusals uint64) {
+	return t.capability.capability(participant, t.now(), t.hostStaleness())
+}

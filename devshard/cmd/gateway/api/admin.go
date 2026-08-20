@@ -152,7 +152,7 @@ func (s *Server) handleAdminUnquarantine(w http.ResponseWriter, r *http.Request)
 		writeErrorFor(w, err)
 		return
 	}
-	auditAdmin("participant breaker cleared", "participant", participantKey)
+	auditAdmin("participant cutoff cleared", "participant", participantKey)
 	writeJSON(w, http.StatusOK, map[string]any{"participant_key": participantKey})
 }
 

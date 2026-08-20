@@ -64,26 +64,26 @@ func (c *Config) Validate() error {
 	if c.Limits.MaxInputTokensInFlight < 0 {
 		complain("max_input_tokens_in_flight: %d must be >= 0", c.Limits.MaxInputTokensInFlight)
 	}
-	if c.Limits.AcquireWaitMS < 0 {
-		complain("acquire_wait_ms: %d must be >= 0", c.Limits.AcquireWaitMS)
+	if c.Limits.AdmissionQueueWaitMS < 0 {
+		complain("admission_queue_wait_ms: %d must be >= 0", c.Limits.AdmissionQueueWaitMS)
 	}
-	if c.Limits.AIMD.InitialWindow < 1 {
-		complain("aimd_initial_window: %d must be >= 1", c.Limits.AIMD.InitialWindow)
+	if c.Limits.HostInflight.Initial < 1 {
+		complain("host_initial_inflight: %d must be >= 1", c.Limits.HostInflight.Initial)
 	}
-	if c.Limits.AIMD.MaxWindow < c.Limits.AIMD.InitialWindow {
-		complain("aimd_max_window: %d must be >= aimd_initial_window %d", c.Limits.AIMD.MaxWindow, c.Limits.AIMD.InitialWindow)
+	if c.Limits.HostInflight.Max < c.Limits.HostInflight.Initial {
+		complain("host_max_inflight: %d must be >= host_initial_inflight %d", c.Limits.HostInflight.Max, c.Limits.HostInflight.Initial)
 	}
-	if c.Limits.Breaker.TripThreshold < 1 {
-		complain("breaker_trip_threshold: %d must be >= 1", c.Limits.Breaker.TripThreshold)
+	if c.Limits.HostCutoff.AfterFailures < 1 {
+		complain("host_cutoff_after_failures: %d must be >= 1", c.Limits.HostCutoff.AfterFailures)
 	}
-	if c.Limits.Breaker.BaseOpenMS < 1 {
-		complain("breaker_base_open_ms: %d must be >= 1", c.Limits.Breaker.BaseOpenMS)
+	if c.Limits.HostCutoff.BaseMS < 1 {
+		complain("host_cutoff_ms: %d must be >= 1", c.Limits.HostCutoff.BaseMS)
 	}
-	if c.Limits.Breaker.MaxOpenMS < c.Limits.Breaker.BaseOpenMS {
-		complain("breaker_max_open_ms: %d must be >= breaker_base_open_ms %d", c.Limits.Breaker.MaxOpenMS, c.Limits.Breaker.BaseOpenMS)
+	if c.Limits.HostCutoff.MaxMS < c.Limits.HostCutoff.BaseMS {
+		complain("host_cutoff_max_ms: %d must be >= host_cutoff_ms %d", c.Limits.HostCutoff.MaxMS, c.Limits.HostCutoff.BaseMS)
 	}
-	if perfEjectionMaxMS := c.Perf.EjectionMaxSeconds * 1000; c.Limits.Breaker.MaxOpenMS > perfEjectionMaxMS {
-		complain("breaker_max_open_ms: %d must be <= perf_ejection_max_seconds %d (ms) so perf stays the dominant ejection authority", c.Limits.Breaker.MaxOpenMS, perfEjectionMaxMS)
+	if perfEjectionMaxMS := c.Perf.EjectionMaxSeconds * 1000; c.Limits.HostCutoff.MaxMS > perfEjectionMaxMS {
+		complain("host_cutoff_max_ms: %d must be <= perf_ejection_max_seconds %d (ms) so perf stays the dominant ejection authority", c.Limits.HostCutoff.MaxMS, perfEjectionMaxMS)
 	}
 	// An admin key short enough to guess is worse than none, because "none" disables admin entirely
 	// (AdminEnabled) while a weak one authenticates.
@@ -204,8 +204,8 @@ func (c *Config) Validate() error {
 
 	// A long grace parks a committed-cost nonce on the chance of a co-arrival, so the ceiling is a
 	// budget guard, not a taste judgement.
-	if c.Scheduler.HoldGraceMS < 0 || c.Scheduler.HoldGraceMS > 5_000 {
-		complain("scheduler_hold_grace_ms: %d must be in [0, 5000]", c.Scheduler.HoldGraceMS)
+	if c.Scheduler.MatchWaitMS < 0 || c.Scheduler.MatchWaitMS > 5_000 {
+		complain("scheduler_match_wait_ms: %d must be in [0, 5000]", c.Scheduler.MatchWaitMS)
 	}
 	for index, participant := range c.Scheduler.ParticipantAllowlist {
 		if strings.TrimSpace(participant) == "" {

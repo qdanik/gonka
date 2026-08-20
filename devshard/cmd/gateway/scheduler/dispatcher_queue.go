@@ -37,7 +37,7 @@ func (d *dispatcher) drain() (time.Time, bool) {
 		escrowRetired := false
 		prepared, err := d.session.Advance(func(binding HostBinding) NonceIntent {
 			taken.participant = binding.Participant
-			decision = match(binding, d.waiting, participants, avail, d.now(), d.stale)
+			decision = match(binding, d.waiting, participants, avail, d.now(), d.matchWait)
 			if _, serving := decision.(serve); !serving {
 				return intentFor(decision)
 			}

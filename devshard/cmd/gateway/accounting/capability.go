@@ -1,0 +1,28 @@
+package accounting
+
+type HostCapability struct {
+	ProtocolVersionUnsupported bool   `json:"protocol_version_unsupported,omitempty"`
+	ToolChoiceUnsupported      bool   `json:"tool_choice_unsupported,omitempty"`
+	ContextLimit               uint64 `json:"context_limit,omitempty"`
+	VersionRefusals            uint64 `json:"version_refusals,omitempty"`
+	ToolRefusals               uint64 `json:"tool_refusals,omitempty"`
+	ContextRefusals            uint64 `json:"context_refusals,omitempty"`
+}
+
+func (c HostCapability) empty() bool {
+	return !c.ProtocolVersionUnsupported && !c.ToolChoiceUnsupported && c.ContextLimit == 0 &&
+		c.VersionRefusals == 0 && c.ToolRefusals == 0 && c.ContextRefusals == 0
+}
+
+type CapabilityFunc func(participant, model string) HostCapability
+
+func attachCapabilities(records []ParticipantRecord, lookup CapabilityFunc) {
+	if lookup == nil {
+		return
+	}
+	for i := range records {
+		if capability := lookup(records[i].Participant, records[i].Model); !capability.empty() {
+			records[i].Capability = &capability
+		}
+	}
+}

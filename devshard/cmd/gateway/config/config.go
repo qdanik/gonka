@@ -44,16 +44,15 @@ type Concurrency struct {
 	PoCRequestsPer10000Weight float64
 }
 
-// AIMD is the additive-increase/multiplicative-decrease per-host window tuning.
-type AIMD struct {
-	InitialWindow int64
-	MaxWindow     int64
+type HostInflight struct {
+	Initial int64
+	Max     int64
 }
 
-type Breaker struct {
-	TripThreshold int64
-	BaseOpenMS    int64
-	MaxOpenMS     int64
+type HostCutoff struct {
+	AfterFailures int64
+	BaseMS        int64
+	MaxMS         int64
 }
 
 // ModelLimits is the per-model override set. Token fields are required as a
@@ -73,10 +72,10 @@ type Limits struct {
 	MaxTokensCap           int64
 	Concurrency            Concurrency
 	MaxInputTokensInFlight int64
-	AcquireWaitMS          int64
-	QueueDepthPerSlot      int64
-	AIMD                   AIMD
-	Breaker                Breaker
+	AdmissionQueueWaitMS   int64
+	AdmissionQueuePerSlot  int64
+	HostInflight           HostInflight
+	HostCutoff             HostCutoff
 	ModelLimits            map[string]ModelLimits
 	ModelAccess            map[string]string
 }
@@ -159,10 +158,10 @@ type Engine struct {
 	MaxSpeculativeAttempts int64
 }
 
-// Scheduler groups nonce-holding tuning. HoldGraceMS is how long a bound nonce waits for a co-arriving
+// Scheduler groups nonce-holding tuning. MatchWaitMS is how long a bound nonce waits for a co-arriving
 // compatible request before it is burned; 0 burns immediately.
 type Scheduler struct {
-	HoldGraceMS          int64
+	MatchWaitMS          int64
 	ParticipantAllowlist []string
 }
 

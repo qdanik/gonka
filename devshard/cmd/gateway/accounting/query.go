@@ -37,11 +37,32 @@ func (b *Book) Query(filter QueryFilter) []ParticipantRecord {
 				records[identity] = record
 			}
 			record.absorb(slot)
+			if last := len(record.LatestNonces); last == 0 || record.LatestNonces[last-1].EscrowID != escrowID {
+				record.LatestNonces = append(record.LatestNonces, EscrowNonce{
+					EscrowID:    escrowID,
+					LatestNonce: escrow.latest,
+					Retired:     escrow.retired,
+				})
+			}
 		}
 		for key, count := range escrow.counters {
 			identity := escrow.identityOf(escrow.participantOf(key.SlotID))
 			if record, known := records[identity]; known {
 				record.Counters = append(record.Counters, CounterRecord{EscrowID: escrowID, CounterKey: key, Count: count})
+				if outcome, settled := timeoutOutcomeOf(key.TimeoutAction, key.TimeoutReason); settled {
+					if record.TimeoutOutcomes == nil {
+						record.TimeoutOutcomes = make(map[TimeoutOutcome]uint64)
+					}
+					record.TimeoutOutcomes[outcome] += count
+					if outcome == TimeoutApplied {
+						record.CrossChecks.TimeoutApplied += count
+					}
+				} else if awaitingTimeout(key) {
+					record.TimeoutPending += count
+				}
+				if namesNoReason(key) {
+					record.UnknownReasonTotal += count
+				}
 			}
 		}
 	}
@@ -148,9 +169,21 @@ func (r *ParticipantRecord) absorb(slot SlotRecord) {
 	r.Assigned += slot.Assigned
 	r.ChainMissed += slot.ChainMissed
 	r.ChainInvalid += slot.ChainInvalid
+	r.RequiredValidations += slot.RequiredValidations
+	r.CompletedValidations += slot.CompletedValidations
 	r.Pending += slot.Pending
+	r.InFlight += slot.InFlight
+	r.UnresolvedChallenges += slot.UnresolvedChallenges
+	r.ValidationsPerformed += slot.ValidationsPerformed
+	r.TimeoutsApplied += slot.TimeoutsApplied
 	r.Unobserved += slot.Unobserved
 	r.Overcounted += slot.Overcounted
+	r.CrossChecks.HostMissed += uint64(slot.ChainMissed)
+	r.CrossChecks.HostInvalid += uint64(slot.ChainInvalid)
+	// Per slot of one escrow: summing both sides first lets a surplus in one hide a shortfall in
+	// another. The invalid term the old ledger carries is absent until a diff can name the transition,
+	// and comparing against a zero it never measured would report the chain's whole Invalid as drift.
+	r.CrossChecks.ErrorCount += absDiff(slot.TimeoutsApplied, uint64(slot.ChainMissed)) + slot.Overcounted
 	for disposition, count := range slot.Dispositions {
 		r.Dispositions[disposition] += count
 	}
@@ -176,8 +209,13 @@ func (e *escrowLedger) slots(escrowID string) []SlotRecord {
 		dispositions[key.SlotID][key.Disposition] += count
 	}
 	pending := make(map[uint32]uint64, groupSize)
+	inFlight := make(map[uint32]uint64, groupSize)
 	for nonce, record := range e.nonces {
-		if record.counted == nil {
+		switch {
+		case record.counted != nil:
+		case record.sent && !record.finished:
+			inFlight[e.slotOf(nonce)]++
+		default:
 			pending[e.slotOf(nonce)]++
 		}
 	}
@@ -185,20 +223,25 @@ func (e *escrowLedger) slots(escrowID string) []SlotRecord {
 	records := make([]SlotRecord, 0, groupSize)
 	for slotID := uint32(0); slotID < groupSize; slotID++ {
 		slot := SlotRecord{
-			EscrowID:     escrowID,
-			SlotID:       slotID,
-			Participant:  e.metadata.Slots[slotID].ValidatorAddress,
-			Assigned:     assignedForSlot(e.latest, groupSize, slotID),
-			Dispositions: dispositions[slotID],
-			Pending:      pending[slotID],
+			EscrowID:             escrowID,
+			SlotID:               slotID,
+			Participant:          e.metadata.Slots[slotID].ValidatorAddress,
+			Assigned:             assignedForSlot(e.latest, groupSize, slotID),
+			Dispositions:         dispositions[slotID],
+			Pending:              pending[slotID],
+			InFlight:             inFlight[slotID],
+			UnresolvedChallenges: e.challenged[slotID],
+			ValidationsPerformed: e.validations[slotID],
+			TimeoutsApplied:      e.timeouts[slotID],
 		}
 		if slot.Dispositions == nil {
 			slot.Dispositions = make(map[Disposition]uint64)
 		}
 		if stats, observed := e.hostStats[slotID]; observed {
 			slot.ChainMissed, slot.ChainInvalid = stats.Missed, stats.Invalid
+			slot.RequiredValidations, slot.CompletedValidations = stats.RequiredValidations, stats.CompletedValidations
 		}
-		accounted := counted[slotID] + slot.Pending
+		accounted := counted[slotID] + slot.Pending + slot.InFlight
 		if accounted > slot.Assigned {
 			slot.Overcounted = accounted - slot.Assigned
 		} else {
@@ -207,4 +250,11 @@ func (e *escrowLedger) slots(escrowID string) []SlotRecord {
 		records = append(records, slot)
 	}
 	return records
+}
+
+func absDiff(a, b uint64) uint64 {
+	if a > b {
+		return a - b
+	}
+	return b - a
 }

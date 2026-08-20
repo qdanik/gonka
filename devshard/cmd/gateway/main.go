@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"devshard/cmd/gateway/accounting"
 	"errors"
 	"fmt"
 	"net/http"
@@ -160,6 +161,17 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 		participants.Reconfigure(limits.ParticipantConfigFromLimits(next.Limits))
 	})
 	hosts := perf.NewTracker(configHolder, clock)
+	nonces.SetCapability(func(participant, _ string) accounting.HostCapability {
+		versionBlocked, toolBlocked, contextLimit, versionRefusals, toolRefusals, contextRefusals := hosts.Capability(participant)
+		return accounting.HostCapability{
+			ProtocolVersionUnsupported: versionBlocked,
+			ToolChoiceUnsupported:      toolBlocked,
+			ContextLimit:               contextLimit,
+			VersionRefusals:            versionRefusals,
+			ToolRefusals:               toolRefusals,
+			ContextRefusals:            contextRefusals,
+		}
+	})
 	telemetry := metrics.New()
 
 	devshardWork := make(chan struct{}, 1)

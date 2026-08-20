@@ -51,7 +51,7 @@ type LimitsCollector struct {
 	participantsExhausted        *prometheus.Desc
 	windowSize                   *prometheus.Desc
 	windowInflight               *prometheus.Desc
-	breakerState                 *prometheus.Desc
+	cutoffState                  *prometheus.Desc
 }
 
 func NewLimitsCollector(sources LimitsSources) *LimitsCollector {
@@ -67,7 +67,7 @@ func NewLimitsCollector(sources LimitsSources) *LimitsCollector {
 
 		inflightRequestsByModel:    gaugeDesc("devshard_gateway_inflight_requests_by_model", "Current in-flight requests per model.", "model"),
 		inflightInputTokensByModel: gaugeDesc("devshard_gateway_inflight_input_tokens_by_model", "Current in-flight input tokens per model.", "model"),
-		queueDepth:                 gaugeDesc("devshard_gateway_limiter_queue_depth", "Requests waiting in the limiter's admission queue per model.", "model"),
+		queueDepth:                 gaugeDesc("devshard_gateway_limiter_queue_depth", "Requests waiting for a free slot, per model.", "model"),
 		capacityScale:              gaugeDesc("devshard_gateway_capacity_scale_by_model", "Ratio of current to baseline host weight per model (1.0 = full capacity).", "model"),
 		capacityTotalWeight:        gaugeDesc("devshard_gateway_capacity_total_weight_by_model", "Current availability-filtered host weight per model.", "model"),
 		capacityBaselineWeight:     gaugeDesc("devshard_gateway_capacity_baseline_weight_by_model", "Baseline steady-state host weight per model.", "model"),
@@ -75,9 +75,9 @@ func NewLimitsCollector(sources LimitsSources) *LimitsCollector {
 
 		participantsTracked:   gaugeDesc("devshard_gateway_participants_tracked", "Participant/model pairs the per-host limiter is tracking."),
 		participantsExhausted: gaugeDesc("devshard_gateway_participants_exhausted", "Tracked participant/model pairs that would currently refuse an attempt."),
-		windowSize:            gaugeDesc("devshard_gateway_participant_window_size", "Per-host AIMD concurrency window.", "participant_key", "model"),
+		windowSize:            gaugeDesc("devshard_gateway_participant_window_size", "Requests allowed in flight to one host right now.", "participant_key", "model"),
 		windowInflight:        gaugeDesc("devshard_gateway_participant_window_inflight", "Attempts currently occupying a host's window.", "participant_key", "model"),
-		breakerState:          gaugeDesc("devshard_gateway_participant_breaker_state", "Per-host circuit-breaker position (1 for the current state).", "participant_key", "model", "state"),
+		cutoffState:           gaugeDesc("devshard_gateway_participant_breaker_state", "Whether a host is currently cut off after repeated transport faults (1 for the current state).", "participant_key", "model", "state"),
 	}
 }
 
@@ -87,7 +87,7 @@ func (c *LimitsCollector) Describe(ch chan<- *prometheus.Desc) {
 		c.inflightRequestsByModel, c.inflightInputTokensByModel, c.queueDepth,
 		c.enforcedMaxConcurrentByModel, c.enforcedMaxTokensByModel,
 		c.capacityScale, c.capacityTotalWeight, c.capacityBaselineWeight, c.capacityWeightsUnobserved,
-		c.participantsTracked, c.participantsExhausted, c.windowSize, c.windowInflight, c.breakerState,
+		c.participantsTracked, c.participantsExhausted, c.windowSize, c.windowInflight, c.cutoffState,
 	} {
 		ch <- desc
 	}
@@ -123,8 +123,8 @@ func (c *LimitsCollector) Collect(ch chan<- prometheus.Metric) {
 		}
 		gauge(ch, c.windowSize, window.Window, window.Participant, window.Model)
 		gauge(ch, c.windowInflight, float64(window.Inflight), window.Participant, window.Model)
-		for _, state := range limits.AllBreakerStates() {
-			gauge(ch, c.breakerState, boolGauge(window.Breaker == state), window.Participant, window.Model, string(state))
+		for _, state := range limits.AllCutoffStates() {
+			gauge(ch, c.cutoffState, boolGauge(window.Cutoff == state), window.Participant, window.Model, string(state))
 		}
 	}
 	gauge(ch, c.participantsTracked, float64(len(windows)))

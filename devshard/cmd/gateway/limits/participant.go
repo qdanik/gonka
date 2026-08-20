@@ -18,9 +18,9 @@ const (
 ) // Overload=429/503; ModelOutcome=model-caused (empty stream etc.), never a host signal
 
 type ParticipantConfig struct {
-	InitialWindow int64
-	MaxWindow     int64
-	TripThreshold int64
+	Initial       int64
+	Max           int64
+	AfterFailures int64
 	BaseOpen      time.Duration
 	MaxOpen       time.Duration
 }
@@ -57,7 +57,7 @@ func NewParticipantLimiter(cfg ParticipantConfig, now func() time.Time) *Partici
 	}
 }
 
-// defaultJitter: up to 20% of base (gRPC connection-backoff's JITTER 0.2), so reopened breakers don't retry in lockstep.
+// defaultJitter: up to 20% of base (gRPC connection-backoff's JITTER 0.2), so reopened cutoffs don't retry in lockstep.
 func defaultJitter(base time.Duration) time.Duration {
 	span := int64(base) / 5
 	if span <= 0 {
@@ -74,11 +74,11 @@ func (l *ParticipantLimiter) Reconfigure(cfg ParticipantConfig) {
 	defer l.mu.Unlock()
 	l.cfg = cfg
 	for _, state := range l.states {
-		if cfg.MaxWindow > 0 && state.window > float64(cfg.MaxWindow) {
-			state.window = float64(cfg.MaxWindow)
+		if cfg.Max > 0 && state.window > float64(cfg.Max) {
+			state.window = float64(cfg.Max)
 		}
-		if state.window < float64(cfg.InitialWindow) {
-			state.window = float64(cfg.InitialWindow)
+		if state.window < float64(cfg.Initial) {
+			state.window = float64(cfg.Initial)
 		}
 	}
 }
@@ -86,19 +86,19 @@ func (l *ParticipantLimiter) Reconfigure(cfg ParticipantConfig) {
 func (l *ParticipantLimiter) stateLocked(k key) *hostState {
 	state, ok := l.states[k]
 	if !ok {
-		state = &hostState{window: float64(l.cfg.InitialWindow)}
+		state = &hostState{window: float64(l.cfg.Initial)}
 		l.states[k] = state
 	}
 	return state
 }
 
 func wouldAdmitLocked(state *hostState, now time.Time) bool {
-	breaker := breakerState(state, now)
-	if breaker == BreakerOpen {
+	cutoff := cutoffState(state, now)
+	if cutoff == CutoffOpen {
 		return false
 	}
 	effectiveWindow := int(math.Floor(state.window))
-	if breaker == BreakerHalfOpen {
+	if cutoff == CutoffHalfOpen {
 		effectiveWindow = 1
 	}
 	return state.inflight < effectiveWindow
@@ -127,30 +127,30 @@ func (l *ParticipantLimiter) Acquire(participant, model string) bool {
 	return true
 }
 
-// Available peeks Acquire's admit decision for participant/model without mutating inflight, the breaker, or creating state for a participant never seen before.
+// Available peeks Acquire's admit decision for participant/model without mutating inflight, the cutoff, or creating state for a participant never seen before.
 func (l *ParticipantLimiter) Available(participant, model string) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
 	state, ok := l.states[key{participant: participant, model: model}]
 	if !ok {
-		state = &hostState{window: float64(l.cfg.InitialWindow)}
+		state = &hostState{window: float64(l.cfg.Initial)}
 	}
 	return wouldAdmitLocked(state, l.now())
 }
 
-type BreakerState string
+type CutoffState string
 
 const (
-	BreakerClosed   BreakerState = "closed"
-	BreakerOpen     BreakerState = "open"
-	BreakerHalfOpen BreakerState = "half_open"
+	CutoffClosed   CutoffState = "closed"
+	CutoffOpen     CutoffState = "open"
+	CutoffHalfOpen CutoffState = "half_open"
 )
 
-// AllBreakerStates lists every breaker state for the metrics layer to enumerate, beside the const block
+// AllCutoffStates lists every cutoff state for the metrics layer to enumerate, beside the const block
 // rather than restated there. See gateway-invariants.md, "10. Labels, ordering and determinism".
-func AllBreakerStates() []BreakerState {
-	return []BreakerState{BreakerClosed, BreakerOpen, BreakerHalfOpen}
+func AllCutoffStates() []CutoffState {
+	return []CutoffState{CutoffClosed, CutoffOpen, CutoffHalfOpen}
 }
 
 // HostWindow is one tracked participant/model pair as a reader sees it.
@@ -159,7 +159,7 @@ type HostWindow struct {
 	Model       string
 	Window      float64
 	Inflight    int
-	Breaker     BreakerState
+	Cutoff      CutoffState
 	Available   bool
 }
 
@@ -176,7 +176,7 @@ func (l *ParticipantLimiter) Snapshot() []HostWindow {
 			Model:       tracked.model,
 			Window:      state.window,
 			Inflight:    state.inflight,
-			Breaker:     breakerState(state, now),
+			Cutoff:      cutoffState(state, now),
 			Available:   wouldAdmitLocked(state, now),
 		})
 	}
@@ -189,19 +189,19 @@ func (l *ParticipantLimiter) Snapshot() []HostWindow {
 	return windows
 }
 
-func breakerState(state *hostState, now time.Time) BreakerState {
+func cutoffState(state *hostState, now time.Time) CutoffState {
 	switch {
 	case now.Before(state.openUntil):
-		return BreakerOpen
+		return CutoffOpen
 	case state.halfOpen || !state.openUntil.IsZero():
-		return BreakerHalfOpen
+		return CutoffHalfOpen
 	}
-	return BreakerClosed
+	return CutoffClosed
 }
 
-// ClearQuarantine reopens every model's breaker for one participant, restores its initial window and
+// ClearQuarantine reopens every model's cutoff for one participant, restores its initial window and
 // leaves inflight alone, reporting whether the participant was tracked at all. See
-// gateway-capacity-and-health.md, "The participant limiter: AIMD plus a breaker".
+// gateway-capacity-and-health.md, "The participant limiter: AIMD plus a cutoff".
 func (l *ParticipantLimiter) ClearQuarantine(participant string) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -211,7 +211,7 @@ func (l *ParticipantLimiter) ClearQuarantine(participant string) bool {
 		if tracked.participant != participant {
 			continue
 		}
-		state.window = float64(l.cfg.InitialWindow)
+		state.window = float64(l.cfg.Initial)
 		state.consecutiveTransportFail = 0
 		state.openUntil = time.Time{}
 		state.backoffCount = 0
@@ -251,7 +251,7 @@ func (l *ParticipantLimiter) OnResult(participant, model string, verdict Verdict
 		// taken and nothing can undo it, which is what makes this independent of who is called first.
 		if float64(state.peakInflight) >= state.window/2 {
 			state.peakInflight = state.inflight
-			state.window = math.Min(state.window+1, float64(l.cfg.MaxWindow))
+			state.window = math.Min(state.window+1, float64(l.cfg.Max))
 		}
 		state.consecutiveTransportFail = 0
 		if state.halfOpen {
@@ -266,8 +266,8 @@ func (l *ParticipantLimiter) OnResult(participant, model string, verdict Verdict
 		state.consecutiveTransportFail = 0
 	case TransportFault:
 		state.consecutiveTransportFail++
-		// A half-open probe gets one try: any fault reopens immediately, not after TripThreshold-many.
-		if state.consecutiveTransportFail >= int(l.cfg.TripThreshold) || state.halfOpen {
+		// A half-open probe gets one try: any fault reopens immediately, not after AfterFailures-many.
+		if state.consecutiveTransportFail >= int(l.cfg.AfterFailures) || state.halfOpen {
 			backoff := time.Duration(float64(l.cfg.BaseOpen) * math.Pow(1.6, float64(state.backoffCount)))
 			backoff += l.jitter(backoff)
 			if backoff > l.cfg.MaxOpen {

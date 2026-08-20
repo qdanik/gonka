@@ -15,20 +15,20 @@ func GatewayConfigFromLimits(l config.Limits) GatewayConfig {
 		}
 	}
 	return GatewayConfig{
-		MaxConcurrent:     l.Concurrency.MaxRequests,
-		MaxInputTokens:    l.MaxInputTokensInFlight,
-		QueueDepthPerSlot: l.QueueDepthPerSlot,
-		AcquireWait:       time.Duration(l.AcquireWaitMS) * time.Millisecond,
-		ModelLimits:       modelLimits,
+		MaxConcurrent:         l.Concurrency.MaxRequests,
+		MaxInputTokens:        l.MaxInputTokensInFlight,
+		AdmissionQueuePerSlot: l.AdmissionQueuePerSlot,
+		AcquireWait:           time.Duration(l.AdmissionQueueWaitMS) * time.Millisecond,
+		ModelLimits:           modelLimits,
 	}
 }
 
 func ParticipantConfigFromLimits(l config.Limits) ParticipantConfig {
 	return ParticipantConfig{
-		InitialWindow: l.AIMD.InitialWindow,
-		MaxWindow:     l.AIMD.MaxWindow,
-		TripThreshold: l.Breaker.TripThreshold,
-		BaseOpen:      time.Duration(l.Breaker.BaseOpenMS) * time.Millisecond,
-		MaxOpen:       time.Duration(l.Breaker.MaxOpenMS) * time.Millisecond,
+		Initial:       l.HostInflight.Initial,
+		Max:           l.HostInflight.Max,
+		AfterFailures: l.HostCutoff.AfterFailures,
+		BaseOpen:      time.Duration(l.HostCutoff.BaseMS) * time.Millisecond,
+		MaxOpen:       time.Duration(l.HostCutoff.MaxMS) * time.Millisecond,
 	}
 }

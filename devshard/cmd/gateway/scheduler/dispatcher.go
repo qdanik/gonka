@@ -36,7 +36,7 @@ type dispatcherDeps struct {
 	holdEscrow   func() (func(), bool)
 	observer     dispatchObserver
 	now          func() time.Time
-	stale        time.Duration
+	matchWait    time.Duration
 	newTimer     func(time.Duration) (<-chan time.Time, func())
 	retire       func(*dispatcher) bool
 	idleGrace    time.Duration

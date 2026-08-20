@@ -127,7 +127,7 @@ func TestUnfinishedNonceStaysPendingUntilItsTimeoutSettles(t *testing.T) {
 	if dispositions := dispositionsOfSlot(t, book, slot); len(dispositions) != 0 {
 		t.Fatalf("dispositions = %v, want none while the timeout is unsettled", dispositions)
 	}
-	if pending := pendingOfSlot(t, book, slot); pending != 1 {
+	if pending := unclassifiedOfSlot(t, book, slot); pending != 1 {
 		t.Fatalf("pending = %d, want the nonce awaiting its timeout", pending)
 	}
 
@@ -135,7 +135,7 @@ func TestUnfinishedNonceStaysPendingUntilItsTimeoutSettles(t *testing.T) {
 		t.Fatalf("RecordTimeout(): %v", err)
 	}
 	assertDisposition(t, book, 6, 4, DispositionUnfinishedExecution)
-	if pending := pendingOfSlot(t, book, slot); pending != 0 {
+	if pending := unclassifiedOfSlot(t, book, slot); pending != 0 {
 		t.Fatalf("pending = %d, want the nonce classified", pending)
 	}
 }
@@ -225,13 +225,13 @@ func TestEveryAssignedNonceIsAccountedForExactlyOnce(t *testing.T) {
 			for _, count := range slot.Dispositions {
 				classified += count
 			}
-			total := classified + slot.Pending + slot.Unobserved
+			total := classified + slot.Pending + slot.InFlight + slot.Unobserved
 			if slot.Overcounted != 0 {
 				t.Fatalf("slot %d overcounted %d nonces", slot.SlotID, slot.Overcounted)
 			}
 			if total != slot.Assigned {
-				t.Fatalf("slot %d: classified %d + pending %d + unobserved %d = %d, want assigned %d",
-					slot.SlotID, classified, slot.Pending, slot.Unobserved, total, slot.Assigned)
+				t.Fatalf("slot %d: classified %d + pending %d + in flight %d + unobserved %d = %d, want assigned %d",
+					slot.SlotID, classified, slot.Pending, slot.InFlight, slot.Unobserved, total, slot.Assigned)
 			}
 		}
 	}
@@ -252,12 +252,12 @@ func TestChainTalliesTravelBesideTheLedgersOwn(t *testing.T) {
 	}
 }
 
-func pendingOfSlot(t *testing.T, book *Book, slotID uint32) uint64 {
+func unclassifiedOfSlot(t *testing.T, book *Book, slotID uint32) uint64 {
 	t.Helper()
 	for _, record := range book.Query(QueryFilter{}) {
 		for _, slot := range record.Slots {
 			if slot.SlotID == slotID {
-				return slot.Pending
+				return slot.Pending + slot.InFlight
 			}
 		}
 	}

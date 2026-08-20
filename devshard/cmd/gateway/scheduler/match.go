@@ -102,7 +102,7 @@ func (a availability) blocksApartFromExclusion(participant string, queued *waite
 // match is pure and total: it reads nothing, mutates nothing, and every path yields a Decision.
 // Filters are keyed by participant, never by slot, so a host a request excluded once can never be
 // re-served to it through a sibling slot of the same validator.
-func match(binding HostBinding, waiting []*waiter, participants []string, avail availability, now time.Time, stale time.Duration) Decision {
+func match(binding HostBinding, waiting []*waiter, participants []string, avail availability, now time.Time, matchWait time.Duration) Decision {
 	participant := binding.Participant
 	if reason := avail.participantBlocked(participant); reason != blockNone {
 		return burn{kind: ghostFor[reason]}
@@ -132,7 +132,7 @@ func match(binding HostBinding, waiting []*waiter, participants []string, avail 
 	if oldestLive == nil {
 		return decline{}
 	}
-	if until := oldestLive.enqueued.Add(stale); now.Before(until) {
+	if until := oldestLive.enqueued.Add(matchWait); now.Before(until) {
 		return hold{until: until}
 	}
 	// See gateway-routing-and-nonces.md, "Serving a host the request excluded".

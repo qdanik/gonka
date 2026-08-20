@@ -2,9 +2,12 @@ package main
 
 import (
 	"context"
+	"devshard/types"
 	"errors"
 	"net/http"
 	"path/filepath"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"devshard/cmd/gateway/accounting"
@@ -40,6 +43,47 @@ type nonceAccounting struct {
 	service  *accounting.Service
 	listener *http.Server
 	epochs   epochSource
+
+	capability atomic.Pointer[accounting.CapabilityFunc]
+
+	observing sync.Map
+}
+
+func (n *nonceAccounting) watchDiffs(escrowID string, session registry.EscrowSession) {
+	if _, already := n.observing.LoadOrStore(escrowID, struct{}{}); already {
+		return
+	}
+	underlying := session.UserSession()
+	if underlying == nil {
+		n.observing.Delete(escrowID)
+		return
+	}
+	underlying.SetDiffObserver(func(diff types.Diff) {
+		for _, tx := range diff.Txs {
+			switch validation, timeout := tx.GetValidation(), tx.GetTimeoutInference(); {
+			case validation != nil:
+				n.report(n.service.Book.RecordValidation(escrowID, validation.ValidatorSlot))
+			case timeout != nil:
+				n.report(n.service.Book.RecordAppliedTimeout(escrowID, timeout.InferenceId))
+			}
+		}
+	})
+}
+
+func (n *nonceAccounting) SetCapability(lookup accounting.CapabilityFunc) {
+	if n != nil && lookup != nil {
+		n.capability.Store(&lookup)
+	}
+}
+
+func (n *nonceAccounting) hostCapability(participant, model string) accounting.HostCapability {
+	if n == nil {
+		return accounting.HostCapability{}
+	}
+	if lookup := n.capability.Load(); lookup != nil {
+		return (*lookup)(participant, model)
+	}
+	return accounting.HostCapability{}
 }
 
 func openNonceAccounting(settings config.NonceAccounting, storageDir string, epochs epochSource, now func() time.Time) *nonceAccounting {
@@ -66,7 +110,7 @@ func openNonceAccounting(settings config.NonceAccounting, storageDir string, epo
 	if settings.ListenAddr != "" {
 		ledger.listener = &http.Server{
 			Addr:              settings.ListenAddr,
-			Handler:           accounting.NewHandler(service.Book, ledger.currentEpoch),
+			Handler:           accounting.NewHandler(service.Book, ledger.currentEpoch, ledger.hostCapability),
 			ReadHeaderTimeout: nonceAccountingReadHeaderTimeout,
 		}
 	}
@@ -154,10 +198,13 @@ func (n *nonceAccounting) sweep(ctx context.Context, escrows escrowSource) {
 				n.report(n.service.Book.ObserveHostStats(state.ID, slotID, *stats))
 			}
 		}
+		n.report(n.service.Book.ObserveChallenges(state.ID, openChallenges(escrowState)))
+		n.watchDiffs(state.ID, session)
 	}
 	for _, escrowID := range n.service.Book.EscrowIDs() {
 		if _, still := published[escrowID]; !still {
 			n.service.Book.RetireEscrow(escrowID)
+			n.observing.Delete(escrowID)
 		}
 	}
 }
@@ -256,4 +303,14 @@ func (n *nonceAccounting) Close() error {
 	shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), nonceAccountingShutdownGrace)
 	defer cancelShutdown()
 	return errors.Join(n.listener.Shutdown(shutdownCtx), n.service.Close())
+}
+
+func openChallenges(escrowState types.EscrowState) map[uint32]uint64 {
+	open := make(map[uint32]uint64)
+	for _, record := range escrowState.Inferences {
+		if record != nil && record.Status == types.StatusChallenged {
+			open[record.ExecutorSlot]++
+		}
+	}
+	return open
 }

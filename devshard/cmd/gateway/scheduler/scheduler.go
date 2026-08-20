@@ -174,7 +174,7 @@ func (s *Scheduler) dispatcherFor(escrow Escrow) (*dispatcher, error) {
 			holdEscrow:   escrow.Hold,
 			observer:     s.observer,
 			now:          s.now,
-			stale:        s.holdGrace(),
+			matchWait:    s.matchWait(),
 			newTimer:     s.newTimer,
 			retire:       s.retire,
 			idleGrace:    idleDispatcherGrace,
@@ -249,8 +249,8 @@ func (s *Scheduler) stateBlocked(escrowID string) func(string) bool {
 	}
 }
 
-func (s *Scheduler) holdGrace() time.Duration {
-	return time.Duration(s.settings.Load().Scheduler.HoldGraceMS) * time.Millisecond
+func (s *Scheduler) matchWait() time.Duration {
+	return time.Duration(s.settings.Load().Scheduler.MatchWaitMS) * time.Millisecond
 }
 
 // reserveTokens is the token count one request may cost: what it already sent, plus the most this gateway
@@ -375,7 +375,7 @@ type escrowWeights interface {
 }
 
 // hostLimiter is satisfied by *limits.ParticipantLimiter. Acquire is the admission authority and runs
-// with the commit; Available is only a cheap pre-filter, so a stale answer from it costs nothing. A
+// with the commit; Available is only a cheap pre-filter, so a matchWait answer from it costs nothing. A
 // slot handed to a caller is released by the engine that spends it, never here.
 type hostLimiter interface {
 	Available(participant, model string) bool

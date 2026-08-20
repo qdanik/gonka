@@ -19,9 +19,9 @@ var testEpoch = time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC)
 
 func limiterConfig(tripThreshold int64) limits.ParticipantConfig {
 	return limits.ParticipantConfig{
-		InitialWindow: 4,
-		MaxWindow:     10,
-		TripThreshold: tripThreshold,
+		Initial:       4,
+		Max:           10,
+		AfterFailures: tripThreshold,
 		BaseOpen:      time.Minute,
 		MaxOpen:       time.Hour,
 	}
@@ -47,7 +47,7 @@ func observedWindow(verdict limits.Verdict, recorded bool) int {
 	return admitted
 }
 
-func observedBreakerOpen(verdict limits.Verdict, recorded bool) bool {
+func observedCutoffOpen(verdict limits.Verdict, recorded bool) bool {
 	limiter := limits.NewParticipantLimiter(limiterConfig(1), func() time.Time { return testEpoch })
 	if recorded {
 		limiter.OnResult(testParticipant, testModel, verdict)
@@ -129,7 +129,7 @@ func TestVerdictTable(t *testing.T) {
 		wantVerdict  limits.Verdict
 		wantRecorded bool
 		wantWindow   int
-		wantBreaker  bool
+		wantCutoff   bool
 	}{
 		{"clean finish, nonce finished, content present", race(cleanAttempt()), cleanAttempt(), limits.Success, true, 5, false},
 		{"clean finish by a loser", race(cleanAttempt()), func() AttemptOutcome {
@@ -200,8 +200,8 @@ func TestVerdictTable(t *testing.T) {
 			if window := observedWindow(verdict, recorded); window != testCase.wantWindow {
 				t.Errorf("window after the verdict = %d, want %d", window, testCase.wantWindow)
 			}
-			if open := observedBreakerOpen(verdict, recorded); open != testCase.wantBreaker {
-				t.Errorf("breaker open after the verdict = %v, want %v", open, testCase.wantBreaker)
+			if open := observedCutoffOpen(verdict, recorded); open != testCase.wantCutoff {
+				t.Errorf("cutoff open after the verdict = %v, want %v", open, testCase.wantCutoff)
 			}
 		})
 	}

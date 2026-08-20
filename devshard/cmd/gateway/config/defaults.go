@@ -31,22 +31,16 @@ func Defaults() Config {
 				PoCRequestsPer10000Weight: 48,
 			},
 			MaxInputTokensInFlight: 0,
-			// The wait budget a request spends looking for capacity. A shard that refuses on the first
-			// hiccup is what 429 meant to a client that had exceeded nothing.
-			AcquireWaitMS: 300_000,
-			// Wait budget divided by the measured time one request holds a slot (~105 s at p50): deeper
-			// than this and the queue provably cannot reach the newcomer before its budget runs out.
-			QueueDepthPerSlot: 4,
-			// A window opens near what a host is known to take rather than discovering it: starting at 4
-			// capped three participants at twelve concurrent requests, whatever the group size.
-			AIMD: AIMD{
-				InitialWindow: 64,
-				MaxWindow:     256,
+			AdmissionQueueWaitMS:   300_000,
+			AdmissionQueuePerSlot:  4,
+			HostInflight: HostInflight{
+				Initial: 64,
+				Max:     256,
 			},
-			Breaker: Breaker{
-				TripThreshold: 3,
-				BaseOpenMS:    5_000,
-				MaxOpenMS:     60_000,
+			HostCutoff: HostCutoff{
+				AfterFailures: 3,
+				BaseMS:        5_000,
+				MaxMS:         60_000,
 			},
 		},
 		Modes: Modes{
@@ -95,7 +89,7 @@ func Defaults() Config {
 			MaxSpeculativeAttempts: 0,
 		},
 		Scheduler: Scheduler{
-			HoldGraceMS: 2_000,
+			MatchWaitMS: 2_000,
 		},
 	}
 }

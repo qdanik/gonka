@@ -16,7 +16,7 @@ import (
 func newLimitsHarness(clock *time.Time) (*limits.GatewayLimiter, *limits.Capacity, *limits.ParticipantLimiter) {
 	limiter := limits.NewGatewayLimiter(limits.GatewayConfig{MaxConcurrent: 8, MaxInputTokens: 4000})
 	participants := limits.NewParticipantLimiter(limits.ParticipantConfig{
-		InitialWindow: 4, MaxWindow: 16, TripThreshold: 1,
+		Initial: 4, Max: 16, AfterFailures: 1,
 		BaseOpen: time.Minute, MaxOpen: time.Minute,
 	}, func() time.Time { return *clock })
 	capacity := limits.NewCapacity(participants.Available)
@@ -123,7 +123,7 @@ func TestTheLimitsCollectorReportsWhileEscrowScoringRunsOnTheMembershipFallback(
 	expectGauge(t, telemetry, "devshard_gateway_capacity_weights_unobserved_by_model", labels{"model": "qwen"}, 0)
 }
 
-func TestTheLimitsCollectorReportsAnOpenBreakerAsExhausted(t *testing.T) {
+func TestTheLimitsCollectorReportsAnOpenCutoffAsExhausted(t *testing.T) {
 	clock := time.Unix(1700000000, 0)
 	limiter, capacity, participants := newLimitsHarness(&clock)
 	telemetry := New()

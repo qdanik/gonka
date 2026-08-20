@@ -16,15 +16,15 @@ type Overrides struct {
 	MaxConcurrentRequestsPer10000Weight    *float64               `json:"max_concurrent_requests_per_10000_weight,omitempty"`
 	PoCMaxConcurrentRequestsPer10000Weight *float64               `json:"poc_max_concurrent_requests_per_10000_weight,omitempty"`
 	MaxInputTokensInFlight                 *int64                 `json:"max_input_tokens_in_flight,omitempty"`
-	AcquireWaitMS                          *int64                 `json:"acquire_wait_ms,omitempty"`
-	QueueDepthPerSlot                      *int64                 `json:"queue_depth_per_slot,omitempty"`
-	HoldGraceMS                            *int64                 `json:"hold_grace_ms,omitempty"`
+	AdmissionQueueWaitMS                   *int64                 `json:"admission_queue_wait_ms,omitempty"`
+	AdmissionQueuePerSlot                  *int64                 `json:"admission_queue_per_slot,omitempty"`
+	MatchWaitMS                            *int64                 `json:"match_wait_ms,omitempty"`
 	ParticipantAllowlist                   *[]string              `json:"participant_allowlist,omitempty"`
-	AIMDInitialWindow                      *int64                 `json:"aimd_initial_window,omitempty"`
-	AIMDMaxWindow                          *int64                 `json:"aimd_max_window,omitempty"`
-	BreakerTripThreshold                   *int64                 `json:"breaker_trip_threshold,omitempty"`
-	BreakerBaseOpenMS                      *int64                 `json:"breaker_base_open_ms,omitempty"`
-	BreakerMaxOpenMS                       *int64                 `json:"breaker_max_open_ms,omitempty"`
+	HostInitialInflight                    *int64                 `json:"host_initial_inflight,omitempty"`
+	HostMaxInflight                        *int64                 `json:"host_max_inflight,omitempty"`
+	HostCutoffAfterFailures                *int64                 `json:"host_cutoff_after_failures,omitempty"`
+	HostCutoffMS                           *int64                 `json:"host_cutoff_ms,omitempty"`
+	HostCutoffMaxMS                        *int64                 `json:"host_cutoff_max_ms,omitempty"`
 	ModelLimits                            map[string]ModelLimits `json:"model_limits,omitempty"`
 	ModelAccess                            map[string]string      `json:"model_access,omitempty"`
 	Disabled                               *bool                  `json:"disabled,omitempty"`

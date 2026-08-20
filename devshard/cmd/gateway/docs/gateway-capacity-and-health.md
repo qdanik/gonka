@@ -167,10 +167,10 @@ Two asymmetries worth knowing, neither of which is stated in the code:
 | `max_input_tokens_in_flight` | 0 (unlimited) | Per-model input-token budget, scaled by capacity. |
 | `max_concurrent_requests_per_10000_weight` | 24.0 | Weight-derived cap; when set with an observed baseline it replaces the absolute cap. |
 | `poc_max_concurrent_requests_per_10000_weight` | 48.0 | The same, used while the chain reports requests blocked. |
-| `acquire_wait_ms` | 300 000 | Bounded queue wait before a 503. |
-| `aimd_initial_window` / `aimd_max_window` | 64 / 256 | Per-participant concurrency window bounds. The window opens near a host's known capacity and AIMD is left to back off from it, rather than discovering it upward from a cold start. |
-| `breaker_trip_threshold` | 3 | Consecutive transport faults before the breaker opens. |
-| `breaker_base_open_ms` / `breaker_max_open_ms` | 5 000 / 60 000 | Backoff ladder bounds. The maximum must not exceed the performance ejection maximum, so ejection stays the dominant authority. |
+| `admission_queue_wait_ms` | 300 000 | How long a request waits for a free slot before a 503. The same value is returned as `Retry-After`. |
+| `host_initial_inflight` / `host_max_inflight` | 64 / 256 | How many requests may be in flight to one host, to start and at most. The window opens near a host's known capacity and AIMD is left to back off from it, rather than discovering it upward from a cold start. |
+| `host_cutoff_after_failures` | 3 | Consecutive transport faults before the host stops receiving requests. |
+| `host_cutoff_ms` / `host_cutoff_max_ms` | 5 000 / 60 000 | How long a cut-off host stays out, first time and at most. The maximum must not exceed the performance ejection maximum, so ejection stays the dominant authority. |
 | `perf_consecutive_fail_threshold` | 5 | Consecutive-failure ejection trigger. |
 | `perf_failure_rate_threshold` / `perf_failure_rate_min_volume` | 0.15 / 20 | Rate-based ejection trigger and its volume gate. |
 | `perf_ejection_base_seconds` / `perf_ejection_max_seconds` | 30 / 600 | Ejection duration ladder. |
@@ -178,7 +178,7 @@ Two asymmetries worth knowing, neither of which is stated in the code:
 | `perf_host_staleness_seconds` | 3 600 | When an unseen host is forgotten. |
 | `GATEWAY_PERF_EWMA_HALFLIFE_SECONDS` | 600 | Half-life of the decayed success and failure counters. |
 
-The rows down to `breaker_max_open_ms` are admin overrides, changeable at run time without a redeploy. The `perf_*` rows are **not**: they are neither overrides nor environment variables, only compile-time defaults, and the snake_case names above are the spellings the boot-time validator uses in its error messages, not knobs an operator can set. `GATEWAY_PERF_EWMA_HALFLIFE_SECONDS` is the one performance value with an environment variable, and it is read once at boot. Retuning ejection therefore means a new binary.
+The rows down to `host_cutoff_max_ms` are admin overrides, changeable at run time without a redeploy. The `perf_*` rows are **not**: they are neither overrides nor environment variables, only compile-time defaults, and the snake_case names above are the spellings the boot-time validator uses in its error messages, not knobs an operator can set. `GATEWAY_PERF_EWMA_HALFLIFE_SECONDS` is the one performance value with an environment variable, and it is read once at boot. Retuning ejection therefore means a new binary.
 
 The default input-token budget of zero means unlimited, which is worth an operator's attention: with million-token contexts it is the only thing between concurrency and memory exhaustion, and the body-size cap deliberately does not throttle load.
 
@@ -186,9 +186,9 @@ The default input-token budget of zero means unlimited, which is worth an operat
 
 A shard should not answer 429. That status means the client exceeded a quota, and a client that ran into the shard's own capacity exceeded nothing — it carries no hint of when to return, so a well-behaved client retries immediately and deepens the shortage it just hit. Every capacity refusal answers 503 instead, and every one of them carries `Retry-After`: the wait already spent when that is known, a default otherwise.
 
-`acquire_wait_ms` is the budget a request may spend looking for capacity, not a delay. A queued waiter is promoted the instant a slot frees. The default is five minutes, and it is set from what a slot actually costs: across three days of load the median winning attempt held its slot 105 s and the p90 held it 317 s. A two-minute budget was shorter than the p90 hold, so most waiters could not be reached before their budget ran out.
+`admission_queue_wait_ms` is the budget a request may spend looking for capacity, not a delay. A queued waiter is promoted the instant a slot frees. The default is five minutes, and it is set from what a slot actually costs: across three days of load the median winning attempt held its slot 105 s and the p90 held it 317 s. A two-minute budget was shorter than the p90 hold, so most waiters could not be reached before their budget ran out.
 
-That ratio is where `queue_depth_per_slot` comes from: five minutes against a 105 s median hold drains about three deep, so four holds a burst without admitting waiters that provably cannot be served. Waiting the whole budget out and being refused anyway costs the client the wait and the shard the connection, so a request that provably cannot reach the front in time is refused on arrival instead. Depth is counted per model against that model's own concurrency, because the caps are per model: a heavy model does not shrink a light one's queue.
+That ratio is where `admission_queue_per_slot` comes from: five minutes against a 105 s median hold drains about three deep, so four holds a burst without admitting waiters that provably cannot be served. Waiting the whole budget out and being refused anyway costs the client the wait and the shard the connection, so a request that provably cannot reach the front in time is refused on arrival instead. Depth is counted per model against that model's own concurrency, because the caps are per model: a heavy model does not shrink a light one's queue.
 
 Two gates can refuse, and they answer different questions. The gateway limiter asks whether there is budget — concurrency, input tokens, chain weights. The scheduler asks whether a live host will take it — participant windows, breakers, chain phase. A request can pass the first and stall at the second; production has shown exactly that, with zero limiter refusals and nine scheduler refusals in one burst. The budget is meant to bound the whole path, and the scheduler side of it is not built yet: it still refuses immediately rather than waiting. See `specs/2026-08-03-request-queue-design.md`.
 

@@ -34,12 +34,12 @@ func TestDefaultsMatchSpec(t *testing.T) {
 		{"Limits.Concurrency.RequestsPer10000Weight", configuration.Limits.Concurrency.RequestsPer10000Weight, 24.0},
 		{"Limits.Concurrency.PoCRequestsPer10000Weight", configuration.Limits.Concurrency.PoCRequestsPer10000Weight, 48.0},
 		{"Limits.MaxInputTokensInFlight", configuration.Limits.MaxInputTokensInFlight, int64(0)},
-		{"Limits.AcquireWaitMS", configuration.Limits.AcquireWaitMS, int64(300_000)},
-		{"Limits.AIMD.InitialWindow", configuration.Limits.AIMD.InitialWindow, int64(64)},
-		{"Limits.AIMD.MaxWindow", configuration.Limits.AIMD.MaxWindow, int64(256)},
-		{"Limits.Breaker.TripThreshold", configuration.Limits.Breaker.TripThreshold, int64(3)},
-		{"Limits.Breaker.BaseOpenMS", configuration.Limits.Breaker.BaseOpenMS, int64(5_000)},
-		{"Limits.Breaker.MaxOpenMS", configuration.Limits.Breaker.MaxOpenMS, int64(60_000)},
+		{"Limits.AdmissionQueueWaitMS", configuration.Limits.AdmissionQueueWaitMS, int64(300_000)},
+		{"Limits.HostInflight.Initial", configuration.Limits.HostInflight.Initial, int64(64)},
+		{"Limits.HostInflight.Max", configuration.Limits.HostInflight.Max, int64(256)},
+		{"Limits.HostCutoff.AfterFailures", configuration.Limits.HostCutoff.AfterFailures, int64(3)},
+		{"Limits.HostCutoff.BaseMS", configuration.Limits.HostCutoff.BaseMS, int64(5_000)},
+		{"Limits.HostCutoff.MaxMS", configuration.Limits.HostCutoff.MaxMS, int64(60_000)},
 		{"Modes.PoCMode", configuration.Modes.PoCMode, "off"},
 		{"Rotation.PrePoCBlocks", configuration.Rotation.PrePoCBlocks, int64(300)},
 		{"Cache.ChatCacheMaxBytes", configuration.Cache.ChatCacheMaxBytes, int64(268_435_456)},
@@ -57,7 +57,7 @@ func TestDefaultsMatchSpec(t *testing.T) {
 		{"Perf.MaxEjectionFraction", configuration.Perf.MaxEjectionFraction, 0.5},
 		{"Perf.MinAvailableHosts", configuration.Perf.MinAvailableHosts, int64(1)},
 		{"Perf.HostStalenessSeconds", configuration.Perf.HostStalenessSeconds, int64(3_600)},
-		{"Scheduler.HoldGraceMS", configuration.Scheduler.HoldGraceMS, int64(2_000)},
+		{"Scheduler.MatchWaitMS", configuration.Scheduler.MatchWaitMS, int64(2_000)},
 		{"Engine.ReceiptTimeoutMS", configuration.Engine.ReceiptTimeoutMS, int64(5_000)},
 		{"Engine.FirstTokenFloorMS", configuration.Engine.FirstTokenFloorMS, int64(1_000)},
 		{"Engine.InterChunkStallMS", configuration.Engine.InterChunkStallMS, int64(30_000)},
@@ -76,14 +76,14 @@ func TestValidateRejectsBrokenConfigAndNamesEveryProblem(t *testing.T) {
 	configuration := Defaults()
 	configuration.Server.Port = 0
 	configuration.Limits.MaxTokensCap = 0
-	configuration.Limits.AIMD.InitialWindow = 0
+	configuration.Limits.HostInflight.Initial = 0
 	configuration.Chain.GRPCEndpoint = "not-host-port"
 
 	err := configuration.Validate()
 	if err == nil {
 		t.Fatal("Validate() on broken config: want error, got nil")
 	}
-	for _, fragment := range []string{"port", "max_tokens_cap", "aimd_initial_window", "chain_grpc"} {
+	for _, fragment := range []string{"port", "max_tokens_cap", "host_initial_inflight", "chain_grpc"} {
 		if !strings.Contains(err.Error(), fragment) {
 			t.Errorf("Validate() error %q does not mention %q", err.Error(), fragment)
 		}
@@ -112,13 +112,13 @@ func TestValidateCatchesEveryRuleBreach(t *testing.T) {
 		{"max_concurrent_requests_per_10000_weight negative", func(c *Config) { c.Limits.Concurrency.RequestsPer10000Weight = -1 }, "max_concurrent_requests_per_10000_weight"},
 		{"poc_max_concurrent_requests_per_10000_weight negative", func(c *Config) { c.Limits.Concurrency.PoCRequestsPer10000Weight = -1 }, "poc_max_concurrent_requests_per_10000_weight"},
 		{"max_input_tokens_in_flight negative", func(c *Config) { c.Limits.MaxInputTokensInFlight = -1 }, "max_input_tokens_in_flight"},
-		{"acquire_wait_ms negative", func(c *Config) { c.Limits.AcquireWaitMS = -1 }, "acquire_wait_ms"},
-		{"aimd_initial_window too low", func(c *Config) { c.Limits.AIMD.InitialWindow = 0 }, "aimd_initial_window"},
-		{"aimd_max_window below initial", func(c *Config) { c.Limits.AIMD.MaxWindow = 1 }, "aimd_max_window"},
-		{"breaker_trip_threshold too low", func(c *Config) { c.Limits.Breaker.TripThreshold = 0 }, "breaker_trip_threshold"},
-		{"breaker_base_open_ms too low", func(c *Config) { c.Limits.Breaker.BaseOpenMS = 0 }, "breaker_base_open_ms"},
-		{"breaker_max_open_ms below base", func(c *Config) { c.Limits.Breaker.MaxOpenMS = 1 }, "breaker_max_open_ms"},
-		{"breaker_max_open_ms above perf ejection horizon", func(c *Config) { c.Limits.Breaker.MaxOpenMS = c.Perf.EjectionMaxSeconds*1000 + 1 }, "dominant ejection authority"},
+		{"admission_queue_wait_ms negative", func(c *Config) { c.Limits.AdmissionQueueWaitMS = -1 }, "admission_queue_wait_ms"},
+		{"host_initial_inflight too low", func(c *Config) { c.Limits.HostInflight.Initial = 0 }, "host_initial_inflight"},
+		{"host_max_inflight below initial", func(c *Config) { c.Limits.HostInflight.Max = 1 }, "host_max_inflight"},
+		{"host_cutoff_after_failures too low", func(c *Config) { c.Limits.HostCutoff.AfterFailures = 0 }, "host_cutoff_after_failures"},
+		{"host_cutoff_ms too low", func(c *Config) { c.Limits.HostCutoff.BaseMS = 0 }, "host_cutoff_ms"},
+		{"host_cutoff_max_ms below base", func(c *Config) { c.Limits.HostCutoff.MaxMS = 1 }, "host_cutoff_max_ms"},
+		{"host_cutoff_max_ms above perf ejection horizon", func(c *Config) { c.Limits.HostCutoff.MaxMS = c.Perf.EjectionMaxSeconds*1000 + 1 }, "dominant ejection authority"},
 		{"model_access bad enum", func(c *Config) { c.Limits.ModelAccess = map[string]string{"model-a": "bogus"} }, "model_access"},
 		{"admin_api_key too short to be safe", func(c *Config) { c.Server.AdminAPIKey = "short" }, "admin_api_key"},
 		{"api_key model with no api keys configured", func(c *Config) {
@@ -160,8 +160,8 @@ func TestValidateCatchesEveryRuleBreach(t *testing.T) {
 		{"perf_max_ejection_fraction above one", func(c *Config) { c.Perf.MaxEjectionFraction = 1.5 }, "perf_max_ejection_fraction"},
 		{"perf_min_available_hosts negative", func(c *Config) { c.Perf.MinAvailableHosts = -1 }, "perf_min_available_hosts"},
 		{"perf_host_staleness_seconds too low", func(c *Config) { c.Perf.HostStalenessSeconds = 0 }, "perf_host_staleness_seconds"},
-		{"scheduler_hold_grace_ms negative", func(c *Config) { c.Scheduler.HoldGraceMS = -1 }, "scheduler_hold_grace_ms"},
-		{"scheduler_hold_grace_ms above ceiling", func(c *Config) { c.Scheduler.HoldGraceMS = 5_001 }, "scheduler_hold_grace_ms"},
+		{"scheduler_match_wait_ms negative", func(c *Config) { c.Scheduler.MatchWaitMS = -1 }, "scheduler_match_wait_ms"},
+		{"scheduler_match_wait_ms above ceiling", func(c *Config) { c.Scheduler.MatchWaitMS = 5_001 }, "scheduler_match_wait_ms"},
 		{"engine_receipt_timeout_ms too low", func(c *Config) { c.Engine.ReceiptTimeoutMS = 0 }, "engine_receipt_timeout_ms"},
 		{"engine_first_token_floor_ms too low", func(c *Config) { c.Engine.FirstTokenFloorMS = 0 }, "engine_first_token_floor_ms"},
 		{"engine_inter_chunk_stall_ms too low", func(c *Config) { c.Engine.InterChunkStallMS = 0 }, "engine_inter_chunk_stall_ms"},

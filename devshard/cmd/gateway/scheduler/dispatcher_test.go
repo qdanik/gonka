@@ -333,7 +333,7 @@ func newHarness(t *testing.T, cfg harnessConfig) *harness {
 		releaseSlot:  func(participant string) { limiter.Release(participant, modelA) },
 		observer:     observer,
 		now:          clock.Now,
-		stale:        staleHold,
+		matchWait:    matchWaitWindow,
 		newTimer:     clock.newTimer,
 		submitBuffer: cfg.submitBuffer,
 		onExhausted:  func(escrowID, reason string) { exhausted.Store(&escrowID) },
@@ -429,7 +429,7 @@ func TestDispatcherServesFirstUsableNonce(t *testing.T) {
 
 func TestDispatcherBurnsUntilACompatibleHostIsBound(t *testing.T) {
 	test := newHarness(t, harnessConfig{})
-	stale := test.clock.Now().Add(-2 * staleHold)
+	stale := test.clock.Now().Add(-2 * matchWaitWindow)
 
 	queued := test.submit(t, stale, hostB)
 
@@ -486,8 +486,8 @@ func TestDispatcherHoldsNonceForCoArrivingWaiter(t *testing.T) {
 		now := test.clock.Now()
 
 		holding := test.submit(t, now, hostB)
-		if delay := test.clock.awaitArmed(t); delay != staleHold {
-			t.Fatalf("hold delay = %v, want %v", delay, staleHold)
+		if delay := test.clock.awaitArmed(t); delay != matchWaitWindow {
+			t.Fatalf("hold delay = %v, want %v", delay, matchWaitWindow)
 		}
 		advances, declines, commits := test.session.report()
 		if advances != 1 || declines != 1 || len(commits) != 0 {
@@ -511,7 +511,7 @@ func TestDispatcherHoldsNonceForCoArrivingWaiter(t *testing.T) {
 
 		holding := test.submit(t, test.clock.Now(), hostB)
 		test.clock.awaitArmed(t)
-		test.clock.advance(staleHold)
+		test.clock.advance(matchWaitWindow)
 		test.clock.fireTimer()
 
 		wantAssignment(t, awaitReply(t, holding), hostA, 2)
@@ -534,7 +534,7 @@ func TestDispatcherFreezesAvailabilityWithinADrain(t *testing.T) {
 	}
 	test := newHarness(t, harnessConfig{throttled: flipping})
 
-	queued := test.submit(t, test.clock.Now().Add(-2*staleHold))
+	queued := test.submit(t, test.clock.Now().Add(-2*matchWaitWindow))
 
 	result := awaitReply(t, queued)
 	if result.err != nil {
@@ -830,7 +830,7 @@ func TestDispatcherLeavesNoWaiterWithoutAWakeUp(t *testing.T) {
 	t.Run("a tripped burn budget answers the queue it stopped serving", func(t *testing.T) {
 		test := newHarness(t, harnessConfig{swallowCommit: true})
 
-		queued := test.submit(t, test.clock.Now().Add(-2*staleHold), hostB)
+		queued := test.submit(t, test.clock.Now().Add(-2*matchWaitWindow), hostB)
 
 		if result := awaitReply(t, queued); !errors.Is(result.err, ErrNoAvailableHost) {
 			t.Fatalf("err = %v, want ErrNoAvailableHost", result.err)

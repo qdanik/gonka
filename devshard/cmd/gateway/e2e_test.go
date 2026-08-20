@@ -625,7 +625,7 @@ func lastIndexOfEventPrefix(events []string, prefix string) int {
 // was implemented only in a test file, so this asserts the counter off the gateway's own exposition.
 func TestEndToEndABurnedNonceIsCountedUnderItsOwnReason(t *testing.T) {
 	gateway := bootGateway(t, e2eOptions{tune: func(settings *config.Config) {
-		settings.Scheduler.HoldGraceMS = 0
+		settings.Scheduler.MatchWaitMS = 0
 	}})
 	fixture := gateway.only()
 	// nonce%3 binds host 1 on nonces 1 and 4: the first blocks it, the second has to burn past it.

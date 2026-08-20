@@ -83,13 +83,13 @@ func TestANonceLeftPendingByARestartIsNamedRatherThanLost(t *testing.T) {
 	if err := book.RecordRace(testEscrow, []Attempt{{Nonce: 6, Sent: true}}); err != nil {
 		t.Fatalf("RecordRace(): %v", err)
 	}
-	if pending := pendingOfSlot(t, book, slotOfNonce(6, 4)); pending != 1 {
+	if pending := unclassifiedOfSlot(t, book, slotOfNonce(6, 4)); pending != 1 {
 		t.Fatalf("pending = %d before the restart, want the unfinished nonce", pending)
 	}
 
 	restored := saveAndReload(t, book, openTestStore(t))
 
-	if pending := pendingOfSlot(t, restored, slotOfNonce(6, 4)); pending != 0 {
+	if pending := unclassifiedOfSlot(t, restored, slotOfNonce(6, 4)); pending != 0 {
 		t.Fatalf("pending = %d after the restart, want the nonce classified", pending)
 	}
 	// No receipt ever arrived for it, so it is a refusal rather than a failed execution.

@@ -92,9 +92,9 @@ A name the gateway does not read is ignored in silence, so a typo costs a debugg
 | `GATEWAY_DEFAULT_MAX_TOKENS` | output budget given to a request that names none |
 | `GATEWAY_MAX_TOKENS_CAP` | ceiling a client's own budget is clamped to |
 | `GATEWAY_MAX_CONCURRENT_REQUESTS` | gateway-wide concurrency cap before capacity scaling |
-| `GATEWAY_ACQUIRE_WAIT_MS` | how long a request may wait for capacity before it is refused |
-| `GATEWAY_HOLD_GRACE_MS` | how long a bound nonce waits for a request that has not excluded its participant, before it is burned |
-| `GATEWAY_QUEUE_DEPTH_PER_SLOT` | how deep the queue may grow per slot before arrivals are refused on sight |
+| `GATEWAY_ADMISSION_QUEUE_WAIT_MS` | how long a request may wait for capacity before it is refused |
+| `GATEWAY_MATCH_WAIT_MS` | how long a bound nonce waits for a request that has not excluded its participant, before it is burned |
+| `GATEWAY_ADMISSION_QUEUE_PER_SLOT` | how deep the queue may grow per slot before arrivals are refused on sight |
 | `GATEWAY_POC_MODE` | whether proof-of-compute blocking is honoured or bypassed |
 | `GATEWAY_DISABLED` | takes the shard out of service without stopping it |
 | `GATEWAY_DISABLED_MESSAGE` | what a client is told while disabled |
@@ -165,7 +165,7 @@ See gateway-capacity-and-health.md, "Nonce dispositions", for which gateway deci
 
 ### Admin overrides (24)
 
-Run-time tuning, changeable without a redeploy: `default_max_tokens`, `max_tokens_cap`, `max_concurrent_requests`, `max_concurrent_requests_per_10000_weight`, `poc_max_concurrent_requests_per_10000_weight`, `max_input_tokens_in_flight`, `acquire_wait_ms`, `queue_depth_per_slot`, `hold_grace_ms`, `participant_allowlist`, `aimd_initial_window`, `aimd_max_window`, `breaker_trip_threshold`, `breaker_base_open_ms`, `breaker_max_open_ms`, `model_limits`, `model_access`, `disabled`, `disabled_message`, `disabled_redirect_url`, `rotation_enabled`, `rotation_settlement_enabled`, `rotation_pre_poc_blocks`, `rotation_models_json`.
+Run-time tuning, changeable without a redeploy: `default_max_tokens`, `max_tokens_cap`, `max_concurrent_requests`, `max_concurrent_requests_per_10000_weight`, `poc_max_concurrent_requests_per_10000_weight`, `max_input_tokens_in_flight`, `admission_queue_wait_ms`, `admission_queue_per_slot`, `match_wait_ms`, `participant_allowlist`, `host_initial_inflight`, `host_max_inflight`, `host_cutoff_after_failures`, `host_cutoff_ms`, `host_cutoff_max_ms`, `model_limits`, `model_access`, `disabled`, `disabled_message`, `disabled_redirect_url`, `rotation_enabled`, `rotation_settlement_enabled`, `rotation_pre_poc_blocks`, `rotation_models_json`.
 
 An unknown field in an override document is an **error**, not a silently ignored key: a typo in an admin PUT must be reported.
 
@@ -177,9 +177,9 @@ The maximum active nonce count is a chain governance parameter, polled by the ob
 
 ### Cross-field rules worth knowing
 
-- `breaker_max_open_ms` must not exceed the performance ejection maximum, so ejection stays the dominant authority over the breaker.
+- `host_cutoff_max_ms` must not exceed the performance ejection maximum, so ejection stays the dominant authority over the breaker.
 - `engine_loser_grace_ms` must be at least `engine_inter_chunk_stall_ms`, or losers merely between chunks are cancelled before the gateway would even call them stalled.
-- `scheduler_hold_grace_ms` is capped at 5 000 ms — a long grace parks a committed-cost nonce on the chance of a co-arrival, so the ceiling is a budget guard.
+- `scheduler_match_wait_ms` is capped at 5 000 ms — a long grace parks a committed-cost nonce on the chance of a co-arrival, so the ceiling is a budget guard.
 - `api_keys` must be non-empty if any model is on the `api_key` tier, otherwise that model is unreachable.
 
 ## Metrics

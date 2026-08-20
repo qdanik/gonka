@@ -22,13 +22,16 @@ type Book struct {
 }
 
 type escrowLedger struct {
-	metadata  EscrowMetadata
-	latest    uint64
-	hostStats map[uint32]types.HostStats
-	counters  map[CounterKey]uint64
-	nonces    map[uint64]*nonceRecord
-	retired   bool
-	retiredAt time.Time
+	metadata    EscrowMetadata
+	latest      uint64
+	hostStats   map[uint32]types.HostStats
+	challenged  map[uint32]uint64
+	validations map[uint32]uint64
+	timeouts    map[uint32]uint64
+	counters    map[CounterKey]uint64
+	nonces      map[uint64]*nonceRecord
+	retired     bool
+	retiredAt   time.Time
 }
 
 type nonceRecord struct {
@@ -79,10 +82,13 @@ func (b *Book) OpenEscrow(metadata EscrowMetadata) error {
 		return nil
 	}
 	b.escrows[metadata.EscrowID] = &escrowLedger{
-		metadata:  metadata,
-		hostStats: make(map[uint32]types.HostStats),
-		counters:  make(map[CounterKey]uint64),
-		nonces:    make(map[uint64]*nonceRecord),
+		metadata:    metadata,
+		hostStats:   make(map[uint32]types.HostStats),
+		challenged:  make(map[uint32]uint64),
+		validations: make(map[uint32]uint64),
+		timeouts:    make(map[uint32]uint64),
+		counters:    make(map[CounterKey]uint64),
+		nonces:      make(map[uint64]*nonceRecord),
 	}
 	b.touchLocked()
 	return nil
@@ -120,6 +126,30 @@ func (b *Book) ObserveLatestNonce(escrowID string, nonce uint64) error {
 func (b *Book) ObserveHostStats(escrowID string, slotID uint32, stats types.HostStats) error {
 	return b.withEscrow(escrowID, func(escrow *escrowLedger) error {
 		escrow.hostStats[slotID] = stats
+		return nil
+	})
+}
+
+func (b *Book) ObserveChallenges(escrowID string, open map[uint32]uint64) error {
+	return b.withEscrow(escrowID, func(escrow *escrowLedger) error {
+		escrow.challenged = open
+		return nil
+	})
+}
+
+func (b *Book) RecordValidation(escrowID string, validatorSlot uint32) error {
+	return b.withEscrow(escrowID, func(escrow *escrowLedger) error {
+		if int(validatorSlot) >= len(escrow.metadata.Slots) {
+			return fmt.Errorf("slot %d out of range", validatorSlot)
+		}
+		escrow.validations[validatorSlot]++
+		return nil
+	})
+}
+
+func (b *Book) RecordAppliedTimeout(escrowID string, nonce uint64) error {
+	return b.withEscrow(escrowID, func(escrow *escrowLedger) error {
+		escrow.timeouts[escrow.slotOf(nonce)]++
 		return nil
 	})
 }

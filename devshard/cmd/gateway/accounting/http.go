@@ -15,10 +15,11 @@ import (
 type Handler struct {
 	book         *Book
 	currentEpoch CurrentEpochFunc
+	capability   CapabilityFunc
 }
 
-func NewHandler(book *Book, currentEpoch CurrentEpochFunc) http.Handler {
-	handler := &Handler{book: book, currentEpoch: currentEpoch}
+func NewHandler(book *Book, currentEpoch CurrentEpochFunc, capability CapabilityFunc) http.Handler {
+	handler := &Handler{book: book, currentEpoch: currentEpoch, capability: capability}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/v1/escrows", handler.serveEscrows)
 	mux.HandleFunc("GET /api/v1/epochs", handler.serveEpochs)
@@ -58,11 +59,13 @@ func (h *Handler) serveParticipants(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	records := h.book.Query(filterOf(r, epoch))
+	attachCapabilities(records, h.capability)
 	writeJSON(w, http.StatusOK, struct {
 		SchemaVersion int                 `json:"schema_version"`
 		EpochIndex    uint64              `json:"epoch_index"`
 		Participants  []ParticipantRecord `json:"participants"`
-	}{SchemaVersion: SchemaVersion, EpochIndex: epoch, Participants: h.book.Query(filterOf(r, epoch))})
+	}{SchemaVersion: SchemaVersion, EpochIndex: epoch, Participants: records})
 }
 
 func (h *Handler) serveParticipant(w http.ResponseWriter, r *http.Request) {
@@ -83,6 +86,7 @@ func (h *Handler) serveParticipant(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "participant not found")
 		return
 	}
+	attachCapabilities(records, h.capability)
 	writeJSON(w, http.StatusOK, struct {
 		SchemaVersion int                 `json:"schema_version"`
 		EpochIndex    uint64              `json:"epoch_index"`
