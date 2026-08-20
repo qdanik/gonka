@@ -47,6 +47,8 @@ const (
 	Terminated        = "terminated"
 	DurationMS        = "duration_ms"
 	DeliverError      = "deliver_error"
+	CatchUpError      = "catch_up_error"
+	Served            = "served"
 	HostClockOffsetMS = "host_clock_offset_ms"
 	HostReceiptMS     = "host_receipt_ms"
 )

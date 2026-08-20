@@ -184,7 +184,7 @@ func TestGhostParamsCarryTheEscrowModelAndTheInjectedClock(t *testing.T) {
 		Prompt:      ghostPrompt,
 		InputLength: uint64(len(ghostPrompt)),
 		MaxTokens:   ghostMaxTokens,
-		StartedAt:   fixedClock()().UnixMilli(),
+		StartedAt:   fixedClock()().Unix(),
 	}
 	if !reflect.DeepEqual(params, want) {
 		t.Errorf("ghostParams() = %+v, want %+v", params, want)

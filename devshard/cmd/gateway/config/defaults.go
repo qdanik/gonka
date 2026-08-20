@@ -89,7 +89,8 @@ func Defaults() Config {
 			MaxSpeculativeAttempts: 0,
 		},
 		Scheduler: Scheduler{
-			MatchWaitMS: 2_000,
+			MatchWaitMS:    2_000,
+			WarmNewEscrows: true,
 		},
 	}
 }

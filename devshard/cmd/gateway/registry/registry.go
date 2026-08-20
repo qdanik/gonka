@@ -31,6 +31,7 @@ type Deps struct {
 	ReadOnlySessions SessionFactory
 	Membership       membership
 	Exhaustion       exhaustion
+	Publications     publications
 	Now              func() time.Time
 }
 
@@ -42,6 +43,7 @@ type Registry struct {
 	readOnlySessions SessionFactory
 	membership       membership
 	exhaustion       exhaustion
+	publications     publications
 	now              func() time.Time
 
 	live         atomic.Pointer[liveSet]
@@ -65,6 +67,7 @@ func New(deps Deps) *Registry {
 		readOnlySessions: deps.ReadOnlySessions,
 		membership:       deps.Membership,
 		exhaustion:       deps.Exhaustion,
+		publications:     deps.Publications,
 		now:              deps.Now,
 		draining:         map[*escrowEntry]struct{}{},
 	}
@@ -115,6 +118,9 @@ func (r *Registry) Add(ctx context.Context, escrowID, model string) error {
 	entry.hold = r.holdFor(entry)
 	r.live.Store(published.with(entry))
 	r.pushMembershipLocked()
+	if r.publications != nil {
+		r.publications.EscrowPublished(escrowID, model)
+	}
 	logging.Info("escrow serving", logkey.Escrow, escrowID, logkey.Model, model)
 	return nil
 }

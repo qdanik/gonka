@@ -35,6 +35,7 @@ func Build(values env.Values, overrides Overrides) (*Config, error) {
 	overrideIfSet(&configuration.Limits.AdmissionQueueWaitMS, values.AdmissionQueueWaitMS)
 	overrideIfSet(&configuration.Limits.AdmissionQueuePerSlot, values.AdmissionQueuePerSlot)
 	overrideIfSet(&configuration.Scheduler.MatchWaitMS, values.MatchWaitMS)
+	overrideIfSet(&configuration.Scheduler.WarmNewEscrows, values.WarmNewEscrows)
 
 	overrideIfSet(&configuration.Modes.PoCMode, values.PoCMode)
 	overrideIfSet(&configuration.Modes.Disabled, values.Disabled)
@@ -73,6 +74,7 @@ func Build(values env.Values, overrides Overrides) (*Config, error) {
 	overrideIfSet(&configuration.Limits.AdmissionQueueWaitMS, overrides.AdmissionQueueWaitMS)
 	overrideIfSet(&configuration.Limits.AdmissionQueuePerSlot, overrides.AdmissionQueuePerSlot)
 	overrideIfSet(&configuration.Scheduler.MatchWaitMS, overrides.MatchWaitMS)
+	overrideIfSet(&configuration.Scheduler.WarmNewEscrows, overrides.WarmNewEscrows)
 	if overrides.ParticipantAllowlist != nil {
 		configuration.Scheduler.ParticipantAllowlist = slices.Clone(*overrides.ParticipantAllowlist)
 	}

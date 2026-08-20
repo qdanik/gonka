@@ -12,6 +12,12 @@ type exhaustion interface {
 	OnBalanceExhausted(escrowID, reason string)
 }
 
+// publications hears about an escrow that has just started serving. It is called while the registry
+// holds its lock, so an implementation must return without doing work of its own.
+type publications interface {
+	EscrowPublished(escrowID, model string)
+}
+
 // slotCounts counts the slots each participant occupies in one escrow: a validator holding several
 // slots repeats in the per-slot key list.
 func slotCounts(perSlotKeys []string) map[string]int {

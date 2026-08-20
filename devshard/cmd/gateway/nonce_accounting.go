@@ -128,6 +128,13 @@ func (n *nonceAccounting) currentEpoch(context.Context) (uint64, error) {
 	return snapshot.EpochIndex, nil
 }
 
+func (n *nonceAccounting) ledger() *accounting.Book {
+	if n == nil || n.service == nil {
+		return nil
+	}
+	return n.service.Book
+}
+
 func (n *nonceAccounting) reset() error {
 	if n == nil {
 		return nil

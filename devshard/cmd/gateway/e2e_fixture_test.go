@@ -315,6 +315,8 @@ func bootGateway(t *testing.T, options e2eOptions) *e2eGateway {
 		chainURL = fakeChainInPhase(t, options.epochPhase, participants)
 	}
 	t.Setenv("GATEWAY_STORAGE_DIR", storageDir)
+	// Warming publishes a nonce of its own; these tests count dispatches, so they turn it off.
+	t.Setenv("GATEWAY_WARM_NEW_ESCROWS", "false")
 	t.Setenv("GATEWAY_PUBLIC_API", chainURL)
 	if options.adminKey != "" {
 		t.Setenv("GATEWAY_ADMIN_API_KEY", options.adminKey)

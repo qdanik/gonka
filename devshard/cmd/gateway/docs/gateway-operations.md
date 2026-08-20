@@ -94,6 +94,7 @@ A name the gateway does not read is ignored in silence, so a typo costs a debugg
 | `GATEWAY_MAX_CONCURRENT_REQUESTS` | gateway-wide concurrency cap before capacity scaling |
 | `GATEWAY_ADMISSION_QUEUE_WAIT_MS` | how long a request may wait for capacity before it is refused |
 | `GATEWAY_MATCH_WAIT_MS` | how long a bound nonce waits for a request that has not excluded its participant, before it is burned |
+| `GATEWAY_WARM_NEW_ESCROWS` | whether a newly published escrow spends one nonce to teach itself to its whole group |
 | `GATEWAY_ADMISSION_QUEUE_PER_SLOT` | how deep the queue may grow per slot before arrivals are refused on sight |
 | `GATEWAY_POC_MODE` | whether proof-of-compute blocking is honoured or bypassed |
 | `GATEWAY_DISABLED` | takes the shard out of service without stopping it |
@@ -165,7 +166,7 @@ See gateway-capacity-and-health.md, "Nonce dispositions", for which gateway deci
 
 ### Admin overrides (24)
 
-Run-time tuning, changeable without a redeploy: `default_max_tokens`, `max_tokens_cap`, `max_concurrent_requests`, `max_concurrent_requests_per_10000_weight`, `poc_max_concurrent_requests_per_10000_weight`, `max_input_tokens_in_flight`, `admission_queue_wait_ms`, `admission_queue_per_slot`, `match_wait_ms`, `participant_allowlist`, `host_initial_inflight`, `host_max_inflight`, `host_cutoff_after_failures`, `host_cutoff_ms`, `host_cutoff_max_ms`, `model_limits`, `model_access`, `disabled`, `disabled_message`, `disabled_redirect_url`, `rotation_enabled`, `rotation_settlement_enabled`, `rotation_pre_poc_blocks`, `rotation_models_json`.
+Run-time tuning, changeable without a redeploy: `default_max_tokens`, `max_tokens_cap`, `max_concurrent_requests`, `max_concurrent_requests_per_10000_weight`, `poc_max_concurrent_requests_per_10000_weight`, `max_input_tokens_in_flight`, `admission_queue_wait_ms`, `admission_queue_per_slot`, `match_wait_ms`, `warm_new_escrows`, `participant_allowlist`, `host_initial_inflight`, `host_max_inflight`, `host_cutoff_after_failures`, `host_cutoff_ms`, `host_cutoff_max_ms`, `model_limits`, `model_access`, `disabled`, `disabled_message`, `disabled_redirect_url`, `rotation_enabled`, `rotation_settlement_enabled`, `rotation_pre_poc_blocks`, `rotation_models_json`.
 
 An unknown field in an override document is an **error**, not a silently ignored key: a typo in an admin PUT must be reported.
 
@@ -252,6 +253,7 @@ What it does write is every event that moves money, changes what the gateway wil
 | `escrow depleted with no replacement configured` | nonces exhausted, rotation has no model for it | capacity left the fleet and nothing replaces it |
 | `escrow tick failed` | the lifecycle tick returned | one line carrying every joined failure, each naming its own step and escrow |
 | `escrow serving` / `escrow retired` / `draining escrow closed` | an escrow entered the published set, left it, and finally let go of its storage | the close runs after the last in-flight request, on nobody's request path, and is invisible otherwise |
+| `escrow warmed` | a new escrow taught itself to its group: the nonce it spent, whether the executor answered, and any catch-up failure | see [gateway-escrow-lifecycle.md](./gateway-escrow-lifecycle.md), "Warming" — `catch_up_error` names hosts that stayed cold |
 | `escrow gone from chain, taken out of service` | a lookup confirmed the escrow no longer exists on chain | `escrow retired` fires for settlement parking too, so this is the only line carrying the cause |
 | `escrow recovered from commitment` | reconciliation resolved a durable creation intent to an escrow id | the create landed while the gateway was down, so `escrow created` never ran and the escrow exists in no other line |
 | `commitment cleared` | a durable creation intent was abandoned | it names the reason, and one of the two — `transaction created no escrow` — means the transaction did commit |

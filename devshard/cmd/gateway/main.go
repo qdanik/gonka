@@ -100,6 +100,7 @@ type gateway struct {
 	server       *http.Server
 	publicAPI    *http.Client
 	nonces       *nonceAccounting
+	warmup       *escrowWarmup
 
 	builders     int
 	devshardWork chan struct{}
@@ -176,7 +177,7 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 
 	devshardWork := make(chan struct{}, 1)
 	depletion := &depletionNotice{}
-	escrows, router := newRouting(routingDeps{
+	escrows, router, warmup := newRouting(routingDeps{
 		Sessions:     sources.Serving,
 		ReadOnly:     sources.ReadOnly,
 		Capacity:     capacity,
@@ -298,6 +299,7 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 		server:       server.HTTPServer(fmt.Sprintf(":%d", configuration.Server.Port)),
 		publicAPI:    boot.client,
 		nonces:       nonces,
+		warmup:       warmup,
 		builders:     boot.builders,
 		devshardWork: devshardWork,
 	}, nil
@@ -319,14 +321,24 @@ type routingDeps struct {
 
 // newRouting joins the escrow set to the picker through the capacity model: an escrow whose
 // membership never reaches it scores as weightless, is skipped by every pick, and serves nothing.
-func newRouting(deps routingDeps) (*registry.Registry, *scheduler.Scheduler) {
-	escrows := registry.New(registry.Deps{
+func newRouting(deps routingDeps) (*registry.Registry, *scheduler.Scheduler, *escrowWarmup) {
+	// The warmup needs the registry it observes, so it is handed the registry once that exists.
+	registryDeps := registry.Deps{
 		ServingSessions:  deps.Sessions,
 		ReadOnlySessions: deps.ReadOnly,
 		Membership:       deps.Capacity,
 		Exhaustion:       deps.Depletion,
 		Now:              deps.Now,
-	})
+	}
+	// A nil warmup must not reach the interface field: a typed nil there is non-nil to a nil check.
+	warmup := newEscrowWarmup(deps.Config, deps.Ledger.ledger(), deps.Now)
+	if warmup != nil {
+		registryDeps.Publications = warmup
+	}
+	escrows := registry.New(registryDeps)
+	if warmup != nil {
+		warmup.escrows = escrows
+	}
 	router := scheduler.NewScheduler(scheduler.Deps{
 		Escrows:           escrows,
 		Capacity:          deps.Capacity,
@@ -338,7 +350,7 @@ func newRouting(deps routingDeps) (*registry.Registry, *scheduler.Scheduler) {
 		Now:               deps.Now,
 		OnEscrowExhausted: escrows.Exhausted,
 	})
-	return escrows, router
+	return escrows, router, warmup
 }
 
 type environmentSigner struct{}

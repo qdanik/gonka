@@ -111,6 +111,43 @@ The tick drains those marks and replaces each escrow: **create the replacement f
 
 There is no backoff and no attempt cap on that retry; it is retried every tick until it succeeds.
 
+## Warming: teaching a new escrow to its group
+
+A host holds no state for an escrow until it receives a diff for it. Until then it cannot validate, cannot vote on a timeout, and answers `verify-timeout` with `404 session not found` — while the timeout tally still counts it among the verifiers and measures the threshold against the full group. The escrow is live and short of quorum for a reason that has nothing to do with any host being unhealthy.
+
+Nothing pushed that first diff. A nonce binds to `nonce % groupSize`, so a host learned the escrow only when the counter reached its slot. Measured over 29 rotated escrows in one production day, the *last* host of a group waited a median of **1827 seconds** for its first diff, with a tail of 2.9 hours.
+
+Warming closes that window in seconds, for one nonce:
+
+```mermaid
+sequenceDiagram
+    participant Registry
+    participant Warmup
+    participant Executor as Slot 1 (executor)
+    participant Group as Slots 0, 2..15
+    Registry->>Warmup: EscrowPublished(escrowID, model)
+    Note over Registry,Warmup: announced under the registry lock — the observer must return at once
+    Warmup->>Warmup: Acquire, and stop here unless Nonce() == 0
+    Warmup->>Executor: one completion, max_tokens at the floor
+    Note over Warmup,Executor: the diff is signed and persisted before the send
+    Executor-->>Warmup: receipt + state signature
+    Warmup->>Group: catch-up — replay that diff, no nonce
+    Group-->>Warmup: state signatures
+    Note over Warmup,Group: every host now holds the escrow and can vote
+```
+
+**One dispatch, then catch-up — never the other way round.** Catch-up replays diffs that already exist (`user.Session.CatchUpAllHosts`), and a session at nonce zero has none, so running it first is a strict no-op. The order also survives a refusal: `composeDiffLocked` signs and persists the diff *before* the send, so a probe the host never answered still leaves catch-up something to replay, and the group is taught either way.
+
+**Sixteen probes would be sixteen nonces.** An earlier design dispatched one probe per slot, because consecutive nonces cover consecutive slots exactly once. It reached the same end state at sixteen times the cost, and it failed in ways catch-up cannot: a probe that timed out left its slot cold, and a timeout raised mid-pass polled slots the pass had not reached yet — which answered `session not found` and sank the round. Catch-up reaches every host in one pass, for no nonce, and does not care whether the probe was answered.
+
+**Warming is not routing.** The probe goes straight at the bound host rather than through the scheduler. The scheduler exists to steer traffic away from hosts that are throttled or unhealthy; warming exists to reach every host in the group, including those. For the same reason the probe feeds neither `perf` nor the participant limiter: gateway housekeeping must not move the scores that decide where user traffic goes.
+
+**The nonce is accounted like any other.** One `Attempt` with `Sent` true, `Finished` set from whether the host answered, `Acknowledged` set from the executor receipt — not from the state signature, which every host returns — and `Usage` as `loser`. It settles as `finished_unused`: work the escrow paid for and no client consumed. A nonce the ledger never hears about reads as one the gateway lost.
+
+**Freshness is `Nonce() == 0`, checked at publication.** `Registry.Add` is the single funnel — start-up, creation, rotation, depletion replacement, import and activation all pass through it — so one observer covers every path. An escrow that has already served is skipped, which means a restart warms nothing and each escrow is warmed at most once in its life.
+
+Warming is on by default and switched with `warm_new_escrows` (`GATEWAY_WARM_NEW_ESCROWS`). Turning it off costs nothing but the cold window.
+
 ## Settlement and retirement
 
 Settlement claims the escrow's remaining funds. Getting the order wrong either lets traffic keep spending an escrow that is being settled, or throws away the only record of how to settle it.

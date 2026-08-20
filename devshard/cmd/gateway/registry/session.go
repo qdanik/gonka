@@ -120,12 +120,15 @@ func (s nonceStream) Advance(decide func(scheduler.HostBinding) scheduler.NonceI
 	return prepared, nil
 }
 
+// StartedAt is seconds, like every other StartedAt: a verifier measures the refusal deadline as
+// now-in-seconds minus this, so a millisecond stamp keeps that difference negative and the timeout on a
+// burned nonce is rejected every time. See host/timeout.go, VerifyRefusedTimeout.
 func (s nonceStream) ghostParams() user.InferenceParams {
 	return user.InferenceParams{
 		Model:       s.model,
 		Prompt:      ghostPrompt,
 		InputLength: uint64(len(ghostPrompt)),
 		MaxTokens:   ghostMaxTokens,
-		StartedAt:   s.now().UnixMilli(),
+		StartedAt:   s.now().Unix(),
 	}
 }

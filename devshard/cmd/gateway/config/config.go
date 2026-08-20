@@ -162,6 +162,7 @@ type Engine struct {
 // compatible request before it is burned; 0 burns immediately.
 type Scheduler struct {
 	MatchWaitMS          int64
+	WarmNewEscrows       bool
 	ParticipantAllowlist []string
 }
 
