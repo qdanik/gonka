@@ -142,16 +142,14 @@ func TestCarryBudgetConcurrentAttemptsSettleToZero(t *testing.T) {
 	budget := testBudget(1<<10, 1<<12, 1<<14)
 	var attempts sync.WaitGroup
 	for worker := range 16 {
-		attempts.Add(1)
-		go func() {
-			defer attempts.Done()
+		attempts.Go(func() {
 			buffer := newCarryBuffer(budget, "participant-"+strconv.Itoa(worker%4))
 			defer buffer.Release()
 			for round := range 64 {
 				buffer.Take(bytes.Repeat([]byte("x"), round))
 				buffer.Take([]byte("payload\n\ntail"))
 			}
-		}()
+		})
 	}
 	attempts.Wait()
 

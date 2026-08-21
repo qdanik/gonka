@@ -2,12 +2,11 @@ package filters
 
 import (
 	"bytes"
-
-	"devshard"
-
 	stdjson "encoding/json"
 
 	json "github.com/goccy/go-json"
+
+	"devshard"
 )
 
 const (

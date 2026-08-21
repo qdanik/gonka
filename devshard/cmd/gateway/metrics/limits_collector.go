@@ -3,9 +3,9 @@ package metrics
 import (
 	"slices"
 
-	"devshard/cmd/gateway/limits"
-
 	"github.com/prometheus/client_golang/prometheus"
+
+	"devshard/cmd/gateway/limits"
 )
 
 type LimiterSource interface {

@@ -55,7 +55,7 @@ type responseCache struct {
 
 // stats is the only account of whether the cache earns the memory it is given: a hit serves a reply
 // without a race, so it appears in no attempt, no nonce and no escrow.
-func (c *responseCache) stats() (hits, misses, entries int64, bytes int64) {
+func (c *responseCache) stats() (hits, misses, entries, byteSize int64) {
 	if c == nil {
 		return 0, 0, 0, 0
 	}

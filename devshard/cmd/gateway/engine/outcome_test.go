@@ -319,9 +319,6 @@ func TestSampleFields(t *testing.T) {
 }
 
 func TestSampleResponsive(t *testing.T) {
-	longNonStreamEmpty := failedAttempt(TerminalEmptyStream)
-	longNonStreamEmpty.Completed = testEpoch.Add(longResponseExemption)
-
 	tests := []struct {
 		name    string
 		outcome RaceOutcome
@@ -381,9 +378,6 @@ func TestEmptyStreamDeniesCrowningWithoutMovingTheWindow(t *testing.T) {
 }
 
 func TestDeniesCrowning(t *testing.T) {
-	longNonStreamEmpty := failedAttempt(TerminalEmptyStream)
-	longNonStreamEmpty.Completed = testEpoch.Add(longResponseExemption)
-
 	tests := []struct {
 		name    string
 		outcome RaceOutcome

@@ -22,6 +22,7 @@ const (
 	commitmentIndexLagMargin = 2 * time.Minute
 	commitmentReconcileGrace = chain.UnorderedTxTTL + commitmentIndexLagMargin
 )
+
 type Manager struct {
 	tx        escrowTxClient
 	store     escrowStore

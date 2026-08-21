@@ -16,7 +16,7 @@ func repeatJSON(payload string, count int) []byte {
 	}
 	out := make([]byte, 0, (len(payload)+1)*count+2)
 	out = append(out, '[')
-	for index := 0; index < count; index++ {
+	for index := range count {
 		if index > 0 {
 			out = append(out, ',')
 		}
@@ -30,7 +30,7 @@ func BenchmarkStripResponseBody(b *testing.B) {
 		payload := repeatJSON(benchDirtyChoice, size)
 		b.Run(fmt.Sprint(size), func(b *testing.B) {
 			b.ReportAllocs()
-			for i := 0; i < b.N; i++ {
+			for range b.N {
 				_ = StripResponseBody(payload, LogprobIntent{})
 			}
 		})

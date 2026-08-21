@@ -4,9 +4,9 @@ import (
 	"testing"
 	"time"
 
-	"devshard/types"
-
 	"github.com/stretchr/testify/require"
+
+	"devshard/types"
 )
 
 // A burned nonce is only ever settled by a refusal timeout, and a verifier gates that on

@@ -4,7 +4,6 @@ package main
 
 import (
 	"context"
-	"devshard/cmd/gateway/accounting"
 	"errors"
 	"fmt"
 	"net/http"
@@ -14,6 +13,7 @@ import (
 	"time"
 
 	devshardpkg "devshard"
+	"devshard/cmd/gateway/accounting"
 	"devshard/cmd/gateway/api"
 	"devshard/cmd/gateway/chain"
 	"devshard/cmd/gateway/config"
@@ -41,12 +41,17 @@ const (
 )
 
 func main() {
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-	if err := run(ctx); err != nil {
+	if err := serve(); err != nil {
 		logging.Error("gateway exited", logkey.Error, err)
 		os.Exit(1)
 	}
+}
+
+// serve owns the signal context so releasing it survives a panic; os.Exit skips a defer left in main.
+func serve() error {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	return run(ctx)
 }
 
 func run(ctx context.Context) error {

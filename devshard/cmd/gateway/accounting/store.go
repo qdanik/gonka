@@ -63,9 +63,7 @@ func (b *Book) Snapshot() Snapshot {
 			HostStats:   make(map[uint32]types.HostStats, len(escrow.hostStats)),
 			Counters:    make([]PersistedCounter, 0, len(escrow.counters)),
 		}
-		for slotID, stats := range escrow.hostStats {
-			stored.HostStats[slotID] = stats
-		}
+		maps.Copy(stored.HostStats, escrow.hostStats)
 		for key, count := range escrow.counters {
 			stored.Counters = append(stored.Counters, PersistedCounter{CounterKey: key, Count: count})
 		}
@@ -120,9 +118,7 @@ func (b *Book) Restore(snapshot Snapshot) error {
 			counters:  make(map[CounterKey]uint64, len(stored.Counters)),
 			nonces:    make(map[uint64]*nonceRecord),
 		}
-		for slotID, stats := range stored.HostStats {
-			escrow.hostStats[slotID] = stats
-		}
+		maps.Copy(escrow.hostStats, stored.HostStats)
 		for _, counter := range stored.Counters {
 			escrow.counters[counter.CounterKey] += counter.Count
 		}

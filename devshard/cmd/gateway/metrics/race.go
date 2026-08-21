@@ -1,10 +1,11 @@
 package metrics
 
 import (
-	"devshard/cmd/gateway/engine"
 	"strconv"
 
 	"github.com/prometheus/client_golang/prometheus"
+
+	"devshard/cmd/gateway/engine"
 )
 
 const (

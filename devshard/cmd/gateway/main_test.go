@@ -15,6 +15,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"go.uber.org/goleak"
+
 	"devshard/bridge"
 	"devshard/cmd/gateway/api"
 	"devshard/cmd/gateway/chain"
@@ -30,9 +33,6 @@ import (
 	"devshard/cmd/gateway/store"
 	"devshard/types"
 	"devshard/user"
-
-	"github.com/prometheus/client_golang/prometheus"
-	"go.uber.org/goleak"
 )
 
 func TestMain(m *testing.M) {

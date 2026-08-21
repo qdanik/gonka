@@ -5,9 +5,9 @@ import (
 	"strings"
 	"time"
 
-	"devshard/signing"
-
 	inferencetypes "github.com/productscience/inference/x/inference/types"
+
+	"devshard/signing"
 )
 
 // The two escrow messages are marshalled by the types generated from the chain's own .proto, so their

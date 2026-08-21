@@ -11,17 +11,14 @@ import (
 	"time"
 
 	"devshard/cmd/gateway/chain"
+	"devshard/cmd/gateway/internal/leakcheck"
 	"devshard/cmd/gateway/scheduler"
 	"devshard/types"
 	"devshard/user"
-
-	"go.uber.org/goleak"
 )
 
 func TestMain(m *testing.M) {
-	// desertbit/timer starts its wheel from a package-level init, so it exists for the life of any
-	// binary that links the chain client and is never ours to stop.
-	goleak.VerifyTestMain(m, goleak.IgnoreTopFunction("github.com/desertbit/timer.timerRoutine"))
+	leakcheck.VerifyTestMain(m)
 }
 
 // settlementSource mirrors escrow.SettlementSource so a signature drift in this package fails here
@@ -362,8 +359,9 @@ func TestCandidatesAreOrderedByEscrowID(t *testing.T) {
 	mustAdd(t, registry, "1", "qwen")
 	mustAdd(t, registry, "2", "qwen")
 
-	var ordered []string
-	for _, candidate := range registry.Candidates("qwen") {
+	candidates := registry.Candidates("qwen")
+	ordered := make([]string, 0, len(candidates))
+	for _, candidate := range candidates {
 		ordered = append(ordered, candidate.ID)
 	}
 	if want := []string{"1", "2", "3"}; !reflect.DeepEqual(ordered, want) {
@@ -761,11 +759,9 @@ func TestConcurrentAddsOfOneEscrowOpenItOnce(t *testing.T) {
 	var adding sync.WaitGroup
 	failures := make([]error, 2)
 	for caller := range failures {
-		adding.Add(1)
-		go func() {
-			defer adding.Done()
+		adding.Go(func() {
 			failures[caller] = registry.Add(context.Background(), "1", "qwen")
-		}()
+		})
 	}
 	adding.Wait()
 

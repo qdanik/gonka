@@ -11,14 +11,13 @@ import (
 	"testing"
 	"time"
 
+	"devshard/cmd/gateway/internal/leakcheck"
 	"devshard/cmd/gateway/scheduler"
 	"devshard/transport"
-
-	"go.uber.org/goleak"
 )
 
 func TestMain(m *testing.M) {
-	goleak.VerifyTestMain(m, goleak.IgnoreTopFunction("github.com/desertbit/timer.timerRoutine"))
+	leakcheck.VerifyTestMain(m)
 }
 
 type fakePrepared struct {

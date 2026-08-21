@@ -5,12 +5,13 @@ import (
 	"crypto/subtle"
 	"io"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
-	"devshard/cmd/gateway/filters"
-
 	json "github.com/goccy/go-json"
+
+	"devshard/cmd/gateway/filters"
 )
 
 const (
@@ -184,10 +185,8 @@ func decodeAdminBody(w http.ResponseWriter, r *http.Request, target any) error {
 }
 
 func allowMethods(w http.ResponseWriter, r *http.Request, methods ...string) bool {
-	for _, method := range methods {
-		if r.Method == method {
-			return true
-		}
+	if slices.Contains(methods, r.Method) {
+		return true
 	}
 	w.Header().Set("Allow", strings.Join(methods, ", "))
 	writeError(w, http.StatusMethodNotAllowed, "method not allowed")

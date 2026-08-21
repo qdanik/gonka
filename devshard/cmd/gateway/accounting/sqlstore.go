@@ -10,9 +10,9 @@ import (
 	"strconv"
 	"time"
 
-	"devshard/types"
-
 	_ "modernc.org/sqlite"
+
+	"devshard/types"
 )
 
 // The pragmas ride the connection string rather than a first statement, because the pool recreates

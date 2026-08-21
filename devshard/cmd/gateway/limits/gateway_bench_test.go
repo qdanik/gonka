@@ -14,7 +14,7 @@ func BenchmarkLimiterAcquireRelease(b *testing.B) {
 	capacity := benchCapacity()
 	ctx := context.Background()
 	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		if err := limiter.AcquireForModel(ctx, "model-0", 100, capacity); err != nil {
 			b.Fatal(err)
 		}

@@ -9,9 +9,8 @@ import (
 	"slices"
 	"testing"
 
-	"go.uber.org/goleak"
-
 	"devshard/cmd/gateway/engine"
+	"devshard/cmd/gateway/internal/leakcheck"
 	"devshard/cmd/gateway/registry"
 	"devshard/host"
 	"devshard/internal/testutil"
@@ -23,7 +22,7 @@ import (
 )
 
 func TestMain(m *testing.M) {
-	goleak.VerifyTestMain(m, goleak.IgnoreTopFunction("github.com/desertbit/timer.timerRoutine"))
+	leakcheck.VerifyTestMain(m)
 }
 
 const (

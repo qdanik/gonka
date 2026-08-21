@@ -192,7 +192,7 @@ func (b SchemaBounds) validateSchemaPattern(object map[string]any) error {
 		return fmt.Errorf("schema pattern is not a valid regular expression: length %d exceeds limit %d", len(pattern), b.MaxPatternLen)
 	}
 	if _, err := regexp.Compile(pattern); err != nil {
-		return fmt.Errorf("schema pattern is not a valid regular expression: %v", err)
+		return fmt.Errorf("schema pattern is not a valid regular expression: %w", err)
 	}
 	return nil
 }
@@ -254,7 +254,7 @@ func checkSize(v any, maxSizeBytes int) error {
 	}
 	size, err := jsonMarshaledSize(v)
 	if err != nil {
-		return fmt.Errorf("cannot be serialized: %v", err)
+		return fmt.Errorf("cannot be serialized: %w", err)
 	}
 	if size > maxSizeBytes {
 		return fmt.Errorf("serialized size exceeded: limit %d bytes", maxSizeBytes)

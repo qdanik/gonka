@@ -8,8 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"devshard/cmd/gateway/config"
 	"go.uber.org/goleak"
+
+	"devshard/cmd/gateway/config"
 )
 
 type traceKey struct{}

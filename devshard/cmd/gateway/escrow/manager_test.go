@@ -3,15 +3,15 @@ package escrow
 import (
 	"context"
 	"errors"
+	"slices"
 	"sync"
 	"testing"
 	"time"
 
 	"devshard/cmd/gateway/chain"
 	"devshard/cmd/gateway/config"
-	"devshard/cmd/gateway/store"
-
 	"devshard/cmd/gateway/internal/leakcheck"
+	"devshard/cmd/gateway/store"
 )
 
 type fakeSnapshotSource struct {
@@ -35,12 +35,7 @@ func (f *blockingSnapshotSource) Snapshot() chain.PhaseSnapshot {
 }
 
 func hasCall(calls []string, name string) bool {
-	for _, c := range calls {
-		if c == name {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(calls, name)
 }
 
 func testManagerDeps(t *testing.T, testStore *fakeStore, txClient *fakeTxClient, snapshots snapshotSource, cfg *config.Config) Deps {
@@ -363,12 +358,10 @@ func TestManagerStopIsABarrierForConcurrentCallers(t *testing.T) {
 	returned := make(chan struct{}, 2)
 	var stoppers sync.WaitGroup
 	for range 2 {
-		stoppers.Add(1)
-		go func() {
-			defer stoppers.Done()
+		stoppers.Go(func() {
 			m.Stop()
 			returned <- struct{}{}
-		}()
+		})
 	}
 
 	select {

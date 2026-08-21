@@ -98,9 +98,7 @@ func (c *VersionsCache) Poll(ctx context.Context) {
 	work := make(chan target)
 	var workers sync.WaitGroup
 	for range min(versionsPollConcurrency, len(candidates)) {
-		workers.Add(1)
-		go func() {
-			defer workers.Done()
+		workers.Go(func() {
 			for next := range work {
 				if ctx.Err() != nil {
 					continue
@@ -112,7 +110,7 @@ func (c *VersionsCache) Poll(ctx context.Context) {
 				c.entries[next.miner] = versionsEntry{capableNodes: nodes, fetchedAt: c.now()}
 				c.mu.Unlock()
 			}
-		}()
+		})
 	}
 	for miner, base := range candidates {
 		work <- target{miner: miner, base: base}

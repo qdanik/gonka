@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	commonchain "common/chain"
-
 	cmtservice "github.com/cosmos/cosmos-sdk/client/grpc/cmtservice"
 	codectypes "github.com/cosmos/cosmos-sdk/codec/types"
 	cryptocodec "github.com/cosmos/cosmos-sdk/crypto/codec"
@@ -101,11 +100,11 @@ func (g *GRPCChain) ChainID(ctx context.Context) (string, error) {
 	if g.chainID != "" {
 		return g.chainID, nil
 	}
-	status, err := g.client.CometServiceClient().GetNodeInfo(ctx, &cmtservice.GetNodeInfoRequest{})
+	nodeInfo, err := g.client.CometServiceClient().GetNodeInfo(ctx, &cmtservice.GetNodeInfoRequest{})
 	if err != nil {
 		return "", fmt.Errorf("fetch chain id: %w", err)
 	}
-	network := strings.TrimSpace(status.GetDefaultNodeInfo().GetNetwork())
+	network := strings.TrimSpace(nodeInfo.GetDefaultNodeInfo().GetNetwork())
 	if network == "" {
 		return "", fmt.Errorf("chain id not reported by node")
 	}

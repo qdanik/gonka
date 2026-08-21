@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"time"
 
+	"common/completionapi"
+
 	"devshard/cmd/gateway/accounting"
 	"devshard/cmd/gateway/config"
 	"devshard/cmd/gateway/internal/logkey"
@@ -12,8 +14,6 @@ import (
 	"devshard/host"
 	"devshard/logging"
 	"devshard/user"
-
-	"common/completionapi"
 )
 
 const (

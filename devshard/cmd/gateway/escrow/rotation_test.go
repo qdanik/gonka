@@ -8,10 +8,9 @@ import (
 	"time"
 
 	"devshard/cmd/gateway/chain"
+	"devshard/cmd/gateway/internal/logcapture"
 	"devshard/cmd/gateway/store"
 	"devshard/signing"
-
-	"devshard/cmd/gateway/internal/logcapture"
 )
 
 // succeedingCreateEscrowFn always succeeds, assigning sequential escrow ids/tx hashes from startID.
@@ -91,7 +90,7 @@ func TestEnsureToTargetAlreadyAtOrOverTarget(t *testing.T) {
 			t.Parallel()
 			testStore := newFakeStore()
 			devshards := make([]store.DevshardRecord, 0, tt.existing)
-			for i := 0; i < tt.existing; i++ {
+			for i := range tt.existing {
 				record := store.DevshardRecord{EscrowID: fmt.Sprintf("existing-%d", i), Model: "model-a", Active: true, RotationRole: roleTemp, RotationEpoch: 5}
 				devshards = append(devshards, record)
 			}

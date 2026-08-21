@@ -9,10 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"devshard/cmd/gateway/filters"
-
 	"devshard/cmd/gateway/config"
 	"devshard/cmd/gateway/engine"
+	"devshard/cmd/gateway/filters"
 )
 
 const streamChatBody = `{"model":"qwen","messages":[{"role":"user","content":"hi"}],"stream":true}`

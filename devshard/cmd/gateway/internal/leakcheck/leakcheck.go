@@ -16,3 +16,16 @@ const timerRoutine = "github.com/desertbit/timer.timerRoutine"
 func VerifyNone(t *testing.T) {
 	goleak.VerifyNone(t, goleak.IgnoreTopFunction(timerRoutine))
 }
+
+// VerifyNoneStarted snapshots the goroutines already running and returns the check to defer, so the
+// verdict covers only what this test started. Use as `defer leakcheck.VerifyNoneStarted(t)()`: the
+// snapshot must be taken now, which a plain deferred call would postpone until the test is over.
+func VerifyNoneStarted(t *testing.T) func() {
+	existing := goleak.IgnoreCurrent()
+	return func() { goleak.VerifyNone(t, goleak.IgnoreTopFunction(timerRoutine), existing) }
+}
+
+// VerifyTestMain fails the package's test run if any goroutine outlives it.
+func VerifyTestMain(m *testing.M) {
+	goleak.VerifyTestMain(m, goleak.IgnoreTopFunction(timerRoutine))
+}

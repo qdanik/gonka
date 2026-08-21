@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"errors"
+	"slices"
 	"time"
 
 	"devshard/cmd/gateway/internal/logkey"
@@ -173,10 +174,8 @@ func (c *raceCoordinator) degraded(participant string) bool {
 	return c.deps.Perf.Degraded(participant, c.request.Model)
 }
 func (c *raceCoordinator) exclude(participant string) {
-	for _, excluded := range c.excluded {
-		if excluded == participant {
-			return
-		}
+	if slices.Contains(c.excluded, participant) {
+		return
 	}
 	c.excluded = append(c.excluded, participant)
 }

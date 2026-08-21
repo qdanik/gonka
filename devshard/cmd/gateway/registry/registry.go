@@ -280,7 +280,7 @@ func (r *Registry) Close() error {
 	clear(r.draining)
 	r.mu.Unlock()
 
-	var errs []error
+	errs := make([]error, 0, len(closing))
 	for _, entry := range closing {
 		errs = append(errs, entry.close())
 	}

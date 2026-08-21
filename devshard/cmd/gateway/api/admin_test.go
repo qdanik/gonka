@@ -10,9 +10,8 @@ import (
 	"strings"
 	"testing"
 
-	"devshard/cmd/gateway/store"
-
 	"devshard/cmd/gateway/internal/logcapture"
+	"devshard/cmd/gateway/store"
 )
 
 // guardedTree lays out a base storage dir and a sibling directory nothing may reach.

@@ -42,7 +42,7 @@ func TestCreateBreakerEscalationLadder(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			b := newCreateBreaker()
-			for i := 0; i < tt.failures; i++ {
+			for range tt.failures {
 				b.recordFailure("model-a", "temp")
 			}
 
@@ -97,13 +97,13 @@ func TestCreateBreakerConcurrentAccess(t *testing.T) {
 	roles := []string{"temp", "regular"}
 
 	var wg sync.WaitGroup
-	for workerIndex := 0; workerIndex < 8; workerIndex++ {
+	for workerIndex := range 8 {
 		wg.Add(1)
 		go func(workerIndex int) {
 			defer wg.Done()
 			model := models[workerIndex%len(models)]
 			role := roles[workerIndex%len(roles)]
-			for i := 0; i < 200; i++ {
+			for i := range 200 {
 				switch i % 3 {
 				case 0:
 					b.recordFailure(model, role)

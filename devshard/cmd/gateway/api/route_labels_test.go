@@ -7,9 +7,9 @@ import (
 	"strings"
 	"testing"
 
-	"devshard/cmd/gateway/metrics"
-
 	dto "github.com/prometheus/client_model/go"
+
+	"devshard/cmd/gateway/metrics"
 )
 
 var (

@@ -242,7 +242,7 @@ func TestPickEscrowTieBreakDoesNotAdvanceWithoutATie(t *testing.T) {
 	)
 	profile := RequestProfile{Model: modelA}
 
-	for attempt := 0; attempt < 3; attempt++ {
+	for attempt := range 3 {
 		picked, err := scheduler.pickEscrow(profile, chain.PhaseSnapshot{})
 		if err != nil {
 			t.Fatalf("pickEscrow: %v", err)

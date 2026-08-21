@@ -57,7 +57,7 @@ func TestOnEscrowMissingChecksEachMarkOnce(t *testing.T) {
 	m := NewManager(testManagerDeps(t, testStore, txClient, &fakeSnapshotSource{}, &cfg))
 
 	m.OnEscrowMissing("1")
-	for tick := 0; tick < 2; tick++ {
+	for range 2 {
 		if err := m.tick(context.Background()); err != nil {
 			t.Fatalf("tick() = %v, want nil", err)
 		}
@@ -192,7 +192,7 @@ func TestTriggerEscrowCheckDedupesConcurrentCallers(t *testing.T) {
 	m := &Manager{tx: txClient, store: testStore, settlementSource: &fakeSettlementSource{}}
 
 	done := make(chan struct{}, callerCount)
-	for i := 0; i < callerCount; i++ {
+	for range callerCount {
 		go func() {
 			if err := m.TriggerEscrowCheck(context.Background(), "1"); err != nil {
 				t.Errorf("TriggerEscrowCheck() = %v, want nil", err)
@@ -203,7 +203,7 @@ func TestTriggerEscrowCheckDedupesConcurrentCallers(t *testing.T) {
 
 	// The callerCount-1 deduped callers return without touching the chain; only the
 	// winner blocks on release, so draining callerCount-1 signals first is deterministic.
-	for i := 0; i < callerCount-1; i++ {
+	for range callerCount - 1 {
 		<-done
 	}
 	close(release)

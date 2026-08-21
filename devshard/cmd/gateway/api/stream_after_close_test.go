@@ -88,14 +88,12 @@ func TestClientStreamSurvivesConcurrentWriters(t *testing.T) {
 
 	var waiting sync.WaitGroup
 	for range 8 {
-		waiting.Add(1)
-		go func() {
-			defer waiting.Done()
+		waiting.Go(func() {
 			for range 50 {
 				_, _ = stream.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"x\"}}]}\n\n"))
 				stream.Flush()
 			}
-		}()
+		})
 	}
 	waiting.Wait()
 

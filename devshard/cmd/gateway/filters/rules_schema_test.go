@@ -596,10 +596,7 @@ func TestValidStructuredOutputsChoice(t *testing.T) {
 		var entries []string
 		remaining := structuredOutputsMaxSizeBytes
 		for remaining > 0 {
-			entryLen := structuredOutputsMaxChoiceEntryLen
-			if remaining < entryLen {
-				entryLen = remaining
-			}
+			entryLen := min(remaining, structuredOutputsMaxChoiceEntryLen)
 			entries = append(entries, `"`+strings.Repeat("a", entryLen)+`"`)
 			remaining -= entryLen
 		}

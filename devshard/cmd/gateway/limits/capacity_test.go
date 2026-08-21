@@ -212,10 +212,10 @@ func TestCapacityConcurrentUpdateAndRead(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Add(goroutineCount * 3)
 
-	for goroutineIndex := 0; goroutineIndex < goroutineCount; goroutineIndex++ {
+	for goroutineIndex := range goroutineCount {
 		go func(goroutineIndex int) {
 			defer wg.Done()
-			for iteration := 0; iteration < iterationsPerGoroutine; iteration++ {
+			for iteration := range iterationsPerGoroutine {
 				capacity.Update(chain.PhaseSnapshot{
 					CurrentWeightsByModel: map[string]map[string]float64{
 						"modelX": {"hostA": float64(goroutineIndex + iteration), "hostEjected": 50},
@@ -229,7 +229,7 @@ func TestCapacityConcurrentUpdateAndRead(t *testing.T) {
 
 		go func() {
 			defer wg.Done()
-			for iteration := 0; iteration < iterationsPerGoroutine; iteration++ {
+			for range iterationsPerGoroutine {
 				capacity.SetEscrowMembership("escrowA", map[string]float64{"hostA": 1})
 				_ = capacity.EscrowWeight("escrowA", "modelX")
 			}
@@ -237,7 +237,7 @@ func TestCapacityConcurrentUpdateAndRead(t *testing.T) {
 
 		go func() {
 			defer wg.Done()
-			for iteration := 0; iteration < iterationsPerGoroutine; iteration++ {
+			for range iterationsPerGoroutine {
 				_ = capacity.ScaleFactor("modelX", false)
 			}
 		}()

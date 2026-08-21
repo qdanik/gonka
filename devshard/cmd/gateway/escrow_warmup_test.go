@@ -9,6 +9,7 @@ import (
 
 	"devshard/cmd/gateway/accounting"
 	"devshard/cmd/gateway/config"
+	"devshard/cmd/gateway/internal/leakcheck"
 	"devshard/cmd/gateway/registry"
 	"devshard/host"
 )
@@ -123,10 +124,17 @@ func TestARefusedProbeIsNotSettledAsFinished(t *testing.T) {
 	}
 }
 
+// A nil *Book assigned straight to the interface field is not a nil interface, so record would call
+// RecordRace on it and dereference nothing.
 func TestWarmupWithoutALedgerRecordsNothingAndDoesNotPanic(t *testing.T) {
-	warmup := &escrowWarmup{now: warmupClock()}
+	holder := config.NewHolder(&config.Config{Scheduler: config.Scheduler{WarmNewEscrows: true}})
 
+	warmup := newEscrowWarmup(holder, nil, warmupClock())
 	warmup.record("escrow-1", 7, true, nil)
+
+	if warmup.ledger != nil {
+		t.Fatalf("ledger = %#v, want a nil interface: record dereferences a typed nil instead of skipping", warmup.ledger)
+	}
 }
 
 func TestABurnedNonceAndAWarmupProbeAgreeOnTheirTokenFloor(t *testing.T) {
@@ -139,6 +147,35 @@ func TestABurnedNonceAndAWarmupProbeAgreeOnTheirTokenFloor(t *testing.T) {
 	if body.MaxTokens != warmupMaxTokens {
 		t.Errorf("warmupPrompt max_tokens = %d, reservation = %d: a host refuses a probe declaring less than it reserved",
 			body.MaxTokens, warmupMaxTokens)
+	}
+}
+
+// warm spawns a watchdog bound to a twenty-minute budget; without the deferred cancel it outlives the
+// escrow by that whole budget, once per publication.
+func TestEscrowPublishedLeavesNoGoroutineBehind(t *testing.T) {
+	defer leakcheck.VerifyNoneStarted(t)()
+
+	caughtUp := make(chan struct{})
+	warmup := &escrowWarmup{
+		escrows: &stubEscrows{session: stubSession{}, live: true},
+		ledger:  &spyLedger{},
+		probe: func(context.Context, registry.EscrowSession, string, int64) (uint64, bool, error) {
+			return 1, true, nil
+		},
+		catchUp: func(context.Context, registry.EscrowSession) error {
+			close(caughtUp)
+			return nil
+		},
+		stop: make(chan struct{}),
+		now:  warmupClock(),
+	}
+
+	warmup.EscrowPublished("escrow-1", "model-a")
+
+	select {
+	case <-caughtUp:
+	case <-time.After(5 * time.Second):
+		t.Fatal("warm never reached its catch-up: the probe path did not run")
 	}
 }
 

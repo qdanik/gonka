@@ -468,7 +468,7 @@ func (g *e2eGateway) shutdownWithin(grace time.Duration) error {
 		return nil
 	}
 	g.stopped = true
-	return g.gateway.shutdown(grace)
+	return g.shutdown(grace)
 }
 
 // capacityWeight reads the escrow's effective weight off the gateway's own exposition, which is the
@@ -581,7 +581,7 @@ func (g *e2eGateway) send(t *testing.T, request e2eRequest) clientResponse {
 func (g *e2eGateway) serve(t *testing.T, request e2eRequest) *recordingWriter {
 	t.Helper()
 	writer := newRecordingWriter()
-	g.gateway.server.Handler.ServeHTTP(writer, g.httpRequest(t, request))
+	g.server.Handler.ServeHTTP(writer, g.httpRequest(t, request))
 	return writer
 }
 
@@ -631,5 +631,5 @@ func (g *e2eGateway) scrapeMetrics(t *testing.T) string {
 
 func (g *e2eGateway) awaitAccounting(t *testing.T, requestID string) store.RequestRecord {
 	t.Helper()
-	return waitForAccountingRow(t, g.gateway.store, requestID)
+	return waitForAccountingRow(t, g.store, requestID)
 }

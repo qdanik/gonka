@@ -7,11 +7,11 @@ import (
 	"testing"
 	"time"
 
+	"go.uber.org/goleak"
+
 	"devshard/cmd/gateway/chain"
 	"devshard/cmd/gateway/perf"
 	"devshard/types"
-
-	"go.uber.org/goleak"
 )
 
 const escrowA = "escrow-a"

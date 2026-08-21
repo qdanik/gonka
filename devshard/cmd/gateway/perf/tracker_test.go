@@ -32,7 +32,7 @@ func fixedNow(instant time.Time) func() time.Time {
 }
 
 func failAllConsecutive(tracker *Tracker, participant, model string, count int64) {
-	for i := int64(0); i < count; i++ {
+	for range count {
 		tracker.RecordSample(Sample{ParticipantKey: participant, Model: model, Responsive: false})
 	}
 }

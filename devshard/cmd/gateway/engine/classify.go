@@ -3,9 +3,9 @@ package engine
 import (
 	"bytes"
 
-	"devshard/cmd/gateway/filters"
-
 	json "github.com/goccy/go-json"
+
+	"devshard/cmd/gateway/filters"
 )
 
 var (

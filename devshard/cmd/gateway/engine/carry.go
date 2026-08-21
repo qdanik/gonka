@@ -93,7 +93,8 @@ func (c *carryBuffer) Take(chunk []byte) (parseable []byte, firstDrop bool) {
 	if len(c.held) > 0 {
 		joined := make([]byte, 0, len(c.held)+lastLineFeed+1)
 		joined = append(joined, c.held...)
-		parseable = append(joined, chunk[:lastLineFeed+1]...)
+		joined = append(joined, chunk[:lastLineFeed+1]...)
+		parseable = joined
 	}
 	if c.replace(chunk[lastLineFeed+1:]) {
 		return parseable, false

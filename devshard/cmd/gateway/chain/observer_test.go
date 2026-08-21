@@ -557,8 +557,8 @@ func TestPhaseObserver_CarriesEveryParticipantDerivedFieldForward(t *testing.T) 
 	for _, name := range append(append([]string{}, participantDerived...), phaseDerived...) {
 		known[name] = true
 	}
-	snapshotType := reflect.TypeOf(PhaseSnapshot{})
-	for index := 0; index < snapshotType.NumField(); index++ {
+	snapshotType := reflect.TypeFor[PhaseSnapshot]()
+	for index := range snapshotType.NumField() {
 		if name := snapshotType.Field(index).Name; !known[name] {
 			t.Errorf("PhaseSnapshot.%s is in neither list: decide whether the failure path must carry it forward", name)
 		}
@@ -791,12 +791,10 @@ func TestPhaseObserver_StopIsIdempotentAndConcurrentSafe(t *testing.T) {
 	waitForSnapshot(t, snapshots, 2*time.Second, func(PhaseSnapshot) bool { return true })
 
 	var stops sync.WaitGroup
-	for i := 0; i < 4; i++ {
-		stops.Add(1)
-		go func() {
-			defer stops.Done()
+	for range 4 {
+		stops.Go(func() {
 			observer.Stop()
-		}()
+		})
 	}
 	stops.Wait()
 	observer.Stop()

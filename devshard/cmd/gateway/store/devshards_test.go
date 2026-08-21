@@ -20,7 +20,7 @@ func TestTheDevshardUpsertCarriesEveryFieldItShould(t *testing.T) {
 		"route_prefix":       "the version the escrow was bound under never changes",
 	}
 
-	recordType := reflect.TypeOf(DevshardRecord{})
+	recordType := reflect.TypeFor[DevshardRecord]()
 	for index := range recordType.NumField() {
 		column := columnName(recordType.Field(index).Name)
 		if reason, expected := deliberatelyNotUpdated[column]; expected {

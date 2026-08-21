@@ -14,10 +14,10 @@ import (
 	"sync/atomic"
 	"time"
 
+	json "github.com/goccy/go-json"
+
 	"devshard/cmd/gateway/config"
 	"devshard/cmd/gateway/filters"
-
-	json "github.com/goccy/go-json"
 )
 
 const (

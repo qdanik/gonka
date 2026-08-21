@@ -5,11 +5,12 @@ import (
 	"testing"
 
 	dto "github.com/prometheus/client_model/go"
-	"go.uber.org/goleak"
+
+	"devshard/cmd/gateway/internal/leakcheck"
 )
 
 func TestMain(m *testing.M) {
-	goleak.VerifyTestMain(m, goleak.IgnoreTopFunction("github.com/desertbit/timer.timerRoutine"))
+	leakcheck.VerifyTestMain(m)
 }
 
 type labels map[string]string

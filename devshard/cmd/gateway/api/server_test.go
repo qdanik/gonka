@@ -41,9 +41,9 @@ func (f *fakeRegistry) Models() []string         { return f.models }
 
 func (f *fakeRegistry) Candidates(model string) []scheduler.Escrow {
 	matched := make([]scheduler.Escrow, 0, len(f.escrows))
-	for _, escrow := range f.escrows {
-		if escrow.Model == model {
-			matched = append(matched, escrow)
+	for _, candidate := range f.escrows {
+		if candidate.Model == model {
+			matched = append(matched, candidate)
 		}
 	}
 	return matched

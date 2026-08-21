@@ -2,13 +2,14 @@ package main
 
 import (
 	"context"
-	"devshard/types"
 	"errors"
 	"net/http"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
 
 	"devshard/cmd/gateway/accounting"
 	"devshard/cmd/gateway/chain"
@@ -17,8 +18,7 @@ import (
 	"devshard/cmd/gateway/internal/logkey"
 	"devshard/cmd/gateway/registry"
 	"devshard/logging"
-
-	"github.com/prometheus/client_golang/prometheus"
+	"devshard/types"
 )
 
 const (

@@ -5,12 +5,12 @@
 package registry_test
 
 import (
-	"common/completionapi"
-
 	"context"
 	"errors"
 	"testing"
 	"time"
+
+	"common/completionapi"
 
 	"devshard/cmd/gateway/chain"
 	"devshard/cmd/gateway/config"

@@ -43,10 +43,10 @@ func TestLatencyWindow_ForgetsWhatFellOutOfTheRing(t *testing.T) {
 	t.Parallel()
 	var window latencyWindow
 
-	for i := 0; i < latencyWindowSize; i++ {
+	for range latencyWindowSize {
 		window.add(5 * time.Minute)
 	}
-	for i := 0; i < latencyWindowSize; i++ {
+	for range latencyWindowSize {
 		window.add(2 * time.Second)
 	}
 
@@ -60,7 +60,7 @@ func TestRecordSample_KeepsTheLatencyItWasGiven(t *testing.T) {
 	t.Parallel()
 	host := newHostPerf(time.Minute)
 
-	for i := 0; i < latencyWindowMinimum; i++ {
+	for range latencyWindowMinimum {
 		host.recordSample(Sample{Responsive: true, FirstContent: 4 * time.Second}, time.Now())
 	}
 	host.recordSample(Sample{Responsive: true}, time.Now())

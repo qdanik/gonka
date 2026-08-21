@@ -5,8 +5,9 @@ import (
 	"errors"
 	"testing"
 
-	"devshard/cmd/gateway/filters"
 	"go.uber.org/goleak"
+
+	"devshard/cmd/gateway/filters"
 )
 
 type recordingClient struct {

@@ -25,7 +25,7 @@ func nestedKeywordSchema(keyword string, depth int) map[string]any {
 // manyPropertiesSchema is a root object with `count` empty-schema properties: count+1 nodes.
 func manyPropertiesSchema(count int) map[string]any {
 	properties := make(map[string]any, count)
-	for i := 0; i < count; i++ {
+	for i := range count {
 		properties["k"+strconv.Itoa(i)] = map[string]any{}
 	}
 	return map[string]any{"properties": properties}
@@ -42,7 +42,7 @@ func nestedObjectMap(depth int) map[string]any {
 // flatObjectMap is a root object with `count` empty-map entries: count+1 nodes.
 func flatObjectMap(count int) map[string]any {
 	object := make(map[string]any, count)
-	for i := 0; i < count; i++ {
+	for i := range count {
 		object["k"+strconv.Itoa(i)] = map[string]any{}
 	}
 	return object

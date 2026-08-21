@@ -1,9 +1,9 @@
 package metrics
 
 import (
-	"devshard/cmd/gateway/registry"
-
 	"github.com/prometheus/client_golang/prometheus"
+
+	"devshard/cmd/gateway/registry"
 )
 
 type EscrowSource interface {

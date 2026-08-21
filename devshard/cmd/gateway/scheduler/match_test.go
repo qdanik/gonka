@@ -62,7 +62,7 @@ func TestServableAgreesWithMatchOverEveryFilterCombination(t *testing.T) {
 	t.Parallel()
 	participants := []string{hostA, hostB}
 
-	for combination := 0; combination < 1<<6; combination++ {
+	for combination := range 1 << 6 {
 		bit := func(index int) bool { return combination&(1<<index) != 0 }
 		availability := availability{
 			pocRequired:  func(participant string) bool { return bit(0) && participant == hostA },
@@ -393,7 +393,7 @@ func TestMatchIsTotal(t *testing.T) {
 		{name: "past stale window", now: baseTime.Add(matchWaitWindow)},
 	}
 
-	for predicates := 0; predicates < 32; predicates++ {
+	for predicates := range 32 {
 		pocRequired := predicates&1 != 0
 		throttled := predicates&2 != 0
 		capabilityBlocked := predicates&4 != 0

@@ -8,9 +8,9 @@ import (
 	"slices"
 	"strings"
 
-	"devshard"
-
 	json "github.com/goccy/go-json"
+
+	"devshard"
 )
 
 var (

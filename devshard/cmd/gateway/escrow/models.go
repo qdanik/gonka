@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"strings"
 
-	"devshard/cmd/gateway/chain"
-
 	json "github.com/goccy/go-json"
+
+	"devshard/cmd/gateway/chain"
 )
 
 // json tags are the GATEWAY_ROTATION_MODELS_JSON wire contract, not renameable.

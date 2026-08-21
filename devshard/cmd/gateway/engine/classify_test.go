@@ -223,13 +223,13 @@ func TestErrorPayloadCopiesTheEventBytes(t *testing.T) {
 		t.Fatal("errorPayload found nothing")
 	}
 	want := `{"error":{"message":"boom","type":"server_error"}}`
-	if string(failure.Payload) != want {
+	if failure.Payload != want {
 		t.Fatalf("Payload = %q, want %q", failure.Payload, want)
 	}
 	for index := range body {
 		body[index] = 'x'
 	}
-	if string(failure.Payload) != want {
+	if failure.Payload != want {
 		t.Errorf("Payload aliases the caller's buffer: %q", failure.Payload)
 	}
 }

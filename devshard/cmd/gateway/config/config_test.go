@@ -220,9 +220,9 @@ func TestValidateAcceptsModelLimitsWithNilOptionalPointers(t *testing.T) {
 // first-token lag and minimum-samples-for-decision were never read, and must not reappear under
 // new names.
 func TestEngineCarriesOnlyTheLiveTunables(t *testing.T) {
-	engineType := reflect.TypeOf(Engine{})
+	engineType := reflect.TypeFor[Engine]()
 	got := make([]string, 0, engineType.NumField())
-	for index := 0; index < engineType.NumField(); index++ {
+	for index := range engineType.NumField() {
 		got = append(got, engineType.Field(index).Name)
 	}
 	want := []string{

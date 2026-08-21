@@ -230,7 +230,8 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request, escrowPin string) 
 	defer s.limiter.ReleaseForModel(normalized.Model, int64(inputTokens))
 
 	if s.cache == nil {
-		s.race(w, r, requestID, normalized, inputTokens, escrowPin)
+		// Nothing to store, so the outcome and the hidden failure the cache path reads are both moot.
+		_, _ = s.race(w, r, requestID, normalized, inputTokens, escrowPin)
 		return
 	}
 	recorder := &cacheRecorder{ResponseWriter: w, limit: s.cache.entryLimit()}

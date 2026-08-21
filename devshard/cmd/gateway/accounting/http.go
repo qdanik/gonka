@@ -124,7 +124,7 @@ func escrowIDsOf(r *http.Request) []string {
 	values := r.URL.Query()["escrow_id"]
 	escrowIDs := make([]string, 0, len(values))
 	for _, value := range values {
-		for _, escrowID := range strings.Split(value, ",") {
+		for escrowID := range strings.SplitSeq(value, ",") {
 			if escrowID = strings.TrimSpace(escrowID); escrowID != "" {
 				escrowIDs = append(escrowIDs, escrowID)
 			}

@@ -3,15 +3,15 @@ package scheduler
 import (
 	"context"
 	"errors"
+	"maps"
 	"sync"
 	"testing"
 	"time"
 
 	"devshard/cmd/gateway/chain"
 	"devshard/cmd/gateway/config"
-	"devshard/cmd/gateway/perf"
-
 	"devshard/cmd/gateway/internal/leakcheck"
+	"devshard/cmd/gateway/perf"
 )
 
 const escrowB = "escrow-b"
@@ -272,9 +272,7 @@ func (h *schedulerHarness) liveDispatchers() map[string]*dispatcher {
 	h.scheduler.registryMu.Lock()
 	defer h.scheduler.registryMu.Unlock()
 	live := make(map[string]*dispatcher, len(h.scheduler.dispatchers))
-	for escrowID, active := range h.scheduler.dispatchers {
-		live[escrowID] = active
-	}
+	maps.Copy(live, h.scheduler.dispatchers)
 	return live
 }
 
@@ -609,16 +607,14 @@ func TestPickAdmitsExactlyOneCallerThroughAWindowOfOne(t *testing.T) {
 	served := make(chan Assignment, callers)
 	rejected := make(chan error, callers)
 	for range callers {
-		group.Add(1)
-		go func() {
-			defer group.Done()
+		group.Go(func() {
 			assignment, err := test.scheduler.Pick(context.Background(), RequestProfile{Model: modelA})
 			if err != nil {
 				rejected <- err
 				return
 			}
 			served <- assignment
-		}()
+		})
 	}
 	group.Wait()
 	close(served)
@@ -738,16 +734,14 @@ func TestPickRunsEscrowsOnIndependentDispatchers(t *testing.T) {
 	failures := make(chan error, 2*perEscrow)
 	for _, escrowID := range []string{escrowA, escrowB} {
 		for range perEscrow {
-			group.Add(1)
-			go func() {
-				defer group.Done()
+			group.Go(func() {
 				assignment, err := test.scheduler.Pick(context.Background(), RequestProfile{Model: modelA, Escrow: escrowID})
 				if err != nil {
 					failures <- err
 					return
 				}
 				results <- assignment
-			}()
+			})
 		}
 	}
 	group.Wait()
@@ -780,26 +774,22 @@ func TestPickSurfacesBackPressureWhenTheQueueIsFull(t *testing.T) {
 	session := test.session(t, escrowA)
 
 	var inFlight sync.WaitGroup
-	inFlight.Add(1)
-	go func() {
-		defer inFlight.Done()
+	inFlight.Go(func() {
 		if _, err := test.scheduler.Pick(context.Background(), RequestProfile{Model: modelA}); err != nil {
 			t.Errorf("Pick: %v", err)
 		}
-	}()
+	})
 	select {
 	case <-session.entered:
 	case <-time.After(2 * time.Second):
 		t.Fatal("the dispatcher never reached the session")
 	}
 
-	inFlight.Add(1)
-	go func() {
-		defer inFlight.Done()
+	inFlight.Go(func() {
 		if _, err := test.scheduler.Pick(context.Background(), RequestProfile{Model: modelA}); err != nil {
 			t.Errorf("Pick: %v", err)
 		}
-	}()
+	})
 	eventually(t, "the submit queue to fill", func() bool { return test.queueDepth(escrowA) == 1 })
 
 	_, err := test.scheduler.Pick(context.Background(), RequestProfile{Model: modelA})

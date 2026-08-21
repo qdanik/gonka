@@ -11,6 +11,7 @@ import (
 	"sync"
 
 	commonchain "common/chain"
+
 	"devshard/bridge"
 	"devshard/cmd/gateway/api"
 	"devshard/cmd/gateway/chain"
@@ -94,13 +95,11 @@ func publishEscrows(
 	semaphore := make(chan struct{}, builders)
 	var building sync.WaitGroup
 	for index, record := range active {
-		building.Add(1)
-		go func() {
-			defer building.Done()
+		building.Go(func() {
 			semaphore <- struct{}{}
 			defer func() { <-semaphore }()
 			built[index] = add(ctx, record.EscrowID, record.Model)
-		}()
+		})
 	}
 	building.Wait()
 

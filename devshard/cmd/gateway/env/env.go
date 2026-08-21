@@ -4,13 +4,14 @@
 package env
 
 import (
-	"devshard/cmd/gateway/internal/logkey"
-	"devshard/logging"
 	"errors"
 	"fmt"
 	"os"
 	"strconv"
 	"strings"
+
+	"devshard/cmd/gateway/internal/logkey"
+	"devshard/logging"
 )
 
 // Values mirrors every GATEWAY_* environment variable the gateway reads; nil = unset.

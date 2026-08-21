@@ -1,9 +1,9 @@
 package metrics
 
 import (
-	"devshard/cmd/gateway/perf"
-
 	"github.com/prometheus/client_golang/prometheus"
+
+	"devshard/cmd/gateway/perf"
 )
 
 type HostPerfSource interface {

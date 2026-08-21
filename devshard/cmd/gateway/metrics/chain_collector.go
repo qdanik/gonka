@@ -3,9 +3,9 @@ package metrics
 import (
 	"time"
 
-	"devshard/cmd/gateway/chain"
-
 	"github.com/prometheus/client_golang/prometheus"
+
+	"devshard/cmd/gateway/chain"
 )
 
 type PhaseSource interface {

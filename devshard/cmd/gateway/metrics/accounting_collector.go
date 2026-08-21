@@ -1,9 +1,9 @@
 package metrics
 
 import (
-	"devshard/cmd/gateway/store"
-
 	"github.com/prometheus/client_golang/prometheus"
+
+	"devshard/cmd/gateway/store"
 )
 
 // LedgerSource is the accounting ledger's own count of what it wrote and what it lost; *store.Ledger

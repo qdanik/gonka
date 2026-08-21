@@ -12,9 +12,8 @@ import (
 	"devshard/cmd/gateway/config"
 	"devshard/cmd/gateway/engine"
 	"devshard/cmd/gateway/limits"
-	"devshard/cmd/gateway/scheduler"
-
 	"devshard/cmd/gateway/registry"
+	"devshard/cmd/gateway/scheduler"
 	"devshard/types"
 )
 

@@ -11,13 +11,13 @@ import (
 	"testing"
 	"time"
 
+	"go.uber.org/goleak"
+
 	"devshard/cmd/gateway/chain"
 	"devshard/cmd/gateway/config"
 	"devshard/cmd/gateway/limits"
 	"devshard/cmd/gateway/perf"
 	"devshard/cmd/gateway/scheduler"
-
-	"go.uber.org/goleak"
 )
 
 // virtualTime is the simulator's clock and the coordinator's timer in one value, so a deadline is reached
@@ -699,8 +699,8 @@ func TestSimulatorCapabilityRefusalDoesNotCrownAndGrowsTheContextHint(t *testing
 	if len(profiles[1].Exclude) != 1 || profiles[1].Exclude[0] != "small-host" {
 		t.Errorf("re-pick Exclude = %v, want [small-host]", profiles[1].Exclude)
 	}
-	if limits := sim.perf.limits; len(limits) != 1 || limits[0].maxTokens != 40_960 {
-		t.Errorf("recorded context limits = %+v, want one of 40960", limits)
+	if recorded := sim.perf.limits; len(recorded) != 1 || recorded[0].maxTokens != 40_960 {
+		t.Errorf("recorded context limits = %+v, want one of 40960", recorded)
 	}
 }
 

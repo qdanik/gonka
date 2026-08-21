@@ -221,7 +221,7 @@ func (e *escrowLedger) slots(escrowID string) []SlotRecord {
 	}
 
 	records := make([]SlotRecord, 0, groupSize)
-	for slotID := uint32(0); slotID < groupSize; slotID++ {
+	for slotID := range groupSize {
 		slot := SlotRecord{
 			EscrowID:             escrowID,
 			SlotID:               slotID,

@@ -111,7 +111,7 @@ func TestCapacityGatewayParticipantLimiterComposeEndToEnd(t *testing.T) {
 	}
 	gatewayLimiter.ReleaseForModel("modelA", 128)
 
-	for i := int64(0); i < limits.HostInflight.Initial; i++ {
+	for i := range limits.HostInflight.Initial {
 		if !participantLimiter.Acquire("hostA", "modelA") {
 			t.Fatalf("ParticipantLimiter.Acquire call %d = false, want true (Initial=%d)", i+1, limits.HostInflight.Initial)
 		}

@@ -6,9 +6,9 @@ import (
 	"net/http"
 	"sync"
 
-	"devshard/cmd/gateway/filters"
-
 	json "github.com/goccy/go-json"
+
+	"devshard/cmd/gateway/filters"
 )
 
 const (

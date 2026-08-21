@@ -144,7 +144,7 @@ func TestEndToEndAStateRootDivergenceBlocksThatHostOnThatEscrowPermanently(t *te
 		served.divergent = true
 	}
 
-	for request := 0; request < e2eHostCount; request++ {
+	for request := range e2eHostCount {
 		gateway.send(t, e2eRequest{path: "/v1/chat/completions", body: distinctChatBody(request)})
 	}
 	exhausted := gateway.send(t, e2eRequest{path: "/v1/chat/completions", body: distinctChatBody(e2eHostCount)})
@@ -185,7 +185,7 @@ func TestEndToEndAnEscrowRetiredMidRaceStillFinishesTheNonceItCommitted(t *testi
 	if !fixture.session.IsNonceFinished(1) {
 		t.Error("the nonce committed before the retire was never finished")
 	}
-	if _, routable := gateway.gateway.escrows.RoutableSession(fixture.id); routable {
+	if _, routable := gateway.escrows.RoutableSession(fixture.id); routable {
 		t.Fatal("the escrow is still routable, so this test never reached the state it is about")
 	}
 }
@@ -203,7 +203,7 @@ func TestEndToEndAnEscrowRetiredMidRaceStillPostsTheVoteItsNonceOwes(t *testing.
 	served := make(chan clientResponse, 1)
 	go func() { served <- gateway.chat(t, true) }()
 	fixture.awaitDispatch(t)
-	if !gateway.gateway.escrows.IsBusy(fixture.id) {
+	if !gateway.escrows.IsBusy(fixture.id) {
 		t.Fatal("IsBusy while the race holds a committed nonce = false: a settlement could claim funds beneath it")
 	}
 
@@ -211,15 +211,15 @@ func TestEndToEndAnEscrowRetiredMidRaceStillPostsTheVoteItsNonceOwes(t *testing.
 	if deactivated.status != http.StatusOK {
 		t.Fatalf("deactivate = %d %s, want 200", deactivated.status, deactivated.body)
 	}
-	if _, routable := gateway.gateway.escrows.RoutableSession(fixture.id); routable {
+	if _, routable := gateway.escrows.RoutableSession(fixture.id); routable {
 		t.Fatal("the retired escrow is still routable, so this test never reached the state it is about")
 	}
-	if !gateway.gateway.escrows.IsBusy(fixture.id) {
+	if !gateway.escrows.IsBusy(fixture.id) {
 		t.Fatal("IsBusy after the retire = false: the escrow drained before the vote its nonce owes")
 	}
 	fixture.releaseHosts()
 	<-served
-	gateway.gateway.races.Stop()
+	gateway.races.Stop()
 
 	if fixture.session.IsNonceFinished(1) {
 		t.Fatal("nonce 1 is finished, so nothing owed a vote and this test asserts nothing")
@@ -233,7 +233,7 @@ func TestEndToEndAnEscrowRetiredMidRaceStillPostsTheVoteItsNonceOwes(t *testing.
 	if posted := timeoutActions(gateway.scrapeMetrics(t), "completed"); len(posted) != 0 {
 		t.Fatalf("timeout votes posted = %v, want none: no verifier was reachable to vote", posted)
 	}
-	if gateway.gateway.escrows.IsBusy(fixture.id) {
+	if gateway.escrows.IsBusy(fixture.id) {
 		t.Error("IsBusy once the vote is posted = true: the escrow is never released for settlement")
 	}
 }
@@ -286,12 +286,10 @@ func TestEndToEndConcurrentRacesEachProduceExactlyOneOutcomeAndOneWinner(t *test
 
 	responses := make([]clientResponse, callers)
 	var calling sync.WaitGroup
-	for caller := 0; caller < callers; caller++ {
-		calling.Add(1)
-		go func() {
-			defer calling.Done()
+	for caller := range callers {
+		calling.Go(func() {
 			responses[caller] = gateway.send(t, e2eRequest{path: "/v1/chat/completions", body: distinctChatBody(caller)})
-		}()
+		})
 	}
 	calling.Wait()
 
@@ -571,7 +569,7 @@ func TestEndToEndShutdownGivesUpOnAVoteThatOutlastsTheGracePeriod(t *testing.T) 
 	started := time.Now()
 	err := gateway.shutdownWithin(200 * time.Millisecond)
 	elapsed := time.Since(started)
-	t.Cleanup(gateway.gateway.races.Stop)
+	t.Cleanup(gateway.races.Stop)
 
 	if elapsed > 2*time.Second {
 		t.Fatalf("shutdown with a 200ms grace period took %v: the drain is unbounded, so SIGTERM ends in a SIGKILL mid-vote", elapsed)
@@ -631,14 +629,14 @@ func TestEndToEndABurnedNonceIsCountedUnderItsOwnReason(t *testing.T) {
 	// nonce%3 binds host 1 on nonces 1 and 4: the first blocks it, the second has to burn past it.
 	fixture.hosts[1].divergent = true
 
-	for request := 0; request < 4; request++ {
+	for request := range 4 {
 		gateway.send(t, e2eRequest{path: "/v1/chat/completions", body: distinctChatBody(request)})
 	}
 
 	escrow := fmt.Sprintf("devshard_id=%q", fixture.id)
 	reason := fmt.Sprintf("reason=%q", "participant_capability_no_send")
 	counted := false
-	for _, line := range strings.Split(gateway.scrapeMetrics(t), "\n") {
+	for line := range strings.SplitSeq(gateway.scrapeMetrics(t), "\n") {
 		if strings.HasPrefix(line, "devshard_gateway_ghost_nonces_burned_total{") &&
 			strings.Contains(line, escrow) && strings.Contains(line, reason) {
 			counted = true
@@ -667,7 +665,7 @@ func TestEndToEndAnEscrowAHostCannotFindIsCheckedAndDeactivated(t *testing.T) {
 	if !record.EscrowMissing {
 		t.Fatalf("accounting row = %+v, want escrow_missing: the host's report never reached the outcome", record)
 	}
-	gateway.gateway.manager.Start(context.Background())
+	gateway.manager.Start(context.Background())
 	awaitDevshardInactive(t, gateway, fixture.id)
 }
 
@@ -699,7 +697,7 @@ func awaitDevshardInactive(t *testing.T, gateway *e2eGateway, escrowID string) {
 	t.Helper()
 	deadline := time.Now().Add(e2eSettleWait)
 	for {
-		records, err := gateway.gateway.store.ListDevshards(context.Background())
+		records, err := gateway.store.ListDevshards(context.Background())
 		if err != nil {
 			t.Fatalf("ListDevshards = %v, want nil", err)
 		}
@@ -824,7 +822,7 @@ func TestEndToEndTheRecoveryRoutesReadALiveEscrowAndADrainingOne(t *testing.T) {
 	if deactivated.status != http.StatusOK {
 		t.Fatalf("deactivate = %d %s, want 200", deactivated.status, deactivated.body)
 	}
-	if _, routable := gateway.gateway.escrows.RoutableSession(fixture.id); routable {
+	if _, routable := gateway.escrows.RoutableSession(fixture.id); routable {
 		t.Fatal("the escrow is still routable, so this test never reached the state it is about")
 	}
 	pending := gateway.send(t, e2eRequest{method: http.MethodGet, path: "/devshard/" + fixture.id + "/v1/debug/pending", bearer: operatorKey})

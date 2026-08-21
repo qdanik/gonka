@@ -339,13 +339,11 @@ func TestSettleDedupesConcurrentCallsForSameEscrow(t *testing.T) {
 	}
 
 	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		if _, err := m.settle(context.Background(), record); err != nil {
 			t.Errorf("first settle() = %v, want nil", err)
 		}
-	}()
+	})
 
 	<-entered
 	if _, err := m.settle(context.Background(), record); !errors.Is(err, ErrSettlementInFlight) {
@@ -420,13 +418,11 @@ func TestDedupedSettleLeavesTheRowForTheCallerThatIsReallySettling(t *testing.T)
 	}
 
 	var settling sync.WaitGroup
-	settling.Add(1)
-	go func() {
-		defer settling.Done()
+	settling.Go(func() {
 		if err := m.retire(context.Background(), record); err != nil {
 			t.Errorf("settling retire() = %v, want nil", err)
 		}
-	}()
+	})
 
 	<-entered
 	dedupedErr := m.retire(context.Background(), record)

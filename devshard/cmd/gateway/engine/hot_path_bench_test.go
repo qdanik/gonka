@@ -8,7 +8,7 @@ import (
 func benchAttempts(count int) []EscalationAttempt {
 	start := time.Unix(1786114580, 0)
 	attempts := make([]EscalationAttempt, 0, count)
-	for i := 0; i < count; i++ {
+	for i := range count {
 		attempts = append(attempts, EscalationAttempt{
 			SendTime:        start,
 			ReceiptTime:     start.Add(200 * time.Millisecond),

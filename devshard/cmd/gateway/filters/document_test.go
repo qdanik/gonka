@@ -9,11 +9,11 @@ import (
 // nestedObjectBody builds `{"a":{"a":...1...}}` with exactly depth opening braces.
 func nestedObjectBody(depth int) []byte {
 	var builder strings.Builder
-	for i := 0; i < depth; i++ {
+	for range depth {
 		builder.WriteString(`{"a":`)
 	}
 	builder.WriteString("1")
-	for i := 0; i < depth; i++ {
+	for range depth {
 		builder.WriteString("}")
 	}
 	return []byte(builder.String())

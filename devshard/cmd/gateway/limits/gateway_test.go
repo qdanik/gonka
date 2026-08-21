@@ -256,7 +256,7 @@ func TestAcquireForModel_DynamicCapClampsToBaselineWeight(t *testing.T) {
 		MaxConcurrentPer10000Weight: 100, // current-derived = 50, baseline-derived = 10
 	}
 
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		if err := limiter.AcquireForModel(context.Background(), "modelA", 1, capacity); err != nil {
 			t.Fatalf("acquire %d = %v, want admitted under the baseline-derived cap of 10", i, err)
 		}
@@ -270,7 +270,7 @@ func TestAcquireForModel_BaselineZeroIsUnlimited(t *testing.T) {
 	t.Parallel()
 	limiter := NewGatewayLimiter(GatewayConfig{MaxConcurrent: 0, AcquireWait: time.Millisecond})
 
-	for i := 0; i < 50; i++ {
+	for i := range 50 {
 		if err := limiter.AcquireForModel(context.Background(), "modelA", 1, ModelCapacity{ScaleFactor: 0}); err != nil {
 			t.Fatalf("acquire %d = %v, want nil (baseline 0 means unlimited even at scale 0)", i, err)
 		}
@@ -299,7 +299,7 @@ func TestAcquireForModel_PerModelOverride(t *testing.T) {
 		t.Errorf("elapsed = %v, want >= AcquireWait 30ms", elapsed)
 	}
 
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		if err := limiter.AcquireForModel(context.Background(), "other-model", 1, fullScale()); err != nil {
 			t.Fatalf("AcquireForModel(other-model) %d = %v, want nil (its own budget of 10, not the override)", i, err)
 		}
@@ -330,10 +330,10 @@ func TestGatewayLimiter_ConcurrencyRace(t *testing.T) {
 	const iterations = 25
 	var wg sync.WaitGroup
 	wg.Add(goroutines)
-	for i := 0; i < goroutines; i++ {
+	for range goroutines {
 		go func() {
 			defer wg.Done()
-			for j := 0; j < iterations; j++ {
+			for range iterations {
 				ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 				err := limiter.AcquireForModel(ctx, "modelA", 3, fullScale())
 				cancel()
@@ -385,13 +385,13 @@ func TestAcquireForModelWeightDerivedCapIsNotSpentByAnotherModel(t *testing.T) {
 	ctx := context.Background()
 	perModelCapacity := ModelCapacity{CurrentWeight: 4000, BaselineWeight: 4000, MaxConcurrentPer10000Weight: 5} // floor(4000*5/10000) = 2
 
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		if err := limiter.AcquireForModel(ctx, "model-a", 1, perModelCapacity); err != nil {
 			t.Fatalf("acquire %d on model-a = %v, want nil under its weight-derived cap of 2", i, err)
 		}
 	}
 
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		if err := limiter.AcquireForModel(ctx, "model-b", 1, perModelCapacity); err != nil {
 			t.Fatalf("acquire %d on model-b = %v, want nil: model-b's weight buys model-b two slots of its own", i, err)
 		}

@@ -76,8 +76,8 @@ func (m *Metrics) Registry() *prometheus.Registry { return m.registry }
 
 // Register adds collectors at construction time, where a duplicate family is a wiring bug that must
 // stop the process rather than silently drop a series.
-func (m *Metrics) Register(collectors ...prometheus.Collector) {
-	m.registry.MustRegister(collectors...)
+func (m *Metrics) Register(metricCollectors ...prometheus.Collector) {
+	m.registry.MustRegister(metricCollectors...)
 }
 
 func (m *Metrics) Handler() http.Handler {

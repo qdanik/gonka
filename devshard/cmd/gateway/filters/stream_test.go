@@ -15,10 +15,7 @@ func feedInChunks(t *testing.T, rewriter *StreamRewriter, data []byte, chunkSize
 	t.Helper()
 	var emitted bytes.Buffer
 	for start := 0; start < len(data); start += chunkSize {
-		end := start + chunkSize
-		if end > len(data) {
-			end = len(data)
-		}
+		end := min(start+chunkSize, len(data))
 		out, err := rewriter.Write(data[start:end])
 		if err != nil {
 			t.Fatalf("Write(%d:%d) = %v", start, end, err)

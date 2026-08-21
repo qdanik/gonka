@@ -68,7 +68,7 @@ func TestAcquireAdmitsUpToWindowThenBlocks(t *testing.T) {
 	t.Parallel()
 	l := newTestLimiter(testConfig(), fixedNow(testEpoch))
 
-	for i := 0; i < 4; i++ {
+	for i := range 4 {
 		if !l.Acquire("p", "m") {
 			t.Fatalf("Acquire() call %d = false, want true (Initial=4)", i+1)
 		}
@@ -81,7 +81,7 @@ func TestAcquireAdmitsUpToWindowThenBlocks(t *testing.T) {
 func TestReleaseAllowsAnotherAcquire(t *testing.T) {
 	t.Parallel()
 	l := newTestLimiter(testConfig(), fixedNow(testEpoch))
-	for i := 0; i < 4; i++ {
+	for range 4 {
 		l.Acquire("p", "m")
 	}
 
@@ -99,7 +99,7 @@ func TestReleaseFloorsAtZero(t *testing.T) {
 	l.Release("p", "m") // never acquired
 	l.Release("p", "m")
 
-	for i := 0; i < 4; i++ {
+	for i := range 4 {
 		if !l.Acquire("p", "m") {
 			t.Fatalf("Acquire() call %d after spurious Release()s = false, want true", i+1)
 		}
@@ -178,7 +178,7 @@ func TestOverloadFloorsWindowAtOne(t *testing.T) {
 func TestOverloadNeverTripsCutoff(t *testing.T) {
 	t.Parallel()
 	l := newTestLimiter(testConfig(), fixedNow(testEpoch))
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		l.Acquire("p", "m")
 		l.OnResult("p", "m", Overload)
 		l.Release("p", "m")
@@ -194,7 +194,7 @@ func TestTransportFaultTripsAtExactThreshold(t *testing.T) {
 	cfg := testConfig() // AfterFailures=3
 	l := newTestLimiter(cfg, fixedNow(testEpoch))
 
-	for i := int64(0); i < cfg.AfterFailures-1; i++ {
+	for range cfg.AfterFailures - 1 {
 		l.OnResult("p", "m", TransportFault)
 	}
 	if !l.Acquire("p", "m") {
@@ -241,7 +241,7 @@ func TestHalfOpenAllowsExactlyOneProbeAfterCooldown(t *testing.T) {
 	clock := newMovingClock(testEpoch)
 	l := newTestLimiter(cfg, clock.now)
 
-	for i := int64(0); i < cfg.AfterFailures; i++ {
+	for range cfg.AfterFailures {
 		l.OnResult("p", "m", TransportFault)
 	}
 	if l.Acquire("p", "m") {
@@ -265,7 +265,7 @@ func TestHalfOpenSuccessClosesCutoffAndDecaysBackoff(t *testing.T) {
 	clock := newMovingClock(testEpoch)
 	l := newTestLimiter(cfg, clock.now)
 
-	for i := int64(0); i < cfg.AfterFailures; i++ {
+	for range cfg.AfterFailures {
 		l.OnResult("p", "m", TransportFault)
 	}
 	state := l.states[key{participant: "p", model: "m"}]
@@ -296,7 +296,7 @@ func TestHalfOpenTransportFaultReopensWithLongerCooldown(t *testing.T) {
 	clock := newMovingClock(testEpoch)
 	l := newTestLimiter(cfg, clock.now)
 
-	for i := int64(0); i < cfg.AfterFailures; i++ {
+	for range cfg.AfterFailures {
 		l.OnResult("p", "m", TransportFault)
 	}
 	state := l.states[key{participant: "p", model: "m"}]
@@ -324,7 +324,7 @@ func TestModelOutcomeNeverPenalizes(t *testing.T) {
 	l := newTestLimiter(testConfig(), fixedNow(testEpoch))
 	l.Acquire("p", "m")
 
-	for i := 0; i < 20; i++ {
+	for range 20 {
 		l.OnResult("p", "m", ModelOutcome)
 	}
 
@@ -361,12 +361,12 @@ func TestParticipantLimiterConcurrentAccessIsRaceFree(t *testing.T) {
 	verdicts := []Verdict{Success, Overload, TransportFault, ModelOutcome}
 
 	var wg sync.WaitGroup
-	for g := 0; g < goroutines; g++ {
+	for g := range goroutines {
 		wg.Add(1)
 		go func(seed int64) {
 			defer wg.Done()
 			source := rand.New(rand.NewSource(seed))
-			for i := 0; i < iterationsPerGoroutine; i++ {
+			for range iterationsPerGoroutine {
 				participant := participants[source.Intn(len(participants))]
 				model := models[source.Intn(len(models))]
 				if l.Acquire(participant, model) {
@@ -410,7 +410,7 @@ func TestAvailableFalseWhileCutoffOpenThenTrueAfterCooldown(t *testing.T) {
 	clock := newMovingClock(testEpoch)
 	l := newTestLimiter(cfg, clock.now)
 
-	for i := int64(0); i < cfg.AfterFailures; i++ {
+	for range cfg.AfterFailures {
 		l.OnResult("p", "m", TransportFault)
 	}
 	if l.Available("p", "m") {
@@ -434,7 +434,7 @@ func TestAvailableFalseDuringHalfOpenProbeInFlight(t *testing.T) {
 	clock := newMovingClock(testEpoch)
 	l := newTestLimiter(cfg, clock.now)
 
-	for i := int64(0); i < cfg.AfterFailures; i++ {
+	for range cfg.AfterFailures {
 		l.OnResult("p", "m", TransportFault)
 	}
 	state := l.states[key{participant: "p", model: "m"}]
@@ -451,7 +451,7 @@ func TestAvailableFalseDuringHalfOpenProbeInFlight(t *testing.T) {
 func TestAvailableFalseAtWindowThenTrueAfterRelease(t *testing.T) {
 	t.Parallel()
 	l := newTestLimiter(testConfig(), fixedNow(testEpoch))
-	for i := 0; i < 4; i++ {
+	for range 4 {
 		l.Acquire("p", "m")
 	}
 	if l.Available("p", "m") {
@@ -470,14 +470,14 @@ func TestAvailableDoesNotConsumeWindowSlots(t *testing.T) {
 	cfg := testConfig()
 	l := newTestLimiter(cfg, fixedNow(testEpoch))
 
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		l.Available("p", "m")
 	}
 	if _, exists := l.states[key{participant: "p", model: "m"}]; exists {
 		t.Fatal("Available() created participant state as a side effect, want no-op until first Acquire")
 	}
 
-	for i := 0; i < int(cfg.Initial); i++ {
+	for i := range cfg.Initial {
 		if !l.Acquire("p", "m") {
 			t.Fatalf("Acquire() call %d after repeated Available() peeks = false, want true (peeks must not consume slots)", i+1)
 		}
@@ -494,7 +494,7 @@ func TestAvailableLeavesExistingStateUnchanged(t *testing.T) {
 	l.OnResult("p", "m", TransportFault)
 	before := *l.states[key{participant: "p", model: "m"}]
 
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		l.Available("p", "m")
 	}
 
@@ -514,12 +514,12 @@ func TestAvailableConcurrentWithAcquireIsRaceFree(t *testing.T) {
 	verdicts := []Verdict{Success, Overload, TransportFault, ModelOutcome}
 
 	var wg sync.WaitGroup
-	for g := 0; g < goroutines; g++ {
+	for g := range goroutines {
 		wg.Add(1)
 		go func(seed int64) {
 			defer wg.Done()
 			source := rand.New(rand.NewSource(seed))
-			for i := 0; i < iterationsPerGoroutine; i++ {
+			for range iterationsPerGoroutine {
 				participant := participants[source.Intn(len(participants))]
 				model := models[source.Intn(len(models))]
 				l.Available(participant, model)

@@ -10,17 +10,17 @@ import (
 	"time"
 	"unicode/utf8"
 
+	json "github.com/goccy/go-json"
+
 	"devshard/cmd/gateway/chain"
 	"devshard/cmd/gateway/engine"
 	"devshard/cmd/gateway/escrow"
 	"devshard/cmd/gateway/filters"
+	"devshard/cmd/gateway/internal/logkey"
 	"devshard/cmd/gateway/limits"
 	"devshard/cmd/gateway/registry"
 	"devshard/cmd/gateway/scheduler"
 	"devshard/logging"
-
-	"devshard/cmd/gateway/internal/logkey"
-	json "github.com/goccy/go-json"
 )
 
 // noHostRetryAfter is the wait a capacity refusal reports. See gateway-capacity-and-health.md,

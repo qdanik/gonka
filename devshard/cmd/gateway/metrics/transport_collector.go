@@ -1,9 +1,9 @@
 package metrics
 
 import (
-	"devshard/transport"
-
 	"github.com/prometheus/client_golang/prometheus"
+
+	"devshard/transport"
 )
 
 type HostConnectionSource interface {
