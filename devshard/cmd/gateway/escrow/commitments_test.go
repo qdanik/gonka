@@ -625,6 +625,29 @@ func TestTxMayStillLand(t *testing.T) {
 	}
 }
 
+// Recorded at creation, not re-derived on the next boot, which is a different version after a redeploy.
+func TestPersistEscrowStampsTheVersionItWasMintedUnder(t *testing.T) {
+	testStore := newFakeStore()
+	m := &Manager{store: testStore, breaker: newCreateBreaker(), now: time.Now, routePrefix: "/devshard/v3"}
+
+	if err := m.persistEscrow(context.Background(), "77",
+		store.Commitment{TxHash: "TXV", Model: "model-a", Role: "temp", Epoch: 1, PrivateKeyEnv: "KEY_A"}); err != nil {
+		t.Fatalf("persistEscrow(): %v", err)
+	}
+
+	devshards, err := testStore.ListDevshards(context.Background())
+	if err != nil {
+		t.Fatalf("ListDevshards(): %v", err)
+	}
+	if len(devshards) != 1 {
+		t.Fatalf("ListDevshards() = %+v, want exactly 1 record", devshards)
+	}
+	if devshards[0].RoutePrefix != "/devshard/v3" {
+		t.Fatalf("RoutePrefix = %q, want %q: an unpinned escrow follows the gateway onto a version its hosts refuse",
+			devshards[0].RoutePrefix, "/devshard/v3")
+	}
+}
+
 // INVARIANT 4: registering the same escrow id twice is a success no-op, not an error.
 func TestPersistEscrowSameEscrowIDTwiceIsSuccessNoOp(t *testing.T) {
 	testStore := newFakeStore()

@@ -73,12 +73,13 @@ const (
 
 // Process and transport.
 const (
-	Port       = "port"
-	Addr       = "addr"
-	StorageDir = "storage_dir"
-	Version    = "version"
-	Subsystem  = "subsystem"
-	Route      = "route"
-	Method     = "method"
-	Status     = "status"
+	Port        = "port"
+	Addr        = "addr"
+	StorageDir  = "storage_dir"
+	Version     = "version"
+	RoutePrefix = "route_prefix"
+	Subsystem   = "subsystem"
+	Route       = "route"
+	Method      = "method"
+	Status      = "status"
 )

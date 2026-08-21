@@ -2,18 +2,15 @@ package engine
 
 import (
 	"errors"
+	"regexp"
 	"strings"
 
 	"devshard/cmd/gateway/filters"
+	"devshard/storage"
 	"devshard/transport"
 )
 
-// A host too old for the escrow's protocol version answers `version "v3" not found`. Both markers are
-// required: the same status also carries `escrow not found`, which a teardown produces and waiting fixes.
-const (
-	versionRefusalSubject = `version "`
-	versionRefusalVerdict = `" not found`
-)
+var versionNotFound = regexp.MustCompile(`version "[^"]*" not found`)
 
 type CapabilitySignal struct {
 	ToolsUnsupported   bool
@@ -22,16 +19,12 @@ type CapabilitySignal struct {
 	ContextRequested   uint64
 }
 
-// Retriable reports a refusal another host may still satisfy, so the race must neither crown the
-// attempt nor end on it.
 func (s CapabilitySignal) Retriable() bool {
 	return s.ToolsUnsupported || s.VersionUnsupported || s.ContextLimit > 0
 }
 
-// ParseVersionRefusal reads the body a host returns when its build does not speak the protocol version
-// the escrow runs on. Waiting cannot fix it, so it is a capability rather than a fault to back off from.
 func ParseVersionRefusal(body string) CapabilitySignal {
-	if !strings.Contains(body, versionRefusalSubject) || !strings.Contains(body, versionRefusalVerdict) {
+	if !versionNotFound.MatchString(body) && !strings.Contains(body, storage.ErrSessionVersionConflict.Error()) {
 		return CapabilitySignal{}
 	}
 	return CapabilitySignal{VersionUnsupported: true}
@@ -45,8 +38,6 @@ func ParseCapabilityError(message string) CapabilitySignal {
 	return CapabilitySignal{ContextLimit: contextLimit, ContextRequested: contextRequested}
 }
 
-// capabilityOfDispatchError reads a refusal the host returned instead of a stream, where no SSE error
-// event exists to carry it.
 func capabilityOfDispatchError(err error) CapabilitySignal {
 	var status *transport.UpstreamStatusError
 	if !errors.As(err, &status) {

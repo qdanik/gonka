@@ -96,6 +96,7 @@ var migrations = []string{
 		participant_key TEXT PRIMARY KEY,
 		created_at TEXT NOT NULL DEFAULT (datetime('now'))
 	);`,
+	`ALTER TABLE devshards ADD COLUMN route_prefix TEXT NOT NULL DEFAULT ''`,
 }
 
 // The legacy-database guard is kept out of the migrations block above because it decides whether

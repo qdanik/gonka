@@ -191,13 +191,14 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 		Now:          clock,
 	})
 	manager := escrow.NewManager(escrow.Deps{
-		Tx:         txClient,
-		Store:      devshardWrites{Store: gatewayStore, changed: func() { notify(devshardWork) }},
-		Snapshots:  observer,
-		Settlement: escrows,
-		Signer:     environmentSigner{},
-		Config:     configHolder,
-		Now:        clock,
+		Tx:          txClient,
+		Store:       devshardWrites{Store: gatewayStore, changed: func() { notify(devshardWork) }},
+		Snapshots:   observer,
+		Settlement:  escrows,
+		Signer:      environmentSigner{},
+		Config:      configHolder,
+		Now:         clock,
+		RoutePrefix: routePrefix,
 	})
 	depletion.manager = manager
 

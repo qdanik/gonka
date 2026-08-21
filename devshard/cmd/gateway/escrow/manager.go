@@ -13,13 +13,14 @@ import (
 const escrowTickInterval = 15 * time.Second
 
 type Deps struct {
-	Tx         escrowTxClient
-	Store      escrowStore
-	Snapshots  snapshotSource
-	Settlement SettlementSource
-	Signer     SignerSource
-	Config     *config.Holder
-	Now        func() time.Time
+	Tx          escrowTxClient
+	Store       escrowStore
+	Snapshots   snapshotSource
+	Settlement  SettlementSource
+	Signer      SignerSource
+	Config      *config.Holder
+	Now         func() time.Time
+	RoutePrefix string
 }
 
 func NewManager(d Deps) *Manager {
@@ -32,6 +33,7 @@ func NewManager(d Deps) *Manager {
 		now:              d.Now,
 		config:           d.Config,
 		settlementSource: d.Settlement,
+		routePrefix:      d.RoutePrefix,
 	}
 }
 

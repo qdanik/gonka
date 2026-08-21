@@ -265,7 +265,7 @@ func servingSessions(records devshardLookup, storageDir string, escrowBridge bri
 			EscrowID:      escrowID,
 			Bridge:        escrowBridge,
 			StoragePath:   storagePath,
-			RoutePrefix:   routePrefix,
+			RoutePrefix:   escrowRoutePrefix(record, routePrefix),
 		})
 		if err != nil {
 			return nil, err
@@ -273,6 +273,16 @@ func servingSessions(records devshardLookup, storageDir string, escrowBridge bri
 		return registry.NewSessionHandle(session, machine), nil
 	}
 }
+
+func escrowRoutePrefix(record store.DevshardRecord, gatewayPrefix string) string {
+	if record.RoutePrefix != "" {
+		return record.RoutePrefix
+	}
+	logging.Warn("escrow route prefix unpinned, following the gateway",
+		logkey.Escrow, record.EscrowID, logkey.RoutePrefix, gatewayPrefix)
+	return gatewayPrefix
+}
+
 func readOnlySessions(records devshardLookup, storageDir string) registry.SessionFactory {
 	return func(ctx context.Context, escrowID string) (registry.EscrowSession, error) {
 		record, err := findDevshard(ctx, records, escrowID)

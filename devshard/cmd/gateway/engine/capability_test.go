@@ -267,6 +267,9 @@ func TestOnlyAVersionRefusalIsReadAsAPermanentCapability(t *testing.T) {
 		{name: "some other quoted thing missing", body: `model "kimi" not found`},
 		{name: "a quoted escrow missing", body: `escrow "49247" not found`},
 		{name: "the word version alone", body: `unsupported version`},
+		{name: "both halves present but describing different things", body: `version "v4" active; model "kimi" not found`},
+		{name: "the escrow is bound to another version", body: `{"message":"session version conflict: stored v3, host v4"}`, want: true},
+		{name: "the conflict as the host sends it, newline and all", body: "{\"message\":\"session version conflict: stored v3, host v4\"}\n", want: true},
 		{name: "nothing at all", body: ""},
 	}
 

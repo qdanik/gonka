@@ -18,10 +18,10 @@ import (
 
 // commitmentIndexLagMargin is how long a landed tx may stay unqueryable past the chain's
 // unordered-tx TTL before the commitment record can be cleared.
-const commitmentIndexLagMargin = 2 * time.Minute
-
-const commitmentReconcileGrace = chain.UnorderedTxTTL + commitmentIndexLagMargin
-
+const (
+	commitmentIndexLagMargin = 2 * time.Minute
+	commitmentReconcileGrace = chain.UnorderedTxTTL + commitmentIndexLagMargin
+)
 type Manager struct {
 	tx        escrowTxClient
 	store     escrowStore
@@ -31,6 +31,7 @@ type Manager struct {
 	now       func() time.Time
 
 	config           *config.Holder
+	routePrefix      string
 	settlementSource SettlementSource
 	settlements      inFlightSet
 	checks           inFlightSet
@@ -79,11 +80,7 @@ func (m *Manager) createEscrow(ctx context.Context, model ModelConfig, role stri
 	return result, m.persistEscrow(ctx, strconv.FormatUint(result.EscrowID, 10), c)
 }
 
-// persistEscrow registers the escrow a commitment created, then drops the commitment. A row that
-// already exists is left exactly as it is: a commitment can outlive its own create when the gateway
-// dies between the two writes, and by the time reconcile finds it that escrow may have been parked for
-// settlement. Re-registering would flip it active again and wipe the settle hash its reconciliation
-// depends on. See gateway-escrow-lifecycle.md, "Creating an escrow, and surviving a crash mid-creation".
+// persistEscrow registers the escrow a commitment created, then drops the commitment. See gateway-escrow-lifecycle.md, "Creating an escrow, and surviving a crash mid-creation".
 func (m *Manager) persistEscrow(ctx context.Context, escrowID string, c store.Commitment) error {
 	registered, err := m.escrowRegistered(ctx, escrowID)
 	if err != nil {
@@ -97,6 +94,7 @@ func (m *Manager) persistEscrow(ctx context.Context, escrowID string, c store.Co
 			Active:        true,
 			RotationRole:  c.Role,
 			RotationEpoch: int64(c.Epoch),
+			RoutePrefix:   m.routePrefix,
 		}
 		if err := m.store.WithRetry(ctx, func() error { return m.store.UpsertDevshard(ctx, record) }); err != nil {
 			return fmt.Errorf("registering escrow %s: %w", escrowID, err)

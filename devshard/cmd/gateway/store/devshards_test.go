@@ -11,11 +11,13 @@ import (
 // update clause names its columns by hand. Nothing else in the package notices: the insert compiles,
 // the scan compiles, and only a re-registration quietly keeps the old value. This is the notice.
 func TestTheDevshardUpsertCarriesEveryFieldItShould(t *testing.T) {
-	// escrow_id is the conflict key, and settlement_pending is left out on purpose so an unrelated
-	// upsert cannot clear a queued settlement. Everything else must survive a re-registration.
+	// escrow_id is the conflict key, settlement_pending is left out on purpose so an unrelated upsert
+	// cannot clear a queued settlement, and route_prefix is pinned for the escrow's life. Everything
+	// else must survive a re-registration.
 	deliberatelyNotUpdated := map[string]string{
 		"escrow_id":          "the conflict key",
 		"settlement_pending": "only SetDevshardSettlementPending moves it",
+		"route_prefix":       "the version the escrow was bound under never changes",
 	}
 
 	recordType := reflect.TypeOf(DevshardRecord{})
