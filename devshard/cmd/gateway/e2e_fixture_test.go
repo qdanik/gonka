@@ -71,7 +71,7 @@ type scriptedHost struct {
 	dispatches atomic.Int64
 }
 
-func (h *scriptedHost) Send(ctx context.Context, request host.HostRequest, stream io.Writer, onReceipt func()) (*host.HostResponse, error) {
+func (h *scriptedHost) Send(ctx context.Context, request host.HostRequest, stream io.Writer, onReceipt func(*host.HostResponse)) (*host.HostResponse, error) {
 	h.dispatches.Add(1)
 	if h.entered != nil {
 		h.entered <- struct{}{}

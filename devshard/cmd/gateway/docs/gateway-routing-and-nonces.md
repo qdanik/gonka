@@ -9,6 +9,7 @@ This document covers `scheduler/` (which escrow, which participant, which nonce)
 - **Escrow** — a funded on-chain account with a fixed participant group, serving one model. The gateway usually holds many.
 - **Participant key** — the identity a host is known by. A validator may hold several *slots* in a group; all of its slots share one participant key. Every filter in the scheduler is keyed by participant, never by slot, so a request that excluded a host cannot be re-served through a sibling slot of the same validator (`match.go`, `match`).
 - **Group size** — the number of slots in an escrow's group. `nonce % groupSize` is the slot index, which is why advancing the nonce is how a host is chosen.
+- **Executor receipt** — the executor's signature over a committed inference, delivered as its own SSE event ahead of any output. It is the only thing that moves a record from `StatusPending` to `StatusStarted`, and it reaches the chain as `MsgConfirmStart` on the next composed diff. It is therefore queued when the event lands rather than when the request ends, because neither a held stream nor an abandoned one leaves a diff to carry it later (`user/session.go`, `Session.confirmStartOnReceipt`).
 - **Ghost burn** — a nonce that was committed locally with a one-token placeholder inference and never sent anywhere, because no host bound to it could serve any waiting request. It is spent money with a recorded reason.
 
 ## Picking an escrow

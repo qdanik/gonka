@@ -342,9 +342,9 @@ type flushingHost struct {
 	sawFlusher bool
 }
 
-func (h *flushingHost) Send(_ context.Context, req host.HostRequest, stream io.Writer, onReceipt func()) (*host.HostResponse, error) {
+func (h *flushingHost) Send(_ context.Context, req host.HostRequest, stream io.Writer, onReceipt func(*host.HostResponse)) (*host.HostResponse, error) {
 	if onReceipt != nil {
-		onReceipt()
+		onReceipt(&host.HostResponse{})
 	}
 	if _, err := io.WriteString(stream, h.line); err != nil {
 		return nil, err

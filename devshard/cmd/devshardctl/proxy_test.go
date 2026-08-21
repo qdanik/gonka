@@ -473,7 +473,7 @@ type killableClient struct {
 	last   *host.HostRequest
 }
 
-func (c *killableClient) Send(ctx context.Context, req host.HostRequest, stream io.Writer, receiptHandler func()) (*host.HostResponse, error) {
+func (c *killableClient) Send(ctx context.Context, req host.HostRequest, stream io.Writer, receiptHandler func(*host.HostResponse)) (*host.HostResponse, error) {
 	c.mu.Lock()
 	reqCopy := req
 	c.last = &reqCopy
@@ -523,7 +523,7 @@ type delayedResultClient struct {
 	sendCalls atomic.Int32
 }
 
-func (c *delayedResultClient) Send(ctx context.Context, _ host.HostRequest, _ io.Writer, _ func()) (*host.HostResponse, error) {
+func (c *delayedResultClient) Send(ctx context.Context, _ host.HostRequest, _ io.Writer, _ func(*host.HostResponse)) (*host.HostResponse, error) {
 	c.sendCalls.Add(1)
 	select {
 	case <-c.releaseCh:
@@ -539,10 +539,10 @@ type emptyNonStreamingRecorderClient struct {
 	mu        sync.Mutex
 }
 
-func (c *emptyNonStreamingRecorderClient) Send(_ context.Context, req host.HostRequest, _ io.Writer, receiptHandler func()) (*host.HostResponse, error) {
+func (c *emptyNonStreamingRecorderClient) Send(_ context.Context, req host.HostRequest, _ io.Writer, receiptHandler func(*host.HostResponse)) (*host.HostResponse, error) {
 	c.sendCalls.Add(1)
 	if receiptHandler != nil {
-		receiptHandler()
+		receiptHandler(&host.HostResponse{})
 	}
 	if req.Payload != nil {
 		c.mu.Lock()
@@ -564,10 +564,10 @@ type blockingNonStreamingRecorderClient struct {
 	mu        sync.Mutex
 }
 
-func (c *blockingNonStreamingRecorderClient) Send(ctx context.Context, req host.HostRequest, _ io.Writer, receiptHandler func()) (*host.HostResponse, error) {
+func (c *blockingNonStreamingRecorderClient) Send(ctx context.Context, req host.HostRequest, _ io.Writer, receiptHandler func(*host.HostResponse)) (*host.HostResponse, error) {
 	c.sendCalls.Add(1)
 	if receiptHandler != nil {
-		receiptHandler()
+		receiptHandler(&host.HostResponse{})
 	}
 	if req.Payload != nil {
 		c.mu.Lock()
@@ -855,9 +855,9 @@ var errSimulatedWinnerTransport = errors.New("simulated winner transport failure
 
 type streamContentThenErrClient struct{}
 
-func (streamContentThenErrClient) Send(ctx context.Context, req host.HostRequest, stream io.Writer, receiptHandler func()) (*host.HostResponse, error) {
+func (streamContentThenErrClient) Send(ctx context.Context, req host.HostRequest, stream io.Writer, receiptHandler func(*host.HostResponse)) (*host.HostResponse, error) {
 	if receiptHandler != nil {
-		receiptHandler()
+		receiptHandler(&host.HostResponse{})
 	}
 	if stream != nil {
 		_, _ = io.WriteString(stream, `data: {"choices":[{"delta":{"content":"x"}}]}`+"\n\n")
@@ -867,9 +867,9 @@ func (streamContentThenErrClient) Send(ctx context.Context, req host.HostRequest
 
 type streamContentWithoutFinishClient struct{}
 
-func (streamContentWithoutFinishClient) Send(ctx context.Context, req host.HostRequest, stream io.Writer, receiptHandler func()) (*host.HostResponse, error) {
+func (streamContentWithoutFinishClient) Send(ctx context.Context, req host.HostRequest, stream io.Writer, receiptHandler func(*host.HostResponse)) (*host.HostResponse, error) {
 	if receiptHandler != nil {
-		receiptHandler()
+		receiptHandler(&host.HostResponse{})
 	}
 	if stream != nil {
 		_, _ = io.WriteString(stream, `data: {"choices":[{"delta":{"content":"x"}}]}`+"\n\n")
@@ -882,9 +882,9 @@ func (streamContentWithoutFinishClient) Send(ctx context.Context, req host.HostR
 
 type emptyStartedClient struct{}
 
-func (emptyStartedClient) Send(_ context.Context, req host.HostRequest, _ io.Writer, receiptHandler func()) (*host.HostResponse, error) {
+func (emptyStartedClient) Send(_ context.Context, req host.HostRequest, _ io.Writer, receiptHandler func(*host.HostResponse)) (*host.HostResponse, error) {
 	if receiptHandler != nil {
-		receiptHandler()
+		receiptHandler(&host.HostResponse{})
 	}
 	return &host.HostResponse{
 		Nonce:       req.Nonce,
@@ -896,10 +896,10 @@ type errorStreamWithoutFinishClient struct {
 	calls atomic.Int32
 }
 
-func (c *errorStreamWithoutFinishClient) Send(_ context.Context, req host.HostRequest, stream io.Writer, receiptHandler func()) (*host.HostResponse, error) {
+func (c *errorStreamWithoutFinishClient) Send(_ context.Context, req host.HostRequest, stream io.Writer, receiptHandler func(*host.HostResponse)) (*host.HostResponse, error) {
 	c.calls.Add(1)
 	if receiptHandler != nil {
-		receiptHandler()
+		receiptHandler(&host.HostResponse{})
 	}
 	if stream != nil {
 		_, _ = io.WriteString(stream, `data: {"error":{"code":404,"message":"The model does not exist.","type":"NotFoundError"}}`+"\n\n")
@@ -913,9 +913,9 @@ func (c *errorStreamWithoutFinishClient) Send(_ context.Context, req host.HostRe
 
 type streamContentThenStallClient struct{}
 
-func (streamContentThenStallClient) Send(ctx context.Context, req host.HostRequest, stream io.Writer, receiptHandler func()) (*host.HostResponse, error) {
+func (streamContentThenStallClient) Send(ctx context.Context, req host.HostRequest, stream io.Writer, receiptHandler func(*host.HostResponse)) (*host.HostResponse, error) {
 	if receiptHandler != nil {
-		receiptHandler()
+		receiptHandler(&host.HostResponse{})
 	}
 	if stream != nil {
 		_, _ = io.WriteString(stream, `data: {"choices":[{"delta":{"content":"x"}}]}`+"\n\n")
@@ -929,9 +929,9 @@ type streamContentThenReleaseClient struct {
 	err       error
 }
 
-func (c *streamContentThenReleaseClient) Send(ctx context.Context, req host.HostRequest, stream io.Writer, receiptHandler func()) (*host.HostResponse, error) {
+func (c *streamContentThenReleaseClient) Send(ctx context.Context, req host.HostRequest, stream io.Writer, receiptHandler func(*host.HostResponse)) (*host.HostResponse, error) {
 	if receiptHandler != nil {
-		receiptHandler()
+		receiptHandler(&host.HostResponse{})
 	}
 	if stream != nil {
 		_, _ = io.WriteString(stream, `data: {"choices":[{"delta":{"content":"x"}}]}`+"\n\n")
@@ -965,14 +965,14 @@ type releaseAfterClient struct {
 	releaseCh chan struct{}
 }
 
-func (c *releaseAfterClient) Send(ctx context.Context, req host.HostRequest, stream io.Writer, receiptHandler func()) (*host.HostResponse, error) {
+func (c *releaseAfterClient) Send(ctx context.Context, req host.HostRequest, stream io.Writer, receiptHandler func(*host.HostResponse)) (*host.HostResponse, error) {
 	select {
 	case <-c.releaseCh:
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
 	if receiptHandler != nil {
-		receiptHandler()
+		receiptHandler(&host.HostResponse{})
 	}
 	nid := req.Nonce
 	return &host.HostResponse{
@@ -2203,15 +2203,15 @@ type slowReceiptClient struct {
 	receiptDelay time.Duration
 }
 
-func (c *slowReceiptClient) Send(ctx context.Context, req host.HostRequest, stream io.Writer, receiptHandler func()) (*host.HostResponse, error) {
+func (c *slowReceiptClient) Send(ctx context.Context, req host.HostRequest, stream io.Writer, receiptHandler func(*host.HostResponse)) (*host.HostResponse, error) {
 	wrapped := receiptHandler
 	if wrapped != nil && c.receiptDelay > 0 {
-		wrapped = func() {
+		wrapped = func(resp *host.HostResponse) {
 			select {
 			case <-time.After(c.receiptDelay):
 			case <-ctx.Done():
 			}
-			receiptHandler()
+			receiptHandler(resp)
 		}
 	}
 	return c.inner.Send(ctx, req, stream, wrapped)
