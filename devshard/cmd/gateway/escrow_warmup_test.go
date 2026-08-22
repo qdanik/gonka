@@ -159,7 +159,8 @@ func TestEscrowPublishedLeavesNoGoroutineBehind(t *testing.T) {
 	warmup := &escrowWarmup{
 		escrows: &stubEscrows{session: stubSession{}, live: true},
 		ledger:  &spyLedger{},
-		probe: func(context.Context, registry.EscrowSession, string, int64) (uint64, bool, error) {
+		probe: func(_ context.Context, _ registry.EscrowSession, _ string, _ int64, nonceCommitted func()) (uint64, bool, error) {
+			nonceCommitted()
 			return 1, true, nil
 		},
 		catchUp: func(context.Context, registry.EscrowSession) error {
@@ -208,7 +209,8 @@ func newWarmupUnderTest(session registry.EscrowSession, probeErr error) (*escrow
 	warmup := &escrowWarmup{
 		escrows: &stubEscrows{session: session, live: true},
 		ledger:  ledger,
-		probe: func(context.Context, registry.EscrowSession, string, int64) (uint64, bool, error) {
+		probe: func(_ context.Context, _ registry.EscrowSession, _ string, _ int64, nonceCommitted func()) (uint64, bool, error) {
+			nonceCommitted()
 			return 1, probeErr == nil, probeErr
 		},
 		catchUp: func(context.Context, registry.EscrowSession) error {
@@ -267,5 +269,38 @@ func TestOnlyAnExecutorReceiptCountsAsAnAnsweredProbe(t *testing.T) {
 					got, testCase.want)
 			}
 		})
+	}
+}
+
+// A host cannot sign or vote until it holds the session, and the first request lands long before the
+// probe's answer, so the catch-up must not wait for it.
+func TestTheGroupIsTaughtWhileTheProbeIsStillStreaming(t *testing.T) {
+	caughtUp := make(chan struct{})
+	sawCatchUp := make(chan struct{})
+	warmup := &escrowWarmup{
+		escrows: &stubEscrows{session: stubSession{}, live: true},
+		ledger:  &spyLedger{},
+		probe: func(_ context.Context, _ registry.EscrowSession, _ string, _ int64, nonceCommitted func()) (uint64, bool, error) {
+			nonceCommitted()
+			select {
+			case <-caughtUp:
+				close(sawCatchUp)
+			case <-time.After(2 * time.Second):
+			}
+			return 1, true, nil
+		},
+		catchUp: func(context.Context, registry.EscrowSession) error {
+			close(caughtUp)
+			return nil
+		},
+		now: warmupClock(),
+	}
+
+	warmup.warm("escrow-1", "test-model")
+
+	select {
+	case <-sawCatchUp:
+	default:
+		t.Error("the catch-up waited for the probe's answer: the group holds nothing for that whole inference")
 	}
 }

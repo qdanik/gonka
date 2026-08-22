@@ -37,7 +37,7 @@ type warmupLedger interface {
 type escrowWarmup struct {
 	escrows warmupEscrows
 	ledger  warmupLedger
-	probe   func(ctx context.Context, session registry.EscrowSession, model string, startedAt int64) (uint64, bool, error)
+	probe   func(ctx context.Context, session registry.EscrowSession, model string, startedAt int64, nonceCommitted func()) (uint64, bool, error)
 	catchUp func(ctx context.Context, session registry.EscrowSession) error
 	stop    <-chan struct{}
 	now     func() time.Time
@@ -87,17 +87,29 @@ func (w *escrowWarmup) warm(escrowID, model string) {
 		}
 	}()
 
-	nonce, acknowledged, probeErr := w.probe(ctx, session, model, w.now().Unix())
+	// The probe's diff is signed before its send, so the group can be taught now instead of an inference later.
+	var catchUp chan error
+	onNonceCommitted := func() {
+		catchUp = make(chan error, 1)
+		go func(done chan<- error) {
+			catchUpCtx, cancelCatchUp := context.WithTimeout(ctx, warmupCatchUpTimeout)
+			defer cancelCatchUp()
+			done <- w.catchUp(catchUpCtx, session)
+		}(catchUp)
+	}
+
+	nonce, acknowledged, probeErr := w.probe(ctx, session, model, w.now().Unix(), onNonceCommitted)
+
+	var catchUpErr error
+	if catchUp != nil {
+		catchUpErr = <-catchUp
+	}
+
 	if nonce == 0 {
 		logging.Warn("escrow warmup found no nonce to spend", logkey.Escrow, escrowID, logkey.Error, probeErr)
 		return
 	}
 	w.record(escrowID, nonce, acknowledged, probeErr)
-
-	// Never before the probe: catch-up replays diffs that exist, and a session at nonce zero has none.
-	catchUpCtx, cancelCatchUp := context.WithTimeout(ctx, warmupCatchUpTimeout)
-	catchUpErr := w.catchUp(catchUpCtx, session)
-	cancelCatchUp()
 
 	logging.Info("escrow warmed", logkey.Escrow, escrowID, logkey.Model, model,
 		logkey.Nonce, nonce, logkey.Served, probeErr == nil, logkey.CatchUpError, catchUpErr)
@@ -107,7 +119,7 @@ func catchUpAllHosts(ctx context.Context, session registry.EscrowSession) error 
 	return session.UserSession().CatchUpAllHosts(ctx)
 }
 
-func dispatchProbe(ctx context.Context, session registry.EscrowSession, model string, startedAt int64) (uint64, bool, error) {
+func dispatchProbe(ctx context.Context, session registry.EscrowSession, model string, startedAt int64, nonceCommitted func()) (uint64, bool, error) {
 	sendCtx, cancelSend := context.WithTimeout(ctx, warmupProbeTimeout)
 	defer cancelSend()
 
@@ -124,6 +136,7 @@ func dispatchProbe(ctx context.Context, session registry.EscrowSession, model st
 		return 0, false, err
 	}
 	nonce, hostIdx := prepared.Nonce(), prepared.HostIdx()
+	nonceCommitted()
 
 	response, sendErr := session.UserSession().SendOnly(sendCtx, prepared, nil, nil)
 	if sendErr != nil {
