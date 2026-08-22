@@ -2033,6 +2033,20 @@ func (s *Session) HandleTimeout(ctx context.Context, nonce uint64, sendTime time
 		return result, ErrNonceFinishedWhileWaiting
 	}
 
+	admitted, votable := s.reasonTheGroupWillAccept(nonce, reason, time.Now())
+	if !votable {
+		logging.Stage(ctx, "timeout_skipped", logFields("reason", "record_admits_no_vote",
+			"planned", timeoutReasonLogLabel(reason))...)
+		result.Outcome, result.DetailReason = "skipped", "record_admits_no_vote"
+		return result, ErrTimeoutNotApplied
+	}
+	if admitted != reason {
+		logging.Stage(ctx, "timeout_reason_rechosen", logFields("planned", timeoutReasonLogLabel(reason),
+			"admitted", timeoutReasonLogLabel(admitted))...)
+		reason = admitted
+		result.Reason = timeoutReasonLogLabel(reason)
+	}
+
 	if elapsed, refusalTimeout, unreachable := s.refusalDeadlineUnreachable(reason, payload); unreachable {
 		logging.Stage(ctx, "timeout_skipped", logFields("reason", "refusal_deadline_unreachable",
 			"elapsed_seconds", elapsed, "refusal_timeout_seconds", refusalTimeout)...)
@@ -2098,6 +2112,30 @@ func (s *Session) HandleTimeout(ctx context.Context, nonce uint64, sendTime time
 	}
 	logging.Stage(ctx, "timeout_insufficient_votes", logFields("reason", result.Reason)...)
 	return result, fmt.Errorf("inference %d: %w: insufficient votes", nonce, ErrTimeoutNotApplied)
+}
+
+// The reason is chosen before the wait, from this session's memory of a receipt, but the verifiers judge
+// the record the chain holds: a confirm-start that never landed leaves it pending while this session
+// votes execution. Waiting the execution deadline already outlasts the refusal one, so a pending record
+// can always be voted refused; the reverse cannot, and skipping beats a vote that cannot apply.
+func (s *Session) reasonTheGroupWillAccept(nonce uint64, planned types.TimeoutReason, now time.Time) (types.TimeoutReason, bool) {
+	record, tracked := s.sm.GetInference(nonce)
+	if !tracked {
+		return planned, true
+	}
+	switch record.Status {
+	case types.StatusPending:
+		return types.TimeoutReason_TIMEOUT_REASON_REFUSED, true
+	case types.StatusStarted:
+		if planned == types.TimeoutReason_TIMEOUT_REASON_EXECUTION {
+			return planned, true
+		}
+		executionDeadline := time.Unix(record.ConfirmedAt, 0).Add(
+			time.Duration(s.sm.Config().ExecutionTimeout)*time.Second + TimeoutBuffer,
+		)
+		return types.TimeoutReason_TIMEOUT_REASON_EXECUTION, record.ConfirmedAt > 0 && !now.Before(executionDeadline)
+	}
+	return planned, false
 }
 
 // A verifier measures the refusal deadline from the record's own StartedAt, so a stamp in the future or
