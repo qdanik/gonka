@@ -28,15 +28,15 @@ var ErrDevshardNotFound = errors.New("devshard not found")
 // DevshardRecord is one row of the devshard registry. Private keys are never
 // stored — only the name of the environment variable that holds the key.
 type DevshardRecord struct {
-	EscrowID          string
-	PrivateKeyEnv     string
-	Model             string
-	Active            bool
-	RotationRole      string
-	RotationEpoch     int64
-	SettlementPending bool
-	SettleTxHash      string
-	RoutePrefix       string
+	EscrowID          string `json:"escrow_id"`
+	PrivateKeyEnv     string `json:"private_key_env"`
+	Model             string `json:"model"`
+	Active            bool   `json:"active"`
+	RotationRole      string `json:"rotation_role"`
+	RotationEpoch     int64  `json:"rotation_epoch"`
+	SettlementPending bool   `json:"settlement_pending"`
+	SettleTxHash      string `json:"settle_tx_hash"`
+	RoutePrefix       string `json:"route_prefix"`
 }
 
 // UpsertDevshard replaces every field of an existing row except two. settlement_pending is left alone

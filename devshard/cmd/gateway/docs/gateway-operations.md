@@ -48,6 +48,7 @@ All admin, all always-on.
 | `/v1/admin/escrows` | POST | Create an escrow on chain. |
 | `/v1/admin/suspicious-hosts` | GET, POST, DELETE | The manual never-trust list. |
 | `/v1/admin/participants/unquarantine` | POST | Clear breaker state for one participant. |
+| `/v1/admin/accounting/reset/{epoch}` | POST | Drop the nonce ledger's records for one epoch. |
 | `/v1/debug/rotation` | GET | Rotation status per model and role. |
 | `/v1/debug/memstats` | GET, HEAD | Go memory statistics. |
 
@@ -135,6 +136,8 @@ Two ledgers with similar names answer different questions, and confusing them wa
 | `GET /api/v1/escrows` | the escrow ids the ledger holds |
 
 `current` stands in for an epoch index and resolves against the chain's phase snapshot. Epoch `0` is refused rather than served: a zero epoch means "unconstrained" inside the ledger, so answering it would report every epoch as though it were one. `?model=` and `?escrow_id=` narrow the first three routes, and `escrow_id` accepts both repetition and commas.
+
+`POST /v1/admin/accounting/reset/{epoch}` clears one epoch and answers how many escrows went with it. It lives on the admin surface rather than this one because it erases records, and the epoch is named rather than defaulted to the current one for the same reason. Neighbouring epochs are untouched: a rotation leaves escrows of two epochs live at once.
 
 The participant route is the one the surface exists for: a host operator can ask what this gateway saw of its own participant. An address the epoch holds no record of is a 404 rather than an empty list, so "nothing went wrong" stays distinguishable from "this gateway never routed to you". Every route is read-only and serves one gateway's view of public network behaviour, so the listener carries no authentication; it is still a separate port, and whether it is reachable beyond the deployment is the operator's choice.
 

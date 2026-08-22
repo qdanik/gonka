@@ -103,14 +103,14 @@ func (s *Service) prune(ctx context.Context) {
 	s.Book.PruneBefore(epoch - s.retentionEpochs)
 }
 
-// Reset empties the ledger and writes the empty one out, so a restart cannot restore what an
+// ResetEpoch clears one epoch and writes the ledger out, so a restart cannot restore what an
 // operator just cleared.
-func (s *Service) Reset() error {
+func (s *Service) ResetEpoch(epoch uint64) (int, error) {
 	if s == nil || s.Book == nil {
-		return nil
+		return 0, nil
 	}
-	s.Book.Reset()
-	return s.Flush()
+	cleared := s.Book.ResetEpoch(epoch)
+	return cleared, s.Flush()
 }
 
 func (s *Service) Close() error {

@@ -94,14 +94,21 @@ func (b *Book) OpenEscrow(metadata EscrowMetadata) error {
 	return nil
 }
 
-// Reset empties the ledger. Counters describe the present, and an operator who asks for a clean one
-// is saying the past no longer describes anything.
-func (b *Book) Reset() {
+// ResetEpoch drops what the ledger holds for one epoch and reports how many escrows went with it.
+func (b *Book) ResetEpoch(epoch uint64) int {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	b.escrows = make(map[string]*escrowLedger)
-	b.rejected = 0
-	b.touchLocked()
+	cleared := 0
+	for escrowID, escrow := range b.escrows {
+		if escrow.metadata.CreationEpoch == epoch {
+			delete(b.escrows, escrowID)
+			cleared++
+		}
+	}
+	if cleared > 0 {
+		b.touchLocked()
+	}
+	return cleared
 }
 
 func (b *Book) RetireEscrow(escrowID string) {

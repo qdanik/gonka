@@ -96,7 +96,7 @@ type Operations interface {
 	Settle(ctx context.Context, escrowID string) (chain.SettleEscrowResult, error)
 	Unquarantine(ctx context.Context, participantKey string) error
 	Reconfigure(ctx context.Context, overrides config.Overrides) error
-	ResetNonceAccounting(ctx context.Context) error
+	ResetAccountingEpoch(ctx context.Context, epoch uint64) (cleared int, err error)
 }
 
 // SuspiciousHosts is the operator's manual never-trust-this-host list.

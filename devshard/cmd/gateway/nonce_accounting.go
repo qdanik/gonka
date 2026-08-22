@@ -135,11 +135,11 @@ func (n *nonceAccounting) ledger() *accounting.Book {
 	return n.service.Book
 }
 
-func (n *nonceAccounting) reset() error {
+func (n *nonceAccounting) resetEpoch(epoch uint64) (int, error) {
 	if n == nil {
-		return nil
+		return 0, nil
 	}
-	return n.service.Reset()
+	return n.service.ResetEpoch(epoch)
 }
 
 func (n *nonceAccounting) collectors() []prometheus.Collector {

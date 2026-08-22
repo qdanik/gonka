@@ -1,9 +1,11 @@
 package api
 
 import (
+	"fmt"
 	"net/http"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 
 	"devshard/cmd/gateway/config"
@@ -151,16 +153,22 @@ func (s *Server) handleAdminUnquarantine(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusOK, map[string]any{"participant_key": participantKey})
 }
 
-func (s *Server) handleAdminResetNonceAccounting(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleAdminResetAccountingEpoch(w http.ResponseWriter, r *http.Request) {
 	if !allowMethods(w, r, http.MethodPost) {
 		return
 	}
-	if err := s.operations.ResetNonceAccounting(r.Context()); err != nil {
+	epoch, err := strconv.ParseUint(r.PathValue("epoch"), 10, 64)
+	if err != nil || epoch == 0 {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid epoch %q", r.PathValue("epoch")))
+		return
+	}
+	cleared, err := s.operations.ResetAccountingEpoch(r.Context(), epoch)
+	if err != nil {
 		writeErrorFor(w, err)
 		return
 	}
-	auditAdmin("nonce accounting reset")
-	writeJSON(w, http.StatusOK, map[string]any{"reset": true})
+	auditAdmin("accounting epoch reset", "epoch", epoch, "escrows", cleared)
+	writeJSON(w, http.StatusOK, map[string]any{"reset": true, "epoch": epoch, "escrows": cleared})
 }
 
 func (s *Server) handleDebugRotation(w http.ResponseWriter, r *http.Request) {

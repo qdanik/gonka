@@ -191,8 +191,8 @@ func (o *operations) Unquarantine(_ context.Context, participantKey string) erro
 	return nil
 }
 
-func (o *operations) ResetNonceAccounting(context.Context) error {
-	return o.nonces.reset()
+func (o *operations) ResetAccountingEpoch(_ context.Context, epoch uint64) (int, error) {
+	return o.nonces.resetEpoch(epoch)
 }
 
 func (o *operations) Reconfigure(ctx context.Context, overrides config.Overrides) error {

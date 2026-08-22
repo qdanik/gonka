@@ -186,8 +186,8 @@ func (f *fakeOperations) Settle(context.Context, string) (chain.SettleEscrowResu
 	return f.settle, f.record("settle")
 }
 
-func (f *fakeOperations) ResetNonceAccounting(context.Context) error {
-	return f.record("reset_nonce_accounting")
+func (f *fakeOperations) ResetAccountingEpoch(context.Context, uint64) (int, error) {
+	return 0, f.record("reset_accounting_epoch")
 }
 
 func (f *fakeOperations) Unquarantine(context.Context, string) error {
@@ -453,9 +453,11 @@ func TestEveryRouteAnswersItsDocumentedStatus(t *testing.T) {
 		{name: "unquarantine", method: http.MethodPost, target: "/v1/admin/participants/unquarantine", body: `{"participant_key":"gonka1abc"}`, headers: adminHeaders(), want: http.StatusOK},
 		{name: "unquarantine without key", method: http.MethodPost, target: "/v1/admin/participants/unquarantine", body: `{}`, headers: adminHeaders(), want: http.StatusBadRequest},
 
-		{name: "reset nonce accounting", method: http.MethodPost, target: "/v1/admin/nonce-accounting/reset", headers: adminHeaders(), want: http.StatusOK},
-		{name: "reset nonce accounting wrong method", method: http.MethodGet, target: "/v1/admin/nonce-accounting/reset", headers: adminHeaders(), want: http.StatusMethodNotAllowed},
-		{name: "reset nonce accounting without the admin key", method: http.MethodPost, target: "/v1/admin/nonce-accounting/reset", want: http.StatusUnauthorized},
+		{name: "reset an accounting epoch", method: http.MethodPost, target: "/v1/admin/accounting/reset/370", headers: adminHeaders(), want: http.StatusOK},
+		{name: "reset an accounting epoch that is not a number", method: http.MethodPost, target: "/v1/admin/accounting/reset/latest", headers: adminHeaders(), want: http.StatusBadRequest},
+		{name: "reset accounting without naming an epoch", method: http.MethodPost, target: "/v1/admin/accounting/reset", headers: adminHeaders(), want: http.StatusNotFound},
+		{name: "reset an accounting epoch wrong method", method: http.MethodGet, target: "/v1/admin/accounting/reset/370", headers: adminHeaders(), want: http.StatusMethodNotAllowed},
+		{name: "reset an accounting epoch without the admin key", method: http.MethodPost, target: "/v1/admin/accounting/reset/370", want: http.StatusUnauthorized},
 
 		{name: "debug rotation", method: http.MethodGet, target: "/v1/debug/rotation", headers: adminHeaders(), want: http.StatusOK},
 		{name: "debug rotation wrong method", method: http.MethodPost, target: "/v1/debug/rotation", headers: adminHeaders(), want: http.StatusMethodNotAllowed},

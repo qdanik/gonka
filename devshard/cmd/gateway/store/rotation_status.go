@@ -9,13 +9,13 @@ import (
 // RotationStatus is the latest observed outcome of one (Model, Role) escrow
 // rotation stage, kept for admin-debug visibility only.
 type RotationStatus struct {
-	Model       string
-	Role        string
-	Stage       string
-	Epoch       uint64
-	Completed   bool
-	CreateError string
-	UpdatedAt   time.Time
+	Model       string    `json:"model"`
+	Role        string    `json:"role"`
+	Stage       string    `json:"stage"`
+	Epoch       uint64    `json:"epoch"`
+	Completed   bool      `json:"completed"`
+	CreateError string    `json:"create_error"`
+	UpdatedAt   time.Time `json:"updated_at"`
 }
 
 func (s *Store) SaveRotationStatus(ctx context.Context, st RotationStatus) error {

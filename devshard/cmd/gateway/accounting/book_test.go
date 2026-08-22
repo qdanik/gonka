@@ -3,6 +3,7 @@ package accounting
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 	"time"
 
@@ -340,19 +341,26 @@ func TestANonceWithoutRaceFactsStillNamesATerminal(t *testing.T) {
 	}
 }
 
-func TestResetEmptiesTheLedger(t *testing.T) {
+// Epochs overlap during a rotation, so clearing one must not take the neighbour that is still live.
+func TestResetClearsOneEpochAndLeavesTheRest(t *testing.T) {
 	book := twoEpochBook(t)
-	if len(book.Query(QueryFilter{})) == 0 {
+	if len(book.Query(QueryFilter{EpochIndex: testEpoch})) == 0 {
 		t.Fatal("fixture produced no records to clear")
 	}
 
-	book.Reset()
+	cleared := book.ResetEpoch(testEpoch)
 
-	if records := book.Query(QueryFilter{}); len(records) != 0 {
-		t.Fatalf("got %d records after a reset, want none", len(records))
+	if cleared != 1 {
+		t.Fatalf("cleared %d escrows, want 1: an operator is told what the reset took", cleared)
 	}
-	if escrows := book.EscrowIDs(); len(escrows) != 0 {
-		t.Fatalf("got escrows %v after a reset, want none", escrows)
+	if records := book.Query(QueryFilter{EpochIndex: testEpoch}); len(records) != 0 {
+		t.Fatalf("got %d records for the cleared epoch, want none", len(records))
+	}
+	if records := book.Query(QueryFilter{EpochIndex: testEpoch + 1}); len(records) == 0 {
+		t.Fatal("the neighbouring epoch went with it: its escrows are still live and still counted")
+	}
+	if escrows := book.EscrowIDs(); !slices.Equal(escrows, []string{secondTestEscrow}) {
+		t.Fatalf("escrows = %v, want only %s", escrows, secondTestEscrow)
 	}
 }
 
@@ -375,8 +383,8 @@ func TestResetIsWrittenOutSoARestartCannotUndoIt(t *testing.T) {
 		t.Fatalf("Flush(): %v", err)
 	}
 
-	if err := service.Reset(); err != nil {
-		t.Fatalf("Reset(): %v", err)
+	if _, err := service.ResetEpoch(testEpoch); err != nil {
+		t.Fatalf("ResetEpoch(): %v", err)
 	}
 
 	snapshot, err := store.Load(context.Background())

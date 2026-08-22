@@ -30,15 +30,16 @@ type route struct {
 
 func (s *Server) routes() []route {
 	return []route{
+		{pattern: "/metrics", alwaysOn: true, handler: s.handleMetrics},
 		{pattern: "/v1/models", label: "/v1/models", handler: s.handleModels},
 		{pattern: "/v1/chat/completions", label: "/v1/chat/completions", handler: s.handleChat},
 		{pattern: "/v1/status", label: "/v1/status", handler: s.handleStatus},
-		{pattern: "/metrics", alwaysOn: true, handler: s.handleMetrics},
+		// Admin-only: the row has no caller to authorise against. See gateway-operations.md, "Operator".
+		{pattern: "/v1/requests/{id}", label: "/v1/requests/{id}", admin: true, alwaysOn: true, handler: s.handleRequestAccounting},
 
 		{pattern: "/devshard/{id}/v1/models", label: "/devshard/{id}/v1/models", handler: s.handleDevshardModels},
 		{pattern: "/devshard/{id}/v1/chat/completions", label: "/devshard/{id}/v1/chat/completions", handler: s.handleDevshardChat},
 		{pattern: "/devshard/{id}/v1/status", label: "/devshard/{id}/v1/status", handler: s.handleDevshardStatus},
-
 		{pattern: "/devshard/{id}/v1/finalize", label: "/devshard/{id}/v1/finalize", admin: true, alwaysOn: true, handler: s.handleDevshardFinalize},
 
 		// Recovery surface: admin and alwaysOn. See gateway-operations.md, "Per-escrow recovery surface".
@@ -47,9 +48,6 @@ func (s *Server) routes() []route {
 		{pattern: "/devshard/{id}/v1/debug/inferences", label: "/devshard/{id}/v1/debug/inferences", admin: true, alwaysOn: true, handler: s.handleDevshardDebugInferences},
 		{pattern: "/devshard/{id}/v1/debug/pending", label: "/devshard/{id}/v1/debug/pending", admin: true, alwaysOn: true, handler: s.handleDevshardDebugPending},
 		{pattern: "/devshard/{id}/v1/debug/signatures", label: "/devshard/{id}/v1/debug/signatures", admin: true, alwaysOn: true, handler: s.handleDevshardDebugSignatures},
-
-		// Admin-only: the row has no caller to authorise against. See gateway-operations.md, "Operator".
-		{pattern: "/v1/requests/{id}", label: "/v1/requests/{id}", admin: true, alwaysOn: true, handler: s.handleRequestAccounting},
 
 		{pattern: "/v1/admin/state", label: "/v1/admin/state", admin: true, alwaysOn: true, handler: s.handleAdminState},
 		{pattern: "/v1/admin/settings", label: "/v1/admin/settings", admin: true, alwaysOn: true, handler: s.handleAdminSettings},
@@ -65,7 +63,7 @@ func (s *Server) routes() []route {
 		{pattern: "/v1/admin/escrows", label: "/v1/admin/escrows", admin: true, alwaysOn: true, handler: s.handleAdminEscrows},
 		{pattern: "/v1/admin/suspicious-hosts", label: "/v1/admin/suspicious-hosts", admin: true, alwaysOn: true, handler: s.handleAdminSuspiciousHosts},
 		{pattern: "/v1/admin/participants/unquarantine", label: "/v1/admin/participants/unquarantine", admin: true, alwaysOn: true, handler: s.handleAdminUnquarantine},
-		{pattern: "/v1/admin/nonce-accounting/reset", label: "/v1/admin/nonce-accounting/reset", admin: true, alwaysOn: true, handler: s.handleAdminResetNonceAccounting},
+		{pattern: "/v1/admin/accounting/reset/{epoch}", label: "/v1/admin/accounting/reset/{epoch}", admin: true, alwaysOn: true, handler: s.handleAdminResetAccountingEpoch},
 		{pattern: "/v1/debug/rotation", label: "/v1/debug/rotation", admin: true, alwaysOn: true, handler: s.handleDebugRotation},
 		{pattern: "/v1/debug/memstats", label: "/v1/debug/memstats", admin: true, alwaysOn: true, handler: s.handleDebugMemstats},
 
