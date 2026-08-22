@@ -10,6 +10,7 @@ import (
 	"time"
 
 	json "github.com/goccy/go-json"
+	"golang.org/x/sync/errgroup"
 )
 
 const (
@@ -94,29 +95,24 @@ func (c *VersionsCache) Poll(ctx context.Context) {
 		return
 	}
 
-	type target struct{ miner, base string }
-	work := make(chan target)
-	var workers sync.WaitGroup
-	for range min(versionsPollConcurrency, len(candidates)) {
-		workers.Go(func() {
-			for next := range work {
-				if ctx.Err() != nil {
-					continue
-				}
+	var workers errgroup.Group
+	workers.SetLimit(min(versionsPollConcurrency, len(candidates)))
+	for miner, base := range candidates {
+		// A cancelled poll abandons the miners it has not reached, but never fails the ones it has: the
+		// cache is fail-closed per miner, so an aborted fetch is an absent entry, not a bad one.
+		workers.Go(func() error {
+			if ctx.Err() == nil {
 				fetchCtx, cancelFetch := context.WithTimeout(ctx, versionsFetchTimeout)
-				nodes := c.fetchOne(fetchCtx, next.base)
+				nodes := c.fetchOne(fetchCtx, base)
 				cancelFetch()
 				c.mu.Lock()
-				c.entries[next.miner] = versionsEntry{capableNodes: nodes, fetchedAt: c.now()}
+				c.entries[miner] = versionsEntry{capableNodes: nodes, fetchedAt: c.now()}
 				c.mu.Unlock()
 			}
+			return nil
 		})
 	}
-	for miner, base := range candidates {
-		work <- target{miner: miner, base: base}
-	}
-	close(work)
-	workers.Wait()
+	_ = workers.Wait()
 }
 
 // fetchOne returns the per-node capability map, or nil on any error (fail-closed).

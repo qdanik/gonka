@@ -41,13 +41,12 @@ func NewManager(d Deps) *Manager {
 func (m *Manager) Start(ctx context.Context) {
 	m.lifecycleMu.Lock()
 	defer m.lifecycleMu.Unlock()
-	if m.stop != nil {
+	if m.cancel != nil {
 		return
 	}
 	ctx, cancel := context.WithCancel(ctx)
-	stop := make(chan struct{})
 	done := make(chan struct{})
-	m.stop, m.done, m.cancel = stop, done, cancel
+	m.done, m.cancel = done, cancel
 
 	go func() {
 		defer cancel()
@@ -58,8 +57,6 @@ func (m *Manager) Start(ctx context.Context) {
 		for {
 			select {
 			case <-ctx.Done():
-				return
-			case <-stop:
 				return
 			case <-ticker.C:
 				m.runTick(ctx)
@@ -78,12 +75,9 @@ func (m *Manager) runTick(ctx context.Context) {
 // interrupts a tick already in flight. See gateway-escrow-lifecycle.md, "The tick".
 func (m *Manager) Stop() {
 	m.lifecycleMu.Lock()
-	stop, done, cancel := m.stop, m.done, m.cancel
-	m.stop, m.cancel = nil, nil
+	done, cancel := m.done, m.cancel
+	m.cancel = nil
 	m.lifecycleMu.Unlock()
-	if stop != nil {
-		close(stop)
-	}
 	if cancel != nil {
 		cancel()
 	}

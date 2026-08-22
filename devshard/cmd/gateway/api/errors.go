@@ -23,25 +23,19 @@ import (
 	"devshard/logging"
 )
 
-// noHostRetryAfter is the wait a capacity refusal reports. See gateway-capacity-and-health.md,
-// "The wait budget".
 const noHostRetryAfter = time.Second
 
 var (
 	ErrUnknownDevshard = errors.New("unknown devshard")
 
-	// ErrUnknownParticipant reports a participant key no limiter state is tracked under.
 	ErrUnknownParticipant = errors.New("unknown participant")
 
-	// ErrPrivateKeyEnvRequired refuses a create that names no key variable. See gateway-operations.md,
-	// "Operator".
 	ErrPrivateKeyEnvRequired = errors.New("private_key_env is required; a raw private_key is not accepted")
 
 	ErrDevshardExists = errors.New("devshard already registered")
 )
 
-// UnsupportedModelError names a model no live escrow serves, listing the ones that are routable so a
-// client can correct the request without a second round trip.
+// UnsupportedModelError lists the routable models so a client can correct the request in one trip.
 type UnsupportedModelError struct {
 	Model     string
 	Supported []string
@@ -51,15 +45,13 @@ func (e *UnsupportedModelError) Error() string {
 	return fmt.Sprintf("unsupported model %q; supported models: %s", e.Model, strings.Join(e.Supported, ", "))
 }
 
-// ModelUnavailableError reports that no escrow is routable at all, which is a gateway that is not
-// ready rather than a request that is wrong.
+// ModelUnavailableError is a gateway that is not ready, not a request that is wrong.
 type ModelUnavailableError struct{ Model string }
 
 func (e *ModelUnavailableError) Error() string {
 	return fmt.Sprintf("model %q is temporarily unavailable: no devshard is currently routable", e.Model)
 }
 
-// AccessDeniedError reports a model whose access tier the presented credential does not satisfy.
 type AccessDeniedError struct {
 	Model   string
 	Message string
@@ -67,7 +59,6 @@ type AccessDeniedError struct {
 
 func (e *AccessDeniedError) Error() string { return e.Message }
 
-// BlockedError reports the chain phase that rejects a request before it is queued.
 type BlockedError struct {
 	Reason     chain.BlockReason
 	Phase      chain.EpochPhase
@@ -112,9 +103,6 @@ func (e *BlockedError) phaseName() string {
 	return "chain admission controls"
 }
 
-// statusForError maps every rejection the request path can produce onto its HTTP status. Cases the
-// packages below already own are delegated to them; the ones this boundary owns are the model,
-// admission and per-escrow-phase rejections nothing under it can express.
 func statusForError(err error) int {
 	if err == nil {
 		return http.StatusOK
@@ -174,15 +162,23 @@ type errorDetail struct {
 	Code    string `json:"code,omitempty"`
 }
 
-// writeError renders a rejection as the JSON envelope, never as the text/plain http.Error gives. See
-// gateway-request-lifecycle.md, "What can end a request, and with what status".
+// writeError renders the JSON envelope; http.Error would send text/plain instead.
 func writeError(w http.ResponseWriter, status int, message string) {
 	writeJSON(w, status, errorEnvelope{Error: errorDetail{Message: message}})
 }
 
-// writeErrorFor is the one place every rejection is written, so Retry-After is set here rather than at
-// each 429's own call site. The value is rounded up: a zero would tell a client to retry immediately,
-// which is the opposite of what a queue timeout means.
+// writeControlFailure is deliberately not writeErrorFor: that one answers 502 for an unrecognised
+// error, which is wrong for a store this process owns.
+func writeControlFailure(w http.ResponseWriter, err error) bool {
+	if err == nil {
+		return false
+	}
+	writeError(w, http.StatusInternalServerError, err.Error())
+	return true
+}
+
+// Retry-After is rounded up: a zero would tell a client to retry immediately, the opposite of what a
+// queue timeout means.
 func writeErrorFor(w http.ResponseWriter, err error) {
 	var throttled *limits.RateLimitError
 	switch {
@@ -208,12 +204,11 @@ func writeJSON(w http.ResponseWriter, status int, payload any) {
 	_, _ = w.Write(append(body, '\n'))
 }
 
-// maxLoggedErrorBytes bounds host-controlled text reaching a log line: a HostApplicationError with no
-// message renders its whole upstream payload. See gateway-operations.md, "The request record".
+// Bounds host-controlled text in a log line: a HostApplicationError with no message renders its whole
+// upstream payload.
 const maxLoggedErrorBytes = 256
 
-// adminFailure logs an admin response the gateway refused or failed to serve. auditAdmin records only
-// the successful path, so without this a failed operator action leaves no trace at all.
+// adminFailure exists because auditAdmin records only the successful path.
 func adminFailure(label string, next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		recorder := &failureRecorder{ResponseWriter: w, status: http.StatusOK}
@@ -230,8 +225,7 @@ func adminFailure(label string, next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-// failureRecorder keeps the status and the start of an error body so the failure log can carry the
-// message the caller was given. Flush is forwarded so a wrapped handler keeps streaming.
+// failureRecorder forwards Flush so a wrapped handler keeps streaming.
 type failureRecorder struct {
 	http.ResponseWriter
 	status int
@@ -258,8 +252,7 @@ func (rec *failureRecorder) Flush() {
 	}
 }
 
-// reason prefers the envelope message; a body truncated at the cap no longer parses, so the raw text
-// is the fallback rather than an empty field.
+// A body truncated at the cap no longer parses, so the raw text is the fallback, not an empty field.
 func (rec *failureRecorder) reason() string {
 	var envelope errorEnvelope
 	if err := json.Unmarshal(rec.body, &envelope); err == nil && envelope.Error.Message != "" {

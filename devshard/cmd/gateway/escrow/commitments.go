@@ -41,7 +41,6 @@ type Manager struct {
 	missing  markSet
 
 	lifecycleMu sync.Mutex
-	stop        chan struct{}
 	done        chan struct{}
 	cancel      context.CancelFunc
 }

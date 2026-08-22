@@ -8,9 +8,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 
 	commonchain "common/chain"
+	"golang.org/x/sync/errgroup"
 
 	"devshard/bridge"
 	"devshard/cmd/gateway/api"
@@ -92,16 +92,15 @@ func publishEscrows(
 	}
 
 	built := make([]error, len(active))
-	semaphore := make(chan struct{}, builders)
-	var building sync.WaitGroup
+	var building errgroup.Group
+	building.SetLimit(builders)
 	for index, record := range active {
-		building.Go(func() {
-			semaphore <- struct{}{}
-			defer func() { <-semaphore }()
+		building.Go(func() error {
 			built[index] = add(ctx, record.EscrowID, record.Model)
+			return nil
 		})
 	}
-	building.Wait()
+	_ = building.Wait()
 
 	for index, err := range built {
 		escrowID := active[index].EscrowID
@@ -244,18 +243,28 @@ func findDevshard(ctx context.Context, records devshardLookup, escrowID string) 
 }
 
 // The bridge is one object for the process: it holds the chain client every session reads escrow state
+// sessionInputs resolves what both session factories need before they diverge on how the session talks
+// to its hosts: the record itself, the key its env var holds, and a storage directory that exists.
+func sessionInputs(ctx context.Context, records devshardLookup, storageDir, escrowID string) (store.DevshardRecord, string, string, error) {
+	record, err := findDevshard(ctx, records, escrowID)
+	if err != nil {
+		return store.DevshardRecord{}, "", "", err
+	}
+	keyHex, err := env.PrivateKey(record.PrivateKeyEnv)
+	if err != nil {
+		return store.DevshardRecord{}, "", "", err
+	}
+	storagePath, err := escrowStorage(storageDir, escrowID)
+	if err != nil {
+		return store.DevshardRecord{}, "", "", err
+	}
+	return record, keyHex, storagePath, nil
+}
+
 // through, so building one per session would open a connection per escrow and lose the client's cache.
 func servingSessions(records devshardLookup, storageDir string, escrowBridge bridge.MainnetBridge, routePrefix string) registry.SessionFactory {
 	return func(ctx context.Context, escrowID string) (registry.EscrowSession, error) {
-		record, err := findDevshard(ctx, records, escrowID)
-		if err != nil {
-			return nil, err
-		}
-		keyHex, err := env.PrivateKey(record.PrivateKeyEnv)
-		if err != nil {
-			return nil, err
-		}
-		storagePath, err := escrowStorage(storageDir, escrowID)
+		record, keyHex, storagePath, err := sessionInputs(ctx, records, storageDir, escrowID)
 		if err != nil {
 			return nil, err
 		}
@@ -284,15 +293,7 @@ func escrowRoutePrefix(record store.DevshardRecord, gatewayPrefix string) string
 
 func readOnlySessions(records devshardLookup, storageDir string) registry.SessionFactory {
 	return func(ctx context.Context, escrowID string) (registry.EscrowSession, error) {
-		record, err := findDevshard(ctx, records, escrowID)
-		if err != nil {
-			return nil, err
-		}
-		keyHex, err := env.PrivateKey(record.PrivateKeyEnv)
-		if err != nil {
-			return nil, err
-		}
-		storagePath, err := escrowStorage(storageDir, escrowID)
+		_, keyHex, storagePath, err := sessionInputs(ctx, records, storageDir, escrowID)
 		if err != nil {
 			return nil, err
 		}

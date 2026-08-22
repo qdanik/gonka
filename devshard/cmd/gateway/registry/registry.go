@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"slices"
-	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -204,11 +203,7 @@ func (r *Registry) closeDraining(entry *escrowEntry) error {
 
 // publishDrainingLocked keeps Snapshot lock-free: a scrape cannot wait on a retirement.
 func (r *Registry) publishDrainingLocked() {
-	entries := make([]*escrowEntry, 0, len(r.draining))
-	for entry := range r.draining {
-		entries = append(entries, entry)
-	}
-	sort.Slice(entries, func(first, second int) bool { return entries[first].id < entries[second].id })
+	entries := drainingInIDOrder(r.draining)
 	r.drainingView.Store(&entries)
 }
 
@@ -292,7 +287,7 @@ func drainingInIDOrder(draining map[*escrowEntry]struct{}) []*escrowEntry {
 	for entry := range draining {
 		entries = append(entries, entry)
 	}
-	sort.SliceStable(entries, func(i, j int) bool { return entries[i].id < entries[j].id })
+	slices.SortFunc(entries, func(first, second *escrowEntry) int { return cmp.Compare(first.id, second.id) })
 	return entries
 }
 

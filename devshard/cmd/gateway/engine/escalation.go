@@ -219,10 +219,7 @@ func (p EscalationPolicy) firstTokenBudget(inputTokens uint64, observed time.Dur
 	if budget < curve {
 		return curve
 	}
-	if p.FirstTokenCeiling > 0 && budget > p.FirstTokenCeiling {
-		return p.FirstTokenCeiling
-	}
-	return budget
+	return p.capToFirstTokenCeiling(budget)
 }
 
 // firstTokenTimeout is the measured first-token fit over prompt size, floored and capped: the curve is
@@ -232,6 +229,12 @@ func (p EscalationPolicy) firstTokenTimeout(inputTokens uint64) time.Duration {
 	tokens := float64(inputTokens)
 	seconds := firstTokenBaseSeconds + firstTokenPerTokenSeconds*tokens + firstTokenQuadraticSeconds*tokens*tokens
 	wait := max(p.FirstTokenFloor, time.Duration(seconds*float64(time.Second)))
+	return p.capToFirstTokenCeiling(wait)
+}
+
+// capToFirstTokenCeiling keeps the curve under the backstop that cancels the attempt; a zero ceiling
+// means the operator removed it.
+func (p EscalationPolicy) capToFirstTokenCeiling(wait time.Duration) time.Duration {
 	if p.FirstTokenCeiling > 0 && wait > p.FirstTokenCeiling {
 		return p.FirstTokenCeiling
 	}

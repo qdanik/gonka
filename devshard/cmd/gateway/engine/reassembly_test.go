@@ -56,6 +56,7 @@ func TestClassifierMapsOneChunkToItsFacts(t *testing.T) {
 				ErrorMessage:      vllmContextTotalMessage,
 				ErrorPayload:      `{"error":{"code":400,"message":"` + vllmContextTotalMessage + `","type":"BadRequestError"}}`,
 				CapabilityRefused: true,
+				Capability:        CapabilitySignal{ContextLimit: 40960, ContextRequested: 41200},
 			},
 		},
 		{
@@ -68,6 +69,7 @@ func TestClassifierMapsOneChunkToItsFacts(t *testing.T) {
 				ErrorMessage:      filters.ToolChoiceUnsupportedMessage,
 				ErrorPayload:      `{"object":"error","message":"` + filters.ToolChoiceUnsupportedMessage + `","type":"BadRequestError"}`,
 				CapabilityRefused: true,
+				Capability:        CapabilitySignal{ToolsUnsupported: true},
 			},
 		},
 		{

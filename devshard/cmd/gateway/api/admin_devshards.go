@@ -21,8 +21,7 @@ func (s *Server) handleAdminDevshards(w http.ResponseWriter, r *http.Request) {
 	}
 	if r.Method == http.MethodGet {
 		records, err := s.control.ListDevshards(r.Context())
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
+		if writeControlFailure(w, err) {
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"devshards": records})
@@ -78,8 +77,7 @@ func (s *Server) handleAdminDevshardDelete(w http.ResponseWriter, r *http.Reques
 	}
 	escrowID := r.PathValue("id")
 	record, found, err := s.devshardRecord(r, escrowID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+	if writeControlFailure(w, err) {
 		return
 	}
 	if !found {
@@ -90,12 +88,10 @@ func (s *Server) handleAdminDevshardDelete(w http.ResponseWriter, r *http.Reques
 		writeErrorFor(w, fmt.Errorf("%w: %s", escrow.ErrDevshardBusy, escrowID))
 		return
 	}
-	if err := s.control.DeleteDevshard(r.Context(), escrowID); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+	if writeControlFailure(w, s.control.DeleteDevshard(r.Context(), escrowID)) {
 		return
 	}
-	if err := removeDevshardStorage(DevshardStoragePath(s.storageDir, escrowID), s.storageDir); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+	if writeControlFailure(w, removeDevshardStorage(DevshardStoragePath(s.storageDir, escrowID), s.storageDir)) {
 		return
 	}
 	auditAdmin("escrow deleted with its session storage", "escrow", escrowID, "model", record.Model)
@@ -113,8 +109,7 @@ func (s *Server) lifecycle(w http.ResponseWriter, r *http.Request, action string
 	}
 	escrowID := r.PathValue("id")
 	_, found, err := s.devshardRecord(r, escrowID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+	if writeControlFailure(w, err) {
 		return
 	}
 	if !found {
@@ -134,8 +129,7 @@ func (s *Server) handleAdminDevshardSettle(w http.ResponseWriter, r *http.Reques
 	}
 	escrowID := r.PathValue("id")
 	_, found, err := s.devshardRecord(r, escrowID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+	if writeControlFailure(w, err) {
 		return
 	}
 	if !found {
@@ -196,8 +190,7 @@ func (s *Server) handleDevshardFinalize(w http.ResponseWriter, r *http.Request) 
 		writeErrorFor(w, fmt.Errorf("%w: %s", escrow.ErrDevshardBusy, escrowID))
 		return
 	}
-	if err := session.Finalize(r.Context()); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+	if writeControlFailure(w, session.Finalize(r.Context())) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"escrow_id": escrowID, "finalized": true})

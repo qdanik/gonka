@@ -185,28 +185,34 @@ func (t *Tracker) Snapshot() []HostState {
 	now := t.now()
 	ejected := t.ejectedView.Load()
 
+	// One pass under one lock: reading each host's window through TimePerOutputTokenP75 would take the
+	// lock again per host and search the map a second time, for a report that wants a single moment.
+	type hostDecode struct {
+		key    hostKey
+		decode time.Duration
+	}
 	t.mu.Lock()
-	keys := make([]hostKey, 0, len(t.hosts))
-	for key := range t.hosts {
-		keys = append(keys, key)
+	decoded := make([]hostDecode, 0, len(t.hosts))
+	for key, host := range t.hosts {
+		decode, _ := host.decode.p75(latencyWindowMinimum)
+		decoded = append(decoded, hostDecode{key: key, decode: decode})
 	}
 	t.mu.Unlock()
 
-	slices.SortFunc(keys, func(first, second hostKey) int {
-		if participants := strings.Compare(first.participant, second.participant); participants != 0 {
+	slices.SortFunc(decoded, func(first, second hostDecode) int {
+		if participants := strings.Compare(first.key.participant, second.key.participant); participants != 0 {
 			return participants
 		}
-		return strings.Compare(first.model, second.model)
+		return strings.Compare(first.key.model, second.key.model)
 	})
-	states := make([]HostState, 0, len(keys))
-	for _, key := range keys {
-		decode, _ := t.TimePerOutputTokenP75(key.participant, key.model)
+	states := make([]HostState, 0, len(decoded))
+	for _, host := range decoded {
 		states = append(states, HostState{
-			Participant:        key.participant,
-			Model:              key.model,
-			Ejected:            ejected != nil && now.Before((*ejected)[key]),
-			Inflight:           t.inflight.count(key.participant),
-			TimePerOutputToken: decode,
+			Participant:        host.key.participant,
+			Model:              host.key.model,
+			Ejected:            ejected != nil && now.Before((*ejected)[host.key]),
+			Inflight:           t.inflight.count(host.key.participant),
+			TimePerOutputToken: host.decode,
 		})
 	}
 	return states

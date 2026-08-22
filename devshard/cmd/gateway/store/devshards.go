@@ -39,8 +39,10 @@ type DevshardRecord struct {
 	RoutePrefix       string
 }
 
-// UpsertDevshard replaces every field of an existing row except settlement_pending, so an unrelated
-// upsert never silently clears a queued settlement; only SetDevshardSettlementPending moves it.
+// UpsertDevshard replaces every field of an existing row except two. settlement_pending is left alone
+// so an unrelated upsert never clears a queued settlement; only SetDevshardSettlementPending moves it.
+// route_prefix is left alone because a host binds an escrow to the first version that reaches it and
+// refuses every other one for good, so the version an escrow was created under must never change.
 func (s *Store) UpsertDevshard(ctx context.Context, record DevshardRecord) error {
 	_, err := s.db.ExecContext(ctx, upsertDevshardStatement,
 		record.EscrowID, record.PrivateKeyEnv, record.Model, record.Active,

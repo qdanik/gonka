@@ -1,9 +1,10 @@
 package limits
 
 import (
+	"cmp"
 	"math"
 	"math/rand"
-	"sort"
+	"slices"
 	"sync"
 	"time"
 )
@@ -180,11 +181,8 @@ func (l *ParticipantLimiter) Snapshot() []HostWindow {
 			Available:   wouldAdmitLocked(state, now),
 		})
 	}
-	sort.Slice(windows, func(first, second int) bool {
-		if windows[first].Participant != windows[second].Participant {
-			return windows[first].Participant < windows[second].Participant
-		}
-		return windows[first].Model < windows[second].Model
+	slices.SortFunc(windows, func(first, second HostWindow) int {
+		return cmp.Or(cmp.Compare(first.Participant, second.Participant), cmp.Compare(first.Model, second.Model))
 	})
 	return windows
 }
@@ -251,7 +249,7 @@ func (l *ParticipantLimiter) OnResult(participant, model string, verdict Verdict
 		// taken and nothing can undo it, which is what makes this independent of who is called first.
 		if float64(state.peakInflight) >= state.window/2 {
 			state.peakInflight = state.inflight
-			state.window = math.Min(state.window+1, float64(l.cfg.Max))
+			state.window = min(state.window+1, float64(l.cfg.Max))
 		}
 		state.consecutiveTransportFail = 0
 		if state.halfOpen {
@@ -262,7 +260,7 @@ func (l *ParticipantLimiter) OnResult(participant, model string, verdict Verdict
 			}
 		}
 	case Overload:
-		state.window = math.Max(state.window*0.5, 1)
+		state.window = max(state.window*0.5, 1)
 		state.consecutiveTransportFail = 0
 	case TransportFault:
 		state.consecutiveTransportFail++

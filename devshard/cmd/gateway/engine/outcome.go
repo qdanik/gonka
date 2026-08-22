@@ -156,7 +156,6 @@ type AttemptOutcome struct {
 	StreamChunks          int64
 	OutputBytes           int64
 	UsageCompletionTokens int64
-	HostCreated           int64
 	MaxChunkGap           time.Duration
 	MaxChunkGapAt         int64
 	MeanChunkGap          time.Duration

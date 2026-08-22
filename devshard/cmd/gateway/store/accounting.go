@@ -192,10 +192,10 @@ func (l *Ledger) insert(record RequestRecord) error {
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(request_id) DO NOTHING`,
 		record.RequestID, record.EscrowID, record.Model, string(record.Outcome), record.Decision,
-		boolToInt(record.Stream),
+		record.Stream,
 		record.WinnerNonce, record.WinnerParticipant, record.WinnerHost, record.WinnerHostIdx,
 		record.Attempts, record.InputTokens, record.WinnerOutputTokens, record.TotalOutputTokens,
-		boolToInt(record.EscrowMissing), boolToInt(record.BalanceExhausted),
+		record.EscrowMissing, record.BalanceExhausted,
 		FormatTime(record.StartedAt), FormatTime(record.CompletedAt),
 		record.FirstTokenMS, record.DurationMS, FormatTime(record.RecordedAt))
 	return err
@@ -221,7 +221,6 @@ func (l *Ledger) sweep(now time.Time) {
 func (s *Store) FindRequest(ctx context.Context, requestID string) (RequestRecord, bool, error) {
 	var record RequestRecord
 	var outcome, startedAt, completedAt, recordedAt string
-	var stream, escrowMissing, balanceExhausted int
 	err := s.db.QueryRowContext(ctx, `
 		SELECT request_id, escrow_id, model, outcome, decision, stream,
 			winner_nonce, winner_participant, winner_host, winner_host_idx,
@@ -229,10 +228,10 @@ func (s *Store) FindRequest(ctx context.Context, requestID string) (RequestRecor
 			escrow_missing, balance_exhausted,
 			started_at, completed_at, first_token_ms, duration_ms, recorded_at
 		FROM request_accounting WHERE request_id = ?`, requestID).
-		Scan(&record.RequestID, &record.EscrowID, &record.Model, &outcome, &record.Decision, &stream,
+		Scan(&record.RequestID, &record.EscrowID, &record.Model, &outcome, &record.Decision, &record.Stream,
 			&record.WinnerNonce, &record.WinnerParticipant, &record.WinnerHost, &record.WinnerHostIdx,
 			&record.Attempts, &record.InputTokens, &record.WinnerOutputTokens, &record.TotalOutputTokens,
-			&escrowMissing, &balanceExhausted,
+			&record.EscrowMissing, &record.BalanceExhausted,
 			&startedAt, &completedAt, &record.FirstTokenMS, &record.DurationMS, &recordedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return RequestRecord{}, false, nil
@@ -241,9 +240,6 @@ func (s *Store) FindRequest(ctx context.Context, requestID string) (RequestRecor
 		return RequestRecord{}, false, fmt.Errorf("loading request %s: %w", requestID, err)
 	}
 	record.Outcome = RequestOutcome(outcome)
-	record.Stream = stream != 0
-	record.EscrowMissing = escrowMissing != 0
-	record.BalanceExhausted = balanceExhausted != 0
 	timestamps := []struct {
 		target *time.Time
 		raw    string
@@ -279,11 +275,4 @@ func parseTime(raw string) (time.Time, error) {
 		return time.Time{}, nil
 	}
 	return time.Parse(time.RFC3339Nano, raw)
-}
-
-func boolToInt(value bool) int {
-	if value {
-		return 1
-	}
-	return 0
 }

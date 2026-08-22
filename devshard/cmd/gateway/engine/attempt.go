@@ -52,10 +52,10 @@ type chunkFacts struct {
 	ErrorMessage      string
 	ErrorPayload      string
 	CapabilityRefused bool
+	Capability        CapabilitySignal
 
 	UsageCompletionTokens int64
 	TokensBurned          bool
-	Created               int64
 }
 
 // streamClassifier reassembles one attempt's SSE bytes and reports what they contained. Release frees
@@ -129,7 +129,6 @@ type attemptState struct {
 	droppedEvents int64
 
 	usageCompletionTokens int64
-	hostCreated           int64
 	tokensBurned          bool
 	contentSource         string
 	capability            CapabilitySignal
@@ -260,12 +259,10 @@ func (s *attemptState) record(facts chunkFacts) {
 		s.errorMessage = facts.ErrorMessage
 		s.errorPayload = facts.ErrorPayload
 		s.capabilityRefused = facts.CapabilityRefused
+		s.capability = facts.Capability
 	}
 	if facts.UsageCompletionTokens > 0 {
 		s.usageCompletionTokens = facts.UsageCompletionTokens
-	}
-	if facts.Created > 0 && s.hostCreated == 0 {
-		s.hostCreated = facts.Created
 	}
 	s.tokensBurned = s.tokensBurned || facts.TokensBurned
 }
@@ -360,7 +357,6 @@ func (s *attemptState) outcome(spec AttemptSpec) *AttemptOutcome {
 		ContentChunks:         s.contentChunks,
 		StreamChunks:          s.streamChunks,
 		UsageCompletionTokens: s.usageCompletionTokens,
-		HostCreated:           s.hostCreated,
 		OutputBytes:           s.outputBytes,
 		MaxChunkGap:           s.maxChunkGap,
 		MaxChunkGapAt:         s.maxGapChunk,

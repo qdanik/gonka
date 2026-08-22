@@ -56,12 +56,7 @@ func requireStringElements() RuleFunc {
 	return requireListElements(isJSONString, "must be a string")
 }
 
-func requireUintElements() RuleFunc {
-	return requireListElements(isJSONUint, "must be an integer token id")
-}
-
 func isJSONString(value any) bool { _, ok := value.(string); return ok }
-func isJSONUint(value any) bool   { _, ok := devshard.JSONNumericUint64(value); return ok }
 
 // dropBlankStringListElements removes whitespace-only string entries from ctx.Param;
 // non-string entries pass through unchanged. Drops the field when nothing survives.

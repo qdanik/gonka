@@ -90,38 +90,6 @@ func TestArraysRequireStringElements(t *testing.T) {
 	}
 }
 
-func TestArraysRequireUintElements(t *testing.T) {
-	const param = "stop_token_ids"
-	tests := []struct {
-		name    string
-		body    string
-		wantErr string
-	}{
-		{"all uint elements accepted", `{"stop_token_ids":[1,2,3]}`, ""},
-		{"string element rejected with index", `{"stop_token_ids":[1,"two",3]}`, "stop_token_ids[1]: must be an integer token id"},
-		{"negative element rejected", `{"stop_token_ids":[-1]}`, "stop_token_ids[0]: must be an integer token id"},
-		{"absent passes through", `{}`, ""},
-	}
-	for _, testCase := range tests {
-		t.Run(testCase.name, func(t *testing.T) {
-			document := parseTestDocument(t, testCase.body)
-			err := requireUintElements()(RuleContext{Document: document, Param: param})
-			if testCase.wantErr == "" {
-				if err != nil {
-					t.Fatalf("requireUintElements() = %v, want nil", err)
-				}
-				return
-			}
-			if err == nil {
-				t.Fatal("requireUintElements() = nil, want error")
-			}
-			if err.Error() != testCase.wantErr {
-				t.Errorf("requireUintElements() error = %q, want %q", err.Error(), testCase.wantErr)
-			}
-		})
-	}
-}
-
 func TestArraysDropBlankStringListElements(t *testing.T) {
 	const param = "bad_words"
 	tests := []struct {

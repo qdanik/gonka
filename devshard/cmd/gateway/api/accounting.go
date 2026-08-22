@@ -105,8 +105,7 @@ func (s *Server) handleRequestAccounting(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	record, found, err := s.accounting.Find(r.Context(), requestID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+	if writeControlFailure(w, err) {
 		return
 	}
 	if !found {

@@ -229,13 +229,11 @@ func stripUsage(payload []byte) (rewritten []byte, emptied, changed bool) {
 	if onlyHousekeepingLeft(decoded) {
 		return nil, true, true
 	}
-	var encoded bytes.Buffer
-	encoder := stdjson.NewEncoder(&encoded)
-	encoder.SetEscapeHTML(false) // the default inflates every < > & in generated content to six bytes
-	if err := encoder.Encode(decoded); err != nil {
+	encoded, err := encodeCompact(decoded)
+	if err != nil {
 		return payload, false, false
 	}
-	return bytes.TrimRight(encoded.Bytes(), "\n"), false, true
+	return encoded, false, true
 }
 
 // eventPayload joins the event's data lines the way a client does -- with a newline, per the SSE spec
@@ -385,11 +383,21 @@ func completionAsChunks(payload []byte) ([]byte, bool) {
 	return events.Bytes(), true
 }
 
-func emitChunk(events *bytes.Buffer, completion sseCompletion, choices []sseChunkChoice, usage json.RawMessage) {
+// encodeCompact encodes without escaping HTML and drops the newline Encode appends: the default would
+// inflate every < > & the model generated to six bytes, and the trailing newline is not part of the
+// value. Encode rather than Marshal, because only the encoder can turn the escaping off.
+func encodeCompact(value any) ([]byte, error) {
 	var encoded bytes.Buffer
 	encoder := stdjson.NewEncoder(&encoded)
-	encoder.SetEscapeHTML(false) // the default inflates every < > & in generated content to six bytes
-	if err := encoder.Encode(sseChunk{
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(value); err != nil {
+		return nil, err
+	}
+	return bytes.TrimRight(encoded.Bytes(), "\n"), nil
+}
+
+func emitChunk(events *bytes.Buffer, completion sseCompletion, choices []sseChunkChoice, usage json.RawMessage) {
+	encoded, err := encodeCompact(sseChunk{
 		ID:                rawOr(completion.ID, `""`),
 		Object:            chunkObject,
 		Created:           rawOr(completion.Created, "0"),
@@ -397,11 +405,12 @@ func emitChunk(events *bytes.Buffer, completion sseCompletion, choices []sseChun
 		SystemFingerprint: completion.SystemFingerprint,
 		Choices:           choices,
 		Usage:             usage,
-	}); err != nil {
+	})
+	if err != nil {
 		return
 	}
 	events.Write(sseDataPrefix)
-	events.Write(bytes.TrimRight(encoded.Bytes(), "\n"))
+	events.Write(encoded)
 	events.Write(sseEventSeparator)
 }
 

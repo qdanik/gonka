@@ -2,7 +2,6 @@ package registry
 
 import (
 	"slices"
-	"sort"
 	"sync"
 
 	"devshard/cmd/gateway/scheduler"
@@ -97,7 +96,7 @@ func (r *Registry) Models() []string {
 			models = append(models, model)
 		}
 	}
-	sort.Strings(models)
+	slices.Sort(models)
 	return models
 }
 func (r *Registry) Serves(model string) bool {

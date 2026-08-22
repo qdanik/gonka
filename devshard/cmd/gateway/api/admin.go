@@ -15,18 +15,15 @@ func (s *Server) handleAdminState(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	records, err := s.control.ListDevshards(r.Context())
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+	if writeControlFailure(w, err) {
 		return
 	}
 	statuses, err := s.control.LoadRotationStatuses(r.Context())
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+	if writeControlFailure(w, err) {
 		return
 	}
 	overrides, err := s.control.LoadOverrides(r.Context())
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+	if writeControlFailure(w, err) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -44,8 +41,7 @@ func (s *Server) handleAdminSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	if r.Method == http.MethodGet {
 		overrides, err := s.control.LoadOverrides(r.Context())
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
+		if writeControlFailure(w, err) {
 			return
 		}
 		writeJSON(w, http.StatusOK, overrides)
@@ -126,8 +122,7 @@ func (s *Server) handleAdminSuspiciousHosts(w http.ResponseWriter, r *http.Reque
 	if r.Method == http.MethodDelete {
 		apply, action = s.suspicious.Remove, "participant removed from the never-trust list"
 	}
-	if err := apply(r.Context(), participantKey); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+	if writeControlFailure(w, apply(r.Context(), participantKey)) {
 		return
 	}
 	auditAdmin(action, "participant", participantKey)
@@ -173,8 +168,7 @@ func (s *Server) handleDebugRotation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	statuses, err := s.control.LoadRotationStatuses(r.Context())
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+	if writeControlFailure(w, err) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"rotation": statuses})

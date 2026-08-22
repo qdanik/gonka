@@ -121,36 +121,6 @@ func decodeUint64Field(document *Document, name string, dst *uint64) error {
 	return nil
 }
 
-// clampUintToField clamps ctx.Param down to document[fieldName] when both parse as uint64
-// and fieldName's value is nonzero; a missing, zero, or non-numeric fieldName disables the clamp.
-func clampUintToField(fieldName string) RuleFunc {
-	return func(ctx RuleContext) error {
-		value, ok := ctx.Document.Uint(ctx.Param)
-		if !ok {
-			return nil
-		}
-		limit, ok := ctx.Document.Uint(fieldName)
-		if !ok || limit == 0 {
-			return nil
-		}
-		if value > limit {
-			ctx.Document.Set(ctx.Param, limit)
-		}
-		return nil
-	}
-}
-
-// stripWhenFieldPresent deletes ctx.Param whenever fieldName is present, regardless of
-// fieldName's own value or validity.
-func stripWhenFieldPresent(fieldName string) RuleFunc {
-	return func(ctx RuleContext) error {
-		if ctx.Document.Has(fieldName) {
-			ctx.Document.Delete(ctx.Param)
-		}
-		return nil
-	}
-}
-
 // greedySamplingForceOne coerces n to 1 when temperature reads as exactly 0; must run before
 // temperature's own clamp rule. See gateway-request-filtering.md, "Registration order is semantics".
 func greedySamplingForceOne() RuleFunc {

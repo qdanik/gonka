@@ -30,13 +30,7 @@ func (t *growingText) String() string { return t.parts.String() }
 // MarshalJSON encodes rather than Marshals: Marshal always escapes HTML, which would inflate every
 // < > & the model generated to six bytes, the very thing encodeCompletion turns off.
 func (t *growingText) MarshalJSON() ([]byte, error) {
-	var encoded bytes.Buffer
-	encoder := stdjson.NewEncoder(&encoded)
-	encoder.SetEscapeHTML(false)
-	if err := encoder.Encode(t.parts.String()); err != nil {
-		return nil, err
-	}
-	return bytes.TrimRight(encoded.Bytes(), "\n"), nil
+	return encodeCompact(t.parts.String())
 }
 
 // AssembleSSEBody merges the streamed chunks into the single JSON body a non-streaming caller
@@ -139,13 +133,11 @@ func encodeCompletion(merged map[string]any) []byte {
 		}
 		return leftKnown && left < right
 	})
-	var encoded bytes.Buffer
-	encoder := stdjson.NewEncoder(&encoded)
-	encoder.SetEscapeHTML(false) // the default inflates every < > & in generated content to six bytes
-	if err := encoder.Encode(merged); err != nil {
+	encoded, err := encodeCompact(merged)
+	if err != nil {
 		return NoResponseDataBody
 	}
-	return bytes.TrimRight(encoded.Bytes(), "\n")
+	return encoded
 }
 
 // mergeChunk folds one chunk in. Everything outside choices is a restated header, so it replaces.

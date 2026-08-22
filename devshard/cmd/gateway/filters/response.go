@@ -141,13 +141,11 @@ func stripInternalFields(payload []byte, intent LogprobIntent) ([]byte, stripOut
 	if !changed && !rewritten {
 		return nil, stripUnchanged
 	}
-	var encoded bytes.Buffer
-	encoder := stdjson.NewEncoder(&encoded)
-	encoder.SetEscapeHTML(false) // the default inflates every < > & in generated content to six bytes
-	if err := encoder.Encode(decoded); err != nil {
+	encoded, err := encodeCompact(decoded)
+	if err != nil {
 		return nil, stripMalformed
 	}
-	return bytes.TrimRight(encoded.Bytes(), "\n"), stripRewritten
+	return encoded, stripRewritten
 }
 
 // deleteFields removes the named keys at any depth, reporting whether anything went.

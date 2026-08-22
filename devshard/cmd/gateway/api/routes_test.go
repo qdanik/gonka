@@ -411,7 +411,7 @@ func TestHostClockOffsetReadsTheWinnersStamp(t *testing.T) {
 		{
 			name: "a completion stamp is not a receipt stamp",
 			outcome: engine.RaceOutcome{WinnerNonce: 7, Attempts: []engine.AttemptOutcome{
-				{Nonce: 7, SendTime: dispatchedAt, ReceiptTime: confirmedAt, HostCreated: 1786114999},
+				{Nonce: 7, SendTime: dispatchedAt, ReceiptTime: confirmedAt},
 			}},
 		},
 		{

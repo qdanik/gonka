@@ -3,8 +3,6 @@ package accounting
 import (
 	"context"
 	"errors"
-	"maps"
-	"slices"
 	"time"
 
 	"devshard/logging"
@@ -127,8 +125,7 @@ func (s *Service) Close() error {
 func (b *Book) PruneBefore(epoch uint64) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	for _, escrowID := range slices.Sorted(maps.Keys(b.escrows)) {
-		escrow := b.escrows[escrowID]
+	for escrowID, escrow := range b.escrows {
 		if escrow.retired && escrow.metadata.CreationEpoch < epoch {
 			delete(b.escrows, escrowID)
 		}

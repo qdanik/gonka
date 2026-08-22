@@ -75,11 +75,7 @@ func (p deadlinePlan) escalation(now time.Time) (ArmedEscalation, bool) {
 }
 func (p deadlinePlan) hardTimeout() time.Time {
 	var earliest time.Time
-	consider := func(at time.Time) {
-		if earliest.IsZero() || at.Before(earliest) {
-			earliest = at
-		}
-	}
+	consider := func(at time.Time) { earliest = earlierSet(earliest, at) }
 	if p.detached() {
 		consider(p.Drain)
 	}
@@ -105,10 +101,14 @@ func (p deadlinePlan) stall() time.Time {
 			attempt.FirstContent.IsZero() || attempt.LastChunk.IsZero() {
 			continue
 		}
-		at := attempt.LastChunk.Add(p.Policy.InterChunkStall)
-		if earliest.IsZero() || at.Before(earliest) {
-			earliest = at
-		}
+		earliest = earlierSet(earliest, attempt.LastChunk.Add(p.Policy.InterChunkStall))
+	}
+	return earliest
+}
+
+func earlierSet(earliest, candidate time.Time) time.Time {
+	if earliest.IsZero() || candidate.Before(earliest) {
+		return candidate
 	}
 	return earliest
 }
