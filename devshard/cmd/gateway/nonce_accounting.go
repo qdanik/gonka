@@ -244,17 +244,19 @@ func (n *nonceAccounting) recordRace(outcome engine.RaceOutcome) {
 	attempts := make([]accounting.Attempt, 0, len(outcome.Attempts))
 	for _, attempt := range outcome.Attempts {
 		attempts = append(attempts, accounting.Attempt{
-			Nonce:        attempt.Nonce,
-			Sent:         !attempt.SendTime.IsZero(),
-			Acknowledged: !attempt.ReceiptTime.IsZero(),
-			Finished:     attempt.NonceFinished,
-			Usage:        usageOf(outcome, attempt),
-			Terminal:     attempt.Terminal.String(),
-			Phase:        phase,
-			SlowReceipt:  slowReceipt(attempt),
-			SlowChunk:    attempt.MaxChunkGap > accounting.SlowChunkGap,
-			ClockDrifted: clockDrifted(attempt),
-			SlowDecode:   engine.TimePerOutputToken(attempt) > accounting.SlowDecode,
+			Nonce:           attempt.Nonce,
+			RequestID:       outcome.RequestID,
+			Sent:            !attempt.SendTime.IsZero(),
+			Acknowledged:    !attempt.ReceiptTime.IsZero(),
+			Finished:        attempt.NonceFinished,
+			Usage:           usageOf(outcome, attempt),
+			Terminal:        attempt.Terminal.String(),
+			Phase:           phase,
+			SlowReceipt:     slowReceipt(attempt),
+			SlowChunk:       attempt.MaxChunkGap > accounting.SlowChunkGap,
+			ClockDrifted:    clockDrifted(attempt),
+			SlowDecode:      engine.TimePerOutputToken(attempt) > accounting.SlowDecode,
+			LogprobsDecoded: attempt.LogprobsDecoded,
 		})
 	}
 	n.report(n.service.Book.RecordRace(outcome.EscrowID, attempts))

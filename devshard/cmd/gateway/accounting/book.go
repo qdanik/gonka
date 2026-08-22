@@ -35,6 +35,7 @@ type escrowLedger struct {
 }
 
 type nonceRecord struct {
+	requestID    string
 	sent         bool
 	finished     bool
 	acknowledged bool
@@ -45,12 +46,13 @@ type nonceRecord struct {
 	timeoutAction string
 	timeoutReason string
 
-	terminal     string
-	phase        Phase
-	slowReceipt  bool
-	slowChunk    bool
-	slowDecode   bool
-	clockDrifted bool
+	terminal        string
+	phase           Phase
+	slowReceipt     bool
+	slowChunk       bool
+	slowDecode      bool
+	clockDrifted    bool
+	logprobsDecoded bool
 
 	counted *CounterKey
 }
@@ -174,6 +176,7 @@ func (b *Book) RecordRace(escrowID string, attempts []Attempt) error {
 	return b.withEscrow(escrowID, func(escrow *escrowLedger) error {
 		for _, attempt := range attempts {
 			record := escrow.record(attempt.Nonce)
+			record.requestID = attempt.RequestID
 			record.sent = attempt.Sent
 			record.finished = attempt.Finished
 			record.acknowledged = attempt.Acknowledged
@@ -184,6 +187,7 @@ func (b *Book) RecordRace(escrowID string, attempts []Attempt) error {
 			record.slowChunk = attempt.SlowChunk
 			record.clockDrifted = attempt.ClockDrifted
 			record.slowDecode = attempt.SlowDecode
+			record.logprobsDecoded = attempt.LogprobsDecoded
 			escrow.reclassify(attempt.Nonce, record)
 		}
 		return nil
@@ -342,6 +346,7 @@ func raceFacts(key CounterKey, record *nonceRecord) CounterKey {
 	key.SlowChunk = record.slowChunk
 	key.ClockDrifted = record.clockDrifted
 	key.SlowDecode = record.slowDecode
+	key.LogprobsDecoded = record.logprobsDecoded
 	return key
 }
 

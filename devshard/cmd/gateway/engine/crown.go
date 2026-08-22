@@ -46,7 +46,7 @@ func (c *raceCoordinator) crownWinner(attempt *liveAttempt, reason string) {
 	c.winner = attempt
 	logging.Info("attempt crowned",
 		logkey.Request, c.request.RequestID, logkey.Escrow, c.escrowID, logkey.Nonce, attempt.nonce,
-		logkey.Participant, attempt.participant, logkey.Reason, reason)
+		logkey.Host, logkey.ShortHost(attempt.participant), logkey.Reason, reason)
 }
 
 // rivalPossible reports an attempt other than the held claimants that could still be crowned. See

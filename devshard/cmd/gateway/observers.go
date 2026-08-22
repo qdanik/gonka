@@ -22,7 +22,7 @@ type tracedDispatches struct {
 // labelled: a counter keyed by it would grow without end.
 func (t tracedDispatches) GhostBurned(escrowID string, nonce uint64, participant, reason string) {
 	logging.Warn("nonce burned for nobody",
-		logkey.Escrow, escrowID, logkey.Nonce, nonce, logkey.Host, participant, logkey.Reason, reason)
+		logkey.Escrow, escrowID, logkey.Nonce, nonce, logkey.Host, logkey.ShortHost(participant), logkey.Reason, reason)
 	t.recorder.GhostBurned(escrowID, participant, reason)
 	t.ledger.recordGhost(escrowID, nonce, reason)
 }

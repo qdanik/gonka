@@ -27,7 +27,8 @@ func declared(t *testing.T) map[string]string {
 		}
 		for _, spec := range general.Specs {
 			value := spec.(*ast.ValueSpec)
-			if literal, ok := value.Values[0].(*ast.BasicLit); ok {
+			// Only string constants are keys; the package may hold a numeric one beside them.
+			if literal, ok := value.Values[0].(*ast.BasicLit); ok && literal.Kind == token.STRING {
 				unquoted, _ := strconv.Unquote(literal.Value)
 				names[unquoted] = value.Names[0].Name
 			}

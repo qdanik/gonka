@@ -30,7 +30,7 @@ func (c *raceCoordinator) apply(event AttemptEvent) {
 	}
 }
 
-// attemptDeliveryFields reads the same for a winner and a loser; every duration is from the dispatch.
+// Every duration is measured from the dispatch, for a winner and a loser alike.
 func attemptDeliveryFields(outcome AttemptOutcome) []any {
 	fields := []any{
 		logkey.ContentChunks, outcome.ContentChunks,
@@ -76,14 +76,12 @@ func (c *raceCoordinator) complete(attempt *liveAttempt, event AttemptEvent) {
 	if attempt.outcome == nil {
 		logging.Info("attempt finished with no outcome",
 			logkey.Request, c.request.RequestID, logkey.Escrow, c.escrowID, logkey.Nonce, attempt.nonce,
-			logkey.Participant, attempt.participant, logkey.NonceFinished, attempt.nonceFinished)
+			logkey.Host, logkey.ShortHost(attempt.participant), logkey.NonceFinished, attempt.nonceFinished)
 		return
 	}
-	// The phase abort is the difference between a host that answered nothing and one the PoC transition
-	// cut off, and every other reader already tells them apart. See gateway-capacity-and-health.md.
 	fields := []any{
 		logkey.Request, c.request.RequestID, logkey.Escrow, c.escrowID, logkey.Nonce, attempt.nonce,
-		logkey.Participant, attempt.participant,
+		logkey.Host, logkey.ShortHost(attempt.participant),
 		logkey.Terminal, c.racedTerminal(attempt, *attempt.outcome).String(),
 		logkey.NonceFinished, attempt.nonceFinished, logkey.StateDivergent, attempt.outcome.StateDivergent,
 	}
@@ -100,15 +98,13 @@ func (c *raceCoordinator) complete(attempt *liveAttempt, event AttemptEvent) {
 	if attempt.outcome.StateDivergent {
 		logging.Warn("host blocked for state divergence",
 			logkey.Request, c.request.RequestID, logkey.Escrow, c.escrowID,
-			logkey.Nonce, attempt.nonce, logkey.Participant, attempt.participant)
+			logkey.Nonce, attempt.nonce, logkey.Host, logkey.ShortHost(attempt.participant))
 		c.deps.Picker.BlockHost(c.escrowID, attempt.participant)
 		c.exclude(attempt.participant)
 	}
 }
 
-// unreportedOutcome stands in for an attempt whose goroutine never reported: the race stopped listening
-// before it finished. Dropping it left a committed nonce with no log line, no ledger row and no timeout
-// vote -- a nonce spent on chain that nothing downstream could see. See gateway-invariants.md, "1".
+// Without this an attempt the race stopped listening to leaves a spent nonce nothing downstream can see.
 func (c *raceCoordinator) unreportedOutcome(attempt *liveAttempt) AttemptOutcome {
 	hostLabel := ""
 	if c.target != nil {
@@ -125,8 +121,7 @@ func (c *raceCoordinator) unreportedOutcome(attempt *liveAttempt) AttemptOutcome
 	}
 }
 
-// racedTerminal is the attempt's terminal as the race sees it: an attempt goroutine knows only its own
-// cancellation, not the crown, the silence or the backstop. Every reader promotes through here.
+// An attempt goroutine knows only its own cancellation, not the crown, the silence or the backstop.
 func (c *raceCoordinator) racedTerminal(attempt *liveAttempt, outcome AttemptOutcome) Terminal {
 	terminal := outcome.Terminal
 	if terminal == TerminalClientCancelled && attempt.backstopped {
@@ -147,7 +142,6 @@ func (c *raceCoordinator) retire(attempt *liveAttempt) {
 	c.deps.Perf.Release(attempt.participant)
 }
 
-// report closes the byte path's escape hatch and hands the race's one outcome to its consumers.
 func (c *raceCoordinator) report() RaceOutcome {
 	close(c.done)
 	outcome := c.outcome()
@@ -200,8 +194,7 @@ func pocBypassActive(snapshot chain.PhaseSnapshot, modes config.Modes) bool {
 	return modes.PoCMode == config.PoCModeRelaxed && snapshot.RequestsBlocked
 }
 
-// pocGenerating is the narrower phase that takes a host away from inference mid-attempt. Only the
-// bypass has an attempt running inside it, so strict mode never reports it.
+// The narrower phase that takes a host away mid-attempt; only the bypass has an attempt running in it.
 func pocGenerating(snapshot chain.PhaseSnapshot, modes config.Modes) bool {
 	if modes.PoCMode != config.PoCModeRelaxed {
 		return false
@@ -210,14 +203,12 @@ func pocGenerating(snapshot chain.PhaseSnapshot, modes config.Modes) bool {
 		snapshot.ConfirmationPoCPhase == chain.ConfirmationPoCGeneration
 }
 
-// phaseAborted asks the shared rule with the phase the coordinator sees, so the log line and the
-// ladders cannot disagree about who ended the attempt.
+// Asked with the phase the coordinator sees, so the log line and the ladders cannot disagree.
 func (c *raceCoordinator) phaseAborted(attempt *liveAttempt, outcome AttemptOutcome) bool {
 	return phaseAborted(outcome, attempt.inInference, pocGenerating(c.deps.Snapshots.Snapshot(), c.deps.Modes))
 }
 
-// phaseAborted reports an attempt the phase transition ended rather than the host. A no-receipt
-// attempt never reached the host's queue, so the transition cannot be what ended it.
+// A no-receipt attempt never reached the host's queue, so the transition cannot be what ended it.
 func phaseAborted(a AttemptOutcome, startedInInference, pocGenerating bool) bool {
 	if !startedInInference || !pocGenerating {
 		return false

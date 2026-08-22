@@ -212,6 +212,9 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request, escrowPin string) 
 		return
 	}
 
+	logging.Info("request params", logkey.Request, requestID, logkey.Model, normalized.Model,
+		logkey.Params, filters.ParametersOf(normalized.Body))
+
 	key := cacheKeyFor(r, normalized.Model, normalized.Body, normalized.Logprobs, normalized.ClientStream)
 	if entry, hit := s.cache.get(key, s.now()); hit {
 		written := serveCached(w, requestID, entry)

@@ -12,27 +12,54 @@ const (
 	refusalCritical          = 0.20
 	unusedAnswerWarning      = 0.20
 	gatewayThrottleWarning   = 0.10
+	capabilityBlockedWarning = 0.01
+	chainMissWarning         = 0.01
+	chainMissCritical        = 0.05
+	chainInvalidWarning      = 0.01
+	chainInvalidCritical     = 0.05
+	undecidedTimeoutWarning  = 0.10
+	undecidedTimeoutCritical = 0.50
+	unknownReasonWarning     = 0.05
 	slowReceiptWarning       = 0.10
 	slowChunkWarning         = 0.10
 	clockDriftWarning        = 0.05
 	slowDecodeWarning        = 0.10
+	decodedLogprobsWarning   = 0.001
+	decodedLogprobsCritical  = 0.01
 	neverCritical            = 2.0
 )
 
 const TimeoutReasonLongResponse = "long_response_after_content"
 
 const (
-	FindingExecutionTimeouts = "execution_timeouts"
-	FindingRefusals          = "refusals"
-	FindingUnusedAnswers     = "answers_unused"
-	FindingGatewayThrottled  = "throttled_by_gateway"
-	FindingChainDisagreement = "ledger_disagrees_with_chain"
-	FindingFailureTerminals  = "failure_terminals"
-	FindingSlowReceipts      = "slow_receipts"
-	FindingSlowChunks        = "slow_chunks"
-	FindingClockDrift        = "clock_drift"
-	FindingSlowDecode        = "slow_decode"
+	FindingExecutionTimeouts    = "execution_timeouts"
+	FindingRefusals             = "refusals"
+	FindingUnusedAnswers        = "answers_unused"
+	FindingGatewayThrottled     = "throttled_by_gateway"
+	FindingChainDisagreement    = "ledger_disagrees_with_chain"
+	FindingLedgerOvercounted    = "ledger_overcounted"
+	FindingChainMisses          = "chain_recorded_misses"
+	FindingChainInvalid         = "chain_recorded_invalid"
+	FindingUnresolvedChallenges = "challenges_unresolved"
+	FindingUndecidedTimeouts    = "timeouts_undecided"
+	FindingUnknownReasons       = "reasons_unknown"
+	FindingCapabilityBlocked    = "blocked_by_capability"
+	FindingDecodedLogprobs      = "logprobs_not_token_ids"
+	FindingFailureTerminals     = "failure_terminals"
+	FindingSlowReceipts         = "slow_receipts"
+	FindingSlowChunks           = "slow_chunks"
+	FindingClockDrift           = "clock_drift"
+	FindingSlowDecode           = "slow_decode"
 )
+
+// findingCodes is every code this gateway can emit, pinned so a rename has to be deliberate.
+var findingCodes = []string{
+	FindingExecutionTimeouts, FindingRefusals, FindingUnusedAnswers, FindingGatewayThrottled,
+	FindingCapabilityBlocked, FindingChainMisses, FindingChainInvalid, FindingUnresolvedChallenges,
+	FindingUndecidedTimeouts, FindingUnknownReasons, FindingChainDisagreement, FindingLedgerOvercounted,
+	FindingFailureTerminals, FindingSlowReceipts, FindingSlowChunks, FindingClockDrift, FindingSlowDecode,
+	FindingDecodedLogprobs,
+}
 
 type Severity string
 
@@ -78,12 +105,26 @@ func findingsFor(record ParticipantRecord) []Finding {
 		FindingUnusedAnswers))
 	add(ratio(ghostsBecause(record, "participant_throttled_no_send"), record.Assigned, gatewayThrottleWarning, neverCritical,
 		FindingGatewayThrottled))
+	add(ratio(ghostsBecause(record, "participant_capability_no_send"), record.Assigned, capabilityBlockedWarning, neverCritical,
+		FindingCapabilityBlocked))
+	add(ratio(uint64(record.ChainMissed), record.Assigned, chainMissWarning, chainMissCritical,
+		FindingChainMisses))
+	add(ratio(uint64(record.ChainInvalid), record.Assigned, chainInvalidWarning, chainInvalidCritical,
+		FindingChainInvalid))
+	add(ratio(record.UnresolvedChallenges, record.Assigned, chainInvalidWarning, chainInvalidCritical,
+		FindingUnresolvedChallenges))
+	add(ratio(undecidedTimeouts(record), timeoutRoundsVoted(record), undecidedTimeoutWarning, undecidedTimeoutCritical,
+		FindingUndecidedTimeouts))
+	add(ratio(record.UnknownReasonTotal, record.Assigned, unknownReasonWarning, neverCritical,
+		FindingUnknownReasons))
 	add(ratio(countersWhere(record, both(outsidePoC, receiptWasSlow)), acknowledgedNormally, slowReceiptWarning, neverCritical,
 		FindingSlowReceipts))
 	add(ratio(countersWhere(record, both(outsidePoC, chunkWasSlow)), deliveredNormally, slowChunkWarning, neverCritical,
 		FindingSlowChunks))
 	add(ratio(countersWhere(record, both(outsidePoC, decodeWasSlow)), deliveredNormally, slowDecodeWarning, neverCritical,
 		FindingSlowDecode))
+	add(ratio(countersWhere(record, logprobsWereDecoded), delivered, decodedLogprobsWarning, decodedLogprobsCritical,
+		FindingDecodedLogprobs))
 	add(ratio(countersWhere(record, clockHadDrifted), delivered+record.Dispositions[DispositionUnfinishedExecution], clockDriftWarning, neverCritical,
 		FindingClockDrift))
 
@@ -94,11 +135,32 @@ func findingsFor(record ParticipantRecord) []Finding {
 	}
 	if record.Overcounted > 0 {
 		findings = append(findings, Finding{
-			Code: FindingChainDisagreement, Severity: SeverityWarning,
+			Code: FindingLedgerOvercounted, Severity: SeverityWarning,
 			Part: record.Overcounted, Whole: record.Assigned,
 		})
 	}
+	if drift := record.CrossChecks.ErrorCount - record.Overcounted; drift > 0 && record.Assigned >= findingMinimumVolume {
+		findings = append(findings, Finding{
+			Code: FindingChainDisagreement, Severity: SeverityWarning,
+			Part: drift, Whole: record.Assigned,
+		})
+	}
 	return findings
+}
+
+func undecidedTimeouts(record ParticipantRecord) uint64 {
+	return record.TimeoutOutcomes[TimeoutVoteCollectionFailed] + record.TimeoutOutcomes[TimeoutInsufficientVotes]
+}
+
+// A skipped round never asked anyone, so it cannot be undecided.
+func timeoutRoundsVoted(record ParticipantRecord) uint64 {
+	var total uint64
+	for outcome, count := range record.TimeoutOutcomes {
+		if outcome != TimeoutSkipped {
+			total += count
+		}
+	}
+	return total
 }
 
 // ratio takes the denominator once, so the rate that decides and the numbers reported beside it cannot
@@ -135,6 +197,8 @@ func receiptWasSlow(key CounterKey) bool  { return key.SlowReceipt }
 func chunkWasSlow(key CounterKey) bool    { return key.SlowChunk }
 func clockHadDrifted(key CounterKey) bool { return key.ClockDrifted }
 func decodeWasSlow(key CounterKey) bool   { return key.SlowDecode }
+
+func logprobsWereDecoded(key CounterKey) bool { return key.LogprobsDecoded }
 
 func countersWhere(record ParticipantRecord, match func(CounterKey) bool) uint64 {
 	var total uint64

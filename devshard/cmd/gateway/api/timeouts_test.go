@@ -49,7 +49,7 @@ func (f *fixedEscrows) SettlementSession(escrowID string) (registry.EscrowSessio
 func TestTimeoutPayloadIsRebuiltFromTheCommittedRecord(t *testing.T) {
 	t.Parallel()
 	committed := types.EscrowState{Inferences: map[uint64]*types.InferenceRecord{
-		4: {Model: liveModel, InputLength: 512, MaxTokens: 64, StartedAt: 1_700_000_000_000},
+		4: {Model: liveModel, InputLength: 512, MaxTokens: 64, StartedAt: 1_700_000_000},
 	}}
 	cases := []struct {
 		name  string
@@ -66,7 +66,7 @@ func TestTimeoutPayloadIsRebuiltFromTheCommittedRecord(t *testing.T) {
 				Model:       liveModel,
 				InputLength: 512,
 				MaxTokens:   64,
-				StartedAt:   1_700_000_000_000,
+				StartedAt:   1_700_000_000,
 			},
 		},
 		{

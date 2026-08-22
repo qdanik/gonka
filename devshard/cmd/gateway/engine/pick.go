@@ -145,7 +145,7 @@ func (c *raceCoordinator) launch(assignment scheduler.Assignment, role, startRea
 	c.deps.Perf.Acquire(attempt.participant)
 	logging.Info("nonce committed",
 		logkey.Request, c.request.RequestID, logkey.Escrow, assignment.Escrow, logkey.Nonce, nonce,
-		logkey.Participant, attempt.participant, logkey.Slot, attempt.hostIdx, logkey.Role, role, logkey.Reason, startReason)
+		logkey.Host, logkey.ShortHost(attempt.participant), logkey.Slot, attempt.hostIdx, logkey.Role, role, logkey.Reason, startReason)
 
 	go runAttempt(attemptCtx, AttemptSpec{
 		Escrow:      assignment.Escrow,

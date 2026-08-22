@@ -162,6 +162,7 @@ type AttemptOutcome struct {
 	DroppedEvents         int64
 
 	Terminal            Terminal
+	LogprobsDecoded     bool
 	Confirmed           bool
 	ConfirmedAt         int64
 	NonceFinished       bool

@@ -2,13 +2,17 @@ package engine
 
 import (
 	"bytes"
+	"strconv"
 
 	json "github.com/goccy/go-json"
 
 	"devshard/cmd/gateway/filters"
 )
 
-var sseUsageKey = []byte(`"usage"`)
+var (
+	sseUsageKey    = []byte(`"usage"`)
+	sseLogprobsKey = []byte(`"logprobs"`)
+)
 
 type sseError struct {
 	Source  string
@@ -24,6 +28,7 @@ type chunkSignal struct {
 	ContentSource         string
 	Error                 sseError
 	UsageCompletionTokens int64
+	LogprobsDecoded       bool
 }
 
 // crownsWinner admits content and nothing else. See gateway-speculative-race.md, "An SSE error event
@@ -48,7 +53,42 @@ func classifyChunk(events []byte, thinkingBudget bool) chunkSignal {
 	if tokens, ok := usageCompletionTokens(events); ok {
 		signal.UsageCompletionTokens = tokens
 	}
+	signal.LogprobsDecoded = logprobsDecoded(events)
 	return signal
+}
+
+func logprobsDecoded(events []byte) bool {
+	if !bytes.Contains(events, sseLogprobsKey) {
+		return false
+	}
+	decoded := false
+	filters.EachSSEDataPayload(events, func(payload []byte) bool {
+		var event struct {
+			Choices []struct {
+				Logprobs struct {
+					Content []struct {
+						Token string `json:"token"`
+					} `json:"content"`
+				} `json:"logprobs"`
+			} `json:"choices"`
+		}
+		if json.Unmarshal(payload, &event) != nil {
+			return false
+		}
+		for _, choice := range event.Choices {
+			for _, entry := range choice.Logprobs.Content {
+				decoded = !isTokenID(entry.Token)
+				return true
+			}
+		}
+		return false
+	})
+	return decoded
+}
+
+func isTokenID(token string) bool {
+	id, err := strconv.Atoi(token)
+	return err == nil && id >= 0
 }
 
 // contentSource names the field carrying the first client-renderable output in events. choices[].text

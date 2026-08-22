@@ -56,7 +56,7 @@ func logRequestFinished(requestID string, normalized filters.Result, outcome eng
 		logkey.Stream, normalized.ClientStream,
 		logkey.InputTokens, outcome.InputTokens,
 		logkey.OutputTokens, winnerOutputTokens(outcome),
-		logkey.Host, winnerParticipant(outcome),
+		logkey.Host, logkey.ShortHost(winnerParticipant(outcome)),
 		logkey.Outcome, verdict,
 		logkey.Bytes, written,
 		logkey.Terminated, terminated,

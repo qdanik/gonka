@@ -42,7 +42,7 @@ func liveParams() user.InferenceParams {
 		Prompt:      livePrompt,
 		InputLength: uint64(len(livePrompt)),
 		MaxTokens:   64,
-		StartedAt:   1_700_000_000_000,
+		StartedAt:   1_700_000_000,
 	}
 }
 

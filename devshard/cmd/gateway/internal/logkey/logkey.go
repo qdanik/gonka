@@ -13,7 +13,17 @@ const (
 	Reason  = "reason"
 	Outcome = "outcome"
 	Error   = "error"
+	Params  = "params"
 )
+
+const hostLabelLength = 8
+
+func ShortHost(address string) string {
+	if len(address) <= hostLabelLength {
+		return address
+	}
+	return address[len(address)-hostLabelLength:]
+}
 
 // What an attempt delivered and how long each stage took.
 const (
@@ -21,7 +31,6 @@ const (
 	NonceFinished  = "nonce_finished"
 	StateDivergent = "state_divergent"
 	PhaseAborted   = "phase_aborted"
-	Participant    = "participant"
 	ContentChunks  = "content_chunks"
 	StreamChunks   = "stream_chunks"
 	OutputBytes    = "output_bytes"

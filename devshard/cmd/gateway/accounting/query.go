@@ -173,6 +173,13 @@ func (r *ParticipantRecord) absorb(slot SlotRecord) {
 	r.CompletedValidations += slot.CompletedValidations
 	r.Pending += slot.Pending
 	r.InFlight += slot.InFlight
+	for requestID := range slot.openRequests {
+		if r.openRequests == nil {
+			r.openRequests = make(map[string]struct{})
+		}
+		r.openRequests[requestID] = struct{}{}
+	}
+	r.InFlightRequests = uint64(len(r.openRequests))
 	r.UnresolvedChallenges += slot.UnresolvedChallenges
 	r.ValidationsPerformed += slot.ValidationsPerformed
 	r.TimeoutsApplied += slot.TimeoutsApplied
@@ -210,11 +217,19 @@ func (e *escrowLedger) slots(escrowID string) []SlotRecord {
 	}
 	pending := make(map[uint32]uint64, groupSize)
 	inFlight := make(map[uint32]uint64, groupSize)
+	openRequests := make(map[uint32]map[string]struct{}, groupSize)
 	for nonce, record := range e.nonces {
 		switch {
 		case record.counted != nil:
 		case record.sent && !record.finished:
-			inFlight[e.slotOf(nonce)]++
+			slotID := e.slotOf(nonce)
+			inFlight[slotID]++
+			if record.requestID != "" {
+				if openRequests[slotID] == nil {
+					openRequests[slotID] = make(map[string]struct{})
+				}
+				openRequests[slotID][record.requestID] = struct{}{}
+			}
 		default:
 			pending[e.slotOf(nonce)]++
 		}
@@ -230,6 +245,8 @@ func (e *escrowLedger) slots(escrowID string) []SlotRecord {
 			Dispositions:         dispositions[slotID],
 			Pending:              pending[slotID],
 			InFlight:             inFlight[slotID],
+			openRequests:         openRequests[slotID],
+			InFlightRequests:     uint64(len(openRequests[slotID])),
 			UnresolvedChallenges: e.challenged[slotID],
 			ValidationsPerformed: e.validations[slotID],
 			TimeoutsApplied:      e.timeouts[slotID],

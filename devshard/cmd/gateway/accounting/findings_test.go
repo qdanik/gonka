@@ -1,6 +1,9 @@
 package accounting
 
 import (
+	"bytes"
+	"os"
+	"path/filepath"
 	"slices"
 	"testing"
 )
@@ -139,14 +142,31 @@ func TestGatewaySideThrottlingIsReportedAsTheGatewaysOwn(t *testing.T) {
 	}
 }
 
-func TestLedgerAndChainDisagreementIsAlwaysReported(t *testing.T) {
+// Counting more than the chain assigned is this gateway's own bug, so it is reported at any volume.
+func TestLedgerOvercountingIsAlwaysReported(t *testing.T) {
 	record := recordWith(10, map[Disposition]uint64{DispositionFinishedUsed: 10})
 	record.Overcounted = 3
 
-	finding := findingWithCode(t, findingsFor(record), FindingChainDisagreement)
+	finding := findingWithCode(t, findingsFor(record), FindingLedgerOvercounted)
 
 	if finding.Severity != SeverityWarning {
 		t.Fatalf("severity = %s, want warning: no host behaviour produces this", finding.Severity)
+	}
+}
+
+// Overcounting has its own code, so the disagreement code must report what is left after it: an
+// operator alerting on drift would otherwise be reading the overcount bug under a name that means
+// something else, and would never see real drift at all.
+func TestChainDisagreementReportsTheDriftBesideTheOvercount(t *testing.T) {
+	record := recordWith(100, map[Disposition]uint64{DispositionFinishedUsed: 100})
+	record.Overcounted = 2
+	record.CrossChecks.ErrorCount = 7
+
+	finding := findingWithCode(t, findingsFor(record), FindingChainDisagreement)
+
+	if finding.Part != 5 || finding.Whole != 100 {
+		t.Fatalf("finding = %d of %d, want the 5 drifting nonces the overcount does not explain",
+			finding.Part, finding.Whole)
 	}
 }
 
@@ -273,6 +293,91 @@ func TestASlowDecodeDuringPoCIsNotChargedToTheHost(t *testing.T) {
 	for _, finding := range findingsFor(record) {
 		if finding.Code == FindingSlowDecode {
 			t.Fatalf("finding = %+v, want none: a PoC answer is not a serving answer", finding)
+		}
+	}
+}
+
+// A dashboard and an operator's alert select on these strings, and the ledger they were written
+// against is the one this gateway replaces. A rename is a silent alert that stops firing.
+func TestTheFindingVocabularyKeepsTheNamesOperatorsAlertOn(t *testing.T) {
+	for _, code := range []string{
+		"execution_timeouts", "refusals", "answers_unused", "throttled_by_gateway",
+		"blocked_by_capability", "chain_recorded_misses", "chain_recorded_invalid",
+		"challenges_unresolved", "timeouts_undecided", "reasons_unknown",
+		"ledger_disagrees_with_chain", "ledger_overcounted", "logprobs_not_token_ids",
+		"slow_receipts", "slow_chunks", "clock_drift", "slow_decode",
+	} {
+		if !slices.Contains(findingCodes, code) {
+			t.Errorf("%q is no longer a code this gateway can emit", code)
+		}
+	}
+}
+
+// A skipped round asked nobody, so counting it as decided would hide a host whose every real round
+// ends without a verdict behind the rounds that were never raised.
+func TestUndecidedTimeoutsAreMeasuredAgainstTheRoundsThatVoted(t *testing.T) {
+	record := recordWith(100, map[Disposition]uint64{DispositionFinishedUsed: 100})
+	record.TimeoutOutcomes = map[TimeoutOutcome]uint64{
+		TimeoutSkipped:              500,
+		TimeoutApplied:              15,
+		TimeoutInsufficientVotes:    3,
+		TimeoutVoteCollectionFailed: 2,
+	}
+
+	finding := findingWithCode(t, findingsFor(record), FindingUndecidedTimeouts)
+
+	if finding.Part != 5 || finding.Whole != 20 {
+		t.Fatalf("finding = %d of %d, want 5 undecided of the 20 rounds that voted", finding.Part, finding.Whole)
+	}
+}
+
+// A host blocked by capability burns every nonce it is assigned; reading that as ordinary throttling
+// hides a defect only its operator can fix.
+func TestCapabilityBurnsAreReportedApartFromThrottling(t *testing.T) {
+	record := recordWith(100, map[Disposition]uint64{DispositionFinishedUsed: 100})
+	record.Counters = []CounterRecord{{
+		CounterKey: CounterKey{Disposition: DispositionGhost, GhostReason: "participant_capability_no_send"},
+		Count:      30,
+	}}
+
+	findings := findingsFor(record)
+
+	blocked := findingWithCode(t, findings, FindingCapabilityBlocked)
+	if blocked.Part != 30 {
+		t.Fatalf("blocked = %d, want the 30 burned nonces", blocked.Part)
+	}
+	if slices.Contains(codesOf(findings), FindingGatewayThrottled) {
+		t.Error("a capability burn was also counted as gateway throttling: one cause, two accusations")
+	}
+}
+
+// The threshold is a tenth of a percent because a single unreplayable answer is already a lost reward,
+// and a host that does it once does it for every answer with logprobs.
+func TestDecodedLogprobsAreReportedAtOnce(t *testing.T) {
+	record := recordWith(100, map[Disposition]uint64{DispositionFinishedUsed: 100})
+	record.Counters = []CounterRecord{{
+		CounterKey: CounterKey{Disposition: DispositionFinishedUsed, LogprobsDecoded: true},
+		Count:      1,
+	}}
+
+	finding := findingWithCode(t, findingsFor(record), FindingDecodedLogprobs)
+
+	if finding.Part != 1 || finding.Whole != 100 {
+		t.Fatalf("finding = %d of %d, want the one unreplayable answer against what was delivered",
+			finding.Part, finding.Whole)
+	}
+}
+
+// The doc is what an operator reads when a finding fires, so a code that exists in neither place is
+// unexplainable and one that exists only in the doc is a promise this gateway does not keep.
+func TestEveryFindingCodeIsDocumented(t *testing.T) {
+	doc, err := os.ReadFile(filepath.Join("..", "docs", "accounting-findings.md"))
+	if err != nil {
+		t.Fatalf("reading accounting-findings.md: %v", err)
+	}
+	for _, code := range findingCodes {
+		if !bytes.Contains(doc, []byte("`"+code+"`")) {
+			t.Errorf("finding %q is not explained in accounting-findings.md", code)
 		}
 	}
 }

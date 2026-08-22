@@ -555,7 +555,7 @@ func (s *Session) processResponse(hostIdx int, resp *host.HostResponse, inferenc
 		}
 	}
 
-	if outcome, ok := s.nonceStates[inferenceNonce]; ok && resp.ConfirmedAt > 0 {
+	if outcome, ok := s.nonceStates[inferenceNonce]; ok && resp.Receipt != nil && resp.ConfirmedAt > 0 {
 		outcome.confirmedAt = resp.ConfirmedAt
 	}
 
@@ -2033,6 +2033,14 @@ func (s *Session) HandleTimeout(ctx context.Context, nonce uint64, sendTime time
 		return result, ErrNonceFinishedWhileWaiting
 	}
 
+	if elapsed, refusalTimeout, unreachable := s.refusalDeadlineUnreachable(reason, payload); unreachable {
+		logging.Stage(ctx, "timeout_skipped", logFields("reason", "refusal_deadline_unreachable",
+			"elapsed_seconds", elapsed, "refusal_timeout_seconds", refusalTimeout)...)
+		result.Outcome = "skipped"
+		result.DetailReason = "refusal_deadline_unreachable"
+		return result, fmt.Errorf("inference %d: refusal deadline unreachable", nonce)
+	}
+
 	logging.Stage(ctx, "timeout_started", logFields("reason", result.Reason)...)
 
 	verifiers := s.TimeoutVerifiers()
@@ -2090,6 +2098,17 @@ func (s *Session) HandleTimeout(ctx context.Context, nonce uint64, sendTime time
 	}
 	logging.Stage(ctx, "timeout_insufficient_votes", logFields("reason", result.Reason)...)
 	return result, fmt.Errorf("inference %d: %w: insufficient votes", nonce, ErrTimeoutNotApplied)
+}
+
+// A verifier measures the refusal deadline from the record's own StartedAt, so a stamp in the future or
+// in the wrong unit makes every vote a certain reject and the whole round waste.
+func (s *Session) refusalDeadlineUnreachable(reason types.TimeoutReason, payload *host.InferencePayload) (elapsed, refusalTimeout int64, unreachable bool) {
+	if reason != types.TimeoutReason_TIMEOUT_REASON_REFUSED || payload == nil {
+		return 0, 0, false
+	}
+	refusalTimeout = s.sm.Config().RefusalTimeout
+	elapsed = time.Now().Unix() - payload.StartedAt
+	return elapsed, refusalTimeout, elapsed < refusalTimeout
 }
 
 func (s *Session) TimeoutDeadline(nonce uint64, sendTime time.Time) (string, time.Time) {

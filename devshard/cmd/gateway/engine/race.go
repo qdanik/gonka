@@ -14,22 +14,18 @@ import (
 )
 
 const (
-	// RolePrimary and RoleSpeculative are the attempt role label values.
 	RolePrimary     = "primary"
 	RoleSpeculative = "speculative"
 
-	// eventBuffer keeps a host's chunk progress from parking its goroutine between the coordinator's
-	// selects. Terminal events block regardless of it, which is what settles a committed nonce.
+	// Chunk progress must not park a host's goroutine; terminal events block regardless.
 	eventBuffer = 32
 
-	// Why an attempt holds the client stream: it claimed first, or it was the last claimant standing.
 	crownFirstClaim = "first_claim"
 	crownNoRival    = "no_rival"
 )
 
 var errNoDispatchTarget = errors.New("assigned escrow has no dispatch target")
 
-// picker is satisfied by *scheduler.Scheduler.
 type picker interface {
 	Pick(ctx context.Context, profile scheduler.RequestProfile) (scheduler.Assignment, error)
 	BlockHost(escrowID, participant string)
@@ -43,12 +39,11 @@ type DispatchTarget interface {
 	NonceFinished(nonce uint64) bool
 }
 
-// targets is satisfied by the runtime registry. Escrows rotate, so the handle is fetched per race.
+// Escrows rotate, so the handle is fetched per race rather than held.
 type targets interface {
 	Target(escrowID string) (DispatchTarget, bool)
 }
 
-// hostPerf is satisfied by *perf.Tracker.
 type hostPerf interface {
 	CapabilityRecorder
 	Acquire(participant string)
@@ -58,19 +53,15 @@ type hostPerf interface {
 	FirstContentP75(participant, model string) (time.Duration, bool)
 }
 
-// crownGate carries the empty-stream crowning penalty between races. See gateway-speculative-race.md,
-// "Crown denial".
+// crownGate carries the empty-stream crowning penalty between races.
 type crownGate interface {
 	Denied(participant, model string) bool
 	Observe(participant, model string, contentless bool)
 }
 
-// snapshotSource is satisfied by *chain.PhaseObserver.
 type snapshotSource interface{ Snapshot() chain.PhaseSnapshot }
 
-// raceDeps is what one coordinator is wired to. Hold parks an escrow hold on the race, given back only
-// once the race's vote is posted; Report receives the race's single outcome from whichever goroutine ends
-// the race, which is not always the one that called runRace.
+// Hold is given back only once the vote is posted, and Report runs on whichever goroutine ends the race.
 type raceDeps struct {
 	Picker       picker
 	Targets      targets
@@ -103,8 +94,7 @@ const (
 	triggerStall
 )
 
-// liveAttempt is the coordinator's own record of one attempt, written only by the coordinator: from
-// AttemptEvents, and from its own deadline firings for the escalated and stalled marks.
+// Written only by the coordinator: from AttemptEvents, and from its own deadline firings.
 type liveAttempt struct {
 	nonce       uint64
 	hostIdx     int
@@ -169,8 +159,7 @@ type raceCoordinator struct {
 	startErr         error
 }
 
-// raceExit is why await stopped; only exitComplete means the race is over. See gateway-invariants.md,
-// "2. Exactly one outcome and exactly one winner per race, on every path".
+// raceExit is why await stopped; only exitComplete means the race is over.
 type raceExit int
 
 const (
@@ -179,10 +168,7 @@ const (
 	exitClientGone
 )
 
-// runRace serves one request and reports the race exactly once. Report may run after runRace has
-// returned: a client whose winner finished is released while losers still stream, and a client that
-// left is released immediately, so the returned outcome is that client's view rather than the
-// reported one.
+// The returned outcome is the client's view; the reported one may be finished later, after losers stream.
 func runRace(clientCtx context.Context, deps raceDeps, request raceRequest) (RaceOutcome, error) {
 	coordinator := newCoordinator(clientCtx, deps, request)
 	if err := coordinator.begin(); err != nil {
@@ -233,8 +219,7 @@ func newCoordinator(clientCtx context.Context, deps raceDeps, request raceReques
 	}
 }
 
-// begin bounds its pick: the race context deliberately never cancels, so a scheduler that waits for
-// capacity would hang here forever. See specs/2026-08-03-request-queue-design.md.
+// The pick is bounded because the race context never cancels: a scheduler waiting for capacity would hang.
 func (c *raceCoordinator) begin() error {
 	pickCtx, cancelPick := context.WithTimeout(c.drain.race, schedulerPickTimeout)
 	defer cancelPick()
@@ -264,16 +249,11 @@ func (c *raceCoordinator) begin() error {
 	return nil
 }
 
-// strand accounts for an assignment no attempt can spend: the host slot goes back, the escrow hold is
-// kept, and the nonce is carried into the timeout plan. See gateway-invariants.md, "1. A committed nonce
-// is always settled" and "5. The slot and the escrow hold are taken with the nonce, and given back after
-// the vote".
-// A stranded nonce is committed, paid for, and answered by nobody -- the shape every recurring
-// settlement defect in this gateway has taken. It is traced at Warn because it is never routine.
+// A stranded nonce is committed, paid for and answered by nobody, so it is carried into the timeout plan.
 func (c *raceCoordinator) strand(assignment scheduler.Assignment, role string) {
 	logging.Warn("nonce stranded",
 		logkey.Request, c.request.RequestID, logkey.Escrow, assignment.Escrow,
-		logkey.Nonce, assignment.Nonce.Nonce(), logkey.Participant, assignment.Host, logkey.Role, role)
+		logkey.Nonce, assignment.Nonce.Nonce(), logkey.Host, logkey.ShortHost(assignment.Host), logkey.Role, role)
 	c.escrowID = assignment.Escrow
 	c.deps.Limiter.Release(assignment.Host, c.request.Model)
 	if c.deps.Hold != nil {
@@ -294,15 +274,11 @@ func (c *raceCoordinator) strand(assignment scheduler.Assignment, role string) {
 	})
 }
 
-// fail reports a race that never got as far as its first attempt. See gateway-invariants.md, "1. A
-// committed nonce is always settled".
 func (c *raceCoordinator) fail(err error) (RaceOutcome, error) {
 	return c.report(), err
 }
 
-// await runs the coordinator until the race is over, until the crowned winner's fate is settled with
-// losers still streaming, or until the client leaves. An armed escalation outlives the last pending
-// attempt, because a race whose every attempt failed is exactly the one owed another.
+// An armed escalation outlives the last pending attempt: a race whose every attempt failed is owed another.
 func (c *raceCoordinator) await() raceExit {
 	defer c.timer.Stop()
 	for {
@@ -330,9 +306,7 @@ func (c *raceCoordinator) await() raceExit {
 	}
 }
 
-// catchUp applies every event already queued, so every select arm that reads race state rather than
-// adding to it starts here. See gateway-invariants.md, "3. No field crosses a goroutine except through
-// the event channel".
+// Every select arm that reads race state rather than adding to it starts here.
 func (c *raceCoordinator) catchUp() {
 	for {
 		select {
@@ -356,16 +330,13 @@ func (c *raceCoordinator) depart() raceExit {
 	return exitClientGone
 }
 
-// detach keeps every started attempt running for its receipt, its response and its nonce's vote, with
-// the drain deadline standing in for the client that is no longer waiting on any of it. The pick is the
-// exception: an attempt not yet started serves nobody, so its nonce and slot go back unspent.
+// Started attempts run on for their votes; the pick does not, since an unstarted attempt serves nobody.
 func (c *raceCoordinator) detach() {
 	c.handedOff = true
 	c.clientGoneAt = c.deps.Now()
 	c.stopPicking()
 }
 
-// clientGone is watched only while a client is still waiting on this race.
 func (c *raceCoordinator) clientGone() <-chan struct{} {
 	if c.handedOff {
 		return nil
@@ -373,8 +344,7 @@ func (c *raceCoordinator) clientGone() <-chan struct{} {
 	return c.drain.clientGone()
 }
 
-// release hands the still-pending losers to a second await on another goroutine. See
-// gateway-speculative-race.md, "Client departure and the drain".
+// release hands the still-pending losers to a second await on another goroutine.
 func (c *raceCoordinator) release() bool {
 	if c.handedOff || c.pending == 0 || c.winner == nil || !c.winner.done {
 		return false

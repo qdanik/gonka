@@ -40,6 +40,7 @@ func (c *sseClassifier) facts(signal chunkSignal) chunkFacts {
 		ContentSource:         signal.ContentSource,
 		UsageCompletionTokens: signal.UsageCompletionTokens,
 		TokensBurned:          signal.UsageCompletionTokens > 0 && c.thinkingBudget,
+		LogprobsDecoded:       signal.LogprobsDecoded,
 	}
 	if !signal.Error.present() {
 		return facts

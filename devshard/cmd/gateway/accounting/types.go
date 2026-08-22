@@ -54,17 +54,19 @@ type EscrowMetadata struct {
 // Attempt is one nonce's share of a race outcome. Sent is false for a nonce the race committed but
 // never dispatched, which is a stranded nonce rather than a ghost: a ghost is a deliberate burn.
 type Attempt struct {
-	Nonce        uint64
-	Sent         bool
-	Finished     bool
-	Acknowledged bool
-	Usage        Usage
-	Terminal     string
-	Phase        Phase
-	SlowReceipt  bool
-	SlowChunk    bool
-	ClockDrifted bool
-	SlowDecode   bool
+	Nonce           uint64
+	RequestID       string
+	Sent            bool
+	Finished        bool
+	Acknowledged    bool
+	Usage           Usage
+	Terminal        string
+	Phase           Phase
+	SlowReceipt     bool
+	SlowChunk       bool
+	ClockDrifted    bool
+	SlowDecode      bool
+	LogprobsDecoded bool
 }
 
 // CounterKey is one bucket of classified nonces. Only observed combinations exist and every dimension
@@ -73,16 +75,17 @@ type CounterKey struct {
 	SlotID      uint32      `json:"slot_id"`
 	Disposition Disposition `json:"disposition"`
 
-	GhostReason   string `json:"ghost_reason,omitempty"`
-	TimeoutKind   string `json:"timeout_kind,omitempty"`
-	TimeoutAction string `json:"timeout_action,omitempty"`
-	TimeoutReason string `json:"timeout_reason,omitempty"`
-	Terminal      string `json:"terminal,omitempty"`
-	Phase         Phase  `json:"phase,omitempty"`
-	SlowReceipt   bool   `json:"slow_receipt,omitempty"`
-	SlowChunk     bool   `json:"slow_chunk,omitempty"`
-	ClockDrifted  bool   `json:"clock_drifted,omitempty"`
-	SlowDecode    bool   `json:"slow_decode,omitempty"`
+	GhostReason     string `json:"ghost_reason,omitempty"`
+	TimeoutKind     string `json:"timeout_kind,omitempty"`
+	TimeoutAction   string `json:"timeout_action,omitempty"`
+	TimeoutReason   string `json:"timeout_reason,omitempty"`
+	Terminal        string `json:"terminal,omitempty"`
+	Phase           Phase  `json:"phase,omitempty"`
+	SlowReceipt     bool   `json:"slow_receipt,omitempty"`
+	SlowChunk       bool   `json:"slow_chunk,omitempty"`
+	ClockDrifted    bool   `json:"clock_drifted,omitempty"`
+	SlowDecode      bool   `json:"slow_decode,omitempty"`
+	LogprobsDecoded bool   `json:"logprobs_decoded,omitempty"`
 }
 
 // Pending is seen but not yet classifiable, Unobserved is the assigned range this gateway never saw,
@@ -103,6 +106,8 @@ type SlotRecord struct {
 	CompletedValidations uint32 `json:"completed_validations"`
 
 	InFlight             uint64 `json:"in_flight"`
+	InFlightRequests     uint64 `json:"in_flight_requests"`
+	openRequests         map[string]struct{}
 	UnresolvedChallenges uint64 `json:"unresolved_challenges"`
 	ValidationsPerformed uint64 `json:"validations_performed"`
 	TimeoutsApplied      uint64 `json:"timeouts_applied"`
@@ -149,8 +154,10 @@ type ParticipantRecord struct {
 	CompletedValidations uint32                    `json:"completed_validations"`
 	TimeoutOutcomes      map[TimeoutOutcome]uint64 `json:"timeout_outcomes"`
 
-	LatestNonces         []EscrowNonce   `json:"latest_nonces"`
-	InFlight             uint64          `json:"in_flight"`
+	LatestNonces         []EscrowNonce `json:"latest_nonces"`
+	InFlight             uint64        `json:"in_flight"`
+	InFlightRequests     uint64        `json:"in_flight_requests"`
+	openRequests         map[string]struct{}
 	UnresolvedChallenges uint64          `json:"unresolved_challenges"`
 	ValidationsPerformed uint64          `json:"validations_performed"`
 	TimeoutsApplied      uint64          `json:"timeouts_applied"`
