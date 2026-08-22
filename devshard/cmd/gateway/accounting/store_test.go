@@ -375,10 +375,14 @@ func TestEveryPersistedFieldSurvivesTheRoundTrip(t *testing.T) {
 		t.Fatalf("ObserveLatestNonce(): %v", err)
 	}
 	if err := book.RecordRace(testEscrow, []Attempt{
-		{Nonce: 1, Sent: true, Acknowledged: true, Finished: true, Usage: UsageLoser,
-			Terminal: "lost", Phase: PhasePoC, SlowReceipt: true, SlowChunk: true, ClockDrifted: true},
-		{Nonce: 2, Sent: true, Acknowledged: true, Usage: UsageWinner,
-			Terminal: "stalled", Phase: PhaseNormal, SlowChunk: true},
+		{
+			Nonce: 1, Sent: true, Acknowledged: true, Finished: true, Usage: UsageLoser,
+			Terminal: "lost", Phase: PhasePoC, SlowReceipt: true, SlowChunk: true, ClockDrifted: true,
+		},
+		{
+			Nonce: 2, Sent: true, Acknowledged: true, Usage: UsageWinner,
+			Terminal: "stalled", Phase: PhaseNormal, SlowChunk: true,
+		},
 	}); err != nil {
 		t.Fatalf("RecordRace(): %v", err)
 	}

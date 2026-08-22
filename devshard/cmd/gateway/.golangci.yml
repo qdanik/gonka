@@ -55,11 +55,18 @@ linters:
     rules:
       - path: _test\.go
         linters: [errcheck]
+      # gofumpt reads a dotless first segment as stdlib, so it wants common/... beside "context".
+      # gci owns import grouping here; gofumpt is kept for everything else it formats.
+      - path: .
+        linters: [gofumpt]
 
 formatters:
   enable:
     - gci
+    - gofumpt
   settings:
+    gofumpt:
+      module-path: devshard
     gci:
       sections:
         - standard

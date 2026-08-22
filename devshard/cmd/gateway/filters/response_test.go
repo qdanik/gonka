@@ -606,7 +606,6 @@ func TestTheLogprobIntentIsReadBeforeTheForceRules(t *testing.T) {
 			t.Parallel()
 
 			result, err := NormalizeRequest([]byte(testCase.body), Options{RoutedModel: "qwen"})
-
 			if err != nil {
 				t.Fatalf("NormalizeRequest: %v", err)
 			}

@@ -24,6 +24,7 @@ func (c *raceCoordinator) observePick(assignment scheduler.Assignment, err error
 	}
 	return assignment, err
 }
+
 func (c *raceCoordinator) requestProfile(params any) scheduler.RequestProfile {
 	return scheduler.RequestProfile{
 		Model:         c.request.Model,
@@ -58,6 +59,7 @@ func (c *raceCoordinator) startPick(reason string, params any) {
 		c.picked <- pickedHost{assignment: assignment, err: err}
 	}()
 }
+
 func (c *raceCoordinator) startNextImmediate() {
 	if c.moreImmediate <= 0 {
 		return
@@ -103,16 +105,19 @@ func (c *raceCoordinator) stopPicking() {
 		c.pickCancel()
 	}
 }
+
 func (c *raceCoordinator) pickDeadline() time.Time {
 	if !c.picking() {
 		return time.Time{}
 	}
 	return c.pickStarted.Add(schedulerPickTimeout)
 }
+
 func (c *raceCoordinator) observedFirstContent(participant string) time.Duration {
 	observed, _ := c.deps.Perf.FirstContentP75(participant, c.request.Model)
 	return observed
 }
+
 func (c *raceCoordinator) launch(assignment scheduler.Assignment, role, startReason string) {
 	// The race holds the escrow for as long as its vote is owed, so the commit's own hold goes back.
 	assignment.ReleaseEscrow()
@@ -167,12 +172,15 @@ func (c *raceCoordinator) launch(assignment scheduler.Assignment, role, startRea
 func (c *raceCoordinator) abandonedByHosts() bool {
 	return c.cancelled && c.winner == nil && !c.handedOff
 }
+
 func (c *raceCoordinator) denied(participant string) bool {
 	return c.deps.Crown != nil && c.deps.Crown.Denied(participant, c.request.Model)
 }
+
 func (c *raceCoordinator) degraded(participant string) bool {
 	return c.deps.Perf.Degraded(participant, c.request.Model)
 }
+
 func (c *raceCoordinator) exclude(participant string) {
 	if slices.Contains(c.excluded, participant) {
 		return

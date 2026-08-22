@@ -489,7 +489,6 @@ func TestSimulatorStreamsAHealthyRequestByteForByte(t *testing.T) {
 	})
 
 	outcome, err := sim.run(context.Background())
-
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -676,7 +675,6 @@ func TestSimulatorCapabilityRefusalDoesNotCrownAndGrowsTheContextHint(t *testing
 	})
 
 	outcome, err := sim.run(context.Background())
-
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}

@@ -47,6 +47,7 @@ func (s *Server) handleAdminDevshards(w http.ResponseWriter, r *http.Request) {
 	auditAdmin("escrow registered", "escrow", request.EscrowID, "model", request.Model)
 	writeJSON(w, http.StatusOK, map[string]any{"escrow_id": request.EscrowID})
 }
+
 func (s *Server) handleAdminDevshardImport(w http.ResponseWriter, r *http.Request) {
 	if !allowMethods(w, r, http.MethodPost) {
 		return
@@ -71,6 +72,7 @@ func (s *Server) handleAdminDevshardImport(w http.ResponseWriter, r *http.Reques
 	auditAdmin("escrow imported", "escrow", request.EscrowID, "model", request.Model)
 	writeJSON(w, http.StatusOK, map[string]any{"escrow_id": request.EscrowID})
 }
+
 func (s *Server) handleAdminDevshardDelete(w http.ResponseWriter, r *http.Request) {
 	if !allowMethods(w, r, http.MethodDelete) {
 		return
@@ -97,12 +99,15 @@ func (s *Server) handleAdminDevshardDelete(w http.ResponseWriter, r *http.Reques
 	auditAdmin("escrow deleted with its session storage", "escrow", escrowID, "model", record.Model)
 	writeJSON(w, http.StatusOK, map[string]any{"escrow_id": escrowID, "deleted": true})
 }
+
 func (s *Server) handleAdminDevshardActivate(w http.ResponseWriter, r *http.Request) {
 	s.lifecycle(w, r, "escrow activated", s.operations.Activate)
 }
+
 func (s *Server) handleAdminDevshardDeactivate(w http.ResponseWriter, r *http.Request) {
 	s.lifecycle(w, r, "escrow deactivated", s.operations.Deactivate)
 }
+
 func (s *Server) lifecycle(w http.ResponseWriter, r *http.Request, action string, apply func(ctx context.Context, escrowID string) error) {
 	if !allowMethods(w, r, http.MethodPost) {
 		return
@@ -123,6 +128,7 @@ func (s *Server) lifecycle(w http.ResponseWriter, r *http.Request, action string
 	auditAdmin(action, "escrow", escrowID)
 	writeJSON(w, http.StatusOK, map[string]any{"escrow_id": escrowID})
 }
+
 func (s *Server) handleAdminDevshardSettle(w http.ResponseWriter, r *http.Request) {
 	if !allowMethods(w, r, http.MethodPost) {
 		return
@@ -147,6 +153,7 @@ func (s *Server) handleAdminDevshardSettle(w http.ResponseWriter, r *http.Reques
 	}
 	writeJSON(w, http.StatusOK, result)
 }
+
 func (s *Server) handleAdminDevshardParticipants(w http.ResponseWriter, r *http.Request) {
 	if !allowMethods(w, r, http.MethodGet) {
 		return
@@ -163,6 +170,7 @@ func (s *Server) handleAdminDevshardParticipants(w http.ResponseWriter, r *http.
 		"slots":        session.HostParticipantKeyList(),
 	})
 }
+
 func (s *Server) handleDevshardFinalize(w http.ResponseWriter, r *http.Request) {
 	if !allowMethods(w, r, http.MethodGet, http.MethodPost) {
 		return
@@ -195,6 +203,7 @@ func (s *Server) handleDevshardFinalize(w http.ResponseWriter, r *http.Request) 
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"escrow_id": escrowID, "finalized": true})
 }
+
 func (s *Server) devshardRecord(r *http.Request, escrowID string) (store.DevshardRecord, bool, error) {
 	records, err := s.control.ListDevshards(r.Context())
 	if err != nil {

@@ -56,7 +56,6 @@ func TestAdvanceCommitsTheServeParams(t *testing.T) {
 		seen = binding
 		return scheduler.NonceIntent{Commit: true, Params: params}
 	})
-
 	if err != nil {
 		t.Fatalf("Advance = %v, want nil", err)
 	}
@@ -84,7 +83,6 @@ func TestAdvanceBurnsAGhostNonceWithoutARequest(t *testing.T) {
 	prepared, err := stream.Advance(func(scheduler.HostBinding) scheduler.NonceIntent {
 		return scheduler.NonceIntent{Commit: true, Ghost: true}
 	})
-
 	if err != nil {
 		t.Fatalf("Advance = %v, want nil", err)
 	}
@@ -103,7 +101,6 @@ func TestAdvanceLeavesADeclinedNonceUnconsumed(t *testing.T) {
 	prepared, err := stream.Advance(func(scheduler.HostBinding) scheduler.NonceIntent {
 		return scheduler.NonceIntent{}
 	})
-
 	if err != nil {
 		t.Fatalf("Advance = %v, want nil (a decline is not a failure)", err)
 	}

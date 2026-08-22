@@ -597,11 +597,12 @@ func TestASettleAlreadyOnChainIsReconciledInsteadOfRebroadcast(t *testing.T) {
 		calls:         log,
 		txCommittedFn: func(string) (bool, error) { return true, nil },
 	}
-	m := &Manager{tx: txClient, store: testStore, signer: &fakeSignerSource{signer: testSigner(t)},
-		settlementSource: &fakeSettlementSource{}}
+	m := &Manager{
+		tx: txClient, store: testStore, signer: &fakeSignerSource{signer: testSigner(t)},
+		settlementSource: &fakeSettlementSource{},
+	}
 
 	result, err := m.settle(context.Background(), record)
-
 	if err != nil {
 		t.Fatalf("settle() = %v, want the recorded settlement recognised", err)
 	}
@@ -628,8 +629,10 @@ func TestASettleThatNeverLandedIsRetried(t *testing.T) {
 			return chain.SettleEscrowResult{EscrowID: input.EscrowID}, nil
 		},
 	}
-	m := &Manager{tx: txClient, store: testStore, signer: &fakeSignerSource{signer: testSigner(t)},
-		settlementSource: &fakeSettlementSource{}}
+	m := &Manager{
+		tx: txClient, store: testStore, signer: &fakeSignerSource{signer: testSigner(t)},
+		settlementSource: &fakeSettlementSource{},
+	}
 
 	if _, err := m.settle(context.Background(), record); err != nil {
 		t.Fatalf("settle() = %v, want a fresh settlement", err)

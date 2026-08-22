@@ -43,11 +43,13 @@ func newSuspiciousHosts(ctx context.Context, pins suspiciousHostStore) (*suspici
 	}
 	return &suspiciousHosts{pins: pins, hosts: hosts}, nil
 }
+
 func (s *suspiciousHosts) Suspicious(participantKey string) bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.hosts[participantKey]
 }
+
 func (s *suspiciousHosts) List() []string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -58,6 +60,7 @@ func (s *suspiciousHosts) List() []string {
 	sort.Strings(listed)
 	return listed
 }
+
 func (s *suspiciousHosts) Add(ctx context.Context, participantKey string) error {
 	if err := s.pins.AddSuspiciousHost(ctx, participantKey); err != nil {
 		return err
@@ -67,6 +70,7 @@ func (s *suspiciousHosts) Add(ctx context.Context, participantKey string) error 
 	s.hosts[participantKey] = true
 	return nil
 }
+
 func (s *suspiciousHosts) Remove(ctx context.Context, participantKey string) error {
 	if err := s.pins.RemoveSuspiciousHost(ctx, participantKey); err != nil {
 		return err
@@ -112,6 +116,7 @@ func (o *operations) CreateEscrow(ctx context.Context, request api.CreateEscrowR
 	}
 	return result, o.escrows.Add(ctx, escrowID(result.EscrowID), request.Model)
 }
+
 func (o *operations) AddDevshard(ctx context.Context, request api.AddDevshardRequest) error {
 	return o.register(ctx, store.DevshardRecord{
 		EscrowID:      request.EscrowID,
@@ -138,6 +143,7 @@ func (o *operations) ImportDevshard(ctx context.Context, request api.ImportDevsh
 		Active:        request.Activate,
 	})
 }
+
 func (o *operations) register(ctx context.Context, record store.DevshardRecord) error {
 	if _, err := env.PrivateKey(record.PrivateKeyEnv); err != nil {
 		return err
@@ -150,6 +156,7 @@ func (o *operations) register(ctx context.Context, record store.DevshardRecord) 
 	}
 	return o.escrows.Add(ctx, record.EscrowID, record.Model)
 }
+
 func (o *operations) Activate(ctx context.Context, id string) error {
 	record, err := findDevshard(ctx, o.store, id)
 	if err != nil {
@@ -169,18 +176,21 @@ func (o *operations) Deactivate(ctx context.Context, id string) error {
 	}
 	return o.store.SetDevshardActive(ctx, id, false)
 }
+
 func (o *operations) Settle(ctx context.Context, id string) (chain.SettleEscrowResult, error) {
 	if err := o.escrows.Retire(id); err != nil {
 		return chain.SettleEscrowResult{}, err
 	}
 	return o.manager.Settle(ctx, id)
 }
+
 func (o *operations) Unquarantine(_ context.Context, participantKey string) error {
 	if !o.participants.ClearQuarantine(participantKey) {
 		return fmt.Errorf("%w: %s", api.ErrUnknownParticipant, participantKey)
 	}
 	return nil
 }
+
 func (o *operations) ResetNonceAccounting(context.Context) error {
 	return o.nonces.reset()
 }

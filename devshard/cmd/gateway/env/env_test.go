@@ -174,7 +174,6 @@ func TestTheEscrowListStillAnswersToItsFormerName(t *testing.T) {
 	t.Setenv("DEVSHARDS_JSON", `[{"escrow_id":"1"}]`)
 
 	values, err := Load()
-
 	if err != nil {
 		t.Fatalf("Load() = %v, want nil", err)
 	}
@@ -192,7 +191,6 @@ func TestEveryRotationKnobIsReachableFromTheEnvironment(t *testing.T) {
 	t.Setenv("GATEWAY_ROTATION_MODELS_JSON", "[]")
 
 	values, err := Load()
-
 	if err != nil {
 		t.Fatalf("Load() = %v, want nil", err)
 	}
@@ -210,7 +208,6 @@ func TestASigningKeyFallsBackToItsRenamedVariable(t *testing.T) {
 	t.Setenv("GATEWAY_PRIVATE_KEY", "deadbeef")
 
 	key, err := PrivateKey("DEVSHARD_PRIVATE_KEY")
-
 	if err != nil {
 		t.Fatalf("PrivateKey() = %v, want the key read from the renamed variable", err)
 	}

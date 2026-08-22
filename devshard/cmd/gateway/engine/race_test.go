@@ -949,7 +949,6 @@ func TestRunRaceCrownsADeniedHostThatIsTheLastOneStanding(t *testing.T) {
 	})
 
 	outcome, err := fixture.run(context.Background())
-
 	if err != nil {
 		t.Fatalf("runRace error = %v", err)
 	}

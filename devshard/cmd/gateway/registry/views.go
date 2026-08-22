@@ -51,6 +51,7 @@ func (r *Registry) Snapshot() []EscrowState {
 	}
 	return states
 }
+
 func stateOf(entry *escrowEntry, draining bool) EscrowState {
 	return EscrowState{
 		ID:           entry.id,
@@ -88,6 +89,7 @@ func (r *Registry) SettlementSession(escrowID string) (EscrowSession, bool) {
 	}
 	return nil, false
 }
+
 func (r *Registry) Models() []string {
 	published := r.live.Load()
 	models := make([]string, 0, len(published.byModel))
@@ -99,6 +101,7 @@ func (r *Registry) Models() []string {
 	slices.Sort(models)
 	return models
 }
+
 func (r *Registry) Serves(model string) bool {
 	return slices.ContainsFunc(r.live.Load().byModel[model], (*escrowEntry).accepting)
 }
@@ -129,6 +132,7 @@ func (r *Registry) holdFor(entry *escrowEntry) func() (func(), bool) {
 		return r.holdLocked(entry), true
 	}
 }
+
 func (r *Registry) holdLocked(entry *escrowEntry) func() {
 	entry.inFlight.Add(1)
 	var once sync.Once

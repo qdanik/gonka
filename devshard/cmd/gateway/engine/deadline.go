@@ -13,12 +13,14 @@ type raceTimer interface {
 
 // deadlineTrigger is what fires at a deadline; the declaration order is the tie-break precedence. See
 // gateway-speculative-race.md, "Deadlines".
-type deadlineTrigger int
-type deadlineArm struct {
-	At         time.Time
-	Trigger    deadlineTrigger
-	Escalation ArmedEscalation
-}
+type (
+	deadlineTrigger int
+	deadlineArm     struct {
+		At         time.Time
+		Trigger    deadlineTrigger
+		Escalation ArmedEscalation
+	}
+)
 
 // Pick is when an unanswered pick stops being worth waiting for, and is zero while none is running.
 type deadlinePlan struct {
@@ -73,6 +75,7 @@ func (p deadlinePlan) escalation(now time.Time) (ArmedEscalation, bool) {
 	}
 	return armed, found
 }
+
 func (p deadlinePlan) hardTimeout() time.Time {
 	var earliest time.Time
 	consider := func(at time.Time) { earliest = earlierSet(earliest, at) }
@@ -91,6 +94,7 @@ func (p deadlinePlan) hardTimeout() time.Time {
 	}
 	return earliest
 }
+
 func (p deadlinePlan) stall() time.Time {
 	if p.Policy.InterChunkStall <= 0 {
 		return time.Time{}
@@ -129,6 +133,7 @@ func newWallTimer() raceTimer {
 	timer.Stop()
 	return &wallTimer{timer: timer}
 }
+
 func (t *wallTimer) Reset(delay time.Duration) {
 	t.timer.Stop()
 	t.timer.Reset(delay)
@@ -140,6 +145,7 @@ func (c *raceCoordinator) expire(arm deadlineArm) {
 	c.catchUp()
 	c.fire(arm)
 }
+
 func (c *raceCoordinator) rearm(arm deadlineArm) {
 	if arm.Trigger == triggerNone {
 		c.timer.Stop()
@@ -147,6 +153,7 @@ func (c *raceCoordinator) rearm(arm deadlineArm) {
 	}
 	c.timer.Reset(arm.At.Sub(c.deps.Now()))
 }
+
 func (c *raceCoordinator) fire(arm deadlineArm) {
 	switch arm.Trigger {
 	case triggerEscalation:
@@ -159,6 +166,7 @@ func (c *raceCoordinator) fire(arm deadlineArm) {
 		c.cancelAll()
 	}
 }
+
 func (c *raceCoordinator) escalate(armed ArmedEscalation) {
 	confirmed, ok := c.deps.Policy.Confirm(armed, c.deps.Now(), c.plan().Attempts, c.escalationRequest())
 	if !ok {
@@ -168,6 +176,7 @@ func (c *raceCoordinator) escalate(armed ArmedEscalation) {
 	c.attempts[confirmed.Attempt].escalated = true
 	c.startPick(confirmed.Stage.Reason(), c.request.Params)
 }
+
 func (c *raceCoordinator) markStalls() {
 	silentSince := c.deps.Now().Add(-c.deps.Policy.InterChunkStall)
 	for _, attempt := range c.attempts {
@@ -177,6 +186,7 @@ func (c *raceCoordinator) markStalls() {
 		attempt.stalled = true
 	}
 }
+
 func (c *raceCoordinator) cancelAll() {
 	c.cancelled = true
 	c.stopPicking()
@@ -191,6 +201,7 @@ func (c *raceCoordinator) cancelAll() {
 		attempt.cancel()
 	}
 }
+
 func (c *raceCoordinator) plan() deadlinePlan {
 	c.scratch = c.scratch[:0]
 	for _, attempt := range c.attempts {
@@ -221,6 +232,7 @@ func (c *raceCoordinator) plan() deadlinePlan {
 		Cancelled: c.cancelled,
 	}
 }
+
 func (c *raceCoordinator) escalationRequest() EscalationRequest {
 	return EscalationRequest{InputTokens: c.request.InputTokens}
 }

@@ -69,7 +69,6 @@ func TestDefaultsMatchSpec(t *testing.T) {
 			t.Errorf("%s = %v, want %v", check.name, check.got, check.want)
 		}
 	}
-
 }
 
 func TestValidateRejectsBrokenConfigAndNamesEveryProblem(t *testing.T) {

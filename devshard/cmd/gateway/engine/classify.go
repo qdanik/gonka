@@ -8,9 +8,7 @@ import (
 	"devshard/cmd/gateway/filters"
 )
 
-var (
-	sseUsageKey = []byte(`"usage"`)
-)
+var sseUsageKey = []byte(`"usage"`)
 
 type sseError struct {
 	Source  string

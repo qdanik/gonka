@@ -104,7 +104,6 @@ func TestPushedMembershipIsWhatMakesTheGatewayRouteAtAll(t *testing.T) {
 		Model:  wiredModel,
 		Params: user.InferenceParams{Model: wiredModel, Prompt: []byte(`{"messages":[]}`), InputLength: 15, MaxTokens: completionapi.MinTokensFloor},
 	})
-
 	if err != nil {
 		t.Fatalf("Pick = %v, want an assignment; a zero escrow weight scores every candidate +Inf", err)
 	}

@@ -135,7 +135,6 @@ func TestSendDispatchesThenAppliesTheReply(t *testing.T) {
 	target := escrowTarget{session: recorded}
 
 	response, err := target.Send(context.Background(), prepared, io.Discard, func() { recorded.receipts++ })
-
 	if err != nil {
 		t.Fatalf("Send = %v, want nil", err)
 	}
@@ -388,7 +387,6 @@ func TestSendLeavesTheClientWriterFlushable(t *testing.T) {
 	sink := &clientSink{}
 
 	_, err := target.Send(context.Background(), prepared, sink, nil)
-
 	if err != nil {
 		t.Fatalf("Send = %v, want nil", err)
 	}

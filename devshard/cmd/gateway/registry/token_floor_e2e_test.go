@@ -57,7 +57,6 @@ func TestAGhostBurnStillCommits(t *testing.T) {
 	prepared, err := stream.Advance(func(scheduler.HostBinding) scheduler.NonceIntent {
 		return scheduler.NonceIntent{Commit: true, Params: stream.ghostParams()}
 	})
-
 	if err != nil {
 		t.Fatalf("burning a nonce = %v, want nil", err)
 	}

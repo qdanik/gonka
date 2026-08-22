@@ -47,6 +47,7 @@ func chainBackedSessions(records devshardLookup, storageDir string) sessionSourc
 		}, nil
 	}
 }
+
 func resolveStorageDir(explicit *string) (string, error) {
 	if explicit != nil {
 		return *explicit, nil
@@ -69,6 +70,7 @@ func (g *gateway) publishEscrows(ctx context.Context) error {
 		return g.store.SetDevshardActive(ctx, escrowID, false)
 	})
 }
+
 func publishEscrows(
 	ctx context.Context,
 	records []store.DevshardRecord,
@@ -137,6 +139,7 @@ func (g *gateway) republishOnDevshardWrites(ctx context.Context) <-chan struct{}
 	}()
 	return done
 }
+
 func notify(work chan struct{}) {
 	select {
 	case work <- struct{}{}:
@@ -154,12 +157,15 @@ type devshardWrites struct {
 func (w devshardWrites) UpsertDevshard(ctx context.Context, record store.DevshardRecord) error {
 	return w.report(w.Store.UpsertDevshard(ctx, record))
 }
+
 func (w devshardWrites) SetDevshardActive(ctx context.Context, escrowID string, active bool) error {
 	return w.report(w.Store.SetDevshardActive(ctx, escrowID, active))
 }
+
 func (w devshardWrites) DeleteDevshard(ctx context.Context, escrowID string) error {
 	return w.report(w.Store.DeleteDevshard(ctx, escrowID))
 }
+
 func (w devshardWrites) report(err error) error {
 	if err == nil {
 		w.changed()
@@ -308,6 +314,7 @@ func readOnlySessions(records devshardLookup, storageDir string) registry.Sessio
 		return registry.NewSessionHandle(session, machine), nil
 	}
 }
+
 func escrowStorage(storageDir, escrowID string) (string, error) {
 	storagePath := api.DevshardStoragePath(storageDir, escrowID)
 	if err := os.MkdirAll(storagePath, 0o755); err != nil {

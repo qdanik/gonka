@@ -392,8 +392,7 @@ func TestMergePreservedWithValidationCapable(t *testing.T) {
 	t.Run("capable excluded miner rejoins with capable-node weight", func(t *testing.T) {
 		state := buildState(t)
 
-		preserved, preservedByModel, currentWeights, currentWeightsByModel :=
-			mergePreservedWithValidationCapable(state, defCapable)
+		preserved, preservedByModel, currentWeights, currentWeightsByModel := mergePreservedWithValidationCapable(state, defCapable)
 
 		if want := []string{"gonka1abc", "gonka1def"}; !reflect.DeepEqual(preserved, want) {
 			t.Fatalf("preserved = %v, want %v", preserved, want)
@@ -427,8 +426,7 @@ func TestMergePreservedWithValidationCapable(t *testing.T) {
 	t.Run("non-capable excluded miner stays out", func(t *testing.T) {
 		state := buildState(t)
 
-		preserved, preservedByModel, currentWeights, _ :=
-			mergePreservedWithValidationCapable(state, noneCapable)
+		preserved, preservedByModel, currentWeights, _ := mergePreservedWithValidationCapable(state, noneCapable)
 
 		if want := []string{"gonka1abc"}; !reflect.DeepEqual(preserved, want) {
 			t.Fatalf("preserved = %v, want %v", preserved, want)

@@ -591,7 +591,6 @@ func TestPickEscrowSkipsAnEscrowHoldingNoAllowedParticipant(t *testing.T) {
 	})
 
 	picked, err := scheduler.pickEscrow(RequestProfile{Model: modelA}, chain.PhaseSnapshot{})
-
 	if err != nil {
 		t.Fatalf("pickEscrow(): %v", err)
 	}

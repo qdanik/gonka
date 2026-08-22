@@ -37,7 +37,6 @@ func TestBuildSettlementRehydratesANonResidentEscrowReadOnly(t *testing.T) {
 	registry := New(Deps{ServingSessions: serving.open, ReadOnlySessions: readOnly.open, Now: fixedClock()})
 
 	input, err := registry.BuildSettlement(context.Background(), "5")
-
 	if err != nil {
 		t.Fatalf("BuildSettlement = %v, want nil", err)
 	}
@@ -64,7 +63,6 @@ func TestBuildSettlementUsesTheResidentSessionWithoutRehydrating(t *testing.T) {
 	mustAdd(t, registry, "5", "qwen")
 
 	input, err := registry.BuildSettlement(context.Background(), "5")
-
 	if err != nil {
 		t.Fatalf("BuildSettlement = %v, want nil", err)
 	}
@@ -87,7 +85,6 @@ func TestBuildSettlementOrdersHostStatsAndSignaturesBySlot(t *testing.T) {
 	})
 
 	input, err := registry.BuildSettlement(context.Background(), "5")
-
 	if err != nil {
 		t.Fatalf("BuildSettlement = %v, want nil", err)
 	}

@@ -9,7 +9,8 @@ import (
 func stream(state *attemptState, start time.Time, chunks ...struct {
 	after   time.Duration
 	payload string
-}) {
+},
+) {
 	for _, chunk := range chunks {
 		state.streamChunks++
 		state.outputBytes += int64(len(chunk.payload))

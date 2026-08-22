@@ -66,6 +66,7 @@ func attemptDeliveryFields(outcome AttemptOutcome) []any {
 	}
 	return fields
 }
+
 func (c *raceCoordinator) complete(attempt *liveAttempt, event AttemptEvent) {
 	attempt.done, attempt.completed = true, event.At
 	attempt.outcome, attempt.lifecycle = event.Outcome, event.Lifecycle
@@ -139,6 +140,7 @@ func (c *raceCoordinator) racedTerminal(attempt *liveAttempt, outcome AttemptOut
 	}
 	return terminal
 }
+
 func (c *raceCoordinator) retire(attempt *liveAttempt) {
 	c.pending--
 	attempt.cancel()
@@ -159,6 +161,7 @@ func (c *raceCoordinator) report() RaceOutcome {
 	}
 	return outcome
 }
+
 func (c *raceCoordinator) outcome() RaceOutcome {
 	outcome := RaceOutcome{
 		RequestID:       c.request.RequestID,

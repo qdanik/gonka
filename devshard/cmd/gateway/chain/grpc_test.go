@@ -11,7 +11,6 @@ func TestAConfiguredChainIDIsUsedWithoutAskingTheNode(t *testing.T) {
 	grpcChain := NewGRPCChain(nil, "  gonka-mainnet  ")
 
 	chainID, err := grpcChain.ChainID(context.Background())
-
 	if err != nil {
 		t.Fatalf("ChainID: %v", err)
 	}

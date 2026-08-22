@@ -83,7 +83,6 @@ func TestAReadDeadlineBoundsTheBodyAndIsClearedBeforeTheResponse(t *testing.T) {
 	readStarted := time.Now()
 
 	body, err := readBody(writer, request, chatIngestLimit)
-
 	if err != nil {
 		t.Fatalf("readBody() = %v", err)
 	}

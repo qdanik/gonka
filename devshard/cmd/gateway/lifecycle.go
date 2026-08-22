@@ -106,9 +106,11 @@ func waitFor(component stopper) func(context.Context) error {
 		}
 	}
 }
+
 func closeOf(component io.Closer) func(context.Context) error {
 	return func(context.Context) error { return component.Close() }
 }
+
 func closeIdle(component idleConnections) func(context.Context) error {
 	return func(context.Context) error {
 		component.CloseIdleConnections()
@@ -133,6 +135,7 @@ func stopAll(ctx context.Context, steps []shutdownStep) error {
 	}
 	return errors.Join(problems...)
 }
+
 func (g *gateway) shutdown(grace time.Duration) error {
 	drainCtx, cancelDrain := context.WithTimeout(context.Background(), grace)
 	defer cancelDrain()

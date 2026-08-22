@@ -313,7 +313,6 @@ func TestStreamRewriter_CloseOnCleanEndEmitsNothing(t *testing.T) {
 	}
 
 	final, err := rewriter.Close()
-
 	if err != nil {
 		t.Errorf("Close() = %v, want no error", err)
 	}
@@ -331,7 +330,6 @@ func TestStreamRewriter_CloseEmitsUnterminatedFinalEvent(t *testing.T) {
 	}
 
 	final, err := rewriter.Close()
-
 	if err != nil {
 		t.Errorf("Close() = %v, want no error", err)
 	}
@@ -348,7 +346,6 @@ func TestStreamRewriter_CloseRewritesUnterminatedFinalEvent(t *testing.T) {
 	}
 
 	final, err := rewriter.Close()
-
 	if err != nil {
 		t.Errorf("Close() = %v, want no error", err)
 	}
@@ -383,7 +380,6 @@ func TestStreamRewriter_CloseKeepsUnterminatedNonDataLine(t *testing.T) {
 	}
 
 	final, err := rewriter.Close()
-
 	if err != nil {
 		t.Errorf("Close() = %v, want no error", err)
 	}

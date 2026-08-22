@@ -211,8 +211,7 @@ func (o *PhaseObserver) refresh(ctx context.Context) {
 		// During PoC validation, excluded miners with validation-inference-capable nodes rejoin
 		// the preserved/current views with those nodes' weight. Capability is fail-closed, so a
 		// cold versions cache keeps the merge conservative.
-		preserved, preservedByModel, currentWeights, currentWeightsByModel =
-			mergePreservedWithValidationCapable(participants, o.versions.IsNodeValidationCapable)
+		preserved, preservedByModel, currentWeights, currentWeightsByModel = mergePreservedWithValidationCapable(participants, o.versions.IsNodeValidationCapable)
 	}
 
 	snapshot.CurrentWeights = currentWeights

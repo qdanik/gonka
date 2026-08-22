@@ -562,7 +562,6 @@ func TestPickStillServesWhenEveryHostIsFailingAtOnce(t *testing.T) {
 	test := newSchedulerHarness(t, schedulerConfig{health: tracker})
 
 	assignment, err := test.scheduler.Pick(context.Background(), RequestProfile{Model: modelA})
-
 	if err != nil {
 		t.Fatalf("Pick: %v, want a host the cap kept in rotation", err)
 	}

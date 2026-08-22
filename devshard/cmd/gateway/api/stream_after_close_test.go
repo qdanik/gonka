@@ -56,7 +56,6 @@ func TestClientStreamIsInertAfterClose(t *testing.T) {
 
 	stream.Flush()
 	count, err := stream.Write([]byte("data: {\"late\":true}\n\n"))
-
 	if err != nil {
 		t.Fatalf("a late write returned %v, want the chunk swallowed", err)
 	}

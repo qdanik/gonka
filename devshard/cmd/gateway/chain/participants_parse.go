@@ -121,6 +121,7 @@ func parseParticipants(body []byte, preservation preservationMode, preservedNode
 	}
 	return state, nil
 }
+
 func addModelWeights(dst map[string]map[string]float64, key string, weights map[string]float64) {
 	for model, weight := range weights {
 		modelWeights := dst[model]
@@ -131,6 +132,7 @@ func addModelWeights(dst map[string]map[string]float64, key string, weights map[
 		modelWeights[key] = weight
 	}
 }
+
 func nodePreserved(participantID, model string, node chainMLNodeInfo, preservation preservationMode, preservedNodes preservedSnapshotState) bool {
 	switch preservation {
 	case preservationModeAll:
@@ -141,12 +143,14 @@ func nodePreserved(participantID, model string, node chainMLNodeInfo, preservati
 		return len(node.TimeslotAllocation) > 1 && node.TimeslotAllocation[1]
 	}
 }
+
 func participantModelAt(participant chainActiveParticipant, index int) string {
 	if index < 0 || index >= len(participant.Models) {
 		return ""
 	}
 	return strings.TrimSpace(participant.Models[index])
 }
+
 func modelNodePoCWeight(participantID, model string, modelNodes chainModelMLNodes, preservation preservationMode, preservedNodes preservedSnapshotState) uint64 {
 	var weight uint64
 	for _, node := range modelNodes.MLNodes {
@@ -156,6 +160,7 @@ func modelNodePoCWeight(participantID, model string, modelNodes chainModelMLNode
 	}
 	return weight
 }
+
 func participantWeight(participant chainActiveParticipant, preservation preservationMode, preservedNodes preservedSnapshotState) float64 {
 	var weight uint64
 	for i, modelNodes := range participant.MLNodes {
@@ -163,6 +168,7 @@ func participantWeight(participant chainActiveParticipant, preservation preserva
 	}
 	return float64(weight)
 }
+
 func participantWeightsByModel(participant chainActiveParticipant, preservation preservationMode, preservedNodes preservedSnapshotState) map[string]float64 {
 	weights := make(map[string]float64, len(participant.Models))
 	for i, rawModel := range participant.Models {

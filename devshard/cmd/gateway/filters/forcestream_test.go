@@ -127,7 +127,6 @@ func TestStreamRewriterDropsForcedUsage(t *testing.T) {
 			t.Parallel()
 
 			got, err := NewStreamRewriter(LogprobIntent{}, testCase.keepUsage).Write([]byte(testCase.stream))
-
 			if err != nil {
 				t.Fatalf("Write() = %v, want no error", err)
 			}
@@ -144,7 +143,6 @@ func TestStreamRewriterKeepsAnErrorEventThatCarriesUsage(t *testing.T) {
 	event := []byte("data: {\"error\":{\"message\":\"upstream exploded\"},\"usage\":{\"completion_tokens\":1}}\n\n")
 
 	got, err := NewStreamRewriter(LogprobIntent{}, false).Write(event)
-
 	if err != nil {
 		t.Fatalf("Write() = %v, want no error", err)
 	}
@@ -162,7 +160,6 @@ func TestStreamRewriterRemovesANullUsage(t *testing.T) {
 	event := []byte("data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hi\"}}],\"usage\":null}\n\n")
 
 	got, err := NewStreamRewriter(LogprobIntent{}, false).Write(event)
-
 	if err != nil {
 		t.Fatalf("Write() = %v, want no error", err)
 	}
@@ -180,7 +177,6 @@ func TestStreamRewriterCloseSeparatesADropFromATruncation(t *testing.T) {
 	}
 
 	tail, err := rewriter.Close()
-
 	if err != nil {
 		t.Fatalf("Close() = %v, want no error for a dropped usage tail", err)
 	}

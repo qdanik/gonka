@@ -169,6 +169,7 @@ func (d *dispatcher) giveBack(taken reservation) {
 		taken.escrowHold()
 	}
 }
+
 func (d *dispatcher) handOff(served *waiter, taken reservation, prepared Prepared) {
 	d.dequeue(served)
 	if prepared == nil {

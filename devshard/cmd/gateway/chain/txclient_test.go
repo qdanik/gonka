@@ -109,7 +109,6 @@ func TestCreateEscrowRecordsTheIntentBeforeItBroadcasts(t *testing.T) {
 	}
 
 	result, err := client.CreateEscrow(t.Context(), signer, 1_000_000, fixedModelID, onPrepared)
-
 	if err != nil {
 		t.Fatalf("CreateEscrow: %v", err)
 	}
@@ -207,7 +206,6 @@ func TestSettleEscrowWaitsForTheTransactionToCommit(t *testing.T) {
 	input := fixedSettlementFull()
 
 	result, err := client.SettleEscrow(t.Context(), signer, input, nil)
-
 	if err != nil {
 		t.Fatalf("SettleEscrow: %v", err)
 	}
