@@ -25,19 +25,20 @@ type EscrowSnapshot struct {
 }
 
 type PersistedNonce struct {
-	Nonce         uint64 `json:"nonce"`
-	Sent          bool   `json:"sent"`
-	Acknowledged  bool   `json:"acknowledged"`
-	Usage         Usage  `json:"usage"`
-	TimeoutKind   string `json:"timeout_kind,omitempty"`
-	TimeoutAction string `json:"timeout_action,omitempty"`
-	TimeoutReason string `json:"timeout_reason,omitempty"`
-	Terminal      string `json:"terminal,omitempty"`
-	Phase         Phase  `json:"phase,omitempty"`
-	SlowReceipt   bool   `json:"slow_receipt,omitempty"`
-	SlowChunk     bool   `json:"slow_chunk,omitempty"`
-	ClockDrifted  bool   `json:"clock_drifted,omitempty"`
-	SlowDecode    bool   `json:"slow_decode,omitempty"`
+	Nonce           uint64 `json:"nonce"`
+	Sent            bool   `json:"sent"`
+	Acknowledged    bool   `json:"acknowledged"`
+	Usage           Usage  `json:"usage"`
+	TimeoutKind     string `json:"timeout_kind,omitempty"`
+	TimeoutAction   string `json:"timeout_action,omitempty"`
+	TimeoutReason   string `json:"timeout_reason,omitempty"`
+	Terminal        string `json:"terminal,omitempty"`
+	Phase           Phase  `json:"phase,omitempty"`
+	SlowReceipt     bool   `json:"slow_receipt,omitempty"`
+	SlowChunk       bool   `json:"slow_chunk,omitempty"`
+	ClockDrifted    bool   `json:"clock_drifted,omitempty"`
+	SlowDecode      bool   `json:"slow_decode,omitempty"`
+	LogprobsDecoded bool   `json:"logprobs_decoded,omitempty"`
 }
 
 type PersistedCounter struct {
@@ -73,19 +74,20 @@ func (b *Book) Snapshot() Snapshot {
 				continue
 			}
 			stored.Nonces = append(stored.Nonces, PersistedNonce{
-				Nonce:         nonce,
-				Sent:          record.sent,
-				Acknowledged:  record.acknowledged,
-				Usage:         record.usage,
-				TimeoutKind:   record.timeoutKind,
-				TimeoutAction: record.timeoutAction,
-				TimeoutReason: record.timeoutReason,
-				Terminal:      record.terminal,
-				Phase:         record.phase,
-				SlowReceipt:   record.slowReceipt,
-				SlowChunk:     record.slowChunk,
-				ClockDrifted:  record.clockDrifted,
-				SlowDecode:    record.slowDecode,
+				Nonce:           nonce,
+				Sent:            record.sent,
+				Acknowledged:    record.acknowledged,
+				Usage:           record.usage,
+				TimeoutKind:     record.timeoutKind,
+				TimeoutAction:   record.timeoutAction,
+				TimeoutReason:   record.timeoutReason,
+				Terminal:        record.terminal,
+				Phase:           record.phase,
+				SlowReceipt:     record.slowReceipt,
+				SlowChunk:       record.slowChunk,
+				ClockDrifted:    record.clockDrifted,
+				SlowDecode:      record.slowDecode,
+				LogprobsDecoded: record.logprobsDecoded,
 			})
 		}
 		slices.SortFunc(stored.Counters, func(left, right PersistedCounter) int {
@@ -124,18 +126,19 @@ func (b *Book) Restore(snapshot Snapshot) error {
 		}
 		for _, stored := range stored.Nonces {
 			record := &nonceRecord{
-				sent:          stored.Sent,
-				acknowledged:  stored.Acknowledged,
-				usage:         stored.Usage,
-				timeoutKind:   stored.TimeoutKind,
-				timeoutAction: stored.TimeoutAction,
-				timeoutReason: stored.TimeoutReason,
-				terminal:      stored.Terminal,
-				phase:         stored.Phase,
-				slowReceipt:   stored.SlowReceipt,
-				slowChunk:     stored.SlowChunk,
-				clockDrifted:  stored.ClockDrifted,
-				slowDecode:    stored.SlowDecode,
+				sent:            stored.Sent,
+				acknowledged:    stored.Acknowledged,
+				usage:           stored.Usage,
+				timeoutKind:     stored.TimeoutKind,
+				timeoutAction:   stored.TimeoutAction,
+				timeoutReason:   stored.TimeoutReason,
+				terminal:        stored.Terminal,
+				phase:           stored.Phase,
+				slowReceipt:     stored.SlowReceipt,
+				slowChunk:       stored.SlowChunk,
+				clockDrifted:    stored.ClockDrifted,
+				slowDecode:      stored.SlowDecode,
+				logprobsDecoded: stored.LogprobsDecoded,
 			}
 			escrow.nonces[stored.Nonce] = record
 			if key, settled := classify(escrow.slotOf(stored.Nonce), record); settled {

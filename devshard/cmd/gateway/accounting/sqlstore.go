@@ -62,12 +62,14 @@ CREATE TABLE IF NOT EXISTS accounting_counters (
 	timeout_reason TEXT    NOT NULL,
 	terminal       TEXT    NOT NULL,
 	phase          TEXT    NOT NULL,
-	slow_receipt   INTEGER NOT NULL,
-	slow_chunk     INTEGER NOT NULL,
-	clock_drifted  INTEGER NOT NULL,
-	count          INTEGER NOT NULL,
+	slow_receipt     INTEGER NOT NULL,
+	slow_chunk       INTEGER NOT NULL,
+	clock_drifted    INTEGER NOT NULL,
+	slow_decode      INTEGER NOT NULL,
+	logprobs_decoded INTEGER NOT NULL,
+	count            INTEGER NOT NULL,
 	PRIMARY KEY (escrow_id, slot_id, disposition, ghost_reason, timeout_kind, timeout_action, timeout_reason,
-	             terminal, phase, slow_receipt, slow_chunk, clock_drifted)
+	             terminal, phase, slow_receipt, slow_chunk, clock_drifted, slow_decode, logprobs_decoded)
 );
 CREATE TABLE IF NOT EXISTS accounting_nonces (
 	escrow_id      TEXT    NOT NULL,
@@ -80,9 +82,11 @@ CREATE TABLE IF NOT EXISTS accounting_nonces (
 	timeout_reason TEXT    NOT NULL,
 	terminal       TEXT    NOT NULL,
 	phase          TEXT    NOT NULL,
-	slow_receipt   INTEGER NOT NULL,
-	slow_chunk     INTEGER NOT NULL,
-	clock_drifted  INTEGER NOT NULL,
+	slow_receipt     INTEGER NOT NULL,
+	slow_chunk       INTEGER NOT NULL,
+	clock_drifted    INTEGER NOT NULL,
+	slow_decode      INTEGER NOT NULL,
+	logprobs_decoded INTEGER NOT NULL,
 	PRIMARY KEY (escrow_id, nonce)
 );
 `
@@ -143,8 +147,8 @@ func currentSchema(db *sql.DB) bool {
 		return false
 	}
 	for _, probe := range []string{
-		`SELECT terminal, phase, slow_receipt, slow_chunk, clock_drifted FROM accounting_counters LIMIT 0`,
-		`SELECT terminal, phase, slow_receipt, slow_chunk, clock_drifted FROM accounting_nonces LIMIT 0`,
+		`SELECT terminal, phase, slow_receipt, slow_chunk, clock_drifted, slow_decode, logprobs_decoded FROM accounting_counters LIMIT 0`,
+		`SELECT terminal, phase, slow_receipt, slow_chunk, clock_drifted, slow_decode, logprobs_decoded FROM accounting_nonces LIMIT 0`,
 	} {
 		if _, err := db.Exec(probe); err != nil {
 			return false
@@ -231,12 +235,12 @@ func writeEscrow(ctx context.Context, transaction *sql.Tx, escrow EscrowSnapshot
 		if _, err := transaction.ExecContext(ctx,
 			`INSERT INTO accounting_counters
 			 (escrow_id, slot_id, disposition, ghost_reason, timeout_kind, timeout_action, timeout_reason,
-			  terminal, phase, slow_receipt, slow_chunk, clock_drifted, count)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			  terminal, phase, slow_receipt, slow_chunk, clock_drifted, slow_decode, logprobs_decoded, count)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			identity, counter.SlotID, counter.Disposition, counter.GhostReason,
 			counter.TimeoutKind, counter.TimeoutAction, counter.TimeoutReason,
 			counter.Terminal, counter.Phase, counter.SlowReceipt, counter.SlowChunk, counter.ClockDrifted,
-			counter.Count,
+			counter.SlowDecode, counter.LogprobsDecoded, counter.Count,
 		); err != nil {
 			return fmt.Errorf("writing a counter of %s: %w", identity, err)
 		}
@@ -245,11 +249,12 @@ func writeEscrow(ctx context.Context, transaction *sql.Tx, escrow EscrowSnapshot
 		if _, err := transaction.ExecContext(ctx,
 			`INSERT INTO accounting_nonces
 			 (escrow_id, nonce, sent, acknowledged, usage, timeout_kind, timeout_action, timeout_reason,
-			  terminal, phase, slow_receipt, slow_chunk, clock_drifted)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			  terminal, phase, slow_receipt, slow_chunk, clock_drifted, slow_decode, logprobs_decoded)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			identity, stored.Nonce, stored.Sent, stored.Acknowledged, stored.Usage,
 			stored.TimeoutKind, stored.TimeoutAction, stored.TimeoutReason,
 			stored.Terminal, stored.Phase, stored.SlowReceipt, stored.SlowChunk, stored.ClockDrifted,
+			stored.SlowDecode, stored.LogprobsDecoded,
 		); err != nil {
 			return fmt.Errorf("writing nonce %d of %s: %w", stored.Nonce, identity, err)
 		}
@@ -374,7 +379,7 @@ func (s *Store) readHostStats(ctx context.Context, escrows map[string]*EscrowSna
 func (s *Store) readCounters(ctx context.Context, escrows map[string]*EscrowSnapshot) error {
 	return s.eachRow(ctx,
 		`SELECT escrow_id, slot_id, disposition, ghost_reason, timeout_kind, timeout_action, timeout_reason,
-		        terminal, phase, slow_receipt, slow_chunk, clock_drifted, count
+		        terminal, phase, slow_receipt, slow_chunk, clock_drifted, slow_decode, logprobs_decoded, count
 		 FROM accounting_counters ORDER BY escrow_id, slot_id, disposition`, "counters",
 		func(rows *sql.Rows) error {
 			var escrowID string
@@ -382,7 +387,7 @@ func (s *Store) readCounters(ctx context.Context, escrows map[string]*EscrowSnap
 			if err := rows.Scan(&escrowID, &counter.SlotID, &counter.Disposition, &counter.GhostReason,
 				&counter.TimeoutKind, &counter.TimeoutAction, &counter.TimeoutReason,
 				&counter.Terminal, &counter.Phase, &counter.SlowReceipt, &counter.SlowChunk, &counter.ClockDrifted,
-				&counter.Count); err != nil {
+				&counter.SlowDecode, &counter.LogprobsDecoded, &counter.Count); err != nil {
 				return err
 			}
 			if escrow, known := escrows[escrowID]; known {
@@ -395,14 +400,15 @@ func (s *Store) readCounters(ctx context.Context, escrows map[string]*EscrowSnap
 func (s *Store) readNonces(ctx context.Context, escrows map[string]*EscrowSnapshot) error {
 	return s.eachRow(ctx,
 		`SELECT escrow_id, nonce, sent, acknowledged, usage, timeout_kind, timeout_action, timeout_reason,
-		        terminal, phase, slow_receipt, slow_chunk, clock_drifted
+		        terminal, phase, slow_receipt, slow_chunk, clock_drifted, slow_decode, logprobs_decoded
 		 FROM accounting_nonces ORDER BY escrow_id, nonce`, "nonces",
 		func(rows *sql.Rows) error {
 			var escrowID string
 			var stored PersistedNonce
 			if err := rows.Scan(&escrowID, &stored.Nonce, &stored.Sent, &stored.Acknowledged, &stored.Usage,
 				&stored.TimeoutKind, &stored.TimeoutAction, &stored.TimeoutReason,
-				&stored.Terminal, &stored.Phase, &stored.SlowReceipt, &stored.SlowChunk, &stored.ClockDrifted); err != nil {
+				&stored.Terminal, &stored.Phase, &stored.SlowReceipt, &stored.SlowChunk, &stored.ClockDrifted,
+				&stored.SlowDecode, &stored.LogprobsDecoded); err != nil {
 				return err
 			}
 			if escrow, known := escrows[escrowID]; known {
