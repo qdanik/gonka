@@ -304,3 +304,18 @@ func TestTheGroupIsTaughtWhileTheProbeIsStillStreaming(t *testing.T) {
 		t.Error("the catch-up waited for the probe's answer: the group holds nothing for that whole inference")
 	}
 }
+
+// The probe is answered for this gateway, not for a client, and the ledger can only tell the two apart
+// if the nonce says so. Without the mark every rotation reads as a race the host lost.
+func TestTheWarmupNonceIsSettledAsAProbe(t *testing.T) {
+	warmup, ledger, _ := newWarmupUnderTest(stubSession{}, nil)
+
+	warmup.warm("escrow-1", "test-model")
+
+	if len(ledger.races) != 1 || len(ledger.races[0].attempts) != 1 {
+		t.Fatalf("recorded %+v, want one attempt for the one nonce the warmup spends", ledger.races)
+	}
+	if got := ledger.races[0].attempts[0].Terminal; got != accounting.TerminalWarmupProbe {
+		t.Errorf("terminal = %q, want %q", got, accounting.TerminalWarmupProbe)
+	}
+}

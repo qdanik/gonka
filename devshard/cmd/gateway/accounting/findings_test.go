@@ -381,3 +381,73 @@ func TestEveryFindingCodeIsDocumented(t *testing.T) {
 		}
 	}
 }
+
+// A refusal this gateway caused is not the host's to answer for. Charging it anyway is how a host that
+// refused nothing ends up flagged for refusals — the phase transition, the vote round that reached no
+// verdict and the poster that was gone are all ours.
+func TestFailuresThisGatewayCausedAreNotChargedToTheHost(t *testing.T) {
+	for _, reason := range []string{
+		TimeoutReasonPhaseAborted, TimeoutReasonCollectionError,
+		TimeoutReasonNotApplied, TimeoutReasonNoPoster, TimeoutReasonLongResponse,
+	} {
+		t.Run(reason, func(t *testing.T) {
+			record := recordWith(100, map[Disposition]uint64{
+				DispositionFinishedUsed:      50,
+				DispositionUnfinishedRefused: 50,
+			})
+			record.Counters = []CounterRecord{{
+				CounterKey: CounterKey{Disposition: DispositionUnfinishedRefused, TimeoutReason: reason},
+				Count:      50,
+			}}
+
+			if codes := codesOf(findingsFor(record)); slices.Contains(codes, FindingRefusals) {
+				t.Errorf("findings %v blame the host for a refusal caused by %q", codes, reason)
+			}
+		})
+	}
+}
+
+// An unnamed reason still counts: excusing what the ledger could not classify would empty the rates.
+func TestARefusalWithNoNamedCauseStillCountsAgainstTheHost(t *testing.T) {
+	record := recordWith(100, map[Disposition]uint64{
+		DispositionFinishedUsed:      50,
+		DispositionUnfinishedRefused: 50,
+	})
+
+	finding := findingWithCode(t, findingsFor(record), FindingRefusals)
+
+	if finding.Part != 50 {
+		t.Fatalf("refusals = %d of %d, want all 50 charged", finding.Part, finding.Whole)
+	}
+}
+
+// The warmup nonce is answered for this gateway, not for a client. Counting it as an answer nobody used
+// reads a host that lost no race as one that keeps losing them, and it happens on every rotation.
+func TestTheWarmupProbeIsNotAnAnswerNobodyUsed(t *testing.T) {
+	record := recordWith(40, map[Disposition]uint64{
+		DispositionFinishedUsed:   20,
+		DispositionFinishedUnused: 20,
+	})
+	record.Counters = []CounterRecord{{
+		CounterKey: CounterKey{Disposition: DispositionFinishedUnused, Terminal: TerminalWarmupProbe},
+		Count:      20,
+	}}
+
+	if codes := codesOf(findingsFor(record)); slices.Contains(codes, FindingUnusedAnswers) {
+		t.Errorf("findings %v count the gateway's own probes as answers a client threw away", codes)
+	}
+}
+
+// A real losing answer still counts: the probe exclusion must not swallow the races a host loses.
+func TestALostRaceIsStillAnAnswerNobodyUsed(t *testing.T) {
+	record := recordWith(40, map[Disposition]uint64{
+		DispositionFinishedUsed:   20,
+		DispositionFinishedUnused: 20,
+	})
+
+	finding := findingWithCode(t, findingsFor(record), FindingUnusedAnswers)
+
+	if finding.Part != 20 || finding.Whole != 40 {
+		t.Fatalf("unused = %d of %d, want the 20 lost races against all 40 delivered", finding.Part, finding.Whole)
+	}
+}

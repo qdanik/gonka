@@ -713,12 +713,18 @@ func (s weightlessSession) Phase() types.SessionPhase        { return types.Phas
 func (s weightlessSession) Signatures() map[uint64]map[uint32][]byte {
 	return map[uint64]map[uint32][]byte{}
 }
-func (s weightlessSession) SnapshotState() types.EscrowState { return types.EscrowState{} }
-func (s weightlessSession) SealedInferences() int            { return 0 }
-func (s weightlessSession) Finalize(context.Context) error   { return nil }
-func (s weightlessSession) FlushSnapshot() error             { return nil }
-func (s weightlessSession) Close() error                     { return nil }
-func (s weightlessSession) UserSession() *user.Session       { return nil }
+
+func (s weightlessSession) SignatureStatus() ([]user.SignatureStatusEntry, uint64, bool) {
+	return nil, 0, false
+}
+
+func (s weightlessSession) SignedSlots() map[uint64]types.Bitmap128 { return nil }
+func (s weightlessSession) SnapshotState() types.EscrowState        { return types.EscrowState{} }
+func (s weightlessSession) SealedInferences() int                   { return 0 }
+func (s weightlessSession) Finalize(context.Context) error          { return nil }
+func (s weightlessSession) FlushSnapshot() error                    { return nil }
+func (s weightlessSession) Close() error                            { return nil }
+func (s weightlessSession) UserSession() *user.Session              { return nil }
 
 func (s weightlessSession) PrepareInferenceFn(user.ParamsForHost) (*user.PreparedInference, error) {
 	return nil, nil

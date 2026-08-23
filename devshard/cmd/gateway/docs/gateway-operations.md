@@ -49,6 +49,7 @@ All admin, all always-on.
 | `/v1/admin/suspicious-hosts` | GET, POST, DELETE | The manual never-trust list. |
 | `/v1/admin/participants/unquarantine` | POST | Clear breaker state for one participant. |
 | `/v1/admin/accounting/reset/{epoch}` | POST | Drop the nonce ledger's records for one epoch. |
+| `/v1/debug/perf` | GET | Tracked hosts as the picker sees them, beside the escalation settings they are judged against. |
 | `/v1/debug/rotation` | GET | Rotation status per model and role. |
 | `/v1/debug/memstats` | GET, HEAD | Go memory statistics. |
 

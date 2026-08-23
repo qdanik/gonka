@@ -167,10 +167,13 @@ func TestAccountingObserverSyncsActiveProtocolMisses(t *testing.T) {
 	oldBuffer := user.TimeoutBuffer
 	user.TimeoutBuffer = 0
 	t.Cleanup(func() { user.TimeoutBuffer = oldBuffer })
+	// The record carries the dispatch time a verifier recomputes the refusal deadline from, so it has to
+	// agree with the send: a record stamped now is one no verifier would accept a refusal for yet.
+	sentAt := time.Now().Add(-2 * time.Second)
 	params := defaultParams()
+	params.StartedAt = sentAt.Unix()
 	prepared, err := env.session.PrepareInference(params)
 	require.NoError(t, err)
-	sentAt := time.Now().Add(-2 * time.Second)
 	recorder.RealSend("escrow-proxy", prepared.Nonce(), sentAt, "")
 
 	result, err := env.session.HandleTimeout(context.Background(), prepared.Nonce(), sentAt, &host.InferencePayload{

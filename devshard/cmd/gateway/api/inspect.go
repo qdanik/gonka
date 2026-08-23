@@ -10,6 +10,7 @@ import (
 	"devshard/cmd/gateway/escrow"
 	"devshard/cmd/gateway/registry"
 	"devshard/types"
+	"devshard/user"
 )
 
 // escrowInspection is one escrow's state as an operator reads it while recovering a stuck devshard.
@@ -49,8 +50,11 @@ type inferenceEntry struct {
 }
 
 type signatureEntry struct {
-	Nonce uint64   `json:"nonce"`
-	Slots []uint32 `json:"slots"`
+	Nonce      uint64   `json:"nonce"`
+	Slots      []uint32 `json:"slots"`
+	SigWeight  uint32   `json:"sig_weight"`
+	TotalSlots uint32   `json:"total_slots"`
+	HasQuorum  bool     `json:"has_quorum"`
 }
 
 func (s *Server) handleDevshardState(w http.ResponseWriter, r *http.Request) {
@@ -99,12 +103,32 @@ func (s *Server) handleDevshardDebugSignatures(w http.ResponseWriter, r *http.Re
 		return
 	}
 	defer release()
-	signatures := session.Signatures()
-	entries := make([]signatureEntry, 0, len(signatures))
-	for _, nonce := range slices.Sorted(maps.Keys(signatures)) {
-		entries = append(entries, signatureEntry{Nonce: nonce, Slots: slices.Sorted(maps.Keys(signatures[nonce]))})
+	status, highestQuorum, hasQuorum := session.SignatureStatus()
+	writeJSON(w, http.StatusOK, map[string]any{
+		"escrow_id":            escrowID,
+		"highest_quorum_nonce": highestQuorum,
+		"has_quorum":           hasQuorum,
+		"signatures":           signatureEntries(session.SignedSlots(), status),
+	})
+}
+
+func signatureEntries(signed map[uint64]types.Bitmap128, status []user.SignatureStatusEntry) []signatureEntry {
+	weights := make(map[uint64]user.SignatureStatusEntry, len(status))
+	for _, entry := range status {
+		weights[entry.Nonce] = entry
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"escrow_id": escrowID, "signatures": entries})
+	entries := make([]signatureEntry, 0, len(signed))
+	for _, nonce := range slices.Sorted(maps.Keys(signed)) {
+		weight := weights[nonce]
+		entries = append(entries, signatureEntry{
+			Nonce:      nonce,
+			Slots:      signed[nonce].SetBits(),
+			SigWeight:  weight.SigWeight,
+			TotalSlots: weight.Total,
+			HasQuorum:  weight.HasQuorum,
+		})
+	}
+	return entries
 }
 
 func (s *Server) writeInferences(w http.ResponseWriter, r *http.Request, keep func(types.InferenceStatus) bool) {

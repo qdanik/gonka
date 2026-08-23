@@ -34,6 +34,20 @@ type escrowLedger struct {
 	retiredAt   time.Time
 }
 
+// newEscrowLedger is the only way to build one. A second construction site that forgot a map would
+// panic on the first write to it, and the write is a recording path with no error to return.
+func newEscrowLedger(metadata EscrowMetadata) *escrowLedger {
+	return &escrowLedger{
+		metadata:    metadata,
+		hostStats:   make(map[uint32]types.HostStats),
+		challenged:  make(map[uint32]uint64),
+		validations: make(map[uint32]uint64),
+		timeouts:    make(map[uint32]uint64),
+		counters:    make(map[CounterKey]uint64),
+		nonces:      make(map[uint64]*nonceRecord),
+	}
+}
+
 type nonceRecord struct {
 	requestID    string
 	sent         bool
@@ -83,15 +97,7 @@ func (b *Book) OpenEscrow(metadata EscrowMetadata) error {
 		b.touchLocked()
 		return nil
 	}
-	b.escrows[metadata.EscrowID] = &escrowLedger{
-		metadata:    metadata,
-		hostStats:   make(map[uint32]types.HostStats),
-		challenged:  make(map[uint32]uint64),
-		validations: make(map[uint32]uint64),
-		timeouts:    make(map[uint32]uint64),
-		counters:    make(map[CounterKey]uint64),
-		nonces:      make(map[uint64]*nonceRecord),
-	}
+	b.escrows[metadata.EscrowID] = newEscrowLedger(metadata)
 	b.touchLocked()
 	return nil
 }
@@ -379,6 +385,8 @@ const TimeoutActionAbandoned = "abandoned_by_restart"
 const TimeoutKindRefused = "refused"
 
 const TerminalUnreported = "unreported"
+
+const TerminalWarmupProbe = "warmup_probe"
 
 func assignedForSlot(latest uint64, groupSize, slotID uint32) uint64 {
 	if groupSize == 0 || latest == 0 {

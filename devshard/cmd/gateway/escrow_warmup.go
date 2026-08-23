@@ -160,6 +160,7 @@ func (w *escrowWarmup) record(escrowID string, nonce uint64, acknowledged bool, 
 		Acknowledged: acknowledged,
 		Usage:        accounting.UsageLoser,
 		Phase:        accounting.PhaseNormal,
+		Terminal:     accounting.TerminalWarmupProbe,
 	}
 	if err := w.ledger.RecordRace(escrowID, []accounting.Attempt{attempt}); err != nil {
 		logging.Warn("escrow warmup could not settle its nonce", logkey.Escrow, escrowID, logkey.Nonce, nonce, logkey.Error, err)

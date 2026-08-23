@@ -112,14 +112,9 @@ func (b *Book) Restore(snapshot Snapshot) error {
 		if stored.Metadata.EscrowID == "" || len(stored.Metadata.Slots) == 0 {
 			return fmt.Errorf("accounting: snapshot holds an escrow without id or slots")
 		}
-		escrow := &escrowLedger{
-			metadata:  stored.Metadata,
-			latest:    stored.LatestNonce,
-			retired:   stored.Retired,
-			hostStats: make(map[uint32]types.HostStats, len(stored.HostStats)),
-			counters:  make(map[CounterKey]uint64, len(stored.Counters)),
-			nonces:    make(map[uint64]*nonceRecord),
-		}
+		escrow := newEscrowLedger(stored.Metadata)
+		escrow.latest = stored.LatestNonce
+		escrow.retired = stored.Retired
 		maps.Copy(escrow.hostStats, stored.HostStats)
 		for _, counter := range stored.Counters {
 			escrow.counters[counter.CounterKey] += counter.Count

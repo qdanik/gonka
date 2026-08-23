@@ -29,7 +29,13 @@ const (
 	neverCritical            = 2.0
 )
 
-const TimeoutReasonLongResponse = "long_response_after_content"
+const (
+	TimeoutReasonLongResponse    = "long_response_after_content"
+	TimeoutReasonPhaseAborted    = "phase_transition_aborted"
+	TimeoutReasonCollectionError = "timeout_collection_error"
+	TimeoutReasonNotApplied      = "timeout_not_applied"
+	TimeoutReasonNoPoster        = "no_poster"
+)
 
 const (
 	FindingExecutionTimeouts    = "execution_timeouts"
@@ -81,11 +87,14 @@ type Finding struct {
 // Nonces that never reached the host are excluded from every rate: a burn is this gateway's own
 // decision, and counting it against the host would report our throttling as its failure.
 func findingsFor(record ParticipantRecord) []Finding {
-	delivered := record.Dispositions[DispositionFinishedUsed] +
-		record.Dispositions[DispositionFinishedUnused] +
-		record.Dispositions[DispositionFinishedUsageUnknown]
-	refused := record.Dispositions[DispositionUnfinishedRefused]
-	unfinished := without(record.Dispositions[DispositionUnfinishedExecution], countersWhere(record, excused))
+	probes := countersWhere(record, servedNoUser)
+	delivered := without(record.Dispositions[DispositionFinishedUsed]+
+		record.Dispositions[DispositionFinishedUnused]+
+		record.Dispositions[DispositionFinishedUsageUnknown], probes)
+	refused := without(record.Dispositions[DispositionUnfinishedRefused],
+		countersWhere(record, both(is(DispositionUnfinishedRefused), excused)))
+	unfinished := without(record.Dispositions[DispositionUnfinishedExecution],
+		countersWhere(record, both(is(DispositionUnfinishedExecution), excused)))
 	reached := delivered + refused + unfinished
 
 	deliveredNormally := countersWhere(record, both(outsidePoC, wasDelivered))
@@ -101,8 +110,8 @@ func findingsFor(record ParticipantRecord) []Finding {
 		FindingExecutionTimeouts))
 	add(ratio(refused, reached, refusalWarning, refusalCritical,
 		FindingRefusals))
-	add(ratio(record.Dispositions[DispositionFinishedUnused], delivered, unusedAnswerWarning, neverCritical,
-		FindingUnusedAnswers))
+	add(ratio(without(record.Dispositions[DispositionFinishedUnused], probes), delivered,
+		unusedAnswerWarning, neverCritical, FindingUnusedAnswers))
 	add(ratio(ghostsBecause(record, "participant_throttled_no_send"), record.Assigned, gatewayThrottleWarning, neverCritical,
 		FindingGatewayThrottled))
 	add(ratio(ghostsBecause(record, "participant_capability_no_send"), record.Assigned, capabilityBlockedWarning, neverCritical,
@@ -210,6 +219,10 @@ func countersWhere(record ParticipantRecord, match func(CounterKey) bool) uint64
 	return total
 }
 
+func is(disposition Disposition) func(CounterKey) bool {
+	return func(key CounterKey) bool { return key.Disposition == disposition }
+}
+
 func both(first, second func(CounterKey) bool) func(CounterKey) bool {
 	return func(key CounterKey) bool { return first(key) && second(key) }
 }
@@ -226,8 +239,15 @@ func wasAcknowledged(key CounterKey) bool {
 	return wasDelivered(key) || key.Disposition == DispositionUnfinishedExecution
 }
 
+func servedNoUser(key CounterKey) bool { return key.Terminal == TerminalWarmupProbe }
+
 func excused(key CounterKey) bool {
-	return key.TimeoutReason == TimeoutReasonLongResponse
+	switch key.TimeoutReason {
+	case TimeoutReasonLongResponse, TimeoutReasonPhaseAborted,
+		TimeoutReasonCollectionError, TimeoutReasonNotApplied, TimeoutReasonNoPoster:
+		return true
+	}
+	return false
 }
 
 func without(total, part uint64) uint64 {

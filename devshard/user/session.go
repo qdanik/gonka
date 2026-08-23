@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"slices"
 	"sort"
 	"strings"
@@ -264,7 +265,8 @@ type Session struct {
 	hostSyncNonce   map[int]uint64               // hostIdx -> last nonce sent
 	pendingTxs      []*types.DevshardTx          // from host mempools, for next diff
 	pendingTxKeys   map[string]struct{}          // dedup set keyed by tx_type:id
-	signatures      map[uint64]map[uint32][]byte // nonce -> slotID -> sig
+	signatures      map[uint64]map[uint32][]byte // nonce -> slotID -> sig, kept only for the live window
+	signedSlots     map[uint64]types.Bitmap128   // nonce -> slots that signed it, kept for good
 	store           storage.Storage              // optional persistent storage
 	nonceStates     map[uint64]*nonceOutcome     // nonce -> protocol outcome
 	verifierQueue   *verifierHostQueue           // per-verifier RPC limiter for timeout votes
@@ -348,6 +350,7 @@ func NewSession(
 		hostSyncNonce:   make(map[int]uint64),
 		pendingTxKeys:   make(map[string]struct{}),
 		signatures:      make(map[uint64]map[uint32][]byte),
+		signedSlots:     make(map[uint64]types.Bitmap128),
 		nonceStates:     make(map[uint64]*nonceOutcome),
 		verifierQueue:   SharedVerifierQueue,
 		diffObserver:    func(types.Diff) {},
@@ -514,11 +517,8 @@ func (s *Session) processResponse(hostIdx int, resp *host.HostResponse, inferenc
 		}
 
 		// Store for all slots owned by this validator address.
-		if _, ok := s.signatures[resp.Nonce]; !ok {
-			s.signatures[resp.Nonce] = make(map[uint32][]byte)
-		}
 		for _, slot := range s.addrToSlots[expectedAddr] {
-			s.signatures[resp.Nonce][slot] = resp.StateSig
+			s.recordSignatureLocked(resp.Nonce, slot, resp.StateSig)
 			if s.store != nil {
 				if sigErr := s.store.AddSignature(s.escrowID, resp.Nonce, slot, resp.StateSig); sigErr != nil {
 					logging.Warn("failed to persist signature",
@@ -1337,6 +1337,48 @@ func (s *Session) clearPendingTxs() {
 	}
 }
 
+// signatureWindow is how many recent nonces keep their signature bytes in memory. Only the finalize
+// nonce is ever asked for them, and every one of them is already in storage, but a window costs little
+// and spares a fetch when finalization follows the last inference closely.
+const signatureWindow = 256
+
+// recordSignatureLocked keeps the slot in the mask for good and the bytes only while the nonce is recent.
+// A session that held every signature carried 16 slots of 65 bytes per nonce for the escrow's whole life,
+// which is the largest thing a live escrow keeps and the one nothing reads back.
+func (s *Session) recordSignatureLocked(nonce uint64, slot uint32, signature []byte) {
+	// types.Bitmap128 rather than a word: a group is bounded by MaxGroupSize, not by 32, and a shifted
+	// word would drop every slot past the thirty-second without a sign.
+	signed := s.signedSlots[nonce]
+	signed.Set(slot)
+	s.signedSlots[nonce] = signed
+	if s.signatures[nonce] == nil {
+		s.signatures[nonce] = make(map[uint32][]byte)
+	}
+	s.signatures[nonce][slot] = signature
+	s.pruneSignatureBytesLocked(nonce)
+}
+
+// pruneSignatureBytesLocked drops the bytes of nonces the window has left behind. The mask stays, so the
+// status report and the debug surface still see every nonce this session ever collected.
+func (s *Session) pruneSignatureBytesLocked(latest uint64) {
+	if latest < signatureWindow {
+		return
+	}
+	oldest := latest - signatureWindow
+	for nonce := range s.signatures {
+		if nonce < oldest {
+			delete(s.signatures, nonce)
+		}
+	}
+}
+
+// SignedSlots reports, for every nonce this session collected, which slots signed it.
+func (s *Session) SignedSlots() map[uint64]types.Bitmap128 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return maps.Clone(s.signedSlots)
+}
+
 func (s *Session) Signatures() map[uint64]map[uint32][]byte {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1561,11 +1603,8 @@ func (s *Session) fetchSignature(ctx context.Context, hostIdx int, nonce uint64,
 				"escrow", s.escrowID, "nonce", nonce, "host", hostIdx, "slot", slotID, "error", err)
 			return false
 		}
-		if _, ok := s.signatures[nonce]; !ok {
-			s.signatures[nonce] = make(map[uint32][]byte)
-		}
 		for _, slot := range s.addrToSlots[expectedAddr] {
-			s.signatures[nonce][slot] = sigs[slotID]
+			s.recordSignatureLocked(nonce, slot, sigs[slotID])
 			if s.store != nil {
 				if sigErr := s.store.AddSignature(s.escrowID, nonce, slot, sigs[slotID]); sigErr != nil {
 					logging.Warn("failed to persist fetched signature",
@@ -1767,8 +1806,8 @@ func (s *Session) signatureStatusLocked() (entries []SignatureStatusEntry, highe
 	threshold := s.sm.QuorumThreshold()
 
 	addrMaxNonce := make(map[string]uint64)
-	for nonce, slotSigs := range s.signatures {
-		for slotID := range slotSigs {
+	for nonce, signed := range s.signedSlots {
+		for _, slotID := range signed.SetBits() {
 			addr := s.sm.SlotAddress(slotID)
 			if nonce > addrMaxNonce[addr] {
 				addrMaxNonce[addr] = nonce
@@ -1776,8 +1815,8 @@ func (s *Session) signatureStatusLocked() (entries []SignatureStatusEntry, highe
 		}
 	}
 
-	nonces := make([]uint64, 0, len(s.signatures))
-	for n := range s.signatures {
+	nonces := make([]uint64, 0, len(s.signedSlots))
+	for n := range s.signedSlots {
 		nonces = append(nonces, n)
 	}
 	sort.Slice(nonces, func(i, j int) bool { return nonces[i] < nonces[j] })

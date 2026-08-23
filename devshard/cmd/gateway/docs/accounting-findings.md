@@ -4,6 +4,8 @@ What each finding code means, what it points at, and what to check. The API carr
 
 A finding is never raised below **20** nonces in its denominator: a rate off four attempts describes noise, not a host.
 
+A failure this gateway caused is excluded from the host's rates as well. Its own phase transition ending an attempt, a vote round that reached no verdict, a missing poster and a long response that had already produced content are all ours, not the host's. A failure whose cause the ledger could not name still counts against the host: excusing the unclassified would empty the rates.
+
 Nonces that never reached the host are excluded from every rate. A burn is this gateway's own decision, and counting it against the host would report our throttling as its failure.
 
 ## What the host answers for

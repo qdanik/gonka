@@ -4,6 +4,8 @@ services:
     image: ghcr.io/gonka-ai/devshard-gateway:mainnet-v0.2.13-v3-latest
     env_file:
       - ${DEVSHARD_ENV_FILE:-./config.devshard.env}
+    environment:
+      GOMEMLIMIT: ${DEVSHARD_GOMEMLIMIT:-3400MiB}
     volumes:
       - ${DEVSHARD_STORAGE_HOST_DIR:-.devshardctl}:/root/.devshardctl
     expose:

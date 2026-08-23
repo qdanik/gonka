@@ -32,9 +32,16 @@ func (g *gateway) serve(ctx context.Context) error {
 
 	serveResult := make(chan error, 1)
 	go func() { serveResult <- g.server.ListenAndServe() }()
+	engine := configuration.Engine
 	logging.Info("gateway started",
 		logkey.Version, Version, logkey.Port, configuration.Server.Port,
-		logkey.StorageDir, configuration.Server.StorageDir, logkey.EscrowBuilders, g.builders)
+		logkey.StorageDir, configuration.Server.StorageDir, logkey.EscrowBuilders, g.builders,
+		logkey.ReceiptTimeoutMS, engine.ReceiptTimeoutMS,
+		logkey.FirstTokenFloorMS, engine.FirstTokenFloorMS,
+		logkey.FirstTokenCeilingMS, engine.FirstTokenCeilingMS,
+		logkey.InterChunkStallMS, engine.InterChunkStallMS,
+		logkey.LoserGraceMS, engine.LoserGraceMS,
+		logkey.MaxSpeculativeAttempts, engine.MaxSpeculativeAttempts)
 
 	var listenErr error
 	select {

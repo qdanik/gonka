@@ -39,6 +39,8 @@ type EscrowSession interface {
 	Phase() types.SessionPhase
 	PrepareInferenceFn(chooser user.ParamsForHost) (*user.PreparedInference, error)
 	Signatures() map[uint64]map[uint32][]byte
+	SignedSlots() map[uint64]types.Bitmap128
+	SignatureStatus() (entries []user.SignatureStatusEntry, highestQuorum uint64, hasAny bool)
 	SnapshotState() types.EscrowState
 	SealedInferences() int
 	Finalize(ctx context.Context) error

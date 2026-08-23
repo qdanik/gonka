@@ -229,10 +229,7 @@ func RecoverSession(
 			for _, rec := range backfillRecords {
 				sess.diffs = append(sess.diffs, rec.Diff)
 				for slotID, sig := range rec.Signatures {
-					if _, ok := sess.signatures[rec.Nonce]; !ok {
-						sess.signatures[rec.Nonce] = make(map[uint32][]byte)
-					}
-					sess.signatures[rec.Nonce][slotID] = sig
+					sess.recordSignatureLocked(rec.Nonce, slotID, sig)
 				}
 			}
 		}
@@ -286,10 +283,7 @@ func RecoverSession(
 		sess.nonce = rec.Nonce
 
 		for slotID, sig := range rec.Signatures {
-			if _, ok := sess.signatures[rec.Nonce]; !ok {
-				sess.signatures[rec.Nonce] = make(map[uint32][]byte)
-			}
-			sess.signatures[rec.Nonce][slotID] = sig
+			sess.recordSignatureLocked(rec.Nonce, slotID, sig)
 		}
 	}
 
@@ -321,11 +315,8 @@ func restoreSignaturesFromStore(sess *Session, store storage.Storage, escrowID s
 	if len(sigs) == 0 {
 		return nil
 	}
-	if _, ok := sess.signatures[nonce]; !ok {
-		sess.signatures[nonce] = make(map[uint32][]byte)
-	}
 	for slotID, sig := range sigs {
-		sess.signatures[nonce][slotID] = sig
+		sess.recordSignatureLocked(nonce, slotID, sig)
 	}
 	log.Printf("recover_session escrow=%s signatures_restored nonce=%d slots=%d", escrowID, nonce, len(sigs))
 	return nil

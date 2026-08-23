@@ -84,8 +84,14 @@ func (f *fakeSession) PrepareInferenceFn(chooser user.ParamsForHost) (*user.Prep
 }
 
 func (f *fakeSession) Signatures() map[uint64]map[uint32][]byte { return f.signatures }
-func (f *fakeSession) SnapshotState() types.EscrowState         { return f.escrowState }
-func (f *fakeSession) SealedInferences() int                    { return f.sealed }
+
+func (f *fakeSession) SignatureStatus() ([]user.SignatureStatusEntry, uint64, bool) {
+	return nil, 0, false
+}
+
+func (f *fakeSession) SignedSlots() map[uint64]types.Bitmap128 { return nil }
+func (f *fakeSession) SnapshotState() types.EscrowState        { return f.escrowState }
+func (f *fakeSession) SealedInferences() int                   { return f.sealed }
 
 func (f *fakeSession) Finalize(context.Context) error {
 	f.finalizeCalls.Add(1)
