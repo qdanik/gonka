@@ -1,11 +1,13 @@
 services:
   devshard-gateway:
     container_name: ${GATEWAY_INSTANCE_NAME:-devshard-gateway}
-    image: ${GATEWAY_IMAGE:-kovec/devshard-gateway:v3}
+    image: ${GATEWAY_IMAGE:-kovec/gateway:v4}
     env_file:
       - ${GATEWAY_ENV_FILE:-./config.devshard-gateway.env}
     volumes:
       - ${GATEWAY_STORAGE_HOST_DIR:-.devshard-gateway}:${GATEWAY_STORAGE_DIR:-/root/.devshard-gateway}
+    environment:
+      GOMEMLIMIT: ${GATEWAY_GOMEMLIMIT:-3400MiB}
     expose:
       - "8080"
     ports:
