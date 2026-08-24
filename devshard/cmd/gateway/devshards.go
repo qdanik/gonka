@@ -215,6 +215,8 @@ func seedDevshards(ctx context.Context, records devshardRegistry, raw string) er
 			return fmt.Errorf("seed devshard: escrow_id is required")
 		case strings.TrimSpace(seed.Model) == "":
 			return fmt.Errorf("seed devshard %s: model is required", seed.EscrowID)
+		case strings.TrimSpace(seed.PrivateKeyEnv) == "":
+			return fmt.Errorf("seed devshard %s: private_key_env is required", seed.EscrowID)
 		case registered[seed.EscrowID]:
 			continue
 		}
