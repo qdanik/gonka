@@ -80,14 +80,8 @@ var (
 	parameterTable = []ParameterSpec{
 		spec("model", StagePreValidation, validModelName(modelMaxLen)),
 		{Name: "stream"},
-		{Name: "max_tokens", Rules: []StagedRule{
-			{Stage: StagePreValidation, Apply: maxTokensFloor()},
-			{Stage: StagePreValidation, Apply: rejectNonPositiveOutputTokens()},
-		}},
-		{Name: "max_completion_tokens", Rules: []StagedRule{
-			{Stage: StagePreValidation, Apply: maxTokensFloor()},
-			{Stage: StagePreValidation, Apply: rejectNonPositiveOutputTokens()},
-		}},
+		spec("max_tokens", StagePreValidation, rejectNonPositiveOutputTokens()),
+		spec("max_completion_tokens", StagePreValidation, rejectNonPositiveOutputTokens()),
 		{Name: "messages", Rules: []StagedRule{
 			{Stage: StagePreValidation, Apply: validListLength(messagesMaxEntries, 0)},
 		}},
@@ -196,7 +190,7 @@ var (
 			{Stage: StagePreValidation, Apply: thinking()},
 		}},
 		{Name: "thinking_token_budget", Rules: []StagedRule{
-			{Stage: StagePreValidation, Apply: thinkingTokenBudgetStrip()},
+			{Stage: StagePreValidation, Apply: requireUint()},
 			{Stage: StagePostLimits, Apply: thinkingTokenBudgetResolve()},
 		}},
 		spec("safety_identifier", StagePreValidation, safetyIdentifier()),

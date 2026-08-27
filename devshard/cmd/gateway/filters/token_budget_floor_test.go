@@ -53,9 +53,9 @@ func TestFloorKeepsAMinTokensAboveIt(t *testing.T) {
 
 // min_tokens has to fit inside the budget it is measured against, whatever the client asked for.
 func TestFloorClampsMinTokensToTheResolvedBudget(t *testing.T) {
-	document := normalizedDocument(t, `{"messages":[{"role":"user","content":"x"}],"max_tokens":128,"min_tokens":9000}`, "Qwen/Test")
-	requireUintField(t, document, "max_tokens", 128)
-	requireUintField(t, document, "min_tokens", 128)
+	document := normalizedDocument(t, `{"messages":[{"role":"user","content":"x"}],"max_tokens":300,"min_tokens":9000}`, "Qwen/Test")
+	requireUintField(t, document, "max_tokens", 300)
+	requireUintField(t, document, "min_tokens", 300)
 }
 
 func TestFloorLiftsASmallMaxTokensAndInjectsMinTokens(t *testing.T) {
@@ -127,4 +127,27 @@ func TestStopTokenIdsDoNotCostTheRequestItsMinTokens(t *testing.T) {
 		t.Errorf("stop_token_ids survived: %v", document)
 	}
 	requireUintField(t, document, "min_tokens", 100)
+}
+
+// The smaller of the two output-budget fields wins, but it cannot carry the request below the floor
+// validation is measured against, whichever field the client made small.
+func TestFloorHoldsWhenOneOutputBudgetFieldIsTiny(t *testing.T) {
+	for _, body := range []string{
+		`{"messages":[{"role":"user","content":"x"}],"max_tokens":4096,"max_completion_tokens":16}`,
+		`{"messages":[{"role":"user","content":"x"}],"max_tokens":16,"max_completion_tokens":4096}`,
+	} {
+		t.Run(body, func(t *testing.T) {
+			document := normalizedDocument(t, body, "Qwen/Test")
+			requireUintField(t, document, "max_tokens", completionapi.MinTokensFloor)
+			requireUintField(t, document, "max_completion_tokens", completionapi.MinTokensFloor)
+			requireUintField(t, document, "min_tokens", completionapi.MinTokensFloor)
+		})
+	}
+}
+
+// Both fields leave agreeing, so no downstream layer has to decide which of them it believes.
+func TestBothOutputBudgetFieldsLeaveAgreeing(t *testing.T) {
+	document := normalizedDocument(t, `{"messages":[{"role":"user","content":"x"}],"max_tokens":4096,"max_completion_tokens":200}`, "Qwen/Test")
+	requireUintField(t, document, "max_tokens", 200)
+	requireUintField(t, document, "max_completion_tokens", 200)
 }

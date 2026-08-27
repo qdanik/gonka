@@ -2,6 +2,7 @@ package filters
 
 import (
 	"encoding/json"
+	"fmt"
 	"reflect"
 	"testing"
 )
@@ -306,37 +307,64 @@ func TestThinkingAbsentIsNoOp(t *testing.T) {
 	}
 }
 
-func TestThinkingTokenBudgetStrip(t *testing.T) {
-	for _, profile := range []*Profile{nil, minimaxProfile} {
-		document := parseTestDocument(t, `{"thinking_token_budget":123}`)
-		if err := thinkingTokenBudgetStrip()(RuleContext{Document: document, Param: "thinking_token_budget", Profile: profile}); err != nil {
-			t.Fatalf("thinkingTokenBudgetStrip() = %v, want nil", err)
-		}
-		if document.Has("thinking_token_budget") {
-			t.Errorf("thinking_token_budget must be stripped for profile %v", profile)
-		}
+// The budget reaches the host for every model, not only the profile that resolves one of its own.
+func TestThinkingTokenBudgetSurvivesForEveryModel(t *testing.T) {
+	for _, model := range []string{deepseekModelID, minimaxModelID, kimiModelID, "Qwen/Unknown"} {
+		t.Run(model, func(t *testing.T) {
+			body := fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"x"}],"max_tokens":4096,"thinking_token_budget":128}`, model)
+			result, err := NormalizeRequest([]byte(body), Options{RoutedModel: model})
+			if err != nil {
+				t.Fatalf("NormalizeRequest() = %v, want nil", err)
+			}
+			var document map[string]any
+			if err := json.Unmarshal(result.Body, &document); err != nil {
+				t.Fatalf("unmarshal normalized body: %v", err)
+			}
+			if got := document["thinking_token_budget"]; got != float64(128) {
+				t.Errorf("thinking_token_budget = %v, want 128", got)
+			}
+		})
 	}
 }
 
-func TestThinkingTokenBudgetStripKeepsForHookProfile(t *testing.T) {
-	document := parseTestDocument(t, `{"thinking_token_budget":123}`)
-	if err := thinkingTokenBudgetStrip()(RuleContext{Document: document, Param: "thinking_token_budget", Profile: kimiProfile}); err != nil {
-		t.Fatalf("thinkingTokenBudgetStrip() = %v, want nil", err)
-	}
-	if got, _ := document.Get("thinking_token_budget"); got != json.Number("123") {
-		t.Errorf("thinking_token_budget = %v, want unchanged", got)
+func TestThinkingTokenBudgetRejectsANonNumericValue(t *testing.T) {
+	body := `{"model":"Qwen/Unknown","messages":[{"role":"user","content":"x"}],"thinking_token_budget":"lots"}`
+	if _, err := NormalizeRequest([]byte(body), Options{RoutedModel: "Qwen/Unknown"}); err == nil {
+		t.Error("NormalizeRequest() = nil, want a rejection: the budget is no longer stripped, so it has to be validated")
 	}
 }
 
-func TestThinkingTokenBudgetResolveNoOpWithoutHook(t *testing.T) {
+// Without a profile resolution the caller's budget is kept, but still clamped to leave room for content.
+func TestThinkingTokenBudgetResolveClampsWithoutHook(t *testing.T) {
 	for _, profile := range []*Profile{nil, minimaxProfile} {
-		document := parseTestDocument(t, `{"max_tokens":100,"thinking_token_budget":50}`)
+		document := parseTestDocument(t, `{"max_tokens":4096,"thinking_token_budget":50}`)
 		if err := thinkingTokenBudgetResolve()(RuleContext{Document: document, Profile: profile}); err != nil {
 			t.Fatalf("thinkingTokenBudgetResolve() = %v, want nil", err)
 		}
-		if got, _ := document.Get("thinking_token_budget"); got != json.Number("50") {
-			t.Errorf("thinking_token_budget = %v, want unchanged for profile %v", got, profile)
+		if got, _ := document.Get("thinking_token_budget"); got != uint64(50) {
+			t.Errorf("thinking_token_budget = %v, want 50 for profile %v", got, profile)
 		}
+	}
+}
+
+func TestThinkingTokenBudgetResolveWithoutHookNeverEatsTheContentHeadroom(t *testing.T) {
+	document := parseTestDocument(t, `{"max_tokens":300,"thinking_token_budget":9000}`)
+	if err := thinkingTokenBudgetResolve()(RuleContext{Document: document, Profile: nil}); err != nil {
+		t.Fatalf("thinkingTokenBudgetResolve() = %v, want nil", err)
+	}
+	if got, _ := document.Get("thinking_token_budget"); got != uint64(300-thinkingBudgetContentHeadroom) {
+		t.Errorf("thinking_token_budget = %v, want the headroom cap %d", got, 300-thinkingBudgetContentHeadroom)
+	}
+}
+
+// A profile without a resolution must not gain one: nothing is invented when the caller asked for nothing.
+func TestThinkingTokenBudgetResolveInventsNoBudgetWithoutHook(t *testing.T) {
+	document := parseTestDocument(t, `{"max_tokens":4096}`)
+	if err := thinkingTokenBudgetResolve()(RuleContext{Document: document, Profile: nil}); err != nil {
+		t.Fatalf("thinkingTokenBudgetResolve() = %v, want nil", err)
+	}
+	if got, present := document.Get("thinking_token_budget"); present {
+		t.Errorf("thinking_token_budget = %v, want absent", got)
 	}
 }
 
@@ -409,6 +437,7 @@ func TestNormalizeRequestKimiForceZeroSilencesThinkingThroughEveryEntryPoint(t *
 	}
 }
 
+// max_tokens==255 IS below the 256 force-zero threshold: the budget is forced to 0.
 // max_tokens==255 IS below the 256 force-zero threshold: the budget is forced to 0.
 func TestThinkingTokenBudgetResolveJustBelowThresholdForcesZero(t *testing.T) {
 	document := parseTestDocument(t, `{"max_tokens":255}`)

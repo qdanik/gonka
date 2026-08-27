@@ -18,7 +18,6 @@ const (
 type Profile struct {
 	Models []string
 
-	MaxTokensFloor         uint64
 	ForceZeroPenalties     bool
 	RejectStructuredOutput bool
 	AllowSafetyIdentifier  bool

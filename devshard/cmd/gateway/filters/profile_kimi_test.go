@@ -6,9 +6,6 @@ func TestKimiProfileHooks(t *testing.T) {
 	if len(kimiProfile.Models) != 1 || kimiProfile.Models[0] != kimiModelID {
 		t.Errorf("kimiProfile.Models = %v, want [%q]", kimiProfile.Models, kimiModelID)
 	}
-	if kimiProfile.MaxTokensFloor != 16 {
-		t.Errorf("kimiProfile.MaxTokensFloor = %d, want 16", kimiProfile.MaxTokensFloor)
-	}
 	if kimiProfile.Thinking != ThinkingMirrorToKwargs {
 		t.Errorf("kimiProfile.Thinking = %v, want ThinkingMirrorToKwargs", kimiProfile.Thinking)
 	}
@@ -37,11 +34,9 @@ func TestKimiThinkingBudgetConstants(t *testing.T) {
 		got  uint64
 		want uint64
 	}{
-		{"floor", kimiMaxTokensFloor, 16},
-		{"divisor", kimiThinkingBudgetDivisor, 2},
-		{"absolute max", kimiThinkingBudgetAbsoluteMax, 96_000},
 		{"force-zero threshold", kimiThinkingBudgetForceZeroBelow, 256},
-		{"content headroom", kimiThinkingBudgetContentHeadroom, 64},
+		{"absolute max", thinkingBudgetAbsoluteMax, 96_000},
+		{"content headroom", thinkingBudgetContentHeadroom, 64},
 	}
 	for _, testCase := range tests {
 		t.Run(testCase.name, func(t *testing.T) {

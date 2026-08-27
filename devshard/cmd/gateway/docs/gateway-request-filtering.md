@@ -135,7 +135,7 @@ Per-model behaviour is expressed as *hooks on a profile*, and rules consult the 
 | Profile | Deltas |
 |---|---|
 | Kimi | `max_tokens` floor of 16; penalties forced to zero (fixed at zero on the wire); `structured_outputs` rejected — use `response_format`; `safety_identifier` allowed; thinking mirrored into `chat_template_kwargs`; thinking-token budget resolution. |
-| MiniMax | `enable_thinking` and `thinking` stripped — there is no chat-template knob, reasoning is interleaved and structural to the template; `reasoning_split` is a native passthrough field. |
+| MiniMax | `enable_thinking` and `thinking` stripped — there is no chat-template knob, reasoning is interleaved and structural to the template; `reasoning_split` is a native field, defaulted to `true` so the reasoning the model always produces arrives beside the answer instead of inside it. |
 | Default (Qwen and others) | No deltas. |
 
 One documented hole: a `thinking_token_budget` sent as a *string* fails the numeric coercion and is left completely untouched, bypassing every clamp below it (`filters/rules_reasoning.go`, `thinkingTokenBudgetResolve`). It is acknowledged in the code rather than being an oversight.

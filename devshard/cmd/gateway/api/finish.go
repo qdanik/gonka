@@ -1,6 +1,7 @@
 package api
 
 import (
+	"strings"
 	"time"
 
 	"devshard/cmd/gateway/engine"
@@ -23,13 +24,19 @@ func hostClockOffset(outcome engine.RaceOutcome) (offsetMS, roundTripMS int64, s
 	return 0, 0, false
 }
 
-func winnerParticipant(outcome engine.RaceOutcome) string {
+func loggedHosts(outcome engine.RaceOutcome) string {
 	for _, attempt := range outcome.Attempts {
 		if outcome.IsWinner(attempt) {
-			return attempt.Participant
+			return logkey.ShortHost(attempt.Participant)
 		}
 	}
-	return ""
+	tried := make([]string, 0, len(outcome.Attempts))
+	for _, attempt := range outcome.Attempts {
+		if short := logkey.ShortHost(attempt.Participant); short != "" {
+			tried = append(tried, short)
+		}
+	}
+	return strings.Join(tried, ",")
 }
 
 // winnerOutputTokens is what the client actually received, which with the line's own timestamp is what
@@ -56,7 +63,7 @@ func logRequestFinished(requestID string, normalized filters.Result, outcome eng
 		logkey.Stream, normalized.ClientStream,
 		logkey.InputTokens, outcome.InputTokens,
 		logkey.OutputTokens, winnerOutputTokens(outcome),
-		logkey.Host, logkey.ShortHost(winnerParticipant(outcome)),
+		logkey.Host, loggedHosts(outcome),
 		logkey.Outcome, verdict,
 		logkey.Bytes, written,
 		logkey.Terminated, terminated,

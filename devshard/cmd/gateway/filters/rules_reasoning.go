@@ -2,6 +2,13 @@ package filters
 
 import "devshard"
 
+// Clamps applied to any thinking_token_budget, whichever model it was sent for.
+const (
+	thinkingBudgetAbsoluteMax     uint64 = 96_000
+	thinkingBudgetContentHeadroom uint64 = 64
+	thinkingBudgetDivisor         uint64 = 2
+)
+
 var allowedReasoningEffortValues = map[string]struct{}{
 	"none": {}, "minimal": {}, "low": {}, "medium": {}, "high": {}, "xhigh": {}, "max": {},
 }
@@ -182,21 +189,10 @@ func silenceThinkingInKwargs(document *Document) error {
 	return nil
 }
 
-func thinkingTokenBudgetStrip() RuleFunc {
-	return stripParamUnlessHook(func(profile *Profile) bool {
-		return profile != nil && profile.ThinkingTokenBudget
-	})
-}
-
-// thinkingTokenBudgetResolve implements kimi's budget resolution: force 0 below a small
-// max_tokens, else default to max_tokens/divisor, cap at an absolute max, then clamp to
-// max_tokens minus a content headroom. A string-typed client value fails the uint64 coercion
-// and is left completely untouched -- a documented bypass of every clamp below.
+// thinkingTokenBudgetResolve clamps whatever budget the request carries so content keeps room to be
+// written, for every model. Profiles that own a resolution also get their force-zero and half-split default.
 func thinkingTokenBudgetResolve() RuleFunc {
 	return func(ctx RuleContext) error {
-		if ctx.Profile == nil || !ctx.Profile.ThinkingTokenBudget {
-			return nil
-		}
 		maxTokensRaw, exists := ctx.Document.Get("max_tokens")
 		if !exists {
 			return nil
@@ -205,27 +201,34 @@ func thinkingTokenBudgetResolve() RuleFunc {
 		if !ok || maxTokens == 0 {
 			return nil
 		}
-		if maxTokens < kimiThinkingBudgetForceZeroBelow {
-			ctx.Document.Set("thinking_token_budget", uint64(0))
-			// The budget alone is a logits processor, which speculative decoding discards, and the
-			// thinking rule has already mirrored the caller's answer here -- so this overwrites rather
-			// than fills. See gateway-request-filtering.md, "Silencing Kimi's reasoning".
-			return silenceThinkingInKwargs(ctx.Document)
+		// Only a profile that declares the budget gets one invented: a host on the V2 model runner rejects
+		// the field outright, and V2 is the default for every non-MoE model.
+		if ctx.Profile != nil && ctx.Profile.ThinkingTokenBudget {
+			if maxTokens < kimiThinkingBudgetForceZeroBelow {
+				ctx.Document.Set("thinking_token_budget", uint64(0))
+				// The budget alone is a logits processor, which speculative decoding discards, and the
+				// thinking rule has already mirrored the caller's answer here -- so this overwrites rather
+				// than fills. See gateway-request-filtering.md, "Silencing Kimi's reasoning".
+				return silenceThinkingInKwargs(ctx.Document)
+			}
+			if !ctx.Document.Has("thinking_token_budget") {
+				ctx.Document.Set("thinking_token_budget", maxTokens/thinkingBudgetDivisor)
+			}
 		}
-		if !ctx.Document.Has("thinking_token_budget") {
-			ctx.Document.Set("thinking_token_budget", maxTokens/kimiThinkingBudgetDivisor)
+		budgetRaw, exists := ctx.Document.Get("thinking_token_budget")
+		if !exists {
+			return nil
 		}
-		budgetRaw, _ := ctx.Document.Get("thinking_token_budget")
 		budget, ok := devshard.JSONNumericUint64(budgetRaw)
 		if !ok {
 			return nil
 		}
-		if budget > kimiThinkingBudgetAbsoluteMax {
-			budget = kimiThinkingBudgetAbsoluteMax
+		if budget > thinkingBudgetAbsoluteMax {
+			budget = thinkingBudgetAbsoluteMax
 		}
 		var headroomCap uint64
-		if maxTokens > kimiThinkingBudgetContentHeadroom {
-			headroomCap = maxTokens - kimiThinkingBudgetContentHeadroom
+		if maxTokens > thinkingBudgetContentHeadroom {
+			headroomCap = maxTokens - thinkingBudgetContentHeadroom
 		}
 		if budget > headroomCap {
 			budget = headroomCap
@@ -260,10 +263,24 @@ func stripParamUnlessHook(hook func(*Profile) bool) RuleFunc {
 	}
 }
 
+// reasoningSplit strips the field for profiles that cannot serve it, and fills it for the one that can:
+// M2.x thinks unconditionally, so without the split its reasoning arrives inline in content.
 func reasoningSplit() RuleFunc {
-	return stripParamUnlessHook(func(profile *Profile) bool {
-		return profile != nil && profile.KeepReasoningSplit
-	})
+	return func(ctx RuleContext) error {
+		if ctx.Profile == nil || !ctx.Profile.KeepReasoningSplit {
+			ctx.Document.Delete(ctx.Param)
+			return nil
+		}
+		raw, exists := ctx.Document.Get(ctx.Param)
+		if !exists {
+			ctx.Document.Set(ctx.Param, true)
+			return nil
+		}
+		if _, ok := raw.(bool); !ok {
+			return Reject("%s: must be a boolean: got %T", ctx.Param, raw)
+		}
+		return nil
+	}
 }
 
 // forceZeroPenalty overwrites ctx.Param to 0 for profiles with ForceZeroPenalties, but only

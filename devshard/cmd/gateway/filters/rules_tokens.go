@@ -180,30 +180,10 @@ func floorMinTokens(document *Document, maxTokens uint64) uint64 {
 	return min(max(requested, completionapi.MinTokensFloor), maxTokens)
 }
 
-// maxTokensFloor lifts ctx.Param up to the profile's floor when the parsed value falls below it.
-func maxTokensFloor() RuleFunc {
-	return func(ctx RuleContext) error {
-		if ctx.Profile == nil || ctx.Profile.MaxTokensFloor == 0 {
-			return nil
-		}
-		value, ok := ctx.Document.Uint(ctx.Param)
-		if !ok {
-			return nil
-		}
-		if value < ctx.Profile.MaxTokensFloor {
-			ctx.Document.Set(ctx.Param, ctx.Profile.MaxTokensFloor)
-		}
-		return nil
-	}
-}
-
-// rejectNonPositiveOutputTokens rejects ctx.Param when present, numeric, and <= 0. Skipped for
-// profiles with their own floor, which normalize a low value instead of rejecting it.
+// rejectNonPositiveOutputTokens rejects ctx.Param when present, numeric, and <= 0, on every route: a
+// zero output budget makes no answer, and the redundancy layer then waits out a winner that cannot come.
 func rejectNonPositiveOutputTokens() RuleFunc {
 	return func(ctx RuleContext) error {
-		if ctx.Profile != nil && ctx.Profile.MaxTokensFloor > 0 {
-			return nil
-		}
 		raw, exists := ctx.Document.Get(ctx.Param)
 		if !exists {
 			return nil

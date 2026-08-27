@@ -93,16 +93,16 @@ func applyLimits(t *testing.T, body string, options Options) (*Document, request
 }
 
 func TestTokensApplyLimitsNeitherSetUsesDefault(t *testing.T) {
-	document, view := applyLimits(t, `{}`, Options{DefaultMaxTokens: 100, MaxTokensCap: 200})
+	document, view := applyLimits(t, `{}`, Options{DefaultMaxTokens: 1000, MaxTokensCap: 2000})
 
-	if view.MaxTokens != 100 {
-		t.Errorf("view.MaxTokens = %d, want 100", view.MaxTokens)
+	if view.MaxTokens != 1000 {
+		t.Errorf("view.MaxTokens = %d, want 1000", view.MaxTokens)
 	}
 	if view.MaxCompletionTokens != 0 {
 		t.Errorf("view.MaxCompletionTokens = %d, want 0", view.MaxCompletionTokens)
 	}
-	if got, _ := document.Get("max_tokens"); got != uint64(100) {
-		t.Errorf("document max_tokens = %v, want 100", got)
+	if got, _ := document.Get("max_tokens"); got != uint64(1000) {
+		t.Errorf("document max_tokens = %v, want 1000", got)
 	}
 	if document.Has("max_completion_tokens") {
 		t.Error("document must not gain max_completion_tokens when neither field was set")
@@ -116,15 +116,15 @@ func TestTokensApplyLimitsOnlyMaxTokensSet(t *testing.T) {
 		admin     bool
 		want      uint64
 	}{
-		{"under cap kept as-is", 150, false, 150},
-		{"over cap clamped", 300, false, 200},
-		{"over cap admin bypasses", 300, true, 300},
-		{"explicit zero treated as unset, uses default", 0, false, 100},
+		{"under cap kept as-is", 1500, false, 1500},
+		{"over cap clamped", 3000, false, 2000},
+		{"over cap admin bypasses", 3000, true, 3000},
+		{"explicit zero treated as unset, uses default", 0, false, 1000},
 	}
 	for _, testCase := range tests {
 		t.Run(testCase.name, func(t *testing.T) {
 			body := fmt.Sprintf(`{"max_tokens":%d}`, testCase.maxTokens)
-			document, view := applyLimits(t, body, Options{Admin: testCase.admin, DefaultMaxTokens: 100, MaxTokensCap: 200})
+			document, view := applyLimits(t, body, Options{Admin: testCase.admin, DefaultMaxTokens: 1000, MaxTokensCap: 2000})
 
 			if view.MaxTokens != testCase.want {
 				t.Errorf("view.MaxTokens = %d, want %d", view.MaxTokens, testCase.want)
@@ -149,15 +149,15 @@ func TestTokensApplyLimitsOnlyMaxCompletionTokensSet(t *testing.T) {
 		admin bool
 		want  uint64
 	}{
-		{"under cap kept as-is", 150, false, 150},
-		{"over cap clamped", 300, false, 200},
-		{"over cap admin bypasses", 300, true, 300},
-		{"explicit zero treated as unset, uses default", 0, false, 100},
+		{"under cap kept as-is", 1500, false, 1500},
+		{"over cap clamped", 3000, false, 2000},
+		{"over cap admin bypasses", 3000, true, 3000},
+		{"explicit zero treated as unset, uses default", 0, false, 1000},
 	}
 	for _, testCase := range tests {
 		t.Run(testCase.name, func(t *testing.T) {
 			body := fmt.Sprintf(`{"max_completion_tokens":%d}`, testCase.value)
-			document, view := applyLimits(t, body, Options{Admin: testCase.admin, DefaultMaxTokens: 100, MaxTokensCap: 200})
+			document, view := applyLimits(t, body, Options{Admin: testCase.admin, DefaultMaxTokens: 1000, MaxTokensCap: 2000})
 
 			// max_completion_tokens-only mirrors into both fields.
 			if view.MaxTokens != testCase.want {
@@ -184,16 +184,16 @@ func TestTokensApplyLimitsBothSet(t *testing.T) {
 		admin               bool
 		want                uint64
 	}{
-		{"both under cap, completion smaller wins", 180, 120, false, 120},
-		{"both under cap, max_tokens smaller wins", 120, 180, false, 120},
-		{"both over cap collapse to the shared cap", 500, 800, false, 200},
-		{"admin bypass keeps the raw min uncapped", 500, 800, true, 500},
-		{"max_tokens explicit zero defaults before the min compare", 0, 500, false, 100},
+		{"both under cap, completion smaller wins", 1800, 1200, false, 1200},
+		{"both under cap, max_tokens smaller wins", 1200, 1800, false, 1200},
+		{"both over cap collapse to the shared cap", 5000, 8000, false, 2000},
+		{"admin bypass keeps the raw min uncapped", 5000, 8000, true, 5000},
+		{"max_tokens explicit zero defaults before the min compare", 0, 5000, false, 1000},
 	}
 	for _, testCase := range tests {
 		t.Run(testCase.name, func(t *testing.T) {
 			body := fmt.Sprintf(`{"max_tokens":%d,"max_completion_tokens":%d}`, testCase.maxTokens, testCase.maxCompletionTokens)
-			document, view := applyLimits(t, body, Options{Admin: testCase.admin, DefaultMaxTokens: 100, MaxTokensCap: 200})
+			document, view := applyLimits(t, body, Options{Admin: testCase.admin, DefaultMaxTokens: 1000, MaxTokensCap: 2000})
 
 			if view.MaxTokens != testCase.want {
 				t.Errorf("view.MaxTokens = %d, want %d", view.MaxTokens, testCase.want)
@@ -329,69 +329,14 @@ func TestTokensGreedySamplingCapInterplay(t *testing.T) {
 	}
 }
 
-func TestMaxTokensFloorLiftsBelowFloorForHookProfile(t *testing.T) {
-	document := parseTestDocument(t, `{"max_tokens":1}`)
-	if err := maxTokensFloor()(RuleContext{Document: document, Param: "max_tokens", Profile: kimiProfile}); err != nil {
-		t.Fatalf("maxTokensFloor() = %v, want nil", err)
-	}
-	if got, _ := document.Get("max_tokens"); got != uint64(16) {
-		t.Errorf("max_tokens = %v, want 16", got)
-	}
-}
-
-// 15 is below the floor and gets lifted; 16 is exactly at the floor and passes through untouched.
-func TestMaxTokensFloorBoundary(t *testing.T) {
-	tests := []struct {
-		name  string
-		value string
-		want  any
-	}{
-		{"one below floor lifted", "15", uint64(16)},
-		{"exactly at floor kept as original representation", "16", json.Number("16")},
-		{"above floor kept as original representation", "100", json.Number("100")},
-	}
-	for _, testCase := range tests {
-		t.Run(testCase.name, func(t *testing.T) {
-			document := parseTestDocument(t, `{"max_tokens":`+testCase.value+`}`)
-			if err := maxTokensFloor()(RuleContext{Document: document, Param: "max_tokens", Profile: kimiProfile}); err != nil {
-				t.Fatalf("maxTokensFloor() = %v, want nil", err)
-			}
-			if got, _ := document.Get("max_tokens"); got != testCase.want {
-				t.Errorf("max_tokens = %#v, want %#v", got, testCase.want)
-			}
-		})
-	}
-}
-
-func TestMaxTokensFloorLiftsMaxCompletionTokensIndependently(t *testing.T) {
-	document := parseTestDocument(t, `{"max_completion_tokens":8}`)
-	if err := maxTokensFloor()(RuleContext{Document: document, Param: "max_completion_tokens", Profile: kimiProfile}); err != nil {
-		t.Fatalf("maxTokensFloor() = %v, want nil", err)
-	}
-	if got, _ := document.Get("max_completion_tokens"); got != uint64(16) {
-		t.Errorf("max_completion_tokens = %v, want 16", got)
-	}
-}
-
-func TestMaxTokensFloorNoOpWithoutHook(t *testing.T) {
-	for _, profile := range []*Profile{nil, minimaxProfile} {
-		document := parseTestDocument(t, `{"max_tokens":1}`)
-		if err := maxTokensFloor()(RuleContext{Document: document, Param: "max_tokens", Profile: profile}); err != nil {
-			t.Fatalf("maxTokensFloor() = %v, want nil", err)
+// Every route rejects a zero budget now: the exemption Kimi had came from a profile floor the global
+// one subsumes, not from a decision about the contract.
+func TestRejectNonPositiveOutputTokensRejectsZeroOnEveryProfile(t *testing.T) {
+	for _, profile := range []*Profile{nil, kimiProfile, minimaxProfile, deepseekProfile} {
+		document := parseTestDocument(t, `{"max_tokens":0}`)
+		if err := rejectNonPositiveOutputTokens()(RuleContext{Document: document, Param: "max_tokens", Profile: profile}); err == nil {
+			t.Errorf("rejectNonPositiveOutputTokens() = nil for profile %v, want a rejection", profile)
 		}
-		if got, _ := document.Get("max_tokens"); got != json.Number("1") {
-			t.Errorf("max_tokens = %v, want unchanged for profile %v", got, profile)
-		}
-	}
-}
-
-func TestMaxTokensFloorSkipsMissingField(t *testing.T) {
-	document := parseTestDocument(t, `{}`)
-	if err := maxTokensFloor()(RuleContext{Document: document, Param: "max_tokens", Profile: kimiProfile}); err != nil {
-		t.Fatalf("maxTokensFloor() = %v, want nil", err)
-	}
-	if document.Has("max_tokens") {
-		t.Error("maxTokensFloor must not create the field when absent")
 	}
 }
 
@@ -416,14 +361,6 @@ func TestRejectNonPositiveOutputTokensAcceptsPositive(t *testing.T) {
 	}
 }
 
-func TestRejectNonPositiveOutputTokensSkippedForHookProfile(t *testing.T) {
-	document := parseTestDocument(t, `{"max_tokens":0}`)
-	err := rejectNonPositiveOutputTokens()(RuleContext{Document: document, Param: "max_tokens", Profile: kimiProfile})
-	if err != nil {
-		t.Fatalf("rejectNonPositiveOutputTokens() = %v, want nil (kimi normalizes instead of rejecting)", err)
-	}
-}
-
 func TestRejectNonPositiveOutputTokensAbsentIsNoOp(t *testing.T) {
 	document := parseTestDocument(t, `{}`)
 	if err := rejectNonPositiveOutputTokens()(RuleContext{Document: document, Param: "max_tokens"}); err != nil {
@@ -440,11 +377,11 @@ func TestRejectNonPositiveOutputTokensNonNumericIsNoOp(t *testing.T) {
 
 func TestTokensPerModelOverrideBeatsTheGlobalDefaultAndCap(t *testing.T) {
 	options := Options{
-		DefaultMaxTokens: 100,
-		MaxTokensCap:     200,
+		DefaultMaxTokens: 1000,
+		MaxTokensCap:     2000,
 		ModelTokenLimits: func(model string) (uint64, uint64) {
 			if model == "qwen" {
-				return 1_000, 2_000
+				return 5_000, 8_000
 			}
 			return 0, 0
 		},
@@ -453,38 +390,38 @@ func TestTokensPerModelOverrideBeatsTheGlobalDefaultAndCap(t *testing.T) {
 	_, overridden := applyLimits(t, `{"model":"qwen"}`, options)
 	_, global := applyLimits(t, `{"model":"other"}`, options)
 
-	if overridden.MaxTokens != 1_000 {
-		t.Errorf("qwen default = %d, want the per-model 1000", overridden.MaxTokens)
+	if overridden.MaxTokens != 5_000 {
+		t.Errorf("qwen default = %d, want the per-model 5000", overridden.MaxTokens)
 	}
-	if global.MaxTokens != 100 {
-		t.Errorf("unlisted model default = %d, want the global 100", global.MaxTokens)
+	if global.MaxTokens != 1000 {
+		t.Errorf("unlisted model default = %d, want the global 1000", global.MaxTokens)
 	}
 }
 
 func TestTokensPerModelOverrideCapClampsTheRequestedValue(t *testing.T) {
 	options := Options{
-		DefaultMaxTokens: 100,
-		MaxTokensCap:     200,
-		ModelTokenLimits: func(string) (uint64, uint64) { return 0, 150 },
+		DefaultMaxTokens: 1000,
+		MaxTokensCap:     2000,
+		ModelTokenLimits: func(string) (uint64, uint64) { return 0, 1500 },
 	}
 
-	_, view := applyLimits(t, `{"model":"qwen","max_tokens":180}`, options)
+	_, view := applyLimits(t, `{"model":"qwen","max_tokens":1800}`, options)
 
-	if view.MaxTokens != 150 {
-		t.Errorf("max_tokens = %d, want the per-model cap 150", view.MaxTokens)
+	if view.MaxTokens != 1500 {
+		t.Errorf("max_tokens = %d, want the per-model cap 1500", view.MaxTokens)
 	}
 }
 
-// A cap under the chain's floor cannot be honoured and served at the same time: the reservation is
-// refused below the floor, so the floor wins and the operator's cap is the one that gives way.
-func TestTokensCapBelowTheChainFloorLosesToIt(t *testing.T) {
+// A cap under the floor buys a budget too small to reason in, which the floor exists to prevent, so
+// the floor wins and the operator's cap is the one that gives way.
+func TestTokensCapBelowTheFloorLosesToIt(t *testing.T) {
 	options := Options{
-		DefaultMaxTokens: 100,
-		MaxTokensCap:     200,
+		DefaultMaxTokens: 1000,
+		MaxTokensCap:     2000,
 		ModelTokenLimits: func(string) (uint64, uint64) { return 0, 50 },
 	}
 
-	_, view := applyLimits(t, `{"model":"qwen","max_tokens":180}`, options)
+	_, view := applyLimits(t, `{"model":"qwen","max_tokens":1800}`, options)
 
 	if view.MaxTokens != completionapi.MinTokensFloor {
 		t.Errorf("max_tokens = %d, want the floor %d", view.MaxTokens, completionapi.MinTokensFloor)

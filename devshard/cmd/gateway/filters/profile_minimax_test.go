@@ -6,9 +6,6 @@ func TestMinimaxProfileHooks(t *testing.T) {
 	if len(minimaxProfile.Models) != 1 || minimaxProfile.Models[0] != minimaxModelID {
 		t.Errorf("minimaxProfile.Models = %v, want [%q]", minimaxProfile.Models, minimaxModelID)
 	}
-	if minimaxProfile.MaxTokensFloor != 0 {
-		t.Errorf("minimaxProfile.MaxTokensFloor = %d, want 0", minimaxProfile.MaxTokensFloor)
-	}
 	if minimaxProfile.Thinking != ThinkingStrip {
 		t.Errorf("minimaxProfile.Thinking = %v, want ThinkingStrip", minimaxProfile.Thinking)
 	}
