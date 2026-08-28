@@ -96,12 +96,31 @@ func (c *raceCoordinator) complete(attempt *liveAttempt, event AttemptEvent) {
 		c.exclude(attempt.participant)
 	}
 	if attempt.outcome.StateDivergent {
+		c.stateDiverged(attempt)
+		return
+	}
+	if attempt.nonceFinished {
+		c.deps.Picker.HostServed(c.escrowID, attempt.participant, attempt.outcome.SendTime)
+	}
+}
+
+// A host rolls its diff back when its root disagrees, so its state survives intact and replaying the
+// retained chain costs one request to try.
+func (c *raceCoordinator) stateDiverged(attempt *liveAttempt) {
+	const cause = "escrow state root diverged"
+	c.exclude(attempt.participant)
+
+	if !c.deps.Picker.HostDiverged(c.escrowID, attempt.participant, attempt.completed) {
 		logging.Warn("host blocked for state divergence",
 			logkey.Request, c.request.RequestID, logkey.Escrow, c.escrowID,
 			logkey.Nonce, attempt.nonce, logkey.Host, logkey.ShortHost(attempt.participant))
-		c.deps.Picker.BlockHost(c.escrowID, attempt.participant)
-		c.exclude(attempt.participant)
+		return
 	}
+	rewound := c.target != nil && c.target.RewindHostCatchUp(attempt.hostIdx, cause)
+	logging.Warn("host rewound for state divergence",
+		logkey.Request, c.request.RequestID, logkey.Escrow, c.escrowID,
+		logkey.Nonce, attempt.nonce, logkey.Host, logkey.ShortHost(attempt.participant),
+		logkey.Rewound, rewound)
 }
 
 // Without this an attempt the race stopped listening to leaves a spent nonce nothing downstream can see.

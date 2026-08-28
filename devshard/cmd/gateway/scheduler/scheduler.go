@@ -54,6 +54,7 @@ type Scheduler struct {
 
 	blocksMu     sync.RWMutex
 	blockedHosts map[string]map[string]bool
+	replays      replayCredit
 }
 
 func NewScheduler(deps Deps) *Scheduler {
@@ -126,7 +127,22 @@ func (s *Scheduler) dropAssignment(assignment Assignment, model string) {
 	}
 }
 
-// BlockHost permanently bars a participant from one escrow; never cleared, by design. See
+// HostDiverged reports whether the participant still had its catch-up replay; spending the last one
+// blocks it for the escrow.
+func (s *Scheduler) HostDiverged(escrowID, participant string, at time.Time) bool {
+	if s.replays.spend(escrowID, participant, at) {
+		return true
+	}
+	s.BlockHost(escrowID, participant)
+	return false
+}
+
+// HostServed returns the replay to a participant whose later send the group accepted.
+func (s *Scheduler) HostServed(escrowID, participant string, sentAt time.Time) {
+	s.replays.restore(escrowID, participant, sentAt)
+}
+
+// BlockHost bars a participant from one escrow for as long as the escrow's dispatcher lives. See
 // gateway-routing-and-nonces.md.
 func (s *Scheduler) BlockHost(escrowID, participant string) {
 	s.blocksMu.Lock()
@@ -207,6 +223,7 @@ func (s *Scheduler) retire(idle *dispatcher) bool {
 	s.blocksMu.Lock()
 	delete(s.blockedHosts, idle.escrowID)
 	s.blocksMu.Unlock()
+	s.replays.forget(idle.escrowID)
 	return true
 }
 

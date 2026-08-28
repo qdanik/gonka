@@ -28,7 +28,8 @@ var errNoDispatchTarget = errors.New("assigned escrow has no dispatch target")
 
 type picker interface {
 	Pick(ctx context.Context, profile scheduler.RequestProfile) (scheduler.Assignment, error)
-	BlockHost(escrowID, participant string)
+	HostDiverged(escrowID, participant string, at time.Time) bool
+	HostServed(escrowID, participant string, sentAt time.Time)
 }
 
 // DispatchTarget is one escrow's session, seen only through what a race needs from it.
@@ -37,6 +38,7 @@ type DispatchTarget interface {
 	HostCount() int
 	HostLabel(hostIdx int) string
 	NonceFinished(nonce uint64) bool
+	RewindHostCatchUp(hostIdx int, cause string) bool
 }
 
 // Escrows rotate, so the handle is fetched per race rather than held.

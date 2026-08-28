@@ -118,9 +118,11 @@ func (s *recordingSession) ProcessResponse(hostIdx int, reply *host.HostResponse
 	return s.applyErr
 }
 
-func (s *recordingSession) IsNonceFinished(uint64) bool      { return true }
-func (s *recordingSession) HostParticipantKeyList() []string { return []string{"hostA", "hostB"} }
-func (s *recordingSession) HostLabel(hostIdx int) string     { return fmt.Sprintf("host-%d", hostIdx) }
+func (s *recordingSession) IsNonceFinished(uint64) bool        { return true }
+func (s *recordingSession) HostParticipantKeyList() []string   { return []string{"hostA", "hostB"} }
+func (s *recordingSession) RewindHostCatchUp(int, string) bool { return true }
+
+func (s *recordingSession) HostLabel(hostIdx int) string { return fmt.Sprintf("host-%d", hostIdx) }
 
 type foreignNonce struct{}
 

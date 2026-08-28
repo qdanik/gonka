@@ -1191,7 +1191,9 @@ func (p *panickingPicker) Pick(context.Context, scheduler.RequestProfile) (sched
 	panic("picker exploded")
 }
 
-func (p *panickingPicker) BlockHost(string, string) {}
+func (p *panickingPicker) HostDiverged(string, string, time.Time) bool { return false }
+
+func (p *panickingPicker) HostServed(string, string, time.Time) {}
 
 // net/http recovers a handler panic per connection, so a race that panics without releasing its
 // registration leaves the process alive and Stop waiting forever. The engine is built here rather

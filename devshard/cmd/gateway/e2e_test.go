@@ -137,28 +137,29 @@ func TestEndToEndANonStreamedReplyIsJSONAndNamesItsEscrow(t *testing.T) {
 
 // A host whose post state root the escrow cannot accept is barred from that escrow for good: each of
 // the three hosts serves once, and the fourth request finds nobody left rather than retrying any of them.
-func TestEndToEndAStateRootDivergenceBlocksThatHostOnThatEscrowPermanently(t *testing.T) {
+func TestEndToEndAStateRootDivergenceRewindsAHostOnceThenBlocksIt(t *testing.T) {
+	const dispatchesPerHost = 2
 	gateway := bootGateway(t, e2eOptions{})
 	fixture := gateway.only()
 	for _, served := range fixture.hosts {
 		served.divergent = true
 	}
 
-	for request := range e2eHostCount {
+	for request := range e2eHostCount * dispatchesPerHost {
 		gateway.send(t, e2eRequest{path: "/v1/chat/completions", body: distinctChatBody(request)})
 	}
-	exhausted := gateway.send(t, e2eRequest{path: "/v1/chat/completions", body: distinctChatBody(e2eHostCount)})
+	exhausted := gateway.send(t, e2eRequest{path: "/v1/chat/completions", body: distinctChatBody(e2eHostCount * dispatchesPerHost)})
 
 	for slot, served := range fixture.hosts {
-		if got := served.dispatched(); got != 1 {
-			t.Errorf("host %d served %d requests, want 1: a diverged host is still being routed to", slot, got)
+		if got := served.dispatched(); got != dispatchesPerHost {
+			t.Errorf("host %d served %d requests, want %d: one send, then its replay", slot, got, dispatchesPerHost)
 		}
 	}
 	if exhausted.status != http.StatusBadGateway {
-		t.Fatalf("the request after every host diverged = %d %s, want 502", exhausted.status, exhausted.body)
+		t.Fatalf("the request after every host spent its replay = %d %s, want 502", exhausted.status, exhausted.body)
 	}
-	if got := fixture.dispatches(); got != int64(e2eHostCount) {
-		t.Errorf("total dispatches = %d, want %d: the blocks are not permanent", got, e2eHostCount)
+	if got, want := fixture.dispatches(), int64(e2eHostCount*dispatchesPerHost); got != want {
+		t.Errorf("total dispatches = %d, want %d: a spent replay must still block", got, want)
 	}
 }
 
@@ -626,10 +627,11 @@ func TestEndToEndABurnedNonceIsCountedUnderItsOwnReason(t *testing.T) {
 		settings.Scheduler.MatchWaitMS = 0
 	}})
 	fixture := gateway.only()
-	// nonce%3 binds host 1 on nonces 1 and 4: the first blocks it, the second has to burn past it.
+	// nonce%3 binds host 1 on nonces 1, 4 and 7: the first spends its replay, the second blocks it,
+	// and the third has to burn past it.
 	fixture.hosts[1].divergent = true
 
-	for request := range 4 {
+	for request := range 7 {
 		gateway.send(t, e2eRequest{path: "/v1/chat/completions", body: distinctChatBody(request)})
 	}
 

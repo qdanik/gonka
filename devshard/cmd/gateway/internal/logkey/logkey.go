@@ -13,6 +13,7 @@ const (
 	Reason  = "reason"
 	Outcome = "outcome"
 	Action  = "action"
+	Rewound = "rewound"
 	Error   = "error"
 )
 

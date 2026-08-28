@@ -45,14 +45,19 @@ type dispatchSession interface {
 	IsNonceFinished(nonce uint64) bool
 	HostParticipantKeyList() []string
 	HostLabel(hostIdx int) string
+	RewindHostCatchUp(hostIdx int, cause string) bool
 }
 
 type escrowTarget struct{ session dispatchSession }
 
 var _ engine.DispatchTarget = escrowTarget{}
 
-func (t escrowTarget) HostCount() int                  { return len(t.session.HostParticipantKeyList()) }
-func (t escrowTarget) HostLabel(hostIdx int) string    { return t.session.HostLabel(hostIdx) }
+func (t escrowTarget) HostCount() int               { return len(t.session.HostParticipantKeyList()) }
+func (t escrowTarget) HostLabel(hostIdx int) string { return t.session.HostLabel(hostIdx) }
+
+func (t escrowTarget) RewindHostCatchUp(hostIdx int, cause string) bool {
+	return t.session.RewindHostCatchUp(hostIdx, cause)
+}
 func (t escrowTarget) NonceFinished(nonce uint64) bool { return t.session.IsNonceFinished(nonce) }
 
 func (t escrowTarget) Send(ctx context.Context, nonce scheduler.Prepared, stream io.Writer, onReceipt func()) (engine.Response, error) {

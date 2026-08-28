@@ -23,6 +23,8 @@ type stubPicker struct {
 	mu       sync.Mutex
 	queue    []scheduler.Assignment
 	blocked  [][2]string
+	diverged [][2]string
+	replays  int
 	profiles []scheduler.RequestProfile
 	hold     chan struct{}
 	parked   chan struct{}
@@ -67,7 +69,28 @@ func (p *stubPicker) next() (scheduler.Assignment, error) {
 	return next, nil
 }
 
-func (p *stubPicker) BlockHost(escrowID, participant string) {
+// Mirrors the scheduler's one-replay-per-participant-per-escrow policy.
+func (p *stubPicker) HostDiverged(escrowID, participant string, _ time.Time) bool {
+	p.mu.Lock()
+	seen := 0
+	for _, entry := range p.diverged {
+		if entry == [2]string{escrowID, participant} {
+			seen++
+		}
+	}
+	p.diverged = append(p.diverged, [2]string{escrowID, participant})
+	p.mu.Unlock()
+	if seen == 0 {
+		p.replays++
+		return true
+	}
+	p.blockHost(escrowID, participant)
+	return false
+}
+
+func (p *stubPicker) HostServed(string, string, time.Time) {}
+
+func (p *stubPicker) blockHost(escrowID, participant string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.blocked = append(p.blocked, [2]string{escrowID, participant})
@@ -96,6 +119,7 @@ type scriptedTarget struct {
 	scripts map[uint64]*hostScript
 	hosts   int
 	labels  map[int]string
+	rewound []int
 }
 
 func (t *scriptedTarget) script(nonce uint64) *hostScript {
@@ -155,6 +179,13 @@ func (t *scriptedTarget) HostLabel(hostIdx int) string {
 		return label
 	}
 	return fmt.Sprintf("host-%d", hostIdx)
+}
+
+func (t *scriptedTarget) RewindHostCatchUp(hostIdx int, _ string) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.rewound = append(t.rewound, hostIdx)
+	return true
 }
 
 func (t *scriptedTarget) NonceFinished(nonce uint64) bool {
@@ -781,7 +812,7 @@ func TestRunRaceReleasesOneHostSlotPerAttempt(t *testing.T) {
 	}
 }
 
-func TestRunRaceBlocksDivergentHostAndReportsLifecycle(t *testing.T) {
+func TestRunRaceRewindsADivergentHostBeforeBlockingIt(t *testing.T) {
 	fixture := newRaceFixture(settledPolicy(), 1)
 	fixture.host(80, 0, "host-0", &hostScript{receipt: true, err: ErrStateRootDivergence})
 
@@ -793,10 +824,19 @@ func TestRunRaceBlocksDivergentHostAndReportsLifecycle(t *testing.T) {
 		t.Fatal("StateDivergent = false, want true")
 	}
 	fixture.picker.mu.Lock()
-	blocked := fixture.picker.blocked
+	blocked, diverged := fixture.picker.blocked, fixture.picker.diverged
 	fixture.picker.mu.Unlock()
-	if len(blocked) != 1 || blocked[0] != [2]string{"escrow-1", "host-0"} {
-		t.Fatalf("blocked hosts = %v, want the divergent one", blocked)
+	if len(diverged) != 1 || diverged[0] != [2]string{"escrow-1", "host-0"} {
+		t.Fatalf("diverged hosts = %v, want the divergent one", diverged)
+	}
+	if len(blocked) != 0 {
+		t.Fatalf("blocked hosts = %v, want none on the first divergence", blocked)
+	}
+	fixture.target.mu.Lock()
+	rewound := fixture.target.rewound
+	fixture.target.mu.Unlock()
+	if len(rewound) != 1 || rewound[0] != 0 {
+		t.Fatalf("rewound host indexes = %v, want the divergent host's", rewound)
 	}
 }
 
