@@ -17,7 +17,7 @@ Every parameter that is stripped / rejected / normalized at the gateway is docum
 | Silent disappearance of a param | silent-strip allowlist | search by param name under [#silent-strips](#silent-strips) |
 | `thinking.type` value normalized | `adaptive` / `auto` resolved to `enabled` | see [Kimi overrides](kimi-k2.6.md#parameter-overrides) |
 | `tool_choice: "required"` becomes `"auto"` | network policy | [#coerce-tool-choice-required](#coerce-tool-choice-required) |
-| `n` becomes 1 at `temperature == 0` | vLLM constraint | [#coerce-n-when-temperature-zero](#coerce-n-when-temperature-zero) |
+| `n` becomes 1 | reservation budgets one `MaxTokens` output | [#coerce-n-when-temperature-zero](#coerce-n-when-temperature-zero) |
 | `extra_body` keys appear at top level | OpenAI Python SDK passthrough | [#unwrap-extra_body](#unwrap-extra_body) |
 | `enable_thinking` lifts into `chat_template_kwargs` | Qwen3 canonical placement | [#translate-enable_thinking](#translate-enable_thinking) |
 | `reasoning` object decomposed to top-level `reasoning_effort` | OpenRouter unified-reasoning convention | [#translate-reasoning](#translate-reasoning) |
@@ -212,13 +212,13 @@ Every parameter that is stripped / rejected / normalized at the gateway is docum
 
 ### #strip-reasoning_effort
 
-**What**: `reasoning_effort: "none"|"minimal"|"low"|"medium"|"high"|"xhigh"` enum-validated, then field stripped from the request body before forwarding to vLLM.
+**What**: `reasoning_effort: "none"|"minimal"|"low"|"medium"|"high"|"xhigh"|"max"` enum-validated on every route, then stripped on every route **except** `deepseek-ai/DeepSeek-V4-Flash-0731`, where an explicit value is forwarded unchanged and an omitted one is filled in as `"max"`.
 
-**Why**: vLLM declares the enum [[vLLM-1]](references.md#vllm) (sourced from [[OpenAI-4]](references.md#openai) reasoning guide; we exclude `"max"` because no routed model is DeepSeek). Both currently-routed models are non-reasoning — [[Qwen-1]](references.md#qwen) for Qwen3-235B-Instruct-2507, [[Moonshot-1]](references.md#moonshot) for Kimi (schema lacks the field). The validate-then-strip pattern surfaces malformed enum values as a 400 instead of silently forwarding garbage; the strip itself is the documented no-op on both backends.
+**Why**: vLLM declares the enum [[vLLM-1]](references.md#vllm) (sourced from [[OpenAI-4]](references.md#openai) reasoning guide, plus `"max"`, which vLLM documents as DeepSeek-V4-specific and outside the OpenAI spec). The other routed models are non-reasoning — [[Qwen-1]](references.md#qwen) for Qwen3-235B-Instruct-2507, [[Moonshot-1]](references.md#moonshot) for Kimi — but the strip there is not merely a tidy no-op: vLLM *also* derives `enable_thinking` from this field and injects it into `chat_template_kwargs` [[vLLM-1]](references.md#vllm), so forwarding it to a template that declares that variable would silently flip thinking while the effort level itself went nowhere. Validating everywhere and stripping selectively surfaces a malformed enum as a 400 regardless of route.
 
-**When to restore**: when a reasoning-capable model is added to the gateway routes — strip wiring must be revisited then.
+**When to revisit**: when another reasoning-capable model is routed — add it to `Models` on the `reasoning_effort` entry in `defaultVLLMParameterCatalog`, and check its own value mapping first, since the levels are not portable ([DeepSeek-V4 collapses seven wire values onto three](deepseek-v4-flash-0731.md#the-reasoning_effort-contract)).
 
-**Fix (client-side)**: if you're sending `reasoning_effort` and need the behavior, you're on a route that doesn't support it. Either drop the field or wait for a reasoning-capable route to be added.
+**Fix (client-side)**: on any route other than DeepSeek-V4-Flash-0731 the field does nothing — drop it. On DeepSeek-V4-Flash-0731 only `low`, `high` and `max` are distinct: `minimal`/`medium` render as `low` and `xhigh` renders as `high`. Omitting the field there is not neutral — it arrives as `max`, so `minimal`/`low`/`medium` ask for *less* reasoning than sending nothing. To get the engine's own fallback, send `high` explicitly; to turn reasoning off, send `none` (or `reasoning: {"enabled": false}`, which is recorded as `none`).
 
 ## Translations / coercions
 
@@ -260,13 +260,13 @@ Every parameter that is stripped / rejected / normalized at the gateway is docum
 
 ### #coerce-n-when-temperature-zero
 
-**What**: `n: <N>` coerced to `n: 1` whenever `temperature == 0`.
+**What**: any present `n` is rewritten to `n: 1` before the request reaches ML. An omitted `n` stays omitted (vLLM default is 1). This includes `n: 0`, `n > 1`, and unbounded `n`.
 
-**Why**: vLLM rejects `n > 1` with `temperature == 0` — greedy sampling produces identical completions, so vLLM treats this as a malformed request (`Best of with temperature 0` error). Rather than returning a 400, the gateway silently rounds down to `n: 1`, matching the sole semantically valid value under deterministic sampling.
+**Why**: signed reservation and settlement budget a single `MaxTokens` output. Forwarding `n > 1` lets aggregate choice tokens exceed `ReservedCost`, so the host is undercharged. Forcing a single choice closes that hole (and also covers the old vLLM `Best of with temperature 0` reject, which is now unreachable). Unbounded `n` is the same rewrite, which also mitigates [[CVE-9]](references.md#security-advisories) (vLLM OOM on huge `n`).
 
-**When to restore**: when vLLM relaxes the constraint.
+**When to restore**: when reservation/settlement include `n × max_tokens` and validation supports multi-choice.
 
-**Fix (client-side)**: either set `temperature > 0` (typical) or accept `n: 1` — deterministic sampling produces one output anyway.
+**Fix (client-side)**: send one completion (`n` omitted or `n: 1`). Multi-choice is not available.
 
 ---
 

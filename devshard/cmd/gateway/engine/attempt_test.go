@@ -370,7 +370,7 @@ func TestRunAttempt_TerminalClassification(t *testing.T) {
 		},
 		{
 			name:       "an sse event past the cap",
-			dispatch:   &fakeDispatcher{err: fmt.Errorf("read: %w", transport.ErrSSELineTooLarge)},
+			dispatch:   &fakeDispatcher{err: fmt.Errorf("read: %w", transport.ErrSSEEventTooLarge)},
 			classifier: &fakeClassifier{},
 			want:       TerminalResponseTooLarge,
 		},

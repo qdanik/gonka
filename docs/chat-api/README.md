@@ -6,6 +6,7 @@ OpenAI-compatible chat completions, routed to Kimi-K2.6 / Qwen3-235B / MiniMax-M
 - [Per-model overrides: Kimi-K2.6](kimi-k2.6.md)
 - [Per-model overrides: Qwen3-235B-A22B-Instruct-2507](qwen3-235b-a22b-instruct-2507.md)
 - [Per-model overrides: MiniMax-M2.7](minimax-m2.7.md)
+- [Per-model overrides: DeepSeek-V4-Flash-0731](deepseek-v4-flash-0731.md)
 - [Why was my param stripped/rejected?](troubleshooting.md)
 - [Client agents compatibility](agents.md)
 - [Source citations](references.md)
@@ -20,7 +21,7 @@ OpenAI-compatible chat completions, routed to Kimi-K2.6 / Qwen3-235B / MiniMax-M
 | Max body size | 10 MiB | gateway-level; pre-`json.Unmarshal` check |
 | Max nesting depth | 32 | `ensureRequestNestingDepth`; defense against deeply-nested JSON DoS |
 | Max messages count | 2048 | OpenAI Chat Completions convention; defensive cap |
-| Max choices (`n`) | 5 | `MaxChatRequestChoices`; ceiling on completion fan-out |
+| Max choices (`n`) | 1 | forced to 1 when present; reservation/settlement budget a single `MaxTokens` output ([why](troubleshooting.md#coerce-n-when-temperature-zero)) |
 
 ## Supported parameters (universal behavior)
 
@@ -41,7 +42,7 @@ OpenAI-compatible chat completions, routed to Kimi-K2.6 / Qwen3-235B / MiniMax-M
 | `stream` | bool | false | pass-through | [[OpenAI-1]](references.md#openai) |
 | `stream_options` | object | — | strip when stream≠true; whitelist `include_usage`; strip `continuous_usage_stats` | [[OpenAI-1]](references.md#openai) |
 | `stop` | str\|array | — | array entries must be strings (else reject — [why](troubleshooting.md#reject-malformed-param-types)); ≤16 entries × 256 B each | [[OpenAI-1]](references.md#openai) |
-| `n` | int | 1 | hard cap ≤5; coerce to 1 when temperature==0 ([why](troubleshooting.md#coerce-n-when-temperature-zero)) | [[OpenAI-1]](references.md#openai), [[CVE-9]](references.md#security-advisories) |
+| `n` | int | 1 | force `1` when present (omitted stays omitted; ML default is 1). Reservation only budgets one `MaxTokens` output ([why](troubleshooting.md#coerce-n-when-temperature-zero)) | [[OpenAI-1]](references.md#openai), [[CVE-9]](references.md#security-advisories) |
 | `seed` | uint64 | — | must be a non-negative integer (else reject — [why](troubleshooting.md#reject-malformed-param-types)); pass-through | [[OpenAI-1]](references.md#openai) |
 | `logprobs` | bool | — | force `true`; observability pipeline | — |
 | `top_logprobs` | int | — | force `5`; observability pipeline | — |
@@ -62,7 +63,7 @@ OpenAI-compatible chat completions, routed to Kimi-K2.6 / Qwen3-235B / MiniMax-M
 | `cache_key` | string | — | silent-strip ([why](troubleshooting.md#strip-cache_key)) | [[Moonshot-1]](references.md#moonshot) |
 | `extra_headers` | object | — | silent-strip ([why](troubleshooting.md#strip-extra_headers)) | [[OpenAI-5]](references.md#openai) |
 | `extra_body` | object | — | unwrap to top-level ([why](troubleshooting.md#unwrap-extra_body)) | [[OpenAI-5]](references.md#openai) |
-| `reasoning_effort` | enum string | — | validated then stripped ([why](troubleshooting.md#strip-reasoning_effort)) | [[vLLM-1]](references.md#vllm), [[OpenAI-4]](references.md#openai) |
+| `reasoning_effort` | enum string | `max` on DeepSeek-V4 only | validated everywhere; on [DeepSeek-V4-Flash-0731](deepseek-v4-flash-0731.md) an explicit value is forwarded and an omitted one defaults to `max`, stripped on every other route ([why](troubleshooting.md#strip-reasoning_effort)) | [[vLLM-1]](references.md#vllm), [[OpenAI-4]](references.md#openai) |
 | `reasoning` | object | — | translate `effort` → `reasoning_effort` ([why](troubleshooting.md#translate-reasoning)) | [[OpenRouter-4]](references.md#openrouter) |
 | `enable_thinking` | bool | — | translate to chat_template_kwargs ([why](troubleshooting.md#translate-enable_thinking)) | [[Qwen-3]](references.md#qwen) |
 | `thinking_config` | object | — | silent-strip ([why](troubleshooting.md#strip-thinking_config)) | — |

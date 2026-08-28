@@ -282,6 +282,9 @@ type RequestFilterContext struct {
 	AdminAuthenticated bool
 	Request            chatRequest
 	RoutedModel        string
+	// ForceUpstreamStreaming is snapshotted once so a mid-flight admin flip
+	// cannot set stream:true without stream_options.include_usage.
+	ForceUpstreamStreaming bool
 }
 
 func newRequestFilterContext(body []byte, adminAuthenticated bool, limits outputTokenLimits) (*RequestFilterContext, error) {
@@ -290,9 +293,10 @@ func newRequestFilterContext(body []byte, adminAuthenticated bool, limits output
 		return nil, err
 	}
 	return &RequestFilterContext{
-		Document:           ChatRequestDocument{raw: raw},
-		OutputLimits:       normalizedOutputTokenLimits(limits),
-		AdminAuthenticated: adminAuthenticated,
+		Document:               ChatRequestDocument{raw: raw},
+		OutputLimits:           normalizedOutputTokenLimits(limits),
+		AdminAuthenticated:     adminAuthenticated,
+		ForceUpstreamStreaming: ForceUpstreamStreamingEnabled(),
 	}, nil
 }
 
@@ -326,8 +330,8 @@ func (ctx *RequestFilterContext) DecodeRequest() error {
 // max_completion_tokens into the document (the max-completion-only branch mirrors into
 // max_tokens too), so this preservation is a harmless no-op safety net.
 //
-// Other fields are re-read so caps applied by PostLimits rules (for example `n` via
-// paramvalidators.CapUintParameter through the adapter) propagate into the projection.
+// Other fields are re-read so PostLimits mutations (for example forcing `n` to 1)
+// propagate into the projection.
 func (ctx *RequestFilterContext) SyncRequestView() error {
 	var req chatRequest
 	if err := readChatRequestFields(&ctx.Document, &req); err != nil {
@@ -374,7 +378,7 @@ func readChatRequestFields(doc *ChatRequestDocument, req *chatRequest) error {
 	// request; any other shape is treated as "not requested" so we never reject a
 	// request the gateway previously accepted -- the PostLimits ForceLiteral
 	// rules overwrite both fields regardless of incoming type. Cf.
-	// logprobClientIntent and conditional response stripping.
+	// clientResponseIntent and conditional response stripping.
 	if raw, ok := doc.Get("logprobs"); ok {
 		if b, isBool := raw.(bool); isBool {
 			req.Logprobs = b
@@ -383,6 +387,11 @@ func readChatRequestFields(doc *ChatRequestDocument, req *chatRequest) error {
 	if raw, ok := doc.Get("top_logprobs"); ok {
 		if n, isNum := devshard.JSONNumericUint64(raw); isNum {
 			req.TopLogprobs = n
+		}
+	}
+	if options, ok := doc.Object("stream_options"); ok {
+		if included, isBool := options["include_usage"].(bool); isBool {
+			req.IncludeUsage = included
 		}
 	}
 	return nil
@@ -437,10 +446,13 @@ func defaultVLLMParameterCatalog() VLLMParameterCatalog {
 			newParameter("seed").
 				withRule(RequestFilterStagePreValidation, mustBeUint),
 			newParameter("n").
-				withRule(RequestFilterStagePostLimits, ParameterHandlerAdapter{Handler: paramvalidators.CapUintParameter{Min: 1, Max: MaxChatRequestChoices}}).
-				withRule(RequestFilterStagePostLimits, DocumentValidatorHandler{
-					Validator: paramvalidators.GreedySamplingValidator{},
-				}),
+				// Force a single choice while reservation/settlement only budget one
+				// MaxTokens output: aggregate `n` choice tokens can exceed the signed
+				// reservation, and settlement then caps the charge at ReservedCost.
+				// OverwriteOnly keeps an omitted `n` omitted (ML default is 1).
+				// No cap / greedy-sampling coerce: those are redundant once every
+				// present `n` is rewritten to 1 (including n=0 and unbounded n).
+				withRule(RequestFilterStagePostLimits, ParameterHandlerAdapter{Handler: paramvalidators.ForceLiteralParameter{Value: uint64(1), OverwriteOnly: true}}),
 			newParameter("temperature").
 				withRule(RequestFilterStagePostLimits, ParameterHandlerAdapter{Handler: paramvalidators.SanitizeFloatParameter{StripNonFinite: true, Min: floatPointer(MinTemperature), Max: floatPointer(MaxTemperature)}}),
 			newParameter("repetition_penalty").
@@ -457,15 +469,13 @@ func defaultVLLMParameterCatalog() VLLMParameterCatalog {
 				withRule(RequestFilterStagePreValidation, DocumentValidatorHandler{
 					Validator: paramvalidators.ReasoningValidator{},
 				}),
-			// reasoning_effort: enum-validate then strip. Models: nil keeps the strip
-			// universal until a reasoning-capable model is routed. List models in Models
-			// to start forwarding.
 			newParameter("reasoning_effort").
 				withRule(RequestFilterStagePreValidation, DocumentValidatorHandler{
 					Validator: paramvalidators.ReasoningEffortValidator{},
 				}).
 				withRule(RequestFilterStagePreValidation, ModelScopedParameterHandler{
-					Models:           nil,
+					Models:           []string{deepSeekV4Flash0731ModelID},
+					Handler:          ParameterHandlerAdapter{Handler: paramvalidators.DefaultLiteralParameter{Value: deepSeekDefaultReasoningEffort}},
 					UnmatchedHandler: ParameterHandlerAdapter{Handler: paramvalidators.StripParameter{}},
 				}),
 			// MiniMax-M2.7 has no chat_template knob for enable_thinking (vLLM #36778);

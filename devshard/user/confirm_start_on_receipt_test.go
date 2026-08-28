@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -288,4 +289,95 @@ func TestAHostAlreadyBehindTheHistoryIsLeftAlone(t *testing.T) {
 	defer session.mu.Unlock()
 	require.Equal(t, uint64(500), session.hostSyncNonce[2],
 		"there is nothing further back to give it, so moving the cursor buys nothing")
+}
+
+type refusingCatchUpClient struct {
+	InProcessClient
+	refusal error
+}
+
+func (c *refusingCatchUpClient) Send(context.Context, host.HostRequest, io.Writer, func(*host.HostResponse)) (*host.HostResponse, error) {
+	return nil, c.refusal
+}
+
+func TestCatchUpReportsAHostThatRefusedTheDiffs(t *testing.T) {
+	session, _, _ := setupSession(t, 3, 100000, 10)
+	_, err := session.SendInference(context.Background(), warmupParams())
+	require.NoError(t, err)
+	session.clients[2] = &refusingCatchUpClient{
+		InProcessClient: *session.clients[2].(*InProcessClient),
+		refusal: &transport.UpstreamStatusError{
+			Path: "/sessions/1/chat/completions", StatusCode: http.StatusConflict,
+			Body: `{"message":"session version conflict: stored v3, host v4"}`,
+		},
+	}
+
+	catchUpErr := session.CatchUpAllHosts(context.Background())
+
+	require.Error(t, catchUpErr,
+		"a caller told the group is caught up treats every host as holding the escrow, and this one does not")
+	require.Contains(t, catchUpErr.Error(), "host 2")
+}
+
+type countingClient struct {
+	InProcessClient
+	sends atomic.Int64
+}
+
+func (c *countingClient) Send(ctx context.Context, req host.HostRequest, stream io.Writer, onReceipt func(*host.HostResponse)) (*host.HostResponse, error) {
+	c.sends.Add(1)
+	return c.InProcessClient.Send(ctx, req, stream, onReceipt)
+}
+
+func TestOneRefusingHostDoesNotStopTheOthersFromSyncing(t *testing.T) {
+	session, _, _ := setupSession(t, 3, 100000, 10)
+	_, err := session.SendInference(context.Background(), warmupParams())
+	require.NoError(t, err)
+
+	refusing := &refusingCatchUpClient{
+		InProcessClient: *session.clients[0].(*InProcessClient),
+		refusal:         errors.New("session version conflict"),
+	}
+	counting := &countingClient{InProcessClient: *session.clients[2].(*InProcessClient)}
+	session.clients[0] = refusing
+	session.clients[2] = counting
+
+	syncErr := session.SyncHosts(context.Background())
+
+	require.Error(t, syncErr, "the caller must learn which hosts did not catch up")
+	require.NotZero(t, counting.sends.Load(),
+		"a host after the refusing one must still be reached: stopping there leaves the group half taught")
+}
+
+func TestRewindMakesTheNextCatchUpCarryTheWholeHistory(t *testing.T) {
+	session, _, _ := setupSession(t, 3, 100000, 10)
+	for range 6 {
+		_, err := session.PrepareInference(InferenceParams{
+			Model: "llama", Prompt: testutil.TestPrompt,
+			InputLength: 100, MaxTokens: testutil.TestMaxTokens, StartedAt: 1000,
+		})
+		require.NoError(t, err)
+	}
+	session.mu.Lock()
+	session.hostSyncNonce[2] = 4
+	before := len(session.diffsForHost(2))
+	session.mu.Unlock()
+	require.NotZero(t, before, "precondition: the cursor hides part of a non-empty history")
+
+	require.True(t, session.RewindHostCatchUp(2, "escrow_state_root_diverged"))
+
+	session.mu.Lock()
+	defer session.mu.Unlock()
+	require.Greater(t, len(session.diffsForHost(2)), before,
+		"a rewound host has to be handed the chain its cursor claimed it already had")
+}
+
+func TestRewindIsANoOpForAHostAlreadyAtTheStartOfTheHistory(t *testing.T) {
+	session, _, _ := setupSession(t, 3, 100000, 10)
+	session.mu.Lock()
+	session.hostSyncNonce[2] = 0
+	session.mu.Unlock()
+
+	require.False(t, session.RewindHostCatchUp(2, "escrow_state_root_diverged"),
+		"rewinding past the retained history would hand the host a chain missing its own beginning")
 }

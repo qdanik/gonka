@@ -239,7 +239,6 @@ type InferenceParams struct {
 	MaxTokens        uint64
 	ContextTotalHint uint64
 	StartedAt        int64
-	Stream           bool
 }
 
 // Session manages the user side of the devshard protocol.
@@ -868,20 +867,26 @@ func (p *PreparedInference) HostIdx() int { return p.hostIdx }
 // this dispatch as a probe (e.g. PoC bypass for non-preserved hosts).
 func (p *PreparedInference) IsProbe() bool { return p.isProbe }
 
+// Payload is verified against the nonce's committed PromptHash, so a timeout raised on a nonce we
+// never dispatched has to build it exactly as a real dispatch would.
+func (p *PreparedInference) Payload() *host.InferencePayload {
+	return &host.InferencePayload{
+		Prompt:      p.params.Prompt,
+		Model:       p.params.Model,
+		InputLength: p.params.InputLength,
+		MaxTokens:   p.params.MaxTokens,
+		StartedAt:   p.params.StartedAt,
+	}
+}
+
 // SendOnly sends a prepared inference to the host and returns the raw response
 // without processing it. Use ProcessResponse separately to apply the response
 // to session state. This split allows parallel network I/O with ordered processing.
 func (s *Session) SendOnly(ctx context.Context, p *PreparedInference, stream io.Writer, receiptHandler func()) (*host.HostResponse, error) {
 	resp, err := s.clients[p.hostIdx].Send(ctx, host.HostRequest{
-		Diffs: p.catchUp,
-		Nonce: p.diff.Nonce,
-		Payload: &host.InferencePayload{
-			Prompt:      p.params.Prompt,
-			Model:       p.params.Model,
-			InputLength: p.params.InputLength,
-			MaxTokens:   p.params.MaxTokens,
-			StartedAt:   p.params.StartedAt,
-		},
+		Diffs:   p.catchUp,
+		Nonce:   p.diff.Nonce,
+		Payload: p.Payload(),
 	}, stream, func(partial *host.HostResponse) {
 		s.confirmStartOnReceipt(p.diff.Nonce, partial)
 		if receiptHandler != nil {
@@ -1457,11 +1462,17 @@ func (s *Session) forgetHostState(hostIdx int, err error) {
 	if !transport.IsSessionNotFound(err) {
 		return
 	}
+	s.RewindHostCatchUp(hostIdx, "host lost the escrow")
+}
+
+// RewindHostCatchUp rewinds a host to the start of the history we still hold, so the next request
+// carries the whole chain instead of the tail its cursor claims it needs. Reports whether it moved.
+func (s *Session) RewindHostCatchUp(hostIdx int, cause string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	cursor, tracked := s.hostSyncNonce[hostIdx]
 	if hostIdx < 0 || hostIdx >= len(s.group) || !tracked || cursor == 0 {
-		return
+		return false
 	}
 	// Only as far back as the diffs actually held: after a restart the history starts at the group's
 	// lowest cursor, and rewinding past it would hand the host a chain missing its own beginning.
@@ -1470,11 +1481,12 @@ func (s *Session) forgetHostState(hostIdx int, err error) {
 		earliest = s.diffs[0].Nonce - 1
 	}
 	if cursor <= earliest {
-		return
+		return false
 	}
-	logging.Warn("host lost the escrow, rewinding its catch-up cursor", "subsystem", "session",
+	logging.Warn("rewinding a host's catch-up cursor", "subsystem", "session", "cause", cause,
 		"escrow", s.escrowID, "host", hostIdx, "cursor", cursor, "rewound_to", earliest)
 	s.hostSyncNonce[hostIdx] = earliest
+	return true
 }
 
 // getFinalizeClients mirrors s.clients with admission control stripped, for the protocol paths that must
@@ -2099,7 +2111,7 @@ func (s *Session) HandleTimeout(ctx context.Context, nonce uint64, sendTime time
 	verifiers := s.TimeoutVerifiers()
 	storedDiffs := s.Diffs()
 
-	votes, hadVerifierErrors, err := s.collectTimeoutVotes(ctx, nonce, reason, payload, verifiers, storedDiffs)
+	votes, verifierError, err := s.collectTimeoutVotes(ctx, nonce, reason, payload, verifiers, storedDiffs)
 	if err != nil {
 		result.Outcome = "vote_collection_failed"
 		if ctx.Err() != nil {
@@ -2135,13 +2147,15 @@ func (s *Session) HandleTimeout(ctx context.Context, nonce uint64, sendTime time
 		return result, fmt.Errorf("inference %d timed out: %s", nonce, reason)
 	}
 
-	if hadVerifierErrors {
+	if verifierError != "" {
 		result.Outcome = "vote_collection_failed"
+		result.DetailReason = verifierError
 		if ctx.Err() != nil {
 			result.DetailReason = "context_canceled"
 		}
 	} else {
 		result.Outcome = "insufficient_votes"
+		result.DetailReason = "vote_weight_short"
 	}
 	logging.Stage(ctx, "timeout_insufficient_votes", logFields("reason", result.Reason)...)
 	return result, fmt.Errorf("inference %d: %w: insufficient votes", nonce, ErrTimeoutNotApplied)
@@ -2171,8 +2185,9 @@ func (s *Session) reasonTheGroupWillAccept(nonce uint64, planned types.TimeoutRe
 	return planned, false
 }
 
-// A verifier measures the refusal deadline from the record's own StartedAt, so a stamp in the future or
-// in the wrong unit makes every vote a certain reject and the whole round waste.
+// refusalDeadlineUnreachable reports whether a refusal vote is already lost. A verifier measures the
+// deadline as its own clock in seconds minus the record's StartedAt, so a stamp in the future — or in
+// the wrong unit — makes every vote a guaranteed reject, and the round is pure waste.
 func (s *Session) refusalDeadlineUnreachable(reason types.TimeoutReason, payload *host.InferencePayload) (elapsed, refusalTimeout int64, unreachable bool) {
 	if reason != types.TimeoutReason_TIMEOUT_REASON_REFUSED || payload == nil {
 		return 0, 0, false
@@ -2279,7 +2294,7 @@ func (s *Session) collectTimeoutVotes(
 	payload *host.InferencePayload,
 	verifiers map[int]TimeoutVerifier,
 	diffs []types.Diff,
-) ([]*types.TimeoutVote, bool, error) {
+) ([]*types.TimeoutVote, string, error) {
 	// Cancel all in-flight verifier RPCs (and unblock any goroutines still
 	// waiting in the per-verifier queue) once we return — typically because
 	// the vote-weight threshold was met early. Without this, leftover
@@ -2409,10 +2424,12 @@ func (s *Session) collectTimeoutVotes(
 	voteThreshold := s.sm.VoteThreshold()
 	var accWeight uint32
 	var errors, rejects, invalid int
+	errorClasses := make(map[string]int)
 	for i := 0; i < expected; i++ {
 		res := <-results
 		if res.err != nil {
 			errors++
+			errorClasses[classifyVoteError(res.err)]++
 			logging.Stage(ctx, "timeout_vote_result",
 				logFields(
 					res.verifierAddr,
@@ -2500,7 +2517,7 @@ func (s *Session) collectTimeoutVotes(
 		"reject", rejects, "invalid", invalid, "errors", errors,
 		"threshold", voteThreshold, "verifiers", expected)
 
-	return votes, errors > 0, nil
+	return votes, dominantVoteError(errorClasses), nil
 }
 
 // HasSufficientTimeoutVotes returns true if the accept votes exceed the vote

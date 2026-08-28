@@ -296,7 +296,6 @@ func (s *Server) race(w http.ResponseWriter, r *http.Request, requestID string, 
 			InputLength: uint64(len(normalized.Body)),
 			MaxTokens:   outputTokens,
 			StartedAt:   s.now().Unix(),
-			Stream:      true,
 		},
 	}, client)
 	if err != nil {

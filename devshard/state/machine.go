@@ -100,7 +100,7 @@ type StateMachine struct {
 	addressToSlots     map[string][]uint32 // address -> sorted slot IDs
 	totalSlots         uint32
 
-	warmResolver    WarmKeyResolver       // optional, nil = no warm key support
+	warmResolver WarmKeyResolver // optional, nil = no warm key support
 
 	// obsDeferred, when non-nil, redirects observability writes made during a
 	// trial apply (ValidateDiff / PreviewLocalBestEffort) into a buffer instead
@@ -316,8 +316,8 @@ func (sm *StateMachine) ApplyLocal(nonce uint64, txs []*types.DevshardTx) ([]byt
 	return sm.applyCore(nonce, txs, nil, "user")
 }
 
-// ApplyLocalPersisted replays a diff this node already accepted. A diff is part of a recorded state root,
-// so a rule that tightened since it was written cannot undo it by refusing it, only fail to start.
+// ApplyLocalPersisted replays a diff this node already accepted and persisted. It is the only path that
+// relaxes policy, and it relaxes it only for checks that guard the creation of new work.
 func (sm *StateMachine) ApplyLocalPersisted(nonce uint64, txs []*types.DevshardTx) ([]byte, error) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
@@ -408,9 +408,9 @@ func (sm *StateMachine) flushDeferredObsLocked(writes []deferredObsWrite) {
 	}
 }
 
-// logDroppedTx reports what best-effort composition discarded. A dropped ConfirmStart is queued once per
-// inference and leaves it pending for good, so it warns; mempool txs are gossiped repeatedly and a stale
-// one is ordinary, so they stay at debug.
+// logDroppedTx reports what best-effort composition discarded. A dropped ConfirmStart is queued once
+// per inference and leaves it pending forever, so it warns; mempool txs are gossiped repeatedly and
+// stale ones are ordinary, so they stay at debug.
 func logDroppedTx(nonce uint64, tx *types.DevshardTx, err error) {
 	if confirm := tx.GetConfirmStart(); confirm != nil {
 		logging.Warn("dropped confirm start", "subsystem", "state",

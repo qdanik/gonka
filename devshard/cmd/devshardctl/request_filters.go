@@ -27,9 +27,10 @@ type chatRequest struct {
 	// top_logprobs to completionapi.ForcedTopLogprobs on the wire). These hold what the
 	// client asked for, not the forced values, and drive conditional response
 	// stripping so clients who explicitly asked for logprobs get them back. Cf.
-	// logprobClientIntent.
-	Logprobs    bool   `json:"logprobs"`
-	TopLogprobs uint64 `json:"top_logprobs"`
+	// clientResponseIntent.
+	Logprobs     bool   `json:"logprobs"`
+	TopLogprobs  uint64 `json:"top_logprobs"`
+	IncludeUsage bool   `json:"-"`
 }
 
 type outputTokenLimits struct {
@@ -81,8 +82,9 @@ func wrapBadChatRequest(err error) error {
 }
 
 type ChatRequestPipeline struct {
-	parameters VLLMParameterCatalog
-	messages   ChatMessageProcessor
+	parameters     VLLMParameterCatalog
+	messages       ChatMessageProcessor
+	forceStreaming bool
 }
 
 func defaultChatRequestPipeline() ChatRequestPipeline {
@@ -90,6 +92,12 @@ func defaultChatRequestPipeline() ChatRequestPipeline {
 		parameters: defaultParameterCatalog,
 		messages:   defaultMessageProcessor,
 	}
+}
+
+func upstreamChatRequestPipeline() ChatRequestPipeline {
+	pipeline := defaultChatRequestPipeline()
+	pipeline.forceStreaming = true
+	return pipeline
 }
 
 // Normalize runs the catalog (generic + per-model rules) and emits the rewritten body.
@@ -119,11 +127,22 @@ func (p ChatRequestPipeline) Normalize(body []byte, adminAuthenticated bool, lim
 	if err := ctx.SyncRequestView(); err != nil {
 		return nil, chatRequest{}, err
 	}
+	p.applyForcedStreaming(ctx)
 	updatedBody, err := ctx.Document.Marshal()
 	if err != nil {
 		return nil, chatRequest{}, err
 	}
 	return updatedBody, ctx.Request, nil
+}
+
+func (p ChatRequestPipeline) applyForcedStreaming(ctx *RequestFilterContext) {
+	if ctx == nil || !p.forceStreaming || !ctx.ForceUpstreamStreaming {
+		return
+	}
+	// After SyncRequestView on purpose: ctx.Request keeps the shape the client asked for.
+	// Both fields come from the request snapshot so a mid-flight flag flip cannot split them.
+	ctx.Document.Set("stream", true)
+	ctx.Document.Set("stream_options", forcedStreamOptions)
 }
 
 func (p ChatRequestPipeline) applyOutputTokenLimits(ctx *RequestFilterContext) {
@@ -219,7 +238,7 @@ func prepareChatRequestBodyWithTokenLimits(r *http.Request, limits outputTokenLi
 	}
 	originalBody := append([]byte(nil), body...)
 	logResponseFormatDiagnostics(r.Context(), body)
-	updatedBody, req, err := normalizeChatRequestForAuthAndLimits(body, requestHasAdminAuth(r), limits, routedModel)
+	updatedBody, req, err := upstreamChatRequestPipeline().Normalize(body, requestHasAdminAuth(r), limits, routedModel)
 	if err != nil {
 		captureFilterRejectedRequest(r, originalBody, err, chatRequestModel(body), "")
 		return nil, chatRequest{}, err
