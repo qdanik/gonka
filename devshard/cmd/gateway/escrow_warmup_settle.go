@@ -44,8 +44,8 @@ func (w *escrowWarmup) settleRefusedProbe(ctx context.Context, escrowID, model s
 	w.recordTimeout(event)
 
 	posted := event
-	_, err := poster.SettleTimeout(ctx, nonce, time.Unix(params.StartedAt, 0))
-	posted.Action, posted.Reason = engine.TimeoutOutcome(err, false)
+	vote, err := poster.SettleTimeout(ctx, nonce, time.Unix(params.StartedAt, 0))
+	posted.Action, posted.Reason = engine.TimeoutOutcome(vote, err, false)
 	w.recordTimeout(posted)
 
 	logging.Info("escrow warmup voted on its refused nonce", logkey.Escrow, escrowID,

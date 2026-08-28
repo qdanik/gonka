@@ -156,7 +156,7 @@ func TestSettleTimeoutReportsACancelledWaitAsNoVote(t *testing.T) {
 	if !errors.Is(err, context.Canceled) {
 		t.Errorf("SettleTimeout error = %v, want it to match context.Canceled", err)
 	}
-	if vote != "" {
+	if vote.Kind != "" {
 		t.Errorf("vote = %q, want empty: the protocol deadline was never reached", vote)
 	}
 }
@@ -180,7 +180,7 @@ func TestSettleTimeoutReportsAnInsufficientVoteTallyAsAFailure(t *testing.T) {
 	if !errors.Is(err, user.ErrTimeoutNotApplied) {
 		t.Errorf("SettleTimeout error = %v, want it to match user.ErrTimeoutNotApplied", err)
 	}
-	if got, want := vote, "refused"; got != want {
-		t.Errorf("vote = %q, want %q", got, want)
+	if got, want := vote.Kind, "refused"; got != want {
+		t.Errorf("vote kind = %q, want %q", got, want)
 	}
 }

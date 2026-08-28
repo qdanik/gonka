@@ -33,7 +33,12 @@ const (
 )
 
 type TimeoutPoster interface {
-	SettleTimeout(ctx context.Context, nonce uint64, startedAt time.Time) (vote string, err error)
+	SettleTimeout(ctx context.Context, nonce uint64, startedAt time.Time) (TimeoutVote, error)
+}
+
+type TimeoutVote struct {
+	Kind   string
+	Detail string
 }
 
 type TimeoutEvent struct {
@@ -138,25 +143,33 @@ func SettleTimeouts(ctx context.Context, poster TimeoutPoster, outcome RaceOutco
 		events = append(events, step.Event)
 		vote, err := poster.SettleTimeout(ctx, step.Nonce, step.StartedAt)
 		posted := step.Event
-		posted.Kind = timeoutVoteKind(vote, posted.Kind)
-		posted.Action, posted.Reason = TimeoutOutcome(err, outcome.Lifecycle.EscrowMissing)
+		posted.Kind = timeoutVoteKind(vote.Kind, posted.Kind)
+		posted.Action, posted.Reason = TimeoutOutcome(vote, err, outcome.Lifecycle.EscrowMissing)
 		events = append(events, posted)
 	}
 	return events
 }
 
-// TimeoutOutcome classifies what a posted vote came back as. escrowMissing is the caller's own
-// reading: vote collection reports a count, never the verifier's own error.
-func TimeoutOutcome(err error, escrowMissing bool) (action, reason string) {
+// TimeoutOutcome classifies what a posted vote came back as. The handler's own detail is preferred
+// over the generic collection error, because that is the only place the refusing verifier is named.
+// escrowMissing is the caller's reading: vote collection reports a count, never the verifier's error.
+func TimeoutOutcome(vote TimeoutVote, err error, escrowMissing bool) (action, reason string) {
 	switch {
 	case errors.Is(err, user.ErrNonceFinishedWhileWaiting):
 		return TimeoutActionSkipped, timeoutReasonNonceFinished
 	case errors.Is(err, user.ErrTimeoutNotApplied):
-		return TimeoutActionFailed, timeoutReasonNotApplied
+		return TimeoutActionFailed, firstNamed(vote.Detail, timeoutReasonNotApplied)
 	case err != nil && escrowMissing:
 		return TimeoutActionFailed, timeoutReasonEscrowGone
 	case err != nil:
-		return TimeoutActionFailed, timeoutReasonCollectionError
+		return TimeoutActionFailed, firstNamed(vote.Detail, timeoutReasonCollectionError)
 	}
 	return TimeoutActionCompleted, timeoutReasonNone
+}
+
+func firstNamed(detail, fallback string) string {
+	if detail != "" {
+		return detail
+	}
+	return fallback
 }

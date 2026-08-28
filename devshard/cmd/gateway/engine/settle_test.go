@@ -15,14 +15,15 @@ type recordedPost struct {
 }
 
 type stubPoster struct {
-	posts []recordedPost
-	vote  string
-	err   error
+	posts  []recordedPost
+	vote   string
+	detail string
+	err    error
 }
 
-func (p *stubPoster) SettleTimeout(_ context.Context, nonce uint64, sentAt time.Time) (string, error) {
+func (p *stubPoster) SettleTimeout(_ context.Context, nonce uint64, sentAt time.Time) (TimeoutVote, error) {
 	p.posts = append(p.posts, recordedPost{nonce: nonce, sentAt: sentAt})
-	return p.vote, p.err
+	return TimeoutVote{Kind: p.vote, Detail: p.detail}, p.err
 }
 
 func unsettledAttempt() AttemptOutcome {
@@ -282,5 +283,32 @@ func TestANonceFinishedWhileWaitingIsSkippedRatherThanFailed(t *testing.T) {
 
 	if events[1].Action != TimeoutActionSkipped || events[1].Reason != timeoutReasonNonceFinished {
 		t.Fatalf("event = %+v, want skipped/%s", events[1], timeoutReasonNonceFinished)
+	}
+}
+
+func TestSettleTimeoutsCarriesTheVerifierFailureItWasGiven(t *testing.T) {
+	tests := []struct {
+		name       string
+		detail     string
+		err        error
+		wantReason string
+	}{
+		{"a named verifier failure", "verifier_unreachable", errors.New("collect"), "verifier_unreachable"},
+		{"an unnamed collection failure", "", errors.New("collect"), timeoutReasonCollectionError},
+		{"a named short vote", "vote_weight_short", user.ErrTimeoutNotApplied, "vote_weight_short"},
+		{"an unnamed unapplied timeout", "", user.ErrTimeoutNotApplied, timeoutReasonNotApplied},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			poster := &stubPoster{vote: "refused", detail: testCase.detail, err: testCase.err}
+			outcome := RaceOutcome{EscrowID: "escrow-1", Attempts: []AttemptOutcome{unsettledAttempt()}}
+
+			events := SettleTimeouts(context.Background(), poster, outcome)
+
+			posted := events[len(events)-1]
+			if posted.Reason != testCase.wantReason {
+				t.Errorf("reason = %q, want %q", posted.Reason, testCase.wantReason)
+			}
+		})
 	}
 }

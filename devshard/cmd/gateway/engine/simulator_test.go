@@ -260,7 +260,7 @@ func newSimPoster() *simPoster {
 	return &simPoster{entered: make(chan uint64, 8), vote: timeoutKindExecution}
 }
 
-func (p *simPoster) SettleTimeout(_ context.Context, nonce uint64, _ time.Time) (string, error) {
+func (p *simPoster) SettleTimeout(_ context.Context, nonce uint64, _ time.Time) (TimeoutVote, error) {
 	p.entered <- nonce
 	if p.release != nil {
 		<-p.release
@@ -268,7 +268,7 @@ func (p *simPoster) SettleTimeout(_ context.Context, nonce uint64, _ time.Time) 
 	p.mu.Lock()
 	p.posted = append(p.posted, nonce)
 	p.mu.Unlock()
-	return p.vote, p.err
+	return TimeoutVote{Kind: p.vote}, p.err
 }
 
 func (p *simPoster) settled() []uint64 {

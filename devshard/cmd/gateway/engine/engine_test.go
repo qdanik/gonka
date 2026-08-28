@@ -37,6 +37,7 @@ func TestSessionTimeoutsReadsAPostedVoteThroughTheHandlersAppliedFlag(t *testing
 		result     user.TimeoutResult
 		err        error
 		wantVote   string
+		wantDetail string
 		wantFailed bool
 	}{
 		{
@@ -82,6 +83,14 @@ func TestSessionTimeoutsReadsAPostedVoteThroughTheHandlersAppliedFlag(t *testing
 			wantFailed: true,
 		},
 		{
+			name:       "the verifier failure the handler named travels with the vote",
+			result:     user.TimeoutResult{Reason: "refused", DetailReason: "verifier_unreachable"},
+			err:        fmt.Errorf("collect timeout votes: %w", errVoteCause),
+			wantVote:   "refused",
+			wantDetail: "verifier_unreachable",
+			wantFailed: true,
+		},
+		{
 			name:       "deadline_never_reached_reports_no_reason_and_fails",
 			result:     user.TimeoutResult{},
 			err:        context.Canceled,
@@ -97,8 +106,11 @@ func TestSessionTimeoutsReadsAPostedVoteThroughTheHandlersAppliedFlag(t *testing
 
 			vote, err := poster.SettleTimeout(context.Background(), 7, testEpoch)
 
-			if vote != testCase.wantVote {
-				t.Errorf("vote = %q, want %q", vote, testCase.wantVote)
+			if vote.Detail != testCase.wantDetail {
+				t.Errorf("vote detail = %q, want %q", vote.Detail, testCase.wantDetail)
+			}
+			if vote.Kind != testCase.wantVote {
+				t.Errorf("vote kind = %q, want %q", vote.Kind, testCase.wantVote)
 			}
 			if (err != nil) != testCase.wantFailed {
 				t.Errorf("err = %v, want failed = %v", err, testCase.wantFailed)

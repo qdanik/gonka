@@ -17,9 +17,9 @@ type stubPoster struct {
 	calls int
 }
 
-func (p *stubPoster) SettleTimeout(context.Context, uint64, time.Time) (string, error) {
+func (p *stubPoster) SettleTimeout(context.Context, uint64, time.Time) (engine.TimeoutVote, error) {
 	p.calls++
-	return p.vote, p.err
+	return engine.TimeoutVote{Kind: p.vote}, p.err
 }
 
 type spyTimeouts struct {
