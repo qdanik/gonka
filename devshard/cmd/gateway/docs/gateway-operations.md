@@ -97,6 +97,7 @@ A name the gateway does not read is ignored in silence, so a typo costs a debugg
 | `GATEWAY_ADMISSION_QUEUE_WAIT_MS` | how long a request may wait for capacity before it is refused |
 | `GATEWAY_MATCH_WAIT_MS` | how long a bound nonce waits for a request that has not excluded its participant, before it is burned |
 | `GATEWAY_WARM_NEW_ESCROWS` | whether a newly published escrow spends one nonce to teach itself to its whole group |
+| `GATEWAY_LOG_FORMAT` | `json` makes every stage line a JSON object a collector reads as labels; anything else keeps the text form |
 | `GATEWAY_CHARGE_REFUSED_NONCES` | whether a nonce burned on a host that refused it earns that host a refusal vote. Off by default: it changes what the network bills for, so it is turned on deliberately |
 | `GATEWAY_ADMISSION_QUEUE_PER_SLOT` | how deep the queue may grow per slot before arrivals are refused on sight |
 | `GATEWAY_POC_MODE` | whether proof-of-compute blocking is honoured or bypassed |

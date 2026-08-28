@@ -41,6 +41,9 @@ const (
 )
 
 func main() {
+	// Before anything can log: a collector reads JSON fields as labels, where the default text line
+	// carries log's own date prefix and has to be re-parsed.
+	logging.ConfigureFormat(os.Getenv("GATEWAY_LOG_FORMAT"))
 	if err := serve(); err != nil {
 		logging.Error("gateway exited", logkey.Error, err)
 		os.Exit(1)
