@@ -45,3 +45,52 @@ func TestTwoEpochsExportAsDistinctSeries(t *testing.T) {
 		t.Fatalf("assigned series carried epochs %v, want one series per epoch", epochs)
 	}
 }
+
+// Findings are the ledger's verdict on a host, and until they are exported an alert has nothing to
+// fire on: the JSON API is not served unless an operator sets a listen address.
+func TestFindingsAreExportedAsTheirOwnSeries(t *testing.T) {
+	const groupSize = 2
+	book := newTestBook(t, groupSize)
+	// Slot 0's assigned count is the highest nonce over the group size, so it must clear the
+	// twenty-nonce floor a finding needs before it is raised at all.
+	for nonce := uint64(0); nonce <= 40; nonce += groupSize {
+		if err := book.RecordGhost(testEscrow, nonce, "participant_capability_no_send"); err != nil {
+			t.Fatalf("RecordGhost(%d): %v", nonce, err)
+		}
+	}
+
+	registry := prometheus.NewPedanticRegistry()
+	if err := registry.Register(NewCollector(book)); err != nil {
+		t.Fatalf("Register(): %v", err)
+	}
+	families, err := registry.Gather()
+	if err != nil {
+		t.Fatalf("Gather(): %v", err)
+	}
+
+	labels := map[string]string{}
+	value := 0.0
+	found := false
+	for _, family := range families {
+		if family.GetName() != "devshard_gateway_nonce_finding" {
+			continue
+		}
+		for _, metric := range family.GetMetric() {
+			for _, label := range metric.GetLabel() {
+				labels[label.GetName()] = label.GetValue()
+			}
+			if labels["code"] == FindingCapabilityBlocked {
+				value, found = metric.GetGauge().GetValue(), true
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("no %q series for the burns that raised it", FindingCapabilityBlocked)
+	}
+	if labels["severity"] != string(SeverityWarning) {
+		t.Errorf("severity = %q, want %q", labels["severity"], SeverityWarning)
+	}
+	if value <= 0 {
+		t.Errorf("value = %v, want the rate that raised the finding", value)
+	}
+}

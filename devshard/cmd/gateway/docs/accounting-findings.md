@@ -2,6 +2,8 @@
 
 What each finding code means, what it points at, and what to check. The API carries only the code, the severity and the two numbers it was flagged on — `part` and `whole` — so an explanation is written once here instead of crossing the network with every response. `whole` is absent when the finding counts rather than measures a rate.
 
+Findings also leave as `devshard_gateway_nonce_finding{code,severity,epoch,participant,model}`, valued at the rate that raised them. That series is how an alert reaches them: the JSON API is served only when `GATEWAY_NONCE_ACCOUNTING_LISTEN_ADDR` is set, and it is empty by default.
+
 A finding is never raised below **20** nonces in its denominator: a rate off four attempts describes noise, not a host.
 
 A failure this gateway caused is excluded from the host's rates as well. Its own phase transition ending an attempt, a vote round that reached no verdict, a missing poster and a long response that had already produced content are all ours, not the host's. A failure whose cause the ledger could not name still counts against the host: excusing the unclassified would empty the rates.

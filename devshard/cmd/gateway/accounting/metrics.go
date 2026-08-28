@@ -26,6 +26,7 @@ type Collector struct {
 	unobserved   *prometheus.Desc
 	overcounted  *prometheus.Desc
 	rejected     *prometheus.Desc
+	finding      *prometheus.Desc
 }
 
 func NewCollector(book *Book) *Collector {
@@ -49,13 +50,16 @@ func NewCollector(book *Book) *Collector {
 			"Nonces classified beyond what the chain assigned; non-zero means the ledger and the chain disagree.", participantLabels, nil),
 		rejected: prometheus.NewDesc("devshard_gateway_nonce_facts_rejected_total",
 			"Facts dropped because their escrow was never opened.", nil, nil),
+		finding: prometheus.NewDesc("devshard_gateway_nonce_finding",
+			"Findings raised against a participant, valued at the rate that raised them. Alert on presence.",
+			append([]string{"code", "severity"}, participantLabels...), nil),
 	}
 }
 
 func (c *Collector) Describe(descs chan<- *prometheus.Desc) {
 	for _, desc := range []*prometheus.Desc{
 		c.assigned, c.disposition, c.chainMissed, c.chainInvalid,
-		c.pending, c.unobserved, c.overcounted, c.rejected,
+		c.pending, c.unobserved, c.overcounted, c.rejected, c.finding,
 	} {
 		descs <- desc
 	}
@@ -74,6 +78,11 @@ func (c *Collector) Collect(metrics chan<- prometheus.Metric) {
 			c.overcounted:  float64(record.Overcounted),
 		} {
 			metrics <- prometheus.MustNewConstMetric(desc, prometheus.GaugeValue, value, identity...)
+		}
+		for _, finding := range record.Findings {
+			metrics <- prometheus.MustNewConstMetric(c.finding, prometheus.GaugeValue,
+				float64(finding.Part)/float64(finding.Whole),
+				append([]string{finding.Code, string(finding.Severity)}, identity...)...)
 		}
 		summed := make(map[dispositionLabels]uint64, len(record.Counters))
 		for _, counter := range record.Counters {
