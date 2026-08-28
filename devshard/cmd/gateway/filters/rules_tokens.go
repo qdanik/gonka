@@ -121,27 +121,6 @@ func decodeUint64Field(document *Document, name string, dst *uint64) error {
 	return nil
 }
 
-// greedySamplingForceOne coerces n to 1 when temperature reads as exactly 0; must run before
-// temperature's own clamp rule. See gateway-request-filtering.md, "Registration order is semantics".
-func greedySamplingForceOne() RuleFunc {
-	return func(ctx RuleContext) error {
-		n, ok := ctx.Document.Uint("n")
-		if !ok || n <= 1 {
-			return nil
-		}
-		temperatureRaw, exists := ctx.Document.Get("temperature")
-		if !exists {
-			return nil
-		}
-		temperature, ok := devshard.JSONNumericFloat64(temperatureRaw)
-		if !ok || temperature != 0 {
-			return nil
-		}
-		ctx.Document.Set("n", uint64(1))
-		return nil
-	}
-}
-
 // applyOutputTokenLimits resolves max_tokens from whichever field(s) the client sent (the min
 // of both when both are present), then mirrors it into max_completion_tokens iff that was sent.
 func applyOutputTokenLimits(document *Document, view *requestView, options Options, routedModel string) {

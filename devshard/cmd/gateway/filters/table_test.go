@@ -1,6 +1,9 @@
 package filters
 
-import "testing"
+import (
+	"encoding/json"
+	"testing"
+)
 
 func TestTableIsNotEmpty(t *testing.T) {
 	if len(parameterTable) == 0 {
@@ -35,5 +38,31 @@ func TestTableKnownParametersDerivedFromTable(t *testing.T) {
 		if _, ok := knownParameterSet[spec.Name]; !ok {
 			t.Errorf("knownParameterSet missing table entry %q", spec.Name)
 		}
+	}
+}
+
+func TestTableForcesASingleChoice(t *testing.T) {
+	for _, testCase := range []struct {
+		name string
+		body string
+		want any
+	}{
+		{"present is rewritten", `{"messages":[{"role":"user","content":"hi"}],"n":5}`, json.Number("1")},
+		{"absent stays absent", `{"messages":[{"role":"user","content":"hi"}]}`, nil},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			result, err := NormalizeRequest([]byte(testCase.body), Options{DefaultMaxTokens: 3072, MaxTokensCap: 3072})
+			if err != nil {
+				t.Fatalf("NormalizeRequest() = %v, want acceptance", err)
+			}
+			document, err := ParseDocument(result.Body)
+			if err != nil {
+				t.Fatalf("ParseDocument(%s) = %v", result.Body, err)
+			}
+			got, _ := document.Get("n")
+			if got != testCase.want {
+				t.Errorf("n = %#v, want %#v (body %s)", got, testCase.want, result.Body)
+			}
+		})
 	}
 }

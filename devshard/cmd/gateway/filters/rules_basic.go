@@ -97,6 +97,15 @@ func forceLiteral(value any) RuleFunc {
 	}
 }
 
+func replaceIfPresent(value any) RuleFunc {
+	return func(ctx RuleContext) error {
+		if ctx.Document.Has(ctx.Param) {
+			ctx.Document.Set(ctx.Param, value)
+		}
+		return nil
+	}
+}
+
 // clampFloat coerces ctx.Param to float64, strips it when absent, unparseable, or
 // non-finite, then clamps the result into [min, max] and writes it back.
 func clampFloat(min, max float64) RuleFunc {
@@ -151,29 +160,6 @@ func validTopK(max float64) RuleFunc {
 			number = max
 		}
 		ctx.Document.Set(ctx.Param, int64(math.Trunc(number)))
-		return nil
-	}
-}
-
-// capUint clamps ctx.Param into [min, max] when it parses as a uint64; a non-numeric or
-// absent field passes through untouched.
-func capUint(min, max uint64) RuleFunc {
-	return func(ctx RuleContext) error {
-		raw, exists := ctx.Document.Get(ctx.Param)
-		if !exists {
-			return nil
-		}
-		value, ok := devshard.JSONNumericUint64(raw)
-		if !ok {
-			return nil
-		}
-		if value < min {
-			ctx.Document.Set(ctx.Param, min)
-			return nil
-		}
-		if value > max {
-			ctx.Document.Set(ctx.Param, max)
-		}
 		return nil
 	}
 }

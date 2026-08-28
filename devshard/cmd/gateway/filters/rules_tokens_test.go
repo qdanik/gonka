@@ -1,7 +1,6 @@
 package filters
 
 import (
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"testing"
@@ -270,62 +269,6 @@ func TestTokensDecodeRequestViewTypeErrors(t *testing.T) {
 				t.Errorf("ErrorStatus() = %d, want %d", got, http.StatusBadRequest)
 			}
 		})
-	}
-}
-
-func TestTokensGreedySamplingForceOne(t *testing.T) {
-	tests := []struct {
-		name     string
-		body     string
-		wantN    any
-		wantNSet bool
-	}{
-		{"n above one, temperature json.Number zero forces one", `{"n":5,"temperature":0}`, uint64(1), true},
-		{"n above one, temperature string zero forces one", `{"n":5,"temperature":"0"}`, uint64(1), true},
-		{"n above one, temperature string zero-point-zero forces one", `{"n":5,"temperature":"0.0"}`, uint64(1), true},
-		{"n above one, temperature nonzero leaves n untouched", `{"n":5,"temperature":0.7}`, json.Number("5"), true},
-		{"n already one leaves n untouched", `{"n":1,"temperature":0}`, json.Number("1"), true},
-		{"n absent leaves document without n", `{"temperature":0}`, nil, false},
-		{"temperature absent leaves n untouched", `{"n":5}`, json.Number("5"), true},
-		{"temperature non-numeric leaves n untouched", `{"n":5,"temperature":true}`, json.Number("5"), true},
-		{"n non-numeric leaves n untouched", `{"n":"many","temperature":0}`, "many", true},
-	}
-	for _, testCase := range tests {
-		t.Run(testCase.name, func(t *testing.T) {
-			document := parseTestDocument(t, testCase.body)
-			if err := greedySamplingForceOne()(RuleContext{Document: document, Param: "n"}); err != nil {
-				t.Fatalf("greedySamplingForceOne() = %v, want nil", err)
-			}
-			got, ok := document.Get("n")
-			if ok != testCase.wantNSet {
-				t.Fatalf("Has(n) = %v, want %v", ok, testCase.wantNSet)
-			}
-			if !testCase.wantNSet {
-				return
-			}
-			if got != testCase.wantN {
-				t.Errorf("Get(n) = %#v, want %#v", got, testCase.wantN)
-			}
-		})
-	}
-}
-
-// Proves greedy sampling reads n AFTER its own cap has already clamped it: n=100 first
-// clamps to the [1,5] cap, then temperature==0 forces the capped value down to 1.
-func TestTokensGreedySamplingCapInterplay(t *testing.T) {
-	document := parseTestDocument(t, `{"n":100,"temperature":0}`)
-	ctx := RuleContext{Document: document, Param: "n"}
-	if err := capUint(minChatChoices, maxChatChoices)(ctx); err != nil {
-		t.Fatalf("capUint() = %v, want nil", err)
-	}
-	if got, _ := document.Get("n"); got != uint64(5) {
-		t.Fatalf("Get(n) after capUint = %v, want 5 (cap applied before greedy)", got)
-	}
-	if err := greedySamplingForceOne()(ctx); err != nil {
-		t.Fatalf("greedySamplingForceOne() = %v, want nil", err)
-	}
-	if got, _ := document.Get("n"); got != uint64(1) {
-		t.Errorf("Get(n) after greedy = %v, want 1 (greedy overrides the cap)", got)
 	}
 }
 

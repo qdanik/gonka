@@ -36,9 +36,6 @@ type ParameterSpec struct {
 
 // Per-parameter bounds wired into parameterTable below.
 const (
-	minChatChoices uint64 = 1
-	maxChatChoices uint64 = 5
-
 	minTemperature = 0.0
 	maxTemperature = 2.0
 
@@ -86,12 +83,8 @@ var (
 			{Stage: StagePreValidation, Apply: validListLength(messagesMaxEntries, 0)},
 		}},
 		spec("seed", StagePreValidation, requireUint()),
-		// n's greedy rule must stay after its own cap and before "temperature" below: greedy
-		// reads temperature's raw wire value, ahead of temperature's own clamp rule.
-		{Name: "n", Rules: []StagedRule{
-			{Stage: StagePostLimits, Apply: capUint(minChatChoices, maxChatChoices)},
-			{Stage: StagePostLimits, Apply: greedySamplingForceOne()},
-		}},
+		// Reservation budgets one max_tokens output; n choices can produce n times what it signed for.
+		spec("n", StagePostLimits, replaceIfPresent(uint64(1))),
 		spec("temperature", StagePostLimits, clampFloat(minTemperature, maxTemperature)),
 		spec("repetition_penalty", StagePostLimits, rejectNonPositiveThenClamp(maxRepetitionPenalty)),
 		spec("top_p", StagePostLimits, rejectNonPositiveThenClamp(topPMax)),

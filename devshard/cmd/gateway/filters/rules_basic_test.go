@@ -1,7 +1,6 @@
 package filters
 
 import (
-	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -414,25 +413,23 @@ func TestBasicValidModelNameRejectsMegabyteNameOnLength(t *testing.T) {
 	}
 }
 
-func TestBasicCapUint(t *testing.T) {
+func TestBasicReplaceIfPresent(t *testing.T) {
 	const param = "n"
 	tests := []struct {
 		name string
 		body string
 		want any
 	}{
-		{"below min clamps to min", `{"n":0}`, uint64(1)},
-		{"above max clamps to max", `{"n":1638400}`, uint64(5)},
-		{"exactly at min kept as original representation", `{"n":1}`, json.Number("1")},
-		{"exactly at max kept as original representation", `{"n":5}`, json.Number("5")},
-		{"within range kept as original representation", `{"n":3}`, json.Number("3")},
-		{"non-numeric type passes through untouched", `{"n":"abc"}`, "abc"},
+		{"numeric value is replaced", `{"n":5}`, uint64(1)},
+		{"zero is replaced", `{"n":0}`, uint64(1)},
+		{"huge value is replaced", `{"n":1638400}`, uint64(1)},
+		{"non-numeric type is replaced too", `{"n":"abc"}`, uint64(1)},
 	}
 	for _, testCase := range tests {
 		t.Run(testCase.name, func(t *testing.T) {
 			document := parseTestDocument(t, testCase.body)
-			if err := capUint(1, 5)(RuleContext{Document: document, Param: param}); err != nil {
-				t.Fatalf("capUint() = %v, want nil", err)
+			if err := replaceIfPresent(uint64(1))(RuleContext{Document: document, Param: param}); err != nil {
+				t.Fatalf("replaceIfPresent() = %v, want nil", err)
 			}
 			got, ok := document.Get(param)
 			if !ok {
@@ -443,13 +440,13 @@ func TestBasicCapUint(t *testing.T) {
 			}
 		})
 	}
-	t.Run("absent is a no-op", func(t *testing.T) {
+	t.Run("absent stays absent", func(t *testing.T) {
 		document := parseTestDocument(t, `{}`)
-		if err := capUint(1, 5)(RuleContext{Document: document, Param: param}); err != nil {
-			t.Fatalf("capUint() = %v, want nil", err)
+		if err := replaceIfPresent(uint64(1))(RuleContext{Document: document, Param: param}); err != nil {
+			t.Fatalf("replaceIfPresent() = %v, want nil", err)
 		}
 		if document.Has(param) {
-			t.Error("Has(n) = true, want absent to stay absent")
+			t.Error("Has(n) = true, want an omitted parameter to stay omitted")
 		}
 	})
 }

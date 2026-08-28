@@ -102,6 +102,7 @@ func withoutForcedFields(t *testing.T, body []byte) []byte {
 	}
 	document.Delete("stream")
 	document.Delete("stream_options")
+	document.Delete("n")
 	if kwargs, present, isObject := document.ObjectField("chat_template_kwargs"); present && isObject {
 		delete(kwargs, "thinking")
 		if len(kwargs) == 0 {
