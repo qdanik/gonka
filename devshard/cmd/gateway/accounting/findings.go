@@ -245,7 +245,13 @@ func wasAcknowledged(key CounterKey) bool {
 
 func servedNoUser(key CounterKey) bool { return key.Terminal == TerminalWarmupProbe }
 
+// excused names a failure the host did not cause: the client stopped waiting, or this gateway's own
+// policy ended the attempt. Slowness that drove a client away is measured on its own, by the receipt,
+// chunk and decode findings, so excusing the abort here does not hide a slow host.
 func excused(key CounterKey) bool {
+	if key.Terminal == TerminalClientCancelled {
+		return true
+	}
 	switch key.TimeoutReason {
 	case TimeoutReasonLongResponse, TimeoutReasonPhaseAborted,
 		TimeoutReasonCollectionError, TimeoutReasonNotApplied, TimeoutReasonNoPoster:

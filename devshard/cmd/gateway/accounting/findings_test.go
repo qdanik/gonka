@@ -451,3 +451,54 @@ func TestALostRaceIsStillAnAnswerNobodyUsed(t *testing.T) {
 		t.Fatalf("unused = %d of %d, want the 20 lost races against all 40 delivered", finding.Part, finding.Whole)
 	}
 }
+
+// refusals and execution_timeouts are the two findings that can reach critical. A client that stops
+// waiting produces neither a refusal nor a timeout the host caused, so counting it there flags a host
+// for work it never turned down.
+func TestAClientThatStoppedWaitingIsNotChargedToTheHost(t *testing.T) {
+	tests := []struct {
+		name        string
+		disposition Disposition
+		code        string
+	}{
+		{"an abandoned refusal", DispositionUnfinishedRefused, FindingRefusals},
+		{"an abandoned execution", DispositionUnfinishedExecution, FindingExecutionTimeouts},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			record := recordWith(100, map[Disposition]uint64{
+				DispositionFinishedUsed: 60,
+				testCase.disposition:    40,
+			})
+			record.Counters = []CounterRecord{{
+				CounterKey: CounterKey{Disposition: testCase.disposition, Terminal: TerminalClientCancelled},
+				Count:      40,
+			}}
+
+			findings := findingsFor(record)
+
+			if slices.Contains(codesOf(findings), testCase.code) {
+				t.Fatalf("%q was raised for attempts the client abandoned: %+v", testCase.code, findings)
+			}
+		})
+	}
+}
+
+// The same shape without the client's fingerprint must still reach the host, or the exclusion above
+// would excuse every failure.
+func TestAnAbandonedAttemptIsTheOnlyOneExcused(t *testing.T) {
+	record := recordWith(100, map[Disposition]uint64{
+		DispositionFinishedUsed:      60,
+		DispositionUnfinishedRefused: 40,
+	})
+	record.Counters = []CounterRecord{{
+		CounterKey: CounterKey{Disposition: DispositionUnfinishedRefused, Terminal: "no_receipt"},
+		Count:      40,
+	}}
+
+	findings := findingsFor(record)
+
+	if !slices.Contains(codesOf(findings), FindingRefusals) {
+		t.Fatalf("refusals was not raised for a host that refused 40 of 100: %+v", findings)
+	}
+}

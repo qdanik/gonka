@@ -6,6 +6,8 @@ Findings also leave as `devshard_gateway_nonce_finding{code,severity,epoch,parti
 
 A finding is never raised below **20** nonces in its denominator: a rate off four attempts describes noise, not a host.
 
+An attempt the client stopped waiting for is excluded from the host's rates: it is neither a refusal nor a timeout the host caused. Slowness that drove the client away is measured on its own, by the receipt, chunk and decode findings.
+
 A failure this gateway caused is excluded from the host's rates as well. Its own phase transition ending an attempt, a vote round that reached no verdict, a missing poster and a long response that had already produced content are all ours, not the host's. A failure whose cause the ledger could not name still counts against the host: excusing the unclassified would empty the rates.
 
 A winner whose client had already hung up carries the terminal `client_gone_before_delivery`. It still counts as delivered — the host answered — but it is the only way to find the races that outlived the caller waiting on them.

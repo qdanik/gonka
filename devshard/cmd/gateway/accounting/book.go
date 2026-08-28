@@ -392,8 +392,9 @@ const TimeoutKindRefused = "refused"
 const TerminalUnreported = "unreported"
 
 const (
-	TerminalWarmupProbe = "warmup_probe"
-	TerminalClientGone  = "client_gone_before_delivery"
+	TerminalWarmupProbe     = "warmup_probe"
+	TerminalClientGone      = "client_gone_before_delivery"
+	TerminalClientCancelled = "client_cancelled"
 )
 
 func assignedForSlot(latest uint64, groupSize, slotID uint32) uint64 {
