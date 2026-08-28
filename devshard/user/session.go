@@ -2111,12 +2111,7 @@ func (s *Session) HandleTimeout(ctx context.Context, nonce uint64, sendTime time
 	if s.HasSufficientTimeoutVotes(votes) {
 		s.AddPendingTimeoutTx(nonce, reason, votes)
 		diff, err := s.sendPendingDiff(ctx)
-		result.Applied = HasMsgTimeout(diff.Txs, nonce)
-		if !result.Applied {
-			if record, found := s.sm.GetInference(nonce); found && record.Status == types.StatusTimedOut {
-				result.Applied = true
-			}
-		}
+		result.Applied = s.timeoutTookEffect(diff, nonce)
 		if err != nil {
 			result.DetailReason = "timeout_diff_delivery_failed"
 			if result.Applied {
@@ -2137,7 +2132,6 @@ func (s *Session) HandleTimeout(ctx context.Context, nonce uint64, sendTime time
 			result.DetailReason = "timeout_not_applied"
 		}
 		logging.Stage(ctx, "timeout_completed", logFields("reason", result.Reason)...)
-		result.Applied = true
 		return result, fmt.Errorf("inference %d timed out: %s", nonce, reason)
 	}
 
