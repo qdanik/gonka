@@ -462,3 +462,20 @@ func TestHostClockOffsetDoesNotReadTruncationAsDrift(t *testing.T) {
 		t.Errorf("offsetMS = %d, want a synchronised host inside the truncated second", offsetMS)
 	}
 }
+
+// A 429 tells an operator that the gateway pushed back; only the reason says which cap did it, and
+// without it a throttling incident is a wall of identical statuses.
+func TestALimiterRejectionNamesTheCapItHit(t *testing.T) {
+	live := newHarness(t)
+	live.limiter.err = &limits.RateLimitError{Reason: "too many concurrent requests"}
+
+	live.request(t, http.MethodPost, "/v1/chat/completions", chatBody, nil)
+
+	reasons := live.rejections.reasons()
+	if len(reasons) != 1 || reasons[0] != "concurrent_requests" {
+		t.Fatalf("recorded %v, want the cap that rejected the request", reasons)
+	}
+	if live.rejections.model != "qwen" {
+		t.Errorf("model = %q, want the model that was turned away", live.rejections.model)
+	}
+}

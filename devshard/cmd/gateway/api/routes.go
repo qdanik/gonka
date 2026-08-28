@@ -222,6 +222,11 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request, escrowPin string) 
 
 	inputTokens := estimatePromptTokens(normalized.Body)
 	if err := s.limiter.AcquireForModel(r.Context(), normalized.Model, int64(inputTokens), s.capacity.ForModel(normalized.Model)); err != nil {
+		if throttled, ours := rateLimited(err); ours && s.rejections != nil {
+			s.rejections.Rejected(normalized.Model, throttled.Label())
+			logging.Warn("gateway limiter turned a request away", logkey.Request, requestID,
+				logkey.Model, normalized.Model, logkey.Reason, throttled.Label())
+		}
 		writeErrorFor(w, err)
 		return
 	}

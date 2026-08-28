@@ -286,6 +286,7 @@ type harness struct {
 	operations  *fakeOperations
 	suspicious  *fakeSuspicious
 	telemetry   *fakeTelemetry
+	rejections  *spyRejections
 	comparisons atomic.Int64
 	storageDir  string
 }
@@ -302,12 +303,13 @@ func newHarness(t *testing.T, tune ...func(*config.Config)) *harness {
 	}
 
 	live := &harness{
-		config:    config.NewHolder(&configuration),
-		escrows:   &fakeRegistry{models: []string{"qwen"}, sessions: map[string]registry.EscrowSession{}, busy: map[string]bool{}},
-		inference: &fakeEngine{reply: `{"id":"resp","choices":[]}`, outcome: engine.RaceOutcome{EscrowID: "7", Succeeded: true}},
-		limiter:   &countingLimiter{},
-		capacity:  &fakeCapacity{capacity: limits.ModelCapacity{ScaleFactor: 1}},
-		snapshots: &fixedSnapshots{},
+		config:     config.NewHolder(&configuration),
+		escrows:    &fakeRegistry{models: []string{"qwen"}, sessions: map[string]registry.EscrowSession{}, busy: map[string]bool{}},
+		inference:  &fakeEngine{reply: `{"id":"resp","choices":[]}`, outcome: engine.RaceOutcome{EscrowID: "7", Succeeded: true}},
+		limiter:    &countingLimiter{},
+		rejections: &spyRejections{},
+		capacity:   &fakeCapacity{capacity: limits.ModelCapacity{ScaleFactor: 1}},
+		snapshots:  &fixedSnapshots{},
 		control: &fakeControl{devshards: []store.DevshardRecord{
 			{EscrowID: "7", Model: "qwen", Active: false},
 			{EscrowID: "9", Model: "qwen", Active: true},
@@ -332,6 +334,7 @@ func newHarness(t *testing.T, tune ...func(*config.Config)) *harness {
 		Operations: live.operations,
 		Suspicious: live.suspicious,
 		Telemetry:  live.telemetry,
+		Rejections: live.rejections,
 		StorageDir: storageDir,
 		Version:    "test",
 		Now:        func() time.Time { return time.Unix(1700000000, 0) },
@@ -555,4 +558,22 @@ func TestNewRejectsAnIncompleteWiring(t *testing.T) {
 	if _, err := New(Deps{}); err == nil {
 		t.Fatal("New accepted an empty Deps")
 	}
+}
+
+type spyRejections struct {
+	mu    sync.Mutex
+	seen  []string
+	model string
+}
+
+func (s *spyRejections) Rejected(model, reason string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.model, s.seen = model, append(s.seen, reason)
+}
+
+func (s *spyRejections) reasons() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string(nil), s.seen...)
 }

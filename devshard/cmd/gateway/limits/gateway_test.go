@@ -499,3 +499,15 @@ func TestReconfigureAppliesToTheNextAcquireAndReleasesTheQueue(t *testing.T) {
 		t.Fatalf("AcquireForModel() after a lowered cap = %v, want a rate-limit error", err)
 	}
 }
+
+// A reason without a label reaches the counter as "unnamed", which is a bucket an operator cannot act
+// on. Every reason the limiter can report must have one.
+func TestEveryRejectionReasonHasALabel(t *testing.T) {
+	for _, reason := range []string{
+		reasonTooManyConcurrentRequests, reasonTooManyInputTokens, reasonQueueTooDeep,
+	} {
+		if label := (&RateLimitError{Reason: reason}).Label(); label == "unnamed" || label == "" {
+			t.Errorf("reason %q has no label", reason)
+		}
+	}
+}

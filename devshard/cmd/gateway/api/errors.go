@@ -128,8 +128,7 @@ func statusForError(err error) int {
 	}
 	// Our own limiter is a quota the caller exceeded, which is 429; capacity and a busy escrow are the
 	// shard having no room, which is 503. The old gateway drew the line in the same place.
-	var throttled *limits.RateLimitError
-	if errors.As(err, &throttled) {
+	if _, ours := rateLimited(err); ours {
 		return http.StatusTooManyRequests
 	}
 	if shardHasNoRoom(err) {
@@ -178,6 +177,16 @@ func writeControlFailure(w http.ResponseWriter, err error) bool {
 	return true
 }
 
+// rateLimited reports the gateway limiter's own rejection: the status, the Retry-After header and the
+// counter that names which cap was hit all ask for it.
+func rateLimited(err error) (*limits.RateLimitError, bool) {
+	var throttled *limits.RateLimitError
+	if errors.As(err, &throttled) {
+		return throttled, true
+	}
+	return nil, false
+}
+
 func shardHasNoRoom(err error) bool {
 	return errors.Is(err, scheduler.ErrHostsBusy) ||
 		errors.Is(err, scheduler.ErrNoEscrowCapacity) ||
@@ -187,12 +196,12 @@ func shardHasNoRoom(err error) bool {
 // Retry-After is rounded up: a zero would tell a client to retry immediately, the opposite of what a
 // queue timeout means.
 func writeErrorFor(w http.ResponseWriter, err error) {
-	var throttled *limits.RateLimitError
+	throttled, ours := rateLimited(err)
 	switch {
-	case errors.As(err, &throttled) && throttled.RetryAfter > 0:
+	case ours && throttled.RetryAfter > 0:
 		seconds := int64(math.Ceil(throttled.RetryAfter.Seconds()))
 		w.Header().Set("Retry-After", strconv.FormatInt(seconds, 10))
-	case errors.As(err, &throttled), shardHasNoRoom(err):
+	case ours, shardHasNoRoom(err):
 		w.Header().Set("Retry-After", strconv.FormatInt(int64(noHostRetryAfter.Seconds()), 10))
 	}
 	writeError(w, statusForError(err), err.Error())

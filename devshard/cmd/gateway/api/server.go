@@ -111,6 +111,11 @@ type Telemetry interface {
 	Handler() http.Handler
 }
 
+// LimitRejections counts what the gateway's own limiter turned away; *metrics.LimitRecorder satisfies it.
+type LimitRejections interface {
+	Rejected(model, reason string)
+}
+
 // Deps is everything the HTTP boundary reads or calls. New requires every field except Version and
 // RequestIDs, which default to empty and to a random id generator.
 type Deps struct {
@@ -125,6 +130,7 @@ type Deps struct {
 	Operations Operations
 	Suspicious SuspiciousHosts
 	Telemetry  Telemetry
+	Rejections LimitRejections
 	StorageDir string
 	Version    string
 	Now        func() time.Time
@@ -143,6 +149,7 @@ type Server struct {
 	operations Operations
 	suspicious SuspiciousHosts
 	telemetry  Telemetry
+	rejections LimitRejections
 	storageDir string
 	version    string
 	now        func() time.Time
@@ -195,6 +202,7 @@ func New(deps Deps) (*Server, error) {
 		operations: deps.Operations,
 		suspicious: deps.Suspicious,
 		telemetry:  deps.Telemetry,
+		rejections: deps.Rejections,
 		storageDir: deps.StorageDir,
 		version:    deps.Version,
 		now:        deps.Now,

@@ -20,6 +20,21 @@ type RateLimitError struct {
 	RetryAfter time.Duration
 }
 
+// Label is the stable name a counter and a log line group by; Reason is the sentence a caller reads.
+func (e *RateLimitError) Label() string {
+	switch {
+	case e == nil:
+		return ""
+	case e.Reason == reasonTooManyConcurrentRequests:
+		return "concurrent_requests"
+	case e.Reason == reasonTooManyInputTokens:
+		return "input_tokens"
+	case e.Reason == reasonQueueTooDeep:
+		return "queue_depth"
+	}
+	return "unnamed"
+}
+
 func (e *RateLimitError) Error() string {
 	if e == nil {
 		return "rate limit exceeded"
