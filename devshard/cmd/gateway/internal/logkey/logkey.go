@@ -12,6 +12,7 @@ const (
 	Role    = "role"
 	Reason  = "reason"
 	Outcome = "outcome"
+	Action  = "action"
 	Error   = "error"
 )
 

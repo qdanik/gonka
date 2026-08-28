@@ -139,24 +139,24 @@ func SettleTimeouts(ctx context.Context, poster TimeoutPoster, outcome RaceOutco
 		vote, err := poster.SettleTimeout(ctx, step.Nonce, step.StartedAt)
 		posted := step.Event
 		posted.Kind = timeoutVoteKind(vote, posted.Kind)
-		posted.Action = TimeoutActionCompleted
-		switch {
-		case errors.Is(err, user.ErrNonceFinishedWhileWaiting):
-			posted.Action = TimeoutActionSkipped
-			posted.Reason = timeoutReasonNonceFinished
-		case errors.Is(err, user.ErrTimeoutNotApplied):
-			posted.Action = TimeoutActionFailed
-			posted.Reason = timeoutReasonNotApplied
-		case err != nil && outcome.Lifecycle.EscrowMissing:
-			// The verifier error itself never reaches here -- vote collection reports only a count -- so
-			// the escrow's absence is read from the attempts that were told the same thing.
-			posted.Action = TimeoutActionFailed
-			posted.Reason = timeoutReasonEscrowGone
-		case err != nil:
-			posted.Action = TimeoutActionFailed
-			posted.Reason = timeoutReasonCollectionError
-		}
+		posted.Action, posted.Reason = TimeoutOutcome(err, outcome.Lifecycle.EscrowMissing)
 		events = append(events, posted)
 	}
 	return events
+}
+
+// TimeoutOutcome classifies what a posted vote came back as. escrowMissing is the caller's own
+// reading: vote collection reports a count, never the verifier's own error.
+func TimeoutOutcome(err error, escrowMissing bool) (action, reason string) {
+	switch {
+	case errors.Is(err, user.ErrNonceFinishedWhileWaiting):
+		return TimeoutActionSkipped, timeoutReasonNonceFinished
+	case errors.Is(err, user.ErrTimeoutNotApplied):
+		return TimeoutActionFailed, timeoutReasonNotApplied
+	case err != nil && escrowMissing:
+		return TimeoutActionFailed, timeoutReasonEscrowGone
+	case err != nil:
+		return TimeoutActionFailed, timeoutReasonCollectionError
+	}
+	return TimeoutActionCompleted, timeoutReasonNone
 }

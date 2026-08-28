@@ -9,6 +9,7 @@ import (
 
 	"devshard/cmd/gateway/accounting"
 	"devshard/cmd/gateway/config"
+	"devshard/cmd/gateway/engine"
 	"devshard/cmd/gateway/internal/logkey"
 	"devshard/cmd/gateway/registry"
 	"devshard/host"
@@ -35,12 +36,14 @@ type warmupLedger interface {
 
 // EscrowPublished is announced under the registry's lock, so it must return without doing work.
 type escrowWarmup struct {
-	escrows warmupEscrows
-	ledger  warmupLedger
-	probe   func(ctx context.Context, session registry.EscrowSession, model string, startedAt int64, nonceCommitted func()) (uint64, bool, error)
-	catchUp func(ctx context.Context, session registry.EscrowSession) error
-	stop    <-chan struct{}
-	now     func() time.Time
+	escrows  warmupEscrows
+	ledger   warmupLedger
+	posters  func(escrowID string, params any) (engine.TimeoutPoster, bool)
+	timeouts warmupTimeouts
+	probe    func(ctx context.Context, session registry.EscrowSession, params user.InferenceParams, nonceCommitted func()) (uint64, bool, error)
+	catchUp  func(ctx context.Context, session registry.EscrowSession) error
+	stop     <-chan struct{}
+	now      func() time.Time
 }
 
 func newEscrowWarmup(configuration *config.Holder, ledger *accounting.Book, now func() time.Time) *escrowWarmup {
@@ -98,7 +101,8 @@ func (w *escrowWarmup) warm(escrowID, model string) {
 		}(catchUp)
 	}
 
-	nonce, acknowledged, probeErr := w.probe(ctx, session, model, w.now().Unix(), onNonceCommitted)
+	params := warmupParams(model, w.now().Unix())
+	nonce, acknowledged, probeErr := w.probe(ctx, session, params, onNonceCommitted)
 
 	var catchUpErr error
 	if catchUp != nil {
@@ -110,6 +114,9 @@ func (w *escrowWarmup) warm(escrowID, model string) {
 		return
 	}
 	w.record(escrowID, nonce, acknowledged, probeErr)
+	if probeErr != nil {
+		w.settleRefusedProbe(ctx, escrowID, model, params, nonce)
+	}
 
 	logging.Info("escrow warmed", logkey.Escrow, escrowID, logkey.Model, model,
 		logkey.Nonce, nonce, logkey.Served, probeErr == nil, logkey.CatchUpError, catchUpErr)
@@ -119,18 +126,22 @@ func catchUpAllHosts(ctx context.Context, session registry.EscrowSession) error 
 	return session.UserSession().CatchUpAllHosts(ctx)
 }
 
-func dispatchProbe(ctx context.Context, session registry.EscrowSession, model string, startedAt int64, nonceCommitted func()) (uint64, bool, error) {
+func warmupParams(model string, startedAt int64) user.InferenceParams {
+	return user.InferenceParams{
+		Model:       model,
+		Prompt:      warmupPrompt,
+		InputLength: uint64(len(warmupPrompt)),
+		MaxTokens:   warmupMaxTokens,
+		StartedAt:   startedAt,
+	}
+}
+
+func dispatchProbe(ctx context.Context, session registry.EscrowSession, params user.InferenceParams, nonceCommitted func()) (uint64, bool, error) {
 	sendCtx, cancelSend := context.WithTimeout(ctx, warmupProbeTimeout)
 	defer cancelSend()
 
 	prepared, err := session.PrepareInferenceFn(func(user.HostBinding) (user.InferenceParams, bool, error) {
-		return user.InferenceParams{
-			Model:       model,
-			Prompt:      warmupPrompt,
-			InputLength: uint64(len(warmupPrompt)),
-			MaxTokens:   warmupMaxTokens,
-			StartedAt:   startedAt,
-		}, false, nil
+		return params, false, nil
 	})
 	if err != nil || prepared == nil {
 		return 0, false, err

@@ -221,6 +221,12 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 	}
 
 	sessions := api.NewSessions(escrows)
+	// The warmup votes on a nonce its probe was refused, through the same poster and observer the race uses.
+	raceObserver := nonceAccountedRaces{recorder: metrics.NewRaceRecorder(telemetry), ledger: nonces}
+	if warmup != nil {
+		warmup.posters = sessions.Poster
+		warmup.timeouts = raceObserver
+	}
 	races := engine.NewEngine(engine.Deps{
 		Picker:     router,
 		Targets:    sessions,
@@ -228,7 +234,7 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 		Perf:       hosts,
 		Snapshots:  observer,
 		Config:     configHolder,
-		Metrics:    nonceAccountedRaces{recorder: metrics.NewRaceRecorder(telemetry), ledger: nonces},
+		Metrics:    raceObserver,
 		Ledger:     api.NewRaceLedger(ledger),
 		Lifecycle:  manager,
 		Suspicious: suspicious.Suspicious,

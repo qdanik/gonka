@@ -12,6 +12,7 @@ import (
 	"devshard/cmd/gateway/internal/leakcheck"
 	"devshard/cmd/gateway/registry"
 	"devshard/host"
+	"devshard/user"
 )
 
 type recordedRace struct {
@@ -159,7 +160,7 @@ func TestEscrowPublishedLeavesNoGoroutineBehind(t *testing.T) {
 	warmup := &escrowWarmup{
 		escrows: &stubEscrows{session: stubSession{}, live: true},
 		ledger:  &spyLedger{},
-		probe: func(_ context.Context, _ registry.EscrowSession, _ string, _ int64, nonceCommitted func()) (uint64, bool, error) {
+		probe: func(_ context.Context, _ registry.EscrowSession, _ user.InferenceParams, nonceCommitted func()) (uint64, bool, error) {
 			nonceCommitted()
 			return 1, true, nil
 		},
@@ -209,7 +210,7 @@ func newWarmupUnderTest(session registry.EscrowSession, probeErr error) (*escrow
 	warmup := &escrowWarmup{
 		escrows: &stubEscrows{session: session, live: true},
 		ledger:  ledger,
-		probe: func(_ context.Context, _ registry.EscrowSession, _ string, _ int64, nonceCommitted func()) (uint64, bool, error) {
+		probe: func(_ context.Context, _ registry.EscrowSession, _ user.InferenceParams, nonceCommitted func()) (uint64, bool, error) {
 			nonceCommitted()
 			return 1, probeErr == nil, probeErr
 		},
@@ -280,7 +281,7 @@ func TestTheGroupIsTaughtWhileTheProbeIsStillStreaming(t *testing.T) {
 	warmup := &escrowWarmup{
 		escrows: &stubEscrows{session: stubSession{}, live: true},
 		ledger:  &spyLedger{},
-		probe: func(_ context.Context, _ registry.EscrowSession, _ string, _ int64, nonceCommitted func()) (uint64, bool, error) {
+		probe: func(_ context.Context, _ registry.EscrowSession, _ user.InferenceParams, nonceCommitted func()) (uint64, bool, error) {
 			nonceCommitted()
 			select {
 			case <-caughtUp:
