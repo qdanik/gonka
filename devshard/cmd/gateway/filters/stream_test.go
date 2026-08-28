@@ -691,3 +691,48 @@ func rewriteEventOnly(event []byte, intent LogprobIntent, keepUsage bool) []byte
 	rewritten, _ := rewriteEvent(event, intent, keepUsage)
 	return rewritten
 }
+
+// The client's own logprobs intent is applied before this conversion, so anything still here was asked
+// for. Dropping it hands a streaming client an answer without the logprobs it paid for.
+func TestACompletionConvertedToChunksKeepsTheLogprobsItCarried(t *testing.T) {
+	const logprobs = `{"content":[{"token":"ok","logprob":-0.5,"bytes":[111,107],"top_logprobs":[]}]}`
+	tests := []struct {
+		name string
+		body string
+		want string
+	}{
+		{
+			name: "logprobs the client asked for",
+			body: `{"id":"x","object":"chat.completion","created":1,"model":"m","choices":[{"index":0,` +
+				`"message":{"role":"assistant","content":"ok"},"logprobs":` + logprobs + `,"finish_reason":"stop"}]}`,
+			want: `"logprobs":` + logprobs,
+		},
+		{
+			name: "a host that reported none",
+			body: `{"id":"x","object":"chat.completion","created":1,"model":"m","choices":[{"index":0,` +
+				`"message":{"role":"assistant","content":"ok"},"logprobs":null,"finish_reason":"stop"}]}`,
+		},
+		{
+			name: "a host that named no such field",
+			body: `{"id":"x","object":"chat.completion","created":1,"model":"m","choices":[{"index":0,` +
+				`"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`,
+		},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			chunks, converted := completionAsChunks([]byte(testCase.body))
+			if !converted {
+				t.Fatalf("completionAsChunks() did not convert %s", testCase.body)
+			}
+			if testCase.want == "" {
+				if bytes.Contains(chunks, []byte(`"logprobs"`)) {
+					t.Fatalf("a logprobs field appeared where the host sent none: %s", chunks)
+				}
+				return
+			}
+			if !bytes.Contains(chunks, []byte(testCase.want)) {
+				t.Fatalf("chunks lost the logprobs\n got:  %s\n want: %s", chunks, testCase.want)
+			}
+		})
+	}
+}

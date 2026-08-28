@@ -313,6 +313,7 @@ type sseCompletion struct {
 type sseCompletionChoice struct {
 	Index        json.RawMessage            `json:"index"`
 	Message      map[string]json.RawMessage `json:"message"`
+	Logprobs     json.RawMessage            `json:"logprobs"`
 	FinishReason json.RawMessage            `json:"finish_reason"`
 	StopReason   json.RawMessage            `json:"stop_reason"`
 }
@@ -330,6 +331,7 @@ type sseChunk struct {
 type sseChunkChoice struct {
 	Index        json.RawMessage            `json:"index"`
 	Delta        map[string]json.RawMessage `json:"delta"`
+	Logprobs     json.RawMessage            `json:"logprobs,omitempty"`
 	FinishReason json.RawMessage            `json:"finish_reason"`
 	StopReason   json.RawMessage            `json:"stop_reason,omitempty"`
 }
@@ -363,7 +365,12 @@ func completionAsChunks(payload []byte) ([]byte, bool) {
 			}
 		}
 		if len(delta) > 0 {
-			emitChunk(&events, completion, []sseChunkChoice{{Index: rawOr(choice.Index, "0"), Delta: delta}}, nil)
+			// The whole answer arrives as one delta, so the logprobs for it ride the same chunk.
+			emitChunk(&events, completion, []sseChunkChoice{{
+				Index:    rawOr(choice.Index, "0"),
+				Delta:    delta,
+				Logprobs: presentValue(choice.Logprobs),
+			}}, nil)
 		}
 		if stopReason := presentValue(choice.StopReason); presentValue(choice.FinishReason) != nil || stopReason != nil {
 			emitChunk(&events, completion, []sseChunkChoice{{
