@@ -253,16 +253,16 @@ func TestMatchBurnKindPastStaleWindow(t *testing.T) {
 			wantKind:   ghostCapability,
 		},
 		{
-			name:     "a scanned waiter is state blocked",
+			name:     "the participant's state diverged, whatever is queued",
 			waiting:  []*waiter{queuedWaiter(baseTime, "model-a")},
 			state:    always(true),
-			wantKind: ghostCapability,
+			wantKind: ghostStateDiverged,
 		},
 		{
-			name:     "an excluded waiter the host cannot serve either way",
+			name:     "the participant's state diverged and the queue excludes it too",
 			waiting:  []*waiter{queuedWaiter(baseTime, "model-a", hostA)},
 			state:    always(true),
-			wantKind: ghostExclude,
+			wantKind: ghostStateDiverged,
 		},
 	}
 	for _, testCase := range tests {
@@ -327,7 +327,7 @@ func TestMatchEmptyQueueNeverHolds(t *testing.T) {
 			availability := openAvailability()
 			availability.stateBlocked = always(true)
 			return availability
-		}(), wantDeclined: true},
+		}(), wantBurnKind: ghostStateDiverged},
 	}
 	for _, testCase := range tests {
 		t.Run(testCase.name, func(t *testing.T) {

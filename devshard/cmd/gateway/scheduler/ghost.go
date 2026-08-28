@@ -9,6 +9,7 @@ const (
 	ghostEjected
 	ghostNotAllowed
 	ghostCapability
+	ghostStateDiverged
 	ghostExclude
 	ghostAbandoned
 )
@@ -25,6 +26,8 @@ func (k GhostKind) reason() string {
 		return "participant_outside_allowlist"
 	case ghostCapability:
 		return "participant_capability_no_send"
+	case ghostStateDiverged:
+		return "participant_state_diverged_no_send"
 	case ghostExclude:
 		return "no_compatible_request_after_stale"
 	case ghostAbandoned:

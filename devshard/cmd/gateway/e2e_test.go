@@ -636,7 +636,7 @@ func TestEndToEndABurnedNonceIsCountedUnderItsOwnReason(t *testing.T) {
 	}
 
 	escrow := fmt.Sprintf("devshard_id=%q", fixture.id)
-	reason := fmt.Sprintf("reason=%q", "participant_capability_no_send")
+	reason := fmt.Sprintf("reason=%q", "participant_state_diverged_no_send")
 	counted := false
 	for line := range strings.SplitSeq(gateway.scrapeMetrics(t), "\n") {
 		if strings.HasPrefix(line, "devshard_gateway_ghost_nonces_burned_total{") &&

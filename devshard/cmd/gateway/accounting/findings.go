@@ -13,6 +13,7 @@ const (
 	unusedAnswerWarning      = 0.20
 	gatewayThrottleWarning   = 0.10
 	capabilityBlockedWarning = 0.01
+	stateDivergedWarning     = 0.01
 	chainMissWarning         = 0.01
 	chainMissCritical        = 0.05
 	chainInvalidWarning      = 0.01
@@ -50,6 +51,7 @@ const (
 	FindingUndecidedTimeouts    = "timeouts_undecided"
 	FindingUnknownReasons       = "reasons_unknown"
 	FindingCapabilityBlocked    = "blocked_by_capability"
+	FindingStateDiverged        = "blocked_by_state_divergence"
 	FindingDecodedLogprobs      = "logprobs_not_token_ids"
 	FindingFailureTerminals     = "failure_terminals"
 	FindingSlowReceipts         = "slow_receipts"
@@ -61,7 +63,7 @@ const (
 // findingCodes is every code this gateway can emit, pinned so a rename has to be deliberate.
 var findingCodes = []string{
 	FindingExecutionTimeouts, FindingRefusals, FindingUnusedAnswers, FindingGatewayThrottled,
-	FindingCapabilityBlocked, FindingChainMisses, FindingChainInvalid, FindingUnresolvedChallenges,
+	FindingCapabilityBlocked, FindingStateDiverged, FindingChainMisses, FindingChainInvalid, FindingUnresolvedChallenges,
 	FindingUndecidedTimeouts, FindingUnknownReasons, FindingChainDisagreement, FindingLedgerOvercounted,
 	FindingFailureTerminals, FindingSlowReceipts, FindingSlowChunks, FindingClockDrift, FindingSlowDecode,
 	FindingDecodedLogprobs,
@@ -116,6 +118,8 @@ func findingsFor(record ParticipantRecord) []Finding {
 		FindingGatewayThrottled))
 	add(ratio(ghostsBecause(record, "participant_capability_no_send"), record.Assigned, capabilityBlockedWarning, neverCritical,
 		FindingCapabilityBlocked))
+	add(ratio(ghostsBecause(record, "participant_state_diverged_no_send"), record.Assigned, stateDivergedWarning, neverCritical,
+		FindingStateDiverged))
 	add(ratio(uint64(record.ChainMissed), record.Assigned, chainMissWarning, chainMissCritical,
 		FindingChainMisses))
 	add(ratio(uint64(record.ChainInvalid), record.Assigned, chainInvalidWarning, chainInvalidCritical,

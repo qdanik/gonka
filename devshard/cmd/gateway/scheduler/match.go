@@ -33,14 +33,19 @@ const (
 
 // ghostFor names the burn each participant-only block earns, as one mapping rather than two switches.
 var ghostFor = map[blockReason]GhostKind{
-	blockPoCRequired: ghostPoC,
-	blockThrottled:   ghostThrottled,
-	blockEjected:     ghostEjected,
-	blockNotAllowed:  ghostNotAllowed,
+	blockPoCRequired:   ghostPoC,
+	blockThrottled:     ghostThrottled,
+	blockEjected:       ghostEjected,
+	blockNotAllowed:    ghostNotAllowed,
+	blockStateDiverged: ghostStateDiverged,
 }
 
-// outsideAllowlist reads a missing predicate as no allowlist at all, so a caller that builds an
-// availability without one narrows dispatch to nobody by accident.
+// divergedFromEscrowState and outsideAllowlist read a missing predicate as no block at all, so a
+// caller that builds an availability without one does not narrow dispatch by accident.
+func (a availability) divergedFromEscrowState(participant string) bool {
+	return a.stateBlocked != nil && a.stateBlocked(participant)
+}
+
 func (a availability) outsideAllowlist(participant string) bool {
 	return a.notAllowed != nil && a.notAllowed(participant)
 }
@@ -56,6 +61,8 @@ func (a availability) participantBlocked(participant string) blockReason {
 		return blockThrottled
 	case a.ejected(participant):
 		return blockEjected
+	case a.divergedFromEscrowState(participant):
+		return blockStateDiverged
 	}
 	return blockNone
 }
@@ -87,9 +94,6 @@ func (a availability) onlyThisHostIsLeft(participant string, participants []stri
 }
 
 func (a availability) blocksApartFromExclusion(participant string, queued *waiter) blockReason {
-	if a.stateBlocked(participant) {
-		return blockStateDiverged
-	}
 	switch reason, blocked := a.capability(participant, queued.profile); {
 	case !blocked:
 		return blockNone
