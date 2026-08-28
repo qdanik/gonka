@@ -94,7 +94,10 @@ func TestAHostlessRequestIsOurRefusalNotAnUpstreamFailure(t *testing.T) {
 
 // The chat path must not answer 429: it means "you exceeded a quota", and a client that ran into the
 // shard's own capacity exceeded nothing. Every capacity refusal is 503 with a hint of when to return.
-func TestNoCapacityRefusalReachesTheClientAs429(t *testing.T) {
+//
+// This contradicts gateway-request-lifecycle.md, which promises 429 with Retry-After for the same
+// three rejections, and the old gateway, which answered 429. Whichever wins, both must say it.
+func TestEveryCapacityRefusalAnswersUnavailableWithAWait(t *testing.T) {
 	refusals := []error{
 		&limits.RateLimitError{Reason: "too many concurrent requests"},
 		scheduler.ErrHostsBusy,

@@ -126,15 +126,10 @@ func statusForError(err error) int {
 	if errors.As(err, &blocked) {
 		return http.StatusServiceUnavailable
 	}
-	var throttled *limits.RateLimitError
-	if errors.As(err, &throttled) {
+	if backpressure(err) {
 		return http.StatusServiceUnavailable
 	}
 	switch {
-	case errors.Is(err, scheduler.ErrNoEscrowCapacity), errors.Is(err, scheduler.ErrEscrowBusy):
-		return http.StatusServiceUnavailable
-	case errors.Is(err, scheduler.ErrHostsBusy):
-		return http.StatusServiceUnavailable
 	case errors.Is(err, scheduler.ErrEscrowGone):
 		return http.StatusConflict
 	case errors.Is(err, scheduler.ErrToolsUnsupported):
@@ -177,6 +172,17 @@ func writeControlFailure(w http.ResponseWriter, err error) bool {
 	return true
 }
 
+// backpressure names a rejection the caller should simply retry: the gateway is full, not broken. It
+// decides both the status and the Retry-After header, so a case added to one cannot go missing from
+// the other. Whether the status should be 503 or 429 is an open question -- see errors_test.go.
+func backpressure(err error) bool {
+	var throttled *limits.RateLimitError
+	return errors.As(err, &throttled) ||
+		errors.Is(err, scheduler.ErrHostsBusy) ||
+		errors.Is(err, scheduler.ErrNoEscrowCapacity) ||
+		errors.Is(err, scheduler.ErrEscrowBusy)
+}
+
 // Retry-After is rounded up: a zero would tell a client to retry immediately, the opposite of what a
 // queue timeout means.
 func writeErrorFor(w http.ResponseWriter, err error) {
@@ -185,8 +191,7 @@ func writeErrorFor(w http.ResponseWriter, err error) {
 	case errors.As(err, &throttled) && throttled.RetryAfter > 0:
 		seconds := int64(math.Ceil(throttled.RetryAfter.Seconds()))
 		w.Header().Set("Retry-After", strconv.FormatInt(seconds, 10))
-	case errors.As(err, &throttled), errors.Is(err, scheduler.ErrHostsBusy),
-		errors.Is(err, scheduler.ErrNoEscrowCapacity), errors.Is(err, scheduler.ErrEscrowBusy):
+	case backpressure(err):
 		w.Header().Set("Retry-After", strconv.FormatInt(int64(noHostRetryAfter.Seconds()), 10))
 	}
 	writeError(w, statusForError(err), err.Error())
