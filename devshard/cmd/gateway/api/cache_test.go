@@ -92,7 +92,7 @@ func TestTheSameCallerOnADifferentEscrowIsAMiss(t *testing.T) {
 		request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
 		request.Header.Set("Authorization", "Bearer caller-a")
 		request.SetPathValue("id", escrowID)
-		return cacheKeyFor(request, "qwen", []byte(chatBody), filters.LogprobIntent{}, false)
+		return cacheKeyFor(request, "qwen", []byte(chatBody), filters.LogprobIntent{}, false, false)
 	}
 	cache := newResponseCache(1 << 20)
 	now := time.Unix(1700000000, 0)
@@ -340,15 +340,20 @@ func TestTheCacheKeySeparatesRequestsByWhatTheyAskedFor(t *testing.T) {
 	request.Header.Set("Authorization", "Bearer one-caller")
 	body := []byte(`{"model":"qwen","logprobs":true}`)
 
-	asked := cacheKeyFor(request, "qwen", body, filters.LogprobIntent{Keep: true}, false)
-	askedForAlternatives := cacheKeyFor(request, "qwen", body, filters.LogprobIntent{Keep: true, KeepTop: true}, false)
-	askedForNeither := cacheKeyFor(request, "qwen", body, filters.LogprobIntent{}, false)
+	asked := cacheKeyFor(request, "qwen", body, filters.LogprobIntent{Keep: true}, false, false)
+	askedForAlternatives := cacheKeyFor(request, "qwen", body, filters.LogprobIntent{Keep: true, KeepTop: true}, false, false)
+	askedForNeither := cacheKeyFor(request, "qwen", body, filters.LogprobIntent{}, false, false)
 
 	if asked == askedForNeither {
 		t.Fatal("a request that asked for logprobs shares an entry with one that did not")
 	}
 	if asked == askedForAlternatives {
 		t.Fatal("a request that asked for alternatives shares an entry with one that did not")
+	}
+	// The body asks every host to report usage, so only the remembered intent separates these two.
+	askedForUsage := cacheKeyFor(request, "qwen", body, filters.LogprobIntent{Keep: true}, false, true)
+	if asked == askedForUsage {
+		t.Fatal("a request that asked for a usage chunk shares an entry with one that did not")
 	}
 }
 
@@ -359,8 +364,8 @@ func TestTheCacheSeparatesReplyShapes(t *testing.T) {
 	request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
 	body := []byte(chatBody)
 
-	buffered := cacheKeyFor(request, "qwen", body, filters.LogprobIntent{}, false)
-	streamed := cacheKeyFor(request, "qwen", body, filters.LogprobIntent{}, true)
+	buffered := cacheKeyFor(request, "qwen", body, filters.LogprobIntent{}, false, false)
+	streamed := cacheKeyFor(request, "qwen", body, filters.LogprobIntent{}, true, false)
 
 	if buffered == streamed {
 		t.Fatal("a buffered and a streamed caller share one cache key")

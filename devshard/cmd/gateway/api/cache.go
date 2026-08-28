@@ -30,6 +30,7 @@ type cacheKey struct {
 	body     string
 	logprobs filters.LogprobIntent
 	stream   bool
+	usage    bool
 }
 
 type cachedResponse struct {
@@ -85,9 +86,10 @@ func newResponseCache(maxBytes int64) *responseCache {
 
 // The logprob intent is part of the key because the normalized body is not: the force rules make one
 // client's request identical to another's, and the two are answered with differently stripped bodies.
-// cacheKeyFor takes the client's streaming intent separately: the body now asks every host to stream,
-// so two callers wanting different reply shapes would otherwise share one entry.
-func cacheKeyFor(r *http.Request, model string, body []byte, logprobs filters.LogprobIntent, stream bool) cacheKey {
+// cacheKeyFor takes the client's streaming and usage intents separately: the body now asks every host
+// to stream and to report usage, so two callers wanting different reply shapes would otherwise share
+// one entry, and whichever arrived first would decide what the second one got.
+func cacheKeyFor(r *http.Request, model string, body []byte, logprobs filters.LogprobIntent, stream, usage bool) cacheKey {
 	return cacheKey{
 		caller:   digest([]byte(strings.TrimSpace(r.Header.Get("Authorization")))),
 		escrow:   r.PathValue("id"),
@@ -95,6 +97,7 @@ func cacheKeyFor(r *http.Request, model string, body []byte, logprobs filters.Lo
 		body:     digest(body),
 		logprobs: logprobs,
 		stream:   stream,
+		usage:    usage,
 	}
 }
 
