@@ -219,3 +219,50 @@ func TestASlowDecodeReachesTheLedgerAsAFactAboutTheHost(t *testing.T) {
 		})
 	}
 }
+
+func terminalsOf(t *testing.T, ledger *nonceAccounting) map[string]uint64 {
+	t.Helper()
+	terminals := map[string]uint64{}
+	for _, record := range ledger.service.Book.Query(accounting.QueryFilter{}) {
+		for _, counter := range record.Counters {
+			terminals[counter.Terminal] += counter.Count
+		}
+	}
+	return terminals
+}
+
+func TestAWinnerWhoseClientLeftIsNamedApartFromOneThatWasRead(t *testing.T) {
+	sent := time.Unix(100, 0)
+	tests := []struct {
+		name       string
+		clientGone bool
+		want       string
+	}{
+		{"the client was still waiting", false, engine.TerminalWon.String()},
+		{"the client had already left", true, accounting.TerminalClientGone},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			ledger := newLedgerForTest(t)
+
+			ledger.recordRace(engine.RaceOutcome{
+				EscrowID:    "escrow-1",
+				Succeeded:   true,
+				WinnerNonce: 4,
+				Lifecycle:   engine.Lifecycle{ClientGone: testCase.clientGone},
+				Attempts: []engine.AttemptOutcome{
+					{Nonce: 4, SendTime: sent, NonceFinished: true, Terminal: engine.TerminalWon},
+					{Nonce: 5, SendTime: sent, NonceFinished: true, Terminal: engine.TerminalLost},
+				},
+			})
+
+			terminals := terminalsOf(t, ledger)
+			if terminals[testCase.want] != 1 {
+				t.Fatalf("terminals = %v, want one %q for the winner", terminals, testCase.want)
+			}
+			if terminals[engine.TerminalLost.String()] != 1 {
+				t.Errorf("terminals = %v, want the loser untouched", terminals)
+			}
+		})
+	}
+}

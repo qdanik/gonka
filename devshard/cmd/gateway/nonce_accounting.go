@@ -250,7 +250,7 @@ func (n *nonceAccounting) recordRace(outcome engine.RaceOutcome) {
 			Acknowledged:    !attempt.ReceiptTime.IsZero(),
 			Finished:        attempt.NonceFinished,
 			Usage:           usageOf(outcome, attempt),
-			Terminal:        attempt.Terminal.String(),
+			Terminal:        terminalFor(outcome, attempt),
 			Phase:           phase,
 			SlowReceipt:     slowReceipt(attempt),
 			SlowChunk:       attempt.MaxChunkGap > accounting.SlowChunkGap,
@@ -283,6 +283,16 @@ func (n *nonceAccounting) recordTimeout(event engine.TimeoutEvent) {
 	if n != nil {
 		n.report(n.service.Book.RecordTimeout(event.EscrowID, event.Nonce, event.Kind, event.Action, event.Reason))
 	}
+}
+
+// A crowned winner whose client had already left still counts as work the host delivered, but it is not
+// an answer anybody read; without its own name the population where the race outlived its client cannot
+// be found in the ledger at all.
+func terminalFor(outcome engine.RaceOutcome, attempt engine.AttemptOutcome) string {
+	if outcome.Lifecycle.ClientGone && outcome.IsWinner(attempt) {
+		return accounting.TerminalClientGone
+	}
+	return attempt.Terminal.String()
 }
 
 func usageOf(outcome engine.RaceOutcome, attempt engine.AttemptOutcome) accounting.Usage {
