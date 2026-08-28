@@ -70,12 +70,12 @@ func TestAChatRequestWithoutAModelIsAClientError(t *testing.T) {
 
 // Capacity the gateway does not have is not the client exceeding a quota, so the refusal is 503 with a
 // hint of when to return -- 429 blamed a caller that had exceeded nothing and carried no such hint.
-func TestTheLimiterRejectionReachesTheClientAsUnavailable(t *testing.T) {
+func TestTheLimiterRejectionReachesTheClientAsTooManyRequests(t *testing.T) {
 	live := newHarness(t)
 	live.limiter.err = &limits.RateLimitError{Reason: "too many concurrent requests"}
 	recorder := live.request(t, http.MethodPost, "/v1/chat/completions", chatBody, nil)
-	if recorder.Code != http.StatusServiceUnavailable {
-		t.Fatalf("status: got %d, want 503", recorder.Code)
+	if recorder.Code != http.StatusTooManyRequests {
+		t.Fatalf("status: got %d, want 429", recorder.Code)
 	}
 	if got := live.inference.runs.Load(); got != 0 {
 		t.Fatalf("races started after a limiter rejection: got %d", got)

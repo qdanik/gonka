@@ -116,7 +116,8 @@ Retention is enforced on both axes — age and row count — and a zero on eithe
 | Gateway not ready (empty registry) | 503 |
 | Model requires a credential the caller does not have | 401 |
 | Requests blocked by the chain phase | 503, naming the phase |
-| Gateway-limiter queue timeout, or no escrow capacity, or escrow busy | 429 with `Retry-After` |
+| Gateway-limiter queue timeout | 429 with `Retry-After` |
+| No escrow capacity, escrow busy, or every host busy | 503 with `Retry-After` |
 | Pinned escrow no longer serves the model | 409 |
 | Pinned escrow id unknown to the gateway | 404 |
 | Engine stopping, or registry closed | 503 |

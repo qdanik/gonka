@@ -126,7 +126,13 @@ func statusForError(err error) int {
 	if errors.As(err, &blocked) {
 		return http.StatusServiceUnavailable
 	}
-	if backpressure(err) {
+	// Our own limiter is a quota the caller exceeded, which is 429; capacity and a busy escrow are the
+	// shard having no room, which is 503. The old gateway drew the line in the same place.
+	var throttled *limits.RateLimitError
+	if errors.As(err, &throttled) {
+		return http.StatusTooManyRequests
+	}
+	if shardHasNoRoom(err) {
 		return http.StatusServiceUnavailable
 	}
 	switch {
@@ -172,13 +178,8 @@ func writeControlFailure(w http.ResponseWriter, err error) bool {
 	return true
 }
 
-// backpressure names a rejection the caller should simply retry: the gateway is full, not broken. It
-// decides both the status and the Retry-After header, so a case added to one cannot go missing from
-// the other. Whether the status should be 503 or 429 is an open question -- see errors_test.go.
-func backpressure(err error) bool {
-	var throttled *limits.RateLimitError
-	return errors.As(err, &throttled) ||
-		errors.Is(err, scheduler.ErrHostsBusy) ||
+func shardHasNoRoom(err error) bool {
+	return errors.Is(err, scheduler.ErrHostsBusy) ||
 		errors.Is(err, scheduler.ErrNoEscrowCapacity) ||
 		errors.Is(err, scheduler.ErrEscrowBusy)
 }
@@ -191,7 +192,7 @@ func writeErrorFor(w http.ResponseWriter, err error) {
 	case errors.As(err, &throttled) && throttled.RetryAfter > 0:
 		seconds := int64(math.Ceil(throttled.RetryAfter.Seconds()))
 		w.Header().Set("Retry-After", strconv.FormatInt(seconds, 10))
-	case backpressure(err):
+	case errors.As(err, &throttled), shardHasNoRoom(err):
 		w.Header().Set("Retry-After", strconv.FormatInt(int64(noHostRetryAfter.Seconds()), 10))
 	}
 	writeError(w, statusForError(err), err.Error())

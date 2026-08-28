@@ -22,8 +22,8 @@ func TestARateLimitRejectionCarriesRetryAfter(t *testing.T) {
 
 	writeErrorFor(recorder, &limits.RateLimitError{Reason: "queue timeout", RetryAfter: 1500 * time.Millisecond})
 
-	if recorder.Code != http.StatusServiceUnavailable {
-		t.Fatalf("status = %d, want 503", recorder.Code)
+	if recorder.Code != http.StatusTooManyRequests {
+		t.Fatalf("status = %d, want 429", recorder.Code)
 	}
 	if got := recorder.Header().Get("Retry-After"); got != "2" {
 		t.Fatalf("Retry-After = %q, want %q (1.5s rounded up)", got, "2")
@@ -92,26 +92,33 @@ func TestAHostlessRequestIsOurRefusalNotAnUpstreamFailure(t *testing.T) {
 	}
 }
 
-// The chat path must not answer 429: it means "you exceeded a quota", and a client that ran into the
-// shard's own capacity exceeded nothing. Every capacity refusal is 503 with a hint of when to return.
-//
-// This contradicts gateway-request-lifecycle.md, which promises 429 with Retry-After for the same
-// three rejections, and the old gateway, which answered 429. Whichever wins, both must say it.
-func TestEveryCapacityRefusalAnswersUnavailableWithAWait(t *testing.T) {
-	refusals := []error{
-		&limits.RateLimitError{Reason: "too many concurrent requests"},
-		scheduler.ErrHostsBusy,
-		scheduler.ErrNoEscrowCapacity,
-		scheduler.ErrEscrowBusy,
-	}
+// A client that ran into the shard's own capacity exceeded no quota, so 429 would misname it. The old
+// gateway drew the same line: its limiter answered 429, its admission control 503.
+func TestACapacityRefusalAnswersUnavailableWithAWait(t *testing.T) {
+	refusals := []error{scheduler.ErrHostsBusy, scheduler.ErrNoEscrowCapacity, scheduler.ErrEscrowBusy}
 	for _, refusal := range refusals {
 		recorder := httptest.NewRecorder()
 		writeErrorFor(recorder, refusal)
-		if recorder.Code == http.StatusTooManyRequests {
-			t.Fatalf("%v answered 429", refusal)
+		if recorder.Code != http.StatusServiceUnavailable {
+			t.Fatalf("%v answered %d, want 503", refusal, recorder.Code)
 		}
 		if recorder.Header().Get("Retry-After") == "" {
 			t.Fatalf("%v carried no Retry-After: a client cannot tell when to come back", refusal)
 		}
+	}
+}
+
+// The gateway's own limiter is a quota, and an OpenAI client reads 429 as backpressure to retry with
+// backoff where 503 reads as an outage worth failing over.
+func TestTheGatewaysOwnLimitAnswersTooManyRequests(t *testing.T) {
+	recorder := httptest.NewRecorder()
+
+	writeErrorFor(recorder, &limits.RateLimitError{Reason: "too many concurrent requests"})
+
+	if recorder.Code != http.StatusTooManyRequests {
+		t.Fatalf("status = %d, want 429", recorder.Code)
+	}
+	if recorder.Header().Get("Retry-After") == "" {
+		t.Fatal("a limiter rejection carried no Retry-After")
 	}
 }
