@@ -314,8 +314,13 @@ func classify(slotID uint32, record *nonceRecord) (CounterKey, bool) {
 	key := CounterKey{SlotID: slotID}
 	switch {
 	case record.ghostReason != "":
+		// A burn the host is charged for votes like any other nonce, so its outcome has to reach the key
+		// the burn already made; without this the vote is posted and counted nowhere.
 		key.Disposition = DispositionGhost
 		key.GhostReason = record.ghostReason
+		key.TimeoutKind = record.timeoutKind
+		key.TimeoutAction = record.timeoutAction
+		key.TimeoutReason = record.timeoutReason
 		return key, true
 	case record.finished:
 		key.Disposition = finishedDisposition(record.usage)

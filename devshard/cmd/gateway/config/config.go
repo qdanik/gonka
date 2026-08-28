@@ -163,6 +163,7 @@ type Engine struct {
 type Scheduler struct {
 	MatchWaitMS          int64
 	WarmNewEscrows       bool
+	ChargeRefusedNonces  bool
 	ParticipantAllowlist []string
 }
 

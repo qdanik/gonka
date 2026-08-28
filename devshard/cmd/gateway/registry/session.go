@@ -122,6 +122,10 @@ func (s nonceStream) Advance(decide func(scheduler.HostBinding) scheduler.NonceI
 	return prepared, nil
 }
 
+// GhostPrompt is what a burned nonce committed. A vote raised for that nonce must carry it, because a
+// verifier checks the payload against the record's own prompt hash.
+func GhostPrompt() []byte { return ghostPrompt }
+
 // StartedAt is seconds, like every other StartedAt: a verifier measures the refusal deadline as
 // now-in-seconds minus this, so a millisecond stamp keeps that difference negative and the timeout on a
 // burned nonce is rejected every time. See host/timeout.go, VerifyRefusedTimeout.

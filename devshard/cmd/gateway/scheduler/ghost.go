@@ -14,12 +14,18 @@ const (
 	ghostAbandoned
 )
 
+// Exported so a caller outside the scheduler can tell the burns a host earned from the ones it did not.
+const (
+	GhostReasonThrottled     = "participant_throttled_no_send"
+	GhostReasonStateDiverged = "participant_state_diverged_no_send"
+)
+
 func (k GhostKind) reason() string {
 	switch k {
 	case ghostPoC:
 		return "poc_unavailable_host"
 	case ghostThrottled:
-		return "participant_throttled_no_send"
+		return GhostReasonThrottled
 	case ghostEjected:
 		return "participant_ejected_no_send"
 	case ghostNotAllowed:
@@ -27,7 +33,7 @@ func (k GhostKind) reason() string {
 	case ghostCapability:
 		return "participant_capability_no_send"
 	case ghostStateDiverged:
-		return "participant_state_diverged_no_send"
+		return GhostReasonStateDiverged
 	case ghostExclude:
 		return "no_compatible_request_after_stale"
 	case ghostAbandoned:

@@ -16,6 +16,7 @@ import (
 type tracedDispatches struct {
 	recorder *metrics.DispatchRecorder
 	ledger   *nonceAccounting
+	charges  *ghostAccountability
 }
 
 // GhostBurned is a nonce that cost money on chain and will serve nobody. The nonce is logged and never
@@ -25,6 +26,7 @@ func (t tracedDispatches) GhostBurned(escrowID string, nonce uint64, participant
 		logkey.Escrow, escrowID, logkey.Nonce, nonce, logkey.Host, logkey.ShortHost(participant), logkey.Reason, reason)
 	t.recorder.GhostBurned(escrowID, participant, reason)
 	t.ledger.recordGhost(escrowID, nonce, reason)
+	t.charges.burned(escrowID, nonce, participant, reason)
 }
 
 // BurnBudgetExhausted means the escrow stopped burning nonces to answer requests it cannot serve, so

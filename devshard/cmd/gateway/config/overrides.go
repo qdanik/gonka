@@ -20,6 +20,7 @@ type Overrides struct {
 	AdmissionQueuePerSlot                  *int64                 `json:"admission_queue_per_slot,omitempty"`
 	MatchWaitMS                            *int64                 `json:"match_wait_ms,omitempty"`
 	WarmNewEscrows                         *bool                  `json:"warm_new_escrows,omitempty"`
+	ChargeRefusedNonces                    *bool                  `json:"charge_refused_nonces,omitempty"`
 	ParticipantAllowlist                   *[]string              `json:"participant_allowlist,omitempty"`
 	HostInitialInflight                    *int64                 `json:"host_initial_inflight,omitempty"`
 	HostMaxInflight                        *int64                 `json:"host_max_inflight,omitempty"`

@@ -420,3 +420,32 @@ func TestNoncesSeenBetweenSweepsDoNotReadAsADisagreement(t *testing.T) {
 		}
 	}
 }
+
+func TestAChargedBurnCarriesItsTimeoutOutcome(t *testing.T) {
+	book := newTestBook(t, 2)
+	if err := book.RecordGhost(testEscrow, 4, "participant_throttled_no_send"); err != nil {
+		t.Fatalf("RecordGhost: %v", err)
+	}
+
+	if err := book.RecordTimeout(testEscrow, 4, "refused", "completed", "none"); err != nil {
+		t.Fatalf("RecordTimeout: %v", err)
+	}
+
+	var charged *CounterRecord
+	for _, record := range book.Query(QueryFilter{}) {
+		for index, counter := range record.Counters {
+			if counter.GhostReason == "participant_throttled_no_send" {
+				charged = &record.Counters[index]
+			}
+		}
+	}
+	if charged == nil {
+		t.Fatal("no counter for the burned nonce")
+	}
+	if charged.TimeoutAction != "completed" {
+		t.Errorf("timeout action = %q, want the vote's own outcome", charged.TimeoutAction)
+	}
+	if charged.Disposition != DispositionGhost {
+		t.Errorf("disposition = %q, want it to stay a ghost", charged.Disposition)
+	}
+}

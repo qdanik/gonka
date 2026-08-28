@@ -182,7 +182,7 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 
 	devshardWork := make(chan struct{}, 1)
 	depletion := &depletionNotice{}
-	escrows, router, warmup := newRouting(routingDeps{
+	escrows, router, warmup, charges := newRouting(routingDeps{
 		Sessions:     sources.Serving,
 		ReadOnly:     sources.ReadOnly,
 		Capacity:     capacity,
@@ -221,12 +221,13 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 	}
 
 	sessions := api.NewSessions(escrows)
-	// The warmup votes on a nonce its probe was refused, through the same poster and observer the race uses.
+	// The warmup and the burn charge both vote through the poster and observer the race already uses.
 	raceObserver := nonceAccountedRaces{recorder: metrics.NewRaceRecorder(telemetry), ledger: nonces}
 	if warmup != nil {
 		warmup.posters = sessions.Poster
 		warmup.timeouts = raceObserver
 	}
+	charges.escrows, charges.posters, charges.timeouts = escrows, sessions.Poster, raceObserver
 	races := engine.NewEngine(engine.Deps{
 		Picker:     router,
 		Targets:    sessions,
@@ -333,7 +334,7 @@ type routingDeps struct {
 
 // newRouting joins the escrow set to the picker through the capacity model: an escrow whose
 // membership never reaches it scores as weightless, is skipped by every pick, and serves nothing.
-func newRouting(deps routingDeps) (*registry.Registry, *scheduler.Scheduler, *escrowWarmup) {
+func newRouting(deps routingDeps) (*registry.Registry, *scheduler.Scheduler, *escrowWarmup, *ghostAccountability) {
 	// The warmup needs the registry it observes, so it is handed the registry once that exists.
 	registryDeps := registry.Deps{
 		ServingSessions:  deps.Sessions,
@@ -347,6 +348,10 @@ func newRouting(deps routingDeps) (*registry.Registry, *scheduler.Scheduler, *es
 	if warmup != nil {
 		registryDeps.Publications = warmup
 	}
+	charges := &ghostAccountability{
+		now:     deps.Now,
+		enabled: func() bool { return deps.Config.Load().Scheduler.ChargeRefusedNonces },
+	}
 	escrows := registry.New(registryDeps)
 	if warmup != nil {
 		warmup.escrows = escrows
@@ -358,11 +363,11 @@ func newRouting(deps routingDeps) (*registry.Registry, *scheduler.Scheduler, *es
 		Perf:              deps.Hosts,
 		Snapshots:         deps.Snapshots,
 		Config:            deps.Config,
-		Observer:          tracedDispatches{recorder: deps.Dispatches, ledger: deps.Ledger},
+		Observer:          tracedDispatches{recorder: deps.Dispatches, ledger: deps.Ledger, charges: charges},
 		Now:               deps.Now,
 		OnEscrowExhausted: escrows.Exhausted,
 	})
-	return escrows, router, warmup
+	return escrows, router, warmup, charges
 }
 
 type environmentSigner struct{}

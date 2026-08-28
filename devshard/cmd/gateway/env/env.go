@@ -44,6 +44,7 @@ type Values struct {
 	RotationPrePoCBlocks      *int64
 	MatchWaitMS               *int64
 	WarmNewEscrows            *bool
+	ChargeRefusedNonces       *bool
 	RotationSettlementEnabled *bool
 	RotationModelsJSON        *string
 
@@ -211,6 +212,7 @@ func Load() (Values, error) {
 	readInt("GATEWAY_ROTATION_PRE_POC_BLOCKS", &values.RotationPrePoCBlocks)
 	readInt("GATEWAY_MATCH_WAIT_MS", &values.MatchWaitMS)
 	readBool("GATEWAY_WARM_NEW_ESCROWS", &values.WarmNewEscrows)
+	readBool("GATEWAY_CHARGE_REFUSED_NONCES", &values.ChargeRefusedNonces)
 	readBool("GATEWAY_ROTATION_SETTLEMENT_ENABLED", &values.RotationSettlementEnabled)
 	readString("GATEWAY_ROTATION_MODELS_JSON", &values.RotationModelsJSON)
 
