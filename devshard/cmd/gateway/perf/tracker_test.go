@@ -179,16 +179,16 @@ func TestTrackerEjectedCapNeverEjectsTheOnlyKnownHost(t *testing.T) {
 func TestTrackerCannotServeDelegatesToCapability(t *testing.T) {
 	tracker := newTestTracker(testPerf(), fixedNow(testEpoch))
 
-	tracker.RecordToolUnsupported("participant-a")
-	tracker.RecordContextLimit("participant-b", 100)
+	tracker.RecordToolUnsupported("participant-a", capabilityModel)
+	tracker.RecordContextLimit("participant-b", capabilityModel, 100)
 
-	if reason, blocked := tracker.CannotServe("participant-a", true, 0); !blocked || reason != "tool_choice_unsupported" {
+	if reason, blocked := tracker.CannotServe("participant-a", capabilityModel, true, 0); !blocked || reason != "tool_choice_unsupported" {
 		t.Fatalf("CannotServe(tool-unsupported participant) = (%q, %v), want (tool_choice_unsupported, true)", reason, blocked)
 	}
-	if reason, blocked := tracker.CannotServe("participant-b", false, 101); !blocked || reason != "context_limit_exceeded" {
+	if reason, blocked := tracker.CannotServe("participant-b", capabilityModel, false, 101); !blocked || reason != "context_limit_exceeded" {
 		t.Fatalf("CannotServe(over context limit) = (%q, %v), want (context_limit_exceeded, true)", reason, blocked)
 	}
-	if _, blocked := tracker.CannotServe("participant-c", true, 999999); blocked {
+	if _, blocked := tracker.CannotServe("participant-c", capabilityModel, true, 999999); blocked {
 		t.Fatal("CannotServe(unknown participant) blocked = true, want false")
 	}
 }

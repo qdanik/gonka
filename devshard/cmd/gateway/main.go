@@ -167,8 +167,8 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 		participants.Reconfigure(limits.ParticipantConfigFromLimits(next.Limits))
 	})
 	hosts := perf.NewTracker(configHolder, clock)
-	nonces.SetCapability(func(participant, _ string) accounting.HostCapability {
-		versionBlocked, toolBlocked, contextLimit, versionRefusals, toolRefusals, contextRefusals := hosts.Capability(participant)
+	nonces.SetCapability(func(participant, model string) accounting.HostCapability {
+		versionBlocked, toolBlocked, contextLimit, versionRefusals, toolRefusals, contextRefusals := hosts.Capability(participant, model)
 		return accounting.HostCapability{
 			ProtocolVersionUnsupported: versionBlocked,
 			ToolChoiceUnsupported:      toolBlocked,

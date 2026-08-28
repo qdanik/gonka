@@ -36,8 +36,8 @@ func (openLimiter) Release(string, string)        {}
 
 type capablePerf struct{}
 
-func (capablePerf) CannotServe(string, bool, uint64) (string, bool) { return "", false }
-func (capablePerf) Ejected(string, string) bool                     { return false }
+func (capablePerf) CannotServe(string, string, bool, uint64) (string, bool) { return "", false }
+func (capablePerf) Ejected(string, string) bool                             { return false }
 
 type fixedSnapshots struct{ snapshot chain.PhaseSnapshot }
 

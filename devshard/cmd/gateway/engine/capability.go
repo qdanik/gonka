@@ -57,22 +57,22 @@ func CapabilityOf(a AttemptOutcome) CapabilitySignal {
 }
 
 type CapabilityRecorder interface {
-	RecordContextLimit(participant string, maxTokens uint64)
-	RecordToolUnsupported(participant string)
+	RecordContextLimit(participant, model string, maxTokens uint64)
+	RecordToolUnsupported(participant, model string)
 	RecordVersionUnsupported(participant string)
 }
 
-func RecordCapability(recorder CapabilityRecorder, participant string, signal CapabilitySignal) {
+func RecordCapability(recorder CapabilityRecorder, participant, model string, signal CapabilitySignal) {
 	if recorder == nil || participant == "" {
 		return
 	}
 	switch {
 	case signal.ToolsUnsupported:
-		recorder.RecordToolUnsupported(participant)
+		recorder.RecordToolUnsupported(participant, model)
 	case signal.VersionUnsupported:
 		recorder.RecordVersionUnsupported(participant)
 	case signal.ContextLimit > 0:
-		recorder.RecordContextLimit(participant, signal.ContextLimit)
+		recorder.RecordContextLimit(participant, model, signal.ContextLimit)
 	}
 }
 

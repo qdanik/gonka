@@ -241,7 +241,7 @@ func (s *Scheduler) predicates(escrow Escrow) func(chain.PhaseSnapshot) availabi
 			throttled:   func(participant string) bool { return !s.limiter.Available(participant, model) },
 			ejected:     func(participant string) bool { return s.perf.Ejected(participant, model) },
 			capability: func(participant string, profile RequestProfile) (string, bool) {
-				return s.perf.CannotServe(participant, profile.RequiresTools, profile.ContextHint)
+				return s.perf.CannotServe(participant, model, profile.RequiresTools, profile.ContextHint)
 			},
 			stateBlocked: stateBlocked,
 		}
@@ -403,7 +403,7 @@ type hostLimiter interface {
 // hostHealth is satisfied by *perf.Tracker. Ejected is already capped to a fraction of the model's known
 // hosts, so honouring it here can never empty the pool.
 type hostHealth interface {
-	CannotServe(participant string, requiresTools bool, contextHint uint64) (string, bool)
+	CannotServe(participant, model string, requiresTools bool, contextHint uint64) (string, bool)
 	Ejected(participant, model string) bool
 }
 

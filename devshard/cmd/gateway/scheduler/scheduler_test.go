@@ -113,7 +113,7 @@ func (f *fakePerf) Ejected(participant, _ string) bool {
 	return f.ejected[participant]
 }
 
-func (f *fakePerf) CannotServe(participant string, requiresTools bool, contextHint uint64) (string, bool) {
+func (f *fakePerf) CannotServe(participant, model string, requiresTools bool, contextHint uint64) (string, bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.queries = append(f.queries, capabilityQuery{participant: participant, requiresTools: requiresTools, contextHint: contextHint})

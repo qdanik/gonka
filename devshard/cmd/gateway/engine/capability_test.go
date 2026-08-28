@@ -13,11 +13,11 @@ type stubCapabilityRecorder struct {
 	versionsUnsupported []string
 }
 
-func (r *stubCapabilityRecorder) RecordContextLimit(participant string, maxTokens uint64) {
+func (r *stubCapabilityRecorder) RecordContextLimit(participant, model string, maxTokens uint64) {
 	r.contextLimits = append(r.contextLimits, contextLimitCall{participant: participant, maxTokens: maxTokens})
 }
 
-func (r *stubCapabilityRecorder) RecordToolUnsupported(participant string) {
+func (r *stubCapabilityRecorder) RecordToolUnsupported(participant, model string) {
 	r.toolsUnsupported = append(r.toolsUnsupported, participant)
 }
 
@@ -135,7 +135,7 @@ func TestRecordCapability(t *testing.T) {
 		t.Parallel()
 		recorder := &stubCapabilityRecorder{}
 
-		RecordCapability(recorder, testParticipant, ParseCapabilityError(vllmContextLengthMessage))
+		RecordCapability(recorder, testParticipant, "model-a", ParseCapabilityError(vllmContextLengthMessage))
 
 		if len(recorder.contextLimits) != 1 {
 			t.Fatalf("context limits = %+v, want one", recorder.contextLimits)
@@ -152,7 +152,7 @@ func TestRecordCapability(t *testing.T) {
 		t.Parallel()
 		recorder := &stubCapabilityRecorder{}
 
-		RecordCapability(recorder, testParticipant, ParseCapabilityError(vllmToolChoiceMessage))
+		RecordCapability(recorder, testParticipant, "model-a", ParseCapabilityError(vllmToolChoiceMessage))
 
 		if len(recorder.toolsUnsupported) != 1 || recorder.toolsUnsupported[0] != testParticipant {
 			t.Fatalf("tools unsupported = %+v, want %s", recorder.toolsUnsupported, testParticipant)
@@ -166,7 +166,7 @@ func TestRecordCapability(t *testing.T) {
 		t.Parallel()
 		recorder := &stubCapabilityRecorder{}
 
-		RecordCapability(recorder, testParticipant, ParseCapabilityError("this model's maximum context length is exceeded"))
+		RecordCapability(recorder, testParticipant, "model-a", ParseCapabilityError("this model's maximum context length is exceeded"))
 
 		if len(recorder.contextLimits) != 0 || len(recorder.toolsUnsupported) != 0 {
 			t.Fatalf("recorder = %+v, want nothing recorded", recorder)
@@ -177,7 +177,7 @@ func TestRecordCapability(t *testing.T) {
 		t.Parallel()
 		recorder := &stubCapabilityRecorder{}
 
-		RecordCapability(recorder, "", ParseCapabilityError(vllmContextLengthMessage))
+		RecordCapability(recorder, "", "model-a", ParseCapabilityError(vllmContextLengthMessage))
 
 		if len(recorder.contextLimits) != 0 {
 			t.Fatalf("context limits = %+v, want none", recorder.contextLimits)
@@ -307,7 +307,7 @@ func TestAVersionRefusalIsRecordedAgainstTheParticipant(t *testing.T) {
 	t.Parallel()
 	recorder := &stubCapabilityRecorder{}
 
-	RecordCapability(recorder, "host-0", ParseVersionRefusal(`version "v3" not found`))
+	RecordCapability(recorder, "host-0", "model-a", ParseVersionRefusal(`version "v3" not found`))
 
 	if len(recorder.versionsUnsupported) != 1 || recorder.versionsUnsupported[0] != "host-0" {
 		t.Fatalf("versions recorded = %v, want one for host-0", recorder.versionsUnsupported)

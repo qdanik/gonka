@@ -303,7 +303,7 @@ func (p *stubPerf) Degraded(participant, _ string) bool {
 	return p.degraded[participant]
 }
 
-func (p *stubPerf) RecordContextLimit(participant string, maxTokens uint64) {
+func (p *stubPerf) RecordContextLimit(participant, model string, maxTokens uint64) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.limits = append(p.limits, contextLimitCall{participant: participant, maxTokens: maxTokens})
@@ -315,7 +315,7 @@ func (p *stubPerf) RecordVersionUnsupported(participant string) {
 	p.versionCalls = append(p.versionCalls, participant)
 }
 
-func (p *stubPerf) RecordToolUnsupported(participant string) {
+func (p *stubPerf) RecordToolUnsupported(participant, model string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.toolCalls = append(p.toolCalls, participant)

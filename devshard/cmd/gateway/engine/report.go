@@ -91,7 +91,7 @@ func (c *raceCoordinator) complete(attempt *liveAttempt, event AttemptEvent) {
 	}
 	logging.Info("attempt finished", fields...)
 	if signal := CapabilityOf(*attempt.outcome); signal.Retriable() {
-		RecordCapability(c.deps.Perf, attempt.participant, signal)
+		RecordCapability(c.deps.Perf, attempt.participant, c.request.Model, signal)
 		c.contextHint = GrowContextHint(c.contextHint, signal)
 		c.exclude(attempt.participant)
 	}
