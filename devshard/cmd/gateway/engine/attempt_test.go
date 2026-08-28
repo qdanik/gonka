@@ -369,6 +369,18 @@ func TestRunAttempt_TerminalClassification(t *testing.T) {
 			want:       TerminalStreamTruncated,
 		},
 		{
+			name:       "an sse event past the cap",
+			dispatch:   &fakeDispatcher{err: fmt.Errorf("read: %w", transport.ErrSSELineTooLarge)},
+			classifier: &fakeClassifier{},
+			want:       TerminalResponseTooLarge,
+		},
+		{
+			name:       "a non-stream body past the cap",
+			dispatch:   &fakeDispatcher{err: fmt.Errorf("read: %w", transport.ErrResponseBodyTooLarge)},
+			classifier: &fakeClassifier{},
+			want:       TerminalResponseTooLarge,
+		},
+		{
 			name:       "unexpected eof",
 			dispatch:   &fakeDispatcher{err: fmt.Errorf("read: %w", io.ErrUnexpectedEOF)},
 			classifier: &fakeClassifier{},

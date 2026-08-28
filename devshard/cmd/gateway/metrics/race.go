@@ -226,7 +226,7 @@ func transportStatus(terminal engine.Terminal) (string, bool) {
 	}
 	switch terminal {
 	case engine.TerminalRejected, engine.TerminalDialFailure, engine.TerminalStreamTruncated,
-		engine.TerminalUnexpectedEOF, engine.TerminalStalled:
+		engine.TerminalUnexpectedEOF, engine.TerminalStalled, engine.TerminalResponseTooLarge:
 		return statusNoCode, true
 	}
 	return "", false

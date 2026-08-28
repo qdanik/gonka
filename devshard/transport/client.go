@@ -68,6 +68,7 @@ type ClientConfig struct {
 	VerifyTimeout    time.Duration                   // verify-timeout, default 3m
 	QueryTimeout     time.Duration                   // diffs, mempool GETs, default 30s
 	MaxSSELineBytes  int                             // cap on one SSE line, default 16MB
+	MaxBodyBytes     int                             // cap on a non-stream response body, default 16MB
 	StreamCallback   func(nonce uint64, line string) // if set, receives raw SSE data lines during inference
 	RoutePrefix      string                          // path prefix for all session routes; default /devshard/<version>
 	// ParticipantKey is the canonical participant identifier passed to
@@ -111,6 +112,10 @@ type requestAdmissionBodyObserver interface {
 var ErrSSEStreamTruncated = errors.New("sse stream ended without [DONE] or devshard_receipt")
 
 var ErrSSELineTooLarge = errors.New("sse line exceeds the maximum size")
+
+// ErrResponseBodyTooLarge names a host answering the inference route with a non-stream content type
+// and never stopping, which is how an unbounded read slips past the SSE cap.
+var ErrResponseBodyTooLarge = errors.New("response body exceeds the maximum size")
 
 // maxErrorBodyBytes bounds the body kept from a failed response. It reaches an error string, a
 // metric label and a log line, none of which a host's error page should be free to size.
@@ -183,11 +188,15 @@ func DefaultClientConfig() ClientConfig {
 		VerifyTimeout:    3 * time.Minute,
 		QueryTimeout:     30 * time.Second,
 		MaxSSELineBytes:  DefaultMaxSSELineBytes,
+		MaxBodyBytes:     DefaultMaxBodyBytes,
 		RoutePrefix:      DefaultRoutePrefix(),
 	}
 }
 
-const DefaultMaxSSELineBytes = 16 << 20
+const (
+	DefaultMaxSSELineBytes = 16 << 20
+	DefaultMaxBodyBytes    = 16 << 20
+)
 
 // HTTPClient implements user.HostClient over HTTP.
 type HTTPClient struct {
@@ -313,7 +322,7 @@ func (c *HTTPClient) Send(ctx context.Context, req host.HostRequest, stream io.W
 	}
 
 	// Backward compat: JSON response.
-	respBody, err := io.ReadAll(resp.Body)
+	respBody, err := readBoundedBody(resp.Body, c.config.MaxBodyBytes)
 	if err != nil {
 		return nil, err
 	}
@@ -373,6 +382,20 @@ func (c *HTTPClient) parseSSEResponse(ctx context.Context, r io.Reader, stream i
 			return &result, fmt.Errorf("read SSE stream: %w", readErr)
 		}
 	}
+}
+
+func readBoundedBody(body io.Reader, limit int) ([]byte, error) {
+	if limit <= 0 {
+		limit = DefaultMaxBodyBytes
+	}
+	read, err := io.ReadAll(io.LimitReader(body, int64(limit)+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(read) > limit {
+		return nil, ErrResponseBodyTooLarge
+	}
+	return read, nil
 }
 
 func readLimitedLine(br *bufio.Reader, limit int) ([]byte, error) {

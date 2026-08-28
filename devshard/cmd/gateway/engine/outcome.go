@@ -53,6 +53,7 @@ const (
 	TerminalDialFailure
 	TerminalStreamTruncated
 	TerminalUnexpectedEOF
+	TerminalResponseTooLarge
 	TerminalClientCancelled
 	TerminalNoReceipt
 	TerminalEmptyStream
@@ -214,7 +215,8 @@ func (t Terminal) verdict() (limits.Verdict, bool) {
 	case TerminalThrottled, TerminalUnavailable, TerminalHardTimeout:
 		return limits.Overload, true
 	case TerminalForbidden, TerminalNotFound, TerminalTimestampDrift,
-		TerminalDialFailure, TerminalStreamTruncated, TerminalUnexpectedEOF, TerminalStalled:
+		TerminalDialFailure, TerminalStreamTruncated, TerminalUnexpectedEOF, TerminalStalled,
+		TerminalResponseTooLarge:
 		return limits.TransportFault, true
 	case TerminalEmptyStream, TerminalBurnEmpty, TerminalErrorStream, TerminalCapabilityRefused:
 		return limits.ModelOutcome, true
@@ -264,6 +266,8 @@ func (t Terminal) reason() string {
 		return "sse_truncated"
 	case TerminalUnexpectedEOF:
 		return "eof_transport"
+	case TerminalResponseTooLarge:
+		return "response_too_large"
 	case TerminalClientCancelled:
 		return "client_cancelled"
 	case TerminalNoReceipt:
