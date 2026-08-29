@@ -31,6 +31,7 @@ func Build(values env.Values, overrides Overrides) (*Config, error) {
 
 	overrideIfSet(&configuration.Limits.DefaultMaxTokens, values.DefaultMaxTokens)
 	overrideIfSet(&configuration.Limits.MaxTokensCap, values.MaxTokensCap)
+	overrideIfSet(&configuration.Limits.ForceUpstreamStreaming, values.ForceUpstreamStreaming)
 	overrideIfSet(&configuration.Limits.Concurrency.MaxRequests, values.MaxConcurrentRequests)
 	overrideIfSet(&configuration.Limits.AdmissionQueueWaitMS, values.AdmissionQueueWaitMS)
 	overrideIfSet(&configuration.Limits.AdmissionQueuePerSlot, values.AdmissionQueuePerSlot)
@@ -75,6 +76,7 @@ func Build(values env.Values, overrides Overrides) (*Config, error) {
 	overrideIfSet(&configuration.Limits.AdmissionQueueWaitMS, overrides.AdmissionQueueWaitMS)
 	overrideIfSet(&configuration.Limits.AdmissionQueuePerSlot, overrides.AdmissionQueuePerSlot)
 	overrideIfSet(&configuration.Scheduler.MatchWaitMS, overrides.MatchWaitMS)
+	overrideIfSet(&configuration.Limits.ForceUpstreamStreaming, overrides.ForceUpstreamStreaming)
 	overrideIfSet(&configuration.Scheduler.WarmNewEscrows, overrides.WarmNewEscrows)
 	overrideIfSet(&configuration.Scheduler.ChargeRefusedNonces, overrides.ChargeRefusedNonces)
 	if overrides.ParticipantAllowlist != nil {

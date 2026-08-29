@@ -6,6 +6,7 @@ import (
 
 	"devshard/cmd/gateway/chain"
 	"devshard/cmd/gateway/config"
+	"devshard/cmd/gateway/filters"
 	"devshard/cmd/gateway/scheduler"
 	"devshard/cmd/gateway/store"
 	"devshard/types"
@@ -47,6 +48,19 @@ type modelTopProvider struct {
 	ContextLength       uint64 `json:"context_length,omitempty"`
 	MaxCompletionTokens uint64 `json:"max_completion_tokens,omitempty"`
 	IsModerated         bool   `json:"is_moderated"`
+}
+
+// filterOptions is where the operator's configuration becomes the request-shaping rules. Forcing is
+// expressed as its opposite here so that an Options built without it keeps forcing, which is what
+// every caller that predates the switch expects.
+func filterOptions(limits config.Limits, admin bool) filters.Options {
+	return filters.Options{
+		Admin:            admin,
+		KeepClientStream: !limits.ForceUpstreamStreaming,
+		DefaultMaxTokens: uint64(limits.DefaultMaxTokens),
+		MaxTokensCap:     uint64(limits.MaxTokensCap),
+		ModelTokenLimits: modelTokenLimits(limits.ModelLimits),
+	}
 }
 
 // modelTokenLimits closes over the per-model override map only when an operator configured one, so

@@ -188,12 +188,7 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request, escrowPin string) 
 		writeErrorFor(w, err)
 		return
 	}
-	normalized, err := filters.NormalizeRequest(body, filters.Options{
-		Admin:            identity.admin,
-		DefaultMaxTokens: uint64(configuration.Limits.DefaultMaxTokens),
-		MaxTokensCap:     uint64(configuration.Limits.MaxTokensCap),
-		ModelTokenLimits: modelTokenLimits(configuration.Limits.ModelLimits),
-	})
+	normalized, err := filters.NormalizeRequest(body, filterOptions(configuration.Limits, identity.admin))
 	if err != nil {
 		s.capture.filterRejected(r, requestID, body, err)
 		writeErrorFor(w, err)

@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"devshard/cmd/gateway/config"
 	"devshard/cmd/gateway/store"
 )
 
@@ -32,5 +33,27 @@ func TestAdminStateSpellsStorageRowsInSnakeCase(t *testing.T) {
 		if strings.Contains(body, goFieldName) {
 			t.Fatalf("state body %s still carries the Go field name %s", body, goFieldName)
 		}
+	}
+}
+
+// The switch is one negation wide, and a flipped sign here would leave the operator's rollback lever
+// doing the opposite of what it says.
+func TestTheForcedStreamingSwitchReachesTheFilters(t *testing.T) {
+	tests := []struct {
+		name                 string
+		forceUpstream        bool
+		wantKeepClientStream bool
+	}{
+		{name: "forcing on, as it ships", forceUpstream: true, wantKeepClientStream: false},
+		{name: "forcing rolled back", forceUpstream: false, wantKeepClientStream: true},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			options := filterOptions(config.Limits{ForceUpstreamStreaming: testCase.forceUpstream}, false)
+
+			if options.KeepClientStream != testCase.wantKeepClientStream {
+				t.Errorf("KeepClientStream = %v, want %v", options.KeepClientStream, testCase.wantKeepClientStream)
+			}
+		})
 	}
 }

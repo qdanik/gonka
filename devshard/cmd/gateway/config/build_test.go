@@ -145,3 +145,35 @@ func TestTheChainRPCFallbackIsConfigurable(t *testing.T) {
 		t.Fatalf("Chain.RPCEndpoint = %q, want the configured endpoint", configuration.Chain.RPCEndpoint)
 	}
 }
+
+// A rollback lever is worth nothing if it cannot be pulled without a redeploy, and a default-true flag
+// is the kind that regresses to false unnoticed.
+func TestForcedStreamingIsOnByDefaultAndTurnedOffWithoutARedeploy(t *testing.T) {
+	tests := []struct {
+		name      string
+		values    env.Values
+		overrides Overrides
+		want      bool
+	}{
+		{name: "nothing configured", want: true},
+		{name: "turned off by env", values: env.Values{ForceUpstreamStreaming: boolPointer(false)}, want: false},
+		{name: "turned off at runtime", overrides: Overrides{ForceUpstreamStreaming: boolPointer(false)}, want: false},
+		{
+			name:      "turned back on at runtime over an env that turned it off",
+			values:    env.Values{ForceUpstreamStreaming: boolPointer(false)},
+			overrides: Overrides{ForceUpstreamStreaming: boolPointer(true)},
+			want:      true,
+		},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			configuration, err := Build(testCase.values, testCase.overrides)
+			if err != nil {
+				t.Fatalf("Build(): %v", err)
+			}
+			if got := configuration.Limits.ForceUpstreamStreaming; got != testCase.want {
+				t.Errorf("force_upstream_streaming = %v, want %v", got, testCase.want)
+			}
+		})
+	}
+}

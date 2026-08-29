@@ -93,6 +93,7 @@ A name the gateway does not read is ignored in silence, so a typo costs a debugg
 | `GATEWAY_TX_GAS_LIMIT` | gas limit for a chain transaction |
 | `GATEWAY_DEFAULT_MAX_TOKENS` | output budget given to a request that names none |
 | `GATEWAY_MAX_TOKENS_CAP` | ceiling a client's own budget is clamped to |
+| `GATEWAY_FORCE_UPSTREAM_STREAMING` | whether the gateway asks the host to stream whatever the client asked for. On by default: streaming is what lets it time the first token, spot a stall mid-answer and receipt the nonce early. Off sends the client's own request, which is the rollback lever if forcing turns out to break a host |
 | `GATEWAY_MAX_CONCURRENT_REQUESTS` | gateway-wide concurrency cap before capacity scaling |
 | `GATEWAY_ADMISSION_QUEUE_WAIT_MS` | how long a request may wait for capacity before it is refused |
 | `GATEWAY_MATCH_WAIT_MS` | how long a bound nonce waits for a request that has not excluded its participant, before it is burned |
@@ -176,7 +177,7 @@ See gateway-capacity-and-health.md, "Nonce dispositions", for which gateway deci
 
 ### Admin overrides (24)
 
-Run-time tuning, changeable without a redeploy: `default_max_tokens`, `max_tokens_cap`, `max_concurrent_requests`, `max_concurrent_requests_per_10000_weight`, `poc_max_concurrent_requests_per_10000_weight`, `max_input_tokens_in_flight`, `admission_queue_wait_ms`, `admission_queue_per_slot`, `match_wait_ms`, `warm_new_escrows`, `participant_allowlist`, `host_initial_inflight`, `host_max_inflight`, `host_cutoff_after_failures`, `host_cutoff_ms`, `host_cutoff_max_ms`, `model_limits`, `model_access`, `disabled`, `disabled_message`, `disabled_redirect_url`, `rotation_enabled`, `rotation_settlement_enabled`, `rotation_pre_poc_blocks`, `rotation_models_json`.
+Run-time tuning, changeable without a redeploy: `default_max_tokens`, `max_tokens_cap`, `force_upstream_streaming`, `max_concurrent_requests`, `max_concurrent_requests_per_10000_weight`, `poc_max_concurrent_requests_per_10000_weight`, `max_input_tokens_in_flight`, `admission_queue_wait_ms`, `admission_queue_per_slot`, `match_wait_ms`, `warm_new_escrows`, `participant_allowlist`, `host_initial_inflight`, `host_max_inflight`, `host_cutoff_after_failures`, `host_cutoff_ms`, `host_cutoff_max_ms`, `model_limits`, `model_access`, `disabled`, `disabled_message`, `disabled_redirect_url`, `rotation_enabled`, `rotation_settlement_enabled`, `rotation_pre_poc_blocks`, `rotation_models_json`.
 
 An unknown field in an override document is an **error**, not a silently ignored key: a typo in an admin PUT must be reported.
 

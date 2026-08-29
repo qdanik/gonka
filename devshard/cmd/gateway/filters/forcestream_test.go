@@ -184,3 +184,66 @@ func TestStreamRewriterCloseSeparatesADropFromATruncation(t *testing.T) {
 		t.Errorf("Close() = %q, want nothing emitted", tail)
 	}
 }
+
+// The switch exists to roll the forcing back without a redeploy, so what it produces must be the
+// client's own request rather than a third shape of its own.
+func TestKeepingTheClientStreamSendsWhatTheClientAsked(t *testing.T) {
+	t.Parallel()
+	testCases := []struct {
+		name       string
+		body       string
+		wantStream string
+	}{
+		{
+			name:       "a client that asked for a buffered reply",
+			body:       `{"model":"model-a","messages":[{"role":"user","content":"hi"}],"stream":false}`,
+			wantStream: `"stream":false`,
+		},
+		{
+			name:       "a streaming client",
+			body:       `{"model":"model-a","messages":[{"role":"user","content":"hi"}],"stream":true}`,
+			wantStream: `"stream":true`,
+		},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			result, err := NormalizeRequest([]byte(testCase.body), Options{
+				KeepClientStream: true,
+				DefaultMaxTokens: 3072,
+				MaxTokensCap:     4096,
+				RoutedModel:      "model-a",
+			})
+
+			if err != nil {
+				t.Fatalf("NormalizeRequest(%s) = %v, want acceptance", testCase.body, err)
+			}
+			if !strings.Contains(string(result.Body), testCase.wantStream) {
+				t.Errorf("body = %s, want %s", result.Body, testCase.wantStream)
+			}
+			if strings.Contains(string(result.Body), `"stream_options"`) {
+				t.Errorf("body = %s, want no forced stream_options", result.Body)
+			}
+		})
+	}
+}
+
+// A client that never said "stream" must not have the field invented for it.
+func TestKeepingTheClientStreamLeavesAnUnaskedRequestAlone(t *testing.T) {
+	t.Parallel()
+
+	result, err := NormalizeRequest([]byte(`{"model":"model-a","messages":[{"role":"user","content":"hi"}]}`), Options{
+		KeepClientStream: true,
+		DefaultMaxTokens: 3072,
+		MaxTokensCap:     4096,
+		RoutedModel:      "model-a",
+	})
+
+	if err != nil {
+		t.Fatalf("NormalizeRequest() = %v, want acceptance", err)
+	}
+	if strings.Contains(string(result.Body), `"stream"`) {
+		t.Errorf("body = %s, want the absent field left absent", result.Body)
+	}
+}

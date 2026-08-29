@@ -361,7 +361,18 @@ func (c *HTTPClient) Send(ctx context.Context, req host.HostRequest, stream io.W
 	if err := json.Unmarshal(respBody, &respJSON); err != nil {
 		return nil, fmt.Errorf("unmarshal response: %w", err)
 	}
-	return HostResponseFromJSON(respJSON)
+	response, err := HostResponseFromJSON(respJSON)
+	if err != nil {
+		return nil, err
+	}
+	// An unacknowledged attempt is a refused one to everything downstream, so a host that answers JSON
+	// is read as never having started: its timeout is voted as a refusal against a record the chain
+	// already advanced, and every verifier rejects that. The SSE path fires on devshard_receipt; here
+	// the whole response is the acknowledgement.
+	if receiptHandler != nil {
+		receiptHandler(response)
+	}
+	return response, nil
 }
 
 // parseSSEResponse reads an SSE stream and extracts protocol receipt/meta events.

@@ -69,6 +69,7 @@ type ModelLimits struct {
 // model to one of the tiers below.
 type Limits struct {
 	DefaultMaxTokens       int64
+	ForceUpstreamStreaming bool
 	MaxTokensCap           int64
 	Concurrency            Concurrency
 	MaxInputTokensInFlight int64

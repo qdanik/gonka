@@ -34,7 +34,9 @@ func runPipeline(document *Document, options Options) (Result, error) {
 		return Result{}, err
 	}
 	usage := decodeUsageIntent(document)
-	forceUpstreamStreaming(document)
+	if !options.KeepClientStream {
+		forceUpstreamStreaming(document)
+	}
 	body, err := document.Marshal()
 	if err != nil {
 		return Result{}, err

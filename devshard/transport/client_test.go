@@ -2,6 +2,7 @@ package transport
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -532,4 +533,28 @@ func TestReadBoundedResponseBody_RejectsOversizeInsteadOfTruncating(t *testing.T
 // newInfiniteDataLineReader opens an SSE data line that never terminates.
 func newInfiniteDataLineReader(filler io.Reader) io.Reader {
 	return io.MultiReader(strings.NewReader("data: "), filler)
+}
+
+// A host may answer application/json despite being asked to stream, and the gateway's force-streaming
+// switch makes that the normal case rather than the legacy one. Without the acknowledgement the
+// attempt looks refused: timeoutKind reads a zero receipt as a refusal, which is the wrong vote
+// against a host that answered.
+func TestHTTPClient_Send_JSONResponseStillDeliversTheReceipt(t *testing.T) {
+	signer := testutil.MustGenerateKey(t)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		body, marshalErr := json.Marshal(InferenceResponse{Nonce: 7, Receipt: []byte("receipt-7")})
+		require.NoError(t, marshalErr)
+		_, _ = w.Write(body)
+	}))
+	t.Cleanup(server.Close)
+	client := NewHTTPClient(server.URL, "escrow-1", signer)
+
+	var acknowledged *host.HostResponse
+	response, err := client.Send(context.Background(), host.HostRequest{Nonce: 7}, nil,
+		func(partial *host.HostResponse) { acknowledged = partial })
+
+	require.NoError(t, err)
+	require.NotNil(t, acknowledged, "the JSON path never acknowledged the nonce")
+	require.Equal(t, response, acknowledged, "the acknowledgement carried something other than the response")
 }
