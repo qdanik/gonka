@@ -25,6 +25,8 @@ func NewHandler(book *Book, currentEpoch CurrentEpochFunc, capability Capability
 	mux.HandleFunc("GET /api/v1/epochs", handler.serveEpochs)
 	mux.HandleFunc("GET /api/v1/epochs/{epoch}/participants", handler.serveParticipants)
 	mux.HandleFunc("GET /api/v1/epochs/{epoch}/participants/{participant}", handler.serveParticipant)
+	mux.HandleFunc("GET /api/v1/epochs/{epoch}/events", handler.serveEvents)
+	mux.HandleFunc("GET /api/v1/epochs/{epoch}/events/{participant}", handler.serveEvents)
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -93,6 +95,27 @@ func (h *Handler) serveParticipant(w http.ResponseWriter, r *http.Request) {
 		Participant   string              `json:"participant"`
 		Records       []ParticipantRecord `json:"records"`
 	}{SchemaVersion: SchemaVersion, EpochIndex: epoch, Participant: participant, Records: records})
+}
+
+// A host with no verdicts against it is answered with an empty feed rather than a 404: nothing to
+// report is the healthy case here, unlike a host absent from the epoch entirely.
+func (h *Handler) serveEvents(w http.ResponseWriter, r *http.Request) {
+	epoch, err := h.epochOf(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	filter := filterOf(r, epoch)
+	filter.Participant = strings.TrimSpace(r.PathValue("participant"))
+	if filter.Participant == "" {
+		filter.Participant = strings.TrimSpace(r.URL.Query().Get("participant"))
+	}
+	writeJSON(w, http.StatusOK, struct {
+		SchemaVersion int                   `json:"schema_version"`
+		EpochIndex    uint64                `json:"epoch_index"`
+		Participant   string                `json:"participant,omitempty"`
+		Events        []ProtocolEventRecord `json:"events"`
+	}{SchemaVersion: SchemaVersion, EpochIndex: epoch, Participant: filter.Participant, Events: h.book.Events(filter)})
 }
 
 // Epoch zero is refused: the filter reads it as "every epoch", so serving it would answer a question

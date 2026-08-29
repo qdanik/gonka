@@ -136,9 +136,13 @@ Two ledgers with similar names answer different questions, and confusing them wa
 | `GET /api/v1/epochs` | every epoch the ledger holds, summed across participants |
 | `GET /api/v1/epochs/{epoch}/participants` | every participant of one epoch |
 | `GET /api/v1/epochs/{epoch}/participants/{address}` | one participant, addressed by its own chain address |
+| `GET /api/v1/epochs/{epoch}/events` | the applied timeouts and invalid verdicts of one epoch, newest first |
+| `GET /api/v1/epochs/{epoch}/events/{address}` | the same feed for one participant |
 | `GET /api/v1/escrows` | the escrow ids the ledger holds |
 
-`current` stands in for an epoch index and resolves against the chain's phase snapshot. Epoch `0` is refused rather than served: a zero epoch means "unconstrained" inside the ledger, so answering it would report every epoch as though it were one. `?model=` and `?escrow_id=` narrow the first three routes, and `escrow_id` accepts both repetition and commas.
+`current` stands in for an epoch index and resolves against the chain's phase snapshot. Epoch `0` is refused rather than served: a zero epoch means "unconstrained" inside the ledger, so answering it would report every epoch as though it were one. `?model=` and `?escrow_id=` narrow every route but `/escrows`, and `escrow_id` accepts both repetition and commas; the event feed also takes `?participant=` where the address is not in the path.
+
+The event routes are the drill-down under the counters: a participant's `timeouts_applied` says how many verdicts it took, and the feed says which nonce and which client request took them. Each escrow keeps its newest 256, which caps a pathological run rather than trimming normal traffic — a verdict is rare and an escrow dies with its epoch. A host with nothing against it is answered with an empty feed rather than a 404: here, unlike the participant route, nothing to report is the healthy case.
 
 `POST /v1/admin/accounting/reset/{epoch}` clears one epoch and answers how many escrows went with it. It lives on the admin surface rather than this one because it erases records, and the epoch is named rather than defaulted to the current one for the same reason. Neighbouring epochs are untouched: a rotation leaves escrows of two epochs live at once.
 

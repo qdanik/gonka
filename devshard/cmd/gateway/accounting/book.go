@@ -31,6 +31,7 @@ type escrowLedger struct {
 	rejected    map[uint32]uint64
 	counters    map[CounterKey]uint64
 	nonces      map[uint64]*nonceRecord
+	events      []protocolEvent
 	retired     bool
 	retiredAt   time.Time
 }
@@ -167,6 +168,7 @@ func (b *Book) RecordValidation(escrowID string, validatorSlot uint32) error {
 func (b *Book) RecordAppliedTimeout(escrowID string, nonce uint64) error {
 	return b.withEscrow(escrowID, func(escrow *escrowLedger) error {
 		escrow.timeouts[escrow.slotOf(nonce)]++
+		escrow.appendEvent(nonce, ProtocolTimeoutApplied, b.now())
 		return nil
 	})
 }
@@ -174,6 +176,7 @@ func (b *Book) RecordAppliedTimeout(escrowID string, nonce uint64) error {
 func (b *Book) RecordInvalidVerdict(escrowID string, nonce uint64) error {
 	return b.withEscrow(escrowID, func(escrow *escrowLedger) error {
 		escrow.rejected[escrow.slotOf(nonce)]++
+		escrow.appendEvent(nonce, ProtocolInvalidated, b.now())
 		return nil
 	})
 }
