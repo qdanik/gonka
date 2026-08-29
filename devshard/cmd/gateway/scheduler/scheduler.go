@@ -123,7 +123,7 @@ func (s *Scheduler) dropAssignment(assignment Assignment, model string) {
 	s.limiter.Release(assignment.Host, model)
 	assignment.ReleaseEscrow()
 	if s.observer != nil {
-		s.observer.GhostBurned(assignment.Escrow, assignment.Nonce.Nonce(), assignment.Host, ghostAbandoned.reason())
+		s.observer.GhostBurned(assignment.Escrow, Burn{Nonce: assignment.Nonce.Nonce(), Participant: assignment.Host, Reason: ghostAbandoned.reason(), Prepared: assignment.Nonce})
 	}
 }
 
@@ -218,12 +218,11 @@ func (s *Scheduler) retire(idle *dispatcher) bool {
 	if s.observer != nil {
 		s.observer.EscrowRetired(idle.escrowID)
 	}
-	// Escrow ids are chain-monotonic and never reused, so a block list kept past retirement is one entry
-	// per escrow that ever saw a divergent host, held for the life of the process.
-	s.blocksMu.Lock()
-	delete(s.blockedHosts, idle.escrowID)
-	s.blocksMu.Unlock()
-	s.replays.forget(idle.escrowID)
+	// The block and the spent replay outlive the actor on purpose. Reaping is idleness, not resolution:
+	// a dispatcher is recreated for the same escrow on the next request, and dropping either here would
+	// hand a host that cannot follow this escrow's chain a fresh replay for having been quiet five
+	// minutes. Escrow ids are chain-monotonic and never reused, so what is kept is one entry per escrow
+	// that ever saw a divergent host, held for the life of the process.
 	return true
 }
 
@@ -304,6 +303,16 @@ type RequestProfile struct {
 	InputTokens int
 	Exclude     []string
 	Params      any
+}
+
+// Burn is a nonce the scheduler spent on nobody. Prepared is nil when the decision was taken before a
+// nonce was committed; otherwise it carries the committed inference, which is what lets a caller spend
+// the burn on a real request rather than on silence.
+type Burn struct {
+	Nonce       uint64
+	Participant string
+	Reason      string
+	Prepared    Prepared
 }
 
 // Assignment is a committed nonce ready to spend. EscrowHold gives back the escrow's in-flight count the

@@ -3,11 +3,13 @@ package main
 import (
 	"sync"
 
+	"devshard/cmd/gateway/burns"
 	"devshard/cmd/gateway/chain"
 	"devshard/cmd/gateway/engine"
 	"devshard/cmd/gateway/internal/logkey"
 	"devshard/cmd/gateway/metrics"
 	"devshard/cmd/gateway/nonces"
+	"devshard/cmd/gateway/scheduler"
 	"devshard/logging"
 )
 
@@ -17,17 +19,17 @@ import (
 type tracedDispatches struct {
 	recorder *metrics.DispatchRecorder
 	ledger   *nonces.Recorder
-	charges  *ghostAccountability
+	charges  *burns.Accountant
 }
 
 // GhostBurned is a nonce that cost money on chain and will serve nobody. The nonce is logged and never
 // labelled: a counter keyed by it would grow without end.
-func (t tracedDispatches) GhostBurned(escrowID string, nonce uint64, participant, reason string) {
-	logging.Warn("nonce burned for nobody",
-		logkey.Escrow, escrowID, logkey.Nonce, nonce, logkey.Host, logkey.ShortHost(participant), logkey.Reason, reason)
-	t.recorder.GhostBurned(escrowID, participant, reason)
-	t.ledger.RecordGhost(escrowID, nonce, reason)
-	t.charges.burned(escrowID, nonce, participant, reason)
+func (t tracedDispatches) GhostBurned(escrowID string, burned scheduler.Burn) {
+	logging.Warn("nonce burned for nobody", logkey.Escrow, escrowID, logkey.Nonce, burned.Nonce,
+		logkey.Host, logkey.ShortHost(burned.Participant), logkey.Reason, burned.Reason)
+	t.recorder.GhostBurned(escrowID, burned.Participant, burned.Reason)
+	t.ledger.RecordGhost(escrowID, burned.Nonce, burned.Reason)
+	t.charges.Burned(escrowID, burned)
 }
 
 // BurnBudgetExhausted means the escrow stopped burning nonces to answer requests it cannot serve, so

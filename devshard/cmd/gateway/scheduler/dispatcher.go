@@ -16,7 +16,7 @@ const defaultSubmitBuffer = 64
 // EscrowRetired lets an observer forget an escrow: ids are monotonic chain identifiers and are never
 // reused, so a per-escrow metric series that outlives its escrow grows with uptime and nothing else.
 type dispatchObserver interface {
-	GhostBurned(escrowID string, nonce uint64, participant, reason string)
+	GhostBurned(escrowID string, burned Burn)
 	NonceHeld(escrowID string)
 	BurnBudgetExhausted(escrowID string)
 	EscrowRetired(escrowID string)
@@ -239,9 +239,9 @@ func (d *dispatcher) dequeue(target *waiter) {
 	}
 }
 
-func (d *dispatcher) recordGhost(nonce uint64, participant, reason string) {
+func (d *dispatcher) recordGhost(burned Burn) {
 	if d.observer != nil {
-		d.observer.GhostBurned(d.escrowID, nonce, participant, reason)
+		d.observer.GhostBurned(d.escrowID, burned)
 	}
 }
 

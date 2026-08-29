@@ -843,9 +843,10 @@ func TestSchedulerReapsAnIdleDispatcherAndRecreatesItOnDemand(t *testing.T) {
 	test.scheduler.Stop()
 }
 
-// blockedHosts is keyed by an escrow id the chain never reuses, so an entry that outlives its escrow is
-// never read again and never freed. One per escrow that saw a divergent host, for the process lifetime.
-func TestRetiringAnEscrowForgetsItsBlockedHosts(t *testing.T) {
+// Reaping a dispatcher is idleness, not resolution: the escrow comes back on the next request, and a
+// host that cannot follow its chain has to still be blocked when it does. The cost is one entry per
+// escrow that ever saw a divergent host, held for the process lifetime -- escrow ids are never reused.
+func TestReapingADispatcherKeepsTheEscrowBlockedForADivergentHost(t *testing.T) {
 	leakcheck.VerifyNone(t)
 	test := newSchedulerHarness(t, schedulerConfig{})
 	escrow := test.escrow(t, escrowA)
@@ -860,9 +861,39 @@ func TestRetiringAnEscrowForgetsItsBlockedHosts(t *testing.T) {
 		t.Fatal("refused to retire an unclaimed idle dispatcher")
 	}
 
-	test.scheduler.blocksMu.RLock()
-	defer test.scheduler.blocksMu.RUnlock()
-	if _, held := test.scheduler.blockedHosts[escrowA]; held {
-		t.Fatal("the retired escrow's block list is still held")
+	if !test.scheduler.stateBlocked(escrowA)("host-a") {
+		t.Error("the host was unblocked by the dispatcher going idle")
+	}
+	revived, err := test.scheduler.dispatcherFor(escrow)
+	if err != nil {
+		t.Fatalf("dispatcherFor after retirement: %v", err)
+	}
+	revived.pendingSubmits.Add(-1)
+	if !test.scheduler.stateBlocked(escrowA)("host-a") {
+		t.Error("the dispatcher recreated for the same escrow serves a host its chain cannot follow")
+	}
+}
+
+// The replay is the one chance a diverged host gets, not one per quiet spell.
+func TestReapingADispatcherDoesNotHandBackTheSpentReplay(t *testing.T) {
+	leakcheck.VerifyNone(t)
+	test := newSchedulerHarness(t, schedulerConfig{})
+	escrow := test.escrow(t, escrowA)
+	claimed, err := test.scheduler.dispatcherFor(escrow)
+	if err != nil {
+		t.Fatalf("dispatcherFor: %v", err)
+	}
+	claimed.pendingSubmits.Add(-1)
+	diverged := time.Unix(1_700_000_000, 0)
+	if !test.scheduler.HostDiverged(escrowA, "host-a", diverged) {
+		t.Fatal("the first divergence did not spend the replay")
+	}
+
+	if !test.scheduler.retire(claimed) {
+		t.Fatal("refused to retire an unclaimed idle dispatcher")
+	}
+
+	if test.scheduler.HostDiverged(escrowA, "host-a", diverged.Add(time.Hour)) {
+		t.Error("the host was given a second replay for having been idle")
 	}
 }

@@ -15,6 +15,7 @@ import (
 	devshardpkg "devshard"
 	"devshard/cmd/gateway/accounting"
 	"devshard/cmd/gateway/api"
+	"devshard/cmd/gateway/burns"
 	"devshard/cmd/gateway/chain"
 	"devshard/cmd/gateway/config"
 	"devshard/cmd/gateway/engine"
@@ -214,7 +215,7 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 	// The warmup and the burn charge both vote through the poster and observer the race already uses.
 	raceObserver := nonceAccountedRaces{recorder: metrics.NewRaceRecorder(telemetry), ledger: recorder}
 	prober.Settle(sessions.Poster, raceObserver)
-	charges.escrows, charges.posters, charges.timeouts = escrows, sessions.Poster, raceObserver
+	charges.Serve(escrows, sessions.Poster, raceObserver)
 	races := engine.NewEngine(engine.Deps{
 		Picker:     router,
 		Targets:    sessions,
@@ -322,7 +323,7 @@ type routingDeps struct {
 
 // newRouting joins the escrow set to the picker through the capacity model: an escrow whose
 // membership never reaches it scores as weightless, is skipped by every pick, and serves nothing.
-func newRouting(deps routingDeps) (*registry.Registry, *scheduler.Scheduler, *warmup.Prober, *ghostAccountability) {
+func newRouting(deps routingDeps) (*registry.Registry, *scheduler.Scheduler, *warmup.Prober, *burns.Accountant) {
 	// The warmup needs the registry it observes, so it is handed the registry once that exists.
 	registryDeps := registry.Deps{
 		ServingSessions:  deps.Sessions,
@@ -336,10 +337,7 @@ func newRouting(deps routingDeps) (*registry.Registry, *scheduler.Scheduler, *wa
 	if prober != nil {
 		registryDeps.Publications = prober
 	}
-	charges := &ghostAccountability{
-		now:     deps.Now,
-		enabled: func() bool { return deps.Config.Load().Scheduler.ChargeRefusedNonces },
-	}
+	charges := burns.New(deps.Now, func() bool { return deps.Config.Load().Scheduler.ChargeRefusedNonces })
 	escrows := registry.New(registryDeps)
 	prober.Serve(escrows)
 	router := scheduler.NewScheduler(scheduler.Deps{
