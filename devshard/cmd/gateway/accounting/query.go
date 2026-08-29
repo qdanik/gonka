@@ -32,7 +32,7 @@ func (b *Book) Query(filter QueryFilter) []ParticipantRecord {
 					EpochIndex:    identity.epoch,
 					Participant:   identity.participant,
 					Model:         identity.model,
-					Dispositions:  make(map[Disposition]uint64),
+					nonceTotals:   nonceTotals{Dispositions: make(map[Disposition]uint64)},
 				}
 				records[identity] = record
 			}
@@ -49,20 +49,6 @@ func (b *Book) Query(filter QueryFilter) []ParticipantRecord {
 			identity := escrow.identityOf(escrow.participantOf(key.SlotID))
 			if record, known := records[identity]; known {
 				record.Counters = append(record.Counters, CounterRecord{EscrowID: escrowID, CounterKey: key, Count: count})
-				if outcome, settled := timeoutOutcomeOf(key.TimeoutAction, key.TimeoutReason); settled {
-					if record.TimeoutOutcomes == nil {
-						record.TimeoutOutcomes = make(map[TimeoutOutcome]uint64)
-					}
-					record.TimeoutOutcomes[outcome] += count
-					if outcome == TimeoutApplied {
-						record.CrossChecks.TimeoutApplied += count
-					}
-				} else if awaitingTimeout(key) {
-					record.TimeoutPending += count
-				}
-				if namesNoReason(key) {
-					record.UnknownReasonTotal += count
-				}
 			}
 		}
 	}
@@ -96,7 +82,7 @@ func (b *Book) Epochs(filter QueryFilter) []EpochSummary {
 				SchemaVersion: SchemaVersion,
 				UpdatedAt:     record.UpdatedAt,
 				EpochIndex:    record.EpochIndex,
-				Dispositions:  make(map[Disposition]uint64),
+				nonceTotals:   nonceTotals{Dispositions: make(map[Disposition]uint64)},
 			}
 			summaries[record.EpochIndex] = summary
 		}
@@ -112,15 +98,7 @@ func (b *Book) Epochs(filter QueryFilter) []EpochSummary {
 
 func (s *EpochSummary) absorb(record ParticipantRecord) {
 	s.Participants++
-	s.Assigned += record.Assigned
-	s.ChainMissed += record.ChainMissed
-	s.ChainInvalid += record.ChainInvalid
-	s.Pending += record.Pending
-	s.Unobserved += record.Unobserved
-	s.Overcounted += record.Overcounted
-	for disposition, count := range record.Dispositions {
-		s.Dispositions[disposition] += count
-	}
+	s.nonceTotals.add(record.nonceTotals)
 }
 
 func (b *Book) EscrowIDs() []string {
@@ -166,34 +144,16 @@ func compareCounterRecord(left, right CounterRecord) int {
 }
 
 func (r *ParticipantRecord) absorb(slot SlotRecord) {
-	r.Assigned += slot.Assigned
-	r.ChainMissed += slot.ChainMissed
-	r.ChainInvalid += slot.ChainInvalid
-	r.RequiredValidations += slot.RequiredValidations
-	r.CompletedValidations += slot.CompletedValidations
-	r.Pending += slot.Pending
-	r.InFlight += slot.InFlight
-	for requestID := range slot.openRequests {
-		if r.openRequests == nil {
-			r.openRequests = make(map[string]struct{})
-		}
-		r.openRequests[requestID] = struct{}{}
-	}
-	r.InFlightRequests = uint64(len(r.openRequests))
-	r.UnresolvedChallenges += slot.UnresolvedChallenges
-	r.ValidationsPerformed += slot.ValidationsPerformed
-	r.TimeoutsApplied += slot.TimeoutsApplied
-	r.Unobserved += slot.Unobserved
-	r.Overcounted += slot.Overcounted
+	r.nonceTotals.add(slot.nonceTotals)
+	r.hostActivity.add(slot.hostActivity)
+	r.timeoutTally.add(slot.timeoutTally)
+	r.CrossChecks.TimeoutApplied += slot.TimeoutOutcomes[TimeoutApplied]
 	r.CrossChecks.HostMissed += uint64(slot.ChainMissed)
 	r.CrossChecks.HostInvalid += uint64(slot.ChainInvalid)
-	// Per slot of one escrow: summing both sides first lets a surplus in one hide a shortfall in
-	// another. The invalid term the old ledger carries is absent until a diff can name the transition,
-	// and comparing against a zero it never measured would report the chain's whole Invalid as drift.
-	r.CrossChecks.ErrorCount += absDiff(slot.TimeoutsApplied, uint64(slot.ChainMissed)) + slot.Overcounted
-	for disposition, count := range slot.Dispositions {
-		r.Dispositions[disposition] += count
-	}
+	r.CrossChecks.RecordedInvalid += slot.rejected
+	// Per slot of one escrow: summing both sides first lets a surplus in one hide a shortfall in another.
+	r.CrossChecks.ErrorCount += absDiff(slot.TimeoutsApplied, uint64(slot.ChainMissed)) +
+		absDiff(slot.rejected, uint64(slot.ChainInvalid)) + slot.Overcounted
 	r.Slots = append(r.Slots, slot)
 }
 
@@ -208,12 +168,16 @@ func (e *escrowLedger) slots(escrowID string) []SlotRecord {
 	groupSize := uint32(len(e.metadata.Slots))
 	counted := make(map[uint32]uint64, groupSize)
 	dispositions := make(map[uint32]map[Disposition]uint64, groupSize)
+	tallies := make(map[uint32]timeoutTally, groupSize)
 	for key, count := range e.counters {
 		counted[key.SlotID] += count
 		if dispositions[key.SlotID] == nil {
 			dispositions[key.SlotID] = make(map[Disposition]uint64)
 		}
 		dispositions[key.SlotID][key.Disposition] += count
+		tally := tallies[key.SlotID]
+		tally.fold(key, count)
+		tallies[key.SlotID] = tally
 	}
 	pending := make(map[uint32]uint64, groupSize)
 	inFlight := make(map[uint32]uint64, groupSize)
@@ -238,18 +202,24 @@ func (e *escrowLedger) slots(escrowID string) []SlotRecord {
 	records := make([]SlotRecord, 0, groupSize)
 	for slotID := range groupSize {
 		slot := SlotRecord{
-			EscrowID:             escrowID,
-			SlotID:               slotID,
-			Participant:          e.metadata.Slots[slotID].ValidatorAddress,
-			Assigned:             assignedForSlot(e.latest, groupSize, slotID),
-			Dispositions:         dispositions[slotID],
-			Pending:              pending[slotID],
-			InFlight:             inFlight[slotID],
-			openRequests:         openRequests[slotID],
-			InFlightRequests:     uint64(len(openRequests[slotID])),
-			UnresolvedChallenges: e.challenged[slotID],
-			ValidationsPerformed: e.validations[slotID],
-			TimeoutsApplied:      e.timeouts[slotID],
+			EscrowID:    escrowID,
+			SlotID:      slotID,
+			Participant: e.metadata.Slots[slotID].ValidatorAddress,
+			rejected:    e.rejected[slotID],
+			nonceTotals: nonceTotals{
+				Assigned:     assignedForSlot(e.latest, groupSize, slotID),
+				Dispositions: dispositions[slotID],
+				Pending:      pending[slotID],
+			},
+			hostActivity: hostActivity{
+				InFlight:             inFlight[slotID],
+				openRequests:         openRequests[slotID],
+				InFlightRequests:     uint64(len(openRequests[slotID])),
+				UnresolvedChallenges: e.challenged[slotID],
+				ValidationsPerformed: e.validations[slotID],
+				TimeoutsApplied:      e.timeouts[slotID],
+			},
+			timeoutTally: tallies[slotID],
 		}
 		if slot.Dispositions == nil {
 			slot.Dispositions = make(map[Disposition]uint64)

@@ -123,3 +123,27 @@ func TestSlotRowsNameTheirEscrow(t *testing.T) {
 		t.Fatalf("slot rows by escrow = %v, want one row from each escrow the participant holds", escrows)
 	}
 }
+
+// The ledger's own honesty check has to be able to fire, or a gap in instrumentation reads as a clean
+// host. These are the fallbacks the engine and the scheduler emit when they cannot name a cause.
+func TestTheUnknownReasonCheckCatchesWhatNothingCouldName(t *testing.T) {
+	tests := []struct {
+		name string
+		key  CounterKey
+		want bool
+	}{
+		{"a terminal the engine has no name for", CounterKey{Terminal: TerminalUnnamed}, true},
+		{"an attempt the race never classified", CounterKey{Terminal: TerminalUnclassified}, true},
+		{"a burn kind with no reason", CounterKey{Disposition: DispositionGhost}, true},
+		{"a race that reported nothing", CounterKey{Terminal: TerminalUnreported}, false},
+		{"a burn that named itself", CounterKey{Disposition: DispositionGhost, GhostReason: "poc_unavailable_host"}, false},
+		{"an ordinary answer", CounterKey{Disposition: DispositionFinishedUsed, Terminal: "won"}, false},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			if got := namesNoReason(testCase.key); got != testCase.want {
+				t.Errorf("namesNoReason() = %v, want %v", got, testCase.want)
+			}
+		})
+	}
+}

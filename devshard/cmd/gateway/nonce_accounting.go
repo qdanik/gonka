@@ -63,6 +63,9 @@ func (n *nonceAccounting) watchDiffs(escrowID string, session registry.EscrowSes
 			switch validation, timeout := tx.GetValidation(), tx.GetTimeoutInference(); {
 			case validation != nil:
 				n.report(n.service.Book.RecordValidation(escrowID, validation.ValidatorSlot))
+				if !validation.Valid {
+					n.report(n.service.Book.RecordInvalidVerdict(escrowID, validation.InferenceId))
+				}
 			case timeout != nil:
 				n.report(n.service.Book.RecordAppliedTimeout(escrowID, timeout.InferenceId))
 			}

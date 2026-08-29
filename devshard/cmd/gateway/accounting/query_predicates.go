@@ -8,11 +8,12 @@ func awaitingTimeout(key CounterKey) bool {
 		key.Disposition == DispositionUnfinishedExecution
 }
 
-// namesNoReason counts a bucket whose producer reached the ledger without naming why. It is the one
-// number that says how much of the breakdown is guesswork rather than measurement.
+// namesNoReason is the ledger's check on itself: a nonce whose cause it could not name. It matches the
+// fallbacks the producers actually emit -- an engine terminal with no string of its own, an attempt the
+// race never classified, and a burn kind with no reason. "unreported" is not one of them: that names a
+// race that reported nothing, which is a fact rather than a gap.
 func namesNoReason(key CounterKey) bool {
-	const unnamed = "unknown"
-	return key.GhostReason == unnamed ||
-		key.TimeoutReason == unnamed ||
-		key.Terminal == unnamed
+	return key.Terminal == TerminalUnnamed ||
+		key.Terminal == TerminalUnclassified ||
+		(key.Disposition == DispositionGhost && key.GhostReason == "")
 }

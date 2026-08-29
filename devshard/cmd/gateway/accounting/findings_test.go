@@ -11,7 +11,7 @@ import (
 // recordWith builds the totals a finding reads, so a test states the shape of a participant's epoch
 // rather than the sequence of facts that would produce it.
 func recordWith(assigned uint64, dispositions map[Disposition]uint64) ParticipantRecord {
-	return ParticipantRecord{Assigned: assigned, Dispositions: dispositions}
+	return ParticipantRecord{nonceTotals: nonceTotals{Assigned: assigned, Dispositions: dispositions}}
 }
 
 // troubledBook drives a book through the facts a struggling host produces, so the tests above the

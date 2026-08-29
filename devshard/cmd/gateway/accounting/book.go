@@ -28,6 +28,7 @@ type escrowLedger struct {
 	challenged  map[uint32]uint64
 	validations map[uint32]uint64
 	timeouts    map[uint32]uint64
+	rejected    map[uint32]uint64
 	counters    map[CounterKey]uint64
 	nonces      map[uint64]*nonceRecord
 	retired     bool
@@ -43,6 +44,7 @@ func newEscrowLedger(metadata EscrowMetadata) *escrowLedger {
 		challenged:  make(map[uint32]uint64),
 		validations: make(map[uint32]uint64),
 		timeouts:    make(map[uint32]uint64),
+		rejected:    make(map[uint32]uint64),
 		counters:    make(map[CounterKey]uint64),
 		nonces:      make(map[uint64]*nonceRecord),
 	}
@@ -165,6 +167,13 @@ func (b *Book) RecordValidation(escrowID string, validatorSlot uint32) error {
 func (b *Book) RecordAppliedTimeout(escrowID string, nonce uint64) error {
 	return b.withEscrow(escrowID, func(escrow *escrowLedger) error {
 		escrow.timeouts[escrow.slotOf(nonce)]++
+		return nil
+	})
+}
+
+func (b *Book) RecordInvalidVerdict(escrowID string, nonce uint64) error {
+	return b.withEscrow(escrowID, func(escrow *escrowLedger) error {
+		escrow.rejected[escrow.slotOf(nonce)]++
 		return nil
 	})
 }
@@ -389,7 +398,11 @@ const TimeoutActionAbandoned = "abandoned_by_restart"
 
 const TimeoutKindRefused = "refused"
 
-const TerminalUnreported = "unreported"
+const (
+	TerminalUnreported   = "unreported"
+	TerminalUnnamed      = "unnamed"
+	TerminalUnclassified = "unclassified"
+)
 
 const (
 	TerminalWarmupProbe     = "warmup_probe"

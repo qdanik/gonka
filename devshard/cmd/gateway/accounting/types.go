@@ -91,31 +91,13 @@ type CounterKey struct {
 // Pending is seen but not yet classifiable, Unobserved is the assigned range this gateway never saw,
 // and Overcounted is the impossible case: more classified than the chain assigned.
 type SlotRecord struct {
-	EscrowID     string                 `json:"escrow_id"`
-	SlotID       uint32                 `json:"slot_id"`
-	Participant  string                 `json:"participant"`
-	Assigned     uint64                 `json:"assigned_nonces"`
-	Dispositions map[Disposition]uint64 `json:"dispositions"`
-	ChainMissed  uint32                 `json:"protocol_misses"`
-	ChainInvalid uint32                 `json:"protocol_invalid"`
-	Pending      uint64                 `json:"pending_classification"`
-	Unobserved   uint64                 `json:"unclassified"`
-	Overcounted  uint64                 `json:"overclassified"`
-
-	RequiredValidations  uint32 `json:"required_validations"`
-	CompletedValidations uint32 `json:"completed_validations"`
-
-	InFlight             uint64 `json:"in_flight"`
-	InFlightRequests     uint64 `json:"in_flight_requests"`
-	openRequests         map[string]struct{}
-	UnresolvedChallenges uint64 `json:"unresolved_challenges"`
-	ValidationsPerformed uint64 `json:"validations_performed"`
-	TimeoutsApplied      uint64 `json:"timeouts_applied"`
-	TimeoutPending       uint64 `json:"timeout_pending"`
-	UnknownReasonTotal   uint64 `json:"unknown_reason_total"`
-	CrossCheckError      uint64 `json:"-"`
-
-	TimeoutOutcomes map[TimeoutOutcome]uint64 `json:"timeout_outcomes"`
+	EscrowID    string `json:"escrow_id"`
+	SlotID      uint32 `json:"slot_id"`
+	Participant string `json:"participant"`
+	nonceTotals
+	rejected uint64
+	hostActivity
+	timeoutTally
 }
 
 // EscrowNonce is the furthest nonce one escrow has reached, so a reader can tell a participant that
@@ -142,29 +124,13 @@ type ParticipantRecord struct {
 	Participant   string    `json:"participant"`
 	Model         string    `json:"model"`
 
-	Assigned     uint64                 `json:"assigned_nonces"`
-	Dispositions map[Disposition]uint64 `json:"dispositions"`
-	ChainMissed  uint32                 `json:"protocol_misses"`
-	ChainInvalid uint32                 `json:"protocol_invalid"`
-	Pending      uint64                 `json:"pending_classification"`
-	Unobserved   uint64                 `json:"unclassified"`
-	Overcounted  uint64                 `json:"overclassified"`
+	nonceTotals
+	hostActivity
+	timeoutTally
 
-	RequiredValidations  uint32                    `json:"required_validations"`
-	CompletedValidations uint32                    `json:"completed_validations"`
-	TimeoutOutcomes      map[TimeoutOutcome]uint64 `json:"timeout_outcomes"`
-
-	LatestNonces         []EscrowNonce `json:"latest_nonces"`
-	InFlight             uint64        `json:"in_flight"`
-	InFlightRequests     uint64        `json:"in_flight_requests"`
-	openRequests         map[string]struct{}
-	UnresolvedChallenges uint64          `json:"unresolved_challenges"`
-	ValidationsPerformed uint64          `json:"validations_performed"`
-	TimeoutsApplied      uint64          `json:"timeouts_applied"`
-	TimeoutPending       uint64          `json:"timeout_pending"`
-	UnknownReasonTotal   uint64          `json:"unknown_reason_total"`
-	CrossChecks          CrossChecks     `json:"cross_checks"`
-	Capability           *HostCapability `json:"capability,omitempty"`
+	LatestNonces []EscrowNonce   `json:"latest_nonces"`
+	CrossChecks  CrossChecks     `json:"cross_checks"`
+	Capability   *HostCapability `json:"capability,omitempty"`
 
 	Counters []CounterRecord `json:"counters"`
 	Slots    []SlotRecord    `json:"slots"`
@@ -176,14 +142,7 @@ type EpochSummary struct {
 	UpdatedAt     time.Time `json:"updated_at"`
 	EpochIndex    uint64    `json:"epoch_index"`
 	Participants  int       `json:"participants"`
-
-	Assigned     uint64                 `json:"assigned_nonces"`
-	Dispositions map[Disposition]uint64 `json:"dispositions"`
-	ChainMissed  uint32                 `json:"protocol_misses"`
-	ChainInvalid uint32                 `json:"protocol_invalid"`
-	Pending      uint64                 `json:"pending_classification"`
-	Unobserved   uint64                 `json:"unclassified"`
-	Overcounted  uint64                 `json:"overclassified"`
+	nonceTotals
 }
 
 // A zero field constrains nothing. Epoch zero is unconstrained rather than selectable, matching the

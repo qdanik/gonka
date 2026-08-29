@@ -220,3 +220,43 @@ func TestCrossCheckErrorDoesNotLetSlotsCancelEachOther(t *testing.T) {
 			record.CrossChecks.ErrorCount)
 	}
 }
+
+// A validator rejects someone else's answer, so the two halves of one message land on two slots.
+func TestARejectedAnswerChargesTheExecutorNotTheValidator(t *testing.T) {
+	book := schemaTestBook(t)
+	const executedBySlotOne = uint64(3)
+
+	if err := book.RecordValidation("e1", 0); err != nil {
+		t.Fatalf("RecordValidation: %v", err)
+	}
+	if err := book.RecordInvalidVerdict("e1", executedBySlotOne); err != nil {
+		t.Fatalf("RecordInvalidVerdict: %v", err)
+	}
+
+	if got := recordFor(t, book, "p1").CrossChecks.RecordedInvalid; got != 1 {
+		t.Errorf("recorded_invalid_transitions = %d for the executor, want 1", got)
+	}
+	if got := recordFor(t, book, "p0").CrossChecks.RecordedInvalid; got != 0 {
+		t.Errorf("the validator that rejected was charged %d, want none", got)
+	}
+}
+
+// The per-escrow rows carried these as null while the host row above them was populated, so an escrow
+// could not be told apart from a quiet one.
+func TestASlotCarriesTheTimeoutsOfItsOwnEscrow(t *testing.T) {
+	book := schemaTestBook(t)
+	if err := book.RecordTimeout("e1", 1, "refused", "started", "none"); err != nil {
+		t.Fatalf("RecordTimeout: %v", err)
+	}
+
+	record := recordFor(t, book, "p1")
+	if len(record.Slots) != 1 {
+		t.Fatalf("the host holds %d escrow rows, want 1", len(record.Slots))
+	}
+	if got := record.Slots[0].TimeoutPending; got != 1 {
+		t.Errorf("the escrow row reports timeout_pending = %d, want 1", got)
+	}
+	if got := record.TimeoutPending; got != 1 {
+		t.Errorf("the host row reports timeout_pending = %d, want the same 1", got)
+	}
+}
