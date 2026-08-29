@@ -1,4 +1,6 @@
-package main
+// Package warmup spends one nonce on a newly published escrow so every host in its group learns the
+// escrow exists, and settles that nonce itself: nothing else ever will.
+package warmup
 
 import (
 	"context"
@@ -18,59 +20,62 @@ import (
 )
 
 const (
-	warmupProbeTimeout   = 2 * time.Minute
-	warmupCatchUpTimeout = 2 * time.Minute
-	warmupBudget         = 20 * time.Minute
-	warmupMaxTokens      = uint64(completionapi.MinTokensFloor)
+	probeTimeout   = 2 * time.Minute
+	catchUpTimeout = 2 * time.Minute
+	budget         = 20 * time.Minute
+	probeMaxTokens = uint64(completionapi.MinTokensFloor)
 )
 
-var warmupPrompt = fmt.Appendf(nil, `{"messages":[{"role":"user","content":"."}],"max_tokens":%d}`, warmupMaxTokens)
+var probePrompt = fmt.Appendf(nil, `{"messages":[{"role":"user","content":"."}],"max_tokens":%d}`, probeMaxTokens)
 
-type warmupEscrows interface {
+// Posters resolves the vote poster for one escrow and the params its nonce committed.
+type Posters func(escrowID string, params any) (engine.TimeoutPoster, bool)
+
+type Escrows interface {
 	Acquire(escrowID string) (registry.EscrowSession, func(), bool)
 }
 
-type warmupLedger interface {
+type ledger interface {
 	RecordRace(escrowID string, attempts []accounting.Attempt) error
 }
 
 // EscrowPublished is announced under the registry's lock, so it must return without doing work.
-type escrowWarmup struct {
-	escrows  warmupEscrows
-	ledger   warmupLedger
-	posters  func(escrowID string, params any) (engine.TimeoutPoster, bool)
-	timeouts warmupTimeouts
+type Prober struct {
+	escrows  Escrows
+	ledger   ledger
+	posters  Posters
+	timeouts Timeouts
 	probe    func(ctx context.Context, session registry.EscrowSession, params user.InferenceParams, nonceCommitted func()) (uint64, bool, error)
 	catchUp  func(ctx context.Context, session registry.EscrowSession) error
 	stop     <-chan struct{}
 	now      func() time.Time
 }
 
-func newEscrowWarmup(configuration *config.Holder, ledger *accounting.Book, now func() time.Time) *escrowWarmup {
+func New(configuration *config.Holder, ledger *accounting.Book, now func() time.Time) *Prober {
 	if configuration == nil || !configuration.Load().Scheduler.WarmNewEscrows {
 		return nil
 	}
-	warmup := &escrowWarmup{probe: dispatchProbe, catchUp: catchUpAllHosts, now: now}
+	warmup := &Prober{probe: dispatchProbe, catchUp: catchUpAllHosts, now: now}
 	if ledger != nil {
 		warmup.ledger = ledger
 	}
 	return warmup
 }
 
-func (w *escrowWarmup) start(ctx context.Context) {
+func (w *Prober) Start(ctx context.Context) {
 	if w != nil {
 		w.stop = ctx.Done()
 	}
 }
 
-func (w *escrowWarmup) EscrowPublished(escrowID, model string) {
+func (w *Prober) EscrowPublished(escrowID, model string) {
 	if w == nil || w.escrows == nil {
 		return
 	}
 	go w.warm(escrowID, model)
 }
 
-func (w *escrowWarmup) warm(escrowID, model string) {
+func (w *Prober) warm(escrowID, model string) {
 	session, release, live := w.escrows.Acquire(escrowID)
 	if !live {
 		return
@@ -80,7 +85,7 @@ func (w *escrowWarmup) warm(escrowID, model string) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), warmupBudget)
+	ctx, cancel := context.WithTimeout(context.Background(), budget)
 	defer cancel()
 	go func() {
 		select {
@@ -95,13 +100,13 @@ func (w *escrowWarmup) warm(escrowID, model string) {
 	onNonceCommitted := func() {
 		catchUp = make(chan error, 1)
 		go func(done chan<- error) {
-			catchUpCtx, cancelCatchUp := context.WithTimeout(ctx, warmupCatchUpTimeout)
+			catchUpCtx, cancelCatchUp := context.WithTimeout(ctx, catchUpTimeout)
 			defer cancelCatchUp()
 			done <- w.catchUp(catchUpCtx, session)
 		}(catchUp)
 	}
 
-	params := warmupParams(model, w.now().Unix())
+	params := probeParams(model, w.now().Unix())
 	nonce, acknowledged, probeErr := w.probe(ctx, session, params, onNonceCommitted)
 
 	var catchUpErr error
@@ -126,18 +131,18 @@ func catchUpAllHosts(ctx context.Context, session registry.EscrowSession) error 
 	return session.UserSession().CatchUpAllHosts(ctx)
 }
 
-func warmupParams(model string, startedAt int64) user.InferenceParams {
+func probeParams(model string, startedAt int64) user.InferenceParams {
 	return user.InferenceParams{
 		Model:       model,
-		Prompt:      warmupPrompt,
-		InputLength: uint64(len(warmupPrompt)),
-		MaxTokens:   warmupMaxTokens,
+		Prompt:      probePrompt,
+		InputLength: uint64(len(probePrompt)),
+		MaxTokens:   probeMaxTokens,
 		StartedAt:   startedAt,
 	}
 }
 
 func dispatchProbe(ctx context.Context, session registry.EscrowSession, params user.InferenceParams, nonceCommitted func()) (uint64, bool, error) {
-	sendCtx, cancelSend := context.WithTimeout(ctx, warmupProbeTimeout)
+	sendCtx, cancelSend := context.WithTimeout(ctx, probeTimeout)
 	defer cancelSend()
 
 	prepared, err := session.PrepareInferenceFn(func(user.HostBinding) (user.InferenceParams, bool, error) {
@@ -160,7 +165,7 @@ func executorAcknowledged(response *host.HostResponse) bool {
 	return response != nil && len(response.Receipt) > 0
 }
 
-func (w *escrowWarmup) record(escrowID string, nonce uint64, acknowledged bool, probeErr error) {
+func (w *Prober) record(escrowID string, nonce uint64, acknowledged bool, probeErr error) {
 	if w.ledger == nil {
 		return
 	}
@@ -175,5 +180,19 @@ func (w *escrowWarmup) record(escrowID string, nonce uint64, acknowledged bool, 
 	}
 	if err := w.ledger.RecordRace(escrowID, []accounting.Attempt{attempt}); err != nil {
 		logging.Warn("escrow warmup could not settle its nonce", logkey.Escrow, escrowID, logkey.Nonce, nonce, logkey.Error, err)
+	}
+}
+
+// Serve and Settle are late bindings: the registry exists only after the warmup it publishes to, and
+// the vote path only after the sessions the race shares with it.
+func (w *Prober) Serve(escrows Escrows) {
+	if w != nil {
+		w.escrows = escrows
+	}
+}
+
+func (w *Prober) Settle(posters Posters, timeouts Timeouts) {
+	if w != nil {
+		w.posters, w.timeouts = posters, timeouts
 	}
 }

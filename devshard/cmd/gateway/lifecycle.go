@@ -17,7 +17,7 @@ func (g *gateway) serve(ctx context.Context) error {
 	defer stopBackground()
 
 	g.observer.Start(backgroundCtx)
-	g.warmup.start(backgroundCtx)
+	g.warmup.Start(backgroundCtx)
 	configuration := g.config.Load()
 	if err := seedDevshards(ctx, g.store, configuration.Server.DevshardsJSON); err != nil {
 		return errors.Join(err, g.shutdown(shutdownGracePeriod))
@@ -28,7 +28,7 @@ func (g *gateway) serve(ctx context.Context) error {
 	g.manager.Start(backgroundCtx)
 	republished := g.republishOnDevshardWrites(backgroundCtx)
 
-	g.nonces.start(backgroundCtx, g.escrows)
+	g.nonces.Start(backgroundCtx, g.escrows)
 
 	serveResult := make(chan error, 1)
 	go func() { serveResult <- g.server.ListenAndServe() }()

@@ -255,7 +255,6 @@ type harnessConfig struct {
 	pocRequired     func(string) bool
 	throttled       func(string) bool
 	ejected         func(string) bool
-	capability      func(string, RequestProfile) (string, bool)
 	stateBlocked    func(string) bool
 	afterDecide     func(HostBinding)
 	failWith        error

@@ -98,7 +98,7 @@ func (b *Book) Epochs(filter QueryFilter) []EpochSummary {
 
 func (s *EpochSummary) absorb(record ParticipantRecord) {
 	s.Participants++
-	s.nonceTotals.add(record.nonceTotals)
+	s.add(record.nonceTotals)
 }
 
 func (b *Book) EscrowIDs() []string {

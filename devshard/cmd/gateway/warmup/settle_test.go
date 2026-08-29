@@ -1,4 +1,4 @@
-package main
+package warmup
 
 import (
 	"context"
@@ -30,8 +30,8 @@ func (s *spyTimeouts) RecordTimeout(event engine.TimeoutEvent) {
 	s.events = append(s.events, event)
 }
 
-func refusedWarmup(poster *stubPoster, timeouts *spyTimeouts, resolved bool) *escrowWarmup {
-	return &escrowWarmup{
+func refusedWarmup(poster *stubPoster, timeouts *spyTimeouts, resolved bool) *Prober {
+	return &Prober{
 		escrows:  &stubEscrows{session: stubSession{}, live: true},
 		ledger:   &spyLedger{},
 		timeouts: timeouts,
@@ -103,7 +103,7 @@ func TestAWarmupProbeWithNoPosterIsRecordedAsSkipped(t *testing.T) {
 	if len(timeouts.events) != 1 || timeouts.events[0].Action != engine.TimeoutActionSkipped {
 		t.Fatalf("recorded %+v, want one skipped event", timeouts.events)
 	}
-	if got := timeouts.events[0].Reason; got != warmupTimeoutNoPoster {
-		t.Errorf("reason = %q, want %q", got, warmupTimeoutNoPoster)
+	if got := timeouts.events[0].Reason; got != timeoutNoPoster {
+		t.Errorf("reason = %q, want %q", got, timeoutNoPoster)
 	}
 }

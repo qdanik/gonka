@@ -251,18 +251,6 @@ func safetyIdentifier() RuleFunc {
 	}
 }
 
-// stripParamUnlessHook passes ctx.Param through when hook(ctx.Profile) is true, strips it
-// otherwise -- the recurring "keep only for profiles carrying this hook" scoping shape.
-func stripParamUnlessHook(hook func(*Profile) bool) RuleFunc {
-	return func(ctx RuleContext) error {
-		if hook(ctx.Profile) {
-			return nil
-		}
-		ctx.Document.Delete(ctx.Param)
-		return nil
-	}
-}
-
 // reasoningSplit strips the field for profiles that cannot serve it, and fills it for the one that can:
 // M2.x thinks unconditionally, so without the split its reasoning arrives inline in content.
 func reasoningSplit() RuleFunc {

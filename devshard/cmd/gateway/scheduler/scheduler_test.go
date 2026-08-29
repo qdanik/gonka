@@ -94,17 +94,9 @@ func (f *fakeLimiter) slots() (held, admitted int) {
 	return held, f.admitted
 }
 
-type capabilityQuery struct {
-	participant   string
-	requiresTools bool
-	contextHint   uint64
-}
-
 type fakePerf struct {
 	mu      sync.Mutex
-	blocked map[string]string
 	ejected map[string]bool
-	queries []capabilityQuery
 }
 
 func (f *fakePerf) Ejected(participant, _ string) bool {
@@ -113,30 +105,10 @@ func (f *fakePerf) Ejected(participant, _ string) bool {
 	return f.ejected[participant]
 }
 
-func (f *fakePerf) CannotServe(participant, model string, requiresTools bool, contextHint uint64) (string, bool) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.queries = append(f.queries, capabilityQuery{participant: participant, requiresTools: requiresTools, contextHint: contextHint})
-	reason, blocked := f.blocked[participant]
-	return reason, blocked
-}
-
 func (f *fakePerf) eject(participant string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.ejected[participant] = true
-}
-
-func (f *fakePerf) block(participant, reason string) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.blocked[participant] = reason
-}
-
-func (f *fakePerf) asked() []capabilityQuery {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return append([]capabilityQuery(nil), f.queries...)
 }
 
 type schedulerConfig struct {
@@ -223,7 +195,7 @@ func newSchedulerHarness(t *testing.T, cfg schedulerConfig) *schedulerHarness {
 		weights:   weights,
 		sessions:  sessions,
 		limiter:   limiter,
-		perf:      &fakePerf{blocked: map[string]string{}, ejected: map[string]bool{}},
+		perf:      &fakePerf{ejected: map[string]bool{}},
 		snapshots: &fakeSnapshots{},
 		observer:  &recordingObserver{},
 		clock:     newTestClock(),

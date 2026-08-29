@@ -352,7 +352,7 @@ func TestThinkingTokenBudgetResolveWithoutHookNeverEatsTheContentHeadroom(t *tes
 	if err := thinkingTokenBudgetResolve()(RuleContext{Document: document, Profile: nil}); err != nil {
 		t.Fatalf("thinkingTokenBudgetResolve() = %v, want nil", err)
 	}
-	if got, _ := document.Get("thinking_token_budget"); got != uint64(300-thinkingBudgetContentHeadroom) {
+	if got, _ := document.Get("thinking_token_budget"); got != 300-thinkingBudgetContentHeadroom {
 		t.Errorf("thinking_token_budget = %v, want the headroom cap %d", got, 300-thinkingBudgetContentHeadroom)
 	}
 }

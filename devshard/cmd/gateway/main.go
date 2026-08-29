@@ -23,10 +23,12 @@ import (
 	"devshard/cmd/gateway/internal/logkey"
 	"devshard/cmd/gateway/limits"
 	"devshard/cmd/gateway/metrics"
+	"devshard/cmd/gateway/nonces"
 	"devshard/cmd/gateway/perf"
 	"devshard/cmd/gateway/registry"
 	"devshard/cmd/gateway/scheduler"
 	"devshard/cmd/gateway/store"
+	"devshard/cmd/gateway/warmup"
 	"devshard/logging"
 	"devshard/signing"
 	"devshard/transport"
@@ -79,21 +81,6 @@ func run(ctx context.Context) error {
 	return gateway.serve(ctx)
 }
 
-// sessionSources opens the two kinds of escrow session, given the chain bridge and host route prefix
-// compose resolves. It is a parameter so the transport an escrow is served over is chosen once, at the
-// composition root. The chain access travels with the sessions because it rides the same connection.
-type sessionSources func(endpoints config.Chain, routePrefix string) (chainSources, error)
-
-// chainSources is what one dial yields: the two kinds of escrow session and the chain access every
-// other consumer needs. Reader and Transport are interfaces so a provider that dials nothing can
-// answer them in process, which is what keeps a test off the network.
-type chainSources struct {
-	Serving   registry.SessionFactory
-	ReadOnly  registry.SessionFactory
-	Reader    chain.Reader
-	Transport chain.Transport
-}
-
 type gateway struct {
 	config       *config.Holder
 	store        *store.Store
@@ -107,8 +94,8 @@ type gateway struct {
 	telemetry    *metrics.Metrics
 	server       *http.Server
 	publicAPI    *http.Client
-	nonces       *nonceAccounting
-	warmup       *escrowWarmup
+	nonces       *nonces.Recorder
+	warmup       *warmup.Prober
 
 	builders     int
 	devshardWork chan struct{}
@@ -158,7 +145,7 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 		return nil, err
 	}
 
-	nonces := openNonceAccounting(configuration.NonceAccounting, storageDir, observer, clock)
+	recorder := nonces.Open(configuration.NonceAccounting, storageDir, observer, clock)
 
 	participants := limits.NewParticipantLimiter(limits.ParticipantConfigFromLimits(configuration.Limits), clock)
 	capacity := limits.NewCapacity(participants.Available)
@@ -170,7 +157,7 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 		participants.Reconfigure(limits.ParticipantConfigFromLimits(next.Limits))
 	})
 	hosts := perf.NewTracker(configHolder, clock)
-	nonces.SetCapability(func(participant, model string) accounting.HostCapability {
+	recorder.SetCapability(func(participant, model string) accounting.HostCapability {
 		contextLimit, versionRefusals, toolRefusals, contextRefusals := hosts.Capability(participant, model)
 		return accounting.HostCapability{
 			ProtocolVersionUnsupported: versionRefusals > 0,
@@ -185,7 +172,7 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 
 	devshardWork := make(chan struct{}, 1)
 	depletion := &depletionNotice{}
-	escrows, router, warmup, charges := newRouting(routingDeps{
+	escrows, router, prober, charges := newRouting(routingDeps{
 		Sessions:     sources.Serving,
 		ReadOnly:     sources.ReadOnly,
 		Capacity:     capacity,
@@ -195,7 +182,7 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 		Config:       configHolder,
 		Depletion:    depletion,
 		Dispatches:   metrics.NewDispatchRecorder(telemetry),
-		Ledger:       nonces,
+		Ledger:       recorder,
 		Now:          clock,
 	})
 	manager := escrow.NewManager(escrow.Deps{
@@ -225,11 +212,8 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 
 	sessions := api.NewSessions(escrows)
 	// The warmup and the burn charge both vote through the poster and observer the race already uses.
-	raceObserver := nonceAccountedRaces{recorder: metrics.NewRaceRecorder(telemetry), ledger: nonces}
-	if warmup != nil {
-		warmup.posters = sessions.Poster
-		warmup.timeouts = raceObserver
-	}
+	raceObserver := nonceAccountedRaces{recorder: metrics.NewRaceRecorder(telemetry), ledger: recorder}
+	prober.Settle(sessions.Poster, raceObserver)
 	charges.escrows, charges.posters, charges.timeouts = escrows, sessions.Poster, raceObserver
 	races := engine.NewEngine(engine.Deps{
 		Picker:     router,
@@ -248,7 +232,7 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 	// One wrapper for both readers: the gauge must report the scale admission actually applies, and
 	// only this type knows the operator's relaxed-mode override of the chain's raw blocking state.
 	modelCapacities := modelCapacity{capacity: capacity, snapshots: observer, config: configHolder}
-	telemetry.Register(nonces.collectors()...)
+	telemetry.Register(recorder.Collectors()...)
 	telemetry.Register(
 		metrics.NewLimitsCollector(metrics.LimitsSources{
 			Limiter:      gatewayLimiter,
@@ -285,7 +269,7 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 			manager:      manager,
 			participants: participants,
 			storageDir:   storageDir,
-			nonces:       nonces,
+			nonces:       recorder,
 		},
 		Suspicious: suspicious,
 		Telemetry:  telemetry,
@@ -315,8 +299,8 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 		telemetry:    telemetry,
 		server:       server.HTTPServer(fmt.Sprintf(":%d", configuration.Server.Port)),
 		publicAPI:    boot.client,
-		nonces:       nonces,
-		warmup:       warmup,
+		nonces:       recorder,
+		warmup:       prober,
 		builders:     boot.builders,
 		devshardWork: devshardWork,
 	}, nil
@@ -332,13 +316,13 @@ type routingDeps struct {
 	Config       *config.Holder
 	Depletion    *depletionNotice
 	Dispatches   *metrics.DispatchRecorder
-	Ledger       *nonceAccounting
+	Ledger       *nonces.Recorder
 	Now          func() time.Time
 }
 
 // newRouting joins the escrow set to the picker through the capacity model: an escrow whose
 // membership never reaches it scores as weightless, is skipped by every pick, and serves nothing.
-func newRouting(deps routingDeps) (*registry.Registry, *scheduler.Scheduler, *escrowWarmup, *ghostAccountability) {
+func newRouting(deps routingDeps) (*registry.Registry, *scheduler.Scheduler, *warmup.Prober, *ghostAccountability) {
 	// The warmup needs the registry it observes, so it is handed the registry once that exists.
 	registryDeps := registry.Deps{
 		ServingSessions:  deps.Sessions,
@@ -348,18 +332,16 @@ func newRouting(deps routingDeps) (*registry.Registry, *scheduler.Scheduler, *es
 		Now:              deps.Now,
 	}
 	// A nil warmup must not reach the interface field: a typed nil there is non-nil to a nil check.
-	warmup := newEscrowWarmup(deps.Config, deps.Ledger.ledger(), deps.Now)
-	if warmup != nil {
-		registryDeps.Publications = warmup
+	prober := warmup.New(deps.Config, deps.Ledger.Book(), deps.Now)
+	if prober != nil {
+		registryDeps.Publications = prober
 	}
 	charges := &ghostAccountability{
 		now:     deps.Now,
 		enabled: func() bool { return deps.Config.Load().Scheduler.ChargeRefusedNonces },
 	}
 	escrows := registry.New(registryDeps)
-	if warmup != nil {
-		warmup.escrows = escrows
-	}
+	prober.Serve(escrows)
 	router := scheduler.NewScheduler(scheduler.Deps{
 		Escrows:           escrows,
 		Capacity:          deps.Capacity,
@@ -371,7 +353,7 @@ func newRouting(deps routingDeps) (*registry.Registry, *scheduler.Scheduler, *es
 		Now:               deps.Now,
 		OnEscrowExhausted: escrows.Exhausted,
 	})
-	return escrows, router, warmup, charges
+	return escrows, router, prober, charges
 }
 
 type environmentSigner struct{}

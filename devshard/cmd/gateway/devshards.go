@@ -181,6 +181,21 @@ func (d *depletionNotice) OnBalanceExhausted(escrowID, reason string) {
 	d.manager.OnBalanceExhausted(escrowID, reason)
 }
 
+// sessionSources opens the two kinds of escrow session, given the chain bridge and host route prefix
+// compose resolves. It is a parameter so the transport an escrow is served over is chosen once, at the
+// composition root. The chain access travels with the sessions because it rides the same connection.
+type sessionSources func(endpoints config.Chain, routePrefix string) (chainSources, error)
+
+// chainSources is what one dial yields: the two kinds of escrow session and the chain access every
+// other consumer needs. Reader and Transport are interfaces so a provider that dials nothing can
+// answer them in process, which is what keeps a test off the network.
+type chainSources struct {
+	Serving   registry.SessionFactory
+	ReadOnly  registry.SessionFactory
+	Reader    chain.Reader
+	Transport chain.Transport
+}
+
 type seedDevshard struct {
 	EscrowID      string `json:"escrow_id"`
 	PrivateKeyEnv string `json:"private_key_env"`

@@ -1,12 +1,55 @@
 package main
 
 import (
+	"context"
 	"testing"
 	"time"
 
 	"devshard/cmd/gateway/engine"
+	"devshard/cmd/gateway/registry"
 	"devshard/cmd/gateway/scheduler"
 )
+
+// The burn charge has its own doubles: it borrowed the warmup's while they shared a package, and a
+// test that reaches into another subsystem's fixtures binds the two together again.
+type stubPoster struct {
+	vote  string
+	err   error
+	calls int
+}
+
+func (p *stubPoster) SettleTimeout(context.Context, uint64, time.Time) (engine.TimeoutVote, error) {
+	p.calls++
+	return engine.TimeoutVote{Kind: p.vote}, p.err
+}
+
+type spyTimeouts struct {
+	events []engine.TimeoutEvent
+}
+
+func (s *spyTimeouts) RecordTimeout(event engine.TimeoutEvent) {
+	s.events = append(s.events, event)
+}
+
+type stubEscrows struct {
+	session  registry.EscrowSession
+	live     bool
+	released int
+}
+
+func (s *stubEscrows) Acquire(string) (registry.EscrowSession, func(), bool) {
+	if !s.live {
+		return nil, nil, false
+	}
+	return s.session, func() { s.released++ }, true
+}
+
+type stubSession struct {
+	registry.EscrowSession
+	nonce uint64
+}
+
+func (s stubSession) Nonce() uint64 { return s.nonce }
 
 func chargingFor(poster *stubPoster, timeouts *spyTimeouts, enabled bool) *ghostAccountability {
 	return &ghostAccountability{

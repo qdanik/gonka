@@ -1,4 +1,4 @@
-package main
+package warmup
 
 import (
 	"context"
@@ -11,17 +11,17 @@ import (
 )
 
 const (
-	warmupTimeoutKind     = "refused"
-	warmupTimeoutNoPoster = "no_poster"
+	timeoutKind     = "refused"
+	timeoutNoPoster = "no_poster"
 )
 
-type warmupTimeouts interface {
+type Timeouts interface {
 	RecordTimeout(event engine.TimeoutEvent)
 }
 
 // settleRefusedProbe resolves the nonce the warmup spent: it is committed outside the scheduler, so
 // nothing else ever will, and the escrow pays its reserve while the host escapes the miss.
-func (w *escrowWarmup) settleRefusedProbe(ctx context.Context, escrowID, model string, params user.InferenceParams, nonce uint64) {
+func (w *Prober) settleRefusedProbe(ctx context.Context, escrowID, model string, params user.InferenceParams, nonce uint64) {
 	if w.posters == nil {
 		return
 	}
@@ -29,15 +29,15 @@ func (w *escrowWarmup) settleRefusedProbe(ctx context.Context, escrowID, model s
 		EscrowID: escrowID,
 		Model:    model,
 		Nonce:    nonce,
-		Kind:     warmupTimeoutKind,
+		Kind:     timeoutKind,
 		Action:   engine.TimeoutActionStarted,
 	}
 
 	poster, resolved := w.posters(escrowID, params)
 	if !resolved {
 		w.recordTimeout(engine.TimeoutEvent{
-			EscrowID: escrowID, Model: model, Nonce: nonce, Kind: warmupTimeoutKind,
-			Action: engine.TimeoutActionSkipped, Reason: warmupTimeoutNoPoster,
+			EscrowID: escrowID, Model: model, Nonce: nonce, Kind: timeoutKind,
+			Action: engine.TimeoutActionSkipped, Reason: timeoutNoPoster,
 		})
 		return
 	}
@@ -52,7 +52,7 @@ func (w *escrowWarmup) settleRefusedProbe(ctx context.Context, escrowID, model s
 		logkey.Nonce, nonce, logkey.Action, posted.Action, logkey.Reason, posted.Reason)
 }
 
-func (w *escrowWarmup) recordTimeout(event engine.TimeoutEvent) {
+func (w *Prober) recordTimeout(event engine.TimeoutEvent) {
 	if w.timeouts != nil {
 		w.timeouts.RecordTimeout(event)
 	}

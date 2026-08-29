@@ -1,4 +1,4 @@
-package main
+package nonces
 
 import (
 	"testing"
@@ -10,7 +10,7 @@ import (
 	"devshard/types"
 )
 
-func newLedgerForTest(t *testing.T) *nonceAccounting {
+func newLedgerForTest(t *testing.T) *Recorder {
 	t.Helper()
 	service, err := accounting.NewService(accounting.Settings{
 		Now: func() time.Time { return time.Unix(0, 0).UTC() },
@@ -18,7 +18,7 @@ func newLedgerForTest(t *testing.T) *nonceAccounting {
 	if err != nil {
 		t.Fatalf("NewService(): %v", err)
 	}
-	ledger := &nonceAccounting{service: service}
+	ledger := &Recorder{service: service}
 	t.Cleanup(func() { _ = ledger.service.Close() })
 	if err := ledger.service.Book.OpenEscrow(accounting.EscrowMetadata{
 		EscrowID: "escrow-1",
@@ -33,7 +33,7 @@ func newLedgerForTest(t *testing.T) *nonceAccounting {
 	return ledger
 }
 
-func dispositionCount(t *testing.T, ledger *nonceAccounting, want accounting.Disposition) uint64 {
+func dispositionCount(t *testing.T, ledger *Recorder, want accounting.Disposition) uint64 {
 	t.Helper()
 	var total uint64
 	for _, record := range ledger.service.Book.Query(accounting.QueryFilter{}) {
@@ -48,7 +48,7 @@ func TestALosingAttemptOfAWonRaceIsCountedAsUnused(t *testing.T) {
 	ledger := newLedgerForTest(t)
 	sent := time.Unix(100, 0)
 
-	ledger.recordRace(engine.RaceOutcome{
+	ledger.RecordRace(engine.RaceOutcome{
 		EscrowID:    "escrow-1",
 		Succeeded:   true,
 		WinnerNonce: 4,
@@ -71,7 +71,7 @@ func TestALosingAttemptOfAWonRaceIsCountedAsUnused(t *testing.T) {
 func TestAFinishedAttemptOfALostRaceIsCountedAsUnknown(t *testing.T) {
 	ledger := newLedgerForTest(t)
 
-	ledger.recordRace(engine.RaceOutcome{
+	ledger.RecordRace(engine.RaceOutcome{
 		EscrowID:  "escrow-1",
 		Succeeded: false,
 		Attempts: []engine.AttemptOutcome{
@@ -88,7 +88,7 @@ func TestAFinishedAttemptOfALostRaceIsCountedAsUnknown(t *testing.T) {
 func TestATimeoutClassifiesTheNonceItsRaceLeftPending(t *testing.T) {
 	ledger := newLedgerForTest(t)
 
-	ledger.recordRace(engine.RaceOutcome{
+	ledger.RecordRace(engine.RaceOutcome{
 		EscrowID:  "escrow-1",
 		Succeeded: false,
 		Attempts:  []engine.AttemptOutcome{{Nonce: 4, SendTime: time.Unix(100, 0)}},
@@ -97,7 +97,7 @@ func TestATimeoutClassifiesTheNonceItsRaceLeftPending(t *testing.T) {
 		t.Fatalf("unfinished_execution = %d, want none before the timeout settles", pending)
 	}
 
-	ledger.recordTimeout(engine.TimeoutEvent{
+	ledger.RecordTimeout(engine.TimeoutEvent{
 		EscrowID: "escrow-1", Nonce: 4, Kind: "execution",
 		Action: engine.TimeoutActionCompleted, Reason: "none",
 	})
@@ -110,7 +110,7 @@ func TestATimeoutClassifiesTheNonceItsRaceLeftPending(t *testing.T) {
 func TestABurnedNonceIsCountedAgainstTheSlotTheChainAssignsIt(t *testing.T) {
 	ledger := newLedgerForTest(t)
 
-	ledger.recordGhost("escrow-1", 5, "participant_throttled_no_send")
+	ledger.RecordGhost("escrow-1", 5, "participant_throttled_no_send")
 
 	// Two slots, so nonce 5 belongs to slot 1 and to nobody else.
 	for _, record := range ledger.service.Book.Query(accounting.QueryFilter{}) {
@@ -126,13 +126,13 @@ func TestABurnedNonceIsCountedAgainstTheSlotTheChainAssignsIt(t *testing.T) {
 
 // Every emitter is called from a path that must not care whether accounting is configured.
 func TestADisabledLedgerAcceptsEveryFactWithoutPanicking(t *testing.T) {
-	var ledger *nonceAccounting
+	var ledger *Recorder
 
-	ledger.recordGhost("escrow-1", 1, "poc_unavailable_host")
-	ledger.recordRace(engine.RaceOutcome{EscrowID: "escrow-1"})
-	ledger.recordTimeout(engine.TimeoutEvent{EscrowID: "escrow-1"})
-	ledger.start(t.Context(), nil)
-	if collectors := ledger.collectors(); collectors != nil {
+	ledger.RecordGhost("escrow-1", 1, "poc_unavailable_host")
+	ledger.RecordRace(engine.RaceOutcome{EscrowID: "escrow-1"})
+	ledger.RecordTimeout(engine.TimeoutEvent{EscrowID: "escrow-1"})
+	ledger.Start(t.Context(), nil)
+	if collectors := ledger.Collectors(); collectors != nil {
 		t.Fatalf("collectors() = %v, want none while disabled", collectors)
 	}
 	if err := ledger.Close(); err != nil {
@@ -142,28 +142,28 @@ func TestADisabledLedgerAcceptsEveryFactWithoutPanicking(t *testing.T) {
 
 // The ledger exports itself through the gateway's own metrics endpoint and serves nothing of its own.
 func TestAnEnabledLedgerExportsItselfAndADisabledOneIsNotBuilt(t *testing.T) {
-	ledger := openNonceAccounting(
+	ledger := Open(
 		config.NonceAccounting{Enabled: true, SnapshotSeconds: 300},
 		t.TempDir(), nil, func() time.Time { return time.Unix(0, 0).UTC() },
 	)
 	if ledger == nil {
-		t.Fatal("openNonceAccounting() returned nothing for an enabled ledger")
+		t.Fatal("Open() returned nothing for an enabled ledger")
 	}
 	t.Cleanup(func() { _ = ledger.Close() })
-	if collectors := ledger.collectors(); len(collectors) != 1 {
+	if collectors := ledger.Collectors(); len(collectors) != 1 {
 		t.Fatalf("collectors() = %d, want the ledger exported", len(collectors))
 	}
 
-	disabled := openNonceAccounting(
+	disabled := Open(
 		config.NonceAccounting{SnapshotSeconds: 300},
 		t.TempDir(), nil, func() time.Time { return time.Unix(0, 0).UTC() },
 	)
 	if disabled != nil {
-		t.Fatal("openNonceAccounting() built a disabled ledger")
+		t.Fatal("Open() built a disabled ledger")
 	}
 }
 
-func counterCount(t *testing.T, ledger *nonceAccounting, match func(accounting.CounterKey) bool) uint64 {
+func counterCount(t *testing.T, ledger *Recorder, match func(accounting.CounterKey) bool) uint64 {
 	t.Helper()
 	var total uint64
 	for _, record := range ledger.service.Book.Query(accounting.QueryFilter{}) {
@@ -203,7 +203,7 @@ func TestASlowDecodeReachesTheLedgerAsAFactAboutTheHost(t *testing.T) {
 		t.Run(testCase.name, func(t *testing.T) {
 			ledger := newLedgerForTest(t)
 
-			ledger.recordRace(engine.RaceOutcome{
+			ledger.RecordRace(engine.RaceOutcome{
 				EscrowID: "escrow-1", Succeeded: true, WinnerNonce: 4,
 				Attempts: []engine.AttemptOutcome{{
 					Nonce: 4, SendTime: sent, NonceFinished: true, Terminal: engine.TerminalWon,
@@ -220,7 +220,7 @@ func TestASlowDecodeReachesTheLedgerAsAFactAboutTheHost(t *testing.T) {
 	}
 }
 
-func terminalsOf(t *testing.T, ledger *nonceAccounting) map[string]uint64 {
+func terminalsOf(t *testing.T, ledger *Recorder) map[string]uint64 {
 	t.Helper()
 	terminals := map[string]uint64{}
 	for _, record := range ledger.service.Book.Query(accounting.QueryFilter{}) {
@@ -245,7 +245,7 @@ func TestAWinnerWhoseClientLeftIsNamedApartFromOneThatWasRead(t *testing.T) {
 		t.Run(testCase.name, func(t *testing.T) {
 			ledger := newLedgerForTest(t)
 
-			ledger.recordRace(engine.RaceOutcome{
+			ledger.RecordRace(engine.RaceOutcome{
 				EscrowID:    "escrow-1",
 				Succeeded:   true,
 				WinnerNonce: 4,

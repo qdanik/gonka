@@ -7,6 +7,7 @@ import (
 	"devshard/cmd/gateway/engine"
 	"devshard/cmd/gateway/internal/logkey"
 	"devshard/cmd/gateway/metrics"
+	"devshard/cmd/gateway/nonces"
 	"devshard/logging"
 )
 
@@ -15,7 +16,7 @@ import (
 // because counting and narrating are different jobs, and the scheduler stays free of a logger.
 type tracedDispatches struct {
 	recorder *metrics.DispatchRecorder
-	ledger   *nonceAccounting
+	ledger   *nonces.Recorder
 	charges  *ghostAccountability
 }
 
@@ -25,7 +26,7 @@ func (t tracedDispatches) GhostBurned(escrowID string, nonce uint64, participant
 	logging.Warn("nonce burned for nobody",
 		logkey.Escrow, escrowID, logkey.Nonce, nonce, logkey.Host, logkey.ShortHost(participant), logkey.Reason, reason)
 	t.recorder.GhostBurned(escrowID, participant, reason)
-	t.ledger.recordGhost(escrowID, nonce, reason)
+	t.ledger.RecordGhost(escrowID, nonce, reason)
 	t.charges.burned(escrowID, nonce, participant, reason)
 }
 
@@ -103,17 +104,17 @@ func (n *phaseNarrator) observe(snapshot chain.PhaseSnapshot) {
 // engine should know about neither.
 type nonceAccountedRaces struct {
 	recorder *metrics.RaceRecorder
-	ledger   *nonceAccounting
+	ledger   *nonces.Recorder
 }
 
 func (r nonceAccountedRaces) RecordRace(outcome engine.RaceOutcome) {
 	r.recorder.RecordRace(outcome)
-	r.ledger.recordRace(outcome)
+	r.ledger.RecordRace(outcome)
 }
 
 func (r nonceAccountedRaces) RecordTimeout(event engine.TimeoutEvent) {
 	r.recorder.RecordTimeout(event)
-	r.ledger.recordTimeout(event)
+	r.ledger.RecordTimeout(event)
 }
 
 // RecordClassifyOverflow passes straight through: an overflowing classifier says nothing about a nonce.

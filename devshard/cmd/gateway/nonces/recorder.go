@@ -1,4 +1,6 @@
-package main
+// Package nonces turns what the gateway did to a nonce -- the race it ran, the burn it took, the
+// timeout it voted -- and what the chain later recorded about it into one ledger, and serves that ledger.
+package nonces
 
 import (
 	"context"
@@ -30,26 +32,26 @@ const (
 	nonceAccountingSweepInterval = 10 * time.Second
 )
 
-type epochSource interface {
+type EpochSource interface {
 	Snapshot() chain.PhaseSnapshot
 }
 
-type escrowSource interface {
+type EscrowSource interface {
 	Snapshot() []registry.EscrowState
 	RoutableSession(escrowID string) (registry.EscrowSession, bool)
 }
 
-type nonceAccounting struct {
+type Recorder struct {
 	service  *accounting.Service
 	listener *http.Server
-	epochs   epochSource
+	epochs   EpochSource
 
 	capability atomic.Pointer[accounting.CapabilityFunc]
 
 	observing sync.Map
 }
 
-func (n *nonceAccounting) watchDiffs(escrowID string, session registry.EscrowSession) {
+func (n *Recorder) watchDiffs(escrowID string, session registry.EscrowSession) {
 	if _, already := n.observing.LoadOrStore(escrowID, struct{}{}); already {
 		return
 	}
@@ -73,13 +75,13 @@ func (n *nonceAccounting) watchDiffs(escrowID string, session registry.EscrowSes
 	})
 }
 
-func (n *nonceAccounting) SetCapability(lookup accounting.CapabilityFunc) {
+func (n *Recorder) SetCapability(lookup accounting.CapabilityFunc) {
 	if n != nil && lookup != nil {
 		n.capability.Store(&lookup)
 	}
 }
 
-func (n *nonceAccounting) hostCapability(participant, model string) accounting.HostCapability {
+func (n *Recorder) hostCapability(participant, model string) accounting.HostCapability {
 	if n == nil {
 		return accounting.HostCapability{}
 	}
@@ -89,11 +91,11 @@ func (n *nonceAccounting) hostCapability(participant, model string) accounting.H
 	return accounting.HostCapability{}
 }
 
-func openNonceAccounting(settings config.NonceAccounting, storageDir string, epochs epochSource, now func() time.Time) *nonceAccounting {
+func Open(settings config.NonceAccounting, storageDir string, epochs EpochSource, now func() time.Time) *Recorder {
 	if !settings.Enabled {
 		return nil
 	}
-	ledger := &nonceAccounting{epochs: epochs}
+	ledger := &Recorder{epochs: epochs}
 	store, openErr := accounting.OpenStore(filepath.Join(storageDir, nonceAccountingDatabase))
 	if openErr != nil {
 		logging.Error("nonce accounting could not open its store", "error", openErr)
@@ -120,7 +122,7 @@ func openNonceAccounting(settings config.NonceAccounting, storageDir string, epo
 	return ledger
 }
 
-func (n *nonceAccounting) currentEpoch(context.Context) (uint64, error) {
+func (n *Recorder) currentEpoch(context.Context) (uint64, error) {
 	if n == nil || n.epochs == nil {
 		return 0, errors.New("chain snapshot is unavailable")
 	}
@@ -131,28 +133,28 @@ func (n *nonceAccounting) currentEpoch(context.Context) (uint64, error) {
 	return snapshot.EpochIndex, nil
 }
 
-func (n *nonceAccounting) ledger() *accounting.Book {
+func (n *Recorder) Book() *accounting.Book {
 	if n == nil || n.service == nil {
 		return nil
 	}
 	return n.service.Book
 }
 
-func (n *nonceAccounting) resetEpoch(epoch uint64) (int, error) {
+func (n *Recorder) ResetEpoch(epoch uint64) (int, error) {
 	if n == nil {
 		return 0, nil
 	}
 	return n.service.ResetEpoch(epoch)
 }
 
-func (n *nonceAccounting) collectors() []prometheus.Collector {
+func (n *Recorder) Collectors() []prometheus.Collector {
 	if n == nil {
 		return nil
 	}
 	return []prometheus.Collector{accounting.NewCollector(n.service.Book)}
 }
 
-func (n *nonceAccounting) start(ctx context.Context, escrows escrowSource) {
+func (n *Recorder) Start(ctx context.Context, escrows EscrowSource) {
 	if n == nil {
 		return
 	}
@@ -167,7 +169,7 @@ func (n *nonceAccounting) start(ctx context.Context, escrows escrowSource) {
 	go n.sweepUntil(ctx, escrows)
 }
 
-func (n *nonceAccounting) sweepUntil(ctx context.Context, escrows escrowSource) {
+func (n *Recorder) sweepUntil(ctx context.Context, escrows EscrowSource) {
 	ticker := time.NewTicker(nonceAccountingSweepInterval)
 	defer ticker.Stop()
 	for {
@@ -180,7 +182,7 @@ func (n *nonceAccounting) sweepUntil(ctx context.Context, escrows escrowSource) 
 	}
 }
 
-func (n *nonceAccounting) sweep(ctx context.Context, escrows escrowSource) {
+func (n *Recorder) sweep(ctx context.Context, escrows EscrowSource) {
 	// The epoch stamped here is the one the escrow was first seen in, not the one it was created in,
 	// which the gateway never reads. With counters that start empty on every boot the two say the same
 	// thing: the epoch this ledger's numbers cover.
@@ -219,7 +221,7 @@ func (n *nonceAccounting) sweep(ctx context.Context, escrows escrowSource) {
 	}
 }
 
-func (n *nonceAccounting) reconcileFinished(escrowID string, session registry.EscrowSession) {
+func (n *Recorder) reconcileFinished(escrowID string, session registry.EscrowSession) {
 	unfinished := n.service.Book.UnfinishedNonces(escrowID)
 	finished := make([]uint64, 0, len(unfinished))
 	for _, nonce := range unfinished {
@@ -230,13 +232,13 @@ func (n *nonceAccounting) reconcileFinished(escrowID string, session registry.Es
 	n.report(n.service.Book.MarkFinished(escrowID, finished))
 }
 
-func (n *nonceAccounting) recordGhost(escrowID string, nonce uint64, reason string) {
+func (n *Recorder) RecordGhost(escrowID string, nonce uint64, reason string) {
 	if n != nil {
 		n.report(n.service.Book.RecordGhost(escrowID, nonce, reason))
 	}
 }
 
-func (n *nonceAccounting) recordRace(outcome engine.RaceOutcome) {
+func (n *Recorder) RecordRace(outcome engine.RaceOutcome) {
 	if n == nil {
 		return
 	}
@@ -282,7 +284,7 @@ func clockDrifted(attempt engine.AttemptOutcome) bool {
 	return measured && (offset > accounting.ClockDrift || offset < -accounting.ClockDrift)
 }
 
-func (n *nonceAccounting) recordTimeout(event engine.TimeoutEvent) {
+func (n *Recorder) RecordTimeout(event engine.TimeoutEvent) {
 	if n != nil {
 		n.report(n.service.Book.RecordTimeout(event.EscrowID, event.Nonce, event.Kind, event.Action, event.Reason))
 	}
@@ -309,13 +311,13 @@ func usageOf(outcome engine.RaceOutcome, attempt engine.AttemptOutcome) accounti
 	}
 }
 
-func (n *nonceAccounting) report(err error) {
+func (n *Recorder) report(err error) {
 	if err != nil && !errors.Is(err, accounting.ErrUnknownEscrow) {
 		logging.Warn("nonce accounting refused a fact", "error", err)
 	}
 }
 
-func (n *nonceAccounting) Close() error {
+func (n *Recorder) Close() error {
 	if n == nil {
 		return nil
 	}

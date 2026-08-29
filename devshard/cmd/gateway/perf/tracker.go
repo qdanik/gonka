@@ -257,10 +257,6 @@ func maxEjectable(perf config.Perf, knownForModel int) int {
 	return allowed
 }
 
-func (t *Tracker) hostStaleness() time.Duration {
-	return time.Duration(t.config.Load().Perf.HostStalenessSeconds) * time.Second
-}
-
 func (t *Tracker) Capability(participant, model string) (contextLimit, versionRefusals, toolRefusals, contextRefusals uint64) {
 	return t.capability.capability(participant, model)
 }

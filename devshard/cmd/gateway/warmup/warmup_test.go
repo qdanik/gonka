@@ -1,4 +1,4 @@
-package main
+package warmup
 
 import (
 	"context"
@@ -51,23 +51,23 @@ func warmupClock() func() time.Time {
 func TestWarmupIsSkippedWhenTheOperatorTurnedItOff(t *testing.T) {
 	holder := config.NewHolder(&config.Config{})
 
-	if warmup := newEscrowWarmup(holder, nil, warmupClock()); warmup != nil {
-		t.Errorf("newEscrowWarmup() = %v with warming off, want nil so nothing observes publications", warmup)
+	if warmup := New(holder, nil, warmupClock()); warmup != nil {
+		t.Errorf("New() = %v with warming off, want nil so nothing observes publications", warmup)
 	}
 }
 
 func TestWarmupIsBuiltWhenWarmingIsOn(t *testing.T) {
 	holder := config.NewHolder(&config.Config{Scheduler: config.Scheduler{WarmNewEscrows: true}})
 
-	if warmup := newEscrowWarmup(holder, nil, warmupClock()); warmup == nil {
-		t.Error("newEscrowWarmup() = nil with warming on, want a warmup")
+	if warmup := New(holder, nil, warmupClock()); warmup == nil {
+		t.Error("New() = nil with warming on, want a warmup")
 	}
 }
 
 func TestWarmupKeepsATypedNilLedgerOutOfItsInterface(t *testing.T) {
 	holder := config.NewHolder(&config.Config{Scheduler: config.Scheduler{WarmNewEscrows: true}})
 
-	warmup := newEscrowWarmup(holder, nil, warmupClock())
+	warmup := New(holder, nil, warmupClock())
 
 	if warmup.ledger != nil {
 		t.Error("ledger is non-nil for a nil *Book: a typed nil there panics on the first record")
@@ -77,7 +77,7 @@ func TestWarmupKeepsATypedNilLedgerOutOfItsInterface(t *testing.T) {
 func TestWarmupSkipsAnEscrowThatIsAlreadyGone(t *testing.T) {
 	escrows := &stubEscrows{live: false}
 	ledger := &spyLedger{}
-	warmup := &escrowWarmup{escrows: escrows, ledger: ledger, now: warmupClock()}
+	warmup := &Prober{escrows: escrows, ledger: ledger, now: warmupClock()}
 
 	warmup.warm("escrow-1", "test-model")
 
@@ -88,7 +88,7 @@ func TestWarmupSkipsAnEscrowThatIsAlreadyGone(t *testing.T) {
 
 func TestWarmupSettlesItsNonceAsWorkNobodyUsed(t *testing.T) {
 	ledger := &spyLedger{}
-	warmup := &escrowWarmup{ledger: ledger, now: warmupClock()}
+	warmup := &Prober{ledger: ledger, now: warmupClock()}
 
 	warmup.record("escrow-1", 7, true, nil)
 
@@ -110,7 +110,7 @@ func TestWarmupSettlesItsNonceAsWorkNobodyUsed(t *testing.T) {
 
 func TestARefusedProbeIsNotSettledAsFinished(t *testing.T) {
 	ledger := &spyLedger{}
-	warmup := &escrowWarmup{ledger: ledger, now: warmupClock()}
+	warmup := &Prober{ledger: ledger, now: warmupClock()}
 
 	warmup.record("escrow-1", 7, false, errors.New("host refused"))
 
@@ -130,7 +130,7 @@ func TestARefusedProbeIsNotSettledAsFinished(t *testing.T) {
 func TestWarmupWithoutALedgerRecordsNothingAndDoesNotPanic(t *testing.T) {
 	holder := config.NewHolder(&config.Config{Scheduler: config.Scheduler{WarmNewEscrows: true}})
 
-	warmup := newEscrowWarmup(holder, nil, warmupClock())
+	warmup := New(holder, nil, warmupClock())
 	warmup.record("escrow-1", 7, true, nil)
 
 	if warmup.ledger != nil {
@@ -142,12 +142,12 @@ func TestABurnedNonceAndAWarmupProbeAgreeOnTheirTokenFloor(t *testing.T) {
 	var body struct {
 		MaxTokens uint64 `json:"max_tokens"`
 	}
-	if err := json.Unmarshal(warmupPrompt, &body); err != nil {
-		t.Fatalf("parsing warmupPrompt: %v", err)
+	if err := json.Unmarshal(probePrompt, &body); err != nil {
+		t.Fatalf("parsing probePrompt: %v", err)
 	}
-	if body.MaxTokens != warmupMaxTokens {
-		t.Errorf("warmupPrompt max_tokens = %d, reservation = %d: a host refuses a probe declaring less than it reserved",
-			body.MaxTokens, warmupMaxTokens)
+	if body.MaxTokens != probeMaxTokens {
+		t.Errorf("probePrompt max_tokens = %d, reservation = %d: a host refuses a probe declaring less than it reserved",
+			body.MaxTokens, probeMaxTokens)
 	}
 }
 
@@ -157,7 +157,7 @@ func TestEscrowPublishedLeavesNoGoroutineBehind(t *testing.T) {
 	defer leakcheck.VerifyNoneStarted(t)()
 
 	caughtUp := make(chan struct{})
-	warmup := &escrowWarmup{
+	warmup := &Prober{
 		escrows: &stubEscrows{session: stubSession{}, live: true},
 		ledger:  &spyLedger{},
 		probe: func(_ context.Context, _ registry.EscrowSession, _ user.InferenceParams, nonceCommitted func()) (uint64, bool, error) {
@@ -183,9 +183,9 @@ func TestEscrowPublishedLeavesNoGoroutineBehind(t *testing.T) {
 
 func TestTheWarmupStopsWithTheGateway(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
-	warmup := &escrowWarmup{now: warmupClock()}
+	warmup := &Prober{now: warmupClock()}
 
-	warmup.start(ctx)
+	warmup.Start(ctx)
 	cancel()
 
 	select {
@@ -204,10 +204,10 @@ type stubSession struct {
 
 func (s stubSession) Nonce() uint64 { return s.nonce }
 
-func newWarmupUnderTest(session registry.EscrowSession, probeErr error) (*escrowWarmup, *spyLedger, *int) {
+func newWarmupUnderTest(session registry.EscrowSession, probeErr error) (*Prober, *spyLedger, *int) {
 	caughtUp := 0
 	ledger := &spyLedger{}
-	warmup := &escrowWarmup{
+	warmup := &Prober{
 		escrows: &stubEscrows{session: session, live: true},
 		ledger:  ledger,
 		probe: func(_ context.Context, _ registry.EscrowSession, _ user.InferenceParams, nonceCommitted func()) (uint64, bool, error) {
@@ -278,7 +278,7 @@ func TestOnlyAnExecutorReceiptCountsAsAnAnsweredProbe(t *testing.T) {
 func TestTheGroupIsTaughtWhileTheProbeIsStillStreaming(t *testing.T) {
 	caughtUp := make(chan struct{})
 	sawCatchUp := make(chan struct{})
-	warmup := &escrowWarmup{
+	warmup := &Prober{
 		escrows: &stubEscrows{session: stubSession{}, live: true},
 		ledger:  &spyLedger{},
 		probe: func(_ context.Context, _ registry.EscrowSession, _ user.InferenceParams, nonceCommitted func()) (uint64, bool, error) {

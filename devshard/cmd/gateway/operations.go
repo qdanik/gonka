@@ -13,6 +13,7 @@ import (
 	"devshard/cmd/gateway/env"
 	"devshard/cmd/gateway/escrow"
 	"devshard/cmd/gateway/limits"
+	"devshard/cmd/gateway/nonces"
 	"devshard/cmd/gateway/registry"
 	"devshard/cmd/gateway/store"
 )
@@ -94,7 +95,7 @@ type operations struct {
 	manager      escrowLifecycle
 	participants *limits.ParticipantLimiter
 	storageDir   string
-	nonces       *nonceAccounting
+	nonces       *nonces.Recorder
 }
 
 // CreateEscrow takes the name of the variable holding the signing key, never the key. See
@@ -192,7 +193,7 @@ func (o *operations) Unquarantine(_ context.Context, participantKey string) erro
 }
 
 func (o *operations) ResetAccountingEpoch(_ context.Context, epoch uint64) (int, error) {
-	return o.nonces.resetEpoch(epoch)
+	return o.nonces.ResetEpoch(epoch)
 }
 
 func (o *operations) Reconfigure(ctx context.Context, overrides config.Overrides) error {

@@ -12,7 +12,20 @@ import (
 	"devshard/user"
 )
 
-const ghostTimeoutKind = "refused"
+const (
+	ghostTimeoutKind = "refused"
+	ghostNoPoster    = "no_poster"
+)
+
+// The collaborators are declared here rather than borrowed: a burn is not a warmup, and each side
+// naming the two methods it calls keeps one from moving the other's.
+type chargeEscrows interface {
+	Acquire(escrowID string) (registry.EscrowSession, func(), bool)
+}
+
+type chargeTimeouts interface {
+	RecordTimeout(event engine.TimeoutEvent)
+}
 
 // accountableBurns are the burns the host earned. A host under PoC is unavailable by the protocol's own
 // grant, and an excluded or abandoned burn is this gateway's own scheduling; neither is a refusal.
@@ -25,9 +38,9 @@ var accountableBurns = map[string]bool{
 // the reserve and the host reaches no miss. The burn already committed a MsgStart, so the protocol has
 // everything the vote needs.
 type ghostAccountability struct {
-	escrows  warmupEscrows
+	escrows  chargeEscrows
 	posters  func(escrowID string, params any) (engine.TimeoutPoster, bool)
-	timeouts warmupTimeouts
+	timeouts chargeTimeouts
 	enabled  func() bool
 	now      func() time.Time
 }
@@ -57,7 +70,7 @@ func (g *ghostAccountability) charge(escrowID string, nonce uint64, participant,
 	poster, resolved := g.posters(escrowID, user.InferenceParams{Prompt: registry.GhostPrompt()})
 	if !resolved {
 		skipped := event
-		skipped.Action, skipped.Reason = engine.TimeoutActionSkipped, warmupTimeoutNoPoster
+		skipped.Action, skipped.Reason = engine.TimeoutActionSkipped, ghostNoPoster
 		g.record(skipped)
 		return
 	}

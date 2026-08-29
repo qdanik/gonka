@@ -38,7 +38,10 @@ Weight is carried by four packages — `filters`, `engine`, `api` and `chain` �
 | `escrow/` | The escrow lifecycle: creation, crash-recovery reconciliation, rotation across the proof-of-compute boundary, depletion, settlement and retirement. |
 | `api/` | The HTTP boundary: routes, authentication, admission, the response cache, request capture, error mapping and the streaming writer. |
 | `metrics/` | The Prometheus registry and every collector; the only package that knows Prometheus exists. |
-| `main.go` | The composition root. No policy, only wiring, boot and shutdown. |
+| `accounting/` | The nonce ledger itself: counters keyed by how a nonce ended, the findings derived from them, and the read API. |
+| `nonces/` | What feeds that ledger: chain diffs watched per escrow, the periodic sweep, and the race, burn and timeout events the gateway records as they happen. |
+| `warmup/` | One nonce spent on a newly published escrow so its whole group learns it exists, and the vote that settles that nonce — nothing else would. |
+| `main.go` and its neighbours | The composition root: wiring, boot, shutdown, the escrow records this process owns, and the admin operations over them. |
 
 ## Dependency rules
 
