@@ -172,14 +172,10 @@ func TestCapabilityTrackerConcurrentAccessIsRaceFree(t *testing.T) {
 	}
 }
 
-func TestAVersionRefusalBlocksEveryRequestShapeWhileItIsFresh(t *testing.T) {
+func TestAVersionRefusalIsCountedButNeverRoutedOn(t *testing.T) {
 	t.Parallel()
 	tracker := newCapabilityTracker()
-
-	if _, blocked := tracker.cannotServe("host-0", capabilityModel, false, 0, capabilityNow, capabilityWindow); blocked {
-		t.Fatal("a host with no recorded refusal was blocked")
-	}
-	tracker.recordVersionUnsupported("host-0", capabilityNow)
+	tracker.recordVersionUnsupported("host-0")
 
 	for _, shape := range []struct {
 		name          string
@@ -191,25 +187,21 @@ func TestAVersionRefusalBlocksEveryRequestShapeWhileItIsFresh(t *testing.T) {
 		{name: "a large request", contextHint: 100_000},
 	} {
 		t.Run(shape.name, func(t *testing.T) {
-			reason, blocked := tracker.cannotServe("host-0", capabilityModel, shape.requiresTools, shape.contextHint, capabilityNow, capabilityWindow)
-			if !blocked {
-				t.Fatal("a host whose build cannot serve the protocol version was admitted")
-			}
-			if reason != CapabilityVersionUnsupported {
-				t.Fatalf("reason = %q, want %q", reason, CapabilityVersionUnsupported)
+			if reason, blocked := tracker.cannotServe("host-0", capabilityModel, shape.requiresTools, shape.contextHint, capabilityNow, capabilityWindow); blocked {
+				t.Fatalf("a version refusal held the host out of the rota with reason %q", reason)
 			}
 		})
 	}
 
-	if _, blocked := tracker.cannotServe("host-1", capabilityModel, false, 0, capabilityNow, capabilityWindow); blocked {
-		t.Error("the refusal of one host blocked another")
+	versionBlocked, _, _, refusals, _, _ := tracker.capability("host-0", capabilityModel, capabilityNow, capabilityWindow)
+	if !versionBlocked || refusals != 1 {
+		t.Errorf("report says refused=%v count=%d, want the refusal visible to a reader", versionBlocked, refusals)
 	}
 }
 
 func TestCapabilityVerdictsStopBlockingOnceStale(t *testing.T) {
 	t.Parallel()
 	tracker := newCapabilityTracker()
-	tracker.recordVersionUnsupported("host-0", capabilityNow)
 	tracker.recordToolUnsupported("host-1", capabilityModel, capabilityNow)
 	tracker.recordContextLimit("host-2", capabilityModel, 1000, capabilityNow)
 
@@ -219,7 +211,6 @@ func TestCapabilityVerdictsStopBlockingOnceStale(t *testing.T) {
 		requiresTools bool
 		contextHint   uint64
 	}{
-		{participant: "host-0"},
 		{participant: "host-1", requiresTools: true},
 		{participant: "host-2", contextHint: 5000},
 	} {
@@ -232,17 +223,17 @@ func TestCapabilityVerdictsStopBlockingOnceStale(t *testing.T) {
 func TestCapabilityEvictStaleDropsForgottenVerdicts(t *testing.T) {
 	t.Parallel()
 	tracker := newCapabilityTracker()
-	tracker.recordVersionUnsupported("gone", capabilityNow)
-	tracker.recordVersionUnsupported("current", capabilityNow.Add(capabilityWindow))
+	tracker.recordToolUnsupported("gone", capabilityModel, capabilityNow)
+	tracker.recordToolUnsupported("current", capabilityModel, capabilityNow.Add(capabilityWindow))
 
 	tracker.evictStale(capabilityNow.Add(capabilityWindow+time.Second), capabilityWindow)
 
 	tracker.mu.RLock()
 	defer tracker.mu.RUnlock()
-	if _, held := tracker.versionUnsupported["gone"]; held {
+	if _, held := tracker.toolUnsupported[hostKey{participant: "gone", model: capabilityModel}]; held {
 		t.Error("a verdict past the window survived the sweep")
 	}
-	if _, held := tracker.versionUnsupported["current"]; !held {
+	if _, held := tracker.toolUnsupported[hostKey{participant: "current", model: capabilityModel}]; !held {
 		t.Error("the sweep dropped a verdict that is still fresh")
 	}
 }
@@ -250,10 +241,9 @@ func TestCapabilityEvictStaleDropsForgottenVerdicts(t *testing.T) {
 func TestACapabilityRefusalIsScopedToTheModelThatEarnedIt(t *testing.T) {
 	const other = "model-b"
 	tests := []struct {
-		name        string
-		record      func(*capabilityTracker)
-		query       func(*capabilityTracker, string) bool
-		blocksOther bool
+		name   string
+		record func(*capabilityTracker)
+		query  func(*capabilityTracker, string) bool
 	}{
 		{
 			name:   "tool refusal",
@@ -273,15 +263,6 @@ func TestACapabilityRefusalIsScopedToTheModelThatEarnedIt(t *testing.T) {
 				return blocked
 			},
 		},
-		{
-			name:   "version refusal",
-			record: func(c *capabilityTracker) { c.recordVersionUnsupported("participant-a", capabilityNow) },
-			query: func(c *capabilityTracker, model string) bool {
-				_, blocked := c.cannotServe("participant-a", model, false, 0, capabilityNow, capabilityWindow)
-				return blocked
-			},
-			blocksOther: true,
-		},
 	}
 	for _, testCase := range tests {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -291,8 +272,8 @@ func TestACapabilityRefusalIsScopedToTheModelThatEarnedIt(t *testing.T) {
 			if !testCase.query(tracker, capabilityModel) {
 				t.Fatal("the model that earned the refusal must be blocked")
 			}
-			if got := testCase.query(tracker, other); got != testCase.blocksOther {
-				t.Errorf("another model blocked = %v, want %v", got, testCase.blocksOther)
+			if testCase.query(tracker, other) {
+				t.Error("a refusal on one model blocked another")
 			}
 		})
 	}

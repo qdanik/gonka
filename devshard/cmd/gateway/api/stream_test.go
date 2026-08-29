@@ -96,3 +96,46 @@ func TestANonStreamingReplyCountsItsBody(t *testing.T) {
 		t.Fatal("a served reply reported nothing delivered")
 	}
 }
+
+// A caller that reads the status must not be told the request succeeded and then handed a body saying
+// it did not. The old gateway chose the status from the assembled body for exactly this reason.
+func TestABodyTheAssemblerCouldNotFoldIsNotServedAsSuccess(t *testing.T) {
+	tests := []struct {
+		name       string
+		events     string
+		wantStatus int
+		wantBody   string
+	}{
+		{
+			name:       "a stream that carried no payload",
+			events:     "\n\n",
+			wantStatus: 502,
+			wantBody:   string(filters.NoResponseDataBody),
+		},
+		{
+			name:       "an answer the host actually produced",
+			events:     "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\ndata: [DONE]\n\n",
+			wantStatus: 200,
+		},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			stream := newClientStream(recorder, "req-1", false, true, filters.LogprobIntent{})
+			if _, err := stream.Write([]byte(testCase.events)); err != nil {
+				t.Fatalf("Write(): %v", err)
+			}
+
+			if err := stream.Close(); err != nil {
+				t.Fatalf("Close(): %v", err)
+			}
+
+			if recorder.Code != testCase.wantStatus {
+				t.Errorf("status = %d, want %d for body %s", recorder.Code, testCase.wantStatus, recorder.Body)
+			}
+			if testCase.wantBody != "" && strings.TrimSpace(recorder.Body.String()) != testCase.wantBody {
+				t.Errorf("body = %s, want %s", recorder.Body, testCase.wantBody)
+			}
+		})
+	}
+}

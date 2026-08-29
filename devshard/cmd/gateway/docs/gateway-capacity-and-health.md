@@ -146,7 +146,7 @@ A retired escrow stays in `Snapshot` until that count reaches zero, reporting `d
 
 Stale host state is swept at most once per tenth of the staleness window, because entries age out over minutes and scanning every host on every sample costs O(hosts) under the global lock for nothing.
 
-**Capability flags** — a host's known context limit and whether it rejects tool use — are per participant, sticky, and cleared only by process restart. They feed the scheduler's capability filter, which is how a retry skips every host already known to be too small.
+**Capability flags** — a host's known context limit and whether it rejects tool use — are keyed by participant and model and expire with the host staleness window. They feed the scheduler's capability filter, which is how a retry skips every host already known to be too small. A protocol-version refusal is counted and reported beside them but never routed on: it is the one verdict that would hold a host out of the rota wholesale rather than steer the requests it cannot serve, and a gateway serves one protocol version for its whole life, so holding out would retire the host for good.
 
 ## Nothing here is persisted
 

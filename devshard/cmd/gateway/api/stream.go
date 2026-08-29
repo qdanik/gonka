@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"cmp"
 	"fmt"
 	"net/http"
@@ -17,7 +18,9 @@ const (
 	RequestIDHeader = "X-Request-Id"
 
 	// Without this a host that wins the race on its first token can then send unlimited valid SSE and
-	// take the process out.
+	// take the process out. It tracks the carry cap on purpose: this buffer holds the same
+	// prompt_token_ids frames that cap was derived from, so lowering one without the other would
+	// refuse the large-context replies the arithmetic was meant to admit.
 	maxBufferedResponseBytes = filters.MaxStreamCarryBytes
 )
 
@@ -119,8 +122,9 @@ func (c *clientStream) Close() error {
 		}
 		return tailErr
 	}
-	c.beginLocked("application/json")
-	written, err := c.writer.Write(filters.StripResponseBody(filters.AssembleSSEBody(c.buffered), c.logprobs))
+	body := filters.StripResponseBody(filters.AssembleSSEBody(c.buffered), c.logprobs)
+	c.beginStatusLocked("application/json", statusForAssembled(body))
+	written, err := c.writer.Write(body)
 	c.written += int64(written)
 	return err
 }
@@ -193,11 +197,24 @@ func writeChatHeaders(header http.Header, requestID, escrowID, contentType strin
 	}
 }
 
+// statusForAssembled answers 502 for the bodies the assembler substitutes for an answer it could not
+// fold: the host is upstream, and neither body carries a status of its own.
+func statusForAssembled(body []byte) int {
+	if bytes.Equal(body, filters.TruncatedResponseBody) || bytes.Equal(body, filters.NoResponseDataBody) {
+		return http.StatusBadGateway
+	}
+	return http.StatusOK
+}
+
 func (c *clientStream) beginLocked(contentType string) {
+	c.beginStatusLocked(contentType, http.StatusOK)
+}
+
+func (c *clientStream) beginStatusLocked(contentType string, status int) {
 	if c.started {
 		return
 	}
 	writeChatHeaders(c.writer.Header(), c.requestID, "", contentType, c.streaming)
-	c.writer.WriteHeader(http.StatusOK)
+	c.writer.WriteHeader(status)
 	c.started = true
 }

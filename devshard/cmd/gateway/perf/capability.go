@@ -7,15 +7,12 @@ import (
 
 const CapabilityToolsUnsupported = "tool_choice_unsupported"
 
-const CapabilityVersionUnsupported = "protocol_version_unsupported"
-
 // A tool call or a context length is a property of what the model asks for, so those verdicts are
 // keyed by model. A protocol version is a property of the build, so that one is not.
 type capabilityTracker struct {
-	mu                 sync.RWMutex
-	contextLimits      map[hostKey]contextVerdict
-	toolUnsupported    map[hostKey]time.Time
-	versionUnsupported map[string]time.Time
+	mu              sync.RWMutex
+	contextLimits   map[hostKey]contextVerdict
+	toolUnsupported map[hostKey]time.Time
 
 	versionRefusals map[string]uint64
 	toolRefusals    map[hostKey]uint64
@@ -29,12 +26,11 @@ type contextVerdict struct {
 
 func newCapabilityTracker() *capabilityTracker {
 	return &capabilityTracker{
-		contextLimits:      make(map[hostKey]contextVerdict),
-		toolUnsupported:    make(map[hostKey]time.Time),
-		versionUnsupported: make(map[string]time.Time),
-		versionRefusals:    make(map[string]uint64),
-		toolRefusals:       make(map[hostKey]uint64),
-		contextRefusals:    make(map[hostKey]uint64),
+		contextLimits:   make(map[hostKey]contextVerdict),
+		toolUnsupported: make(map[hostKey]time.Time),
+		versionRefusals: make(map[string]uint64),
+		toolRefusals:    make(map[hostKey]uint64),
+		contextRefusals: make(map[hostKey]uint64),
 	}
 }
 
@@ -57,10 +53,9 @@ func (c *capabilityTracker) recordToolUnsupported(participant, model string, now
 	c.toolRefusals[served]++
 }
 
-func (c *capabilityTracker) recordVersionUnsupported(participant string, now time.Time) {
+func (c *capabilityTracker) recordVersionUnsupported(participant string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.versionUnsupported[participant] = now
 	c.versionRefusals[participant]++
 }
 
@@ -78,9 +73,6 @@ func (c *capabilityTracker) cannotServe(
 	served := hostKey{participant: participant, model: model}
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	if fresh(c.versionUnsupported[participant], now, staleness) {
-		return CapabilityVersionUnsupported, true
-	}
 	if requiresTools && fresh(c.toolUnsupported[served], now, staleness) {
 		return CapabilityToolsUnsupported, true
 	}
@@ -95,11 +87,6 @@ func (c *capabilityTracker) cannotServe(
 func (c *capabilityTracker) evictStale(now time.Time, staleness time.Duration) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	for participant, observed := range c.versionUnsupported {
-		if !fresh(observed, now, staleness) {
-			delete(c.versionUnsupported, participant)
-		}
-	}
 	for served, observed := range c.toolUnsupported {
 		if !fresh(observed, now, staleness) {
 			delete(c.toolUnsupported, served)
@@ -116,7 +103,7 @@ func (c *capabilityTracker) capability(participant, model string, now time.Time,
 	served := hostKey{participant: participant, model: model}
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	versionBlocked = fresh(c.versionUnsupported[participant], now, staleness)
+	versionBlocked = c.versionRefusals[participant] > 0
 	toolBlocked = fresh(c.toolUnsupported[served], now, staleness)
 	if verdict := c.contextLimits[served]; fresh(verdict.observed, now, staleness) {
 		contextLimit = verdict.limit

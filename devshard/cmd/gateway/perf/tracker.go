@@ -159,7 +159,7 @@ func (t *Tracker) RecordToolUnsupported(participant, model string) {
 }
 
 func (t *Tracker) RecordVersionUnsupported(participant string) {
-	t.capability.recordVersionUnsupported(participant, t.now())
+	t.capability.recordVersionUnsupported(participant)
 }
 
 func (t *Tracker) Acquire(participant string) {
