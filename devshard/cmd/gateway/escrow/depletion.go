@@ -62,6 +62,12 @@ func (m *Manager) retireDepleted(ctx context.Context, record store.DevshardRecor
 // replacement is always regular: inheriting a temp role would hand the next bridge an escrow to retire
 // rather than the lasting coverage the depleted one was providing.
 func (m *Manager) replaceDepleted(ctx context.Context, record store.DevshardRecord, model ModelConfig, snapshot chain.PhaseSnapshot) error {
+	// The replacement is keyed by the epoch that funded it, and an escrow created under a snapshot that
+	// has no chain data is counted by no epoch at all -- so the next bridge funds a full set on top of
+	// it. Refusing here re-marks the escrow, and the next tick with a snapshot tries again.
+	if snapshot.EpochIndex == 0 || snapshot.BlockHeight == 0 {
+		return fmt.Errorf("replacing depleted escrow %s: the chain snapshot carries no epoch yet", record.EscrowID)
+	}
 	if _, err := m.createEscrow(ctx, model, roleRegular, snapshot.EpochIndex, snapshot.BlockHeight); err != nil {
 		return fmt.Errorf("creating replacement for depleted escrow %s: %w", record.EscrowID, err)
 	}

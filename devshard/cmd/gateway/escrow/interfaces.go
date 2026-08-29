@@ -2,6 +2,7 @@ package escrow
 
 import (
 	"context"
+	"time"
 
 	"devshard/cmd/gateway/chain"
 	"devshard/cmd/gateway/store"
@@ -25,6 +26,8 @@ type escrowStore interface {
 	SetDevshardActive(ctx context.Context, escrowID string, active bool) error
 	SetDevshardSettlementPending(ctx context.Context, escrowID string, pending bool) error
 	ParkForSettlement(ctx context.Context, escrowID string) error
+	DevshardSettleTxHash(ctx context.Context, escrowID string) (string, time.Time, error)
+	SetDevshardRotationRole(ctx context.Context, escrowID, role string) error
 	SetDevshardSettleTxHash(ctx context.Context, escrowID, txHash string) error
 	DeleteDevshard(ctx context.Context, escrowID string) error
 	SaveCommitment(ctx context.Context, c store.Commitment) error

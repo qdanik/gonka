@@ -167,9 +167,6 @@ func hasActiveTemp(devshards []store.DevshardRecord, modelID string, epoch int64
 	return false
 }
 
-// promoteRegularsToTemp is the prepareBridge degrade path: it relabels every active regular
-// escrow for the model to temp, in place. It keeps going past a write failure to promote as
-// many as it can, surfacing only the first error.
 // deferredRetire reports the outcomes that mean "not yet" rather than "failed": a draining escrow and a
 // settlement already running are both retried by the next tick, so surfacing them would make an error of
 // every ordinary rotation. Anything else is a real failure and must reach the tick.
@@ -177,13 +174,15 @@ func deferredRetire(err error) bool {
 	return errors.Is(err, ErrDevshardBusy) || errors.Is(err, ErrSettlementInFlight)
 }
 
+// The prepareBridge degrade path: it relabels regulars in place, and keeps going past a write failure.
 func (m *Manager) promoteRegularsToTemp(ctx context.Context, model ModelConfig, devshards []store.DevshardRecord) (promoted int, err error) {
 	for _, record := range devshards {
 		if !record.Active || record.RotationRole == roleTemp || record.Model != model.ModelID {
 			continue
 		}
-		record.RotationRole = roleTemp
-		if writeErr := m.store.WithRetry(ctx, func() error { return m.store.UpsertDevshard(ctx, record) }); writeErr != nil {
+		if writeErr := m.store.WithRetry(ctx, func() error {
+			return m.store.SetDevshardRotationRole(ctx, record.EscrowID, roleTemp)
+		}); writeErr != nil {
 			if err == nil {
 				err = fmt.Errorf("promoting escrow %s to temp: %w", record.EscrowID, writeErr)
 			}

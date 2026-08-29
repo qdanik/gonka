@@ -82,6 +82,7 @@ type fakeStore struct {
 	saveCommitmentErr     error
 	upsertDevshardErr     error
 	upsertDevshardErrByID map[string]error
+	rotationRoleErrByID   map[string]error
 	deleteCommitmentErr   error
 	setActiveErr          error
 	setPendingErr         error
@@ -91,6 +92,7 @@ type fakeStore struct {
 
 	commitments      map[string]store.Commitment
 	devshards        map[string]store.DevshardRecord
+	settleTxAt       map[string]time.Time
 	rotationStatuses map[string]store.RotationStatus
 	savedCommitments []store.Commitment
 	calls            *callLog
@@ -100,6 +102,7 @@ func newFakeStore() *fakeStore {
 	return &fakeStore{
 		commitments:      make(map[string]store.Commitment),
 		devshards:        make(map[string]store.DevshardRecord),
+		settleTxAt:       make(map[string]time.Time),
 		rotationStatuses: make(map[string]store.RotationStatus),
 	}
 }
@@ -241,6 +244,30 @@ func (f *fakeStore) ParkForSettlement(_ context.Context, escrowID string) error 
 	return nil
 }
 
+func (f *fakeStore) DevshardSettleTxHash(_ context.Context, escrowID string) (string, time.Time, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.devshards[escrowID].SettleTxHash, f.settleTxAt[escrowID], nil
+}
+
+func (f *fakeStore) SetDevshardRotationRole(_ context.Context, escrowID, role string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.calls != nil {
+		f.calls.record(fmt.Sprintf("SetDevshardRotationRole(%q)", role))
+	}
+	if err := f.rotationRoleErrByID[escrowID]; err != nil {
+		return err
+	}
+	record, held := f.devshards[escrowID]
+	if !held {
+		return store.ErrDevshardNotFound
+	}
+	record.RotationRole = role
+	f.devshards[escrowID] = record
+	return nil
+}
+
 func (f *fakeStore) SetDevshardSettleTxHash(_ context.Context, escrowID, txHash string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -253,6 +280,11 @@ func (f *fakeStore) SetDevshardSettleTxHash(_ context.Context, escrowID, txHash 
 	}
 	record.SettleTxHash = txHash
 	f.devshards[escrowID] = record
+	if txHash == "" {
+		delete(f.settleTxAt, escrowID)
+	} else {
+		f.settleTxAt[escrowID] = time.Now().UTC()
+	}
 	return nil
 }
 

@@ -15,7 +15,7 @@ import (
 
 const (
 	// Concurrency and per-fetch timeout together keep one pass well inside the freshness window. See
-	// gateway-escrow-lifecycle.md, "What the chain observer provides".
+	// README.md, "What the chain observer provides".
 	versionsPollConcurrency = 16
 	versionsFetchTimeout    = 2 * time.Second
 )

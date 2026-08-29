@@ -107,6 +107,17 @@ func decodeStreamedEvent(payload []byte) (map[string]any, bool) {
 
 // encodeCompletion turns each choice's accumulated delta into its message, ordered by index.
 func encodeCompletion(merged map[string]any) []byte {
+	finalizeCompletion(merged)
+	encoded, err := encodeCompact(merged)
+	if err != nil {
+		return NoResponseDataBody
+	}
+	return encoded
+}
+
+// finalizeCompletion turns the accumulated deltas into the completion a client is given. It rewrites
+// the accumulator in place, so it runs once, at the end -- never as part of measuring it.
+func finalizeCompletion(merged map[string]any) {
 	merged["object"] = completionObject
 	choices, _ := merged["choices"].([]any)
 	for _, entry := range choices {
@@ -133,11 +144,6 @@ func encodeCompletion(merged map[string]any) []byte {
 		}
 		return leftKnown && left < right
 	})
-	encoded, err := encodeCompact(merged)
-	if err != nil {
-		return NoResponseDataBody
-	}
-	return encoded
 }
 
 // mergeChunk folds one chunk in. Everything outside choices is a restated header, so it replaces.

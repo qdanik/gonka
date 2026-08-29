@@ -80,7 +80,7 @@ func (m *Manager) createEscrow(ctx context.Context, model ModelConfig, role stri
 	return result, m.persistEscrow(ctx, strconv.FormatUint(result.EscrowID, 10), c)
 }
 
-// persistEscrow registers the escrow a commitment created, then drops the commitment. See gateway-escrow-lifecycle.md, "Creating an escrow, and surviving a crash mid-creation".
+// persistEscrow registers the escrow a commitment created, then drops the commitment. See escrows.md, "Creating an escrow".
 func (m *Manager) persistEscrow(ctx context.Context, escrowID string, c store.Commitment) error {
 	registered, err := m.escrowRegistered(ctx, escrowID)
 	if err != nil {

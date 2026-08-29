@@ -3,8 +3,10 @@ package escrow
 import (
 	"context"
 	"errors"
+	"slices"
 	"sync"
 	"testing"
+	"time"
 
 	"devshard/cmd/gateway/chain"
 	"devshard/cmd/gateway/config"
@@ -640,5 +642,82 @@ func TestASettleThatNeverLandedIsRetried(t *testing.T) {
 
 	if got := testStore.devshards["7"].SettleTxHash; got != "FRESH-TX" {
 		t.Fatalf("recorded hash = %q, want the new transaction's", got)
+	}
+}
+
+func TestASettleReadsTheHashFromTheRowNotTheCopyItWasHanded(t *testing.T) {
+	log := &callLog{}
+	stored := store.DevshardRecord{EscrowID: "7", Model: "model-a", SettlementPending: true, SettleTxHash: "SETTLE-TX"}
+	testStore := newFakeStore()
+	testStore.devshards[stored.EscrowID] = stored
+	testStore.calls = log
+	txClient := &fakeTxClient{calls: log, txCommittedFn: func(string) (bool, error) { return true, nil }}
+	m := &Manager{
+		tx: txClient, store: testStore, signer: &fakeSignerSource{signer: testSigner(t)},
+		settlementSource: &fakeSettlementSource{},
+	}
+	// What an earlier step in the same tick broadcast is in the row; the tick's own slice predates it.
+	stale := stored
+	stale.SettleTxHash = ""
+
+	result, err := m.settle(context.Background(), stale)
+
+	if err != nil {
+		t.Fatalf("settle() = %v, want the settle already on chain to be reconciled", err)
+	}
+	if result.TxHash != "SETTLE-TX" {
+		t.Errorf("TxHash = %q, want the hash the row holds", result.TxHash)
+	}
+	if slices.Contains(log.snapshot(), "SettleEscrow") {
+		t.Error("a second settlement was broadcast for an escrow already settled")
+	}
+}
+
+func TestASettleStillWithinItsTTLIsNotRebroadcast(t *testing.T) {
+	record := store.DevshardRecord{EscrowID: "7", Model: "model-a", SettlementPending: true}
+	testStore := newFakeStore()
+	testStore.devshards[record.EscrowID] = record
+	if err := testStore.SetDevshardSettleTxHash(context.Background(), "7", "IN-FLIGHT"); err != nil {
+		t.Fatalf("SetDevshardSettleTxHash(): %v", err)
+	}
+	txClient := &fakeTxClient{
+		settleTxHash:  "SECOND-TX",
+		txCommittedFn: func(string) (bool, error) { return false, chain.ErrTxNotFound },
+	}
+	m := &Manager{
+		tx: txClient, store: testStore, signer: &fakeSignerSource{signer: testSigner(t)},
+		settlementSource: &fakeSettlementSource{}, now: time.Now,
+	}
+
+	_, err := m.settle(context.Background(), record)
+
+	if !errors.Is(err, ErrSettlementInFlight) {
+		t.Fatalf("settle() = %v, want the settle still on its way to be left alone", err)
+	}
+	if got := testStore.devshards["7"].SettleTxHash; got != "IN-FLIGHT" {
+		t.Errorf("recorded hash = %q, want the transaction still in flight kept", got)
+	}
+}
+
+func TestAnAlreadySettledEscrowIsStillTakenOutOfRouting(t *testing.T) {
+	log := &callLog{}
+	record := store.DevshardRecord{EscrowID: "7", Model: "model-a", SettlementPending: true, SettleTxHash: "SETTLE-TX"}
+	testStore := newFakeStore()
+	testStore.devshards[record.EscrowID] = record
+	testStore.calls = log
+	source := &fakeSettlementSource{calls: log}
+	m := &Manager{
+		tx:     &fakeTxClient{calls: log, txCommittedFn: func(string) (bool, error) { return true, nil }},
+		store:  testStore,
+		signer: &fakeSignerSource{signer: testSigner(t)}, settlementSource: source, now: time.Now,
+	}
+
+	if _, err := m.settle(context.Background(), record); err != nil {
+		t.Fatalf("settle() = %v, want the settle already on chain reconciled", err)
+	}
+
+	if !slices.Contains(log.snapshot(), "Retire") {
+		// The caller deletes the row next; a row that is gone can no longer un-publish the escrow.
+		t.Error("the escrow was reconciled while still routable")
 	}
 }

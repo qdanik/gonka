@@ -514,7 +514,7 @@ func TestPromoteRegularsToTempContinuesPastErrorReturnsFirst(t *testing.T) {
 	testStore.devshards[regularOne.EscrowID] = regularOne
 	testStore.devshards[regularTwo.EscrowID] = regularTwo
 	writeFailure := errors.New("store unavailable")
-	testStore.upsertDevshardErrByID = map[string]error{"reg-1": writeFailure}
+	testStore.rotationRoleErrByID = map[string]error{"reg-1": writeFailure}
 	m := newRotationManager(t, testStore, &fakeTxClient{}, false)
 	model := ModelConfig{ModelID: "model-a"}
 	devshards := []store.DevshardRecord{regularOne, regularTwo}
@@ -587,5 +587,36 @@ func TestASkippedRotationIsWrittenDown(t *testing.T) {
 	}
 	if got := logcapture.Field(entry, "model"); got != "qwen" {
 		t.Fatalf("model field = %v, want the model that was skipped", got)
+	}
+}
+
+func TestPromotingToTempKeepsWhatTheSameTickAlreadyWrote(t *testing.T) {
+	testStore := newFakeStore()
+	stored := store.DevshardRecord{EscrowID: "reg-1", Model: "model-a", Active: true, RotationRole: roleRegular}
+	testStore.devshards[stored.EscrowID] = stored
+	m := newRotationManager(t, testStore, &fakeTxClient{}, false)
+	// What the tick's own slice holds: a copy taken before an earlier step deactivated the escrow and
+	// recorded the settlement it broadcast.
+	stale := []store.DevshardRecord{stored}
+	if err := testStore.SetDevshardActive(context.Background(), "reg-1", false); err != nil {
+		t.Fatalf("SetDevshardActive(): %v", err)
+	}
+	if err := testStore.SetDevshardSettleTxHash(context.Background(), "reg-1", "SETTLE-TX"); err != nil {
+		t.Fatalf("SetDevshardSettleTxHash(): %v", err)
+	}
+
+	if _, err := m.promoteRegularsToTemp(context.Background(), ModelConfig{ModelID: "model-a"}, stale); err != nil {
+		t.Fatalf("promoteRegularsToTemp() = %v, want nil", err)
+	}
+
+	row := testStore.devshards["reg-1"]
+	if row.RotationRole != roleTemp {
+		t.Errorf("rotation_role = %q, want the promotion applied", row.RotationRole)
+	}
+	if row.Active {
+		t.Error("the escrow the chain says is gone was put back into routing")
+	}
+	if row.SettleTxHash != "SETTLE-TX" {
+		t.Errorf("settle_tx_hash = %q, want the hash this tick broadcast kept", row.SettleTxHash)
 	}
 }

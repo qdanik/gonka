@@ -266,3 +266,16 @@ func TestAWinnerWhoseClientLeftIsNamedApartFromOneThatWasRead(t *testing.T) {
 		})
 	}
 }
+
+func TestABurnWithNoNonceIsNotRecordedAgainstNonceZero(t *testing.T) {
+	ledger := newLedgerForTest(t)
+
+	ledger.RecordGhost("escrow-1", 0, "participant_throttled_no_send")
+	ledger.RecordGhost("escrow-1", 0, "participant_throttled_no_send")
+
+	for _, record := range ledger.Book().Query(accounting.QueryFilter{}) {
+		if ghosts := record.Dispositions[accounting.DispositionGhost]; ghosts != 0 {
+			t.Errorf("%s was charged %d ghosts for burns that named no nonce", record.Participant, ghosts)
+		}
+	}
+}

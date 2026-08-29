@@ -149,11 +149,12 @@ func dispatchProbe(session registry.EscrowSession, burned scheduler.Burn) bool {
 		return false
 	}
 	// Applied even beside an error: a reply that arrived carries the receipt the chain still needs.
-	if applyErr := dispatch.ProcessResponse(prepared.HostIdx(), reply, prepared.Nonce()); applyErr != nil {
+	applyErr := dispatch.ProcessResponse(prepared.HostIdx(), reply, prepared.Nonce())
+	if applyErr != nil {
 		logging.Warn("the probe answer did not apply", logkey.Nonce, burned.Nonce,
 			logkey.Host, logkey.ShortHost(burned.Participant), logkey.Error, applyErr)
 	}
-	return err == nil
+	return err == nil && applyErr == nil
 }
 
 func (g *Accountant) record(event engine.TimeoutEvent) {

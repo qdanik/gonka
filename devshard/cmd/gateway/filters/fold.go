@@ -6,22 +6,24 @@ import (
 )
 
 type BodyFolder struct {
-	intent      LogprobIntent
-	carry       []byte
-	scanned     int
-	unframed    []byte
-	merged      map[string]any
-	complete    []byte
-	framed      bool
-	assembled   int
-	truncated   bool
-	failed      error
-	mergedBytes int64
+	intent       LogprobIntent
+	carry        []byte
+	scanned      int
+	unframed     []byte
+	merged       map[string]any
+	complete     []byte
+	framed       bool
+	assembled    int
+	truncated    bool
+	failed       error
+	mergedBytes  int64
+	sinceMeasure int64
 }
 
-// Merging collapses what the events repeat, so the accumulated size is measured rather than summed --
-// every foldMeasureEvery events, which costs one encode per that many instead of one per event.
-const foldMeasureEvery = 64
+// Merging collapses what the events repeat, so the accumulated size is measured rather than summed.
+// The trigger is bytes rather than events: an event can carry a megabyte, and a count-based interval
+// would leave that much unaccounted while the cap and the shared budget read low.
+const foldMeasureBytes = 256 << 10
 
 func NewBodyFolder(intent LogprobIntent) *BodyFolder {
 	return &BodyFolder{intent: intent}
@@ -91,9 +93,25 @@ func (f *BodyFolder) fold(event []byte) {
 	}
 	f.merged = mergeChunk(f.merged, decoded)
 	f.assembled++
-	if f.assembled%foldMeasureEvery == 0 {
-		f.mergedBytes = int64(len(encodeCompletion(f.merged)))
+	f.sinceMeasure += int64(len(payload))
+	if f.sinceMeasure >= foldMeasureBytes {
+		f.measure()
 	}
+}
+
+// measure re-encodes the accumulator without finalising it: finalising rewrites the deltas the fold is
+// still appending to.
+func (f *BodyFolder) measure() {
+	f.sinceMeasure = 0
+	if f.merged == nil {
+		f.mergedBytes = 0
+		return
+	}
+	encoded, err := encodeCompact(f.merged)
+	if err != nil {
+		return
+	}
+	f.mergedBytes = int64(len(encoded))
 }
 
 func (f *BodyFolder) Body() []byte {
@@ -123,5 +141,5 @@ func (f *BodyFolder) Held() int64 {
 
 func (f *BodyFolder) Discard() {
 	f.carry, f.unframed, f.merged, f.complete = nil, nil, nil, nil
-	f.scanned, f.mergedBytes = 0, 0
+	f.scanned, f.mergedBytes, f.sinceMeasure = 0, 0, 0
 }

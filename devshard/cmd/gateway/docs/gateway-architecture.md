@@ -1,3 +1,5 @@
+> Package-by-package detail now lives in each package's own `README.md`; start from [`../README.md`](../README.md) or [`../Architecture.md`](../Architecture.md). This document remains the responsibility map.
+
 # Devshard gateway — architecture
 
 The gateway (`devshard/cmd/gateway`) sits between the broker and the race participants: it accepts OpenAI-shaped chat-completion requests, normalises them, chooses which escrow and which participant will serve each one, races several participants against each other when that is worth doing, streams the winner's bytes back, and makes sure every nonce it spent on the chain is settled. It replaces `devshard/cmd/devshardctl`, which had grown into a single 26k-line `package main` where target selection lived at three uncoordinated points and one struct carried 57 fields across three goroutines.

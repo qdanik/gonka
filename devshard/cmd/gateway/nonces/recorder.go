@@ -233,9 +233,10 @@ func (n *Recorder) reconcileFinished(escrowID string, session registry.EscrowSes
 }
 
 func (n *Recorder) RecordGhost(escrowID string, nonce uint64, reason string) {
-	if n != nil {
-		n.report(n.service.Book.RecordGhost(escrowID, nonce, reason))
+	if n == nil || nonce == 0 {
+		return
 	}
+	n.report(n.service.Book.RecordGhost(escrowID, nonce, reason))
 }
 
 func (n *Recorder) RecordRace(outcome engine.RaceOutcome) {

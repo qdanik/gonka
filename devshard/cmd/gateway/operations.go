@@ -163,6 +163,11 @@ func (o *operations) Activate(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
+	// An escrow parked for settlement has had its balance committed to a settlement that is either on
+	// chain or on its way. Serving from it again spends nonces the settlement does not account for.
+	if record.SettlementPending || record.SettleTxHash != "" {
+		return fmt.Errorf("%w: escrow %s is parked for settlement", api.ErrDevshardNotActivatable, id)
+	}
 	if err := o.store.SetDevshardActive(ctx, id, true); err != nil {
 		return err
 	}

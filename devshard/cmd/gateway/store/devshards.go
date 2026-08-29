@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"time"
 )
 
 // upsertDevshardStatement lives apart from its caller so a test can read which columns the update
@@ -127,8 +128,43 @@ func requireOneRow(result sql.Result, escrowID string) error {
 	return nil
 }
 
+// DevshardSettleTxHash reads the hash from the row rather than from a record the caller is holding: a
+// tick loads its escrows once and several steps settle from that one slice, so a copy taken at the top
+// no longer says what an earlier step in the same tick broadcast.
+func (s *Store) DevshardSettleTxHash(ctx context.Context, escrowID string) (hash string, broadcastAt time.Time, err error) {
+	var stamp string
+	err = s.WithRetry(ctx, func() error {
+		return s.db.QueryRowContext(ctx,
+			`SELECT settle_tx_hash, settle_tx_at FROM devshards WHERE escrow_id = ?`, escrowID).Scan(&hash, &stamp)
+	})
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", time.Time{}, nil
+	}
+	if err != nil {
+		return "", time.Time{}, fmt.Errorf("reading settle tx hash for escrow %s: %w", escrowID, err)
+	}
+	if parsed, parseErr := time.Parse(time.DateTime, stamp); parseErr == nil {
+		broadcastAt = parsed.UTC()
+	}
+	return hash, broadcastAt, nil
+}
+
+// SetDevshardRotationRole moves one escrow between roles without touching anything else. A whole-record
+// upsert would carry the caller's copy of active and settle_tx_hash back into the row, and a tick loads
+// its escrows once: the copy predates whatever an earlier step in the same tick wrote.
+func (s *Store) SetDevshardRotationRole(ctx context.Context, escrowID, role string) error {
+	return s.updateDevshardField(ctx,
+		`UPDATE devshards SET rotation_role = ?, updated_at = datetime('now') WHERE escrow_id = ?`, role, escrowID)
+}
+
 // SetDevshardSettleTxHash records the transaction a settle broadcast, so a tick that finds the row
 // still pending can ask the chain what happened to it instead of building a second one.
 func (s *Store) SetDevshardSettleTxHash(ctx context.Context, escrowID, txHash string) error {
-	return s.updateDevshardField(ctx, `UPDATE devshards SET settle_tx_hash = ?, updated_at = datetime('now') WHERE escrow_id = ?`, txHash, escrowID)
+	result, err := s.db.ExecContext(ctx,
+		`UPDATE devshards SET settle_tx_hash = ?, settle_tx_at = CASE WHEN ? = '' THEN '' ELSE datetime('now') END, updated_at = datetime('now') WHERE escrow_id = ?`,
+		txHash, txHash, escrowID)
+	if err != nil {
+		return fmt.Errorf("updating devshard %s: %w", escrowID, err)
+	}
+	return requireOneRow(result, escrowID)
 }

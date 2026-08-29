@@ -112,7 +112,7 @@ func NewTxClient(cfg Config) (*TxClient, error) {
 
 // CreateEscrow builds, signs, and broadcasts a MsgCreateDevshardEscrow tx; onPrepared records the
 // precomputed tx hash before the irreversible broadcast, and an error from it aborts the broadcast.
-// See gateway-escrow-lifecycle.md, "Creating an escrow, and surviving a crash mid-creation".
+// See README.md, "Transaction encoding".
 func (c *TxClient) CreateEscrow(ctx context.Context, signer *signing.Secp256k1Signer, amount uint64, modelID string, onPrepared func(txHash string) error) (CreateEscrowResult, error) {
 	if signer == nil {
 		return CreateEscrowResult{}, fmt.Errorf("signer is required")
@@ -159,8 +159,7 @@ func (c *TxClient) CreateEscrow(ctx context.Context, signer *signing.Secp256k1Si
 }
 
 // SettleEscrow builds, signs, broadcasts and confirms a MsgSettleDevshardEscrow tx; unlike CreateEscrow
-// it takes no intent hook, and it waits for the commit rather than CheckTx. See
-// gateway-escrow-lifecycle.md, "Transaction encoding".
+// it waits for the commit rather than CheckTx. See README.md, "Transaction encoding".
 // SettleEscrow takes onPrepared for the same reason CreateEscrow does: the hash has to be durable
 // before the broadcast, or a settle that commits while the gateway is not looking is money moved under
 // a name nothing recorded.
@@ -200,7 +199,7 @@ func (c *TxClient) SettleEscrow(ctx context.Context, signer *signing.Secp256k1Si
 	}
 	logging.Info("settle tx broadcast", "escrow", input.EscrowID, "tx", txHash, "settler", settler)
 	// Waiting is what makes the result mean "settled": the caller destroys the means to retry. See
-	// gateway-escrow-lifecycle.md, "Transaction encoding".
+	// README.md, "Transaction encoding".
 	if err := c.waitForCommit(ctx, txHash); err != nil {
 		return SettleEscrowResult{}, fmt.Errorf("awaiting settlement commit for tx %s: %w", txHash, err)
 	}
@@ -212,8 +211,7 @@ func (c *TxClient) resolveChainID(ctx context.Context) (string, error) {
 }
 
 // GetTxEscrowID reports found=false when the transaction committed and failed, and ErrTxNotFound when
-// the chain does not have it; a transport failure is neither. See gateway-escrow-lifecycle.md,
-// "Creating an escrow, and surviving a crash mid-creation".
+// the chain does not have it; a transport failure is neither. See README.md, "Transaction encoding".
 func (c *TxClient) GetTxEscrowID(ctx context.Context, txHash string) (uint64, bool, error) {
 	result, found, err := c.transport.Tx(ctx, txHash)
 	if err != nil {
@@ -246,7 +244,7 @@ func (c *TxClient) TxCommitted(ctx context.Context, txHash string) (succeeded bo
 }
 
 // errUnconfirmed says what the caller must not conclude: the transaction was broadcast, so it may yet
-// commit, and its commitment row is reconciled rather than abandoned. See gateway-escrow-lifecycle.md.
+// commit, and its commitment row is reconciled rather than abandoned. See README.md, "Transaction encoding".
 func errUnconfirmed(txHash string, within time.Duration) error {
 	return fmt.Errorf("tx %s was broadcast but not confirmed within %s; its commitment is kept and reconciled, so do not create another", txHash, within)
 }

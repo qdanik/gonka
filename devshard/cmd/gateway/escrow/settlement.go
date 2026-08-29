@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"time"
 
 	"devshard/cmd/gateway/chain"
 	"devshard/cmd/gateway/internal/logkey"
@@ -25,7 +26,7 @@ var (
 )
 
 // pendingSettleBudget bounds how many parked escrows one tick settles. See
-// gateway-escrow-lifecycle.md, "Settlement and retirement".
+// escrows.md, "Settlement and retirement".
 const pendingSettleBudget = 4
 
 // settlePending drains escrows parked by retire: deactivated, still registered because their row
@@ -98,14 +99,17 @@ func (m *Manager) settle(ctx context.Context, record store.DevshardRecord) (chai
 	}
 	defer leave()
 
-	if settled, err := m.alreadySettled(ctx, record); err != nil {
-		return chain.SettleEscrowResult{}, err
-	} else if settled {
-		return chain.SettleEscrowResult{EscrowID: numericEscrowID(record.EscrowID), TxHash: record.SettleTxHash}, nil
-	}
-
+	// Parked before the reconciliation, not after it: the caller deletes the row on success, and a row
+	// that is gone can no longer take the escrow out of routing. An escrow put back by hand would keep
+	// serving with nothing left to un-publish it.
 	if err := m.park(ctx, record.EscrowID); err != nil {
 		return chain.SettleEscrowResult{}, err
+	}
+
+	if hash, settled, err := m.alreadySettled(ctx, record); err != nil {
+		return chain.SettleEscrowResult{}, err
+	} else if settled {
+		return chain.SettleEscrowResult{EscrowID: numericEscrowID(record.EscrowID), TxHash: hash}, nil
 	}
 
 	// busy is a deferred-settle signal, not a failure: the now-retired escrow drains, then a retrigger settles it.
@@ -143,22 +147,42 @@ func (m *Manager) settle(ctx context.Context, record store.DevshardRecord) (chai
 
 // alreadySettled reports whether the transaction this escrow last broadcast reached the chain and
 // succeeded. An unreachable endpoint is not an answer, so it fails the tick rather than concluding the
-// settle never happened. See gateway-escrow-lifecycle.md, "Settling an escrow, and surviving a crash".
-func (m *Manager) alreadySettled(ctx context.Context, record store.DevshardRecord) (bool, error) {
-	if record.SettleTxHash == "" {
-		return false, nil
+// settle never happened. See escrows.md, "Settlement and retirement".
+func (m *Manager) alreadySettled(ctx context.Context, record store.DevshardRecord) (string, bool, error) {
+	hash, broadcastAt, err := m.store.DevshardSettleTxHash(ctx, record.EscrowID)
+	if err != nil {
+		return "", false, err
 	}
-	succeeded, err := m.tx.TxCommitted(ctx, record.SettleTxHash)
+	if hash == "" {
+		return "", false, nil
+	}
+	succeeded, err := m.tx.TxCommitted(ctx, hash)
 	switch {
+	case errors.Is(err, chain.ErrTxNotFound) && m.settleTxMayStillLand(broadcastAt):
+		// Not indexed yet is not the same as never landed. An unordered transaction stays landable for
+		// its whole TTL, and rebroadcasting inside that window pays a fee per tick for a settle that is
+		// still on its way -- then loses to it and starts over. The create path waits the same way.
+		return "", false, ErrSettlementInFlight
 	case errors.Is(err, chain.ErrTxNotFound):
-		return false, m.clearSettleTxHash(ctx, record.EscrowID) // never landed: a fresh transaction is right
+		return "", false, m.clearSettleTxHash(ctx, record.EscrowID) // past its TTL: a fresh transaction is right
 	case err != nil:
-		return false, fmt.Errorf("checking settle tx %s for escrow %s: %w", record.SettleTxHash, record.EscrowID, err)
+		return "", false, fmt.Errorf("checking settle tx %s for escrow %s: %w", hash, record.EscrowID, err)
 	case !succeeded:
-		return false, m.clearSettleTxHash(ctx, record.EscrowID) // committed and rejected: retry is right
+		return "", false, m.clearSettleTxHash(ctx, record.EscrowID) // committed and rejected: retry is right
 	}
-	logging.Info("settle already on chain, reconciled", logkey.Escrow, record.EscrowID, logkey.Tx, record.SettleTxHash)
-	return true, nil
+	logging.Info("settle already on chain, reconciled", logkey.Escrow, record.EscrowID, logkey.Tx, hash)
+	return hash, true, nil
+}
+
+// A row written before the stamp existed carries no broadcast time, and counts as past the window: the
+// create path defaults the other way because keeping a commitment costs a row, while keeping a hash
+// here costs an escrow that is never settled at all. Rebroadcasting one that was in fact still landing
+// costs a fee once, and the stamp this write leaves governs every tick after it.
+func (m *Manager) settleTxMayStillLand(broadcastAt time.Time) bool {
+	if broadcastAt.IsZero() {
+		return false
+	}
+	return m.now().Sub(broadcastAt) <= commitmentReconcileGrace
 }
 
 func (m *Manager) clearSettleTxHash(ctx context.Context, escrowID string) error {

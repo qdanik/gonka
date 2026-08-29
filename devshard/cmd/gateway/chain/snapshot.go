@@ -50,7 +50,7 @@ func AllBlockReasons() []BlockReason {
 
 // PhaseSnapshot is an immutable, published view of chain phase and participant state, folded from raw
 // chain inputs only. The absent-value semantics of RequestsBlocked, Preserved and MaxNonce are
-// load-bearing: see gateway-escrow-lifecycle.md, "What the chain observer provides".
+// load-bearing: see README.md, "What the chain observer provides".
 type PhaseSnapshot struct {
 	BlockHeight            int64
 	EpochSwitchBlockHeight int64

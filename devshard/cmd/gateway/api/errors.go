@@ -33,6 +33,8 @@ var (
 	ErrPrivateKeyEnvRequired = errors.New("private_key_env is required; a raw private_key is not accepted")
 
 	ErrDevshardExists = errors.New("devshard already registered")
+
+	ErrDevshardNotActivatable = errors.New("devshard cannot be activated")
 )
 
 // UnsupportedModelError lists the routable models so a client can correct the request in one trip.
@@ -141,6 +143,8 @@ func statusForError(err error) int {
 		return http.StatusServiceUnavailable
 	case errors.Is(err, ErrPrivateKeyEnvRequired):
 		return http.StatusBadRequest
+	case errors.Is(err, ErrDevshardNotActivatable):
+		return http.StatusConflict
 	case errors.Is(err, ErrUnknownDevshard), errors.Is(err, ErrUnknownParticipant):
 		return http.StatusNotFound
 	case errors.Is(err, escrow.ErrDevshardBusy), errors.Is(err, escrow.ErrSettlementInFlight),

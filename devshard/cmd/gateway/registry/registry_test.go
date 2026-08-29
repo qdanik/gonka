@@ -501,6 +501,26 @@ func TestADrainedEscrowThatFailsToCloseIsCounted(t *testing.T) {
 	}
 }
 
+// Close releases the store even when the flush before it failed, so the id is free again. Holding it in
+// draining on a flush failure would refuse that escrow for the rest of the process's life.
+func TestAnEscrowWhoseFlushFailedCanBePublishedAgain(t *testing.T) {
+	t.Parallel()
+	session := newFakeSession("hostA")
+	session.flushErr = errors.New("disk full")
+	registry := New(Deps{
+		ServingSessions: newSessions(map[string]*fakeSession{"1": session}).open,
+		Now:             fixedClock(),
+	})
+	mustAdd(t, registry, "1", "qwen")
+	if err := registry.Retire("1"); err == nil {
+		t.Fatal("Retire(1) = nil, want the flush failure reported")
+	}
+
+	if err := registry.Add(context.Background(), "1", "qwen"); err != nil {
+		t.Fatalf("Add(1) after a failed flush = %v, want the released id accepted", err)
+	}
+}
+
 // A retired escrow's committed nonces still owe their votes and their settlement, so the two lookups
 // must disagree about it: one serving both would either route to a retired escrow or strand those nonces.
 func TestRoutingLosesARetiredEscrowWhileSettlementKeepsIt(t *testing.T) {

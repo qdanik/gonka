@@ -72,7 +72,7 @@ func (m *Manager) runTick(ctx context.Context) {
 }
 
 // Stop is idempotent and a barrier for every caller: done outlives stop, and cancelling the context
-// interrupts a tick already in flight. See gateway-escrow-lifecycle.md, "The tick".
+// interrupts a tick already in flight. See escrows.md, "The tick".
 func (m *Manager) Stop() {
 	m.lifecycleMu.Lock()
 	done, cancel := m.done, m.cancel

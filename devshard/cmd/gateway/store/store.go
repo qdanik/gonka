@@ -17,7 +17,7 @@ import (
 )
 
 // Store wraps the gateway.db handle; access is serialized via a single connection. See
-// gateway-escrow-lifecycle.md, "What the store holds".
+// README.md, "What it owns".
 type Store struct {
 	db           *sql.DB
 	retryBackoff time.Duration
@@ -97,6 +97,7 @@ var migrations = []string{
 		created_at TEXT NOT NULL DEFAULT (datetime('now'))
 	);`,
 	`ALTER TABLE devshards ADD COLUMN route_prefix TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE devshards ADD COLUMN settle_tx_at TEXT NOT NULL DEFAULT ''`,
 }
 
 // The legacy-database guard is kept out of the migrations block above because it decides whether

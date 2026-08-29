@@ -37,7 +37,9 @@ func (e *escrowEntry) accepting() bool { return e.session.Phase() == types.Phase
 func (e *escrowEntry) busy() bool { return e.inFlight.Load() > 0 }
 
 // close flushes before releasing storage. See gateway-routing-and-nonces.md, "The escrow registry".
-func (e *escrowEntry) close() error {
+// Reports whether the store was released: Close runs even when the flush failed, and an entry whose
+// store is gone must stop refusing its own id.
+func (e *escrowEntry) close() (bool, error) {
 	var flushErr error
 	if err := e.session.FlushSnapshot(); err != nil {
 		flushErr = fmt.Errorf("flushing escrow %s: %w", e.id, err)
@@ -46,7 +48,7 @@ func (e *escrowEntry) close() error {
 	if closeErr != nil {
 		closeErr = fmt.Errorf("closing escrow %s: %w", e.id, closeErr)
 	}
-	return errors.Join(flushErr, closeErr)
+	return closeErr == nil, errors.Join(flushErr, closeErr)
 }
 
 // liveSet is the published escrow set, replaced rather than mutated, so readers take it with one atomic
