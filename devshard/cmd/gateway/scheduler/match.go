@@ -2,18 +2,15 @@ package scheduler
 
 import (
 	"time"
-
-	"devshard/cmd/gateway/perf"
 )
 
-// availability is a frozen per-drain snapshot of the host predicates; capability reports why a host is
-// blocked, not merely whether. See gateway-routing-and-nonces.md, "The drain".
+// availability is a frozen per-drain snapshot of the host predicates. See
+// gateway-routing-and-nonces.md, "The drain".
 type availability struct {
 	pocRequired  func(participant string) bool
 	throttled    func(participant string) bool
 	ejected      func(participant string) bool
 	notAllowed   func(participant string) bool
-	capability   func(participant string, profile RequestProfile) (reason string, blocked bool)
 	stateBlocked func(participant string) bool
 }
 
@@ -27,8 +24,6 @@ const (
 	blockNotAllowed
 	blockExcluded
 	blockStateDiverged
-	blockCapability
-	blockToolsUnsupported
 )
 
 // ghostFor names the burn each participant-only block earns, as one mapping rather than two switches.
@@ -78,29 +73,16 @@ func (a availability) blocks(participant string, queued *waiter) blockReason {
 	if queued.exclude[participant] {
 		return blockExcluded
 	}
-	return a.blocksApartFromExclusion(participant, queued)
+	return blockNone
 }
 
 func (a availability) onlyThisHostIsLeft(participant string, participants []string, queued *waiter) bool {
-	if a.blocksApartFromExclusion(participant, queued) != blockNone {
-		return false
-	}
 	for _, other := range participants {
 		if other != participant && a.blocks(other, queued) == blockNone {
 			return false
 		}
 	}
 	return true
-}
-
-func (a availability) blocksApartFromExclusion(participant string, queued *waiter) blockReason {
-	switch reason, blocked := a.capability(participant, queued.profile); {
-	case !blocked:
-		return blockNone
-	case reason == perf.CapabilityToolsUnsupported:
-		return blockToolsUnsupported
-	}
-	return blockCapability
 }
 
 // match is pure and total: it reads nothing, mutates nothing, and every path yields a Decision.
@@ -112,7 +94,6 @@ func match(binding HostBinding, waiting []*waiter, participants []string, avail 
 		return burn{kind: ghostFor[reason]}
 	}
 
-	sawBlockedWaiter := false
 	var oldestLive, excludedOnly *waiter
 	for _, queued := range waiting {
 		if queued.abandoned.Load() {
@@ -128,8 +109,6 @@ func match(binding HostBinding, waiting []*waiter, participants []string, avail 
 			if excludedOnly == nil && avail.onlyThisHostIsLeft(participant, participants, queued) {
 				excludedOnly = queued
 			}
-		default:
-			sawBlockedWaiter = true
 		}
 	}
 
@@ -142,9 +121,6 @@ func match(binding HostBinding, waiting []*waiter, participants []string, avail 
 	// See gateway-routing-and-nonces.md, "Serving a host the request excluded".
 	if excludedOnly != nil {
 		return serve{waiter: excludedOnly, despiteExclusion: true}
-	}
-	if sawBlockedWaiter {
-		return burn{kind: ghostCapability}
 	}
 	return burn{kind: ghostExclude}
 }

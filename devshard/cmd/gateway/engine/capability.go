@@ -16,7 +16,6 @@ type CapabilitySignal struct {
 	ToolsUnsupported   bool
 	VersionUnsupported bool
 	ContextLimit       uint64
-	ContextRequested   uint64
 }
 
 func (s CapabilitySignal) Retriable() bool {
@@ -34,8 +33,8 @@ func ParseCapabilityError(message string) CapabilitySignal {
 	if strings.Contains(message, filters.ToolChoiceUnsupportedMessage) {
 		return CapabilitySignal{ToolsUnsupported: true}
 	}
-	contextLimit, contextRequested := filters.CapabilityLimits(message)
-	return CapabilitySignal{ContextLimit: contextLimit, ContextRequested: contextRequested}
+	contextLimit, _ := filters.CapabilityLimits(message)
+	return CapabilitySignal{ContextLimit: contextLimit}
 }
 
 func capabilityOfDispatchError(err error) CapabilitySignal {
@@ -74,13 +73,4 @@ func RecordCapability(recorder CapabilityRecorder, participant, model string, si
 	case signal.ContextLimit > 0:
 		recorder.RecordContextLimit(participant, model, signal.ContextLimit)
 	}
-}
-
-// GrowContextHint raises the token count the next Pick screens hosts against. See
-// gateway-speculative-race.md, "An SSE error event counts as a chunk but never crowns".
-func GrowContextHint(hint uint64, signal CapabilitySignal) uint64 {
-	if signal.ContextRequested > hint {
-		return signal.ContextRequested
-	}
-	return hint
 }

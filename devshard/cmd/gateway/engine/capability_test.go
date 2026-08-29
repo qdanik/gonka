@@ -47,7 +47,7 @@ func TestParseCapabilityError(t *testing.T) {
 		{
 			name:    "total_of_at_least",
 			message: vllmContextTotalMessage,
-			want:    CapabilitySignal{ContextLimit: 40960, ContextRequested: 41200},
+			want:    CapabilitySignal{ContextLimit: 40960},
 		},
 		{
 			name:    "tool_choice_unsupported",
@@ -115,7 +115,6 @@ func TestRetriableCapabilitySignal(t *testing.T) {
 	}{
 		{name: "context_limit", signal: CapabilitySignal{ContextLimit: 8192}, want: true},
 		{name: "tools_unsupported", signal: CapabilitySignal{ToolsUnsupported: true}, want: true},
-		{name: "requested_total_alone", signal: CapabilitySignal{ContextRequested: 41200}},
 		{name: "nothing_parsed", signal: CapabilitySignal{}},
 	}
 
@@ -210,42 +209,6 @@ func TestCapabilityOfAttempt(t *testing.T) {
 				t.Fatalf("signal = %+v, want %+v", got, testCase.want)
 			}
 		})
-	}
-}
-
-// The hint the next Pick screens hosts against grows only from what the host said the request
-// needs, never from what the host said it can serve.
-func TestContextHintGrowsAcrossARetry(t *testing.T) {
-	firstAttempt := failedAttempt(TerminalCapabilityRefused)
-	firstAttempt.ErrorSource = "sse_error"
-	firstAttempt.ErrorMessage = vllmContextTotalMessage
-
-	hint := uint64(1024)
-	hint = GrowContextHint(hint, CapabilityOf(firstAttempt))
-	if hint != 41200 {
-		t.Fatalf("hint after the first refusal = %d, want 41200", hint)
-	}
-
-	secondAttempt := firstAttempt
-	secondAttempt.ErrorMessage = "This model's maximum context length is 8192 tokens. However, you requested 41200 tokens, for a total of at least 9000 tokens."
-	hint = GrowContextHint(hint, CapabilityOf(secondAttempt))
-	if hint != 41200 {
-		t.Fatalf("hint after a smaller refusal = %d, want it held at 41200", hint)
-	}
-
-	thirdAttempt := firstAttempt
-	thirdAttempt.ErrorMessage = "for a total of at least 60000 tokens"
-	if hint = GrowContextHint(hint, CapabilityOf(thirdAttempt)); hint != 60000 {
-		t.Fatalf("hint after a larger refusal = %d, want 60000", hint)
-	}
-}
-
-func TestContextHintIgnoresANonCapabilityFailure(t *testing.T) {
-	attempt := failedAttempt(TerminalDialFailure)
-	attempt.ErrorMessage = "connection reset by peer"
-
-	if hint := GrowContextHint(4096, CapabilityOf(attempt)); hint != 4096 {
-		t.Fatalf("hint = %d, want it unchanged at 4096", hint)
 	}
 }
 

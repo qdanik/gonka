@@ -54,7 +54,7 @@ func TestFindingsAreExportedAsTheirOwnSeries(t *testing.T) {
 	// Slot 0's assigned count is the highest nonce over the group size, so it must clear the
 	// twenty-nonce floor a finding needs before it is raised at all.
 	for nonce := uint64(0); nonce <= 40; nonce += groupSize {
-		if err := book.RecordGhost(testEscrow, nonce, "participant_capability_no_send"); err != nil {
+		if err := book.RecordGhost(testEscrow, nonce, "participant_state_diverged_no_send"); err != nil {
 			t.Fatalf("RecordGhost(%d): %v", nonce, err)
 		}
 	}
@@ -79,13 +79,13 @@ func TestFindingsAreExportedAsTheirOwnSeries(t *testing.T) {
 			for _, label := range metric.GetLabel() {
 				labels[label.GetName()] = label.GetValue()
 			}
-			if labels["code"] == FindingCapabilityBlocked {
+			if labels["code"] == FindingStateDiverged {
 				value, found = metric.GetGauge().GetValue(), true
 			}
 		}
 	}
 	if !found {
-		t.Fatalf("no %q series for the burns that raised it", FindingCapabilityBlocked)
+		t.Fatalf("no %q series for the burns that raised it", FindingStateDiverged)
 	}
 	if labels["severity"] != string(SeverityWarning) {
 		t.Errorf("severity = %q, want %q", labels["severity"], SeverityWarning)

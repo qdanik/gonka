@@ -661,7 +661,7 @@ func TestSimulatorHoldsPreContentChunksUntilTheCrownIsWon(t *testing.T) {
 	sim.reported(t)
 }
 
-func TestSimulatorCapabilityRefusalDoesNotCrownAndGrowsTheContextHint(t *testing.T) {
+func TestSimulatorCapabilityRefusalDoesNotCrownAndRepicksElsewhere(t *testing.T) {
 	sim := newSimulator(t, speculativePolicy(2), 2, qwenModel)
 	sim.host(10, 0, "small-host", &hostScript{
 		receipt: true,
@@ -690,9 +690,6 @@ func TestSimulatorCapabilityRefusalDoesNotCrownAndGrowsTheContextHint(t *testing
 	sim.picker.mu.Unlock()
 	if len(profiles) != 2 {
 		t.Fatalf("Pick calls = %d, want 2", len(profiles))
-	}
-	if profiles[1].ContextHint != 41_200 {
-		t.Errorf("re-pick ContextHint = %d, want 41200", profiles[1].ContextHint)
 	}
 	if len(profiles[1].Exclude) != 1 || profiles[1].Exclude[0] != "small-host" {
 		t.Errorf("re-pick Exclude = %v, want [small-host]", profiles[1].Exclude)

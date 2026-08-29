@@ -3,8 +3,6 @@ package scheduler
 import (
 	"testing"
 	"time"
-
-	"devshard/cmd/gateway/perf"
 )
 
 const (
@@ -36,23 +34,12 @@ func openAvailability() availability {
 		pocRequired:  func(string) bool { return false },
 		throttled:    func(string) bool { return false },
 		ejected:      func(string) bool { return false },
-		capability:   func(string, RequestProfile) (string, bool) { return "", false },
 		stateBlocked: func(string) bool { return false },
 	}
 }
 
 func always(blocked bool) func(string) bool {
 	return func(string) bool { return blocked }
-}
-
-func capabilityBlocksModels(models ...string) func(string, RequestProfile) (string, bool) {
-	blocked := make(map[string]bool, len(models))
-	for _, model := range models {
-		blocked[model] = true
-	}
-	return func(_ string, profile RequestProfile) (string, bool) {
-		return perf.CapabilityToolsUnsupported, blocked[profile.Model]
-	}
 }
 
 // servable is the sweep's fast answer and match is the per-nonce decision, and they must be exactly
@@ -69,9 +56,6 @@ func TestServableAgreesWithMatchOverEveryFilterCombination(t *testing.T) {
 			throttled:    func(participant string) bool { return bit(1) && participant == hostB },
 			ejected:      func(participant string) bool { return bit(2) && participant == hostA },
 			stateBlocked: func(participant string) bool { return bit(3) && participant == hostB },
-			capability: func(participant string, _ RequestProfile) (string, bool) {
-				return perf.CapabilityToolsUnsupported, bit(4) && participant == hostA
-			},
 		}
 		var excluded []string
 		if bit(5) {
@@ -79,7 +63,7 @@ func TestServableAgreesWithMatchOverEveryFilterCombination(t *testing.T) {
 		}
 		queued := queuedWaiter(baseTime, "model-a", excluded...)
 
-		canServe, _, _, _ := servable(queued, participants, availability)
+		canServe, _, _ := servable(queued, participants, availability)
 		matchWouldServe := false
 		for _, participant := range participants {
 			binding := HostBinding{Nonce: 1, Participant: participant}
@@ -234,23 +218,19 @@ func TestMatchBurnKindPastStaleWindow(t *testing.T) {
 	expired := baseTime.Add(matchWaitWindow)
 
 	tests := []struct {
-		name       string
-		waiting    []*waiter
-		capability func(string, RequestProfile) (string, bool)
-		state      func(string) bool
-		wantKind   GhostKind
+		name         string
+		waiting      []*waiter
+		participants []string
+		state        func(string) bool
+		wantKind     GhostKind
 	}{
 		{
-			name:       "every waiter excludes the host and the host cannot serve it anyway",
-			waiting:    []*waiter{queuedWaiter(baseTime, "model-a", hostA)},
-			capability: capabilityBlocksModels("model-a"),
-			wantKind:   ghostExclude,
-		},
-		{
-			name:       "a scanned waiter is capability blocked",
-			waiting:    []*waiter{queuedWaiter(baseTime, "model-a")},
-			capability: capabilityBlocksModels("model-a"),
-			wantKind:   ghostCapability,
+			// With another host able to take it, the exclusion stands and the nonce burns; the sole-host
+			// case is served despite the exclusion instead, and has its own test.
+			name:         "every waiter excludes the host and another can serve it",
+			waiting:      []*waiter{queuedWaiter(baseTime, "model-a", hostA)},
+			participants: []string{hostA, hostB},
+			wantKind:     ghostExclude,
 		},
 		{
 			name:     "the participant's state diverged, whatever is queued",
@@ -269,14 +249,16 @@ func TestMatchBurnKindPastStaleWindow(t *testing.T) {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
 			availability := openAvailability()
-			if testCase.capability != nil {
-				availability.capability = testCase.capability
-			}
 			if testCase.state != nil {
 				availability.stateBlocked = testCase.state
 			}
 
-			decision := match(binding, testCase.waiting, soleHost, availability, expired, matchWaitWindow)
+			participants := testCase.participants
+			if participants == nil {
+				participants = soleHost
+			}
+
+			decision := match(binding, testCase.waiting, participants, availability, expired, matchWaitWindow)
 
 			wantBurn(t, decision, testCase.wantKind)
 		})
@@ -370,7 +352,6 @@ func TestMatchDoesNotMutateItsInputs(t *testing.T) {
 func TestMatchIsTotal(t *testing.T) {
 	t.Parallel()
 	binding := HostBinding{Nonce: 4, HostIdx: 0, Participant: hostA}
-	blockedModel := "model-blocked"
 
 	queues := []struct {
 		name    string
@@ -379,9 +360,8 @@ func TestMatchIsTotal(t *testing.T) {
 		{name: "empty queue"},
 		{name: "compatible waiter", waiting: []*waiter{queuedWaiter(baseTime, "model-a")}},
 		{name: "excluding waiter", waiting: []*waiter{queuedWaiter(baseTime, "model-a", hostA)}},
-		{name: "capability blocked waiter", waiting: []*waiter{queuedWaiter(baseTime, blockedModel)}},
-		{name: "blocked then compatible", waiting: []*waiter{
-			queuedWaiter(baseTime, blockedModel),
+		{name: "two compatible waiters", waiting: []*waiter{
+			queuedWaiter(baseTime, "model-a"),
 			queuedWaiter(baseTime.Add(time.Millisecond), "model-a"),
 		}},
 	}
@@ -393,28 +373,24 @@ func TestMatchIsTotal(t *testing.T) {
 		{name: "past stale window", now: baseTime.Add(matchWaitWindow)},
 	}
 
-	for predicates := range 32 {
+	for predicates := range 16 {
 		pocRequired := predicates&1 != 0
 		throttled := predicates&2 != 0
-		capabilityBlocked := predicates&4 != 0
-		stateBlocked := predicates&8 != 0
-		ejected := predicates&16 != 0
+		stateBlocked := predicates&4 != 0
+		ejected := predicates&8 != 0
 
 		availability := availability{
 			pocRequired:  always(pocRequired),
 			throttled:    always(throttled),
 			ejected:      always(ejected),
 			stateBlocked: always(stateBlocked),
-			capability: func(_ string, profile RequestProfile) (string, bool) {
-				return perf.CapabilityToolsUnsupported, capabilityBlocked || profile.Model == blockedModel
-			},
 		}
 
 		for _, queue := range queues {
 			for _, clock := range clocks {
 				name := queue.name + "/" + clock.name +
 					"/poc=" + boolLabel(pocRequired) + ",throttled=" + boolLabel(throttled) +
-					",capability=" + boolLabel(capabilityBlocked) + ",state=" + boolLabel(stateBlocked) +
+					",state=" + boolLabel(stateBlocked) +
 					",ejected=" + boolLabel(ejected)
 				t.Run(name, func(t *testing.T) {
 					t.Parallel()
@@ -428,11 +404,8 @@ func TestMatchIsTotal(t *testing.T) {
 					}
 					switch outcome := decision.(type) {
 					case serve:
-						if pocRequired || throttled || stateBlocked || capabilityBlocked {
+						if pocRequired || throttled || stateBlocked || ejected {
 							t.Fatalf("served through an active filter: %+v", availability)
-						}
-						if outcome.waiter.profile.Model == blockedModel {
-							t.Fatalf("served an incompatible waiter %+v", outcome.waiter.profile)
 						}
 						if outcome.waiter.exclude[hostA] && !outcome.despiteExclusion {
 							t.Fatalf("served an excluded waiter without saying so %+v", outcome.waiter.profile)

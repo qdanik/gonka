@@ -27,13 +27,11 @@ func (c *raceCoordinator) observePick(assignment scheduler.Assignment, err error
 
 func (c *raceCoordinator) requestProfile(params any) scheduler.RequestProfile {
 	return scheduler.RequestProfile{
-		Model:         c.request.Model,
-		Escrow:        c.escrowID,
-		InputTokens:   int(c.request.InputTokens),
-		RequiresTools: c.request.RequiresTools,
-		ContextHint:   c.contextHint,
-		Exclude:       c.excluded,
-		Params:        params,
+		Model:       c.request.Model,
+		Escrow:      c.escrowID,
+		InputTokens: int(c.request.InputTokens),
+		Exclude:     c.excluded,
+		Params:      params,
 	}
 }
 

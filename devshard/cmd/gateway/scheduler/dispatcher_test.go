@@ -10,7 +10,6 @@ import (
 	"go.uber.org/goleak"
 
 	"devshard/cmd/gateway/chain"
-	"devshard/cmd/gateway/perf"
 	"devshard/types"
 )
 
@@ -311,12 +310,6 @@ func newHarness(t *testing.T, cfg harnessConfig) *harness {
 			},
 			ejected: func(participant string) bool {
 				return cfg.ejected != nil && cfg.ejected(participant)
-			},
-			capability: func(participant string, profile RequestProfile) (string, bool) {
-				if cfg.capability == nil {
-					return "", false
-				}
-				return cfg.capability(participant, profile)
 			},
 			stateBlocked: func(participant string) bool {
 				return cfg.stateBlocked != nil && cfg.stateBlocked(participant)
@@ -748,32 +741,6 @@ func TestDispatcherRefetchesTheSnapshotEachDrain(t *testing.T) {
 
 // A host that has answered "I do not implement tools" will answer the same way tomorrow, so telling
 // the caller to retry wastes their time and a nonce. Every other exhaustion is genuinely transient.
-func TestDispatcherSeparatesAPermanentToolRefusalFromATransientOne(t *testing.T) {
-	tests := []struct {
-		name    string
-		reason  string
-		wantErr error
-	}{
-		{name: "no host implements tools", reason: perf.CapabilityToolsUnsupported, wantErr: ErrToolsUnsupported},
-		{name: "the hosts are merely busy", reason: "context_limit_exceeded", wantErr: ErrNoAvailableHost},
-	}
-	for _, testCase := range tests {
-		t.Run(testCase.name, func(t *testing.T) {
-			test := newHarness(t, harnessConfig{
-				capability: func(string, RequestProfile) (string, bool) { return testCase.reason, true },
-			})
-
-			result := awaitReply(t, test.submit(t, test.clock.Now()))
-
-			if !errors.Is(result.err, testCase.wantErr) {
-				t.Fatalf("err = %v, want %v", result.err, testCase.wantErr)
-			}
-		})
-	}
-}
-
-// A spent deposit is terminal for the escrow: nothing refills it, so without this notice every later
-// request routes to the same escrow and fails identically, forever.
 func TestDispatcherReportsASpentDepositForReplacement(t *testing.T) {
 	t.Run("an exhausted deposit is reported", func(t *testing.T) {
 		test := newHarness(t, harnessConfig{failWith: types.ErrInsufficientBalance})

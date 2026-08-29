@@ -56,7 +56,7 @@ func TestClassifierMapsOneChunkToItsFacts(t *testing.T) {
 				ErrorMessage:      vllmContextTotalMessage,
 				ErrorPayload:      `{"error":{"code":400,"message":"` + vllmContextTotalMessage + `","type":"BadRequestError"}}`,
 				CapabilityRefused: true,
-				Capability:        CapabilitySignal{ContextLimit: 40960, ContextRequested: 41200},
+				Capability:        CapabilitySignal{ContextLimit: 40960},
 			},
 		},
 		{

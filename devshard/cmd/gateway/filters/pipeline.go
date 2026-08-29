@@ -43,7 +43,6 @@ func runPipeline(document *Document, options Options) (Result, error) {
 	}
 	return Result{
 		Body:                body,
-		RequiresTools:       requiresTools(document),
 		Model:               view.Model,
 		ClientStream:        view.Stream,
 		ClientUsage:         usage,
@@ -101,20 +100,4 @@ func applyStage(stage Stage, document *Document, profile *Profile) error {
 		}
 	}
 	return nil
-}
-
-// requiresTools reads the decoded document the pipeline already holds. The answer used to come from a
-// second full unmarshal of the finished body, on every request, to produce one boolean.
-func requiresTools(document *Document) bool {
-	if tools, exists := document.Array("tools"); exists && len(tools) > 0 {
-		return true
-	}
-	choice, exists := document.Get("tool_choice")
-	if !exists {
-		return false
-	}
-	if named, isString := choice.(string); isString {
-		return named != "none"
-	}
-	return true
 }

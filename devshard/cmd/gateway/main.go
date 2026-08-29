@@ -171,10 +171,10 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 	})
 	hosts := perf.NewTracker(configHolder, clock)
 	nonces.SetCapability(func(participant, model string) accounting.HostCapability {
-		versionBlocked, toolBlocked, contextLimit, versionRefusals, toolRefusals, contextRefusals := hosts.Capability(participant, model)
+		contextLimit, versionRefusals, toolRefusals, contextRefusals := hosts.Capability(participant, model)
 		return accounting.HostCapability{
-			ProtocolVersionUnsupported: versionBlocked,
-			ToolChoiceUnsupported:      toolBlocked,
+			ProtocolVersionUnsupported: versionRefusals > 0,
+			ToolChoiceUnsupported:      toolRefusals > 0,
 			ContextLimit:               contextLimit,
 			VersionRefusals:            versionRefusals,
 			ToolRefusals:               toolRefusals,

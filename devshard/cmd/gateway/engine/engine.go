@@ -86,13 +86,11 @@ type Deps struct {
 // Request is one client request as a race sees it. Params passes through unread; OnEscrow fires at
 // the last moment a response header can still be set.
 type Request struct {
-	RequestID     string
-	Model         string
-	Escrow        string
-	InputTokens   uint64
-	RequiresTools bool
-	ClientStream  bool
-	ContextHint   uint64
+	RequestID    string
+	Model        string
+	Escrow       string
+	InputTokens  uint64
+	ClientStream bool
 
 	Params any
 

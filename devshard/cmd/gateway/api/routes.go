@@ -282,13 +282,12 @@ func (s *Server) race(w http.ResponseWriter, r *http.Request, requestID string, 
 	client := newClientStream(w, requestID, normalized.ClientStream, normalized.ClientUsage, normalized.Logprobs)
 	outputTokens := outputTokenBudget(normalized)
 	outcome, err := s.inference.Run(r.Context(), engine.Request{
-		RequestID:     requestID,
-		Model:         normalized.Model,
-		Escrow:        escrowPin,
-		InputTokens:   inputTokens,
-		ClientStream:  normalized.ClientStream,
-		RequiresTools: normalized.RequiresTools,
-		OnEscrow:      func(escrowID string) { client.Header().Set(EscrowHeader, escrowID) },
+		RequestID:    requestID,
+		Model:        normalized.Model,
+		Escrow:       escrowPin,
+		InputTokens:  inputTokens,
+		ClientStream: normalized.ClientStream,
+		OnEscrow:     func(escrowID string) { client.Header().Set(EscrowHeader, escrowID) },
 
 		Params: user.InferenceParams{
 			Model:       normalized.Model,

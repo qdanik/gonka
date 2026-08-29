@@ -60,15 +60,12 @@ The offset is measured against the midpoint of the send-to-receipt round trip, n
 | code | rate of | warning | critical |
 |---|---|---|---|
 | `throttled_by_gateway` | assigned nonces burned without being sent | 10% | — |
-| `blocked_by_capability` | assigned nonces burned because the host refuses this kind of work | 1% | — |
 | `blocked_by_state_divergence` | assigned nonces burned because the host's escrow state no longer matches the group's | 1% | — |
 | `failure_terminals` | nonces that reached the host and produced no usable answer | any | — |
 
 **`throttled_by_gateway`** — this gateway stopped sending, so these nonces are its decision and not the host's failure. Its per-host window narrows after repeated failures and widens again as they stop, which makes this a consequence of the other findings rather than a fault of its own.
 
-**`blocked_by_capability`** — the host answers that it cannot serve this request at all: an unsupported protocol version, a tool call it does not implement, a context length it will not take. Every nonce assigned to it burns, so the rate climbs fast, and unlike throttling it is fixed on the host's side rather than by waiting.
-
-**`blocked_by_state_divergence`** — the host returned a post-state-root that disagrees with the group's. It earns one replay of the retained chain first, because a host rolls its diff back on a mismatch and its state survives intact; this finding counts what it burned after that replay was spent. Read it against `blocked_by_capability`: a capability block says route around this build, a divergence block says eject this host from the escrow.
+**`blocked_by_state_divergence`** — the host returned a post-state-root that disagrees with the group's. It earns one replay of the retained chain first, because a host rolls its diff back on a mismatch and its state survives intact; this finding counts what it burned after that replay was spent. It is the only capability-shaped verdict that still withholds a host: a build that refuses tools, a version or a context length is counted and reported, never routed around.
 
 **`failure_terminals`** — how many failures reached the host at all. Which failure each was is in the `counters` array beside the finding: read `terminal` there, and `phase` of `poc` marks one that is expected, because the host was proving computation and could not serve.
 

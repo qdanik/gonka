@@ -1507,7 +1507,7 @@ func refusalPolicy() EscalationPolicy {
 	return policy
 }
 
-func TestRunRaceGrowsContextHintAndExcludesRefusingHost(t *testing.T) {
+func TestRunRaceRecordsTheContextLimitAndExcludesTheRefusingHost(t *testing.T) {
 	fixture := newRaceFixture(refusalPolicy(), 3)
 	fixture.host(100, 0, "host-0", &hostScript{receipt: true, chunks: []string{"data: too-long\n\n"}})
 	fixture.host(101, 1, "host-1", &hostScript{
@@ -1541,9 +1541,6 @@ func TestRunRaceGrowsContextHintAndExcludesRefusingHost(t *testing.T) {
 	fixture.picker.mu.Unlock()
 	if len(profiles) != 2 {
 		t.Fatalf("picks = %d, want 2", len(profiles))
-	}
-	if profiles[1].ContextHint != 41200 {
-		t.Fatalf("re-pick context hint = %d, want the refused request size", profiles[1].ContextHint)
 	}
 	if len(profiles[1].Exclude) != 1 || profiles[1].Exclude[0] != "host-0" {
 		t.Fatalf("re-pick exclusions = %v, want the refusing host", profiles[1].Exclude)

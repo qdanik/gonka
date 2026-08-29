@@ -30,7 +30,7 @@ Weight is carried by four packages — `filters`, `engine`, `api` and `chain` �
 | `store/` | SQLite: devshard records, admin overrides, intent commitments, rotation status, suspicious hosts, and the asynchronous request-accounting ledger. |
 | `chain/` | All chain input and output: the transaction client (build, sign, broadcast, confirm) and the phase observer that polls the public API and publishes an immutable `PhaseSnapshot`. |
 | `filters/` | The request and response boundary: one rule table for every top-level parameter, per-model profiles, schema bounds, the streaming response rewriter, and the vLLM capability-error parser. |
-| `perf/` | Per-participant decayed success and failure counts, Envoy-style outlier ejection, and the sticky host-capability flags. |
+| `perf/` | Per-participant decayed success and failure counts, Envoy-style outlier ejection, and the host-capability refusal counts. |
 | `limits/` | Three limiters: the gateway-wide FIFO admission limiter, the per-participant AIMD window with circuit breaker, and the chain-weight capacity model. |
 | `registry/` | The live escrow set: escrow id to session, model, group and in-flight count, published and draining, behind a copy-on-write snapshot. |
 | `scheduler/` | Target selection: which escrow, which participant, which nonce — including burning the nonces bound to participants that cannot serve. |

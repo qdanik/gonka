@@ -98,13 +98,11 @@ func (d *dispatcher) sweepExhausted(participants []string, avail availability) {
 		if queued.abandoned.Load() {
 			return false
 		}
-		canServe, toolsUnsupported, busy, chainBlocked := servable(queued, participants, avail)
+		canServe, busy, chainBlocked := servable(queued, participants, avail)
 		if canServe {
 			return true
 		}
 		switch {
-		case toolsUnsupported:
-			queued.deliver(pickResult{err: ErrToolsUnsupported})
 		case busy, chainBlocked:
 			queued.deliver(pickResult{err: ErrHostsBusy})
 		default:
@@ -136,23 +134,19 @@ func (d *dispatcher) keepWaiting(accept func(*waiter) bool) {
 // servable also reports the one blocking reason a caller can fix and no wait can: tool support. It
 // separates a busy host from one the chain has stopped -- the first passes on its own and is what a
 // waiter may be held for, the second lasts an epoch phase.
-func servable(queued *waiter, participants []string, avail availability) (canServe, toolsUnsupported, busy, chainBlocked bool) {
-	anyToolRefusal, anyOtherReason, anyBusy, anyChainBlocked := false, false, false, false
+func servable(queued *waiter, participants []string, avail availability) (canServe, busy, chainBlocked bool) {
+	anyBusy, anyChainBlocked := false, false
 	for _, participant := range participants {
-		switch reason := avail.blocks(participant, queued); reason {
+		switch avail.blocks(participant, queued) {
 		case blockNone:
-			return true, false, false, false
-		case blockToolsUnsupported:
-			anyToolRefusal = true
+			return true, false, false
 		case blockThrottled:
-			anyOtherReason, anyBusy = true, true
+			anyBusy = true
 		case blockPoCRequired:
-			anyOtherReason, anyChainBlocked = true, true
-		default:
-			anyOtherReason = true
+			anyChainBlocked = true
 		}
 	}
-	return false, anyToolRefusal && !anyOtherReason, anyBusy, anyChainBlocked
+	return false, anyBusy, anyChainBlocked
 }
 
 // reservation is what a serve decision took before the nonce was committed: the participant's concurrency

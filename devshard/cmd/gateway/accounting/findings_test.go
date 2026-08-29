@@ -299,10 +299,12 @@ func TestASlowDecodeDuringPoCIsNotChargedToTheHost(t *testing.T) {
 
 // A dashboard and an operator's alert select on these strings, and the ledger they were written
 // against is the one this gateway replaces. A rename is a silent alert that stops firing.
+// "blocked_by_capability" is deliberately absent: nothing withholds a host from routing over a
+// capability refusal any more, so the code names a burn that can no longer happen.
 func TestTheFindingVocabularyKeepsTheNamesOperatorsAlertOn(t *testing.T) {
 	for _, code := range []string{
 		"execution_timeouts", "refusals", "answers_unused", "throttled_by_gateway",
-		"blocked_by_capability", "chain_recorded_misses", "chain_recorded_invalid",
+		"chain_recorded_misses", "chain_recorded_invalid",
 		"challenges_unresolved", "timeouts_undecided", "reasons_unknown",
 		"ledger_disagrees_with_chain", "ledger_overcounted", "logprobs_not_token_ids",
 		"slow_receipts", "slow_chunks", "clock_drift", "slow_decode",
@@ -333,21 +335,21 @@ func TestUndecidedTimeoutsAreMeasuredAgainstTheRoundsThatVoted(t *testing.T) {
 
 // A host blocked by capability burns every nonce it is assigned; reading that as ordinary throttling
 // hides a defect only its operator can fix.
-func TestCapabilityBurnsAreReportedApartFromThrottling(t *testing.T) {
+func TestStateDivergenceBurnsAreReportedApartFromThrottling(t *testing.T) {
 	record := recordWith(100, map[Disposition]uint64{DispositionFinishedUsed: 100})
 	record.Counters = []CounterRecord{{
-		CounterKey: CounterKey{Disposition: DispositionGhost, GhostReason: "participant_capability_no_send"},
+		CounterKey: CounterKey{Disposition: DispositionGhost, GhostReason: "participant_state_diverged_no_send"},
 		Count:      30,
 	}}
 
 	findings := findingsFor(record)
 
-	blocked := findingWithCode(t, findings, FindingCapabilityBlocked)
-	if blocked.Part != 30 {
-		t.Fatalf("blocked = %d, want the 30 burned nonces", blocked.Part)
+	diverged := findingWithCode(t, findings, FindingStateDiverged)
+	if diverged.Part != 30 {
+		t.Fatalf("diverged = %d, want the 30 burned nonces", diverged.Part)
 	}
 	if slices.Contains(codesOf(findings), FindingGatewayThrottled) {
-		t.Error("a capability burn was also counted as gateway throttling: one cause, two accusations")
+		t.Error("a divergence burn was also counted as gateway throttling: one cause, two accusations")
 	}
 }
 

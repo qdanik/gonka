@@ -11,10 +11,6 @@ var (
 	// excluded: the first passes on its own, the second does not, and a client retries them differently.
 	ErrHostsBusy = errors.New("all hosts are at capacity")
 
-	// ErrToolsUnsupported reports the one exhaustion waiting cannot fix: every host has already said it
-	// does not implement tools, so a retry buys the same refusal at the same price.
-	ErrToolsUnsupported = errors.New("no host supports tool calling")
-
 	// ErrAllowlistUnreachable reports that no escrow this gateway serves holds a participant the
 	// allowlist admits. It is separated from ErrNoAvailableHost because waiting cannot fix it: the
 	// operator narrowed routing to participants none of these escrow groups contains.

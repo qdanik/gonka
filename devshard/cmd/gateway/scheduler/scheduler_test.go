@@ -482,12 +482,6 @@ func TestPickWiresEachAvailabilityPredicateToItsSource(t *testing.T) {
 			wantReason: ghostThrottled.reason(),
 		},
 		{
-			name:       "a participant that cannot serve the request",
-			arrange:    func(test *schedulerHarness) { test.perf.block(hostB, "context_limit_exceeded") },
-			profile:    RequestProfile{Model: modelA},
-			wantReason: ghostCapability.reason(),
-		},
-		{
 			name:       "a participant the outlier detector ejected",
 			arrange:    func(test *schedulerHarness) { test.perf.eject(hostB) },
 			profile:    RequestProfile{Model: modelA},
@@ -648,10 +642,10 @@ func TestPickAdmitsExactlyOneCallerThroughAWindowOfOne(t *testing.T) {
 	}
 }
 
-func TestPickAsksTheHostSourcesWithTheRequestsOwnKeys(t *testing.T) {
+func TestPickAsksTheLimiterAboutTheRequestsOwnModel(t *testing.T) {
 	test := newSchedulerHarness(t, schedulerConfig{})
 
-	_, err := test.scheduler.Pick(context.Background(), RequestProfile{Model: modelA, RequiresTools: true, ContextHint: 4096})
+	_, err := test.scheduler.Pick(context.Background(), RequestProfile{Model: modelA})
 	if err != nil {
 		t.Fatalf("Pick: %v", err)
 	}
@@ -659,15 +653,6 @@ func TestPickAsksTheHostSourcesWithTheRequestsOwnKeys(t *testing.T) {
 	for _, model := range test.limiter.askedModels() {
 		if model != modelA {
 			t.Fatalf("limiter asked about model %q, want %q", model, modelA)
-		}
-	}
-	queries := test.perf.asked()
-	if len(queries) == 0 {
-		t.Fatal("the capability source was never asked")
-	}
-	for _, query := range queries {
-		if !query.requiresTools || query.contextHint != 4096 {
-			t.Fatalf("capability query = %+v, want the request's own tool and context keys", query)
 		}
 	}
 }

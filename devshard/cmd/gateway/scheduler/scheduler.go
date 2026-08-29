@@ -236,13 +236,10 @@ func (s *Scheduler) predicates(escrow Escrow) func(chain.PhaseSnapshot) availabi
 		preserved := pocPreserved(snapshot, model)
 		allowed := allowedParticipants(s.settings.Load().Scheduler.ParticipantAllowlist)
 		return availability{
-			notAllowed:  func(participant string) bool { return !allowed(participant) },
-			pocRequired: func(participant string) bool { return !preserved(participant) },
-			throttled:   func(participant string) bool { return !s.limiter.Available(participant, model) },
-			ejected:     func(participant string) bool { return s.perf.Ejected(participant, model) },
-			capability: func(participant string, profile RequestProfile) (string, bool) {
-				return s.perf.CannotServe(participant, model, profile.RequiresTools, profile.ContextHint)
-			},
+			notAllowed:   func(participant string) bool { return !allowed(participant) },
+			pocRequired:  func(participant string) bool { return !preserved(participant) },
+			throttled:    func(participant string) bool { return !s.limiter.Available(participant, model) },
+			ejected:      func(participant string) bool { return s.perf.Ejected(participant, model) },
 			stateBlocked: stateBlocked,
 		}
 	}
@@ -302,13 +299,11 @@ func pocPreserved(snapshot chain.PhaseSnapshot, model string) func(string) bool 
 // the escrow's inference params, so it must be exactly devshard/user.InferenceParams -- not the request
 // body it was built from, which the adapter cannot commit and will reject.
 type RequestProfile struct {
-	Model         string
-	Escrow        string
-	InputTokens   int
-	RequiresTools bool
-	ContextHint   uint64
-	Exclude       []string
-	Params        any
+	Model       string
+	Escrow      string
+	InputTokens int
+	Exclude     []string
+	Params      any
 }
 
 // Assignment is a committed nonce ready to spend. EscrowHold gives back the escrow's in-flight count the
@@ -403,7 +398,6 @@ type hostLimiter interface {
 // hostHealth is satisfied by *perf.Tracker. Ejected is already capped to a fraction of the model's known
 // hosts, so honouring it here can never empty the pool.
 type hostHealth interface {
-	CannotServe(participant, model string, requiresTools bool, contextHint uint64) (string, bool)
 	Ejected(participant, model string) bool
 }
 

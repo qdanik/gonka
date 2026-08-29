@@ -4,277 +4,119 @@ import (
 	"fmt"
 	"sync"
 	"testing"
-	"time"
 )
 
-var (
-	capabilityModel = "model-a"
-	capabilityNow   = time.Unix(1_700_000_000, 0)
-)
+const capabilityModel = "model-a"
 
-const capabilityWindow = time.Hour
+func TestARecordedContextLimitIsWhatTheHostAdmittedTo(t *testing.T) {
+	t.Parallel()
+	tracker := newCapabilityTracker()
 
-func TestCapabilityTrackerRecordContextLimitBlocksAboveStoredValue(t *testing.T) {
-	c := newCapabilityTracker()
-	c.recordContextLimit("participant-a", capabilityModel, 4096, capabilityNow)
+	tracker.recordContextLimit("host-0", capabilityModel, 4096)
 
-	if reason, blocked := c.cannotServe("participant-a", capabilityModel, false, 5000, capabilityNow, capabilityWindow); !blocked || reason != "context_limit_exceeded" {
-		t.Fatalf("cannotServe() over the stored limit = (%q, %v), want (context_limit_exceeded, true)", reason, blocked)
-	}
-	if _, blocked := c.cannotServe("participant-a", capabilityModel, false, 100, capabilityNow, capabilityWindow); blocked {
-		t.Fatal("cannotServe() under the stored limit = true, want false")
+	limit, _, _, refusals := tracker.capability("host-0", capabilityModel)
+	if limit != 4096 || refusals != 1 {
+		t.Errorf("limit/refusals = %d/%d, want 4096 and one refusal", limit, refusals)
 	}
 }
 
-func TestCapabilityTrackerRecordContextLimitIgnoresZero(t *testing.T) {
-	c := newCapabilityTracker()
-	c.recordContextLimit("participant-a", capabilityModel, 0, capabilityNow)
+// Zero is what a host sends when it will not say how large its context is, and storing it would report
+// a limit of nothing rather than an unknown one.
+func TestAZeroContextLimitIsNotRecorded(t *testing.T) {
+	t.Parallel()
+	tracker := newCapabilityTracker()
 
-	if _, blocked := c.cannotServe("participant-a", capabilityModel, false, 999999, capabilityNow, capabilityWindow); blocked {
-		t.Fatal("cannotServe() after a zero-value record = true, want false (no limit stored)")
+	tracker.recordContextLimit("host-0", capabilityModel, 0)
+
+	limit, _, _, refusals := tracker.capability("host-0", capabilityModel)
+	if limit != 0 || refusals != 0 {
+		t.Errorf("limit/refusals = %d/%d, want nothing recorded", limit, refusals)
 	}
 }
 
-func TestCapabilityTrackerRecordContextLimitUpdatesOnChange(t *testing.T) {
-	c := newCapabilityTracker()
-	c.recordContextLimit("participant-a", capabilityModel, 4096, capabilityNow)
-	c.recordContextLimit("participant-a", capabilityModel, 8192, capabilityNow)
+func TestTheLatestContextLimitReplacesTheOneBefore(t *testing.T) {
+	t.Parallel()
+	tracker := newCapabilityTracker()
 
-	if _, blocked := c.cannotServe("participant-a", capabilityModel, false, 8000, capabilityNow, capabilityWindow); blocked {
-		t.Fatal("cannotServe() under the updated limit = true, want false")
-	}
-	if reason, blocked := c.cannotServe("participant-a", capabilityModel, false, 8193, capabilityNow, capabilityWindow); !blocked || reason != "context_limit_exceeded" {
-		t.Fatalf("cannotServe() over the updated limit = (%q, %v), want (context_limit_exceeded, true)", reason, blocked)
-	}
-}
+	tracker.recordContextLimit("host-0", capabilityModel, 8192)
+	tracker.recordContextLimit("host-0", capabilityModel, 2048)
 
-func TestCapabilityTrackerRecordToolUnsupportedIsIdempotent(t *testing.T) {
-	c := newCapabilityTracker()
-	c.recordToolUnsupported("participant-a", capabilityModel, capabilityNow)
-	c.recordToolUnsupported("participant-a", capabilityModel, capabilityNow)
-
-	if reason, blocked := c.cannotServe("participant-a", capabilityModel, true, 0, capabilityNow, capabilityWindow); !blocked || reason != "tool_choice_unsupported" {
-		t.Fatalf("cannotServe() after two recordToolUnsupported calls = (%q, %v), want (tool_choice_unsupported, true)", reason, blocked)
+	limit, _, _, refusals := tracker.capability("host-0", capabilityModel)
+	if limit != 2048 || refusals != 2 {
+		t.Errorf("limit/refusals = %d/%d, want the newer 2048 and both refusals counted", limit, refusals)
 	}
 }
 
-func TestCapabilityTrackerCannotServe(t *testing.T) {
-	tests := []struct {
-		name            string
-		toolUnsupported bool
-		contextLimit    uint64
-		requiresTools   bool
-		contextHint     uint64
-		wantReason      string
-		wantBlocked     bool
-	}{
-		{
-			name:            "requires tools and participant is tool unsupported blocks",
-			toolUnsupported: true,
-			requiresTools:   true,
-			wantReason:      "tool_choice_unsupported",
-			wantBlocked:     true,
-		},
-		{
-			name:          "requires tools but participant supports tools does not block",
-			requiresTools: true,
-			wantBlocked:   false,
-		},
-		{
-			name:         "context hint over the known limit blocks",
-			contextLimit: 1000,
-			contextHint:  1001,
-			wantReason:   "context_limit_exceeded",
-			wantBlocked:  true,
-		},
-		{
-			name:         "context hint equal to the known limit does not block",
-			contextLimit: 1000,
-			contextHint:  1000,
-			wantBlocked:  false,
-		},
-		{
-			name:         "context hint under the known limit does not block",
-			contextLimit: 1000,
-			contextHint:  500,
-			wantBlocked:  false,
-		},
-		{
-			name:        "no known capability limits does not block",
-			contextHint: 999999,
-			wantBlocked: false,
-		},
-		{
-			name:            "tool_choice_unsupported takes precedence over an exceeded context limit",
-			toolUnsupported: true,
-			contextLimit:    100,
-			requiresTools:   true,
-			contextHint:     500,
-			wantReason:      "tool_choice_unsupported",
-			wantBlocked:     true,
-		},
-	}
-	for _, testCase := range tests {
-		t.Run(testCase.name, func(t *testing.T) {
-			c := newCapabilityTracker()
-			if testCase.toolUnsupported {
-				c.recordToolUnsupported("participant-a", capabilityModel, capabilityNow)
-			}
-			if testCase.contextLimit > 0 {
-				c.recordContextLimit("participant-a", capabilityModel, testCase.contextLimit, capabilityNow)
-			}
+// Nothing here withholds a host from routing, so the only question a reader can ask is how often each
+// refusal happened -- and a repeat is a build that refuses everything, not a one-off.
+func TestRefusalsAreCountedRatherThanJudged(t *testing.T) {
+	t.Parallel()
+	tracker := newCapabilityTracker()
 
-			reason, blocked := c.cannotServe("participant-a", capabilityModel, testCase.requiresTools, testCase.contextHint, capabilityNow, capabilityWindow)
-			if reason != testCase.wantReason || blocked != testCase.wantBlocked {
-				t.Fatalf("cannotServe() = (%q, %v), want (%q, %v)", reason, blocked, testCase.wantReason, testCase.wantBlocked)
-			}
-		})
+	tracker.recordVersionUnsupported("host-0")
+	tracker.recordVersionUnsupported("host-0")
+	tracker.recordToolUnsupported("host-0", capabilityModel)
+
+	_, versionRefusals, toolRefusals, _ := tracker.capability("host-0", capabilityModel)
+	if versionRefusals != 2 || toolRefusals != 1 {
+		t.Errorf("version/tool refusals = %d/%d, want 2 and 1", versionRefusals, toolRefusals)
 	}
 }
 
-// TestCapabilityTrackerConcurrentAccessIsRaceFree must run with -race: it
-// pins goroutine-safety, not any particular interleaving outcome.
+// A tool call and a context length belong to the model; a protocol version belongs to the build, so a
+// refusal on one model must not be reported against another.
+func TestAModelsRefusalIsNotReportedAgainstAnotherModel(t *testing.T) {
+	t.Parallel()
+	tracker := newCapabilityTracker()
+
+	tracker.recordToolUnsupported("host-0", capabilityModel)
+	tracker.recordContextLimit("host-0", capabilityModel, 4096)
+	tracker.recordVersionUnsupported("host-0")
+
+	limit, versionRefusals, toolRefusals, contextRefusals := tracker.capability("host-0", "model-b")
+	if limit != 0 || toolRefusals != 0 || contextRefusals != 0 {
+		t.Errorf("model-b reports limit %d, %d tool and %d context refusals, want none",
+			limit, toolRefusals, contextRefusals)
+	}
+	if versionRefusals != 1 {
+		t.Errorf("model-b reports %d version refusals, want the build's own 1", versionRefusals)
+	}
+}
+
 func TestCapabilityTrackerConcurrentAccessIsRaceFree(t *testing.T) {
-	c := newCapabilityTracker()
+	tracker := newCapabilityTracker()
 	const participantCount = 8
 	const iterations = 200
 
-	var wg sync.WaitGroup
-	for i := range participantCount {
-		participant := fmt.Sprintf("participant-%d", i)
-		wg.Add(3)
+	var waiting sync.WaitGroup
+	for index := range participantCount {
+		participant := fmt.Sprintf("participant-%d", index)
+		waiting.Add(3)
 		go func() {
-			defer wg.Done()
-			for j := range iterations {
-				c.recordContextLimit(participant, capabilityModel, uint64(1000+j), capabilityNow)
+			defer waiting.Done()
+			for iteration := range iterations {
+				tracker.recordContextLimit(participant, capabilityModel, uint64(1000+iteration))
 			}
 		}()
 		go func() {
-			defer wg.Done()
+			defer waiting.Done()
 			for range iterations {
-				c.recordToolUnsupported(participant, capabilityModel, capabilityNow)
+				tracker.recordToolUnsupported(participant, capabilityModel)
 			}
 		}()
 		go func() {
-			defer wg.Done()
+			defer waiting.Done()
 			for range iterations {
-				_, _ = c.cannotServe(participant, capabilityModel, true, 500, capabilityNow, capabilityWindow)
+				_, _, _, _ = tracker.capability(participant, capabilityModel)
 			}
 		}()
 	}
-	wg.Wait()
+	waiting.Wait()
 
-	for i := range participantCount {
-		participant := fmt.Sprintf("participant-%d", i)
-		if reason, blocked := c.cannotServe(participant, capabilityModel, true, 0, capabilityNow, capabilityWindow); !blocked || reason != "tool_choice_unsupported" {
-			t.Fatalf("cannotServe(%s) after concurrent recordToolUnsupported = (%q, %v), want (tool_choice_unsupported, true)", participant, reason, blocked)
+	for index := range participantCount {
+		participant := fmt.Sprintf("participant-%d", index)
+		if _, _, toolRefusals, _ := tracker.capability(participant, capabilityModel); toolRefusals != iterations {
+			t.Fatalf("%s counted %d tool refusals, want %d", participant, toolRefusals, iterations)
 		}
-	}
-}
-
-func TestAVersionRefusalIsCountedButNeverRoutedOn(t *testing.T) {
-	t.Parallel()
-	tracker := newCapabilityTracker()
-	tracker.recordVersionUnsupported("host-0")
-
-	for _, shape := range []struct {
-		name          string
-		requiresTools bool
-		contextHint   uint64
-	}{
-		{name: "a plain request"},
-		{name: "a request needing tools", requiresTools: true},
-		{name: "a large request", contextHint: 100_000},
-	} {
-		t.Run(shape.name, func(t *testing.T) {
-			if reason, blocked := tracker.cannotServe("host-0", capabilityModel, shape.requiresTools, shape.contextHint, capabilityNow, capabilityWindow); blocked {
-				t.Fatalf("a version refusal held the host out of the rota with reason %q", reason)
-			}
-		})
-	}
-
-	versionBlocked, _, _, refusals, _, _ := tracker.capability("host-0", capabilityModel, capabilityNow, capabilityWindow)
-	if !versionBlocked || refusals != 1 {
-		t.Errorf("report says refused=%v count=%d, want the refusal visible to a reader", versionBlocked, refusals)
-	}
-}
-
-func TestCapabilityVerdictsStopBlockingOnceStale(t *testing.T) {
-	t.Parallel()
-	tracker := newCapabilityTracker()
-	tracker.recordToolUnsupported("host-1", capabilityModel, capabilityNow)
-	tracker.recordContextLimit("host-2", capabilityModel, 1000, capabilityNow)
-
-	later := capabilityNow.Add(capabilityWindow + time.Second)
-	for _, probe := range []struct {
-		participant   string
-		requiresTools bool
-		contextHint   uint64
-	}{
-		{participant: "host-1", requiresTools: true},
-		{participant: "host-2", contextHint: 5000},
-	} {
-		if reason, blocked := tracker.cannotServe(probe.participant, capabilityModel, probe.requiresTools, probe.contextHint, later, capabilityWindow); blocked {
-			t.Errorf("%s still blocked past the window with reason %q", probe.participant, reason)
-		}
-	}
-}
-
-func TestCapabilityEvictStaleDropsForgottenVerdicts(t *testing.T) {
-	t.Parallel()
-	tracker := newCapabilityTracker()
-	tracker.recordToolUnsupported("gone", capabilityModel, capabilityNow)
-	tracker.recordToolUnsupported("current", capabilityModel, capabilityNow.Add(capabilityWindow))
-
-	tracker.evictStale(capabilityNow.Add(capabilityWindow+time.Second), capabilityWindow)
-
-	tracker.mu.RLock()
-	defer tracker.mu.RUnlock()
-	if _, held := tracker.toolUnsupported[hostKey{participant: "gone", model: capabilityModel}]; held {
-		t.Error("a verdict past the window survived the sweep")
-	}
-	if _, held := tracker.toolUnsupported[hostKey{participant: "current", model: capabilityModel}]; !held {
-		t.Error("the sweep dropped a verdict that is still fresh")
-	}
-}
-
-func TestACapabilityRefusalIsScopedToTheModelThatEarnedIt(t *testing.T) {
-	const other = "model-b"
-	tests := []struct {
-		name   string
-		record func(*capabilityTracker)
-		query  func(*capabilityTracker, string) bool
-	}{
-		{
-			name:   "tool refusal",
-			record: func(c *capabilityTracker) { c.recordToolUnsupported("participant-a", capabilityModel, capabilityNow) },
-			query: func(c *capabilityTracker, model string) bool {
-				_, blocked := c.cannotServe("participant-a", model, true, 0, capabilityNow, capabilityWindow)
-				return blocked
-			},
-		},
-		{
-			name: "context limit",
-			record: func(c *capabilityTracker) {
-				c.recordContextLimit("participant-a", capabilityModel, 4096, capabilityNow)
-			},
-			query: func(c *capabilityTracker, model string) bool {
-				_, blocked := c.cannotServe("participant-a", model, false, 5000, capabilityNow, capabilityWindow)
-				return blocked
-			},
-		},
-	}
-	for _, testCase := range tests {
-		t.Run(testCase.name, func(t *testing.T) {
-			tracker := newCapabilityTracker()
-			testCase.record(tracker)
-
-			if !testCase.query(tracker, capabilityModel) {
-				t.Fatal("the model that earned the refusal must be blocked")
-			}
-			if testCase.query(tracker, other) {
-				t.Error("a refusal on one model blocked another")
-			}
-		})
 	}
 }

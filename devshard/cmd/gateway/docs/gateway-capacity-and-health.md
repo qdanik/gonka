@@ -10,7 +10,7 @@ Three separate questions, three separate mechanisms:
 
 They are deliberately not one thing. The first protects the gateway and respects the network's view of how much of the model's capacity this gateway commands; the second protects the participant from the gateway; the third is an outlier detector plus the sticky record of what a host has proved it cannot do.
 
-A host is removed from a pick by the participant limiter, by the capability flags, or by the ejection verdict — see [Outlier ejection](#outlier-ejection) for what the ejection verdict is capped by before routing honours it.
+A host is removed from a pick by the participant limiter or by the ejection verdict — see [Outlier ejection](#outlier-ejection) for what the ejection verdict is capped by before routing honours it.
 
 The design principle across all three is **adaptation instead of punishment**. The legacy gateway quarantined a host for thirty to sixty minutes; here an overloaded host receives less traffic within one round trip and recovers automatically, and the worst case is minutes.
 
@@ -130,7 +130,7 @@ A retired escrow stays in `Snapshot` until that count reaches zero, reporting `d
 
 `perf.Tracker` answers two questions in O(1) with no lock: **is this participant withheld from routing** (`Ejected`), and **did the detector want it out at all** (`Degraded`). They differ only by the pool-wide cap, and each has exactly one job.
 
-**`Ejected` is a routing gate.** It is one of the scheduler's six host gates — excluded, proof-of-compute-required, throttled, ejected, state-blocked and capability — so a host it names receives no request and its nonces are burned as `participant_ejected_no_send` ghosts (`scheduler/match.go`, `scheduler/ghost.go`). It also drives the `devshard_gateway_host_ejected` gauge and one branch of the limiter-verdict ladder, where a `Stalled` attempt is charged to the host instead of excused as a model outcome, but only while that host is ejected (`engine/outcome.go`).
+**`Ejected` is a routing gate.** It is one of the scheduler's five host gates — excluded, proof-of-compute-required, throttled, ejected and state-blocked — so a host it names receives no request and its nonces are burned as `participant_ejected_no_send` ghosts (`scheduler/match.go`, `scheduler/ghost.go`). It also drives the `devshard_gateway_host_ejected` gauge and one branch of the limiter-verdict ladder, where a `Stalled` attempt is charged to the host instead of excused as a model outcome, but only while that host is ejected (`engine/outcome.go`).
 
 **`Degraded` is why the gate is not the whole story.** The cap below refuses to honour an ejection once too many of a model's hosts are failing at once, which is exactly the moment the gate stops protecting anything: those hosts stay in rotation. `Degraded` reports the verdict *before* the cap, and the race reads it for one decision — a primary the detector wanted out starts its second attempt immediately, under `primary_degraded`, rather than waiting out the receipt or first-token deadline. That hedge is bounded by the attempt budget, so a correlated outage costs at most one extra attempt per request and never an unbounded retry storm.
 
@@ -146,11 +146,11 @@ A retired escrow stays in `Snapshot` until that count reaches zero, reporting `d
 
 Stale host state is swept at most once per tenth of the staleness window, because entries age out over minutes and scanning every host on every sample costs O(hosts) under the global lock for nothing.
 
-**Capability flags** — a host's known context limit and whether it rejects tool use — are keyed by participant and model and expire with the host staleness window. They feed the scheduler's capability filter, which is how a retry skips every host already known to be too small. A protocol-version refusal is counted and reported beside them but never routed on: it is the one verdict that would hold a host out of the rota wholesale rather than steer the requests it cannot serve, and a gateway serves one protocol version for its whole life, so holding out would retire the host for good.
+**Capability refusals** — an unsupported protocol version, a tool call the build does not implement, a context length it will not take — are counted, and the smallest context a host has admitted to is kept beside them. Nothing here withholds a host from routing: the counts say what to fix and how often it happened, and a refusal that repeats is a build that refuses everything rather than a one-off. Version refusals are keyed by participant, because a protocol version is a property of the build; tool and context refusals are keyed by participant and model.
 
 ## Nothing here is persisted
 
-Every restart starts clean: no ejections, no capability flags, every AIMD window at its initial value, every breaker closed, every decayed counter at zero. That is a deliberate divergence from the legacy gateway, argued in [gateway-non-goals.md](./gateway-non-goals.md): minute-scale backoff self-heals faster than replaying stale penalties is worth. The cost is that a genuinely bad host gets one free window after every deploy.
+Every restart starts clean: no ejections, no capability counts, every AIMD window at its initial value, every breaker closed, every decayed counter at zero. That is a deliberate divergence from the legacy gateway, argued in [gateway-non-goals.md](./gateway-non-goals.md): minute-scale backoff self-heals faster than replaying stale penalties is worth. The cost is that a genuinely bad host gets one free window after every deploy.
 
 The one host judgement that *is* persisted is the operator's manual suspicious-host pin, and for the opposite reason — a pin the gateway acts on but forgets on restart is a state an operator cannot see. The store is written before the in-memory copy (`main.go`, `suspiciousHosts.Add`).
 

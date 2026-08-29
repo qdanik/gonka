@@ -152,7 +152,6 @@ type raceCoordinator struct {
 	pickReason       string
 	moreImmediate    int
 	excluded         []string
-	contextHint      uint64
 	clientGoneAt     time.Time
 	cancelled        bool
 	handedOff        bool
@@ -206,18 +205,17 @@ func newCoordinator(clientCtx context.Context, deps raceDeps, request raceReques
 	contexts := newDrain(clientCtx, deps.DrainTimeout)
 	request.Client = contexts.gate(request.Client)
 	return &raceCoordinator{
-		drain:       contexts,
-		deps:        deps,
-		request:     request,
-		events:      make(chan AttemptEvent, eventBuffer),
-		crown:       make(chan crownRequest),
-		picked:      make(chan pickedHost, 1),
-		done:        make(chan struct{}),
-		timer:       deps.Timer(),
-		byNonce:     map[uint64]*liveAttempt{},
-		contextHint: request.ContextHint,
-		escrowID:    request.Escrow,
-		started:     deps.Now(),
+		drain:    contexts,
+		deps:     deps,
+		request:  request,
+		events:   make(chan AttemptEvent, eventBuffer),
+		crown:    make(chan crownRequest),
+		picked:   make(chan pickedHost, 1),
+		done:     make(chan struct{}),
+		timer:    deps.Timer(),
+		byNonce:  map[uint64]*liveAttempt{},
+		escrowID: request.Escrow,
+		started:  deps.Now(),
 	}
 }
 

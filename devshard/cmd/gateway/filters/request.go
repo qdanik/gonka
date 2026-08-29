@@ -19,7 +19,6 @@ type Result struct {
 	Model               string
 	ClientStream        bool
 	ClientUsage         bool
-	RequiresTools       bool
 	MaxTokens           uint64
 	MaxCompletionTokens uint64
 	Logprobs            LogprobIntent
