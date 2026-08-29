@@ -12,13 +12,11 @@ import (
 var (
 	ErrEmptyStream = errors.New("empty content stream")
 
-	// ErrWinnerIncomplete: the client already saw this attempt's bytes, so no other attempt's
-	// completion can be substituted for it.
+	// ErrWinnerIncomplete: the client already saw this attempt's bytes, so no substitute can be sent.
 	ErrWinnerIncomplete = errors.New("winner failed after streaming started")
 )
 
-// HostApplicationError is an upstream refusal the client must see verbatim: the host answered, and
-// its answer is the response.
+// HostApplicationError is an upstream refusal the client must see verbatim: the host's answer is the response.
 type HostApplicationError struct {
 	Code    string
 	Type    string
@@ -52,8 +50,7 @@ func (e *HostApplicationError) HTTPStatus() int {
 	return http.StatusBadGateway
 }
 
-// UpstreamStatus reports the HTTP status a transport error carries, which is the only place the
-// engine can learn that a host throttled or rejected the request.
+// UpstreamStatus reports the HTTP status a transport error carries, the only place a host's refusal is visible.
 func UpstreamStatus(err error) (int, bool) {
 	var upstream *transport.UpstreamStatusError
 	if errors.As(err, &upstream) && upstream != nil {

@@ -143,7 +143,7 @@ Beyond the request path, the process runs: the chain phase observer, the escrow 
 
 ## Deliberate divergences from the legacy gateway
 
-Recorded in full in [`docs/gateway-non-goals.md`](./docs/gateway-non-goals.md); the load-bearing ones:
+Recorded in full in [`docs/rules.md`](./docs/rules.md); the load-bearing ones:
 
 - **Every restart starts clean** — no ejections, no capability counts, no penalties replayed. Minute-scale backoff self-heals faster than stale state is worth.
 - **Capability refusals do not withhold a host from routing.** They are counted and reported; a version refusal would otherwise retire a host permanently, since a gateway serves one protocol version for its whole life.

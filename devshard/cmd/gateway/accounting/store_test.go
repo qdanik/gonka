@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"devshard/cmd/gateway/engine"
 	"devshard/types"
 )
 
@@ -99,7 +100,7 @@ func TestANonceLeftPendingByARestartIsNamedRatherThanLost(t *testing.T) {
 			continue
 		}
 		for _, counter := range record.Counters {
-			if counter.TimeoutAction != TimeoutActionAbandoned {
+			if counter.TimeoutAction != engine.TimeoutActionAbandoned {
 				t.Fatalf("timeout action = %q, want the abandonment named", counter.TimeoutAction)
 			}
 		}

@@ -2,10 +2,7 @@ package perf
 
 import "sync"
 
-// capabilityTracker is what a host's build has refused, counted rather than judged: nothing here
-// withholds a host from routing. A tool call and a context length are properties of what the model
-// asks for, so those are keyed by model; a protocol version is a property of the build, so that one
-// is not.
+// capabilityTracker counts refusals rather than judging them. See README.md, "What a capability refusal is keyed on".
 type capabilityTracker struct {
 	mu sync.RWMutex
 
@@ -24,8 +21,7 @@ func newCapabilityTracker() *capabilityTracker {
 	}
 }
 
-// The three recorders report whether the observation is new, so their caller can say so once instead
-// of on every repeat, and can say it outside the lock.
+// The three recorders report a first observation, so a caller can log it once and outside the lock.
 func (c *capabilityTracker) recordContextLimit(participant, model string, maxTokens uint64) (previous uint64, changed bool) {
 	if maxTokens == 0 {
 		return 0, false
@@ -34,9 +30,13 @@ func (c *capabilityTracker) recordContextLimit(participant, model string, maxTok
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	previous = c.contextLimits[served]
-	c.contextLimits[served] = maxTokens
 	c.contextRefusals[served]++
-	return previous, previous != maxTokens
+	// The smallest refusal is the bound that holds: a later, larger one does not lift it.
+	if previous != 0 && previous <= maxTokens {
+		return previous, false
+	}
+	c.contextLimits[served] = maxTokens
+	return previous, true
 }
 
 func (c *capabilityTracker) recordToolUnsupported(participant, model string) (first bool) {

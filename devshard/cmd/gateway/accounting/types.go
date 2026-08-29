@@ -1,6 +1,5 @@
-// Package accounting answers where every committed nonce went. Settlement credits a slot with
-// assigned nonces minus recorded misses, so a nonce burned without work and a nonce sent but never
-// finished both cost a participant's record. See gateway-operations.md, "Nonce accounting".
+// Package accounting answers where every committed nonce went: settlement counts nonces, so a burn and
+// an unfinished send both cost a participant's record. See docs/accounting.md.
 package accounting
 
 import (
@@ -13,29 +12,9 @@ const SchemaVersion = 4
 
 type Disposition string
 
-const (
-	DispositionGhost                Disposition = "ghost"
-	DispositionFinishedUsed         Disposition = "finished_used"
-	DispositionFinishedUnused       Disposition = "finished_unused"
-	DispositionFinishedUsageUnknown Disposition = "finished_usage_unknown"
-	DispositionUnfinishedRefused    Disposition = "unfinished_refused"
-	DispositionUnfinishedExecution  Disposition = "unfinished_execution"
-)
-
 type Usage string
 
-const (
-	UsageWinner  Usage = "winner"
-	UsageLoser   Usage = "loser"
-	UsageUnknown Usage = "unknown"
-)
-
 type Phase string
-
-const (
-	PhaseNormal Phase = "normal"
-	PhasePoC    Phase = "poc"
-)
 
 const (
 	SlowReceipt  = 2500 * time.Millisecond
@@ -51,8 +30,7 @@ type EscrowMetadata struct {
 	Slots         []types.SlotAssignment
 }
 
-// Attempt is one nonce's share of a race outcome. Sent is false for a nonce the race committed but
-// never dispatched, which is a stranded nonce rather than a ghost: a ghost is a deliberate burn.
+// One nonce's share of a race outcome. Sent is false for a stranded nonce, which is not a ghost.
 type Attempt struct {
 	Nonce           uint64
 	RequestID       string
@@ -69,8 +47,7 @@ type Attempt struct {
 	LogprobsDecoded bool
 }
 
-// CounterKey is one bucket of classified nonces. Only observed combinations exist and every dimension
-// is bounded by its producer, so an escrow holds a few hundred buckets rather than a row per nonce.
+// One bucket of classified nonces. See README.md, "How a nonce is classified".
 type CounterKey struct {
 	SlotID      uint32      `json:"slot_id"`
 	Disposition Disposition `json:"disposition"`
@@ -88,8 +65,7 @@ type CounterKey struct {
 	LogprobsDecoded bool   `json:"logprobs_decoded,omitempty"`
 }
 
-// Pending is seen but not yet classifiable, Unobserved is the assigned range this gateway never saw,
-// and Overcounted is the impossible case: more classified than the chain assigned.
+// Overcounted is the impossible case: more classified than the chain assigned.
 type SlotRecord struct {
 	EscrowID    string `json:"escrow_id"`
 	SlotID      uint32 `json:"slot_id"`
@@ -100,8 +76,7 @@ type SlotRecord struct {
 	timeoutTally
 }
 
-// EscrowNonce is the furthest nonce one escrow has reached, so a reader can tell a participant that
-// stopped receiving work from one whose escrow stopped advancing.
+// The furthest nonce an escrow reached: tells a quiet participant from a stalled escrow.
 type EscrowNonce struct {
 	EscrowID    string `json:"escrow_id"`
 	LatestNonce uint64 `json:"latest_nonce"`
@@ -145,8 +120,7 @@ type EpochSummary struct {
 	nonceTotals
 }
 
-// A zero field constrains nothing. Epoch zero is unconstrained rather than selectable, matching the
-// rest of the gateway, which reads a zero epoch index as "not known yet".
+// A zero field constrains nothing; epoch zero is unconstrained rather than selectable.
 type QueryFilter struct {
 	EpochIndex  uint64
 	Model       string

@@ -8,10 +8,12 @@ import (
 	"time"
 
 	"devshard/cmd/gateway/accounting"
+	"devshard/cmd/gateway/chain"
 	"devshard/cmd/gateway/config"
 	"devshard/cmd/gateway/internal/leakcheck"
 	"devshard/cmd/gateway/registry"
 	"devshard/host"
+	"devshard/types"
 	"devshard/user"
 )
 
@@ -22,7 +24,20 @@ type recordedRace struct {
 
 type spyLedger struct {
 	races  []recordedRace
+	opened []accounting.EscrowMetadata
 	reject error
+}
+
+func (s *spyLedger) OpenEscrow(metadata accounting.EscrowMetadata) error {
+	s.opened = append(s.opened, metadata)
+	return nil
+}
+
+// stubEpochs stamps a fixed epoch, so a test that cares about the stamp states it rather than the chain.
+type stubEpochs struct{ epoch uint64 }
+
+func (s stubEpochs) Snapshot() chain.PhaseSnapshot {
+	return chain.PhaseSnapshot{EpochIndex: s.epoch}
 }
 
 func (s *spyLedger) RecordRace(escrowID string, attempts []accounting.Attempt) error {
@@ -51,7 +66,7 @@ func warmupClock() func() time.Time {
 func TestWarmupIsSkippedWhenTheOperatorTurnedItOff(t *testing.T) {
 	holder := config.NewHolder(&config.Config{})
 
-	if warmup := New(holder, nil, warmupClock()); warmup != nil {
+	if warmup := New(holder, nil, stubEpochs{}, warmupClock()); warmup != nil {
 		t.Errorf("New() = %v with warming off, want nil so nothing observes publications", warmup)
 	}
 }
@@ -59,7 +74,7 @@ func TestWarmupIsSkippedWhenTheOperatorTurnedItOff(t *testing.T) {
 func TestWarmupIsBuiltWhenWarmingIsOn(t *testing.T) {
 	holder := config.NewHolder(&config.Config{Scheduler: config.Scheduler{WarmNewEscrows: true}})
 
-	if warmup := New(holder, nil, warmupClock()); warmup == nil {
+	if warmup := New(holder, nil, stubEpochs{}, warmupClock()); warmup == nil {
 		t.Error("New() = nil with warming on, want a warmup")
 	}
 }
@@ -67,7 +82,7 @@ func TestWarmupIsBuiltWhenWarmingIsOn(t *testing.T) {
 func TestWarmupKeepsATypedNilLedgerOutOfItsInterface(t *testing.T) {
 	holder := config.NewHolder(&config.Config{Scheduler: config.Scheduler{WarmNewEscrows: true}})
 
-	warmup := New(holder, nil, warmupClock())
+	warmup := New(holder, nil, stubEpochs{}, warmupClock())
 
 	if warmup.ledger != nil {
 		t.Error("ledger is non-nil for a nil *Book: a typed nil there panics on the first record")
@@ -130,7 +145,7 @@ func TestARefusedProbeIsNotSettledAsFinished(t *testing.T) {
 func TestWarmupWithoutALedgerRecordsNothingAndDoesNotPanic(t *testing.T) {
 	holder := config.NewHolder(&config.Config{Scheduler: config.Scheduler{WarmNewEscrows: true}})
 
-	warmup := New(holder, nil, warmupClock())
+	warmup := New(holder, nil, stubEpochs{}, warmupClock())
 	warmup.record("escrow-1", 7, true, nil)
 
 	if warmup.ledger != nil {
@@ -203,6 +218,10 @@ type stubSession struct {
 }
 
 func (s stubSession) Nonce() uint64 { return s.nonce }
+
+func (s stubSession) SnapshotState() types.EscrowState {
+	return types.EscrowState{Group: []types.SlotAssignment{{SlotID: 0, ValidatorAddress: "host-a"}}}
+}
 
 func newWarmupUnderTest(session registry.EscrowSession, probeErr error) (*Prober, *spyLedger, *int) {
 	caughtUp := 0
@@ -318,5 +337,26 @@ func TestTheWarmupNonceIsSettledAsAProbe(t *testing.T) {
 	}
 	if got := ledger.races[0].attempts[0].Terminal; got != accounting.TerminalWarmupProbe {
 		t.Errorf("terminal = %q, want %q", got, accounting.TerminalWarmupProbe)
+	}
+}
+
+// The ledger opens escrows on a ten-second sweep that has not run for an escrow published a moment ago
+// -- at boot it has not started at all. An unopened escrow refuses the attempt, and the probe's nonce
+// loses the marker that keeps this gateway's own request out of the host's record.
+func TestTheProbeOpensTheEscrowItIsAboutToRecordAgainst(t *testing.T) {
+	warmup, ledger, _ := newWarmupUnderTest(stubSession{}, nil)
+	warmup.epochs = stubEpochs{epoch: 42}
+
+	warmup.warm("escrow-1", "test-model")
+
+	if len(ledger.opened) != 1 {
+		t.Fatalf("opened %d escrows in the ledger, want the one it recorded against", len(ledger.opened))
+	}
+	opened := ledger.opened[0]
+	if opened.EscrowID != "escrow-1" || opened.Model != "test-model" || opened.CreationEpoch != 42 {
+		t.Errorf("opened %+v, want escrow-1/test-model stamped with the epoch the ledger first saw it in", opened)
+	}
+	if len(opened.Slots) != 1 {
+		t.Errorf("opened with %d slots, want the group the session reports: a slotless escrow is refused", len(opened.Slots))
 	}
 }

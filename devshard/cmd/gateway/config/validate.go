@@ -8,8 +8,7 @@ import (
 	"strings"
 )
 
-// Validate reports every problem in the snapshot at once. Field names in
-// messages use snake_case to match the admin-API/JSON spelling.
+// Validate reports every problem at once, naming fields in the admin-API snake_case spelling.
 func (c *Config) Validate() error {
 	var problems []error
 	complain := func(format string, args ...any) {
@@ -85,8 +84,7 @@ func (c *Config) Validate() error {
 	if perfEjectionMaxMS := c.Perf.EjectionMaxSeconds * 1000; c.Limits.HostCutoff.MaxMS > perfEjectionMaxMS {
 		complain("host_cutoff_max_ms: %d must be <= perf_ejection_max_seconds %d (ms) so perf stays the dominant ejection authority", c.Limits.HostCutoff.MaxMS, perfEjectionMaxMS)
 	}
-	// An admin key short enough to guess is worse than none, because "none" disables admin entirely
-	// (AdminEnabled) while a weak one authenticates.
+	// A guessable key is worse than none: "none" disables admin entirely, a weak one authenticates.
 	if c.Server.AdminAPIKey != "" && len(c.Server.AdminAPIKey) < minAdminAPIKeyLength {
 		complain("admin_api_key: must be at least %d characters when set (empty disables admin routes)", minAdminAPIKeyLength)
 	}
@@ -189,8 +187,7 @@ func (c *Config) Validate() error {
 	if c.Engine.InterChunkStallMS < 1 {
 		complain("engine_inter_chunk_stall_ms: %d must be >= 1", c.Engine.InterChunkStallMS)
 	}
-	// A loser is cancelled at the grace, so a grace under the stall window kills attempts that are
-	// merely between chunks — before the gateway would even call such a stream stalled.
+	// A grace under the stall window kills losers that are merely between chunks.
 	if c.Engine.LoserGraceMS < c.Engine.InterChunkStallMS {
 		complain("engine_loser_grace_ms: %d must be >= engine_inter_chunk_stall_ms %d", c.Engine.LoserGraceMS, c.Engine.InterChunkStallMS)
 	}
@@ -202,8 +199,7 @@ func (c *Config) Validate() error {
 		complain("engine_max_speculative_attempts: %d must be >= 0 (0 = bounded only by the host group)", c.Engine.MaxSpeculativeAttempts)
 	}
 
-	// A long grace parks a committed-cost nonce on the chance of a co-arrival, so the ceiling is a
-	// budget guard, not a taste judgement.
+	// The ceiling is a budget guard: a long grace parks a committed-cost nonce on the chance of a co-arrival.
 	if c.Scheduler.MatchWaitMS < 0 || c.Scheduler.MatchWaitMS > 5_000 {
 		complain("scheduler_match_wait_ms: %d must be in [0, 5000]", c.Scheduler.MatchWaitMS)
 	}

@@ -14,12 +14,10 @@ import (
 	"devshard/user"
 )
 
-// otherRouteLabel is the single label every unmatched path folds into. See gateway-operations.md,
-// "Cardinality rules".
+// otherRouteLabel is the single label every unmatched path folds into. See operations.md, "Cardinality rules".
 const otherRouteLabel = "other"
 
-// route is one registered pattern. An empty label means the route is not instrumented, which is how
-// /metrics stays out of its own counters; alwaysOn exempts a route from the operator kill switch.
+// route is one registered pattern; an empty label leaves it uninstrumented. See README.md, "The route table".
 type route struct {
 	pattern  string
 	label    string
@@ -34,7 +32,7 @@ func (s *Server) routes() []route {
 		{pattern: "/v1/models", label: "/v1/models", handler: s.handleModels},
 		{pattern: "/v1/chat/completions", label: "/v1/chat/completions", handler: s.handleChat},
 		{pattern: "/v1/status", label: "/v1/status", handler: s.handleStatus},
-		// Admin-only: the row has no caller to authorise against. See gateway-operations.md, "Operator".
+		// Admin-only: the row has no caller to authorise against. See operations.md, "What is exposed".
 		{pattern: "/v1/requests/{id}", label: "/v1/requests/{id}", admin: true, alwaysOn: true, handler: s.handleRequestAccounting},
 
 		{pattern: "/devshard/{id}/v1/models", label: "/devshard/{id}/v1/models", handler: s.handleDevshardModels},
@@ -42,7 +40,7 @@ func (s *Server) routes() []route {
 		{pattern: "/devshard/{id}/v1/status", label: "/devshard/{id}/v1/status", handler: s.handleDevshardStatus},
 		{pattern: "/devshard/{id}/v1/finalize", label: "/devshard/{id}/v1/finalize", admin: true, alwaysOn: true, handler: s.handleDevshardFinalize},
 
-		// Recovery surface: admin and alwaysOn. See gateway-operations.md, "Per-escrow recovery surface".
+		// Recovery surface: admin and alwaysOn. See operations.md, "What is exposed".
 		{pattern: "/devshard/{id}/v1/state", label: "/devshard/{id}/v1/state", admin: true, alwaysOn: true, handler: s.handleDevshardState},
 		{pattern: "/devshard/{id}/v1/debug/state", label: "/devshard/{id}/v1/debug/state", admin: true, alwaysOn: true, handler: s.handleDevshardDebugState},
 		{pattern: "/devshard/{id}/v1/debug/inferences", label: "/devshard/{id}/v1/debug/inferences", admin: true, alwaysOn: true, handler: s.handleDevshardDebugInferences},
@@ -52,8 +50,7 @@ func (s *Server) routes() []route {
 		{pattern: "/v1/admin/state", label: "/v1/admin/state", admin: true, alwaysOn: true, handler: s.handleAdminState},
 		{pattern: "/v1/admin/settings", label: "/v1/admin/settings", admin: true, alwaysOn: true, handler: s.handleAdminSettings},
 		{pattern: "/v1/admin/devshards", label: "/v1/admin/devshards", admin: true, alwaysOn: true, handler: s.handleAdminDevshards},
-		// The templated label is deliberate: the established series covers this path under the same
-		// name, and a label of its own would split the panel that reads it.
+		// The templated label is deliberate: a label of its own would split the panel that reads the series.
 		{pattern: "/v1/admin/devshards/import", label: "/v1/admin/devshards/{id}", admin: true, alwaysOn: true, handler: s.handleAdminDevshardImport},
 		{pattern: "/v1/admin/devshards/{id}", label: "/v1/admin/devshards/{id}", admin: true, alwaysOn: true, handler: s.handleAdminDevshardDelete},
 		{pattern: "/v1/admin/devshards/{id}/activate", label: "/v1/admin/devshards/{id}/activate", admin: true, alwaysOn: true, handler: s.handleAdminDevshardActivate},
@@ -164,8 +161,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	s.chat(w, r, "")
 }
 
-// handleDevshardChat pins the race to one escrow, and refuses a pin the gateway no longer routes to.
-// See gateway-operations.md, "Client".
+// handleDevshardChat pins the race to one escrow, refusing a pin it no longer routes to. See operations.md, "What is exposed".
 func (s *Server) handleDevshardChat(w http.ResponseWriter, r *http.Request) {
 	if !allowMethods(w, r, http.MethodPost) {
 		return
@@ -239,9 +235,7 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request, escrowPin string) 
 	}
 }
 
-// routableModel refuses an unroutable model before it can take a limiter slot or an input-token
-// budget, and fails closed on an empty registry. See gateway-request-lifecycle.md, "3. Authorisation
-// and routability".
+// routableModel refuses a model before it can take a limiter slot. See README.md, "Authentication and the kill switch".
 func (s *Server) routableModel(model string) error {
 	if model == "" {
 		return filters.Reject("model is required")
@@ -273,10 +267,7 @@ func authorizeModel(configured config.Limits, model string, identity credentials
 	}
 }
 
-// race runs one request to its winner and returns the outcome together with the failure the reply's
-// status could not carry. A stream commits 200 on its first byte, so a race that fails after that
-// leaves an SSE error event under a success status; the caller needs the error itself to tell that
-// response apart from one worth replaying.
+// race returns the outcome and the failure the reply's status could not carry. See README.md, "Streaming the reply".
 func (s *Server) race(w http.ResponseWriter, r *http.Request, requestID string, normalized filters.Result, inputTokens uint64, escrowPin string) (engine.RaceOutcome, error) {
 	startedAt := s.now()
 	client := newClientStream(w, requestID, normalized.ClientStream, normalized.ClientUsage, normalized.Logprobs, s.buffers)
@@ -301,19 +292,24 @@ func (s *Server) race(w http.ResponseWriter, r *http.Request, requestID string, 
 	if err != nil {
 		s.capture.attemptsFailed(r, requestID, normalized, err)
 		if client.Started() {
-			logRequestFinished(requestID, normalized, outcome, "failed_mid_stream", client, s.now().Sub(startedAt), err, client.Fail(err))
+			logRequestFinished(requestID, normalized, outcome, deliveryFailedMidStream, client, s.now().Sub(startedAt), err, client.Fail(err))
 			return outcome, err
 		}
-		logRequestFinished(requestID, normalized, outcome, "failed_before_first_byte", client, s.now().Sub(startedAt), err, nil)
+		logRequestFinished(requestID, normalized, outcome, deliveryFailedBeforeFirstByte, client, s.now().Sub(startedAt), err, nil)
 		w.Header().Set(RequestIDHeader, requestID)
 		writeErrorFor(w, err)
 		return outcome, nil
 	}
-	// The second of the two X-Devshard-ID writes, authoritative for a reply still holding its headers.
-	// See gateway-request-lifecycle.md, "9. Streaming out".
+	// The authoritative X-Devshard-ID write. See README.md, "Streaming the reply".
 	if outcome.EscrowID != "" {
 		client.Header().Set(EscrowHeader, outcome.EscrowID)
 	}
-	logRequestFinished(requestID, normalized, outcome, "served", client, s.now().Sub(startedAt), nil, client.Close())
-	return outcome, nil
+	// Returned, not just logged, so the cache refuses a body that stops mid-answer.
+	closeErr := client.Close()
+	delivery := deliveryServed
+	if closeErr != nil {
+		delivery = deliveryFailedMidStream
+	}
+	logRequestFinished(requestID, normalized, outcome, delivery, client, s.now().Sub(startedAt), nil, closeErr)
+	return outcome, closeErr
 }

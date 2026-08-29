@@ -2,9 +2,7 @@ package metrics
 
 import "github.com/prometheus/client_golang/prometheus"
 
-// CaptureSource is the request-capture sink's own account of itself; *api.Server satisfies it. The
-// counts travel as plain integers rather than a shared struct because api's own tests read this
-// package, and importing it back would close a cycle.
+// CaptureSource is the capture sink's own account of itself; plain integers avoid an import cycle with api.
 type CaptureSource interface {
 	CaptureStats() (written, refused, failed, held int64)
 }

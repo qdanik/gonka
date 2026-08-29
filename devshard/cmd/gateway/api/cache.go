@@ -17,12 +17,9 @@ import (
 const (
 	cacheEntryTTL      = time.Hour
 	cacheSweepInterval = time.Minute
-	// cacheEntryOverhead approximates a map bucket, the key digests and the struct fields.
 	cacheEntryOverhead = 256
 )
 
-// cacheKey pins an entry to the caller and to the escrow scope as well as to the request. See
-// gateway-request-lifecycle.md, "5. Response cache".
 type cacheKey struct {
 	caller   string
 	escrow   string
@@ -54,8 +51,6 @@ type responseCache struct {
 	misses     atomic.Int64
 }
 
-// stats is the only account of whether the cache earns the memory it is given: a hit serves a reply
-// without a race, so it appears in no attempt, no nonce and no escrow.
 func (c *responseCache) stats() (hits, misses, entries, byteSize int64) {
 	if c == nil {
 		return 0, 0, 0, 0
@@ -65,12 +60,12 @@ func (c *responseCache) stats() (hits, misses, entries, byteSize int64) {
 	return c.hits.Load(), c.misses.Load(), int64(len(c.entries)), c.totalBytes
 }
 
-// entryLimit is the largest reply put would accept, so a recorder past it is recording for nothing.
+// One entry is bounded by what a single reply may hold, not by the whole cache. See README.md.
 func (c *responseCache) entryLimit() int64 {
 	if c == nil {
 		return 0
 	}
-	return c.maxBytes
+	return min(c.maxBytes, maxBufferedResponseBytes)
 }
 
 func newResponseCache(maxBytes int64) *responseCache {
@@ -84,11 +79,8 @@ func newResponseCache(maxBytes int64) *responseCache {
 	}
 }
 
-// The logprob intent is part of the key because the normalized body is not: the force rules make one
-// client's request identical to another's, and the two are answered with differently stripped bodies.
-// cacheKeyFor takes the client's streaming and usage intents separately: the body now asks every host
-// to stream and to report usage, so two callers wanting different reply shapes would otherwise share
-// one entry, and whichever arrived first would decide what the second one got.
+// The key carries everything that varies the answer, including what the normalised body no longer
+// states. See README.md, "The response cache".
 func cacheKeyFor(r *http.Request, model string, body []byte, logprobs filters.LogprobIntent, stream, usage bool) cacheKey {
 	return cacheKey{
 		caller:   digest([]byte(strings.TrimSpace(r.Header.Get("Authorization")))),
@@ -166,7 +158,6 @@ func (c *responseCache) sweepLocked(now time.Time) {
 	}
 }
 
-// evictToFitLocked drops entries in map order. See gateway-request-lifecycle.md, "5. Response cache".
 func (c *responseCache) evictToFitLocked(keep cacheKey) {
 	for key := range c.entries {
 		if c.totalBytes <= c.maxBytes {
@@ -182,7 +173,7 @@ func entrySize(entry cachedResponse) int64 {
 	return int64(len(entry.body)+len(entry.contentType)+len(entry.escrowID)+8*len(entry.bounds)) + cacheEntryOverhead
 }
 
-// serveCached reports what it managed to write, so a cache hit carries the same delivery record as a race.
+// Reports what it managed to write, so a cache hit carries the same delivery record as a race.
 func serveCached(w http.ResponseWriter, requestID string, entry cachedResponse) (written int64) {
 	writeChatHeaders(w.Header(), requestID, entry.escrowID, entry.contentType, entry.stream)
 	w.WriteHeader(entry.status)
@@ -203,10 +194,7 @@ func serveCached(w http.ResponseWriter, requestID string, entry cachedResponse) 
 	return written
 }
 
-// cacheRecorder mirrors what the client receives; it keeps the first status the handler chose, so a
-// write after the response has begun cannot turn a recorded failure into a 200. limit is what the cache
-// could ever store, so a reply that passes it is dropped as it streams rather than held to the end and
-// rejected by put -- one buffer per request in flight is the memory this bounds.
+// Mirrors what the client receives, bounded per request in flight. See README.md, "The response cache".
 type cacheRecorder struct {
 	http.ResponseWriter
 	limit      int64
@@ -245,8 +233,6 @@ func (w *cacheRecorder) Write(chunk []byte) (int, error) {
 
 func (w *cacheRecorder) Unwrap() http.ResponseWriter { return w.ResponseWriter }
 
-// entry is the recorded reply as a replay would send it. unstorable carries the reasons the recorded
-// bytes cannot state themselves: a client that left, and a failure a committed 200 hid.
 func (w *cacheRecorder) entry(escrowID string, stream bool, unstorable error) (cachedResponse, bool) {
 	if w.overflowed || w.writeErr != nil || unstorable != nil || w.body.Len() == 0 || strings.TrimSpace(escrowID) == "" {
 		return cachedResponse{}, false

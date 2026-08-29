@@ -1,6 +1,6 @@
 // End-to-end suite: the composed gateway with real devshard sessions and real in-process hosts -- real
 // diffs, state roots, signatures and a real MsgFinishInference, with no network and no chain. What green
-// here does NOT mean is documented in docs/gateway-verification-limits.md; read it before trusting this.
+// here does NOT mean is documented in docs/rules.md; read it before trusting this.
 
 package main
 

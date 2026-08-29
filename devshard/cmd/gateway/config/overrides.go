@@ -7,8 +7,7 @@ import (
 	json "github.com/goccy/go-json"
 )
 
-// Overrides is the admin-tunable subset of Config, persisted by the store and
-// merged over env by Build. Nil field = not overridden.
+// Overrides is the admin-tunable subset of Config, merged over env by Build; a nil field is not overridden.
 type Overrides struct {
 	DefaultMaxTokens                       *int64                 `json:"default_max_tokens,omitempty"`
 	MaxTokensCap                           *int64                 `json:"max_tokens_cap,omitempty"`
@@ -40,8 +39,7 @@ type Overrides struct {
 	RotationModelsJSON                     *string                `json:"rotation_models_json,omitempty"`
 }
 
-// ParseOverrides decodes admin-supplied override JSON. Unknown fields are an
-// error: a typo in an admin PUT must be reported, never silently ignored.
+// ParseOverrides rejects unknown fields: a typo in an admin PUT must be reported, never silently ignored.
 func ParseOverrides(raw []byte) (Overrides, error) {
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.DisallowUnknownFields()

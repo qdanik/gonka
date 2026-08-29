@@ -13,8 +13,7 @@ const (
 	EpochPhasePoCValidateWindDown EpochPhase = "PoCValidateWindDown"
 )
 
-// AllEpochPhases lists every phase, so a reader that must enumerate them (a per-phase metric series)
-// stays beside the const block instead of restating it in another package.
+// AllEpochPhases keeps the enumeration beside the const block instead of restating it in another package.
 func AllEpochPhases() []EpochPhase {
 	return []EpochPhase{
 		EpochPhaseInference,
@@ -48,9 +47,7 @@ func AllBlockReasons() []BlockReason {
 	return []BlockReason{BlockReasonNone, BlockReasonPoC, BlockReasonConfirmationPoC}
 }
 
-// PhaseSnapshot is an immutable, published view of chain phase and participant state, folded from raw
-// chain inputs only. The absent-value semantics of RequestsBlocked, Preserved and MaxNonce are
-// load-bearing: see README.md, "What the chain observer provides".
+// PhaseSnapshot is an immutable published view folded from raw chain inputs; the absent-value semantics of RequestsBlocked, Preserved and MaxNonce are load-bearing: see README.md, "What the chain observer provides".
 type PhaseSnapshot struct {
 	BlockHeight            int64
 	EpochSwitchBlockHeight int64
@@ -74,8 +71,7 @@ type PhaseSnapshot struct {
 	LastError     string
 }
 
-// rawPoCBlockingState reports whether the raw chain phase blocks new requests
-// and why; epoch-phase PoC states take precedence over confirmation-PoC states.
+// rawPoCBlockingState reports whether the raw chain phase blocks new requests and why; epoch-phase PoC wins over confirmation-PoC.
 func rawPoCBlockingState(epochPhase EpochPhase, confirmationPhase ConfirmationPoCPhase) (bool, BlockReason) {
 	switch epochPhase {
 	case EpochPhasePoCGenerate, EpochPhasePoCGenerateWindDown, EpochPhasePoCValidate, EpochPhasePoCValidateWindDown:

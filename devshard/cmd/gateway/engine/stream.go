@@ -16,17 +16,13 @@ const (
 	streamSuppressed
 )
 
-// crownRequest is an attempt's claim on the client stream, raised when it has its first content
-// chunk in hand; the coordinator answers on Reply exactly once and the claimant blocks on that answer.
-// See gateway-speculative-race.md, "Crowning".
+// crownRequest is an attempt's claim on the client stream, answered on Reply exactly once. See race.md, "Crowning".
 type crownRequest struct {
 	Nonce uint64
 	Reply chan<- streamVerdict
 }
 
-// winnerWriter is one attempt's claim on the client stream. client is the only path to the client anywhere
-// in the writer and withheld is the only source it is ever assigned from, so a losing attempt has no
-// reachable sink at all rather than a sink guarded by a branch somebody must remember to write.
+// winnerWriter is one attempt's claim on the client stream; a losing attempt has no reachable sink at all. See README, "Crowning and the client's bytes".
 type winnerWriter struct {
 	nonce    uint64
 	crown    chan<- crownRequest
@@ -51,8 +47,7 @@ func newWinnerWriter(nonce uint64, client io.Writer, crown chan<- crownRequest, 
 	}
 }
 
-// Write claims the crown on the first content chunk and buffers everything before it; a suppressed
-// attempt reports success without writing. See gateway-speculative-race.md, "Crowning".
+// Write claims the crown on the first content chunk and buffers everything before it. See race.md, "Crowning".
 func (w *winnerWriter) Write(chunk []byte, hasContent bool) error {
 	switch w.verdict {
 	case streamWinner:
@@ -77,8 +72,7 @@ func (w *winnerWriter) Flush() {
 	}
 }
 
-// Abandon forfeits this attempt's claim on the client. An attempt that ends without earning the
-// crown must never have what it buffered forwarded.
+// Abandon forfeits this attempt's claim: what an uncrowned attempt buffered must never be forwarded.
 func (w *winnerWriter) Abandon() {
 	w.verdict, w.prefix, w.client, w.withheld = streamSuppressed, nil, nil, nil
 }
@@ -118,9 +112,7 @@ func (w *winnerWriter) forward(chunk []byte) error {
 	return err
 }
 
-// buffer holds pre-content bytes until a claim can flush them ahead of the chunk that crowned this
-// attempt; past the cap the prefix is dropped, never the attempt. See gateway-speculative-race.md,
-// "Crowning".
+// buffer holds pre-content bytes until a claim can flush them; past the cap the prefix is dropped, never the attempt. See race.md, "Crowning".
 func (w *winnerWriter) buffer(chunk []byte) {
 	if w.prefixLost {
 		return

@@ -13,16 +13,8 @@ import (
 	"devshard/logging"
 )
 
-const (
-	RolePrimary     = "primary"
-	RoleSpeculative = "speculative"
-
-	// Chunk progress must not park a host's goroutine; terminal events block regardless.
-	eventBuffer = 32
-
-	crownFirstClaim = "first_claim"
-	crownNoRival    = "no_rival"
-)
+// Chunk progress must not park a host's goroutine; terminal events block regardless.
+const eventBuffer = 32
 
 var errNoDispatchTarget = errors.New("assigned escrow has no dispatch target")
 

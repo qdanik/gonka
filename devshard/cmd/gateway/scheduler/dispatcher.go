@@ -13,8 +13,7 @@ import (
 
 const defaultSubmitBuffer = 64
 
-// EscrowRetired lets an observer forget an escrow: ids are monotonic chain identifiers and are never
-// reused, so a per-escrow metric series that outlives its escrow grows with uptime and nothing else.
+// EscrowRetired lets an observer forget an escrow, whose id is never reused. See README, "Dispatcher lifecycle".
 type dispatchObserver interface {
 	GhostBurned(escrowID string, burned Burn)
 	NonceHeld(escrowID string)
@@ -22,10 +21,7 @@ type dispatchObserver interface {
 	EscrowRetired(escrowID string)
 }
 
-// dispatcherDeps wires one escrow's actor. acquireSlot and holdEscrow run inside the same Advance that
-// commits the nonce -- holdEscrow on the serve path only, so a ghost commits unprotected against a
-// concurrent retire. The slot travels with the assignment, so releaseSlot covers only the paths that never
-// reach a dispatch; retire is answered under the lock that guards claims, so a claimed actor is never lost.
+// dispatcherDeps wires one escrow's actor. See README, "Where the nonce, the slot and the hold are taken".
 type dispatcherDeps struct {
 	escrowID     string
 	session      session
@@ -52,8 +48,7 @@ const (
 	submitFull
 )
 
-// dispatcher turns one escrow's sequential nonce stream into request assignments; its loop goroutine is the
-// sole owner of waiting and of the session. See gateway-routing-and-nonces.md, "The per-escrow dispatcher".
+// dispatcher turns one escrow's nonce stream into assignments; its loop goroutine solely owns waiting and the session. See routing.md, "The per-escrow dispatcher".
 type dispatcher struct {
 	dispatcherDeps
 
@@ -105,8 +100,7 @@ func (d *dispatcher) start() {
 	go d.loop()
 }
 
-// stop is idempotent and blocks until the loop has exited. Holding the write lock while closing
-// stopCh keeps submitWaiter from landing a waiter in a buffer nobody will ever read.
+// stop is idempotent and blocks until the loop has exited; the write lock keeps a submit out of a dead buffer.
 func (d *dispatcher) stop() {
 	d.lifecycleMu.Lock()
 	if !d.stopped {
@@ -125,9 +119,7 @@ func (d *dispatcher) stop() {
 	}
 }
 
-// submitWaiter never blocks: a submit arriving before start, or faster than the actor drains, must
-// not stall its caller or pin the lifecycle lock. A full queue and a stopped dispatcher are reported
-// apart. See gateway-routing-and-nonces.md, "The per-escrow dispatcher".
+// submitWaiter never blocks, and reports a full queue apart from a stopped one. See routing.md, "The per-escrow dispatcher".
 func (d *dispatcher) submitWaiter(queued *waiter) submitOutcome {
 	d.lifecycleMu.RLock()
 	defer d.lifecycleMu.RUnlock()
@@ -148,8 +140,7 @@ func (d *dispatcher) isStopped() bool {
 	return d.stopped
 }
 
-// markStopped shuts the actor down from inside its own goroutine, refusing once a waiter is in the submit
-// buffer. See gateway-routing-and-nonces.md, "Idle dispatchers are reaped".
+// markStopped shuts the actor down from inside its own goroutine, refusing once a waiter is in the submit buffer. See routing.md, "Idle dispatchers are reaped".
 func (d *dispatcher) markStopped() bool {
 	d.lifecycleMu.Lock()
 	defer d.lifecycleMu.Unlock()
@@ -194,9 +185,7 @@ func (d *dispatcher) loop() {
 	}
 }
 
-// failAdvance answers the whole queue, not just the waiter a serve decision chose: the session could not
-// advance its nonce at all. A spent deposit is terminal for the escrow rather than for this request, so
-// only the exhaustion notice gets it replaced.
+// failAdvance answers the whole queue: the session could not advance its nonce at all. See README, "Where the nonce, the slot and the hold are taken".
 func (d *dispatcher) failAdvance(decision Decision, taken reservation, err error) {
 	if _, chosen := decision.(serve); chosen {
 		d.giveBack(taken)
@@ -268,8 +257,7 @@ func intentFor(decision Decision) NonceIntent {
 	}
 }
 
-// memoiseOrNil keeps a predicate nobody set nil rather than wrapping it, so the reader above can tell
-// "no allowlist" from "an allowlist that refuses everybody".
+// memoiseOrNil keeps a predicate nobody set nil, so "no allowlist" stays distinct from one that refuses everybody.
 func memoiseOrNil(predicate func(string) bool) func(string) bool {
 	if predicate == nil {
 		return nil
@@ -287,9 +275,7 @@ func freeze(live availability) availability {
 	}
 }
 
-// admit couples the drain's admission to its frozen predicates: a participant whose window refused a slot
-// counts as throttled for the rest of the drain. See
-// gateway-routing-and-nonces.md, "Where the nonce, the slot and the hold are taken".
+// admit couples admission to the frozen predicates: a refused slot counts as throttled for the rest of the drain. See routing.md, "Where the nonce, the slot and the hold are taken".
 func admit(avail *availability, acquire func(string) bool) func(string) bool {
 	refused := map[string]bool{}
 	throttled := avail.throttled

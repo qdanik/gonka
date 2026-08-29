@@ -15,15 +15,10 @@ import (
 	"devshard/types"
 )
 
-// The pragmas ride the connection string rather than a first statement, because the pool recreates
-// connections and a recreated one would come back without them. One connection, because the ledger is
-// written whole inside a single transaction and has no concurrent writer to gain from more.
+// Pragmas ride the connection string; one connection. See README.md, "Storage".
 const connectionPragmas = "?_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=busy_timeout(5000)"
 
-// Nothing queries this database except the ledger's own load at start-up: every question an operator
-// asks is answered from memory. The tables therefore mirror the in-memory shape one for one, and a
-// write is one transaction that empties and refills them. That is what makes a half-written ledger
-// impossible -- a reader sees the previous contents until the commit, and a crash leaves them.
+// The tables mirror the in-memory shape; a write empties and refills them in one transaction.
 const schema = `
 CREATE TABLE IF NOT EXISTS accounting_meta (
 	key   TEXT PRIMARY KEY,
@@ -50,6 +45,15 @@ CREATE TABLE IF NOT EXISTS accounting_host_stats (
 	cost                  INTEGER NOT NULL,
 	required_validations  INTEGER NOT NULL,
 	completed_validations INTEGER NOT NULL,
+	PRIMARY KEY (escrow_id, slot_id)
+);
+CREATE TABLE IF NOT EXISTS accounting_slot_activity (
+	escrow_id        TEXT    NOT NULL,
+	slot_id          INTEGER NOT NULL,
+	challenged       INTEGER NOT NULL,
+	validations      INTEGER NOT NULL,
+	timeouts_applied INTEGER NOT NULL,
+	rejected         INTEGER NOT NULL,
 	PRIMARY KEY (escrow_id, slot_id)
 );
 CREATE TABLE IF NOT EXISTS accounting_counters (
@@ -95,6 +99,7 @@ var clearedTables = []string{
 	"accounting_nonces",
 	"accounting_counters",
 	"accounting_host_stats",
+	"accounting_slot_activity",
 	"accounting_slots",
 	"accounting_escrows",
 	"accounting_meta",
@@ -136,8 +141,7 @@ func discardOutdatedSchema(db *sql.DB) error {
 	return nil
 }
 
-// currentSchema reports whether this build can write what is on disk. An unreadable version says nothing
-// about the tables beside it, so it is discarded rather than trusted -- on an empty store, six no-op drops.
+// An unreadable version says nothing about the tables beside it, so they are discarded rather than trusted.
 func currentSchema(db *sql.DB) bool {
 	var stored string
 	if err := db.QueryRow(`SELECT value FROM accounting_meta WHERE key = ?`, metaSchemaVersion).Scan(&stored); err != nil {
@@ -231,6 +235,18 @@ func writeEscrow(ctx context.Context, transaction *sql.Tx, escrow EscrowSnapshot
 			return fmt.Errorf("writing host stats for slot %d of %s: %w", slotID, identity, err)
 		}
 	}
+	for _, slotID := range slices.Sorted(maps.Keys(escrow.SlotActivity)) {
+		activity := escrow.SlotActivity[slotID]
+		if _, err := transaction.ExecContext(ctx,
+			`INSERT INTO accounting_slot_activity
+			 (escrow_id, slot_id, challenged, validations, timeouts_applied, rejected)
+			 VALUES (?, ?, ?, ?, ?, ?)`,
+			identity, slotID, activity.Challenged, activity.Validations,
+			activity.TimeoutsApplied, activity.Rejected,
+		); err != nil {
+			return fmt.Errorf("writing slot activity for slot %d of %s: %w", slotID, identity, err)
+		}
+	}
 	for _, counter := range escrow.Counters {
 		if _, err := transaction.ExecContext(ctx,
 			`INSERT INTO accounting_counters
@@ -284,7 +300,7 @@ func (s *Store) Load(ctx context.Context) (Snapshot, error) {
 		return Snapshot{}, err
 	}
 	for _, read := range []func(context.Context, map[string]*EscrowSnapshot) error{
-		s.readSlots, s.readHostStats, s.readCounters, s.readNonces,
+		s.readSlots, s.readHostStats, s.readSlotActivity, s.readCounters, s.readNonces,
 	} {
 		if err := read(ctx, escrows); err != nil {
 			return Snapshot{}, err
@@ -333,6 +349,7 @@ func (s *Store) readEscrows(ctx context.Context) (map[string]*EscrowSnapshot, []
 				return err
 			}
 			stored.HostStats = make(map[uint32]types.HostStats)
+			stored.SlotActivity = make(map[uint32]SlotActivity)
 			escrows[stored.Metadata.EscrowID] = &stored
 			order = append(order, stored.Metadata.EscrowID)
 			return nil
@@ -371,6 +388,25 @@ func (s *Store) readHostStats(ctx context.Context, escrows map[string]*EscrowSna
 			}
 			if escrow, known := escrows[escrowID]; known {
 				escrow.HostStats[slotID] = stats
+			}
+			return nil
+		})
+}
+
+func (s *Store) readSlotActivity(ctx context.Context, escrows map[string]*EscrowSnapshot) error {
+	return s.eachRow(ctx,
+		`SELECT escrow_id, slot_id, challenged, validations, timeouts_applied, rejected
+		 FROM accounting_slot_activity`, "slot activity",
+		func(rows *sql.Rows) error {
+			var escrowID string
+			var slotID uint32
+			var activity SlotActivity
+			if err := rows.Scan(&escrowID, &slotID, &activity.Challenged, &activity.Validations,
+				&activity.TimeoutsApplied, &activity.Rejected); err != nil {
+				return err
+			}
+			if escrow, known := escrows[escrowID]; known {
+				escrow.SlotActivity[slotID] = activity
 			}
 			return nil
 		})

@@ -15,7 +15,9 @@ It is not a health check and not a scheduler. It runs once per escrow, on public
 
 - **Late binding is deliberate.** The registry exists only after the warmup it publishes to, and the vote path only after the sessions the race shares with it — hence `Serve` and `Settle` rather than constructor arguments.
 - **The probe's nonce is the gateway's own work, not a user's.** The ledger records it under its own terminal so it lands on neither side of a serving ratio.
+- **The escrow is opened in the ledger here, not left to the sweep.** The sweep opens escrows on its own schedule, which has not necessarily run yet — and this nonce is spent on a just-published escrow. An attempt the ledger refuses would lose the terminal that keeps the gateway's own nonce out of the host's record.
+- **`EscrowPublished` is announced under the registry's lock**, so it must return without doing work.
 
 ## Read next
 
-- [`docs/gateway-escrow-lifecycle.md`](../docs/gateway-escrow-lifecycle.md) — where publication sits in the escrow's life.
+- [`docs/escrows.md`](../docs/escrows.md) — where publication sits in the escrow's life.

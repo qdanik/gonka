@@ -6,8 +6,7 @@ import (
 	"time"
 )
 
-// RotationStatus is the latest observed outcome of one (Model, Role) escrow
-// rotation stage, kept for admin-debug visibility only.
+// RotationStatus is the latest outcome of one (Model, Role) rotation stage, kept for admin-debug visibility only.
 type RotationStatus struct {
 	Model       string    `json:"model"`
 	Role        string    `json:"role"`

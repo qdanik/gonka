@@ -2,7 +2,7 @@
 
 Choosing where a request goes is not a free decision in this system. The protocol binds an executor to a nonce (`executor = nonce % groupSize`), and `user.Session` issues nonces strictly in order. So "pick host X" is not something the gateway can say: it can only advance the nonce sequence, and every nonce it advances past is spent whether or not anyone serves it. Nonces are a capped, chain-costed resource. That is the fact the whole scheduler is shaped around.
 
-This document covers `scheduler/` (which escrow, which participant, which nonce) and `registry/` (what the live escrow set is and who may hold a handle on it). The race that follows a pick is in [gateway-speculative-race.md](./gateway-speculative-race.md).
+This document covers `scheduler/` (which escrow, which participant, which nonce) and `registry/` (what the live escrow set is and who may hold a handle on it). The race that follows a pick is in [race.md](./race.md).
 
 ## Vocabulary
 
@@ -30,7 +30,7 @@ Dropping a capped escrow is only half the answer. Routing declines it; nothing a
 loadScore(escrow) = activeUsers(escrow) / escrowWeight(escrow, model)
 ```
 
-`activeUsers` is the escrow's in-flight count; `escrowWeight` is the capacity model's view of how much of the network's serving weight this escrow commands for this model (see [gateway-capacity-and-health.md](./gateway-capacity-and-health.md)). A weight that is zero, negative or NaN scores `+Inf` and the candidate is skipped — deliberately, because a plain ratio would score a broken escrow as perfectly idle (`escrow_pick.go`, `loadScore`).
+`activeUsers` is the escrow's in-flight count; `escrowWeight` is the capacity model's view of how much of the network's serving weight this escrow commands for this model (see [capacity.md](./capacity.md)). A weight that is zero, negative or NaN scores `+Inf` and the candidate is skipped — deliberately, because a plain ratio would score a broken escrow as perfectly idle (`escrow_pick.go`, `loadScore`).
 
 Ties are broken by one process-wide atomic counter modulo the tie-set size. It is a pseudo-round-robin over whatever tie set exists at that moment, not a fair per-model rotation, and it depends on the candidate slice being in a stable order — which the registry guarantees by sorting each model's candidates by escrow id (`escrow.go`, `newLiveSet`). That coupling between the registry's ordering and the scheduler's tie-break is real and easy to break by "optimising" either side.
 

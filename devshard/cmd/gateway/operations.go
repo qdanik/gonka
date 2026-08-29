@@ -18,9 +18,7 @@ import (
 	"devshard/cmd/gateway/store"
 )
 
-// suspiciousHosts is the operator's manual pin list, cached in memory because every race reads it and
-// backed by the store because a pin outlives the incident that prompted it. The store is written
-// first: a pin the gateway acts on but forgets on restart is the failure an operator cannot see.
+// suspiciousHosts is the operator's pin list, written to the store first. See README.md, "Admin operations".
 type suspiciousHosts struct {
 	pins suspiciousHostStore
 
@@ -98,8 +96,7 @@ type operations struct {
 	nonces       *nonces.Recorder
 }
 
-// CreateEscrow takes the name of the variable holding the signing key, never the key. See
-// gateway-operations.md, "Operator".
+// CreateEscrow takes the name of the variable holding the signing key, never the key. See operations.md, "What is exposed".
 func (o *operations) CreateEscrow(ctx context.Context, request api.CreateEscrowRequest) (chain.CreateEscrowResult, error) {
 	if strings.TrimSpace(request.PrivateKeyEnv) == "" {
 		return chain.CreateEscrowResult{}, api.ErrPrivateKeyEnvRequired
@@ -127,8 +124,7 @@ func (o *operations) AddDevshard(ctx context.Context, request api.AddDevshardReq
 	})
 }
 
-// ImportDevshard copies rather than references the storage, so the gateway owns the only handle to
-// what it serves.
+// ImportDevshard copies the storage, so the gateway owns the only handle to what it serves.
 func (o *operations) ImportDevshard(ctx context.Context, request api.ImportDevshardRequest) error {
 	storagePath, err := escrowStorage(o.storageDir, request.EscrowID)
 	if err != nil {
@@ -163,8 +159,7 @@ func (o *operations) Activate(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
-	// An escrow parked for settlement has had its balance committed to a settlement that is either on
-	// chain or on its way. Serving from it again spends nonces the settlement does not account for.
+	// A parked escrow's balance is already committed: serving spends nonces the settlement misses.
 	if record.SettlementPending || record.SettleTxHash != "" {
 		return fmt.Errorf("%w: escrow %s is parked for settlement", api.ErrDevshardNotActivatable, id)
 	}
@@ -174,8 +169,7 @@ func (o *operations) Activate(ctx context.Context, id string) error {
 	return o.escrows.Add(ctx, id, record.Model)
 }
 
-// Deactivate and Settle stop routing before the row changes, so nothing new is admitted while the
-// write runs. See gateway-operations.md, "Operator".
+// Deactivate and Settle stop routing before the row changes. See operations.md, "What is exposed".
 func (o *operations) Deactivate(ctx context.Context, id string) error {
 	if err := o.escrows.Retire(id); err != nil {
 		return err

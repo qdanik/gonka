@@ -11,8 +11,7 @@ import (
 	"devshard/types"
 )
 
-// Finalize satisfies escrow.SettlementSource. Finalizing collects host signatures, so a non-resident
-// escrow is rehydrated with a serving session rather than a read-only one.
+// Finalize collects host signatures, so a non-resident escrow is rehydrated with a serving session.
 func (r *Registry) Finalize(ctx context.Context, escrowID string) error {
 	if session, held := r.SettlementSession(escrowID); held {
 		return finalize(ctx, session)
@@ -27,8 +26,7 @@ func (r *Registry) Finalize(ctx context.Context, escrowID string) error {
 	return errors.Join(finalize(ctx, session), session.Close())
 }
 
-// BuildSettlement satisfies escrow.SettlementSource. A non-resident escrow is rehydrated read-only:
-// the payload comes entirely from local storage, so it needs neither chain access nor host clients.
+// BuildSettlement rehydrates a non-resident escrow read-only: the payload comes entirely from local storage.
 func (r *Registry) BuildSettlement(ctx context.Context, escrowID string) (chain.SettlementInput, error) {
 	if session, held := r.SettlementSession(escrowID); held {
 		return buildSettlement(escrowID, session)
@@ -44,9 +42,7 @@ func (r *Registry) BuildSettlement(ctx context.Context, escrowID string) (chain.
 	return input, errors.Join(buildErr, session.Close())
 }
 
-// Inspect resolves a session for reading alone. A live or draining escrow answers from its own session;
-// one already retired is rehydrated from local storage, which is exactly when an operator asks these
-// questions. The returned release closes a rehydrated session and does nothing for a resident one.
+// Inspect resolves a session for reading alone; its release closes a rehydrated one and does nothing for a resident one.
 func (r *Registry) Inspect(ctx context.Context, escrowID string) (EscrowSession, func(), error) {
 	if session, held := r.SettlementSession(escrowID); held {
 		return session, func() {}, nil

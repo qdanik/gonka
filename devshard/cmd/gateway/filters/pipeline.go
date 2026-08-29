@@ -24,8 +24,7 @@ func runPipeline(document *Document, options Options) (Result, error) {
 		return Result{}, err
 	}
 	applyOutputTokenLimits(document, &view, options, routedModel)
-	// Read before StagePostLimits: that stage forces logprobs on for validation, so afterwards the
-	// document says what the gateway wants, not what the client asked for.
+	// Read before StagePostLimits: that stage forces logprobs on, overwriting what the client asked for.
 	logprobs := decodeLogprobIntent(document)
 	if err := applyStage(StagePostLimits, document, profile); err != nil {
 		return Result{}, err
@@ -52,12 +51,10 @@ func runPipeline(document *Document, options Options) (Result, error) {
 	}, nil
 }
 
-// forcedStreamOptions is shared rather than built per request: the document is marshalled and dropped
-// straight after, so nothing can mutate it.
+// Shared rather than built per request: the document is marshalled and dropped straight after.
 var forcedStreamOptions = map[string]any{"include_usage": true}
 
-// forceUpstreamStreaming makes every host request a streamed one. See gateway-request-filtering.md,
-// "Streaming is forced upstream".
+// forceUpstreamStreaming makes every host request a streamed one. See README.md, "Streaming is forced upstream".
 func forceUpstreamStreaming(document *Document) {
 	document.Set("stream", true)
 	document.Set("stream_options", forcedStreamOptions)

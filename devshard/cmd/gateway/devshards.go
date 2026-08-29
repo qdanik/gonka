@@ -25,15 +25,10 @@ import (
 	"devshard/user"
 )
 
-// chainBackedSessions owns the chain connection because it is the only provider that needs one: an
-// in-process provider dials nothing, which is what keeps a test from carrying a live gRPC client.
+// chainBackedSessions owns the chain connection because it is the only provider that needs one.
 func chainBackedSessions(records devshardLookup, storageDir string) sessionSources {
 	return func(endpoints config.Chain, routePrefix string) (chainSources, error) {
-		// NewGRPCBridgeFromURL is upstream's test constructor; production builds the bridge over a client
-		// carrying the CometBFT RPC query fallback, so an escrow read survives the gRPC query path failing.
-		// An empty RPC endpoint lets common/chain derive one from the gRPC host at the standard port,
-		// which is how a default deployment is laid out; a deployment that moved it has to say so, or
-		// the query fallback resolves to a host nobody is listening on and dies silently.
+		// This client carries the CometBFT RPC query fallback. See README.md, "Escrow sessions and the chain connection".
 		chainClient, err := commonchain.NewWithQueryFallback(endpoints.GRPCEndpoint, endpoints.RPCEndpoint)
 		if err != nil {
 			return chainSources{}, fmt.Errorf("dialing chain grpc %s: %w", endpoints.GRPCEndpoint, err)
@@ -59,8 +54,7 @@ func resolveStorageDir(explicit *string) (string, error) {
 	return filepath.Join(homeDir, ".cache", "gonka-gateway"), nil
 }
 
-// publishEscrows brings the registry to what the store calls active, builders at a time. See
-// gateway-operations.md, "Start-up".
+// publishEscrows brings the registry to what the store calls active, builders at a time. See operations.md, "Boot".
 func (g *gateway) publishEscrows(ctx context.Context) error {
 	records, err := g.store.ListDevshards(ctx)
 	if err != nil {
@@ -120,8 +114,7 @@ func publishEscrows(
 	return errors.Join(problems...)
 }
 
-// republishOnDevshardWrites keeps routing in step with the rotation lifecycle, which owns the rows
-// and knows nothing about the registry. The returned channel closes once the watcher has exited.
+// republishOnDevshardWrites keeps routing in step with the rotation lifecycle, which knows no registry.
 func (g *gateway) republishOnDevshardWrites(ctx context.Context) <-chan struct{} {
 	done := make(chan struct{})
 	go func() {
@@ -147,8 +140,7 @@ func notify(work chan struct{}) {
 	}
 }
 
-// devshardWrites reports the rows the rotation lifecycle changes, so a replacement escrow routes
-// without waiting for a poll and a retired one stops taking requests at once.
+// devshardWrites reports changed rows, so a replacement escrow routes without waiting for a poll.
 type devshardWrites struct {
 	*store.Store
 	changed func()
@@ -173,22 +165,17 @@ func (w devshardWrites) report(err error) error {
 	return err
 }
 
-// depletionNotice breaks the registry/manager cycle: the manager settles through the registry, so it
-// cannot also be constructed before it.
+// depletionNotice breaks the registry/manager cycle: the manager settles through the registry.
 type depletionNotice struct{ manager *escrow.Manager }
 
 func (d *depletionNotice) OnBalanceExhausted(escrowID, reason string) {
 	d.manager.OnBalanceExhausted(escrowID, reason)
 }
 
-// sessionSources opens the two kinds of escrow session, given the chain bridge and host route prefix
-// compose resolves. It is a parameter so the transport an escrow is served over is chosen once, at the
-// composition root. The chain access travels with the sessions because it rides the same connection.
+// sessionSources is a parameter so the transport an escrow is served over is chosen once, at compose.
 type sessionSources func(endpoints config.Chain, routePrefix string) (chainSources, error)
 
-// chainSources is what one dial yields: the two kinds of escrow session and the chain access every
-// other consumer needs. Reader and Transport are interfaces so a provider that dials nothing can
-// answer them in process, which is what keeps a test off the network.
+// chainSources is what one dial yields; Reader and Transport are interfaces so a test dials nothing.
 type chainSources struct {
 	Serving   registry.SessionFactory
 	ReadOnly  registry.SessionFactory
@@ -206,8 +193,7 @@ type devshardRegistry interface {
 	UpsertDevshard(ctx context.Context, record store.DevshardRecord) error
 }
 
-// seedDevshards leaves a devshard it already knows alone, so a restart cannot resurrect one an
-// operator deactivated.
+// seedDevshards leaves a known devshard alone, so a restart cannot resurrect a deactivated one.
 func seedDevshards(ctx context.Context, records devshardRegistry, raw string) error {
 	if strings.TrimSpace(raw) == "" {
 		return nil
@@ -265,9 +251,7 @@ func findDevshard(ctx context.Context, records devshardLookup, escrowID string) 
 	return store.DevshardRecord{}, fmt.Errorf("devshard %s: %w", escrowID, escrow.ErrUnknownEscrow)
 }
 
-// The bridge is one object for the process: it holds the chain client every session reads escrow state
-// sessionInputs resolves what both session factories need before they diverge on how the session talks
-// to its hosts: the record itself, the key its env var holds, and a storage directory that exists.
+// sessionInputs resolves what both session factories need before they diverge on how they reach hosts.
 func sessionInputs(ctx context.Context, records devshardLookup, storageDir, escrowID string) (store.DevshardRecord, string, string, error) {
 	record, err := findDevshard(ctx, records, escrowID)
 	if err != nil {
@@ -284,7 +268,7 @@ func sessionInputs(ctx context.Context, records devshardLookup, storageDir, escr
 	return record, keyHex, storagePath, nil
 }
 
-// through, so building one per session would open a connection per escrow and lose the client's cache.
+// The bridge is one object for the process. See README.md, "Escrow sessions and the chain connection".
 func servingSessions(records devshardLookup, storageDir string, escrowBridge bridge.MainnetBridge, routePrefix string) registry.SessionFactory {
 	return func(ctx context.Context, escrowID string) (registry.EscrowSession, error) {
 		record, keyHex, storagePath, err := sessionInputs(ctx, records, storageDir, escrowID)
@@ -340,8 +324,7 @@ func escrowStorage(storageDir, escrowID string) (string, error) {
 	return storagePath, nil
 }
 
-// copySessionStorage copies regular files only: session storage is a flat set of SQLite files, so a
-// directory below it is not part of the escrow.
+// copySessionStorage copies regular files only: a directory below a flat SQLite set is not the escrow's.
 func copySessionStorage(sourceDir, targetDir string) error {
 	entries, err := os.ReadDir(sourceDir)
 	if err != nil {

@@ -1,7 +1,6 @@
 package filters
 
-// Options carries NormalizeRequest's per-call configuration. A set ModelTokenLimits overrides the global
-// token limits for the routed model, and a zero value it returns leaves the corresponding global one alone.
+// Options carries NormalizeRequest's per-call configuration. See README.md, "Output token limits".
 type Options struct {
 	Admin            bool
 	KeepClientStream bool
@@ -11,9 +10,7 @@ type Options struct {
 	ModelTokenLimits func(model string) (defaultMaxTokens, maxTokensCap uint64)
 }
 
-// Result is the normalized body plus the typed fields callers need without re-parsing it. Body asks the
-// host to stream unless KeepClientStream turned that off; ClientStream and ClientUsage are what the
-// caller asked for.
+// Result is the normalized body plus the typed fields callers need without re-parsing it.
 type Result struct {
 	Body                []byte
 	Model               string

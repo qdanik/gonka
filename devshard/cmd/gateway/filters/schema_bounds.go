@@ -7,9 +7,7 @@ import (
 	json "github.com/goccy/go-json"
 )
 
-// Bound families for each schema-carrying field, kept separate per field even where the values
-// currently match. See gateway-request-filtering.md, "Bounds that exist because a host dies
-// without them".
+// Bound families kept separate per schema-carrying field even where the values match. See README.md, "Schema bounds".
 const (
 	chatTemplateKwargsMaxDepth     = 16
 	chatTemplateKwargsMaxSizeBytes = 16 * 1024
@@ -46,8 +44,7 @@ const (
 )
 
 var (
-	// validSchemaTypes are the JSON-Schema primitives; anything else crashes xgrammar's
-	// grammar compiler (CVE-2025-48944).
+	// validSchemaTypes are the JSON-Schema primitives; anything else crashes xgrammar's compiler (CVE-2025-48944).
 	validSchemaTypes = map[string]struct{}{
 		"string": {}, "number": {}, "integer": {}, "object": {}, "boolean": {}, "array": {}, "null": {},
 	}
@@ -56,20 +53,17 @@ var (
 	branchSchemaKeys    = []string{"anyOf", "oneOf", "allOf"}
 
 	// schemaDataKeys hold literal data, not child schemas — the walker must not recurse into them.
-	// See gateway-request-filtering.md, "Bounds that exist because a host dies without them".
 	schemaDataKeys = map[string]struct{}{
 		"enum": {}, "const": {}, "default": {}, "examples": {}, "required": {}, "dependentRequired": {},
 	}
 
-	// schemaChildMapKeys hold name->schema maps; each value is walked as its own child schema
-	// and the wrapper map itself is not counted as an extra node.
+	// schemaChildMapKeys hold name->schema maps; each value is walked as a child, the wrapper is not counted.
 	schemaChildMapKeys = map[string]struct{}{
 		"properties": {}, "patternProperties": {}, "dependentSchemas": {},
 	}
 )
 
-// SchemaBounds bounds a JSON-Schema payload's depth, node count, serialized size,
-// anyOf/oneOf/allOf arm count, and enum size; bans $ref/$defs/definitions; and validates `type`/`pattern`.
+// SchemaBounds bounds a JSON-Schema payload's shape and size. See README.md, "Schema bounds".
 type SchemaBounds struct {
 	MaxDepth      int
 	MaxNodes      int
@@ -79,8 +73,7 @@ type SchemaBounds struct {
 	MaxPatternLen int
 }
 
-// Check walks schema for structural violations before measuring its serialized size. See
-// gateway-request-filtering.md, "Bounds that exist because a host dies without them".
+// Check walks schema for structural violations before measuring its serialized size.
 func (b SchemaBounds) Check(schema map[string]any) error {
 	var nodes int
 	if err := b.walk(schema, 1, &nodes); err != nil {
@@ -146,8 +139,7 @@ func (b SchemaBounds) walk(schema any, depth int, nodes *int) error {
 	return nil
 }
 
-// validateSchemaType rejects a `type` that is not a JSON-Schema primitive, or an array
-// containing one — an absent `type` is fine. See CVE-2025-48944.
+// validateSchemaType rejects a `type` that is not a JSON-Schema primitive; absent is fine (CVE-2025-48944).
 func validateSchemaType(object map[string]any) error {
 	raw, present := object["type"]
 	if !present {
@@ -174,8 +166,7 @@ func validateSchemaType(object map[string]any) error {
 	return nil
 }
 
-// validateSchemaPattern rejects a `pattern` over MaxPatternLen or that fails to compile
-// (CVE-2025-48944); MaxPatternLen <= 0 disables the check.
+// validateSchemaPattern rejects an over-long or uncompilable `pattern` (CVE-2025-48944); MaxPatternLen <= 0 disables it.
 func (b SchemaBounds) validateSchemaPattern(object map[string]any) error {
 	if b.MaxPatternLen <= 0 {
 		return nil
@@ -197,8 +188,7 @@ func (b SchemaBounds) validateSchemaPattern(object map[string]any) error {
 	return nil
 }
 
-// ObjectBounds bounds an arbitrary nested JSON object with no JSON-Schema semantics — no
-// $ref ban, no type/pattern/enum/branch checks.
+// ObjectBounds bounds an arbitrary nested JSON object, with no JSON-Schema semantics.
 type ObjectBounds struct {
 	MaxDepth     int
 	MaxNodes     int
@@ -269,8 +259,7 @@ func (c *countingWriter) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-// jsonMarshaledSize returns len(json.Marshal(v)) without allocating the output slice.
-// Encoder.Encode trails a newline that Marshal omits, so subtract one.
+// jsonMarshaledSize returns len(json.Marshal(v)) without allocating it; Encode trails a newline, so subtract one.
 func jsonMarshaledSize(v any) (int, error) {
 	var counter countingWriter
 	if err := json.NewEncoder(&counter).Encode(v); err != nil {

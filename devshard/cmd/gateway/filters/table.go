@@ -98,8 +98,7 @@ var (
 			{Stage: StagePostLimits, Apply: clampFloat(penaltyMin, penaltyMax)},
 			{Stage: StagePostLimits, Apply: forceZeroPenalty()},
 		}},
-		// The key check must run before the value/size rules below. See
-		// gateway-request-filtering.md, "Registration order is semantics".
+		// The key check must run before the value/size rules below. See README.md, "Registration order is semantics".
 		{Name: "logit_bias", Rules: []StagedRule{
 			{Stage: StagePostLimits, Apply: requireTokenIDKeys()},
 			{Stage: StagePostLimits, Apply: validFloatMap(logitBiasMinValue, logitBiasMaxValue, logitBiasMaxEntries)},
@@ -133,8 +132,7 @@ var (
 		spec("metadata", StagePreValidation, validMetadata(metadataMaxKeys, metadataMaxKeyLen, metadataMaxValueLen)),
 		spec("stream_options", StagePreValidation, validStreamOptions()),
 		spec("min_tokens", StagePreValidation, requireUint()),
-		// tools must precede tool_choice below. See gateway-request-filtering.md,
-		// "Registration order is semantics".
+		// tools must precede tool_choice below. See README.md, "Registration order is semantics".
 		spec("tools", StagePreValidation, validTools(SchemaBounds{
 			MaxDepth:      toolsMaxDepth,
 			MaxNodes:      toolsMaxNodes,
@@ -177,8 +175,7 @@ var (
 		{Name: "enable_thinking", Rules: []StagedRule{
 			{Stage: StagePreValidation, Apply: enableThinking()},
 		}},
-		// thinking must run before chat_template_kwargs below. See gateway-request-filtering.md,
-		// "Registration order is semantics".
+		// thinking must run before chat_template_kwargs below. See README.md, "Registration order is semantics".
 		{Name: "thinking", Rules: []StagedRule{
 			{Stage: StagePreValidation, Apply: thinking()},
 		}},
@@ -211,8 +208,7 @@ func buildKnownParameterSet() map[string]struct{} {
 	return known
 }
 
-// unwrapExtraBody flattens an extra_body envelope into top-level fields before the whitelist
-// runs; an existing top-level key wins on conflict, the envelope key is dropped either way.
+// unwrapExtraBody flattens an extra_body envelope before the whitelist runs; a top-level key wins on conflict.
 func unwrapExtraBody(document *Document) {
 	envelope, exists := document.Get("extra_body")
 	if !exists {
@@ -231,8 +227,7 @@ func unwrapExtraBody(document *Document) {
 	}
 }
 
-// rejectUnknownParameters is the whitelist gate: any key absent from parameterTable rejects
-// the request. Unknown keys are sorted so the reported violation is deterministic.
+// rejectUnknownParameters is the whitelist gate; unknown keys are sorted so the report is deterministic.
 func rejectUnknownParameters(document *Document) error {
 	unknown := make([]string, 0)
 	for key := range document.Raw() {

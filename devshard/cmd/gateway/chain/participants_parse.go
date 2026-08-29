@@ -51,8 +51,7 @@ type chainMLNodeInfo struct {
 // preservationMode selects which ML nodes count as preserved when folding participants.
 type preservationMode int
 
-// parseParticipants parses the current-participants response body, partitioning nodes under the
-// given preservation rule; preservedNodes backs preservationModeSnapshot membership checks.
+// parseParticipants folds the current-participants body under the given preservation rule. See README.md, "Folding the participants response".
 func parseParticipants(body []byte, preservation preservationMode, preservedNodes preservedSnapshotState) (participantsState, error) {
 	var payload chainCurrentParticipantsResponse
 	if err := json.Unmarshal(body, &payload); err != nil {

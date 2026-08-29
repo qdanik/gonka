@@ -105,8 +105,7 @@ func encodeTxRaw(bodyBytes, authInfoBytes, signature []byte) []byte {
 	return out
 }
 
-// encodeUnorderedTxBody builds a TxBody for the unordered-tx extension:
-// field 1 msg, field 4 unordered=true, field 5 timeout_timestamp.
+// encodeUnorderedTxBody builds a TxBody for the unordered-tx extension: field 1 msg, field 4 unordered=true, field 5 timeout_timestamp.
 func encodeUnorderedTxBody(msgAny []byte, timeout time.Time) []byte {
 	var out []byte
 	out = appendBytesField(out, 1, msgAny)

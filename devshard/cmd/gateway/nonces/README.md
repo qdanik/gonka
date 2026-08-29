@@ -18,6 +18,15 @@ It does not classify. Which counter a nonce lands in is `accounting`'s decision;
 - **A disabled ledger is a nil `*Recorder`, not a no-op object.** Every method tolerates a nil receiver, which is what keeps the enabled and disabled paths from diverging.
 - **The sweep is the safety net, not the primary path.** Live events are recorded as they happen; the sweep exists because the gateway can miss one — a restart, a dropped diff — and the chain is the authority.
 
+## The judgements it does make
+
+Not classification — that is `accounting`'s — but the four readings of a raw fact that have to happen before the fact can be reported at all:
+
+- **The epoch a swept escrow is stamped with** is the one the escrow was *first seen in*, not the one it was created in, which the gateway never reads. With counters that start empty on every boot the two say the same thing: the epoch this ledger's numbers cover.
+- **A slow receipt is measured from the dispatch, and only where both stamps exist.** An attempt that never got a receipt is a refusal, which the ledger already counts; calling it slow as well would report one failure twice.
+- **Clock drift counts in either direction.** A host running ahead makes the gateway wait past a deadline that already passed; one running behind makes it vote on a nonce still being served.
+- **A winner crowned after its client left gets its own terminal.** It still counts as work the host delivered, but it is not an answer anybody read — and without a name of its own, the population where the race outlived its client cannot be found in the ledger at all.
+
 ## Read next
 
 - [`accounting/README.md`](../accounting/README.md) — the book this fills.

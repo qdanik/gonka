@@ -2,9 +2,7 @@ package metrics
 
 import "github.com/prometheus/client_golang/prometheus"
 
-// CacheSource is the response cache's own account of itself; *api.Server satisfies it. The counts
-// travel as plain integers because api's own tests read this package, and importing it back would
-// close a cycle.
+// CacheSource is the response cache's own account of itself; plain integers avoid an import cycle with api.
 type CacheSource interface {
 	CacheStats() (hits, misses, entries, bytes int64)
 }

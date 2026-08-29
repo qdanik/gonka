@@ -11,8 +11,7 @@ import (
 	"devshard/logging"
 )
 
-// OnBalanceExhausted marks an escrow for replacement; the work happens in the next tick, so this
-// hook does no I/O and never fans out a per-escrow chain call.
+// OnBalanceExhausted marks an escrow for replacement in the next tick, so this hook does no I/O.
 func (m *Manager) OnBalanceExhausted(escrowID, reason string) {
 	if m.depleted.mark(escrowID) {
 		logging.Warn("escrow left routing", logkey.Escrow, escrowID, logkey.Reason, reason)
@@ -42,9 +41,7 @@ func (m *Manager) checkDepletion(ctx context.Context, snapshot chain.PhaseSnapsh
 	return errors.Join(errs...)
 }
 
-// retireDepleted stops routing to an exhausted escrow, whose low in-flight count is exactly what makes
-// the load score prefer it while it fails every request. A replacement is created first where one is
-// configured, so coverage never drops; where none is, the escrow is retired anyway.
+// retireDepleted stops routing to an exhausted escrow. See README.md, "Replacing a depleted escrow".
 func (m *Manager) retireDepleted(ctx context.Context, record store.DevshardRecord, modelByID map[string]ModelConfig, snapshot chain.PhaseSnapshot) error {
 	model, replaceable := modelByID[record.Model]
 	if replaceable {
@@ -57,14 +54,9 @@ func (m *Manager) retireDepleted(ctx context.Context, record store.DevshardRecor
 	return nil
 }
 
-// replaceDepleted creates the replacement before retiring the depleted escrow, so coverage never
-// drops to zero; a failed create leaves the depleted escrow in place for the next attempt. The
-// replacement is always regular: inheriting a temp role would hand the next bridge an escrow to retire
-// rather than the lasting coverage the depleted one was providing.
+// replaceDepleted creates the replacement before retiring, so coverage never drops to zero.
 func (m *Manager) replaceDepleted(ctx context.Context, record store.DevshardRecord, model ModelConfig, snapshot chain.PhaseSnapshot) error {
-	// The replacement is keyed by the epoch that funded it, and an escrow created under a snapshot that
-	// has no chain data is counted by no epoch at all -- so the next bridge funds a full set on top of
-	// it. Refusing here re-marks the escrow, and the next tick with a snapshot tries again.
+	// An escrow created under an epoch-less snapshot is counted by no epoch at all, so the next bridge funds a full set on top of it.
 	if snapshot.EpochIndex == 0 || snapshot.BlockHeight == 0 {
 		return fmt.Errorf("replacing depleted escrow %s: the chain snapshot carries no epoch yet", record.EscrowID)
 	}

@@ -10,8 +10,7 @@ type EscrowSource interface {
 	Snapshot() []registry.EscrowState
 }
 
-// RegistrySources pairs the live escrow set with the readers that answer questions about it, passed
-// as functions so the registry keeps no edge to limits.
+// RegistrySources takes its readers as functions, so the registry keeps no edge to limits.
 type RegistrySources struct {
 	Escrows            EscrowSource
 	EscrowWeight       func(escrowID, model string) float64

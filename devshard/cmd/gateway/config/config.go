@@ -1,15 +1,12 @@
-// Package config owns the gateway's immutable configuration snapshot:
-// defaults ← environment ← admin overrides. A snapshot is never mutated after
-// Build — reconfiguration swaps the whole snapshot (see Holder) — and Build
-// clones every map/slice it takes from its inputs.
+// Package config owns the gateway's immutable configuration snapshot: defaults ← environment ← admin
+// overrides, never mutated after Build. See README.md.
 package config
 
 import (
 	"devshard/cmd/gateway/env"
 )
 
-// Server is the listener's own configuration. StorageDir is resolved by main before Build, which applies
-// the default and never unsets it there.
+// Server is the listener's own configuration; StorageDir is resolved by main before Build.
 type Server struct {
 	Port                       int64
 	StorageDir                 string
@@ -19,8 +16,7 @@ type Server struct {
 	MaxConcurrentRuntimeBuilds int64
 }
 
-// GRPCEndpoint is what the escrow bridge dials. common/chain derives the CometBFT RPC host from it
-// at the standard port, and that derived endpoint is the query fallback every escrow read inherits.
+// Chain addresses the network; a moved RPC port must be named, not derived. See README.md, "What each group holds".
 type Chain struct {
 	PublicAPIBaseURL string
 	GRPCEndpoint     string
@@ -36,8 +32,7 @@ type Tx struct {
 	PollTimeoutMS  int64
 }
 
-// Concurrency caps requests in flight. A zero MaxRequests is no static cap, leaving admission to
-// the capacity-scaled per-weight limit alone.
+// Concurrency caps requests in flight; a zero MaxRequests leaves only the per-weight limit.
 type Concurrency struct {
 	MaxRequests               int64
 	RequestsPer10000Weight    float64
@@ -55,8 +50,7 @@ type HostCutoff struct {
 	MaxMS         int64
 }
 
-// ModelLimits is the per-model override set. Token fields are required as a
-// pair; pointer fields are optional — nil inherits the global limit.
+// ModelLimits is the per-model override set; a nil pointer field inherits the global limit.
 type ModelLimits struct {
 	DefaultMaxTokens       int64  `json:"default_max_tokens"`
 	MaxTokensCap           int64  `json:"max_tokens_cap"`
@@ -64,9 +58,7 @@ type ModelLimits struct {
 	MaxInputTokensInFlight *int64 `json:"max_input_tokens_in_flight,omitempty"`
 }
 
-// Limits groups admission tuning. A zero MaxInputTokensInFlight is unlimited, MaxTokensCap bounds
-// what a client may ask for and deliberately does not clamp DefaultMaxTokens, and ModelAccess maps a
-// model to one of the tiers below.
+// Limits groups admission tuning; several zeroes mean unlimited. See README.md, "What each group holds".
 type Limits struct {
 	DefaultMaxTokens         int64
 	ForceUpstreamStreaming   bool
@@ -106,10 +98,7 @@ type Accounting struct {
 	RetentionMaxRows int64
 }
 
-// NonceAccounting configures the per-nonce ledger, which answers a different question than Accounting:
-// where every committed nonce went, rather than what became of one client request. It reaches an
-// operator as devshard_gateway_nonces_* on the gateway's own metrics endpoint. RetentionEpochs of 0
-// keeps every epoch.
+// NonceAccounting configures the per-nonce ledger, not the per-request one; RetentionEpochs 0 keeps every epoch.
 type NonceAccounting struct {
 	Enabled         bool
 	ListenAddr      string
@@ -117,8 +106,7 @@ type NonceAccounting struct {
 	SnapshotSeconds int64
 }
 
-// Capture bounds the request-capture sink. An empty Dir means <storageDir>/captured-requests, SampleRate
-// runs from 1 (every matching request) to 0 (none), and MaxBytes ceilings what the directory may hold.
+// Capture bounds the request-capture sink; an empty Dir means <storageDir>/captured-requests.
 type Capture struct {
 	Enabled    bool
 	Dir        string
@@ -133,9 +121,7 @@ type Stream struct {
 	ClassifyMaxGlobalBytes      int64
 }
 
-// Perf groups Envoy-style host ejection tuning: consecutive-fail and rate-with-min-volume triggers, timed
-// backoff, and the pool-wide ejection cap. MinAvailableHosts is a floor kept routable regardless of that
-// cap, and host-model state unseen for the staleness window is evicted.
+// Perf groups Envoy-style host ejection tuning. See README.md, "What each group holds".
 type Perf struct {
 	EWMAHalfLifeSeconds      int64
 	ConsecutiveFailThreshold int64
@@ -148,9 +134,7 @@ type Perf struct {
 	HostStalenessSeconds     int64
 }
 
-// Engine groups race-escalation tuning; a zero MaxSpeculativeAttempts is bounded only by the host
-// group, and the backstops it does not carry are engine constants. See gateway-speculative-race.md,
-// "Tunables and backstops".
+// Engine groups race-escalation tuning. See race.md, "Tunables and backstops".
 type Engine struct {
 	ReceiptTimeoutMS       int64
 	FirstTokenFloorMS      int64
@@ -160,8 +144,7 @@ type Engine struct {
 	MaxSpeculativeAttempts int64
 }
 
-// Scheduler groups nonce-holding tuning. MatchWaitMS is how long a bound nonce waits for a co-arriving
-// compatible request before it is burned; 0 burns immediately.
+// Scheduler groups nonce-holding tuning; MatchWaitMS of 0 burns an unmatched nonce immediately.
 type Scheduler struct {
 	MatchWaitMS          int64
 	WarmNewEscrows       bool
@@ -201,12 +184,10 @@ const (
 	minAdminAPIKeyLength = 16
 )
 
-// AdminEnabled reports whether admin routes are configured at all. Callers must gate on this rather
-// than comparing a presented credential against AdminAPIKey, which would authenticate an empty one.
+// AdminEnabled is what callers must gate on: comparing against AdminAPIKey would authenticate an empty key.
 func (s Server) AdminEnabled() bool { return s.AdminAPIKey != "" }
 
-// AccessFor resolves a model's access tier; a model outside a populated ModelAccess is admin-only, not
-// open. See gateway-request-lifecycle.md, "3. Authorisation and routability".
+// AccessFor resolves a model's access tier. See operations.md, "Who may call what".
 func (l Limits) AccessFor(model string) string {
 	if len(l.ModelAccess) == 0 {
 		return ModelAccessOpen

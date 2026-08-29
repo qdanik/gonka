@@ -9,8 +9,7 @@ import (
 	"devshard/types"
 )
 
-// fallbackNonceCeiling applies until governance max_nonce has been fetched: the fixed ceiling the gateway
-// ran on before the param existed. See gateway-routing-and-nonces.md, "Picking an escrow".
+// fallbackNonceCeiling applies until governance max_nonce has been fetched. See routing.md, "Picking an escrow".
 const fallbackNonceCeiling uint64 = 19_800
 
 func (s *Scheduler) pickEscrow(profile RequestProfile, snapshot chain.PhaseSnapshot) (Escrow, error) {
@@ -22,9 +21,7 @@ func (s *Scheduler) pickEscrow(profile RequestProfile, snapshot chain.PhaseSnaps
 			if candidate.ID != profile.Escrow {
 				continue
 			}
-			// The cap is checked here too: a client picks this escrow by id, and the nonce ceiling is
-			// what reserves room for the finalize and settlement that follow. See
-			// gateway-routing-and-nonces.md, "Picking an escrow".
+			// A pinned escrow is capped too: the ceiling reserves room for the finalize and settlement. See routing.md, "Picking an escrow".
 			if reason := exhaustionReason(candidate, snapshot.MaxNonce, reserveTokens); reason != "" {
 				if s.onEscrowExhausted != nil {
 					s.onEscrowExhausted(candidate.ID, reason)
@@ -35,12 +32,10 @@ func (s *Scheduler) pickEscrow(profile RequestProfile, snapshot chain.PhaseSnaps
 		}
 		return Escrow{}, fmt.Errorf("escrow %q for model %q: %w", profile.Escrow, profile.Model, ErrEscrowGone)
 	}
-	// The allowlist is read here as well as at dispatch: an escrow whose whole group it refuses can
-	// never serve, and picking it by load alone spends the request on a group holding nobody.
+	// Read here as well as at dispatch: an escrow whose whole group it refuses can never serve.
 	reachable := reachableByAllowlist(s.participantAllowlist())
 
-	// Ties hold indices rather than candidates: an index does not escape the way a returned Escrow does,
-	// so the common case picks without touching the heap at all.
+	// Indices, not candidates: an index does not escape, so the common case never touches the heap.
 	bestScore := math.Inf(1)
 	var tied []int
 	admitted := 0
@@ -52,8 +47,7 @@ func (s *Scheduler) pickEscrow(profile RequestProfile, snapshot chain.PhaseSnaps
 		admitted++
 		if reason := exhaustionReason(candidate, snapshot.MaxNonce, reserveTokens); reason != "" {
 			declined = reason
-			// Routing only declines it; replacing it belongs to the rotation lifecycle, which
-			// otherwise never learns and lets the escrow drain silently into ErrNoEscrowCapacity.
+			// Routing only declines; the rotation lifecycle is what replaces an exhausted escrow.
 			if s.onEscrowExhausted != nil {
 				s.onEscrowExhausted(candidate.ID, reason)
 			}
@@ -84,8 +78,7 @@ func (s *Scheduler) pickEscrow(profile RequestProfile, snapshot chain.PhaseSnaps
 	}
 }
 
-// noCapacity carries why the last candidate was declined, so an escrow the floor caught while it could
-// still refuse cleanly is accounted as the running dry it is, not as a model nobody serves.
+// noCapacity carries why the last candidate was declined, so running dry is not read as a model nobody serves.
 func noCapacity(reason string) error {
 	if reason == "balance_floor" {
 		return fmt.Errorf("%w: %w", ErrNoEscrowCapacity, types.ErrInsufficientBalance)
@@ -93,8 +86,7 @@ func noCapacity(reason string) error {
 	return ErrNoEscrowCapacity
 }
 
-// loadScore is the ascending utilisation ratio; a non-positive or corrupt weight scores unusable. See
-// gateway-routing-and-nonces.md, "Picking an escrow".
+// loadScore is the ascending utilisation ratio; a non-positive or corrupt weight scores unusable. See routing.md, "Picking an escrow".
 func loadScore(activeUsers int, weight float64) float64 {
 	if weight <= 0 || math.IsNaN(weight) {
 		return math.Inf(1)
@@ -128,8 +120,7 @@ func exhaustionReason(candidate Escrow, maxNonce uint64, reserveTokens uint64) s
 	return ""
 }
 
-// belowBalanceFloor prices the reserve the way the chain does, (input+max_tokens)*token_price, and asks
-// whether the escrow still covers everything in flight plus this arrival.
+// belowBalanceFloor prices the reserve the way the chain does, (input+max_tokens)*token_price.
 func belowBalanceFloor(candidate Escrow, reserveTokens uint64) bool {
 	if candidate.Session == nil || reserveTokens == 0 {
 		return false
@@ -145,8 +136,7 @@ func belowBalanceFloor(candidate Escrow, reserveTokens uint64) bool {
 	return candidate.Session.Balance() < floor
 }
 
-// safeMul reports the product only when it did not wrap: a price this escrow cannot afford must not read
-// as an affordable small one.
+// safeMul reports the product only when it did not wrap: an unaffordable price must not read as a small one.
 func safeMul(left, right uint64) (uint64, bool) {
 	if left == 0 || right == 0 {
 		return 0, true
@@ -155,8 +145,7 @@ func safeMul(left, right uint64) (uint64, bool) {
 	return product, product/left == right
 }
 
-// reachableByAllowlist is built once per pick rather than per candidate, and an empty allowlist skips
-// the walk entirely: narrowing exists only where an operator asked for it.
+// reachableByAllowlist is built once per pick, and an empty allowlist skips the walk entirely.
 func reachableByAllowlist(allowlist []string) func(Escrow) bool {
 	if len(allowlist) == 0 {
 		return func(Escrow) bool { return true }

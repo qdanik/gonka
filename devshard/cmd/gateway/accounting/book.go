@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"devshard/cmd/gateway/engine"
 	"devshard/types"
 )
 
@@ -33,11 +34,9 @@ type escrowLedger struct {
 	nonces      map[uint64]*nonceRecord
 	events      []protocolEvent
 	retired     bool
-	retiredAt   time.Time
 }
 
-// newEscrowLedger is the only way to build one. A second construction site that forgot a map would
-// panic on the first write to it, and the write is a recording path with no error to return.
+// The only way to build one: a second site that forgot a map would panic on a path with no error to return.
 func newEscrowLedger(metadata EscrowMetadata) *escrowLedger {
 	return &escrowLedger{
 		metadata:    metadata,
@@ -81,8 +80,7 @@ func NewBook(now func() time.Time) *Book {
 	return &Book{escrows: make(map[string]*escrowLedger), now: now}
 }
 
-// Re-opening keeps the counters and pins the epoch at first sighting: an escrow that re-stamped
-// itself on every sweep would drag its whole history into the current epoch.
+// Re-opening keeps the counters and pins the epoch at first sighting. See README.md, "How a nonce is classified".
 func (b *Book) OpenEscrow(metadata EscrowMetadata) error {
 	if metadata.EscrowID == "" {
 		return fmt.Errorf("accounting: escrow id is required")
@@ -127,7 +125,6 @@ func (b *Book) RetireEscrow(escrowID string) {
 	defer b.mu.Unlock()
 	if escrow, known := b.escrows[escrowID]; known {
 		escrow.retired = true
-		escrow.retiredAt = b.now().UTC()
 		b.touchLocked()
 	}
 }
@@ -282,9 +279,7 @@ func (b *Book) withEscrow(escrowID string, apply func(*escrowLedger) error) erro
 
 func (b *Book) touchLocked() { b.updatedAt = b.now().UTC() }
 
-// Seeing a nonce raises the assigned watermark too: the chain's latest is polled on a sweep while
-// nonces arrive on every race, and without this the counters outrun the range they are measured
-// against and report the gap as a disagreement with the chain.
+// Seeing a nonce raises the assigned watermark too, or the counters outrun the range they are measured against.
 func (e *escrowLedger) record(nonce uint64) *nonceRecord {
 	if nonce > e.latest {
 		e.latest = nonce
@@ -326,8 +321,7 @@ func classify(slotID uint32, record *nonceRecord) (CounterKey, bool) {
 	key := CounterKey{SlotID: slotID}
 	switch {
 	case record.ghostReason != "":
-		// A burn the host is charged for votes like any other nonce, so its outcome has to reach the key
-		// the burn already made; without this the vote is posted and counted nowhere.
+		// A charged burn votes like any other nonce, so its outcome has to reach the key the burn already made.
 		key.Disposition = DispositionGhost
 		key.GhostReason = record.ghostReason
 		key.TimeoutKind = record.timeoutKind
@@ -338,9 +332,7 @@ func classify(slotID uint32, record *nonceRecord) (CounterKey, bool) {
 		key.Disposition = finishedDisposition(record.usage)
 		return raceFacts(key, record), true
 	case !record.sent:
-		// Committed and never dispatched. It is not a ghost -- nothing decided to burn it -- and it is
-		// not in flight, because the race that held it has reported. It is an unfinished refusal: no
-		// host ever saw it.
+		// Committed and never dispatched: an unfinished refusal, not a ghost. See README.md.
 		if record.timeoutAction == "" {
 			return key, false
 		}
@@ -356,9 +348,7 @@ func classify(slotID uint32, record *nonceRecord) (CounterKey, bool) {
 	return raceFacts(key, record), true
 }
 
-// An empty terminal is itself a fact -- the nonce reached classification without the race ever
-// reporting on it -- so it is named rather than left blank, which reads as missing data and drops the
-// bucket from any grouping by terminal.
+// An empty terminal is itself a fact, so it is named rather than left blank. See README.md.
 func raceFacts(key CounterKey, record *nonceRecord) CounterKey {
 	key.Terminal = record.terminal
 	if key.Terminal == "" {
@@ -386,7 +376,7 @@ func finishedDisposition(usage Usage) Disposition {
 
 func unfinishedDisposition(record *nonceRecord) Disposition {
 	switch {
-	case record.timeoutKind == TimeoutKindRefused:
+	case record.timeoutKind == engine.TimeoutKindRefused:
 		return DispositionUnfinishedRefused
 	case record.timeoutKind != "":
 		return DispositionUnfinishedExecution
@@ -396,22 +386,6 @@ func unfinishedDisposition(record *nonceRecord) Disposition {
 		return DispositionUnfinishedRefused
 	}
 }
-
-const TimeoutActionAbandoned = "abandoned_by_restart"
-
-const TimeoutKindRefused = "refused"
-
-const (
-	TerminalUnreported   = "unreported"
-	TerminalUnnamed      = "unnamed"
-	TerminalUnclassified = "unclassified"
-)
-
-const (
-	TerminalWarmupProbe     = "warmup_probe"
-	TerminalClientGone      = "client_gone_before_delivery"
-	TerminalClientCancelled = "client_cancelled"
-)
 
 func assignedForSlot(latest uint64, groupSize, slotID uint32) uint64 {
 	if groupSize == 0 || latest == 0 {
@@ -425,4 +399,26 @@ func assignedForSlot(latest uint64, groupSize, slotID uint32) uint64 {
 		return 0
 	}
 	return (latest-slot)/group + 1
+}
+
+func (e *escrowLedger) slotActivity() map[uint32]SlotActivity {
+	activity := make(map[uint32]SlotActivity, len(e.metadata.Slots))
+	record := func(slotID uint32, apply func(*SlotActivity)) {
+		entry := activity[slotID]
+		apply(&entry)
+		activity[slotID] = entry
+	}
+	for slotID, count := range e.challenged {
+		record(slotID, func(entry *SlotActivity) { entry.Challenged = count })
+	}
+	for slotID, count := range e.validations {
+		record(slotID, func(entry *SlotActivity) { entry.Validations = count })
+	}
+	for slotID, count := range e.timeouts {
+		record(slotID, func(entry *SlotActivity) { entry.TimeoutsApplied = count })
+	}
+	for slotID, count := range e.rejected {
+		record(slotID, func(entry *SlotActivity) { entry.Rejected = count })
+	}
+	return activity
 }

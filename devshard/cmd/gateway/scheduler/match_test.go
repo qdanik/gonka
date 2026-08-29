@@ -63,7 +63,7 @@ func TestServableAgreesWithMatchOverEveryFilterCombination(t *testing.T) {
 		}
 		queued := queuedWaiter(baseTime, "model-a", excluded...)
 
-		canServe, _, _ := servable(queued, participants, availability)
+		canServe, _, _, _ := servable(queued, participants, availability)
 		matchWouldServe := false
 		for _, participant := range participants {
 			binding := HostBinding{Nonce: 1, Participant: participant}

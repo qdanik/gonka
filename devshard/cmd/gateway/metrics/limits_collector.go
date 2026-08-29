@@ -22,8 +22,7 @@ type ParticipantSource interface {
 	Snapshot() []limits.HostWindow
 }
 
-// LimitsSources is everything the limits collector reads. Models names the models a scrape should
-// report capacity for even when no request has touched them yet.
+// LimitsSources is everything the limits collector reads; Models covers those no request has touched yet.
 type LimitsSources struct {
 	Limiter       LimiterSource
 	Capacity      CapacitySource
@@ -137,8 +136,7 @@ func (c *LimitsCollector) Collect(ch chan<- prometheus.Metric) {
 	gauge(ch, c.participantsExhausted, float64(exhausted))
 }
 
-// reportedModels folds the configured model list into the models with live traffic, so a model with
-// no in-flight request still reports its capacity and no model is emitted twice.
+// reportedModels folds the configured list into the live one, so an idle model still reports its capacity.
 func (c *LimitsCollector) reportedModels(snapshot limits.LimiterSnapshot) []string {
 	models := make([]string, 0, len(snapshot.ByModel))
 	for model := range snapshot.ByModel {

@@ -183,9 +183,7 @@ func (n *Recorder) sweepUntil(ctx context.Context, escrows EscrowSource) {
 }
 
 func (n *Recorder) sweep(ctx context.Context, escrows EscrowSource) {
-	// The epoch stamped here is the one the escrow was first seen in, not the one it was created in,
-	// which the gateway never reads. With counters that start empty on every boot the two say the same
-	// thing: the epoch this ledger's numbers cover.
+	// The epoch stamped here is the one the escrow was first seen in. See README.md, "The judgements it does make".
 	epoch, epochErr := n.currentEpoch(ctx)
 	published := make(map[string]struct{})
 	for _, state := range escrows.Snapshot() {
@@ -268,9 +266,7 @@ func (n *Recorder) RecordRace(outcome engine.RaceOutcome) {
 	n.report(n.service.Book.RecordRace(outcome.EscrowID, attempts))
 }
 
-// slowReceipt measures from the dispatch, and only where both stamps exist: an attempt that never got
-// a receipt is a refusal, which the ledger already counts, and calling it slow as well would report
-// one failure twice.
+// slowReceipt needs both stamps: a missing receipt is a refusal already counted, not a second failure.
 func slowReceipt(attempt engine.AttemptOutcome) bool {
 	if attempt.SendTime.IsZero() || attempt.ReceiptTime.IsZero() {
 		return false
@@ -278,8 +274,7 @@ func slowReceipt(attempt engine.AttemptOutcome) bool {
 	return attempt.ReceiptTime.Sub(attempt.SendTime) > accounting.SlowReceipt
 }
 
-// clockDrifted reads the offset in either direction: a host running ahead makes the gateway wait past
-// a deadline that already passed, one running behind makes it vote on a nonce still being served.
+// clockDrifted reads the offset in either direction; both directions break a deadline. See README.md.
 func clockDrifted(attempt engine.AttemptOutcome) bool {
 	offset, measured := engine.ClockOffset(attempt)
 	return measured && (offset > accounting.ClockDrift || offset < -accounting.ClockDrift)
@@ -291,9 +286,7 @@ func (n *Recorder) RecordTimeout(event engine.TimeoutEvent) {
 	}
 }
 
-// A crowned winner whose client had already left still counts as work the host delivered, but it is not
-// an answer anybody read; without its own name the population where the race outlived its client cannot
-// be found in the ledger at all.
+// A winner crowned after its client left needs its own terminal, or that population is unfindable.
 func terminalFor(outcome engine.RaceOutcome, attempt engine.AttemptOutcome) string {
 	if outcome.Lifecycle.ClientGone && outcome.IsWinner(attempt) {
 		return accounting.TerminalClientGone

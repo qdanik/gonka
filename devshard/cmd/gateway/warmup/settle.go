@@ -10,17 +10,11 @@ import (
 	"devshard/user"
 )
 
-const (
-	timeoutKind     = "refused"
-	timeoutNoPoster = "no_poster"
-)
-
 type Timeouts interface {
 	RecordTimeout(event engine.TimeoutEvent)
 }
 
-// settleRefusedProbe resolves the nonce the warmup spent: it is committed outside the scheduler, so
-// nothing else ever will, and the escrow pays its reserve while the host escapes the miss.
+// settleRefusedProbe resolves a nonce committed outside the scheduler, which nothing else ever would.
 func (w *Prober) settleRefusedProbe(ctx context.Context, escrowID, model string, params user.InferenceParams, nonce uint64) {
 	if w.posters == nil {
 		return
@@ -29,15 +23,15 @@ func (w *Prober) settleRefusedProbe(ctx context.Context, escrowID, model string,
 		EscrowID: escrowID,
 		Model:    model,
 		Nonce:    nonce,
-		Kind:     timeoutKind,
+		Kind:     engine.TimeoutKindRefused,
 		Action:   engine.TimeoutActionStarted,
 	}
 
 	poster, resolved := w.posters(escrowID, params)
 	if !resolved {
 		w.recordTimeout(engine.TimeoutEvent{
-			EscrowID: escrowID, Model: model, Nonce: nonce, Kind: timeoutKind,
-			Action: engine.TimeoutActionSkipped, Reason: timeoutNoPoster,
+			EscrowID: escrowID, Model: model, Nonce: nonce, Kind: engine.TimeoutKindRefused,
+			Action: engine.TimeoutActionSkipped, Reason: engine.TimeoutReasonNoPoster,
 		})
 		return
 	}

@@ -9,9 +9,7 @@ import (
 	"strings"
 )
 
-// A participant is addressable by its own address, which is what lets a host ask what this gateway
-// saw of it. Every route is read-only, so the listener carries no authentication. See
-// gateway-operations.md, "Nonce accounting".
+// Read-only, so the listener carries no authentication. See docs/accounting.md, "The surface".
 type Handler struct {
 	book         *Book
 	currentEpoch CurrentEpochFunc
@@ -97,8 +95,7 @@ func (h *Handler) serveParticipant(w http.ResponseWriter, r *http.Request) {
 	}{SchemaVersion: SchemaVersion, EpochIndex: epoch, Participant: participant, Records: records})
 }
 
-// A host with no verdicts against it is answered with an empty feed rather than a 404: nothing to
-// report is the healthy case here, unlike a host absent from the epoch entirely.
+// An empty feed rather than a 404: here nothing to report is the healthy case.
 func (h *Handler) serveEvents(w http.ResponseWriter, r *http.Request) {
 	epoch, err := h.epochOf(r)
 	if err != nil {
@@ -118,8 +115,7 @@ func (h *Handler) serveEvents(w http.ResponseWriter, r *http.Request) {
 	}{SchemaVersion: SchemaVersion, EpochIndex: epoch, Participant: filter.Participant, Events: h.book.Events(filter)})
 }
 
-// Epoch zero is refused: the filter reads it as "every epoch", so serving it would answer a question
-// about one epoch with all of them.
+// Epoch zero is refused: the filter reads it as "every epoch".
 func (h *Handler) epochOf(r *http.Request) (uint64, error) {
 	value := r.PathValue("epoch")
 	if value == "current" {

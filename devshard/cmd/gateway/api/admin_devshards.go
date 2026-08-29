@@ -217,8 +217,7 @@ func (s *Server) devshardRecord(r *http.Request, escrowID string) (store.Devshar
 	return store.DevshardRecord{}, false, nil
 }
 
-// badRequestUnlessOversized keeps an ingest-cap rejection at 413 while every other decode failure is
-// the client's malformed body.
+// badRequestUnlessOversized keeps an ingest-cap rejection at 413; every other decode failure is the client's.
 func badRequestUnlessOversized(err error) error {
 	var oversized *http.MaxBytesError
 	if errors.As(err, &oversized) {
@@ -227,14 +226,12 @@ func badRequestUnlessOversized(err error) error {
 	return filters.WrapReject(err)
 }
 
-// DevshardStoragePath is where one escrow's session keeps its SQLite files, and sessions and the
-// delete route must derive it the same way. See gateway-operations.md, "Operator".
+// DevshardStoragePath: sessions and the delete route must derive it the same way. See operations.md, "What is exposed".
 func DevshardStoragePath(baseStorageDir, escrowID string) string {
 	return filepath.Join(baseStorageDir, "escrow-"+escrowID)
 }
 
-// removeDevshardStorage guards os.RemoveAll on a path derived from a client-supplied escrow id. See
-// gateway-operations.md, "Operator".
+// removeDevshardStorage guards os.RemoveAll on a client-supplied escrow id. See operations.md, "What is exposed".
 func removeDevshardStorage(storagePath, baseStorageDir string) error {
 	if strings.TrimSpace(storagePath) == "" {
 		return nil

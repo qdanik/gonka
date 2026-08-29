@@ -8,30 +8,6 @@ import (
 	"devshard/user"
 )
 
-const (
-	timeoutKindRefused   = "refused"
-	timeoutKindExecution = "execution"
-
-	TimeoutActionSkipped   = "skipped"
-	TimeoutActionStarted   = "started"
-	TimeoutActionCompleted = "completed"
-	TimeoutActionFailed    = "failed"
-
-	// timeoutReasonNoPoster names a step whose escrow no longer has a session to vote through.
-	timeoutReasonNoPoster = "no_poster"
-
-	timeoutReasonNone            = "none"
-	timeoutReasonPhaseAborted    = "phase_transition_aborted"
-	timeoutReasonEmptyStream     = "empty_stream_without_non_empty_winner"
-	timeoutReasonNonceFinished   = "nonce_already_finished"
-	timeoutReasonLongResponse    = "long_response_after_content"
-	timeoutReasonCollectionError = "timeout_collection_error"
-	timeoutReasonNotApplied      = "timeout_not_applied"
-	// timeoutReasonEscrowGone names a vote no retry can win: the hosts have dropped the escrow, so the
-	// nonce it would have settled is now unsettleable and will pay its full reserve.
-	timeoutReasonEscrowGone = "escrow_gone_from_hosts"
-)
-
 type TimeoutPoster interface {
 	SettleTimeout(ctx context.Context, nonce uint64, startedAt time.Time) (TimeoutVote, error)
 }
@@ -51,8 +27,7 @@ type TimeoutEvent struct {
 	Reason      string
 }
 
-// TimeoutStep is one nonce's vote. StartedAt is the record's, not the attempt's dispatch, so a nonce
-// no attempt ever spent still waits out the deadline a verifier recomputes from that record.
+// TimeoutStep is one nonce's vote; StartedAt is the record's, not the attempt's dispatch. See README, "Timeout votes".
 type TimeoutStep struct {
 	Nonce     uint64
 	StartedAt time.Time
@@ -62,14 +37,14 @@ type TimeoutStep struct {
 
 func timeoutKind(a AttemptOutcome) string {
 	if a.ReceiptTime.IsZero() {
-		return timeoutKindRefused
+		return TimeoutKindRefused
 	}
-	return timeoutKindExecution
+	return TimeoutKindExecution
 }
 
 func timeoutVoteKind(vote, fallback string) string {
 	switch vote {
-	case timeoutKindRefused, timeoutKindExecution:
+	case TimeoutKindRefused, TimeoutKindExecution:
 		return vote
 	}
 	return fallback
@@ -80,18 +55,17 @@ func (o RaceOutcome) nonceSettled(a AttemptOutcome) bool {
 		a.Terminal != TerminalErrorStream && a.Terminal != TerminalCapabilityRefused
 }
 
-// timeoutSkipReason names every skip; a host whose escrow state diverged is deliberately not one of
-// them. See gateway-speculative-race.md, "Timeout votes".
+// timeoutSkipReason names every skip; a diverged escrow state is deliberately not one. See race.md, "Timeout votes".
 func (o RaceOutcome) timeoutSkipReason(a AttemptOutcome) (string, bool) {
 	switch {
 	case a.PhaseTransitionAborted:
-		return timeoutReasonPhaseAborted, true
+		return TimeoutReasonPhaseAborted, true
 	case a.emptyStream() && a.NonceFinished:
-		return timeoutReasonEmptyStream, true
+		return TimeoutReasonEmptyStream, true
 	case a.NonceFinished:
-		return timeoutReasonNonceFinished, true
+		return TimeoutReasonNonceFinished, true
 	case o.longResponseExempt(a):
-		return timeoutReasonLongResponse, true
+		return TimeoutReasonLongResponse, true
 	}
 	return "", false
 }
@@ -119,7 +93,7 @@ func (o RaceOutcome) TimeoutPlan() []TimeoutStep {
 		} else {
 			step.Post = true
 			step.Event.Action = TimeoutActionStarted
-			step.Event.Reason = timeoutReasonNone
+			step.Event.Reason = TimeoutReasonNone
 		}
 		steps = append(steps, step)
 	}
@@ -134,8 +108,8 @@ func SettleTimeouts(ctx context.Context, poster TimeoutPoster, outcome RaceOutco
 		if !step.Post || poster == nil {
 			skipped := step.Event
 			skipped.Action = TimeoutActionSkipped
-			if skipped.Reason == timeoutReasonNone {
-				skipped.Reason = timeoutReasonNoPoster
+			if skipped.Reason == TimeoutReasonNone {
+				skipped.Reason = TimeoutReasonNoPoster
 			}
 			events = append(events, skipped)
 			continue
@@ -150,21 +124,19 @@ func SettleTimeouts(ctx context.Context, poster TimeoutPoster, outcome RaceOutco
 	return events
 }
 
-// TimeoutOutcome classifies what a posted vote came back as. The handler's own detail is preferred
-// over the generic collection error, because that is the only place the refusing verifier is named.
-// escrowMissing is the caller's reading: vote collection reports a count, never the verifier's error.
+// TimeoutOutcome classifies what a posted vote came back as, preferring the handler's own detail. See README, "Timeout votes".
 func TimeoutOutcome(vote TimeoutVote, err error, escrowMissing bool) (action, reason string) {
 	switch {
 	case errors.Is(err, user.ErrNonceFinishedWhileWaiting):
-		return TimeoutActionSkipped, timeoutReasonNonceFinished
+		return TimeoutActionSkipped, TimeoutReasonNonceFinished
 	case errors.Is(err, user.ErrTimeoutNotApplied):
-		return TimeoutActionFailed, firstNamed(vote.Detail, timeoutReasonNotApplied)
+		return TimeoutActionFailed, firstNamed(vote.Detail, TimeoutReasonNotApplied)
 	case err != nil && escrowMissing:
-		return TimeoutActionFailed, timeoutReasonEscrowGone
+		return TimeoutActionFailed, TimeoutReasonEscrowGone
 	case err != nil:
-		return TimeoutActionFailed, firstNamed(vote.Detail, timeoutReasonCollectionError)
+		return TimeoutActionFailed, firstNamed(vote.Detail, TimeoutReasonCollectionError)
 	}
-	return TimeoutActionCompleted, timeoutReasonNone
+	return TimeoutActionCompleted, TimeoutReasonNone
 }
 
 func firstNamed(detail, fallback string) string {

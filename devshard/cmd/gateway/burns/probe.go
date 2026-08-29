@@ -6,15 +6,12 @@ import (
 )
 
 const (
-	// probeInterval is the floor between two probes to one host. The picker burns throttled ghosts in a
-	// tight loop, so without it a busy host would be probed as fast as it refuses.
+	// probeInterval floors the gap between two probes to one host: the picker burns ghosts in a tight loop.
 	probeInterval = 5 * time.Second
 	probeTimeout  = 30 * time.Second
 )
 
-// probeGate keeps one probe in flight per participant and no faster than probeInterval. A host that is
-// merely busy must not be asked to prove it twice at once: the probe is a real request, and a second
-// one costs the host the capacity the first is waiting on.
+// probeGate keeps one probe in flight per participant and no faster than probeInterval. See README.md, "What it owns".
 type probeGate struct {
 	mu   sync.Mutex
 	last map[string]time.Time

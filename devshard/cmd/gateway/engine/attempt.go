@@ -15,8 +15,7 @@ import (
 
 const maxUpstreamBodyLogged = 256
 
-// ErrStateRootDivergence is wrapped by the dispatcher adapter around the session's own detection, so
-// the race can branch on a diverging post state root without reading upstream error text.
+// ErrStateRootDivergence lets the race branch on a diverging post state root without reading error text.
 var ErrStateRootDivergence = errors.New("post state root divergence")
 
 // dispatcher is the engine's only route to a host; an adapter over devshard/user.Session satisfies it.
@@ -31,16 +30,12 @@ type Response interface {
 	ConfirmedAt() int64
 }
 
-// hostLimiter is satisfied by *limits.ParticipantLimiter; the attempt that spends the nonce gives the
-// host's concurrency slot back. See gateway-invariants.md, "5. The slot and the escrow hold are taken
-// with the nonce, and given back after the vote".
+// hostLimiter is satisfied by *limits.ParticipantLimiter. See rules.md, "5. The slot and the escrow hold are taken with the nonce, and given back after the vote".
 type hostLimiter interface {
 	Release(participant, model string)
 }
 
-// chunkFacts is what one SSE chunk carried. Error excludes the capability refusals a different host can
-// still serve, which travel as CapabilityRefused instead; TokensBurned separates a model that produced
-// nothing from a host that carried nothing.
+// chunkFacts is what one SSE chunk carried. See README, "Classification and reassembly".
 type chunkFacts struct {
 	Content       bool
 	ContentSource string
@@ -59,17 +54,14 @@ type chunkFacts struct {
 	LogprobsDecoded       bool
 }
 
-// streamClassifier reassembles one attempt's SSE bytes and reports what they contained. Release frees
-// the reassembly buffer and the byte reservations behind it.
+// streamClassifier reassembles one attempt's SSE bytes and reports what they contained; Release frees the buffer.
 type streamClassifier interface {
 	Classify(chunk []byte) chunkFacts
 	Flush() chunkFacts
 	Release()
 }
 
-// AttemptSpec is everything one attempt needs, fixed at construction and never written afterwards. Events
-// must be drained until every started attempt has delivered its AttemptDone. See gateway-invariants.md,
-// "1. A committed nonce is always settled".
+// AttemptSpec is everything one attempt needs, fixed at construction; Events must be drained until AttemptDone. See rules.md, "1. A committed nonce is always settled".
 type AttemptSpec struct {
 	Escrow      string
 	Model       string
@@ -111,8 +103,7 @@ type AttemptEvent struct {
 	Lifecycle Lifecycle
 }
 
-// attemptState is owned by the attempt's own goroutine and is never read by another goroutine. Every
-// fact the race needs travels as an AttemptEvent instead.
+// attemptState is owned by the attempt's own goroutine alone. See README, "Who owns which state".
 type attemptState struct {
 	sendTime     time.Time
 	receiptTime  time.Time
@@ -213,8 +204,7 @@ func (w *attemptWriter) Write(chunk []byte) (int, error) {
 	return w.spec.Sink.Write(chunk)
 }
 
-// Flush is how the transport's per-line flush reaches the client: without it the assertion the
-// transport makes on its writer fails and a crowned winner's bytes sit in the server's buffer.
+// Flush is how the transport's per-line flush reaches the client; without it a winner's bytes sit in the server's buffer.
 func (w *attemptWriter) Flush() {
 	if flusher, ok := w.spec.Sink.(http.Flusher); ok {
 		flusher.Flush()
@@ -225,8 +215,7 @@ func (w *attemptWriter) progress(kind AttemptEventKind, at time.Time) AttemptEve
 	return AttemptEvent{Kind: kind, Nonce: w.nonce, At: at}
 }
 
-// recordChunkGap keeps the longest silence a host left mid-stream, which a chunk count cannot show.
-// The silence before [DONE] is the end of the stream, not a host that went quiet.
+// recordChunkGap keeps the longest mid-stream silence; the one before [DONE] is the end, not a quiet host.
 func (s *attemptState) recordChunkGap(now time.Time, chunk []byte) {
 	previous := s.lastChunk
 	s.lastChunk = now
@@ -297,8 +286,7 @@ func (s *attemptState) classify(ctx context.Context, spec AttemptSpec, err error
 	}
 }
 
-// upstreamRefusal keeps what the host said when it refused. The body is truncated because a log line
-// needs the reason, not the payload.
+// upstreamRefusal keeps what the host said when it refused, truncated: a log line needs the reason, not the payload.
 func upstreamRefusal(err error) (int, string) {
 	var status *transport.UpstreamStatusError
 	if !errors.As(err, &status) {
@@ -392,8 +380,7 @@ func (spec AttemptSpec) emit(event AttemptEvent) {
 	spec.Events <- event
 }
 
-// offer drops progress the coordinator is too busy to take, where emit blocks; expire drains the
-// queue before reading lastChunk, so a drop only ever ages it between reads.
+// offer drops progress the coordinator is too busy to take, where emit blocks. See README, "Who owns which state".
 func (spec AttemptSpec) offer(event AttemptEvent) bool {
 	select {
 	case spec.Events <- event:

@@ -10,13 +10,10 @@ import (
 )
 
 const (
-	// MaxStreamCarryBytes bounds the unterminated tail held per stream: a host that never sends an
-	// event terminator would otherwise grow it without limit. The size is derived, not picked — see
-	// gateway-request-filtering.md, "The response side".
+	// MaxStreamCarryBytes bounds the unterminated tail held per stream. See README.md, "SSE framing".
 	MaxStreamCarryBytes = 32 << 20
 
-	// chunkObject is the object name every synthesised event carries; it is what tells a streaming
-	// client to read choices[].delta instead of choices[].message.
+	// chunkObject tells a streaming client to read choices[].delta instead of choices[].message.
 	chunkObject = "chat.completion.chunk"
 )
 
@@ -26,22 +23,19 @@ var (
 	sseDataPrefix         = []byte("data: ")
 	sseDoneMarker         = []byte("[DONE]")
 
-	// sseDataParsePrefix deliberately omits the space sseDataPrefix emits; the two must not be
-	// unified. See gateway-request-filtering.md, "Two `data:` prefixes that must not be unified".
+	// sseDataParsePrefix deliberately omits the space sseDataPrefix emits. See README.md, "Two `data:` prefixes that must not be unified".
 	sseDataParsePrefix = []byte("data:")
 
 	// usageKey spares every other event a decode it has nothing to gain from.
 	usageKey = []byte(`"usage"`)
 
-	// SSEDoneEvent is the terminator an SSE client reads until; without it the client waits out its
-	// own timeout instead of finishing.
+	// SSEDoneEvent is the terminator an SSE client reads until; without it the client waits out its own timeout.
 	SSEDoneEvent = []byte("data: [DONE]\n\n")
 
 	// NoResponseDataBody is the reply a non-streaming caller gets when the stream carried no payload.
 	NoResponseDataBody = []byte(`{"error":{"message":"no response data"}}`)
 
-	// TruncatedResponseBody replaces a fold that ran past maxAssembledEvents. Returning the prefix
-	// would be a complete-looking answer missing its tail.
+	// TruncatedResponseBody replaces a fold past maxAssembledEvents; the prefix alone would look complete.
 	TruncatedResponseBody = []byte(`{"error":{"message":"response exceeded the assembler's event budget"}}`)
 
 	// ErrStreamCarryOverflow reports an unterminated SSE event larger than MaxStreamCarryBytes.
@@ -50,8 +44,7 @@ var (
 	ErrStreamTruncatedEvent = errors.New("sse stream ended mid-event")
 )
 
-// eachSSELine visits the trimmed payload of every "data:" line in events, including the empty ones
-// and the terminator, and stops as soon as visit reports the line it wanted.
+// eachSSELine visits every "data:" line's trimmed payload, terminator included, stopping when visit says so.
 func eachSSELine(events []byte, visit func(payload []byte) bool) {
 	for rest := events; len(rest) > 0; {
 		var line []byte
@@ -66,8 +59,7 @@ func eachSSELine(events []byte, visit func(payload []byte) bool) {
 	}
 }
 
-// EachSSEDataPayload visits the trimmed payload of every "data:" line in events, skipping empty
-// lines and [DONE], and stops as soon as visit reports the payload it wanted.
+// EachSSEDataPayload visits every "data:" payload, skipping empty lines and [DONE].
 func EachSSEDataPayload(events []byte, visit func(payload []byte) bool) {
 	eachSSELine(events, func(payload []byte) bool {
 		if len(payload) == 0 || bytes.Equal(payload, sseDoneMarker) {
@@ -77,8 +69,7 @@ func EachSSEDataPayload(events []byte, visit func(payload []byte) bool) {
 	})
 }
 
-// HasSSEDone reports whether events already carry the terminator, so it is never sent twice. The
-// check is line-anchored: "[DONE]" inside a content delta is not a terminator.
+// HasSSEDone is line-anchored, so a "[DONE]" inside a content delta is not read as the terminator.
 func HasSSEDone(events []byte) bool {
 	terminated := false
 	eachSSELine(events, func(payload []byte) bool {
@@ -88,8 +79,7 @@ func HasSSEDone(events []byte) bool {
 	return terminated
 }
 
-// StreamRewriter strips the fields a client must not see from an SSE stream delivered in arbitrary
-// chunks, emitting complete events only and holding the trailing partial until it completes.
+// StreamRewriter strips the hidden fields from an SSE stream, emitting complete events only.
 type StreamRewriter struct {
 	intent    LogprobIntent
 	keepUsage bool
@@ -103,8 +93,7 @@ func NewStreamRewriter(intent LogprobIntent, keepUsage bool) *StreamRewriter {
 	return &StreamRewriter{intent: intent, keepUsage: keepUsage}
 }
 
-// Write appends chunk to the carry buffer and returns every event it completes, rewritten.
-// Once the carry exceeds MaxStreamCarryBytes the rewriter fails permanently.
+// Write returns every event chunk completes, rewritten; past MaxStreamCarryBytes the rewriter fails permanently.
 func (r *StreamRewriter) Write(chunk []byte) ([]byte, error) {
 	if r.failed {
 		return nil, ErrStreamCarryOverflow
@@ -133,8 +122,7 @@ func (r *StreamRewriter) Write(chunk []byte) ([]byte, error) {
 	return out.Bytes(), nil
 }
 
-// Close returns the trailing partial rewritten when it is a well-formed final event, and drops it
-// with ErrStreamTruncatedEvent when its payload does not parse.
+// Close rewrites a well-formed trailing partial, and drops an unparseable one with ErrStreamTruncatedEvent.
 func (r *StreamRewriter) Close() ([]byte, error) {
 	carry := r.carry
 	r.carry, r.scanned = nil, 0
@@ -151,15 +139,7 @@ func (r *StreamRewriter) Close() ([]byte, error) {
 	return final, nil
 }
 
-// rewriteEvent returns the event as the client must read it: a complete chat.completion becomes the
-// chunk events an OpenAI streaming client renders, and the fields this client must not see -- the
-// internal ones, and the usage it did not ask for -- are removed from the JSON payload. It reports
-// malformed for a payload that does not parse, which must be dropped rather than forwarded.
-//
-// Every decision is taken on the decoded payload, never on the event's raw bytes. A host controls
-// those bytes: it can spell a key with a \u escape, or split one object across two data lines, and
-// either defeats a byte-wise check while the client's own decoder reads the object whole. See
-// gateway-request-filtering.md, "The response side".
+// rewriteEvent returns the event as the client must read it, deciding on the decoded payload and never on the host-controlled raw bytes. See README.md, "Rewriting an event".
 func rewriteEvent(event []byte, intent LogprobIntent, keepUsage bool) (rewritten []byte, malformed bool) {
 	lines, payload, held := eventPayload(event)
 	if !held {
@@ -168,8 +148,7 @@ func rewriteEvent(event []byte, intent LogprobIntent, keepUsage bool) (rewritten
 	filtered, outcome := stripInternalFields(payload, intent)
 	switch outcome {
 	case stripMalformed:
-		// A payload that opens as an object and does not parse is a host sending something no client
-		// can read; forwarding it would carry whatever it hides.
+		// A payload that opens as an object and does not parse would carry whatever it hides.
 		if bytes.HasPrefix(bytes.TrimLeft(payload, " \t"), []byte("{")) {
 			return nil, true
 		}
@@ -201,8 +180,7 @@ var chunkHousekeepingFields = map[string]bool{
 	"service_tier": true, "choices": true,
 }
 
-// onlyHousekeepingLeft reports an event with nothing left to deliver. Testing for empty choices instead
-// would delete a host's error event, which carries none either.
+// onlyHousekeepingLeft: testing for empty choices instead would delete a host's error event, which carries none either.
 func onlyHousekeepingLeft(decoded map[string]any) bool {
 	for field := range decoded {
 		if !chunkHousekeepingFields[field] {
@@ -236,9 +214,7 @@ func stripUsage(payload []byte) (rewritten []byte, emptied, changed bool) {
 	return encoded, false, true
 }
 
-// eventPayload joins the event's data lines the way a client does -- with a newline, per the SSE spec
-// -- and reports where they were. One object split across two lines reaches the client as one object,
-// so it must reach the strip as one too.
+// eventPayload joins the event's data lines with a newline as a client does, so a split object reaches the strip whole.
 func eventPayload(event []byte) (dataLines []int, payload []byte, held bool) {
 	var joined []byte
 	for offset := 0; offset < len(event); {
@@ -262,8 +238,7 @@ func eventPayload(event []byte) (dataLines []int, payload []byte, held bool) {
 	return dataLines, joined, true
 }
 
-// rebuildEvent emits the event with its data lines replaced by the payload, keeping every other line
-// where it was: a client reads event, id and retry from the lines around the data.
+// rebuildEvent replaces the data lines and keeps every other one: a client reads event, id and retry from them.
 func rebuildEvent(event, payload []byte) []byte {
 	rewritten := make([]byte, 0, len(event)+len(payload))
 	emitted := false
@@ -278,9 +253,7 @@ func rebuildEvent(event, payload []byte) []byte {
 			continue
 		}
 		if !emitted {
-			// One data line per segment, the inverse of the join eventPayload did. A payload written
-			// after a single prefix would put its embedded newlines at the start of lines carrying no
-			// data: prefix, and a client drops those -- it would rejoin a truncated object.
+			// One data line per segment, the inverse of eventPayload's join: a client drops continuation lines with no data: prefix.
 			for index, segment := range bytes.Split(payload, []byte("\n")) {
 				if index > 0 {
 					rewritten = append(rewritten, '\n')
@@ -296,11 +269,7 @@ func rebuildEvent(event, payload []byte) []byte {
 	return rewritten
 }
 
-// sseCompletion is the complete chat.completion some hosts answer a streaming request with, and
-// sseChunk is the chat.completion.chunk an OpenAI streaming client actually reads.
-// Every field the host controls is carried raw. Decoding one into a typed field lets a host fail the
-// conversion with a value of the wrong type -- a numeric id, a created past the float range -- and the
-// client then reads a message where it renders a delta while the nonce is settled all the same.
+// sseCompletion carries every host-controlled field raw: a typed field lets a host fail the conversion with a wrong type.
 type sseCompletion struct {
 	ID                json.RawMessage       `json:"id"`
 	Created           json.RawMessage       `json:"created"`
@@ -336,13 +305,9 @@ type sseChunkChoice struct {
 	StopReason   json.RawMessage            `json:"stop_reason,omitempty"`
 }
 
-// completionAsChunks converts a complete chat.completion into the chunk events a streaming client
-// renders. A host that answers a stream with a whole response hands the client a message where it
-// reads a delta, so the client renders nothing while the nonce is settled and the money is spent.
-// The role, the payload and the finish reason travel as separate chunks, as a real stream sends them.
+// completionAsChunks converts a complete chat.completion into the chunk events a streaming client renders. See README.md, "A complete reply on a streaming request is rewritten into chunks".
 func completionAsChunks(payload []byte) ([]byte, bool) {
-	// The standard library here, as in stripInternalFields: goccy parses a number token even into a raw
-	// message and errors past the float64 range, so a created of 1e999 would fail the conversion.
+	// Standard library again: goccy errors past the float64 range even into a raw message.
 	var completion sseCompletion
 	if stdjson.Unmarshal(payload, &completion) != nil {
 		return nil, false
@@ -390,9 +355,7 @@ func completionAsChunks(payload []byte) ([]byte, bool) {
 	return events.Bytes(), true
 }
 
-// encodeCompact encodes without escaping HTML and drops the newline Encode appends: the default would
-// inflate every < > & the model generated to six bytes, and the trailing newline is not part of the
-// value. Encode rather than Marshal, because only the encoder can turn the escaping off.
+// encodeCompact drops HTML escaping, which would inflate every < > & to six bytes; only the encoder can turn it off.
 func encodeCompact(value any) ([]byte, error) {
 	var encoded bytes.Buffer
 	encoder := stdjson.NewEncoder(&encoded)
@@ -421,9 +384,7 @@ func emitChunk(events *bytes.Buffer, completion sseCompletion, choices []sseChun
 	events.Write(sseEventSeparator)
 }
 
-// rawOr keeps a field the host sent verbatim; an absent one takes the fallback, since an empty raw
-// message is not JSON and would fail the encode this conversion exists to produce. The fallbacks are
-// the zero values the typed fields used to encode, so an ordinary response converts byte for byte.
+// rawOr keeps a host's field verbatim; an absent one takes the fallback, since an empty raw message fails the encode.
 func rawOr(raw json.RawMessage, fallback string) json.RawMessage {
 	if len(bytes.TrimSpace(raw)) == 0 {
 		return json.RawMessage(fallback)
@@ -431,8 +392,7 @@ func rawOr(raw json.RawMessage, fallback string) json.RawMessage {
 	return raw
 }
 
-// presentValue returns a raw JSON field only when it was sent with a value, JSON null counting as
-// absent so a field the host spelled out as null is not re-sent as one the client must interpret.
+// presentValue counts JSON null as absent, so a field the host spelled out as null is not re-sent.
 func presentValue(raw json.RawMessage) json.RawMessage {
 	trimmed := bytes.TrimSpace(raw)
 	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
@@ -456,9 +416,7 @@ func forEachSSEEvent(stream []byte, visit func(event []byte) bool) {
 	}
 }
 
-// indexEventEnd returns the offset just past the first LF or CRLF event terminator in buf, or -1. It
-// walks line by line: searching for a CRLF terminator an LF-framed stream never carries scanned to the
-// end of the buffer for every event.
+// indexEventEnd returns the offset past the first LF or CRLF terminator, or -1; it walks line by line to stay linear.
 func indexEventEnd(buf []byte) int {
 	for offset := 0; offset < len(buf); {
 		lineEnd := bytes.IndexByte(buf[offset:], '\n')

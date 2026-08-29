@@ -10,6 +10,7 @@ import (
 	"common/completionapi"
 
 	"devshard/cmd/gateway/accounting"
+	"devshard/cmd/gateway/chain"
 	"devshard/cmd/gateway/config"
 	"devshard/cmd/gateway/engine"
 	"devshard/cmd/gateway/internal/logkey"
@@ -36,13 +37,20 @@ type Escrows interface {
 }
 
 type ledger interface {
+	OpenEscrow(metadata accounting.EscrowMetadata) error
 	RecordRace(escrowID string, attempts []accounting.Attempt) error
+}
+
+// Epochs stamps the escrow with the epoch the ledger first saw it in, exactly as its own sweep would.
+type Epochs interface {
+	Snapshot() chain.PhaseSnapshot
 }
 
 // EscrowPublished is announced under the registry's lock, so it must return without doing work.
 type Prober struct {
 	escrows  Escrows
 	ledger   ledger
+	epochs   Epochs
 	posters  Posters
 	timeouts Timeouts
 	probe    func(ctx context.Context, session registry.EscrowSession, params user.InferenceParams, nonceCommitted func()) (uint64, bool, error)
@@ -51,11 +59,11 @@ type Prober struct {
 	now      func() time.Time
 }
 
-func New(configuration *config.Holder, ledger *accounting.Book, now func() time.Time) *Prober {
+func New(configuration *config.Holder, ledger *accounting.Book, epochs Epochs, now func() time.Time) *Prober {
 	if configuration == nil || !configuration.Load().Scheduler.WarmNewEscrows {
 		return nil
 	}
-	warmup := &Prober{probe: dispatchProbe, catchUp: catchUpAllHosts, now: now}
+	warmup := &Prober{probe: dispatchProbe, catchUp: catchUpAllHosts, epochs: epochs, now: now}
 	if ledger != nil {
 		warmup.ledger = ledger
 	}
@@ -118,6 +126,7 @@ func (w *Prober) warm(escrowID, model string) {
 		logging.Warn("escrow warmup found no nonce to spend", logkey.Escrow, escrowID, logkey.Error, probeErr)
 		return
 	}
+	w.openLedger(escrowID, model, session)
 	w.record(escrowID, nonce, acknowledged, probeErr)
 	if probeErr != nil {
 		w.settleRefusedProbe(ctx, escrowID, model, params, nonce)
@@ -165,6 +174,21 @@ func executorAcknowledged(response *host.HostResponse) bool {
 	return response != nil && len(response.Receipt) > 0
 }
 
+// Not left to the ledger's own sweep, which has not necessarily run on a just-published escrow.
+func (w *Prober) openLedger(escrowID, model string, session registry.EscrowSession) {
+	if w.ledger == nil || w.epochs == nil {
+		return
+	}
+	if err := w.ledger.OpenEscrow(accounting.EscrowMetadata{
+		EscrowID:      escrowID,
+		Model:         model,
+		CreationEpoch: w.epochs.Snapshot().EpochIndex,
+		Slots:         session.SnapshotState().Group,
+	}); err != nil {
+		logging.Warn("escrow warmup could not open the escrow in the ledger", logkey.Escrow, escrowID, logkey.Error, err)
+	}
+}
+
 func (w *Prober) record(escrowID string, nonce uint64, acknowledged bool, probeErr error) {
 	if w.ledger == nil {
 		return
@@ -183,8 +207,7 @@ func (w *Prober) record(escrowID string, nonce uint64, acknowledged bool, probeE
 	}
 }
 
-// Serve and Settle are late bindings: the registry exists only after the warmup it publishes to, and
-// the vote path only after the sessions the race shares with it.
+// Serve and Settle are late bindings. See README.md, "Boundaries worth knowing".
 func (w *Prober) Serve(escrows Escrows) {
 	if w != nil {
 		w.escrows = escrows

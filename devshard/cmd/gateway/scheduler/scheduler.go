@@ -12,12 +12,10 @@ import (
 	"devshard/cmd/gateway/config"
 )
 
-// idleDispatcherGrace is how long an escrow's actor stays alive with an empty queue. See
-// gateway-routing-and-nonces.md, "Idle dispatchers are reaped".
+// idleDispatcherGrace is how long an escrow's actor stays alive with an empty queue. See routing.md, "Idle dispatchers are reaped".
 const idleDispatcherGrace = 5 * time.Minute
 
-// Deps wires the runtime facts routing reads. Observer, Now, SubmitBuffer and OnEscrowExhausted are
-// optional; the last is how the rotation lifecycle learns an escrow is out of nonces or out of deposit.
+// Deps wires the runtime facts routing reads; Observer, Now, SubmitBuffer and OnEscrowExhausted are optional.
 type Deps struct {
 	Escrows           escrowSource
 	Capacity          escrowWeights
@@ -31,8 +29,7 @@ type Deps struct {
 	OnEscrowExhausted func(escrowID, reason string)
 }
 
-// Scheduler owns one actor per escrow. tieBreak is a single counter shared across every model and tie-set
-// shape. See gateway-routing-and-nonces.md, "Picking an escrow".
+// Scheduler owns one actor per escrow. See routing.md, "Picking an escrow".
 type Scheduler struct {
 	escrows           escrowSource
 	capacity          escrowWeights
@@ -77,8 +74,7 @@ func NewScheduler(deps Deps) *Scheduler {
 	}
 }
 
-// Pick serves one request or one escalation attempt within a request; an escalation reuses the
-// pinned escrow rather than re-deriving it.
+// Pick serves one request or one escalation attempt; an escalation reuses the pinned escrow.
 func (s *Scheduler) Pick(ctx context.Context, profile RequestProfile) (Assignment, error) {
 	escrow, err := s.pickEscrow(profile, s.snapshots.Snapshot())
 	if err != nil {
@@ -99,8 +95,7 @@ func (s *Scheduler) Pick(ctx context.Context, profile RequestProfile) (Assignmen
 		if outcome == submitFull {
 			return Assignment{}, ErrEscrowBusy
 		}
-		// A stopped dispatcher is replaced by the next get-or-create, and the claim above keeps the
-		// replacement alive, so this retries at most once more before the registry itself is closed.
+		// A stopped dispatcher is replaced by the next get-or-create, so this retries at most once more.
 	}
 
 	select {
@@ -110,8 +105,7 @@ func (s *Scheduler) Pick(ctx context.Context, profile RequestProfile) (Assignmen
 		}
 		return result.assignment, nil
 	case <-ctx.Done():
-		// Leaving and taking whatever was already handed over is one step: an assignment delivered in
-		// this same instant holds a committed nonce and a concurrency slot nobody else will give back.
+		// Leaving and taking are one step: an assignment delivered in this instant holds a nonce and a slot.
 		if delivered, wasDelivered := queued.abandon(); wasDelivered && delivered.err == nil {
 			s.dropAssignment(delivered.assignment, profile.Model)
 		}
@@ -127,8 +121,7 @@ func (s *Scheduler) dropAssignment(assignment Assignment, model string) {
 	}
 }
 
-// HostDiverged reports whether the participant still had its catch-up replay; spending the last one
-// blocks it for the escrow.
+// HostDiverged reports whether the participant still had its catch-up replay; the last one blocks it.
 func (s *Scheduler) HostDiverged(escrowID, participant string, at time.Time) bool {
 	if s.replays.spend(escrowID, participant, at) {
 		return true
@@ -142,8 +135,7 @@ func (s *Scheduler) HostServed(escrowID, participant string, sentAt time.Time) {
 	s.replays.restore(escrowID, participant, sentAt)
 }
 
-// BlockHost bars a participant from one escrow for as long as the escrow's dispatcher lives. See
-// gateway-routing-and-nonces.md.
+// BlockHost bars a participant from one escrow for as long as the escrow's dispatcher lives. See routing.md.
 func (s *Scheduler) BlockHost(escrowID, participant string) {
 	s.blocksMu.Lock()
 	defer s.blocksMu.Unlock()
@@ -200,8 +192,7 @@ func (s *Scheduler) dispatcherFor(escrow Escrow) (*dispatcher, error) {
 		s.dispatchers[escrow.ID] = target
 		target.start()
 	}
-	// Claimed under the registry lock, so an actor deciding to retire cannot slip between this and
-	// the submit that follows.
+	// Claimed under the registry lock, so an actor deciding to retire cannot slip in before the submit.
 	target.pendingSubmits.Add(1)
 	return target, nil
 }
@@ -218,16 +209,11 @@ func (s *Scheduler) retire(idle *dispatcher) bool {
 	if s.observer != nil {
 		s.observer.EscrowRetired(idle.escrowID)
 	}
-	// The block and the spent replay outlive the actor on purpose. Reaping is idleness, not resolution:
-	// a dispatcher is recreated for the same escrow on the next request, and dropping either here would
-	// hand a host that cannot follow this escrow's chain a fresh replay for having been quiet five
-	// minutes. Escrow ids are chain-monotonic and never reused, so what is kept is one entry per escrow
-	// that ever saw a divergent host, held for the life of the process.
+	// The block and the spent replay outlive the actor on purpose. See README, "Dispatcher lifecycle".
 	return true
 }
 
-// predicates rebuilds the host filters from their own sources on every drain; the dispatcher freezes
-// the result for that drain.
+// predicates rebuilds the host filters on every drain; the dispatcher freezes the result for that drain.
 func (s *Scheduler) predicates(escrow Escrow) func(chain.PhaseSnapshot) availability {
 	model := escrow.Model
 	stateBlocked := s.stateBlocked(escrow.ID)
@@ -266,8 +252,7 @@ func (s *Scheduler) matchWait() time.Duration {
 	return time.Duration(s.settings.Load().Scheduler.MatchWaitMS) * time.Millisecond
 }
 
-// reserveTokens is the token count one request may cost: what it already sent, plus the most this gateway
-// will let the host answer with.
+// reserveTokens is what the request already sent plus the most this gateway will let the host answer with.
 func (s *Scheduler) reserveTokens(profile RequestProfile) uint64 {
 	if s.settings == nil {
 		return 0
@@ -275,9 +260,7 @@ func (s *Scheduler) reserveTokens(profile RequestProfile) uint64 {
 	return uint64(max(profile.InputTokens, 0)) + uint64(max(s.settings.Load().Limits.MaxTokensCap, 0))
 }
 
-// pocPreserved reads the PoC-preserved set, preferring the model's own; a nil set means not loaded yet, so
-// every participant counts as preserved. See
-// gateway-invariants.md, "8. Fail-closed and fail-open are chosen per signal, and each choice is deliberate".
+// pocPreserved prefers the model's own set; a nil set means not loaded yet, so everybody counts as preserved. See rules.md, "8. Fail-closed and fail-open are chosen per signal".
 func pocPreserved(snapshot chain.PhaseSnapshot, model string) func(string) bool {
 	preserved := snapshot.PreservedByModel[model]
 	if preserved == nil {
@@ -293,10 +276,7 @@ func pocPreserved(snapshot chain.PhaseSnapshot, model string) func(string) bool 
 	return func(participant string) bool { return loaded[participant] }
 }
 
-// RequestProfile is one request as routing reads it; an empty Escrow picks one, a set Escrow is an
-// escalation reusing the pinned one. Params is forwarded to session.Advance unread and committed there as
-// the escrow's inference params, so it must be exactly devshard/user.InferenceParams -- not the request
-// body it was built from, which the adapter cannot commit and will reject.
+// RequestProfile is one request as routing reads it; Params must be exactly devshard/user.InferenceParams. See README, "The boundary types".
 type RequestProfile struct {
 	Model       string
 	Escrow      string
@@ -305,9 +285,7 @@ type RequestProfile struct {
 	Params      any
 }
 
-// Burn is a nonce the scheduler spent on nobody. Prepared is nil when the decision was taken before a
-// nonce was committed; otherwise it carries the committed inference, which is what lets a caller spend
-// the burn on a real request rather than on silence.
+// Burn is a nonce the scheduler spent on nobody; Prepared is nil when the decision preceded the commit.
 type Burn struct {
 	Nonce       uint64
 	Participant string
@@ -315,8 +293,7 @@ type Burn struct {
 	Prepared    Prepared
 }
 
-// Assignment is a committed nonce ready to spend. EscrowHold gives back the escrow's in-flight count the
-// commit took; it is idempotent, and nil when the escrow source counts nothing.
+// Assignment is a committed nonce ready to spend. See README, "The boundary types".
 type Assignment struct {
 	Escrow     string
 	Host       string
@@ -324,23 +301,19 @@ type Assignment struct {
 	EscrowHold func()
 }
 
-// ReleaseEscrow gives the hold back. A caller that has taken its own hold on the escrow calls this as
-// soon as it has one; a caller that never dispatches calls it instead of dispatching.
+// ReleaseEscrow gives the hold back: as soon as the caller has its own, or instead of dispatching.
 func (a Assignment) ReleaseEscrow() {
 	if a.EscrowHold != nil {
 		a.EscrowHold()
 	}
 }
 
-// escrowSource is the candidate-escrow registry; api wires it over the live runtime map. Candidates
-// returns escrows in a stable order with active/phase already filtered to accepts-new-inferences.
+// escrowSource is the candidate-escrow registry; Candidates returns a stable, already-filtered order.
 type escrowSource interface {
 	Candidates(model string) []Escrow
 }
 
-// Escrow is one candidate. ActiveUsers is the in-flight user request count the W(e) load score reads. Hold
-// counts one in-flight request against the escrow and yields its release; it is taken with the nonce commit
-// and refused once the escrow has been retired, and a nil Hold counts nothing.
+// Escrow is one candidate; a nil Hold counts nothing. See README, "The boundary types".
 type Escrow struct {
 	ID          string
 	Model       string
@@ -349,20 +322,14 @@ type Escrow struct {
 	Hold        func() (release func(), ok bool)
 }
 
-// NonceIntent is what the scheduler tells a session to do with the nonce it is offering. The
-// adapter that implements session lives outside this package, so it branches on this rather than on
-// Decision, whose variants are unexported; Params is RequestProfile.Params forwarded verbatim, under the same type
-// requirement, and is set only for a non-ghost commit.
+// NonceIntent is what the scheduler tells a session to do with the nonce it offers. See README, "The boundary types".
 type NonceIntent struct {
 	Commit bool
 	Ghost  bool
 	Params any
 }
 
-// session is the narrow view of devshard/user.Session the scheduler needs; api wires an adapter.
-// Advance is the one atomic nonce-peek->decide->commit unit: it computes the next candidate binding,
-// calls decide, and commits the nonce only if the returned intent says to; a declined nonce is left
-// untouched and yields a nil Prepared.
+// session is the narrow view of devshard/user.Session the scheduler needs; Advance is the atomic peek->decide->commit unit. See README, "The boundary types".
 type session interface {
 	Advance(decide func(HostBinding) NonceIntent) (Prepared, error)
 	ParticipantKeys() []string // distinct participants (slots deduped) -- the exclusion universe
@@ -372,16 +339,14 @@ type session interface {
 	TokenPrice() uint64        // for the balance floor
 }
 
-// HostBinding is the nonce the session is offering and the host it is bound to; Participant is that host's
-// participant key, deduped across the slots one validator holds.
+// HostBinding is the nonce the session is offering and the host it is bound to, deduped across a validator's slots.
 type HostBinding struct {
 	Nonce       uint64
 	HostIdx     int
 	Participant string
 }
 
-// Prepared is a committed nonce ready for dispatch. *user.PreparedInference already satisfies this
-// verbatim, so the api adapter needs no conversion code; a nil Prepared means the nonce was declined.
+// Prepared is a committed nonce ready for dispatch; nil means the nonce was declined.
 type Prepared interface {
 	Nonce() uint64
 	HostIdx() int
@@ -395,23 +360,19 @@ type escrowWeights interface {
 	EscrowWeight(escrowID, model string) float64
 }
 
-// hostLimiter is satisfied by *limits.ParticipantLimiter. Acquire is the admission authority and runs
-// with the commit; Available is only a cheap pre-filter, so a matchWait answer from it costs nothing. A
-// slot handed to a caller is released by the engine that spends it, never here.
+// hostLimiter is satisfied by *limits.ParticipantLimiter. See README, "The boundary types".
 type hostLimiter interface {
 	Available(participant, model string) bool
 	Acquire(participant, model string) bool
 	Release(participant, model string)
 }
 
-// hostHealth is satisfied by *perf.Tracker. Ejected is already capped to a fraction of the model's known
-// hosts, so honouring it here can never empty the pool.
+// hostHealth is satisfied by *perf.Tracker; Ejected is already capped, so honouring it cannot empty the pool.
 type hostHealth interface {
 	Ejected(participant, model string) bool
 }
 
-// allowedParticipants answers true for everybody when the list is empty, so the narrowing exists only
-// where an operator asked for it.
+// allowedParticipants answers true for everybody when the list is empty.
 func allowedParticipants(allowlist []string) func(participant string) bool {
 	if len(allowlist) == 0 {
 		return func(string) bool { return true }

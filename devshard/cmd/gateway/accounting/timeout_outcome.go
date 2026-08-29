@@ -1,40 +1,21 @@
 package accounting
 
+import "devshard/cmd/gateway/engine"
+
 type TimeoutOutcome string
 
-const (
-	TimeoutSkipped              TimeoutOutcome = "skipped"
-	TimeoutVoteCollectionFailed TimeoutOutcome = "vote_collection_failed"
-	TimeoutInsufficientVotes    TimeoutOutcome = "insufficient_votes"
-	TimeoutDiffSendFailed       TimeoutOutcome = "diff_send_failed"
-	TimeoutApplied              TimeoutOutcome = "applied"
-)
-
-const (
-	timeoutActionSkipped   = "skipped"
-	timeoutActionCompleted = "completed"
-	timeoutActionFailed    = "failed"
-
-	timeoutReasonCollectionError = "timeout_collection_error"
-	timeoutReasonNotApplied      = "timeout_not_applied"
-	timeoutReasonEscrowGone      = "escrow_gone_from_hosts"
-)
-
-// timeoutOutcomeOf names a settled round the way the old ledger names it, so one dashboard reads both.
-// The engine reports an action and a reason where the old tree reports a single outcome, and the two
-// vocabularies meet only here: `failed` alone says nothing a reader can act on, and its reason is what
-// tells a round that gathered too few votes from one that could not gather any.
+// Where the engine's action-and-reason meets the old ledger's single outcome. See README.md.
 func timeoutOutcomeOf(action, reason string) (TimeoutOutcome, bool) {
 	switch action {
-	case timeoutActionSkipped:
+	case engine.TimeoutActionSkipped:
 		return TimeoutSkipped, true
-	case timeoutActionCompleted:
+	case engine.TimeoutActionCompleted:
 		return TimeoutApplied, true
-	case timeoutActionFailed:
+	case engine.TimeoutActionFailed:
 		switch reason {
-		case timeoutReasonNotApplied:
+		case engine.TimeoutReasonNotApplied:
 			return TimeoutInsufficientVotes, true
-		case timeoutReasonCollectionError, timeoutReasonEscrowGone:
+		case engine.TimeoutReasonCollectionError, engine.TimeoutReasonEscrowGone:
 			return TimeoutVoteCollectionFailed, true
 		}
 		return TimeoutVoteCollectionFailed, true

@@ -1,6 +1,5 @@
-// Package burns charges a host for the nonces it would not take: without the vote the escrow pays the
-// reserve and the host reaches no miss. The burn is spent on a real request first, so a host that is
-// merely busy clears itself rather than earning a miss it did not deserve.
+// Package burns charges a host for the nonces it would not take, spending each burn on a real request
+// first so a host that is merely busy clears itself. See README.md.
 package burns
 
 import (
@@ -17,16 +16,6 @@ import (
 	"devshard/user"
 )
 
-const (
-	timeoutKind = "refused"
-	noPoster    = "no_poster"
-	// hostServedProbe is the ledger's own name for a charge the host talked its way out of. It has to be
-	// a name the vocabulary admits, or the reason normalises to "unknown" and the withdrawal is invisible.
-	hostServedProbe = "host_served_probe"
-)
-
-// The collaborators are declared here rather than borrowed: a burn is not a warmup, and each side
-// naming the two methods it calls keeps one from moving the other's.
 // Posters resolves the vote poster for one escrow and the params its nonce committed.
 type Posters func(escrowID string, params any) (engine.TimeoutPoster, bool)
 
@@ -38,23 +27,18 @@ type Timeouts interface {
 	RecordTimeout(event engine.TimeoutEvent)
 }
 
-// Session is how a probe reaches the host: the burn already committed the nonce, so the request
-// it carries is the one the escrow has already paid for.
+// Session is how a probe reaches the host, carrying the request the escrow has already paid for.
 type Session interface {
 	SendOnly(ctx context.Context, prepared *user.PreparedInference, stream io.Writer, onReceipt func()) (*host.HostResponse, error)
 	ProcessResponse(hostIdx int, reply *host.HostResponse, inferenceNonce uint64) error
 }
 
-// accountableBurns are the burns the host earned. A host under PoC is unavailable by the protocol's own
-// grant, and an excluded or abandoned burn is this gateway's own scheduling; neither is a refusal.
+// accountableBurns are the burns the host earned; the rest are this gateway's own doing.
 var accountableBurns = map[string]bool{
 	scheduler.GhostReasonThrottled:     true,
 	scheduler.GhostReasonStateDiverged: true,
 }
 
-// Accountant charges a host for a nonce it would not take: without the vote the escrow pays
-// the reserve and the host reaches no miss. The burn already committed a MsgStart, so the protocol has
-// everything the vote needs.
 type Accountant struct {
 	escrows  Escrows
 	posters  Posters
@@ -62,9 +46,7 @@ type Accountant struct {
 	enabled  func() bool
 	now      func() time.Time
 	probes   *probeGate
-	// send is the dispatch itself, kept behind a field for the same reason the warmup keeps its own:
-	// the committed inference has no constructor outside its package, so only the decision above it is
-	// reachable from a unit test.
+	// Behind a field because the committed inference has no constructor outside its package.
 	send func(session registry.EscrowSession, burned scheduler.Burn) bool
 }
 
@@ -75,28 +57,30 @@ func (g *Accountant) Burned(escrowID string, burned scheduler.Burn) {
 	if g.enabled != nil && !g.enabled() {
 		return
 	}
-	// One goroutine per burn: charging waits out the refusal deadline, and a queue of burns settled in
-	// turn would hold the escrow's drain barrier for that wait once per nonce.
+	// One goroutine per burn: a queue would hold the escrow's drain barrier once per nonce.
 	go g.charge(escrowID, burned)
 }
 
-// charge votes on the burned nonce. HandleTimeout sleeps out the refusal deadline before it talks to
-// verifiers, so it holds the escrow for that whole wait: settlement must not conclude while a vote for
-// one of its nonces is still in flight.
+// charge votes on the burned nonce, holding the escrow for the whole refusal wait.
 func (g *Accountant) charge(escrowID string, burned scheduler.Burn) {
 	nonce, participant := burned.Nonce, burned.Participant
-	session, release, live := g.escrows.Acquire(escrowID)
-	if live {
-		defer release()
-	}
-
 	event := engine.TimeoutEvent{
 		EscrowID: escrowID, Participant: participant, Nonce: nonce,
-		Kind: timeoutKind, Action: engine.TimeoutActionStarted, Reason: burned.Reason,
+		Kind: engine.TimeoutKindRefused, Action: engine.TimeoutActionStarted, Reason: burned.Reason,
 	}
+
+	// Without the hold, settlement reads the escrow as idle and can conclude while the vote is in flight.
+	session, release, live := g.escrows.Acquire(escrowID)
+	if !live {
+		skipped := event
+		skipped.Action, skipped.Reason = engine.TimeoutActionSkipped, engine.TimeoutReasonEscrowNotLive
+		g.record(skipped)
+		return
+	}
+	defer release()
 	if g.served(session, burned) {
 		served := event
-		served.Action, served.Reason = engine.TimeoutActionSkipped, hostServedProbe
+		served.Action, served.Reason = engine.TimeoutActionSkipped, engine.TimeoutReasonHostServedProbe
 		g.record(served)
 		logging.Info("host answered the nonce it was about to be charged for", logkey.Escrow, escrowID,
 			logkey.Nonce, nonce, logkey.Host, logkey.ShortHost(participant))
@@ -105,7 +89,7 @@ func (g *Accountant) charge(escrowID string, burned scheduler.Burn) {
 	poster, resolved := g.posters(escrowID, user.InferenceParams{Prompt: registry.GhostPrompt()})
 	if !resolved {
 		skipped := event
-		skipped.Action, skipped.Reason = engine.TimeoutActionSkipped, noPoster
+		skipped.Action, skipped.Reason = engine.TimeoutActionSkipped, engine.TimeoutReasonNoPoster
 		g.record(skipped)
 		return
 	}
@@ -120,9 +104,7 @@ func (g *Accountant) charge(escrowID string, burned scheduler.Burn) {
 		logkey.Host, logkey.ShortHost(participant), logkey.Action, posted.Action, logkey.Reason, posted.Reason)
 }
 
-// served spends the burn on the request it already committed instead of on silence, and reports whether
-// the host answered. A host that is merely busy clears itself; one that stays silent earns exactly the
-// timeout the quiet burn would have raised.
+// served spends the burn on the request it already committed, and reports whether the host answered.
 func (g *Accountant) served(session registry.EscrowSession, burned scheduler.Burn) bool {
 	if session == nil || g.send == nil || g.probes == nil {
 		return false
@@ -163,8 +145,7 @@ func (g *Accountant) record(event engine.TimeoutEvent) {
 	}
 }
 
-// New builds the charge with what the process decides; Serve supplies the rest once the registry and
-// the sessions exist, which is after the charge itself must be handed to the scheduler.
+// Serve supplies the rest: the registry and the sessions exist only after the scheduler has the charge.
 func New(now func() time.Time, enabled func() bool) *Accountant {
 	return &Accountant{now: now, enabled: enabled, probes: newProbeGate(), send: dispatchProbe}
 }

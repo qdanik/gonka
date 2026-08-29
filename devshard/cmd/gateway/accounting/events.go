@@ -8,16 +8,10 @@ import (
 	"time"
 )
 
-// maxEventsPerEscrow bounds the newest-wins ring one escrow keeps. A miss or an invalid is rare and an
-// escrow dies with its epoch, so the bound caps a pathological run rather than trimming normal traffic.
+// Caps a pathological run rather than trimming normal traffic: a verdict is rare and an escrow dies with its epoch.
 const maxEventsPerEscrow = 256
 
 type ProtocolKind string
-
-const (
-	ProtocolTimeoutApplied ProtocolKind = "timeout_applied"
-	ProtocolInvalidated    ProtocolKind = "invalidated"
-)
 
 // protocolEvent is one chain-applied verdict against a slot, kept on the escrow that owns the nonce.
 type protocolEvent struct {
@@ -28,8 +22,7 @@ type protocolEvent struct {
 	at        time.Time
 }
 
-// ProtocolEventRecord resolves one event against the escrow and participant it belongs to. The
-// counters say how many verdicts a host took; this says which nonce and which client request took them.
+// ProtocolEventRecord is the drill-down under the counters: which nonce and which request took a verdict.
 type ProtocolEventRecord struct {
 	EscrowID    string       `json:"escrow_id"`
 	Participant string       `json:"participant"`

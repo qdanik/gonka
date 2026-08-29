@@ -1,6 +1,6 @@
 // This is the one black-box test in the package: it reaches for limits and scheduler, which the
 // registry itself must never import, to pin the wiring an in-package test cannot see. Missing that
-// wiring makes the gateway boot green and serve nothing. See gateway-routing-and-nonces.md,
+// wiring makes the gateway boot green and serve nothing. See routing.md,
 // "Membership: what the capacity model is told".
 package registry_test
 

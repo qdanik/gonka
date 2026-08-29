@@ -31,13 +31,10 @@ type chunkSignal struct {
 	LogprobsDecoded       bool
 }
 
-// crownsWinner admits content and nothing else. See gateway-speculative-race.md, "An SSE error event
-// counts as a chunk but never crowns".
+// crownsWinner admits content and nothing else. See race.md, "An SSE error event counts as a chunk but never crowns".
 func (s chunkSignal) crownsWinner() bool { return s.ContentSource != "" }
 
-// thinkingBudgetRoute reports the only route whose host-reported completion_tokens may separate a model
-// that produced nothing from a host that carried nothing. See gateway-speculative-race.md, "Crown
-// denial".
+// thinkingBudgetRoute reports the only route whose completion_tokens can stand in for content. See race.md, "Crown denial".
 func thinkingBudgetRoute(model string) bool {
 	profile := filters.ProfileFor(model)
 	return profile != nil && profile.ThinkingTokenBudget
@@ -91,9 +88,7 @@ func isTokenID(token string) bool {
 	return err == nil && id >= 0
 }
 
-// contentSource names the field carrying the first client-renderable output in events. choices[].text
-// is excluded: the gateway serves only /v1/chat/completions, where a host emitting it renders nothing.
-// A stop with host-reported completion tokens and no output counts only on a thinking-budget route.
+// contentSource names the field carrying the first client-renderable output. See README, "Classification and reassembly".
 func contentSource(events []byte, thinkingBudget bool) (string, bool) {
 	var source string
 	filters.EachSSEDataPayload(events, func(payload []byte) bool {
@@ -150,12 +145,7 @@ func (p renderedParts) source(shape string) (string, bool) {
 	return "", false
 }
 
-// errorPayload extracts the first OpenAI-compatible error in events, in both the nested
-// {"error":{...}} shape and the flat {"object":"error",...} one vLLM still emits.
-//
-// Deliberately without a byte-wise pre-filter: the host writes these bytes, and a key spelled with a
-// \u escape would pass the scan while the decoder reads it as the error it is, leaving the attempt
-// classified as something it is not. The saved parse is not worth reopening that.
+// errorPayload extracts the first OpenAI-compatible error, deliberately without a byte-wise pre-filter. See README, "Classification and reassembly".
 func errorPayload(events []byte) (sseError, bool) {
 	var found sseError
 	filters.EachSSEDataPayload(events, func(payload []byte) bool {
@@ -179,8 +169,7 @@ func errorPayload(events []byte) (sseError, bool) {
 	return found, found.present()
 }
 
-// usageCompletionTokens reads usage.completion_tokens, which counts tokens vLLM stripped from
-// content. vLLM emits the usage object once per stream, so the key check skips almost every chunk.
+// usageCompletionTokens reads usage.completion_tokens; vLLM emits usage once per stream, so the key check skips almost every chunk.
 func usageCompletionTokens(events []byte) (int64, bool) {
 	if !bytes.Contains(events, sseUsageKey) {
 		return 0, false

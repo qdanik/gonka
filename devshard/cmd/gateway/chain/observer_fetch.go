@@ -129,8 +129,7 @@ func preservedModelsForParticipant(participant chainActiveParticipant, preservat
 	return models
 }
 
-// extractParticipantNodes flattens a participant's (model, node, weight) triples for the
-// validation-capable merge.
+// extractParticipantNodes flattens a participant's (model, node, weight) triples for the validation-capable merge.
 func extractParticipantNodes(participant chainActiveParticipant) []participantNode {
 	var nodes []participantNode
 	for i, rawModel := range participant.Models {
@@ -174,10 +173,7 @@ func participantValidationInferenceWeights(nodes []participantNode, miner string
 	return weights, total
 }
 
-// mergePreservedWithValidationCapable returns the PoC-validation availability views: preserved
-// miners keep their current weight, and each excluded miner with validation-inference-capable
-// nodes is added back with the summed weight of those nodes (per model). The input state is not
-// mutated.
+// mergePreservedWithValidationCapable returns the PoC-validation availability views without mutating state. See README.md, "PoC validation rejoins capable miners".
 func mergePreservedWithValidationCapable(
 	state participantsState,
 	capable func(miner, nodeID string) bool,
@@ -279,9 +275,6 @@ func newPreservedSnapshotState(snapshot *PreservedNodes) preservedSnapshotState 
 	}
 	return state
 }
-
-// chainParamsResponse is the raw /productscience/inference/inference/params JSON envelope,
-// decoding only the devshard_escrow_params.max_nonce field.
 
 // jsonInt64 decodes an int64 field that may arrive as a JSON number or a numeric string.
 type jsonInt64 int64

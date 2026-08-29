@@ -9,8 +9,7 @@ import (
 	"devshard/cmd/gateway/config"
 )
 
-// LoadOverrides returns the persisted admin overrides, or the zero value when
-// none were ever saved.
+// LoadOverrides returns the persisted admin overrides, or the zero value when none were ever saved.
 func (s *Store) LoadOverrides(ctx context.Context) (config.Overrides, error) {
 	var raw string
 	row := s.db.QueryRowContext(ctx, `SELECT overrides_json FROM config_overrides WHERE id = 1`)

@@ -1,8 +1,8 @@
 package accounting
 
-// Thresholds are constants rather than configuration: a per-deployment one would let two gateways
-// report the same host differently, and neverCritical is the ceiling of a finding that stops at
-// warning, since no rate exceeds 1.
+import "devshard/cmd/gateway/engine"
+
+// Constants, not configuration: two gateways must not report the same host differently. See docs/accounting.md.
 const (
 	findingMinimumVolume = 20
 
@@ -29,35 +29,6 @@ const (
 	neverCritical            = 2.0
 )
 
-const (
-	TimeoutReasonLongResponse    = "long_response_after_content"
-	TimeoutReasonPhaseAborted    = "phase_transition_aborted"
-	TimeoutReasonCollectionError = "timeout_collection_error"
-	TimeoutReasonNotApplied      = "timeout_not_applied"
-	TimeoutReasonNoPoster        = "no_poster"
-)
-
-const (
-	FindingExecutionTimeouts    = "execution_timeouts"
-	FindingRefusals             = "refusals"
-	FindingUnusedAnswers        = "answers_unused"
-	FindingGatewayThrottled     = "throttled_by_gateway"
-	FindingChainDisagreement    = "ledger_disagrees_with_chain"
-	FindingLedgerOvercounted    = "ledger_overcounted"
-	FindingChainMisses          = "chain_recorded_misses"
-	FindingChainInvalid         = "chain_recorded_invalid"
-	FindingUnresolvedChallenges = "challenges_unresolved"
-	FindingUndecidedTimeouts    = "timeouts_undecided"
-	FindingUnknownReasons       = "reasons_unknown"
-	FindingStateDiverged        = "blocked_by_state_divergence"
-	FindingDecodedLogprobs      = "logprobs_not_token_ids"
-	FindingFailureTerminals     = "failure_terminals"
-	FindingSlowReceipts         = "slow_receipts"
-	FindingSlowChunks           = "slow_chunks"
-	FindingClockDrift           = "clock_drift"
-	FindingSlowDecode           = "slow_decode"
-)
-
 // findingCodes is every code this gateway can emit, pinned so a rename has to be deliberate.
 var findingCodes = []string{
 	FindingExecutionTimeouts, FindingRefusals, FindingUnusedAnswers, FindingGatewayThrottled,
@@ -69,14 +40,7 @@ var findingCodes = []string{
 
 type Severity string
 
-const (
-	SeverityWarning  Severity = "warning"
-	SeverityCritical Severity = "critical"
-)
-
-// Finding names a condition and the numbers it was flagged on, nothing more. What each code means and
-// what to check lives in docs/accounting-findings.md, so an explanation is written once instead of
-// crossing the network with every response.
+// A condition and the two numbers it was flagged on. What each code means lives in docs/accounting.md.
 type Finding struct {
 	Code     string   `json:"code"`
 	Severity Severity `json:"severity"`
@@ -84,17 +48,16 @@ type Finding struct {
 	Whole    uint64   `json:"whole,omitempty"`
 }
 
-// Nonces that never reached the host are excluded from every rate: a burn is this gateway's own
-// decision, and counting it against the host would report our throttling as its failure.
+// Nonces that never reached the host are excluded from every rate: a burn is this gateway's own decision.
 func findingsFor(record ParticipantRecord) []Finding {
-	probes := countersWhere(record, servedNoUser)
 	delivered := without(record.Dispositions[DispositionFinishedUsed]+
 		record.Dispositions[DispositionFinishedUnused]+
-		record.Dispositions[DispositionFinishedUsageUnknown], probes)
+		record.Dispositions[DispositionFinishedUsageUnknown],
+		countersWhere(record, both(wasDelivered, servedNoUser)))
 	refused := without(record.Dispositions[DispositionUnfinishedRefused],
-		countersWhere(record, both(is(DispositionUnfinishedRefused), excused)))
+		countersWhere(record, both(is(DispositionUnfinishedRefused), offRecord)))
 	unfinished := without(record.Dispositions[DispositionUnfinishedExecution],
-		countersWhere(record, both(is(DispositionUnfinishedExecution), excused)))
+		countersWhere(record, both(is(DispositionUnfinishedExecution), offRecord)))
 	reached := delivered + refused + unfinished
 
 	deliveredNormally := countersWhere(record, both(outsidePoC, wasDelivered))
@@ -110,7 +73,8 @@ func findingsFor(record ParticipantRecord) []Finding {
 		FindingExecutionTimeouts))
 	add(ratio(refused, reached, refusalWarning, refusalCritical,
 		FindingRefusals))
-	add(ratio(without(record.Dispositions[DispositionFinishedUnused], probes), delivered,
+	add(ratio(without(record.Dispositions[DispositionFinishedUnused],
+		countersWhere(record, both(is(DispositionFinishedUnused), servedNoUser))), delivered,
 		unusedAnswerWarning, neverCritical, FindingUnusedAnswers))
 	add(ratio(ghostsBecause(record, "participant_throttled_no_send"), record.Assigned, gatewayThrottleWarning, neverCritical,
 		FindingGatewayThrottled))
@@ -172,8 +136,7 @@ func timeoutRoundsVoted(record ParticipantRecord) uint64 {
 	return total
 }
 
-// ratio takes the denominator once, so the rate that decides and the numbers reported beside it cannot
-// disagree about what they were measured against.
+// The denominator is taken once, so the rate and the numbers reported beside it cannot disagree.
 func ratio(part, whole uint64, warning, critical float64, code string) (Finding, bool) {
 	severity, flagged := rate(part, whole, warning, critical)
 	if !flagged {
@@ -196,8 +159,7 @@ func rate(part, whole uint64, warning, critical float64) (Severity, bool) {
 	return "", false
 }
 
-// failedWithoutAnswer is the pair of dispositions that reached the host and produced nothing; which
-// terminal it was is already in the counter beside it.
+// The dispositions that reached the host and produced nothing; which terminal is in the counter beside it.
 func failedWithoutAnswer(key CounterKey) bool {
 	return key.Disposition == DispositionUnfinishedRefused || key.Disposition == DispositionUnfinishedExecution
 }
@@ -241,16 +203,17 @@ func wasAcknowledged(key CounterKey) bool {
 
 func servedNoUser(key CounterKey) bool { return key.Terminal == TerminalWarmupProbe }
 
-// excused names a failure the host did not cause: the client stopped waiting, or this gateway's own
-// policy ended the attempt. Slowness that drove a client away is measured on its own, by the receipt,
-// chunk and decode findings, so excusing the abort here does not hide a slow host.
+// A warmup probe is the gateway's own request, so it leaves every rate whatever it ended as.
+func offRecord(key CounterKey) bool { return excused(key) || servedNoUser(key) }
+
+// A failure the host did not cause. Slowness that drove the client away is measured by its own findings.
 func excused(key CounterKey) bool {
 	if key.Terminal == TerminalClientCancelled {
 		return true
 	}
 	switch key.TimeoutReason {
-	case TimeoutReasonLongResponse, TimeoutReasonPhaseAborted,
-		TimeoutReasonCollectionError, TimeoutReasonNotApplied, TimeoutReasonNoPoster:
+	case engine.TimeoutReasonLongResponse, engine.TimeoutReasonPhaseAborted,
+		engine.TimeoutReasonCollectionError, engine.TimeoutReasonNotApplied, engine.TimeoutReasonNoPoster:
 		return true
 	}
 	return false

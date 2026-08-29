@@ -71,8 +71,7 @@ func (m *Manager) runTick(ctx context.Context) {
 	}
 }
 
-// Stop is idempotent and a barrier for every caller: done outlives stop, and cancelling the context
-// interrupts a tick already in flight. See escrows.md, "The tick".
+// Stop is idempotent and a barrier for every caller. See escrows.md, "The tick".
 func (m *Manager) Stop() {
 	m.lifecycleMu.Lock()
 	done, cancel := m.done, m.cancel
@@ -93,8 +92,7 @@ func (m *Manager) tick(ctx context.Context) error {
 	if err != nil {
 		return errors.Join(reconcileErr, err)
 	}
-	// Parked escrows must settle whatever the rotation toggle says: their row is the only record of
-	// which key can settle them, so nothing else will ever pick them up.
+	// Parked escrows must settle whatever the rotation toggle says: nothing else will ever pick them up.
 	pendingErr := m.settlePending(ctx, devshards)
 	// An escrow gone from chain must stop taking traffic whatever the rotation toggle says.
 	missingErr := m.checkMissing(ctx)
@@ -103,8 +101,7 @@ func (m *Manager) tick(ctx context.Context) error {
 	// Pulled, not subscribed: a 15s poll is equivalent at this cadence and avoids callback races.
 	snapshot := m.snapshots.Snapshot()
 	models, modelsErr := rotationModels(cfg.Rotation)
-	// An exhausted escrow must stop taking traffic whatever the rotation toggle says; only creating
-	// its replacement is rotation's business, so models is empty unless rotation can supply one.
+	// An exhausted escrow must stop taking traffic whatever the toggle says; models is empty unless rotation can supply a replacement.
 	depletionErr := m.checkDepletion(ctx, snapshot, models, devshards)
 	lifecycleErr := errors.Join(reconcileErr, pendingErr, missingErr, modelsErr, depletionErr)
 
@@ -125,8 +122,7 @@ func (m *Manager) tick(ctx context.Context) error {
 	return errors.Join(lifecycleErr, bridgeErr)
 }
 
-// rotationModels is the set of models rotation can create a replacement for; empty when rotation is
-// off, so no caller downstream has to re-read the toggle to know whether a replacement is available.
+// rotationModels is empty when rotation is off, so no caller downstream has to re-read the toggle.
 func rotationModels(rotation config.Rotation) ([]ModelConfig, error) {
 	if !rotation.Enabled {
 		return nil, nil

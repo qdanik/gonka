@@ -16,8 +16,7 @@ import (
 	"devshard/logging"
 )
 
-// commitmentIndexLagMargin is how long a landed tx may stay unqueryable past the chain's
-// unordered-tx TTL before the commitment record can be cleared.
+// commitmentIndexLagMargin allows for a landed tx staying unqueryable past the chain's unordered-tx TTL.
 const (
 	commitmentIndexLagMargin = 2 * time.Minute
 	commitmentReconcileGrace = chain.UnorderedTxTTL + commitmentIndexLagMargin
@@ -45,8 +44,7 @@ type Manager struct {
 	cancel      context.CancelFunc
 }
 
-// CreateEscrow creates one escrow on demand and registers it, on the same durable-intent path the
-// rotation lifecycle uses, so an operator-created escrow is recovered by reconcile like any other.
+// CreateEscrow creates one escrow on demand, on the same durable-intent path rotation uses. See README.md, "Creating an escrow".
 func (m *Manager) CreateEscrow(ctx context.Context, model ModelConfig) (chain.CreateEscrowResult, error) {
 	snapshot := m.snapshots.Snapshot()
 	return m.createEscrow(ctx, model, roleRegular, snapshot.EpochIndex, snapshot.BlockHeight)
@@ -103,8 +101,7 @@ func (m *Manager) persistEscrow(ctx context.Context, escrowID string, c store.Co
 	if err := m.clearCommitmentRow(ctx, escrowID, c.TxHash); err != nil {
 		return err
 	}
-	// The reset belongs to both paths: an escrow found already registered is a create that succeeded,
-	// and leaving the breaker tripped backs off the next create for a failure that did not happen.
+	// Both paths: an escrow found already registered is a create that succeeded.
 	m.breaker.reset(c.Model, c.Role)
 	return nil
 }

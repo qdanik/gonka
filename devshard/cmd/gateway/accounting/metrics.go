@@ -13,8 +13,7 @@ type dispositionLabels struct {
 	timeoutReason string
 }
 
-// Gauges rather than counters: a disposition moves when a nonce is reclassified, so a series goes
-// down as well as up and a counter would misread every move as a reset.
+// Gauges, not counters: a disposition moves, so a series goes down as well as up.
 type Collector struct {
 	book *Book
 

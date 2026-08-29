@@ -1,5 +1,5 @@
 // Package metrics owns the gateway's Prometheus registry; family names are frozen as devshard_*.
-// See gateway-operations.md, "Metrics".
+// See operations.md, "Metrics".
 package metrics
 
 import (
@@ -12,10 +12,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
-// otherMethodLabel absorbs every method outside knownMethods. net/http hands the handler any RFC 7230
-// token the client sent, so labelling with r.Method directly lets one unauthenticated caller mint a
-// permanent Prometheus series per probe -- the same hazard the route label already avoids by never
-// carrying a raw path.
+// otherMethodLabel absorbs every method outside knownMethods. See README.md, "Cardinality in practice".
 const otherMethodLabel = "other"
 
 var knownMethods = map[string]bool{
@@ -74,8 +71,7 @@ func New() *Metrics {
 
 func (m *Metrics) Registry() *prometheus.Registry { return m.registry }
 
-// Register adds collectors at construction time, where a duplicate family is a wiring bug that must
-// stop the process rather than silently drop a series.
+// Register runs at construction time, where a duplicate family must stop the process, not drop a series.
 func (m *Metrics) Register(metricCollectors ...prometheus.Collector) {
 	m.registry.MustRegister(metricCollectors...)
 }
@@ -84,9 +80,7 @@ func (m *Metrics) Handler() http.Handler {
 	return promhttp.HandlerFor(m.registry, promhttp.HandlerOpts{})
 }
 
-// InstrumentRoute wraps next, recording count and duration under the fixed
-// routeLabel. Pass the route PATTERN (e.g. "/devshard/{id}/v1/status"), never
-// the raw request path — label cardinality must stay bounded.
+// InstrumentRoute takes the route PATTERN ("/devshard/{id}/v1/status"), never the raw request path.
 func (m *Metrics) InstrumentRoute(routeLabel string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		startedAt := time.Now()
@@ -98,9 +92,7 @@ func (m *Metrics) InstrumentRoute(routeLabel string, next http.Handler) http.Han
 	})
 }
 
-// statusRecorder captures the response status for labeling. Flush is forwarded so streaming handlers
-// keep working when wrapped, and Unwrap exposes the server's own writer to the standard library calls
-// that reach it by type assertion.
+// statusRecorder captures the response status for labeling. See README.md, "How a collector reaches its source".
 type statusRecorder struct {
 	http.ResponseWriter
 	status int

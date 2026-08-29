@@ -92,13 +92,13 @@ func TestTimeoutLadderSkipConditions(t *testing.T) {
 		wantPosted bool
 		wantReason string
 	}{
-		{name: "no_skip_condition", attempt: unsettledAttempt(), wantPosted: true, wantReason: timeoutReasonNone},
-		{name: "phase_transition_aborted", attempt: phaseAborted, wantReason: timeoutReasonPhaseAborted},
-		{name: "empty_stream_already_finished", attempt: emptyFinished, wantReason: timeoutReasonEmptyStream},
-		{name: "error_stream_already_finished", attempt: errorStreamFinished, wantReason: timeoutReasonNonceFinished},
-		{name: "long_response_after_content", attempt: longResponse, wantReason: timeoutReasonLongResponse},
-		{name: "just_under_long_response_exemption", attempt: justUnderLongResponse, wantPosted: true, wantReason: timeoutReasonNone},
-		{name: "state_divergent_host_is_still_settled", attempt: stateDivergent, wantPosted: true, wantReason: timeoutReasonNone},
+		{name: "no_skip_condition", attempt: unsettledAttempt(), wantPosted: true, wantReason: TimeoutReasonNone},
+		{name: "phase_transition_aborted", attempt: phaseAborted, wantReason: TimeoutReasonPhaseAborted},
+		{name: "empty_stream_already_finished", attempt: emptyFinished, wantReason: TimeoutReasonEmptyStream},
+		{name: "error_stream_already_finished", attempt: errorStreamFinished, wantReason: TimeoutReasonNonceFinished},
+		{name: "long_response_after_content", attempt: longResponse, wantReason: TimeoutReasonLongResponse},
+		{name: "just_under_long_response_exemption", attempt: justUnderLongResponse, wantPosted: true, wantReason: TimeoutReasonNone},
+		{name: "state_divergent_host_is_still_settled", attempt: stateDivergent, wantPosted: true, wantReason: TimeoutReasonNone},
 	}
 
 	for _, testCase := range testCases {
@@ -153,8 +153,8 @@ func TestTimeoutSkipLadderOrder(t *testing.T) {
 
 	events := settleEvents(race(attempt), &stubPoster{})
 
-	if events[0].Reason != timeoutReasonPhaseAborted {
-		t.Fatalf("reason = %q, want the first matching rung %q", events[0].Reason, timeoutReasonPhaseAborted)
+	if events[0].Reason != TimeoutReasonPhaseAborted {
+		t.Fatalf("reason = %q, want the first matching rung %q", events[0].Reason, TimeoutReasonPhaseAborted)
 	}
 }
 
@@ -167,8 +167,8 @@ func TestTimeoutKindFollowsReceipt(t *testing.T) {
 		attempt  AttemptOutcome
 		wantKind string
 	}{
-		{name: "never_receipted", attempt: unsettledAttempt(), wantKind: timeoutKindRefused},
-		{name: "receipted_then_failed", attempt: received, wantKind: timeoutKindExecution},
+		{name: "never_receipted", attempt: unsettledAttempt(), wantKind: TimeoutKindRefused},
+		{name: "receipted_then_failed", attempt: received, wantKind: TimeoutKindExecution},
 	}
 
 	for _, testCase := range testCases {
@@ -189,10 +189,10 @@ func TestTimeoutVoteOverridesKind(t *testing.T) {
 
 	events := settleEvents(race(unsettledAttempt()), poster)
 
-	if events[0].Kind != timeoutKindRefused {
-		t.Fatalf("started kind = %q, want %q", events[0].Kind, timeoutKindRefused)
+	if events[0].Kind != TimeoutKindRefused {
+		t.Fatalf("started kind = %q, want %q", events[0].Kind, TimeoutKindRefused)
 	}
-	if events[1].Kind != timeoutKindExecution {
+	if events[1].Kind != TimeoutKindExecution {
 		t.Fatalf("completed event = %+v, want the posted vote to set the kind", events[1])
 	}
 }
@@ -202,7 +202,7 @@ func TestTimeoutPostFailureIsReported(t *testing.T) {
 
 	events := settleEvents(race(unsettledAttempt()), poster)
 
-	if events[1].Action != TimeoutActionFailed || events[1].Reason != timeoutReasonCollectionError {
+	if events[1].Action != TimeoutActionFailed || events[1].Reason != TimeoutReasonCollectionError {
 		t.Fatalf("failure event = %+v, want a failed action with the collection reason", events[1])
 	}
 }
@@ -240,7 +240,7 @@ func TestTimeoutEventCarriesRaceIdentity(t *testing.T) {
 // A host that emits one SSE error event and then holds the stream open past the long-response exemption
 // leaves its nonce committed, unfinished, and unvoted: the exemption counts error chunks as content, so
 // the timeout vote it exists to defer is dropped instead. Nothing else sweeps an unfinished nonce, so
-// the escrow can never reclaim what that nonce cost. See gateway-invariants.md, invariant 1.
+// the escrow can never reclaim what that nonce cost. See rules.md, invariant 1.
 func TestAnErrorOnlyStreamStillVotesItsTimeout(t *testing.T) {
 	attempt := failedAttempt(TerminalErrorStream)
 	attempt.ContentChunks = 1 // the error event itself, counted as a chunk
@@ -281,8 +281,8 @@ func TestANonceFinishedWhileWaitingIsSkippedRatherThanFailed(t *testing.T) {
 
 	events := settleEvents(race(unsettledAttempt()), poster)
 
-	if events[1].Action != TimeoutActionSkipped || events[1].Reason != timeoutReasonNonceFinished {
-		t.Fatalf("event = %+v, want skipped/%s", events[1], timeoutReasonNonceFinished)
+	if events[1].Action != TimeoutActionSkipped || events[1].Reason != TimeoutReasonNonceFinished {
+		t.Fatalf("event = %+v, want skipped/%s", events[1], TimeoutReasonNonceFinished)
 	}
 }
 
@@ -294,9 +294,9 @@ func TestSettleTimeoutsCarriesTheVerifierFailureItWasGiven(t *testing.T) {
 		wantReason string
 	}{
 		{"a named verifier failure", "verifier_unreachable", errors.New("collect"), "verifier_unreachable"},
-		{"an unnamed collection failure", "", errors.New("collect"), timeoutReasonCollectionError},
+		{"an unnamed collection failure", "", errors.New("collect"), TimeoutReasonCollectionError},
 		{"a named short vote", "vote_weight_short", user.ErrTimeoutNotApplied, "vote_weight_short"},
-		{"an unnamed unapplied timeout", "", user.ErrTimeoutNotApplied, timeoutReasonNotApplied},
+		{"an unnamed unapplied timeout", "", user.ErrTimeoutNotApplied, TimeoutReasonNotApplied},
 	}
 	for _, testCase := range tests {
 		t.Run(testCase.name, func(t *testing.T) {

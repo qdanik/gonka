@@ -20,17 +20,14 @@ var (
 	// ErrUnknownEscrow marks a settlement asked for an escrow the registry has no row for.
 	ErrUnknownEscrow = errors.New("unknown escrow")
 
-	// ErrSettlementInFlight marks a settlement another caller is already running: not success, because
-	// the row carries the only key that can settle the escrow and belongs to that other caller.
+	// ErrSettlementInFlight marks a settlement another caller is already running -- not success.
 	ErrSettlementInFlight = errors.New("settlement already in flight")
 )
 
-// pendingSettleBudget bounds how many parked escrows one tick settles. See
-// escrows.md, "Settlement and retirement".
+// pendingSettleBudget bounds how many parked escrows one tick settles. See escrows.md, "Settlement and retirement".
 const pendingSettleBudget = 4
 
-// settlePending drains escrows parked by retire: deactivated, still registered because their row
-// carries the only key that can settle them. A busy or failing escrow simply stays parked.
+// settlePending drains escrows parked by retire; a busy or failing escrow simply stays parked.
 func (m *Manager) settlePending(ctx context.Context, devshards []store.DevshardRecord) error {
 	if !m.config.Load().Rotation.SettlementEnabled {
 		return nil
@@ -53,8 +50,7 @@ func (m *Manager) settlePending(ctx context.Context, devshards []store.DevshardR
 	return errors.Join(errs...)
 }
 
-// Settle settles one escrow on demand, on the same path the rotation lifecycle uses, so an operator
-// settlement carries the same dedup, deactivate-first ordering and busy check.
+// Settle settles one escrow on demand, on the same path the rotation lifecycle uses.
 func (m *Manager) Settle(ctx context.Context, escrowID string) (chain.SettleEscrowResult, error) {
 	devshards, err := m.store.ListDevshards(ctx)
 	if err != nil {
@@ -68,15 +64,13 @@ func (m *Manager) Settle(ctx context.Context, escrowID string) (chain.SettleEscr
 		if err != nil {
 			return result, err
 		}
-		// The row holds the only name of the key that could settle this escrow, and the settlement it
-		// was kept for has happened. Retirement drops it on its own paths; this one has to as well.
+		// The settlement the row was kept for has happened; retirement drops it on its own paths, this one has to as well.
 		return result, m.deleteSettled(ctx, escrowID)
 	}
 	return chain.SettleEscrowResult{}, fmt.Errorf("settling escrow %s: %w", escrowID, ErrUnknownEscrow)
 }
 
-// park records the intent to settle -- inactive and pending in one write, so a crash leaves the escrow
-// recoverable -- and then stops routing to it, which is what the busy check that follows relies on.
+// park writes inactive and pending in one statement, then stops routing -- the order the busy check relies on.
 func (m *Manager) park(ctx context.Context, escrowID string) error {
 	if err := m.store.WithRetry(ctx, func() error {
 		return m.store.ParkForSettlement(ctx, escrowID)
@@ -90,8 +84,7 @@ func (m *Manager) park(ctx context.Context, escrowID string) error {
 	return nil
 }
 
-// settle deduplicates concurrent callers for the same escrow and only clears SettlementPending once
-// the broadcast is confirmed; any earlier failure leaves it set for recovery.
+// settle clears SettlementPending only once the broadcast is confirmed. See README.md, "Settlement and retirement".
 func (m *Manager) settle(ctx context.Context, record store.DevshardRecord) (chain.SettleEscrowResult, error) {
 	leave, busy := m.settlements.enter(record.EscrowID)
 	if busy {
@@ -99,9 +92,7 @@ func (m *Manager) settle(ctx context.Context, record store.DevshardRecord) (chai
 	}
 	defer leave()
 
-	// Parked before the reconciliation, not after it: the caller deletes the row on success, and a row
-	// that is gone can no longer take the escrow out of routing. An escrow put back by hand would keep
-	// serving with nothing left to un-publish it.
+	// Parked before the reconciliation: the caller deletes the row on success, and a row that is gone can no longer un-publish the escrow.
 	if err := m.park(ctx, record.EscrowID); err != nil {
 		return chain.SettleEscrowResult{}, err
 	}
@@ -145,9 +136,7 @@ func (m *Manager) settle(ctx context.Context, record store.DevshardRecord) (chai
 	return result, nil
 }
 
-// alreadySettled reports whether the transaction this escrow last broadcast reached the chain and
-// succeeded. An unreachable endpoint is not an answer, so it fails the tick rather than concluding the
-// settle never happened. See escrows.md, "Settlement and retirement".
+// alreadySettled reports whether the transaction this escrow last broadcast landed. See escrows.md, "Settlement and retirement".
 func (m *Manager) alreadySettled(ctx context.Context, record store.DevshardRecord) (string, bool, error) {
 	hash, broadcastAt, err := m.store.DevshardSettleTxHash(ctx, record.EscrowID)
 	if err != nil {
@@ -159,9 +148,7 @@ func (m *Manager) alreadySettled(ctx context.Context, record store.DevshardRecor
 	succeeded, err := m.tx.TxCommitted(ctx, hash)
 	switch {
 	case errors.Is(err, chain.ErrTxNotFound) && m.settleTxMayStillLand(broadcastAt):
-		// Not indexed yet is not the same as never landed. An unordered transaction stays landable for
-		// its whole TTL, and rebroadcasting inside that window pays a fee per tick for a settle that is
-		// still on its way -- then loses to it and starts over. The create path waits the same way.
+		// Not indexed yet is not never landed: an unordered tx stays landable for its whole TTL.
 		return "", false, ErrSettlementInFlight
 	case errors.Is(err, chain.ErrTxNotFound):
 		return "", false, m.clearSettleTxHash(ctx, record.EscrowID) // past its TTL: a fresh transaction is right
@@ -174,10 +161,7 @@ func (m *Manager) alreadySettled(ctx context.Context, record store.DevshardRecor
 	return hash, true, nil
 }
 
-// A row written before the stamp existed carries no broadcast time, and counts as past the window: the
-// create path defaults the other way because keeping a commitment costs a row, while keeping a hash
-// here costs an escrow that is never settled at all. Rebroadcasting one that was in fact still landing
-// costs a fee once, and the stamp this write leaves governs every tick after it.
+// A missing broadcast stamp counts as past the window -- the create path defaults the other way. See README.md, "Reconciling a settle that may already have landed".
 func (m *Manager) settleTxMayStillLand(broadcastAt time.Time) bool {
 	if broadcastAt.IsZero() {
 		return false
@@ -200,12 +184,9 @@ func numericEscrowID(escrowID string) uint64 {
 	return parsed
 }
 
-// retire honors the SettlementEnabled toggle: off skips the chain call
-// entirely, on settles first and only drops the row once settle succeeds.
+// retire honors the SettlementEnabled toggle. See README.md, "Settlement and retirement".
 func (m *Manager) retire(ctx context.Context, record store.DevshardRecord) error {
-	// With settlement off the escrow is only parked: its row carries the private-key env name that
-	// is the sole way to settle it later, so the row outlives retirement and is dropped only once
-	// a settlement has actually been confirmed on chain.
+	// Parked only: the row names the sole key that can settle this escrow later, so it outlives retirement.
 	if !m.config.Load().Rotation.SettlementEnabled {
 		return m.park(ctx, record.EscrowID)
 	}
@@ -216,8 +197,7 @@ func (m *Manager) retire(ctx context.Context, record store.DevshardRecord) error
 	return m.deleteSettled(ctx, record.EscrowID)
 }
 
-// deleteSettled drops the row that named the only key able to settle the escrow, so it runs on both
-// settle paths only once the settlement itself succeeded.
+// deleteSettled drops the row that named the only key able to settle the escrow, so it runs only after success.
 func (m *Manager) deleteSettled(ctx context.Context, escrowID string) error {
 	if err := m.store.WithRetry(ctx, func() error { return m.store.DeleteDevshard(ctx, escrowID) }); err != nil {
 		return fmt.Errorf("deleting settled escrow %s: %w", escrowID, err)

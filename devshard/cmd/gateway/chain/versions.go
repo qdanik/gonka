@@ -14,8 +14,7 @@ import (
 )
 
 const (
-	// Concurrency and per-fetch timeout together keep one pass well inside the freshness window. See
-	// README.md, "What the chain observer provides".
+	// Together these keep one pass inside the freshness window. See README.md, "What the chain observer provides".
 	versionsPollConcurrency = 16
 	versionsFetchTimeout    = 2 * time.Second
 )
@@ -35,9 +34,7 @@ type versionsEntry struct {
 	fetchedAt    time.Time
 }
 
-// VersionsCache polls each candidate miner's dapi /v1/versions and reports per-node
-// PoC-validation-inference capability; unknown, errored or stale reads as false. candidates maps a miner to
-// its dapi base URL, which is the participant's inference_url.
+// VersionsCache reports per-node PoC-validation-inference capability; unknown, errored or stale reads as false. See README.md, "PoC validation rejoins capable miners".
 type VersionsCache struct {
 	client *http.Client
 	ttl    time.Duration
@@ -48,8 +45,7 @@ type VersionsCache struct {
 	now        func() time.Time
 }
 
-// NewVersionsCache builds a cache that polls through client with the given
-// staleness ttl; now is the injectable clock for fetch timestamps and TTL checks.
+// NewVersionsCache builds a cache that polls through client with the given staleness ttl.
 func NewVersionsCache(client *http.Client, ttl time.Duration, now func() time.Time) *VersionsCache {
 	return &VersionsCache{
 		client:     client,
@@ -60,8 +56,7 @@ func NewVersionsCache(client *http.Client, ttl time.Duration, now func() time.Ti
 	}
 }
 
-// SetCandidates replaces the miner->URL set polled on the next pass and drops
-// entries for miners no longer present.
+// SetCandidates replaces the miner->URL set polled on the next pass and drops entries for miners no longer present.
 func (c *VersionsCache) SetCandidates(minerURLs map[string]string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -80,8 +75,7 @@ func (c *VersionsCache) SetCandidates(minerURLs map[string]string) {
 	}
 }
 
-// versionsURL builds the dapi public /v1/versions endpoint from a miner's
-// inference base URL (scheme+host[:port]).
+// versionsURL builds the dapi /v1/versions endpoint from a miner's inference base URL (scheme+host[:port]).
 func versionsURL(base string) string {
 	return strings.TrimSuffix(strings.TrimSpace(base), "/") + "/v1/versions"
 }
@@ -98,8 +92,7 @@ func (c *VersionsCache) Poll(ctx context.Context) {
 	var workers errgroup.Group
 	workers.SetLimit(min(versionsPollConcurrency, len(candidates)))
 	for miner, base := range candidates {
-		// A cancelled poll abandons the miners it has not reached, but never fails the ones it has: the
-		// cache is fail-closed per miner, so an aborted fetch is an absent entry, not a bad one.
+		// Fail-closed per miner: an aborted fetch leaves an absent entry, never a wrong one.
 		workers.Go(func() error {
 			if ctx.Err() == nil {
 				fetchCtx, cancelFetch := context.WithTimeout(ctx, versionsFetchTimeout)
@@ -145,8 +138,7 @@ func (c *VersionsCache) fetchOne(ctx context.Context, base string) map[string]bo
 	return nodes
 }
 
-// IsNodeValidationCapable reports whether the named node of the named miner is
-// currently known to be validation-inference capable and the knowledge is fresh.
+// IsNodeValidationCapable reports whether the node is known validation-inference capable and the knowledge is fresh.
 func (c *VersionsCache) IsNodeValidationCapable(miner, nodeID string) bool {
 	c.mu.RLock()
 	defer c.mu.RUnlock()

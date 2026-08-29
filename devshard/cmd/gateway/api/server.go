@@ -61,8 +61,7 @@ type ControlStore interface {
 	LoadRotationStatuses(ctx context.Context) ([]store.RotationStatus, error)
 }
 
-// CreateEscrowRequest is the body of POST /v1/admin/escrows. It names the variable holding the signing
-// key, never the key. See gateway-operations.md, "Operator".
+// CreateEscrowRequest names the variable holding the signing key, never the key. See operations.md, "What is exposed".
 type CreateEscrowRequest struct {
 	Model         string `json:"model"`
 	Amount        uint64 `json:"amount"`
@@ -85,8 +84,7 @@ type ImportDevshardRequest struct {
 	Activate      bool   `json:"activate"`
 }
 
-// Operations are the lifecycle actions the operator routes trigger. They span the chain client, the
-// escrow manager and the registry, so the composition root implements them and this package calls them.
+// Operations are the lifecycle actions the operator routes trigger. See README.md, "What the server is given".
 type Operations interface {
 	CreateEscrow(ctx context.Context, request CreateEscrowRequest) (chain.CreateEscrowResult, error)
 	AddDevshard(ctx context.Context, request AddDevshardRequest) error
@@ -116,8 +114,7 @@ type LimitRejections interface {
 	Rejected(model, reason string)
 }
 
-// Deps is everything the HTTP boundary reads or calls. New requires every field except Version and
-// RequestIDs, which default to empty and to a random id generator.
+// Deps is everything the HTTP boundary reads or calls. See README.md, "What the server is given".
 type Deps struct {
 	Config     *config.Holder
 	Escrows    EscrowRegistry
@@ -229,9 +226,7 @@ func New(deps Deps) (*Server, error) {
 // Handler is the process handler: one mux, no wrapper above it.
 func (s *Server) Handler() http.Handler { return s.handler }
 
-// HTTPServer builds the listener's server. Neither ReadTimeout nor WriteTimeout is set: both are
-// absolute deadlines over an exchange that outlives the request, and either would cut an SSE stream
-// mid-answer. Reading the body carries its own deadline, armed and cleared per request in readBody.
+// HTTPServer sets neither ReadTimeout nor WriteTimeout: either would cut an SSE stream. See README.md, "Reading a body".
 func (s *Server) HTTPServer(address string) *http.Server {
 	return &http.Server{
 		Addr:              address,

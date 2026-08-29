@@ -7,8 +7,7 @@ import (
 	"devshard/cmd/gateway/chain"
 )
 
-// Capacity scores escrows against the chain's weight views. The observer has already applied Preserved to
-// the snapshot's CurrentWeights, so nothing is re-filtered here.
+// Capacity scores escrows against the chain's weight views; the observer has already applied Preserved.
 type Capacity struct {
 	mu         sync.RWMutex
 	snapshot   chain.PhaseSnapshot
@@ -29,8 +28,7 @@ func (c *Capacity) Update(s chain.PhaseSnapshot) {
 	c.snapshot = s
 }
 
-// hostShares[h] is slots(h,escrowID)/totalSlots(h) across every escrow h serves, so a participant
-// shared by several escrows is split rather than counted once per escrow.
+// hostShares[h] is slots(h,escrowID)/totalSlots(h), so a shared participant is split, not counted twice.
 func (c *Capacity) SetEscrowMembership(escrowID string, hostShares map[string]float64) {
 	clean := make(map[string]float64, len(hostShares))
 	maps.Copy(clean, hostShares)
@@ -45,10 +43,7 @@ func (c *Capacity) RemoveEscrow(escrowID string) {
 	delete(c.membership, escrowID)
 }
 
-// ScaleFactor is the availability-filtered W_tot(model)/W_ref(model) via scaleFactor(). blocked is the
-// EFFECTIVE blocking state, not the chain's raw one: relaxed mode is the operator's override of that
-// fact, so a capacity that read the snapshot itself would zero the scale exactly when the override was
-// meant to keep serving -- and a zero scale clamps every weight-derived cap to nothing.
+// ScaleFactor takes the EFFECTIVE blocking state, never the chain's raw one. See README.md, "The capacity model".
 func (c *Capacity) ScaleFactor(model string, blocked bool) float64 {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -60,9 +55,7 @@ func (c *Capacity) ScaleFactor(model string, blocked bool) float64 {
 	return scaleFactor(current, full)
 }
 
-// EscrowWeight is escrowWeight() over this escrow's membership share and the per-model current weights,
-// falling back to the share alone when neither view has been observed. See
-// gateway-capacity-and-health.md, "Two fail-safes with opposite directions".
+// EscrowWeight falls back to the membership share. See capacity.md, "Two fail-safes with opposite directions".
 func (c *Capacity) EscrowWeight(escrowID, model string) float64 {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -80,22 +73,19 @@ func (c *Capacity) EscrowWeight(escrowID, model string) float64 {
 	return escrowWeight(c.currentWeightsLocked(model), shares, availableForModel)
 }
 
-// WeightsUnobserved reports that EscrowWeight is scoring this model on the membership-share fallback
-// rather than on chain weights, which serves requests correctly and silently.
+// WeightsUnobserved makes the membership-share fallback visible, since it serves requests silently.
 func (c *Capacity) WeightsUnobserved(model string) bool {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.modelServedLocked(model) && c.weightsUnobservedLocked(model)
 }
 
-// A host the chain has reported is a key in the view whatever its weight, so an empty view means the
-// chain named nobody rather than that everybody weighs nothing.
+// An empty view means the chain named nobody, not that everybody weighs nothing.
 func (c *Capacity) weightsUnobservedLocked(model string) bool {
 	return len(c.currentWeightsLocked(model)) == 0 && len(c.fullWeightsLocked(model)) == 0
 }
 
-// Weights is ScaleFactor's numerator and denominator: the availability-filtered current weight and
-// the steady-state baseline weight for one model.
+// Weights is ScaleFactor's numerator and denominator for one model.
 func (c *Capacity) Weights(model string) (current, baseline float64) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -105,8 +95,7 @@ func (c *Capacity) Weights(model string) (current, baseline float64) {
 	return c.sumAvailableLocked(c.currentWeightsLocked(model), model), sumWeights(c.fullWeightsLocked(model))
 }
 
-// A model absent from a populated by-model view is served by nobody, so it gets zero capacity instead
-// of inheriting the generic all-model view; with no by-model view at all that view applies to everything.
+// A model absent from a populated by-model view is served by nobody, so it must not inherit the generic view.
 func (c *Capacity) modelServedLocked(model string) bool {
 	if len(c.snapshot.CurrentWeightsByModel) == 0 && len(c.snapshot.FullWeightsByModel) == 0 {
 		return true
@@ -118,7 +107,7 @@ func (c *Capacity) modelServedLocked(model string) bool {
 	return ok
 }
 
-// currentWeightsLocked/fullWeightsLocked fall back to the generic view independently per side, so a missing full-by-model entry doesn't suppress a present current-by-model one.
+// The two sides fall back independently, so a missing full-by-model entry can't suppress a present current one.
 func (c *Capacity) currentWeightsLocked(model string) map[string]float64 {
 	if weights, ok := c.snapshot.CurrentWeightsByModel[model]; ok {
 		return weights

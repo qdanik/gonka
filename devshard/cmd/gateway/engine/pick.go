@@ -16,8 +16,7 @@ func (c *raceCoordinator) pick(ctx context.Context) (scheduler.Assignment, error
 	return c.observePick(c.deps.Picker.Pick(ctx, c.requestProfile(c.request.Params)))
 }
 
-// observePick latches the out-of-funds fact a declined nonce carries. The balance is spent composing
-// the diff, so no host reports it and no attempt is ever started against an escrow that ran dry.
+// observePick latches the out-of-funds fact a declined nonce carries; no host ever reports it.
 func (c *raceCoordinator) observePick(assignment scheduler.Assignment, err error) (scheduler.Assignment, error) {
 	if errors.Is(err, types.ErrInsufficientBalance) {
 		c.balanceExhausted = true
@@ -42,9 +41,7 @@ type pickedHost struct {
 
 func (c *raceCoordinator) picking() bool { return c.pickCancel != nil }
 
-// startPick runs a speculative pick beside the race, never on the coordinator's own goroutine. At most
-// one pick runs at a time, and pickDeadline bounds it however long the scheduler's queue takes to
-// answer. See gateway-speculative-race.md, "Escalation".
+// startPick runs at most one speculative pick beside the race, never on the coordinator's goroutine. See race.md, "Escalation".
 func (c *raceCoordinator) startPick(reason string, params any) {
 	if c.picking() || len(c.attempts) >= c.budget {
 		return
@@ -66,8 +63,7 @@ func (c *raceCoordinator) startNextImmediate() {
 	c.startPick(c.decision, c.request.Params)
 }
 
-// applyPick spends what the scheduler answered with. A race that can no longer use the assignment still
-// owes its nonce a vote, so it is stranded rather than dropped.
+// applyPick spends what the scheduler answered with; an assignment the race cannot use is stranded, not dropped.
 func (c *raceCoordinator) applyPick(result pickedHost) {
 	c.pickCancel()
 	c.pickCancel = nil
@@ -84,8 +80,7 @@ func (c *raceCoordinator) applyPick(result pickedHost) {
 	c.startNextImmediate()
 }
 
-// reportUnfilledPick traces an escalation that reached no attempt; on the cancellation path a nonce was
-// committed and the scheduler accounts it as an abandoned ghost. A race's own cancellation is no refusal.
+// reportUnfilledPick traces an escalation that reached no attempt; a race's own cancellation is no refusal.
 func (c *raceCoordinator) reportUnfilledPick(err error) {
 	if c.cancelled || c.handedOff {
 		return
@@ -95,8 +90,7 @@ func (c *raceCoordinator) reportUnfilledPick(err error) {
 		logkey.Attempts, len(c.attempts), logkey.Error, err)
 }
 
-// stopPicking gives up on a pick the race can no longer spend. The scheduler answers a cancelled pick by
-// giving back whatever it had already handed over, so nothing is left holding a slot.
+// stopPicking gives up on a pick the race can no longer spend; the scheduler gives back what it had handed over.
 func (c *raceCoordinator) stopPicking() {
 	c.moreImmediate = 0
 	if c.picking() {
@@ -137,8 +131,7 @@ func (c *raceCoordinator) launch(assignment scheduler.Assignment, role, startRea
 	c.attempts = append(c.attempts, attempt)
 	c.byNonce[nonce] = attempt
 	c.pending++
-	// Excluded on dispatch, not on failure: otherwise an escalation can be answered with this same
-	// host through a sibling slot -- a second nonce for one host's opinion.
+	// Excluded on dispatch, not on failure: a sibling slot would cost a second nonce for one host's opinion.
 	c.exclude(attempt.participant)
 	c.deps.Perf.Acquire(attempt.participant)
 	logging.Info("nonce committed",
@@ -164,9 +157,7 @@ func (c *raceCoordinator) launch(assignment scheduler.Assignment, role, startRea
 	})
 }
 
-// abandonedByHosts reports the backstop firing while a client was still waiting and no host had been
-// crowned: every attempt it cancels answered nothing. The same backstop also ends the losers' grace
-// after a win and the drain after a client leaves, and neither is the hosts' fault.
+// abandonedByHosts reports the backstop cancelling every attempt while a client still waited, uncrowned.
 func (c *raceCoordinator) abandonedByHosts() bool {
 	return c.cancelled && c.winner == nil && !c.handedOff
 }

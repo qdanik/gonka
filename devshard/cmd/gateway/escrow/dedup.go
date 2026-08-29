@@ -2,8 +2,7 @@ package escrow
 
 import "sync"
 
-// inFlightSet dedups concurrent operations by key: the first caller enters and gets a leave func to
-// call when done; a caller whose key is already in flight gets busy=true and should no-op.
+// inFlightSet dedups concurrent operations by key. See README.md, "Keeping the request path off the chain".
 type inFlightSet struct {
 	mu   sync.Mutex
 	keys map[string]bool
@@ -26,9 +25,7 @@ func (s *inFlightSet) enter(key string) (leave func(), busy bool) {
 	}, false
 }
 
-// markSet is the request-path-to-tick handoff: a hook marks a key without doing I/O and the next
-// tick takes the whole set at once. drain steals the map rather than copying it, so a key marked
-// while the tick is running belongs to the following tick and cannot be dropped.
+// markSet is the request-path-to-tick handoff. See README.md, "Keeping the request path off the chain".
 type markSet struct {
 	mu   sync.Mutex
 	keys map[string]bool

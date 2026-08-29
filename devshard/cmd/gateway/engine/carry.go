@@ -8,8 +8,7 @@ import (
 	"devshard/cmd/gateway/config"
 )
 
-// carryBudget bounds the bytes held for SSE reassembly at three levels: attempt, participant and
-// global. See gateway-speculative-race.md, "Classification and reassembly".
+// carryBudget bounds the bytes held for SSE reassembly at attempt, participant and global level. See race.md, "Classification and reassembly".
 type carryBudget struct {
 	attemptLimit     int64
 	participantLimit int64
@@ -29,8 +28,7 @@ func newCarryBudget(stream config.Stream) *carryBudget {
 	}
 }
 
-// counterFor creates a participant's counter on first use and never removes it. See
-// gateway-invariants.md, "9. Bounded by construction".
+// counterFor creates a participant's counter on first use and never removes it. See rules.md, "9. Bounded by construction".
 func (b *carryBudget) counterFor(participant string) *atomic.Int64 {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -42,8 +40,7 @@ func (b *carryBudget) counterFor(participant string) *atomic.Int64 {
 	return counter
 }
 
-// reserve charges n bytes to the participant and then to the global pool, undoing the participant
-// charge when the global pool trips. See gateway-invariants.md, "9. Bounded by construction".
+// reserve charges the participant then the global pool, undoing the first when the second trips. See rules.md, "9. Bounded by construction".
 func (b *carryBudget) reserve(participant *atomic.Int64, n int64) bool {
 	if participant.Add(n) > b.participantLimit {
 		participant.Add(-n)
@@ -65,8 +62,7 @@ func (b *carryBudget) refund(participant *atomic.Int64, n int64) {
 	b.global.Add(-n)
 }
 
-// carryBuffer reassembles SSE events across chunk boundaries for one attempt. It belongs to that
-// attempt's goroutine alone; only the byte charge it holds is shared.
+// carryBuffer reassembles SSE events for one attempt and belongs to that attempt's goroutine alone.
 type carryBuffer struct {
 	budget      *carryBudget
 	participant *atomic.Int64
@@ -78,9 +74,7 @@ func newCarryBuffer(budget *carryBudget, participant string) *carryBuffer {
 	return &carryBuffer{budget: budget, participant: budget.counterFor(participant)}
 }
 
-// Take returns every newline-terminated event in the held fragment plus chunk, and retains the rest.
-// A cap trip releases the fragment and yields the raw chunk instead, so classification degrades to
-// whatever parses on its own rather than stopping. The second result is true only on the first trip.
+// Take returns every newline-terminated event and retains the rest; firstDrop is true only on the first cap trip. See README, "Classification and reassembly".
 func (c *carryBuffer) Take(chunk []byte) (parseable []byte, firstDrop bool) {
 	lastLineFeed := bytes.LastIndexByte(chunk, '\n')
 	if lastLineFeed < 0 {
@@ -102,8 +96,7 @@ func (c *carryBuffer) Take(chunk []byte) (parseable []byte, firstDrop bool) {
 	return parseable, c.noteDrop()
 }
 
-// Tail is the unterminated final fragment. A stream whose last event arrives without a newline is
-// classified from it, or it reads as having produced nothing.
+// Tail is the unterminated final fragment, from which a newline-less last event is classified.
 func (c *carryBuffer) Tail() []byte { return c.held }
 
 func (c *carryBuffer) Release() {

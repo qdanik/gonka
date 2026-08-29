@@ -67,9 +67,7 @@ func defaultJitter(base time.Duration) time.Duration {
 	return time.Duration(rand.Int63n(span))
 }
 
-// Reconfigure swaps the tuning on a running limiter. A window already earned stays, clamped to the new
-// ceiling, and one that sits below the new initial is lifted to it. See gateway-capacity-and-health.md,
-// "The participant limiter".
+// Reconfigure keeps a window already earned, clamped into the new bounds. See capacity.md, "The participant limiter".
 func (l *ParticipantLimiter) Reconfigure(cfg ParticipantConfig) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -148,8 +146,7 @@ const (
 	CutoffHalfOpen CutoffState = "half_open"
 )
 
-// AllCutoffStates lists every cutoff state for the metrics layer to enumerate, beside the const block
-// rather than restated there. See gateway-invariants.md, "10. Labels, ordering and determinism".
+// AllCutoffStates lets metrics enumerate without restating them. See rules.md, "10. Labels, ordering and determinism".
 func AllCutoffStates() []CutoffState {
 	return []CutoffState{CutoffClosed, CutoffOpen, CutoffHalfOpen}
 }
@@ -197,9 +194,7 @@ func cutoffState(state *hostState, now time.Time) CutoffState {
 	return CutoffClosed
 }
 
-// ClearQuarantine reopens every model's cutoff for one participant, restores its initial window and
-// leaves inflight alone, reporting whether the participant was tracked at all. See
-// gateway-capacity-and-health.md, "The participant limiter: AIMD plus a cutoff".
+// ClearQuarantine reopens one participant's cutoffs. See capacity.md, "The participant limiter: AIMD plus a cutoff".
 func (l *ParticipantLimiter) ClearQuarantine(participant string) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -243,10 +238,7 @@ func (l *ParticipantLimiter) OnResult(participant, model string, verdict Verdict
 
 	switch verdict {
 	case Success:
-		// Peak since the last adjustment, not the live count: the engine releases an attempt's slot in a
-		// defer and reports its verdict afterwards, so a live read would see the slot already given back
-		// and refuse to grow a window that was genuinely saturated. The peak is set when the slot is
-		// taken and nothing can undo it, which is what makes this independent of who is called first.
+		// Peak since the last adjustment, not the live count: the engine frees the slot before reporting.
 		if float64(state.peakInflight) >= state.window/2 {
 			state.peakInflight = state.inflight
 			state.window = min(state.window+1, float64(l.cfg.Max))

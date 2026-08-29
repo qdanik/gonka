@@ -22,8 +22,6 @@ import (
 
 const (
 	captureDirName         = "captured-requests"
-	captureFilterRejected  = "filter_rejected"
-	captureAttemptsFailed  = "all_attempts_failed"
 	captureFileNameLayout  = "20060102T150405.000000000Z"
 	captureDirPermissions  = 0o700
 	captureFilePermissions = 0o600
@@ -135,8 +133,7 @@ func (c *requestCapture) record(kind string, r *http.Request, requestID, model s
 	}
 }
 
-// admit passes a deterministic stride of what it sees rather than a random sample. See
-// gateway-request-lifecycle.md, "Request capture".
+// admit passes a deterministic stride, not a random sample. See README.md, "Request capture".
 func (c *requestCapture) admit() bool {
 	switch {
 	case c.sampleRate >= 1:
@@ -211,10 +208,7 @@ func chatRequestHints(body []byte) (model string, stream bool) {
 	return request.Model, request.Stream
 }
 
-// stats is what the sink can say about itself. refused only ever grows: nothing deletes capture files,
-// so once the directory reaches its cap the sink is off until an operator empties it, and this count is
-// the only signal that has happened. failed is the other way capture goes dark -- an unwritable or full
-// directory -- and is separate because it needs an operator, not a cleanup.
+// stats is what the sink can say about itself; refused and failed differ. See README.md, "Request capture".
 func (c *requestCapture) stats() (written, refused, failed, held int64) {
 	if c == nil {
 		return 0, 0, 0, 0

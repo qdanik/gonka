@@ -3,6 +3,9 @@ package scheduler
 import (
 	"fmt"
 	"time"
+
+	"devshard/cmd/gateway/internal/logkey"
+	"devshard/logging"
 )
 
 type armedTimer struct {
@@ -17,9 +20,7 @@ func (a *armedTimer) disarm() {
 	a.fired, a.cancel = nil, nil
 }
 
-// drain assigns nonces until the queue empties, a nonce is held, or the burn budget trips; the freeze
-// and the budget are what bound its cost in nonces. It returns with a waiter still queued ONLY when it
-// reports a held nonce -- the one exit the loop arms a timer for -- so nothing is parked unwoken.
+// drain assigns nonces until the queue empties, a nonce is held, or the burn budget trips. See README, "The drain".
 func (d *dispatcher) drain() (time.Time, bool) {
 	avail := freeze(d.predicates(d.snapshots.Snapshot()))
 	acquire := admit(&avail, d.acquireSlot)
@@ -64,10 +65,13 @@ func (d *dispatcher) drain() (time.Time, bool) {
 
 		switch outcome := decision.(type) {
 		case serve:
+			if outcome.despiteExclusion {
+				logging.Info("nonce spent on a host the request excluded", logkey.Escrow, d.escrowID,
+					logkey.Host, logkey.ShortHost(taken.participant))
+			}
 			d.handOff(outcome.waiter, taken, prepared)
 		case burn:
-			// A burn decided before the session could commit has no nonce to name: the escrow is out of
-			// them, or the decision was made without one being taken.
+			// A burn decided before the session could commit has no nonce to name.
 			burned := Burn{Participant: taken.participant, Reason: outcome.kind.reason()}
 			if prepared != nil {
 				burned.Nonce, burned.Prepared = prepared.Nonce(), prepared
@@ -98,8 +102,9 @@ func (d *dispatcher) sweepExhausted(participants []string, avail availability) {
 		if queued.abandoned.Load() {
 			return false
 		}
-		canServe, busy, chainBlocked := servable(queued, participants, avail)
-		if canServe {
+		canServe, busy, chainBlocked, excludedOnly := servable(queued, participants, avail)
+		// An excluded host is not a dead end: past the stale window match spends the nonce on it.
+		if canServe || excludedOnly {
 			return true
 		}
 		switch {
@@ -131,27 +136,25 @@ func (d *dispatcher) keepWaiting(accept func(*waiter) bool) {
 	d.waiting = kept
 }
 
-// servable also reports the one blocking reason a caller can fix and no wait can: tool support. It
-// separates a busy host from one the chain has stopped -- the first passes on its own and is what a
-// waiter may be held for, the second lasts an epoch phase.
-func servable(queued *waiter, participants []string, avail availability) (canServe, busy, chainBlocked bool) {
-	anyBusy, anyChainBlocked := false, false
+// servable separates a busy host, which passes on its own, from one the chain has stopped. See README, "The drain".
+func servable(queued *waiter, participants []string, avail availability) (canServe, busy, chainBlocked, excludedOnly bool) {
+	anyBusy, anyChainBlocked, anyExcluded := false, false, false
 	for _, participant := range participants {
 		switch avail.blocks(participant, queued) {
 		case blockNone:
-			return true, false, false
+			return true, false, false, false
 		case blockThrottled:
 			anyBusy = true
 		case blockPoCRequired:
 			anyChainBlocked = true
+		case blockExcluded:
+			anyExcluded = true
 		}
 	}
-	return false, anyBusy, anyChainBlocked
+	return false, anyBusy, anyChainBlocked, anyExcluded
 }
 
-// reservation is what a serve decision took before the nonce was committed: the participant's concurrency
-// slot and the escrow's in-flight hold, given back together or not at all. See
-// gateway-routing-and-nonces.md, "Where the nonce, the slot and the hold are taken".
+// reservation is the slot and the escrow hold a serve took, given back together or not at all. See routing.md, "Where the nonce, the slot and the hold are taken".
 type reservation struct {
 	participant string
 	escrowHold  func()

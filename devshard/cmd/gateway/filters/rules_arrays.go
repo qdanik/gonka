@@ -11,8 +11,7 @@ import (
 // streamOptionsWhitelist is the only stream_options sub-field forwarded upstream.
 var streamOptionsWhitelist = map[string]struct{}{"include_usage": {}}
 
-// validListLength rejects ctx.Param when it holds an array longer than maxEntries, or (if
-// maxEntryLen > 0) a string element longer than maxEntryLen; non-array values pass through.
+// validListLength rejects an over-long array or (when maxEntryLen > 0) an over-long string element.
 func validListLength(maxEntries, maxEntryLen int) RuleFunc {
 	return func(ctx RuleContext) error {
 		list, ok := ctx.Document.Array(ctx.Param)
@@ -35,8 +34,7 @@ func validListLength(maxEntries, maxEntryLen int) RuleFunc {
 	}
 }
 
-// requireListElements rejects ctx.Param's first array element that fails valid, formatted
-// as "<param>[<index>]: <message>". Non-array and absent values pass through untouched.
+// requireListElements rejects the first array element failing valid, as "<param>[<index>]: <message>".
 func requireListElements(valid func(any) bool, message string) RuleFunc {
 	return func(ctx RuleContext) error {
 		list, ok := ctx.Document.Array(ctx.Param)
@@ -58,8 +56,7 @@ func requireStringElements() RuleFunc {
 
 func isJSONString(value any) bool { _, ok := value.(string); return ok }
 
-// dropBlankStringListElements removes whitespace-only string entries from ctx.Param;
-// non-string entries pass through unchanged. Drops the field when nothing survives.
+// dropBlankStringListElements removes whitespace-only strings, dropping the field when nothing survives.
 func dropBlankStringListElements() RuleFunc {
 	return func(ctx RuleContext) error {
 		list, ok := ctx.Document.Array(ctx.Param)
@@ -86,9 +83,7 @@ func dropBlankStringListElements() RuleFunc {
 	}
 }
 
-// requireTokenIDKeys rejects ctx.Param's lexicographically first key that is not a non-negative
-// 32-bit integer (vLLM #16529). See gateway-request-filtering.md, "Bounds that exist because a
-// host dies without them".
+// requireTokenIDKeys rejects the lexicographically first key that is not a non-negative token id (vLLM #16529).
 func requireTokenIDKeys() RuleFunc {
 	return func(ctx RuleContext) error {
 		object, ok := ctx.Document.Object(ctx.Param)
@@ -111,8 +106,7 @@ func requireTokenIDKeys() RuleFunc {
 	}
 }
 
-// validFloatMap rejects ctx.Param outright past maxEntries raw entries, drops entries
-// outside [min, max] or non-finite, and drops the field entirely once none survive.
+// validFloatMap rejects past maxEntries, drops out-of-range or non-finite entries, and drops an emptied field.
 func validFloatMap(min, max float64, maxEntries int) RuleFunc {
 	return func(ctx RuleContext) error {
 		object, ok := ctx.Document.Object(ctx.Param)
@@ -140,8 +134,7 @@ func validFloatMap(min, max float64, maxEntries int) RuleFunc {
 	}
 }
 
-// validMetadata enforces the OpenAI-compatible metadata contract: an object with at most
-// maxKeys entries, keys up to maxKeyLen bytes, and string values up to maxValueLen bytes.
+// validMetadata enforces the OpenAI-compatible metadata contract. See README.md, "Parameter rules".
 func validMetadata(maxKeys, maxKeyLen, maxValueLen int) RuleFunc {
 	return func(ctx RuleContext) error {
 		object, present, isObject := ctx.Document.ObjectField(ctx.Param)
@@ -170,8 +163,7 @@ func validMetadata(maxKeys, maxKeyLen, maxValueLen int) RuleFunc {
 	}
 }
 
-// validStreamOptions strips ctx.Param entirely unless stream is exactly true, then keeps
-// only whitelisted sub-fields, dropping the field when nothing survives.
+// validStreamOptions strips ctx.Param unless stream is exactly true, then keeps only whitelisted sub-fields.
 func validStreamOptions() RuleFunc {
 	return func(ctx RuleContext) error {
 		object, present, isObject := ctx.Document.ObjectField(ctx.Param)

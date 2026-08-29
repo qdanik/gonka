@@ -13,8 +13,7 @@ var allowedReasoningEffortValues = map[string]struct{}{
 	"none": {}, "minimal": {}, "low": {}, "medium": {}, "high": {}, "xhigh": {}, "max": {},
 }
 
-// reasoningWrapper strips the reasoning wrapper, lifting .effort into a not-yet-present
-// reasoning_effort unless the wrapper carries enabled:false.
+// reasoningWrapper strips the wrapper, lifting .effort into an absent reasoning_effort unless enabled:false.
 func reasoningWrapper() RuleFunc {
 	return func(ctx RuleContext) error {
 		raw, exists := ctx.Document.Get("reasoning")
@@ -39,8 +38,7 @@ func reasoningWrapper() RuleFunc {
 	}
 }
 
-// reasoningEffortValidate rejects reasoning_effort when present and not one of the allowed
-// enum values. Scoping to the routes that read it is a separate table rule.
+// reasoningEffortValidate rejects a value outside the enum; scoping to the routes that read it is a separate rule.
 func reasoningEffortValidate() RuleFunc {
 	return func(ctx RuleContext) error {
 		raw, exists := ctx.Document.Get("reasoning_effort")
@@ -71,9 +69,7 @@ func reasoningEffortScope() RuleFunc {
 	}
 }
 
-// enableThinking strips for ThinkingStrip profiles (no matching chat-template knob);
-// otherwise validates the bool and mirrors it into chat_template_kwargs.enable_thinking,
-// preserving any value already nested there.
+// enableThinking strips for ThinkingStrip profiles (no matching chat-template knob), else mirrors into kwargs.
 func enableThinking() RuleFunc {
 	return func(ctx RuleContext) error {
 		if ctx.Profile != nil && ctx.Profile.Thinking == ThinkingStrip {
@@ -92,9 +88,7 @@ func enableThinking() RuleFunc {
 	}
 }
 
-// thinking strips for ThinkingStrip profiles; mirrors into chat_template_kwargs.thinking for
-// ThinkingMirrorToKwargs profiles (dropping the top-level field); otherwise normalizes the
-// type enum in place and drops the display hint.
+// thinking strips, mirrors, or normalizes the type enum in place, per the profile's ThinkingDisposition.
 func thinking() RuleFunc {
 	return func(ctx RuleContext) error {
 		if ctx.Profile != nil && ctx.Profile.Thinking == ThinkingStrip {
@@ -134,8 +128,7 @@ func thinking() RuleFunc {
 	}
 }
 
-// resolveThinkingType maps thinking.type to its boolean intent; adaptive/auto both signal
-// opt-in thinking with an SDK-chosen budget. The second return is false for an unknown type.
+// resolveThinkingType maps thinking.type to its boolean intent; adaptive/auto both mean opt-in thinking.
 func resolveThinkingType(typeValue string) (bool, bool) {
 	switch typeValue {
 	case "enabled", "adaptive", "auto":
@@ -147,8 +140,7 @@ func resolveThinkingType(typeValue string) (bool, bool) {
 	}
 }
 
-// getOrCreateChatTemplateKwargs returns the document's chat_template_kwargs object, creating
-// an empty one when absent; rejects a present non-object value.
+// getOrCreateChatTemplateKwargs returns the kwargs object, creating it when absent and rejecting a non-object.
 func getOrCreateChatTemplateKwargs(document *Document) (map[string]any, error) {
 	raw, exists := document.Get("chat_template_kwargs")
 	if !exists {
@@ -163,8 +155,7 @@ func getOrCreateChatTemplateKwargs(document *Document) (map[string]any, error) {
 	return kwargs, nil
 }
 
-// mirrorFieldIntoKwargs moves a top-level bool into chat_template_kwargs[field], preserving
-// any value already nested there; the top-level field is always removed.
+// mirrorFieldIntoKwargs moves a top-level bool into kwargs[field], preserving a value already nested there.
 func mirrorFieldIntoKwargs(document *Document, field string, value bool) error {
 	kwargs, err := getOrCreateChatTemplateKwargs(document)
 	if err != nil {
@@ -178,8 +169,7 @@ func mirrorFieldIntoKwargs(document *Document, field string, value bool) error {
 	return nil
 }
 
-// silenceThinkingInKwargs overrules the caller, the way the forced budget already does: a request that
-// cannot afford thinking cannot afford it in the template either.
+// silenceThinkingInKwargs overrules the caller: a request that cannot afford thinking cannot afford it in the template.
 func silenceThinkingInKwargs(document *Document) error {
 	kwargs, err := getOrCreateChatTemplateKwargs(document)
 	if err != nil {
@@ -189,8 +179,7 @@ func silenceThinkingInKwargs(document *Document) error {
 	return nil
 }
 
-// thinkingTokenBudgetResolve clamps whatever budget the request carries so content keeps room to be
-// written, for every model. Profiles that own a resolution also get their force-zero and half-split default.
+// thinkingTokenBudgetResolve clamps any budget so content keeps room. See README.md, "Reasoning and thinking".
 func thinkingTokenBudgetResolve() RuleFunc {
 	return func(ctx RuleContext) error {
 		maxTokensRaw, exists := ctx.Document.Get("max_tokens")
@@ -201,14 +190,11 @@ func thinkingTokenBudgetResolve() RuleFunc {
 		if !ok || maxTokens == 0 {
 			return nil
 		}
-		// Only a profile that declares the budget gets one invented: a host on the V2 model runner rejects
-		// the field outright, and V2 is the default for every non-MoE model.
+		// Only a profile that declares the budget gets one invented: the V2 model runner rejects the field outright.
 		if ctx.Profile != nil && ctx.Profile.ThinkingTokenBudget {
 			if maxTokens < kimiThinkingBudgetForceZeroBelow {
 				ctx.Document.Set("thinking_token_budget", uint64(0))
-				// The budget alone is a logits processor, which speculative decoding discards, and the
-				// thinking rule has already mirrored the caller's answer here -- so this overwrites rather
-				// than fills. See gateway-request-filtering.md, "Silencing Kimi's reasoning".
+				// Overwrites rather than fills: the budget alone is a logits processor speculative decoding discards. See README.md, "Silencing Kimi's reasoning".
 				return silenceThinkingInKwargs(ctx.Document)
 			}
 			if !ctx.Document.Has("thinking_token_budget") {
@@ -238,8 +224,7 @@ func thinkingTokenBudgetResolve() RuleFunc {
 	}
 }
 
-// safetyIdentifier validates and keeps ctx.Param for profiles with AllowSafetyIdentifier;
-// strips it for every other profile.
+// safetyIdentifier validates and keeps ctx.Param for AllowSafetyIdentifier profiles, and strips it otherwise.
 func safetyIdentifier() RuleFunc {
 	validate := requireString(safetyIdentifierMaxLen)
 	return func(ctx RuleContext) error {
@@ -251,8 +236,7 @@ func safetyIdentifier() RuleFunc {
 	}
 }
 
-// reasoningSplit strips the field for profiles that cannot serve it, and fills it for the one that can:
-// M2.x thinks unconditionally, so without the split its reasoning arrives inline in content.
+// reasoningSplit fills the field for the profile that can serve it: M2.x thinks unconditionally, so without it reasoning arrives inline in content.
 func reasoningSplit() RuleFunc {
 	return func(ctx RuleContext) error {
 		if ctx.Profile == nil || !ctx.Profile.KeepReasoningSplit {
@@ -271,8 +255,7 @@ func reasoningSplit() RuleFunc {
 	}
 }
 
-// forceZeroPenalty overwrites ctx.Param to 0 for profiles with ForceZeroPenalties, but only
-// when the field is already present (overwrite-only: never introduces the field).
+// forceZeroPenalty overwrites ctx.Param to 0 for ForceZeroPenalties profiles, but only when already present.
 func forceZeroPenalty() RuleFunc {
 	return func(ctx RuleContext) error {
 		if ctx.Profile == nil || !ctx.Profile.ForceZeroPenalties {

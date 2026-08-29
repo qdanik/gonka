@@ -16,17 +16,14 @@ import (
 
 const (
 	defaultObserverPollInterval = 5 * time.Second
-	// versionsTTLPollMultiplier lets versions entries survive a couple of missed polls without
-	// outliving the poller's own cadence.
+	// Lets versions entries survive a couple of missed polls without outliving the poller's own cadence.
 	versionsTTLPollMultiplier = 3
 
 	epochInfoPath    = "/v1/epochs/latest"
 	participantsPath = "/v1/epochs/current/participants"
 )
 
-// ObserverConfig configures a PhaseObserver. Zero-value poll/client/clock fields take package
-// defaults; PublicAPIBaseURL is required. Chain serves the preserved-nodes snapshot during PoC and the
-// nonce ceiling; when nil both are skipped and the legacy preservation rule applies.
+// ObserverConfig configures a PhaseObserver; PublicAPIBaseURL is required, and a nil Chain skips the preserved-nodes snapshot and the nonce ceiling. See README.md, "Which nodes count as preserved".
 type ObserverConfig struct {
 	PublicAPIBaseURL string
 	Chain            Reader
@@ -35,9 +32,7 @@ type ObserverConfig struct {
 	Now              func() time.Time
 }
 
-// PhaseObserver polls chain phase and participant state, derives an immutable PhaseSnapshot, and
-// publishes it to subscribers; it folds raw inputs only. See README.md, "What the chain
-// observer provides".
+// PhaseObserver polls chain phase and participant state and publishes an immutable PhaseSnapshot. See README.md, "What the chain observer provides".
 type PhaseObserver struct {
 	publicAPIBaseURL string
 	chain            Reader
@@ -58,8 +53,7 @@ type PhaseObserver struct {
 	doneCh      chan struct{}
 }
 
-// NewPhaseObserver validates cfg and applies defaults for unset fields; it errors only when
-// PublicAPIBaseURL is blank.
+// NewPhaseObserver validates cfg and applies defaults for unset fields; it errors only when PublicAPIBaseURL is blank.
 func NewPhaseObserver(cfg ObserverConfig) (*PhaseObserver, error) {
 	baseURL := strings.TrimRight(strings.TrimSpace(cfg.PublicAPIBaseURL), "/")
 	if baseURL == "" {
@@ -91,9 +85,7 @@ func NewPhaseObserver(cfg ObserverConfig) (*PhaseObserver, error) {
 	return observer, nil
 }
 
-// Start spawns the poll loop and the versions poller on a context derived from ctx; doneCh closes
-// once both have exited. It returns immediately, and is idempotent: a call while already running is
-// a no-op rather than a second set of pollers.
+// Start spawns the poll loop and the versions poller, and is idempotent. See README.md, "The poll loop".
 func (o *PhaseObserver) Start(ctx context.Context) {
 	o.lifecycleMu.Lock()
 	defer o.lifecycleMu.Unlock()
@@ -120,9 +112,7 @@ func (o *PhaseObserver) Start(ctx context.Context) {
 	}()
 }
 
-// Stop cancels the context Start derived and blocks until both loops have exited; it is a no-op
-// before Start. It is a barrier for every caller: doneCh outlives cancel, so a second concurrent
-// Stop waits for the pollers to exit instead of returning while they still run.
+// Stop blocks until both loops have exited and is a barrier for every caller. See README.md, "The poll loop".
 func (o *PhaseObserver) Stop() {
 	o.lifecycleMu.Lock()
 	cancel, done := o.cancel, o.doneCh
@@ -150,8 +140,7 @@ func (o *PhaseObserver) run(ctx context.Context) {
 	}
 }
 
-// refresh runs one poll and publishes a snapshot; a fetch error republishes the previous fields with
-// LastError set. See README.md, "What the chain observer provides".
+// refresh runs one poll and publishes a snapshot. See README.md, "What the chain observer provides".
 func (o *PhaseObserver) refresh(ctx context.Context) {
 	previous := o.Snapshot()
 
@@ -208,9 +197,7 @@ func (o *PhaseObserver) refresh(ctx context.Context) {
 	currentWeights := participants.Weights
 	currentWeightsByModel := participants.WeightsByModel
 	if rawPoCValidationState(epoch.Phase, epoch.ConfirmationPoCPhase) {
-		// During PoC validation, excluded miners with validation-inference-capable nodes rejoin
-		// the preserved/current views with those nodes' weight. Capability is fail-closed, so a
-		// cold versions cache keeps the merge conservative.
+		// See README.md, "PoC validation rejoins capable miners".
 		preserved, preservedByModel, currentWeights, currentWeightsByModel = mergePreservedWithValidationCapable(participants, o.versions.IsNodeValidationCapable)
 	}
 
@@ -237,8 +224,7 @@ func (o *PhaseObserver) publishWithPreviousParticipants(snapshot, previous Phase
 	o.publish(snapshot)
 }
 
-// resolvePreservation picks the node-preservation rule: all nodes outside PoC; a current
-// preserved-nodes snapshot during PoC, allow-all in the grace period, else the legacy rule.
+// resolvePreservation picks the node-preservation rule for this poll. See README.md, "Which nodes count as preserved".
 func (o *PhaseObserver) resolvePreservation(ctx context.Context, epoch epochInfo, blocked bool, reason BlockReason) (preservationMode, preservedSnapshotState, error) {
 	if !blocked && !epoch.IsConfirmationPoCActive {
 		return preservationModeAll, preservedSnapshotState{}, nil
@@ -254,9 +240,7 @@ func (o *PhaseObserver) resolvePreservation(ctx context.Context, epoch epochInfo
 	}
 }
 
-// preservedSnapshotAnchor is the episode anchor height a preserved snapshot must match to count
-// as current: the confirmation-PoC trigger height, or the epoch PoC start height; 0 skips the
-// anchor check.
+// preservedSnapshotAnchor is the height a preserved snapshot must match to count as current; 0 skips the check.
 func preservedSnapshotAnchor(epoch epochInfo, reason BlockReason) int64 {
 	switch reason {
 	case BlockReasonConfirmationPoC:
@@ -270,15 +254,12 @@ func preservedSnapshotAnchor(epoch epochInfo, reason BlockReason) int64 {
 	return 0
 }
 
-// allowAllParticipantsUntilSnapshot reports the confirmation-PoC grace period, when the matching
-// preserved snapshot intentionally does not exist yet.
+// allowAllParticipantsUntilSnapshot reports the grace period, when the matching preserved snapshot intentionally does not exist yet.
 func allowAllParticipantsUntilSnapshot(epoch epochInfo, reason BlockReason) bool {
 	return reason == BlockReasonConfirmationPoC && epoch.ConfirmationPoCPhase == ConfirmationPoCGracePeriod
 }
 
-// fetchPreservedSnapshot reads the chain's preserved-nodes snapshot. A chain that answers no snapshot
-// for the current episode is a different thing from one that could not be reached, and only the second
-// is an error: the first makes routing fall back to the epoch group.
+// fetchPreservedSnapshot separates "no snapshot for this episode" from "could not be reached"; only the second is an error.
 func (o *PhaseObserver) fetchPreservedSnapshot(ctx context.Context, expectedAnchor int64) (preservedSnapshotState, preservedSnapshotStatus, error) {
 	if o.chain == nil {
 		return preservedSnapshotState{}, preservedSnapshotUnavailable, nil
@@ -296,8 +277,7 @@ func (o *PhaseObserver) fetchPreservedSnapshot(ctx context.Context, expectedAnch
 	return newPreservedSnapshotState(snapshot), preservedSnapshotCurrent, nil
 }
 
-// fetchMaxNonce reads the chain's devshard escrow nonce ceiling. fetched=false with a nil error means
-// the chain carries no devshard escrow params at all.
+// fetchMaxNonce reads the nonce ceiling; fetched=false with a nil error means the chain carries no devshard escrow params.
 func (o *PhaseObserver) fetchMaxNonce(ctx context.Context) (maxNonce uint64, fetched bool, err error) {
 	if o.chain == nil {
 		return 0, false, nil
@@ -334,9 +314,7 @@ func (o *PhaseObserver) Snapshot() PhaseSnapshot {
 	return *o.current.Load()
 }
 
-// Subscribe registers a callback invoked synchronously on every publish, mirroring
-// config.Holder's semantics (store-before-notify, cancel via map delete). The returned cancel
-// removes the subscription.
+// Subscribe registers a callback invoked synchronously on every publish. See README.md, "The poll loop".
 func (o *PhaseObserver) Subscribe(cb func(PhaseSnapshot)) (cancel func()) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
@@ -356,8 +334,7 @@ type snapshotHealth struct {
 	degraded bool
 }
 
-// healthChange is what one publish is worth saying about, separated from saying it so the decision can
-// be tested: the whole value of this type is writing nothing while a failure persists.
+// healthChange separates the decision from the logging, so writing nothing while a failure persists is testable.
 type healthChange struct {
 	degraded  bool
 	recovered bool
@@ -372,8 +349,7 @@ func (h *snapshotHealth) advance(lastError string) healthChange {
 	return change
 }
 
-// joinSnapshotError keeps every failed read of one poll. Overwriting left the operator reading the last
-// failure only, so a frozen MaxNonce -- the ceiling nonces are issued against -- went unnamed.
+// joinSnapshotError keeps every failed read of one poll. See README.md, "The poll loop".
 func joinSnapshotError(existing, added string) string {
 	switch {
 	case added == "":
@@ -396,8 +372,7 @@ func (o *PhaseObserver) narrateHealth(snapshot PhaseSnapshot) {
 	}
 }
 
-// publish stores snapshot then synchronously notifies the current subscribers, in no particular
-// order.
+// publish stores snapshot then synchronously notifies the current subscribers, in no particular order.
 func (o *PhaseObserver) publish(snapshot PhaseSnapshot) {
 	o.current.Store(&snapshot)
 	o.narrateHealth(snapshot)

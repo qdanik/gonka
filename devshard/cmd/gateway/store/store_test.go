@@ -214,7 +214,7 @@ func TestOpenIsIdempotentAcrossRestarts(t *testing.T) {
 	}
 }
 
-// The DDL below is devshardctl's own, reduced to the colliding tables; see gateway-operations.md.
+// The DDL below is devshardctl's own, reduced to the colliding tables; see operations.md.
 func TestOpenRefusesADevshardctlDatabase(t *testing.T) {
 	dir := t.TempDir()
 

@@ -34,8 +34,7 @@ type EscrowState struct {
 	Participants []string
 }
 
-// Snapshot returns every published escrow in id order, plus the retired ones still draining. It takes
-// no lock. See gateway-capacity-and-health.md, "What in-flight actually counts".
+// Snapshot takes no lock, and includes the retired escrows still draining. See capacity.md, "What in-flight actually counts".
 func (r *Registry) Snapshot() []EscrowState {
 	published := r.live.Load()
 	states := make([]EscrowState, 0, len(published.byID))
@@ -62,9 +61,7 @@ func stateOf(entry *escrowEntry, draining bool) EscrowState {
 	}
 }
 
-// RoutableSession is the read-only handle the status routes read. It takes no in-flight count and is
-// deliberately not the dispatch path: a race resolves its escrow through Acquire, which returns the
-// session and its release together so a handle cannot be held without the hold.
+// RoutableSession takes no in-flight count and is deliberately not the dispatch path; that is Acquire.
 func (r *Registry) RoutableSession(escrowID string) (EscrowSession, bool) {
 	entry, known := r.live.Load().byID[escrowID]
 	if !known {
@@ -73,9 +70,7 @@ func (r *Registry) RoutableSession(escrowID string) (EscrowSession, bool) {
 	return entry.session, true
 }
 
-// SettlementSession resolves the handle this process still holds, published or draining -- deliberately
-// asymmetric with routing's published-only lookup. See gateway-invariants.md,
-// "4. Routing and settlement read the escrow set asymmetrically, on purpose".
+// SettlementSession resolves published or draining, deliberately asymmetric with routing. See rules.md, "4. Routing and settlement read the escrow set asymmetrically, on purpose".
 func (r *Registry) SettlementSession(escrowID string) (EscrowSession, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -106,9 +101,7 @@ func (r *Registry) Serves(model string) bool {
 	return slices.ContainsFunc(r.live.Load().byModel[model], (*escrowEntry).accepting)
 }
 
-// Acquire resolves the dispatch handle and counts one in-flight request against it in the same locked step;
-// ok is false when the escrow is gone and the caller must not dispatch to it. See
-// gateway-routing-and-nonces.md, "The escrow registry".
+// Acquire resolves the dispatch handle and counts one in-flight request in the same locked step. See routing.md, "The escrow registry".
 func (r *Registry) Acquire(escrowID string) (session EscrowSession, release func(), ok bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -119,9 +112,7 @@ func (r *Registry) Acquire(escrowID string) (session EscrowSession, release func
 	return entry.session, r.holdLocked(entry), true
 }
 
-// holdFor is the scheduler's view of the same count, taken in the step that commits a nonce and bound to
-// the entry rather than to its id. See gateway-routing-and-nonces.md, "Where the nonce, the slot and the
-// hold are taken".
+// holdFor is bound to the entry rather than its id. See routing.md, "Where the nonce, the slot and the hold are taken".
 func (r *Registry) holdFor(entry *escrowEntry) func() (func(), bool) {
 	return func() (func(), bool) {
 		r.mu.Lock()

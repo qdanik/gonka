@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"slices"
 	"testing"
+
+	"devshard/cmd/gateway/engine"
 )
 
 // recordWith builds the totals a finding reads, so a test states the shape of a participant's epoch
@@ -261,7 +263,7 @@ func TestALongResponseTheGatewayExcusedIsNotAFailure(t *testing.T) {
 	record.Counters = []CounterRecord{{
 		CounterKey: CounterKey{
 			Disposition:   DispositionUnfinishedExecution,
-			TimeoutReason: TimeoutReasonLongResponse,
+			TimeoutReason: engine.TimeoutReasonLongResponse,
 		},
 		Count: 10,
 	}}
@@ -373,13 +375,13 @@ func TestDecodedLogprobsAreReportedAtOnce(t *testing.T) {
 // The doc is what an operator reads when a finding fires, so a code that exists in neither place is
 // unexplainable and one that exists only in the doc is a promise this gateway does not keep.
 func TestEveryFindingCodeIsDocumented(t *testing.T) {
-	doc, err := os.ReadFile(filepath.Join("..", "docs", "accounting-findings.md"))
+	doc, err := os.ReadFile(filepath.Join("..", "docs", "accounting.md"))
 	if err != nil {
-		t.Fatalf("reading accounting-findings.md: %v", err)
+		t.Fatalf("reading accounting.md: %v", err)
 	}
 	for _, code := range findingCodes {
 		if !bytes.Contains(doc, []byte("`"+code+"`")) {
-			t.Errorf("finding %q is not explained in accounting-findings.md", code)
+			t.Errorf("finding %q is not explained in accounting.md", code)
 		}
 	}
 }
@@ -389,8 +391,8 @@ func TestEveryFindingCodeIsDocumented(t *testing.T) {
 // verdict and the poster that was gone are all ours.
 func TestFailuresThisGatewayCausedAreNotChargedToTheHost(t *testing.T) {
 	for _, reason := range []string{
-		TimeoutReasonPhaseAborted, TimeoutReasonCollectionError,
-		TimeoutReasonNotApplied, TimeoutReasonNoPoster, TimeoutReasonLongResponse,
+		engine.TimeoutReasonPhaseAborted, engine.TimeoutReasonCollectionError,
+		engine.TimeoutReasonNotApplied, engine.TimeoutReasonNoPoster, engine.TimeoutReasonLongResponse,
 	} {
 		t.Run(reason, func(t *testing.T) {
 			record := recordWith(100, map[Disposition]uint64{
@@ -502,5 +504,41 @@ func TestAnAbandonedAttemptIsTheOnlyOneExcused(t *testing.T) {
 
 	if !slices.Contains(codesOf(findings), FindingRefusals) {
 		t.Fatalf("refusals was not raised for a host that refused 40 of 100: %+v", findings)
+	}
+}
+
+// A host that refuses the gateway's own warmup probe refused no client. Excluding the probe only when
+// it succeeded would report the failures and hide the successes -- the flattering half of the rule.
+func TestARefusedWarmupProbeIsNotChargedToTheHost(t *testing.T) {
+	record := recordWith(100, map[Disposition]uint64{
+		DispositionFinishedUsed:      20,
+		DispositionUnfinishedRefused: 5,
+	})
+	record.Counters = []CounterRecord{{
+		CounterKey: CounterKey{Disposition: DispositionUnfinishedRefused, Terminal: TerminalWarmupProbe},
+		Count:      5,
+	}}
+
+	if codes := codesOf(findingsFor(record)); slices.Contains(codes, FindingRefusals) {
+		t.Errorf("findings %v charge the host for refusing the gateway's own probe", codes)
+	}
+}
+
+// The probes subtracted from a bucket are the ones in it. Subtracting every probe from the delivered
+// bucket empties it when a probe ended elsewhere, and each rate then divides by the smaller total.
+func TestAProbeThatFailedDoesNotEmptyTheDeliveredTotal(t *testing.T) {
+	record := recordWith(100, map[Disposition]uint64{
+		DispositionFinishedUsed:        10,
+		DispositionUnfinishedExecution: 10,
+	})
+	record.Counters = []CounterRecord{{
+		CounterKey: CounterKey{Disposition: DispositionUnfinishedRefused, Terminal: TerminalWarmupProbe},
+		Count:      10,
+	}}
+
+	finding := findingWithCode(t, findingsFor(record), FindingExecutionTimeouts)
+
+	if finding.Whole != 20 {
+		t.Fatalf("execution timeouts = %d of %d, want 10 of 20 -- the delivered answers still counted", finding.Part, finding.Whole)
 	}
 }

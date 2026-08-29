@@ -38,8 +38,7 @@ func requireBool() RuleFunc {
 	}
 }
 
-// requireString rejects ctx.Param when present and not a string, or longer than maxBytes.
-// Unlike requireUint/requireBool, an explicit null is rejected rather than treated as absent.
+// requireString rejects a non-string or over-long ctx.Param; unlike requireUint/requireBool, null is rejected.
 func requireString(maxBytes int) RuleFunc {
 	return func(ctx RuleContext) error {
 		raw, exists := ctx.Document.Get(ctx.Param)
@@ -57,8 +56,7 @@ func requireString(maxBytes int) RuleFunc {
 	}
 }
 
-// validModelName rejects ctx.Param when present and not a string, blank after trimming,
-// longer than maxBytes, or outside modelNameRegex; an absent field passes through.
+// validModelName rejects a non-string, blank, over-long, or non-matching ctx.Param; absent passes through.
 func validModelName(maxBytes int) RuleFunc {
 	return func(ctx RuleContext) error {
 		raw, exists := ctx.Document.Get(ctx.Param)
@@ -89,7 +87,6 @@ func stripParameter() RuleFunc {
 	}
 }
 
-// forceLiteral unconditionally overwrites ctx.Param with value, present or absent.
 func forceLiteral(value any) RuleFunc {
 	return func(ctx RuleContext) error {
 		ctx.Document.Set(ctx.Param, value)
@@ -106,8 +103,7 @@ func replaceIfPresent(value any) RuleFunc {
 	}
 }
 
-// clampFloat coerces ctx.Param to float64, strips it when absent, unparseable, or
-// non-finite, then clamps the result into [min, max] and writes it back.
+// clampFloat coerces ctx.Param to float64 via sanitizeFloatField, then clamps it into [min, max].
 func clampFloat(min, max float64) RuleFunc {
 	return func(ctx RuleContext) error {
 		number, ok := sanitizeFloatField(ctx.Document, ctx.Param)
@@ -125,9 +121,7 @@ func clampFloat(min, max float64) RuleFunc {
 	}
 }
 
-// rejectNonPositiveThenClamp clamps ctx.Param down to max, then rejects a non-positive
-// result — an exclusive lower bound can't be enforced by clamping without producing an
-// illegal value.
+// rejectNonPositiveThenClamp clamps down to max first: an exclusive lower bound can't be clamped to a legal value.
 func rejectNonPositiveThenClamp(max float64) RuleFunc {
 	return func(ctx RuleContext) error {
 		number, ok := sanitizeFloatField(ctx.Document, ctx.Param)
@@ -145,8 +139,7 @@ func rejectNonPositiveThenClamp(max float64) RuleFunc {
 	}
 }
 
-// validTopK strips non-finite/unparseable values, rejects anything but -1 (disabled) or a
-// value >= 1, then clamps down to max and truncates toward zero.
+// validTopK rejects anything but -1 (disabled) or a value >= 1, then clamps down to max and truncates.
 func validTopK(max float64) RuleFunc {
 	return func(ctx RuleContext) error {
 		number, ok := sanitizeFloatField(ctx.Document, ctx.Param)
@@ -164,8 +157,7 @@ func validTopK(max float64) RuleFunc {
 	}
 }
 
-// sanitizeFloatField coerces document[name] to float64. ok is false, and the field is
-// deleted, whenever it's absent, unparseable, or non-finite (NaN/Inf).
+// sanitizeFloatField coerces document[name] to float64, deleting it when unparseable or non-finite (NaN/Inf).
 func sanitizeFloatField(document *Document, name string) (float64, bool) {
 	raw, exists := document.Get(name)
 	if !exists {

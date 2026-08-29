@@ -15,21 +15,18 @@ import (
 	"devshard/user"
 )
 
-// escrows is satisfied by *registry.Registry; its two lookups differ on a retired escrow on purpose.
-// See gateway-invariants.md, "4. Routing and settlement read the escrow set asymmetrically, on purpose".
+// escrows is satisfied by *registry.Registry. See rules.md, "4. Routing and settlement read the escrow set asymmetrically, on purpose".
 type escrows interface {
 	Acquire(escrowID string) (registry.EscrowSession, func(), bool)
 	SettlementSession(escrowID string) (registry.EscrowSession, bool)
 }
 
-// Sessions adapts the live escrows to the engine's two outbound boundaries: the target a race dispatches
-// through, and the poster that settles the nonces the race left unfinished.
+// Sessions adapts the live escrows to the engine's two outbound boundaries: the dispatch target and the vote poster.
 type Sessions struct{ escrows escrows }
 
 func NewSessions(escrows escrows) Sessions { return Sessions{escrows: escrows} }
 
 // Target resolves one escrow per race, because an escrow can rotate out between the pick and the send.
-// The release keeps the escrow draining rather than closed until the race's vote is posted.
 func (s Sessions) Target(escrowID string) (engine.DispatchTarget, func(), bool) {
 	session, release, held := s.escrows.Acquire(escrowID)
 	if !held {
@@ -65,11 +62,10 @@ func (t escrowTarget) Send(ctx context.Context, nonce scheduler.Prepared, stream
 	if !ok {
 		return nil, fmt.Errorf("dispatch nonce is %T, want *user.PreparedInference", nonce)
 	}
-	// stream is handed on unwrapped: the transport flushes each SSE line through an http.Flusher
-	// assertion on it, and a wrapper would leave a crowned winner's bytes in the server's buffer.
+	// stream is handed on unwrapped: the transport type-asserts http.Flusher on it to flush each SSE line.
 	reply, err := t.session.SendOnly(ctx, prepared, stream, onReceipt)
 	if reply != nil {
-		// Applies for a reply that arrived beside an error too; see gateway-invariants.md.
+		// Applies for a reply that arrived beside an error too; see rules.md.
 		if applyErr := t.session.ProcessResponse(prepared.HostIdx(), reply, prepared.Nonce()); err == nil {
 			err = applyErr
 		}
@@ -83,8 +79,7 @@ func (t escrowTarget) Send(ctx context.Context, nonce scheduler.Prepared, stream
 	return hostReply{reply: reply}, err
 }
 
-// divergedState reads a post state root the escrow cannot accept from either side of the wire: the host
-// reports it as a diff it could not apply, the session as a hash that differs from the local root.
+// divergedState reads a rejected post state root from either side of the wire: the host's diff or the local hash.
 func divergedState(err error) bool {
 	return state.IsPostStateRootMismatchError(err) || errors.Is(err, types.ErrStateHashMismatch)
 }

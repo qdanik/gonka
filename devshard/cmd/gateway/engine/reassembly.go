@@ -1,7 +1,6 @@
 package engine
 
-// sseClassifier joins one attempt's bounded reassembly to the SSE verdicts. See
-// gateway-speculative-race.md, "Classification and reassembly".
+// sseClassifier joins one attempt's bounded reassembly to the SSE verdicts. See race.md, "Classification and reassembly".
 type sseClassifier struct {
 	thinkingBudget bool
 	carry          *carryBuffer
@@ -32,8 +31,7 @@ func (c *sseClassifier) Flush() chunkFacts {
 
 func (c *sseClassifier) Release() { c.carry.Release() }
 
-// facts keeps a capability refusal out of Error, while its message still reaches the perf recorder. See
-// gateway-speculative-race.md, "An SSE error event counts as a chunk but never crowns".
+// facts keeps a capability refusal out of Error, while its message still reaches the perf recorder. See race.md, "An SSE error event counts as a chunk but never crowns".
 func (c *sseClassifier) facts(signal chunkSignal) chunkFacts {
 	facts := chunkFacts{
 		Content:               signal.crownsWinner(),

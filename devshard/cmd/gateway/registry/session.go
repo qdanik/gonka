@@ -17,19 +17,14 @@ import (
 const ghostMaxTokens = uint64(completionapi.MinTokensFloor)
 
 var (
-	// ghostPrompt is the synthetic MsgStart a burned nonce commits: composed into the diff, never sent to
-	// a host. See gateway-routing-and-nonces.md, "Ghost burns".
+	// ghostPrompt is composed into the diff, never sent to a host. See routing.md, "Ghost burns".
 	ghostPrompt = fmt.Appendf(nil, `{"messages":[{"role":"user","content":"."}],"max_tokens":%d}`, ghostMaxTokens)
 
 	// errNonceDeclined leaves the bound nonce unconsumed, so the next caller sees the same nonce.
 	errNonceDeclined = errors.New("nonce declined")
 )
 
-// EscrowSession is one escrow's session as the registry uses it; sessionHandle binds a *user.Session to
-// its state machine to satisfy it. Two methods carry a trap. SealedInferences counts what sealing has
-// drained out of SnapshotState().Inferences, which holds only the live tail, so a reader without it
-// mistakes that tail for the escrow's whole history. UserSession is the concrete handle the dispatch
-// boundary needs, and one rehydrated read-only has no host clients, so sending through it is a bug.
+// EscrowSession is one escrow's session as the registry uses it; two of its methods carry a trap. See README.md, "The two session kinds".
 type EscrowSession interface {
 	ParticipantKeys() []string
 	HostParticipantKeyList() []string
@@ -49,13 +44,7 @@ type EscrowSession interface {
 	UserSession() *user.Session
 }
 
-// ServingSessions opens a chain-backed session with host clients (user.NewHTTPSession) — the only kind
-// that can dispatch. ReadOnlySessions rehydrates from local storage alone (user.NewLocalSession): no
-// chain, no host clients, so it can build a settlement but can neither serve nor finalize.
-//
-// An escrow with no record must fail with an error wrapping escrow.ErrUnknownEscrow. Callers tell that
-// apart from a load failure to answer 404 rather than 502, and a factory that returns its own error for
-// a missing escrow turns "no such escrow" into "the gateway is broken".
+// SessionFactory: an escrow with no record must fail wrapping escrow.ErrUnknownEscrow. See README.md, "The two session kinds".
 type SessionFactory func(ctx context.Context, escrowID string) (EscrowSession, error)
 
 type sessionHandle struct {
@@ -72,8 +61,7 @@ func (h sessionHandle) SnapshotState() types.EscrowState { return h.machine.Snap
 func (h sessionHandle) SealedInferences() int            { return len(h.machine.ExportSealedNonces()) }
 func (h sessionHandle) UserSession() *user.Session       { return h.Session }
 
-// groupSize is taken once: the group is fixed for the escrow's life, and asking the session takes the
-// lock a nonce commit holds.
+// groupSize is taken once: the group is fixed, and asking the session takes the lock a nonce commit holds.
 type nonceStream struct {
 	session   EscrowSession
 	model     string
@@ -122,13 +110,10 @@ func (s nonceStream) Advance(decide func(scheduler.HostBinding) scheduler.NonceI
 	return prepared, nil
 }
 
-// GhostPrompt is what a burned nonce committed. A vote raised for that nonce must carry it, because a
-// verifier checks the payload against the record's own prompt hash.
+// GhostPrompt is what a vote for a burned nonce must carry: a verifier checks it against the record's prompt hash.
 func GhostPrompt() []byte { return ghostPrompt }
 
-// StartedAt is seconds, like every other StartedAt: a verifier measures the refusal deadline as
-// now-in-seconds minus this, so a millisecond stamp keeps that difference negative and the timeout on a
-// burned nonce is rejected every time. See host/timeout.go, VerifyRefusedTimeout.
+// StartedAt is seconds, not milliseconds, or the refusal deadline goes negative. See host/timeout.go, VerifyRefusedTimeout.
 func (s nonceStream) ghostParams() user.InferenceParams {
 	return user.InferenceParams{
 		Model:       s.model,

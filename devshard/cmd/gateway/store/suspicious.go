@@ -5,8 +5,7 @@ import (
 	"fmt"
 )
 
-// AddSuspiciousHost pins a participant as never-to-be-trusted; pinning one already pinned keeps the
-// original timestamp.
+// AddSuspiciousHost pins a participant as never-to-be-trusted; re-pinning keeps the original timestamp.
 func (s *Store) AddSuspiciousHost(ctx context.Context, participantKey string) error {
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO suspicious_hosts (participant_key) VALUES (?)

@@ -51,7 +51,7 @@ The gateway then reads `GATEWAY_PRIVATE_KEY` from its environment. This is why t
 
 ## Tuning without a redeploy
 
-Most limits are also runtime overrides through the admin API, so the values here are the boot defaults rather than the last word. Which keys are live and what each one means is in [gateway-operations.md](../docs/gateway-operations.md), under "Operator".
+Most limits are also runtime overrides through the admin API, so the values here are the boot defaults rather than the last word. Which keys are live and what each one means is in [operations.md](../docs/operations.md), under "Configuration".
 
 Two worth knowing before the first run:
 

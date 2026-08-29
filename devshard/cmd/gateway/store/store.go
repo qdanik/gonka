@@ -1,7 +1,5 @@
 // Package store persists gateway control-plane state in SQLite
-// (<storageDir>/gateway.db): admin config overrides, the devshard registry,
-// escrow rotation commitments, rotation status, the operator's suspicious-host
-// pins, and the per-request accounting ledger.
+// (<storageDir>/gateway.db). See README.md, "What it owns".
 package store
 
 import (
@@ -16,8 +14,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-// Store wraps the gateway.db handle; access is serialized via a single connection. See
-// README.md, "What it owns".
+// Store wraps the gateway.db handle; access is serialized via a single connection. See README.md, "What it owns".
 type Store struct {
 	db           *sql.DB
 	retryBackoff time.Duration
@@ -29,8 +26,7 @@ type Store struct {
 
 const gatewayDatabaseFileName = "gateway.db"
 
-// migrations run in order inside one transaction per version; the schema
-// version table records progress so Open is idempotent.
+// migrations run in order, one transaction per version, with progress recorded so Open is idempotent.
 var migrations = []string{
 	`CREATE TABLE IF NOT EXISTS config_overrides (
 		id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -100,16 +96,12 @@ var migrations = []string{
 	`ALTER TABLE devshards ADD COLUMN settle_tx_at TEXT NOT NULL DEFAULT ''`,
 }
 
-// The legacy-database guard is kept out of the migrations block above because it decides whether
-// this storage dir may be migrated at all, and because those entries are raw SQL whose indentation
-// is part of the literal.
+// Kept out of the migrations block: it decides whether the dir may be migrated at all, and those entries are raw SQL whose indentation is part of the literal.
 var (
-	// ErrLegacyDatabase reports a gateway.db written by devshardctl. Two table names collide at
-	// different columns, so migrating would adopt the legacy shape instead of failing.
+	// ErrLegacyDatabase reports a gateway.db written by devshardctl. See README.md, "The legacy-database guard".
 	ErrLegacyDatabase = errors.New("storage dir holds a devshardctl database; point the gateway at an empty storage dir")
 
-	// legacyOnlyTables are created by devshardctl and never here, so their presence without a
-	// schema_version is proof rather than a guess.
+	// Created by devshardctl and never here, so their presence without a schema_version is proof rather than a guess.
 	legacyOnlyTables = []string{"gateway_settings", "gateway_devshards", "gateway_suspicious_hosts", "participant_throttle_state"}
 )
 
@@ -121,15 +113,12 @@ func Open(storageDir string) (*Store, error) {
 		return nil, fmt.Errorf("creating storage dir: %w", err)
 	}
 	databasePath := filepath.Join(storageDir, gatewayDatabaseFileName)
-	// The pragmas travel in the DSN, not as statements after the open: they are per-connection, and a
-	// connection the pool recreates would come back without them -- silently, with busy_timeout at 0
-	// and synchronous back at FULL. In the DSN every connection carries them by construction.
+	// In the DSN, not as statements after the open, so a recreated connection cannot come back without them.
 	db, err := sql.Open("sqlite", databasePath+connectionPragmas)
 	if err != nil {
 		return nil, fmt.Errorf("opening gateway store: %w", err)
 	}
-	// One writer, kept for the life of the process: SQLite serializes writes anyway, and a second
-	// connection would only add the lock contention the single connection makes impossible.
+	// One writer for the life of the process: SQLite serializes writes anyway. See README.md, "Opening the database".
 	db.SetMaxOpenConns(1)
 	db.SetMaxIdleConns(1)
 	db.SetConnMaxLifetime(0)

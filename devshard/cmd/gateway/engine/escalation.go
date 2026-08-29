@@ -8,36 +8,21 @@ import (
 )
 
 const (
-	// Backstops bound a request every tunable already failed to bound, so they are not tunable. A stream
-	// held past the chain's execution deadline is work nobody can be paid for, so the tuned 20 minutes
-	// gives way if that deadline ever moves below it.
+	// Backstops bound a request every tunable already failed to bound. See README, "Backstops are not tunable".
 	streamingHardTimeout = min(20*time.Minute, types.DefaultExecutionTimeoutSeconds*time.Second-time.Minute)
 	schedulerPickTimeout = 2 * time.Minute
 
 	// Admitting a very large prompt is itself work, so such a host gets twice as long to receipt.
 	receiptTimeoutDoubleAboveTokens = 100_000
 
-	// The measured first-token curve over prompt size: a fixed cost to start answering, a per-token cost
-	// to read the prompt, and a quadratic term that only matters on very large ones.
+	// The measured first-token curve over prompt size. See README, "Escalation and the deadline ladder".
 	firstTokenBaseSeconds      = 1.7
 	firstTokenPerTokenSeconds  = 3e-5
 	firstTokenQuadraticSeconds = 5e-10
-
-	StartPrimarySuspicious = "primary_suspicious"
-	StartPrimaryDegraded   = "primary_degraded"
-	StartPrimary           = "primary"
 )
 
 // EscalationStage names the condition that earned an attempt one more attempt beside it.
 type EscalationStage string
-
-const (
-	StageNone           EscalationStage = ""
-	StageSuspicious     EscalationStage = "suspicious_host_immediate_escalation"
-	StageAttemptFailed  EscalationStage = "attempt_failed"
-	StageReceiptTimeout EscalationStage = "receipt_timeout_wait_elapsed"
-	StageFirstToken     EscalationStage = "first_token_timeout_wait_elapsed"
-)
 
 func (s EscalationStage) Reason() string {
 	switch s {
@@ -105,8 +90,7 @@ type StartPlan struct {
 	Reason            string
 }
 
-// ArmedEscalation is a deadline to arm, deliberately not a permission to escalate; Confirm is the only
-// thing that converts it. See gateway-speculative-race.md, "Escalation".
+// ArmedEscalation is a deadline to arm, deliberately not a permission to escalate; only Confirm converts it. See race.md, "Escalation".
 type ArmedEscalation struct {
 	Attempt  int
 	Stage    EscalationStage
@@ -118,9 +102,7 @@ type ConfirmedEscalation struct {
 	Stage   EscalationStage
 }
 
-// Decide hedges a primary the race already has reason to distrust; degraded is the outlier detector's
-// verdict before the routing cap. See gateway-speculative-race.md, "Escalation" and
-// gateway-capacity-and-health.md, "Outlier ejection".
+// Decide hedges a primary the race already has reason to distrust. See race.md, "Escalation" and capacity.md, "Outlier ejection".
 func (p EscalationPolicy) Decide(budget int, primarySuspicious, primaryDegraded bool) StartPlan {
 	switch {
 	case budget < 2:
@@ -132,8 +114,7 @@ func (p EscalationPolicy) Decide(budget int, primarySuspicious, primaryDegraded 
 	return StartPlan{ImmediateAttempts: 1, Reason: StartPrimary}
 }
 
-// AttemptBudget caps how many attempts one race may hold; scarce nonces force a single attempt. See
-// gateway-speculative-race.md, "Escalation".
+// AttemptBudget caps how many attempts one race may hold; scarce nonces force a single attempt. See race.md, "Escalation".
 func (p EscalationPolicy) AttemptBudget(hostCount int, nonceScarce bool) int {
 	if hostCount < 1 {
 		return 1
@@ -192,8 +173,7 @@ func (p EscalationPolicy) triggerFor(attempt EscalationAttempt, request Escalati
 	case !attempt.FirstToken.IsZero():
 		return ArmedEscalation{}, false
 	}
-	// The curve is measured from dispatch, but a receipt that used more than the curve allows would leave
-	// the rung already due: the host owes a first token, not the time its receipt took.
+	// Measured from dispatch, but the host owes a first token, not the time its receipt took.
 	deadline := attempt.SendTime.Add(p.firstTokenBudget(request.InputTokens, attempt.FirstContentP75))
 	if graceFromReceipt := attempt.ReceiptTime.Add(p.FirstTokenFloor); graceFromReceipt.After(deadline) {
 		deadline = graceFromReceipt
@@ -208,8 +188,7 @@ func (p EscalationPolicy) receiptTimeout(inputTokens uint64) time.Duration {
 	return p.ReceiptTimeout
 }
 
-// firstTokenBudget only ever extends: a host slower than the curve keeps it, because waiting out its
-// own history would delay the attempt that rescues the request.
+// firstTokenBudget only ever extends: a host slower than the curve keeps it, since its history would delay the rescue.
 func (p EscalationPolicy) firstTokenBudget(inputTokens uint64, observed time.Duration) time.Duration {
 	curve := p.firstTokenTimeout(inputTokens)
 	if observed <= 0 || observed > firstTokenObservedLimit*curve {
@@ -222,9 +201,7 @@ func (p EscalationPolicy) firstTokenBudget(inputTokens uint64, observed time.Dur
 	return p.capToFirstTokenCeiling(budget)
 }
 
-// firstTokenTimeout is the measured first-token fit over prompt size, floored and capped: the curve is
-// quadratic, and uncapped it outgrows the backstop that cancels the attempt. See
-// gateway-speculative-race.md, "Escalation".
+// firstTokenTimeout is the measured fit over prompt size, floored and capped. See race.md, "Escalation".
 func (p EscalationPolicy) firstTokenTimeout(inputTokens uint64) time.Duration {
 	tokens := float64(inputTokens)
 	seconds := firstTokenBaseSeconds + firstTokenPerTokenSeconds*tokens + firstTokenQuadraticSeconds*tokens*tokens
@@ -232,8 +209,7 @@ func (p EscalationPolicy) firstTokenTimeout(inputTokens uint64) time.Duration {
 	return p.capToFirstTokenCeiling(wait)
 }
 
-// capToFirstTokenCeiling keeps the curve under the backstop that cancels the attempt; a zero ceiling
-// means the operator removed it.
+// capToFirstTokenCeiling keeps the curve under the backstop; a zero ceiling means the operator removed it.
 func (p EscalationPolicy) capToFirstTokenCeiling(wait time.Duration) time.Duration {
 	if p.FirstTokenCeiling > 0 && wait > p.FirstTokenCeiling {
 		return p.FirstTokenCeiling

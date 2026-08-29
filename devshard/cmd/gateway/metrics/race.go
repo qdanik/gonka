@@ -25,17 +25,13 @@ const (
 	reasonBalanceExhausted = "balance_exhausted"
 )
 
-// The top bucket has to clear the slowest attempt the engine permits, not the fastest it expects:
-// a quantile cannot report above the highest finite bound, so a short ladder silently pins p95
-// there. Nineteen buckets reach 2621s, past the 2400s drain timeout.
+// The top bucket clears the 2400s drain timeout: a quantile cannot report above the highest finite bound.
 var latencyBuckets = prometheus.ExponentialBuckets(0.01, 2, 19)
 
-// chunkGapBuckets reach past the stall timeout: latencyBuckets stop at 20s, so every stall would
-// land in +Inf, which is the one case these exist to separate.
+// chunkGapBuckets reach past the stall timeout, which latencyBuckets would collapse into +Inf.
 var chunkGapBuckets = prometheus.ExponentialBuckets(0.005, 2, 15)
 
-// RaceRecorder satisfies the engine's metrics hook; every family here derives from one race outcome.
-// See gateway-operations.md, "Metrics".
+// RaceRecorder satisfies the engine's metrics hook. See operations.md, "Metrics".
 type RaceRecorder struct {
 	attemptsStarted   *prometheus.CounterVec
 	attemptsTerminal  *prometheus.CounterVec
@@ -218,8 +214,7 @@ func raceFailureReason(outcome engine.RaceOutcome, firstFailure string) string {
 	return metricLabel(firstFailure, labelUnknown)
 }
 
-// transportStatus maps a terminal back to the upstream status the host answered with, reporting
-// statusNoCode when none was recovered. See gateway-operations.md, "Cardinality rules".
+// transportStatus maps a terminal back to the host's upstream status. See operations.md, "Cardinality rules".
 func transportStatus(terminal engine.Terminal) (string, bool) {
 	if status, recovered := engine.StatusFor(terminal); recovered {
 		return strconv.Itoa(status), true

@@ -13,9 +13,7 @@ import (
 	"devshard/logging"
 )
 
-// Tracker composes the per-host performance primitives; sub-components own their locking, so mu only
-// guards the host/ejection maps. The two published views answer Ejected and Degraded without taking mu.
-// See gateway-capacity-and-health.md, "Outlier ejection".
+// Tracker's mu guards only the host/ejection maps. See capacity.md, "Outlier ejection".
 type Tracker struct {
 	mu           sync.Mutex
 	config       *config.Holder
@@ -123,8 +121,7 @@ func (t *Tracker) ensureHostLocked(key hostKey, perf config.Perf) (*hostPerf, *e
 	return host, state
 }
 
-// evictStaleLocked sweeps at most once per tenth of the staleness window.
-// See gateway-capacity-and-health.md, "Outlier ejection".
+// evictStaleLocked sweeps at most once per tenth of the staleness window. See capacity.md, "Outlier ejection".
 func (t *Tracker) evictStaleLocked(now time.Time, staleness time.Duration) bool {
 	if now.Sub(t.lastSweep) < staleness/10 {
 		return false
@@ -188,14 +185,12 @@ type HostState struct {
 	TimePerOutputToken time.Duration
 }
 
-// Snapshot returns every tracked pair in participant/model order. The in-flight counts are read after
-// the host lock is released, because they live behind their own.
+// Snapshot returns every tracked pair in participant/model order, in-flight counts read after the host lock.
 func (t *Tracker) Snapshot() []HostState {
 	now := t.now()
 	ejected := t.ejectedView.Load()
 
-	// One pass under one lock: reading each host's window through TimePerOutputTokenP75 would take the
-	// lock again per host and search the map a second time, for a report that wants a single moment.
+	// One pass under one lock: a per-host read would relock and re-search for a report wanting one moment.
 	type hostDecode struct {
 		key    hostKey
 		decode time.Duration
@@ -227,14 +222,12 @@ func (t *Tracker) Snapshot() []HostState {
 	return states
 }
 
-// Ejected reports whether a host is currently withheld from routing, reading the capped view published
-// at rebuild time rather than scanning. See gateway-capacity-and-health.md, "Outlier ejection".
+// Ejected reads the capped view published at rebuild time. See capacity.md, "Outlier ejection".
 func (t *Tracker) Ejected(participant, model string) bool {
 	return ejectedIn(t.ejectedView.Load(), participant, model, t.now())
 }
 
-// Degraded reports the ejection verdict before the pool-wide cap, so a host the cap had to leave in
-// rotation is still known to be the one the detector wanted out.
+// Degraded is the verdict before the pool-wide cap. See README.md, "Ejection, and its two views".
 func (t *Tracker) Degraded(participant, model string) bool {
 	return ejectedIn(t.degradedView.Load(), participant, model, t.now())
 }

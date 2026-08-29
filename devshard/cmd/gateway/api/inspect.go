@@ -13,9 +13,7 @@ import (
 	"devshard/user"
 )
 
-// escrowInspection is one escrow's state as an operator reads it while recovering a stuck devshard.
-// Live and sealed inferences are counted apart because sealing drains records out of the live map, so
-// the live tail alone reads as a whole history and is off by the escrow's entire lifetime.
+// escrowInspection is one escrow's state as an operator reads it. See README.md, "The operator and recovery surface".
 type escrowInspection struct {
 	EscrowID         string   `json:"escrow_id"`
 	Phase            string   `json:"phase"`
@@ -149,9 +147,7 @@ func (s *Server) writeInferences(w http.ResponseWriter, r *http.Request, keep fu
 	writeJSON(w, http.StatusOK, map[string]any{"escrow_id": escrowID, "inferences": entries})
 }
 
-// inspectable resolves a handle for reading. A resident escrow answers from its own session and an
-// already-settled one is rehydrated from local storage, because "what did this escrow do" is a question
-// asked after it stopped serving, not while. See gateway-operations.md, "Per-escrow recovery surface".
+// inspectable resolves a handle for reading; a settled escrow is rehydrated. See operations.md, "What is exposed".
 func (s *Server) inspectable(w http.ResponseWriter, r *http.Request) (registry.EscrowSession, string, func(), bool) {
 	if !allowMethods(w, r, http.MethodGet, http.MethodHead) {
 		return nil, "", nil, false
@@ -193,8 +189,7 @@ func inspect(escrowID string, session registry.EscrowSession) escrowInspection {
 	}
 }
 
-// unresolved reports an inference that has not produced a result yet: the ones holding a stuck escrow
-// short of settlement.
+// unresolved reports an inference with no result yet: the ones holding a stuck escrow short of settlement.
 func unresolved(status types.InferenceStatus) bool {
 	return status == types.StatusPending || status == types.StatusStarted || status == types.StatusChallenged
 }

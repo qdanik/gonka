@@ -25,14 +25,10 @@ const (
 	UnorderedTxTTL = 9 * time.Minute
 )
 
-// ErrTxNotFound marks a tx absent from every reachable query endpoint —
-// distinct from a tx that committed but failed on chain. Not terminal: the
-// tx may still land until its unordered TTL elapses.
+// ErrTxNotFound marks a tx absent from the chain -- not terminal, and distinct from one that committed and failed. See README.md, "Transaction encoding".
 var ErrTxNotFound = errors.New("tx not found on chain")
 
-// TxClient builds, signs, broadcasts, and queries gonka escrow transactions over the chain's gRPC
-// service. It owns the transaction envelope and the intent hook; the transport underneath is
-// interchangeable, which is what keeps its tests off a connection.
+// TxClient owns the transaction envelope and the intent hook; the transport underneath is interchangeable, which keeps its tests off a connection.
 type TxClient struct {
 	transport    Transport
 	feeDenom     string
@@ -43,8 +39,7 @@ type TxClient struct {
 	now          func() time.Time
 }
 
-// Config configures a TxClient. Zero-value fee/gas/poll/clock fields take package defaults; Transport
-// is required.
+// Config configures a TxClient. Zero-value fee/gas/poll/clock fields take package defaults; Transport is required.
 type Config struct {
 	Transport    Transport
 	FeeDenom     string
@@ -55,8 +50,7 @@ type Config struct {
 	Now          func() time.Time
 }
 
-// The tags are what the operator API returns: without them the two results are the only responses in
-// the gateway rendered with Go field names.
+// The tags are what the operator API returns; without them these are the only responses rendered with Go field names.
 type CreateEscrowResult struct {
 	EscrowID uint64 `json:"escrow_id"`
 	TxHash   string `json:"tx_hash"`
@@ -69,8 +63,7 @@ type SettleEscrowResult struct {
 	Settler  string `json:"settler"`
 }
 
-// NewTxClient validates cfg and applies defaults for unset fields; it errors only when no transport
-// is given.
+// NewTxClient validates cfg and applies defaults for unset fields; it errors only when no transport is given.
 func NewTxClient(cfg Config) (*TxClient, error) {
 	if cfg.Transport == nil {
 		return nil, fmt.Errorf("chain transport is required")
@@ -110,9 +103,7 @@ func NewTxClient(cfg Config) (*TxClient, error) {
 	}, nil
 }
 
-// CreateEscrow builds, signs, and broadcasts a MsgCreateDevshardEscrow tx; onPrepared records the
-// precomputed tx hash before the irreversible broadcast, and an error from it aborts the broadcast.
-// See README.md, "Transaction encoding".
+// CreateEscrow builds, signs and broadcasts a MsgCreateDevshardEscrow tx; onPrepared records the hash before the irreversible broadcast. See README.md, "Transaction encoding".
 func (c *TxClient) CreateEscrow(ctx context.Context, signer *signing.Secp256k1Signer, amount uint64, modelID string, onPrepared func(txHash string) error) (CreateEscrowResult, error) {
 	if signer == nil {
 		return CreateEscrowResult{}, fmt.Errorf("signer is required")
@@ -158,11 +149,7 @@ func (c *TxClient) CreateEscrow(ctx context.Context, signer *signing.Secp256k1Si
 	return CreateEscrowResult{EscrowID: escrowID, TxHash: txHash, Creator: creator}, nil
 }
 
-// SettleEscrow builds, signs, broadcasts and confirms a MsgSettleDevshardEscrow tx; unlike CreateEscrow
-// it waits for the commit rather than CheckTx. See README.md, "Transaction encoding".
-// SettleEscrow takes onPrepared for the same reason CreateEscrow does: the hash has to be durable
-// before the broadcast, or a settle that commits while the gateway is not looking is money moved under
-// a name nothing recorded.
+// SettleEscrow builds, signs, broadcasts and confirms a MsgSettleDevshardEscrow tx; unlike CreateEscrow it waits for the commit. See README.md, "Transaction encoding".
 func (c *TxClient) SettleEscrow(ctx context.Context, signer *signing.Secp256k1Signer, input SettlementInput, onPrepared func(txHash string) error) (SettleEscrowResult, error) {
 	if signer == nil {
 		return SettleEscrowResult{}, fmt.Errorf("signer is required")
@@ -198,8 +185,7 @@ func (c *TxClient) SettleEscrow(ctx context.Context, signer *signing.Secp256k1Si
 		return SettleEscrowResult{}, fmt.Errorf("tx hash mismatch: precomputed %s, node returned %s", txHash, nodeHash)
 	}
 	logging.Info("settle tx broadcast", "escrow", input.EscrowID, "tx", txHash, "settler", settler)
-	// Waiting is what makes the result mean "settled": the caller destroys the means to retry. See
-	// README.md, "Transaction encoding".
+	// Waiting is what makes the result mean "settled": the caller destroys the means to retry.
 	if err := c.waitForCommit(ctx, txHash); err != nil {
 		return SettleEscrowResult{}, fmt.Errorf("awaiting settlement commit for tx %s: %w", txHash, err)
 	}
@@ -210,8 +196,7 @@ func (c *TxClient) resolveChainID(ctx context.Context) (string, error) {
 	return c.transport.ChainID(ctx)
 }
 
-// GetTxEscrowID reports found=false when the transaction committed and failed, and ErrTxNotFound when
-// the chain does not have it; a transport failure is neither. See README.md, "Transaction encoding".
+// GetTxEscrowID reports found=false when the tx committed and failed; a transport failure is neither that nor ErrTxNotFound. See README.md, "Transaction encoding".
 func (c *TxClient) GetTxEscrowID(ctx context.Context, txHash string) (uint64, bool, error) {
 	result, found, err := c.transport.Tx(ctx, txHash)
 	if err != nil {
@@ -229,9 +214,7 @@ func (c *TxClient) GetTxEscrowID(ctx context.Context, txHash string) (uint64, bo
 	return 0, false, fmt.Errorf("tx %s committed but escrow_id event was not found", txHash)
 }
 
-// TxCommitted reports whether a transaction reached the chain and succeeded there. A transport failure
-// is returned as one: reading it as absence would rebuild and rebroadcast a settlement that already
-// moved the money.
+// TxCommitted reports whether a transaction reached the chain and succeeded there. See README.md, "Transaction encoding".
 func (c *TxClient) TxCommitted(ctx context.Context, txHash string) (succeeded bool, err error) {
 	result, found, err := c.transport.Tx(ctx, txHash)
 	if err != nil {
@@ -243,16 +226,12 @@ func (c *TxClient) TxCommitted(ctx context.Context, txHash string) (succeeded bo
 	return result.Code == 0, nil
 }
 
-// errUnconfirmed says what the caller must not conclude: the transaction was broadcast, so it may yet
-// commit, and its commitment row is reconciled rather than abandoned. See README.md, "Transaction encoding".
+// errUnconfirmed says what the caller must not conclude. See README.md, "Transaction encoding".
 func errUnconfirmed(txHash string, within time.Duration) error {
 	return fmt.Errorf("tx %s was broadcast but not confirmed within %s; its commitment is kept and reconciled, so do not create another", txHash, within)
 }
 
-// awaitTx polls the chain until a committed transaction satisfies ready, pollTimeout elapses, or ctx is
-// done; a 404 is "not indexed yet" rather than the terminal not-found GetTxEscrowID reports. A non-zero
-// code is returned as an error, and it is the only way to learn a DeliverTx failure: broadcasting in
-// BROADCAST_MODE_SYNC reports CheckTx alone, so a transaction can be accepted and still never execute.
+// awaitTx polls until a committed tx satisfies ready, pollTimeout elapses, or ctx is done. See README.md, "Transaction encoding".
 func (c *TxClient) awaitTx(ctx context.Context, txHash string, ready func(TxResult) bool) (TxResult, error) {
 	deadline := c.now().Add(c.pollTimeout)
 	var lastErr error

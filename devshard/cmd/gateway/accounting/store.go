@@ -6,6 +6,7 @@ import (
 	"slices"
 	"time"
 
+	"devshard/cmd/gateway/engine"
 	"devshard/types"
 )
 
@@ -16,12 +17,21 @@ type Snapshot struct {
 }
 
 type EscrowSnapshot struct {
-	Metadata    EscrowMetadata             `json:"metadata"`
-	LatestNonce uint64                     `json:"latest_nonce"`
-	Retired     bool                       `json:"retired"`
-	HostStats   map[uint32]types.HostStats `json:"host_stats,omitempty"`
-	Counters    []PersistedCounter         `json:"counters,omitempty"`
-	Nonces      []PersistedNonce           `json:"nonces,omitempty"`
+	Metadata     EscrowMetadata             `json:"metadata"`
+	LatestNonce  uint64                     `json:"latest_nonce"`
+	Retired      bool                       `json:"retired"`
+	HostStats    map[uint32]types.HostStats `json:"host_stats,omitempty"`
+	SlotActivity map[uint32]SlotActivity    `json:"slot_activity,omitempty"`
+	Counters     []PersistedCounter         `json:"counters,omitempty"`
+	Nonces       []PersistedNonce           `json:"nonces,omitempty"`
+}
+
+// The gateway's side of the counts HostStats holds the chain's side of. See README.md, "Storage".
+type SlotActivity struct {
+	Challenged      uint64 `json:"challenged,omitempty"`
+	Validations     uint64 `json:"validations,omitempty"`
+	TimeoutsApplied uint64 `json:"timeouts_applied,omitempty"`
+	Rejected        uint64 `json:"rejected,omitempty"`
 }
 
 type PersistedNonce struct {
@@ -65,6 +75,7 @@ func (b *Book) Snapshot() Snapshot {
 			Counters:    make([]PersistedCounter, 0, len(escrow.counters)),
 		}
 		maps.Copy(stored.HostStats, escrow.hostStats)
+		stored.SlotActivity = escrow.slotActivity()
 		for key, count := range escrow.counters {
 			stored.Counters = append(stored.Counters, PersistedCounter{CounterKey: key, Count: count})
 		}
@@ -101,8 +112,7 @@ func (b *Book) Snapshot() Snapshot {
 	return snapshot
 }
 
-// Restore replaces the ledger with a stored snapshot. A snapshot from another schema is refused
-// rather than half-read: counters whose dimensions moved would be silently misfiled.
+// A snapshot from another schema is refused rather than half-read.
 func (b *Book) Restore(snapshot Snapshot) error {
 	if snapshot.SchemaVersion != SchemaVersion {
 		return fmt.Errorf("accounting: snapshot schema %d is not %d", snapshot.SchemaVersion, SchemaVersion)
@@ -116,6 +126,12 @@ func (b *Book) Restore(snapshot Snapshot) error {
 		escrow.latest = stored.LatestNonce
 		escrow.retired = stored.Retired
 		maps.Copy(escrow.hostStats, stored.HostStats)
+		for slotID, activity := range stored.SlotActivity {
+			escrow.challenged[slotID] = activity.Challenged
+			escrow.validations[slotID] = activity.Validations
+			escrow.timeouts[slotID] = activity.TimeoutsApplied
+			escrow.rejected[slotID] = activity.Rejected
+		}
 		for _, counter := range stored.Counters {
 			escrow.counters[counter.CounterKey] += counter.Count
 		}
@@ -141,7 +157,7 @@ func (b *Book) Restore(snapshot Snapshot) error {
 				record.counted = &counted
 				continue
 			}
-			record.timeoutAction = TimeoutActionAbandoned
+			record.timeoutAction = engine.TimeoutActionAbandoned
 			escrow.reclassify(stored.Nonce, record)
 		}
 		restored[stored.Metadata.EscrowID] = escrow
@@ -153,9 +169,7 @@ func (b *Book) Restore(snapshot Snapshot) error {
 	return nil
 }
 
-// revisable says whether a nonce's disposition can still move. A burned or finished nonce cannot: no
-// later fact lifts it. An unfinished one can, because the protocol may finish it after the race that
-// gave up on it, and one still awaiting its timeout has no disposition yet.
+// Whether a nonce's disposition can still move. See README.md, "Storage".
 func revisable(record *nonceRecord) bool {
 	if record.counted == nil {
 		return true

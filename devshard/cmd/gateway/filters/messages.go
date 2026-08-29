@@ -14,8 +14,7 @@ const (
 	roleTool      = "tool"
 	roleFunction  = "function"
 
-	// emptyToolResultContent fills a role:"tool" message left with no content -- vLLM chat
-	// templates require some text in every tool turn.
+	// emptyToolResultContent fills an empty role:"tool" message -- vLLM chat templates require text in every tool turn.
 	emptyToolResultContent = "<empty tool result>"
 )
 
@@ -33,8 +32,7 @@ var (
 		roleFunction:  {disallowedFields: disallowedAgenticFields, requireName: true},
 	}
 
-	// messageNormalizerChain is fixed and order-sensitive. See gateway-request-filtering.md,
-	// "Message hygiene".
+	// messageNormalizerChain is fixed and order-sensitive. See README.md, "Message hygiene".
 	messageNormalizerChain = []messageNormalizer{
 		dropOrphanToolMessages,
 		dropEmptyAssistantTurns,
@@ -50,8 +48,7 @@ type messageRolePolicy struct {
 	requireToolCallID bool
 }
 
-// messageNormalizer rewrites the messages array before validateMessages runs, reporting
-// whether anything changed.
+// messageNormalizer rewrites the messages array before validateMessages, reporting whether anything changed.
 type messageNormalizer func(messages []any) ([]any, bool, error)
 
 func normalizeMessages(document *Document) error {
@@ -76,8 +73,7 @@ func normalizeMessages(document *Document) error {
 	return nil
 }
 
-// dropOrphanToolMessages removes role:"tool" entries whose tool_call_id has no matching
-// prior assistant tool_call, tracking pending ids the same way validateMessages does.
+// dropOrphanToolMessages removes role:"tool" entries whose tool_call_id has no matching prior assistant tool_call.
 func dropOrphanToolMessages(messages []any) ([]any, bool, error) {
 	pending := map[string]struct{}{}
 	filtered := make([]any, 0, len(messages))
@@ -116,8 +112,7 @@ func dropOrphanToolMessages(messages []any) ([]any, bool, error) {
 	return filtered, dropped, nil
 }
 
-// dropEmptyAssistantTurns removes role:"assistant" messages with no content and no
-// tool_calls/function_call -- informationless placeholders some clients resend.
+// dropEmptyAssistantTurns removes assistant messages with no content and no call -- placeholders some clients resend.
 func dropEmptyAssistantTurns(messages []any) ([]any, bool, error) {
 	filtered := make([]any, 0, len(messages))
 	dropped := false
@@ -136,8 +131,7 @@ func dropEmptyAssistantTurns(messages []any) ([]any, bool, error) {
 	return filtered, dropped, nil
 }
 
-// normalizeEmptyMessageContent fills empty role:"tool" content with the sentinel, and
-// nullifies empty role:"assistant" content that carries a tool/function call payload.
+// normalizeEmptyMessageContent fills empty tool content with the sentinel, and nullifies empty assistant content carrying a call.
 func normalizeEmptyMessageContent(messages []any) ([]any, bool, error) {
 	changed := false
 	for _, raw := range messages {
@@ -171,8 +165,7 @@ func normalizeEmptyMessageContent(messages []any) ([]any, bool, error) {
 	return messages, changed, nil
 }
 
-// stripLegacyToolName drops the legacy `name` field from role:"tool" messages, left over
-// from the retired role:"function" shape.
+// stripLegacyToolName drops the `name` field from role:"tool" messages, left over from the retired role:"function".
 func stripLegacyToolName(messages []any) ([]any, bool, error) {
 	changed := false
 	for _, raw := range messages {
@@ -192,8 +185,7 @@ func stripLegacyToolName(messages []any) ([]any, bool, error) {
 	return messages, changed, nil
 }
 
-// flattenMessageTextParts joins a content array of {type:"text",text} parts into one
-// newline-separated string; any other shape is left for validateMessages to reject.
+// flattenMessageTextParts joins {type:"text",text} parts into one string; other shapes are left for validateMessages.
 func flattenMessageTextParts(messages []any) ([]any, bool, error) {
 	changed := false
 	for index, raw := range messages {
@@ -253,8 +245,7 @@ func validateMessages(document *Document) error {
 	return nil
 }
 
-// validateMessageRoleFields checks the fields specific to one role: content is required
-// unless assistant carries tool_calls/function_call, plus each role's own required fields.
+// validateMessageRoleFields checks one role's own fields; content is required unless assistant carries a call.
 func validateMessageRoleFields(message map[string]any, index int, role string, policy messageRolePolicy, pendingToolCalls map[string]struct{}) error {
 	switch role {
 	case roleDeveloper, roleSystem, roleUser:
@@ -303,8 +294,7 @@ func validateMessageRoleFields(message map[string]any, index int, role string, p
 	return nil
 }
 
-// requiredNonEmptyStringField returns the trimmed-nonblank string at fields[key], or
-// describes why it's missing/wrong; the caller adds its own positional prefix.
+// requiredNonEmptyStringField returns the trimmed-nonblank string, or why it isn't; the caller adds the positional prefix.
 func requiredNonEmptyStringField(fields map[string]any, key string) (string, error) {
 	rawValue, exists := fields[key]
 	if !exists || rawValue == nil {
@@ -332,8 +322,7 @@ func optionalStringField(fields map[string]any, key string) error {
 	return nil
 }
 
-// ensureFieldsAbsent rejects the first of disallowed present in fields; an explicit null
-// still counts as present.
+// ensureFieldsAbsent rejects the first disallowed field present; an explicit null still counts as present.
 func ensureFieldsAbsent(fields map[string]any, disallowed ...string) error {
 	for _, key := range disallowed {
 		if _, exists := fields[key]; exists {
@@ -343,8 +332,7 @@ func ensureFieldsAbsent(fields map[string]any, disallowed ...string) error {
 	return nil
 }
 
-// validateNonEmptyContent accepts a non-blank string, or a non-empty array of
-// {type:"text",text} parts; anything else is rejected.
+// validateNonEmptyContent accepts a non-blank string, or a non-empty array of {type:"text",text} parts.
 func validateNonEmptyContent(content any) error {
 	switch value := content.(type) {
 	case string:
@@ -383,8 +371,7 @@ func validateRequiredContentField(message map[string]any) error {
 	return validateNonEmptyContent(content)
 }
 
-// validateAssistantContentField allows a missing/null content field when canBeEmpty (a
-// tool_calls or function_call payload is present); a present field is always shape-checked.
+// validateAssistantContentField allows a missing content when canBeEmpty; a present field is always shape-checked.
 func validateAssistantContentField(message map[string]any, canBeEmpty bool) error {
 	content, exists := message["content"]
 	if !exists || content == nil {
@@ -430,8 +417,7 @@ func combineTextContentParts(parts []any) (string, error) {
 	return strings.Join(texts, "\n"), nil
 }
 
-// isEmptyContent reports a blank string or a zero-length parts array; other shapes --
-// including nil, which means "missing" rather than "empty" -- are never empty.
+// isEmptyContent reports a blank string or an empty parts array; nil means "missing" rather than "empty".
 func isEmptyContent(content any) bool {
 	switch value := content.(type) {
 	case string:
@@ -461,8 +447,7 @@ func isAssistantTurnEmpty(message map[string]any) bool {
 	return isEmptyContent(content)
 }
 
-// validateToolCallsField validates message.tool_calls and returns its ids; a null value
-// is treated as absent and silently removed (some SDKs serialize empty slots that way).
+// validateToolCallsField validates tool_calls and returns its ids; a null is removed as absent (some SDKs serialize empty slots so).
 func validateToolCallsField(message map[string]any) ([]string, bool, error) {
 	rawToolCalls, exists := message["tool_calls"]
 	if !exists {
@@ -516,8 +501,7 @@ func validateToolCallsField(message map[string]any) ([]string, bool, error) {
 	return ids, true, nil
 }
 
-// validateFunctionCallField validates the legacy message.function_call field; a null
-// value is treated as absent and silently removed.
+// validateFunctionCallField validates the legacy function_call; a null value is removed as absent.
 func validateFunctionCallField(message map[string]any) (bool, error) {
 	rawFunctionCall, exists := message["function_call"]
 	if !exists {

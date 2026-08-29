@@ -6,8 +6,7 @@ import (
 	"devshard/cmd/gateway/store"
 )
 
-// LedgerSource is the accounting ledger's own count of what it wrote and what it lost; *store.Ledger
-// satisfies it.
+// LedgerSource is the accounting ledger's own count of what it wrote and lost; *store.Ledger satisfies it.
 type LedgerSource interface {
 	Stats() store.LedgerStats
 }

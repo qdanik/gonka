@@ -39,8 +39,7 @@ func loggedHosts(outcome engine.RaceOutcome) string {
 	return strings.Join(tried, ",")
 }
 
-// winnerOutputTokens is what the client actually received, which with the line's own timestamp is what
-// a measured output rate is computed from.
+// winnerOutputTokens is what the client actually received, which a measured output rate is computed from.
 func winnerOutputTokens(outcome engine.RaceOutcome) int64 {
 	for _, attempt := range outcome.Attempts {
 		if outcome.IsWinner(attempt) {
@@ -50,10 +49,7 @@ func winnerOutputTokens(outcome engine.RaceOutcome) int64 {
 	return 0
 }
 
-// logRequestFinished answers the one question a finished request can no longer be asked: how much
-// reached the client and whether the terminator went with it. A delivery error is the difference
-// between a reply the client read and one it is still waiting out its own timeout for.
-// Input tokens ride along because every escalation deadline is computed from them.
+// logRequestFinished records what a finished request can no longer be asked. See README.md, "What a finished request records".
 func logRequestFinished(requestID string, normalized filters.Result, outcome engine.RaceOutcome, verdict string, stream *clientStream, elapsed time.Duration, raceErr, deliverErr error) {
 	written, terminated := stream.delivered()
 	fields := []any{
@@ -85,8 +81,7 @@ func logRequestFinished(requestID string, normalized filters.Result, outcome eng
 	logging.Info("request finished", fields...)
 }
 
-// estimatePromptTokens is the limiter's and the perf buckets' input size, not a tokenizer call. See
-// gateway-request-lifecycle.md, "6. Admission to capacity".
+// estimatePromptTokens is an input size, not a tokenizer call. See README.md, "What the boundary hands the engine".
 func estimatePromptTokens(body []byte) uint64 {
 	if estimated := (len(body) + 3) / 4; estimated > 0 {
 		return uint64(estimated)

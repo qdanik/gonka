@@ -2,7 +2,10 @@ package accounting
 
 import (
 	"reflect"
+	"slices"
 	"testing"
+
+	"devshard/types"
 )
 
 // Every recording path writes into a map and has no error to return if that map is nil, so a restored
@@ -35,5 +38,36 @@ func TestEveryMapOfAnEscrowLedgerIsBuilt(t *testing.T) {
 		if field.Kind() == reflect.Map && field.IsNil() {
 			t.Errorf("escrowLedger.%s is nil: the first write to it panics", ledger.Type().Field(i).Name)
 		}
+	}
+}
+
+// The chain's side of the cross-check is restored from host stats; the gateway's side is these four
+// per-slot counts. Restoring one without the other reads every applied timeout as a nonce the chain
+// counted and the gateway did not, so a restart alone raises a disagreement no host behaviour produces.
+func TestARestartDoesNotInventADisagreementWithTheChain(t *testing.T) {
+	book := newTestBook(t, 1)
+	if err := book.ObserveLatestNonce(testEscrow, 40); err != nil {
+		t.Fatalf("ObserveLatestNonce(): %v", err)
+	}
+	for nonce := uint64(1); nonce <= 30; nonce++ {
+		if err := book.RecordAppliedTimeout(testEscrow, nonce); err != nil {
+			t.Fatalf("RecordAppliedTimeout(%d): %v", nonce, err)
+		}
+	}
+	if err := book.ObserveHostStats(testEscrow, 0, types.HostStats{Missed: 30}); err != nil {
+		t.Fatalf("ObserveHostStats(): %v", err)
+	}
+	if codes := codesOf(findingsFor(book.Query(QueryFilter{})[0])); slices.Contains(codes, FindingChainDisagreement) {
+		t.Fatalf("findings %v disagree with the chain before any restart", codes)
+	}
+
+	restored := saveAndReload(t, book, openTestStore(t))
+
+	records := restored.Query(QueryFilter{})
+	if len(records) != 1 {
+		t.Fatalf("Query() returned %d records, want the one participant", len(records))
+	}
+	if codes := codesOf(findingsFor(records[0])); slices.Contains(codes, FindingChainDisagreement) {
+		t.Errorf("findings %v report a disagreement the restart invented", codes)
 	}
 }

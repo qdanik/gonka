@@ -103,7 +103,7 @@ func TestAWarmupProbeWithNoPosterIsRecordedAsSkipped(t *testing.T) {
 	if len(timeouts.events) != 1 || timeouts.events[0].Action != engine.TimeoutActionSkipped {
 		t.Fatalf("recorded %+v, want one skipped event", timeouts.events)
 	}
-	if got := timeouts.events[0].Reason; got != timeoutNoPoster {
-		t.Errorf("reason = %q, want %q", got, timeoutNoPoster)
+	if got := timeouts.events[0].Reason; got != engine.TimeoutReasonNoPoster {
+		t.Errorf("reason = %q, want %q", got, engine.TimeoutReasonNoPoster)
 	}
 }

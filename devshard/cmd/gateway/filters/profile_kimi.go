@@ -5,7 +5,7 @@ const (
 	kimiThinkingBudgetForceZeroBelow uint64 = 256
 )
 
-// kimiProfile is Kimi's delta set. See gateway-request-filtering.md, "Model profiles".
+// kimiProfile is Kimi's delta set. See README.md, "Model profiles".
 var kimiProfile = &Profile{
 	Models:                 []string{kimiModelID},
 	ForceZeroPenalties:     true,

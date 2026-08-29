@@ -6,8 +6,7 @@ import (
 	"time"
 )
 
-// Decision is match's total outcome for one nonce: exactly one of serve, burn, hold, or decline. See
-// gateway-invariants.md, "1. A committed nonce is always settled".
+// Decision is match's total outcome for one nonce: exactly one of serve, burn, hold, or decline. See rules.md, "1. A committed nonce is always settled".
 type Decision interface{ isDecision() }
 
 type serve struct {
@@ -16,12 +15,10 @@ type serve struct {
 }
 type burn struct{ kind GhostKind }
 
-// hold declines the bound nonce without committing it until until, giving a co-arriving
-// compatible waiter a chance before the nonce is burned.
+// hold leaves the bound nonce uncommitted until then, giving a compatible waiter a chance. See README, "The match decision".
 type hold struct{ until time.Time }
 
-// decline gives the nonce back uncommitted: with no live waiter left, a burn would spend a
-// chain-costed nonce on nobody, under a reason that never happened.
+// decline gives the nonce back uncommitted: with no live waiter, a burn would name a reason that never happened.
 type decline struct{}
 
 func (serve) isDecision()   {}
@@ -29,9 +26,7 @@ func (burn) isDecision()    {}
 func (hold) isDecision()    {}
 func (decline) isDecision() {}
 
-// waiter is one request queued on an escrow's dispatcher, waiting for a compatible nonce. abandoned is how a
-// cancelled caller leaves the queue, never a message the actor has to receive; handoff orders deliver against
-// abandon. See gateway-routing-and-nonces.md, "The per-escrow dispatcher".
+// waiter is one request queued on an escrow's dispatcher; handoff orders deliver against abandon. See routing.md, "The per-escrow dispatcher".
 type waiter struct {
 	profile   RequestProfile
 	exclude   map[string]bool

@@ -8,9 +8,7 @@ import (
 	"time"
 )
 
-// upsertDevshardStatement lives apart from its caller so a test can read which columns the update
-// carries: a field added to DevshardRecord that nobody adds here is inserted once and never updated
-// again, and nothing else in the package fails when that happens.
+// Apart from its caller so a test can read which columns the update carries. See README.md, "The devshard registry".
 const upsertDevshardStatement = `
 		INSERT INTO devshards (escrow_id, private_key_env, model, active, rotation_role, rotation_epoch, settlement_pending, settle_tx_hash, route_prefix)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -26,8 +24,7 @@ const upsertDevshardStatement = `
 // ErrDevshardNotFound is returned by updates/deletes that match no row.
 var ErrDevshardNotFound = errors.New("devshard not found")
 
-// DevshardRecord is one row of the devshard registry. Private keys are never
-// stored — only the name of the environment variable that holds the key.
+// DevshardRecord is one row of the registry; private keys are never stored, only the env var name that holds one.
 type DevshardRecord struct {
 	EscrowID          string `json:"escrow_id"`
 	PrivateKeyEnv     string `json:"private_key_env"`
@@ -40,10 +37,7 @@ type DevshardRecord struct {
 	RoutePrefix       string `json:"route_prefix"`
 }
 
-// UpsertDevshard replaces every field of an existing row except two. settlement_pending is left alone
-// so an unrelated upsert never clears a queued settlement; only SetDevshardSettlementPending moves it.
-// route_prefix is left alone because a host binds an escrow to the first version that reaches it and
-// refuses every other one for good, so the version an escrow was created under must never change.
+// UpsertDevshard replaces every field except settlement_pending and route_prefix. See README.md, "The devshard registry".
 func (s *Store) UpsertDevshard(ctx context.Context, record DevshardRecord) error {
 	_, err := s.db.ExecContext(ctx, upsertDevshardStatement,
 		record.EscrowID, record.PrivateKeyEnv, record.Model, record.Active,
@@ -88,9 +82,7 @@ func (s *Store) SetDevshardSettlementPending(ctx context.Context, escrowID strin
 	return s.updateDevshardField(ctx, `UPDATE devshards SET settlement_pending = ?, updated_at = datetime('now') WHERE escrow_id = ?`, pending, escrowID)
 }
 
-// ParkForSettlement takes the escrow out of service and marks it pending in one statement. Written as
-// two, a crash between them leaves the row inactive and not pending, which no recovery path picks up:
-// settlePending looks for pending rows, so the escrow would be out of service and never settled.
+// ParkForSettlement deactivates and marks pending in one statement, because no recovery path picks up inactive-and-not-pending.
 func (s *Store) ParkForSettlement(ctx context.Context, escrowID string) error {
 	result, err := s.db.ExecContext(ctx,
 		`UPDATE devshards SET active = 0, settlement_pending = 1, updated_at = datetime('now') WHERE escrow_id = ?`,
@@ -128,9 +120,7 @@ func requireOneRow(result sql.Result, escrowID string) error {
 	return nil
 }
 
-// DevshardSettleTxHash reads the hash from the row rather than from a record the caller is holding: a
-// tick loads its escrows once and several steps settle from that one slice, so a copy taken at the top
-// no longer says what an earlier step in the same tick broadcast.
+// DevshardSettleTxHash reads from the row, not from the caller's copy, which predates what an earlier step in the same tick broadcast.
 func (s *Store) DevshardSettleTxHash(ctx context.Context, escrowID string) (hash string, broadcastAt time.Time, err error) {
 	var stamp string
 	err = s.WithRetry(ctx, func() error {
@@ -149,16 +139,13 @@ func (s *Store) DevshardSettleTxHash(ctx context.Context, escrowID string) (hash
 	return hash, broadcastAt, nil
 }
 
-// SetDevshardRotationRole moves one escrow between roles without touching anything else. A whole-record
-// upsert would carry the caller's copy of active and settle_tx_hash back into the row, and a tick loads
-// its escrows once: the copy predates whatever an earlier step in the same tick wrote.
+// SetDevshardRotationRole touches nothing else: a whole-record upsert would carry the caller's stale copy back into the row.
 func (s *Store) SetDevshardRotationRole(ctx context.Context, escrowID, role string) error {
 	return s.updateDevshardField(ctx,
 		`UPDATE devshards SET rotation_role = ?, updated_at = datetime('now') WHERE escrow_id = ?`, role, escrowID)
 }
 
-// SetDevshardSettleTxHash records the transaction a settle broadcast, so a tick that finds the row
-// still pending can ask the chain what happened to it instead of building a second one.
+// SetDevshardSettleTxHash records what a settle broadcast, so a later tick can ask the chain about it instead of building a second one.
 func (s *Store) SetDevshardSettleTxHash(ctx context.Context, escrowID, txHash string) error {
 	result, err := s.db.ExecContext(ctx,
 		`UPDATE devshards SET settle_tx_hash = ?, settle_tx_at = CASE WHEN ? = '' THEN '' ELSE datetime('now') END, updated_at = datetime('now') WHERE escrow_id = ?`,

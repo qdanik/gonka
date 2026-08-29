@@ -33,8 +33,7 @@ func (c *PerfCollector) Describe(ch chan<- *prometheus.Desc) {
 	ch <- c.decode
 }
 
-// Collect reports in-flight once per participant: the tracker counts it per participant while
-// ejection is per participant and model, and a repeated label set is a duplicate series.
+// Collect reports in-flight once per participant; ejection is per model, so the loop would duplicate it.
 func (c *PerfCollector) Collect(ch chan<- prometheus.Metric) {
 	reported := map[string]struct{}{}
 	for _, host := range c.hosts.Snapshot() {

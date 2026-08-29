@@ -5,9 +5,7 @@ import (
 	"time"
 )
 
-// replayCredit holds the one catch-up replay a participant gets on an escrow before a state-root
-// divergence blocks it. A host rolls its diff back when its root disagrees, so its state survives the
-// refusal intact and replaying the retained chain costs one request to try.
+// replayCredit holds the one catch-up replay a participant gets on an escrow. See README, "Divergence and the replay credit".
 type replayCredit struct {
 	mu    sync.Mutex
 	spent map[string]map[string]time.Time
@@ -32,9 +30,7 @@ func (c *replayCredit) spend(escrowID, participant string, at time.Time) bool {
 	return true
 }
 
-// restore returns the replay to a participant that served since it was taken. Requests to one
-// participant overlap, so a send that started before the replay proves nothing about the replayed
-// state and must not return the credit.
+// restore returns the replay only for a send that started after it was taken: overlapping sends prove nothing.
 func (c *replayCredit) restore(escrowID, participant string, sentAt time.Time) {
 	c.mu.Lock()
 	defer c.mu.Unlock()

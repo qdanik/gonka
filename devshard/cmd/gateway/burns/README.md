@@ -20,4 +20,4 @@ It does not decide that a nonce is burned — that is [`scheduler`](../scheduler
 
 ## Read next
 
-- [`docs/gateway-routing-and-nonces.md`](../docs/gateway-routing-and-nonces.md) — why a nonce is burned in the first place, and the reason each burn carries.
+- [`docs/routing.md`](../docs/routing.md) — why a nonce is burned in the first place, and the reason each burn carries.

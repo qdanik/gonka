@@ -453,10 +453,11 @@ func TestDispatcherConservesNonceAcrossWaiters(t *testing.T) {
 	}
 }
 
-func TestDispatcherSweepsExhaustedWaiterWithoutAdvancing(t *testing.T) {
-	test := newHarness(t, harnessConfig{})
+// A host no participant can reach is a dead end, and answering it costs no nonce at all.
+func TestDispatcherSweepsAnUnreachableWaiterWithoutAdvancing(t *testing.T) {
+	test := newHarness(t, harnessConfig{ejected: func(string) bool { return true }})
 
-	queued := test.submit(t, test.clock.Now(), hostA, hostB)
+	queued := test.submit(t, test.clock.Now())
 
 	if result := awaitReply(t, queued); !errors.Is(result.err, ErrNoAvailableHost) {
 		t.Fatalf("err = %v, want ErrNoAvailableHost", result.err)
@@ -470,6 +471,24 @@ func TestDispatcherSweepsExhaustedWaiterWithoutAdvancing(t *testing.T) {
 	if test.session.LatestNonce() != 0 {
 		t.Fatalf("nonce = %d, want 0", test.session.LatestNonce())
 	}
+}
+
+// A host the request itself excluded is not a dead end. Sweeping the waiter out here fails the one
+// request the exclusion rescue exists for, which is why that rescue was unreachable from the day it
+// was written: the sweep judged the waiter one statement earlier, on the same ladder.
+func TestAWaiterEveryHostExcludedIsServedRatherThanFailed(t *testing.T) {
+	test := newHarness(t, harnessConfig{})
+
+	queued := test.submit(t, test.clock.Now().Add(-2*matchWaitWindow), hostA, hostB)
+
+	result := awaitReply(t, queued)
+	if result.err != nil {
+		t.Fatalf("err = %v, want the nonce spent on an attempt rather than on nobody", result.err)
+	}
+	if result.assignment.Nonce == nil {
+		t.Fatal("the waiter was answered without a nonce to dispatch")
+	}
+	test.dispatcher.stop()
 }
 
 func TestDispatcherHoldsNonceForCoArrivingWaiter(t *testing.T) {

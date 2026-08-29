@@ -120,3 +120,23 @@ func TestCapabilityTrackerConcurrentAccessIsRaceFree(t *testing.T) {
 		}
 	}
 }
+
+// The report names the tightest context a host has admitted to. Keeping the latest lets one refusal at
+// a larger size erase the smaller bound, and the operator reads a limit the host has already denied.
+func TestTheReportedContextLimitIsTheSmallestRefusal(t *testing.T) {
+	tracker := newCapabilityTracker()
+
+	tracker.recordContextLimit("host-a", "model-a", 16_000)
+	previous, changed := tracker.recordContextLimit("host-a", "model-a", 32_000)
+
+	if changed {
+		t.Errorf("a larger refusal reported a change from %d: it does not lift the smaller bound", previous)
+	}
+	limit, _, _, refusals := tracker.capability("host-a", "model-a")
+	if limit != 16_000 {
+		t.Errorf("context limit = %d, want the smallest refusal 16000", limit)
+	}
+	if refusals != 2 {
+		t.Errorf("context refusals = %d, want both counted", refusals)
+	}
+}

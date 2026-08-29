@@ -10,8 +10,7 @@ import (
 	"time"
 )
 
-// storedTimeLayout is fixed-width where RFC3339Nano is not: retention compares and orders timestamps
-// as text, and a trimmed fraction makes byte order disagree with time order.
+// Fixed-width where RFC3339Nano is not, because retention orders timestamps as text. See README.md, "Timestamps".
 const storedTimeLayout = "2006-01-02T15:04:05.000000000Z07:00"
 
 type RequestOutcome string
@@ -142,8 +141,7 @@ func (l *Ledger) Stats() LedgerStats {
 	}
 }
 
-// Close drains what is queued; a row shed under load or lost to a write failure is counted in Stats
-// and never fails the close. See gateway-request-lifecycle.md, "10. Recording".
+// Close drains what is queued; a lost row is counted in Stats, never returned. See README.md, "The accounting ledger".
 func (l *Ledger) Close() error {
 	l.mu.Lock()
 	alreadyClosed := l.closed
@@ -171,9 +169,7 @@ func (l *Ledger) run() {
 		} else {
 			l.written.Add(1)
 		}
-		// Swept whatever the insert did: a persistently failing insert is exactly when rows are least
-		// likely to be deleted and most likely to need it, and gating retention behind success turns a
-		// write problem into an unbounded table.
+		// Swept whatever the insert did: gating retention behind success turns a write problem into an unbounded table.
 		if now := l.now(); l.lastSweep.IsZero() || now.Sub(l.lastSweep) >= retentionSweepEvery {
 			l.sweep(now)
 		}
@@ -204,9 +200,7 @@ func (l *Ledger) insert(record RequestRecord) error {
 func (l *Ledger) sweep(now time.Time) {
 	l.lastSweep = now
 	cutoff := FormatTime(now.Add(-l.retention.MaxAge))
-	// The two bounds are attempted independently: the row cap is the disk-fill guard, and a busy lock
-	// on the age delete must not be what stops it running. A sweep that cannot delete leaves the
-	// ledger growing past both bounds, so each failure is counted rather than dropped.
+	// Independent, so a busy lock on the age delete cannot stop the row cap running. See README.md, "Retention".
 	if _, err := l.store.db.Exec(`DELETE FROM request_accounting WHERE recorded_at < ?`, cutoff); err != nil {
 		l.sweepFailed.Add(1)
 	}
@@ -258,10 +252,7 @@ func (s *Store) FindRequest(ctx context.Context, requestID string) (RequestRecor
 	return record, true, nil
 }
 
-// FormatTime renders a timestamp for storage and for the accounting API, so the retention cutoff and
-// the rows it compares against can never drift in precision or zone. The fraction is fixed-width
-// because retention compares and orders these as text: RFC3339Nano trims trailing zeros, so a whole
-// second sorts after the same second plus a tenth, and the sweep prunes by the wrong order.
+// FormatTime renders every stored timestamp and the accounting API's, so the retention cutoff cannot drift from the rows it compares. See README.md, "Timestamps".
 func FormatTime(value time.Time) string {
 	if value.IsZero() {
 		return ""

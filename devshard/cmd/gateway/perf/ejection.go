@@ -48,8 +48,7 @@ func (s *ejectionState) ejected(now time.Time) bool {
 	return now.Before(s.ejectedUntil)
 }
 
-// decayEjectionCount relaxes one rung per full healthy window since the last
-// ejection ended, advancing the anchor so it can't cascade faster than that.
+// decayEjectionCount relaxes one rung per healthy window, advancing the anchor so it can't cascade.
 func (s *ejectionState) decayEjectionCount(window time.Duration, now time.Time) {
 	for s.ejectionCount > 0 && !s.ejectedUntil.IsZero() && now.Sub(s.ejectedUntil) >= window {
 		s.ejectionCount--

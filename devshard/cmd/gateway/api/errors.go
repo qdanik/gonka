@@ -128,8 +128,7 @@ func statusForError(err error) int {
 	if errors.As(err, &blocked) {
 		return http.StatusServiceUnavailable
 	}
-	// Our own limiter is a quota the caller exceeded, which is 429; capacity and a busy escrow are the
-	// shard having no room, which is 503. The old gateway drew the line in the same place.
+	// Our limiter is a quota the caller exceeded (429); no room on the shard is not. See README.md, "Errors and statuses".
 	if _, ours := rateLimited(err); ours {
 		return http.StatusTooManyRequests
 	}
@@ -169,8 +168,7 @@ func writeError(w http.ResponseWriter, status int, message string) {
 	writeJSON(w, status, errorEnvelope{Error: errorDetail{Message: message}})
 }
 
-// writeControlFailure is deliberately not writeErrorFor: that one answers 502 for an unrecognised
-// error, which is wrong for a store this process owns.
+// writeControlFailure is deliberately not writeErrorFor: 502 is wrong for a store this process owns.
 func writeControlFailure(w http.ResponseWriter, err error) bool {
 	if err == nil {
 		return false
@@ -179,8 +177,7 @@ func writeControlFailure(w http.ResponseWriter, err error) bool {
 	return true
 }
 
-// rateLimited reports the gateway limiter's own rejection: the status, the Retry-After header and the
-// counter that names which cap was hit all ask for it.
+// rateLimited singles out the gateway limiter's own rejection: the status, Retry-After and the counter all ask for it.
 func rateLimited(err error) (*limits.RateLimitError, bool) {
 	var throttled *limits.RateLimitError
 	if errors.As(err, &throttled) {
@@ -196,8 +193,7 @@ func shardHasNoRoom(err error) bool {
 		errors.Is(err, ErrResponseBufferFull)
 }
 
-// Retry-After is rounded up: a zero would tell a client to retry immediately, the opposite of what a
-// queue timeout means.
+// Retry-After is rounded up: a zero would tell a client to retry immediately, which a queue timeout does not mean.
 func writeErrorFor(w http.ResponseWriter, err error) {
 	throttled, ours := rateLimited(err)
 	switch {
@@ -222,8 +218,7 @@ func writeJSON(w http.ResponseWriter, status int, payload any) {
 	_, _ = w.Write(append(body, '\n'))
 }
 
-// Bounds host-controlled text in a log line: a HostApplicationError with no message renders its whole
-// upstream payload.
+// Bounds host-controlled text in a log line: a message-less HostApplicationError renders its whole payload.
 const maxLoggedErrorBytes = 256
 
 // adminFailure exists because auditAdmin records only the successful path.

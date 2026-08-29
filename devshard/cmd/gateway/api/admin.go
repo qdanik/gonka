@@ -67,8 +67,7 @@ func (s *Server) handleAdminSettings(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, overrides)
 }
 
-// auditAdmin records an operator action that changed state the gateway serves or settles from. It
-// carries the action and its subject, never the body: an override payload can hold the admin key.
+// auditAdmin carries the action and its subject, never the body: an override payload can hold the admin key.
 func auditAdmin(action string, fields ...any) {
 	logging.Info("admin: "+action, fields...)
 }

@@ -20,9 +20,7 @@ type BodyFolder struct {
 	sinceMeasure int64
 }
 
-// Merging collapses what the events repeat, so the accumulated size is measured rather than summed.
-// The trigger is bytes rather than events: an event can carry a megabyte, and a count-based interval
-// would leave that much unaccounted while the cap and the shared budget read low.
+// Re-measure interval, in merged bytes rather than events. See README.md, "Folding a stream into one body".
 const foldMeasureBytes = 256 << 10
 
 func NewBodyFolder(intent LogprobIntent) *BodyFolder {
@@ -99,8 +97,7 @@ func (f *BodyFolder) fold(event []byte) {
 	}
 }
 
-// measure re-encodes the accumulator without finalising it: finalising rewrites the deltas the fold is
-// still appending to.
+// measure re-encodes without finalising: finalising rewrites the deltas the fold is still appending to.
 func (f *BodyFolder) measure() {
 	f.sinceMeasure = 0
 	if f.merged == nil {

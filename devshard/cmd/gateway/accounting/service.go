@@ -33,9 +33,7 @@ type Settings struct {
 	Now              func() time.Time
 }
 
-// NewService restores any stored ledger and starts the snapshot and retention loops. A snapshot that
-// cannot be read is reported and the ledger starts empty: refusing to start over an unreadable
-// observability file would trade a gateway for a graph.
+// An unreadable snapshot is reported and the ledger starts empty: a graph must not cost a gateway.
 func NewService(settings Settings) (*Service, error) {
 	if settings.SnapshotInterval <= 0 {
 		settings.SnapshotInterval = defaultSnapshotInterval
@@ -103,8 +101,7 @@ func (s *Service) prune(ctx context.Context) {
 	s.Book.PruneBefore(epoch - s.retentionEpochs)
 }
 
-// ResetEpoch clears one epoch and writes the ledger out, so a restart cannot restore what an
-// operator just cleared.
+// Writes the ledger out, so a restart cannot restore what an operator just cleared.
 func (s *Service) ResetEpoch(epoch uint64) (int, error) {
 	if s == nil || s.Book == nil {
 		return 0, nil

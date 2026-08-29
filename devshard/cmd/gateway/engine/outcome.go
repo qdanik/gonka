@@ -12,29 +12,13 @@ import (
 )
 
 const (
-	// Label values the engine emits. metrics reads these rather than restating them. See
-	// gateway-invariants.md, "10. Labels, ordering and determinism".
-	AttemptOutcomeSuccess = "success"
-	AttemptOutcomeFailed  = "failed"
-
-	VisibilityWinner            = "user_visible_winner"
-	VisibilityWinnerClientGone  = "winner_client_gone"
-	VisibilityNoWinner          = "no_winner"
-	VisibilitySuppressedLoser   = "suppressed_loser"
-	VisibilityFailedNotFinished = "failed_not_finished"
-
-	// reasonCrownDenied names an answer that arrived complete and was given to nobody.
-	reasonCrownDenied = "crown_denied"
-
 	longResponseExemption = 280 * time.Second
 
-	// Below this an empty stream is the model's output; at or above it the host held the request past the
-	// refusal point and returned nothing.
+	// Below this an empty stream is the model's output; at or above it the host held it past the refusal point.
 	emptyStreamHeldTooLong = types.DefaultRefusalTimeoutSeconds * time.Second
 )
 
-// Terminal is an attempt's classified end state. Every downstream vocabulary — limiter verdict,
-// perf sample, metric label — is a total function of it. See gateway-speculative-race.md, "The outcome".
+// Terminal is an attempt's classified end state; every downstream vocabulary is a total function of it. See race.md, "The outcome".
 type Terminal int
 
 const (
@@ -46,8 +30,7 @@ const (
 	TerminalForbidden
 	TerminalNotFound
 	TerminalTimestampDrift
-	// TerminalRejected is every other upstream status, 400 and 500 included. See
-	// gateway-speculative-race.md, "The outcome".
+	// TerminalRejected is every other upstream status, 400 and 500 included. See race.md, "The outcome".
 	TerminalRejected
 	TerminalOffPath
 	TerminalDialFailure
@@ -66,8 +49,6 @@ const (
 
 var (
 	// terminalStatuses is the one table linking an upstream status to the terminal it produces.
-	// StatusFor reads it forward for metrics and classifyDispatchError reads the derived inverse, so
-	// the two cannot disagree about which status a label describes.
 	terminalStatuses = map[Terminal]int{
 		TerminalThrottled:      http.StatusTooManyRequests,
 		TerminalUnavailable:    http.StatusServiceUnavailable,
@@ -76,8 +57,7 @@ var (
 		TerminalTimestampDrift: http.StatusUnauthorized,
 	}
 
-	// terminalForStatus is the inverse, built once so a status can never map to one terminal going out
-	// and a different one coming back.
+	// terminalForStatus is the derived inverse, so the two directions cannot disagree.
 	terminalForStatus = func() map[int]Terminal {
 		inverse := make(map[int]Terminal, len(terminalStatuses))
 		for terminal, status := range terminalStatuses {
@@ -87,8 +67,7 @@ var (
 	}()
 )
 
-// StatusFor reports the upstream status a terminal was recovered from, and false for the terminals
-// that never carried one.
+// StatusFor reports the upstream status a terminal was recovered from, false for those that carried none.
 func StatusFor(terminal Terminal) (int, bool) {
 	status, known := terminalStatuses[terminal]
 	return status, known
@@ -132,10 +111,7 @@ type RaceOutcome struct {
 	Lifecycle       Lifecycle
 }
 
-// AttemptOutcome is what one attempt ended up doing. ErrorPayload holds the host's own error event
-// verbatim, so a refusal reaches the client unrewritten. StartedAt is the race's, not the attempt's:
-// verifiers recompute a refusal deadline from the committed record, so every nonce a request commits
-// must carry the one stamp, dispatched or stranded.
+// AttemptOutcome is what one attempt ended up doing; StartedAt is the race's, not the attempt's. See README, "Timeout votes".
 type AttemptOutcome struct {
 	Participant string
 	HostIdx     int
@@ -187,9 +163,7 @@ type AttemptOutcome struct {
 
 const executorStampTruncation = time.Second
 
-// The stamp landed somewhere inside the round trip, so it is compared against that window's midpoint
-// rather than the dispatch, which would charge the host for the outbound leg; half a second is added
-// back because the executor stamps whole seconds downward.
+// The stamp landed inside the round trip, so it is compared against that window's midpoint. See README, "Measurements".
 func ClockOffset(attempt AttemptOutcome) (time.Duration, bool) {
 	if attempt.ConfirmedAt == 0 || attempt.SendTime.IsZero() || !attempt.ReceiptTime.After(attempt.SendTime) {
 		return 0, false
@@ -224,9 +198,7 @@ func (t Terminal) verdict() (limits.Verdict, bool) {
 	return limits.ModelOutcome, false
 }
 
-// String names the terminal. reason() answers a different question -- why an attempt failed -- and is
-// empty for the two outcomes that are not failures, which failureReason relies on to fall through.
-// The failure names come from reason() rather than a second list, so the two cannot drift apart.
+// String names the terminal, taking failure names from reason() rather than a second list.
 func (t Terminal) String() string {
 	switch t {
 	case TerminalWon:
@@ -295,8 +267,7 @@ func (a AttemptOutcome) elapsed() time.Duration {
 	return a.Completed.Sub(a.SendTime)
 }
 
-// longResponseExempt gates on ContentSource, not ContentChunks, which counts error events too. See
-// gateway-invariants.md, "1. A committed nonce is always settled".
+// longResponseExempt gates on ContentSource, not ContentChunks, which counts error events too. See rules.md, "1. A committed nonce is always settled".
 func (o RaceOutcome) longResponseExempt(a AttemptOutcome) bool {
 	if a.Terminal == TerminalHardTimeout {
 		return false
@@ -304,22 +275,17 @@ func (o RaceOutcome) longResponseExempt(a AttemptOutcome) bool {
 	return !a.NonceFinished && a.ContentSource != "" && a.elapsed() >= longResponseExemption
 }
 
-// responsive decides whether a host earns a positive perf sample. A long non-stream reply is exempt
-// from being judged slow, but an empty one earns nothing: crediting a host that held the request for
-// the whole window and returned no content teaches the router to prefer it. See
-// gateway-speculative-race.md, "The exemption ladder".
+// responsive decides whether a host earns a positive perf sample. See race.md, "The exemption ladder".
 func (o RaceOutcome) responsive(a AttemptOutcome) bool {
 	return a.Confirmed && a.NonceFinished && !a.emptyStream()
 }
 
-// sampleExemption is the whole ladder: the ordered reasons an attempt contributes no perf sample,
-// and therefore never counts toward its host's ejection.
+// sampleExemption is the whole ladder of reasons an attempt contributes no perf sample. See README, "The exemption ladder".
 func (o RaceOutcome) sampleExemption(a AttemptOutcome) SampleExemption {
 	switch {
 	case a.SendTime.IsZero():
 		return ExemptNeverDispatched
-	// An attempt that never reported is one the race stopped listening for, so it says nothing about
-	// the host: judging it would charge a host for our own cancellation.
+	// An attempt that never reported says nothing about the host: judging it would charge our own cancellation.
 	case a.Terminal == TerminalUnclassified:
 		return ExemptNeverReported
 	case a.PhaseTransitionAborted:
@@ -334,8 +300,7 @@ func (o RaceOutcome) sampleExemption(a AttemptOutcome) SampleExemption {
 		return ExemptPoCSuppressed
 	case a.emptyStream() && !o.Succeeded:
 		return ExemptEmptyStreamNoWinner
-	// The race cancels its own losers; the sample and verdict ladders deliberately disagree here. See
-	// gateway-speculative-race.md, "The exemption ladder".
+	// The race cancels its own losers; the sample and verdict ladders deliberately disagree here. See race.md, "The exemption ladder".
 	case a.Terminal == TerminalClientCancelled:
 		return ExemptClientCancelled
 	}
@@ -374,8 +339,29 @@ func (o RaceOutcome) Verdict(a AttemptOutcome) (limits.Verdict, bool) {
 	return a.Terminal.verdict()
 }
 
-// DeniesCrowning reports that a host produced nothing while claiming to serve. See
-// gateway-speculative-race.md, "Crown denial".
+// observeCrowning reports only the attempts that say something about the host.
+func (o RaceOutcome) observeCrowning(crown crownGate) {
+	if crown == nil {
+		return
+	}
+	for _, attempt := range o.Attempts {
+		if !o.JudgesCrowning(attempt) {
+			continue
+		}
+		crown.Observe(attempt.Participant, o.Model, o.DeniesCrowning(attempt))
+	}
+}
+
+// JudgesCrowning reports that this attempt says something about the host's crowning. See README, "Crown denial".
+func (o RaceOutcome) JudgesCrowning(a AttemptOutcome) bool {
+	if a.PhaseTransitionAborted || o.PoCBypassActive {
+		return false
+	}
+	return a.Terminal == TerminalEmptyStream ||
+		((a.Terminal == TerminalWon || a.Terminal == TerminalLost) && o.responsive(a))
+}
+
+// DeniesCrowning reports that a host produced nothing while claiming to serve. See race.md, "Crown denial".
 func (o RaceOutcome) DeniesCrowning(a AttemptOutcome) bool {
 	if a.PhaseTransitionAborted || o.PoCBypassActive {
 		return false
@@ -422,15 +408,14 @@ func (o RaceOutcome) visibility(a AttemptOutcome, served bool) string {
 	return VisibilityFailedNotFinished
 }
 
-// IsWinner is the one test for "this attempt won the race". Whether a client was still there to receive
-// it is Lifecycle.ClientGone, which visibility reads: the race outlives the client on purpose.
+// IsWinner is the one test for "this attempt won the race"; whether a client saw it is Lifecycle.ClientGone.
 func (o RaceOutcome) IsWinner(a AttemptOutcome) bool {
 	return o.WinnerNonce != 0 && a.Nonce == o.WinnerNonce
 }
 
 func (o RaceOutcome) failureReason(a AttemptOutcome) string {
 	if a.PhaseTransitionAborted {
-		return timeoutReasonPhaseAborted
+		return TimeoutReasonPhaseAborted
 	}
 	if reason := a.Terminal.reason(); reason != "" {
 		return reason

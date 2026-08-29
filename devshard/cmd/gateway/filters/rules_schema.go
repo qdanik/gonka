@@ -8,8 +8,7 @@ import (
 var (
 	responseFormatNameRegex = regexp.MustCompile(`^[A-Za-z0-9_.-]+$`)
 
-	// structuredOutputsConstraintFields are mutually exclusive per vLLM's
-	// StructuredOutputsParams.__post_init__ rule: exactly one must be set.
+	// structuredOutputsConstraintFields are mutually exclusive per vLLM's StructuredOutputsParams.__post_init__.
 	structuredOutputsConstraintFields = []string{"json", "regex", "choice", "grammar", "json_object", "structural_tag"}
 
 	// structuredOutputsAuxiliaryFields may accompany any single constraint field.
@@ -20,8 +19,7 @@ var (
 
 	structuredOutputsKnownFields = buildStructuredOutputsKnownFields()
 
-	// forbiddenChatTemplateKwargsKeys override apply_hf_chat_template's positional arguments
-	// instead of becoming template variables — known CVE vectors; add_generation_prompt is not banned.
+	// forbiddenChatTemplateKwargsKeys override apply_hf_chat_template's positional arguments; add_generation_prompt is not banned.
 	forbiddenChatTemplateKwargsKeys = map[string]struct{}{
 		"chat_template":          {}, // CVE-2025-61620: arbitrary Jinja template
 		"tokenize":               {}, // CVE-2025-62426: stalls the request handler
@@ -37,8 +35,7 @@ var (
 	}
 )
 
-// validTools enforces the OpenAI tool contract plus tool_choice cross-field cleanup:
-// "required" collapses to defaultToolChoice, an empty tools array drops both fields, and function.strict is stripped silently.
+// validTools enforces the OpenAI tool contract plus tool_choice cross-field cleanup. See README.md, "`tools` and `tool_choice`".
 func validTools(bounds SchemaBounds, defaultToolChoice string) RuleFunc {
 	return func(ctx RuleContext) error {
 		if choice, _ := ctx.Document.Get("tool_choice"); choice == "required" {
@@ -90,8 +87,7 @@ func validTools(bounds SchemaBounds, defaultToolChoice string) RuleFunc {
 	}
 }
 
-// validToolChoice accepts "auto" | "none" | {type:"function", function:{name}}. "required"
-// is coerced upstream by validTools and never reaches here.
+// validToolChoice accepts "auto" | "none" | {type:"function", function:{name}}; "required" is coerced by validTools first.
 func validToolChoice(maxNameLen int) RuleFunc {
 	return func(ctx RuleContext) error {
 		raw, exists := ctx.Document.Get("tool_choice")
@@ -127,8 +123,7 @@ func validToolChoice(maxNameLen int) RuleFunc {
 	}
 }
 
-// validResponseFormat accepts type text/json_object as-is; json_schema additionally
-// requires a name (regex ^[A-Za-z0-9_.-]+$, length-capped) and a bounded schema.
+// validResponseFormat accepts text/json_object as-is; json_schema also needs a valid name and a bounded schema.
 func validResponseFormat(bounds SchemaBounds, maxNameLen int) RuleFunc {
 	return func(ctx RuleContext) error {
 		raw, exists := ctx.Document.Get("response_format")
@@ -179,8 +174,7 @@ func validResponseFormatJSONSchema(responseFormat map[string]any, bounds SchemaB
 	return nil
 }
 
-// structuredOutputsBounds bundles the JSON-schema bounds shared with response_format/tools
-// (for the "json" constraint) plus the choice/grammar/structural_tag specific caps.
+// structuredOutputsBounds bundles the shared JSON-schema bounds plus the choice/grammar/structural_tag caps.
 type structuredOutputsBounds struct {
 	SchemaBounds
 	MaxChoiceEntries    int
@@ -201,8 +195,7 @@ func buildStructuredOutputsKnownFields() map[string]struct{} {
 	return known
 }
 
-// structuredOutputsConstraintValidators pairs each constraint field with its validator so a new
-// field can't be added without one -- see the coverage test below.
+// structuredOutputsConstraintValidators pairs each constraint field with its validator so a new one can't be added without.
 func structuredOutputsConstraintValidators(bounds structuredOutputsBounds) map[string]func(value any) error {
 	return map[string]func(value any) error{
 		"json": func(value any) error {
@@ -236,9 +229,7 @@ func structuredOutputsConstraintValidators(bounds structuredOutputsBounds) map[s
 	}
 }
 
-// validStructuredOutputs enforces object shape, no response_format conflict, a closed
-// sub-field whitelist, exactly one constraint field set, and each constraint's own bounds;
-// profiles with RejectStructuredOutput reject the field outright (no matching route).
+// validStructuredOutputs enforces the closed sub-field whitelist and exactly one constraint. See README.md, "`structured_outputs`".
 func validStructuredOutputs(bounds structuredOutputsBounds) RuleFunc {
 	constraintValidators := structuredOutputsConstraintValidators(bounds)
 	return func(ctx RuleContext) error {
@@ -303,8 +294,7 @@ func validStructuredOutputs(bounds structuredOutputsBounds) RuleFunc {
 	}
 }
 
-// validStructuredOutputsPattern backs both the "regex" and "whitespace_pattern" sub-fields:
-// same shape/length/compile rules, only the field-name prefix in the message differs.
+// validStructuredOutputsPattern backs both "regex" and "whitespace_pattern"; only the message prefix differs.
 func validStructuredOutputsPattern(value any, maxLen int, fieldName string) error {
 	pattern, ok := value.(string)
 	if !ok {
@@ -344,8 +334,7 @@ func validStructuredOutputsChoice(value any, maxEntries, maxEntryLen, maxTotalBy
 	return nil
 }
 
-// validStructuredOutputsGrammar tracks active bracket depth; unmatched opens (the
-// CVE-2026-25048 PoC shape) drive maxDepth up without a matching close ever bringing it down.
+// validStructuredOutputsGrammar tracks active bracket depth: unmatched opens (the CVE-2026-25048 shape) never come back down.
 func validStructuredOutputsGrammar(value any, maxLen, maxNesting int) error {
 	grammar, ok := value.(string)
 	if !ok {
@@ -374,8 +363,7 @@ func validStructuredOutputsGrammar(value any, maxLen, maxNesting int) error {
 	return nil
 }
 
-// validStructuredOutputsStructuralTag accepts only the object form (vLLM's
-// StructuralTagResponseFormat); a JSON-encoded string form crashes the engine with an HTTP 500.
+// validStructuredOutputsStructuralTag accepts only the object form; a JSON-encoded string crashes the engine.
 func validStructuredOutputsStructuralTag(value any, maxLen int) error {
 	object, ok := value.(map[string]any)
 	if !ok {
@@ -391,8 +379,7 @@ func validStructuredOutputsStructuralTag(value any, maxLen int) error {
 	return nil
 }
 
-// validChatTemplateKwargs rejects forbidden keys before checking plain object bounds — no
-// $ref ban or type/pattern semantics, since this feeds a Jinja renderer, not a grammar compiler.
+// validChatTemplateKwargs uses plain object bounds: this feeds a Jinja renderer, not a grammar compiler.
 func validChatTemplateKwargs(bounds ObjectBounds) RuleFunc {
 	return func(ctx RuleContext) error {
 		raw, exists := ctx.Document.Get("chat_template_kwargs")

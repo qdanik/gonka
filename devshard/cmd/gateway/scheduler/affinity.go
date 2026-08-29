@@ -1,5 +1,4 @@
 package scheduler
 
-// AffinityHint is the extension point for KV-cache affinity: the per-request handle a later revision
-// will rank hosts with. It carries nothing and changes no decision today.
+// AffinityHint is the extension point for KV-cache affinity; it carries nothing today. See README, "The boundary types".
 type AffinityHint struct{}

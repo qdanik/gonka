@@ -7,8 +7,7 @@ import (
 	"strings"
 )
 
-// Aggregation happens here rather than in storage: every total above the counters is derivable, so a
-// stored total could only ever disagree with its own parts.
+// Aggregated on read, never stored: a stored total could only ever disagree with its own parts.
 func (b *Book) Query(filter QueryFilter) []ParticipantRecord {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
@@ -107,8 +106,7 @@ func (b *Book) EscrowIDs() []string {
 	return slices.Sorted(maps.Keys(b.escrows))
 }
 
-// Epoch is part of the key because a rotation leaves escrows of adjacent epochs live at once, and
-// summing those would report one epoch's work under another's index.
+// Epoch is part of the key: a rotation leaves escrows of adjacent epochs live at once.
 type participantIdentity struct {
 	participant string
 	model       string

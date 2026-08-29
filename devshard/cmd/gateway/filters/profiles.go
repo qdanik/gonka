@@ -2,8 +2,7 @@ package filters
 
 import "slices"
 
-// ThinkingDisposition is the closed set of ways a profile handles the thinking/enable_thinking
-// fields: normalize in place, mirror into chat_template_kwargs, or strip entirely.
+// ThinkingDisposition is the closed set of ways a profile handles the thinking/enable_thinking fields.
 type ThinkingDisposition int
 
 const (
@@ -12,9 +11,7 @@ const (
 	ThinkingStrip                                       // MiniMax
 )
 
-// Profile captures one routed model's deltas from the default parameter pipeline; a nil *Profile
-// is the default profile (e.g. Qwen), with no deltas. See gateway-request-filtering.md,
-// "Model profiles".
+// Profile captures one routed model's deltas from the default pipeline; a nil *Profile is the default. See README.md, "Model profiles".
 type Profile struct {
 	Models []string
 

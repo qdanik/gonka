@@ -11,8 +11,7 @@ import (
 	"devshard/logging"
 )
 
-// OnEscrowMissing marks an escrow a host reported as absent from chain; the confirming lookup happens
-// in the next tick, so this hook does no I/O and never reaches the chain from the request path.
+// OnEscrowMissing marks an escrow a host reported as absent; the tick confirms it, so this hook does no I/O.
 func (m *Manager) OnEscrowMissing(escrowID string) {
 	m.missing.mark(escrowID)
 }
@@ -28,8 +27,7 @@ func (m *Manager) checkMissing(ctx context.Context) error {
 	return errors.Join(errs...)
 }
 
-// Only a confirmed not-found deactivates the escrow; a lookup error or a found escrow both keep it
-// active -- ambiguity is never a reason to deactivate. Concurrent callers for the same ID dedup to one check.
+// Only a confirmed not-found deactivates the escrow. See README.md, "Escrow checks".
 func (m *Manager) TriggerEscrowCheck(ctx context.Context, escrowID string) error {
 	leave, busy := m.checks.enter(escrowID)
 	if busy {
@@ -44,8 +42,7 @@ func (m *Manager) TriggerEscrowCheck(ctx context.Context, escrowID string) error
 	if found {
 		return nil
 	}
-	// Routing stops before the row is written: an escrow the chain confirms absent must take no
-	// further request even if that write fails.
+	// Routing stops before the row is written, so a failed write still takes the escrow out of service.
 	if err := m.settlementSource.Retire(escrowID); err != nil {
 		return fmt.Errorf("retiring escrow %s from routing: %w", escrowID, err)
 	}

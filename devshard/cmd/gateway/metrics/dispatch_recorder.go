@@ -2,8 +2,7 @@ package metrics
 
 import "github.com/prometheus/client_golang/prometheus"
 
-// DispatchRecorder satisfies the scheduler's nonce-accounting hook, with a burn, a hold and an
-// exhausted burn budget each in their own family. See gateway-operations.md, "Metrics".
+// DispatchRecorder satisfies the scheduler's nonce-accounting hook. See operations.md, "Metrics".
 type DispatchRecorder struct {
 	ghostBurns          *prometheus.CounterVec
 	nonceHolds          *prometheus.CounterVec
@@ -45,10 +44,7 @@ func (r *DispatchRecorder) BurnBudgetExhausted(escrowID string) {
 	r.burnBudgetExhausted.WithLabelValues(metricLabel(escrowID, labelUnknown)).Inc()
 }
 
-// EscrowRetired drops every series the escrow left behind. Escrow ids are monotonic and never reused,
-// so without this each rotation leaves one nonce-holds series, one budget series and one ghost series
-// per reason, permanently -- the sibling registry collector avoids the same growth by rebuilding from
-// the live set on every scrape.
+// EscrowRetired drops the escrow's series: ids are never reused, so a rotation would leak them forever.
 func (r *DispatchRecorder) EscrowRetired(escrowID string) {
 	labels := prometheus.Labels{"devshard_id": escrowID}
 	r.ghostBurns.DeletePartialMatch(labels)

@@ -10,11 +10,7 @@ import (
 	"devshard/signing"
 )
 
-// The two escrow messages are marshalled by the types generated from the chain's own .proto, so their
-// wire layout tracks the chain by construction. Hand-laying the fields put a money transaction's
-// layout in a third place that had to be edited in lockstep with the proto or the settlement
-// mis-encodes silently. Marshal cannot fail for these messages -- neither carries an Any or a custom
-// type -- and an error is returned rather than dropped so a future field cannot make it silent.
+// The escrow messages are marshalled by the chain's own generated types, so their wire layout tracks the chain by construction. See README.md, "How a message is encoded".
 func encodeMsgCreateDevshardEscrow(creator string, amount uint64, modelID string) ([]byte, error) {
 	message := &inferencetypes.MsgCreateDevshardEscrow{Creator: creator, Amount: amount, ModelId: modelID}
 	return message.Marshal()
@@ -53,8 +49,7 @@ func encodeMsgSettleDevshardEscrow(settler string, input SettlementInput) ([]byt
 	return message.Marshal()
 }
 
-// truncateSignature validates and drops the recovery byte from a secp256k1
-// signature so only r||s (64 bytes) goes into the tx.
+// truncateSignature drops the recovery byte so only r||s (64 bytes) goes into the tx.
 func truncateSignature(sig []byte) ([]byte, error) {
 	if len(sig) < 64 {
 		return nil, fmt.Errorf("invalid signature length %d", len(sig))

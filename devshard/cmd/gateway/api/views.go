@@ -50,9 +50,7 @@ type modelTopProvider struct {
 	IsModerated         bool   `json:"is_moderated"`
 }
 
-// filterOptions is where the operator's configuration becomes the request-shaping rules. Forcing is
-// expressed as its opposite here so that an Options built without it keeps forcing, which is what
-// every caller that predates the switch expects.
+// filterOptions expresses forcing as its opposite, so an Options built without it keeps forcing.
 func filterOptions(limits config.Limits, admin bool) filters.Options {
 	return filters.Options{
 		Admin:            admin,
@@ -63,8 +61,7 @@ func filterOptions(limits config.Limits, admin bool) filters.Options {
 	}
 }
 
-// modelTokenLimits closes over the per-model override map only when an operator configured one, so
-// a deployment without overrides allocates nothing on the request path.
+// modelTokenLimits stays nil without overrides, so such a deployment allocates nothing on the request path.
 func modelTokenLimits(overrides map[string]config.ModelLimits) func(string) (uint64, uint64) {
 	if len(overrides) == 0 {
 		return nil
@@ -116,8 +113,7 @@ type statusResponse struct {
 	Capacity        []capacityStatus  `json:"capacity"`
 }
 
-// The two views below keep the storage rows out of the response: without them a column rename in the
-// store silently changes the API, and the record's own field names reach the client as written.
+// The two views below keep the storage rows out of the response: a column rename would change the API.
 type devshardView struct {
 	EscrowID          string `json:"escrow_id"`
 	PrivateKeyEnv     string `json:"private_key_env"`
@@ -172,9 +168,7 @@ func rotationViews(statuses []store.RotationStatus) []rotationView {
 	return views
 }
 
-// SessionVersion is the protocol tag the session was created under and the one every settlement payload
-// carries. An operator reading this endpoint has no other way to see which version an escrow is bound
-// to, and a mismatch with the host it dispatches to is what makes a settlement unacceptable.
+// SessionVersion is the protocol tag an escrow is bound to. See README.md, "The views a response is built from".
 type devshardStatus struct {
 	EscrowID       string `json:"escrow_id"`
 	Model          string `json:"model"`
@@ -192,8 +186,7 @@ type limiterStatus struct {
 	MaxTokensCap           int64 `json:"max_tokens_cap"`
 }
 
-// capacityStatus carries each weight under both spellings, old and new. See gateway-operations.md,
-// "Reading the gateway's state".
+// capacityStatus carries each weight under both spellings. See operations.md, "Reading the gateway's state".
 type capacityStatus struct {
 	Model                       string  `json:"model"`
 	CurrentWeight               float64 `json:"current_weight"`

@@ -18,15 +18,13 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-// Reader is the chain state the observer polls. An interface rather than the client itself so a test
-// answers these without a connection, which is what keeps the gateway's own tests off the network.
+// Reader is the chain state the observer polls, an interface so tests answer it without a connection.
 type Reader interface {
 	MaxNonce(ctx context.Context) (uint64, bool, error)
 	PreservedNodes(ctx context.Context) (*PreservedNodes, bool, error)
 }
 
-// Transport is the chain access a transaction needs: the reads that go into a signed body, the
-// broadcast, and the query that says whether it executed.
+// Transport is the chain access a transaction needs: the reads a signed body carries, the broadcast, and the query that says whether it executed.
 type Transport interface {
 	ChainID(ctx context.Context) (string, error)
 	Account(ctx context.Context, address string) (Account, error)
@@ -35,15 +33,13 @@ type Transport interface {
 	Escrow(ctx context.Context, escrowID uint64) (EscrowInfo, bool, error)
 }
 
-// Account is the pair a signed transaction needs; the sequence is signed as zero for an unordered
-// transaction, so only the number reaches the wire.
+// Account is the pair a signed transaction needs; an unordered tx signs the sequence as zero, so only the number reaches the wire.
 type Account struct {
 	Number   uint64
 	Sequence uint64
 }
 
-// TxResult is a committed transaction as the gateway reads it: the code that says whether it executed
-// and the events an escrow id is recovered from.
+// TxResult is a committed transaction as the gateway reads it: the code that says whether it executed, and the events an escrow id is recovered from.
 type TxResult struct {
 	Code      uint32
 	Codespace string
@@ -77,8 +73,7 @@ type PreservedParticipant struct {
 	NodeIDs       []string
 }
 
-// GRPCChain answers both interfaces over one connection. The gateway dials the chain once, for the
-// escrow bridge, and every other chain read rides that same connection and its query fallback.
+// GRPCChain answers both interfaces over the one connection the gateway dials. See README.md, "The gRPC transport".
 type GRPCChain struct {
 	client   *commonchain.Client
 	registry codectypes.InterfaceRegistry
@@ -94,8 +89,7 @@ func NewGRPCChain(client *commonchain.Client, chainID string) *GRPCChain {
 
 func (g *GRPCChain) conn() grpc.ClientConnInterface { return g.client.Conn() }
 
-// ChainID asks the node unless a value was configured. A mismatch invalidates every signature, so a
-// configured value is taken as the operator's decision and wins over what the node reports.
+// ChainID asks the node unless a value was configured; a mismatch invalidates every signature, so the configured value wins.
 func (g *GRPCChain) ChainID(ctx context.Context) (string, error) {
 	if g.chainID != "" {
 		return g.chainID, nil
@@ -111,8 +105,7 @@ func (g *GRPCChain) ChainID(ctx context.Context) (string, error) {
 	return network, nil
 }
 
-// Account reads the number and sequence through the account's own type, so a vesting or module account
-// answers correctly instead of by whichever nested field a search happened to reach first.
+// Account reads through the account's own registered type, so a vesting or module account answers correctly.
 func (g *GRPCChain) Account(ctx context.Context, address string) (Account, error) {
 	address = strings.TrimSpace(address)
 	if address == "" {
@@ -152,8 +145,7 @@ func (g *GRPCChain) Broadcast(ctx context.Context, txBytes []byte) (string, erro
 	return txHash, nil
 }
 
-// Tx reports found=false for a transaction the node has not indexed yet, which a caller polling after
-// a broadcast must tell apart from a failure.
+// Tx reports found=false for a transaction the node has not indexed yet, which a poller must tell apart from a failure.
 func (g *GRPCChain) Tx(ctx context.Context, txHash string) (TxResult, bool, error) {
 	response, err := txtypes.NewServiceClient(g.conn()).GetTx(ctx, &txtypes.GetTxRequest{Hash: txHash})
 	if err != nil {
@@ -177,8 +169,7 @@ func (g *GRPCChain) Tx(ctx context.Context, txHash string) (TxResult, bool, erro
 	return converted, true, nil
 }
 
-// Escrow reports found=false only when the chain says the escrow is absent; a transport failure is an
-// error, because reading it as absence would retire an escrow that still holds funds.
+// Escrow reports found=false only when the chain says the escrow is absent; a transport failure is an error.
 func (g *GRPCChain) Escrow(ctx context.Context, escrowID uint64) (EscrowInfo, bool, error) {
 	response, err := g.client.InferenceQueryClient().DevshardEscrow(ctx, &inferencetypes.QueryGetDevshardEscrowRequest{Id: escrowID})
 	if err != nil {
@@ -193,8 +184,7 @@ func (g *GRPCChain) Escrow(ctx context.Context, escrowID uint64) (EscrowInfo, bo
 	}, true, nil
 }
 
-// MaxNonce reports fetched=false when the chain carries no devshard escrow params, which is a chain
-// that has not enabled them rather than a failure to read.
+// MaxNonce reports fetched=false when the chain carries no devshard escrow params -- not enabled, rather than unread.
 func (g *GRPCChain) MaxNonce(ctx context.Context) (uint64, bool, error) {
 	response, err := g.client.InferenceQueryClient().Params(ctx, &inferencetypes.QueryParamsRequest{})
 	if err != nil {
@@ -207,8 +197,7 @@ func (g *GRPCChain) MaxNonce(ctx context.Context) (uint64, bool, error) {
 	return uint64(params.GetMaxNonce()), true, nil
 }
 
-// PreservedNodes reports found=false when the chain holds no snapshot for the current episode, which
-// routing reads as "no preserved set" rather than as an empty one.
+// PreservedNodes reports found=false when the chain holds no snapshot for the current episode, which routing reads as "no preserved set".
 func (g *GRPCChain) PreservedNodes(ctx context.Context) (*PreservedNodes, bool, error) {
 	response, err := g.client.InferenceQueryClient().PreservedNodesSnapshot(ctx, &inferencetypes.QueryPreservedNodesSnapshotRequest{})
 	if err != nil {
@@ -232,8 +221,7 @@ func (g *GRPCChain) PreservedNodes(ctx context.Context) (*PreservedNodes, bool, 
 	return converted, true, nil
 }
 
-// isNotFoundStatus reports the gRPC code a node answers for a transaction it has not indexed. The
-// message check covers nodes that answer Unknown with the same text rather than the typed code.
+// isNotFoundStatus also matches the message text, for nodes that answer Unknown instead of the typed code.
 func isNotFoundStatus(err error) bool {
 	if status.Code(err) == codes.NotFound {
 		return true

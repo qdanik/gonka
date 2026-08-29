@@ -371,3 +371,34 @@ func TestTheCacheSeparatesReplyShapes(t *testing.T) {
 		t.Fatal("a buffered and a streamed caller share one cache key")
 	}
 }
+
+// A stream that stops mid-event is delivered under a 200 the status can no longer take back, so the
+// only thing that can keep it out of the cache is the close failure. Cached, it is replayed to every
+// identical request for the whole entry lifetime.
+func TestAStreamThatEndedMidEventIsNotCached(t *testing.T) {
+	live := newHarness(t)
+	live.inference.reply = ""
+	live.inference.chunks = []string{
+		"data: {\"choices\":[{\"delta\":{\"content\":\"one\"}}]}\n\n",
+		"data: {\"choices\":[{\"delta\":{\"cont",
+	}
+	live.inference.outcome = engine.RaceOutcome{EscrowID: "7"}
+
+	live.requestInto(t, newChunkRecorder(), http.MethodPost, "/v1/chat/completions", streamChatBody, callerHeaders("caller-a"))
+	live.requestInto(t, newChunkRecorder(), http.MethodPost, "/v1/chat/completions", streamChatBody, callerHeaders("caller-a"))
+
+	if got := live.inference.runs.Load(); got != 2 {
+		t.Fatalf("races: got %d, want 2 (a reply that stopped mid-answer must not be replayed from cache)", got)
+	}
+}
+
+// The recorder buffers into memory per in-flight request. Bounding it by the whole cache lets each
+// concurrent request hold the entire cache on its own, outside every budget that reports held bytes.
+func TestOneRecordedEntryIsBoundedByOneReplyNotByTheWholeCache(t *testing.T) {
+	if limit := newResponseCache(1 << 30).entryLimit(); limit != maxBufferedResponseBytes {
+		t.Errorf("entryLimit() on a 1 GiB cache = %d, want %d", limit, int64(maxBufferedResponseBytes))
+	}
+	if limit := newResponseCache(1 << 10).entryLimit(); limit != 1<<10 {
+		t.Errorf("entryLimit() on a 1 KiB cache = %d, want the cache's own ceiling", limit)
+	}
+}

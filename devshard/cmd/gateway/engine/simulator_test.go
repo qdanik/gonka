@@ -257,7 +257,7 @@ func (p *simPoster) paramsSeen() []any {
 }
 
 func newSimPoster() *simPoster {
-	return &simPoster{entered: make(chan uint64, 8), vote: timeoutKindExecution}
+	return &simPoster{entered: make(chan uint64, 8), vote: TimeoutKindExecution}
 }
 
 func (p *simPoster) SettleTimeout(_ context.Context, nonce uint64, _ time.Time) (TimeoutVote, error) {
@@ -785,8 +785,8 @@ func TestSimulatorPhaseTransitionAbortSkipsTheSampleAndTheVote(t *testing.T) {
 	}
 	sim.settleAll()
 	events := sim.timeoutEvents()
-	if len(events) != 1 || events[0].Action != TimeoutActionSkipped || events[0].Reason != timeoutReasonPhaseAborted {
-		t.Fatalf("timeout events = %+v, want one skipped/%s", events, timeoutReasonPhaseAborted)
+	if len(events) != 1 || events[0].Action != TimeoutActionSkipped || events[0].Reason != TimeoutReasonPhaseAborted {
+		t.Fatalf("timeout events = %+v, want one skipped/%s", events, TimeoutReasonPhaseAborted)
 	}
 	if posted := sim.poster.settled(); len(posted) != 0 {
 		t.Errorf("votes posted = %v, want none", posted)

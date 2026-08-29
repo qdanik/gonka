@@ -9,17 +9,14 @@ import (
 	"devshard/cmd/gateway/config"
 )
 
-// defaultDrainTimeout must exceed every deadline a race arms for itself. See
-// gateway-speculative-race.md, "Client departure and the drain".
+// defaultDrainTimeout must exceed every deadline a race arms for itself. See race.md, "Client departure and the drain".
 const defaultDrainTimeout = 40 * time.Minute
 
 func DrainTimeoutFromConfig(stream config.Stream) time.Duration {
 	return time.Duration(stream.DrainTimeoutSeconds) * time.Second
 }
 
-// drain holds a race's two contexts: the client's cancellation is deliberately dropped rather than
-// inherited, and the drain deadline bounds the race from the client's departure on. See
-// gateway-speculative-race.md, "Client departure and the drain".
+// drain holds a race's two contexts; the client's cancellation is deliberately dropped, not inherited. See race.md, "Client departure and the drain".
 type drain struct {
 	client  context.Context
 	race    context.Context
@@ -55,8 +52,7 @@ func (d drain) gate(client io.Writer) io.Writer {
 	return clientStream{client: client, gone: d.clientGone()}
 }
 
-// clientStream reports a departed client's bytes as written instead of failing. See
-// gateway-speculative-race.md, "Client departure and the drain".
+// clientStream reports a departed client's bytes as written instead of failing. See race.md, "Client departure and the drain".
 type clientStream struct {
 	client io.Writer
 	gone   <-chan struct{}

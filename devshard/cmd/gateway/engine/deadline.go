@@ -11,8 +11,7 @@ type raceTimer interface {
 	Fired() <-chan time.Time
 }
 
-// deadlineTrigger is what fires at a deadline; the declaration order is the tie-break precedence. See
-// gateway-speculative-race.md, "Deadlines".
+// deadlineTrigger is what fires at a deadline; the declaration order is the tie-break precedence. See race.md, "Deadlines".
 type (
 	deadlineTrigger int
 	deadlineArm     struct {
@@ -33,8 +32,7 @@ type deadlinePlan struct {
 	Cancelled bool
 }
 
-// nextDeadline is the earliest armed deadline and what fires there, with trigger precedence breaking
-// exact ties. See gateway-speculative-race.md, "Deadlines".
+// nextDeadline is the earliest armed deadline and what fires there, precedence breaking exact ties. See race.md, "Deadlines".
 func nextDeadline(now time.Time, plan deadlinePlan) deadlineArm {
 	var arm deadlineArm
 	consider := func(at time.Time, trigger deadlineTrigger) {
@@ -63,8 +61,7 @@ func nextDeadline(now time.Time, plan deadlinePlan) deadlineArm {
 	return arm
 }
 
-// A race whose client left is owed no further attempt: another attempt is another nonce to settle for
-// a response nobody will read. A pick already running is the escalation, so it disarms the trigger too.
+// A race whose client left is owed no further attempt, and a running pick is already the escalation.
 func (p deadlinePlan) escalation(now time.Time) (ArmedEscalation, bool) {
 	if !p.Pick.IsZero() || p.detached() || p.crowned() {
 		return ArmedEscalation{}, false

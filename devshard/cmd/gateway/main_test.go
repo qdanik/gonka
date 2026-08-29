@@ -534,7 +534,7 @@ func TestShutdownStopsAcceptingFirstAndClosesTheStoreLast(t *testing.T) {
 }
 
 // An escrow session is closed only once the work that reaches it has stopped. See
-// gateway-invariants.md, "6. Shutdown order is a contract".
+// rules.md, "6. Shutdown order is a contract".
 func TestShutdownSkipsEscrowSessionsWhenADrainOverran(t *testing.T) {
 	var sequence []string
 	record := func(name string) func(context.Context) error {
@@ -605,7 +605,7 @@ func (b *blockingStopper) Stop() {
 }
 
 // A drain that cannot finish inside the budget must yield it to the steps below. See
-// gateway-architecture.md, "Shutdown".
+// README.md, "Shutdown".
 func TestWaitForYieldsTheBudgetToTheStepsBelowADrainThatOutlastsIt(t *testing.T) {
 	drainCtx, cancelDrain := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancelDrain()

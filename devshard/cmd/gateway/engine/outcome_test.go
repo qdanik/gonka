@@ -681,3 +681,44 @@ func TestSampleCarriesTheDecodeMeasure(t *testing.T) {
 		t.Fatalf("sample.TimePerOutputToken = %v, want %v", got, want)
 	}
 }
+
+// A strike is cleared by a host that answered, not by one that never got the chance. Judging every
+// terminal lets a host alternate empty streams with dial failures and never reach the threshold.
+func TestOnlyAnAnswerOrAnEmptyStreamJudgesCrowning(t *testing.T) {
+	t.Parallel()
+	for _, testCase := range []struct {
+		name    string
+		attempt AttemptOutcome
+		want    bool
+	}{
+		{name: "answered with content", attempt: cleanAttempt(), want: true},
+		{name: "claimed to serve and produced none", attempt: failedAttempt(TerminalEmptyStream), want: true},
+		{name: "never reached the host", attempt: failedAttempt(TerminalNoReceipt), want: false},
+		{name: "the client left", attempt: failedAttempt(TerminalClientCancelled), want: false},
+		{name: "won but never confirmed", attempt: failedAttempt(TerminalWon), want: false},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			if got := race(testCase.attempt).JudgesCrowning(testCase.attempt); got != testCase.want {
+				t.Fatalf("JudgesCrowning() = %v, want %v", got, testCase.want)
+			}
+		})
+	}
+}
+
+// A host that never answered must keep the strikes it earned. Reporting every attempt clears them on a
+// dial failure, so a host alternating empty streams with failures never reaches the threshold.
+func TestARaceTheHostNeverAnsweredLeavesItsStrikesAlone(t *testing.T) {
+	t.Parallel()
+	crown := newCrownStrikes()
+	for range crownDenialStrikes - 1 {
+		crown.Observe(testParticipant, testModel, true)
+	}
+
+	race(failedAttempt(TerminalNoReceipt)).observeCrowning(crown)
+	crown.Observe(testParticipant, testModel, true)
+
+	if !crown.Denied(testParticipant, testModel) {
+		t.Fatal("the dial failure cleared the strikes the host had already earned")
+	}
+}

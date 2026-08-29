@@ -7,16 +7,13 @@ import (
 	"strings"
 )
 
-// EscrowInfo is the escrow as the gateway reads it: the id it was asked about and the balance that
-// decides whether it can still pay for work.
+// EscrowInfo is the escrow as the gateway reads it: the id asked about, and the balance that decides whether it can still pay.
 type EscrowInfo struct {
 	EscrowID string
 	Balance  uint64
 }
 
-// GetEscrow reports found=false only when the chain says the escrow is absent. A read that failed is
-// returned as an error and never as absence: absence retires an escrow, and retiring one that still
-// holds funds strands them.
+// GetEscrow reports found=false only when the chain says the escrow is absent. See README.md, "The gRPC transport".
 func (c *TxClient) GetEscrow(ctx context.Context, escrowID string) (EscrowInfo, bool, error) {
 	numericID, err := strconv.ParseUint(strings.TrimSpace(escrowID), 10, 64)
 	if err != nil {

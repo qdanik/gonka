@@ -23,9 +23,7 @@ func scaleFactor(currentAvailable, full float64) float64 {
 	return clampUnit(currentAvailable / full)
 }
 
-// escrowWeight = Σ over hosts of currentWeight[h] * hostShares[h] * (available[h] ? 1 : 0).
-// hostShares[h] = slots(h,escrow)/totalSlots(h), normalized by the caller; raw slot counts here
-// would count a participant once per escrow it serves instead of splitting it.
+// escrowWeight = Σ over available hosts of currentWeight[h] * hostShares[h]. See README.md, "The capacity model".
 func escrowWeight(currentWeights, hostShares map[string]float64, available func(host string) bool) float64 {
 	var sum float64
 	for host, share := range hostShares {

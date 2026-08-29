@@ -1,6 +1,5 @@
-// Package env is the single place the gateway reads environment variables.
-// Load returns what is SET (nil pointer = unset); defaults are owned by the
-// config package, never here.
+// Package env is the single place the gateway reads environment variables. Load returns what is SET
+// (nil pointer = unset); defaults belong to config, never here. See README.md.
 package env
 
 import (
@@ -78,8 +77,7 @@ var (
 	// ErrPrivateKeyMissing marks a devshard whose signing key the environment does not hold.
 	ErrPrivateKeyMissing = errors.New("private key missing")
 
-	// legacyNames is the devshardctl spelling each variable falls back to; a variable absent here has no
-	// devshardctl equivalent. See gateway-operations.md, "Start-up".
+	// legacyNames is the devshardctl spelling each variable falls back to. See operations.md, "Variable names".
 	legacyNames = map[string]string{
 		"GATEWAY_ESCROWS_JSON":                "DEVSHARDS_JSON",
 		"GATEWAY_PORT":                        "DEVSHARD_PORT",
@@ -103,8 +101,7 @@ var (
 	}
 )
 
-// PrivateKey reads the hex signing key held by the named variable, falling back to the GATEWAY_ spelling
-// of a name recorded before the rename. Errors and the fallback name the variable and never the value.
+// PrivateKey reads the key held by the named variable; errors and logs name the variable, never the value.
 func PrivateKey(name string) (string, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
@@ -124,8 +121,7 @@ func PrivateKey(name string) (string, error) {
 	return "", fmt.Errorf("%w: %s is unset", ErrPrivateKeyMissing, name)
 }
 
-// lookup prefers the gateway's own spelling and falls back to devshardctl's. An empty value counts as
-// unset on both, so an operator can blank a legacy variable without the fallback resurrecting it.
+// lookup prefers the gateway's spelling; empty counts as unset on both, so blanking a legacy variable sticks.
 func lookup(name string) string {
 	if raw := strings.TrimSpace(os.Getenv(name)); raw != "" {
 		return raw
@@ -136,8 +132,7 @@ func lookup(name string) string {
 	return ""
 }
 
-// Load reads every gateway environment variable. Parse failures are
-// accumulated so the operator sees all misconfigured variables at once.
+// Load reads every gateway environment variable, accumulating parse failures so none is reported alone.
 func Load() (Values, error) {
 	var values Values
 	var problems []error

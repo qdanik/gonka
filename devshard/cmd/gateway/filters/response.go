@@ -14,9 +14,7 @@ import (
 )
 
 var (
-	// clientStrippedFields are response-body keys, at any nesting depth, hidden from a client that asked
-	// for none of them. Paired with parameterTable's force rules by
-	// TestForcedRequestParametersHaveResponseStripCounterpart.
+	// clientStrippedFields are response keys, at any depth, hidden from a client that asked for none of them.
 	clientStrippedFields = []string{
 		"logprob",
 		"logprobs",
@@ -33,9 +31,7 @@ var (
 		"top_logprobs",
 	}
 
-	// alwaysStrippedFields is what remains: internals no request can ask for. Derived rather than
-	// written out, so a field added to the list above cannot be left out of this one and reach a client
-	// that asked for nothing -- a hand-written second list is exactly how top_logprobs once leaked.
+	// alwaysStrippedFields is derived, not written out: a hand-written second list is how top_logprobs once leaked.
 	alwaysStrippedFields = func() []string {
 		fields := make([]string, 0, len(clientStrippedFields))
 		for _, field := range clientStrippedFields {
@@ -46,8 +42,7 @@ var (
 		return fields
 	}()
 
-	// nonCacheableErrorMarkers identify transient, environmental, or model-availability failures
-	// excluded from caching regardless of which of message/type/code carries them.
+	// nonCacheableErrorMarkers identify transient or availability failures excluded from caching.
 	nonCacheableErrorMarkers = []string{
 		"context canceled",
 		"context cancelled",
@@ -78,17 +73,13 @@ const (
 	stripRewritten
 )
 
-// LogprobIntent is what the client's own request asked for, read before the force rules overwrite it.
-// The gateway turns logprobs on upstream for validation whatever the client sent, so without this the
-// response strip cannot tell a client who asked for logprobs from one who did not, and answers both by
-// removing them. See gateway-request-filtering.md, "The response side".
+// LogprobIntent is what the client asked for, read before the force rules overwrite it. See README.md, "Response stripping".
 type LogprobIntent struct {
 	Keep    bool
 	KeepTop bool
 }
 
-// strippedFields is what this client must not see. A client that asked for logprobs keeps them; one
-// that did not loses the whole family, including a top_logprobs a host placed outside them.
+// strippedFields is what this client must not see; one that asked for nothing loses the whole logprob family.
 func (intent LogprobIntent) strippedFields() []string {
 	if intent.Keep {
 		return alwaysStrippedFields
@@ -96,8 +87,7 @@ func (intent LogprobIntent) strippedFields() []string {
 	return clientStrippedFields
 }
 
-// stripResponseBody removes the fields this client must not see from a non-streaming JSON response
-// body, at any nesting depth. A malformed body passes through unchanged.
+// stripResponseBody removes the hidden fields at any depth; a malformed body passes through unchanged.
 func stripResponseBody(body []byte, intent LogprobIntent) []byte {
 	filtered, outcome := stripInternalFields(body, intent)
 	if outcome != stripRewritten {
@@ -106,18 +96,14 @@ func stripResponseBody(body []byte, intent LogprobIntent) []byte {
 	return filtered
 }
 
-// stripInternalFields stays on the standard library: goccy's UseNumber parses the token anyway and
-// errors past float64 range, which fails this open -- a body carrying 1e999 keeps every internal field.
-// See gateway-request-filtering.md, "The response side".
+// stripInternalFields stays on the standard library: goccy errors past float64 range, failing this open. See README.md, "Which JSON decoder, and why".
 func stripInternalFields(payload []byte, intent LogprobIntent) ([]byte, stripOutcome) {
 	decoder := stdjson.NewDecoder(bytes.NewReader(payload))
 	decoder.UseNumber()
 	var decoded any
 	rewritten := false
 	if err := decoder.Decode(&decoded); err != nil || decoder.More() {
-		// A backend writes NaN and Infinity as barewords for a probability of zero. Neither is JSON, so
-		// without this the body is inspected by nobody: the buffered path forwards it with every
-		// internal field in it, and the streaming path drops the event and the client's answer with it.
+		// A backend writes NaN/Infinity as barewords; without this nothing can inspect or forward the body.
 		normalized, replaced := replaceNonFiniteNumbers(payload)
 		if !replaced {
 			return nil, stripMalformed
@@ -128,10 +114,7 @@ func stripInternalFields(payload []byte, intent LogprobIntent) ([]byte, stripOut
 		if err := decoder.Decode(&decoded); err != nil || decoder.More() {
 			return nil, stripMalformed
 		}
-		// The caller must receive the re-encoded bytes even when nothing was deleted. Handed the
-		// original, everything downstream meets the barewords again: the completion-to-chunks
-		// conversion fails on them and forwards a response a streaming client renders nothing from,
-		// while the attempt is crowned on its content and the nonce is paid for.
+		// The caller must get the re-encoded bytes even when nothing was deleted, or the barewords reach the chunk conversion.
 		rewritten = true
 	}
 	changed := deleteFields(decoded, intent.strippedFields())
@@ -148,7 +131,6 @@ func stripInternalFields(payload []byte, intent LogprobIntent) ([]byte, stripOut
 	return encoded, stripRewritten
 }
 
-// deleteFields removes the named keys at any depth, reporting whether anything went.
 func deleteFields(value any, fields []string) bool {
 	switch typed := value.(type) {
 	case map[string]any:
@@ -181,8 +163,7 @@ type UpstreamError struct {
 	Message string
 }
 
-// IsCacheableResponse reports whether a completed upstream response may be stored: any success
-// whose payload carries no failure, or a deterministic client-input error.
+// IsCacheableResponse reports whether a completed upstream response may be stored.
 func IsCacheableResponse(status int, body []byte) bool {
 	if len(body) == 0 || HasNonCacheableError(body) {
 		return false
@@ -193,15 +174,13 @@ func IsCacheableResponse(status int, body []byte) bool {
 	return IsCacheableUpstreamError(status, body)
 }
 
-// HasNonCacheableError reports whether body carries a failure that must not be replayed, so a
-// stored response can be re-checked on read and a poisoned entry drops itself.
+// HasNonCacheableError reports a failure that must not be replayed, so a poisoned entry drops itself on read.
 func HasNonCacheableError(body []byte) bool {
 	details, ok := parseUpstreamErrorDetails(body)
 	return ok && !isCacheableErrorDetails(details)
 }
 
-// IsCacheableUpstreamError reports whether status/body is a deterministic client-input error
-// (safe to cache) rather than a transient, environmental, or model-availability failure.
+// IsCacheableUpstreamError reports a deterministic client-input error, safe to cache.
 func IsCacheableUpstreamError(status int, body []byte) bool {
 	if status != http.StatusBadRequest {
 		return false
@@ -213,15 +192,13 @@ func IsCacheableUpstreamError(status int, body []byte) bool {
 	return isCacheableErrorDetails(details)
 }
 
-// parseUpstreamErrorDetails extracts an OpenAI-compatible top-level error from a response body,
-// whether the body is plain JSON or an SSE stream carrying the failure inside a data event.
+// parseUpstreamErrorDetails extracts a top-level error from plain JSON or from an SSE data event.
 func parseUpstreamErrorDetails(payload []byte) (UpstreamError, bool) {
 	if details, ok := DecodeUpstreamError(payload); ok {
 		return details, true
 	}
 	var found UpstreamError
-	// An empty {"error":{}} decodes without carrying anything, so stopping on it would leave a real
-	// error in a later event unseen and the stream readable as cacheable.
+	// An empty {"error":{}} carries nothing, so stopping on it would leave a real error in a later event unseen.
 	EachSSEDataPayload(payload, func(data []byte) bool {
 		details, ok := DecodeUpstreamError(data)
 		if !ok || details == (UpstreamError{}) {
@@ -233,8 +210,7 @@ func parseUpstreamErrorDetails(payload []byte) (UpstreamError, bool) {
 	return found, found != UpstreamError{}
 }
 
-// DecodeUpstreamError reads one JSON payload as an OpenAI-compatible error, accepting both the
-// nested {"error":{...}} shape and the flat {"object":"error",...} one vLLM still emits.
+// DecodeUpstreamError accepts both the nested {"error":{...}} shape and the flat {"object":"error",...} one vLLM emits.
 func DecodeUpstreamError(payload []byte) (UpstreamError, bool) {
 	var body struct {
 		Error *struct {
@@ -259,8 +235,7 @@ func DecodeUpstreamError(payload []byte) (UpstreamError, bool) {
 	return UpstreamError{}, false
 }
 
-// codeString renders an error code field as a string, treating JSON null as absent rather than
-// the literal text "<nil>".
+// codeString treats a JSON null code as absent rather than the literal text "<nil>".
 func codeString(code any) string {
 	if code == nil {
 		return ""
@@ -286,17 +261,13 @@ func isCacheableErrorDetails(details UpstreamError) bool {
 	return true
 }
 
-// isRetriableCapabilityError reports host-capability failures (tool-choice support, context
-// window size) that are excluded from caching because a different host may serve them fine.
+// isRetriableCapabilityError excludes host-capability failures from caching: a different host may serve them fine.
 func isRetriableCapabilityError(msg string) bool {
 	contextLimit, _ := CapabilityLimits(msg)
 	return strings.Contains(msg, ToolChoiceUnsupportedMessage) || contextLimit > 0
 }
 
-// emptyTopLogprobs replaces every top_logprobs array with an empty one, which is the shape OpenAI
-// returns to a client that asked for logprobs without alternatives. The gateway forces the
-// alternatives on upstream for validation, so leaving them would hand the client a request it never
-// made; removing the key would drop a field its schema expects to be present.
+// emptyTopLogprobs leaves the empty array OpenAI returns when alternatives were not asked for. See README.md, "Response stripping".
 func emptyTopLogprobs(value any) bool {
 	switch typed := value.(type) {
 	case map[string]any:
@@ -322,9 +293,7 @@ func emptyTopLogprobs(value any) bool {
 	}
 }
 
-// decodeLogprobIntent reads what the client asked for, leniently: only an explicit true counts as a
-// request, so a value of the wrong shape is read as "not asked" rather than rejecting a request the
-// gateway would otherwise have accepted -- the force rules overwrite both fields regardless of type.
+// decodeLogprobIntent is lenient: only an explicit true counts, so a wrong-shaped value reads as "not asked".
 func decodeLogprobIntent(document *Document) LogprobIntent {
 	var intent LogprobIntent
 	if raw, held := document.Get("logprobs"); held {
@@ -343,14 +312,10 @@ func decodeLogprobIntent(document *Document) LogprobIntent {
 	return intent
 }
 
-// nonFiniteLiterals are the three barewords a backend writes for a probability of zero or an overflow.
-// None is valid JSON, so a body carrying one parses nowhere: the strip cannot inspect it and the
-// streaming path cannot forward it.
+// nonFiniteLiterals are the barewords a backend writes for a probability of zero; none is valid JSON.
 var nonFiniteLiterals = [][]byte{[]byte("-Infinity"), []byte("Infinity"), []byte("NaN")}
 
-// replaceNonFiniteNumbers rewrites those barewords to null outside string literals, so a body carrying
-// one can be inspected and delivered instead of leaking its internal fields or being dropped whole. It
-// returns ok=false when the body carries none, so the ordinary path allocates nothing.
+// replaceNonFiniteNumbers rewrites those barewords to null outside strings; ok=false when the body carries none, allocating nothing.
 func replaceNonFiniteNumbers(body []byte) ([]byte, bool) {
 	carries := false
 	for _, literal := range nonFiniteLiterals {
@@ -387,8 +352,7 @@ func replaceNonFiniteNumbers(body []byte) ([]byte, bool) {
 	return out, replaced
 }
 
-// matchNonFinite reports the length of a bareword at the start of tail, and 0 when there is none. The
-// longest form is tried first so -Infinity is not read as a minus sign followed by Infinity.
+// matchNonFinite reports the length of a bareword at the start of tail; longest first, so -Infinity is not read as Infinity.
 func matchNonFinite(tail []byte) int {
 	for _, literal := range nonFiniteLiterals {
 		if bytes.HasPrefix(tail, literal) {

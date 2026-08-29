@@ -10,7 +10,7 @@ import (
 const (
 	completionObject = "chat.completion"
 
-	// The three bounds a host must not exceed. See gateway-request-filtering.md, "The response side".
+	// The three bounds a host must not exceed. See README.md, "Folding a stream into one body".
 	maxIndexedElements = 256
 	maxTopLevelFields  = 64
 	maxAssembledEvents = 65_536
@@ -27,14 +27,12 @@ func newGrowingText(head string) *growingText {
 
 func (t *growingText) String() string { return t.parts.String() }
 
-// MarshalJSON encodes rather than Marshals: Marshal always escapes HTML, which would inflate every
-// < > & the model generated to six bytes, the very thing encodeCompletion turns off.
+// MarshalJSON encodes rather than Marshals: Marshal always escapes HTML, the very thing encodeCompact turns off.
 func (t *growingText) MarshalJSON() ([]byte, error) {
 	return encodeCompact(t.parts.String())
 }
 
-// assembleSSEBody merges the streamed chunks into the single JSON body a non-streaming caller
-// expects. See gateway-request-filtering.md, "Streaming is forced upstream".
+// assembleSSEBody merges the streamed chunks into the single JSON body a non-streaming caller expects.
 func assembleSSEBody(body []byte) []byte {
 	var merged map[string]any
 	var complete []byte
@@ -115,8 +113,7 @@ func encodeCompletion(merged map[string]any) []byte {
 	return encoded
 }
 
-// finalizeCompletion turns the accumulated deltas into the completion a client is given. It rewrites
-// the accumulator in place, so it runs once, at the end -- never as part of measuring it.
+// finalizeCompletion rewrites the accumulator in place, so it runs once at the end, never as part of measuring it.
 func finalizeCompletion(merged map[string]any) {
 	merged["object"] = completionObject
 	choices, _ := merged["choices"].([]any)
@@ -169,8 +166,7 @@ func mergeChunk(accumulated, chunk map[string]any) map[string]any {
 	return accumulated
 }
 
-// What grows across chunks; everything else is a restated fact that replaces. See
-// gateway-request-filtering.md, "The response side".
+// What grows across chunks; everything else is a restated fact that replaces.
 var (
 	accumulatedChoiceFields = map[string]bool{"delta": true, "logprobs": true, "token_ids": true}
 
@@ -179,7 +175,6 @@ var (
 	}
 )
 
-// mergeChoice grows the delta and the logprobs beside it; finish_reason and the rest replace.
 func mergeChoice(target, incoming map[string]any) {
 	for key, value := range incoming {
 		if value == nil {
@@ -193,8 +188,7 @@ func mergeChoice(target, incoming map[string]any) {
 	}
 }
 
-// mergeStreamedValue accumulates a delta by field name, never by Go type: a host restates its identity
-// fields, and growing those hands the client a tool call it cannot answer.
+// mergeStreamedValue accumulates by field name, never by Go type: growing a restated identity field breaks a tool call.
 func mergeStreamedValue(field string, accumulated, incoming any) any {
 	switch typed := incoming.(type) {
 	case nil:
@@ -287,8 +281,7 @@ func elementAtIndex(elements []any, wanted any) map[string]any {
 	return nil
 }
 
-// leadsWithAnIndex decides an accumulated array by its first element: scanning all of it per chunk was
-// what made the merge quadratic.
+// leadsWithAnIndex decides by the first element: scanning all of it per chunk was what made the merge quadratic.
 func leadsWithAnIndex(elements []any) bool {
 	if len(elements) == 0 {
 		return false
@@ -296,7 +289,6 @@ func leadsWithAnIndex(elements []any) bool {
 	return indexedElements(elements[:1])
 }
 
-// indexedElements reports the shape that merges by index.
 func indexedElements(elements []any) bool {
 	for _, entry := range elements {
 		element, isObject := entry.(map[string]any)

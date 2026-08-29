@@ -21,22 +21,17 @@ const (
 	// adminIngestLimit bounds every operator body. The largest of them is a settings patch.
 	adminIngestLimit = 64 << 10
 
-	// bodyReadTimeout bounds how long a caller may take to deliver a body it has already announced. It
-	// is armed per request rather than as http.Server.ReadTimeout, which stays armed for the whole
-	// exchange: there it would expire mid-response and cancel the request a long stream is still
-	// writing for.
+	// bodyReadTimeout is armed per request, not as http.Server.ReadTimeout, which would expire mid-response.
 	bodyReadTimeout = 30 * time.Second
 )
 
-// credentials is one request's resolved identity. It is computed only where an answer is used, so a
-// route that needs neither never compares a key at all.
+// credentials is one request's resolved identity, computed only where an answer is used.
 type credentials struct {
 	admin  bool
 	apiKey bool
 }
 
-// keyGate compares a presented bearer against configured keys, hashing both sides first. See
-// gateway-request-lifecycle.md, "3. Authorisation and routability".
+// keyGate compares a bearer against configured keys. See README.md, "Authentication and the kill switch".
 type keyGate struct {
 	digests    [][sha256.Size]byte
 	configured bool
@@ -55,8 +50,7 @@ func newKeyGate(keys ...string) keyGate {
 	return gate
 }
 
-// authenticate reports whether authorization carries one of the configured keys. Every configured
-// key is compared, so the time taken does not depend on which one matched.
+// authenticate compares every configured key, so the time taken does not depend on which one matched.
 func (g keyGate) authenticate(authorization string) bool {
 	presented, hasBearer := strings.CutPrefix(authorization, "Bearer ")
 	if !g.configured || !hasBearer {
@@ -70,8 +64,7 @@ func (g keyGate) authenticate(authorization string) bool {
 	return matched == 1
 }
 
-// requireAdmin gates the operator routes, and is where the admin key comparison lives rather than in a
-// blanket middleware. See gateway-request-lifecycle.md, "3. Authorisation and routability".
+// requireAdmin gates the operator routes. See README.md, "Authentication and the kill switch".
 func (s *Server) requireAdmin(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !s.adminEnabled() {
@@ -98,8 +91,7 @@ func (s *Server) authenticateAdmin(r *http.Request) bool {
 	return s.resolveCredentials(r).admin
 }
 
-// resolveCredentials answers only when a credential was presented, so an unauthenticated request
-// never reaches a key comparison at all.
+// resolveCredentials answers only when a credential was presented, so an unauthenticated request compares nothing.
 func (s *Server) resolveCredentials(r *http.Request) credentials {
 	authorization := r.Header.Get("Authorization")
 	if authorization == "" {
@@ -120,8 +112,7 @@ func (s *Server) compareKeys(authorization string) credentials {
 	}
 }
 
-// disabled is the operator kill switch; /metrics and the operator routes stay reachable. See
-// gateway-operations.md, "The kill switch".
+// disabled is the operator kill switch; alwaysOn routes stay reachable. See operations.md, "The kill switch".
 func (s *Server) disabled(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		modes := s.config.Load().Modes
@@ -146,11 +137,7 @@ func (s *Server) disabled(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-// readBody bounds ingest with MaxBytesReader rather than LimitReader: it returns a typed error the
-// status mapper recognises, and it marks the connection so the server stops reading a hostile body
-// instead of draining it. The deadline is cleared again before the response begins, so only the read
-// is bounded. A writer that neither carries a deadline nor unwraps to one reports ErrNotSupported and
-// keeps the size bound alone.
+// readBody bounds ingest with MaxBytesReader, not LimitReader. See README.md, "Reading a body".
 func readBody(w http.ResponseWriter, r *http.Request, limit int64) ([]byte, error) {
 	deadlines := http.NewResponseController(w)
 	_ = deadlines.SetReadDeadline(time.Now().Add(bodyReadTimeout))
@@ -160,9 +147,7 @@ func readBody(w http.ResponseWriter, r *http.Request, limit int64) ([]byte, erro
 	return body, err
 }
 
-// baseWriter walks the Unwrap chain to the writer the server owns. MaxBytesReader marks a connection
-// by type-asserting its writer, so handed a wrapper it cannot see through it leaves the server
-// draining a hostile body it has already refused.
+// baseWriter walks the Unwrap chain: MaxBytesReader marks a connection by type-asserting the writer it is handed.
 func baseWriter(w http.ResponseWriter) http.ResponseWriter {
 	for {
 		unwrapper, ok := w.(interface{ Unwrap() http.ResponseWriter })

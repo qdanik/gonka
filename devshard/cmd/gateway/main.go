@@ -1,5 +1,4 @@
-// Command gateway is the devshard gateway between the broker and race
-// participants.
+// Command gateway is the devshard gateway between the broker and race participants. See README.md.
 package main
 
 import (
@@ -44,8 +43,7 @@ const (
 )
 
 func main() {
-	// Before anything can log: a collector reads JSON fields as labels, where the default text line
-	// carries log's own date prefix and has to be re-parsed.
+	// Before anything can log: a collector reads JSON fields as labels, a text line needs re-parsing.
 	logging.ConfigureFormat(os.Getenv("GATEWAY_LOG_FORMAT"))
 	if err := serve(); err != nil {
 		logging.Error("gateway exited", logkey.Error, err)
@@ -232,8 +230,7 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 		Timeouts:   sessions.Poster,
 		Now:        clock,
 	})
-	// One wrapper for both readers: the gauge must report the scale admission actually applies, and
-	// only this type knows the operator's relaxed-mode override of the chain's raw blocking state.
+	// One wrapper for both readers, so the gauge reports the scale admission actually applies.
 	modelCapacities := modelCapacity{capacity: capacity, snapshots: observer, config: configHolder}
 	telemetry.Register(recorder.Collectors()...)
 	telemetry.Register(
@@ -286,8 +283,7 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 	if err != nil {
 		return nil, err
 	}
-	// Registered after the server, which owns the capture sink. Nothing evicts capture files, so the
-	// refusal count is the only signal that capture has turned itself off at its byte cap.
+	// Registered after the server, which owns both sinks. See README.md, "Wiring order, and the knots in it".
 	telemetry.Register(metrics.NewCaptureCollector(server))
 	telemetry.Register(metrics.NewCacheCollector(server))
 
@@ -325,8 +321,7 @@ type routingDeps struct {
 	Now          func() time.Time
 }
 
-// newRouting joins the escrow set to the picker through the capacity model: an escrow whose
-// membership never reaches it scores as weightless, is skipped by every pick, and serves nothing.
+// newRouting joins the escrow set to the picker through the capacity model; an unjoined escrow serves nothing.
 func newRouting(deps routingDeps) (*registry.Registry, *scheduler.Scheduler, *warmup.Prober, *burns.Accountant) {
 	// The warmup needs the registry it observes, so it is handed the registry once that exists.
 	registryDeps := registry.Deps{
@@ -337,7 +332,7 @@ func newRouting(deps routingDeps) (*registry.Registry, *scheduler.Scheduler, *wa
 		Now:              deps.Now,
 	}
 	// A nil warmup must not reach the interface field: a typed nil there is non-nil to a nil check.
-	prober := warmup.New(deps.Config, deps.Ledger.Book(), deps.Now)
+	prober := warmup.New(deps.Config, deps.Ledger.Book(), deps.Snapshots, deps.Now)
 	if prober != nil {
 		registryDeps.Publications = prober
 	}
@@ -368,8 +363,7 @@ func (environmentSigner) SignerFor(privateKeyEnv string) (*signing.Secp256k1Sign
 	return signing.SignerFromHex(keyHex)
 }
 
-// modelCapacity's per-weight allowance follows the raw chain phase rather than the relaxed-mode
-// override, because it bounds what the hosts can actually do.
+// modelCapacity's per-weight allowance follows the raw chain phase: it bounds what the hosts can do.
 type modelCapacity struct {
 	capacity  *limits.Capacity
 	snapshots *chain.PhaseObserver
@@ -391,10 +385,7 @@ func (m modelCapacity) ForModel(model string) limits.ModelCapacity {
 	}
 }
 
-// ScaleFactor applies the operator's relaxed-mode override before asking for the ratio. Reading the
-// chain's raw blocking state instead would zero the scale during PoC, and a zero scale clamps every
-// weight-derived cap to nothing -- so relaxed mode would go dead in exactly the deployments that set
-// an input-token cap or a per-model override, which are the ones that need it.
+// ScaleFactor folds in relaxed mode first, or PoC zeroes every cap. See README.md, "Relaxed mode, in one place".
 func (m modelCapacity) ScaleFactor(model string) float64 {
 	return m.capacity.ScaleFactor(model, blockedFor(m.snapshots.Snapshot(), m.config.Load().Modes))
 }
@@ -407,8 +398,7 @@ func (m modelCapacity) WeightsUnobserved(model string) bool {
 	return m.capacity.WeightsUnobserved(model)
 }
 
-// blockedFor is the effective blocking state: the chain's raw fact, unless the operator's relaxed mode
-// overrides it. api.admission folds the same override in for the pre-queue gate.
+// blockedFor is the effective blocking state; api.admission folds the same override for the pre-queue gate.
 func blockedFor(snapshot chain.PhaseSnapshot, modes config.Modes) bool {
 	return snapshot.RequestsBlocked && modes.PoCMode != config.PoCModeRelaxed
 }

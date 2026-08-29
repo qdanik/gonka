@@ -42,8 +42,7 @@ func (e *RateLimitError) Error() string {
 	return fmt.Sprintf("rate limit exceeded: %s", e.Reason)
 }
 
-// ModelCapacity is one model's capacity for a single Acquire. CurrentWeight and ScaleFactor must
-// already be availability- and block-filtered (0 when requests are blocked); Acquire never re-reads the snapshot.
+// ModelCapacity must arrive already availability- and block-filtered: Acquire never re-reads the snapshot.
 type ModelCapacity struct {
 	ScaleFactor                 float64
 	CurrentWeight               float64
@@ -70,8 +69,7 @@ type modelCounter struct {
 	enforced    admission
 }
 
-// waiter is one blocked Acquire; reason is why it had to queue and is what a timed-out wait reports.
-// See gateway-capacity-and-health.md, "The queue".
+// waiter is one blocked Acquire; its reason is what a timed-out wait reports. See capacity.md, "The queue".
 type waiter struct {
 	model    string
 	tokens   int64
@@ -80,8 +78,7 @@ type waiter struct {
 	ready    chan struct{}
 }
 
-// GatewayLimiter is the gateway-wide FIFO admission limiter. Each model records the admission it was
-// last judged against, because overrides and capacity weights make the cap a per-model answer.
+// GatewayLimiter is the gateway-wide FIFO admission limiter; each model records the cap it was last judged against.
 type GatewayLimiter struct {
 	mu     sync.Mutex
 	cfg    GatewayConfig
@@ -97,8 +94,7 @@ type InFlight struct {
 	QueueDepth  int
 }
 
-// Enforced is the pair a model's requests are actually judged against, after its own overrides and its
-// own capacity weights. There is no gateway-wide answer: two models rarely share one cap.
+// Enforced is per model because there is no gateway-wide answer: two models rarely share one cap.
 type Enforced struct {
 	MaxConcurrentRequests  int64
 	MaxInputTokensInFlight int64
@@ -116,8 +112,7 @@ func NewGatewayLimiter(cfg GatewayConfig) *GatewayLimiter {
 	return &GatewayLimiter{cfg: cfg, models: map[string]*modelCounter{}}
 }
 
-// Reconfigure replaces the caps every later admission is judged against and sweeps the queue.
-// See gateway-capacity-and-health.md, "The queue".
+// Reconfigure replaces the caps and sweeps the queue. See capacity.md, "The queue".
 func (l *GatewayLimiter) Reconfigure(cfg GatewayConfig) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -168,8 +163,7 @@ func (l *GatewayLimiter) AcquireForModel(ctx context.Context, model string, inpu
 		l.mu.Unlock()
 		return &RateLimitError{Reason: reason, RetryAfter: acquireWait}
 	}
-	// A queued waiter is one that capacity currently cannot serve, so admitting a request that fits
-	// does not overtake it: a freed slot is handed to the queue directly, under this same lock.
+	// A freed slot goes to the queue under this same lock, so admitting a request that fits overtakes nobody.
 	reason := l.blockedReasonLocked(model, admitted)
 	if reason == "" {
 		l.takeLocked(model, inputTokens)
@@ -222,8 +216,7 @@ func (l *GatewayLimiter) dequeue(w *waiter) bool {
 	return false
 }
 
-// promoteLocked hands freed capacity to queued waiters in arrival order, skipping — rather than stopping
-// at — a waiter its own model still cannot serve. See gateway-capacity-and-health.md, "The queue".
+// promoteLocked skips — rather than stops at — a waiter its own model cannot serve. See capacity.md, "The queue".
 func (l *GatewayLimiter) promoteLocked() {
 	for i := 0; i < len(l.queue); {
 		waiting := l.queue[i]
@@ -239,8 +232,7 @@ func (l *GatewayLimiter) promoteLocked() {
 	}
 }
 
-// queueTooDeepLocked reports a queue this request cannot reach the front of in time. See
-// gateway-capacity-and-health.md, "The wait budget".
+// queueTooDeepLocked reports a queue this request cannot reach the front of in time. See capacity.md, "The wait budget".
 func (l *GatewayLimiter) queueTooDeepLocked(model string, admitted admission) bool {
 	perSlot := l.cfg.AdmissionQueuePerSlot
 	if perSlot <= 0 || admitted.concurrencyLimit <= 0 {
@@ -263,9 +255,7 @@ func (l *GatewayLimiter) takeLocked(model string, inputTokens int64) {
 	l.total.inputTokens += inputTokens
 }
 
-// admissionFor computes one model's caps: the configured maxima are each model's own budget, and an
-// override replaces the configured maximum for its model rather than narrowing it further.
-// See gateway-capacity-and-health.md, "The gateway limiter".
+// admissionFor treats each model's configured maximum as its own budget. See capacity.md, "The gateway limiter".
 func (l *GatewayLimiter) admissionFor(model string, inputTokens int64, capacity ModelCapacity) admission {
 	maxConcurrent, maxInputTokens := l.cfg.MaxConcurrent, l.cfg.MaxInputTokens
 	if override, ok := l.cfg.ModelLimits[model]; ok {
@@ -294,9 +284,7 @@ func (l *GatewayLimiter) ReleaseForModel(model string, inputTokens int64) {
 	l.promoteLocked()
 }
 
-// releaseLocked leaves an idle counter in place. Deleting it cost an allocation on the next acquire for
-// the same model, and a model that goes quiet now reads zero in the snapshot instead of disappearing,
-// which a reader cannot tell apart from the gateway being gone. The map is bounded by routable models.
+// releaseLocked leaves an idle counter in place so a quiet model reads zero instead of disappearing.
 func (l *GatewayLimiter) releaseLocked(model string, inputTokens int64) {
 	counter, ok := l.models[model]
 	if !ok {
@@ -366,7 +354,7 @@ func effectiveInputTokenLimit(baseMaxInputTokens int64, capacity ModelCapacity) 
 	return scaleClamp(baseMaxInputTokens, capacity.ScaleFactor), true
 }
 
-// scaleClamp rounds to nearest rather than flooring. See gateway-capacity-and-health.md, "The gateway limiter".
+// scaleClamp rounds to nearest rather than flooring. See capacity.md, "The gateway limiter".
 func scaleClamp(base int64, scale float64) int64 {
 	if base <= 0 {
 		return 0

@@ -10,8 +10,7 @@ import (
 	"devshard/types"
 )
 
-// escrowEntry is one escrow's live state. inFlight is shared by every published set the entry appears
-// in, so a rotation never loses the count of requests already running against it.
+// escrowEntry is one escrow's live state; inFlight is shared by every published set the entry appears in.
 type escrowEntry struct {
 	id       string
 	model    string
@@ -36,9 +35,7 @@ func (e *escrowEntry) accepting() bool { return e.session.Phase() == types.Phase
 
 func (e *escrowEntry) busy() bool { return e.inFlight.Load() > 0 }
 
-// close flushes before releasing storage. See gateway-routing-and-nonces.md, "The escrow registry".
-// Reports whether the store was released: Close runs even when the flush failed, and an entry whose
-// store is gone must stop refusing its own id.
+// close flushes before releasing storage and reports whether the store was released. See routing.md, "The escrow registry".
 func (e *escrowEntry) close() (bool, error) {
 	var flushErr error
 	if err := e.session.FlushSnapshot(); err != nil {
@@ -51,8 +48,7 @@ func (e *escrowEntry) close() (bool, error) {
 	return closeErr == nil, errors.Join(flushErr, closeErr)
 }
 
-// liveSet is the published escrow set, replaced rather than mutated, so readers take it with one atomic
-// load. See gateway-routing-and-nonces.md, "The escrow registry".
+// liveSet is replaced rather than mutated, so readers take it with one atomic load. See routing.md, "The escrow registry".
 type liveSet struct {
 	byID    map[string]*escrowEntry
 	byModel map[string][]*escrowEntry

@@ -19,21 +19,17 @@ const (
 	stageFinishRegular = "finish_regular"
 )
 
-// errCreateSuppressed marks a create the breaker refused. It is not "nothing needed": the breaker is
-// gated exactly when creation has been failing, so the bridge must take its degrade path and keep the
-// escrows it has instead of retiring them for replacements that were never created.
+// errCreateSuppressed marks a create the breaker refused -- not "nothing needed". See README.md, "The bridge across proof-of-compute".
 var errCreateSuppressed = errors.New("escrow creation suppressed by the create breaker")
 
-// ensureToTarget creates escrows up to target for (model, role, epoch). devshards is the
-// snapshot the caller already loaded once this tick; it is only filtered here, never reloaded.
+// ensureToTarget creates escrows up to target for (model, role, epoch), filtering the tick's own devshard slice.
 func (m *Manager) ensureToTarget(ctx context.Context, role string, target int, model ModelConfig, snapshot chain.PhaseSnapshot, devshards []store.DevshardRecord) (created int, err error) {
 	existing := countActive(devshards, model.ModelID, role, int64(snapshot.EpochIndex))
 	if existing >= target {
 		return 0, nil
 	}
 	if served, known := servedByNetwork(snapshot, model.ModelID); known && !served {
-		// Written down because it is a rotation that produced nothing on purpose: without it an
-		// operator looking for the escrow that never appeared finds no reason anywhere.
+		// A rotation that produced nothing on purpose, logged so the missing escrow has a reason somewhere.
 		logging.Warn("rotation skipped, the network serves no such model",
 			logkey.Model, model.ModelID, logkey.Role, role, logkey.Epoch, snapshot.EpochIndex)
 		return 0, nil
@@ -62,8 +58,7 @@ func countActive(devshards []store.DevshardRecord, modelID, role string, epoch i
 	return count
 }
 
-// prepareBridge swaps temp escrows in ahead of an epoch switch, one model at a time; a
-// failure on one model is recorded and skipped, never stopping the rest.
+// prepareBridge swaps temp escrows in ahead of an epoch switch, one model at a time, failure-isolated.
 func (m *Manager) prepareBridge(ctx context.Context, snapshot chain.PhaseSnapshot, models []ModelConfig, devshards []store.DevshardRecord) error {
 	var errs []error
 	for _, model := range models {
@@ -152,8 +147,7 @@ func (m *Manager) finishBridge(ctx context.Context, snapshot chain.PhaseSnapshot
 	return errors.Join(errs...)
 }
 
-// isActiveTemp selects the rows finishBridge retires; hasActiveTemp is the same predicate folded
-// over the set, so the gate and the retirement can never disagree about which rows are bridged.
+// hasActiveTemp folds isActiveTemp over the set, so the gate and the retirement cannot disagree.
 func isActiveTemp(record store.DevshardRecord, modelID string, epoch int64) bool {
 	return record.Active && record.RotationRole == roleTemp && record.Model == modelID && record.RotationEpoch <= epoch
 }
@@ -167,9 +161,7 @@ func hasActiveTemp(devshards []store.DevshardRecord, modelID string, epoch int64
 	return false
 }
 
-// deferredRetire reports the outcomes that mean "not yet" rather than "failed": a draining escrow and a
-// settlement already running are both retried by the next tick, so surfacing them would make an error of
-// every ordinary rotation. Anything else is a real failure and must reach the tick.
+// deferredRetire reports the outcomes that mean "not yet" rather than "failed"; anything else must reach the tick.
 func deferredRetire(err error) bool {
 	return errors.Is(err, ErrDevshardBusy) || errors.Is(err, ErrSettlementInFlight)
 }

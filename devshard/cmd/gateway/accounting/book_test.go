@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"devshard/cmd/gateway/engine"
 	"devshard/types"
 )
 
@@ -147,7 +148,7 @@ func TestUnfinishedNonceThatWasNeverAcknowledgedCountsAsRefused(t *testing.T) {
 	if err := book.RecordRace(testEscrow, []Attempt{attempt}); err != nil {
 		t.Fatalf("RecordRace(): %v", err)
 	}
-	if err := book.RecordTimeout(testEscrow, 6, TimeoutKindRefused, "completed", "none"); err != nil {
+	if err := book.RecordTimeout(testEscrow, 6, engine.TimeoutKindRefused, "completed", "none"); err != nil {
 		t.Fatalf("RecordTimeout(): %v", err)
 	}
 	assertDisposition(t, book, 6, 4, DispositionUnfinishedRefused)

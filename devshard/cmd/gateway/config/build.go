@@ -8,8 +8,7 @@ import (
 	"devshard/cmd/gateway/env"
 )
 
-// Build produces the validated snapshot: Defaults() ← env ← admin overrides.
-// Maps/slices from inputs are cloned (no-aliasing contract — see package doc).
+// Build produces the validated snapshot: Defaults() ← env ← admin overrides, cloning every input map and slice.
 func Build(values env.Values, overrides Overrides) (*Config, error) {
 	configuration := Defaults()
 

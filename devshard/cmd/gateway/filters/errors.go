@@ -29,8 +29,7 @@ func WrapReject(err error) error {
 	return &RejectError{Status: http.StatusBadRequest, Message: err.Error(), Wrapped: err}
 }
 
-// ErrorStatus returns err's rejection status, or fallback. An ingest-cap overrun is checked first:
-// a body refused for its size stays a 413 even when a RejectError carrying 400 wraps it.
+// ErrorStatus returns err's rejection status, or fallback; a 413 size overrun outranks a wrapping 400.
 func ErrorStatus(err error, fallback int) int {
 	var oversized *http.MaxBytesError
 	if errors.As(err, &oversized) {

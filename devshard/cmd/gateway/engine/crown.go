@@ -5,8 +5,7 @@ import (
 	"devshard/logging"
 )
 
-// answer settles one attempt's claim on the client stream; a suspicious host's claim is held rather than
-// refused, because a refusal is permanent. See gateway-speculative-race.md, "Crowning".
+// answer settles one claim; a suspicious host's is held rather than refused, because a refusal is permanent. See race.md, "Crowning".
 func (c *raceCoordinator) answer(claim crownRequest) {
 	switch attempt := c.byNonce[claim.Nonce]; {
 	case attempt == nil || c.winner != nil:
@@ -19,8 +18,7 @@ func (c *raceCoordinator) answer(claim crownRequest) {
 	}
 }
 
-// settleClaims answers the held claims once the race can tell whether a rival will serve; alone, a
-// suspicious host is crowned. See gateway-speculative-race.md, "Crown denial".
+// settleClaims answers the held claims once the race can tell whether a rival will serve. See race.md, "Crown denial".
 func (c *raceCoordinator) settleClaims() {
 	if len(c.claims) == 0 {
 		return
@@ -49,13 +47,12 @@ func (c *raceCoordinator) crownWinner(attempt *liveAttempt, reason string) {
 		logkey.Host, logkey.ShortHost(attempt.participant), logkey.Reason, reason)
 }
 
-// rivalPossible reports an attempt other than the held claimants that could still be crowned. See
-// gateway-speculative-race.md, "Crown denial".
+// rivalPossible reports an attempt other than the held claimants that could still be crowned. See race.md, "Crown denial".
 func (c *raceCoordinator) rivalPossible() bool {
 	return c.pending > len(c.claims) || c.picking() || c.moreImmediate > 0
 }
 
-// attemptSink is one attempt's byte path. It runs only on that attempt's goroutine.
+// attemptSink is one attempt's byte path, running only on that attempt's goroutine.
 type attemptSink struct {
 	winner     *winnerWriter
 	hasContent bool
@@ -69,8 +66,7 @@ func (s *attemptSink) Write(chunk []byte) (int, error) {
 }
 func (s *attemptSink) Flush() { s.winner.Flush() }
 
-// contentGate hands the sink beside it the one fact an io.Writer signature cannot carry. Classify is
-// called immediately before the Write of the same chunk, on the same goroutine.
+// contentGate hands the sink the one fact an io.Writer signature cannot carry, for the Write that follows.
 type contentGate struct {
 	streamClassifier
 	sink *attemptSink

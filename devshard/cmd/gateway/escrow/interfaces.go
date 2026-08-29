@@ -9,8 +9,7 @@ import (
 	"devshard/signing"
 )
 
-// Satisfied by *chain.TxClient. TxCommitted is what tells a row still marked pending apart from one
-// whose settle genuinely failed: the settle may have reached the chain after the wait gave up.
+// Satisfied by *chain.TxClient. See README.md, "What this package expects of others".
 type escrowTxClient interface {
 	CreateEscrow(ctx context.Context, signer *signing.Secp256k1Signer, amount uint64, modelID string, onPrepared func(txHash string) error) (chain.CreateEscrowResult, error)
 	SettleEscrow(ctx context.Context, signer *signing.Secp256k1Signer, input chain.SettlementInput, onPrepared func(txHash string) error) (chain.SettleEscrowResult, error)
@@ -47,8 +46,7 @@ type SignerSource interface {
 	SignerFor(privateKeyEnv string) (*signing.Secp256k1Signer, error)
 }
 
-// api/ wires this to the live engine runtime; escrow only consumes it. Retire is what makes IsBusy
-// monotone, so an idle answer stays true until the settlement it gates is broadcast.
+// api/ wires this to the live engine runtime; escrow only consumes it. See README.md, "What this package expects of others".
 type SettlementSource interface {
 	Retire(escrowID string) error // synchronous: no nonce can be committed on the escrow after it returns
 	IsBusy(escrowID string) bool

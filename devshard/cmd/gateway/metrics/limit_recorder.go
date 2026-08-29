@@ -2,8 +2,7 @@ package metrics
 
 import "github.com/prometheus/client_golang/prometheus"
 
-// LimitRecorder counts what the gateway's own limiter turned away. The caps and the in-flight counts
-// are gauges on LimitsCollector; this is the only place the rejections themselves are counted.
+// LimitRecorder is the only place the limiter's rejections are counted; the caps are LimitsCollector gauges.
 type LimitRecorder struct {
 	rejections *prometheus.CounterVec
 }

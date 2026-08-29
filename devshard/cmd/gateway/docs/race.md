@@ -2,7 +2,7 @@
 
 One client request is a *race*: one to N attempts against distinct participants, of which at most one is crowned and streamed to the client. Speculation exists because a devshard host can fail in ways that a timeout alone does not catch — it can answer instantly with nothing, receipt and then never produce a token, or simply be much slower than a peer. Racing turns those into a latency cost rather than a failed request.
 
-This document covers `engine/`. Where a nonce comes from is in [gateway-routing-and-nonces.md](./gateway-routing-and-nonces.md); the invariants the engine must not break are in [gateway-invariants.md](./gateway-invariants.md).
+This document covers `engine/`. Where a nonce comes from is in [routing.md](./routing.md); the invariants the engine must not break are in [rules.md](./rules.md).
 
 ## Anatomy
 
@@ -75,7 +75,7 @@ Stages that can trigger another attempt. The reason column is the wire string, w
 | `first_token_timeout` | No first token within the first-token deadline. |
 | `attempt_failed` | An attempt ended without producing anything usable. |
 
-An attempt launched at race start beside a primary the race distrusts carries a start reason rather than an escalation reason on `devshard_gateway_attempts_started_total{reason}`, and the two vocabularies do not overlap: `primary_suspicious` for a crown-denied or operator-pinned host, `primary_degraded` for one the outlier detector wanted out of rotation. The second exists because the routing gate that withholds an ejected host is capped, and a fleet failing together stays routable by design — see [gateway-capacity-and-health.md](./gateway-capacity-and-health.md).
+An attempt launched at race start beside a primary the race distrusts carries a start reason rather than an escalation reason on `devshard_gateway_attempts_started_total{reason}`, and the two vocabularies do not overlap: `primary_suspicious` for a crown-denied or operator-pinned host, `primary_degraded` for one the outlier detector wanted out of rotation. The second exists because the routing gate that withholds an ejected host is capped, and a fleet failing together stays routable by design — see [capacity.md](./capacity.md).
 
 The first-token deadline is a fixed quadratic in prompt size, `1.7 + 3e-5·T + 5e-10·T²` seconds, with a floor from `engine_first_token_floor_ms` (`engine/escalation.go`, `EscalationPolicy.firstTokenTimeout`). At the default floor of one second the floor is inert: the quadratic's minimum is 1.7 s, so the floor binds only if raised.
 
@@ -85,7 +85,7 @@ The trigger is consumed *before* the new attempt starts, so a failed start canno
 
 The escalation pick runs on its own goroutine rather than inline in the coordinator loop (`engine/race.go`). The scheduler may hold the nonce briefly for a co-arriving request, and a crown claim is the client's first token: waiting for the pick inside the loop would spend that hold on exactly the latency escalation exists to avoid. A departing client cancels the pick, which returns the nonce and the slot.
 
-**There is one ladder, because there is one reply shape.** The gateway asks every host to stream whatever the client asked for ([gateway-request-filtering.md](./gateway-request-filtering.md), "Streaming is forced upstream"), so every request has a first token to wait for and every attempt that ends without one is escalated on the spot. The buffered ladder this replaced had its own rung, `response_timeout_retry`, whose deadline grew with the output budget at a measured 25 tokens a second; it was configured at 50, so the modelled time came out half of real and the floor decided every time. A rung that never fires on its own terms is worse than no rung: it reads as coverage. Removing it took `engine_non_stream_response_floor_ms`, `engine_non_stream_response_ceiling_ms` and `engine_per_output_token_response_lag_ms` with it, along with the one-shot retry they gated and its exemption from the attempt budget.
+**There is one ladder, because there is one reply shape.** The gateway asks every host to stream whatever the client asked for ([`filters/README.md`](../filters/README.md), "Streaming is forced upstream"), so every request has a first token to wait for and every attempt that ends without one is escalated on the spot. The buffered ladder this replaced had its own rung, `response_timeout_retry`, whose deadline grew with the output budget at a measured 25 tokens a second; it was configured at 50, so the modelled time came out half of real and the floor decided every time. A rung that never fires on its own terms is worse than no rung: it reads as coverage. Removing it took `engine_non_stream_response_floor_ms`, `engine_non_stream_response_ceiling_ms` and `engine_per_output_token_response_lag_ms` with it, along with the one-shot retry they gated and its exemption from the attempt budget.
 
 **Scarcity overrides speculation.** When the chain is blocking requests and the relaxed bypass is not active, the attempt budget collapses to one: a speculative attempt spends a nonce the phase the gateway is serving through will not replace.
 

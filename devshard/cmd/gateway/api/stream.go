@@ -13,20 +13,12 @@ import (
 )
 
 const (
-	EscrowHeader = "X-Devshard-ID"
-
-	RequestIDHeader = "X-Request-Id"
-
-	// Without this a host that wins the race on its first token can then send unlimited valid SSE and
-	// take the process out. It tracks the carry cap on purpose: this buffer holds the same
-	// prompt_token_ids frames that cap was derived from, so lowering one without the other would
-	// refuse the large-context replies the arithmetic was meant to admit.
+	// Tracks the carry cap on purpose, and caps a winner's SSE. See README.md, "Streaming the reply".
 	maxBufferedResponseBytes = filters.MaxStreamCarryBytes
 )
 
 type clientStream struct {
-	// An attempt goroutine can still be writing after the handler returned, and Go invalidates the
-	// writer at that moment: every path that touches it locks and stops once closed.
+	// An attempt goroutine can still write after the handler returned, when Go invalidates the writer.
 	mu     sync.Mutex
 	closed bool
 
@@ -204,8 +196,7 @@ func errorEvent(cause error) []byte {
 	return append(append([]byte("data: "), payload...), '\n', '\n')
 }
 
-// One place for every chat reply header, so a cache replay and a live race cannot answer the same
-// request differently.
+// One place for every chat reply header, so a cache replay and a live race cannot answer differently.
 func writeChatHeaders(header http.Header, requestID, escrowID, contentType string, streaming bool) {
 	if requestID != "" {
 		header.Set(RequestIDHeader, requestID)
@@ -220,8 +211,7 @@ func writeChatHeaders(header http.Header, requestID, escrowID, contentType strin
 	}
 }
 
-// statusForAssembled answers 502 for the bodies the assembler substitutes for an answer it could not
-// fold: the host is upstream, and neither body carries a status of its own.
+// statusForAssembled answers 502 for a substituted body: the host is upstream, and the body carries no status.
 func statusForAssembled(body []byte) int {
 	if bytes.Equal(body, filters.TruncatedResponseBody) || bytes.Equal(body, filters.NoResponseDataBody) {
 		return http.StatusBadGateway

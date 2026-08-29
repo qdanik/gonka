@@ -6,8 +6,7 @@ import (
 	"devshard"
 )
 
-// Package-default output-token limits, used when Options passes a zero limit and as the single
-// source config.Defaults reads.
+// Package-default output-token limits; also the single source config.Defaults reads.
 const (
 	DefaultRequestMaxTokens uint64 = 3_072
 	RequestMaxTokensCap     uint64 = 4_096
@@ -28,8 +27,7 @@ func normalizedOutputTokenLimits(limits outputTokenLimits) outputTokenLimits {
 	return limits
 }
 
-// resolveOutputTokenLimits lets a per-model override replace either global limit; a zero the
-// override returns means "not set for this model" and keeps the global one.
+// resolveOutputTokenLimits lets a per-model override replace either global limit; a zero keeps the global one.
 func resolveOutputTokenLimits(options Options, routedModel string) outputTokenLimits {
 	limits := outputTokenLimits{DefaultMaxTokens: options.DefaultMaxTokens, MaxTokensCap: options.MaxTokensCap}
 	if options.ModelTokenLimits == nil {
@@ -45,9 +43,7 @@ func resolveOutputTokenLimits(options Options, routedModel string) outputTokenLi
 	return limits
 }
 
-// capOutputTokens: 0 means the client named no budget and gets the configured default, which the cap
-// deliberately does not clamp; a nonzero value clamps unless bypassed. See
-// gateway-request-filtering.md, "What the gateway forces, and the paired strip".
+// capOutputTokens: 0 means no client budget and takes the default uncapped; a nonzero value clamps unless bypassed.
 func capOutputTokens(value uint64, bypassLimit bool, limits outputTokenLimits) uint64 {
 	limits = normalizedOutputTokenLimits(limits)
 	if value == 0 {
@@ -121,8 +117,7 @@ func decodeUint64Field(document *Document, name string, dst *uint64) error {
 	return nil
 }
 
-// applyOutputTokenLimits resolves max_tokens from whichever field(s) the client sent (the min
-// of both when both are present), then mirrors it into max_completion_tokens iff that was sent.
+// applyOutputTokenLimits resolves max_tokens from whichever field(s) the client sent. See README.md, "Output token limits".
 func applyOutputTokenLimits(document *Document, view *requestView, options Options, routedModel string) {
 	_, hasMaxTokens := document.Get("max_tokens")
 	_, hasMaxCompletionTokens := document.Get("max_completion_tokens")
@@ -159,8 +154,7 @@ func floorMinTokens(document *Document, maxTokens uint64) uint64 {
 	return min(max(requested, completionapi.MinTokensFloor), maxTokens)
 }
 
-// rejectNonPositiveOutputTokens rejects ctx.Param when present, numeric, and <= 0, on every route: a
-// zero output budget makes no answer, and the redundancy layer then waits out a winner that cannot come.
+// rejectNonPositiveOutputTokens: a zero output budget makes no answer, and redundancy waits out a winner that cannot come.
 func rejectNonPositiveOutputTokens() RuleFunc {
 	return func(ctx RuleContext) error {
 		raw, exists := ctx.Document.Get(ctx.Param)

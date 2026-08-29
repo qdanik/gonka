@@ -23,9 +23,7 @@ func NewSessionTimeouts(session *user.Session, payload *host.InferencePayload) *
 	return &SessionTimeouts{handler: session, payload: payload}
 }
 
-// SettleTimeout reads the handler's own record of whether the timeout reached the escrow state. The
-// handler returns a non-nil error on its success path too -- that error carries "the inference timed out"
-// to the request -- so the error alone cannot tell a settled vote from an unsettled one.
+// SettleTimeout reads the handler's own record of whether the vote landed: the error alone cannot tell. See README, "Timeout votes".
 func (s *SessionTimeouts) SettleTimeout(ctx context.Context, nonce uint64, startedAt time.Time) (TimeoutVote, error) {
 	result, err := s.handler.HandleTimeout(ctx, nonce, startedAt, s.payload)
 	vote := TimeoutVote{Kind: result.Reason, Detail: result.DetailReason}

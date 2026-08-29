@@ -12,12 +12,10 @@ import (
 const (
 	MaxNestingDepth = 32
 
-	// MaxBodyBytes bounds the raw request body, both at ingest and before the decode. See
-	// gateway-request-filtering.md, "Structural bounds before anything is decoded".
+	// MaxBodyBytes bounds the raw request body, both at ingest and before the decode.
 	MaxBodyBytes = 10 << 20
 
-	// MaxStructuralNodes bounds the containers and elements the decode allocates. See
-	// gateway-request-filtering.md, "Structural bounds before anything is decoded".
+	// MaxStructuralNodes bounds the containers and elements the decode allocates.
 	MaxStructuralNodes = 250_000
 )
 
@@ -34,9 +32,7 @@ func ParseDocument(body []byte) (*Document, error) {
 	if err := ensureStructuralBounds(body, MaxNestingDepth, MaxStructuralNodes); err != nil {
 		return nil, err
 	}
-	// The decoder here is the standard library's on purpose, alone in this package. Its error text goes
-	// to the client verbatim and the golden corpus pins it against the gateway this replaces, so a
-	// faster library with different wording would change what every malformed request sees.
+	// Standard library on purpose: its error text reaches the client verbatim and the goldens pin that wording.
 	var raw map[string]any
 	decoder := stdjson.NewDecoder(bytes.NewReader(body))
 	decoder.UseNumber()
@@ -105,9 +101,7 @@ func (d *Document) Marshal() ([]byte, error) {
 	return body, nil
 }
 
-// ensureStructuralBounds scans body byte-by-byte outside string literals in one pass, rejecting it
-// once nesting exceeds maxDepth or the container/element count exceeds maxNodes. See
-// gateway-request-filtering.md, "Structural bounds before anything is decoded".
+// ensureStructuralBounds scans body once outside string literals, rejecting it past maxDepth or maxNodes.
 func ensureStructuralBounds(body []byte, maxDepth, maxNodes int) error {
 	depth := 0
 	nodes := 0

@@ -61,8 +61,7 @@ func (g *gateway) serve(ctx context.Context) error {
 	return shutdownErr
 }
 
-// needsQuiesced marks a step that destroys state the steps above it may still be using. See
-// gateway-invariants.md, "6. Shutdown order is a contract".
+// needsQuiesced marks a step that destroys state the steps above it may still use. See rules.md, "6. Shutdown order is a contract".
 type shutdownStep struct {
 	name          string
 	stop          func(context.Context) error
@@ -73,12 +72,10 @@ type httpListener interface {
 }
 type stopper interface{ Stop() }
 
-// idleConnections is satisfied by *http.Client: the pooled chain client keeps sockets open between
-// polls, and nothing above it in the order closes them.
+// idleConnections is satisfied by *http.Client, whose pooled sockets nothing above it closes.
 type idleConnections interface{ CloseIdleConnections() }
 
-// shutdownOrder is the eight-step contract every shutdown follows. See gateway-architecture.md,
-// "Shutdown" and gateway-invariants.md, "6. Shutdown order is a contract".
+// shutdownOrder is the nine-step contract every shutdown follows. See operations.md, "Shutdown".
 func shutdownOrder(listener httpListener, races, dispatchers, escrowLifecycle, chainObserver stopper, sessions, nonceLedger, storage io.Closer, publicAPI idleConnections) []shutdownStep {
 	return []shutdownStep{
 		{name: "http server", stop: listener.Shutdown},
@@ -87,20 +84,15 @@ func shutdownOrder(listener httpListener, races, dispatchers, escrowLifecycle, c
 		{name: "escrow lifecycle", stop: waitFor(escrowLifecycle)},
 		{name: "chain observer", stop: waitFor(chainObserver)},
 		{name: "escrow sessions", stop: closeOf(sessions), needsQuiesced: true},
-		// After every emitter above has stopped, so the final snapshot holds the counters the run ended
-		// with rather than one taken while races were still classifying nonces.
+		// After every emitter above, so the final snapshot holds the counters the run ended with.
 		{name: "nonce accounting", stop: closeOf(nonceLedger)},
 		{name: "store", stop: closeOf(storage)},
-		// Last: every step above can still reach the public API, and an idle socket closed under one of
-		// them is a socket the next poll has to re-dial. The chain's own gRPC connection is not closed
-		// here and cannot be: common/chain owns it and exposes no Close, so it lives until the process
-		// exits. That is why the tests ignore its goroutines rather than waiting for them.
+		// Last: every step above can still reach the public API. See README.md, "Shutdown".
 		{name: "public api connections", stop: closeIdle(publicAPI)},
 	}
 }
 
-// waitFor bounds a drain by the shutdown budget without cancelling the work inside it. See
-// gateway-architecture.md, "Shutdown".
+// waitFor bounds a drain by the shutdown budget without cancelling it. See README.md, "Shutdown".
 func waitFor(component stopper) func(context.Context) error {
 	return func(ctx context.Context) error {
 		stopped := make(chan struct{})
@@ -125,8 +117,7 @@ func closeIdle(component idleConnections) func(context.Context) error {
 	}
 }
 
-// stopAll runs every step even after a failure, except one marked needsQuiesced, which is skipped and
-// the skip reported. See gateway-architecture.md, "Shutdown".
+// stopAll runs every step even after a failure, skipping and reporting a needsQuiesced one. See README.md, "Shutdown".
 func stopAll(ctx context.Context, steps []shutdownStep) error {
 	var problems []error
 	quiesced := true
@@ -149,8 +140,7 @@ func (g *gateway) shutdown(grace time.Duration) error {
 	return stopAll(drainCtx, shutdownOrder(g.server, g.races, g.router, g.manager, g.observer, g.escrows, g.nonces, g.store, g.publicAPI))
 }
 
-// bootBudget ties the two halves of a bounded boot: the concurrent-build limit and the idle pool those
-// builds reuse. See gateway-architecture.md, "Boot".
+// bootBudget sizes the build limit and the idle pool those builds reuse together. See README.md, "Wiring order, and the knots in it".
 type bootBudget struct {
 	builders int
 	client   *http.Client

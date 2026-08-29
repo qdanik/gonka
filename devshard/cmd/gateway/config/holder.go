@@ -5,9 +5,7 @@ import (
 	"sync/atomic"
 )
 
-// Holder publishes the live configuration snapshot. Readers call Load on
-// every use; reconfiguration calls Swap. Subscribers run synchronously inside
-// Swap: keep them fast, and never call Swap from a callback.
+// Holder publishes the live configuration snapshot. See README.md, "Using the `Holder`".
 type Holder struct {
 	current     atomic.Pointer[Config]
 	mutex       sync.Mutex
@@ -24,8 +22,7 @@ func NewHolder(initial *Config) *Holder {
 // Load returns the current snapshot. The result is shared and immutable.
 func (h *Holder) Load() *Config { return h.current.Load() }
 
-// Swap publishes a new snapshot and notifies subscribers (unordered;
-// subscribers must be order-independent).
+// Swap publishes a new snapshot and notifies subscribers unordered, so they must be order-independent.
 func (h *Holder) Swap(next *Config) {
 	h.current.Store(next)
 	h.mutex.Lock()

@@ -20,8 +20,7 @@ var (
 	// ErrClosed rejects work on a registry whose sessions have already been released.
 	ErrClosed = errors.New("registry closed")
 
-	// ErrDraining refuses an escrow id whose earlier entry has not finished: that entry owns the nonces
-	// still awaiting votes and holds the storage they settle through.
+	// ErrDraining refuses an id whose earlier entry still owns nonces awaiting votes and the storage they settle through.
 	ErrDraining = errors.New("escrow is still draining")
 )
 
@@ -34,9 +33,7 @@ type Deps struct {
 	Now              func() time.Time
 }
 
-// Registry owns the live escrow set. live is written only under mu and read without it, so Candidates costs
-// one atomic load; draining holds escrows removed from routing whose requests have not finished, keyed by
-// entry rather than id. See gateway-routing-and-nonces.md, "The escrow registry".
+// Registry owns the live escrow set: live is written only under mu and read without it. See routing.md, "The escrow registry".
 type Registry struct {
 	servingSessions  SessionFactory
 	readOnlySessions SessionFactory
@@ -74,8 +71,7 @@ func New(deps Deps) *Registry {
 	return registry
 }
 
-// Add publishes one escrow for routing, refuses an id an earlier entry is still draining, and releases an
-// unpublished session without flushing. See gateway-routing-and-nonces.md, "The escrow registry".
+// Add publishes one escrow for routing and releases an unpublished session without flushing. See routing.md, "The escrow registry".
 func (r *Registry) Add(ctx context.Context, escrowID, model string) error {
 	switch {
 	case escrowID == "":
@@ -124,11 +120,7 @@ func (r *Registry) Add(ctx context.Context, escrowID, model string) error {
 	return nil
 }
 
-// openingLock serializes opens of one escrow. A session is a SQLite file: two concurrent opens fail
-// with SQLITE_BUSY before either reaches the already-published check below, so the escrow an operator
-// just created can report a failure while another caller serves it. Locks are kept for the life of the
-// process -- one small mutex per escrow id ever published -- because removing one a waiter still holds
-// would let the next caller take a fresh lock and race it.
+// openingLock serializes opens of one escrow, whose session is a SQLite file. See README.md, "Publishing, retiring and draining".
 func (r *Registry) openingLock(escrowID string) *sync.Mutex {
 	lock, _ := r.openings.LoadOrStore(escrowID, &sync.Mutex{})
 	return lock.(*sync.Mutex)
@@ -158,9 +150,7 @@ func (r *Registry) Retire(escrowID string) error {
 	return r.closeDraining(entry)
 }
 
-// unpublish takes an escrow out of routing and reports whether the caller owns its close. An entry
-// stays in draining until the close finishes, whether or not requests were running, so Add refuses the
-// id for the whole close rather than opening a second session over storage the first still holds.
+// unpublish takes an escrow out of routing and reports whether the caller owns its close.
 func (r *Registry) unpublish(escrowID string) (*escrowEntry, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -184,13 +174,9 @@ func (r *Registry) unpublish(escrowID string) (*escrowEntry, bool) {
 	return entry, true
 }
 
-// closeDraining releases the session with the registry lock free. Closing flushes the snapshot, which
-// takes the session lock, and a dispatch takes the session lock before the registry lock: holding the
-// two in the opposite order here wedges every later route and settlement behind one retirement. It
-// also keeps the snapshot write and the storage close off the path of every pick.
+// closeDraining releases the session with the registry lock free, in the session-then-registry lock order.
 func (r *Registry) closeDraining(entry *escrowEntry) error {
-	// Only an unreleased store leaves the entry in draining: Add must keep refusing that id rather than
-	// open a second session over storage the first still holds.
+	// Only an unreleased store leaves the entry in draining, so Add keeps refusing that id.
 	released, err := entry.close()
 	if !released {
 		return err
@@ -220,8 +206,7 @@ func (r *Registry) release(entry *escrowEntry) {
 	logging.Info("draining escrow closed", logkey.Escrow, entry.id)
 }
 
-// lastHoldDropped reports that this release ended the final in-flight request of a retired escrow, so
-// exactly one caller closes it. The count reaches zero once, and only a retired entry is in draining.
+// lastHoldDropped is true for exactly one caller: the count reaches zero once, and only a retired entry drains.
 func (r *Registry) lastHoldDropped(entry *escrowEntry) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -232,13 +217,10 @@ func (r *Registry) lastHoldDropped(entry *escrowEntry) bool {
 	return isDraining
 }
 
-// DrainCloseFailures counts the drained escrows whose flush or close failed. Retire and Close hand
-// that error to their caller; here the request that kept the escrow open has already been answered
-// and there is nobody left to return it to, so it is counted instead of lost.
+// DrainCloseFailures counts a flush or close failure with no caller left to return it to.
 func (r *Registry) DrainCloseFailures() int64 { return r.drainCloseFailures.Load() }
 
-// IsBusy satisfies escrow.SettlementSource: a settlement must not claim funds while a request is
-// still spending nonces on the escrow, including one still draining from an earlier session of it.
+// IsBusy satisfies escrow.SettlementSource: a settlement must not claim funds while nonces are still being spent.
 func (r *Registry) IsBusy(escrowID string) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -253,8 +235,7 @@ func (r *Registry) IsBusy(escrowID string) bool {
 	return false
 }
 
-// Exhausted reports an escrow routing declined as spent -- out of nonces or out of deposit -- for the
-// rotation lifecycle, which is what replaces it.
+// Exhausted reports an escrow routing declined as spent to the rotation lifecycle, which is what replaces it.
 func (r *Registry) Exhausted(escrowID, reason string) {
 	if r.exhaustion == nil {
 		return
@@ -293,8 +274,7 @@ func drainingInIDOrder(draining map[*escrowEntry]struct{}) []*escrowEntry {
 	return entries
 }
 
-// pushMembershipLocked republishes every live escrow's share, not just the one that changed. See
-// gateway-routing-and-nonces.md, "Membership: what the capacity model is told".
+// pushMembershipLocked republishes every live escrow's share. See routing.md, "Membership: what the capacity model is told".
 func (r *Registry) pushMembershipLocked() {
 	if r.membership == nil {
 		return

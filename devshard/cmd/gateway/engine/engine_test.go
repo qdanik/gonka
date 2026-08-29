@@ -157,7 +157,7 @@ func TestSettleTimeoutsRecordsAPostedVoteAsCompleted(t *testing.T) {
 	if events[1].Action != TimeoutActionCompleted {
 		t.Errorf("action = %q, want %q", events[1].Action, TimeoutActionCompleted)
 	}
-	if events[1].Kind != timeoutKindExecution {
+	if events[1].Kind != TimeoutKindExecution {
 		t.Errorf("kind = %q, want execution", events[1].Kind)
 	}
 }
@@ -177,8 +177,8 @@ func TestSettleTimeoutsNamesADiffThatCarriedNoTimeout(t *testing.T) {
 	if settled.Action != TimeoutActionFailed {
 		t.Fatalf("action = %q, want %q", settled.Action, TimeoutActionFailed)
 	}
-	if settled.Reason != timeoutReasonNotApplied {
-		t.Fatalf("reason = %q, want %q", settled.Reason, timeoutReasonNotApplied)
+	if settled.Reason != TimeoutReasonNotApplied {
+		t.Fatalf("reason = %q, want %q", settled.Reason, TimeoutReasonNotApplied)
 	}
 }
 
@@ -373,8 +373,8 @@ func TestSettleTimeoutsSeparatesAGoneEscrowFromACollectionFailure(t *testing.T) 
 		escrowMissing bool
 		wantReason    string
 	}{
-		{name: "the hosts still have the escrow", wantReason: timeoutReasonCollectionError},
-		{name: "the hosts have dropped the escrow", escrowMissing: true, wantReason: timeoutReasonEscrowGone},
+		{name: "the hosts still have the escrow", wantReason: TimeoutReasonCollectionError},
+		{name: "the hosts have dropped the escrow", escrowMissing: true, wantReason: TimeoutReasonEscrowGone},
 	}
 
 	for _, testCase := range cases {
@@ -416,7 +416,7 @@ func TestAGoneEscrowDoesNotRenameASettledVote(t *testing.T) {
 	if settled.Action != TimeoutActionCompleted {
 		t.Fatalf("action = %q, want %q", settled.Action, TimeoutActionCompleted)
 	}
-	if settled.Reason == timeoutReasonEscrowGone {
+	if settled.Reason == TimeoutReasonEscrowGone {
 		t.Fatal("a settled vote was named as a gone escrow")
 	}
 }

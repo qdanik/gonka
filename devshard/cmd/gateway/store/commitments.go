@@ -6,9 +6,7 @@ import (
 	"time"
 )
 
-// Commitment is the durable intent for one escrow create, written before the
-// tx broadcasts so a crash before the escrow id is known can be recovered by
-// resolving TxHash on-chain.
+// Commitment is the durable intent for one escrow create, written before the tx broadcasts. See README.md, "The commitment row".
 type Commitment struct {
 	TxHash        string
 	Model         string

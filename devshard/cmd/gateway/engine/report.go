@@ -103,8 +103,7 @@ func (c *raceCoordinator) complete(attempt *liveAttempt, event AttemptEvent) {
 	}
 }
 
-// A host rolls its diff back when its root disagrees, so its state survives intact and replaying the
-// retained chain costs one request to try.
+// A host rolls its diff back when its root disagrees, so replaying the retained chain costs one request to try.
 func (c *raceCoordinator) stateDiverged(attempt *liveAttempt) {
 	const cause = "escrow state root diverged"
 	c.exclude(attempt.participant)
@@ -163,11 +162,7 @@ func (c *raceCoordinator) retire(attempt *liveAttempt) {
 func (c *raceCoordinator) report() RaceOutcome {
 	close(c.done)
 	outcome := c.outcome()
-	if c.deps.Crown != nil {
-		for _, attempt := range outcome.Attempts {
-			c.deps.Crown.Observe(attempt.Participant, outcome.Model, outcome.DeniesCrowning(attempt))
-		}
-	}
+	outcome.observeCrowning(c.deps.Crown)
 	if c.deps.Report != nil {
 		c.deps.Report(outcome)
 	}

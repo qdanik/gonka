@@ -4,8 +4,7 @@ import (
 	"time"
 )
 
-// availability is a frozen per-drain snapshot of the host predicates. See
-// gateway-routing-and-nonces.md, "The drain".
+// availability is a frozen per-drain snapshot of the host predicates. See routing.md, "The drain".
 type availability struct {
 	pocRequired  func(participant string) bool
 	throttled    func(participant string) bool
@@ -35,8 +34,7 @@ var ghostFor = map[blockReason]GhostKind{
 	blockStateDiverged: ghostStateDiverged,
 }
 
-// divergedFromEscrowState and outsideAllowlist read a missing predicate as no block at all, so a
-// caller that builds an availability without one does not narrow dispatch by accident.
+// A missing predicate reads as no block, so an availability built without one does not narrow dispatch.
 func (a availability) divergedFromEscrowState(participant string) bool {
 	return a.stateBlocked != nil && a.stateBlocked(participant)
 }
@@ -62,10 +60,7 @@ func (a availability) participantBlocked(participant string) blockReason {
 	return blockNone
 }
 
-// blocks is the one definition of "this participant cannot serve this waiter". match and servable both
-// read it because they must be exactly as strict as each other: a servable that is stricter fails a
-// request match would have served, and one that is laxer keeps a waiter queued that every drain can
-// only answer by burning a chain-costed nonce.
+// blocks is the one definition of "this participant cannot serve this waiter", read by match and servable alike. See README, "The drain".
 func (a availability) blocks(participant string, queued *waiter) blockReason {
 	if reason := a.participantBlocked(participant); reason != blockNone {
 		return reason
@@ -85,9 +80,7 @@ func (a availability) onlyThisHostIsLeft(participant string, participants []stri
 	return true
 }
 
-// match is pure and total: it reads nothing, mutates nothing, and every path yields a Decision.
-// Filters are keyed by participant, never by slot, so a host a request excluded once can never be
-// re-served to it through a sibling slot of the same validator.
+// match is pure and total, and filters by participant rather than slot. See README, "The match decision".
 func match(binding HostBinding, waiting []*waiter, participants []string, avail availability, now time.Time, matchWait time.Duration) Decision {
 	participant := binding.Participant
 	if reason := avail.participantBlocked(participant); reason != blockNone {
@@ -118,7 +111,7 @@ func match(binding HostBinding, waiting []*waiter, participants []string, avail 
 	if until := oldestLive.enqueued.Add(matchWait); now.Before(until) {
 		return hold{until: until}
 	}
-	// See gateway-routing-and-nonces.md, "Serving a host the request excluded".
+	// See routing.md, "Serving a host the request excluded".
 	if excludedOnly != nil {
 		return serve{waiter: excludedOnly, despiteExclusion: true}
 	}

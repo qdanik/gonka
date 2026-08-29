@@ -1,8 +1,6 @@
 package accounting
 
-// nonceTotals is the range of nonces a row was assigned and how those nonces came out. One slot of one
-// escrow, one host across all of them, and one epoch across all hosts are the same shape, so each is
-// the sum of the rows below it.
+// The three levels are the same shape, so each is the sum of the rows below it. See README.md.
 type nonceTotals struct {
 	Assigned     uint64                 `json:"assigned_nonces"`
 	Dispositions map[Disposition]uint64 `json:"dispositions"`
@@ -23,8 +21,7 @@ func (t *nonceTotals) add(other nonceTotals) {
 	t.Dispositions = addInto(t.Dispositions, other.Dispositions)
 }
 
-// hostActivity is what the host was doing rather than how its nonces came out: the duties the protocol
-// handed it, the work still open, and the checks it performed.
+// What the host was doing rather than how its nonces came out.
 type hostActivity struct {
 	RequiredValidations  uint32 `json:"required_validations"`
 	CompletedValidations uint32 `json:"completed_validations"`
@@ -36,8 +33,7 @@ type hostActivity struct {
 	TimeoutsApplied      uint64 `json:"timeouts_applied"`
 }
 
-// add unions the open requests instead of summing them: one request spends several nonces, so slots of
-// the same escrow hold it at once and summing would count the client twice.
+// Open requests are unioned, not summed: one request spends several nonces at once.
 func (a *hostActivity) add(other hostActivity) {
 	a.RequiredValidations += other.RequiredValidations
 	a.CompletedValidations += other.CompletedValidations
@@ -54,8 +50,7 @@ func (a *hostActivity) add(other hostActivity) {
 	a.InFlightRequests = uint64(len(a.openRequests))
 }
 
-// timeoutTally is the timeout view of a set of counters, folded once per counter on the slot that owns
-// it and summed upwards, so a host's row and its per-escrow rows cannot classify one nonce differently.
+// Folded once on the owning slot and summed upwards, so two rows cannot classify one nonce differently.
 type timeoutTally struct {
 	TimeoutPending     uint64                    `json:"timeout_pending"`
 	UnknownReasonTotal uint64                    `json:"unknown_reason_total"`

@@ -13,17 +13,14 @@ import (
 	"devshard/logging"
 )
 
-// tracedDispatches narrates the dispatch events an operator would otherwise have to infer from a
-// counter's slope, and forwards every one to the recorder. It wraps rather than living inside metrics
-// because counting and narrating are different jobs, and the scheduler stays free of a logger.
+// tracedDispatches narrates dispatch events and forwards them on. See README.md, "Two readers of one fact".
 type tracedDispatches struct {
 	recorder *metrics.DispatchRecorder
 	ledger   *nonces.Recorder
 	charges  *burns.Accountant
 }
 
-// GhostBurned is a nonce that cost money on chain and will serve nobody. The nonce is logged and never
-// labelled: a counter keyed by it would grow without end.
+// GhostBurned logs the nonce and never labels it: a counter keyed by nonce would grow without end.
 func (t tracedDispatches) GhostBurned(escrowID string, burned scheduler.Burn) {
 	logging.Warn("nonce burned for nobody", logkey.Escrow, escrowID, logkey.Nonce, burned.Nonce,
 		logkey.Host, logkey.ShortHost(burned.Participant), logkey.Reason, burned.Reason)
@@ -32,21 +29,18 @@ func (t tracedDispatches) GhostBurned(escrowID string, burned scheduler.Burn) {
 	t.charges.Burned(escrowID, burned)
 }
 
-// BurnBudgetExhausted means the escrow stopped burning nonces to answer requests it cannot serve, so
-// queued callers now wait rather than spend. Rare, and it changes what the escrow does.
+// BurnBudgetExhausted is rare and changes what the escrow does: queued callers now wait rather than spend.
 func (t tracedDispatches) BurnBudgetExhausted(escrowID string) {
 	logging.Warn("escrow stopped burning nonces at its budget", logkey.Escrow, escrowID)
 	t.recorder.BurnBudgetExhausted(escrowID)
 }
 
-// NonceHeld and EscrowRetired pass straight through: a held nonce is the ordinary case, and retirement
-// is already written down where it happens.
+// NonceHeld and EscrowRetired pass straight through: both are already written down where they happen.
 func (t tracedDispatches) NonceHeld(escrowID string) { t.recorder.NonceHeld(escrowID) }
 
 func (t tracedDispatches) EscrowRetired(escrowID string) { t.recorder.EscrowRetired(escrowID) }
 
-// phaseNarrator turns the observer's five-second poll into a line only when something an operator cares
-// about actually changed. Subscribing without this would write the same snapshot twelve times a minute.
+// phaseNarrator writes a line only when something changed; the observer polls twelve times a minute.
 type phaseNarrator struct {
 	mu      sync.Mutex
 	started bool
@@ -56,8 +50,7 @@ type phaseNarrator struct {
 	reason  chain.BlockReason
 }
 
-// phaseChange is what one publish is worth saying about, separated from saying it so the decision can
-// be tested: the whole value of this type is writing nothing when nothing moved.
+// phaseChange separates deciding from saying, so writing nothing when nothing moved can be tested.
 type phaseChange struct {
 	first bool
 	epoch bool
@@ -101,9 +94,7 @@ func (n *phaseNarrator) observe(snapshot chain.PhaseSnapshot) {
 	}
 }
 
-// nonceAccountedRaces hands one race outcome to both readers of it. The recorder asks how the fleet
-// performed; the ledger asks where each nonce went. Neither question belongs inside the other, and the
-// engine should know about neither.
+// nonceAccountedRaces hands one race outcome to both readers of it. See README.md, "Two readers of one fact".
 type nonceAccountedRaces struct {
 	recorder *metrics.RaceRecorder
 	ledger   *nonces.Recorder

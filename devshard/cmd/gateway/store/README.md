@@ -18,3 +18,68 @@ One SQLite database at `<storageDir>/gateway.db`, holding what must survive a re
 - **This is control-plane state, not inference data.** Payloads and the nonce ledger live elsewhere.
 - **Retention is enforced on both age and row count**, and a zero on either is rejected at construction, so an unbounded ledger cannot be configured.
 - **A write that must survive a crash is one statement**, not a read-modify-write.
+
+## Opening the database
+
+`Open` creates the storage dir, opens `gateway.db`, refuses a legacy database, and migrates.
+
+The connection pragmas — `journal_mode(WAL)`, `synchronous(NORMAL)`, `busy_timeout(5000)` — travel in the DSN rather than as statements issued after the open. They are per-connection, and a connection the pool recreates would come back without them, silently, with `busy_timeout` at 0 and `synchronous` back at FULL. In the DSN every connection carries them by construction.
+
+The pool is one connection, kept for the life of the process. SQLite serializes writes anyway, and a second connection would only add the lock contention a single connection makes impossible.
+
+Migrations run in order, one transaction per version, and the applied version is recorded in `schema_version` — so `Open` is idempotent and a version that failed part-way is never recorded as applied.
+
+### The legacy-database guard
+
+`gateway.db` is also the name devshardctl uses, and two table names collide at different columns, so migrating one of those would adopt the legacy shape instead of failing. A database with no `schema_version` that holds any of `gateway_settings`, `gateway_devshards`, `gateway_suspicious_hosts` or `participant_throttle_state` is refused with `ErrLegacyDatabase`: those tables are created by devshardctl and never here, so their presence is proof rather than a guess.
+
+The guard is declared apart from the migrations list because it decides whether the storage dir may be migrated at all, and because the migration entries are raw SQL whose indentation is part of the literal.
+
+## Writing under a lock
+
+`WithRetry` runs a write up to `retryAttempts` (10) times, waiting `retryBackoff` between attempts, to ride out a transient write lock. It returns immediately on success, aborts with `ctx.Err()` without sleeping past a cancellation, and otherwise returns the last error once every attempt is exhausted.
+
+Only a locked database is retried. Everything else — a missing row, a constraint — fails the same way on every attempt, so retrying it spends the whole ladder to return the error the first call already had, and the caller waits seconds for an answer it could have had at once.
+
+`isLockedError` matches `SQLITE_BUSY` and `SQLITE_LOCKED`, masked to the primary code: with one connection a lock surfaces in its primary form, but the driver enables extended codes, and a comparison that only matched the primary would stop retrying the moment the connection model changed. The driver's own `busy_timeout` absorbs the short waits, so seeing one of these codes here means the lock outlived it. It is a field on `Store` rather than a direct call because the driver's error type cannot be constructed outside its own package, and the ladder's own mechanics — backoff, cancellation, attempt count — have to be testable without provoking a real cross-process lock.
+
+## The devshard registry
+
+A row names the escrow, the environment variable holding the key that can act on it — never the key itself — its model, whether it is active, its rotation role and epoch, whether a settlement is queued, the hash and time of the settle transaction it last broadcast, and the route prefix it was created under. An update or delete matching no row returns `ErrDevshardNotFound`.
+
+`UpsertDevshard` replaces every field of an existing row except two:
+
+- `settlement_pending`, so an unrelated upsert never clears a queued settlement — only `SetDevshardSettlementPending` moves it;
+- `route_prefix`, because a host binds an escrow to the first version that reaches it and refuses every other one for good, so the version an escrow was created under must never change.
+
+Its statement is a named constant so a test can read which columns the update carries: a field added to `DevshardRecord` that nobody adds there is inserted once and never updated again, and nothing else in the package fails when that happens.
+
+`ParkForSettlement` writes `active = 0` and `settlement_pending = 1` in one statement. Written as two, a crash between them leaves the row inactive and not pending, which no recovery path picks up: the settle sweep looks for pending rows, so the escrow would be out of service and never settled.
+
+Everything else is a targeted single-column update rather than a whole-record upsert, for one reason: a tick loads its escrows once and several steps act on that one slice, so the caller's copy predates whatever an earlier step in the same tick wrote. `SetDevshardRotationRole` moves the role without carrying a stale `active` or `settle_tx_hash` back into the row, and `DevshardSettleTxHash` reads the hash from the row rather than from the record the caller is holding.
+
+`SetDevshardSettleTxHash` stamps `settle_tx_at` alongside the hash, and clears the stamp when the hash is cleared. That stamp is what lets a later tick tell a settle that may still land from one that no longer can, instead of building a second transaction for a settle already on its way.
+
+## The commitment row
+
+A `Commitment` is the durable intent for one escrow create, written before the transaction broadcasts so that a crash before the escrow id is known can be recovered by resolving its `TxHash` on chain. It carries what the create would have to be repeated with — model, role, key env, epoch, block height — and the creation time the reconciler measures its grace window from. Commitments load ordered by `(created_at, tx_hash)`, and deleting one that is already gone is a no-op.
+
+`RotationStatus` beside it is the latest observed outcome of one (model, role) rotation stage, kept for admin-debug visibility only.
+
+## The accounting ledger
+
+`NewLedger` registers a single writer with the store, and `Store.Close` drains it before the database handle goes, so no queued row outlives the connection it needs. Only one open ledger is allowed at a time.
+
+The ledger writes from one goroutine behind a queue of `ledgerQueueDepth` (1024) and **sheds rather than blocks**: its caller is on the response path. A row shed under load, or lost to a write failure, is counted in `Stats` and never fails the close. Inserts are `ON CONFLICT(request_id) DO NOTHING`, so a request recorded twice is not a second row. A `RequestRecord` carries no monetary cost: the race outcome that writes it knows only token counts.
+
+### Retention
+
+A sweep runs at most every `retentionSweepEvery` (1 min), and once more when the queue closes.
+
+It runs whatever the insert before it did: a persistently failing insert is exactly when rows are least likely to be deleted and most likely to need it, and gating retention behind a successful write turns a write problem into an unbounded table. The two bounds are attempted independently — the row cap is the disk-fill guard, and a busy lock on the age delete must not be what stops it running. A sweep that cannot delete leaves the ledger growing past both bounds, so each failure is counted rather than dropped.
+
+### Timestamps
+
+`FormatTime` renders every timestamp this package stores, and the accounting API renders with the same function, so the retention cutoff and the rows it is compared against can never drift in precision or zone.
+
+Its layout is fixed-width where `RFC3339Nano` is not. Retention compares and orders timestamps as text, and `RFC3339Nano` trims trailing zeros, so a whole second would sort after the same second plus a tenth and the sweep would prune by the wrong order. `parseTime` is the only reader of what `FormatTime` writes, the empty zero timestamp included.
