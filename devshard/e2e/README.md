@@ -17,6 +17,7 @@ Each test starts an isolated Docker network with:
 - `postgres`: smoke CI storage dependency.
 - `devshard-host-0..2`: three participant hosts with stub inference.
 - `devshardctl`: OpenAI-compatible HTTP entry point for the test client.
+- `devshard-gateway`: the same entry point served by `cmd/gateway`, started **instead of** `devshardctl` when a scenario sets `runGateway`. The two cannot run together: both would open the same escrow and advance the same nonce sequence. Its image comes from `DEVSHARD_E2E_GATEWAY_IMAGE` and is built by `make -C cmd/gateway image`, which `make e2e-images` calls.
 
 Some recovery tests also attach named Docker volumes to host containers to
 verify SQLite-backed restart behavior.

@@ -9,7 +9,7 @@ The hard part is not proxying. It is that **every nonce costs the escrow money w
 | If you want to | Read |
 | --- | --- |
 | run it | [`deploy/README.md`](./deploy/README.md) |
-| understand how it fits together | [`Architecture.md`](./Architecture.md) |
+| understand how it fits together | [`architecture.md`](./docs/architecture.md) |
 | follow one request end to end | [`docs/request.md`](./docs/request.md) |
 | change one layer | that layer's own `README.md` — see the table below |
 | operate it | [`docs/operations.md`](./docs/operations.md) |

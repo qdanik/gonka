@@ -1,4 +1,4 @@
-.PHONY: gateway gateway-test proto test test-junit gateway-mockenv-test gateway-mockenv-test-junit integration-test stress-test fault-test ci-testenv-unit ci-testenv-integration devshard-gateway-release e2e e2e-test e2e-images
+.PHONY: proto test test-junit gateway-mockenv-test gateway-mockenv-test-junit integration-test stress-test fault-test ci-testenv-unit ci-testenv-integration devshard-gateway-release e2e e2e-test e2e-images
 
 DEVSHARD_VERSION ?= dev
 DEVSHARD_PROTOCOL_VERSION ?= v3
@@ -17,6 +17,7 @@ GATEWAY_MOCKENV_JUNIT_REPORT ?= mockenv-junit-report.xml
 DEVSHARD_E2E_MOCK_CHAIN_IMAGE ?= devshard-mock-chain:local
 DEVSHARD_E2E_HOST_IMAGE ?= devshard-host:local
 DEVSHARD_E2E_DEVSHARDCTL_IMAGE ?= devshardctl:local
+DEVSHARD_E2E_GATEWAY_IMAGE ?= devshard-gateway:local
 DEVSHARD_E2E_POSTGRES_IMAGE ?= postgres:18.1-bookworm
 # Pin e2e host+ctl protocol stamp to "dev" so images stay aligned without
 # bumping this on every release protocol version change.
@@ -40,15 +41,6 @@ devshard-gateway-release:
 		-f Dockerfile \
 		--push \
 		..
-
-# DEVSHARD_VERSION is stamped into types.buildStateRootProtocolVersion, which is hashed into the
-# state-root preimage and written into every settlement payload. A binary built without it falls back
-# to the plain-`go test` default and signs settlements the network computes differently.
-gateway:
-	go build -ldflags "-X main.Version=$(DEVSHARD_VERSION) -X devshard/types.buildStateRootProtocolVersion=$(DEVSHARD_VERSION)" -o bin/gateway ./cmd/gateway
-
-gateway-test:
-	go test ./cmd/gateway/... -race -count=1
 
 proto:
 	PATH="$$HOME/go/bin:$$PATH" protoc --proto_path=proto --go_out=. --go_opt=module=devshard proto/devshard/v1/*.proto
@@ -85,6 +77,10 @@ e2e-images:
 	$(DOCKER_BUILD) -t $(DEVSHARD_E2E_MOCK_CHAIN_IMAGE) -f Dockerfile.mock-chain ..
 	$(DOCKER_BUILD) --build-arg DEVSHARD_VERSION=$(DEVSHARD_E2E_VERSION) -t $(DEVSHARD_E2E_HOST_IMAGE) -f Dockerfile.host ..
 	$(DOCKER_BUILD) --build-arg DEVSHARD_VERSION=$(DEVSHARD_E2E_VERSION) --target devshardctl-runtime -t $(DEVSHARD_E2E_DEVSHARDCTL_IMAGE) -f Dockerfile ..
+	# The gateway owns how its own image is built; the stack only says which tag it wants.
+	$(MAKE) -C cmd/gateway image GATEWAY_VERSION=$(DEVSHARD_E2E_VERSION) \
+		GATEWAY_IMAGE=$(firstword $(subst :, ,$(DEVSHARD_E2E_GATEWAY_IMAGE))) \
+		GATEWAY_STAGE_TAG=$(lastword $(subst :, ,$(DEVSHARD_E2E_GATEWAY_IMAGE)))
 
 e2e-test:
 	docker compose -f docker-compose.e2e.yml run --rm e2e-test

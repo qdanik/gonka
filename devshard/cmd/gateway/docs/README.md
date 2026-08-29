@@ -4,7 +4,7 @@ Each package has its own `README.md` describing what that layer owns. The docume
 
 | Document | What it answers |
 | --- | --- |
-| [../Architecture.md](./../Architecture.md) | the package map and what each one is responsible for |
+| [../architecture.md](./architecture.md) | the package map and what each one is responsible for |
 | [request.md](./request.md) | one request from the socket to the settled nonce |
 | [race.md](./race.md) | the escalation ladder, the crown, the drain barrier |
 | [routing.md](./routing.md) | the drain loop, the host gates, every burn reason |
@@ -19,4 +19,4 @@ Each package has its own `README.md` describing what that layer owns. The docume
 | [operations.md](./operations.md) | every route, every environment variable, every metric |
 | [proposal.md](./proposal.md) | the original design proposal |
 
-Start from [`../README.md`](../README.md) or [`../Architecture.md`](../Architecture.md).
+Start from [`../README.md`](../README.md) or [`./architecture.md`](./architecture.md).

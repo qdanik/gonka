@@ -66,6 +66,11 @@ type e2eEnvOptions struct {
 	hostEnvOverrides        map[int]map[string]string
 	usePostgresStorage      bool
 	devshardctlEnvOverrides map[string]string
+
+	// runGateway drives the stack with cmd/gateway in place of devshardctl. The two cannot run side by
+	// side: both would open the same escrow and advance the same nonce sequence.
+	runGateway          bool
+	gatewayEnvOverrides map[string]string
 }
 
 func startHappyPathEnv(ctx context.Context, t *testing.T, images e2eImages) *e2eEnv {
@@ -142,6 +147,13 @@ func startE2EEnv(ctx context.Context, t *testing.T, images e2eImages, opts e2eEn
 		env.startHost(ctx, t, i)
 	}
 
+	if opts.runGateway {
+		env.startGateway(ctx, t, opts)
+		require.NotNil(t, mockChain)
+		require.NotNil(t, postgres)
+		return env
+	}
+
 	devshardctlEnv := map[string]string{
 		"DEVSHARD_E2E":           "1",
 		"DEVSHARD_ESCROW_ID":     defaultEscrowID,
@@ -184,6 +196,43 @@ func startE2EEnv(ctx context.Context, t *testing.T, images e2eImages, opts e2eEn
 	require.NotNil(t, mockChain)
 	require.NotNil(t, postgres)
 	return env
+}
+
+// startGateway runs cmd/gateway against the same hosts and the same mock chain devshardctl uses, so a
+// scenario written for one binary describes the same network for the other.
+func (e *e2eEnv) startGateway(ctx context.Context, t *testing.T, opts e2eEnvOptions) {
+	t.Helper()
+	gatewayEnv := map[string]string{
+		"GATEWAY_ESCROWS_JSON":   fmt.Sprintf(`[{"escrow_id":%q,"model":"stub-model","private_key_env":"GATEWAY_ESCROW_KEY"}]`, defaultEscrowID),
+		"GATEWAY_ESCROW_KEY":     testutil.EnvDefault("DEVSHARD_E2E_USER_PRIVATE_KEY", testutil.UserPrivateKey),
+		"GATEWAY_CHAIN_GRPC":     mockChainAlias + ":9090",
+		"GATEWAY_PUBLIC_API":     "http://" + mockChainAlias + ":9191",
+		"GATEWAY_ADMIN_API_KEY":  testutil.AdminAPIKey,
+		"GATEWAY_STORAGE_DIR":    "/tmp/gateway",
+		"GATEWAY_MAX_TOKENS_CAP": "4096",
+		"GATEWAY_PORT":           "8080",
+	}
+	for k, v := range opts.gatewayEnvOverrides {
+		gatewayEnv[k] = v
+	}
+	gateway := e.startContainer(ctx, t, containerSpec{
+		name:     gatewayName,
+		image:    e.images.gateway,
+		port:     "8080/tcp",
+		aliases:  []string{gatewayName},
+		env:      gatewayEnv,
+		tmpfs:    map[string]string{"/tmp": "rw"},
+		waitPath: "/v1/status",
+	})
+
+	host, err := gateway.Host(ctx)
+	require.NoError(t, err)
+	port, err := gateway.MappedPort(ctx, "8080/tcp")
+	require.NoError(t, err)
+	e.clientURL = "http://" + host + ":" + port.Port()
+	// The gateway serves its own metrics on the client port; there is no second stats listener.
+	e.statsURL = e.clientURL
+	testutil.DebugLogf(t, "gateway client URL: %s", e.clientURL)
 }
 
 func hostName(index int) string {
