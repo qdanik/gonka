@@ -148,9 +148,9 @@ Stale host state is swept at most once per tenth of the staleness window, becaus
 
 ### Buffered replies have a ceiling of their own
 
-A client that asked for one whole answer is still served over a stream: the gateway forces `stream: true` upstream, accumulates every SSE event and folds them into one JSON body at the end. So each such request holds the **raw stream** in memory, not the finished reply, and `max_buffered_response_bytes` (`GATEWAY_MAX_BUFFERED_RESPONSE_BYTES`, 512 MiB) is the ceiling on all of them at once.
+A client that asked for one whole answer is still served over a stream: the gateway forces `stream: true` upstream. The events are folded into the answer as they arrive and the raw stream is dropped, so what such a request holds is the reply being assembled — and the internal fields nobody will see are removed before the merge, not after it, so a client that did not ask for logprobs never accumulates them. `max_buffered_response_bytes` (`GATEWAY_MAX_BUFFERED_RESPONSE_BYTES`, 512 MiB) is the ceiling on every such reply at once.
 
-The per-request cap is separate and much larger — 32 MiB, derived from what one unterminated SSE frame can carry once `return_token_ids` is forced, roughly seven bytes per prompt token. Nothing bounded their *sum* until this ceiling, and the request limiter does not stand in for it: with `max_concurrent_requests` unset its cap comes from network weight and routinely admits thousands at once, which made the exposure one per-request ceiling times however many requests arrived.
+The per-request cap is separate and much larger — 32 MiB, which now bounds one unterminated SSE frame rather than a whole accumulated stream. Nothing bounded the *sum* until this ceiling, and the request limiter does not stand in for it: with `max_concurrent_requests` unset its cap comes from network weight and routinely admits thousands at once, which made the exposure one per-request ceiling times however many requests arrived.
 
 Past the ceiling a request is refused with `503`, the same answer as a shard with no room — the gateway has nothing left to hold, which is not the caller's doing. A ceiling of zero holds nothing back, for a deployment that would rather be killed by the kernel than refuse a request. Lowering it at runtime stops admitting rather than repossessing: what is already held drains on its own.
 

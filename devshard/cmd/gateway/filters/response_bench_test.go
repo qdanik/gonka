@@ -31,7 +31,7 @@ func BenchmarkStripResponseBody(b *testing.B) {
 		b.Run(fmt.Sprint(size), func(b *testing.B) {
 			b.ReportAllocs()
 			for range b.N {
-				_ = StripResponseBody(payload, LogprobIntent{})
+				_ = stripResponseBody(payload, LogprobIntent{})
 			}
 		})
 	}

@@ -33,9 +33,9 @@ func (t *growingText) MarshalJSON() ([]byte, error) {
 	return encodeCompact(t.parts.String())
 }
 
-// AssembleSSEBody merges the streamed chunks into the single JSON body a non-streaming caller
+// assembleSSEBody merges the streamed chunks into the single JSON body a non-streaming caller
 // expects. See gateway-request-filtering.md, "Streaming is forced upstream".
-func AssembleSSEBody(body []byte) []byte {
+func assembleSSEBody(body []byte) []byte {
 	var merged map[string]any
 	var complete []byte
 	framed, assembled, truncated := false, 0, false

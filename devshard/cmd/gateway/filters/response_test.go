@@ -298,14 +298,14 @@ func TestStripResponseBody_RemovesAllInternalFieldsAtAnyDepth(t *testing.T) {
 		"prompt_token_ids": [9, 8, 7],
 		"prompt_logprobs": null
 	}`)
-	got := StripResponseBody(body, LogprobIntent{})
+	got := stripResponseBody(body, LogprobIntent{})
 	var decoded map[string]any
 	if err := json.Unmarshal(got, &decoded); err != nil {
-		t.Fatalf("StripResponseBody(, LogprobIntent{}) produced invalid JSON: %v (%q)", err, got)
+		t.Fatalf("stripResponseBody(, LogprobIntent{}) produced invalid JSON: %v (%q)", err, got)
 	}
 	for _, field := range []string{"logprob", "logprobs", "top_logprobs", "token_ids", "prompt_token_ids", "prompt_logprobs"} {
 		if bytes.Contains(got, fmt.Appendf(nil, "%q", field)) {
-			t.Errorf("StripResponseBody(, LogprobIntent{}) output still contains %q: %s", field, got)
+			t.Errorf("stripResponseBody(, LogprobIntent{}) output still contains %q: %s", field, got)
 		}
 	}
 	choices, ok := decoded["choices"].([]any)
@@ -327,30 +327,30 @@ func TestStripResponseBody_RemovesAllInternalFieldsAtAnyDepth(t *testing.T) {
 
 func TestStripResponseBody_NoChangeReturnsEquivalentBytes(t *testing.T) {
 	body := []byte(`{"id":"chatcmpl-plain","choices":[{"message":{"content":"hi"}}]}`)
-	got := StripResponseBody(body, LogprobIntent{})
+	got := stripResponseBody(body, LogprobIntent{})
 	if !bytes.Equal(got, body) {
-		t.Errorf("StripResponseBody(, LogprobIntent{}) = %q, want unchanged %q", got, body)
+		t.Errorf("stripResponseBody(, LogprobIntent{}) = %q, want unchanged %q", got, body)
 	}
 }
 
 func TestStripResponseBody_MalformedBodyPassesThroughUnchanged(t *testing.T) {
 	body := []byte(`this is not json`)
-	got := StripResponseBody(body, LogprobIntent{})
+	got := stripResponseBody(body, LogprobIntent{})
 	if !bytes.Equal(got, body) {
-		t.Errorf("StripResponseBody(, LogprobIntent{}) = %q, want unchanged %q", got, body)
+		t.Errorf("stripResponseBody(, LogprobIntent{}) = %q, want unchanged %q", got, body)
 	}
 }
 
 func TestStripResponseBody_EmptyBodyPassesThroughUnchanged(t *testing.T) {
-	got := StripResponseBody([]byte{}, LogprobIntent{})
+	got := stripResponseBody([]byte{}, LogprobIntent{})
 	if len(got) != 0 {
-		t.Errorf("StripResponseBody(, LogprobIntent{}) = %q, want empty", got)
+		t.Errorf("stripResponseBody(, LogprobIntent{}) = %q, want empty", got)
 	}
 }
 
 func TestStripResponseBody_NullValuedFieldAlsoStripped(t *testing.T) {
 	body := []byte(`{"id":"x","prompt_logprobs":null,"choices":[]}`)
-	got := StripResponseBody(body, LogprobIntent{})
+	got := stripResponseBody(body, LogprobIntent{})
 	var decoded map[string]any
 	if err := json.Unmarshal(got, &decoded); err != nil {
 		t.Fatalf("invalid JSON output: %v", err)
@@ -469,7 +469,7 @@ func TestHasNonCacheableErrorFindsFailuresRegardlessOfFraming(t *testing.T) {
 func TestStripKeepsIntegersTooLargeForFloat64(t *testing.T) {
 	body := []byte(`{"id":"c","seed":9007199254740993,"logprobs":{"content":[]},"choices":[]}`)
 
-	stripped := string(StripResponseBody(body, LogprobIntent{}))
+	stripped := string(stripResponseBody(body, LogprobIntent{}))
 
 	if !strings.Contains(stripped, `"seed":9007199254740993`) {
 		t.Fatalf("seed was rewritten: %s", stripped)
@@ -484,7 +484,7 @@ func TestStripKeepsIntegersTooLargeForFloat64(t *testing.T) {
 func TestStripLeavesABodyWithTrailingJunkAlone(t *testing.T) {
 	body := []byte(`{"logprobs":{"content":[]}} {"and":"more"}`)
 
-	if got := string(StripResponseBody(body, LogprobIntent{})); got != string(body) {
+	if got := string(stripResponseBody(body, LogprobIntent{})); got != string(body) {
 		t.Fatalf("a malformed body was rewritten:\n got %s\nwant %s", got, body)
 	}
 }
@@ -497,7 +497,7 @@ func TestADeeplyNestedResponseCannotCrashTheProcess(t *testing.T) {
 	for _, depth := range []int{1_000, 1_000_000, 3_000_000} {
 		body := []byte(`{"logprobs":1,"a":` + strings.Repeat("[", depth) + strings.Repeat("]", depth) + `}`)
 
-		if got := StripResponseBody(body, LogprobIntent{}); len(got) == 0 {
+		if got := stripResponseBody(body, LogprobIntent{}); len(got) == 0 {
 			t.Fatalf("depth %d produced nothing", depth)
 		}
 	}
@@ -508,13 +508,13 @@ func TestADeeplyNestedResponseCannotCrashTheProcess(t *testing.T) {
 // a reply a client is waiting for, but a host wanting its logprobs seen can nest its way there.
 func TestPastTheDepthLimitTheStripIsBypassed(t *testing.T) {
 	shallow := []byte(`{"logprobs":1,"a":[[]]}`)
-	if strings.Contains(string(StripResponseBody(shallow, LogprobIntent{})), "logprobs") {
+	if strings.Contains(string(stripResponseBody(shallow, LogprobIntent{})), "logprobs") {
 		t.Fatal("a shallow body kept its internal field")
 	}
 
 	deep := []byte(`{"logprobs":1,"a":` + strings.Repeat("[", 100_000) + strings.Repeat("]", 100_000) + `}`)
 
-	if !strings.Contains(string(StripResponseBody(deep, LogprobIntent{})), "logprobs") {
+	if !strings.Contains(string(stripResponseBody(deep, LogprobIntent{})), "logprobs") {
 		t.Fatal("the deep body was stripped after all -- then this test, and the bypass it documents, are stale")
 	}
 }
@@ -524,7 +524,7 @@ func TestPastTheDepthLimitTheStripIsBypassed(t *testing.T) {
 func TestAnOutOfRangeNumberDoesNotDisableTheStrip(t *testing.T) {
 	body := []byte(`{"choices":[{"message":{"content":"hi"},"logprobs":{"a":1}}],"seed":1e999}`)
 
-	stripped := string(StripResponseBody(body, LogprobIntent{}))
+	stripped := string(stripResponseBody(body, LogprobIntent{}))
 
 	if strings.Contains(stripped, "logprobs") {
 		t.Fatalf("one out-of-range number turned the strip off: %s", stripped)
@@ -539,7 +539,7 @@ func TestAnOutOfRangeNumberDoesNotDisableTheStrip(t *testing.T) {
 func TestGeneratedMarkupIsNotEscaped(t *testing.T) {
 	body := []byte(`{"choices":[{"message":{"content":"<div> a & b"}}],"logprobs":{}}`)
 
-	if got := string(StripResponseBody(body, LogprobIntent{})); !strings.Contains(got, "<div> a & b") {
+	if got := string(stripResponseBody(body, LogprobIntent{})); !strings.Contains(got, "<div> a & b") {
 		t.Fatalf("markup was escaped on the way out: %s", got)
 	}
 }
@@ -565,7 +565,7 @@ func TestTheStripFollowsWhatTheClientAskedFor(t *testing.T) {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
 
-			stripped := string(StripResponseBody(body, testCase.intent))
+			stripped := string(stripResponseBody(body, testCase.intent))
 
 			if held := strings.Contains(stripped, `"logprob"`); held != testCase.wantLogprobs {
 				t.Fatalf("logprob present = %v, want %v: %s", held, testCase.wantLogprobs, stripped)
@@ -644,7 +644,7 @@ func TestEveryStrippedFieldIsRemoved(t *testing.T) {
 	for _, field := range clientStrippedFields {
 		body := []byte(`{"choices":[{"index":0,"` + field + `":{"content":[]}}]}`)
 
-		stripped := StripResponseBody(body, LogprobIntent{})
+		stripped := stripResponseBody(body, LogprobIntent{})
 
 		if bytes.Contains(stripped, []byte(field)) {
 			t.Fatalf("field %q survived the strip: %s", field, stripped)
@@ -658,7 +658,7 @@ func TestEveryStrippedFieldIsRemoved(t *testing.T) {
 func TestABodyCarryingNonFiniteNumbersIsStillStrippedAndDelivered(t *testing.T) {
 	body := []byte(`{"choices":[{"message":{"content":"hi"},"logprobs":{"content":[{"logprob":-Infinity}]}}],"token_ids":[7],"prompt_logprobs":[1]}`)
 
-	stripped := StripResponseBody(body, LogprobIntent{})
+	stripped := stripResponseBody(body, LogprobIntent{})
 
 	for _, internal := range []string{"token_ids", "prompt_logprobs", "logprob"} {
 		if bytes.Contains(stripped, []byte(internal)) {
@@ -683,7 +683,7 @@ func TestNonFiniteWordsInsideStringsAreLeftAlone(t *testing.T) {
 		t.Fatal("the body parses on its own, so normalisation never runs and this test is vacuous")
 	}
 
-	stripped := StripResponseBody(body, LogprobIntent{})
+	stripped := stripResponseBody(body, LogprobIntent{})
 
 	if !bytes.Contains(stripped, []byte(`the value is NaN, or -Infinity`)) {
 		t.Fatalf("content was rewritten: %s", stripped)

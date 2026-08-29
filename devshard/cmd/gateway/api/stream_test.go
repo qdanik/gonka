@@ -2,6 +2,8 @@ package api
 
 import (
 	"bytes"
+	"errors"
+	"fmt"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -9,10 +11,7 @@ import (
 	"devshard/cmd/gateway/filters"
 )
 
-// A non-streaming reply is held whole until Close, so a host that wins the race by producing one token
-// first could otherwise send unlimited valid SSE and take the process out. The streaming path forwards
-// as it goes and needs no such bound.
-func TestNonStreamingRepliesAreBoundedInMemory(t *testing.T) {
+func TestAnUnterminatedEventIsBoundedInMemory(t *testing.T) {
 	stream := newClientStream(httptest.NewRecorder(), "req-1", false, true, filters.LogprobIntent{}, nil)
 	chunk := bytes.Repeat([]byte("x"), 1<<20)
 
@@ -30,11 +29,31 @@ func TestNonStreamingRepliesAreBoundedInMemory(t *testing.T) {
 	if failure == nil {
 		t.Fatalf("wrote %d bytes with no limit, want a refusal past %d", written, maxBufferedResponseBytes)
 	}
-	if !strings.Contains(failure.Error(), "buffered response exceeds") {
-		t.Fatalf("error = %v, want the buffered-response bound", failure)
+	if !errors.Is(failure, filters.ErrStreamCarryOverflow) {
+		t.Fatalf("error = %v, want the carry bound", failure)
 	}
 	if written > maxBufferedResponseBytes {
-		t.Fatalf("buffered %d bytes, want no more than %d", written, maxBufferedResponseBytes)
+		t.Fatalf("held %d bytes, want no more than %d", written, maxBufferedResponseBytes)
+	}
+}
+
+// The reply is folded as it arrives, so what a non-streaming client costs is the answer it will be
+// given, not the stream it was assembled from.
+func TestAFoldedReplyHoldsTheAnswerRatherThanTheStream(t *testing.T) {
+	stream := newClientStream(httptest.NewRecorder(), "req-1", false, true, filters.LogprobIntent{}, nil)
+
+	raw := 0
+	for token := range 200 {
+		event := fmt.Appendf(nil, "data: {\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"%d \"},\"logprobs\":{\"content\":[{\"token\":\"%d\",\"logprob\":-0.5,\"top_logprobs\":[{\"token\":\"a\",\"logprob\":-1.5},{\"token\":\"b\",\"logprob\":-2.5},{\"token\":\"c\",\"logprob\":-3.5}]}]}}]}\n\n", token, token)
+		if _, err := stream.Write(event); err != nil {
+			t.Fatalf("Write(): %v", err)
+		}
+		raw += len(event)
+	}
+
+	held := stream.folder.Held()
+	if held >= int64(raw)/4 {
+		t.Errorf("holding %d bytes of a %d-byte stream: the logprobs this client never asked for are being kept", held, raw)
 	}
 }
 

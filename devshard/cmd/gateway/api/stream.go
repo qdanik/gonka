@@ -36,7 +36,7 @@ type clientStream struct {
 	streaming  bool
 	logprobs   filters.LogprobIntent
 	rewriter   *filters.StreamRewriter
-	buffered   []byte
+	folder     *filters.BodyFolder
 	budget     *BufferBudget
 	charged    int64
 	written    int64
@@ -55,6 +55,8 @@ func newClientStream(w http.ResponseWriter, requestID string, streaming, usage b
 	}
 	if streaming {
 		stream.rewriter = filters.NewStreamRewriter(logprobs, usage)
+	} else {
+		stream.folder = filters.NewBodyFolder(logprobs)
 	}
 	return stream
 }
@@ -80,15 +82,19 @@ func (c *clientStream) Write(chunk []byte) (int, error) {
 		return len(chunk), nil
 	}
 	if !c.streaming {
-		if len(c.buffered)+len(chunk) > maxBufferedResponseBytes {
+		written, err := c.folder.Write(chunk)
+		if err != nil {
+			return 0, err
+		}
+		if held := c.folder.Held(); held > maxBufferedResponseBytes {
 			return 0, fmt.Errorf("buffered response exceeds %d bytes", maxBufferedResponseBytes)
+		} else if owed := held - c.charged; owed > 0 {
+			if !c.budget.reserve(owed) {
+				return 0, ErrResponseBufferFull
+			}
+			c.charged += owed
 		}
-		if !c.budget.reserve(int64(len(chunk))) {
-			return 0, ErrResponseBufferFull
-		}
-		c.charged += int64(len(chunk))
-		c.buffered = append(c.buffered, chunk...)
-		return len(chunk), nil
+		return written, nil
 	}
 	c.beginLocked("text/event-stream")
 	rewritten, err := c.rewriter.Write(chunk)
@@ -129,7 +135,7 @@ func (c *clientStream) Close() error {
 		}
 		return tailErr
 	}
-	body := filters.StripResponseBody(filters.AssembleSSEBody(c.buffered), c.logprobs)
+	body := c.folder.Body()
 	c.beginStatusLocked("application/json", statusForAssembled(body))
 	written, err := c.writer.Write(body)
 	c.written += int64(written)
@@ -140,7 +146,10 @@ func (c *clientStream) discard() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.budget.release(c.charged)
-	c.charged, c.buffered = 0, nil
+	c.charged = 0
+	if c.folder != nil {
+		c.folder.Discard()
+	}
 }
 
 func (c *clientStream) Fail(cause error) error {

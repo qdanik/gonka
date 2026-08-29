@@ -96,9 +96,9 @@ func (intent LogprobIntent) strippedFields() []string {
 	return clientStrippedFields
 }
 
-// StripResponseBody removes the fields this client must not see from a non-streaming JSON response
+// stripResponseBody removes the fields this client must not see from a non-streaming JSON response
 // body, at any nesting depth. A malformed body passes through unchanged.
-func StripResponseBody(body []byte, intent LogprobIntent) []byte {
+func stripResponseBody(body []byte, intent LogprobIntent) []byte {
 	filtered, outcome := stripInternalFields(body, intent)
 	if outcome != stripRewritten {
 		return body

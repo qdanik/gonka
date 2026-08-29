@@ -88,7 +88,7 @@ func TestAssembleSSEBodyMergesDeltas(t *testing.T) {
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
-			if got := string(AssembleSSEBody(sseStream(testCase.events...))); got != testCase.want {
+			if got := string(assembleSSEBody(sseStream(testCase.events...))); got != testCase.want {
 				t.Fatalf("assembled\n got: %s\nwant: %s", got, testCase.want)
 			}
 		})
@@ -97,7 +97,7 @@ func TestAssembleSSEBodyMergesDeltas(t *testing.T) {
 
 func TestAssembleSSEBodyKeepsLogprobsOfEveryChoice(t *testing.T) {
 	t.Parallel()
-	assembled := string(AssembleSSEBody(sseStream(
+	assembled := string(assembleSSEBody(sseStream(
 		`{"choices":[{"index":0,"delta":{"content":"a"},"logprobs":{"content":[{"token":"a"}]}},{"index":1,"delta":{"content":"x"},"logprobs":{"content":[{"token":"x"}]}}]}`,
 	)))
 	want := `{"choices":[{"index":0,"logprobs":{"content":[{"token":"a"}]},"message":{"content":"a"}},{"index":1,"logprobs":{"content":[{"token":"x"}]},"message":{"content":"x"}}],"object":"chat.completion"}`
@@ -109,7 +109,7 @@ func TestAssembleSSEBodyKeepsLogprobsOfEveryChoice(t *testing.T) {
 // Upstream restates a tool call's id and type in every delta, and its name in the last one.
 func TestAssembleSSEBodyKeepsIdentityFieldsWhole(t *testing.T) {
 	t.Parallel()
-	assembled := string(AssembleSSEBody(sseStream(
+	assembled := string(assembleSSEBody(sseStream(
 		`{"choices":[{"index":0,"delta":{"role":"assistant","tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"get_weather","arguments":"{\"city\":"}}]}}]}`,
 		`{"choices":[{"index":0,"delta":{"role":"assistant","tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"get_weather","arguments":"\"Paris\"}"}}]}}]}`,
 	)))
@@ -123,7 +123,7 @@ func TestAssembleSSEBodyJoinsSplitDataLines(t *testing.T) {
 	t.Parallel()
 	split := []byte("data: {\"id\":\"a\",\"choices\":[{\"index\":0,\"delta\":\ndata: {\"content\":\"hi\"}}]}\n\ndata: [DONE]\n\n")
 
-	assembled := string(AssembleSSEBody(split))
+	assembled := string(assembleSSEBody(split))
 
 	want := `{"choices":[{"index":0,"message":{"content":"hi"}}],"id":"a","object":"chat.completion"}`
 	if assembled != want {
@@ -134,7 +134,7 @@ func TestAssembleSSEBodyJoinsSplitDataLines(t *testing.T) {
 // An index-less choice compared equal to every other, which is not a total order.
 func TestAssembleSSEBodyOrdersChoicesWithAnIndexFirst(t *testing.T) {
 	t.Parallel()
-	assembled := string(AssembleSSEBody(sseStream(
+	assembled := string(assembleSSEBody(sseStream(
 		`{"choices":[{"index":1,"delta":{"content":"one"}}]}`,
 		`{"choices":[{"delta":{"content":"none"}}]}`,
 		`{"choices":[{"index":0,"delta":{"content":"zero"}}]}`,
@@ -152,7 +152,7 @@ func TestAssembleSSEBodyBoundsTheIndexedMerge(t *testing.T) {
 		events = append(events, fmt.Sprintf(`{"choices":[{"index":%d,"delta":{"content":"x"}}]}`, index))
 	}
 
-	assembled := AssembleSSEBody(sseStream(events...))
+	assembled := assembleSSEBody(sseStream(events...))
 
 	var decoded struct {
 		Choices []json.RawMessage `json:"choices"`
@@ -172,7 +172,7 @@ func TestAssembleSSEBodyBoundsTheKeySet(t *testing.T) {
 		events = append(events, fmt.Sprintf(`{"invented%d":"x","choices":[{"index":0,"delta":{"content":"y"}}]}`, index))
 	}
 
-	assembled := AssembleSSEBody(sseStream(events...))
+	assembled := assembleSSEBody(sseStream(events...))
 
 	var decoded map[string]json.RawMessage
 	if err := json.Unmarshal(assembled, &decoded); err != nil {
@@ -190,7 +190,7 @@ func TestAssembleSSEBodyBoundsTheKeySet(t *testing.T) {
 // token_ids arrive as a per-chunk delta, unlike every other choice-level field.
 func TestAssembleSSEBodyAccumulatesTokenIds(t *testing.T) {
 	t.Parallel()
-	assembled := string(AssembleSSEBody(sseStream(
+	assembled := string(assembleSSEBody(sseStream(
 		`{"choices":[{"index":0,"delta":{"content":"a"},"token_ids":[11]}]}`,
 		`{"choices":[{"index":0,"delta":{"content":"b"},"token_ids":[22]}]}`,
 	)))
@@ -207,7 +207,7 @@ func TestAssembleSSEBodyRefusesRatherThanTruncate(t *testing.T) {
 		events = append(events, `{"choices":[{"index":0,"delta":{"content":"x"}}]}`)
 	}
 
-	assembled := AssembleSSEBody(sseStream(events...))
+	assembled := assembleSSEBody(sseStream(events...))
 
 	if !bytes.Equal(assembled, TruncatedResponseBody) {
 		t.Fatalf("assembled = %s, want the truncation error: a prefix is indistinguishable from a complete answer", assembled)
@@ -216,7 +216,7 @@ func TestAssembleSSEBodyRefusesRatherThanTruncate(t *testing.T) {
 
 func TestAssembleSSEBodyKeepsFoldedDeltasWhenACompletionFollows(t *testing.T) {
 	t.Parallel()
-	assembled := AssembleSSEBody(sseStream(
+	assembled := assembleSSEBody(sseStream(
 		`{"choices":[{"index":0,"delta":{"content":"hello "}}]}`,
 		`{"choices":[{"index":0,"delta":{"content":"world"}}]}`,
 		`{"object":"chat.completion","choices":[{"index":0,"message":{"content":"discarded"}}]}`,
@@ -244,7 +244,7 @@ func TestAssembleSSEBodyPassesASoleCompletionThrough(t *testing.T) {
 	t.Parallel()
 	payload := `{"object":"chat.completion","choices":[{"index":0,"message":{"content":"whole"}}]}`
 
-	assembled := AssembleSSEBody(sseStream(payload))
+	assembled := assembleSSEBody(sseStream(payload))
 
 	if string(assembled) != payload {
 		t.Fatalf("assembled = %s, want the already-complete payload unchanged", assembled)
@@ -254,7 +254,7 @@ func TestAssembleSSEBodyPassesASoleCompletionThrough(t *testing.T) {
 func TestAssembleSSEBodyRejectsAPayloadCarryingTwoObjects(t *testing.T) {
 	t.Parallel()
 
-	assembled := string(AssembleSSEBody([]byte("data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"real\"}}]} {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"smuggled\"}}]}\n\ndata: [DONE]\n\n")))
+	assembled := string(assembleSSEBody([]byte("data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"real\"}}]} {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"smuggled\"}}]}\n\ndata: [DONE]\n\n")))
 
 	if assembled != string(NoResponseDataBody) {
 		t.Fatalf("assembled = %s, want the payload rejected", assembled)
@@ -264,7 +264,7 @@ func TestAssembleSSEBodyRejectsAPayloadCarryingTwoObjects(t *testing.T) {
 // Some upstream versions re-send a tool call's arguments whole on the finish chunk.
 func TestAssembleSSEBodyDoesNotDoubleArgumentsResentWhole(t *testing.T) {
 	t.Parallel()
-	assembled := string(AssembleSSEBody(sseStream(
+	assembled := string(assembleSSEBody(sseStream(
 		`{"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"ci"}}]}}]}`,
 		`{"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"ty\":"}}]}}]}`,
 		`{"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"city\":\"Paris\"}"}}]}}]}`,
@@ -284,7 +284,7 @@ func TestAssembleSSEBodyOnARecordedKimiReply(t *testing.T) {
 		t.Fatalf("reading the fixture: %v", err)
 	}
 
-	assembled := string(AssembleSSEBody(stream))
+	assembled := string(assembleSSEBody(stream))
 
 	want := `{"choices":[{"finish_reason":"length","index":0,"message":{"content":" I'll </think> examining","role":"assistant","tool_calls":[]}}],"created":1786114584,"id":"devshard-46055-1453","model":"moonshotai/Kimi-K2.6","object":"chat.completion","usage":{"completion_tokens":16,"prompt_tokens":46,"total_tokens":62}}`
 	if assembled != want {

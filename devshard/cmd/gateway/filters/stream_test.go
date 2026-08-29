@@ -448,8 +448,8 @@ func TestAssembleSSEBody(t *testing.T) {
 	}
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
-			if got := AssembleSSEBody([]byte(testCase.body)); string(got) != testCase.want {
-				t.Fatalf("AssembleSSEBody(%q) = %s, want %s", testCase.body, got, testCase.want)
+			if got := assembleSSEBody([]byte(testCase.body)); string(got) != testCase.want {
+				t.Fatalf("assembleSSEBody(%q) = %s, want %s", testCase.body, got, testCase.want)
 			}
 		})
 	}
