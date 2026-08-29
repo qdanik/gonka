@@ -129,8 +129,6 @@ func waitForCharge(t *testing.T, done func() bool) {
 	t.Fatal("the charge never ran")
 }
 
-// The whole point of the probe: a host that is merely busy answers the nonce and is charged nothing,
-// while a silent one earns exactly the timeout the quiet burn would have raised.
 func TestAHostThatAnswersTheProbeIsNotCharged(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -164,8 +162,6 @@ func TestAHostThatAnswersTheProbeIsNotCharged(t *testing.T) {
 	}
 }
 
-// A burn whose decision was taken before a nonce was committed has nothing to send and nothing to
-// charge, and a probe that is refused entry must fall through to the vote rather than skip it.
 func TestAChargeWithoutAProbeStillVotes(t *testing.T) {
 	poster, timeouts := &stubPoster{vote: "refused"}, &spyTimeouts{}
 	charges := chargingFor(poster, timeouts, true)
@@ -177,8 +173,6 @@ func TestAChargeWithoutAProbeStillVotes(t *testing.T) {
 	}
 }
 
-// A probe already in flight must not swallow the charge: the gate decides whether to ask the host
-// again, never whether the nonce is owed a vote.
 func TestAChargeVotesWhenTheGateHoldsTheProbeBack(t *testing.T) {
 	poster, timeouts := &stubPoster{vote: "refused"}, &spyTimeouts{}
 	charges := chargingFor(poster, timeouts, true)

@@ -188,7 +188,8 @@ func rateLimited(err error) (*limits.RateLimitError, bool) {
 func shardHasNoRoom(err error) bool {
 	return errors.Is(err, scheduler.ErrHostsBusy) ||
 		errors.Is(err, scheduler.ErrNoEscrowCapacity) ||
-		errors.Is(err, scheduler.ErrEscrowBusy)
+		errors.Is(err, scheduler.ErrEscrowBusy) ||
+		errors.Is(err, ErrResponseBufferFull)
 }
 
 // Retry-After is rounded up: a zero would tell a client to retry immediately, the opposite of what a

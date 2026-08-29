@@ -275,7 +275,7 @@ func TestCachedReplayAndLiveStreamAgreeOnHeaders(t *testing.T) {
 		}
 		t.Run(name, func(t *testing.T) {
 			live := httptest.NewRecorder()
-			stream := newClientStream(live, "req-1", streaming, true, filters.LogprobIntent{})
+			stream := newClientStream(live, "req-1", streaming, true, filters.LogprobIntent{}, nil)
 			stream.beginLocked(contentType)
 			live.Header().Set(EscrowHeader, "escrow-1")
 

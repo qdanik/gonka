@@ -37,18 +37,21 @@ type clientStream struct {
 	logprobs   filters.LogprobIntent
 	rewriter   *filters.StreamRewriter
 	buffered   []byte
+	budget     *BufferBudget
+	charged    int64
 	written    int64
 	started    bool
 	terminated bool
 }
 
-func newClientStream(w http.ResponseWriter, requestID string, streaming, usage bool, logprobs filters.LogprobIntent) *clientStream {
+func newClientStream(w http.ResponseWriter, requestID string, streaming, usage bool, logprobs filters.LogprobIntent, budget *BufferBudget) *clientStream {
 	stream := &clientStream{
 		writer:     w,
 		controller: http.NewResponseController(w),
 		requestID:  requestID,
 		streaming:  streaming,
 		logprobs:   logprobs,
+		budget:     budget,
 	}
 	if streaming {
 		stream.rewriter = filters.NewStreamRewriter(logprobs, usage)
@@ -80,6 +83,10 @@ func (c *clientStream) Write(chunk []byte) (int, error) {
 		if len(c.buffered)+len(chunk) > maxBufferedResponseBytes {
 			return 0, fmt.Errorf("buffered response exceeds %d bytes", maxBufferedResponseBytes)
 		}
+		if !c.budget.reserve(int64(len(chunk))) {
+			return 0, ErrResponseBufferFull
+		}
+		c.charged += int64(len(chunk))
 		c.buffered = append(c.buffered, chunk...)
 		return len(chunk), nil
 	}
@@ -127,6 +134,13 @@ func (c *clientStream) Close() error {
 	written, err := c.writer.Write(body)
 	c.written += int64(written)
 	return err
+}
+
+func (c *clientStream) discard() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.budget.release(c.charged)
+	c.charged, c.buffered = 0, nil
 }
 
 func (c *clientStream) Fail(cause error) error {

@@ -130,6 +130,7 @@ type Deps struct {
 	Operations Operations
 	Suspicious SuspiciousHosts
 	Telemetry  Telemetry
+	Buffers    *BufferBudget
 	Rejections LimitRejections
 	StorageDir string
 	Version    string
@@ -154,6 +155,7 @@ type Server struct {
 	version    string
 	now        func() time.Time
 	requestIDs func() string
+	buffers    *BufferBudget
 	cache      *responseCache
 	capture    *requestCapture
 
@@ -191,6 +193,7 @@ func New(deps Deps) (*Server, error) {
 		return nil, errors.New("api: Now is required")
 	}
 	server := &Server{
+		buffers:    deps.Buffers,
 		config:     deps.Config,
 		escrows:    deps.Escrows,
 		inference:  deps.Inference,

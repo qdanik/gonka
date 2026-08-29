@@ -5,9 +5,6 @@ import (
 	"time"
 )
 
-// The picker burns throttled ghosts in a tight loop, so an ungated probe would ask a host to prove
-// itself as fast as it refuses — and each probe is a real request competing for the capacity the
-// previous one is waiting on.
 func TestTheProbeGateAdmitsOneHostAtATime(t *testing.T) {
 	gate := newProbeGate()
 	now := time.Unix(1_700_000_000, 0)

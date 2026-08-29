@@ -146,6 +146,16 @@ A retired escrow stays in `Snapshot` until that count reaches zero, reporting `d
 
 Stale host state is swept at most once per tenth of the staleness window, because entries age out over minutes and scanning every host on every sample costs O(hosts) under the global lock for nothing.
 
+### Buffered replies have a ceiling of their own
+
+A client that asked for one whole answer is still served over a stream: the gateway forces `stream: true` upstream, accumulates every SSE event and folds them into one JSON body at the end. So each such request holds the **raw stream** in memory, not the finished reply, and `max_buffered_response_bytes` (`GATEWAY_MAX_BUFFERED_RESPONSE_BYTES`, 512 MiB) is the ceiling on all of them at once.
+
+The per-request cap is separate and much larger — 32 MiB, derived from what one unterminated SSE frame can carry once `return_token_ids` is forced, roughly seven bytes per prompt token. Nothing bounded their *sum* until this ceiling, and the request limiter does not stand in for it: with `max_concurrent_requests` unset its cap comes from network weight and routinely admits thousands at once, which made the exposure one per-request ceiling times however many requests arrived.
+
+Past the ceiling a request is refused with `503`, the same answer as a shard with no room — the gateway has nothing left to hold, which is not the caller's doing. A ceiling of zero holds nothing back, for a deployment that would rather be killed by the kernel than refuse a request. Lowering it at runtime stops admitting rather than repossessing: what is already held drains on its own.
+
+`devshard_gateway_buffered_response_bytes` is what is held right now. Watch it before choosing a number: the sum is driven by the *typical* reply, and the ceiling only bounds the tail.
+
 **Capability refusals** — an unsupported protocol version, a tool call the build does not implement, a context length it will not take — are counted, and the smallest context a host has admitted to is kept beside them. Nothing here withholds a host from routing: the counts say what to fix and how often it happened, and a refusal that repeats is a build that refuses everything rather than a one-off. Version refusals are keyed by participant, because a protocol version is a property of the build; tool and context refusals are keyed by participant and model.
 
 ## Nothing here is persisted

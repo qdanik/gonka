@@ -68,17 +68,18 @@ type ModelLimits struct {
 // what a client may ask for and deliberately does not clamp DefaultMaxTokens, and ModelAccess maps a
 // model to one of the tiers below.
 type Limits struct {
-	DefaultMaxTokens       int64
-	ForceUpstreamStreaming bool
-	MaxTokensCap           int64
-	Concurrency            Concurrency
-	MaxInputTokensInFlight int64
-	AdmissionQueueWaitMS   int64
-	AdmissionQueuePerSlot  int64
-	HostInflight           HostInflight
-	HostCutoff             HostCutoff
-	ModelLimits            map[string]ModelLimits
-	ModelAccess            map[string]string
+	DefaultMaxTokens         int64
+	ForceUpstreamStreaming   bool
+	MaxBufferedResponseBytes int64
+	MaxTokensCap             int64
+	Concurrency              Concurrency
+	MaxInputTokensInFlight   int64
+	AdmissionQueueWaitMS     int64
+	AdmissionQueuePerSlot    int64
+	HostInflight             HostInflight
+	HostCutoff               HostCutoff
+	ModelLimits              map[string]ModelLimits
+	ModelAccess              map[string]string
 }
 
 type Modes struct {

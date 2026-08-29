@@ -843,9 +843,6 @@ func TestSchedulerReapsAnIdleDispatcherAndRecreatesItOnDemand(t *testing.T) {
 	test.scheduler.Stop()
 }
 
-// Reaping a dispatcher is idleness, not resolution: the escrow comes back on the next request, and a
-// host that cannot follow its chain has to still be blocked when it does. The cost is one entry per
-// escrow that ever saw a divergent host, held for the process lifetime -- escrow ids are never reused.
 func TestReapingADispatcherKeepsTheEscrowBlockedForADivergentHost(t *testing.T) {
 	leakcheck.VerifyNone(t)
 	test := newSchedulerHarness(t, schedulerConfig{})
@@ -874,7 +871,6 @@ func TestReapingADispatcherKeepsTheEscrowBlockedForADivergentHost(t *testing.T) 
 	}
 }
 
-// The replay is the one chance a diverged host gets, not one per quiet spell.
 func TestReapingADispatcherDoesNotHandBackTheSpentReplay(t *testing.T) {
 	leakcheck.VerifyNone(t)
 	test := newSchedulerHarness(t, schedulerConfig{})

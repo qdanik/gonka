@@ -153,9 +153,11 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 	observer.Subscribe(capacity.Update)
 	observer.Subscribe((&phaseNarrator{}).observe)
 	gatewayLimiter := limits.NewGatewayLimiter(limits.GatewayConfigFromLimits(configuration.Limits))
+	buffers := api.NewBufferBudget(configuration.Limits.MaxBufferedResponseBytes)
 	configHolder.Subscribe(func(next *config.Config) {
 		gatewayLimiter.Reconfigure(limits.GatewayConfigFromLimits(next.Limits))
 		participants.Reconfigure(limits.ParticipantConfigFromLimits(next.Limits))
+		buffers.Retune(next.Limits.MaxBufferedResponseBytes)
 	})
 	hosts := perf.NewTracker(configHolder, clock)
 	recorder.SetCapability(func(participant, model string) accounting.HostCapability {
@@ -236,10 +238,11 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 	telemetry.Register(recorder.Collectors()...)
 	telemetry.Register(
 		metrics.NewLimitsCollector(metrics.LimitsSources{
-			Limiter:      gatewayLimiter,
-			Capacity:     modelCapacities,
-			Participants: participants,
-			Models:       escrows.Models,
+			Limiter:       gatewayLimiter,
+			Capacity:      modelCapacities,
+			Participants:  participants,
+			Models:        escrows.Models,
+			BufferedBytes: buffers.Held,
 		}),
 		metrics.NewPerfCollector(hosts),
 		metrics.NewRegistryCollector(metrics.RegistrySources{
@@ -274,6 +277,7 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 		},
 		Suspicious: suspicious,
 		Telemetry:  telemetry,
+		Buffers:    buffers,
 		Rejections: metrics.NewLimitRecorder(telemetry),
 		StorageDir: storageDir,
 		Version:    Version,

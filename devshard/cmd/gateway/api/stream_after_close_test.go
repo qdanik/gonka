@@ -13,7 +13,7 @@ import (
 // returns. In production that invalidation is a nil buffer and the flush below is a panic.
 func closedStream(t *testing.T) *clientStream {
 	t.Helper()
-	stream := newClientStream(httptest.NewRecorder(), "req-1", true, false, filters.LogprobIntent{})
+	stream := newClientStream(httptest.NewRecorder(), "req-1", true, false, filters.LogprobIntent{}, nil)
 	if _, err := stream.Write([]byte("data: {\"choices\":[]}\n\n")); err != nil {
 		t.Fatalf("Write: %v", err)
 	}
@@ -33,7 +33,7 @@ func (f *flushSpy) Flush() { f.flushes++ }
 
 func TestClientStreamStopsFlushingAfterClose(t *testing.T) {
 	spy := &flushSpy{ResponseWriter: httptest.NewRecorder()}
-	stream := newClientStream(spy, "req-1", true, false, filters.LogprobIntent{})
+	stream := newClientStream(spy, "req-1", true, false, filters.LogprobIntent{}, nil)
 	if _, err := stream.Write([]byte("data: {\"choices\":[]}\n\n")); err != nil {
 		t.Fatalf("Write: %v", err)
 	}
@@ -83,7 +83,7 @@ func TestClientStreamCloseIsIdempotent(t *testing.T) {
 // Two attempt goroutines racing on one stream corrupted the rewriter's carry, which surfaced as a
 // slice bounds panic rather than a wrong answer.
 func TestClientStreamSurvivesConcurrentWriters(t *testing.T) {
-	stream := newClientStream(httptest.NewRecorder(), "req-1", true, false, filters.LogprobIntent{})
+	stream := newClientStream(httptest.NewRecorder(), "req-1", true, false, filters.LogprobIntent{}, nil)
 
 	var waiting sync.WaitGroup
 	for range 8 {
