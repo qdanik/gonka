@@ -15,6 +15,9 @@ const (
 	Action  = "action"
 	Rewound = "rewound"
 	Error   = "error"
+
+	ContextLimit         = "context_limit"
+	PreviousContextLimit = "previous_context_limit"
 )
 
 const (

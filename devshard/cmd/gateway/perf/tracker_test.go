@@ -321,3 +321,37 @@ func TestAnUnmeasuredDecodeIsNotFoldedIntoTheWindow(t *testing.T) {
 		t.Fatalf("TimePerOutputTokenP75() = (%v, %v), want (20ms, true): an unmeasured attempt entered the window", got, ok)
 	}
 }
+
+// An operator learns a build refuses only from this line, now that nothing routes on it -- and a host
+// that refuses every request must not repeat it into the log.
+func TestARefusalIsAnnouncedOnceRatherThanOnEveryRepeat(t *testing.T) {
+	tracker := newCapabilityTracker()
+
+	if first := tracker.recordVersionUnsupported("participant-a"); !first {
+		t.Error("the first version refusal did not report itself as new")
+	}
+	if first := tracker.recordVersionUnsupported("participant-a"); first {
+		t.Error("a repeated version refusal reported itself as new")
+	}
+	if first := tracker.recordToolUnsupported("participant-a", capabilityModel); !first {
+		t.Error("the first tool refusal did not report itself as new")
+	}
+	if first := tracker.recordToolUnsupported("participant-a", capabilityModel); first {
+		t.Error("a repeated tool refusal reported itself as new")
+	}
+}
+
+// The limit is the one capability value that moves, so a change is worth saying and a restatement is not.
+func TestOnlyAChangedContextLimitIsAnnounced(t *testing.T) {
+	tracker := newCapabilityTracker()
+
+	if previous, changed := tracker.recordContextLimit("participant-a", capabilityModel, 4096); previous != 0 || !changed {
+		t.Errorf("first limit reported previous=%d changed=%v, want 0 and true", previous, changed)
+	}
+	if _, changed := tracker.recordContextLimit("participant-a", capabilityModel, 4096); changed {
+		t.Error("the same limit reported itself as a change")
+	}
+	if previous, changed := tracker.recordContextLimit("participant-a", capabilityModel, 2048); previous != 4096 || !changed {
+		t.Errorf("a smaller limit reported previous=%d changed=%v, want 4096 and true", previous, changed)
+	}
+}

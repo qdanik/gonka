@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"devshard/cmd/gateway/config"
+	"devshard/cmd/gateway/internal/logkey"
+	"devshard/logging"
 )
 
 // Tracker composes the per-host performance primitives; sub-components own their locking, so mu only
@@ -150,15 +152,23 @@ func newEjectionPolicyFromPerf(perf config.Perf) ejectionPolicy {
 }
 
 func (t *Tracker) RecordContextLimit(participant, model string, maxTokens uint64) {
-	t.capability.recordContextLimit(participant, model, maxTokens)
+	if previous, changed := t.capability.recordContextLimit(participant, model, maxTokens); changed {
+		logging.Info("host admitted a context length it will not exceed", logkey.Host, logkey.ShortHost(participant),
+			logkey.Model, model, logkey.ContextLimit, maxTokens, logkey.PreviousContextLimit, previous)
+	}
 }
 
 func (t *Tracker) RecordToolUnsupported(participant, model string) {
-	t.capability.recordToolUnsupported(participant, model)
+	if t.capability.recordToolUnsupported(participant, model) {
+		logging.Info("host build does not implement tool calling", logkey.Host, logkey.ShortHost(participant),
+			logkey.Model, model)
+	}
 }
 
 func (t *Tracker) RecordVersionUnsupported(participant string) {
-	t.capability.recordVersionUnsupported(participant)
+	if t.capability.recordVersionUnsupported(participant) {
+		logging.Info("host build cannot serve the escrow's protocol version", logkey.Host, logkey.ShortHost(participant))
+	}
 }
 
 func (t *Tracker) Acquire(participant string) {

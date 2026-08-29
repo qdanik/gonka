@@ -24,28 +24,34 @@ func newCapabilityTracker() *capabilityTracker {
 	}
 }
 
-func (c *capabilityTracker) recordContextLimit(participant, model string, maxTokens uint64) {
+// The three recorders report whether the observation is new, so their caller can say so once instead
+// of on every repeat, and can say it outside the lock.
+func (c *capabilityTracker) recordContextLimit(participant, model string, maxTokens uint64) (previous uint64, changed bool) {
 	if maxTokens == 0 {
-		return
+		return 0, false
 	}
 	served := hostKey{participant: participant, model: model}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	previous = c.contextLimits[served]
 	c.contextLimits[served] = maxTokens
 	c.contextRefusals[served]++
+	return previous, previous != maxTokens
 }
 
-func (c *capabilityTracker) recordToolUnsupported(participant, model string) {
+func (c *capabilityTracker) recordToolUnsupported(participant, model string) (first bool) {
 	served := hostKey{participant: participant, model: model}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.toolRefusals[served]++
+	return c.toolRefusals[served] == 1
 }
 
-func (c *capabilityTracker) recordVersionUnsupported(participant string) {
+func (c *capabilityTracker) recordVersionUnsupported(participant string) (first bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.versionRefusals[participant]++
+	return c.versionRefusals[participant] == 1
 }
 
 // capability reports the refusal counts and the smallest context the host has admitted to.
