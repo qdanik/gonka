@@ -1,0 +1,194 @@
+package e2e
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"strings"
+	"testing"
+	"time"
+
+	"devshard/e2e/testutil"
+)
+
+func gatewayParticipants(t *testing.T, client *http.Client, clientURL string) []string {
+	t.Helper()
+	status, body := gatewayGet(t, client, clientURL+"/v1/admin/devshards/"+defaultEscrowID+"/participants", testutil.AdminAPIKey)
+	if status != http.StatusOK {
+		t.Fatalf("participants = %d %s", status, body)
+	}
+	var listed struct {
+		Participants []string `json:"participants"`
+	}
+	if err := json.Unmarshal([]byte(body), &listed); err != nil {
+		t.Fatalf("participants are not JSON: %v (%s)", err, body)
+	}
+	if len(listed.Participants) < 3 {
+		t.Fatalf("the escrow lists %d participants, want the three the stack runs", len(listed.Participants))
+	}
+	return listed.Participants
+}
+
+// An allowlist withholds a host from routing without stopping the escrow: nonce%3 still binds every third
+// nonce to the excluded slot, and those must be burned rather than sent, under their own reason.
+func TestE2E_GatewayBurnsTheNoncesOfAHostOutsideTheAllowlist(t *testing.T) {
+	env, client := startGatewayEnv(t, e2eEnvOptions{})
+
+	participants := gatewayParticipants(t, client, env.clientURL)
+	putSettings(t, client, env.clientURL, map[string]any{"participant_allowlist": participants[:2]})
+
+	served := 0
+	for request := range 9 {
+		if response := testutil.SendCompletionRaw(t, client, env.clientURL,
+			fmt.Sprintf("allowlisted %d", request), testutil.AdminAPIKey); response.StatusCode == http.StatusOK {
+			served++
+		}
+	}
+	if served == 0 {
+		t.Fatal("an allowlist of two of three hosts served nothing at all")
+	}
+
+	burned := awaitGhostBurns(t, client, env.statsURL, "participant_outside_allowlist", 60*time.Second)
+	if burned == 0 {
+		t.Error("no nonce was burned for the excluded host: its slot either kept routing or lost its nonces silently")
+	}
+}
+
+// Narrowing the allowlist to one host and then clearing it puts the group back in service: an operator
+// who over-narrows during an incident must be able to undo it without a restart.
+func TestE2E_GatewayKeepsServingWhenTheAllowlistIsPutBack(t *testing.T) {
+	env, client := startGatewayEnv(t, e2eEnvOptions{})
+
+	participants := gatewayParticipants(t, client, env.clientURL)
+	putSettings(t, client, env.clientURL, map[string]any{"participant_allowlist": participants[:1]})
+	putSettings(t, client, env.clientURL, map[string]any{"participant_allowlist": []string{}})
+
+	testutil.RequireOpenAINonStreamingCompletion(t,
+		testutil.SendCompletionRaw(t, client, env.clientURL, "allowlist lifted", testutil.AdminAPIKey))
+}
+
+// A host the gateway cannot reach is cut off, and while the cutoff holds its nonces are burned as
+// throttled rather than offered again. Only a transport fault trips the breaker -- see the scenario below.
+func TestE2E_GatewayBurnsTheNoncesOfACutOffHost(t *testing.T) {
+	env, client := startGatewayEnv(t, e2eEnvOptions{})
+
+	putSettings(t, client, env.clientURL, map[string]any{
+		"host_cutoff_after_failures": 1,
+		"host_cutoff_ms":             60000,
+		"host_cutoff_max_ms":         60000,
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), testutil.DefaultRequestTimeout)
+	t.Cleanup(cancel)
+	env.stopHost(ctx, t, 1)
+
+	for request := range 9 {
+		testutil.SendCompletionRaw(t, client, env.clientURL,
+			fmt.Sprintf("cutting off %d", request), testutil.AdminAPIKey)
+	}
+
+	if burned := awaitGhostBurns(t, client, env.statsURL, "participant_throttled_no_send", 60*time.Second); burned == 0 {
+		t.Errorf("an unreachable host was still being offered work; the burns that did land were %v",
+			gatewayGhostReasons(t, client, env.statsURL))
+	}
+	scrape := gatewayScrape(t, client, env.clientURL)
+	if !strings.Contains(scrape, "devshard_gateway_participant_breaker_state") {
+		t.Error("the breaker state is not published, so an operator cannot see which host is cut off")
+	}
+}
+
+// A host answering 503 is held back, not cut off: it replied, so the window halves and the transport-fault
+// count resets (limits/participant.go, Overload). Cutting off a host that answers would lose capacity that
+// is merely busy.
+func TestE2E_GatewayDoesNotCutOffAHostThatAnswers503(t *testing.T) {
+	env, client := startGatewayEnv(t, e2eEnvOptions{
+		hostEnvOverrides: map[int]map[string]string{1: brokenHost("503", "busy")},
+	})
+
+	putSettings(t, client, env.clientURL, map[string]any{
+		"host_cutoff_after_failures": 1,
+		"host_cutoff_ms":             60000,
+		"host_cutoff_max_ms":         60000,
+	})
+
+	for request := range 9 {
+		testutil.SendCompletionRaw(t, client, env.clientURL,
+			fmt.Sprintf("busy host %d", request), testutil.AdminAPIKey)
+	}
+
+	if burned := gatewayGhostBurns(t, client, env.statsURL, "participant_throttled_no_send"); burned > 0 {
+		t.Errorf("a host that answered 503 was cut off %d time(s): an answer is not a transport fault", burned)
+	}
+}
+
+// Ejection outlives the cutoff, and the two are read in that order: while a host is cut off it burns as
+// throttled, and only once the cutoff lapses does the ejection behind it show. Both windows are kept
+// short and long on purpose so the second is reachable at all.
+func TestE2E_GatewayBurnsTheNoncesOfAnEjectedHostOnceItsCutoffLapses(t *testing.T) {
+	env, client := startGatewayEnv(t, e2eEnvOptions{
+		hostEnvOverrides: map[int]map[string]string{1: brokenHost("500", "host is broken")},
+	})
+
+	putSettings(t, client, env.clientURL, map[string]any{
+		"host_cutoff_after_failures": 3,
+		"host_cutoff_ms":             500,
+		"host_cutoff_max_ms":         500,
+	})
+
+	for request := range 10 {
+		testutil.SendCompletionRaw(t, client, env.clientURL,
+			fmt.Sprintf("ejecting %d", request), testutil.AdminAPIKey)
+	}
+	// Past the half-second cutoff and well inside the thirty-second ejection, which is the only window
+	// where the ejection is the block that answers.
+	time.Sleep(3 * time.Second)
+	for request := range 6 {
+		testutil.SendCompletionRaw(t, client, env.clientURL,
+			fmt.Sprintf("after the cutoff %d", request), testutil.AdminAPIKey)
+	}
+
+	if burned := awaitGhostBurns(t, client, env.statsURL, "participant_ejected_no_send", 60*time.Second); burned == 0 {
+		t.Errorf("an ejected host was still being offered work once its cutoff lapsed; the burns were %v",
+			gatewayGhostReasons(t, client, env.statsURL))
+	}
+}
+
+// gatewayGhostReasons is every burn reason the ledger holds, so a scenario that expected one can say
+// which arrived instead of only that its own did not.
+func gatewayGhostReasons(t *testing.T, client *http.Client, statsURL string) map[string]uint64 {
+	t.Helper()
+	body := testutil.GetJSON(t, client, statsURL+"/api/v1/epochs/current/participants")
+	participants, _ := body["participants"].([]any)
+	reasons := map[string]uint64{}
+	for _, rawParticipant := range participants {
+		participant, ok := rawParticipant.(map[string]any)
+		if !ok {
+			continue
+		}
+		counters, _ := participant["counters"].([]any)
+		for _, rawCounter := range counters {
+			counter, ok := rawCounter.(map[string]any)
+			if !ok || counter["disposition"] != "ghost" {
+				continue
+			}
+			reason, _ := counter["ghost_reason"].(string)
+			reasons[reason] += testutil.NumericField(t, counter, "count")
+		}
+	}
+	return reasons
+}
+
+func awaitGhostBurns(t *testing.T, client *http.Client, statsURL, reason string, within time.Duration) uint64 {
+	t.Helper()
+	deadline := time.Now().Add(within)
+	for {
+		if burned := gatewayGhostBurns(t, client, statsURL, reason); burned > 0 {
+			return burned
+		}
+		if time.Now().After(deadline) {
+			return 0
+		}
+		time.Sleep(time.Second)
+	}
+}

@@ -48,6 +48,8 @@ graph LR
 
 `unfinished_refused` is the cheap failure — the nonce frees at the refusal deadline. `unfinished_execution` is the expensive one: the host took the work, so the nonce is held to the execution deadline.
 
+The kind is read from the receipt — `engine/settle.go`, `timeoutKind` — and then deferred to the verifiers' vote, which is the protocol's answer and can disagree: they judge on what they saw, and the receipt went to the gateway.
+
 ## The surface
 
 `GATEWAY_NONCE_ACCOUNTING_ENABLED` builds the ledger and exports it as `devshard_gateway_nonces_*` on the gateway's ordinary metrics endpoint. There is no second port to configure: a Prometheus already scraping the gateway picks the series up on its next scrape.
@@ -72,6 +74,14 @@ Every route is read-only and serves one gateway's view of public network behavio
 `POST /v1/admin/accounting/reset/{epoch}` clears one epoch and answers how many escrows went with it. It lives on the **admin** surface because it erases records, and the epoch is named rather than defaulted for the same reason — a rotation leaves escrows of two epochs live at once, and neighbouring epochs are untouched.
 
 Each escrow keeps its newest 256 events, which caps a pathological run rather than trimming normal traffic: a verdict is rare, and an escrow dies with its epoch.
+
+### The counter's shape is this ledger's own
+
+A counter is served **flat** -- `escrow_id`, `slot_id`, `disposition`, `ghost_reason`, `terminal`, `phase` and the timeout fields all at the top level of the object. The legacy ledger in `devshard/accounting` nests the same facts under a `key` object and calls the burn reason `no_send_reason`.
+
+Nothing outside this gateway reads the JSON counter, and the in-repo Grafana dashboard queries the Prometheus labels instead -- `devshard_gateway_nonces_by_disposition` grouped by `ghost_reason` -- which already match. The shapes are therefore left apart deliberately rather than aligned.
+
+The cost of that is worth stating, because it is silent: a reader written against the legacy shape finds none of these fields, decodes them as empty, filters every counter out and reports **zero burns rather than an error**. The e2e suite hit exactly this, which is why the gateway scenarios read counters with their own helper rather than the shared one.
 
 ## Findings
 

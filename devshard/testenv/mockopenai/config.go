@@ -28,7 +28,7 @@ func DefaultConfig() Config {
 // FaultConfig holds runtime fault-injection knobs (env or POST /testenv/fault).
 type FaultConfig struct {
 	Latency          time.Duration
-	HTTPStatus       int  // 0 = OK
+	HTTPStatus       int // 0 = OK
 	DropFirstChunk   bool
 	PartialStream    bool // omit final chunk + [DONE]
 	StreamChunkDelay time.Duration

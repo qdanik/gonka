@@ -38,6 +38,7 @@ type Registry struct {
 	servingSessions  SessionFactory
 	readOnlySessions SessionFactory
 	membership       membership
+	sessions         atomic.Uint64
 	exhaustion       exhaustion
 	publications     publications
 	now              func() time.Time
@@ -109,7 +110,7 @@ func (r *Registry) Add(ctx context.Context, escrowID, model string) error {
 	if _, alreadyLive := published.byID[escrowID]; alreadyLive {
 		return session.Close()
 	}
-	entry := newEscrowEntry(escrowID, model, session, r.now)
+	entry := newEscrowEntry(escrowID, model, r.sessions.Add(1), session, r.now)
 	entry.hold = r.holdFor(entry)
 	r.live.Store(published.with(entry))
 	r.pushMembershipLocked()

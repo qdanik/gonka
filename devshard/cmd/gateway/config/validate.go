@@ -8,6 +8,9 @@ import (
 	"strings"
 )
 
+// ErrInvalid marks a configuration the operator got wrong, so the surface answers 400 rather than 502.
+var ErrInvalid = errors.New("invalid configuration")
+
 // Validate reports every problem at once, naming fields in the admin-API snake_case spelling.
 func (c *Config) Validate() error {
 	var problems []error
@@ -210,7 +213,7 @@ func (c *Config) Validate() error {
 	}
 
 	if len(problems) > 0 {
-		return fmt.Errorf("invalid configuration: %w", errors.Join(problems...))
+		return fmt.Errorf("%w: %w", ErrInvalid, errors.Join(problems...))
 	}
 	return nil
 }

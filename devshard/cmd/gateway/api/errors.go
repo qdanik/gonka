@@ -13,6 +13,7 @@ import (
 	json "github.com/goccy/go-json"
 
 	"devshard/cmd/gateway/chain"
+	"devshard/cmd/gateway/config"
 	"devshard/cmd/gateway/engine"
 	"devshard/cmd/gateway/escrow"
 	"devshard/cmd/gateway/filters"
@@ -140,7 +141,7 @@ func statusForError(err error) int {
 		return http.StatusConflict
 	case errors.Is(err, engine.ErrStopped), errors.Is(err, registry.ErrClosed):
 		return http.StatusServiceUnavailable
-	case errors.Is(err, ErrPrivateKeyEnvRequired):
+	case errors.Is(err, ErrPrivateKeyEnvRequired), errors.Is(err, config.ErrInvalid):
 		return http.StatusBadRequest
 	case errors.Is(err, ErrDevshardNotActivatable):
 		return http.StatusConflict

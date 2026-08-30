@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net/http"
 	"strings"
 	"testing"
 	"time"
@@ -35,6 +36,8 @@ type e2eEnv struct {
 	clientURL   string
 	statsURL    string
 
+	gateway          testcontainers.Container
+	mockChain        testcontainers.Container
 	images           e2eImages
 	hostURLs         []string
 	hostVolumeNames  []string
@@ -71,6 +74,10 @@ type e2eEnvOptions struct {
 	// side: both would open the same escrow and advance the same nonce sequence.
 	runGateway          bool
 	gatewayEnvOverrides map[string]string
+	// mockChainParams patches the chain's escrow params first: a session takes its deadlines when opened.
+	mockChainParams map[string]any
+	// gatewayVolumeName keeps storage across a restart; without it Docker recreates the dir empty.
+	gatewayVolumeName string
 }
 
 func startHappyPathEnv(ctx context.Context, t *testing.T, images e2eImages) *e2eEnv {
@@ -111,12 +118,16 @@ func startE2EEnv(ctx context.Context, t *testing.T, images e2eImages, opts e2eEn
 	t.Cleanup(func() { env.terminate(context.Background(), t) })
 
 	mockChain := env.startContainer(ctx, t, containerSpec{
-		name:    mockChainAlias,
-		image:   images.mockChain,
-		port:    "9090/tcp",
-		aliases: []string{mockChainAlias},
-		waitLog: "mock-chain gRPC listening",
+		name:       mockChainAlias,
+		image:      images.mockChain,
+		port:       "9090/tcp",
+		aliases:    []string{mockChainAlias},
+		extraPorts: []string{"9191/tcp"},
+		waitLog:    "mock-chain gRPC listening",
 	})
+	if len(opts.mockChainParams) > 0 {
+		patchMockChainParams(ctx, t, mockChain, opts.mockChainParams)
+	}
 
 	postgres := env.startContainer(ctx, t, containerSpec{
 		name:    postgresAlias,
@@ -148,6 +159,7 @@ func startE2EEnv(ctx context.Context, t *testing.T, images e2eImages, opts e2eEn
 	}
 
 	if opts.runGateway {
+		env.mockChain = mockChain
 		env.startGateway(ctx, t, opts)
 		require.NotNil(t, mockChain)
 		require.NotNil(t, postgres)
@@ -211,28 +223,66 @@ func (e *e2eEnv) startGateway(ctx context.Context, t *testing.T, opts e2eEnvOpti
 		"GATEWAY_STORAGE_DIR":    "/tmp/gateway",
 		"GATEWAY_MAX_TOKENS_CAP": "4096",
 		"GATEWAY_PORT":           "8080",
+		// Off in production, on here: it is the only surface that says what became of each nonce.
+		"GATEWAY_NONCE_ACCOUNTING_ENABLED":          "true",
+		"GATEWAY_NONCE_ACCOUNTING_LISTEN_ADDR":      ":9091",
+		"GATEWAY_NONCE_ACCOUNTING_SNAPSHOT_SECONDS": "3600",
 	}
 	for k, v := range opts.gatewayEnvOverrides {
 		gatewayEnv[k] = v
 	}
-	gateway := e.startContainer(ctx, t, containerSpec{
-		name:     gatewayName,
-		image:    e.images.gateway,
-		port:     "8080/tcp",
-		aliases:  []string{gatewayName},
-		env:      gatewayEnv,
-		tmpfs:    map[string]string{"/tmp": "rw"},
-		waitPath: "/v1/status",
-	})
+	spec := containerSpec{
+		name:       gatewayName,
+		image:      e.images.gateway,
+		port:       "8080/tcp",
+		extraPorts: []string{"9091/tcp"},
+		aliases:    []string{gatewayName},
+		env:        gatewayEnv,
+		// /metrics, not /v1/status: the kill switch turns that route off and the wait would never end.
+		waitPath: "/metrics",
+	}
+	if opts.gatewayVolumeName == "" {
+		spec.tmpfs = map[string]string{"/tmp": "rw"}
+	} else {
+		spec.mounts = []mount.Mount{{Type: mount.TypeVolume, Source: opts.gatewayVolumeName, Target: "/tmp"}}
+		t.Cleanup(func() { removeDockerVolumes(context.Background(), t, []string{opts.gatewayVolumeName}) })
+	}
+	e.gateway = e.startContainer(ctx, t, spec)
+	e.readGatewayURLs(ctx, t)
+}
 
-	host, err := gateway.Host(ctx)
+// restartGateway restarts the same container, so the storage the ledger snapshotted into survives.
+func (e *e2eEnv) restartGateway(ctx context.Context, t *testing.T) {
+	t.Helper()
+	require.NotNil(t, e.gateway, "no gateway container: this scenario did not ask for one")
+	testutil.DebugLogf(t, "restarting %s", gatewayName)
+	require.NoError(t, e.gateway.Stop(ctx, nil), "stop %s", gatewayName)
+	require.NoError(t, e.gateway.Start(ctx), "start %s", gatewayName)
+	// Docker reassigns published ports on start, so the pre-restart URLs point at a dead socket.
+	e.readGatewayURLs(ctx, t)
+}
+
+func (e *e2eEnv) readGatewayURLs(ctx context.Context, t *testing.T) {
+	t.Helper()
+	host, err := e.gateway.Host(ctx)
 	require.NoError(t, err)
-	port, err := gateway.MappedPort(ctx, "8080/tcp")
+	port, err := e.gateway.MappedPort(ctx, "8080/tcp")
 	require.NoError(t, err)
 	e.clientURL = "http://" + host + ":" + port.Port()
-	// The gateway serves its own metrics on the client port; there is no second stats listener.
-	e.statsURL = e.clientURL
-	testutil.DebugLogf(t, "gateway client URL: %s", e.clientURL)
+	ledgerPort, err := e.gateway.MappedPort(ctx, "9091/tcp")
+	require.NoError(t, err)
+	e.statsURL = "http://" + host + ":" + ledgerPort.Port()
+	testutil.DebugLogf(t, "gateway client URL: %s, nonce ledger URL: %s", e.clientURL, e.statsURL)
+}
+
+func patchMockChainParams(ctx context.Context, t *testing.T, mockChain testcontainers.Container, params map[string]any) {
+	t.Helper()
+	host, err := mockChain.Host(ctx)
+	require.NoError(t, err)
+	port, err := mockChain.MappedPort(ctx, "9191/tcp")
+	require.NoError(t, err)
+	testutil.PostJSON(t, &http.Client{Timeout: testutil.DefaultRequestTimeout},
+		"http://"+host+":"+port.Port()+"/testenv/params", params)
 }
 
 func hostName(index int) string {

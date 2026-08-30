@@ -216,6 +216,7 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 	raceObserver := nonceAccountedRaces{recorder: metrics.NewRaceRecorder(telemetry), ledger: recorder}
 	prober.Settle(sessions.Poster, raceObserver)
 	charges.Serve(escrows, sessions.Poster, raceObserver)
+	e2e := env.LoadE2E()
 	races := engine.NewEngine(engine.Deps{
 		Picker:     router,
 		Targets:    sessions,
@@ -229,6 +230,7 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 		Suspicious: suspicious.Suspicious,
 		Timeouts:   sessions.Poster,
 		Now:        clock,
+		E2E:        engine.E2EOverrides{HardTimeout: e2e.StreamingHardTimeout},
 	})
 	// One wrapper for both readers, so the gauge reports the scale admission actually applies.
 	modelCapacities := modelCapacity{capacity: capacity, snapshots: observer, config: configHolder}

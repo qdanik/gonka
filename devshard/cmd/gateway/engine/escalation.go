@@ -46,6 +46,19 @@ type EscalationPolicy struct {
 	InterChunkStall        time.Duration
 	LoserGrace             time.Duration
 	MaxSpeculativeAttempts int
+	HardTimeout            time.Duration
+}
+
+// E2EOverrides are the bounds a test stand may shorten; every zero keeps the production bound.
+type E2EOverrides struct {
+	HardTimeout time.Duration
+}
+
+func (p EscalationPolicy) hardTimeout() time.Duration {
+	if p.HardTimeout > 0 {
+		return p.HardTimeout
+	}
+	return streamingHardTimeout
 }
 
 func EscalationPolicyFromConfig(engine config.Engine) EscalationPolicy {

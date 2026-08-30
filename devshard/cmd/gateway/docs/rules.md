@@ -205,22 +205,34 @@ The metric families that described the deleted quarantine machinery went with it
 - The in-repo Grafana dashboard queries families this gateway does not emit, and the repository defines no alerting rules at all. Neither is a code gap; both mean a binary swap leaves panels blank.
 - Three residuals recorded rather than papered over: a ghost burn commits its nonce without taking the escrow's in-flight hold, so it is not protected against a concurrent retire the way a served commit is; the per-participant limiter's state map never evicts, unlike the performance tracker's; and a per-participant decay half-life is captured when a host is first seen, so changing it at run time reaches only hosts seen afterwards.
 
+### What a test stand may reach
+
+Two of the gateway's own bounds are out of reach of any test that runs in minutes: an attempt that was sent and went silent is held for `streamingHardTimeout` (20 minutes), and a nonce is not classified until a timeout outcome is recorded for it. Without a way in, the whole expensive-failure path — `unfinished_execution`, applied timeouts, the chain cross-check — is unprovable end to end.
+
+So a stand may shorten them, and only a stand. The values arrive as `engine.Deps.E2E`, loaded once by [`env.LoadE2E`](../env/e2e.go), and every one of them is refused by `internal/e2econfig` unless the process set `DEVSHARD_E2E=1`. Three properties make that safe, and all three are load-bearing:
+
+- **An operator gets no knob.** The values are not in `config.Config` and cannot be set through the admin settings endpoint, so "backstops are not tunable" stays true of every deployment.
+- **A refused value cannot stop a boot.** `LoadE2E` returns an empty struct and warns rather than failing, so a stray variable in someone's environment can neither change how a deployment behaves nor keep it from starting.
+- **Zero is the production bound.** Each field defaults to the compiled constant, so a stand that sets nothing measures exactly what ships.
+
 ## Part 3 — What the tests do not verify
 
-The end-to-end suite (`e2e_test.go`) composes the real gateway — engine, scheduler, registry, limits, store — with real devshard sessions talking to real in-process hosts: real diffs, real state roots, real signatures, a real `MsgFinishInference`, no network and no chain.
+The end-to-end suite is [`devshard/e2e`](../../../e2e) (`gateway_*_test.go`): the gateway as its shipped container beside three real host containers and a mock-chain process, reached over real HTTP and real gRPC. It replaced an in-process suite that composed the same packages in one process with no network.
 
-This section exists because reading that suite as green and concluding "verified" would be wrong. These are not gaps to be closed by writing more of the same suite; they are outside what any in-process test can reach.
+This section exists because reading that suite as green and concluding "verified" would be wrong. These are not gaps to be closed by writing more of the same suite; they are outside what the stand can reach.
 
-**That the real chain accepts the gateway's transactions.** Every chain response in the suite is written by the suite. Protobuf field numbers, unordered-transaction TTL semantics, gas, fee denomination, sequence handling under contention and the escrow-created event shape are checked against the suite's *model* of the chain. One wrong field number is a green suite and a rejected transaction. This is the largest irreducible risk, and nothing in the suite touches it.
+**That the chain's rules accept the gateway's transactions.** The wire is real: the stand decodes a signed `TxRaw` with the generated cosmos and `inferencetypes` types, so a wrong field number or type URL on `MsgCreateDevshardEscrow` or `MsgSettleDevshardEscrow` fails it. What stays modelled is everything the chain then *decides* — gas, fee denomination, unordered-transaction TTL, sequence handling under contention, the escrow-created event shape. Every chain response is still written by the stand, and that remains the largest irreducible risk.
 
-**That real hosts behave like these.** The hosts are real state machines, but their inference engine is a stub. A vLLM version emitting a new SSE field, a valid receipt followed by a stream truncated at an unscripted byte boundary, TCP behaviour under packet loss — all unrepresented. The non-streaming reply is SSE-shaped because the in-process client writes SSE either way, so non-streaming *body* bytes are not evidence about a real host.
+**That real hosts behave like these.** The hosts are the real host binary, but their inference engine is a stub. A vLLM version emitting a new SSE field, a valid receipt followed by a stream truncated at an unscripted byte boundary, TCP behaviour under packet loss — all unrepresented.
+
+**Anything below the volume floor.** A finding needs 20 nonces from one participant, so a scenario spending a handful raises none however extreme its failure rate. The stand can show a rate is computed; it cannot show a finding fires.
 
 **Any tuning threshold.** Peak-EWMA, the hedging trigger, outlier ejection and the AIMD window all take a latency distribution as input. "Given these numbers, this decision" is asserted in the owning packages; "these thresholds are right for the fleet" is unanswerable without production traffic.
 
-**Real concurrency at real scale.** The widest race in the suite is single digits. One scale hazard is known and needs load to observe: `ProcessResponse` serialising a wide race on one session mutex.
+**Real concurrency at real scale.** The widest race in the stand is single digits. One scale hazard is known and needs load to observe: `ProcessResponse` serialising a wide race on one session mutex.
 
 **Settlement money end to end.** The suite asserts the payload the gateway builds. Whether the chain then pays the right participants the right amounts is chain-side.
 
-**Byte-for-byte compatibility with real clients.** The frames are pinned in the suite. Whether an OpenAI-SDK or aiohttp client in the field parses them as it parsed the legacy gateway's is an assumption, not a result.
+**Byte-for-byte compatibility with real clients.** The frames now cross a real socket, so their bytes are the bytes. Whether an OpenAI-SDK or aiohttp client in the field parses them as it parsed the legacy gateway's is still an assumption, not a result.
 
-**In one sentence:** the suite verifies every decision the gateway makes given a set of inputs, and the wiring that makes those decisions reachable — not that its model of the chain or of a real host is correct, and not any tuning.
+**In one sentence:** the stand verifies every decision the gateway makes given a set of inputs, the wiring that makes those decisions reachable, and the bytes it puts on the wire — not that its model of the chain is correct, not that a real host answers like the stub, and not any tuning.

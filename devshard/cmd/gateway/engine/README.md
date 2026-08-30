@@ -64,6 +64,8 @@ The rungs, in `triggerFor` order: an already-escalated attempt never arms; a sus
 
 `streamingHardTimeout` and `schedulerPickTimeout` bound a request every tunable already failed to bound. The streaming backstop is the tuned 20 minutes, but gives way if the chain's own execution deadline ever moves below it — a stream held past that deadline is work nobody can be paid for.
 
+Not tunable still means not tunable **by an operator**. `Deps.E2E` can shorten the streaming backstop, and nothing but a declared end-to-end stand can fill it: see [`docs/rules.md`](../docs/rules.md), "What a test stand may reach".
+
 ## Crowning and the client's bytes
 
 `winnerWriter` is one attempt's claim on the client stream. `client` is the only path to the client anywhere in the writer, and `withheld` is the only source it is ever assigned from, so a losing attempt has no reachable sink at all rather than a sink guarded by a branch somebody must remember to write.

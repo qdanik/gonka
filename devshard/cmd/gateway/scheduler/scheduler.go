@@ -170,10 +170,12 @@ func (s *Scheduler) dispatcherFor(escrow Escrow) (*dispatcher, error) {
 		return nil, ErrDispatcherStopped
 	}
 
+	// A reopened escrow needs its own dispatcher: the old one still holds the retired session.
 	target, known := s.dispatchers[escrow.ID]
-	if !known || target.isStopped() {
+	if !known || target.isStopped() || target.sessionID != escrow.SessionID {
 		target = newDispatcher(dispatcherDeps{
 			escrowID:     escrow.ID,
+			sessionID:    escrow.SessionID,
 			session:      escrow.Session,
 			snapshots:    s.snapshots,
 			predicates:   s.predicates(escrow),
@@ -317,6 +319,7 @@ type escrowSource interface {
 type Escrow struct {
 	ID          string
 	Model       string
+	SessionID   uint64
 	Session     session
 	ActiveUsers int
 	Hold        func() (release func(), ok bool)

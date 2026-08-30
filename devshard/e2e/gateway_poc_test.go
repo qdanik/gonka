@@ -1,0 +1,100 @@
+package e2e
+
+import (
+	"context"
+	"fmt"
+	"net/http"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/require"
+
+	"devshard/e2e/testutil"
+)
+
+// setChainPhase moves the phase the public API reports, and optionally publishes the participant group
+// with only the named addresses preserved.
+func setChainPhase(ctx context.Context, t *testing.T, env *e2eEnv, request map[string]any) {
+	t.Helper()
+	host, err := env.mockChain.Host(ctx)
+	require.NoError(t, err)
+	port, err := env.mockChain.MappedPort(ctx, "9191/tcp")
+	require.NoError(t, err)
+	applied := testutil.PostJSONRaw(t, &http.Client{Timeout: testutil.DefaultRequestTimeout},
+		"http://"+host+":"+port.Port()+"/testenv/phase", request, "")
+	if applied.StatusCode != http.StatusOK {
+		t.Fatalf("setting the chain phase %v = %d %s", request, applied.StatusCode, applied.Body)
+	}
+}
+
+// While the chain is generating proof of compute, the default gateway stops serving: the hosts are busy
+// proving, and work sent to them is work that will not come back.
+func TestE2E_GatewayStopsServingWhileTheChainIsInPoC(t *testing.T) {
+	env, client := startGatewayEnv(t, e2eEnvOptions{})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	t.Cleanup(cancel)
+
+	testutil.RequireOpenAINonStreamingCompletion(t,
+		testutil.SendCompletionRaw(t, client, env.clientURL, "before poc", testutil.AdminAPIKey))
+
+	setChainPhase(ctx, t, env, map[string]any{"phase": "PoCGenerate"})
+
+	deadline := time.Now().Add(60 * time.Second)
+	for {
+		blocked := testutil.SendCompletionRaw(t, client, env.clientURL, "during poc", testutil.AdminAPIKey)
+		if blocked.StatusCode == http.StatusServiceUnavailable {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the gateway still served during PoC: %d %s", blocked.StatusCode, blocked.Body)
+		}
+		time.Sleep(2 * time.Second)
+	}
+
+	scrape := gatewayScrape(t, client, env.clientURL)
+	requireMetrics(t, scrape, []string{"devshard_gateway_chain_requests_blocked", "devshard_gateway_chain_block_reason"})
+
+	setChainPhase(ctx, t, env, map[string]any{"phase": "Inference"})
+	awaitServed(t, client, env.clientURL, 60*time.Second)
+}
+
+// In relaxed mode the gateway keeps serving through a PoC, but only on the hosts the chain preserved.
+// A host left out is not sent work: its nonces are burned under their own reason instead.
+func TestE2E_GatewayBurnsTheNoncesOfAHostPoCDidNotPreserve(t *testing.T) {
+	env, client := startGatewayEnv(t, e2eEnvOptions{
+		gatewayEnvOverrides: map[string]string{"GATEWAY_POC_MODE": "relaxed"},
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	t.Cleanup(cancel)
+
+	participants := gatewayParticipants(t, client, env.clientURL)
+	setChainPhase(ctx, t, env, map[string]any{
+		"phase":                "PoCGenerate",
+		"publish_participants": true,
+		"preserved_addresses":  participants[:2],
+	})
+
+	// Traffic keeps flowing while the check runs: the burn happens on dispatch, and the chain view lands
+	// on the gateway's own poll, so a fixed burst can finish before the two ever meet.
+	served, deadline := 0, time.Now().Add(90*time.Second)
+	var burned uint64
+	for request := 0; time.Now().Before(deadline); request++ {
+		if response := testutil.SendCompletionRaw(t, client, env.clientURL,
+			fmt.Sprintf("relaxed poc %d", request), testutil.AdminAPIKey); response.StatusCode == http.StatusOK {
+			served++
+		}
+		if burned = gatewayGhostBurns(t, client, env.statsURL, "poc_unavailable_host"); burned > 0 {
+			break
+		}
+		time.Sleep(time.Second)
+	}
+	if served == 0 {
+		t.Fatal("relaxed mode served nothing during a PoC: the preserved hosts should have carried it")
+	}
+	if burned == 0 {
+		t.Errorf("no nonce was burned for the host PoC left out; the burns that landed were %v",
+			gatewayGhostReasons(t, client, env.statsURL))
+	}
+}

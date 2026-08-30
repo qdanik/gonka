@@ -24,6 +24,7 @@ type dispatchObserver interface {
 // dispatcherDeps wires one escrow's actor. See README, "Where the nonce, the slot and the hold are taken".
 type dispatcherDeps struct {
 	escrowID     string
+	sessionID    uint64
 	session      session
 	snapshots    snapshotSource
 	predicates   func(chain.PhaseSnapshot) availability

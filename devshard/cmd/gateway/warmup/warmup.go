@@ -5,6 +5,7 @@ package warmup
 import (
 	"context"
 	"fmt"
+	"sync/atomic"
 	"time"
 
 	"common/completionapi"
@@ -129,7 +130,7 @@ func (w *Prober) warm(escrowID, model string) {
 	w.openLedger(escrowID, model, session)
 	w.record(escrowID, nonce, acknowledged, probeErr)
 	if probeErr != nil {
-		w.settleRefusedProbe(ctx, escrowID, model, params, nonce)
+		w.settleUnfinishedProbe(ctx, escrowID, model, params, nonce, acknowledged)
 	}
 
 	logging.Info("escrow warmed", logkey.Escrow, escrowID, logkey.Model, model,
@@ -163,11 +164,13 @@ func dispatchProbe(ctx context.Context, session registry.EscrowSession, params u
 	nonce, hostIdx := prepared.Nonce(), prepared.HostIdx()
 	nonceCommitted()
 
-	response, sendErr := session.UserSession().SendOnly(sendCtx, prepared, nil, nil)
+	// Taken as it arrives: a host that receipts and then hangs never returns the reply to read it from.
+	var acknowledged atomic.Bool
+	response, sendErr := session.UserSession().SendOnly(sendCtx, prepared, nil, func() { acknowledged.Store(true) })
 	if sendErr != nil {
-		return nonce, false, sendErr
+		return nonce, acknowledged.Load(), sendErr
 	}
-	return nonce, executorAcknowledged(response), session.UserSession().ProcessResponse(hostIdx, response, nonce)
+	return nonce, acknowledged.Load() || executorAcknowledged(response), session.UserSession().ProcessResponse(hostIdx, response, nonce)
 }
 
 func executorAcknowledged(response *host.HostResponse) bool {

@@ -1,6 +1,7 @@
 package store
 
 import (
+	"sort"
 	"sync"
 
 	inferencetypes "github.com/productscience/inference/x/inference/types"
@@ -29,8 +30,8 @@ type Store struct {
 	ParamsBlockHeight int64
 	// NextPocStartBlockHeight is the upcoming epoch PoC anchor (EpochContext.NextPoCStart).
 	NextPocStartBlockHeight int64
-	Params                 inferencetypes.Params
-	Epoch             inferencetypes.Epoch
+	Params                  inferencetypes.Params
+	Epoch                   inferencetypes.Epoch
 
 	Participants   map[string]*inferencetypes.Participant
 	Escrows        map[uint64]*inferencetypes.DevshardEscrow
@@ -212,6 +213,20 @@ func (s *Store) GetParticipant(address string) *inferencetypes.Participant {
 	}
 	c := *p
 	return &c
+}
+
+// ListParticipants returns every participant, sorted by address for a stable render order.
+func (s *Store) ListParticipants() []inferencetypes.Participant {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	listed := make([]inferencetypes.Participant, 0, len(s.Participants))
+	for _, participant := range s.Participants {
+		if participant != nil {
+			listed = append(listed, *participant)
+		}
+	}
+	sort.Slice(listed, func(i, j int) bool { return listed[i].Address < listed[j].Address })
+	return listed
 }
 
 // Escrow returns an escrow by id or nil.

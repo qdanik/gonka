@@ -12,22 +12,24 @@ import (
 
 // escrowEntry is one escrow's live state; inFlight is shared by every published set the entry appears in.
 type escrowEntry struct {
-	id       string
-	model    string
-	session  EscrowSession
-	slots    map[string]int
-	stream   nonceStream
-	inFlight atomic.Int64
-	hold     func() (func(), bool)
+	id        string
+	sessionID uint64
+	model     string
+	session   EscrowSession
+	slots     map[string]int
+	stream    nonceStream
+	inFlight  atomic.Int64
+	hold      func() (func(), bool)
 }
 
-func newEscrowEntry(escrowID, model string, session EscrowSession, now func() time.Time) *escrowEntry {
+func newEscrowEntry(escrowID, model string, sessionID uint64, session EscrowSession, now func() time.Time) *escrowEntry {
 	return &escrowEntry{
-		id:      escrowID,
-		model:   model,
-		session: session,
-		slots:   slotCounts(session.HostParticipantKeyList()),
-		stream:  newNonceStream(session, model, now),
+		id:        escrowID,
+		sessionID: sessionID,
+		model:     model,
+		session:   session,
+		slots:     slotCounts(session.HostParticipantKeyList()),
+		stream:    newNonceStream(session, model, now),
 	}
 }
 

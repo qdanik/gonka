@@ -19,7 +19,9 @@ services:
           - devshard-pool
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/v1/status"]
+      # /metrics, not /v1/status: the kill switch turns /v1/status off, and a health check
+      # pointed at it would have the orchestrator restart a gateway that was disabled on purpose.
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/metrics"]
       interval: 30s
       timeout: 5s
       retries: 3

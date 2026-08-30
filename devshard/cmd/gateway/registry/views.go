@@ -18,6 +18,7 @@ func (r *Registry) Candidates(model string) []scheduler.Escrow {
 		candidates = append(candidates, scheduler.Escrow{
 			ID:          entry.id,
 			Model:       entry.model,
+			SessionID:   entry.sessionID,
 			Session:     entry.stream,
 			ActiveUsers: int(entry.inFlight.Load()),
 			Hold:        entry.hold,

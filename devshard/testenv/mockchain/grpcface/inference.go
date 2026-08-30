@@ -3,6 +3,7 @@ package grpcface
 import (
 	"context"
 
+	p2p "github.com/cometbft/cometbft/proto/tendermint/p2p"
 	"github.com/cosmos/cosmos-sdk/client/grpc/cmtservice"
 	inferencetypes "github.com/productscience/inference/x/inference/types"
 	"google.golang.org/grpc/codes"
@@ -93,6 +94,13 @@ type CometServer struct {
 // NewCometServer returns a cmtservice server backed by store.
 func NewCometServer(st *store.Store) *CometServer {
 	return &CometServer{store: st}
+}
+
+// GetNodeInfo answers with the chain id as "network"; the gateway reads it before signing anything.
+func (s *CometServer) GetNodeInfo(_ context.Context, _ *cmtservice.GetNodeInfoRequest) (*cmtservice.GetNodeInfoResponse, error) {
+	return &cmtservice.GetNodeInfoResponse{
+		DefaultNodeInfo: &p2p.DefaultNodeInfo{Network: s.store.GetChainID()},
+	}, nil
 }
 
 func (s *CometServer) GetLatestBlock(_ context.Context, _ *cmtservice.GetLatestBlockRequest) (*cmtservice.GetLatestBlockResponse, error) {

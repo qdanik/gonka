@@ -14,23 +14,27 @@ type Timeouts interface {
 	RecordTimeout(event engine.TimeoutEvent)
 }
 
-// settleRefusedProbe resolves a nonce committed outside the scheduler, which nothing else ever would.
-func (w *Prober) settleRefusedProbe(ctx context.Context, escrowID, model string, params user.InferenceParams, nonce uint64) {
+// settleUnfinishedProbe resolves a nonce committed outside the scheduler, which nothing else ever would.
+func (w *Prober) settleUnfinishedProbe(ctx context.Context, escrowID, model string, params user.InferenceParams, nonce uint64, acknowledged bool) {
 	if w.posters == nil {
 		return
+	}
+	kind := engine.TimeoutKindRefused
+	if acknowledged {
+		kind = engine.TimeoutKindExecution
 	}
 	event := engine.TimeoutEvent{
 		EscrowID: escrowID,
 		Model:    model,
 		Nonce:    nonce,
-		Kind:     engine.TimeoutKindRefused,
+		Kind:     kind,
 		Action:   engine.TimeoutActionStarted,
 	}
 
 	poster, resolved := w.posters(escrowID, params)
 	if !resolved {
 		w.recordTimeout(engine.TimeoutEvent{
-			EscrowID: escrowID, Model: model, Nonce: nonce, Kind: engine.TimeoutKindRefused,
+			EscrowID: escrowID, Model: model, Nonce: nonce, Kind: kind,
 			Action: engine.TimeoutActionSkipped, Reason: engine.TimeoutReasonNoPoster,
 		})
 		return
@@ -42,7 +46,7 @@ func (w *Prober) settleRefusedProbe(ctx context.Context, escrowID, model string,
 	posted.Action, posted.Reason = engine.TimeoutOutcome(vote, err, false)
 	w.recordTimeout(posted)
 
-	logging.Info("escrow warmup voted on its refused nonce", logkey.Escrow, escrowID,
+	logging.Info("escrow warmup voted on its unfinished nonce", logkey.Escrow, escrowID,
 		logkey.Nonce, nonce, logkey.Action, posted.Action, logkey.Reason, posted.Reason)
 }
 

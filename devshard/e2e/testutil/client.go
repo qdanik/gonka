@@ -13,6 +13,7 @@ import (
 type RawResponse struct {
 	StatusCode  int
 	ContentType string
+	Header      http.Header
 	Body        string
 	JSON        map[string]any
 }
@@ -89,6 +90,7 @@ func PostRawE(client *http.Client, url, contentType string, body []byte, bearerT
 	return RawResponse{
 		StatusCode:  resp.StatusCode,
 		ContentType: resp.Header.Get("Content-Type"),
+		Header:      resp.Header,
 		Body:        string(respBody),
 		JSON:        decoded,
 	}, nil

@@ -31,6 +31,10 @@ func (s *spyTimeouts) RecordTimeout(event engine.TimeoutEvent) {
 }
 
 func refusedWarmup(poster *stubPoster, timeouts *spyTimeouts, resolved bool) *Prober {
+	return unfinishedWarmup(poster, timeouts, resolved, false)
+}
+
+func unfinishedWarmup(poster *stubPoster, timeouts *spyTimeouts, resolved, acknowledged bool) *Prober {
 	return &Prober{
 		escrows:  &stubEscrows{session: stubSession{}, live: true},
 		ledger:   &spyLedger{},
@@ -40,7 +44,7 @@ func refusedWarmup(poster *stubPoster, timeouts *spyTimeouts, resolved bool) *Pr
 		},
 		probe: func(_ context.Context, _ registry.EscrowSession, _ user.InferenceParams, nonceCommitted func()) (uint64, bool, error) {
 			nonceCommitted()
-			return 7, false, errors.New("host refused")
+			return 7, acknowledged, errors.New("host stopped answering")
 		},
 		catchUp: func(context.Context, registry.EscrowSession) error { return nil },
 		stop:    make(chan struct{}),
@@ -68,6 +72,31 @@ func TestARefusedWarmupProbeIsVotedOn(t *testing.T) {
 	}
 	if got := timeouts.events[1].Nonce; got != 7 {
 		t.Errorf("event nonce = %d, want the nonce the probe spent", got)
+	}
+}
+
+// A receipted probe is an execution failure: the host took the work before it hung.
+func TestAReceiptedWarmupProbeIsVotedAnExecutionTimeout(t *testing.T) {
+	poster := &stubPoster{vote: "refused"}
+	timeouts := &spyTimeouts{}
+
+	unfinishedWarmup(poster, timeouts, true, true).warm("escrow-1", "model-a")
+
+	if len(timeouts.events) == 0 {
+		t.Fatal("no timeout event was recorded for the probe")
+	}
+	if got := timeouts.events[0].Kind; got != engine.TimeoutKindExecution {
+		t.Errorf("kind = %q, want %q: the probe was receipted", got, engine.TimeoutKindExecution)
+	}
+}
+
+func TestAnUnreceiptedWarmupProbeStaysARefusal(t *testing.T) {
+	timeouts := &spyTimeouts{}
+
+	unfinishedWarmup(&stubPoster{vote: "refused"}, timeouts, true, false).warm("escrow-1", "model-a")
+
+	if got := timeouts.events[0].Kind; got != engine.TimeoutKindRefused {
+		t.Errorf("kind = %q, want %q: no receipt was seen", got, engine.TimeoutKindRefused)
 	}
 }
 

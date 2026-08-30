@@ -6,9 +6,9 @@ import (
 	"net"
 
 	"github.com/cosmos/cosmos-sdk/client/grpc/cmtservice"
-	inferencetypes "github.com/productscience/inference/x/inference/types"
-	authtypes "github.com/cosmos/cosmos-sdk/x/auth/types"
 	txtypes "github.com/cosmos/cosmos-sdk/types/tx"
+	authtypes "github.com/cosmos/cosmos-sdk/x/auth/types"
+	inferencetypes "github.com/productscience/inference/x/inference/types"
 	"google.golang.org/grpc"
 
 	"devshard/testenv/mockchain/rpcface"

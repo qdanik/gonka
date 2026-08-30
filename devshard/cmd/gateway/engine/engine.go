@@ -74,6 +74,8 @@ type Deps struct {
 
 	Now   func() time.Time
 	Timer func() raceTimer
+
+	E2E E2EOverrides
 }
 
 // Request is one client request as a race sees it; OnEscrow fires at the last moment a header can still be set.
@@ -135,6 +137,12 @@ func (e *Engine) Stop() {
 	e.stopped = true
 	e.mu.Unlock()
 	e.tracked.Wait()
+}
+
+func (e *Engine) policy(settings config.Engine) EscalationPolicy {
+	policy := EscalationPolicyFromConfig(settings)
+	policy.HardTimeout = e.deps.E2E.HardTimeout
+	return policy
 }
 
 // admit registers a race before it starts, returning nil once the engine is stopped. See race.md, "Stop".
@@ -209,7 +217,7 @@ func (e *Engine) raceDeps(settings *config.Config, request Request, registration
 		Perf:         e.deps.Perf,
 		Crown:        suspicionGate{pinned: e.deps.Suspicious, strikes: e.crown},
 		Snapshots:    e.deps.Snapshots,
-		Policy:       EscalationPolicyFromConfig(settings.Engine),
+		Policy:       e.policy(settings.Engine),
 		Modes:        settings.Modes,
 		DrainTimeout: DrainTimeoutFromConfig(settings.Stream),
 		Classify:     e.classify(request.Model),
