@@ -663,39 +663,16 @@ func TestASmallBudgetSilencesKimiInTheTemplateToo(t *testing.T) {
 	}
 }
 
-func TestReasoningEffortScopeStripsOffTheConsumingRoutes(t *testing.T) {
-	for _, profile := range []*Profile{nil, kimiProfile, minimaxProfile} {
-		document := parseTestDocument(t, `{"reasoning_effort":"high"}`)
-		ctx := RuleContext{Document: document, Profile: profile, Param: "reasoning_effort"}
-		if err := reasoningEffortScope()(ctx); err != nil {
-			t.Fatalf("reasoningEffortScope() = %v, want nil", err)
-		}
-		if document.Has("reasoning_effort") {
-			t.Errorf("profile %v kept a field no route of it reads", profile)
-		}
-	}
-}
-
-func TestReasoningEffortScopeFillsTheRouteDefault(t *testing.T) {
-	document := parseTestDocument(t, `{"messages":[]}`)
-	ctx := RuleContext{Document: document, Profile: deepseekProfile, Param: "reasoning_effort"}
-	if err := reasoningEffortScope()(ctx); err != nil {
-		t.Fatalf("reasoningEffortScope() = %v, want nil", err)
-	}
-	if got, _ := document.Get("reasoning_effort"); got != "max" {
-		t.Errorf("reasoning_effort = %v, want %q: an omitted field renders as high, which is the level the loop reports name", got, "max")
-	}
-}
-
-func TestReasoningEffortScopeKeepsAnExplicitValue(t *testing.T) {
-	for _, effort := range []string{"none", "minimal", "low", "medium", "high", "xhigh", "max"} {
-		document := parseTestDocument(t, `{"reasoning_effort":"`+effort+`"}`)
-		ctx := RuleContext{Document: document, Profile: deepseekProfile, Param: "reasoning_effort"}
-		if err := reasoningEffortScope()(ctx); err != nil {
-			t.Fatalf("reasoningEffortScope() = %v, want nil", err)
-		}
-		if got, _ := document.Get("reasoning_effort"); got != effort {
-			t.Errorf("reasoning_effort = %v, want %q: the route default must never overrule the caller", got, effort)
+// The level reaches every route: only DeepSeek's renderer reads it, but a caller asking for one is not
+// second-guessed on the routes that ignore it.
+func TestReasoningEffortReachesEveryRoute(t *testing.T) {
+	for _, model := range []string{"", kimiModelID, minimaxModelID, deepseekModelID} {
+		for _, effort := range []string{"none", "minimal", "low", "medium", "high", "xhigh", "max"} {
+			body := `{"messages":[{"role":"user","content":"x"}],"max_tokens":4096,"reasoning_effort":"` + effort + `"}`
+			document := normalizedDocument(t, body, model)
+			if document["reasoning_effort"] != effort {
+				t.Errorf("model %q: reasoning_effort = %v, want %q", model, document["reasoning_effort"], effort)
+			}
 		}
 	}
 }

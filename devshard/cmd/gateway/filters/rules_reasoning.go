@@ -56,19 +56,6 @@ func reasoningEffortValidate() RuleFunc {
 	}
 }
 
-func reasoningEffortScope() RuleFunc {
-	return func(ctx RuleContext) error {
-		if ctx.Profile == nil || ctx.Profile.ReasoningEffortDefault == "" {
-			ctx.Document.Delete(ctx.Param)
-			return nil
-		}
-		if !ctx.Document.Has(ctx.Param) {
-			ctx.Document.Set(ctx.Param, ctx.Profile.ReasoningEffortDefault)
-		}
-		return nil
-	}
-}
-
 // enableThinking strips for ThinkingStrip profiles (no matching chat-template knob), else mirrors into kwargs.
 func enableThinking() RuleFunc {
 	return func(ctx RuleContext) error {

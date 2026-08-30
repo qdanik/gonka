@@ -79,9 +79,7 @@ var (
 		{Name: "stream"},
 		spec("max_tokens", StagePreValidation, rejectNonPositiveOutputTokens()),
 		spec("max_completion_tokens", StagePreValidation, rejectNonPositiveOutputTokens()),
-		{Name: "messages", Rules: []StagedRule{
-			{Stage: StagePreValidation, Apply: validListLength(messagesMaxEntries, 0)},
-		}},
+		spec("messages", StagePreValidation, validListLength(messagesMaxEntries, 0)),
 		spec("seed", StagePreValidation, requireUint()),
 		// Reservation budgets one max_tokens output; n choices can produce n times what it signed for.
 		spec("n", StagePostLimits, replaceIfPresent(uint64(1))),
@@ -165,20 +163,11 @@ var (
 			MaxGrammarNesting:   structuredOutputsMaxGrammarNesting,
 			MaxStructuralTagLen: structuredOutputsMaxStructuralTagLen,
 		})),
-		{Name: "reasoning", Rules: []StagedRule{
-			{Stage: StagePreValidation, Apply: reasoningWrapper()},
-		}},
-		{Name: "reasoning_effort", Rules: []StagedRule{
-			{Stage: StagePreValidation, Apply: reasoningEffortValidate()},
-			{Stage: StagePreValidation, Apply: reasoningEffortScope()},
-		}},
-		{Name: "enable_thinking", Rules: []StagedRule{
-			{Stage: StagePreValidation, Apply: enableThinking()},
-		}},
+		spec("reasoning", StagePreValidation, reasoningWrapper()),
+		spec("reasoning_effort", StagePreValidation, reasoningEffortValidate()),
+		spec("enable_thinking", StagePreValidation, enableThinking()),
 		// thinking must run before chat_template_kwargs below. See README.md, "Registration order is semantics".
-		{Name: "thinking", Rules: []StagedRule{
-			{Stage: StagePreValidation, Apply: thinking()},
-		}},
+		spec("thinking", StagePreValidation, thinking()),
 		{Name: "thinking_token_budget", Rules: []StagedRule{
 			{Stage: StagePreValidation, Apply: requireUint()},
 			{Stage: StagePostLimits, Apply: thinkingTokenBudgetResolve()},

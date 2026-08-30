@@ -8,10 +8,8 @@ import (
 
 func TestDeepseekProfileHooks(t *testing.T) {
 	require.Equal(t, []string{deepseekModelID}, deepseekProfile.Models)
-	require.Equal(t, deepseekReasoningEffortDefault, deepseekProfile.ReasoningEffortDefault)
 
-	// DeepSeek carries a reasoning-effort default and nothing else; a hook gained here silently would
-	// change the route without a decision.
+	// DeepSeek carries no hooks at all; one gained here silently would change the route without a decision.
 	boolHooks := []struct {
 		name string
 		got  bool
@@ -28,11 +26,11 @@ func TestDeepseekProfileHooks(t *testing.T) {
 	require.Equal(t, ThinkingNormalizeInPlace, deepseekProfile.Thinking)
 }
 
-// An omitted reasoning_effort renders as "high", so the route only reaches the strongest prefix the
-// encoder defines if the gateway fills it.
-func TestDeepseekFillsTheReasoningEffortDefault(t *testing.T) {
+// The level is the caller's to choose: an omitted field is forwarded as omitted, and the encoder's own
+// fallback of "high" applies upstream.
+func TestDeepseekFillsNoReasoningEffort(t *testing.T) {
 	document := normalizedDocument(t, `{"messages":[{"role":"user","content":"x"}],"max_tokens":4096}`, deepseekModelID)
-	require.Equal(t, deepseekReasoningEffortDefault, document["reasoning_effort"])
+	require.NotContains(t, document, "reasoning_effort")
 }
 
 func TestDeepseekKeepsAClientReasoningEffort(t *testing.T) {

@@ -21,7 +21,6 @@ type Profile struct {
 	Thinking               ThinkingDisposition
 	KeepReasoningSplit     bool
 	ThinkingTokenBudget    bool
-	ReasoningEffortDefault string
 }
 
 // Exact routed-model identifiers the parameter table dispatches on.
