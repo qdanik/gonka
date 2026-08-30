@@ -31,6 +31,7 @@ type clientStream struct {
 	folder     *filters.BodyFolder
 	budget     *BufferBudget
 	charged    int64
+	overBudget bool
 	written    int64
 	started    bool
 	terminated bool
@@ -82,6 +83,7 @@ func (c *clientStream) Write(chunk []byte) (int, error) {
 			return 0, fmt.Errorf("buffered response exceeds %d bytes", maxBufferedResponseBytes)
 		} else if owed := held - c.charged; owed > 0 {
 			if !c.budget.reserve(owed) {
+				c.overBudget = true
 				return 0, ErrResponseBufferFull
 			}
 			c.charged += owed
@@ -126,6 +128,11 @@ func (c *clientStream) Close() error {
 			return err
 		}
 		return tailErr
+	}
+	if c.overBudget {
+		writeError(c.writer, http.StatusServiceUnavailable, ErrResponseBufferFull.Error())
+		c.started = true
+		return ErrResponseBufferFull
 	}
 	body := c.folder.Body()
 	c.beginStatusLocked("application/json", statusForAssembled(body))

@@ -883,6 +883,7 @@ func (p *PreparedInference) Payload() *host.InferencePayload {
 // without processing it. Use ProcessResponse separately to apply the response
 // to session state. This split allows parallel network I/O with ordered processing.
 func (s *Session) SendOnly(ctx context.Context, p *PreparedInference, stream io.Writer, receiptHandler func()) (*host.HostResponse, error) {
+	s.drainOversizedCatchUp(ctx, p)
 	resp, err := s.clients[p.hostIdx].Send(ctx, host.HostRequest{
 		Diffs:   p.catchUp,
 		Nonce:   p.diff.Nonce,
@@ -997,10 +998,64 @@ func (s *Session) sendDiffRound(ctx context.Context, extraTxs []*types.DevshardT
 // replay state incrementally and the proxy bail out early if any chunk fails.
 const catchUpChunkSize = 200
 
+// inlineCatchUpMaxBytes caps what one inference request may carry as catch-up. Past it the backlog is
+// sent by the chunked path first, so the request that follows carries only its own diff. Well under the
+// 10 MB a proxy in front of a host will refuse. See issue #1660.
+const inlineCatchUpMaxBytes = 4 << 20
+
+// inlineCatchUpMeasureFrom is the backlog length worth measuring: below it the bytes cannot approach the cap.
+const inlineCatchUpMeasureFrom = 16
+
 // catchUpChunkTimeout is the per-chunk timeout for sendCatchUp. Each chunk
 // of 200 diffs gets its own deadline so large catch-ups (thousands of diffs)
 // don't hit a single overall timeout.
 const catchUpChunkTimeout = 60 * time.Second
+
+// drainOversizedCatchUp sends the backlog ahead of the request when it would not fit in one body, leaving
+// the request carrying its own diff. The target diff is held back: the host executes the inference when it
+// applies it, so it must arrive with the payload rather than ahead of it.
+//
+// This costs the request the drain: a host far behind delays its own next inference by however long the
+// chunks take, up to catchUpChunkTimeout each. Chosen over sending one body a proxy will refuse.
+func (s *Session) drainOversizedCatchUp(ctx context.Context, p *PreparedInference) {
+	backlog := p.catchUp
+	if len(backlog) > 0 && backlog[len(backlog)-1].Nonce == p.diff.Nonce {
+		backlog = backlog[:len(backlog)-1]
+	}
+	if len(backlog) < inlineCatchUpMeasureFrom || !diffsExceed(backlog, inlineCatchUpMaxBytes) {
+		return
+	}
+
+	logging.Warn("catch-up too large to ride the inference, draining it first", "subsystem", "session",
+		"escrow", s.escrowID, "host", p.hostIdx, "nonce", p.diff.Nonce,
+		"backlog_diffs", len(backlog))
+	if err := s.sendCatchUpChunks(ctx, p.hostIdx, s.clients[p.hostIdx], backlog); err != nil {
+		logging.Warn("draining the catch-up failed; the request carries it after all", "subsystem", "session",
+			"escrow", s.escrowID, "host", p.hostIdx, "error", err)
+		return
+	}
+
+	s.mu.Lock()
+	p.catchUp = s.diffsForHost(p.hostIdx)
+	s.mu.Unlock()
+}
+
+// diffsExceed reports whether the diffs cost more than limit on the wire, stopping as soon as they do so
+// the walk is bounded by the limit rather than by the history. Signatures and state roots dominate, and
+// JSON only inflates them further.
+func diffsExceed(diffs []types.Diff, limit int) bool {
+	total := 0
+	for _, diff := range diffs {
+		total += len(diff.UserSig) + len(diff.PostStateRoot)
+		for _, tx := range diff.Txs {
+			total += proto.Size(tx)
+		}
+		if total > limit {
+			return true
+		}
+	}
+	return false
+}
 
 // sendCatchUp sends existing diffs to a host, admission-free: they are already signed by the group.
 func (s *Session) sendCatchUp(ctx context.Context, hostIdx int) error {
@@ -1014,8 +1069,15 @@ func (s *Session) sendCatchUp(ctx context.Context, hostIdx int) error {
 // Returns non-nil only on processResponse errors; dead hosts are silently skipped.
 func (s *Session) sendCatchUpWith(ctx context.Context, hostIdx int, client HostClient) error {
 	s.mu.Lock()
-	nonce := s.nonce
 	catchUp := s.diffsForHost(hostIdx)
+	s.mu.Unlock()
+	return s.sendCatchUpChunks(ctx, hostIdx, client, catchUp)
+}
+
+// sendCatchUpChunks sends the given diffs, which the caller has already chosen.
+func (s *Session) sendCatchUpChunks(ctx context.Context, hostIdx int, client HostClient, catchUp []types.Diff) error {
+	s.mu.Lock()
+	nonce := s.nonce
 	s.mu.Unlock()
 
 	if len(catchUp) == 0 {

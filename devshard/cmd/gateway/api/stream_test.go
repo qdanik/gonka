@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -70,6 +71,27 @@ func TestNonStreamingRepliesUnderTheBoundAreKept(t *testing.T) {
 
 	if !strings.Contains(recorder.Body.String(), `"content":"ok"`) {
 		t.Fatalf("body = %q, want the assembled reply", recorder.Body.String())
+	}
+}
+
+// A reply the shared budget refuses must be shed, not served. The reply has to clear the fold's own
+// measuring step, which is what the budget is charged from: below it the fold reports nothing held.
+func TestAReplyPastTheBufferBudgetIsRefused(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	stream := newClientStream(recorder, "req-1", false, true, filters.LogprobIntent{}, NewBufferBudget(1))
+
+	oversized := `data: {"choices":[{"delta":{"content":"` + strings.Repeat("x", 512<<10) + `"}}]}` + "\n\n"
+	if _, err := stream.Write([]byte(oversized)); !errors.Is(err, ErrResponseBufferFull) {
+		t.Fatalf("Write() = %v, want %v", err, ErrResponseBufferFull)
+	}
+	if err := stream.Close(); !errors.Is(err, ErrResponseBufferFull) {
+		t.Fatalf("Close() = %v, want %v", err, ErrResponseBufferFull)
+	}
+	if recorder.Code != http.StatusServiceUnavailable {
+		t.Errorf("status = %d, want 503", recorder.Code)
+	}
+	if strings.Contains(recorder.Body.String(), "xxxx") {
+		t.Error("the refused reply was served anyway")
 	}
 }
 
