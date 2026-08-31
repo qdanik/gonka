@@ -154,6 +154,24 @@ func floorMinTokens(document *Document, maxTokens uint64) uint64 {
 	return min(max(requested, completionapi.MinTokensFloor), maxTokens)
 }
 
+// liftNonPositiveOutputTokens raises a zero budget to the shared floor for the profile that asks for it, ahead of the refusal below.
+func liftNonPositiveOutputTokens() RuleFunc {
+	return func(ctx RuleContext) error {
+		if ctx.Profile == nil || !ctx.Profile.LiftNonPositiveOutputTokens {
+			return nil
+		}
+		raw, exists := ctx.Document.Get(ctx.Param)
+		if !exists {
+			return nil
+		}
+		if number, ok := devshard.JSONNumericFloat64(raw); !ok || number > 0 {
+			return nil
+		}
+		ctx.Document.Set(ctx.Param, uint64(completionapi.MinTokensFloor))
+		return nil
+	}
+}
+
 // rejectNonPositiveOutputTokens: a zero output budget makes no answer, and redundancy waits out a winner that cannot come.
 func rejectNonPositiveOutputTokens() RuleFunc {
 	return func(ctx RuleContext) error {

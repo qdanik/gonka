@@ -77,8 +77,14 @@ var (
 	parameterTable = []ParameterSpec{
 		spec("model", StagePreValidation, validModelName(modelMaxLen)),
 		{Name: "stream"},
-		spec("max_tokens", StagePreValidation, rejectNonPositiveOutputTokens()),
-		spec("max_completion_tokens", StagePreValidation, rejectNonPositiveOutputTokens()),
+		{Name: "max_tokens", Rules: []StagedRule{
+			{Stage: StagePreValidation, Apply: liftNonPositiveOutputTokens()},
+			{Stage: StagePreValidation, Apply: rejectNonPositiveOutputTokens()},
+		}},
+		{Name: "max_completion_tokens", Rules: []StagedRule{
+			{Stage: StagePreValidation, Apply: liftNonPositiveOutputTokens()},
+			{Stage: StagePreValidation, Apply: rejectNonPositiveOutputTokens()},
+		}},
 		spec("messages", StagePreValidation, validListLength(messagesMaxEntries, 0)),
 		spec("seed", StagePreValidation, requireUint()),
 		// Reservation budgets one max_tokens output; n choices can produce n times what it signed for.

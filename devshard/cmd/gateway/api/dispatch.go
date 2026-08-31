@@ -65,9 +65,9 @@ func (t escrowTarget) Send(ctx context.Context, nonce scheduler.Prepared, stream
 	// stream is handed on unwrapped: the transport type-asserts http.Flusher on it to flush each SSE line.
 	reply, err := t.session.SendOnly(ctx, prepared, stream, onReceipt)
 	if reply != nil {
-		// Applies for a reply that arrived beside an error too; see rules.md.
-		if applyErr := t.session.ProcessResponse(prepared.HostIdx(), reply, prepared.Nonce()); err == nil {
-			err = applyErr
+		// Applies for a reply that arrived beside an error too, and keeps both: a failed send must not hide a diverged state. See rules.md.
+		if applyErr := t.session.ProcessResponse(prepared.HostIdx(), reply, prepared.Nonce()); applyErr != nil {
+			err = errors.Join(err, applyErr)
 		}
 	}
 	if divergedState(err) {

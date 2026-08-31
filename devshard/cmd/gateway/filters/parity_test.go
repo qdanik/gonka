@@ -50,7 +50,8 @@ func TestGoldenParity(t *testing.T) {
 			}
 			rawGolden, err := os.ReadFile(filepath.Join("testdata", "goldens", entry.Name()))
 			if err != nil {
-				t.Fatalf("reading golden (regenerate with: go test ./cmd/devshardctl/ -tags goldengen -run TestGenerateFilterGoldens): %v", err)
+				// Goldens track this pipeline's intended output, not the legacy generator's: regenerating from it undoes deliberate divergences.
+				t.Fatalf("reading golden (a new corpus case needs its golden written from this pipeline's output): %v", err)
 			}
 			var golden parityGolden
 			if err := json.Unmarshal(rawGolden, &golden); err != nil {

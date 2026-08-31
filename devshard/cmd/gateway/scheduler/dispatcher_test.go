@@ -871,3 +871,17 @@ func TestDispatcherLifecycleIsIdempotent(t *testing.T) {
 
 func (s *scriptedSession) Balance() uint64    { return s.balance }
 func (s *scriptedSession) TokenPrice() uint64 { return 1 }
+
+// freeze must not turn an omitted optional predicate into a panicking closure; match reads a missing one as no block.
+func TestFreezeLeavesAnOmittedOptionalPredicateMissing(t *testing.T) {
+	t.Parallel()
+	frozen := freeze(availability{
+		pocRequired: always(false),
+		throttled:   always(false),
+		ejected:     always(false),
+	})
+
+	if got := frozen.participantBlocked(hostA); got != blockNone {
+		t.Errorf("participantBlocked(%q) = %v, want blockNone when neither optional predicate was given", hostA, got)
+	}
+}

@@ -7,10 +7,11 @@ const (
 
 // kimiProfile is Kimi's delta set. See README.md, "Model profiles".
 var kimiProfile = &Profile{
-	Models:                 []string{kimiModelID},
-	ForceZeroPenalties:     true,
-	RejectStructuredOutput: true,
-	AllowSafetyIdentifier:  true,
-	Thinking:               ThinkingMirrorToKwargs,
-	ThinkingTokenBudget:    true,
+	Models:                      []string{kimiModelID},
+	ForceZeroPenalties:          true,
+	RejectStructuredOutput:      true,
+	AllowSafetyIdentifier:       true,
+	Thinking:                    ThinkingMirrorToKwargs,
+	ThinkingTokenBudget:         true,
+	LiftNonPositiveOutputTokens: true,
 }

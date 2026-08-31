@@ -223,7 +223,7 @@ func safetyIdentifier() RuleFunc {
 	}
 }
 
-// reasoningSplit fills the field for the profile that can serve it: M2.x thinks unconditionally, so without it reasoning arrives inline in content.
+// reasoningSplit passes the field through on the profile that can serve it and strips it elsewhere; an absent one stays absent.
 func reasoningSplit() RuleFunc {
 	return func(ctx RuleContext) error {
 		if ctx.Profile == nil || !ctx.Profile.KeepReasoningSplit {
@@ -232,7 +232,6 @@ func reasoningSplit() RuleFunc {
 		}
 		raw, exists := ctx.Document.Get(ctx.Param)
 		if !exists {
-			ctx.Document.Set(ctx.Param, true)
 			return nil
 		}
 		if _, ok := raw.(bool); !ok {

@@ -35,6 +35,8 @@ import (
 	"devshard/user"
 )
 
+var errNoChainDialed = errors.New("the composed test gateway dials no chain")
+
 func TestMain(m *testing.M) {
 	goleak.VerifyTestMain(m,
 		// database/sql keeps its connection cleaner alive for the process, and the sqlite driver's
@@ -78,7 +80,51 @@ func gatewayEnvironment(t *testing.T) {
 	t.Helper()
 	chainURL := fakeChain(t)
 	t.Setenv("GATEWAY_STORAGE_DIR", t.TempDir())
+	// An IP literal keeps grpc.NewClient from starting a DNS resolver goroutine nothing can close.
+	t.Setenv("GATEWAY_CHAIN_GRPC", "127.0.0.1:9090")
 	t.Setenv("GATEWAY_PUBLIC_API", chainURL)
+}
+
+// chainWithoutADial replaces the one dial in composedGateway: grpc.NewClient starts a DNS resolver
+// goroutine nothing can close, and no test here reaches the chain over it.
+type chainWithoutADial struct{}
+
+func (chainWithoutADial) MaxNonce(context.Context) (uint64, bool, error) { return 0, false, nil }
+
+func (chainWithoutADial) PreservedNodes(context.Context) (*chain.PreservedNodes, bool, error) {
+	return nil, false, nil
+}
+
+func (chainWithoutADial) ChainID(context.Context) (string, error) { return "", errNoChainDialed }
+
+func (chainWithoutADial) Account(context.Context, string) (chain.Account, error) {
+	return chain.Account{}, errNoChainDialed
+}
+
+func (chainWithoutADial) Broadcast(context.Context, []byte) (string, error) {
+	return "", errNoChainDialed
+}
+
+func (chainWithoutADial) Tx(context.Context, string) (chain.TxResult, bool, error) {
+	return chain.TxResult{}, false, errNoChainDialed
+}
+
+func (chainWithoutADial) Escrow(context.Context, uint64) (chain.EscrowInfo, bool, error) {
+	return chain.EscrowInfo{}, false, errNoChainDialed
+}
+
+// sessionsWithoutADial is chainBackedSessions with the gRPC client left out; only ReadOnly is reached.
+func sessionsWithoutADial(records devshardLookup, storageDir string) sessionSources {
+	return func(config.Chain, string) (chainSources, error) {
+		return chainSources{
+			Serving: func(context.Context, string) (registry.EscrowSession, error) {
+				return nil, errNoChainDialed
+			},
+			ReadOnly:  readOnlySessions(records, storageDir),
+			Reader:    chainWithoutADial{},
+			Transport: chainWithoutADial{},
+		}, nil
+	}
 }
 
 // composedGateway builds exactly what run() builds, so an assertion below reaches the wiring the
@@ -97,7 +143,7 @@ func composedGateway(t *testing.T) *gateway {
 	if err != nil {
 		t.Fatalf("opening store: %v", err)
 	}
-	composed, err := compose(context.Background(), values, storageDir, gatewayStore, chainBackedSessions(gatewayStore, storageDir))
+	composed, err := compose(context.Background(), values, storageDir, gatewayStore, sessionsWithoutADial(gatewayStore, storageDir))
 	if err != nil {
 		gatewayStore.Close()
 		t.Fatalf("compose(): %v", err)

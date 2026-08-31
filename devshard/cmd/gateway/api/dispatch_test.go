@@ -202,7 +202,7 @@ func TestSendAppliesEveryReplyTheHostProduced(t *testing.T) {
 			wantErr:      errApplyFailure,
 		},
 		{
-			name:         "the host's own failure outranks the apply failure",
+			name:         "a failed send and a failed apply both reach the caller",
 			reply:        reply,
 			sendErr:      errHostGone,
 			applyErr:     errApplyFailure,
@@ -254,6 +254,12 @@ func TestSendReportsADivergedStateRootFromEitherSideOfTheWire(t *testing.T) {
 		},
 		{
 			name:          "the host's state hash differs from the local root",
+			applyErr:      fmt.Errorf("%w: host 1 at nonce 1", types.ErrStateHashMismatch),
+			wantDivergent: true,
+		},
+		{
+			name:          "a state hash mismatch beside a failed send is still divergence",
+			sendErr:       errHostGone,
 			applyErr:      fmt.Errorf("%w: host 1 at nonce 1", types.ErrStateHashMismatch),
 			wantDivergent: true,
 		},

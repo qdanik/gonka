@@ -272,8 +272,35 @@ func TestTokensDecodeRequestViewTypeErrors(t *testing.T) {
 	}
 }
 
-// Every route rejects a zero budget now: the exemption Kimi had came from a profile floor the global
-// one subsumes, not from a decision about the contract.
+func TestLiftNonPositiveOutputTokensRaisesAZeroToTheFloor(t *testing.T) {
+	for _, param := range []string{"max_tokens", "max_completion_tokens"} {
+		t.Run(param, func(t *testing.T) {
+			document := parseTestDocument(t, `{"`+param+`":0}`)
+			if err := liftNonPositiveOutputTokens()(RuleContext{Document: document, Param: param, Profile: kimiProfile}); err != nil {
+				t.Fatalf("liftNonPositiveOutputTokens() = %v, want nil", err)
+			}
+			if got, _ := document.Uint(param); got != completionapi.MinTokensFloor {
+				t.Errorf("%s = %d, want the floor %d", param, got, completionapi.MinTokensFloor)
+			}
+		})
+	}
+}
+
+func TestLiftNonPositiveOutputTokensLeavesEveryOtherProfileToTheRefusal(t *testing.T) {
+	for _, profile := range []*Profile{nil, minimaxProfile, deepseekProfile} {
+		document := parseTestDocument(t, `{"max_tokens":0}`)
+		if err := liftNonPositiveOutputTokens()(RuleContext{Document: document, Param: "max_tokens", Profile: profile}); err != nil {
+			t.Fatalf("liftNonPositiveOutputTokens() = %v, want nil", err)
+		}
+		if got, _ := document.Uint("max_tokens"); got != 0 {
+			t.Errorf("max_tokens = %d for profile %v, want the zero left for the refusal", got, profile)
+		}
+	}
+}
+
+// The refusal stays absolute on every profile; a profile that wants its zero raised gets that from
+// liftNonPositiveOutputTokens ahead of it, because capOutputTokens reads a zero as "unset" and would
+// otherwise hand it the default rather than the floor.
 func TestRejectNonPositiveOutputTokensRejectsZeroOnEveryProfile(t *testing.T) {
 	for _, profile := range []*Profile{nil, kimiProfile, minimaxProfile, deepseekProfile} {
 		document := parseTestDocument(t, `{"max_tokens":0}`)

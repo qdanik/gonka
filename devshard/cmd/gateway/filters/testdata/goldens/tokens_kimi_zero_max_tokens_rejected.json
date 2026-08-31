@@ -1,5 +1,0 @@
-{
-  "http_status": 400,
-  "message": "max_tokens: must be greater than 0",
-  "status": "rejected"
-}

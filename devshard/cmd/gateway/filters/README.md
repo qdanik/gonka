@@ -118,7 +118,7 @@ What the gateway forces, and what it strips:
 
 `applyOutputTokenLimits` then resolves one number from whichever fields the client sent — the minimum of both when both are present — floors it at `completionapi.MinTokensFloor`, and writes it to `max_tokens`. It mirrors the result into `max_completion_tokens` only when the client sent that field, so the gateway does not introduce a field the request never carried. `min_tokens` is set to the requested value raised to the floor and capped at the resolved `max_tokens`.
 
-`rejectNonPositiveOutputTokens` rejects a present, numeric, non-positive `max_tokens` or `max_completion_tokens` on every route: a zero output budget makes no answer, and the redundancy layer then waits out a winner that cannot come.
+`liftNonPositiveOutputTokens` runs first and raises a present, numeric, non-positive `max_tokens` or `max_completion_tokens` to `completionapi.MinTokensFloor` for a profile with `LiftNonPositiveOutputTokens`. It has to run before the refusal rather than fall through to the floor above, because `capOutputTokens` reads a zero as "the client named no budget" and would hand back the default instead. `rejectNonPositiveOutputTokens` then rejects whatever is left, on every profile: a zero output budget makes no answer, and the redundancy layer then waits out a winner that cannot come.
 
 ## Model profiles
 
@@ -126,9 +126,9 @@ A `*Profile` is one routed model's set of deltas from the default pipeline. A ni
 
 | Model | Deltas |
 | --- | --- |
-| `moonshotai/Kimi-K2.6` | Zero penalties forced, `structured_outputs` rejected, `safety_identifier` allowed, thinking mirrored into `chat_template_kwargs`, owns a `thinking_token_budget` resolution. |
+| `moonshotai/Kimi-K2.6` | Zero penalties forced, `structured_outputs` rejected, `safety_identifier` allowed, thinking mirrored into `chat_template_kwargs`, owns a `thinking_token_budget` resolution, a non-positive output budget lifted to the floor instead of refused. |
 | `MiniMaxAI/MiniMax-M2.7` | Thinking fields stripped, `reasoning_split` kept. |
-| `deepseek-ai/DeepSeek-V4-Flash-0731` | `reasoning_effort` defaults to `"max"`. |
+| `deepseek-ai/DeepSeek-V4-Flash-0731` | No deltas; registered so the routed model is recognised. |
 
 `ThinkingDisposition` is the closed set of ways a profile handles `thinking`/`enable_thinking`: normalise in place (the default), mirror into `chat_template_kwargs`, or strip entirely.
 
@@ -136,7 +136,7 @@ A `*Profile` is one routed model's set of deltas from the default pipeline. A ni
 
 `reasoning` is a wrapper the gateway does not forward: `reasoningWrapper` deletes it, and lifts `.effort` into a not-yet-present `reasoning_effort` — unless the wrapper carries `enabled: false`, which becomes `reasoning_effort: "none"` instead.
 
-`reasoning_effort` is validated against a closed enum (`none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`) and then scoped separately: a profile with no `ReasoningEffortDefault` has the field deleted, and a profile with one gets it filled in when the client sent nothing.
+`reasoning_effort` is validated against a closed enum (`none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`) and forwarded on every route: no profile scopes it away, and none supplies a default.
 
 `enable_thinking` and `thinking` both depend on the profile's disposition:
 
@@ -153,7 +153,7 @@ Below `kimiThinkingBudgetForceZeroBelow` (256) output tokens, a profile that own
 ### The rest of the profile-scoped rules
 
 - `safetyIdentifier` validates and keeps the field for a profile with `AllowSafetyIdentifier`, and strips it for every other.
-- `reasoningSplit` strips the field for profiles that cannot serve it, and fills it with `true` for the one that can: M2.x thinks unconditionally, so without the split its reasoning arrives inline in `content`.
+- `reasoningSplit` strips the field for profiles that cannot serve it and passes it through for the one that can; an absent field stays absent. Passing it through is a courtesy, not a control: `reasoning_split` is MiniMax's own hosted-API switch and vLLM has no such request field, so a host ignores it and logs it as unused. Our MiniMax nodes already separate reasoning server-side, via `--reasoning-parser minimax_m2_append_think` in `deploy/join/node-config-minimaxm27-*.json`.
 - `forceZeroPenalty` overwrites `frequency_penalty` and `presence_penalty` to 0 for a `ForceZeroPenalties` profile, but only when the field is already present — it never introduces one.
 
 ## Schema bounds

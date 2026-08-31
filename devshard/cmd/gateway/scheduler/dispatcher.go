@@ -272,7 +272,7 @@ func freeze(live availability) availability {
 		throttled:    memoise(live.throttled),
 		ejected:      memoise(live.ejected),
 		notAllowed:   memoiseOrNil(live.notAllowed),
-		stateBlocked: memoise(live.stateBlocked),
+		stateBlocked: memoiseOrNil(live.stateBlocked),
 	}
 }
 

@@ -567,6 +567,16 @@ func TestReasoningSplitPassesThroughForHookProfile(t *testing.T) {
 	}
 }
 
+func TestReasoningSplitLeavesAnAbsentFieldAbsent(t *testing.T) {
+	document := parseTestDocument(t, `{"max_tokens":4096}`)
+	if err := reasoningSplit()(RuleContext{Document: document, Param: "reasoning_split", Profile: minimaxProfile}); err != nil {
+		t.Fatalf("reasoningSplit() = %v, want nil", err)
+	}
+	if document.Has("reasoning_split") {
+		t.Error("reasoning_split was invented; the caller decides whether reasoning arrives split")
+	}
+}
+
 func TestReasoningSplitStripsWithoutHook(t *testing.T) {
 	for _, profile := range []*Profile{nil, kimiProfile} {
 		document := parseTestDocument(t, `{"reasoning_split":true}`)

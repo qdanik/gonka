@@ -1,6 +1,9 @@
 package accounting
 
-import "devshard/cmd/gateway/engine"
+import (
+	"devshard/cmd/gateway/engine"
+	"devshard/cmd/gateway/scheduler"
+)
 
 // Constants, not configuration: two gateways must not report the same host differently. See docs/accounting.md.
 const (
@@ -76,9 +79,9 @@ func findingsFor(record ParticipantRecord) []Finding {
 	add(ratio(without(record.Dispositions[DispositionFinishedUnused],
 		countersWhere(record, both(is(DispositionFinishedUnused), servedNoUser))), delivered,
 		unusedAnswerWarning, neverCritical, FindingUnusedAnswers))
-	add(ratio(ghostsBecause(record, "participant_throttled_no_send"), record.Assigned, gatewayThrottleWarning, neverCritical,
+	add(ratio(ghostsBecause(record, scheduler.GhostReasonThrottled), record.Assigned, gatewayThrottleWarning, neverCritical,
 		FindingGatewayThrottled))
-	add(ratio(ghostsBecause(record, "participant_state_diverged_no_send"), record.Assigned, stateDivergedWarning, neverCritical,
+	add(ratio(ghostsBecause(record, scheduler.GhostReasonStateDiverged), record.Assigned, stateDivergedWarning, neverCritical,
 		FindingStateDiverged))
 	add(ratio(uint64(record.ChainMissed), record.Assigned, chainMissWarning, chainMissCritical,
 		FindingChainMisses))
