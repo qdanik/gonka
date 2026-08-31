@@ -13,7 +13,8 @@ func TestTimeoutReasonFromString_KeepsWhatItCanName(t *testing.T) {
 		TimeoutPhaseTransitionAborted, TimeoutLongResponseAfterContent, TimeoutStateRootDiverged,
 		TimeoutContextCanceled, TimeoutDiffDeliveryFailed, TimeoutNotApplied, TimeoutEscrowGone,
 		TimeoutVerifierVersionUnsupported, TimeoutVerifierEscrowMissing, TimeoutVerifierInferenceMissing,
-		TimeoutVerifierUnreachable, TimeoutVoteWeightShort, TimeoutHostServedProbe,
+		TimeoutVerifierUnreachable, TimeoutVerifierQueueExpired, TimeoutVerifierRPCTimeout,
+		TimeoutVoteWeightShort, TimeoutHostServedProbe,
 	} {
 		require.Equal(t, reason, TimeoutReasonFromString(TimeoutVoteCollectionFailed, string(reason)),
 			"a named reason must survive whatever outcome carried it")
@@ -53,6 +54,7 @@ func TestFailureOriginFromDetail_VerifierFailuresAreNotTheExecutorsFault(t *test
 	for _, detail := range []string{
 		"verifier_version_unsupported", "verifier_escrow_missing",
 		"verifier_inference_missing", "verifier_unreachable",
+		"verifier_queue_expired", "verifier_rpc_timeout",
 	} {
 		require.Equal(t, FailureTransportUnknown, FailureOriginFromDetail(detail), detail)
 	}
@@ -94,6 +96,18 @@ func TestNormalizeDeliveryReason_KeepsWhatADeliveryCanBe(t *testing.T) {
 	require.Empty(t, normalizeDeliveryReason("  "))
 }
 
+// Every reason gatewayAttemptFailureReason can produce has to survive both vocabularies; a bound the
+// gateway enforced is a concrete host fault, and collapsing it to unknown loses the per-host report.
+func TestNormalizeReasons_KeepEveryBoundedResponseFailure(t *testing.T) {
+	for _, reason := range []string{
+		"sse_event_too_large", "response_body_too_large",
+		"aggregate_response_too_large", "aggregate_fold_too_large",
+	} {
+		require.Equal(t, reason, normalizeDetailReason(reason))
+		require.Equal(t, reason, normalizeDeliveryReason(reason))
+	}
+}
+
 // The burn split is only visible in the ledger if the delivery vocabulary admits it.
 func TestNormalizeDetailReason_AdmitsTheModelBurn(t *testing.T) {
 	require.Equal(t, "model_burn_empty", normalizeDetailReason("model_burn_empty"))
@@ -105,6 +119,7 @@ func TestBothVocabulariesNameTheSameReasons(t *testing.T) {
 	for _, reason := range []TimeoutReason{
 		TimeoutPhaseTransitionAborted, TimeoutLongResponseAfterContent, TimeoutStateRootDiverged,
 		TimeoutContextCanceled, TimeoutDiffDeliveryFailed, TimeoutNotApplied, TimeoutHostServedProbe,
+		TimeoutVerifierQueueExpired, TimeoutVerifierRPCTimeout,
 	} {
 		require.Equal(t, string(reason), normalizeDetailReason(string(reason)),
 			"a reason the timeout vocabulary names must survive the detail vocabulary too")

@@ -1,6 +1,7 @@
 package user
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -25,6 +26,11 @@ func TestClassifyVoteError_NamesWhatTheVerifierAnsweredWith(t *testing.T) {
 			class: VoteErrorVersionUnsupported,
 		},
 		{
+			name:  "escrow already bound to a different binary tag",
+			err:   &transport.UpstreamStatusError{Path: "/sessions/1/verify-timeout", StatusCode: http.StatusConflict, Body: "session version conflict: stored v3, host v4"},
+			class: VoteErrorVersionUnsupported,
+		},
+		{
 			name:  "verifier no longer holds the escrow",
 			err:   &transport.UpstreamStatusError{StatusCode: http.StatusInternalServerError, Body: "escrow not found"},
 			class: VoteErrorEscrowMissing,
@@ -39,6 +45,26 @@ func TestClassifyVoteError_NamesWhatTheVerifierAnsweredWith(t *testing.T) {
 			err:   errors.New("dial tcp: connection refused"),
 			class: VoteErrorUnreachable,
 		},
+		{
+			name:  "queue wait never got a slot",
+			err:   fmt.Errorf("%w: %w", errVerifierQueueExpired, context.DeadlineExceeded),
+			class: VoteErrorQueueExpired,
+		},
+		{
+			name:  "sent VerifyTimeout then hit the RPC deadline",
+			err:   context.DeadlineExceeded,
+			class: VoteErrorRPCTimeout,
+		},
+		{
+			name:  "RPC deadline wrapped after send",
+			err:   fmt.Errorf("verify-timeout: %w", context.DeadlineExceeded),
+			class: VoteErrorRPCTimeout,
+		},
+		{
+			name:  "abandoned before the RPC left the gateway",
+			err:   fmt.Errorf("%w: %w", errVoteNotSent, context.DeadlineExceeded),
+			class: VoteErrorUnreachable,
+		},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			require.Equal(t, testCase.class, classifyVoteError(testCase.err))
@@ -46,7 +72,16 @@ func TestClassifyVoteError_NamesWhatTheVerifierAnsweredWith(t *testing.T) {
 	}
 }
 
-// The class has to survive the wrapping every caller adds on the way up.
+// The same deadline error means three different things depending on how far the round got, and only
+// the wrapping can tell them apart.
+func TestClassifyVoteError_QueueExpired(t *testing.T) {
+	require.Equal(t, VoteErrorQueueExpired,
+		classifyVoteError(fmt.Errorf("%w: %w", errVerifierQueueExpired, context.DeadlineExceeded)))
+	require.Equal(t, VoteErrorUnreachable,
+		classifyVoteError(fmt.Errorf("%w: %w", errVoteNotSent, context.DeadlineExceeded)))
+	require.Equal(t, VoteErrorRPCTimeout, classifyVoteError(context.DeadlineExceeded))
+}
+
 func TestClassifyVoteError_LooksThroughWrapping(t *testing.T) {
 	wrapped := fmt.Errorf("collect timeout votes: %w",
 		&transport.UpstreamStatusError{StatusCode: http.StatusNotFound, Body: `version "v3" not found`})
