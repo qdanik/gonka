@@ -12,8 +12,11 @@ import (
 	"devshard/internal/e2econfig"
 )
 
-// A host that starts an answer and then emits an SSE error has committed its nonce. The client must be
-// told plainly, and the nonce must still reach the books rather than vanish with the broken stream.
+// Test flow:
+//  1. Start the three-host environment with every host failing mid-stream with an SSE error.
+//  2. Send one completion.
+//  3. Assert the client was not told the broken stream succeeded.
+//  4. Assert the nonces it spent reached a disposition rather than vanishing.
 func TestE2E_GatewaySurfacesAHostErrorMidStream(t *testing.T) {
 	failing := map[string]string{e2econfig.StubInferenceSSEErrorEnv: "the model fell over"}
 	env, client := startGatewayEnv(t, e2eEnvOptions{
@@ -36,8 +39,11 @@ func TestE2E_GatewaySurfacesAHostErrorMidStream(t *testing.T) {
 	}
 }
 
-// The client hangs up while the answer is in flight. The nonce is already committed on chain, so the
-// books must still say what became of it: a caller going away cannot take the money off the record.
+// Test flow:
+//  1. Start the default three-host gateway environment.
+//  2. Send one completion and hang up 40ms in, while the answer is still in flight.
+//  3. Send a second completion and assert it is served normally.
+//  4. Assert the abandoned request raised no findings.
 func TestE2E_GatewayAccountsANonceAfterTheClientHangsUp(t *testing.T) {
 	env, client := startGatewayEnv(t, e2eEnvOptions{})
 

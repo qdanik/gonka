@@ -23,7 +23,12 @@ func brokenHost(status, message string) map[string]string {
 	}
 }
 
-// A host drops out: the group keeps serving and the escrow walks past the slot nonce%3 binds to it.
+// Test flow:
+//  1. Start the default three-host gateway environment.
+//  2. Serve one completion and read the session nonce.
+//  3. Stop one host and send four more completions.
+//  4. Assert the remaining two served every one of them.
+//  5. Assert the session nonce advanced past the slot nonce%3 binds to the absent host.
 func TestE2E_GatewayServesThroughAHostOutage(t *testing.T) {
 	env, client := startGatewayEnv(t, e2eEnvOptions{})
 
@@ -50,7 +55,11 @@ func TestE2E_GatewayServesThroughAHostOutage(t *testing.T) {
 	}
 }
 
-// One host 502s and the rest are healthy: the group serves on, and its nonce still reaches the ledger.
+// Test flow:
+//  1. Start the three-host environment with one host answering HTTP 502.
+//  2. Send completions through the group.
+//  3. Assert the healthy hosts serve them.
+//  4. Assert the failing host's nonce still reaches the ledger.
 func TestE2E_GatewayServesAroundAHostAnswering502(t *testing.T) {
 	env, client := startGatewayEnv(t, e2eEnvOptions{
 		hostEnvOverrides: map[int]map[string]string{1: brokenHost("502", "upstream connect error")},
@@ -73,8 +82,11 @@ func TestE2E_GatewayServesAroundAHostAnswering502(t *testing.T) {
 	}
 }
 
-// The money invariant: with every host refusing, each committed nonce still ends in one recorded outcome.
-// It settles slowly -- no disposition lands until the refusal deadline passes, so an early read looks short.
+// Test flow:
+//  1. Start the three-host environment with every host answering HTTP 502.
+//  2. Send three completions that nobody can serve.
+//  3. Poll accounting until every assigned nonce carries a disposition, which lands only past the refusal deadline.
+//  4. Assert no finding reports more nonces classified than the chain assigned.
 func TestE2E_GatewayAccountsEveryNonceWhenEveryHostFails(t *testing.T) {
 	broken := brokenHost("502", "upstream connect error")
 	env, client := startGatewayEnv(t, e2eEnvOptions{
@@ -101,7 +113,11 @@ func TestE2E_GatewayAccountsEveryNonceWhenEveryHostFails(t *testing.T) {
 	}
 }
 
-// A diverging post-state-root earns one replay, then a permanent block: its nonces burn rather than send.
+// Test flow:
+//  1. Start the three-host environment with one host refusing every diff on a state-root mismatch.
+//  2. Send enough traffic for the host to disagree twice: the first rewinds it, the second blocks it.
+//  3. Assert its later nonces are burned rather than sent; no finding is asserted, because the
+//     20-nonce volume floor is far above what this spends.
 func TestE2E_GatewayBlocksAHostThatDivergesAndBurnsItsNonces(t *testing.T) {
 	env, client := startGatewayEnv(t, e2eEnvOptions{
 		hostEnvOverrides: map[int]map[string]string{
@@ -109,7 +125,6 @@ func TestE2E_GatewayBlocksAHostThatDivergesAndBurnsItsNonces(t *testing.T) {
 		},
 	})
 
-	// The first disagreement only spends the replay credit, so the slot has to come up more than once.
 	for request := range 3 * len(env.hostURLs) {
 		testutil.SendCompletionRaw(t, client, env.clientURL,
 			fmt.Sprintf("state divergence %d", request), testutil.AdminAPIKey)
@@ -122,16 +137,17 @@ func TestE2E_GatewayBlocksAHostThatDivergesAndBurnsItsNonces(t *testing.T) {
 	if burned == 0 {
 		t.Fatal("no nonce was burned for state divergence: the diverging host was still being sent work")
 	}
-	// No finding is asserted: the 20-nonce floor is far above what this spends, so the burn is the fact.
 }
 
-// A restart must not lose the books: what was counted before it is still counted after.
-// It does NOT guard the cross-check restore -- both sides are zero here, so it passes without it.
+// Test flow:
+//  1. Start the three-host environment with storage that survives a restart.
+//  2. Send traffic and read the ledger.
+//  3. Restart the gateway.
+//  4. Assert what was counted before the restart is still counted after, and the chain cross-check reports no disagreement.
 func TestE2E_GatewayRestartInventsNoDisagreementWithTheChain(t *testing.T) {
 	env, client := startGatewayEnv(t, e2eEnvOptions{
 		gatewayVolumeName: fmt.Sprintf("devshard-e2e-%s-gateway", strings.ToLower(t.Name())),
 		gatewayEnvOverrides: map[string]string{
-			// Snapshot often enough that the restart has something to restore beyond the shutdown write.
 			"GATEWAY_NONCE_ACCOUNTING_SNAPSHOT_SECONDS": "2",
 		},
 		hostEnvOverrides: map[int]map[string]string{1: brokenHost("502", "upstream connect error")},
@@ -172,8 +188,12 @@ func crossCheckErrors(resp testutil.AccountingParticipantsResponse) uint64 {
 	return total
 }
 
-// A host that receipts then goes silent must not stall the group, nor be filed as the cheap failure.
-// The execution disposition is not asserted: it is due only past the chain's deadline, 1200s here.
+// Test flow:
+//  1. Start the three-host environment with one host stalling its inference for sixty seconds.
+//  2. Send six completions.
+//  3. Assert the other two served at least one, so one stalling host does not take the model down.
+//  4. Assert no stalled nonce was filed as a refusal, which is the cheaper failure.
+//  5. The execution disposition is not asserted: it is due only past the chain's 1200s deadline.
 func TestE2E_GatewayIsNotStalledByAHostThatReceiptsThenGoesSilent(t *testing.T) {
 	stalling := map[string]string{e2econfig.StubInferenceDelayMillisEnv: "60000"}
 	env, client := startGatewayEnv(t, e2eEnvOptions{
@@ -202,8 +222,11 @@ func TestE2E_GatewayIsNotStalledByAHostThatReceiptsThenGoesSilent(t *testing.T) 
 		testutil.AccountingDispositionCount(ledger, "unfinished_refused"))
 }
 
-// A host that receipts then goes silent for good. Its warmup probe is the nonce that reaches a verdict,
-// and a receipted probe is an execution failure: filing it as a refusal names the cheap failure.
+// Test flow:
+//  1. Start the three-host environment with short protocol deadlines and one host stalling for good.
+//  2. Send six completions so the stalled host draws its warmup probe.
+//  3. Poll accounting until an unfinished_execution disposition lands.
+//  4. Assert no receipted nonce was filed as a refusal, which would name the cheap failure for the expensive one.
 func TestE2E_GatewayAccountsAStalledNonceEvenWhenTheGroupCallsItARefusal(t *testing.T) {
 	requireSlowE2E(t)
 	env, client := startGatewayEnv(t, e2eEnvOptions{

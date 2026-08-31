@@ -10,9 +10,9 @@ import (
 	"devshard/e2e/testutil"
 )
 
+// requireMetrics matches on the TYPE line: a histogram never appears under its bare name, only as _bucket/_sum/_count.
 func requireMetrics(t *testing.T, scrape string, families []string) {
 	t.Helper()
-	// Matched on the TYPE line: a histogram never appears under its bare name, only as _bucket/_sum/_count.
 	for _, family := range families {
 		if !strings.Contains(scrape, "# TYPE "+family+" ") {
 			t.Errorf("the scrape publishes no %s, so nothing downstream can alert on it", family)
@@ -29,8 +29,10 @@ func gatewayScrape(t *testing.T, client *http.Client, clientURL string) string {
 	return scrape
 }
 
-// Ordinary traffic has to light up every family a dashboard reads: the request counters, the per-host
-// latencies the router decides on, the cache, the chain view and the nonce books.
+// Test flow:
+//  1. Start the default three-host gateway environment.
+//  2. Send buffered, streamed and repeated completions so every ordinary path is exercised.
+//  3. Assert the scrape publishes every family a dashboard reads.
 func TestE2E_GatewayPublishesEveryMetricOrdinaryTrafficProduces(t *testing.T) {
 	env, client := startGatewayEnv(t, e2eEnvOptions{})
 
@@ -64,8 +66,10 @@ func TestE2E_GatewayPublishesEveryMetricOrdinaryTrafficProduces(t *testing.T) {
 	})
 }
 
-// The families that only exist once something goes wrong. A counter nobody ever increments publishes
-// nothing at all, so these are exactly the series an operator finds missing during the incident.
+// Test flow:
+//  1. Start the three-host environment with hosts that fail.
+//  2. Drive enough traffic for the failure paths to be taken.
+//  3. Assert the scrape publishes the families that exist only once something goes wrong.
 func TestE2E_GatewayPublishesTheMetricsOnlyFailuresProduce(t *testing.T) {
 	env, client := startGatewayEnv(t, e2eEnvOptions{
 		hostEnvOverrides: map[int]map[string]string{1: brokenHost("502", "upstream is down")},
@@ -84,7 +88,10 @@ func TestE2E_GatewayPublishesTheMetricsOnlyFailuresProduce(t *testing.T) {
 	})
 }
 
-// The limiter's own series. Without them a gateway shedding load looks identical to one nobody is calling.
+// Test flow:
+//  1. Start the three-host environment with a cap low enough to shed load.
+//  2. Fire concurrent completions until the limiter turns some away.
+//  3. Assert the scrape publishes the limiter families.
 func TestE2E_GatewayPublishesTheMetricsTheLimiterProduces(t *testing.T) {
 	env, client := startGatewayEnv(t, e2eEnvOptions{gatewayEnvOverrides: map[string]string{
 		"GATEWAY_MAX_CONCURRENT_REQUESTS":  "1",

@@ -28,8 +28,12 @@ func advanceEpoch(ctx context.Context, t *testing.T, env *e2eEnv) {
 	t.Logf("chain advanced: %s", advanced.Body)
 }
 
-// An epoch rolls over under a serving gateway. The chain view has to follow it, and the gateway has to
-// keep serving across the boundary: an epoch change is routine, not an outage.
+// Test flow:
+//  1. Start the default three-host gateway environment.
+//  2. Serve one completion and read the epoch index off the scrape.
+//  3. Drive the chain through a real epoch transition.
+//  4. Poll the scrape until the gateway reports the new epoch.
+//  5. Assert the gateway still serves and raised no findings.
 func TestE2E_GatewayFollowsTheChainAcrossAnEpochBoundary(t *testing.T) {
 	env, client := startGatewayEnv(t, e2eEnvOptions{})
 

@@ -7,8 +7,10 @@ import (
 	"devshard/e2e/testutil"
 )
 
-// Creating an escrow takes the NAME of the environment variable holding the signing key, never the key.
-// A surface that accepted the key itself would put it in every request log and proxy buffer on the way.
+// Test flow:
+//  1. Start the default three-host gateway environment.
+//  2. Create an escrow without naming a key environment variable and assert 400.
+//  3. Create an escrow naming one but no model or amount and assert 400.
 func TestE2E_GatewayTakesAKeyByEnvNameOrNotAtAll(t *testing.T) {
 	env, client := startGatewayEnv(t, e2eEnvOptions{})
 
@@ -24,8 +26,10 @@ func TestE2E_GatewayTakesAKeyByEnvNameOrNotAtAll(t *testing.T) {
 	}
 }
 
-// Lifting a quarantine names a participant, and an unknown one is refused rather than silently accepted:
-// an operator has to know the key they typed did nothing.
+// Test flow:
+//  1. Start the default three-host gateway environment.
+//  2. Unquarantine a participant the gateway has never seen and assert 404.
+//  3. Unquarantine nobody at all and assert 400.
 func TestE2E_GatewayRefusesToUnquarantineAParticipantItDoesNotKnow(t *testing.T) {
 	env, client := startGatewayEnv(t, e2eEnvOptions{})
 
@@ -41,8 +45,10 @@ func TestE2E_GatewayRefusesToUnquarantineAParticipantItDoesNotKnow(t *testing.T)
 	}
 }
 
-// Epoch 0 means "unconstrained" inside the ledger, so resetting it would clear every epoch at once. The
-// route refuses it by name rather than by accident.
+// Test flow:
+//  1. Start the default three-host gateway environment.
+//  2. Reset accounting for epoch 1 and assert 200.
+//  3. Reset accounting for epoch 0, which means unconstrained inside the ledger, and assert it is refused.
 func TestE2E_GatewayRefusesToResetTheUnconstrainedEpoch(t *testing.T) {
 	env, client := startGatewayEnv(t, e2eEnvOptions{})
 
@@ -55,7 +61,9 @@ func TestE2E_GatewayRefusesToResetTheUnconstrainedEpoch(t *testing.T) {
 	}
 }
 
-// An import names a file to read the escrow from; without one there is nothing to import.
+// Test flow:
+//  1. Start the default three-host gateway environment.
+//  2. Import an escrow without naming a source path and assert 400.
 func TestE2E_GatewayRefusesAnImportWithNothingToImport(t *testing.T) {
 	env, client := startGatewayEnv(t, e2eEnvOptions{})
 
@@ -66,13 +74,13 @@ func TestE2E_GatewayRefusesAnImportWithNothingToImport(t *testing.T) {
 	}
 }
 
-// Finalize is the operator's way to close an escrow's outstanding work by hand. It is admin-gated and
-// stays up under the kill switch, so what is checked is that it answers and refuses the public.
+// Test flow:
+//  1. Start the default three-host gateway environment.
+//  2. Read the finalize route with the admin key and assert it answers rather than failing; 409 is an answer.
+//  3. Read it anonymously and assert it does not answer.
 func TestE2E_GatewayAnswersOnFinalize(t *testing.T) {
 	env, client := startGatewayEnv(t, e2eEnvOptions{})
 
-	// 409 until the escrow is actually finalized: the route answers the question, and "not finalized" is
-	// an answer. What must not happen is a 5xx or an anonymous read.
 	finalize := env.clientURL + "/devshard/" + defaultEscrowID + "/v1/finalize"
 	if status, body := gatewayGet(t, client, finalize, testutil.AdminAPIKey); status >= http.StatusInternalServerError {
 		t.Errorf("GET finalize = %d %s, want an answer rather than a failure", status, body)

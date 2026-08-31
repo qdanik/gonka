@@ -71,8 +71,10 @@ func gatewayFindings(t *testing.T, client *http.Client, statsURL string) []strin
 	return codes
 }
 
-// The stack boots and serves. Every other scenario assumes it, so it is asserted on its own: a failure
-// here is a wiring fault, not a behaviour one.
+// Test flow:
+//  1. Start the default three-host gateway environment.
+//  2. Send one non-streaming completion.
+//  3. Assert the whole stack answered it in OpenAI shape.
 func TestE2E_GatewayServesTheStack(t *testing.T) {
 	env, client := startGatewayEnv(t, e2eEnvOptions{})
 

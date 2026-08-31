@@ -8,8 +8,10 @@ import (
 	"devshard/e2e/testutil"
 )
 
-// Every served request is traceable by the id it answered with. The header and the trace are the two
-// halves of one promise: without the pairing an operator has an id nothing resolves.
+// Test flow:
+//  1. Start the default three-host gateway environment.
+//  2. Serve one completion and read the request id and escrow off its headers.
+//  3. Trace that id and assert the trace names the same request, escrow and model.
 func TestE2E_GatewayTracesAServedRequestByItsID(t *testing.T) {
 	env, client := startGatewayEnv(t, e2eEnvOptions{})
 
@@ -39,8 +41,9 @@ func TestE2E_GatewayTracesAServedRequestByItsID(t *testing.T) {
 	}
 }
 
-// An unknown request id is a 404 rather than an empty trace: an operator must not read "no attempts" as
-// a finished request that did nothing.
+// Test flow:
+//  1. Start the default three-host gateway environment.
+//  2. Trace an id the gateway never issued and assert 404.
 func TestE2E_GatewayRefusesToTraceARequestItNeverSaw(t *testing.T) {
 	env, client := startGatewayEnv(t, e2eEnvOptions{})
 
@@ -50,7 +53,11 @@ func TestE2E_GatewayRefusesToTraceARequestItNeverSaw(t *testing.T) {
 	}
 }
 
-// The catalogue a client reads before it sends anything: what is served, and by which escrow.
+// Test flow:
+//  1. Start the default three-host gateway environment.
+//  2. Read the model catalogue and assert it offers the model the stack serves.
+//  3. Read the escrow-pinned catalogue and assert it offers one too.
+//  4. Read both status routes anonymously and assert they answer.
 func TestE2E_GatewayPublishesWhatItServes(t *testing.T) {
 	env, client := startGatewayEnv(t, e2eEnvOptions{})
 
@@ -70,7 +77,10 @@ func TestE2E_GatewayPublishesWhatItServes(t *testing.T) {
 	}
 }
 
-// A route that does not exist is a 404, and a read-only route refuses a write rather than acting on it.
+// Test flow:
+//  1. Start the default three-host gateway environment.
+//  2. Read a route that does not exist and assert 404.
+//  3. Write to a read-only route and assert it refuses rather than acting.
 func TestE2E_GatewayRefusesUnknownRoutesAndWrongMethods(t *testing.T) {
 	env, client := startGatewayEnv(t, e2eEnvOptions{})
 
@@ -83,8 +93,10 @@ func TestE2E_GatewayRefusesUnknownRoutesAndWrongMethods(t *testing.T) {
 	}
 }
 
-// The recovery surface an operator reaches for when an escrow misbehaves. Each route is admin-gated and
-// stays up under the kill switch, so what is checked is that every one of them answers.
+// Test flow:
+//  1. Start the default three-host gateway environment.
+//  2. Read every recovery route with the admin key and assert each answers.
+//  3. Read each one anonymously and assert it does not.
 func TestE2E_GatewayAnswersOnEveryRecoveryRoute(t *testing.T) {
 	env, client := startGatewayEnv(t, e2eEnvOptions{})
 

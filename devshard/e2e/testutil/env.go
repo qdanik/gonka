@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"devshard/internal/e2econfig"
 )
 
 const DefaultRequestTimeout = 2 * time.Minute
@@ -18,6 +20,24 @@ var HostPrivateKeys = []string{
 const UserPrivateKey = "0000000000000000000000000000000000000000000000000000000000000021"
 
 const AdminAPIKey = "devshard-e2e-admin-key"
+
+// EchoingHosts makes every host answer with the request body it received.
+func EchoingHosts(hostCount int) map[int]map[string]string {
+	return hostsCarrying(hostCount, e2econfig.StubInferenceEchoRequestEnv, "1")
+}
+
+// HostsAnswering pins the body every host returns.
+func HostsAnswering(hostCount int, answer string) map[int]map[string]string {
+	return hostsCarrying(hostCount, e2econfig.StubInferenceResponseBodyEnv, answer)
+}
+
+func hostsCarrying(hostCount int, key, value string) map[int]map[string]string {
+	hosts := make(map[int]map[string]string, hostCount)
+	for index := range hostCount {
+		hosts[index] = map[string]string{key: value}
+	}
+	return hosts
+}
 
 func EnvDefault(key, fallback string) string {
 	if value := os.Getenv(key); value != "" {

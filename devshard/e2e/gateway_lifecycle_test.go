@@ -14,8 +14,11 @@ func gatewayPost(t *testing.T, client *http.Client, url string) testutil.RawResp
 	return testutil.PostRaw(t, client, url, "application/json", nil, testutil.AdminAPIKey)
 }
 
-// Deactivating takes an escrow out of routing and activating puts it back. It is how an operator drains
-// one shard without stopping the gateway, so the round trip has to leave it serving again.
+// Test flow:
+//  1. Start the default three-host gateway environment.
+//  2. Deactivate the escrow and assert a request is no longer served.
+//  3. Activate it again.
+//  4. Poll until the escrow is back in service.
 func TestE2E_GatewayDeactivatesAnEscrowAndBringsItBack(t *testing.T) {
 	env, client := startGatewayEnv(t, e2eEnvOptions{})
 
@@ -33,8 +36,6 @@ func TestE2E_GatewayDeactivatesAnEscrowAndBringsItBack(t *testing.T) {
 	if activated := gatewayPost(t, client, admin+"/activate"); activated.StatusCode != http.StatusOK {
 		t.Fatalf("activate = %d %s", activated.StatusCode, activated.Body)
 	}
-	// Activation re-opens the session rather than flipping a flag, so the promise is that it comes back,
-	// not that the very next request finds it.
 	awaitServed(t, client, env.clientURL, 30*time.Second)
 }
 
@@ -52,8 +53,10 @@ func awaitServed(t *testing.T, client *http.Client, clientURL string, within tim
 	t.Fatalf("the escrow never came back into service within %s: last answer %d %s", within, last.StatusCode, last.Body)
 }
 
-// A settled escrow is gone, not parked: settlement drops the row that named the only key able to settle
-// it, so activating it afterwards finds nothing. Serving it again would spend nonces the settlement missed.
+// Test flow:
+//  1. Start the default three-host gateway environment.
+//  2. Settle the escrow.
+//  3. Activate it again and assert 404: serving it would spend nonces the settlement missed.
 func TestE2E_GatewayCannotActivateAnEscrowItHasSettled(t *testing.T) {
 	env, client := startGatewayEnv(t, e2eEnvOptions{})
 
@@ -67,8 +70,10 @@ func TestE2E_GatewayCannotActivateAnEscrowItHasSettled(t *testing.T) {
 	}
 }
 
-// The lifecycle routes act on an escrow that exists, and say so plainly when it does not: acting on an
-// unknown id would be worse than refusing.
+// Test flow:
+//  1. Start the default three-host gateway environment.
+//  2. Post every lifecycle action against an escrow id the gateway does not have.
+//  3. Assert each one answers 404 rather than acting.
 func TestE2E_GatewayRefusesLifecycleOnAnUnknownEscrow(t *testing.T) {
 	env, client := startGatewayEnv(t, e2eEnvOptions{})
 
@@ -80,8 +85,10 @@ func TestE2E_GatewayRefusesLifecycleOnAnUnknownEscrow(t *testing.T) {
 	}
 }
 
-// The escrow inventory an operator reads before touching anything: what the gateway holds, and who is
-// in the group it would pay.
+// Test flow:
+//  1. Start the default three-host gateway environment.
+//  2. Read the escrow listing routes and assert each answers 200.
+//  3. Read the escrow's participants and assert it lists one slot per host the stack runs.
 func TestE2E_GatewayListsItsEscrowsAndTheirParticipants(t *testing.T) {
 	env, client := startGatewayEnv(t, e2eEnvOptions{})
 
@@ -105,8 +112,10 @@ func TestE2E_GatewayListsItsEscrowsAndTheirParticipants(t *testing.T) {
 	}
 }
 
-// The debug surface an operator reaches for when routing looks wrong. It is admin-gated and always on,
-// so a gateway that is refusing traffic can still be asked why.
+// Test flow:
+//  1. Start the default three-host gateway environment.
+//  2. Read each debug route with the admin key and assert 200.
+//  3. Read each one anonymously and assert it does not answer.
 func TestE2E_GatewayAnswersOnItsDebugRoutes(t *testing.T) {
 	env, client := startGatewayEnv(t, e2eEnvOptions{})
 

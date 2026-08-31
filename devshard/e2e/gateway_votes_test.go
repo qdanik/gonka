@@ -38,12 +38,12 @@ func gatewayTimeoutActions(t *testing.T, client *http.Client, statsURL string) m
 	return actions
 }
 
-// The shape production showed on 2026-08-30: verify-timeout answered "session not found", "inference not
-// found" or nothing at all, and the running weight never reached the threshold. A host restarted without
-// its storage forgets the session, which is the same answer from the gateway's side.
-//
-// What must hold is the money invariant: the vote fails, and the nonce still reaches a recorded outcome
-// rather than disappearing with the round that could not decide it.
+// Test flow:
+//  1. Start the three-host environment with short protocol deadlines.
+//  2. Send traffic, then stop one host and restart the other two without their storage.
+//  3. Send more traffic so the stopped host's nonces need a timeout vote the others cannot answer.
+//  4. Poll until a timeout round is recorded as failed.
+//  5. Assert its nonces still reached a disposition rather than leaving the books.
 func TestE2E_GatewayAccountsATimeoutItsVerifiersCouldNotDecide(t *testing.T) {
 	requireSlowE2E(t)
 	env, client := startGatewayEnv(t, e2eEnvOptions{
@@ -63,8 +63,6 @@ func TestE2E_GatewayAccountsATimeoutItsVerifiersCouldNotDecide(t *testing.T) {
 			fmt.Sprintf("before the verifiers forget %d", request), testutil.AdminAPIKey)
 	}
 
-	// One host stops answering, so its nonces need a timeout vote; the other two lose their storage, so
-	// they cannot answer the vote when it comes.
 	env.stopHost(ctx, t, 1)
 	env.restartHost(ctx, t, 0)
 	env.restartHost(ctx, t, 2)
@@ -108,8 +106,11 @@ func failedRounds(actions map[string]uint64) uint64 {
 	return failed
 }
 
-// A host that comes back without its storage must be caught up rather than left answering "session not
-// found" forever: the group re-syncs it and serving continues.
+// Test flow:
+//  1. Start the three-host environment with storage that a restart clears.
+//  2. Serve traffic, then restart one host without its storage.
+//  3. Assert the group re-syncs it rather than leaving it answering "session not found".
+//  4. Assert serving continues.
 func TestE2E_GatewayServesAfterAHostForgetsTheSession(t *testing.T) {
 	env, client := startGatewayEnv(t, e2eEnvOptions{})
 

@@ -1,9 +1,10 @@
 services:
   e2e-test:
     image: ${DEVSHARD_E2E_GO_IMAGE:-golang:1.25.9-alpine3.23}
-    working_dir: /app
+    # The module replaces reach ../common and ../inference-chain, so the repo root is the mount.
+    working_dir: /repo/devshard
     volumes:
-      - .:/app
+      - ..:/repo
       - /var/run/docker.sock:/var/run/docker.sock
     extra_hosts:
       - host.docker.internal:host-gateway

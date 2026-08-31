@@ -27,8 +27,11 @@ func setChainPhase(ctx context.Context, t *testing.T, env *e2eEnv, request map[s
 	}
 }
 
-// While the chain is generating proof of compute, the default gateway stops serving: the hosts are busy
-// proving, and work sent to them is work that will not come back.
+// Test flow:
+//  1. Start the default three-host gateway environment.
+//  2. Move the chain into proof of compute.
+//  3. Assert the gateway stops serving while the hosts are proving.
+//  4. Move the chain back and assert serving resumes.
 func TestE2E_GatewayStopsServingWhileTheChainIsInPoC(t *testing.T) {
 	env, client := startGatewayEnv(t, e2eEnvOptions{})
 
@@ -59,8 +62,11 @@ func TestE2E_GatewayStopsServingWhileTheChainIsInPoC(t *testing.T) {
 	awaitServed(t, client, env.clientURL, 60*time.Second)
 }
 
-// In relaxed mode the gateway keeps serving through a PoC, but only on the hosts the chain preserved.
-// A host left out is not sent work: its nonces are burned under their own reason instead.
+// Test flow:
+//  1. Start the three-host environment with the gateway in relaxed PoC mode.
+//  2. Move the chain into proof of compute preserving only some participants.
+//  3. Send traffic while the phase holds.
+//  4. Assert the unpreserved host is not sent work and its nonces are burned under their own reason.
 func TestE2E_GatewayBurnsTheNoncesOfAHostPoCDidNotPreserve(t *testing.T) {
 	env, client := startGatewayEnv(t, e2eEnvOptions{
 		gatewayEnvOverrides: map[string]string{"GATEWAY_POC_MODE": "relaxed"},
@@ -76,8 +82,6 @@ func TestE2E_GatewayBurnsTheNoncesOfAHostPoCDidNotPreserve(t *testing.T) {
 		"preserved_addresses":  participants[:2],
 	})
 
-	// Traffic keeps flowing while the check runs: the burn happens on dispatch, and the chain view lands
-	// on the gateway's own poll, so a fixed burst can finish before the two ever meet.
 	served, deadline := 0, time.Now().Add(90*time.Second)
 	var burned uint64
 	for request := 0; time.Now().Before(deadline); request++ {

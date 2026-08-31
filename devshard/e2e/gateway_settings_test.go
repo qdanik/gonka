@@ -18,8 +18,11 @@ func putSettings(t *testing.T, client *http.Client, clientURL string, overrides 
 	}
 }
 
-// An operator changes a limit on a running gateway and it binds at once. A setting that needs a restart
-// to take effect is a setting nobody can use during the incident it was meant for.
+// Test flow:
+//  1. Start the default three-host gateway environment.
+//  2. Set a cap of one concurrent request through the settings route.
+//  3. Fire concurrent completions.
+//  4. Assert the new cap turned some of them away, without a restart.
 func TestE2E_GatewayAppliesANewLimitWithoutARestart(t *testing.T) {
 	env, client := startGatewayEnv(t, e2eEnvOptions{})
 
@@ -51,7 +54,11 @@ func TestE2E_GatewayAppliesANewLimitWithoutARestart(t *testing.T) {
 	t.Errorf("a cap set through /v1/admin/settings admitted all %d at once: statuses %v", attempts, statuses)
 }
 
-// Closing a model behind a key at runtime takes effect on the next request, and the key still opens it.
+// Test flow:
+//  1. Start the three-host environment with an API key configured.
+//  2. Put the served model behind that key through the settings route.
+//  3. Assert an unauthenticated completion is answered 401.
+//  4. Assert the same completion with the key is served.
 func TestE2E_GatewayLocksAModelBehindAKeyAtRuntime(t *testing.T) {
 	env, client := startGatewayEnv(t, e2eEnvOptions{
 		gatewayEnvOverrides: map[string]string{"GATEWAY_API_KEYS": testutil.AdminAPIKey},
@@ -67,8 +74,11 @@ func TestE2E_GatewayLocksAModelBehindAKeyAtRuntime(t *testing.T) {
 		testutil.SendCompletionRaw(t, client, env.clientURL, "with key", testutil.AdminAPIKey))
 }
 
-// A setting that would put a model behind a key nobody holds is refused, and refused as the operator's
-// mistake rather than the gateway's: a 502 here would send them hunting a fault that is not there.
+// Test flow:
+//  1. Start the default three-host gateway environment.
+//  2. Apply a setting that would put the model behind a key nobody holds.
+//  3. Assert it is refused with 400 as the operator's mistake, not a 502.
+//  4. Assert the model is still served.
 func TestE2E_GatewayRefusesASettingThatWouldStrandAModel(t *testing.T) {
 	env, client := startGatewayEnv(t, e2eEnvOptions{})
 
@@ -81,8 +91,10 @@ func TestE2E_GatewayRefusesASettingThatWouldStrandAModel(t *testing.T) {
 		testutil.SendCompletionRaw(t, client, env.clientURL, "still served", testutil.AdminAPIKey))
 }
 
-// AccessFor treats every model missing from a non-empty map as admin-only, so naming one model closes
-// all the others. Deliberate, and sharp enough that a typo in the map takes a served model off the air.
+// Test flow:
+//  1. Start the default three-host gateway environment.
+//  2. Set an access map naming only some other model.
+//  3. Assert the served model, now unlisted, answers 401 to an unauthenticated request.
 func TestE2E_GatewayClosesModelsLeftOutOfTheAccessMap(t *testing.T) {
 	env, client := startGatewayEnv(t, e2eEnvOptions{})
 
@@ -94,7 +106,10 @@ func TestE2E_GatewayClosesModelsLeftOutOfTheAccessMap(t *testing.T) {
 	}
 }
 
-// What the settings route reports back is what was applied; an operator reads it to confirm the change.
+// Test flow:
+//  1. Start the default three-host gateway environment.
+//  2. Apply a setting through the settings route.
+//  3. Read the route back and assert it reports what was applied.
 func TestE2E_GatewaySettingsReadBackWhatWasApplied(t *testing.T) {
 	env, client := startGatewayEnv(t, e2eEnvOptions{})
 

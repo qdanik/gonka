@@ -1,7 +1,6 @@
 package e2e
 
 import (
-	"io"
 	"net/http"
 	"strings"
 	"testing"
@@ -11,26 +10,15 @@ import (
 
 func gatewayGet(t *testing.T, client *http.Client, url, bearer string) (int, string) {
 	t.Helper()
-	request, err := http.NewRequest(http.MethodGet, url, nil)
-	if err != nil {
-		t.Fatalf("building GET %s: %v", url, err)
-	}
-	if bearer != "" {
-		request.Header.Set("Authorization", "Bearer "+bearer)
-	}
-	response, err := client.Do(request)
-	if err != nil {
-		t.Fatalf("GET %s: %v", url, err)
-	}
-	defer response.Body.Close()
-	body, err := io.ReadAll(response.Body)
-	if err != nil {
-		t.Fatalf("reading GET %s: %v", url, err)
-	}
-	return response.StatusCode, string(body)
+	resp := testutil.GetRaw(t, client, url, bearer)
+	return resp.StatusCode, resp.Body
 }
 
-// The kill switch stops the serving, not the operating: an escrow still has to be inspectable and settleable.
+// Test flow:
+//  1. Start the three-host environment with the gateway disabled.
+//  2. Assert a completion is answered 503.
+//  3. Assert the scrape still answers, so the gateway can be diagnosed.
+//  4. Assert admin state still answers, so the escrow stays settleable.
 func TestE2E_GatewayKillSwitchLeavesTheOperatorSurfaceUp(t *testing.T) {
 	env, client := startGatewayEnv(t, e2eEnvOptions{
 		gatewayEnvOverrides: map[string]string{"GATEWAY_DISABLED": "true"},
@@ -47,7 +35,9 @@ func TestE2E_GatewayKillSwitchLeavesTheOperatorSurfaceUp(t *testing.T) {
 	}
 }
 
-// Without a configured key the admin surface does not exist at all, and says 404 rather than 401.
+// Test flow:
+//  1. Start the three-host environment with no admin key configured.
+//  2. Read an operator route and assert 404: the surface is absent, not merely closed.
 func TestE2E_GatewayWithoutAnAdminKeyHidesTheOperatorRoutes(t *testing.T) {
 	env, client := startGatewayEnv(t, e2eEnvOptions{
 		gatewayEnvOverrides: map[string]string{"GATEWAY_ADMIN_API_KEY": ""},
@@ -58,7 +48,10 @@ func TestE2E_GatewayWithoutAnAdminKeyHidesTheOperatorRoutes(t *testing.T) {
 	}
 }
 
-// A pin is a demand for one escrow, so an unknown one must fail rather than fall back to whatever is routable.
+// Test flow:
+//  1. Start the default three-host gateway environment.
+//  2. Send a completion pinned to the escrow the stack runs and assert it is served.
+//  3. Send one pinned to an escrow that does not exist and assert it is not.
 func TestE2E_GatewayServesAPinnedEscrowAndRefusesAnUnknownPin(t *testing.T) {
 	env, client := startGatewayEnv(t, e2eEnvOptions{})
 
@@ -75,7 +68,10 @@ func TestE2E_GatewayServesAPinnedEscrowAndRefusesAnUnknownPin(t *testing.T) {
 	}
 }
 
-// Route labels stay patterns: an id in a label grows the series with the escrow set, one more per probe.
+// Test flow:
+//  1. Start the default three-host gateway environment.
+//  2. Serve a plain completion, an escrow-pinned one, and a path needing normalisation.
+//  3. Assert the scrape labels them by route template rather than by literal path.
 func TestE2E_GatewayScrapeCarriesTemplatedRouteLabels(t *testing.T) {
 	env, client := startGatewayEnv(t, e2eEnvOptions{})
 

@@ -161,3 +161,48 @@ func FinalizeSession(t *testing.T, client *http.Client, clientURL string) map[st
 	t.Logf("SettlementContract:\n%s", settlementJSON)
 	return settlement
 }
+
+// LeakyHostAnswer carries every field the response side hides, at the depths vLLM writes them.
+const LeakyHostAnswer = `{"choices":[{"message":{"content":"stub"},"logprobs":{"content":[{"logprob":-0.5,"top_logprobs":[]}]},"token_ids":[1,2,3]}],"prompt_token_ids":[4,5],"prompt_logprobs":[null],"usage":{"prompt_tokens":80,"completion_tokens":40}}`
+
+// EchoedRequest reads the request body back out of an echoing host's answer.
+func EchoedRequest(t *testing.T, resp RawResponse) map[string]any {
+	t.Helper()
+	require.Equal(t, http.StatusOK, resp.StatusCode, "completion should be served: %s", resp.Body)
+	choices, ok := resp.JSON["choices"].([]any)
+	require.True(t, ok, "echoed answer should carry choices: %s", resp.Body)
+	require.NotEmpty(t, choices, "echoed answer should carry a choice: %s", resp.Body)
+	choice, ok := choices[0].(map[string]any)
+	require.True(t, ok, "echoed choice should be an object: %s", resp.Body)
+	message, ok := choice["message"].(map[string]any)
+	require.True(t, ok, "echoed choice should carry a message: %s", resp.Body)
+	content, ok := message["content"].(string)
+	require.True(t, ok, "echoed message should carry string content: %s", resp.Body)
+
+	var received map[string]any
+	require.NoError(t, json.Unmarshal([]byte(content), &received), "echoed content should be the request body: %s", content)
+	return received
+}
+
+// EscrowBalance reads what the live escrow session has left; the stored record carries no balance.
+func EscrowBalance(t *testing.T, client *http.Client, clientURL, escrowID, bearerToken string) uint64 {
+	t.Helper()
+	resp := GetRaw(t, client, clientURL+"/v1/admin/state", bearerToken)
+	require.Equal(t, http.StatusOK, resp.StatusCode, "reading gateway state: %s", resp.Body)
+	var state struct {
+		Status struct {
+			Devshards []struct {
+				EscrowID string `json:"escrow_id"`
+				Balance  uint64 `json:"balance"`
+			} `json:"devshards"`
+		} `json:"status"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(resp.Body), &state), "parsing gateway state: %s", resp.Body)
+	for _, escrow := range state.Status.Devshards {
+		if escrow.EscrowID == escrowID {
+			return escrow.Balance
+		}
+	}
+	t.Fatalf("gateway state carries no escrow %s: %s", escrowID, resp.Body)
+	return 0
+}

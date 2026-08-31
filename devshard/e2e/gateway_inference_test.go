@@ -8,8 +8,11 @@ import (
 	"devshard/e2e/testutil"
 )
 
-// Ordinary traffic must land in the ledger as delivered work and raise nothing. This is the baseline
-// every other accounting scenario is read against: if it drifts, none of the others mean anything.
+// Test flow:
+//  1. Start the default three-host gateway environment.
+//  2. Send four non-streaming completions.
+//  3. Assert the ledger counts at least four finished_used nonces.
+//  4. Assert ordinary traffic raised no findings.
 func TestE2E_GatewayAccountsServedNonces(t *testing.T) {
 	env, client := startGatewayEnv(t, e2eEnvOptions{})
 
@@ -28,8 +31,12 @@ func TestE2E_GatewayAccountsServedNonces(t *testing.T) {
 	}
 }
 
-// The streamed path spends its nonce the same way the buffered one does. The two differ in how the
-// answer reaches the client, not in what the escrow paid for, and the ledger must say so.
+// Test flow:
+//  1. Start the default three-host gateway environment.
+//  2. Read the finished_used count before any traffic.
+//  3. Send one streaming completion.
+//  4. Assert finished_used grew, so the stream spent a nonce the ledger recorded.
+//  5. Assert the streamed request raised no findings.
 func TestE2E_GatewayAccountsAStreamedNonceLikeABufferedOne(t *testing.T) {
 	env, client := startGatewayEnv(t, e2eEnvOptions{})
 
@@ -45,8 +52,11 @@ func TestE2E_GatewayAccountsAStreamedNonceLikeABufferedOne(t *testing.T) {
 	}
 }
 
-// A cache hit is answered without reaching a host, so it must spend no nonce. Serving one from cache and
-// still paying for it would be the worst of both.
+// Test flow:
+//  1. Start the default three-host gateway environment.
+//  2. Send one completion and read the session nonce.
+//  3. Send the identical completion again.
+//  4. Assert the nonce did not move, so the cache hit reached no host.
 func TestE2E_GatewayCacheHitSpendsNoNonce(t *testing.T) {
 	env, client := startGatewayEnv(t, e2eEnvOptions{})
 
@@ -63,8 +73,11 @@ func TestE2E_GatewayCacheHitSpendsNoNonce(t *testing.T) {
 	}
 }
 
-// A race with a loser: the second answer is spent work nobody used, not a failure. Speculation
-// produces losers unaided -- an injected delay was measured and changed nothing.
+// Test flow:
+//  1. Start the default three-host gateway environment.
+//  2. Send six completions, which is enough for speculation to produce a loser unaided.
+//  3. Poll accounting until a finished_unused nonce appears.
+//  4. Log the used and unused counts the race settled on.
 func TestE2E_GatewayAccountsAnAnswerThatLostItsRace(t *testing.T) {
 	env, client := startGatewayEnv(t, e2eEnvOptions{})
 

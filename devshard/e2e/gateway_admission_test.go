@@ -9,7 +9,11 @@ import (
 	"devshard/e2e/testutil"
 )
 
-// The limiter says no before it takes the money: a request refused at the door reserved no nonce.
+// Test flow:
+//  1. Start the three-host environment with a cap of one concurrent request and no admission queue.
+//  2. Fire eight completions at once.
+//  3. Assert at least one was turned away with 429.
+//  4. Assert no nonce was taken and then abandoned before dispatch.
 func TestE2E_GatewayTurnsAwayAnOverloadBeforeItTakesANonce(t *testing.T) {
 	env, client := startGatewayEnv(t, e2eEnvOptions{gatewayEnvOverrides: map[string]string{
 		"GATEWAY_MAX_CONCURRENT_REQUESTS":  "1",
@@ -49,7 +53,12 @@ func TestE2E_GatewayTurnsAwayAnOverloadBeforeItTakesANonce(t *testing.T) {
 	}
 }
 
-// Refusing a model no escrow serves must cost nothing, so the nonce sequence stands where it stood.
+// Test flow:
+//  1. Start the default three-host gateway environment.
+//  2. Read the session nonce before any traffic.
+//  3. Send one completion naming a model no escrow serves.
+//  4. Assert the gateway answers 4xx.
+//  5. Assert the session nonce did not move.
 func TestE2E_GatewayRejectsAnUnservedModelWithoutSpendingANonce(t *testing.T) {
 	env, client := startGatewayEnv(t, e2eEnvOptions{})
 

@@ -30,8 +30,11 @@ func gatewayParticipants(t *testing.T, client *http.Client, clientURL string) []
 	return listed.Participants
 }
 
-// An allowlist withholds a host from routing without stopping the escrow: nonce%3 still binds every third
-// nonce to the excluded slot, and those must be burned rather than sent, under their own reason.
+// Test flow:
+//  1. Start the default three-host gateway environment.
+//  2. Narrow the allowlist to two of the three participants.
+//  3. Send nine completions and assert the allowed two served some of them.
+//  4. Assert the excluded slot burned its nonces under participant_outside_allowlist rather than routing or losing them.
 func TestE2E_GatewayBurnsTheNoncesOfAHostOutsideTheAllowlist(t *testing.T) {
 	env, client := startGatewayEnv(t, e2eEnvOptions{})
 
@@ -55,8 +58,10 @@ func TestE2E_GatewayBurnsTheNoncesOfAHostOutsideTheAllowlist(t *testing.T) {
 	}
 }
 
-// Narrowing the allowlist to one host and then clearing it puts the group back in service: an operator
-// who over-narrows during an incident must be able to undo it without a restart.
+// Test flow:
+//  1. Start the default three-host gateway environment.
+//  2. Narrow the allowlist to a single host, then clear it again.
+//  3. Assert the group serves once more, without a restart.
 func TestE2E_GatewayKeepsServingWhenTheAllowlistIsPutBack(t *testing.T) {
 	env, client := startGatewayEnv(t, e2eEnvOptions{})
 
@@ -68,8 +73,11 @@ func TestE2E_GatewayKeepsServingWhenTheAllowlistIsPutBack(t *testing.T) {
 		testutil.SendCompletionRaw(t, client, env.clientURL, "allowlist lifted", testutil.AdminAPIKey))
 }
 
-// A host the gateway cannot reach is cut off, and while the cutoff holds its nonces are burned as
-// throttled rather than offered again. Only a transport fault trips the breaker -- see the scenario below.
+// Test flow:
+//  1. Start the three-host environment with one host unreachable.
+//  2. Set a cutoff that trips on the first transport fault.
+//  3. Send traffic while the cutoff holds.
+//  4. Assert the cut-off host's nonces are burned as throttled rather than offered again.
 func TestE2E_GatewayBurnsTheNoncesOfACutOffHost(t *testing.T) {
 	env, client := startGatewayEnv(t, e2eEnvOptions{})
 
@@ -98,9 +106,11 @@ func TestE2E_GatewayBurnsTheNoncesOfACutOffHost(t *testing.T) {
 	}
 }
 
-// A host answering 503 is held back, not cut off: it replied, so the window halves and the transport-fault
-// count resets (limits/participant.go, Overload). Cutting off a host that answers would lose capacity that
-// is merely busy.
+// Test flow:
+//  1. Start the three-host environment with one host answering HTTP 503.
+//  2. Set a cutoff that trips on the first transport fault.
+//  3. Send nine completions.
+//  4. Assert no nonce was burned as throttled: a host that answers is busy, not faulty.
 func TestE2E_GatewayDoesNotCutOffAHostThatAnswers503(t *testing.T) {
 	env, client := startGatewayEnv(t, e2eEnvOptions{
 		hostEnvOverrides: map[int]map[string]string{1: brokenHost("503", "busy")},
@@ -122,9 +132,11 @@ func TestE2E_GatewayDoesNotCutOffAHostThatAnswers503(t *testing.T) {
 	}
 }
 
-// Ejection outlives the cutoff, and the two are read in that order: while a host is cut off it burns as
-// throttled, and only once the cutoff lapses does the ejection behind it show. Both windows are kept
-// short and long on purpose so the second is reachable at all.
+// Test flow:
+//  1. Start the three-host environment with one host answering HTTP 500.
+//  2. Set a half-second cutoff that trips after three failures, leaving the longer ejection behind it.
+//  3. Send ten completions to eject the host, then wait past the cutoff and send six more.
+//  4. Assert the ejection is what blocks it now, burning its nonces under participant_ejected_no_send.
 func TestE2E_GatewayBurnsTheNoncesOfAnEjectedHostOnceItsCutoffLapses(t *testing.T) {
 	env, client := startGatewayEnv(t, e2eEnvOptions{
 		hostEnvOverrides: map[int]map[string]string{1: brokenHost("500", "host is broken")},
@@ -140,8 +152,6 @@ func TestE2E_GatewayBurnsTheNoncesOfAnEjectedHostOnceItsCutoffLapses(t *testing.
 		testutil.SendCompletionRaw(t, client, env.clientURL,
 			fmt.Sprintf("ejecting %d", request), testutil.AdminAPIKey)
 	}
-	// Past the half-second cutoff and well inside the thirty-second ejection, which is the only window
-	// where the ejection is the block that answers.
 	time.Sleep(3 * time.Second)
 	for request := range 6 {
 		testutil.SendCompletionRaw(t, client, env.clientURL,
