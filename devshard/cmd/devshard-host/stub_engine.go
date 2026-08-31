@@ -20,5 +20,10 @@ func stubInferenceEngineFromEnv() (devshardpkg.InferenceEngine, error) {
 		stubEngine.ResponseBody = body
 		stubEngine.ResponseHash = responseHash[:]
 	}
+	echoRequest, err := e2econfig.StringFromEnv(e2econfig.StubInferenceEchoRequestEnv)
+	if err != nil {
+		return nil, err
+	}
+	stubEngine.EchoRequest = echoRequest != ""
 	return stubEngine, nil
 }

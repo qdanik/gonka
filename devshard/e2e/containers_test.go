@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -63,6 +64,12 @@ type containerSpec struct {
 	waitLogOccurrence int
 	mounts            []mount.Mount
 }
+
+const (
+	// One source for both the stand and the assertions that read what the stand configured.
+	e2eHostCount    = 3
+	e2eMaxTokensCap = 4096
+)
 
 type e2eEnvOptions struct {
 	hostVolumeNames         []string
@@ -147,7 +154,7 @@ func startE2EEnv(ctx context.Context, t *testing.T, images e2eImages, opts e2eEn
 		waitLogOccurrence: 2,
 	})
 
-	env.hostURLs = make([]string, 3)
+	env.hostURLs = make([]string, e2eHostCount)
 	for i := range env.hostURLs {
 		env.hostURLs[i] = fmt.Sprintf("http://devshard-host-%d:8080", i)
 	}
@@ -176,7 +183,7 @@ func startE2EEnv(ctx context.Context, t *testing.T, images e2eImages, opts e2eEn
 		"DEVSHARD_ADMIN_API_KEY": testutil.AdminAPIKey,
 		"DEVSHARD_STORAGE_PATH":  "/tmp/devshardctl",
 		"DEVSHARD_MODEL":         "stub-model",
-		"GATEWAY_MAX_TOKENS_CAP": "4096",
+		"GATEWAY_MAX_TOKENS_CAP": strconv.Itoa(e2eMaxTokensCap),
 		"DEVSHARD_STATS_PORT":    "9091",
 	}
 	for k, v := range opts.devshardctlEnvOverrides {

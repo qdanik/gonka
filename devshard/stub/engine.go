@@ -3,6 +3,7 @@ package stub
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"net/http"
 
@@ -15,6 +16,18 @@ type InferenceEngine struct {
 	InputTokens  uint64
 	OutputTokens uint64
 	ResponseBody []byte
+
+	// EchoRequest answers with the body the host received, so a test can read back what the gateway normalised.
+	EchoRequest bool
+}
+
+// echoedRequestBody carries the prompt in the one field that survives the fold and reaches the client.
+func echoedRequestBody(prompt []byte) []byte {
+	content, err := json.Marshal(string(prompt))
+	if err != nil {
+		content = []byte(`""`)
+	}
+	return []byte(`{"choices":[{"message":{"content":` + string(content) + `}}],"usage":{"prompt_tokens":80,"completion_tokens":40}}`)
 }
 
 func NewInferenceEngine() *InferenceEngine {
@@ -29,10 +42,16 @@ func NewInferenceEngine() *InferenceEngine {
 }
 
 func (e *InferenceEngine) Execute(_ context.Context, req devshard.ExecuteRequest) (*devshard.ExecuteResult, error) {
+	body, responseHash := e.ResponseBody, e.ResponseHash
+	if e.EchoRequest {
+		body = echoedRequestBody(req.Prompt)
+		sum := sha256.Sum256(body)
+		responseHash = sum[:]
+	}
 	if req.ResponseWriter != nil {
 		// Write mock SSE events to the response writer.
 		if rw, ok := req.ResponseWriter.(http.Flusher); ok {
-			fmt.Fprintf(req.ResponseWriter, "data: %s\n\n", e.ResponseBody)
+			fmt.Fprintf(req.ResponseWriter, "data: %s\n\n", body)
 			rw.Flush()
 			fmt.Fprintf(req.ResponseWriter, "data: [DONE]\n\n")
 			rw.Flush()
@@ -40,10 +59,10 @@ func (e *InferenceEngine) Execute(_ context.Context, req devshard.ExecuteRequest
 	}
 
 	return &devshard.ExecuteResult{
-		ResponseHash: e.ResponseHash,
+		ResponseHash: responseHash,
 		InputTokens:  e.InputTokens,
 		OutputTokens: e.OutputTokens,
-		ResponseBody: e.ResponseBody,
+		ResponseBody: body,
 	}, nil
 }
 
