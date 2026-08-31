@@ -116,10 +116,18 @@ func TestVerdictTable(t *testing.T) {
 	heldEmpty := failedAttempt(TerminalEmptyStream)
 	heldEmpty.Completed = testEpoch.Add(emptyStreamHeldTooLong)
 
+	// A host that closed its nonce answered, even with nothing in it; one that did not took the work
+	// and left its reserve parked until the timeout vote.
+	finishedEmpty := failedAttempt(TerminalEmptyStream)
+	finishedEmpty.NonceFinished = true
+
+	heldFinishedEmpty := finishedEmpty
+	heldFinishedEmpty.Completed = testEpoch.Add(emptyStreamHeldTooLong)
+
 	heldBurnEmpty := failedAttempt(TerminalBurnEmpty)
 	heldBurnEmpty.Completed = testEpoch.Add(15 * time.Minute)
 
-	briefEmpty := failedAttempt(TerminalEmptyStream)
+	briefEmpty := finishedEmpty
 	briefEmpty.Completed = testEpoch.Add(emptyStreamHeldTooLong - time.Millisecond)
 
 	tests := []struct {
@@ -148,16 +156,18 @@ func TestVerdictTable(t *testing.T) {
 		{"unexpected EOF", race(cleanAttempt()), failedAttempt(TerminalUnexpectedEOF), limits.TransportFault, true, 4, true},
 		{"truncated SSE stream", race(cleanAttempt()), failedAttempt(TerminalStreamTruncated), limits.TransportFault, true, 4, true},
 		{"failure on a non-inference path", race(cleanAttempt()), failedAttempt(TerminalOffPath), limits.ModelOutcome, false, 4, false},
-		{"empty stream", race(failedAttempt(TerminalEmptyStream)), failedAttempt(TerminalEmptyStream), limits.ModelOutcome, true, 4, false},
+		{"empty stream that never finished its nonce", race(failedAttempt(TerminalEmptyStream)), failedAttempt(TerminalEmptyStream), limits.TransportFault, true, 4, true},
+		{"empty stream that finished its nonce", race(finishedEmpty), finishedEmpty, limits.ModelOutcome, true, 4, false},
 		{"empty stream with completion tokens burned", race(cleanAttempt()), failedAttempt(TerminalBurnEmpty), limits.ModelOutcome, true, 4, false},
 		{"error event inside the SSE stream", race(cleanAttempt()), failedAttempt(TerminalErrorStream), limits.ModelOutcome, true, 4, false},
 		{"capability refusal another host can serve", race(cleanAttempt()), failedAttempt(TerminalCapabilityRefused), limits.ModelOutcome, true, 4, false},
 		{"winner stalled after content, failure rate exceeded", race(stalledOverThreshold), stalledOverThreshold, limits.TransportFault, true, 4, true},
 		{"winner stalled after content, failure rate not exceeded", race(stalledUnderThreshold), stalledUnderThreshold, limits.ModelOutcome, false, 4, false},
 		{"content produced, past the exemption, nonce unfinished", race(longResponse), longResponse, limits.ModelOutcome, false, 4, false},
-		{"empty stream that held the request past the refusal point", race(heldEmpty), heldEmpty, limits.Overload, true, 2, false},
+		{"empty stream that held the request past the refusal point without finishing its nonce", race(heldEmpty), heldEmpty, limits.TransportFault, true, 4, true},
+		{"empty stream that finished its nonce and held the request past the refusal point", race(heldFinishedEmpty), heldFinishedEmpty, limits.Overload, true, 2, false},
 		{"empty stream that burned tokens and held the request", race(heldBurnEmpty), heldBurnEmpty, limits.Overload, true, 2, false},
-		{"empty stream one millisecond inside the refusal point", race(briefEmpty), briefEmpty, limits.ModelOutcome, true, 4, false},
+		{"empty stream that finished its nonce one millisecond inside the refusal point", race(briefEmpty), briefEmpty, limits.ModelOutcome, true, 4, false},
 		{"empty stream that held the request while the PoC bypass is active", func() RaceOutcome {
 			outcome := race(heldEmpty)
 			outcome.PoCBypassActive = true
@@ -359,18 +369,23 @@ func TestSampleResponsive(t *testing.T) {
 	}
 }
 
-func TestEmptyStreamDeniesCrowningWithoutMovingTheWindow(t *testing.T) {
+// The two penalties are independent: crown denial keeps the host off the client's answer, the cutoff
+// keeps it off the escrow's nonces, and neither moves the AIMD window.
+func TestEmptyStreamWithAnUnfinishedNonceDeniesCrowningAndOpensTheCutoff(t *testing.T) {
 	t.Parallel()
 
 	attempt := failedAttempt(TerminalEmptyStream)
 	outcome := race(attempt)
 
 	verdict, recorded := outcome.Verdict(attempt)
-	if verdict != limits.ModelOutcome || !recorded {
-		t.Fatalf("Verdict() = (%v, %v), want (ModelOutcome, true)", verdict, recorded)
+	if verdict != limits.TransportFault || !recorded {
+		t.Fatalf("Verdict() = (%v, %v), want (TransportFault, true)", verdict, recorded)
 	}
 	if window := observedWindow(verdict, recorded); window != 4 {
 		t.Fatalf("window after an empty stream = %d, want 4 (untouched)", window)
+	}
+	if !observedCutoffOpen(verdict, recorded) {
+		t.Fatal("cutoff after an empty stream = closed, want open")
 	}
 	if !outcome.DeniesCrowning(attempt) {
 		t.Fatal("DeniesCrowning() = false, want true")

@@ -48,7 +48,7 @@ A **capability refusal** is a third case and is kept out of the error class enti
 
 ### Crown denial
 
-A host that repeatedly answers with no content keeps receiving attempts but stops being crownable. Three content-free answers cost the crown; one content-bearing answer buys it back immediately (`engine/engine.go`). While denied, the host is treated as suspicious: a race that starts with it launches a speculative attempt immediately, and its claim on the client stream is held for as long as **any rival could still serve**. A rival is one already running that has not claimed, one whose pick is in flight, and one the race has committed to starting but not yet picked for — the replacement a suspicious primary earns is a rival from the moment the race decides to fetch it, not from the moment it launches. When none is left the held claim is crowned, because then its answer is the one the race committed a nonce for and refusing it would hand the client an error for a response that exists (`engine/race.go`).
+A host that repeatedly answers with no content stops being crownable, and keeps receiving attempts until the breaker cuts it off for leaving nonces open. Three content-free answers cost the crown; one content-bearing answer buys it back immediately (`engine/engine.go`). While denied, the host is treated as suspicious: a race that starts with it launches a speculative attempt immediately, and its claim on the client stream is held for as long as **any rival could still serve**. A rival is one already running that has not claimed, one whose pick is in flight, and one the race has committed to starting but not yet picked for — the replacement a suspicious primary earns is a rival from the moment the race decides to fetch it, not from the moment it launches. When none is left the held claim is crowned, because then its answer is the one the race committed a nonce for and refusing it would hand the client an error for a response that exists (`engine/race.go`).
 
 The operator's manual suspicious-host pins fold into the same gate, so a pinned host escalates and is held back however well it has been answering.
 
@@ -124,11 +124,11 @@ There are twenty terminal values, and every downstream vocabulary — limiter ve
 
 | Consumer | Rule |
 |---|---|
-| Limiter verdict | Won/Lost → success; throttled/unavailable → overload; transport-class terminals → transport fault; empty stream, burn-empty, error stream and capability refusal → model outcome, which never moves a host's window. |
+| Limiter verdict | Won/Lost → success; throttled/unavailable → overload; transport-class terminals and an empty stream that never finished its nonce → transport fault; burn-empty, error stream, capability refusal and an empty stream that did finish its nonce → model outcome, which never moves a host's window. |
 | Performance sample | One sample per attempt, unless the exemption ladder excuses it. The sample carries only participant, model and whether the host was responsive. |
 | Metric labels | Bounded label vocabularies exported by the engine and referenced — not restated — by the metrics layer. |
 
-"An empty stream is what the model produced, not what the host failed to carry, so the host's window must not contract for it" (`engine/outcome.go`, `Terminal.verdict`). The host still answers for it, through crown denial rather than through the limiter.
+"An empty stream is what the model produced, not what the host failed to carry, so the host's window must not contract for it" (`engine/outcome.go`, `Terminal.verdict`) — but only once the nonce is closed. A host that said nothing and left the nonce open did not produce an empty answer; it took the work and parked the reserve until the timeout vote, so it answers to the breaker as well as to crown denial (`engine/outcome.go`, `RaceOutcome.Verdict`).
 
 ### The exemption ladder
 

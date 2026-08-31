@@ -329,6 +329,8 @@ func (o RaceOutcome) Verdict(a AttemptOutcome) (limits.Verdict, bool) {
 		return limits.ModelOutcome, false
 	case a.emptyStream() && o.PoCBypassActive:
 		return limits.ModelOutcome, false
+	case a.Terminal == TerminalEmptyStream && !a.NonceFinished:
+		return limits.TransportFault, true
 	case a.emptyStream() && a.elapsed() >= emptyStreamHeldTooLong:
 		return limits.Overload, true
 	case a.Terminal == TerminalStalled && !a.FailureRateExceeded:
