@@ -194,7 +194,7 @@ The default input-token budget of zero means unlimited, which is worth an operat
 
 ## The wait budget
 
-A shard should not answer 429. That status means the client exceeded a quota, and a client that ran into the shard's own capacity exceeded nothing — it carries no hint of when to return, so a well-behaved client retries immediately and deepens the shortage it just hit. Every capacity refusal answers 503 instead, and every one of them carries `Retry-After`: the wait already spent when that is known, a default otherwise.
+A shard with no room should not answer 429. That status means the client exceeded a quota, and a client that ran into the shard's own capacity exceeded nothing — it carries no hint of when to return, so a well-behaved client retries immediately and deepens the shortage it just hit. Those refusals answer 503. The gateway's own limiter is the other case and keeps 429, because there the caller did exceed a quota (`api/errors.go`, `statusForError`, and api/README.md, "Errors and statuses"). Both carry `Retry-After`: the wait already spent when that is known, a default otherwise.
 
 `admission_queue_wait_ms` is the budget a request may spend looking for capacity, not a delay. A queued waiter is promoted the instant a slot frees. The default is five minutes, and it is set from what a slot actually costs: across three days of load the median winning attempt held its slot 105 s and the p90 held it 317 s. A two-minute budget was shorter than the p90 hold, so most waiters could not be reached before their budget ran out.
 
