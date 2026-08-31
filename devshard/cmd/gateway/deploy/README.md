@@ -1,6 +1,6 @@
 # Running the devshard gateway
 
-This is the self-hosted stack for the gateway in `devshard/cmd/gateway`. The release stack that ships with a node lives in [`deploy/join/docker-compose.devshard-gateway.yml`](../../../../deploy/join/docker-compose.devshard-gateway.yml) and pins a published image; this one defaults to a development image and is the pair to edit while working on the gateway itself.
+This is the self-hosted stack for the gateway in `devshard/cmd/gateway`.
 
 | File | What it is |
 | --- | --- |

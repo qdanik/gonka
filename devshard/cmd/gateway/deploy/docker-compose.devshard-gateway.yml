@@ -1,7 +1,7 @@
 services:
   devshard-gateway:
     container_name: ${GATEWAY_INSTANCE_NAME:-devshard-gateway}
-    image: ${GATEWAY_IMAGE:-kovec/gateway:v4}
+    image: ${GATEWAY_IMAGE:-kovec/gateway:v4-latest}
     env_file:
       - ${GATEWAY_ENV_FILE:-./config.devshard-gateway.env}
     volumes:
