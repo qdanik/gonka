@@ -710,3 +710,47 @@ func TestClassifyCarriesAVersionRefusalOffTheDispatchError(t *testing.T) {
 		})
 	}
 }
+
+func TestLogprobsDecoded(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name        string
+		body        string
+		wantDecoded bool
+	}{
+		{
+			name: "every token and alternative names an id",
+			body: `data: {"choices":[{"logprobs":{"content":[{"token":"758","top_logprobs":[{"token":"12"}]},{"token":"91"}]}}]}` + "\n\n",
+		},
+		{
+			name:        "the first token names its text",
+			body:        `data: {"choices":[{"logprobs":{"content":[{"token":"The"}]}}]}` + "\n\n",
+			wantDecoded: true,
+		},
+		{
+			name:        "a later token names its text",
+			body:        `data: {"choices":[{"logprobs":{"content":[{"token":"758"},{"token":"The"}]}}]}` + "\n\n",
+			wantDecoded: true,
+		},
+		{
+			name:        "an alternative names its text",
+			body:        `data: {"choices":[{"logprobs":{"content":[{"token":"758","top_logprobs":[{"token":"12"},{"token":"The"}]}]}}]}` + "\n\n",
+			wantDecoded: true,
+		},
+		{
+			name:        "a later event names its text",
+			body:        `data: {"choices":[{"logprobs":{"content":[{"token":"758"}]}}]}` + "\n\n" + `data: {"choices":[{"logprobs":{"content":[{"token":"The"}]}}]}` + "\n\n",
+			wantDecoded: true,
+		},
+		{name: "no logprobs at all", body: `data: {"choices":[{"delta":{"content":"hi"}}]}` + "\n\n"},
+	}
+
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			if got := logprobsDecoded([]byte(testCase.body)); got != testCase.wantDecoded {
+				t.Errorf("logprobsDecoded() = %v, want %v", got, testCase.wantDecoded)
+			}
+		})
+	}
+}

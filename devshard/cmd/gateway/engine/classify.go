@@ -64,7 +64,10 @@ func logprobsDecoded(events []byte) bool {
 			Choices []struct {
 				Logprobs struct {
 					Content []struct {
-						Token string `json:"token"`
+						Token       string `json:"token"`
+						TopLogprobs []struct {
+							Token string `json:"token"`
+						} `json:"top_logprobs"`
 					} `json:"content"`
 				} `json:"logprobs"`
 			} `json:"choices"`
@@ -72,10 +75,20 @@ func logprobsDecoded(events []byte) bool {
 		if json.Unmarshal(payload, &event) != nil {
 			return false
 		}
+		// Every token and every alternative: the validator rejects on the first one of either it cannot
+		// replay, so a numeric first token hides the rest.
 		for _, choice := range event.Choices {
 			for _, entry := range choice.Logprobs.Content {
-				decoded = !isTokenID(entry.Token)
-				return true
+				if !isTokenID(entry.Token) {
+					decoded = true
+					return true
+				}
+				for _, alternative := range entry.TopLogprobs {
+					if !isTokenID(alternative.Token) {
+						decoded = true
+						return true
+					}
+				}
 			}
 		}
 		return false
