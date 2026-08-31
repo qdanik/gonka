@@ -13,6 +13,8 @@ import (
 
 const (
 	defaultEscrowID = "1"
+	// defaultStandModel is what the committed mock-chain config serves; a test can ask for another.
+	defaultStandModel = "stub-model"
 
 	mockChainAlias  = "mock-chain"
 	devshardCtlName = "devshardctl"

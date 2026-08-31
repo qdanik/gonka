@@ -71,6 +71,14 @@ const (
 	e2eMaxTokensCap = 4096
 )
 
+// standModel is the routed model the stand serves; the escrow and the client body have to name the same one.
+func standModel(opts e2eEnvOptions) string {
+	if opts.model == "" {
+		return defaultStandModel
+	}
+	return opts.model
+}
+
 type e2eEnvOptions struct {
 	hostVolumeNames         []string
 	hostEnvOverrides        map[int]map[string]string
@@ -85,6 +93,9 @@ type e2eEnvOptions struct {
 	mockChainParams map[string]any
 	// gatewayVolumeName keeps storage across a restart; without it Docker recreates the dir empty.
 	gatewayVolumeName string
+
+	// model routes the whole stand at one routed model id, so a test can reach a filter profile.
+	model string
 }
 
 func startHappyPathEnv(ctx context.Context, t *testing.T, images e2eImages) *e2eEnv {
@@ -182,7 +193,7 @@ func startE2EEnv(ctx context.Context, t *testing.T, images e2eImages, opts e2eEn
 		"DEVSHARD_PRIVATE_KEY":   testutil.EnvDefault("DEVSHARD_E2E_USER_PRIVATE_KEY", testutil.UserPrivateKey),
 		"DEVSHARD_ADMIN_API_KEY": testutil.AdminAPIKey,
 		"DEVSHARD_STORAGE_PATH":  "/tmp/devshardctl",
-		"DEVSHARD_MODEL":         "stub-model",
+		"DEVSHARD_MODEL":         standModel(opts),
 		"GATEWAY_MAX_TOKENS_CAP": strconv.Itoa(e2eMaxTokensCap),
 		"DEVSHARD_STATS_PORT":    "9091",
 	}
@@ -222,7 +233,7 @@ func startE2EEnv(ctx context.Context, t *testing.T, images e2eImages, opts e2eEn
 func (e *e2eEnv) startGateway(ctx context.Context, t *testing.T, opts e2eEnvOptions) {
 	t.Helper()
 	gatewayEnv := map[string]string{
-		"GATEWAY_ESCROWS_JSON":   fmt.Sprintf(`[{"escrow_id":%q,"model":"stub-model","private_key_env":"GATEWAY_ESCROW_KEY"}]`, defaultEscrowID),
+		"GATEWAY_ESCROWS_JSON":   fmt.Sprintf(`[{"escrow_id":%q,"model":%q,"private_key_env":"GATEWAY_ESCROW_KEY"}]`, defaultEscrowID, standModel(opts)),
 		"GATEWAY_ESCROW_KEY":     testutil.EnvDefault("DEVSHARD_E2E_USER_PRIVATE_KEY", testutil.UserPrivateKey),
 		"GATEWAY_CHAIN_GRPC":     mockChainAlias + ":9090",
 		"GATEWAY_PUBLIC_API":     "http://" + mockChainAlias + ":9191",

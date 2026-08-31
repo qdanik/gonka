@@ -148,3 +148,37 @@ func TestE2E_GatewayUnwrapsExtraBodyBeforeAHostSeesIt(t *testing.T) {
 		t.Errorf("host received extra_body = %v, want the envelope dropped", received["extra_body"])
 	}
 }
+
+// The filter profile is chosen by the routed model, so only a stand serving that model can show it at
+// all: on the MiniMax route the caller's reasoning_split survives and the thinking wrapper does not.
+func TestE2E_GatewayAppliesTheRoutedModelsFilterProfile(t *testing.T) {
+	const minimaxModel = "MiniMaxAI/MiniMax-M2.7"
+	env, client := startGatewayEnv(t, e2eEnvOptions{model: minimaxModel, hostEnvOverrides: echoingHosts()})
+
+	body := testutil.ChatCompletionBody("routed profile", false)
+	body["model"] = minimaxModel
+	body["reasoning_split"] = false
+	body["thinking"] = map[string]any{"type": "enabled"}
+	received := echoedRequest(t, testutil.PostJSONRaw(t, client, env.clientURL+"/v1/chat/completions", body, testutil.AdminAPIKey))
+
+	if got, present := received["reasoning_split"]; !present || got != false {
+		t.Errorf("host received reasoning_split = %v (present=%t), want the caller's false kept on the MiniMax route", got, present)
+	}
+	if _, present := received["thinking"]; present {
+		t.Errorf("host received thinking = %v, want it stripped on the MiniMax route", received["thinking"])
+	}
+}
+
+// The contrast that makes the test above mean something: the default route has no profile to serve
+// reasoning_split, so the same field is dropped instead of forwarded.
+func TestE2E_GatewayStripsAProfileFieldOnARouteThatCannotServeIt(t *testing.T) {
+	env, client := startGatewayEnv(t, e2eEnvOptions{hostEnvOverrides: echoingHosts()})
+
+	body := testutil.ChatCompletionBody("no profile", false)
+	body["reasoning_split"] = false
+	received := echoedRequest(t, testutil.PostJSONRaw(t, client, env.clientURL+"/v1/chat/completions", body, testutil.AdminAPIKey))
+
+	if _, present := received["reasoning_split"]; present {
+		t.Errorf("host received reasoning_split = %v, want it stripped on a route with no profile for it", received["reasoning_split"])
+	}
+}
