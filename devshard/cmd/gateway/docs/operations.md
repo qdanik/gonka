@@ -75,7 +75,7 @@ Signing keys are addressed **by the name of the variable that holds them**, neve
 | `GATEWAY_WARM_NEW_ESCROWS` | true | whether a new escrow is taught to its group before serving |
 | `GATEWAY_CHAIN_SNAPSHOT_MAX_AGE_SECONDS` | 60 | how stale the chain snapshot may be before requests are refused 503; `0` disables the gate |
 | `GATEWAY_ENGINE_RECEIPT_TIMEOUT_MS` | 5 000 | receipt deadline; doubled above 100 000 input tokens |
-| `GATEWAY_ENGINE_FIRST_TOKEN_FLOOR_MS` | 1 000 | lower bound on the first-token curve |
+| `GATEWAY_ENGINE_FIRST_TOKEN_FLOOR_MS` | 12 000 | lower bound on the first-token curve |
 | `GATEWAY_ENGINE_FIRST_TOKEN_CEILING_MS` | 30 000 | upper bound, whatever the host's own p75 asks for |
 | `GATEWAY_ENGINE_INTER_CHUNK_STALL_MS` | 30 000 | silence after first content before an attempt is stalled |
 | `GATEWAY_ENGINE_LOSER_GRACE_MS` | 600 000 | how long a loser may keep running after the crown |

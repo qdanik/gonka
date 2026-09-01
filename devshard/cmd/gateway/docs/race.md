@@ -77,7 +77,7 @@ Stages that can trigger another attempt. The reason column is the wire string, w
 
 An attempt launched at race start beside a primary the race distrusts carries a start reason rather than an escalation reason on `devshard_gateway_attempts_started_total{reason}`, and the two vocabularies do not overlap: `primary_suspicious` for a crown-denied or operator-pinned host, `primary_degraded` for one the outlier detector wanted out of rotation. The second exists because the routing gate that withholds an ejected host is capped, and a fleet failing together stays routable by design — see [capacity.md](./capacity.md).
 
-The first-token deadline is a fixed quadratic in prompt size, `1.7 + 3e-5·T + 5e-10·T²` seconds, with a floor from `engine_first_token_floor_ms` (`engine/escalation.go`, `EscalationPolicy.firstTokenTimeout`). At the default floor of one second the floor is inert: the quadratic's minimum is 1.7 s, so the floor binds only if raised.
+The first-token deadline is a fixed quadratic in prompt size, `1.7 + 3e-5·T + 5e-10·T²` seconds, with a floor from `engine_first_token_floor_ms` (`engine/escalation.go`, `EscalationPolicy.firstTokenTimeout`). At the default floor of twelve seconds the floor is what binds for ordinary traffic: the quadratic only overtakes it above roughly 117 000 input tokens.
 
 **Arming is not permission.** `NextEscalation` yields an `ArmedEscalation`, which is a deadline and nothing more. The only producer of an actionable escalation is `Confirm`, which re-derives the trigger *at fire time* and rejects a trigger that has vanished, a stage that has advanced, or a timer that fired early (`engine/escalation.go`, `ArmedEscalation` and `EscalationPolicy.Confirm`). This exists because an attempt's stage moves while its timer runs — a receipt landing just under the receipt timeout is the common case — and escalating on the armed stage would start a needless extra attempt on *every* healthy request. Confirming re-reads state, so the type system enforces it: an unconfirmed `ArmedEscalation` carries a deadline and no permission, and cannot be acted on.
 
@@ -168,11 +168,11 @@ Carried in the configuration snapshot (`config.Engine`, `config.Stream`) and bou
 | Field | Default | Effect |
 |---|---|---|
 | `engine_receipt_timeout_ms` | 5 000 | Receipt deadline; doubled above 100 000 input tokens. |
-| `engine_first_token_floor_ms` | 1 000 | Lower bound on the first-token curve. Inert at the default. |
+| `engine_first_token_floor_ms` | 12 000 | Lower bound on the first-token curve. Binds below roughly 117 000 input tokens. |
 | `engine_first_token_ceiling_ms` | 30 000 | Upper bound, whatever the host's own p75 asks for. |
 | `engine_inter_chunk_stall_ms` | 30 000 | Silence after first content before an attempt is flagged stalled. |
 | `engine_loser_grace_ms` | 600 000 | How long losers may keep streaming after the winner finishes. Must be at least the stall window, or losers merely between chunks are killed. |
-| `engine_max_speculative_attempts` | 0 | 0 means bounded only by the host group. |
+| `engine_max_speculative_attempts` | 3 | Attempts one race may hold; 0 means bounded only by the host group. |
 | `drain_timeout_seconds` | 2 400 | Bound on a race after its client leaves. |
 | `classify_max_attempt_bytes`, `classify_max_participant_bytes`, `classify_max_global_bytes` | 1 / 10 / 100 MiB | Reassembly budgets: attempt, participant, global. |
 

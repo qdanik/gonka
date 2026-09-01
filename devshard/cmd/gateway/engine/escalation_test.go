@@ -178,13 +178,13 @@ func TestLadderRuleInIsolation(t *testing.T) {
 			wantStage: StageNone,
 		},
 		{
-			// The curve puts this at 1.7305s, only 0.73s after the receipt landed; the floor is what the
-			// host is owed from the moment it acknowledged, so the deadline moves out to 2s.
+			// The curve puts this at 1.7305s, before the receipt has even landed; the floor is what the
+			// host is owed from the moment it acknowledged, so the deadline moves out to receipt plus floor.
 			name:         "rule 10: a receipted streaming attempt waits the first-token deadline",
 			attempt:      receiptedNoToken,
 			request:      streaming,
 			wantStage:    StageFirstToken,
-			wantDeadline: raceStart.Add(2 * time.Second),
+			wantDeadline: raceStart.Add(13 * time.Second),
 		},
 	}
 	for _, testCase := range testCases {
@@ -230,6 +230,8 @@ func TestReceiptTimeoutDoublesOnlyAboveTheLargeInputBoundary(t *testing.T) {
 
 func TestFirstTokenTimeoutHoldsTheFloorAndGrowsWithInput(t *testing.T) {
 	floored := EscalationPolicy{FirstTokenFloor: 3_988 * time.Millisecond}
+	// No floor, so the curve itself is observable below the shipped floor.
+	curveOnly := EscalationPolicy{FirstTokenCeiling: testPolicy.FirstTokenCeiling}
 	testCases := []struct {
 		name        string
 		policy      EscalationPolicy
@@ -239,8 +241,8 @@ func TestFirstTokenTimeoutHoldsTheFloorAndGrowsWithInput(t *testing.T) {
 		{"curve just under the floor", floored, 43_000, 3_988 * time.Millisecond},
 		{"curve exactly on the floor", floored, 44_000, 3_988 * time.Millisecond},
 		{"curve just over the floor", floored, 44_001, 3_988_074 * time.Microsecond},
-		{"empty prompt sits on the curve", testPolicy, 0, 1_700 * time.Millisecond},
-		{"linear term grows the wait", testPolicy, 1_000, 1_730_500 * time.Microsecond},
+		{"empty prompt sits on the curve", curveOnly, 0, 1_700 * time.Millisecond},
+		{"linear term grows the wait", curveOnly, 1_000, 1_730_500 * time.Microsecond},
 		// The curve reaches 8m51s at a million tokens -- past the streaming backstop that cancels the
 		// attempt, so an uncapped rung would never fire on a body the ingest limit still admits.
 		{"a prompt no retry could beat stops at the ceiling", testPolicy, 1_000_000, testPolicy.FirstTokenCeiling},
@@ -420,5 +422,19 @@ func TestTheStreamingBackstopFiresInsideTheChainsExecutionDeadline(t *testing.T)
 	if streamingHardTimeout >= settlementDeadline {
 		t.Fatalf("streamingHardTimeout = %s, want it inside the chain's %s execution deadline",
 			streamingHardTimeout, settlementDeadline)
+	}
+}
+
+// The shipped defaults are a production tuning decision, not an accident: the race hedges a bounded
+// number of times, and it waits long enough that a healthy primary answers before it is hedged at all.
+func TestShippedDefaultsBoundTheRaceAndItsFirstTokenWait(t *testing.T) {
+	t.Parallel()
+	policy := EscalationPolicyFromConfig(config.Defaults().Engine)
+
+	if budget := policy.AttemptBudget(16, false); budget != 3 {
+		t.Fatalf("AttemptBudget over a 16-host group = %d, want 3", budget)
+	}
+	if wait := policy.firstTokenTimeout(3_460); wait != 12*time.Second {
+		t.Fatalf("first-token wait for a median prompt = %v, want the 12s floor", wait)
 	}
 }

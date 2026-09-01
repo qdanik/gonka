@@ -59,12 +59,12 @@ func TestDefaultsMatchSpec(t *testing.T) {
 		{"Perf.HostStalenessSeconds", configuration.Perf.HostStalenessSeconds, int64(3_600)},
 		{"Scheduler.MatchWaitMS", configuration.Scheduler.MatchWaitMS, int64(2_000)},
 		{"Engine.ReceiptTimeoutMS", configuration.Engine.ReceiptTimeoutMS, int64(5_000)},
-		{"Engine.FirstTokenFloorMS", configuration.Engine.FirstTokenFloorMS, int64(1_000)},
+		{"Engine.FirstTokenFloorMS", configuration.Engine.FirstTokenFloorMS, int64(12_000)},
 		{"Engine.InterChunkStallMS", configuration.Engine.InterChunkStallMS, int64(30_000)},
 		{"Engine.FirstTokenCeilingMS", configuration.Engine.FirstTokenCeilingMS, int64(30_000)},
 		{"Chain.SnapshotMaxAgeSeconds", configuration.Chain.SnapshotMaxAgeSeconds, int64(60)},
 		{"Engine.LoserGraceMS", configuration.Engine.LoserGraceMS, int64(600_000)},
-		{"Engine.MaxSpeculativeAttempts", configuration.Engine.MaxSpeculativeAttempts, int64(0)},
+		{"Engine.MaxSpeculativeAttempts", configuration.Engine.MaxSpeculativeAttempts, int64(3)},
 	}
 	for _, check := range checks {
 		if check.got != check.want {

@@ -85,11 +85,11 @@ func Defaults() Config {
 		},
 		Engine: Engine{
 			ReceiptTimeoutMS:       5_000,
-			FirstTokenFloorMS:      1_000,
+			FirstTokenFloorMS:      12_000,
 			FirstTokenCeilingMS:    30_000,
 			InterChunkStallMS:      30_000,
 			LoserGraceMS:           600_000,
-			MaxSpeculativeAttempts: 0,
+			MaxSpeculativeAttempts: 3,
 		},
 		Scheduler: Scheduler{
 			MatchWaitMS:    2_000,
