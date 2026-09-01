@@ -3,10 +3,10 @@
 Three kinds of rule govern this gateway, and they answer three different questions:
 
 - **Invariants** — what must never stop being true. Break one and the gateway still runs; it just loses money or lies.
-- **Non-goals** — what it deliberately does not do, so "is this missing or on purpose?" is answerable without reading code.
+- **Non-goals** — what it does not do, so "is this missing or intended?" is answerable without reading code.
 - **Verification limits** — what a green test suite does *not* prove.
 
-Most of the invariants were learned the hard way, several were violated during the rewrite itself, and the best ones are enforced by a type or a lock rather than by discipline.
+The strongest invariants below are enforced by a type or a lock; the rest hold only while every caller honours them.
 
 ## Part 1 — Invariants
 
@@ -31,7 +31,7 @@ What enforces it:
 - **`Engine.Stop` is a real barrier.** A race is registered under the engine mutex *before* it starts and released only after its vote goroutine finishes (`engine/engine.go`, `admit` and `raceRegistration.release`). Registering later would leave the just-admitted race — precisely the one still owing a vote — outside the barrier.
 - **`Run` recovers a panic solely to release that registration, then re-panics with the same value.** Without it a panic between admission and settlement leaves `Stop` waiting forever.
 
-**This shape broke seven times**, and every one was a variation of *state moved between the commit and the lookup meant to resolve it*: admission peeked instead of acquiring atomically; a missing dispatch target returned early after the commit; a dead declined-admission path; an escrow retired between race end and settle became unresolvable; an in-flight counter with no production caller left every escrow reading idle; a reply applied only on the success path stranded nonces that failed *beside* a reply; and a re-added escrow id stole the settlement lookup from the entry still draining.
+**Seven ways this shape breaks**, each a variation of *state moving between the commit and the lookup meant to resolve it*: admission peeked instead of acquiring atomically; a missing dispatch target returned early after the commit; a dead declined-admission path; an escrow retired between race end and settle became unresolvable; an in-flight counter with no production caller left every escrow reading idle; a reply applied only on the success path stranded nonces that failed *beside* a reply; and a re-added escrow id stole the settlement lookup from the entry still draining.
 
 ### 2. Exactly one outcome and exactly one winner per race, on every path
 
@@ -49,11 +49,11 @@ The legacy engine shared a 57-field struct across three goroutines on the money 
 
 Here each attempt owns its state and publishes facts as events. `attemptState` is never read by another goroutine; `liveAttempt` is written only in response to events, on the coordinator; the byte path runs only on the attempt's goroutine. There are exactly two cross-goroutine channels — the event channel and the crown handshake — plus a close-only `done`.
 
-**`select` chooses at random among ready cases, and that forced a specific shape.** When a buffered event and a fired timer are both ready, the coordinator may take the timer and act on state the queued event has already invalidated: spending a nonce on an escalation newer state has cleared, mislabelling a healthy host, reporting a completed winner as cancelled. So every select arm that *reads* race state first drains the event queue (`engine/race.go`, `catchUp`). This appeared three times before it was fixed structurally, and once as a live flake that passed at `-count=3` then failed with the wrong terminal state.
+**`select` chooses at random among ready cases, and that forced a specific shape.** When a buffered event and a fired timer are both ready, the coordinator may take the timer and act on state the queued event has already invalidated: spending a nonce on an escalation newer state has cleared, mislabelling a healthy host, reporting a completed winner as cancelled. So every select arm that *reads* race state first drains the event queue (`engine/race.go`, `catchUp`). This affects three arms of the coordinator, and its absence is intermittent: the race passes at `-count=3` and then reports the wrong terminal state.
 
 Precedence is therefore explicit, never inherited from arm order: `nextDeadline` takes the earliest deadline outright, and the declaration order of the trigger constants breaks exact ties (`engine/deadline.go`).
 
-### 4. Routing and settlement read the escrow set asymmetrically, on purpose
+### 4. Routing and settlement read the escrow set asymmetrically
 
 ```
 Routing      → published entries only
@@ -75,7 +75,7 @@ Three resources move together: the nonce, the participant's concurrency slot, an
 
 **The hold outlives the race**, released only after the settlement vote is posted, from inside the goroutine that posts it. The exception is the stranded case, where the assignment's own hold is kept, because the escrow being retired is exactly why there was no target and the vote still has to reach it.
 
-**Why the peek still exists.** `limits.Available` remains a cheap pre-filter for routing, where a stale answer costs nothing. What broke was using it as the *authority*. Filter versus authority is the whole lesson.
+**The peek is a filter, never the authority.** `limits.Available` is a cheap pre-filter for routing, where a stale answer costs nothing; used as the authority it commits a nonce the acquire then refuses.
 
 ### 6. Shutdown order is a contract
 
@@ -87,7 +87,7 @@ Three runner properties are as load-bearing as the order:
 - **The drain is bounded but not cancelled.** Cancelling aborts the vote the drain exists to protect; waiting forever forfeits every later step to the SIGKILL that follows. An overrunning drain is left running and reported (`lifecycle.go`, `waitFor`).
 - **One step is guarded by quiescence.** A step marked `needsQuiesced` is skipped, and the skip reported, whenever anything above it failed — today only the escrow sessions. Closing a session takes no lock, so closing one under an overrun drain races a nonce commit, trading a vote already going to be dropped for on-disk state nothing can repair.
 
-Got wrong twice: an earlier order omitted the dispatchers and the registry entirely, closing the gateway store while every escrow session still held a handle; and an earlier `waitFor` discarded its context, so the grace period reached only the listener — one unanswered request plus SIGTERM blocked the drain for minutes and the orchestrator killed the process mid-vote.
+Two failures this order and this runner prevent: omitting the dispatchers and the registry closes the gateway store while every escrow session still holds a handle; a `waitFor` that discards its context confines the grace period to the listener — one unanswered request plus SIGTERM blocked the drain for minutes and the orchestrator killed the process mid-vote.
 
 ### 7. Money-path orderings
 
@@ -114,7 +114,7 @@ Neither default is right everywhere. What matters is that each is decided rather
 **Fail closed** — refuse rather than guess:
 
 - A model absent from a *populated* per-model weight view gets zero capacity rather than inheriting the all-model view (`limits/capacity.go`). Model strings are client input; without this an unknown model inherited full network capacity.
-- A NaN or out-of-range scale clamps to **zero**, never to one (`limits/gateway.go`, `clampUnit`). The natural-looking alternative — returning an empty weight map — would have hit the "no baseline means unlimited" branch and granted *full* capacity.
+- A NaN or out-of-range scale clamps to **zero**, never to one (`limits/gateway.go`, `clampUnit`). Returning an empty weight map instead hits the "no baseline means unlimited" branch and grants *full* capacity.
 - An empty escrow registry means not ready, not "everything routes": 503.
 - A host's node-version capability is unknown until proven, and a stale entry counts as unknown.
 - Admin routes do not exist without a configured key — 404, not 401 — and a key must be at least 16 characters.
@@ -139,7 +139,7 @@ Loops that spend money or memory per iteration carry an explicit bound, not a ho
 | version polling | 16 ways, 2 s per fetch — a sequential pass over hundreds of miners exceeds the freshness window, which silently makes every node report as not validation-capable |
 | boot | escrow runtimes built under a semaphore whose depth is also the idle-connection pool size |
 
-Three maps deliberately never evict, and each has a reason eviction would break:
+Three maps never evict, and each has a reason eviction would break:
 
 - **Crown strikes** — the entry *is* the running count of contentless answers, and only an answer that carried content clears it; a dial failure or a stranded nonce says nothing about the host, and evicting on one hands it a clean record it did not earn.
 - **Reassembly charges** — held by pointer for the life of the attempt, so dropping the entry mints a second counter while the first still carries live charges, and the participant's cap then bounds nothing.
@@ -155,7 +155,7 @@ Both of the first two are keyed by participant, and the participant set is the b
 - Iteration with an observable effect is over **sorted** keys: membership publication, the escrow-missing drain, the registry's snapshot and close paths.
 - Request capture admits a deterministic **stride**, not a random sample, so a configured rate is honoured exactly and reproducibly.
 
-## Part 2 — What it deliberately does not do
+## Part 2 — Non-goals
 
 ### Dropped from the legacy gateway
 
@@ -186,7 +186,7 @@ The metric families that described the deleted quarantine machinery went with it
 
 **No KV-cache affinity routing.** `scheduler.AffinityHint` is an empty struct with no caller — the extension point exists so adding affinity later is a local change inside the scheduler rather than a fourth selection mechanism bolted beside the three legacy had.
 
-**No data-driven first-token escalation.** The escalation curve is a hardcoded quadratic. An earlier design fed it a measured percentile; that reader is gone and no half-built seam dangles toward it. First-content timings are still observed, but only as a histogram with no in-process reader.
+**No data-driven first-token escalation.** The escalation curve is a hardcoded quadratic. No measured percentile feeds it and no seam dangles toward one. First-content timings are observed as a histogram with no in-process reader.
 
 **No caching during proof-of-compute.** The cache is probed *after* the admission gate, so while requests are blocked the gateway serves nothing rather than serving hits. Legacy probed first. The admission gate's contract is that it rejects a request before it can take a cache lookup, a limiter slot or a token budget — probing first would make that claim false.
 
@@ -198,12 +198,12 @@ The metric families that described the deleted quarantine machinery went with it
 - **The gateway does not restate chain policy locally.** The maximum active nonce count is a governance parameter. A failed read falls back to a conservative constant; it never invents a policy of its own.
 - **No changes to the shared `devshard/` packages.** Where one has a defect the gateway must live with, the gateway normalises at the boundary. The standing example: the shared timeout handler returns a non-nil error on its own success path, so only its genuine failures wrap a cause — a reported reason beside an unwrapped error is a vote that reached the chain, and `SettleTimeout` translates exactly that pair into success (`api/timeouts.go`). Reading the raw error instead would record every posted vote as a failed one.
 
-### Known gaps, stated rather than hidden
+### Known gaps
 
-- Two per-escrow recovery tools legacy had are not restored: `signatures/collect` and `sync-hosts`. The read-only half of the recovery surface **is** served, and deliberately resolves through the settlement lookup so a draining escrow still answers — which is the point, since the escrow needing inspection is usually the one in trouble.
+- Two per-escrow recovery tools the legacy gateway had are not restored: `signatures/collect` and `sync-hosts`. The read-only half of the recovery surface **is** served, and resolves through the settlement lookup so a draining escrow still answers — which is the point, since the escrow needing inspection is usually the one in trouble.
 - **`/v1/debug/perf` is not served.** The request ledger at `/v1/requests/{id}` answers the same question per request, and the accounting findings now carry the thresholds a host's numbers are judged against. The pairwise summaries legacy's version carried describe a mechanism this gateway no longer has.
 - The in-repo Grafana dashboard queries families this gateway does not emit, and the repository defines no alerting rules at all. Neither is a code gap; both mean a binary swap leaves panels blank.
-- Three residuals recorded rather than papered over: a ghost burn commits its nonce without taking the escrow's in-flight hold, so it is not protected against a concurrent retire the way a served commit is; the per-participant limiter's state map never evicts, unlike the performance tracker's; and a per-participant decay half-life is captured when a host is first seen, so changing it at run time reaches only hosts seen afterwards.
+- Three residuals: a ghost burn commits its nonce without taking the escrow's in-flight hold, so it is not protected against a concurrent retire the way a served commit is; the per-participant limiter's state map never evicts, unlike the performance tracker's; and a per-participant decay half-life is captured when a host is first seen, so changing it at run time reaches only hosts seen afterwards.
 
 ### What a test stand may reach
 
@@ -219,7 +219,7 @@ So a stand may shorten them, and only a stand. The values arrive as `engine.Deps
 
 The end-to-end suite is [`devshard/e2e`](../../../e2e) (`gateway_*_test.go`): the gateway as its shipped container beside three real host containers and a mock-chain process, reached over real HTTP and real gRPC. It replaced an in-process suite that composed the same packages in one process with no network.
 
-This section exists because reading that suite as green and concluding "verified" would be wrong. These are not gaps to be closed by writing more of the same suite; they are outside what the stand can reach.
+A green run of that suite does not verify the following. These are not gaps more of the same suite closes; they are outside what the stand can reach.
 
 **That the chain's rules accept the gateway's transactions.** The wire is real: the stand decodes a signed `TxRaw` with the generated cosmos and `inferencetypes` types, so a wrong field number or type URL on `MsgCreateDevshardEscrow` or `MsgSettleDevshardEscrow` fails it. What stays modelled is everything the chain then *decides* — gas, fee denomination, unordered-transaction TTL, sequence handling under contention, the escrow-created event shape. Every chain response is still written by the stand, and that remains the largest irreducible risk.
 

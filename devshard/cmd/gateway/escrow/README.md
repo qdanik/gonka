@@ -13,7 +13,7 @@ An escrow is funds on chain plus a group of hosts. This package creates one, kee
 | `checker.go`, `dedup.go` | crash-recovery reconciliation: what the chain holds versus what this process recorded |
 | `breaker.go` | refusing to keep creating escrows when creation keeps failing |
 
-## Boundaries worth knowing
+## Boundaries
 
 - **Intent is written before the transaction, not after.** An interrupted rotation is recoverable only if the record of what was attempted survives the interruption.
 - **An escrow parks before it is checked for busy, not after.** Otherwise a nonce can be committed between the two.
@@ -68,7 +68,7 @@ The grace window is `commitmentReconcileGrace`: the chain's `UnorderedTxTTL` plu
 
 `ensureToTarget` creates up to the target count for one (model, role, epoch). It stops before creating anything in two cases:
 
-- **The network serves no such model** — `servedByNetwork` reports known-and-not-served. That is logged, because it is a rotation that produced nothing on purpose: without the line an operator looking for the escrow that never appeared would find no reason anywhere. A cold start where both weight-by-model maps are empty reads as *unknown* rather than *not served*, so nothing is skipped.
+- **The network serves no such model** — `servedByNetwork` reports known-and-not-served. That is logged, because it is a rotation that produced nothing by design: without the line an operator looking for the escrow that never appeared would find no reason anywhere. A cold start where both weight-by-model maps are empty reads as *unknown* rather than *not served*, so nothing is skipped.
 - **The create breaker is gated**, which returns `errCreateSuppressed`. That is not "nothing needed": the breaker is gated exactly when creation has been failing, so `prepareBridge` must take its degrade path and keep the escrows it has instead of retiring them for replacements that were never created.
 
 The degrade path is `promoteRegularsToTemp`: it relabels the existing regulars in place so the epoch still has bridge coverage, and keeps going past a write failure.

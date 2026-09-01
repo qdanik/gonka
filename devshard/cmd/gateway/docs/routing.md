@@ -16,7 +16,7 @@ This document covers `scheduler/` (which escrow, which participant, which nonce)
 
 `Pick` is called once per request and once per escalation attempt inside a race. An escalation passes the escrow it is already pinned to; only a fresh request goes through escrow selection (`scheduler.go`, `Scheduler.Pick`).
 
-**A pin skips selection entirely, and that has two consequences worth knowing** (`escrow_pick.go`, the pin branch of `pickEscrow`). A request that names an escrow — an escalation, or a client calling `/devshard/{id}/v1/chat/completions` — is matched against the candidate list by id and returned directly, so it is neither scored nor checked against the nonce ceiling below, and it does not fire the exhaustion callback that schedules a replacement. A pin that names an escrow the gateway no longer routes to is refused with `ErrEscrowGone`. A deployment served entirely through pinned requests therefore never marks a spent escrow for rotation.
+**A pin skips selection entirely, with two consequences** (`escrow_pick.go`, the pin branch of `pickEscrow`). A request that names an escrow — an escalation, or a client calling `/devshard/{id}/v1/chat/completions` — is matched against the candidate list by id and returned directly, so it is neither scored nor checked against the nonce ceiling below, and it does not fire the exhaustion callback that schedules a replacement. A pin that names an escrow the gateway no longer routes to is refused with `ErrEscrowGone`. A deployment served entirely through pinned requests therefore never marks a spent escrow for rotation.
 
 Selection (`escrow_pick.go`, `pickEscrow`) runs over `registry.Candidates(model)`, which is already filtered to escrows whose session phase accepts new inferences, and against a single chain snapshot taken once for the call.
 
@@ -30,11 +30,11 @@ Dropping a capped escrow is only half the answer. Routing declines it; nothing a
 loadScore(escrow) = activeUsers(escrow) / escrowWeight(escrow, model)
 ```
 
-`activeUsers` is the escrow's in-flight count; `escrowWeight` is the capacity model's view of how much of the network's serving weight this escrow commands for this model (see [capacity.md](./capacity.md)). A weight that is zero, negative or NaN scores `+Inf` and the candidate is skipped — deliberately, because a plain ratio would score a broken escrow as perfectly idle (`escrow_pick.go`, `loadScore`).
+`activeUsers` is the escrow's in-flight count; `escrowWeight` is the capacity model's view of how much of the network's serving weight this escrow commands for this model (see [capacity.md](./capacity.md)). A weight that is zero, negative or NaN scores `+Inf` and the candidate is skipped: a plain ratio would score a broken escrow as perfectly idle (`escrow_pick.go`, `loadScore`).
 
-Ties are broken by one process-wide atomic counter modulo the tie-set size. It is a pseudo-round-robin over whatever tie set exists at that moment, not a fair per-model rotation, and it depends on the candidate slice being in a stable order — which the registry guarantees by sorting each model's candidates by escrow id (`escrow.go`, `newLiveSet`). That coupling between the registry's ordering and the scheduler's tie-break is real and easy to break by "optimising" either side.
+Ties are broken by one process-wide atomic counter modulo the tie-set size. It is a pseudo-round-robin over whatever tie set exists at that moment, not a fair per-model rotation, and it depends on the candidate slice being in a stable order — which the registry guarantees by sorting each model's candidates by escrow id (`escrow.go`, `newLiveSet`). The registry's ordering and the scheduler's tie-break are coupled: an unsorted candidate slice makes the counter's modulo select arbitrarily.
 
-If nothing survives, `Pick` returns `ErrNoEscrowCapacity`, which deliberately names no host: it is a capacity condition, not an accusation (`errors.go`, `ErrNoEscrowCapacity`).
+If nothing survives, `Pick` returns `ErrNoEscrowCapacity`, which names no host: it is a capacity condition, not an accusation (`errors.go`, `ErrNoEscrowCapacity`).
 
 ## The per-escrow dispatcher
 
@@ -70,7 +70,7 @@ flowchart TD
     J --> Z
 ```
 
-**Predicates are frozen for the whole drain.** `pocRequired`, `throttled`, `ejected` and `stateBlocked` are memoised per participant. This is not a caching optimisation. Reading them live lets a host look usable to the sweep that keeps a waiter and unusable to the binding that would serve it, one iteration later — which burns a nonce every turn, forever (`match.go`, `availability`; `dispatcher.go`, `freeze`). A future predicate that reads a field of the request profile cannot be memoised per participant alone, and must carry that field in its own key.
+**Predicates are frozen for the whole drain.** `pocRequired`, `throttled`, `ejected` and `stateBlocked` are memoised per participant. This is not a caching optimisation. Reading them live lets a host look usable to the sweep that keeps a waiter and unusable to the binding that would serve it, one iteration later — which burns a nonce every turn, forever (`match.go`, `availability`; `dispatcher.go`, `freeze`). The memo key is the participant alone, so a predicate that reads a field of the request profile must carry that field in its key.
 
 **The burn budget is `groupSize * (waiters + 1)`, computed once at drain entry.** Together with the freeze it gives the drain a termination proof: `waiting`, the availability predicates and the budget are all fixed, no waiter is appended during a drain (appends happen only in the select loop), and every iteration either returns, serves — which strictly shrinks the queue — or burns, which strictly shrinks the budget. Iterations are therefore bounded by `waiters + budget + 1`. Hold deadlines are fixed at enqueue time, so a fired timer cannot re-hold the same head.
 
@@ -109,7 +109,7 @@ Every burn is reported to the dispatch observer, which turns it into `devshard_g
 
 ## Where the nonce, the slot and the hold are taken
 
-This is the money path, and it is the part of the design that was got wrong most often during the build. All three acquisitions happen inside one atomic step.
+This is the money path, and the ordering below is its fragile part. All three acquisitions happen inside one atomic step.
 
 `session.Advance(decide)` is the single peek-decide-commit unit (`scheduler.go`, `session`). It calls back into the scheduler with the *binding* — the nonce and the participant it is bound to — while `user.Session` holds its own lock, and it commits the nonce if and only if the callback says to commit. Everything the scheduler decides happens inside that callback:
 
@@ -118,9 +118,9 @@ This is the money path, and it is the part of the design that was got wrong most
 3. Then the escrow's in-flight hold is taken (`dispatcher.go`, the escrow hold in `dispatcher.drain`). A refusal means the escrow was retired; the slot is given straight back and the queue fails with `ErrEscrowGone`.
 4. Only then does the nonce commit.
 
-Admission lives *inside* the commit rather than beside it, and the reason is a defect this design already had. An earlier version used the limiter's cheap `Available` peek during selection and called `Acquire` afterwards, in the engine. Those are two separate critical sections, so between them a window could fill; the acquire then failed *after* the nonce was already committed, and the failed attempt never entered the race outcome — so nothing ever posted its settlement vote. A peek used as authority where atomicity was required, and the result was an orphaned chain message. `Available` remains, but only as a pre-filter whose staleness costs nothing (`scheduler.go`, `hostLimiter`).
+Admission lives *inside* the commit rather than beside it. A peek during selection and called `Acquire` afterwards, in the engine. Those are two separate critical sections, so between them a window could fill; the acquire then failed *after* the nonce was already committed, and the failed attempt never entered the race outcome — so nothing ever posted its settlement vote. A peek used as authority where atomicity was required, and the result was an orphaned chain message. `Available` remains, but only as a pre-filter whose staleness costs nothing (`scheduler.go`, `hostLimiter`).
 
-The naive repair — acquire at the serve point with no memory — would have replaced one money bug with another: with a full window, every drain iteration would take, fail and burn a nonce, up to the whole budget, where the old code burned none. That is why `admit` folds a refused participant back into the drain's *frozen* `throttled` predicate (`dispatcher.go`, `admit`). The sweep then answers the affected waiters with `ErrNoAvailableHost` instead of the binding burning another nonce every turn.
+Acquiring at the serve point with no memory trades that bug for another: with a full window every drain iteration takes, fails and burns a nonce, up to the whole budget, where the old code burned none. That is why `admit` folds a refused participant back into the drain's *frozen* `throttled` predicate (`dispatcher.go`, `admit`). The sweep then answers the affected waiters with `ErrNoAvailableHost` instead of the binding burning another nonce every turn.
 
 The two reservations travel together as one value (`dispatcher.go`, `reservation`):
 
@@ -138,7 +138,7 @@ The two reservations travel together as one value (`dispatcher.go`, `reservation
 
 The escrow hold is idempotent (a `sync.Once` around the release, `registry.go`, `Registry.holdLocked`), so a doubled release is harmless, and it is bound to the *entry* rather than to the escrow id, so a hold from a previous incarnation of the same id can never count against a new one.
 
-One asymmetry has no comment stating it: **a ghost burn takes no escrow hold**. The burn branch returns from the intent before the acquire-and-hold block. That is consistent — a ghost is never dispatched and owes no vote, so it needs nothing kept alive on its behalf — but it means a ghost commit is not protected against a concurrent retire the way a serve is.
+**A ghost burn takes no escrow hold.** The burn branch returns from the intent before the acquire-and-hold block. That is consistent — a ghost is never dispatched and owes no vote, so it needs nothing kept alive on its behalf — but it means a ghost commit is not protected against a concurrent retire the way a serve is.
 
 ## Serving a host the request excluded
 
@@ -156,9 +156,9 @@ Every burn names its participant, in the log line and on `devshard_gateway_ghost
 
 `BlockHost(escrowID, participant)` is called by the engine when a host returns a post-state-root that diverges from the local one — but not on the first one: the host rolls its own diff back on a mismatch, so its state survives intact, and replaying the retained chain is worth one request. `HostDiverged` spends that single replay; the block follows only once it is gone.
 
-It is per-escrow, has no expiry, no eviction and no recovery for the lifetime of the process, and neither has the spent replay. Both outlive the escrow's dispatcher on purpose: reaping an idle actor is idleness, not resolution, and a dispatcher is recreated for the same escrow on the next request. Dropping either at that point would hand a host that cannot follow this escrow's chain a fresh replay for having been quiet five minutes — which is what the code did until the two lifetimes were reconciled. An unbounded map with no cleanup reads like an oversight; it is the cost knowingly paid, one entry per escrow that ever saw a divergent host, and escrow ids are chain-monotonic and never reused. The host demonstrated it is building on state the escrow does not share, so every later dispatch to it would compound the divergence. It is a correctness valve, not a performance signal.
+It is per-escrow, has no expiry, no eviction and no recovery for the lifetime of the process, and neither has the spent replay. Both outlive the escrow's dispatcher: reaping an idle actor is idleness, not resolution, and a dispatcher is recreated for the same escrow on the next request. Dropping either at that point would hand a host that cannot follow this escrow's chain a fresh replay for having been quiet five minutes — which is what the code did until the two lifetimes were reconciled. An unbounded map with no cleanup is bounded in practice: one entry per escrow that ever saw a divergent host, and escrow ids are chain-monotonic and never reused. The host demonstrated it is building on state the escrow does not share, so every later dispatch to it would compound the divergence. It is a correctness valve, not a performance signal.
 
-One use it looks suited to is refused. The engine's settlement path deliberately does **not** skip posting a timeout vote for a state-blocked host. That skip existed in one of the two legacy copies of the timeout ladder, and keeping it would mean that once a host diverged, every later nonce bound to it stopped being settled — an accumulating orphaned-message leak. The divergence is already actioned as a routing fact; reusing it to suppress a chain vote conflates two concerns.
+One use it looks suited to is refused. The engine's settlement path does **not** skip posting a timeout vote for a state-blocked host. Skipping it means that once a host diverges, every later nonce bound to it stops being settled — an accumulating orphaned-message leak. The divergence is already actioned as a routing fact; reusing it to suppress a chain vote conflates two concerns.
 
 ## The escrow registry
 
@@ -166,13 +166,13 @@ One use it looks suited to is refused. The engine's settlement path deliberately
 
 **Reads take no lock.** The set is a copy-on-write `liveSet` in an `atomic.Pointer`, written only under the registry mutex and read without one (`escrow.go`, `liveSet`). A pick costs one atomic load, never contends with a rotation, and — the structural point — there is no read lock that could be held across the session work that follows.
 
-**Published and draining are two different sets, and the asymmetry is the design.** Routing reads the published set alone: a retired escrow must take no further request. Settlement reads published *then* draining: the nonces a retired escrow already committed still owe their votes (`registry.go`, `Registry.SettlementSession`). Unifying the two lookups, which is exactly what a tidying pass would do, either lets routing dispatch to an escrow that is going away or strands the votes of one that already did.
+**Published and draining are two different sets, and the asymmetry is the design.** Routing reads the published set alone: a retired escrow must take no further request. Settlement reads published *then* draining: the nonces a retired escrow already committed still owe their votes (`registry.go`, `Registry.SettlementSession`). Unifying the two lookups either lets routing dispatch to an escrow that is going away or strands the votes of one that already did.
 
 The draining set is keyed by *entry*, not by escrow id, so the same id can be re-added while an earlier session of it is still finishing (`registry.go`, the `draining` map on `Registry`). The last release of a draining entry closes it, so a rotation cannot pull storage out from under a race that is still writing signatures. And `Add` refuses an id that is still draining (`ErrDraining`), because that earlier entry owns the nonces awaiting votes and holds the storage they settle through — a re-added id would otherwise steal the settlement lookup from the entry that still owes them, and open a second session over storage the first still holds.
 
 **Opening a session is serialized per escrow** (`registry.go`, `Registry.openingLock`). `Add` opens outside the registry mutex, because an open is slow I/O and holding the mutex across it would stall every pick. Two callers publishing one escrow is the ordinary case rather than a corner: creating an escrow adds it, and the devshard row that create writes wakes the republish watcher, which adds it again. A session is a SQLite file, so the second open fails with `SQLITE_BUSY` before either caller reaches the already-published check — and whichever one loses reports a failure for an escrow the other is already serving. With the open serialized, the second caller waits, finds the escrow live, and opens nothing.
 
-**`Acquire` resolves the session and takes the hold in one locked step**, returning `(session, release, ok)` (`registry.go`, `Registry.Acquire`). Splitting them would let a retire land between the resolve and the count and close the session the caller is about to dispatch through. The shape is deliberate: there is no way to get a dispatch handle without also being counted, so "nobody called `Acquire`" — which is exactly what happened once, leaving every escrow's in-flight count at zero and letting retire close sessions instead of draining them — cannot happen again. A separate read-only `RoutableSession` remains for status routes, which must *not* count.
+**`Acquire` resolves the session and takes the hold in one locked step**, returning `(session, release, ok)` (`registry.go`, `Registry.Acquire`). Splitting them would let a retire land between the resolve and the count and close the session the caller is about to dispatch through. There is no way to get a dispatch handle without being counted, so no caller can skip `Acquire`; a skipped `Acquire` leaves every escrow's in-flight count at zero and lets retire close sessions instead of draining them. A separate read-only `RoutableSession` remains for status routes, which must *not* count.
 
 **Closing an entry flushes before releasing storage** (`escrow.go`, `escrowEntry.close`). Finalize advances the nonce, so an escrow closed without a flush replays its whole diff tail on the next rehydration. The mirror-image rule is that an *unpublished* session — one opened by `Add` on a path that then bails — is closed *without* flushing, because it served nothing and its snapshot would land on the storage of the entry that did serve (`registry.go`, `Registry.Add`).
 

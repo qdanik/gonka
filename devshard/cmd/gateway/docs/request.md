@@ -35,7 +35,7 @@ Steps 3–5 run **after** normalisation because the model name is only known onc
 9. `forceUpstreamStreaming` — unless `force_upstream_streaming` is off.
 10. `document.Marshal` → `Result`.
 
-`Result` carries the normalised body plus what the **client** asked for: `ClientStream`, `ClientUsage`, `Logprobs`, `MaxTokens`. The body and the intent diverge deliberately — that divergence is the whole response side.
+`Result` carries the normalised body plus what the **client** asked for: `ClientStream`, `ClientUsage`, `Logprobs`, `MaxTokens`. The body and the intent diverge, and that divergence is the whole response side.
 
 ### The rule table
 
@@ -91,7 +91,7 @@ Two shapes, decided by what the client asked for, not by what the host sends —
 | `logprob`, `logprobs`, `top_logprobs` | only if the client asked (`logprobs: true`) |
 | `token_ids`, `prompt_token_ids`, `prompt_logprobs` | never |
 
-The "always stripped" list is **derived** from the two above, not written out a second time — a hand-written second list is exactly how `top_logprobs` once leaked.
+The "always stripped" list is **derived** from the two above, not written out a second time — a second hand-written list can omit a field the first strips, which leaks `top_logprobs`.
 
 ## Memory
 

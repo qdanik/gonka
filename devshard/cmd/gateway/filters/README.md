@@ -14,13 +14,13 @@ Everything a client sends is normalised here before it reaches a host, and every
 - `fold.go` — `BodyFolder` folds the host's SSE stream into one JSON body **as chunks arrive**, stripping the fields the client must not see before merging rather than after. A client that did not ask for logprobs never accumulates them.
 - `stream.go` — the rewriter for a streaming client, which does the same strip per event on the way out.
 - `response.go` — which fields are stripped, and which a client can ask back.
-- `assemble.go` — the older whole-body fold, now the reference implementation the incremental one is verified against.
+- `assemble.go` — the whole-body fold, the reference implementation the incremental one is verified against.
 
-## Boundaries worth knowing
+## Boundaries
 
 - **The gateway forces `stream: true` upstream** even when the client did not ask for it, so both sides of this package are always in play.
 - **Three fields are never returned to anyone**: `token_ids`, `prompt_token_ids`, `prompt_logprobs`. Three more are returned only if asked: `logprob`, `logprobs`, `top_logprobs`.
-- **The strip list is derived, not written twice.** A field added to what is stripped cannot be left out of what is always stripped — which is exactly how `top_logprobs` once leaked.
+- **The strip list is derived, not written twice.** A field added to what is stripped cannot be left out of what is always stripped — the failure that exposes `top_logprobs`.
 - **A malformed body passes through unchanged rather than being dropped**, except where a host writes `NaN`/`Infinity` as barewords, which are normalised so the body is inspectable at all.
 
 ## The request pipeline
@@ -71,11 +71,11 @@ Three bounds run before anything is decoded: `MaxBodyBytes` (10 MiB) on the raw 
 
 ## Which JSON decoder, and why
 
-The package uses two: `encoding/json` from the standard library, and `github.com/goccy/go-json`. Each site picks one deliberately.
+The package uses two: `encoding/json` from the standard library, and `github.com/goccy/go-json`. Each site picks one for a stated reason.
 
 | Site | Decoder | Why |
 | --- | --- | --- |
-| `ParseDocument` | standard library | Its error text goes to the client verbatim, and the golden corpus pins that wording against the gateway this replaces. A faster library with different phrasing would change what every malformed request sees. |
+| `ParseDocument` | standard library | Its error text goes to the client verbatim, and the golden corpus pins that wording against the legacy gateway's. A faster library with different phrasing would change what every malformed request sees. |
 | `stripInternalFields`, `decodeStreamedEvent`, `completionAsChunks` | standard library | goccy parses a number token even into a `json.RawMessage` and errors past the float64 range. That fails the strip open — a body carrying `1e999` would keep every internal field — and fails the chunk conversion on a `created` out of range. |
 | `Document.Marshal`, `DecodeUpstreamError`, `jsonMarshaledSize` | goccy | Neither the error text nor the range behaviour is load-bearing here, and `Marshal` sorts map keys, so the normalised body is deterministic. |
 
@@ -114,7 +114,7 @@ What the gateway forces, and what it strips:
 
 `DefaultRequestMaxTokens` (3072) and `RequestMaxTokensCap` (4096) are the package defaults, and also the single source `config.Defaults` reads. `Options` may override either globally, and `Options.ModelTokenLimits` may override either per routed model — a zero returned there means "not set for this model" and leaves the global one alone.
 
-`capOutputTokens` treats zero as "the client named no budget": it returns the configured default, which the cap deliberately does not clamp. A nonzero value is clamped to the cap unless `Options.Admin` bypasses it.
+`capOutputTokens` treats zero as "the client named no budget": it returns the configured default, which the cap does not clamp. A nonzero value is clamped to the cap unless `Options.Admin` bypasses it.
 
 `applyOutputTokenLimits` then resolves one number from whichever fields the client sent — the minimum of both when both are present — floors it at `completionapi.MinTokensFloor`, and writes it to `max_tokens`. It mirrors the result into `max_completion_tokens` only when the client sent that field, so the gateway does not introduce a field the request never carried. `min_tokens` is set to the requested value raised to the floor and capped at the resolved `max_tokens`.
 
@@ -153,7 +153,7 @@ Below `kimiThinkingBudgetForceZeroBelow` (256) output tokens, a profile that own
 ### The rest of the profile-scoped rules
 
 - `safetyIdentifier` validates and keeps the field for a profile with `AllowSafetyIdentifier`, and strips it for every other.
-- `reasoningSplit` strips the field for profiles that cannot serve it and passes it through for the one that can; an absent field stays absent. Passing it through is a courtesy, not a control: `reasoning_split` is MiniMax's own hosted-API switch and vLLM has no such request field, so a host ignores it and logs it as unused. Our MiniMax nodes already separate reasoning server-side, via `--reasoning-parser minimax_m2_append_think` in `deploy/join/node-config-minimaxm27-*.json`.
+- `reasoningSplit` strips the field for profiles that cannot serve it and passes it through for the one that can; an absent field stays absent. Passing it through is a courtesy, not a control: `reasoning_split` is MiniMax's own hosted-API switch and vLLM has no such request field, so a host ignores it and logs it as unused. The network's MiniMax nodes separate reasoning server-side, via `--reasoning-parser minimax_m2_append_think` in `deploy/join/node-config-minimaxm27-*.json`.
 - `forceZeroPenalty` overwrites `frequency_penalty` and `presence_penalty` to 0 for a `ForceZeroPenalties` profile, but only when the field is already present — it never introduces one.
 
 ## Schema bounds
@@ -193,7 +193,7 @@ Each constraint pairs with its own validator in a map, so a new constraint field
 
 ### `chat_template_kwargs`
 
-Forbidden keys are rejected before the object bounds run. They are the ones that override `apply_hf_chat_template`'s positional arguments instead of becoming template variables: `chat_template` (CVE-2025-61620, arbitrary Jinja template), `tokenize` (CVE-2025-62426, stalls the request handler), plus `tools`, `documents`, `conversation`, `continue_final_message`, `padding`, `truncation`, `max_length`, `return_tensors`, `return_dict`. `add_generation_prompt` is deliberately not banned.
+Forbidden keys are rejected before the object bounds run. They are the ones that override `apply_hf_chat_template`'s positional arguments instead of becoming template variables: `chat_template` (CVE-2025-61620, arbitrary Jinja template), `tokenize` (CVE-2025-62426, stalls the request handler), plus `tools`, `documents`, `conversation`, `continue_final_message`, `padding`, `truncation`, `max_length`, `return_tensors`, `return_dict`. `add_generation_prompt` is not banned.
 
 ## Message hygiene
 
@@ -223,10 +223,10 @@ Content is accepted as a non-blank string, or as a non-empty array of `{type: "t
 `LogprobIntent` is what the client's own request asked for, read before the force rules overwrite it. Without it the strip cannot tell a client who asked for logprobs from one who did not, and would answer both by removing them.
 
 - A client that asked for nothing loses `clientStrippedFields`: the whole logprob family plus `token_ids`, `prompt_token_ids`, `prompt_logprobs`.
-- A client that asked for logprobs loses only `alwaysStrippedFields`, which is *derived* by subtracting `requestableFields` from the full list. A hand-written second list is exactly how `top_logprobs` once leaked.
+- A client that asked for logprobs loses only `alwaysStrippedFields`, which is *derived* by subtracting `requestableFields` from the full list. A hand-written second list can omit a field the full list gained, which exposes `top_logprobs`.
 - A client that asked for logprobs but not alternatives keeps the key with an empty array: that is the shape OpenAI returns. Leaving the forced alternatives in would hand the client a request it never made, and removing the key would drop a field its schema expects to be present.
 
-`decodeLogprobIntent` is deliberately lenient: only an explicit `true` counts as a request, so a value of the wrong shape reads as "not asked" rather than rejecting a request the gateway would otherwise have accepted — the force rules overwrite both fields regardless of type.
+`decodeLogprobIntent` is lenient: only an explicit `true` counts as a request, so a value of the wrong shape reads as "not asked" rather than rejecting a request the gateway would otherwise have accepted — the force rules overwrite both fields regardless of type.
 
 ### Non-finite barewords
 
@@ -284,7 +284,7 @@ Every host-controlled field is carried as a raw message. Decoding one into a typ
 
 ## Folding a stream into one body
 
-`BodyFolder` is the incremental fold: it strips per event as chunks arrive, then merges, so a client that did not ask for logprobs never accumulates them. `assembleSSEBody` in `assemble.go` is the older whole-body fold, kept as the reference implementation the incremental one is verified against. Both share the merge.
+`BodyFolder` is the incremental fold: it strips per event as chunks arrive, then merges, so a client that did not ask for logprobs never accumulates them. `assembleSSEBody` in `assemble.go` is the whole-body fold, the reference implementation the incremental one is verified against. Both share the merge.
 
 `Held()` reports what the folder is holding so a shared memory budget can watch it. Merging collapses what the events repeat, so the accumulated size is *measured* rather than summed. The trigger for a re-measure is bytes (`foldMeasureBytes`, 256 KiB) rather than events: one event can carry a megabyte, and a count-based interval would leave that much unaccounted while the cap and the shared budget read low. `measure` re-encodes the accumulator without finalising it, because finalising rewrites the deltas the fold is still appending to.
 
@@ -304,7 +304,7 @@ Everything outside `choices` is a restated header, so it replaces rather than ac
 
 Text grows through `growingText`, which keeps the join off the per-chunk path where it would be quadratic in the answer's length. `growText` appends, but replaces instead when a host re-sends `arguments` whole — detected by the incoming string having the accumulated one as its prefix.
 
-Arrays merge by `index` when the accumulated array leads with an indexed element and the incoming one is fully indexed; otherwise they append. `leadsWithAnIndex` decides on the first element alone: scanning the whole array per chunk was what made the merge quadratic. Indexed merging is bounded by `maxIndexedElements` (256).
+Arrays merge by `index` when the accumulated array leads with an indexed element and the incoming one is fully indexed; otherwise they append. `leadsWithAnIndex` decides on the first element alone: scanning the whole array per chunk makes the merge quadratic. Indexed merging is bounded by `maxIndexedElements` (256).
 
 `finalizeCompletion` rewrites the accumulator in place — so it runs once, at the end, never as part of measuring — turning each choice's `delta` into its `message`, ordered by index. A message with no `content` key gets an explicit `null`, because upstream answers a tool call with a null content rather than with the field absent.
 

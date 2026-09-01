@@ -31,7 +31,7 @@ A sweep cannot collide with a live race. The execution deadline is `ConfirmedAt 
 
 ### Scope note
 
-`StatusPending` is deliberately excluded. Its reserve is refunded at settlement either way, and `settleLiveRecordLocked` declines to increment `Missed` there on purpose, because state cannot distinguish user censorship from host absence. Sweeping it would assign blame the protocol chose not to assign.
+`StatusPending` is excluded. Its reserve is refunded at settlement either way, and `settleLiveRecordLocked` declines to increment `Missed` there, because state cannot distinguish user censorship from host absence. Sweeping it would assign blame the protocol chose not to assign.
 
 ---
 
@@ -75,8 +75,8 @@ Wrap that return in `ErrTimeoutNotApplied`, the sentinel the insufficient-votes 
 
 ### Why it works
 
-The gateway no longer depends on the error shape: `SettleTimeout` reads `result.Applied`, which is the fact itself, so the miscount is already gone. The wrap is what remains for the reason label, which is how an operator tells "the diff carried no timeout" from a failure to collect votes at all.
+The gateway reads `result.Applied`, which is the fact itself, so it does not depend on the error shape: `SettleTimeout` reads `result.Applied`, which is the fact itself, so the miscount is already gone. The wrap is what remains for the reason label, which is how an operator tells "the diff carried no timeout" from a failure to collect votes at all.
 
 ### Verification note
 
-This path is not reachable cheaply in a test: it requires `sendPendingDiff` to succeed while returning a diff that carries no timeout transaction for that nonce. The wrap is correct by reading, and its consumer is covered, but the source-to-sentinel link itself is not pinned by a test.
+This path is not reachable cheaply in a test: it requires `sendPendingDiff` to succeed while returning a diff that carries no timeout transaction for that nonce. No test pins the source-to-sentinel link; its consumer is covered.

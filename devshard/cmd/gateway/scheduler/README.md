@@ -14,7 +14,7 @@ A chat request needs a nonce, and a nonce is bound to a host by `nonce % groupSi
 
 It does not dispatch. It hands out an assignment and the [`engine`](../engine/) sends the request. It does not decide whether a burn is charged to the host — that is [`burns`](../burns/).
 
-## Boundaries worth knowing
+## Boundaries
 
 - **Five host gates, all of which waiting can clear**: excluded, proof-of-compute-required, throttled, ejected, state-blocked. A capability refusal is counted, never routed on.
 - **Predicates are frozen for the whole drain.** Reading them live lets a host look usable to the sweep that kept a waiter and unusable to the binding that would serve it — which burns a nonce every turn, forever.
@@ -28,7 +28,7 @@ A request that names no escrow is scored across the candidates for its model; a 
 - **Load score** is the ascending utilisation ratio `ActiveUsers / EscrowWeight`. A non-positive or NaN weight scores unusable rather than best.
 - **The allowlist is read here as well as at dispatch.** An escrow whose whole group the allowlist refuses can never serve, and picking it by load alone spends the request on a group holding nobody. When every candidate is unreachable that way the caller gets `ErrAllowlistUnreachable`, because waiting cannot fix it. An empty allowlist skips the walk entirely: the narrowing exists only where an operator asked for it.
 - **Ties hold indices, not candidates.** An index does not escape the way a returned `Escrow` does, so the common case picks without touching the heap. The tie-break is a single counter shared across every model and tie-set shape.
-- **The nonce cap** uses `fallbackNonceCeiling` — the fixed ceiling the gateway ran on before the parameter existed — until governance `max_nonce` has been fetched. The fetched value is clamped to `MaxUint32`, never allowed to wrap: a cap wrapping to 0 makes `MaxActiveNonce` return `^uint64(0)` and disables the gate.
+- **The nonce cap** uses `fallbackNonceCeiling` — the fixed ceiling applied while governance `max_nonce` is unread — until governance `max_nonce` has been fetched. The fetched value is clamped to `MaxUint32`, never allowed to wrap: a cap wrapping to 0 makes `MaxActiveNonce` return `^uint64(0)` and disables the gate.
 - **The balance floor** prices the reserve the way the chain does, `(input + max_tokens) × token_price`, and asks whether the escrow still covers everything in flight plus this arrival. Every multiplication is overflow-checked, because a price this escrow cannot afford must not read as an affordable small one.
 - **Exhaustion is reported, not just acted on.** Routing only declines an exhausted escrow; replacing it belongs to the rotation lifecycle, which otherwise never learns and lets the escrow drain silently into `ErrNoEscrowCapacity`. An escrow the balance floor caught while it could still refuse cleanly is reported as the running dry it is, wrapping `ErrInsufficientBalance`, rather than as a model nobody serves.
 
@@ -71,7 +71,7 @@ The dispatcher's loop goroutine is the sole owner of the waiting queue and of th
 - `markStopped` shuts the actor down from inside its own goroutine and refuses once a waiter is already in the submit buffer.
 - `retire` runs under the registry lock and only for an actor with no outstanding claim. The claim is taken in the same critical section that hands the actor out, so an actor deciding to retire cannot slip between the claim and the submit that follows. A stopped dispatcher is replaced by the next get-or-create, and the claim keeps the replacement alive, so a submit retries at most once more before the registry itself is closed.
 - An escrow's actor is reaped after `idleDispatcherGrace` with an empty queue. Retirement is announced so an observer can forget the escrow: ids are monotonic chain identifiers and are never reused, so a per-escrow metric series that outlives its escrow grows with uptime and nothing else. See routing.md, "Idle dispatchers are reaped".
-- **The divergence block and the spent replay are kept on purpose.** A dispatcher is recreated for the same escrow on the next request, and dropping either would hand a host that cannot follow this escrow's chain a fresh replay for having been quiet five minutes. What is kept is one entry per escrow that ever saw a divergent host, held for the life of the process.
+- **The divergence block and the spent replay outlive the dispatcher.** A dispatcher is recreated for the same escrow on the next request, and dropping either would hand a host that cannot follow this escrow's chain a fresh replay for having been quiet five minutes. What is kept is one entry per escrow that ever saw a divergent host, held for the life of the process.
 
 ## Divergence and the replay credit
 
@@ -86,14 +86,14 @@ The credit is returned to a participant that served since it was taken — but o
 | `ErrNoAvailableHost` | no participant can take the request: excluded, in PoC, throttled, ejected, state-blocked, or the drain's burn budget tripped | yes |
 | `ErrHostsBusy` | every host is at capacity right now — distinct from broken or excluded, and a client retries the two differently | yes |
 | `ErrAllowlistUnreachable` | no escrow this gateway serves holds a participant the allowlist admits; the operator narrowed routing to participants none of these escrow groups contains | no |
-| `ErrNoEscrowCapacity` | every candidate escrow is at zero spare weight; it deliberately does not name a host | — |
+| `ErrNoEscrowCapacity` | every candidate escrow is at zero spare weight; it names no host | — |
 | `ErrEscrowBusy` | an escrow's dispatch queue is full: the escrow is sound, the caller arrived faster than it can serve | yes |
 | `ErrDispatcherStopped` | the escrow's dispatcher shut down before the request was assigned a nonce; retryable | yes |
 | `ErrEscrowGone` | a request's pinned escrow no longer accepts new inferences | no |
 
 ## The boundary types
 
-The session adapter lives outside this package, so the two sides meet on a deliberately narrow contract.
+The session adapter lives outside this package, so the two sides meet on a narrow contract.
 
 - `session.Advance` is the one atomic nonce-peek → decide → commit unit: it computes the next candidate binding, calls the decision function, and commits only if the returned intent says to. A declined nonce is left untouched and yields a nil `Prepared`.
 - `NonceIntent` exists because that adapter cannot branch on `Decision`, whose variants are unexported.

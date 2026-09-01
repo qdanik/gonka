@@ -83,7 +83,7 @@ Structure: thirteen packages with consumer-side interfaces, so a dependency that
 
 **Criteria 1–3 met.** The API is unchanged; the money-defect class is gated by types and tests, and one attempt to reproduce a member of it at the API layer failed to compile; host selection lives in `scheduler` alone.
 
-**Criterion 4 exceeded, after production corrected our assumptions.** Live traffic showed the admission window opening at four requests per participant, and three distinct participants standing behind sixteen escrow slots — the fleet was capped at twelve concurrent requests by our own defaults, not by the hosts.
+**Criterion 4 exceeded, after production contradicted the projection.** Live traffic showed the admission window opening at four requests per participant, and three distinct participants standing behind sixteen escrow slots — the fleet was capped at twelve concurrent requests by the gateway's own defaults, not by the hosts.
 
 | burst of 100 concurrent | before | after |
 |---|---|---|
@@ -110,7 +110,7 @@ Five consecutive runs, non-overlapping ranges.
 | a second implementation diverges from observed behaviour | old tests kept as contracts; golden-parity harness for filters |
 | cutover loses escrow state | state rebuilt from `GATEWAY_ESCROWS_JSON` and the admin import endpoint; the legacy database is not migrated |
 | operators carry stale configuration | renamed variables fall back to their former names and log which one was read |
-| defects reachable only under real load | staged rollout on one node with log review after each burst — this is what produced section 8 |
+| defects reachable only under real load | staged rollout on one node with log review after each burst — the source of section 8's measurements |
 
 ## 10. Open items
 

@@ -21,7 +21,7 @@ One client request, several attempts on different hosts, one winner. This packag
 
 It does not choose the escrow or commit the nonce — that is [`scheduler`](../scheduler/). It does not shape the request or the reply — that is [`filters`](../filters/). It does not write the ledger — it reports one outcome, and [`nonces`](../nonces/) records it.
 
-## Boundaries worth knowing
+## Boundaries
 
 - **A losing attempt is not a free attempt.** Its nonce is committed and costs the escrow; the race is not over until every one of them has been settled or reported.
 - **The race outlives the client.** A client that hangs up does not cancel the attempts, because their nonces still owe votes. The drain barrier is what makes shutdown wait for them.
@@ -49,7 +49,7 @@ A nonce the race can no longer spend is **stranded**, not dropped: it is committ
 
 `EscalationPolicy` is pure over its arguments: no host performance, no phase snapshot, no clock of its own. `nextDeadline` takes the earliest armed deadline, with the declaration order of `deadlineTrigger` breaking exact ties.
 
-An `ArmedEscalation` is a deadline to arm, deliberately not a permission to escalate; only `Confirm` converts it, by re-deriving the same stage at the same deadline. The attempt's `escalated` flag is consumed before the pick starts, so a pick that finds no host cannot retry the same trigger.
+An `ArmedEscalation` is a deadline to arm, not a permission to escalate; only `Confirm` converts it, by re-deriving the same stage at the same deadline. The attempt's `escalated` flag is consumed before the pick starts, so a pick that finds no host cannot retry the same trigger.
 
 Escalation is disarmed entirely when a pick is already running (that pick *is* the escalation), when the client has left (another attempt is another nonce to settle for a response nobody will read), when an attempt has been crowned, or when the budget is spent.
 
@@ -62,7 +62,7 @@ The rungs, in `triggerFor` order: an already-escalated attempt never arms; a sus
 
 ### Backstops are not tunable
 
-`streamingHardTimeout` and `schedulerPickTimeout` bound a request every tunable already failed to bound. The streaming backstop is the tuned 20 minutes, but gives way if the chain's own execution deadline ever moves below it — a stream held past that deadline is work nobody can be paid for.
+`streamingHardTimeout` and `schedulerPickTimeout` bound a request every tunable already failed to bound. The streaming backstop is 20 minutes, but gives way if the chain's own execution deadline ever moves below it — a stream held past that deadline is work nobody can be paid for.
 
 Not tunable still means not tunable **by an operator**. `Deps.E2E` can shorten the streaming backstop, and nothing but a declared end-to-end stand can fill it: see [`docs/rules.md`](../docs/rules.md), "What a test stand may reach".
 
@@ -92,7 +92,7 @@ Only attempts that say something about the host are observed: it answered with c
 What the classifier reads out of an event:
 
 - **Content** names the field carrying the first client-renderable output. `choices[].text` is excluded: the gateway serves only `/v1/chat/completions`, where a host emitting it renders nothing. A `stop` with host-reported completion tokens and no output counts as content only on a thinking-budget route, which is also the only route whose `completion_tokens` can separate a model that produced nothing from a host that carried nothing.
-- **Errors** are extracted in both the nested `{"error":{...}}` shape and the flat `{"object":"error",...}` one vLLM still emits, deliberately without a byte-wise pre-filter: the host writes these bytes, and a key spelled with a `\u` escape would pass the scan while the decoder reads it as the error it is, leaving the attempt classified as something it is not. The saved parse is not worth reopening that.
+- **Errors** are extracted in both the nested `{"error":{...}}` shape and the flat `{"object":"error",...}` one vLLM emits, without a byte-wise pre-filter: the host writes these bytes, and a key spelled with a `\u` escape would pass the scan while the decoder reads it as the error it is, leaving the attempt classified as something it is not. The parse a pre-filter saves does not offset that misclassification.
 - **Usage** is pre-filtered on the `"usage"` key, which is sound because vLLM emits the usage object once per stream, so the check skips almost every chunk.
 - **A capability refusal is kept out of `Error`** and travels as `CapabilityRefused` instead, so a different host can still serve it; its message still reaches the perf recorder.
 
@@ -104,25 +104,25 @@ What the classifier reads out of an event:
 
 ### The exemption ladder
 
-`sampleExemption` is the ordered set of reasons an attempt contributes no perf sample and therefore never counts toward its host's ejection: never dispatched, never reported (the race stopped listening, so judging it would charge a host for our own cancellation), phase aborted, error stream or capability refusal, state divergent, long response, empty stream under a PoC bypass, empty stream with no winner, and finally client-cancelled.
+`sampleExemption` is the ordered set of reasons an attempt contributes no perf sample and therefore never counts toward its host's ejection: never dispatched, never reported (the race stopped listening, so judging it would charge a host for the gateway's own cancellation), phase aborted, error stream or capability refusal, state divergent, long response, empty stream under a PoC bypass, empty stream with no winner, and finally client-cancelled.
 
-`Verdict` is a second ladder and **deliberately disagrees with the sample ladder at client cancellation** — the race cancels its own losers. It also turns an empty stream held past `emptyStreamHeldTooLong` into an overload verdict: below that an empty stream is the model's output, at or above it the host held the request past the refusal point and returned nothing.
+`Verdict` is a second ladder and **disagrees with the sample ladder at client cancellation** — the race cancels its own losers. It also turns an empty stream held past `emptyStreamHeldTooLong` into an overload verdict: below that an empty stream is the model's output, at or above it the host held the request past the refusal point and returned nothing.
 
 `responsive` decides whether a host earns a positive sample: confirmed, nonce finished, and not an empty stream. A long non-stream reply is exempt from being judged slow, but an empty one earns nothing — crediting a host that held the request for the whole window and returned no content teaches the router to prefer it. The long-response exemption gates on `ContentSource`, not `ContentChunks`, which counts error events too (rules.md, "1. A committed nonce is always settled").
 
 ### Measurements
 
-- `IsWinner` is the one test for "this attempt won the race". Whether a client was still there to receive it is `Lifecycle.ClientGone`, which visibility reads: the race outlives the client on purpose.
+- `IsWinner` is the one test for "this attempt won the race". Whether a client was still there to receive it is `Lifecycle.ClientGone`, which visibility reads: the race outlives the client.
 - `ClockOffset` compares the executor's stamp against the midpoint of the send-to-receipt window rather than the dispatch, which would charge the host for the outbound leg; half a second is added back because the executor stamps whole seconds downward.
 - `TimePerOutputToken` starts at the first content chunk, so prefill is not charged to decode speed.
 - `MaxChunkGap` keeps the longest silence a host left mid-stream, which a chunk count cannot show. The silence before `[DONE]` is the end of the stream, not a host that went quiet. `MeanChunkGap` is the inverse of the delivered rate.
-- A served attempt's label reason is blanked, except under `VisibilityNoWinner`: blanking it there rendered the panel's own headline case as "unknown".
+- A served attempt's label reason is blanked, except under `VisibilityNoWinner`: blanking it there renders the panel's headline case as "unknown".
 
 ## Timeout votes
 
 Every nonce the race did not leave settled owes a chain vote. `TimeoutStep.StartedAt` is the race's start, not the attempt's dispatch: verifiers recompute a refusal deadline from the committed record, so every nonce a request commits must carry the one stamp, dispatched or stranded.
 
-`timeoutSkipReason` names every skip — phase aborted, empty stream with a finished nonce, finished nonce, long response. A host whose escrow state diverged is deliberately not one of them. `SettleTimeouts` emits a started event and then a completed one; a step nobody will attempt is emitted only as skipped, because a started event with no completion following reads as a hung settle.
+`timeoutSkipReason` names every skip — phase aborted, empty stream with a finished nonce, finished nonce, long response. A host whose escrow state diverged is not one of them. `SettleTimeouts` emits a started event and then a completed one; a step nobody will attempt is emitted only as skipped, because a started event with no completion following reads as a hung settle.
 
 `Deps.Timeouts` is resolved per race rather than held, because escrows rotate, and it is handed the request params because the vote must carry the prompt the committed record keeps only as a hash.
 

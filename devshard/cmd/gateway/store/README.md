@@ -13,7 +13,7 @@ One SQLite database at `<storageDir>/gateway.db`, holding what must survive a re
 | `accounting.go` | the asynchronous per-request ledger, with its own retention |
 | `retry.go` | the retry policy for a locked database |
 
-## Boundaries worth knowing
+## Boundaries
 
 - **This is control-plane state, not inference data.** Payloads and the nonce ledger live elsewhere.
 - **Retention is enforced on both age and row count**, and a zero on either is rejected at construction, so an unbounded ledger cannot be configured.
@@ -52,7 +52,7 @@ A row names the escrow, the environment variable holding the key that can act on
 - `settlement_pending`, so an unrelated upsert never clears a queued settlement — only `SetDevshardSettlementPending` moves it;
 - `route_prefix`, because a host binds an escrow to the first version that reaches it and refuses every other one for good, so the version an escrow was created under must never change.
 
-Its statement is a named constant so a test can read which columns the update carries: a field added to `DevshardRecord` that nobody adds there is inserted once and never updated again, and nothing else in the package fails when that happens.
+Its statement is a named constant so a test can read which columns the update carries: a field present in `DevshardRecord` but absent from that statement is inserted once and never updated again, and no other code in the package fails on it.
 
 `ParkForSettlement` writes `active = 0` and `settlement_pending = 1` in one statement. Written as two, a crash between them leaves the row inactive and not pending, which no recovery path picks up: the settle sweep looks for pending rows, so the escrow would be out of service and never settled.
 

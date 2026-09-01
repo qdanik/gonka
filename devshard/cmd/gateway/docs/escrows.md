@@ -2,7 +2,7 @@
 
 An escrow is a funded account on chain that pays for inference. Every nonce the gateway spends is drawn from one, so an escrow's lifecycle is where the gateway's money lives: it is created ahead of need, rotated around epoch switches, retired when it empties, and settled once — after which nothing can ever settle it again.
 
-Owned by [`escrow/`](../escrow/) (the lifecycle) and [`registry/`](../registry/) (which escrows are routable right now). The two are deliberately separate: the registry answers "can a request use this escrow", the manager answers "should this escrow exist at all".
+Owned by [`escrow/`](../escrow/) (the lifecycle) and [`registry/`](../registry/) (which escrows are routable right now). The two are separate: the registry answers "can a request use this escrow", the manager answers "should this escrow exist at all".
 
 ## The one invariant everything else protects
 
@@ -144,7 +144,7 @@ graph TD
 | committed and rejected | clear the hash; retry |
 | endpoint unreachable | fail the tick — not an answer |
 
-A row written before `settle_tx_at` existed carries no stamp and counts as **past** the window — the opposite default from the create path, and deliberately so: keeping a stale commitment costs a row, keeping a stale settle hash costs an escrow that is never settled at all. Rebroadcasting one that was still landing costs a fee once, and the stamp that write leaves governs every tick after it.
+A row written before `settle_tx_at` existed carries no stamp and counts as **past** the window — the opposite default from the create path: keeping a stale commitment costs a row, keeping a stale settle hash costs an escrow that is never settled at all. Rebroadcasting one that was still landing costs a fee once, and the stamp that write leaves governs every tick after it.
 
 **Deferred, not failed.** `ErrDevshardBusy` and `ErrSettlementInFlight` both mean "not yet": the next tick retries. `deferredRetire` filters them out of rotation's error set, so an ordinary bridge does not report an error for every escrow that happened to be draining.
 
@@ -158,7 +158,7 @@ The close runs with the registry lock **released**: flushing takes the session l
 
 `entry.close()` flushes the snapshot and then closes the session **unconditionally**, and reports the two separately. The entry stays in `draining` only when the store was not released; a failed flush with a successful close frees the id, because holding it would refuse that escrow for the rest of the process's life. On the last release the failure is counted (`DrainCloseFailures`) rather than raised: the request that held the escrow open has already been answered, and there is nobody left to hand it to. A `Retire` with nothing in flight returns it to its caller instead.
 
-## Failure modes worth recognising
+## Failure modes and their causes
 
 | Symptom | Cause |
 | --- | --- |
@@ -166,7 +166,7 @@ The close runs with the registry lock **released**: flushing takes the session l
 | `devshard cannot be activated` (409) | the escrow is parked for settlement — settle it, do not re-serve it |
 | `settlement already in flight`, repeatedly | a settle tx is inside its 11-minute window; it resolves on its own |
 | the same escrow settles every tick and never clears | the broadcast is landing but `settle_tx_hash` is not being written — check the store |
-| rotation logs "the network serves no such model" | the chain's snapshot lists no host for that model; the escrow is skipped on purpose |
+| rotation logs "the network serves no such model" | the chain's snapshot lists no host for that model; the escrow is skipped |
 | a bridge creates nothing and retires nothing | the create breaker is gated after repeated failures; look for the earlier create error |
 
 ## Where to change what

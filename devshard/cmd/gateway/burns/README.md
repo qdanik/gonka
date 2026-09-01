@@ -12,9 +12,9 @@ The scheduler burns a nonce bound to a host that cannot serve it. The nonce is a
 
 It does not decide that a nonce is burned — that is [`scheduler`](../scheduler/). It does not record the burn in the ledger — that is [`nonces`](../nonces/). It only decides whether the host owes a vote for it.
 
-## Boundaries worth knowing
+## Boundaries
 
-- **Charging is off by default** (`charge_refused_nonces`). It changes what the network bills for, so it is turned on deliberately.
+- **Charging is off by default** (`charge_refused_nonces`). It changes what the network bills for, so enabling it is an explicit operator decision.
 - **One goroutine per burn.** Settling waits out the refusal deadline; a queue of burns settled in turn would hold the escrow's drain barrier for that wait once per nonce.
 - **The gate never swallows the charge.** It decides whether to ask the host again, never whether the nonce is owed a vote.
 

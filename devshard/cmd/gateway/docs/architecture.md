@@ -141,9 +141,9 @@ Four places, each with its own guard:
 
 Beyond the request path, the process runs: the chain phase observer, the escrow lifecycle manager (rotation, depletion, settlement), the nonce ledger's sweep, the escrow warmup, and the burn charger. Each is started by the composition root and stopped by it in order — the race's drain barrier last, because it is the one that can still owe the chain something.
 
-## Deliberate divergences from the legacy gateway
+## Divergences from the legacy gateway
 
-Recorded in full in [`docs/rules.md`](./docs/rules.md); the load-bearing ones:
+Recorded in full in [`docs/rules.md`](./rules.md); the load-bearing ones:
 
 - **Every restart starts clean** — no ejections, no capability counts, no penalties replayed. Minute-scale backoff self-heals faster than stale state is worth.
 - **Capability refusals do not withhold a host from routing.** They are counted and reported; a version refusal would otherwise retire a host permanently, since a gateway serves one protocol version for its whole life.
