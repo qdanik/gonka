@@ -177,6 +177,17 @@ func (e *escrowLedger) slots(escrowID string) []SlotRecord {
 		tally.fold(key, count)
 		tallies[key.SlotID] = tally
 	}
+	money := make(map[uint32]slotMoney, groupSize)
+	for nonce, cost := range e.costs {
+		slotID := e.slotOf(nonce)
+		carried := money[slotID]
+		carried.reserved += cost.reserved
+		carried.actual += cost.actual
+		carried.refunded += cost.refunded()
+		carried.input += cost.input
+		carried.output += cost.output
+		money[slotID] = carried
+	}
 	pending := make(map[uint32]uint64, groupSize)
 	inFlight := make(map[uint32]uint64, groupSize)
 	openRequests := make(map[uint32]map[string]struct{}, groupSize)
@@ -224,8 +235,12 @@ func (e *escrowLedger) slots(escrowID string) []SlotRecord {
 		}
 		if stats, observed := e.hostStats[slotID]; observed {
 			slot.ChainMissed, slot.ChainInvalid = stats.Missed, stats.Invalid
+			slot.ChainCost = stats.Cost
 			slot.RequiredValidations, slot.CompletedValidations = stats.RequiredValidations, stats.CompletedValidations
 		}
+		carried := money[slotID]
+		slot.ReservedCost, slot.ActualCost, slot.RefundedCost = carried.reserved, carried.actual, carried.refunded
+		slot.InputTokens, slot.OutputTokens = carried.input, carried.output
 		accounted := counted[slotID] + slot.Pending + slot.InFlight
 		if accounted > slot.Assigned {
 			slot.Overcounted = accounted - slot.Assigned

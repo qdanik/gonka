@@ -208,6 +208,11 @@ func (n *Recorder) sweep(ctx context.Context, escrows EscrowSource) {
 				n.report(n.service.Book.ObserveHostStats(state.ID, slotID, *stats))
 			}
 		}
+		for nonce, record := range escrowState.Inferences {
+			if record != nil {
+				n.report(n.service.Book.ObserveNonceCost(state.ID, nonce, *record))
+			}
+		}
 		n.report(n.service.Book.ObserveChallenges(state.ID, openChallenges(escrowState)))
 		n.watchDiffs(state.ID, session)
 	}

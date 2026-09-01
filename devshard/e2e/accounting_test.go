@@ -617,3 +617,96 @@ func TestE2E_AccountingOneHostUnavailable(t *testing.T) {
 	testutil.RequireAccountingResponseCoherent(t, accounting, "stub-model")
 	testutil.RequireNonceAccountingBalanced(t, accounting)
 }
+
+// Test flow:
+//  1. Start the default three-host gateway environment.
+//  2. Send two sequential completions so a finish rides the second answer from the same host.
+//  3. Poll the accounting participants route until a row reports a paid cost.
+//  4. Assert the row names its participant and model, and that its refund is the reserve it did not spend.
+func TestE2E_AccountingReportsCostPerParticipantAndModel(t *testing.T) {
+	env, client := startGatewayEnv(t, e2eEnvOptions{})
+
+	testutil.SendCompletion(t, client, env.clientURL, "money first")
+	testutil.SendCompletion(t, client, env.clientURL, "money second")
+
+	ledger := testutil.WaitAccountingParticipants(t, client, env.statsURL, "",
+		func(response testutil.AccountingParticipantsResponse) bool {
+			for _, participant := range response.Participants {
+				if participant.ActualCost > 0 {
+					return true
+				}
+			}
+			return false
+		})
+
+	for _, participant := range ledger.Participants {
+		if participant.RefundedCost != 0 && participant.ActualCost == 0 {
+			t.Errorf("%s refunded %d without paying anything: an open reserve is money held",
+				participant.Participant, participant.RefundedCost)
+		}
+	}
+
+	var reported int
+	for _, participant := range ledger.Participants {
+		if participant.ActualCost == 0 {
+			continue
+		}
+		reported++
+		if participant.ChainCost == 0 {
+			t.Errorf("%s paid %d and the chain charged its slot nothing", participant.Participant, participant.ActualCost)
+		}
+		if participant.RefundedCost > participant.ReservedCost {
+			t.Errorf("%s refunded %d, more than the %d it reserved",
+				participant.Participant, participant.RefundedCost, participant.ReservedCost)
+		}
+		if participant.Participant == "" || participant.Model == "" {
+			t.Errorf("a row carrying %d reserved names participant %q and model %q",
+				participant.ReservedCost, participant.Participant, participant.Model)
+		}
+		if participant.ActualCost > participant.ReservedCost {
+			t.Errorf("%s paid %d against a reserve of %d",
+				participant.Participant, participant.ActualCost, participant.ReservedCost)
+		}
+	}
+	if reported == 0 {
+		t.Fatalf("no participant row carried a paid cost: %+v", ledger.Participants)
+	}
+}
+
+// Test flow:
+//  1. Start the default three-host gateway environment.
+//  2. Send two sequential completions so a host reports its usage.
+//  3. Poll accounting until a row reports output tokens.
+//  4. Assert the tokens are the chain's counts, attributed to a named participant and model.
+func TestE2E_AccountingReportsTokensPerParticipantAndModel(t *testing.T) {
+	env, client := startGatewayEnv(t, e2eEnvOptions{})
+
+	testutil.SendCompletion(t, client, env.clientURL, "tokens first")
+	testutil.SendCompletion(t, client, env.clientURL, "tokens second")
+
+	ledger := testutil.WaitAccountingParticipants(t, client, env.statsURL, "",
+		func(response testutil.AccountingParticipantsResponse) bool {
+			for _, participant := range response.Participants {
+				if participant.OutputTokens > 0 {
+					return true
+				}
+			}
+			return false
+		})
+
+	for _, participant := range ledger.Participants {
+		if participant.OutputTokens == 0 {
+			continue
+		}
+		if participant.Participant == "" || participant.Model == "" {
+			t.Errorf("a row carrying %d output tokens names participant %q and model %q",
+				participant.OutputTokens, participant.Participant, participant.Model)
+		}
+		if participant.InputTokens == 0 {
+			t.Errorf("%s reports %d output tokens and no input tokens",
+				participant.Participant, participant.OutputTokens)
+		}
+		return
+	}
+	t.Fatalf("no participant row carried output tokens: %+v", ledger.Participants)
+}

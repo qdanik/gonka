@@ -32,6 +32,12 @@ type AccountingParticipant struct {
 	PendingClassification uint64              `json:"pending_classification"`
 	Unclassified          uint64              `json:"unclassified"`
 	Overclassified        uint64              `json:"overclassified"`
+	ChainCost             uint64              `json:"chain_cost"`
+	ReservedCost          uint64              `json:"reserved_cost"`
+	ActualCost            uint64              `json:"actual_cost"`
+	RefundedCost          uint64              `json:"refunded_cost"`
+	InputTokens           uint64              `json:"input_tokens"`
+	OutputTokens          uint64              `json:"output_tokens"`
 	CrossChecks           AccountingChecks    `json:"cross_checks"`
 	Counters              []AccountingCounter `json:"counters"`
 }

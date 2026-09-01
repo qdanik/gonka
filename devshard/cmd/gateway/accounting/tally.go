@@ -9,10 +9,22 @@ type nonceTotals struct {
 	Pending      uint64                 `json:"pending_classification"`
 	Unobserved   uint64                 `json:"unclassified"`
 	Overcounted  uint64                 `json:"overclassified"`
+	ChainCost    uint64                 `json:"chain_cost"`
+	ReservedCost uint64                 `json:"reserved_cost"`
+	ActualCost   uint64                 `json:"actual_cost"`
+	RefundedCost uint64                 `json:"refunded_cost"`
+	InputTokens  uint64                 `json:"input_tokens"`
+	OutputTokens uint64                 `json:"output_tokens"`
 }
 
 func (t *nonceTotals) add(other nonceTotals) {
 	t.Assigned += other.Assigned
+	t.ChainCost += other.ChainCost
+	t.ReservedCost += other.ReservedCost
+	t.ActualCost += other.ActualCost
+	t.RefundedCost += other.RefundedCost
+	t.InputTokens += other.InputTokens
+	t.OutputTokens += other.OutputTokens
 	t.ChainMissed += other.ChainMissed
 	t.ChainInvalid += other.ChainInvalid
 	t.Pending += other.Pending

@@ -54,7 +54,7 @@ The kind is read from the receipt — `engine/settle.go`, `timeoutKind` — and 
 
 `GATEWAY_NONCE_ACCOUNTING_ENABLED` builds the ledger and exports it as `devshard_gateway_nonces_*` on the gateway's ordinary metrics endpoint. There is no second port to configure: a Prometheus already scraping the gateway picks the series up on its next scrape.
 
-`GATEWAY_NONCE_ACCOUNTING_LISTEN_ADDR` additionally serves the ledger as JSON on its own port, for a reader that needs what a metric cannot carry — escrow ids and slots are unbounded labels and stay out of Prometheus deliberately.
+`GATEWAY_NONCE_ACCOUNTING_LISTEN_ADDR` additionally serves the ledger as JSON on its own port, for a reader that needs what a metric cannot carry — escrow ids and slots are unbounded labels and stay out of Prometheus by design.
 
 | Route | Answers |
 | --- | --- |
@@ -79,9 +79,9 @@ Each escrow keeps its newest 256 events, which caps a pathological run rather th
 
 A counter is served **flat** -- `escrow_id`, `slot_id`, `disposition`, `ghost_reason`, `terminal`, `phase` and the timeout fields all at the top level of the object. The legacy ledger in `devshard/accounting` nests the same facts under a `key` object and calls the burn reason `no_send_reason`.
 
-Nothing outside this gateway reads the JSON counter, and the in-repo Grafana dashboard queries the Prometheus labels instead -- `devshard_gateway_nonces_by_disposition` grouped by `ghost_reason` -- which already match. The shapes are therefore left apart deliberately rather than aligned.
+Nothing outside this gateway reads the JSON counter, and the in-repo Grafana dashboard queries the Prometheus labels instead -- `devshard_gateway_nonces_by_disposition` grouped by `ghost_reason` -- which already match. The two shapes therefore stay apart.
 
-The cost of that is worth stating, because it is silent: a reader written against the legacy shape finds none of these fields, decodes them as empty, filters every counter out and reports **zero burns rather than an error**. The e2e suite hit exactly this, which is why the gateway scenarios read counters with their own helper rather than the shared one.
+The cost of that is worth stating, because it is silent: a reader written against the legacy shape finds none of these fields, decodes them as empty, filters every counter out and reports **zero burns rather than an error**. The gateway e2e scenarios therefore read counters with their own helper, not the shared one.
 
 ## Findings
 
@@ -92,8 +92,8 @@ Findings are derived on every read and **never stored**: the counters are the fa
 ### Four rules that keep a finding honest
 
 - **A volume floor.** No finding is raised below **20** nonces in its denominator: a rate off four attempts describes noise, not a host.
-- **Burns are excluded from every host rate.** A burn is this gateway's own decision; charging it to the host would report our throttling as its failure.
-- **Our own failures are excluded.** A phase transition ending an attempt, a vote round that reached no verdict, a missing poster, a long response that had already produced content, and a client that stopped waiting are all ours. A failure the ledger could not *name* still counts — excusing the unclassified would empty the rates.
+- **Burns are excluded from every host rate.** A burn is this gateway's own decision; charging it to the host would report the gateway's throttling as the host's failure.
+- **The gateway's own failures are excluded.** A phase transition ending an attempt, a vote round that reached no verdict, a missing poster, a long response that had already produced content, and a client that stopped waiting are all the gateway's. A failure the ledger could not *name* still counts — excusing the unclassified would empty the rates.
 - **The warmup probe is excluded whatever it ended as.** It is the gateway's own request, so it leaves both sides of every ratio; excluding it only when it succeeded would report a host's refusals while hiding its successes.
 
 Thresholds are constants rather than configuration: two gateways must not report the same host differently, and a host comparing two reports should be able to tell that the host moved, not the ruler.
@@ -161,7 +161,7 @@ Thresholds are constants rather than configuration: two gateways must not report
 
 **`ledger_overcounted`** — this gateway accounted for more nonces than the chain says the slot was given, so one of the two is wrong. Worth reporting rather than acting on: no host behaviour produces this.
 
-**`ledger_disagrees_with_chain`** — what the two sides disagree on beyond that bug. The cross-check compares **both sides per slot**: the timeouts this gateway applied against the chain's misses, and the invalid verdicts it recorded against the chain's. Both sides are persisted, so a restart does not raise this on its own — restoring the chain's half without the gateway's once made every restart look like a disagreement for the rest of the epoch.
+**`ledger_disagrees_with_chain`** — what the two sides disagree on beyond that bug. The cross-check compares **both sides per slot**: the timeouts this gateway applied against the chain's misses, and the invalid verdicts it recorded against the chain's. Both sides are persisted, so a restart does not raise this on its own — restoring the chain's half without the gateway's makes every restart read as a disagreement for the rest of the epoch.
 
 **`reasons_unknown`** — the ledger's own honesty check: how much of this host's traffic it filed under a reason it could not name. A rising share means the gateway's instrumentation is behind its behaviour, not that the host did anything.
 
@@ -199,3 +199,23 @@ Every series carries an `epoch` label: the ledger holds several epochs at once a
 | a stored or reported value's name | the owning `vocabulary.go` — and treat it as a migration |
 | what the ledger persists | `accounting/store.go` and `accounting/sqlstore.go`, together |
 | what feeds the ledger | [`nonces/`](../nonces/) — live events, chain diffs, the sweep |
+
+## Money and tokens
+
+The ledger carries the chain's own arithmetic; it computes none of it. Six fields ride on all three levels — the slot, the participant record and the epoch summary:
+
+| Field | Where it comes from |
+|---|---|
+| `chain_cost` | `HostStats.Cost`, read on every sweep |
+| `reserved_cost` | `InferenceRecord.ReservedCost`, `(input_length + max_tokens) × token_price` |
+| `actual_cost` | `InferenceRecord.ActualCost`. The state machine clamps it to the reserve, and the ledger still refuses to derive a refund from a larger one rather than trusting that |
+| `refunded_cost` | derived at read time, never stored: `reserved − actual` for a nonce that paid, the **whole reserve** for one the chain timed out or invalidated (both return everything: `applyTimeout` never assigns a cost, and invalidation returns the cost on top of the surplus already released at finish), and **zero while a nonce is still open**, because a reserve nobody has paid out is money held, not money back |
+| `input_tokens` / `output_tokens` | `InferenceRecord`, the chain's counts rather than the gateway's four-bytes-per-token estimate |
+
+All of it is carried by the ten-second sweep (`nonces/recorder.go`), which already reads the escrow state for host stats — the request path is untouched, and the paid amount does not exist there anyway: it appears only once the host's `MsgFinishInference` lands in a diff. The sweep re-reads the same nonces every pass, so a record replaces its predecessor rather than adding to it.
+
+Two limits bound what the numbers cover. Sealing drains `EscrowState.Inferences` once a record turns terminal and the nonce gate passes, so under load a timed-out or invalidated nonce can be evicted between two sweeps and never reach the ledger — `chain_cost` stays complete while the per-nonce sums are a sample biased toward successes. And `actual_cost` counts money the chain later claws back on invalidation (`hs.Cost -= rec.ActualCost` with `rec.ActualCost` left set), so it can exceed `chain_cost` in the same row by exactly the invalidated total.
+
+Per-participant output tokens are exported as `devshard_gateway_participant_output_tokens_total{participant_key,model}`, taken from the host's own reported usage. Its label pair is already paid for by `devshard_gateway_participant_prefill_seconds_per_input_token`.
+
+The costs map is the one part of the ledger that is not persisted: a restart reports `chain_cost` in full beside per-nonce sums covering only what is still live in escrow state.

@@ -13,7 +13,7 @@
 
 It does not classify. Which counter a nonce lands in is `accounting`'s decision; this package only reports what happened, in the vocabulary the ledger admits.
 
-## Boundaries worth knowing
+## Boundaries
 
 - **A disabled ledger is a nil `*Recorder`, not a no-op object.** Every method tolerates a nil receiver, which is what keeps the enabled and disabled paths from diverging.
 - **The sweep is the safety net, not the primary path.** Live events are recorded as they happen; the sweep exists because the gateway can miss one — a restart, a dropped diff — and the chain is the authority.

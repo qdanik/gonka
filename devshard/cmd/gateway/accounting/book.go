@@ -32,8 +32,40 @@ type escrowLedger struct {
 	rejected    map[uint32]uint64
 	counters    map[CounterKey]uint64
 	nonces      map[uint64]*nonceRecord
+	costs       map[uint64]nonceCost
 	events      []protocolEvent
 	retired     bool
+}
+
+// nonceCost is one nonce's money as the escrow recorded it. See docs/accounting.md, "Money and tokens".
+type nonceCost struct {
+	reserved uint64
+	actual   uint64
+	input    uint64
+	output   uint64
+	status   types.InferenceStatus
+}
+
+// slotMoney is one slot's share of the escrow's money.
+type slotMoney struct {
+	reserved uint64
+	actual   uint64
+	refunded uint64
+	input    uint64
+	output   uint64
+}
+
+func (c nonceCost) refunded() uint64 {
+	switch c.status {
+	case types.StatusTimedOut, types.StatusInvalidated:
+		return c.reserved
+	case types.StatusPending, types.StatusStarted:
+		return 0
+	}
+	if c.actual > c.reserved {
+		return 0
+	}
+	return c.reserved - c.actual
 }
 
 // The only way to build one: a second site that forgot a map would panic on a path with no error to return.
@@ -47,6 +79,7 @@ func newEscrowLedger(metadata EscrowMetadata) *escrowLedger {
 		rejected:    make(map[uint32]uint64),
 		counters:    make(map[CounterKey]uint64),
 		nonces:      make(map[uint64]*nonceRecord),
+		costs:       make(map[uint64]nonceCost),
 	}
 }
 
@@ -141,6 +174,20 @@ func (b *Book) ObserveLatestNonce(escrowID string, nonce uint64) error {
 func (b *Book) ObserveHostStats(escrowID string, slotID uint32, stats types.HostStats) error {
 	return b.withEscrow(escrowID, func(escrow *escrowLedger) error {
 		escrow.hostStats[slotID] = stats
+		return nil
+	})
+}
+
+// ObserveNonceCost carries the escrow's own record for one nonce, replacing any earlier reading of it.
+func (b *Book) ObserveNonceCost(escrowID string, nonce uint64, record types.InferenceRecord) error {
+	return b.withEscrow(escrowID, func(escrow *escrowLedger) error {
+		escrow.costs[nonce] = nonceCost{
+			reserved: record.ReservedCost,
+			actual:   record.ActualCost,
+			input:    record.InputTokens,
+			output:   record.OutputTokens,
+			status:   record.Status,
+		}
 		return nil
 	})
 }

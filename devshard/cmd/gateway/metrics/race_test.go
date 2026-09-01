@@ -13,19 +13,20 @@ func at(offset time.Duration) time.Time { return raceStart.Add(offset) }
 
 func winningAttempt() engine.AttemptOutcome {
 	return engine.AttemptOutcome{
-		Participant:   "gonka1winner",
-		Nonce:         11,
-		Role:          "primary",
-		StartReason:   "primary",
-		SendTime:      at(0),
-		ReceiptTime:   at(200 * time.Millisecond),
-		FirstToken:    at(500 * time.Millisecond),
-		FirstContent:  at(600 * time.Millisecond),
-		Completed:     at(2 * time.Second),
-		ContentChunks: 4,
-		Terminal:      engine.TerminalWon,
-		Confirmed:     true,
-		NonceFinished: true,
+		Participant:           "gonka1winner",
+		Nonce:                 11,
+		Role:                  "primary",
+		StartReason:           "primary",
+		SendTime:              at(0),
+		ReceiptTime:           at(200 * time.Millisecond),
+		FirstToken:            at(500 * time.Millisecond),
+		FirstContent:          at(600 * time.Millisecond),
+		Completed:             at(2 * time.Second),
+		ContentChunks:         4,
+		Terminal:              engine.TerminalWon,
+		Confirmed:             true,
+		NonceFinished:         true,
+		UsageCompletionTokens: 40,
 	}
 }
 
@@ -48,6 +49,8 @@ func TestAWonRaceEmitsTheWinnerFamiliesWithTheirValues(t *testing.T) {
 		labels{"participant_key": "gonka1winner", "model": "qwen", "role": "primary", "outcome": "success", "visibility": "user_visible_winner"}, 1)
 	expectCounter(t, telemetry, "devshard_gateway_user_visible_wins_total",
 		labels{"participant_key": "gonka1winner", "model": "qwen"}, 1)
+	expectCounter(t, telemetry, "devshard_gateway_participant_output_tokens_total",
+		labels{"participant_key": "gonka1winner", "model": "qwen"}, 40)
 	expectCounter(t, telemetry, "devshard_gateway_requests_total",
 		labels{"model": "qwen", "outcome": "success", "reason": "none"}, 1)
 	expectCounter(t, telemetry, "devshard_gateway_escalation_decisions_total", labels{"reason": "primary"}, 1)
@@ -115,13 +118,14 @@ func TestAHiddenLoserFailureIsCountedAgainstASuccessfulRequest(t *testing.T) {
 		Attempts: []engine.AttemptOutcome{
 			winningAttempt(),
 			{
-				Participant: "gonka1loser",
-				Nonce:       12,
-				Role:        "extra",
-				StartReason: "primary_slow",
-				SendTime:    at(300 * time.Millisecond),
-				Completed:   at(1 * time.Second),
-				Terminal:    engine.TerminalUnavailable,
+				Participant:           "gonka1loser",
+				Nonce:                 12,
+				Role:                  "extra",
+				StartReason:           "primary_slow",
+				SendTime:              at(300 * time.Millisecond),
+				Completed:             at(1 * time.Second),
+				Terminal:              engine.TerminalUnavailable,
+				UsageCompletionTokens: 12,
 			},
 		},
 	})
@@ -132,6 +136,8 @@ func TestAHiddenLoserFailureIsCountedAgainstASuccessfulRequest(t *testing.T) {
 		labels{"participant_key": "gonka1loser", "model": "qwen", "path_kind": "inference", "status": "503"}, 1)
 	expectCounter(t, telemetry, "devshard_gateway_user_requests_with_hidden_failure_total",
 		labels{"model": "qwen", "severity": "protected", "reason": "http_503"}, 1)
+	expectCounter(t, telemetry, "devshard_gateway_participant_output_tokens_total",
+		labels{"participant_key": "gonka1loser", "model": "qwen"}, 12)
 	expectCounter(t, telemetry, "devshard_gateway_requests_total",
 		labels{"model": "qwen", "outcome": "success", "reason": "none"}, 1)
 	expectAbsent(t, telemetry, "devshard_gateway_critical_user_failures_total")

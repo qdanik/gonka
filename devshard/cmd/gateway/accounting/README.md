@@ -13,9 +13,10 @@ Every nonce the gateway commits costs the escrow money whether or not anyone was
 
 It records; it does not decide. Nothing here withholds a host from routing, changes what is dispatched, or talks to the chain. The facts arrive from [`nonces`](../nonces/), which is the only writer.
 
-## Boundaries worth knowing
+## Boundaries
 
 - **The response schema is frozen.** `ParticipantRecord`, `SlotRecord` and `EpochSummary` are read by a tracker outside this repository. Adding a key is tolerable; renaming or removing one is a regression. Internal carriers between `slots()` and `absorb()` stay unexported rather than taking a JSON tag.
+- **`SchemaVersion` is one number for two readers.** It is the report's `schema_version` and the value `sqlstore` checks on open; a mismatch drops the tables rather than migrating them, because the ledger is an epoch of observations, not a system of record. It is **7**, above the legacy `devshard/accounting`'s 6: both packages emit `schema_version` over different shapes, so the number is the only thing telling them apart.
 - **Aggregation happens on read, not on write.** Every total above the counters is derivable, so a stored total could only ever disagree with its own parts.
 - **`in_flight` and `in_flight_requests` are not live-request gauges.** A race reaches the ledger only once it has ended, so these count nonces the chain has yet to settle. The live number is the limiter's `devshard_gateway_inflight_requests`.
 
@@ -38,7 +39,7 @@ Re-opening an escrow keeps its counters and **pins the epoch at first sighting**
 
 ## The ledger's check on itself
 
-`namesNoReason` counts the nonces whose cause the ledger could not name, matching the fallbacks the producers actually emit: an engine terminal with no string of its own, an attempt the race never classified, and a burn kind with no reason. `unreported` is deliberately **not** one of them — that names a race that reported nothing, which is a fact rather than a gap.
+`namesNoReason` counts the nonces whose cause the ledger could not name, matching the fallbacks the producers actually emit: an engine terminal with no string of its own, an attempt the race never classified, and a burn kind with no reason. `unreported` is **not** one of them — that names a race that reported nothing, which is a fact rather than a gap.
 
 `timeoutOutcomeOf` is where two vocabularies meet: the engine reports an action and a reason, the legacy ledger reports a single outcome, and one dashboard has to read both. `failed` alone says nothing a reader can act on; its reason is what tells a round that gathered too few votes from one that could not gather any.
 

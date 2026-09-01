@@ -50,6 +50,7 @@ type RaceRecorder struct {
 	receiptSeconds  *prometheus.HistogramVec
 	firstContent    *prometheus.HistogramVec
 	prefillPerToken *prometheus.HistogramVec
+	outputTokens    *prometheus.CounterVec
 	totalAttempt    *prometheus.HistogramVec
 	maxChunkGap     *prometheus.HistogramVec
 	meanChunkGap    *prometheus.HistogramVec
@@ -124,6 +125,10 @@ func NewRaceRecorder(telemetry *Metrics) *RaceRecorder {
 			Help:    "Receipt-to-first-content time divided by input tokens, by participant and model.",
 			Buckets: prometheus.ExponentialBuckets(0.0001, 2, 12),
 		}, []string{"participant_key", "model"}),
+		outputTokens: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "devshard_gateway_participant_output_tokens_total",
+			Help: "Output tokens a participant generated on a model, as the host itself reported them.",
+		}, []string{"participant_key", "model"}),
 		maxChunkGap: prometheus.NewHistogramVec(prometheus.HistogramOpts{
 			Name:    "devshard_gateway_participant_max_inter_chunk_seconds",
 			Help:    "Longest silence between two streamed chunks within one attempt, by participant and model.",
@@ -149,7 +154,7 @@ func (r *RaceRecorder) collectors() []prometheus.Collector {
 		r.attemptsStarted, r.attemptsTerminal, r.attemptFailures, r.noWinnerAttempts,
 		r.userVisibleWins, r.transportErrors, r.requests, r.criticalFailures, r.hiddenFailures,
 		r.escalations, r.timeoutActions, r.inferenceTimeouts, r.carryOverflows,
-		r.receiptSeconds, r.firstContent, r.prefillPerToken, r.totalAttempt,
+		r.receiptSeconds, r.firstContent, r.prefillPerToken, r.outputTokens, r.totalAttempt,
 		r.maxChunkGap, r.meanChunkGap,
 	}
 }
@@ -228,6 +233,9 @@ func transportStatus(terminal engine.Terminal) (string, bool) {
 }
 
 func (r *RaceRecorder) observeAttemptLatency(participant, model string, inputTokens uint64, attempt engine.AttemptOutcome) {
+	if attempt.UsageCompletionTokens > 0 {
+		r.outputTokens.WithLabelValues(participant, model).Add(float64(attempt.UsageCompletionTokens))
+	}
 	if seconds := elapsedSeconds(attempt.SendTime, attempt.ReceiptTime); seconds > 0 {
 		r.receiptSeconds.WithLabelValues(participant, model).Observe(seconds)
 	}
