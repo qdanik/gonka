@@ -73,7 +73,6 @@ Signing keys are addressed **by the name of the variable that holds them**, neve
 | `GATEWAY_ROTATION_SETTLEMENT_ENABLED` | false | whether retirement settles or only parks |
 | `GATEWAY_ROTATION_PRE_POC_BLOCKS` | 300 | how early the bridge starts |
 | `GATEWAY_WARM_NEW_ESCROWS` | true | whether a new escrow is taught to its group before serving |
-| `GATEWAY_CHARGE_REFUSED_NONCES` | false | whether a host is charged for a nonce it refused |
 | `GATEWAY_CHAIN_SNAPSHOT_MAX_AGE_SECONDS` | 60 | how stale the chain snapshot may be before requests are refused 503; `0` disables the gate |
 | `GATEWAY_ENGINE_RECEIPT_TIMEOUT_MS` | 5 000 | receipt deadline; doubled above 100 000 input tokens |
 | `GATEWAY_ENGINE_FIRST_TOKEN_FLOOR_MS` | 1 000 | lower bound on the first-token curve |

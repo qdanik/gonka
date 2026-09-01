@@ -56,7 +56,6 @@ const (
 	TimeoutActionStarted   = "started"
 	TimeoutActionCompleted = "completed"
 	TimeoutActionFailed    = "failed"
-	// A nonce whose race died with the process: no vote was ever posted on it.
 	TimeoutActionAbandoned = "abandoned_by_restart"
 
 	TimeoutReasonNone            = "none"
@@ -67,9 +66,5 @@ const (
 	TimeoutReasonLongResponse    = "long_response_after_content"
 	TimeoutReasonCollectionError = "timeout_collection_error"
 	TimeoutReasonNotApplied      = "timeout_not_applied"
-	TimeoutReasonHostServedProbe = "host_served_probe"
-	TimeoutReasonEscrowNotLive   = "escrow_not_routable"
-	// A vote no retry can win: the hosts dropped the escrow, so the nonce it would have settled is
-	// unsettleable and pays its full reserve.
-	TimeoutReasonEscrowGone = "escrow_gone_from_hosts"
+	TimeoutReasonEscrowGone      = "escrow_gone_from_hosts"
 )

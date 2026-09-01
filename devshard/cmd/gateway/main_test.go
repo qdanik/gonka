@@ -791,7 +791,7 @@ func TestPublishingAnEscrowGivesItWeightAndMakesItPickable(t *testing.T) {
 		t.Fatalf("NewPhaseObserver(): %v", err)
 	}
 
-	escrows, router, _, _ := newRouting(routingDeps{
+	escrows, router, _ := newRouting(routingDeps{
 		Sessions: func(context.Context, string) (registry.EscrowSession, error) {
 			return weightlessSession{participants: participants}, nil
 		},
@@ -833,7 +833,7 @@ func routingFor(t *testing.T, capacity *limits.Capacity, participants []string) 
 	if err != nil {
 		t.Fatalf("NewPhaseObserver(): %v", err)
 	}
-	escrows, router, _, _ := newRouting(routingDeps{
+	escrows, router, _ := newRouting(routingDeps{
 		Sessions: func(context.Context, string) (registry.EscrowSession, error) {
 			return weightlessSession{participants: participants}, nil
 		},

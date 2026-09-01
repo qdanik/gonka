@@ -110,9 +110,6 @@ func (s nonceStream) Advance(decide func(scheduler.HostBinding) scheduler.NonceI
 	return prepared, nil
 }
 
-// GhostPrompt is what a vote for a burned nonce must carry: a verifier checks it against the record's prompt hash.
-func GhostPrompt() []byte { return ghostPrompt }
-
 // StartedAt is seconds, not milliseconds, or the refusal deadline goes negative. See host/timeout.go, VerifyRefusedTimeout.
 func (s nonceStream) ghostParams() user.InferenceParams {
 	return user.InferenceParams{

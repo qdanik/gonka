@@ -34,7 +34,6 @@ graph TD
     subgraph ledger["accounting"]
         NON["nonces"]
         ACC["accounting"]
-        BRN["burns"]
         WRM["warmup"]
     end
     subgraph plumbing["plumbing"]
@@ -133,7 +132,6 @@ Four places, each with its own guard:
 | Risk | Guard |
 | --- | --- |
 | a committed nonce nobody settles | the race's drain barrier: shutdown waits for every owed vote |
-| a host that refuses work and takes no miss | [`burns`](./burns/) — probe first, charge only what the host earned |
 | an escrow that pays for work it did not receive | [`accounting`](./accounting/) cross-checks its own counts against the chain's |
 | a reply held in memory until the process dies | a per-request cap, a process-wide ceiling, and folding as chunks arrive |
 

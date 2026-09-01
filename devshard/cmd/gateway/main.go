@@ -14,7 +14,6 @@ import (
 	devshardpkg "devshard"
 	"devshard/cmd/gateway/accounting"
 	"devshard/cmd/gateway/api"
-	"devshard/cmd/gateway/burns"
 	"devshard/cmd/gateway/chain"
 	"devshard/cmd/gateway/config"
 	"devshard/cmd/gateway/engine"
@@ -173,7 +172,7 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 
 	devshardWork := make(chan struct{}, 1)
 	depletion := &depletionNotice{}
-	escrows, router, prober, charges := newRouting(routingDeps{
+	escrows, router, prober := newRouting(routingDeps{
 		Sessions:     sources.Serving,
 		ReadOnly:     sources.ReadOnly,
 		Capacity:     capacity,
@@ -215,7 +214,6 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 	// The warmup and the burn charge both vote through the poster and observer the race already uses.
 	raceObserver := nonceAccountedRaces{recorder: metrics.NewRaceRecorder(telemetry), ledger: recorder}
 	prober.Settle(sessions.Poster, raceObserver)
-	charges.Serve(escrows, sessions.Poster, raceObserver)
 	e2e := env.LoadE2E()
 	races := engine.NewEngine(engine.Deps{
 		Picker:     router,
@@ -324,7 +322,7 @@ type routingDeps struct {
 }
 
 // newRouting joins the escrow set to the picker through the capacity model; an unjoined escrow serves nothing.
-func newRouting(deps routingDeps) (*registry.Registry, *scheduler.Scheduler, *warmup.Prober, *burns.Accountant) {
+func newRouting(deps routingDeps) (*registry.Registry, *scheduler.Scheduler, *warmup.Prober) {
 	// The warmup needs the registry it observes, so it is handed the registry once that exists.
 	registryDeps := registry.Deps{
 		ServingSessions:  deps.Sessions,
@@ -338,7 +336,6 @@ func newRouting(deps routingDeps) (*registry.Registry, *scheduler.Scheduler, *wa
 	if prober != nil {
 		registryDeps.Publications = prober
 	}
-	charges := burns.New(deps.Now, func() bool { return deps.Config.Load().Scheduler.ChargeRefusedNonces })
 	escrows := registry.New(registryDeps)
 	prober.Serve(escrows)
 	router := scheduler.NewScheduler(scheduler.Deps{
@@ -348,11 +345,11 @@ func newRouting(deps routingDeps) (*registry.Registry, *scheduler.Scheduler, *wa
 		Perf:              deps.Hosts,
 		Snapshots:         deps.Snapshots,
 		Config:            deps.Config,
-		Observer:          tracedDispatches{recorder: deps.Dispatches, ledger: deps.Ledger, charges: charges},
+		Observer:          tracedDispatches{recorder: deps.Dispatches, ledger: deps.Ledger},
 		Now:               deps.Now,
 		OnEscrowExhausted: escrows.Exhausted,
 	})
-	return escrows, router, prober, charges
+	return escrows, router, prober
 }
 
 type environmentSigner struct{}

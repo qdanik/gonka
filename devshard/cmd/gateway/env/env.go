@@ -45,7 +45,6 @@ type Values struct {
 	ForceUpstreamStreaming    *bool
 	MaxBufferedResponseBytes  *int64
 	WarmNewEscrows            *bool
-	ChargeRefusedNonces       *bool
 	RotationSettlementEnabled *bool
 	RotationModelsJSON        *string
 
@@ -219,7 +218,6 @@ func Load() (Values, error) {
 	readBool("GATEWAY_FORCE_UPSTREAM_STREAMING", &values.ForceUpstreamStreaming)
 	readInt("GATEWAY_MAX_BUFFERED_RESPONSE_BYTES", &values.MaxBufferedResponseBytes)
 	readBool("GATEWAY_WARM_NEW_ESCROWS", &values.WarmNewEscrows)
-	readBool("GATEWAY_CHARGE_REFUSED_NONCES", &values.ChargeRefusedNonces)
 	readBool("GATEWAY_ROTATION_SETTLEMENT_ENABLED", &values.RotationSettlementEnabled)
 	readString("GATEWAY_ROTATION_MODELS_JSON", &values.RotationModelsJSON)
 

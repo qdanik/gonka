@@ -3,7 +3,6 @@ package main
 import (
 	"sync"
 
-	"devshard/cmd/gateway/burns"
 	"devshard/cmd/gateway/chain"
 	"devshard/cmd/gateway/engine"
 	"devshard/cmd/gateway/internal/logkey"
@@ -17,7 +16,6 @@ import (
 type tracedDispatches struct {
 	recorder *metrics.DispatchRecorder
 	ledger   *nonces.Recorder
-	charges  *burns.Accountant
 }
 
 // GhostBurned logs the nonce and never labels it: a counter keyed by nonce would grow without end.
@@ -26,7 +24,6 @@ func (t tracedDispatches) GhostBurned(escrowID string, burned scheduler.Burn) {
 		logkey.Host, logkey.ShortHost(burned.Participant), logkey.Reason, burned.Reason)
 	t.recorder.GhostBurned(escrowID, burned.Participant, burned.Reason)
 	t.ledger.RecordGhost(escrowID, burned.Nonce, burned.Reason)
-	t.charges.Burned(escrowID, burned)
 }
 
 // BurnBudgetExhausted is rare and changes what the escrow does: queued callers now wait rather than spend.

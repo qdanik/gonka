@@ -117,7 +117,7 @@ func (s *Scheduler) dropAssignment(assignment Assignment, model string) {
 	s.limiter.Release(assignment.Host, model)
 	assignment.ReleaseEscrow()
 	if s.observer != nil {
-		s.observer.GhostBurned(assignment.Escrow, Burn{Nonce: assignment.Nonce.Nonce(), Participant: assignment.Host, Reason: ghostAbandoned.reason(), Prepared: assignment.Nonce})
+		s.observer.GhostBurned(assignment.Escrow, Burn{Nonce: assignment.Nonce.Nonce(), Participant: assignment.Host, Reason: ghostAbandoned.reason()})
 	}
 }
 
@@ -292,7 +292,6 @@ type Burn struct {
 	Nonce       uint64
 	Participant string
 	Reason      string
-	Prepared    Prepared
 }
 
 // Assignment is a committed nonce ready to spend. See README, "The boundary types".

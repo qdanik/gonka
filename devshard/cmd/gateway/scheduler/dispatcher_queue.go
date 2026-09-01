@@ -74,7 +74,7 @@ func (d *dispatcher) drain() (time.Time, bool) {
 			// A burn decided before the session could commit has no nonce to name.
 			burned := Burn{Participant: taken.participant, Reason: outcome.kind.reason()}
 			if prepared != nil {
-				burned.Nonce, burned.Prepared = prepared.Nonce(), prepared
+				burned.Nonce = prepared.Nonce()
 			}
 			d.recordGhost(burned)
 			burnBudget--
@@ -177,6 +177,6 @@ func (d *dispatcher) handOff(served *waiter, taken reservation, prepared Prepare
 	assignment := Assignment{Escrow: d.escrowID, Host: taken.participant, Nonce: prepared, EscrowHold: taken.escrowHold}
 	if !served.deliver(pickResult{assignment: assignment}) {
 		d.giveBack(taken)
-		d.recordGhost(Burn{Nonce: prepared.Nonce(), Participant: taken.participant, Reason: ghostAbandoned.reason(), Prepared: prepared})
+		d.recordGhost(Burn{Nonce: prepared.Nonce(), Participant: taken.participant, Reason: ghostAbandoned.reason()})
 	}
 }
