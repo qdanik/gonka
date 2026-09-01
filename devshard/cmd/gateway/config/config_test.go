@@ -64,7 +64,7 @@ func TestDefaultsMatchSpec(t *testing.T) {
 		{"Engine.FirstTokenCeilingMS", configuration.Engine.FirstTokenCeilingMS, int64(30_000)},
 		{"Chain.SnapshotMaxAgeSeconds", configuration.Chain.SnapshotMaxAgeSeconds, int64(60)},
 		{"Engine.LoserGraceMS", configuration.Engine.LoserGraceMS, int64(600_000)},
-		{"Engine.MaxSpeculativeAttempts", configuration.Engine.MaxSpeculativeAttempts, int64(3)},
+		{"Engine.MaxAttemptsPerRequest", configuration.Engine.MaxAttemptsPerRequest, int64(3)},
 	}
 	for _, check := range checks {
 		if check.got != check.want {
@@ -167,7 +167,7 @@ func TestValidateCatchesEveryRuleBreach(t *testing.T) {
 		{"engine_first_token_floor_ms too low", func(c *Config) { c.Engine.FirstTokenFloorMS = 0 }, "engine_first_token_floor_ms"},
 		{"engine_inter_chunk_stall_ms too low", func(c *Config) { c.Engine.InterChunkStallMS = 0 }, "engine_inter_chunk_stall_ms"},
 		{"engine_loser_grace_ms below inter-chunk stall", func(c *Config) { c.Engine.LoserGraceMS = c.Engine.InterChunkStallMS - 1 }, "engine_loser_grace_ms"},
-		{"engine_max_speculative_attempts negative", func(c *Config) { c.Engine.MaxSpeculativeAttempts = -1 }, "engine_max_speculative_attempts"},
+		{"engine_max_attempts_per_request negative", func(c *Config) { c.Engine.MaxAttemptsPerRequest = -1 }, "engine_max_attempts_per_request"},
 		{"chain_grpc without a port", func(c *Config) { c.Chain.GRPCEndpoint = "node.example" }, "chain_grpc"},
 		{"chain_grpc as a URL", func(c *Config) { c.Chain.GRPCEndpoint = "http://node.example:9090" }, "chain_grpc"},
 	}
@@ -228,7 +228,7 @@ func TestEngineCarriesOnlyTheLiveTunables(t *testing.T) {
 	}
 	want := []string{
 		"ReceiptTimeoutMS", "FirstTokenFloorMS", "FirstTokenCeilingMS", "InterChunkStallMS", "LoserGraceMS",
-		"MaxSpeculativeAttempts",
+		"MaxAttemptsPerRequest",
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("Engine fields = %v, want %v", got, want)

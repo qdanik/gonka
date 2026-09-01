@@ -21,12 +21,12 @@ const (
 )
 
 const (
-	ReceiptTimeoutMS       = "receipt_timeout_ms"
-	FirstTokenFloorMS      = "first_token_floor_ms"
-	FirstTokenCeilingMS    = "first_token_ceiling_ms"
-	InterChunkStallMS      = "inter_chunk_stall_ms"
-	LoserGraceMS           = "loser_grace_ms"
-	MaxSpeculativeAttempts = "max_speculative_attempts"
+	ReceiptTimeoutMS      = "receipt_timeout_ms"
+	FirstTokenFloorMS     = "first_token_floor_ms"
+	FirstTokenCeilingMS   = "first_token_ceiling_ms"
+	InterChunkStallMS     = "inter_chunk_stall_ms"
+	LoserGraceMS          = "loser_grace_ms"
+	MaxAttemptsPerRequest = "max_attempts_per_request"
 )
 
 const hostLabelLength = 8

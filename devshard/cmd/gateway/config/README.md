@@ -33,7 +33,7 @@ Everything the gateway's behaviour depends on, in one value that is never mutate
 | `Capture` | the request-capture sink. An empty `Dir` means `<storageDir>/captured-requests`, `SampleRate` runs from 1 (every matching request) to 0 (none), and `MaxBytes` ceilings what the directory may hold. |
 | `Stream` | the drain timeout and the three-tier classification byte budget. |
 | `Perf` | Envoy-style host ejection: consecutive-fail and rate-with-min-volume triggers, timed backoff, and the pool-wide ejection cap. `MinAvailableHosts` is a floor kept routable regardless of that cap, and host-model state unseen for `HostStalenessSeconds` is evicted. |
-| `Engine` | race-escalation tuning. A zero `MaxSpeculativeAttempts` is bounded only by the host group, and the backstops this struct does not carry are engine constants — see [`docs/race.md`](../docs/race.md), "Tunables and backstops". |
+| `Engine` | race-escalation tuning. A zero `MaxAttemptsPerRequest` is bounded only by the host group, and the backstops this struct does not carry are engine constants — see [`docs/race.md`](../docs/race.md), "Tunables and backstops". |
 | `Scheduler` | `MatchWaitMS` is how long a bound nonce waits for a co-arriving compatible request before it is burned; 0 burns immediately. |
 
 Two accessors carry rules of their own. `Server.AdminEnabled` is what callers must gate on — comparing a presented credential against `AdminAPIKey` directly would authenticate an empty one. `Limits.AccessFor` resolves a model outside a *populated* `ModelAccess` to admin-only rather than open; with no map at all every model is open. See [`docs/operations.md`](../docs/operations.md), "Who may call what".

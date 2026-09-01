@@ -227,8 +227,8 @@ func (c *Config) Validate() error {
 		complain("engine_first_token_ceiling_ms: %d must be >= engine_first_token_floor_ms %d",
 			c.Engine.FirstTokenCeilingMS, c.Engine.FirstTokenFloorMS)
 	}
-	if c.Engine.MaxSpeculativeAttempts < 0 {
-		complain("engine_max_speculative_attempts: %d must be >= 0 (0 = bounded only by the host group)", c.Engine.MaxSpeculativeAttempts)
+	if c.Engine.MaxAttemptsPerRequest < 0 {
+		complain("engine_max_attempts_per_request: %d must be >= 0 (0 = bounded only by the host group)", c.Engine.MaxAttemptsPerRequest)
 	}
 
 	// The ceiling is a budget guard: a long grace parks a committed-cost nonce on the chance of a co-arrival.

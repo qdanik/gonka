@@ -305,11 +305,11 @@ func engineSettings(policy EscalationPolicy, modes config.Modes) *config.Config 
 			ClassifyMaxGlobalBytes:      100 << 20,
 		},
 		Engine: config.Engine{
-			ReceiptTimeoutMS:       policy.ReceiptTimeout.Milliseconds(),
-			FirstTokenFloorMS:      policy.FirstTokenFloor.Milliseconds(),
-			InterChunkStallMS:      policy.InterChunkStall.Milliseconds(),
-			LoserGraceMS:           policy.LoserGrace.Milliseconds(),
-			MaxSpeculativeAttempts: int64(policy.MaxSpeculativeAttempts),
+			ReceiptTimeoutMS:      policy.ReceiptTimeout.Milliseconds(),
+			FirstTokenFloorMS:     policy.FirstTokenFloor.Milliseconds(),
+			InterChunkStallMS:     policy.InterChunkStall.Milliseconds(),
+			LoserGraceMS:          policy.LoserGrace.Milliseconds(),
+			MaxAttemptsPerRequest: int64(policy.MaxAttemptsPerRequest),
 		},
 	}
 }
@@ -467,7 +467,7 @@ func attemptFor(t *testing.T, outcome RaceOutcome, nonce uint64) AttemptOutcome 
 // attempt that failed rather than to a receipt clock.
 func speculativePolicy(maxAttempts int) EscalationPolicy {
 	policy := settledPolicy()
-	policy.MaxSpeculativeAttempts = maxAttempts
+	policy.MaxAttemptsPerRequest = maxAttempts
 	return policy
 }
 

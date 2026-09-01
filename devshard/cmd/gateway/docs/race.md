@@ -163,7 +163,7 @@ A panicking race still releases its registration and then re-panics with the sam
 
 ## Tunables and backstops
 
-Carried in the configuration snapshot (`config.Engine`, `config.Stream`) and bounded by `Config.Validate`, at start-up and on every admin write. The five timings below take a `GATEWAY_ENGINE_*` variable and an admin override; a race reads the snapshot when it is admitted (`engine/engine.go`, `Engine.Run`), so a swap reaches the next race and never re-times one already running. `engine_max_speculative_attempts` is not among them: it multiplies nonces per request rather than moving a deadline, and stays a restart.
+Carried in the configuration snapshot (`config.Engine`, `config.Stream`) and bounded by `Config.Validate`, at start-up and on every admin write. The five timings below take a `GATEWAY_ENGINE_*` variable and an admin override; a race reads the snapshot when it is admitted (`engine/engine.go`, `Engine.Run`), so a swap reaches the next race and never re-times one already running. `engine_max_attempts_per_request` is not among them: it multiplies nonces per request rather than moving a deadline, and stays a restart.
 
 | Field | Default | Effect |
 |---|---|---|
@@ -172,7 +172,7 @@ Carried in the configuration snapshot (`config.Engine`, `config.Stream`) and bou
 | `engine_first_token_ceiling_ms` | 30 000 | Upper bound, whatever the host's own p75 asks for. |
 | `engine_inter_chunk_stall_ms` | 30 000 | Silence after first content before an attempt is flagged stalled. |
 | `engine_loser_grace_ms` | 600 000 | How long losers may keep streaming after the winner finishes. Must be at least the stall window, or losers merely between chunks are killed. |
-| `engine_max_speculative_attempts` | 3 | Attempts one race may hold; 0 means bounded only by the host group. |
+| `engine_max_attempts_per_request` | 3 | Attempts one race may hold; 0 means bounded only by the host group. |
 | `drain_timeout_seconds` | 2 400 | Bound on a race after its client leaves. |
 | `classify_max_attempt_bytes`, `classify_max_participant_bytes`, `classify_max_global_bytes` | 1 / 10 / 100 MiB | Reassembly budgets: attempt, participant, global. |
 

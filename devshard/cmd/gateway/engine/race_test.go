@@ -462,21 +462,21 @@ func (f *raceFixture) run(ctx context.Context) (RaceOutcome, error) {
 // second crownable attempt joins a race that has no suspicious host.
 func racePolicy(maxAttempts int) EscalationPolicy {
 	return EscalationPolicy{
-		ReceiptTimeout:         0,
-		FirstTokenFloor:        time.Hour,
-		InterChunkStall:        time.Hour,
-		LoserGrace:             10 * time.Minute,
-		MaxSpeculativeAttempts: maxAttempts,
+		ReceiptTimeout:        0,
+		FirstTokenFloor:       time.Hour,
+		InterChunkStall:       time.Hour,
+		LoserGrace:            10 * time.Minute,
+		MaxAttemptsPerRequest: maxAttempts,
 	}
 }
 
 func settledPolicy() EscalationPolicy {
 	return EscalationPolicy{
-		ReceiptTimeout:         time.Hour,
-		FirstTokenFloor:        time.Hour,
-		InterChunkStall:        time.Hour,
-		LoserGrace:             10 * time.Minute,
-		MaxSpeculativeAttempts: 1,
+		ReceiptTimeout:        time.Hour,
+		FirstTokenFloor:       time.Hour,
+		InterChunkStall:       time.Hour,
+		LoserGrace:            10 * time.Minute,
+		MaxAttemptsPerRequest: 1,
 	}
 }
 
@@ -1503,7 +1503,7 @@ func TestOutcomeRewritesTerminalsTheCoordinatorAloneKnows(t *testing.T) {
 // starts the second attempt.
 func refusalPolicy() EscalationPolicy {
 	policy := settledPolicy()
-	policy.MaxSpeculativeAttempts = 2
+	policy.MaxAttemptsPerRequest = 2
 	return policy
 }
 

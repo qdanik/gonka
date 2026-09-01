@@ -137,12 +137,12 @@ type Perf struct {
 
 // Engine groups race-escalation tuning. See race.md, "Tunables and backstops".
 type Engine struct {
-	ReceiptTimeoutMS       int64
-	FirstTokenFloorMS      int64
-	FirstTokenCeilingMS    int64
-	InterChunkStallMS      int64
-	LoserGraceMS           int64
-	MaxSpeculativeAttempts int64
+	ReceiptTimeoutMS      int64
+	FirstTokenFloorMS     int64
+	FirstTokenCeilingMS   int64
+	InterChunkStallMS     int64
+	LoserGraceMS          int64
+	MaxAttemptsPerRequest int64
 }
 
 // Scheduler groups nonce-holding tuning; MatchWaitMS of 0 burns an unmatched nonce immediately.

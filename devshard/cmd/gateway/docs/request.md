@@ -72,7 +72,7 @@ sequenceDiagram
     R->>H1: settle the losing nonce
 ```
 
-The escalation ladder (`engine/escalation.go`) measures each stage against the host's own history, not a fixed timeout: receipt, first token, inter-chunk silence. `MaxSpeculativeAttempts` bounds the **total** attempts including the primary.
+The escalation ladder (`engine/escalation.go`) measures each stage against the host's own history, not a fixed timeout: receipt, first token, inter-chunk silence. `MaxAttemptsPerRequest` bounds the **total** attempts including the primary.
 
 ## The response side
 

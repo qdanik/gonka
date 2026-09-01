@@ -23,7 +23,7 @@ func BenchmarkNextDeadline(b *testing.B) {
 	policy := EscalationPolicy{
 		ReceiptTimeout: 10 * time.Second, FirstTokenFloor: time.Second,
 		FirstTokenCeiling: 60 * time.Second, InterChunkStall: time.Minute,
-		LoserGrace: 5 * time.Second, MaxSpeculativeAttempts: 4,
+		LoserGrace: 5 * time.Second, MaxAttemptsPerRequest: 4,
 	}
 	plan := deadlinePlan{
 		Policy:   policy,

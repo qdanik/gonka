@@ -84,12 +84,12 @@ func Defaults() Config {
 			HostStalenessSeconds:     3_600,
 		},
 		Engine: Engine{
-			ReceiptTimeoutMS:       5_000,
-			FirstTokenFloorMS:      12_000,
-			FirstTokenCeilingMS:    30_000,
-			InterChunkStallMS:      30_000,
-			LoserGraceMS:           600_000,
-			MaxSpeculativeAttempts: 3,
+			ReceiptTimeoutMS:      5_000,
+			FirstTokenFloorMS:     12_000,
+			FirstTokenCeilingMS:   30_000,
+			InterChunkStallMS:     30_000,
+			LoserGraceMS:          600_000,
+			MaxAttemptsPerRequest: 2,
 		},
 		Scheduler: Scheduler{
 			MatchWaitMS:    2_000,

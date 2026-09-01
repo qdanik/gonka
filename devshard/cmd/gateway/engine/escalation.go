@@ -40,13 +40,13 @@ func (s EscalationStage) Reason() string {
 
 // The ladder is pure over its arguments: no host performance, no phase snapshot, no clock of its own.
 type EscalationPolicy struct {
-	ReceiptTimeout         time.Duration
-	FirstTokenFloor        time.Duration
-	FirstTokenCeiling      time.Duration
-	InterChunkStall        time.Duration
-	LoserGrace             time.Duration
-	MaxSpeculativeAttempts int
-	HardTimeout            time.Duration
+	ReceiptTimeout        time.Duration
+	FirstTokenFloor       time.Duration
+	FirstTokenCeiling     time.Duration
+	InterChunkStall       time.Duration
+	LoserGrace            time.Duration
+	MaxAttemptsPerRequest int
+	HardTimeout           time.Duration
 }
 
 // E2EOverrides are the bounds a test stand may shorten; every zero keeps the production bound.
@@ -63,12 +63,12 @@ func (p EscalationPolicy) hardTimeout() time.Duration {
 
 func EscalationPolicyFromConfig(engine config.Engine) EscalationPolicy {
 	return EscalationPolicy{
-		ReceiptTimeout:         time.Duration(engine.ReceiptTimeoutMS) * time.Millisecond,
-		FirstTokenFloor:        time.Duration(engine.FirstTokenFloorMS) * time.Millisecond,
-		FirstTokenCeiling:      time.Duration(engine.FirstTokenCeilingMS) * time.Millisecond,
-		InterChunkStall:        time.Duration(engine.InterChunkStallMS) * time.Millisecond,
-		LoserGrace:             time.Duration(engine.LoserGraceMS) * time.Millisecond,
-		MaxSpeculativeAttempts: int(engine.MaxSpeculativeAttempts),
+		ReceiptTimeout:        time.Duration(engine.ReceiptTimeoutMS) * time.Millisecond,
+		FirstTokenFloor:       time.Duration(engine.FirstTokenFloorMS) * time.Millisecond,
+		FirstTokenCeiling:     time.Duration(engine.FirstTokenCeilingMS) * time.Millisecond,
+		InterChunkStall:       time.Duration(engine.InterChunkStallMS) * time.Millisecond,
+		LoserGrace:            time.Duration(engine.LoserGraceMS) * time.Millisecond,
+		MaxAttemptsPerRequest: int(engine.MaxAttemptsPerRequest),
 	}
 }
 
@@ -135,10 +135,10 @@ func (p EscalationPolicy) AttemptBudget(hostCount int, nonceScarce bool) int {
 	if nonceScarce {
 		return 1
 	}
-	if p.MaxSpeculativeAttempts < 1 || p.MaxSpeculativeAttempts > hostCount {
+	if p.MaxAttemptsPerRequest < 1 || p.MaxAttemptsPerRequest > hostCount {
 		return hostCount
 	}
-	return p.MaxSpeculativeAttempts
+	return p.MaxAttemptsPerRequest
 }
 
 func (p EscalationPolicy) NextEscalation(now time.Time, attempts []EscalationAttempt, request EscalationRequest) (ArmedEscalation, bool) {

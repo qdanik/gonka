@@ -20,20 +20,20 @@ func dispatched(offset time.Duration) EscalationAttempt {
 
 func TestEscalationPolicyFromConfigConvertsEveryTunable(t *testing.T) {
 	policy := EscalationPolicyFromConfig(config.Engine{
-		ReceiptTimeoutMS:       1_500,
-		FirstTokenFloorMS:      250,
-		FirstTokenCeilingMS:    70_000,
-		InterChunkStallMS:      7_000,
-		LoserGraceMS:           90_000,
-		MaxSpeculativeAttempts: 4,
+		ReceiptTimeoutMS:      1_500,
+		FirstTokenFloorMS:     250,
+		FirstTokenCeilingMS:   70_000,
+		InterChunkStallMS:     7_000,
+		LoserGraceMS:          90_000,
+		MaxAttemptsPerRequest: 4,
 	})
 	want := EscalationPolicy{
-		ReceiptTimeout:         1_500 * time.Millisecond,
-		FirstTokenFloor:        250 * time.Millisecond,
-		FirstTokenCeiling:      70 * time.Second,
-		InterChunkStall:        7 * time.Second,
-		LoserGrace:             90 * time.Second,
-		MaxSpeculativeAttempts: 4,
+		ReceiptTimeout:        1_500 * time.Millisecond,
+		FirstTokenFloor:       250 * time.Millisecond,
+		FirstTokenCeiling:     70 * time.Second,
+		InterChunkStall:       7 * time.Second,
+		LoserGrace:            90 * time.Second,
+		MaxAttemptsPerRequest: 4,
 	}
 	if policy != want {
 		t.Fatalf("EscalationPolicyFromConfig = %+v, want %+v", policy, want)
@@ -113,7 +113,7 @@ func TestAttemptBudgetClampsToOneWhenNoncesAreScarce(t *testing.T) {
 	}
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
-			policy := EscalationPolicy{MaxSpeculativeAttempts: testCase.maxSpeculative}
+			policy := EscalationPolicy{MaxAttemptsPerRequest: testCase.maxSpeculative}
 			got := policy.AttemptBudget(testCase.hostCount, testCase.nonceScarce)
 			if got != testCase.want {
 				t.Fatalf("AttemptBudget(%d, %t) = %d, want %d",
