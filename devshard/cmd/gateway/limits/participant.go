@@ -258,13 +258,9 @@ func (l *ParticipantLimiter) OnResult(participant, model string, verdict Verdict
 		state.consecutiveTransportFail++
 		// A half-open probe gets one try: any fault reopens immediately, not after AfterFailures-many.
 		if state.consecutiveTransportFail >= int(l.cfg.AfterFailures) || state.halfOpen {
-			backoff := time.Duration(float64(l.cfg.BaseOpen) * math.Pow(1.6, float64(state.backoffCount)))
-			backoff += l.jitter(backoff)
-			if backoff > l.cfg.MaxOpen {
-				backoff = l.cfg.MaxOpen
-			}
-			state.openUntil = now.Add(backoff)
-			if backoff < l.cfg.MaxOpen { // stop counting once saturated so 1.6^count can't overflow the Duration
+			capped := min(time.Duration(float64(l.cfg.BaseOpen)*math.Pow(1.6, float64(state.backoffCount))), l.cfg.MaxOpen)
+			state.openUntil = now.Add(capped + l.jitter(capped))
+			if capped < l.cfg.MaxOpen { // stop counting once saturated so 1.6^count can't overflow the Duration
 				state.backoffCount++
 			}
 			state.halfOpen = false

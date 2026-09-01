@@ -189,10 +189,10 @@ func (t Terminal) verdict() (limits.Verdict, bool) {
 	case TerminalThrottled, TerminalUnavailable, TerminalHardTimeout:
 		return limits.Overload, true
 	case TerminalForbidden, TerminalNotFound, TerminalTimestampDrift,
-		TerminalDialFailure, TerminalStreamTruncated, TerminalUnexpectedEOF, TerminalStalled,
-		TerminalResponseTooLarge:
+		TerminalDialFailure, TerminalStreamTruncated, TerminalUnexpectedEOF, TerminalStalled:
 		return limits.TransportFault, true
-	case TerminalEmptyStream, TerminalBurnEmpty, TerminalErrorStream, TerminalCapabilityRefused:
+	case TerminalEmptyStream, TerminalBurnEmpty, TerminalErrorStream, TerminalCapabilityRefused,
+		TerminalResponseTooLarge:
 		return limits.ModelOutcome, true
 	}
 	return limits.ModelOutcome, false

@@ -124,7 +124,7 @@ There are twenty terminal values, and every downstream vocabulary — limiter ve
 
 | Consumer | Rule |
 |---|---|
-| Limiter verdict | Won/Lost → success; throttled/unavailable → overload; transport-class terminals and an empty stream that never finished its nonce → transport fault; burn-empty, error stream, capability refusal and an empty stream that did finish its nonce → model outcome, which never moves a host's window. |
+| Limiter verdict | Won/Lost → success; throttled/unavailable → overload; transport-class terminals and an empty stream that never finished its nonce → transport fault; burn-empty, error stream, capability refusal, a reply past the gateway's own buffer cap, and an empty stream that did finish its nonce → model outcome, which never moves a host's window. |
 | Performance sample | One sample per attempt, unless the exemption ladder excuses it. The sample carries only participant, model and whether the host was responsive. |
 | Metric labels | Bounded label vocabularies exported by the engine and referenced — not restated — by the metrics layer. |
 

@@ -27,7 +27,7 @@ Two shapes, for two different questions.
 
 A host is ejected when either trigger fires: consecutive failures past the threshold, or a failure rate past its threshold once the window carries enough volume to be worth reading. The ejection lasts `base * ejectionCount`, capped at the maximum, so a repeat offender is out for longer each time. That count relaxes one rung per full healthy window since the last ejection ended, and the anchor advances with it so a long quiet stretch cannot cascade several rungs at once.
 
-The pool-wide cap is `min(MaxEjectionFraction * hostsKnownForModel, hostsKnownForModel - MinAvailableHosts)`, floored at zero, and it is applied per model. Which hosts survive the cap is decided in participant order, so the same set of ejections always yields the same routable set.
+The pool-wide cap is `min(MaxEjectionFraction * hostsKnownForModel, hostsKnownForModel - MinAvailableHosts)`, floored at zero, and it is applied per model. Which hosts survive the cap is decided by ejection count, most-ejected first, with participant order breaking ties, so the cap keeps the least chronic offenders in rotation and the same set of ejections always yields the same routable set.
 
 That cap is why there are two published views:
 

@@ -2,6 +2,7 @@
 package perf
 
 import (
+	"cmp"
 	"slices"
 	"strings"
 	"sync"
@@ -94,7 +95,12 @@ func (t *Tracker) rebuildEjectedViewLocked(now time.Time, perf config.Perf) {
 
 	view := make(map[hostKey]time.Time, len(degraded))
 	for model, keys := range ejectedByModel {
-		slices.SortFunc(keys, func(a, b hostKey) int { return strings.Compare(a.participant, b.participant) })
+		slices.SortFunc(keys, func(a, b hostKey) int {
+			if rung := cmp.Compare(t.ejections[b].ejectionCount, t.ejections[a].ejectionCount); rung != 0 {
+				return rung
+			}
+			return strings.Compare(a.participant, b.participant)
+		})
 		allowed := maxEjectable(perf, knownByModel[model])
 		for rank, key := range keys {
 			if rank >= allowed {

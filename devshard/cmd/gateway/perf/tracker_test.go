@@ -100,22 +100,29 @@ func TestTrackerEjectedRespectsConfiguredEjectionBaseSeconds(t *testing.T) {
 	}
 }
 
-func TestTrackerEjectedCapLimitsFractionAcrossManyFailingHosts(t *testing.T) {
+// The cap decides which degraded hosts keep serving, so it must pardon the least chronic ones. Ordering
+// by name instead would keep the same alphabetically-early hosts out of rotation whatever they measure.
+func TestTrackerEjectedCapKeepsTheMostChronicHostsEjected(t *testing.T) {
 	perf := testPerf()
 	perf.MaxEjectionFraction = 0.5
 	perf.MinAvailableHosts = 1
-	tracker := newTestTracker(perf, fixedNow(testEpoch))
+	instant := testEpoch
+	tracker := newTestTracker(perf, func() time.Time { return instant })
 
-	participants := []string{"p0", "p1", "p2", "p3"}
-	for _, participant := range participants {
+	// p2 and p3 earn a second rung of the ejection ladder before all four are ejected together.
+	for _, participant := range []string{"p2", "p3"} {
+		failAllConsecutive(tracker, participant, "model-a", perf.ConsecutiveFailThreshold)
+	}
+	instant = instant.Add(time.Duration(perf.EjectionBaseSeconds)*time.Second + time.Second)
+	for _, participant := range []string{"p0", "p1", "p2", "p3"} {
 		failAllConsecutive(tracker, participant, "model-a", perf.ConsecutiveFailThreshold)
 	}
 
-	if !tracker.Ejected("p0", "model-a") || !tracker.Ejected("p1", "model-a") {
-		t.Fatal("expected p0 and p1 (lexicographically first) to remain reported as ejected")
+	if !tracker.Ejected("p2", "model-a") || !tracker.Ejected("p3", "model-a") {
+		t.Fatal("expected p2 and p3, ejected twice each, to remain reported as ejected")
 	}
-	if tracker.Ejected("p2", "model-a") || tracker.Ejected("p3", "model-a") {
-		t.Fatal("expected p2 and p3 to be pardoned by the ejection cap")
+	if tracker.Ejected("p0", "model-a") || tracker.Ejected("p1", "model-a") {
+		t.Fatal("expected p0 and p1, ejected once each, to be pardoned by the ejection cap")
 	}
 }
 

@@ -737,3 +737,17 @@ func TestARaceTheHostNeverAnsweredLeavesItsStrikesAlone(t *testing.T) {
 		t.Fatal("the dial failure cleared the strikes the host had already earned")
 	}
 }
+
+// The oversize cap is the gateway's own buffer limit, so an attempt it kills says nothing about the
+// host's transport and must not open its cutoff.
+func TestResponseTooLargeIsNotChargedToTheHostAsATransportFault(t *testing.T) {
+	t.Parallel()
+
+	attempt := failedAttempt(TerminalResponseTooLarge)
+	outcome := race(attempt)
+
+	verdict, recorded := outcome.Verdict(attempt)
+	if verdict != limits.ModelOutcome {
+		t.Fatalf("Verdict() = (%v, %v), want (ModelOutcome, _)", verdict, recorded)
+	}
+}

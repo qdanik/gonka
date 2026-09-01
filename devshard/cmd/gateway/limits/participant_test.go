@@ -651,3 +651,27 @@ func TestReconfigureClampsAWindowAboveTheNewCeiling(t *testing.T) {
 		t.Fatalf("window = %v, want the new ceiling 8", clamped)
 	}
 }
+
+// Jitter exists so hosts that trip together do not reopen together; clamping after it would erase it
+// exactly when every host is saturated at MaxOpen.
+func TestSaturatedBackoffStillCarriesJitter(t *testing.T) {
+	t.Parallel()
+	cfg := ParticipantConfig{
+		Initial:       4,
+		Max:           64,
+		AfterFailures: 1,
+		BaseOpen:      1 * time.Second,
+		MaxOpen:       3 * time.Second,
+	}
+	l := NewParticipantLimiter(cfg, fixedNow(testEpoch))
+	l.jitter = func(backoff time.Duration) time.Duration { return backoff / 5 }
+
+	for range 4 { // the ladder saturates well before the fourth trip
+		l.OnResult("p", "m", TransportFault)
+	}
+
+	got := l.states[key{participant: "p", model: "m"}].openUntil.Sub(testEpoch)
+	if !withinTolerance(got, cfg.MaxOpen+cfg.MaxOpen/5) {
+		t.Fatalf("saturated backoff = %v, want %v (MaxOpen plus its jitter)", got, cfg.MaxOpen+cfg.MaxOpen/5)
+	}
+}
