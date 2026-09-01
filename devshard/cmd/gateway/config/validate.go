@@ -6,6 +6,14 @@ import (
 	"net"
 	"net/url"
 	"strings"
+
+	"devshard/cmd/gateway/chain"
+)
+
+const (
+	maxSnapshotAgeSeconds   = 86_400
+	maxEngineTimingMS       = 86_400_000
+	snapshotAgePollMultiple = 7
 )
 
 // ErrInvalid marks a configuration the operator got wrong, so the surface answers 400 rather than 502.
@@ -34,6 +42,12 @@ func (c *Config) Validate() error {
 	// A gRPC target is host:port with no scheme, so the URL check above would pass anything.
 	if _, _, err := net.SplitHostPort(c.Chain.GRPCEndpoint); err != nil {
 		complain("chain_grpc: %q is not host:port", c.Chain.GRPCEndpoint)
+	}
+	if c.Chain.SnapshotMaxAgeSeconds < 0 || c.Chain.SnapshotMaxAgeSeconds > maxSnapshotAgeSeconds {
+		complain("chain_snapshot_max_age_seconds: %d must be between 0 (disabled) and %d", c.Chain.SnapshotMaxAgeSeconds, maxSnapshotAgeSeconds)
+	}
+	if minimum := int64(chain.DefaultObserverPollInterval.Seconds()) * snapshotAgePollMultiple; c.Chain.SnapshotMaxAgeSeconds > 0 && c.Chain.SnapshotMaxAgeSeconds < minimum {
+		complain("chain_snapshot_max_age_seconds: %d must be 0 or at least %d, the observer's own refresh cadence", c.Chain.SnapshotMaxAgeSeconds, minimum)
 	}
 	if c.Tx.FeeAmount < 0 {
 		complain("tx_fee_amount: %d must be >= 0", c.Tx.FeeAmount)
@@ -184,15 +198,30 @@ func (c *Config) Validate() error {
 	if c.Engine.ReceiptTimeoutMS < 1 {
 		complain("engine_receipt_timeout_ms: %d must be >= 1", c.Engine.ReceiptTimeoutMS)
 	}
+	if c.Engine.ReceiptTimeoutMS > maxEngineTimingMS {
+		complain("engine_receipt_timeout_ms: %d must be <= %d", c.Engine.ReceiptTimeoutMS, maxEngineTimingMS)
+	}
 	if c.Engine.FirstTokenFloorMS < 1 {
 		complain("engine_first_token_floor_ms: %d must be >= 1", c.Engine.FirstTokenFloorMS)
+	}
+	if c.Engine.FirstTokenFloorMS > maxEngineTimingMS {
+		complain("engine_first_token_floor_ms: %d must be <= %d", c.Engine.FirstTokenFloorMS, maxEngineTimingMS)
 	}
 	if c.Engine.InterChunkStallMS < 1 {
 		complain("engine_inter_chunk_stall_ms: %d must be >= 1", c.Engine.InterChunkStallMS)
 	}
+	if c.Engine.InterChunkStallMS > maxEngineTimingMS {
+		complain("engine_inter_chunk_stall_ms: %d must be <= %d", c.Engine.InterChunkStallMS, maxEngineTimingMS)
+	}
 	// A grace under the stall window kills losers that are merely between chunks.
 	if c.Engine.LoserGraceMS < c.Engine.InterChunkStallMS {
 		complain("engine_loser_grace_ms: %d must be >= engine_inter_chunk_stall_ms %d", c.Engine.LoserGraceMS, c.Engine.InterChunkStallMS)
+	}
+	if c.Engine.LoserGraceMS > maxEngineTimingMS {
+		complain("engine_loser_grace_ms: %d must be <= %d", c.Engine.LoserGraceMS, maxEngineTimingMS)
+	}
+	if c.Engine.FirstTokenCeilingMS > maxEngineTimingMS {
+		complain("engine_first_token_ceiling_ms: %d must be <= %d", c.Engine.FirstTokenCeilingMS, maxEngineTimingMS)
 	}
 	if c.Engine.FirstTokenCeilingMS < c.Engine.FirstTokenFloorMS {
 		complain("engine_first_token_ceiling_ms: %d must be >= engine_first_token_floor_ms %d",

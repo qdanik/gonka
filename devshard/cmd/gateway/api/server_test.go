@@ -269,9 +269,18 @@ func (t *fakeTelemetry) Handler() http.Handler {
 	})
 }
 
+var harnessClock = time.Unix(1700000000, 0)
+
 type fixedSnapshots struct{ snapshot chain.PhaseSnapshot }
 
-func (f fixedSnapshots) Snapshot() chain.PhaseSnapshot { return f.snapshot }
+func (f fixedSnapshots) Snapshot() chain.PhaseSnapshot {
+	snapshot := f.snapshot
+	if snapshot.LastHealthyAt.IsZero() {
+		snapshot.LastUpdatedAt = harnessClock
+		snapshot.LastHealthyAt = harnessClock
+	}
+	return snapshot
+}
 
 type harness struct {
 	server      *Server
@@ -337,7 +346,7 @@ func newHarness(t *testing.T, tune ...func(*config.Config)) *harness {
 		Rejections: live.rejections,
 		StorageDir: storageDir,
 		Version:    "test",
-		Now:        func() time.Time { return time.Unix(1700000000, 0) },
+		Now:        func() time.Time { return harnessClock },
 		RequestIDs: func() string { return "request-1" },
 	})
 	if err != nil {

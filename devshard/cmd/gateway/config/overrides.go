@@ -37,6 +37,12 @@ type Overrides struct {
 	RotationSettlementEnabled              *bool                  `json:"rotation_settlement_enabled,omitempty"`
 	RotationPrePoCBlocks                   *int64                 `json:"rotation_pre_poc_blocks,omitempty"`
 	RotationModelsJSON                     *string                `json:"rotation_models_json,omitempty"`
+	ChainSnapshotMaxAgeSeconds             *int64                 `json:"chain_snapshot_max_age_seconds,omitempty"`
+	EngineReceiptTimeoutMS                 *int64                 `json:"engine_receipt_timeout_ms,omitempty"`
+	EngineFirstTokenFloorMS                *int64                 `json:"engine_first_token_floor_ms,omitempty"`
+	EngineFirstTokenCeilingMS              *int64                 `json:"engine_first_token_ceiling_ms,omitempty"`
+	EngineInterChunkStallMS                *int64                 `json:"engine_inter_chunk_stall_ms,omitempty"`
+	EngineLoserGraceMS                     *int64                 `json:"engine_loser_grace_ms,omitempty"`
 }
 
 // ParseOverrides rejects unknown fields: a typo in an admin PUT must be reported, never silently ignored.

@@ -223,11 +223,12 @@ func (s *Server) status(escrows []scheduler.Escrow) statusResponse {
 			MaxConcurrentPer10000Weight: modelCapacity.MaxConcurrentPer10000Weight,
 		})
 	}
+	refusal := admission(snapshot, configuration.Modes, s.now(), configuration.Chain.SnapshotMaxAgeSeconds)
 	return statusResponse{
 		Mode:            configuration.Modes.PoCMode,
 		Version:         s.version,
-		RequestsBlocked: admission(snapshot, configuration.Modes) != nil,
-		BlockReason:     snapshot.BlockReason,
+		RequestsBlocked: refusal != nil,
+		BlockReason:     statusBlockReason(snapshot, refusal),
 		Models:          models,
 		Devshards:       devshards,
 		Limiter: limiterStatus{
@@ -264,4 +265,12 @@ func phaseName(phase types.SessionPhase) string {
 		return "settlement"
 	}
 	return "unknown"
+}
+
+// statusBlockReason names why the shard is refusing. See README.md, "Errors and statuses".
+func statusBlockReason(snapshot chain.PhaseSnapshot, refusal error) chain.BlockReason {
+	if chainUnreadable(refusal) {
+		return chain.BlockReasonSnapshotStale
+	}
+	return snapshot.BlockReason
 }

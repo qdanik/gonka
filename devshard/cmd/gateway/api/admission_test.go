@@ -62,7 +62,7 @@ func TestAdmissionFoldsRelaxedModeOverTheRawChainState(t *testing.T) {
 	}
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
-			err := admission(testCase.snapshot, config.Modes{PoCMode: testCase.mode})
+			err := admission(testCase.snapshot, config.Modes{PoCMode: testCase.mode}, staleTestEpoch, 0)
 			if testCase.wantBlocked != (err != nil) {
 				t.Fatalf("blocked: got %v, want %v", err != nil, testCase.wantBlocked)
 			}

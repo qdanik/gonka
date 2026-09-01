@@ -65,6 +65,14 @@ type Values struct {
 	CaptureMaxBytes   *int64
 
 	PerfEWMAHalfLifeSeconds *int64
+
+	ChainSnapshotMaxAgeSeconds *int64
+
+	EngineReceiptTimeoutMS    *int64
+	EngineFirstTokenFloorMS   *int64
+	EngineFirstTokenCeilingMS *int64
+	EngineInterChunkStallMS   *int64
+	EngineLoserGraceMS        *int64
 }
 
 // PoCModeOff and PoCModeRelaxed are the accepted GATEWAY_POC_MODE values.
@@ -231,6 +239,14 @@ func Load() (Values, error) {
 	readInt("GATEWAY_CAPTURE_MAX_BYTES", &values.CaptureMaxBytes)
 
 	readInt("GATEWAY_PERF_EWMA_HALFLIFE_SECONDS", &values.PerfEWMAHalfLifeSeconds)
+
+	readInt("GATEWAY_CHAIN_SNAPSHOT_MAX_AGE_SECONDS", &values.ChainSnapshotMaxAgeSeconds)
+
+	readInt("GATEWAY_ENGINE_RECEIPT_TIMEOUT_MS", &values.EngineReceiptTimeoutMS)
+	readInt("GATEWAY_ENGINE_FIRST_TOKEN_FLOOR_MS", &values.EngineFirstTokenFloorMS)
+	readInt("GATEWAY_ENGINE_FIRST_TOKEN_CEILING_MS", &values.EngineFirstTokenCeilingMS)
+	readInt("GATEWAY_ENGINE_INTER_CHUNK_STALL_MS", &values.EngineInterChunkStallMS)
+	readInt("GATEWAY_ENGINE_LOSER_GRACE_MS", &values.EngineLoserGraceMS)
 
 	if values.PoCMode != nil && *values.PoCMode != PoCModeOff && *values.PoCMode != PoCModeRelaxed {
 		problems = append(problems, fmt.Errorf("GATEWAY_POC_MODE: %q is not %q or %q", *values.PoCMode, PoCModeOff, PoCModeRelaxed))

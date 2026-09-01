@@ -9,11 +9,11 @@ Per-host history, and the one verdict derived from it that routing honours.
 - **In-flight load** (`inflight.go`) — what each host is carrying right now.
 - **Capability refusals** (`capability.go`) — counts of what a host's build refused: an unsupported protocol version, a tool call it does not implement, a context length it will not take, plus the smallest context it has admitted to.
 
-## Boundaries worth knowing
+## Boundaries
 
 - **Capability refusals are counted, never routed on.** They are reported so an operator knows what to fix; nothing here withholds a host from the rota over one. A version refusal in particular would retire a host for good, because a gateway serves one protocol version for its whole life.
 - **Ejection is capped by a floor of available hosts**, so it cannot empty a model.
-- **Every restart starts clean.** No ejections, no counts, every window at its initial value — a deliberate divergence from the legacy gateway, argued in [`docs/rules.md`](../docs/rules.md).
+- **Every restart starts clean.** No ejections, no counts, every window at its initial value — a divergence from the legacy gateway, argued in [`docs/rules.md`](../docs/rules.md).
 
 ## How the numbers are kept
 

@@ -40,6 +40,7 @@ const (
 	BlockReasonNone            BlockReason = ""
 	BlockReasonPoC             BlockReason = "poc"
 	BlockReasonConfirmationPoC BlockReason = "confirmation_poc"
+	BlockReasonSnapshotStale   BlockReason = "chain_snapshot_stale"
 )
 
 // AllBlockReasons lists every block reason, for the same reason AllEpochPhases exists.
@@ -68,6 +69,7 @@ type PhaseSnapshot struct {
 	MaxNonce uint64
 
 	LastUpdatedAt time.Time
+	LastHealthyAt time.Time
 	LastError     string
 }
 

@@ -32,9 +32,9 @@ Each attempt runs in its own goroutine and communicates with the coordinator onl
 
 **A winner is crowned by its first chunk of actual content** — not by a receipt, not by the first token, and not by HTTP 200 (`engine/classify.go`, `chunkSignal.crownsWinner`; `engine/race.go`, `raceCoordinator.answer`).
 
-The choice answers a specific failure: a host that responds instantly with an empty stream would win on any earlier signal, and the client would get nothing while a slower, honest host was cancelled. Requiring content means the empty host loses to whoever produces tokens.
+A host that responds instantly with an empty stream wins on any earlier signal, and the client gets nothing while a slower, honest host is cancelled. Requiring content means the empty host loses to whoever produces tokens.
 
-The mechanics are a handshake, not a flag. An attempt's writer buffers everything it receives while it has produced no content; on the first chunk that carries content it sends a crown request and **blocks** on the reply (`engine/stream.go`, `winnerWriter.Write` and `winnerWriter.claim`). So no byte reaches the client before the coordinator has settled on a single winner. The coordinator's answer is you are the winner or you are suppressed, and a suspicious host's claim is **held** until it can be answered honestly. A suppressed attempt's writer then discards its buffered prefix and clears its client field entirely — a loser has no reachable sink at all, rather than a sink behind a branch someone must remember to write. Suppression is permanent, which is why the claim is held rather than refused early: an attempt refused a crown can never be given one, so refusing it while a rival might still fail would throw away an answer the race has already paid for.
+The mechanics are a handshake, not a flag. An attempt's writer buffers everything it receives while it has produced no content; on the first chunk that carries content it sends a crown request and **blocks** on the reply (`engine/stream.go`, `winnerWriter.Write` and `winnerWriter.claim`). So no byte reaches the client before the coordinator has settled on a single winner. The coordinator's answer is you are the winner or you are suppressed, and a suspicious host's claim is **held** until it can be answered honestly. A suppressed attempt's writer then discards its buffered prefix and clears its client field entirely — a loser has no reachable sink at all, rather than a sink reachable behind a branch. Suppression is permanent, which is why the claim is held rather than refused early: an attempt refused a crown can never be given one, so refusing it while a rival might still fail would throw away an answer the race has already paid for.
 
 A suppressed attempt keeps reporting successful writes to its host, so the host keeps streaming to its own receipt. Its bytes go nowhere.
 
@@ -64,7 +64,7 @@ Reassembly is charged against three budgets — per attempt (1 MiB), per partici
 
 ## Escalation
 
-The escalation policy is deliberately **pure**: a function of its arguments and the configured thresholds, with no chain snapshot and no clock of its own. It reads no host performance data either — the race reads the outlier detector and hands `Decide` a boolean, so the policy's whole input is its argument list (`engine/escalation.go`).
+The escalation policy is **pure**: a function of its arguments and the configured thresholds, with no chain snapshot and no clock of its own. It reads no host performance data either — the race reads the outlier detector and hands `Decide` a boolean, so the policy's whole input is its argument list (`engine/escalation.go`).
 
 Stages that can trigger another attempt. The reason column is the wire string, which is what `devshard_gateway_escalation_decisions_total{reason}` carries:
 
@@ -79,13 +79,13 @@ An attempt launched at race start beside a primary the race distrusts carries a 
 
 The first-token deadline is a fixed quadratic in prompt size, `1.7 + 3e-5·T + 5e-10·T²` seconds, with a floor from `engine_first_token_floor_ms` (`engine/escalation.go`, `EscalationPolicy.firstTokenTimeout`). At the default floor of one second the floor is inert: the quadratic's minimum is 1.7 s, so the floor binds only if raised.
 
-**Arming is not permission.** `NextEscalation` yields an `ArmedEscalation`, which is a deadline and nothing more. The only producer of an actionable escalation is `Confirm`, which re-derives the trigger *at fire time* and rejects a trigger that has vanished, a stage that has advanced, or a timer that fired early (`engine/escalation.go`, `ArmedEscalation` and `EscalationPolicy.Confirm`). This exists because an attempt's stage moves while its timer runs — a receipt landing just under the receipt timeout is the common case — and escalating on the armed stage would start a needless extra attempt on *every* healthy request. Confirming re-reads state, so the type system does the enforcing: forgetting to confirm yields a value that cannot be acted on.
+**Arming is not permission.** `NextEscalation` yields an `ArmedEscalation`, which is a deadline and nothing more. The only producer of an actionable escalation is `Confirm`, which re-derives the trigger *at fire time* and rejects a trigger that has vanished, a stage that has advanced, or a timer that fired early (`engine/escalation.go`, `ArmedEscalation` and `EscalationPolicy.Confirm`). This exists because an attempt's stage moves while its timer runs — a receipt landing just under the receipt timeout is the common case — and escalating on the armed stage would start a needless extra attempt on *every* healthy request. Confirming re-reads state, so the type system enforces it: an unconfirmed `ArmedEscalation` carries a deadline and no permission, and cannot be acted on.
 
 The trigger is consumed *before* the new attempt starts, so a failed start cannot retry the same trigger (`engine/race.go`).
 
 The escalation pick runs on its own goroutine rather than inline in the coordinator loop (`engine/race.go`). The scheduler may hold the nonce briefly for a co-arriving request, and a crown claim is the client's first token: waiting for the pick inside the loop would spend that hold on exactly the latency escalation exists to avoid. A departing client cancels the pick, which returns the nonce and the slot.
 
-**There is one ladder, because there is one reply shape.** The gateway asks every host to stream whatever the client asked for ([`filters/README.md`](../filters/README.md), "Streaming is forced upstream"), so every request has a first token to wait for and every attempt that ends without one is escalated on the spot. The buffered ladder this replaced had its own rung, `response_timeout_retry`, whose deadline grew with the output budget at a measured 25 tokens a second; it was configured at 50, so the modelled time came out half of real and the floor decided every time. A rung that never fires on its own terms is worse than no rung: it reads as coverage. Removing it took `engine_non_stream_response_floor_ms`, `engine_non_stream_response_ceiling_ms` and `engine_per_output_token_response_lag_ms` with it, along with the one-shot retry they gated and its exemption from the attempt budget.
+**There is one ladder, because there is one reply shape.** The gateway asks every host to stream whatever the client asked for ([`filters/README.md`](../filters/README.md), "Streaming is forced upstream"), so every request has a first token to wait for and every attempt that ends without one is escalated on the spot. There is no buffered rung. A `response_timeout_retry` deadline scaled by an output-token rate configured at 50 against a measured 25 a second models half the real time, so its floor decides every fire, and a rung that never fires on its own terms reads as coverage it does not give. `engine_non_stream_response_floor_ms`, `engine_non_stream_response_ceiling_ms`, `engine_per_output_token_response_lag_ms`, the one-shot retry they gate and its exemption from the attempt budget do not exist.
 
 **Scarcity overrides speculation.** When the chain is blocking requests and the relaxed bypass is not active, the attempt budget collapses to one: a speculative attempt spends a nonce the phase the gateway is serving through will not replace.
 
@@ -100,7 +100,7 @@ One re-armed timer carries every deadline. `nextDeadline` takes the earliest of 
 
 The tie-break order is itself the policy: a race that must stop gains nothing from spending a nonce, and a stall flag is telemetry either way.
 
-**Every select arm that reads race state drains the event queue first.** A buffered event and a fired timer are equally ready, and Go chooses among ready cases at random — so acting on a deadline that a queued event has already invalidated is a live possibility, not a theoretical one. It costs a spent nonce, a mislabelled healthy host, or a completed winner reported as cancelled. `catchUp` runs at the top of the timer and departure paths (`engine/race.go`, `raceCoordinator.catchUp`). This class of bug appeared three times in this package.
+**Every select arm that reads race state drains the event queue first.** A buffered event and a fired timer are equally ready, and Go chooses among ready cases at random — so acting on a deadline that a queued event has already invalidated is a live possibility, not a theoretical one. It costs a spent nonce, a mislabelled healthy host, or a completed winner reported as cancelled. `catchUp` runs at the top of the timer and departure paths (`engine/race.go`, `raceCoordinator.catchUp`). Three sites in `engine/` are exposed to it, so the drain is a rule of the coordinator loop rather than a local fix.
 
 ## Client departure and the drain
 
@@ -153,7 +153,7 @@ A host whose escrow state diverged still gets its vote posted. Divergence is a r
 
 Posting runs on its own goroutine beside the race, because the protocol wait is measured in minutes. The engine's registration for that race is released only inside that goroutine, after the vote (`engine/engine.go`, `Engine.settle`).
 
-One external quirk is absorbed at the boundary: the shared session's timeout handler returns a **non-nil error on its success path**, which is why a posted vote is recognised by "unwrapped error plus a reported reason" rather than by `err == nil` (`engine/session.go`, `SessionTimeouts.SettleTimeout`). The collision that follows is known and unfixed at this layer: one genuine failure mode returns a structurally identical value — a reported reason beside an unwrapped error — and is therefore counted as a posted vote. In the legacy gateway this quirk made the "completed" branch unreachable, so every posted vote was labelled failed.
+One external quirk is absorbed at the boundary: the shared session's timeout handler returns a **non-nil error on its success path**, which is why a posted vote is recognised by "unwrapped error plus a reported reason" rather than by `err == nil` (`engine/session.go`, `SessionTimeouts.SettleTimeout`). The collision that follows is not separated at this layer: one genuine failure mode returns a structurally identical value — a reported reason beside an unwrapped error — and is therefore counted as a posted vote. In the legacy gateway this quirk made the "completed" branch unreachable, so every posted vote was labelled failed.
 
 ## Stop
 
@@ -163,19 +163,20 @@ A panicking race still releases its registration and then re-panics with the sam
 
 ## Tunables and backstops
 
-Carried in the configuration snapshot (`config.Engine`, `config.Stream`) and bounded by `Config.Validate` at start-up. No environment variable and no admin override reaches any of them today, so changing one is a rebuild:
+Carried in the configuration snapshot (`config.Engine`, `config.Stream`) and bounded by `Config.Validate`, at start-up and on every admin write. The five timings below take a `GATEWAY_ENGINE_*` variable and an admin override; a race reads the snapshot when it is admitted (`engine/engine.go`, `Engine.Run`), so a swap reaches the next race and never re-times one already running. `engine_max_speculative_attempts` is not among them: it multiplies nonces per request rather than moving a deadline, and stays a restart.
 
 | Field | Default | Effect |
 |---|---|---|
 | `engine_receipt_timeout_ms` | 5 000 | Receipt deadline; doubled above 100 000 input tokens. |
 | `engine_first_token_floor_ms` | 1 000 | Lower bound on the first-token curve. Inert at the default. |
+| `engine_first_token_ceiling_ms` | 30 000 | Upper bound, whatever the host's own p75 asks for. |
 | `engine_inter_chunk_stall_ms` | 30 000 | Silence after first content before an attempt is flagged stalled. |
 | `engine_loser_grace_ms` | 600 000 | How long losers may keep streaming after the winner finishes. Must be at least the stall window, or losers merely between chunks are killed. |
 | `engine_max_speculative_attempts` | 0 | 0 means bounded only by the host group. |
 | `drain_timeout_seconds` | 2 400 | Bound on a race after its client leaves. |
 | `classify_max_attempt_bytes`, `classify_max_participant_bytes`, `classify_max_global_bytes` | 1 / 10 / 100 MiB | Reassembly budgets: attempt, participant, global. |
 
-Go constants rather than configuration, on purpose — these bound a request that every value above already failed to bound (`engine/escalation.go`, the backstop constants):
+Go constants rather than configuration — these bound a request that every value above already failed to bound (`engine/escalation.go`, the backstop constants):
 
 | Constant | Value |
 |---|---|
@@ -188,4 +189,4 @@ Go constants rather than configuration, on purpose — these bound a request tha
 | Event channel capacity | 32 |
 | Crown prefix carry cap | 32 MiB |
 
-One divergence follows from those numbers and is recorded rather than hidden: because the streaming hard timeout (20 minutes) always exceeds the long-response exemption (280 seconds), a stalled winner is always past the exemption. `Stalled` therefore does not move a limiter window **while the host is still within its failure-rate budget** — `RaceOutcome.Verdict` exempts it as a model outcome whenever the attempt's `FailureRateExceeded` is unset, which the race fills from the outlier detector's ejection verdict. Once the host is already ejected the exemption stops applying and `Stalled` falls through to `Terminal.verdict`'s transport-fault class, which does move the window. The escape hatch is deliberate, and stating the exemption without it would read as an invitation to delete the guard that implements it.
+One divergence follows from those numbers: because the streaming hard timeout (20 minutes) always exceeds the long-response exemption (280 seconds), a stalled winner is always past the exemption. `Stalled` therefore does not move a limiter window **while the host is still within its failure-rate budget** — `RaceOutcome.Verdict` exempts it as a model outcome whenever the attempt's `FailureRateExceeded` is unset, which the race fills from the outlier detector's ejection verdict. Once the host is already ejected the exemption stops applying and `Stalled` falls through to `Terminal.verdict`'s transport-fault class, which does move the window. The exemption is bounded by the failure-rate budget rather than absolute: `FailureRateExceeded` is the guard that bounds it.

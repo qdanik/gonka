@@ -28,10 +28,10 @@ The `/devshard/{id}/…` prefix pins a request to one escrow instead of letting 
 | `api_key` | a caller presenting one of `GATEWAY_API_KEYS` |
 | `admin_only` | a caller presenting `GATEWAY_ADMIN_API_KEY` |
 
-**Two gotchas that have bitten operators:**
+**Two behaviours to know before editing it:**
 
 - An **empty** `model_access` map means every model is `open`. A **populated** one makes every model *not listed in it* `admin_only`. Adding your first entry silently closes every other model.
-- With `GATEWAY_ADMIN_API_KEY` unset the whole admin surface answers **404, not 401** — the routes do not exist rather than rejecting you. A "route not found" on `/v1/admin/…` usually means the key is missing, not the path.
+- With `GATEWAY_ADMIN_API_KEY` unset the whole admin surface answers **404, not 401** — the routes do not exist rather than rejecting the caller. A "route not found" on `/v1/admin/…` usually means the key is missing, not the path.
 
 An admin key satisfies every tier, so admin calls never need a second key.
 
@@ -47,7 +47,7 @@ Three layers, later wins:
 
 1. **Defaults** — `config/config.go`, `Defaults()`. The only place a default lives.
 2. **Environment** — read once at boot, in `env/` and nowhere else. `env.Load` returns *what is set* (a nil pointer is unset), so an unset variable can never overwrite a default with a zero.
-3. **Admin overrides** — 28 fields (`config.Overrides`), written through `PUT /v1/admin/settings`, persisted in the store and reloaded at boot. These take effect without a restart: the config is an immutable snapshot swapped whole, and every reader loads it per request.
+3. **Admin overrides** — 34 fields (`config.Overrides`), written through `PUT /v1/admin/settings`, persisted in the store and reloaded at boot. These take effect without a restart: the config is an immutable snapshot swapped whole, and every reader loads it per request.
 
 Parse failures are accumulated, so a boot reports **every** misconfigured variable at once rather than one per restart.
 
@@ -57,7 +57,7 @@ Each `GATEWAY_*` variable falls back to a `DEVSHARD_*` spelling from before the 
 
 Signing keys are addressed **by the name of the variable that holds them**, never by value: `escrows_json` and `rotation.models_json` carry `private_key_env`. Log lines and errors name the variable, never the key.
 
-### The knobs worth knowing
+### The knobs that decide behaviour
 
 | Variable | Default | What it decides |
 | --- | --- | --- |
@@ -74,15 +74,21 @@ Signing keys are addressed **by the name of the variable that holds them**, neve
 | `GATEWAY_ROTATION_PRE_POC_BLOCKS` | 300 | how early the bridge starts |
 | `GATEWAY_WARM_NEW_ESCROWS` | true | whether a new escrow is taught to its group before serving |
 | `GATEWAY_CHARGE_REFUSED_NONCES` | false | whether a host is charged for a nonce it refused |
+| `GATEWAY_CHAIN_SNAPSHOT_MAX_AGE_SECONDS` | 60 | how stale the chain snapshot may be before requests are refused 503; `0` disables the gate |
+| `GATEWAY_ENGINE_RECEIPT_TIMEOUT_MS` | 5 000 | receipt deadline; doubled above 100 000 input tokens |
+| `GATEWAY_ENGINE_FIRST_TOKEN_FLOOR_MS` | 1 000 | lower bound on the first-token curve |
+| `GATEWAY_ENGINE_FIRST_TOKEN_CEILING_MS` | 30 000 | upper bound, whatever the host's own p75 asks for |
+| `GATEWAY_ENGINE_INTER_CHUNK_STALL_MS` | 30 000 | silence after first content before an attempt is stalled |
+| `GATEWAY_ENGINE_LOSER_GRACE_MS` | 600 000 | how long a loser may keep running after the crown |
 | `GATEWAY_NONCE_ACCOUNTING_ENABLED` | false | the per-nonce ledger and its own listener |
 | `GATEWAY_PERF_EWMA_HALFLIFE_SECONDS` | 600 | how fast a host's history forgets |
 | `GATEWAY_POC_MODE` | off | `relaxed` keeps serving through proof-of-compute |
 
-The full list is `env/env.go`; the full set of defaults is `config.Defaults()`. Neither is duplicated here on purpose — a table that drifts is worse than a pointer that does not.
+The full list is `env/env.go`; the full set of defaults is `config.Defaults()`. Neither is duplicated here — a table that drifts is worse than a pointer that does not.
 
 ## Boot
 
-`lifecycle.go`, `serve`. Order is deliberate:
+`lifecycle.go`, `serve`. The order is load-bearing:
 
 1. the chain observer starts — nothing downstream can score a host before a snapshot exists;
 2. the warmup prober starts;
@@ -127,7 +133,7 @@ Always on, with no level knob — a trace that ships off by default is not there
 | --- | --- |
 | `nonce committed` (`engine/pick.go`) | request, escrow, nonce, participant, slot, role, and why this attempt started |
 | `attempt finished` (`engine/report.go`) | the same identity, the terminal verdict, whether the nonce was finished, whether the host diverged on state |
-| `nonce stranded` (`engine/race.go`) | **Warn** — a committed nonce nobody will answer for; every recurring settlement defect here has taken this shape |
+| `nonce stranded` (`engine/race.go`) | **Warn** — a committed nonce nobody will answer for; the shape every recurring settlement defect takes |
 
 Follow one request by grepping its request id; follow one nonce through commit, dispatch and verdict by grepping the nonce.
 
@@ -159,7 +165,7 @@ The record carries no request or response body — capture files exist for that,
 | `nonce burned for nobody` (`observers.go`) | a committed nonce that will serve nobody, with the escrow and the reason |
 | `escrow stopped burning nonces at its budget` | the escrow now queues callers rather than spending on requests it cannot serve |
 | `host blocked for state divergence` (`engine/report.go`) | the block does not lift while the process runs and no metric exposes it — "why is this host never picked" is answerable only here |
-| `chain snapshot stale` / `chain snapshot recovered` | written on the **edge** only; a failed refresh keeps routing on the previous participants |
+| `chain snapshot stale` / `chain snapshot recovered` | written on the **edge** only; a failed refresh keeps routing on the previous participants until the last poll that read the epoch and the participants passes `chain_snapshot_max_age_seconds`, after which requests are refused 503. The nonce-ceiling and preserved-set reads fall back within the poll and do not hold that clock back |
 | `admin request failed` / `admin request refused` (`api/errors.go`) | the operator mutation lines are written on the successful path only, so a failed operator action would otherwise be invisible |
 
 Admin lines carry the action and its subject, **never the request body** — an override payload can hold the admin key. An unkeyed call on an operator route is refused 401 and written down: that is the shape an intrusion attempt takes.
@@ -183,7 +189,7 @@ Admin lines carry the action and its subject, **never the request body** — an 
 
 ### Cardinality rules
 
-Route labels are **templated** (`/devshard/{id}/…`), never per-escrow, so cardinality does not grow with the escrow set. `/v1/admin/devshards/import` deliberately reports under the `/v1/admin/devshards/{id}` label so it lands in the same panel. Every label value is kept non-empty (`metrics/labels.go`): an empty label silently merges unrelated series, and a status with no recoverable code reports as `statusNoCode` rather than as blank.
+Route labels are **templated** (`/devshard/{id}/…`), never per-escrow, so cardinality does not grow with the escrow set. `/v1/admin/devshards/import` reports under the `/v1/admin/devshards/{id}` label so it lands in the same panel. Every label value is kept non-empty (`metrics/labels.go`): an empty label silently merges unrelated series, and a status with no recoverable code reports as `statusNoCode` rather than as blank.
 
 ## Reading the gateway's state
 

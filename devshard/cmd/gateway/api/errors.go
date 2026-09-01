@@ -68,6 +68,15 @@ type BlockedError struct {
 	Confirming chain.ConfirmationPoCPhase
 }
 
+// ChainStaleError says the chain snapshot is too old to serve under. See README.md, "Errors and statuses".
+type ChainStaleError struct {
+	Age time.Duration
+}
+
+func (e *ChainStaleError) Error() string {
+	return fmt.Sprintf("chain snapshot is %s old; the gateway cannot tell which phase it is serving under", e.Age.Round(time.Second))
+}
+
 func (e *BlockedError) Error() string {
 	return "devshard temporarily unavailable during " + e.phaseName()
 }
@@ -129,6 +138,9 @@ func statusForError(err error) int {
 	if errors.As(err, &blocked) {
 		return http.StatusServiceUnavailable
 	}
+	if chainUnreadable(err) {
+		return http.StatusServiceUnavailable
+	}
 	// Our limiter is a quota the caller exceeded (429); no room on the shard is not. See README.md, "Errors and statuses".
 	if _, ours := rateLimited(err); ours {
 		return http.StatusTooManyRequests
@@ -187,6 +199,11 @@ func rateLimited(err error) (*limits.RateLimitError, bool) {
 	return nil, false
 }
 
+func chainUnreadable(err error) bool {
+	var stale *ChainStaleError
+	return errors.As(err, &stale)
+}
+
 func shardHasNoRoom(err error) bool {
 	return errors.Is(err, scheduler.ErrHostsBusy) ||
 		errors.Is(err, scheduler.ErrNoEscrowCapacity) ||
@@ -201,6 +218,8 @@ func writeErrorFor(w http.ResponseWriter, err error) {
 	case ours && throttled.RetryAfter > 0:
 		seconds := int64(math.Ceil(throttled.RetryAfter.Seconds()))
 		w.Header().Set("Retry-After", strconv.FormatInt(seconds, 10))
+	case chainUnreadable(err):
+		w.Header().Set("Retry-After", strconv.FormatInt(int64(chain.DefaultObserverPollInterval.Seconds()), 10))
 	case ours, shardHasNoRoom(err):
 		w.Header().Set("Retry-After", strconv.FormatInt(int64(noHostRetryAfter.Seconds()), 10))
 	}

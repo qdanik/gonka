@@ -2,6 +2,7 @@ package config
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -98,9 +99,28 @@ func TestBuildClonesOverridesModelLimits(t *testing.T) {
 
 // deployedEnvTemplate is the file an operator sources to start the gateway, read here rather than
 // copied so a value that drifts out of what Build accepts fails this test instead of a deploy.
-const deployedEnvTemplate = "../../../../deploy/join/config.devshard.env.template"
+var deployedEnvTemplates = []string{
+	"../../../../deploy/join/config.devshard.env.template",
+	"../deploy/config.devshard-gateway.env.template",
+}
 
 func TestBuildAcceptsTheShippedEnvTemplate(t *testing.T) {
+	for _, path := range deployedEnvTemplates {
+		t.Run(filepath.Base(filepath.Dir(path)), func(t *testing.T) {
+			buildFromTemplate(t, path)
+		})
+	}
+}
+
+// The templates ship key placeholders for an operator to replace, so the shipped text is not a key and
+// is not what this test judges.
+var templateSecrets = map[string]string{
+	"API_KEYS":      "sk-template-placeholder",
+	"ADMIN_API_KEY": "sk-admin-template-placeholder",
+}
+
+func buildFromTemplate(t *testing.T, deployedEnvTemplate string) {
+	t.Helper()
 	template, err := os.ReadFile(deployedEnvTemplate)
 	if err != nil {
 		t.Fatalf("reading %s: %v", deployedEnvTemplate, err)
@@ -116,6 +136,9 @@ func TestBuildAcceptsTheShippedEnvTemplate(t *testing.T) {
 			t.Fatalf("malformed export line: %q", line)
 		}
 		exported++
+		if placeholder, isSecret := templateSecrets[name]; isSecret {
+			value = placeholder
+		}
 		t.Setenv("GATEWAY_"+name, value)
 	}
 	if exported == 0 {
@@ -127,7 +150,7 @@ func TestBuildAcceptsTheShippedEnvTemplate(t *testing.T) {
 		t.Fatalf("env.Load() = %v, want nil", err)
 	}
 	if _, err := Build(values, Overrides{}); err != nil {
-		t.Fatalf("Build() on the shipped template = %v; the gateway refuses to boot on its own deploy file", err)
+		t.Fatalf("Build() on %s = %v; the gateway refuses to boot on its own deploy file", deployedEnvTemplate, err)
 	}
 }
 

@@ -25,6 +25,7 @@ func Build(values env.Values, overrides Overrides) (*Config, error) {
 	overrideIfSet(&configuration.Chain.PublicAPIBaseURL, values.PublicAPI)
 	overrideIfSet(&configuration.Chain.ChainID, values.ChainID)
 	overrideIfSet(&configuration.Chain.RPCEndpoint, values.ChainRPC)
+	overrideIfSet(&configuration.Chain.SnapshotMaxAgeSeconds, values.ChainSnapshotMaxAgeSeconds)
 	overrideIfSet(&configuration.Tx.FeeAmount, values.TxFeeAmount)
 	overrideIfSet(&configuration.Tx.GasLimit, values.TxGasLimit)
 
@@ -66,6 +67,12 @@ func Build(values env.Values, overrides Overrides) (*Config, error) {
 
 	overrideIfSet(&configuration.Perf.EWMAHalfLifeSeconds, values.PerfEWMAHalfLifeSeconds)
 
+	overrideIfSet(&configuration.Engine.ReceiptTimeoutMS, values.EngineReceiptTimeoutMS)
+	overrideIfSet(&configuration.Engine.FirstTokenFloorMS, values.EngineFirstTokenFloorMS)
+	overrideIfSet(&configuration.Engine.FirstTokenCeilingMS, values.EngineFirstTokenCeilingMS)
+	overrideIfSet(&configuration.Engine.InterChunkStallMS, values.EngineInterChunkStallMS)
+	overrideIfSet(&configuration.Engine.LoserGraceMS, values.EngineLoserGraceMS)
+
 	// Admin-override layer (wins over env).
 	overrideIfSet(&configuration.Limits.DefaultMaxTokens, overrides.DefaultMaxTokens)
 	overrideIfSet(&configuration.Limits.MaxTokensCap, overrides.MaxTokensCap)
@@ -80,6 +87,12 @@ func Build(values env.Values, overrides Overrides) (*Config, error) {
 	overrideIfSet(&configuration.Limits.MaxBufferedResponseBytes, overrides.MaxBufferedResponseBytes)
 	overrideIfSet(&configuration.Scheduler.WarmNewEscrows, overrides.WarmNewEscrows)
 	overrideIfSet(&configuration.Scheduler.ChargeRefusedNonces, overrides.ChargeRefusedNonces)
+	overrideIfSet(&configuration.Chain.SnapshotMaxAgeSeconds, overrides.ChainSnapshotMaxAgeSeconds)
+	overrideIfSet(&configuration.Engine.ReceiptTimeoutMS, overrides.EngineReceiptTimeoutMS)
+	overrideIfSet(&configuration.Engine.FirstTokenFloorMS, overrides.EngineFirstTokenFloorMS)
+	overrideIfSet(&configuration.Engine.FirstTokenCeilingMS, overrides.EngineFirstTokenCeilingMS)
+	overrideIfSet(&configuration.Engine.InterChunkStallMS, overrides.EngineInterChunkStallMS)
+	overrideIfSet(&configuration.Engine.LoserGraceMS, overrides.EngineLoserGraceMS)
 	if overrides.ParticipantAllowlist != nil {
 		configuration.Scheduler.ParticipantAllowlist = slices.Clone(*overrides.ParticipantAllowlist)
 	}

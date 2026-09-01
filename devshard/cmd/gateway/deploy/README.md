@@ -19,7 +19,7 @@ $EDITOR config.devshard-gateway.env
 docker compose -f docker-compose.devshard-gateway.yml up -d
 ```
 
-The gateway answers on `127.0.0.1:18080` (`GATEWAY_HOST_PORT`), bound to loopback deliberately: the chat API is reachable from the host but not from the network. Check it with
+The gateway answers on `127.0.0.1:18080` (`GATEWAY_HOST_PORT`), bound to loopback by design: the chat API is reachable from the host but not from the network. Check it with
 
 ```
 curl -s localhost:18080/v1/status
@@ -53,7 +53,7 @@ The gateway then reads `GATEWAY_PRIVATE_KEY` from its environment. This is why t
 
 Most limits are also runtime overrides through the admin API, so the values here are the boot defaults rather than the last word. Which keys are live and what each one means is in [operations.md](../docs/operations.md), under "Configuration".
 
-Two worth knowing before the first run:
+Two settings decide behaviour before the first run:
 
-- `GATEWAY_NONCE_ACCOUNTING_ENABLED` ships as `false` and the built-in default is also off. The old gateway had its ledger **on**, so an operator porting a config gets no counters, no findings and no `accounting.db` — without an error. Turn it on unless you mean to run blind.
-- `GATEWAY_POC_MODE=relaxed` serves through the chain phase that otherwise blocks new inferences. It is the right setting for a gateway that must keep answering across an epoch boundary, and the wrong one if you want the chain's own admission to hold.
+- `GATEWAY_NONCE_ACCOUNTING_ENABLED` ships as `false` and the built-in default is also off. The old gateway had its ledger **on**, so an operator porting a config gets no counters, no findings and no `accounting.db` — without an error. Left off, the gateway runs without counters or findings.
+- `GATEWAY_POC_MODE=relaxed` serves through the chain phase that otherwise blocks new inferences. It is the right setting for a gateway that must keep answering across an epoch boundary, and and the wrong one where the chain's own admission must hold.

@@ -198,7 +198,7 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request, escrowPin string) 
 		writeErrorFor(w, err)
 		return
 	}
-	if err := admission(s.snapshots.Snapshot(), configuration.Modes); err != nil {
+	if err := admission(s.snapshots.Snapshot(), configuration.Modes, s.now(), configuration.Chain.SnapshotMaxAgeSeconds); err != nil {
 		writeErrorFor(w, err)
 		return
 	}

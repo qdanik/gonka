@@ -15,9 +15,9 @@ import (
 )
 
 const (
-	defaultObserverPollInterval = 5 * time.Second
-	// Lets versions entries survive a couple of missed polls without outliving the poller's own cadence.
-	versionsTTLPollMultiplier = 3
+	DefaultObserverPollInterval = 5 * time.Second
+	refreshDeadlineMultiple     = 6
+	versionsTTLPollMultiplier   = 3
 
 	epochInfoPath    = "/v1/epochs/latest"
 	participantsPath = "/v1/epochs/current/participants"
@@ -61,7 +61,7 @@ func NewPhaseObserver(cfg ObserverConfig) (*PhaseObserver, error) {
 	}
 	pollInterval := cfg.PollInterval
 	if pollInterval <= 0 {
-		pollInterval = defaultObserverPollInterval
+		pollInterval = DefaultObserverPollInterval
 	}
 	client := cfg.HTTPClient
 	if client == nil {
@@ -127,7 +127,7 @@ func (o *PhaseObserver) Stop() {
 }
 
 func (o *PhaseObserver) run(ctx context.Context) {
-	o.refresh(ctx)
+	o.refreshBounded(ctx)
 	ticker := time.NewTicker(o.pollInterval)
 	defer ticker.Stop()
 	for {
@@ -135,9 +135,16 @@ func (o *PhaseObserver) run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			o.refresh(ctx)
+			o.refreshBounded(ctx)
 		}
 	}
+}
+
+// refreshBounded gives one poll its own deadline. See README.md, "What the chain observer provides".
+func (o *PhaseObserver) refreshBounded(ctx context.Context) {
+	bounded, cancel := context.WithTimeout(ctx, o.pollInterval*refreshDeadlineMultiple)
+	defer cancel()
+	o.refresh(bounded)
 }
 
 // refresh runs one poll and publishes a snapshot. See README.md, "What the chain observer provides".
@@ -208,6 +215,7 @@ func (o *PhaseObserver) refresh(ctx context.Context) {
 	snapshot.Preserved = preserved
 	snapshot.PreservedByModel = preservedByModel
 	snapshot.InferenceURLs = participants.InferenceURLs
+	snapshot.LastHealthyAt = snapshot.LastUpdatedAt
 
 	o.publish(snapshot)
 }
@@ -220,6 +228,7 @@ func (o *PhaseObserver) publishWithPreviousParticipants(snapshot, previous Phase
 	snapshot.Preserved = previous.Preserved
 	snapshot.PreservedByModel = previous.PreservedByModel
 	snapshot.InferenceURLs = previous.InferenceURLs
+	snapshot.LastHealthyAt = previous.LastHealthyAt
 	snapshot.LastError = joinSnapshotError(snapshot.LastError, lastError)
 	o.publish(snapshot)
 }
@@ -374,6 +383,11 @@ func (o *PhaseObserver) narrateHealth(snapshot PhaseSnapshot) {
 
 // publish stores snapshot then synchronously notifies the current subscribers, in no particular order.
 func (o *PhaseObserver) publish(snapshot PhaseSnapshot) {
+	if snapshot.LastHealthyAt.IsZero() {
+		if previous := o.current.Load(); previous != nil {
+			snapshot.LastHealthyAt = previous.LastHealthyAt
+		}
+	}
 	o.current.Store(&snapshot)
 	o.narrateHealth(snapshot)
 	o.mu.Lock()

@@ -9,7 +9,7 @@ Everything the gateway's behaviour depends on, in one value that is never mutate
 - **`Validate`** — fail-fast checks at startup; an unsafe combination is refused rather than discovered later.
 - **`Holder`** — an atomic holder that publishes a whole replacement snapshot and notifies subscribers. Readers take a pointer and are never torn.
 
-## Boundaries worth knowing
+## Boundaries
 
 - **A snapshot is never mutated after `Build`.** Reconfiguration swaps the whole thing.
 - **Defaults live here, never in [`env`](../env/).** A `nil` from the environment means "unset", which is not the same as a zero.
@@ -22,7 +22,7 @@ Everything the gateway's behaviour depends on, in one value that is never mutate
 | `Server` | the listener itself. `StorageDir` is resolved by `main` *before* `Build`, so its `~/.cache/gonka-gateway` default lives there, not in `Defaults`. |
 | `Chain` | `GRPCEndpoint` is what the escrow bridge dials. `common/chain` derives the CometBFT RPC host from it at the standard port, and that derived endpoint is the query fallback every escrow read inherits — a deployment that moved the RPC port must set `RPCEndpoint` explicitly. |
 | `Tx` | fee, gas and the poll loop that waits for a transaction. |
-| `Limits` | admission tuning. A zero `MaxInputTokensInFlight` is unlimited. `MaxTokensCap` bounds what a client may *ask for* and deliberately does not clamp `DefaultMaxTokens`. `ModelAccess` maps a model to one of the tiers below. |
+| `Limits` | admission tuning. A zero `MaxInputTokensInFlight` is unlimited. `MaxTokensCap` bounds what a client may *ask for* and does not clamp `DefaultMaxTokens`. `ModelAccess` maps a model to one of the tiers below. |
 | `Limits.Concurrency` | a zero `MaxRequests` is no static cap at all, leaving admission to the capacity-scaled per-weight limit alone. |
 | `Limits.ModelLimits` | the per-model override set. The two token fields are required as a pair; the pointer fields are optional, and a `nil` inherits the global limit rather than meaning zero. |
 | `Modes` | PoC mode and the disabled/redirect switches. |

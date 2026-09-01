@@ -268,8 +268,8 @@ func TestNewPhaseObserver_AppliesDefaultsForZeroFields(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewPhaseObserver(): %v", err)
 	}
-	if observer.pollInterval != defaultObserverPollInterval {
-		t.Errorf("pollInterval = %v, want %v", observer.pollInterval, defaultObserverPollInterval)
+	if observer.pollInterval != DefaultObserverPollInterval {
+		t.Errorf("pollInterval = %v, want %v", observer.pollInterval, DefaultObserverPollInterval)
 	}
 	if observer.client == nil {
 		t.Error("HTTP client default not applied")
@@ -524,6 +524,7 @@ func TestPhaseObserver_EpochFetchErrorKeepsPreviousSnapshotWithLastError(t *test
 // no error anywhere. The second half of this test fails when a new field belongs to neither list, so the
 // omission cannot be silent.
 func TestPhaseObserver_CarriesEveryParticipantDerivedFieldForward(t *testing.T) {
+	carriedAcrossFailure := []string{"LastHealthyAt"}
 	participantDerived := []string{
 		"CurrentWeights", "FullWeights", "CurrentWeightsByModel", "FullWeightsByModel",
 		"Preserved", "PreservedByModel", "InferenceURLs",
@@ -534,6 +535,7 @@ func TestPhaseObserver_CarriesEveryParticipantDerivedFieldForward(t *testing.T) 
 	}
 
 	previous := PhaseSnapshot{
+		LastHealthyAt:         time.Unix(1700000000, 0),
 		CurrentWeights:        map[string]float64{"participant-a": 1},
 		FullWeights:           map[string]float64{"participant-a": 2},
 		CurrentWeightsByModel: map[string]map[string]float64{"model-a": {"participant-a": 3}},
@@ -547,14 +549,14 @@ func TestPhaseObserver_CarriesEveryParticipantDerivedFieldForward(t *testing.T) 
 	carried := reflect.ValueOf(observer.Snapshot())
 	source := reflect.ValueOf(previous)
 
-	for _, name := range participantDerived {
+	for _, name := range append(append([]string{}, participantDerived...), carriedAcrossFailure...) {
 		if got, want := carried.FieldByName(name).Interface(), source.FieldByName(name).Interface(); !reflect.DeepEqual(got, want) {
 			t.Errorf("%s = %v, want the previous snapshot's %v", name, got, want)
 		}
 	}
 
 	known := map[string]bool{}
-	for _, name := range append(append([]string{}, participantDerived...), phaseDerived...) {
+	for _, name := range append(append(append([]string{}, participantDerived...), phaseDerived...), carriedAcrossFailure...) {
 		known[name] = true
 	}
 	snapshotType := reflect.TypeFor[PhaseSnapshot]()

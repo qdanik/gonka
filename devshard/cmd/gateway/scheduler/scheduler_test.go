@@ -500,6 +500,7 @@ func failUntilEjected(tracker *perf.Tracker, healthy []string, failing ...string
 func TestPickWithholdsAHostTheOutlierDetectorEjected(t *testing.T) {
 	leakcheck.VerifyNone(t)
 	settings := config.Defaults()
+	settings.Perf.MinAvailableHosts = 1
 	tracker := perf.NewTracker(config.NewHolder(&settings), time.Now)
 	failUntilEjected(tracker, []string{hostA}, hostB)
 	test := newSchedulerHarness(t, schedulerConfig{health: tracker})

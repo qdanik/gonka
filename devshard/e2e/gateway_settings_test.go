@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 	"testing"
 
@@ -125,5 +126,37 @@ func TestE2E_GatewaySettingsReadBackWhatWasApplied(t *testing.T) {
 	}
 	if got := testutil.NumericField(t, settings, "max_concurrent_requests"); got != 7 {
 		t.Errorf("max_concurrent_requests reads back as %d, want the 7 that was applied", got)
+	}
+}
+
+// Test flow:
+//  1. Start the default three-host gateway environment.
+//  2. Apply an engine timing through the settings route.
+//  3. Read the route back and assert it reports the stored value.
+//  4. Apply a grace shorter than the stall it must outlive and assert the route refuses it.
+func TestE2E_GatewayEngineTimingsReadBackAndAreValidated(t *testing.T) {
+	env, client := startGatewayEnv(t, e2eEnvOptions{})
+
+	putSettings(t, client, env.clientURL, map[string]any{"engine_receipt_timeout_ms": 7000})
+
+	status, body := gatewayGet(t, client, env.clientURL+"/v1/admin/settings", testutil.AdminAPIKey)
+	if status != http.StatusOK {
+		t.Fatalf("GET settings = %d %s", status, body)
+	}
+	var settings map[string]any
+	if err := json.Unmarshal([]byte(body), &settings); err != nil {
+		t.Fatalf("settings are not JSON: %v (%s)", err, body)
+	}
+	if got := testutil.NumericField(t, settings, "engine_receipt_timeout_ms"); got != 7000 {
+		t.Errorf("engine_receipt_timeout_ms reads back as %d, want the 7000 that was applied", got)
+	}
+
+	refused := testutil.PostJSONRaw(t, client, env.clientURL+"/v1/admin/settings",
+		map[string]any{"engine_loser_grace_ms": 1000, "engine_inter_chunk_stall_ms": 30000}, testutil.AdminAPIKey)
+	if refused.StatusCode != http.StatusBadRequest {
+		t.Errorf("a grace shorter than the stall was answered %d %s, want 400", refused.StatusCode, refused.Body)
+	}
+	if !strings.Contains(refused.Body, "engine_loser_grace_ms") {
+		t.Errorf("the refusal does not name the field it refused: %s", refused.Body)
 	}
 }

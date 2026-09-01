@@ -17,9 +17,9 @@ The only package that speaks HTTP to a client, and the one that decides what a f
 | `capture.go`, `inspect.go` | sampled request capture for diagnosis |
 | `dispatch.go`, `timeouts.go` | the adapters that join a registry session to the race and to the vote path |
 
-## Boundaries worth knowing
+## Boundaries
 
-- **Our own limiter is 429; the shard being full is 503.** A quota the caller exceeded is theirs to slow down; no room on the shard is not.
+- **The gateway's own limiter answers 429; a full shard answers 503.** A quota the caller exceeded is theirs to slow down; no room on the shard is not.
 - **A reply is folded as it arrives**, so a non-streaming request holds the answer being assembled rather than the stream it came from. Past the process-wide ceiling it is refused with 503 rather than held until the kernel intervenes.
 - **The status is chosen from the assembled body, not before it.** A body the assembler could not fold is answered as a failure, not as a 200 carrying an error object.
 - **`clientStream` is written by attempt goroutines after the handler has returned**, so every path through it takes the lock and stops once closed.
@@ -56,7 +56,7 @@ The only package that speaks HTTP to a client, and the one that decides what a f
 
 Each `route` is one registered pattern. An empty label means the route is not instrumented, which is how `/metrics` stays out of its own counters; `alwaysOn` exempts a route from the operator kill switch; `otherRouteLabel` is the single label every unmatched path folds into.
 
-`/v1/admin/devshards/import` deliberately carries the templated `/v1/admin/devshards/{id}` label: the established series covers this path under the same name, and a label of its own would split the panel that reads it.
+`/v1/admin/devshards/import` carries the templated `/v1/admin/devshards/{id}` label: the established series covers this path under the same name, and a label of its own would split the panel that reads it.
 
 `handleDevshardChat` pins the race to one escrow, and refuses a pin the gateway no longer routes to.
 
@@ -64,7 +64,7 @@ Each `route` is one registered pattern. An empty label means the route is not in
 
 ## What the boundary hands the engine
 
-`Sessions` adapts the live escrows to the engine's two outbound boundaries: the target a race dispatches through, and the poster that settles the nonces the race left unfinished. The `escrows` interface it reads has two lookups that differ on a retired escrow on purpose — see `rules.md`, "4. Routing and settlement read the escrow set asymmetrically, on purpose".
+`Sessions` adapts the live escrows to the engine's two outbound boundaries: the target a race dispatches through, and the poster that settles the nonces the race left unfinished. The `escrows` interface it reads has two lookups that differ on a retired escrow — see `rules.md`, "4. Routing and settlement read the escrow set asymmetrically".
 
 - `Target` resolves one escrow per race, because an escrow can rotate out between the pick and the send. Its release keeps the escrow draining rather than closed until the race's vote is posted.
 - `Send` hands the stream on unwrapped: the transport flushes each SSE line through an `http.Flusher` assertion on it, and a wrapper would leave a crowned winner's bytes in the server's buffer. `ProcessResponse` is applied for a reply that arrived beside an error too.
@@ -74,7 +74,7 @@ Each `route` is one registered pattern. An empty label means the route is not in
 
 ## Streaming the reply
 
-`maxBufferedResponseBytes` tracks the stream carry cap on purpose. Without a cap at all, a host that wins the race on its first token can then send unlimited valid SSE and take the process out; and because this buffer holds the same `prompt_token_ids` frames the carry cap was derived from, lowering one without the other would refuse the large-context replies that arithmetic was meant to admit.
+`maxBufferedResponseBytes` tracks the stream carry cap. Without a cap at all, a host that wins the race on its first token can then send unlimited valid SSE and take the process out; and because this buffer holds the same `prompt_token_ids` frames the carry cap was derived from, lowering one without the other would refuse the large-context replies that arithmetic was meant to admit.
 
 `writeChatHeaders` is the one place every chat reply header is set, so a cache replay and a live race cannot answer the same request differently.
 
@@ -84,13 +84,15 @@ In `race`, the second `X-Devshard-ID` write is the authoritative one for a reply
 
 ## Errors and statuses
 
-- Our own limiter is a quota the caller exceeded, which is 429; capacity and a busy escrow are the shard having no room, which is 503. The old gateway drew the line in the same place.
+- The gateway's own limiter is a quota the caller exceeded, which is 429; capacity and a busy escrow are the shard having no room, which is 503. The legacy gateway splits the two statuses at the same point, so client retry logic carries across.
 - `writeError` renders the JSON envelope; `http.Error` would send `text/plain` instead.
-- `writeControlFailure` is deliberately not `writeErrorFor`: that one answers 502 for an unrecognised error, which is wrong for a store this process owns.
+- `writeControlFailure` is not `writeErrorFor`: that one answers 502 for an unrecognised error, which is wrong for a store this process owns.
 - `rateLimited` singles out the gateway limiter's own rejection, because the status, the `Retry-After` header and the counter that names which cap was hit all ask for it.
 - `Retry-After` is rounded up: a zero would tell a client to retry immediately, the opposite of what a queue timeout means.
 - `maxLoggedErrorBytes` bounds host-controlled text in a log line, because a `HostApplicationError` with no message renders its whole upstream payload. A body truncated at that cap no longer parses, so `failureRecorder.reason` falls back to the raw text rather than an empty field.
 - `adminFailure` exists because `auditAdmin` records only the successful path. Its `failureRecorder` forwards `Flush` so a wrapped handler keeps streaming.
+
+- **A snapshot too old to trust is its own refusal class.** `ChainStaleError` answers 503 with `Retry-After` of one poll interval, not the one-second default: the chain has by then been unreadable for at least `chain_snapshot_max_age_seconds`. `/v1/status` reports it as `chain_snapshot_stale`, so blocked is never returned without a reason. An unset timestamp is stale — the listener opens after the observer starts, so there is no phase to serve under before the first poll lands.
 
 ## What a finished request records
 
@@ -104,7 +106,7 @@ In `race`, the second `X-Devshard-ID` write is the authoritative one for a reply
 
 ## The views a response is built from
 
-`filterOptions` is where the operator's configuration becomes the request-shaping rules. Forcing is expressed as its opposite there so that an `Options` built without it keeps forcing, which is what every caller that predates the switch expects.
+`filterOptions` is where the operator's configuration becomes the request-shaping rules. Forcing is expressed as its opposite there so that an `Options` built without it keeps forcing, so an `Options` built without that field keeps forcing.
 
 `modelTokenLimits` closes over the per-model override map only when an operator configured one, so a deployment without overrides allocates nothing on the request path.
 
@@ -137,7 +139,7 @@ The sink's two failure counters mean different things. `refused` only ever grows
 An entry is keyed on **everything that varies the answer**, and two of those are not obvious:
 
 - **The logprob intent**, because the normalised body is not part of what varies: the force rules make one client's request byte-identical to another's, and the two are answered with differently stripped bodies.
-- **The client's streaming and usage intents, separately from the body**, because the body now asks every host to stream and to report usage. Two callers wanting different reply shapes would otherwise share one entry, and whichever arrived first would decide what the second one got.
+- **The client's streaming and usage intents, separately from the body**, because the body asks every host to stream and to report usage. Two callers wanting different reply shapes would otherwise share one entry, and whichever arrived first would decide what the second one got.
 
 The caller and the escrow scope are in the key as well, so a cached reply never crosses a caller or an escrow boundary.
 

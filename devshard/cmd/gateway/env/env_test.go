@@ -223,3 +223,38 @@ func TestASigningKeyWithNeitherNameSetStillFails(t *testing.T) {
 		t.Fatalf("PrivateKey() = %v, want ErrPrivateKeyMissing", err)
 	}
 }
+
+func TestLoadParsesEngineTimings(t *testing.T) {
+	for name, value := range map[string]string{
+		"GATEWAY_ENGINE_RECEIPT_TIMEOUT_MS":      "7000",
+		"GATEWAY_ENGINE_FIRST_TOKEN_FLOOR_MS":    "1500",
+		"GATEWAY_ENGINE_FIRST_TOKEN_CEILING_MS":  "25000",
+		"GATEWAY_ENGINE_INTER_CHUNK_STALL_MS":    "45000",
+		"GATEWAY_ENGINE_LOSER_GRACE_MS":          "120000",
+		"GATEWAY_CHAIN_SNAPSHOT_MAX_AGE_SECONDS": "45",
+	} {
+		t.Setenv(name, value)
+	}
+
+	values, err := Load()
+	if err != nil {
+		t.Fatalf("Load(): unexpected error: %v", err)
+	}
+
+	for _, field := range []struct {
+		name string
+		got  *int64
+		want int64
+	}{
+		{"GATEWAY_ENGINE_RECEIPT_TIMEOUT_MS", values.EngineReceiptTimeoutMS, 7000},
+		{"GATEWAY_ENGINE_FIRST_TOKEN_FLOOR_MS", values.EngineFirstTokenFloorMS, 1500},
+		{"GATEWAY_ENGINE_FIRST_TOKEN_CEILING_MS", values.EngineFirstTokenCeilingMS, 25000},
+		{"GATEWAY_ENGINE_INTER_CHUNK_STALL_MS", values.EngineInterChunkStallMS, 45000},
+		{"GATEWAY_ENGINE_LOSER_GRACE_MS", values.EngineLoserGraceMS, 120000},
+		{"GATEWAY_CHAIN_SNAPSHOT_MAX_AGE_SECONDS", values.ChainSnapshotMaxAgeSeconds, 45},
+	} {
+		if field.got == nil || *field.got != field.want {
+			t.Errorf("%s = %v, want %d", field.name, field.got, field.want)
+		}
+	}
+}

@@ -396,7 +396,12 @@ func (e *e2eEnv) restartHost(ctx context.Context, t *testing.T, index int) {
 
 func (e *e2eEnv) stopHost(ctx context.Context, t *testing.T, index int) {
 	t.Helper()
-	name := hostName(index)
+	e.stopContainer(ctx, t, hostName(index))
+}
+
+// stopContainer terminates one container by name and forgets it.
+func (e *e2eEnv) stopContainer(ctx context.Context, t *testing.T, name string) {
+	t.Helper()
 	testutil.DebugLogf(t, "stopping %s", name)
 	for i := range e.containers {
 		if e.containers[i].name != name {
@@ -407,6 +412,12 @@ func (e *e2eEnv) stopHost(ctx context.Context, t *testing.T, index int) {
 		return
 	}
 	t.Fatalf("container %s not found", name)
+}
+
+// stopMockChain silences the chain so the observer stops refreshing its snapshot.
+func (e *e2eEnv) stopMockChain(ctx context.Context, t *testing.T) {
+	t.Helper()
+	e.stopContainer(ctx, t, mockChainAlias)
 }
 
 func (e *e2eEnv) restartAllHosts(ctx context.Context, t *testing.T) {

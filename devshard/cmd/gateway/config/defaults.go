@@ -12,8 +12,9 @@ func Defaults() Config {
 			MaxConcurrentRuntimeBuilds: 16,
 		},
 		Chain: Chain{
-			GRPCEndpoint:     "localhost:9090",
-			PublicAPIBaseURL: "http://localhost:9000",
+			GRPCEndpoint:          "localhost:9090",
+			PublicAPIBaseURL:      "http://localhost:9000",
+			SnapshotMaxAgeSeconds: 60,
 		},
 		Tx: Tx{
 			FeeDenom:       chain.DefaultFeeDenom,
@@ -79,7 +80,7 @@ func Defaults() Config {
 			EjectionBaseSeconds:      30,
 			EjectionMaxSeconds:       600,
 			MaxEjectionFraction:      0.5,
-			MinAvailableHosts:        1,
+			MinAvailableHosts:        4,
 			HostStalenessSeconds:     3_600,
 		},
 		Engine: Engine{

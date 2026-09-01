@@ -9,7 +9,7 @@ Every read from the network and every transaction the gateway signs passes throu
 - **Escrow queries and settlement encoding** (`escrow_query.go`, `settlement.go`).
 - **Protocol versions** (`versions.go`) — the gateway serves exactly one, fixed at build time.
 
-## Boundaries worth knowing
+## Boundaries
 
 - **The snapshot is immutable and published whole.** A reader never sees half an update, and never has to lock.
 - **A wrong chain id invalidates every signature**, so it is validated at startup rather than discovered on the first broadcast.
@@ -21,7 +21,7 @@ Every read from the network and every transaction the gateway signs passes throu
 
 A failed poll **republishes the previous snapshot with `LastError` set** rather than an empty one: a network hiccup must not read as "the epoch has no participants". `LastUpdatedAt` is how a reader tells fresh data from a held-over view.
 
-Three fields have absent values that are load-bearing, and each chooses its direction deliberately:
+Three fields have absent values that are load-bearing, and each fails in a chosen direction:
 
 | Field | Absent means | Read as |
 | --- | --- | --- |
@@ -39,7 +39,7 @@ Weights follow the same rule: `CurrentWeightsByModel` is preferred, `CurrentWeig
 
 `Subscribe` registers a callback invoked synchronously on every publish, mirroring `config.Holder`'s semantics: store before notify, cancel by deleting from the map. Subscribers are notified in no particular order.
 
-A poll that fails only in part still publishes: `LastError` keeps **every** failed read of that poll, joined by `; `. Overwriting instead of joining left the operator reading the last failure only, so a frozen `MaxNonce` — the ceiling nonces are issued against — went unnamed. The health line is written only on a change of state, degraded and then recovered, so a five-second poll speaks once instead of every tick; `LastError` carries the cause the health gauge cannot, by naming which read failed.
+A poll that fails only in part still publishes: `LastError` keeps **every** failed read of that poll, joined by `; `. Overwriting rather than joining shows only the last failure, leaving a frozen `MaxNonce` — the ceiling nonces are issued against — went unnamed. The health line is written only on a change of state, degraded and then recovered, so a five-second poll speaks once instead of every tick; `LastError` carries the cause the health gauge cannot, by naming which read failed.
 
 ### Which nodes count as preserved
 
@@ -69,6 +69,10 @@ The chain's numeric fields arrive as either JSON numbers or numeric strings, and
 
 The epoch switch height is derived rather than read: the current epoch's `set_new_validators` while it is still ahead of the current block, else the next epoch's, else the current epoch's `next_poc_start`, else the latest epoch's PoC start height.
 
+- **Each poll is bounded at six poll intervals.** The process context carries cancellation but no deadline, so a hung read would otherwise hold the loop for as long as the call takes.
+- **The snapshot carries two clocks.** `LastUpdatedAt` moves on every publish and feeds the age gauge. `LastHealthyAt` moves only when the epoch and participant reads both landed, is carried forward otherwise, and is what the staleness gate judges. The nonce-ceiling and preserved-set reads fall back within the poll and do not hold it back.
+- **`DefaultObserverPollInterval` is exported** because `Config.Validate` rejects a staleness limit below it. A limit under the refresh cadence refuses traffic from a healthy chain.
+
 ## Transaction encoding
 
 Transactions are **unordered**: instead of a sequence number they carry a `timeout_timestamp` set `UnorderedTxTTL` (9 min) ahead of now. Inside that window a broadcast transaction can still land, so "not found" is never proof it failed — every reconciliation in [`escrow/`](../escrow/) waits out the window before concluding anything.
@@ -89,7 +93,7 @@ Both money-moving transactions take an `onPrepared` hook that records the precom
 
 ### How a message is encoded
 
-The two escrow messages are marshalled by the types generated from the chain's own `.proto`, so their wire layout tracks the chain by construction. Hand-laying those fields put a money transaction's layout in a third place that had to be edited in lockstep with the proto, or the settlement mis-encodes silently. `Marshal` cannot fail for these two messages — neither carries an `Any` nor a custom type — and the error is returned rather than dropped so a future field cannot make it silent.
+The two escrow messages are marshalled by the types generated from the chain's own `.proto`, so their wire layout tracks the chain by construction. Hand-laying those fields puts a money transaction's layout in a third place, edited in lockstep with the proto, or the settlement mis-encodes silently. `Marshal` cannot fail for these two messages — neither carries an `Any` nor a custom type — and the error is returned rather than dropped so a future field cannot make it silent.
 
 Everything around the message is hand-encoded in `protoencode.go`: the `Any` wrapper, the secp256k1 pubkey, the `Fee`, a `SignerInfo` with a single `SIGN_MODE_DIRECT` mode, the `AuthInfo`, the `SignDoc` that gets hashed and signed, and the broadcastable `TxRaw`. The body is an unordered `TxBody` — field 1 the message, field 4 `unordered=true`, field 5 the `timeout_timestamp`. The tx hash is the upper-hex SHA-256 of the tx bytes, which is what lets it be recorded before the broadcast and compared against the hash the node returns.
 
