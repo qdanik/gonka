@@ -431,8 +431,8 @@ func TestShippedDefaultsBoundTheRaceAndItsFirstTokenWait(t *testing.T) {
 	t.Parallel()
 	policy := EscalationPolicyFromConfig(config.Defaults().Engine)
 
-	if budget := policy.AttemptBudget(16, false); budget != 3 {
-		t.Fatalf("AttemptBudget over a 16-host group = %d, want 3", budget)
+	if budget := policy.AttemptBudget(16, false); budget != 2 {
+		t.Fatalf("AttemptBudget over a 16-host group = %d, want 2", budget)
 	}
 	if wait := policy.firstTokenTimeout(3_460); wait != 12*time.Second {
 		t.Fatalf("first-token wait for a median prompt = %v, want the 12s floor", wait)

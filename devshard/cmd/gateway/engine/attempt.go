@@ -316,6 +316,9 @@ func classifyDispatchError(ctx context.Context, err error) Terminal {
 		if terminal, recovered := terminalForStatus[status.StatusCode]; recovered {
 			return terminal
 		}
+		if status.StatusCode >= http.StatusInternalServerError && !transport.IsUpstreamEscrowNotFound(err) {
+			return TerminalUpstreamServerError
+		}
 		return TerminalRejected
 	}
 

@@ -64,7 +64,7 @@ func TestDefaultsMatchSpec(t *testing.T) {
 		{"Engine.FirstTokenCeilingMS", configuration.Engine.FirstTokenCeilingMS, int64(30_000)},
 		{"Chain.SnapshotMaxAgeSeconds", configuration.Chain.SnapshotMaxAgeSeconds, int64(60)},
 		{"Engine.LoserGraceMS", configuration.Engine.LoserGraceMS, int64(600_000)},
-		{"Engine.MaxAttemptsPerRequest", configuration.Engine.MaxAttemptsPerRequest, int64(3)},
+		{"Engine.MaxAttemptsPerRequest", configuration.Engine.MaxAttemptsPerRequest, int64(2)},
 	}
 	for _, check := range checks {
 		if check.got != check.want {

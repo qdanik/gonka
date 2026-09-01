@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -749,5 +750,39 @@ func TestResponseTooLargeIsNotChargedToTheHostAsATransportFault(t *testing.T) {
 	verdict, recorded := outcome.Verdict(attempt)
 	if verdict != limits.ModelOutcome {
 		t.Fatalf("Verdict() = (%v, %v), want (ModelOutcome, _)", verdict, recorded)
+	}
+}
+
+// A 5xx is the host's upstream failing while the host itself answers, so the window should narrow for
+// it. A 4xx is the request's own problem and must not move the host's window at all.
+func TestUpstreamServerErrorsNarrowTheWindowAndClientErrorsDoNot(t *testing.T) {
+	t.Parallel()
+	testCases := []struct {
+		status       int
+		wantTerminal Terminal
+		wantVerdict  limits.Verdict
+		wantMoves    bool
+	}{
+		{status: 500, wantTerminal: TerminalUpstreamServerError, wantVerdict: limits.Overload, wantMoves: true},
+		{status: 502, wantTerminal: TerminalUpstreamServerError, wantVerdict: limits.Overload, wantMoves: true},
+		{status: 504, wantTerminal: TerminalUpstreamServerError, wantVerdict: limits.Overload, wantMoves: true},
+		{status: 400, wantTerminal: TerminalRejected, wantVerdict: limits.ModelOutcome, wantMoves: false},
+	}
+	for _, testCase := range testCases {
+		t.Run(fmt.Sprint(testCase.status), func(t *testing.T) {
+			err := &transport.UpstreamStatusError{Path: "/v1/chat/completions", StatusCode: testCase.status}
+
+			terminal := classifyDispatchError(context.Background(), err)
+			if terminal != testCase.wantTerminal {
+				t.Fatalf("status %d classified as %v, want %v", testCase.status, terminal, testCase.wantTerminal)
+			}
+
+			attempt := failedAttempt(terminal)
+			verdict, moves := race(attempt).Verdict(attempt)
+			if verdict != testCase.wantVerdict || moves != testCase.wantMoves {
+				t.Fatalf("Verdict() = (%v, %v), want (%v, %v)",
+					verdict, moves, testCase.wantVerdict, testCase.wantMoves)
+			}
+		})
 	}
 }

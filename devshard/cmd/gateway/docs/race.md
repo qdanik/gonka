@@ -118,13 +118,13 @@ Everything the race learned is folded into one `RaceOutcome`, and one field deci
 
 There are twenty terminal values, and every downstream vocabulary — limiter verdict, performance sample, metric label — is a *total function* of it (`engine/outcome.go`, `Terminal`). The HTTP-status recovery and the SSE inspection that decide the terminal therefore happen once, where the error and the bytes are, instead of being re-derived at each consumer.
 
-`Rejected` is the one terminal whose scope is not obvious from its name: it covers every upstream status that is neither throttling nor unavailability — 400s and 500s included — because those describe the request or the model, not the host's ability to serve, so they move nothing (`engine/outcome.go`, `TerminalRejected`).
+`Rejected` is the one terminal whose scope is not obvious from its name: it covers every upstream 4xx that is neither throttling nor one of the named statuses, because those describe the request, not the host's ability to serve, so they move nothing (`engine/outcome.go`, `TerminalRejected`). A 5xx is the opposite case and gets its own terminal: the host answered but what it proxies to did not, so `UpstreamServerError` contracts the window as an overload without opening the breaker. The exception is a host reporting that it cannot find the escrow — that is the gateway's own bookkeeping, so it stays a `Rejected` and blames nobody.
 
 ### The three translations
 
 | Consumer | Rule |
 |---|---|
-| Limiter verdict | Won/Lost → success; throttled/unavailable → overload; transport-class terminals and an empty stream that never finished its nonce → transport fault; burn-empty, error stream, capability refusal, a reply past the gateway's own buffer cap, and an empty stream that did finish its nonce → model outcome, which never moves a host's window. |
+| Limiter verdict | Won/Lost → success; throttled, unavailable and an upstream 5xx → overload; transport-class terminals and an empty stream that never finished its nonce → transport fault; burn-empty, error stream, capability refusal, a reply past the gateway's own buffer cap, and an empty stream that did finish its nonce → model outcome, which never moves a host's window. |
 | Performance sample | One sample per attempt, unless the exemption ladder excuses it. The sample carries only participant, model and whether the host was responsive. |
 | Metric labels | Bounded label vocabularies exported by the engine and referenced — not restated — by the metrics layer. |
 

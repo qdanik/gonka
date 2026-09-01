@@ -30,8 +30,8 @@ const (
 	TerminalForbidden
 	TerminalNotFound
 	TerminalTimestampDrift
-	// TerminalRejected is every other upstream status, 400 and 500 included. See race.md, "The outcome".
 	TerminalRejected
+	TerminalUpstreamServerError
 	TerminalOffPath
 	TerminalDialFailure
 	TerminalStreamTruncated
@@ -186,7 +186,7 @@ func (t Terminal) verdict() (limits.Verdict, bool) {
 	switch t {
 	case TerminalWon, TerminalLost:
 		return limits.Success, true
-	case TerminalThrottled, TerminalUnavailable, TerminalHardTimeout:
+	case TerminalThrottled, TerminalUnavailable, TerminalUpstreamServerError, TerminalHardTimeout:
 		return limits.Overload, true
 	case TerminalForbidden, TerminalNotFound, TerminalTimestampDrift,
 		TerminalDialFailure, TerminalStreamTruncated, TerminalUnexpectedEOF, TerminalStalled:
@@ -230,6 +230,8 @@ func (t Terminal) reason() string {
 		return "http_timestamp_drift"
 	case TerminalRejected:
 		return "http_error"
+	case TerminalUpstreamServerError:
+		return "http_server_error"
 	case TerminalOffPath:
 		return "off_path"
 	case TerminalDialFailure:

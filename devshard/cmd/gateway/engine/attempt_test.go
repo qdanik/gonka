@@ -347,7 +347,7 @@ func TestRunAttempt_TerminalClassification(t *testing.T) {
 			name:       "http 500",
 			dispatch:   &fakeDispatcher{err: statusError(inferencePath, 500, "internal")},
 			classifier: &fakeClassifier{},
-			want:       TerminalRejected,
+			want:       TerminalUpstreamServerError,
 		},
 		{
 			name:           "escrow missing is reported not blamed",
