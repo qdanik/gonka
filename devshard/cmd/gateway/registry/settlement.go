@@ -7,6 +7,9 @@ import (
 	"strconv"
 
 	"devshard/cmd/gateway/chain"
+	"devshard/cmd/gateway/internal/logkey"
+	"devshard/logging"
+	"devshard/signing"
 	"devshard/state"
 	"devshard/types"
 )
@@ -70,11 +73,18 @@ func buildSettlement(escrowID string, session EscrowSession) (chain.SettlementIn
 		return chain.SettlementInput{}, fmt.Errorf("escrow id %q is not numeric: %w", escrowID, err)
 	}
 	nonce := session.Nonce()
-	payload, err := state.BuildSettlement(escrowID, session.SnapshotState(), session.Signatures()[nonce], nonce)
+	snapshot := session.SnapshotState()
+	payload, err := state.BuildSettlement(escrowID, snapshot, session.Signatures()[nonce], nonce)
 	if err != nil {
 		return chain.SettlementInput{}, fmt.Errorf("building settlement for escrow %s: %w", escrowID, err)
 	}
 	hostStats := statsPerPresentSlot(payload.HostStats)
+	verified := *payload
+	verified.HostStats = hostStats
+	if unverifiable := settlementUnverifiable(verified, snapshot); unverifiable != nil {
+		logging.Warn("settlement signatures did not verify",
+			logkey.Escrow, escrowID, logkey.Nonce, nonce, logkey.Error, unverifiable)
+	}
 	hostStatsHash, err := state.ComputeHostStatsHash(hostStats)
 	if err != nil {
 		return chain.SettlementInput{}, fmt.Errorf("hashing host stats for escrow %s: %w", escrowID, err)
@@ -125,4 +135,13 @@ func settlementSlotSigs(perSlot map[uint32][]byte) []chain.SettlementSlotSig {
 		sigs = append(sigs, chain.SettlementSlotSig{SlotID: uint64(slotID), Signature: perSlot[slotID]})
 	}
 	return sigs
+}
+
+// settlementUnverifiable reports what the chain would refuse. See README.md, "Settlement and inspection".
+func settlementUnverifiable(payload state.SettlementPayload, snapshot types.EscrowState) error {
+	if len(snapshot.Group) == 0 {
+		return nil
+	}
+	_, err := state.VerifySettlement(payload, snapshot.Group, signing.NewSecp256k1Verifier(), snapshot.WarmKeys)
+	return err
 }

@@ -9,7 +9,7 @@ Which escrows exist right now, what each serves, and who its hosts are.
 - **Membership and capacity** (`membership.go`, `views.go`) — the participant set each escrow contributes to the capacity model, and the in-flight count routing scores by.
 - **Settlement handles** (`settlement.go`) — a retired escrow still resolves, because its committed nonces have no other settlement path.
 
-## Boundaries worth knowing
+## Boundaries
 
 - **A retired escrow does not disappear.** Its nonces still owe votes, and the session that can post them outlives its routability.
 - **The in-flight hold is taken with the nonce commit and refused once retired**, so an escrow cannot start work it will not be able to settle.
@@ -22,9 +22,9 @@ Which escrows exist right now, what each serves, and who its hosts are.
 
 `Snapshot` returns every published escrow in id order plus the retired ones still draining, and takes no lock at all — `publishDrainingLocked` republishes the draining view under the registry lock precisely so a scrape cannot wait on a retirement.
 
-`RoutableSession` is the read-only handle the status routes read. It takes no in-flight count and is deliberately not the dispatch path: a race resolves its escrow through `Acquire`, which returns the session and its release together, so a handle cannot be held without the hold. `holdFor` is the scheduler's view of the same count, taken in the step that commits a nonce; it is bound to the entry rather than to its id, and re-checks that the published entry is still that entry, so a hold cannot land on a replacement published under the same id.
+`RoutableSession` is the read-only handle the status routes read. It takes no in-flight count and is not the dispatch path: a race resolves its escrow through `Acquire`, which returns the session and its release together, so a handle cannot be held without the hold. `holdFor` is the scheduler's view of the same count, taken in the step that commits a nonce; it is bound to the entry rather than to its id, and re-checks that the published entry is still that entry, so a hold cannot land on a replacement published under the same id.
 
-`SettlementSession` resolves the handle this process still holds, published or draining — deliberately asymmetric with routing's published-only lookup. See `rules.md`, "4. Routing and settlement read the escrow set asymmetrically, on purpose".
+`SettlementSession` resolves the handle this process still holds, published or draining — asymmetric with routing's published-only lookup. See `rules.md`, "4. Routing and settlement read the escrow set asymmetrically".
 
 ## Publishing, retiring and draining
 
@@ -52,7 +52,7 @@ Which escrows exist right now, what each serves, and who its hosts are.
 
 A factory handed an escrow with no record must fail with an error wrapping `escrow.ErrUnknownEscrow`. Callers tell that apart from a load failure to answer 404 rather than 502, and a factory that returns its own error for a missing escrow turns "no such escrow" into "the gateway is broken".
 
-Two `EscrowSession` methods carry a trap. `SealedInferences` counts what sealing has drained out of `SnapshotState().Inferences`, which holds only the live tail, so a reader without it mistakes that tail for the escrow's whole history. `UserSession` is the concrete handle the dispatch boundary needs, and one rehydrated read-only has no host clients, so sending through it is a bug.
+Two `EscrowSession` methods have non-obvious contracts. `SealedInferences` counts what sealing has drained out of `SnapshotState().Inferences`, which holds only the live tail, so a reader without it mistakes that tail for the escrow's whole history. `UserSession` is the concrete handle the dispatch boundary needs, and one rehydrated read-only has no host clients, so sending through it is a bug.
 
 ## Nonces and ghost burns
 
@@ -77,6 +77,8 @@ The two notification interfaces are both called from paths that must not block. 
 `Finalize` and `BuildSettlement` both satisfy `escrow.SettlementSource` and both handle a non-resident escrow, but they rehydrate it differently. Finalizing collects host signatures, so it needs a serving session; a settlement payload comes entirely from local storage, so a read-only one is enough — no chain access, no host clients.
 
 `Inspect` resolves a session for reading alone. A live or draining escrow answers from its own session; one already retired is rehydrated from local storage, which is exactly when an operator asks these questions. The returned release closes a rehydrated session and does nothing for a resident one.
+
+Before a payload leaves, `settlementUnverifiable` runs the chain's own check over it — recomputed state root, recovered signers, and weight against 2/3+1 — using the snapshot's group and warm keys, and against the same host stats the transaction will carry rather than the raw map, which may hold nil slots. It **warns and never blocks**: warm keys are populated lazily, so a refusal here can freeze a settlement the chain would have accepted.
 
 ## Read next
 
