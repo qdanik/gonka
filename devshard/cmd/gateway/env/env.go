@@ -63,7 +63,15 @@ type Values struct {
 	CaptureSampleRate *float64
 	CaptureMaxBytes   *int64
 
-	PerfEWMAHalfLifeSeconds *int64
+	PerfEWMAHalfLifeSeconds      *int64
+	PerfConsecutiveFailThreshold *int64
+	PerfFailureRateThreshold     *float64
+	PerfFailureRateMinVolume     *float64
+	PerfEjectionBaseSeconds      *int64
+	PerfEjectionMaxSeconds       *int64
+	PerfMaxEjectionFraction      *float64
+	PerfMinAvailableHosts        *int64
+	PerfHostStalenessSeconds     *int64
 
 	ChainSnapshotMaxAgeSeconds *int64
 
@@ -237,6 +245,14 @@ func Load() (Values, error) {
 	readInt("GATEWAY_CAPTURE_MAX_BYTES", &values.CaptureMaxBytes)
 
 	readInt("GATEWAY_PERF_EWMA_HALFLIFE_SECONDS", &values.PerfEWMAHalfLifeSeconds)
+	readInt("GATEWAY_PERF_CONSECUTIVE_FAIL_THRESHOLD", &values.PerfConsecutiveFailThreshold)
+	readFloat("GATEWAY_PERF_FAILURE_RATE_THRESHOLD", &values.PerfFailureRateThreshold)
+	readFloat("GATEWAY_PERF_FAILURE_RATE_MIN_VOLUME", &values.PerfFailureRateMinVolume)
+	readInt("GATEWAY_PERF_EJECTION_BASE_SECONDS", &values.PerfEjectionBaseSeconds)
+	readInt("GATEWAY_PERF_EJECTION_MAX_SECONDS", &values.PerfEjectionMaxSeconds)
+	readFloat("GATEWAY_PERF_MAX_EJECTION_FRACTION", &values.PerfMaxEjectionFraction)
+	readInt("GATEWAY_PERF_MIN_AVAILABLE_HOSTS", &values.PerfMinAvailableHosts)
+	readInt("GATEWAY_PERF_HOST_STALENESS_SECONDS", &values.PerfHostStalenessSeconds)
 
 	readInt("GATEWAY_CHAIN_SNAPSHOT_MAX_AGE_SECONDS", &values.ChainSnapshotMaxAgeSeconds)
 

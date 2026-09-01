@@ -65,6 +65,14 @@ func Build(values env.Values, overrides Overrides) (*Config, error) {
 	overrideIfSet(&configuration.Capture.MaxBytes, values.CaptureMaxBytes)
 
 	overrideIfSet(&configuration.Perf.EWMAHalfLifeSeconds, values.PerfEWMAHalfLifeSeconds)
+	overrideIfSet(&configuration.Perf.ConsecutiveFailThreshold, values.PerfConsecutiveFailThreshold)
+	overrideIfSet(&configuration.Perf.FailureRateThreshold, values.PerfFailureRateThreshold)
+	overrideIfSet(&configuration.Perf.FailureRateMinVolume, values.PerfFailureRateMinVolume)
+	overrideIfSet(&configuration.Perf.EjectionBaseSeconds, values.PerfEjectionBaseSeconds)
+	overrideIfSet(&configuration.Perf.EjectionMaxSeconds, values.PerfEjectionMaxSeconds)
+	overrideIfSet(&configuration.Perf.MaxEjectionFraction, values.PerfMaxEjectionFraction)
+	overrideIfSet(&configuration.Perf.MinAvailableHosts, values.PerfMinAvailableHosts)
+	overrideIfSet(&configuration.Perf.HostStalenessSeconds, values.PerfHostStalenessSeconds)
 
 	overrideIfSet(&configuration.Engine.ReceiptTimeoutMS, values.EngineReceiptTimeoutMS)
 	overrideIfSet(&configuration.Engine.FirstTokenFloorMS, values.EngineFirstTokenFloorMS)
@@ -91,6 +99,15 @@ func Build(values env.Values, overrides Overrides) (*Config, error) {
 	overrideIfSet(&configuration.Engine.FirstTokenCeilingMS, overrides.EngineFirstTokenCeilingMS)
 	overrideIfSet(&configuration.Engine.InterChunkStallMS, overrides.EngineInterChunkStallMS)
 	overrideIfSet(&configuration.Engine.LoserGraceMS, overrides.EngineLoserGraceMS)
+	overrideIfSet(&configuration.Perf.EWMAHalfLifeSeconds, overrides.PerfEWMAHalfLifeSeconds)
+	overrideIfSet(&configuration.Perf.ConsecutiveFailThreshold, overrides.PerfConsecutiveFailThreshold)
+	overrideIfSet(&configuration.Perf.FailureRateThreshold, overrides.PerfFailureRateThreshold)
+	overrideIfSet(&configuration.Perf.FailureRateMinVolume, overrides.PerfFailureRateMinVolume)
+	overrideIfSet(&configuration.Perf.EjectionBaseSeconds, overrides.PerfEjectionBaseSeconds)
+	overrideIfSet(&configuration.Perf.EjectionMaxSeconds, overrides.PerfEjectionMaxSeconds)
+	overrideIfSet(&configuration.Perf.MaxEjectionFraction, overrides.PerfMaxEjectionFraction)
+	overrideIfSet(&configuration.Perf.MinAvailableHosts, overrides.PerfMinAvailableHosts)
+	overrideIfSet(&configuration.Perf.HostStalenessSeconds, overrides.PerfHostStalenessSeconds)
 	if overrides.ParticipantAllowlist != nil {
 		configuration.Scheduler.ParticipantAllowlist = slices.Clone(*overrides.ParticipantAllowlist)
 	}

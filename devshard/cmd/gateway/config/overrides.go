@@ -42,6 +42,15 @@ type Overrides struct {
 	EngineFirstTokenCeilingMS              *int64                 `json:"engine_first_token_ceiling_ms,omitempty"`
 	EngineInterChunkStallMS                *int64                 `json:"engine_inter_chunk_stall_ms,omitempty"`
 	EngineLoserGraceMS                     *int64                 `json:"engine_loser_grace_ms,omitempty"`
+	PerfEWMAHalfLifeSeconds                *int64                 `json:"perf_ewma_halflife_seconds,omitempty"`
+	PerfConsecutiveFailThreshold           *int64                 `json:"perf_consecutive_fail_threshold,omitempty"`
+	PerfFailureRateThreshold               *float64               `json:"perf_failure_rate_threshold,omitempty"`
+	PerfFailureRateMinVolume               *float64               `json:"perf_failure_rate_min_volume,omitempty"`
+	PerfEjectionBaseSeconds                *int64                 `json:"perf_ejection_base_seconds,omitempty"`
+	PerfEjectionMaxSeconds                 *int64                 `json:"perf_ejection_max_seconds,omitempty"`
+	PerfMaxEjectionFraction                *float64               `json:"perf_max_ejection_fraction,omitempty"`
+	PerfMinAvailableHosts                  *int64                 `json:"perf_min_available_hosts,omitempty"`
+	PerfHostStalenessSeconds               *int64                 `json:"perf_host_staleness_seconds,omitempty"`
 }
 
 // ParseOverrides rejects unknown fields: a typo in an admin PUT must be reported, never silently ignored.

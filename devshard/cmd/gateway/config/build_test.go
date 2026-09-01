@@ -200,3 +200,50 @@ func TestForcedStreamingIsOnByDefaultAndTurnedOffWithoutARedeploy(t *testing.T) 
 		})
 	}
 }
+
+// The ejection detector decides which hosts a model may route to, so its thresholds have to be
+// reachable while the gateway runs: a threshold that needs a rebuild cannot be trialled against load.
+func TestEjectionThresholdsAreReachableWithoutARedeploy(t *testing.T) {
+	tests := []struct {
+		name          string
+		values        env.Values
+		overrides     Overrides
+		wantRate      float64
+		wantMaxSecond int64
+	}{
+		{name: "nothing configured", wantRate: 0.15, wantMaxSecond: 600},
+		{
+			name:          "set by env",
+			values:        env.Values{PerfFailureRateThreshold: float64Pointer(0.5), PerfEjectionMaxSeconds: int64Pointer(180)},
+			wantRate:      0.5,
+			wantMaxSecond: 180,
+		},
+		{
+			name:          "set at runtime",
+			overrides:     Overrides{PerfFailureRateThreshold: float64Pointer(0.5), PerfEjectionMaxSeconds: int64Pointer(180)},
+			wantRate:      0.5,
+			wantMaxSecond: 180,
+		},
+		{
+			name:          "runtime wins over env",
+			values:        env.Values{PerfFailureRateThreshold: float64Pointer(0.5), PerfEjectionMaxSeconds: int64Pointer(180)},
+			overrides:     Overrides{PerfFailureRateThreshold: float64Pointer(0.7), PerfEjectionMaxSeconds: int64Pointer(300)},
+			wantRate:      0.7,
+			wantMaxSecond: 300,
+		},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			configuration, err := Build(testCase.values, testCase.overrides)
+			if err != nil {
+				t.Fatalf("Build(): %v", err)
+			}
+			if got := configuration.Perf.FailureRateThreshold; got != testCase.wantRate {
+				t.Errorf("perf_failure_rate_threshold = %v, want %v", got, testCase.wantRate)
+			}
+			if got := configuration.Perf.EjectionMaxSeconds; got != testCase.wantMaxSecond {
+				t.Errorf("perf_ejection_max_seconds = %d, want %d", got, testCase.wantMaxSecond)
+			}
+		})
+	}
+}
