@@ -219,12 +219,14 @@ func (w *attemptWriter) progress(kind AttemptEventKind, at time.Time) AttemptEve
 func (s *attemptState) recordChunkGap(now time.Time, chunk []byte) {
 	previous := s.lastChunk
 	s.lastChunk = now
-	if previous.IsZero() || filters.HasSSEDone(chunk) {
+	if previous.IsZero() {
 		return
 	}
-	if gap := now.Sub(previous); gap > s.maxChunkGap {
-		s.maxChunkGap, s.maxGapChunk = gap, s.streamChunks
+	gap := now.Sub(previous)
+	if gap <= s.maxChunkGap || filters.HasSSEDone(chunk) {
+		return
 	}
+	s.maxChunkGap, s.maxGapChunk = gap, s.streamChunks
 }
 
 // meanChunkGap is the average silence between chunks, which is the inverse of the delivered rate.
@@ -316,7 +318,7 @@ func classifyDispatchError(ctx context.Context, err error) Terminal {
 		if terminal, recovered := terminalForStatus[status.StatusCode]; recovered {
 			return terminal
 		}
-		if status.StatusCode >= http.StatusInternalServerError && !transport.IsUpstreamEscrowNotFound(err) {
+		if status.StatusCode >= http.StatusInternalServerError && !transport.IsUpstreamRequestFault(err) {
 			return TerminalUpstreamServerError
 		}
 		return TerminalRejected

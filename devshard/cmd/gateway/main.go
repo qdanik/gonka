@@ -190,6 +190,7 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 		Store:       devshardWrites{Store: gatewayStore, changed: func() { notify(devshardWork) }},
 		Snapshots:   observer,
 		Settlement:  escrows,
+		Timeouts:    escrows,
 		Signer:      environmentSigner{},
 		Config:      configHolder,
 		Now:         clock,

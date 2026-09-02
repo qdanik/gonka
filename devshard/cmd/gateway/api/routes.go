@@ -109,7 +109,7 @@ func (s *Server) handleDevshardModels(w http.ResponseWriter, r *http.Request) {
 	if !allowMethods(w, r, http.MethodGet, http.MethodHead) {
 		return
 	}
-	escrow, found := s.routableEscrow(r.PathValue("id"))
+	escrow, found := s.escrows.Routable(r.PathValue("id"))
 	if !found {
 		writeErrorFor(w, fmt.Errorf("%w: %s", ErrUnknownDevshard, r.PathValue("id")))
 		return
@@ -128,7 +128,7 @@ func (s *Server) handleDevshardStatus(w http.ResponseWriter, r *http.Request) {
 	if !allowMethods(w, r, http.MethodGet, http.MethodHead) {
 		return
 	}
-	escrow, found := s.routableEscrow(r.PathValue("id"))
+	escrow, found := s.escrows.Routable(r.PathValue("id"))
 	if !found {
 		writeErrorFor(w, fmt.Errorf("%w: %s", ErrUnknownDevshard, r.PathValue("id")))
 		return
@@ -145,15 +145,6 @@ func (s *Server) routableEscrows() []scheduler.Escrow {
 	return escrows
 }
 
-func (s *Server) routableEscrow(escrowID string) (scheduler.Escrow, bool) {
-	for _, escrow := range s.routableEscrows() {
-		if escrow.ID == escrowID {
-			return escrow, true
-		}
-	}
-	return scheduler.Escrow{}, false
-}
-
 func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	if !allowMethods(w, r, http.MethodPost) {
 		return
@@ -167,7 +158,7 @@ func (s *Server) handleDevshardChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	escrowID := r.PathValue("id")
-	if _, routable := s.routableEscrow(escrowID); !routable {
+	if _, routable := s.escrows.Routable(escrowID); !routable {
 		writeErrorFor(w, fmt.Errorf("%w: %s", ErrUnknownDevshard, escrowID))
 		return
 	}
@@ -203,12 +194,15 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request, escrowPin string) 
 		return
 	}
 
-	key := cacheKeyFor(r, normalized.Model, normalized.Body, normalized.Logprobs, normalized.ClientStream, normalized.ClientUsage)
-	if entry, hit := s.cache.get(key, s.now()); hit {
-		written := serveCached(w, requestID, entry)
-		logging.Info("request finished", logkey.Request, requestID, logkey.Model, normalized.Model,
-			logkey.Escrow, entry.escrowID, logkey.Stream, entry.stream, logkey.Outcome, "cache_hit", logkey.Bytes, written)
-		return
+	var key cacheKey
+	if s.cache != nil {
+		key = cacheKeyFor(r, normalized.Model, normalized.Body, normalized.Logprobs, normalized.ClientStream, normalized.ClientUsage)
+		if entry, hit := s.cache.get(key, s.now()); hit {
+			written := serveCached(w, requestID, entry)
+			logging.Info("request finished", logkey.Request, requestID, logkey.Model, normalized.Model,
+				logkey.Escrow, entry.escrowID, logkey.Stream, entry.stream, logkey.Outcome, "cache_hit", logkey.Bytes, written)
+			return
+		}
 	}
 
 	inputTokens := estimatePromptTokens(normalized.Body)
@@ -228,7 +222,7 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request, escrowPin string) 
 		_, _ = s.race(w, r, requestID, normalized, inputTokens, escrowPin)
 		return
 	}
-	recorder := &cacheRecorder{ResponseWriter: w, limit: s.cache.entryLimit()}
+	recorder := newCacheRecorder(w, s.cache.entryLimit(), normalized.ClientStream)
 	outcome, hiddenFailure := s.race(recorder, r, requestID, normalized, inputTokens, escrowPin)
 	if entry, storable := recorder.entry(outcome.EscrowID, normalized.ClientStream, cmp.Or(r.Context().Err(), hiddenFailure)); storable {
 		s.cache.put(key, entry, s.now())

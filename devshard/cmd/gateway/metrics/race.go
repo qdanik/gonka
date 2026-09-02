@@ -175,7 +175,7 @@ func (r *RaceRecorder) RecordRace(outcome engine.RaceOutcome) {
 		if labels.Outcome == engine.AttemptOutcomeFailed {
 			reason := metricLabel(labels.Reason, labelUnknown)
 			r.attemptFailures.WithLabelValues(participant, model, role, reason, labels.Visibility).Inc()
-			if status, upstream := transportStatus(attempt.Terminal); upstream {
+			if status, upstream := transportStatus(attempt); upstream {
 				r.transportErrors.WithLabelValues(participant, model, pathKindInference, status).Inc()
 			}
 			if firstFailure == "" {
@@ -219,12 +219,17 @@ func raceFailureReason(outcome engine.RaceOutcome, firstFailure string) string {
 	return metricLabel(firstFailure, labelUnknown)
 }
 
-// transportStatus maps a terminal back to the host's upstream status. See operations.md, "Cardinality rules".
-func transportStatus(terminal engine.Terminal) (string, bool) {
-	if status, recovered := engine.StatusFor(terminal); recovered {
+// transportStatus maps an attempt back to the host's upstream status. See operations.md, "Cardinality rules".
+func transportStatus(attempt engine.AttemptOutcome) (string, bool) {
+	if status, recovered := engine.StatusFor(attempt.Terminal); recovered {
 		return strconv.Itoa(status), true
 	}
-	switch terminal {
+	switch attempt.Terminal {
+	case engine.TerminalUpstreamServerError:
+		if attempt.UpstreamStatus > 0 {
+			return strconv.Itoa(attempt.UpstreamStatus), true
+		}
+		return statusNoCode, true
 	case engine.TerminalRejected, engine.TerminalDialFailure, engine.TerminalStreamTruncated,
 		engine.TerminalUnexpectedEOF, engine.TerminalStalled, engine.TerminalResponseTooLarge:
 		return statusNoCode, true

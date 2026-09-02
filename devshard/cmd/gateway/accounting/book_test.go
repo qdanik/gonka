@@ -46,6 +46,15 @@ func participantFor(slotID int) string {
 	return string(rune('A' + slotID))
 }
 
+// challengedNonces is the escrow state a sweep reads when a slot has challenges still open against it.
+func challengedNonces(slotID uint32, count uint64) map[uint64]*types.InferenceRecord {
+	inferences := make(map[uint64]*types.InferenceRecord, count)
+	for nonce := range count {
+		inferences[nonce+1] = &types.InferenceRecord{Status: types.StatusChallenged, ExecutorSlot: slotID}
+	}
+	return inferences
+}
+
 // slotOfNonce mirrors the chain's convention in the test so an expectation names the slot it means
 // rather than repeating the arithmetic under test.
 func slotOfNonce(nonce uint64, groupSize int) uint32 { return uint32(nonce % uint64(groupSize)) }

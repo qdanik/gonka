@@ -100,6 +100,35 @@ func TestAReadDeadlineBoundsTheBodyAndIsClearedBeforeTheResponse(t *testing.T) {
 	}
 }
 
+// The declared length only sizes the buffer the body is read into; what the client actually sent is
+// what the handler must see.
+func TestABodyIsReadWholeWhateverLengthItDeclares(t *testing.T) {
+	testCases := []struct {
+		name          string
+		contentLength int64
+	}{
+		{name: "declared exactly", contentLength: int64(len(chatBody))},
+		{name: "undeclared", contentLength: -1},
+		{name: "overstated", contentLength: 1 << 20},
+		{name: "understated", contentLength: 4},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(chatBody))
+			request.ContentLength = testCase.contentLength
+
+			body, err := readBody(httptest.NewRecorder(), request, chatIngestLimit)
+			if err != nil {
+				t.Fatalf("readBody() = %v", err)
+			}
+			if string(body) != chatBody {
+				t.Fatalf("readBody() = %q, want the whole body", body)
+			}
+		})
+	}
+}
+
 func TestThePublicRoutesNeverReachTheKeyComparison(t *testing.T) {
 	probes := []struct {
 		name   string
@@ -184,6 +213,28 @@ func TestTheOperatorRoutesAre404WhenNoAdminKeyIsConfigured(t *testing.T) {
 	recorder := live.request(t, http.MethodGet, "/v1/admin/state", "", adminHeaders())
 	if recorder.Code != http.StatusNotFound {
 		t.Fatalf("status: got %d, want 404", recorder.Code)
+	}
+}
+
+// The configured keys are hashed once per configuration snapshot, so a rotation has to reach the
+// very next request: the retired key is refused and the new one is not.
+func TestARotatedAdminKeyTakesEffectOnTheNextRequest(t *testing.T) {
+	live := newHarness(t)
+	if served := live.request(t, http.MethodGet, "/v1/admin/state", "", adminHeaders()); served.Code != http.StatusOK {
+		t.Fatalf("the configured key: got %d, want 200", served.Code)
+	}
+
+	live.swapConfig(func(next *config.Config) { next.Server.AdminAPIKey = "rotated-admin-key" })
+
+	retired := live.request(t, http.MethodGet, "/v1/admin/state", "", adminHeaders())
+	rotated := live.request(t, http.MethodGet, "/v1/admin/state", "",
+		map[string]string{"Authorization": "Bearer rotated-admin-key"})
+
+	if retired.Code != http.StatusUnauthorized {
+		t.Fatalf("the retired key: got %d, want 401", retired.Code)
+	}
+	if rotated.Code != http.StatusOK {
+		t.Fatalf("the rotated key: got %d, want 200", rotated.Code)
 	}
 }
 

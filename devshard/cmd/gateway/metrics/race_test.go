@@ -221,6 +221,21 @@ func TestAnUndispatchedAttemptIsNotCountedAsStarted(t *testing.T) {
 		labels{"participant_key": "gonka1ghost", "model": "qwen", "role": "extra", "outcome": "failed", "visibility": "failed_not_finished"}, 1)
 }
 
+func TestAnUpstreamServerErrorIsCountedUnderTheStatusTheHostSent(t *testing.T) {
+	telemetry := New()
+	NewRaceRecorder(telemetry).RecordRace(engine.RaceOutcome{
+		Model:    "qwen",
+		Decision: "primary",
+		Attempts: []engine.AttemptOutcome{{
+			Participant: "gonka1host", Role: "primary", SendTime: at(0),
+			Terminal: engine.TerminalUpstreamServerError, UpstreamStatus: 502,
+		}},
+	})
+
+	expectCounter(t, telemetry, "devshard_gateway_participant_transport_errors_total",
+		labels{"participant_key": "gonka1host", "model": "qwen", "path_kind": "inference", "status": "502"}, 1)
+}
+
 func TestEmptyLabelsFallBackRatherThanShippingBlank(t *testing.T) {
 	telemetry := New()
 	NewRaceRecorder(telemetry).RecordRace(engine.RaceOutcome{

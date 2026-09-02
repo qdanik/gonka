@@ -9,15 +9,18 @@ import (
 
 // Aggregated on read, never stored: a stored total could only ever disagree with its own parts.
 func (b *Book) Query(filter QueryFilter) []ParticipantRecord {
+	return b.query(filter, true)
+}
+
+// Undetailed leaves out the counters, slots, latest nonces and findings, for a caller that sums the totals and throws the rest away.
+func (b *Book) query(filter QueryFilter, detailed bool) []ParticipantRecord {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 
+	admitted := b.admittedEscrows(filter)
 	records := make(map[participantIdentity]*ParticipantRecord)
-	for _, escrowID := range slices.Sorted(maps.Keys(b.escrows)) {
+	for _, escrowID := range admitted {
 		escrow := b.escrows[escrowID]
-		if !filter.admitsEscrow(escrowID, escrow.metadata) {
-			continue
-		}
 		for _, slot := range escrow.slots(escrowID) {
 			if filter.Participant != "" && slot.Participant != filter.Participant {
 				continue
@@ -36,6 +39,10 @@ func (b *Book) Query(filter QueryFilter) []ParticipantRecord {
 				records[identity] = record
 			}
 			record.absorb(slot)
+			if !detailed {
+				continue
+			}
+			record.Slots = append(record.Slots, slot)
 			if last := len(record.LatestNonces); last == 0 || record.LatestNonces[last-1].EscrowID != escrowID {
 				record.LatestNonces = append(record.LatestNonces, EscrowNonce{
 					EscrowID:    escrowID,
@@ -44,22 +51,65 @@ func (b *Book) Query(filter QueryFilter) []ParticipantRecord {
 				})
 			}
 		}
-		for key, count := range escrow.counters {
-			identity := escrow.identityOf(escrow.participantOf(key.SlotID))
-			if record, known := records[identity]; known {
-				record.Counters = append(record.Counters, CounterRecord{EscrowID: escrowID, CounterKey: key, Count: count})
-			}
-		}
+	}
+	if detailed {
+		distributeCounters(b.escrows, admitted, records)
 	}
 
 	aggregated := make([]ParticipantRecord, 0, len(records))
 	for _, identity := range slices.SortedFunc(maps.Keys(records), compareParticipantIdentity) {
 		record := records[identity]
-		slices.SortFunc(record.Counters, compareCounterRecord)
-		record.Findings = findingsFor(*record)
+		if detailed {
+			sortCountersWithinEscrows(record.Counters)
+			record.Findings = findingsFor(*record)
+		}
 		aggregated = append(aggregated, *record)
 	}
 	return aggregated
+}
+
+// admittedEscrows are the escrow ids the filter admits, in id order. The caller holds b.mu.
+func (b *Book) admittedEscrows(filter QueryFilter) []string {
+	admitted := make([]string, 0, len(b.escrows))
+	for _, escrowID := range slices.Sorted(maps.Keys(b.escrows)) {
+		if filter.admitsEscrow(escrowID, b.escrows[escrowID].metadata) {
+			admitted = append(admitted, escrowID)
+		}
+	}
+	return admitted
+}
+
+func distributeCounters(escrows map[string]*escrowLedger, admitted []string, records map[participantIdentity]*ParticipantRecord) {
+	var owners []*ParticipantRecord
+	for _, escrowID := range admitted {
+		escrow := escrows[escrowID]
+		owners = owners[:0]
+		for slotID := range uint32(len(escrow.metadata.Slots)) {
+			owners = append(owners, records[escrow.identityOf(escrow.participantOf(slotID))])
+		}
+		// A stored counter naming a slot the group no longer holds keeps the participant it always had: none.
+		beyondGroup := records[escrow.identityOf("")]
+		for key, count := range escrow.counters {
+			owner := beyondGroup
+			if int(key.SlotID) < len(owners) {
+				owner = owners[key.SlotID]
+			}
+			if owner != nil {
+				owner.Counters = append(owner.Counters, CounterRecord{EscrowID: escrowID, CounterKey: key, Count: count})
+			}
+		}
+	}
+}
+
+func sortCountersWithinEscrows(counters []CounterRecord) {
+	for start := 0; start < len(counters); {
+		end := start + 1
+		for end < len(counters) && counters[end].EscrowID == counters[start].EscrowID {
+			end++
+		}
+		slices.SortFunc(counters[start:end], compareCounterRecord)
+		start = end
+	}
 }
 
 func (f QueryFilter) admitsEscrow(escrowID string, metadata EscrowMetadata) bool {
@@ -74,7 +124,7 @@ func (f QueryFilter) admitsEscrow(escrowID string, metadata EscrowMetadata) bool
 
 func (b *Book) Epochs(filter QueryFilter) []EpochSummary {
 	summaries := make(map[uint64]*EpochSummary)
-	for _, record := range b.Query(filter) {
+	for _, record := range b.query(filter, false) {
 		summary, known := summaries[record.EpochIndex]
 		if !known {
 			summary = &EpochSummary{
@@ -131,12 +181,17 @@ func (e *escrowLedger) identityOf(participant string) participantIdentity {
 	}
 }
 
+// The order the report's rows come out in.
 func compareCounterRecord(left, right CounterRecord) int {
 	if byEscrow := strings.Compare(left.EscrowID, right.EscrowID); byEscrow != 0 {
 		return byEscrow
 	}
+	return compareCounterKey(left.CounterKey, right.CounterKey)
+}
+
+func compareCounterKey(left, right CounterKey) int {
 	if left.SlotID != right.SlotID {
-		return int(left.SlotID) - int(right.SlotID)
+		return cmp.Compare(left.SlotID, right.SlotID)
 	}
 	return strings.Compare(string(left.Disposition), string(right.Disposition))
 }
@@ -152,7 +207,6 @@ func (r *ParticipantRecord) absorb(slot SlotRecord) {
 	// Per slot of one escrow: summing both sides first lets a surplus in one hide a shortfall in another.
 	r.CrossChecks.ErrorCount += absDiff(slot.TimeoutsApplied, uint64(slot.ChainMissed)) +
 		absDiff(slot.rejected, uint64(slot.ChainInvalid)) + slot.Overcounted
-	r.Slots = append(r.Slots, slot)
 }
 
 func (e *escrowLedger) participantOf(slotID uint32) string {
@@ -162,54 +216,63 @@ func (e *escrowLedger) participantOf(slotID uint32) string {
 	return e.metadata.Slots[slotID].ValidatorAddress
 }
 
+// slotAggregate is one slot's share of an escrow, folded in one pass so the record below is a copy.
+type slotAggregate struct {
+	counted      uint64
+	pending      uint64
+	inFlight     uint64
+	dispositions map[Disposition]uint64
+	openRequests map[string]struct{}
+	tally        timeoutTally
+	money        slotMoney
+}
+
 func (e *escrowLedger) slots(escrowID string) []SlotRecord {
 	groupSize := uint32(len(e.metadata.Slots))
-	counted := make(map[uint32]uint64, groupSize)
-	dispositions := make(map[uint32]map[Disposition]uint64, groupSize)
-	tallies := make(map[uint32]timeoutTally, groupSize)
+	aggregates := make([]slotAggregate, groupSize)
 	for key, count := range e.counters {
-		counted[key.SlotID] += count
-		if dispositions[key.SlotID] == nil {
-			dispositions[key.SlotID] = make(map[Disposition]uint64)
+		if key.SlotID >= groupSize {
+			continue
 		}
-		dispositions[key.SlotID][key.Disposition] += count
-		tally := tallies[key.SlotID]
-		tally.fold(key, count)
-		tallies[key.SlotID] = tally
+		aggregate := &aggregates[key.SlotID]
+		aggregate.counted += count
+		if aggregate.dispositions == nil {
+			aggregate.dispositions = make(map[Disposition]uint64)
+		}
+		aggregate.dispositions[key.Disposition] += count
+		aggregate.tally.fold(key, count)
 	}
-	money := make(map[uint32]slotMoney, groupSize)
 	for nonce, cost := range e.costs {
-		slotID := e.slotOf(nonce)
-		carried := money[slotID]
-		carried.reserved += cost.reserved
-		carried.actual += cost.actual
-		carried.refunded += cost.refunded()
-		carried.input += cost.input
-		carried.output += cost.output
-		money[slotID] = carried
+		money := &aggregates[e.slotOf(nonce)].money
+		money.reserved += cost.reserved
+		money.actual += cost.actual
+		money.refunded += cost.refunded()
+		money.input += cost.input
+		money.output += cost.output
 	}
-	pending := make(map[uint32]uint64, groupSize)
-	inFlight := make(map[uint32]uint64, groupSize)
-	openRequests := make(map[uint32]map[string]struct{}, groupSize)
 	for nonce, record := range e.nonces {
+		aggregate := &aggregates[e.slotOf(nonce)]
 		switch {
-		case record.counted != nil:
+		case record.isCounted:
 		case record.sent && !record.finished:
-			slotID := e.slotOf(nonce)
-			inFlight[slotID]++
+			aggregate.inFlight++
 			if record.requestID != "" {
-				if openRequests[slotID] == nil {
-					openRequests[slotID] = make(map[string]struct{})
+				if aggregate.openRequests == nil {
+					aggregate.openRequests = make(map[string]struct{})
 				}
-				openRequests[slotID][record.requestID] = struct{}{}
+				aggregate.openRequests[record.requestID] = struct{}{}
 			}
 		default:
-			pending[e.slotOf(nonce)]++
+			aggregate.pending++
 		}
 	}
 
 	records := make([]SlotRecord, 0, groupSize)
 	for slotID := range groupSize {
+		aggregate := &aggregates[slotID]
+		if aggregate.dispositions == nil {
+			aggregate.dispositions = make(map[Disposition]uint64)
+		}
 		slot := SlotRecord{
 			EscrowID:    escrowID,
 			SlotID:      slotID,
@@ -217,31 +280,30 @@ func (e *escrowLedger) slots(escrowID string) []SlotRecord {
 			rejected:    e.rejected[slotID],
 			nonceTotals: nonceTotals{
 				Assigned:     assignedForSlot(e.latest, groupSize, slotID),
-				Dispositions: dispositions[slotID],
-				Pending:      pending[slotID],
+				Dispositions: aggregate.dispositions,
+				Pending:      aggregate.pending,
+				ReservedCost: aggregate.money.reserved,
+				ActualCost:   aggregate.money.actual,
+				RefundedCost: aggregate.money.refunded,
+				InputTokens:  aggregate.money.input,
+				OutputTokens: aggregate.money.output,
 			},
 			hostActivity: hostActivity{
-				InFlight:             inFlight[slotID],
-				openRequests:         openRequests[slotID],
-				InFlightRequests:     uint64(len(openRequests[slotID])),
+				InFlight:             aggregate.inFlight,
+				openRequests:         aggregate.openRequests,
+				InFlightRequests:     uint64(len(aggregate.openRequests)),
 				UnresolvedChallenges: e.challenged[slotID],
 				ValidationsPerformed: e.validations[slotID],
 				TimeoutsApplied:      e.timeouts[slotID],
 			},
-			timeoutTally: tallies[slotID],
-		}
-		if slot.Dispositions == nil {
-			slot.Dispositions = make(map[Disposition]uint64)
+			timeoutTally: aggregate.tally,
 		}
 		if stats, observed := e.hostStats[slotID]; observed {
 			slot.ChainMissed, slot.ChainInvalid = stats.Missed, stats.Invalid
 			slot.ChainCost = stats.Cost
 			slot.RequiredValidations, slot.CompletedValidations = stats.RequiredValidations, stats.CompletedValidations
 		}
-		carried := money[slotID]
-		slot.ReservedCost, slot.ActualCost, slot.RefundedCost = carried.reserved, carried.actual, carried.refunded
-		slot.InputTokens, slot.OutputTokens = carried.input, carried.output
-		accounted := counted[slotID] + slot.Pending + slot.InFlight
+		accounted := aggregate.counted + slot.Pending + slot.InFlight
 		if accounted > slot.Assigned {
 			slot.Overcounted = accounted - slot.Assigned
 		} else {

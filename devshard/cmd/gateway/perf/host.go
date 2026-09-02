@@ -16,6 +16,16 @@ type hostKey struct {
 	model       string
 }
 
+// hostState is the pair the Tracker keys one map by: the two always live and die together.
+type hostState struct {
+	perf     hostPerf
+	ejection ejectionState
+}
+
+func newHostState(halfLife time.Duration) *hostState {
+	return &hostState{perf: *newHostPerf(halfLife)}
+}
+
 type decayedCounter struct {
 	count     float64
 	lastTouch time.Time
@@ -35,7 +45,11 @@ func (c *decayedCounter) value(now time.Time) float64 {
 	if c.lastTouch.IsZero() {
 		return 0
 	}
-	return c.count * decayWeight(now.Sub(c.lastTouch), c.halfLife)
+	elapsed := now.Sub(c.lastTouch)
+	if elapsed <= 0 {
+		return c.count
+	}
+	return c.count * decayWeight(elapsed, c.halfLife)
 }
 
 func decayWeight(elapsed, halfLife time.Duration) float64 {
@@ -112,8 +126,8 @@ func (w *latencyWindow) p75(minimum int) (time.Duration, bool) {
 	if w.filled < minimum {
 		return 0, false
 	}
-	sorted := make([]time.Duration, w.filled)
-	copy(sorted, w.samples[:w.filled])
+	var scratch [latencyWindowSize]time.Duration
+	sorted := scratch[:copy(scratch[:], w.samples[:w.filled])]
 	slices.Sort(sorted)
 	return sorted[(len(sorted)*3)/4], true
 }

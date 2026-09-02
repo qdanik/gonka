@@ -53,18 +53,13 @@ type Finding struct {
 
 // Nonces that never reached the host are excluded from every rate: a burn is this gateway's own decision.
 func findingsFor(record ParticipantRecord) []Finding {
+	counted := countedOf(record)
 	delivered := without(record.Dispositions[DispositionFinishedUsed]+
 		record.Dispositions[DispositionFinishedUnused]+
-		record.Dispositions[DispositionFinishedUsageUnknown],
-		countersWhere(record, both(wasDelivered, servedNoUser)))
-	refused := without(record.Dispositions[DispositionUnfinishedRefused],
-		countersWhere(record, both(is(DispositionUnfinishedRefused), offRecord)))
-	unfinished := without(record.Dispositions[DispositionUnfinishedExecution],
-		countersWhere(record, both(is(DispositionUnfinishedExecution), offRecord)))
+		record.Dispositions[DispositionFinishedUsageUnknown], counted.deliveredWarmup)
+	refused := without(record.Dispositions[DispositionUnfinishedRefused], counted.refusedOffRecord)
+	unfinished := without(record.Dispositions[DispositionUnfinishedExecution], counted.unfinishedOffRecord)
 	reached := delivered + refused + unfinished
-
-	deliveredNormally := countersWhere(record, both(outsidePoC, wasDelivered))
-	acknowledgedNormally := countersWhere(record, both(outsidePoC, wasAcknowledged))
 
 	findings := make([]Finding, 0, 4)
 	add := func(finding Finding, flagged bool) {
@@ -76,12 +71,11 @@ func findingsFor(record ParticipantRecord) []Finding {
 		FindingExecutionTimeouts))
 	add(ratio(refused, reached, refusalWarning, refusalCritical,
 		FindingRefusals))
-	add(ratio(without(record.Dispositions[DispositionFinishedUnused],
-		countersWhere(record, both(is(DispositionFinishedUnused), servedNoUser))), delivered,
+	add(ratio(without(record.Dispositions[DispositionFinishedUnused], counted.unusedWarmup), delivered,
 		unusedAnswerWarning, neverCritical, FindingUnusedAnswers))
-	add(ratio(ghostsBecause(record, scheduler.GhostReasonThrottled), record.Assigned, gatewayThrottleWarning, neverCritical,
+	add(ratio(counted.throttledGhosts, record.Assigned, gatewayThrottleWarning, neverCritical,
 		FindingGatewayThrottled))
-	add(ratio(ghostsBecause(record, scheduler.GhostReasonStateDiverged), record.Assigned, stateDivergedWarning, neverCritical,
+	add(ratio(counted.stateDivergedGhosts, record.Assigned, stateDivergedWarning, neverCritical,
 		FindingStateDiverged))
 	add(ratio(uint64(record.ChainMissed), record.Assigned, chainMissWarning, chainMissCritical,
 		FindingChainMisses))
@@ -93,18 +87,18 @@ func findingsFor(record ParticipantRecord) []Finding {
 		FindingUndecidedTimeouts))
 	add(ratio(record.UnknownReasonTotal, record.Assigned, unknownReasonWarning, neverCritical,
 		FindingUnknownReasons))
-	add(ratio(countersWhere(record, both(outsidePoC, receiptWasSlow)), acknowledgedNormally, slowReceiptWarning, neverCritical,
+	add(ratio(counted.slowReceiptsOutsidePoC, counted.acknowledgedOutsidePoC, slowReceiptWarning, neverCritical,
 		FindingSlowReceipts))
-	add(ratio(countersWhere(record, both(outsidePoC, chunkWasSlow)), deliveredNormally, slowChunkWarning, neverCritical,
+	add(ratio(counted.slowChunksOutsidePoC, counted.deliveredOutsidePoC, slowChunkWarning, neverCritical,
 		FindingSlowChunks))
-	add(ratio(countersWhere(record, both(outsidePoC, decodeWasSlow)), deliveredNormally, slowDecodeWarning, neverCritical,
+	add(ratio(counted.slowDecodesOutsidePoC, counted.deliveredOutsidePoC, slowDecodeWarning, neverCritical,
 		FindingSlowDecode))
-	add(ratio(countersWhere(record, logprobsWereDecoded), delivered, decodedLogprobsWarning, decodedLogprobsCritical,
+	add(ratio(counted.logprobsDecoded, delivered, decodedLogprobsWarning, decodedLogprobsCritical,
 		FindingDecodedLogprobs))
-	add(ratio(countersWhere(record, clockHadDrifted), delivered+record.Dispositions[DispositionUnfinishedExecution], clockDriftWarning, neverCritical,
+	add(ratio(counted.clockDrifted, delivered+record.Dispositions[DispositionUnfinishedExecution], clockDriftWarning, neverCritical,
 		FindingClockDrift))
 
-	if total := countersWhere(record, failedWithoutAnswer); total > 0 && reached >= findingMinimumVolume {
+	if total := counted.failedWithoutAnswer; total > 0 && reached >= findingMinimumVolume {
 		findings = append(findings, Finding{
 			Code: FindingFailureTerminals, Severity: SeverityWarning, Part: total, Whole: reached,
 		})
@@ -122,6 +116,83 @@ func findingsFor(record ParticipantRecord) []Finding {
 		})
 	}
 	return findings
+}
+
+// Every sum a rate below is measured from, so a participant's counters are walked once rather than per finding.
+type countedNonces struct {
+	deliveredWarmup        uint64
+	unusedWarmup           uint64
+	refusedOffRecord       uint64
+	unfinishedOffRecord    uint64
+	deliveredOutsidePoC    uint64
+	acknowledgedOutsidePoC uint64
+	slowReceiptsOutsidePoC uint64
+	slowChunksOutsidePoC   uint64
+	slowDecodesOutsidePoC  uint64
+	logprobsDecoded        uint64
+	clockDrifted           uint64
+	failedWithoutAnswer    uint64
+	throttledGhosts        uint64
+	stateDivergedGhosts    uint64
+}
+
+func countedOf(record ParticipantRecord) countedNonces {
+	var counted countedNonces
+	for _, counter := range record.Counters {
+		key, count := counter.CounterKey, counter.Count
+		if key.LogprobsDecoded {
+			counted.logprobsDecoded += count
+		}
+		if key.ClockDrifted {
+			counted.clockDrifted += count
+		}
+		if outsidePoC(key) {
+			if key.SlowReceipt {
+				counted.slowReceiptsOutsidePoC += count
+			}
+			if key.SlowChunk {
+				counted.slowChunksOutsidePoC += count
+			}
+			if key.SlowDecode {
+				counted.slowDecodesOutsidePoC += count
+			}
+		}
+		if failedWithoutAnswer(key) {
+			counted.failedWithoutAnswer += count
+		}
+		switch key.Disposition {
+		case DispositionFinishedUsed, DispositionFinishedUnused, DispositionFinishedUsageUnknown:
+			if servedNoUser(key) {
+				counted.deliveredWarmup += count
+				if key.Disposition == DispositionFinishedUnused {
+					counted.unusedWarmup += count
+				}
+			}
+			if outsidePoC(key) {
+				counted.deliveredOutsidePoC += count
+				counted.acknowledgedOutsidePoC += count
+			}
+		case DispositionUnfinishedExecution:
+			if offRecord(key) {
+				counted.unfinishedOffRecord += count
+			}
+			if outsidePoC(key) {
+				counted.acknowledgedOutsidePoC += count
+			}
+		case DispositionUnfinishedRefused:
+			if offRecord(key) {
+				counted.refusedOffRecord += count
+			}
+		case DispositionGhost:
+			switch key.GhostReason {
+			case scheduler.GhostReasonThrottled:
+				counted.throttledGhosts += count
+			case scheduler.GhostReasonStateDiverged:
+				counted.stateDivergedGhosts += count
+			}
+		}
+	}
+	return counted
 }
 
 func undecidedTimeouts(record ParticipantRecord) uint64 {
@@ -167,42 +238,7 @@ func failedWithoutAnswer(key CounterKey) bool {
 	return key.Disposition == DispositionUnfinishedRefused || key.Disposition == DispositionUnfinishedExecution
 }
 
-func receiptWasSlow(key CounterKey) bool  { return key.SlowReceipt }
-func chunkWasSlow(key CounterKey) bool    { return key.SlowChunk }
-func clockHadDrifted(key CounterKey) bool { return key.ClockDrifted }
-func decodeWasSlow(key CounterKey) bool   { return key.SlowDecode }
-
-func logprobsWereDecoded(key CounterKey) bool { return key.LogprobsDecoded }
-
-func countersWhere(record ParticipantRecord, match func(CounterKey) bool) uint64 {
-	var total uint64
-	for _, counter := range record.Counters {
-		if match(counter.CounterKey) {
-			total += counter.Count
-		}
-	}
-	return total
-}
-
-func is(disposition Disposition) func(CounterKey) bool {
-	return func(key CounterKey) bool { return key.Disposition == disposition }
-}
-
-func both(first, second func(CounterKey) bool) func(CounterKey) bool {
-	return func(key CounterKey) bool { return first(key) && second(key) }
-}
-
 func outsidePoC(key CounterKey) bool { return key.Phase != PhasePoC }
-
-func wasDelivered(key CounterKey) bool {
-	return key.Disposition == DispositionFinishedUsed ||
-		key.Disposition == DispositionFinishedUnused ||
-		key.Disposition == DispositionFinishedUsageUnknown
-}
-
-func wasAcknowledged(key CounterKey) bool {
-	return wasDelivered(key) || key.Disposition == DispositionUnfinishedExecution
-}
 
 func servedNoUser(key CounterKey) bool { return key.Terminal == TerminalWarmupProbe }
 
@@ -227,14 +263,4 @@ func without(total, part uint64) uint64 {
 		return 0
 	}
 	return total - part
-}
-
-func ghostsBecause(record ParticipantRecord, reason string) uint64 {
-	var total uint64
-	for _, counter := range record.Counters {
-		if counter.Disposition == DispositionGhost && counter.GhostReason == reason {
-			total += counter.Count
-		}
-	}
-	return total
 }

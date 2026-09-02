@@ -47,6 +47,12 @@ type SignerSource interface {
 }
 
 // api/ wires this to the live engine runtime; escrow only consumes it. See README.md, "What this package expects of others".
+// TimeoutSweeper retries the execution timeouts no race is left to post. The budget is the ceiling for
+// one tick across every escrow, so the vote traffic it adds never follows the request rate.
+type TimeoutSweeper interface {
+	SweepExecutionTimeouts(ctx context.Context, grace time.Duration, budget int) (due, applied, failed int)
+}
+
 type SettlementSource interface {
 	Retire(escrowID string) error // synchronous: no nonce can be committed on the escrow after it returns
 	IsBusy(escrowID string) bool

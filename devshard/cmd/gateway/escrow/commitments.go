@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"devshard/cmd/gateway/chain"
@@ -38,6 +39,10 @@ type Manager struct {
 
 	depleted markSet
 	missing  markSet
+
+	timeoutSweeper TimeoutSweeper
+	sweeping       atomic.Bool
+	sweepWork      sync.WaitGroup
 
 	lifecycleMu sync.Mutex
 	done        chan struct{}

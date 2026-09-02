@@ -79,7 +79,8 @@ func (p deadlinePlan) hardTimeout() time.Time {
 	if p.detached() {
 		consider(p.Drain)
 	}
-	for _, attempt := range p.Attempts {
+	for index := range p.Attempts {
+		attempt := &p.Attempts[index]
 		switch {
 		case attempt.Done:
 			if attempt.Crowned && !attempt.Completed.IsZero() && p.Policy.LoserGrace > 0 {
@@ -97,7 +98,8 @@ func (p deadlinePlan) stall() time.Time {
 		return time.Time{}
 	}
 	var earliest time.Time
-	for _, attempt := range p.Attempts {
+	for index := range p.Attempts {
+		attempt := &p.Attempts[index]
 		if attempt.Done || attempt.Stalled ||
 			attempt.FirstContent.IsZero() || attempt.LastChunk.IsZero() {
 			continue
@@ -115,8 +117,8 @@ func earlierSet(earliest, candidate time.Time) time.Time {
 }
 func (p deadlinePlan) detached() bool { return !p.Drain.IsZero() }
 func (p deadlinePlan) crowned() bool {
-	for _, attempt := range p.Attempts {
-		if attempt.Crowned {
+	for index := range p.Attempts {
+		if p.Attempts[index].Crowned {
 			return true
 		}
 	}

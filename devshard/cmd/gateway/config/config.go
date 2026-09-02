@@ -152,6 +152,14 @@ type Scheduler struct {
 	ParticipantAllowlist []string
 }
 
+// TimeoutSweep bounds the retry of execution timeouts no race is left to post. BudgetPerTick is the
+// ceiling on votes one tick attempts across every escrow, so the load it adds never follows the request
+// rate; zero turns the sweep off. GraceSeconds keeps it off a nonce whose own race is still due to vote.
+type TimeoutSweep struct {
+	BudgetPerTick int64
+	GraceSeconds  int64
+}
+
 // Config is the complete immutable gateway configuration snapshot.
 type Config struct {
 	Server     Server
@@ -167,6 +175,8 @@ type Config struct {
 	Perf       Perf
 	Engine     Engine
 	Scheduler  Scheduler
+
+	TimeoutSweep TimeoutSweep
 
 	NonceAccounting NonceAccounting
 }

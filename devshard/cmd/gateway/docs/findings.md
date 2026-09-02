@@ -1,82 +1,39 @@
-# Proposals outside the gateway
+# Defects outside the gateway
 
-Three defects the gateway runs into and cannot fix inside `cmd/gateway`. Each is stated from the code that produces it, with the change that would resolve it and the reason that change is sound.
-
----
-
-## 1. Sweep the execution timeouts nobody retries
-
-| | |
-|---|---|
-| **Status** | Proposed. Not implemented. |
-| **Scope** | `devshard/state`, `devshard/user`, one caller in `cmd/gateway/escrow` |
-
-### Problem
-
-A nonce a host receipted and never finished owes an execution timeout. `SettleTimeouts` is called once, from the end of the race that owned the nonce ([`engine/engine.go`](../engine/engine.go)). If the vote does not reach the threshold at that moment — verifiers unreachable, the group briefly short — nothing attempts it again, because the race that owned the nonce has ended and no other component knows the nonce exists.
-
-The cost is not observability, it is money. In [`settleLiveRecordLocked`](../../../state/machine.go) a `StatusStarted` record settles as `ActualCost = ReservedCost`, credited to the executor slot: the escrow pays in full for an answer it never received. A timeout that does apply instead refunds `ReservedCost` to the balance and increments that executor's `Missed`, so the unposted vote also spares the host a stat it earned.
-
-### Proposal
-
-Add an enumeration of live `StatusStarted` ids to `state.StateMachine`; add a bounded sweep to `user.Session` that calls the existing `HandleTimeout` for each such nonce already past its execution deadline; drive it from the gateway's existing 15-second escrow tick ([`escrow/manager.go`](../escrow/manager.go)), beside `settlePending` and `checkMissing`.
-
-### Why it works
-
-`applyTimeout` ([`state/machine.go`](../../../state/machine.go)) has no wall-clock bound: it requires only that the record is still live and that its status matches the reason. `sealEligibleStatus` ([`state/seal.go`](../../../state/seal.go)) admits only `Finished`, `Validated`, `Invalidated` and `TimedOut`, so a `StatusStarted` record never auto-seals — neither the nonce gate nor the clock gate can reach it. It therefore stays settleable until the escrow itself settles, which leaves a window measured in hours, not minutes, for a retry to find the verifiers reachable.
-
-The retry needs nothing carried over from the original request: `VerifyExecutionTimeout` ([`host/timeout.go`](../../../host/timeout.go)) decides from the verifier's own state and the executor, and takes no payload. The live `StatusStarted` records are the whole input.
-
-A sweep cannot collide with a live race. The execution deadline is `ConfirmedAt + ExecutionTimeout` (32 minutes) and no attempt outlives `streamingHardTimeout` (20 minutes), so a nonce past its deadline is owned by nobody.
-
-### Scope note
-
-`StatusPending` is excluded. Its reserve is refunded at settlement either way, and `settleLiveRecordLocked` declines to increment `Missed` there, because state cannot distinguish user censorship from host absence. Sweeping it would assign blame the protocol chose not to assign.
+Three defects the gateway runs into and cannot fix inside `cmd/gateway`. All three are now closed; each entry states the rule that replaced it and where that rule lives.
 
 ---
 
-## 2. Read the confirm stamp from the record, not from the cache
+## 1. The execution timeouts nobody retried — closed
 
-| | |
-|---|---|
-| **Status** | Proposed. Not implemented. |
-| **Scope** | `devshard/user` |
+**What it was.** A nonce a host receipted and never finished owes an execution timeout, and `SettleTimeouts` was called once, from the end of the race that owned it ([`engine/engine.go`](../engine/engine.go)). A round that found no verifiers left the nonce owned by nobody, because no other component knew it existed.
 
-### Problem
+The cost was money, not observability. In `settleLiveRecordLocked` ([`state/machine.go`](../../../state/machine.go)) a `StatusStarted` record settles as `ActualCost = ReservedCost`, credited to the executor slot: the escrow pays in full for an answer it never received, and the unposted vote also spares that host the `Missed` it earned.
 
-`Session.TimeoutDeadline` reads `confirmedAt` only from the in-memory `nonceStates` map. That map is written when a nonce is committed and when a response arrives, and it is empty after a restart. The committed record carries `ConfirmedAt` and survives.
+**The rule now.** Every escrow tick scans its own live records for ones started, stamped and past their execution deadline by a grace, and re-votes them through the same `HandleTimeout`: [`state/started_deadline.go`](../../../state/started_deadline.go) scans, [`user/timeout_sweep.go`](../../../user/timeout_sweep.go) votes, [`registry/timeout_sweep.go`](../registry/timeout_sweep.go) walks the published escrows, and [`escrow/manager.go`](../escrow/manager.go) drives it off the tick. See [`race.md`](./race.md), "The vote nobody retried", for the three properties that keep it off the hot path.
 
-With an empty map, a nonce a host already receipted yields reason `refused`. `applyTimeout` rejects a refused timeout against such a record — `reason=refused requires pending`. The vote is therefore not merely missed across a restart: it cannot be posted at all, and the nonce is guaranteed to settle at full reserve.
+**Why it is sound.** `applyTimeout` ([`state/machine.go`](../../../state/machine.go)) has no wall-clock bound: it requires only that the record is still live and that its status matches the reason. `sealEligibleStatus` ([`state/seal.go`](../../../state/seal.go)) admits only `Finished`, `Validated`, `Invalidated` and `TimedOut`, so a `StatusStarted` record never auto-seals and stays settleable until the escrow itself settles. The retry needs nothing carried over from the original request: `VerifyExecutionTimeout` ([`host/timeout.go`](../../../host/timeout.go)) decides from the verifier's own state and the executor, and takes no payload. A sweep cannot collide with a live race either: the execution deadline is `ConfirmedAt + ExecutionTimeout` (32 minutes) and no attempt outlives `streamingHardTimeout` (20 minutes), and the configured grace is added on top of that.
 
-### Proposal
-
-Prefer the committed record and fall back to the map, rather than the reverse. The record is the authority; the map is a cache of it.
-
-### Why it works
-
-`ConfirmedAt` is written in the same transition that sets `StatusStarted` ([`state/machine.go`](../../../state/machine.go)), from the executor's signed receipt, so any record the sweep in proposal 1 would enumerate carries it. A record without the stamp still reads as `refused` and is simply left alone, which is the safe direction: the chain would decline it.
+**Scope note.** `StatusPending` is excluded. Its reserve is refunded at settlement either way, and `settleLiveRecordLocked` declines to increment `Missed` there, because state cannot distinguish user censorship from host absence. Sweeping it would assign blame the protocol chose not to assign.
 
 ---
 
-## 3. Name the unapplied timeout at its source
+## 2. The confirm stamp read from the cache — closed
 
-| | |
-|---|---|
-| **Status** | Half implemented — the gateway side is done. |
-| **Scope** | `devshard/user` |
+**What it was.** `Session.TimeoutDeadline` read `confirmedAt` only from the in-memory `nonceStates` map. That map is written when a nonce is committed and when a response arrives, and it is empty after a restart, while the committed record carries `ConfirmedAt` and survives.
 
-### Problem
+With an empty map a nonce a host already receipted yielded reason `refused`, and `applyTimeout` rejects a refused timeout against such a record — `reason=refused requires pending`. The vote was not merely missed across a restart: it could not be posted at all, and the nonce was guaranteed to settle at full reserve.
 
-`HandleTimeout` has a path where the votes sufficed and the diff was sent, but the transaction did not land. `result.Applied` is false while the returned error is unwrapped — the same shape a settled vote returns. A caller separating the two by error shape reads the unsettled nonce as settled and records a vote that never reached the chain.
+**The rule now.** The committed record is the authority for the stamp and the map is a cache of it ([`user/session.go`](../../../user/session.go), `TimeoutDeadline`). A record without the stamp still reads as `refused`, which is the safe direction: the chain would decline anything else.
 
-### Proposal
+**Why it is sound.** `ConfirmedAt` is written in the same transition that sets `StatusStarted` ([`state/machine.go`](../../../state/machine.go)), from the executor's signed receipt, so every record the sweep enumerates carries it.
 
-Wrap that return in `ErrTimeoutNotApplied`, the sentinel the insufficient-votes path already uses.
+---
 
-### Why it works
+## 3. The unapplied timeout unnamed at its source — closed
 
-The gateway reads `result.Applied`, which is the fact itself, so it does not depend on the error shape: `SettleTimeout` reads `result.Applied`, which is the fact itself, so the miscount is already gone. The wrap is what remains for the reason label, which is how an operator tells "the diff carried no timeout" from a failure to collect votes at all.
+**What it was.** `HandleTimeout` had a path where the votes sufficed and the diff was sent, but the transaction did not land. `result.Applied` was false while the returned error was unwrapped — the same shape a settled vote returns — so a caller separating the two by error shape read the unsettled nonce as settled.
 
-### Verification note
+**The rule now.** That return is wrapped in `ErrTimeoutNotApplied`, the sentinel the insufficient-votes path already uses ([`user/timeout_effect.go`](../../../user/timeout_effect.go), `timeoutSettledError`). The gateway itself never depended on the error shape — `SettleTimeout` reads `result.Applied`, which is the fact — so this closes the reason label rather than a miscount.
 
-This path is not reachable cheaply in a test: it requires `sendPendingDiff` to succeed while returning a diff that carries no timeout transaction for that nonce. No test pins the source-to-sentinel link; its consumer is covered.
+**Verification note.** The path is not reachable cheaply in a test: it requires `sendPendingDiff` to succeed while returning a diff that carries no timeout transaction for that nonce. The decision it feeds is pinned directly instead ([`user/timeout_effect_test.go`](../../../user/timeout_effect_test.go)).

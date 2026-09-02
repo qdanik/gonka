@@ -144,8 +144,8 @@ func (p EscalationPolicy) AttemptBudget(hostCount int, nonceScarce bool) int {
 func (p EscalationPolicy) NextEscalation(now time.Time, attempts []EscalationAttempt, request EscalationRequest) (ArmedEscalation, bool) {
 	var earliest ArmedEscalation
 	found := false
-	for index, attempt := range attempts {
-		armed, ok := p.triggerFor(attempt, request, now)
+	for index := range attempts {
+		armed, ok := p.triggerFor(&attempts[index], request, now)
 		if !ok {
 			continue
 		}
@@ -161,14 +161,15 @@ func (p EscalationPolicy) Confirm(armed ArmedEscalation, now time.Time, attempts
 	if armed.Attempt < 0 || armed.Attempt >= len(attempts) {
 		return ConfirmedEscalation{}, false
 	}
-	current, ok := p.triggerFor(attempts[armed.Attempt], request, now)
+	current, ok := p.triggerFor(&attempts[armed.Attempt], request, now)
 	if !ok || current.Stage != armed.Stage || now.Before(current.Deadline) {
 		return ConfirmedEscalation{}, false
 	}
 	return ConfirmedEscalation{Attempt: armed.Attempt, Stage: armed.Stage}, true
 }
 
-func (p EscalationPolicy) triggerFor(attempt EscalationAttempt, request EscalationRequest, now time.Time) (ArmedEscalation, bool) {
+// The attempt is taken by pointer: the ladder is walked for every attempt on every event, and the value is wide.
+func (p EscalationPolicy) triggerFor(attempt *EscalationAttempt, request EscalationRequest, now time.Time) (ArmedEscalation, bool) {
 	switch {
 	case attempt.Escalated:
 		return ArmedEscalation{}, false

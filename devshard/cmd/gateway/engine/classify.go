@@ -9,9 +9,12 @@ import (
 	"devshard/cmd/gateway/filters"
 )
 
+// finishReasonStop is the upstream token that lets generated tokens stand in for content.
+const finishReasonStop = "stop"
+
 var (
-	sseUsageKey    = []byte(`"usage"`)
-	sseLogprobsKey = []byte(`"logprobs"`)
+	deltaLabels   = sourceLabels{sourceDeltaContent, sourceDeltaReasoning, sourceDeltaReasoningContent, sourceDeltaToolCalls}
+	messageLabels = sourceLabels{sourceMessageContent, sourceMessageReasoning, sourceMessageReasoningContent, sourceMessageToolCalls}
 )
 
 type sseError struct {
@@ -25,10 +28,8 @@ type sseError struct {
 func (e sseError) present() bool { return e.Source != "" }
 
 type chunkSignal struct {
-	ContentSource         string
-	Error                 sseError
-	UsageCompletionTokens int64
-	LogprobsDecoded       bool
+	chunkScan
+	Error sseError
 }
 
 // crownsWinner admits content and nothing else. See race.md, "An SSE error event counts as a chunk but never crowns".
@@ -41,100 +42,157 @@ func thinkingBudgetRoute(model string) bool {
 }
 
 func classifyChunk(events []byte, thinkingBudget bool) chunkSignal {
-	var signal chunkSignal
-	if source, ok := contentSource(events, thinkingBudget); ok {
-		signal.ContentSource = source
-	} else if failure, ok := errorPayload(events); ok {
-		signal.Error = failure
+	signal := chunkSignal{chunkScan: scanChunk(events, thinkingBudget)}
+	if signal.ContentSource == "" {
+		if failure, ok := errorPayload(events); ok {
+			signal.Error = failure
+		}
 	}
-	if tokens, ok := usageCompletionTokens(events); ok {
-		signal.UsageCompletionTokens = tokens
-	}
-	signal.LogprobsDecoded = logprobsDecoded(events)
 	return signal
 }
 
-func logprobsDecoded(events []byte) bool {
-	if !bytes.Contains(events, sseLogprobsKey) {
-		return false
+// chunkScan is what one pass over a chunk answers.
+type chunkScan struct {
+	ContentSource         string
+	UsageCompletionTokens int64
+	LogprobsDecoded       bool
+}
+
+// streamedEvent is every field one pass over an event reads, in the one shape the decoder is asked for.
+type streamedEvent struct {
+	Choices []streamedChoice `json:"choices"`
+	Usage   *streamedUsage   `json:"usage"`
+}
+
+type streamedChoice struct {
+	FinishReason string           `json:"finish_reason"`
+	Delta        renderedParts    `json:"delta"`
+	Message      renderedParts    `json:"message"`
+	Logprobs     streamedLogprobs `json:"logprobs"`
+}
+
+type streamedLogprobs struct {
+	Content []struct {
+		Token       string `json:"token"`
+		TopLogprobs []struct {
+			Token string `json:"token"`
+		} `json:"top_logprobs"`
+	} `json:"content"`
+}
+
+type streamedUsage struct {
+	CompletionTokens int64 `json:"completion_tokens"`
+}
+
+// looseEvent is the same event with the parts a host can type against the schema left raw, so a wrong type in one of them costs that answer alone rather than every answer the event carries.
+type looseEvent struct {
+	Choices []struct {
+		FinishReason string          `json:"finish_reason"`
+		Delta        renderedParts   `json:"delta"`
+		Message      renderedParts   `json:"message"`
+		Logprobs     json.RawMessage `json:"logprobs"`
+	} `json:"choices"`
+	Usage json.RawMessage `json:"usage"`
+}
+
+// tighten decodes each raw part on its own and drops the ones that do not fit their shape.
+func (loose looseEvent) tighten() streamedEvent {
+	event := streamedEvent{Choices: make([]streamedChoice, 0, len(loose.Choices))}
+	var usage streamedUsage
+	if len(loose.Usage) > 0 && json.Unmarshal(loose.Usage, &usage) == nil {
+		event.Usage = &usage
 	}
-	decoded := false
-	filters.EachSSEDataPayload(events, func(payload []byte) bool {
-		var event struct {
-			Choices []struct {
-				Logprobs struct {
-					Content []struct {
-						Token       string `json:"token"`
-						TopLogprobs []struct {
-							Token string `json:"token"`
-						} `json:"top_logprobs"`
-					} `json:"content"`
-				} `json:"logprobs"`
-			} `json:"choices"`
+	for _, choice := range loose.Choices {
+		tightened := streamedChoice{FinishReason: choice.FinishReason, Delta: choice.Delta, Message: choice.Message}
+		if len(choice.Logprobs) > 0 {
+			_ = json.Unmarshal(choice.Logprobs, &tightened.Logprobs)
 		}
-		if json.Unmarshal(payload, &event) != nil {
+		event.Choices = append(event.Choices, tightened)
+	}
+	return event
+}
+
+// decodeEvent reads an event, falling back to the shapes that tolerate what a host got wrong: barewords for a non-finite number, then raw parts for a field typed against the schema.
+func decodeEvent(payload []byte) (streamedEvent, bool) {
+	var event streamedEvent
+	if json.Unmarshal(payload, &event) == nil {
+		return event, true
+	}
+	// A host writes NaN/Infinity as barewords; without this its content and usage read as absent.
+	if normalized, replaced := filters.ReplaceNonFiniteNumbers(payload); replaced {
+		payload = normalized
+		event = streamedEvent{}
+		if json.Unmarshal(payload, &event) == nil {
+			return event, true
+		}
+	}
+	var loose looseEvent
+	if json.Unmarshal(payload, &loose) != nil {
+		return streamedEvent{}, false
+	}
+	return loose.tighten(), true
+}
+
+// scanChunk decodes each event once and answers every question the classifier asks of it.
+func scanChunk(events []byte, thinkingBudget bool) chunkScan {
+	var scan chunkScan
+	filters.EachSSEDataPayload(events, func(payload []byte) bool {
+		event, decoded := decodeEvent(payload)
+		if !decoded {
 			return false
 		}
-		// Every token and every alternative: the validator rejects on the first one of either it cannot
-		// replay, so a numeric first token hides the rest.
+		tokens := int64(0)
+		if event.Usage != nil {
+			tokens = event.Usage.CompletionTokens
+		}
+		if scan.UsageCompletionTokens == 0 && tokens > 0 {
+			scan.UsageCompletionTokens = tokens
+		}
 		for _, choice := range event.Choices {
-			for _, entry := range choice.Logprobs.Content {
-				if !isTokenID(entry.Token) {
-					decoded = true
-					return true
-				}
-				for _, alternative := range entry.TopLogprobs {
-					if !isTokenID(alternative.Token) {
-						decoded = true
-						return true
-					}
-				}
+			if scan.ContentSource == "" {
+				scan.ContentSource = choiceSource(choice.Delta, choice.Message, choice.FinishReason, thinkingBudget && tokens > 0)
+			}
+			if !scan.LogprobsDecoded {
+				scan.LogprobsDecoded = choice.Logprobs.namesDecodedTokens()
 			}
 		}
 		return false
 	})
-	return decoded
+	return scan
+}
+
+// choiceSource names the field that carried something renderable, empty when the choice rendered nothing.
+func choiceSource(delta, message renderedParts, finishReason string, stopStandsInForContent bool) string {
+	if source, ok := delta.source(deltaLabels); ok {
+		return source
+	}
+	if source, ok := message.source(messageLabels); ok {
+		return source
+	}
+	if finishReason == finishReasonStop && stopStandsInForContent {
+		return sourceStopWithTokens
+	}
+	return ""
+}
+
+// namesDecodedTokens reports whether one choice's logprobs name any token by its decoded text instead of its id.
+func (l streamedLogprobs) namesDecodedTokens() bool {
+	for _, entry := range l.Content {
+		if !isTokenID(entry.Token) {
+			return true
+		}
+		for _, alternative := range entry.TopLogprobs {
+			if !isTokenID(alternative.Token) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func isTokenID(token string) bool {
 	id, err := strconv.Atoi(token)
 	return err == nil && id >= 0
-}
-
-// contentSource names the field carrying the first client-renderable output. See README, "Classification and reassembly".
-func contentSource(events []byte, thinkingBudget bool) (string, bool) {
-	var source string
-	filters.EachSSEDataPayload(events, func(payload []byte) bool {
-		var event struct {
-			Choices []struct {
-				FinishReason string        `json:"finish_reason"`
-				Delta        renderedParts `json:"delta"`
-				Message      renderedParts `json:"message"`
-			} `json:"choices"`
-			Usage struct {
-				CompletionTokens int64 `json:"completion_tokens"`
-			} `json:"usage"`
-		}
-		if json.Unmarshal(payload, &event) != nil {
-			return false
-		}
-		for _, choice := range event.Choices {
-			if found, ok := choice.Delta.source("delta"); ok {
-				source = found
-				return true
-			}
-			if found, ok := choice.Message.source("message"); ok {
-				source = found
-				return true
-			}
-			if thinkingBudget && choice.FinishReason == "stop" && event.Usage.CompletionTokens > 0 {
-				source = "message.empty_stop_completion_tokens"
-				return true
-			}
-		}
-		return false
-	})
-	return source, source != ""
 }
 
 type renderedParts struct {
@@ -144,16 +202,24 @@ type renderedParts struct {
 	ToolCalls        json.RawMessage `json:"tool_calls"`
 }
 
-func (p renderedParts) source(shape string) (string, bool) {
+// sourceLabels are one shape's four labels, resolved at compile time rather than built per chunk.
+type sourceLabels struct {
+	content          string
+	reasoning        string
+	reasoningContent string
+	toolCalls        string
+}
+
+func (p renderedParts) source(labels sourceLabels) (string, bool) {
 	switch {
 	case p.Content != "":
-		return shape + ".content", true
+		return labels.content, true
 	case p.Reasoning != "":
-		return shape + ".reasoning", true
+		return labels.reasoning, true
 	case p.ReasoningContent != "":
-		return shape + ".reasoning_content", true
+		return labels.reasoningContent, true
 	case jsonArrayHasElements(p.ToolCalls):
-		return shape + ".tool_calls", true
+		return labels.toolCalls, true
 	}
 	return "", false
 }
@@ -180,30 +246,6 @@ func errorPayload(events []byte) (sseError, bool) {
 		return true
 	})
 	return found, found.present()
-}
-
-// usageCompletionTokens reads usage.completion_tokens; vLLM emits usage once per stream, so the key check skips almost every chunk.
-func usageCompletionTokens(events []byte) (int64, bool) {
-	if !bytes.Contains(events, sseUsageKey) {
-		return 0, false
-	}
-	var tokens int64
-	filters.EachSSEDataPayload(events, func(payload []byte) bool {
-		var event struct {
-			Usage *struct {
-				CompletionTokens int64 `json:"completion_tokens"`
-			} `json:"usage"`
-		}
-		if json.Unmarshal(payload, &event) != nil {
-			return false
-		}
-		if event.Usage == nil || event.Usage.CompletionTokens <= 0 {
-			return false
-		}
-		tokens = event.Usage.CompletionTokens
-		return true
-	})
-	return tokens, tokens > 0
 }
 
 func jsonArrayHasElements(raw json.RawMessage) bool {

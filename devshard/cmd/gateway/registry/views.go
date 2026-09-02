@@ -15,16 +15,29 @@ func (r *Registry) Candidates(model string) []scheduler.Escrow {
 		if !entry.accepting() {
 			continue
 		}
-		candidates = append(candidates, scheduler.Escrow{
-			ID:          entry.id,
-			Model:       entry.model,
-			SessionID:   entry.sessionID,
-			Session:     entry.stream,
-			ActiveUsers: int(entry.inFlight.Load()),
-			Hold:        entry.hold,
-		})
+		candidates = append(candidates, entry.candidate())
 	}
 	return candidates
+}
+
+// Routable answers for one escrow what Candidates answers for a model, by id rather than by scanning every model.
+func (r *Registry) Routable(escrowID string) (scheduler.Escrow, bool) {
+	entry, known := r.live.Load().byID[escrowID]
+	if !known || !entry.accepting() {
+		return scheduler.Escrow{}, false
+	}
+	return entry.candidate(), true
+}
+
+func (e *escrowEntry) candidate() scheduler.Escrow {
+	return scheduler.Escrow{
+		ID:          e.id,
+		Model:       e.model,
+		SessionID:   e.sessionID,
+		Session:     e.stream,
+		ActiveUsers: int(e.inFlight.Load()),
+		Hold:        e.hold,
+	}
 }
 
 type EscrowState struct {

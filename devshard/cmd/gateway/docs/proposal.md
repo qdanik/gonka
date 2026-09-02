@@ -103,6 +103,20 @@ Five consecutive runs, non-overlapping ranges.
 
 **Regressions accepted.** Field-stripping of large responses allocates ~68 KB more per response: the path moved from a byte scan to a full parse, and that scan was the hole an escaped field name walked through. Latency percentiles rose once the halving was removed, because requests formerly refused instantly or answered at half length now complete in full.
 
+**What `encoding/json/v2` would do to that 68 KB, measured.** The stripping path uses a `Decoder` rather than `Unmarshal` for one reason: `UseNumber` exists only on the decoder, and without it every number passes through `float64` — the defect that returned a different `seed` to the client. `encoding/json/v2` offers the options on `Unmarshal`, so a prototype re-implemented the strip on it and compared them on the same bodies (Apple M2 Pro, Go 1.26.4, medians of ten interleaved runs).
+
+| 100-fragment body | ns/op | B/op | allocs/op |
+|---|---|---|---|
+| today, ordinary build | 346 758 | 368 252 | 6 031 |
+| today, built under `GOEXPERIMENT=jsonv2` | 509 256 | 388 150 | 5 948 |
+| rewritten on `encoding/json/v2` | 528 175 | **299 948** | 6 017 |
+
+The memory regression goes away exactly: **−68 304 B (−18.5%)** against the ordinary build, landing back on the ~299 KB the legacy gateway held. Time is the obstacle, and it is not the rewrite's: building the *unchanged* code under the experiment costs **+46.9%** on its own, while the rewrite costs **+3.7%** against that same build. All of the memory is won at encode; all of the time is lost in the experimental decoder.
+
+Equivalence was proven before the numbers were read: 84 body-and-intent combinations byte-identical, including a `seed` beyond `float64` (9007199254740993) and an escaped stripped key (`"\u006cogprobs"`). It needs four options plus one unmarshaler, because v2 has no exported `UseNumber`: raw numbers are preserved by intercepting them in `WithUnmarshalers`, and duplicate names, invalid UTF-8, deterministic key order and JS escaping must each be asked for by name to match what v1 did by default.
+
+**Decision: wait.** The package is reachable only through `GOEXPERIMENT=jsonv2` and is outside the Go 1 compatibility promise, and adopting it today trades 68 KB for half the wall-clock of every strip. The prototype's caveats are on the record too: synthetic bodies from the in-tree benchmark, a machine that was not quiet, and the second decode the production path avoids was not measured.
+
 ## 9. Risks
 
 | risk | mitigation |
@@ -114,5 +128,6 @@ Five consecutive runs, non-overlapping ranges.
 
 ## 10. Open items
 
-- **KV-cache affinity.** Still an extension point. What can be promised is affinity to a *participant*; whether that reaches the same node is decided by that participant's own router.
+- **KV-cache affinity.** Closed as unreachable, not deferred. The protocol addresses a *participant*, never a node behind it, so the most a gateway can promise is affinity to the participant; which of that participant's nodes serves the request is decided by its own router, which this side neither sees nor addresses. `AffinityHint` stays an empty extension point until the protocol carries node identity.
 - **Cross-shard coordination of the network concurrency share.** Unbuilt. Measurement shows it is not the binding constraint at current load.
+- **`encoding/json/v2` for the response strip.** Measured, not adopted — see section 8. Revisit when the package ships without `GOEXPERIMENT`.

@@ -2151,14 +2151,11 @@ func (s *Session) HandleTimeout(ctx context.Context, nonce uint64, sendTime time
 		if result.Applied {
 			result.Outcome = "applied"
 		} else {
-			// The send succeeded but the transaction did not land. Report it
-			// rather than counting an applied timeout; the caller's control flow
-			// is unchanged.
 			result.Outcome = "diff_send_failed"
 			result.DetailReason = "timeout_not_applied"
 		}
 		logging.Stage(ctx, "timeout_completed", logFields("reason", result.Reason)...)
-		return result, fmt.Errorf("inference %d timed out: %s", nonce, reason)
+		return result, timeoutSettledError(nonce, reason, result.Applied)
 	}
 
 	if verifierError != "" {
@@ -2211,12 +2208,23 @@ func (s *Session) refusalDeadlineUnreachable(reason types.TimeoutReason, payload
 	return elapsed, refusalTimeout, elapsed < refusalTimeout
 }
 
+// TimeoutDeadline names the timeout the record admits and when it comes due. The committed record is
+// the authority for the confirm stamp; this session's map is a cache of it that a restart leaves empty.
 func (s *Session) TimeoutDeadline(nonce uint64, sendTime time.Time) (string, time.Time) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	cfg := s.sm.Config()
-	if outcome := s.nonceStates[nonce]; outcome != nil && outcome.confirmedAt > 0 {
-		return "execution", time.Unix(outcome.confirmedAt, 0).Add(
+	confirmedAt := int64(0)
+	if record, tracked := s.sm.GetInference(nonce); tracked {
+		confirmedAt = record.ConfirmedAt
+	}
+	if confirmedAt <= 0 {
+		s.mu.Lock()
+		if outcome := s.nonceStates[nonce]; outcome != nil {
+			confirmedAt = outcome.confirmedAt
+		}
+		s.mu.Unlock()
+	}
+	if confirmedAt > 0 {
+		return "execution", time.Unix(confirmedAt, 0).Add(
 			time.Duration(cfg.ExecutionTimeout)*time.Second + TimeoutBuffer,
 		)
 	}

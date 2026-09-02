@@ -128,8 +128,8 @@ func TestLatestNoncesMarkARetiredEscrow(t *testing.T) {
 
 func TestUnresolvedChallengesAreAGaugePerSlot(t *testing.T) {
 	book := schemaTestBook(t)
-	if err := book.ObserveChallenges("e1", map[uint32]uint64{1: 3}); err != nil {
-		t.Fatalf("ObserveChallenges: %v", err)
+	if err := book.ObserveInferences("e1", challengedNonces(1, 3)); err != nil {
+		t.Fatalf("ObserveInferences: %v", err)
 	}
 
 	if got := recordFor(t, book, "p1").UnresolvedChallenges; got != 3 {
@@ -139,8 +139,8 @@ func TestUnresolvedChallengesAreAGaugePerSlot(t *testing.T) {
 		t.Errorf("the other slot carries %d, want none", got)
 	}
 
-	if err := book.ObserveChallenges("e1", map[uint32]uint64{1: 1}); err != nil {
-		t.Fatalf("ObserveChallenges: %v", err)
+	if err := book.ObserveInferences("e1", challengedNonces(1, 1)); err != nil {
+		t.Fatalf("ObserveInferences: %v", err)
 	}
 	if got := recordFor(t, book, "p1").UnresolvedChallenges; got != 1 {
 		t.Errorf("unresolved_challenges = %d after two resolved, want 1: this is a gauge, not a total", got)

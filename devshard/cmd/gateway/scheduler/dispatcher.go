@@ -258,46 +258,22 @@ func intentFor(decision Decision) NonceIntent {
 	}
 }
 
-// memoiseOrNil keeps a predicate nobody set nil, so "no allowlist" stays distinct from one that refuses everybody.
-func memoiseOrNil(predicate func(string) bool) func(string) bool {
-	if predicate == nil {
-		return nil
-	}
-	return memoise(predicate)
-}
-
-func freeze(live availability) availability {
-	return availability{
-		pocRequired:  memoise(live.pocRequired),
-		throttled:    memoise(live.throttled),
-		ejected:      memoise(live.ejected),
-		notAllowed:   memoiseOrNil(live.notAllowed),
-		stateBlocked: memoiseOrNil(live.stateBlocked),
-	}
+// freeze memoises the ladder for the drain; a predicate nobody set is left nil, so "no allowlist" stays distinct from one that refuses everybody.
+func freeze(live availability, hosts int) availability {
+	live.frozen = make(map[string]blockReason, hosts)
+	return live
 }
 
 // admit couples admission to the frozen predicates: a refused slot counts as throttled for the rest of the drain. See routing.md, "Where the nonce, the slot and the hold are taken".
 func admit(avail *availability, acquire func(string) bool) func(string) bool {
-	refused := map[string]bool{}
-	throttled := avail.throttled
-	avail.throttled = func(participant string) bool { return refused[participant] || throttled(participant) }
+	if avail.frozen == nil {
+		avail.frozen = map[string]blockReason{}
+	}
 	return func(participant string) bool {
 		if acquire(participant) {
 			return true
 		}
-		refused[participant] = true
+		avail.refuseSlot(participant)
 		return false
-	}
-}
-
-func memoise(live func(string) bool) func(string) bool {
-	answers := map[string]bool{}
-	return func(participant string) bool {
-		answer, known := answers[participant]
-		if !known {
-			answer = live(participant)
-			answers[participant] = answer
-		}
-		return answer
 	}
 }

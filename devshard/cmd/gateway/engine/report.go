@@ -9,6 +9,9 @@ import (
 	"devshard/logging"
 )
 
+// attemptFinishFields is the widest a finish line gets: the fixed head, every delivery field, and the phase mark.
+const attemptFinishFields = 42
+
 func (c *raceCoordinator) apply(event AttemptEvent) {
 	attempt := c.byNonce[event.Nonce]
 	if attempt == nil {
@@ -31,13 +34,21 @@ func (c *raceCoordinator) apply(event AttemptEvent) {
 }
 
 // Every duration is measured from the dispatch, for a winner and a loser alike.
-func attemptDeliveryFields(outcome AttemptOutcome) []any {
-	fields := []any{
+// attemptFinishHead is what every finished attempt reports, in a line reserved for the widest one it can grow into.
+func (c *raceCoordinator) attemptFinishHead(attempt *liveAttempt) []any {
+	return append(make([]any, 0, attemptFinishFields),
+		logkey.Request, c.request.RequestID, logkey.Escrow, c.escrowID, logkey.Nonce, attempt.nonce,
+		logkey.Host, logkey.ShortHost(attempt.participant),
+		logkey.Terminal, c.racedTerminal(attempt, *attempt.outcome).String(),
+		logkey.NonceFinished, attempt.nonceFinished, logkey.StateDivergent, attempt.outcome.StateDivergent)
+}
+
+func appendAttemptDeliveryFields(fields []any, outcome *AttemptOutcome) []any {
+	fields = append(fields,
 		logkey.ContentChunks, outcome.ContentChunks,
 		logkey.StreamChunks, outcome.StreamChunks,
 		logkey.OutputBytes, outcome.OutputBytes,
-		logkey.UsageTokens, outcome.UsageCompletionTokens,
-	}
+		logkey.UsageTokens, outcome.UsageCompletionTokens)
 	if outcome.MaxChunkGap > 0 {
 		fields = append(fields,
 			logkey.MaxGapMS, outcome.MaxChunkGap.Milliseconds(),
@@ -50,7 +61,7 @@ func attemptDeliveryFields(outcome AttemptOutcome) []any {
 			fields = append(fields, logkey.UpstreamBody, outcome.UpstreamBody)
 		}
 	}
-	for _, span := range []struct {
+	spans := [...]struct {
 		name  string
 		until time.Time
 	}{
@@ -58,7 +69,8 @@ func attemptDeliveryFields(outcome AttemptOutcome) []any {
 		{"first_token_ms", outcome.FirstToken},
 		{"first_content_ms", outcome.FirstContent},
 		{"attempt_ms", outcome.Completed},
-	} {
+	}
+	for _, span := range spans {
 		if outcome.SendTime.IsZero() || span.until.IsZero() {
 			continue
 		}
@@ -79,13 +91,7 @@ func (c *raceCoordinator) complete(attempt *liveAttempt, event AttemptEvent) {
 			logkey.Host, logkey.ShortHost(attempt.participant), logkey.NonceFinished, attempt.nonceFinished)
 		return
 	}
-	fields := []any{
-		logkey.Request, c.request.RequestID, logkey.Escrow, c.escrowID, logkey.Nonce, attempt.nonce,
-		logkey.Host, logkey.ShortHost(attempt.participant),
-		logkey.Terminal, c.racedTerminal(attempt, *attempt.outcome).String(),
-		logkey.NonceFinished, attempt.nonceFinished, logkey.StateDivergent, attempt.outcome.StateDivergent,
-	}
-	fields = append(fields, attemptDeliveryFields(*attempt.outcome)...)
+	fields := appendAttemptDeliveryFields(c.attemptFinishHead(attempt), attempt.outcome)
 	if c.phaseAborted(attempt, *attempt.outcome) {
 		fields = append(fields, logkey.PhaseAborted, true)
 	}
@@ -182,9 +188,11 @@ func (c *raceCoordinator) outcome() RaceOutcome {
 		Attempts:        make([]AttemptOutcome, 0, len(c.attempts)),
 	}
 	for _, attempt := range c.attempts {
-		record := c.unreportedOutcome(attempt)
+		var record AttemptOutcome
 		if attempt.outcome != nil {
 			record = *attempt.outcome
+		} else {
+			record = c.unreportedOutcome(attempt)
 		}
 		record.StartedAt = c.started
 		record.NonceFinished = attempt.nonceFinished

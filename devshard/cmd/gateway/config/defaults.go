@@ -95,5 +95,9 @@ func Defaults() Config {
 			MatchWaitMS:    2_000,
 			WarmNewEscrows: true,
 		},
+		TimeoutSweep: TimeoutSweep{
+			BudgetPerTick: 8,
+			GraceSeconds:  120,
+		},
 	}
 }

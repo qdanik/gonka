@@ -233,8 +233,14 @@ func TestFailureTerminalsCountEveryFailureThatReachedTheHost(t *testing.T) {
 	if finding.Part != 20 {
 		t.Fatalf("finding = %d failures, want both the PoC and the normal one", finding.Part)
 	}
-	if counted := countersWhere(record, both(outsidePoC, failedWithoutAnswer)); counted != 15 {
-		t.Fatalf("counters outside PoC = %d, want 15: the split lives there now", counted)
+	var outsidePoCFailures uint64
+	for _, counter := range record.Counters {
+		if outsidePoC(counter.CounterKey) && failedWithoutAnswer(counter.CounterKey) {
+			outsidePoCFailures += counter.Count
+		}
+	}
+	if outsidePoCFailures != 15 {
+		t.Fatalf("counters outside PoC = %d, want 15: the split lives there now", outsidePoCFailures)
 	}
 }
 

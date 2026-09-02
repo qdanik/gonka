@@ -14,26 +14,37 @@ import (
 	"devshard/logging"
 )
 
-// Tracker's mu guards only the host/ejection maps. See capacity.md, "Outlier ejection".
+// Tracker's mu guards the host map and the rebuild scratch it reuses. See capacity.md, "Outlier ejection".
 type Tracker struct {
-	mu           sync.Mutex
-	config       *config.Holder
-	hosts        map[hostKey]*hostPerf
-	ejections    map[hostKey]*ejectionState
-	capability   *capabilityTracker
-	inflight     *inflightGauge
-	now          func() time.Time
-	lastSweep    time.Time
-	ejectedView  atomic.Pointer[map[hostKey]time.Time]
-	degradedView atomic.Pointer[map[hostKey]time.Time]
+	mu            sync.Mutex
+	config        *config.Holder
+	hosts         map[hostKey]*hostState
+	liveEjections []liveEjection
+	capability    *capabilityTracker
+	inflight      *inflightGauge
+	now           func() time.Time
+	lastSweep     time.Time
+	view          atomic.Pointer[map[hostKey]ejectionView]
+}
+
+// ejectionView is what a routing decision asks of one host: the capped verdict and the raw one.
+type ejectionView struct {
+	ejectedUntil  time.Time
+	degradedUntil time.Time
+}
+
+// liveEjection carries what the cap sorts on, so the comparison never re-searches the map.
+type liveEjection struct {
+	key           hostKey
+	ejectedUntil  time.Time
+	ejectionCount int
 }
 
 func NewTracker(holder *config.Holder, now func() time.Time) *Tracker {
 	return &Tracker{
 		config:     holder,
 		now:        now,
-		hosts:      make(map[hostKey]*hostPerf),
-		ejections:  make(map[hostKey]*ejectionState),
+		hosts:      make(map[hostKey]*hostState),
 		capability: newCapabilityTracker(),
 		inflight:   newInflightGauge(),
 	}
@@ -46,7 +57,7 @@ func (t *Tracker) FirstContentP75(participant, model string) (time.Duration, boo
 	if host == nil {
 		return 0, false
 	}
-	return host.firstContent.p75(latencyWindowMinimum)
+	return host.perf.firstContent.p75(latencyWindowMinimum)
 }
 
 func (t *Tracker) TimePerOutputTokenP75(participant, model string) (time.Duration, bool) {
@@ -56,7 +67,7 @@ func (t *Tracker) TimePerOutputTokenP75(participant, model string) (time.Duratio
 	if host == nil {
 		return 0, false
 	}
-	return host.decode.p75(latencyWindowMinimum)
+	return host.perf.decode.p75(latencyWindowMinimum)
 }
 
 func (t *Tracker) RecordSample(s Sample) {
@@ -67,64 +78,63 @@ func (t *Tracker) RecordSample(s Sample) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	host, state := t.ensureHostLocked(key, perf)
-	host.recordSample(s, now)
-	ejectedUntilBefore := state.ejectedUntil
-	newEjectionPolicyFromPerf(perf).evaluate(host, state, now)
+	host := t.ensureHostLocked(key, perf)
+	host.perf.recordSample(s, now)
+	ejectedUntilBefore := host.ejection.ejectedUntil
+	newEjectionPolicyFromPerf(perf).evaluate(&host.perf, &host.ejection, now)
 
 	staleness := time.Duration(perf.HostStalenessSeconds) * time.Second
 	evicted := t.evictStaleLocked(now, staleness)
-	if evicted || state.ejectedUntil != ejectedUntilBefore {
+	if evicted || host.ejection.ejectedUntil != ejectedUntilBefore {
 		t.rebuildEjectedViewLocked(now, perf)
 	}
 }
 
+// rebuildEjectedViewLocked republishes both verdicts as one map: every live ejection is degraded, and the per-model cap decides which of them routing actually withholds.
 func (t *Tracker) rebuildEjectedViewLocked(now time.Time, perf config.Perf) {
+	live := t.liveEjections[:0]
 	knownByModel := make(map[string]int, len(t.hosts))
-	for key := range t.hosts {
+	for key, host := range t.hosts {
 		knownByModel[key.model]++
-	}
-	ejectedByModel := make(map[string][]hostKey)
-	degraded := make(map[hostKey]time.Time, len(t.ejections))
-	for key, state := range t.ejections {
-		if state.ejected(now) {
-			ejectedByModel[key.model] = append(ejectedByModel[key.model], key)
-			degraded[key] = state.ejectedUntil
+		if host.ejection.ejected(now) {
+			live = append(live, liveEjection{key: key, ejectedUntil: host.ejection.ejectedUntil, ejectionCount: host.ejection.ejectionCount})
 		}
 	}
+	t.liveEjections = live
 
-	view := make(map[hostKey]time.Time, len(degraded))
-	for model, keys := range ejectedByModel {
-		slices.SortFunc(keys, func(a, b hostKey) int {
-			if rung := cmp.Compare(t.ejections[b].ejectionCount, t.ejections[a].ejectionCount); rung != 0 {
-				return rung
-			}
-			return strings.Compare(a.participant, b.participant)
-		})
-		allowed := maxEjectable(perf, knownByModel[model])
-		for rank, key := range keys {
-			if rank >= allowed {
-				break
-			}
-			view[key] = t.ejections[key].ejectedUntil
+	slices.SortFunc(live, func(first, second liveEjection) int {
+		if models := strings.Compare(first.key.model, second.key.model); models != 0 {
+			return models
 		}
+		if rung := cmp.Compare(second.ejectionCount, first.ejectionCount); rung != 0 {
+			return rung
+		}
+		return strings.Compare(first.key.participant, second.key.participant)
+	})
+
+	view := make(map[hostKey]ejectionView, len(live))
+	allowed, rank := 0, 0
+	for index, ejection := range live {
+		if index == 0 || ejection.key.model != live[index-1].key.model {
+			allowed, rank = maxEjectable(perf, knownByModel[ejection.key.model]), 0
+		}
+		entry := ejectionView{degradedUntil: ejection.ejectedUntil}
+		if rank < allowed {
+			entry.ejectedUntil = ejection.ejectedUntil
+		}
+		view[ejection.key] = entry
+		rank++
 	}
-	t.ejectedView.Store(&view)
-	t.degradedView.Store(&degraded)
+	t.view.Store(&view)
 }
 
-func (t *Tracker) ensureHostLocked(key hostKey, perf config.Perf) (*hostPerf, *ejectionState) {
+func (t *Tracker) ensureHostLocked(key hostKey, perf config.Perf) *hostState {
 	host, ok := t.hosts[key]
 	if !ok {
-		host = newHostPerf(time.Duration(perf.EWMAHalfLifeSeconds) * time.Second)
+		host = newHostState(time.Duration(perf.EWMAHalfLifeSeconds) * time.Second)
 		t.hosts[key] = host
 	}
-	state, ok := t.ejections[key]
-	if !ok {
-		state = &ejectionState{}
-		t.ejections[key] = state
-	}
-	return host, state
+	return host
 }
 
 // evictStaleLocked sweeps at most once per tenth of the staleness window. See capacity.md, "Outlier ejection".
@@ -135,9 +145,8 @@ func (t *Tracker) evictStaleLocked(now time.Time, staleness time.Duration) bool 
 	t.lastSweep = now
 	evicted := false
 	for key, host := range t.hosts {
-		if now.Sub(host.lastSeen) > staleness {
+		if now.Sub(host.perf.lastSeen) > staleness {
 			delete(t.hosts, key)
-			delete(t.ejections, key)
 			evicted = true
 		}
 	}
@@ -194,7 +203,7 @@ type HostState struct {
 // Snapshot returns every tracked pair in participant/model order, in-flight counts read after the host lock.
 func (t *Tracker) Snapshot() []HostState {
 	now := t.now()
-	ejected := t.ejectedView.Load()
+	view := t.view.Load()
 
 	// One pass under one lock: a per-host read would relock and re-search for a report wanting one moment.
 	type hostDecode struct {
@@ -204,7 +213,7 @@ func (t *Tracker) Snapshot() []HostState {
 	t.mu.Lock()
 	decoded := make([]hostDecode, 0, len(t.hosts))
 	for key, host := range t.hosts {
-		decode, _ := host.decode.p75(latencyWindowMinimum)
+		decode, _ := host.perf.decode.p75(latencyWindowMinimum)
 		decoded = append(decoded, hostDecode{key: key, decode: decode})
 	}
 	t.mu.Unlock()
@@ -220,7 +229,7 @@ func (t *Tracker) Snapshot() []HostState {
 		states = append(states, HostState{
 			Participant:        host.key.participant,
 			Model:              host.key.model,
-			Ejected:            ejected != nil && now.Before((*ejected)[host.key]),
+			Ejected:            view != nil && now.Before((*view)[host.key].ejectedUntil),
 			Inflight:           t.inflight.count(host.key.participant),
 			TimePerOutputToken: host.decode,
 		})
@@ -230,19 +239,20 @@ func (t *Tracker) Snapshot() []HostState {
 
 // Ejected reads the capped view published at rebuild time. See capacity.md, "Outlier ejection".
 func (t *Tracker) Ejected(participant, model string) bool {
-	return ejectedIn(t.ejectedView.Load(), participant, model, t.now())
+	return t.now().Before(t.viewOf(participant, model).ejectedUntil)
 }
 
 // Degraded is the verdict before the pool-wide cap. See README.md, "Ejection, and its two views".
 func (t *Tracker) Degraded(participant, model string) bool {
-	return ejectedIn(t.degradedView.Load(), participant, model, t.now())
+	return t.now().Before(t.viewOf(participant, model).degradedUntil)
 }
 
-func ejectedIn(view *map[hostKey]time.Time, participant, model string, now time.Time) bool {
+func (t *Tracker) viewOf(participant, model string) ejectionView {
+	view := t.view.Load()
 	if view == nil {
-		return false
+		return ejectionView{}
 	}
-	return now.Before((*view)[hostKey{participant: participant, model: model}])
+	return (*view)[hostKey{participant: participant, model: model}]
 }
 
 func maxEjectable(perf config.Perf, knownForModel int) int {

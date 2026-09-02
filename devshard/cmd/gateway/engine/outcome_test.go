@@ -2,13 +2,14 @@ package engine
 
 import (
 	"context"
-	"fmt"
 	"testing"
 	"time"
 
+	"devshard/bridge"
 	"devshard/cmd/gateway/limits"
 	"devshard/cmd/gateway/perf"
 	"devshard/transport"
+	"devshard/types"
 )
 
 const (
@@ -753,24 +754,39 @@ func TestResponseTooLargeIsNotChargedToTheHostAsATransportFault(t *testing.T) {
 	}
 }
 
-// A 5xx is the host's upstream failing while the host itself answers, so the window should narrow for
-// it. A 4xx is the request's own problem and must not move the host's window at all.
+// A 5xx is the host's upstream failing while the host itself answers, so the window should narrow for it.
+// A 4xx, and a 5xx that names a fault in what the gateway sent, must not move the host's window at all.
 func TestUpstreamServerErrorsNarrowTheWindowAndClientErrorsDoNot(t *testing.T) {
 	t.Parallel()
 	testCases := []struct {
+		name         string
 		status       int
+		body         string
 		wantTerminal Terminal
 		wantVerdict  limits.Verdict
 		wantMoves    bool
 	}{
-		{status: 500, wantTerminal: TerminalUpstreamServerError, wantVerdict: limits.Overload, wantMoves: true},
-		{status: 502, wantTerminal: TerminalUpstreamServerError, wantVerdict: limits.Overload, wantMoves: true},
-		{status: 504, wantTerminal: TerminalUpstreamServerError, wantVerdict: limits.Overload, wantMoves: true},
-		{status: 400, wantTerminal: TerminalRejected, wantVerdict: limits.ModelOutcome, wantMoves: false},
+		{name: "500", status: 500, wantTerminal: TerminalUpstreamServerError, wantVerdict: limits.UpstreamFault, wantMoves: true},
+		{name: "502", status: 502, wantTerminal: TerminalUpstreamServerError, wantVerdict: limits.UpstreamFault, wantMoves: true},
+		{name: "504", status: 504, wantTerminal: TerminalUpstreamServerError, wantVerdict: limits.UpstreamFault, wantMoves: true},
+		{name: "400", status: 400, wantTerminal: TerminalRejected, wantVerdict: limits.ModelOutcome, wantMoves: false},
+		{
+			name: "500 on an escrow we never opened", status: 500, body: bridge.ErrEscrowNotFound.Error(),
+			wantTerminal: TerminalRejected, wantVerdict: limits.ModelOutcome,
+		},
+		{
+			name: "500 on a nonce we allocated past the cap", status: 500,
+			body:         types.ErrNonceLimitExceeded.Error() + ": nonce 21 exceeds active cap 20",
+			wantTerminal: TerminalRejected, wantVerdict: limits.ModelOutcome,
+		},
+		{
+			name: "500 on a payload we mismatched", status: 500, body: types.ErrPromptHashMismatch.Error(),
+			wantTerminal: TerminalRejected, wantVerdict: limits.ModelOutcome,
+		},
 	}
 	for _, testCase := range testCases {
-		t.Run(fmt.Sprint(testCase.status), func(t *testing.T) {
-			err := &transport.UpstreamStatusError{Path: "/v1/chat/completions", StatusCode: testCase.status}
+		t.Run(testCase.name, func(t *testing.T) {
+			err := &transport.UpstreamStatusError{Path: "/v1/chat/completions", StatusCode: testCase.status, Body: testCase.body}
 
 			terminal := classifyDispatchError(context.Background(), err)
 			if terminal != testCase.wantTerminal {

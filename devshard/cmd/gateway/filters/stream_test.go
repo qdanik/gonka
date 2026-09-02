@@ -736,3 +736,30 @@ func TestACompletionConvertedToChunksKeepsTheLogprobsItCarried(t *testing.T) {
 		})
 	}
 }
+
+// The conversion's decoder binds a key case-insensitively, so the gate in front of it must not turn a
+// conversion away because the host spelled the key another way.
+func TestACompletionConvertsWhateverWayItsKeysAreSpelled(t *testing.T) {
+	t.Parallel()
+	for _, testCase := range []struct {
+		name  string
+		event string
+	}{
+		{name: "capitalised_choices", event: `data: {"id":"x","object":"chat.completion","Choices":[{"index":0,"message":{"content":"hi"}}]}`},
+		{name: "empty_choices_beside_a_capitalised_one", event: `data: {"id":"x","object":"chat.completion","choices":[],"Choices":[{"index":0,"message":{"content":"hi"}}]}`},
+		{name: "capitalised_message", event: `data: {"id":"x","object":"chat.completion","choices":[{"index":0,"Message":{"content":"hi"}}]}`},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			rewritten := rewriteEventOnly([]byte(testCase.event+"\n\n"), LogprobIntent{}, true)
+
+			if !bytes.Contains(rewritten, []byte(`"chat.completion.chunk"`)) {
+				t.Fatalf("the response was forwarded unconverted, so a streaming client renders nothing: %s", rewritten)
+			}
+			if !bytes.Contains(rewritten, []byte(`"content":"hi"`)) {
+				t.Fatalf("the content did not survive the conversion: %s", rewritten)
+			}
+		})
+	}
+}

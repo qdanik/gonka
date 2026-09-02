@@ -186,8 +186,10 @@ func (t Terminal) verdict() (limits.Verdict, bool) {
 	switch t {
 	case TerminalWon, TerminalLost:
 		return limits.Success, true
-	case TerminalThrottled, TerminalUnavailable, TerminalUpstreamServerError, TerminalHardTimeout:
+	case TerminalThrottled, TerminalUnavailable, TerminalHardTimeout:
 		return limits.Overload, true
+	case TerminalUpstreamServerError:
+		return limits.UpstreamFault, true
 	case TerminalForbidden, TerminalNotFound, TerminalTimestampDrift,
 		TerminalDialFailure, TerminalStreamTruncated, TerminalUnexpectedEOF, TerminalStalled:
 		return limits.TransportFault, true

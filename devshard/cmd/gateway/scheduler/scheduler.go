@@ -139,8 +139,8 @@ func (s *Scheduler) HostServed(escrowID, participant string, sentAt time.Time) {
 func (s *Scheduler) BlockHost(escrowID, participant string) {
 	s.blocksMu.Lock()
 	defer s.blocksMu.Unlock()
-	blocked, known := s.blockedHosts[escrowID]
-	if !known {
+	blocked := s.blockedHosts[escrowID]
+	if blocked == nil {
 		blocked = map[string]bool{}
 		s.blockedHosts[escrowID] = blocked
 	}
@@ -217,17 +217,15 @@ func (s *Scheduler) retire(idle *dispatcher) bool {
 
 // predicates rebuilds the host filters on every drain; the dispatcher freezes the result for that drain.
 func (s *Scheduler) predicates(escrow Escrow) func(chain.PhaseSnapshot) availability {
-	model := escrow.Model
-	stateBlocked := s.stateBlocked(escrow.ID)
+	model, escrowID := escrow.Model, escrow.ID
 	return func(snapshot chain.PhaseSnapshot) availability {
 		preserved := pocPreserved(snapshot, model)
-		allowed := allowedParticipants(s.settings.Load().Scheduler.ParticipantAllowlist)
 		return availability{
-			notAllowed:   func(participant string) bool { return !allowed(participant) },
-			pocRequired:  func(participant string) bool { return !preserved(participant) },
+			notAllowed:   refusedByAllowlist(s.settings.Load().Scheduler.ParticipantAllowlist),
+			pocRequired:  func(participant string) bool { return preserved != nil && !preserved[participant] },
 			throttled:    func(participant string) bool { return !s.limiter.Available(participant, model) },
 			ejected:      func(participant string) bool { return s.perf.Ejected(participant, model) },
-			stateBlocked: stateBlocked,
+			stateBlocked: s.stateBlocked(escrowID),
 		}
 	}
 }
@@ -242,6 +240,7 @@ func (s *Scheduler) releaseSlot(escrow Escrow) func(participant string) {
 	return func(participant string) { s.limiter.Release(participant, model) }
 }
 
+// stateBlocked reads the blocks live: the drain asks once per participant, and a block that lands while it runs must reach the hosts it has not offered yet.
 func (s *Scheduler) stateBlocked(escrowID string) func(string) bool {
 	return func(participant string) bool {
 		s.blocksMu.RLock()
@@ -263,19 +262,19 @@ func (s *Scheduler) reserveTokens(profile RequestProfile) uint64 {
 }
 
 // pocPreserved prefers the model's own set; a nil set means not loaded yet, so everybody counts as preserved. See rules.md, "8. Fail-closed and fail-open are chosen per signal".
-func pocPreserved(snapshot chain.PhaseSnapshot, model string) func(string) bool {
+func pocPreserved(snapshot chain.PhaseSnapshot, model string) map[string]bool {
 	preserved := snapshot.PreservedByModel[model]
 	if preserved == nil {
 		preserved = snapshot.Preserved
 	}
 	if preserved == nil {
-		return func(string) bool { return true }
+		return nil
 	}
 	loaded := make(map[string]bool, len(preserved))
 	for _, participant := range preserved {
 		loaded[participant] = true
 	}
-	return func(participant string) bool { return loaded[participant] }
+	return loaded
 }
 
 // RequestProfile is one request as routing reads it; Params must be exactly devshard/user.InferenceParams. See README, "The boundary types".
@@ -372,6 +371,15 @@ type hostLimiter interface {
 // hostHealth is satisfied by *perf.Tracker; Ejected is already capped, so honouring it cannot empty the pool.
 type hostHealth interface {
 	Ejected(participant, model string) bool
+}
+
+// refusedByAllowlist stays nil when nobody narrowed routing, so the drain reads "no allowlist" as no rung at all.
+func refusedByAllowlist(allowlist []string) func(participant string) bool {
+	if len(allowlist) == 0 {
+		return nil
+	}
+	allowed := allowedParticipants(allowlist)
+	return func(participant string) bool { return !allowed(participant) }
 }
 
 // allowedParticipants answers true for everybody when the list is empty.

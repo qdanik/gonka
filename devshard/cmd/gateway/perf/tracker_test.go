@@ -152,6 +152,36 @@ func TestTrackerReportsCapPardonedHostsAsDegradedButNotEjected(t *testing.T) {
 	}
 }
 
+// Each model's cap divides that model's own host count, so a crowded model cannot spend a sparse one's budget.
+func TestTrackerEjectedCapIsCountedPerModel(t *testing.T) {
+	perf := testPerf()
+	perf.MaxEjectionFraction = 0.5
+	perf.MinAvailableHosts = 1
+	tracker := newTestTracker(perf, fixedNow(testEpoch))
+
+	for _, participant := range []string{"p0", "p1", "p2", "p3"} {
+		failAllConsecutive(tracker, participant, "model-a", perf.ConsecutiveFailThreshold)
+	}
+	for _, participant := range []string{"q0", "q1"} {
+		failAllConsecutive(tracker, participant, "model-b", perf.ConsecutiveFailThreshold)
+	}
+
+	// model-a knows four hosts: min(0.5*4, 4-1) = 2 ejected, the rest pardoned.
+	if !tracker.Ejected("p0", "model-a") || !tracker.Ejected("p1", "model-a") {
+		t.Fatal("expected model-a's two lexicographically first hosts to stay ejected")
+	}
+	if tracker.Ejected("p2", "model-a") || tracker.Ejected("p3", "model-a") {
+		t.Fatal("expected model-a's cap of 2 to pardon p2 and p3")
+	}
+	// model-b knows two hosts: min(0.5*2, 2-1) = 1 ejected, whatever model-a spent.
+	if !tracker.Ejected("q0", "model-b") {
+		t.Fatal("expected model-b's own cap of 1 to keep q0 ejected")
+	}
+	if tracker.Ejected("q1", "model-b") {
+		t.Fatal("expected model-b's cap of 1 to pardon q1")
+	}
+}
+
 func TestTrackerEjectedCapBoundByMinAvailableHosts(t *testing.T) {
 	perf := testPerf()
 	perf.MaxEjectionFraction = 1.0 // fraction alone would allow all 3 ejected
@@ -236,8 +266,8 @@ func TestTrackerRecordSampleLazilyEvictsHostsUnseenPastStaleness(t *testing.T) {
 	if _, exists := tracker.hosts[hostKey{participant: "fresh-host", model: "model-a"}]; !exists {
 		t.Fatal("fresh-host missing from the hosts map after the sweep")
 	}
-	if _, exists := tracker.ejections[hostKey{participant: "stale-host", model: "model-a"}]; exists {
-		t.Fatal("stale-host's ejection state was not evicted alongside its hostPerf")
+	if got := len(tracker.hosts); got != 1 {
+		t.Fatalf("hosts known for model-a after the sweep = %d, want 1 (the count the ejection cap divides)", got)
 	}
 }
 

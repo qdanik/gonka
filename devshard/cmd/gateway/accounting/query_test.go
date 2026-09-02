@@ -2,6 +2,7 @@ package accounting
 
 import (
 	"maps"
+	"slices"
 	"testing"
 )
 
@@ -31,6 +32,47 @@ func TestEscrowsFromDifferentEpochsAreNotMerged(t *testing.T) {
 	want := map[uint64]uint64{testEpoch: 1, testEpoch + 1: 1}
 	if !maps.Equal(ghostsByEpoch, want) {
 		t.Fatalf("ghosts by epoch = %v, want %v", ghostsByEpoch, want)
+	}
+}
+
+// A participant's counters are sized from the slot rows that fed them, before a single one is copied
+// in. Drift in that count still reports the right numbers -- it only rebuilds the slice several times
+// over -- so nothing but the capacity it came out with catches it.
+func TestACountersSliceIsSizedForExactlyWhatItHolds(t *testing.T) {
+	book := twoEpochBook(t)
+
+	for _, record := range book.Query(QueryFilter{}) {
+		if cap(record.Counters) != len(record.Counters) {
+			t.Errorf("%s holds %d counters in a slice of %d: the count that sized it drifted",
+				record.Participant, len(record.Counters), cap(record.Counters))
+		}
+	}
+}
+
+// The rows come out ordered by compareCounterRecord, but nothing sorts the whole slice: the groups
+// arrive in escrow order and only the rows inside one group are put in order. A group that arrived out
+// of turn would reorder the report and break nothing else.
+func TestCountersComeOutOrderedByEscrowThenSlot(t *testing.T) {
+	book := newTestBook(t, 2)
+	openTestEscrow(t, book, secondTestEscrow, testEpoch, 2)
+	for _, escrowID := range []string{secondTestEscrow, testEscrow} {
+		if err := book.RecordRace(escrowID, []Attempt{
+			{Nonce: 2, Sent: true, Finished: true, Usage: UsageWinner, Terminal: "won"},
+			{Nonce: 4, Sent: true, Finished: true, Usage: UsageLoser, Terminal: "lost"},
+			{Nonce: 3, Sent: true, Finished: true, Usage: UsageWinner, Terminal: "won"},
+		}); err != nil {
+			t.Fatalf("RecordRace(%s): %v", escrowID, err)
+		}
+	}
+
+	for _, record := range book.Query(QueryFilter{}) {
+		if len(record.Counters) < 2 {
+			t.Fatalf("%s holds %d counters, want several for an order to be visible",
+				record.Participant, len(record.Counters))
+		}
+		if !slices.IsSortedFunc(record.Counters, compareCounterRecord) {
+			t.Errorf("%s counters came out unordered: %+v", record.Participant, record.Counters)
+		}
 	}
 }
 

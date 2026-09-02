@@ -158,15 +158,16 @@ func (l *GatewayLimiter) AcquireForModel(ctx context.Context, model string, inpu
 	l.mu.Lock()
 	acquireWait := l.cfg.AcquireWait
 	admitted := l.admissionFor(model, inputTokens, capacity)
-	l.counterLocked(model).enforced = admitted
+	counter := l.counterLocked(model)
+	counter.enforced = admitted
 	if reason := admitted.impossible(); reason != "" {
 		l.mu.Unlock()
 		return &RateLimitError{Reason: reason, RetryAfter: acquireWait}
 	}
 	// A freed slot goes to the queue under this same lock, so admitting a request that fits overtakes nobody.
-	reason := l.blockedReasonLocked(model, admitted)
+	reason := admitted.blockedReason(counter.inFlight, counter.inputTokens)
 	if reason == "" {
-		l.takeLocked(model, inputTokens)
+		l.takeLocked(counter, inputTokens)
 		l.mu.Unlock()
 		return nil
 	}
@@ -221,13 +222,14 @@ func (l *GatewayLimiter) promoteLocked() {
 	for i := 0; i < len(l.queue); {
 		waiting := l.queue[i]
 		admitted := l.admissionFor(waiting.model, waiting.tokens, waiting.capacity)
-		l.counterLocked(waiting.model).enforced = admitted
-		if l.blockedReasonLocked(waiting.model, admitted) != "" {
+		counter := l.counterLocked(waiting.model)
+		counter.enforced = admitted
+		if admitted.blockedReason(counter.inFlight, counter.inputTokens) != "" {
 			i++
 			continue
 		}
 		l.queue = append(l.queue[:i], l.queue[i+1:]...)
-		l.takeLocked(waiting.model, waiting.tokens)
+		l.takeLocked(counter, waiting.tokens)
 		close(waiting.ready)
 	}
 }
@@ -247,8 +249,7 @@ func (l *GatewayLimiter) queueTooDeepLocked(model string, admitted admission) bo
 	return queued >= admitted.concurrencyLimit*perSlot
 }
 
-func (l *GatewayLimiter) takeLocked(model string, inputTokens int64) {
-	counter := l.counterLocked(model)
+func (l *GatewayLimiter) takeLocked(counter *modelCounter, inputTokens int64) {
 	counter.inFlight++
 	counter.inputTokens += inputTokens
 	l.total.inFlight++
@@ -294,14 +295,6 @@ func (l *GatewayLimiter) releaseLocked(model string, inputTokens int64) {
 	counter.inputTokens = max(counter.inputTokens-inputTokens, 0)
 	l.total.inFlight = max(l.total.inFlight-1, 0)
 	l.total.inputTokens = max(l.total.inputTokens-inputTokens, 0)
-}
-
-func (l *GatewayLimiter) blockedReasonLocked(model string, admitted admission) string {
-	var inFlight, inputTokens int64
-	if counter, ok := l.models[model]; ok {
-		inFlight, inputTokens = counter.inFlight, counter.inputTokens
-	}
-	return admitted.blockedReason(inFlight, inputTokens)
 }
 
 func (l *GatewayLimiter) counterLocked(model string) *modelCounter {

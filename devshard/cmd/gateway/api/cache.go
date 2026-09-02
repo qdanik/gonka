@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"cmp"
 	"crypto/sha256"
-	"encoding/hex"
 	"net/http"
 	"strings"
 	"sync"
@@ -18,13 +17,17 @@ const (
 	cacheEntryTTL      = time.Hour
 	cacheSweepInterval = time.Minute
 	cacheEntryOverhead = 256
+
+	// expectedStreamEvents is the event count a streamed reply usually carries.
+	expectedStreamEvents = 64
 )
 
+// The two digests are held raw: hex would spend an allocation each to say the same thing.
 type cacheKey struct {
-	caller   string
+	caller   [sha256.Size]byte
+	body     [sha256.Size]byte
 	escrow   string
 	model    string
-	body     string
 	logprobs filters.LogprobIntent
 	stream   bool
 	usage    bool
@@ -83,19 +86,14 @@ func newResponseCache(maxBytes int64) *responseCache {
 // states. See README.md, "The response cache".
 func cacheKeyFor(r *http.Request, model string, body []byte, logprobs filters.LogprobIntent, stream, usage bool) cacheKey {
 	return cacheKey{
-		caller:   digest([]byte(strings.TrimSpace(r.Header.Get("Authorization")))),
+		caller:   sha256.Sum256([]byte(strings.TrimSpace(r.Header.Get("Authorization")))),
+		body:     sha256.Sum256(body),
 		escrow:   r.PathValue("id"),
 		model:    strings.TrimSpace(model),
-		body:     digest(body),
 		logprobs: logprobs,
 		stream:   stream,
 		usage:    usage,
 	}
-}
-
-func digest(value []byte) string {
-	sum := sha256.Sum256(value)
-	return hex.EncodeToString(sum[:])
 }
 
 func (c *responseCache) get(key cacheKey, now time.Time) (cachedResponse, bool) {
@@ -205,6 +203,15 @@ type cacheRecorder struct {
 	overflowed bool
 }
 
+// A streamed reply is recorded event by event, so its boundaries are worth reserving; a folded one arrives as a single body.
+func newCacheRecorder(w http.ResponseWriter, limit int64, streamed bool) *cacheRecorder {
+	recorder := &cacheRecorder{ResponseWriter: w, limit: limit}
+	if streamed {
+		recorder.bounds = make([]int, 0, expectedStreamEvents)
+	}
+	return recorder
+}
+
 func (w *cacheRecorder) WriteHeader(status int) {
 	if w.status != 0 {
 		return
@@ -242,7 +249,14 @@ func (w *cacheRecorder) entry(escrowID string, stream bool, unstorable error) (c
 		stream:      stream,
 		status:      cmp.Or(w.status, http.StatusOK),
 		contentType: w.Header().Get("Content-Type"),
-		body:        w.body.Bytes(),
-		bounds:      w.bounds,
+		body:        exactly(w.body.Bytes()),
+		bounds:      exactly(w.bounds),
 	}, true
+}
+
+// exactly copies into a slice with no spare capacity, so a stored entry holds what entrySize charges it.
+func exactly[E any](source []E) []E {
+	copied := make([]E, len(source))
+	copy(copied, source)
+	return copied
 }

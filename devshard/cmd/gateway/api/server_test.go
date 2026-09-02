@@ -49,6 +49,15 @@ func (f *fakeRegistry) Candidates(model string) []scheduler.Escrow {
 	return matched
 }
 
+func (f *fakeRegistry) Routable(escrowID string) (scheduler.Escrow, bool) {
+	for _, candidate := range f.escrows {
+		if candidate.ID == escrowID {
+			return candidate, true
+		}
+	}
+	return scheduler.Escrow{}, false
+}
+
 func (f *fakeRegistry) RoutableSession(escrowID string) (registry.EscrowSession, bool) {
 	session, held := f.sessions[escrowID]
 	return session, held

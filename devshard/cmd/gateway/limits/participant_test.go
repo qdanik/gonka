@@ -189,6 +189,27 @@ func TestOverloadNeverTripsCutoff(t *testing.T) {
 	}
 }
 
+func TestUpstreamFaultHalvesTheWindowAndKeepsTheBreakersCount(t *testing.T) {
+	t.Parallel()
+	cfg := testConfig() // AfterFailures=3
+	l := newTestLimiter(cfg, fixedNow(testEpoch))
+	l.Acquire("p", "m")
+
+	// A host answering 5xx between resets must not clear the count that opens the cutoff.
+	for range cfg.AfterFailures - 1 {
+		l.OnResult("p", "m", TransportFault)
+		l.OnResult("p", "m", UpstreamFault)
+	}
+	if got := l.states[key{participant: "p", model: "m"}].window; got != 1 {
+		t.Fatalf("window after repeated UpstreamFault = %v, want floor 1", got)
+	}
+
+	l.OnResult("p", "m", TransportFault)
+	if l.Acquire("p", "m") {
+		t.Fatal("Acquire() after the threshold-th transport fault = true, want false (cutoff must open)")
+	}
+}
+
 func TestTransportFaultTripsAtExactThreshold(t *testing.T) {
 	t.Parallel()
 	cfg := testConfig() // AfterFailures=3

@@ -24,8 +24,8 @@ func TestARestoredEscrowAcceptsEveryRecordingPath(t *testing.T) {
 	if err := restored.RecordAppliedTimeout(testEscrow, 2); err != nil {
 		t.Fatalf("RecordAppliedTimeout(): %v", err)
 	}
-	if err := restored.ObserveChallenges(testEscrow, map[uint32]uint64{1: 3}); err != nil {
-		t.Fatalf("ObserveChallenges(): %v", err)
+	if err := restored.ObserveInferences(testEscrow, challengedNonces(1, 3)); err != nil {
+		t.Fatalf("ObserveInferences(): %v", err)
 	}
 }
 

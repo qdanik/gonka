@@ -185,8 +185,9 @@ func (n *Recorder) sweepUntil(ctx context.Context, escrows EscrowSource) {
 func (n *Recorder) sweep(ctx context.Context, escrows EscrowSource) {
 	// The epoch stamped here is the one the escrow was first seen in. See README.md, "The judgements it does make".
 	epoch, epochErr := n.currentEpoch(ctx)
-	published := make(map[string]struct{})
-	for _, state := range escrows.Snapshot() {
+	states := escrows.Snapshot()
+	published := make(map[string]struct{}, len(states))
+	for _, state := range states {
 		session, routable := escrows.RoutableSession(state.ID)
 		if !routable {
 			continue
@@ -201,19 +202,8 @@ func (n *Recorder) sweep(ctx context.Context, escrows EscrowSource) {
 				Slots:         escrowState.Group,
 			}))
 		}
-		n.report(n.service.Book.ObserveLatestNonce(state.ID, escrowState.LatestNonce))
+		n.observeEscrowState(state.ID, escrowState)
 		n.reconcileFinished(state.ID, session)
-		for slotID, stats := range escrowState.HostStats {
-			if stats != nil {
-				n.report(n.service.Book.ObserveHostStats(state.ID, slotID, *stats))
-			}
-		}
-		for nonce, record := range escrowState.Inferences {
-			if record != nil {
-				n.report(n.service.Book.ObserveNonceCost(state.ID, nonce, *record))
-			}
-		}
-		n.report(n.service.Book.ObserveChallenges(state.ID, openChallenges(escrowState)))
 		n.watchDiffs(state.ID, session)
 	}
 	for _, escrowID := range n.service.Book.EscrowIDs() {
@@ -224,11 +214,24 @@ func (n *Recorder) sweep(ctx context.Context, escrows EscrowSource) {
 	}
 }
 
+// What one sweep reads off an escrow: the watermark, the chain's per-slot stats, and every nonce's money.
+func (n *Recorder) observeEscrowState(escrowID string, escrowState types.EscrowState) {
+	n.report(n.service.Book.ObserveLatestNonce(escrowID, escrowState.LatestNonce))
+	for slotID, stats := range escrowState.HostStats {
+		if stats != nil {
+			n.report(n.service.Book.ObserveHostStats(escrowID, slotID, *stats))
+		}
+	}
+	n.report(n.service.Book.ObserveInferences(escrowID, escrowState.Inferences))
+}
+
+// The session handle is taken once: it is fixed for the sweep, and the ask behind it takes the lock a nonce commit holds.
 func (n *Recorder) reconcileFinished(escrowID string, session registry.EscrowSession) {
 	unfinished := n.service.Book.UnfinishedNonces(escrowID)
-	finished := make([]uint64, 0, len(unfinished))
+	underlying := session.UserSession()
+	var finished []uint64
 	for _, nonce := range unfinished {
-		if session.UserSession().IsNonceFinished(nonce) {
+		if underlying.IsNonceFinished(nonce) {
 			finished = append(finished, nonce)
 		}
 	}
@@ -326,14 +329,4 @@ func (n *Recorder) Close() error {
 	shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), nonceAccountingShutdownGrace)
 	defer cancelShutdown()
 	return errors.Join(n.listener.Shutdown(shutdownCtx), n.service.Close())
-}
-
-func openChallenges(escrowState types.EscrowState) map[uint32]uint64 {
-	open := make(map[uint32]uint64)
-	for _, record := range escrowState.Inferences {
-		if record != nil && record.Status == types.StatusChallenged {
-			open[record.ExecutorSlot]++
-		}
-	}
-	return open
 }

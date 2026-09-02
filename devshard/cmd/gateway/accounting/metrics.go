@@ -66,24 +66,30 @@ func (c *Collector) Describe(descs chan<- *prometheus.Desc) {
 
 func (c *Collector) Collect(metrics chan<- prometheus.Metric) {
 	metrics <- prometheus.MustNewConstMetric(c.rejected, prometheus.CounterValue, float64(c.book.Rejected()))
+	labels := make([]string, 0, 7)
+	summed := make(map[dispositionLabels]uint64)
 	for _, record := range c.book.Query(QueryFilter{}) {
-		identity := []string{strconv.FormatUint(record.EpochIndex, 10), record.Participant, record.Model}
-		for desc, value := range map[*prometheus.Desc]float64{
-			c.assigned:     float64(record.Assigned),
-			c.chainMissed:  float64(record.ChainMissed),
-			c.chainInvalid: float64(record.ChainInvalid),
-			c.pending:      float64(record.Pending),
-			c.unobserved:   float64(record.Unobserved),
-			c.overcounted:  float64(record.Overcounted),
+		epoch := strconv.FormatUint(record.EpochIndex, 10)
+		for _, gauge := range []struct {
+			desc  *prometheus.Desc
+			value float64
+		}{
+			{c.assigned, float64(record.Assigned)},
+			{c.chainMissed, float64(record.ChainMissed)},
+			{c.chainInvalid, float64(record.ChainInvalid)},
+			{c.pending, float64(record.Pending)},
+			{c.unobserved, float64(record.Unobserved)},
+			{c.overcounted, float64(record.Overcounted)},
 		} {
-			metrics <- prometheus.MustNewConstMetric(desc, prometheus.GaugeValue, value, identity...)
+			metrics <- prometheus.MustNewConstMetric(gauge.desc, prometheus.GaugeValue, gauge.value,
+				epoch, record.Participant, record.Model)
 		}
 		for _, finding := range record.Findings {
+			labels = append(labels[:0], finding.Code, string(finding.Severity), epoch, record.Participant, record.Model)
 			metrics <- prometheus.MustNewConstMetric(c.finding, prometheus.GaugeValue,
-				float64(finding.Part)/float64(finding.Whole),
-				append([]string{finding.Code, string(finding.Severity)}, identity...)...)
+				float64(finding.Part)/float64(finding.Whole), labels...)
 		}
-		summed := make(map[dispositionLabels]uint64, len(record.Counters))
+		clear(summed)
 		for _, counter := range record.Counters {
 			summed[dispositionLabels{
 				disposition:   counter.Disposition,
@@ -92,11 +98,10 @@ func (c *Collector) Collect(metrics chan<- prometheus.Metric) {
 				timeoutReason: counter.TimeoutReason,
 			}] += counter.Count
 		}
-		for labels, count := range summed {
-			metrics <- prometheus.MustNewConstMetric(c.disposition, prometheus.GaugeValue, float64(count),
-				append([]string{
-					string(labels.disposition), labels.ghostReason, labels.timeoutAction, labels.timeoutReason,
-				}, identity...)...)
+		for series, count := range summed {
+			labels = append(labels[:0], string(series.disposition), series.ghostReason,
+				series.timeoutAction, series.timeoutReason, epoch, record.Participant, record.Model)
+			metrics <- prometheus.MustNewConstMetric(c.disposition, prometheus.GaugeValue, float64(count), labels...)
 		}
 	}
 }

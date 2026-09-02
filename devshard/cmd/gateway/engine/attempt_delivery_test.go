@@ -3,6 +3,8 @@ package engine
 import (
 	"testing"
 	"time"
+
+	"devshard/cmd/gateway/internal/logkey"
 )
 
 func loggedValue(fields []any, name string) (any, bool) {
@@ -19,7 +21,7 @@ func TestAttemptDeliveryFields_ReportWhatTheHostReturned(t *testing.T) {
 	t.Parallel()
 	dispatchedAt := time.Unix(1786114580, 0)
 
-	fields := attemptDeliveryFields(AttemptOutcome{
+	fields := appendAttemptDeliveryFields(nil, &AttemptOutcome{
 		SendTime:              dispatchedAt,
 		ReceiptTime:           dispatchedAt.Add(120 * time.Millisecond),
 		FirstToken:            dispatchedAt.Add(2 * time.Second),
@@ -56,7 +58,7 @@ func TestAttemptDeliveryFields_SkipAStageThatNeverHappened(t *testing.T) {
 	t.Parallel()
 	dispatchedAt := time.Unix(1786114580, 0)
 
-	fields := attemptDeliveryFields(AttemptOutcome{
+	fields := appendAttemptDeliveryFields(nil, &AttemptOutcome{
 		SendTime:  dispatchedAt,
 		Completed: dispatchedAt.Add(3 * time.Second),
 	})
@@ -75,7 +77,7 @@ func TestAttemptDeliveryFields_SkipAStageThatNeverHappened(t *testing.T) {
 func TestAttemptDeliveryFields_SkipEveryDurationWithoutADispatch(t *testing.T) {
 	t.Parallel()
 
-	fields := attemptDeliveryFields(AttemptOutcome{Completed: time.Unix(1786114580, 0), StreamChunks: 2})
+	fields := appendAttemptDeliveryFields(nil, &AttemptOutcome{Completed: time.Unix(1786114580, 0), StreamChunks: 2})
 
 	for _, absent := range []string{"receipt_ms", "first_token_ms", "attempt_ms"} {
 		if _, held := loggedValue(fields, absent); held {
@@ -84,5 +86,37 @@ func TestAttemptDeliveryFields_SkipEveryDurationWithoutADispatch(t *testing.T) {
 	}
 	if got, _ := loggedValue(fields, "stream_chunks"); got != int64(2) {
 		t.Errorf("stream_chunks = %v, want 2", got)
+	}
+}
+
+// widestFinishedOutcome carries every field a finish line can report, so the line it builds is the widest one.
+func widestFinishedOutcome() AttemptOutcome {
+	return AttemptOutcome{
+		SendTime:     testEpoch,
+		ReceiptTime:  testEpoch.Add(200 * time.Millisecond),
+		FirstToken:   testEpoch.Add(900 * time.Millisecond),
+		FirstContent: testEpoch.Add(950 * time.Millisecond),
+		Completed:    testEpoch.Add(9 * time.Second),
+
+		ContentChunks: 412, StreamChunks: 415, OutputBytes: 61_440,
+		UsageCompletionTokens: 512,
+		MaxChunkGap:           1200 * time.Millisecond, MaxChunkGapAt: 310,
+		MeanChunkGap:   21 * time.Millisecond,
+		UpstreamStatus: 502, UpstreamBody: "upstream is down",
+	}
+}
+
+// The reservation is hand-counted, so the widest line the code can build must be measured against it.
+func TestAFinishLineFitsWhatItReserves(t *testing.T) {
+	t.Parallel()
+	outcome := widestFinishedOutcome()
+	attempt := &liveAttempt{nonce: 77, participant: "host-3", nonceFinished: true, outcome: &outcome}
+	coordinator := stalledFixtureCoordinator(settledPolicy(), attempt)
+
+	fields := appendAttemptDeliveryFields(coordinator.attemptFinishHead(attempt), &outcome)
+	fields = append(fields, logkey.PhaseAborted, true)
+
+	if len(fields) != attemptFinishFields {
+		t.Fatalf("the widest finish line is %d fields, but %d are reserved", len(fields), attemptFinishFields)
 	}
 }

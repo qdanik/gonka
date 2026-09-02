@@ -14,9 +14,10 @@ type Verdict int
 const (
 	Success Verdict = iota
 	Overload
+	UpstreamFault
 	TransportFault
 	ModelOutcome
-) // Overload=429/503; ModelOutcome=model-caused (empty stream etc.), never a host signal
+) // Overload=429/503; UpstreamFault=the host answered 5xx; ModelOutcome=model-caused (empty stream etc.), never a host signal
 
 type ParticipantConfig struct {
 	Initial       int64
@@ -254,6 +255,9 @@ func (l *ParticipantLimiter) OnResult(participant, model string, verdict Verdict
 	case Overload:
 		state.window = max(state.window*0.5, 1)
 		state.consecutiveTransportFail = 0
+	case UpstreamFault:
+		// The breaker counts faults the host never answered, so a 5xx narrows the window without clearing its count.
+		state.window = max(state.window*0.5, 1)
 	case TransportFault:
 		state.consecutiveTransportFail++
 		// A half-open probe gets one try: any fault reopens immediately, not after AfterFailures-many.

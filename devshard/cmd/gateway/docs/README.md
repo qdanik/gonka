@@ -13,7 +13,7 @@ Each package has its own `README.md` describing what that layer owns. The docume
 | [accounting.md](./accounting.md) | the nonce ledger: vocabulary, surface, findings, storage |
 | [rules.md](./rules.md) | the invariants that must never stop being true, and the non-goals |
 | [operations.md](./operations.md) | every route, every environment variable, every metric |
-| [findings.md](./findings.md) | defects the gateway cannot fix inside `cmd/gateway` |
+| [findings.md](./findings.md) | defects outside `cmd/gateway`, and the rules that closed them |
 | [proposal.md](./proposal.md) | the original design proposal, recorded after the fact |
 
 Start from [`../README.md`](../README.md) or [`./architecture.md`](./architecture.md).

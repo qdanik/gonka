@@ -88,6 +88,7 @@ type nonceRecord struct {
 	sent         bool
 	finished     bool
 	acknowledged bool
+	isCounted    bool
 	usage        Usage
 	ghostReason  string
 
@@ -103,7 +104,7 @@ type nonceRecord struct {
 	clockDrifted    bool
 	logprobsDecoded bool
 
-	counted *CounterKey
+	countedAs CounterKey
 }
 
 func NewBook(now func() time.Time) *Book {
@@ -178,23 +179,26 @@ func (b *Book) ObserveHostStats(escrowID string, slotID uint32, stats types.Host
 	})
 }
 
-// ObserveNonceCost carries the escrow's own record for one nonce, replacing any earlier reading of it.
-func (b *Book) ObserveNonceCost(escrowID string, nonce uint64, record types.InferenceRecord) error {
+// ObserveInferences replaces an escrow's per-nonce money and its open-challenge counts from one sweep.
+func (b *Book) ObserveInferences(escrowID string, inferences map[uint64]*types.InferenceRecord) error {
 	return b.withEscrow(escrowID, func(escrow *escrowLedger) error {
-		escrow.costs[nonce] = nonceCost{
-			reserved: record.ReservedCost,
-			actual:   record.ActualCost,
-			input:    record.InputTokens,
-			output:   record.OutputTokens,
-			status:   record.Status,
+		challenged := make(map[uint32]uint64)
+		for nonce, record := range inferences {
+			if record == nil {
+				continue
+			}
+			escrow.costs[nonce] = nonceCost{
+				reserved: record.ReservedCost,
+				actual:   record.ActualCost,
+				input:    record.InputTokens,
+				output:   record.OutputTokens,
+				status:   record.Status,
+			}
+			if record.Status == types.StatusChallenged {
+				challenged[record.ExecutorSlot]++
+			}
 		}
-		return nil
-	})
-}
-
-func (b *Book) ObserveChallenges(escrowID string, open map[uint32]uint64) error {
-	return b.withEscrow(escrowID, func(escrow *escrowLedger) error {
-		escrow.challenged = open
+		escrow.challenged = challenged
 		return nil
 	})
 }
@@ -276,9 +280,9 @@ func (b *Book) UnfinishedNonces(escrowID string) []uint64 {
 	if !known {
 		return nil
 	}
-	unfinished := make([]uint64, 0, len(escrow.nonces))
+	var unfinished []uint64
 	for nonce, record := range escrow.nonces {
-		if record.counted != nil && !record.finished && revisable(record) {
+		if record.isCounted && !record.finished && revisable(record) {
 			unfinished = append(unfinished, nonce)
 		}
 	}
@@ -346,22 +350,21 @@ func (e *escrowLedger) slotOf(nonce uint64) uint32 {
 
 func (e *escrowLedger) reclassify(nonce uint64, record *nonceRecord) {
 	key, settled := classify(e.slotOf(nonce), record)
-	if record.counted != nil {
-		if settled && *record.counted == key {
+	if record.isCounted {
+		if settled && record.countedAs == key {
 			return
 		}
-		e.counters[*record.counted]--
-		if e.counters[*record.counted] == 0 {
-			delete(e.counters, *record.counted)
+		e.counters[record.countedAs]--
+		if e.counters[record.countedAs] == 0 {
+			delete(e.counters, record.countedAs)
 		}
-		record.counted = nil
+		record.isCounted = false
 	}
 	if !settled {
 		return
 	}
 	e.counters[key]++
-	counted := key
-	record.counted = &counted
+	record.countedAs, record.isCounted = key, true
 }
 
 func classify(slotID uint32, record *nonceRecord) (CounterKey, bool) {

@@ -2,7 +2,6 @@ package accounting
 
 import (
 	"cmp"
-	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -52,12 +51,14 @@ func (b *Book) Events(filter QueryFilter) []ProtocolEventRecord {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 
-	records := make([]ProtocolEventRecord, 0)
-	for _, escrowID := range slices.Sorted(maps.Keys(b.escrows)) {
+	admitted := b.admittedEscrows(filter)
+	held := 0
+	for _, escrowID := range admitted {
+		held += len(b.escrows[escrowID].events)
+	}
+	records := make([]ProtocolEventRecord, 0, held)
+	for _, escrowID := range admitted {
 		escrow := b.escrows[escrowID]
-		if !filter.admitsEscrow(escrowID, escrow.metadata) {
-			continue
-		}
 		for _, event := range escrow.events {
 			participant := escrow.participantOf(event.slotID)
 			if filter.Participant != "" && participant != filter.Participant {

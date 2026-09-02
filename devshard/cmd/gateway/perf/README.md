@@ -34,7 +34,7 @@ That cap is why there are two published views:
 - **`Ejected`** is the capped verdict — whether routing actually withholds the host.
 - **`Degraded`** is the verdict *before* the cap, so a host the cap had to leave in rotation is still known to be one the detector wanted out.
 
-Both are rebuilt under the tracker's lock and published as atomic pointers, so a routing decision reads a map rather than taking a lock and scanning.
+Both are rebuilt under the tracker's lock and published together as one atomic map — an entry carries the capped deadline and the uncapped one — so a routing decision reads a map rather than taking a lock and scanning.
 
 State for a host and model unseen for the staleness window is evicted, swept at most once per tenth of that window rather than on every sample. `Snapshot` takes its decode quantiles in one pass under one lock — asking per host would take the lock again each time and search the map twice for a report that wants a single moment — and reads the in-flight counts afterwards, because those live behind their own lock.
 

@@ -5,6 +5,7 @@ import (
 	stdjson "encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	json "github.com/goccy/go-json"
 )
@@ -18,6 +19,7 @@ const (
 )
 
 var (
+	sseLineSeparator      = []byte("\n")
 	sseEventSeparator     = []byte("\n\n")
 	sseEventSeparatorCRLF = []byte("\r\n\r\n")
 	sseDataPrefix         = []byte("data: ")
@@ -25,9 +27,6 @@ var (
 
 	// sseDataParsePrefix deliberately omits the space sseDataPrefix emits. See README.md, "Two `data:` prefixes that must not be unified".
 	sseDataParsePrefix = []byte("data:")
-
-	// usageKey spares every other event a decode it has nothing to gain from.
-	usageKey = []byte(`"usage"`)
 
 	// SSEDoneEvent is the terminator an SSE client reads until; without it the client waits out its own timeout.
 	SSEDoneEvent = []byte("data: [DONE]\n\n")
@@ -48,7 +47,7 @@ var (
 func eachSSELine(events []byte, visit func(payload []byte) bool) {
 	for rest := events; len(rest) > 0; {
 		var line []byte
-		line, rest, _ = bytes.Cut(rest, []byte("\n"))
+		line, rest, _ = bytes.Cut(rest, sseLineSeparator)
 		data, isData := bytes.CutPrefix(bytes.TrimRight(line, "\r"), sseDataParsePrefix)
 		if !isData {
 			continue
@@ -141,34 +140,43 @@ func (r *StreamRewriter) Close() ([]byte, error) {
 
 // rewriteEvent returns the event as the client must read it, deciding on the decoded payload and never on the host-controlled raw bytes. See README.md, "Rewriting an event".
 func rewriteEvent(event []byte, intent LogprobIntent, keepUsage bool) (rewritten []byte, malformed bool) {
-	lines, payload, held := eventPayload(event)
+	dataLines, payload, held := eventPayload(event)
 	if !held {
 		return event, false
 	}
-	filtered, outcome := stripInternalFields(payload, intent)
-	switch outcome {
-	case stripMalformed:
-		// A payload that opens as an object and does not parse would carry whatever it hides.
+	// A payload that opens as an object and does not parse would carry whatever it hides.
+	unreadable := func() ([]byte, bool) {
 		if bytes.HasPrefix(bytes.TrimLeft(payload, " \t"), []byte("{")) {
 			return nil, true
 		}
 		return event, false
-	case stripUnchanged:
-		filtered = payload
 	}
+	decoded, changed, ok := decodePayload(payload)
+	if !ok {
+		return unreadable()
+	}
+	changed = stripDecodedFields(decoded, intent) || changed
 	if !keepUsage {
-		withoutUsage, emptied, changed := stripUsage(filtered)
+		dropped, emptied := dropUsage(decoded)
 		if emptied {
 			return nil, false
 		}
-		if changed {
-			filtered, outcome = withoutUsage, stripRewritten
+		changed = dropped || changed
+	}
+	filtered := payload
+	if changed {
+		encoded, err := encodeCompact(decoded)
+		if err != nil {
+			return unreadable()
+		}
+		filtered = encoded
+	}
+	if carriesChoiceMessage(decoded) {
+		if chunks, converted := completionAsChunks(filtered); converted {
+			return chunks, false
 		}
 	}
-	if chunks, converted := completionAsChunks(filtered); converted {
-		return chunks, false
-	}
-	if outcome != stripRewritten && len(lines) == 1 {
+	if !changed && dataLines == 1 {
 		return event, false
 	}
 	return rebuildEvent(event, filtered), false
@@ -191,51 +199,49 @@ func onlyHousekeepingLeft(decoded map[string]any) bool {
 	return len(choices) == 0
 }
 
-// stripUsage removes a usage the client never asked for, reporting emptied for an event left with none.
-func stripUsage(payload []byte) (rewritten []byte, emptied, changed bool) {
-	if !bytes.Contains(payload, usageKey) {
-		return payload, false, false
+// dropUsage deletes a usage the client never asked for from what the strip decoded, emptied for an event left with none.
+func dropUsage(decoded any) (dropped, emptied bool) {
+	event, isObject := decoded.(map[string]any)
+	if !isObject {
+		return false, false
 	}
-	decoded, parsed := decodeStreamedEvent(payload)
-	if !parsed {
-		return payload, false, false
+	if _, held := event["usage"]; !held {
+		return false, false
 	}
-	if _, held := decoded["usage"]; !held {
-		return payload, false, false
-	}
-	delete(decoded, "usage")
-	if onlyHousekeepingLeft(decoded) {
-		return nil, true, true
-	}
-	encoded, err := encodeCompact(decoded)
-	if err != nil {
-		return payload, false, false
-	}
-	return encoded, false, true
+	delete(event, "usage")
+	return true, onlyHousekeepingLeft(event)
 }
 
-// eventPayload joins the event's data lines with a newline as a client does, so a split object reaches the strip whole.
-func eventPayload(event []byte) (dataLines []int, payload []byte, held bool) {
+// eventPayload joins the event's data lines as a client does, handing back a single-line event as a slice of it rather than a copy.
+func eventPayload(event []byte) (dataLines int, payload []byte, held bool) {
 	var joined []byte
 	for offset := 0; offset < len(event); {
 		line, lineEnd := event[offset:], len(event)
 		if breakAt := bytes.IndexByte(line, '\n'); breakAt >= 0 {
 			line, lineEnd = line[:breakAt], offset+breakAt+1
 		}
-		data, isData := bytes.CutPrefix(bytes.TrimRight(line, "\r"), sseDataParsePrefix)
-		if isData {
-			dataLines = append(dataLines, offset)
-			if len(joined) > 0 {
-				joined = append(joined, '\n')
-			}
-			joined = append(joined, bytes.TrimLeft(data, " \t")...)
-		}
 		offset = lineEnd
+		data, isData := bytes.CutPrefix(bytes.TrimRight(line, "\r"), sseDataParsePrefix)
+		if !isData {
+			continue
+		}
+		data = bytes.TrimLeft(data, " \t")
+		dataLines++
+		if dataLines == 1 {
+			payload = data
+			continue
+		}
+		if dataLines == 2 {
+			joined = append(make([]byte, 0, len(payload)+len(data)+1), payload...)
+		}
+		// The separator follows the payload so far, not the line count: a leading empty data line adds none.
+		if len(joined) > 0 {
+			joined = append(joined, '\n')
+		}
+		joined = append(joined, data...)
+		payload = joined
 	}
-	if len(dataLines) == 0 {
-		return nil, nil, false
-	}
-	return dataLines, joined, true
+	return dataLines, payload, dataLines > 0
 }
 
 // rebuildEvent replaces the data lines and keeps every other one: a client reads event, id and retry from them.
@@ -254,10 +260,12 @@ func rebuildEvent(event, payload []byte) []byte {
 		}
 		if !emitted {
 			// One data line per segment, the inverse of eventPayload's join: a client drops continuation lines with no data: prefix.
-			for index, segment := range bytes.Split(payload, []byte("\n")) {
-				if index > 0 {
+			segments := 0
+			for segment := range bytes.SplitSeq(payload, sseLineSeparator) {
+				if segments > 0 {
 					rewritten = append(rewritten, '\n')
 				}
+				segments++
 				rewritten = append(rewritten, sseDataPrefix...)
 				rewritten = append(rewritten, segment...)
 			}
@@ -303,6 +311,36 @@ type sseChunkChoice struct {
 	Logprobs     json.RawMessage            `json:"logprobs,omitempty"`
 	FinishReason json.RawMessage            `json:"finish_reason"`
 	StopReason   json.RawMessage            `json:"stop_reason,omitempty"`
+}
+
+// carriesChoiceMessage gates the conversion below, which is a second decode of every event that reaches it: only a choice carrying a message object can become chunks, and a streamed chunk carries a delta instead.
+// It admits every spelling of a key, because the conversion's decoder binds them case-insensitively and a gate that resolved one of them would refuse a conversion that decoder would have made.
+func carriesChoiceMessage(decoded any) bool {
+	object, isObject := decoded.(map[string]any)
+	if !isObject {
+		return false
+	}
+	for key, value := range object {
+		if !strings.EqualFold(key, "choices") {
+			continue
+		}
+		choices, isList := value.([]any)
+		if !isList {
+			continue
+		}
+		for _, entry := range choices {
+			choice, isObject := entry.(map[string]any)
+			if !isObject {
+				continue
+			}
+			for name, held := range choice {
+				if _, isObject := held.(map[string]any); isObject && strings.EqualFold(name, "message") {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 // completionAsChunks converts a complete chat.completion into the chunk events a streaming client renders. See README.md, "A complete reply on a streaming request is rewritten into chunks".
@@ -355,7 +393,7 @@ func completionAsChunks(payload []byte) ([]byte, bool) {
 	return events.Bytes(), true
 }
 
-// encodeCompact drops HTML escaping, which would inflate every < > & to six bytes; only the encoder can turn it off.
+// encodeCompact drops HTML escaping, which would inflate every < > & to six bytes on a path carrying whole model responses.
 func encodeCompact(value any) ([]byte, error) {
 	var encoded bytes.Buffer
 	encoder := stdjson.NewEncoder(&encoded)

@@ -58,6 +58,9 @@ type Values struct {
 	NonceAccountingRetentionEpochs *int64
 	NonceAccountingSnapshotSeconds *int64
 
+	TimeoutSweepBudgetPerTick *int64
+	TimeoutSweepGraceSeconds  *int64
+
 	CaptureEnabled    *bool
 	CaptureDir        *string
 	CaptureSampleRate *float64
@@ -238,6 +241,8 @@ func Load() (Values, error) {
 	readString("GATEWAY_NONCE_ACCOUNTING_LISTEN_ADDR", &values.NonceAccountingListenAddr)
 	readInt("GATEWAY_NONCE_ACCOUNTING_RETENTION_EPOCHS", &values.NonceAccountingRetentionEpochs)
 	readInt("GATEWAY_NONCE_ACCOUNTING_SNAPSHOT_SECONDS", &values.NonceAccountingSnapshotSeconds)
+	readInt("GATEWAY_TIMEOUT_SWEEP_BUDGET_PER_TICK", &values.TimeoutSweepBudgetPerTick)
+	readInt("GATEWAY_TIMEOUT_SWEEP_GRACE_SECONDS", &values.TimeoutSweepGraceSeconds)
 
 	readBool("GATEWAY_CAPTURE_ENABLED", &values.CaptureEnabled)
 	readString("GATEWAY_CAPTURE_DIR", &values.CaptureDir)

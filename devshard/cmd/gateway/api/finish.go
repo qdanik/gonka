@@ -10,6 +10,9 @@ import (
 	"devshard/logging"
 )
 
+// loggedFieldSlots is every keyval a finished request can carry, so the line is never copied to grow.
+const loggedFieldSlots = 30
+
 func hostClockOffset(outcome engine.RaceOutcome) (offsetMS, roundTripMS int64, stamped bool) {
 	for _, attempt := range outcome.Attempts {
 		if !outcome.IsWinner(attempt) {
@@ -51,8 +54,19 @@ func winnerOutputTokens(outcome engine.RaceOutcome) int64 {
 
 // logRequestFinished records what a finished request can no longer be asked. See README.md, "What a finished request records".
 func logRequestFinished(requestID string, normalized filters.Result, outcome engine.RaceOutcome, verdict string, stream *clientStream, elapsed time.Duration, raceErr, deliverErr error) {
+	fields := requestFinishedFields(requestID, normalized, outcome, verdict, stream, elapsed, raceErr, deliverErr)
+	if raceErr != nil || deliverErr != nil {
+		logging.Warn("request finished", fields...)
+		return
+	}
+	logging.Info("request finished", fields...)
+}
+
+// requestFinishedFields builds the line in a slice reserved for the widest one a finished request can carry.
+func requestFinishedFields(requestID string, normalized filters.Result, outcome engine.RaceOutcome, verdict string, stream *clientStream, elapsed time.Duration, raceErr, deliverErr error) []any {
 	written, terminated := stream.delivered()
-	fields := []any{
+	fields := make([]any, 0, loggedFieldSlots)
+	fields = append(fields,
 		logkey.Request, requestID,
 		logkey.Model, normalized.Model,
 		logkey.Escrow, outcome.EscrowID,
@@ -64,7 +78,7 @@ func logRequestFinished(requestID string, normalized filters.Result, outcome eng
 		logkey.Bytes, written,
 		logkey.Terminated, terminated,
 		logkey.DurationMS, elapsed.Milliseconds(),
-	}
+	)
 	if offsetMS, roundTripMS, stamped := hostClockOffset(outcome); stamped {
 		fields = append(fields, logkey.HostClockOffsetMS, offsetMS, logkey.HostReceiptMS, roundTripMS)
 	}
@@ -74,11 +88,7 @@ func logRequestFinished(requestID string, normalized filters.Result, outcome eng
 	if deliverErr != nil {
 		fields = append(fields, logkey.DeliverError, loggedError(deliverErr))
 	}
-	if raceErr != nil || deliverErr != nil {
-		logging.Warn("request finished", fields...)
-		return
-	}
-	logging.Info("request finished", fields...)
+	return fields
 }
 
 // estimatePromptTokens is an input size, not a tokenizer call. See README.md, "What the boundary hands the engine".

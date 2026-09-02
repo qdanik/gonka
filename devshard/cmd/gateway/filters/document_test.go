@@ -109,6 +109,44 @@ func TestDocumentParseIgnoresStructuralCharactersInsideStrings(t *testing.T) {
 	}
 }
 
+// An escaped quote does not end the literal, so the structural scan must not read a message's own
+// braces as nesting, nor treat the rest of the body as content.
+func TestStringLiteralEndCountsEscapes(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		body string
+		want int
+	}{
+		{name: "plain literal", body: `hi"rest`, want: 3},
+		{name: "escaped quote inside", body: `a\"b"rest`, want: 5},
+		{name: "escaped backslash ends the literal", body: `a\\"rest`, want: 4},
+		{name: "unterminated literal", body: `a\"b`, want: 4},
+		{name: "empty literal", body: `"rest`, want: 1},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			if got := stringLiteralEnd([]byte(testCase.body)); got != testCase.want {
+				t.Errorf("stringLiteralEnd(%q) = %d, want %d", testCase.body, got, testCase.want)
+			}
+		})
+	}
+}
+
+// The depth the scan counts must not change when the same document carries escapes in its content.
+func TestDocumentParseCountsDepthAroundEscapedQuotes(t *testing.T) {
+	t.Parallel()
+	body := []byte(`{"user":"a\"{[,\\","nested":{"deep":[1,2]}}`)
+	document, err := ParseDocument(body)
+	if err != nil {
+		t.Fatalf("ParseDocument() with escapes in a string: want nil error, got %v", err)
+	}
+	if value, held := document.Get("user"); !held {
+		t.Fatalf("the escaped content did not survive the parse: %v", value)
+	}
+}
+
 func TestDocumentParseEmptyBodyRejectsWithEOF(t *testing.T) {
 	_, err := ParseDocument(nil)
 	if err == nil {

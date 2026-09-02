@@ -17,6 +17,7 @@ type Deps struct {
 	Store       escrowStore
 	Snapshots   snapshotSource
 	Settlement  SettlementSource
+	Timeouts    TimeoutSweeper
 	Signer      SignerSource
 	Config      *config.Holder
 	Now         func() time.Time
@@ -33,6 +34,7 @@ func NewManager(d Deps) *Manager {
 		now:              d.Now,
 		config:           d.Config,
 		settlementSource: d.Settlement,
+		timeoutSweeper:   d.Timeouts,
 		routePrefix:      d.RoutePrefix,
 	}
 }
@@ -83,6 +85,30 @@ func (m *Manager) Stop() {
 	if done != nil {
 		<-done
 	}
+	m.sweepWork.Wait()
+}
+
+// sweepTimeouts runs off the tick rather than on it: one vote round can outlast the tick interval, and
+// a second sweep over the same escrows would double the load the budget exists to bound.
+func (m *Manager) sweepTimeouts(ctx context.Context) {
+	settings := m.config.Load().TimeoutSweep
+	budget := int(settings.BudgetPerTick)
+	if m.timeoutSweeper == nil || budget <= 0 {
+		return
+	}
+	if !m.sweeping.CompareAndSwap(false, true) {
+		return
+	}
+	m.sweepWork.Go(func() {
+		defer m.sweeping.Store(false)
+		grace := time.Duration(settings.GraceSeconds) * time.Second
+		due, applied, failed := m.timeoutSweeper.SweepExecutionTimeouts(ctx, grace, budget)
+		if due == 0 {
+			return
+		}
+		logging.Info("execution timeouts swept",
+			logkey.SweptDue, due, logkey.SweptApplied, applied, logkey.SweptFailed, failed)
+	})
 }
 
 func (m *Manager) tick(ctx context.Context) error {
@@ -96,6 +122,7 @@ func (m *Manager) tick(ctx context.Context) error {
 	pendingErr := m.settlePending(ctx, devshards)
 	// An escrow gone from chain must stop taking traffic whatever the rotation toggle says.
 	missingErr := m.checkMissing(ctx)
+	m.sweepTimeouts(ctx)
 
 	cfg := m.config.Load()
 	// Pulled, not subscribed: a 15s poll is equivalent at this cadence and avoids callback races.

@@ -105,25 +105,10 @@ func (d *Document) Marshal() ([]byte, error) {
 func ensureStructuralBounds(body []byte, maxDepth, maxNodes int) error {
 	depth := 0
 	nodes := 0
-	inString := false
-	escaped := false
-	for _, b := range body {
-		if escaped {
-			escaped = false
-			continue
-		}
-		if inString {
-			switch b {
-			case '\\':
-				escaped = true
-			case '"':
-				inString = false
-			}
-			continue
-		}
-		switch b {
+	for index := 0; index < len(body); index++ {
+		switch body[index] {
 		case '"':
-			inString = true
+			index += stringLiteralEnd(body[index+1:])
 			continue
 		case '{', '[':
 			depth++
@@ -146,4 +131,24 @@ func ensureStructuralBounds(body []byte, maxDepth, maxNodes int) error {
 		}
 	}
 	return nil
+}
+
+// stringLiteralEnd returns how far past body's start the literal's closing quote sits, or its length when unterminated.
+func stringLiteralEnd(body []byte) int {
+	for offset := 0; offset < len(body); {
+		quote := bytes.IndexByte(body[offset:], '"')
+		if quote < 0 {
+			return len(body)
+		}
+		closing := offset + quote
+		backslashes := 0
+		for closing-backslashes > offset && body[closing-backslashes-1] == '\\' {
+			backslashes++
+		}
+		if backslashes%2 == 0 {
+			return closing + 1
+		}
+		offset = closing + 1
+	}
+	return len(body)
 }

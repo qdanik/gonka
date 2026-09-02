@@ -189,7 +189,7 @@ func TestLadderRuleInIsolation(t *testing.T) {
 	}
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
-			armed, ok := testPolicy.triggerFor(testCase.attempt, testCase.request, raceStart)
+			armed, ok := testPolicy.triggerFor(&testCase.attempt, testCase.request, raceStart)
 			if testCase.wantStage == StageNone {
 				if ok {
 					t.Fatalf("triggerFor = %+v, want no trigger", armed)
@@ -403,7 +403,7 @@ func TestStageReasonLabelsEveryTrigger(t *testing.T) {
 func TestAReceiptAlwaysBuysItsHostFirstTokenGrace(t *testing.T) {
 	slowReceipt := EscalationAttempt{SendTime: raceStart, ReceiptTime: raceStart.Add(4 * time.Second)}
 
-	armed, ok := testPolicy.triggerFor(slowReceipt, streaming, raceStart.Add(4*time.Second))
+	armed, ok := testPolicy.triggerFor(&slowReceipt, streaming, raceStart.Add(4*time.Second))
 
 	if !ok || armed.Stage != StageFirstToken {
 		t.Fatalf("triggerFor = (%q, %v), want the first-token rung", armed.Stage, ok)

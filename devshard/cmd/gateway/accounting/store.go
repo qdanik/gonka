@@ -1,6 +1,7 @@
 package accounting
 
 import (
+	"cmp"
 	"fmt"
 	"maps"
 	"slices"
@@ -79,8 +80,7 @@ func (b *Book) Snapshot() Snapshot {
 		for key, count := range escrow.counters {
 			stored.Counters = append(stored.Counters, PersistedCounter{CounterKey: key, Count: count})
 		}
-		for _, nonce := range slices.Sorted(maps.Keys(escrow.nonces)) {
-			record := escrow.nonces[nonce]
+		for nonce, record := range escrow.nonces {
 			if !revisable(record) {
 				continue
 			}
@@ -101,11 +101,11 @@ func (b *Book) Snapshot() Snapshot {
 				LogprobsDecoded: record.logprobsDecoded,
 			})
 		}
+		slices.SortFunc(stored.Nonces, func(left, right PersistedNonce) int {
+			return cmp.Compare(left.Nonce, right.Nonce)
+		})
 		slices.SortFunc(stored.Counters, func(left, right PersistedCounter) int {
-			return compareCounterRecord(
-				CounterRecord{CounterKey: left.CounterKey},
-				CounterRecord{CounterKey: right.CounterKey},
-			)
+			return compareCounterKey(left.CounterKey, right.CounterKey)
 		})
 		snapshot.Escrows = append(snapshot.Escrows, stored)
 	}
@@ -153,8 +153,7 @@ func (b *Book) Restore(snapshot Snapshot) error {
 			}
 			escrow.nonces[stored.Nonce] = record
 			if key, settled := classify(escrow.slotOf(stored.Nonce), record); settled {
-				counted := key
-				record.counted = &counted
+				record.countedAs, record.isCounted = key, true
 				continue
 			}
 			record.timeoutAction = engine.TimeoutActionAbandoned
@@ -171,9 +170,9 @@ func (b *Book) Restore(snapshot Snapshot) error {
 
 // Whether a nonce's disposition can still move. See README.md, "Storage".
 func revisable(record *nonceRecord) bool {
-	if record.counted == nil {
+	if !record.isCounted {
 		return true
 	}
-	return record.counted.Disposition == DispositionUnfinishedRefused ||
-		record.counted.Disposition == DispositionUnfinishedExecution
+	return record.countedAs.Disposition == DispositionUnfinishedRefused ||
+		record.countedAs.Disposition == DispositionUnfinishedExecution
 }

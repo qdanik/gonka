@@ -142,6 +142,14 @@ func (c *Config) Validate() error {
 	if c.Accounting.RetentionMaxRows < 1 {
 		complain("accounting_retention_max_rows: %d must be >= 1", c.Accounting.RetentionMaxRows)
 	}
+	if c.TimeoutSweep.BudgetPerTick < 0 {
+		complain("timeout_sweep_budget_per_tick: %d must be >= 0", c.TimeoutSweep.BudgetPerTick)
+	}
+
+	if c.TimeoutSweep.GraceSeconds < 0 {
+		complain("timeout_sweep_grace_seconds: %d must be >= 0", c.TimeoutSweep.GraceSeconds)
+	}
+
 	if c.NonceAccounting.RetentionEpochs < 0 {
 		complain("nonce_accounting_retention_epochs: %d must be >= 0", c.NonceAccounting.RetentionEpochs)
 	}

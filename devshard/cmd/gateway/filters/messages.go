@@ -73,62 +73,67 @@ func normalizeMessages(document *Document) error {
 	return nil
 }
 
-// dropOrphanToolMessages removes role:"tool" entries whose tool_call_id has no matching prior assistant tool_call.
-func dropOrphanToolMessages(messages []any) ([]any, bool, error) {
-	pending := map[string]struct{}{}
-	filtered := make([]any, 0, len(messages))
-	dropped := false
-	for _, raw := range messages {
-		message, ok := raw.(map[string]any)
-		if !ok {
-			filtered = append(filtered, raw)
+// retainMessages copies the history only once something is dropped; a history nothing touches keeps its own array.
+func retainMessages(messages []any, keep func(message map[string]any) bool) ([]any, bool) {
+	retained, dropped := messages, false
+	for index, raw := range messages {
+		if message, isObject := raw.(map[string]any); isObject && !keep(message) {
+			if !dropped {
+				retained, dropped = append(make([]any, 0, len(messages)), messages[:index]...), true
+			}
 			continue
 		}
-		role, _ := message["role"].(string)
-		switch role {
+		if dropped {
+			retained = append(retained, raw)
+		}
+	}
+	return retained, dropped
+}
+
+// dropOrphanToolMessages removes role:"tool" entries whose tool_call_id has no matching prior assistant tool_call.
+func dropOrphanToolMessages(messages []any) ([]any, bool, error) {
+	var pending map[string]struct{}
+	retained, dropped := retainMessages(messages, func(message map[string]any) bool {
+		switch role, _ := message["role"].(string); role {
 		case roleAssistant:
-			if calls, ok := message["tool_calls"].([]any); ok {
-				for _, rawCall := range calls {
-					call, ok := rawCall.(map[string]any)
-					if !ok {
-						continue
+			calls, isList := message["tool_calls"].([]any)
+			if !isList {
+				return true
+			}
+			for _, rawCall := range calls {
+				call, isObject := rawCall.(map[string]any)
+				if !isObject {
+					continue
+				}
+				if id, isString := call["id"].(string); isString && id != "" {
+					if pending == nil {
+						pending = map[string]struct{}{}
 					}
-					if id, ok := call["id"].(string); ok && id != "" {
-						pending[id] = struct{}{}
-					}
+					pending[id] = struct{}{}
 				}
 			}
 		case roleTool:
-			if id, ok := message["tool_call_id"].(string); ok && id != "" {
-				if _, matched := pending[id]; !matched {
-					dropped = true
-					continue
-				}
-				delete(pending, id)
+			id, isString := message["tool_call_id"].(string)
+			if !isString || id == "" {
+				return true
 			}
+			if _, matched := pending[id]; !matched {
+				return false
+			}
+			delete(pending, id)
 		}
-		filtered = append(filtered, raw)
-	}
-	return filtered, dropped, nil
+		return true
+	})
+	return retained, dropped, nil
 }
 
 // dropEmptyAssistantTurns removes assistant messages with no content and no call -- placeholders some clients resend.
 func dropEmptyAssistantTurns(messages []any) ([]any, bool, error) {
-	filtered := make([]any, 0, len(messages))
-	dropped := false
-	for _, raw := range messages {
-		message, ok := raw.(map[string]any)
-		if !ok {
-			filtered = append(filtered, raw)
-			continue
-		}
-		if role, _ := message["role"].(string); role == roleAssistant && isAssistantTurnEmpty(message) {
-			dropped = true
-			continue
-		}
-		filtered = append(filtered, raw)
-	}
-	return filtered, dropped, nil
+	retained, dropped := retainMessages(messages, func(message map[string]any) bool {
+		role, _ := message["role"].(string)
+		return role != roleAssistant || !isAssistantTurnEmpty(message)
+	})
+	return retained, dropped, nil
 }
 
 // normalizeEmptyMessageContent fills empty tool content with the sentinel, and nullifies empty assistant content carrying a call.

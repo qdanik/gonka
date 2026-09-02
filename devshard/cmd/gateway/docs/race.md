@@ -116,15 +116,17 @@ Once the winner has finished, the client's request handler is released and any s
 
 Everything the race learned is folded into one `RaceOutcome`, and one field decides everything downstream: `Terminal`.
 
-There are twenty terminal values, and every downstream vocabulary — limiter verdict, performance sample, metric label — is a *total function* of it (`engine/outcome.go`, `Terminal`). The HTTP-status recovery and the SSE inspection that decide the terminal therefore happen once, where the error and the bytes are, instead of being re-derived at each consumer.
+There are twenty-three terminal values, and every downstream vocabulary — limiter verdict, performance sample, metric label — is a *total function* of it (`engine/outcome.go`, `Terminal`). The HTTP-status recovery and the SSE inspection that decide the terminal therefore happen once, where the error and the bytes are, instead of being re-derived at each consumer.
 
-`Rejected` is the one terminal whose scope is not obvious from its name: it covers every upstream 4xx that is neither throttling nor one of the named statuses, because those describe the request, not the host's ability to serve, so they move nothing (`engine/outcome.go`, `TerminalRejected`). A 5xx is the opposite case and gets its own terminal: the host answered but what it proxies to did not, so `UpstreamServerError` contracts the window as an overload without opening the breaker. The exception is a host reporting that it cannot find the escrow — that is the gateway's own bookkeeping, so it stays a `Rejected` and blames nobody.
+`Rejected` is the one terminal whose scope is not obvious from its name: it covers every upstream 4xx that is neither throttling nor one of the named statuses, because those describe the request, not the host's ability to serve, so they move nothing (`engine/outcome.go`, `TerminalRejected`). A 5xx is the opposite case and gets its own terminal: the host answered but what it serves the request from did not, so `UpstreamServerError` halves the window on its own verdict, `UpstreamFault`. That verdict exists because the host demonstrably answered: unlike a throttle it must not clear the count of unanswered faults the breaker opens on, or a host alternating 5xx answers with connection resets would never be cut off.
+
+The exception is a 5xx that names a fault in what the gateway sent. A host reports every diff it cannot apply as a 500 carrying the error's text — an escrow it cannot find, a nonce past the chain's cap, a balance, a payload hash — and none of those is the host's doing, so `transport.IsUpstreamRequestFault` keeps them a `Rejected` that blames nobody. The predicate matches on the shared error sentinels rather than a list of phrases, so the two sides cannot drift apart.
 
 ### The three translations
 
 | Consumer | Rule |
 |---|---|
-| Limiter verdict | Won/Lost → success; throttled, unavailable and an upstream 5xx → overload; transport-class terminals and an empty stream that never finished its nonce → transport fault; burn-empty, error stream, capability refusal, a reply past the gateway's own buffer cap, and an empty stream that did finish its nonce → model outcome, which never moves a host's window. |
+| Limiter verdict | Won/Lost → success; throttled and unavailable → overload; an upstream 5xx → upstream fault, which halves the window and leaves the breaker's count alone; transport-class terminals and an empty stream that never finished its nonce → transport fault; burn-empty, error stream, capability refusal, a reply past the gateway's own buffer cap, and an empty stream that did finish its nonce → model outcome, which never moves a host's window. |
 | Performance sample | One sample per attempt, unless the exemption ladder excuses it. The sample carries only participant, model and whether the host was responsive. |
 | Metric labels | Bounded label vocabularies exported by the engine and referenced — not restated — by the metrics layer. |
 
@@ -153,7 +155,19 @@ A host whose escrow state diverged still gets its vote posted. Divergence is a r
 
 Posting runs on its own goroutine beside the race, because the protocol wait is measured in minutes. The engine's registration for that race is released only inside that goroutine, after the vote (`engine/engine.go`, `Engine.settle`).
 
-One external quirk is absorbed at the boundary: the shared session's timeout handler returns a **non-nil error on its success path**, which is why a posted vote is recognised by "unwrapped error plus a reported reason" rather than by `err == nil` (`engine/session.go`, `SessionTimeouts.SettleTimeout`). The collision that follows is not separated at this layer: one genuine failure mode returns a structurally identical value — a reported reason beside an unwrapped error — and is therefore counted as a posted vote. In the legacy gateway this quirk made the "completed" branch unreachable, so every posted vote was labelled failed.
+One external quirk is absorbed at the boundary: the shared session's timeout handler returns a **non-nil error on its success path**, so a posted vote is recognised by the handler's own `Applied` flag rather than by `err == nil` (`engine/session.go`, `SessionTimeouts.SettleTimeout`). The failure mode that used to be structurally identical — a diff the group carried without the timeout — is now marked at its source with `user.ErrTimeoutNotApplied`, so a caller reading the error alone no longer counts it as a posted vote (`user/timeout_effect.go`, `timeoutSettledError`). In the legacy gateway this quirk made the "completed" branch unreachable, so every posted vote was labelled failed.
+
+### The vote nobody retried
+
+The vote above is attempted **once**, at the end of the race that owned the nonce. A round that finds no verifiers, or a restart that outlives the round, leaves the nonce started, unvoted and still settleable — and `settleLiveRecordLocked` settles a started record at the **full reserved cost** in the executor's favour, without incrementing its `Missed` (`state/machine.go`).
+
+The sweep is what claims it back. Every escrow tick scans its own live records for ones started, stamped and past their execution deadline by a grace, and re-votes them through the same `HandleTimeout` (`state/started_deadline.go`, `user/timeout_sweep.go`, `registry/timeout_sweep.go`). Three properties keep it off the hot path:
+
+- **the scan is bounded by live records, not by traffic** — one pass under the read lock, no allocation when nothing is due (1.4 ms at 100 000 live records, 12 µs at 1 000);
+- **the votes are bounded by one budget per tick across every escrow** (8 by default, so at most 32 a minute), and the walk rotates its starting escrow, so the RPC it adds never follows the request rate and no escrow starves;
+- **the grace keeps it off a nonce whose own race is still due to wake and vote**, which is the ordinary case.
+
+A nonce the verifiers decline stays started, and the next sweep finds it again; nothing is retried faster than the budget allows.
 
 ## Stop
 
@@ -172,7 +186,7 @@ Carried in the configuration snapshot (`config.Engine`, `config.Stream`) and bou
 | `engine_first_token_ceiling_ms` | 30 000 | Upper bound, whatever the host's own p75 asks for. |
 | `engine_inter_chunk_stall_ms` | 30 000 | Silence after first content before an attempt is flagged stalled. |
 | `engine_loser_grace_ms` | 600 000 | How long losers may keep streaming after the winner finishes. Must be at least the stall window, or losers merely between chunks are killed. |
-| `engine_max_attempts_per_request` | 3 | Attempts one race may hold; 0 means bounded only by the host group. |
+| `engine_max_attempts_per_request` | 2 | Attempts one race may hold; 0 means bounded only by the host group. |
 | `drain_timeout_seconds` | 2 400 | Bound on a race after its client leaves. |
 | `classify_max_attempt_bytes`, `classify_max_participant_bytes`, `classify_max_global_bytes` | 1 / 10 / 100 MiB | Reassembly budgets: attempt, participant, global. |
 

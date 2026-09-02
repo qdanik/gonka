@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -214,7 +215,7 @@ func TestZeroMaxBytesDisablesTheCache(t *testing.T) {
 func TestAnEntryPoisonedAfterItWasStoredDropsItselfOnRead(t *testing.T) {
 	cache := newResponseCache(1 << 20)
 	now := time.Unix(1700000000, 0)
-	key := cacheKey{caller: "a", model: "qwen", body: "b"}
+	key := cacheKey{caller: sha256.Sum256([]byte("a")), model: "qwen", body: sha256.Sum256([]byte("b"))}
 	poisoned := []byte(`data: {"error":{"message":"upstream request timeout","type":"server_error"}}` + "\n\n")
 
 	cache.entries[key] = cachedResponse{escrowID: "7", status: http.StatusOK, body: poisoned, bounds: []int{len(poisoned)}, expiresAt: now.Add(time.Hour)}
@@ -229,7 +230,7 @@ func TestAnEntryPoisonedAfterItWasStoredDropsItselfOnRead(t *testing.T) {
 
 func TestAnExpiredEntryIsAMissAndAnOversizedOneIsNeverStored(t *testing.T) {
 	now := time.Unix(1700000000, 0)
-	key := cacheKey{caller: "a", model: "qwen", body: "b"}
+	key := cacheKey{caller: sha256.Sum256([]byte("a")), model: "qwen", body: sha256.Sum256([]byte("b"))}
 	body := []byte(`{"id":"a"}`)
 	entry := cachedResponse{escrowID: "7", status: http.StatusOK, body: body, bounds: []int{len(body)}}
 
@@ -252,7 +253,7 @@ func TestTheCapEvictsUntilTheCacheFits(t *testing.T) {
 	cache := newResponseCache(4 * (int64(len(body)) + cacheEntryOverhead))
 
 	for index := range 10 {
-		key := cacheKey{caller: "a", model: "qwen", body: string(rune('a' + index))}
+		key := cacheKey{caller: sha256.Sum256([]byte("a")), model: "qwen", body: sha256.Sum256([]byte{byte('a' + index)})}
 		cache.put(key, cachedResponse{escrowID: "7", status: http.StatusOK, body: body, bounds: []int{len(body)}}, now)
 	}
 
@@ -400,5 +401,27 @@ func TestOneRecordedEntryIsBoundedByOneReplyNotByTheWholeCache(t *testing.T) {
 	}
 	if limit := newResponseCache(1 << 10).entryLimit(); limit != 1<<10 {
 		t.Errorf("entryLimit() on a 1 KiB cache = %d, want the cache's own ceiling", limit)
+	}
+}
+
+// The cache is bounded in bytes, so an entry must hold exactly what it is charged for: a buffer handed
+// over with its growth slack costs the cache memory no ledger knows about.
+func TestAStoredEntryHoldsExactlyWhatItIsChargedFor(t *testing.T) {
+	recorder := newCacheRecorder(httptest.NewRecorder(), 1<<20, true)
+	for range 40 {
+		if _, err := recorder.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"word \"}}]}\n\n")); err != nil {
+			t.Fatalf("Write(): %v", err)
+		}
+	}
+
+	entry, stored := recorder.entry("escrow-1", true, nil)
+	if !stored {
+		t.Fatal("the recorder refused to store a reply it accepted")
+	}
+	if cap(entry.body) != len(entry.body) {
+		t.Errorf("entry body holds %d bytes but is charged for %d", cap(entry.body), len(entry.body))
+	}
+	if cap(entry.bounds) != len(entry.bounds) {
+		t.Errorf("entry bounds hold %d, charged for %d", cap(entry.bounds), len(entry.bounds))
 	}
 }

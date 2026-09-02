@@ -114,6 +114,11 @@ func TestContentSource(t *testing.T) {
 		},
 		{name: "non_data_lines_ignored", body: "event: ping\nid: 42\n\n"},
 		{name: "delta_empty_string", body: `data: {"choices":[{"delta":{"content":""}}]}` + "\n\n"},
+		{
+			name:       "content_beside_a_non_finite_logprob",
+			body:       `data: {"choices":[{"message":{"content":"stub"},"logprobs":{"content":[{"logprob":-Infinity,"top_logprobs":[]}]}}]}` + "\n\n",
+			wantSource: "message.content",
+		},
 	}
 
 	for _, testCase := range cases {
@@ -256,6 +261,11 @@ func TestUsageCompletionTokens(t *testing.T) {
 			wantTokens: 42,
 		},
 		{name: "usage_null", body: `data: {"choices":[],"usage":null}` + "\n\n"},
+		{
+			name:       "usage_beside_a_non_finite_logprob",
+			body:       `data: {"choices":[{"message":{"content":"stub"},"logprobs":{"content":[{"logprob":-Infinity}]}}],"usage":{"completion_tokens":40}}` + "\n\n",
+			wantTokens: 40,
+		},
 	}
 
 	for _, testCase := range cases {
@@ -753,4 +763,64 @@ func TestLogprobsDecoded(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A host that types one sub-shape wrong must not cost the answers the rest of the event carries.
+func TestAWrongTypedFieldOnlyCostsItsOwnAnswer(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name        string
+		body        string
+		wantSource  string
+		wantTokens  int64
+		wantDecoded bool
+	}{
+		{
+			name:       "logprobs sent as a list",
+			body:       `data: {"choices":[{"delta":{"content":"hi"},"logprobs":[]}],"usage":{"completion_tokens":40}}` + "\n\n",
+			wantSource: "delta.content", wantTokens: 40,
+		},
+		{
+			name:       "a logprob token sent as a number",
+			body:       `data: {"choices":[{"delta":{"content":"hi"},"logprobs":{"content":[{"token":758}]}}],"usage":{"completion_tokens":40}}` + "\n\n",
+			wantSource: "delta.content", wantTokens: 40,
+		},
+		{
+			name:        "a token count sent as a string",
+			body:        `data: {"choices":[{"delta":{"content":"hi"},"logprobs":{"content":[{"token":"The"}]}}],"usage":{"completion_tokens":"40"}}` + "\n\n",
+			wantSource:  "delta.content",
+			wantDecoded: true,
+		},
+	}
+
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			scan := scanChunk([]byte(testCase.body), false)
+			if scan.ContentSource != testCase.wantSource {
+				t.Errorf("ContentSource = %q, want %q", scan.ContentSource, testCase.wantSource)
+			}
+			if scan.UsageCompletionTokens != testCase.wantTokens {
+				t.Errorf("UsageCompletionTokens = %d, want %d", scan.UsageCompletionTokens, testCase.wantTokens)
+			}
+			if scan.LogprobsDecoded != testCase.wantDecoded {
+				t.Errorf("LogprobsDecoded = %v, want %v", scan.LogprobsDecoded, testCase.wantDecoded)
+			}
+		})
+	}
+}
+
+// The three questions the scan answers, each named for what its table drives.
+func contentSource(events []byte, thinkingBudget bool) (string, bool) {
+	source := scanChunk(events, thinkingBudget).ContentSource
+	return source, source != ""
+}
+
+func usageCompletionTokens(events []byte) (int64, bool) {
+	tokens := scanChunk(events, false).UsageCompletionTokens
+	return tokens, tokens > 0
+}
+
+func logprobsDecoded(events []byte) bool {
+	return scanChunk(events, false).LogprobsDecoded
 }

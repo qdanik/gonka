@@ -1,11 +1,15 @@
 package filters
 
 import (
+	stdjson "encoding/json"
 	"fmt"
 	"testing"
 )
 
 const (
+	benchCleanChoice = `{"id":"c","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"hello"},` +
+		`"scores":{"content":[{"token":"hello","score":-0.5,"alternatives":[{"token":"hi","score":-1.2}]}]}}]}`
+
 	benchDirtyChoice = `{"id":"c","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"hello"},` +
 		`"logprobs":{"content":[{"token":"hello","logprob":-0.5,"top_logprobs":[{"token":"hi","logprob":-1.2}]}]}}]}`
 )
@@ -34,5 +38,17 @@ func BenchmarkStripResponseBody(b *testing.B) {
 				_ = stripResponseBody(payload, LogprobIntent{})
 			}
 		})
+	}
+}
+
+// A delta with nothing to strip still pays the walk, so this measures the walk rather than the delete.
+func BenchmarkDeleteFields(b *testing.B) {
+	var decoded any
+	if err := stdjson.Unmarshal([]byte(benchCleanChoice), &decoded); err != nil {
+		b.Fatal(err)
+	}
+	b.ReportAllocs()
+	for b.Loop() {
+		deleteFields(decoded, clientStrippedFieldSet)
 	}
 }

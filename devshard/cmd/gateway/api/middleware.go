@@ -3,6 +3,7 @@ package api
 import (
 	"crypto/sha256"
 	"crypto/subtle"
+	"errors"
 	"io"
 	"net/http"
 	"slices"
@@ -11,18 +12,16 @@ import (
 
 	json "github.com/goccy/go-json"
 
+	"devshard/cmd/gateway/config"
 	"devshard/cmd/gateway/filters"
 )
 
 const (
-	// chatIngestLimit stops a body at the socket that filters would reject after buffering it.
-	chatIngestLimit = filters.MaxBodyBytes
-
-	// adminIngestLimit bounds every operator body. The largest of them is a settings patch.
+	chatIngestLimit  = filters.MaxBodyBytes
 	adminIngestLimit = 64 << 10
+	bodyReadTimeout  = 30 * time.Second
 
-	// bodyReadTimeout is armed per request, not as http.Server.ReadTimeout, which would expire mid-response.
-	bodyReadTimeout = 30 * time.Second
+	bodyReadStart = 16 << 10
 )
 
 // credentials is one request's resolved identity, computed only where an answer is used.
@@ -35,6 +34,13 @@ type credentials struct {
 type keyGate struct {
 	digests    [][sha256.Size]byte
 	configured bool
+}
+
+// keyGates are one configuration snapshot's gates, hashed once for as long as that snapshot is live.
+type keyGates struct {
+	source *config.Config
+	admin  keyGate
+	client keyGate
 }
 
 func newKeyGate(keys ...string) keyGate {
@@ -101,15 +107,26 @@ func (s *Server) resolveCredentials(r *http.Request) credentials {
 }
 
 func (s *Server) compareKeys(authorization string) credentials {
-	server := s.config.Load().Server
-	adminKeys := keyGate{}
-	if server.AdminEnabled() {
-		adminKeys = newKeyGate(server.AdminAPIKey)
-	}
+	gates := s.keyGates()
 	return credentials{
-		admin:  adminKeys.authenticate(authorization),
-		apiKey: newKeyGate(server.APIKeys...).authenticate(authorization),
+		admin:  gates.admin.authenticate(authorization),
+		apiKey: gates.client.authenticate(authorization),
 	}
+}
+
+// keyGates hashes the configured keys once per snapshot: every request compares, none re-digests.
+func (s *Server) keyGates() *keyGates {
+	configuration := s.config.Load()
+	if cached := s.gates.Load(); cached != nil && cached.source == configuration {
+		return cached
+	}
+	server := configuration.Server
+	built := &keyGates{source: configuration, client: newKeyGate(server.APIKeys...)}
+	if server.AdminEnabled() {
+		built.admin = newKeyGate(server.AdminAPIKey)
+	}
+	s.gates.Store(built)
+	return built
 }
 
 // disabled is the operator kill switch; alwaysOn routes stay reachable. See operations.md, "The kill switch".
@@ -142,9 +159,27 @@ func readBody(w http.ResponseWriter, r *http.Request, limit int64) ([]byte, erro
 	deadlines := http.NewResponseController(w)
 	_ = deadlines.SetReadDeadline(time.Now().Add(bodyReadTimeout))
 	r.Body = http.MaxBytesReader(baseWriter(w), r.Body, limit)
-	body, err := io.ReadAll(r.Body)
+	body, err := readAll(r.Body)
 	_ = deadlines.SetReadDeadline(time.Time{})
 	return body, err
+}
+
+// readAll is io.ReadAll starting wide enough for an ordinary body. The start is a constant, never the declared Content-Length: a header the client has not backed with bytes must buy no memory. See README.md, "Reading a body".
+func readAll(reader io.Reader) ([]byte, error) {
+	body := make([]byte, 0, bodyReadStart)
+	for {
+		if len(body) == cap(body) {
+			body = append(body, 0)[:len(body)]
+		}
+		read, err := reader.Read(body[len(body):cap(body)])
+		body = body[:len(body)+read]
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				err = nil
+			}
+			return body, err
+		}
+	}
 }
 
 // baseWriter walks the Unwrap chain: MaxBytesReader marks a connection by type-asserting the writer it is handed.

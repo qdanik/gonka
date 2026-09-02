@@ -434,6 +434,23 @@ func TestBlockHostAppliesToOneEscrowOnly(t *testing.T) {
 	}
 }
 
+// A drain builds the predicate once and asks it per participant, so a block landing mid-drain must be
+// visible to the hosts it has not offered yet rather than waiting for the next drain.
+func TestABlockIsVisibleToThePredicateADrainAlreadyHolds(t *testing.T) {
+	test := newSchedulerHarness(t, schedulerConfig{escrows: []string{escrowA}})
+
+	blocked := test.scheduler.stateBlocked(escrowA)
+	if blocked(hostB) {
+		t.Fatal("stateBlocked() before BlockHost = true, want false")
+	}
+
+	test.scheduler.BlockHost(escrowA, hostB)
+
+	if !blocked(hostB) {
+		t.Fatal("stateBlocked() held from before the block = false, want true")
+	}
+}
+
 func TestPickWiresEachAvailabilityPredicateToItsSource(t *testing.T) {
 	testCases := []struct {
 		name       string

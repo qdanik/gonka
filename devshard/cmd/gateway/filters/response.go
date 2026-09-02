@@ -42,6 +42,9 @@ var (
 		return fields
 	}()
 
+	clientStrippedFieldSet = fieldSet(clientStrippedFields)
+	alwaysStrippedFieldSet = fieldSet(alwaysStrippedFields)
+
 	// nonCacheableErrorMarkers identify transient or availability failures excluded from caching.
 	nonCacheableErrorMarkers = []string{
 		"context canceled",
@@ -80,68 +83,90 @@ type LogprobIntent struct {
 }
 
 // strippedFields is what this client must not see; one that asked for nothing loses the whole logprob family.
-func (intent LogprobIntent) strippedFields() []string {
+func (intent LogprobIntent) strippedFields() map[string]struct{} {
 	if intent.Keep {
-		return alwaysStrippedFields
+		return alwaysStrippedFieldSet
 	}
-	return clientStrippedFields
+	return clientStrippedFieldSet
+}
+
+func fieldSet(fields []string) map[string]struct{} {
+	set := make(map[string]struct{}, len(fields))
+	for _, field := range fields {
+		set[field] = struct{}{}
+	}
+	return set
 }
 
 // stripResponseBody removes the hidden fields at any depth; a malformed body passes through unchanged.
 func stripResponseBody(body []byte, intent LogprobIntent) []byte {
-	filtered, outcome := stripInternalFields(body, intent)
+	filtered, _, outcome := stripInternalFields(body, intent)
 	if outcome != stripRewritten {
 		return body
 	}
 	return filtered
 }
 
-// stripInternalFields stays on the standard library: goccy errors past float64 range, failing this open. See README.md, "Which JSON decoder, and why".
-func stripInternalFields(payload []byte, intent LogprobIntent) ([]byte, stripOutcome) {
+// decodePayload stays on the standard library: goccy errors past float64 range, failing this open. See README.md, "Which JSON decoder, and why".
+func decodePayload(payload []byte) (decoded any, normalized, ok bool) {
+	if value, parsed := decodeJSONValue(payload); parsed {
+		return value, false, true
+	}
+	// A backend writes NaN/Infinity as barewords; without this nothing can inspect or forward the body.
+	rewritten, replaced := ReplaceNonFiniteNumbers(payload)
+	if !replaced {
+		return nil, false, false
+	}
+	value, parsed := decodeJSONValue(rewritten)
+	return value, true, parsed
+}
+
+func decodeJSONValue(payload []byte) (any, bool) {
 	decoder := stdjson.NewDecoder(bytes.NewReader(payload))
 	decoder.UseNumber()
 	var decoded any
-	rewritten := false
 	if err := decoder.Decode(&decoded); err != nil || decoder.More() {
-		// A backend writes NaN/Infinity as barewords; without this nothing can inspect or forward the body.
-		normalized, replaced := replaceNonFiniteNumbers(payload)
-		if !replaced {
-			return nil, stripMalformed
-		}
-		decoder = stdjson.NewDecoder(bytes.NewReader(normalized))
-		decoder.UseNumber()
-		decoded = nil
-		if err := decoder.Decode(&decoded); err != nil || decoder.More() {
-			return nil, stripMalformed
-		}
-		// The caller must get the re-encoded bytes even when nothing was deleted, or the barewords reach the chunk conversion.
-		rewritten = true
+		return nil, false
 	}
+	return decoded, true
+}
+
+// stripDecodedFields deletes what this client must not see from a payload already decoded.
+func stripDecodedFields(decoded any, intent LogprobIntent) bool {
 	changed := deleteFields(decoded, intent.strippedFields())
 	if intent.Keep && !intent.KeepTop {
 		changed = emptyTopLogprobs(decoded) || changed
 	}
-	if !changed && !rewritten {
-		return nil, stripUnchanged
+	return changed
+}
+
+// stripInternalFields hands back what it decoded so a caller can ask the payload a further question without decoding it a second time.
+func stripInternalFields(payload []byte, intent LogprobIntent) ([]byte, any, stripOutcome) {
+	decoded, normalized, ok := decodePayload(payload)
+	if !ok {
+		return nil, nil, stripMalformed
+	}
+	if !stripDecodedFields(decoded, intent) && !normalized {
+		return nil, decoded, stripUnchanged
 	}
 	encoded, err := encodeCompact(decoded)
 	if err != nil {
-		return nil, stripMalformed
+		return nil, decoded, stripMalformed
 	}
-	return encoded, stripRewritten
+	return encoded, decoded, stripRewritten
 }
 
-func deleteFields(value any, fields []string) bool {
+// One pass over the decoded keys, rather than one lookup per stripped name: a chunk's objects are smaller than the list.
+func deleteFields(value any, fields map[string]struct{}) bool {
 	switch typed := value.(type) {
 	case map[string]any:
 		changed := false
-		for _, field := range fields {
-			if _, held := typed[field]; held {
-				delete(typed, field)
+		for key, child := range typed {
+			if _, stripped := fields[key]; stripped {
+				delete(typed, key)
 				changed = true
+				continue
 			}
-		}
-		for _, child := range typed {
 			changed = deleteFields(child, fields) || changed
 		}
 		return changed
@@ -315,8 +340,8 @@ func decodeLogprobIntent(document *Document) LogprobIntent {
 // nonFiniteLiterals are the barewords a backend writes for a probability of zero; none is valid JSON.
 var nonFiniteLiterals = [][]byte{[]byte("-Infinity"), []byte("Infinity"), []byte("NaN")}
 
-// replaceNonFiniteNumbers rewrites those barewords to null outside strings; ok=false when the body carries none, allocating nothing.
-func replaceNonFiniteNumbers(body []byte) ([]byte, bool) {
+// ReplaceNonFiniteNumbers rewrites the barewords above to null outside strings; ok=false when the body carries none, allocating nothing.
+func ReplaceNonFiniteNumbers(body []byte) ([]byte, bool) {
 	carries := false
 	for _, literal := range nonFiniteLiterals {
 		if bytes.Contains(body, literal) {
@@ -328,25 +353,22 @@ func replaceNonFiniteNumbers(body []byte) ([]byte, bool) {
 		return nil, false
 	}
 	out := make([]byte, 0, len(body))
-	inString, escaped, replaced := false, false, false
+	replaced := false
 	for index := 0; index < len(body); {
-		current := body[index]
-		switch {
-		case escaped:
-			escaped = false
-		case inString && current == '\\':
-			escaped = true
-		case current == '"':
-			inString = !inString
-		case !inString:
-			if literal := matchNonFinite(body[index:]); literal > 0 {
-				out = append(out, []byte("null")...)
-				index += literal
-				replaced = true
-				continue
-			}
+		if body[index] == '"' {
+			// One rule for where a string literal ends, shared with the structural scan.
+			literalEnd := index + 1 + stringLiteralEnd(body[index+1:])
+			out = append(out, body[index:literalEnd]...)
+			index = literalEnd
+			continue
 		}
-		out = append(out, current)
+		if literal := matchNonFinite(body[index:]); literal > 0 {
+			out = append(out, []byte("null")...)
+			index += literal
+			replaced = true
+			continue
+		}
+		out = append(out, body[index])
 		index++
 	}
 	return out, replaced

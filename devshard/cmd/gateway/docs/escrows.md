@@ -53,9 +53,12 @@ stateDiagram-v2
 | 2 | `settlePending` | a parked escrow's row is the only record of its key; nothing else picks it up |
 | 3 | `checkMissing` | an escrow gone from chain must stop taking traffic |
 | 4 | `checkDepletion` | so must an empty one — only *creating its replacement* is rotation's business |
-| 5 | `prepareBridge` / `finishBridge` | rotation proper; skipped when the toggle is off |
+| 5 | `sweepTimeouts` | a nonce the chain still settles is owed a vote whether or not rotation is on |
+| 6 | `prepareBridge` / `finishBridge` | rotation proper; skipped when the toggle is off |
 
 Every step returns its error into an `errors.Join`; one failing model or escrow never stops the others. `Stop()` cancels the context and waits for the tick in flight, so shutdown never races a half-finished rotation.
+
+`sweepTimeouts` is the one step that does not run *on* the tick. A vote round can outlast 15 s, so it runs in its own goroutine and a second tick starts nothing while the first is still voting; `Stop()` waits for it as well. Its whole cost is bounded by `timeout_sweep.budget_per_tick` across every escrow, and the walk starts one escrow further along each tick so a backlog on one cannot starve the rest. See [`race.md`](./race.md), "The vote nobody retried".
 
 ## Creating an escrow
 

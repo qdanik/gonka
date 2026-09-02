@@ -19,6 +19,7 @@ import (
 
 	json "github.com/goccy/go-json"
 
+	"devshard/bridge"
 	"devshard/host"
 	"devshard/logging"
 	"devshard/signing"
@@ -28,6 +29,21 @@ import (
 )
 
 var sharedTransports sync.Map // baseURL -> *http.Transport
+
+// upstreamRequestFaults are the errors a host reports for a diff it could not apply. See race.md, "The outcome".
+var upstreamRequestFaults = []error{
+	bridge.ErrEscrowNotFound,
+	types.ErrInvalidNonce,
+	types.ErrNonceLimitExceeded,
+	types.ErrInsufficientBalance,
+	types.ErrSessionFinalizing,
+	types.ErrPromptHashMismatch,
+	types.ErrPayloadMismatch,
+	types.ErrPostStateRootMismatch,
+	types.ErrStateHashMismatch,
+	types.ErrEscrowIDMismatch,
+	types.ErrInvalidInferenceID,
+}
 
 func getTransport(baseURL string) *http.Transport {
 	if t, ok := sharedTransports.Load(baseURL); ok {
@@ -190,6 +206,20 @@ func IsUpstreamEscrowNotFound(err error) bool {
 	}
 	return ue.StatusCode == http.StatusInternalServerError &&
 		strings.Contains(ue.Body, "escrow not found")
+}
+
+// IsUpstreamRequestFault reports a 5xx that blames what the gateway sent rather than the host, which must not be penalised for it.
+func IsUpstreamRequestFault(err error) bool {
+	var ue *UpstreamStatusError
+	if !errors.As(err, &ue) || ue.StatusCode < http.StatusInternalServerError {
+		return false
+	}
+	for _, fault := range upstreamRequestFaults {
+		if strings.Contains(ue.Body, fault.Error()) {
+			return true
+		}
+	}
+	return false
 }
 
 // IsSessionNotFound returns true if err is an UpstreamStatusError from a host that does not hold the

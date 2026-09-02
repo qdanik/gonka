@@ -20,12 +20,39 @@ func (a *armedTimer) disarm() {
 	a.fired, a.cancel = nil, nil
 }
 
+// offer is what one Advance decided, kept across the loop so the decide closure is built once per drain.
+type offer struct {
+	decision      Decision
+	taken         reservation
+	escrowRetired bool
+}
+
 // drain assigns nonces until the queue empties, a nonce is held, or the burn budget trips. See README, "The drain".
 func (d *dispatcher) drain() (time.Time, bool) {
-	avail := freeze(d.predicates(d.snapshots.Snapshot()))
-	acquire := admit(&avail, d.acquireSlot)
 	participants := d.session.ParticipantKeys()
+	avail := freeze(d.predicates(d.snapshots.Snapshot()), len(participants))
+	acquire := admit(&avail, d.acquireSlot)
 	burnBudget := d.session.GroupSize() * (len(d.waiting) + 1)
+
+	var offered offer
+	decide := func(binding HostBinding) NonceIntent {
+		offered.taken.participant = binding.Participant
+		offered.decision = match(binding, d.waiting, participants, avail, d.now(), d.matchWait)
+		if _, serving := offered.decision.(serve); !serving {
+			return intentFor(offered.decision)
+		}
+		if !acquire(binding.Participant) {
+			offered.decision = burn{kind: ghostThrottled}
+			return intentFor(offered.decision)
+		}
+		var held bool
+		if offered.taken.escrowHold, held = d.holdEscrow(); !held {
+			d.releaseSlot(binding.Participant)
+			offered.escrowRetired = true
+			return NonceIntent{}
+		}
+		return intentFor(offered.decision)
+	}
 
 	for {
 		d.sweepExhausted(participants, avail)
@@ -33,46 +60,27 @@ func (d *dispatcher) drain() (time.Time, bool) {
 			return time.Time{}, false
 		}
 
-		var decision Decision
-		var taken reservation
-		escrowRetired := false
-		prepared, err := d.session.Advance(func(binding HostBinding) NonceIntent {
-			taken.participant = binding.Participant
-			decision = match(binding, d.waiting, participants, avail, d.now(), d.matchWait)
-			if _, serving := decision.(serve); !serving {
-				return intentFor(decision)
-			}
-			if !acquire(binding.Participant) {
-				decision = burn{kind: ghostThrottled}
-				return intentFor(decision)
-			}
-			var held bool
-			if taken.escrowHold, held = d.holdEscrow(); !held {
-				d.releaseSlot(binding.Participant)
-				escrowRetired = true
-				return NonceIntent{}
-			}
-			return intentFor(decision)
-		})
+		offered = offer{}
+		prepared, err := d.session.Advance(decide)
 		switch {
-		case escrowRetired:
+		case offered.escrowRetired:
 			d.failWaiting(ErrEscrowGone)
 			return time.Time{}, false
 		case err != nil:
-			d.failAdvance(decision, taken, err)
+			d.failAdvance(offered.decision, offered.taken, err)
 			return time.Time{}, false
 		}
 
-		switch outcome := decision.(type) {
+		switch outcome := offered.decision.(type) {
 		case serve:
 			if outcome.despiteExclusion {
 				logging.Info("nonce spent on a host the request excluded", logkey.Escrow, d.escrowID,
-					logkey.Host, logkey.ShortHost(taken.participant))
+					logkey.Host, logkey.ShortHost(offered.taken.participant))
 			}
-			d.handOff(outcome.waiter, taken, prepared)
+			d.handOff(outcome.waiter, offered.taken, prepared)
 		case burn:
 			// A burn decided before the session could commit has no nonce to name.
-			burned := Burn{Participant: taken.participant, Reason: outcome.kind.reason()}
+			burned := Burn{Participant: offered.taken.participant, Reason: outcome.kind.reason()}
 			if prepared != nil {
 				burned.Nonce = prepared.Nonce()
 			}

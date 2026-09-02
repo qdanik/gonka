@@ -4,13 +4,15 @@ import (
 	"time"
 )
 
-// availability is a frozen per-drain snapshot of the host predicates. See routing.md, "The drain".
+// availability is the host predicates for one drain. Its frozen map memoises the whole ladder per participant, and a nil one leaves every read live. See routing.md, "The drain".
 type availability struct {
 	pocRequired  func(participant string) bool
 	throttled    func(participant string) bool
 	ejected      func(participant string) bool
 	notAllowed   func(participant string) bool
 	stateBlocked func(participant string) bool
+
+	frozen map[string]blockReason
 }
 
 type blockReason int
@@ -45,19 +47,33 @@ func (a availability) outsideAllowlist(participant string) bool {
 
 // participantBlocked is the half of blocks that needs no waiter, so match and blocks share one ladder.
 func (a availability) participantBlocked(participant string) blockReason {
+	if reason, memoised := a.frozen[participant]; memoised {
+		return reason
+	}
+	reason := blockNone
 	switch {
 	case a.outsideAllowlist(participant):
-		return blockNotAllowed
+		reason = blockNotAllowed
 	case a.pocRequired(participant):
-		return blockPoCRequired
+		reason = blockPoCRequired
 	case a.throttled(participant):
-		return blockThrottled
+		reason = blockThrottled
 	case a.ejected(participant):
-		return blockEjected
+		reason = blockEjected
 	case a.divergedFromEscrowState(participant):
-		return blockStateDiverged
+		reason = blockStateDiverged
 	}
-	return blockNone
+	if a.frozen != nil {
+		a.frozen[participant] = reason
+	}
+	return reason
+}
+
+// refuseSlot folds a refused admission into the frozen ladder.
+func (a availability) refuseSlot(participant string) {
+	if a.frozen != nil {
+		a.frozen[participant] = blockThrottled
+	}
 }
 
 // blocks is the one definition of "this participant cannot serve this waiter", read by match and servable alike. See README, "The drain".

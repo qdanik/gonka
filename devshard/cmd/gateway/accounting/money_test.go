@@ -40,14 +40,14 @@ func TestNonceCostsAreCarriedFromTheEscrowRecord(t *testing.T) {
 		t.Fatalf("OpenEscrow: %v", err)
 	}
 
-	if err := book.ObserveNonceCost("5", 7, types.InferenceRecord{
+	if err := book.ObserveInferences("5", map[uint64]*types.InferenceRecord{7: {
 		ReservedCost: 10_000,
 		ActualCost:   6_400,
 		Status:       types.StatusFinished,
 		InputTokens:  512,
 		OutputTokens: 128,
-	}); err != nil {
-		t.Fatalf("ObserveNonceCost: %v", err)
+	}}); err != nil {
+		t.Fatalf("ObserveInferences: %v", err)
 	}
 
 	totals := queryTotals(t, book)
@@ -78,8 +78,10 @@ func TestAnUnfinishedNonceRefundsNothing(t *testing.T) {
 				t.Fatalf("OpenEscrow: %v", err)
 			}
 
-			if err := book.ObserveNonceCost("5", 7, types.InferenceRecord{ReservedCost: 10_000, Status: status}); err != nil {
-				t.Fatalf("ObserveNonceCost: %v", err)
+			if err := book.ObserveInferences("5", map[uint64]*types.InferenceRecord{
+				7: {ReservedCost: 10_000, Status: status},
+			}); err != nil {
+				t.Fatalf("ObserveInferences: %v", err)
 			}
 
 			totals := queryTotals(t, book)
@@ -110,13 +112,12 @@ func TestMoneyIsSummedAcrossTheNoncesOfOneSlot(t *testing.T) {
 		t.Fatalf("OpenEscrow: %v", err)
 	}
 
-	for _, nonce := range []uint64{7, 9} {
-		if err := book.ObserveNonceCost("5", nonce, types.InferenceRecord{
-			ReservedCost: 1_000, ActualCost: 400, InputTokens: 10, OutputTokens: 4,
-			Status: types.StatusFinished,
-		}); err != nil {
-			t.Fatalf("ObserveNonceCost %d: %v", nonce, err)
-		}
+	spent := &types.InferenceRecord{
+		ReservedCost: 1_000, ActualCost: 400, InputTokens: 10, OutputTokens: 4,
+		Status: types.StatusFinished,
+	}
+	if err := book.ObserveInferences("5", map[uint64]*types.InferenceRecord{7: spent, 9: spent}); err != nil {
+		t.Fatalf("ObserveInferences: %v", err)
 	}
 
 	var totals nonceTotals
@@ -152,12 +153,11 @@ func TestMoneyIsSummedAcrossTheSlotsOfOneParticipant(t *testing.T) {
 		t.Fatalf("OpenEscrow: %v", err)
 	}
 
-	for _, nonce := range []uint64{7, 8} {
-		if err := book.ObserveNonceCost("5", nonce, types.InferenceRecord{
-			ReservedCost: 1_000, ActualCost: 400, InputTokens: 10, OutputTokens: 4, Status: types.StatusFinished,
-		}); err != nil {
-			t.Fatalf("ObserveNonceCost %d: %v", nonce, err)
-		}
+	spent := &types.InferenceRecord{
+		ReservedCost: 1_000, ActualCost: 400, InputTokens: 10, OutputTokens: 4, Status: types.StatusFinished,
+	}
+	if err := book.ObserveInferences("5", map[uint64]*types.InferenceRecord{7: spent, 8: spent}); err != nil {
+		t.Fatalf("ObserveInferences: %v", err)
 	}
 
 	for slotID, cost := range map[uint32]uint64{0: 30, 1: 70} {
@@ -192,10 +192,10 @@ func TestInvalidationRefundsTheWholeReserve(t *testing.T) {
 		t.Fatalf("OpenEscrow: %v", err)
 	}
 
-	if err := book.ObserveNonceCost("5", 7, types.InferenceRecord{
-		ReservedCost: 1_000, ActualCost: 400, Status: types.StatusInvalidated,
+	if err := book.ObserveInferences("5", map[uint64]*types.InferenceRecord{
+		7: {ReservedCost: 1_000, ActualCost: 400, Status: types.StatusInvalidated},
 	}); err != nil {
-		t.Fatalf("ObserveNonceCost: %v", err)
+		t.Fatalf("ObserveInferences: %v", err)
 	}
 
 	if got := queryTotals(t, book).RefundedCost; got != 1_000 {
@@ -209,11 +209,11 @@ func TestObservingTheSameNonceTwiceDoesNotDoubleTheMoney(t *testing.T) {
 	if err := book.OpenEscrow(EscrowMetadata{EscrowID: "5", Model: "Qwen/Test", Slots: []types.SlotAssignment{{SlotID: 0, ValidatorAddress: "gonka1aaa"}}}); err != nil {
 		t.Fatalf("OpenEscrow: %v", err)
 	}
-	record := types.InferenceRecord{ReservedCost: 10_000, ActualCost: 6_400, OutputTokens: 128, Status: types.StatusFinished}
+	record := &types.InferenceRecord{ReservedCost: 10_000, ActualCost: 6_400, OutputTokens: 128, Status: types.StatusFinished}
 
 	for range 3 {
-		if err := book.ObserveNonceCost("5", 7, record); err != nil {
-			t.Fatalf("ObserveNonceCost: %v", err)
+		if err := book.ObserveInferences("5", map[uint64]*types.InferenceRecord{7: record}); err != nil {
+			t.Fatalf("ObserveInferences: %v", err)
 		}
 	}
 

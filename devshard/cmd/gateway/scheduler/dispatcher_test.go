@@ -879,7 +879,7 @@ func TestFreezeLeavesAnOmittedOptionalPredicateMissing(t *testing.T) {
 		pocRequired: always(false),
 		throttled:   always(false),
 		ejected:     always(false),
-	})
+	}, 1)
 
 	if got := frozen.participantBlocked(hostA); got != blockNone {
 		t.Errorf("participantBlocked(%q) = %v, want blockNone when neither optional predicate was given", hostA, got)

@@ -88,7 +88,7 @@ func decodeStreamedEvent(payload []byte) (map[string]any, bool) {
 	var decoded any
 	// More() matches the strip: a payload carrying a second object is one no client can read.
 	if err := decoder.Decode(&decoded); err != nil || decoder.More() {
-		normalized, replaced := replaceNonFiniteNumbers(payload)
+		normalized, replaced := ReplaceNonFiniteNumbers(payload)
 		if !replaced {
 			return nil, false
 		}

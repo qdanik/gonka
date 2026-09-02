@@ -41,12 +41,14 @@ type waiter struct {
 func newWaiter(profile RequestProfile, enqueued time.Time) *waiter {
 	queued := &waiter{
 		profile:  profile,
-		exclude:  make(map[string]bool, len(profile.Exclude)),
 		enqueued: enqueued,
 		replyCh:  make(chan pickResult, 1),
 	}
-	for _, participant := range profile.Exclude {
-		queued.exclude[participant] = true
+	if len(profile.Exclude) > 0 {
+		queued.exclude = make(map[string]bool, len(profile.Exclude))
+		for _, participant := range profile.Exclude {
+			queued.exclude[participant] = true
+		}
 	}
 	return queued
 }

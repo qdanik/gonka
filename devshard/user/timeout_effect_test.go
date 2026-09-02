@@ -1,6 +1,7 @@
 package user
 
 import (
+	"errors"
 	"testing"
 
 	"devshard/internal/testutil"
@@ -53,4 +54,19 @@ func TestTimeoutTookEffect(t *testing.T) {
 			require.Equal(t, testCase.want, session.timeoutTookEffect(testCase.diff, nonce))
 		})
 	}
+}
+
+// A caller separates a settled vote from an unposted one by the sentinel, not by the error text.
+func TestTimeoutSettledErrorMarksAnUnpostedVote(t *testing.T) {
+	const nonce = uint64(11)
+
+	applied := timeoutSettledError(nonce, types.TimeoutReason_TIMEOUT_REASON_EXECUTION, true)
+	unposted := timeoutSettledError(nonce, types.TimeoutReason_TIMEOUT_REASON_EXECUTION, false)
+
+	require.False(t, errors.Is(applied, ErrTimeoutNotApplied),
+		"a timeout the diff carried is settled, whatever the error says about it")
+	require.True(t, errors.Is(unposted, ErrTimeoutNotApplied),
+		"a diff that left without the timeout leaves the vote unposted")
+	require.Contains(t, unposted.Error(), "inference 11 timed out",
+		"the sentinel is added to the reason, it does not replace it")
 }

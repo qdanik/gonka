@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"sync/atomic"
 	"time"
 
 	"devshard/cmd/gateway/chain"
@@ -23,6 +24,7 @@ type EscrowRegistry interface {
 	Serves(model string) bool
 	Models() []string
 	Candidates(model string) []scheduler.Escrow
+	Routable(escrowID string) (scheduler.Escrow, bool)
 	RoutableSession(escrowID string) (registry.EscrowSession, bool)
 	SettlementSession(escrowID string) (registry.EscrowSession, bool)
 	Inspect(ctx context.Context, escrowID string) (registry.EscrowSession, func(), error)
@@ -156,6 +158,7 @@ type Server struct {
 	cache      *responseCache
 	capture    *requestCapture
 
+	gates   atomic.Pointer[keyGates]
 	verify  func(authorization string) credentials
 	handler http.Handler
 }

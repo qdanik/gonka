@@ -58,6 +58,8 @@ func Build(values env.Values, overrides Overrides) (*Config, error) {
 	overrideIfSet(&configuration.NonceAccounting.ListenAddr, values.NonceAccountingListenAddr)
 	overrideIfSet(&configuration.NonceAccounting.RetentionEpochs, values.NonceAccountingRetentionEpochs)
 	overrideIfSet(&configuration.NonceAccounting.SnapshotSeconds, values.NonceAccountingSnapshotSeconds)
+	overrideIfSet(&configuration.TimeoutSweep.BudgetPerTick, values.TimeoutSweepBudgetPerTick)
+	overrideIfSet(&configuration.TimeoutSweep.GraceSeconds, values.TimeoutSweepGraceSeconds)
 
 	overrideIfSet(&configuration.Capture.Enabled, values.CaptureEnabled)
 	overrideIfSet(&configuration.Capture.Dir, values.CaptureDir)

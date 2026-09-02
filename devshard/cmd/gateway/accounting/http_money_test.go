@@ -17,15 +17,15 @@ func TestParticipantsEndpointReturnsCostPerParticipantAndModel(t *testing.T) {
 		address string
 		cost    uint64
 		nonce   uint64
-		record  types.InferenceRecord
+		record  *types.InferenceRecord
 	}{
 		{
 			id: "5", model: "Qwen/Test", address: "gonka1aaa", cost: 100, nonce: 2,
-			record: types.InferenceRecord{ReservedCost: 900, ActualCost: 400, InputTokens: 64, OutputTokens: 16, Status: types.StatusFinished},
+			record: &types.InferenceRecord{ReservedCost: 900, ActualCost: 400, InputTokens: 64, OutputTokens: 16, Status: types.StatusFinished},
 		},
 		{
 			id: "6", model: "Kimi/Test", address: "gonka1aaa", cost: 70, nonce: 4,
-			record: types.InferenceRecord{ReservedCost: 500, ActualCost: 500, InputTokens: 32, OutputTokens: 8, Status: types.StatusFinished},
+			record: &types.InferenceRecord{ReservedCost: 500, ActualCost: 500, InputTokens: 32, OutputTokens: 8, Status: types.StatusFinished},
 		},
 	} {
 		if err := book.OpenEscrow(EscrowMetadata{
@@ -39,8 +39,8 @@ func TestParticipantsEndpointReturnsCostPerParticipantAndModel(t *testing.T) {
 		if err := book.ObserveHostStats(escrow.id, 0, types.HostStats{Cost: escrow.cost}); err != nil {
 			t.Fatalf("ObserveHostStats %s: %v", escrow.id, err)
 		}
-		if err := book.ObserveNonceCost(escrow.id, escrow.nonce, escrow.record); err != nil {
-			t.Fatalf("ObserveNonceCost %s: %v", escrow.id, err)
+		if err := book.ObserveInferences(escrow.id, map[uint64]*types.InferenceRecord{escrow.nonce: escrow.record}); err != nil {
+			t.Fatalf("ObserveInferences %s: %v", escrow.id, err)
 		}
 	}
 

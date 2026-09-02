@@ -16,6 +16,10 @@ const (
 	Rewound = "rewound"
 	Error   = "error"
 
+	SweptDue     = "swept_due"
+	SweptApplied = "swept_applied"
+	SweptFailed  = "swept_failed"
+
 	ContextLimit         = "context_limit"
 	PreviousContextLimit = "previous_context_limit"
 )

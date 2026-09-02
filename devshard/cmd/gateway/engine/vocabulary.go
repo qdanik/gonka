@@ -21,6 +21,19 @@ const (
 	StageFirstToken     EscalationStage = "first_token_timeout_wait_elapsed"
 )
 
+// What carried an answer's first renderable bytes, reported on every attempt that produced content.
+const (
+	sourceDeltaContent            = "delta.content"
+	sourceDeltaReasoning          = "delta.reasoning"
+	sourceDeltaReasoningContent   = "delta.reasoning_content"
+	sourceDeltaToolCalls          = "delta.tool_calls"
+	sourceMessageContent          = "message.content"
+	sourceMessageReasoning        = "message.reasoning"
+	sourceMessageReasoningContent = "message.reasoning_content"
+	sourceMessageToolCalls        = "message.tool_calls"
+	sourceStopWithTokens          = "message.empty_stop_completion_tokens"
+)
+
 // An attempt's place in its race, and why the crown fell to it.
 const (
 	RolePrimary     = "primary"
