@@ -9,8 +9,10 @@ import (
 	"time"
 
 	"devshard/cmd/gateway/config"
+	"devshard/cmd/gateway/internal/logkey"
 	"devshard/cmd/gateway/limits"
 	"devshard/cmd/gateway/perf"
+	"devshard/logging"
 )
 
 var (
@@ -382,8 +384,17 @@ func (g *crownStrikes) Observe(participant, model string, contentless bool) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if !contentless {
+		if g.strikes[key] >= crownDenialStrikes {
+			logging.Info("host crowned again",
+				logkey.Host, logkey.ShortHost(participant), logkey.Model, model)
+		}
 		delete(g.strikes, key)
 		return
 	}
 	g.strikes[key]++
+	if g.strikes[key] == crownDenialStrikes {
+		logging.Warn("host denied the crown",
+			logkey.Host, logkey.ShortHost(participant), logkey.Model, model,
+			logkey.Strikes, g.strikes[key])
+	}
 }

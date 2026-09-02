@@ -68,7 +68,7 @@ CI uploads this report as `devshard-e2e-junit-report` and publishes it as the
 
 ## Test Files
 
-- `happy_path_test.go`: non-streaming OpenAI-style completions and settlement
+- `non_streaming_test.go`: non-streaming OpenAI-style completions and settlement
   contract validation.
 - `streaming_test.go`: SSE streaming shape, cache-hit streaming shape, and
   streaming/non-streaming cache isolation.
@@ -79,6 +79,11 @@ CI uploads this report as `devshard-e2e-junit-report` and publishes it as the
 ## Notes
 
 E2E tests require `DEVSHARD_E2E=1`. The Compose runner sets this automatically.
+
+The protocol deadlines a nonce is judged against are the stand's to shorten, on the gateway as well as
+on the hosts: `DEVSHARD_E2E_REFUSAL_TIMEOUT_SECONDS` and `DEVSHARD_E2E_EXECUTION_TIMEOUT_SECONDS` reach
+the gateway's own session through `gatewayEnvOverrides`, alongside `DEVSHARD_E2E=1`. Without them the
+chain's half-hour execution deadline stands, and no scenario that ends in an applied timeout can run.
 
 Each test uses a unique Docker network name so stale networks from interrupted
 runs do not break the next run. If Docker state still gets messy, prune stopped

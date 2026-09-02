@@ -10,7 +10,7 @@ This document covers `scheduler/` (which escrow, which participant, which nonce)
 - **Participant key** — the identity a host is known by. A validator may hold several *slots* in a group; all of its slots share one participant key. Every filter in the scheduler is keyed by participant, never by slot, so a request that excluded a host cannot be re-served through a sibling slot of the same validator (`match.go`, `match`).
 - **Group size** — the number of slots in an escrow's group. `nonce % groupSize` is the slot index, which is why advancing the nonce is how a host is chosen.
 - **Executor receipt** — the executor's signature over a committed inference, delivered as its own SSE event ahead of any output. It is the only thing that moves a record from `StatusPending` to `StatusStarted`, and it reaches the chain as `MsgConfirmStart` on the next composed diff. It is therefore queued when the event lands rather than when the request ends, because neither a held stream nor an abandoned one leaves a diff to carry it later (`user/session.go`, `Session.confirmStartOnReceipt`).
-- **Ghost burn** — a nonce that was committed locally with a one-token placeholder inference and never sent anywhere, because no host bound to it could serve any waiting request. It is spent money with a recorded reason.
+- **Ghost burn** — a nonce that was committed locally with a floor-sized placeholder inference and never sent anywhere, because no host bound to it could serve any waiting request. It is spent money with a recorded reason.
 
 ## Picking an escrow
 
@@ -74,7 +74,7 @@ flowchart TD
 
 **The burn budget is `groupSize * (waiters + 1)`, computed once at drain entry.** Together with the freeze it gives the drain a termination proof: `waiting`, the availability predicates and the budget are all fixed, no waiter is appended during a drain (appends happen only in the select loop), and every iteration either returns, serves — which strictly shrinks the queue — or burns, which strictly shrinks the budget. Iterations are therefore bounded by `waiters + budget + 1`. Hold deadlines are fixed at enqueue time, so a fired timer cannot re-hold the same head.
 
-**The sweep is the second termination lever.** Before every binding it drops abandoned waiters silently and answers any waiter for which no participant passes all five gates (excluded, PoC-required, throttled, ejected, state-blocked). This costs no nonce. The answer is `ErrNoAvailableHost`, or `ErrHostsBusy` when the hosts are merely at capacity: both are transient, and every gate that survives is one that waiting can clear. A build that refuses tools, a protocol version or a context length is counted rather than gated, so such a request reaches the host and comes back with the host's own refusal.
+**The sweep is the second termination lever.** Before every binding it drops abandoned waiters silently and answers any waiter for which no participant passes all six gates (outside the allowlist, PoC-required, throttled, ejected, state-blocked, excluded by this waiter) with a burn rather than leaving it queued.
 
 ### match is pure
 
@@ -89,13 +89,13 @@ flowchart TD
 
 The exhaustiveness of that sum type is the nonce-liveness invariant made compiler-checked (`decision.go`, `Decision`): there is no outcome in which a nonce is committed and nobody owns it, and no way to add one without changing the type.
 
-Decision order: a host the chain has *not* preserved, and therefore requires to run proof-of-compute, burns `ghostPoC`; a throttled host burns `ghostThrottled`; a host the outlier detector ejected burns `ghostEjected`; otherwise the queue is walked in arrival order and the first waiter that is not excluding this participant is served. If nobody live remains in the queue at all — every waiter having been abandoned between the sweep and the binding — the nonce is declined rather than burned: a burn would spend a chain-costed nonce on behalf of nobody, and would record it under a reason that never happened. Otherwise, if the oldest *live* waiter is still inside the hold grace, the nonce is held; past that it burns `ghostExclude`, because the only reason left is that the queue excludes this participant.
+Decision order (`scheduler/match.go`, `participantBlocked`): a host outside the allowlist burns `ghostNotAllowed`; a host the chain has *not* preserved, and therefore requires to run proof-of-compute, burns `ghostPoC`; a throttled host burns `ghostThrottled`; a host the outlier detector ejected burns `ghostEjected`; a host whose escrow state diverged burns `ghostStateDiverged`; and only then does the queue's own exclusion apply.
 
 Two details in that order are load-bearing. The hold deadline is anchored on the oldest **live** waiter, never on the queue head, because an abandoned head would otherwise park a nonce for a caller who will never be served — a liveness failure in disguise (`match.go`, the hold branch of `match`). And the hold window is half-open (`now.Before(until)`), so the deadline always passes.
 
 ### Ghost burns
 
-A ghost commits a real one-token inference into the escrow's local diff and never sends it to a host. The prompt is a fixed placeholder and `MaxTokens` is 1 (`registry/session.go`, `ghostMaxTokens`, `ghostPrompt` and `nonceStream.ghostParams`). The point is bookkeeping: every nonce the escrow advances through has an owner (`registry/session.go`, `ghostPrompt`).
+A ghost commits a real inference into the escrow's local diff and never sends it to a host. The prompt is a fixed placeholder and `MaxTokens` is the network's floor of 64 (`registry/session.go`, `ghostMaxTokens`), because a smaller one would be raised anyway.
 
 | Kind | Recorded reason | Cause |
 |---|---|---|
@@ -104,6 +104,8 @@ A ghost commits a real one-token inference into the escrow's local diff and neve
 | `ghostEjected` | `participant_ejected_no_send` | The outlier detector ejected the host, and the pool-wide cap left room to honour it. |
 | `ghostExclude` | `no_compatible_request_after_stale` | The queue has already raced this host, and the hold grace expired. |
 | `ghostAbandoned` | `request_abandoned_before_dispatch` | The nonce was committed for a caller who vanished before the assignment reached it. |
+| `ghostNotAllowed` | `participant_outside_allowlist` | The host is not on the participant allowlist, which is checked before every other gate. |
+| `ghostStateDiverged` | `participant_state_diverged_no_send` | The host's escrow state diverged from this gateway's, so nothing may be dispatched to it on that escrow. |
 
 Every burn is reported to the dispatch observer, which turns it into `devshard_gateway_ghost_nonces_burned_total{devshard_id,reason}`. A burned nonce is spent money; an unlabelled burn is money the operator cannot account for.
 
@@ -118,7 +120,7 @@ This is the money path, and the ordering below is its fragile part. All three ac
 3. Then the escrow's in-flight hold is taken (`dispatcher.go`, the escrow hold in `dispatcher.drain`). A refusal means the escrow was retired; the slot is given straight back and the queue fails with `ErrEscrowGone`.
 4. Only then does the nonce commit.
 
-Admission lives *inside* the commit rather than beside it. A peek during selection and called `Acquire` afterwards, in the engine. Those are two separate critical sections, so between them a window could fill; the acquire then failed *after* the nonce was already committed, and the failed attempt never entered the race outcome — so nothing ever posted its settlement vote. A peek used as authority where atomicity was required, and the result was an orphaned chain message. `Available` remains, but only as a pre-filter whose staleness costs nothing (`scheduler.go`, `hostLimiter`).
+Admission lives *inside* the commit rather than beside it. The legacy gateway peeked during selection and called `Acquire` afterwards, in the engine. Those are two separate critical sections, so between them a window could fill; the acquire then failed *after* the nonce was already committed, and the failed attempt never entered the race outcome — so nothing ever posted its settlement vote. A peek used as authority where atomicity was required, and the result was an orphaned chain message. `Available` remains, but only as a pre-filter whose staleness costs nothing (`scheduler.go`, `hostLimiter`).
 
 Acquiring at the serve point with no memory trades that bug for another: with a full window every drain iteration takes, fails and burns a nonce, up to the whole budget, where the old code burned none. That is why `admit` folds a refused participant back into the drain's *frozen* `throttled` predicate (`dispatcher.go`, `admit`). The sweep then answers the affected waiters with `ErrNoAvailableHost` instead of the binding burning another nonce every turn.
 

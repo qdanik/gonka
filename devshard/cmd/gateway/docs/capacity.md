@@ -90,7 +90,7 @@ Recovery walks the ladder back down: a success while half-open clears the trip *
 
 **The utilisation gate reads a peak, and that is what makes call order irrelevant.** `Acquire` records the in-flight high-water mark at the instant it takes the slot, where nothing can undo it, and `OnResult` compares that peak — not the live count — against half the window (`limits/participant.go`, `ParticipantLimiter.Acquire` and `ParticipantLimiter.OnResult`). This matters because the engine releases an attempt's slot in a `defer` and reports its verdict afterwards: a gate reading the live count would see the slot already given back and refuse to widen a window that had been genuinely saturated, so the window would grow slower than the rule says. Reading the peak decides identically whichever of release and result runs first, so the order of the three calls is an implementation detail and **not** a contract.
 
-**Manual reset.** `POST /v1/admin/participants/unquarantine` clears every model's breaker for one participant and restores the initial window, and reports "not found" for a participant the gateway is not tracking. In-flight counts are left alone: they count attempts still running, not penalty: they count attempts still running, not penalty.
+**Manual reset.** `POST /v1/admin/participants/unquarantine` clears every model's breaker for one participant and restores the initial window, and reports "not found" for a participant the gateway is not tracking. In-flight counts are left alone: they count attempts still running, not penalty.
 
 Both limiters take a settings change without a restart. The gateway limiter swaps its whole configuration; the participant limiter keeps what it has learned, clamping any window above the new ceiling and lifting any that sits below the new initial. The lift reaches participants already tracked: an operator raising the initial window after a bad episode means it for the participants already tracked, and a limiter that applied it only to a restarted process would make the knob useless exactly when it is reached for. Nothing is lost by being generous — a participant that is still failing shrinks again within seconds, and the breaker is what protects against one that is failing badly.
 
@@ -124,39 +124,39 @@ The distinction matters for what it costs. A host that answers empty after a rec
 
 `devshard_runtime_active_requests` is not the number of clients waiting. The escrow hold a race takes is kept "for as long as the race's vote is owed" (`engine/engine.go`, `raceRegistration.holdEscrow`), and it is released on the goroutine that posts the timeout vote for every nonce the race left unfinished — after the losers have been given their grace, which defaults to ten minutes. So a request whose answer was delivered long ago keeps its escrow's count up until the chain has been told what became of each of its nonces. Reading the gauge as "requests still generating" overstates load by however much settlement is behind.
 
-A retired escrow stays in `Snapshot` until that count reaches zero, reporting `devshard_runtime_active` as 0 while it drains (`registry/registry.go`). Dropping it at retirement would end the series mid-drain — at 208 in one observed case — rather than letting it fall to zero, hiding the most interesting minutes of an escrow's life were the ones no panel could show.
+A retired escrow stays in `Snapshot` until that count reaches zero, reporting `devshard_runtime_active` as 0 while it drains (`registry/registry.go`). Dropping it at retirement instead would hide the most interesting minutes of an escrow's life behind a panel that no longer has a series to draw.
 
 ## Outlier ejection
 
 `perf.Tracker` answers two questions in O(1) with no lock: **is this participant withheld from routing** (`Ejected`), and **did the detector want it out at all** (`Degraded`). They differ only by the pool-wide cap, and each has exactly one job.
 
-**`Ejected` is a routing gate.** It is one of the scheduler's five host gates — excluded, proof-of-compute-required, throttled, ejected and state-blocked — so a host it names receives no request and its nonces are burned as `participant_ejected_no_send` ghosts (`scheduler/match.go`, `scheduler/ghost.go`). It also drives the `devshard_gateway_host_ejected` gauge and one branch of the limiter-verdict ladder, where a `Stalled` attempt is charged to the host instead of excused as a model outcome, but only while that host is ejected (`engine/outcome.go`).
+**`Ejected` is a routing gate.** It is one of the scheduler's six host gates — outside the allowlist, proof-of-compute-required, throttled, ejected, state-blocked and excluded by this waiter — so a host it names receives no request while the gate holds.
 
 **`Degraded` is why the gate is not the whole story.** The cap below refuses to honour an ejection once too many of a model's hosts are failing at once, which is exactly the moment the gate stops protecting anything: those hosts stay in rotation. `Degraded` reports the verdict *before* the cap, and the race reads it for one decision — a primary the detector wanted out starts its second attempt immediately, under `primary_degraded`, rather than waiting out the receipt or first-token deadline. That hedge is bounded by the attempt budget, so a correlated outage costs at most one extra attempt per request and never an unbounded retry storm.
 
-**What it tracks is health, not latency.** A sample is three fields: participant, model, and whether the host was responsive (`perf/sample.go`, `Sample`). There is no latency ring, no percentile and no host score in this package; response timings are recorded by the metrics layer from the race outcome, and escrow selection scores on in-flight load over chain weight. The only *exponentially* decayed quantities are the counts of successes and failures; the ejection count decays too, but in whole rungs rather than continuously.
+**What it tracks is health and latency both.** A sample carries participant, model, whether the host was responsive, and two timings: first content and time per output token (`perf/sample.go`, `Sample`). The timings feed two 64-sample rings whose p75 the escalation ladder reads; the health counters are decayed and feed ejection.
 
 **Ejection triggers** (`perf/ejection.go`, `ejectionPolicy.evaluate`): a run of consecutive failures, or a failure rate above the threshold once the decayed volume is large enough. The minimum-volume gate is why a quiet host is not ejected by one bad request.
 
 **The ladder.** Only a *fresh* trigger starts an ejection — an already-ejected host rides out its current timer rather than having it pushed back. Each fresh trigger lengthens the next ejection linearly in the ejection count, capped, and resets the outcome counters so the rate restarts from zero. The count decays back one rung per full healthy window, with the anchor advancing so the ladder cannot unwind faster than that.
 
-**The pool-wide cap.** Envoy's max-ejection-percent applies per model: at most `min(fraction × known hosts, known hosts − minimum available)` ejections are honoured, resolved by sorting participant keys. Ejections beyond the cap keep their timers running but are absent from the routing view, so they are `Degraded` and not `Ejected` (`perf/tracker.go`). This is what makes the routing gate safe to honour: a correlated outage can never remove a whole model's fleet from routing, and the hosts it leaves in rotation are the ones the race hedges instead.
+**The pool-wide cap.** Envoy's max-ejection-percent applies per model: at most `min(fraction × known hosts, known hosts − minimum available)` ejections are honoured, resolved by ejection count first, most chronic kept out, with the participant key breaking ties.
 
 **Why it is lock-free.** The shape is sized for a per-host, per-admission read: at five hundred hosts a scan under one global mutex costs 2.35 ms and roughly 1 300 lock acquisitions per request. The tracker publishes two atomic maps of keys to expiry times, one capped for routing and one uncapped; a read is an atomic load, a map lookup and a time comparison, with no lock. The cap and the tie-break are resolved once, at rebuild time, and each entry carries its own expiry so ageing out needs no rebuild at all. The rebuild itself is conditional — only when the membership the cap is computed over actually moved (`perf/tracker.go`, `Tracker`'s two published views, `Tracker.RecordSample` and `ejectedIn`).
 
 Stale host state is swept at most once per tenth of the staleness window, because entries age out over minutes and scanning every host on every sample costs O(hosts) under the global lock for nothing.
 
-### Buffered replies have a ceiling of their own
+**Capability refusals** — an unsupported protocol version, a tool call the build does not implement, a context length it will not take — are counted, and the smallest context a host has admitted to is kept beside them. Nothing here withholds a host from routing: the counts say what to fix and how often it happened, and a refusal that repeats is a build that refuses everything rather than a one-off. Version refusals are keyed by participant, because a protocol version is a property of the build; tool and context refusals are keyed by participant and model.
+
+## Buffered replies have a ceiling of their own
 
 A client that asked for one whole answer is still served over a stream: the gateway forces `stream: true` upstream. The events are folded into the answer as they arrive and the raw stream is dropped, so what such a request holds is the reply being assembled — and the internal fields nobody will see are removed before the merge, not after it, so a client that did not ask for logprobs never accumulates them. `max_buffered_response_bytes` (`GATEWAY_MAX_BUFFERED_RESPONSE_BYTES`, 512 MiB) is the ceiling on every such reply at once.
 
-The per-request cap is separate and much larger — 32 MiB, bounding one unterminated SSE frame rather than a whole accumulated stream. This ceiling is the only bound on the *sum*, and the request limiter does not stand in for it: with `max_concurrent_requests` unset its cap comes from network weight and routinely admits thousands at once, which made the exposure one per-request ceiling times however many requests arrived.
+The per-request cap is separate and much smaller — 32 MiB, bounding one unterminated SSE frame rather than a whole accumulated stream. This ceiling is the only bound on the *sum*, and the request limiter does not stand in for it: with `max_concurrent_requests` unset its cap comes from network weight and routinely admits thousands at once, which made the exposure one per-request ceiling times however many requests arrived.
 
 Past the ceiling a request is refused with `503`, the same answer as a shard with no room — the gateway has nothing left to hold, which is not the caller's doing. A ceiling of zero holds nothing back, for a deployment that would rather be killed by the kernel than refuse a request. Lowering it at runtime stops admitting rather than repossessing: what is already held drains on its own.
 
 `devshard_gateway_buffered_response_bytes` is what is held right now. Watch it before choosing a number: the sum is driven by the *typical* reply, and the ceiling only bounds the tail.
-
-**Capability refusals** — an unsupported protocol version, a tool call the build does not implement, a context length it will not take — are counted, and the smallest context a host has admitted to is kept beside them. Nothing here withholds a host from routing: the counts say what to fix and how often it happened, and a refusal that repeats is a build that refuses everything rather than a one-off. Version refusals are keyed by participant, because a protocol version is a property of the build; tool and context refusals are keyed by participant and model.
 
 ## Nothing here is persisted
 
@@ -177,7 +177,7 @@ Two asymmetries the code does not state:
 | `max_input_tokens_in_flight` | 0 (unlimited) | Per-model input-token budget, scaled by capacity. |
 | `max_concurrent_requests_per_10000_weight` | 24.0 | Weight-derived cap; when set with an observed baseline it replaces the absolute cap. |
 | `poc_max_concurrent_requests_per_10000_weight` | 48.0 | The same, used while the chain reports requests blocked. |
-| `admission_queue_wait_ms` | 300 000 | How long a request waits for a free slot before a 503. The same value is returned as `Retry-After`. |
+| `admission_queue_wait_ms` | 300 000 | How long a request waits for a free slot before a 429. The same value is returned as `Retry-After`. |
 | `host_initial_inflight` / `host_max_inflight` | 64 / 256 | How many requests may be in flight to one host, to start and at most. The window opens near a host's known capacity and AIMD is left to back off from it, rather than discovering it upward from a cold start. |
 | `host_cutoff_after_failures` | 3 | Consecutive transport faults before the host stops receiving requests. |
 | `host_cutoff_ms` / `host_cutoff_max_ms` | 5 000 / 60 000 | How long a cut-off host stays out, first time and at most. The maximum must not exceed the performance ejection maximum, so ejection stays the dominant authority. |
@@ -188,7 +188,7 @@ Two asymmetries the code does not state:
 | `perf_host_staleness_seconds` | 3 600 | When an unseen host is forgotten. |
 | `GATEWAY_PERF_EWMA_HALFLIFE_SECONDS` | 600 | Half-life of the decayed success and failure counters. |
 
-The rows down to `host_cutoff_max_ms` are admin overrides, changeable at run time without a redeploy. The `perf_*` rows are **not**: they are neither overrides nor environment variables, only compile-time defaults, and the snake_case names above are the spellings the boot-time validator uses in its error messages, not knobs an operator can set. `GATEWAY_PERF_EWMA_HALFLIFE_SECONDS` is the one performance value with an environment variable, and it is read once at boot. Retuning ejection therefore means a new binary.
+Every row above is an admin override, changeable at run time without a redeploy, and every one also takes a `GATEWAY_*` environment variable read at boot. The `perf_*` rows joined them when the ejection detector's thresholds were made reachable without a rebuild.
 
 The default input-token budget of zero means unlimited, which is worth an operator's attention: with million-token contexts it is the only thing between concurrency and memory exhaustion, and the body-size cap does not throttle load.
 
@@ -213,7 +213,7 @@ The disposition model follows that proposal; the event vocabulary is the gateway
 | what the ledger folds | where it comes from |
 |---|---|
 | escrow membership, its latest nonce, and what the chain recorded per slot | a ten-second sweep of the published escrow set: `Snapshot` names the escrows, each session's `SnapshotState` carries the slot group, the latest nonce, and `HostStats` |
-| a burned nonce and its reason | `tracedDispatches.GhostBurned`, which carries the nonce and one of six reasons |
+| a burned nonce and its reason | `tracedDispatches.GhostBurned`, which carries the nonce and one of seven reasons |
 | every attempt of one race | `nonceAccountedRaces.RecordRace`: per attempt the nonce, whether it was sent, whether the protocol finished it, and whether the client got its answer |
 | a timeout's kind, action and reason | `nonceAccountedRaces.RecordTimeout` |
 
@@ -231,4 +231,4 @@ Two consequences follow from folding coarser events. The reference deduplicates 
 
 **What the ledger cannot see.** A nonce is invisible to it between commitment and the end of the race that spent it, because a race reports only when it ends. Those nonces fall into `unobserved` alongside genuinely protocol-only ones, so that number is a floor on protocol overhead rather than a measurement of it; a baseline that grows while traffic is steady is the signal worth watching. `pending` is the separate case of a nonce seen unfinished whose timeout has not settled, and `overcounted` — classified beyond what the chain assigned — should never be anything but zero.
 
-The gateway's vocabulary is richer where its facts are. Six ghost reasons, not five: `participant_ejected_no_send` and `request_abandoned_before_dispatch` are first-class rather than an unknown reason with a detail string. Timeout reasons likewise — `phase_transition_aborted` and `long_response_after_content` happen to match the reference verbatim, while `empty_stream_without_non_empty_winner`, `nonce_already_finished` and `no_poster` exist only here.
+The gateway's vocabulary is richer where its facts are. Seven ghost reasons, not five: `participant_ejected_no_send`, `participant_outside_allowlist`, `participant_state_diverged_no_send` and `request_abandoned_before_dispatch` are first-class rather than an unknown reason.

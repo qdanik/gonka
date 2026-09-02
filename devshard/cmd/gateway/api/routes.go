@@ -11,6 +11,7 @@ import (
 	"devshard/cmd/gateway/internal/logkey"
 	"devshard/cmd/gateway/scheduler"
 	"devshard/logging"
+	"devshard/transport"
 	"devshard/user"
 )
 
@@ -179,6 +180,10 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request, escrowPin string) 
 	if err != nil {
 		s.capture.filterRejected(r, requestID, body, err)
 		writeErrorFor(w, err)
+		return
+	}
+	if !transport.InferenceRequestFits(len(normalized.Body), nil) {
+		writeErrorFor(w, tooLargeForHosts(len(normalized.Body)))
 		return
 	}
 	if err := authorizeModel(configuration.Limits, normalized.Model, identity); err != nil {

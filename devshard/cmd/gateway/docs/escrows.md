@@ -45,15 +45,15 @@ stateDiagram-v2
 
 ## The tick
 
-`escrow/manager.go`, `tick`, every **15 s** (`escrowTickInterval`), single-threaded per process. Order matters, and the first four steps run **whatever `rotation.enabled` says**:
+`escrow/manager.go`, `tick`, every **15 s** (`escrowTickInterval`), single-threaded per process. Order matters, and the first five steps run **whatever `rotation.enabled` says**:
 
 | # | Step | Runs regardless of the toggle because |
 | --- | --- | --- |
 | 1 | `reconcile` | crash recovery is not a rotation feature |
 | 2 | `settlePending` | a parked escrow's row is the only record of its key; nothing else picks it up |
 | 3 | `checkMissing` | an escrow gone from chain must stop taking traffic |
-| 4 | `checkDepletion` | so must an empty one — only *creating its replacement* is rotation's business |
-| 5 | `sweepTimeouts` | a nonce the chain still settles is owed a vote whether or not rotation is on |
+| 4 | `sweepTimeouts` | a nonce the chain still settles is owed a vote whether or not rotation is on |
+| 5 | `checkDepletion` | so must an empty one — only *creating its replacement* is rotation's business |
 | 6 | `prepareBridge` / `finishBridge` | rotation proper; skipped when the toggle is off |
 
 Every step returns its error into an `errors.Join`; one failing model or escrow never stops the others. `Stop()` cancels the context and waits for the tick in flight, so shutdown never races a half-finished rotation.
@@ -69,7 +69,7 @@ Every step returns its error into an `errors.Join`; one failing model or escrow 
 3. Broadcast. If the process dies here, the commitment is the only trace — and it is enough.
 4. On the next tick, `reconcile` resolves every commitment.
 
-`reconcileOne` has exactly four outcomes:
+`reconcileOne` has exactly five outcomes:
 
 | Chain says | Action |
 | --- | --- |

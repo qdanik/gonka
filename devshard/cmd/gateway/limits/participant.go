@@ -7,6 +7,9 @@ import (
 	"slices"
 	"sync"
 	"time"
+
+	"devshard/cmd/gateway/internal/logkey"
+	"devshard/logging"
 )
 
 type Verdict int
@@ -226,6 +229,13 @@ func (l *ParticipantLimiter) Release(participant, model string) {
 	state.inflight--
 }
 
+func cutoffReason(halfOpen bool) string {
+	if halfOpen {
+		return cutoffReasonProbeFailed
+	}
+	return cutoffReasonConsecutiveFaults
+}
+
 func (l *ParticipantLimiter) OnResult(participant, model string, verdict Verdict) {
 	if verdict == ModelOutcome {
 		return
@@ -251,6 +261,9 @@ func (l *ParticipantLimiter) OnResult(participant, model string, verdict Verdict
 			if state.backoffCount > 0 {
 				state.backoffCount--
 			}
+			logging.Info("host back after its cut-off",
+				logkey.Host, logkey.ShortHost(participant), logkey.Model, model,
+				logkey.BackoffCount, state.backoffCount)
 		}
 	case Overload:
 		state.window = max(state.window*0.5, 1)
@@ -267,8 +280,13 @@ func (l *ParticipantLimiter) OnResult(participant, model string, verdict Verdict
 			if capped < l.cfg.MaxOpen { // stop counting once saturated so 1.6^count can't overflow the Duration
 				state.backoffCount++
 			}
+			reason := cutoffReason(state.halfOpen)
 			state.halfOpen = false
 			state.consecutiveTransportFail = 0
+			logging.Warn("host cut off after transport faults",
+				logkey.Host, logkey.ShortHost(participant), logkey.Model, model,
+				logkey.Reason, reason, logkey.BackoffCount, state.backoffCount,
+				logkey.CutOffForMS, state.openUntil.Sub(now).Milliseconds())
 		}
 	}
 }

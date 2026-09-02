@@ -107,7 +107,7 @@ In `race`, the second `X-Devshard-ID` write is the authoritative one for a reply
 
 ## The views a response is built from
 
-`filterOptions` is where the operator's configuration becomes the request-shaping rules. Forcing is expressed as its opposite there so that an `Options` built without it keeps forcing, so an `Options` built without that field keeps forcing.
+`filterOptions` is where the operator's configuration becomes the request-shaping rules. Forcing is expressed as its opposite there so that an `Options` built without it keeps forcing.
 
 `modelTokenLimits` closes over the per-model override map only when an operator configured one, so a deployment without overrides allocates nothing on the request path.
 
@@ -154,4 +154,3 @@ Eviction drops entries in map order: with a per-caller key and an hour's TTL the
 
 - [`docs/request.md`](../docs/request.md) — one request from the socket to the settled nonce.
 - [`docs/operations.md`](../docs/operations.md) — every route and every knob.
-- [`docs/request.md`](../docs/request.md) — one request from the socket to the settled nonce.

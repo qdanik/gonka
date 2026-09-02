@@ -129,5 +129,5 @@ Equivalence was proven before the numbers were read: 84 body-and-intent combinat
 ## 10. Open items
 
 - **KV-cache affinity.** Closed as unreachable, not deferred. The protocol addresses a *participant*, never a node behind it, so the most a gateway can promise is affinity to the participant; which of that participant's nodes serves the request is decided by its own router, which this side neither sees nor addresses. `AffinityHint` stays an empty extension point until the protocol carries node identity.
-- **Cross-shard coordination of the network concurrency share.** Unbuilt. Measurement shows it is not the binding constraint at current load.
+- **Cross-shard coordination of the network concurrency share.** Closed as a protocol limit, not deferred. A shard sees its own escrows and nothing else, so no gateway can divide a network-wide concurrency share without the protocol carrying one; measurement also shows it is not the binding constraint at current load.
 - **`encoding/json/v2` for the response strip.** Measured, not adopted — see section 8. Revisit when the package ships without `GOEXPERIMENT`.

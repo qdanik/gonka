@@ -232,7 +232,7 @@ Content is accepted as a non-blank string, or as a non-empty array of `{type: "t
 
 A backend writes `NaN`, `Infinity` and `-Infinity` as barewords for a probability of zero or an overflow. None is valid JSON, so a body carrying one parses nowhere: the buffered path would forward it with every internal field intact, and the streaming path would drop the event and the client's answer with it.
 
-`replaceNonFiniteNumbers` rewrites them to `null` outside string literals. It returns `ok = false` when the body carries none, so the ordinary path allocates nothing, and it matches the longest literal first so `-Infinity` is not read as a minus sign followed by `Infinity`.
+`ReplaceNonFiniteNumbers` rewrites them to `null` outside string literals. It returns `ok = false` when the body carries none, so the ordinary path allocates nothing, and it matches the longest literal first so `-Infinity` is not read as a minus sign followed by `Infinity`.
 
 When that rescue fires, the caller must receive the re-encoded bytes even if no field was deleted. Handed the original, everything downstream meets the barewords again: the completion-to-chunks conversion fails on them and forwards a response a streaming client renders nothing from, while the attempt is crowned on its content and the nonce is paid for.
 
@@ -272,7 +272,7 @@ An error is *not* cacheable when its message, type, or code contains one of `non
 
 A payload that opens as an object and does not parse is dropped rather than forwarded — a host sending something no client can read would otherwise carry along whatever it hides. A payload that is not object-shaped passes through untouched.
 
-When the client did not ask for usage, `stripUsage` removes it. An event left with nothing but housekeeping (`id`, `object`, `created`, `model`, `system_fingerprint`, `service_tier`, and an empty `choices`) is dropped entirely. The test is for housekeeping rather than for empty choices, because a host's error event carries no choices either and must survive.
+When the client did not ask for usage, `dropUsage` removes it. An event left with nothing but housekeeping (`id`, `object`, `created`, `model`, `system_fingerprint`, `service_tier`, and an empty `choices`) is dropped entirely. The test is for housekeeping rather than for empty choices, because a host's error event carries no choices either and must survive.
 
 ### A complete reply on a streaming request is rewritten into chunks
 

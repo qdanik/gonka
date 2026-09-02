@@ -67,7 +67,7 @@ The kind is read from the receipt — `engine/settle.go`, `timeoutKind` — and 
 
 `current` stands in for an epoch index and resolves against the chain snapshot. Epoch `0` is **refused** rather than served: zero means "unconstrained" inside the ledger, so answering it would report every epoch as one. `?model=` and `?escrow_id=` narrow every route but `/escrows`, and `escrow_id` accepts both repetition and commas; the event feed also takes `?participant=`.
 
-The participant route is what the surface exists for: a host operator can ask what this gateway saw of its own participant. An address the epoch holds no record of is a **404 rather than an empty list**, so "nothing went wrong" stays distinguishable from "this gateway never routed to you". The event feed is the opposite — a host with nothing against it gets an empty feed, because there nothing to report is the healthy case.
+The participant route is what the surface exists for: a host operator can ask what this gateway saw of its own participant. An address the epoch holds no record of is a **404 rather than an empty list**, so "nothing went wrong" stays distinguishable from "this gateway never routed to you". The event feed is the opposite — a host with nothing against it gets an empty feed, because there, nothing to report is the healthy case.
 
 Every route is read-only and serves one gateway's view of public network behaviour, so the listener carries no authentication. It is still a separate port, and whether it is reachable beyond the deployment is the operator's choice.
 
@@ -77,9 +77,9 @@ Each escrow keeps its newest 256 events, which caps a pathological run rather th
 
 ### The counter's shape is this ledger's own
 
-A counter is served **flat** -- `escrow_id`, `slot_id`, `disposition`, `ghost_reason`, `terminal`, `phase` and the timeout fields all at the top level of the object. The legacy ledger in `devshard/accounting` nests the same facts under a `key` object and calls the burn reason `no_send_reason`.
+A counter is served **flat** — `escrow_id`, `slot_id`, `disposition`, `ghost_reason`, `terminal`, `phase` and the timeout fields all at the top level of the object. The legacy ledger in `devshard/accounting` nests the same facts under a `key` object and calls the burn reason `no_send_reason`.
 
-Nothing outside this gateway reads the JSON counter, and the in-repo Grafana dashboard queries the Prometheus labels instead -- `devshard_gateway_nonces_by_disposition` grouped by `ghost_reason` -- which already match. The two shapes therefore stay apart.
+Nothing outside this gateway reads the JSON counter, and the in-repo Grafana dashboard queries the Prometheus labels instead — `devshard_gateway_nonces_by_disposition` grouped by `ghost_reason` — which already match. The two shapes therefore stay apart.
 
 The cost of that is worth stating, because it is silent: a reader written against the legacy shape finds none of these fields, decodes them as empty, filters every counter out and reports **zero burns rather than an error**. The gateway e2e scenarios therefore read counters with their own helper, not the shared one.
 
@@ -91,7 +91,7 @@ Findings are derived on every read and **never stored**: the counters are the fa
 
 ### Four rules that keep a finding honest
 
-- **A volume floor.** No finding is raised below **20** nonces in its denominator: a rate off four attempts describes noise, not a host.
+- **A volume floor.** No *rate* finding is raised below **20** nonces in its denominator: a rate off four attempts describes noise, not a host. The one finding that counts rather than measures, `ledger_overcounted`, has no floor: a single overcounted nonce is already a defect in the books.
 - **Burns are excluded from every host rate.** A burn is this gateway's own decision; charging it to the host would report the gateway's throttling as the host's failure.
 - **The gateway's own failures are excluded.** A phase transition ending an attempt, a vote round that reached no verdict, a missing poster, a long response that had already produced content, and a client that stopped waiting are all the gateway's. A failure the ledger could not *name* still counts — excusing the unclassified would empty the rates.
 - **The warmup probe is excluded whatever it ended as.** It is the gateway's own request, so it leaves both sides of every ratio; excluding it only when it succeeded would report a host's refusals while hiding its successes.
@@ -190,16 +190,6 @@ The `devshard_gateway_nonces_*` family is **gauges, not counters**. A nonce's di
 
 Every series carries an `epoch` label: the ledger holds several epochs at once and a participant keeps its slot across a rotation, so the epoch is what separates two otherwise identical series — and it, not the dashboard's time range, is what a panel must filter on. A cumulative gauge does not respond to a time picker.
 
-## Where to change what
-
-| To change | Go to |
-| --- | --- |
-| a finding's threshold | `accounting/findings.go`, the constants at the top |
-| what a finding excludes | `accounting/findings.go`, `excused` / `offRecord` / `servedNoUser` |
-| a stored or reported value's name | the owning `vocabulary.go` — and treat it as a migration |
-| what the ledger persists | `accounting/store.go` and `accounting/sqlstore.go`, together |
-| what feeds the ledger | [`nonces/`](../nonces/) — live events, chain diffs, the sweep |
-
 ## Money and tokens
 
 The ledger carries the chain's own arithmetic; it computes none of it. Six fields ride on all three levels — the slot, the participant record and the epoch summary:
@@ -219,3 +209,13 @@ Two limits bound what the numbers cover. Sealing drains `EscrowState.Inferences`
 Per-participant output tokens are exported as `devshard_gateway_participant_output_tokens_total{participant_key,model}`, taken from the host's own reported usage. Its label pair is already paid for by `devshard_gateway_participant_prefill_seconds_per_input_token`.
 
 The costs map is the one part of the ledger that is not persisted: a restart reports `chain_cost` in full beside per-nonce sums covering only what is still live in escrow state.
+
+## Where to change what
+
+| To change | Go to |
+| --- | --- |
+| a finding's threshold | `accounting/findings.go`, the constants at the top |
+| what a finding excludes | `accounting/findings.go`, `excused` / `offRecord` / `servedNoUser` |
+| a stored or reported value's name | the owning `vocabulary.go` — and treat it as a migration |
+| what the ledger persists | `accounting/store.go` and `accounting/sqlstore.go`, together |
+| what feeds the ledger | [`nonces/`](../nonces/) — live events, chain diffs, the sweep |

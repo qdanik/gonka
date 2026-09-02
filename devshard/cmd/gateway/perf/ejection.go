@@ -6,6 +6,7 @@ import "time"
 type ejectionState struct {
 	ejectedUntil  time.Time
 	ejectionCount int
+	wasWithheld   bool
 }
 
 type ejectionPolicy struct {

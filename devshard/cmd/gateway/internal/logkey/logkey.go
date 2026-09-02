@@ -16,6 +16,15 @@ const (
 	Rewound = "rewound"
 	Error   = "error"
 
+	BackoffCount        = "backoff_count"
+	Strikes             = "strikes"
+	CutOffForMS         = "cut_off_for_ms"
+	EjectionCount       = "ejection_count"
+	ConsecutiveFailures = "consecutive_failures"
+	FailureRate         = "failure_rate"
+	FailureVolume       = "failure_volume"
+	WithheldForMS       = "withheld_for_ms"
+
 	SweptDue     = "swept_due"
 	SweptApplied = "swept_applied"
 	SweptFailed  = "swept_failed"

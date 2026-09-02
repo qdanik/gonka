@@ -22,6 +22,7 @@ import (
 	"devshard/cmd/gateway/registry"
 	"devshard/cmd/gateway/scheduler"
 	"devshard/logging"
+	"devshard/transport"
 )
 
 const noHostRetryAfter = time.Second
@@ -113,6 +114,14 @@ func (e *BlockedError) phaseName() string {
 		return string(e.Phase)
 	}
 	return "chain admission controls"
+}
+
+func tooLargeForHosts(bodyBytes int) error {
+	return &filters.RejectError{
+		Status: http.StatusRequestEntityTooLarge,
+		Message: fmt.Sprintf("request body of %d bytes does not fit the %d-byte limit once encoded for a host",
+			bodyBytes, transport.MaxHostRequestBytes),
+	}
 }
 
 func statusForError(err error) int {

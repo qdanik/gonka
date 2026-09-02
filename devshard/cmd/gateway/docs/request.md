@@ -10,15 +10,16 @@ One `POST /v1/chat/completions`, from the socket to the settled nonce. Every ste
 | --- | --- | --- | --- |
 | 1 | read the body, capped at 10 MiB | `readBody`, `chatIngestLimit` = `filters.MaxBodyBytes` | 413 |
 | 2 | normalise the request | `filters.NormalizeRequest`, options from `filterOptions` | 400 |
-| 3 | authorise the model for this caller | `authorizeModel` | 401 / 403 |
-| 4 | is the model routable at all | `routableModel` | 503 |
-| 5 | does the chain phase admit new work | `admission`, on `snapshots.Snapshot()` | 503 |
-| 6 | cache lookup | `cacheKeyFor` → `cache.get` | — (hit returns here) |
-| 7 | take an admission slot and token budget | `limiter.AcquireForModel` | 429 |
-| 8 | race it | `race` → `engine.Run` | see below |
-| 9 | release the slot | `defer limiter.ReleaseForModel` | — |
+| 3 | will it fit a host-bound body once encoded | `transport.InferenceRequestFits` | 413 |
+| 4 | authorise the model for this caller | `authorizeModel` | 401 / 403 |
+| 5 | is the model routable at all | `routableModel` | 503 |
+| 6 | does the chain phase admit new work | `admission`, on `snapshots.Snapshot()` | 503 |
+| 7 | cache lookup | `cacheKeyFor` → `cache.get` | — (hit returns here) |
+| 8 | take an admission slot and token budget | `limiter.AcquireForModel` | 429 |
+| 9 | race it | `race` → `engine.Run` | see below |
+| 10 | release the slot | `defer limiter.ReleaseForModel` | — |
 
-Steps 3–5 run **after** normalisation because the model name is only known once the body is parsed and the per-model profile applied.
+Steps 4–6 run **after** normalisation because the model name is only known once the body is parsed and the per-model profile applied.
 
 ## Step 2 in detail: `filters.NormalizeRequest`
 
@@ -50,7 +51,7 @@ Steps 3–5 run **after** normalisation because the model name is only known onc
 
 The executor forces the first three itself (`common/completionapi.ModifyRequestBodyWithLogprobsMode`), so the gateway's copies are belt and braces on the committed payload rather than the only guard.
 
-## Step 8 in detail: the race
+## Step 9 in detail: the race
 
 `api/routes.go`, `race` → `engine.Run` (`engine/engine.go`).
 
@@ -97,10 +98,13 @@ The "always stripped" list is **derived** from the two above, not written out a 
 
 | Bound | Value | What it bounds |
 | --- | --- | --- |
-| `chatIngestLimit` | 10 MiB | one request body |
+| `chatIngestLimit` | 10 MiB | one request body as it arrives |
+| `transport.MaxHostRequestBytes` | 10 MiB | one request body as a host receives it |
 | `MaxStreamCarryBytes` | 32 MiB | one unterminated SSE event |
 | `maxBufferedResponseBytes` | 32 MiB | one reply being assembled |
 | `max_buffered_response_bytes` | 512 MiB | **every** reply being assembled, at once |
+
+The two 10 MiB bounds are not the same bound. A prompt travels base64 inside the host-bound JSON, so it costs four bytes for every three, and the catch-up diffs ride the same body. A request inside the ingest cap can therefore be past what the public proxy, the versiond router and a host accept — the shape [issue #1658](https://github.com/gonka-ai/gonka/issues/1658) reported. Step 3 refuses it before a nonce is spent. When the catch-up backlog is what would not fit, it is drained ahead of the request instead of riding it ([`user/session.go`](../../../user/session.go), `drainOversizedCatchUp`), and each drained chunk is cut by wire bytes rather than by diff count — a chunk a host refuses whole leaves its sync cursor where it was, so the next attempt rebuilds the same backlog, which is the loop [issue #1660](https://github.com/gonka-ai/gonka/issues/1660) describes. Only a body that still does not fit is refused at the send with `transport.ErrHostRequestTooLarge`.
 
 The last one exists because the request limiter does not stand in for it: with `max_concurrent_requests` unset the cap comes from network weight and admits thousands at a time. Past it, a request is refused 503; `devshard_gateway_buffered_response_bytes` is what is held right now.
 

@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -477,5 +478,34 @@ func TestALimiterRejectionNamesTheCapItHit(t *testing.T) {
 	}
 	if live.rejections.model != "qwen" {
 		t.Errorf("model = %q, want the model that was turned away", live.rejections.model)
+	}
+}
+
+// The prompt travels base64 in the host request, so a body inside the ingest cap can still be past
+// what a host accepts.
+func TestChatRefusesABodyNoHostCouldBeSent(t *testing.T) {
+	live := newHarness(t)
+	oversized := fmt.Sprintf(`{"model":"qwen","messages":[{"role":"user","content":%q}]}`,
+		strings.Repeat("x", 8<<20))
+
+	recorder := live.request(t, http.MethodPost, "/v1/chat/completions", oversized, nil)
+
+	if recorder.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status: got %d (%s), want 413", recorder.Code, recorder.Body.String())
+	}
+	if got := live.limiter.acquires.Load(); got != 0 {
+		t.Fatalf("limiter slots taken: got %d, want 0 — the refusal must precede admission", got)
+	}
+}
+
+func TestChatServesABodyThatStillFitsOnceEncoded(t *testing.T) {
+	live := newHarness(t)
+	large := fmt.Sprintf(`{"model":"qwen","messages":[{"role":"user","content":%q}]}`,
+		strings.Repeat("x", 4<<20))
+
+	recorder := live.request(t, http.MethodPost, "/v1/chat/completions", large, nil)
+
+	if recorder.Code == http.StatusRequestEntityTooLarge {
+		t.Fatalf("a body that fits once encoded was refused as too large: %s", recorder.Body.String())
 	}
 }

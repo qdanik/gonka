@@ -836,6 +836,9 @@ func (p *PreparedInference) Payload() *host.InferencePayload {
 // to session state. This split allows parallel network I/O with ordered processing.
 func (s *Session) SendOnly(ctx context.Context, p *PreparedInference, stream io.Writer, receiptHandler func()) (*host.HostResponse, error) {
 	s.drainOversizedCatchUp(ctx, p)
+	if payload := p.Payload(); payload != nil && !transport.InferenceRequestFits(len(payload.Prompt), p.catchUp) {
+		return nil, fmt.Errorf("escrow %s nonce %d: %w", s.escrowID, p.diff.Nonce, transport.ErrHostRequestTooLarge)
+	}
 	resp, err := s.clients[p.hostIdx].Send(ctx, host.HostRequest{
 		Diffs:   p.catchUp,
 		Nonce:   p.diff.Nonce,
@@ -950,6 +953,11 @@ func (s *Session) sendDiffRound(ctx context.Context, extraTxs []*types.DevshardT
 // replay state incrementally and the proxy bail out early if any chunk fails.
 const catchUpChunkSize = 200
 
+// catchUpChunkWireBytes caps what one chunk may cost on the wire, whatever its diff count. A chunk past
+// what a host accepts is refused whole, and the sync cursor it would have moved stays where it was, so
+// the next attempt builds the same backlog again.
+const catchUpChunkWireBytes = transport.MaxHostRequestBytes - 64<<10
+
 // inlineCatchUpMaxBytes caps what one inference request may carry as catch-up. Past it the backlog is
 // sent by the chunked path first, so the request that follows carries only its own diff. Well under the
 // 10 MB a proxy in front of a host will refuse. See issue #1660.
@@ -974,7 +982,7 @@ func (s *Session) drainOversizedCatchUp(ctx context.Context, p *PreparedInferenc
 	if len(backlog) > 0 && backlog[len(backlog)-1].Nonce == p.diff.Nonce {
 		backlog = backlog[:len(backlog)-1]
 	}
-	if len(backlog) < inlineCatchUpMeasureFrom || !diffsExceed(backlog, inlineCatchUpMaxBytes) {
+	if len(backlog) < inlineCatchUpMeasureFrom || !transport.DiffsExceedWireBytes(backlog, inlineCatchUpMaxBytes) {
 		return
 	}
 
@@ -990,23 +998,6 @@ func (s *Session) drainOversizedCatchUp(ctx context.Context, p *PreparedInferenc
 	s.mu.Lock()
 	p.catchUp = s.diffsForHost(p.hostIdx)
 	s.mu.Unlock()
-}
-
-// diffsExceed reports whether the diffs cost more than limit on the wire, stopping as soon as they do so
-// the walk is bounded by the limit rather than by the history. Signatures and state roots dominate, and
-// JSON only inflates them further.
-func diffsExceed(diffs []types.Diff, limit int) bool {
-	total := 0
-	for _, diff := range diffs {
-		total += len(diff.UserSig) + len(diff.PostStateRoot)
-		for _, tx := range diff.Txs {
-			total += proto.Size(tx)
-		}
-		if total > limit {
-			return true
-		}
-	}
-	return false
 }
 
 // sendCatchUp sends existing diffs to a host, admission-free: they are already signed by the group.
@@ -1050,10 +1041,8 @@ func (s *Session) sendCatchUpChunks(ctx context.Context, hostIdx int, client Hos
 			return nil
 		}
 
-		end := chunkIdx + catchUpChunkSize
-		if end > len(catchUp) {
-			end = len(catchUp)
-		}
+		end := min(chunkIdx+catchUpChunkSize, len(catchUp))
+		end = chunkIdx + transport.DiffsWithinWireBytes(catchUp[chunkIdx:end], catchUpChunkWireBytes)
 		chunk := catchUp[chunkIdx:end]
 		chunkNonce := chunk[len(chunk)-1].Nonce
 		chunkNum := chunkIdx/catchUpChunkSize + 1

@@ -46,6 +46,10 @@ The input-token cap only ever takes the second path.
 - **`Available` peeks the admit decision** without touching in-flight, the cutoff, or creating state for a participant never seen before, which is what lets routing ask about a host it has never dispatched to.
 - **`Snapshot` is taken under one lock acquisition** and returned in participant/model order, so a report cannot mix two moments.
 
+## When a host stops taking work
+
+A cut-off is a decision an operator has to be able to explain afterwards, and its gauge cannot carry it: the first cut-off lasts 5 seconds against a gauge sampled every 15 or 30. `OnResult` therefore writes one line on each edge and nothing in between, naming which of the two triggers fired — a run of transport faults, or a half-open probe that failed on its single try — the backoff depth that set the duration, and how long the cut-off will last. The volume follows the host count and the backoff, never the request rate. This is the only reason the package imports a logger.
+
 ## The capacity model
 
 | Quantity | Definition |

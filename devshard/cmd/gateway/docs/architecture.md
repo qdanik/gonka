@@ -127,12 +127,12 @@ A nonce that reaches none of the bottom row is money the escrow paid for silence
 
 ## Where the money is
 
-Four places, each with its own guard:
+Three places, each with its own guard:
 
 | Risk | Guard |
 | --- | --- |
 | a committed nonce nobody settles | the race's drain barrier: shutdown waits for every owed vote |
-| an escrow that pays for work it did not receive | [`accounting`](./accounting/) cross-checks its own counts against the chain's |
+| an escrow that pays for work it did not receive | [`accounting`](../accounting/) cross-checks its own counts against the chain's |
 | a reply held in memory until the process dies | a per-request cap, a process-wide ceiling, and folding as chunks arrive |
 
 ## What runs in the background

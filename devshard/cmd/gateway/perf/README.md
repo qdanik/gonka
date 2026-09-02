@@ -15,6 +15,10 @@ Per-host history, and the one verdict derived from it that routing honours.
 - **Ejection is capped by a floor of available hosts**, so it cannot empty a model.
 - **Every restart starts clean.** No ejections, no counts, every window at its initial value — a divergence from the legacy gateway, argued in [`docs/rules.md`](../docs/rules.md).
 
+## When a host stops taking work
+
+An ejection is a decision an operator has to explain afterwards, and its gauge cannot carry it: the gauge is sampled every 15 or 30 seconds while the first rung lasts 30, so the shortest withholdings pass between two scrapes. `RecordSample` writes one line on each edge and nothing in between, naming which trigger fired, the rung that set the duration, the run length, and the rate over its volume. A return has no event of its own, because an ejection lapses by the clock, so the state keeps the last edge and the first sample afterwards closes it. The volume follows the host count and the rungs, never the request rate.
+
 ## How the numbers are kept
 
 Two shapes, for two different questions.

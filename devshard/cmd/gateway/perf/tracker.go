@@ -88,6 +88,37 @@ func (t *Tracker) RecordSample(s Sample) {
 	if evicted || host.ejection.ejectedUntil != ejectedUntilBefore {
 		t.rebuildEjectedViewLocked(now, perf)
 	}
+	logEjectionTransition(key, host, now)
+}
+
+// logEjectionTransition reports a host that stopped or resumed taking work, and only on the change.
+func logEjectionTransition(key hostKey, host *hostState, now time.Time) {
+	withheldNow := host.ejection.ejected(now)
+	switch {
+	case withheldNow && !host.ejection.wasWithheld:
+		host.ejection.wasWithheld = true
+		rate, volume := host.perf.failureRate(now)
+		logging.Warn("host withheld from routing",
+			logkey.Host, logkey.ShortHost(key.participant), logkey.Model, key.model,
+			logkey.Reason, ejectionReason(&host.perf, rate),
+			logkey.EjectionCount, host.ejection.ejectionCount,
+			logkey.ConsecutiveFailures, host.perf.consecutiveFail,
+			logkey.FailureRate, rate, logkey.FailureVolume, volume,
+			logkey.WithheldForMS, host.ejection.ejectedUntil.Sub(now).Milliseconds())
+	case !withheldNow && host.ejection.wasWithheld:
+		host.ejection.wasWithheld = false
+		logging.Info("host back in routing",
+			logkey.Host, logkey.ShortHost(key.participant), logkey.Model, key.model,
+			logkey.EjectionCount, host.ejection.ejectionCount)
+	}
+}
+
+// ejectionReason names which of the two triggers fired: they call for different answers.
+func ejectionReason(host *hostPerf, rate float64) string {
+	if host.consecutiveFail > 0 && rate == 0 {
+		return ejectionReasonConsecutiveFailures
+	}
+	return ejectionReasonFailureRate
 }
 
 // rebuildEjectedViewLocked republishes both verdicts as one map: every live ejection is degraded, and the per-model cap decides which of them routing actually withholds.

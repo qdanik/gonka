@@ -47,7 +47,7 @@ Three layers, later wins:
 
 1. **Defaults** — `config/config.go`, `Defaults()`. The only place a default lives.
 2. **Environment** — read once at boot, in `env/` and nowhere else. `env.Load` returns *what is set* (a nil pointer is unset), so an unset variable can never overwrite a default with a zero.
-3. **Admin overrides** — 34 fields (`config.Overrides`), written through `PUT /v1/admin/settings`, persisted in the store and reloaded at boot. These take effect without a restart: the config is an immutable snapshot swapped whole, and every reader loads it per request.
+3. **Admin overrides** — 42 fields (`config.Overrides`), written through `PUT /v1/admin/settings`, persisted in the store and reloaded at boot. These take effect without a restart: the config is an immutable snapshot swapped whole, and every reader loads it per request.
 
 Parse failures are accumulated, so a boot reports **every** misconfigured variable at once rather than one per restart.
 
@@ -139,6 +139,21 @@ Always on, with no level knob — a trace that ships off by default is not there
 Follow one request by grepping its request id; follow one nonce through commit, dispatch and verdict by grepping the nonce.
 
 `attempt finished` carries the terminal **the attempt itself reported**. A goroutine sees only its own cancellation, so the coordinator reclassifies at the end of the race — an attempt that outlived the backstop becomes `hard_timeout`, a host that went silent mid-stream becomes `stalled` — while the line still reads `client_cancelled`, because that is what the attempt saw.
+
+### When a host stops taking work
+
+Three mechanisms withhold work from a host, each on its own trigger, and each is a gauge in Prometheus. A gauge is sampled every 15 or 30 seconds while the first rung of two of them lasts 30 seconds and 5 seconds, so the shortest withholdings pass entirely between two scrapes. Each therefore also writes one line on the edge, and nothing in between: the volume follows the number of hosts and their own windows, never the request rate.
+
+| Line | Trigger | Carries |
+| --- | --- | --- |
+| `host withheld from routing` (`perf/tracker.go`) | five failures in a row, or a failure rate from 15% over a volume from 20 | **Warn** — which trigger fired, the rung, the run length, the rate and its volume, and how long the withholding lasts |
+| `host back in routing` (`perf/tracker.go`) | first sample after the withholding lapsed | the rung it decayed to |
+| `host cut off after transport faults` (`limits/participant.go`) | three transport faults in a row, or one failed half-open probe | **Warn** — which of the two, the backoff depth, and how long the cut-off lasts |
+| `host back after its cut-off` (`limits/participant.go`) | the probe answered | the backoff depth it decayed to |
+| `host denied the crown` (`engine/engine.go`) | three content-free answers in a row | **Warn** — the strike count. The host keeps drawing nonces and starts a second attempt beside itself, so this is a spend, not only a quality signal |
+| `host crowned again` (`engine/engine.go`) | one answer with content | — |
+
+One more line belongs to the same family, on the money side rather than the routing one: `execution timeouts swept` (`escrow/manager.go`), written by the escrow tick only when the sweep found nonces to re-vote, carrying how many were due, applied and failed. Silence means nothing was owed.
 
 ### The request record
 

@@ -44,7 +44,7 @@ The buffered prefix matters for correctness of the visible stream: role announce
 
 An error event increments the attempt's chunk count — so the stream is *not* empty — while carrying no content, so it cannot crown (`engine/attempt.go`, `attemptState.record`; `engine/classify.go`, `chunkSignal.crownsWinner`). That combination is what distinguishes "the host said something went wrong" from "the host said nothing", and the two are charged differently.
 
-A **capability refusal** is a third case and is kept out of the error class entirely (`engine/reassembly.go`, `sseClassifier.facts`): another host can still serve the request, so it must neither count as a chunk nor end the race, while its message still reaches the performance recorder. On a refusal the engine records the host's capability limit and *grows the request's context hint*, so the next pick skips every host already known to be too small (`engine/capability.go`, `GrowContextHint`).
+A **capability refusal** is a third case and is kept out of the error class entirely (`engine/reassembly.go`, `sseClassifier.facts`): another host can still serve the request, so it must neither count as a chunk nor end the race, while its message still reaches the performance recorder. On a refusal the engine records the host's capability limit (`engine/capability.go` → `perf/tracker.go`, `RecordContextLimit`). Nothing routes on it: the count is reported so an operator knows what to fix.
 
 ### Crown denial
 
@@ -100,7 +100,7 @@ One re-armed timer carries every deadline. `nextDeadline` takes the earliest of 
 
 The tie-break order is itself the policy: a race that must stop gains nothing from spending a nonce, and a stall flag is telemetry either way.
 
-**Every select arm that reads race state drains the event queue first.** A buffered event and a fired timer are equally ready, and Go chooses among ready cases at random — so acting on a deadline that a queued event has already invalidated is a live possibility, not a theoretical one. It costs a spent nonce, a mislabelled healthy host, or a completed winner reported as cancelled. `catchUp` runs at the top of the timer and departure paths (`engine/race.go`, `raceCoordinator.catchUp`). Three sites in `engine/` are exposed to it, so the drain is a rule of the coordinator loop rather than a local fix.
+**Every select arm that reads race state drains the event queue first.** A buffered event and a fired timer can both be ready, and `select` picks at random, so an arm that reads state without draining acts on state a queued event has already invalidated. Two arms read race state: the deadline timer and the client's departure (`engine/deadline.go`, `engine/race.go`).
 
 ## Client departure and the drain
 
@@ -127,7 +127,7 @@ The exception is a 5xx that names a fault in what the gateway sent. A host repor
 | Consumer | Rule |
 |---|---|
 | Limiter verdict | Won/Lost → success; throttled and unavailable → overload; an upstream 5xx → upstream fault, which halves the window and leaves the breaker's count alone; transport-class terminals and an empty stream that never finished its nonce → transport fault; burn-empty, error stream, capability refusal, a reply past the gateway's own buffer cap, and an empty stream that did finish its nonce → model outcome, which never moves a host's window. |
-| Performance sample | One sample per attempt, unless the exemption ladder excuses it. The sample carries only participant, model and whether the host was responsive. |
+| Performance sample | One sample per attempt, unless the exemption ladder excuses it. The sample carries participant, model, whether the host was responsive, and the two timings the escalation ladder reads back as quantiles. |
 | Metric labels | Bounded label vocabularies exported by the engine and referenced — not restated — by the metrics layer. |
 
 "An empty stream is what the model produced, not what the host failed to carry, so the host's window must not contract for it" (`engine/outcome.go`, `Terminal.verdict`) — but only once the nonce is closed. A host that said nothing and left the nonce open did not produce an empty answer; it took the work and parked the reserve until the timeout vote, so it answers to the breaker as well as to crown denial (`engine/outcome.go`, `RaceOutcome.Verdict`).
@@ -137,13 +137,14 @@ The exception is a 5xx that names a fault in what the gateway sent. A host repor
 Whether an attempt contributes a performance sample at all is decided by one ordered ladder, applied in `Engine.record` and nowhere else (`engine/outcome.go`, `RaceOutcome.sampleExemption`). The legacy gateway made this decision at six divergent call sites.
 
 1. Never dispatched — the attempt exists only because of the gateway's own bookkeeping.
-2. Ended by a proof-of-compute phase transition — blame the transition, not the host.
-3. Error stream or capability refusal.
-4. State-divergent.
-5. Long response: content produced, nonce not finished, at least 280 seconds elapsed — **unless the backstop ended it**. The exemption exists to leave a host alone while it is still writing; a `hard_timeout` is the gateway declaring that it no longer is, so such an attempt contributes its sample, contracts the host's window as an overload, and goes to a timeout vote rather than being excused.
+2. Never reported — the attempt returned no terminal at all, so there is nothing to judge it on.
+3. Ended by a proof-of-compute phase transition — blame the transition, not the host.
+4. Error stream or capability refusal.
+5. State-divergent.
 6. Empty stream while the proof-of-compute bypass is active.
-7. Empty stream in a race nobody won.
-8. Cancelled by the race itself — a sample would say the host was unresponsive when it was told to stop.
+7. Empty stream while the proof-of-compute bypass is active.
+8. Empty stream in a race nobody won.
+9. Cancelled by the race itself — a sample would say the host was unresponsive when it was told to stop.
 
 Two parallel ladders use the same facts for different questions: the *verdict* ladder decides whether the AIMD window moves, and the *timeout-skip* ladder decides whether a vote is posted. The sample ladder disagrees with the verdict ladder in exactly one place. A loser the race cancelled needs no verdict rung, because no terminal maps `client_cancelled` to a verdict at all; it does need a sample rung, because a recorded sample would report the host as unresponsive when the race is what told it to stop. That is rung 8.
 
@@ -195,8 +196,7 @@ Go constants rather than configuration — these bound a request that every valu
 | Constant | Value |
 |---|---|
 | Streaming hard timeout | 20 minutes per live attempt |
-| Non-streaming no-content timeout | 20 minutes |
-| Non-streaming maximum attempt wait | 30 minutes |
+| Scheduler pick timeout | 2 minutes waiting for a host to be assigned |
 | Receipt-doubling input-token threshold | 100 000 |
 | Long-response exemption | 280 seconds |
 | Crown-denial strikes | 3 |

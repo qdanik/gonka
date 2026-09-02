@@ -275,12 +275,15 @@ func servingSessions(records devshardLookup, storageDir string, escrowBridge bri
 		if err != nil {
 			return nil, err
 		}
+		sessionTimeouts := env.LoadE2E().SessionTimeouts
 		session, machine, err := user.NewHTTPSession(user.HTTPSessionConfig{
-			PrivateKeyHex: keyHex,
-			EscrowID:      escrowID,
-			Bridge:        escrowBridge,
-			StoragePath:   storagePath,
-			RoutePrefix:   escrowRoutePrefix(record, routePrefix),
+			PrivateKeyHex:           keyHex,
+			EscrowID:                escrowID,
+			Bridge:                  escrowBridge,
+			StoragePath:             storagePath,
+			RoutePrefix:             escrowRoutePrefix(record, routePrefix),
+			RefusalTimeoutSeconds:   sessionTimeouts.RefusalTimeoutSeconds,
+			ExecutionTimeoutSeconds: sessionTimeouts.ExecutionTimeoutSeconds,
 		})
 		if err != nil {
 			return nil, err
