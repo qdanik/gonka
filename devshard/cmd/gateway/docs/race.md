@@ -141,12 +141,12 @@ Whether an attempt contributes a performance sample at all is decided by one ord
 3. Ended by a proof-of-compute phase transition — blame the transition, not the host.
 4. Error stream or capability refusal.
 5. State-divergent.
-6. Empty stream while the proof-of-compute bypass is active.
+6. Long response after content — the host produced output, its nonce is still open, and the attempt has run past the exemption window, so the delay is a slow answer rather than an unresponsive host. An attempt the twenty-minute backstop cut does not take this rung; it is judged on its own terminal.
 7. Empty stream while the proof-of-compute bypass is active.
 8. Empty stream in a race nobody won.
 9. Cancelled by the race itself — a sample would say the host was unresponsive when it was told to stop.
 
-Two parallel ladders use the same facts for different questions: the *verdict* ladder decides whether the AIMD window moves, and the *timeout-skip* ladder decides whether a vote is posted. The sample ladder disagrees with the verdict ladder in exactly one place. A loser the race cancelled needs no verdict rung, because no terminal maps `client_cancelled` to a verdict at all; it does need a sample rung, because a recorded sample would report the host as unresponsive when the race is what told it to stop. That is rung 8.
+Two parallel ladders use the same facts for different questions: the *verdict* ladder decides whether the AIMD window moves, and the *timeout-skip* ladder decides whether a vote is posted. The sample ladder disagrees with the verdict ladder in exactly one place. A loser the race cancelled needs no verdict rung, because no terminal maps `client_cancelled` to a verdict at all; it does need a sample rung, because a recorded sample would report the host as unresponsive when the race is what told it to stop. That is rung 9.
 
 ### Timeout votes
 

@@ -58,8 +58,6 @@ graph TD
     NON --> ACC
     NON --> ENG
     NON --> CHN
-    BRN --> SCH
-    BRN --> REG
     WRM --> REG
     ENV --> CFG
     CFG --> API
@@ -67,6 +65,8 @@ graph TD
 ```
 
 `filters` depends on nothing: it is pure, and its behaviour is pinned byte-for-byte against goldens. `env` is read once at startup and never again. Everything else reads an immutable `config` snapshot that is swapped whole on reconfiguration.
+
+The graph shows packages, so the composition root is not on it: `main.go` imports every box above, and the three adapters that hand one event to two readers — a race outcome to the metrics recorder and the nonce ledger, a burn to its log line, its metric and the ledger, a phase poll to a line only when something changed — live in `observers.go` rather than in a package of their own. See the root [`README.md`](../README.md), "Two readers of one fact".
 
 ## One request
 

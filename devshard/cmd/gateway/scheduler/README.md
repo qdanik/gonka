@@ -12,11 +12,11 @@ A chat request needs a nonce, and a nonce is bound to a host by `nonce % groupSi
 
 ## What it does not own
 
-It does not dispatch. It hands out an assignment and the [`engine`](../engine/) sends the request. It does not decide whether a burn is charged to the host — that is [`burns`](../burns/).
+It does not dispatch. It hands out an assignment and the [`engine`](../engine/) sends the request. It does not decide what a burn means for a host either: it names the reason and reports it, and the ledger excludes ghosts from every host rate by construction, because burning a nonce is the gateway's own decision (`accounting/findings.go`). The fan-out from one burn to its log line, its metric and its ledger entry lives in the composition root, not in a package of its own (`observers.go`, `tracedDispatches`).
 
 ## Boundaries
 
-- **Five host gates, all of which waiting can clear**: excluded, proof-of-compute-required, throttled, ejected, state-blocked. A capability refusal is counted, never routed on.
+- **Six host gates, in this order**: outside the allowlist, proof-of-compute-required, throttled, ejected, state-diverged, then excluded by this waiter. The first five need no waiter and are memoised once per drain; only the sixth depends on who is asking, which is why `match` and `servable` read the same `blocks` definition rather than two ladders. A capability refusal is counted, never routed on.
 - **Predicates are frozen for the whole drain.** Reading them live lets a host look usable to the sweep that kept a waiter and unusable to the binding that would serve it — which burns a nonce every turn, forever.
 - **The divergence block and the spent replay outlive the escrow's actor.** Reaping an idle dispatcher is idleness, not resolution.
 - **A burn decided before the session could commit has no nonce to name**, and is reported without one.

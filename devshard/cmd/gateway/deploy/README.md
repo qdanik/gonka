@@ -25,7 +25,7 @@ The gateway answers on `127.0.0.1:18080` (`GATEWAY_HOST_PORT`), bound to loopbac
 curl -s localhost:18080/v1/status
 ```
 
-which is the same route the container's healthcheck uses, so `docker compose ps` reporting `healthy` means the same thing.
+The container's healthcheck deliberately probes a *different* route, `/metrics`, which the kill switch leaves up. Pointed at `/v1/status`, it would have the orchestrator restart a gateway an operator had disabled on purpose. So `docker compose ps` reporting `healthy` means the process is up and answering, not that it is serving chat — `/v1/status` is what answers that.
 
 ## What you must fill in
 
@@ -56,4 +56,4 @@ Most limits are also runtime overrides through the admin API, so the values here
 Two settings decide behaviour before the first run:
 
 - `GATEWAY_NONCE_ACCOUNTING_ENABLED` ships as `false` and the built-in default is also off. The old gateway had its ledger **on**, so an operator porting a config gets no counters, no findings and no `accounting.db` — without an error. Left off, the gateway runs without counters or findings.
-- `GATEWAY_POC_MODE=relaxed` serves through the chain phase that otherwise blocks new inferences. It is the right setting for a gateway that must keep answering across an epoch boundary, and and the wrong one where the chain's own admission must hold.
+- `GATEWAY_POC_MODE=relaxed` serves through the chain phase that otherwise blocks new inferences. It is the right setting for a gateway that must keep answering across an epoch boundary, and the wrong one where the chain's own admission must hold.

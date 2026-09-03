@@ -23,18 +23,21 @@ An escrow is funds on chain plus a group of hosts. This package creates one, kee
 
 `Start` runs one tick immediately and then every `escrowTickInterval` (15 s). `Stop` cancels the context the tick runs under, so a tick already in flight is interrupted, and blocks until it has exited — it is a barrier for every caller. Both are idempotent: a second call is a no-op rather than a second loop.
 
-Four steps run whatever the `Rotation.Enabled` toggle says, because each of them is about an escrow that already exists rather than about creating one:
+Five steps run whatever the `Rotation.Enabled` toggle says, because each of them is about an escrow that already exists rather than about creating one:
 
 | Step | Why it ignores the toggle |
 | --- | --- |
 | `reconcile` | crash recovery must not depend on a runtime toggle |
 | `settlePending` | a parked escrow's row is the only record of which key can settle it, so nothing else will ever pick it up |
 | `checkMissing` | an escrow the chain no longer holds must stop taking traffic |
+| `sweepTimeouts` | a nonce the chain will still settle is owed a vote whether or not rotation is on |
 | `checkDepletion` | an exhausted escrow must stop taking traffic; only creating its replacement is rotation's business, which is why `rotationModels` returns an empty set when rotation is off and no caller downstream has to re-read the toggle |
+
+`sweepTimeouts` is the only one of the five that does not run *on* the tick: a vote round can outlast 15 s, so it runs in its own goroutine, a second tick starts nothing while the first is still voting, and `Stop` waits for it as well as for the tick.
 
 The chain snapshot is pulled from the observer once per tick rather than subscribed to: at this cadence a poll is equivalent and it avoids callback races. The devshard rows are likewise loaded once and passed down; the steps below filter that one slice rather than reloading it.
 
-Only after those four does the bridge run, and only when rotation is enabled and the snapshot carries chain data (`EpochIndex` and `BlockHeight` both non-zero — otherwise it is a cold start). Within `PrePoCBlocks` of the epoch switch `prepareBridge` runs and wins even when PoC is also inactive; otherwise `finishBridge` runs while requests are not blocked.
+Only after those five does the bridge run, and only when rotation is enabled and the snapshot carries chain data (`EpochIndex` and `BlockHeight` both non-zero — otherwise it is a cold start). Within `PrePoCBlocks` of the epoch switch `prepareBridge` runs and wins even when PoC is also inactive; otherwise `finishBridge` runs while requests are not blocked.
 
 ## Creating an escrow
 
