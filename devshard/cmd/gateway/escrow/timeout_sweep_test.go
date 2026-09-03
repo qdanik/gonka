@@ -41,7 +41,7 @@ func managerWithSweeper(t *testing.T, sweeper TimeoutSweeper, cfg *config.Config
 	t.Helper()
 	deps := testManagerDeps(t, newFakeStore(), &fakeTxClient{}, &fakeSnapshotSource{}, cfg)
 	deps.Timeouts = sweeper
-	return NewManager(deps)
+	return mustManager(t, deps)
 }
 
 func TestSweepPassesTheConfiguredBudgetAndGrace(t *testing.T) {

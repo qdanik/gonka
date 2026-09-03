@@ -25,7 +25,22 @@ type Deps struct {
 	RoutePrefix string
 }
 
-func NewManager(d Deps) *Manager {
+// NewManager refuses a dependency set it cannot run a tick with, rather than panicking on the first one.
+func NewManager(d Deps) (*Manager, error) {
+	switch {
+	case d.Config == nil:
+		return nil, errors.New("escrow: Config is required")
+	case d.Tx == nil:
+		return nil, errors.New("escrow: Tx is required")
+	case d.Store == nil:
+		return nil, errors.New("escrow: Store is required")
+	case d.Snapshots == nil:
+		return nil, errors.New("escrow: Snapshots is required")
+	case d.Signer == nil:
+		return nil, errors.New("escrow: Signer is required")
+	case d.Now == nil:
+		return nil, errors.New("escrow: Now is required")
+	}
 	return &Manager{
 		tx:               d.Tx,
 		store:            d.Store,
@@ -38,7 +53,7 @@ func NewManager(d Deps) *Manager {
 		timeoutSweeper:   d.Timeouts,
 		sweepRecorder:    d.Sweeps,
 		routePrefix:      d.RoutePrefix,
-	}
+	}, nil
 }
 
 // Start is idempotent: a call while already running is a no-op.

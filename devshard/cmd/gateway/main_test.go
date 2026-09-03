@@ -791,7 +791,7 @@ func TestPublishingAnEscrowGivesItWeightAndMakesItPickable(t *testing.T) {
 		t.Fatalf("NewPhaseObserver(): %v", err)
 	}
 
-	escrows, router, _ := newRouting(routingDeps{
+	escrows, router, _, routingErr := newRouting(routingDeps{
 		Sessions: func(context.Context, string) (registry.EscrowSession, error) {
 			return weightlessSession{participants: participants}, nil
 		},
@@ -803,6 +803,9 @@ func TestPublishingAnEscrowGivesItWeightAndMakesItPickable(t *testing.T) {
 		Depletion:    &depletionNotice{},
 		Now:          time.Now,
 	})
+	if routingErr != nil {
+		t.Fatalf("newRouting() = %v, want a wired router", routingErr)
+	}
 	t.Cleanup(func() { escrows.Close() })
 	t.Cleanup(router.Stop)
 
@@ -833,7 +836,7 @@ func routingFor(t *testing.T, capacity *limits.Capacity, participants []string) 
 	if err != nil {
 		t.Fatalf("NewPhaseObserver(): %v", err)
 	}
-	escrows, router, _ := newRouting(routingDeps{
+	escrows, router, _, routingErr := newRouting(routingDeps{
 		Sessions: func(context.Context, string) (registry.EscrowSession, error) {
 			return weightlessSession{participants: participants}, nil
 		},
@@ -845,6 +848,9 @@ func routingFor(t *testing.T, capacity *limits.Capacity, participants []string) 
 		Depletion:    &depletionNotice{},
 		Now:          time.Now,
 	})
+	if routingErr != nil {
+		t.Fatalf("newRouting() = %v, want a wired router", routingErr)
+	}
 	t.Cleanup(func() { escrows.Close() })
 	t.Cleanup(router.Stop)
 	if err := escrows.Add(context.Background(), "escrow-1", "model-a"); err != nil {

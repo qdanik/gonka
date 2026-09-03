@@ -204,7 +204,7 @@ func newSchedulerHarness(t *testing.T, cfg schedulerConfig) *schedulerHarness {
 	if health == nil {
 		health = test.perf
 	}
-	test.scheduler = NewScheduler(Deps{
+	scheduler, err := NewScheduler(Deps{
 		Escrows:      escrows,
 		Capacity:     weights,
 		Limiter:      test.limiter,
@@ -215,6 +215,10 @@ func newSchedulerHarness(t *testing.T, cfg schedulerConfig) *schedulerHarness {
 		Now:          test.clock.Now,
 		SubmitBuffer: cfg.submitBuffer,
 	})
+	if err != nil {
+		t.Fatalf("NewScheduler() = %v, want a wired scheduler", err)
+	}
+	test.scheduler = scheduler
 	test.scheduler.newTimer = test.clock.newTimer
 	t.Cleanup(test.scheduler.Stop)
 	return test

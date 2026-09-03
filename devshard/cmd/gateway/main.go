@@ -172,7 +172,7 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 
 	devshardWork := make(chan struct{}, 1)
 	depletion := &depletionNotice{}
-	escrows, router, prober := newRouting(routingDeps{
+	escrows, router, prober, err := newRouting(routingDeps{
 		Sessions:     sources.Serving,
 		ReadOnly:     sources.ReadOnly,
 		Capacity:     capacity,
@@ -185,8 +185,11 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 		Ledger:       recorder,
 		Now:          clock,
 	})
+	if err != nil {
+		return nil, err
+	}
 	raceRecorder := metrics.NewRaceRecorder(telemetry)
-	manager := escrow.NewManager(escrow.Deps{
+	manager, err := escrow.NewManager(escrow.Deps{
 		Tx:          txClient,
 		Store:       devshardWrites{Store: gatewayStore, changed: func() { notify(devshardWork) }},
 		Snapshots:   observer,
@@ -198,6 +201,9 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 		Now:         clock,
 		RoutePrefix: routePrefix,
 	})
+	if err != nil {
+		return nil, err
+	}
 	depletion.manager = manager
 
 	ledger, err := gatewayStore.NewLedger(store.Retention{
@@ -218,7 +224,7 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 	raceObserver := nonceAccountedRaces{recorder: raceRecorder, ledger: recorder}
 	prober.Settle(sessions.Poster, raceObserver)
 	e2e := env.LoadE2E()
-	races := engine.NewEngine(engine.Deps{
+	races, err := engine.NewEngine(engine.Deps{
 		Picker:     router,
 		Targets:    sessions,
 		Windows:    participants,
@@ -233,6 +239,9 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 		Now:        clock,
 		E2E:        engine.E2EOverrides{HardTimeout: e2e.StreamingHardTimeout},
 	})
+	if err != nil {
+		return nil, err
+	}
 	// One wrapper for both readers, so the gauge reports the scale admission actually applies.
 	modelCapacities := modelCapacity{capacity: capacity, snapshots: observer, config: configHolder}
 	telemetry.Register(recorder.Collectors()...)
@@ -327,7 +336,7 @@ type routingDeps struct {
 }
 
 // newRouting joins the escrow set to the picker through the capacity model; an unjoined escrow serves nothing.
-func newRouting(deps routingDeps) (*registry.Registry, *scheduler.Scheduler, *warmup.Prober) {
+func newRouting(deps routingDeps) (*registry.Registry, *scheduler.Scheduler, *warmup.Prober, error) {
 	// The warmup needs the registry it observes, so it is handed the registry once that exists.
 	registryDeps := registry.Deps{
 		ServingSessions:  deps.Sessions,
@@ -343,7 +352,7 @@ func newRouting(deps routingDeps) (*registry.Registry, *scheduler.Scheduler, *wa
 	}
 	escrows := registry.New(registryDeps)
 	prober.Serve(escrows)
-	router := scheduler.NewScheduler(scheduler.Deps{
+	router, err := scheduler.NewScheduler(scheduler.Deps{
 		Escrows:           escrows,
 		Capacity:          deps.Capacity,
 		Limiter:           deps.Participants,
@@ -354,7 +363,10 @@ func newRouting(deps routingDeps) (*registry.Registry, *scheduler.Scheduler, *wa
 		Now:               deps.Now,
 		OnEscrowExhausted: escrows.Exhausted,
 	})
-	return escrows, router, prober
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	return escrows, router, prober, nil
 }
 
 type environmentSigner struct{}

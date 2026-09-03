@@ -57,7 +57,7 @@ func TestTickReconcileRunsEvenWhenRotationDisabled(t *testing.T) {
 	testStore.calls = log
 	cfg := config.Defaults()
 	cfg.Rotation.Enabled = false
-	m := NewManager(testManagerDeps(t, testStore, &fakeTxClient{}, &fakeSnapshotSource{}, &cfg))
+	m := mustManager(t, testManagerDeps(t, testStore, &fakeTxClient{}, &fakeSnapshotSource{}, &cfg))
 
 	if err := m.tick(context.Background()); err != nil {
 		t.Fatalf("tick(): %v", err)
@@ -88,7 +88,7 @@ func TestTickColdStartReturnsAfterReconcile(t *testing.T) {
 			testStore.calls = log
 			cfg := config.Defaults()
 			cfg.Rotation.Enabled = true
-			m := NewManager(testManagerDeps(t, testStore, &fakeTxClient{createEscrowFn: failOnCreate(t)}, &fakeSnapshotSource{snapshot: tt.snapshot}, &cfg))
+			m := mustManager(t, testManagerDeps(t, testStore, &fakeTxClient{createEscrowFn: failOnCreate(t)}, &fakeSnapshotSource{snapshot: tt.snapshot}, &cfg))
 
 			if err := m.tick(context.Background()); err != nil {
 				t.Fatalf("tick(): %v", err)
@@ -105,7 +105,7 @@ func TestTickInvalidModelsJSONSurfacesErrorAlongsideReconcile(t *testing.T) {
 	cfg := config.Defaults()
 	cfg.Rotation.Enabled = true
 	cfg.Rotation.ModelsJSON = "not valid json"
-	m := NewManager(testManagerDeps(t, testStore, &fakeTxClient{createEscrowFn: failOnCreate(t)}, &fakeSnapshotSource{}, &cfg))
+	m := mustManager(t, testManagerDeps(t, testStore, &fakeTxClient{createEscrowFn: failOnCreate(t)}, &fakeSnapshotSource{}, &cfg))
 
 	if err := m.tick(context.Background()); err == nil {
 		t.Fatal("tick() = nil, want the bad rotation config surfaced")
@@ -118,7 +118,7 @@ func TestTickListDevshardsFailureSurfacesErrorAlongsideReconcile(t *testing.T) {
 	cfg := config.Defaults()
 	cfg.Rotation.Enabled = true
 	snapshot := chain.PhaseSnapshot{EpochIndex: 5, BlockHeight: 100}
-	m := NewManager(testManagerDeps(t, testStore, &fakeTxClient{createEscrowFn: failOnCreate(t)}, &fakeSnapshotSource{snapshot: snapshot}, &cfg))
+	m := mustManager(t, testManagerDeps(t, testStore, &fakeTxClient{createEscrowFn: failOnCreate(t)}, &fakeSnapshotSource{snapshot: snapshot}, &cfg))
 
 	if err := m.tick(context.Background()); err == nil {
 		t.Fatal("tick() = nil, want the ListDevshards failure surfaced")
@@ -136,7 +136,7 @@ func TestTickPrePoCWindowRunsPrepareBridgeEvenWhenPoCInactive(t *testing.T) {
 		RequestsBlocked:    false, // pre-PoC must win even though PoC is not active
 		FullWeightsByModel: map[string]map[string]float64{"model-a": {"p": 1}},
 	}
-	m := NewManager(testManagerDeps(t, testStore, txClient, &fakeSnapshotSource{snapshot: snapshot}, &cfg))
+	m := mustManager(t, testManagerDeps(t, testStore, txClient, &fakeSnapshotSource{snapshot: snapshot}, &cfg))
 
 	if err := m.tick(context.Background()); err != nil {
 		t.Fatalf("tick(): %v", err)
@@ -175,7 +175,7 @@ func TestTickPoCOverRunsFinishBridge(t *testing.T) {
 		RequestsBlocked:    false, // PoC over
 		FullWeightsByModel: map[string]map[string]float64{"model-a": {"p": 1}},
 	}
-	m := NewManager(testManagerDeps(t, testStore, txClient, &fakeSnapshotSource{snapshot: snapshot}, &cfg))
+	m := mustManager(t, testManagerDeps(t, testStore, txClient, &fakeSnapshotSource{snapshot: snapshot}, &cfg))
 
 	if err := m.tick(context.Background()); err != nil {
 		t.Fatalf("tick(): %v", err)
@@ -208,7 +208,7 @@ func TestTickCheckDepletionRunsRegardlessOfBridgeBranch(t *testing.T) {
 		RequestsBlocked:    true, // PoC active and outside the window: neither bridge branch runs
 		FullWeightsByModel: map[string]map[string]float64{"model-a": {"p": 1}},
 	}
-	m := NewManager(testManagerDeps(t, testStore, txClient, &fakeSnapshotSource{snapshot: snapshot}, &cfg))
+	m := mustManager(t, testManagerDeps(t, testStore, txClient, &fakeSnapshotSource{snapshot: snapshot}, &cfg))
 	m.OnBalanceExhausted("1", "test")
 
 	if err := m.tick(context.Background()); err != nil {
@@ -224,7 +224,7 @@ func TestStartStopIdempotent(t *testing.T) {
 	defer leakcheck.VerifyNone(t)
 
 	cfg := config.Defaults()
-	m := NewManager(testManagerDeps(t, newFakeStore(), &fakeTxClient{}, &fakeSnapshotSource{}, &cfg))
+	m := mustManager(t, testManagerDeps(t, newFakeStore(), &fakeTxClient{}, &fakeSnapshotSource{}, &cfg))
 
 	ctx := context.Background()
 	m.Start(ctx)
@@ -240,7 +240,7 @@ func TestStopBlocksUntilInFlightTickExits(t *testing.T) {
 	release := make(chan struct{})
 	cfg := config.Defaults()
 	cfg.Rotation.Enabled = true // reach the snapshot fetch, where this test blocks the tick
-	m := NewManager(testManagerDeps(t, newFakeStore(), &fakeTxClient{}, &blockingSnapshotSource{started: started, release: release}, &cfg))
+	m := mustManager(t, testManagerDeps(t, newFakeStore(), &fakeTxClient{}, &blockingSnapshotSource{started: started, release: release}, &cfg))
 
 	m.Start(context.Background())
 	<-started // the immediate first tick is now blocked inside Snapshot()
@@ -273,7 +273,7 @@ func TestContextCancelAloneStopsTickGoroutine(t *testing.T) {
 	defer leakcheck.VerifyNone(t)
 
 	cfg := config.Defaults()
-	m := NewManager(testManagerDeps(t, newFakeStore(), &fakeTxClient{}, &fakeSnapshotSource{}, &cfg))
+	m := mustManager(t, testManagerDeps(t, newFakeStore(), &fakeTxClient{}, &fakeSnapshotSource{}, &cfg))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	m.Start(ctx)
@@ -291,7 +291,7 @@ func TestStartStopConcurrentCallsAreRaceFree(t *testing.T) {
 	defer leakcheck.VerifyNone(t)
 
 	cfg := config.Defaults()
-	m := NewManager(testManagerDeps(t, newFakeStore(), &fakeTxClient{}, &fakeSnapshotSource{}, &cfg))
+	m := mustManager(t, testManagerDeps(t, newFakeStore(), &fakeTxClient{}, &fakeSnapshotSource{}, &cfg))
 
 	var wg sync.WaitGroup
 	for range 10 {
@@ -312,7 +312,7 @@ func TestTickSettlesParkedEscrowWhileRotationDisabled(t *testing.T) {
 	cfg.Rotation.Enabled = false
 	cfg.Rotation.SettlementEnabled = true
 
-	m := NewManager(testManagerDeps(t, testStore, settlingTxClient(), &fakeSnapshotSource{}, &cfg))
+	m := mustManager(t, testManagerDeps(t, testStore, settlingTxClient(), &fakeSnapshotSource{}, &cfg))
 
 	if err := m.tick(context.Background()); err != nil {
 		t.Fatalf("tick(): %v", err)
@@ -331,7 +331,7 @@ func TestTickRetiresDepletedEscrowWhileRotationDisabled(t *testing.T) {
 	cfg := config.Defaults()
 	cfg.Rotation.Enabled = false
 	cfg.Rotation.ModelsJSON = `[{"model_id":"model-a","target_count":1,"amount":1000,"private_key_env":"MODEL_A_KEY"}]`
-	m := NewManager(testManagerDeps(t, testStore, &fakeTxClient{createEscrowFn: failOnCreate(t)}, &fakeSnapshotSource{}, &cfg))
+	m := mustManager(t, testManagerDeps(t, testStore, &fakeTxClient{createEscrowFn: failOnCreate(t)}, &fakeSnapshotSource{}, &cfg))
 	m.OnBalanceExhausted("1", "test")
 
 	if err := m.tick(context.Background()); err != nil {
@@ -350,7 +350,7 @@ func TestManagerStopIsABarrierForConcurrentCallers(t *testing.T) {
 	blocking := &blockingSnapshotSource{started: make(chan struct{}), release: make(chan struct{})}
 	cfg := config.Defaults()
 	cfg.Rotation.Enabled = true
-	m := NewManager(testManagerDeps(t, testStore, &fakeTxClient{createEscrowFn: failOnCreate(t)}, blocking, &cfg))
+	m := mustManager(t, testManagerDeps(t, testStore, &fakeTxClient{createEscrowFn: failOnCreate(t)}, blocking, &cfg))
 
 	m.Start(context.Background())
 	<-blocking.started // a tick is inside Snapshot and cannot finish until released
@@ -375,4 +375,14 @@ func TestManagerStopIsABarrierForConcurrentCallers(t *testing.T) {
 	if len(returned) != 2 {
 		t.Fatalf("%d of 2 Stop calls returned", len(returned))
 	}
+}
+
+// mustManager builds a manager the way the composition root does, failing the test rather than the tick.
+func mustManager(t *testing.T, deps Deps) *Manager {
+	t.Helper()
+	manager, err := NewManager(deps)
+	if err != nil {
+		t.Fatalf("NewManager() = %v, want a wired manager", err)
+	}
+	return manager
 }

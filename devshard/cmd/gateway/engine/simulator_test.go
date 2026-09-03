@@ -342,7 +342,7 @@ func newSimulatorInPhase(
 		model:     model,
 		pinned:    map[string]bool{},
 	}
-	sim.engine = NewEngine(Deps{
+	engine, err := NewEngine(Deps{
 		Picker:     sim.picker,
 		Targets:    sim.target,
 		Windows:    sim.windows,
@@ -359,6 +359,10 @@ func newSimulatorInPhase(
 		Now:   sim.clock.Now,
 		Timer: func() raceTimer { return sim.clock },
 	})
+	if err != nil {
+		t.Fatalf("NewEngine() = %v, want a running engine", err)
+	}
+	sim.engine = engine
 	t.Cleanup(sim.engine.Stop)
 	return sim
 }
@@ -1197,12 +1201,18 @@ func (p *panickingPicker) HostServed(string, string, time.Time) {}
 // than through the simulator because the simulator's cleanup is itself a Stop, which would turn a
 // failing assertion into a hung suite.
 func TestPanickingRaceReleasesTheStopBarrierAndRepanics(t *testing.T) {
-	races := NewEngine(Deps{
+	races, err := NewEngine(Deps{
 		Picker:    &panickingPicker{},
+		Targets:   &simTargets{scriptedTarget: &scriptedTarget{scripts: map[uint64]*hostScript{}, labels: map[int]string{}}},
+		Windows:   &simWindows{},
+		Perf:      &simTracker{stubPerf: &stubPerf{ejected: map[string]bool{}, degraded: map[string]bool{}}},
 		Config:    config.NewHolder(engineSettings(settledPolicy(), config.Modes{})),
 		Snapshots: newSimSnapshots(chain.PhaseSnapshot{}),
 		Now:       func() time.Time { return testEpoch },
 	})
+	if err != nil {
+		t.Fatalf("NewEngine() = %v, want a running engine", err)
+	}
 
 	recovered := make(chan any, 1)
 	go func() {

@@ -90,7 +90,7 @@ func TestPushedMembershipIsWhatMakesTheGatewayRouteAtAll(t *testing.T) {
 	}
 
 	settings := config.Defaults()
-	router := scheduler.NewScheduler(scheduler.Deps{
+	router, wiringErr := scheduler.NewScheduler(scheduler.Deps{
 		Escrows:   escrows,
 		Capacity:  capacity,
 		Limiter:   openLimiter{},
@@ -98,6 +98,9 @@ func TestPushedMembershipIsWhatMakesTheGatewayRouteAtAll(t *testing.T) {
 		Snapshots: fixedSnapshots{},
 		Config:    config.NewHolder(&settings),
 	})
+	if wiringErr != nil {
+		t.Fatalf("NewScheduler() = %v, want a wired router", wiringErr)
+	}
 	t.Cleanup(router.Stop)
 
 	assignment, err := router.Pick(context.Background(), scheduler.RequestProfile{
@@ -138,7 +141,7 @@ func TestWithoutTheMembershipPushEveryEscrowScoresUnusable(t *testing.T) {
 	}
 
 	settings := config.Defaults()
-	router := scheduler.NewScheduler(scheduler.Deps{
+	router, wiringErr := scheduler.NewScheduler(scheduler.Deps{
 		Escrows:   escrows,
 		Capacity:  capacity,
 		Limiter:   openLimiter{},
@@ -146,6 +149,9 @@ func TestWithoutTheMembershipPushEveryEscrowScoresUnusable(t *testing.T) {
 		Snapshots: fixedSnapshots{},
 		Config:    config.NewHolder(&settings),
 	})
+	if wiringErr != nil {
+		t.Fatalf("NewScheduler() = %v, want a wired router", wiringErr)
+	}
 	t.Cleanup(router.Stop)
 
 	_, err := router.Pick(context.Background(), scheduler.RequestProfile{Model: wiredModel})

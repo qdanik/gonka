@@ -104,12 +104,27 @@ type Engine struct {
 	tracked sync.WaitGroup
 }
 
-func NewEngine(deps Deps) *Engine {
+// NewEngine refuses a dependency set it cannot race with, rather than panicking on the first request.
+func NewEngine(deps Deps) (*Engine, error) {
+	switch {
+	case deps.Config == nil:
+		return nil, errors.New("engine: Config is required")
+	case deps.Picker == nil:
+		return nil, errors.New("engine: Picker is required")
+	case deps.Targets == nil:
+		return nil, errors.New("engine: Targets is required")
+	case deps.Windows == nil:
+		return nil, errors.New("engine: Windows is required")
+	case deps.Perf == nil:
+		return nil, errors.New("engine: Perf is required")
+	case deps.Snapshots == nil:
+		return nil, errors.New("engine: Snapshots is required")
+	}
 	return &Engine{
 		deps:  deps,
 		carry: newCarryBudget(deps.Config.Load().Stream),
 		crown: newCrownStrikes(),
-	}
+	}, nil
 }
 
 // Run races one request to a single winner and streams that winner's bytes to client. See README, "From pick to report".

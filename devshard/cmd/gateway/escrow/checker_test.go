@@ -25,7 +25,7 @@ func TestOnEscrowMissingDeactivatesTheEscrowOnTheNextTick(t *testing.T) {
 	}
 	cfg := config.Defaults()
 	cfg.Rotation.Enabled = false
-	m := NewManager(testManagerDeps(t, testStore, txClient, &fakeSnapshotSource{}, &cfg))
+	m := mustManager(t, testManagerDeps(t, testStore, txClient, &fakeSnapshotSource{}, &cfg))
 
 	m.OnEscrowMissing("1")
 	if hasCall(log.snapshot(), "GetEscrow") {
@@ -54,7 +54,7 @@ func TestOnEscrowMissingChecksEachMarkOnce(t *testing.T) {
 	}
 	cfg := config.Defaults()
 	cfg.Rotation.Enabled = false
-	m := NewManager(testManagerDeps(t, testStore, txClient, &fakeSnapshotSource{}, &cfg))
+	m := mustManager(t, testManagerDeps(t, testStore, txClient, &fakeSnapshotSource{}, &cfg))
 
 	m.OnEscrowMissing("1")
 	for range 2 {

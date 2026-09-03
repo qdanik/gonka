@@ -3,6 +3,7 @@ package scheduler
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -54,7 +55,22 @@ type Scheduler struct {
 	replays      replayCredit
 }
 
-func NewScheduler(deps Deps) *Scheduler {
+// NewScheduler refuses a dependency set it cannot route with, rather than panicking on the first request.
+func NewScheduler(deps Deps) (*Scheduler, error) {
+	switch {
+	case deps.Config == nil:
+		return nil, errors.New("scheduler: Config is required")
+	case deps.Escrows == nil:
+		return nil, errors.New("scheduler: Escrows is required")
+	case deps.Capacity == nil:
+		return nil, errors.New("scheduler: Capacity is required")
+	case deps.Limiter == nil:
+		return nil, errors.New("scheduler: Limiter is required")
+	case deps.Perf == nil:
+		return nil, errors.New("scheduler: Perf is required")
+	case deps.Snapshots == nil:
+		return nil, errors.New("scheduler: Snapshots is required")
+	}
 	if deps.Now == nil {
 		deps.Now = time.Now
 	}
@@ -71,7 +87,7 @@ func NewScheduler(deps Deps) *Scheduler {
 		onEscrowExhausted: deps.OnEscrowExhausted,
 		dispatchers:       map[string]*dispatcher{},
 		blockedHosts:      map[string]map[string]bool{},
-	}
+	}, nil
 }
 
 // Pick serves one request or one escalation attempt; an escalation reuses the pinned escrow.
