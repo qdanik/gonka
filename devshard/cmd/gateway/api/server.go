@@ -118,45 +118,49 @@ type LimitRejections interface {
 
 // Deps is everything the HTTP boundary reads or calls. See README.md, "What the server is given".
 type Deps struct {
-	Config     *config.Holder
-	Escrows    EscrowRegistry
-	Inference  InferenceEngine
-	Limiter    GatewayLimiter
-	Capacity   CapacityReader
-	Snapshots  SnapshotSource
-	Control    ControlStore
-	Accounting RequestLedger
-	Operations Operations
-	Suspicious SuspiciousHosts
-	Telemetry  Telemetry
-	Buffers    *BufferBudget
-	Rejections LimitRejections
-	StorageDir string
-	Version    string
-	Now        func() time.Time
-	RequestIDs func() string
+	Config      *config.Holder
+	Escrows     EscrowRegistry
+	Inference   InferenceEngine
+	Limiter     GatewayLimiter
+	Capacity    CapacityReader
+	Snapshots   SnapshotSource
+	Control     ControlStore
+	Accounting  RequestLedger
+	Operations  Operations
+	Suspicious  SuspiciousHosts
+	HostStates  HostStates
+	HostWindows HostWindows
+	Telemetry   Telemetry
+	Buffers     *BufferBudget
+	Rejections  LimitRejections
+	StorageDir  string
+	Version     string
+	Now         func() time.Time
+	RequestIDs  func() string
 }
 
 type Server struct {
-	config     *config.Holder
-	escrows    EscrowRegistry
-	inference  InferenceEngine
-	limiter    GatewayLimiter
-	capacity   CapacityReader
-	snapshots  SnapshotSource
-	control    ControlStore
-	accounting RequestLedger
-	operations Operations
-	suspicious SuspiciousHosts
-	telemetry  Telemetry
-	rejections LimitRejections
-	storageDir string
-	version    string
-	now        func() time.Time
-	requestIDs func() string
-	buffers    *BufferBudget
-	cache      *responseCache
-	capture    *requestCapture
+	config      *config.Holder
+	escrows     EscrowRegistry
+	inference   InferenceEngine
+	limiter     GatewayLimiter
+	capacity    CapacityReader
+	snapshots   SnapshotSource
+	control     ControlStore
+	accounting  RequestLedger
+	operations  Operations
+	suspicious  SuspiciousHosts
+	hostStates  HostStates
+	hostWindows HostWindows
+	telemetry   Telemetry
+	rejections  LimitRejections
+	storageDir  string
+	version     string
+	now         func() time.Time
+	requestIDs  func() string
+	buffers     *BufferBudget
+	cache       *responseCache
+	capture     *requestCapture
 
 	gates   atomic.Pointer[keyGates]
 	verify  func(authorization string) credentials
@@ -193,23 +197,25 @@ func New(deps Deps) (*Server, error) {
 		return nil, errors.New("api: Now is required")
 	}
 	server := &Server{
-		buffers:    deps.Buffers,
-		config:     deps.Config,
-		escrows:    deps.Escrows,
-		inference:  deps.Inference,
-		limiter:    deps.Limiter,
-		capacity:   deps.Capacity,
-		snapshots:  deps.Snapshots,
-		control:    deps.Control,
-		accounting: deps.Accounting,
-		operations: deps.Operations,
-		suspicious: deps.Suspicious,
-		telemetry:  deps.Telemetry,
-		rejections: deps.Rejections,
-		storageDir: deps.StorageDir,
-		version:    deps.Version,
-		now:        deps.Now,
-		requestIDs: deps.RequestIDs,
+		buffers:     deps.Buffers,
+		config:      deps.Config,
+		escrows:     deps.Escrows,
+		inference:   deps.Inference,
+		limiter:     deps.Limiter,
+		capacity:    deps.Capacity,
+		snapshots:   deps.Snapshots,
+		control:     deps.Control,
+		accounting:  deps.Accounting,
+		operations:  deps.Operations,
+		suspicious:  deps.Suspicious,
+		hostStates:  deps.HostStates,
+		hostWindows: deps.HostWindows,
+		telemetry:   deps.Telemetry,
+		rejections:  deps.Rejections,
+		storageDir:  deps.StorageDir,
+		version:     deps.Version,
+		now:         deps.Now,
+		requestIDs:  deps.RequestIDs,
 	}
 	if server.requestIDs == nil {
 		server.requestIDs = randomRequestID

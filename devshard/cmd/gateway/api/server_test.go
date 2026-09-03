@@ -18,6 +18,7 @@ import (
 	"devshard/cmd/gateway/engine"
 	"devshard/cmd/gateway/escrow"
 	"devshard/cmd/gateway/limits"
+	"devshard/cmd/gateway/perf"
 	"devshard/cmd/gateway/registry"
 	"devshard/cmd/gateway/scheduler"
 	"devshard/cmd/gateway/store"
@@ -305,6 +306,7 @@ type harness struct {
 	suspicious  *fakeSuspicious
 	telemetry   *fakeTelemetry
 	rejections  *spyRejections
+	hosts       *fakeHosts
 	comparisons atomic.Int64
 	storageDir  string
 }
@@ -335,28 +337,31 @@ func newHarness(t *testing.T, tune ...func(*config.Config)) *harness {
 		accounting: &fakeAccounting{rows: map[string]store.RequestRecord{}},
 		operations: &fakeOperations{},
 		suspicious: &fakeSuspicious{},
+		hosts:      &fakeHosts{},
 		telemetry:  &fakeTelemetry{},
 		storageDir: storageDir,
 	}
 	live.escrows.escrows = []scheduler.Escrow{{ID: "7", Model: "qwen", ActiveUsers: 1}}
 
 	server, err := New(Deps{
-		Config:     live.config,
-		Escrows:    live.escrows,
-		Inference:  live.inference,
-		Limiter:    live.limiter,
-		Capacity:   live.capacity,
-		Snapshots:  live.snapshots,
-		Control:    live.control,
-		Accounting: live.accounting,
-		Operations: live.operations,
-		Suspicious: live.suspicious,
-		Telemetry:  live.telemetry,
-		Rejections: live.rejections,
-		StorageDir: storageDir,
-		Version:    "test",
-		Now:        func() time.Time { return harnessClock },
-		RequestIDs: func() string { return "request-1" },
+		Config:      live.config,
+		Escrows:     live.escrows,
+		Inference:   live.inference,
+		Limiter:     live.limiter,
+		Capacity:    live.capacity,
+		Snapshots:   live.snapshots,
+		Control:     live.control,
+		Accounting:  live.accounting,
+		Operations:  live.operations,
+		Suspicious:  live.suspicious,
+		HostStates:  live.hosts,
+		HostWindows: fakeHostWindows{hosts: live.hosts},
+		Telemetry:   live.telemetry,
+		Rejections:  live.rejections,
+		StorageDir:  storageDir,
+		Version:     "test",
+		Now:         func() time.Time { return harnessClock },
+		RequestIDs:  func() string { return "request-1" },
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -595,3 +600,22 @@ func (s *spyRejections) reasons() []string {
 	defer s.mu.Unlock()
 	return append([]string(nil), s.seen...)
 }
+
+// fakeHosts stands in for the performance tracker and the participant limiter at once.
+type fakeHosts struct {
+	states   []perf.HostState
+	windows  []limits.HostWindow
+	degraded map[string]bool
+}
+
+func (f *fakeHosts) Snapshot() []perf.HostState { return f.states }
+
+func (f *fakeHosts) Degraded(participant, model string) bool {
+	return f.degraded[participant+"|"+model]
+}
+
+func (f *fakeHosts) Capability(string, string) (uint64, uint64, uint64, uint64) { return 0, 0, 0, 0 }
+
+type fakeHostWindows struct{ hosts *fakeHosts }
+
+func (f fakeHostWindows) Snapshot() []limits.HostWindow { return f.hosts.windows }

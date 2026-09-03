@@ -41,6 +41,7 @@ type Manager struct {
 	missing  markSet
 
 	timeoutSweeper TimeoutSweeper
+	sweepRecorder  SweepRecorder
 	sweeping       atomic.Bool
 	sweepWork      sync.WaitGroup
 

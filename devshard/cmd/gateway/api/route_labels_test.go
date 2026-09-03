@@ -51,7 +51,7 @@ var (
 	}
 
 	// deliberateDivergences are the only labels allowed to sit outside the legacy domain.
-	deliberateDivergences = []string{otherRouteLabel, "/v1/requests/{id}"}
+	deliberateDivergences = []string{otherRouteLabel, "/v1/requests/{id}", "/v1/admin/hosts"}
 )
 
 func TestEveryRouteCarriesItsExactMetricLabel(t *testing.T) {
@@ -83,6 +83,7 @@ func TestEveryRouteCarriesItsExactMetricLabel(t *testing.T) {
 		"/v1/admin/suspicious-hosts":            "/v1/admin/suspicious-hosts",
 		"/v1/admin/participants/unquarantine":   "/v1/admin/participants/unquarantine",
 		"/v1/admin/accounting/reset/{epoch}":    "/v1/admin/accounting/reset/{epoch}",
+		"/v1/admin/hosts":                       "/v1/admin/hosts",
 		"/v1/debug/rotation":                    "/v1/debug/rotation",
 		"/v1/debug/memstats":                    "/v1/debug/memstats",
 		"/":                                     otherRouteLabel,

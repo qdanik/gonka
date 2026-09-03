@@ -113,9 +113,9 @@ func atNonceCap(candidate Escrow, maxNonce uint64) bool {
 func exhaustionReason(candidate Escrow, maxNonce uint64, reserveTokens uint64) string {
 	switch {
 	case atNonceCap(candidate, maxNonce):
-		return "nonce_cap"
+		return exhaustionNonceCap
 	case belowBalanceFloor(candidate, reserveTokens):
-		return "balance_floor"
+		return exhaustionBalanceFloor
 	}
 	return ""
 }

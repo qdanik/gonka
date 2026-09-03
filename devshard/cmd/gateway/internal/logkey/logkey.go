@@ -11,6 +11,7 @@ const (
 	Slot    = "slot"
 	Role    = "role"
 	Reason  = "reason"
+	Kind    = "kind"
 	Outcome = "outcome"
 	Action  = "action"
 	Rewound = "rewound"

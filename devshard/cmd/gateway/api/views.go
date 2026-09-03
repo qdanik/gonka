@@ -258,13 +258,13 @@ func (s *Server) devshardStatus(escrow scheduler.Escrow) devshardStatus {
 func phaseName(phase types.SessionPhase) string {
 	switch phase {
 	case types.PhaseActive:
-		return "active"
+		return phaseNameActive
 	case types.PhaseFinalizing:
-		return "finalizing"
+		return phaseNameFinalizing
 	case types.PhaseSettlement:
-		return "settlement"
+		return phaseNameSettlement
 	}
-	return "unknown"
+	return phaseNameUnknown
 }
 
 // statusBlockReason names why the shard is refusing. See README.md, "Errors and statuses".

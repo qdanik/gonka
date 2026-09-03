@@ -185,12 +185,14 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 		Ledger:       recorder,
 		Now:          clock,
 	})
+	raceRecorder := metrics.NewRaceRecorder(telemetry)
 	manager := escrow.NewManager(escrow.Deps{
 		Tx:          txClient,
 		Store:       devshardWrites{Store: gatewayStore, changed: func() { notify(devshardWork) }},
 		Snapshots:   observer,
 		Settlement:  escrows,
 		Timeouts:    escrows,
+		Sweeps:      raceRecorder,
 		Signer:      environmentSigner{},
 		Config:      configHolder,
 		Now:         clock,
@@ -213,7 +215,7 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 
 	sessions := api.NewSessions(escrows)
 	// The warmup and the burn charge both vote through the poster and observer the race already uses.
-	raceObserver := nonceAccountedRaces{recorder: metrics.NewRaceRecorder(telemetry), ledger: recorder}
+	raceObserver := nonceAccountedRaces{recorder: raceRecorder, ledger: recorder}
 	prober.Settle(sessions.Poster, raceObserver)
 	e2e := env.LoadE2E()
 	races := engine.NewEngine(engine.Deps{
@@ -273,13 +275,15 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 			storageDir:   storageDir,
 			nonces:       recorder,
 		},
-		Suspicious: suspicious,
-		Telemetry:  telemetry,
-		Buffers:    buffers,
-		Rejections: metrics.NewLimitRecorder(telemetry),
-		StorageDir: storageDir,
-		Version:    Version,
-		Now:        clock,
+		Suspicious:  suspicious,
+		HostStates:  hosts,
+		HostWindows: participants,
+		Telemetry:   telemetry,
+		Buffers:     buffers,
+		Rejections:  metrics.NewLimitRecorder(telemetry),
+		StorageDir:  storageDir,
+		Version:     Version,
+		Now:         clock,
 	})
 	if err != nil {
 		return nil, err

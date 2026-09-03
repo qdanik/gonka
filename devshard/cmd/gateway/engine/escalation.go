@@ -27,13 +27,13 @@ type EscalationStage string
 func (s EscalationStage) Reason() string {
 	switch s {
 	case StageSuspicious:
-		return "suspicious_host"
+		return EscalationReasonSuspicious
 	case StageAttemptFailed:
-		return "attempt_failed"
+		return EscalationReasonAttemptFailed
 	case StageReceiptTimeout:
-		return "receipt_timeout"
+		return EscalationReasonReceipt
 	case StageFirstToken:
-		return "first_token_timeout"
+		return EscalationReasonFirstToken
 	}
 	return ""
 }

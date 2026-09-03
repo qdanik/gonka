@@ -197,19 +197,19 @@ func unresolved(status types.InferenceStatus) bool {
 func statusName(status types.InferenceStatus) string {
 	switch status {
 	case types.StatusPending:
-		return "pending"
+		return statusNamePending
 	case types.StatusStarted:
-		return "started"
+		return statusNameStarted
 	case types.StatusFinished:
-		return "finished"
+		return statusNameFinished
 	case types.StatusChallenged:
-		return "challenged"
+		return statusNameChallenged
 	case types.StatusValidated:
-		return "validated"
+		return statusNameValidated
 	case types.StatusInvalidated:
-		return "invalidated"
+		return statusNameInvalidated
 	case types.StatusTimedOut:
-		return "timed_out"
+		return statusNameTimedOut
 	}
-	return "unknown"
+	return statusNameUnknown
 }

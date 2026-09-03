@@ -204,16 +204,16 @@ func (t Terminal) verdict() (limits.Verdict, bool) {
 func (t Terminal) String() string {
 	switch t {
 	case TerminalWon:
-		return "won"
+		return TerminalNameWon
 	case TerminalLost:
-		return "lost"
+		return TerminalNameLost
 	case TerminalUnclassified:
-		return "unclassified"
+		return TerminalNameUnclassified
 	}
 	if reason := t.reason(); reason != "" {
 		return reason
 	}
-	return "unnamed"
+	return TerminalNameUnnamed
 }
 
 func (t Terminal) reason() string {
@@ -221,43 +221,43 @@ func (t Terminal) reason() string {
 	case TerminalWon, TerminalLost:
 		return ""
 	case TerminalThrottled:
-		return "http_429"
+		return ReasonThrottled
 	case TerminalUnavailable:
-		return "http_503"
+		return ReasonUnavailable
 	case TerminalForbidden:
-		return "http_forbidden"
+		return ReasonForbidden
 	case TerminalNotFound:
-		return "http_not_found"
+		return ReasonNotFound
 	case TerminalTimestampDrift:
-		return "http_timestamp_drift"
+		return ReasonTimestampDrift
 	case TerminalRejected:
-		return "http_error"
+		return ReasonRejected
 	case TerminalUpstreamServerError:
-		return "http_server_error"
+		return ReasonUpstreamServer
 	case TerminalOffPath:
-		return "off_path"
+		return ReasonOffPath
 	case TerminalDialFailure:
-		return "transport_error"
+		return ReasonDialFailure
 	case TerminalStreamTruncated:
-		return "sse_truncated"
+		return ReasonStreamTruncated
 	case TerminalUnexpectedEOF:
-		return "eof_transport"
+		return ReasonUnexpectedEOF
 	case TerminalResponseTooLarge:
-		return "response_too_large"
+		return ReasonResponseTooLarge
 	case TerminalClientCancelled:
-		return "client_cancelled"
+		return ReasonClientCancelled
 	case TerminalNoReceipt:
-		return "no_receipt"
+		return ReasonNoReceipt
 	case TerminalEmptyStream, TerminalBurnEmpty:
-		return "empty_stream"
+		return ReasonEmptyStream
 	case TerminalErrorStream, TerminalCapabilityRefused:
-		return "error_stream"
+		return ReasonErrorStream
 	case TerminalStalled:
-		return "stalled"
+		return ReasonStalled
 	case TerminalHardTimeout:
-		return "hard_timeout"
+		return ReasonHardTimeout
 	}
-	return "unknown"
+	return ReasonUnknown
 }
 
 func (a AttemptOutcome) emptyStream() bool {
@@ -277,6 +277,15 @@ func (o RaceOutcome) longResponseExempt(a AttemptOutcome) bool {
 		return false
 	}
 	return !a.NonceFinished && a.ContentSource != "" && a.elapsed() >= longResponseExemption
+}
+
+func (o RaceOutcome) WinnerNonceFinished() (finished, crowned bool) {
+	for _, attempt := range o.Attempts {
+		if o.IsWinner(attempt) {
+			return attempt.NonceFinished, true
+		}
+	}
+	return false, false
 }
 
 // responsive decides whether a host earns a positive perf sample. See race.md, "The exemption ladder".
@@ -427,9 +436,9 @@ func (o RaceOutcome) failureReason(a AttemptOutcome) string {
 		return reason
 	}
 	if !a.NonceFinished {
-		return "not_finished"
+		return ReasonNonceNotFinished
 	}
-	return "unknown"
+	return ReasonUnknown
 }
 
 // TimePerOutputToken starts at the first content chunk, so prefill is not charged to decode speed.

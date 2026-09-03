@@ -26,13 +26,13 @@ func (e *RateLimitError) Label() string {
 	case e == nil:
 		return ""
 	case e.Reason == reasonTooManyConcurrentRequests:
-		return "concurrent_requests"
+		return RejectionConcurrentRequests
 	case e.Reason == reasonTooManyInputTokens:
-		return "input_tokens"
+		return RejectionInputTokens
 	case e.Reason == reasonQueueTooDeep:
-		return "queue_depth"
+		return RejectionQueueDepth
 	}
-	return "unnamed"
+	return RejectionUnnamed
 }
 
 func (e *RateLimitError) Error() string {

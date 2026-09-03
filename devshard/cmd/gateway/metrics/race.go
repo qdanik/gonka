@@ -43,6 +43,7 @@ type RaceRecorder struct {
 	criticalFailures  *prometheus.CounterVec
 	hiddenFailures    *prometheus.CounterVec
 	escalations       *prometheus.CounterVec
+	sweeps            *prometheus.CounterVec
 	timeoutActions    *prometheus.CounterVec
 	inferenceTimeouts *prometheus.CounterVec
 	carryOverflows    *prometheus.CounterVec
@@ -94,6 +95,10 @@ func NewRaceRecorder(telemetry *Metrics) *RaceRecorder {
 			Name: "devshard_gateway_user_requests_with_hidden_failure_total",
 			Help: "Total successful user requests that hid a gateway-visible attempt failure.",
 		}, []string{"model", "severity", "reason"}),
+		sweeps: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "devshard_gateway_timeout_sweep_total",
+			Help: "Total execution-timeout votes the escrow tick's sweep found, applied and failed to apply.",
+		}, []string{"outcome"}),
 		escalations: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "devshard_gateway_escalation_decisions_total",
 			Help: "Total escalation-policy decisions by reason.",
@@ -153,10 +158,20 @@ func (r *RaceRecorder) collectors() []prometheus.Collector {
 	return []prometheus.Collector{
 		r.attemptsStarted, r.attemptsTerminal, r.attemptFailures, r.noWinnerAttempts,
 		r.userVisibleWins, r.transportErrors, r.requests, r.criticalFailures, r.hiddenFailures,
-		r.escalations, r.timeoutActions, r.inferenceTimeouts, r.carryOverflows,
+		r.escalations, r.timeoutActions, r.inferenceTimeouts, r.carryOverflows, r.sweeps,
 		r.receiptSeconds, r.firstContent, r.prefillPerToken, r.outputTokens, r.totalAttempt,
 		r.maxChunkGap, r.meanChunkGap,
 	}
+}
+
+// RecordSweep counts one tick of the execution-timeout sweep; a tick that found nothing moves no series.
+func (r *RaceRecorder) RecordSweep(due, applied, failed int) {
+	if due <= 0 {
+		return
+	}
+	r.sweeps.WithLabelValues(sweepOutcomeDue).Add(float64(due))
+	r.sweeps.WithLabelValues(sweepOutcomeApplied).Add(float64(applied))
+	r.sweeps.WithLabelValues(sweepOutcomeFailed).Add(float64(failed))
 }
 
 func (r *RaceRecorder) RecordRace(outcome engine.RaceOutcome) {

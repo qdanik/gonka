@@ -58,7 +58,7 @@ stateDiagram-v2
 
 Every step returns its error into an `errors.Join`; one failing model or escrow never stops the others. `Stop()` cancels the context and waits for the tick in flight, so shutdown never races a half-finished rotation.
 
-`sweepTimeouts` is the one step that does not run *on* the tick. A vote round can outlast 15 s, so it runs in its own goroutine and a second tick starts nothing while the first is still voting; `Stop()` waits for it as well. Its whole cost is bounded by `timeout_sweep.budget_per_tick` across every escrow, and the walk starts one escrow further along each tick so a backlog on one cannot starve the rest. See [`race.md`](./race.md), "The vote nobody retried".
+`sweepTimeouts` is the one step that does not run *on* the tick. A vote round can outlast 15 s, so it runs in its own goroutine and a second tick starts nothing while the first is still voting; `Stop()` waits for it as well. Its whole cost is bounded by `timeout_sweep.budget_per_tick` across every escrow, and the walk starts one escrow further along each tick so a backlog on one cannot starve the rest. `devshard_gateway_timeout_sweep_total` counts what each tick found, applied and failed to apply; a tick that found nothing moves no series. See [`race.md`](./race.md), "The vote nobody retried".
 
 ## Creating an escrow
 

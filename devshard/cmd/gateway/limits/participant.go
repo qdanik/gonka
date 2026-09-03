@@ -157,12 +157,13 @@ func AllCutoffStates() []CutoffState {
 
 // HostWindow is one tracked participant/model pair as a reader sees it.
 type HostWindow struct {
-	Participant string
-	Model       string
-	Window      float64
-	Inflight    int
-	Cutoff      CutoffState
-	Available   bool
+	Participant  string
+	Model        string
+	Window       float64
+	Inflight     int
+	Cutoff       CutoffState
+	BackoffCount int
+	Available    bool
 }
 
 // Snapshot returns every tracked pair in participant/model order, taken under one lock acquisition.
@@ -174,12 +175,13 @@ func (l *ParticipantLimiter) Snapshot() []HostWindow {
 	windows := make([]HostWindow, 0, len(l.states))
 	for tracked, state := range l.states {
 		windows = append(windows, HostWindow{
-			Participant: tracked.participant,
-			Model:       tracked.model,
-			Window:      state.window,
-			Inflight:    state.inflight,
-			Cutoff:      cutoffState(state, now),
-			Available:   wouldAdmitLocked(state, now),
+			Participant:  tracked.participant,
+			Model:        tracked.model,
+			Window:       state.window,
+			Inflight:     state.inflight,
+			Cutoff:       cutoffState(state, now),
+			BackoffCount: state.backoffCount,
+			Available:    wouldAdmitLocked(state, now),
 		})
 	}
 	slices.SortFunc(windows, func(first, second HostWindow) int {

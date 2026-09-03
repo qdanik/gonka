@@ -23,3 +23,23 @@ const (
 	captureFilterRejected = "filter_rejected"
 	captureAttemptsFailed = "all_attempts_failed"
 )
+
+// How a chain inference record reads in an admin answer, one name per protocol status.
+const (
+	statusNamePending     = "pending"
+	statusNameStarted     = "started"
+	statusNameFinished    = "finished"
+	statusNameChallenged  = "challenged"
+	statusNameValidated   = "validated"
+	statusNameInvalidated = "invalidated"
+	statusNameTimedOut    = "timed_out"
+	statusNameUnknown     = "unknown"
+)
+
+// What phase an escrow session is in, as an admin answer names it.
+const (
+	phaseNameActive     = "active"
+	phaseNameFinalizing = "finalizing"
+	phaseNameSettlement = "settlement"
+	phaseNameUnknown    = "unknown"
+)

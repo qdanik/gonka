@@ -81,3 +81,43 @@ const (
 	TimeoutReasonNotApplied      = "timeout_not_applied"
 	TimeoutReasonEscrowGone      = "escrow_gone_from_hosts"
 )
+
+// How an attempt ended, as the ledger, the metrics and the logs all name it.
+const (
+	TerminalNameWon          = "won"
+	TerminalNameLost         = "lost"
+	TerminalNameUnclassified = "unclassified"
+	TerminalNameUnnamed      = "unnamed"
+)
+
+// Why an attempt did not win. A terminal that names no reason is one that won or lost on merit.
+const (
+	ReasonThrottled        = "http_429"
+	ReasonUnavailable      = "http_503"
+	ReasonForbidden        = "http_forbidden"
+	ReasonNotFound         = "http_not_found"
+	ReasonTimestampDrift   = "http_timestamp_drift"
+	ReasonRejected         = "http_error"
+	ReasonUpstreamServer   = "http_server_error"
+	ReasonOffPath          = "off_path"
+	ReasonDialFailure      = "transport_error"
+	ReasonStreamTruncated  = "sse_truncated"
+	ReasonUnexpectedEOF    = "eof_transport"
+	ReasonResponseTooLarge = "response_too_large"
+	ReasonClientCancelled  = "client_cancelled"
+	ReasonNoReceipt        = "no_receipt"
+	ReasonEmptyStream      = "empty_stream"
+	ReasonErrorStream      = "error_stream"
+	ReasonStalled          = "stalled"
+	ReasonHardTimeout      = "hard_timeout"
+	ReasonNonceNotFinished = "not_finished"
+	ReasonUnknown          = "unknown"
+)
+
+// Why an attempt was started beside another, as the metric label names it.
+const (
+	EscalationReasonSuspicious    = "suspicious_host"
+	EscalationReasonAttemptFailed = "attempt_failed"
+	EscalationReasonReceipt       = "receipt_timeout"
+	EscalationReasonFirstToken    = "first_token_timeout"
+)

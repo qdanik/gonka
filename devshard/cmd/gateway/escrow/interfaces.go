@@ -53,6 +53,11 @@ type TimeoutSweeper interface {
 	SweepExecutionTimeouts(ctx context.Context, grace time.Duration, budget int) (due, applied, failed int)
 }
 
+// SweepRecorder counts what one sweep tick did.
+type SweepRecorder interface {
+	RecordSweep(due, applied, failed int)
+}
+
 type SettlementSource interface {
 	Retire(escrowID string) error // synchronous: no nonce can be committed on the escrow after it returns
 	IsBusy(escrowID string) bool

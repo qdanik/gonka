@@ -165,6 +165,7 @@ One more line belongs to the same family, on the money side rather than the rout
 | `terminated` | whether the SSE terminator went with them; without it a client waits out its own timeout on a reply it already has |
 | `outcome` | `served`, `failed_mid_stream`, or `failed_before_first_byte` — the last distinguishes a reply the client can retry from one it cannot |
 | `deliver_error` | the failure that reached the client instead of the last bytes: the case no status code can express, because a stream commits 200 on its first byte |
+| `nonce_finished` | whether the crowned attempt's nonce closed on the chain. A served request with `false` here answered the client and left the escrow owing a vote for that nonce, which is the shape [issue #1387](https://github.com/gonka-ai/gonka/issues/1387) reported from the other side: the legacy gateway called the whole request failed for it. Absent when nobody was crowned |
 
 The record carries no request or response body — capture files exist for that, sampled and bounded. Its `error` field is truncated at 256 bytes, and that is not tidiness: a host error with no message renders its raw upstream payload as the error text, so an untruncated field would write a whole SSE event, generated tokens included, once per failed request.
 
@@ -218,6 +219,20 @@ Route labels are **templated** (`/devshard/{id}/…`), never per-escrow, so card
 | one escrow's protocol state | `GET /devshard/{id}/v1/state` |
 | what happened to one request's nonces | `GET /v1/requests/{id}` |
 | hosts the gateway distrusts | `GET /v1/admin/suspicious-hosts` |
+| why one host is or is not taking work | `GET /v1/admin/hosts` |
+
+### What a host answer carries
+
+`GET /v1/admin/hosts` joins the two snapshots that already exist, one row per participant and model. Nothing is computed for it: these are the same values the gauges carry, asked for on demand rather than waited for at the next scrape.
+
+| Field | Where it comes from |
+| --- | --- |
+| `ejected`, `degraded`, `inflight`, `decode_seconds_per_token` | the performance tracker: whether routing withholds this host, whether it would without the pool-wide cap, and how fast it decodes |
+| `window`, `window_inflight`, `cutoff`, `backoff_count`, `available` | the participant limiter: the AIMD window, what is in flight against it, the breaker's state, how deep its backoff has gone, and whether the host would be admitted right now |
+| `context_limit`, `version_refusals`, `tool_refusals`, `context_refusals` | what this host's build refused |
+| `suspicious` | whether an operator pinned it |
+
+`backoff_count` is the answer to "was this host cut off once or eleven times": it is what makes the next cut-off a minute long instead of five seconds. `degraded` beside a false `ejected` means the pool-wide cap is withholding the withholding, because too many of that model's hosts are failing at once.
 
 ## When something is wrong
 

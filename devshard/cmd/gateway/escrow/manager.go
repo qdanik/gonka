@@ -18,6 +18,7 @@ type Deps struct {
 	Snapshots   snapshotSource
 	Settlement  SettlementSource
 	Timeouts    TimeoutSweeper
+	Sweeps      SweepRecorder
 	Signer      SignerSource
 	Config      *config.Holder
 	Now         func() time.Time
@@ -35,6 +36,7 @@ func NewManager(d Deps) *Manager {
 		config:           d.Config,
 		settlementSource: d.Settlement,
 		timeoutSweeper:   d.Timeouts,
+		sweepRecorder:    d.Sweeps,
 		routePrefix:      d.RoutePrefix,
 	}
 }
@@ -103,6 +105,9 @@ func (m *Manager) sweepTimeouts(ctx context.Context) {
 		defer m.sweeping.Store(false)
 		grace := time.Duration(settings.GraceSeconds) * time.Second
 		due, applied, failed := m.timeoutSweeper.SweepExecutionTimeouts(ctx, grace, budget)
+		if m.sweepRecorder != nil {
+			m.sweepRecorder.RecordSweep(due, applied, failed)
+		}
 		if due == 0 {
 			return
 		}

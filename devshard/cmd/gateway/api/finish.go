@@ -11,7 +11,7 @@ import (
 )
 
 // loggedFieldSlots is every keyval a finished request can carry, so the line is never copied to grow.
-const loggedFieldSlots = 30
+const loggedFieldSlots = 32
 
 func hostClockOffset(outcome engine.RaceOutcome) (offsetMS, roundTripMS int64, stamped bool) {
 	for _, attempt := range outcome.Attempts {
@@ -79,6 +79,9 @@ func requestFinishedFields(requestID string, normalized filters.Result, outcome 
 		logkey.Terminated, terminated,
 		logkey.DurationMS, elapsed.Milliseconds(),
 	)
+	if nonceFinished, crowned := outcome.WinnerNonceFinished(); crowned {
+		fields = append(fields, logkey.NonceFinished, nonceFinished)
+	}
 	if offsetMS, roundTripMS, stamped := hostClockOffset(outcome); stamped {
 		fields = append(fields, logkey.HostClockOffsetMS, offsetMS, logkey.HostReceiptMS, roundTripMS)
 	}

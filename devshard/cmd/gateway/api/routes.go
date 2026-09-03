@@ -60,6 +60,7 @@ func (s *Server) routes() []route {
 		{pattern: "/v1/admin/devshards/{id}/participants", label: "/v1/admin/devshards/{id}/participants", admin: true, alwaysOn: true, handler: s.handleAdminDevshardParticipants},
 		{pattern: "/v1/admin/escrows", label: "/v1/admin/escrows", admin: true, alwaysOn: true, handler: s.handleAdminEscrows},
 		{pattern: "/v1/admin/suspicious-hosts", label: "/v1/admin/suspicious-hosts", admin: true, alwaysOn: true, handler: s.handleAdminSuspiciousHosts},
+		{pattern: "/v1/admin/hosts", label: "/v1/admin/hosts", admin: true, alwaysOn: true, handler: s.handleAdminHosts},
 		{pattern: "/v1/admin/participants/unquarantine", label: "/v1/admin/participants/unquarantine", admin: true, alwaysOn: true, handler: s.handleAdminUnquarantine},
 		{pattern: "/v1/admin/accounting/reset/{epoch}", label: "/v1/admin/accounting/reset/{epoch}", admin: true, alwaysOn: true, handler: s.handleAdminResetAccountingEpoch},
 		{pattern: "/v1/debug/rotation", label: "/v1/debug/rotation", admin: true, alwaysOn: true, handler: s.handleDebugRotation},

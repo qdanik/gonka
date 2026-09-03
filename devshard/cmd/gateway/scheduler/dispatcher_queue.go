@@ -38,16 +38,20 @@ func (d *dispatcher) drain() (time.Time, bool) {
 	decide := func(binding HostBinding) NonceIntent {
 		offered.taken.participant = binding.Participant
 		offered.decision = match(binding, d.waiting, participants, avail, d.now(), d.matchWait)
-		if _, serving := offered.decision.(serve); !serving {
-			return intentFor(offered.decision)
-		}
-		if !acquire(binding.Participant) {
-			offered.decision = burn{kind: ghostThrottled}
+		switch offered.decision.(type) {
+		case serve:
+			if !acquire(binding.Participant) {
+				offered.decision = burn{kind: ghostThrottled}
+			}
+		case burn:
+		default:
 			return intentFor(offered.decision)
 		}
 		var held bool
 		if offered.taken.escrowHold, held = d.holdEscrow(); !held {
-			d.releaseSlot(binding.Participant)
+			if _, serving := offered.decision.(serve); serving {
+				d.releaseSlot(binding.Participant)
+			}
 			offered.escrowRetired = true
 			return NonceIntent{}
 		}
@@ -85,6 +89,9 @@ func (d *dispatcher) drain() (time.Time, bool) {
 				burned.Nonce = prepared.Nonce()
 			}
 			d.recordGhost(burned)
+			if offered.taken.escrowHold != nil {
+				offered.taken.escrowHold()
+			}
 			burnBudget--
 			if burnBudget <= 0 {
 				d.recordBudgetTrip()

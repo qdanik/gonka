@@ -264,6 +264,7 @@ type harnessConfig struct {
 	gate            chan struct{}
 	submitBuffer    int
 	holdStart       bool
+	escrowHold      func() (func(), bool)
 }
 
 type harness struct {
@@ -329,6 +330,7 @@ func newHarness(t *testing.T, cfg harnessConfig) *harness {
 		newTimer:     clock.newTimer,
 		submitBuffer: cfg.submitBuffer,
 		onExhausted:  func(escrowID, reason string) { exhausted.Store(&escrowID) },
+		holdEscrow:   cfg.escrowHold,
 	})
 	t.Cleanup(dispatcher.stop)
 	if !cfg.holdStart {
