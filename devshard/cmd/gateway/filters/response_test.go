@@ -391,8 +391,37 @@ func TestIsCacheableUpstreamError(t *testing.T) {
 	}
 }
 
+// What the host said about its own failure, in the order the rule reads it: the status it would have
+// answered with, then the class it named, then the words of the message.
+func TestAnErrorIsJudgedByWhatTheHostNamed(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want bool
+	}{
+		{name: "a numeric code of 400 is about the request", body: `{"object":"error","code":400,"message":"context too long","type":"BadRequestError"}`, want: true},
+		{name: "422 likewise", body: `{"error":{"code":422,"message":"unprocessable"}}`, want: true},
+		{name: "404 names a model another host may serve", body: `{"error":{"code":404,"message":"the model does not exist"}}`},
+		{name: "429 is about the moment", body: `{"error":{"code":429,"message":"slow down"}}`},
+		{name: "500 is about the moment", body: `{"error":{"code":500,"message":"a fixed validation failure"}}`},
+		{name: "a status wins over an innocent message", body: `{"error":{"code":503,"message":"everything is fine"}}`},
+		{name: "a class the host named, with no status", body: `{"object":"error","code":null,"message":"boom","type":"server_error"}`},
+		{name: "a request class, with no status", body: `{"error":{"type":"BadRequestError","message":"unknown parameter foo"}}`, want: true},
+		{name: "a class spelled in the code", body: `{"error":{"code":"rate_limit_exceeded","message":"generic failure"}}`},
+		{name: "nothing but a message, which is all the host gave", body: `{"error":{"message":"upstream request timed out"}}`},
+		{name: "nothing but a message that names no failure", body: `{"error":{"message":"temperature must be between 0 and 2"}}`, want: true},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			if got := IsCacheableUpstreamError(400, []byte(testCase.body)); got != testCase.want {
+				t.Errorf("IsCacheableUpstreamError(400, %s) = %v, want %v", testCase.body, got, testCase.want)
+			}
+		})
+	}
+}
+
 func TestIsCacheableUpstreamError_EveryMarkerExcludes(t *testing.T) {
-	for _, marker := range nonCacheableErrorMarkers {
+	for _, marker := range momentaryFailureMessages {
 		t.Run("marker in message: "+marker, func(t *testing.T) {
 			body := fmt.Sprintf(`{"error":{"message":%q}}`, "request failed: "+marker+" occurred")
 			if got := IsCacheableUpstreamError(400, []byte(body)); got {
@@ -421,10 +450,10 @@ func TestIsCacheableResponseCoversSuccessesAndSSEEmbeddedFailures(t *testing.T) 
 		body   string
 		want   bool
 	}{
-		{"a plain success is cacheable", 200, `{"choices":[{"message":{"content":"hi"}}]}`, true},
+		{"a plain success is cacheable", 200, `{"choices":[{"message":{"content":"hi"},"finish_reason":"stop"}]}`, true},
 		{"a 204 is cacheable", 204, `{"choices":[]}`, true},
 		{"an empty body is never cacheable", 200, ``, false},
-		{"a completed sse stream is cacheable", 200, "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\ndata: [DONE]\n\n", true},
+		{"a completed sse stream is cacheable", 200, "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n", true},
 		{"a success carrying a transient error inside an sse event is not cacheable", 200, "data: {\"choices\":[]}\n\ndata: {\"error\":{\"message\":\"upstream timeout\"}}\n\n", false},
 		{"a success carrying a deterministic error inside an sse event is still not a success", 200, "data: {\"error\":{\"message\":\"temperature must be between 0 and 2\"}}\n\n", true},
 		{"a 400 carrying a deterministic error inside an sse event is cacheable", 400, "data: {\"error\":{\"type\":\"invalid_request_error\",\"message\":\"unknown parameter foo\"}}\n\n", true},
@@ -453,6 +482,8 @@ func TestHasNonCacheableErrorFindsFailuresRegardlessOfFraming(t *testing.T) {
 		{"an sse-embedded transient error", "data: {\"choices\":[]}\n\ndata: {\"error\":{\"message\":\"overloaded\"}}\n\n", true},
 		{"an sse stream with no error", "data: {\"choices\":[]}\n\ndata: [DONE]\n\n", false},
 		{"a malformed body carries none", `not json`, false},
+		{"a failure a host hid behind wrongly typed choices, framed", "data: {\"error\":{\"message\":\"service unavailable\"},\"choices\":\"none\"}\n\n", true},
+		{"the first failure is the one kept", "data: {\"error\":{\"message\":\"temperature must be between 0 and 2\"}}\n\ndata: {\"error\":{\"message\":\"overloaded\"}}\n\n", false},
 	}
 	for _, testCase := range tests {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -705,5 +736,246 @@ func TestAnEmptyErrorEventDoesNotStopTheScan(t *testing.T) {
 	}
 	if details.Message != "service unavailable" {
 		t.Fatalf("message = %q, want the later event's", details.Message)
+	}
+}
+
+// The gateway appends its own [DONE] when a host sends none, so the terminator cannot say whether the
+// model finished. A reply that stopped mid-answer is served and must never be replayed from the cache.
+func TestAnAnswerThatNeverFinishedIsNotCacheable(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		body string
+		want bool
+	}{
+		{
+			name: "a choice that never finished",
+			body: "data: {\"choices\":[{\"index\":0,\"delta\":{\"reasoning\":\"still working\"}}]}\n\ndata: [DONE]\n\n",
+		},
+		{
+			name: "a choice finished by a later event",
+			body: "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"ok\"}}]}\n\n" +
+				"data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n",
+			want: true,
+		},
+		{
+			name: "a terminal reason a later event does not name again",
+			body: "data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n" +
+				"data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"trailing\"}}]}\n\ndata: [DONE]\n\n",
+			want: true,
+		},
+		{
+			name: "a null finish_reason is not terminal",
+			body: "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"ok\"},\"finish_reason\":null}]}\n\ndata: [DONE]\n\n",
+		},
+		{
+			name: "an empty finish_reason is not terminal",
+			body: "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"\"}]}\n\ndata: [DONE]\n\n",
+		},
+		{
+			name: "a second choice that never finished",
+			body: "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"a\"},\"finish_reason\":\"stop\"},{\"index\":1,\"delta\":{\"content\":\"b\"}}]}\n\n",
+		},
+		{
+			name: "an unindexed second choice is not vouched for by its sibling",
+			body: "data: {\"choices\":[{\"delta\":{\"content\":\"a\"},\"finish_reason\":\"stop\"},{\"delta\":{\"content\":\"b\"}}]}\n\n",
+		},
+		{
+			name: "the usage-only event a stream ends with starts no choice",
+			body: "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\n" +
+				"data: {\"choices\":[],\"usage\":{\"completion_tokens\":7}}\n\ndata: [DONE]\n\n",
+			want: true,
+		},
+		{
+			name: "a completion terminated by stop_reason alone, as the chunk conversion reads it",
+			body: `{"object":"chat.completion","choices":[{"index":0,"message":{"content":"ok"},"finish_reason":null,"stop_reason":128009}]}`,
+			want: true,
+		},
+		{
+			name: "a length cut is an ending like any other",
+			body: "data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"length\"}]}\n\ndata: [DONE]\n\n",
+			want: true,
+		},
+		{
+			name: "a choice a host spelled with a capital, still unfinished",
+			body: `{"object":"chat.completion","Choices":[{"index":0,"message":{"content":"half"},"finish_reason":null}]}`,
+		},
+		{
+			name: "a folded completion that never finished",
+			body: `{"choices":[{"index":0,"message":{"content":"hi"},"finish_reason":null}]}`,
+		},
+		{
+			name: "a folded completion that finished",
+			body: `{"choices":[{"index":0,"message":{"content":"hi"},"finish_reason":"stop"}]}`,
+			want: true,
+		},
+		{
+			name: "an unframed completion a host sent instead of a stream",
+			body: `{"object":"chat.completion","choices":[{"index":0,"message":{"content":"hi"}}]}`,
+		},
+		{
+			name: "a choice split across two data lines is one object, as a client reads it",
+			body: "data: {\"choices\":[{\"index\":0,\ndata: \"delta\":{\"content\":\"half\"}}]}\n\n",
+		},
+		{
+			name: "a finished choice split across two data lines",
+			body: "data: {\"choices\":[{\"index\":0,\ndata: \"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
+			want: true,
+		},
+		{
+			name: "a transient failure a host hid behind a choices field of the wrong type",
+			body: `{"error":{"message":"service unavailable"},"choices":"none"}`,
+		},
+		{
+			name: "an error object carrying nothing is not replayable either",
+			body: `{"error":{}}`,
+		},
+		{
+			name: "an event cut off mid-object",
+			body: "data: {\"choices\":[{\"index\":0,\"delta\":{\"cont\n\n",
+		},
+		{
+			name: "an index spelled as a string falls back to where the choice stands",
+			body: `{"choices":[{"index":"0","message":{"content":"a"},"finish_reason":"stop"},{"index":"1","message":{"content":"b"}}]}`,
+		},
+		{
+			name: "an index past what an int64 holds falls back the same way",
+			body: `{"choices":[{"index":1e30,"message":{"content":"a"},"finish_reason":"stop"},{"index":1e30,"message":{"content":"b"}}]}`,
+		},
+		{
+			name: "an empty error event is one event among many, and stops nothing",
+			body: "data: {\"error\":{}}\n\ndata: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
+			want: true,
+		},
+		{
+			name: "a body that is neither JSON nor events",
+			body: `<html>upstream is down</html>`,
+		},
+		{
+			name: "an unframed completion cut off mid-object",
+			body: `{"id":"c","object":"chat.completion","choices":[{"index":0,"message":{"content":"half`,
+		},
+		{
+			name: "a reply that started no choice at all",
+			body: `{"id":"resp","choices":[]}`,
+			want: true,
+		},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			if got := IsCacheableResponse(200, []byte(testCase.body)); got != testCase.want {
+				t.Errorf("IsCacheableResponse(200, %q) = %v, want %v", testCase.body, got, testCase.want)
+			}
+		})
+	}
+}
+
+// The rule is only worth having if a real answer still earns its entry, so every recorded host stream is
+// classified here and a fixture added to testdata/sse fails until someone says which side it belongs on.
+func TestEveryRecordedStreamIsClassified(t *testing.T) {
+	t.Parallel()
+	storable := map[string]bool{
+		"comment_and_blank_lines.sse":   false, // its one choice carries finish_reason null
+		"completion_wrapped_stream.sse": true,
+		"content_stream.sse":            true,
+		"kimi_thinking_stream.sse":      true,
+		"logprobs_stream.sse":           true,
+		"malformed_data_line.sse":       false, // an event nobody can read
+		"newlineless_final_content.sse": false, // ends on content, never on a reason
+		"newlineless_final_error.sse":   false, // type server_error: the host named a failure of the moment
+		"token_ids_stream.sse":          true,
+		"tool_calls_stream.sse":         true,
+	}
+	entries, err := os.ReadDir(filepath.Join("testdata", "sse"))
+	if err != nil {
+		t.Fatalf("reading fixtures: %v", err)
+	}
+	entries = slices.DeleteFunc(entries, func(entry os.DirEntry) bool { return entry.IsDir() })
+	if len(entries) != len(storable) {
+		t.Fatalf("%d fixtures against %d classified: the list and the directory must say the same", len(entries), len(storable))
+	}
+	for _, entry := range entries {
+		want, classified := storable[entry.Name()]
+		if !classified {
+			t.Fatalf("%s is unclassified: say whether the cache must store it", entry.Name())
+		}
+		t.Run(entry.Name(), func(t *testing.T) {
+			if got := IsCacheableResponse(200, readSSEFixture(t, entry.Name())); got != want {
+				t.Fatalf("IsCacheableResponse = %v, want %v", got, want)
+			}
+		})
+	}
+}
+
+// The refusal is not just a boolean: routes.go branches on the name, and operations.md documents it.
+func TestCacheRefusalNamesWhyItRefused(t *testing.T) {
+	t.Parallel()
+	finished := `{"choices":[{"index":0,"message":{"content":"hi"},"finish_reason":"stop"}]}`
+	tests := []struct {
+		name   string
+		status int
+		body   string
+		want   string
+	}{
+		{name: "a finished success", status: 200, body: finished, want: CacheStorable},
+		{name: "no body at all", status: 200, body: "", want: CacheRefusedEmptyBody},
+		{name: "a transient failure", status: 200, body: `{"error":{"message":"service unavailable"}}`, want: CacheRefusedFailure},
+		{name: "an event nobody can read", status: 200, body: "data: {\"choices\":[{\"index\":0,\n\n", want: CacheRefusedUnreadable},
+		{name: "a body nothing can read", status: 200, body: "<html>upstream is down</html>", want: CacheRefusedUnreadable},
+		{name: "choices no client could render", status: 200, body: `{"choices":"none"}`, want: CacheRefusedUnreadable},
+		{name: "the same, inside an event", status: 200, body: "data: {\"choices\":\"none\"}\n\n", want: CacheRefusedUnreadable},
+		{name: "an answer that stopped mid-answer", status: 200, body: `{"choices":[{"index":0,"message":{"content":"half"}}]}`, want: CacheRefusedUnfinished},
+		{name: "a status no replay may carry", status: 500, body: finished, want: CacheRefusedStatus},
+		{name: "a status refused before the answer is judged", status: 500, body: `{"choices":[{"index":0,"message":{"content":"half"}}]}`, want: CacheRefusedStatus},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			if got := CacheRefusal(testCase.status, []byte(testCase.body)); got != testCase.want {
+				t.Errorf("CacheRefusal(%d, %q) = %q, want %q", testCase.status, testCase.body, got, testCase.want)
+			}
+		})
+	}
+}
+
+// A host naming more choices than the fold would ever merge is not one to replay, however it ends them.
+func TestAFloodOfChoicesIsNotStored(t *testing.T) {
+	t.Parallel()
+	for _, choices := range []int{maxIndexedElements, maxIndexedElements + 1} {
+		t.Run(fmt.Sprint(choices), func(t *testing.T) {
+			var body strings.Builder
+			body.WriteString(`{"choices":[`)
+			for index := range choices {
+				if index > 0 {
+					body.WriteString(",")
+				}
+				fmt.Fprintf(&body, `{"index":%d,"message":{"content":"x"},"finish_reason":"stop"}`, index)
+			}
+			body.WriteString(`]}`)
+
+			want := choices <= maxIndexedElements
+			if got := IsCacheableResponse(200, []byte(body.String())); got != want {
+				t.Fatalf("IsCacheableResponse over %d choices = %v, want %v", choices, got, want)
+			}
+		})
+	}
+}
+
+// The strip rewrites a host's NaN/Infinity barewords into null on the way out, so what the cache is handed
+// is decodable. If that ever stops holding, the terminal chunk becomes unreadable and nothing is cached.
+func TestAStreamCarryingBarewordsStaysCacheableAfterTheStrip(t *testing.T) {
+	t.Parallel()
+	event := []byte(`data: {"choices":[{"index":0,"delta":{"content":"ok"},` +
+		`"logprobs":{"content":[{"token":"ok","logprob":-Infinity}]},"finish_reason":"stop"}]}` + "\n\n")
+
+	rewritten, err := NewStreamRewriter(LogprobIntent{Keep: true, KeepTop: true}, true).Write(event)
+	if err != nil {
+		t.Fatalf("Write(): %v", err)
+	}
+
+	if bytes.Contains(rewritten, []byte("Infinity")) {
+		t.Fatalf("a bareword no decoder reads reached the cache: %s", rewritten)
+	}
+	if got := CacheRefusal(200, rewritten); got != CacheStorable {
+		t.Fatalf("CacheRefusal = %q, want the reply stored", got)
 	}
 }

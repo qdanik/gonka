@@ -231,7 +231,11 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request, escrowPin string) 
 	recorder := newCacheRecorder(w, s.cache.entryLimit(), normalized.ClientStream)
 	outcome, hiddenFailure := s.race(recorder, r, requestID, normalized, inputTokens, escrowPin)
 	if entry, storable := recorder.entry(outcome.EscrowID, normalized.ClientStream, cmp.Or(r.Context().Err(), hiddenFailure)); storable {
-		s.cache.put(key, entry, s.now())
+		// The client keeps every byte that arrived; only the replay stops, and only this refusal is news.
+		if s.cache.put(key, entry, s.now()) == filters.CacheRefusedUnfinished {
+			logging.Warn("a host stopped mid-answer: reply served, not cached", logkey.Request, requestID,
+				logkey.Model, normalized.Model, logkey.Escrow, outcome.EscrowID)
+		}
 	}
 }
 

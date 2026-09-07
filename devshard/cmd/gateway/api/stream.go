@@ -17,24 +17,27 @@ const (
 	maxBufferedResponseBytes = filters.MaxStreamCarryBytes
 )
 
+var sseEventSeparator = []byte("\n\n")
+
 type clientStream struct {
 	// An attempt goroutine can still write after the handler returned, when Go invalidates the writer.
 	mu     sync.Mutex
 	closed bool
 
-	writer     http.ResponseWriter
-	controller *http.ResponseController
-	requestID  string
-	streaming  bool
-	logprobs   filters.LogprobIntent
-	rewriter   *filters.StreamRewriter
-	folder     *filters.BodyFolder
-	budget     *BufferBudget
-	charged    int64
-	overBudget bool
-	written    int64
-	started    bool
-	terminated bool
+	writer       http.ResponseWriter
+	controller   *http.ResponseController
+	requestID    string
+	streaming    bool
+	logprobs     filters.LogprobIntent
+	rewriter     *filters.StreamRewriter
+	folder       *filters.BodyFolder
+	budget       *BufferBudget
+	charged      int64
+	overBudget   bool
+	written      int64
+	started      bool
+	terminated   bool
+	pendingEvent bool
 }
 
 func newClientStream(w http.ResponseWriter, requestID string, streaming, usage bool, logprobs filters.LogprobIntent, budget *BufferBudget) *clientStream {
@@ -189,7 +192,16 @@ func (c *clientStream) terminateLocked() error {
 
 func (c *clientStream) emitLocked(events []byte) (int, error) {
 	c.beginLocked("text/event-stream")
+	// A host's last event without its blank line would otherwise have the next one glued onto it.
+	if c.pendingEvent {
+		separator, err := c.writer.Write(sseEventSeparator)
+		c.written += int64(separator)
+		if err != nil {
+			return 0, err
+		}
+	}
 	c.terminated = c.terminated || filters.HasSSEDone(events)
+	c.pendingEvent = !filters.SSEEventTerminated(events)
 	written, err := c.writer.Write(events)
 	c.written += int64(written)
 	return written, err

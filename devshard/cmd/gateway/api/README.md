@@ -148,6 +148,10 @@ The caller and the escrow scope are in the key as well, so a cached reply never 
 
 **The recorder keeps the first status the handler chose**, so a write after the response has begun cannot turn a recorded failure into a 200. What the bytes cannot state themselves — a client that left, and a failure a committed 200 hid — is passed to `entry` as the unstorable reason.
 
+**A reply that never finished its answer is served and never stored.** `put` asks `filters.CacheRefusal` of the bytes it is about to keep, outside the lock, and hands back what refused them — see [`filters/README.md`](../filters/README.md), "Finishing an answer" for what counts as finished. `chat` logs the one refusal that is news: a host that stopped mid-answer, which no other line names. The client still receives every byte that arrived; what stops is the replay, not the delivery.
+
+`get` re-asks only the error verdict, as it always has: the finish verdict cannot change under a stored entry, since `put` is the one way in and the stored bytes never move. That read runs the walk in its cheap form, which decodes no choices, so a hit costs what it always did rather than the store's price under the cache's lock.
+
 Eviction drops entries in map order: with a per-caller key and an hour's TTL there is no access pattern a smarter policy would reward, and map order costs nothing.
 
 ## Read next

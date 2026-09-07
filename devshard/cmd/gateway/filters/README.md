@@ -14,6 +14,9 @@ Everything a client sends is normalised here before it reaches a host, and every
 - `fold.go` — `BodyFolder` folds the host's SSE stream into one JSON body **as chunks arrive**, stripping the fields the client must not see before merging rather than after. A client that did not ask for logprobs never accumulates them.
 - `stream.go` — the rewriter for a streaming client, which does the same strip per event on the way out.
 - `response.go` — which fields are stripped, and which a client can ask back.
+- `cacheable.go` — the one walk that decides whether a reply may be stored: what it failed with, and whether its answer finished.
+- `finish.go` — whether every choice a reply started also finished, which is what that walk asks besides the error.
+- `vocabulary.go` — the name each refusal goes into the record under.
 - `assemble.go` — the whole-body fold, the reference implementation the incremental one is verified against.
 
 ## Boundaries
@@ -238,11 +241,39 @@ When that rescue fires, the caller must receive the re-encoded bytes even if no 
 
 ### Cacheability
 
-`IsCacheableResponse` stores a success whose payload carries no failure, or a deterministic client-input error (an HTTP 400 with a parseable error body). `HasNonCacheableError` is the same check run on read, so a poisoned entry drops itself.
+`CacheRefusal` names why a response may not be stored: an empty body, a failure that must not be replayed, an event or a body nothing can read, an answer that never finished, or a status that is neither a success nor a deterministic client-input error (an HTTP 400 with a parseable error body). `IsCacheableResponse` is the same answer as a boolean. On read `api` asks the narrower `HasNonCacheableError` — see [`api/README.md`](../api/README.md), "The response cache" for why only the failure is re-asked — and that walk passes `judgeAnswer` false, so a hit pays for none of the choices.
 
-An error is *not* cacheable when its message, type, or code contains one of `nonCacheableErrorMarkers` — cancellation, timeouts, rate limits, overload, unavailability, or model-availability failures — or when it is a host-capability failure, since a different host may serve it fine.
+One walk decides all of it: `scanResponse` reads a plain JSON body whole and an SSE body **event by event, not `data:` line by line** — a client joins the lines of one event, so an object a host split across two of them must reach the decoder whole. Each event is decoded once into `scannedEvent`, the error shape and the choices together, because two walks would parse the same megabyte twice to ask two questions about it.
 
-`parseUpstreamErrorDetails` reads the error from plain JSON or from inside an SSE data event, and `DecodeUpstreamError` accepts both the nested `{"error":{...}}` shape and the flat `{"object":"error",...}` one vLLM still emits. The SSE scan does not stop at the first decodable event: an empty `{"error":{}}` decodes while carrying nothing, and stopping there would leave a real error in a later event unseen and read the stream as cacheable. A null `code` renders as absent rather than the literal text `<nil>`.
+A host that types its `choices` as something no client could render must not take the error in the same event down with it — that is how a rate-limit failure would end up replayed for an hour. So the decode falls back to the failure shape alone, and an event read that way counts as unreadable rather than as silence. An event nothing can read at all — a truncated tail, a payload that is not JSON — refuses the reply outright, since what it carried is unknowable.
+
+Whether a host's error may be replayed is read from what the host itself said, in the order of how much that is:
+
+1. **The status it named.** A numeric `code` is the status the host would have answered with: 400 and 422 are about the request and may be stored, while 404 names a model another host may still serve, and 408, 429 and 5xx are about the moment.
+2. **The class it named.** A `type`, or a `code` that is not a status, is a class name — `server_error`, `BadRequestError`, `rate_limit_exceeded` — matched with every separator removed. A substring of a class field is still a class; a substring of a message is prose.
+3. **The words of the message**, when the host gave nothing else: `nonCacheableErrorMarkers` names cancellation, timeouts, rate limits, overload, unavailability and model availability.
+
+The two structured tiers are not guesses about our hosts: vLLM's `create_error_response` (`vllm/entrypoints/serve/exception_handling/error_response.py`) fills `ErrorInfo.code` with the `HTTPStatus` it would have answered with, and fills `type` with the class it raised — `BadRequestError` at 400, `UnprocessableEntityError` at 422, `NotFoundError` at 404, `InternalServerError` at 500 — or, for a graceful HTTP error, with the status phrase itself (`Service Unavailable`, `Too Many Requests`), which is why a class is matched with its separators removed. Older vLLM wrote the flat `{"object":"error",...}` shape instead; `DecodeUpstreamError` reads both.
+
+A host-capability failure is refused before any of that, since a different host may serve it fine. The order earns itself in both directions: a `type: server_error` whose message reads "boom" is refused on its class, where the message alone said nothing, and a 400 whose message happens to contain the word "timeout" is stored on its status rather than refused on a coincidence.
+
+The polarity is still a blacklist: an error naming nothing recognisable is stored. That is deliberate for now — refusing it would send every repeat of a permanently broken request back to the hosts — but it is the half of this rule that will be wrong first, and it should become a whitelist once there is evidence of what our hosts actually name.
+
+`parseUpstreamErrorDetails` reads the error from plain JSON or from inside an SSE data event, and `DecodeUpstreamError` accepts both the nested `{"error":{...}}` shape and the flat `{"object":"error",...}` one vLLM still emits. The scan visits every event rather than stopping at the first decodable one: an empty `{"error":{}}` decodes while carrying nothing, so stopping there would leave a real error in a later event unseen — and a choice's terminal reason usually arrives after the events that carried its content. The first failure found is the one kept. A null `code` renders as absent rather than the literal text `<nil>`.
+
+### Finishing an answer
+
+The gateway appends its own `[DONE]` when a host sends none (`api/stream.go`, `terminateLocked`), so the terminator says nothing about whether the model finished: a host that streamed reasoning for twenty minutes and then dropped the connection is terminated by us and reads as a complete 200. The only signal left is a terminal reason on every choice the reply started, and storing a reply without one is how eight identical retries came back with the same unfinished body in under three seconds.
+
+- `finish_reason` and `stop_reason` both end a choice, the way `completionAsChunks` ends one; `null`, `""` and absent are all still running. Both stay raw through the decode, because a wrong type in one of them would otherwise fail the decode that also finds the error.
+- Any reason a host names is terminal, `"length"` and a reason no spec lists included: the question is whether generation ended, not why. A reply cut short by `max_tokens` ended.
+- A choice is remembered by its index, so a finished choice cannot vouch for an unfinished sibling. `n` is forced to 1 (see "Parameter rules"), so this is not for a client that asked for several — it is for a host that answers with more choices than it was asked for. A choice whose index is missing or unreadable is remembered by where it stands in the list, which is how a client reads it.
+- A reply that started no choice counts as finished. An answer carrying nothing is the engine's to fault (see [`engine/README.md`](../engine/README.md), "Classification and reassembly"), and refusing it here would also refuse a body that is a bare error object.
+- Past `maxIndexedElements` distinct choices the reply is refused whatever its reasons say. That is the bound the fold already applies to the same input, and a host naming choices without limit is not one to replay.
+
+A recorded host stream that finishes still earns its entry: `TestEveryRecordedStreamIsClassified` names the verdict for every fixture in `testdata/sse`, so a new one fails the suite until somebody says which side of the gate it belongs on.
+
+Reading the choices is what the answer costs: on a 64-chunk, 23 KB production stream the walk goes from ~26 µs to ~42 µs and from 138 allocations to 408 (`BenchmarkIsCacheableResponse`; absolutes are machine- and load-dependent, the 1.6× is what travels). It scales with the body, so a 1.3 MB reply pays about a millisecond of it on the store — against the seconds that same reply spends being written to the client. Only the store pays: the read path asks the failure alone. The events-side alternative, counting inside the rewriter and the fold as the events go past, costs a tenth of that, but it answers from writer state rather than from the bytes actually stored, and it cannot see a body that was never framed as events at all.
 
 ### Capability errors
 

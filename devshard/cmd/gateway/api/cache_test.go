@@ -7,12 +7,14 @@ import (
 	"net/http/httptest"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
 	"devshard/cmd/gateway/config"
 	"devshard/cmd/gateway/engine"
 	"devshard/cmd/gateway/filters"
+	"devshard/cmd/gateway/internal/logcapture"
 )
 
 const streamChatBody = `{"model":"qwen","messages":[{"role":"user","content":"hi"}],"stream":true}`
@@ -116,7 +118,7 @@ func TestAStreamedReplyReplaysChunkForChunk(t *testing.T) {
 	live := newHarness(t)
 	live.inference.chunks = []string{
 		"data: {\"choices\":[{\"delta\":{\"content\":\"one\"}}]}\n\n",
-		"data: {\"choices\":[{\"delta\":{\"content\":\"two\"}}]}\n\n",
+		"data: {\"choices\":[{\"delta\":{\"content\":\"two\"},\"finish_reason\":\"stop\"}]}\n\n",
 		"data: [DONE]\n\n",
 	}
 
@@ -241,7 +243,9 @@ func TestAnExpiredEntryIsAMissAndAnOversizedOneIsNeverStored(t *testing.T) {
 	}
 
 	tiny := newResponseCache(1)
-	tiny.put(key, entry, now)
+	if refusal := tiny.put(key, entry, now); refusal != cacheRefusedTooLarge {
+		t.Fatalf("put refused with %q, want %q", refusal, cacheRefusedTooLarge)
+	}
 	if len(tiny.entries) != 0 {
 		t.Fatalf("an entry larger than the whole cap was stored: %d entries", len(tiny.entries))
 	}
@@ -249,7 +253,9 @@ func TestAnExpiredEntryIsAMissAndAnOversizedOneIsNeverStored(t *testing.T) {
 
 func TestTheCapEvictsUntilTheCacheFits(t *testing.T) {
 	now := time.Unix(1700000000, 0)
-	body := make([]byte, 512)
+	// A storable body of a known size: the cache only ever accounts for replies it agreed to keep.
+	answer := strings.Repeat("x", 512-len(`{"choices":[{"index":0,"message":{"content":""},"finish_reason":"stop"}]}`))
+	body := []byte(`{"choices":[{"index":0,"message":{"content":"` + answer + `"},"finish_reason":"stop"}]}`)
 	cache := newResponseCache(4 * (int64(len(body)) + cacheEntryOverhead))
 
 	for index := range 10 {
@@ -423,5 +429,133 @@ func TestAStoredEntryHoldsExactlyWhatItIsChargedFor(t *testing.T) {
 	}
 	if cap(entry.bounds) != len(entry.bounds) {
 		t.Errorf("entry bounds hold %d, charged for %d", cap(entry.bounds), len(entry.bounds))
+	}
+}
+
+// The gateway writes the terminator itself when a host sends none, so a reply that stopped mid-answer
+// reads as complete to the client that receives it and to the cache that stores it. Replaying one for
+// an hour is how eight identical retries got the same unfinished body.
+func TestAStreamThatStoppedMidAnswerIsNotCached(t *testing.T) {
+	live := newHarness(t)
+	live.inference.chunks = []string{`data: {"choices":[{"index":0,"delta":{"reasoning":"still working"}}]}` + "\n\n"}
+
+	first := live.request(t, http.MethodPost, "/v1/chat/completions", streamChatBody, callerHeaders("caller-a"))
+	live.request(t, http.MethodPost, "/v1/chat/completions", streamChatBody, callerHeaders("caller-a"))
+
+	if delivered := first.Body.String(); !strings.Contains(delivered, "still working") || !strings.Contains(delivered, "[DONE]") {
+		t.Fatalf("the client is still served what arrived, terminator included: %q", delivered)
+	}
+	if got := live.inference.runs.Load(); got != 2 {
+		t.Fatalf("races: got %d, want 2 (an unfinished answer must not be replayed)", got)
+	}
+}
+
+// The gate reads finish_reason, so an answer that did finish must still be worth a cache hit.
+func TestAStreamThatFinishedItsAnswerIsCached(t *testing.T) {
+	live := newHarness(t)
+	live.inference.chunks = []string{
+		`data: {"choices":[{"index":0,"delta":{"content":"ok"}}]}` + "\n\n",
+		`data: {"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}` + "\n\n",
+	}
+
+	live.request(t, http.MethodPost, "/v1/chat/completions", streamChatBody, callerHeaders("caller-a"))
+	live.request(t, http.MethodPost, "/v1/chat/completions", streamChatBody, callerHeaders("caller-a"))
+
+	if got := live.inference.runs.Load(); got != 1 {
+		t.Fatalf("races: got %d, want 1 (a finished answer is what the cache is for)", got)
+	}
+}
+
+// A non-streaming caller is served the same host stream, folded. The fold hides the defect better: the
+// merged body carries no finish_reason at all, and nothing in it says the answer stopped early.
+func TestAFoldedAnswerThatStoppedMidAnswerIsNotCached(t *testing.T) {
+	live := newHarness(t)
+	live.inference.chunks = []string{`data: {"object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"still w"}}]}` + "\n\n"}
+
+	live.request(t, http.MethodPost, "/v1/chat/completions", chatBody, callerHeaders("caller-a"))
+	live.request(t, http.MethodPost, "/v1/chat/completions", chatBody, callerHeaders("caller-a"))
+
+	if got := live.inference.runs.Load(); got != 2 {
+		t.Fatalf("races: got %d, want 2 (a folded unfinished answer must not be replayed either)", got)
+	}
+}
+
+// The refusal is the only place a truncated answer is named, so this line is the operator's contract.
+func TestAHostThatStoppedMidAnswerIsLogged(t *testing.T) {
+	logged := logcapture.Install(t)
+	live := newHarness(t)
+	live.inference.chunks = []string{`data: {"choices":[{"index":0,"delta":{"reasoning":"still working"}}]}` + "\n\n"}
+
+	live.request(t, http.MethodPost, "/v1/chat/completions", streamChatBody, callerHeaders("caller-a"))
+
+	line, found := logged.Find("a host stopped mid-answer: reply served, not cached")
+	if !found {
+		t.Fatalf("a truncated answer left no log line: %+v", logged.All())
+	}
+	if line.Level != "warn" {
+		t.Fatalf("level = %q, want warn", line.Level)
+	}
+	if got := logcapture.Field(line, "escrow"); got != "7" {
+		t.Fatalf("escrow = %v, want the escrow that answered", got)
+	}
+}
+
+// put is the only way into the cache, so the refusal it returns is the gate itself, not a log message.
+func TestPutRefusesAnUnfinishedAnswerAndNamesIt(t *testing.T) {
+	cache := newResponseCache(1 << 20)
+	now := time.Unix(1700000000, 0)
+	key := cacheKey{caller: sha256.Sum256([]byte("a")), model: "qwen", body: sha256.Sum256([]byte("b"))}
+	unfinished := []byte("data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"half\"}}]}\n\ndata: [DONE]\n\n")
+
+	refusal := cache.put(key, cachedResponse{escrowID: "7", stream: true, status: http.StatusOK, body: unfinished, bounds: []int{len(unfinished)}}, now)
+
+	if refusal != filters.CacheRefusedUnfinished {
+		t.Fatalf("put refused with %q, want %q", refusal, filters.CacheRefusedUnfinished)
+	}
+	if len(cache.entries) != 0 {
+		t.Fatalf("an unfinished answer was stored: %d entries", len(cache.entries))
+	}
+}
+
+// A host may split one JSON object over two data lines, which a client joins and the gate must too. Read
+// line by line, neither half decodes and the finished answer below would never earn its entry.
+func TestAStreamSplitAcrossDataLinesIsJudgedWhole(t *testing.T) {
+	live := newHarness(t)
+	live.inference.chunks = []string{"data: {\"choices\":[{\"index\":0,\ndata: \"delta\":{},\"finish_reason\":\"stop\"}]}\n\n"}
+
+	live.request(t, http.MethodPost, "/v1/chat/completions", streamChatBody, callerHeaders("caller-a"))
+	live.request(t, http.MethodPost, "/v1/chat/completions", streamChatBody, callerHeaders("caller-a"))
+
+	if got := live.inference.runs.Load(); got != 1 {
+		t.Fatalf("races: got %d, want 1 (a finished answer split across data lines is still finished)", got)
+	}
+}
+
+// A host may end its last event without the blank line that closes it. Our terminator must not glue onto
+// that event: one frame no client can read is also one the cache cannot judge, and the host loses caching.
+func TestATerminatorIsNotGluedOntoAnUnterminatedEvent(t *testing.T) {
+	live := newHarness(t)
+	live.inference.chunks = []string{`data: {"choices":[{"index":0,"delta":{"content":"ok"},"finish_reason":"stop"}]}`}
+
+	first := live.request(t, http.MethodPost, "/v1/chat/completions", streamChatBody, callerHeaders("caller-a"))
+	live.request(t, http.MethodPost, "/v1/chat/completions", streamChatBody, callerHeaders("caller-a"))
+
+	if delivered := first.Body.String(); !strings.Contains(delivered, "}\n\ndata: [DONE]") {
+		t.Fatalf("the terminator was glued onto the host's last event: %q", delivered)
+	}
+	if got := live.inference.runs.Load(); got != 1 {
+		t.Fatalf("races: got %d, want 1 (a finished answer must still earn its entry)", got)
+	}
+}
+
+// A host that framed its last event with CRLF closed it already; a second separator would open an empty one.
+func TestACrlfFramedEventIsNotSeparatedTwice(t *testing.T) {
+	live := newHarness(t)
+	live.inference.chunks = []string{"data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\r\n\r\n"}
+
+	first := live.request(t, http.MethodPost, "/v1/chat/completions", streamChatBody, callerHeaders("caller-a"))
+
+	if delivered := first.Body.String(); strings.Contains(delivered, "\r\n\r\n\n\n") {
+		t.Fatalf("a separator was written after an event that already ended: %q", delivered)
 	}
 }

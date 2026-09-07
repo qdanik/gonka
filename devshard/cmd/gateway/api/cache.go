@@ -107,6 +107,7 @@ func (c *responseCache) get(key cacheKey, now time.Time) (cachedResponse, bool) 
 		c.misses.Add(1)
 		return cachedResponse{}, false
 	}
+	// Only the error verdict is re-asked: put is the only way in, and it asks the whole question there.
 	if !entry.expiresAt.After(now) || filters.HasNonCacheableError(entry.body) {
 		c.dropLocked(key)
 		c.misses.Add(1)
@@ -116,14 +117,19 @@ func (c *responseCache) get(key cacheKey, now time.Time) (cachedResponse, bool) 
 	return entry, true
 }
 
-func (c *responseCache) put(key cacheKey, entry cachedResponse, now time.Time) {
-	if c == nil || !filters.IsCacheableResponse(entry.status, entry.body) {
-		return
+// put stores the entry, or names what refused it. See README.md, "The response cache".
+func (c *responseCache) put(key cacheKey, entry cachedResponse, now time.Time) string {
+	if c == nil {
+		// No cache configured, so nothing refused the reply; chat returns before this on that path anyway.
+		return filters.CacheStorable
+	}
+	if refusal := filters.CacheRefusal(entry.status, entry.body); refusal != filters.CacheStorable {
+		return refusal
 	}
 	entry.expiresAt = now.Add(c.ttl)
 	size := entrySize(entry)
 	if size > c.maxBytes {
-		return
+		return cacheRefusedTooLarge
 	}
 
 	c.mu.Lock()
@@ -133,6 +139,7 @@ func (c *responseCache) put(key cacheKey, entry cachedResponse, now time.Time) {
 	c.entries[key] = entry
 	c.totalBytes += size
 	c.evictToFitLocked(key)
+	return filters.CacheStorable
 }
 
 func (c *responseCache) dropLocked(key cacheKey) {

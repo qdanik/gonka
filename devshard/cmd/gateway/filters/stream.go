@@ -68,6 +68,11 @@ func EachSSEDataPayload(events []byte, visit func(payload []byte) bool) {
 	})
 }
 
+// SSEEventTerminated reports whether these bytes end an event, so a caller does not glue the next one on.
+func SSEEventTerminated(events []byte) bool {
+	return bytes.HasSuffix(events, sseEventSeparator) || bytes.HasSuffix(events, sseEventSeparatorCRLF)
+}
+
 // HasSSEDone is line-anchored, so a "[DONE]" inside a content delta is not read as the terminator.
 func HasSSEDone(events []byte) bool {
 	terminated := false

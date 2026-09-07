@@ -1,6 +1,7 @@
 package filters
 
 import (
+	"bytes"
 	stdjson "encoding/json"
 	"fmt"
 	"testing"
@@ -50,5 +51,43 @@ func BenchmarkDeleteFields(b *testing.B) {
 	b.ReportAllocs()
 	for b.Loop() {
 		deleteFields(decoded, clientStrippedFieldSet)
+	}
+}
+
+// The cache asks this of every reply it stores and of every hit it replays, so its cost is paid twice
+// per entry on bodies that reach a megabyte.
+func BenchmarkIsCacheableResponse(b *testing.B) {
+	events := productionStream(64)
+	var body bytes.Buffer
+	// Everything but the terminator, then the terminal chunk the fixture leaves out, then the terminator.
+	for _, event := range events[:len(events)-1] {
+		body.Write(event)
+	}
+	body.WriteString("data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n")
+	body.Write(events[len(events)-1])
+	stream := body.Bytes()
+	b.ReportAllocs()
+	b.SetBytes(int64(len(stream)))
+	for b.Loop() {
+		if !IsCacheableResponse(200, stream) {
+			b.Fatal("the production stream must stay cacheable")
+		}
+	}
+}
+
+// What a cache hit pays: the read path asks only whether the stored reply carries a failure.
+func BenchmarkHasNonCacheableError(b *testing.B) {
+	events := productionStream(64)
+	var body bytes.Buffer
+	for _, event := range events {
+		body.Write(event)
+	}
+	stream := body.Bytes()
+	b.ReportAllocs()
+	b.SetBytes(int64(len(stream)))
+	for b.Loop() {
+		if HasNonCacheableError(stream) {
+			b.Fatal("the production stream carries no failure")
+		}
 	}
 }

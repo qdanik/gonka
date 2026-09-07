@@ -18,6 +18,9 @@ const (
 	deliveryFailedBeforeFirstByte = "failed_before_first_byte"
 )
 
+// The cache's own refusal, beside the ones filters can name from the body alone.
+const cacheRefusedTooLarge = "too_large"
+
 // Why a request was captured. Capture has these two triggers and no others.
 const (
 	captureFilterRejected = "filter_rejected"

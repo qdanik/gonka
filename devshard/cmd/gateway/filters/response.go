@@ -3,12 +3,7 @@ package filters
 import (
 	"bytes"
 	stdjson "encoding/json"
-	"fmt"
-	"net/http"
 	"slices"
-	"strings"
-
-	json "github.com/goccy/go-json"
 
 	"devshard"
 )
@@ -44,27 +39,6 @@ var (
 
 	clientStrippedFieldSet = fieldSet(clientStrippedFields)
 	alwaysStrippedFieldSet = fieldSet(alwaysStrippedFields)
-
-	// nonCacheableErrorMarkers identify transient or availability failures excluded from caching.
-	nonCacheableErrorMarkers = []string{
-		"context canceled",
-		"context cancelled",
-		"client disconnected",
-		"request canceled",
-		"request cancelled",
-		"timeout",
-		"timed out",
-		"rate limit",
-		"overloaded",
-		"temporarily unavailable",
-		"service unavailable",
-		"internal server error",
-		"unsupported model",
-		"model not found",
-		"model_not_found",
-		"does not exist",
-		"not supported on this model",
-	}
 )
 
 // stripOutcome separates an unparseable payload from a parseable one with nothing to strip.
@@ -179,117 +153,6 @@ func deleteFields(value any, fields map[string]struct{}) bool {
 	default:
 		return false
 	}
-}
-
-// UpstreamError is the OpenAI-compatible error shape extracted from a response body or SSE event.
-type UpstreamError struct {
-	Type    string
-	Code    string
-	Message string
-}
-
-// IsCacheableResponse reports whether a completed upstream response may be stored.
-func IsCacheableResponse(status int, body []byte) bool {
-	if len(body) == 0 || HasNonCacheableError(body) {
-		return false
-	}
-	if status >= 200 && status < 300 {
-		return true
-	}
-	return IsCacheableUpstreamError(status, body)
-}
-
-// HasNonCacheableError reports a failure that must not be replayed, so a poisoned entry drops itself on read.
-func HasNonCacheableError(body []byte) bool {
-	details, ok := parseUpstreamErrorDetails(body)
-	return ok && !isCacheableErrorDetails(details)
-}
-
-// IsCacheableUpstreamError reports a deterministic client-input error, safe to cache.
-func IsCacheableUpstreamError(status int, body []byte) bool {
-	if status != http.StatusBadRequest {
-		return false
-	}
-	details, ok := parseUpstreamErrorDetails(body)
-	if !ok {
-		return false
-	}
-	return isCacheableErrorDetails(details)
-}
-
-// parseUpstreamErrorDetails extracts a top-level error from plain JSON or from an SSE data event.
-func parseUpstreamErrorDetails(payload []byte) (UpstreamError, bool) {
-	if details, ok := DecodeUpstreamError(payload); ok {
-		return details, true
-	}
-	var found UpstreamError
-	// An empty {"error":{}} carries nothing, so stopping on it would leave a real error in a later event unseen.
-	EachSSEDataPayload(payload, func(data []byte) bool {
-		details, ok := DecodeUpstreamError(data)
-		if !ok || details == (UpstreamError{}) {
-			return false
-		}
-		found = details
-		return true
-	})
-	return found, found != UpstreamError{}
-}
-
-// DecodeUpstreamError accepts both the nested {"error":{...}} shape and the flat {"object":"error",...} one vLLM emits.
-func DecodeUpstreamError(payload []byte) (UpstreamError, bool) {
-	var body struct {
-		Error *struct {
-			Type    string `json:"type"`
-			Code    any    `json:"code"`
-			Message string `json:"message"`
-		} `json:"error"`
-		Object  string `json:"object"`
-		Type    string `json:"type"`
-		Code    any    `json:"code"`
-		Message string `json:"message"`
-	}
-	if err := json.Unmarshal(payload, &body); err != nil {
-		return UpstreamError{}, false
-	}
-	if body.Error != nil {
-		return UpstreamError{Type: body.Error.Type, Code: codeString(body.Error.Code), Message: body.Error.Message}, true
-	}
-	if body.Object == "error" && body.Message != "" {
-		return UpstreamError{Type: body.Type, Code: codeString(body.Code), Message: body.Message}, true
-	}
-	return UpstreamError{}, false
-}
-
-// codeString treats a JSON null code as absent rather than the literal text "<nil>".
-func codeString(code any) string {
-	if code == nil {
-		return ""
-	}
-	return fmt.Sprint(code)
-}
-
-func isCacheableErrorDetails(details UpstreamError) bool {
-	msg := strings.ToLower(details.Message)
-	if strings.TrimSpace(msg) == "" {
-		return false
-	}
-	if isRetriableCapabilityError(details.Message) {
-		return false
-	}
-	typ := strings.ToLower(details.Type)
-	code := strings.ToLower(details.Code)
-	for _, marker := range nonCacheableErrorMarkers {
-		if strings.Contains(msg, marker) || strings.Contains(typ, marker) || strings.Contains(code, marker) {
-			return false
-		}
-	}
-	return true
-}
-
-// isRetriableCapabilityError excludes host-capability failures from caching: a different host may serve them fine.
-func isRetriableCapabilityError(msg string) bool {
-	contextLimit, _ := CapabilityLimits(msg)
-	return strings.Contains(msg, ToolChoiceUnsupportedMessage) || contextLimit > 0
 }
 
 // emptyTopLogprobs leaves the empty array OpenAI returns when alternatives were not asked for. See README.md, "Response stripping".
