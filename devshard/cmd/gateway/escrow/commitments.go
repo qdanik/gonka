@@ -154,12 +154,12 @@ func (m *Manager) reconcileOne(ctx context.Context, c store.Commitment) error {
 		logging.Info("escrow recovered from commitment", logkey.Escrow, escrowID, logkey.Model, c.Model, logkey.Role, c.Role, logkey.Epoch, c.Epoch, logkey.Tx, c.TxHash)
 		return nil
 	case err == nil && !found:
-		return m.clearCommitment(ctx, c, "transaction created no escrow") // committed but produced no escrow event: terminal
+		return m.clearCommitment(ctx, c, commitmentClearedNoEscrow) // committed but produced no escrow event: terminal
 	case errors.Is(err, chain.ErrTxNotFound):
 		if m.txMayStillLand(c) {
 			return nil // unordered tx may still land: keep, retry next tick
 		}
-		return m.clearCommitment(ctx, c, "transaction can no longer land") // past its TTL
+		return m.clearCommitment(ctx, c, commitmentClearedCannotLand) // past its TTL
 	default:
 		return fmt.Errorf("querying tx %s: %w", c.TxHash, err) // endpoint unreachable: keep, retry next tick
 	}

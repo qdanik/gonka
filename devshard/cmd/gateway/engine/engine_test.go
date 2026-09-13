@@ -304,6 +304,15 @@ func TestOutcomeFailureNamesWhatTheClientLost(t *testing.T) {
 	hostRefused.ErrorType = "BadRequestError"
 	hostRefused.ErrorMessage = "model does not exist"
 
+	contextRejected := failedAttempt(TerminalCapabilityRefused)
+	contextRejected.Nonce = hostRefused.Nonce + 1
+	contextRejected.ErrorSource = "error.BadRequestError"
+	contextRejected.ErrorType = "BadRequestError"
+	contextRejected.ErrorMessage = vllmContextTotalMessage
+
+	suspiciousContextRejected := contextRejected
+	suspiciousContextRejected.Suspicious = true
+
 	cases := []struct {
 		name    string
 		outcome RaceOutcome
@@ -323,6 +332,21 @@ func TestOutcomeFailureNamesWhatTheClientLost(t *testing.T) {
 		{
 			name:    "the_host_refused_in_words_the_client_must_see",
 			outcome: failedRace(hostRefused),
+			want:    &HostApplicationError{Type: "BadRequestError", Message: "model does not exist"},
+		},
+		{
+			name:    "a_trusted_context_length_rejection_outranks_an_earlier_refusal",
+			outcome: RaceOutcome{Model: testModel, Attempts: []AttemptOutcome{hostRefused, contextRejected}},
+			want:    &HostApplicationError{Type: "BadRequestError", Message: vllmContextTotalMessage},
+		},
+		{
+			name:    "a_suspicious_hosts_context_length_rejection_outranks_nothing",
+			outcome: RaceOutcome{Model: testModel, Attempts: []AttemptOutcome{hostRefused, suspiciousContextRejected}},
+			want:    &HostApplicationError{Type: "BadRequestError", Message: "model does not exist"},
+		},
+		{
+			name:    "the_crowned_attempts_refusal_outranks_a_context_length_rejection",
+			outcome: RaceOutcome{Model: testModel, WinnerNonce: hostRefused.Nonce, Attempts: []AttemptOutcome{contextRejected, hostRefused}},
 			want:    &HostApplicationError{Type: "BadRequestError", Message: "model does not exist"},
 		},
 		{

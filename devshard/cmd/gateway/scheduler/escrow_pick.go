@@ -12,6 +12,12 @@ import (
 // fallbackNonceCeiling applies until governance max_nonce has been fetched. See routing.md, "Picking an escrow".
 const fallbackNonceCeiling uint64 = 19_800
 
+// exhaustionFallbackNonceCeiling is the one decline reason never reported, so it never leaves this package. See routing.md, "Picking an escrow".
+const exhaustionFallbackNonceCeiling = "fallback_nonce_ceiling"
+
+// nonceInFlightMargin is room left under the hosts' nonce cap for work already routed. See routing.md, "Picking an escrow".
+const nonceInFlightMargin uint64 = 200
+
 func (s *Scheduler) pickEscrow(profile RequestProfile, snapshot chain.PhaseSnapshot) (Escrow, error) {
 	candidates := s.escrows.Candidates(profile.Model)
 	reserveTokens := s.reserveTokens(profile)
@@ -23,9 +29,7 @@ func (s *Scheduler) pickEscrow(profile RequestProfile, snapshot chain.PhaseSnaps
 			}
 			// A pinned escrow is capped too: the ceiling reserves room for the finalize and settlement. See routing.md, "Picking an escrow".
 			if reason := exhaustionReason(candidate, snapshot.MaxNonce, reserveTokens); reason != "" {
-				if s.onEscrowExhausted != nil {
-					s.onEscrowExhausted(candidate.ID, reason)
-				}
+				s.reportExhausted(candidate.ID, reason)
 				return Escrow{}, noCapacity(reason)
 			}
 			return candidate, nil
@@ -48,9 +52,7 @@ func (s *Scheduler) pickEscrow(profile RequestProfile, snapshot chain.PhaseSnaps
 		if reason := exhaustionReason(candidate, snapshot.MaxNonce, reserveTokens); reason != "" {
 			declined = reason
 			// Routing only declines; the rotation lifecycle is what replaces an exhausted escrow.
-			if s.onEscrowExhausted != nil {
-				s.onEscrowExhausted(candidate.ID, reason)
-			}
+			s.reportExhausted(candidate.ID, reason)
 			continue
 		}
 		score := loadScore(candidate.ActiveUsers, s.capacity.EscrowWeight(candidate.ID, profile.Model))
@@ -78,9 +80,17 @@ func (s *Scheduler) pickEscrow(profile RequestProfile, snapshot chain.PhaseSnaps
 	}
 }
 
+// reportExhausted passes over the fallback ceiling: it is not the hosts' cap, and a reported escrow is parked for good. See routing.md, "Picking an escrow".
+func (s *Scheduler) reportExhausted(escrowID, reason string) {
+	if s.onEscrowExhausted == nil || reason == exhaustionFallbackNonceCeiling {
+		return
+	}
+	s.onEscrowExhausted(escrowID, reason)
+}
+
 // noCapacity carries why the last candidate was declined, so running dry is not read as a model nobody serves.
 func noCapacity(reason string) error {
-	if reason == "balance_floor" {
+	if reason == exhaustionBalanceFloor {
 		return fmt.Errorf("%w: %w", ErrNoEscrowCapacity, types.ErrInsufficientBalance)
 	}
 	return ErrNoEscrowCapacity
@@ -94,30 +104,37 @@ func loadScore(activeUsers int, weight float64) float64 {
 	return float64(activeUsers) / weight
 }
 
-func atNonceCap(candidate Escrow, maxNonce uint64) bool {
+// nonceCeilingReason names the ceiling an escrow has reached, and is empty below it.
+func nonceCeilingReason(candidate Escrow, maxNonce uint64) string {
 	if candidate.Session == nil {
-		return false
+		return ""
 	}
-	cutoff := fallbackNonceCeiling
+	cutoff, reason := fallbackNonceCeiling, exhaustionFallbackNonceCeiling
 	if maxNonce > 0 {
 		// Clamp, never wrap: a cap wrapping to 0 makes MaxActiveNonce return ^uint64(0), disabling the gate.
 		if maxNonce > math.MaxUint32 {
 			maxNonce = math.MaxUint32
 		}
 		cutoff = types.MaxActiveNonce(uint32(maxNonce), candidate.Session.GroupSize())
+		cutoff -= min(nonceInFlightMargin, cutoff/2)
+		reason = exhaustionNonceCap
 	}
-	return candidate.Session.LatestNonce() >= cutoff
+	if candidate.Session.LatestNonce() < cutoff {
+		return ""
+	}
+	return reason
 }
 
-// exhaustionReason is empty while the escrow may still be picked.
+// exhaustionReason is empty while the escrow may still be picked; the fallback ceiling ranks last, so an escrow past it is still reported when its balance floor catches it. See routing.md, "Picking an escrow".
 func exhaustionReason(candidate Escrow, maxNonce uint64, reserveTokens uint64) string {
+	ceilingReason := nonceCeilingReason(candidate, maxNonce)
 	switch {
-	case atNonceCap(candidate, maxNonce):
+	case ceilingReason == exhaustionNonceCap:
 		return exhaustionNonceCap
 	case belowBalanceFloor(candidate, reserveTokens):
 		return exhaustionBalanceFloor
 	}
-	return ""
+	return ceilingReason
 }
 
 // belowBalanceFloor prices the reserve the way the chain does, (input+max_tokens)*token_price.

@@ -96,9 +96,13 @@ func (c *raceCoordinator) complete(attempt *liveAttempt, event AttemptEvent) {
 		fields = append(fields, logkey.PhaseAborted, true)
 	}
 	logging.Info("attempt finished", fields...)
-	if signal := CapabilityOf(*attempt.outcome); signal.Retriable() {
+	if signal := CapabilityOf(*attempt.outcome); signal.Refused() {
 		RecordCapability(c.deps.Perf, attempt.participant, c.request.Model, signal)
 		c.exclude(attempt.participant)
+	}
+	if rulesOutRetry(*attempt.outcome) {
+		c.retryRuledOut = true
+		c.stopPicking()
 	}
 	if attempt.outcome.StateDivergent {
 		c.stateDiverged(attempt)

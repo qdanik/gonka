@@ -15,6 +15,7 @@ import (
 
 	"devshard/cmd/gateway/chain"
 	"devshard/cmd/gateway/config"
+	"devshard/cmd/gateway/filters"
 	"devshard/cmd/gateway/limits"
 	"devshard/cmd/gateway/perf"
 	"devshard/cmd/gateway/scheduler"
@@ -665,15 +666,15 @@ func TestSimulatorHoldsPreContentChunksUntilTheCrownIsWon(t *testing.T) {
 	sim.reported(t)
 }
 
-func TestSimulatorCapabilityRefusalDoesNotCrownAndRepicksElsewhere(t *testing.T) {
+func TestSimulatorToolRefusalDoesNotCrownAndRepicksElsewhere(t *testing.T) {
 	sim := newSimulator(t, speculativePolicy(2), 2, qwenModel)
-	sim.host(10, 0, "small-host", &hostScript{
+	sim.host(10, 0, "toolless-host", &hostScript{
 		receipt: true,
 		chunks: []string{
-			`data: {"error":{"code":400,"message":"` + vllmContextTotalMessage + `","type":"BadRequestError"}}` + "\n\n",
+			`data: {"error":{"code":400,"message":"` + filters.ToolChoiceUnsupportedMessage + `","type":"BadRequestError"}}` + "\n\n",
 		},
 	})
-	sim.host(11, 1, "large-host", &hostScript{
+	sim.host(11, 1, "tool-host", &hostScript{
 		receipt: true, chunks: []string{contentEvent("hi")},
 		confirmed: true, finished: true,
 	})
@@ -683,7 +684,7 @@ func TestSimulatorCapabilityRefusalDoesNotCrownAndRepicksElsewhere(t *testing.T)
 		t.Fatalf("Run() error = %v", err)
 	}
 	if outcome.WinnerNonce != 11 {
-		t.Fatalf("winner = %d, want the host that could serve the prompt", outcome.WinnerNonce)
+		t.Fatalf("winner = %d, want the host that could serve the tool call", outcome.WinnerNonce)
 	}
 	reported := sim.reported(t)
 	if refused := attemptFor(t, reported, 10); refused.Terminal != TerminalCapabilityRefused {
@@ -695,11 +696,44 @@ func TestSimulatorCapabilityRefusalDoesNotCrownAndRepicksElsewhere(t *testing.T)
 	if len(profiles) != 2 {
 		t.Fatalf("Pick calls = %d, want 2", len(profiles))
 	}
-	if len(profiles[1].Exclude) != 1 || profiles[1].Exclude[0] != "small-host" {
-		t.Errorf("re-pick Exclude = %v, want [small-host]", profiles[1].Exclude)
+	if len(profiles[1].Exclude) != 1 || profiles[1].Exclude[0] != "toolless-host" {
+		t.Errorf("re-pick Exclude = %v, want [toolless-host]", profiles[1].Exclude)
 	}
-	if recorded := sim.perf.limits; len(recorded) != 1 || recorded[0].maxTokens != 40_960 {
-		t.Errorf("recorded context limits = %+v, want one of 40960", recorded)
+	if recorded := sim.perf.toolCalls; len(recorded) != 1 || recorded[0] != "toolless-host" {
+		t.Errorf("recorded tool refusals = %v, want one for toolless-host", recorded)
+	}
+}
+
+// A prompt past the model's context length is past every host's, so the client gets the host's own words
+// at once, and the refused nonce is still voted.
+func TestSimulatorContextLengthRejectionReachesTheClientWithoutAnotherAttempt(t *testing.T) {
+	const rejection = `{"error":{"code":400,"message":"` + vllmContextTotalMessage + `","type":"BadRequestError"}}`
+	sim := newSimulator(t, speculativePolicy(2), 2, qwenModel)
+	sim.host(10, 0, "host-0", &hostScript{receipt: true, chunks: []string{"data: " + rejection + "\n\n"}})
+	sim.host(11, 1, "host-1", &hostScript{
+		receipt: true, chunks: []string{contentEvent("hi")},
+		confirmed: true, finished: true,
+	})
+
+	_, err := sim.run(context.Background())
+
+	var hostErr *HostApplicationError
+	if !errors.As(err, &hostErr) || hostErr.Payload != rejection {
+		t.Fatalf("Run() error = %v, want the host's own rejection %s", err, rejection)
+	}
+	sim.reported(t)
+	sim.picker.mu.Lock()
+	picks := len(sim.picker.profiles)
+	sim.picker.mu.Unlock()
+	if picks != 1 {
+		t.Fatalf("Pick calls = %d, want 1", picks)
+	}
+	if recorded := sim.perf.limits; len(recorded) != 1 || recorded[0] != (contextLimitCall{participant: "host-0", maxTokens: 40_960}) {
+		t.Errorf("recorded context limits = %+v, want one of 40960 for host-0", recorded)
+	}
+	sim.settleAll()
+	if posted := sim.poster.settled(); len(posted) != 1 || posted[0] != 10 {
+		t.Fatalf("votes posted = %v, want [10]", posted)
 	}
 }
 

@@ -25,6 +25,7 @@ type escrowStore interface {
 	SetDevshardActive(ctx context.Context, escrowID string, active bool) error
 	SetDevshardSettlementPending(ctx context.Context, escrowID string, pending bool) error
 	ParkForSettlement(ctx context.Context, escrowID string) error
+	ParkForSettlementIfActive(ctx context.Context, escrowID string) (bool, error)
 	DevshardSettleTxHash(ctx context.Context, escrowID string) (string, time.Time, error)
 	SetDevshardRotationRole(ctx context.Context, escrowID, role string) error
 	SetDevshardSettleTxHash(ctx context.Context, escrowID, txHash string) error

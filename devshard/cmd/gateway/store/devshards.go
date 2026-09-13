@@ -93,6 +93,21 @@ func (s *Store) ParkForSettlement(ctx context.Context, escrowID string) error {
 	return requireOneRow(result, escrowID)
 }
 
+// ParkForSettlementIfActive reports whether it parked a serving row. See README.md, "The devshard registry".
+func (s *Store) ParkForSettlementIfActive(ctx context.Context, escrowID string) (bool, error) {
+	result, err := s.db.ExecContext(ctx,
+		`UPDATE devshards SET active = 0, settlement_pending = 1, updated_at = datetime('now') WHERE escrow_id = ? AND active = 1`,
+		escrowID)
+	if err != nil {
+		return false, fmt.Errorf("parking devshard %s: %w", escrowID, err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("checking affected rows for %s: %w", escrowID, err)
+	}
+	return affected == 1, nil
+}
+
 func (s *Store) DeleteDevshard(ctx context.Context, escrowID string) error {
 	result, err := s.db.ExecContext(ctx, `DELETE FROM devshards WHERE escrow_id = ?`, escrowID)
 	if err != nil {

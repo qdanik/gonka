@@ -30,6 +30,8 @@ type deadlinePlan struct {
 	Drain     time.Time
 	Pick      time.Time
 	Cancelled bool
+
+	RetryRuledOut bool
 }
 
 // nextDeadline is the earliest armed deadline and what fires there, precedence breaking exact ties. See race.md, "Deadlines".
@@ -61,9 +63,9 @@ func nextDeadline(now time.Time, plan deadlinePlan) deadlineArm {
 	return arm
 }
 
-// A race whose client left is owed no further attempt, and a running pick is already the escalation.
+// A race whose client left, or whose retry a trusted host's refusal ruled out, is owed no further attempt, and a running pick is already the escalation.
 func (p deadlinePlan) escalation(now time.Time) (ArmedEscalation, bool) {
-	if !p.Pick.IsZero() || p.detached() || p.crowned() {
+	if !p.Pick.IsZero() || p.detached() || p.crowned() || p.RetryRuledOut {
 		return ArmedEscalation{}, false
 	}
 	armed, found := p.Policy.NextEscalation(now, p.Attempts, p.Request)
@@ -229,6 +231,8 @@ func (c *raceCoordinator) plan() deadlinePlan {
 		Drain:     c.drain.deadline(c.clientGoneAt),
 		Pick:      c.pickDeadline(),
 		Cancelled: c.cancelled,
+
+		RetryRuledOut: c.retryRuledOut,
 	}
 }
 

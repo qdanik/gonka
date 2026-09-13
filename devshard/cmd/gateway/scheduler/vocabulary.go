@@ -1,6 +1,6 @@
 package scheduler
 
-// The strings this package puts on the wire, declared once and referenced by name. See README.md, "Ghost burns".
+// The strings this package puts on the wire, declared once and referenced by name. See routing.md, "Ghost burns".
 
 // Why a nonce was burned instead of served.
 const (

@@ -25,6 +25,7 @@ func TestProfileForUnknownModelReturnsNil(t *testing.T) {
 		{"empty routed model", ""},
 		{"near-miss kimi version does not match", "moonshotai/Kimi-K2.5"},
 		{"near-miss minimax version does not match", "MiniMaxAI/MiniMax-M2"},
+		{"near-miss glm variant does not match", "zai-org/GLM-5.3"},
 		{"kimi id with leading whitespace does not match", " " + kimiModelID},
 	}
 	for _, testCase := range tests {
@@ -43,5 +44,8 @@ func TestModelIDLiterals(t *testing.T) {
 	}
 	if minimaxModelID != "MiniMaxAI/MiniMax-M2.7" {
 		t.Errorf("minimaxModelID = %q, want %q", minimaxModelID, "MiniMaxAI/MiniMax-M2.7")
+	}
+	if glm53FlashModelID != "zai-org/GLM-5.3-Flash" {
+		t.Errorf("glm53FlashModelID = %q, want %q", glm53FlashModelID, "zai-org/GLM-5.3-Flash")
 	}
 }

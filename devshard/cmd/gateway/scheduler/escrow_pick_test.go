@@ -11,6 +11,7 @@ import (
 
 	"devshard/cmd/gateway/chain"
 	"devshard/cmd/gateway/config"
+	"devshard/types"
 )
 
 const modelA = "model-a"
@@ -76,6 +77,8 @@ type candidate struct {
 	weight      float64
 	latestNonce uint64
 	groupSize   int
+	balance     uint64
+	tokenPrice  uint64
 }
 
 func newScheduler(candidates ...candidate) (*Scheduler, *fakeEscrows, *fakeWeights) {
@@ -89,7 +92,7 @@ func newScheduler(candidates ...candidate) (*Scheduler, *fakeEscrows, *fakeWeigh
 		escrows.byModel[modelA] = append(escrows.byModel[modelA], Escrow{
 			ID:          entry.id,
 			Model:       modelA,
-			Session:     &fakeSession{latestNonce: entry.latestNonce, groupSize: groupSize},
+			Session:     &fakeSession{latestNonce: entry.latestNonce, groupSize: groupSize, balance: entry.balance, tokenPrice: entry.tokenPrice},
 			ActiveUsers: entry.activeUsers,
 		})
 		weights.byEscrow[entry.id] = entry.weight
@@ -263,6 +266,7 @@ func TestPickEscrowNonceCap(t *testing.T) {
 		want       string
 		wantErr    error
 	}{
+		// Cap 1_000, group 4: hosts' cap 995, cutoff 795.
 		{
 			name:     "governance cap drops the capped escrow",
 			maxNonce: 1_000,
@@ -276,7 +280,7 @@ func TestPickEscrowNonceCap(t *testing.T) {
 			name:     "governance cap keeps an escrow one nonce below the cutoff",
 			maxNonce: 1_000,
 			candidates: []candidate{
-				{id: "escrow-1", activeUsers: 0, weight: 100, latestNonce: 994, groupSize: 4},
+				{id: "escrow-1", activeUsers: 0, weight: 100, latestNonce: 794, groupSize: 4},
 			},
 			want: "escrow-1",
 		},
@@ -284,9 +288,52 @@ func TestPickEscrowNonceCap(t *testing.T) {
 			name:     "governance cap drops an escrow exactly at the cutoff",
 			maxNonce: 1_000,
 			candidates: []candidate{
-				{id: "escrow-1", activeUsers: 0, weight: 100, latestNonce: 995, groupSize: 4},
+				{id: "escrow-1", activeUsers: 0, weight: 100, latestNonce: 795, groupSize: 4},
 			},
 			wantErr: ErrNoEscrowCapacity,
+		},
+		// Cap 1_000_000, group 3: hosts' cap 999_996, cutoff 999_796.
+		{
+			name:     "a large cap keeps an escrow one nonce below the cutoff",
+			maxNonce: 1_000_000,
+			candidates: []candidate{
+				{id: "escrow-1", activeUsers: 0, weight: 100, latestNonce: 999_795, groupSize: 3},
+			},
+			want: "escrow-1",
+		},
+		{
+			name:     "a large cap drops an escrow at the cutoff",
+			maxNonce: 1_000_000,
+			candidates: []candidate{
+				{id: "escrow-1", activeUsers: 0, weight: 100, latestNonce: 999_796, groupSize: 3},
+			},
+			wantErr: ErrNoEscrowCapacity,
+		},
+		// Cap 150, group 4: hosts' cap 145, margin at most half of it (72), cutoff 73.
+		{
+			name:     "a small cap keeps an escrow one nonce below the half-cap cutoff",
+			maxNonce: 150,
+			candidates: []candidate{
+				{id: "escrow-1", activeUsers: 0, weight: 100, latestNonce: 72, groupSize: 4},
+			},
+			want: "escrow-1",
+		},
+		{
+			name:     "a small cap drops an escrow at the half-cap cutoff",
+			maxNonce: 150,
+			candidates: []candidate{
+				{id: "escrow-1", activeUsers: 0, weight: 100, latestNonce: 73, groupSize: 4},
+			},
+			wantErr: ErrNoEscrowCapacity,
+		},
+		// Cap 206, group 4: hosts' cap 201, cutoff 101.
+		{
+			name:     "the cutoff does not collapse once the hosts' cap passes the margin",
+			maxNonce: 206,
+			candidates: []candidate{
+				{id: "escrow-1", activeUsers: 0, weight: 100, latestNonce: 100, groupSize: 4},
+			},
+			want: "escrow-1",
 		},
 		{
 			name:     "unfetched cap keeps an escrow just below the fallback ceiling",
@@ -325,7 +372,7 @@ func TestPickEscrowNonceCap(t *testing.T) {
 			name:     "an oversized cap still admits an escrow below the clamped cutoff",
 			maxNonce: uint64(math.MaxUint32) + 1,
 			candidates: []candidate{
-				{id: "escrow-1", activeUsers: 0, weight: 100, latestNonce: math.MaxUint32 - 10, groupSize: 4},
+				{id: "escrow-1", activeUsers: 0, weight: 100, latestNonce: math.MaxUint32 - 300, groupSize: 4},
 			},
 			want: "escrow-1",
 		},
@@ -423,26 +470,88 @@ func TestPickEscrowTouchesOnlyEnumerationAndWeights(t *testing.T) {
 	}
 }
 
-// Routing declines a nonce-exhausted escrow but cannot replace it, so it must tell the rotation
-// lifecycle. Without this the escrow is simply never picked again and drains away silently.
-func TestPickEscrowReportsANonceExhaustedCandidate(t *testing.T) {
-	t.Parallel()
-	scheduler, _, _ := newScheduler(
-		candidate{id: "escrow-spent", weight: 100, latestNonce: fallbackNonceCeiling},
-		candidate{id: "escrow-fresh", weight: 100, latestNonce: 1},
-	)
-	var reported []string
-	scheduler.onEscrowExhausted = func(escrowID, reason string) { reported = append(reported, escrowID) }
+type exhaustionReport struct{ escrowID, reason string }
 
-	picked, err := scheduler.pickEscrow(RequestProfile{Model: modelA}, chain.PhaseSnapshot{})
-	if err != nil {
-		t.Fatalf("pickEscrow() = %v, want the fresh escrow", err)
+// Routing declines an exhausted escrow but cannot replace it, so it tells the rotation lifecycle why, and
+// never for the fallback ceiling alone: that ceiling can sit below the hosts' own, and a reported escrow is
+// parked for good.
+func TestPickEscrowReportsAnExhaustedEscrowButNeverForTheFallbackCeilingAlone(t *testing.T) {
+	t.Parallel()
+
+	chainCap := chain.PhaseSnapshot{MaxNonce: 1_000}
+	const funded, dry uint64 = 1 << 30, 100
+	testCases := []struct {
+		name           string
+		pinned         string
+		snapshot       chain.PhaseSnapshot
+		spentBalance   uint64
+		wantPicked     string
+		wantErr        error
+		wantOutOfFunds bool
+		wantReported   []exhaustionReport
+	}{
+		{
+			name: "the chain's cap reports the spent candidate", snapshot: chainCap, spentBalance: funded,
+			wantPicked:   "escrow-fresh",
+			wantReported: []exhaustionReport{{escrowID: "escrow-spent", reason: exhaustionNonceCap}},
+		},
+		{
+			name: "the chain's cap reports a pinned spent escrow", pinned: "escrow-spent", snapshot: chainCap, spentBalance: funded,
+			wantErr:      ErrNoEscrowCapacity,
+			wantReported: []exhaustionReport{{escrowID: "escrow-spent", reason: exhaustionNonceCap}},
+		},
+		{
+			name: "the chain's cap outranks a dry balance", pinned: "escrow-spent", snapshot: chainCap, spentBalance: dry,
+			wantErr:      ErrNoEscrowCapacity,
+			wantReported: []exhaustionReport{{escrowID: "escrow-spent", reason: exhaustionNonceCap}},
+		},
+		{
+			name: "the fallback ceiling declines the spent candidate unreported", spentBalance: funded,
+			wantPicked: "escrow-fresh",
+		},
+		{
+			name: "the fallback ceiling declines a pinned spent escrow unreported", pinned: "escrow-spent", spentBalance: funded,
+			wantErr: ErrNoEscrowCapacity,
+		},
+		{
+			name: "past the fallback ceiling a dry candidate is reported for its balance", spentBalance: dry,
+			wantPicked:   "escrow-fresh",
+			wantReported: []exhaustionReport{{escrowID: "escrow-spent", reason: exhaustionBalanceFloor}},
+		},
+		{
+			name: "past the fallback ceiling a pinned dry escrow is refused as out of funds", pinned: "escrow-spent", spentBalance: dry,
+			wantErr:        ErrNoEscrowCapacity,
+			wantOutOfFunds: true,
+			wantReported:   []exhaustionReport{{escrowID: "escrow-spent", reason: exhaustionBalanceFloor}},
+		},
 	}
-	if picked.ID != "escrow-fresh" {
-		t.Fatalf("picked %q, want escrow-fresh", picked.ID)
-	}
-	if len(reported) != 1 || reported[0] != "escrow-spent" {
-		t.Fatalf("reported = %v, want exactly [escrow-spent]", reported)
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			settings := config.Defaults()
+			settings.Limits.MaxTokensCap = 4_096
+			scheduler, _, _ := newScheduler(
+				candidate{id: "escrow-spent", weight: 100, latestNonce: fallbackNonceCeiling, balance: testCase.spentBalance, tokenPrice: 10},
+				candidate{id: "escrow-fresh", weight: 100, latestNonce: 1, balance: funded, tokenPrice: 10},
+			)
+			scheduler.settings = config.NewHolder(&settings)
+			var reported []exhaustionReport
+			scheduler.onEscrowExhausted = func(escrowID, reason string) {
+				reported = append(reported, exhaustionReport{escrowID: escrowID, reason: reason})
+			}
+
+			picked, err := scheduler.pickEscrow(RequestProfile{Model: modelA, Escrow: testCase.pinned}, testCase.snapshot)
+
+			if picked.ID != testCase.wantPicked || !errors.Is(err, testCase.wantErr) {
+				t.Fatalf("pickEscrow() = %q, %v; want %q, %v", picked.ID, err, testCase.wantPicked, testCase.wantErr)
+			}
+			if outOfFunds := errors.Is(err, types.ErrInsufficientBalance); outOfFunds != testCase.wantOutOfFunds {
+				t.Fatalf("out of funds = %v, want %v: %v", outOfFunds, testCase.wantOutOfFunds, err)
+			}
+			if !slices.Equal(reported, testCase.wantReported) {
+				t.Fatalf("reported = %v, want %v", reported, testCase.wantReported)
+			}
+		})
 	}
 }
 
@@ -470,6 +579,34 @@ func TestAPinnedEscrowStillHonoursTheNonceCeiling(t *testing.T) {
 
 	if !errors.Is(err, ErrNoEscrowCapacity) {
 		t.Fatalf("pickEscrow() = %v, want the exhausted escrow refused", err)
+	}
+}
+
+func TestAPinnedEscrowMeetsTheInFlightMarginAtAFetchedCap(t *testing.T) {
+	t.Parallel()
+	testCases := []struct {
+		name        string
+		latestNonce uint64
+		want        string
+		wantErr     error
+	}{
+		{name: "one nonce below the cutoff is served", latestNonce: 794, want: "escrow-1"},
+		{name: "at the cutoff is refused", latestNonce: 795, wantErr: ErrNoEscrowCapacity},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			scheduler, _, _ := newScheduler(candidate{id: "escrow-1", weight: 1, latestNonce: testCase.latestNonce, groupSize: 4})
+
+			picked, err := scheduler.pickEscrow(RequestProfile{Model: modelA, Escrow: "escrow-1"}, chain.PhaseSnapshot{MaxNonce: 1_000})
+
+			if !errors.Is(err, testCase.wantErr) {
+				t.Fatalf("pickEscrow() = %v, want %v", err, testCase.wantErr)
+			}
+			if picked.ID != testCase.want {
+				t.Fatalf("picked %q, want %q", picked.ID, testCase.want)
+			}
+		})
 	}
 }
 

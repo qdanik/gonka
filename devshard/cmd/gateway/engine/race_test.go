@@ -270,6 +270,8 @@ type stubPerf struct {
 	versionCalls []string
 	limits       []contextLimitCall
 	observed     map[string]time.Duration
+
+	contextLimitRecorded chan struct{}
 }
 
 func (p *stubPerf) FirstContentP75(participant, _ string) (time.Duration, bool) {
@@ -305,8 +307,12 @@ func (p *stubPerf) Degraded(participant, _ string) bool {
 
 func (p *stubPerf) RecordContextLimit(participant, model string, maxTokens uint64) {
 	p.mu.Lock()
-	defer p.mu.Unlock()
 	p.limits = append(p.limits, contextLimitCall{participant: participant, maxTokens: maxTokens})
+	recorded := p.contextLimitRecorded
+	p.mu.Unlock()
+	if recorded != nil {
+		recorded <- struct{}{}
+	}
 }
 
 func (p *stubPerf) RecordVersionUnsupported(participant string) {
@@ -477,6 +483,20 @@ func settledPolicy() EscalationPolicy {
 		InterChunkStall:       time.Hour,
 		LoserGrace:            10 * time.Minute,
 		MaxAttemptsPerRequest: 1,
+	}
+}
+
+// waitForValue bounds a wait on the race, so a regression that blocks it fails the test rather than
+// hanging the package.
+func waitForValue[T any](t *testing.T, values <-chan T, what string) T {
+	t.Helper()
+	select {
+	case value := <-values:
+		return value
+	case <-time.After(5 * time.Second):
+		t.Fatalf("%s never happened", what)
+		var zero T
+		return zero
 	}
 }
 
@@ -750,13 +770,8 @@ func TestRunRaceGivesBackTheSlotAndVotesForANonceItCannotDispatch(t *testing.T) 
 	if !errors.Is(err, errNoDispatchTarget) {
 		t.Fatalf("error = %v, want errNoDispatchTarget", err)
 	}
-	select {
-	case released := <-fixture.limiter.releases:
-		if released != "host-0" {
-			t.Fatalf("released slot = %q, want host-0", released)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("the host slot the scheduler took for this assignment was never given back")
+	if released := waitForValue(t, fixture.limiter.releases, "the release of the slot the scheduler took for this assignment"); released != "host-0" {
+		t.Fatalf("released slot = %q, want host-0", released)
 	}
 	reported := <-fixture.reported
 	plan := reported.TimeoutPlan()
@@ -801,11 +816,7 @@ func TestRunRaceReleasesOneHostSlotPerAttempt(t *testing.T) {
 		t.Fatalf("attempts = %d, want 2", len(reported.Attempts))
 	}
 	for range reported.Attempts {
-		select {
-		case <-fixture.limiter.releases:
-		case <-time.After(2 * time.Second):
-			t.Fatalf("timed out waiting for %d host-slot releases", len(reported.Attempts))
-		}
+		waitForValue(t, fixture.limiter.releases, "a host-slot release for every attempt")
 	}
 	if extra := len(fixture.limiter.releases); extra != 0 {
 		t.Fatalf("host-slot releases = %d more than attempts, want one each", extra)
@@ -1071,16 +1082,17 @@ func TestNextDeadlinePrecedence(t *testing.T) {
 	const hard = streamingHardTimeout
 
 	cases := []struct {
-		name        string
-		receipt     time.Duration
-		stall       time.Duration
-		loserGrace  time.Duration
-		budget      int
-		drain       time.Time
-		cancelled   bool
-		attempts    []EscalationAttempt
-		wantAt      time.Time
-		wantTrigger deadlineTrigger
+		name          string
+		receipt       time.Duration
+		stall         time.Duration
+		loserGrace    time.Duration
+		budget        int
+		drain         time.Time
+		cancelled     bool
+		retryRuledOut bool
+		attempts      []EscalationAttempt
+		wantAt        time.Time
+		wantTrigger   deadlineTrigger
 	}{
 		{
 			name: "escalation earliest", receipt: time.Second, stall: 2 * time.Second, budget: 4,
@@ -1136,6 +1148,13 @@ func TestNextDeadlinePrecedence(t *testing.T) {
 			attempts:    []EscalationAttempt{pendingAttempt(base), streamingAttempt(base, base)},
 			wantAt:      base.Add(2 * time.Second),
 			wantTrigger: triggerStall,
+		},
+		{
+			name: "a refusal that rules out a retry ends escalation", receipt: time.Second, stall: 2 * time.Second, budget: 4,
+			retryRuledOut: true,
+			attempts:      []EscalationAttempt{pendingAttempt(base), streamingAttempt(base, base)},
+			wantAt:        base.Add(2 * time.Second),
+			wantTrigger:   triggerStall,
 		},
 		{
 			name: "an already stalled attempt is not re-armed", receipt: time.Hour, stall: time.Second, budget: 1,
@@ -1215,6 +1234,8 @@ func TestNextDeadlinePrecedence(t *testing.T) {
 				Budget:    testCase.budget,
 				Drain:     testCase.drain,
 				Cancelled: testCase.cancelled,
+
+				RetryRuledOut: testCase.retryRuledOut,
 			}
 			arm := nextDeadline(base, plan)
 			if arm.Trigger != testCase.wantTrigger {
@@ -1251,6 +1272,67 @@ func stalledFixtureCoordinator(policy EscalationPolicy, attempts ...*liveAttempt
 	return pausedCoordinator(newRaceFixture(policy, 1), 1, attempts...)
 }
 
+// A pick's answer and a rejection can be ready at once; the answer is judged after the rejection, so its
+// committed nonce is stranded, not dispatched.
+func TestAPickAnswerIsJudgedAgainstTheEventsAlreadyDelivered(t *testing.T) {
+	fixture := newRaceFixture(refusalPolicy(), 2)
+	refused := &liveAttempt{nonce: 100, participant: "host-0", sendTime: testEpoch, receiptTime: testEpoch, cancel: func() {}}
+	coordinator := pausedCoordinator(fixture, 2, refused)
+	coordinator.pickCancel = func() {}
+	coordinator.events <- AttemptEvent{Kind: AttemptDone, Nonce: 100, At: testEpoch, Outcome: &AttemptOutcome{
+		Nonce:        100,
+		Participant:  "host-0",
+		Terminal:     TerminalCapabilityRefused,
+		ErrorSource:  "error.BadRequestError",
+		ErrorType:    "BadRequestError",
+		ErrorMessage: vllmContextTotalMessage,
+	}}
+
+	coordinator.applyPick(pickedHost{assignment: scheduler.Assignment{
+		Escrow: "escrow-1",
+		Host:   "host-1",
+		Nonce:  fakePrepared{nonce: 101, hostIdx: 1},
+	}})
+
+	if len(coordinator.attempts) != 2 {
+		t.Fatalf("attempts = %d, want the refused one and the stranded pick", len(coordinator.attempts))
+	}
+	if picked := coordinator.attempts[1]; !picked.done || picked.outcome.Terminal != TerminalNoReceipt {
+		t.Fatalf("picked attempt done = %v outcome = %+v, want stranded without a receipt", picked.done, picked.outcome)
+	}
+}
+
+// The rejection ends the search for another host, not the race: a sibling still running keeps its context.
+func TestATrustedContextLengthRejectionDisarmsEscalationWithoutCancellingASibling(t *testing.T) {
+	fixture := newRaceFixture(refusalPolicy(), 3)
+	siblingCancelled := false
+	refused := &liveAttempt{nonce: 100, participant: "host-0", sendTime: testEpoch, receiptTime: testEpoch, cancel: func() {}}
+	sibling := &liveAttempt{
+		nonce:       101,
+		participant: "host-1",
+		sendTime:    testEpoch,
+		receiptTime: testEpoch,
+		cancel:      func() { siblingCancelled = true },
+	}
+	coordinator := pausedCoordinator(fixture, 3, refused, sibling)
+
+	coordinator.apply(AttemptEvent{Kind: AttemptDone, Nonce: 100, At: testEpoch, Outcome: &AttemptOutcome{
+		Nonce:        100,
+		Participant:  "host-0",
+		Terminal:     TerminalCapabilityRefused,
+		ErrorSource:  "error.BadRequestError",
+		ErrorType:    "BadRequestError",
+		ErrorMessage: vllmContextTotalMessage,
+	}})
+
+	if arm := nextDeadline(coordinator.deps.Now(), coordinator.plan()); arm.Trigger == triggerEscalation {
+		t.Fatalf("arm = %+v, want no escalation once a trusted host rejected the prompt", arm)
+	}
+	if siblingCancelled {
+		t.Fatal("the rejection cancelled an attempt still running")
+	}
+}
+
 // A timer fire and a queued event are equally ready in the select, so every deadline must be judged
 // against the events already delivered. Each case below queues the event that clears its deadline.
 func TestADeadlineIsJudgedAgainstTheEventsAlreadyDelivered(t *testing.T) {
@@ -1283,6 +1365,44 @@ func TestADeadlineIsJudgedAgainstTheEventsAlreadyDelivered(t *testing.T) {
 		fixture.picker.mu.Unlock()
 		if picks != 0 {
 			t.Fatalf("picks = %d, want 0: an extra nonce was committed on a cleared deadline", picks)
+		}
+	})
+
+	t.Run("a delivered context-length rejection withdraws the escalation it would have confirmed", func(t *testing.T) {
+		policy := settledPolicy()
+		policy.ReceiptTimeout = time.Second
+		fixture := newRaceFixture(policy, 3)
+		unreceipted := &liveAttempt{
+			nonce:       430,
+			participant: "host-0",
+			sendTime:    testEpoch.Add(-2 * time.Second),
+			cancel:      func() {},
+		}
+		rejecting := &liveAttempt{
+			nonce:       431,
+			participant: "host-1",
+			sendTime:    testEpoch.Add(-2 * time.Second),
+			receiptTime: testEpoch.Add(-2 * time.Second),
+			cancel:      func() {},
+		}
+		coordinator := pausedCoordinator(fixture, 3, unreceipted, rejecting)
+		arm := nextDeadline(coordinator.deps.Now(), coordinator.plan())
+		if arm.Trigger != triggerEscalation || arm.Escalation.Stage != StageReceiptTimeout {
+			t.Fatalf("arm = %+v, want the receipt-timeout escalation", arm)
+		}
+		coordinator.events <- AttemptEvent{Kind: AttemptDone, Nonce: 431, At: testEpoch, Outcome: &AttemptOutcome{
+			Nonce:        431,
+			Participant:  "host-1",
+			Terminal:     TerminalCapabilityRefused,
+			ErrorSource:  "error.BadRequestError",
+			ErrorType:    "BadRequestError",
+			ErrorMessage: vllmContextTotalMessage,
+		}}
+
+		coordinator.expire(arm)
+
+		if coordinator.picking() {
+			t.Fatal("a pick started after a trusted host rejected the prompt as past the model's context length")
 		}
 	})
 
@@ -1371,18 +1491,10 @@ func TestAParkedEscalationPickBlocksNeitherTheWinnerNorTheRace(t *testing.T) {
 	}()
 
 	<-dispatched
-	select {
-	case <-parked:
-	case <-time.After(5 * time.Second):
-		t.Fatal("the escalation never reached the scheduler")
-	}
+	waitForValue(t, parked, "the escalation reaching the scheduler")
 
 	close(release)
-	select {
-	case <-streamed:
-	case <-time.After(5 * time.Second):
-		t.Fatal("the winner's first content chunk never got past the coordinator's crown answer")
-	}
+	waitForValue(t, streamed, "the winner's first content chunk getting past the coordinator's crown answer")
 	if forwarded := fixture.client.forwarded(); !bytes.Contains(forwarded, []byte(contentChunk(500))) {
 		t.Fatalf("client stream %q is missing the crowned winner's bytes", forwarded)
 	}
@@ -1391,13 +1503,8 @@ func TestAParkedEscalationPickBlocksNeitherTheWinnerNorTheRace(t *testing.T) {
 	fixture.clock.waitArmed(t, schedulerPickTimeout)
 	fixture.clock.advance(schedulerPickTimeout)
 
-	select {
-	case outcome := <-returned:
-		if outcome.WinnerNonce != 500 || !outcome.Succeeded {
-			t.Fatalf("outcome = winner %d succeeded %v, want 500/true", outcome.WinnerNonce, outcome.Succeeded)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("the race never ended while its escalation pick was parked")
+	if outcome := waitForValue(t, returned, "the race ending while its escalation pick was parked"); outcome.WinnerNonce != 500 || !outcome.Succeeded {
+		t.Fatalf("outcome = winner %d succeeded %v, want 500/true", outcome.WinnerNonce, outcome.Succeeded)
 	}
 	if reported := <-fixture.reported; len(reported.Attempts) != 1 {
 		t.Fatalf("reported attempts = %d, want only the one the race started", len(reported.Attempts))
@@ -1499,15 +1606,17 @@ func TestOutcomeRewritesTerminalsTheCoordinatorAloneKnows(t *testing.T) {
 	}
 }
 
-// refusalPolicy escalates on a failed attempt and on nothing else, so a capability refusal is what
-// starts the second attempt.
+// refusalPolicy escalates on nothing but a failed attempt or a suspicious primary: no receipt or
+// first-token clock starts an attempt.
 func refusalPolicy() EscalationPolicy {
 	policy := settledPolicy()
 	policy.MaxAttemptsPerRequest = 2
 	return policy
 }
 
-func TestRunRaceRecordsTheContextLimitAndExcludesTheRefusingHost(t *testing.T) {
+// The race takes a trusted host's rejection as every host's, so a second attempt would only commit a nonce
+// and leave its host a timeout vote.
+func TestRunRaceStopsEscalatingOnceATrustedHostRejectsTheContextLength(t *testing.T) {
 	fixture := newRaceFixture(refusalPolicy(), 3)
 	fixture.host(100, 0, "host-0", &hostScript{receipt: true, chunks: []string{"data: too-long\n\n"}})
 	fixture.host(101, 1, "host-1", &hostScript{
@@ -1522,11 +1631,8 @@ func TestRunRaceRecordsTheContextLimitAndExcludesTheRefusingHost(t *testing.T) {
 		t.Fatalf("runRace error = %v", err)
 	}
 	<-fixture.reported
-	if outcome.WinnerNonce != 101 || !outcome.Succeeded {
-		t.Fatalf("winner = %d succeeded = %v, want 101/true", outcome.WinnerNonce, outcome.Succeeded)
-	}
-	if outcome.Attempts[0].Terminal != TerminalCapabilityRefused {
-		t.Fatalf("refusing attempt terminal = %v, want capability refused", outcome.Attempts[0].Terminal)
+	if len(outcome.Attempts) != 1 || outcome.Attempts[0].Terminal != TerminalCapabilityRefused {
+		t.Fatalf("attempts = %+v, want only the refused one", outcome.Attempts)
 	}
 
 	fixture.perf.mu.Lock()
@@ -1537,14 +1643,110 @@ func TestRunRaceRecordsTheContextLimitAndExcludesTheRefusingHost(t *testing.T) {
 	}
 
 	fixture.picker.mu.Lock()
-	profiles := fixture.picker.profiles
+	picks := len(fixture.picker.profiles)
 	fixture.picker.mu.Unlock()
-	if len(profiles) != 2 {
-		t.Fatalf("picks = %d, want 2", len(profiles))
+	if picks != 1 {
+		t.Fatalf("picks = %d, want 1: no other host takes a prompt past the model's context length", picks)
 	}
-	if len(profiles[1].Exclude) != 1 || profiles[1].Exclude[0] != "host-0" {
-		t.Fatalf("re-pick exclusions = %v, want the refusing host", profiles[1].Exclude)
+}
+
+// The rejection ends only the search for another host: an attempt already running is left to answer.
+func TestRunRaceLetsARunningAttemptFinishAfterATrustedContextLengthRejection(t *testing.T) {
+	fixture := newRaceFixture(racePolicy(2), 2)
+	release := make(chan struct{})
+	openRelease := sync.OnceFunc(func() { close(release) })
+	t.Cleanup(openRelease)
+	fixture.perf.contextLimitRecorded = make(chan struct{}, 1)
+	fixture.host(100, 0, "host-0", &hostScript{
+		release:   release,
+		receipt:   true,
+		chunks:    []string{contentChunk(100)},
+		confirmed: true,
+		finished:  true,
+	})
+	fixture.host(101, 1, "host-1", &hostScript{receipt: true, chunks: []string{"data: too-long\n\n"}})
+
+	outcomes := make(chan RaceOutcome, 1)
+	go func() {
+		outcome, err := fixture.run(context.Background())
+		if err != nil {
+			t.Error(err)
+		}
+		outcomes <- outcome
+	}()
+	waitForValue(t, fixture.perf.contextLimitRecorded, "the escalated host's rejection reaching the race")
+	openRelease()
+
+	outcome := waitForValue(t, outcomes, "the race ending")
+	waitForValue(t, fixture.reported, "the race's report")
+	if outcome.WinnerNonce != 100 || !outcome.Succeeded {
+		t.Fatalf("winner = %d succeeded = %v, want 100/true: the rejection cut short the attempt still running",
+			outcome.WinnerNonce, outcome.Succeeded)
 	}
+}
+
+// A suspicious host's word is not taken on trust, so the rival its race is already fetching still runs.
+func TestRunRaceKeepsTheRivalOfASuspiciousHostThatRejectsTheContextLength(t *testing.T) {
+	fixture := newRaceFixture(refusalPolicy(), 2)
+	fixture.crown.denied["host-0"] = true
+	hold := make(chan struct{})
+	openHold := sync.OnceFunc(func() { close(hold) })
+	t.Cleanup(openHold)
+	fixture.picker.hold, fixture.picker.parked = hold, make(chan struct{}, 1)
+	fixture.perf.contextLimitRecorded = make(chan struct{}, 1)
+	fixture.host(100, 0, "host-0", &hostScript{receipt: true, chunks: []string{"data: too-long\n\n"}})
+
+	outcomes := make(chan RaceOutcome, 1)
+	go func() {
+		outcome, err := fixture.run(context.Background())
+		if err != nil {
+			t.Error(err)
+		}
+		outcomes <- outcome
+	}()
+	waitForValue(t, fixture.picker.parked, "the rival's pick reaching the scheduler")
+	waitForValue(t, fixture.perf.contextLimitRecorded, "the suspicious host's rejection reaching the race")
+	fixture.host(101, 1, "host-1", &hostScript{
+		receipt:   true,
+		chunks:    []string{contentChunk(101)},
+		confirmed: true,
+		finished:  true,
+	})
+	openHold()
+
+	outcome := waitForValue(t, outcomes, "the race ending")
+	waitForValue(t, fixture.reported, "the race's report")
+	if outcome.WinnerNonce != 101 || !outcome.Succeeded {
+		t.Fatalf("winner = %d succeeded = %v, want 101/true: the suspicious host's rejection stopped its rival",
+			outcome.WinnerNonce, outcome.Succeeded)
+	}
+}
+
+// The pick is given up rather than waited out, so the rejection commits no nonce nobody will answer.
+func TestRunRaceGivesUpThePickInFlightWhenATrustedHostRejectsTheContextLength(t *testing.T) {
+	fixture := newRaceFixture(racePolicy(2), 2)
+	hold, release := make(chan struct{}), make(chan struct{})
+	openRelease := sync.OnceFunc(func() { close(release) })
+	t.Cleanup(func() { close(hold) })
+	t.Cleanup(openRelease)
+	fixture.picker.hold, fixture.picker.parked = hold, make(chan struct{}, 1)
+	fixture.host(100, 0, "host-0", &hostScript{release: release, receipt: true, chunks: []string{"data: too-long\n\n"}})
+
+	outcomes := make(chan RaceOutcome, 1)
+	go func() {
+		outcome, err := fixture.run(context.Background())
+		if err != nil {
+			t.Error(err)
+		}
+		outcomes <- outcome
+	}()
+	waitForValue(t, fixture.picker.parked, "the escalation's pick reaching the scheduler")
+	openRelease()
+
+	if outcome := waitForValue(t, outcomes, "the race ending without waiting out its pick"); len(outcome.Attempts) != 1 {
+		t.Fatalf("attempts = %d, want only the refused one", len(outcome.Attempts))
+	}
+	waitForValue(t, fixture.reported, "the race's report")
 }
 
 func TestRunRaceEscalatesAfterItsLastAttemptFailed(t *testing.T) {
@@ -1773,6 +1975,8 @@ func TestAWinnerCrownedAfterTheClientLeftIsNotLabelledUserVisible(t *testing.T) 
 	fixture.clock.step = time.Second
 	arrive := make(chan uint64, 1)
 	release := make(chan struct{})
+	openRelease := sync.OnceFunc(func() { close(release) })
+	t.Cleanup(openRelease)
 	fixture.host(50, 0, "host-0", &hostScript{
 		arrive:    arrive,
 		release:   release,
@@ -1783,15 +1987,19 @@ func TestAWinnerCrownedAfterTheClientLeftIsNotLabelledUserVisible(t *testing.T) 
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())
+	returned := make(chan error, 1)
 	go func() {
-		if _, err := fixture.run(ctx); !errors.Is(err, context.Canceled) {
-			t.Errorf("runRace error = %v, want context.Canceled", err)
-		}
+		_, err := fixture.run(ctx)
+		returned <- err
 	}()
 
 	<-arrive
 	cancel()
-	close(release)
+	// Released only once the race has answered the departed client, so the departure lands before the answer.
+	if err := waitForValue(t, returned, "the race answering the departed client"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("runRace error = %v, want context.Canceled", err)
+	}
+	openRelease()
 
 	reported := <-fixture.reported
 

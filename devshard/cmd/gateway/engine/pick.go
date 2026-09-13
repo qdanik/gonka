@@ -43,7 +43,7 @@ func (c *raceCoordinator) picking() bool { return c.pickCancel != nil }
 
 // startPick runs at most one speculative pick beside the race, never on the coordinator's goroutine. See race.md, "Escalation".
 func (c *raceCoordinator) startPick(reason string, params any) {
-	if c.picking() || len(c.attempts) >= c.budget {
+	if c.picking() || len(c.attempts) >= c.budget || c.retryRuledOut {
 		return
 	}
 	ctx, cancel := context.WithTimeout(c.drain.race, schedulerPickTimeout)
@@ -65,6 +65,7 @@ func (c *raceCoordinator) startNextImmediate() {
 
 // applyPick spends what the scheduler answered with; an assignment the race cannot use is stranded, not dropped.
 func (c *raceCoordinator) applyPick(result pickedHost) {
+	c.catchUp()
 	c.pickCancel()
 	c.pickCancel = nil
 	assignment, err := c.observePick(result.assignment, result.err)
@@ -72,7 +73,7 @@ func (c *raceCoordinator) applyPick(result pickedHost) {
 	case err != nil:
 		c.reportUnfilledPick(err)
 		c.startErr, c.moreImmediate = err, 0
-	case c.cancelled || c.handedOff || c.winner != nil:
+	case c.cancelled || c.handedOff || c.winner != nil || c.retryRuledOut:
 		c.strand(assignment, RoleSpeculative)
 	default:
 		c.launch(assignment, RoleSpeculative, c.pickReason)
@@ -82,7 +83,7 @@ func (c *raceCoordinator) applyPick(result pickedHost) {
 
 // reportUnfilledPick traces an escalation that reached no attempt; a race's own cancellation is no refusal.
 func (c *raceCoordinator) reportUnfilledPick(err error) {
-	if c.cancelled || c.handedOff {
+	if c.cancelled || c.handedOff || c.retryRuledOut {
 		return
 	}
 	logging.Info("escalation unfilled",

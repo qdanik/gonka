@@ -1,6 +1,6 @@
 # Defects outside the gateway
 
-Three defects the gateway runs into and cannot fix inside `cmd/gateway`. All three are now closed; each entry states the rule that replaced it and where that rule lives.
+Four defects the gateway runs into and cannot fix inside `cmd/gateway`. All four are now closed; each entry states the rule that replaced it and where that rule lives.
 
 ---
 
@@ -37,3 +37,13 @@ With an empty map a nonce a host already receipted yielded reason `refused`, and
 **The rule now.** That return is wrapped in `ErrTimeoutNotApplied`, the sentinel the insufficient-votes path already uses ([`user/timeout_effect.go`](../../../user/timeout_effect.go), `timeoutSettledError`). The gateway itself never depended on the error shape — `SettleTimeout` reads `result.Applied`, which is the fact — so this closes the reason label rather than a miscount.
 
 **Verification note.** The path is not reachable cheaply in a test: it requires `sendPendingDiff` to succeed while returning a diff that carries no timeout transaction for that nonce. The decision it feeds is pinned directly instead ([`user/timeout_effect_test.go`](../../../user/timeout_effect_test.go)).
+
+---
+
+## 4. The SSE event cap below the body a host may send — closed
+
+**What it was.** The transport capped one SSE event at 1 MiB ([`transport/client.go`](../../../transport/client.go), `DefaultMaxSSEEventBytes`). The gateway always asks for logprobs, `top_logprobs` and token ids, and a host that does not stream writes its whole answer as one event, so a few thousand tokens passed the cap. The attempt was aborted as `response_too_large` after its nonce was committed, the honest host took the perf sample, and the attempt's answer was lost; the legacy fold kept its own copy of the same 1 MiB cap.
+
+**The rule now.** The cap is `MaxJSONResponseBytes` (16 MiB), the largest body the JSON path already reads, and the legacy fold reads its scanner cap from the transport constant ([`cmd/devshardctl/stream_aggregate.go`](../../devshardctl/stream_aggregate.go)). See [`race.md`](./race.md), "Classification and reassembly", for why a complete event never reaches the attempt budget.
+
+**Why it is sound.** No bound grew: the JSON path already buffers a body of that size ([`transport/client.go`](../../../transport/client.go), `readBoundedResponseBody`), and the carry budget charges only an unterminated tail, which the transport never hands over, because `writeSSELine` writes an event and its terminator in one write.

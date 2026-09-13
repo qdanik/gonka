@@ -146,3 +146,4 @@ Recorded in full in [`docs/rules.md`](./rules.md); the load-bearing ones:
 - **Every restart starts clean** — no ejections, no capability counts, no penalties replayed. Minute-scale backoff self-heals faster than stale state is worth.
 - **Capability refusals do not withhold a host from routing.** They are counted and reported; a version refusal would otherwise retire a host permanently, since a gateway serves one protocol version for its whole life.
 - **A non-streaming reply is folded as it arrives, not accumulated.** What a request holds is the answer being assembled, not the stream it came from.
+- **The nonce cutoff follows governance and keeps an in-flight margin, escalations included.** The legacy gateway in this tree stops every escrow at a fixed 19 800; upstream gonka-ai/gonka#1761 gives it a margin, but only when choosing an escrow and in its balance sweep, never for an escalation. See [`routing.md`](./routing.md), "Picking an escrow".

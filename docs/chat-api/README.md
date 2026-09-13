@@ -1,12 +1,13 @@
 # Gonka Chat Completions API
 
-OpenAI-compatible chat completions, routed to Kimi-K2.6 / Qwen3-235B / MiniMax-M2.7 via vLLM. This doc covers universal parameter behavior. For per-model overrides see [Kimi-K2.6](kimi-k2.6.md) / [Qwen3-235B](qwen3-235b-a22b-instruct-2507.md) / [MiniMax-M2.7](minimax-m2.7.md).
+OpenAI-compatible chat completions, routed to Kimi-K2.6 / Qwen3-235B / MiniMax-M2.7 / DeepSeek-V4-Flash-0731 / GLM-5.3-Flash via vLLM. This doc covers universal parameter behavior. For per-model overrides see [Kimi-K2.6](kimi-k2.6.md) / [Qwen3-235B](qwen3-235b-a22b-instruct-2507.md) / [MiniMax-M2.7](minimax-m2.7.md) / [DeepSeek-V4-Flash-0731](deepseek-v4-flash-0731.md) / [GLM-5.3-Flash](glm-5.3-flash.md).
 
 ## Quick navigation
 - [Per-model overrides: Kimi-K2.6](kimi-k2.6.md)
 - [Per-model overrides: Qwen3-235B-A22B-Instruct-2507](qwen3-235b-a22b-instruct-2507.md)
 - [Per-model overrides: MiniMax-M2.7](minimax-m2.7.md)
 - [Per-model overrides: DeepSeek-V4-Flash-0731](deepseek-v4-flash-0731.md)
+- [Per-model overrides: GLM-5.3-Flash](glm-5.3-flash.md)
 - [Why was my param stripped/rejected?](troubleshooting.md)
 - [Client agents compatibility](agents.md)
 - [Source citations](references.md)

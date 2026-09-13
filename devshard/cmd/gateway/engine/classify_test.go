@@ -282,32 +282,33 @@ func TestUsageCompletionTokens(t *testing.T) {
 	}
 }
 
-func TestRetriableCapability(t *testing.T) {
+func TestParseCapabilityErrorRecognisesARefusal(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
 		name          string
 		message       string
+		wantRefused   bool
 		wantRetriable bool
 		wantLimit     uint64
 	}{
-		{name: "tool_choice_unsupported", message: filters.ToolChoiceUnsupportedMessage, wantRetriable: true},
+		{name: "tool_choice_unsupported", message: filters.ToolChoiceUnsupportedMessage, wantRefused: true, wantRetriable: true},
 		{
-			name:          "context_length_with_trailing_text",
-			message:       "This model's maximum context length is 131072 tokens. However, you requested 150000 tokens.",
-			wantRetriable: true,
-			wantLimit:     131072,
+			name:        "context_length_with_trailing_text",
+			message:     "This model's maximum context length is 131072 tokens. However, you requested 150000 tokens.",
+			wantRefused: true,
+			wantLimit:   131072,
 		},
 		{
-			name:          "context_length_at_end_of_message",
-			message:       "This model's maximum context length is 131072",
-			wantRetriable: true,
-			wantLimit:     131072,
+			name:        "context_length_at_end_of_message",
+			message:     "This model's maximum context length is 131072",
+			wantRefused: true,
+			wantLimit:   131072,
 		},
 		{
-			name:          "marker_matched_case_insensitively",
-			message:       "Maximum Context Length Is 4096 tokens",
-			wantRetriable: true,
-			wantLimit:     4096,
+			name:        "marker_matched_case_insensitively",
+			message:     "Maximum Context Length Is 4096 tokens",
+			wantRefused: true,
+			wantLimit:   4096,
 		},
 		{name: "plain_model_error", message: "plain model error"},
 		{name: "marker_without_digits", message: "maximum context length is unknown"},
@@ -317,6 +318,9 @@ func TestRetriableCapability(t *testing.T) {
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
+			if got := ParseCapabilityError(testCase.message).Refused(); got != testCase.wantRefused {
+				t.Errorf("Refused() = %v, want %v", got, testCase.wantRefused)
+			}
 			if got := ParseCapabilityError(testCase.message).Retriable(); got != testCase.wantRetriable {
 				t.Errorf("Retriable() = %v, want %v", got, testCase.wantRetriable)
 			}

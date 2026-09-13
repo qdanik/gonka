@@ -108,11 +108,14 @@ Failures are recorded per model in `rotation_status` (`stage`, `epoch`, `create_
 
 A depleted escrow is worse than a dead one: its in-flight count is low precisely because every request fails, so the load score **prefers** it. `OnBalanceExhausted` marks it (no I/O — the request path never reaches the chain), and the next tick's `checkDepletion` acts:
 
-- a replacement is created **first**, so coverage never drops to zero, then the depleted escrow is retired;
+- the depleted escrow is **parked first** — inactive and settlement-pending in one statement that matches only a serving row, then out of routing — and only the call that moved the row creates a replacement, so neither a later tick nor a restart creates a second one;
+- the replacement gets **one attempt**: a failed create, including one that broadcast and never confirmed or one a shutdown cut short after the park, is not retried — a create that did land is still registered by `reconcile`; the model runs one escrow short until the next rotation, and if the escrow was the model's last active temp during proof-of-compute, `finishBridge` finds no temp to finish and the model serves nothing until the next epoch's bridge;
+- a failure to close the retired escrow's session after the park still counts as parked — routing has already stopped — so the create still runs, and the error is surfaced;
 - the replacement is always `regular` — inheriting `temp` would hand the next bridge an escrow to retire instead of lasting coverage;
-- with no model configured for replacement, the escrow is retired anyway, with a warning;
-- a failed retirement re-marks the escrow, so the next tick tries again;
-- a snapshot with no epoch yet (`EpochIndex == 0` or `BlockHeight == 0`) **refuses** the replacement — an escrow created under it belongs to no epoch, and the next bridge would fund a full set on top of it.
+- with no model configured for replacement, the escrow is parked anyway, with a warning;
+- with settlement on, the parked escrow settles through `settlePending` on a later tick, like any other parked row;
+- a park that fails re-marks the escrow, so the next tick tries again, and nothing is created meanwhile;
+- a snapshot with no epoch yet (`EpochIndex == 0` or `BlockHeight == 0`) **refuses** the replacement before anything is parked — an escrow created under it belongs to no epoch, and the next bridge would fund a full set on top of it; the escrow stays marked and serving for the next tick.
 
 ## Gone from chain
 

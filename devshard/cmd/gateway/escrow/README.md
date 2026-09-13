@@ -12,6 +12,7 @@ An escrow is funds on chain plus a group of hosts. This package creates one, kee
 | `depletion.go` | noticing the funds will not cover the work in flight |
 | `checker.go`, `dedup.go` | crash-recovery reconciliation: what the chain holds versus what this process recorded |
 | `breaker.go` | refusing to keep creating escrows when creation keeps failing |
+| `vocabulary.go` | the strings written into rows and log fields: rotation roles and stages, which are stored, and why a commitment was cleared |
 
 ## Boundaries
 
@@ -84,11 +85,11 @@ The breaker is keyed by (model, role). A failed create opens a cooldown of `esca
 
 ## Replacing a depleted escrow
 
-An exhausted escrow is exactly the one the load score prefers, because its in-flight count stays low while it fails every request. So `OnBalanceExhausted` takes it out of routing first and the tick asks questions afterwards.
+An exhausted escrow is exactly the one the load score prefers, because its in-flight count stays low while it fails every request. So `OnBalanceExhausted` only marks it, and the next tick takes it out of service.
 
-Where the model is configured for rotation, the replacement is created **before** the depleted escrow is retired, so coverage never drops to zero; a failed create leaves the depleted escrow in place for the next attempt. Where no model is configured, the escrow is retired anyway and the fact is logged. The replacement always takes the `regular` role: inheriting a temp role would hand the next bridge an escrow to retire rather than the lasting coverage the depleted one was providing.
+The escrow is **parked before** its replacement is created, and only the call that moved its row out of service creates one (`parkIfServing`). A create can fail after its broadcast, while it waits for the result; an escrow still serving then would be reported again and replaced on every tick, so the row is the guard, and it holds across ticks and restarts. The replacement always takes the `regular` role: inheriting a temp role would hand the next bridge an escrow to retire rather than the lasting coverage the depleted one was providing. Every rule is listed in [`docs/escrows.md`](../docs/escrows.md), "Depletion".
 
-Replacement is refused when the snapshot carries no chain data yet. A replacement is keyed by the epoch that funded it, and an escrow created under an epoch-less snapshot is counted by no epoch at all — so the next bridge would fund a full set on top of it. Refusing re-marks the escrow, and the next tick with a snapshot tries again.
+Replacement is refused when the snapshot carries no chain data yet, and refused before the escrow is parked, since no later tick replaces an escrow already out of service. A replacement is keyed by the epoch that funded it, and an escrow created under an epoch-less snapshot is counted by no epoch at all — so the next bridge would fund a full set on top of it. Refusing re-marks the escrow, and the next tick with a snapshot tries again.
 
 ## Settlement and retirement
 
@@ -131,7 +132,7 @@ A settle row with no broadcast stamp defaults the opposite way to a commitment r
 
 Two hooks are called from the request path — `OnEscrowMissing` and `OnBalanceExhausted` — and neither does I/O. Each only marks an escrow id in a `markSet`, and the next tick takes the whole set at once, which is what keeps a per-request event from fanning out into a per-escrow chain call.
 
-`markSet.drain` steals the map rather than copying it, so a key marked while the tick is running belongs to the following tick and cannot be dropped. `mark` reports whether the key was new, which is how a depletion is logged once per tick rather than once per request. A step that fails re-marks its key, so a failed check never un-schedules itself.
+`markSet.drain` steals the map rather than copying it, so a key marked while the tick is running belongs to the following tick and cannot be dropped. `mark` reports whether the key was new, which is how a depletion is logged once per tick rather than once per request. A step that fails re-marks its key, so a failed check never un-schedules itself; a parked depleted escrow is the exception, see [`docs/escrows.md`](../docs/escrows.md), "Depletion".
 
 `inFlightSet` is the other half: it dedups concurrent operations by key. The first caller enters and gets a `leave` func to call when done; a caller whose key is already in flight is told it is busy and should no-op.
 

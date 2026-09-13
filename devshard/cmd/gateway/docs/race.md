@@ -44,7 +44,7 @@ The buffered prefix matters for correctness of the visible stream: role announce
 
 An error event increments the attempt's chunk count — so the stream is *not* empty — while carrying no content, so it cannot crown (`engine/attempt.go`, `attemptState.record`; `engine/classify.go`, `chunkSignal.crownsWinner`). That combination is what distinguishes "the host said something went wrong" from "the host said nothing", and the two are charged differently.
 
-A **capability refusal** is a third case and is kept out of the error class entirely (`engine/reassembly.go`, `sseClassifier.facts`): another host can still serve the request, so it must neither count as a chunk nor end the race, while its message still reaches the performance recorder. On a refusal the engine records the host's capability limit (`engine/capability.go` → `perf/tracker.go`, `RecordContextLimit`). Nothing routes on it: the count is reported so an operator knows what to fix.
+A **capability refusal** is a third case and is kept out of the error class entirely (`engine/reassembly.go`, `sseClassifier.facts`): it must neither count as a chunk nor end the race, while its message still reaches the performance recorder. After a tool or version refusal another host can still serve the request (`engine/capability.go`, `CapabilitySignal.Retriable`); a trusted host's context-length rejection ends the escalation instead (see [Escalation](#escalation)). On a refusal the engine records the host's capability limit (`engine/capability.go` → `perf/tracker.go`, `RecordContextLimit`). Nothing routes on it: the count is reported so an operator knows what to fix.
 
 ### Crown denial
 
@@ -61,6 +61,8 @@ The classifier reads an attempt's SSE stream incrementally and yields, per chunk
 TCP does not deliver event-aligned chunks, so a carry buffer reassembles events split across reads and classifies each exactly once, when its final line arrives (`engine/reassembly.go`, `sseClassifier`). The unterminated final event is classified on flush, before emptiness is decided, so a host is not charged for an empty answer it did not give.
 
 Reassembly is charged against three budgets — per attempt (1 MiB), per participant (10 MiB) and process-wide (100 MiB). The participant level is the one that matters: it stops a single host that never terminates an event from draining the shared pool and starving every other host of classification (`engine/carry.go`, `carryBudget`). A cap trip releases the fragment and classifies the raw chunk instead, so classification *degrades* rather than stopping, and the first trip is reported once as a metric. A trip on the global budget undoes the participant charge, because a charge left behind on a trip is quota nobody can return.
+
+A complete event is never charged. The transport writes an event and its terminator into the attempt in one write, and caps one event at `DefaultMaxSSEEventBytes`, which is `MaxJSONResponseBytes` (16 MiB), rather than at the attempt budget, because a host that does not stream writes its whole answer, forced logprobs included, as a single event ([`transport/client.go`](../../../transport/client.go), `writeSSELine` and `DefaultMaxSSEEventBytes`).
 
 ## Escalation
 
@@ -89,18 +91,20 @@ The escalation pick runs on its own goroutine rather than inline in the coordina
 
 **Scarcity overrides speculation.** When the chain is blocking requests and the relaxed bypass is not active, the attempt budget collapses to one: a speculative attempt spends a nonce the phase the gateway is serving through will not replace.
 
+**A refusal that rules out a retry ends the escalation.** A capability refusal is retriable when it belongs to the answering host's build — a tool call or protocol version it lacks — so another host may still serve the request (`engine/capability.go`, `CapabilitySignal.Retriable`). A context-length rejection is not: the chain registers `--max-model-len` in a model's `ModelArgs`, and the broker drops a host's own `--max-model-len <value>` pair ([`decentralized-api/broker/broker.go`](../../../../decentralized-api/broker/broker.go), `Broker.MergeModelArgs`), so a prompt one host rejects as past the model's context length is one every host running the registered arguments rejects, and another attempt would only commit a nonce and leave its host a timeout vote. The race takes that as given: it does not check that the model registers the flag. A trusted host is one the race does not hold suspicious (see [Crown denial](#crown-denial)); the network does not verify a refusal, so a suspicious host's refusal rules out nothing. Once a trusted host's refusal rules out a retry, the race arms no further escalation, gives up a pick still in flight, strands one that has already answered, and lets the attempts still running finish (`engine/capability.go`, `rulesOutRetry`; `engine/report.go`, `raceCoordinator.complete`). The client gets that host's error unless the crowned attempt carries its own (`engine/engine.go`, `RaceOutcome.hostError`).
+
 ## Deadlines
 
-One re-armed timer carries every deadline. `nextDeadline` takes the earliest of four families — the hard timeout, the escalation, the pick and the stall — and the declaration order of the trigger constants breaks *exact* ties only (`engine/race.go`, the `deadlineTrigger` constants and `nextDeadline`):
+One re-armed timer carries every deadline. `nextDeadline` takes the earliest of four families — the hard timeout, the escalation, the pick and the stall — and the declaration order of the trigger constants breaks *exact* ties only (`engine/race.go`, the `deadlineTrigger` constants; `engine/deadline.go`, `nextDeadline`):
 
 1. **Hard timeout** — the minimum of: the drain deadline once the client has left; 30 minutes of total wait and 20 minutes without content for a non-streaming race; the loser grace after a crowned attempt finishes; and 20 minutes per live attempt.
-2. **Escalation** — the next armed trigger, suppressed while a pick is already running, and once the race is crowned, detached, or at its attempt budget.
+2. **Escalation** — the next armed trigger, suppressed while a pick is already running, and once the race is crowned, detached, at its attempt budget, or once a trusted host's refusal rules out a retry.
 3. **Pick** — when an unanswered escalation pick stops being worth waiting for; zero while no pick is running.
 4. **Stall** — the earliest `last chunk + inter-chunk stall` over attempts that have produced content and gone quiet.
 
 The tie-break order is itself the policy: a race that must stop gains nothing from spending a nonce, and a stall flag is telemetry either way.
 
-**Every select arm that reads race state drains the event queue first.** A buffered event and a fired timer can both be ready, and `select` picks at random, so an arm that reads state without draining acts on state a queued event has already invalidated. Two arms read race state: the deadline timer and the client's departure (`engine/deadline.go`, `engine/race.go`).
+**Every select arm that reads race state drains the event queue first.** A buffered event and a fired timer can both be ready, and `select` picks at random, so an arm that reads state without draining acts on state a queued event has already invalidated. Three arms read state a queued event can change: the deadline timer, the pick's answer and the client's departure (`engine/deadline.go`, `engine/pick.go`, `engine/race.go`).
 
 ## Client departure and the drain
 

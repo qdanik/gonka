@@ -11,14 +11,6 @@ import (
 	"devshard/logging"
 )
 
-const (
-	roleTemp    = "temp"
-	roleRegular = "regular"
-
-	stagePrepareTemp   = "prepare_temp"
-	stageFinishRegular = "finish_regular"
-)
-
 // errCreateSuppressed marks a create the breaker refused -- not "nothing needed". See README.md, "The bridge across proof-of-compute".
 var errCreateSuppressed = errors.New("escrow creation suppressed by the create breaker")
 

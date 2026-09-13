@@ -132,8 +132,9 @@ A `*Profile` is one routed model's set of deltas from the default pipeline. A ni
 | `moonshotai/Kimi-K2.6` | Zero penalties forced, `structured_outputs` rejected, `safety_identifier` allowed, thinking mirrored into `chat_template_kwargs`, owns a `thinking_token_budget` resolution, a non-positive output budget lifted to the floor instead of refused. |
 | `MiniMaxAI/MiniMax-M2.7` | Thinking fields stripped, `reasoning_split` kept. |
 | `deepseek-ai/DeepSeek-V4-Flash-0731` | No deltas; registered so the routed model is recognised. |
+| `zai-org/GLM-5.3-Flash` | Thinking forced on in `chat_template_kwargs`. |
 
-`ThinkingDisposition` is the closed set of ways a profile handles `thinking`/`enable_thinking`: normalise in place (the default), mirror into `chat_template_kwargs`, or strip entirely.
+`ThinkingDisposition` is the closed set of ways a profile handles `thinking`/`enable_thinking`: normalise in place (the default), mirror into `chat_template_kwargs`, strip entirely, or force thinking on.
 
 ## Reasoning and thinking
 
@@ -146,6 +147,8 @@ A `*Profile` is one routed model's set of deltas from the default pipeline. A ni
 - `ThinkingStrip` deletes the field — the model has no matching chat-template knob.
 - `ThinkingMirrorToKwargs` moves the boolean into `chat_template_kwargs`, preserving a value already nested there and always removing the top-level field.
 - Otherwise `thinking.type` is normalised in place to `"enabled"` or `"disabled"`, and the `display` hint is dropped. `adaptive` and `auto` both resolve to enabled: they signal opt-in thinking with an SDK-chosen budget.
+
+`ThinkingForceOn` handles both fields as the default does, then sets `chat_template_kwargs.enable_thinking` to `true` at `StagePostLimits`, once every lift into the kwargs has landed, whatever the caller sent. A caller's `chat_template_kwargs.thinking` passes through. Why, and why only on the exact GLM-5.3-Flash id: [`glm-5.3-flash.md`](../../../../docs/chat-api/glm-5.3-flash.md).
 
 `thinkingTokenBudgetResolve` runs after the token limits and clamps whatever budget the request carries, for every model, so content keeps room to be written: down to `thinkingBudgetAbsoluteMax` (96,000), and down to `max_tokens - thinkingBudgetContentHeadroom` (64). Only a profile that declares `ThinkingTokenBudget` gets a budget *invented* — `max_tokens / 2` — because a host on the V2 model runner rejects the field outright, and V2 is the default for every non-MoE model.
 

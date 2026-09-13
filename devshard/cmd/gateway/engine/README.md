@@ -51,7 +51,7 @@ A nonce the race can no longer spend is **stranded**, not dropped: it is committ
 
 An `ArmedEscalation` is a deadline to arm, not a permission to escalate; only `Confirm` converts it, by re-deriving the same stage at the same deadline. The attempt's `escalated` flag is consumed before the pick starts, so a pick that finds no host cannot retry the same trigger.
 
-Escalation is disarmed entirely when a pick is already running (that pick *is* the escalation), when the client has left (another attempt is another nonce to settle for a response nobody will read), when an attempt has been crowned, or when the budget is spent.
+Escalation is disarmed entirely when a pick is already running (that pick *is* the escalation), when the client has left (another attempt is another nonce to settle for a response nobody will read), when an attempt has been crowned, when the budget is spent, or when a trusted host's refusal rules out a retry (race.md, "Escalation").
 
 The rungs, in `triggerFor` order: an already-escalated attempt never arms; a suspicious host arms immediately; a done attempt whose nonce is finished never arms, and any other done attempt arms immediately; an attempt with no receipt arms at `SendTime + receiptTimeout`; an attempt with a first token never arms; everything else arms on the first-token curve.
 
@@ -94,7 +94,7 @@ What the classifier reads out of an event:
 - **Content** names the field carrying the first client-renderable output. `choices[].text` is excluded: the gateway serves only `/v1/chat/completions`, where a host emitting it renders nothing. A `stop` with host-reported completion tokens and no output counts as content only on a thinking-budget route, which is also the only route whose `completion_tokens` can separate a model that produced nothing from a host that carried nothing.
 - **Errors** are extracted in both the nested `{"error":{...}}` shape and the flat `{"object":"error",...}` one vLLM emits, without a byte-wise pre-filter: the host writes these bytes, and a key spelled with a `\u` escape would pass the scan while the decoder reads it as the error it is, leaving the attempt classified as something it is not. The parse a pre-filter saves does not offset that misclassification.
 - **Usage** is pre-filtered on the `"usage"` key, which is sound because vLLM emits the usage object once per stream, so the check skips almost every chunk.
-- **A capability refusal is kept out of `Error`** and travels as `CapabilityRefused` instead, so a different host can still serve it; its message still reaches the perf recorder.
+- **A capability refusal is kept out of `Error`** and travels as `CapabilityRefused` instead, so it does not end the race; its message still reaches the perf recorder.
 
 ## Outcome, samples and verdicts
 
@@ -142,7 +142,7 @@ Facts the race observes about the escrow but must not act on travel in `Lifecycl
 - `ErrWinnerIncomplete` — the crowned attempt's bytes are already on the wire, so no other attempt's payload can be put in their place.
 - `ErrEmptyStream` — every attempt ended empty.
 - `ErrAllAttemptsFailed` — nothing above applied.
-- `HostApplicationError` — an upstream refusal the client must see verbatim: the host answered, and its answer is the response. `hostError` prefers the crowned attempt's refusal, because a host chosen to answer is the one whose answer the client asked for.
+- `HostApplicationError` — an upstream refusal the client must see verbatim: the host answered, and its answer is the response. `hostError` prefers the crowned attempt's refusal, because a host chosen to answer is the one whose answer the client asked for, and after it a trusted host's refusal that rules out a retry (race.md, "Escalation").
 - `StatusForError` maps a host application error to its own status, and an upstream throttle or unavailability to 429.
 
 ## Read next

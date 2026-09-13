@@ -85,6 +85,19 @@ func TestCarryBufferReassemblesAcrossChunks(t *testing.T) {
 	assertUsage(t, budget, "alice", 0, 0)
 }
 
+func TestCarryBufferNeverChargesACompleteEventLargerThanTheAttemptBudget(t *testing.T) {
+	budget := testBudget(8, 1<<20, 1<<20)
+	buffer := newCarryBuffer(budget, "alice")
+	event := []byte("data: {\"x\":1}\n\n")
+
+	parseable, dropped := buffer.Take(event)
+
+	if !bytes.Equal(parseable, event) || dropped {
+		t.Fatalf("Take() = %q, %v; want the whole event and no drop", parseable, dropped)
+	}
+	assertUsage(t, budget, "alice", 0, 0)
+}
+
 func TestCarryBufferCapsTripIndependently(t *testing.T) {
 	oversized := bytes.Repeat([]byte("x"), 24)
 	tests := []struct {

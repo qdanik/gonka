@@ -107,14 +107,18 @@ func TestParseCapabilityError(t *testing.T) {
 	}
 }
 
-func TestRetriableCapabilitySignal(t *testing.T) {
+// A tool or version refusal belongs to the answering host's build, so another host may serve the request; a
+// context length is the one the chain registers for the model, so no other host is expected to lift it.
+func TestCapabilitySignalTellsARetriableRefusalFromAContextLengthRejection(t *testing.T) {
 	testCases := []struct {
-		name   string
-		signal CapabilitySignal
-		want   bool
+		name          string
+		signal        CapabilitySignal
+		wantRefused   bool
+		wantRetriable bool
 	}{
-		{name: "context_limit", signal: CapabilitySignal{ContextLimit: 8192}, want: true},
-		{name: "tools_unsupported", signal: CapabilitySignal{ToolsUnsupported: true}, want: true},
+		{name: "context_limit", signal: CapabilitySignal{ContextLimit: 8192}, wantRefused: true},
+		{name: "tools_unsupported", signal: CapabilitySignal{ToolsUnsupported: true}, wantRefused: true, wantRetriable: true},
+		{name: "version_unsupported", signal: CapabilitySignal{VersionUnsupported: true}, wantRefused: true, wantRetriable: true},
 		{name: "nothing_parsed", signal: CapabilitySignal{}},
 	}
 
@@ -122,8 +126,11 @@ func TestRetriableCapabilitySignal(t *testing.T) {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
 
-			if got := testCase.signal.Retriable(); got != testCase.want {
-				t.Fatalf("retriable = %v, want %v", got, testCase.want)
+			if got := testCase.signal.Refused(); got != testCase.wantRefused {
+				t.Fatalf("refused = %v, want %v", got, testCase.wantRefused)
+			}
+			if got := testCase.signal.Retriable(); got != testCase.wantRetriable {
+				t.Fatalf("retriable = %v, want %v", got, testCase.wantRetriable)
 			}
 		})
 	}
@@ -260,7 +267,7 @@ func TestAVersionRefusalReachesCapabilityOfThroughTheDispatchError(t *testing.T)
 	if !signal.Retriable() {
 		t.Fatal("a version refusal must let the race try another host")
 	}
-	if CapabilityOf(AttemptOutcome{}).Retriable() {
+	if CapabilityOf(AttemptOutcome{}).Refused() {
 		t.Fatal("an attempt with no refusal at all reported one")
 	}
 }

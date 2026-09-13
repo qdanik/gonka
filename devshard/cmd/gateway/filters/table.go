@@ -180,11 +180,14 @@ var (
 		}},
 		spec("safety_identifier", StagePreValidation, safetyIdentifier()),
 		spec("reasoning_split", StagePreValidation, reasoningSplit()),
-		spec("chat_template_kwargs", StagePreValidation, validChatTemplateKwargs(ObjectBounds{
-			MaxDepth:     chatTemplateKwargsMaxDepth,
-			MaxNodes:     chatTemplateKwargsMaxNodes,
-			MaxSizeBytes: chatTemplateKwargsMaxSizeBytes,
-		})),
+		{Name: "chat_template_kwargs", Rules: []StagedRule{
+			{Stage: StagePreValidation, Apply: validChatTemplateKwargs(ObjectBounds{
+				MaxDepth:     chatTemplateKwargsMaxDepth,
+				MaxNodes:     chatTemplateKwargsMaxNodes,
+				MaxSizeBytes: chatTemplateKwargsMaxSizeBytes,
+			})},
+			{Stage: StagePostLimits, Apply: forceThinkingOn()},
+		}},
 	}
 
 	// knownParameterSet is the whitelist, derived from parameterTable once at package init.

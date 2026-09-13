@@ -18,6 +18,7 @@ Every parameter that is stripped / rejected / normalized at the gateway is docum
 | `thinking.type` value normalized | `adaptive` / `auto` resolved to `enabled` | see [Kimi overrides](kimi-k2.6.md#parameter-overrides) |
 | `tool_choice: "required"` becomes `"auto"` | network policy | [#coerce-tool-choice-required](#coerce-tool-choice-required) |
 | `n` becomes 1 | reservation budgets one `MaxTokens` output | [#coerce-n-when-temperature-zero](#coerce-n-when-temperature-zero) |
+| `chat_template_kwargs.enable_thinking` forced to `true` on GLM-5.3-Flash | the template always thinks; a false kwarg would leak reasoning into `content` | [#coerce-enable_thinking-glm53](#coerce-enable_thinking-glm53) |
 | `extra_body` keys appear at top level | OpenAI Python SDK passthrough | [#unwrap-extra_body](#unwrap-extra_body) |
 | `enable_thinking` lifts into `chat_template_kwargs` | Qwen3 canonical placement | [#translate-enable_thinking](#translate-enable_thinking) |
 | `reasoning` object decomposed to top-level `reasoning_effort` | OpenRouter unified-reasoning convention | [#translate-reasoning](#translate-reasoning) |
@@ -270,6 +271,18 @@ Every parameter that is stripped / rejected / normalized at the gateway is docum
 
 ---
 
+### #coerce-enable_thinking-glm53
+
+**What**: on the `zai-org/GLM-5.3-Flash` route the gateway sets `chat_template_kwargs.enable_thinking` to `true`, whatever the caller sent — including a lifted top-level `enable_thinking`, `reasoning_effort: "none"` and `reasoning: {"enabled": false}`. Other `chat_template_kwargs` keys, `thinking` included, and `reasoning_effort` itself pass through unchanged.
+
+**Why**: the GLM-5.3-Flash template has no thinking switch: the generation prompt always opens `<think>`, and its only knobs are `reasoning_effort` and `clear_thinking` [[Zai-1]](references.md#zai). vLLM's `glm47_moe` parser still turns reasoning extraction off when at least one of the `thinking` and `enable_thinking` kwargs is present and none is true [[vLLM-41]](references.md#vllm), and vLLM derives `enable_thinking: false` from `reasoning_effort: "none"` on its own [[vLLM-35]](references.md#vllm). The model then thinks as usual, but the scratchpad and a dangling `</think>` land in `content` instead of `reasoning` [[vLLM-40]](references.md#vllm). Reporting thinking as on leaves the rendered prompt byte-identical, because the template never reads the variable, and restores the split in streaming and non-streaming responses alike. The parser keeps extraction on when either kwarg is true, so a caller's `thinking: false` no longer matters. The override is scoped to the exact model ID: the GLM-5.2-FP8 template does read `enable_thinking` and renders an empty `<think></think>` for false [[Zai-2]](references.md#zai).
+
+**When to restore**: when vLLM stops letting `thinking`/`enable_thinking` disable extraction for templates that never read them [[vLLM-40]](references.md#vllm). The gonka-ai vLLM fork carries the same gating on both `release/v0.25.1` [[vLLM-44]](references.md#vllm) and `release/v0.28.0-glm53` [[vLLM-45]](references.md#vllm), so the 0.28 upgrade alone does not remove the need.
+
+**Fix (client-side)**: nothing to change — thinking cannot be turned off on this model. `reasoning_effort: "low"` is the smallest budget the template renders; any value other than `low` or `high`, `none` included, renders as `max`. See [the thinking contract](glm-5.3-flash.md#the-thinking-contract).
+
+---
+
 ### #unwrap-extra_body
 
 **What**: `extra_body: {keyA: valueA, ...}` envelope opened; each inner key lifted to the top level of the request document; envelope removed.
@@ -488,3 +501,4 @@ Brief pointers to deeper notes in per-model docs:
 - **Kimi-K2.6**: [Known model-side bugs we work around](kimi-k2.6.md#known-model-side-bugs-we-work-around)
 - **Qwen3-235B-A22B-Instruct-2507**: [Known model-side bugs we work around](qwen3-235b-a22b-instruct-2507.md#known-model-side-bugs-we-work-around)
 - **MiniMaxAI/MiniMax-M2.7**: [Known model-side bugs we work around](minimax-m2.7.md#known-model-side-bugs-we-work-around)
+- **zai-org/GLM-5.3-Flash**: [Known model-side bugs we work around](glm-5.3-flash.md#known-model-side-bugs-we-work-around)

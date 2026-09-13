@@ -150,6 +150,8 @@ type raceCoordinator struct {
 	pocBypass        bool
 	balanceExhausted bool
 	startErr         error
+
+	retryRuledOut bool
 }
 
 // raceExit is why await stopped; only exitComplete means the race is over.
@@ -298,7 +300,7 @@ func (c *raceCoordinator) await() raceExit {
 	}
 }
 
-// Every select arm that reads race state rather than adding to it starts here.
+// Every select arm that reads state a queued event can change starts here.
 func (c *raceCoordinator) catchUp() {
 	for {
 		select {

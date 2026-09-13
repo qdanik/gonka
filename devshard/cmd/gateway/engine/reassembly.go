@@ -44,8 +44,8 @@ func (c *sseClassifier) facts(signal chunkSignal) chunkFacts {
 		return facts
 	}
 	capability := ParseCapabilityError(signal.Error.Message)
-	facts.Error = !capability.Retriable()
-	facts.CapabilityRefused = capability.Retriable()
+	facts.Error = !capability.Refused()
+	facts.CapabilityRefused = capability.Refused()
 	facts.Capability = capability
 	facts.ErrorSource = signal.Error.Source
 	facts.ErrorCode = signal.Error.Code

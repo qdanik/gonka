@@ -166,6 +166,21 @@ func silenceThinkingInKwargs(document *Document) error {
 	return nil
 }
 
+// forceThinkingOn overrules the caller's thinking switches for a ThinkingForceOn profile. See README.md, "Reasoning and thinking".
+func forceThinkingOn() RuleFunc {
+	return func(ctx RuleContext) error {
+		if ctx.Profile == nil || ctx.Profile.Thinking != ThinkingForceOn {
+			return nil
+		}
+		kwargs, err := getOrCreateChatTemplateKwargs(ctx.Document)
+		if err != nil {
+			return err
+		}
+		kwargs["enable_thinking"] = true
+		return nil
+	}
+}
+
 // thinkingTokenBudgetResolve clamps any budget so content keeps room. See README.md, "Reasoning and thinking".
 func thinkingTokenBudgetResolve() RuleFunc {
 	return func(ctx RuleContext) error {

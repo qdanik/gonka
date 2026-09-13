@@ -25,6 +25,21 @@ func workingCreateEscrowFn(newEscrowID uint64) func(context.Context, *signing.Se
 	}
 }
 
+func failingCreateEscrowFn() func(context.Context, *signing.Secp256k1Signer, uint64, string, func(string) error) (chain.CreateEscrowResult, error) {
+	return func(ctx context.Context, signer *signing.Secp256k1Signer, amount uint64, modelID string, onPrepared func(string) error) (chain.CreateEscrowResult, error) {
+		return chain.CreateEscrowResult{}, errors.New("account info: rpc unavailable")
+	}
+}
+
+func unconfirmedCreateEscrowFn() func(context.Context, *signing.Secp256k1Signer, uint64, string, func(string) error) (chain.CreateEscrowResult, error) {
+	return func(ctx context.Context, signer *signing.Secp256k1Signer, amount uint64, modelID string, onPrepared func(string) error) (chain.CreateEscrowResult, error) {
+		if err := onPrepared("tx-" + modelID); err != nil {
+			return chain.CreateEscrowResult{}, err
+		}
+		return chain.CreateEscrowResult{}, errors.New("waiting for tx: context deadline exceeded")
+	}
+}
+
 func depletionManager(t *testing.T, testStore *fakeStore, txClient *fakeTxClient) *Manager {
 	t.Helper()
 	return &Manager{
@@ -62,14 +77,24 @@ func depletionModels() []ModelConfig {
 	return []ModelConfig{{ModelID: "model-a", TargetCount: 1, Amount: 1000, PrivateKeyEnv: "MODEL_A_KEY"}}
 }
 
-func TestOnBalanceExhaustedMarksAndDedups(t *testing.T) {
-	m := &Manager{}
-	m.OnBalanceExhausted("1", "test")
-	m.OnBalanceExhausted("1", "test")
-	m.OnBalanceExhausted("2", "test")
+func depletionTick(t *testing.T, manager *Manager, testStore *fakeStore, escrowID string) error {
+	t.Helper()
+	manager.OnBalanceExhausted(escrowID, "nonce_cap")
+	devshards, err := testStore.ListDevshards(context.Background())
+	if err != nil {
+		t.Fatalf("ListDevshards: %v", err)
+	}
+	return manager.checkDepletion(context.Background(), servingSnapshot(), depletionModels(), devshards)
+}
 
-	if len(m.depleted.keys) != 2 || !m.depleted.keys["1"] || !m.depleted.keys["2"] {
-		t.Fatalf("depletedMarks = %v, want {1,2} deduped", m.depleted.keys)
+func TestOnBalanceExhaustedMarksAndDedups(t *testing.T) {
+	manager := &Manager{}
+	manager.OnBalanceExhausted("1", "test")
+	manager.OnBalanceExhausted("1", "test")
+	manager.OnBalanceExhausted("2", "test")
+
+	if len(manager.depleted.keys) != 2 || !manager.depleted.keys["1"] || !manager.depleted.keys["2"] {
+		t.Fatalf("depletedMarks = %v, want {1,2} deduped", manager.depleted.keys)
 	}
 }
 
@@ -77,11 +102,11 @@ func TestCheckDepletionReplacesMarkedEscrowThenClearsMark(t *testing.T) {
 	testStore := newFakeStore()
 	testStore.devshards["1"] = activeRecord("1", "model-a")
 	txClient := &fakeTxClient{createEscrowFn: workingCreateEscrowFn(999)}
-	m := depletionManager(t, testStore, txClient)
+	manager := depletionManager(t, testStore, txClient)
 	devshards := []store.DevshardRecord{testStore.devshards["1"]}
 
-	m.OnBalanceExhausted("1", "test")
-	if err := m.checkDepletion(context.Background(), servingSnapshot(), depletionModels(), devshards); err != nil {
+	manager.OnBalanceExhausted("1", "test")
+	if err := manager.checkDepletion(context.Background(), servingSnapshot(), depletionModels(), devshards); err != nil {
 		t.Fatalf("checkDepletion() = %v, want nil", err)
 	}
 
@@ -92,10 +117,10 @@ func TestCheckDepletionReplacesMarkedEscrowThenClearsMark(t *testing.T) {
 	if _, ok := testStore.devshards["999"]; !ok {
 		t.Fatal("replacement escrow 999 not registered")
 	}
-	if len(m.depleted.keys) != 0 {
-		t.Fatalf("depletedMarks = %v, want cleared after a successful replacement", m.depleted.keys)
+	if len(manager.depleted.keys) != 0 {
+		t.Fatalf("depletedMarks = %v, want cleared after a successful replacement", manager.depleted.keys)
 	}
-	if err := m.checkDepletion(context.Background(), servingSnapshot(), depletionModels(), devshards); err != nil {
+	if err := manager.checkDepletion(context.Background(), servingSnapshot(), depletionModels(), devshards); err != nil {
 		t.Fatalf("second checkDepletion() = %v, want nil", err)
 	}
 	if txClient.createCalls != 1 {
@@ -107,32 +132,32 @@ func TestCheckDepletionUnmarkedEscrowIsLeftAlone(t *testing.T) {
 	testStore := newFakeStore()
 	testStore.devshards["1"] = activeRecord("1", "model-a")
 	txClient := &fakeTxClient{createEscrowFn: workingCreateEscrowFn(999)}
-	m := depletionManager(t, testStore, txClient)
+	manager := depletionManager(t, testStore, txClient)
 	devshards := []store.DevshardRecord{testStore.devshards["1"]}
 
-	if err := m.checkDepletion(context.Background(), servingSnapshot(), depletionModels(), devshards); err != nil {
+	if err := manager.checkDepletion(context.Background(), servingSnapshot(), depletionModels(), devshards); err != nil {
 		t.Fatalf("checkDepletion() = %v, want nil", err)
 	}
 	if txClient.createCalls != 0 {
 		t.Fatalf("createCalls = %d, want 0 without a depletion mark", txClient.createCalls)
 	}
 	if record := testStore.devshards["1"]; !record.Active {
-		t.Fatal("unmarked escrow was retired")
+		t.Fatal("unmarked escrow was parked")
 	}
 }
 
 // An exhausted escrow fails every request routed to it, and its idle in-flight count is what makes the
 // load score prefer it, so it must stop taking traffic even where no replacement can be created.
-func TestCheckDepletionRetiresEscrowWhoseModelHasNoReplacementConfigured(t *testing.T) {
+func TestCheckDepletionParksEscrowWhoseModelHasNoReplacementConfigured(t *testing.T) {
 	testStore := newFakeStore()
 	testStore.devshards["1"] = activeRecord("1", "model-a")
 	txClient := &fakeTxClient{createEscrowFn: workingCreateEscrowFn(999)}
-	m := depletionManager(t, testStore, txClient)
+	manager := depletionManager(t, testStore, txClient)
 	devshards := []store.DevshardRecord{testStore.devshards["1"]}
 
-	m.OnBalanceExhausted("1", "test")
+	manager.OnBalanceExhausted("1", "test")
 	otherModelOnly := []ModelConfig{{ModelID: "model-b", TargetCount: 1, Amount: 1000, PrivateKeyEnv: "MODEL_B_KEY"}}
-	if err := m.checkDepletion(context.Background(), servingSnapshot(), otherModelOnly, devshards); err != nil {
+	if err := manager.checkDepletion(context.Background(), servingSnapshot(), otherModelOnly, devshards); err != nil {
 		t.Fatalf("checkDepletion() = %v, want nil", err)
 	}
 
@@ -142,84 +167,187 @@ func TestCheckDepletionRetiresEscrowWhoseModelHasNoReplacementConfigured(t *test
 	}
 }
 
-func TestCheckDepletionFailedReplacementKeepsMarkForNextTick(t *testing.T) {
+func TestADepletedEscrowLeavesServiceBeforeItsReplacementIsCreated(t *testing.T) {
 	testStore := newFakeStore()
 	testStore.devshards["1"] = activeRecord("1", "model-a")
+	routing := &fakeSettlementSource{}
+	var savedActiveAtCreate, routedAtCreate bool
 	txClient := &fakeTxClient{
 		createEscrowFn: func(ctx context.Context, signer *signing.Secp256k1Signer, amount uint64, modelID string, onPrepared func(string) error) (chain.CreateEscrowResult, error) {
-			return chain.CreateEscrowResult{}, errors.New("broadcast setup failed")
+			record, _ := testStore.snapshotDevshard("1")
+			savedActiveAtCreate, routedAtCreate = record.Active, !routing.retired
+			return workingCreateEscrowFn(999)(ctx, signer, amount, modelID, onPrepared)
 		},
 	}
-	m := depletionManager(t, testStore, txClient)
-	devshards := []store.DevshardRecord{testStore.devshards["1"]}
+	manager := depletionManager(t, testStore, txClient)
+	manager.settlementSource = routing
 
-	m.OnBalanceExhausted("1", "test")
-	if err := m.checkDepletion(context.Background(), servingSnapshot(), depletionModels(), devshards); err == nil {
-		t.Fatal("checkDepletion() = nil, want the replacement failure surfaced")
+	if err := depletionTick(t, manager, testStore, "1"); err != nil {
+		t.Fatalf("checkDepletion() = %v, want nil", err)
 	}
 
-	if !m.depleted.keys["1"] {
-		t.Fatal("mark for escrow 1 was dropped by a failed replacement; nothing would ever retry it")
+	if txClient.createCalls != 1 {
+		t.Fatalf("createCalls = %d, want 1 replacement created", txClient.createCalls)
 	}
-	if record := testStore.devshards["1"]; !record.Active {
-		t.Fatal("depleted escrow was retired even though no replacement exists")
+	if savedActiveAtCreate {
+		t.Error("the replacement was created while the depleted escrow was still saved active")
+	}
+	if routedAtCreate {
+		t.Error("the replacement was created while the depleted escrow was still routed")
 	}
 }
 
-func TestReplaceDepletedCreatesReplacementBeforeRetiringOld(t *testing.T) {
+func TestAReplacementThatNeverConfirmedIsNotBroadcastAgain(t *testing.T) {
 	testStore := newFakeStore()
 	testStore.devshards["1"] = activeRecord("1", "model-a")
-	log := &callLog{}
-	testStore.calls = log
-	txClient := &fakeTxClient{
-		createEscrowFn: func(ctx context.Context, signer *signing.Secp256k1Signer, amount uint64, modelID string, onPrepared func(string) error) (chain.CreateEscrowResult, error) {
-			log.record("CreateReplacement")
-			if err := onPrepared("tx-" + modelID); err != nil {
-				return chain.CreateEscrowResult{}, err
-			}
-			return chain.CreateEscrowResult{EscrowID: 999}, nil
-		},
-	}
-	m := depletionManager(t, testStore, txClient)
-	model := depletionModels()[0]
+	txClient := &fakeTxClient{createEscrowFn: unconfirmedCreateEscrowFn()}
+	manager := depletionManager(t, testStore, txClient)
 
-	if err := m.replaceDepleted(context.Background(), testStore.devshards["1"], model, servingSnapshot()); err != nil {
-		t.Fatalf("replaceDepleted() = %v, want nil", err)
+	if err := depletionTick(t, manager, testStore, "1"); err == nil {
+		t.Fatal("first checkDepletion() = nil, want the unconfirmed create surfaced")
+	}
+	if err := depletionTick(t, manager, testStore, "1"); err != nil {
+		t.Fatalf("second checkDepletion() = %v, want nil", err)
 	}
 
-	createIndex, deactivateIndex := -1, -1
-	for i, name := range log.snapshot() {
-		switch name {
-		case "CreateReplacement":
-			createIndex = i
-		case "ParkForSettlement":
-			if deactivateIndex == -1 {
-				deactivateIndex = i
-			}
-		}
-	}
-	if createIndex == -1 || deactivateIndex == -1 || createIndex > deactivateIndex {
-		t.Fatalf("call log = %v, want the replacement created before the old escrow is retired", log.snapshot())
+	if txClient.createCalls != 1 {
+		t.Fatalf("createCalls = %d, want 1: a depleted escrow gets one replacement, however many ticks see it", txClient.createCalls)
 	}
 }
 
-func TestReplaceDepletedCreateFailureLeavesOldEscrow(t *testing.T) {
+func TestAReplacementThatLandedWithoutConfirmationIsRegisteredByReconcile(t *testing.T) {
 	testStore := newFakeStore()
 	testStore.devshards["1"] = activeRecord("1", "model-a")
 	txClient := &fakeTxClient{
-		createEscrowFn: func(ctx context.Context, signer *signing.Secp256k1Signer, amount uint64, modelID string, onPrepared func(string) error) (chain.CreateEscrowResult, error) {
-			return chain.CreateEscrowResult{}, errors.New("broadcast setup failed")
+		createEscrowFn: unconfirmedCreateEscrowFn(),
+		getTxEscrowIDFn: func(ctx context.Context, txHash string) (uint64, bool, error) {
+			return 999, true, nil
 		},
 	}
-	m := depletionManager(t, testStore, txClient)
-	model := depletionModels()[0]
-
-	if err := m.replaceDepleted(context.Background(), testStore.devshards["1"], model, servingSnapshot()); err == nil {
-		t.Fatal("replaceDepleted() = nil, want error when the replacement create fails")
+	manager := depletionManager(t, testStore, txClient)
+	if err := depletionTick(t, manager, testStore, "1"); err == nil {
+		t.Fatal("checkDepletion() = nil, want the unconfirmed create surfaced")
 	}
-	got, ok := testStore.devshards["1"]
-	if !ok || !got.Active {
-		t.Fatalf("depleted escrow = %+v ok=%v, want it kept active until a replacement exists", got, ok)
+
+	if err := manager.reconcile(context.Background()); err != nil {
+		t.Fatalf("reconcile() = %v, want nil", err)
+	}
+
+	replacement, registered := testStore.devshards["999"]
+	if !registered || !replacement.Active {
+		t.Fatalf("replacement = %+v, registered %v; want escrow 999 registered and active", replacement, registered)
+	}
+}
+
+func TestADepletedEscrowLeavesServiceWhenItsReplacementFails(t *testing.T) {
+	testStore := newFakeStore()
+	testStore.devshards["1"] = activeRecord("1", "model-a")
+	txClient := &fakeTxClient{createEscrowFn: failingCreateEscrowFn()}
+	manager := depletionManager(t, testStore, txClient)
+
+	if err := depletionTick(t, manager, testStore, "1"); err == nil {
+		t.Fatal("checkDepletion() = nil, want the failed replacement surfaced")
+	}
+
+	assertParked(t, testStore, "1")
+}
+
+func TestAFailureToStopRoutingAParkedEscrowIsSurfaced(t *testing.T) {
+	routingFailure := errors.New("flushing session snapshot: disk full")
+	testCases := []struct {
+		name            string
+		models          []ModelConfig
+		createEscrowFn  func(context.Context, *signing.Secp256k1Signer, uint64, string, func(string) error) (chain.CreateEscrowResult, error)
+		wantCreateCalls int
+	}{
+		{name: "replacement created", models: depletionModels(), createEscrowFn: workingCreateEscrowFn(999), wantCreateCalls: 1},
+		{name: "replacement failed", models: depletionModels(), createEscrowFn: failingCreateEscrowFn(), wantCreateCalls: 1},
+		{name: "no replacement configured", models: nil, createEscrowFn: workingCreateEscrowFn(999), wantCreateCalls: 0},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			testStore := newFakeStore()
+			testStore.devshards["1"] = activeRecord("1", "model-a")
+			txClient := &fakeTxClient{createEscrowFn: testCase.createEscrowFn}
+			manager := depletionManager(t, testStore, txClient)
+			manager.settlementSource = &fakeSettlementSource{retireErr: routingFailure}
+			manager.OnBalanceExhausted("1", "nonce_cap")
+
+			err := manager.checkDepletion(context.Background(), servingSnapshot(), testCase.models, []store.DevshardRecord{testStore.devshards["1"]})
+
+			if !errors.Is(err, routingFailure) {
+				t.Errorf("checkDepletion() = %v, want the routing failure surfaced", err)
+			}
+			if txClient.createCalls != testCase.wantCreateCalls {
+				t.Errorf("createCalls = %d, want %d", txClient.createCalls, testCase.wantCreateCalls)
+			}
+			assertParked(t, testStore, "1")
+		})
+	}
+}
+
+func TestNoReplacementIsCreatedWhileADepletedEscrowCannotBeParked(t *testing.T) {
+	testStore := newFakeStore()
+	testStore.devshards["1"] = activeRecord("1", "model-a")
+	testStore.setActiveErr = errors.New("database is locked")
+	txClient := &fakeTxClient{createEscrowFn: workingCreateEscrowFn(999)}
+	routing := &fakeSettlementSource{}
+	manager := depletionManager(t, testStore, txClient)
+	manager.settlementSource = routing
+
+	if err := depletionTick(t, manager, testStore, "1"); err == nil {
+		t.Fatal("checkDepletion() = nil, want the failed park surfaced")
+	}
+
+	if txClient.createCalls != 0 {
+		t.Errorf("createCalls = %d, want 0 while the escrow is still saved active", txClient.createCalls)
+	}
+	if routing.retired {
+		t.Error("the escrow left routing although its park was never saved")
+	}
+}
+
+func TestADepletedEscrowIsReplacedOnceTheStoreRecovers(t *testing.T) {
+	testStore := newFakeStore()
+	testStore.devshards["1"] = activeRecord("1", "model-a")
+	testStore.setActiveErr = errors.New("database is locked")
+	txClient := &fakeTxClient{createEscrowFn: workingCreateEscrowFn(999)}
+	manager := depletionManager(t, testStore, txClient)
+	if err := depletionTick(t, manager, testStore, "1"); err == nil {
+		t.Fatal("first checkDepletion() = nil, want the failed park surfaced")
+	}
+	if txClient.createCalls != 0 {
+		t.Fatalf("createCalls = %d before the store recovered, want 0", txClient.createCalls)
+	}
+	testStore.setActiveErr = nil
+
+	devshards, err := testStore.ListDevshards(context.Background())
+	if err != nil {
+		t.Fatalf("ListDevshards: %v", err)
+	}
+	if err := manager.checkDepletion(context.Background(), servingSnapshot(), depletionModels(), devshards); err != nil {
+		t.Fatalf("checkDepletion() = %v, want nil", err)
+	}
+
+	assertParked(t, testStore, "1")
+	if txClient.createCalls != 1 {
+		t.Fatalf("createCalls = %d, want 1 once the park succeeds", txClient.createCalls)
+	}
+}
+
+func TestAnEscrowAlreadyOutOfServiceGetsNoReplacement(t *testing.T) {
+	testStore := newFakeStore()
+	testStore.devshards["1"] = parkedRecord("1")
+	txClient := &fakeTxClient{createEscrowFn: workingCreateEscrowFn(999)}
+	manager := depletionManager(t, testStore, txClient)
+
+	manager.OnBalanceExhausted("1", "nonce_cap")
+	if err := manager.checkDepletion(context.Background(), servingSnapshot(), depletionModels(), []store.DevshardRecord{activeRecord("1", "model-a")}); err != nil {
+		t.Fatalf("checkDepletion() = %v, want nil", err)
+	}
+
+	if txClient.createCalls != 0 {
+		t.Fatalf("createCalls = %d, want 0: the escrow left service before this tick acted on it", txClient.createCalls)
 	}
 }
 
@@ -231,10 +359,10 @@ func TestADepletedTempIsReplacedByARegular(t *testing.T) {
 	depleted.RotationRole = roleTemp
 	testStore.devshards["1"] = depleted
 	txClient := &fakeTxClient{createEscrowFn: workingCreateEscrowFn(999)}
-	m := depletionManager(t, testStore, txClient)
+	manager := depletionManager(t, testStore, txClient)
 
-	if err := m.replaceDepleted(context.Background(), depleted, depletionModels()[0], servingSnapshot()); err != nil {
-		t.Fatalf("replaceDepleted() = %v, want nil", err)
+	if err := depletionTick(t, manager, testStore, "1"); err != nil {
+		t.Fatalf("checkDepletion() = %v, want nil", err)
 	}
 
 	if got := testStore.devshards["999"].RotationRole; got != roleRegular {
@@ -269,11 +397,13 @@ func TestADepletedEscrowIsNotReplacedBeforeTheChainIsKnown(t *testing.T) {
 	testStore := newFakeStore()
 	testStore.devshards["1"] = activeRecord("1", "model-a")
 	txClient := &fakeTxClient{createEscrowFn: workingCreateEscrowFn(999)}
-	m := depletionManager(t, testStore, txClient)
+	routing := &fakeSettlementSource{}
+	manager := depletionManager(t, testStore, txClient)
+	manager.settlementSource = routing
 	devshards := []store.DevshardRecord{testStore.devshards["1"]}
 
-	m.OnBalanceExhausted("1", "test")
-	err := m.checkDepletion(context.Background(), chain.PhaseSnapshot{}, depletionModels(), devshards)
+	manager.OnBalanceExhausted("1", "test")
+	err := manager.checkDepletion(context.Background(), chain.PhaseSnapshot{}, depletionModels(), devshards)
 
 	if err == nil {
 		t.Fatal("a replacement was created under a snapshot with no epoch: no epoch counts it, so the next bridge funds a whole set on top of it")
@@ -281,7 +411,16 @@ func TestADepletedEscrowIsNotReplacedBeforeTheChainIsKnown(t *testing.T) {
 	if txClient.createCalls != 0 {
 		t.Errorf("createCalls = %d, want none before the chain is known", txClient.createCalls)
 	}
-	if !m.depleted.keys["1"] {
-		t.Error("the escrow was left unmarked, so the next tick will not retry it")
+	if record := testStore.devshards["1"]; !record.Active {
+		t.Error("the escrow was parked before the chain is known, so no later tick replaces it")
+	}
+	if routing.retired {
+		t.Error("the escrow left routing before the chain is known, so no later tick replaces it")
+	}
+	if err := manager.checkDepletion(context.Background(), servingSnapshot(), depletionModels(), devshards); err != nil {
+		t.Fatalf("checkDepletion() once the chain is known = %v, want nil", err)
+	}
+	if txClient.createCalls != 1 {
+		t.Errorf("createCalls = %d once the chain is known, want 1: the refused escrow stays marked for the next tick", txClient.createCalls)
 	}
 }

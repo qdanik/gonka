@@ -45,7 +45,7 @@ Only a locked database is retried. Everything else — a missing row, a constrai
 
 ## The devshard registry
 
-A row names the escrow, the environment variable holding the key that can act on it — never the key itself — its model, whether it is active, its rotation role and epoch, whether a settlement is queued, the hash and time of the settle transaction it last broadcast, and the route prefix it was created under. An update or delete matching no row returns `ErrDevshardNotFound`.
+A row names the escrow, the environment variable holding the key that can act on it — never the key itself — its model, whether it is active, its rotation role and epoch, whether a settlement is queued, the hash and time of the settle transaction it last broadcast, and the route prefix it was created under. An update or delete matching no row returns `ErrDevshardNotFound`, except `ParkForSettlementIfActive` below.
 
 `UpsertDevshard` replaces every field of an existing row except two:
 
@@ -55,6 +55,8 @@ A row names the escrow, the environment variable holding the key that can act on
 Its statement is a named constant so a test can read which columns the update carries: a field present in `DevshardRecord` but absent from that statement is inserted once and never updated again, and no other code in the package fails on it.
 
 `ParkForSettlement` writes `active = 0` and `settlement_pending = 1` in one statement. Written as two, a crash between them leaves the row inactive and not pending, which no recovery path picks up: the settle sweep looks for pending rows, so the escrow would be out of service and never settled.
+
+`ParkForSettlementIfActive` is the same write restricted to a serving row, and reports whether it moved one — `false` for a row already inactive or gone, never `ErrDevshardNotFound` — so only the call that took a depleted escrow out of service replaces it.
 
 Everything else is a targeted single-column update rather than a whole-record upsert, for one reason: a tick loads its escrows once and several steps act on that one slice, so the caller's copy predates whatever an earlier step in the same tick wrote. `SetDevshardRotationRole` moves the role without carrying a stale `active` or `settle_tx_hash` back into the row, and `DevshardSettleTxHash` reads the hash from the row rather than from the record the caller is holding.
 

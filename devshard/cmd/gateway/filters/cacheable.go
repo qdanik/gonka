@@ -196,7 +196,7 @@ func codeString(code any) string {
 }
 
 func isCacheableErrorDetails(details UpstreamError) bool {
-	if strings.TrimSpace(details.Message) == "" || isRetriableCapabilityError(details.Message) {
+	if strings.TrimSpace(details.Message) == "" || isCapabilityRefusal(details.Message) {
 		return false
 	}
 	// A numeric code is the status the host would have answered with. 400 and 422 are about the request;
@@ -242,8 +242,8 @@ func namesMomentaryFailure(class string) bool {
 	return false
 }
 
-// isRetriableCapabilityError excludes host-capability failures from caching: a different host may serve them fine.
-func isRetriableCapabilityError(msg string) bool {
-	contextLimit, _ := CapabilityLimits(msg)
-	return strings.Contains(msg, ToolChoiceUnsupportedMessage) || contextLimit > 0
+// isCapabilityRefusal keeps a refusal out of the cache: it is one host's unverified word on what it can run, and a replay would answer for hosts that never refused.
+func isCapabilityRefusal(message string) bool {
+	contextLimit, _ := CapabilityLimits(message)
+	return strings.Contains(message, ToolChoiceUnsupportedMessage) || contextLimit > 0
 }

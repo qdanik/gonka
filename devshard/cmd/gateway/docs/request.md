@@ -32,7 +32,7 @@ Steps 4–6 run **after** normalisation because the model name is only known onc
 5. `decodeRequestView` — the typed view of what the client asked for.
 6. `applyOutputTokenLimits` — default and cap, per model.
 7. `decodeLogprobIntent` — **read here, before the next stage**, because `StagePostLimits` forces logprobs on and afterwards the document says what the gateway wants, not what the client asked.
-8. `applyStage(StagePostLimits)` — the forcing stage: `logprobs`, `top_logprobs`, `return_token_ids`, `n → 1`.
+8. `applyStage(StagePostLimits)` — the forcing stage: `logprobs`, `top_logprobs`, `return_token_ids`, `n → 1`, and each model profile's own forces ([`filters/README.md`](../filters/README.md), "Model profiles").
 9. `forceUpstreamStreaming` — unless `force_upstream_streaming` is off.
 10. `document.Marshal` → `Result`.
 

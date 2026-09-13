@@ -27,7 +27,7 @@ var (
 // pendingSettleBudget bounds how many parked escrows one tick settles. See escrows.md, "Settlement and retirement".
 const pendingSettleBudget = 4
 
-// settlePending drains escrows parked by retire; a busy or failing escrow simply stays parked.
+// settlePending drains escrows parked by retire or by depletion; a busy or failing escrow simply stays parked.
 func (m *Manager) settlePending(ctx context.Context, devshards []store.DevshardRecord) error {
 	if !m.config.Load().Rotation.SettlementEnabled {
 		return nil
@@ -77,6 +77,26 @@ func (m *Manager) park(ctx context.Context, escrowID string) error {
 	}); err != nil {
 		return fmt.Errorf("parking escrow %s for settlement: %w", escrowID, err)
 	}
+	return m.stopRoutingParked(escrowID)
+}
+
+// parkIfServing parks only a serving escrow and reports whether this call parked it. See README.md, "Replacing a depleted escrow".
+func (m *Manager) parkIfServing(ctx context.Context, escrowID string) (bool, error) {
+	var parked bool
+	if err := m.store.WithRetry(ctx, func() error {
+		var err error
+		parked, err = m.store.ParkForSettlementIfActive(ctx, escrowID)
+		return err
+	}); err != nil {
+		return false, fmt.Errorf("parking escrow %s for settlement: %w", escrowID, err)
+	}
+	if !parked {
+		return false, nil
+	}
+	return true, m.stopRoutingParked(escrowID)
+}
+
+func (m *Manager) stopRoutingParked(escrowID string) error {
 	if err := m.settlementSource.Retire(escrowID); err != nil {
 		return fmt.Errorf("retiring escrow %s from routing: %w", escrowID, err)
 	}

@@ -18,8 +18,14 @@ type CapabilitySignal struct {
 	ContextLimit       uint64
 }
 
+// Retriable reports a refusal another host may not repeat: a tool call or protocol version the answering host's build lacks.
 func (s CapabilitySignal) Retriable() bool {
-	return s.ToolsUnsupported || s.VersionUnsupported || s.ContextLimit > 0
+	return s.ToolsUnsupported || s.VersionUnsupported
+}
+
+// Refused reports any refusal the gateway recognises, retriable or not.
+func (s CapabilitySignal) Refused() bool {
+	return s.Retriable() || s.ContextLimit > 0
 }
 
 func ParseVersionRefusal(body string) CapabilitySignal {
@@ -45,14 +51,20 @@ func capabilityOfDispatchError(err error) CapabilitySignal {
 	return ParseVersionRefusal(status.Body)
 }
 
-func CapabilityOf(a AttemptOutcome) CapabilitySignal {
-	if a.Capability.Retriable() {
-		return a.Capability
+func CapabilityOf(attempt AttemptOutcome) CapabilitySignal {
+	if attempt.Capability.Refused() {
+		return attempt.Capability
 	}
-	if a.ErrorSource == "" || a.ErrorMessage == "" {
+	if attempt.ErrorSource == "" || attempt.ErrorMessage == "" {
 		return CapabilitySignal{}
 	}
-	return ParseCapabilityError(a.ErrorMessage)
+	return ParseCapabilityError(attempt.ErrorMessage)
+}
+
+// rulesOutRetry reports a trusted host's refusal that is not Retriable, which the race takes as every host's. See race.md, "Escalation".
+func rulesOutRetry(attempt AttemptOutcome) bool {
+	refusal := CapabilityOf(attempt)
+	return !attempt.Suspicious && refusal.Refused() && !refusal.Retriable()
 }
 
 type CapabilityRecorder interface {

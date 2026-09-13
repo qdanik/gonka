@@ -41,6 +41,7 @@ type fakeSettlementSource struct {
 	committed int
 
 	busy        bool
+	retireErr   error
 	finalizeErr error
 	buildErr    error
 	buildInput  chain.SettlementInput
@@ -54,7 +55,7 @@ func (f *fakeSettlementSource) Retire(escrowID string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.retired = true
-	return nil
+	return f.retireErr
 }
 
 func (f *fakeSettlementSource) commit() bool {

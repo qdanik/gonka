@@ -27,7 +27,7 @@ Three fields have absent values that are load-bearing, and each fails in a chose
 | --- | --- | --- |
 | `RequestsBlocked` | derived, never absent — `false` outside every PoC phase (`rawPoCBlockingState`) | requests admitted |
 | `Preserved` / `PreservedByModel` | the chain holds no snapshot for this episode | **everyone** is preserved (`scheduler`, `pocPreserved`) — fail open, so a missing snapshot never empties routing |
-| `MaxNonce` | the chain has not enabled devshard escrow params | the nonce gate falls back to `fallbackNonceCeiling` rather than to "no ceiling" |
+| `MaxNonce` | never observed: the chain has not enabled devshard escrow params, or no read has succeeded since start | the nonce gate falls back to `fallbackNonceCeiling` rather than to "no ceiling", and routing reports no escrow exhausted against it (`scheduler`, `reportExhausted`) |
 
 Weights follow the same rule: `CurrentWeightsByModel` is preferred, `CurrentWeights` is the fallback, and a model with neither scores by membership share rather than as zero.
 

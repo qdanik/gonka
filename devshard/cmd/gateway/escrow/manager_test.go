@@ -324,20 +324,51 @@ func TestTickSettlesParkedEscrowWhileRotationDisabled(t *testing.T) {
 
 // Rotation off is the default, and an exhausted escrow left in the live set scores best on load
 // precisely because it serves nothing, so it attracts traffic and fails it.
-func TestTickRetiresDepletedEscrowWhileRotationDisabled(t *testing.T) {
+func TestTickParksDepletedEscrowWhileRotationDisabled(t *testing.T) {
 	testStore := newFakeStore()
 	depleted := store.DevshardRecord{EscrowID: "1", Model: "model-a", Active: true, RotationRole: roleRegular, PrivateKeyEnv: "MODEL_A_KEY"}
 	testStore.devshards[depleted.EscrowID] = depleted
 	cfg := config.Defaults()
 	cfg.Rotation.Enabled = false
 	cfg.Rotation.ModelsJSON = `[{"model_id":"model-a","target_count":1,"amount":1000,"private_key_env":"MODEL_A_KEY"}]`
-	m := mustManager(t, testManagerDeps(t, testStore, &fakeTxClient{createEscrowFn: failOnCreate(t)}, &fakeSnapshotSource{}, &cfg))
-	m.OnBalanceExhausted("1", "test")
+	manager := mustManager(t, testManagerDeps(t, testStore, &fakeTxClient{createEscrowFn: failOnCreate(t)}, &fakeSnapshotSource{}, &cfg))
+	manager.OnBalanceExhausted("1", "test")
 
-	if err := m.tick(context.Background()); err != nil {
+	if err := manager.tick(context.Background()); err != nil {
 		t.Fatalf("tick(): %v", err)
 	}
 
+	assertParked(t, testStore, "1")
+}
+
+// Pins the documented cost of one replacement attempt. See escrows.md, "Depletion".
+func TestTickLeavesAModelUnservedUntilTheNextBridgeAfterItsLastTempFailsToBeReplaced(t *testing.T) {
+	testStore := newFakeStore()
+	temp := store.DevshardRecord{EscrowID: "1", Model: "model-a", Active: true, RotationRole: roleTemp, RotationEpoch: 9, PrivateKeyEnv: "MODEL_A_KEY"}
+	testStore.devshards[temp.EscrowID] = temp
+	txClient := &fakeTxClient{createEscrowFn: failingCreateEscrowFn()}
+	cfg := config.Defaults()
+	cfg.Rotation.Enabled = true
+	cfg.Rotation.ModelsJSON = `[{"model_id":"model-a","target_count":1,"amount":1000,"private_key_env":"MODEL_A_KEY"}]`
+	snapshots := &fakeSnapshotSource{snapshot: chain.PhaseSnapshot{
+		EpochIndex: 9, BlockHeight: 800, EpochSwitchBlockHeight: 100,
+		RequestsBlocked:    true,
+		FullWeightsByModel: map[string]map[string]float64{"model-a": {"p": 1}},
+	}}
+	manager := mustManager(t, testManagerDeps(t, testStore, txClient, snapshots, &cfg))
+	manager.OnBalanceExhausted("1", "nonce_cap")
+	if err := manager.tick(context.Background()); err == nil {
+		t.Fatal("tick() during proof-of-compute = nil, want the failed replacement surfaced")
+	}
+
+	snapshots.snapshot.RequestsBlocked = false
+	if err := manager.tick(context.Background()); err != nil {
+		t.Fatalf("tick() after proof-of-compute: %v", err)
+	}
+
+	if txClient.createCalls != 1 {
+		t.Fatalf("createCalls = %d, want 1: finishBridge finds no active temp, so nothing replaces the failed attempt", txClient.createCalls)
+	}
 	assertParked(t, testStore, "1")
 }
 

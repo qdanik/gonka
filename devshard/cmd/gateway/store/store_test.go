@@ -334,6 +334,70 @@ func TestParkingAnUnknownEscrowIsReported(t *testing.T) {
 	}
 }
 
+func TestParkingIfActiveParksAServingEscrow(t *testing.T) {
+	gatewayStore := openTestStore(t)
+	ctx := context.Background()
+	if err := gatewayStore.UpsertDevshard(ctx, DevshardRecord{EscrowID: "7", Model: "qwen", Active: true}); err != nil {
+		t.Fatalf("UpsertDevshard: %v", err)
+	}
+
+	parked, err := gatewayStore.ParkForSettlementIfActive(ctx, "7")
+
+	if err != nil {
+		t.Fatalf("ParkForSettlementIfActive: %v", err)
+	}
+	if !parked {
+		t.Fatal("parking a serving escrow did not report that it parked it")
+	}
+	records, err := gatewayStore.ListDevshards(ctx)
+	if err != nil {
+		t.Fatalf("ListDevshards: %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("records = %d, want 1", len(records))
+	}
+	if records[0].Active || !records[0].SettlementPending {
+		t.Fatalf("record = %+v, want inactive and settlement-pending", records[0])
+	}
+}
+
+func TestParkingIfActiveReportsNoParkForAnUnknownEscrow(t *testing.T) {
+	gatewayStore := openTestStore(t)
+
+	parked, err := gatewayStore.ParkForSettlementIfActive(context.Background(), "404")
+
+	if err != nil || parked {
+		t.Fatalf("ParkForSettlementIfActive = %v, %v; want false, nil", parked, err)
+	}
+}
+
+func TestParkingIfActiveLeavesAnEscrowAlreadyOutOfServiceUntouched(t *testing.T) {
+	gatewayStore := openTestStore(t)
+	ctx := context.Background()
+	if err := gatewayStore.UpsertDevshard(ctx, DevshardRecord{EscrowID: "7", Model: "qwen", Active: false}); err != nil {
+		t.Fatalf("UpsertDevshard: %v", err)
+	}
+
+	parked, err := gatewayStore.ParkForSettlementIfActive(ctx, "7")
+
+	if err != nil {
+		t.Fatalf("ParkForSettlementIfActive: %v", err)
+	}
+	if parked {
+		t.Fatal("parking an escrow already out of service reported a park")
+	}
+	records, err := gatewayStore.ListDevshards(ctx)
+	if err != nil {
+		t.Fatalf("ListDevshards: %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("records = %d, want 1", len(records))
+	}
+	if records[0].SettlementPending {
+		t.Fatal("an escrow taken out of service without a settlement was queued for one")
+	}
+}
+
 // The pragmas are per-connection. Carried in the DSN they hold for every connection the pool opens;
 // applied as statements afterwards they hold only for the one connection that ran them, and a
 // recreated connection would come back with busy_timeout at 0 and synchronous back at FULL.

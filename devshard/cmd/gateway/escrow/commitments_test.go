@@ -244,6 +244,28 @@ func (f *fakeStore) ParkForSettlement(_ context.Context, escrowID string) error 
 	return nil
 }
 
+func (f *fakeStore) ParkForSettlementIfActive(_ context.Context, escrowID string) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.calls != nil {
+		f.calls.record("ParkForSettlementIfActive")
+	}
+	if f.setActiveErr != nil {
+		return false, f.setActiveErr
+	}
+	if f.setPendingErr != nil {
+		return false, f.setPendingErr
+	}
+	record, held := f.devshards[escrowID]
+	if !held || !record.Active {
+		return false, nil
+	}
+	record.Active = false
+	record.SettlementPending = true
+	f.devshards[escrowID] = record
+	return true, nil
+}
+
 func (f *fakeStore) DevshardSettleTxHash(_ context.Context, escrowID string) (string, time.Time, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
