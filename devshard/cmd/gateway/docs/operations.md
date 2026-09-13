@@ -80,6 +80,7 @@ Signing keys are addressed **by the name of the variable that holds them**, neve
 | `GATEWAY_ENGINE_INTER_CHUNK_STALL_MS` | 30 000 | silence after first content before an attempt is stalled |
 | `GATEWAY_ENGINE_LOSER_GRACE_MS` | 600 000 | how long a loser may keep running after the crown |
 | `GATEWAY_NONCE_ACCOUNTING_ENABLED` | false | the per-nonce ledger and its own listener |
+| `GATEWAY_NONCE_ACCOUNTING_RETENTION_EPOCHS` | 2 | how many epochs before the current one the nonce ledger keeps retired escrows; below 1 is refused while the ledger is on |
 | `GATEWAY_PERF_EWMA_HALFLIFE_SECONDS` | 600 | how fast a host's history forgets |
 | `GATEWAY_TIMEOUT_SWEEP_BUDGET_PER_TICK` | 8 | execution-timeout votes one tick may retry across every escrow; `0` turns the sweep off |
 | `GATEWAY_TIMEOUT_SWEEP_GRACE_SECONDS` | 120 | how far past its deadline a nonce must be before the sweep claims it from its own race |

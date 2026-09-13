@@ -177,6 +177,8 @@ It holds nonce dispositions, not timings, so no finding speaks to prefill or dec
 
 The ledger lives in memory and is written whole to `accounting.db` under the storage directory every `GATEWAY_NONCE_ACCOUNTING_SNAPSHOT_SECONDS`, and once more at shutdown. Nothing queries that database except the ledger's own load at start-up, so its tables mirror the in-memory shape one for one and a write is a single transaction that empties and refills them. The transaction is what makes a half-written ledger impossible: a crash or a failed insert rolls back to the previous contents rather than leaving the tables empty.
 
+Retired escrows are pruned once a minute: an escrow that is retired and was created more than `GATEWAY_NONCE_ACCOUNTING_RETENTION_EPOCHS` epochs before the current one leaves the ledger, the next snapshot and the `devshard_gateway_nonces_*` series together, while a live escrow stays however old it is (`accounting/service.go`, `Service.prune`). The default is 2. At two to three million nonces a day an unpruned ledger grows by close to a gigabyte a day, so the gateway refuses to boot with the ledger on and a retention below 1.
+
 A snapshot that cannot be read is reported and the gateway starts with an **empty ledger**: refusing to start over an unreadable observability file would trade a gateway for a graph.
 
 Only the nonces whose disposition can still move are written down — those awaiting a timeout, and those an unfinished disposition might yet be lifted from. A burned or finished nonce is already counted and nothing lifts it, so the file stays close to the size of the trouble rather than the size of the history. Two things follow:

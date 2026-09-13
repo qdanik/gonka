@@ -65,6 +65,7 @@ func TestDefaultsMatchSpec(t *testing.T) {
 		{"Chain.SnapshotMaxAgeSeconds", configuration.Chain.SnapshotMaxAgeSeconds, int64(60)},
 		{"Engine.LoserGraceMS", configuration.Engine.LoserGraceMS, int64(600_000)},
 		{"Engine.MaxAttemptsPerRequest", configuration.Engine.MaxAttemptsPerRequest, int64(2)},
+		{"NonceAccounting.RetentionEpochs", configuration.NonceAccounting.RetentionEpochs, int64(2)},
 	}
 	for _, check := range checks {
 		if check.got != check.want {
@@ -161,6 +162,11 @@ func TestValidateCatchesEveryRuleBreach(t *testing.T) {
 		{"perf_max_ejection_fraction above one", func(c *Config) { c.Perf.MaxEjectionFraction = 1.5 }, "perf_max_ejection_fraction"},
 		{"perf_min_available_hosts negative", func(c *Config) { c.Perf.MinAvailableHosts = -1 }, "perf_min_available_hosts"},
 		{"perf_host_staleness_seconds too low", func(c *Config) { c.Perf.HostStalenessSeconds = 0 }, "perf_host_staleness_seconds"},
+		{"nonce_accounting_retention_epochs negative", func(c *Config) { c.NonceAccounting.RetentionEpochs = -1 }, "nonce_accounting_retention_epochs"},
+		{"nonce_accounting_retention_epochs unbounded while the ledger is on", func(c *Config) {
+			c.NonceAccounting.Enabled = true
+			c.NonceAccounting.RetentionEpochs = 0
+		}, "nonce_accounting_retention_epochs"},
 		{"scheduler_match_wait_ms negative", func(c *Config) { c.Scheduler.MatchWaitMS = -1 }, "scheduler_match_wait_ms"},
 		{"scheduler_match_wait_ms above ceiling", func(c *Config) { c.Scheduler.MatchWaitMS = 5_001 }, "scheduler_match_wait_ms"},
 		{"engine_receipt_timeout_ms too low", func(c *Config) { c.Engine.ReceiptTimeoutMS = 0 }, "engine_receipt_timeout_ms"},
@@ -183,6 +189,17 @@ func TestValidateCatchesEveryRuleBreach(t *testing.T) {
 				t.Fatalf("error %q does not mention %q", err.Error(), testCase.messageFragment)
 			}
 		})
+	}
+}
+
+// A ledger that is off holds nothing, so a retention of 0 cannot grow anything and stays accepted.
+func TestValidateAcceptsAnUnboundedRetentionWhileTheLedgerIsOff(t *testing.T) {
+	configuration := Defaults()
+	configuration.NonceAccounting.Enabled = false
+	configuration.NonceAccounting.RetentionEpochs = 0
+
+	if err := configuration.Validate(); err != nil {
+		t.Fatalf("Validate() with the nonce ledger off and retention 0 = %v, want nil", err)
 	}
 }
 

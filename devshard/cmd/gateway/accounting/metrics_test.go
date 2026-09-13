@@ -1,9 +1,12 @@
 package accounting
 
 import (
+	"context"
 	"testing"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
 // TestTwoEpochsExportAsDistinctSeries guards the pairing of the aggregation key with the label set. A
@@ -92,5 +95,37 @@ func TestFindingsAreExportedAsTheirOwnSeries(t *testing.T) {
 	}
 	if value <= 0 {
 		t.Errorf("value = %v, want the rate that raised the finding", value)
+	}
+}
+
+// Retention bounds the exported series as well as the ledger: the collector rebuilds from the ledger on
+// every scrape, so a retired epoch that pruning drops stops being exported on the next one.
+func TestPruningARetiredEpochRemovesItsSeries(t *testing.T) {
+	const currentEpoch = 10
+	service, err := NewService(Settings{
+		RetentionEpochs: 2,
+		CurrentEpoch:    func(context.Context) (uint64, error) { return currentEpoch, nil },
+		Now:             func() time.Time { return time.Unix(0, 0).UTC() },
+	})
+	if err != nil {
+		t.Fatalf("NewService(): %v", err)
+	}
+	t.Cleanup(func() { _ = service.Close() })
+	openTestEscrow(t, service.Book, "escrow-retired", currentEpoch-3, 1)
+	service.Book.RetireEscrow("escrow-retired")
+	openTestEscrow(t, service.Book, "escrow-current", currentEpoch, 1)
+
+	registry := prometheus.NewPedanticRegistry()
+	if err := registry.Register(NewCollector(service.Book)); err != nil {
+		t.Fatalf("Register(): %v", err)
+	}
+	if before, err := testutil.GatherAndCount(registry, "devshard_gateway_nonces_assigned"); err != nil || before != 2 {
+		t.Fatalf("assigned series before pruning = %d (%v), want one per epoch", before, err)
+	}
+
+	service.prune(t.Context())
+
+	if after, err := testutil.GatherAndCount(registry, "devshard_gateway_nonces_assigned"); err != nil || after != 1 {
+		t.Fatalf("assigned series after pruning = %d (%v), want only the current epoch's", after, err)
 	}
 }
