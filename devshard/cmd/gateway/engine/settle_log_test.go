@@ -17,12 +17,10 @@ func TestAFailedTimeoutVoteIsLogged(t *testing.T) {
 		Nonce: 42, Kind: TimeoutKindExecution, Action: TimeoutActionFailed, Reason: TimeoutReasonNotApplied,
 	})
 
-	entry, found := logged.Find("timeout vote failed")
-	require.True(t, found, "a vote that never reached the chain must name the nonce it left unpaid")
-	require.Equal(t, "7", logcapture.Field(entry, "escrow"))
-	require.Equal(t, uint64(42), logcapture.Field(entry, "nonce"))
-	require.Equal(t, TimeoutKindExecution, logcapture.Field(entry, "kind"))
-	require.Equal(t, TimeoutReasonNotApplied, logcapture.Field(entry, "reason"))
+	logged.RequireLine(t, logcapture.Entry{Level: "warn", Msg: "timeout vote failed", Fields: []any{
+		"escrow", "7", "nonce", uint64(42), "host", "aaaaaaaa", "model", "qwen",
+		"kind", "execution", "reason", "timeout_not_applied",
+	}})
 }
 
 // An escrow gone from the chain fails every vote it owed at once, and has its own line already.

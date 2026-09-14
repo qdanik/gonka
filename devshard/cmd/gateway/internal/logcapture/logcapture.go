@@ -3,6 +3,7 @@
 package logcapture
 
 import (
+	"reflect"
 	"sync"
 	"testing"
 
@@ -68,4 +69,22 @@ func Field(entry Entry, key string) any {
 		}
 	}
 	return nil
+}
+
+// Contains reports whether a line with exactly this level, message and typed fields was recorded.
+func (r *Recorder) Contains(want Entry) bool {
+	for _, entry := range r.All() {
+		if reflect.DeepEqual(entry, want) {
+			return true
+		}
+	}
+	return false
+}
+
+// RequireLine fails the test unless a line identical to want was recorded.
+func (r *Recorder) RequireLine(t *testing.T, want Entry) {
+	t.Helper()
+	if !r.Contains(want) {
+		t.Fatalf("no line %+v among %+v", want, r.All())
+	}
 }

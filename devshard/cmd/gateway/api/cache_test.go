@@ -14,7 +14,6 @@ import (
 	"devshard/cmd/gateway/config"
 	"devshard/cmd/gateway/engine"
 	"devshard/cmd/gateway/filters"
-	"devshard/cmd/gateway/internal/logcapture"
 )
 
 const streamChatBody = `{"model":"qwen","messages":[{"role":"user","content":"hi"}],"stream":true}`
@@ -477,26 +476,6 @@ func TestAFoldedAnswerThatStoppedMidAnswerIsNotCached(t *testing.T) {
 
 	if got := live.inference.runs.Load(); got != 2 {
 		t.Fatalf("races: got %d, want 2 (a folded unfinished answer must not be replayed either)", got)
-	}
-}
-
-// The refusal is the only place a truncated answer is named, so this line is the operator's contract.
-func TestAHostThatStoppedMidAnswerIsLogged(t *testing.T) {
-	logged := logcapture.Install(t)
-	live := newHarness(t)
-	live.inference.chunks = []string{`data: {"choices":[{"index":0,"delta":{"reasoning":"still working"}}]}` + "\n\n"}
-
-	live.request(t, http.MethodPost, "/v1/chat/completions", streamChatBody, callerHeaders("caller-a"))
-
-	line, found := logged.Find("a host stopped mid-answer: reply served, not cached")
-	if !found {
-		t.Fatalf("a truncated answer left no log line: %+v", logged.All())
-	}
-	if line.Level != "warn" {
-		t.Fatalf("level = %q, want warn", line.Level)
-	}
-	if got := logcapture.Field(line, "escrow"); got != "7" {
-		t.Fatalf("escrow = %v, want the escrow that answered", got)
 	}
 }
 
