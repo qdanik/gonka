@@ -52,8 +52,9 @@ The `journal` step sits between `escrow sessions` and `nonce accounting` (`lifec
 | Kind | Producer | Ledger | Line |
 | --- | --- | --- | --- |
 | `KindRaceReported` | `nonceAccountedRaces.RecordRace` (`observers.go`) | `RecordRace` | none |
-| `KindTimeoutVote` | `nonceAccountedRaces.RecordTimeout` (`observers.go`) | `RecordTimeout` | written by `engine/settle.go` |
-| `KindNonceBurned` | `tracedDispatches.GhostBurned` (`observers.go`) | `RecordGhost` | written by `observers.go` |
+| `KindTimeoutVote` | `nonceAccountedRaces.RecordTimeout` for a race vote; `probeVotes.RecordTimeout` through `RecordProbeTimeout` for a warmup vote (`observers.go`) | `RecordTimeout` | `timeout vote failed`, Warn (`render_money.go`): a race vote whose action is `failed` for any reason but `escrow_gone_from_hosts`, which the escrow's own line already reports once. A warmup vote writes none; the warmup writes its own line |
+| `KindNonceBurned` | `tracedDispatches.GhostBurned` (`observers.go`) | `RecordGhost` | `nonce burned for nobody`, Warn (`render_money.go`) |
+| `KindBurnBudgetExhausted` | `tracedDispatches.BurnBudgetExhausted` (`observers.go`) | none | `escrow stopped burning nonces at its budget`, Warn (`render_money.go`) |
 
 ## Read next
 

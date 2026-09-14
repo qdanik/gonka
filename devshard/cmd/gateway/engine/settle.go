@@ -5,8 +5,6 @@ import (
 	"errors"
 	"time"
 
-	"devshard/cmd/gateway/internal/logkey"
-	"devshard/logging"
 	"devshard/user"
 )
 
@@ -124,17 +122,6 @@ func SettleTimeouts(ctx context.Context, poster TimeoutPoster, outcome RaceOutco
 		events = append(events, posted)
 	}
 	return events
-}
-
-// logTimeoutVote reports a vote that never reached the chain. See race.md, "Timeout votes".
-func logTimeoutVote(event TimeoutEvent) {
-	if event.Action != TimeoutActionFailed || event.Reason == TimeoutReasonEscrowGone {
-		return
-	}
-	logging.Warn("timeout vote failed",
-		logkey.Escrow, event.EscrowID, logkey.Nonce, event.Nonce,
-		logkey.Host, logkey.ShortHost(event.Participant), logkey.Model, event.Model,
-		logkey.Kind, event.Kind, logkey.Reason, event.Reason)
 }
 
 // TimeoutOutcome classifies what a posted vote came back as, preferring the handler's own detail. See README, "Timeout votes".

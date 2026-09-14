@@ -148,6 +148,16 @@ func (j *Journal) GhostBurned(escrowID string, burned scheduler.Burn) {
 	j.emit(queuedEvent{kind: KindNonceBurned, escrowID: escrowID, burn: burned})
 }
 
+// BurnBudgetExhausted reports an escrow that now queues callers rather than burning nonces on them.
+func (j *Journal) BurnBudgetExhausted(escrowID string) {
+	j.emit(queuedEvent{kind: KindBurnBudgetExhausted, escrowID: escrowID})
+}
+
+// RecordProbeTimeout hands a warmup probe's vote to the ledger without a race vote's line. See README.md, "Kinds".
+func (j *Journal) RecordProbeTimeout(vote engine.TimeoutEvent) {
+	j.emit(queuedEvent{kind: KindTimeoutVote, timeout: &vote, probeVote: true})
+}
+
 // emit admits one event to its lane and never waits. See README.md, "Two lanes".
 func (j *Journal) emit(entry queuedEvent) {
 	j.mu.Lock()
@@ -239,12 +249,18 @@ func (j *Journal) deliver(entry *queuedEvent) {
 			j.ledger.RecordRace(*entry.race)
 		}
 	case KindTimeoutVote:
+		if !entry.probeVote {
+			renderTimeoutVote(j.lines, entry.timeout)
+		}
 		if j.ledger != nil {
 			j.ledger.RecordTimeout(*entry.timeout)
 		}
 	case KindNonceBurned:
+		renderBurn(j.lines, entry.escrowID, entry.burn)
 		if j.ledger != nil {
 			j.ledger.RecordGhost(entry.escrowID, entry.burn.Nonce, entry.burn.Reason)
 		}
+	case KindBurnBudgetExhausted:
+		renderBurnBudgetExhausted(j.lines, entry.escrowID)
 	}
 }

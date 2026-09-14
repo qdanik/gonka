@@ -234,9 +234,9 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 	}
 
 	sessions := api.NewSessions(escrows)
-	// The warmup and the burn charge both vote through the poster and observer the race already uses.
+	// The warmup votes through the poster the race uses and is counted by the race's recorder.
 	raceObserver := nonceAccountedRaces{recorder: raceRecorder, events: events}
-	prober.Settle(sessions.Poster, raceObserver)
+	prober.Settle(sessions.Poster, probeVotes{recorder: raceRecorder, events: events})
 	e2e := env.LoadE2E()
 	races, err := engine.NewEngine(engine.Deps{
 		Picker:     router,

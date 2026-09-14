@@ -128,6 +128,8 @@ Every nonce the race did not leave settled owes a chain vote. `TimeoutStep.Start
 
 `SettleTimeout` reads the handler's own record of whether the vote reached the escrow state: the handler returns a non-nil error on its success path too — that error carries "the inference timed out" to the request — so the error alone cannot tell a settled vote from an unsettled one. `TimeoutOutcome` prefers the handler's own detail over the generic collection error, because that is the only place the refusing verifier is named; `escrowMissing` is the caller's reading, since vote collection reports a count and never the verifier's error.
 
+Every event `SettleTimeouts` returns goes to `Deps.Metrics`, and nowhere else. The composition root forwards it to the [`journal`](../journal/), which writes `timeout vote failed` for a vote that never reached the chain.
+
 ## The Stop barrier and the escrow hold
 
 `Engine.Stop` refuses new races and then waits: it returns once every race it admitted has posted the vote that settles its nonces. `admit` registers a race under the lock before it starts, and returns nil once stopped. A panicking race still owes the barrier its release, and the panic itself is re-raised unchanged.

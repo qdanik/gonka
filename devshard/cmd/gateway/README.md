@@ -53,10 +53,11 @@ Most of `compose` is a straight line. Four places are not:
 
 ### Two readers of one fact
 
-Three small adapters exist because two subsystems want the same event for different reasons, and neither belongs inside the other:
+Four small adapters exist because two subsystems want the same event for different reasons, and neither belongs inside the other:
 
-- **`nonceAccountedRaces`** hands one race outcome to both readers of it. The metrics recorder asks how the fleet performed and is called on the spot; the ledger asks where each nonce went and receives the outcome through the [`journal`](./journal/), so the response path never takes the ledger's lock. The engine knows about neither. The warmup and the burn charge vote through the same poster and observer the race already uses.
-- **`tracedDispatches`** narrates the dispatch events an operator would otherwise have to infer from a counter's slope, and forwards every one to the recorder, and hands a burn's ledger fact to the journal. It wraps rather than living inside [`metrics`](./metrics/) because counting and narrating are different jobs, and it keeps the scheduler free of a logger. A burned nonce is logged with its nonce and *never labelled with it* — a counter keyed by nonce would grow without end.
+- **`nonceAccountedRaces`** hands one race outcome to both readers of it. The metrics recorder asks how the fleet performed and is called on the spot; the ledger asks where each nonce went and receives the outcome through the [`journal`](./journal/), so the response path never takes the ledger's lock. The engine knows about neither. The warmup votes through the same poster the race uses and is counted by the same recorder, through `probeVotes`.
+- **`tracedDispatches`** counts every dispatch event on the spot and hands a burn and a tripped burn budget to the [`journal`](./journal/), which writes their lines and the burn's ledger fact. It wraps rather than living inside [`metrics`](./metrics/) because counting and narrating are different jobs, and it keeps the scheduler free of a logger. A burned nonce is logged with its nonce and *never labelled with it* — a counter keyed by nonce would grow without end.
+- **`probeVotes`** counts a warmup's timeout vote like a race vote and hands it to the journal as a probe vote: it reaches the ledger without the race's `timeout vote failed` line, because the warmup writes its own.
 - **`phaseNarrator`** turns the observer's five-second poll into a line only when something an operator cares about actually changed. Subscribing without it would write the same snapshot twelve times a minute.
 
 ### Relaxed mode, in one place

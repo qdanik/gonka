@@ -13,24 +13,22 @@ import (
 	"devshard/logging"
 )
 
-// tracedDispatches narrates dispatch events and forwards them on. See README.md, "Two readers of one fact".
+// tracedDispatches counts dispatch events and hands the ones worth a line or a ledger fact to the journal. See README.md, "Two readers of one fact".
 type tracedDispatches struct {
 	recorder *metrics.DispatchRecorder
 	events   *journal.Journal
 }
 
-// GhostBurned logs the nonce and never labels it: a counter keyed by nonce would grow without end.
+// GhostBurned is counted by escrow and reason, never by nonce: a counter keyed by nonce would grow without end.
 func (t tracedDispatches) GhostBurned(escrowID string, burned scheduler.Burn) {
-	logging.Warn("nonce burned for nobody", logkey.Escrow, escrowID, logkey.Nonce, burned.Nonce,
-		logkey.Host, logkey.ShortHost(burned.Participant), logkey.Reason, burned.Reason)
 	t.recorder.GhostBurned(escrowID, burned.Participant, burned.Reason)
 	t.events.GhostBurned(escrowID, burned)
 }
 
 // BurnBudgetExhausted is rare and changes what the escrow does: queued callers now wait rather than spend.
 func (t tracedDispatches) BurnBudgetExhausted(escrowID string) {
-	logging.Warn("escrow stopped burning nonces at its budget", logkey.Escrow, escrowID)
 	t.recorder.BurnBudgetExhausted(escrowID)
+	t.events.BurnBudgetExhausted(escrowID)
 }
 
 // NonceHeld and EscrowRetired pass straight through: both are already written down where they happen.
@@ -111,6 +109,17 @@ func (r nonceAccountedRaces) RecordTimeout(event engine.TimeoutEvent) {
 // RecordClassifyOverflow passes straight through: an overflowing classifier says nothing about a nonce.
 func (r nonceAccountedRaces) RecordClassifyOverflow(participant, model string) {
 	r.recorder.RecordClassifyOverflow(participant, model)
+}
+
+// probeVotes counts a warmup vote like a race vote and hands it to the ledger without a race vote's line. See README.md, "Two readers of one fact".
+type probeVotes struct {
+	recorder *metrics.RaceRecorder
+	events   *journal.Journal
+}
+
+func (p probeVotes) RecordTimeout(event engine.TimeoutEvent) {
+	p.recorder.RecordTimeout(event)
+	p.events.RecordProbeTimeout(event)
 }
 
 // journalSettings keeps a disabled ledger out of the interface field: a typed nil there is non-nil to a nil check.
