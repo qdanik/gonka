@@ -53,6 +53,8 @@ func TestMain(m *testing.M) {
 		goleak.IgnoreTopFunction("google.golang.org/grpc/internal/grpcsync.(*CallbackSerializer).run"),
 		goleak.IgnoreTopFunction("google.golang.org/grpc/internal/resolver/dns.(*dnsResolver).watcher"),
 		goleak.IgnoreTopFunction("google.golang.org/grpc.(*addrConn).resetTransportAndUnlock"),
+		// The keyring's init() opens a D-Bus session connection wherever a session bus answers, as on a Linux CI runner.
+		goleak.IgnoreAnyFunction("github.com/godbus/dbus.(*Conn).inWorker"),
 	)
 }
 
