@@ -154,7 +154,9 @@ func (b *Book) Restore(snapshot Snapshot) error {
 			escrow.nonces[stored.Nonce] = record
 			if key, settled := classify(escrow.slotOf(stored.Nonce), record); settled {
 				record.countedAs, record.isCounted = key, true
-				continue
+				if record.timeoutAction != engine.TimeoutActionStarted {
+					continue
+				}
 			}
 			record.timeoutAction = engine.TimeoutActionAbandoned
 			escrow.reclassify(stored.Nonce, record)

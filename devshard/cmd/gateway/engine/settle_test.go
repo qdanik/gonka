@@ -37,7 +37,38 @@ func unsettledAttempt() AttemptOutcome {
 }
 
 func settleEvents(outcome RaceOutcome, poster TimeoutPoster) []TimeoutEvent {
-	return SettleTimeouts(context.Background(), poster, outcome)
+	var events []TimeoutEvent
+	SettleTimeouts(context.Background(), poster, outcome, func(event TimeoutEvent) { events = append(events, event) })
+	return events
+}
+
+// countingPoster reads how many events had been reported when each vote was posted.
+type countingPoster struct {
+	reported   *[]TimeoutEvent
+	seenAtPost []int
+}
+
+func (p *countingPoster) SettleTimeout(context.Context, uint64, time.Time) (TimeoutVote, error) {
+	p.seenAtPost = append(p.seenAtPost, len(*p.reported))
+	return TimeoutVote{Kind: TimeoutKindRefused}, nil
+}
+
+// A vote round runs for minutes; a started event held back until it ends hides the vote in flight.
+func TestAStartedEventIsReportedBeforeItsVoteIsPosted(t *testing.T) {
+	first := unsettledAttempt()
+	first.Nonce = 11
+	second := unsettledAttempt()
+	second.Nonce = 12
+	outcome := race(first)
+	outcome.Attempts = []AttemptOutcome{first, second}
+	var reported []TimeoutEvent
+	poster := &countingPoster{reported: &reported}
+
+	SettleTimeouts(context.Background(), poster, outcome, func(event TimeoutEvent) { reported = append(reported, event) })
+
+	require.Equal(t, []int{1, 3}, poster.seenAtPost)
+	require.Equal(t, TimeoutActionStarted, reported[0].Action)
+	require.Equal(t, TimeoutActionStarted, reported[2].Action)
 }
 
 func TestTimeoutLadderPostsWhenNoSkipConditionHolds(t *testing.T) {
@@ -306,7 +337,7 @@ func TestSettleTimeoutsCarriesTheVerifierFailureItWasGiven(t *testing.T) {
 			poster := &stubPoster{vote: "refused", detail: testCase.detail, err: testCase.err}
 			outcome := RaceOutcome{EscrowID: "escrow-1", Attempts: []AttemptOutcome{unsettledAttempt()}}
 
-			events := SettleTimeouts(context.Background(), poster, outcome)
+			events := settleEvents(outcome, poster)
 
 			posted := events[len(events)-1]
 			if posted.Reason != testCase.wantReason {

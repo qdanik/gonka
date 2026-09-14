@@ -183,7 +183,7 @@ A snapshot that cannot be read is reported and the gateway starts with an **empt
 
 Only the nonces whose disposition can still move are written down — those awaiting a timeout, and those an unfinished disposition might yet be lifted from. A burned or finished nonce is already counted and nothing lifts it, so the file stays close to the size of the trouble rather than the size of the history. Two things follow:
 
-- A nonce whose race died with the process is named `abandoned_by_restart` rather than left pending for ever: no timeout was ever voted on it, and it will still settle as a completed inference nobody checked.
+- A nonce whose race died with the process, or whose vote was still posting when it stopped, is named `abandoned_by_restart` rather than left pending for ever: no vote result ever reached the ledger, and it will still settle as a completed inference nobody checked. A stored `started` is read as unresolved for that reason (`accounting/store.go`, `Book.Restore`).
 - An unfinished nonce is re-asked on every sweep. If the protocol finished it after the race gave up, it leaves the unfinished bucket — that bucket is what settlement reads as work the participant failed to do.
 
 ## Metrics

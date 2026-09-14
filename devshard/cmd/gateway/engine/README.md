@@ -124,14 +124,13 @@ What the classifier reads out of an event:
 
 Every nonce the race did not leave settled owes a chain vote. `TimeoutStep.StartedAt` is the race's start, not the attempt's dispatch: verifiers recompute a refusal deadline from the committed record, so every nonce a request commits must carry the one stamp, dispatched or stranded.
 
-`timeoutSkipReason` names every skip — phase aborted, empty stream with a finished nonce, finished nonce, long response. A host whose escrow state diverged is not one of them. `SettleTimeouts` emits a started event and then a completed one; a step nobody will attempt is emitted only as skipped, because a started event with no completion following reads as a hung settle.
+`timeoutSkipReason` names every skip — phase aborted, empty stream with a finished nonce, finished nonce, long response. A host whose escrow state diverged is not one of them. `SettleTimeouts` reports each step through its callback as it happens: a posted vote's started event before the post and its result once the post returns, because a vote round runs for minutes and a started event held until the end hides a vote in flight from the ledger and the metrics. A step nobody will attempt is reported only as skipped, because a started event with no completion following reads as a hung settle.
 
-`Deps.Timeouts` is resolved per race rather than held, because escrows rotate, and it is handed the request params because the vote must carry the prompt the committed record keeps only as a hash.
-Every `TimeoutEvent` carries the race's `RequestID`, and the settle goroutine posts under `settleContext`, which puts that id on the context so the shared session's `timeout_*` stage lines carry `request`. An empty id adds nothing, because `logging.WithRequestID` would mint one.
+`Deps.Timeouts` is resolved per race rather than held, because escrows rotate, and it is handed the request params because the vote must carry the prompt the committed record keeps only as a hash. Every `TimeoutEvent` carries the race's `RequestID`, and the settle goroutine posts under `settleContext`, which puts that id on the context so the shared session's `timeout_*` stage lines carry `request`. An empty id adds nothing, because `logging.WithRequestID` would mint one.
 
 `SettleTimeout` reads the handler's own record of whether the vote reached the escrow state: the handler returns a non-nil error on its success path too — that error carries "the inference timed out" to the request — so the error alone cannot tell a settled vote from an unsettled one. `TimeoutOutcome` prefers the handler's own detail over the generic collection error, because that is the only place the refusing verifier is named; `escrowMissing` is the caller's reading, since vote collection reports a count and never the verifier's error.
 
-Every event `SettleTimeouts` returns goes to `Deps.Metrics`, and nowhere else. The composition root forwards it to the [`journal`](../journal/), which writes `timeout vote failed` for a vote that never reached the chain.
+Every event `SettleTimeouts` reports goes to `Deps.Metrics`, and nowhere else. The composition root forwards it to the [`journal`](../journal/), which writes `timeout vote failed` for a vote that never reached the chain.
 
 ## The Stop barrier and the escrow hold
 

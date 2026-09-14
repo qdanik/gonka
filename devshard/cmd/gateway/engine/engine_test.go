@@ -149,7 +149,7 @@ func TestSettleTimeoutsRecordsAPostedVoteAsCompleted(t *testing.T) {
 	}
 	outcome := race(failedAttempt(TerminalDialFailure))
 
-	events := SettleTimeouts(context.Background(), &SessionTimeouts{handler: handler}, outcome)
+	events := settleEvents(outcome, &SessionTimeouts{handler: handler})
 
 	if len(events) != 2 {
 		t.Fatalf("events = %d, want 2", len(events))
@@ -171,7 +171,7 @@ func TestSettleTimeoutsNamesADiffThatCarriedNoTimeout(t *testing.T) {
 		err:    fmt.Errorf("inference %d: %w: diff landed no timeout", 7, user.ErrTimeoutNotApplied),
 	}
 
-	events := SettleTimeouts(context.Background(), &SessionTimeouts{handler: handler}, race(failedAttempt(TerminalDialFailure)))
+	events := settleEvents(race(failedAttempt(TerminalDialFailure)), &SessionTimeouts{handler: handler})
 
 	settled := events[len(events)-1]
 	if settled.Action != TimeoutActionFailed {
@@ -411,7 +411,7 @@ func TestSettleTimeoutsSeparatesAGoneEscrowFromACollectionFailure(t *testing.T) 
 			outcome := race(failedAttempt(TerminalDialFailure))
 			outcome.Lifecycle.EscrowMissing = testCase.escrowMissing
 
-			events := SettleTimeouts(context.Background(), &SessionTimeouts{handler: handler}, outcome)
+			events := settleEvents(outcome, &SessionTimeouts{handler: handler})
 
 			settled := events[len(events)-1]
 			if settled.Action != TimeoutActionFailed {
@@ -434,7 +434,7 @@ func TestAGoneEscrowDoesNotRenameASettledVote(t *testing.T) {
 	outcome := race(failedAttempt(TerminalDialFailure))
 	outcome.Lifecycle.EscrowMissing = true
 
-	events := SettleTimeouts(context.Background(), &SessionTimeouts{handler: handler}, outcome)
+	events := settleEvents(outcome, &SessionTimeouts{handler: handler})
 
 	settled := events[len(events)-1]
 	if settled.Action != TimeoutActionCompleted {
