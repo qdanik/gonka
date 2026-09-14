@@ -2,9 +2,9 @@ package registry
 
 import (
 	"context"
+	"reflect"
 	"testing"
 
-	"devshard/cmd/gateway/internal/logcapture"
 	"devshard/state"
 	"devshard/types"
 )
@@ -77,9 +77,10 @@ func TestBuildSettlementReportsASettlementThatWouldNotVerify(t *testing.T) {
 		{SlotID: 1, ValidatorAddress: "gonka1bbb"},
 		{SlotID: 2, ValidatorAddress: "gonka1ccc"},
 	}
-	logged := logcapture.Install(t)
+	narrator := &recordingEscrowNarrator{}
 	registry := New(Deps{
 		ReadOnlySessions: newSessions(map[string]*fakeSession{"5": session}).open,
+		Narrator:         narrator,
 		Now:              fixedClock(),
 	})
 
@@ -87,7 +88,7 @@ func TestBuildSettlementReportsASettlementThatWouldNotVerify(t *testing.T) {
 		t.Fatalf("BuildSettlement = %v, want nil", err)
 	}
 
-	if _, found := logged.Find("settlement signatures did not verify"); !found {
-		t.Errorf("the payload left without being checked: %v", logged.All())
+	if got := narrator.recorded(); !reflect.DeepEqual(got, []string{"unverifiable 5 nonce 9"}) {
+		t.Errorf("the payload left without being checked: %v", got)
 	}
 }

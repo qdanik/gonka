@@ -368,6 +368,7 @@ func newRouting(deps routingDeps) (*registry.Registry, *scheduler.Scheduler, *wa
 		ReadOnlySessions: deps.ReadOnly,
 		Membership:       deps.Capacity,
 		Exhaustion:       deps.Depletion,
+		Narrator:         deps.Journal,
 		Now:              deps.Now,
 	}
 	// A nil warmup must not reach the interface field: a typed nil there is non-nil to a nil check.

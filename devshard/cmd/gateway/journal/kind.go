@@ -21,10 +21,11 @@ const (
 	KindRequestThrottled
 	KindHostTransition
 	KindExcludedHostServed
+	KindEscrowTransition
 )
 
 // kindCount is one past the last kind, so a table indexed by kind has a slot for each.
-const kindCount = KindExcludedHostServed + 1
+const kindCount = KindEscrowTransition + 1
 
 var kindNames = [kindCount]string{
 	KindRaceReported:        "race_reported",
@@ -44,6 +45,7 @@ var kindNames = [kindCount]string{
 	KindRequestThrottled:    "request_throttled",
 	KindHostTransition:      "host_transition",
 	KindExcludedHostServed:  "excluded_host_served",
+	KindEscrowTransition:    "escrow_transition",
 }
 
 func (k Kind) String() string {
@@ -57,7 +59,8 @@ func (k Kind) String() string {
 func (k Kind) onMoneyLane() bool {
 	switch k {
 	case KindRaceReported, KindTimeoutVote, KindNonceBurned, KindBurnBudgetExhausted, KindDiffComposed,
-		KindWarmupProbe, KindNonceStranded, KindHostDiverged, KindReplyNotCached, KindRequestFinished:
+		KindWarmupProbe, KindNonceStranded, KindHostDiverged, KindReplyNotCached, KindRequestFinished,
+		KindEscrowTransition:
 		return true
 	}
 	return false

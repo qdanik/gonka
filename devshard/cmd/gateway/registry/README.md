@@ -46,6 +46,8 @@ Which escrows exist right now, what each serves, and who its hosts are.
 
 `Exhausted` reports an escrow routing declined as spent — out of nonces or out of deposit — to the rotation lifecycle, which is what replaces it.
 
+Each transition above — published, retired idle or draining, a drained escrow closed or failing to close — and a settlement payload that would not verify is narrated through `Deps.Narrator`, which the composition root binds to the journal. The narrator is called under the registry lock, so it must queue and return; a registry built without one behaves the same and says nothing.
+
 ## The two session kinds
 
 `ServingSessions` opens a chain-backed session with host clients (`user.NewHTTPSession`) — the only kind that can dispatch. `ReadOnlySessions` rehydrates from local storage alone (`user.NewLocalSession`): no chain, no host clients, so it can build a settlement but can neither serve nor finalize.

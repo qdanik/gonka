@@ -401,6 +401,7 @@ type escrowPublisher struct {
 	added       []string
 	retired     []string
 	deactivated []string
+	unserved    []string
 
 	failures map[string]error
 
@@ -440,6 +441,12 @@ func (p *escrowPublisher) deactivate(escrowID string) error {
 	defer p.mu.Unlock()
 	p.deactivated = append(p.deactivated, escrowID)
 	return nil
+}
+
+func (p *escrowPublisher) unservable(escrowID string, _ error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.unserved = append(p.unserved, escrowID)
 }
 
 func devshard(escrowID string, active bool) store.DevshardRecord {
@@ -495,7 +502,7 @@ func TestPublishEscrowsWalksTheThreeArmedBuildLadder(t *testing.T) {
 			publisher := &escrowPublisher{failures: testCase.failures}
 
 			err := publishEscrows(context.Background(), testCase.records, 4,
-				publisher.add, publisher.retire, publisher.deactivate)
+				publisher.add, publisher.retire, publisher.deactivate, publisher.unservable)
 
 			if testCase.wantError == nil && err != nil {
 				t.Fatalf("publishEscrows() = %v, want nil", err)
@@ -506,6 +513,7 @@ func TestPublishEscrowsWalksTheThreeArmedBuildLadder(t *testing.T) {
 			assertSame(t, "added", publisher.added, testCase.wantAdded)
 			assertSame(t, "retired", publisher.retired, testCase.wantRetired)
 			assertSame(t, "deactivated", publisher.deactivated, testCase.wantDeactivated)
+			assertSame(t, "unserved", publisher.unserved, testCase.wantDeactivated)
 		})
 	}
 }
@@ -533,7 +541,7 @@ func TestPublishEscrowsBuildsNoMoreThanTheBuilderLimitAtOnce(t *testing.T) {
 	done := make(chan error, 1)
 	go func() {
 		done <- publishEscrows(context.Background(), records, builders,
-			publisher.add, publisher.retire, publisher.deactivate)
+			publisher.add, publisher.retire, publisher.deactivate, publisher.unservable)
 	}()
 
 	deadline := time.Now().Add(5 * time.Second)

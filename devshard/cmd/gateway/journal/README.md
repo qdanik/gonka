@@ -1,6 +1,6 @@
 # `journal` — one ordered path to a log line or a ledger fact
 
-Race outcomes and race trace steps, request records, limiter refusals and uncached replies, burns and burn-budget trips, timeout votes, composed diffs' ledger facts, warmup probes, host transitions, and nonces served on a host their request excluded all pass through here, in the order they happened; this package decides which of those become log lines and which the nonce ledger applies.
+Race outcomes and race trace steps, request records, limiter refusals and uncached replies, burns and burn-budget trips, timeout votes, composed diffs' ledger facts, warmup probes, host transitions, escrow transitions, and nonces served on a host their request excluded all pass through here, in the order they happened; this package decides which of those become log lines and which the nonce ledger applies.
 
 ## What it owns
 
@@ -15,11 +15,11 @@ Race outcomes and race trace steps, request records, limiter refusals and uncach
 - **It does not classify.** Which counter a nonce lands in is `accounting`'s decision.
 - **The sweep writes the ledger directly.** `Recorder.sweep` (`nonces/recorder.go`) calls `Book.OpenEscrow`, `MarkFinished`, the `Observe*` methods and `RetireEscrow` on its own goroutine, never through this package.
 - **The warmup's `OpenEscrow` is a direct write too.** `Prober.openLedger` (`warmup/warmup.go`) calls it itself, because the open must land before the probe reaches the ledger through the journal.
-- **A few lifecycle lines are still written by their own packages.** The journal is not yet the only writer of lifecycle lines: the escrow drain lines in `registry/` are an example.
+- **A few lifecycle lines are still written by their own packages.** The journal is not yet the only writer of lifecycle lines: the escrow settlement lines in `escrow/` are an example.
 
 ## Boundaries
 
-- **Producers never import this package.** `engine`, `scheduler`, `perf`, `limits`, `nonces` and `warmup` declare the interface they call; `api` imports it only for `RequestLine`. The composition root adapts the rest (`observers.go`).
+- **Producers never import this package.** `engine`, `scheduler`, `perf`, `limits`, `registry`, `nonces` and `warmup` declare the interface they call; `api` imports it only for `RequestLine`. The composition root adapts the rest (`observers.go`).
 - **`DiffFact` is declared in `accounting`** and aliased here, so `*nonces.Recorder` satisfies `ledgerSink` without importing this package.
 - **A disabled ledger is a nil interface, never a typed nil.** `journalSettings` in `observers.go` leaves `Settings.Ledger` unset when the recorder is nil; a nil pointer inside the interface is non-nil to the consumer's check.
 - **No sink writes what it is handed.** A race outcome's attempts are the slice `api` reads on the response path.
@@ -31,7 +31,7 @@ Race outcomes and race trace steps, request records, limiter refusals and uncach
 
 | Lane | Kinds | Refused when | Counted in |
 | --- | --- | --- | --- |
-| money (the spec's `record`) | `KindRaceReported`, `KindTimeoutVote`, `KindNonceBurned`, `KindBurnBudgetExhausted`, `KindDiffComposed`, `KindWarmupProbe`, `KindNonceStranded`, `KindHostDiverged`, `KindReplyNotCached`, `KindRequestFinished` | `MoneyCeiling` (100 000) money events are accepted and not yet delivered | `devshard_gateway_journal_money_refused_total` |
+| money (the spec's `record`) | `KindRaceReported`, `KindTimeoutVote`, `KindNonceBurned`, `KindBurnBudgetExhausted`, `KindDiffComposed`, `KindWarmupProbe`, `KindNonceStranded`, `KindHostDiverged`, `KindReplyNotCached`, `KindRequestFinished`, `KindEscrowTransition` | `MoneyCeiling` (100 000) money events are accepted and not yet delivered | `devshard_gateway_journal_money_refused_total` |
 | progress (the spec's `offer`) | every other kind | `ProgressBacklog` (8 192) progress events are accepted and not yet delivered | `devshard_gateway_journal_progress_dropped_total` |
 
 Both lanes share one queue, so a line and a ledger fact keep the order they happened in. A lane releases an event when the consumer has delivered it, not when the consumer takes it out of the queue, so the batch being delivered still counts against its lane. A producer never waits: admission is an append under the journal's mutex, and a refusal is a counter. The queued value stays a few words wide: every payload wider than a few words is copied once by the producer method that receives it, outside the mutex, and queued as a pointer, so neither the append nor a growing queue copies a payload under the mutex. The money ceiling is not back-pressure; it bounds memory when the consumer is stuck, and a refused money-lane event is a ledger fact never applied or a money-path line never written (a stranded nonce, a divergent host, an uncached reply, a finished request's own record), which is why `Close` returns an error when any were refused. After the batch that follows a progress drop, the consumer writes one Warn line, `journal skipped progress lines`, with `skipped_lines`. That batch may be empty: the consumer does not wait while a drop is still unwritten, so the line reaches the log before `Flush` or `Close` returns. A drop never needs to wake the consumer, because a lane is full only while an event it counts is queued or being delivered, and the consumer sleeps only when neither holds.
@@ -75,6 +75,7 @@ The `journal` step sits between `escrow sessions` and `nonce accounting` (`lifec
 | `KindRequestThrottled` | `Server.chat` through `RequestThrottled` (`api/routes.go`) | none | `gateway limiter turned a request away`, Warn (`render_request.go`) |
 | `KindHostTransition` | `perf.Tracker`, `limits.ParticipantLimiter`, `engine` crown strikes | none | host withheld and back, capability refusals, cut off and back, crown denied and restored |
 | `KindExcludedHostServed` | `tracedDispatches.ExcludedHostServed` (`observers.go`) | none | `nonce spent on a host the request excluded` |
+| `KindEscrowTransition` | `registry.Registry`, `publishEscrows` (`devshards.go`), `escrow.Manager`, `chain.TxClient`, `warmup.Prober` | none | escrow published, retired, drained, created, settled; boot and warmup failures |
 
 ## Absent subjects are omitted
 
@@ -96,8 +97,12 @@ A narrator method copies its arguments into a render closure and hands it to `em
 | `limits.ParticipantLimiter` | `cutoffNarrator`, bound by `SetNarrator` | `KindHostTransition` | progress |
 | `engine` crown strikes | `crownNarrator`, part of `raceJournal` | `KindHostTransition` | progress |
 | `scheduler` dispatcher | `dispatchObserver.ExcludedHostServed`, through `tracedDispatches` | `KindExcludedHostServed` | progress |
+| `registry.Registry` | `escrowNarrator`, bound by `Deps.Narrator` | `KindEscrowTransition` | money |
+| `publishEscrows` (`devshards.go`) | `unservable`, the journal's `EscrowUnservable` | `KindEscrowTransition` | money |
 
 Host transitions ride the progress lane: they follow the host count and the backoff, never the request rate, and one dropped in a flood is counted like any other progress line.
+
+Escrow transitions ride the money lane: `escrow settled` is the audit record of funds leaving and `settled escrow record dropped` names the only key that could settle an escrow, so neither may be dropped in a flood of progress lines. Their volume follows the escrow tick, far below `MoneyCeiling`.
 
 ## Read next
 
