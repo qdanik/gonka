@@ -181,6 +181,12 @@ func (o *recordingObserver) counts() (holds, trips int) {
 	return o.holds, o.trips
 }
 
+func (o *recordingObserver) retiredEscrows() []string {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return append([]string(nil), o.retired...)
+}
+
 type testClock struct {
 	mu    sync.Mutex
 	now   time.Time

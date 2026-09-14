@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"maps"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -805,6 +806,42 @@ func TestClaimedDispatcherOutlivesTheIdleReaper(t *testing.T) {
 	test.scheduler.Stop()
 }
 
+// Holding the claim until Pick returns keeps the reaper from forgetting an escrow a waiting caller may still burn a nonce on.
+func TestAWaitingPickKeepsItsDispatcherClaimed(t *testing.T) {
+	leakcheck.VerifyNone(t)
+	test := newSchedulerHarness(t, schedulerConfig{matchWaitMS: 200})
+	ctx, cancel := context.WithCancel(t.Context())
+
+	// The nonce binds the one host this request excludes, so the waiter is held inside the dispatcher.
+	picked := make(chan error, 1)
+	go func() {
+		_, err := test.scheduler.Pick(ctx, RequestProfile{Model: modelA, Exclude: []string{hostB}})
+		picked <- err
+	}()
+	test.clock.awaitArmed(t)
+	waiting := test.liveDispatchers()[escrowA]
+
+	if test.scheduler.retire(waiting) {
+		t.Fatal("retired the dispatcher a waiting Pick still holds")
+	}
+
+	cancel()
+	select {
+	case err := <-picked:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("Pick err = %v, want context.Canceled", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Pick did not return after its context was cancelled")
+	}
+	if !test.scheduler.retire(waiting) {
+		t.Fatal("refused to retire the dispatcher after the Pick that claimed it returned")
+	}
+	if retired := test.observer.retiredEscrows(); !slices.Equal(retired, []string{escrowA}) {
+		t.Fatalf("escrows announced as retired = %v, want %v", retired, []string{escrowA})
+	}
+}
+
 func TestPickReplacesAStoppedDispatcher(t *testing.T) {
 	leakcheck.VerifyNone(t)
 	test := newSchedulerHarness(t, schedulerConfig{})
@@ -855,6 +892,10 @@ func TestSchedulerReapsAnIdleDispatcherAndRecreatesItOnDemand(t *testing.T) {
 	}
 	test.clock.fireTimer()
 	eventually(t, "the idle dispatcher to retire", func() bool { return len(test.liveDispatchers()) == 0 })
+
+	if retired := test.observer.retiredEscrows(); !slices.Equal(retired, []string{escrowA}) {
+		t.Fatalf("escrows announced as retired = %v, want %v: an observer never told keeps the escrow's series forever", retired, []string{escrowA})
+	}
 
 	recreated, err := test.scheduler.Pick(context.Background(), RequestProfile{Model: modelA})
 

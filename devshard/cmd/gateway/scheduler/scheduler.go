@@ -98,21 +98,12 @@ func (s *Scheduler) Pick(ctx context.Context, profile RequestProfile) (Assignmen
 	}
 
 	queued := newWaiter(profile, s.now())
-	for {
-		target, err := s.dispatcherFor(escrow)
-		if err != nil {
-			return Assignment{}, err
-		}
-		outcome := target.submitWaiter(queued)
-		target.pendingSubmits.Add(-1)
-		if outcome == submitAccepted {
-			break
-		}
-		if outcome == submitFull {
-			return Assignment{}, ErrEscrowBusy
-		}
-		// A stopped dispatcher is replaced by the next get-or-create, so this retries at most once more.
+	claimed, err := s.claimAndSubmit(escrow, queued)
+	if err != nil {
+		return Assignment{}, err
 	}
+	// Held until Pick returns, so the reaper cannot forget an escrow this caller may still burn a nonce on. See README, "Dispatcher lifecycle".
+	defer claimed.pendingSubmits.Add(-1)
 
 	select {
 	case result := <-queued.replyCh:
@@ -126,6 +117,24 @@ func (s *Scheduler) Pick(ctx context.Context, profile RequestProfile) (Assignmen
 			s.dropAssignment(delivered.assignment, profile.Model)
 		}
 		return Assignment{}, ctx.Err()
+	}
+}
+
+// claimAndSubmit returns the dispatcher that accepted the waiter, still claimed; a stopped one is replaced by the next get-or-create, so this retries at most once more.
+func (s *Scheduler) claimAndSubmit(escrow Escrow, queued *waiter) (*dispatcher, error) {
+	for {
+		target, err := s.dispatcherFor(escrow)
+		if err != nil {
+			return nil, err
+		}
+		outcome := target.submitWaiter(queued)
+		if outcome == submitAccepted {
+			return target, nil
+		}
+		target.pendingSubmits.Add(-1)
+		if outcome == submitFull {
+			return nil, ErrEscrowBusy
+		}
 	}
 }
 
@@ -210,7 +219,7 @@ func (s *Scheduler) dispatcherFor(escrow Escrow) (*dispatcher, error) {
 		s.dispatchers[escrow.ID] = target
 		target.start()
 	}
-	// Claimed under the registry lock, so an actor deciding to retire cannot slip in before the submit.
+	// Claimed under the registry lock and released when Pick returns, so an actor cannot retire while its caller holds a waiter or an assignment.
 	target.pendingSubmits.Add(1)
 	return target, nil
 }
