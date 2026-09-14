@@ -15,7 +15,7 @@ Race outcomes and race trace steps, request records, limiter refusals and uncach
 - **It does not classify.** Which counter a nonce lands in is `accounting`'s decision.
 - **The sweep writes the ledger directly.** `Recorder.sweep` (`nonces/recorder.go`) calls `Book.OpenEscrow`, `MarkFinished`, the `Observe*` methods and `RetireEscrow` on its own goroutine, never through this package.
 - **The warmup's `OpenEscrow` is a direct write too.** `Prober.openLedger` (`warmup/warmup.go`) calls it itself, because the open must land before the probe reaches the ledger through the journal.
-- **A few lifecycle lines are still written by their own packages.** The journal is not yet the only writer of lifecycle lines: the warmup lines in `warmup/` are an example.
+- **A few lifecycle lines are still written by their own packages.** The journal is not yet the only writer of lifecycle lines: the chain lines in `chain/observer.go` and `observers.go` are an example.
 
 ## Boundaries
 
@@ -101,10 +101,15 @@ A narrator method copies its arguments into a render closure and hands it to `em
 | `publishEscrows` (`devshards.go`) | `unservable`, the journal's `EscrowUnservable` | `KindEscrowTransition` | money |
 | `escrow.Manager` | `lifecycleNarrator`, bound by `Deps.Narrator` | `KindEscrowTransition` | money |
 | `chain.TxClient` | `settlementNarrator`, bound by `Config.Narrator` | `KindEscrowTransition` | money |
+| `warmup.Prober` | `warmupNarrator`, bound by `SetNarrator` | `KindEscrowTransition` | money |
 
 Host transitions ride the progress lane: they follow the host count and the backoff, never the request rate, and one dropped in a flood is counted like any other progress line.
 
 Escrow transitions ride the money lane: `escrow settled` is the audit record of funds leaving and `settled escrow record dropped` names the only key that could settle an escrow, so neither may be dropped in a flood of progress lines. Their volume follows the escrow tick, far below `MoneyCeiling`.
+
+## Nil errors are omitted
+
+An error key is written only when there is an error. `escrow warmup found no nonce to spend` from a probe that failed without one carries no `error`, and `escrow warmed` carries `catch_up_error` only when the catch-up failed. A nil error rendered as `error=<nil>` in text and `"error":null` in JSON, which a search for failing warmups matched. The warmup's own vote is written at Warn when it failed, as a race's failed vote is, and at Info otherwise.
 
 ## Read next
 

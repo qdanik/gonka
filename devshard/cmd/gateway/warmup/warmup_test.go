@@ -24,13 +24,14 @@ type recordedProbe struct {
 
 // spyLedger is both of the warmup's ledger paths: the escrow it opens directly and the probe it hands the journal.
 type spyLedger struct {
-	opened []accounting.EscrowMetadata
-	probes []recordedProbe
+	opened      []accounting.EscrowMetadata
+	probes      []recordedProbe
+	openRefusal error
 }
 
 func (s *spyLedger) OpenEscrow(metadata accounting.EscrowMetadata) error {
 	s.opened = append(s.opened, metadata)
-	return nil
+	return s.openRefusal
 }
 
 func (s *spyLedger) ProbeRecorded(escrowID string, attempt accounting.Attempt) {

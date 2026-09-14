@@ -380,6 +380,7 @@ func newRouting(deps routingDeps) (*registry.Registry, *scheduler.Scheduler, *wa
 	}
 	escrows := registry.New(registryDeps)
 	prober.Serve(escrows)
+	prober.SetNarrator(deps.Journal)
 	router, err := scheduler.NewScheduler(scheduler.Deps{
 		Escrows:           escrows,
 		Capacity:          deps.Capacity,
