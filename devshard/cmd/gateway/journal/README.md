@@ -15,11 +15,11 @@ Race outcomes and race trace steps, request records, limiter refusals and uncach
 - **It does not classify.** Which counter a nonce lands in is `accounting`'s decision.
 - **The sweep writes the ledger directly.** `Recorder.sweep` (`nonces/recorder.go`) calls `Book.OpenEscrow`, `MarkFinished`, the `Observe*` methods and `RetireEscrow` on its own goroutine, never through this package.
 - **The warmup's `OpenEscrow` is a direct write too.** `Prober.openLedger` (`warmup/warmup.go`) calls it itself, because the open must land before the probe reaches the ledger through the journal.
-- **A few lifecycle lines are still written by their own packages.** The journal is not yet the only writer of lifecycle lines: the escrow settlement lines in `escrow/` are an example.
+- **A few lifecycle lines are still written by their own packages.** The journal is not yet the only writer of lifecycle lines: the warmup lines in `warmup/` are an example.
 
 ## Boundaries
 
-- **Producers never import this package.** `engine`, `scheduler`, `perf`, `limits`, `registry`, `nonces` and `warmup` declare the interface they call; `api` imports it only for `RequestLine`. The composition root adapts the rest (`observers.go`).
+- **Producers never import this package.** `engine`, `scheduler`, `perf`, `limits`, `registry`, `escrow`, `chain`, `nonces` and `warmup` declare the interface they call; `api` imports it only for `RequestLine`. The composition root adapts the rest (`observers.go`).
 - **`DiffFact` is declared in `accounting`** and aliased here, so `*nonces.Recorder` satisfies `ledgerSink` without importing this package.
 - **A disabled ledger is a nil interface, never a typed nil.** `journalSettings` in `observers.go` leaves `Settings.Ledger` unset when the recorder is nil; a nil pointer inside the interface is non-nil to the consumer's check.
 - **No sink writes what it is handed.** A race outcome's attempts are the slice `api` reads on the response path.
@@ -99,6 +99,8 @@ A narrator method copies its arguments into a render closure and hands it to `em
 | `scheduler` dispatcher | `dispatchObserver.ExcludedHostServed`, through `tracedDispatches` | `KindExcludedHostServed` | progress |
 | `registry.Registry` | `escrowNarrator`, bound by `Deps.Narrator` | `KindEscrowTransition` | money |
 | `publishEscrows` (`devshards.go`) | `unservable`, the journal's `EscrowUnservable` | `KindEscrowTransition` | money |
+| `escrow.Manager` | `lifecycleNarrator`, bound by `Deps.Narrator` | `KindEscrowTransition` | money |
+| `chain.TxClient` | `settlementNarrator`, bound by `Config.Narrator` | `KindEscrowTransition` | money |
 
 Host transitions ride the progress lane: they follow the host count and the backoff, never the request rate, and one dropped in a flood is counted like any other progress line.
 

@@ -64,7 +64,7 @@ Every create — the bridge's, an operator's `CreateEscrow`, and a depleted escr
 
 The grace window is `commitmentReconcileGrace`: the chain's `UnorderedTxTTL` plus `commitmentIndexLagMargin` (2 min), which allows for a landed transaction staying unqueryable a little past its TTL. A row with a zero `CreatedAt` — malformed, or written before the stamp existed — counts as still pending, because keeping a commitment costs one row while dropping a live one costs an escrow nobody knows about.
 
-`clearCommitment` takes the reason it logs rather than deriving it: the two callers know it, the row does not.
+`clearCommitment` takes the reason it narrates rather than deriving it: the two callers know it, the row does not.
 
 ## The bridge across proof-of-compute
 
@@ -72,7 +72,7 @@ The grace window is `commitmentReconcileGrace`: the chain's `UnorderedTxTTL` plu
 
 `ensureToTarget` creates up to the target count for one (model, role, epoch). It stops before creating anything in two cases:
 
-- **The network serves no such model** — `servedByNetwork` reports known-and-not-served. That is logged, because it is a rotation that produced nothing by design: without the line an operator looking for the escrow that never appeared would find no reason anywhere. A cold start where both weight-by-model maps are empty reads as *unknown* rather than *not served*, so nothing is skipped.
+- **The network serves no such model** — `servedByNetwork` reports known-and-not-served. That is narrated, because it is a rotation that produced nothing by design: without the line an operator looking for the escrow that never appeared would find no reason anywhere. A cold start where both weight-by-model maps are empty reads as *unknown* rather than *not served*, so nothing is skipped.
 - **The create breaker is gated**, which returns `errCreateSuppressed`. That is not "nothing needed": the breaker is gated exactly when creation has been failing, so `prepareBridge` must take its degrade path and keep the escrows it has instead of retiring them for replacements that were never created.
 
 The degrade path is `promoteRegularsToTemp`: it relabels the existing regulars in place so the epoch still has bridge coverage, and keeps going past a write failure.
@@ -141,6 +141,7 @@ Two hooks are called from the request path — `OnEscrowMissing` and `OnBalanceE
 - `escrowTxClient`, satisfied by `*chain.TxClient`. `TxCommitted` is what tells a row still marked pending apart from one whose settle genuinely failed: the settle may have reached the chain after the wait gave up.
 - `escrowStore`, satisfied by `*store.Store`; `snapshotSource`, satisfied by `*chain.PhaseObserver`.
 - `SettlementSource`, wired by `api/` to the live engine runtime. `Retire` is synchronous — no nonce can be committed on the escrow after it returns — and that is what makes `IsBusy` monotone, so an idle answer stays true until the settlement it gates is broadcast. `Finalize` is idempotent.
+- **A narrator** (`Deps.Narrator`, satisfied by the journal) hears every transition an operator reads the log for — created, recovered, cleared, gone, marked, parked, settled, reconciled, dropped, bridged, a failed tick and a sweep that found work. The package writes no line itself, and every escrow id it hands over is the text form the rest of the gateway uses.
 - `ModelConfig`'s json tags are the `GATEWAY_ROTATION_MODELS_JSON` wire contract and are not renameable.
 
 ## Read next

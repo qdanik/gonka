@@ -132,18 +132,6 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 	if err != nil {
 		return nil, err
 	}
-	txClient, err := chain.NewTxClient(chain.Config{
-		Transport:    sources.Transport,
-		FeeDenom:     configuration.Tx.FeeDenom,
-		FeeAmount:    uint64(configuration.Tx.FeeAmount),
-		GasLimit:     uint64(configuration.Tx.GasLimit),
-		PollInterval: time.Duration(configuration.Tx.PollIntervalMS) * time.Millisecond,
-		PollTimeout:  time.Duration(configuration.Tx.PollTimeoutMS) * time.Millisecond,
-		Now:          clock,
-	})
-	if err != nil {
-		return nil, err
-	}
 
 	recorder := nonces.Open(configuration.NonceAccounting, storageDir, observer, clock)
 	events := journal.New(journalSettings(recorder))
@@ -154,6 +142,19 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 			_ = events.Close()
 		}
 	}()
+	txClient, err := chain.NewTxClient(chain.Config{
+		Transport:    sources.Transport,
+		FeeDenom:     configuration.Tx.FeeDenom,
+		FeeAmount:    uint64(configuration.Tx.FeeAmount),
+		GasLimit:     uint64(configuration.Tx.GasLimit),
+		PollInterval: time.Duration(configuration.Tx.PollIntervalMS) * time.Millisecond,
+		PollTimeout:  time.Duration(configuration.Tx.PollTimeoutMS) * time.Millisecond,
+		Now:          clock,
+		Narrator:     events,
+	})
+	if err != nil {
+		return nil, err
+	}
 
 	participants := limits.NewParticipantLimiter(limits.ParticipantConfigFromConfig(configuration), clock)
 	participants.SetNarrator(events)
@@ -212,6 +213,7 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 		Settlement:  escrows,
 		Timeouts:    escrows,
 		Sweeps:      raceRecorder,
+		Narrator:    events,
 		Signer:      environmentSigner{},
 		Config:      configHolder,
 		Now:         clock,

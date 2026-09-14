@@ -14,6 +14,7 @@ Every read from the network and every transaction the gateway signs passes throu
 - **The snapshot is immutable and published whole.** A reader never sees half an update, and never has to lock.
 - **A wrong chain id invalidates every signature**, so it is validated at startup rather than discovered on the first broadcast.
 - **Weights can be absent.** A model whose weights the chain has not reported falls back to membership share, and says so, rather than scoring as zero.
+- **The settle broadcast is narrated, not logged.** `Config.Narrator` hears the transaction hash as soon as the node accepts it, before the commit wait that can still fail; the journal writes `settle tx broadcast`.
 
 ## What the chain observer provides
 

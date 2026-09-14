@@ -200,6 +200,8 @@ The record carries no request or response body — capture files exist for that,
 | `chain snapshot stale` / `chain snapshot recovered` | written on the **edge** only; a failed refresh keeps routing on the previous participants until the last poll that read the epoch and the participants passes `chain_snapshot_max_age_seconds`, after which requests are refused 503. The nonce-ceiling and preserved-set reads fall back within the poll and do not hold that clock back |
 | `admin request failed` / `admin request refused` (`api/errors.go`) | the operator mutation lines are written on the successful path only, so a failed operator action would otherwise be invisible |
 
+`escrow` is always the escrow id as text. The chain hands `escrow created`, `escrow recovered from commitment` and `settle tx broadcast` the id as a number, and `escrow/` and `chain/` convert it before the journal writes it, because a JSON collector reads a number as a different type from every other line's `escrow`.
+
 Admin lines carry the action and its subject, **never the request body** — an override payload can hold the admin key. An unkeyed call on an operator route is refused 401 and written down: that is the shape an intrusion attempt takes.
 
 ## Metrics

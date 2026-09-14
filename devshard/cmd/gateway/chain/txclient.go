@@ -10,7 +10,6 @@ import (
 	"strings"
 	"time"
 
-	"devshard/logging"
 	"devshard/signing"
 )
 
@@ -37,6 +36,7 @@ type TxClient struct {
 	pollInterval time.Duration
 	pollTimeout  time.Duration
 	now          func() time.Time
+	narrator     settlementNarrator
 }
 
 // Config configures a TxClient. Zero-value fee/gas/poll/clock fields take package defaults; Transport is required.
@@ -48,6 +48,12 @@ type Config struct {
 	PollInterval time.Duration
 	PollTimeout  time.Duration
 	Now          func() time.Time
+	Narrator     settlementNarrator
+}
+
+// settlementNarrator is satisfied by *journal.Journal; chain never imports it. See README.md, "Boundaries".
+type settlementNarrator interface {
+	SettleBroadcast(escrowID, txHash, settler string)
 }
 
 // The tags are what the operator API returns; without them these are the only responses rendered with Go field names.
@@ -100,6 +106,7 @@ func NewTxClient(cfg Config) (*TxClient, error) {
 		pollInterval: pollInterval,
 		pollTimeout:  pollTimeout,
 		now:          now,
+		narrator:     cfg.Narrator,
 	}, nil
 }
 
@@ -184,7 +191,9 @@ func (c *TxClient) SettleEscrow(ctx context.Context, signer *signing.Secp256k1Si
 	if !strings.EqualFold(nodeHash, txHash) {
 		return SettleEscrowResult{}, fmt.Errorf("tx hash mismatch: precomputed %s, node returned %s", txHash, nodeHash)
 	}
-	logging.Info("settle tx broadcast", "escrow", input.EscrowID, "tx", txHash, "settler", settler)
+	if c.narrator != nil {
+		c.narrator.SettleBroadcast(strconv.FormatUint(input.EscrowID, 10), txHash, settler)
+	}
 	// Waiting is what makes the result mean "settled": the caller destroys the means to retry.
 	if err := c.waitForCommit(ctx, txHash); err != nil {
 		return SettleEscrowResult{}, fmt.Errorf("awaiting settlement commit for tx %s: %w", txHash, err)
