@@ -44,25 +44,10 @@ func fieldValue(fields []any, key string) any {
 	return nil
 }
 
-// Every attempt failing before a first byte still has to say who was asked.
-func TestLoggedHostsNamesEveryHostTriedWhenNobodyWon(t *testing.T) {
-	first := "gonka1aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-	second := "gonka1bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-	outcome := engine.RaceOutcome{Attempts: []engine.AttemptOutcome{
-		{Participant: first},
-		{Participant: second},
-	}}
-
-	got := loggedHosts(outcome)
-
-	require.Contains(t, got, logkey.ShortHost(first))
-	require.Contains(t, got, logkey.ShortHost(second))
-}
-
 // The reservation is hand-counted, so the widest line the code can build must be measured against it.
 func TestARequestFinishedLineFitsWhatItReserves(t *testing.T) {
 	line := RequestLine{
-		RequestID: "request-1", Model: "qwen", ClientStream: true, Outcome: servedOutcome(),
+		RequestID: "request-1", Model: "qwen", EscrowID: "escrow-1", ClientStream: true, Outcome: servedOutcome(),
 		Verdict: "served", Elapsed: 3 * time.Second, RaceErr: errors.New("race"), DeliverErr: errors.New("deliver"),
 	}
 

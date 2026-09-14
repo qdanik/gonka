@@ -8,6 +8,7 @@ const (
 	Nonce   = "nonce"
 	Model   = "model"
 	Host    = "host"
+	Hosts   = "hosts"
 	Slot    = "slot"
 	Role    = "role"
 	Reason  = "reason"

@@ -315,8 +315,8 @@ func TestARequestFinishedLineSurvivesAFullProgressBacklogThatDropsARequestThrott
 	events.Flush()
 
 	lines.RequireLine(t, logcapture.Entry{Level: "info", Msg: "request finished", Fields: []any{
-		"request", "request-1", "model", "qwen", "escrow", "", "stream", false,
-		"input_tokens", uint64(0), "output_tokens", int64(0), "host", "",
+		"request", "request-1", "model", "qwen", "stream", false,
+		"input_tokens", uint64(0), "output_tokens", int64(0),
 		"outcome", "served", "bytes", int64(0), "terminated", false, "duration_ms", int64(0),
 	}})
 	_, progressDropped, _ := events.Counts()

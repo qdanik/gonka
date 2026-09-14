@@ -46,25 +46,27 @@ func renderReplyNotCached(lines logSink, line *RequestLine) {
 
 // requestFinishedFields builds the line in a slice reserved for the widest one a finished request can carry.
 func requestFinishedFields(line *RequestLine) []any {
-	outcome := line.Outcome
 	fields := make([]any, 0, loggedFieldSlots)
+	fields = append(fields, logkey.Request, line.RequestID, logkey.Model, line.Model)
+	if line.EscrowID != "" {
+		fields = append(fields, logkey.Escrow, line.EscrowID)
+	}
 	fields = append(fields,
-		logkey.Request, line.RequestID,
-		logkey.Model, line.Model,
-		logkey.Escrow, line.EscrowID,
 		logkey.Stream, line.ClientStream,
-		logkey.InputTokens, outcome.InputTokens,
-		logkey.OutputTokens, winnerOutputTokens(outcome),
-		logkey.Host, loggedHosts(outcome),
+		logkey.InputTokens, line.Outcome.InputTokens,
+		logkey.OutputTokens, winnerOutputTokens(line.Outcome),
+	)
+	fields = appendHosts(fields, line.Outcome)
+	fields = append(fields,
 		logkey.Outcome, line.Verdict,
 		logkey.Bytes, line.Bytes,
 		logkey.Terminated, line.Terminated,
 		logkey.DurationMS, line.Elapsed.Milliseconds(),
 	)
-	if nonceFinished, crowned := outcome.WinnerNonceFinished(); crowned {
+	if nonceFinished, crowned := line.Outcome.WinnerNonceFinished(); crowned {
 		fields = append(fields, logkey.NonceFinished, nonceFinished)
 	}
-	if offsetMS, roundTripMS, stamped := hostClockOffset(outcome); stamped {
+	if offsetMS, roundTripMS, stamped := hostClockOffset(line.Outcome); stamped {
 		fields = append(fields, logkey.HostClockOffsetMS, offsetMS, logkey.HostReceiptMS, roundTripMS)
 	}
 	if line.RaceErr != nil {
@@ -90,10 +92,11 @@ func hostClockOffset(outcome engine.RaceOutcome) (offsetMS, roundTripMS int64, s
 	return 0, 0, false
 }
 
-func loggedHosts(outcome engine.RaceOutcome) string {
+// appendHosts names the crowned host, every host tried when nobody was crowned, and neither when no attempt ran. See README.md, "Absent subjects are omitted".
+func appendHosts(fields []any, outcome engine.RaceOutcome) []any {
 	for _, attempt := range outcome.Attempts {
 		if outcome.IsWinner(attempt) {
-			return logkey.ShortHost(attempt.Participant)
+			return append(fields, logkey.Host, logkey.ShortHost(attempt.Participant))
 		}
 	}
 	tried := make([]string, 0, len(outcome.Attempts))
@@ -102,7 +105,10 @@ func loggedHosts(outcome engine.RaceOutcome) string {
 			tried = append(tried, short)
 		}
 	}
-	return strings.Join(tried, ",")
+	if len(tried) == 0 {
+		return fields
+	}
+	return append(fields, logkey.Hosts, strings.Join(tried, ","))
 }
 
 // winnerOutputTokens is what the client actually received, which a measured output rate is computed from.

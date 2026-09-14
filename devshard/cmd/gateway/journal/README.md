@@ -74,6 +74,10 @@ The `journal` step sits between `escrow sessions` and `nonce accounting` (`lifec
 | `KindRequestFinished` | `Server.finishRequest` (`api/finish.go`) and the cache hit in `Server.chat` (`api/routes.go`), through `RequestFinished` | none | `request finished` (`render_request.go`): Info when the request went out clean, Warn with a race or delivery error; a cache hit writes the short shape with `outcome` `cache_hit` |
 | `KindRequestThrottled` | `Server.chat` through `RequestThrottled` (`api/routes.go`) | none | `gateway limiter turned a request away`, Warn (`render_request.go`) |
 
+## Absent subjects are omitted
+
+A key is written only when its subject exists. `request finished` carries `escrow` only when the race picked one, `host` only for the crowned attempt, and `hosts` — every host tried, comma-separated — only when attempts ran and nobody was crowned. A burn carries no `nonce` when the session committed none, which only a session test double does. An empty value reads as a subject with no name, and a query for it matches every line that never had one.
+
 ## Read next
 
 - [`nonces/README.md`](../nonces/README.md) — the ledger sink.

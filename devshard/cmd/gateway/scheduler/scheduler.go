@@ -311,7 +311,7 @@ type RequestProfile struct {
 	Params      any
 }
 
-// Burn is a nonce the scheduler spent on nobody; Prepared is nil when the decision preceded the commit.
+// Burn is a committed nonce the scheduler spent on nobody.
 type Burn struct {
 	Nonce       uint64
 	Participant string

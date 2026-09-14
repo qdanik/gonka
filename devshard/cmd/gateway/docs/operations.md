@@ -169,6 +169,8 @@ One more line belongs to the same family, on the money side rather than the rout
 
 | Field | What it settles |
 | --- | --- |
+| `escrow` | the escrow the race ran on; absent when no escrow was picked |
+| `host` / `hosts` | `host` is the crowned attempt's host; with nobody crowned, `hosts` lists every host tried, comma-separated; a race that ran no attempt carries neither |
 | `bytes` | how much actually reached the client, counted at the socket — the strip rewrites events on the way out |
 | `terminated` | whether the SSE terminator went with them; without it a client waits out its own timeout on a reply it already has |
 | `outcome` | `served`, `failed_mid_stream`, or `failed_before_first_byte` — the last distinguishes a reply the client can retry from one it cannot |

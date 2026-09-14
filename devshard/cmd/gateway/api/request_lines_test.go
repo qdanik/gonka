@@ -18,7 +18,7 @@ func TestAServedRequestWritesItsRecord(t *testing.T) {
 
 	logged.RequireLine(t, logcapture.Entry{Level: "info", Msg: "request finished", Fields: []any{
 		"request", "request-1", "model", "qwen", "escrow", "7", "stream", false,
-		"input_tokens", uint64(0), "output_tokens", int64(0), "host", "",
+		"input_tokens", uint64(0), "output_tokens", int64(0),
 		"outcome", "served", "bytes", int64(response.Body.Len()), "terminated", false, "duration_ms", int64(0),
 	}})
 }
@@ -53,7 +53,7 @@ func TestARaceThatFailedBeforeItsFirstByteWritesItsRecordAtWarn(t *testing.T) {
 
 	logged.RequireLine(t, logcapture.Entry{Level: "warn", Msg: "request finished", Fields: []any{
 		"request", "request-1", "model", "qwen", "escrow", "7", "stream", false,
-		"input_tokens", uint64(0), "output_tokens", int64(0), "host", "",
+		"input_tokens", uint64(0), "output_tokens", int64(0),
 		"outcome", "failed_before_first_byte", "bytes", int64(0), "terminated", false, "duration_ms", int64(0),
 		"error", "every attempt failed",
 	}})
@@ -71,7 +71,7 @@ func TestAStreamThatFailedMidAnswerWritesItsRecordAtWarn(t *testing.T) {
 
 	logged.RequireLine(t, logcapture.Entry{Level: "warn", Msg: "request finished", Fields: []any{
 		"request", "request-1", "model", "qwen", "escrow", "7", "stream", true,
-		"input_tokens", uint64(0), "output_tokens", int64(0), "host", "",
+		"input_tokens", uint64(0), "output_tokens", int64(0),
 		"outcome", "failed_mid_stream", "bytes", int64(response.Body.Len()), "terminated", true, "duration_ms", int64(0),
 		"error", "every attempt failed",
 	}})

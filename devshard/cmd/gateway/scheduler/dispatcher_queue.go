@@ -83,7 +83,7 @@ func (d *dispatcher) drain() (time.Time, bool) {
 			}
 			d.handOff(outcome.waiter, offered.taken, prepared)
 		case burn:
-			// A burn decided before the session could commit has no nonce to name.
+			// A real session always commits the ghost it was asked for; only a session double leaves Nonce zero.
 			burned := Burn{Participant: offered.taken.participant, Reason: outcome.kind.reason()}
 			if prepared != nil {
 				burned.Nonce = prepared.Nonce()

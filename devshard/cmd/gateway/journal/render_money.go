@@ -6,10 +6,15 @@ import (
 	"devshard/cmd/gateway/scheduler"
 )
 
-// renderBurn names the nonce in the line because no metric may carry it.
+// renderBurn names the nonce only when the session committed one. See README.md, "Absent subjects are omitted".
 func renderBurn(lines logSink, escrowID string, burned scheduler.Burn) {
-	lines.Warn("nonce burned for nobody", logkey.Escrow, escrowID, logkey.Nonce, burned.Nonce,
-		logkey.Host, logkey.ShortHost(burned.Participant), logkey.Reason, burned.Reason)
+	fields := make([]any, 0, 8)
+	fields = append(fields, logkey.Escrow, escrowID)
+	if burned.Nonce != 0 {
+		fields = append(fields, logkey.Nonce, burned.Nonce)
+	}
+	fields = append(fields, logkey.Host, logkey.ShortHost(burned.Participant), logkey.Reason, burned.Reason)
+	lines.Warn("nonce burned for nobody", fields...)
 }
 
 func renderBurnBudgetExhausted(lines logSink, escrowID string) {
