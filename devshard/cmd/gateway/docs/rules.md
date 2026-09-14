@@ -69,9 +69,9 @@ The narrow interfaces make the mistake hard to express: an attempt to reproduce 
 
 Three resources move together: the nonce, the participant's concurrency slot, and the escrow's in-flight hold.
 
-**Acquisition is one atomic step**, inside the callback of `session.Advance`, under the session's own lock with the nonce-to-host binding already fixed (`scheduler/dispatcher.go`). A refused slot becomes `burn{ghostThrottled}`.
+**Acquisition is one atomic step**, inside the callback of `session.Advance`, under the session's own lock with the nonce-to-host binding already fixed (`scheduler/dispatcher_queue.go`). A refused slot becomes `burn{ghostThrottled}`.
 
-**Release is by whoever spends it.** The engine's view of the limiter exposes only `Release` — an interface that cannot acquire cannot get the ownership wrong. Every scheduler path that cannot deliver an assignment gives the slot and the hold back *together*.
+**Release is by whoever spends it.** The engine's view of the limiter exposes only `Release` — an interface that cannot acquire cannot get the ownership wrong. Every scheduler path that cannot deliver an assignment gives the slot and the hold back *together*. A burn takes the hold and no slot, and gives the hold back whether its commit succeeds or fails.
 
 **The hold outlives the race**, released only after the settlement vote is posted, from inside the goroutine that posts it. The exception is the stranded case, where the assignment's own hold is kept, because the escrow being retired is exactly why there was no target and the vote still has to reach it.
 
@@ -79,7 +79,7 @@ Three resources move together: the nonce, the participant's concurrency slot, an
 
 ### 6. Shutdown order is a contract
 
-Nine steps (`lifecycle.go`, `shutdownOrder` and `stopAll`), listed in [operations.md](./operations.md). The order encodes three dependencies: races drain to the vote that settles their nonces, and that vote needs the escrow sessions, the observer and the chain client alive — so races stop second and everything they depend on stops below them. The store is second to last because closing it drains the accounting ledger. Chain connections close last because every step above can still reach the chain.
+Ten steps (`lifecycle.go`, `shutdownOrder` and `stopAll`), listed in [operations.md](./operations.md). The order encodes four dependencies: races drain to the vote that settles their nonces, and that vote needs the escrow sessions, the observer and the chain client alive — so races stop second and everything they depend on stops below them. The store is second to last because closing it drains the accounting ledger. Chain connections close last because every step above can still reach the chain. The journal closes after every producer that owns a step above it, the escrow sessions' diff observer last, and before nonce accounting, the ledger it drains into. Work that outlives its step or has none — a timeout vote still posting after the races drain ran out of budget, a handler still running after the listener's shutdown, the warmup, the republish after a devshard write — can still narrate after the journal closes, and such a line is counted as a late event.
 
 Three runner properties are as load-bearing as the order:
 
@@ -159,7 +159,7 @@ Both of the first two are keyed by participant, and the participant set is the b
 
 A package that takes a `Deps` refuses one it cannot work with, and says which field is missing: `api.New`, `engine.NewEngine`, `scheduler.NewScheduler`, `escrow.NewManager` and `store.NewLedger` all return an error rather than a half-wired object. Without that, a forgotten dependency is a nil interface the compiler accepts, and it surfaces as a panic — in the constructor for the engine, on the first request for the scheduler, on the first tick for the escrow manager.
 
-Optional dependencies stay optional and are guarded at every use: metrics, the ledger, the timeout poster, the dispatch observer. The constructor is where that distinction is written down, so a reader can tell "not wired yet" from "wired to nothing".
+Optional dependencies stay optional and are guarded at every use: metrics, the ledger, the timeout poster, the dispatch observer, the engine's journal. The constructor is where that distinction is written down, so a reader can tell "not wired yet" from "wired to nothing".
 
 The rule does not reach values. A struct the caller fills with already-checked numbers stays a literal, and the one that consumes it validates: `store.Retention` is two fields, and `NewLedger` refuses a non-positive age or a row cap below one. A constructor there would duplicate a check that already exists closer to use. Snapshots and events a package hands *out* — `perf.HostState`, `limits.HostWindow`, `engine.TimeoutEvent` — are literals for the same reason: nothing about them can be wrong at construction.
 
@@ -172,7 +172,7 @@ The rule does not reach values. A struct the caller fills with already-checked n
 | **Single-escrow mode** and the ten top-level routes that existed only for it | one escrow is now a pool of one; everything is reachable at `/devshard/{id}/…`. Operator scripts using bare paths need the escrow id added |
 | **The hand-written OpenAPI document and Swagger UI** | both had drifted, neither was tested, and the UI pulled assets from a CDN. Shipping a stale hand-written document is worse than shipping none |
 | **`/debug/pprof/*`** | legacy mounted it on the same mux as public traffic, where one unauthenticated request can stall the process. Adding it back belongs with a decision about where it is exposed |
-| **Short-content response capture** | capture has two triggers only: a request the filters rejected, and one every attempt failed. What answered the same question is now counted rather than kept — crown strikes, `no_winner_attempts_total`, the per-request record |
+| **Short-content response capture** | capture has two triggers only: a request the filters rejected, and one every attempt failed. What answered the same question is now counted rather than kept — crown strikes, `attempt_failures_total{visibility="no_winner"}`, the per-request record |
 | **A configurable host route prefix** | derived from the binary's own version and not overridable (`main.go`, `ResolveRoutePrefix`). The prefix names the protocol version sessions are created with and settlements carry; a knob that sets them apart is a way to build a settlement the chain will not take |
 | **The quarantine state machine** (`probe`/`shadow`/`probation`, 30–60 minute sentences) | replaced by the AIMD window plus a circuit breaker whose worst case is minutes: adaptation instead of punishment. The operator escape hatch survives as `POST /v1/admin/participants/unquarantine` |
 | **The pairwise speed comparator and its 500 ms winner hold** | pairwise routing is gone, so there is no preference signal to hold for — and inline in the writer the hold stalled the eventual winner's own socket while buying nothing |
@@ -208,12 +208,12 @@ The metric families that described the deleted quarantine machinery went with it
 
 ### Known gaps
 
-Each of these was reviewed against a fleet serving thousands of inferences a minute, and all but two are **closed as not worth building**. The verdict is recorded so the next reader does not re-open them.
+Each of these was reviewed against a fleet serving thousands of inferences a minute, and all but one are **closed**, most as not worth building. The verdict is recorded so the next reader does not re-open them.
 
 - **Not worth building.** Two per-escrow recovery tools the legacy gateway had are not restored: `signatures/collect` and `sync-hosts`. The read-only half of the recovery surface **is** served, and resolves through the settlement lookup so a draining escrow still answers — which is the point, since the escrow needing inspection is usually the one in trouble. Neither write-side tool has been reached for in production.
 - **Not worth building.** `/v1/debug/perf` is not served. The request ledger at `/v1/requests/{id}` answers the same question per request, and the accounting findings carry the thresholds a host's numbers are judged against. The pairwise summaries legacy's version carried describe a mechanism this gateway no longer has.
-- **Closed.** The dashboard gap is answered by [`gonka-gateway-escrows.json`](../../../../deploy/join/observability/grafana/dashboards/gonka-gateway-escrows.json), built for this gateway: every family it queries is emitted. The legacy `gonka-gateway-observability.json` still queries six families this gateway does not emit — capacity scale, participant limit rejections, quarantine state, picker choice, slot decisions and the skipped-escrow gauge — and that dashboard is not the one to keep. Alerting rules are still absent from the repository.
-- **Not worth building, two of three.** The per-participant limiter's state map never evicts, but it is keyed by participant and model, so it grows with the shape of the network and not with traffic. A per-participant decay half-life is captured when a host is first seen, so changing it at run time reaches only hosts seen afterwards. **Open:** a ghost burn commits its nonce without taking the escrow's in-flight hold, so it is not protected against a concurrent retire the way a served commit is — that one is on the money path.
+- **Closed.** The dashboard gap is answered by [`gonka-gateway-escrows.json`](../../../../deploy/join/observability/grafana/dashboards/gonka-gateway-escrows.json), built for this gateway: every family and label value it queries is emitted. No test reads that file — `devshard/cmd/devshardctl/gateway_dashboard_test.go` covers only the legacy dashboard — so a change to a family is checked against it by hand, with `jq -r '.. | .expr? // empty'`. The legacy `gonka-gateway-observability.json` still queries six families this gateway does not emit — capacity scale, participant limit rejections, quarantine state, picker choice, slot decisions and the skipped-escrow gauge — and that dashboard is not the one to keep. Alerting rules are still absent from the repository.
+- **Not worth building.** A per-participant decay half-life is captured when a host is first seen, so changing it at run time reaches only hosts seen afterwards.
 - **Open.** The timeout votes a race owes are posted from one goroutine per race, and nothing bounds how many run at once (`engine/engine.go`, `Engine.settle`). Each vote first waits out its protocol deadline, minutes long, and the goroutine holds the race's escrow and its place in the `Stop` barrier until the last vote is done. A host outage that fails every request for a few minutes leaves one such goroutine per failed request, and their votes reach the verifiers together once the deadlines pass.
 
 ### What a test stand may reach

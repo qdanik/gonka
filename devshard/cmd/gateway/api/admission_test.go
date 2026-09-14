@@ -84,6 +84,7 @@ func TestChatIsRejectedDuringPoCAndServedUnderRelaxedMode(t *testing.T) {
 
 	rejecting := newHarness(t)
 	rejecting.snapshots.snapshot = blocked
+	rejecting.swapConfig(func(next *config.Config) { next.Modes.PoCMode = config.PoCModeOff })
 	recorder := rejecting.request(t, http.MethodPost, "/v1/chat/completions", chatBody, nil)
 	if recorder.Code != http.StatusServiceUnavailable {
 		t.Fatalf("blocked chat: got %d, want 503", recorder.Code)

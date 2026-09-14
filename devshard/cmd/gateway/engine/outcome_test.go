@@ -465,7 +465,7 @@ func TestLabels(t *testing.T) {
 		}},
 		{"shadow-quarantined host another attempt served for", race(cleanAttempt()), suspicious, AttemptLabels{
 			Participant: testParticipant, Model: testModel, Role: "primary",
-			Outcome: "success", Visibility: "no_winner", Reason: reasonCrownDenied,
+			Outcome: "success", Visibility: "no_winner",
 		}},
 		{"shadow-quarantined host that served alone", race(suspiciousWinner), suspiciousWinner, AttemptLabels{
 			Participant: testParticipant, Model: testModel, Role: "primary",
@@ -727,7 +727,7 @@ func TestOnlyAnAnswerOrAnEmptyStreamJudgesCrowning(t *testing.T) {
 // dial failure, so a host alternating empty streams with failures never reaches the threshold.
 func TestARaceTheHostNeverAnsweredLeavesItsStrikesAlone(t *testing.T) {
 	t.Parallel()
-	crown := newCrownStrikes()
+	crown := newCrownStrikes(nil)
 	for range crownDenialStrikes - 1 {
 		crown.Observe(testParticipant, testModel, true)
 	}

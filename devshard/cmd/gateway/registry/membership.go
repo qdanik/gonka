@@ -16,6 +16,15 @@ type publications interface {
 	EscrowPublished(escrowID, model string)
 }
 
+// escrowNarrator is satisfied by *journal.Journal; Add and unpublish call it under the registry lock, so it must queue and return. See README.md, "Publishing, retiring and draining".
+type escrowNarrator interface {
+	EscrowServing(escrowID, model string)
+	EscrowRetired(escrowID string)
+	EscrowRetiredDraining(escrowID string, inFlight int64)
+	DrainingEscrowClosed(escrowID string, closeErr error)
+	SettlementUnverifiable(escrowID string, nonce uint64, unverifiable error)
+}
+
 // slotCounts counts each participant's slots: one holding several repeats in the per-slot key list.
 func slotCounts(perSlotKeys []string) map[string]int {
 	counts := make(map[string]int, len(perSlotKeys))

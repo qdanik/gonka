@@ -401,10 +401,6 @@ func (o RaceOutcome) Labels(a AttemptOutcome) AttemptLabels {
 	if served {
 		labels.Outcome = AttemptOutcomeSuccess
 		labels.Reason = ""
-		// Blanking this reason rendered the panel's own headline case as "unknown".
-		if labels.Visibility == VisibilityNoWinner {
-			labels.Reason = reasonCrownDenied
-		}
 	}
 	return labels
 }

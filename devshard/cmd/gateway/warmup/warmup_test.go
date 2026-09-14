@@ -17,20 +17,25 @@ import (
 	"devshard/user"
 )
 
-type recordedRace struct {
+type recordedProbe struct {
 	escrowID string
-	attempts []accounting.Attempt
+	attempt  accounting.Attempt
 }
 
+// spyLedger is both of the warmup's ledger paths: the escrow it opens directly and the probe it hands the journal.
 type spyLedger struct {
-	races  []recordedRace
-	opened []accounting.EscrowMetadata
-	reject error
+	opened      []accounting.EscrowMetadata
+	probes      []recordedProbe
+	openRefusal error
 }
 
 func (s *spyLedger) OpenEscrow(metadata accounting.EscrowMetadata) error {
 	s.opened = append(s.opened, metadata)
-	return nil
+	return s.openRefusal
+}
+
+func (s *spyLedger) ProbeRecorded(escrowID string, attempt accounting.Attempt) {
+	s.probes = append(s.probes, recordedProbe{escrowID: escrowID, attempt: attempt})
 }
 
 // stubEpochs stamps a fixed epoch, so a test that cares about the stamp states it rather than the chain.
@@ -38,11 +43,6 @@ type stubEpochs struct{ epoch uint64 }
 
 func (s stubEpochs) Snapshot() chain.PhaseSnapshot {
 	return chain.PhaseSnapshot{EpochIndex: s.epoch}
-}
-
-func (s *spyLedger) RecordRace(escrowID string, attempts []accounting.Attempt) error {
-	s.races = append(s.races, recordedRace{escrowID: escrowID, attempts: attempts})
-	return s.reject
 }
 
 type stubEscrows struct {
@@ -92,25 +92,25 @@ func TestWarmupKeepsATypedNilLedgerOutOfItsInterface(t *testing.T) {
 func TestWarmupSkipsAnEscrowThatIsAlreadyGone(t *testing.T) {
 	escrows := &stubEscrows{live: false}
 	ledger := &spyLedger{}
-	warmup := &Prober{escrows: escrows, ledger: ledger, now: warmupClock()}
+	warmup := &Prober{escrows: escrows, ledger: ledger, probes: ledger, now: warmupClock()}
 
 	warmup.warm("escrow-1", "test-model")
 
-	if len(ledger.races) != 0 {
-		t.Errorf("recorded %d races for a retired escrow, want 0", len(ledger.races))
+	if len(ledger.probes) != 0 {
+		t.Errorf("recorded %d probes for a retired escrow, want 0", len(ledger.probes))
 	}
 }
 
 func TestWarmupSettlesItsNonceAsWorkNobodyUsed(t *testing.T) {
 	ledger := &spyLedger{}
-	warmup := &Prober{ledger: ledger, now: warmupClock()}
+	warmup := &Prober{ledger: ledger, probes: ledger, now: warmupClock()}
 
 	warmup.record("escrow-1", 7, true, nil)
 
-	if len(ledger.races) != 1 {
-		t.Fatalf("recorded %d races, want 1", len(ledger.races))
+	if len(ledger.probes) != 1 {
+		t.Fatalf("recorded %d probes, want 1", len(ledger.probes))
 	}
-	attempt := ledger.races[0].attempts[0]
+	attempt := ledger.probes[0].attempt
 	switch {
 	case attempt.Nonce != 7:
 		t.Errorf("nonce = %d, want 7", attempt.Nonce)
@@ -125,11 +125,11 @@ func TestWarmupSettlesItsNonceAsWorkNobodyUsed(t *testing.T) {
 
 func TestARefusedProbeIsNotSettledAsFinished(t *testing.T) {
 	ledger := &spyLedger{}
-	warmup := &Prober{ledger: ledger, now: warmupClock()}
+	warmup := &Prober{ledger: ledger, probes: ledger, now: warmupClock()}
 
 	warmup.record("escrow-1", 7, false, errors.New("host refused"))
 
-	attempt := ledger.races[0].attempts[0]
+	attempt := ledger.probes[0].attempt
 	switch {
 	case !attempt.Sent:
 		t.Error("Sent = false, want true: the nonce is spent either way")
@@ -140,16 +140,15 @@ func TestARefusedProbeIsNotSettledAsFinished(t *testing.T) {
 	}
 }
 
-// A nil *Book assigned straight to the interface field is not a nil interface, so record would call
-// RecordRace on it and dereference nothing.
+// A nil *Book assigned straight to the interface field is not a nil interface, so openLedger would call OpenEscrow on it.
 func TestWarmupWithoutALedgerRecordsNothingAndDoesNotPanic(t *testing.T) {
 	holder := config.NewHolder(&config.Config{Scheduler: config.Scheduler{WarmNewEscrows: true}})
 
 	warmup := New(holder, nil, stubEpochs{}, warmupClock())
-	warmup.record("escrow-1", 7, true, nil)
+	warmup.openLedger("escrow-1", "test-model", stubSession{})
 
 	if warmup.ledger != nil {
-		t.Fatalf("ledger = %#v, want a nil interface: record dereferences a typed nil instead of skipping", warmup.ledger)
+		t.Fatalf("ledger = %#v, want a nil interface: openLedger dereferences a typed nil instead of skipping", warmup.ledger)
 	}
 }
 
@@ -229,6 +228,7 @@ func newWarmupUnderTest(session registry.EscrowSession, probeErr error) (*Prober
 	warmup := &Prober{
 		escrows: &stubEscrows{session: session, live: true},
 		ledger:  ledger,
+		probes:  ledger,
 		probe: func(_ context.Context, _ registry.EscrowSession, _ user.InferenceParams, nonceCommitted func()) (uint64, bool, error) {
 			nonceCommitted()
 			return 1, probeErr == nil, probeErr
@@ -267,8 +267,8 @@ func TestAnEscrowThatAlreadyServedIsNeitherProbedNorCaughtUp(t *testing.T) {
 
 	warmup.warm("escrow-1", "test-model")
 
-	if len(ledger.races) != 0 || *caughtUp != 0 {
-		t.Errorf("races = %d, catch-ups = %d, want 0 and 0: its hosts already hold the escrow", len(ledger.races), *caughtUp)
+	if len(ledger.probes) != 0 || *caughtUp != 0 {
+		t.Errorf("probes = %d, catch-ups = %d, want 0 and 0: its hosts already hold the escrow", len(ledger.probes), *caughtUp)
 	}
 }
 
@@ -332,10 +332,10 @@ func TestTheWarmupNonceIsSettledAsAProbe(t *testing.T) {
 
 	warmup.warm("escrow-1", "test-model")
 
-	if len(ledger.races) != 1 || len(ledger.races[0].attempts) != 1 {
-		t.Fatalf("recorded %+v, want one attempt for the one nonce the warmup spends", ledger.races)
+	if len(ledger.probes) != 1 {
+		t.Fatalf("recorded %+v, want one attempt for the one nonce the warmup spends", ledger.probes)
 	}
-	if got := ledger.races[0].attempts[0].Terminal; got != accounting.TerminalWarmupProbe {
+	if got := ledger.probes[0].attempt.Terminal; got != accounting.TerminalWarmupProbe {
 		t.Errorf("terminal = %q, want %q", got, accounting.TerminalWarmupProbe)
 	}
 }

@@ -7,8 +7,6 @@ import (
 	"strconv"
 
 	"devshard/cmd/gateway/chain"
-	"devshard/cmd/gateway/internal/logkey"
-	"devshard/logging"
 	"devshard/signing"
 	"devshard/state"
 	"devshard/types"
@@ -32,7 +30,7 @@ func (r *Registry) Finalize(ctx context.Context, escrowID string) error {
 // BuildSettlement rehydrates a non-resident escrow read-only: the payload comes entirely from local storage.
 func (r *Registry) BuildSettlement(ctx context.Context, escrowID string) (chain.SettlementInput, error) {
 	if session, held := r.SettlementSession(escrowID); held {
-		return buildSettlement(escrowID, session)
+		return r.buildSettlement(escrowID, session)
 	}
 	if r.readOnlySessions == nil {
 		return chain.SettlementInput{}, fmt.Errorf("escrow %s: no read-only session factory", escrowID)
@@ -41,7 +39,7 @@ func (r *Registry) BuildSettlement(ctx context.Context, escrowID string) (chain.
 	if err != nil {
 		return chain.SettlementInput{}, fmt.Errorf("rehydrating read-only session for escrow %s: %w", escrowID, err)
 	}
-	input, buildErr := buildSettlement(escrowID, session)
+	input, buildErr := r.buildSettlement(escrowID, session)
 	return input, errors.Join(buildErr, session.Close())
 }
 
@@ -67,7 +65,7 @@ func finalize(ctx context.Context, session EscrowSession) error {
 	return session.Finalize(ctx)
 }
 
-func buildSettlement(escrowID string, session EscrowSession) (chain.SettlementInput, error) {
+func (r *Registry) buildSettlement(escrowID string, session EscrowSession) (chain.SettlementInput, error) {
 	numericID, err := strconv.ParseUint(escrowID, 10, 64)
 	if err != nil {
 		return chain.SettlementInput{}, fmt.Errorf("escrow id %q is not numeric: %w", escrowID, err)
@@ -81,9 +79,8 @@ func buildSettlement(escrowID string, session EscrowSession) (chain.SettlementIn
 	hostStats := statsPerPresentSlot(payload.HostStats)
 	verified := *payload
 	verified.HostStats = hostStats
-	if unverifiable := settlementUnverifiable(verified, snapshot); unverifiable != nil {
-		logging.Warn("settlement signatures did not verify",
-			logkey.Escrow, escrowID, logkey.Nonce, nonce, logkey.Error, unverifiable)
+	if unverifiable := settlementUnverifiable(verified, snapshot); unverifiable != nil && r.narrator != nil {
+		r.narrator.SettlementUnverifiable(escrowID, nonce, unverifiable)
 	}
 	hostStatsHash, err := state.ComputeHostStatsHash(hostStats)
 	if err != nil {

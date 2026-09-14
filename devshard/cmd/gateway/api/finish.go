@@ -1,97 +1,29 @@
 package api
 
 import (
-	"strings"
 	"time"
 
 	"devshard/cmd/gateway/engine"
 	"devshard/cmd/gateway/filters"
-	"devshard/cmd/gateway/internal/logkey"
-	"devshard/logging"
+	"devshard/cmd/gateway/journal"
 )
 
-// loggedFieldSlots is every keyval a finished request can carry, so the line is never copied to grow.
-const loggedFieldSlots = 32
-
-func hostClockOffset(outcome engine.RaceOutcome) (offsetMS, roundTripMS int64, stamped bool) {
-	for _, attempt := range outcome.Attempts {
-		if !outcome.IsWinner(attempt) {
-			continue
-		}
-		offset, measured := engine.ClockOffset(attempt)
-		if !measured {
-			continue
-		}
-		return offset.Milliseconds(), attempt.ReceiptTime.Sub(attempt.SendTime).Milliseconds(), true
-	}
-	return 0, 0, false
-}
-
-func loggedHosts(outcome engine.RaceOutcome) string {
-	for _, attempt := range outcome.Attempts {
-		if outcome.IsWinner(attempt) {
-			return logkey.ShortHost(attempt.Participant)
-		}
-	}
-	tried := make([]string, 0, len(outcome.Attempts))
-	for _, attempt := range outcome.Attempts {
-		if short := logkey.ShortHost(attempt.Participant); short != "" {
-			tried = append(tried, short)
-		}
-	}
-	return strings.Join(tried, ",")
-}
-
-// winnerOutputTokens is what the client actually received, which a measured output rate is computed from.
-func winnerOutputTokens(outcome engine.RaceOutcome) int64 {
-	for _, attempt := range outcome.Attempts {
-		if outcome.IsWinner(attempt) {
-			return attempt.UsageCompletionTokens
-		}
-	}
-	return 0
-}
-
-// logRequestFinished records what a finished request can no longer be asked. See README.md, "What a finished request records".
-func logRequestFinished(requestID string, normalized filters.Result, outcome engine.RaceOutcome, verdict string, stream *clientStream, elapsed time.Duration, raceErr, deliverErr error) {
-	fields := requestFinishedFields(requestID, normalized, outcome, verdict, stream, elapsed, raceErr, deliverErr)
-	if raceErr != nil || deliverErr != nil {
-		logging.Warn("request finished", fields...)
-		return
-	}
-	logging.Info("request finished", fields...)
-}
-
-// requestFinishedFields builds the line in a slice reserved for the widest one a finished request can carry.
-func requestFinishedFields(requestID string, normalized filters.Result, outcome engine.RaceOutcome, verdict string, stream *clientStream, elapsed time.Duration, raceErr, deliverErr error) []any {
+// finishRequest hands the journal what a finished request can no longer be asked. See README.md, "What a finished request records".
+func (s *Server) finishRequest(requestID string, normalized filters.Result, outcome engine.RaceOutcome, verdict string, stream *clientStream, elapsed time.Duration, raceErr, deliverErr error) {
 	written, terminated := stream.delivered()
-	fields := make([]any, 0, loggedFieldSlots)
-	fields = append(fields,
-		logkey.Request, requestID,
-		logkey.Model, normalized.Model,
-		logkey.Escrow, outcome.EscrowID,
-		logkey.Stream, normalized.ClientStream,
-		logkey.InputTokens, outcome.InputTokens,
-		logkey.OutputTokens, winnerOutputTokens(outcome),
-		logkey.Host, loggedHosts(outcome),
-		logkey.Outcome, verdict,
-		logkey.Bytes, written,
-		logkey.Terminated, terminated,
-		logkey.DurationMS, elapsed.Milliseconds(),
-	)
-	if nonceFinished, crowned := outcome.WinnerNonceFinished(); crowned {
-		fields = append(fields, logkey.NonceFinished, nonceFinished)
-	}
-	if offsetMS, roundTripMS, stamped := hostClockOffset(outcome); stamped {
-		fields = append(fields, logkey.HostClockOffsetMS, offsetMS, logkey.HostReceiptMS, roundTripMS)
-	}
-	if raceErr != nil {
-		fields = append(fields, logkey.Error, loggedError(raceErr))
-	}
-	if deliverErr != nil {
-		fields = append(fields, logkey.DeliverError, loggedError(deliverErr))
-	}
-	return fields
+	s.events.RequestFinished(journal.RequestLine{
+		RequestID:    requestID,
+		Model:        normalized.Model,
+		EscrowID:     outcome.EscrowID,
+		ClientStream: normalized.ClientStream,
+		Outcome:      outcome,
+		Verdict:      verdict,
+		Bytes:        written,
+		Terminated:   terminated,
+		Elapsed:      elapsed,
+		RaceErr:      raceErr,
+		DeliverErr:   deliverErr,
+	})
 }
 
 // estimatePromptTokens is an input size, not a tokenizer call. See README.md, "What the boundary hands the engine".

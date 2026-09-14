@@ -14,10 +14,8 @@ import (
 	"devshard/cmd/gateway/chain"
 	"devshard/cmd/gateway/config"
 	"devshard/cmd/gateway/engine"
-	"devshard/cmd/gateway/internal/logkey"
 	"devshard/cmd/gateway/registry"
 	"devshard/host"
-	"devshard/logging"
 	"devshard/user"
 )
 
@@ -39,7 +37,19 @@ type Escrows interface {
 
 type ledger interface {
 	OpenEscrow(metadata accounting.EscrowMetadata) error
-	RecordRace(escrowID string, attempts []accounting.Attempt) error
+}
+
+// Probes is satisfied by *journal.Journal: the probe's nonce reaches the ledger the way a race's does.
+type Probes interface {
+	ProbeRecorded(escrowID string, attempt accounting.Attempt)
+}
+
+// warmupNarrator is satisfied by *journal.Journal. See README.md, "Boundaries".
+type warmupNarrator interface {
+	WarmupFoundNoNonce(escrowID string, probeErr error)
+	EscrowWarmed(escrowID, model string, nonce uint64, served bool, catchUpErr error)
+	WarmupLedgerOpenFailed(escrowID string, err error)
+	WarmupVoted(escrowID string, nonce uint64, action, reason string)
 }
 
 // Epochs stamps the escrow with the epoch the ledger first saw it in, exactly as its own sweep would.
@@ -54,6 +64,8 @@ type Prober struct {
 	epochs   Epochs
 	posters  Posters
 	timeouts Timeouts
+	probes   Probes
+	narrator warmupNarrator
 	probe    func(ctx context.Context, session registry.EscrowSession, params user.InferenceParams, nonceCommitted func()) (uint64, bool, error)
 	catchUp  func(ctx context.Context, session registry.EscrowSession) error
 	stop     <-chan struct{}
@@ -124,7 +136,9 @@ func (w *Prober) warm(escrowID, model string) {
 	}
 
 	if nonce == 0 {
-		logging.Warn("escrow warmup found no nonce to spend", logkey.Escrow, escrowID, logkey.Error, probeErr)
+		if w.narrator != nil {
+			w.narrator.WarmupFoundNoNonce(escrowID, probeErr)
+		}
 		return
 	}
 	w.openLedger(escrowID, model, session)
@@ -133,8 +147,9 @@ func (w *Prober) warm(escrowID, model string) {
 		w.settleUnfinishedProbe(ctx, escrowID, model, params, nonce, acknowledged)
 	}
 
-	logging.Info("escrow warmed", logkey.Escrow, escrowID, logkey.Model, model,
-		logkey.Nonce, nonce, logkey.Served, probeErr == nil, logkey.CatchUpError, catchUpErr)
+	if w.narrator != nil {
+		w.narrator.EscrowWarmed(escrowID, model, nonce, probeErr == nil, catchUpErr)
+	}
 }
 
 func catchUpAllHosts(ctx context.Context, session registry.EscrowSession) error {
@@ -187,16 +202,16 @@ func (w *Prober) openLedger(escrowID, model string, session registry.EscrowSessi
 		Model:         model,
 		CreationEpoch: w.epochs.Snapshot().EpochIndex,
 		Slots:         session.SnapshotState().Group,
-	}); err != nil {
-		logging.Warn("escrow warmup could not open the escrow in the ledger", logkey.Escrow, escrowID, logkey.Error, err)
+	}); err != nil && w.narrator != nil {
+		w.narrator.WarmupLedgerOpenFailed(escrowID, err)
 	}
 }
 
 func (w *Prober) record(escrowID string, nonce uint64, acknowledged bool, probeErr error) {
-	if w.ledger == nil {
+	if w.probes == nil {
 		return
 	}
-	attempt := accounting.Attempt{
+	w.probes.ProbeRecorded(escrowID, accounting.Attempt{
 		Nonce:        nonce,
 		Sent:         true,
 		Finished:     probeErr == nil,
@@ -204,21 +219,25 @@ func (w *Prober) record(escrowID string, nonce uint64, acknowledged bool, probeE
 		Usage:        accounting.UsageLoser,
 		Phase:        accounting.PhaseNormal,
 		Terminal:     accounting.TerminalWarmupProbe,
-	}
-	if err := w.ledger.RecordRace(escrowID, []accounting.Attempt{attempt}); err != nil {
-		logging.Warn("escrow warmup could not settle its nonce", logkey.Escrow, escrowID, logkey.Nonce, nonce, logkey.Error, err)
-	}
+	})
 }
 
-// Serve and Settle are late bindings. See README.md, "Boundaries worth knowing".
+// Serve and Settle are late bindings. See README.md, "Boundaries".
 func (w *Prober) Serve(escrows Escrows) {
 	if w != nil {
 		w.escrows = escrows
 	}
 }
 
-func (w *Prober) Settle(posters Posters, timeouts Timeouts) {
+func (w *Prober) Settle(posters Posters, timeouts Timeouts, probes Probes) {
 	if w != nil {
-		w.posters, w.timeouts = posters, timeouts
+		w.posters, w.timeouts, w.probes = posters, timeouts, probes
+	}
+}
+
+// SetNarrator binds the journal the warmup's transitions are written through; call it before the first publication.
+func (w *Prober) SetNarrator(narrator warmupNarrator) {
+	if w != nil {
+		w.narrator = narrator
 	}
 }

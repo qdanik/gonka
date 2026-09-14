@@ -8,9 +8,7 @@ import (
 
 	"devshard/cmd/gateway/chain"
 	"devshard/cmd/gateway/config"
-	"devshard/cmd/gateway/internal/logkey"
 	"devshard/cmd/gateway/scheduler"
-	"devshard/logging"
 )
 
 // Chunk progress must not park a host's goroutine; terminal events block regardless.
@@ -69,6 +67,7 @@ type raceDeps struct {
 	Classify     func(participant string) streamClassifier
 	Now          func() time.Time
 	Timer        func() raceTimer
+	Journal      raceJournal
 
 	Hold func(release func())
 
@@ -245,9 +244,10 @@ func (c *raceCoordinator) begin() error {
 
 // A stranded nonce is committed, paid for and answered by nobody, so it is carried into the timeout plan.
 func (c *raceCoordinator) strand(assignment scheduler.Assignment, role string) {
-	logging.Warn("nonce stranded",
-		logkey.Request, c.request.RequestID, logkey.Escrow, assignment.Escrow,
-		logkey.Nonce, assignment.Nonce.Nonce(), logkey.Host, logkey.ShortHost(assignment.Host), logkey.Role, role)
+	c.traceStep(RaceStep{
+		Kind: RaceStepNonceStranded, RequestID: c.request.RequestID, EscrowID: assignment.Escrow,
+		Nonce: assignment.Nonce.Nonce(), Participant: assignment.Host, Role: role,
+	})
 	c.escrowID = assignment.Escrow
 	c.deps.Limiter.Release(assignment.Host, c.request.Model)
 	if c.deps.Hold != nil {

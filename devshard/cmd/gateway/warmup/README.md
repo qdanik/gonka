@@ -13,10 +13,11 @@ It is not a health check and not a scheduler. It runs once per escrow, on public
 
 ## Boundaries
 
-- **Both dependencies bind after construction.** The registry exists only after the warmup it publishes to, and the vote path only after the sessions the race shares with it — hence `Serve` and `Settle` rather than constructor arguments.
+- **The warmup writes no line.** Its transitions — no nonce to spend, warmed, the ledger refusing the escrow, its own vote — are narrated through `SetNarrator`, bound to the journal by `main.go` beside `Serve` in `newRouting`. The journal omits a nil error and writes a failed vote at Warn. A probe the book refuses is written by the journal (`renderProbeRefused`) from the error `nonces.Recorder.RecordProbe` returns.
+- **Both dependencies bind after construction.** The registry exists only after the warmup it publishes to, and the vote path only after the sessions the race shares with it — hence `Serve` and `Settle` rather than constructor arguments. `Settle` also binds `Probes`, the journal through which the probe's nonce reaches the ledger.
 - **The probe's nonce is the gateway's own work, not a user's.** The ledger records it under its own terminal so it lands on neither side of a serving ratio.
 - **The probe's timeout kind is read from the receipt, the way the engine reads it.** A host that receipts and then hangs outlives `probeTimeout`, so the send errors and its reply never arrives; the receipt is therefore taken as it arrives. A kind fixed at `refused` files the expensive failure as the cheap one.
-- **The escrow is opened in the ledger here, not left to the sweep.** The sweep opens escrows on its own schedule, which has not necessarily run yet — and this nonce is spent on a just-published escrow. An attempt the ledger refuses would lose the terminal that keeps the gateway's own nonce out of the host's record.
+- **The escrow is opened in the ledger here, not left to the sweep.** The sweep opens escrows on its own schedule, which has not necessarily run yet — and this nonce is spent on a just-published escrow. An attempt the ledger refuses would lose the terminal that keeps the gateway's own nonce out of the host's record. The open is a direct write, so it lands before the probe, which reaches the ledger through the journal.
 - **`EscrowPublished` is announced under the registry's lock**, so it must return without doing work.
 
 ## Read next

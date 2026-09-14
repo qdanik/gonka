@@ -1,10 +1,5 @@
 package engine
 
-import (
-	"devshard/cmd/gateway/internal/logkey"
-	"devshard/logging"
-)
-
 // answer settles one claim; a suspicious host's is held rather than refused, because a refusal is permanent. See race.md, "Crowning".
 func (c *raceCoordinator) answer(claim crownRequest) {
 	switch attempt := c.byNonce[claim.Nonce]; {
@@ -42,9 +37,10 @@ func (c *raceCoordinator) settleClaims() {
 // crownWinner is the single place one attempt becomes the client's answer, so the reason travels with it.
 func (c *raceCoordinator) crownWinner(attempt *liveAttempt, reason string) {
 	c.winner = attempt
-	logging.Info("attempt crowned",
-		logkey.Request, c.request.RequestID, logkey.Escrow, c.escrowID, logkey.Nonce, attempt.nonce,
-		logkey.Host, logkey.ShortHost(attempt.participant), logkey.Reason, reason)
+	c.traceStep(RaceStep{
+		Kind: RaceStepAttemptCrowned, RequestID: c.request.RequestID, EscrowID: c.escrowID,
+		Nonce: attempt.nonce, Participant: attempt.participant, Reason: reason,
+	})
 }
 
 // rivalPossible reports an attempt other than the held claimants that could still be crowned. See race.md, "Crown denial".

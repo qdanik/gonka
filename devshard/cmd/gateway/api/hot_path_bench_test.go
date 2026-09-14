@@ -14,6 +14,7 @@ import (
 	"devshard/cmd/gateway/config"
 	"devshard/cmd/gateway/engine"
 	"devshard/cmd/gateway/filters"
+	"devshard/cmd/gateway/journal"
 	"devshard/cmd/gateway/limits"
 	"devshard/cmd/gateway/registry"
 	"devshard/cmd/gateway/scheduler"
@@ -76,6 +77,8 @@ func benchServer(b *testing.B, chunks []string) *Server {
 		busy:     map[string]bool{},
 		escrows:  []scheduler.Escrow{{ID: "7", Model: "qwen", ActiveUsers: 1}},
 	}
+	events := journal.New(journal.Settings{Lines: quietLogger{}})
+	b.Cleanup(func() { _ = events.Close() })
 	server, err := New(Deps{
 		Config:     config.NewHolder(&configuration),
 		Escrows:    escrows,
@@ -89,6 +92,7 @@ func benchServer(b *testing.B, chunks []string) *Server {
 		Suspicious: &fakeSuspicious{},
 		Telemetry:  &fakeTelemetry{},
 		Rejections: &spyRejections{},
+		Journal:    events,
 		Buffers:    NewBufferBudget(1 << 30),
 		StorageDir: configuration.Server.StorageDir,
 		Version:    "bench",
@@ -277,19 +281,6 @@ func BenchmarkServeCached(b *testing.B) {
 	for b.Loop() {
 		writer.reset()
 		serveCached(writer, "request-1", entry)
-	}
-}
-
-// Every finished request is logged from the outcome, once, whatever it did.
-func BenchmarkLogRequestFinished(b *testing.B) {
-	quietLogging(b)
-	outcome := benchOutcome()
-	normalized := filters.Result{Model: "qwen", ClientStream: true}
-	stream := newClientStream(newSinkWriter(), "request-1", true, false, filters.LogprobIntent{}, nil)
-
-	b.ReportAllocs()
-	for b.Loop() {
-		logRequestFinished("request-1", normalized, outcome, deliveryServed, stream, 3*time.Second, nil, nil)
 	}
 }
 

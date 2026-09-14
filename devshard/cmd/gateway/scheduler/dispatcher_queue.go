@@ -3,9 +3,6 @@ package scheduler
 import (
 	"fmt"
 	"time"
-
-	"devshard/cmd/gateway/internal/logkey"
-	"devshard/logging"
 )
 
 type armedTimer struct {
@@ -22,9 +19,10 @@ func (a *armedTimer) disarm() {
 
 // offer is what one Advance decided, kept across the loop so the decide closure is built once per drain.
 type offer struct {
-	decision      Decision
-	taken         reservation
-	escrowRetired bool
+	decision        Decision
+	taken           reservation
+	escrowRetired   bool
+	throttledWaiter *waiter
 }
 
 // drain assigns nonces until the queue empties, a nonce is held, or the burn budget trips. See README, "The drain".
@@ -38,9 +36,10 @@ func (d *dispatcher) drain() (time.Time, bool) {
 	decide := func(binding HostBinding) NonceIntent {
 		offered.taken.participant = binding.Participant
 		offered.decision = match(binding, d.waiting, participants, avail, d.now(), d.matchWait)
-		switch offered.decision.(type) {
+		switch decided := offered.decision.(type) {
 		case serve:
 			if !acquire(binding.Participant) {
+				offered.throttledWaiter = decided.waiter
 				offered.decision = burn{kind: ghostThrottled}
 			}
 		case burn:
@@ -78,20 +77,20 @@ func (d *dispatcher) drain() (time.Time, bool) {
 		switch outcome := offered.decision.(type) {
 		case serve:
 			if outcome.despiteExclusion {
-				logging.Info("nonce spent on a host the request excluded", logkey.Escrow, d.escrowID,
-					logkey.Host, logkey.ShortHost(offered.taken.participant))
+				d.recordExcludedServe(offered.taken.participant)
 			}
 			d.handOff(outcome.waiter, offered.taken, prepared)
 		case burn:
-			// A burn decided before the session could commit has no nonce to name.
-			burned := Burn{Participant: offered.taken.participant, Reason: outcome.kind.reason()}
+			// A real session always commits the ghost it was asked for; only a session double leaves Nonce zero.
+			burned := Burn{
+				Participant: offered.taken.participant, Reason: outcome.kind.reason(),
+				RequestID: d.burnedDuring(offered.throttledWaiter),
+			}
 			if prepared != nil {
 				burned.Nonce = prepared.Nonce()
 			}
 			d.recordGhost(burned)
-			if offered.taken.escrowHold != nil {
-				offered.taken.escrowHold()
-			}
+			offered.taken.releaseHold()
 			burnBudget--
 			if burnBudget <= 0 {
 				d.recordBudgetTrip()
@@ -137,6 +136,19 @@ func (d *dispatcher) dropAbandoned() {
 	d.keepWaiting(func(queued *waiter) bool { return !queued.abandoned.Load() })
 }
 
+// burnedDuring names the waiter a refused slot was meant for, else the oldest waiter still waiting. See README, "The boundary types".
+func (d *dispatcher) burnedDuring(throttledWaiter *waiter) string {
+	if throttledWaiter != nil {
+		return throttledWaiter.profile.RequestID
+	}
+	for _, queued := range d.waiting {
+		if !queued.abandoned.Load() {
+			return queued.profile.RequestID
+		}
+	}
+	return ""
+}
+
 // keepWaiting compacts the queue, clearing the tail so a departed waiter is not held by the array.
 func (d *dispatcher) keepWaiting(accept func(*waiter) bool) {
 	kept := d.waiting[:0]
@@ -169,17 +181,21 @@ func servable(queued *waiter, participants []string, avail availability) (canSer
 	return false, anyBusy, anyChainBlocked, anyExcluded
 }
 
-// reservation is the slot and the escrow hold a serve took, given back together or not at all. See routing.md, "Where the nonce, the slot and the hold are taken".
+// reservation is what a decision took: a serve the slot and the escrow hold, a burn the hold alone. See routing.md, "Where the nonce, the slot and the hold are taken".
 type reservation struct {
 	participant string
 	escrowHold  func()
 }
 
+func (r reservation) releaseHold() {
+	if r.escrowHold != nil {
+		r.escrowHold()
+	}
+}
+
 func (d *dispatcher) giveBack(taken reservation) {
 	d.releaseSlot(taken.participant)
-	if taken.escrowHold != nil {
-		taken.escrowHold()
-	}
+	taken.releaseHold()
 }
 
 func (d *dispatcher) handOff(served *waiter, taken reservation, prepared Prepared) {
@@ -192,6 +208,9 @@ func (d *dispatcher) handOff(served *waiter, taken reservation, prepared Prepare
 	assignment := Assignment{Escrow: d.escrowID, Host: taken.participant, Nonce: prepared, EscrowHold: taken.escrowHold}
 	if !served.deliver(pickResult{assignment: assignment}) {
 		d.giveBack(taken)
-		d.recordGhost(Burn{Nonce: prepared.Nonce(), Participant: taken.participant, Reason: ghostAbandoned.reason()})
+		d.recordGhost(Burn{
+			Nonce: prepared.Nonce(), Participant: taken.participant,
+			Reason: ghostAbandoned.reason(), RequestID: served.profile.RequestID,
+		})
 	}
 }

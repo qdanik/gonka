@@ -25,6 +25,8 @@ import (
 	"devshard/cmd/gateway/engine"
 	"devshard/cmd/gateway/env"
 	"devshard/cmd/gateway/escrow"
+	"devshard/cmd/gateway/internal/logcapture"
+	"devshard/cmd/gateway/journal"
 	"devshard/cmd/gateway/limits"
 	"devshard/cmd/gateway/metrics"
 	"devshard/cmd/gateway/perf"
@@ -51,6 +53,8 @@ func TestMain(m *testing.M) {
 		goleak.IgnoreTopFunction("google.golang.org/grpc/internal/grpcsync.(*CallbackSerializer).run"),
 		goleak.IgnoreTopFunction("google.golang.org/grpc/internal/resolver/dns.(*dnsResolver).watcher"),
 		goleak.IgnoreTopFunction("google.golang.org/grpc.(*addrConn).resetTransportAndUnlock"),
+		// The keyring's init() opens a D-Bus session connection wherever a session bus answers, as on a Linux CI runner.
+		goleak.IgnoreAnyFunction("github.com/godbus/dbus.(*Conn).inWorker"),
 	)
 }
 
@@ -154,6 +158,14 @@ func composedGateway(t *testing.T) *gateway {
 		}
 	})
 	return composed
+}
+
+// newTestJournal is a journal a test closes, for wiring that hands facts to one.
+func newTestJournal(t *testing.T) *journal.Journal {
+	t.Helper()
+	events := journal.New(journal.Settings{})
+	t.Cleanup(func() { _ = events.Close() })
+	return events
 }
 
 func TestRunServesMetricsAndShutsDownGracefully(t *testing.T) {
@@ -348,6 +360,7 @@ func TestEveryOwnerCollectorIsRegisteredOnTheGatewaysRegistry(t *testing.T) {
 		{name: "chain", collector: metrics.NewChainCollector(nil, time.Now)},
 		{name: "transport", collector: metrics.NewTransportCollector(nil)},
 		{name: "accounting", collector: metrics.NewAccountingCollector(nil)},
+		{name: "journal", collector: metrics.NewJournalCollector(nil)},
 	}
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -391,6 +404,7 @@ type escrowPublisher struct {
 	added       []string
 	retired     []string
 	deactivated []string
+	unserved    []string
 
 	failures map[string]error
 
@@ -430,6 +444,12 @@ func (p *escrowPublisher) deactivate(escrowID string) error {
 	defer p.mu.Unlock()
 	p.deactivated = append(p.deactivated, escrowID)
 	return nil
+}
+
+func (p *escrowPublisher) unservable(escrowID string, _ error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.unserved = append(p.unserved, escrowID)
 }
 
 func devshard(escrowID string, active bool) store.DevshardRecord {
@@ -485,7 +505,7 @@ func TestPublishEscrowsWalksTheThreeArmedBuildLadder(t *testing.T) {
 			publisher := &escrowPublisher{failures: testCase.failures}
 
 			err := publishEscrows(context.Background(), testCase.records, 4,
-				publisher.add, publisher.retire, publisher.deactivate)
+				publisher.add, publisher.retire, publisher.deactivate, publisher.unservable)
 
 			if testCase.wantError == nil && err != nil {
 				t.Fatalf("publishEscrows() = %v, want nil", err)
@@ -496,6 +516,7 @@ func TestPublishEscrowsWalksTheThreeArmedBuildLadder(t *testing.T) {
 			assertSame(t, "added", publisher.added, testCase.wantAdded)
 			assertSame(t, "retired", publisher.retired, testCase.wantRetired)
 			assertSame(t, "deactivated", publisher.deactivated, testCase.wantDeactivated)
+			assertSame(t, "unserved", publisher.unserved, testCase.wantDeactivated)
 		})
 	}
 }
@@ -523,7 +544,7 @@ func TestPublishEscrowsBuildsNoMoreThanTheBuilderLimitAtOnce(t *testing.T) {
 	done := make(chan error, 1)
 	go func() {
 		done <- publishEscrows(context.Background(), records, builders,
-			publisher.add, publisher.retire, publisher.deactivate)
+			publisher.add, publisher.retire, publisher.deactivate, publisher.unservable)
 	}()
 
 	deadline := time.Now().Add(5 * time.Second)
@@ -569,13 +590,13 @@ func TestShutdownStopsAcceptingFirstAndClosesTheStoreLast(t *testing.T) {
 	steps := shutdownOrder(
 		recorder("http server"), recorder("races"), recorder("dispatchers"),
 		recorder("escrow lifecycle"), recorder("chain observer"),
-		recorder("escrow sessions"), recorder("nonce accounting"), recorder("store"),
+		recorder("escrow sessions"), recorder("journal"), recorder("nonce accounting"), recorder("store"),
 		recorder("public api connections"))
 	if err := stopAll(context.Background(), steps); err != nil {
 		t.Fatalf("stopAll(): %v", err)
 	}
 
-	want := []string{"http server", "races", "dispatchers", "escrow lifecycle", "chain observer", "escrow sessions", "nonce accounting", "store", "public api connections"}
+	want := []string{"http server", "races", "dispatchers", "escrow lifecycle", "chain observer", "escrow sessions", "journal", "nonce accounting", "store", "public api connections"}
 	assertSame(t, "shutdown sequence", sequence, want)
 }
 
@@ -617,7 +638,7 @@ func TestShutdownReachesTheStoreEvenWhenAnEarlierStepFails(t *testing.T) {
 	steps := shutdownOrder(
 		failing, recorder("races"), recorder("dispatchers"),
 		recorder("escrow lifecycle"), recorder("chain observer"),
-		recorder("escrow sessions"), recorder("nonce accounting"), recorder("store"),
+		recorder("escrow sessions"), recorder("journal"), recorder("nonce accounting"), recorder("store"),
 		recorder("public api connections"))
 	err := stopAll(context.Background(), steps)
 
@@ -626,6 +647,68 @@ func TestShutdownReachesTheStoreEvenWhenAnEarlierStepFails(t *testing.T) {
 	}
 	if !slices.Contains(sequence, "store") {
 		t.Fatalf("shutdown sequence = %v, want the store closed despite the earlier failure", sequence)
+	}
+}
+
+// blockingCloser is a close that returns only once released, like a journal whose sink is stuck.
+type blockingCloser struct {
+	entered  chan struct{}
+	released chan struct{}
+	release  func()
+	result   error
+}
+
+// newBlockingCloser releases the close in cleanup, so the goroutine closeWithin started returns before goleak looks.
+func newBlockingCloser(t *testing.T, result error) *blockingCloser {
+	t.Helper()
+	stuck := &blockingCloser{entered: make(chan struct{}), released: make(chan struct{}), result: result}
+	stuck.release = sync.OnceFunc(func() { close(stuck.released) })
+	t.Cleanup(stuck.release)
+	return stuck
+}
+
+func (c *blockingCloser) Close() error {
+	close(c.entered)
+	<-c.released
+	return c.result
+}
+
+// A stuck journal must not keep nonce accounting, the store and the connections below it from closing.
+func TestTheJournalStepGivesUpWhenItsCloseOutlivesTheBudget(t *testing.T) {
+	stuck := newBlockingCloser(t, nil)
+	expired, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	err := closeWithin(stuck, 0)(expired)
+
+	if err == nil || !strings.Contains(err.Error(), "abandoned with events still queued") {
+		t.Fatalf("closeWithin() = %v, want the journal step reported as abandoned", err)
+	}
+}
+
+// The floor lets the journal drain after a step above spent the budget, and the step reports the close's own result.
+func TestTheJournalStepWaitsOutItsFloorWhenTheBudgetIsAlreadySpent(t *testing.T) {
+	refusal := errors.New("journal refused 1 money-lane events past its ceiling of 1")
+	closing := newBlockingCloser(t, refusal)
+	expired, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	stepResult := make(chan error, 1)
+	go func() { stepResult <- closeWithin(closing, time.Hour)(expired) }()
+	select {
+	case <-closing.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("closeWithin() never started the close")
+	}
+	closing.release()
+
+	select {
+	case err := <-stepResult:
+		if !errors.Is(err, refusal) {
+			t.Fatalf("closeWithin() = %v, want the close's own result", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("closeWithin() did not return within 5s of the close returning")
 	}
 }
 
@@ -801,6 +884,7 @@ func TestPublishingAnEscrowGivesItWeightAndMakesItPickable(t *testing.T) {
 		Snapshots:    observer,
 		Config:       configHolder,
 		Depletion:    &depletionNotice{},
+		Journal:      newTestJournal(t),
 		Now:          time.Now,
 	})
 	if routingErr != nil {
@@ -846,6 +930,7 @@ func routingFor(t *testing.T, capacity *limits.Capacity, participants []string) 
 		Snapshots:    observer,
 		Config:       configHolder,
 		Depletion:    &depletionNotice{},
+		Journal:      newTestJournal(t),
 		Now:          time.Now,
 	})
 	if routingErr != nil {
@@ -857,6 +942,15 @@ func routingFor(t *testing.T, capacity *limits.Capacity, participants []string) 
 		t.Fatalf("Add(): %v", err)
 	}
 	return router
+}
+
+// A scheduler without a journal would panic at its first burn, on a goroutine nothing recovers.
+func TestRoutingIsRefusedWithoutAJournal(t *testing.T) {
+	_, _, _, err := newRouting(routingDeps{})
+
+	if err == nil || !strings.Contains(err.Error(), "Journal is required") {
+		t.Fatalf("newRouting() without a journal = %v, want the missing journal named", err)
+	}
 }
 
 // The chain reporting nothing is missing data, not zero capacity: routing on it must still reach a
@@ -928,6 +1022,28 @@ func TestReconfiguringTheGatewayChangesTheCapTheNextRequestIsJudgedAgainst(t *te
 		t.Fatalf("second AcquireForModel() under a cap of 1 = %v, want a rate-limit error; the limiter never saw the new configuration", err)
 	}
 	composed.limiter.ReleaseForModel("model-a", 1)
+}
+
+// A limiter compose leaves without its narrator cuts hosts off in silence, so the composed limiter's cut-off must reach the journal.
+func TestTheComposedParticipantLimiterNarratesACutOffThroughTheJournal(t *testing.T) {
+	gatewayEnvironment(t)
+	logged := logcapture.Install(t)
+	composed := composedGateway(t)
+
+	for range composed.config.Load().Limits.HostCutoff.AfterFailures {
+		composed.participants.OnResult("gonka1aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "model-a", limits.TransportFault)
+	}
+	composed.events.Flush()
+
+	cutOff, found := logged.Find("host cut off after transport faults")
+	if !found {
+		t.Fatalf("no cut-off line among %+v: main.go did not bind the participant limiter's narrator to the journal", logged.All())
+	}
+	// The cut-off length carries jitter, so it is read back; every other field is pinned.
+	logged.RequireLine(t, logcapture.Entry{Level: "warn", Msg: "host cut off after transport faults", Fields: []any{
+		"host", "aaaaaaaa", "model", "model-a", "reason", "consecutive_transport_faults", "backoff_count", 1,
+		"cut_off_for_ms", logcapture.Field(cutOff, "cut_off_for_ms"),
+	}})
 }
 
 func TestSuspiciousHostsAreWrittenThroughToTheStoreTheEngineReadsFrom(t *testing.T) {

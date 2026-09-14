@@ -17,6 +17,7 @@ import (
 	"devshard/cmd/gateway/config"
 	"devshard/cmd/gateway/engine"
 	"devshard/cmd/gateway/escrow"
+	"devshard/cmd/gateway/journal"
 	"devshard/cmd/gateway/limits"
 	"devshard/cmd/gateway/perf"
 	"devshard/cmd/gateway/registry"
@@ -307,6 +308,7 @@ type harness struct {
 	telemetry   *fakeTelemetry
 	rejections  *spyRejections
 	hosts       *fakeHosts
+	events      *journal.Journal
 	comparisons atomic.Int64
 	storageDir  string
 }
@@ -339,8 +341,10 @@ func newHarness(t *testing.T, tune ...func(*config.Config)) *harness {
 		suspicious: &fakeSuspicious{},
 		hosts:      &fakeHosts{},
 		telemetry:  &fakeTelemetry{},
+		events:     journal.New(journal.Settings{}),
 		storageDir: storageDir,
 	}
+	t.Cleanup(func() { _ = live.events.Close() })
 	live.escrows.escrows = []scheduler.Escrow{{ID: "7", Model: "qwen", ActiveUsers: 1}}
 
 	server, err := New(Deps{
@@ -358,6 +362,7 @@ func newHarness(t *testing.T, tune ...func(*config.Config)) *harness {
 		HostWindows: fakeHostWindows{hosts: live.hosts},
 		Telemetry:   live.telemetry,
 		Rejections:  live.rejections,
+		Journal:     live.events,
 		StorageDir:  storageDir,
 		Version:     "test",
 		Now:         func() time.Time { return harnessClock },

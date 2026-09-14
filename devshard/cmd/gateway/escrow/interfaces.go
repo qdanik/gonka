@@ -65,3 +65,23 @@ type SettlementSource interface {
 	Finalize(ctx context.Context, escrowID string) error // idempotent: no-op if already finalized
 	BuildSettlement(ctx context.Context, escrowID string) (chain.SettlementInput, error)
 }
+
+// lifecycleNarrator is satisfied by *journal.Journal; each method names one transition an operator reads the log for. See README.md, "What this package expects of others".
+type lifecycleNarrator interface {
+	EscrowCreated(escrowID, model, role string, epoch uint64, txHash string)
+	EscrowRecovered(escrowID, model, role string, epoch uint64, txHash string)
+	CommitmentCleared(txHash, model, role string, epoch uint64, reason string)
+	EscrowGoneFromChain(escrowID string)
+	EscrowMarkedForReplacement(escrowID, reason string)
+	EscrowDepletedWithoutReplacement(escrowID, model string)
+	RotationSkipped(model, role string, epoch uint64)
+	RegularsPromotedToTemp(model string, epoch uint64, promoted int)
+	BridgePrepared(model string, epoch uint64, created, retired int)
+	BridgeFinished(model string, epoch uint64, created, retired int)
+	EscrowParked(escrowID string)
+	EscrowSettled(escrowID, model, txHash, settler string)
+	SettlementReconciled(escrowID, txHash string)
+	SettledRecordDropped(escrowID string)
+	EscrowTickFailed(err error)
+	TimeoutsSwept(due, applied, failed int)
+}

@@ -7,9 +7,6 @@ import (
 	"slices"
 	"sync"
 	"time"
-
-	"devshard/cmd/gateway/internal/logkey"
-	"devshard/logging"
 )
 
 type Verdict int
@@ -22,12 +19,14 @@ const (
 	ModelOutcome
 ) // Overload=429/503; UpstreamFault=the host answered 5xx; ModelOutcome=model-caused (empty stream etc.), never a host signal
 
+// ParticipantConfig's IdleEviction of zero keeps every pair for the life of the process.
 type ParticipantConfig struct {
 	Initial       int64
 	Max           int64
 	AfterFailures int64
 	BaseOpen      time.Duration
 	MaxOpen       time.Duration
+	IdleEviction  time.Duration
 }
 
 type key struct {
@@ -43,14 +42,23 @@ type hostState struct {
 	openUntil                time.Time
 	backoffCount             int
 	halfOpen                 bool
+	lastUsed                 time.Time
+}
+
+// cutoffNarrator is satisfied by *journal.Journal; it is called under the limiter's lock, so it must queue and return. See README.md, "When a host stops taking work".
+type cutoffNarrator interface {
+	HostCutOff(participant, model, reason string, backoffCount int, cutOffFor time.Duration)
+	HostCutOffLifted(participant, model string, backoffCount int)
 }
 
 type ParticipantLimiter struct {
-	mu     sync.Mutex
-	cfg    ParticipantConfig
-	states map[key]*hostState
-	now    func() time.Time
-	jitter func(time.Duration) time.Duration
+	mu        sync.Mutex
+	cfg       ParticipantConfig
+	states    map[key]*hostState
+	now       func() time.Time
+	jitter    func(time.Duration) time.Duration
+	lastSweep time.Time
+	narrator  cutoffNarrator
 }
 
 func NewParticipantLimiter(cfg ParticipantConfig, now func() time.Time) *ParticipantLimiter {
@@ -60,6 +68,13 @@ func NewParticipantLimiter(cfg ParticipantConfig, now func() time.Time) *Partici
 		now:    now,
 		jitter: defaultJitter,
 	}
+}
+
+// SetNarrator binds the journal the limiter's cut-off edges are written through; call it before the limiter is shared.
+func (l *ParticipantLimiter) SetNarrator(narrator cutoffNarrator) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.narrator = narrator
 }
 
 // defaultJitter: up to 20% of base (gRPC connection-backoff's JITTER 0.2), so reopened cutoffs don't retry in lockstep.
@@ -111,8 +126,10 @@ func (l *ParticipantLimiter) Acquire(participant, model string) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	state := l.stateLocked(key{participant: participant, model: model})
 	now := l.now()
+	state := l.stateLocked(key{participant: participant, model: model})
+	state.lastUsed = now
+	l.forgetIdleLocked(now)
 
 	if now.Before(state.openUntil) {
 		return false
@@ -229,6 +246,21 @@ func (l *ParticipantLimiter) Release(participant, model string) {
 		return
 	}
 	state.inflight--
+	state.lastUsed = l.now()
+}
+
+// See capacity.md, "Nothing here is persisted".
+func (l *ParticipantLimiter) forgetIdleLocked(now time.Time) {
+	idleFor := l.cfg.IdleEviction
+	if idleFor <= 0 || now.Sub(l.lastSweep) < idleFor/10 {
+		return
+	}
+	l.lastSweep = now
+	for tracked, state := range l.states {
+		if state.inflight == 0 && !now.Before(state.openUntil) && now.Sub(state.lastUsed) > idleFor {
+			delete(l.states, tracked)
+		}
+	}
 }
 
 func cutoffReason(halfOpen bool) string {
@@ -248,6 +280,7 @@ func (l *ParticipantLimiter) OnResult(participant, model string, verdict Verdict
 
 	state := l.stateLocked(key{participant: participant, model: model})
 	now := l.now()
+	state.lastUsed = now
 
 	switch verdict {
 	case Success:
@@ -263,9 +296,9 @@ func (l *ParticipantLimiter) OnResult(participant, model string, verdict Verdict
 			if state.backoffCount > 0 {
 				state.backoffCount--
 			}
-			logging.Info("host back after its cut-off",
-				logkey.Host, logkey.ShortHost(participant), logkey.Model, model,
-				logkey.BackoffCount, state.backoffCount)
+			if l.narrator != nil {
+				l.narrator.HostCutOffLifted(participant, model, state.backoffCount)
+			}
 		}
 	case Overload:
 		state.window = max(state.window*0.5, 1)
@@ -285,10 +318,9 @@ func (l *ParticipantLimiter) OnResult(participant, model string, verdict Verdict
 			reason := cutoffReason(state.halfOpen)
 			state.halfOpen = false
 			state.consecutiveTransportFail = 0
-			logging.Warn("host cut off after transport faults",
-				logkey.Host, logkey.ShortHost(participant), logkey.Model, model,
-				logkey.Reason, reason, logkey.BackoffCount, state.backoffCount,
-				logkey.CutOffForMS, state.openUntil.Sub(now).Milliseconds())
+			if l.narrator != nil {
+				l.narrator.HostCutOff(participant, model, reason, state.backoffCount, state.openUntil.Sub(now))
+			}
 		}
 	}
 }

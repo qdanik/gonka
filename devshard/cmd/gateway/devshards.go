@@ -62,7 +62,7 @@ func (g *gateway) publishEscrows(ctx context.Context) error {
 	}
 	return publishEscrows(ctx, records, g.builders, g.escrows.Add, g.escrows.Retire, func(escrowID string) error {
 		return g.store.SetDevshardActive(ctx, escrowID, false)
-	})
+	}, g.events.EscrowUnservable)
 }
 
 func publishEscrows(
@@ -72,6 +72,7 @@ func publishEscrows(
 	add func(ctx context.Context, escrowID, model string) error,
 	retire func(escrowID string) error,
 	deactivate func(escrowID string) error,
+	unservable func(escrowID string, err error),
 ) error {
 	var (
 		active   []store.DevshardRecord
@@ -103,7 +104,7 @@ func publishEscrows(
 		switch {
 		case err == nil:
 		case errors.Is(err, bridge.ErrEscrowNotFound), errors.Is(err, env.ErrPrivateKeyMissing):
-			logging.Warn("devshard cannot be served, marking inactive", logkey.Escrow, escrowID, logkey.Error, err)
+			unservable(escrowID, err)
 			if deactivateErr := deactivate(escrowID); deactivateErr != nil {
 				problems = append(problems, fmt.Errorf("deactivating escrow %s: %w", escrowID, deactivateErr))
 			}

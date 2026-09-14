@@ -6,8 +6,6 @@ import (
 	"time"
 
 	"devshard/cmd/gateway/config"
-	"devshard/cmd/gateway/internal/logkey"
-	"devshard/logging"
 )
 
 const escrowTickInterval = 15 * time.Second
@@ -19,6 +17,7 @@ type Deps struct {
 	Settlement  SettlementSource
 	Timeouts    TimeoutSweeper
 	Sweeps      SweepRecorder
+	Narrator    lifecycleNarrator
 	Signer      SignerSource
 	Config      *config.Holder
 	Now         func() time.Time
@@ -52,6 +51,7 @@ func NewManager(d Deps) (*Manager, error) {
 		settlementSource: d.Settlement,
 		timeoutSweeper:   d.Timeouts,
 		sweepRecorder:    d.Sweeps,
+		narrator:         d.Narrator,
 		routePrefix:      d.RoutePrefix,
 	}, nil
 }
@@ -85,8 +85,8 @@ func (m *Manager) Start(ctx context.Context) {
 }
 
 func (m *Manager) runTick(ctx context.Context) {
-	if err := m.tick(ctx); err != nil {
-		logging.Error("escrow tick failed", logkey.Error, err)
+	if err := m.tick(ctx); err != nil && m.narrator != nil {
+		m.narrator.EscrowTickFailed(err)
 	}
 }
 
@@ -123,11 +123,10 @@ func (m *Manager) sweepTimeouts(ctx context.Context) {
 		if m.sweepRecorder != nil {
 			m.sweepRecorder.RecordSweep(due, applied, failed)
 		}
-		if due == 0 {
+		if due == 0 || m.narrator == nil {
 			return
 		}
-		logging.Info("execution timeouts swept",
-			logkey.SweptDue, due, logkey.SweptApplied, applied, logkey.SweptFailed, failed)
+		m.narrator.TimeoutsSwept(due, applied, failed)
 	})
 }
 

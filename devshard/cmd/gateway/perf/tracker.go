@@ -10,8 +10,6 @@ import (
 	"time"
 
 	"devshard/cmd/gateway/config"
-	"devshard/cmd/gateway/internal/logkey"
-	"devshard/logging"
 )
 
 // Tracker's mu guards the host map and the rebuild scratch it reuses. See capacity.md, "Outlier ejection".
@@ -23,6 +21,7 @@ type Tracker struct {
 	capability    *capabilityTracker
 	inflight      *inflightGauge
 	now           func() time.Time
+	narrator      hostNarrator
 	lastSweep     time.Time
 	view          atomic.Pointer[map[hostKey]ejectionView]
 }
@@ -40,6 +39,27 @@ type liveEjection struct {
 	ejectionCount int
 }
 
+// Withholding is one host taken out of routing, as the line that explains it names it.
+type Withholding struct {
+	Participant         string
+	Model               string
+	Reason              string
+	EjectionCount       int
+	ConsecutiveFailures int
+	FailureRate         float64
+	FailureVolume       float64
+	WithheldFor         time.Duration
+}
+
+// hostNarrator is satisfied by *journal.Journal; each method is called on the edge it names, never per sample. See README.md, "When a host stops taking work".
+type hostNarrator interface {
+	HostWithheld(withheld Withholding)
+	HostReturned(participant, model string, ejectionCount int)
+	HostContextLimit(participant, model string, contextLimit, previousContextLimit uint64)
+	HostToolsUnsupported(participant, model string)
+	HostVersionUnsupported(participant string)
+}
+
 func NewTracker(holder *config.Holder, now func() time.Time) *Tracker {
 	return &Tracker{
 		config:     holder,
@@ -48,6 +68,11 @@ func NewTracker(holder *config.Holder, now func() time.Time) *Tracker {
 		capability: newCapabilityTracker(),
 		inflight:   newInflightGauge(),
 	}
+}
+
+// SetNarrator binds the journal the tracker's edges are written through; call it before the tracker is shared.
+func (t *Tracker) SetNarrator(narrator hostNarrator) {
+	t.narrator = narrator
 }
 
 func (t *Tracker) FirstContentP75(participant, model string) (time.Duration, bool) {
@@ -88,28 +113,34 @@ func (t *Tracker) RecordSample(s Sample) {
 	if evicted || host.ejection.ejectedUntil != ejectedUntilBefore {
 		t.rebuildEjectedViewLocked(now, perf)
 	}
-	logEjectionTransition(key, host, now)
+	t.narrateEjectionTransition(key, host, now)
 }
 
-// logEjectionTransition reports a host that stopped or resumed taking work, and only on the change.
-func logEjectionTransition(key hostKey, host *hostState, now time.Time) {
+// narrateEjectionTransition runs under t.mu and narrates HostWithheld or HostReturned only on the change; the state moves with or without a narrator.
+func (t *Tracker) narrateEjectionTransition(key hostKey, host *hostState, now time.Time) {
 	withheldNow := host.ejection.ejected(now)
 	switch {
 	case withheldNow && !host.ejection.wasWithheld:
 		host.ejection.wasWithheld = true
+		if t.narrator == nil {
+			return
+		}
 		rate, volume := host.perf.failureRate(now)
-		logging.Warn("host withheld from routing",
-			logkey.Host, logkey.ShortHost(key.participant), logkey.Model, key.model,
-			logkey.Reason, ejectionReason(&host.perf, rate),
-			logkey.EjectionCount, host.ejection.ejectionCount,
-			logkey.ConsecutiveFailures, host.perf.consecutiveFail,
-			logkey.FailureRate, rate, logkey.FailureVolume, volume,
-			logkey.WithheldForMS, host.ejection.ejectedUntil.Sub(now).Milliseconds())
+		t.narrator.HostWithheld(Withholding{
+			Participant:         key.participant,
+			Model:               key.model,
+			Reason:              ejectionReason(&host.perf, rate),
+			EjectionCount:       host.ejection.ejectionCount,
+			ConsecutiveFailures: host.perf.consecutiveFail,
+			FailureRate:         rate,
+			FailureVolume:       volume,
+			WithheldFor:         host.ejection.ejectedUntil.Sub(now),
+		})
 	case !withheldNow && host.ejection.wasWithheld:
 		host.ejection.wasWithheld = false
-		logging.Info("host back in routing",
-			logkey.Host, logkey.ShortHost(key.participant), logkey.Model, key.model,
-			logkey.EjectionCount, host.ejection.ejectionCount)
+		if t.narrator != nil {
+			t.narrator.HostReturned(key.participant, key.model, host.ejection.ejectionCount)
+		}
 	}
 }
 
@@ -195,22 +226,20 @@ func newEjectionPolicyFromPerf(perf config.Perf) ejectionPolicy {
 }
 
 func (t *Tracker) RecordContextLimit(participant, model string, maxTokens uint64) {
-	if previous, changed := t.capability.recordContextLimit(participant, model, maxTokens); changed {
-		logging.Info("host admitted a context length it will not exceed", logkey.Host, logkey.ShortHost(participant),
-			logkey.Model, model, logkey.ContextLimit, maxTokens, logkey.PreviousContextLimit, previous)
+	if previous, changed := t.capability.recordContextLimit(participant, model, maxTokens); changed && t.narrator != nil {
+		t.narrator.HostContextLimit(participant, model, maxTokens, previous)
 	}
 }
 
 func (t *Tracker) RecordToolUnsupported(participant, model string) {
-	if t.capability.recordToolUnsupported(participant, model) {
-		logging.Info("host build does not implement tool calling", logkey.Host, logkey.ShortHost(participant),
-			logkey.Model, model)
+	if t.capability.recordToolUnsupported(participant, model) && t.narrator != nil {
+		t.narrator.HostToolsUnsupported(participant, model)
 	}
 }
 
 func (t *Tracker) RecordVersionUnsupported(participant string) {
-	if t.capability.recordVersionUnsupported(participant) {
-		logging.Info("host build cannot serve the escrow's protocol version", logkey.Host, logkey.ShortHost(participant))
+	if t.capability.recordVersionUnsupported(participant) && t.narrator != nil {
+		t.narrator.HostVersionUnsupported(participant)
 	}
 }
 

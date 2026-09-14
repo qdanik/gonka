@@ -47,3 +47,18 @@ func TestDispatchRecorderDropsSeriesWhenAnEscrowRetires(t *testing.T) {
 		}
 	}
 }
+
+// A write trims the escrow id before it becomes a label, so a delete that did not would miss the series it was called for.
+func TestDispatchRecorderDropsTheSeriesItWroteForAnUntrimmedEscrowID(t *testing.T) {
+	telemetry := New()
+	recorder := NewDispatchRecorder(telemetry)
+	recorder.GhostBurned(" escrow-1 ", "gonka1host", "poc_unavailable_host")
+	recorder.NonceHeld(" escrow-1 ")
+	recorder.BurnBudgetExhausted(" escrow-1 ")
+
+	recorder.EscrowRetired(" escrow-1 ")
+
+	expectSeriesCount(t, telemetry, "devshard_gateway_ghost_nonces_burned_total", 0)
+	expectSeriesCount(t, telemetry, "devshard_gateway_nonce_holds_total", 0)
+	expectSeriesCount(t, telemetry, "devshard_gateway_burn_budget_exhausted_total", 0)
+}

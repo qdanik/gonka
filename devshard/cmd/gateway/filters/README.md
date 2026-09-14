@@ -115,7 +115,7 @@ What the gateway forces, and what it strips:
 
 ## Output token limits
 
-`DefaultRequestMaxTokens` (3072) and `RequestMaxTokensCap` (4096) are the package defaults, and also the single source `config.Defaults` reads. `Options` may override either globally, and `Options.ModelTokenLimits` may override either per routed model — a zero returned there means "not set for this model" and leaves the global one alone.
+`DefaultRequestMaxTokens` (4096) and `RequestMaxTokensCap` (4096) are the package defaults, and also the single source `config.Defaults` reads. `Options` may override either globally, and `Options.ModelTokenLimits` may override either per routed model — a zero returned there means "not set for this model" and leaves the global one alone.
 
 `capOutputTokens` treats zero as "the client named no budget": it returns the configured default, which the cap does not clamp. A nonzero value is clamped to the cap unless `Options.Admin` bypasses it.
 

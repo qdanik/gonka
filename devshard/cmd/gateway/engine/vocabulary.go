@@ -54,9 +54,6 @@ const (
 	VisibilityNoWinner          = "no_winner"
 	VisibilitySuppressedLoser   = "suppressed_loser"
 	VisibilityFailedNotFinished = "failed_not_finished"
-
-	// An answer that arrived complete and was given to nobody.
-	reasonCrownDenied = "crown_denied"
 )
 
 // The vocabulary of a TimeoutEvent: what a nonce was owed, what the gateway did about it, and why. A

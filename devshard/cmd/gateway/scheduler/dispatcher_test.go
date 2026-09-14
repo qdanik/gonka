@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"errors"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -130,12 +131,14 @@ func (p preparedNonce) Nonce() uint64 { return p.nonce }
 func (p preparedNonce) HostIdx() int  { return p.hostIdx }
 
 type recordingObserver struct {
-	mu          sync.Mutex
-	retired     []string
-	ghosts      []string
-	holds       int
-	trips       int
-	ghostNonces []uint64
+	mu             sync.Mutex
+	retired        []string
+	ghosts         []string
+	holds          int
+	trips          int
+	ghostNonces    []uint64
+	burnRequestIDs []string
+	excluded       []string
 }
 
 func (o *recordingObserver) GhostBurned(_ string, burned Burn) {
@@ -143,6 +146,7 @@ func (o *recordingObserver) GhostBurned(_ string, burned Burn) {
 	defer o.mu.Unlock()
 	o.ghosts = append(o.ghosts, burned.Reason)
 	o.ghostNonces = append(o.ghostNonces, burned.Nonce)
+	o.burnRequestIDs = append(o.burnRequestIDs, burned.RequestID)
 }
 
 func (o *recordingObserver) NonceHeld(string) {
@@ -175,10 +179,34 @@ func (o *recordingObserver) burnedNonces() []uint64 {
 	return append([]uint64(nil), o.ghostNonces...)
 }
 
+func (o *recordingObserver) burnRequests() []string {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return append([]string(nil), o.burnRequestIDs...)
+}
+
 func (o *recordingObserver) counts() (holds, trips int) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	return o.holds, o.trips
+}
+
+func (o *recordingObserver) retiredEscrows() []string {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return append([]string(nil), o.retired...)
+}
+
+func (o *recordingObserver) ExcludedHostServed(_ string, participant string) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.excluded = append(o.excluded, participant)
+}
+
+func (o *recordingObserver) excludedServes() []string {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return append([]string(nil), o.excluded...)
 }
 
 type testClock struct {
@@ -358,7 +386,12 @@ func (h *harness) wantSlots(t *testing.T, held, admitted int) {
 
 func (h *harness) submit(t *testing.T, enqueued time.Time, excluded ...string) *waiter {
 	t.Helper()
-	queued := newWaiter(RequestProfile{Model: modelA, Exclude: excluded, Params: "payload"}, enqueued)
+	return h.submitAs(t, "", enqueued, excluded...)
+}
+
+func (h *harness) submitAs(t *testing.T, requestID string, enqueued time.Time, excluded ...string) *waiter {
+	t.Helper()
+	queued := newWaiter(RequestProfile{RequestID: requestID, Model: modelA, Exclude: excluded, Params: "payload"}, enqueued)
 	if outcome := h.dispatcher.submitWaiter(queued); outcome != submitAccepted {
 		t.Fatalf("submitWaiter on a running dispatcher = %v, want submitAccepted", outcome)
 	}
@@ -493,6 +526,19 @@ func TestAWaiterEveryHostExcludedIsServedRatherThanFailed(t *testing.T) {
 	test.dispatcher.stop()
 }
 
+// Nonce 1 binds hostB; the request excluded both hosts and waited past the match wait, so hostB serves it anyway.
+func TestAServeDespiteExclusionIsReported(t *testing.T) {
+	test := newHarness(t, harnessConfig{})
+
+	queued := test.submit(t, test.clock.Now().Add(-2*matchWaitWindow), hostA, hostB)
+
+	wantAssignment(t, awaitReply(t, queued), hostB, 1)
+	test.dispatcher.stop()
+	if got := test.observer.excludedServes(); !slices.Equal(got, []string{hostB}) {
+		t.Fatalf("excluded serves = %v, want the one host the request had excluded and still got", got)
+	}
+}
+
 func TestDispatcherHoldsNonceForCoArrivingWaiter(t *testing.T) {
 	t.Run("a compatible co-arrival is served on the held nonce", func(t *testing.T) {
 		test := newHarness(t, harnessConfig{})
@@ -605,12 +651,12 @@ func TestDispatcherReclassifiesALostAssignmentAsAGhost(t *testing.T) {
 	})
 }
 
-// Between the admission and the dispatch that gives the slot back sit two paths that never reach a
-// caller; each has to hand the slot back itself.
+// Two paths between admission and dispatch never reach a caller; each gives back the slot and hold it took.
 func TestDispatcherReleasesAnAdmissionThatNeverReachesACaller(t *testing.T) {
 	t.Run("the session fails after admitting the request", func(t *testing.T) {
 		sessionErr := errors.New("commit rejected")
-		test := newHarness(t, harnessConfig{failAfterDecide: sessionErr})
+		holds := &escrowHolds{}
+		test := newHarness(t, harnessConfig{failAfterDecide: sessionErr, escrowHold: holds.source()})
 
 		queued := test.submit(t, test.clock.Now())
 
@@ -618,6 +664,9 @@ func TestDispatcherReleasesAnAdmissionThatNeverReachesACaller(t *testing.T) {
 			t.Fatalf("err = %v, want the session error", result.err)
 		}
 		test.wantSlots(t, 0, 1)
+		if outstanding := holds.outstanding(); outstanding != 0 {
+			t.Fatalf("escrow holds still out = %d, want the serve's hold given back with its slot", outstanding)
+		}
 	})
 
 	t.Run("the session commits no nonce", func(t *testing.T) {
@@ -630,6 +679,38 @@ func TestDispatcherReleasesAnAdmissionThatNeverReachesACaller(t *testing.T) {
 		}
 		test.wantSlots(t, 0, 1)
 	})
+}
+
+// A burn's hold must come back if its commit fails, or a retired escrow never finishes draining.
+func TestDispatcherGivesBackTheHoldOfABurnWhoseCommitFailed(t *testing.T) {
+	testCases := []struct {
+		name   string
+		config harnessConfig
+	}{
+		{name: "admission refused the bound host", config: harnessConfig{refused: []string{hostB}}},
+		{name: "the bound host owes proof of compute", config: harnessConfig{
+			pocRequired: func(participant string) bool { return participant == hostB },
+		}},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			holds := &escrowHolds{}
+			settings := testCase.config
+			settings.failAfterDecide = types.ErrInsufficientBalance
+			settings.escrowHold = holds.source()
+			test := newHarness(t, settings)
+
+			queued := test.submit(t, test.clock.Now())
+
+			if result := awaitReply(t, queued); !errors.Is(result.err, types.ErrInsufficientBalance) {
+				t.Fatalf("err = %v, want the failed commit's error", result.err)
+			}
+			if outstanding := holds.outstanding(); outstanding != 0 {
+				t.Fatalf("escrow holds still out = %d, want the burn's hold given back", outstanding)
+			}
+			test.wantSlots(t, 0, 0)
+		})
+	}
 }
 
 // A window that fills between the peek and the commit must cost one ghost, not one per turn: the
@@ -885,5 +966,81 @@ func TestFreezeLeavesAnOmittedOptionalPredicateMissing(t *testing.T) {
 
 	if got := frozen.participantBlocked(hostA); got != blockNone {
 		t.Errorf("participantBlocked(%q) = %v, want blockNone when neither optional predicate was given", hostA, got)
+	}
+}
+
+// Nonce 1 binds hostB, the host the request excluded, past the match wait: the drain burns it while serving request-7.
+func TestABurnNamesTheRequestItsDrainWasServing(t *testing.T) {
+	test := newHarness(t, harnessConfig{})
+	stale := test.clock.Now().Add(-2 * matchWaitWindow)
+
+	queued := test.submitAs(t, "request-7", stale, hostB)
+
+	wantAssignment(t, awaitReply(t, queued), hostA, 2)
+	test.dispatcher.stop()
+	if got := test.observer.burnRequests(); !slices.Equal(got, []string{"request-7"}) {
+		t.Fatalf("burned during = %v, want the request the drain was serving", got)
+	}
+}
+
+// The waiter leaves after its nonce is committed, so the burn is charged to the request that left, not to the one served next.
+func TestAnAbandonedAssignmentNamesTheRequestThatLeft(t *testing.T) {
+	var abandonOnce sync.Once
+	var lost *waiter
+	test := newHarness(t, harnessConfig{afterDecide: func(HostBinding) {
+		abandonOnce.Do(func() { lost.abandoned.Store(true) })
+	}})
+	lost = newWaiter(RequestProfile{RequestID: "request-lost", Model: modelA}, test.clock.Now())
+	if outcome := test.dispatcher.submitWaiter(lost); outcome != submitAccepted {
+		t.Fatalf("submitWaiter on a running dispatcher = %v, want submitAccepted", outcome)
+	}
+
+	next := test.submitAs(t, "request-next", test.clock.Now())
+
+	wantAssignment(t, awaitReply(t, next), hostA, 2)
+	if got := test.observer.burnRequests(); !slices.Equal(got, []string{"request-lost"}) {
+		t.Fatalf("burned during = %v, want the request that left before its nonce reached it", got)
+	}
+}
+
+// request-first excluded hostB, so nonce 1 was meant for request-second until admission refused the slot; nonce 3 finds hostB throttled with request-second the oldest waiter left.
+func TestAThrottledBurnNamesTheRequestItsSlotWasMeantFor(t *testing.T) {
+	test := newHarness(t, harnessConfig{refused: []string{hostB}, holdStart: true})
+	first := test.submitAs(t, "request-first", test.clock.Now(), hostB)
+	second := test.submitAs(t, "request-second", test.clock.Now())
+
+	test.dispatcher.start()
+
+	wantAssignment(t, awaitReply(t, first), hostA, 2)
+	wantAssignment(t, awaitReply(t, second), hostA, 4)
+	test.dispatcher.stop()
+	if got := test.observer.burnRequests(); !slices.Equal(got, []string{"request-second", "request-second"}) {
+		t.Fatalf("burned during = %v, want the request each burned nonce was meant for, never the head of the queue", got)
+	}
+}
+
+// head is abandoned mid-decide, before its own burn is named: the drain must skip it for the oldest live waiter, never the newest.
+func TestABurnSkipsAnAbandonedWaiterAndNamesTheOldestLiveOne(t *testing.T) {
+	var abandonOnce sync.Once
+	var head *waiter
+	test := newHarness(t, harnessConfig{holdStart: true, afterDecide: func(HostBinding) {
+		abandonOnce.Do(func() { head.abandoned.Store(true) })
+	}})
+	stale := test.clock.Now().Add(-2 * matchWaitWindow)
+	head = newWaiter(RequestProfile{RequestID: "request-head", Model: modelA, Exclude: []string{hostB}}, stale)
+	if outcome := test.dispatcher.submitWaiter(head); outcome != submitAccepted {
+		t.Fatalf("submitWaiter on a running dispatcher = %v, want submitAccepted", outcome)
+	}
+	middle := test.submitAs(t, "request-middle", stale, hostB)
+	tail := test.submitAs(t, "request-tail", stale, hostB)
+
+	test.dispatcher.start()
+
+	wantAssignment(t, awaitReply(t, middle), hostA, 2)
+	wantAssignment(t, awaitReply(t, tail), hostA, 4)
+	test.dispatcher.stop()
+	wantNoReply(t, head)
+	if got := test.observer.burnRequests(); !slices.Equal(got, []string{"request-middle", "request-tail"}) {
+		t.Fatalf("burned during = %v, want each burn charged to the oldest live waiter, skipping the abandoned head", got)
 	}
 }

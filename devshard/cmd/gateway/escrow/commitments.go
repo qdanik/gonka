@@ -12,9 +12,7 @@ import (
 
 	"devshard/cmd/gateway/chain"
 	"devshard/cmd/gateway/config"
-	"devshard/cmd/gateway/internal/logkey"
 	"devshard/cmd/gateway/store"
-	"devshard/logging"
 )
 
 // commitmentIndexLagMargin allows for a landed tx staying unqueryable past the chain's unordered-tx TTL.
@@ -42,6 +40,7 @@ type Manager struct {
 
 	timeoutSweeper TimeoutSweeper
 	sweepRecorder  SweepRecorder
+	narrator       lifecycleNarrator
 	sweeping       atomic.Bool
 	sweepWork      sync.WaitGroup
 
@@ -80,8 +79,11 @@ func (m *Manager) createEscrow(ctx context.Context, model ModelConfig, role stri
 	if err != nil {
 		return chain.CreateEscrowResult{}, fmt.Errorf("creating escrow for %s/%s: %w", model.ModelID, role, err)
 	}
-	logging.Info("escrow created", logkey.Escrow, result.EscrowID, logkey.Model, model.ModelID, logkey.Role, role, logkey.Epoch, epoch, logkey.Tx, result.TxHash)
-	return result, m.persistEscrow(ctx, strconv.FormatUint(result.EscrowID, 10), c)
+	escrowID := strconv.FormatUint(result.EscrowID, 10)
+	if m.narrator != nil {
+		m.narrator.EscrowCreated(escrowID, model.ModelID, role, epoch, result.TxHash)
+	}
+	return result, m.persistEscrow(ctx, escrowID, c)
 }
 
 // persistEscrow registers the escrow a commitment created, then drops the commitment. See escrows.md, "Creating an escrow".
@@ -145,13 +147,16 @@ func (m *Manager) reconcile(ctx context.Context) error {
 }
 
 func (m *Manager) reconcileOne(ctx context.Context, c store.Commitment) error {
-	escrowID, found, err := m.tx.GetTxEscrowID(ctx, c.TxHash)
+	createdEscrowID, found, err := m.tx.GetTxEscrowID(ctx, c.TxHash)
 	switch {
 	case err == nil && found:
-		if persistErr := m.persistEscrow(ctx, strconv.FormatUint(escrowID, 10), c); persistErr != nil {
+		escrowID := strconv.FormatUint(createdEscrowID, 10)
+		if persistErr := m.persistEscrow(ctx, escrowID, c); persistErr != nil {
 			return persistErr
 		}
-		logging.Info("escrow recovered from commitment", logkey.Escrow, escrowID, logkey.Model, c.Model, logkey.Role, c.Role, logkey.Epoch, c.Epoch, logkey.Tx, c.TxHash)
+		if m.narrator != nil {
+			m.narrator.EscrowRecovered(escrowID, c.Model, c.Role, c.Epoch, c.TxHash)
+		}
 		return nil
 	case err == nil && !found:
 		return m.clearCommitment(ctx, c, commitmentClearedNoEscrow) // committed but produced no escrow event: terminal
@@ -170,7 +175,9 @@ func (m *Manager) clearCommitment(ctx context.Context, c store.Commitment, reaso
 	if err := m.store.WithRetry(ctx, func() error { return m.store.DeleteCommitment(ctx, c.TxHash) }); err != nil {
 		return fmt.Errorf("clearing commitment %s: %w", c.TxHash, err)
 	}
-	logging.Warn("commitment cleared", logkey.Tx, c.TxHash, logkey.Model, c.Model, logkey.Role, c.Role, logkey.Epoch, c.Epoch, logkey.Reason, reason)
+	if m.narrator != nil {
+		m.narrator.CommitmentCleared(c.TxHash, c.Model, c.Role, c.Epoch, reason)
+	}
 	return nil
 }
 

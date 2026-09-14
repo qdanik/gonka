@@ -16,10 +16,11 @@ One client request, several attempts on different hosts, one winner. This packag
 | `settle.go`, `session.go` | the timeout vote every unfinished nonce owes |
 | `reassembly.go`, `carry.go` | rebuilding events split across chunk boundaries |
 | `vocabulary.go` | the wire strings — metric labels, log fields, ledger reasons — declared once |
+| `trace.go` | the `RaceStep` a coordinator copies at emit, for the journal |
 
 ## What it does not own
 
-It does not choose the escrow or commit the nonce — that is [`scheduler`](../scheduler/). It does not shape the request or the reply — that is [`filters`](../filters/). It does not write the ledger — it reports one outcome, and [`nonces`](../nonces/) records it.
+It does not choose the escrow or commit the nonce — that is [`scheduler`](../scheduler/). It does not shape the request or the reply — that is [`filters`](../filters/). It does not write the ledger — it reports one outcome, and [`nonces`](../nonces/) records it. It does not write its trace lines either: it copies each step into a `RaceStep` and hands it to `Deps.Journal`, and [`journal`](../journal/) renders it.
 
 ## Boundaries
 
@@ -27,6 +28,7 @@ It does not choose the escrow or commit the nonce — that is [`scheduler`](../s
 - **The race outlives the client.** A client that hangs up does not cancel the attempts, because their nonces still owe votes. The drain barrier is what makes shutdown wait for them.
 - **The outcome is reported exactly once**, from whichever goroutine ends the race.
 - **An SSE error event counts as a chunk but never crowns.** A host that answers with an error has answered something, but not content.
+- **A step is copied on the coordinator goroutine.** `RaceStep` holds values, and its `Outcome` is a copy of the attempt's, so nothing the coordinator owns crosses to the journal's goroutine. `Deps.Journal` is optional and guarded; a race without one writes no trace.
 
 ## From pick to report
 
@@ -75,13 +77,15 @@ Not tunable still means not tunable **by an operator**. `Deps.E2E` can shorten t
 - `Flush` needs no gate of its own — an uncrowned attempt has no client to reach. `attemptWriter.Flush` is how the transport's per-line flush reaches the client at all: without it the assertion the transport makes on its writer fails and a crowned winner's bytes sit in the server's buffer.
 - `contentGate` hands the sink beside it the one fact an `io.Writer` signature cannot carry. `Classify` is called immediately before the `Write` of the same chunk, on the same goroutine.
 
-The coordinator answers claims in `answer`: an unknown nonce or an already-crowned race is suppressed, a **suspicious host's claim is held rather than refused**, because a refusal is permanent, and anything else is crowned on the spot. `settleClaims` answers the held claims once the race can tell whether a rival will serve — a rival being a pending attempt beyond the claimants, a running pick, or an immediate attempt still owed. Alone, a suspicious host is crowned. `crownWinner` is the single place one attempt becomes the client's answer, so the reason travels with it into the log.
+The coordinator answers claims in `answer`: an unknown nonce or an already-crowned race is suppressed, a **suspicious host's claim is held rather than refused**, because a refusal is permanent, and anything else is crowned on the spot. `settleClaims` answers the held claims once the race can tell whether a rival will serve — a rival being a pending attempt beyond the claimants, a running pick, or an immediate attempt still owed. Alone, a suspicious host is crowned. `crownWinner` is the single place one attempt becomes the client's answer, so the reason travels with it into the trace.
 
 ### Crown denial
 
 `crownStrikes` withholds the crown from a host that answers without content, while leaving it in the scheduler's rotation. `crownDenialStrikes` content-free answers deny it; a content-bearing answer removes the entry, and entries are otherwise never evicted (see rules.md, "9. Bounded by construction"). `suspicionGate` folds the operator's manual never-trust-this-host pins into the same gate.
 
 Only attempts that say something about the host are observed: it answered with content, or it claimed to serve and produced none. A dial failure, a stranded nonce or a cancelled client says neither, and clearing the host's strikes on one would hand it a clean record it did not earn.
+
+`crownStrikes` narrates the two edges — denied at the third content-free answer, restored by the next answer with content — through `Deps.Journal`, whose `raceJournal` interface includes `crownNarrator`. `Observe` calls `HostDeniedCrown` and `HostCrownedAgain` while it holds `crownStrikes.mu`, so the narrator must queue and return: the journal only appends the event, and its own lock is a leaf that takes no other lock ([`journal/README.md`](../journal/README.md), "Order and the locks it takes"). The journal writes `host denied the crown` and `host crowned again`; a nil journal leaves the strikes working and silent.
 
 ## Classification and reassembly
 
@@ -122,11 +126,13 @@ What the classifier reads out of an event:
 
 Every nonce the race did not leave settled owes a chain vote. `TimeoutStep.StartedAt` is the race's start, not the attempt's dispatch: verifiers recompute a refusal deadline from the committed record, so every nonce a request commits must carry the one stamp, dispatched or stranded.
 
-`timeoutSkipReason` names every skip — phase aborted, empty stream with a finished nonce, finished nonce, long response. A host whose escrow state diverged is not one of them. `SettleTimeouts` emits a started event and then a completed one; a step nobody will attempt is emitted only as skipped, because a started event with no completion following reads as a hung settle.
+`timeoutSkipReason` names every skip — phase aborted, empty stream with a finished nonce, finished nonce, long response. A host whose escrow state diverged is not one of them. `SettleTimeouts` reports each step through its callback as it happens: a posted vote's started event before the post and its result once the post returns, because a vote round runs for minutes and a started event held until the end hides a vote in flight from the ledger and the metrics. A step nobody will attempt is reported only as skipped, because a started event with no completion following reads as a hung settle.
 
-`Deps.Timeouts` is resolved per race rather than held, because escrows rotate, and it is handed the request params because the vote must carry the prompt the committed record keeps only as a hash.
+`Deps.Timeouts` is resolved per race rather than held, because escrows rotate, and it is handed the request params because the vote must carry the prompt the committed record keeps only as a hash. Every `TimeoutEvent` carries the race's `RequestID`, and the settle goroutine posts under `settleContext`, which puts that id on the context so the shared session's `timeout_*` stage lines carry `request`. An empty id adds nothing, because `logging.WithRequestID` would mint one.
 
 `SettleTimeout` reads the handler's own record of whether the vote reached the escrow state: the handler returns a non-nil error on its success path too — that error carries "the inference timed out" to the request — so the error alone cannot tell a settled vote from an unsettled one. `TimeoutOutcome` prefers the handler's own detail over the generic collection error, because that is the only place the refusing verifier is named; `escrowMissing` is the caller's reading, since vote collection reports a count and never the verifier's error.
+
+Every event `SettleTimeouts` reports goes to `Deps.Metrics`, and nowhere else. The composition root forwards it to the [`journal`](../journal/), which writes `timeout vote failed` for a vote that never reached the chain.
 
 ## The Stop barrier and the escrow hold
 

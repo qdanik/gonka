@@ -5,8 +5,6 @@ import (
 	"time"
 
 	"devshard/cmd/gateway/engine"
-	"devshard/cmd/gateway/internal/logkey"
-	"devshard/logging"
 	"devshard/user"
 )
 
@@ -46,8 +44,9 @@ func (w *Prober) settleUnfinishedProbe(ctx context.Context, escrowID, model stri
 	posted.Action, posted.Reason = engine.TimeoutOutcome(vote, err, false)
 	w.recordTimeout(posted)
 
-	logging.Info("escrow warmup voted on its unfinished nonce", logkey.Escrow, escrowID,
-		logkey.Nonce, nonce, logkey.Action, posted.Action, logkey.Reason, posted.Reason)
+	if w.narrator != nil {
+		w.narrator.WarmupVoted(escrowID, nonce, posted.Action, posted.Reason)
+	}
 }
 
 func (w *Prober) recordTimeout(event engine.TimeoutEvent) {

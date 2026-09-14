@@ -48,7 +48,6 @@ func TestE2E_GatewayPublishesEveryMetricOrdinaryTrafficProduces(t *testing.T) {
 		"devshard_gateway_requests_total",
 		"devshard_gateway_attempts_started_total",
 		"devshard_gateway_attempts_terminal_total",
-		"devshard_gateway_user_visible_wins_total",
 		"devshard_gateway_participant_receipt_seconds",
 		"devshard_gateway_participant_total_attempt_seconds",
 		"devshard_gateway_inflight_requests",

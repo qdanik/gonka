@@ -1,5 +1,5 @@
 // Package env is the single place the gateway reads environment variables. Load returns what is SET
-// (nil pointer = unset); defaults belong to config, never here. See README.md.
+// (nil pointer = unset); defaults belong to config, except LogFormat's. See README.md.
 package env
 
 import (
@@ -90,6 +90,20 @@ const (
 	PoCModeOff     = "off"
 	PoCModeRelaxed = "relaxed"
 )
+
+// LogFormatJSON and LogFormatText are the accepted GATEWAY_LOG_FORMAT values; empty means LogFormatJSON.
+const (
+	LogFormatJSON = "json"
+	LogFormatText = "text"
+)
+
+// LogFormat is read apart from Load because it must be applied before anything can log. See README.md, "The log format".
+func LogFormat() string {
+	if strings.EqualFold(lookup("GATEWAY_LOG_FORMAT"), LogFormatText) {
+		return LogFormatText
+	}
+	return LogFormatJSON
+}
 
 var (
 	// ErrPrivateKeyMissing marks a devshard whose signing key the environment does not hold.
@@ -269,6 +283,9 @@ func Load() (Values, error) {
 
 	if values.PoCMode != nil && *values.PoCMode != PoCModeOff && *values.PoCMode != PoCModeRelaxed {
 		problems = append(problems, fmt.Errorf("GATEWAY_POC_MODE: %q is not %q or %q", *values.PoCMode, PoCModeOff, PoCModeRelaxed))
+	}
+	if raw := lookup("GATEWAY_LOG_FORMAT"); raw != "" && !strings.EqualFold(raw, LogFormatJSON) && !strings.EqualFold(raw, LogFormatText) {
+		problems = append(problems, fmt.Errorf("GATEWAY_LOG_FORMAT: %q is not %q or %q", raw, LogFormatJSON, LogFormatText))
 	}
 
 	if len(problems) > 0 {

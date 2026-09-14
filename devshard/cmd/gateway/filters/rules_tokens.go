@@ -8,7 +8,7 @@ import (
 
 // Package-default output-token limits; also the single source config.Defaults reads.
 const (
-	DefaultRequestMaxTokens uint64 = 3_072
+	DefaultRequestMaxTokens uint64 = 4_096
 	RequestMaxTokensCap     uint64 = 4_096
 )
 

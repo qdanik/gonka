@@ -29,6 +29,7 @@ The hard part is not proxying. It is that **every nonce costs the escrow money w
 | [`perf/`](./perf/) | per-host history, outlier ejection, capability refusal counts |
 | [`accounting/`](./accounting/) | the per-nonce ledger and the findings derived from it |
 | [`nonces/`](./nonces/) | what feeds that ledger: live events, chain diffs, the sweep |
+| [`journal/`](./journal/) | one ordered path for race, request and ledger events to their log line or ledger fact |
 | [`warmup/`](./warmup/) | teaching a newly published escrow to its own group |
 | [`store/`](./store/) | control-plane state in SQLite |
 | [`config/`](./config/) | the immutable configuration snapshot and its atomic holder |
@@ -43,20 +44,22 @@ Five files, and what each is for: `main.go` wires everything, `lifecycle.go` sta
 
 ### Wiring order, and the knots in it
 
-Most of `compose` is a straight line. Four places are not:
+Most of `compose` is a straight line. Five places are not:
 
-- **Logging is configured before anything else can log.** A collector reads JSON fields as labels; the default text line carries `log`'s own date prefix and would have to be re-parsed.
+- **Logging is configured before anything else can log**, from `env.LogFormat`. JSON is the default: a collector reads its fields as labels, while the text line carries `log`'s own date prefix and would have to be re-parsed.
 - **`serve` owns the signal context**, so releasing it survives a panic. `os.Exit` skips a `defer` left in `main`.
 - **Routing joins the escrow set to the picker through the capacity model.** An escrow whose membership never reaches that model scores as weightless, is skipped by every pick, and serves nothing — so the join is not optional wiring. The warmup is handed the registry *after* the registry exists, because the registry publishes to it; and a nil warmup must never be assigned into the interface field, since a typed nil there is non-nil to a nil check.
+- **The journal and the nonce recorder are built around each other.** The journal takes the recorder as its ledger sink when it is built; the recorder receives the journal as an argument of `Start`, which `serve` calls once both exist. `journalSettings` keeps a disabled recorder out of the journal's interface field.
 - **The capture and cache collectors are registered after the server**, which owns both sinks. Nothing evicts capture files, so the refusal count is the only signal that capture has turned itself off at its byte cap.
 
 ### Two readers of one fact
 
-Three small adapters exist because two subsystems want the same event for different reasons, and neither belongs inside the other:
+Four small adapters exist because two subsystems want the same event for different reasons, and neither belongs inside the other:
 
-- **`nonceAccountedRaces`** hands one race outcome to both readers of it. The metrics recorder asks how the fleet performed; the ledger asks where each nonce went. The engine should know about neither. The warmup and the burn charge vote through the same poster and observer the race already uses.
-- **`tracedDispatches`** narrates the dispatch events an operator would otherwise have to infer from a counter's slope, and forwards every one to the recorder. It wraps rather than living inside [`metrics`](./metrics/) because counting and narrating are different jobs, and it keeps the scheduler free of a logger. A burned nonce is logged with its nonce and *never labelled with it* — a counter keyed by nonce would grow without end.
-- **`phaseNarrator`** turns the observer's five-second poll into a line only when something an operator cares about actually changed. Subscribing without it would write the same snapshot twelve times a minute.
+- **`nonceAccountedRaces`** hands one race outcome to both readers of it. The metrics recorder asks how the fleet performed and is called on the spot; the ledger asks where each nonce went and receives the outcome through the [`journal`](./journal/), so the response path never takes the ledger's lock. The engine knows about neither. The warmup votes through the same poster the race uses and is counted by the same recorder, through `probeVotes`.
+- **`tracedDispatches`** counts dispatch events on the spot and hands a burn, a tripped burn budget and a nonce spent on a host its request excluded to the [`journal`](./journal/), which writes their lines and the burn's ledger fact; the excluded-host serve has no counter, so its line is its only record. It wraps rather than living inside [`metrics`](./metrics/) because counting and narrating are different jobs, and it keeps the scheduler free of a logger. A burned nonce is logged with its nonce and *never labelled with it* — a counter keyed by nonce would grow without end.
+- **`probeVotes`** counts a warmup's timeout vote like a race vote and hands it to the journal as a probe vote: it reaches the ledger without the race's `timeout vote failed` line, because the warmup writes its own.
+- **`phaseNarrator`** turns the observer's five-second poll into a chain change only when something an operator cares about actually moved — the epoch or its phase, or requests blocked or unblocked — and hands that change to the [`journal`](./journal/), which writes the line. Subscribing the journal without it would write the same snapshot twelve times a minute.
 
 ### Relaxed mode, in one place
 
@@ -68,10 +71,11 @@ The per-weight *allowance* is the exception: it follows the raw chain phase rath
 
 ### Shutdown
 
-Nine steps, in a fixed order, described in [`docs/operations.md`](./docs/operations.md), "Shutdown". Every step runs even after an earlier one fails, except a step marked as needing a quiesced system — that one is skipped and the skip reported, because it destroys state the steps above it may still be using. A drain step is bounded by the shutdown budget without cancelling the work inside it.
+Ten steps, in a fixed order, described in [`docs/operations.md`](./docs/operations.md), "Shutdown". Every step runs even after an earlier one fails, except a step marked as needing a quiesced system — that one is skipped and the skip reported, because it destroys state the steps above it may still be using. A drain step is bounded by the shutdown budget without cancelling the work inside it.
 
-Two positions in that order are load-bearing:
+Three positions in that order are load-bearing:
 
+- **The journal closes after the escrow sessions and before nonce accounting.** Every producer that owns a shutdown step has stopped above it, and the ledger it drains into is still open; the warmup, which is only cancelled, and the republish after a devshard write can still narrate after it closes, and such a line is counted as a late event. Its close is bounded by the shutdown budget with a one-second floor, so a stuck sink cannot keep the ledger and the store from closing.
 - **Nonce accounting closes after every emitter above it has stopped**, so the final snapshot holds the counters the run ended with rather than one taken while races were still classifying nonces.
 - **Public-API connections close last.** Every step above can still reach the public API, and an idle socket closed under one of them is a socket the next poll has to re-dial. The chain's own gRPC connection is *not* closed here and cannot be: `common/chain` owns it and exposes no `Close`, so it lives until the process exits. That is why the tests ignore its goroutines rather than waiting for them.
 

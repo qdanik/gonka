@@ -8,7 +8,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	json "github.com/goccy/go-json"
 
@@ -301,16 +300,4 @@ func (rec *failureRecorder) reason() string {
 		return envelope.Error.Message
 	}
 	return strings.TrimSpace(string(rec.body))
-}
-
-func loggedError(err error) string {
-	text := err.Error()
-	if len(text) <= maxLoggedErrorBytes {
-		return text
-	}
-	cut := maxLoggedErrorBytes
-	for cut > 0 && !utf8.RuneStart(text[cut]) {
-		cut--
-	}
-	return text[:cut] + "…(truncated)"
 }

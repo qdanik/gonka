@@ -145,6 +145,33 @@ func TestTheLimitsCollectorReportsAnOpenCutoffAsExhausted(t *testing.T) {
 		labels{"participant_key": "gonka1down", "model": "qwen", "state": "closed"}, 0)
 }
 
+// The collector reads the limiter's snapshot rather than a copy, so a pair the limiter forgot is gone from the next scrape.
+func TestTheLimitsCollectorStopsReportingAPairTheLimiterForgot(t *testing.T) {
+	clock := time.Unix(1700000000, 0)
+	participants := limits.NewParticipantLimiter(limits.ParticipantConfig{
+		Initial: 4, Max: 16, AfterFailures: 1,
+		BaseOpen: time.Minute, MaxOpen: time.Minute, IdleEviction: time.Hour,
+	}, func() time.Time { return clock })
+	telemetry := New()
+	telemetry.Register(NewLimitsCollector(LimitsSources{
+		Limiter:      limits.NewGatewayLimiter(limits.GatewayConfig{MaxConcurrent: 8, MaxInputTokens: 4000}),
+		Capacity:     servingCapacity{limits.NewCapacity(participants.Available)},
+		Participants: participants,
+		Models:       func() []string { return nil },
+	}))
+	participants.Acquire("gonka1gone", "qwen")
+	participants.Release("gonka1gone", "qwen")
+	participants.Acquire("gonka1busy", "qwen")
+	expectSeriesCount(t, telemetry, "devshard_gateway_participant_window_size", 2)
+
+	clock = clock.Add(time.Hour + time.Minute)
+	participants.Acquire("gonka1busy", "qwen")
+
+	expectSeriesCount(t, telemetry, "devshard_gateway_participant_window_size", 1)
+	expectGauge(t, telemetry, "devshard_gateway_participant_window_inflight", labels{"participant_key": "gonka1busy", "model": "qwen"}, 2)
+	expectGauge(t, telemetry, "devshard_gateway_participants_tracked", labels{}, 1)
+}
+
 func TestThePerfCollectorMatchesTheTracker(t *testing.T) {
 	configuration := config.Defaults()
 	clock := time.Unix(1700000000, 0)
@@ -197,10 +224,9 @@ func TestTheRegistryCollectorReportsEveryPublishedEscrow(t *testing.T) {
 	expectGauge(t, telemetry, "devshard_runtime_active_requests", labels{"devshard_id": "7", "model": "qwen"}, 3)
 	expectGauge(t, telemetry, "devshard_gateway_escrow_weight", labels{"devshard_id": "7"}, 42)
 	expectGauge(t, telemetry, "devshard_gateway_escrow_blocked_participants", labels{"devshard_id": "7", "model": "qwen"}, 1)
-	expectGauge(t, telemetry, "devshard_gateway_escrow_participant_limited", labels{"devshard_id": "7", "model": "qwen"}, 1)
 	expectGauge(t, telemetry, "devshard_gateway_escrow_blocked_participants", labels{"devshard_id": "9", "model": "qwen"}, 0)
-	expectGauge(t, telemetry, "devshard_gateway_escrow_participant_limited", labels{"devshard_id": "9", "model": "qwen"}, 0)
 	expectCounter(t, telemetry, "devshard_gateway_escrow_drain_close_failures_total", labels{}, 4)
+	expectAbsent(t, telemetry, "devshard_gateway_escrow_participant_limited")
 }
 
 func TestTheRegistryCollectorIsSilentOnAnEmptyRegistry(t *testing.T) {

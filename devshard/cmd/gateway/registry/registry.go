@@ -11,9 +11,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-
-	"devshard/cmd/gateway/internal/logkey"
-	"devshard/logging"
 )
 
 var (
@@ -30,6 +27,7 @@ type Deps struct {
 	Membership       membership
 	Exhaustion       exhaustion
 	Publications     publications
+	Narrator         escrowNarrator
 	Now              func() time.Time
 }
 
@@ -41,6 +39,7 @@ type Registry struct {
 	sessions         atomic.Uint64
 	exhaustion       exhaustion
 	publications     publications
+	narrator         escrowNarrator
 	now              func() time.Time
 
 	live         atomic.Pointer[liveSet]
@@ -68,6 +67,7 @@ func New(deps Deps) *Registry {
 		membership:       deps.Membership,
 		exhaustion:       deps.Exhaustion,
 		publications:     deps.Publications,
+		narrator:         deps.Narrator,
 		now:              deps.Now,
 		draining:         map[*escrowEntry]struct{}{},
 	}
@@ -120,7 +120,9 @@ func (r *Registry) Add(ctx context.Context, escrowID, model string) error {
 	if r.publications != nil {
 		r.publications.EscrowPublished(escrowID, model)
 	}
-	logging.Info("escrow serving", logkey.Escrow, escrowID, logkey.Model, model)
+	if r.narrator != nil {
+		r.narrator.EscrowServing(escrowID, model)
+	}
 	return nil
 }
 
@@ -171,10 +173,14 @@ func (r *Registry) unpublish(escrowID string) (*escrowEntry, bool) {
 	r.draining[entry] = struct{}{}
 	r.publishDrainingLocked()
 	if entry.busy() {
-		logging.Info("escrow retired, draining", logkey.Escrow, escrowID, logkey.InFlight, entry.inFlight.Load())
+		if r.narrator != nil {
+			r.narrator.EscrowRetiredDraining(escrowID, entry.inFlight.Load())
+		}
 		return nil, false
 	}
-	logging.Info("escrow retired", logkey.Escrow, escrowID)
+	if r.narrator != nil {
+		r.narrator.EscrowRetired(escrowID)
+	}
 	return entry, true
 }
 
@@ -202,12 +208,13 @@ func (r *Registry) release(entry *escrowEntry) {
 	if !r.lastHoldDropped(entry) {
 		return
 	}
-	if err := r.closeDraining(entry); err != nil {
+	closeErr := r.closeDraining(entry)
+	if closeErr != nil {
 		r.drainCloseFailures.Add(1)
-		logging.Error("draining escrow failed to close, its storage stays held", logkey.Escrow, entry.id, logkey.Error, err)
-		return
 	}
-	logging.Info("draining escrow closed", logkey.Escrow, entry.id)
+	if r.narrator != nil {
+		r.narrator.DrainingEscrowClosed(entry.id, closeErr)
+	}
 }
 
 // lastHoldDropped is true for exactly one caller: the count reaches zero once, and only a retired entry drains.

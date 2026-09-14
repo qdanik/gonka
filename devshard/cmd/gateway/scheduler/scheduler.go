@@ -98,21 +98,12 @@ func (s *Scheduler) Pick(ctx context.Context, profile RequestProfile) (Assignmen
 	}
 
 	queued := newWaiter(profile, s.now())
-	for {
-		target, err := s.dispatcherFor(escrow)
-		if err != nil {
-			return Assignment{}, err
-		}
-		outcome := target.submitWaiter(queued)
-		target.pendingSubmits.Add(-1)
-		if outcome == submitAccepted {
-			break
-		}
-		if outcome == submitFull {
-			return Assignment{}, ErrEscrowBusy
-		}
-		// A stopped dispatcher is replaced by the next get-or-create, so this retries at most once more.
+	claimed, err := s.claimAndSubmit(escrow, queued)
+	if err != nil {
+		return Assignment{}, err
 	}
+	// Held until Pick returns, so the reaper cannot forget an escrow this caller may still burn a nonce on. See README, "Dispatcher lifecycle".
+	defer claimed.pendingSubmits.Add(-1)
 
 	select {
 	case result := <-queued.replyCh:
@@ -123,17 +114,38 @@ func (s *Scheduler) Pick(ctx context.Context, profile RequestProfile) (Assignmen
 	case <-ctx.Done():
 		// Leaving and taking are one step: an assignment delivered in this instant holds a nonce and a slot.
 		if delivered, wasDelivered := queued.abandon(); wasDelivered && delivered.err == nil {
-			s.dropAssignment(delivered.assignment, profile.Model)
+			s.dropAssignment(delivered.assignment, profile)
 		}
 		return Assignment{}, ctx.Err()
 	}
 }
 
-func (s *Scheduler) dropAssignment(assignment Assignment, model string) {
-	s.limiter.Release(assignment.Host, model)
+// claimAndSubmit returns the dispatcher that accepted the waiter, still claimed; a stopped one is replaced by the next get-or-create, so this retries at most once more.
+func (s *Scheduler) claimAndSubmit(escrow Escrow, queued *waiter) (*dispatcher, error) {
+	for {
+		target, err := s.dispatcherFor(escrow)
+		if err != nil {
+			return nil, err
+		}
+		outcome := target.submitWaiter(queued)
+		if outcome == submitAccepted {
+			return target, nil
+		}
+		target.pendingSubmits.Add(-1)
+		if outcome == submitFull {
+			return nil, ErrEscrowBusy
+		}
+	}
+}
+
+func (s *Scheduler) dropAssignment(assignment Assignment, profile RequestProfile) {
+	s.limiter.Release(assignment.Host, profile.Model)
 	assignment.ReleaseEscrow()
 	if s.observer != nil {
-		s.observer.GhostBurned(assignment.Escrow, Burn{Nonce: assignment.Nonce.Nonce(), Participant: assignment.Host, Reason: ghostAbandoned.reason()})
+		s.observer.GhostBurned(assignment.Escrow, Burn{
+			Nonce: assignment.Nonce.Nonce(), Participant: assignment.Host,
+			Reason: ghostAbandoned.reason(), RequestID: profile.RequestID,
+		})
 	}
 }
 
@@ -210,7 +222,7 @@ func (s *Scheduler) dispatcherFor(escrow Escrow) (*dispatcher, error) {
 		s.dispatchers[escrow.ID] = target
 		target.start()
 	}
-	// Claimed under the registry lock, so an actor deciding to retire cannot slip in before the submit.
+	// Claimed under the registry lock and released when Pick returns, so an actor cannot retire while its caller holds a waiter or an assignment.
 	target.pendingSubmits.Add(1)
 	return target, nil
 }
@@ -293,8 +305,9 @@ func pocPreserved(snapshot chain.PhaseSnapshot, model string) map[string]bool {
 	return loaded
 }
 
-// RequestProfile is one request as routing reads it; Params must be exactly devshard/user.InferenceParams. See README, "The boundary types".
+// RequestProfile is one request as routing reads it; RequestID only names it on the burns it causes, and Params must be exactly devshard/user.InferenceParams. See README, "The boundary types".
 type RequestProfile struct {
+	RequestID   string
 	Model       string
 	Escrow      string
 	InputTokens int
@@ -302,11 +315,12 @@ type RequestProfile struct {
 	Params      any
 }
 
-// Burn is a nonce the scheduler spent on nobody; Prepared is nil when the decision preceded the commit.
+// Burn is a committed nonce the scheduler spent on nobody, and the request it was spent during.
 type Burn struct {
 	Nonce       uint64
 	Participant string
 	Reason      string
+	RequestID   string
 }
 
 // Assignment is a committed nonce ready to spend. See README, "The boundary types".

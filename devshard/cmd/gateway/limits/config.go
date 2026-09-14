@@ -32,3 +32,10 @@ func ParticipantConfigFromLimits(l config.Limits) ParticipantConfig {
 		MaxOpen:       time.Duration(l.HostCutoff.MaxMS) * time.Millisecond,
 	}
 }
+
+// ParticipantConfigFromConfig takes the idle window from perf_host_staleness_seconds. See capacity.md, "Nothing here is persisted".
+func ParticipantConfigFromConfig(configuration *config.Config) ParticipantConfig {
+	settings := ParticipantConfigFromLimits(configuration.Limits)
+	settings.IdleEviction = time.Duration(configuration.Perf.HostStalenessSeconds) * time.Second
+	return settings
+}

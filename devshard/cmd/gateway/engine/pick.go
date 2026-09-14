@@ -6,9 +6,7 @@ import (
 	"slices"
 	"time"
 
-	"devshard/cmd/gateway/internal/logkey"
 	"devshard/cmd/gateway/scheduler"
-	"devshard/logging"
 	"devshard/types"
 )
 
@@ -26,6 +24,7 @@ func (c *raceCoordinator) observePick(assignment scheduler.Assignment, err error
 
 func (c *raceCoordinator) requestProfile(params any) scheduler.RequestProfile {
 	return scheduler.RequestProfile{
+		RequestID:   c.request.RequestID,
 		Model:       c.request.Model,
 		Escrow:      c.escrowID,
 		InputTokens: int(c.request.InputTokens),
@@ -86,9 +85,10 @@ func (c *raceCoordinator) reportUnfilledPick(err error) {
 	if c.cancelled || c.handedOff || c.retryRuledOut {
 		return
 	}
-	logging.Info("escalation unfilled",
-		logkey.Request, c.request.RequestID, logkey.Escrow, c.escrowID, logkey.Reason, c.pickReason,
-		logkey.Attempts, len(c.attempts), logkey.Error, err)
+	c.traceStep(RaceStep{
+		Kind: RaceStepEscalationUnfilled, RequestID: c.request.RequestID, EscrowID: c.escrowID,
+		Reason: c.pickReason, Attempts: len(c.attempts), Err: err,
+	})
 }
 
 // stopPicking gives up on a pick the race can no longer spend; the scheduler gives back what it had handed over.
@@ -135,9 +135,10 @@ func (c *raceCoordinator) launch(assignment scheduler.Assignment, role, startRea
 	// Excluded on dispatch, not on failure: a sibling slot would cost a second nonce for one host's opinion.
 	c.exclude(attempt.participant)
 	c.deps.Perf.Acquire(attempt.participant)
-	logging.Info("nonce committed",
-		logkey.Request, c.request.RequestID, logkey.Escrow, assignment.Escrow, logkey.Nonce, nonce,
-		logkey.Host, logkey.ShortHost(attempt.participant), logkey.Slot, attempt.hostIdx, logkey.Role, role, logkey.Reason, startReason)
+	c.traceStep(RaceStep{
+		Kind: RaceStepNonceCommitted, RequestID: c.request.RequestID, EscrowID: assignment.Escrow, Nonce: nonce,
+		Participant: attempt.participant, Slot: attempt.hostIdx, Role: role, Reason: startReason,
+	})
 
 	go runAttempt(attemptCtx, AttemptSpec{
 		Escrow:      assignment.Escrow,

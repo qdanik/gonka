@@ -24,7 +24,6 @@ type RegistryCollector struct {
 	active              *prometheus.Desc
 	activeRequests      *prometheus.Desc
 	escrowWeight        *prometheus.Desc
-	participantLimited  *prometheus.Desc
 	blockedParticipants *prometheus.Desc
 	drainCloseFailures  *prometheus.Desc
 }
@@ -35,7 +34,6 @@ func NewRegistryCollector(sources RegistrySources) *RegistryCollector {
 		active:              gaugeDesc("devshard_runtime_active", "Whether an escrow runtime is accepting requests.", "devshard_id", "model"),
 		activeRequests:      gaugeDesc("devshard_runtime_active_requests", "Nonces an escrow is still answerable for: the client may already have its reply while the chain vote is owed.", "devshard_id", "model"),
 		escrowWeight:        gaugeDesc("devshard_gateway_escrow_weight", "Per-escrow effective host weight used by the capacity-aware picker.", "devshard_id"),
-		participantLimited:  gaugeDesc("devshard_gateway_escrow_participant_limited", "Whether at least one of an escrow's participants is currently unavailable.", "devshard_id", "model"),
 		blockedParticipants: gaugeDesc("devshard_gateway_escrow_blocked_participants", "Participants of an escrow that are currently unavailable.", "devshard_id", "model"),
 		drainCloseFailures:  counterDesc("devshard_gateway_escrow_drain_close_failures_total", "Drained escrows whose snapshot flush or session close failed."),
 	}
@@ -43,7 +41,7 @@ func NewRegistryCollector(sources RegistrySources) *RegistryCollector {
 
 func (c *RegistryCollector) Describe(ch chan<- *prometheus.Desc) {
 	for _, desc := range []*prometheus.Desc{
-		c.active, c.activeRequests, c.escrowWeight, c.participantLimited, c.blockedParticipants,
+		c.active, c.activeRequests, c.escrowWeight, c.blockedParticipants,
 		c.drainCloseFailures,
 	} {
 		ch <- desc
@@ -70,6 +68,5 @@ func (c *RegistryCollector) Collect(ch chan<- prometheus.Metric) {
 			}
 		}
 		gauge(ch, c.blockedParticipants, float64(blocked), escrow.ID, escrow.Model)
-		gauge(ch, c.participantLimited, boolGauge(blocked > 0), escrow.ID, escrow.Model)
 	}
 }

@@ -20,6 +20,7 @@ import (
 	"devshard/cmd/gateway/env"
 	"devshard/cmd/gateway/escrow"
 	"devshard/cmd/gateway/internal/logkey"
+	"devshard/cmd/gateway/journal"
 	"devshard/cmd/gateway/limits"
 	"devshard/cmd/gateway/metrics"
 	"devshard/cmd/gateway/nonces"
@@ -42,8 +43,8 @@ const (
 )
 
 func main() {
-	// Before anything can log: a collector reads JSON fields as labels, a text line needs re-parsing.
-	logging.ConfigureFormat(os.Getenv("GATEWAY_LOG_FORMAT"))
+	// Before anything can log. See README.md, "Wiring order, and the knots in it".
+	logging.ConfigureFormat(env.LogFormat())
 	if err := serve(); err != nil {
 		logging.Error("gateway exited", logkey.Error, err)
 		os.Exit(1)
@@ -93,6 +94,7 @@ type gateway struct {
 	server       *http.Server
 	publicAPI    *http.Client
 	nonces       *nonces.Recorder
+	events       *journal.Journal
 	warmup       *warmup.Prober
 
 	builders     int
@@ -130,6 +132,16 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 	if err != nil {
 		return nil, err
 	}
+
+	recorder := nonces.Open(configuration.NonceAccounting, storageDir, observer, clock)
+	events := journal.New(journalSettings(recorder))
+	// A composed gateway closes the journal in shutdownOrder; a failed compose closes it here.
+	built := false
+	defer func() {
+		if !built {
+			_ = events.Close()
+		}
+	}()
 	txClient, err := chain.NewTxClient(chain.Config{
 		Transport:    sources.Transport,
 		FeeDenom:     configuration.Tx.FeeDenom,
@@ -138,25 +150,27 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 		PollInterval: time.Duration(configuration.Tx.PollIntervalMS) * time.Millisecond,
 		PollTimeout:  time.Duration(configuration.Tx.PollTimeoutMS) * time.Millisecond,
 		Now:          clock,
+		Narrator:     events,
 	})
 	if err != nil {
 		return nil, err
 	}
 
-	recorder := nonces.Open(configuration.NonceAccounting, storageDir, observer, clock)
-
-	participants := limits.NewParticipantLimiter(limits.ParticipantConfigFromLimits(configuration.Limits), clock)
+	participants := limits.NewParticipantLimiter(limits.ParticipantConfigFromConfig(configuration), clock)
+	participants.SetNarrator(events)
 	capacity := limits.NewCapacity(participants.Available)
 	observer.Subscribe(capacity.Update)
-	observer.Subscribe((&phaseNarrator{}).observe)
+	observer.SetNarrator(events)
+	observer.Subscribe((&phaseNarrator{events: events}).observe)
 	gatewayLimiter := limits.NewGatewayLimiter(limits.GatewayConfigFromLimits(configuration.Limits))
 	buffers := api.NewBufferBudget(configuration.Limits.MaxBufferedResponseBytes)
 	configHolder.Subscribe(func(next *config.Config) {
 		gatewayLimiter.Reconfigure(limits.GatewayConfigFromLimits(next.Limits))
-		participants.Reconfigure(limits.ParticipantConfigFromLimits(next.Limits))
+		participants.Reconfigure(limits.ParticipantConfigFromConfig(next))
 		buffers.Retune(next.Limits.MaxBufferedResponseBytes)
 	})
 	hosts := perf.NewTracker(configHolder, clock)
+	hosts.SetNarrator(events)
 	recorder.SetCapability(func(participant, model string) accounting.HostCapability {
 		contextLimit, versionRefusals, toolRefusals, contextRefusals := hosts.Capability(participant, model)
 		return accounting.HostCapability{
@@ -183,12 +197,16 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 		Depletion:    depletion,
 		Dispatches:   metrics.NewDispatchRecorder(telemetry),
 		Ledger:       recorder,
+		Journal:      events,
 		Now:          clock,
 	})
 	if err != nil {
 		return nil, err
 	}
-	raceRecorder := metrics.NewRaceRecorder(telemetry)
+	hostStaleness := func() time.Duration {
+		return time.Duration(configHolder.Load().Perf.HostStalenessSeconds) * time.Second
+	}
+	raceRecorder := metrics.NewRaceRecorder(telemetry, clock, hostStaleness)
 	manager, err := escrow.NewManager(escrow.Deps{
 		Tx:          txClient,
 		Store:       devshardWrites{Store: gatewayStore, changed: func() { notify(devshardWork) }},
@@ -196,6 +214,7 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 		Settlement:  escrows,
 		Timeouts:    escrows,
 		Sweeps:      raceRecorder,
+		Narrator:    events,
 		Signer:      environmentSigner{},
 		Config:      configHolder,
 		Now:         clock,
@@ -220,9 +239,9 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 	}
 
 	sessions := api.NewSessions(escrows)
-	// The warmup and the burn charge both vote through the poster and observer the race already uses.
-	raceObserver := nonceAccountedRaces{recorder: raceRecorder, ledger: recorder}
-	prober.Settle(sessions.Poster, raceObserver)
+	// The warmup votes through the poster the race uses and is counted by the race's recorder.
+	raceObserver := nonceAccountedRaces{recorder: raceRecorder, events: events}
+	prober.Settle(sessions.Poster, probeVotes{recorder: raceRecorder, events: events}, events)
 	e2e := env.LoadE2E()
 	races, err := engine.NewEngine(engine.Deps{
 		Picker:     router,
@@ -234,6 +253,7 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 		Metrics:    raceObserver,
 		Ledger:     api.NewRaceLedger(ledger),
 		Lifecycle:  manager,
+		Journal:    events,
 		Suspicious: suspicious.Suspicious,
 		Timeouts:   sessions.Poster,
 		Now:        clock,
@@ -263,6 +283,7 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 		metrics.NewChainCollector(observer, clock),
 		metrics.NewTransportCollector(transport.DefaultHostConnectionTracker()),
 		metrics.NewAccountingCollector(ledger),
+		metrics.NewJournalCollector(journalCounts(events)),
 	)
 
 	server, err := api.New(api.Deps{
@@ -290,6 +311,7 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 		Telemetry:   telemetry,
 		Buffers:     buffers,
 		Rejections:  metrics.NewLimitRecorder(telemetry),
+		Journal:     events,
 		StorageDir:  storageDir,
 		Version:     Version,
 		Now:         clock,
@@ -301,6 +323,7 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 	telemetry.Register(metrics.NewCaptureCollector(server))
 	telemetry.Register(metrics.NewCacheCollector(server))
 
+	built = true
 	return &gateway{
 		config:       configHolder,
 		store:        gatewayStore,
@@ -315,6 +338,7 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 		server:       server.HTTPServer(fmt.Sprintf(":%d", configuration.Server.Port)),
 		publicAPI:    boot.client,
 		nonces:       recorder,
+		events:       events,
 		warmup:       prober,
 		builders:     boot.builders,
 		devshardWork: devshardWork,
@@ -332,17 +356,22 @@ type routingDeps struct {
 	Depletion    *depletionNotice
 	Dispatches   *metrics.DispatchRecorder
 	Ledger       *nonces.Recorder
+	Journal      *journal.Journal
 	Now          func() time.Time
 }
 
 // newRouting joins the escrow set to the picker through the capacity model; an unjoined escrow serves nothing.
 func newRouting(deps routingDeps) (*registry.Registry, *scheduler.Scheduler, *warmup.Prober, error) {
+	if deps.Journal == nil {
+		return nil, nil, nil, errors.New("routing: Journal is required")
+	}
 	// The warmup needs the registry it observes, so it is handed the registry once that exists.
 	registryDeps := registry.Deps{
 		ServingSessions:  deps.Sessions,
 		ReadOnlySessions: deps.ReadOnly,
 		Membership:       deps.Capacity,
 		Exhaustion:       deps.Depletion,
+		Narrator:         deps.Journal,
 		Now:              deps.Now,
 	}
 	// A nil warmup must not reach the interface field: a typed nil there is non-nil to a nil check.
@@ -352,6 +381,7 @@ func newRouting(deps routingDeps) (*registry.Registry, *scheduler.Scheduler, *wa
 	}
 	escrows := registry.New(registryDeps)
 	prober.Serve(escrows)
+	prober.SetNarrator(deps.Journal)
 	router, err := scheduler.NewScheduler(scheduler.Deps{
 		Escrows:           escrows,
 		Capacity:          deps.Capacity,
@@ -359,7 +389,7 @@ func newRouting(deps routingDeps) (*registry.Registry, *scheduler.Scheduler, *wa
 		Perf:              deps.Hosts,
 		Snapshots:         deps.Snapshots,
 		Config:            deps.Config,
-		Observer:          tracedDispatches{recorder: deps.Dispatches, ledger: deps.Ledger},
+		Observer:          tracedDispatches{recorder: deps.Dispatches, events: deps.Journal},
 		Now:               deps.Now,
 		OnEscrowExhausted: escrows.Exhausted,
 	})

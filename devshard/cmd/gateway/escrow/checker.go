@@ -6,9 +6,6 @@ import (
 	"fmt"
 	"maps"
 	"slices"
-
-	"devshard/cmd/gateway/internal/logkey"
-	"devshard/logging"
 )
 
 // OnEscrowMissing marks an escrow a host reported as absent; the tick confirms it, so this hook does no I/O.
@@ -51,6 +48,8 @@ func (m *Manager) TriggerEscrowCheck(ctx context.Context, escrowID string) error
 	}); err != nil {
 		return fmt.Errorf("deactivating escrow %s: %w", escrowID, err)
 	}
-	logging.Warn("escrow gone from chain, taken out of service", logkey.Escrow, escrowID)
+	if m.narrator != nil {
+		m.narrator.EscrowGoneFromChain(escrowID)
+	}
 	return nil
 }

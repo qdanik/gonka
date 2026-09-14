@@ -44,10 +44,10 @@ func (r *DispatchRecorder) BurnBudgetExhausted(escrowID string) {
 	r.burnBudgetExhausted.WithLabelValues(metricLabel(escrowID, labelUnknown)).Inc()
 }
 
-// EscrowRetired drops the escrow's series: ids are never reused, so a rotation would leak them forever.
+// EscrowRetired drops the escrow's series under the label its writes used: ids are never reused, so a rotation would leak them forever.
 func (r *DispatchRecorder) EscrowRetired(escrowID string) {
-	labels := prometheus.Labels{"devshard_id": escrowID}
-	r.ghostBurns.DeletePartialMatch(labels)
-	r.nonceHolds.DeletePartialMatch(labels)
-	r.burnBudgetExhausted.DeletePartialMatch(labels)
+	retired := prometheus.Labels{"devshard_id": metricLabel(escrowID, labelUnknown)}
+	r.ghostBurns.DeletePartialMatch(retired)
+	r.nonceHolds.DeletePartialMatch(retired)
+	r.burnBudgetExhausted.DeletePartialMatch(retired)
 }

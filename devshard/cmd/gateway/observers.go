@@ -5,31 +5,33 @@ import (
 
 	"devshard/cmd/gateway/chain"
 	"devshard/cmd/gateway/engine"
-	"devshard/cmd/gateway/internal/logkey"
+	"devshard/cmd/gateway/journal"
 	"devshard/cmd/gateway/metrics"
 	"devshard/cmd/gateway/nonces"
 	"devshard/cmd/gateway/scheduler"
-	"devshard/logging"
 )
 
-// tracedDispatches narrates dispatch events and forwards them on. See README.md, "Two readers of one fact".
+// tracedDispatches counts dispatch events and hands the ones worth a line or a ledger fact to the journal. See README.md, "Two readers of one fact".
 type tracedDispatches struct {
 	recorder *metrics.DispatchRecorder
-	ledger   *nonces.Recorder
+	events   *journal.Journal
 }
 
-// GhostBurned logs the nonce and never labels it: a counter keyed by nonce would grow without end.
+// GhostBurned is counted by escrow and reason, never by nonce: a counter keyed by nonce would grow without end.
 func (t tracedDispatches) GhostBurned(escrowID string, burned scheduler.Burn) {
-	logging.Warn("nonce burned for nobody", logkey.Escrow, escrowID, logkey.Nonce, burned.Nonce,
-		logkey.Host, logkey.ShortHost(burned.Participant), logkey.Reason, burned.Reason)
 	t.recorder.GhostBurned(escrowID, burned.Participant, burned.Reason)
-	t.ledger.RecordGhost(escrowID, burned.Nonce, burned.Reason)
+	t.events.GhostBurned(escrowID, burned)
 }
 
 // BurnBudgetExhausted is rare and changes what the escrow does: queued callers now wait rather than spend.
 func (t tracedDispatches) BurnBudgetExhausted(escrowID string) {
-	logging.Warn("escrow stopped burning nonces at its budget", logkey.Escrow, escrowID)
 	t.recorder.BurnBudgetExhausted(escrowID)
+	t.events.BurnBudgetExhausted(escrowID)
+}
+
+// ExcludedHostServed has no counter: the line is the only record that a request's exclusion lapsed.
+func (t tracedDispatches) ExcludedHostServed(escrowID, participant string) {
+	t.events.ExcludedHostServed(escrowID, participant)
 }
 
 // NonceHeld and EscrowRetired pass straight through: both are already written down where they happen.
@@ -37,8 +39,9 @@ func (t tracedDispatches) NonceHeld(escrowID string) { t.recorder.NonceHeld(escr
 
 func (t tracedDispatches) EscrowRetired(escrowID string) { t.recorder.EscrowRetired(escrowID) }
 
-// phaseNarrator writes a line only when something changed; the observer polls twelve times a minute.
+// phaseNarrator hands the journal a chain change only when something moved; the observer polls twelve times a minute.
 type phaseNarrator struct {
+	events  *journal.Journal
 	mu      sync.Mutex
 	started bool
 	epoch   uint64
@@ -70,44 +73,65 @@ func (n *phaseNarrator) advance(snapshot chain.PhaseSnapshot) phaseChange {
 
 func (n *phaseNarrator) observe(snapshot chain.PhaseSnapshot) {
 	change := n.advance(snapshot)
-	first := change.first
-	epochChanged := change.epoch
-	blockChanged := change.block
-
-	if first || epochChanged {
-		logging.Info("chain epoch",
-			logkey.Epoch, snapshot.EpochIndex, logkey.Phase, snapshot.EpochPhase,
-			logkey.Height, snapshot.BlockHeight, logkey.SwitchHeight, snapshot.EpochSwitchBlockHeight)
+	if change.first || change.epoch {
+		n.events.ChainEpoch(snapshot.EpochIndex, snapshot.EpochPhase, snapshot.BlockHeight, snapshot.EpochSwitchBlockHeight)
 	}
-	if !first && !blockChanged {
+	if !change.first && !change.block {
 		return
 	}
 	if snapshot.RequestsBlocked {
-		logging.Warn("chain blocked requests", logkey.Reason, snapshot.BlockReason, logkey.Epoch, snapshot.EpochIndex, logkey.Height, snapshot.BlockHeight)
+		n.events.ChainRequestsBlocked(snapshot.BlockReason, snapshot.EpochIndex, snapshot.BlockHeight)
 		return
 	}
-	if !first {
-		logging.Info("chain unblocked requests", logkey.Epoch, snapshot.EpochIndex, logkey.Height, snapshot.BlockHeight)
+	if !change.first {
+		n.events.ChainRequestsUnblocked(snapshot.EpochIndex, snapshot.BlockHeight)
 	}
 }
 
 // nonceAccountedRaces hands one race outcome to both readers of it. See README.md, "Two readers of one fact".
 type nonceAccountedRaces struct {
 	recorder *metrics.RaceRecorder
-	ledger   *nonces.Recorder
+	events   *journal.Journal
 }
 
 func (r nonceAccountedRaces) RecordRace(outcome engine.RaceOutcome) {
 	r.recorder.RecordRace(outcome)
-	r.ledger.RecordRace(outcome)
+	r.events.RecordRace(outcome)
 }
 
 func (r nonceAccountedRaces) RecordTimeout(event engine.TimeoutEvent) {
 	r.recorder.RecordTimeout(event)
-	r.ledger.RecordTimeout(event)
+	r.events.RecordTimeout(event)
 }
 
 // RecordClassifyOverflow passes straight through: an overflowing classifier says nothing about a nonce.
 func (r nonceAccountedRaces) RecordClassifyOverflow(participant, model string) {
 	r.recorder.RecordClassifyOverflow(participant, model)
+}
+
+// probeVotes counts a warmup vote like a race vote and hands it to the ledger without a race vote's line. See README.md, "Two readers of one fact".
+type probeVotes struct {
+	recorder *metrics.RaceRecorder
+	events   *journal.Journal
+}
+
+func (p probeVotes) RecordTimeout(event engine.TimeoutEvent) {
+	p.recorder.RecordTimeout(event)
+	p.events.RecordProbeTimeout(event)
+}
+
+// journalSettings keeps a disabled ledger out of the interface field: a typed nil there is non-nil to a nil check.
+func journalSettings(recorder *nonces.Recorder) journal.Settings {
+	if recorder == nil {
+		return journal.Settings{}
+	}
+	return journal.Settings{Ledger: recorder}
+}
+
+// journalCounts adapts the journal's counters to the collector, which cannot import journal.
+func journalCounts(events *journal.Journal) func() metrics.JournalCounts {
+	return func() metrics.JournalCounts {
+		moneyRefused, progressDropped, lateEvents := events.Counts()
+		return metrics.JournalCounts{MoneyRefused: moneyRefused, ProgressDropped: progressDropped, LateEvents: lateEvents}
+	}
 }

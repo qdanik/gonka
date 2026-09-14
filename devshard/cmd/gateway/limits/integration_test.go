@@ -81,6 +81,20 @@ func TestParticipantConfigFromLimits_MapsFieldsFromDefaults(t *testing.T) {
 	}
 }
 
+func TestParticipantConfigFromConfig_ForgetsIdlePairsOnThePerfStalenessWindow(t *testing.T) {
+	t.Parallel()
+	configuration := config.Defaults()
+	configuration.Perf.HostStalenessSeconds = 90
+
+	got := ParticipantConfigFromConfig(&configuration)
+
+	want := ParticipantConfigFromLimits(configuration.Limits)
+	want.IdleEviction = 90 * time.Second
+	if got != want {
+		t.Fatalf("ParticipantConfigFromConfig() = %+v, want %+v", got, want)
+	}
+}
+
 // Capacity's derived scale feeds GatewayLimiter's admission, and ParticipantLimiter (built from
 // the same mapped config) independently gates a single host at its per-host window.
 func TestCapacityGatewayParticipantLimiterComposeEndToEnd(t *testing.T) {

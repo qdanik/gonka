@@ -63,7 +63,7 @@ Signing keys are addressed **by the name of the variable that holds them**, neve
 | --- | --- | --- |
 | `GATEWAY_PORT` | 8080 | the listening port |
 | `GATEWAY_STORAGE_DIR` | `$HOME/.cache/gonka-gateway` | where `gateway.db` and the escrow storage live |
-| `GATEWAY_MAX_CONCURRENT_REQUESTS` | 1536 | the hard admission ceiling; unset lets the weight model decide |
+| `GATEWAY_MAX_CONCURRENT_REQUESTS` | 2048 | the hard admission ceiling; unset lets the weight model decide |
 | `GATEWAY_ADMISSION_QUEUE_WAIT_MS` | 300000 | how long a request waits for a slot before 429 |
 | `GATEWAY_ADMISSION_QUEUE_PER_SLOT` | 4 | how deep the queue is allowed to grow per slot |
 | `GATEWAY_MAX_BUFFERED_RESPONSE_BYTES` | 512 MiB | **every** non-streaming reply being assembled, at once |
@@ -80,10 +80,12 @@ Signing keys are addressed **by the name of the variable that holds them**, neve
 | `GATEWAY_ENGINE_INTER_CHUNK_STALL_MS` | 30 000 | silence after first content before an attempt is stalled |
 | `GATEWAY_ENGINE_LOSER_GRACE_MS` | 600 000 | how long a loser may keep running after the crown |
 | `GATEWAY_NONCE_ACCOUNTING_ENABLED` | false | the per-nonce ledger and its own listener |
+| `GATEWAY_NONCE_ACCOUNTING_RETENTION_EPOCHS` | 2 | how many epochs before the current one the nonce ledger keeps retired escrows; below 1 is refused while the ledger is on |
 | `GATEWAY_PERF_EWMA_HALFLIFE_SECONDS` | 600 | how fast a host's history forgets |
 | `GATEWAY_TIMEOUT_SWEEP_BUDGET_PER_TICK` | 8 | execution-timeout votes one tick may retry across every escrow; `0` turns the sweep off |
 | `GATEWAY_TIMEOUT_SWEEP_GRACE_SECONDS` | 120 | how far past its deadline a nonce must be before the sweep claims it from its own race |
-| `GATEWAY_POC_MODE` | off | `relaxed` keeps serving through proof-of-compute |
+| `GATEWAY_POC_MODE` | relaxed | `relaxed` keeps serving through proof-of-compute; `off` refuses new requests while the chain blocks them |
+| `GATEWAY_LOG_FORMAT` | json | one JSON object per line, which promtail and the Loki panels read; `text` restores the text form, and any other value refuses to boot |
 
 The full list is `env/env.go`; the full set of defaults is `config.Defaults()`. Neither is duplicated here — a table that drifts is worse than a pointer that does not.
 
@@ -104,7 +106,7 @@ A failure in steps 3 or 4 shuts down cleanly rather than serving half-built.
 
 ## Shutdown
 
-`lifecycle.go`, `shutdownOrder`. Nine steps, in this order, bounded as a whole by the grace period:
+`lifecycle.go`, `shutdownOrder`. Ten steps, in this order, bounded by the grace period, with up to one more second from the journal step's floor:
 
 | # | Step | Why here |
 | --- | --- | --- |
@@ -114,17 +116,24 @@ A failure in steps 3 or 4 shuts down cleanly rather than serving half-built.
 | 4 | escrow lifecycle | no rotation starts mid-drain |
 | 5 | chain observer | nothing above still needs a snapshot |
 | 6 | escrow sessions | **destroys state** the steps above may still use |
-| 7 | nonce accounting | after every emitter, so the final snapshot holds the counters the run ended with |
-| 8 | store | every step above may still write to it |
-| 9 | public API connections | every step above can still reach it; closing earlier just forces a re-dial |
+| 7 | journal | every producer with a shutdown step above has stopped; it drains its queue into the ledger below, waiting for whatever budget remains, or for one second when the steps above leave less, and counts anything later as a late event, such as a line from the warmup, which is only cancelled, or from the republish after a devshard write |
+| 8 | nonce accounting | after every emitter, so the final snapshot holds the counters the run ended with |
+| 9 | store | every step above may still write to it |
+| 10 | public API connections | every step above can still reach it; closing earlier just forces a re-dial |
 
 `stopAll` runs every step **even after one fails**, except a step marked `needsQuiesced` (step 6): if anything above it failed, work may still be running, so closing the sessions would pull storage out from under it. That step is skipped and the skip is reported.
 
 Each drain is bounded by the grace period but **not cancelled** by it — a step that runs out of time is reported as "abandoned with work still running" rather than killed mid-vote.
 
+The `journal` step (7) is bounded the same way, but with a floor: it waits for its queue for whatever budget remains, or for one second whenever the steps above it leave less than one second of the grace period, so its queue can still reach the ledger, and a close that outlasts that wait is reported as "abandoned with events still queued".
+
 ## Logs
 
 The gateway writes a line for every event that **moves money, changes what it will serve, or is an operator's own doing** — and for very little else. Failures on the money path are not logged separately: each is returned as an error naming its own step (`resolving signer for escrow X`, `building settlement for escrow X`) and the escrow tick logs the joined result once. A success has no such carrier, which is why the successful transitions are the ones written down.
+
+Lines are JSON objects by default. Promtail lifts `level` into a Loki label (`deploy/join/observability/promtail-config.yaml`), and the Loki panels parse the rest with `| json`, so a gateway switched to `GATEWAY_LOG_FORMAT=text` empties those panels.
+
+Every lifecycle line is written by the journal (`journal/`) in the order its steps happened. A file named beside a line below is the step's producer, unless it names a `journal/render_*.go` renderer or says "written by". A test fails on a lifecycle line written around the journal and on a key the log vocabulary does not declare (`journal/guard_test.go`, `journal/keys_test.go`).
 
 ### The trace
 
@@ -132,17 +141,21 @@ Always on, with no level knob — a trace that ships off by default is not there
 
 | Line | Carries |
 | --- | --- |
-| `nonce committed` (`engine/pick.go`) | request, escrow, nonce, participant, slot, role, and why this attempt started |
-| `attempt finished` (`engine/report.go`) | the same identity, the terminal verdict, whether the nonce was finished, whether the host diverged on state |
-| `nonce stranded` (`engine/race.go`) | **Warn** — a committed nonce nobody will answer for; the shape every recurring settlement defect takes |
+| `nonce committed` (emitted by `engine/pick.go`, written by `journal/render_race.go`) | request, escrow, nonce, participant, slot, role, and why this attempt started |
+| `attempt finished` (emitted by `engine/report.go`, written by `journal/render_race.go`) | the same identity, the terminal verdict, whether the nonce was finished, whether the host diverged on state |
+| `nonce stranded` (emitted by `engine/race.go`, written by `journal/render_race.go`) | **Warn** — a committed nonce nobody will answer for; the shape every recurring settlement defect takes |
+
+The journal's consumer writes these lines, so under load, or while the nonce ledger copies itself for a snapshot, it can drop `nonce committed` and `attempt finished` — counted in `devshard_gateway_journal_progress_dropped_total` and announced by `journal skipped progress lines` — while `nonce stranded` is refused only past the money ceiling.
+
+A line the journal writes is stamped when the journal's consumer writes it, not when the event happened, so it can trail — for example, while the consumer waits for the nonce ledger's lock as `Book.Snapshot` copies the ledger. Journal lines keep their order among themselves. Lines written directly — the shared `devshard/user` session lines and the gateway's process, admin and store lines — are stamped when they happen, so the two can interleave out of order. `duration_ms` and the other `*_ms` fields are measured at the event, and are the timings to trust.
 
 Follow one request by grepping its request id; follow one nonce through commit, dispatch and verdict by grepping the nonce.
 
-`attempt finished` carries the terminal **the attempt itself reported**. A goroutine sees only its own cancellation, so the coordinator reclassifies at the end of the race — an attempt that outlived the backstop becomes `hard_timeout`, a host that went silent mid-stream becomes `stalled` — while the line still reads `client_cancelled`, because that is what the attempt saw.
+`attempt finished` carries the coordinator's reading of the attempt at the moment it completed: `racedTerminal` (`engine/report.go`) makes a backstopped attempt read `hard_timeout`, a stalled one `stalled`, and the winner `won`. Only a later `abandonedByHosts` reclassification, made once the whole race has finished, reaches the ledger without reaching this line.
 
 ### When a host stops taking work
 
-Three mechanisms withhold work from a host, each on its own trigger, and each is a gauge in Prometheus. A gauge is sampled every 15 or 30 seconds while the first rung of two of them lasts 30 seconds and 5 seconds, so the shortest withholdings pass entirely between two scrapes. Each therefore also writes one line on the edge, and nothing in between: the volume follows the number of hosts and their own windows, never the request rate.
+Three mechanisms withhold work from a host, each on its own trigger, and each is a gauge in Prometheus. A gauge is sampled every 15 or 30 seconds while the first rung of two of them lasts 30 seconds and 5 seconds, so the shortest withholdings pass entirely between two scrapes. Each producer therefore also narrates each edge through the journal, which writes one line for it, and nothing in between: the volume follows the number of hosts and their own windows, never the request rate.
 
 | Line | Trigger | Carries |
 | --- | --- | --- |
@@ -157,10 +170,12 @@ One more line belongs to the same family, on the money side rather than the rout
 
 ### The request record
 
-`request finished` (`api/finish.go`), one line per completed race: Info when it went out clean, Warn when it did not. It answers what a finished request can no longer be asked:
+`request finished` (`journal/render_request.go`), one line per completed race: Info when it went out clean, Warn when it did not. It answers what a finished request can no longer be asked:
 
 | Field | What it settles |
 | --- | --- |
+| `escrow` | the escrow the race ran on; absent when no escrow was picked |
+| `host` / `hosts` | `host` is the crowned attempt's host; with nobody crowned, `hosts` lists every host tried, comma-separated; a race that ran no attempt carries neither |
 | `bytes` | how much actually reached the client, counted at the socket — the strip rewrites events on the way out |
 | `terminated` | whether the SSE terminator went with them; without it a client waits out its own timeout on a reply it already has |
 | `outcome` | `served`, `failed_mid_stream`, or `failed_before_first_byte` — the last distinguishes a reply the client can retry from one it cannot |
@@ -168,6 +183,8 @@ One more line belongs to the same family, on the money side rather than the rout
 | `nonce_finished` | whether the crowned attempt's nonce closed on the chain. A served request with `false` here answered the client and left the escrow owing a vote for that nonce, which is the shape [issue #1387](https://github.com/gonka-ai/gonka/issues/1387) reported from the other side: the legacy gateway called the whole request failed for it. Absent when nobody was crowned |
 
 The record carries no request or response body — capture files exist for that, sampled and bounded. Its `error` field is truncated at 256 bytes, and that is not tidiness: a host error with no message renders its raw upstream payload as the error text, so an untruncated field would write a whole SSE event, generated tokens included, once per failed request.
+
+`gateway limiter turned a request away` sits on the journal's progress lane rather than this line's money lane, so it can be skipped when the progress backlog is full — the exact condition a refusal storm creates. A skipped line is counted in `devshard_gateway_journal_progress_dropped_total`; every refusal, logged or not, is still counted in `devshard_gateway_limit_rejections_total`.
 
 ### Lines that mean something happened
 
@@ -179,35 +196,63 @@ The record carries no request or response body — capture files exist for that,
 | `commitment cleared` | a creation intent was abandoned, with the reason — one of which (`transaction created no escrow`) means the transaction *did* commit |
 | `escrow gone from chain, taken out of service` | `escrow retired` also fires for settlement parking, so this is the only line carrying the cause |
 | `escrow depleted with no replacement configured` | capacity left the fleet and nothing replaces it |
-| `nonce burned for nobody` (`observers.go`) | a committed nonce that will serve nobody, with the escrow and the reason |
-| `a host stopped mid-answer: reply served, not cached` (`api/routes.go`) | the reply reached the client whole and never reached a terminal `finish_reason`, so nothing replays it. The gateway writes the SSE terminator itself, so nothing else names a truncated answer — but only a reply the cache would otherwise have stored gets here: with `chat_cache_max_bytes` at 0, for a body past the per-entry bound, or when the client had already left, a truncated answer still passes unnamed |
+| `nonce burned for nobody` (`journal/render_money.go`) | a committed nonce that will serve nobody, with the escrow and the reason, and under `burned_during_request` the request it was spent during |
+| `a host stopped mid-answer: reply served, not cached` (`journal/render_request.go`) | the reply reached the client whole and never reached a terminal `finish_reason`, so nothing replays it. The gateway writes the SSE terminator itself, so nothing else names a truncated answer — but only a reply the cache would otherwise have stored gets here: with `chat_cache_max_bytes` at 0, for a body past the per-entry bound, or when the client had already left, a truncated answer still passes unnamed |
 | `escrow stopped burning nonces at its budget` | the escrow now queues callers rather than spending on requests it cannot serve |
-| `host blocked for state divergence` (`engine/report.go`) | the block does not lift while the process runs and no metric exposes it — "why is this host never picked" is answerable only here |
+| `escrow warmed` / `escrow warmup voted on its unfinished nonce` | a new escrow's group was taught the escrow, and the probe's own nonce was settled; the vote line is **Warn** when the vote failed, and `catch_up_error` appears only when the catch-up failed |
+| `host blocked for state divergence` (`journal/render_race.go`) | the block does not lift while the process runs and no metric exposes it — "why is this host never picked" is answerable only here |
 | `chain snapshot stale` / `chain snapshot recovered` | written on the **edge** only; a failed refresh keeps routing on the previous participants until the last poll that read the epoch and the participants passes `chain_snapshot_max_age_seconds`, after which requests are refused 503. The nonce-ceiling and preserved-set reads fall back within the poll and do not hold that clock back |
+| `chain epoch` / `chain blocked requests` / `chain unblocked requests` | written on the **edge** only: `phaseNarrator` (`observers.go`) decides the change and the journal writes it; a snapshot that carries no epoch — a first poll that failed — announces none |
 | `admin request failed` / `admin request refused` (`api/errors.go`) | the operator mutation lines are written on the successful path only, so a failed operator action would otherwise be invisible |
+
+`escrow` is always the escrow id as text. The chain carries the id behind `escrow created`, `escrow recovered from commitment` and `settle tx broadcast` as a number, and `escrow/` and `chain/` convert it to text before the journal writes it, because a JSON collector reads a number as a different type from every other line's `escrow`.
 
 Admin lines carry the action and its subject, **never the request body** — an override payload can hold the admin key. An unkeyed call on an operator route is refused 401 and written down: that is the shape an intrusion attempt takes.
 
 ## Metrics
 
-`/metrics`, Prometheus, ~75 series, plus the `devshard_gateway_nonces_*` family when the nonce ledger is on (see [accounting.md](./accounting.md)). Grouped by the question they answer:
+`/metrics`, Prometheus: 74 gateway families beside the Go runtime and process collectors, and nine more when the nonce ledger is on — the `devshard_gateway_nonces_*` gauges, `devshard_gateway_nonce_facts_rejected_total` and `devshard_gateway_nonce_finding` (see [accounting.md](./accounting.md)). Grouped by the question they answer:
 
 | Question | Series |
 | --- | --- |
-| is the gateway serving | `devshard_gateway_requests_total`, `devshard_http_request_duration_seconds`, `devshard_gateway_user_visible_wins_total` |
-| is it hiding failures | `devshard_gateway_critical_user_failures_total`, `devshard_gateway_user_requests_with_hidden_failure_total`, `devshard_gateway_no_winner_attempts_total` |
-| is it admitting or refusing | `devshard_gateway_limit_rejections_total`, `devshard_gateway_limiter_queue_depth`, `devshard_gateway_effective_max_concurrent_requests`, `devshard_gateway_inflight_requests` |
+| is the gateway serving | `devshard_gateway_requests_total`, `devshard_http_request_duration_seconds`, `devshard_gateway_attempts_terminal_total{visibility="user_visible_winner"}` |
+| is it hiding failures | `devshard_gateway_requests_total{outcome="failure"}`, `devshard_gateway_user_requests_with_hidden_failure_total`, `devshard_gateway_attempt_failures_total{visibility="no_winner"}` |
+| is it admitting or refusing | `devshard_gateway_limit_rejections_total`, `devshard_gateway_limiter_queue_depth`, and `devshard_gateway_inflight_requests_by_model` against `devshard_gateway_enforced_max_concurrent_requests_by_model`, the cap after overrides and capacity scaling (`devshard_gateway_effective_max_concurrent_requests` is the configured cap before either) |
 | how are the hosts | `devshard_gateway_participant_*` (receipt, first content, inter-chunk, transport errors), `devshard_gateway_host_ejected`, `devshard_gateway_participant_window_size` |
 | is money leaking | `devshard_gateway_ghost_nonces_burned_total`, `devshard_gateway_nonce_holds_total`, `devshard_gateway_timeout_actions_total`, `devshard_gateway_burn_budget_exhausted_total` |
 | is the chain view healthy | `devshard_gateway_chain_snapshot_healthy`, `devshard_gateway_chain_snapshot_age_seconds`, `devshard_gateway_chain_epoch_phase`, `devshard_gateway_chain_requests_blocked` |
 | is memory bounded | `devshard_gateway_buffered_response_bytes`, `devshard_gateway_cache_bytes`, `devshard_gateway_capture_bytes_held` |
 | is the ledger keeping up | `devshard_gateway_accounting_rows_written_total`, `devshard_gateway_accounting_rows_lost_total`, `devshard_gateway_accounting_retention_sweeps_failed_total` |
+| is the journal keeping up | `devshard_gateway_journal_money_refused_total`, `devshard_gateway_journal_progress_dropped_total`, `devshard_gateway_journal_late_events_total` |
 
 `devshard_gateway_chain_snapshot_healthy` is the one to alert on first: with a stale snapshot every score, weight and preserved-set decision below it is being made on old data.
 
 ### Cardinality rules
 
-Route labels are **templated** (`/devshard/{id}/…`), never per-escrow, so cardinality does not grow with the escrow set. `/v1/admin/devshards/import` reports under the `/v1/admin/devshards/{id}` label so it lands in the same panel. Every label value is kept non-empty (`metrics/labels.go`): an empty label silently merges unrelated series, and a status with no recoverable code reports as `statusNoCode` rather than as blank.
+Route labels are **templated** (`/devshard/{id}/…`), never per-escrow, so cardinality does not grow with the escrow set. `/v1/admin/devshards/import` reports under the `/v1/admin/devshards/{id}` label so it lands in the same panel. A recorder keeps every label value it writes non-empty (`metrics/labels.go`, `metricLabel`): an empty label silently merges unrelated series, and a status with no recoverable code reports as `0` (`metrics/race.go`, `statusNoCode`) rather than as blank. A collector passes its source's values through unchanged, so `devshard_gateway_nonces_by_disposition`, for one, carries an empty `ghost_reason`, `timeout_action` or `timeout_reason` on a series those facts do not apply to.
+
+### Metric changes
+
+A dashboard or alert outside this repository may query a family this gateway does not emit; each row names the one to query instead.
+
+| Not emitted | Query instead |
+| --- | --- |
+| `devshard_gateway_no_winner_attempts_total` | `devshard_gateway_attempt_failures_total{visibility="no_winner"}`; an answer that arrived complete and reached nobody is `devshard_gateway_attempts_terminal_total{visibility="no_winner",outcome="success"}` |
+| `devshard_gateway_user_visible_wins_total` | `devshard_gateway_attempts_terminal_total{visibility="user_visible_winner"}` |
+| `devshard_gateway_critical_user_failures_total` | `devshard_gateway_requests_total{outcome="failure"}` |
+| `devshard_inference_timeouts_total` | `devshard_gateway_timeout_actions_total{action=~"completed\|failed"}` |
+| `devshard_gateway_escrow_participant_limited` | `devshard_gateway_escrow_blocked_participants > bool 0` |
+| `devshard_gateway_escalation_decisions_total` | `devshard_gateway_attempts_started_total{role="speculative"}` by `reason`; that family carried the race's start plan, never what triggered an escalation |
+
+The gateway emits neither label nor the value below, so a selector that names one matches nothing:
+
+- `devshard_gateway_participant_transport_errors_total` has no `path_kind`: every error it counts is an inference request.
+- `devshard_gateway_user_requests_with_hidden_failure_total` has no `severity`: every hidden failure it counts is on a protected request.
+- `outcome="due"` on `devshard_gateway_timeout_sweep_total`: `applied` plus `failed` is what a tick found, short of it only on a tick that shutdown cut off mid-round.
+
+Participant-labelled race series — `devshard_gateway_attempts_*`, `devshard_gateway_attempt_failures_total`, `devshard_gateway_timeout_actions_total`, `devshard_gateway_stream_carry_overflow_total` and every `devshard_gateway_participant_*` family except the window and breaker gauges — are deleted once their participant and model go unwritten for `perf_host_staleness_seconds`. A host that returns afterwards starts from fresh counters, which `rate()` reads as a reset.
+
+`devshard_gateway_participant_window_size`, `devshard_gateway_participant_window_inflight` and `devshard_gateway_participant_breaker_state` stop reporting a pair the participant limiter forgot on the same window, and `devshard_gateway_participants_tracked` counts only the pairs it still holds.
 
 ## Reading the gateway's state
 

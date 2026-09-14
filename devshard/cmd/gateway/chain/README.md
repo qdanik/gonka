@@ -14,6 +14,7 @@ Every read from the network and every transaction the gateway signs passes throu
 - **The snapshot is immutable and published whole.** A reader never sees half an update, and never has to lock.
 - **A wrong chain id invalidates every signature**, so it is validated at startup rather than discovered on the first broadcast.
 - **Weights can be absent.** A model whose weights the chain has not reported falls back to membership share, and says so, rather than scoring as zero.
+- **The settle broadcast is narrated, not logged.** `Config.Narrator` hears the transaction hash as soon as the node accepts it, before the commit wait that can still fail; the journal writes `settle tx broadcast`.
 
 ## What the chain observer provides
 
@@ -39,7 +40,7 @@ Weights follow the same rule: `CurrentWeightsByModel` is preferred, `CurrentWeig
 
 `Subscribe` registers a callback invoked synchronously on every publish, mirroring `config.Holder`'s semantics: store before notify, cancel by deleting from the map. Subscribers are notified in no particular order.
 
-A poll that fails only in part still publishes: `LastError` keeps **every** failed read of that poll, joined by `; `. Overwriting rather than joining shows only the last failure, leaving a frozen `MaxNonce` — the ceiling nonces are issued against — went unnamed. The health line is written only on a change of state, degraded and then recovered, so a five-second poll speaks once instead of every tick; `LastError` carries the cause the health gauge cannot, by naming which read failed.
+A poll that fails only in part still publishes: `LastError` keeps **every** failed read of that poll, joined by `; `. Overwriting rather than joining shows only the last failure, leaving a frozen `MaxNonce` — the ceiling nonces are issued against — went unnamed. The observer decides when its health turned — degraded, then recovered — and narrates only that turn through `SetNarrator` to the journal, which writes `chain snapshot stale` and `chain snapshot recovered`, so a five-second poll speaks once instead of every tick; `LastError` carries the cause the health gauge cannot, by naming which read failed. `publish` narrates before it notifies subscribers, so a snapshot's health line comes before its epoch line.
 
 ### Which nodes count as preserved
 

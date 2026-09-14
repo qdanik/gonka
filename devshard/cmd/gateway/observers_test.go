@@ -61,3 +61,10 @@ func TestThePhaseNarratorReportsABlockClearing(t *testing.T) {
 		t.Fatal("requests came back and the narrator said nothing, so the block looks permanent in the log")
 	}
 }
+
+// A nil *nonces.Recorder in the journal's interface field is non-nil to its check, so the consumer would call a disabled ledger on every fact.
+func TestADisabledLedgerIsKeptOutOfTheJournal(t *testing.T) {
+	if settings := journalSettings(nil); settings.Ledger != nil {
+		t.Fatalf("Ledger = %#v, want a nil interface", settings.Ledger)
+	}
+}

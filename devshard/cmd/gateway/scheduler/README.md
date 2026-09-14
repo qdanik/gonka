@@ -12,7 +12,7 @@ A chat request needs a nonce, and a nonce is bound to a host by `nonce % groupSi
 
 ## What it does not own
 
-It does not dispatch. It hands out an assignment and the [`engine`](../engine/) sends the request. It does not decide what a burn means for a host either: it names the reason and reports it, and the ledger excludes ghosts from every host rate by construction, because burning a nonce is the gateway's own decision (`accounting/findings.go`). The fan-out from one burn to its log line, its metric and its ledger entry lives in the composition root, not in a package of its own (`observers.go`, `tracedDispatches`).
+It does not dispatch. It hands out an assignment and the [`engine`](../engine/) sends the request. It does not decide what a burn means for a host either: it names the reason and reports it, and the ledger excludes ghosts from every host rate by construction, because burning a nonce is the gateway's own decision (`accounting/findings.go`). The fan-out from one burn to its log line, its metric and its ledger entry lives in the composition root, not in a package of its own (`observers.go`, `tracedDispatches`). A nonce served on a host its request excluded reaches the same observer as `ExcludedHostServed`, so the scheduler writes no line of its own.
 
 ## Boundaries
 
@@ -44,7 +44,7 @@ The host predicates are frozen once per drain by memoising them. `admit` couples
 
 ### Where the nonce, the slot and the hold are taken
 
-The concurrency slot and the escrow's in-flight hold are taken inside the same `Advance` that commits the nonce, and are given back together or not at all. The hold is taken on the serve path only, so a ghost commits unprotected against a concurrent retire; the slot travels with the assignment, so the release path covers only what never reaches a dispatch. A failed `Advance` answers the whole queue, not just the waiter a serve decision chose — the session could not advance its nonce at all — and a spent deposit is terminal for the escrow rather than for the request, so only the exhaustion notice gets it replaced. An assignment the waiter can no longer accept is given back and burned as abandoned.
+The concurrency slot and the escrow's in-flight hold are taken inside the same `Advance` that commits the nonce. A serve takes both and gives them back together or not at all; a burn takes the hold alone and gives it back whether its commit succeeds or fails, so a retire cannot land mid-commit on either. The slot travels with the assignment, so the release path covers only what never reaches a dispatch. A failed `Advance` answers the whole queue, not just the waiter a serve decision chose — the session could not advance its nonce at all — and a spent deposit is terminal for the escrow rather than for the request, so only the exhaustion notice gets it replaced. An assignment the waiter can no longer accept is given back and burned as abandoned.
 
 See routing.md, "Where the nonce, the slot and the hold are taken".
 
@@ -69,7 +69,7 @@ The dispatcher's loop goroutine is the sole owner of the waiting queue and of th
 
 - `stop` is idempotent and blocks until the loop has exited. It holds the write lock while closing the stop channel, which keeps `submitWaiter` from landing a waiter in a buffer nobody will ever read.
 - `markStopped` shuts the actor down from inside its own goroutine and refuses once a waiter is already in the submit buffer.
-- `retire` runs under the registry lock and only for an actor with no outstanding claim. The claim is taken in the same critical section that hands the actor out, so an actor deciding to retire cannot slip between the claim and the submit that follows. A stopped dispatcher is replaced by the next get-or-create, and the claim keeps the replacement alive, so a submit retries at most once more before the registry itself is closed.
+- `retire` runs under the registry lock and only for an actor with no outstanding claim. The claim is taken in the same critical section that hands the actor out and released only when `Pick` returns, so an actor cannot retire between the claim and the submit, nor while its caller waits or abandons an assignment it was just handed. The second case matters for metrics: an abandoned assignment burns its nonce through the observer, and a burn after `EscrowRetired` would write back the series the observer had just deleted. A stopped dispatcher is replaced by the next get-or-create, and the claim keeps the replacement alive, so a submit retries at most once more before the registry itself is closed.
 - An escrow's actor is reaped after `idleDispatcherGrace` with an empty queue. Retirement is announced so an observer can forget the escrow: ids are monotonic chain identifiers and are never reused, so a per-escrow metric series that outlives its escrow grows with uptime and nothing else. See routing.md, "Idle dispatchers are reaped".
 - **The divergence block and the spent replay outlive the dispatcher.** A dispatcher is recreated for the same escrow on the next request, and dropping either would hand a host that cannot follow this escrow's chain a fresh replay for having been quiet five minutes. What is kept is one entry per escrow that ever saw a divergent host, held for the life of the process.
 
@@ -98,6 +98,7 @@ The session adapter lives outside this package, so the two sides meet on a narro
 - `session.Advance` is the one atomic nonce-peek → decide → commit unit: it computes the next candidate binding, calls the decision function, and commits only if the returned intent says to. A declined nonce is left untouched and yields a nil `Prepared`.
 - `NonceIntent` exists because that adapter cannot branch on `Decision`, whose variants are unexported.
 - `RequestProfile.Params` is forwarded to `Advance` unread and committed there as the escrow's inference params, so it must be exactly `devshard/user.InferenceParams` — not the request body it was built from, which the adapter cannot commit and will reject. `NonceIntent.Params` carries it verbatim under the same requirement, and is set only for a non-ghost commit.
+- `RequestProfile.RequestID` is carried only so a burn can name it: `Burn.RequestID` is the request a refused slot was meant for, otherwise the oldest request still waiting when a drain burned the nonce, or the request whose assignment arrived after it left. Routing never reads it.
 - `Prepared` is satisfied verbatim by `*user.PreparedInference`, so the api adapter needs no conversion code.
 - `Assignment.EscrowHold` gives back the escrow's in-flight count the commit took. It is idempotent, and nil when the escrow source counts nothing. A caller that has taken its own hold releases this one as soon as it has one; a caller that never dispatches releases it instead of dispatching.
 - `Escrow.Hold` is taken with the nonce commit and refused once the escrow has been retired. `Candidates` returns escrows in a stable order, already filtered to accepts-new-inferences.

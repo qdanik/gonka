@@ -107,6 +107,37 @@ func TestANonceLeftPendingByARestartIsNamedRatherThanLost(t *testing.T) {
 	}
 }
 
+// A vote still posting when the process stopped never reports its result, so the restart names it as it names a vote never posted.
+func TestAVoteStillPostingAtARestartIsNamedAbandoned(t *testing.T) {
+	book := newTestBook(t, 4)
+	if err := book.ObserveLatestNonce(testEscrow, 12); err != nil {
+		t.Fatalf("ObserveLatestNonce(): %v", err)
+	}
+	if err := book.RecordRace(testEscrow, []Attempt{{Nonce: 6, Sent: true}}); err != nil {
+		t.Fatalf("RecordRace(): %v", err)
+	}
+	if err := book.RecordTimeout(testEscrow, 6, engine.TimeoutKindRefused, engine.TimeoutActionStarted, engine.TimeoutReasonNone); err != nil {
+		t.Fatalf("RecordTimeout(): %v", err)
+	}
+
+	restored := saveAndReload(t, book, openTestStore(t))
+
+	abandoned := 0
+	for _, record := range restored.Query(QueryFilter{}) {
+		for _, counter := range record.Counters {
+			if counter.TimeoutAction == engine.TimeoutActionStarted {
+				t.Fatalf("counter %+v still reads started after the restart", counter)
+			}
+			if counter.TimeoutAction == engine.TimeoutActionAbandoned {
+				abandoned++
+			}
+		}
+	}
+	if abandoned == 0 {
+		t.Fatal("the vote the restart cut off was not named abandoned")
+	}
+}
+
 func TestAnEmptyStoreStartsAnEmptyLedger(t *testing.T) {
 	snapshot, err := openTestStore(t).Load(context.Background())
 	if err != nil {

@@ -5,7 +5,6 @@ import (
 	"errors"
 	"time"
 
-	"devshard/cmd/gateway/internal/logkey"
 	"devshard/logging"
 	"devshard/user"
 )
@@ -20,6 +19,7 @@ type TimeoutVote struct {
 }
 
 type TimeoutEvent struct {
+	RequestID   string
 	EscrowID    string
 	Participant string
 	Model       string
@@ -82,6 +82,7 @@ func (o RaceOutcome) TimeoutPlan() []TimeoutStep {
 			Nonce:     attempt.Nonce,
 			StartedAt: attempt.StartedAt,
 			Event: TimeoutEvent{
+				RequestID:   o.RequestID,
 				EscrowID:    o.EscrowID,
 				Participant: attempt.Participant,
 				Model:       o.Model,
@@ -102,10 +103,9 @@ func (o RaceOutcome) TimeoutPlan() []TimeoutStep {
 	return steps
 }
 
-func SettleTimeouts(ctx context.Context, poster TimeoutPoster, outcome RaceOutcome) []TimeoutEvent {
-	steps := outcome.TimeoutPlan()
-	events := make([]TimeoutEvent, 0, len(steps))
-	for _, step := range steps {
+// SettleTimeouts reports a posted vote's started event before the post and its result after. See README, "Timeout votes".
+func SettleTimeouts(ctx context.Context, poster TimeoutPoster, outcome RaceOutcome, report func(TimeoutEvent)) {
+	for _, step := range outcome.TimeoutPlan() {
 		// A started event for a vote nobody attempts reads as a hung settle when no completion follows.
 		if !step.Post || poster == nil {
 			skipped := step.Event
@@ -113,28 +113,16 @@ func SettleTimeouts(ctx context.Context, poster TimeoutPoster, outcome RaceOutco
 			if skipped.Reason == TimeoutReasonNone {
 				skipped.Reason = TimeoutReasonNoPoster
 			}
-			events = append(events, skipped)
+			report(skipped)
 			continue
 		}
-		events = append(events, step.Event)
+		report(step.Event)
 		vote, err := poster.SettleTimeout(ctx, step.Nonce, step.StartedAt)
 		posted := step.Event
 		posted.Kind = timeoutVoteKind(vote.Kind, posted.Kind)
 		posted.Action, posted.Reason = TimeoutOutcome(vote, err, outcome.Lifecycle.EscrowMissing)
-		events = append(events, posted)
+		report(posted)
 	}
-	return events
-}
-
-// logTimeoutVote reports a vote that never reached the chain. See race.md, "Timeout votes".
-func logTimeoutVote(event TimeoutEvent) {
-	if event.Action != TimeoutActionFailed || event.Reason == TimeoutReasonEscrowGone {
-		return
-	}
-	logging.Warn("timeout vote failed",
-		logkey.Escrow, event.EscrowID, logkey.Nonce, event.Nonce,
-		logkey.Host, logkey.ShortHost(event.Participant), logkey.Model, event.Model,
-		logkey.Kind, event.Kind, logkey.Reason, event.Reason)
 }
 
 // TimeoutOutcome classifies what a posted vote came back as, preferring the handler's own detail. See README, "Timeout votes".
@@ -157,4 +145,13 @@ func firstNamed(detail, fallback string) string {
 		return detail
 	}
 	return fallback
+}
+
+// settleContext carries the race's request id into the shared session's timeout stages; an empty id adds none. See README, "Timeout votes".
+func settleContext(requestID string) context.Context {
+	if requestID == "" {
+		return context.Background()
+	}
+	withRequest, _ := logging.WithRequestID(context.Background(), requestID)
+	return withRequest
 }

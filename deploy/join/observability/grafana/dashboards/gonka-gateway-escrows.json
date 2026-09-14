@@ -521,7 +521,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "count(devshard_gateway_escrow_participant_limited{devshard_id=~\"$escrow\",model=~\"$model\"} == 1)",
+          "expr": "count(devshard_gateway_escrow_blocked_participants{devshard_id=~\"$escrow\",model=~\"$model\"} > 0)",
           "instant": true,
           "legendFormat": "limited",
           "refId": "A"
@@ -3144,7 +3144,7 @@
             "type": "loki",
             "uid": "loki"
           },
-          "expr": "{service_name=\"devshard-gateway\"} |= \"host_clock_offset_ms=\"",
+          "expr": "{service_name=\"devshard-gateway\"} |= \"request finished\" | json | host_clock_offset_ms != \"\"",
           "refId": "A"
         }
       ],
@@ -3153,7 +3153,7 @@
         {
           "id": "extractFields",
           "options": {
-            "format": "kvp",
+            "format": "json",
             "keepTime": false,
             "replace": false,
             "source": "Line"
@@ -3400,9 +3400,9 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum by (reason) (rate(devshard_gateway_critical_user_failures_total{model=~\"$model\"}[$__rate_interval]))",
+          "expr": "sum by (reason) (rate(devshard_gateway_requests_total{model=~\"$model\",outcome=\"failure\"}[$__rate_interval]))",
           "instant": false,
-          "legendFormat": "critical · {{reason}}",
+          "legendFormat": "failed · {{reason}}",
           "refId": "A"
         },
         {
@@ -3523,7 +3523,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "devshard_gateway_limiter_queue_depth",
+          "expr": "sum(devshard_gateway_limiter_queue_depth{model=~\"$model\"})",
           "instant": false,
           "legendFormat": "queued",
           "refId": "A"
@@ -3543,7 +3543,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "devshard_gateway_effective_max_concurrent_requests",
+          "expr": "sum(devshard_gateway_enforced_max_concurrent_requests_by_model{model=~\"$model\"})",
           "instant": false,
           "legendFormat": "ceiling",
           "refId": "C"
@@ -3757,7 +3757,7 @@
           },
           "expr": "devshard_gateway_participant_window_inflight",
           "instant": false,
-          "legendFormat": "in flight · {{participant_key}}",
+          "legendFormat": "in flight · {{participant_key}} · {{model}}",
           "refId": "A"
         },
         {
@@ -3767,7 +3767,7 @@
           },
           "expr": "devshard_gateway_participant_window_size",
           "instant": false,
-          "legendFormat": "window · {{participant_key}}",
+          "legendFormat": "window · {{participant_key}} · {{model}}",
           "refId": "B"
         },
         {
@@ -3775,9 +3775,9 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "devshard_gateway_participant_breaker_state",
+          "expr": "devshard_gateway_participant_breaker_state{state!=\"closed\"} == 1",
           "instant": false,
-          "legendFormat": "breaker · {{participant_key}}",
+          "legendFormat": "breaker {{state}} · {{participant_key}} · {{model}}",
           "refId": "C"
         }
       ],
@@ -4228,7 +4228,7 @@
           },
           "direction": "backward",
           "editorMode": "code",
-          "expr": "{service_name=\"devshard-gateway\"} |= \"request finished\" |= \"duration_ms=\"",
+          "expr": "{service_name=\"devshard-gateway\"} |= \"request finished\" | json | duration_ms != \"\"",
           "queryType": "range",
           "refId": "A"
         }
@@ -4238,7 +4238,7 @@
         {
           "id": "extractFields",
           "options": {
-            "format": "kvp",
+            "format": "json",
             "keepTime": false,
             "replace": false,
             "source": "Line"
@@ -4274,6 +4274,7 @@
                 "input_tokens",
                 "output_tokens",
                 "host",
+                "hosts",
                 "outcome",
                 "duration_ms",
                 "error"
@@ -4289,13 +4290,14 @@
             "indexByName": {
               "duration_ms": 0,
               "error": 2,
-              "escrow": 7,
+              "escrow": 8,
               "host": 3,
-              "input_tokens": 5,
-              "model": 4,
+              "hosts": 4,
+              "input_tokens": 6,
+              "model": 5,
               "outcome": 1,
-              "output_tokens": 6,
-              "request": 8
+              "output_tokens": 7,
+              "request": 9
             },
             "renameByName": {
               "duration_ms": "",
@@ -4407,7 +4409,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum by (reason) (rate(devshard_gateway_escalation_decisions_total[$__rate_interval]))",
+          "expr": "sum by (reason) (rate(devshard_gateway_attempts_started_total{model=~\"$model\",role=\"speculative\",reason=~\"suspicious_host|attempt_failed|receipt_timeout|first_token_timeout\"}[$__rate_interval]))",
           "instant": false,
           "legendFormat": "{{reason}}",
           "refId": "A"
@@ -4473,7 +4475,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum(rate(devshard_gateway_escalation_decisions_total{reason=\"first_token_timeout\"}[$__range])) / clamp_min(sum(rate(devshard_gateway_escalation_decisions_total[$__range])), 1e-9)",
+          "expr": "sum(rate(devshard_gateway_attempts_started_total{model=~\"$model\",role=\"speculative\",reason=\"first_token_timeout\"}[$__range])) / clamp_min(sum(rate(devshard_gateway_attempts_started_total{model=~\"$model\",role=\"speculative\",reason=~\"suspicious_host|attempt_failed|receipt_timeout|first_token_timeout\"}[$__range])), 1e-9)",
           "instant": false,
           "legendFormat": "",
           "refId": "A"
@@ -4487,7 +4489,7 @@
         "type": "prometheus",
         "uid": "${datasource}"
       },
-      "description": "Attempts started divided by attempts that won their race. This is what engine_max_attempts_per_request bounds; near that bound means most requests use their whole budget.",
+      "description": "Attempts started divided by requests answered successfully. This is what engine_max_attempts_per_request bounds; near that bound means most requests use their whole budget.",
       "fieldConfig": {
         "defaults": {
           "thresholds": {
@@ -4539,7 +4541,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum(rate(devshard_gateway_attempts_started_total{model=~\"$model\"}[$__range])) / sum(rate(devshard_gateway_attempts_terminal_total{model=~\"$model\",outcome=\"won\"}[$__range]))",
+          "expr": "sum(rate(devshard_gateway_attempts_started_total{model=~\"$model\"}[$__range])) / sum(rate(devshard_gateway_requests_total{model=~\"$model\",outcome=\"success\"}[$__range]))",
           "instant": false,
           "legendFormat": "",
           "refId": "A"

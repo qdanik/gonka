@@ -45,10 +45,11 @@ The input-token cap only ever takes the second path.
 - **Backoff is `base * 1.6^count` plus up to 20% jitter** (gRPC connection-backoff's `JITTER`), so reopened cutoffs across many hosts do not retry in lockstep. The count stops rising once the backoff saturates at `MaxOpen`, so `1.6^count` cannot overflow the duration.
 - **`Available` peeks the admit decision** without touching in-flight, the cutoff, or creating state for a participant never seen before, which is what lets routing ask about a host it has never dispatched to.
 - **`Snapshot` is taken under one lock acquisition** and returned in participant/model order, so a report cannot mix two moments.
+- **A pair idle past `IdleEviction` is forgotten.** `Acquire` marks the pair it is asked about as used, then scans at most once per tenth of the window and drops only a pair with nothing in flight and no cut-off still running, so a `Release` never lands on a state that is gone. The composition root sets the window to `perf_host_staleness_seconds` through `ParticipantConfigFromConfig`; an `IdleEviction` of zero keeps every pair.
 
 ## When a host stops taking work
 
-A cut-off is a decision an operator has to be able to explain afterwards, and its gauge cannot carry it: the first cut-off lasts 5 seconds against a gauge sampled every 15 or 30. `OnResult` therefore writes one line on each edge and nothing in between, naming which of the two triggers fired — a run of transport faults, or a half-open probe that failed on its single try — the backoff depth that set the duration, and how long the cut-off will last. The volume follows the host count and the backoff, never the request rate. This is the only reason the package imports a logger.
+A cut-off is a decision an operator has to be able to explain afterwards, and its gauge cannot carry it: the first cut-off lasts 5 seconds against a gauge sampled every 15 or 30. `OnResult` therefore narrates each edge to the journal bound by `SetNarrator`, under its own lock, and nothing in between, naming which of the two triggers fired — a run of transport faults, or a half-open probe that failed on its single try — the backoff depth that set the duration, and how long the cut-off will last. The volume follows the host count and the backoff, never the request rate. The package imports no logger; the journal writes the line.
 
 ## The capacity model
 

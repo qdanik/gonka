@@ -369,3 +369,49 @@ func TestWaitForCreatedEscrowIDReturnsOnContextCancel(t *testing.T) {
 		t.Fatalf("waitForCreatedEscrowID = %v, want context.Canceled", err)
 	}
 }
+
+type recordingSettlementNarrator struct {
+	broadcasts []string
+}
+
+func (n *recordingSettlementNarrator) SettleBroadcast(escrowID, txHash, settler string) {
+	n.broadcasts = append(n.broadcasts, escrowID+" "+txHash+" "+settler)
+}
+
+// The hash is the one handle on a settlement whose commit wait fails, so it is narrated before the wait begins.
+func TestASettleBroadcastIsNarratedBeforeItsCommitIsAwaited(t *testing.T) {
+	signer := fixedSigner(t)
+	transport := newFakeTransport()
+	narrator := &recordingSettlementNarrator{}
+	narratedAtFirstPoll := -1
+	transport.onTx = func(call int) {
+		if call == 1 {
+			narratedAtFirstPoll = len(narrator.broadcasts)
+		}
+		for _, sent := range transport.broadcasts() {
+			transport.setTx(txHashFromBytes(sent), TxResult{})
+		}
+	}
+	client, err := NewTxClient(Config{
+		Transport:    transport,
+		PollInterval: time.Millisecond,
+		PollTimeout:  time.Second,
+		Now:          func() time.Time { return time.Unix(1_800_000_000, 0).UTC() },
+		Narrator:     narrator,
+	})
+	if err != nil {
+		t.Fatalf("NewTxClient: %v", err)
+	}
+
+	result, err := client.SettleEscrow(t.Context(), signer, fixedSettlementFull(), nil)
+
+	if err != nil {
+		t.Fatalf("SettleEscrow: %v", err)
+	}
+	if narratedAtFirstPoll != 1 {
+		t.Fatalf("broadcasts narrated by the first commit poll = %d, want 1", narratedAtFirstPoll)
+	}
+	if want := "123 " + result.TxHash + " " + signer.Address(); len(narrator.broadcasts) != 1 || narrator.broadcasts[0] != want {
+		t.Fatalf("narrated broadcasts = %v, want [%s]", narrator.broadcasts, want)
+	}
+}

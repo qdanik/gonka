@@ -68,7 +68,7 @@ A complete event is never charged. The transport writes an event and its termina
 
 The escalation policy is **pure**: a function of its arguments and the configured thresholds, with no chain snapshot and no clock of its own. It reads no host performance data either — the race reads the outlier detector and hands `Decide` a boolean, so the policy's whole input is its argument list (`engine/escalation.go`).
 
-Stages that can trigger another attempt. The reason column is the wire string, which is what `devshard_gateway_escalation_decisions_total{reason}` carries:
+Stages that can trigger another attempt. The reason column is the wire string an escalated attempt carries on `devshard_gateway_attempts_started_total{role="speculative",reason}` (`engine/escalation.go`, `EscalationStage.Reason`):
 
 | Reason | When |
 |---|---|
@@ -158,7 +158,7 @@ Every attempt whose nonce the host did not finish gets a vote posted, with one o
 
 A host whose escrow state diverged still gets its vote posted. Divergence is a routing fact — the scheduler blocks the host permanently — while an unposted vote leaves an orphaned start message that settlement can never resolve (`engine/settle.go`, `RaceOutcome.timeoutSkipReason`).
 
-A vote that fails is written down as a warning naming the nonce, the host and the reason, because a vote is the only thing that undoes a charge; the one exception is an escrow gone from the chain, which fails every vote it owed at once and has its own line already. Posting runs on its own goroutine beside the race, because the protocol wait is measured in minutes. The engine's registration for that race is released only inside that goroutine, after the vote (`engine/engine.go`, `Engine.settle`).
+A vote that fails is written down as a warning naming the request, the nonce, the host and the reason, because a vote is the only thing that undoes a charge; the one exception is an escrow gone from the chain, which fails every vote it owed at once and has its own line already. Posting runs on its own goroutine beside the race, because the protocol wait is measured in minutes. The engine's registration for that race is released only inside that goroutine, after the vote (`engine/engine.go`, `Engine.settle`). The started event is reported before the post and the result after it (`engine/settle.go`, `SettleTimeouts`): each report reaches the metrics synchronously on the settle goroutine, while its ledger fact and any line are only queued, for the journal's consumer to deliver (`observers.go`, `nonceAccountedRaces.RecordTimeout`).
 
 One external quirk is absorbed at the boundary: the shared session's timeout handler returns a **non-nil error on its success path**, so a posted vote is recognised by the handler's own `Applied` flag rather than by `err == nil` (`engine/session.go`, `SessionTimeouts.SettleTimeout`). The failure mode that used to be structurally identical — a diff the group carried without the timeout — is now marked at its source with `user.ErrTimeoutNotApplied`, so a caller reading the error alone no longer counts it as a posted vote (`user/timeout_effect.go`, `timeoutSettledError`). In the legacy gateway this quirk made the "completed" branch unreachable, so every posted vote was labelled failed.
 

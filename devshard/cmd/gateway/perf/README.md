@@ -17,7 +17,7 @@ Per-host history, and the one verdict derived from it that routing honours.
 
 ## When a host stops taking work
 
-An ejection is a decision an operator has to explain afterwards, and its gauge cannot carry it: the gauge is sampled every 15 or 30 seconds while the first rung lasts 30, so the shortest withholdings pass between two scrapes. `RecordSample` writes one line on each edge and nothing in between, naming which trigger fired, the rung that set the duration, the run length, and the rate over its volume. A return has no event of its own, because an ejection lapses by the clock, so the state keeps the last edge and the first sample afterwards closes it. The volume follows the host count and the rungs, never the request rate.
+An ejection is a decision an operator has to explain afterwards, and its gauge cannot carry it: the gauge is sampled every 15 or 30 seconds while the first rung lasts 30, so the shortest withholdings pass between two scrapes. `RecordSample` narrates each edge to the journal bound by `SetNarrator`, which writes the line, and nothing in between, naming which trigger fired, the rung that set the duration, the run length, and the rate over its volume. `HostWithheld` and `HostReturned` are called under `t.mu`, so the narrator must queue and return, as the journal does. A return has no event of its own, because an ejection lapses by the clock, so the state keeps the last edge and the first sample afterwards closes it. The volume follows the host count and the rungs, never the request rate.
 
 ## How the numbers are kept
 
@@ -46,4 +46,4 @@ State for a host and model unseen for the staleness window is evicted, swept at 
 
 A tool call and a context length are properties of what the *model* asks for, so those refusals are keyed by participant **and** model. A protocol version is a property of the *build*, so that one is keyed by participant alone.
 
-For context, the **smallest** refusal is the bound that holds: a later, larger refusal does not lift it. Each recorder reports whether the observation was new, which lets its caller log once instead of on every repeat, and log it outside the lock.
+For context, the **smallest** refusal is the bound that holds: a later, larger refusal does not lift it. Each recorder reports whether the observation was new, which lets its caller narrate once instead of on every repeat, outside the lock.

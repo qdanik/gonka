@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
+
 	"devshard/cmd/gateway/config"
 )
 
@@ -694,5 +696,127 @@ func TestSaturatedBackoffStillCarriesJitter(t *testing.T) {
 	got := l.states[key{participant: "p", model: "m"}].openUntil.Sub(testEpoch)
 	if !withinTolerance(got, cfg.MaxOpen+cfg.MaxOpen/5) {
 		t.Fatalf("saturated backoff = %v, want %v (MaxOpen plus its jitter)", got, cfg.MaxOpen+cfg.MaxOpen/5)
+	}
+}
+
+func idleEvictionConfig() ParticipantConfig {
+	settings := testConfig()
+	settings.IdleEviction = time.Hour
+	return settings
+}
+
+// A pair nothing has used for the eviction window is forgotten; one still carrying an attempt is not.
+func TestAcquireForgetsAPairIdlePastTheEvictionWindow(t *testing.T) {
+	t.Parallel()
+	clock := newMovingClock(testEpoch)
+	limiter := newTestLimiter(idleEvictionConfig(), clock.now)
+	require.True(t, limiter.Acquire("host-released", "model-a"))
+	limiter.Release("host-released", "model-a")
+	require.True(t, limiter.Acquire("host-busy", "model-a"))
+
+	clock.advance(time.Hour + time.Minute)
+	require.True(t, limiter.Acquire("host-new", "model-a"))
+
+	require.Equal(t, []HostWindow{
+		{Participant: "host-busy", Model: "model-a", Window: 4, Inflight: 1, Cutoff: CutoffClosed, Available: true},
+		{Participant: "host-new", Model: "model-a", Window: 4, Inflight: 1, Cutoff: CutoffClosed, Available: true},
+	}, limiter.Snapshot())
+}
+
+// A running cut-off survives idle eviction; an idle half-open pair past the window does not.
+func TestAcquireForgetsAnIdleHalfOpenPairButKeepsARunningCutoff(t *testing.T) {
+	t.Parallel()
+	settings := idleEvictionConfig()
+	settings.AfterFailures, settings.BaseOpen, settings.MaxOpen = 1, 2*time.Hour, 4*time.Hour
+	clock := newMovingClock(testEpoch)
+	limiter := newTestLimiter(settings, clock.now)
+	limiter.OnResult("host-probing", "model-a", TransportFault)
+	clock.advance(2*time.Hour + time.Minute)
+	require.True(t, limiter.Acquire("host-probing", "model-a"), "an expired cut-off admits one probe")
+	limiter.Release("host-probing", "model-a")
+	limiter.OnResult("host-cut-off", "model-a", TransportFault)
+
+	clock.advance(time.Hour + time.Minute)
+	require.True(t, limiter.Acquire("host-trigger", "model-a"))
+
+	require.Equal(t, []HostWindow{
+		{Participant: "host-cut-off", Model: "model-a", Window: 4, Cutoff: CutoffOpen, BackoffCount: 1},
+		{Participant: "host-trigger", Model: "model-a", Window: 4, Inflight: 1, Cutoff: CutoffClosed, Available: true},
+	}, limiter.Snapshot())
+}
+
+// Release stamps lastUsed, so a pair whose verdict is still pending is kept.
+func TestAcquireKeepsAPairJustReleasedEvenPastTheEvictionWindow(t *testing.T) {
+	t.Parallel()
+	clock := newMovingClock(testEpoch)
+	limiter := newTestLimiter(idleEvictionConfig(), clock.now)
+	require.True(t, limiter.Acquire("host-pending", "model-a"))
+
+	clock.advance(time.Hour + time.Minute)
+	limiter.Release("host-pending", "model-a")
+	require.True(t, limiter.Acquire("host-trigger", "model-a"))
+
+	require.Len(t, limiter.Snapshot(), 2, "host-pending was released just now; its verdict may still be reported")
+}
+
+// OnResult stamps lastUsed too, so a verdict arriving after a release keeps postponing the pair's eviction.
+func TestAcquireKeepsAPairWhoseVerdictArrivedAfterItWasReleased(t *testing.T) {
+	t.Parallel()
+	clock := newMovingClock(testEpoch)
+	limiter := newTestLimiter(idleEvictionConfig(), clock.now)
+	require.True(t, limiter.Acquire("host-late-result", "model-a"))
+	limiter.Release("host-late-result", "model-a")
+
+	clock.advance(55 * time.Minute)
+	limiter.OnResult("host-late-result", "model-a", Success)
+
+	clock.advance(10 * time.Minute)
+	require.True(t, limiter.Acquire("host-trigger", "model-a"))
+
+	require.Len(t, limiter.Snapshot(), 2, "the verdict landed 10m ago, not 1h5m, because OnResult refreshed lastUsed")
+}
+
+// The scan runs under the limiter's one lock on the admission path, so it runs at most once per tenth of the window.
+func TestAcquireScansForIdlePairsAtMostOncePerTenthOfTheWindow(t *testing.T) {
+	t.Parallel()
+	clock := newMovingClock(testEpoch)
+	limiter := newTestLimiter(idleEvictionConfig(), clock.now)
+	require.True(t, limiter.Acquire("host-idle", "model-a"))
+	limiter.Release("host-idle", "model-a")
+	clock.advance(58 * time.Minute)
+	require.True(t, limiter.Acquire("host-trigger", "model-a"))
+
+	clock.advance(3 * time.Minute)
+	require.True(t, limiter.Acquire("host-trigger", "model-a"))
+	require.Len(t, limiter.Snapshot(), 2, "three minutes after the last scan, host-idle may not be forgotten yet")
+
+	clock.advance(3 * time.Minute)
+	require.True(t, limiter.Acquire("host-trigger", "model-a"))
+	require.Len(t, limiter.Snapshot(), 1)
+}
+
+func TestIdleEvictionIsRaceFreeUnderConcurrentAdmission(t *testing.T) {
+	settings := idleEvictionConfig()
+	settings.IdleEviction = time.Minute
+	clock := newMovingClock(testEpoch)
+	limiter := newTestLimiter(settings, clock.now)
+	participants := []string{"p1", "p2", "p3"}
+
+	var workers sync.WaitGroup
+	for _, participant := range participants {
+		workers.Go(func() {
+			for range 200 {
+				clock.advance(time.Second)
+				if limiter.Acquire(participant, "m") {
+					limiter.OnResult(participant, "m", Success)
+					limiter.Release(participant, "m")
+				}
+			}
+		})
+	}
+	workers.Wait()
+
+	for _, window := range limiter.Snapshot() {
+		require.Zero(t, window.Inflight, window.Participant)
 	}
 }

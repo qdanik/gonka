@@ -19,6 +19,7 @@ type dispatchObserver interface {
 	NonceHeld(escrowID string)
 	BurnBudgetExhausted(escrowID string)
 	EscrowRetired(escrowID string)
+	ExcludedHostServed(escrowID, participant string)
 }
 
 // dispatcherDeps wires one escrow's actor. See README, "Where the nonce, the slot and the hold are taken".
@@ -188,8 +189,11 @@ func (d *dispatcher) loop() {
 
 // failAdvance answers the whole queue: the session could not advance its nonce at all. See README, "Where the nonce, the slot and the hold are taken".
 func (d *dispatcher) failAdvance(decision Decision, taken reservation, err error) {
-	if _, chosen := decision.(serve); chosen {
+	switch decision.(type) {
+	case serve:
 		d.giveBack(taken)
+	case burn:
+		taken.releaseHold()
 	}
 	if errors.Is(err, types.ErrInsufficientBalance) && d.onExhausted != nil {
 		d.onExhausted(d.escrowID, "insufficient_balance")
@@ -244,6 +248,12 @@ func (d *dispatcher) recordHold() {
 func (d *dispatcher) recordBudgetTrip() {
 	if d.observer != nil {
 		d.observer.BurnBudgetExhausted(d.escrowID)
+	}
+}
+
+func (d *dispatcher) recordExcludedServe(participant string) {
+	if d.observer != nil {
+		d.observer.ExcludedHostServed(d.escrowID, participant)
 	}
 }
 
