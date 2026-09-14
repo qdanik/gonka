@@ -26,7 +26,7 @@ const (
 // The top bucket clears the 2400s drain timeout: a quantile cannot report above the highest finite bound.
 var latencyBuckets = prometheus.ExponentialBuckets(0.01, 2, 19)
 
-// chunkGapBuckets reach past the stall timeout, which latencyBuckets would collapse into +Inf.
+// chunkGapBuckets start one doubling below latencyBuckets and stop at 81.92 s, past the stall timeout. See README.md, "Histogram buckets".
 var chunkGapBuckets = prometheus.ExponentialBuckets(0.005, 2, 15)
 
 // RaceRecorder satisfies the engine's metrics hook. See operations.md, "Metrics".

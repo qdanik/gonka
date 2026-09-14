@@ -54,7 +54,7 @@ The kind is read from the receipt — `engine/settle.go`, `timeoutKind` — and 
 
 `GATEWAY_NONCE_ACCOUNTING_ENABLED` builds the ledger and exports it as `devshard_gateway_nonces_*` on the gateway's ordinary metrics endpoint. There is no second port to configure: a Prometheus already scraping the gateway picks the series up on its next scrape.
 
-`GATEWAY_NONCE_ACCOUNTING_LISTEN_ADDR` additionally serves the ledger as JSON on its own port, for a reader that needs what a metric cannot carry — escrow ids and slots are unbounded labels and stay out of Prometheus by design.
+`GATEWAY_NONCE_ACCOUNTING_LISTEN_ADDR` additionally serves the ledger as JSON on its own port, for a reader that needs what a metric cannot carry — escrow ids and slots are unbounded, so the `devshard_gateway_nonces_*` families leave them out by design.
 
 | Route | Answers |
 | --- | --- |

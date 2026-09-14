@@ -11,7 +11,7 @@ The only package that knows Prometheus exists.
 ## Boundaries
 
 - **Family names are frozen as `devshard_*`.** A dashboard and an operator's alert select on these strings; a rename is a silent alert that stops firing.
-- **Unbounded labels stay out.** Escrow ids and nonces are absent — they would grow the series without end. What a metric cannot carry, the JSON accounting API serves instead.
+- **Unbounded labels stay out.** A nonce or a request id is never a label: either would grow the series without end. An escrow id is a label only where [`docs/rules.md`](../docs/rules.md), "10. Labels, ordering and determinism", allows it — the three dispatch counters, deleted when the escrow's dispatcher is reaped, and the registry gauges, rebuilt from the live escrow set on every scrape. What a metric cannot carry, the JSON accounting API serves instead.
 - **A collector reads its source; it does not keep its own copy**, so a gauge cannot disagree with the thing it reports.
 
 ## Cardinality in practice
@@ -28,7 +28,7 @@ The four places an unbounded label could get in, and what stops it:
 Two ladders, and both are sized by what they must be able to *report*, not by what they expect:
 
 - **`latencyBuckets`** — nineteen exponential buckets from 10 ms reach 2621 s, past the 2400 s drain timeout. A quantile cannot report above the highest finite bound, so a short ladder would silently pin p95 there instead of showing the slowest attempt the engine actually permits.
-- **`chunkGapBuckets`** — a shorter, finer ladder that still reaches past the stall timeout. `latencyBuckets` stop at 20 s, so every stall would land in `+Inf` — which is the one case these exist to separate.
+- **`chunkGapBuckets`** — fifteen exponential buckets from 5 ms reach 81.92 s, past the 30 s default stall timeout (`engine_inter_chunk_stall_ms`), so a stall still lands in a finite bucket. `latencyBuckets` would reach that far as well; this ladder starts one doubling lower and stops four buckets sooner, and both inter-chunk histograms are written per participant and model, so each pair carries four fewer bucket series in each of them.
 
 ## How a collector reaches its source
 

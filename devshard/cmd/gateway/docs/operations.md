@@ -191,13 +191,13 @@ Admin lines carry the action and its subject, **never the request body** — an 
 
 ## Metrics
 
-`/metrics`, Prometheus, ~75 series, plus the `devshard_gateway_nonces_*` family when the nonce ledger is on (see [accounting.md](./accounting.md)). Grouped by the question they answer:
+`/metrics`, Prometheus: 71 gateway families beside the Go runtime and process collectors, and nine more when the nonce ledger is on — the `devshard_gateway_nonces_*` gauges, `devshard_gateway_nonce_facts_rejected_total` and `devshard_gateway_nonce_finding` (see [accounting.md](./accounting.md)). Grouped by the question they answer:
 
 | Question | Series |
 | --- | --- |
 | is the gateway serving | `devshard_gateway_requests_total`, `devshard_http_request_duration_seconds`, `devshard_gateway_attempts_terminal_total{visibility="user_visible_winner"}` |
 | is it hiding failures | `devshard_gateway_requests_total{outcome="failure"}`, `devshard_gateway_user_requests_with_hidden_failure_total`, `devshard_gateway_attempt_failures_total{visibility="no_winner"}` |
-| is it admitting or refusing | `devshard_gateway_limit_rejections_total`, `devshard_gateway_limiter_queue_depth`, `devshard_gateway_effective_max_concurrent_requests`, `devshard_gateway_inflight_requests` |
+| is it admitting or refusing | `devshard_gateway_limit_rejections_total`, `devshard_gateway_limiter_queue_depth`, and `devshard_gateway_inflight_requests_by_model` against `devshard_gateway_enforced_max_concurrent_requests_by_model`, the cap after overrides and capacity scaling (`devshard_gateway_effective_max_concurrent_requests` is the configured cap before either) |
 | how are the hosts | `devshard_gateway_participant_*` (receipt, first content, inter-chunk, transport errors), `devshard_gateway_host_ejected`, `devshard_gateway_participant_window_size` |
 | is money leaking | `devshard_gateway_ghost_nonces_burned_total`, `devshard_gateway_nonce_holds_total`, `devshard_gateway_timeout_actions_total`, `devshard_gateway_burn_budget_exhausted_total` |
 | is the chain view healthy | `devshard_gateway_chain_snapshot_healthy`, `devshard_gateway_chain_snapshot_age_seconds`, `devshard_gateway_chain_epoch_phase`, `devshard_gateway_chain_requests_blocked` |
@@ -208,7 +208,7 @@ Admin lines carry the action and its subject, **never the request body** — an 
 
 ### Cardinality rules
 
-Route labels are **templated** (`/devshard/{id}/…`), never per-escrow, so cardinality does not grow with the escrow set. `/v1/admin/devshards/import` reports under the `/v1/admin/devshards/{id}` label so it lands in the same panel. Every label value is kept non-empty (`metrics/labels.go`): an empty label silently merges unrelated series, and a status with no recoverable code reports as `statusNoCode` rather than as blank.
+Route labels are **templated** (`/devshard/{id}/…`), never per-escrow, so cardinality does not grow with the escrow set. `/v1/admin/devshards/import` reports under the `/v1/admin/devshards/{id}` label so it lands in the same panel. A recorder keeps every label value it writes non-empty (`metrics/labels.go`, `metricLabel`): an empty label silently merges unrelated series, and a status with no recoverable code reports as `0` (`metrics/race.go`, `statusNoCode`) rather than as blank. A collector passes its source's values through unchanged, so `devshard_gateway_nonces_by_disposition`, for one, carries an empty `ghost_reason`, `timeout_action` or `timeout_reason` on a series those facts do not apply to.
 
 ### Metric changes
 
