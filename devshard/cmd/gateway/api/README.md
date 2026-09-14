@@ -33,6 +33,8 @@ The only package that speaks HTTP to a client, and the one that decides what a f
 
 `admission` is the pre-queue chain check. Relaxed proof-of-compute mode is read at three further sites: the shutdown gate in `main`, and the race's own bypass and generating checks in `engine`.
 
+Journal receives the request lines. The boundary builds a `journal.RequestLine` on the handler goroutine, reading the client stream's byte count while the handler still owns it, and the [`journal`](../journal/) renders it.
+
 ## Authentication and the kill switch
 
 `credentials` is one request's resolved identity, computed only where an answer is used: `resolveCredentials` returns an empty value when no `Authorization` header was sent, so an unauthenticated request never reaches a key comparison at all, and a route that needs neither answer never compares a key.
@@ -97,9 +99,9 @@ In `race`, the second `X-Devshard-ID` write is the authoritative one for a reply
 
 ## What a finished request records
 
-`logRequestFinished` answers the one question a finished request can no longer be asked: how much reached the client, and whether the terminator went with it. A delivery error is the difference between a reply the client read and one it is still waiting out its own timeout for. Input tokens ride along because every escalation deadline is computed from them.
+`finishRequest` hands the [`journal`](../journal/) the one question a finished request can no longer be asked: how much reached the client, and whether the terminator went with it. A delivery error is the difference between a reply the client read and one it is still waiting out its own timeout for. Input tokens ride along because every escalation deadline is computed from them.
 
-`winnerOutputTokens` is what the client actually received, which with the line's own timestamp is what a measured output rate is computed from.
+The journal's `winnerOutputTokens` is what the client actually received, which with the line's own timestamp is what a measured output rate is computed from.
 
 `estimatePromptTokens` is the limiter's and the perf buckets' input size, not a tokenizer call.
 

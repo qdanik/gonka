@@ -21,6 +21,7 @@ Every lifecycle step of a request, attempt, nonce, timeout vote and escrow drain
 - **No sink writes what it is handed.** A race outcome's attempts are the slice `api` reads on the response path.
 - **A renderer allocates the fields of every line.** A logger may keep the slice it is given; `logcapture.Recorder` does.
 - **A race step is already a copy.** The coordinator fills `engine.RaceStep` on its own goroutine, the terminal it would log already raced and the phase mark already computed, so rendering reads no coordinator state. `RecordStep` queues a pointer to its own copy of the step, so the journal's mutex never copies an attempt outcome.
+- **`api` reads the client stream before it hands the line over.** `RequestLine.Bytes` and `Terminated` are taken on the handler goroutine, because attempt goroutines can still write the stream after the handler returns.
 
 ## Two lanes
 
@@ -62,6 +63,9 @@ The `journal` step sits between `escrow sessions` and `nonce accounting` (`lifec
 | `KindEscalationUnfilled` | `raceCoordinator.reportUnfilledPick` through `RecordStep` (`engine/pick.go`) | none | `escalation unfilled`, Info (`render_race.go`) |
 | `KindAttemptCrowned` | `raceCoordinator.crownWinner` through `RecordStep` (`engine/crown.go`) | none | `attempt crowned`, Info (`render_race.go`) |
 | `KindAttemptFinished` | `raceCoordinator.complete` through `RecordStep` (`engine/report.go`) | none | `attempt finished`, or `attempt finished with no outcome` when the attempt reported nothing, Info (`render_race.go`) |
+| `KindReplyNotCached` | `Server.chat` through `ReplyNotCached` (`api/routes.go`) | none | `a host stopped mid-answer: reply served, not cached`, Warn (`render_request.go`) |
+| `KindRequestFinished` | `Server.finishRequest` (`api/finish.go`) and the cache hit in `Server.chat` (`api/routes.go`), through `RequestFinished` | none | `request finished` (`render_request.go`): Info when the request went out clean, Warn with a race or delivery error; a cache hit writes the short shape with `outcome` `cache_hit` |
+| `KindRequestThrottled` | `Server.chat` through `RequestThrottled` (`api/routes.go`) | none | `gateway limiter turned a request away`, Warn (`render_request.go`) |
 
 ## Read next
 

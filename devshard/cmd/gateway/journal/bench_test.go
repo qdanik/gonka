@@ -1,6 +1,9 @@
 package journal
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 // The sink keeps what a benchmark built from being optimised away.
 var sinkFields []any
@@ -31,5 +34,18 @@ func BenchmarkRecordStep(b *testing.B) {
 	b.ReportAllocs()
 	for b.Loop() {
 		events.RecordStep(step)
+	}
+}
+
+// Every finished request builds its record once, whatever it did.
+func BenchmarkRequestFinishedFields(b *testing.B) {
+	line := RequestLine{
+		RequestID: "request-1", Model: "qwen", ClientStream: true, Outcome: servedOutcome(),
+		Verdict: "served", Elapsed: 3 * time.Second,
+	}
+
+	b.ReportAllocs()
+	for b.Loop() {
+		sinkFields = requestFinishedFields(&line)
 	}
 }

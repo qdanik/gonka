@@ -14,6 +14,7 @@ func TestAServedRequestWritesItsRecord(t *testing.T) {
 	live := newHarness(t)
 
 	response := live.request(t, http.MethodPost, "/v1/chat/completions", chatBody, nil)
+	live.events.Flush()
 
 	logged.RequireLine(t, logcapture.Entry{Level: "info", Msg: "request finished", Fields: []any{
 		"request", "request-1", "model", "qwen", "escrow", "7", "stream", false,
@@ -30,6 +31,7 @@ func TestAServedRequestWithAWinnerWritesTheWinnersFacts(t *testing.T) {
 	live.inference.outcome.EscrowID = "7"
 
 	response := live.request(t, http.MethodPost, "/v1/chat/completions", chatBody, nil)
+	live.events.Flush()
 
 	logged.RequireLine(t, logcapture.Entry{Level: "info", Msg: "request finished", Fields: []any{
 		"request", "request-1", "model", "qwen", "escrow", "7", "stream", false,
@@ -47,6 +49,7 @@ func TestARaceThatFailedBeforeItsFirstByteWritesItsRecordAtWarn(t *testing.T) {
 	live.inference.err = engine.ErrAllAttemptsFailed
 
 	live.request(t, http.MethodPost, "/v1/chat/completions", chatBody, nil)
+	live.events.Flush()
 
 	logged.RequireLine(t, logcapture.Entry{Level: "warn", Msg: "request finished", Fields: []any{
 		"request", "request-1", "model", "qwen", "escrow", "7", "stream", false,
@@ -64,6 +67,7 @@ func TestAStreamThatFailedMidAnswerWritesItsRecordAtWarn(t *testing.T) {
 	live.inference.err = engine.ErrAllAttemptsFailed
 
 	response := live.request(t, http.MethodPost, "/v1/chat/completions", streamChatBody, nil)
+	live.events.Flush()
 
 	logged.RequireLine(t, logcapture.Entry{Level: "warn", Msg: "request finished", Fields: []any{
 		"request", "request-1", "model", "qwen", "escrow", "7", "stream", true,
@@ -79,6 +83,7 @@ func TestACacheHitWritesTheShortRecord(t *testing.T) {
 	live.request(t, http.MethodPost, "/v1/chat/completions", chatBody, callerHeaders("caller-a"))
 
 	replay := live.request(t, http.MethodPost, "/v1/chat/completions", chatBody, callerHeaders("caller-a"))
+	live.events.Flush()
 
 	logged.RequireLine(t, logcapture.Entry{Level: "info", Msg: "request finished", Fields: []any{
 		"request", "request-1", "model", "qwen", "escrow", "7", "stream", false,
@@ -92,6 +97,7 @@ func TestALimiterRefusalIsLoggedWithTheCapItHit(t *testing.T) {
 	live.limiter.err = &limits.RateLimitError{Reason: "too many concurrent requests"}
 
 	live.request(t, http.MethodPost, "/v1/chat/completions", chatBody, nil)
+	live.events.Flush()
 
 	logged.RequireLine(t, logcapture.Entry{Level: "warn", Msg: "gateway limiter turned a request away", Fields: []any{
 		"request", "request-1", "model", "qwen", "reason", "concurrent_requests",
@@ -105,6 +111,7 @@ func TestAHostThatStoppedMidAnswerIsLogged(t *testing.T) {
 	live.inference.chunks = []string{`data: {"choices":[{"index":0,"delta":{"reasoning":"still working"}}]}` + "\n\n"}
 
 	live.request(t, http.MethodPost, "/v1/chat/completions", streamChatBody, callerHeaders("caller-a"))
+	live.events.Flush()
 
 	logged.RequireLine(t, logcapture.Entry{Level: "warn", Msg: "a host stopped mid-answer: reply served, not cached", Fields: []any{
 		"request", "request-1", "model", "qwen", "escrow", "7",

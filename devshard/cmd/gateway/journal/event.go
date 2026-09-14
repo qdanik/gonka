@@ -13,5 +13,6 @@ type queuedEvent struct {
 	timeout   *engine.TimeoutEvent
 	burn      scheduler.Burn
 	raceStep  *engine.RaceStep
+	request   *RequestLine
 	probeVote bool
 }

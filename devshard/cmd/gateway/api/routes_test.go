@@ -8,10 +8,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 
 	"devshard/cmd/gateway/config"
-	"devshard/cmd/gateway/engine"
 	"devshard/cmd/gateway/limits"
 	"devshard/cmd/gateway/registry"
 	"devshard/cmd/gateway/scheduler"
@@ -354,113 +352,6 @@ func TestTheStatusReportsTheSessionVersion(t *testing.T) {
 	}
 	if !strings.Contains(recorder.Body.String(), `"session_version":"`+types.EffectiveStateRootAndProtocolVersion+`"`) {
 		t.Fatalf("the status carries no session version: %s", recorder.Body.String())
-	}
-}
-
-func TestHostClockOffsetReadsTheWinnersStamp(t *testing.T) {
-	t.Parallel()
-	dispatchedAt := time.Unix(1786114580, 0)
-	confirmedAt := dispatchedAt.Add(120 * time.Millisecond)
-	testCases := []struct {
-		name         string
-		outcome      engine.RaceOutcome
-		wantOffsetMS int64
-		wantRoundTri int64
-		wantFound    bool
-	}{
-		{
-			name: "a host whose clock agrees with ours",
-			outcome: engine.RaceOutcome{WinnerNonce: 7, Attempts: []engine.AttemptOutcome{
-				{Nonce: 7, SendTime: dispatchedAt, ReceiptTime: confirmedAt, ConfirmedAt: 1786114584},
-			}},
-			wantOffsetMS: 4440,
-			wantRoundTri: 120,
-			wantFound:    true,
-		},
-		{
-			name: "a host stamping before we dispatched, which only a drifted clock can do",
-			outcome: engine.RaceOutcome{WinnerNonce: 7, Attempts: []engine.AttemptOutcome{
-				{Nonce: 7, SendTime: dispatchedAt, ReceiptTime: confirmedAt, ConfirmedAt: 1786114550},
-			}},
-			wantOffsetMS: -29560,
-			wantRoundTri: 120,
-			wantFound:    true,
-		},
-		{
-			// The stamp landed inside the round trip, so half of it is ours, not the host's drift.
-			name: "a slow round trip is not charged to the host as drift",
-			outcome: engine.RaceOutcome{WinnerNonce: 7, Attempts: []engine.AttemptOutcome{
-				{
-					Nonce: 7, SendTime: dispatchedAt,
-					ReceiptTime: dispatchedAt.Add(4 * time.Second), ConfirmedAt: 1786114584,
-				},
-			}},
-			wantOffsetMS: 2500,
-			wantRoundTri: 4000,
-			wantFound:    true,
-		},
-		{
-			name: "the loser's stamp is not the winner's",
-			outcome: engine.RaceOutcome{WinnerNonce: 7, Attempts: []engine.AttemptOutcome{
-				{Nonce: 9, SendTime: dispatchedAt, ReceiptTime: confirmedAt, ConfirmedAt: 1786114999},
-				{Nonce: 7, SendTime: dispatchedAt, ReceiptTime: confirmedAt, ConfirmedAt: 1786114584},
-			}},
-			wantOffsetMS: 4440,
-			wantRoundTri: 120,
-			wantFound:    true,
-		},
-		{
-			name: "a completion stamp is not a receipt stamp",
-			outcome: engine.RaceOutcome{WinnerNonce: 7, Attempts: []engine.AttemptOutcome{
-				{Nonce: 7, SendTime: dispatchedAt, ReceiptTime: confirmedAt},
-			}},
-		},
-		{
-			name: "a reply that never carried a receipt reports nothing rather than an epoch offset",
-			outcome: engine.RaceOutcome{WinnerNonce: 7, Attempts: []engine.AttemptOutcome{
-				{Nonce: 7, SendTime: dispatchedAt, ReceiptTime: confirmedAt},
-			}},
-		},
-	}
-	for _, testCase := range testCases {
-		t.Run(testCase.name, func(t *testing.T) {
-			t.Parallel()
-
-			offsetMS, roundTripMS, found := hostClockOffset(testCase.outcome)
-
-			if found != testCase.wantFound {
-				t.Fatalf("found = %v, want %v", found, testCase.wantFound)
-			}
-			if offsetMS != testCase.wantOffsetMS {
-				t.Errorf("offsetMS = %d, want %d", offsetMS, testCase.wantOffsetMS)
-			}
-			if roundTripMS != testCase.wantRoundTri {
-				t.Errorf("roundTripMS = %d, want %d", roundTripMS, testCase.wantRoundTri)
-			}
-		})
-	}
-}
-
-// The executor stamps whole seconds by truncation, so a host dispatched to late in a second signs a
-// stamp that reads a full second behind however well its clock agrees with ours.
-func TestHostClockOffsetDoesNotReadTruncationAsDrift(t *testing.T) {
-	t.Parallel()
-	dispatchedAt := time.Unix(1786114580, 0).Add(900 * time.Millisecond)
-
-	offsetMS, _, stamped := hostClockOffset(engine.RaceOutcome{
-		WinnerNonce: 7,
-		Attempts: []engine.AttemptOutcome{{
-			Nonce: 7, SendTime: dispatchedAt,
-			ReceiptTime: dispatchedAt.Add(200 * time.Millisecond),
-			ConfirmedAt: 1786114580,
-		}},
-	})
-
-	if !stamped {
-		t.Fatal("a signed receipt must be readable")
-	}
-	if offsetMS < -600 || offsetMS > 600 {
-		t.Errorf("offsetMS = %d, want a synchronised host inside the truncated second", offsetMS)
 	}
 }
 

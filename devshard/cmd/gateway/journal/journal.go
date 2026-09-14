@@ -163,6 +163,21 @@ func (j *Journal) RecordStep(step engine.RaceStep) {
 	j.emit(queuedEvent{kind: raceStepKind(step.Kind), raceStep: &step})
 }
 
+// RequestFinished writes the record of a finished request, raced or served from the cache.
+func (j *Journal) RequestFinished(line RequestLine) {
+	j.emit(queuedEvent{kind: KindRequestFinished, request: &line})
+}
+
+// RequestThrottled writes that the gateway's own limiter turned a request away.
+func (j *Journal) RequestThrottled(line RequestLine) {
+	j.emit(queuedEvent{kind: KindRequestThrottled, request: &line})
+}
+
+// ReplyNotCached writes that a served reply stopped mid-answer and was not cached.
+func (j *Journal) ReplyNotCached(line RequestLine) {
+	j.emit(queuedEvent{kind: KindReplyNotCached, request: &line})
+}
+
 func raceStepKind(kind engine.RaceStepKind) Kind {
 	switch kind {
 	case engine.RaceStepNonceCommitted:
@@ -287,5 +302,11 @@ func (j *Journal) deliver(entry *queuedEvent) {
 	case KindNonceCommitted, KindEscalationUnfilled, KindAttemptCrowned, KindAttemptFinished,
 		KindNonceStranded, KindHostDiverged:
 		renderRaceStep(j.lines, entry.raceStep)
+	case KindRequestFinished:
+		renderRequestFinished(j.lines, entry.request)
+	case KindRequestThrottled:
+		renderRequestThrottled(j.lines, entry.request)
+	case KindReplyNotCached:
+		renderReplyNotCached(j.lines, entry.request)
 	}
 }

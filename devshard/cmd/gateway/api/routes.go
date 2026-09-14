@@ -8,9 +8,8 @@ import (
 	"devshard/cmd/gateway/config"
 	"devshard/cmd/gateway/engine"
 	"devshard/cmd/gateway/filters"
-	"devshard/cmd/gateway/internal/logkey"
+	"devshard/cmd/gateway/journal"
 	"devshard/cmd/gateway/scheduler"
-	"devshard/logging"
 	"devshard/transport"
 	"devshard/user"
 )
@@ -205,8 +204,10 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request, escrowPin string) 
 		key = cacheKeyFor(r, normalized.Model, normalized.Body, normalized.Logprobs, normalized.ClientStream, normalized.ClientUsage)
 		if entry, hit := s.cache.get(key, s.now()); hit {
 			written := serveCached(w, requestID, entry)
-			logging.Info("request finished", logkey.Request, requestID, logkey.Model, normalized.Model,
-				logkey.Escrow, entry.escrowID, logkey.Stream, entry.stream, logkey.Outcome, "cache_hit", logkey.Bytes, written)
+			s.events.RequestFinished(journal.RequestLine{
+				RequestID: requestID, Model: normalized.Model, EscrowID: entry.escrowID,
+				ClientStream: entry.stream, Bytes: written, CacheHit: true,
+			})
 			return
 		}
 	}
@@ -215,8 +216,9 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request, escrowPin string) 
 	if err := s.limiter.AcquireForModel(r.Context(), normalized.Model, int64(inputTokens), s.capacity.ForModel(normalized.Model)); err != nil {
 		if throttled, ours := rateLimited(err); ours && s.rejections != nil {
 			s.rejections.Rejected(normalized.Model, throttled.Label())
-			logging.Warn("gateway limiter turned a request away", logkey.Request, requestID,
-				logkey.Model, normalized.Model, logkey.Reason, throttled.Label())
+			s.events.RequestThrottled(journal.RequestLine{
+				RequestID: requestID, Model: normalized.Model, LimiterReason: throttled.Label(),
+			})
 		}
 		writeErrorFor(w, err)
 		return
@@ -233,8 +235,7 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request, escrowPin string) 
 	if entry, storable := recorder.entry(outcome.EscrowID, normalized.ClientStream, cmp.Or(r.Context().Err(), hiddenFailure)); storable {
 		// The client keeps every byte that arrived; only the replay stops, and only this refusal is news.
 		if s.cache.put(key, entry, s.now()) == filters.CacheRefusedUnfinished {
-			logging.Warn("a host stopped mid-answer: reply served, not cached", logkey.Request, requestID,
-				logkey.Model, normalized.Model, logkey.Escrow, outcome.EscrowID)
+			s.events.ReplyNotCached(journal.RequestLine{RequestID: requestID, Model: normalized.Model, EscrowID: outcome.EscrowID})
 		}
 	}
 }
@@ -296,10 +297,10 @@ func (s *Server) race(w http.ResponseWriter, r *http.Request, requestID string, 
 	if err != nil {
 		s.capture.attemptsFailed(r, requestID, normalized, err)
 		if client.Started() {
-			logRequestFinished(requestID, normalized, outcome, deliveryFailedMidStream, client, s.now().Sub(startedAt), err, client.Fail(err))
+			s.finishRequest(requestID, normalized, outcome, deliveryFailedMidStream, client, s.now().Sub(startedAt), err, client.Fail(err))
 			return outcome, err
 		}
-		logRequestFinished(requestID, normalized, outcome, deliveryFailedBeforeFirstByte, client, s.now().Sub(startedAt), err, nil)
+		s.finishRequest(requestID, normalized, outcome, deliveryFailedBeforeFirstByte, client, s.now().Sub(startedAt), err, nil)
 		w.Header().Set(RequestIDHeader, requestID)
 		writeErrorFor(w, err)
 		return outcome, nil
@@ -314,6 +315,6 @@ func (s *Server) race(w http.ResponseWriter, r *http.Request, requestID string, 
 	if closeErr != nil {
 		delivery = deliveryFailedMidStream
 	}
-	logRequestFinished(requestID, normalized, outcome, delivery, client, s.now().Sub(startedAt), nil, closeErr)
+	s.finishRequest(requestID, normalized, outcome, delivery, client, s.now().Sub(startedAt), nil, closeErr)
 	return outcome, closeErr
 }

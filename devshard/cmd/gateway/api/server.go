@@ -13,6 +13,7 @@ import (
 	"devshard/cmd/gateway/chain"
 	"devshard/cmd/gateway/config"
 	"devshard/cmd/gateway/engine"
+	"devshard/cmd/gateway/journal"
 	"devshard/cmd/gateway/limits"
 	"devshard/cmd/gateway/registry"
 	"devshard/cmd/gateway/scheduler"
@@ -116,6 +117,13 @@ type LimitRejections interface {
 	Rejected(model, reason string)
 }
 
+// RequestJournal is satisfied by *journal.Journal; each method returns without waiting on a log handler.
+type RequestJournal interface {
+	RequestFinished(line journal.RequestLine)
+	RequestThrottled(line journal.RequestLine)
+	ReplyNotCached(line journal.RequestLine)
+}
+
 // Deps is everything the HTTP boundary reads or calls. See README.md, "What the server is given".
 type Deps struct {
 	Config      *config.Holder
@@ -133,6 +141,7 @@ type Deps struct {
 	Telemetry   Telemetry
 	Buffers     *BufferBudget
 	Rejections  LimitRejections
+	Journal     RequestJournal
 	StorageDir  string
 	Version     string
 	Now         func() time.Time
@@ -154,6 +163,7 @@ type Server struct {
 	hostWindows HostWindows
 	telemetry   Telemetry
 	rejections  LimitRejections
+	events      RequestJournal
 	storageDir  string
 	version     string
 	now         func() time.Time
@@ -191,6 +201,8 @@ func New(deps Deps) (*Server, error) {
 		return nil, errors.New("api: Suspicious is required")
 	case deps.Telemetry == nil:
 		return nil, errors.New("api: Telemetry is required")
+	case deps.Journal == nil:
+		return nil, errors.New("api: Journal is required")
 	case deps.StorageDir == "":
 		return nil, errors.New("api: StorageDir is required")
 	case deps.Now == nil:
@@ -212,6 +224,7 @@ func New(deps Deps) (*Server, error) {
 		hostWindows: deps.HostWindows,
 		telemetry:   deps.Telemetry,
 		rejections:  deps.Rejections,
+		events:      deps.Journal,
 		storageDir:  deps.StorageDir,
 		version:     deps.Version,
 		now:         deps.Now,

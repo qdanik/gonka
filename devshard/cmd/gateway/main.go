@@ -306,6 +306,7 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 		Telemetry:   telemetry,
 		Buffers:     buffers,
 		Rejections:  metrics.NewLimitRecorder(telemetry),
+		Journal:     events,
 		StorageDir:  storageDir,
 		Version:     Version,
 		Now:         clock,
