@@ -723,8 +723,9 @@ func TestAcquireForgetsAPairIdlePastTheEvictionWindow(t *testing.T) {
 	}, limiter.Snapshot())
 }
 
-// Forgetting a pair mid-backoff would hand the host a full window and a closed breaker it has not earned back.
-func TestAcquireKeepsAnIdlePairWhileItsBreakerIsOpenOrAwaitingAProbeVerdict(t *testing.T) {
+// Forgetting a pair mid-backoff would hand the host a full window and a closed breaker it has not earned back; a
+// half-open pair past the window has no such backoff left to protect, so it is forgotten like any other idle pair.
+func TestAcquireForgetsAnIdleHalfOpenPairButKeepsARunningCutoff(t *testing.T) {
 	t.Parallel()
 	settings := idleEvictionConfig()
 	settings.AfterFailures, settings.BaseOpen, settings.MaxOpen = 1, 2*time.Hour, 4*time.Hour
@@ -741,9 +742,40 @@ func TestAcquireKeepsAnIdlePairWhileItsBreakerIsOpenOrAwaitingAProbeVerdict(t *t
 
 	require.Equal(t, []HostWindow{
 		{Participant: "host-cut-off", Model: "model-a", Window: 4, Cutoff: CutoffOpen, BackoffCount: 1},
-		{Participant: "host-probing", Model: "model-a", Window: 4, Cutoff: CutoffHalfOpen, BackoffCount: 1, Available: true},
 		{Participant: "host-trigger", Model: "model-a", Window: 4, Inflight: 1, Cutoff: CutoffClosed, Available: true},
 	}, limiter.Snapshot())
+}
+
+// Release stamps lastUsed too, or a pair released right when its idle window has already elapsed would be
+// forgotten before its still-pending verdict lands.
+func TestAcquireKeepsAPairJustReleasedEvenPastTheEvictionWindow(t *testing.T) {
+	t.Parallel()
+	clock := newMovingClock(testEpoch)
+	limiter := newTestLimiter(idleEvictionConfig(), clock.now)
+	require.True(t, limiter.Acquire("host-pending", "model-a"))
+
+	clock.advance(time.Hour + time.Minute)
+	limiter.Release("host-pending", "model-a")
+	require.True(t, limiter.Acquire("host-trigger", "model-a"))
+
+	require.Len(t, limiter.Snapshot(), 2, "host-pending was released just now; its verdict may still be reported")
+}
+
+// OnResult stamps lastUsed too, so a verdict arriving after a release keeps postponing the pair's eviction.
+func TestAcquireKeepsAPairWhoseVerdictArrivedAfterItWasReleased(t *testing.T) {
+	t.Parallel()
+	clock := newMovingClock(testEpoch)
+	limiter := newTestLimiter(idleEvictionConfig(), clock.now)
+	require.True(t, limiter.Acquire("host-late-result", "model-a"))
+	limiter.Release("host-late-result", "model-a")
+
+	clock.advance(55 * time.Minute)
+	limiter.OnResult("host-late-result", "model-a", Success)
+
+	clock.advance(10 * time.Minute)
+	require.True(t, limiter.Acquire("host-trigger", "model-a"))
+
+	require.Len(t, limiter.Snapshot(), 2, "the verdict landed 10m ago, not 1h5m, because OnResult refreshed lastUsed")
 }
 
 // The scan runs under the limiter's one lock on the admission path, so it runs at most once per tenth of the window.

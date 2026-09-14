@@ -166,7 +166,7 @@ The one host judgement that *is* persisted is the operator's manual suspicious-h
 
 Two things the code does not state:
 
-- The participant limiter forgets a `{participant, model}` pair on the window the performance tracker ages hosts out on, `perf_host_staleness_seconds`, but only a pair with nothing in flight, no probe awaiting its verdict and no cut-off still running. The scan runs inside `Acquire`, at most once per tenth of the window, after the pair being admitted is marked used (`limits/participant.go`, `ParticipantLimiter.forgetIdleLocked`). A forgotten host that returns starts at the initial window with a closed breaker, as it would after a restart.
+- The participant limiter forgets a `{participant, model}` pair on the window the performance tracker ages hosts out on, `perf_host_staleness_seconds`, but only a pair with nothing in flight and no cut-off still running. The scan runs inside `Acquire`, at most once per tenth of the window, after the pair it is asked about is marked used (`limits/participant.go`, `ParticipantLimiter.forgetIdleLocked`). A forgotten host that returns starts at the initial window with a closed breaker, as it would after a restart.
 - Ejection thresholds are re-read from configuration on every sample, so they hot-reload — but a host's decay half-life is captured when the host is first seen, so a changed half-life applies only to hosts seen afterwards.
 
 ## Configuration

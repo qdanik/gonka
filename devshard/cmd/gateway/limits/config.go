@@ -33,7 +33,7 @@ func ParticipantConfigFromLimits(l config.Limits) ParticipantConfig {
 	}
 }
 
-// ParticipantConfigFromConfig forgets an idle pair on the window perf ages hosts out on. See capacity.md, "Nothing here is persisted".
+// ParticipantConfigFromConfig takes the idle window from perf_host_staleness_seconds. See capacity.md, "Nothing here is persisted".
 func ParticipantConfigFromConfig(configuration *config.Config) ParticipantConfig {
 	settings := ParticipantConfigFromLimits(configuration.Limits)
 	settings.IdleEviction = time.Duration(configuration.Perf.HostStalenessSeconds) * time.Second

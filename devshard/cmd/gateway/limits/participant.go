@@ -238,7 +238,7 @@ func (l *ParticipantLimiter) Release(participant, model string) {
 	state.lastUsed = l.now()
 }
 
-// forgetIdleLocked scans at most once per tenth of IdleEviction, and forgets only a pair with nothing in flight, no probe awaiting its verdict and no cut-off running. See capacity.md, "Nothing here is persisted".
+// See capacity.md, "Nothing here is persisted".
 func (l *ParticipantLimiter) forgetIdleLocked(now time.Time) {
 	idleFor := l.cfg.IdleEviction
 	if idleFor <= 0 || now.Sub(l.lastSweep) < idleFor/10 {
@@ -246,7 +246,7 @@ func (l *ParticipantLimiter) forgetIdleLocked(now time.Time) {
 	}
 	l.lastSweep = now
 	for tracked, state := range l.states {
-		if state.inflight == 0 && !state.halfOpen && !now.Before(state.openUntil) && now.Sub(state.lastUsed) > idleFor {
+		if state.inflight == 0 && !now.Before(state.openUntil) && now.Sub(state.lastUsed) > idleFor {
 			delete(l.states, tracked)
 		}
 	}

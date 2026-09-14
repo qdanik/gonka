@@ -45,7 +45,7 @@ The input-token cap only ever takes the second path.
 - **Backoff is `base * 1.6^count` plus up to 20% jitter** (gRPC connection-backoff's `JITTER`), so reopened cutoffs across many hosts do not retry in lockstep. The count stops rising once the backoff saturates at `MaxOpen`, so `1.6^count` cannot overflow the duration.
 - **`Available` peeks the admit decision** without touching in-flight, the cutoff, or creating state for a participant never seen before, which is what lets routing ask about a host it has never dispatched to.
 - **`Snapshot` is taken under one lock acquisition** and returned in participant/model order, so a report cannot mix two moments.
-- **A pair idle past `IdleEviction` is forgotten.** `Acquire` marks the pair it admits as used, then scans at most once per tenth of the window and drops only a pair with nothing in flight, no probe awaiting its verdict and no cut-off running, so a `Release` never lands on a state that is gone. The composition root sets the window to `perf_host_staleness_seconds` through `ParticipantConfigFromConfig`; zero keeps every pair.
+- **A pair idle past `IdleEviction` is forgotten.** `Acquire` marks the pair it is asked about as used, then scans at most once per tenth of the window and drops only a pair with nothing in flight and no cut-off running, so a `Release` never lands on a state that is gone. The composition root sets the window to `perf_host_staleness_seconds` through `ParticipantConfigFromConfig`; an `IdleEviction` of zero keeps every pair.
 
 ## When a host stops taking work
 
