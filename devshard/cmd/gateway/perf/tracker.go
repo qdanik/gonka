@@ -116,7 +116,7 @@ func (t *Tracker) RecordSample(s Sample) {
 	t.narrateEjectionTransition(key, host, now)
 }
 
-// narrateEjectionTransition reports a host that stopped or resumed taking work, and only on the change; the state moves with or without a narrator.
+// narrateEjectionTransition runs under t.mu and narrates HostWithheld or HostReturned only on the change; the state moves with or without a narrator.
 func (t *Tracker) narrateEjectionTransition(key hostKey, host *hostState, now time.Time) {
 	withheldNow := host.ejection.ejected(now)
 	switch {

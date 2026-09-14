@@ -25,6 +25,7 @@ import (
 	"devshard/cmd/gateway/engine"
 	"devshard/cmd/gateway/env"
 	"devshard/cmd/gateway/escrow"
+	"devshard/cmd/gateway/internal/logcapture"
 	"devshard/cmd/gateway/journal"
 	"devshard/cmd/gateway/limits"
 	"devshard/cmd/gateway/metrics"
@@ -1019,6 +1020,28 @@ func TestReconfiguringTheGatewayChangesTheCapTheNextRequestIsJudgedAgainst(t *te
 		t.Fatalf("second AcquireForModel() under a cap of 1 = %v, want a rate-limit error; the limiter never saw the new configuration", err)
 	}
 	composed.limiter.ReleaseForModel("model-a", 1)
+}
+
+// A limiter compose leaves without its narrator cuts hosts off in silence, so the composed limiter's cut-off must reach the journal.
+func TestTheComposedParticipantLimiterNarratesACutOffThroughTheJournal(t *testing.T) {
+	gatewayEnvironment(t)
+	logged := logcapture.Install(t)
+	composed := composedGateway(t)
+
+	for range composed.config.Load().Limits.HostCutoff.AfterFailures {
+		composed.participants.OnResult("gonka1aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "model-a", limits.TransportFault)
+	}
+	composed.events.Flush()
+
+	cutOff, found := logged.Find("host cut off after transport faults")
+	if !found {
+		t.Fatalf("no cut-off line among %+v: main.go did not bind the participant limiter's narrator to the journal", logged.All())
+	}
+	// The cut-off length carries jitter, so it is read back; every other field is pinned.
+	logged.RequireLine(t, logcapture.Entry{Level: "warn", Msg: "host cut off after transport faults", Fields: []any{
+		"host", "aaaaaaaa", "model", "model-a", "reason", "consecutive_transport_faults", "backoff_count", 1,
+		"cut_off_for_ms", logcapture.Field(cutOff, "cut_off_for_ms"),
+	}})
 }
 
 func TestSuspiciousHostsAreWrittenThroughToTheStoreTheEngineReadsFrom(t *testing.T) {

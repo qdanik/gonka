@@ -392,8 +392,16 @@ func TestASettleBroadcastIsNarratedBeforeItsCommitIsAwaited(t *testing.T) {
 			transport.setTx(txHashFromBytes(sent), TxResult{})
 		}
 	}
-	client := newFakeTxClient(t, transport)
-	client.narrator = narrator
+	client, err := NewTxClient(Config{
+		Transport:    transport,
+		PollInterval: time.Millisecond,
+		PollTimeout:  time.Second,
+		Now:          func() time.Time { return time.Unix(1_800_000_000, 0).UTC() },
+		Narrator:     narrator,
+	})
+	if err != nil {
+		t.Fatalf("NewTxClient: %v", err)
+	}
 
 	result, err := client.SettleEscrow(t.Context(), signer, fixedSettlementFull(), nil)
 

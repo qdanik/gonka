@@ -9,7 +9,7 @@ import (
 	"devshard/cmd/gateway/internal/logcapture"
 )
 
-// Each want is the line its producer used to write itself, key for key and type for type.
+// Each want pins one escrow transition's level, message and every key with its type.
 func TestEscrowTransitionsRenderTheLinesTheirProducersWrote(t *testing.T) {
 	closeFailure := errors.New("storage refused to close")
 	unverifiable := errors.New("slot 2 signature does not verify")
@@ -78,7 +78,7 @@ func TestEscrowTransitionsRenderTheLinesTheirProducersWrote(t *testing.T) {
 	}
 }
 
-// Each want is the line the escrow manager or the transaction client wrote, with the escrow id as text where it was a number.
+// Each want pins a line the escrow manager or the transaction client narrates, with the escrow id as text.
 func TestEscrowLifecycleTransitionsRenderTheLinesTheirProducersWrote(t *testing.T) {
 	tickFailure := errors.New("store unavailable")
 

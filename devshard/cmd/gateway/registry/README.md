@@ -46,7 +46,7 @@ Which escrows exist right now, what each serves, and who its hosts are.
 
 `Exhausted` reports an escrow routing declined as spent — out of nonces or out of deposit — to the rotation lifecycle, which is what replaces it.
 
-Each transition above — published, retired idle or draining, a drained escrow closed or failing to close — and a settlement payload that would not verify is narrated through `Deps.Narrator`, which the composition root binds to the journal. The narrator is called under the registry lock, so it must queue and return; a registry built without one behaves the same and says nothing.
+Each transition above — published, retired idle or draining, a drained escrow closed or failing to close — and a settlement payload that would not verify is narrated through `Deps.Narrator`, which the composition root binds to the journal. `Add` and `unpublish` call the narrator under the registry lock, so it must queue and return; a drained escrow's close and an unverifiable settlement are narrated with the lock free. A registry built without a narrator behaves the same and says nothing.
 
 ## The two session kinds
 

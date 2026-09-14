@@ -10,7 +10,7 @@ import (
 	"devshard/cmd/gateway/perf"
 )
 
-// Each want is the line its producer used to write itself, key for key and type for type.
+// Each want pins one host transition's level, message and every key with its type.
 func TestHostTransitionsRenderTheLinesTheirProducersWrote(t *testing.T) {
 	testCases := []struct {
 		name    string

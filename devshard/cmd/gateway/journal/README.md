@@ -1,6 +1,6 @@
 # `journal` — one ordered path to a log line or a ledger fact
 
-Race outcomes and race trace steps, request records, limiter refusals and uncached replies, burns and burn-budget trips, timeout votes, composed diffs' ledger facts, warmup probes, host transitions, escrow transitions, and nonces served on a host their request excluded all pass through here, in the order they happened; this package decides which of those become log lines and which the nonce ledger applies.
+Race outcomes and race trace steps, request records, limiter refusals and uncached replies, burns and burn-budget trips, timeout votes, composed diffs' ledger facts, warmup probes, host transitions, escrow transitions, chain transitions, and nonces served on a host their request excluded all pass through here, in the order they happened; this package decides which of those become log lines and which the nonce ledger applies.
 
 ## What it owns
 
@@ -15,7 +15,7 @@ Race outcomes and race trace steps, request records, limiter refusals and uncach
 - **It does not classify.** Which counter a nonce lands in is `accounting`'s decision.
 - **The sweep writes the ledger directly.** `Recorder.sweep` (`nonces/recorder.go`) calls `Book.OpenEscrow`, `MarkFinished`, the `Observe*` methods and `RetireEscrow` on its own goroutine, never through this package.
 - **The warmup's `OpenEscrow` is a direct write too.** `Prober.openLedger` (`warmup/warmup.go`) calls it itself, because the open must land before the probe reaches the ledger through the journal.
-- **Process, admin and store lines are written where they happen.** `gateway started`, `gateway stopped` and `gateway exited` (`lifecycle.go`, `main.go`), the boot republish and route-prefix lines (`devshards.go`), admin actions (`api/admin.go`, `api/errors.go`), and the nonce ledger's, accounting's and environment's own lines (`nonces`, `accounting`, `env`) call `logging` directly; no lifecycle producer does.
+- **Process, admin and store lines are written where they happen;** "Who may log directly" names the files.
 
 ## Boundaries
 
@@ -31,7 +31,7 @@ Race outcomes and race trace steps, request records, limiter refusals and uncach
 
 | Lane | Kinds | Refused when | Counted in |
 | --- | --- | --- | --- |
-| money (the spec's `record`) | `KindRaceReported`, `KindTimeoutVote`, `KindNonceBurned`, `KindBurnBudgetExhausted`, `KindDiffComposed`, `KindWarmupProbe`, `KindNonceStranded`, `KindHostDiverged`, `KindReplyNotCached`, `KindRequestFinished`, `KindEscrowTransition` | `MoneyCeiling` (100 000) money events are accepted and not yet delivered | `devshard_gateway_journal_money_refused_total` |
+| money (the spec's `record`) | `KindRaceReported`, `KindTimeoutVote`, `KindNonceBurned`, `KindBurnBudgetExhausted`, `KindDiffComposed`, `KindWarmupProbe`, `KindNonceStranded`, `KindHostDiverged`, `KindReplyNotCached`, `KindRequestFinished`, `KindHostTransition`, `KindExcludedHostServed`, `KindEscrowTransition`, `KindChainTransition` | `MoneyCeiling` (100 000) money events are accepted and not yet delivered | `devshard_gateway_journal_money_refused_total` |
 | progress (the spec's `offer`) | every other kind | `ProgressBacklog` (8 192) progress events are accepted and not yet delivered | `devshard_gateway_journal_progress_dropped_total` |
 
 Both lanes share one queue, so a line and a ledger fact keep the order they happened in. A lane releases an event when the consumer has delivered it, not when the consumer takes it out of the queue, so the batch being delivered still counts against its lane. A producer never waits: admission is an append under the journal's mutex, and a refusal is a counter. The queued value stays a few words wide: every payload wider than a few words is copied once by the producer method that receives it, outside the mutex, and queued as a pointer, so neither the append nor a growing queue copies a payload under the mutex. The money ceiling is not back-pressure; it bounds memory when the consumer is stuck, and a refused money-lane event is a ledger fact never applied or a money-path line never written (a stranded nonce, a divergent host, an uncached reply, a finished request's own record), which is why `Close` returns an error when any were refused. After the batch that follows a progress drop, the consumer writes one Warn line, `journal skipped progress lines`, with `skipped_lines`. That batch may be empty: the consumer does not wait while a drop is still unwritten, so the line reaches the log before `Flush` or `Close` returns. A drop never needs to wake the consumer, because a lane is full only while an event it counts is queued or being delivered, and the consumer sleeps only when neither holds.
@@ -40,7 +40,8 @@ Both lanes share one queue, so a line and a ledger fact keep the order they happ
 
 - **The consumer never holds the journal's mutex while it calls a sink.** It swaps the pending slice out under the mutex and delivers the batch outside it.
 - **The mutex guards a slice of small values.** A producer's payload is copied once, outside the mutex, when its method receives it; under the mutex only a pointer and a few scalars are appended, however long the queue grows.
-- **The session diff observer calls in under the session lock** (`devshard/user/session.go`, `SetDiffObserver`). `DiffComposed` counts the diff's ledger facts before it allocates, copies them into `DiffFact` values and appends one small event; the book's own lock is taken later, on the consumer, never under the session's. The observer's copy of the diff is its one allocation; `DiffComposed` adds none for a diff with no verdict and no applied timeout, and queues nothing.
+- **Five producers call in under their own lock.** The session diff observer under the session lock (`devshard/user/session.go`, `SetDiffObserver`); `perf.Tracker` under `t.mu`; `limits.ParticipantLimiter` under `l.mu`; the crown strikes under `crownStrikes.mu` (`engine/engine.go`); and `registry.Registry`'s `Add` and unpublish under `r.mu`. Each call ends in `emit`, which holds `j.mu` only to admit the event and takes no other lock under it, so `j.mu` is a leaf and no cycle can form.
+- **The diff observer allocates once.** `DiffComposed` counts the diff's ledger facts before it allocates, copies them into `DiffFact` values and appends one small event; the book's own lock is taken later, on the consumer, never under the session's. The observer's copy of the diff is its one allocation; `DiffComposed` adds none for a diff with no verdict and no applied timeout, and queues nothing.
 - **A slow ledger delays every line.** Lines and ledger facts share one consumer, so while `Book.Snapshot` holds the book's read lock the consumer waits on its next ledger fact, and progress lines past the backlog are dropped.
 - **A line's timestamp is when the consumer wrote it**, not when the step happened, and lines of different kinds can interleave differently than when each producer wrote its own.
 
@@ -48,11 +49,11 @@ Both lanes share one queue, so a line and a ledger fact keep the order they happ
 
 - **`Flush`** returns once every event accepted before the call has reached the sinks and every drop counted before it has been written in a skipped-lines warning. Tests call it before asserting; a sink must never call it.
 - **`Close`** refuses later events, drains what was accepted, writes the skipped-lines warning still owed, stops the consumer, and returns an error naming how many money-lane events were refused over the journal's life. A second call returns at once.
-- **An event after `Close`** reaches no sink. It is counted in `devshard_gateway_journal_late_events_total`, and the first of each kind is written straight to the log sink as the Error line `journal received an event after it closed` with its `kind`. Only work still running when the journal closes can be late: a timeout vote still posting after the `races` drain ran out of budget, an in-flight warmup probe, or a handler still running after the listener's shutdown.
+- **An event after `Close`** reaches no sink. It is counted in `devshard_gateway_journal_late_events_total`, and the first of each kind is written straight to the log sink as the Error line `journal received an event after it closed` with its `kind`. Only work still running when the journal closes can be late: a timeout vote still posting after the `races` drain ran out of budget, an in-flight warmup probe, a handler still running after the listener's shutdown, or the republish after a devshard write, whose goroutine `serve` awaits only after shutdown (`devshards.go`, `republishOnDevshardWrites`).
 
 ## Shutdown
 
-The `journal` step sits between `escrow sessions` and `nonce accounting` (`lifecycle.go`, `shutdownOrder`). Every producer stops above it and the ledger it feeds closes below it. It is not `needsQuiesced`: closing it destroys nothing a running step reads, and a late event is counted rather than lost unseen. The step closes through `closeWithin`: it waits for the drain up to the shutdown budget, and at least one second (`journalCloseFloor`) even when a drain step above spent the budget, then reports the step abandoned, so a sink that never returns cannot keep nonce accounting and the store from closing. A close that returns just as the budget runs out reports its own result, so a money-lane refusal is never replaced by the abandonment.
+The `journal` step sits between `escrow sessions` and `nonce accounting` (`lifecycle.go`, `shutdownOrder`). Every producer that owns a shutdown step stops above it and the ledger it feeds closes below it; the warmup, which is only cancelled, and the republish after a devshard write can still narrate after the journal closes, and such a line is counted as a late event. It is not `needsQuiesced`: closing it destroys nothing a running step reads, and a late event is counted rather than lost unseen. The step closes through `closeWithin`: it waits for the drain up to the shutdown budget, and at least one second (`journalCloseFloor`) even when a drain step above spent the budget, then reports the step abandoned, so a sink that never returns cannot keep nonce accounting and the store from closing. A close that returns just as the budget runs out reports its own result, so a money-lane refusal is never replaced by the abandonment.
 
 ## Kinds
 
@@ -73,10 +74,10 @@ The `journal` step sits between `escrow sessions` and `nonce accounting` (`lifec
 | `KindReplyNotCached` | `Server.chat` through `ReplyNotCached` (`api/routes.go`) | none | `a host stopped mid-answer: reply served, not cached`, Warn (`render_request.go`) |
 | `KindRequestFinished` | `Server.finishRequest` (`api/finish.go`) and the cache hit in `Server.chat` (`api/routes.go`), through `RequestFinished` | none | `request finished` (`render_request.go`): Info when the request went out clean, Warn with a race or delivery error; a cache hit writes the short shape with `outcome` `cache_hit` |
 | `KindRequestThrottled` | `Server.chat` through `RequestThrottled` (`api/routes.go`) | none | `gateway limiter turned a request away`, Warn (`render_request.go`) |
-| `KindHostTransition` | `perf.Tracker`, `limits.ParticipantLimiter`, `engine` crown strikes | none | host withheld and back, capability refusals, cut off and back, crown denied and restored |
-| `KindExcludedHostServed` | `tracedDispatches.ExcludedHostServed` (`observers.go`) | none | `nonce spent on a host the request excluded` |
-| `KindEscrowTransition` | `registry.Registry`, `publishEscrows` (`devshards.go`), `escrow.Manager`, `chain.TxClient`, `warmup.Prober` | none | escrow published, retired, drained, created, settled; boot and warmup failures |
-| `KindChainTransition` | the chain observer's health edge through `healthNarrator`; `phaseNarrator` (`observers.go`) for epoch and blocking changes | none | chain epoch, blocked and unblocked requests, snapshot stale and recovered |
+| `KindHostTransition` | `perf.Tracker`, `limits.ParticipantLimiter`, `engine` crown strikes | none | host withheld and back, capability refusals, cut off and back, crown denied and restored (`render_host.go`): Info, except `host withheld from routing`, `host cut off after transport faults` and `host denied the crown`, which are Warn |
+| `KindExcludedHostServed` | `tracedDispatches.ExcludedHostServed` (`observers.go`) | none | `nonce spent on a host the request excluded`, Info (`render_host.go`) |
+| `KindEscrowTransition` | `registry.Registry`, `publishEscrows` (`devshards.go`), `escrow.Manager`, `chain.TxClient`, `warmup.Prober` | none | escrow published, retired, drained, created, settled; boot and warmup failures (`render_escrow.go`, `render_warmup.go`): Info, except Warn for `settlement signatures did not verify`, `devshard cannot be served, marking inactive`, `commitment cleared`, `escrow gone from chain, taken out of service`, `escrow marked for replacement`, `escrow depleted with no replacement configured`, `rotation skipped, the network serves no such model`, `regular escrows promoted to temp`, `escrow warmup found no nonce to spend`, `escrow warmup could not open the escrow in the ledger` and a failed vote's `escrow warmup voted on its unfinished nonce`, and Error for `draining escrow failed to close, its storage stays held` and `escrow tick failed` |
+| `KindChainTransition` | the chain observer's health edge through `healthNarrator`; `phaseNarrator` (`observers.go`) for epoch and blocking changes | none | chain epoch, blocked and unblocked requests, snapshot stale and recovered (`render_chain.go`): Info, except `chain blocked requests` and `chain snapshot stale`, which are Warn |
 
 ## Absent subjects are omitted
 
@@ -88,35 +89,35 @@ A burn names the request it was spent during under `burned_during_request`: the 
 
 ## Lifecycle lines outside a race
 
-Host, escrow, chain and warmup transitions are decided in their own packages and written here. Each producer package declares a narrator interface over plain values that `*Journal` satisfies, so none imports `journal`; the composition root binds the journal where the producer is built (`SetNarrator`, `Deps.Narrator`, `Config.Narrator`, or a dispatch observer method).
+Host, escrow, chain and warmup transitions are decided in their own packages and written here. Each producer package declares a narrator interface over plain values that `*Journal` satisfies, so none imports `journal`; the composition root binds the journal where the producer is built (`SetNarrator`, `Deps.Narrator`, `Config.Narrator`, a dispatch observer method, or `publishEscrows`' function value `unservable`, the journal's `EscrowUnservable`).
 
 A narrator method copies its arguments into a render closure and hands it to `emitLine`; the consumer runs the closure against the log sink. These lines feed only the log, are rare, and each renders one message, so a typed payload per line would triple the code with no second reader. What to write — an omitted nil error, a Warn for a failed vote — is decided inside the closure, here.
 
 | Producer | Narrator | Kind | Lane |
 | --- | --- | --- | --- |
-| `perf.Tracker` | `hostNarrator`, bound by `SetNarrator` | `KindHostTransition` | progress |
-| `limits.ParticipantLimiter` | `cutoffNarrator`, bound by `SetNarrator` | `KindHostTransition` | progress |
-| `engine` crown strikes | `crownNarrator`, part of `raceJournal` | `KindHostTransition` | progress |
-| `scheduler` dispatcher | `dispatchObserver.ExcludedHostServed`, through `tracedDispatches` | `KindExcludedHostServed` | progress |
+| `perf.Tracker` | `hostNarrator`, bound by `SetNarrator` | `KindHostTransition` | money |
+| `limits.ParticipantLimiter` | `cutoffNarrator`, bound by `SetNarrator` | `KindHostTransition` | money |
+| `engine` crown strikes | `crownNarrator`, part of `raceJournal` | `KindHostTransition` | money |
+| `scheduler` dispatcher | `dispatchObserver.ExcludedHostServed`, through `tracedDispatches` | `KindExcludedHostServed` | money |
 | `registry.Registry` | `escrowNarrator`, bound by `Deps.Narrator` | `KindEscrowTransition` | money |
 | `publishEscrows` (`devshards.go`) | `unservable`, the journal's `EscrowUnservable` | `KindEscrowTransition` | money |
 | `escrow.Manager` | `lifecycleNarrator`, bound by `Deps.Narrator` | `KindEscrowTransition` | money |
 | `chain.TxClient` | `settlementNarrator`, bound by `Config.Narrator` | `KindEscrowTransition` | money |
 | `warmup.Prober` | `warmupNarrator`, bound by `SetNarrator` | `KindEscrowTransition` | money |
-| `chain.PhaseObserver` | `healthNarrator`, bound by `SetNarrator` | `KindChainTransition` | progress |
-| `phaseNarrator` (`observers.go`) | none: the composition root may import `journal`, so it calls the chain methods directly | `KindChainTransition` | progress |
+| `chain.PhaseObserver` | `healthNarrator`, bound by `SetNarrator` | `KindChainTransition` | money |
+| `phaseNarrator` (`observers.go`) | none: the composition root may import `journal`, so it calls the chain methods directly | `KindChainTransition` | money |
 
-Host transitions ride the progress lane: they follow the host count and the backoff, never the request rate, and one dropped in a flood is counted like any other progress line.
+Host, excluded-host and chain transitions ride the money lane, because operators read them exactly when the consumer lags. Host and chain transitions follow edges — the host count and the backoff, and the chain poll — while an excluded-host serve follows served nonces, so it moves with the request rate; their volume stays far inside `MoneyCeiling`.
 
 Escrow transitions ride the money lane: `escrow settled` is the audit record of funds leaving and `settled escrow record dropped` names the only key that could settle an escrow, so neither may be dropped in a flood of progress lines. Their volume follows the escrow tick, far below `MoneyCeiling`.
 
 ## Nil errors are omitted
 
-An error key is written only when there is an error. `escrow warmup found no nonce to spend` from a probe that failed without one carries no `error`, and `escrow warmed` carries `catch_up_error` only when the catch-up failed. A nil error rendered as `error=<nil>` in text and `"error":null` in JSON, which a search for failing warmups matched. The warmup's own vote is written at Warn when it failed, as a race's failed vote is, and at Info otherwise.
+An error key is written only when there is an error. `escrow warmup found no nonce to spend` from a probe that failed without one carries no `error`, and `escrow warmed` carries `catch_up_error` only when the catch-up failed. A nil error written as a value reads `error=<nil>` in text and `"error":null` in JSON, which a search for failing warmups matches. The warmup's own vote is written at Warn when it failed, as a race's failed vote is, and at Info otherwise.
 
 ## Chain transitions
 
-The chain observer and `phaseNarrator` keep deciding what moved, both on the observer's publishing goroutine: the observer compares each publish's `LastError` with the last one and narrates a turn to stale or recovered, and `phaseNarrator` compares epoch and phase, blocking state and reason. The journal only renders what it is handed. `publish` narrates health before it notifies subscribers, so the health line is queued before the epoch line of the same snapshot, the order the observer used when it wrote the health line itself. `ChainEpoch` writes nothing for epoch 0, which only a poll that never read the epoch publishes — a silence rule decided inside its closure, like the ones `renderTimeoutVote` applies. `phaseNarrator` still records that snapshot, so the next one that carries an epoch is a change and is announced.
+The chain observer and `phaseNarrator` keep deciding what moved, both on the observer's publishing goroutine: the observer keeps only whether the last publish was degraded, that is carried a `LastError`, and narrates a turn to stale or recovered only when that flips, so one error followed by another is no turn; `phaseNarrator` compares epoch and phase, blocking state and reason. The journal only renders what it is handed. `publish` narrates health before it notifies subscribers, so the health line is queued before the epoch line of the same snapshot. `ChainEpoch` writes nothing for epoch 0, which only a poll that never read the epoch publishes — a silence rule decided inside its closure, like the ones `renderTimeoutVote` applies. `phaseNarrator` still records that snapshot, so the next one that carries an epoch is a change and is announced.
 
 ## Who may log directly
 

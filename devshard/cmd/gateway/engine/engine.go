@@ -380,7 +380,7 @@ func (o RaceOutcome) everyAttempt(holds func(AttemptOutcome) bool) bool {
 	return true
 }
 
-// crownNarrator hears the two edges of crown denial; it is called under the strikes' lock, so it must queue and return. See race.md, "Crown denial".
+// crownNarrator hears the two edges of crown denial, under crownStrikes.mu. See README.md, "Crown denial".
 type crownNarrator interface {
 	HostDeniedCrown(participant, model string, strikes int)
 	HostCrownedAgain(participant, model string)

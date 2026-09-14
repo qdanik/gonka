@@ -327,7 +327,8 @@ func TestEveryKindHasANameAndTheLaneTheSpecAssigns(t *testing.T) {
 	moneyLane := map[Kind]bool{
 		KindRaceReported: true, KindTimeoutVote: true, KindNonceBurned: true, KindBurnBudgetExhausted: true,
 		KindDiffComposed: true, KindWarmupProbe: true, KindNonceStranded: true, KindHostDiverged: true,
-		KindReplyNotCached: true, KindRequestFinished: true, KindEscrowTransition: true,
+		KindReplyNotCached: true, KindRequestFinished: true, KindHostTransition: true, KindExcludedHostServed: true,
+		KindEscrowTransition: true, KindChainTransition: true,
 	}
 	for kind := KindRaceReported; kind < kindCount; kind++ {
 		require.NotEqual(t, "unknown", kind.String(), "kind %d has no name", kind)

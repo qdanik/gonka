@@ -352,7 +352,7 @@ type snapshotHealth struct {
 	degraded bool
 }
 
-// healthChange separates the decision from the logging, so writing nothing while a failure persists is testable.
+// healthChange separates the decision from the narration, so narrating nothing while a failure persists is testable.
 type healthChange struct {
 	degraded  bool
 	recovered bool

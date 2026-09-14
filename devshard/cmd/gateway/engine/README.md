@@ -85,7 +85,7 @@ The coordinator answers claims in `answer`: an unknown nonce or an already-crown
 
 Only attempts that say something about the host are observed: it answered with content, or it claimed to serve and produced none. A dial failure, a stranded nonce or a cancelled client says neither, and clearing the host's strikes on one would hand it a clean record it did not earn.
 
-`crownStrikes` narrates the two edges — denied at the third content-free answer, restored by the next answer with content — through `Deps.Journal`, whose `raceJournal` interface includes `crownNarrator`. The journal writes `host denied the crown` and `host crowned again`; a nil journal leaves the strikes working and silent.
+`crownStrikes` narrates the two edges — denied at the third content-free answer, restored by the next answer with content — through `Deps.Journal`, whose `raceJournal` interface includes `crownNarrator`. `Observe` calls `HostDeniedCrown` and `HostCrownedAgain` while it holds `crownStrikes.mu`, so the narrator must queue and return: the journal only appends the event, and its own lock is a leaf that takes no other lock ([`journal/README.md`](../journal/README.md), "Order and the locks it takes"). The journal writes `host denied the crown` and `host crowned again`; a nil journal leaves the strikes working and silent.
 
 ## Classification and reassembly
 

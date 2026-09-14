@@ -23,8 +23,8 @@ import (
 	"devshard/types"
 )
 
-// journalLifecycleMethods are the exported methods that write no line of their own.
-var journalLifecycleMethods = []string{"Close", "Counts", "Flush"}
+// methodsThatWriteNoLine are the exported methods that write no line of their own.
+var methodsThatWriteNoLine = []string{"Close", "Counts", "Flush"}
 
 // declaredKeys reads internal/logkey's string constants, so the vocabulary keeps one definition.
 func declaredKeys(t *testing.T) map[string]bool {
@@ -182,7 +182,7 @@ func TestEveryProducerMethodIsSampled(t *testing.T) {
 
 	for index := range journalType.NumMethod() {
 		name := journalType.Method(index).Name
-		if slices.Contains(journalLifecycleMethods, name) {
+		if slices.Contains(methodsThatWriteNoLine, name) {
 			continue
 		}
 		if _, sampled := samples[name]; !sampled {

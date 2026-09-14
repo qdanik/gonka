@@ -62,7 +62,7 @@ func (k Kind) onMoneyLane() bool {
 	switch k {
 	case KindRaceReported, KindTimeoutVote, KindNonceBurned, KindBurnBudgetExhausted, KindDiffComposed,
 		KindWarmupProbe, KindNonceStranded, KindHostDiverged, KindReplyNotCached, KindRequestFinished,
-		KindEscrowTransition:
+		KindHostTransition, KindExcludedHostServed, KindEscrowTransition, KindChainTransition:
 		return true
 	}
 	return false

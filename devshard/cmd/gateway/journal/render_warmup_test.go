@@ -9,7 +9,7 @@ import (
 	"devshard/cmd/gateway/internal/logcapture"
 )
 
-// Each want is the warmup's line after L6 and L13; the comments name what the line carried before.
+// Each want pins a warmup line: a nil error writes no error key, and a failed vote writes Warn.
 func TestWarmupTransitionsRenderWithoutNilErrorsAndWithAFailedVoteAtWarn(t *testing.T) {
 	probeFailure := errors.New("host stopped answering")
 	catchUpFailure := errors.New("catch-up timed out")
@@ -21,7 +21,7 @@ func TestWarmupTransitionsRenderWithoutNilErrorsAndWithAFailedVoteAtWarn(t *test
 		want    logcapture.Entry
 	}{
 		{
-			name:    "no nonce and no error: before, it carried error nil",
+			name:    "no nonce and no error carries no error key",
 			produce: func(events *Journal) { events.WarmupFoundNoNonce("escrow-1", nil) },
 			want:    logcapture.Entry{Level: "warn", Msg: "escrow warmup found no nonce to spend", Fields: []any{"escrow", "escrow-1"}},
 		},
@@ -33,7 +33,7 @@ func TestWarmupTransitionsRenderWithoutNilErrorsAndWithAFailedVoteAtWarn(t *test
 			}},
 		},
 		{
-			name:    "warmed with a clean catch-up: before, it carried catch_up_error nil",
+			name:    "warmed with a clean catch-up carries no catch_up_error key",
 			produce: func(events *Journal) { events.EscrowWarmed("escrow-1", "model-a", 7, true, nil) },
 			want: logcapture.Entry{Level: "info", Msg: "escrow warmed", Fields: []any{
 				"escrow", "escrow-1", "model", "model-a", "nonce", uint64(7), "served", true,
@@ -61,7 +61,7 @@ func TestWarmupTransitionsRenderWithoutNilErrorsAndWithAFailedVoteAtWarn(t *test
 			}},
 		},
 		{
-			name:    "a failed vote: before, it was info",
+			name:    "a failed vote is warn",
 			produce: func(events *Journal) { events.WarmupVoted("escrow-1", 7, "failed", "timeout_collection_error") },
 			want: logcapture.Entry{Level: "warn", Msg: "escrow warmup voted on its unfinished nonce", Fields: []any{
 				"escrow", "escrow-1", "nonce", uint64(7), "action", "failed", "reason", "timeout_collection_error",

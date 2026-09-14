@@ -141,7 +141,7 @@ Two hooks are called from the request path — `OnEscrowMissing` and `OnBalanceE
 - `escrowTxClient`, satisfied by `*chain.TxClient`. `TxCommitted` is what tells a row still marked pending apart from one whose settle genuinely failed: the settle may have reached the chain after the wait gave up.
 - `escrowStore`, satisfied by `*store.Store`; `snapshotSource`, satisfied by `*chain.PhaseObserver`.
 - `SettlementSource`, wired by `api/` to the live engine runtime. `Retire` is synchronous — no nonce can be committed on the escrow after it returns — and that is what makes `IsBusy` monotone, so an idle answer stays true until the settlement it gates is broadcast. `Finalize` is idempotent.
-- **A narrator** (`Deps.Narrator`, satisfied by the journal) hears every transition an operator reads the log for — created, recovered, cleared, gone, marked, parked, settled, reconciled, dropped, bridged, a failed tick and a sweep that found work. The package writes no line itself, and every escrow id it hands over is the text form the rest of the gateway uses.
+- **A narrator** (`Deps.Narrator`, satisfied by the journal) hears every transition an operator reads the log for — created, recovered, cleared, gone, marked, depleted with no replacement, rotation skipped, regulars promoted to temp, bridged, parked, settled, reconciled, dropped, a failed tick and a sweep that found work. The package writes no line itself, and every escrow id it hands over is the text form the rest of the gateway uses.
 - `ModelConfig`'s json tags are the `GATEWAY_ROTATION_MODELS_JSON` wire contract and are not renameable.
 
 ## Read next

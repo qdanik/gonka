@@ -40,6 +40,20 @@ func TestAnEscrowAtItsBurnBudgetSaysSo(t *testing.T) {
 	}})
 }
 
+// The line is the only record that a request's exclusion lapsed, so its escrow and host must not trade places.
+func TestANonceSpentOnAnExcludedHostNamesItsEscrowAndHost(t *testing.T) {
+	logged := logcapture.Install(t)
+	events := newTestJournal(t)
+	dispatches := tracedDispatches{recorder: metrics.NewDispatchRecorder(metrics.New()), events: events}
+
+	dispatches.ExcludedHostServed("escrow-1", "gonka1bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+	events.Flush()
+
+	logged.RequireLine(t, logcapture.Entry{Level: "info", Msg: "nonce spent on a host the request excluded", Fields: []any{
+		"escrow", "escrow-1", "host", "bbbbbbbb",
+	}})
+}
+
 // A warmup vote reaches the ledger through RecordProbeTimeout, not RecordTimeout, so it never writes the race vote's own line.
 func TestAFailedWarmupVoteWritesNoTimeoutVoteLine(t *testing.T) {
 	logged := logcapture.Install(t)

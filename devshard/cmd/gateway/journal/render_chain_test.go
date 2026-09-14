@@ -9,7 +9,7 @@ import (
 	"devshard/cmd/gateway/internal/logcapture"
 )
 
-// Each want is the line observers.go or chain/observer.go wrote before the move, key for key and type for type.
+// Each want pins one chain transition's level, message and every key with its type.
 func TestChainTransitionsRenderTheLinesTheirProducersWrote(t *testing.T) {
 	testCases := []struct {
 		name    string
@@ -66,7 +66,7 @@ func TestChainTransitionsRenderTheLinesTheirProducersWrote(t *testing.T) {
 	}
 }
 
-// A first poll that failed publishes a snapshot with no epoch; announcing epoch 0 read as a chain that had restarted.
+// A first poll that failed publishes a snapshot with epoch 0, which announces no epoch: epoch 0 reads as a restarted chain.
 func TestAnEpochlessSnapshotAnnouncesNoEpoch(t *testing.T) {
 	lines := &logcapture.Recorder{}
 	events := newJournal(t, Settings{Lines: lines})
@@ -74,5 +74,5 @@ func TestAnEpochlessSnapshotAnnouncesNoEpoch(t *testing.T) {
 	events.ChainEpoch(0, "", 0, 0)
 	events.Flush()
 
-	require.Empty(t, lines.All(), "before this task, a snapshot with epoch 0 wrote chain epoch")
+	require.Empty(t, lines.All(), "a snapshot with epoch 0 writes no chain epoch line")
 }

@@ -116,7 +116,7 @@ A failure in steps 3 or 4 shuts down cleanly rather than serving half-built.
 | 4 | escrow lifecycle | no rotation starts mid-drain |
 | 5 | chain observer | nothing above still needs a snapshot |
 | 6 | escrow sessions | **destroys state** the steps above may still use |
-| 7 | journal | every producer above has stopped; it drains its queue into the ledger below, waiting for whatever budget remains and up to one more second when a drain above has spent it, and counts anything later |
+| 7 | journal | every producer with a shutdown step above has stopped; it drains its queue into the ledger below, waiting for whatever budget remains, or for one second when the steps above leave less, and counts anything later as a late event, such as a line from the warmup, which is only cancelled, or from the republish after a devshard write |
 | 8 | nonce accounting | after every emitter, so the final snapshot holds the counters the run ended with |
 | 9 | store | every step above may still write to it |
 | 10 | public API connections | every step above can still reach it; closing earlier just forces a re-dial |
@@ -125,7 +125,7 @@ A failure in steps 3 or 4 shuts down cleanly rather than serving half-built.
 
 Each drain is bounded by the grace period but **not cancelled** by it — a step that runs out of time is reported as "abandoned with work still running" rather than killed mid-vote.
 
-The `journal` step (7) is bounded the same way, but with a floor: it waits for its queue for whatever budget remains, and for up to one more second when a drain above it has spent the whole grace period, so its queue can still reach the ledger, and a close that outlasts both is reported as "abandoned with events still queued".
+The `journal` step (7) is bounded the same way, but with a floor: it waits for its queue for whatever budget remains, or for one second whenever the steps above it leave less than one second of the grace period, so its queue can still reach the ledger, and a close that outlasts that wait is reported as "abandoned with events still queued".
 
 ## Logs
 
@@ -155,7 +155,7 @@ Follow one request by grepping its request id; follow one nonce through commit, 
 
 ### When a host stops taking work
 
-Three mechanisms withhold work from a host, each on its own trigger, and each is a gauge in Prometheus. A gauge is sampled every 15 or 30 seconds while the first rung of two of them lasts 30 seconds and 5 seconds, so the shortest withholdings pass entirely between two scrapes. Each therefore also writes one line on the edge, and nothing in between: the volume follows the number of hosts and their own windows, never the request rate.
+Three mechanisms withhold work from a host, each on its own trigger, and each is a gauge in Prometheus. A gauge is sampled every 15 or 30 seconds while the first rung of two of them lasts 30 seconds and 5 seconds, so the shortest withholdings pass entirely between two scrapes. Each producer therefore also narrates each edge through the journal, which writes one line for it, and nothing in between: the volume follows the number of hosts and their own windows, never the request rate.
 
 | Line | Trigger | Carries |
 | --- | --- | --- |
@@ -205,7 +205,7 @@ The record carries no request or response body — capture files exist for that,
 | `chain epoch` / `chain blocked requests` / `chain unblocked requests` | written on the **edge** only: `phaseNarrator` (`observers.go`) decides the change and the journal writes it; a snapshot that carries no epoch — a first poll that failed — announces none |
 | `admin request failed` / `admin request refused` (`api/errors.go`) | the operator mutation lines are written on the successful path only, so a failed operator action would otherwise be invisible |
 
-`escrow` is always the escrow id as text. The chain hands `escrow created`, `escrow recovered from commitment` and `settle tx broadcast` the id as a number, and `escrow/` and `chain/` convert it before the journal writes it, because a JSON collector reads a number as a different type from every other line's `escrow`.
+`escrow` is always the escrow id as text. The chain carries the id behind `escrow created`, `escrow recovered from commitment` and `settle tx broadcast` as a number, and `escrow/` and `chain/` convert it to text before the journal writes it, because a JSON collector reads a number as a different type from every other line's `escrow`.
 
 Admin lines carry the action and its subject, **never the request body** — an override payload can hold the admin key. An unkeyed call on an operator route is refused 401 and written down: that is the shape an intrusion attempt takes.
 
