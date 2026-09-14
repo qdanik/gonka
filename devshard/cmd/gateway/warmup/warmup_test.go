@@ -267,7 +267,7 @@ func TestAnEscrowThatAlreadyServedIsNeitherProbedNorCaughtUp(t *testing.T) {
 	warmup.warm("escrow-1", "test-model")
 
 	if len(ledger.probes) != 0 || *caughtUp != 0 {
-		t.Errorf("races = %d, catch-ups = %d, want 0 and 0: its hosts already hold the escrow", len(ledger.probes), *caughtUp)
+		t.Errorf("probes = %d, catch-ups = %d, want 0 and 0: its hosts already hold the escrow", len(ledger.probes), *caughtUp)
 	}
 }
 

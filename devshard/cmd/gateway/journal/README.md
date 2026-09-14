@@ -1,6 +1,6 @@
-# `journal` — one path from a lifecycle step to its log line and its ledger fact
+# `journal` — one ordered path to a log line or a ledger fact
 
-Every lifecycle step of a request, attempt, nonce, timeout vote and escrow drain passes through here once; this package alone decides which steps become log lines and which the nonce ledger applies, in the order they happened.
+Race outcomes and race trace steps, request records, limiter refusals and uncached replies, burns and burn-budget trips, timeout votes, composed diffs' ledger facts, and warmup probes all pass through here, in the order they happened; this package decides which of those become log lines and which the nonce ledger applies.
 
 ## What it owns
 
@@ -13,6 +13,9 @@ Every lifecycle step of a request, attempt, nonce, timeout vote and escrow drain
 - **Nothing is persisted.** An event lives in memory between the producer's call and its delivery. At two to three million nonces a day an event row per step would cost about 10 GB a day, so the ledger keeps its per-escrow counters and the logs keep their handler.
 - **Metrics stay synchronous.** A recorder in `metrics` is still called by the producer; only lines and ledger facts are queued.
 - **It does not classify.** Which counter a nonce lands in is `accounting`'s decision.
+- **The sweep writes the ledger directly.** `Recorder.sweep` (`nonces/recorder.go`) calls `Book.OpenEscrow`, `MarkFinished`, the `Observe*` methods and `RetireEscrow` on its own goroutine, never through this package.
+- **The warmup's `OpenEscrow` is a direct write too.** `Prober.openLedger` (`warmup/warmup.go`) calls it itself, because the open must land before the probe reaches the ledger through the journal.
+- **A few lifecycle lines are still written by their own packages.** The journal is not yet the only writer of lifecycle lines: the escrow drain lines in `registry/`, the dispatcher's excluded-host line (`scheduler/dispatcher_queue.go`), and the crown-strike lines (`engine/engine.go`) are examples.
 
 ## Boundaries
 
@@ -37,7 +40,7 @@ Both lanes share one queue, so a line and a ledger fact keep the order they happ
 
 - **The consumer never holds the journal's mutex while it calls a sink.** It swaps the pending slice out under the mutex and delivers the batch outside it.
 - **The mutex guards a slice of small values.** A producer's payload is copied once, outside the mutex, when its method receives it; under the mutex only a pointer and a few scalars are appended, however long the queue grows.
-- **The session diff observer calls in under the session lock** (`devshard/user/session.go`, `SetDiffObserver`). `DiffComposed` counts the diff's ledger facts before it allocates, copies them into `DiffFact` values and appends one small event; the book's own lock is taken later, on the consumer, never under the session's. A diff with no verdict and no applied timeout allocates nothing and is not queued.
+- **The session diff observer calls in under the session lock** (`devshard/user/session.go`, `SetDiffObserver`). `DiffComposed` counts the diff's ledger facts before it allocates, copies them into `DiffFact` values and appends one small event; the book's own lock is taken later, on the consumer, never under the session's. The observer's copy of the diff is its one allocation; `DiffComposed` adds none for a diff with no verdict and no applied timeout, and queues nothing.
 - **A slow ledger delays every line.** Lines and ledger facts share one consumer, so while `Book.Snapshot` holds the book's read lock the consumer waits on its next ledger fact, and progress lines past the backlog are dropped.
 - **A line's timestamp is when the consumer wrote it**, not when the step happened, and lines of different kinds can interleave differently than when each producer wrote its own.
 
@@ -45,7 +48,7 @@ Both lanes share one queue, so a line and a ledger fact keep the order they happ
 
 - **`Flush`** returns once every event accepted before the call has reached the sinks and every drop counted before it has been written in a skipped-lines warning. Tests call it before asserting; a sink must never call it.
 - **`Close`** refuses later events, drains what was accepted, writes the skipped-lines warning still owed, stops the consumer, and returns an error naming how many money-lane events were refused over the journal's life. A second call returns at once.
-- **An event after `Close`** reaches no sink. It is counted in `devshard_gateway_journal_late_events_total`, and the first of each kind is written straight to the log sink as the Error line `journal received an event after it closed` with its `kind`. Only work a shutdown step abandoned can be late: a timeout vote still posting after the `races` drain ran out of budget, or a warmup goroutine.
+- **An event after `Close`** reaches no sink. It is counted in `devshard_gateway_journal_late_events_total`, and the first of each kind is written straight to the log sink as the Error line `journal received an event after it closed` with its `kind`. Only work still running when the journal closes can be late: a timeout vote still posting after the `races` drain ran out of budget, an in-flight warmup probe, or a handler still running after the listener's shutdown.
 
 ## Shutdown
 

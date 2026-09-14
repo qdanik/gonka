@@ -212,7 +212,7 @@ func (w *Prober) record(escrowID string, nonce uint64, acknowledged bool, probeE
 	})
 }
 
-// Serve and Settle are late bindings. See README.md, "Boundaries worth knowing".
+// Serve and Settle are late bindings. See README.md, "Boundaries".
 func (w *Prober) Serve(escrows Escrows) {
 	if w != nil {
 		w.escrows = escrows

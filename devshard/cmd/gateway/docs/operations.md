@@ -105,7 +105,7 @@ A failure in steps 3 or 4 shuts down cleanly rather than serving half-built.
 
 ## Shutdown
 
-`lifecycle.go`, `shutdownOrder`. Ten steps, in this order, bounded as a whole by the grace period:
+`lifecycle.go`, `shutdownOrder`. Ten steps, in this order, bounded by the grace period, with up to one more second from the journal step's floor:
 
 | # | Step | Why here |
 | --- | --- | --- |
@@ -115,7 +115,7 @@ A failure in steps 3 or 4 shuts down cleanly rather than serving half-built.
 | 4 | escrow lifecycle | no rotation starts mid-drain |
 | 5 | chain observer | nothing above still needs a snapshot |
 | 6 | escrow sessions | **destroys state** the steps above may still use |
-| 7 | journal | every producer above has stopped; it drains its queue into the ledger below within the budget, and at least one second, and counts anything later |
+| 7 | journal | every producer above has stopped; it drains its queue into the ledger below, waiting for whatever budget remains and up to one more second when a drain above has spent it, and counts anything later |
 | 8 | nonce accounting | after every emitter, so the final snapshot holds the counters the run ended with |
 | 9 | store | every step above may still write to it |
 | 10 | public API connections | every step above can still reach it; closing earlier just forces a re-dial |
@@ -124,7 +124,7 @@ A failure in steps 3 or 4 shuts down cleanly rather than serving half-built.
 
 Each drain is bounded by the grace period but **not cancelled** by it — a step that runs out of time is reported as "abandoned with work still running" rather than killed mid-vote.
 
-The `journal` step (7) is bounded the same way, with a one-second floor: it waits at least that long even when a drain above it spent the grace period, so its queue can still reach the ledger, and a close that outlasts both is reported as "abandoned with events still queued".
+The `journal` step (7) is bounded the same way, but with a floor: it waits for its queue for whatever budget remains, and for up to one more second when a drain above it has spent the whole grace period, so its queue can still reach the ledger, and a close that outlasts both is reported as "abandoned with events still queued".
 
 ## Logs
 
@@ -142,9 +142,11 @@ Always on, with no level knob — a trace that ships off by default is not there
 
 The journal's consumer writes these lines, so under load, or while the nonce ledger copies itself for a snapshot, it can drop `nonce committed` and `attempt finished` — counted in `devshard_gateway_journal_progress_dropped_total` and announced by `journal skipped progress lines` — while `nonce stranded` is refused only past the money ceiling.
 
+A line the journal writes is stamped when the journal's consumer writes it, not when the event happened, so it can trail — for example, while the consumer waits for the nonce ledger's lock as `Book.Snapshot` copies the ledger. Journal lines keep their order among themselves. Lines written directly — the shared `devshard/user` session lines and the few lifecycle lines not yet routed through the journal — are stamped when they happen, so the two can interleave out of order. `duration_ms` and the other `*_ms` fields are measured at the event, and are the timings to trust.
+
 Follow one request by grepping its request id; follow one nonce through commit, dispatch and verdict by grepping the nonce.
 
-`attempt finished` carries the terminal **the attempt itself reported**. A goroutine sees only its own cancellation, so the coordinator reclassifies at the end of the race — an attempt that outlived the backstop becomes `hard_timeout`, a host that went silent mid-stream becomes `stalled` — while the line still reads `client_cancelled`, because that is what the attempt saw.
+`attempt finished` carries the coordinator's reading of the attempt at the moment it completed: `racedTerminal` (`engine/report.go`) makes a backstopped attempt read `hard_timeout`, a stalled one `stalled`, and the winner `won`. Only a later `abandonedByHosts` reclassification, made once the whole race has finished, reaches the ledger without reaching this line.
 
 ### When a host stops taking work
 

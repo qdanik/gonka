@@ -334,3 +334,27 @@ func TestEveryKindHasANameAndTheLaneTheSpecAssigns(t *testing.T) {
 		require.Equal(t, moneyLane[kind], kind.onMoneyLane(), "kind %s is on the wrong lane", kind)
 	}
 }
+
+func TestRaceStepKindMapsEveryStepToItsLane(t *testing.T) {
+	testCases := []struct {
+		name     string
+		step     engine.RaceStepKind
+		wantKind Kind
+		money    bool
+	}{
+		{name: "nonce committed stays on the progress lane", step: engine.RaceStepNonceCommitted, wantKind: KindNonceCommitted, money: false},
+		{name: "escalation unfilled stays on the progress lane", step: engine.RaceStepEscalationUnfilled, wantKind: KindEscalationUnfilled, money: false},
+		{name: "attempt crowned stays on the progress lane", step: engine.RaceStepAttemptCrowned, wantKind: KindAttemptCrowned, money: false},
+		{name: "attempt finished stays on the progress lane", step: engine.RaceStepAttemptFinished, wantKind: KindAttemptFinished, money: false},
+		{name: "nonce stranded rides the money lane", step: engine.RaceStepNonceStranded, wantKind: KindNonceStranded, money: true},
+		{name: "host blocked rides the money lane", step: engine.RaceStepHostBlocked, wantKind: KindHostDiverged, money: true},
+		{name: "host rewound rides the money lane", step: engine.RaceStepHostRewound, wantKind: KindHostDiverged, money: true},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			got := raceStepKind(testCase.step)
+			require.Equal(t, testCase.wantKind, got)
+			require.Equal(t, testCase.money, got.onMoneyLane(), "kind %s is on the wrong lane", got)
+		})
+	}
+}

@@ -244,7 +244,7 @@ func (j *Journal) emit(entry queuedEvent) {
 	j.mu.Unlock()
 }
 
-// run is the only goroutine that reaches a sink, so the sinks see events in the order they were accepted.
+// run is the only goroutine that reaches the ledger, so the ledger sees events in the order they were accepted.
 func (j *Journal) run() {
 	defer close(j.done)
 	for {

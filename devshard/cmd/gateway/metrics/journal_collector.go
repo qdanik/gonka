@@ -22,7 +22,7 @@ func NewJournalCollector(counts func() JournalCounts) *JournalCollector {
 		counts:          counts,
 		moneyRefused:    counterDesc("devshard_gateway_journal_money_refused_total", "Money-lane events the journal refused past its ceiling: a nonce, burn or vote the nonce ledger never applied, or a money-path line never written."),
 		progressDropped: counterDesc("devshard_gateway_journal_progress_dropped_total", "Progress lines the journal dropped while its consumer was behind."),
-		lateEvents:      counterDesc("devshard_gateway_journal_late_events_total", "Events that reached the journal after it closed, from work a shutdown step abandoned."),
+		lateEvents:      counterDesc("devshard_gateway_journal_late_events_total", "Events that reached the journal after it closed, from work still running when the journal closes."),
 	}
 }
 
