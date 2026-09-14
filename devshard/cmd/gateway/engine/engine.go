@@ -308,7 +308,7 @@ func (e *Engine) settle(outcome RaceOutcome, params any, registration *raceRegis
 	}
 	go func() {
 		defer registration.release()
-		for _, event := range SettleTimeouts(context.Background(), poster, outcome) {
+		for _, event := range SettleTimeouts(settleContext(outcome.RequestID), poster, outcome) {
 			if e.deps.Metrics != nil {
 				e.deps.Metrics.RecordTimeout(event)
 			}

@@ -6,6 +6,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
+
+	"devshard/logging"
 	"devshard/user"
 )
 
@@ -311,4 +314,27 @@ func TestSettleTimeoutsCarriesTheVerifierFailureItWasGiven(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestEveryTimeoutEventNamesTheRequestThatOwedIt(t *testing.T) {
+	events := settleEvents(race(unsettledAttempt()), &stubPoster{})
+
+	require.Len(t, events, 2)
+	require.Equal(t, "req-1", events[0].RequestID)
+	require.Equal(t, "req-1", events[1].RequestID)
+}
+
+// The shared session writes its timeout stages with the context it is handed; this is the only way they learn the request.
+func TestTheSettleContextCarriesTheRequestIntoTheSharedStages(t *testing.T) {
+	requestID, carried := logging.RequestID(settleContext("req-9"))
+
+	require.True(t, carried)
+	require.Equal(t, "req-9", requestID)
+}
+
+// logging.WithRequestID mints an id for an empty one, which would stamp a vote with a request that never existed.
+func TestTheSettleContextOfAnUnnamedRaceCarriesNoRequest(t *testing.T) {
+	_, carried := logging.RequestID(settleContext(""))
+
+	require.False(t, carried)
 }

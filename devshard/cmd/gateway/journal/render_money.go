@@ -24,15 +24,20 @@ func renderBurnBudgetExhausted(lines logSink, escrowID string) {
 	lines.Warn("escrow stopped burning nonces at its budget", logkey.Escrow, escrowID)
 }
 
-// renderTimeoutVote reports a race vote that never reached the chain. See docs/race.md, "Timeout votes".
+// renderTimeoutVote reports a vote that never reached the chain, naming its request when it has one. See race.md, "Timeout votes".
 func renderTimeoutVote(lines logSink, vote *engine.TimeoutEvent) {
 	if vote.Action != engine.TimeoutActionFailed || vote.Reason == engine.TimeoutReasonEscrowGone {
 		return
 	}
-	lines.Warn("timeout vote failed",
+	fields := make([]any, 0, 14)
+	if vote.RequestID != "" {
+		fields = append(fields, logkey.Request, vote.RequestID)
+	}
+	fields = append(fields,
 		logkey.Escrow, vote.EscrowID, logkey.Nonce, vote.Nonce,
 		logkey.Host, logkey.ShortHost(vote.Participant), logkey.Model, vote.Model,
 		logkey.Kind, vote.Kind, logkey.Reason, vote.Reason)
+	lines.Warn("timeout vote failed", fields...)
 }
 
 // renderProbeRefused names the warmup nonce the ledger refused; nothing else records it.

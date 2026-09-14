@@ -5,6 +5,7 @@ import (
 	"errors"
 	"time"
 
+	"devshard/logging"
 	"devshard/user"
 )
 
@@ -18,6 +19,7 @@ type TimeoutVote struct {
 }
 
 type TimeoutEvent struct {
+	RequestID   string
 	EscrowID    string
 	Participant string
 	Model       string
@@ -80,6 +82,7 @@ func (o RaceOutcome) TimeoutPlan() []TimeoutStep {
 			Nonce:     attempt.Nonce,
 			StartedAt: attempt.StartedAt,
 			Event: TimeoutEvent{
+				RequestID:   o.RequestID,
 				EscrowID:    o.EscrowID,
 				Participant: attempt.Participant,
 				Model:       o.Model,
@@ -144,4 +147,13 @@ func firstNamed(detail, fallback string) string {
 		return detail
 	}
 	return fallback
+}
+
+// settleContext carries the race's request id into the shared session's timeout stages; an empty id adds none. See README, "Timeout votes".
+func settleContext(requestID string) context.Context {
+	if requestID == "" {
+		return context.Background()
+	}
+	withRequest, _ := logging.WithRequestID(context.Background(), requestID)
+	return withRequest
 }
