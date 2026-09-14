@@ -12,12 +12,8 @@ const (
 	// The request-level "failure" has no engine counterpart: attempts report failed, requests failure.
 	outcomeFailure = "failure"
 
-	pathKindInference = "inference"
 	// statusNoCode is legacy's label for an attempt that failed without an upstream status.
 	statusNoCode = "0"
-
-	// hiddenFailureSeverity is the only severity legacy ever emitted.
-	hiddenFailureSeverity = "protected"
 
 	reasonNone             = "none"
 	reasonNoAttempts       = "no_attempts"
@@ -33,20 +29,15 @@ var chunkGapBuckets = prometheus.ExponentialBuckets(0.005, 2, 15)
 
 // RaceRecorder satisfies the engine's metrics hook. See operations.md, "Metrics".
 type RaceRecorder struct {
-	attemptsStarted   *prometheus.CounterVec
-	attemptsTerminal  *prometheus.CounterVec
-	attemptFailures   *prometheus.CounterVec
-	noWinnerAttempts  *prometheus.CounterVec
-	userVisibleWins   *prometheus.CounterVec
-	transportErrors   *prometheus.CounterVec
-	requests          *prometheus.CounterVec
-	criticalFailures  *prometheus.CounterVec
-	hiddenFailures    *prometheus.CounterVec
-	escalations       *prometheus.CounterVec
-	sweeps            *prometheus.CounterVec
-	timeoutActions    *prometheus.CounterVec
-	inferenceTimeouts *prometheus.CounterVec
-	carryOverflows    *prometheus.CounterVec
+	attemptsStarted  *prometheus.CounterVec
+	attemptsTerminal *prometheus.CounterVec
+	attemptFailures  *prometheus.CounterVec
+	transportErrors  *prometheus.CounterVec
+	requests         *prometheus.CounterVec
+	hiddenFailures   *prometheus.CounterVec
+	sweeps           *prometheus.CounterVec
+	timeoutActions   *prometheus.CounterVec
+	carryOverflows   *prometheus.CounterVec
 
 	receiptSeconds  *prometheus.HistogramVec
 	firstContent    *prometheus.HistogramVec
@@ -71,46 +62,26 @@ func NewRaceRecorder(telemetry *Metrics) *RaceRecorder {
 			Name: "devshard_gateway_attempt_failures_total",
 			Help: "Total failed gateway attempts by bounded failure reason and visibility.",
 		}, []string{"participant_key", "model", "role", "reason", "visibility"}),
-		noWinnerAttempts: prometheus.NewCounterVec(prometheus.CounterOpts{
-			Name: "devshard_gateway_no_winner_attempts_total",
-			Help: "Total attempts whose output could be given to nobody, by participant, model, and reason.",
-		}, []string{"participant_key", "model", "reason"}),
-		userVisibleWins: prometheus.NewCounterVec(prometheus.CounterOpts{
-			Name: "devshard_gateway_user_visible_wins_total",
-			Help: "Total user-visible winning responses by participant and model.",
-		}, []string{"participant_key", "model"}),
 		transportErrors: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "devshard_gateway_participant_transport_errors_total",
-			Help: "Total participant-bound request errors by participant, model, request kind, and upstream status.",
-		}, []string{"participant_key", "model", "path_kind", "status"}),
+			Help: "Total participant-bound request errors by participant, model, and upstream status.",
+		}, []string{"participant_key", "model", "status"}),
 		requests: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "devshard_gateway_requests_total",
 			Help: "Total gateway chat requests by model, user-visible outcome, and bounded reason.",
 		}, []string{"model", "outcome", "reason"}),
-		criticalFailures: prometheus.NewCounterVec(prometheus.CounterOpts{
-			Name: "devshard_gateway_critical_user_failures_total",
-			Help: "Total critical user-visible gateway failures by model and bounded reason.",
-		}, []string{"model", "reason"}),
 		hiddenFailures: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "devshard_gateway_user_requests_with_hidden_failure_total",
 			Help: "Total successful user requests that hid a gateway-visible attempt failure.",
-		}, []string{"model", "severity", "reason"}),
+		}, []string{"model", "reason"}),
 		sweeps: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "devshard_gateway_timeout_sweep_total",
-			Help: "Total execution-timeout votes the escrow tick's sweep found, applied and failed to apply.",
+			Help: "Total execution-timeout votes the escrow tick's sweep applied and failed to apply.",
 		}, []string{"outcome"}),
-		escalations: prometheus.NewCounterVec(prometheus.CounterOpts{
-			Name: "devshard_gateway_escalation_decisions_total",
-			Help: "Total escalation-policy decisions by reason.",
-		}, []string{"reason"}),
 		timeoutActions: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "devshard_gateway_timeout_actions_total",
 			Help: "Total nonce timeout-vote actions by participant, model, kind, action, and reason.",
 		}, []string{"participant_key", "model", "kind", "action", "reason"}),
-		inferenceTimeouts: prometheus.NewCounterVec(prometheus.CounterOpts{
-			Name: "devshard_inference_timeouts_total",
-			Help: "Total handled inference timeouts by reason.",
-		}, []string{"reason"}),
 		carryOverflows: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "devshard_gateway_stream_carry_overflow_total",
 			Help: "Total SSE reassembly buffers that overflowed their carry budget.",
@@ -156,20 +127,18 @@ func NewRaceRecorder(telemetry *Metrics) *RaceRecorder {
 
 func (r *RaceRecorder) collectors() []prometheus.Collector {
 	return []prometheus.Collector{
-		r.attemptsStarted, r.attemptsTerminal, r.attemptFailures, r.noWinnerAttempts,
-		r.userVisibleWins, r.transportErrors, r.requests, r.criticalFailures, r.hiddenFailures,
-		r.escalations, r.timeoutActions, r.inferenceTimeouts, r.carryOverflows, r.sweeps,
+		r.attemptsStarted, r.attemptsTerminal, r.attemptFailures, r.transportErrors, r.requests,
+		r.hiddenFailures, r.timeoutActions, r.carryOverflows, r.sweeps,
 		r.receiptSeconds, r.firstContent, r.prefillPerToken, r.outputTokens, r.totalAttempt,
 		r.maxChunkGap, r.meanChunkGap,
 	}
 }
 
-// RecordSweep counts one tick of the execution-timeout sweep; a tick that found nothing moves no series.
+// RecordSweep counts what one tick of the execution-timeout sweep applied and failed; a tick that found nothing moves no series.
 func (r *RaceRecorder) RecordSweep(due, applied, failed int) {
 	if due <= 0 {
 		return
 	}
-	r.sweeps.WithLabelValues(sweepOutcomeDue).Add(float64(due))
 	r.sweeps.WithLabelValues(sweepOutcomeApplied).Add(float64(applied))
 	r.sweeps.WithLabelValues(sweepOutcomeFailed).Add(float64(failed))
 }
@@ -191,21 +160,14 @@ func (r *RaceRecorder) RecordRace(outcome engine.RaceOutcome) {
 			reason := metricLabel(labels.Reason, labelUnknown)
 			r.attemptFailures.WithLabelValues(participant, model, role, reason, labels.Visibility).Inc()
 			if status, upstream := transportStatus(attempt); upstream {
-				r.transportErrors.WithLabelValues(participant, model, pathKindInference, status).Inc()
+				r.transportErrors.WithLabelValues(participant, model, status).Inc()
 			}
 			if firstFailure == "" {
 				firstFailure = reason
 			}
 		}
-		switch labels.Visibility {
-		case engine.VisibilityWinner:
-			r.userVisibleWins.WithLabelValues(participant, model).Inc()
-		case engine.VisibilityNoWinner:
-			r.noWinnerAttempts.WithLabelValues(participant, model, metricLabel(labels.Reason, labelUnknown)).Inc()
-		}
 		r.observeAttemptLatency(participant, model, outcome.InputTokens, attempt)
 	}
-	r.escalations.WithLabelValues(metricLabel(outcome.Decision, labelUnknown)).Inc()
 	r.recordRequest(model, outcome, firstFailure)
 }
 
@@ -213,13 +175,11 @@ func (r *RaceRecorder) recordRequest(model string, outcome engine.RaceOutcome, f
 	if outcome.Succeeded {
 		r.requests.WithLabelValues(model, engine.AttemptOutcomeSuccess, reasonNone).Inc()
 		if firstFailure != "" {
-			r.hiddenFailures.WithLabelValues(model, hiddenFailureSeverity, firstFailure).Inc()
+			r.hiddenFailures.WithLabelValues(model, firstFailure).Inc()
 		}
 		return
 	}
-	reason := raceFailureReason(outcome, firstFailure)
-	r.requests.WithLabelValues(model, outcomeFailure, reason).Inc()
-	r.criticalFailures.WithLabelValues(model, reason).Inc()
+	r.requests.WithLabelValues(model, outcomeFailure, raceFailureReason(outcome, firstFailure)).Inc()
 }
 
 func raceFailureReason(outcome engine.RaceOutcome, firstFailure string) string {
@@ -275,15 +235,13 @@ func (r *RaceRecorder) observeAttemptLatency(participant, model string, inputTok
 }
 
 func (r *RaceRecorder) RecordTimeout(event engine.TimeoutEvent) {
-	participant := metricLabel(event.Participant, labelUnknown)
-	model := metricLabel(event.Model, labelUnknown)
-	reason := metricLabel(event.Reason, reasonNone)
 	r.timeoutActions.WithLabelValues(
-		participant, model, metricLabel(event.Kind, labelUnknown), metricLabel(event.Action, labelUnknown), reason,
+		metricLabel(event.Participant, labelUnknown),
+		metricLabel(event.Model, labelUnknown),
+		metricLabel(event.Kind, labelUnknown),
+		metricLabel(event.Action, labelUnknown),
+		metricLabel(event.Reason, reasonNone),
 	).Inc()
-	if event.Action == engine.TimeoutActionCompleted || event.Action == engine.TimeoutActionFailed {
-		r.inferenceTimeouts.WithLabelValues(reason).Inc()
-	}
 }
 
 func (r *RaceRecorder) RecordClassifyOverflow(participant, model string) {

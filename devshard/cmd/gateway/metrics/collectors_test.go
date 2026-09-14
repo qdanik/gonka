@@ -197,10 +197,9 @@ func TestTheRegistryCollectorReportsEveryPublishedEscrow(t *testing.T) {
 	expectGauge(t, telemetry, "devshard_runtime_active_requests", labels{"devshard_id": "7", "model": "qwen"}, 3)
 	expectGauge(t, telemetry, "devshard_gateway_escrow_weight", labels{"devshard_id": "7"}, 42)
 	expectGauge(t, telemetry, "devshard_gateway_escrow_blocked_participants", labels{"devshard_id": "7", "model": "qwen"}, 1)
-	expectGauge(t, telemetry, "devshard_gateway_escrow_participant_limited", labels{"devshard_id": "7", "model": "qwen"}, 1)
 	expectGauge(t, telemetry, "devshard_gateway_escrow_blocked_participants", labels{"devshard_id": "9", "model": "qwen"}, 0)
-	expectGauge(t, telemetry, "devshard_gateway_escrow_participant_limited", labels{"devshard_id": "9", "model": "qwen"}, 0)
 	expectCounter(t, telemetry, "devshard_gateway_escrow_drain_close_failures_total", labels{}, 4)
+	expectAbsent(t, telemetry, "devshard_gateway_escrow_participant_limited")
 }
 
 func TestTheRegistryCollectorIsSilentOnAnEmptyRegistry(t *testing.T) {

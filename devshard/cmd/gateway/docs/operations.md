@@ -195,8 +195,8 @@ Admin lines carry the action and its subject, **never the request body** — an 
 
 | Question | Series |
 | --- | --- |
-| is the gateway serving | `devshard_gateway_requests_total`, `devshard_http_request_duration_seconds`, `devshard_gateway_user_visible_wins_total` |
-| is it hiding failures | `devshard_gateway_critical_user_failures_total`, `devshard_gateway_user_requests_with_hidden_failure_total`, `devshard_gateway_no_winner_attempts_total` |
+| is the gateway serving | `devshard_gateway_requests_total`, `devshard_http_request_duration_seconds`, `devshard_gateway_attempts_terminal_total{visibility="user_visible_winner"}` |
+| is it hiding failures | `devshard_gateway_requests_total{outcome="failure"}`, `devshard_gateway_user_requests_with_hidden_failure_total`, `devshard_gateway_attempt_failures_total{visibility="no_winner"}` |
 | is it admitting or refusing | `devshard_gateway_limit_rejections_total`, `devshard_gateway_limiter_queue_depth`, `devshard_gateway_effective_max_concurrent_requests`, `devshard_gateway_inflight_requests` |
 | how are the hosts | `devshard_gateway_participant_*` (receipt, first content, inter-chunk, transport errors), `devshard_gateway_host_ejected`, `devshard_gateway_participant_window_size` |
 | is money leaking | `devshard_gateway_ghost_nonces_burned_total`, `devshard_gateway_nonce_holds_total`, `devshard_gateway_timeout_actions_total`, `devshard_gateway_burn_budget_exhausted_total` |
@@ -209,6 +209,25 @@ Admin lines carry the action and its subject, **never the request body** — an 
 ### Cardinality rules
 
 Route labels are **templated** (`/devshard/{id}/…`), never per-escrow, so cardinality does not grow with the escrow set. `/v1/admin/devshards/import` reports under the `/v1/admin/devshards/{id}` label so it lands in the same panel. Every label value is kept non-empty (`metrics/labels.go`): an empty label silently merges unrelated series, and a status with no recoverable code reports as `statusNoCode` rather than as blank.
+
+### Metric changes
+
+Dashboards and alerts outside this repository may still read what was removed here. Each row names what to query instead.
+
+| Removed | Query instead |
+| --- | --- |
+| `devshard_gateway_no_winner_attempts_total` | `devshard_gateway_attempt_failures_total{visibility="no_winner"}`; an answer that arrived complete and reached nobody is `devshard_gateway_attempts_terminal_total{visibility="no_winner",outcome="success"}` |
+| `devshard_gateway_user_visible_wins_total` | `devshard_gateway_attempts_terminal_total{visibility="user_visible_winner"}` |
+| `devshard_gateway_critical_user_failures_total` | `devshard_gateway_requests_total{outcome="failure"}` |
+| `devshard_inference_timeouts_total` | `devshard_gateway_timeout_actions_total{action=~"completed\|failed"}` |
+| `devshard_gateway_escrow_participant_limited` | `devshard_gateway_escrow_blocked_participants > bool 0` |
+| `devshard_gateway_escalation_decisions_total` | `devshard_gateway_attempts_started_total{role="speculative"}` by `reason`; the removed family carried the race's start plan, never what triggered an escalation |
+
+Two labels and one label value no longer exist, and a selector that names one matches nothing:
+
+- `path_kind` on `devshard_gateway_participant_transport_errors_total`, which was always `inference`.
+- `severity` on `devshard_gateway_user_requests_with_hidden_failure_total`, which was always `protected`.
+- `outcome="due"` on `devshard_gateway_timeout_sweep_total`: `applied` plus `failed` is what a tick found, short of it only on a tick that shutdown cut off mid-round.
 
 ## Reading the gateway's state
 

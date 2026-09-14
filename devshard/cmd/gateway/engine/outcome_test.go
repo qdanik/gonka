@@ -465,7 +465,7 @@ func TestLabels(t *testing.T) {
 		}},
 		{"shadow-quarantined host another attempt served for", race(cleanAttempt()), suspicious, AttemptLabels{
 			Participant: testParticipant, Model: testModel, Role: "primary",
-			Outcome: "success", Visibility: "no_winner", Reason: reasonCrownDenied,
+			Outcome: "success", Visibility: "no_winner",
 		}},
 		{"shadow-quarantined host that served alone", race(suspiciousWinner), suspiciousWinner, AttemptLabels{
 			Participant: testParticipant, Model: testModel, Role: "primary",
