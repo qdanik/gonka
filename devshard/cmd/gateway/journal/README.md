@@ -118,6 +118,12 @@ An error key is written only when there is an error. `escrow warmup found no non
 
 The chain observer and `phaseNarrator` keep deciding what moved, both on the observer's publishing goroutine: the observer compares each publish's `LastError` with the last one and narrates a turn to stale or recovered, and `phaseNarrator` compares epoch and phase, blocking state and reason. The journal only renders what it is handed. `publish` narrates health before it notifies subscribers, so the health line is queued before the epoch line of the same snapshot, the order the observer used when it wrote the health line itself. `ChainEpoch` writes nothing for epoch 0, which only a poll that never read the epoch publishes — a silence rule decided inside its closure, like the ones `renderTimeoutVote` applies. `phaseNarrator` still records that snapshot, so the next one that carries an epoch is a change and is announced.
 
+## Who may log directly
+
+Lifecycle packages — `engine`, `scheduler`, `registry`, `escrow`, `perf`, `limits`, `chain`, `warmup`, `api` and `observers.go` — write no line themselves: a line written around the journal leaves out of order with the trace it belongs to and skips the lane that counts what was dropped. `guard_test.go` fails on any `logging.Info`, `Warn`, `Error` or `Debug` call there, under any import alias. `api/admin.go` and `api/errors.go` stay plain, because an operator's own action and a refused admin call belong to no lifecycle. Outside those packages `main.go`, `lifecycle.go`, `devshards.go`, `env/`, `nonces/` and `accounting/` log directly, none of them a lifecycle line — the refused warmup probe reaches the log through the journal's `renderProbeRefused`, not through `nonces` — and `internal/logkey/logkey_test.go` keeps checking their literal keys.
+
+`guard_test.go` also fails when a producer package imports `journal`; each declares the narrator interface it calls. `keys_test.go` drives every exported producer method once with its widest input and fails on a rendered key `internal/logkey` does not declare, and on a producer method added without a sample, so the check cannot skip a new line. Its journal has a ledger that refuses the probe, so the refused-probe line is checked as well.
+
 ## Read next
 
 - [`nonces/README.md`](../nonces/README.md) — the ledger sink.
