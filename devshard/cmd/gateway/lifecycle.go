@@ -12,6 +12,9 @@ import (
 	"devshard/logging"
 )
 
+// journalCloseFloor lets the journal drain even after a drain step above it spent the whole budget.
+const journalCloseFloor = time.Second
+
 func (g *gateway) serve(ctx context.Context) error {
 	backgroundCtx, stopBackground := context.WithCancel(ctx)
 	defer stopBackground()
@@ -75,8 +78,8 @@ type stopper interface{ Stop() }
 // idleConnections is satisfied by *http.Client, whose pooled sockets nothing above it closes.
 type idleConnections interface{ CloseIdleConnections() }
 
-// shutdownOrder is the nine-step contract every shutdown follows. See operations.md, "Shutdown".
-func shutdownOrder(listener httpListener, races, dispatchers, escrowLifecycle, chainObserver stopper, sessions, nonceLedger, storage io.Closer, publicAPI idleConnections) []shutdownStep {
+// shutdownOrder is the ten-step contract every shutdown follows. See operations.md, "Shutdown".
+func shutdownOrder(listener httpListener, races, dispatchers, escrowLifecycle, chainObserver stopper, sessions, events, nonceLedger, storage io.Closer, publicAPI idleConnections) []shutdownStep {
 	return []shutdownStep{
 		{name: "http server", stop: listener.Shutdown},
 		{name: "races", stop: waitFor(races)},
@@ -84,6 +87,8 @@ func shutdownOrder(listener httpListener, races, dispatchers, escrowLifecycle, c
 		{name: "escrow lifecycle", stop: waitFor(escrowLifecycle)},
 		{name: "chain observer", stop: waitFor(chainObserver)},
 		{name: "escrow sessions", stop: closeOf(sessions), needsQuiesced: true},
+		// After every producer above and before the ledger it drains into, bounded so a stuck sink cannot hold the steps below. See README.md, "Shutdown".
+		{name: "journal", stop: closeWithin(events, journalCloseFloor)},
 		// After every emitter above, so the final snapshot holds the counters the run ended with.
 		{name: "nonce accounting", stop: closeOf(nonceLedger)},
 		{name: "store", stop: closeOf(storage)},
@@ -108,6 +113,27 @@ func waitFor(component stopper) func(context.Context) error {
 
 func closeOf(component io.Closer) func(context.Context) error {
 	return func(context.Context) error { return component.Close() }
+}
+
+// closeWithin bounds a close by the shutdown budget, and by at least floor, as waitFor bounds a drain. See README.md, "Shutdown".
+func closeWithin(component io.Closer, floor time.Duration) func(context.Context) error {
+	return func(ctx context.Context) error {
+		closed := make(chan error, 1)
+		go func() { closed <- component.Close() }()
+		floorTimer := time.NewTimer(floor)
+		defer floorTimer.Stop()
+		select {
+		case err := <-closed:
+			return err
+		case <-floorTimer.C:
+		}
+		select {
+		case err := <-closed:
+			return err
+		case <-ctx.Done():
+			return fmt.Errorf("abandoned with events still queued: %w", ctx.Err())
+		}
+	}
 }
 
 func closeIdle(component idleConnections) func(context.Context) error {
@@ -137,7 +163,7 @@ func stopAll(ctx context.Context, steps []shutdownStep) error {
 func (g *gateway) shutdown(grace time.Duration) error {
 	drainCtx, cancelDrain := context.WithTimeout(context.Background(), grace)
 	defer cancelDrain()
-	return stopAll(drainCtx, shutdownOrder(g.server, g.races, g.router, g.manager, g.observer, g.escrows, g.nonces, g.store, g.publicAPI))
+	return stopAll(drainCtx, shutdownOrder(g.server, g.races, g.router, g.manager, g.observer, g.escrows, g.events, g.nonces, g.store, g.publicAPI))
 }
 
 // bootBudget sizes the build limit and the idle pool those builds reuse together. See README.md, "Wiring order, and the knots in it".

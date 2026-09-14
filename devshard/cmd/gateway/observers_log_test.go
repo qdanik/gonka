@@ -11,7 +11,7 @@ import (
 // A burned nonce is money spent on nobody; the line is the only place its nonce is named.
 func TestABurnedNonceIsLoggedWithTheEscrowItCostAndWhy(t *testing.T) {
 	logged := logcapture.Install(t)
-	dispatches := tracedDispatches{recorder: metrics.NewDispatchRecorder(metrics.New())}
+	dispatches := tracedDispatches{recorder: metrics.NewDispatchRecorder(metrics.New()), events: newTestJournal(t)}
 
 	dispatches.GhostBurned("escrow-1", scheduler.Burn{
 		Nonce: 5, Participant: "gonka1bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", Reason: "participant_throttled_no_send",
@@ -24,7 +24,7 @@ func TestABurnedNonceIsLoggedWithTheEscrowItCostAndWhy(t *testing.T) {
 
 func TestAnEscrowAtItsBurnBudgetSaysSo(t *testing.T) {
 	logged := logcapture.Install(t)
-	dispatches := tracedDispatches{recorder: metrics.NewDispatchRecorder(metrics.New())}
+	dispatches := tracedDispatches{recorder: metrics.NewDispatchRecorder(metrics.New()), events: newTestJournal(t)}
 
 	dispatches.BurnBudgetExhausted("escrow-1")
 

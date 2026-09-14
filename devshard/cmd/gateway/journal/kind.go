@@ -1,0 +1,60 @@
+package journal
+
+// Kind is one lifecycle step the journal orders. See README.md, "Kinds".
+type Kind uint8
+
+const (
+	KindRaceReported Kind = iota + 1
+	KindTimeoutVote
+	KindNonceBurned
+	KindBurnBudgetExhausted
+	KindDiffComposed
+	KindWarmupProbe
+	KindNonceStranded
+	KindHostDiverged
+	KindReplyNotCached
+	KindNonceCommitted
+	KindEscalationUnfilled
+	KindAttemptCrowned
+	KindAttemptFinished
+	KindRequestFinished
+	KindRequestThrottled
+)
+
+// kindCount is one past the last kind, so a table indexed by kind has a slot for each.
+const kindCount = KindRequestThrottled + 1
+
+var kindNames = [kindCount]string{
+	KindRaceReported:        "race_reported",
+	KindTimeoutVote:         "timeout_vote",
+	KindNonceBurned:         "nonce_burned",
+	KindBurnBudgetExhausted: "burn_budget_exhausted",
+	KindDiffComposed:        "diff_composed",
+	KindWarmupProbe:         "warmup_probe",
+	KindNonceStranded:       "nonce_stranded",
+	KindHostDiverged:        "host_diverged",
+	KindReplyNotCached:      "reply_not_cached",
+	KindNonceCommitted:      "nonce_committed",
+	KindEscalationUnfilled:  "escalation_unfilled",
+	KindAttemptCrowned:      "attempt_crowned",
+	KindAttemptFinished:     "attempt_finished",
+	KindRequestFinished:     "request_finished",
+	KindRequestThrottled:    "request_throttled",
+}
+
+func (k Kind) String() string {
+	if k == 0 || k >= kindCount {
+		return "unknown"
+	}
+	return kindNames[k]
+}
+
+// onMoneyLane reports a kind refused only past the money ceiling. See README.md, "Two lanes".
+func (k Kind) onMoneyLane() bool {
+	switch k {
+	case KindRaceReported, KindTimeoutVote, KindNonceBurned, KindBurnBudgetExhausted, KindDiffComposed,
+		KindWarmupProbe, KindNonceStranded, KindHostDiverged, KindReplyNotCached:
+		return true
+	}
+	return false
+}

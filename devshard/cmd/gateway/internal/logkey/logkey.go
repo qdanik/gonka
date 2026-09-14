@@ -118,4 +118,6 @@ const (
 	Route       = "route"
 	Method      = "method"
 	Status      = "status"
+
+	SkippedLines = "skipped_lines"
 )

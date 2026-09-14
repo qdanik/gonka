@@ -20,6 +20,7 @@ import (
 	"devshard/cmd/gateway/env"
 	"devshard/cmd/gateway/escrow"
 	"devshard/cmd/gateway/internal/logkey"
+	"devshard/cmd/gateway/journal"
 	"devshard/cmd/gateway/limits"
 	"devshard/cmd/gateway/metrics"
 	"devshard/cmd/gateway/nonces"
@@ -93,6 +94,7 @@ type gateway struct {
 	server       *http.Server
 	publicAPI    *http.Client
 	nonces       *nonces.Recorder
+	events       *journal.Journal
 	warmup       *warmup.Prober
 
 	builders     int
@@ -144,6 +146,14 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 	}
 
 	recorder := nonces.Open(configuration.NonceAccounting, storageDir, observer, clock)
+	events := journal.New(journalSettings(recorder))
+	// A composed gateway closes the journal in shutdownOrder; a failed compose closes it here.
+	built := false
+	defer func() {
+		if !built {
+			_ = events.Close()
+		}
+	}()
 
 	participants := limits.NewParticipantLimiter(limits.ParticipantConfigFromConfig(configuration), clock)
 	capacity := limits.NewCapacity(participants.Available)
@@ -183,6 +193,7 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 		Depletion:    depletion,
 		Dispatches:   metrics.NewDispatchRecorder(telemetry),
 		Ledger:       recorder,
+		Journal:      events,
 		Now:          clock,
 	})
 	if err != nil {
@@ -224,7 +235,7 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 
 	sessions := api.NewSessions(escrows)
 	// The warmup and the burn charge both vote through the poster and observer the race already uses.
-	raceObserver := nonceAccountedRaces{recorder: raceRecorder, ledger: recorder}
+	raceObserver := nonceAccountedRaces{recorder: raceRecorder, events: events}
 	prober.Settle(sessions.Poster, raceObserver)
 	e2e := env.LoadE2E()
 	races, err := engine.NewEngine(engine.Deps{
@@ -266,6 +277,7 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 		metrics.NewChainCollector(observer, clock),
 		metrics.NewTransportCollector(transport.DefaultHostConnectionTracker()),
 		metrics.NewAccountingCollector(ledger),
+		metrics.NewJournalCollector(journalCounts(events)),
 	)
 
 	server, err := api.New(api.Deps{
@@ -304,6 +316,7 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 	telemetry.Register(metrics.NewCaptureCollector(server))
 	telemetry.Register(metrics.NewCacheCollector(server))
 
+	built = true
 	return &gateway{
 		config:       configHolder,
 		store:        gatewayStore,
@@ -318,6 +331,7 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 		server:       server.HTTPServer(fmt.Sprintf(":%d", configuration.Server.Port)),
 		publicAPI:    boot.client,
 		nonces:       recorder,
+		events:       events,
 		warmup:       prober,
 		builders:     boot.builders,
 		devshardWork: devshardWork,
@@ -335,6 +349,7 @@ type routingDeps struct {
 	Depletion    *depletionNotice
 	Dispatches   *metrics.DispatchRecorder
 	Ledger       *nonces.Recorder
+	Journal      *journal.Journal
 	Now          func() time.Time
 }
 
@@ -362,7 +377,7 @@ func newRouting(deps routingDeps) (*registry.Registry, *scheduler.Scheduler, *wa
 		Perf:              deps.Hosts,
 		Snapshots:         deps.Snapshots,
 		Config:            deps.Config,
-		Observer:          tracedDispatches{recorder: deps.Dispatches, ledger: deps.Ledger},
+		Observer:          tracedDispatches{recorder: deps.Dispatches, events: deps.Journal},
 		Now:               deps.Now,
 		OnEscrowExhausted: escrows.Exhausted,
 	})

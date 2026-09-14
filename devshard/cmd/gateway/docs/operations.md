@@ -105,7 +105,7 @@ A failure in steps 3 or 4 shuts down cleanly rather than serving half-built.
 
 ## Shutdown
 
-`lifecycle.go`, `shutdownOrder`. Nine steps, in this order, bounded as a whole by the grace period:
+`lifecycle.go`, `shutdownOrder`. Ten steps, in this order, bounded as a whole by the grace period:
 
 | # | Step | Why here |
 | --- | --- | --- |
@@ -115,9 +115,10 @@ A failure in steps 3 or 4 shuts down cleanly rather than serving half-built.
 | 4 | escrow lifecycle | no rotation starts mid-drain |
 | 5 | chain observer | nothing above still needs a snapshot |
 | 6 | escrow sessions | **destroys state** the steps above may still use |
-| 7 | nonce accounting | after every emitter, so the final snapshot holds the counters the run ended with |
-| 8 | store | every step above may still write to it |
-| 9 | public API connections | every step above can still reach it; closing earlier just forces a re-dial |
+| 7 | journal | every producer above has stopped; it drains its queue into the ledger below within the budget, and at least one second, and counts anything later |
+| 8 | nonce accounting | after every emitter, so the final snapshot holds the counters the run ended with |
+| 9 | store | every step above may still write to it |
+| 10 | public API connections | every step above can still reach it; closing earlier just forces a re-dial |
 
 `stopAll` runs every step **even after one fails**, except a step marked `needsQuiesced` (step 6): if anything above it failed, work may still be running, so closing the sessions would pull storage out from under it. That step is skipped and the skip is reported.
 
@@ -191,7 +192,7 @@ Admin lines carry the action and its subject, **never the request body** — an 
 
 ## Metrics
 
-`/metrics`, Prometheus: 71 gateway families beside the Go runtime and process collectors, and nine more when the nonce ledger is on — the `devshard_gateway_nonces_*` gauges, `devshard_gateway_nonce_facts_rejected_total` and `devshard_gateway_nonce_finding` (see [accounting.md](./accounting.md)). Grouped by the question they answer:
+`/metrics`, Prometheus: 74 gateway families beside the Go runtime and process collectors, and nine more when the nonce ledger is on — the `devshard_gateway_nonces_*` gauges, `devshard_gateway_nonce_facts_rejected_total` and `devshard_gateway_nonce_finding` (see [accounting.md](./accounting.md)). Grouped by the question they answer:
 
 | Question | Series |
 | --- | --- |
@@ -203,6 +204,7 @@ Admin lines carry the action and its subject, **never the request body** — an 
 | is the chain view healthy | `devshard_gateway_chain_snapshot_healthy`, `devshard_gateway_chain_snapshot_age_seconds`, `devshard_gateway_chain_epoch_phase`, `devshard_gateway_chain_requests_blocked` |
 | is memory bounded | `devshard_gateway_buffered_response_bytes`, `devshard_gateway_cache_bytes`, `devshard_gateway_capture_bytes_held` |
 | is the ledger keeping up | `devshard_gateway_accounting_rows_written_total`, `devshard_gateway_accounting_rows_lost_total`, `devshard_gateway_accounting_retention_sweeps_failed_total` |
+| is the journal keeping up | `devshard_gateway_journal_money_refused_total`, `devshard_gateway_journal_progress_dropped_total`, `devshard_gateway_journal_late_events_total` |
 
 `devshard_gateway_chain_snapshot_healthy` is the one to alert on first: with a stale snapshot every score, weight and preserved-set decision below it is being made on old data.
 

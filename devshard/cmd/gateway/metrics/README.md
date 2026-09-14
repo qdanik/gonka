@@ -4,7 +4,7 @@ The only package that knows Prometheus exists.
 
 ## What it owns
 
-- **The registry** (`metrics.go`) and every collector: limits, capacity, perf, registry, chain, cache, capture, transport, accounting.
+- **The registry** (`metrics.go`) and every collector: limits, capacity, perf, registry, chain, cache, capture, transport, accounting, journal.
 - **Recorders** (`race.go`, `dispatch_recorder.go`, `limit_recorder.go`) — the write side, called by the subsystems that produce the facts.
 - **Label discipline** (`labels.go`) — what may become a label and what may not.
 

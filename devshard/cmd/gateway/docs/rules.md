@@ -79,7 +79,7 @@ Three resources move together: the nonce, the participant's concurrency slot, an
 
 ### 6. Shutdown order is a contract
 
-Nine steps (`lifecycle.go`, `shutdownOrder` and `stopAll`), listed in [operations.md](./operations.md). The order encodes three dependencies: races drain to the vote that settles their nonces, and that vote needs the escrow sessions, the observer and the chain client alive — so races stop second and everything they depend on stops below them. The store is second to last because closing it drains the accounting ledger. Chain connections close last because every step above can still reach the chain.
+Ten steps (`lifecycle.go`, `shutdownOrder` and `stopAll`), listed in [operations.md](./operations.md). The order encodes three dependencies: races drain to the vote that settles their nonces, and that vote needs the escrow sessions, the observer and the chain client alive — so races stop second and everything they depend on stops below them. The store is second to last because closing it drains the accounting ledger. Chain connections close last because every step above can still reach the chain. The journal closes after every producer above it and before nonce accounting, the ledger it drains into.
 
 Three runner properties are as load-bearing as the order:
 

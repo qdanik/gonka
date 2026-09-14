@@ -5,7 +5,7 @@
 ## What it owns
 
 - **`Recorder`** — opened by `Open` when nonce accounting is enabled, `nil` when it is not, so a disabled ledger costs nothing and every call site tolerates the nil.
-- **Three live sources.** The race, through `RecordRace`; the scheduler's burns, through `RecordGhost`; the timeout votes, through `RecordTimeout`.
+- **Three live sources**, each delivered by the [`journal`](../journal/)'s consumer rather than on the producer's goroutine. The race, through `RecordRace`; the scheduler's burns, through `RecordGhost`; the timeout votes, through `RecordTimeout`.
 - **Two chain sources.** A per-escrow diff watcher that turns applied timeouts and validation verdicts into ledger entries, and a periodic sweep that reconciles finished nonces, host stats and open challenges with what the chain actually holds.
 - **The HTTP listener and the Prometheus collectors** for the book it owns.
 

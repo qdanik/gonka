@@ -6,6 +6,7 @@ import (
 	"devshard/cmd/gateway/chain"
 	"devshard/cmd/gateway/engine"
 	"devshard/cmd/gateway/internal/logkey"
+	"devshard/cmd/gateway/journal"
 	"devshard/cmd/gateway/metrics"
 	"devshard/cmd/gateway/nonces"
 	"devshard/cmd/gateway/scheduler"
@@ -15,7 +16,7 @@ import (
 // tracedDispatches narrates dispatch events and forwards them on. See README.md, "Two readers of one fact".
 type tracedDispatches struct {
 	recorder *metrics.DispatchRecorder
-	ledger   *nonces.Recorder
+	events   *journal.Journal
 }
 
 // GhostBurned logs the nonce and never labels it: a counter keyed by nonce would grow without end.
@@ -23,7 +24,7 @@ func (t tracedDispatches) GhostBurned(escrowID string, burned scheduler.Burn) {
 	logging.Warn("nonce burned for nobody", logkey.Escrow, escrowID, logkey.Nonce, burned.Nonce,
 		logkey.Host, logkey.ShortHost(burned.Participant), logkey.Reason, burned.Reason)
 	t.recorder.GhostBurned(escrowID, burned.Participant, burned.Reason)
-	t.ledger.RecordGhost(escrowID, burned.Nonce, burned.Reason)
+	t.events.GhostBurned(escrowID, burned)
 }
 
 // BurnBudgetExhausted is rare and changes what the escrow does: queued callers now wait rather than spend.
@@ -94,20 +95,36 @@ func (n *phaseNarrator) observe(snapshot chain.PhaseSnapshot) {
 // nonceAccountedRaces hands one race outcome to both readers of it. See README.md, "Two readers of one fact".
 type nonceAccountedRaces struct {
 	recorder *metrics.RaceRecorder
-	ledger   *nonces.Recorder
+	events   *journal.Journal
 }
 
 func (r nonceAccountedRaces) RecordRace(outcome engine.RaceOutcome) {
 	r.recorder.RecordRace(outcome)
-	r.ledger.RecordRace(outcome)
+	r.events.RecordRace(outcome)
 }
 
 func (r nonceAccountedRaces) RecordTimeout(event engine.TimeoutEvent) {
 	r.recorder.RecordTimeout(event)
-	r.ledger.RecordTimeout(event)
+	r.events.RecordTimeout(event)
 }
 
 // RecordClassifyOverflow passes straight through: an overflowing classifier says nothing about a nonce.
 func (r nonceAccountedRaces) RecordClassifyOverflow(participant, model string) {
 	r.recorder.RecordClassifyOverflow(participant, model)
+}
+
+// journalSettings keeps a disabled ledger out of the interface field: a typed nil there is non-nil to a nil check.
+func journalSettings(recorder *nonces.Recorder) journal.Settings {
+	if recorder == nil {
+		return journal.Settings{}
+	}
+	return journal.Settings{Ledger: recorder}
+}
+
+// journalCounts adapts the journal's counters to the collector, which cannot import journal.
+func journalCounts(events *journal.Journal) func() metrics.JournalCounts {
+	return func() metrics.JournalCounts {
+		moneyRefused, progressDropped, lateEvents := events.Counts()
+		return metrics.JournalCounts{MoneyRefused: moneyRefused, ProgressDropped: progressDropped, LateEvents: lateEvents}
+	}
 }

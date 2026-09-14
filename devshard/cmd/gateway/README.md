@@ -29,6 +29,7 @@ The hard part is not proxying. It is that **every nonce costs the escrow money w
 | [`perf/`](./perf/) | per-host history, outlier ejection, capability refusal counts |
 | [`accounting/`](./accounting/) | the per-nonce ledger and the findings derived from it |
 | [`nonces/`](./nonces/) | what feeds that ledger: live events, chain diffs, the sweep |
+| [`journal/`](./journal/) | the one path from a lifecycle step to its log line and its ledger fact |
 | [`warmup/`](./warmup/) | teaching a newly published escrow to its own group |
 | [`store/`](./store/) | control-plane state in SQLite |
 | [`config/`](./config/) | the immutable configuration snapshot and its atomic holder |
@@ -54,8 +55,8 @@ Most of `compose` is a straight line. Four places are not:
 
 Three small adapters exist because two subsystems want the same event for different reasons, and neither belongs inside the other:
 
-- **`nonceAccountedRaces`** hands one race outcome to both readers of it. The metrics recorder asks how the fleet performed; the ledger asks where each nonce went. The engine should know about neither. The warmup and the burn charge vote through the same poster and observer the race already uses.
-- **`tracedDispatches`** narrates the dispatch events an operator would otherwise have to infer from a counter's slope, and forwards every one to the recorder. It wraps rather than living inside [`metrics`](./metrics/) because counting and narrating are different jobs, and it keeps the scheduler free of a logger. A burned nonce is logged with its nonce and *never labelled with it* — a counter keyed by nonce would grow without end.
+- **`nonceAccountedRaces`** hands one race outcome to both readers of it. The metrics recorder asks how the fleet performed and is called on the spot; the ledger asks where each nonce went and receives the outcome through the [`journal`](./journal/), so the response path never takes the ledger's lock. The engine knows about neither. The warmup and the burn charge vote through the same poster and observer the race already uses.
+- **`tracedDispatches`** narrates the dispatch events an operator would otherwise have to infer from a counter's slope, and forwards every one to the recorder, and hands a burn's ledger fact to the journal. It wraps rather than living inside [`metrics`](./metrics/) because counting and narrating are different jobs, and it keeps the scheduler free of a logger. A burned nonce is logged with its nonce and *never labelled with it* — a counter keyed by nonce would grow without end.
 - **`phaseNarrator`** turns the observer's five-second poll into a line only when something an operator cares about actually changed. Subscribing without it would write the same snapshot twelve times a minute.
 
 ### Relaxed mode, in one place
@@ -68,10 +69,11 @@ The per-weight *allowance* is the exception: it follows the raw chain phase rath
 
 ### Shutdown
 
-Nine steps, in a fixed order, described in [`docs/operations.md`](./docs/operations.md), "Shutdown". Every step runs even after an earlier one fails, except a step marked as needing a quiesced system — that one is skipped and the skip reported, because it destroys state the steps above it may still be using. A drain step is bounded by the shutdown budget without cancelling the work inside it.
+Ten steps, in a fixed order, described in [`docs/operations.md`](./docs/operations.md), "Shutdown". Every step runs even after an earlier one fails, except a step marked as needing a quiesced system — that one is skipped and the skip reported, because it destroys state the steps above it may still be using. A drain step is bounded by the shutdown budget without cancelling the work inside it.
 
-Two positions in that order are load-bearing:
+Three positions in that order are load-bearing:
 
+- **The journal closes after the escrow sessions and before nonce accounting.** Every producer has stopped above it, so what it drains is complete, and the ledger it drains into is still open. Its close is bounded by the shutdown budget with a one-second floor, so a stuck sink cannot keep the ledger and the store from closing.
 - **Nonce accounting closes after every emitter above it has stopped**, so the final snapshot holds the counters the run ended with rather than one taken while races were still classifying nonces.
 - **Public-API connections close last.** Every step above can still reach the public API, and an idle socket closed under one of them is a socket the next poll has to re-dial. The chain's own gRPC connection is *not* closed here and cannot be: `common/chain` owns it and exposes no `Close`, so it lives until the process exits. That is why the tests ignore its goroutines rather than waiting for them.
 

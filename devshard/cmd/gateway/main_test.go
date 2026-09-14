@@ -25,6 +25,7 @@ import (
 	"devshard/cmd/gateway/engine"
 	"devshard/cmd/gateway/env"
 	"devshard/cmd/gateway/escrow"
+	"devshard/cmd/gateway/journal"
 	"devshard/cmd/gateway/limits"
 	"devshard/cmd/gateway/metrics"
 	"devshard/cmd/gateway/perf"
@@ -154,6 +155,14 @@ func composedGateway(t *testing.T) *gateway {
 		}
 	})
 	return composed
+}
+
+// newTestJournal is a journal a test closes, for wiring that hands facts to one.
+func newTestJournal(t *testing.T) *journal.Journal {
+	t.Helper()
+	events := journal.New(journal.Settings{})
+	t.Cleanup(func() { _ = events.Close() })
+	return events
 }
 
 func TestRunServesMetricsAndShutsDownGracefully(t *testing.T) {
@@ -348,6 +357,7 @@ func TestEveryOwnerCollectorIsRegisteredOnTheGatewaysRegistry(t *testing.T) {
 		{name: "chain", collector: metrics.NewChainCollector(nil, time.Now)},
 		{name: "transport", collector: metrics.NewTransportCollector(nil)},
 		{name: "accounting", collector: metrics.NewAccountingCollector(nil)},
+		{name: "journal", collector: metrics.NewJournalCollector(nil)},
 	}
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -569,13 +579,13 @@ func TestShutdownStopsAcceptingFirstAndClosesTheStoreLast(t *testing.T) {
 	steps := shutdownOrder(
 		recorder("http server"), recorder("races"), recorder("dispatchers"),
 		recorder("escrow lifecycle"), recorder("chain observer"),
-		recorder("escrow sessions"), recorder("nonce accounting"), recorder("store"),
+		recorder("escrow sessions"), recorder("journal"), recorder("nonce accounting"), recorder("store"),
 		recorder("public api connections"))
 	if err := stopAll(context.Background(), steps); err != nil {
 		t.Fatalf("stopAll(): %v", err)
 	}
 
-	want := []string{"http server", "races", "dispatchers", "escrow lifecycle", "chain observer", "escrow sessions", "nonce accounting", "store", "public api connections"}
+	want := []string{"http server", "races", "dispatchers", "escrow lifecycle", "chain observer", "escrow sessions", "journal", "nonce accounting", "store", "public api connections"}
 	assertSame(t, "shutdown sequence", sequence, want)
 }
 
@@ -617,7 +627,7 @@ func TestShutdownReachesTheStoreEvenWhenAnEarlierStepFails(t *testing.T) {
 	steps := shutdownOrder(
 		failing, recorder("races"), recorder("dispatchers"),
 		recorder("escrow lifecycle"), recorder("chain observer"),
-		recorder("escrow sessions"), recorder("nonce accounting"), recorder("store"),
+		recorder("escrow sessions"), recorder("journal"), recorder("nonce accounting"), recorder("store"),
 		recorder("public api connections"))
 	err := stopAll(context.Background(), steps)
 
@@ -626,6 +636,30 @@ func TestShutdownReachesTheStoreEvenWhenAnEarlierStepFails(t *testing.T) {
 	}
 	if !slices.Contains(sequence, "store") {
 		t.Fatalf("shutdown sequence = %v, want the store closed despite the earlier failure", sequence)
+	}
+}
+
+// blockingCloser is a close that never returns on its own, like a journal whose sink is stuck.
+type blockingCloser struct {
+	released chan struct{}
+}
+
+func (c *blockingCloser) Close() error {
+	<-c.released
+	return nil
+}
+
+// A stuck journal must not keep nonce accounting, the store and the connections below it from closing.
+func TestTheJournalStepGivesUpWhenItsCloseOutlivesTheBudget(t *testing.T) {
+	stuck := &blockingCloser{released: make(chan struct{})}
+	t.Cleanup(func() { close(stuck.released) })
+	expired, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	err := closeWithin(stuck, 0)(expired)
+
+	if err == nil || !strings.Contains(err.Error(), "abandoned with events still queued") {
+		t.Fatalf("closeWithin() = %v, want the journal step reported as abandoned", err)
 	}
 }
 
@@ -801,6 +835,7 @@ func TestPublishingAnEscrowGivesItWeightAndMakesItPickable(t *testing.T) {
 		Snapshots:    observer,
 		Config:       configHolder,
 		Depletion:    &depletionNotice{},
+		Journal:      newTestJournal(t),
 		Now:          time.Now,
 	})
 	if routingErr != nil {
@@ -846,6 +881,7 @@ func routingFor(t *testing.T, capacity *limits.Capacity, participants []string) 
 		Snapshots:    observer,
 		Config:       configHolder,
 		Depletion:    &depletionNotice{},
+		Journal:      newTestJournal(t),
 		Now:          time.Now,
 	})
 	if routingErr != nil {
