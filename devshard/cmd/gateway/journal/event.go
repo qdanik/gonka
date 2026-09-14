@@ -18,4 +18,5 @@ type queuedEvent struct {
 	facts     []DiffFact
 	attempt   *accounting.Attempt
 	probeVote bool
+	render    func(lines logSink)
 }

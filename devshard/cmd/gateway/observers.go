@@ -31,6 +31,11 @@ func (t tracedDispatches) BurnBudgetExhausted(escrowID string) {
 	t.events.BurnBudgetExhausted(escrowID)
 }
 
+// ExcludedHostServed has no counter: the line is the only record that a request's exclusion lapsed.
+func (t tracedDispatches) ExcludedHostServed(escrowID, participant string) {
+	t.events.ExcludedHostServed(escrowID, participant)
+}
+
 // NonceHeld and EscrowRetired pass straight through: both are already written down where they happen.
 func (t tracedDispatches) NonceHeld(escrowID string) { t.recorder.NonceHeld(escrowID) }
 

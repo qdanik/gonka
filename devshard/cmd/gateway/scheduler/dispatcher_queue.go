@@ -3,9 +3,6 @@ package scheduler
 import (
 	"fmt"
 	"time"
-
-	"devshard/cmd/gateway/internal/logkey"
-	"devshard/logging"
 )
 
 type armedTimer struct {
@@ -80,8 +77,7 @@ func (d *dispatcher) drain() (time.Time, bool) {
 		switch outcome := offered.decision.(type) {
 		case serve:
 			if outcome.despiteExclusion {
-				logging.Info("nonce spent on a host the request excluded", logkey.Escrow, d.escrowID,
-					logkey.Host, logkey.ShortHost(offered.taken.participant))
+				d.recordExcludedServe(offered.taken.participant)
 			}
 			d.handOff(outcome.waiter, offered.taken, prepared)
 		case burn:

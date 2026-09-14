@@ -19,6 +19,10 @@ func (r *recordingJournal) RecordStep(step RaceStep) {
 	r.steps = append(r.steps, step)
 }
 
+func (r *recordingJournal) HostDeniedCrown(string, string, int) {}
+
+func (r *recordingJournal) HostCrownedAgain(string, string) {}
+
 func (r *recordingJournal) recorded() []RaceStep {
 	r.mu.Lock()
 	defer r.mu.Unlock()

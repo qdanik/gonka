@@ -244,6 +244,11 @@ func (j *Journal) emit(entry queuedEvent) {
 	j.mu.Unlock()
 }
 
+// emitLine queues a lifecycle line written outside a race; its kind picks the lane. See README.md, "Lifecycle lines outside a race".
+func (j *Journal) emitLine(kind Kind, render func(lines logSink)) {
+	j.emit(queuedEvent{kind: kind, render: render})
+}
+
 // run is the only goroutine that reaches the ledger, so the ledger sees events in the order they were accepted.
 func (j *Journal) run() {
 	defer close(j.done)
@@ -336,5 +341,7 @@ func (j *Journal) deliver(entry *queuedEvent) {
 		renderRequestThrottled(j.lines, entry.request)
 	case KindReplyNotCached:
 		renderReplyNotCached(j.lines, entry.request)
+	case KindHostTransition, KindExcludedHostServed:
+		entry.render(j.lines)
 	}
 }

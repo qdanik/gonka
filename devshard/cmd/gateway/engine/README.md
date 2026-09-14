@@ -85,6 +85,8 @@ The coordinator answers claims in `answer`: an unknown nonce or an already-crown
 
 Only attempts that say something about the host are observed: it answered with content, or it claimed to serve and produced none. A dial failure, a stranded nonce or a cancelled client says neither, and clearing the host's strikes on one would hand it a clean record it did not earn.
 
+`crownStrikes` narrates the two edges — denied at the third content-free answer, restored by the next answer with content — through `Deps.Journal`, whose `raceJournal` interface includes `crownNarrator`. The journal writes `host denied the crown` and `host crowned again`; a nil journal leaves the strikes working and silent.
+
 ## Classification and reassembly
 
 `carryBudget` bounds the bytes held for SSE reassembly at three levels — attempt, participant and global. `reserve` charges the participant first and then the global pool, undoing the participant charge when the global pool trips. A participant's counter is created on first use and never removed (rules.md, "9. Bounded by construction").

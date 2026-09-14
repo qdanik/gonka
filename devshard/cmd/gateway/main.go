@@ -156,6 +156,7 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 	}()
 
 	participants := limits.NewParticipantLimiter(limits.ParticipantConfigFromConfig(configuration), clock)
+	participants.SetNarrator(events)
 	capacity := limits.NewCapacity(participants.Available)
 	observer.Subscribe(capacity.Update)
 	observer.Subscribe((&phaseNarrator{}).observe)
@@ -167,6 +168,7 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 		buffers.Retune(next.Limits.MaxBufferedResponseBytes)
 	})
 	hosts := perf.NewTracker(configHolder, clock)
+	hosts.SetNarrator(events)
 	recorder.SetCapability(func(participant, model string) accounting.HostCapability {
 		contextLimit, versionRefusals, toolRefusals, contextRefusals := hosts.Capability(participant, model)
 		return accounting.HostCapability{

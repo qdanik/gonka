@@ -9,10 +9,8 @@ import (
 	"time"
 
 	"devshard/cmd/gateway/config"
-	"devshard/cmd/gateway/internal/logkey"
 	"devshard/cmd/gateway/limits"
 	"devshard/cmd/gateway/perf"
-	"devshard/logging"
 )
 
 var (
@@ -124,7 +122,7 @@ func NewEngine(deps Deps) (*Engine, error) {
 	return &Engine{
 		deps:  deps,
 		carry: newCarryBudget(deps.Config.Load().Stream),
-		crown: newCrownStrikes(),
+		crown: newCrownStrikes(deps.Journal),
 	}, nil
 }
 
@@ -382,15 +380,24 @@ func (o RaceOutcome) everyAttempt(holds func(AttemptOutcome) bool) bool {
 	return true
 }
 
+// crownNarrator hears the two edges of crown denial; it is called under the strikes' lock, so it must queue and return. See race.md, "Crown denial".
+type crownNarrator interface {
+	HostDeniedCrown(participant, model string, strikes int)
+	HostCrownedAgain(participant, model string)
+}
+
 type crownKey struct{ participant, model string }
 
 // crownStrikes withholds the crown from a host answering without content, but leaves it in rotation. See rules.md, "9. Bounded by construction".
 type crownStrikes struct {
-	mu      sync.Mutex
-	strikes map[crownKey]int
+	mu       sync.Mutex
+	strikes  map[crownKey]int
+	narrator crownNarrator
 }
 
-func newCrownStrikes() *crownStrikes { return &crownStrikes{strikes: map[crownKey]int{}} }
+func newCrownStrikes(narrator crownNarrator) *crownStrikes {
+	return &crownStrikes{strikes: map[crownKey]int{}, narrator: narrator}
+}
 
 func (g *crownStrikes) Denied(participant, model string) bool {
 	g.mu.Lock()
@@ -403,17 +410,14 @@ func (g *crownStrikes) Observe(participant, model string, contentless bool) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if !contentless {
-		if g.strikes[key] >= crownDenialStrikes {
-			logging.Info("host crowned again",
-				logkey.Host, logkey.ShortHost(participant), logkey.Model, model)
+		if g.strikes[key] >= crownDenialStrikes && g.narrator != nil {
+			g.narrator.HostCrownedAgain(participant, model)
 		}
 		delete(g.strikes, key)
 		return
 	}
 	g.strikes[key]++
-	if g.strikes[key] == crownDenialStrikes {
-		logging.Warn("host denied the crown",
-			logkey.Host, logkey.ShortHost(participant), logkey.Model, model,
-			logkey.Strikes, g.strikes[key])
+	if g.strikes[key] == crownDenialStrikes && g.narrator != nil {
+		g.narrator.HostDeniedCrown(participant, model, g.strikes[key])
 	}
 }

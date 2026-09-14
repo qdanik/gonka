@@ -270,7 +270,7 @@ func TestTheRecordingPointAccountsEveryRaceExactlyOnce(t *testing.T) {
 
 func TestCrownStrikesDenyOnlyAfterRepeatedContentlessAnswers(t *testing.T) {
 	t.Parallel()
-	gate := newCrownStrikes()
+	gate := newCrownStrikes(nil)
 
 	for range crownDenialStrikes - 1 {
 		gate.Observe(testParticipant, testModel, true)

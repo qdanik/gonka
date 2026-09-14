@@ -12,7 +12,7 @@ A chat request needs a nonce, and a nonce is bound to a host by `nonce % groupSi
 
 ## What it does not own
 
-It does not dispatch. It hands out an assignment and the [`engine`](../engine/) sends the request. It does not decide what a burn means for a host either: it names the reason and reports it, and the ledger excludes ghosts from every host rate by construction, because burning a nonce is the gateway's own decision (`accounting/findings.go`). The fan-out from one burn to its log line, its metric and its ledger entry lives in the composition root, not in a package of its own (`observers.go`, `tracedDispatches`).
+It does not dispatch. It hands out an assignment and the [`engine`](../engine/) sends the request. It does not decide what a burn means for a host either: it names the reason and reports it, and the ledger excludes ghosts from every host rate by construction, because burning a nonce is the gateway's own decision (`accounting/findings.go`). The fan-out from one burn to its log line, its metric and its ledger entry lives in the composition root, not in a package of its own (`observers.go`, `tracedDispatches`). A nonce served on a host its request excluded reaches the same observer as `ExcludedHostServed`, so the scheduler writes no line of its own.
 
 ## Boundaries
 

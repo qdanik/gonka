@@ -19,6 +19,7 @@ type dispatchObserver interface {
 	NonceHeld(escrowID string)
 	BurnBudgetExhausted(escrowID string)
 	EscrowRetired(escrowID string)
+	ExcludedHostServed(escrowID, participant string)
 }
 
 // dispatcherDeps wires one escrow's actor. See README, "Where the nonce, the slot and the hold are taken".
@@ -247,6 +248,12 @@ func (d *dispatcher) recordHold() {
 func (d *dispatcher) recordBudgetTrip() {
 	if d.observer != nil {
 		d.observer.BurnBudgetExhausted(d.escrowID)
+	}
+}
+
+func (d *dispatcher) recordExcludedServe(participant string) {
+	if d.observer != nil {
+		d.observer.ExcludedHostServed(d.escrowID, participant)
 	}
 }
 

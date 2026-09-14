@@ -727,7 +727,7 @@ func TestOnlyAnAnswerOrAnEmptyStreamJudgesCrowning(t *testing.T) {
 // dial failure, so a host alternating empty streams with failures never reaches the threshold.
 func TestARaceTheHostNeverAnsweredLeavesItsStrikesAlone(t *testing.T) {
 	t.Parallel()
-	crown := newCrownStrikes()
+	crown := newCrownStrikes(nil)
 	for range crownDenialStrikes - 1 {
 		crown.Observe(testParticipant, testModel, true)
 	}

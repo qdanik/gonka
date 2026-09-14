@@ -1,6 +1,6 @@
 # `journal` — one ordered path to a log line or a ledger fact
 
-Race outcomes and race trace steps, request records, limiter refusals and uncached replies, burns and burn-budget trips, timeout votes, composed diffs' ledger facts, and warmup probes all pass through here, in the order they happened; this package decides which of those become log lines and which the nonce ledger applies.
+Race outcomes and race trace steps, request records, limiter refusals and uncached replies, burns and burn-budget trips, timeout votes, composed diffs' ledger facts, warmup probes, host transitions, and nonces served on a host their request excluded all pass through here, in the order they happened; this package decides which of those become log lines and which the nonce ledger applies.
 
 ## What it owns
 
@@ -15,11 +15,11 @@ Race outcomes and race trace steps, request records, limiter refusals and uncach
 - **It does not classify.** Which counter a nonce lands in is `accounting`'s decision.
 - **The sweep writes the ledger directly.** `Recorder.sweep` (`nonces/recorder.go`) calls `Book.OpenEscrow`, `MarkFinished`, the `Observe*` methods and `RetireEscrow` on its own goroutine, never through this package.
 - **The warmup's `OpenEscrow` is a direct write too.** `Prober.openLedger` (`warmup/warmup.go`) calls it itself, because the open must land before the probe reaches the ledger through the journal.
-- **A few lifecycle lines are still written by their own packages.** The journal is not yet the only writer of lifecycle lines: the escrow drain lines in `registry/`, the dispatcher's excluded-host line (`scheduler/dispatcher_queue.go`), and the crown-strike lines (`engine/engine.go`) are examples.
+- **A few lifecycle lines are still written by their own packages.** The journal is not yet the only writer of lifecycle lines: the escrow drain lines in `registry/` are an example.
 
 ## Boundaries
 
-- **Producers never import this package.** `engine`, `scheduler`, `nonces` and `warmup` declare the interface they call; `api` imports it only for `RequestLine`. The composition root adapts the rest (`observers.go`).
+- **Producers never import this package.** `engine`, `scheduler`, `perf`, `limits`, `nonces` and `warmup` declare the interface they call; `api` imports it only for `RequestLine`. The composition root adapts the rest (`observers.go`).
 - **`DiffFact` is declared in `accounting`** and aliased here, so `*nonces.Recorder` satisfies `ledgerSink` without importing this package.
 - **A disabled ledger is a nil interface, never a typed nil.** `journalSettings` in `observers.go` leaves `Settings.Ledger` unset when the recorder is nil; a nil pointer inside the interface is non-nil to the consumer's check.
 - **No sink writes what it is handed.** A race outcome's attempts are the slice `api` reads on the response path.
@@ -73,6 +73,8 @@ The `journal` step sits between `escrow sessions` and `nonce accounting` (`lifec
 | `KindReplyNotCached` | `Server.chat` through `ReplyNotCached` (`api/routes.go`) | none | `a host stopped mid-answer: reply served, not cached`, Warn (`render_request.go`) |
 | `KindRequestFinished` | `Server.finishRequest` (`api/finish.go`) and the cache hit in `Server.chat` (`api/routes.go`), through `RequestFinished` | none | `request finished` (`render_request.go`): Info when the request went out clean, Warn with a race or delivery error; a cache hit writes the short shape with `outcome` `cache_hit` |
 | `KindRequestThrottled` | `Server.chat` through `RequestThrottled` (`api/routes.go`) | none | `gateway limiter turned a request away`, Warn (`render_request.go`) |
+| `KindHostTransition` | `perf.Tracker`, `limits.ParticipantLimiter`, `engine` crown strikes | none | host withheld and back, capability refusals, cut off and back, crown denied and restored |
+| `KindExcludedHostServed` | `tracedDispatches.ExcludedHostServed` (`observers.go`) | none | `nonce spent on a host the request excluded` |
 
 ## Absent subjects are omitted
 
@@ -81,6 +83,21 @@ A key is written only when its subject exists. `request finished` carries `escro
 ## Which request a burn and a vote belong to
 
 A burn names the request it was spent during under `burned_during_request`: the request a refused slot was meant for, otherwise the oldest request still waiting in the dispatcher's queue when a drain burned the nonce, or the request whose assignment arrived after it had left. The key is deliberately not `request`, because the nonce served nobody and a search for one request's own lines must not return it. Neither id is ever a metric label. The key is written only when the burn has a request to name. A failed timeout vote names its race's `request`; a warmup vote has none.
+
+## Lifecycle lines outside a race
+
+Host, escrow, chain and warmup transitions are decided in their own packages and written here. Each producer package declares a narrator interface over plain values that `*Journal` satisfies, so none imports `journal`; the composition root binds the journal where the producer is built (`SetNarrator`, `Deps.Narrator`, `Config.Narrator`, or a dispatch observer method).
+
+A narrator method copies its arguments into a render closure and hands it to `emitLine`; the consumer runs the closure against the log sink. These lines feed only the log, are rare, and each renders one message, so a typed payload per line would triple the code with no second reader. What to write — an omitted nil error, a Warn for a failed vote — is decided inside the closure, here.
+
+| Producer | Narrator | Kind | Lane |
+| --- | --- | --- | --- |
+| `perf.Tracker` | `hostNarrator`, bound by `SetNarrator` | `KindHostTransition` | progress |
+| `limits.ParticipantLimiter` | `cutoffNarrator`, bound by `SetNarrator` | `KindHostTransition` | progress |
+| `engine` crown strikes | `crownNarrator`, part of `raceJournal` | `KindHostTransition` | progress |
+| `scheduler` dispatcher | `dispatchObserver.ExcludedHostServed`, through `tracedDispatches` | `KindExcludedHostServed` | progress |
+
+Host transitions ride the progress lane: they follow the host count and the backoff, never the request rate, and one dropped in a flood is counted like any other progress line.
 
 ## Read next
 

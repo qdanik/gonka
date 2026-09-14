@@ -138,6 +138,7 @@ type recordingObserver struct {
 	trips          int
 	ghostNonces    []uint64
 	burnRequestIDs []string
+	excluded       []string
 }
 
 func (o *recordingObserver) GhostBurned(_ string, burned Burn) {
@@ -194,6 +195,18 @@ func (o *recordingObserver) retiredEscrows() []string {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	return append([]string(nil), o.retired...)
+}
+
+func (o *recordingObserver) ExcludedHostServed(_ string, participant string) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.excluded = append(o.excluded, participant)
+}
+
+func (o *recordingObserver) excludedServes() []string {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return append([]string(nil), o.excluded...)
 }
 
 type testClock struct {
@@ -511,6 +524,19 @@ func TestAWaiterEveryHostExcludedIsServedRatherThanFailed(t *testing.T) {
 		t.Fatal("the waiter was answered without a nonce to dispatch")
 	}
 	test.dispatcher.stop()
+}
+
+// Nonce 1 binds hostB; the request excluded both hosts and waited past the match wait, so hostB serves it anyway.
+func TestAServeDespiteExclusionIsReported(t *testing.T) {
+	test := newHarness(t, harnessConfig{})
+
+	queued := test.submit(t, test.clock.Now().Add(-2*matchWaitWindow), hostA, hostB)
+
+	wantAssignment(t, awaitReply(t, queued), hostB, 1)
+	test.dispatcher.stop()
+	if got := test.observer.excludedServes(); !slices.Equal(got, []string{hostB}) {
+		t.Fatalf("excluded serves = %v, want the one host the request had excluded and still got", got)
+	}
 }
 
 func TestDispatcherHoldsNonceForCoArrivingWaiter(t *testing.T) {

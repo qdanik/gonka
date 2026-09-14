@@ -19,10 +19,12 @@ const (
 	KindAttemptFinished
 	KindRequestFinished
 	KindRequestThrottled
+	KindHostTransition
+	KindExcludedHostServed
 )
 
 // kindCount is one past the last kind, so a table indexed by kind has a slot for each.
-const kindCount = KindRequestThrottled + 1
+const kindCount = KindExcludedHostServed + 1
 
 var kindNames = [kindCount]string{
 	KindRaceReported:        "race_reported",
@@ -40,6 +42,8 @@ var kindNames = [kindCount]string{
 	KindAttemptFinished:     "attempt_finished",
 	KindRequestFinished:     "request_finished",
 	KindRequestThrottled:    "request_throttled",
+	KindHostTransition:      "host_transition",
+	KindExcludedHostServed:  "excluded_host_served",
 }
 
 func (k Kind) String() string {

@@ -36,6 +36,7 @@ type RaceStep struct {
 // raceJournal is satisfied by *journal.Journal; RecordStep returns without waiting on a sink.
 type raceJournal interface {
 	RecordStep(step RaceStep)
+	crownNarrator
 }
 
 func (c *raceCoordinator) traceStep(step RaceStep) {
