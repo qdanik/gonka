@@ -69,7 +69,7 @@ The narrow interfaces make the mistake hard to express: an attempt to reproduce 
 
 Three resources move together: the nonce, the participant's concurrency slot, and the escrow's in-flight hold.
 
-**Acquisition is one atomic step**, inside the callback of `session.Advance`, under the session's own lock with the nonce-to-host binding already fixed (`scheduler/dispatcher.go`). A refused slot becomes `burn{ghostThrottled}`.
+**Acquisition is one atomic step**, inside the callback of `session.Advance`, under the session's own lock with the nonce-to-host binding already fixed (`scheduler/dispatcher_queue.go`). A refused slot becomes `burn{ghostThrottled}`.
 
 **Release is by whoever spends it.** The engine's view of the limiter exposes only `Release` — an interface that cannot acquire cannot get the ownership wrong. Every scheduler path that cannot deliver an assignment gives the slot and the hold back *together*. A burn takes the hold and no slot, and gives the hold back whether its commit succeeds or fails.
 
@@ -208,7 +208,7 @@ The metric families that described the deleted quarantine machinery went with it
 
 ### Known gaps
 
-Each of these was reviewed against a fleet serving thousands of inferences a minute, and all but one are **closed as not worth building**. The verdict is recorded so the next reader does not re-open them.
+Each of these was reviewed against a fleet serving thousands of inferences a minute, and all but one are **closed**, most as not worth building. The verdict is recorded so the next reader does not re-open them.
 
 - **Not worth building.** Two per-escrow recovery tools the legacy gateway had are not restored: `signatures/collect` and `sync-hosts`. The read-only half of the recovery surface **is** served, and resolves through the settlement lookup so a draining escrow still answers — which is the point, since the escrow needing inspection is usually the one in trouble. Neither write-side tool has been reached for in production.
 - **Not worth building.** `/v1/debug/perf` is not served. The request ledger at `/v1/requests/{id}` answers the same question per request, and the accounting findings carry the thresholds a host's numbers are judged against. The pairwise summaries legacy's version carried describe a mechanism this gateway no longer has.

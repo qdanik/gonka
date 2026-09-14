@@ -283,7 +283,7 @@ func (r *RaceRecorder) RecordClassifyOverflow(participant, model string) {
 	r.carryOverflows.WithLabelValues(participantLabel, modelLabel).Inc()
 }
 
-// markSeen runs before a participant series is written, so a sweep never deletes what the write is about to add. See README.md, "Cardinality in practice".
+// See README.md, "Cardinality in practice".
 func (r *RaceRecorder) markSeen(participant, model string) {
 	r.agingMu.Lock()
 	defer r.agingMu.Unlock()

@@ -98,8 +98,7 @@ func TestFindingsAreExportedAsTheirOwnSeries(t *testing.T) {
 	}
 }
 
-// Retention bounds the exported series as well as the ledger: the collector rebuilds from the ledger on
-// every scrape, so a retired epoch that pruning drops stops being exported on the next one.
+// The collector rebuilds from the ledger, so a pruned retired epoch leaves the next scrape.
 func TestPruningARetiredEpochRemovesItsSeries(t *testing.T) {
 	const currentEpoch = 10
 	service, err := NewService(Settings{

@@ -723,8 +723,7 @@ func TestAcquireForgetsAPairIdlePastTheEvictionWindow(t *testing.T) {
 	}, limiter.Snapshot())
 }
 
-// Forgetting a pair mid-backoff would hand the host a full window and a closed breaker it has not earned back; a
-// half-open pair past the window has no such backoff left to protect, so it is forgotten like any other idle pair.
+// A running cut-off survives idle eviction; an idle half-open pair past the window does not.
 func TestAcquireForgetsAnIdleHalfOpenPairButKeepsARunningCutoff(t *testing.T) {
 	t.Parallel()
 	settings := idleEvictionConfig()
@@ -746,8 +745,7 @@ func TestAcquireForgetsAnIdleHalfOpenPairButKeepsARunningCutoff(t *testing.T) {
 	}, limiter.Snapshot())
 }
 
-// Release stamps lastUsed too, or a pair released right when its idle window has already elapsed would be
-// forgotten before its still-pending verdict lands.
+// Release stamps lastUsed, so a pair whose verdict is still pending is kept.
 func TestAcquireKeepsAPairJustReleasedEvenPastTheEvictionWindow(t *testing.T) {
 	t.Parallel()
 	clock := newMovingClock(testEpoch)

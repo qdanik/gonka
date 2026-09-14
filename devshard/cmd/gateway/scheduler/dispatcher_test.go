@@ -611,8 +611,7 @@ func TestDispatcherReclassifiesALostAssignmentAsAGhost(t *testing.T) {
 	})
 }
 
-// Between the admission and the dispatch that gives the slot back sit two paths that never reach a
-// caller; each has to hand the slot back itself.
+// Two paths between admission and dispatch never reach a caller; each gives back the slot and hold it took.
 func TestDispatcherReleasesAnAdmissionThatNeverReachesACaller(t *testing.T) {
 	t.Run("the session fails after admitting the request", func(t *testing.T) {
 		sessionErr := errors.New("commit rejected")
