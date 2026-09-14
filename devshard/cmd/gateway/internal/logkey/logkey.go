@@ -3,20 +3,21 @@
 package logkey
 
 const (
-	Request = "request"
-	Escrow  = "escrow"
-	Nonce   = "nonce"
-	Model   = "model"
-	Host    = "host"
-	Hosts   = "hosts"
-	Slot    = "slot"
-	Role    = "role"
-	Reason  = "reason"
-	Kind    = "kind"
-	Outcome = "outcome"
-	Action  = "action"
-	Rewound = "rewound"
-	Error   = "error"
+	Request             = "request"
+	Escrow              = "escrow"
+	Nonce               = "nonce"
+	Model               = "model"
+	Host                = "host"
+	Hosts               = "hosts"
+	Slot                = "slot"
+	Role                = "role"
+	Reason              = "reason"
+	Kind                = "kind"
+	Outcome             = "outcome"
+	Action              = "action"
+	Rewound             = "rewound"
+	Error               = "error"
+	BurnedDuringRequest = "burned_during_request"
 
 	BackoffCount        = "backoff_count"
 	Strikes             = "strikes"
@@ -34,9 +35,6 @@ const (
 	ContextLimit         = "context_limit"
 	PreviousContextLimit = "previous_context_limit"
 )
-
-// Which request a nonce spent on nobody was spent during; never the request key, which names a request's own lines.
-const BurnedDuringRequest = "burned_during_request"
 
 const (
 	ReceiptTimeoutMS      = "receipt_timeout_ms"

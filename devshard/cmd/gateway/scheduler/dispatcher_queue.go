@@ -22,10 +22,10 @@ func (a *armedTimer) disarm() {
 
 // offer is what one Advance decided, kept across the loop so the decide closure is built once per drain.
 type offer struct {
-	decision      Decision
-	taken         reservation
-	escrowRetired bool
-	throttled     *waiter
+	decision        Decision
+	taken           reservation
+	escrowRetired   bool
+	throttledWaiter *waiter
 }
 
 // drain assigns nonces until the queue empties, a nonce is held, or the burn budget trips. See README, "The drain".
@@ -42,7 +42,7 @@ func (d *dispatcher) drain() (time.Time, bool) {
 		switch decided := offered.decision.(type) {
 		case serve:
 			if !acquire(binding.Participant) {
-				offered.throttled = decided.waiter
+				offered.throttledWaiter = decided.waiter
 				offered.decision = burn{kind: ghostThrottled}
 			}
 		case burn:
@@ -86,7 +86,10 @@ func (d *dispatcher) drain() (time.Time, bool) {
 			d.handOff(outcome.waiter, offered.taken, prepared)
 		case burn:
 			// A real session always commits the ghost it was asked for; only a session double leaves Nonce zero.
-			burned := Burn{Participant: offered.taken.participant, Reason: outcome.kind.reason(), RequestID: d.burnedDuring(offered.throttled)}
+			burned := Burn{
+				Participant: offered.taken.participant, Reason: outcome.kind.reason(),
+				RequestID: d.burnedDuring(offered.throttledWaiter),
+			}
 			if prepared != nil {
 				burned.Nonce = prepared.Nonce()
 			}
@@ -138,9 +141,9 @@ func (d *dispatcher) dropAbandoned() {
 }
 
 // burnedDuring names the waiter a refused slot was meant for, else the oldest waiter still waiting. See README, "The boundary types".
-func (d *dispatcher) burnedDuring(throttled *waiter) string {
-	if throttled != nil {
-		return throttled.profile.RequestID
+func (d *dispatcher) burnedDuring(throttledWaiter *waiter) string {
+	if throttledWaiter != nil {
+		return throttledWaiter.profile.RequestID
 	}
 	for _, queued := range d.waiting {
 		if !queued.abandoned.Load() {
@@ -209,6 +212,9 @@ func (d *dispatcher) handOff(served *waiter, taken reservation, prepared Prepare
 	assignment := Assignment{Escrow: d.escrowID, Host: taken.participant, Nonce: prepared, EscrowHold: taken.escrowHold}
 	if !served.deliver(pickResult{assignment: assignment}) {
 		d.giveBack(taken)
-		d.recordGhost(Burn{Nonce: prepared.Nonce(), Participant: taken.participant, Reason: ghostAbandoned.reason(), RequestID: served.profile.RequestID})
+		d.recordGhost(Burn{
+			Nonce: prepared.Nonce(), Participant: taken.participant,
+			Reason: ghostAbandoned.reason(), RequestID: served.profile.RequestID,
+		})
 	}
 }

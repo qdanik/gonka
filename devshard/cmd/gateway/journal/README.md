@@ -80,7 +80,7 @@ A key is written only when its subject exists. `request finished` carries `escro
 
 ## Which request a burn and a vote belong to
 
-A burn names the request it was spent during under `burned_during_request`: the request a refused slot was meant for, otherwise the oldest request still waiting in the dispatcher's queue when a drain burned the nonce, or the request whose assignment arrived after it had left. The key is deliberately not `request`, because the nonce served nobody and a search for one request's own lines must not return it. Neither id is ever a metric label.
+A burn names the request it was spent during under `burned_during_request`: the request a refused slot was meant for, otherwise the oldest request still waiting in the dispatcher's queue when a drain burned the nonce, or the request whose assignment arrived after it had left. The key is deliberately not `request`, because the nonce served nobody and a search for one request's own lines must not return it. Neither id is ever a metric label. The key is written only when the burn has a request to name.
 
 ## Read next
 

@@ -992,3 +992,29 @@ func TestAThrottledBurnNamesTheRequestItsSlotWasMeantFor(t *testing.T) {
 		t.Fatalf("burned during = %v, want the request each burned nonce was meant for, never the head of the queue", got)
 	}
 }
+
+// head is abandoned mid-decide, before its own burn is named: the drain must skip it for the oldest live waiter, never the newest.
+func TestABurnSkipsAnAbandonedWaiterAndNamesTheOldestLiveOne(t *testing.T) {
+	var abandonOnce sync.Once
+	var head *waiter
+	test := newHarness(t, harnessConfig{holdStart: true, afterDecide: func(HostBinding) {
+		abandonOnce.Do(func() { head.abandoned.Store(true) })
+	}})
+	stale := test.clock.Now().Add(-2 * matchWaitWindow)
+	head = newWaiter(RequestProfile{RequestID: "request-head", Model: modelA, Exclude: []string{hostB}}, stale)
+	if outcome := test.dispatcher.submitWaiter(head); outcome != submitAccepted {
+		t.Fatalf("submitWaiter on a running dispatcher = %v, want submitAccepted", outcome)
+	}
+	middle := test.submitAs(t, "request-middle", stale, hostB)
+	tail := test.submitAs(t, "request-tail", stale, hostB)
+
+	test.dispatcher.start()
+
+	wantAssignment(t, awaitReply(t, middle), hostA, 2)
+	wantAssignment(t, awaitReply(t, tail), hostA, 4)
+	test.dispatcher.stop()
+	wantNoReply(t, head)
+	if got := test.observer.burnRequests(); !slices.Equal(got, []string{"request-middle", "request-tail"}) {
+		t.Fatalf("burned during = %v, want each burn charged to the oldest live waiter, skipping the abandoned head", got)
+	}
+}
