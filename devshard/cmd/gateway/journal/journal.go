@@ -60,6 +60,7 @@ type Journal struct {
 	accepted         uint64
 	delivered        uint64
 	skippedSinceLine uint64
+	skippedWritten   uint64
 	closed           bool
 	lateKinds        [kindCount]bool
 
@@ -99,12 +100,12 @@ func New(settings Settings) *Journal {
 	return created
 }
 
-// Flush returns once every event accepted before it has reached the sinks; never call it from a sink.
+// Flush returns once every event accepted and every drop counted before it has reached the sinks; never call it from a sink.
 func (j *Journal) Flush() {
 	j.mu.Lock()
 	defer j.mu.Unlock()
-	target := j.accepted
-	for j.delivered < target {
+	acceptedBefore, droppedBefore := j.accepted, j.progressDropped
+	for j.delivered < acceptedBefore || j.skippedWritten < droppedBefore {
 		j.drained.Wait()
 	}
 }
@@ -197,18 +198,18 @@ func (j *Journal) run() {
 		if skipped > 0 {
 			j.lines.Warn(skippedProgressMessage, logkey.SkippedLines, skipped)
 		}
-		j.finishBatch(batch, moneyEvents)
+		j.finishBatch(batch, moneyEvents, skipped)
 	}
 }
 
-// takeBatch waits for events and swaps the queue out, so producers keep appending while a batch is delivered.
+// takeBatch waits for events or an unwritten drop and swaps the queue out, so producers keep appending while a batch is delivered.
 func (j *Journal) takeBatch() (batch []queuedEvent, skipped uint64, open bool) {
 	j.mu.Lock()
 	defer j.mu.Unlock()
-	for len(j.pending) == 0 && !j.closed {
+	for len(j.pending) == 0 && j.skippedSinceLine == 0 && !j.closed {
 		j.arrived.Wait()
 	}
-	if len(j.pending) == 0 {
+	if len(j.pending) == 0 && j.skippedSinceLine == 0 {
 		return nil, 0, false
 	}
 	batch, j.pending, j.spare = j.pending, j.spare, nil
@@ -217,10 +218,11 @@ func (j *Journal) takeBatch() (batch []queuedEvent, skipped uint64, open bool) {
 }
 
 // finishBatch releases the batch from its lanes only now, so a lane bounds what is accepted and not yet delivered.
-func (j *Journal) finishBatch(batch []queuedEvent, moneyEvents int) {
+func (j *Journal) finishBatch(batch []queuedEvent, moneyEvents int, skipped uint64) {
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	j.delivered += uint64(len(batch))
+	j.skippedWritten += skipped
 	j.pendingMoney -= moneyEvents
 	j.pendingProgress -= len(batch) - moneyEvents
 	if cap(batch) <= retainedBatchCapacity {

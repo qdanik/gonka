@@ -67,6 +67,30 @@ func (l *heldLedger) RecordRace(outcome engine.RaceOutcome) {
 	l.ledgerSpy.RecordRace(outcome)
 }
 
+// heldVoteLedger parks the consumer inside its first race and again inside its first timeout vote.
+type heldVoteLedger struct {
+	heldLedger
+	voteEntered chan struct{}
+	voteRelease chan struct{}
+	voteHolding sync.Once
+}
+
+func newHeldVoteLedger() *heldVoteLedger {
+	return &heldVoteLedger{
+		heldLedger:  heldLedger{entered: make(chan struct{}), release: make(chan struct{})},
+		voteEntered: make(chan struct{}),
+		voteRelease: make(chan struct{}),
+	}
+}
+
+func (l *heldVoteLedger) RecordTimeout(vote engine.TimeoutEvent) {
+	l.voteHolding.Do(func() {
+		close(l.voteEntered)
+		<-l.voteRelease
+	})
+	l.heldLedger.RecordTimeout(vote)
+}
+
 func newJournal(t *testing.T, settings Settings) *Journal {
 	t.Helper()
 	created := New(settings)
@@ -86,6 +110,44 @@ func holdConsumer(t *testing.T, events *Journal, ledger *heldLedger) func() {
 		t.Fatal("the consumer never took the first race")
 	}
 	return release
+}
+
+// dropWhileTheQueueIsEmpty parks the consumer on a batch holding the only progress slot, drops two progress lines behind it, and returns the release.
+func dropWhileTheQueueIsEmpty(t *testing.T, events *Journal, ledger *heldVoteLedger) func() {
+	t.Helper()
+	releaseRace := holdConsumer(t, events, &ledger.heldLedger)
+	events.emit(queuedEvent{kind: KindNonceCommitted})
+	events.RecordTimeout(engine.TimeoutEvent{EscrowID: "escrow-1", Nonce: 4})
+	releaseVote := sync.OnceFunc(func() { close(ledger.voteRelease) })
+	t.Cleanup(releaseVote)
+	releaseRace()
+	select {
+	case <-ledger.voteEntered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the consumer never took the vote queued behind the progress line")
+	}
+	events.emit(queuedEvent{kind: KindNonceCommitted})
+	events.emit(queuedEvent{kind: KindNonceCommitted})
+	return releaseVote
+}
+
+// awaitClosed returns once Close has marked the journal closed; call it only while the consumer is parked in a sink.
+func awaitClosed(t *testing.T, events *Journal) {
+	t.Helper()
+	marked := make(chan struct{})
+	go func() {
+		defer close(marked)
+		events.mu.Lock()
+		defer events.mu.Unlock()
+		for !events.closed {
+			events.arrived.Wait()
+		}
+	}()
+	select {
+	case <-marked:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Close never marked the journal closed")
+	}
 }
 
 // The ledger applies facts in the order they happened, whichever producer reported them.
@@ -156,16 +218,53 @@ func TestAProgressLinePastTheBacklogIsDroppedAndTheNextBatchSaysHowMany(t *testi
 	}})
 }
 
+// A drop with nothing accepted after it is still written, and Flush waits for its line.
+func TestADropNothingFollowsIsWrittenBeforeFlushReturns(t *testing.T) {
+	lines := &logcapture.Recorder{}
+	ledger := newHeldVoteLedger()
+	events := newJournal(t, Settings{Lines: lines, Ledger: ledger, ProgressBacklog: 1})
+	release := dropWhileTheQueueIsEmpty(t, events, ledger)
+
+	release()
+	events.Flush()
+
+	lines.RequireLine(t, logcapture.Entry{Level: "warn", Msg: "journal skipped progress lines", Fields: []any{
+		"skipped_lines", uint64(2),
+	}})
+}
+
+func TestCloseWritesTheWarningOwedForADropNothingFollowed(t *testing.T) {
+	lines := &logcapture.Recorder{}
+	ledger := newHeldVoteLedger()
+	events := newJournal(t, Settings{Lines: lines, Ledger: ledger, ProgressBacklog: 1})
+	release := dropWhileTheQueueIsEmpty(t, events, ledger)
+
+	release()
+	require.NoError(t, events.Close())
+
+	lines.RequireLine(t, logcapture.Entry{Level: "warn", Msg: "journal skipped progress lines", Fields: []any{
+		"skipped_lines", uint64(2),
+	}})
+}
+
 // Close waits for everything already accepted, so the ledger closing after it holds every fact.
 func TestCloseDrainsWhatWasAcceptedBeforeIt(t *testing.T) {
 	ledger := newHeldLedger()
 	events := newJournal(t, Settings{Lines: &logcapture.Recorder{}, Ledger: ledger})
 	release := holdConsumer(t, events, ledger)
 	events.RecordRace(engine.RaceOutcome{RequestID: "request-1"})
+
+	closeResult := make(chan error, 1)
+	go func() { closeResult <- events.Close() }()
+	awaitClosed(t, events)
 	release()
 
-	require.NoError(t, events.Close())
-
+	select {
+	case err := <-closeResult:
+		require.NoError(t, err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("Close did not return once the consumer was released")
+	}
 	require.Equal(t, []string{"race holding", "race request-1"}, ledger.arrived())
 }
 

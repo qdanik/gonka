@@ -355,6 +355,9 @@ type routingDeps struct {
 
 // newRouting joins the escrow set to the picker through the capacity model; an unjoined escrow serves nothing.
 func newRouting(deps routingDeps) (*registry.Registry, *scheduler.Scheduler, *warmup.Prober, error) {
+	if deps.Journal == nil {
+		return nil, nil, nil, errors.New("routing: Journal is required")
+	}
 	// The warmup needs the registry it observes, so it is handed the registry once that exists.
 	registryDeps := registry.Deps{
 		ServingSessions:  deps.Sessions,

@@ -131,6 +131,11 @@ func closeWithin(component io.Closer, floor time.Duration) func(context.Context)
 		case err := <-closed:
 			return err
 		case <-ctx.Done():
+		}
+		select {
+		case err := <-closed:
+			return err
+		default:
 			return fmt.Errorf("abandoned with events still queued: %w", ctx.Err())
 		}
 	}

@@ -639,20 +639,32 @@ func TestShutdownReachesTheStoreEvenWhenAnEarlierStepFails(t *testing.T) {
 	}
 }
 
-// blockingCloser is a close that never returns on its own, like a journal whose sink is stuck.
+// blockingCloser is a close that returns only once released, like a journal whose sink is stuck.
 type blockingCloser struct {
+	entered  chan struct{}
 	released chan struct{}
+	release  func()
+	result   error
+}
+
+// newBlockingCloser releases the close in cleanup, so the goroutine closeWithin started returns before goleak looks.
+func newBlockingCloser(t *testing.T, result error) *blockingCloser {
+	t.Helper()
+	stuck := &blockingCloser{entered: make(chan struct{}), released: make(chan struct{}), result: result}
+	stuck.release = sync.OnceFunc(func() { close(stuck.released) })
+	t.Cleanup(stuck.release)
+	return stuck
 }
 
 func (c *blockingCloser) Close() error {
+	close(c.entered)
 	<-c.released
-	return nil
+	return c.result
 }
 
 // A stuck journal must not keep nonce accounting, the store and the connections below it from closing.
 func TestTheJournalStepGivesUpWhenItsCloseOutlivesTheBudget(t *testing.T) {
-	stuck := &blockingCloser{released: make(chan struct{})}
-	t.Cleanup(func() { close(stuck.released) })
+	stuck := newBlockingCloser(t, nil)
 	expired, cancel := context.WithCancel(t.Context())
 	cancel()
 
@@ -660,6 +672,32 @@ func TestTheJournalStepGivesUpWhenItsCloseOutlivesTheBudget(t *testing.T) {
 
 	if err == nil || !strings.Contains(err.Error(), "abandoned with events still queued") {
 		t.Fatalf("closeWithin() = %v, want the journal step reported as abandoned", err)
+	}
+}
+
+// The floor lets the journal drain after a step above spent the budget, and the step reports the close's own result.
+func TestTheJournalStepWaitsOutItsFloorWhenTheBudgetIsAlreadySpent(t *testing.T) {
+	refusal := errors.New("journal refused 1 money-lane events past its ceiling of 1")
+	closing := newBlockingCloser(t, refusal)
+	expired, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	stepResult := make(chan error, 1)
+	go func() { stepResult <- closeWithin(closing, time.Hour)(expired) }()
+	select {
+	case <-closing.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("closeWithin() never started the close")
+	}
+	closing.release()
+
+	select {
+	case err := <-stepResult:
+		if !errors.Is(err, refusal) {
+			t.Fatalf("closeWithin() = %v, want the close's own result", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("closeWithin() did not return within 5s of the close returning")
 	}
 }
 
@@ -893,6 +931,15 @@ func routingFor(t *testing.T, capacity *limits.Capacity, participants []string) 
 		t.Fatalf("Add(): %v", err)
 	}
 	return router
+}
+
+// A scheduler without a journal would panic at its first burn, on a goroutine nothing recovers.
+func TestRoutingIsRefusedWithoutAJournal(t *testing.T) {
+	_, _, _, err := newRouting(routingDeps{})
+
+	if err == nil || !strings.Contains(err.Error(), "Journal is required") {
+		t.Fatalf("newRouting() without a journal = %v, want the missing journal named", err)
+	}
 }
 
 // The chain reporting nothing is missing data, not zero capacity: routing on it must still reach a
