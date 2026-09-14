@@ -956,3 +956,16 @@ func TestReapingADispatcherDoesNotHandBackTheSpentReplay(t *testing.T) {
 		t.Error("the host was given a second replay for having been idle")
 	}
 }
+
+func TestADroppedAssignmentNamesTheRequestThatLeft(t *testing.T) {
+	test := newSchedulerHarness(t, schedulerConfig{})
+
+	test.scheduler.dropAssignment(
+		Assignment{Escrow: escrowA, Host: hostA, Nonce: preparedNonce{nonce: 3}},
+		RequestProfile{RequestID: "request-gone", Model: modelA},
+	)
+
+	if got := test.observer.burnRequests(); !slices.Equal(got, []string{"request-gone"}) {
+		t.Fatalf("burned during = %v, want the request whose Pick gave up with the assignment in hand", got)
+	}
+}

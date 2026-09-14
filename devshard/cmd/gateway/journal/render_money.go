@@ -6,14 +6,17 @@ import (
 	"devshard/cmd/gateway/scheduler"
 )
 
-// renderBurn names the nonce only when the session committed one. See README.md, "Absent subjects are omitted".
+// renderBurn names the nonce only when the session committed one, and the request only when the burn had one. See README.md, "Absent subjects are omitted".
 func renderBurn(lines logSink, escrowID string, burned scheduler.Burn) {
-	fields := make([]any, 0, 8)
+	fields := make([]any, 0, 10)
 	fields = append(fields, logkey.Escrow, escrowID)
 	if burned.Nonce != 0 {
 		fields = append(fields, logkey.Nonce, burned.Nonce)
 	}
 	fields = append(fields, logkey.Host, logkey.ShortHost(burned.Participant), logkey.Reason, burned.Reason)
+	if burned.RequestID != "" {
+		fields = append(fields, logkey.BurnedDuringRequest, burned.RequestID)
+	}
 	lines.Warn("nonce burned for nobody", fields...)
 }
 

@@ -78,6 +78,10 @@ The `journal` step sits between `escrow sessions` and `nonce accounting` (`lifec
 
 A key is written only when its subject exists. `request finished` carries `escrow` only when the race picked one, `host` only for the crowned attempt, and `hosts` — every host tried, comma-separated — only when attempts ran and nobody was crowned. A burn carries no `nonce` when the session committed none, which only a session test double does. An empty value reads as a subject with no name, and a query for it matches every line that never had one.
 
+## Which request a burn and a vote belong to
+
+A burn names the request it was spent during under `burned_during_request`: the request a refused slot was meant for, otherwise the oldest request still waiting in the dispatcher's queue when a drain burned the nonce, or the request whose assignment arrived after it had left. The key is deliberately not `request`, because the nonce served nobody and a search for one request's own lines must not return it. Neither id is ever a metric label.
+
 ## Read next
 
 - [`nonces/README.md`](../nonces/README.md) — the ledger sink.

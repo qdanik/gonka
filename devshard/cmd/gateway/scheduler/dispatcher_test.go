@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"errors"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -130,12 +131,13 @@ func (p preparedNonce) Nonce() uint64 { return p.nonce }
 func (p preparedNonce) HostIdx() int  { return p.hostIdx }
 
 type recordingObserver struct {
-	mu          sync.Mutex
-	retired     []string
-	ghosts      []string
-	holds       int
-	trips       int
-	ghostNonces []uint64
+	mu             sync.Mutex
+	retired        []string
+	ghosts         []string
+	holds          int
+	trips          int
+	ghostNonces    []uint64
+	burnRequestIDs []string
 }
 
 func (o *recordingObserver) GhostBurned(_ string, burned Burn) {
@@ -143,6 +145,7 @@ func (o *recordingObserver) GhostBurned(_ string, burned Burn) {
 	defer o.mu.Unlock()
 	o.ghosts = append(o.ghosts, burned.Reason)
 	o.ghostNonces = append(o.ghostNonces, burned.Nonce)
+	o.burnRequestIDs = append(o.burnRequestIDs, burned.RequestID)
 }
 
 func (o *recordingObserver) NonceHeld(string) {
@@ -173,6 +176,12 @@ func (o *recordingObserver) burnedNonces() []uint64 {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	return append([]uint64(nil), o.ghostNonces...)
+}
+
+func (o *recordingObserver) burnRequests() []string {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return append([]string(nil), o.burnRequestIDs...)
 }
 
 func (o *recordingObserver) counts() (holds, trips int) {
@@ -364,7 +373,12 @@ func (h *harness) wantSlots(t *testing.T, held, admitted int) {
 
 func (h *harness) submit(t *testing.T, enqueued time.Time, excluded ...string) *waiter {
 	t.Helper()
-	queued := newWaiter(RequestProfile{Model: modelA, Exclude: excluded, Params: "payload"}, enqueued)
+	return h.submitAs(t, "", enqueued, excluded...)
+}
+
+func (h *harness) submitAs(t *testing.T, requestID string, enqueued time.Time, excluded ...string) *waiter {
+	t.Helper()
+	queued := newWaiter(RequestProfile{RequestID: requestID, Model: modelA, Exclude: excluded, Params: "payload"}, enqueued)
 	if outcome := h.dispatcher.submitWaiter(queued); outcome != submitAccepted {
 		t.Fatalf("submitWaiter on a running dispatcher = %v, want submitAccepted", outcome)
 	}
@@ -926,5 +940,55 @@ func TestFreezeLeavesAnOmittedOptionalPredicateMissing(t *testing.T) {
 
 	if got := frozen.participantBlocked(hostA); got != blockNone {
 		t.Errorf("participantBlocked(%q) = %v, want blockNone when neither optional predicate was given", hostA, got)
+	}
+}
+
+// Nonce 1 binds hostB, the host the request excluded, past the match wait: the drain burns it while serving request-7.
+func TestABurnNamesTheRequestItsDrainWasServing(t *testing.T) {
+	test := newHarness(t, harnessConfig{})
+	stale := test.clock.Now().Add(-2 * matchWaitWindow)
+
+	queued := test.submitAs(t, "request-7", stale, hostB)
+
+	wantAssignment(t, awaitReply(t, queued), hostA, 2)
+	test.dispatcher.stop()
+	if got := test.observer.burnRequests(); !slices.Equal(got, []string{"request-7"}) {
+		t.Fatalf("burned during = %v, want the request the drain was serving", got)
+	}
+}
+
+// The waiter leaves after its nonce is committed, so the burn is charged to the request that left, not to the one served next.
+func TestAnAbandonedAssignmentNamesTheRequestThatLeft(t *testing.T) {
+	var abandonOnce sync.Once
+	var lost *waiter
+	test := newHarness(t, harnessConfig{afterDecide: func(HostBinding) {
+		abandonOnce.Do(func() { lost.abandoned.Store(true) })
+	}})
+	lost = newWaiter(RequestProfile{RequestID: "request-lost", Model: modelA}, test.clock.Now())
+	if outcome := test.dispatcher.submitWaiter(lost); outcome != submitAccepted {
+		t.Fatalf("submitWaiter on a running dispatcher = %v, want submitAccepted", outcome)
+	}
+
+	next := test.submitAs(t, "request-next", test.clock.Now())
+
+	wantAssignment(t, awaitReply(t, next), hostA, 2)
+	if got := test.observer.burnRequests(); !slices.Equal(got, []string{"request-lost"}) {
+		t.Fatalf("burned during = %v, want the request that left before its nonce reached it", got)
+	}
+}
+
+// request-first excluded hostB, so nonce 1 was meant for request-second until admission refused the slot; nonce 3 finds hostB throttled with request-second the oldest waiter left.
+func TestAThrottledBurnNamesTheRequestItsSlotWasMeantFor(t *testing.T) {
+	test := newHarness(t, harnessConfig{refused: []string{hostB}, holdStart: true})
+	first := test.submitAs(t, "request-first", test.clock.Now(), hostB)
+	second := test.submitAs(t, "request-second", test.clock.Now())
+
+	test.dispatcher.start()
+
+	wantAssignment(t, awaitReply(t, first), hostA, 2)
+	wantAssignment(t, awaitReply(t, second), hostA, 4)
+	test.dispatcher.stop()
+	if got := test.observer.burnRequests(); !slices.Equal(got, []string{"request-second", "request-second"}) {
+		t.Fatalf("burned during = %v, want the request each burned nonce was meant for, never the head of the queue", got)
 	}
 }

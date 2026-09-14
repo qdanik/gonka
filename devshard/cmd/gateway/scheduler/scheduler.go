@@ -114,7 +114,7 @@ func (s *Scheduler) Pick(ctx context.Context, profile RequestProfile) (Assignmen
 	case <-ctx.Done():
 		// Leaving and taking are one step: an assignment delivered in this instant holds a nonce and a slot.
 		if delivered, wasDelivered := queued.abandon(); wasDelivered && delivered.err == nil {
-			s.dropAssignment(delivered.assignment, profile.Model)
+			s.dropAssignment(delivered.assignment, profile)
 		}
 		return Assignment{}, ctx.Err()
 	}
@@ -138,11 +138,14 @@ func (s *Scheduler) claimAndSubmit(escrow Escrow, queued *waiter) (*dispatcher, 
 	}
 }
 
-func (s *Scheduler) dropAssignment(assignment Assignment, model string) {
-	s.limiter.Release(assignment.Host, model)
+func (s *Scheduler) dropAssignment(assignment Assignment, profile RequestProfile) {
+	s.limiter.Release(assignment.Host, profile.Model)
 	assignment.ReleaseEscrow()
 	if s.observer != nil {
-		s.observer.GhostBurned(assignment.Escrow, Burn{Nonce: assignment.Nonce.Nonce(), Participant: assignment.Host, Reason: ghostAbandoned.reason()})
+		s.observer.GhostBurned(assignment.Escrow, Burn{
+			Nonce: assignment.Nonce.Nonce(), Participant: assignment.Host,
+			Reason: ghostAbandoned.reason(), RequestID: profile.RequestID,
+		})
 	}
 }
 
@@ -302,8 +305,9 @@ func pocPreserved(snapshot chain.PhaseSnapshot, model string) map[string]bool {
 	return loaded
 }
 
-// RequestProfile is one request as routing reads it; Params must be exactly devshard/user.InferenceParams. See README, "The boundary types".
+// RequestProfile is one request as routing reads it; RequestID only names it on the burns it causes, and Params must be exactly devshard/user.InferenceParams. See README, "The boundary types".
 type RequestProfile struct {
+	RequestID   string
 	Model       string
 	Escrow      string
 	InputTokens int
@@ -311,11 +315,12 @@ type RequestProfile struct {
 	Params      any
 }
 
-// Burn is a committed nonce the scheduler spent on nobody.
+// Burn is a committed nonce the scheduler spent on nobody, and the request it was spent during.
 type Burn struct {
 	Nonce       uint64
 	Participant string
 	Reason      string
+	RequestID   string
 }
 
 // Assignment is a committed nonce ready to spend. See README, "The boundary types".

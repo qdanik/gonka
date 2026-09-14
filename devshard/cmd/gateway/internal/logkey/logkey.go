@@ -35,6 +35,9 @@ const (
 	PreviousContextLimit = "previous_context_limit"
 )
 
+// Which request a nonce spent on nobody was spent during; never the request key, which names a request's own lines.
+const BurnedDuringRequest = "burned_during_request"
+
 const (
 	ReceiptTimeoutMS      = "receipt_timeout_ms"
 	FirstTokenFloorMS     = "first_token_floor_ms"
