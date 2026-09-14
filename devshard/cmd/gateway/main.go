@@ -160,7 +160,8 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 	participants.SetNarrator(events)
 	capacity := limits.NewCapacity(participants.Available)
 	observer.Subscribe(capacity.Update)
-	observer.Subscribe((&phaseNarrator{}).observe)
+	observer.SetNarrator(events)
+	observer.Subscribe((&phaseNarrator{events: events}).observe)
 	gatewayLimiter := limits.NewGatewayLimiter(limits.GatewayConfigFromLimits(configuration.Limits))
 	buffers := api.NewBufferBudget(configuration.Limits.MaxBufferedResponseBytes)
 	configHolder.Subscribe(func(next *config.Config) {

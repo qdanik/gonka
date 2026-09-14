@@ -5,12 +5,10 @@ import (
 
 	"devshard/cmd/gateway/chain"
 	"devshard/cmd/gateway/engine"
-	"devshard/cmd/gateway/internal/logkey"
 	"devshard/cmd/gateway/journal"
 	"devshard/cmd/gateway/metrics"
 	"devshard/cmd/gateway/nonces"
 	"devshard/cmd/gateway/scheduler"
-	"devshard/logging"
 )
 
 // tracedDispatches counts dispatch events and hands the ones worth a line or a ledger fact to the journal. See README.md, "Two readers of one fact".
@@ -41,8 +39,9 @@ func (t tracedDispatches) NonceHeld(escrowID string) { t.recorder.NonceHeld(escr
 
 func (t tracedDispatches) EscrowRetired(escrowID string) { t.recorder.EscrowRetired(escrowID) }
 
-// phaseNarrator writes a line only when something changed; the observer polls twelve times a minute.
+// phaseNarrator hands the journal a chain change only when something moved; the observer polls twelve times a minute.
 type phaseNarrator struct {
+	events  *journal.Journal
 	mu      sync.Mutex
 	started bool
 	epoch   uint64
@@ -74,24 +73,18 @@ func (n *phaseNarrator) advance(snapshot chain.PhaseSnapshot) phaseChange {
 
 func (n *phaseNarrator) observe(snapshot chain.PhaseSnapshot) {
 	change := n.advance(snapshot)
-	first := change.first
-	epochChanged := change.epoch
-	blockChanged := change.block
-
-	if first || epochChanged {
-		logging.Info("chain epoch",
-			logkey.Epoch, snapshot.EpochIndex, logkey.Phase, snapshot.EpochPhase,
-			logkey.Height, snapshot.BlockHeight, logkey.SwitchHeight, snapshot.EpochSwitchBlockHeight)
+	if change.first || change.epoch {
+		n.events.ChainEpoch(snapshot.EpochIndex, snapshot.EpochPhase, snapshot.BlockHeight, snapshot.EpochSwitchBlockHeight)
 	}
-	if !first && !blockChanged {
+	if !change.first && !change.block {
 		return
 	}
 	if snapshot.RequestsBlocked {
-		logging.Warn("chain blocked requests", logkey.Reason, snapshot.BlockReason, logkey.Epoch, snapshot.EpochIndex, logkey.Height, snapshot.BlockHeight)
+		n.events.ChainRequestsBlocked(snapshot.BlockReason, snapshot.EpochIndex, snapshot.BlockHeight)
 		return
 	}
-	if !first {
-		logging.Info("chain unblocked requests", logkey.Epoch, snapshot.EpochIndex, logkey.Height, snapshot.BlockHeight)
+	if !change.first {
+		n.events.ChainRequestsUnblocked(snapshot.EpochIndex, snapshot.BlockHeight)
 	}
 }
 

@@ -9,9 +9,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-
-	"devshard/cmd/gateway/internal/logkey"
-	"devshard/logging"
 )
 
 const (
@@ -32,6 +29,12 @@ type ObserverConfig struct {
 	Now              func() time.Time
 }
 
+// healthNarrator is satisfied by *journal.Journal; chain never imports it. See README.md, "The poll loop".
+type healthNarrator interface {
+	ChainSnapshotStale(lastError string, epoch uint64, height int64)
+	ChainSnapshotRecovered(epoch uint64, height int64)
+}
+
 // PhaseObserver polls chain phase and participant state and publishes an immutable PhaseSnapshot. See README.md, "What the chain observer provides".
 type PhaseObserver struct {
 	publicAPIBaseURL string
@@ -41,8 +44,9 @@ type PhaseObserver struct {
 	now              func() time.Time
 	versions         *VersionsCache
 
-	current atomic.Pointer[PhaseSnapshot]
-	health  snapshotHealth
+	current  atomic.Pointer[PhaseSnapshot]
+	health   snapshotHealth
+	narrator healthNarrator
 
 	mu          sync.Mutex
 	subscribers map[int]func(PhaseSnapshot)
@@ -337,6 +341,11 @@ func (o *PhaseObserver) Subscribe(cb func(PhaseSnapshot)) (cancel func()) {
 	}
 }
 
+// SetNarrator binds the journal the health edge is written through; call it before Start.
+func (o *PhaseObserver) SetNarrator(narrator healthNarrator) {
+	o.narrator = narrator
+}
+
 // snapshotHealth remembers the last publish's health so a five-second poll speaks only on the turn.
 type snapshotHealth struct {
 	mu       sync.Mutex
@@ -372,12 +381,14 @@ func joinSnapshotError(existing, added string) string {
 // narrateHealth carries the cause the health gauge cannot: LastError names which of four reads failed.
 func (o *PhaseObserver) narrateHealth(snapshot PhaseSnapshot) {
 	change := o.health.advance(snapshot.LastError)
+	if o.narrator == nil {
+		return
+	}
 	switch {
 	case change.degraded:
-		logging.Warn("chain snapshot stale", logkey.Error, snapshot.LastError,
-			logkey.Epoch, snapshot.EpochIndex, logkey.Height, snapshot.BlockHeight)
+		o.narrator.ChainSnapshotStale(snapshot.LastError, snapshot.EpochIndex, snapshot.BlockHeight)
 	case change.recovered:
-		logging.Info("chain snapshot recovered", logkey.Epoch, snapshot.EpochIndex, logkey.Height, snapshot.BlockHeight)
+		o.narrator.ChainSnapshotRecovered(snapshot.EpochIndex, snapshot.BlockHeight)
 	}
 }
 

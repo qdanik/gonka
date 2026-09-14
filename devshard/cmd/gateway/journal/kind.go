@@ -22,10 +22,11 @@ const (
 	KindHostTransition
 	KindExcludedHostServed
 	KindEscrowTransition
+	KindChainTransition
 )
 
 // kindCount is one past the last kind, so a table indexed by kind has a slot for each.
-const kindCount = KindEscrowTransition + 1
+const kindCount = KindChainTransition + 1
 
 var kindNames = [kindCount]string{
 	KindRaceReported:        "race_reported",
@@ -46,6 +47,7 @@ var kindNames = [kindCount]string{
 	KindHostTransition:      "host_transition",
 	KindExcludedHostServed:  "excluded_host_served",
 	KindEscrowTransition:    "escrow_transition",
+	KindChainTransition:     "chain_transition",
 }
 
 func (k Kind) String() string {

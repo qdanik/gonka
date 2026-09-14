@@ -15,7 +15,7 @@ Race outcomes and race trace steps, request records, limiter refusals and uncach
 - **It does not classify.** Which counter a nonce lands in is `accounting`'s decision.
 - **The sweep writes the ledger directly.** `Recorder.sweep` (`nonces/recorder.go`) calls `Book.OpenEscrow`, `MarkFinished`, the `Observe*` methods and `RetireEscrow` on its own goroutine, never through this package.
 - **The warmup's `OpenEscrow` is a direct write too.** `Prober.openLedger` (`warmup/warmup.go`) calls it itself, because the open must land before the probe reaches the ledger through the journal.
-- **A few lifecycle lines are still written by their own packages.** The journal is not yet the only writer of lifecycle lines: the chain lines in `chain/observer.go` and `observers.go` are an example.
+- **Process, admin and store lines are written where they happen.** `gateway started`, `gateway stopped` and `gateway exited` (`lifecycle.go`, `main.go`), the boot republish and route-prefix lines (`devshards.go`), admin actions (`api/admin.go`, `api/errors.go`), and the nonce ledger's, accounting's and environment's own lines (`nonces`, `accounting`, `env`) call `logging` directly; no lifecycle producer does.
 
 ## Boundaries
 
@@ -76,6 +76,7 @@ The `journal` step sits between `escrow sessions` and `nonce accounting` (`lifec
 | `KindHostTransition` | `perf.Tracker`, `limits.ParticipantLimiter`, `engine` crown strikes | none | host withheld and back, capability refusals, cut off and back, crown denied and restored |
 | `KindExcludedHostServed` | `tracedDispatches.ExcludedHostServed` (`observers.go`) | none | `nonce spent on a host the request excluded` |
 | `KindEscrowTransition` | `registry.Registry`, `publishEscrows` (`devshards.go`), `escrow.Manager`, `chain.TxClient`, `warmup.Prober` | none | escrow published, retired, drained, created, settled; boot and warmup failures |
+| `KindChainTransition` | the chain observer's health edge through `healthNarrator`; `phaseNarrator` (`observers.go`) for epoch and blocking changes | none | chain epoch, blocked and unblocked requests, snapshot stale and recovered |
 
 ## Absent subjects are omitted
 
@@ -102,6 +103,8 @@ A narrator method copies its arguments into a render closure and hands it to `em
 | `escrow.Manager` | `lifecycleNarrator`, bound by `Deps.Narrator` | `KindEscrowTransition` | money |
 | `chain.TxClient` | `settlementNarrator`, bound by `Config.Narrator` | `KindEscrowTransition` | money |
 | `warmup.Prober` | `warmupNarrator`, bound by `SetNarrator` | `KindEscrowTransition` | money |
+| `chain.PhaseObserver` | `healthNarrator`, bound by `SetNarrator` | `KindChainTransition` | progress |
+| `phaseNarrator` (`observers.go`) | none: the composition root may import `journal`, so it calls the chain methods directly | `KindChainTransition` | progress |
 
 Host transitions ride the progress lane: they follow the host count and the backoff, never the request rate, and one dropped in a flood is counted like any other progress line.
 
@@ -110,6 +113,10 @@ Escrow transitions ride the money lane: `escrow settled` is the audit record of 
 ## Nil errors are omitted
 
 An error key is written only when there is an error. `escrow warmup found no nonce to spend` from a probe that failed without one carries no `error`, and `escrow warmed` carries `catch_up_error` only when the catch-up failed. A nil error rendered as `error=<nil>` in text and `"error":null` in JSON, which a search for failing warmups matched. The warmup's own vote is written at Warn when it failed, as a race's failed vote is, and at Info otherwise.
+
+## Chain transitions
+
+The chain observer and `phaseNarrator` keep deciding what moved, both on the observer's publishing goroutine: the observer compares each publish's `LastError` with the last one and narrates a turn to stale or recovered, and `phaseNarrator` compares epoch and phase, blocking state and reason. The journal only renders what it is handed. `publish` narrates health before it notifies subscribers, so the health line is queued before the epoch line of the same snapshot, the order the observer used when it wrote the health line itself. `ChainEpoch` writes nothing for epoch 0, which only a poll that never read the epoch publishes — a silence rule decided inside its closure, like the ones `renderTimeoutVote` applies. `phaseNarrator` still records that snapshot, so the next one that carries an epoch is a change and is announced.
 
 ## Read next
 

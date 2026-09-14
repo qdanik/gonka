@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"devshard/cmd/gateway/chain"
 	"devshard/cmd/gateway/engine"
 	"devshard/cmd/gateway/internal/logcapture"
 	"devshard/cmd/gateway/metrics"
@@ -62,5 +63,30 @@ func TestAFailedWarmupVoteWritesNoTimeoutVoteLine(t *testing.T) {
 
 	if lines := logged.All(); len(lines) != 1 {
 		t.Fatalf("lines after the warmup's own failed vote = %d, want 1: the warmup vote must reach RecordProbeTimeout, not the race's own line", len(lines))
+	}
+}
+
+// phaseNarrator decides what moved and the journal writes it; a first poll that read no epoch announces none.
+func TestThePhaseNarratorHandsItsChangesToTheJournal(t *testing.T) {
+	logged := logcapture.Install(t)
+	events := newTestJournal(t)
+	narrator := &phaseNarrator{events: events}
+
+	narrator.observe(chain.PhaseSnapshot{LastError: "fetch epoch info: 503"})
+	narrator.observe(chain.PhaseSnapshot{EpochIndex: 7, EpochPhase: chain.EpochPhasePoCGenerate, BlockHeight: 100, RequestsBlocked: true, BlockReason: chain.BlockReasonPoC})
+	narrator.observe(chain.PhaseSnapshot{EpochIndex: 7, EpochPhase: chain.EpochPhasePoCGenerate, BlockHeight: 120})
+	events.Flush()
+
+	logged.RequireLine(t, logcapture.Entry{Level: "info", Msg: "chain epoch", Fields: []any{
+		"epoch", uint64(7), "phase", chain.EpochPhasePoCGenerate, "height", int64(100), "switch_height", int64(0),
+	}})
+	logged.RequireLine(t, logcapture.Entry{Level: "warn", Msg: "chain blocked requests", Fields: []any{
+		"reason", chain.BlockReasonPoC, "epoch", uint64(7), "height", int64(100),
+	}})
+	logged.RequireLine(t, logcapture.Entry{Level: "info", Msg: "chain unblocked requests", Fields: []any{
+		"epoch", uint64(7), "height", int64(120),
+	}})
+	if recorded := logged.All(); len(recorded) != 3 {
+		t.Fatalf("recorded %+v, want exactly three chain lines: the epoch-less first snapshot announces no epoch", recorded)
 	}
 }
