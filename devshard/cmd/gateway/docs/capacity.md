@@ -164,9 +164,9 @@ Every restart starts clean: no ejections, no capability counts, every AIMD windo
 
 The one host judgement that *is* persisted is the operator's manual suspicious-host pin, and for the opposite reason — a pin the gateway acts on but forgets on restart is a state an operator cannot see. The store is written before the in-memory copy (`main.go`, `suspiciousHosts.Add`).
 
-Two asymmetries the code does not state:
+Two things the code does not state:
 
-- The participant limiter's `{participant, model}` state map never evicts; only the performance tracker ages hosts out. The participant set is the bounded validator set, so this is survivable, but the two packages differ.
+- The participant limiter forgets a `{participant, model}` pair on the window the performance tracker ages hosts out on, `perf_host_staleness_seconds`, but only a pair with nothing in flight, no probe awaiting its verdict and no cut-off still running. The scan runs inside `Acquire`, at most once per tenth of the window, after the pair being admitted is marked used (`limits/participant.go`, `ParticipantLimiter.forgetIdleLocked`). A forgotten host that returns starts at the initial window with a closed breaker, as it would after a restart.
 - Ejection thresholds are re-read from configuration on every sample, so they hot-reload — but a host's decay half-life is captured when the host is first seen, so a changed half-life applies only to hosts seen afterwards.
 
 ## Configuration
@@ -185,7 +185,7 @@ Two asymmetries the code does not state:
 | `perf_failure_rate_threshold` / `perf_failure_rate_min_volume` | 0.15 / 20 | Rate-based ejection trigger and its volume gate. |
 | `perf_ejection_base_seconds` / `perf_ejection_max_seconds` | 30 / 600 | Ejection duration ladder. |
 | `perf_max_ejection_fraction` / `perf_min_available_hosts` | 0.5 / 4 | Pool-wide ejection cap, and the reason the routing gate cannot empty a model's fleet. |
-| `perf_host_staleness_seconds` | 3 600 | When an unseen host is forgotten by the performance tracker, and when its participant-labelled race series are deleted. |
+| `perf_host_staleness_seconds` | 3 600 | When an unseen host is forgotten by the performance tracker and the participant limiter, and when its participant-labelled race series are deleted. |
 | `GATEWAY_PERF_EWMA_HALFLIFE_SECONDS` | 600 | Half-life of the decayed success and failure counters. |
 
 Every row above is an admin override, changeable at run time without a redeploy, and every one also takes a `GATEWAY_*` environment variable read at boot. The `perf_*` rows joined them when the ejection detector's thresholds were made reachable without a rebuild.

@@ -231,6 +231,8 @@ Two labels and one label value no longer exist, and a selector that names one ma
 
 Participant-labelled race series — `devshard_gateway_attempts_*`, `devshard_gateway_attempt_failures_total`, `devshard_gateway_timeout_actions_total`, `devshard_gateway_stream_carry_overflow_total` and every `devshard_gateway_participant_*` family except the window and breaker gauges — are deleted once their participant and model go unwritten for `perf_host_staleness_seconds`. A host that returns afterwards starts from fresh counters, which `rate()` reads as a reset.
 
+`devshard_gateway_participant_window_size`, `devshard_gateway_participant_window_inflight` and `devshard_gateway_participant_breaker_state` stop reporting a pair the participant limiter forgot on the same window, and `devshard_gateway_participants_tracked` counts only the pairs it still holds.
+
 ## Reading the gateway's state
 
 | To see | Call |

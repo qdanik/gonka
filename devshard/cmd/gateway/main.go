@@ -145,7 +145,7 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 
 	recorder := nonces.Open(configuration.NonceAccounting, storageDir, observer, clock)
 
-	participants := limits.NewParticipantLimiter(limits.ParticipantConfigFromLimits(configuration.Limits), clock)
+	participants := limits.NewParticipantLimiter(limits.ParticipantConfigFromConfig(configuration), clock)
 	capacity := limits.NewCapacity(participants.Available)
 	observer.Subscribe(capacity.Update)
 	observer.Subscribe((&phaseNarrator{}).observe)
@@ -153,7 +153,7 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 	buffers := api.NewBufferBudget(configuration.Limits.MaxBufferedResponseBytes)
 	configHolder.Subscribe(func(next *config.Config) {
 		gatewayLimiter.Reconfigure(limits.GatewayConfigFromLimits(next.Limits))
-		participants.Reconfigure(limits.ParticipantConfigFromLimits(next.Limits))
+		participants.Reconfigure(limits.ParticipantConfigFromConfig(next))
 		buffers.Retune(next.Limits.MaxBufferedResponseBytes)
 	})
 	hosts := perf.NewTracker(configHolder, clock)

@@ -22,12 +22,14 @@ const (
 	ModelOutcome
 ) // Overload=429/503; UpstreamFault=the host answered 5xx; ModelOutcome=model-caused (empty stream etc.), never a host signal
 
+// ParticipantConfig's IdleEviction of zero keeps every pair for the life of the process.
 type ParticipantConfig struct {
 	Initial       int64
 	Max           int64
 	AfterFailures int64
 	BaseOpen      time.Duration
 	MaxOpen       time.Duration
+	IdleEviction  time.Duration
 }
 
 type key struct {
@@ -43,14 +45,16 @@ type hostState struct {
 	openUntil                time.Time
 	backoffCount             int
 	halfOpen                 bool
+	lastUsed                 time.Time
 }
 
 type ParticipantLimiter struct {
-	mu     sync.Mutex
-	cfg    ParticipantConfig
-	states map[key]*hostState
-	now    func() time.Time
-	jitter func(time.Duration) time.Duration
+	mu        sync.Mutex
+	cfg       ParticipantConfig
+	states    map[key]*hostState
+	now       func() time.Time
+	jitter    func(time.Duration) time.Duration
+	lastSweep time.Time
 }
 
 func NewParticipantLimiter(cfg ParticipantConfig, now func() time.Time) *ParticipantLimiter {
@@ -111,8 +115,10 @@ func (l *ParticipantLimiter) Acquire(participant, model string) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	state := l.stateLocked(key{participant: participant, model: model})
 	now := l.now()
+	state := l.stateLocked(key{participant: participant, model: model})
+	state.lastUsed = now
+	l.forgetIdleLocked(now)
 
 	if now.Before(state.openUntil) {
 		return false
@@ -229,6 +235,21 @@ func (l *ParticipantLimiter) Release(participant, model string) {
 		return
 	}
 	state.inflight--
+	state.lastUsed = l.now()
+}
+
+// forgetIdleLocked scans at most once per tenth of IdleEviction, and forgets only a pair with nothing in flight, no probe awaiting its verdict and no cut-off running. See capacity.md, "Nothing here is persisted".
+func (l *ParticipantLimiter) forgetIdleLocked(now time.Time) {
+	idleFor := l.cfg.IdleEviction
+	if idleFor <= 0 || now.Sub(l.lastSweep) < idleFor/10 {
+		return
+	}
+	l.lastSweep = now
+	for tracked, state := range l.states {
+		if state.inflight == 0 && !state.halfOpen && !now.Before(state.openUntil) && now.Sub(state.lastUsed) > idleFor {
+			delete(l.states, tracked)
+		}
+	}
 }
 
 func cutoffReason(halfOpen bool) string {
@@ -248,6 +269,7 @@ func (l *ParticipantLimiter) OnResult(participant, model string, verdict Verdict
 
 	state := l.stateLocked(key{participant: participant, model: model})
 	now := l.now()
+	state.lastUsed = now
 
 	switch verdict {
 	case Success:
