@@ -43,8 +43,8 @@ const (
 )
 
 func main() {
-	// Before anything can log: a collector reads JSON fields as labels, a text line needs re-parsing.
-	logging.ConfigureFormat(os.Getenv("GATEWAY_LOG_FORMAT"))
+	// Before anything can log. See README.md, "Wiring order, and the knots in it".
+	logging.ConfigureFormat(env.LogFormat())
 	if err := serve(); err != nil {
 		logging.Error("gateway exited", logkey.Error, err)
 		os.Exit(1)

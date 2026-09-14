@@ -3144,7 +3144,7 @@
             "type": "loki",
             "uid": "loki"
           },
-          "expr": "{service_name=\"devshard-gateway\"} |= \"host_clock_offset_ms=\"",
+          "expr": "{service_name=\"devshard-gateway\"} |= \"request finished\" | json | host_clock_offset_ms != \"\"",
           "refId": "A"
         }
       ],
@@ -3153,7 +3153,7 @@
         {
           "id": "extractFields",
           "options": {
-            "format": "kvp",
+            "format": "json",
             "keepTime": false,
             "replace": false,
             "source": "Line"
@@ -4228,7 +4228,7 @@
           },
           "direction": "backward",
           "editorMode": "code",
-          "expr": "{service_name=\"devshard-gateway\"} |= \"request finished\" |= \"duration_ms=\"",
+          "expr": "{service_name=\"devshard-gateway\"} |= \"request finished\" | json | duration_ms != \"\"",
           "queryType": "range",
           "refId": "A"
         }
@@ -4238,7 +4238,7 @@
         {
           "id": "extractFields",
           "options": {
-            "format": "kvp",
+            "format": "json",
             "keepTime": false,
             "replace": false,
             "source": "Line"
@@ -4274,6 +4274,7 @@
                 "input_tokens",
                 "output_tokens",
                 "host",
+                "hosts",
                 "outcome",
                 "duration_ms",
                 "error"
@@ -4289,13 +4290,14 @@
             "indexByName": {
               "duration_ms": 0,
               "error": 2,
-              "escrow": 7,
+              "escrow": 8,
               "host": 3,
-              "input_tokens": 5,
-              "model": 4,
+              "hosts": 4,
+              "input_tokens": 6,
+              "model": 5,
               "outcome": 1,
-              "output_tokens": 6,
-              "request": 8
+              "output_tokens": 7,
+              "request": 9
             },
             "renameByName": {
               "duration_ms": "",
