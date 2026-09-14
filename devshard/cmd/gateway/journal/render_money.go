@@ -26,3 +26,8 @@ func renderTimeoutVote(lines logSink, vote *engine.TimeoutEvent) {
 		logkey.Host, logkey.ShortHost(vote.Participant), logkey.Model, vote.Model,
 		logkey.Kind, vote.Kind, logkey.Reason, vote.Reason)
 }
+
+// renderProbeRefused names the warmup nonce the ledger refused; nothing else records it.
+func renderProbeRefused(lines logSink, escrowID string, nonce uint64, err error) {
+	lines.Warn("escrow warmup could not settle its nonce", logkey.Escrow, escrowID, logkey.Nonce, nonce, logkey.Error, err)
+}

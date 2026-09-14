@@ -1,10 +1,12 @@
 package journal
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 
+	"devshard/cmd/gateway/accounting"
 	"devshard/cmd/gateway/engine"
 	"devshard/cmd/gateway/internal/logcapture"
 )
@@ -66,4 +68,18 @@ func TestAFailedProbeVoteReachesTheLedgerWithoutARaceLine(t *testing.T) {
 
 	require.Empty(t, logged.All())
 	require.Equal(t, []string{"timeout 7 42 failed"}, ledger.arrived())
+}
+
+// Only the book sees a refused probe; the journal names it from the refusal the ledger returns.
+func TestAProbeTheLedgerRefusedIsLogged(t *testing.T) {
+	logged := logcapture.Install(t)
+	refusal := fmt.Errorf("%w: %s", accounting.ErrUnknownEscrow, "escrow-9")
+	events := newJournal(t, Settings{Ledger: &ledgerSpy{probeRefusal: refusal}})
+
+	events.ProbeRecorded("escrow-9", accounting.Attempt{Nonce: 7, Sent: true, Acknowledged: true, Terminal: accounting.TerminalWarmupProbe})
+	events.Flush()
+
+	logged.RequireLine(t, logcapture.Entry{Level: "warn", Msg: "escrow warmup could not settle its nonce", Fields: []any{
+		"escrow", "escrow-9", "nonce", uint64(7), "error", fmt.Errorf("%w: %s", accounting.ErrUnknownEscrow, "escrow-9"),
+	}})
 }

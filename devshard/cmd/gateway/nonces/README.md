@@ -6,7 +6,8 @@
 
 - **`Recorder`** — opened by `Open` when nonce accounting is enabled, `nil` when it is not, so a disabled ledger costs nothing and every call site tolerates the nil.
 - **Three live sources**, each delivered by the [`journal`](../journal/)'s consumer rather than on the producer's goroutine. The race, through `RecordRace`; the scheduler's burns, through `RecordGhost`; the timeout votes, through `RecordTimeout`.
-- **Two chain sources.** A per-escrow diff watcher that turns applied timeouts and validation verdicts into ledger entries, and a periodic sweep that reconciles finished nonces, host stats and open challenges with what the chain actually holds.
+- **Two chain sources.** A per-escrow diff watcher that hands every composed diff to the [`journal`](../journal/), which reads its validation verdicts and applied timeouts under the session lock and applies them later through `RecordDiffFacts`; and a periodic sweep that reconciles finished nonces, host stats and open challenges with what the chain actually holds.
+- **The warmup probe's settlement**, through `RecordProbe`, delivered by the journal. When the book refuses the probe, `RecordProbe` returns the refusal and the journal writes `escrow warmup could not settle its nonce`: only the book can see it.
 - **The HTTP listener and the Prometheus collectors** for the book it owns.
 
 ## What it does not own
@@ -17,6 +18,7 @@ It does not classify. Which counter a nonce lands in is `accounting`'s decision;
 
 - **A disabled ledger is a nil `*Recorder`, not a no-op object.** Every method tolerates a nil receiver, which is what keeps the enabled and disabled paths from diverging.
 - **The sweep is the safety net, not the primary path.** Live events are recorded as they happen; the sweep exists because the gateway can miss one — a restart, a dropped diff — and the chain is the authority.
+- **The book's lock is never taken under a session's lock.** The diff observer runs under the lock of the session that composed the diff and only appends to the journal. The watcher installs itself only with the journal `Start` receives, which `lifecycle.go` passes from the composed gateway.
 
 ## The judgements it does make
 

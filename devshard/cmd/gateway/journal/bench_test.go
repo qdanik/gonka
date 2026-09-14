@@ -3,6 +3,8 @@ package journal
 import (
 	"testing"
 	"time"
+
+	"devshard/types"
 )
 
 // The sink keeps what a benchmark built from being optimised away.
@@ -47,5 +49,29 @@ func BenchmarkRequestFinishedFields(b *testing.B) {
 	b.ReportAllocs()
 	for b.Loop() {
 		sinkFields = requestFinishedFields(&line)
+	}
+}
+
+// DiffComposed runs under the session lock for every diff an escrow composes that carries a ledger fact.
+func BenchmarkDiffComposed(b *testing.B) {
+	events := New(Settings{Lines: discardLines{}})
+	b.Cleanup(func() { _ = events.Close() })
+	diff := composedDiff()
+
+	b.ReportAllocs()
+	for b.Loop() {
+		events.DiffComposed("escrow-1", diff)
+	}
+}
+
+// Almost every composed diff carries no ledger fact; that one must cost the session lock no allocation.
+func BenchmarkDiffComposedWithoutFacts(b *testing.B) {
+	events := New(Settings{Lines: discardLines{}})
+	b.Cleanup(func() { _ = events.Close() })
+	diff := &types.Diff{Nonce: 9, Txs: []*types.DevshardTx{{Tx: &types.DevshardTx_StartInference{}}}}
+
+	b.ReportAllocs()
+	for b.Loop() {
+		events.DiffComposed("escrow-1", diff)
 	}
 }

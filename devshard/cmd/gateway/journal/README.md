@@ -17,6 +17,7 @@ Every lifecycle step of a request, attempt, nonce, timeout vote and escrow drain
 ## Boundaries
 
 - **Producers never import this package.** `engine`, `scheduler`, `nonces` and `warmup` declare the interface they call; `api` imports it only for `RequestLine`. The composition root adapts the rest (`observers.go`).
+- **`DiffFact` is declared in `accounting`** and aliased here, so `*nonces.Recorder` satisfies `ledgerSink` without importing this package.
 - **A disabled ledger is a nil interface, never a typed nil.** `journalSettings` in `observers.go` leaves `Settings.Ledger` unset when the recorder is nil; a nil pointer inside the interface is non-nil to the consumer's check.
 - **No sink writes what it is handed.** A race outcome's attempts are the slice `api` reads on the response path.
 - **A renderer allocates the fields of every line.** A logger may keep the slice it is given; `logcapture.Recorder` does.
@@ -36,6 +37,7 @@ Both lanes share one queue, so a line and a ledger fact keep the order they happ
 
 - **The consumer never holds the journal's mutex while it calls a sink.** It swaps the pending slice out under the mutex and delivers the batch outside it.
 - **The mutex guards a slice of small values.** A producer's payload is copied once, outside the mutex, when its method receives it; under the mutex only a pointer and a few scalars are appended, however long the queue grows.
+- **The session diff observer calls in under the session lock** (`devshard/user/session.go`, `SetDiffObserver`). `DiffComposed` counts the diff's ledger facts before it allocates, copies them into `DiffFact` values and appends one small event; the book's own lock is taken later, on the consumer, never under the session's. A diff with no verdict and no applied timeout allocates nothing and is not queued.
 - **A slow ledger delays every line.** Lines and ledger facts share one consumer, so while `Book.Snapshot` holds the book's read lock the consumer waits on its next ledger fact, and progress lines past the backlog are dropped.
 - **A line's timestamp is when the consumer wrote it**, not when the step happened, and lines of different kinds can interleave differently than when each producer wrote its own.
 
@@ -57,6 +59,8 @@ The `journal` step sits between `escrow sessions` and `nonce accounting` (`lifec
 | `KindTimeoutVote` | `nonceAccountedRaces.RecordTimeout` for a race vote; `probeVotes.RecordTimeout` through `RecordProbeTimeout` for a warmup vote (`observers.go`) | `RecordTimeout` | `timeout vote failed`, Warn (`render_money.go`): a race vote whose action is `failed` for any reason but `escrow_gone_from_hosts`, which the escrow's own line already reports once. A warmup vote writes none; the warmup writes its own line |
 | `KindNonceBurned` | `tracedDispatches.GhostBurned` (`observers.go`) | `RecordGhost` | `nonce burned for nobody`, Warn (`render_money.go`) |
 | `KindBurnBudgetExhausted` | `tracedDispatches.BurnBudgetExhausted` (`observers.go`) | none | `escrow stopped burning nonces at its budget`, Warn (`render_money.go`) |
+| `KindDiffComposed` | the diff observer `nonces.Recorder.watchDiffs` installs, through `DiffComposed`, under the session lock | `RecordDiffFacts` | none |
+| `KindWarmupProbe` | `warmup.Prober.record` through `ProbeRecorded` | `RecordProbe` | `escrow warmup could not settle its nonce`, Warn (`render_money.go`), when `RecordProbe` returns the book's refusal |
 | `KindNonceStranded` | `raceCoordinator.strand` through `RecordStep` (`engine/race.go`) | none | `nonce stranded`, Warn (`render_race.go`) |
 | `KindHostDiverged` | `raceCoordinator.stateDiverged` through `RecordStep` (`engine/report.go`) | none | `host blocked for state divergence` or `host rewound for state divergence`, Warn (`render_race.go`) |
 | `KindNonceCommitted` | `raceCoordinator.launch` through `RecordStep` (`engine/pick.go`) | none | `nonce committed`, Info (`render_race.go`) |

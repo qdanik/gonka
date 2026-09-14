@@ -44,11 +44,12 @@ Five files, and what each is for: `main.go` wires everything, `lifecycle.go` sta
 
 ### Wiring order, and the knots in it
 
-Most of `compose` is a straight line. Four places are not:
+Most of `compose` is a straight line. Five places are not:
 
 - **Logging is configured before anything else can log.** A collector reads JSON fields as labels; the default text line carries `log`'s own date prefix and would have to be re-parsed.
 - **`serve` owns the signal context**, so releasing it survives a panic. `os.Exit` skips a `defer` left in `main`.
 - **Routing joins the escrow set to the picker through the capacity model.** An escrow whose membership never reaches that model scores as weightless, is skipped by every pick, and serves nothing — so the join is not optional wiring. The warmup is handed the registry *after* the registry exists, because the registry publishes to it; and a nil warmup must never be assigned into the interface field, since a typed nil there is non-nil to a nil check.
+- **The journal and the nonce recorder are built around each other.** The journal takes the recorder as its ledger sink when it is built; the recorder receives the journal as an argument of `Start`, which `serve` calls once both exist. `journalSettings` keeps a disabled recorder out of the journal's interface field.
 - **The capture and cache collectors are registered after the server**, which owns both sinks. Nothing evicts capture files, so the refusal count is the only signal that capture has turned itself off at its byte cap.
 
 ### Two readers of one fact

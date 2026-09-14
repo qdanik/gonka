@@ -1,6 +1,7 @@
 package nonces
 
 import (
+	"errors"
 	"testing"
 	"time"
 
@@ -131,7 +132,11 @@ func TestADisabledLedgerAcceptsEveryFactWithoutPanicking(t *testing.T) {
 	ledger.RecordGhost("escrow-1", 1, "poc_unavailable_host")
 	ledger.RecordRace(engine.RaceOutcome{EscrowID: "escrow-1"})
 	ledger.RecordTimeout(engine.TimeoutEvent{EscrowID: "escrow-1"})
-	ledger.Start(t.Context(), nil)
+	ledger.RecordDiffFacts("escrow-1", []accounting.DiffFact{{Kind: accounting.DiffFactValidation}})
+	if err := ledger.RecordProbe("escrow-1", accounting.Attempt{Nonce: 1}); err != nil {
+		t.Fatalf("RecordProbe() = %v, want nothing refused while disabled", err)
+	}
+	ledger.Start(t.Context(), nil, nil)
 	if collectors := ledger.Collectors(); collectors != nil {
 		t.Fatalf("collectors() = %v, want none while disabled", collectors)
 	}
@@ -277,5 +282,55 @@ func TestABurnWithNoNonceIsNotRecordedAgainstNonceZero(t *testing.T) {
 		if ghosts := record.Dispositions[accounting.DispositionGhost]; ghosts != 0 {
 			t.Errorf("%s was charged %d ghosts for burns that named no nonce", record.Participant, ghosts)
 		}
+	}
+}
+
+// A composed diff's verdicts and applied timeouts land on the slot the chain assigns their nonce.
+func TestDiffFactsLandOnTheSlotsTheChainAssigns(t *testing.T) {
+	ledger := newLedgerForTest(t)
+
+	ledger.RecordDiffFacts("escrow-1", []accounting.DiffFact{
+		{Kind: accounting.DiffFactValidation, Nonce: 5, ValidatorSlot: 1},
+		{Kind: accounting.DiffFactInvalidVerdict, Nonce: 5, ValidatorSlot: 1},
+		{Kind: accounting.DiffFactAppliedTimeout, Nonce: 3},
+	})
+
+	// Two slots, so nonces 3 and 5 and validator slot 1 all belong to participant-1.
+	for _, record := range ledger.service.Book.Query(accounting.QueryFilter{}) {
+		want := uint64(0)
+		if record.Participant == "participant-1" {
+			want = 1
+		}
+		if record.ValidationsPerformed != want || record.CrossChecks.RecordedInvalid != want || record.TimeoutsApplied != want {
+			t.Fatalf("%s validations/invalid/timeouts = %d/%d/%d, want %d each", record.Participant,
+				record.ValidationsPerformed, record.CrossChecks.RecordedInvalid, record.TimeoutsApplied, want)
+		}
+	}
+}
+
+// The probe is the gateway's own work; its terminal keeps it out of every serving ratio.
+func TestAProbeLandsUnderItsOwnTerminal(t *testing.T) {
+	ledger := newLedgerForTest(t)
+
+	err := ledger.RecordProbe("escrow-1", accounting.Attempt{
+		Nonce: 4, Sent: true, Finished: true, Acknowledged: true,
+		Usage: accounting.UsageLoser, Phase: accounting.PhaseNormal, Terminal: accounting.TerminalWarmupProbe,
+	})
+	if err != nil {
+		t.Fatalf("RecordProbe() = %v, want the probe settled", err)
+	}
+	if terminals := terminalsOf(t, ledger); terminals[accounting.TerminalWarmupProbe] != 1 {
+		t.Fatalf("terminals = %v, want the probe under %q", terminals, accounting.TerminalWarmupProbe)
+	}
+}
+
+// Only the book sees a refused probe, so it hands the refusal back for the journal to name.
+func TestAProbeOnAnUnopenedEscrowIsRefused(t *testing.T) {
+	ledger := newLedgerForTest(t)
+
+	err := ledger.RecordProbe("escrow-9", accounting.Attempt{Nonce: 7, Sent: true, Acknowledged: true, Terminal: accounting.TerminalWarmupProbe})
+
+	if !errors.Is(err, accounting.ErrUnknownEscrow) {
+		t.Fatalf("RecordProbe() = %v, want the unknown-escrow refusal", err)
 	}
 }

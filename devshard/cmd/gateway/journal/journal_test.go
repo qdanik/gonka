@@ -9,6 +9,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"devshard/cmd/gateway/accounting"
 	"devshard/cmd/gateway/engine"
 	"devshard/cmd/gateway/internal/leakcheck"
 	"devshard/cmd/gateway/internal/logcapture"
@@ -19,10 +20,11 @@ func TestMain(m *testing.M) {
 	leakcheck.VerifyTestMain(m)
 }
 
-// ledgerSpy records what reached the ledger, in the order it arrived.
+// ledgerSpy records what reached the ledger, in the order it arrived, and refuses every probe with probeRefusal.
 type ledgerSpy struct {
-	mu       sync.Mutex
-	arrivals []string
+	mu           sync.Mutex
+	arrivals     []string
+	probeRefusal error
 }
 
 func (s *ledgerSpy) note(arrival string) {
@@ -39,6 +41,17 @@ func (s *ledgerSpy) RecordGhost(escrowID string, nonce uint64, reason string) {
 
 func (s *ledgerSpy) RecordTimeout(vote engine.TimeoutEvent) {
 	s.note(fmt.Sprintf("timeout %s %d %s", vote.EscrowID, vote.Nonce, vote.Action))
+}
+
+func (s *ledgerSpy) RecordDiffFacts(escrowID string, facts []DiffFact) {
+	for _, fact := range facts {
+		s.note(fmt.Sprintf("diff %s %d %d %d", escrowID, fact.Kind, fact.Nonce, fact.ValidatorSlot))
+	}
+}
+
+func (s *ledgerSpy) RecordProbe(escrowID string, attempt accounting.Attempt) error {
+	s.note(fmt.Sprintf("probe %s %d %s", escrowID, attempt.Nonce, attempt.Terminal))
+	return s.probeRefusal
 }
 
 func (s *ledgerSpy) arrived() []string {

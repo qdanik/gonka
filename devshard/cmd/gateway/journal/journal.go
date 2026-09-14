@@ -5,10 +5,12 @@ import (
 	"fmt"
 	"sync"
 
+	"devshard/cmd/gateway/accounting"
 	"devshard/cmd/gateway/engine"
 	"devshard/cmd/gateway/internal/logkey"
 	"devshard/cmd/gateway/scheduler"
 	"devshard/logging"
+	"devshard/types"
 )
 
 const (
@@ -32,6 +34,8 @@ type ledgerSink interface {
 	RecordRace(outcome engine.RaceOutcome)
 	RecordGhost(escrowID string, nonce uint64, reason string)
 	RecordTimeout(event engine.TimeoutEvent)
+	RecordDiffFacts(escrowID string, facts []DiffFact)
+	RecordProbe(escrowID string, attempt accounting.Attempt) error
 }
 
 // Settings wires a journal: zero limits take the defaults, and a nil Ledger means nonce accounting is off.
@@ -178,6 +182,20 @@ func (j *Journal) ReplyNotCached(line RequestLine) {
 	j.emit(queuedEvent{kind: KindReplyNotCached, request: &line})
 }
 
+// DiffComposed is called under the session lock that composed the diff: it counts before it allocates and queues only a diff that carries a ledger fact.
+func (j *Journal) DiffComposed(escrowID string, diff *types.Diff) {
+	facts := diffFacts(diff)
+	if len(facts) == 0 {
+		return
+	}
+	j.emit(queuedEvent{kind: KindDiffComposed, escrowID: escrowID, facts: facts})
+}
+
+// ProbeRecorded hands the warmup's own nonce to the ledger, after the escrow it was spent on was opened there.
+func (j *Journal) ProbeRecorded(escrowID string, attempt accounting.Attempt) {
+	j.emit(queuedEvent{kind: KindWarmupProbe, escrowID: escrowID, attempt: &attempt})
+}
+
 func raceStepKind(kind engine.RaceStepKind) Kind {
 	switch kind {
 	case engine.RaceStepNonceCommitted:
@@ -299,6 +317,16 @@ func (j *Journal) deliver(entry *queuedEvent) {
 		}
 	case KindBurnBudgetExhausted:
 		renderBurnBudgetExhausted(j.lines, entry.escrowID)
+	case KindDiffComposed:
+		if j.ledger != nil {
+			j.ledger.RecordDiffFacts(entry.escrowID, entry.facts)
+		}
+	case KindWarmupProbe:
+		if j.ledger != nil {
+			if err := j.ledger.RecordProbe(entry.escrowID, *entry.attempt); err != nil {
+				renderProbeRefused(j.lines, entry.escrowID, entry.attempt.Nonce, err)
+			}
+		}
 	case KindNonceCommitted, KindEscalationUnfilled, KindAttemptCrowned, KindAttemptFinished,
 		KindNonceStranded, KindHostDiverged:
 		renderRaceStep(j.lines, entry.raceStep)

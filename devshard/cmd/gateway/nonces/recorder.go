@@ -41,6 +41,11 @@ type EscrowSource interface {
 	RoutableSession(escrowID string) (registry.EscrowSession, bool)
 }
 
+// DiffJournal is satisfied by *journal.Journal; DiffComposed runs under the session lock, so it reads and appends only.
+type DiffJournal interface {
+	DiffComposed(escrowID string, diff *types.Diff)
+}
+
 type Recorder struct {
 	service  *accounting.Service
 	listener *http.Server
@@ -51,7 +56,11 @@ type Recorder struct {
 	observing sync.Map
 }
 
-func (n *Recorder) watchDiffs(escrowID string, session registry.EscrowSession) {
+// watchDiffs hands every composed diff to the journal, so the book's lock is never taken under the session's. See README.md, "Boundaries".
+func (n *Recorder) watchDiffs(escrowID string, session registry.EscrowSession, diffs DiffJournal) {
+	if diffs == nil {
+		return
+	}
 	if _, already := n.observing.LoadOrStore(escrowID, struct{}{}); already {
 		return
 	}
@@ -60,19 +69,7 @@ func (n *Recorder) watchDiffs(escrowID string, session registry.EscrowSession) {
 		n.observing.Delete(escrowID)
 		return
 	}
-	underlying.SetDiffObserver(func(diff types.Diff) {
-		for _, tx := range diff.Txs {
-			switch validation, timeout := tx.GetValidation(), tx.GetTimeoutInference(); {
-			case validation != nil:
-				n.report(n.service.Book.RecordValidation(escrowID, validation.ValidatorSlot))
-				if !validation.Valid {
-					n.report(n.service.Book.RecordInvalidVerdict(escrowID, validation.InferenceId))
-				}
-			case timeout != nil:
-				n.report(n.service.Book.RecordAppliedTimeout(escrowID, timeout.InferenceId))
-			}
-		}
-	})
+	underlying.SetDiffObserver(func(diff types.Diff) { diffs.DiffComposed(escrowID, &diff) })
 }
 
 func (n *Recorder) SetCapability(lookup accounting.CapabilityFunc) {
@@ -154,7 +151,8 @@ func (n *Recorder) Collectors() []prometheus.Collector {
 	return []prometheus.Collector{accounting.NewCollector(n.service.Book)}
 }
 
-func (n *Recorder) Start(ctx context.Context, escrows EscrowSource) {
+// Start sweeps until ctx ends; every escrow the sweep watches hands its composed diffs to diffs.
+func (n *Recorder) Start(ctx context.Context, escrows EscrowSource, diffs DiffJournal) {
 	if n == nil {
 		return
 	}
@@ -166,14 +164,14 @@ func (n *Recorder) Start(ctx context.Context, escrows EscrowSource) {
 			}
 		}()
 	}
-	go n.sweepUntil(ctx, escrows)
+	go n.sweepUntil(ctx, escrows, diffs)
 }
 
-func (n *Recorder) sweepUntil(ctx context.Context, escrows EscrowSource) {
+func (n *Recorder) sweepUntil(ctx context.Context, escrows EscrowSource, diffs DiffJournal) {
 	ticker := time.NewTicker(nonceAccountingSweepInterval)
 	defer ticker.Stop()
 	for {
-		n.sweep(ctx, escrows)
+		n.sweep(ctx, escrows, diffs)
 		select {
 		case <-ticker.C:
 		case <-ctx.Done():
@@ -182,7 +180,7 @@ func (n *Recorder) sweepUntil(ctx context.Context, escrows EscrowSource) {
 	}
 }
 
-func (n *Recorder) sweep(ctx context.Context, escrows EscrowSource) {
+func (n *Recorder) sweep(ctx context.Context, escrows EscrowSource, diffs DiffJournal) {
 	// The epoch stamped here is the one the escrow was first seen in. See README.md, "The judgements it does make".
 	epoch, epochErr := n.currentEpoch(ctx)
 	states := escrows.Snapshot()
@@ -204,7 +202,7 @@ func (n *Recorder) sweep(ctx context.Context, escrows EscrowSource) {
 		}
 		n.observeEscrowState(state.ID, escrowState)
 		n.reconcileFinished(state.ID, session)
-		n.watchDiffs(state.ID, session)
+		n.watchDiffs(state.ID, session, diffs)
 	}
 	for _, escrowID := range n.service.Book.EscrowIDs() {
 		if _, still := published[escrowID]; !still {
@@ -292,6 +290,31 @@ func (n *Recorder) RecordTimeout(event engine.TimeoutEvent) {
 	if n != nil {
 		n.report(n.service.Book.RecordTimeout(event.EscrowID, event.Nonce, event.Kind, event.Action, event.Reason))
 	}
+}
+
+// RecordDiffFacts applies what a composed diff said, on the journal's goroutine rather than under the session lock.
+func (n *Recorder) RecordDiffFacts(escrowID string, facts []accounting.DiffFact) {
+	if n == nil {
+		return
+	}
+	for _, fact := range facts {
+		switch fact.Kind {
+		case accounting.DiffFactValidation:
+			n.report(n.service.Book.RecordValidation(escrowID, fact.ValidatorSlot))
+		case accounting.DiffFactInvalidVerdict:
+			n.report(n.service.Book.RecordInvalidVerdict(escrowID, fact.Nonce))
+		case accounting.DiffFactAppliedTimeout:
+			n.report(n.service.Book.RecordAppliedTimeout(escrowID, fact.Nonce))
+		}
+	}
+}
+
+// RecordProbe settles the warmup's own nonce and returns the book's refusal for the journal to name.
+func (n *Recorder) RecordProbe(escrowID string, attempt accounting.Attempt) error {
+	if n == nil {
+		return nil
+	}
+	return n.service.Book.RecordRace(escrowID, []accounting.Attempt{attempt})
 }
 
 // A winner crowned after its client left needs its own terminal, or that population is unfindable.

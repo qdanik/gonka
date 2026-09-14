@@ -31,7 +31,7 @@ func (g *gateway) serve(ctx context.Context) error {
 	g.manager.Start(backgroundCtx)
 	republished := g.republishOnDevshardWrites(backgroundCtx)
 
-	g.nonces.Start(backgroundCtx, g.escrows)
+	g.nonces.Start(backgroundCtx, g.escrows, g.events)
 
 	serveResult := make(chan error, 1)
 	go func() { serveResult <- g.server.ListenAndServe() }()

@@ -39,7 +39,11 @@ type Escrows interface {
 
 type ledger interface {
 	OpenEscrow(metadata accounting.EscrowMetadata) error
-	RecordRace(escrowID string, attempts []accounting.Attempt) error
+}
+
+// Probes is satisfied by *journal.Journal: the probe's nonce reaches the ledger the way a race's does.
+type Probes interface {
+	ProbeRecorded(escrowID string, attempt accounting.Attempt)
 }
 
 // Epochs stamps the escrow with the epoch the ledger first saw it in, exactly as its own sweep would.
@@ -54,6 +58,7 @@ type Prober struct {
 	epochs   Epochs
 	posters  Posters
 	timeouts Timeouts
+	probes   Probes
 	probe    func(ctx context.Context, session registry.EscrowSession, params user.InferenceParams, nonceCommitted func()) (uint64, bool, error)
 	catchUp  func(ctx context.Context, session registry.EscrowSession) error
 	stop     <-chan struct{}
@@ -193,10 +198,10 @@ func (w *Prober) openLedger(escrowID, model string, session registry.EscrowSessi
 }
 
 func (w *Prober) record(escrowID string, nonce uint64, acknowledged bool, probeErr error) {
-	if w.ledger == nil {
+	if w.probes == nil {
 		return
 	}
-	attempt := accounting.Attempt{
+	w.probes.ProbeRecorded(escrowID, accounting.Attempt{
 		Nonce:        nonce,
 		Sent:         true,
 		Finished:     probeErr == nil,
@@ -204,10 +209,7 @@ func (w *Prober) record(escrowID string, nonce uint64, acknowledged bool, probeE
 		Usage:        accounting.UsageLoser,
 		Phase:        accounting.PhaseNormal,
 		Terminal:     accounting.TerminalWarmupProbe,
-	}
-	if err := w.ledger.RecordRace(escrowID, []accounting.Attempt{attempt}); err != nil {
-		logging.Warn("escrow warmup could not settle its nonce", logkey.Escrow, escrowID, logkey.Nonce, nonce, logkey.Error, err)
-	}
+	})
 }
 
 // Serve and Settle are late bindings. See README.md, "Boundaries worth knowing".
@@ -217,8 +219,8 @@ func (w *Prober) Serve(escrows Escrows) {
 	}
 }
 
-func (w *Prober) Settle(posters Posters, timeouts Timeouts) {
+func (w *Prober) Settle(posters Posters, timeouts Timeouts, probes Probes) {
 	if w != nil {
-		w.posters, w.timeouts = posters, timeouts
+		w.posters, w.timeouts, w.probes = posters, timeouts, probes
 	}
 }

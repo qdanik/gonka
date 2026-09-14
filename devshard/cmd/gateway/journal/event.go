@@ -1,6 +1,7 @@
 package journal
 
 import (
+	"devshard/cmd/gateway/accounting"
 	"devshard/cmd/gateway/engine"
 	"devshard/cmd/gateway/scheduler"
 )
@@ -14,5 +15,7 @@ type queuedEvent struct {
 	burn      scheduler.Burn
 	raceStep  *engine.RaceStep
 	request   *RequestLine
+	facts     []DiffFact
+	attempt   *accounting.Attempt
 	probeVote bool
 }
