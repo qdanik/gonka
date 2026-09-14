@@ -10,7 +10,7 @@ import (
 )
 
 // Each want pins one escrow transition's level, message and every key with its type.
-func TestEscrowTransitionsRenderTheLinesTheirProducersWrote(t *testing.T) {
+func TestEscrowTransitionsRenderTheLinesTheirProducersNarrate(t *testing.T) {
 	closeFailure := errors.New("storage refused to close")
 	unverifiable := errors.New("slot 2 signature does not verify")
 	missing := errors.New("escrow not found")
@@ -79,7 +79,7 @@ func TestEscrowTransitionsRenderTheLinesTheirProducersWrote(t *testing.T) {
 }
 
 // Each want pins a line the escrow manager or the transaction client narrates, with the escrow id as text.
-func TestEscrowLifecycleTransitionsRenderTheLinesTheirProducersWrote(t *testing.T) {
+func TestEscrowLifecycleTransitionsRenderTheLinesTheirProducersNarrate(t *testing.T) {
 	tickFailure := errors.New("store unavailable")
 
 	testCases := []struct {

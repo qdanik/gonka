@@ -10,7 +10,7 @@ import (
 )
 
 // Each want pins one chain transition's level, message and every key with its type.
-func TestChainTransitionsRenderTheLinesTheirProducersWrote(t *testing.T) {
+func TestChainTransitionsRenderTheLinesTheirProducersNarrate(t *testing.T) {
 	testCases := []struct {
 		name    string
 		produce func(events *Journal)
