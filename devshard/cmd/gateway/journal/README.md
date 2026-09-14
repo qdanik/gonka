@@ -20,6 +20,7 @@ Every lifecycle step of a request, attempt, nonce, timeout vote and escrow drain
 - **A disabled ledger is a nil interface, never a typed nil.** `journalSettings` in `observers.go` leaves `Settings.Ledger` unset when the recorder is nil; a nil pointer inside the interface is non-nil to the consumer's check.
 - **No sink writes what it is handed.** A race outcome's attempts are the slice `api` reads on the response path.
 - **A renderer allocates the fields of every line.** A logger may keep the slice it is given; `logcapture.Recorder` does.
+- **A race step is already a copy.** The coordinator fills `engine.RaceStep` on its own goroutine, the terminal it would log already raced and the phase mark already computed, so rendering reads no coordinator state. `RecordStep` queues a pointer to its own copy of the step, so the journal's mutex never copies an attempt outcome.
 
 ## Two lanes
 
@@ -55,6 +56,12 @@ The `journal` step sits between `escrow sessions` and `nonce accounting` (`lifec
 | `KindTimeoutVote` | `nonceAccountedRaces.RecordTimeout` for a race vote; `probeVotes.RecordTimeout` through `RecordProbeTimeout` for a warmup vote (`observers.go`) | `RecordTimeout` | `timeout vote failed`, Warn (`render_money.go`): a race vote whose action is `failed` for any reason but `escrow_gone_from_hosts`, which the escrow's own line already reports once. A warmup vote writes none; the warmup writes its own line |
 | `KindNonceBurned` | `tracedDispatches.GhostBurned` (`observers.go`) | `RecordGhost` | `nonce burned for nobody`, Warn (`render_money.go`) |
 | `KindBurnBudgetExhausted` | `tracedDispatches.BurnBudgetExhausted` (`observers.go`) | none | `escrow stopped burning nonces at its budget`, Warn (`render_money.go`) |
+| `KindNonceStranded` | `raceCoordinator.strand` through `RecordStep` (`engine/race.go`) | none | `nonce stranded`, Warn (`render_race.go`) |
+| `KindHostDiverged` | `raceCoordinator.stateDiverged` through `RecordStep` (`engine/report.go`) | none | `host blocked for state divergence` or `host rewound for state divergence`, Warn (`render_race.go`) |
+| `KindNonceCommitted` | `raceCoordinator.launch` through `RecordStep` (`engine/pick.go`) | none | `nonce committed`, Info (`render_race.go`) |
+| `KindEscalationUnfilled` | `raceCoordinator.reportUnfilledPick` through `RecordStep` (`engine/pick.go`) | none | `escalation unfilled`, Info (`render_race.go`) |
+| `KindAttemptCrowned` | `raceCoordinator.crownWinner` through `RecordStep` (`engine/crown.go`) | none | `attempt crowned`, Info (`render_race.go`) |
+| `KindAttemptFinished` | `raceCoordinator.complete` through `RecordStep` (`engine/report.go`) | none | `attempt finished`, or `attempt finished with no outcome` when the attempt reported nothing, Info (`render_race.go`) |
 
 ## Read next
 

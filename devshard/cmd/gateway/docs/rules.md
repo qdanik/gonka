@@ -159,7 +159,7 @@ Both of the first two are keyed by participant, and the participant set is the b
 
 A package that takes a `Deps` refuses one it cannot work with, and says which field is missing: `api.New`, `engine.NewEngine`, `scheduler.NewScheduler`, `escrow.NewManager` and `store.NewLedger` all return an error rather than a half-wired object. Without that, a forgotten dependency is a nil interface the compiler accepts, and it surfaces as a panic — in the constructor for the engine, on the first request for the scheduler, on the first tick for the escrow manager.
 
-Optional dependencies stay optional and are guarded at every use: metrics, the ledger, the timeout poster, the dispatch observer. The constructor is where that distinction is written down, so a reader can tell "not wired yet" from "wired to nothing".
+Optional dependencies stay optional and are guarded at every use: metrics, the ledger, the timeout poster, the dispatch observer, the engine's journal. The constructor is where that distinction is written down, so a reader can tell "not wired yet" from "wired to nothing".
 
 The rule does not reach values. A struct the caller fills with already-checked numbers stays a literal, and the one that consumes it validates: `store.Retention` is two fields, and `NewLedger` refuses a non-positive age or a row cap below one. A constructor there would duplicate a check that already exists closer to use. Snapshots and events a package hands *out* — `perf.HostState`, `limits.HostWindow`, `engine.TimeoutEvent` — are literals for the same reason: nothing about them can be wrong at construction.
 

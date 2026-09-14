@@ -248,6 +248,7 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 		Metrics:    raceObserver,
 		Ledger:     api.NewRaceLedger(ledger),
 		Lifecycle:  manager,
+		Journal:    events,
 		Suspicious: suspicious.Suspicious,
 		Timeouts:   sessions.Poster,
 		Now:        clock,

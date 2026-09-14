@@ -16,10 +16,11 @@ One client request, several attempts on different hosts, one winner. This packag
 | `settle.go`, `session.go` | the timeout vote every unfinished nonce owes |
 | `reassembly.go`, `carry.go` | rebuilding events split across chunk boundaries |
 | `vocabulary.go` | the wire strings — metric labels, log fields, ledger reasons — declared once |
+| `trace.go` | the `RaceStep` a coordinator copies at emit, for the journal |
 
 ## What it does not own
 
-It does not choose the escrow or commit the nonce — that is [`scheduler`](../scheduler/). It does not shape the request or the reply — that is [`filters`](../filters/). It does not write the ledger — it reports one outcome, and [`nonces`](../nonces/) records it.
+It does not choose the escrow or commit the nonce — that is [`scheduler`](../scheduler/). It does not shape the request or the reply — that is [`filters`](../filters/). It does not write the ledger — it reports one outcome, and [`nonces`](../nonces/) records it. It does not write its trace lines either: it copies each step into a `RaceStep` and hands it to `Deps.Journal`, and [`journal`](../journal/) renders it.
 
 ## Boundaries
 
@@ -27,6 +28,7 @@ It does not choose the escrow or commit the nonce — that is [`scheduler`](../s
 - **The race outlives the client.** A client that hangs up does not cancel the attempts, because their nonces still owe votes. The drain barrier is what makes shutdown wait for them.
 - **The outcome is reported exactly once**, from whichever goroutine ends the race.
 - **An SSE error event counts as a chunk but never crowns.** A host that answers with an error has answered something, but not content.
+- **A step is copied on the coordinator goroutine.** `RaceStep` holds values, and its `Outcome` is a copy of the attempt's, so nothing the coordinator owns crosses to the journal's goroutine. `Deps.Journal` is optional and guarded; a race without one writes no trace.
 
 ## From pick to report
 
@@ -75,7 +77,7 @@ Not tunable still means not tunable **by an operator**. `Deps.E2E` can shorten t
 - `Flush` needs no gate of its own — an uncrowned attempt has no client to reach. `attemptWriter.Flush` is how the transport's per-line flush reaches the client at all: without it the assertion the transport makes on its writer fails and a crowned winner's bytes sit in the server's buffer.
 - `contentGate` hands the sink beside it the one fact an `io.Writer` signature cannot carry. `Classify` is called immediately before the `Write` of the same chunk, on the same goroutine.
 
-The coordinator answers claims in `answer`: an unknown nonce or an already-crowned race is suppressed, a **suspicious host's claim is held rather than refused**, because a refusal is permanent, and anything else is crowned on the spot. `settleClaims` answers the held claims once the race can tell whether a rival will serve — a rival being a pending attempt beyond the claimants, a running pick, or an immediate attempt still owed. Alone, a suspicious host is crowned. `crownWinner` is the single place one attempt becomes the client's answer, so the reason travels with it into the log.
+The coordinator answers claims in `answer`: an unknown nonce or an already-crowned race is suppressed, a **suspicious host's claim is held rather than refused**, because a refusal is permanent, and anything else is crowned on the spot. `settleClaims` answers the held claims once the race can tell whether a rival will serve — a rival being a pending attempt beyond the claimants, a running pick, or an immediate attempt still owed. Alone, a suspicious host is crowned. `crownWinner` is the single place one attempt becomes the client's answer, so the reason travels with it into the trace.
 
 ### Crown denial
 

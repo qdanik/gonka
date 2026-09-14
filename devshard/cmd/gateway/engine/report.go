@@ -1,16 +1,9 @@
 package engine
 
 import (
-	"time"
-
 	"devshard/cmd/gateway/chain"
 	"devshard/cmd/gateway/config"
-	"devshard/cmd/gateway/internal/logkey"
-	"devshard/logging"
 )
-
-// attemptFinishFields is the widest a finish line gets: the fixed head, every delivery field, and the phase mark.
-const attemptFinishFields = 42
 
 func (c *raceCoordinator) apply(event AttemptEvent) {
 	attempt := c.byNonce[event.Nonce]
@@ -33,52 +26,6 @@ func (c *raceCoordinator) apply(event AttemptEvent) {
 	}
 }
 
-// Every duration is measured from the dispatch, for a winner and a loser alike.
-// attemptFinishHead is what every finished attempt reports, in a line reserved for the widest one it can grow into.
-func (c *raceCoordinator) attemptFinishHead(attempt *liveAttempt) []any {
-	return append(make([]any, 0, attemptFinishFields),
-		logkey.Request, c.request.RequestID, logkey.Escrow, c.escrowID, logkey.Nonce, attempt.nonce,
-		logkey.Host, logkey.ShortHost(attempt.participant),
-		logkey.Terminal, c.racedTerminal(attempt, *attempt.outcome).String(),
-		logkey.NonceFinished, attempt.nonceFinished, logkey.StateDivergent, attempt.outcome.StateDivergent)
-}
-
-func appendAttemptDeliveryFields(fields []any, outcome *AttemptOutcome) []any {
-	fields = append(fields,
-		logkey.ContentChunks, outcome.ContentChunks,
-		logkey.StreamChunks, outcome.StreamChunks,
-		logkey.OutputBytes, outcome.OutputBytes,
-		logkey.UsageTokens, outcome.UsageCompletionTokens)
-	if outcome.MaxChunkGap > 0 {
-		fields = append(fields,
-			logkey.MaxGapMS, outcome.MaxChunkGap.Milliseconds(),
-			logkey.MaxGapAtChunk, outcome.MaxChunkGapAt,
-			logkey.MeanGapMS, outcome.MeanChunkGap.Milliseconds())
-	}
-	if outcome.UpstreamStatus != 0 {
-		fields = append(fields, logkey.UpstreamStatus, outcome.UpstreamStatus)
-		if outcome.UpstreamBody != "" {
-			fields = append(fields, logkey.UpstreamBody, outcome.UpstreamBody)
-		}
-	}
-	spans := [...]struct {
-		name  string
-		until time.Time
-	}{
-		{"receipt_ms", outcome.ReceiptTime},
-		{"first_token_ms", outcome.FirstToken},
-		{"first_content_ms", outcome.FirstContent},
-		{"attempt_ms", outcome.Completed},
-	}
-	for _, span := range spans {
-		if outcome.SendTime.IsZero() || span.until.IsZero() {
-			continue
-		}
-		fields = append(fields, span.name, span.until.Sub(outcome.SendTime).Milliseconds())
-	}
-	return fields
-}
-
 func (c *raceCoordinator) complete(attempt *liveAttempt, event AttemptEvent) {
 	attempt.done, attempt.completed = true, event.At
 	attempt.outcome, attempt.lifecycle = event.Outcome, event.Lifecycle
@@ -86,16 +33,18 @@ func (c *raceCoordinator) complete(attempt *liveAttempt, event AttemptEvent) {
 	c.retire(attempt)
 
 	if attempt.outcome == nil {
-		logging.Info("attempt finished with no outcome",
-			logkey.Request, c.request.RequestID, logkey.Escrow, c.escrowID, logkey.Nonce, attempt.nonce,
-			logkey.Host, logkey.ShortHost(attempt.participant), logkey.NonceFinished, attempt.nonceFinished)
+		c.traceStep(RaceStep{
+			Kind: RaceStepAttemptFinished, RequestID: c.request.RequestID, EscrowID: c.escrowID,
+			Nonce: attempt.nonce, Participant: attempt.participant, NonceFinished: attempt.nonceFinished,
+		})
 		return
 	}
-	fields := appendAttemptDeliveryFields(c.attemptFinishHead(attempt), attempt.outcome)
-	if c.phaseAborted(attempt, *attempt.outcome) {
-		fields = append(fields, logkey.PhaseAborted, true)
-	}
-	logging.Info("attempt finished", fields...)
+	c.traceStep(RaceStep{
+		Kind: RaceStepAttemptFinished, RequestID: c.request.RequestID, EscrowID: c.escrowID,
+		Nonce: attempt.nonce, Participant: attempt.participant,
+		Terminal: c.racedTerminal(attempt, *attempt.outcome), NonceFinished: attempt.nonceFinished,
+		HasOutcome: true, PhaseAborted: c.phaseAborted(attempt, *attempt.outcome), Outcome: *attempt.outcome,
+	})
 	if signal := CapabilityOf(*attempt.outcome); signal.Refused() {
 		RecordCapability(c.deps.Perf, attempt.participant, c.request.Model, signal)
 		c.exclude(attempt.participant)
@@ -119,16 +68,17 @@ func (c *raceCoordinator) stateDiverged(attempt *liveAttempt) {
 	c.exclude(attempt.participant)
 
 	if !c.deps.Picker.HostDiverged(c.escrowID, attempt.participant, attempt.completed) {
-		logging.Warn("host blocked for state divergence",
-			logkey.Request, c.request.RequestID, logkey.Escrow, c.escrowID,
-			logkey.Nonce, attempt.nonce, logkey.Host, logkey.ShortHost(attempt.participant))
+		c.traceStep(RaceStep{
+			Kind: RaceStepHostBlocked, RequestID: c.request.RequestID, EscrowID: c.escrowID,
+			Nonce: attempt.nonce, Participant: attempt.participant,
+		})
 		return
 	}
 	rewound := c.target != nil && c.target.RewindHostCatchUp(attempt.hostIdx, cause)
-	logging.Warn("host rewound for state divergence",
-		logkey.Request, c.request.RequestID, logkey.Escrow, c.escrowID,
-		logkey.Nonce, attempt.nonce, logkey.Host, logkey.ShortHost(attempt.participant),
-		logkey.Rewound, rewound)
+	c.traceStep(RaceStep{
+		Kind: RaceStepHostRewound, RequestID: c.request.RequestID, EscrowID: c.escrowID,
+		Nonce: attempt.nonce, Participant: attempt.participant, Rewound: rewound,
+	})
 }
 
 // Without this an attempt the race stopped listening to leaves a spent nonce nothing downstream can see.

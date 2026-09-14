@@ -1,11 +1,14 @@
-package engine
+package journal
 
 import (
 	"testing"
 	"time"
 
+	"devshard/cmd/gateway/engine"
 	"devshard/cmd/gateway/internal/logkey"
 )
+
+var renderEpoch = time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC)
 
 func loggedValue(fields []any, name string) (any, bool) {
 	for index := 0; index+1 < len(fields); index += 2 {
@@ -21,7 +24,7 @@ func TestAttemptDeliveryFields_ReportWhatTheHostReturned(t *testing.T) {
 	t.Parallel()
 	dispatchedAt := time.Unix(1786114580, 0)
 
-	fields := appendAttemptDeliveryFields(nil, &AttemptOutcome{
+	fields := appendAttemptDeliveryFields(nil, &engine.AttemptOutcome{
 		SendTime:              dispatchedAt,
 		ReceiptTime:           dispatchedAt.Add(120 * time.Millisecond),
 		FirstToken:            dispatchedAt.Add(2 * time.Second),
@@ -58,7 +61,7 @@ func TestAttemptDeliveryFields_SkipAStageThatNeverHappened(t *testing.T) {
 	t.Parallel()
 	dispatchedAt := time.Unix(1786114580, 0)
 
-	fields := appendAttemptDeliveryFields(nil, &AttemptOutcome{
+	fields := appendAttemptDeliveryFields(nil, &engine.AttemptOutcome{
 		SendTime:  dispatchedAt,
 		Completed: dispatchedAt.Add(3 * time.Second),
 	})
@@ -77,7 +80,7 @@ func TestAttemptDeliveryFields_SkipAStageThatNeverHappened(t *testing.T) {
 func TestAttemptDeliveryFields_SkipEveryDurationWithoutADispatch(t *testing.T) {
 	t.Parallel()
 
-	fields := appendAttemptDeliveryFields(nil, &AttemptOutcome{Completed: time.Unix(1786114580, 0), StreamChunks: 2})
+	fields := appendAttemptDeliveryFields(nil, &engine.AttemptOutcome{Completed: time.Unix(1786114580, 0), StreamChunks: 2})
 
 	for _, absent := range []string{"receipt_ms", "first_token_ms", "attempt_ms"} {
 		if _, held := loggedValue(fields, absent); held {
@@ -89,31 +92,33 @@ func TestAttemptDeliveryFields_SkipEveryDurationWithoutADispatch(t *testing.T) {
 	}
 }
 
-// widestFinishedOutcome carries every field a finish line can report, so the line it builds is the widest one.
-func widestFinishedOutcome() AttemptOutcome {
-	return AttemptOutcome{
-		SendTime:     testEpoch,
-		ReceiptTime:  testEpoch.Add(200 * time.Millisecond),
-		FirstToken:   testEpoch.Add(900 * time.Millisecond),
-		FirstContent: testEpoch.Add(950 * time.Millisecond),
-		Completed:    testEpoch.Add(9 * time.Second),
+// widestFinishedStep carries every field a finish line can report, so the line it builds is the widest one.
+func widestFinishedStep() engine.RaceStep {
+	return engine.RaceStep{
+		Kind: engine.RaceStepAttemptFinished, RequestID: "request-1", EscrowID: "escrow-1", Nonce: 77,
+		Participant: "host-3", Terminal: engine.TerminalLost, NonceFinished: true, HasOutcome: true, PhaseAborted: true,
+		Outcome: engine.AttemptOutcome{
+			SendTime:     renderEpoch,
+			ReceiptTime:  renderEpoch.Add(200 * time.Millisecond),
+			FirstToken:   renderEpoch.Add(900 * time.Millisecond),
+			FirstContent: renderEpoch.Add(950 * time.Millisecond),
+			Completed:    renderEpoch.Add(9 * time.Second),
 
-		ContentChunks: 412, StreamChunks: 415, OutputBytes: 61_440,
-		UsageCompletionTokens: 512,
-		MaxChunkGap:           1200 * time.Millisecond, MaxChunkGapAt: 310,
-		MeanChunkGap:   21 * time.Millisecond,
-		UpstreamStatus: 502, UpstreamBody: "upstream is down",
+			ContentChunks: 412, StreamChunks: 415, OutputBytes: 61_440,
+			UsageCompletionTokens: 512,
+			MaxChunkGap:           1200 * time.Millisecond, MaxChunkGapAt: 310,
+			MeanChunkGap:   21 * time.Millisecond,
+			UpstreamStatus: 502, UpstreamBody: "upstream is down",
+		},
 	}
 }
 
 // The reservation is hand-counted, so the widest line the code can build must be measured against it.
 func TestAFinishLineFitsWhatItReserves(t *testing.T) {
 	t.Parallel()
-	outcome := widestFinishedOutcome()
-	attempt := &liveAttempt{nonce: 77, participant: "host-3", nonceFinished: true, outcome: &outcome}
-	coordinator := stalledFixtureCoordinator(settledPolicy(), attempt)
+	step := widestFinishedStep()
 
-	fields := appendAttemptDeliveryFields(coordinator.attemptFinishHead(attempt), &outcome)
+	fields := appendAttemptDeliveryFields(attemptFinishHead(&step), &step.Outcome)
 	fields = append(fields, logkey.PhaseAborted, true)
 
 	if len(fields) != attemptFinishFields {

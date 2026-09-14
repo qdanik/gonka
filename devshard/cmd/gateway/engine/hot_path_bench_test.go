@@ -8,11 +8,8 @@ import (
 	"devshard/cmd/gateway/config"
 )
 
-// The sinks keep what a benchmark built from being optimised away.
-var (
-	sinkFields  []any
-	sinkOutcome RaceOutcome
-)
+// The sink keeps what a benchmark built from being optimised away.
+var sinkOutcome RaceOutcome
 
 func benchAttempts(count int) []EscalationAttempt {
 	start := time.Unix(1786114580, 0)
@@ -195,18 +192,6 @@ func BenchmarkCoordinatorDeadlinePlan(b *testing.B) {
 	b.ReportAllocs()
 	for b.Loop() {
 		nextDeadline(now, coordinator.plan())
-	}
-}
-
-// The finish line every completed attempt writes, built the way the coordinator builds it.
-func BenchmarkAttemptFinishFields(b *testing.B) {
-	outcome := widestFinishedOutcome()
-	attempt := &liveAttempt{nonce: 77, participant: "host-3", nonceFinished: true, outcome: &outcome}
-	coordinator := stalledFixtureCoordinator(settledPolicy(), attempt)
-
-	b.ReportAllocs()
-	for b.Loop() {
-		sinkFields = appendAttemptDeliveryFields(coordinator.attemptFinishHead(attempt), &outcome)
 	}
 }
 

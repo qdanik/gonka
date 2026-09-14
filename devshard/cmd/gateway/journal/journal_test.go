@@ -116,7 +116,7 @@ func holdConsumer(t *testing.T, events *Journal, ledger *heldLedger) func() {
 func dropWhileTheQueueIsEmpty(t *testing.T, events *Journal, ledger *heldVoteLedger) func() {
 	t.Helper()
 	releaseRace := holdConsumer(t, events, &ledger.heldLedger)
-	events.emit(queuedEvent{kind: KindNonceCommitted})
+	events.RecordStep(engine.RaceStep{Kind: engine.RaceStepNonceCommitted})
 	events.RecordTimeout(engine.TimeoutEvent{EscrowID: "escrow-1", Nonce: 4})
 	releaseVote := sync.OnceFunc(func() { close(ledger.voteRelease) })
 	t.Cleanup(releaseVote)
@@ -126,8 +126,8 @@ func dropWhileTheQueueIsEmpty(t *testing.T, events *Journal, ledger *heldVoteLed
 	case <-time.After(5 * time.Second):
 		t.Fatal("the consumer never took the vote queued behind the progress line")
 	}
-	events.emit(queuedEvent{kind: KindNonceCommitted})
-	events.emit(queuedEvent{kind: KindNonceCommitted})
+	events.RecordStep(engine.RaceStep{Kind: engine.RaceStepNonceCommitted})
+	events.RecordStep(engine.RaceStep{Kind: engine.RaceStepNonceCommitted})
 	return releaseVote
 }
 
@@ -205,9 +205,9 @@ func TestAProgressLinePastTheBacklogIsDroppedAndTheNextBatchSaysHowMany(t *testi
 	events := newJournal(t, Settings{Lines: lines, Ledger: ledger, ProgressBacklog: 1})
 	release := holdConsumer(t, events, ledger)
 
-	events.emit(queuedEvent{kind: KindNonceCommitted})
-	events.emit(queuedEvent{kind: KindNonceCommitted})
-	events.emit(queuedEvent{kind: KindNonceCommitted})
+	events.RecordStep(engine.RaceStep{Kind: engine.RaceStepNonceCommitted})
+	events.RecordStep(engine.RaceStep{Kind: engine.RaceStepNonceCommitted})
+	events.RecordStep(engine.RaceStep{Kind: engine.RaceStepNonceCommitted})
 	release()
 	events.Flush()
 

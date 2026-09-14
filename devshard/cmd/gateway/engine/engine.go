@@ -69,6 +69,7 @@ type Deps struct {
 	Metrics   raceMetrics
 	Ledger    raceLedger
 	Lifecycle escrowLifecycle
+	Journal   raceJournal
 
 	Suspicious func(participant string) bool
 
@@ -240,6 +241,7 @@ func (e *Engine) raceDeps(settings *config.Config, request Request, registration
 		Classify:     e.classify(request.Model),
 		Now:          e.deps.Now,
 		Timer:        e.deps.Timer,
+		Journal:      e.deps.Journal,
 		Hold:         registration.holdEscrow,
 		Report:       func(outcome RaceOutcome) { e.record(outcome, request.Params, registration) },
 	}

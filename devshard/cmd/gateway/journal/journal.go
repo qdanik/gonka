@@ -158,6 +158,28 @@ func (j *Journal) RecordProbeTimeout(vote engine.TimeoutEvent) {
 	j.emit(queuedEvent{kind: KindTimeoutVote, timeout: &vote, probeVote: true})
 }
 
+// RecordStep takes a step the coordinator copied at emit; a stranded nonce and a diverged host ride the money lane.
+func (j *Journal) RecordStep(step engine.RaceStep) {
+	j.emit(queuedEvent{kind: raceStepKind(step.Kind), raceStep: &step})
+}
+
+func raceStepKind(kind engine.RaceStepKind) Kind {
+	switch kind {
+	case engine.RaceStepNonceCommitted:
+		return KindNonceCommitted
+	case engine.RaceStepEscalationUnfilled:
+		return KindEscalationUnfilled
+	case engine.RaceStepAttemptCrowned:
+		return KindAttemptCrowned
+	case engine.RaceStepAttemptFinished:
+		return KindAttemptFinished
+	case engine.RaceStepNonceStranded:
+		return KindNonceStranded
+	default:
+		return KindHostDiverged
+	}
+}
+
 // emit admits one event to its lane and never waits. See README.md, "Two lanes".
 func (j *Journal) emit(entry queuedEvent) {
 	j.mu.Lock()
@@ -262,5 +284,8 @@ func (j *Journal) deliver(entry *queuedEvent) {
 		}
 	case KindBurnBudgetExhausted:
 		renderBurnBudgetExhausted(j.lines, entry.escrowID)
+	case KindNonceCommitted, KindEscalationUnfilled, KindAttemptCrowned, KindAttemptFinished,
+		KindNonceStranded, KindHostDiverged:
+		renderRaceStep(j.lines, entry.raceStep)
 	}
 }

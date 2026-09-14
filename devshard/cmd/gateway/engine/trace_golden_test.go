@@ -5,6 +5,7 @@ import (
 
 	"devshard/cmd/gateway/engine"
 	"devshard/cmd/gateway/internal/logcapture"
+	"devshard/cmd/gateway/journal"
 	"devshard/cmd/gateway/scheduler"
 )
 
@@ -12,12 +13,12 @@ import (
 func TestEveryRaceTraceLineKeepsItsLevelMessageAndTypedFields(t *testing.T) {
 	testCases := []struct {
 		name  string
-		drive func(t *testing.T)
+		drive func(t *testing.T, events *journal.Journal)
 		want  []logcapture.Entry
 	}{
 		{
 			name:  "a committed nonce",
-			drive: func(t *testing.T) { engine.TraceNonceCommitted(t) },
+			drive: func(t *testing.T, events *journal.Journal) { engine.TraceNonceCommitted(t, events) },
 			want: []logcapture.Entry{{Level: "info", Msg: "nonce committed", Fields: []any{
 				"request", "request-1", "escrow", "escrow-1", "nonce", uint64(12),
 				"host", "host-2", "slot", 2, "role", "primary", "reason", "primary",
@@ -25,7 +26,7 @@ func TestEveryRaceTraceLineKeepsItsLevelMessageAndTypedFields(t *testing.T) {
 		},
 		{
 			name:  "an escalation nobody filled",
-			drive: func(t *testing.T) { engine.TraceEscalationUnfilled(t) },
+			drive: func(t *testing.T, events *journal.Journal) { engine.TraceEscalationUnfilled(t, events) },
 			want: []logcapture.Entry{{Level: "info", Msg: "escalation unfilled", Fields: []any{
 				"request", "request-1", "escrow", "escrow-1", "reason", "receipt_timeout",
 				"attempts", 0, "error", scheduler.ErrNoAvailableHost,
@@ -33,7 +34,7 @@ func TestEveryRaceTraceLineKeepsItsLevelMessageAndTypedFields(t *testing.T) {
 		},
 		{
 			name:  "a crowned attempt",
-			drive: func(t *testing.T) { engine.TraceAttemptCrowned(t) },
+			drive: func(t *testing.T, events *journal.Journal) { engine.TraceAttemptCrowned(t, events) },
 			want: []logcapture.Entry{{Level: "info", Msg: "attempt crowned", Fields: []any{
 				"request", "request-1", "escrow", "escrow-1", "nonce", uint64(13),
 				"host", "host-3", "reason", "first_claim",
@@ -41,7 +42,7 @@ func TestEveryRaceTraceLineKeepsItsLevelMessageAndTypedFields(t *testing.T) {
 		},
 		{
 			name:  "a finished attempt with every delivery field",
-			drive: func(t *testing.T) { engine.TraceAttemptFinished(t) },
+			drive: func(t *testing.T, events *journal.Journal) { engine.TraceAttemptFinished(t, events) },
 			want: []logcapture.Entry{{Level: "info", Msg: "attempt finished", Fields: []any{
 				"request", "request-1", "escrow", "escrow-1", "nonce", uint64(77),
 				"host", "host-3", "terminal", "lost",
@@ -56,7 +57,7 @@ func TestEveryRaceTraceLineKeepsItsLevelMessageAndTypedFields(t *testing.T) {
 		},
 		{
 			name:  "a finished attempt that reported nothing",
-			drive: func(t *testing.T) { engine.TraceAttemptFinishedWithNoOutcome(t) },
+			drive: func(t *testing.T, events *journal.Journal) { engine.TraceAttemptFinishedWithNoOutcome(t, events) },
 			want: []logcapture.Entry{{Level: "info", Msg: "attempt finished with no outcome", Fields: []any{
 				"request", "request-1", "escrow", "escrow-1", "nonce", uint64(78),
 				"host", "host-4", "nonce_finished", false,
@@ -64,7 +65,7 @@ func TestEveryRaceTraceLineKeepsItsLevelMessageAndTypedFields(t *testing.T) {
 		},
 		{
 			name:  "a host that diverged twice",
-			drive: func(t *testing.T) { engine.TraceHostDiverged(t) },
+			drive: func(t *testing.T, events *journal.Journal) { engine.TraceHostDiverged(t, events) },
 			want: []logcapture.Entry{
 				{Level: "warn", Msg: "host rewound for state divergence", Fields: []any{
 					"request", "request-1", "escrow", "escrow-1", "nonce", uint64(79),
@@ -77,7 +78,7 @@ func TestEveryRaceTraceLineKeepsItsLevelMessageAndTypedFields(t *testing.T) {
 		},
 		{
 			name:  "a stranded nonce",
-			drive: func(t *testing.T) { engine.TraceNonceStranded(t) },
+			drive: func(t *testing.T, events *journal.Journal) { engine.TraceNonceStranded(t, events) },
 			want: []logcapture.Entry{{Level: "warn", Msg: "nonce stranded", Fields: []any{
 				"request", "request-1", "escrow", "escrow-1", "nonce", uint64(91),
 				"host", "host-6", "role", "speculative",
@@ -88,8 +89,11 @@ func TestEveryRaceTraceLineKeepsItsLevelMessageAndTypedFields(t *testing.T) {
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
 			logged := logcapture.Install(t)
+			events := journal.New(journal.Settings{})
+			t.Cleanup(func() { _ = events.Close() })
 
-			testCase.drive(t)
+			testCase.drive(t, events)
+			events.Flush()
 
 			for _, line := range testCase.want {
 				logged.RequireLine(t, line)
