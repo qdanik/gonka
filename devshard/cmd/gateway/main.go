@@ -188,7 +188,10 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 	if err != nil {
 		return nil, err
 	}
-	raceRecorder := metrics.NewRaceRecorder(telemetry)
+	hostStaleness := func() time.Duration {
+		return time.Duration(configHolder.Load().Perf.HostStalenessSeconds) * time.Second
+	}
+	raceRecorder := metrics.NewRaceRecorder(telemetry, clock, hostStaleness)
 	manager, err := escrow.NewManager(escrow.Deps{
 		Tx:          txClient,
 		Store:       devshardWrites{Store: gatewayStore, changed: func() { notify(devshardWork) }},

@@ -185,7 +185,7 @@ Two asymmetries the code does not state:
 | `perf_failure_rate_threshold` / `perf_failure_rate_min_volume` | 0.15 / 20 | Rate-based ejection trigger and its volume gate. |
 | `perf_ejection_base_seconds` / `perf_ejection_max_seconds` | 30 / 600 | Ejection duration ladder. |
 | `perf_max_ejection_fraction` / `perf_min_available_hosts` | 0.5 / 4 | Pool-wide ejection cap, and the reason the routing gate cannot empty a model's fleet. |
-| `perf_host_staleness_seconds` | 3 600 | When an unseen host is forgotten. |
+| `perf_host_staleness_seconds` | 3 600 | When an unseen host is forgotten by the performance tracker, and when its participant-labelled race series are deleted. |
 | `GATEWAY_PERF_EWMA_HALFLIFE_SECONDS` | 600 | Half-life of the decayed success and failure counters. |
 
 Every row above is an admin override, changeable at run time without a redeploy, and every one also takes a `GATEWAY_*` environment variable read at boot. The `perf_*` rows joined them when the ejection detector's thresholds were made reachable without a rebuild.

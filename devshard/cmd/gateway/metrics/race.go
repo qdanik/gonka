@@ -2,6 +2,8 @@ package metrics
 
 import (
 	"strconv"
+	"sync"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 
@@ -46,10 +48,33 @@ type RaceRecorder struct {
 	totalAttempt    *prometheus.HistogramVec
 	maxChunkGap     *prometheus.HistogramVec
 	meanChunkGap    *prometheus.HistogramVec
+
+	now                 func() time.Time
+	staleness           func() time.Duration
+	participantFamilies []partialDeleter
+
+	agingMu   sync.Mutex
+	lastSeen  map[hostSeries]time.Time
+	lastSweep time.Time
 }
 
-func NewRaceRecorder(telemetry *Metrics) *RaceRecorder {
+// hostSeries is the label pair every participant family carries, and the unit a sweep forgets.
+type hostSeries struct {
+	participant string
+	model       string
+}
+
+// partialDeleter is what a CounterVec and a HistogramVec share for forgetting one label pair.
+type partialDeleter interface {
+	DeletePartialMatch(labels prometheus.Labels) int
+}
+
+// NewRaceRecorder forgets a participant and model left unwritten for staleness(). See README.md, "Cardinality in practice".
+func NewRaceRecorder(telemetry *Metrics, now func() time.Time, staleness func() time.Duration) *RaceRecorder {
 	recorder := &RaceRecorder{
+		now:       now,
+		staleness: staleness,
+		lastSeen:  make(map[hostSeries]time.Time),
 		attemptsStarted: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "devshard_gateway_attempts_started_total",
 			Help: "Total gateway attempts dispatched by participant, model, role, and start reason.",
@@ -121,6 +146,11 @@ func NewRaceRecorder(telemetry *Metrics) *RaceRecorder {
 			Buckets: latencyBuckets,
 		}, []string{"participant_key", "model"}),
 	}
+	recorder.participantFamilies = []partialDeleter{
+		recorder.attemptsStarted, recorder.attemptsTerminal, recorder.attemptFailures, recorder.transportErrors,
+		recorder.timeoutActions, recorder.carryOverflows, recorder.receiptSeconds, recorder.firstContent,
+		recorder.prefillPerToken, recorder.outputTokens, recorder.totalAttempt, recorder.maxChunkGap, recorder.meanChunkGap,
+	}
 	telemetry.Register(recorder.collectors()...)
 	return recorder
 }
@@ -150,6 +180,7 @@ func (r *RaceRecorder) RecordRace(outcome engine.RaceOutcome) {
 		labels := outcome.Labels(attempt)
 		participant := metricLabel(labels.Participant, labelUnknown)
 		role := metricLabel(labels.Role, labelUnknown)
+		r.markSeen(participant, model)
 
 		if !attempt.SendTime.IsZero() {
 			r.attemptsStarted.WithLabelValues(participant, model, role, metricLabel(attempt.StartReason, role)).Inc()
@@ -235,9 +266,11 @@ func (r *RaceRecorder) observeAttemptLatency(participant, model string, inputTok
 }
 
 func (r *RaceRecorder) RecordTimeout(event engine.TimeoutEvent) {
+	participant := metricLabel(event.Participant, labelUnknown)
+	model := metricLabel(event.Model, labelUnknown)
+	r.markSeen(participant, model)
 	r.timeoutActions.WithLabelValues(
-		metricLabel(event.Participant, labelUnknown),
-		metricLabel(event.Model, labelUnknown),
+		participant, model,
 		metricLabel(event.Kind, labelUnknown),
 		metricLabel(event.Action, labelUnknown),
 		metricLabel(event.Reason, reasonNone),
@@ -245,5 +278,33 @@ func (r *RaceRecorder) RecordTimeout(event engine.TimeoutEvent) {
 }
 
 func (r *RaceRecorder) RecordClassifyOverflow(participant, model string) {
-	r.carryOverflows.WithLabelValues(metricLabel(participant, labelUnknown), metricLabel(model, labelUnknown)).Inc()
+	participantLabel, modelLabel := metricLabel(participant, labelUnknown), metricLabel(model, labelUnknown)
+	r.markSeen(participantLabel, modelLabel)
+	r.carryOverflows.WithLabelValues(participantLabel, modelLabel).Inc()
+}
+
+// markSeen runs before a participant series is written, so a sweep never deletes what the write is about to add. See README.md, "Cardinality in practice".
+func (r *RaceRecorder) markSeen(participant, model string) {
+	r.agingMu.Lock()
+	defer r.agingMu.Unlock()
+	now := r.now()
+	r.lastSeen[hostSeries{participant: participant, model: model}] = now
+	staleness := r.staleness()
+	if staleness <= 0 || now.Sub(r.lastSweep) < staleness/10 {
+		return
+	}
+	r.lastSweep = now
+	for series, seen := range r.lastSeen {
+		if now.Sub(seen) > staleness {
+			delete(r.lastSeen, series)
+			r.forget(series)
+		}
+	}
+}
+
+func (r *RaceRecorder) forget(series hostSeries) {
+	forgotten := prometheus.Labels{"participant_key": series.participant, "model": series.model}
+	for _, family := range r.participantFamilies {
+		family.DeletePartialMatch(forgotten)
+	}
 }

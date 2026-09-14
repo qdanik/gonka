@@ -2,6 +2,7 @@ package metrics
 
 import (
 	"math"
+	"slices"
 	"testing"
 
 	dto "github.com/prometheus/client_model/go"
@@ -105,6 +106,26 @@ func expectAbsent(t *testing.T, telemetry *Metrics, name string) {
 	if found := family(t, telemetry, name); found != nil {
 		t.Fatalf("family %s should have no series: %v", name, found.GetMetric())
 	}
+}
+
+// familiesCarrying counts the families holding at least one series whose labelName is labelValue.
+func familiesCarrying(t *testing.T, telemetry *Metrics, labelName, labelValue string) int {
+	t.Helper()
+	gathered, err := telemetry.Registry().Gather()
+	if err != nil {
+		t.Fatalf("gather: %v", err)
+	}
+	families := 0
+	for _, candidate := range gathered {
+		if slices.ContainsFunc(candidate.GetMetric(), func(metric *dto.Metric) bool {
+			return slices.ContainsFunc(metric.GetLabel(), func(pair *dto.LabelPair) bool {
+				return pair.GetName() == labelName && pair.GetValue() == labelValue
+			})
+		}) {
+			families++
+		}
+	}
+	return families
 }
 
 func expectSeriesCount(t *testing.T, telemetry *Metrics, name string, count int) {

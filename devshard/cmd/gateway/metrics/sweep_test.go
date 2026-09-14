@@ -8,7 +8,7 @@ import (
 )
 
 func TestSweepCountsWhatEachTickAppliedAndFailed(t *testing.T) {
-	recorder := NewRaceRecorder(New())
+	recorder := newTestRaceRecorder(New())
 
 	recorder.RecordSweep(5, 3, 2)
 	recorder.RecordSweep(1, 1, 0)
@@ -19,7 +19,7 @@ func TestSweepCountsWhatEachTickAppliedAndFailed(t *testing.T) {
 }
 
 func TestSweepWithNothingDueCountsNothing(t *testing.T) {
-	recorder := NewRaceRecorder(New())
+	recorder := newTestRaceRecorder(New())
 
 	recorder.RecordSweep(0, 0, 0)
 

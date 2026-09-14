@@ -11,6 +11,11 @@ var raceStart = time.Unix(1700000000, 0)
 
 func at(offset time.Duration) time.Time { return raceStart.Add(offset) }
 
+// newTestRaceRecorder writes every series at raceStart, well inside the staleness window, so nothing ages out.
+func newTestRaceRecorder(telemetry *Metrics) *RaceRecorder {
+	return NewRaceRecorder(telemetry, func() time.Time { return raceStart }, func() time.Duration { return time.Hour })
+}
+
 func winningAttempt() engine.AttemptOutcome {
 	return engine.AttemptOutcome{
 		Participant:           "gonka1winner",
@@ -32,7 +37,7 @@ func winningAttempt() engine.AttemptOutcome {
 
 func TestAWonRaceEmitsTheWinnerFamiliesWithTheirValues(t *testing.T) {
 	telemetry := New()
-	recorder := NewRaceRecorder(telemetry)
+	recorder := newTestRaceRecorder(telemetry)
 
 	recorder.RecordRace(engine.RaceOutcome{
 		Model:       "qwen",
@@ -68,7 +73,7 @@ func TestAWonRaceEmitsTheWinnerFamiliesWithTheirValues(t *testing.T) {
 // prefill no client ever waited for.
 func TestAContentlessStreamLeavesTheContentLatenciesUnobserved(t *testing.T) {
 	telemetry := New()
-	recorder := NewRaceRecorder(telemetry)
+	recorder := newTestRaceRecorder(telemetry)
 
 	attempt := winningAttempt()
 	attempt.FirstContent = time.Time{}
@@ -86,7 +91,7 @@ func TestAContentlessStreamLeavesTheContentLatenciesUnobserved(t *testing.T) {
 // A stalled host and a slow one carry the same chunk count; the longest silence is what parts them.
 func TestAStalledAttemptReportsItsLongestSilence(t *testing.T) {
 	telemetry := New()
-	recorder := NewRaceRecorder(telemetry)
+	recorder := newTestRaceRecorder(telemetry)
 
 	attempt := winningAttempt()
 	attempt.MaxChunkGap, attempt.MeanChunkGap = 55*time.Second, 40*time.Millisecond
@@ -103,7 +108,7 @@ func TestAStalledAttemptReportsItsLongestSilence(t *testing.T) {
 
 func TestAHiddenLoserFailureIsCountedAgainstASuccessfulRequest(t *testing.T) {
 	telemetry := New()
-	recorder := NewRaceRecorder(telemetry)
+	recorder := newTestRaceRecorder(telemetry)
 
 	recorder.RecordRace(engine.RaceOutcome{
 		Model:       "qwen",
@@ -140,7 +145,7 @@ func TestAHiddenLoserFailureIsCountedAgainstASuccessfulRequest(t *testing.T) {
 
 func TestASuspiciousAttemptIsCountedAsNoWinner(t *testing.T) {
 	telemetry := New()
-	recorder := NewRaceRecorder(telemetry)
+	recorder := newTestRaceRecorder(telemetry)
 
 	recorder.RecordRace(engine.RaceOutcome{
 		Model:    "qwen",
@@ -190,7 +195,7 @@ func TestALifecycleFailureNamesItselfRatherThanAnAttempt(t *testing.T) {
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
 			telemetry := New()
-			NewRaceRecorder(telemetry).RecordRace(testCase.outcome)
+			newTestRaceRecorder(telemetry).RecordRace(testCase.outcome)
 
 			expectCounter(t, telemetry, "devshard_gateway_requests_total",
 				labels{"model": "qwen", "outcome": "failure", "reason": testCase.expected}, 1)
@@ -200,7 +205,7 @@ func TestALifecycleFailureNamesItselfRatherThanAnAttempt(t *testing.T) {
 
 func TestAnUndispatchedAttemptIsNotCountedAsStarted(t *testing.T) {
 	telemetry := New()
-	NewRaceRecorder(telemetry).RecordRace(engine.RaceOutcome{
+	newTestRaceRecorder(telemetry).RecordRace(engine.RaceOutcome{
 		Model:    "qwen",
 		Decision: "primary",
 		Attempts: []engine.AttemptOutcome{{Participant: "gonka1ghost", Role: "extra", Terminal: engine.TerminalOffPath}},
@@ -213,7 +218,7 @@ func TestAnUndispatchedAttemptIsNotCountedAsStarted(t *testing.T) {
 
 func TestAnUpstreamServerErrorIsCountedUnderTheStatusTheHostSent(t *testing.T) {
 	telemetry := New()
-	NewRaceRecorder(telemetry).RecordRace(engine.RaceOutcome{
+	newTestRaceRecorder(telemetry).RecordRace(engine.RaceOutcome{
 		Model:    "qwen",
 		Decision: "primary",
 		Attempts: []engine.AttemptOutcome{{
@@ -228,7 +233,7 @@ func TestAnUpstreamServerErrorIsCountedUnderTheStatusTheHostSent(t *testing.T) {
 
 func TestEmptyLabelsFallBackRatherThanShippingBlank(t *testing.T) {
 	telemetry := New()
-	NewRaceRecorder(telemetry).RecordRace(engine.RaceOutcome{
+	newTestRaceRecorder(telemetry).RecordRace(engine.RaceOutcome{
 		Attempts: []engine.AttemptOutcome{{SendTime: at(0), Terminal: engine.TerminalDialFailure}},
 	})
 
@@ -259,7 +264,7 @@ func TestATimeoutVoteIsCountedWhateverItsAction(t *testing.T) {
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
 			telemetry := New()
-			NewRaceRecorder(telemetry).RecordTimeout(testCase.event)
+			newTestRaceRecorder(telemetry).RecordTimeout(testCase.event)
 
 			expectCounter(t, telemetry, "devshard_gateway_timeout_actions_total", labels{
 				"participant_key": testCase.event.Participant,
@@ -274,7 +279,7 @@ func TestATimeoutVoteIsCountedWhateverItsAction(t *testing.T) {
 
 func TestAClassifyOverflowIsAttributedToItsHost(t *testing.T) {
 	telemetry := New()
-	NewRaceRecorder(telemetry).RecordClassifyOverflow("gonka1host", "qwen")
+	newTestRaceRecorder(telemetry).RecordClassifyOverflow("gonka1host", "qwen")
 
 	expectCounter(t, telemetry, "devshard_gateway_stream_carry_overflow_total",
 		labels{"participant_key": "gonka1host", "model": "qwen"}, 1)
@@ -283,7 +288,7 @@ func TestAClassifyOverflowIsAttributedToItsHost(t *testing.T) {
 // Each removed family duplicated one that stays. See operations.md, "Metric changes".
 func TestTheRecorderPublishesNoRemovedFamily(t *testing.T) {
 	telemetry := New()
-	recorder := NewRaceRecorder(telemetry)
+	recorder := newTestRaceRecorder(telemetry)
 	quiet := engine.AttemptOutcome{
 		Participant: "gonka1quiet", Nonce: 21, Role: "primary", SendTime: at(0), Completed: at(time.Second),
 		Suspicious: true, Terminal: engine.TerminalEmptyStream, Confirmed: true, NonceFinished: true,
