@@ -56,4 +56,4 @@ Most limits are also runtime overrides through the admin API, so the values here
 Two settings decide behaviour before the first run:
 
 - `GATEWAY_NONCE_ACCOUNTING_ENABLED` ships as `false` and the built-in default is also off. The old gateway had its ledger **on**, so an operator porting a config gets no counters, no findings and no `accounting.db` — without an error. Left off, the gateway runs without counters or findings.
-- `GATEWAY_POC_MODE=relaxed` serves through the chain phase that otherwise blocks new inferences. It is the right setting for a gateway that must keep answering across an epoch boundary, and the wrong one where the chain's own admission must hold.
+- `GATEWAY_POC_MODE` ships as `relaxed` and the built-in default is also relaxed: the gateway serves through the chain phase that otherwise blocks new inferences. It is the right setting for a gateway that must keep answering across an epoch boundary; set `off` where the chain's own admission must hold.

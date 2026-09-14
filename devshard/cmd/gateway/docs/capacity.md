@@ -173,10 +173,10 @@ Two things the code does not state:
 
 | Knob | Default | Effect |
 |---|---|---|
-| `max_concurrent_requests` | 1 536 | Per-model in-flight request cap, scaled by capacity. |
+| `max_concurrent_requests` | 2 048 | Per-model in-flight request cap, scaled by capacity. |
 | `max_input_tokens_in_flight` | 0 (unlimited) | Per-model input-token budget, scaled by capacity. |
-| `max_concurrent_requests_per_10000_weight` | 24.0 | Weight-derived cap; when set with an observed baseline it replaces the absolute cap. |
-| `poc_max_concurrent_requests_per_10000_weight` | 48.0 | The same, used while the chain reports requests blocked. |
+| `max_concurrent_requests_per_10000_weight` | 8.0 | Weight-derived cap; when set with an observed baseline it replaces the absolute cap. |
+| `poc_max_concurrent_requests_per_10000_weight` | 16.0 | The same, used while the chain reports requests blocked. |
 | `admission_queue_wait_ms` | 300 000 | How long a request waits for a free slot before a 429. The same value is returned as `Retry-After`. |
 | `host_initial_inflight` / `host_max_inflight` | 64 / 256 | How many requests may be in flight to one host, to start and at most. The window opens near a host's known capacity and AIMD is left to back off from it, rather than discovering it upward from a cold start. |
 | `host_cutoff_after_failures` | 3 | Consecutive transport faults before the host stops receiving requests. |

@@ -63,7 +63,7 @@ Signing keys are addressed **by the name of the variable that holds them**, neve
 | --- | --- | --- |
 | `GATEWAY_PORT` | 8080 | the listening port |
 | `GATEWAY_STORAGE_DIR` | `$HOME/.cache/gonka-gateway` | where `gateway.db` and the escrow storage live |
-| `GATEWAY_MAX_CONCURRENT_REQUESTS` | 1536 | the hard admission ceiling; unset lets the weight model decide |
+| `GATEWAY_MAX_CONCURRENT_REQUESTS` | 2048 | the hard admission ceiling; unset lets the weight model decide |
 | `GATEWAY_ADMISSION_QUEUE_WAIT_MS` | 300000 | how long a request waits for a slot before 429 |
 | `GATEWAY_ADMISSION_QUEUE_PER_SLOT` | 4 | how deep the queue is allowed to grow per slot |
 | `GATEWAY_MAX_BUFFERED_RESPONSE_BYTES` | 512 MiB | **every** non-streaming reply being assembled, at once |
@@ -84,7 +84,7 @@ Signing keys are addressed **by the name of the variable that holds them**, neve
 | `GATEWAY_PERF_EWMA_HALFLIFE_SECONDS` | 600 | how fast a host's history forgets |
 | `GATEWAY_TIMEOUT_SWEEP_BUDGET_PER_TICK` | 8 | execution-timeout votes one tick may retry across every escrow; `0` turns the sweep off |
 | `GATEWAY_TIMEOUT_SWEEP_GRACE_SECONDS` | 120 | how far past its deadline a nonce must be before the sweep claims it from its own race |
-| `GATEWAY_POC_MODE` | off | `relaxed` keeps serving through proof-of-compute |
+| `GATEWAY_POC_MODE` | relaxed | `relaxed` keeps serving through proof-of-compute; `off` refuses new requests while the chain blocks them |
 | `GATEWAY_LOG_FORMAT` | json | one JSON object per line, which promtail and the Loki panels read; `text` restores the text form, and any other value refuses to boot |
 
 The full list is `env/env.go`; the full set of defaults is `config.Defaults()`. Neither is duplicated here — a table that drifts is worse than a pointer that does not.

@@ -29,9 +29,9 @@ func Defaults() Config {
 			MaxBufferedResponseBytes: 512 << 20,
 			MaxTokensCap:             int64(filters.RequestMaxTokensCap),
 			Concurrency: Concurrency{
-				MaxRequests:               1536,
-				RequestsPer10000Weight:    24,
-				PoCRequestsPer10000Weight: 48,
+				MaxRequests:               2048,
+				RequestsPer10000Weight:    8,
+				PoCRequestsPer10000Weight: 16,
 			},
 			MaxInputTokensInFlight: 0,
 			AdmissionQueueWaitMS:   300_000,
@@ -47,7 +47,7 @@ func Defaults() Config {
 			},
 		},
 		Modes: Modes{
-			PoCMode: PoCModeOff,
+			PoCMode: PoCModeRelaxed,
 		},
 		Rotation: Rotation{
 			PrePoCBlocks: 300,

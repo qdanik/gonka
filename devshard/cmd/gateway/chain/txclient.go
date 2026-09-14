@@ -17,7 +17,7 @@ import (
 const (
 	DefaultFeeDenom     = "ngonka"
 	DefaultFeeAmount    = uint64(1_000_000)
-	DefaultGasLimit     = uint64(500_000)
+	DefaultGasLimit     = uint64(700_000)
 	DefaultPollInterval = 2 * time.Second
 	DefaultPollTimeout  = 45 * time.Second
 	// UnorderedTxTTL is how far past "now" a built tx's timeout_timestamp is set.
