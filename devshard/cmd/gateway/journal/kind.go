@@ -53,7 +53,7 @@ func (k Kind) String() string {
 func (k Kind) onMoneyLane() bool {
 	switch k {
 	case KindRaceReported, KindTimeoutVote, KindNonceBurned, KindBurnBudgetExhausted, KindDiffComposed,
-		KindWarmupProbe, KindNonceStranded, KindHostDiverged, KindReplyNotCached:
+		KindWarmupProbe, KindNonceStranded, KindHostDiverged, KindReplyNotCached, KindRequestFinished:
 		return true
 	}
 	return false

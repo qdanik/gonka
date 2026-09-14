@@ -187,8 +187,7 @@ func TestHostClockOffsetReadsTheWinnersStamp(t *testing.T) {
 	}
 }
 
-// The executor stamps whole seconds by truncation, so a host dispatched to late in a second signs a
-// stamp that reads a full second behind however well its clock agrees with ours.
+// The executor stamps whole seconds by truncation, which a late dispatch could misread as up to a second of host clock drift.
 func TestHostClockOffsetDoesNotReadTruncationAsDrift(t *testing.T) {
 	t.Parallel()
 	dispatchedAt := time.Unix(1786114580, 0).Add(900 * time.Millisecond)
@@ -210,9 +209,7 @@ func TestHostClockOffsetDoesNotReadTruncationAsDrift(t *testing.T) {
 	}
 }
 
-// A host that answers with an error event carrying no message renders its whole raw payload as the
-// error text, and that payload is generated content of no fixed size. One line per failed request is
-// enough to fill a disk with the model's own output.
+// A host error with no message renders its whole raw payload as text, unbounded content that could otherwise fill a disk one failed request at a time.
 func TestLoggedErrorBoundsHostControlledText(t *testing.T) {
 	huge := &engine.HostApplicationError{Payload: strings.Repeat("A", 100_000)}
 
@@ -232,9 +229,6 @@ func TestLoggedErrorLeavesAShortErrorAlone(t *testing.T) {
 	}
 }
 
-// Cutting a fixed number of bytes lands mid-rune on multi-byte text, which turns a log line into
-// invalid UTF-8 that a collector may drop whole. The rune here is three bytes wide because the cap is
-// even: a two-byte rune divides into it exactly and would never exercise the boundary at all.
 func TestLoggedErrorCutsOnARuneBoundary(t *testing.T) {
 	if maxLoggedErrorBytes%3 == 0 {
 		t.Fatalf("maxLoggedErrorBytes = %d divides by the test rune width, so this asserts nothing", maxLoggedErrorBytes)

@@ -33,7 +33,7 @@ The only package that speaks HTTP to a client, and the one that decides what a f
 
 `admission` is the pre-queue chain check. Relaxed proof-of-compute mode is read at three further sites: the shutdown gate in `main`, and the race's own bypass and generating checks in `engine`.
 
-Journal receives the request lines. The boundary builds a `journal.RequestLine` on the handler goroutine, reading the client stream's byte count while the handler still owns it, and the [`journal`](../journal/) renders it.
+`Journal` receives the request lines. The boundary builds a `journal.RequestLine` on the handler goroutine, reading the client stream's byte count under the stream's mutex (`api/stream.go`), because attempt goroutines can still write the stream, and the [`journal`](../journal/) renders it.
 
 ## Authentication and the kill switch
 
@@ -92,7 +92,7 @@ In `race`, the second `X-Devshard-ID` write is the authoritative one for a reply
 - `writeControlFailure` is not `writeErrorFor`: that one answers 502 for an unrecognised error, which is wrong for a store this process owns.
 - `rateLimited` singles out the gateway limiter's own rejection, because the status, the `Retry-After` header and the counter that names which cap was hit all ask for it.
 - `Retry-After` is rounded up: a zero would tell a client to retry immediately, the opposite of what a queue timeout means.
-- `maxLoggedErrorBytes` bounds host-controlled text in a log line, because a `HostApplicationError` with no message renders its whole upstream payload. A body truncated at that cap no longer parses, so `failureRecorder.reason` falls back to the raw text rather than an empty field.
+- `maxLoggedErrorBytes` bounds the body `failureRecorder` captures for an admin failure, because a `HostApplicationError` with no message renders its whole upstream payload. A body truncated at that cap no longer parses, so `failureRecorder.reason` falls back to the raw text rather than an empty field. The same truncation for a log line's own `error` field lives in the [`journal`](../journal/)'s own `loggedError` (`render_request.go`), with its own copy of the cap.
 - `adminFailure` exists because `auditAdmin` records only the successful path. Its `failureRecorder` forwards `Flush` so a wrapped handler keeps streaming.
 
 - **A snapshot too old to trust is its own refusal class.** `ChainStaleError` answers 503 with `Retry-After` of one poll interval, not the one-second default: the chain has by then been unreadable for at least `chain_snapshot_max_age_seconds`. `/v1/status` reports it as `chain_snapshot_stale`, so blocked is never returned without a reason. An unset timestamp is stale — the listener opens after the observer starts, so there is no phase to serve under before the first poll lands.
@@ -101,7 +101,7 @@ In `race`, the second `X-Devshard-ID` write is the authoritative one for a reply
 
 `finishRequest` hands the [`journal`](../journal/) the one question a finished request can no longer be asked: how much reached the client, and whether the terminator went with it. A delivery error is the difference between a reply the client read and one it is still waiting out its own timeout for. Input tokens ride along because every escalation deadline is computed from them.
 
-The journal's `winnerOutputTokens` is what the client actually received, which with the line's own timestamp is what a measured output rate is computed from.
+The journal's `winnerOutputTokens` is what the client actually received, which with `duration_ms` — measured on the handler goroutine, not the line's own timestamp, which trails the request's end by however long the journal's queue held it — is what a measured output rate is computed from.
 
 `estimatePromptTokens` is the limiter's and the perf buckets' input size, not a tokenizer call.
 

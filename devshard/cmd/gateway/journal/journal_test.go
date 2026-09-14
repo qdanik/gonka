@@ -288,11 +288,33 @@ func TestAnEventAfterCloseIsCountedAndItsKindWrittenOnce(t *testing.T) {
 	}, lines.All())
 }
 
+// KindRequestFinished rides the money lane, so a progress backlog that drops a throttled request leaves the finished-request record standing.
+func TestARequestFinishedLineSurvivesAFullProgressBacklogThatDropsARequestThrottledLine(t *testing.T) {
+	lines := &logcapture.Recorder{}
+	ledger := newHeldLedger()
+	events := newJournal(t, Settings{Lines: lines, Ledger: ledger, ProgressBacklog: 1})
+	release := holdConsumer(t, events, ledger)
+
+	events.RecordStep(engine.RaceStep{Kind: engine.RaceStepNonceCommitted})
+	events.RequestFinished(RequestLine{RequestID: "request-1", Model: "qwen", Verdict: "served"})
+	events.RequestThrottled(RequestLine{RequestID: "request-2", Model: "qwen", LimiterReason: "too_many_requests"})
+	release()
+	events.Flush()
+
+	lines.RequireLine(t, logcapture.Entry{Level: "info", Msg: "request finished", Fields: []any{
+		"request", "request-1", "model", "qwen", "escrow", "", "stream", false,
+		"input_tokens", uint64(0), "output_tokens", int64(0), "host", "",
+		"outcome", "served", "bytes", int64(0), "terminated", false, "duration_ms", int64(0),
+	}})
+	_, progressDropped, _ := events.Counts()
+	require.Equal(t, uint64(1), progressDropped)
+}
+
 func TestEveryKindHasANameAndTheLaneTheSpecAssigns(t *testing.T) {
 	moneyLane := map[Kind]bool{
 		KindRaceReported: true, KindTimeoutVote: true, KindNonceBurned: true, KindBurnBudgetExhausted: true,
 		KindDiffComposed: true, KindWarmupProbe: true, KindNonceStranded: true, KindHostDiverged: true,
-		KindReplyNotCached: true,
+		KindReplyNotCached: true, KindRequestFinished: true,
 	}
 	for kind := KindRaceReported; kind < kindCount; kind++ {
 		require.NotEqual(t, "unknown", kind.String(), "kind %d has no name", kind)
