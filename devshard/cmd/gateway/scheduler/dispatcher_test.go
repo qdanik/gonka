@@ -616,7 +616,8 @@ func TestDispatcherReclassifiesALostAssignmentAsAGhost(t *testing.T) {
 func TestDispatcherReleasesAnAdmissionThatNeverReachesACaller(t *testing.T) {
 	t.Run("the session fails after admitting the request", func(t *testing.T) {
 		sessionErr := errors.New("commit rejected")
-		test := newHarness(t, harnessConfig{failAfterDecide: sessionErr})
+		holds := &escrowHolds{}
+		test := newHarness(t, harnessConfig{failAfterDecide: sessionErr, escrowHold: holds.source()})
 
 		queued := test.submit(t, test.clock.Now())
 
@@ -624,6 +625,9 @@ func TestDispatcherReleasesAnAdmissionThatNeverReachesACaller(t *testing.T) {
 			t.Fatalf("err = %v, want the session error", result.err)
 		}
 		test.wantSlots(t, 0, 1)
+		if outstanding := holds.outstanding(); outstanding != 0 {
+			t.Fatalf("escrow holds still out = %d, want the serve's hold given back with its slot", outstanding)
+		}
 	})
 
 	t.Run("the session commits no nonce", func(t *testing.T) {
@@ -636,6 +640,38 @@ func TestDispatcherReleasesAnAdmissionThatNeverReachesACaller(t *testing.T) {
 		}
 		test.wantSlots(t, 0, 1)
 	})
+}
+
+// A burn's hold must come back if its commit fails, or a retired escrow never finishes draining.
+func TestDispatcherGivesBackTheHoldOfABurnWhoseCommitFailed(t *testing.T) {
+	testCases := []struct {
+		name   string
+		config harnessConfig
+	}{
+		{name: "admission refused the bound host", config: harnessConfig{refused: []string{hostB}}},
+		{name: "the bound host owes proof of compute", config: harnessConfig{
+			pocRequired: func(participant string) bool { return participant == hostB },
+		}},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			holds := &escrowHolds{}
+			settings := testCase.config
+			settings.failAfterDecide = types.ErrInsufficientBalance
+			settings.escrowHold = holds.source()
+			test := newHarness(t, settings)
+
+			queued := test.submit(t, test.clock.Now())
+
+			if result := awaitReply(t, queued); !errors.Is(result.err, types.ErrInsufficientBalance) {
+				t.Fatalf("err = %v, want the failed commit's error", result.err)
+			}
+			if outstanding := holds.outstanding(); outstanding != 0 {
+				t.Fatalf("escrow holds still out = %d, want the burn's hold given back", outstanding)
+			}
+			test.wantSlots(t, 0, 0)
+		})
+	}
 }
 
 // A window that fills between the peek and the commit must cost one ghost, not one per turn: the

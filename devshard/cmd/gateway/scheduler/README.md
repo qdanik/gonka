@@ -44,7 +44,7 @@ The host predicates are frozen once per drain by memoising them. `admit` couples
 
 ### Where the nonce, the slot and the hold are taken
 
-The concurrency slot and the escrow's in-flight hold are taken inside the same `Advance` that commits the nonce, and are given back together or not at all. The hold is taken on the serve path only, so a ghost commits unprotected against a concurrent retire; the slot travels with the assignment, so the release path covers only what never reaches a dispatch. A failed `Advance` answers the whole queue, not just the waiter a serve decision chose — the session could not advance its nonce at all — and a spent deposit is terminal for the escrow rather than for the request, so only the exhaustion notice gets it replaced. An assignment the waiter can no longer accept is given back and burned as abandoned.
+The concurrency slot and the escrow's in-flight hold are taken inside the same `Advance` that commits the nonce. A serve takes both and gives them back together or not at all; a burn takes the hold alone and gives it back whether its commit succeeds or fails, so a retire cannot land mid-commit on either. The slot travels with the assignment, so the release path covers only what never reaches a dispatch. A failed `Advance` answers the whole queue, not just the waiter a serve decision chose — the session could not advance its nonce at all — and a spent deposit is terminal for the escrow rather than for the request, so only the exhaustion notice gets it replaced. An assignment the waiter can no longer accept is given back and burned as abandoned.
 
 See routing.md, "Where the nonce, the slot and the hold are taken".
 

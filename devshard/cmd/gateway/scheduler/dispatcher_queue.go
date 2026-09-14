@@ -89,9 +89,7 @@ func (d *dispatcher) drain() (time.Time, bool) {
 				burned.Nonce = prepared.Nonce()
 			}
 			d.recordGhost(burned)
-			if offered.taken.escrowHold != nil {
-				offered.taken.escrowHold()
-			}
+			offered.taken.releaseHold()
 			burnBudget--
 			if burnBudget <= 0 {
 				d.recordBudgetTrip()
@@ -169,17 +167,21 @@ func servable(queued *waiter, participants []string, avail availability) (canSer
 	return false, anyBusy, anyChainBlocked, anyExcluded
 }
 
-// reservation is the slot and the escrow hold a serve took, given back together or not at all. See routing.md, "Where the nonce, the slot and the hold are taken".
+// reservation is what a decision took: a serve the slot and the escrow hold, a burn the hold alone. See routing.md, "Where the nonce, the slot and the hold are taken".
 type reservation struct {
 	participant string
 	escrowHold  func()
 }
 
+func (r reservation) releaseHold() {
+	if r.escrowHold != nil {
+		r.escrowHold()
+	}
+}
+
 func (d *dispatcher) giveBack(taken reservation) {
 	d.releaseSlot(taken.participant)
-	if taken.escrowHold != nil {
-		taken.escrowHold()
-	}
+	taken.releaseHold()
 }
 
 func (d *dispatcher) handOff(served *waiter, taken reservation, prepared Prepared) {

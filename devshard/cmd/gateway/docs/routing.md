@@ -116,22 +116,24 @@ This is the money path, and the ordering below is its fragile part. All three ac
 `session.Advance(decide)` is the single peek-decide-commit unit (`scheduler.go`, `session`). It calls back into the scheduler with the *binding* — the nonce and the participant it is bound to — while `user.Session` holds its own lock, and it commits the nonce if and only if the callback says to commit. Everything the scheduler decides happens inside that callback:
 
 1. `match` chooses.
-2. On `serve`, the participant's concurrency slot is acquired (`dispatcher.go`, the slot acquire in `dispatcher.drain`). A refusal turns the decision into `burn{ghostThrottled}`.
-3. Then the escrow's in-flight hold is taken (`dispatcher.go`, the escrow hold in `dispatcher.drain`). A refusal means the escrow was retired; the slot is given straight back and the queue fails with `ErrEscrowGone`.
+2. On `serve`, the participant's concurrency slot is acquired (`dispatcher_queue.go`, the slot acquire in `dispatcher.drain`). A refusal turns the decision into `burn{ghostThrottled}`.
+3. Then, on `serve` and `burn` alike, the escrow's in-flight hold is taken (`dispatcher_queue.go`, the escrow hold in `dispatcher.drain`). A refusal means the escrow was retired; a serve gives its slot straight back, nothing commits, and the queue fails with `ErrEscrowGone`.
 4. Only then does the nonce commit.
 
 Admission lives *inside* the commit rather than beside it. The legacy gateway peeked during selection and called `Acquire` afterwards, in the engine. Those are two separate critical sections, so between them a window could fill; the acquire then failed *after* the nonce was already committed, and the failed attempt never entered the race outcome — so nothing ever posted its settlement vote. A peek used as authority where atomicity was required, and the result was an orphaned chain message. `Available` remains, but only as a pre-filter whose staleness costs nothing (`scheduler.go`, `hostLimiter`).
 
 Acquiring at the serve point with no memory trades that bug for another: with a full window every drain iteration takes, fails and burns a nonce, up to the whole budget, where the old code burned none. That is why `admit` folds a refused participant back into the drain's *frozen* `throttled` predicate (`dispatcher.go`, `admit`). The sweep then answers the affected waiters with `ErrNoAvailableHost` instead of the binding burning another nonce every turn.
 
-The two reservations travel together as one value (`dispatcher.go`, `reservation`):
+The two reservations travel as one value (`dispatcher_queue.go`, `reservation`):
 
-> Every path that cannot spend the assignment gives both back together; a path that hands it over gives neither back.
+> Every path that cannot spend the assignment gives back what its decision took — a serve both, a burn its hold — and a path that hands the assignment over gives neither back.
 
 | Path | Slot | Escrow hold | Nonce |
 |---|---|---|---|
 | Escrow retired between acquire and hold | released inline | never taken | not committed — the intent declines |
 | `Advance` fails after a serve decision | given back | given back | may or may not have committed |
+| `Advance` fails after a burn decision | never taken | given back | may or may not have committed |
+| Burn committed | never taken | given back once the nonce is committed | burned, charged its ghost reason |
 | Session commits nothing on a serve (nil prepared) | given back | given back | none |
 | Waiter abandoned between decision and hand-off | given back | given back | committed, charged `ghostAbandoned` |
 | Caller cancels in the instant of delivery | released by `dropAssignment` | released | committed, charged `ghostAbandoned` |
@@ -140,7 +142,7 @@ The two reservations travel together as one value (`dispatcher.go`, `reservation
 
 The escrow hold is idempotent (a `sync.Once` around the release, `registry.go`, `Registry.holdLocked`), so a doubled release is harmless, and it is bound to the *entry* rather than to the escrow id, so a hold from a previous incarnation of the same id can never count against a new one.
 
-**A ghost burn takes no escrow hold.** The burn branch returns from the intent before the acquire-and-hold block. That is consistent — a ghost is never dispatched and owes no vote, so it needs nothing kept alive on its behalf — but it means a ghost commit is not protected against a concurrent retire the way a serve is.
+**A ghost burn takes the escrow hold and no slot.** A burn spends money, so a retire landing mid-commit is barred the way it is for a serve, and a refused hold turns the burn into a declined intent. The hold is given back once the nonce is committed, and given back just the same when the commit fails (`dispatcher.go`, `dispatcher.failAdvance`). The failure case is the one that matters: a hold never returned keeps the escrow's in-flight count above zero, and a retired escrow finishes draining only when that count reaches zero (`registry/registry.go`, `Registry.unpublish`). A commit fails after a burn decision when, for one, the escrow cannot cover the ghost's own reservation (`devshard/state/machine.go`, `StateMachine.applyStartInference`) — which is when an escrow is close to depleted and about to be retired.
 
 ## Serving a host the request excluded
 
