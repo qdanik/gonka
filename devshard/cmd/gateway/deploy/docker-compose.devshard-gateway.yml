@@ -1,7 +1,7 @@
 services:
   devshard-gateway:
     container_name: ${GATEWAY_INSTANCE_NAME:-devshard-gateway}
-    image: ${GATEWAY_IMAGE:-kovec/gateway:v4-latest}
+    image: ${GATEWAY_IMAGE:-kovec/gateway:v4.1.1}
     env_file:
       - ${GATEWAY_ENV_FILE:-./config.devshard-gateway.env}
     volumes:
@@ -21,9 +21,10 @@ services:
           - devshard-pool
     restart: unless-stopped
     healthcheck:
-      # /metrics, not /v1/status: the kill switch turns /v1/status off, and a health check
+      # /healthz, not /v1/status: the kill switch turns /v1/status off, and a health check
       # pointed at it would have the orchestrator restart a gateway that was disabled on purpose.
-      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/metrics"]
+      # Not /metrics either: there every probe is a full scrape. See README.md.
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/healthz"]
       interval: 30s
       timeout: 5s
       retries: 3

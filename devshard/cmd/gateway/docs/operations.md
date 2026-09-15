@@ -11,7 +11,7 @@ Three tiers, and the tier decides both who may call it and whether the kill swit
 | `/v1/chat/completions` | per-model (below) | no |
 | `/v1/models`, `/v1/status` | none — they list what is routable, nothing caller-specific | no |
 | `/devshard/{id}/v1/chat/completions`, `.../models`, `.../status` | as above, pinned to one escrow | no |
-| `/metrics` | none | yes |
+| `/metrics`, `/healthz` | none | yes |
 | `/v1/requests/{id}` | admin | yes |
 | `/devshard/{id}/v1/finalize`, `.../state`, `.../debug/*` | admin | yes |
 | `/v1/admin/*`, `/v1/debug/rotation`, `/v1/debug/memstats` | admin | yes |
@@ -39,7 +39,7 @@ An admin key satisfies every tier, so admin calls never need a second key.
 
 ### The kill switch
 
-`limits.disabled` (env `GATEWAY_DISABLED`, or the admin settings endpoint) stops serving clients while leaving `/metrics`, the admin surface and the recovery surface up — so a gateway can be taken out of service and still be inspected, settled and drained.
+`modes.disabled` (env `GATEWAY_DISABLED`, or `disabled` through the admin settings endpoint) stops serving clients while leaving `/metrics`, `/healthz`, the admin surface and the recovery surface up — so a gateway can be taken out of service and still be inspected, settled and drained.
 
 With `disabled_redirect_url` set it answers **308** with the new URL in both the header and the body; without one, **503** with `disabled_message`. The distinction matters to clients: a 308 is a permanent move, a 503 is "come back later".
 

@@ -29,6 +29,7 @@ type route struct {
 func (s *Server) routes() []route {
 	return []route{
 		{pattern: "/metrics", alwaysOn: true, handler: s.handleMetrics},
+		{pattern: "/healthz", alwaysOn: true, handler: s.handleHealthz},
 		{pattern: "/v1/models", label: "/v1/models", handler: s.handleModels},
 		{pattern: "/v1/chat/completions", label: "/v1/chat/completions", handler: s.handleChat},
 		{pattern: "/v1/status", label: "/v1/status", handler: s.handleStatus},
@@ -97,6 +98,13 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.telemetry.Handler().ServeHTTP(w, r)
+}
+
+func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
+	if !allowMethods(w, r, http.MethodGet, http.MethodHead) {
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {

@@ -429,6 +429,9 @@ func TestEveryRouteAnswersItsDocumentedStatus(t *testing.T) {
 		{name: "status wrong method", method: http.MethodDelete, target: "/v1/status", want: http.StatusMethodNotAllowed},
 		{name: "metrics", method: http.MethodGet, target: "/metrics", want: http.StatusOK},
 		{name: "metrics wrong method", method: http.MethodPost, target: "/metrics", want: http.StatusMethodNotAllowed},
+		{name: "healthz", method: http.MethodGet, target: "/healthz", want: http.StatusOK},
+		{name: "healthz head", method: http.MethodHead, target: "/healthz", want: http.StatusOK},
+		{name: "healthz wrong method", method: http.MethodPost, target: "/healthz", want: http.StatusMethodNotAllowed},
 
 		{name: "devshard models", method: http.MethodGet, target: "/devshard/7/v1/models", want: http.StatusOK},
 		{name: "devshard models unknown", method: http.MethodGet, target: "/devshard/404/v1/models", want: http.StatusNotFound},
@@ -519,13 +522,15 @@ func TestMethodNotAllowedNamesTheMethodsItAccepts(t *testing.T) {
 	}
 }
 
-func TestMetricsIsNotInstrumented(t *testing.T) {
+func TestMetricsAndHealthzAreNotInstrumented(t *testing.T) {
 	live := newHarness(t)
-	if slices.Contains(live.telemetry.labels, "/metrics") {
-		t.Fatalf("/metrics was registered with an instrumentation label: %v", live.telemetry.labels)
+	for _, uninstrumented := range []string{"/metrics", "/healthz"} {
+		if slices.Contains(live.telemetry.labels, uninstrumented) {
+			t.Fatalf("%s was registered with an instrumentation label: %v", uninstrumented, live.telemetry.labels)
+		}
 	}
-	if want := len(live.server.routes()) - 1; len(live.telemetry.labels) != want {
-		t.Fatalf("instrumented routes: got %d, want %d (every route but /metrics)", len(live.telemetry.labels), want)
+	if want := len(live.server.routes()) - 2; len(live.telemetry.labels) != want {
+		t.Fatalf("instrumented routes: got %d, want %d (every route but /metrics and /healthz)", len(live.telemetry.labels), want)
 	}
 }
 
@@ -539,7 +544,7 @@ func TestImportKeepsTheTemplatedMetricLabel(t *testing.T) {
 	}
 }
 
-func TestKillSwitchSpares5MetricsAndTheOperatorRoutes(t *testing.T) {
+func TestKillSwitchSparesMetricsHealthzAndTheOperatorRoutes(t *testing.T) {
 	live := newHarness(t)
 	live.swapConfig(func(next *config.Config) {
 		next.Modes.Disabled = true
@@ -550,6 +555,9 @@ func TestKillSwitchSpares5MetricsAndTheOperatorRoutes(t *testing.T) {
 	}
 	if got := live.request(t, http.MethodGet, "/metrics", "", nil).Code; got != http.StatusOK {
 		t.Fatalf("disabled gateway must still serve /metrics: got %d", got)
+	}
+	if got := live.request(t, http.MethodGet, "/healthz", "", nil).Code; got != http.StatusOK {
+		t.Fatalf("disabled gateway must still serve /healthz, or its container healthcheck reports a gateway disabled on purpose as unhealthy: got %d", got)
 	}
 	if got := live.request(t, http.MethodGet, "/v1/admin/state", "", adminHeaders()).Code; got != http.StatusOK {
 		t.Fatalf("disabled gateway must still serve the operator routes: got %d", got)

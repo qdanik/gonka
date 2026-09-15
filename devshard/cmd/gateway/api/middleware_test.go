@@ -138,6 +138,7 @@ func TestThePublicRoutesNeverReachTheKeyComparison(t *testing.T) {
 		{name: "models", method: http.MethodGet, target: "/v1/models"},
 		{name: "status", method: http.MethodGet, target: "/v1/status"},
 		{name: "metrics", method: http.MethodGet, target: "/metrics"},
+		{name: "healthz", method: http.MethodGet, target: "/healthz"},
 		{name: "devshard models", method: http.MethodGet, target: "/devshard/7/v1/models"},
 		{name: "devshard status", method: http.MethodGet, target: "/devshard/7/v1/status"},
 		{name: "unmatched", method: http.MethodGet, target: "/favicon.ico"},

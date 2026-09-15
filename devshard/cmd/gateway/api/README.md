@@ -43,7 +43,7 @@ The only package that speaks HTTP to a client, and the one that decides what a f
 
 `requireAdmin` is where the admin key comparison lives, on the operator routes themselves rather than in a blanket middleware. With no admin key configured the whole surface answers 404.
 
-`disabled` is the operator kill switch. Routes marked `alwaysOn` — `/metrics` and the operator surface — stay reachable through it.
+`disabled` is the operator kill switch. Routes marked `alwaysOn` — `/metrics`, `/healthz` and the operator surface — stay reachable through it.
 
 ## Reading a body
 
@@ -57,7 +57,7 @@ The only package that speaks HTTP to a client, and the one that decides what a f
 
 ## The route table
 
-Each `route` is one registered pattern. An empty label means the route is not instrumented, which is how `/metrics` stays out of its own counters; `alwaysOn` exempts a route from the operator kill switch; `otherRouteLabel` is the single label every unmatched path folds into.
+Each `route` is one registered pattern. An empty label means the route is not instrumented, which is how `/metrics` stays out of its own counters and a container healthcheck on `/healthz` stays out of the request series; `alwaysOn` exempts a route from the operator kill switch; `otherRouteLabel` is the single label every unmatched path folds into.
 
 `/v1/admin/devshards/import` carries the templated `/v1/admin/devshards/{id}` label: the established series covers this path under the same name, and a label of its own would split the panel that reads it.
 

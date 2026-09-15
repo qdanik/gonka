@@ -60,6 +60,7 @@ func TestEveryRouteCarriesItsExactMetricLabel(t *testing.T) {
 		"/v1/chat/completions":                  "/v1/chat/completions",
 		"/v1/status":                            "/v1/status",
 		"/metrics":                              "",
+		"/healthz":                              "",
 		"/devshard/{id}/v1/models":              "/devshard/{id}/v1/models",
 		"/devshard/{id}/v1/chat/completions":    "/devshard/{id}/v1/chat/completions",
 		"/devshard/{id}/v1/status":              "/devshard/{id}/v1/status",
