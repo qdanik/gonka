@@ -20,6 +20,8 @@ func TestWeightConcurrencyLimit(t *testing.T) {
 		{"floors a fractional result", 1000, 15, 1},
 		{"NaN weight disables", math.NaN(), 5, 0},
 		{"Inf per10000 disables", 30000, math.Inf(1), 0},
+		{"Inf weight disables", math.Inf(1), 5, 0},
+		{"NaN per10000 disables", 30000, math.NaN(), 0},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

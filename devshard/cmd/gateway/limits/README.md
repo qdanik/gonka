@@ -68,7 +68,7 @@ Three fallbacks decide what a missing view means:
 - **An empty weight view means the chain named nobody**, not that everybody weighs nothing — a host the chain has reported is a key in the view whatever its weight. When neither view has been observed, escrow scoring falls back to the membership share alone, which serves requests correctly and silently; `WeightsUnobserved` is what makes that state visible.
 - **The current and full views fall back to the generic one independently**, so a missing full-by-model entry does not suppress a present current-by-model one.
 
-`ScaleFactor` takes the **effective** blocking state, never the chain's raw one. Relaxed mode is the operator's override of that fact, so a capacity that read the snapshot itself would zero the scale exactly when the override was meant to keep serving — and a zero scale clamps every weight-derived cap to nothing. The composition root in [`main.go`](../main.go) owns that fold.
+`ScaleFactor` takes the **effective** blocking state, never the chain's raw one. Relaxed mode is the operator's override of that fact, so a capacity that read the snapshot itself would zero the scale exactly when the override was meant to keep serving — and a zero scale clamps every weight-derived cap to nothing. The composition root in [`main.go`](../main.go) passes `config.Modes.BlocksRequests`, which owns the fold.
 
 ## Read next
 

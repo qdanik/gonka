@@ -42,7 +42,7 @@ func (m *Manager) checkDepletion(ctx context.Context, snapshot chain.PhaseSnapsh
 func (m *Manager) replaceDepleted(ctx context.Context, record store.DevshardRecord, modelByID map[string]ModelConfig, snapshot chain.PhaseSnapshot) error {
 	model, replaceable := modelByID[record.Model]
 	// An escrow created under an epoch-less snapshot is counted by no epoch at all, so the next bridge funds a full set on top of it.
-	if replaceable && (snapshot.EpochIndex == 0 || snapshot.BlockHeight == 0) {
+	if replaceable && snapshotHasNoEpochYet(snapshot) {
 		m.depleted.mark(record.EscrowID)
 		return fmt.Errorf("replacing depleted escrow %s: the chain snapshot carries no epoch yet", record.EscrowID)
 	}

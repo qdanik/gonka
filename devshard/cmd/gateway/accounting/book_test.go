@@ -431,6 +431,27 @@ func TestNoncesSeenBetweenSweepsDoNotReadAsADisagreement(t *testing.T) {
 	}
 }
 
+// A nonce only a timeout ever touched stays pending until its timeout action arrives, then reads as an unfinished refusal, not a ghost. See README.md.
+func TestANonceRecordedOnlyByATimeoutStaysPendingThenReadsRefused(t *testing.T) {
+	book := newTestBook(t, 4)
+	slot := slotOfNonce(6, 4)
+
+	if err := book.RecordTimeout(testEscrow, 6, "execution", "", "none"); err != nil {
+		t.Fatalf("RecordTimeout(): %v", err)
+	}
+	if dispositions := dispositionsOfSlot(t, book, slot); len(dispositions) != 0 {
+		t.Fatalf("dispositions = %v, want none while the never-dispatched nonce awaits a timeout action", dispositions)
+	}
+	if pending := unclassifiedOfSlot(t, book, slot); pending != 1 {
+		t.Fatalf("pending = %d, want the never-dispatched nonce awaiting its timeout action", pending)
+	}
+
+	if err := book.RecordTimeout(testEscrow, 6, "execution", "completed", "none"); err != nil {
+		t.Fatalf("RecordTimeout(): %v", err)
+	}
+	assertDisposition(t, book, 6, 4, DispositionUnfinishedRefused)
+}
+
 func TestAChargedBurnCarriesItsTimeoutOutcome(t *testing.T) {
 	book := newTestBook(t, 2)
 	if err := book.RecordGhost(testEscrow, 4, "participant_throttled_no_send"); err != nil {

@@ -66,14 +66,14 @@ type requestView struct {
 
 func decodeRequestView(document *Document) (requestView, error) {
 	var view requestView
-	if raw, ok := document.Get("model"); ok && raw != nil {
+	if raw, ok := document.Get("model"); presentField(raw, ok) {
 		modelName, isString := raw.(string)
 		if !isString {
 			return requestView{}, Reject("parse request: model must be a string")
 		}
 		view.Model = modelName
 	}
-	if raw, ok := document.Get("stream"); ok && raw != nil {
+	if raw, ok := document.Get("stream"); presentField(raw, ok) {
 		streamFlag, isBool := raw.(bool)
 		if !isBool {
 			return requestView{}, Reject("parse request: stream must be a boolean")
@@ -106,7 +106,7 @@ func syncRequestView(document *Document, view *requestView) error {
 
 func decodeUint64Field(document *Document, name string, dst *uint64) error {
 	raw, ok := document.Get(name)
-	if !ok || raw == nil {
+	if !presentField(raw, ok) {
 		return nil
 	}
 	value, ok := devshard.JSONNumericUint64(raw)

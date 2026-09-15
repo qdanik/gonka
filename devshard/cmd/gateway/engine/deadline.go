@@ -63,16 +63,11 @@ func nextDeadline(now time.Time, plan deadlinePlan) deadlineArm {
 	return arm
 }
 
-// A race whose client left, or whose retry a trusted host's refusal or rejection of the request ruled out, is owed no further attempt, and a running pick is already the escalation.
 func (p deadlinePlan) escalation(now time.Time) (ArmedEscalation, bool) {
-	if !p.Pick.IsZero() || p.detached() || p.crowned() || p.RetryRuledOut {
+	if p.escalationDisarmed() {
 		return ArmedEscalation{}, false
 	}
-	armed, found := p.Policy.NextEscalation(now, p.Attempts, p.Request)
-	if found && len(p.Attempts) >= p.Budget {
-		return ArmedEscalation{}, false
-	}
-	return armed, found
+	return p.Policy.NextEscalation(now, p.Attempts, p.Request)
 }
 
 func (p deadlinePlan) hardTimeout() time.Time {
@@ -125,6 +120,14 @@ func (p deadlinePlan) crowned() bool {
 		}
 	}
 	return false
+}
+
+func (p deadlinePlan) picking() bool     { return !p.Pick.IsZero() }
+func (p deadlinePlan) budgetSpent() bool { return len(p.Attempts) >= p.Budget }
+
+// escalationDisarmed lists every reason no escalation arms. See README.md, "Escalation and the deadline ladder".
+func (p deadlinePlan) escalationDisarmed() bool {
+	return p.picking() || p.detached() || p.crowned() || p.budgetSpent() || p.RetryRuledOut
 }
 
 type wallTimer struct{ timer *time.Timer }

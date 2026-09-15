@@ -3,6 +3,7 @@
 package config
 
 import (
+	"devshard/cmd/gateway/chain"
 	"devshard/cmd/gateway/env"
 )
 
@@ -215,4 +216,9 @@ func (l Limits) Offers(model string) bool {
 	}
 	_, ok := l.ModelLimits[model]
 	return ok
+}
+
+// BlocksRequests folds relaxed PoC mode's override into the chain's raw blocking state. See root README.md, "Relaxed mode, in one place".
+func (modes Modes) BlocksRequests(snapshot chain.PhaseSnapshot) bool {
+	return snapshot.RequestsBlocked && modes.PoCMode != PoCModeRelaxed
 }

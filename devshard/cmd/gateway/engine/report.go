@@ -104,13 +104,17 @@ func (c *raceCoordinator) racedTerminal(attempt *liveAttempt, outcome AttemptOut
 	if terminal == TerminalClientCancelled && attempt.backstopped {
 		terminal = TerminalHardTimeout
 	}
-	if terminal == TerminalClientCancelled && (attempt.stalled && outcome.ContentChunks > 0 || c.abandonedByHosts()) {
+	if terminal == TerminalClientCancelled && (attempt.wentSilentMidContent(outcome) || c.abandonedByHosts()) {
 		terminal = TerminalStalled
 	}
 	if attempt == c.winner && terminal == TerminalLost {
 		return TerminalWon
 	}
 	return terminal
+}
+
+func (attempt *liveAttempt) wentSilentMidContent(outcome AttemptOutcome) bool {
+	return attempt.stalled && outcome.ContentChunks > 0
 }
 
 func (c *raceCoordinator) retire(attempt *liveAttempt) {

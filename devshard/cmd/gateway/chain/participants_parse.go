@@ -150,6 +150,12 @@ func participantModelAt(participant chainActiveParticipant, index int) string {
 	return strings.TrimSpace(participant.Models[index])
 }
 
+// usableModelAt reports the model at index and whether it has both a trimmed name and a matching ML-node entry.
+func usableModelAt(participant chainActiveParticipant, index int) (model string, ok bool) {
+	model = participantModelAt(participant, index)
+	return model, model != "" && index < len(participant.MLNodes)
+}
+
 func modelNodePoCWeight(participantID, model string, modelNodes chainModelMLNodes, preservation preservationMode, preservedNodes preservedSnapshotState) uint64 {
 	var weight uint64
 	for _, node := range modelNodes.MLNodes {

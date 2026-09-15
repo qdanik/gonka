@@ -1161,6 +1161,7 @@ func TestNextDeadlinePrecedence(t *testing.T) {
 		loserGrace    time.Duration
 		budget        int
 		drain         time.Time
+		pick          time.Time
 		cancelled     bool
 		retryRuledOut bool
 		attempts      []EscalationAttempt
@@ -1202,6 +1203,13 @@ func TestNextDeadlinePrecedence(t *testing.T) {
 			attempts:    []EscalationAttempt{pendingAttempt(base), streamingAttempt(base, base)},
 			wantAt:      base.Add(5 * time.Second),
 			wantTrigger: triggerEscalation,
+		},
+		{
+			name: "a running pick is already the escalation", receipt: time.Second, stall: 2 * time.Second, budget: 4,
+			pick:        base.Add(schedulerPickTimeout),
+			attempts:    []EscalationAttempt{pendingAttempt(base), streamingAttempt(base, base)},
+			wantAt:      base.Add(2 * time.Second),
+			wantTrigger: triggerStall,
 		},
 		{
 			name: "a crowned winner ends escalation", receipt: time.Second, stall: 2 * time.Second, budget: 4,
@@ -1306,6 +1314,7 @@ func TestNextDeadlinePrecedence(t *testing.T) {
 				Attempts:  testCase.attempts,
 				Budget:    testCase.budget,
 				Drain:     testCase.drain,
+				Pick:      testCase.pick,
 				Cancelled: testCase.cancelled,
 
 				RetryRuledOut: testCase.retryRuledOut,

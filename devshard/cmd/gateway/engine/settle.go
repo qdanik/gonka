@@ -53,8 +53,7 @@ func timeoutVoteKind(vote, fallback string) string {
 }
 
 func (o RaceOutcome) nonceSettled(a AttemptOutcome) bool {
-	return a.NonceFinished && !a.emptyStream() &&
-		a.Terminal != TerminalErrorStream && a.Terminal != TerminalCapabilityRefused
+	return a.NonceFinished && !a.emptyStream() && !a.errorStream()
 }
 
 // timeoutSkipReason names every skip; a diverged escrow state is deliberately not one. See race.md, "Timeout votes".

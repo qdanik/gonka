@@ -224,18 +224,22 @@ func mergeStreamedValue(field string, accumulated, incoming any) any {
 func growText(field string, accumulated any, incoming string) any {
 	switch previous := accumulated.(type) {
 	case *growingText:
-		if field == "arguments" && strings.HasPrefix(incoming, previous.String()) {
+		if resentWhole(field, previous.String(), incoming) {
 			return newGrowingText(incoming)
 		}
 		previous.parts.WriteString(incoming)
 		return previous
 	case string:
-		if field == "arguments" && previous != "" && strings.HasPrefix(incoming, previous) {
+		if resentWhole(field, previous, incoming) {
 			return newGrowingText(incoming)
 		}
 		return newGrowingText(previous + incoming)
 	}
 	return newGrowingText(incoming)
+}
+
+func resentWhole(field, accumulated, incoming string) bool {
+	return field == "arguments" && strings.HasPrefix(incoming, accumulated)
 }
 
 func mergeDeltaElement(target, incoming map[string]any) {

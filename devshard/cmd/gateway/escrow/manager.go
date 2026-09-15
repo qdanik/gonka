@@ -5,6 +5,7 @@ import (
 	"errors"
 	"time"
 
+	"devshard/cmd/gateway/chain"
 	"devshard/cmd/gateway/config"
 )
 
@@ -155,7 +156,7 @@ func (m *Manager) tick(ctx context.Context) error {
 	if !cfg.Rotation.Enabled || modelsErr != nil {
 		return lifecycleErr
 	}
-	if snapshot.EpochIndex == 0 || snapshot.BlockHeight == 0 {
+	if snapshotHasNoEpochYet(snapshot) {
 		return lifecycleErr // cold start, no chain data yet
 	}
 
@@ -175,4 +176,9 @@ func rotationModels(rotation config.Rotation) ([]ModelConfig, error) {
 		return nil, nil
 	}
 	return parseModels(rotation.ModelsJSON)
+}
+
+// snapshotHasNoEpochYet: an escrow created under it belongs to no epoch. See escrows.md, "Depletion".
+func snapshotHasNoEpochYet(snapshot chain.PhaseSnapshot) bool {
+	return snapshot.EpochIndex == 0 || snapshot.BlockHeight == 0
 }

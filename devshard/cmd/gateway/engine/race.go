@@ -219,7 +219,7 @@ func (c *raceCoordinator) begin() error {
 	assignment, err := c.pick(pickCtx)
 	if err != nil {
 		// Read from the client's own context, so a pick's deadline or a scheduler stop is never taken for a departure.
-		if c.drain.clientErr() != nil {
+		if c.clientDeparted() {
 			c.clientGoneAt = c.deps.Now()
 		}
 		return err
@@ -282,7 +282,7 @@ func (c *raceCoordinator) await() raceExit {
 	for {
 		c.settleClaims()
 		arm := nextDeadline(c.deps.Now(), c.plan())
-		if c.pending == 0 && !c.picking() && arm.Trigger != triggerEscalation {
+		if c.nothingInFlight() && arm.Trigger != triggerEscalation {
 			return exitComplete
 		}
 		c.rearm(arm)
@@ -322,7 +322,7 @@ func (c *raceCoordinator) depart() raceExit {
 		return exitWinnerServed
 	}
 	c.detach()
-	if c.pending == 0 && !c.picking() {
+	if c.nothingInFlight() {
 		return exitComplete
 	}
 	return exitClientGone

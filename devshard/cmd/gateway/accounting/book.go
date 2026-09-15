@@ -381,14 +381,11 @@ func classify(slotID uint32, record *nonceRecord) (CounterKey, bool) {
 	case record.finished:
 		key.Disposition = finishedDisposition(record.usage)
 		return raceFacts(key, record), true
-	case !record.sent:
-		// Committed and never dispatched: an unfinished refusal, not a ghost. See README.md.
-		if record.timeoutAction == "" {
-			return key, false
-		}
-		key.Disposition = DispositionUnfinishedRefused
 	case record.timeoutAction == "":
 		return key, false
+	case !record.sent:
+		// Committed and never dispatched: an unfinished refusal, not a ghost. See README.md.
+		key.Disposition = DispositionUnfinishedRefused
 	default:
 		key.Disposition = unfinishedDisposition(record)
 	}
@@ -422,6 +419,11 @@ func finishedDisposition(usage Usage) Disposition {
 	default:
 		return DispositionFinishedUsageUnknown
 	}
+}
+
+// isUnfinishedDisposition is the family unfinishedDisposition can ever return.
+func isUnfinishedDisposition(disposition Disposition) bool {
+	return disposition == DispositionUnfinishedRefused || disposition == DispositionUnfinishedExecution
 }
 
 func unfinishedDisposition(record *nonceRecord) Disposition {

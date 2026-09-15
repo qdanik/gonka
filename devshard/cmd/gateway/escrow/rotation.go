@@ -73,8 +73,7 @@ func (m *Manager) prepareBridge(ctx context.Context, snapshot chain.PhaseSnapsho
 
 		retired, settleFailed := 0, 0
 		for _, record := range devshards {
-			// a "regular" is any active escrow not already in the temp role.
-			if record.Active && record.RotationRole != roleTemp && record.Model == model.ModelID {
+			if isActiveRegular(record, model.ModelID) {
 				if err := m.retire(ctx, record); err != nil {
 					settleFailed++
 					if !deferredRetire(err) {
@@ -152,6 +151,11 @@ func hasActiveTemp(devshards []store.DevshardRecord, modelID string, epoch int64
 	return false
 }
 
+// isActiveRegular is any active escrow not already in the temp role, whatever epoch it was created under.
+func isActiveRegular(record store.DevshardRecord, modelID string) bool {
+	return record.Active && record.RotationRole != roleTemp && record.Model == modelID
+}
+
 // deferredRetire reports the outcomes that mean "not yet" rather than "failed"; anything else must reach the tick.
 func deferredRetire(err error) bool {
 	return errors.Is(err, ErrDevshardBusy) || errors.Is(err, ErrSettlementInFlight)
@@ -160,7 +164,7 @@ func deferredRetire(err error) bool {
 // The prepareBridge degrade path: it relabels regulars in place, and keeps going past a write failure.
 func (m *Manager) promoteRegularsToTemp(ctx context.Context, model ModelConfig, devshards []store.DevshardRecord) (promoted int, err error) {
 	for _, record := range devshards {
-		if !record.Active || record.RotationRole == roleTemp || record.Model != model.ModelID {
+		if !isActiveRegular(record, model.ModelID) {
 			continue
 		}
 		if writeErr := m.store.WithRetry(ctx, func() error {

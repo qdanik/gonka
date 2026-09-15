@@ -40,9 +40,14 @@ type pickedHost struct {
 
 func (c *raceCoordinator) picking() bool { return c.pickCancel != nil }
 
+func (c *raceCoordinator) budgetSpent() bool          { return len(c.attempts) >= c.budget }
+func (c *raceCoordinator) clientDeparted() bool       { return c.drain.clientErr() != nil }
+func (c *raceCoordinator) owedNoFurtherAttempt() bool { return c.retryRuledOut || c.clientDeparted() }
+func (c *raceCoordinator) nothingInFlight() bool      { return c.pending == 0 && !c.picking() }
+
 // startPick runs at most one speculative pick beside the race, never on the coordinator's goroutine and never for a client that has left. See race.md, "Escalation" and "Client departure and the drain".
 func (c *raceCoordinator) startPick(reason string, params any) {
-	if c.picking() || len(c.attempts) >= c.budget || c.retryRuledOut || c.drain.clientErr() != nil {
+	if c.picking() || c.budgetSpent() || c.owedNoFurtherAttempt() {
 		return
 	}
 	ctx, cancel := context.WithTimeout(c.drain.race, schedulerPickTimeout)
@@ -80,9 +85,9 @@ func (c *raceCoordinator) applyPick(result pickedHost) {
 	c.startNextImmediate()
 }
 
-// reportUnfilledPick traces an escalation that reached no attempt; a race's own cancellation is no refusal.
+// reportUnfilledPick traces an escalation that reached no attempt; only the race itself cancels a pick, and that is no refusal.
 func (c *raceCoordinator) reportUnfilledPick(err error) {
-	if c.cancelled || c.handedOff || c.retryRuledOut {
+	if errors.Is(err, context.Canceled) {
 		return
 	}
 	c.traceStep(RaceStep{

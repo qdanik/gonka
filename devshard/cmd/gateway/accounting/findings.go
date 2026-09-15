@@ -235,7 +235,7 @@ func rate(part, whole uint64, warning, critical float64) (Severity, bool) {
 
 // The dispositions that reached the host and produced nothing; which terminal is in the counter beside it.
 func failedWithoutAnswer(key CounterKey) bool {
-	return key.Disposition == DispositionUnfinishedRefused || key.Disposition == DispositionUnfinishedExecution
+	return isUnfinishedDisposition(key.Disposition)
 }
 
 func outsidePoC(key CounterKey) bool { return key.Phase != PhasePoC }

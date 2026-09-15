@@ -9,7 +9,7 @@ import (
 
 // admission is the pre-queue chain check. See README.md, "What the boundary hands the engine".
 func admission(snapshot chain.PhaseSnapshot, modes config.Modes, now time.Time, maxAgeSeconds int64) error {
-	if !snapshot.RequestsBlocked || modes.PoCMode == config.PoCModeRelaxed {
+	if !modes.BlocksRequests(snapshot) {
 		if stale := staleness(snapshot, now, maxAgeSeconds); stale != nil {
 			return stale
 		}

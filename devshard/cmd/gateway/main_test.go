@@ -910,6 +910,89 @@ func TestPublishingAnEscrowGivesItWeightAndMakesItPickable(t *testing.T) {
 	}
 }
 
+// TestModelCapacityScaleFactorFoldsRelaxedModeOverTheBlockedChainState pins modelCapacity.ScaleFactor. See README.md, "Relaxed mode, in one place".
+func TestModelCapacityScaleFactorFoldsRelaxedModeOverTheBlockedChainState(t *testing.T) {
+	observer := blockedPhaseObserverForTest(t)
+	capacity := limits.NewCapacity(func(string, string) bool { return true })
+	capacity.Update(chain.PhaseSnapshot{
+		CurrentWeights: map[string]float64{"host-a": 50},
+		FullWeights:    map[string]float64{"host-a": 100},
+	})
+
+	testCases := []struct {
+		name       string
+		pocMode    string
+		wantScaled bool
+	}{
+		{name: "relaxed mode keeps the weight-derived cap alive", pocMode: config.PoCModeRelaxed, wantScaled: true},
+		{name: "off leaves the chain's block in effect", pocMode: config.PoCModeOff, wantScaled: false},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			configuration := config.Defaults()
+			configuration.Modes.PoCMode = testCase.pocMode
+			capacityForMode := modelCapacity{capacity: capacity, snapshots: observer, config: config.NewHolder(&configuration)}
+
+			scale := capacityForMode.ScaleFactor("model-a")
+			if testCase.wantScaled && scale <= 0 {
+				t.Fatalf("ScaleFactor() = %v, want > 0", scale)
+			}
+			if !testCase.wantScaled && scale != 0 {
+				t.Fatalf("ScaleFactor() = %v, want 0", scale)
+			}
+		})
+	}
+}
+
+// blockedPhaseObserverForTest starts a PhaseObserver against a stub PoC-generation epoch and waits for its first snapshot, so RequestsBlocked is already true when it returns.
+func blockedPhaseObserverForTest(t *testing.T) *chain.PhaseObserver {
+	t.Helper()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/epochs/latest":
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{"block_height": 100, "phase": "PoCGenerate", "latest_epoch": {"index": 1, "poc_start_block_height": 0}, "is_confirmation_poc_active": false}`))
+		case "/v1/epochs/current/participants":
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{"active_participants": {"participants": []}}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	observer, err := chain.NewPhaseObserver(chain.ObserverConfig{
+		PublicAPIBaseURL: server.URL,
+		PollInterval:     time.Hour,
+		HTTPClient:       server.Client(),
+	})
+	if err != nil {
+		t.Fatalf("NewPhaseObserver(): %v", err)
+	}
+	t.Cleanup(observer.Stop)
+
+	published := make(chan chain.PhaseSnapshot, 1)
+	cancelSubscription := observer.Subscribe(func(snapshot chain.PhaseSnapshot) {
+		select {
+		case published <- snapshot:
+		default:
+		}
+	})
+	defer cancelSubscription()
+
+	observer.Start(context.Background())
+	select {
+	case snapshot := <-published:
+		if !snapshot.RequestsBlocked {
+			t.Fatalf("RequestsBlocked = false, want true for a PoCGenerate epoch phase")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for the observer's first snapshot")
+	}
+	return observer
+}
+
 // routingFor builds the escrow set, the capacity model and the picker the way compose does, so a pick
 // is judged on the wiring the gateway actually runs rather than on a hand-built scheduler.
 func routingFor(t *testing.T, capacity *limits.Capacity, participants []string) *scheduler.Scheduler {

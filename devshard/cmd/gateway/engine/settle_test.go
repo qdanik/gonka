@@ -118,6 +118,10 @@ func TestTimeoutLadderSkipConditions(t *testing.T) {
 	errorStreamFinished.ErrorSource = "error"
 	errorStreamFinished.NonceFinished = true
 
+	capabilityRefusedFinished := unsettledAttempt()
+	capabilityRefusedFinished.Terminal = TerminalCapabilityRefused
+	capabilityRefusedFinished.NonceFinished = true
+
 	won := cleanAttempt()
 
 	testCases := []struct {
@@ -130,6 +134,7 @@ func TestTimeoutLadderSkipConditions(t *testing.T) {
 		{name: "phase_transition_aborted", attempt: phaseAborted, wantReason: TimeoutReasonPhaseAborted},
 		{name: "empty_stream_already_finished", attempt: emptyFinished, wantReason: TimeoutReasonEmptyStream},
 		{name: "error_stream_already_finished", attempt: errorStreamFinished, wantReason: TimeoutReasonNonceFinished},
+		{name: "capability_refusal_already_finished", attempt: capabilityRefusedFinished, wantReason: TimeoutReasonNonceFinished},
 		{name: "long_response_after_content", attempt: longResponse, wantReason: TimeoutReasonLongResponse},
 		{name: "just_under_long_response_exemption", attempt: justUnderLongResponse, wantPosted: true, wantReason: TimeoutReasonNone},
 		{name: "state_divergent_host_is_still_settled", attempt: stateDivergent, wantPosted: true, wantReason: TimeoutReasonNone},

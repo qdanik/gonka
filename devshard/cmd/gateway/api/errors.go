@@ -134,8 +134,7 @@ func statusForError(err error) int {
 	if errors.As(err, &unsupported) {
 		return http.StatusBadRequest
 	}
-	var unavailable *ModelUnavailableError
-	if errors.As(err, &unavailable) {
+	if modelUnavailable(err) {
 		return http.StatusServiceUnavailable
 	}
 	var denied *AccessDeniedError

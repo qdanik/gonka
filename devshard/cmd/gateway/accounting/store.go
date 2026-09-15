@@ -175,6 +175,5 @@ func revisable(record *nonceRecord) bool {
 	if !record.isCounted {
 		return true
 	}
-	return record.countedAs.Disposition == DispositionUnfinishedRefused ||
-		record.countedAs.Disposition == DispositionUnfinishedExecution
+	return isUnfinishedDisposition(record.countedAs.Disposition)
 }

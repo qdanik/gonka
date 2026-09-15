@@ -291,3 +291,18 @@ func TestAssembleSSEBodyOnARecordedKimiReply(t *testing.T) {
 		t.Fatalf("assembled\n got: %s\nwant: %s", assembled, want)
 	}
 }
+
+// Empty first chunks leave the accumulator empty, and an empty accumulator grows like any other on both the string and the growing path.
+func TestAssembleSSEBodyGrowsArgumentsThatStartEmpty(t *testing.T) {
+	t.Parallel()
+	assembled := string(assembleSSEBody(sseStream(
+		`{"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":""}}]}}]}`,
+		`{"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":""}}]}}]}`,
+		`{"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"city\":"}}]}}]}`,
+		`{"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\"Paris\"}"}}]}}]}`,
+	)))
+	want := `{"choices":[{"index":0,"message":{"content":null,"tool_calls":[{"function":{"arguments":"{\"city\":\"Paris\"}"},"index":0}]}}],"object":"chat.completion"}`
+	if assembled != want {
+		t.Fatalf("assembled\n got: %s\nwant: %s", assembled, want)
+	}
+}

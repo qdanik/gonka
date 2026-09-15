@@ -5,7 +5,7 @@ import "math"
 
 // weightConcurrencyLimit = floor(weight * per10000 / 10000); 0 when per10000<=0 or weight<=0.
 func weightConcurrencyLimit(weight, per10000 float64) int64 {
-	if weight <= 0 || per10000 <= 0 || math.IsNaN(weight) || math.IsInf(weight, 0) || math.IsNaN(per10000) || math.IsInf(per10000, 0) {
+	if nonPositiveOrNotFinite(weight) || nonPositiveOrNotFinite(per10000) {
 		return 0
 	}
 	limit := math.Floor(weight * per10000 / 10000)
@@ -13,6 +13,11 @@ func weightConcurrencyLimit(weight, per10000 float64) int64 {
 		return math.MaxInt64
 	}
 	return int64(limit)
+}
+
+// nonPositiveOrNotFinite: non-positive or not finite. See README.md, "The capacity model".
+func nonPositiveOrNotFinite(value float64) bool {
+	return value <= 0 || math.IsNaN(value) || math.IsInf(value, 0)
 }
 
 // scaleFactor = clamp(currentAvailable/full, 0, 1); returns 1.0 when full<=0 (baseline unlimited).

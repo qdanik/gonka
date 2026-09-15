@@ -21,7 +21,7 @@ func NewBufferBudget(limit int64) *BufferBudget {
 }
 
 func (b *BufferBudget) reserve(bytes int64) bool {
-	if b == nil || bytes <= 0 {
+	if !b.accountsFor(bytes) {
 		return true
 	}
 	b.mu.Lock()
@@ -34,7 +34,7 @@ func (b *BufferBudget) reserve(bytes int64) bool {
 }
 
 func (b *BufferBudget) release(bytes int64) {
-	if b == nil || bytes <= 0 {
+	if !b.accountsFor(bytes) {
 		return
 	}
 	b.mu.Lock()
@@ -43,6 +43,11 @@ func (b *BufferBudget) release(bytes int64) {
 	if b.held < 0 {
 		b.held = 0
 	}
+}
+
+// accountsFor reports a non-nil budget and a positive amount to reserve or release.
+func (b *BufferBudget) accountsFor(bytes int64) bool {
+	return b != nil && bytes > 0
 }
 
 func (b *BufferBudget) Held() int64 {

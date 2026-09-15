@@ -264,6 +264,18 @@ func (a AttemptOutcome) emptyStream() bool {
 	return a.Terminal == TerminalEmptyStream || a.Terminal == TerminalBurnEmpty
 }
 
+func (a AttemptOutcome) errorStream() bool {
+	return a.Terminal == TerminalErrorStream || a.Terminal == TerminalCapabilityRefused
+}
+
+func (a AttemptOutcome) wonOrLost() bool {
+	return a.Terminal == TerminalWon || a.Terminal == TerminalLost
+}
+
+func (a AttemptOutcome) stalledWithinFailureRateBudget() bool {
+	return a.Terminal == TerminalStalled && !a.FailureRateExceeded
+}
+
 func (a AttemptOutcome) elapsed() time.Duration {
 	if a.SendTime.IsZero() || a.Completed.IsZero() {
 		return 0
@@ -293,6 +305,19 @@ func (o RaceOutcome) responsive(a AttemptOutcome) bool {
 	return a.Confirmed && a.NonceFinished && !a.emptyStream()
 }
 
+func (o RaceOutcome) served(a AttemptOutcome) bool {
+	return a.wonOrLost() && o.responsive(a)
+}
+
+func (o RaceOutcome) emptyStreamUnderPoCBypass(a AttemptOutcome) bool {
+	return a.emptyStream() && o.PoCBypassActive
+}
+
+// exemptOnBothLadders holds the rungs the verdict ladder shares with the sample ladder. See race.md, "The exemption ladder".
+func (o RaceOutcome) exemptOnBothLadders(a AttemptOutcome) bool {
+	return a.PhaseTransitionAborted || a.StateDivergent || o.longResponseExempt(a) || o.emptyStreamUnderPoCBypass(a)
+}
+
 // sampleExemption is the whole ladder of reasons an attempt contributes no perf sample. See README, "The exemption ladder".
 func (o RaceOutcome) sampleExemption(a AttemptOutcome) SampleExemption {
 	switch {
@@ -303,13 +328,13 @@ func (o RaceOutcome) sampleExemption(a AttemptOutcome) SampleExemption {
 		return ExemptNeverReported
 	case a.PhaseTransitionAborted:
 		return ExemptPhaseAborted
-	case a.Terminal == TerminalErrorStream || a.Terminal == TerminalCapabilityRefused:
+	case a.errorStream():
 		return ExemptErrorStream
 	case a.StateDivergent:
 		return ExemptStateDivergent
 	case o.longResponseExempt(a):
 		return ExemptLongResponse
-	case a.emptyStream() && o.PoCBypassActive:
+	case o.emptyStreamUnderPoCBypass(a):
 		return ExemptPoCSuppressed
 	case a.emptyStream() && !o.Succeeded:
 		return ExemptEmptyStreamNoWinner
@@ -336,19 +361,13 @@ func (o RaceOutcome) Sample(a AttemptOutcome) (perf.Sample, SampleExemption) {
 
 func (o RaceOutcome) Verdict(a AttemptOutcome) (limits.Verdict, bool) {
 	switch {
-	case a.PhaseTransitionAborted || a.StateDivergent:
-		return limits.ModelOutcome, false
-	case o.longResponseExempt(a):
-		return limits.ModelOutcome, false
-	case a.emptyStream() && o.PoCBypassActive:
+	case o.exemptOnBothLadders(a):
 		return limits.ModelOutcome, false
 	case a.Terminal == TerminalEmptyStream && !a.NonceFinished:
 		return limits.TransportFault, true
 	case a.emptyStream() && a.elapsed() >= emptyStreamHeldTooLong:
 		return limits.Overload, true
-	case a.Terminal == TerminalStalled && !a.FailureRateExceeded:
-		return limits.ModelOutcome, false
-	case (a.Terminal == TerminalWon || a.Terminal == TerminalLost) && !o.responsive(a):
+	case a.stalledWithinFailureRateBudget(), a.wonOrLost() && !o.responsive(a):
 		return limits.ModelOutcome, false
 	}
 	return a.Terminal.verdict()
@@ -372,8 +391,7 @@ func (o RaceOutcome) JudgesCrowning(a AttemptOutcome) bool {
 	if a.PhaseTransitionAborted || o.PoCBypassActive {
 		return false
 	}
-	return a.Terminal == TerminalEmptyStream ||
-		((a.Terminal == TerminalWon || a.Terminal == TerminalLost) && o.responsive(a))
+	return a.Terminal == TerminalEmptyStream || o.served(a)
 }
 
 // DeniesCrowning reports that a host produced nothing while claiming to serve. See race.md, "Crown denial".
@@ -389,7 +407,7 @@ func (o RaceOutcome) Labels(a AttemptOutcome) AttemptLabels {
 	if role == "" {
 		role = RolePrimary
 	}
-	served := (a.Terminal == TerminalWon || a.Terminal == TerminalLost) && o.responsive(a)
+	served := o.served(a)
 	labels := AttemptLabels{
 		Participant: a.Participant,
 		Model:       o.Model,

@@ -44,3 +44,8 @@ func ProfileFor(routedModel string) *Profile {
 	}
 	return nil
 }
+
+// stripsThinking is nil-safe: it reports a profile with no matching chat-template knob for thinking. See README.md, "Reasoning and thinking".
+func (profile *Profile) stripsThinking() bool {
+	return profile != nil && profile.Thinking == ThinkingStrip
+}

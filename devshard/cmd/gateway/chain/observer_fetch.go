@@ -108,9 +108,9 @@ func participantHasPreservedNode(participant chainActiveParticipant, preservatio
 func preservedModelsForParticipant(participant chainActiveParticipant, preservation preservationMode, preservedNodes preservedSnapshotState) []string {
 	seen := make(map[string]struct{}, len(participant.Models))
 	var models []string
-	for i, rawModel := range participant.Models {
-		model := strings.TrimSpace(rawModel)
-		if model == "" || i >= len(participant.MLNodes) {
+	for i := range participant.Models {
+		model, ok := usableModelAt(participant, i)
+		if !ok {
 			continue
 		}
 		for _, node := range participant.MLNodes[i].MLNodes {
@@ -132,9 +132,9 @@ func preservedModelsForParticipant(participant chainActiveParticipant, preservat
 // extractParticipantNodes flattens a participant's (model, node, weight) triples for the validation-capable merge.
 func extractParticipantNodes(participant chainActiveParticipant) []participantNode {
 	var nodes []participantNode
-	for i, rawModel := range participant.Models {
-		model := strings.TrimSpace(rawModel)
-		if model == "" || i >= len(participant.MLNodes) {
+	for i := range participant.Models {
+		model, ok := usableModelAt(participant, i)
+		if !ok {
 			continue
 		}
 		for _, node := range participant.MLNodes[i].MLNodes {

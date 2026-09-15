@@ -147,7 +147,7 @@ func normalizeEmptyMessageContent(messages []any) ([]any, bool, error) {
 		role, _ := message["role"].(string)
 		content, exists := message["content"]
 		switch {
-		case !exists, content == nil:
+		case !presentField(content, exists):
 			if role == roleTool {
 				message["content"] = emptyToolResultContent
 				changed = true
@@ -199,7 +199,7 @@ func flattenMessageTextParts(messages []any) ([]any, bool, error) {
 			continue
 		}
 		content, exists := message["content"]
-		if !exists || content == nil {
+		if !presentField(content, exists) {
 			continue
 		}
 		parts, ok := content.([]any)
@@ -302,7 +302,7 @@ func validateMessageRoleFields(message map[string]any, index int, role string, p
 // requiredNonEmptyStringField returns the trimmed-nonblank string, or why it isn't; the caller adds the positional prefix.
 func requiredNonEmptyStringField(fields map[string]any, key string) (string, error) {
 	rawValue, exists := fields[key]
-	if !exists || rawValue == nil {
+	if !presentField(rawValue, exists) {
 		return "", fmt.Errorf("is required")
 	}
 	value, ok := rawValue.(string)
@@ -318,7 +318,7 @@ func requiredNonEmptyStringField(fields map[string]any, key string) (string, err
 // optionalStringField rejects fields[key] only when present, non-null, and not a string.
 func optionalStringField(fields map[string]any, key string) error {
 	rawValue, exists := fields[key]
-	if !exists || rawValue == nil {
+	if !presentField(rawValue, exists) {
 		return nil
 	}
 	if _, ok := rawValue.(string); !ok {
@@ -370,7 +370,7 @@ func validateNonEmptyContent(content any) error {
 
 func validateRequiredContentField(message map[string]any) error {
 	content, exists := message["content"]
-	if !exists || content == nil {
+	if !presentField(content, exists) {
 		return fmt.Errorf("is required")
 	}
 	return validateNonEmptyContent(content)
@@ -379,7 +379,7 @@ func validateRequiredContentField(message map[string]any) error {
 // validateAssistantContentField allows a missing content when canBeEmpty; a present field is always shape-checked.
 func validateAssistantContentField(message map[string]any, canBeEmpty bool) error {
 	content, exists := message["content"]
-	if !exists || content == nil {
+	if !presentField(content, exists) {
 		if canBeEmpty {
 			return nil
 		}
@@ -435,18 +435,18 @@ func isEmptyContent(content any) bool {
 }
 
 func isAssistantTurnEmpty(message map[string]any) bool {
-	if raw, exists := message["tool_calls"]; exists && raw != nil {
+	if raw, exists := message["tool_calls"]; presentField(raw, exists) {
 		if calls, ok := raw.([]any); ok && len(calls) > 0 {
 			return false
 		}
 	}
-	if raw, exists := message["function_call"]; exists && raw != nil {
+	if raw, exists := message["function_call"]; presentField(raw, exists) {
 		if functionCall, ok := raw.(map[string]any); ok && len(functionCall) > 0 {
 			return false
 		}
 	}
 	content, exists := message["content"]
-	if !exists || content == nil {
+	if !presentField(content, exists) {
 		return true
 	}
 	return isEmptyContent(content)

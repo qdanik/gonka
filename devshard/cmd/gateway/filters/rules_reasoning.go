@@ -59,7 +59,7 @@ func reasoningEffortValidate() RuleFunc {
 // enableThinking strips for ThinkingStrip profiles (no matching chat-template knob), else mirrors into kwargs.
 func enableThinking() RuleFunc {
 	return func(ctx RuleContext) error {
-		if ctx.Profile != nil && ctx.Profile.Thinking == ThinkingStrip {
+		if ctx.Profile.stripsThinking() {
 			ctx.Document.Delete("enable_thinking")
 			return nil
 		}
@@ -78,7 +78,7 @@ func enableThinking() RuleFunc {
 // thinking strips, mirrors, or normalizes the type enum in place, per the profile's ThinkingDisposition.
 func thinking() RuleFunc {
 	return func(ctx RuleContext) error {
-		if ctx.Profile != nil && ctx.Profile.Thinking == ThinkingStrip {
+		if ctx.Profile.stripsThinking() {
 			ctx.Document.Delete("thinking")
 			return nil
 		}

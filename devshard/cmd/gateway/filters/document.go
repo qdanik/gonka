@@ -101,6 +101,11 @@ func (d *Document) Marshal() ([]byte, error) {
 	return body, nil
 }
 
+// presentField reports a decoded field that exists and was not sent as an explicit null. See README.md, "Parameter rules".
+func presentField(value any, exists bool) bool {
+	return exists && value != nil
+}
+
 // ensureStructuralBounds scans body once outside string literals, rejecting it past maxDepth or maxNodes.
 func ensureStructuralBounds(body []byte, maxDepth, maxNodes int) error {
 	depth := 0

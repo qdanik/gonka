@@ -433,7 +433,7 @@ func (m modelCapacity) ForModel(model string) limits.ModelCapacity {
 
 // ScaleFactor folds in relaxed mode first, or PoC zeroes every cap. See README.md, "Relaxed mode, in one place".
 func (m modelCapacity) ScaleFactor(model string) float64 {
-	return m.capacity.ScaleFactor(model, blockedFor(m.snapshots.Snapshot(), m.config.Load().Modes))
+	return m.capacity.ScaleFactor(model, m.config.Load().Modes.BlocksRequests(m.snapshots.Snapshot()))
 }
 
 func (m modelCapacity) Weights(model string) (current, baseline float64) {
@@ -442,9 +442,4 @@ func (m modelCapacity) Weights(model string) (current, baseline float64) {
 
 func (m modelCapacity) WeightsUnobserved(model string) bool {
 	return m.capacity.WeightsUnobserved(model)
-}
-
-// blockedFor is the effective blocking state; api.admission folds the same override for the pre-queue gate.
-func blockedFor(snapshot chain.PhaseSnapshot, modes config.Modes) bool {
-	return snapshot.RequestsBlocked && modes.PoCMode != config.PoCModeRelaxed
 }

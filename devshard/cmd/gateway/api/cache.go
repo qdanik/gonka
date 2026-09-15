@@ -248,7 +248,7 @@ func (w *cacheRecorder) Write(chunk []byte) (int, error) {
 func (w *cacheRecorder) Unwrap() http.ResponseWriter { return w.ResponseWriter }
 
 func (w *cacheRecorder) entry(escrowID string, stream bool, unstorable error) (cachedResponse, bool) {
-	if w.overflowed || w.writeErr != nil || unstorable != nil || w.body.Len() == 0 || strings.TrimSpace(escrowID) == "" {
+	if w.cannotBuildEntry(unstorable, escrowID) {
 		return cachedResponse{}, false
 	}
 	return cachedResponse{
@@ -259,6 +259,11 @@ func (w *cacheRecorder) entry(escrowID string, stream bool, unstorable error) (c
 		body:        exactly(w.body.Bytes()),
 		bounds:      exactly(w.bounds),
 	}, true
+}
+
+// cannotBuildEntry reports a recording with nothing an entry can be built from. See README.md, "The response cache".
+func (w *cacheRecorder) cannotBuildEntry(unstorable error, escrowID string) bool {
+	return w.overflowed || w.writeErr != nil || unstorable != nil || w.body.Len() == 0 || strings.TrimSpace(escrowID) == ""
 }
 
 // exactly copies into a slice with no spare capacity, so a stored entry holds what entrySize charges it.

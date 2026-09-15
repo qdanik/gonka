@@ -272,7 +272,7 @@ func validStructuredOutputs(bounds structuredOutputsBounds) RuleFunc {
 		set := 0
 		setNames := make([]string, 0, len(structuredOutputsConstraintFields))
 		for _, field := range structuredOutputsConstraintFields {
-			if value, ok := object[field]; ok && value != nil {
+			if value, ok := object[field]; presentField(value, ok) {
 				set++
 				setNames = append(setNames, field)
 			}
@@ -285,20 +285,20 @@ func validStructuredOutputs(bounds structuredOutputsBounds) RuleFunc {
 		}
 		for _, field := range structuredOutputsConstraintFields {
 			value, ok := object[field]
-			if !ok || value == nil {
+			if !presentField(value, ok) {
 				continue
 			}
 			if err := constraintValidators[field](value); err != nil {
 				return err
 			}
 		}
-		if value, ok := object["whitespace_pattern"]; ok && value != nil {
+		if value, ok := object["whitespace_pattern"]; presentField(value, ok) {
 			if err := validStructuredOutputsPattern(value, bounds.MaxPatternLen, "whitespace_pattern"); err != nil {
 				return err
 			}
 		}
 		for _, flag := range []string{"disable_any_whitespace", "disable_additional_properties"} {
-			if value, ok := object[flag]; ok && value != nil {
+			if value, ok := object[flag]; presentField(value, ok) {
 				if _, ok := value.(bool); !ok {
 					return Reject("structured_outputs: flag must be a boolean: %s", flag)
 				}

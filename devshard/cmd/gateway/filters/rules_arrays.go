@@ -1,7 +1,6 @@
 package filters
 
 import (
-	"math"
 	"strconv"
 	"strings"
 
@@ -121,7 +120,7 @@ func validFloatMap(min, max float64, maxEntries int) RuleFunc {
 			if !ok {
 				continue
 			}
-			if math.IsNaN(number) || math.IsInf(number, 0) || number < min || number > max {
+			if nonFinite(number) || number < min || number > max {
 				delete(object, key)
 			}
 		}

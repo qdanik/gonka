@@ -14,7 +14,7 @@ var modelNameRegex = regexp.MustCompile(`^[A-Za-z0-9._/-]+$`)
 func requireUint() RuleFunc {
 	return func(ctx RuleContext) error {
 		raw, exists := ctx.Document.Get(ctx.Param)
-		if !exists || raw == nil {
+		if !presentField(raw, exists) {
 			return nil
 		}
 		if _, ok := devshard.JSONNumericUint64(raw); !ok {
@@ -28,7 +28,7 @@ func requireUint() RuleFunc {
 func requireBool() RuleFunc {
 	return func(ctx RuleContext) error {
 		raw, exists := ctx.Document.Get(ctx.Param)
-		if !exists || raw == nil {
+		if !presentField(raw, exists) {
 			return nil
 		}
 		if _, ok := raw.(bool); !ok {
@@ -164,9 +164,14 @@ func sanitizeFloatField(document *Document, name string) (float64, bool) {
 		return 0, false
 	}
 	number, ok := devshard.JSONNumericFloat64(raw)
-	if !ok || math.IsNaN(number) || math.IsInf(number, 0) {
+	if !ok || nonFinite(number) {
 		document.Delete(name)
 		return 0, false
 	}
 	return number, true
+}
+
+// nonFinite reports NaN or an infinity, neither of which is forwarded to a host.
+func nonFinite(number float64) bool {
+	return math.IsNaN(number) || math.IsInf(number, 0)
 }
