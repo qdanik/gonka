@@ -125,11 +125,12 @@ type raceCoordinator struct {
 	done   chan struct{}
 	timer  raceTimer
 
-	escrowID string
-	target   DispatchTarget
-	decision string
-	budget   int
-	started  time.Time
+	escrowID     string
+	target       DispatchTarget
+	decision     string
+	budget       int
+	attemptLimit int
+	started      time.Time
 
 	attempts []*liveAttempt
 	byNonce  map[uint64]*liveAttempt
@@ -236,7 +237,9 @@ func (c *raceCoordinator) begin() error {
 
 	snapshot := c.deps.Snapshots.Snapshot()
 	c.pocBypass = pocBypassActive(snapshot, c.deps.Modes)
-	c.budget = c.deps.Policy.AttemptBudget(target.HostCount(), snapshot.RequestsBlocked && !c.pocBypass)
+	nonceScarce := snapshot.RequestsBlocked && !c.pocBypass
+	c.budget = c.deps.Policy.AttemptBudget(target.HostCount(), nonceScarce)
+	c.attemptLimit = c.deps.Policy.AttemptLimit(target.HostCount(), nonceScarce)
 
 	plan := c.deps.Policy.Decide(c.budget, c.denied(assignment.Host), c.degraded(assignment.Host))
 	c.decision = plan.Reason

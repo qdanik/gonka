@@ -141,6 +141,14 @@ func (p EscalationPolicy) AttemptBudget(hostCount int, nonceScarce bool) int {
 	return p.MaxAttemptsPerRequest
 }
 
+// AttemptLimit caps how many attempts one race may start in total, failed ones included; scarce nonces allow no replacement. See race.md, "Escalation".
+func (p EscalationPolicy) AttemptLimit(hostCount int, nonceScarce bool) int {
+	if hostCount < 1 || nonceScarce {
+		return 1
+	}
+	return hostCount
+}
+
 func (p EscalationPolicy) NextEscalation(now time.Time, attempts []EscalationAttempt, request EscalationRequest) (ArmedEscalation, bool) {
 	var earliest ArmedEscalation
 	found := false

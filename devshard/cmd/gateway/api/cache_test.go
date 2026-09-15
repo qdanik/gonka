@@ -181,6 +181,20 @@ func TestAFailedRaceIsNotCached(t *testing.T) {
 	}
 }
 
+func TestAnErrorFoldedIntoASuccessIsNotCached(t *testing.T) {
+	live := newHarness(t)
+	live.inference.reply = ""
+	live.inference.chunks = []string{"data: {\"error\":{\"message\":\"empty content stream\"}}\n\n", "data: [DONE]\n\n"}
+	live.inference.outcome = engine.RaceOutcome{EscrowID: "7"}
+
+	live.request(t, http.MethodPost, "/v1/chat/completions", chatBody, callerHeaders("caller-a"))
+	live.request(t, http.MethodPost, "/v1/chat/completions", chatBody, callerHeaders("caller-a"))
+
+	if got := live.inference.runs.Load(); got != 2 {
+		t.Fatalf("races: got %d, want 2 (an error folded into a 200 is no answer to replay)", got)
+	}
+}
+
 // A stream commits 200 on its first byte, so a race that fails afterwards is recorded as a success
 // carrying an SSE error event. Replaying it would freeze one transient host failure for the whole TTL.
 func TestAStreamThatFailsAfterItStartedIsNotCached(t *testing.T) {

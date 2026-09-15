@@ -53,7 +53,7 @@ A nonce the race can no longer spend is **stranded**, not dropped: it is committ
 
 An `ArmedEscalation` is a deadline to arm, not a permission to escalate; only `Confirm` converts it, by re-deriving the same stage at the same deadline. The attempt's `escalated` flag is consumed before the pick starts, so a pick that finds no host cannot retry the same trigger.
 
-Escalation is disarmed entirely when a pick is already running (that pick *is* the escalation), when the client has left (another attempt is another nonce to settle for a response nobody will read), when an attempt has been crowned, when the budget is spent, or when a trusted host's refusal or rejection of the request rules out a retry (race.md, "Escalation").
+Escalation is disarmed entirely when a pick is already running (that pick *is* the escalation), when the client has left (another attempt is another nonce to settle for a response nobody will read), when an attempt has been crowned, when the budget is spent — as many unfinished attempts held as it allows, or as many started as the host group has — or when a trusted host's refusal or rejection of the request rules out a retry (race.md, "Escalation").
 
 The rungs, in `triggerFor` order: an already-escalated attempt never arms; a suspicious host arms immediately; a done attempt whose nonce is finished never arms, and any other done attempt arms immediately; an attempt with no receipt arms at `SendTime + receiptTimeout`; an attempt with a first token never arms; everything else arms on the first-token curve.
 

@@ -27,6 +27,7 @@ type deadlinePlan struct {
 	Request   EscalationRequest
 	Attempts  []EscalationAttempt
 	Budget    int
+	Limit     int
 	Drain     time.Time
 	Pick      time.Time
 	Cancelled bool
@@ -122,8 +123,20 @@ func (p deadlinePlan) crowned() bool {
 	return false
 }
 
-func (p deadlinePlan) picking() bool     { return !p.Pick.IsZero() }
-func (p deadlinePlan) budgetSpent() bool { return len(p.Attempts) >= p.Budget }
+func (p deadlinePlan) picking() bool { return !p.Pick.IsZero() }
+func (p deadlinePlan) budgetSpent() bool {
+	return p.heldAttempts() >= p.Budget || len(p.Attempts) >= p.Limit
+}
+
+func (p deadlinePlan) heldAttempts() int {
+	held := 0
+	for index := range p.Attempts {
+		if !p.Attempts[index].Done {
+			held++
+		}
+	}
+	return held
+}
 
 // escalationDisarmed lists every reason no escalation arms. See README.md, "Escalation and the deadline ladder".
 func (p deadlinePlan) escalationDisarmed() bool {
@@ -231,6 +244,7 @@ func (c *raceCoordinator) plan() deadlinePlan {
 		Request:   c.escalationRequest(),
 		Attempts:  c.scratch,
 		Budget:    c.budget,
+		Limit:     c.attemptLimit,
 		Drain:     c.drain.deadline(c.clientGoneAt),
 		Pick:      c.pickDeadline(),
 		Cancelled: c.cancelled,

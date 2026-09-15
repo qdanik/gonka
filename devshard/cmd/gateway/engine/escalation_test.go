@@ -123,6 +123,29 @@ func TestAttemptBudgetClampsToOneWhenNoncesAreScarce(t *testing.T) {
 	}
 }
 
+func TestAttemptLimitIsTheHostGroupUnlessNoncesAreScarce(t *testing.T) {
+	testCases := []struct {
+		name        string
+		hostCount   int
+		nonceScarce bool
+		want        int
+	}{
+		{name: "every host in the group may be tried", hostCount: 5, want: 5},
+		{name: "a single host allows a single attempt", hostCount: 1, want: 1},
+		{name: "an empty host group still yields one", hostCount: 0, want: 1},
+		{name: "scarce nonces allow no replacement", hostCount: 5, nonceScarce: true, want: 1},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			policy := EscalationPolicy{MaxAttemptsPerRequest: 2}
+			if got := policy.AttemptLimit(testCase.hostCount, testCase.nonceScarce); got != testCase.want {
+				t.Fatalf("AttemptLimit(%d, %t) = %d, want %d",
+					testCase.hostCount, testCase.nonceScarce, got, testCase.want)
+			}
+		})
+	}
+}
+
 func TestLadderRuleInIsolation(t *testing.T) {
 	receiptedNoToken := EscalationAttempt{SendTime: raceStart, ReceiptTime: raceStart.Add(time.Second)}
 	testCases := []struct {

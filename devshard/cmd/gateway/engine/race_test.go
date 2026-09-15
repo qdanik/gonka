@@ -2,6 +2,7 @@ package engine
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -1150,9 +1151,14 @@ func streamingAttempt(sendTime, lastChunk time.Time) EscalationAttempt {
 	}
 }
 
+func failedAfterEscalating(sendTime time.Time) EscalationAttempt {
+	return EscalationAttempt{Done: true, Escalated: true, SendTime: sendTime, ReceiptTime: sendTime}
+}
+
 func TestNextDeadlinePrecedence(t *testing.T) {
 	base := testEpoch
 	const hard = streamingHardTimeout
+	const hostGroupSize = 16
 
 	cases := []struct {
 		name          string
@@ -1160,6 +1166,7 @@ func TestNextDeadlinePrecedence(t *testing.T) {
 		stall         time.Duration
 		loserGrace    time.Duration
 		budget        int
+		limit         int
 		drain         time.Time
 		pick          time.Time
 		cancelled     bool
@@ -1229,6 +1236,18 @@ func TestNextDeadlinePrecedence(t *testing.T) {
 			attempts:    []EscalationAttempt{pendingAttempt(base), streamingAttempt(base, base)},
 			wantAt:      base.Add(2 * time.Second),
 			wantTrigger: triggerStall,
+		},
+		{
+			name: "a failed attempt frees its place in the budget", receipt: time.Second, stall: 2 * time.Second, budget: 2,
+			attempts:    []EscalationAttempt{failedAfterEscalating(base), pendingAttempt(base)},
+			wantAt:      base.Add(time.Second),
+			wantTrigger: triggerEscalation,
+		},
+		{
+			name: "the host group bounds the attempts a failure freed", receipt: time.Second, stall: 2 * time.Second, budget: 2, limit: 2,
+			attempts:    []EscalationAttempt{failedAfterEscalating(base), pendingAttempt(base)},
+			wantAt:      base.Add(hard),
+			wantTrigger: triggerHardTimeout,
 		},
 		{
 			name: "a refusal that rules out a retry ends escalation", receipt: time.Second, stall: 2 * time.Second, budget: 4,
@@ -1313,6 +1332,7 @@ func TestNextDeadlinePrecedence(t *testing.T) {
 				},
 				Attempts:  testCase.attempts,
 				Budget:    testCase.budget,
+				Limit:     cmp.Or(testCase.limit, hostGroupSize),
 				Drain:     testCase.drain,
 				Pick:      testCase.pick,
 				Cancelled: testCase.cancelled,
@@ -1353,6 +1373,7 @@ func pausedCoordinatorForClient(clientCtx context.Context, fixture *raceFixture,
 	coordinator := newCoordinator(clientCtx, fixture.deps, fixture.request)
 	coordinator.target = fixture.target
 	coordinator.budget = budget
+	coordinator.attemptLimit = fixture.deps.Policy.AttemptLimit(fixture.target.HostCount(), false)
 	coordinator.attempts = attempts
 	coordinator.pending = len(attempts)
 	for _, attempt := range attempts {
@@ -1624,6 +1645,27 @@ func TestAnEscalationDueAsTheClientLeavesStartsNoPick(t *testing.T) {
 	fixture.picker.mu.Unlock()
 	if picks != 0 {
 		t.Fatalf("picks = %d, want 0: a nonce was requested for a client that had already left", picks)
+	}
+}
+
+func TestAFailedAttemptFreesItsPlaceForAnotherPick(t *testing.T) {
+	policy := refusalPolicy()
+	policy.ReceiptTimeout = time.Second
+	fixture := newRaceFixture(policy, 3)
+	sentBeforeTheReceiptTimeout := fixture.deps.Now().Add(-time.Minute)
+	failed := &liveAttempt{nonce: 450, participant: "host-0", sendTime: sentBeforeTheReceiptTimeout, receiptTime: sentBeforeTheReceiptTimeout, escalated: true, done: true, cancel: func() {}}
+	waiting := &liveAttempt{nonce: 451, participant: "host-1", sendTime: sentBeforeTheReceiptTimeout, cancel: func() {}}
+	coordinator := pausedCoordinator(fixture, 2, failed, waiting)
+	arm := nextDeadline(coordinator.deps.Now(), coordinator.plan())
+	if arm.Trigger != triggerEscalation || arm.Escalation.Stage != StageReceiptTimeout {
+		t.Fatalf("arm = %+v, want the waiting attempt's receipt timeout", arm)
+	}
+
+	coordinator.expire(arm)
+	t.Cleanup(coordinator.stopPicking)
+
+	if !coordinator.picking() {
+		t.Fatal("no pick started, although the failed attempt left a place in the budget")
 	}
 }
 

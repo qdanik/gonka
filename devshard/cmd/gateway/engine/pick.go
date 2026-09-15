@@ -40,10 +40,22 @@ type pickedHost struct {
 
 func (c *raceCoordinator) picking() bool { return c.pickCancel != nil }
 
-func (c *raceCoordinator) budgetSpent() bool          { return len(c.attempts) >= c.budget }
+func (c *raceCoordinator) budgetSpent() bool {
+	return c.heldAttempts() >= c.budget || len(c.attempts) >= c.attemptLimit
+}
 func (c *raceCoordinator) clientDeparted() bool       { return c.drain.clientErr() != nil }
 func (c *raceCoordinator) owedNoFurtherAttempt() bool { return c.retryRuledOut || c.clientDeparted() }
 func (c *raceCoordinator) nothingInFlight() bool      { return c.pending == 0 && !c.picking() }
+
+func (c *raceCoordinator) heldAttempts() int {
+	held := 0
+	for _, attempt := range c.attempts {
+		if !attempt.done {
+			held++
+		}
+	}
+	return held
+}
 
 // startPick runs at most one speculative pick beside the race, never on the coordinator's goroutine and never for a client that has left. See race.md, "Escalation" and "Client departure and the drain".
 func (c *raceCoordinator) startPick(reason string, params any) {

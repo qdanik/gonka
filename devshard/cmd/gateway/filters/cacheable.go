@@ -23,10 +23,10 @@ func CacheRefusal(status int, body []byte) string {
 		return CacheRefusedEmptyBody
 	}
 	scan := scanResponse(body, true)
-	replayableError := scan.failed && isCacheableErrorDetails(scan.upstream)
-	storableStatus := (status >= 200 && status < 300) || (status == http.StatusBadRequest && replayableError)
+	replayableRejection := status == http.StatusBadRequest && scan.failed && isCacheableErrorDetails(scan.upstream)
+	storableStatus := (status >= 200 && status < 300) || replayableRejection
 	switch {
-	case scan.failed && !replayableError:
+	case scan.failed && !replayableRejection:
 		return CacheRefusedFailure
 	case !storableStatus:
 		return CacheRefusedStatus
