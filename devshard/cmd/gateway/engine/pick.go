@@ -40,9 +40,9 @@ type pickedHost struct {
 
 func (c *raceCoordinator) picking() bool { return c.pickCancel != nil }
 
-// startPick runs at most one speculative pick beside the race, never on the coordinator's goroutine. See race.md, "Escalation".
+// startPick runs at most one speculative pick beside the race, never on the coordinator's goroutine and never for a client that has left. See race.md, "Escalation" and "Client departure and the drain".
 func (c *raceCoordinator) startPick(reason string, params any) {
-	if c.picking() || len(c.attempts) >= c.budget || c.retryRuledOut {
+	if c.picking() || len(c.attempts) >= c.budget || c.retryRuledOut || c.drain.clientErr() != nil {
 		return
 	}
 	ctx, cancel := context.WithTimeout(c.drain.race, schedulerPickTimeout)

@@ -29,6 +29,9 @@ const (
 	vllmContextLengthMessage = "This model's maximum context length is 131072 tokens. However, you requested 140000 tokens (12000 in the messages, 128000 in the completion). Please reduce the length of the messages or completion."
 	vllmContextTotalMessage  = "This model's maximum context length is 40960 tokens. However, you requested 41200 tokens (1200 in the messages, 40000 in the completion), for a total of at least 41200 tokens."
 	vllmToolChoiceMessage    = "tool choice requires --enable-auto-tool-choice and --tool-call-parser to be set"
+
+	malformedToolCallMessage   = "tool call arguments are not valid JSON: Expecting ',' delimiter: line 1 column 12 (char 11)"
+	malformedToolCallRejection = `{"error":{"code":400,"message":"` + malformedToolCallMessage + `","type":"BadRequestError"}}`
 )
 
 // The host controls this text, and U+212A lowers to a one-byte k: a phrase index taken from the
@@ -214,6 +217,63 @@ func TestCapabilityOfAttempt(t *testing.T) {
 
 			if got := CapabilityOf(testCase.attempt); got != testCase.want {
 				t.Fatalf("signal = %+v, want %+v", got, testCase.want)
+			}
+		})
+	}
+}
+
+// errorEventAttempt is an attempt whose host answered with this one error event, as the engine's own classifier reads it.
+func errorEventAttempt(t *testing.T, payload string) AttemptOutcome {
+	t.Helper()
+	event := classifyChunk([]byte("data: "+payload+"\n\n"), false).Error
+	if !event.present() {
+		t.Fatalf("the classifier reads no error event in %s", payload)
+	}
+	return AttemptOutcome{
+		ErrorSource:  event.Source,
+		ErrorCode:    event.Code,
+		ErrorType:    event.Type,
+		ErrorMessage: event.Message,
+		ErrorPayload: event.Payload,
+	}
+}
+
+// Every host receives the same body, so a trusted host's answer about the request is every host's; an answer about the host, the moment, or from a host nobody trusts is not.
+func TestRulesOutRetryOnlyForATrustedAnswerEveryHostWouldRepeat(t *testing.T) {
+	const (
+		contextLengthRejection = `{"error":{"code":400,"message":"` + vllmContextTotalMessage + `","type":"BadRequestError"}}`
+		toolChoiceRefusal      = `{"error":{"code":400,"message":"` + vllmToolChoiceMessage + `","type":"BadRequestError"}}`
+		templateOrderMessage   = "Conversation roles must alternate user/assistant/user/assistant/..."
+	)
+	testCases := []struct {
+		name          string
+		payload       string
+		suspicious    bool
+		contentSource string
+		want          bool
+	}{
+		{name: "trusted_context_length", payload: contextLengthRejection, want: true},
+		{name: "trusted_malformed_tool_call_json_with_code_400", payload: `{"error":{"code":400,"message":"` + malformedToolCallMessage + `"}}`, want: true},
+		{name: "trusted_bad_request_class_without_a_code", payload: `{"error":{"message":"` + templateOrderMessage + `","type":"BadRequestError"}}`, want: true},
+		{name: "the_same_400_from_a_suspicious_host", payload: malformedToolCallRejection, suspicious: true},
+		{name: "tool_choice_unsupported_refusal", payload: toolChoiceRefusal},
+		{name: "code_404", payload: `{"error":{"code":404,"message":"the model kimi is not served here","type":"NotFoundError"}}`},
+		{name: "code_422", payload: `{"error":{"code":422,"message":"` + malformedToolCallMessage + `","type":"UnprocessableEntityError"}}`},
+		{name: "server_error_class", payload: `{"error":{"message":"backend failed","type":"server_error"}}`},
+		{name: "empty_message", payload: `{"error":{"code":400,"message":"","type":"BadRequestError"}}`},
+		{name: "content_streamed_before_the_error", payload: malformedToolCallRejection, contentSource: sourceDeltaContent},
+		{name: "message_only_error_without_a_code_or_class", payload: `{"error":{"message":"` + malformedToolCallMessage + `"}}`},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			attempt := errorEventAttempt(t, testCase.payload)
+			attempt.Suspicious = testCase.suspicious
+			attempt.ContentSource = testCase.contentSource
+
+			if got := rulesOutRetry(attempt); got != testCase.want {
+				t.Fatalf("rulesOutRetry = %v, want %v", got, testCase.want)
 			}
 		})
 	}

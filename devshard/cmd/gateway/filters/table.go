@@ -109,7 +109,6 @@ var (
 		}},
 		spec("skip_special_tokens", StagePreValidation, requireBool()),
 		spec("detokenize", StagePreValidation, requireBool()),
-		spec("parallel_tool_calls", StagePreValidation, requireBool()),
 		spec("user", StagePreValidation, requireString(userMaxLen)),
 		spec("logprobs", StagePostLimits, forceLiteral(true)),
 		spec("top_logprobs", StagePostLimits, forceLiteral(completionapi.ForcedTopLogprobs)),
@@ -146,6 +145,7 @@ var (
 			MaxPatternLen: toolsMaxPatternLen,
 		}, "auto")),
 		spec("tool_choice", StagePreValidation, validToolChoice(toolChoiceMaxNameLen)),
+		spec("parallel_tool_calls", StagePreValidation, parallelToolCalls()),
 		spec("response_format", StagePreValidation, validResponseFormat(SchemaBounds{
 			MaxDepth:      responseFormatMaxDepth,
 			MaxNodes:      responseFormatMaxNodes,

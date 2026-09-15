@@ -190,7 +190,7 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request, escrowPin string) 
 		writeErrorFor(w, err)
 		return
 	}
-	if err := s.routableModel(normalized.Model); err != nil {
+	if err := s.routableModel(configuration.Limits, normalized.Model); err != nil {
 		writeErrorFor(w, err)
 		return
 	}
@@ -240,8 +240,8 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request, escrowPin string) 
 	}
 }
 
-// routableModel refuses a model before it can take a limiter slot. See README.md, "Authentication and the kill switch".
-func (s *Server) routableModel(model string) error {
+// routableModel refuses a model before it can take a limiter slot. See README.md, "The route table".
+func (s *Server) routableModel(configured config.Limits, model string) error {
 	if model == "" {
 		return filters.Reject("model is required")
 	}
@@ -249,10 +249,13 @@ func (s *Server) routableModel(model string) error {
 	if len(served) == 0 {
 		return &ModelUnavailableError{Model: model}
 	}
-	if !s.escrows.Serves(model) {
-		return &UnsupportedModelError{Model: model, Supported: served}
+	if s.escrows.Serves(model) {
+		return nil
 	}
-	return nil
+	if configured.Offers(model) {
+		return &ModelUnavailableError{Model: model}
+	}
+	return &UnsupportedModelError{Model: model, Supported: served}
 }
 
 func authorizeModel(configured config.Limits, model string, identity credentials) error {

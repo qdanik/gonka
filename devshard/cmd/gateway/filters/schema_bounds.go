@@ -14,7 +14,7 @@ const (
 	chatTemplateKwargsMaxNodes     = 128
 
 	toolsMaxDepth      = 16
-	toolsMaxSizeBytes  = 16 * 1024
+	toolsMaxSizeBytes  = 64 * 1024
 	toolsMaxNodes      = 256
 	toolsMaxBranch     = 16
 	toolsMaxEnum       = 256

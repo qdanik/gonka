@@ -342,7 +342,7 @@ func (o RaceOutcome) winnerStreamed() bool {
 	return false
 }
 
-// hostError prefers the crowned attempt's refusal, the answer the client asked for, then a trusted refusal that rules out a retry. See race.md, "Escalation".
+// hostError prefers the crowned attempt's refusal, the answer the client asked for, then a trusted refusal or rejection that rules out a retry. See race.md, "Escalation".
 func (o RaceOutcome) hostError() *HostApplicationError {
 	var found *AttemptOutcome
 	foundRetryRuledOut := false

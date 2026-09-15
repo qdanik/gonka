@@ -2,6 +2,7 @@ package engine
 
 import (
 	"errors"
+	"net/http"
 	"regexp"
 	"strings"
 
@@ -61,10 +62,23 @@ func CapabilityOf(attempt AttemptOutcome) CapabilitySignal {
 	return ParseCapabilityError(attempt.ErrorMessage)
 }
 
-// rulesOutRetry reports a trusted host's refusal that is not Retriable, which the race takes as every host's. See race.md, "Escalation".
+// rulesOutRetry reports a trusted host's answer the race takes as every host's: a refusal that is not Retriable, or a rejection of the request itself. See race.md, "Escalation".
 func rulesOutRetry(attempt AttemptOutcome) bool {
+	if attempt.Suspicious {
+		return false
+	}
 	refusal := CapabilityOf(attempt)
-	return !attempt.Suspicious && refusal.Refused() && !refusal.Retriable()
+	return (refusal.Refused() && !refusal.Retriable()) || rejectsRequest(attempt)
+}
+
+// rejectsRequest reports an error event from an attempt that streamed no content, with a structured 400 that filters reads as about the request, not the host. See filters/README.md, "Cacheability".
+func rejectsRequest(attempt AttemptOutcome) bool {
+	if attempt.ErrorSource == "" || attempt.ContentSource != "" {
+		return false
+	}
+	named := HostApplicationError{Code: attempt.ErrorCode, Type: attempt.ErrorType}
+	return named.HTTPStatus() == http.StatusBadRequest &&
+		filters.IsCacheableUpstreamError(http.StatusBadRequest, []byte(attempt.ErrorPayload))
 }
 
 type CapabilityRecorder interface {

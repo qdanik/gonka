@@ -32,7 +32,7 @@ It does not choose the escrow or commit the nonce — that is [`scheduler`](../s
 
 ## From pick to report
 
-`begin` picks under `schedulerPickTimeout`, because the race context never cancels and a scheduler waiting for capacity would otherwise hang. It resolves the escrow's `DispatchTarget`, reads the phase snapshot for the PoC bypass and the attempt budget, asks the policy for a `StartPlan`, launches the primary, and starts however many more immediate attempts the plan asked for.
+`begin` picks under the client's context bounded by `schedulerPickTimeout`: the bound exists because a scheduler waiting for capacity would otherwise hang, and the client's context exists so a client that leaves while its pick waits gets no primary. A pick that fails once the client has left still records the departure in `Lifecycle.ClientGone`, as `detach` does. It resolves the escrow's `DispatchTarget`, reads the phase snapshot for the PoC bypass and the attempt budget, asks the policy for a `StartPlan`, launches the primary, and starts however many more immediate attempts the plan asked for.
 
 `await` then loops: settle held crown claims, compute the next deadline, and block on attempt events, a finished pick, a crown claim, the timer, or the client leaving. It exits when nothing is pending, no pick is running, and no escalation is armed — an armed escalation outlives the last pending attempt, because a race whose every attempt failed is owed another.
 
@@ -53,7 +53,7 @@ A nonce the race can no longer spend is **stranded**, not dropped: it is committ
 
 An `ArmedEscalation` is a deadline to arm, not a permission to escalate; only `Confirm` converts it, by re-deriving the same stage at the same deadline. The attempt's `escalated` flag is consumed before the pick starts, so a pick that finds no host cannot retry the same trigger.
 
-Escalation is disarmed entirely when a pick is already running (that pick *is* the escalation), when the client has left (another attempt is another nonce to settle for a response nobody will read), when an attempt has been crowned, when the budget is spent, or when a trusted host's refusal rules out a retry (race.md, "Escalation").
+Escalation is disarmed entirely when a pick is already running (that pick *is* the escalation), when the client has left (another attempt is another nonce to settle for a response nobody will read), when an attempt has been crowned, when the budget is spent, or when a trusted host's refusal or rejection of the request rules out a retry (race.md, "Escalation").
 
 The rungs, in `triggerFor` order: an already-escalated attempt never arms; a suspicious host arms immediately; a done attempt whose nonce is finished never arms, and any other done attempt arms immediately; an attempt with no receipt arms at `SendTime + receiptTimeout`; an attempt with a first token never arms; everything else arms on the first-token curve.
 
@@ -148,7 +148,7 @@ Facts the race observes about the escrow but must not act on travel in `Lifecycl
 - `ErrWinnerIncomplete` — the crowned attempt's bytes are already on the wire, so no other attempt's payload can be put in their place.
 - `ErrEmptyStream` — every attempt ended empty.
 - `ErrAllAttemptsFailed` — nothing above applied.
-- `HostApplicationError` — an upstream refusal the client must see verbatim: the host answered, and its answer is the response. `hostError` prefers the crowned attempt's refusal, because a host chosen to answer is the one whose answer the client asked for, and after it a trusted host's refusal that rules out a retry (race.md, "Escalation").
+- `HostApplicationError` — an upstream refusal that is the response: the host answered, and the API writes its message, or its payload when it has no message, under the status `HTTPStatus` reads from its code or class, 502 when neither names one (`api/errors.go`, `writeErrorFor`). `hostError` prefers the crowned attempt's refusal, because a host chosen to answer is the one whose answer the client asked for, and after it a trusted host's refusal or rejection of the request that rules out a retry (race.md, "Escalation").
 - `StatusForError` maps a host application error to its own status, and an upstream throttle or unavailability to 429.
 
 ## Read next

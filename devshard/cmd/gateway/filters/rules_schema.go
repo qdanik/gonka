@@ -38,11 +38,10 @@ var (
 // validTools enforces the OpenAI tool contract plus tool_choice cross-field cleanup. See README.md, "`tools` and `tool_choice`".
 func validTools(bounds SchemaBounds, defaultToolChoice string) RuleFunc {
 	return func(ctx RuleContext) error {
-		if choice, _ := ctx.Document.Get("tool_choice"); choice == "required" {
-			ctx.Document.Set("tool_choice", defaultToolChoice)
-		}
 		raw, exists := ctx.Document.Get("tools")
 		if !exists {
+			// vLLM's check_tool_usage 400s any tool_choice other than "none" sent without tools; the gateway drops every value regardless.
+			ctx.Document.Delete("tool_choice")
 			return nil
 		}
 		tools, ok := raw.([]any)
@@ -53,6 +52,9 @@ func validTools(bounds SchemaBounds, defaultToolChoice string) RuleFunc {
 			ctx.Document.Delete("tools")
 			ctx.Document.Delete("tool_choice")
 			return nil
+		}
+		if choice, _ := ctx.Document.Get("tool_choice"); choice == "required" {
+			ctx.Document.Set("tool_choice", defaultToolChoice)
 		}
 		if !ctx.Document.Has("tool_choice") && defaultToolChoice != "" {
 			ctx.Document.Set("tool_choice", defaultToolChoice)
@@ -120,6 +122,18 @@ func validToolChoice(maxNameLen int) RuleFunc {
 		default:
 			return Reject("tool_choice: invalid value: must be \"auto\", \"none\", or a function object")
 		}
+	}
+}
+
+// parallelToolCalls drops the field from a request without tools and otherwise requires a boolean. See README.md, "`tools` and `tool_choice`".
+func parallelToolCalls() RuleFunc {
+	validate := requireBool()
+	return func(ctx RuleContext) error {
+		if !ctx.Document.Has("tools") {
+			ctx.Document.Delete(ctx.Param)
+			return nil
+		}
+		return validate(ctx)
 	}
 }
 

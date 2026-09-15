@@ -8,7 +8,8 @@ import (
 	"devshard/cmd/gateway/config"
 )
 
-const escrowTickInterval = 15 * time.Second
+// TickInterval is how often the manager parks, replaces and republishes. See README.md, "The tick".
+const TickInterval = 15 * time.Second
 
 type Deps struct {
 	Tx          escrowTxClient
@@ -71,7 +72,7 @@ func (m *Manager) Start(ctx context.Context) {
 		defer cancel()
 		defer close(done)
 		m.runTick(ctx)
-		ticker := time.NewTicker(escrowTickInterval)
+		ticker := time.NewTicker(TickInterval)
 		defer ticker.Stop()
 		for {
 			select {

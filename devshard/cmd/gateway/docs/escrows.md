@@ -45,7 +45,7 @@ stateDiagram-v2
 
 ## The tick
 
-`escrow/manager.go`, `tick`, every **15 s** (`escrowTickInterval`), single-threaded per process. Order matters, and the first five steps run **whatever `rotation.enabled` says**:
+`escrow/manager.go`, `tick`, every **15 s** (`TickInterval`), single-threaded per process. Order matters, and the first five steps run **whatever `rotation.enabled` says**:
 
 | # | Step | Runs regardless of the toggle because |
 | --- | --- | --- |
@@ -117,6 +117,8 @@ A depleted escrow is worse than a dead one: its in-flight count is low precisely
 - a park that fails re-marks the escrow, so the next tick tries again, and nothing is created meanwhile;
 - a snapshot with no epoch yet (`EpochIndex == 0` or `BlockHeight == 0`) **refuses** the replacement before anything is parked — an escrow created under it belongs to no epoch, and the next bridge would fund a full set on top of it; the escrow stays marked and serving for the next tick.
 
+With rotation off, `checkDepletion` parks the drained escrow but creates no replacement. If the operator still offers the model (`limits.model_access` or `limits.model_limits` names it), `api/routes.go`'s `routableModel` answers `503` with `Retry-After` for that model until an operator acts, rather than the `400` a model nobody offers gets.
+
 ## Gone from chain
 
 `checker.go`. A host reporting an escrow absent only *marks* it; `TriggerEscrowCheck` confirms with the chain on the next tick. Only a confirmed not-found deactivates: a lookup error and a found escrow both leave it serving. **Ambiguity is never a reason to deactivate.** Routing stops before the row is written, so a confirmed-absent escrow takes no further request even if the write fails.
@@ -179,7 +181,7 @@ The close runs with the registry lock **released**: flushing takes the session l
 
 | To change | Go to |
 | --- | --- |
-| how often the lifecycle runs | `escrow/manager.go`, `escrowTickInterval` |
+| how often the lifecycle runs | `escrow/manager.go`, `TickInterval` |
 | how long a tx is considered still-landing | `escrow/commitments.go`, `commitmentReconcileGrace` |
 | how many parked escrows settle per tick | `escrow/settlement.go`, `pendingSettleBudget` |
 | how hard a failing create is throttled | `escrow/breaker.go`, `escalatedCooldownTicks` |

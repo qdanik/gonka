@@ -63,7 +63,7 @@ Each `route` is one registered pattern. An empty label means the route is not in
 
 `handleDevshardChat` pins the race to one escrow, and refuses a pin the gateway no longer routes to.
 
-`routableModel` refuses an unroutable model before it can take a limiter slot or an input-token budget, and fails closed on an empty registry.
+`routableModel` refuses an unroutable model before it can take a limiter slot or an input-token budget, and fails closed on an empty registry. A model the operator offers — named in `limits.model_access` or `limits.model_limits`, via `config.Limits.Offers` — answers the same `ModelUnavailableError` as an empty registry when nothing currently routes to it; a model nobody offers answers `UnsupportedModelError` instead.
 
 ## What the boundary hands the engine
 
@@ -96,6 +96,7 @@ In `race`, the second `X-Devshard-ID` write is the authoritative one for a reply
 - `adminFailure` exists because `auditAdmin` records only the successful path. Its `failureRecorder` forwards `Flush` so a wrapped handler keeps streaming.
 
 - **A snapshot too old to trust is its own refusal class.** `ChainStaleError` answers 503 with `Retry-After` of one poll interval, not the one-second default: the chain has by then been unreadable for at least `chain_snapshot_max_age_seconds`. `/v1/status` reports it as `chain_snapshot_stale`, so blocked is never returned without a reason. An unset timestamp is stale — the listener opens after the observer starts, so there is no phase to serve under before the first poll lands.
+- **A model the operator offers with nothing routable is the gateway not being ready, not a bad request.** `ModelUnavailableError` answers 503 with `Retry-After` of `escrow.TickInterval`, the cadence at which a drained model is parked, replaced and republished — the same precedent as `ChainStaleError` taking the chain observer's poll interval. A model nobody offers answers 400 with `UnsupportedModelError` instead, listing the supported models, and carries no `Retry-After`.
 
 ## What a finished request records
 

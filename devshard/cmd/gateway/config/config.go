@@ -207,3 +207,12 @@ func (l Limits) AccessFor(model string) string {
 	}
 	return ModelAccessAdminOnly
 }
+
+// Offers reports whether the operator names the model in ModelAccess or ModelLimits. See operations.md, "Who may call what".
+func (l Limits) Offers(model string) bool {
+	if _, ok := l.ModelAccess[model]; ok {
+		return true
+	}
+	_, ok := l.ModelLimits[model]
+	return ok
+}

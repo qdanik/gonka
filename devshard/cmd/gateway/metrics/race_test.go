@@ -191,6 +191,28 @@ func TestALifecycleFailureNamesItselfRatherThanAnAttempt(t *testing.T) {
 			outcome:  engine.RaceOutcome{Model: "qwen", Decision: "primary", Lifecycle: engine.Lifecycle{BalanceExhausted: true}},
 			expected: "balance_exhausted",
 		},
+		{
+			name:     "the client left before any attempt",
+			outcome:  engine.RaceOutcome{Model: "qwen", Decision: "primary", Lifecycle: engine.Lifecycle{ClientGone: true}},
+			expected: "client_cancelled",
+		},
+		{
+			name: "the client left and no attempt won",
+			outcome: engine.RaceOutcome{
+				Model:     "qwen",
+				Decision:  "primary",
+				Lifecycle: engine.Lifecycle{ClientGone: true},
+				Attempts: []engine.AttemptOutcome{{
+					Participant: "gonka1loser",
+					Nonce:       12,
+					Role:        "primary",
+					StartReason: "primary",
+					SendTime:    at(0),
+					Terminal:    engine.TerminalErrorStream,
+				}},
+			},
+			expected: "client_cancelled",
+		},
 	}
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {

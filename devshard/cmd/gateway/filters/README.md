@@ -52,6 +52,7 @@ Rules run in `parameterTable` order, so where a row sits is behaviour rather tha
 
 - `logit_bias`'s key check runs before its value and size rules.
 - `tools` runs before `tool_choice`, because `validTools` coerces a `"required"` choice and can delete both fields outright.
+- `parallel_tool_calls` runs after `tools`, because its own rule drops the field whenever `tools` did not survive that row — a plain `Has("tools")` check on whatever `validTools` left behind.
 - `thinking` runs before `chat_template_kwargs`, so a mirrored value is already in place when the kwargs bounds are checked.
 
 ### `extra_body` and the whitelist
@@ -168,7 +169,7 @@ Four fields carry a nested payload, and each has its own bound family, kept sepa
 
 `SchemaBounds.Check` walks a JSON-Schema payload before measuring its serialised size, and enforces:
 
-- depth (16), node count (128 or 256), serialised size (16 KiB), branch arms per `anyOf`/`oneOf`/`allOf` (16), and `enum` size (256).
+- depth (16), node count (128 or 256), serialised size (16 KiB, 64 KiB for `tools[].function.parameters`), branch arms per `anyOf`/`oneOf`/`allOf` (16), and `enum` size (256).
 - `$ref`, `$defs` and `definitions` are forbidden outright.
 - `type` must be a JSON-Schema primitive, or an array of them; anything else crashes xgrammar's grammar compiler (CVE-2025-48944).
 - `pattern` must be a string, under 512 bytes, and must compile (CVE-2025-48944).
@@ -179,7 +180,11 @@ The walk distinguishes two key families. `schemaDataKeys` — `enum`, `const`, `
 
 ### `tools` and `tool_choice`
 
-`validTools` enforces the OpenAI tool contract — every entry an object of `type: "function"` with a non-empty `function.name` — and does the cross-field cleanup that `tool_choice` depends on: `"required"` collapses to `"auto"`, an empty `tools` array deletes both fields, an absent choice defaults to `"auto"`, and `function.strict` is stripped silently. `validToolChoice` then accepts only `"auto"`, `"none"`, or a function object with a name under 64 bytes; `"required"` is coerced upstream and never reaches it.
+`validTools` enforces the OpenAI tool contract — every entry an object of `type: "function"` with a non-empty `function.name` — and does the cross-field cleanup that `tool_choice` depends on: an absent or empty `tools` deletes `tool_choice` outright, whatever value it carried; otherwise `"required"` collapses to `"auto"`, an absent choice defaults to `"auto"`, and `function.strict` is stripped silently. `validToolChoice` then accepts only `"auto"`, `"none"`, or a function object with a name under 64 bytes; `"required"` is coerced upstream and never reaches it.
+
+`parallel_tool_calls` is dropped the same way, whatever value it carried, whenever `tools` is absent or empty — vLLM's `check_tool_usage` rejects a `tool_choice` other than `"none"` sent without `tools`, and `parallel_tool_calls` controls nothing without `tools` either, so a request without tools is accepted rather than rejected over a control that names no tool call. `parallelToolCalls` is its own row, gated on `ctx.Document.Has("tools")` the way `safetyIdentifier` and `reasoningSplit` gate on the profile; when `tools` survived, it defers to `requireBool()` unchanged.
+
+`tools[].function.parameters` gets 64 KiB rather than the 16 KiB every other schema-carrying field shares: vLLM only compiles a tool's `parameters` into an xgrammar grammar for a named `tool_choice` or `"required"`, and `"required"` is what this gateway coerces to `"auto"` above — a named choice still passes through unchanged. The structural bounds (depth, nodes, branch, enum, pattern) are what actually guard the grammar compiler either way; the byte cap is a size backstop on top of them.
 
 ### `response_format`
 
@@ -261,6 +266,8 @@ The two structured tiers are not guesses about our hosts: vLLM's `create_error_r
 A host-capability failure is refused before any of that, since a different host may serve it fine. The order earns itself in both directions: a `type: server_error` whose message reads "boom" is refused on its class, where the message alone said nothing, and a 400 whose message happens to contain the word "timeout" is stored on its status rather than refused on a coincidence.
 
 The polarity is still a blacklist: an error naming nothing recognisable is stored. That is deliberate for now — refusing it would send every repeat of a permanently broken request back to the hosts — but it is the half of this rule that will be wrong first, and it should become a whitelist once there is evidence of what our hosts actually name.
+
+The engine reads these rules through `IsCacheableUpstreamError` to stop escalating on a trusted host's 400, so changing what they accept, their polarity included, moves the race's escalation with the cache (see [`docs/race.md`](../docs/race.md), "Escalation").
 
 `parseUpstreamErrorDetails` reads the error from plain JSON or from inside an SSE data event, and `DecodeUpstreamError` accepts both the nested `{"error":{...}}` shape and the flat `{"object":"error",...}` one vLLM still emits. The scan visits every event rather than stopping at the first decodable one: an empty `{"error":{}}` decodes while carrying nothing, so stopping there would leave a real error in a later event unseen — and a choice's terminal reason usually arrives after the events that carried its content. The first failure found is the one kept. A null `code` renders as absent rather than the literal text `<nil>`.
 

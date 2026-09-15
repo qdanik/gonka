@@ -140,14 +140,28 @@ func TestValidToolsCoercesRequiredToDefault(t *testing.T) {
 	}
 }
 
-func TestValidToolsCoercesRequiredEvenWithoutTools(t *testing.T) {
+// vLLM's check_tool_usage rejects a tool_choice other than "none" sent without tools; the gateway deletes every value here regardless.
+func TestValidToolsDeletesToolChoiceWhenToolsAbsentRegardlessOfValue(t *testing.T) {
 	rule := validTools(testToolsBounds(), "auto")
-	document := parseTestDocument(t, `{"tool_choice":"required"}`)
-	if err := runRule(t, document, "tools", rule); err != nil {
-		t.Fatalf("validTools() = %v, want nil", err)
-	}
-	if got, _ := document.Get("tool_choice"); got != "auto" {
-		t.Fatalf("tool_choice = %v, want auto", got)
+	for _, testCase := range []struct {
+		name string
+		body string
+	}{
+		{"required", `{"tool_choice":"required"}`},
+		{"auto", `{"tool_choice":"auto"}`},
+		{"malformed number", `{"tool_choice":42}`},
+		{"malformed unknown string", `{"tool_choice":"force"}`},
+		{"valid function object", `{"tool_choice":{"type":"function","function":{"name":"x"}}}`},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			document := parseTestDocument(t, testCase.body)
+			if err := runRule(t, document, "tools", rule); err != nil {
+				t.Fatalf("validTools() = %v, want nil", err)
+			}
+			if document.Has("tool_choice") {
+				t.Fatal("tool_choice must be deleted when tools is absent")
+			}
+		})
 	}
 }
 
@@ -162,7 +176,7 @@ func TestValidToolsDoesNotOverrideExplicitToolChoice(t *testing.T) {
 	}
 }
 
-func TestValidToolsDoesNotTouchToolChoiceWhenToolsAbsent(t *testing.T) {
+func TestValidToolsLeavesToolChoiceAbsentWhenToolsAbsent(t *testing.T) {
 	rule := validTools(testToolsBounds(), "auto")
 	document := parseTestDocument(t, `{"messages":[]}`)
 	if err := runRule(t, document, "tools", rule); err != nil {
@@ -258,6 +272,139 @@ func TestValidToolChoiceRejects(t *testing.T) {
 				t.Fatalf("validToolChoice() = %v, want %q", err, testCase.wantErr)
 			}
 		})
+	}
+}
+
+// A tool whose parameters serialize to exactly toolsMaxSizeBytes is accepted; one byte more is rejected.
+func TestValidToolsParametersByteCapBoundary(t *testing.T) {
+	rule := validTools(testToolsBounds(), "auto")
+	buildParameters := func(t *testing.T, size int) map[string]any {
+		t.Helper()
+		schema := map[string]any{"type": "object", "description": ""}
+		baseSize, err := jsonMarshaledSize(schema)
+		if err != nil {
+			t.Fatalf("jsonMarshaledSize: %v", err)
+		}
+		schema["description"] = strings.Repeat("a", size-baseSize)
+		return schema
+	}
+	t.Run("exactly at the cap is accepted", func(t *testing.T) {
+		document := parseTestDocument(t, `{"tools":[`+toolWithParams(t, buildParameters(t, toolsMaxSizeBytes))+`]}`)
+		if err := runRule(t, document, "tools", rule); err != nil {
+			t.Fatalf("validTools() = %v, want nil", err)
+		}
+	})
+	t.Run("one byte over the cap is rejected", func(t *testing.T) {
+		document := parseTestDocument(t, `{"tools":[`+toolWithParams(t, buildParameters(t, toolsMaxSizeBytes+1))+`]}`)
+		err := runRule(t, document, "tools", rule)
+		want := "tools[0].function.parameters: serialized size exceeded: limit 65536 bytes"
+		if err == nil || err.Error() != want {
+			t.Fatalf("validTools() = %v, want %q", err, want)
+		}
+	})
+}
+
+// The empty tools array is covered by TestNormalizeRequestDropsToolControlsWithoutTools, because only the pipeline runs validTools before this rule.
+func TestParallelToolCallsDropsWhenToolsAbsentRegardlessOfValue(t *testing.T) {
+	rule := parallelToolCalls()
+	for _, testCase := range []struct {
+		name string
+		body string
+	}{
+		{"valid true, tools absent", `{"parallel_tool_calls":true}`},
+		{"valid false, tools absent", `{"parallel_tool_calls":false}`},
+		{"malformed value, tools absent", `{"parallel_tool_calls":"yes"}`},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			document := parseTestDocument(t, testCase.body)
+			if err := runRule(t, document, "parallel_tool_calls", rule); err != nil {
+				t.Fatalf("parallelToolCalls() = %v, want nil", err)
+			}
+			if document.Has("parallel_tool_calls") {
+				t.Fatal("parallel_tool_calls must be deleted when tools is absent")
+			}
+		})
+	}
+}
+
+func TestParallelToolCallsValidatesWhenToolsPresent(t *testing.T) {
+	rule := parallelToolCalls()
+	document := parseTestDocument(t, `{"tools":[{"type":"function","function":{"name":"x"}}],"parallel_tool_calls":"yes"}`)
+	err := runRule(t, document, "parallel_tool_calls", rule)
+	want := "parallel_tool_calls: must be a boolean"
+	if err == nil || err.Error() != want {
+		t.Fatalf("parallelToolCalls() = %v, want %q", err, want)
+	}
+}
+
+func TestParallelToolCallsPassesThroughAValidBoolWhenToolsPresent(t *testing.T) {
+	rule := parallelToolCalls()
+	document := parseTestDocument(t, `{"tools":[{"type":"function","function":{"name":"x"}}],"parallel_tool_calls":true}`)
+	if err := runRule(t, document, "parallel_tool_calls", rule); err != nil {
+		t.Fatalf("parallelToolCalls() = %v, want nil", err)
+	}
+	if got, _ := document.Get("parallel_tool_calls"); got != true {
+		t.Fatalf("parallel_tool_calls = %v, want true", got)
+	}
+}
+
+// normalizeToolsTestRequest is the shared shell every NormalizeRequest-level tools/tool_choice case wraps.
+func normalizeToolsTestRequest(t *testing.T, body string) (*Document, error) {
+	t.Helper()
+	result, err := NormalizeRequest([]byte(body), Options{DefaultMaxTokens: 3072, MaxTokensCap: 4096})
+	if err != nil {
+		return nil, err
+	}
+	document, parseErr := ParseDocument(result.Body)
+	if parseErr != nil {
+		t.Fatalf("ParseDocument(%s) = %v", result.Body, parseErr)
+	}
+	return document, nil
+}
+
+func TestNormalizeRequestDropsToolControlsWithoutTools(t *testing.T) {
+	for _, testCase := range []struct {
+		name string
+		body string
+	}{
+		{"required tool_choice and true parallel_tool_calls, no tools",
+			`{"messages":[{"role":"user","content":"hi"}],"tool_choice":"required","parallel_tool_calls":true}`},
+		{"malformed tool_choice and malformed parallel_tool_calls, no tools",
+			`{"messages":[{"role":"user","content":"hi"}],"tool_choice":42,"parallel_tool_calls":"yes"}`},
+		{"empty tools array with tool_choice and parallel_tool_calls",
+			`{"messages":[{"role":"user","content":"hi"}],"tools":[],"tool_choice":"auto","parallel_tool_calls":false}`},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			document, err := normalizeToolsTestRequest(t, testCase.body)
+			if err != nil {
+				t.Fatalf("NormalizeRequest() = %v, want acceptance: a request without tools must have its tool controls dropped, not rejected", err)
+			}
+			for _, field := range []string{"tools", "tool_choice", "parallel_tool_calls"} {
+				if document.Has(field) {
+					t.Errorf("%s must be dropped", field)
+				}
+			}
+		})
+	}
+}
+
+func TestNormalizeRequestCoercesRequiredToolChoiceOnlyWhenToolsPresent(t *testing.T) {
+	body := `{"messages":[{"role":"user","content":"hi"}],"tools":[{"type":"function","function":{"name":"x"}}],"tool_choice":"required"}`
+	document, err := normalizeToolsTestRequest(t, body)
+	if err != nil {
+		t.Fatalf("NormalizeRequest() = %v, want acceptance", err)
+	}
+	if got, _ := document.Get("tool_choice"); got != "auto" {
+		t.Fatalf("tool_choice = %v, want auto", got)
+	}
+}
+
+func TestNormalizeRequestRejectsMalformedParallelToolCallsWhenToolsPresent(t *testing.T) {
+	body := `{"messages":[{"role":"user","content":"hi"}],"tools":[{"type":"function","function":{"name":"x"}}],"parallel_tool_calls":"yes"}`
+	_, err := normalizeToolsTestRequest(t, body)
+	want := "parallel_tool_calls: must be a boolean"
+	if err == nil || err.Error() != want {
+		t.Fatalf("NormalizeRequest() = %v, want rejection %q", err, want)
 	}
 }
 

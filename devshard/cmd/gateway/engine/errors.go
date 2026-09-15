@@ -16,7 +16,7 @@ var (
 	ErrWinnerIncomplete = errors.New("winner failed after streaming started")
 )
 
-// HostApplicationError is an upstream refusal the client must see verbatim: the host's answer is the response.
+// HostApplicationError is an upstream refusal that is the response; the API writes its message under HTTPStatus. See README.md, "Errors the engine returns".
 type HostApplicationError struct {
 	Code    string
 	Type    string

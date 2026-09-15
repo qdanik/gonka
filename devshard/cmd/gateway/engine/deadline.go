@@ -63,7 +63,7 @@ func nextDeadline(now time.Time, plan deadlinePlan) deadlineArm {
 	return arm
 }
 
-// A race whose client left, or whose retry a trusted host's refusal ruled out, is owed no further attempt, and a running pick is already the escalation.
+// A race whose client left, or whose retry a trusted host's refusal or rejection of the request ruled out, is owed no further attempt, and a running pick is already the escalation.
 func (p deadlinePlan) escalation(now time.Time) (ArmedEscalation, bool) {
 	if !p.Pick.IsZero() || p.detached() || p.crowned() || p.RetryRuledOut {
 		return ArmedEscalation{}, false

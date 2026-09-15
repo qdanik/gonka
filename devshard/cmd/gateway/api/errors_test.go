@@ -3,9 +3,11 @@ package api
 import (
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
 	"time"
 
+	"devshard/cmd/gateway/escrow"
 	"devshard/cmd/gateway/limits"
 	"devshard/cmd/gateway/scheduler"
 )
@@ -65,6 +67,21 @@ func TestACapacityRefusalAnswersUnavailableWithAWait(t *testing.T) {
 		if recorder.Header().Get("Retry-After") == "" {
 			t.Fatalf("%v carried no Retry-After: a client cannot tell when to come back", refusal)
 		}
+	}
+}
+
+// ModelUnavailableError takes the escrow tick as Retry-After, as ChainStaleError takes the chain poll interval.
+func TestAModelUnavailableRejectionCarriesTheEscrowTickInterval(t *testing.T) {
+	recorder := httptest.NewRecorder()
+
+	writeErrorFor(recorder, &ModelUnavailableError{Model: "qwen"})
+
+	if recorder.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503", recorder.Code)
+	}
+	want := strconv.Itoa(int(escrow.TickInterval.Seconds()))
+	if got := recorder.Header().Get("Retry-After"); got != want {
+		t.Fatalf("Retry-After = %q, want %q (the escrow tick interval)", got, want)
 	}
 }
 

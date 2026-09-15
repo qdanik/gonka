@@ -35,6 +35,8 @@ The `/devshard/{id}/…` prefix pins a request to one escrow instead of letting 
 
 An admin key satisfies every tier, so admin calls never need a second key.
 
+`limits.model_access`, together with `limits.model_limits`, is also the list of models the gateway offers (`config.Limits.Offers`): a model named in either one answers 503 when nothing currently routes to it, and a model named in neither answers 400 while any model is routable — an empty registry answers 503 for every model instead.
+
 ### The kill switch
 
 `limits.disabled` (env `GATEWAY_DISABLED`, or the admin settings endpoint) stops serving clients while leaving `/metrics`, the admin surface and the recovery surface up — so a gateway can be taken out of service and still be inspected, settled and drained.
@@ -224,6 +226,8 @@ Admin lines carry the action and its subject, **never the request body** — an 
 | is memory bounded | `devshard_gateway_buffered_response_bytes`, `devshard_gateway_cache_bytes`, `devshard_gateway_capture_bytes_held` |
 | is the ledger keeping up | `devshard_gateway_accounting_rows_written_total`, `devshard_gateway_accounting_rows_lost_total`, `devshard_gateway_accounting_retention_sweeps_failed_total` |
 | is the journal keeping up | `devshard_gateway_journal_money_refused_total`, `devshard_gateway_journal_progress_dropped_total`, `devshard_gateway_journal_late_events_total` |
+
+A race the client left counts as `devshard_gateway_requests_total{reason="client_cancelled"}` unless the escrow itself failed first, which outranks a departure as `reason="escrow_missing"` or `reason="balance_exhausted"`; the faults of its hosts stay on `devshard_gateway_attempt_failures_total{reason}` instead.
 
 `devshard_gateway_chain_snapshot_healthy` is the one to alert on first: with a stale snapshot every score, weight and preserved-set decision below it is being made on old data.
 

@@ -7,14 +7,6 @@
         "content": "hi"
       }
     ],
-    "tools": [
-      {
-        "type": "function",
-        "function": {
-          "name": "web_search"
-        }
-      }
-    ],
     "tool_choice": {
       "type": "function",
       "function": {

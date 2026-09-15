@@ -12,7 +12,7 @@ One `POST /v1/chat/completions`, from the socket to the settled nonce. Every ste
 | 2 | normalise the request | `filters.NormalizeRequest`, options from `filterOptions` | 400 |
 | 3 | will it fit a host-bound body once encoded | `transport.InferenceRequestFits` | 413 |
 | 4 | authorise the model for this caller | `authorizeModel` | 401 / 403 |
-| 5 | is the model routable at all | `routableModel` | 503 |
+| 5 | is the model routable at all | `routableModel` | 503 when not ready or an offered model has nothing routable; 400 for a model nobody offers |
 | 6 | does the chain phase admit new work | `admission`, on `snapshots.Snapshot()` | 503 |
 | 7 | cache lookup | `cacheKeyFor` → `cache.get` | — (hit returns here) |
 | 8 | take an admission slot and token budget | `limiter.AcquireForModel` | 429 |

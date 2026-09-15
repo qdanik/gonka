@@ -22,7 +22,9 @@ An escrow is funds on chain plus a group of hosts. This package creates one, kee
 
 ## The tick
 
-`Start` runs one tick immediately and then every `escrowTickInterval` (15 s). `Stop` cancels the context the tick runs under, so a tick already in flight is interrupted, and blocks until it has exited — it is a barrier for every caller. Both are idempotent: a second call is a no-op rather than a second loop.
+`Start` runs one tick immediately and then every `TickInterval` (15 s). `Stop` cancels the context the tick runs under, so a tick already in flight is interrupted, and blocks until it has exited — it is a barrier for every caller. Both are idempotent: a second call is a no-op rather than a second loop.
+
+`TickInterval` is exported because `api` answers a drained offered model's 503 with it as `Retry-After`: the tick is the soonest the gateway itself parks, replaces and republishes a drained escrow.
 
 Five steps run whatever the `Rotation.Enabled` toggle says, because each of them is about an escrow that already exists rather than about creating one:
 

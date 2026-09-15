@@ -281,6 +281,29 @@ func TestAccessForFailsClosedOnceAPolicyExists(t *testing.T) {
 	}
 }
 
+func TestOffersReadsBothModelMapsWithoutRequiringEither(t *testing.T) {
+	tests := []struct {
+		name   string
+		access map[string]string
+		limits map[string]ModelLimits
+		model  string
+		want   bool
+	}{
+		{"named in model_access", map[string]string{"model-a": ModelAccessOpen}, nil, "model-a", true},
+		{"named in model_limits", nil, map[string]ModelLimits{"model-a": {}}, "model-a", true},
+		{"named in neither", map[string]string{"model-a": ModelAccessOpen}, map[string]ModelLimits{"model-b": {}}, "model-c", false},
+		{"both maps empty", nil, nil, "model-a", false},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			limits := Limits{ModelAccess: testCase.access, ModelLimits: testCase.limits}
+			if got := limits.Offers(testCase.model); got != testCase.want {
+				t.Fatalf("Offers(%q) = %t, want %t", testCase.model, got, testCase.want)
+			}
+		})
+	}
+}
+
 func TestValidateAcceptsUnsetAdminKey(t *testing.T) {
 	configuration := Defaults()
 	configuration.Server.AdminAPIKey = ""

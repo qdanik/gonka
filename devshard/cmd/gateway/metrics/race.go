@@ -219,6 +219,8 @@ func raceFailureReason(outcome engine.RaceOutcome, firstFailure string) string {
 		return reasonEscrowMissing
 	case outcome.Lifecycle.BalanceExhausted:
 		return reasonBalanceExhausted
+	case outcome.Lifecycle.ClientGone:
+		return engine.ReasonClientCancelled
 	case len(outcome.Attempts) == 0:
 		return reasonNoAttempts
 	}

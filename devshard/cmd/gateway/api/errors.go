@@ -212,6 +212,12 @@ func chainUnreadable(err error) bool {
 	return errors.As(err, &stale)
 }
 
+// modelUnavailable singles out a refusal whose Retry-After is the escrow tick. See README.md, "Errors and statuses".
+func modelUnavailable(err error) bool {
+	var unavailable *ModelUnavailableError
+	return errors.As(err, &unavailable)
+}
+
 func shardHasNoRoom(err error) bool {
 	return errors.Is(err, scheduler.ErrHostsBusy) ||
 		errors.Is(err, scheduler.ErrNoEscrowCapacity) ||
@@ -228,6 +234,8 @@ func writeErrorFor(w http.ResponseWriter, err error) {
 		w.Header().Set("Retry-After", strconv.FormatInt(seconds, 10))
 	case chainUnreadable(err):
 		w.Header().Set("Retry-After", strconv.FormatInt(int64(chain.DefaultObserverPollInterval.Seconds()), 10))
+	case modelUnavailable(err):
+		w.Header().Set("Retry-After", strconv.FormatInt(int64(escrow.TickInterval.Seconds()), 10))
 	case ours, shardHasNoRoom(err):
 		w.Header().Set("Retry-After", strconv.FormatInt(int64(noHostRetryAfter.Seconds()), 10))
 	}

@@ -737,6 +737,34 @@ func TestSimulatorContextLengthRejectionReachesTheClientWithoutAnotherAttempt(t 
 	}
 }
 
+// Every host receives the same body, so the client gets a trusted host's rejection of the request at once, and the rejected nonce is still voted.
+func TestSimulatorRequestRejectionReachesTheClientWithoutAnotherAttempt(t *testing.T) {
+	sim := newSimulator(t, speculativePolicy(2), 2, qwenModel)
+	sim.host(10, 0, "host-0", &hostScript{receipt: true, chunks: []string{"data: " + malformedToolCallRejection + "\n\n"}})
+	sim.host(11, 1, "host-1", &hostScript{
+		receipt: true, chunks: []string{contentEvent("hi")},
+		confirmed: true, finished: true,
+	})
+
+	_, err := sim.run(context.Background())
+
+	var hostErr *HostApplicationError
+	if !errors.As(err, &hostErr) || hostErr.Payload != malformedToolCallRejection {
+		t.Fatalf("Run() error = %v, want the host's own rejection %s", err, malformedToolCallRejection)
+	}
+	sim.reported(t)
+	sim.picker.mu.Lock()
+	picks := len(sim.picker.profiles)
+	sim.picker.mu.Unlock()
+	if picks != 1 {
+		t.Fatalf("Pick calls = %d, want 1: every host would reject the same body", picks)
+	}
+	sim.settleAll()
+	if posted := sim.poster.settled(); len(posted) != 1 || posted[0] != 10 {
+		t.Fatalf("votes posted = %v, want [10]", posted)
+	}
+}
+
 func TestSimulatorForwardsTheFixtureCorpusUnchangedAtEveryChunkSize(t *testing.T) {
 	body := readFixture(t, "content_stream.sse")
 	for _, chunkSize := range []int{1, 3, 64, 1024, 8192} {

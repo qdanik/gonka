@@ -6,10 +6,12 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 
 	"devshard/cmd/gateway/config"
+	"devshard/cmd/gateway/escrow"
 	"devshard/cmd/gateway/limits"
 	"devshard/cmd/gateway/registry"
 	"devshard/cmd/gateway/scheduler"
@@ -36,6 +38,49 @@ func TestAnUnroutableModelIsRejectedBeforeTheLimiterAndTheRace(t *testing.T) {
 	if !strings.Contains(recorder.Body.String(), `unsupported model \"not-served\"`) {
 		t.Fatalf("the rejection must name the model and the routable set: %s", recorder.Body.String())
 	}
+	if got := recorder.Header().Get("Retry-After"); got != "" {
+		t.Fatalf("Retry-After: got %q on a model nobody offers, want none — that is the client's mistake, not a wait", got)
+	}
+}
+
+// A model named in limits.model_access is offered, so with nothing routable it answers 503, not a 400 the client could take as its own error.
+func TestAModelOfferedThroughAccessAnswersUnavailableWithTheEscrowTick(t *testing.T) {
+	live := newHarness(t, func(configuration *config.Config) {
+		configuration.Limits.ModelAccess = map[string]string{"offered-model": config.ModelAccessOpen}
+	})
+	recorder := live.request(t, http.MethodPost, "/v1/chat/completions",
+		`{"model":"offered-model","messages":[{"role":"user","content":"hi"}]}`, nil)
+
+	if recorder.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status: got %d (%s), want 503 — the operator offers this model, even with nothing routable", recorder.Code, recorder.Body.String())
+	}
+	want := strconv.Itoa(int(escrow.TickInterval.Seconds()))
+	if got := recorder.Header().Get("Retry-After"); got != want {
+		t.Fatalf("Retry-After: got %q, want %q (the escrow tick interval)", got, want)
+	}
+	if got := live.limiter.acquires.Load(); got != 0 {
+		t.Fatalf("limiter slots taken: got %d, want 0", got)
+	}
+	if got := live.inference.runs.Load(); got != 0 {
+		t.Fatalf("races started: got %d, want 0", got)
+	}
+}
+
+// A model named only in limits.model_limits is offered too.
+func TestAModelOfferedOnlyThroughModelLimitsAnswersUnavailable(t *testing.T) {
+	live := newHarness(t, func(configuration *config.Config) {
+		configuration.Limits.ModelLimits = map[string]config.ModelLimits{"offered-model": {}}
+	})
+	recorder := live.request(t, http.MethodPost, "/v1/chat/completions",
+		`{"model":"offered-model","messages":[{"role":"user","content":"hi"}]}`, nil)
+
+	if recorder.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status: got %d (%s), want 503 — model_limits alone still offers the model", recorder.Code, recorder.Body.String())
+	}
+	want := strconv.Itoa(int(escrow.TickInterval.Seconds()))
+	if got := recorder.Header().Get("Retry-After"); got != want {
+		t.Fatalf("Retry-After: got %q, want %q (the escrow tick interval)", got, want)
+	}
 }
 
 func TestAnEmptyRegistryFailsClosed(t *testing.T) {
@@ -46,6 +91,10 @@ func TestAnEmptyRegistryFailsClosed(t *testing.T) {
 	recorder := live.request(t, http.MethodPost, "/v1/chat/completions", chatBody, nil)
 	if recorder.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status: got %d (%s), want 503 — an empty registry is not ready, not open", recorder.Code, recorder.Body.String())
+	}
+	want := strconv.Itoa(int(escrow.TickInterval.Seconds()))
+	if got := recorder.Header().Get("Retry-After"); got != want {
+		t.Fatalf("Retry-After: got %q, want %q (the escrow tick interval)", got, want)
 	}
 	if got := live.limiter.acquires.Load(); got != 0 {
 		t.Fatalf("limiter slots taken on an unready gateway: got %d, want 0", got)

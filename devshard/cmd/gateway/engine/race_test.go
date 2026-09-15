@@ -235,6 +235,15 @@ func (markerClassifier) Classify(chunk []byte) chunkFacts {
 			ErrorMessage:      vllmContextTotalMessage,
 			CapabilityRefused: true,
 		}
+	case bytes.Contains(chunk, []byte("malformed-request")):
+		return chunkFacts{
+			Error:        true,
+			ErrorSource:  "error.BadRequestError",
+			ErrorCode:    "400",
+			ErrorType:    "BadRequestError",
+			ErrorMessage: malformedToolCallMessage,
+			ErrorPayload: malformedToolCallRejection,
+		}
 	}
 	return chunkFacts{}
 }
@@ -758,6 +767,70 @@ func TestRunRaceReturnsPickErrorAndReportsNoAttempts(t *testing.T) {
 	}
 }
 
+// A client that leaves while its primary waits in the scheduler is owed no primary, so the pick is given up and nothing is committed for a vote to settle.
+func TestRunRaceGivesUpThePrimaryPickWhenTheClientLeavesWhileItWaits(t *testing.T) {
+	fixture := newRaceFixture(settledPolicy(), 1)
+	hold := make(chan struct{})
+	openHold := sync.OnceFunc(func() { close(hold) })
+	t.Cleanup(openHold)
+	fixture.picker.hold, fixture.picker.parked = hold, make(chan struct{}, 1)
+	clientCtx, leave := context.WithCancel(context.Background())
+	t.Cleanup(leave)
+
+	returned := make(chan error, 1)
+	go func() {
+		_, err := fixture.run(clientCtx)
+		returned <- err
+	}()
+	waitForValue(t, fixture.picker.parked, "the primary's pick waiting in the scheduler")
+	leave()
+	err := waitForValue(t, returned, "the race giving up the primary's pick once the client left")
+	openHold()
+
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("runRace error = %v, want the client's own cancellation, neither a scheduler timeout nor a capacity refusal", err)
+	}
+	reported := <-fixture.reported
+	if len(fixture.reported) != 0 {
+		t.Fatalf("outcomes reported = %d, want 1", 1+len(fixture.reported))
+	}
+	if len(reported.Attempts) != 0 {
+		t.Fatalf("reported attempts = %+v, want none", reported.Attempts)
+	}
+	if plan := reported.TimeoutPlan(); len(plan) != 0 {
+		t.Fatalf("timeout plan = %+v, want no vote", plan)
+	}
+	if reported.Lifecycle != (Lifecycle{ClientGone: true}) {
+		t.Fatalf("lifecycle = %+v, want only the client's departure, with neither a missing escrow nor an exhausted balance", reported.Lifecycle)
+	}
+}
+
+// expiredPicker answers every pick the way the scheduler does once the pick's own deadline has passed.
+type expiredPicker struct{ *stubPicker }
+
+func (expiredPicker) Pick(context.Context, scheduler.RequestProfile) (scheduler.Assignment, error) {
+	return scheduler.Assignment{}, context.DeadlineExceeded
+}
+
+// A pick that runs out its own deadline is the scheduler's failure, so a client still waiting is not recorded as gone.
+func TestRunRaceDoesNotReadAPrimaryPickDeadlineAsADeparture(t *testing.T) {
+	fixture := newRaceFixture(settledPolicy(), 1)
+	fixture.deps.Picker = expiredPicker{stubPicker: fixture.picker}
+
+	_, err := fixture.run(context.Background())
+
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("runRace error = %v, want the pick's own deadline", err)
+	}
+	reported := <-fixture.reported
+	if len(reported.Attempts) != 0 {
+		t.Fatalf("reported attempts = %+v, want none", reported.Attempts)
+	}
+	if reported.Lifecycle.ClientGone {
+		t.Fatal("a pick that ran out its own deadline was recorded as the client leaving")
+	}
+}
+
 // The escrow can rotate out between the pick that committed a nonce on it and the registry lookup that
 // finds its session, which is why the handle is fetched per race. That assignment is already paid for.
 func TestRunRaceGivesBackTheSlotAndVotesForANonceItCannotDispatch(t *testing.T) {
@@ -1257,7 +1330,18 @@ func TestNextDeadlinePrecedence(t *testing.T) {
 // pausedCoordinator holds attempts the test wrote itself, so one wake-up can be driven in isolation
 // instead of being reached through a whole race.
 func pausedCoordinator(fixture *raceFixture, budget int, attempts ...*liveAttempt) *raceCoordinator {
-	coordinator := newCoordinator(context.Background(), fixture.deps, fixture.request)
+	return pausedCoordinatorForClient(context.Background(), fixture, budget, attempts...)
+}
+
+// departedClient is the context of a client that has already hung up.
+func departedClient() context.Context {
+	clientCtx, leave := context.WithCancel(context.Background())
+	leave()
+	return clientCtx
+}
+
+func pausedCoordinatorForClient(clientCtx context.Context, fixture *raceFixture, budget int, attempts ...*liveAttempt) *raceCoordinator {
+	coordinator := newCoordinator(clientCtx, fixture.deps, fixture.request)
 	coordinator.target = fixture.target
 	coordinator.budget = budget
 	coordinator.attempts = attempts
@@ -1511,6 +1595,55 @@ func TestAParkedEscalationPickBlocksNeitherTheWinnerNorTheRace(t *testing.T) {
 	}
 }
 
+// The departure and a due escalation are separate select arms, so the pick reads the departure itself rather than trusting the select to take it first.
+func TestAnEscalationDueAsTheClientLeavesStartsNoPick(t *testing.T) {
+	fixture := newRaceFixture(refusalPolicy(), 2)
+	failed := &liveAttempt{nonce: 440, participant: "host-0", sendTime: testEpoch, receiptTime: testEpoch, done: true, cancel: func() {}}
+	coordinator := pausedCoordinatorForClient(departedClient(), fixture, 2, failed)
+	arm := nextDeadline(coordinator.deps.Now(), coordinator.plan())
+	if arm.Trigger != triggerEscalation || arm.Escalation.Stage != StageAttemptFailed {
+		t.Fatalf("arm = %+v, want the failed attempt's escalation", arm)
+	}
+
+	coordinator.expire(arm)
+
+	if coordinator.picking() {
+		t.Fatal("a pick started for a client that had already left")
+	}
+	fixture.picker.mu.Lock()
+	picks := len(fixture.picker.profiles)
+	fixture.picker.mu.Unlock()
+	if picks != 0 {
+		t.Fatalf("picks = %d, want 0: a nonce was requested for a client that had already left", picks)
+	}
+}
+
+// An immediate attempt still owed when a pick answers is no different: a client that has left is owed no further nonce.
+func TestAnImmediateAttemptOwedAsTheClientLeavesStartsNoPick(t *testing.T) {
+	fixture := newRaceFixture(refusalPolicy(), 3)
+	fixture.target.scripts[451] = &hostScript{receipt: true, finished: true}
+	primary := &liveAttempt{nonce: 450, participant: "host-0", sendTime: testEpoch, receiptTime: testEpoch, cancel: func() {}}
+	coordinator := pausedCoordinatorForClient(departedClient(), fixture, 3, primary)
+	coordinator.pickCancel, coordinator.moreImmediate = func() {}, 1
+
+	coordinator.applyPick(pickedHost{assignment: scheduler.Assignment{
+		Escrow: "escrow-1",
+		Host:   "host-1",
+		Nonce:  fakePrepared{nonce: 451, hostIdx: 1},
+	}})
+	awaitTracedAttemptDone(t, coordinator.events)
+
+	if coordinator.picking() {
+		t.Fatal("an immediate attempt's pick started for a client that had already left")
+	}
+	fixture.picker.mu.Lock()
+	picks := len(fixture.picker.profiles)
+	fixture.picker.mu.Unlock()
+	if picks != 0 {
+		t.Fatalf("picks = %d, want 0: a nonce was requested for a client that had already left", picks)
+	}
+}
+
 // The budget clamp turns on the one fact that makes a nonce scarce, which is not the same fact as the
 // phase refusing new inferences: serving through that phase deliberately is what makes it spendable.
 func TestBudgetClampsOnlyWhenTheGatewayIsNotServingThroughTheBlock(t *testing.T) {
@@ -1747,6 +1880,87 @@ func TestRunRaceGivesUpThePickInFlightWhenATrustedHostRejectsTheContextLength(t 
 		t.Fatalf("attempts = %d, want only the refused one", len(outcome.Attempts))
 	}
 	waitForValue(t, fixture.reported, "the race's report")
+}
+
+// Every host receives the same body, so a trusted host's rejection of the request is every host's, and a second attempt would only commit a nonce and leave its host a timeout vote.
+func TestRunRaceStopsEscalatingOnceATrustedHostRejectsTheRequest(t *testing.T) {
+	fixture := newRaceFixture(refusalPolicy(), 3)
+	fixture.host(100, 0, "host-0", &hostScript{receipt: true, chunks: []string{"data: malformed-request\n\n"}})
+	fixture.host(101, 1, "host-1", &hostScript{
+		receipt:   true,
+		chunks:    []string{contentChunk(101)},
+		confirmed: true,
+		finished:  true,
+	})
+
+	outcome, err := fixture.run(context.Background())
+	if err != nil {
+		t.Fatalf("runRace error = %v", err)
+	}
+	<-fixture.reported
+	if len(outcome.Attempts) != 1 || outcome.Attempts[0].Terminal != TerminalErrorStream {
+		t.Fatalf("attempts = %+v, want only the rejected one", outcome.Attempts)
+	}
+
+	fixture.picker.mu.Lock()
+	picks := len(fixture.picker.profiles)
+	fixture.picker.mu.Unlock()
+	if picks != 1 {
+		t.Fatalf("picks = %d, want 1: every host would reject the same body", picks)
+	}
+}
+
+// finishWatch reports each attempt the coordinator has begun to judge, which it finishes before it reads a pick's answer.
+type finishWatch struct{ finished chan uint64 }
+
+func (w finishWatch) RecordStep(step RaceStep) {
+	if step.Kind == RaceStepAttemptFinished {
+		w.finished <- step.Nonce
+	}
+}
+
+func (finishWatch) HostDeniedCrown(string, string, int) {}
+
+func (finishWatch) HostCrownedAgain(string, string) {}
+
+// A suspicious host's word is not taken on trust, so its rejection of the request still lets the rival's pick through.
+func TestRunRaceKeepsTheRivalOfASuspiciousHostThatRejectsTheRequest(t *testing.T) {
+	fixture := newRaceFixture(refusalPolicy(), 2)
+	fixture.crown.denied["host-0"] = true
+	hold := make(chan struct{})
+	openHold := sync.OnceFunc(func() { close(hold) })
+	t.Cleanup(openHold)
+	fixture.picker.hold, fixture.picker.parked = hold, make(chan struct{}, 1)
+	watch := finishWatch{finished: make(chan uint64, 2)}
+	fixture.deps.Journal = watch
+	fixture.host(100, 0, "host-0", &hostScript{receipt: true, chunks: []string{"data: malformed-request\n\n"}})
+
+	outcomes := make(chan RaceOutcome, 1)
+	go func() {
+		outcome, err := fixture.run(context.Background())
+		if err != nil {
+			t.Error(err)
+		}
+		outcomes <- outcome
+	}()
+	waitForValue(t, fixture.picker.parked, "the rival's pick reaching the scheduler")
+	if finished := waitForValue(t, watch.finished, "the suspicious host's rejection reaching the race"); finished != 100 {
+		t.Fatalf("finished attempt = %d, want the suspicious host's 100", finished)
+	}
+	fixture.host(101, 1, "host-1", &hostScript{
+		receipt:   true,
+		chunks:    []string{contentChunk(101)},
+		confirmed: true,
+		finished:  true,
+	})
+	openHold()
+
+	outcome := waitForValue(t, outcomes, "the race ending")
+	waitForValue(t, fixture.reported, "the race's report")
+	if outcome.WinnerNonce != 101 || !outcome.Succeeded {
+		t.Fatalf("winner = %d succeeded = %v, want 101/true: the suspicious host's rejection stopped its rival",
+			outcome.WinnerNonce, outcome.Succeeded)
+	}
 }
 
 func TestRunRaceEscalatesAfterItsLastAttemptFailed(t *testing.T) {
