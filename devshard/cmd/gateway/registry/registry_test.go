@@ -330,6 +330,47 @@ func TestSnapshotOfAnEmptyRegistryIsEmpty(t *testing.T) {
 	}
 }
 
+func TestSnapshotOrdersEveryEscrowByIDAcrossModels(t *testing.T) {
+	t.Parallel()
+	registry := New(Deps{
+		ServingSessions: newSessions(map[string]*fakeSession{
+			"3": newFakeSession("hostC"),
+			"1": newFakeSession("hostA"),
+			"2": newFakeSession("hostB"),
+		}).open,
+		Now: fixedClock(),
+	})
+	mustAdd(t, registry, "3", "kimi")
+	mustAdd(t, registry, "1", "qwen")
+	mustAdd(t, registry, "2", "kimi")
+
+	states := registry.Snapshot()
+	ordered := make([]string, 0, len(states))
+	for _, state := range states {
+		ordered = append(ordered, state.ID)
+	}
+	if want := []string{"1", "2", "3"}; !reflect.DeepEqual(ordered, want) {
+		t.Fatalf("Snapshot() escrow order = %v, want %v", ordered, want)
+	}
+}
+
+func TestSnapshotParticipantsAreIndependentCopies(t *testing.T) {
+	t.Parallel()
+	registry := New(Deps{
+		ServingSessions: newSessions(map[string]*fakeSession{"1": newFakeSession("hostA", "hostB")}).open,
+		Now:             fixedClock(),
+	})
+	mustAdd(t, registry, "1", "qwen")
+
+	first := registry.Snapshot()
+	first[0].Participants[0] = "corrupted"
+
+	second := registry.Snapshot()
+	if want := []string{"hostA", "hostB"}; !reflect.DeepEqual(second[0].Participants, want) {
+		t.Fatalf("Snapshot() Participants after mutating an earlier snapshot = %v, want %v", second[0].Participants, want)
+	}
+}
+
 func TestCandidatesSkipOtherModels(t *testing.T) {
 	t.Parallel()
 	registry := New(Deps{

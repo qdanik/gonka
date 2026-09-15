@@ -137,26 +137,26 @@ func TestADisabledLedgerAcceptsEveryFactWithoutPanicking(t *testing.T) {
 		t.Fatalf("RecordProbe() = %v, want nothing refused while disabled", err)
 	}
 	ledger.Start(t.Context(), nil, nil)
-	if collectors := ledger.Collectors(); collectors != nil {
-		t.Fatalf("collectors() = %v, want none while disabled", collectors)
-	}
 	if err := ledger.Close(); err != nil {
 		t.Fatalf("Close(): %v", err)
 	}
 }
 
-// The ledger exports itself through the gateway's own metrics endpoint and serves nothing of its own.
-func TestAnEnabledLedgerExportsItselfAndADisabledOneIsNotBuilt(t *testing.T) {
+// The API is the ledger's only surface, so an enabled ledger always has a listener on its port.
+func TestAnEnabledLedgerServesItsAPIOnItsPortAndADisabledOneIsNotBuilt(t *testing.T) {
 	ledger := Open(
-		config.NonceAccounting{Enabled: true, SnapshotSeconds: 300},
+		config.NonceAccounting{Enabled: true, Port: 9191, SnapshotSeconds: 300},
 		t.TempDir(), nil, func() time.Time { return time.Unix(0, 0).UTC() },
 	)
 	if ledger == nil {
 		t.Fatal("Open() returned nothing for an enabled ledger")
 	}
 	t.Cleanup(func() { _ = ledger.Close() })
-	if collectors := ledger.Collectors(); len(collectors) != 1 {
-		t.Fatalf("collectors() = %d, want the ledger exported", len(collectors))
+	if ledger.listener == nil {
+		t.Fatal("Open() built an enabled ledger with no API listener")
+	}
+	if ledger.listener.Addr != ":9191" {
+		t.Fatalf("listener address = %q, want :9191", ledger.listener.Addr)
 	}
 
 	disabled := Open(

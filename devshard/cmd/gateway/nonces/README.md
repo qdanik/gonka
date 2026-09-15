@@ -8,7 +8,7 @@
 - **Three live sources**, each delivered by the [`journal`](../journal/)'s consumer rather than on the producer's goroutine. The race, through `RecordRace`; the scheduler's burns, through `RecordGhost`; the timeout votes, through `RecordTimeout`.
 - **Two chain sources.** A per-escrow diff watcher that hands every composed diff to the [`journal`](../journal/), which reads its validation verdicts and applied timeouts under the session lock and applies them later through `RecordDiffFacts`; and a periodic sweep that reconciles finished nonces, host stats and open challenges with what the chain actually holds.
 - **The warmup probe's settlement**, through `RecordProbe`, delivered by the journal. When the book refuses the probe, `RecordProbe` returns the refusal and the journal writes `escrow warmup could not settle its nonce`: only the book can see it.
-- **The HTTP listener and the Prometheus collectors** for the book it owns.
+- **The HTTP listener** that serves the book it owns as JSON, built whenever the ledger is enabled.
 
 ## What it does not own
 

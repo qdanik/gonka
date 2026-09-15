@@ -18,8 +18,6 @@ type Book struct {
 	escrows   map[string]*escrowLedger
 	updatedAt time.Time
 	now       func() time.Time
-
-	rejected uint64
 }
 
 type escrowLedger struct {
@@ -307,18 +305,11 @@ func (b *Book) MarkFinished(escrowID string, nonces []uint64) error {
 	})
 }
 
-func (b *Book) Rejected() uint64 {
-	b.mu.RLock()
-	defer b.mu.RUnlock()
-	return b.rejected
-}
-
 func (b *Book) withEscrow(escrowID string, apply func(*escrowLedger) error) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	escrow, known := b.escrows[escrowID]
 	if !known {
-		b.rejected++
 		return fmt.Errorf("%w: %s", ErrUnknownEscrow, escrowID)
 	}
 	if err := apply(escrow); err != nil {

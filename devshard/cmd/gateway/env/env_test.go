@@ -168,6 +168,88 @@ func TestLoadFallsBackToTheDevshardctlSpelling(t *testing.T) {
 	})
 }
 
+func TestLoadReadsTheAccountingLedgerUnderTheAccountingPrefix(t *testing.T) {
+	t.Setenv("GATEWAY_ACCOUNTING_ENABLED", "true")
+	t.Setenv("GATEWAY_ACCOUNTING_PORT", "9191")
+	t.Setenv("GATEWAY_ACCOUNTING_RETENTION_EPOCHS", "3")
+	t.Setenv("GATEWAY_ACCOUNTING_SNAPSHOT_SECONDS", "60")
+
+	values, err := Load()
+	if err != nil {
+		t.Fatalf("Load(): %v", err)
+	}
+	if values.NonceAccountingEnabled == nil || !*values.NonceAccountingEnabled {
+		t.Errorf("NonceAccountingEnabled = %v, want true", values.NonceAccountingEnabled)
+	}
+	if values.NonceAccountingPort == nil || *values.NonceAccountingPort != 9191 {
+		t.Errorf("NonceAccountingPort = %v, want 9191", values.NonceAccountingPort)
+	}
+	if values.NonceAccountingRetentionEpochs == nil || *values.NonceAccountingRetentionEpochs != 3 {
+		t.Errorf("NonceAccountingRetentionEpochs = %v, want 3", values.NonceAccountingRetentionEpochs)
+	}
+	if values.NonceAccountingSnapshotSeconds == nil || *values.NonceAccountingSnapshotSeconds != 60 {
+		t.Errorf("NonceAccountingSnapshotSeconds = %v, want 60", values.NonceAccountingSnapshotSeconds)
+	}
+}
+
+// devshardctl called the same ledger "stats", so a node carrying its config over keeps the ledger it had.
+func TestTheAccountingLedgerAnswersToTheDevshardctlStatsNames(t *testing.T) {
+	t.Setenv("DEVSHARD_STATS_ENABLED", "true")
+	t.Setenv("DEVSHARD_STATS_PORT", "9292")
+	t.Setenv("DEVSHARD_STATS_RETENTION_EPOCHS", "4")
+	t.Setenv("DEVSHARD_STATS_SNAPSHOT_SECONDS", "120")
+
+	values, err := Load()
+	if err != nil {
+		t.Fatalf("Load(): %v", err)
+	}
+	if values.NonceAccountingEnabled == nil || !*values.NonceAccountingEnabled {
+		t.Errorf("NonceAccountingEnabled = %v, want true from DEVSHARD_STATS_ENABLED", values.NonceAccountingEnabled)
+	}
+	if values.NonceAccountingPort == nil || *values.NonceAccountingPort != 9292 {
+		t.Errorf("NonceAccountingPort = %v, want 9292 from DEVSHARD_STATS_PORT", values.NonceAccountingPort)
+	}
+	if values.NonceAccountingRetentionEpochs == nil || *values.NonceAccountingRetentionEpochs != 4 {
+		t.Errorf("NonceAccountingRetentionEpochs = %v, want 4 from DEVSHARD_STATS_RETENTION_EPOCHS", values.NonceAccountingRetentionEpochs)
+	}
+	if values.NonceAccountingSnapshotSeconds == nil || *values.NonceAccountingSnapshotSeconds != 120 {
+		t.Errorf("NonceAccountingSnapshotSeconds = %v, want 120 from DEVSHARD_STATS_SNAPSHOT_SECONDS", values.NonceAccountingSnapshotSeconds)
+	}
+}
+
+func TestLoadReadsTheRequestRecordRetentionUnderTheRequestsPrefix(t *testing.T) {
+	t.Setenv("GATEWAY_REQUESTS_RETENTION_HOURS", "24")
+	t.Setenv("GATEWAY_REQUESTS_RETENTION_MAX_ROWS", "500")
+
+	values, err := Load()
+	if err != nil {
+		t.Fatalf("Load(): %v", err)
+	}
+	if values.AccountingRetentionHours == nil || *values.AccountingRetentionHours != 24 {
+		t.Errorf("AccountingRetentionHours = %v, want 24", values.AccountingRetentionHours)
+	}
+	if values.AccountingRetentionMaxRows == nil || *values.AccountingRetentionMaxRows != 500 {
+		t.Errorf("AccountingRetentionMaxRows = %v, want 500", values.AccountingRetentionMaxRows)
+	}
+}
+
+// The ACCOUNTING prefix now names the ledger, so the request records' former names must not be read as theirs.
+func TestTheRequestRecordRetentionNoLongerAnswersToTheAccountingPrefix(t *testing.T) {
+	t.Setenv("GATEWAY_ACCOUNTING_RETENTION_HOURS", "24")
+	t.Setenv("GATEWAY_ACCOUNTING_RETENTION_MAX_ROWS", "500")
+
+	values, err := Load()
+	if err != nil {
+		t.Fatalf("Load(): %v", err)
+	}
+	if values.AccountingRetentionHours != nil {
+		t.Errorf("AccountingRetentionHours = %v, want nil: GATEWAY_ACCOUNTING_RETENTION_HOURS is no longer read", *values.AccountingRetentionHours)
+	}
+	if values.AccountingRetentionMaxRows != nil {
+		t.Errorf("AccountingRetentionMaxRows = %v, want nil: GATEWAY_ACCOUNTING_RETENTION_MAX_ROWS is no longer read", *values.AccountingRetentionMaxRows)
+	}
+}
+
 // The fallback is the devshardctl spelling, as every other entry in the table is. A node still on the
 // gateway's own former name must be migrated: nothing reads it, and the gateway starts serving nothing.
 func TestTheEscrowListStillAnswersToItsFormerName(t *testing.T) {

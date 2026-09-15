@@ -1,7 +1,7 @@
 package accounting
 
 // The strings the ledger stores and serves. They are the report's contract with its readers -- a
-// tracker, a dashboard, an operator -- and they are stored in the snapshot, so a rename is a migration
+// tracker, an operator -- and they are stored in the snapshot, so a rename is a migration
 // and not a rename. Declared here once; the compiler carries any change to every site that names one.
 
 // What became of a nonce. Every committed nonce ends in exactly one of these, and the whole ledger
@@ -37,7 +37,7 @@ const (
 	TerminalClientCancelled = "client_cancelled"
 )
 
-// A settled timeout round, in the vocabulary the legacy ledger used, so one dashboard reads both trees.
+// A settled timeout round, in the vocabulary the legacy ledger used, so one reader understands both trees.
 const (
 	TimeoutSkipped              TimeoutOutcome = "skipped"
 	TimeoutVoteCollectionFailed TimeoutOutcome = "vote_collection_failed"

@@ -242,9 +242,9 @@ func (e *e2eEnv) startGateway(ctx context.Context, t *testing.T, opts e2eEnvOpti
 		"GATEWAY_MAX_TOKENS_CAP": "4096",
 		"GATEWAY_PORT":           "8080",
 		// Off in production, on here: it is the only surface that says what became of each nonce.
-		"GATEWAY_NONCE_ACCOUNTING_ENABLED":          "true",
-		"GATEWAY_NONCE_ACCOUNTING_LISTEN_ADDR":      ":9091",
-		"GATEWAY_NONCE_ACCOUNTING_SNAPSHOT_SECONDS": "3600",
+		"GATEWAY_ACCOUNTING_ENABLED":          "true",
+		"GATEWAY_ACCOUNTING_PORT":             "9091",
+		"GATEWAY_ACCOUNTING_SNAPSHOT_SECONDS": "3600",
 	}
 	for k, v := range opts.gatewayEnvOverrides {
 		gatewayEnv[k] = v

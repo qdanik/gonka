@@ -2,24 +2,24 @@
 
 Settlement counts **nonces**, not requests. One request burns several, and some nonces belong to no request at all — a warmup probe, a burn, a nonce the race could not use. So the gateway keeps a ledger of where every committed nonce went, and derives from it a reading of what the numbers mean.
 
-## Two ledgers with similar names
+## The ledger and the request records
 
-Confusing them wastes an investigation:
+Two stores answer different questions, and confusing them wastes an investigation:
 
-| | Request ledger | Nonce ledger |
+| | Request records | Nonce ledger |
 | --- | --- | --- |
 | Answers | what became of one client request | where every committed nonce went |
-| Configured by | `GATEWAY_ACCOUNTING_*` | `GATEWAY_NONCE_ACCOUNTING_*` |
-| Served at | `GET /v1/requests/{id}` | `/metrics`, plus its own JSON port |
+| Configured by | `GATEWAY_REQUESTS_RETENTION_*` | `GATEWAY_ACCOUNTING_*` |
+| Served at | `GET /v1/requests/{id}` | its own JSON port, `GATEWAY_ACCOUNTING_PORT` |
 | Owned by | [`store/`](../store/) | [`accounting/`](../accounting/), fed by [`nonces/`](../nonces/) |
 
 The rest of this document is the nonce ledger.
 
 ## The vocabulary
 
-Every fact the ledger files is one of a closed set of strings, and those strings are a contract: they are stored in the snapshot, exported as metric labels, and read by an external tracker. A value outside the set normalises to `unknown` and the fact becomes invisible.
+Every fact the ledger files is one of a closed set of strings, and those strings are a contract: they are stored in the snapshot, served by the JSON API, and read by an external tracker. A value outside the set normalises to `unknown` and the fact becomes invisible.
 
-They are therefore declared once, in a `vocabulary.go` beside the type that carries them, and referenced by name everywhere else — so a rename reaches every site through the compiler, while editing a *value* silently moves the wire string under every panel that queries it.
+They are therefore declared once, in a `vocabulary.go` beside the type that carries them, and referenced by name everywhere else — so a rename reaches every site through the compiler, while editing a *value* silently changes the wire string under every reader of the snapshot and the API.
 
 | Vocabulary | Declared in | What it names |
 | --- | --- | --- |
@@ -52,9 +52,9 @@ The kind is read from the receipt — `engine/settle.go`, `timeoutKind` — and 
 
 ## The surface
 
-`GATEWAY_NONCE_ACCOUNTING_ENABLED` builds the ledger and exports it as `devshard_gateway_nonces_*` on the gateway's ordinary metrics endpoint. There is no second port to configure: a Prometheus already scraping the gateway picks the series up on its next scrape.
+`GATEWAY_ACCOUNTING_ENABLED` builds the ledger, and the ledger serves itself only as JSON on its own port, `GATEWAY_ACCOUNTING_PORT` (9091 by default, on every interface). Nothing of it reaches Prometheus: a gauge aggregated from the ledger would walk every nonce it holds under the book's lock on every scrape.
 
-`GATEWAY_NONCE_ACCOUNTING_LISTEN_ADDR` additionally serves the ledger as JSON on its own port, for a reader that needs what a metric cannot carry — escrow ids and slots are unbounded, so the `devshard_gateway_nonces_*` families leave them out by design.
+devshardctl spelled these `DEVSHARD_STATS_ENABLED`, `DEVSHARD_STATS_PORT`, `DEVSHARD_STATS_RETENTION_EPOCHS` and `DEVSHARD_STATS_SNAPSHOT_SECONDS`, and each is still read when the gateway's own name is unset. One value does not carry over: a legacy retention of `0` kept everything, and the gateway refuses it while the ledger is on (see "Storage").
 
 | Route | Answers |
 | --- | --- |
@@ -79,7 +79,7 @@ Each escrow keeps its newest 256 events, which caps a pathological run rather th
 
 A counter is served **flat** — `escrow_id`, `slot_id`, `disposition`, `ghost_reason`, `terminal`, `phase` and the timeout fields all at the top level of the object. The legacy ledger in `devshard/accounting` nests the same facts under a `key` object and calls the burn reason `no_send_reason`.
 
-Nothing outside this gateway reads the JSON counter, and the in-repo Grafana dashboard queries the Prometheus labels instead — `devshard_gateway_nonces_by_disposition` grouped by `ghost_reason` — which already match. The two shapes therefore stay apart.
+Nothing outside this gateway reads the JSON counter, so no reader has to migrate to the flat shape, and the two shapes stay apart.
 
 The cost of that is worth stating, because it is silent: a reader written against the legacy shape finds none of these fields, decodes them as empty, filters every counter out and reports **zero burns rather than an error**. The gateway e2e scenarios therefore read counters with their own helper, not the shared one.
 
@@ -87,7 +87,7 @@ The cost of that is worth stating, because it is silent: a reader written agains
 
 Every participant record carries a `findings` array beside its counters: this gateway's reading of what the counters mean, for an operator who needs to know what to look at rather than what was counted. A finding names a stable `code`, a `severity` of `warning` or `critical`, and the two numbers it was flagged on — `part` and `whole`, the latter absent when the finding counts rather than measures a rate.
 
-Findings are derived on every read and **never stored**: the counters are the fact, the finding is only an interpretation. They also leave as `devshard_gateway_nonce_finding{code,severity,epoch,participant,model}`, valued at the rate that raised them — which is how an alert reaches them, since the JSON API is empty by default.
+Findings are derived on every read and **never stored**: the counters are the fact, the finding is only an interpretation. The JSON API is the only place they are served.
 
 ### Four rules that keep a finding honest
 
@@ -175,9 +175,9 @@ It holds nonce dispositions, not timings, so no finding speaks to prefill or dec
 
 ## Storage
 
-The ledger lives in memory and is written whole to `accounting.db` under the storage directory every `GATEWAY_NONCE_ACCOUNTING_SNAPSHOT_SECONDS`, and once more at shutdown. Nothing queries that database except the ledger's own load at start-up, so its tables mirror the in-memory shape one for one and a write is a single transaction that empties and refills them. The transaction is what makes a half-written ledger impossible: a crash or a failed insert rolls back to the previous contents rather than leaving the tables empty.
+The ledger lives in memory and is written whole to `accounting.db` under the storage directory every `GATEWAY_ACCOUNTING_SNAPSHOT_SECONDS`, and once more at shutdown. Nothing queries that database except the ledger's own load at start-up, so its tables mirror the in-memory shape one for one and a write is a single transaction that empties and refills them. The transaction is what makes a half-written ledger impossible: a crash or a failed insert rolls back to the previous contents rather than leaving the tables empty.
 
-Retired escrows are pruned once a minute: an escrow that is retired and was created more than `GATEWAY_NONCE_ACCOUNTING_RETENTION_EPOCHS` epochs before the current one leaves the ledger, the next snapshot and the `devshard_gateway_nonces_*` series together, while a live escrow stays however old it is (`accounting/service.go`, `Service.prune`). The default is 2. At two to three million nonces a day an unpruned ledger grows by close to a gigabyte a day, so the gateway refuses to boot with the ledger on and a retention below 1.
+Retired escrows are pruned once a minute: an escrow that is retired and was created more than `GATEWAY_ACCOUNTING_RETENTION_EPOCHS` epochs before the current one leaves the ledger and the next snapshot together, while a live escrow stays however old it is (`accounting/service.go`, `Service.prune`). The default is 2. At two to three million nonces a day an unpruned ledger grows by close to a gigabyte a day, so the gateway refuses to boot with the ledger on and a retention below 1.
 
 A snapshot that cannot be read is reported and the gateway starts with an **empty ledger**: refusing to start over an unreadable observability file would trade a gateway for a graph.
 
@@ -185,12 +185,6 @@ Only the nonces whose disposition can still move are written down — those awai
 
 - A nonce whose race died with the process, or whose vote was still posting when it stopped, is named `abandoned_by_restart` rather than left pending for ever: no vote result ever reached the ledger, and it will still settle as a completed inference nobody checked. A stored `started` is read as unresolved for that reason (`accounting/store.go`, `Book.Restore`).
 - An unfinished nonce is re-asked on every sweep. If the protocol finished it after the race gave up, it leaves the unfinished bucket — that bucket is what settlement reads as work the participant failed to do.
-
-## Metrics
-
-The `devshard_gateway_nonces_*` family is **gauges, not counters**. A nonce's disposition moves when it is reclassified, so a series goes down as well as up and `rate()` over one reports nonsense.
-
-Every series carries an `epoch` label: the ledger holds several epochs at once and a participant keeps its slot across a rotation, so the epoch is what separates two otherwise identical series — and it, not the dashboard's time range, is what a panel must filter on. A cumulative gauge does not respond to a time picker.
 
 ## Money and tokens
 

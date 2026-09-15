@@ -44,7 +44,7 @@ The input-token cap only ever takes the second path.
 - **A successful probe clears the trip itself**, not just the half-open flag, or the next `Acquire` would re-flag half-open forever.
 - **Backoff is `base * 1.6^count` plus up to 20% jitter** (gRPC connection-backoff's `JITTER`), so reopened cutoffs across many hosts do not retry in lockstep. The count stops rising once the backoff saturates at `MaxOpen`, so `1.6^count` cannot overflow the duration.
 - **`Available` peeks the admit decision** without touching in-flight, the cutoff, or creating state for a participant never seen before, which is what lets routing ask about a host it has never dispatched to.
-- **`Snapshot` is taken under one lock acquisition** and returned in participant/model order, so a report cannot mix two moments.
+- **`Snapshot` copies every pair under one lock acquisition**, so a report cannot mix two moments, then sorts into participant/model order after the lock releases.
 - **A pair idle past `IdleEviction` is forgotten.** `Acquire` marks the pair it is asked about as used, then scans at most once per tenth of the window and drops only a pair with nothing in flight and no cut-off still running, so a `Release` never lands on a state that is gone. The composition root sets the window to `perf_host_staleness_seconds` through `ParticipantConfigFromConfig`; an `IdleEviction` of zero keeps every pair.
 
 ## When a host stops taking work
@@ -62,13 +62,15 @@ A cut-off is a decision an operator has to be able to explain afterwards, and it
 
 `hostShares[host]` is `slots(host, escrow) / totalSlots(host)` across every escrow that host serves. Raw slot counts would count a participant once per escrow it serves instead of splitting it between them.
 
+`Capacity.mu` guards only the snapshot field and the outer membership map — a published snapshot's maps are never written again and each escrow's membership map is the capacity model's own copy — so `ModelWeights` and `EscrowWeight` take the map references under the lock and sum them once it releases.
+
 Three fallbacks decide what a missing view means:
 
 - **A model absent from a *populated* by-model view is served by nobody**, so it scores zero rather than inheriting the generic all-model view. With no by-model view at all, the generic view applies to everything.
-- **An empty weight view means the chain named nobody**, not that everybody weighs nothing — a host the chain has reported is a key in the view whatever its weight. When neither view has been observed, escrow scoring falls back to the membership share alone, which serves requests correctly and silently; `WeightsUnobserved` is what makes that state visible.
+- **An empty weight view means the chain named nobody**, not that everybody weighs nothing — a host the chain has reported is a key in the view whatever its weight. When neither view has been observed, escrow scoring falls back to the membership share alone, which serves requests correctly and silently; the `WeightsUnobserved` flag of `ModelWeights` is what makes that state visible.
 - **The current and full views fall back to the generic one independently**, so a missing full-by-model entry does not suppress a present current-by-model one.
 
-`ScaleFactor` takes the **effective** blocking state, never the chain's raw one. Relaxed mode is the operator's override of that fact, so a capacity that read the snapshot itself would zero the scale exactly when the override was meant to keep serving — and a zero scale clamps every weight-derived cap to nothing. The composition root in [`main.go`](../main.go) passes `config.Modes.BlocksRequests`, which owns the fold.
+`ModelWeights` takes the **effective** blocking state, never the chain's raw one. Relaxed mode is the operator's override of that fact, so a capacity that read the snapshot itself would zero the scale exactly when the override was meant to keep serving — and a zero scale clamps every weight-derived cap to nothing. The composition root in [`main.go`](../main.go) passes `config.Modes.BlocksRequests`, which owns the fold.
 
 ## Read next
 

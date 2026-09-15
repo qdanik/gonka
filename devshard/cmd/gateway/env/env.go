@@ -54,7 +54,7 @@ type Values struct {
 	AccountingRetentionMaxRows *int64
 
 	NonceAccountingEnabled         *bool
-	NonceAccountingListenAddr      *string
+	NonceAccountingPort            *int64
 	NonceAccountingRetentionEpochs *int64
 	NonceAccountingSnapshotSeconds *int64
 
@@ -130,6 +130,10 @@ var (
 		"GATEWAY_ROTATION_SETTLEMENT_ENABLED": "DEVSHARD_ESCROW_ROTATION_SETTLEMENT_ENABLED",
 		"GATEWAY_ROTATION_MODELS_JSON":        "DEVSHARD_ESCROW_ROTATION_MODELS_JSON",
 		"GATEWAY_CHAT_CACHE_MAX_BYTES":        "DEVSHARD_CHAT_CACHE_MAX_BYTES",
+		"GATEWAY_ACCOUNTING_ENABLED":          "DEVSHARD_STATS_ENABLED",
+		"GATEWAY_ACCOUNTING_PORT":             "DEVSHARD_STATS_PORT",
+		"GATEWAY_ACCOUNTING_RETENTION_EPOCHS": "DEVSHARD_STATS_RETENTION_EPOCHS",
+		"GATEWAY_ACCOUNTING_SNAPSHOT_SECONDS": "DEVSHARD_STATS_SNAPSHOT_SECONDS",
 	}
 )
 
@@ -248,13 +252,13 @@ func Load() (Values, error) {
 
 	readInt("GATEWAY_CHAT_CACHE_MAX_BYTES", &values.ChatCacheMaxBytes)
 
-	readInt("GATEWAY_ACCOUNTING_RETENTION_HOURS", &values.AccountingRetentionHours)
-	readInt("GATEWAY_ACCOUNTING_RETENTION_MAX_ROWS", &values.AccountingRetentionMaxRows)
+	readInt("GATEWAY_REQUESTS_RETENTION_HOURS", &values.AccountingRetentionHours)
+	readInt("GATEWAY_REQUESTS_RETENTION_MAX_ROWS", &values.AccountingRetentionMaxRows)
 
-	readBool("GATEWAY_NONCE_ACCOUNTING_ENABLED", &values.NonceAccountingEnabled)
-	readString("GATEWAY_NONCE_ACCOUNTING_LISTEN_ADDR", &values.NonceAccountingListenAddr)
-	readInt("GATEWAY_NONCE_ACCOUNTING_RETENTION_EPOCHS", &values.NonceAccountingRetentionEpochs)
-	readInt("GATEWAY_NONCE_ACCOUNTING_SNAPSHOT_SECONDS", &values.NonceAccountingSnapshotSeconds)
+	readBool("GATEWAY_ACCOUNTING_ENABLED", &values.NonceAccountingEnabled)
+	readInt("GATEWAY_ACCOUNTING_PORT", &values.NonceAccountingPort)
+	readInt("GATEWAY_ACCOUNTING_RETENTION_EPOCHS", &values.NonceAccountingRetentionEpochs)
+	readInt("GATEWAY_ACCOUNTING_SNAPSHOT_SECONDS", &values.NonceAccountingSnapshotSeconds)
 	readInt("GATEWAY_TIMEOUT_SWEEP_BUDGET_PER_TICK", &values.TimeoutSweepBudgetPerTick)
 	readInt("GATEWAY_TIMEOUT_SWEEP_GRACE_SECONDS", &values.TimeoutSweepGraceSeconds)
 

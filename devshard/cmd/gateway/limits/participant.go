@@ -183,11 +183,9 @@ type HostWindow struct {
 	Available    bool
 }
 
-// Snapshot returns every tracked pair in participant/model order, taken under one lock acquisition.
+// Snapshot returns every tracked pair in participant/model order, copied under one lock and sorted after it releases.
 func (l *ParticipantLimiter) Snapshot() []HostWindow {
 	l.mu.Lock()
-	defer l.mu.Unlock()
-
 	now := l.now()
 	windows := make([]HostWindow, 0, len(l.states))
 	for tracked, state := range l.states {
@@ -201,6 +199,8 @@ func (l *ParticipantLimiter) Snapshot() []HostWindow {
 			Available:    wouldAdmitLocked(state, now),
 		})
 	}
+	l.mu.Unlock()
+
 	slices.SortFunc(windows, func(first, second HostWindow) int {
 		return cmp.Or(cmp.Compare(first.Participant, second.Participant), cmp.Compare(first.Model, second.Model))
 	})

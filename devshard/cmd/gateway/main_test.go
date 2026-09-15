@@ -371,6 +371,24 @@ func TestEveryOwnerCollectorIsRegisteredOnTheGatewaysRegistry(t *testing.T) {
 	}
 }
 
+// The ledger is read through its own API; none of it may ride on the scrape Prometheus polls every few seconds.
+func TestTheAccountingLedgerExportsNothingToPrometheus(t *testing.T) {
+	gatewayEnvironment(t)
+	t.Setenv("GATEWAY_ACCOUNTING_ENABLED", "true")
+	composed := composedGateway(t)
+
+	families, err := composed.telemetry.Registry().Gather()
+	if err != nil {
+		t.Fatalf("Gather(): %v", err)
+	}
+	for _, family := range families {
+		name := family.GetName()
+		if strings.HasPrefix(name, "devshard_gateway_nonces_") || name == "devshard_gateway_nonce_facts_rejected_total" || name == "devshard_gateway_nonce_finding" {
+			t.Errorf("the accounting ledger still exports %s", name)
+		}
+	}
+}
+
 func TestBootBudgetSizesTheIdlePoolToTheBuilderLimit(t *testing.T) {
 	for _, builders := range []int{1, 4, 16, 64} {
 		t.Run(fmt.Sprintf("%d builders", builders), func(t *testing.T) {
@@ -934,12 +952,12 @@ func TestModelCapacityScaleFactorFoldsRelaxedModeOverTheBlockedChainState(t *tes
 			configuration.Modes.PoCMode = testCase.pocMode
 			capacityForMode := modelCapacity{capacity: capacity, snapshots: observer, config: config.NewHolder(&configuration)}
 
-			scale := capacityForMode.ScaleFactor("model-a")
+			scale := capacityForMode.ModelWeights("model-a").ScaleFactor
 			if testCase.wantScaled && scale <= 0 {
-				t.Fatalf("ScaleFactor() = %v, want > 0", scale)
+				t.Fatalf("ModelWeights().ScaleFactor = %v, want > 0", scale)
 			}
 			if !testCase.wantScaled && scale != 0 {
-				t.Fatalf("ScaleFactor() = %v, want 0", scale)
+				t.Fatalf("ModelWeights().ScaleFactor = %v, want 0", scale)
 			}
 		})
 	}

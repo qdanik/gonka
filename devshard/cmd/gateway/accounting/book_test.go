@@ -179,14 +179,11 @@ func TestReclassificationMovesANonceRatherThanDuplicatingIt(t *testing.T) {
 	assertDisposition(t, book, 8, 4, DispositionFinishedUsed)
 }
 
-func TestAFactForAnUnopenedEscrowIsRefusedAndCounted(t *testing.T) {
+func TestAFactForAnUnopenedEscrowIsRefused(t *testing.T) {
 	book := newTestBook(t, 4)
 	err := book.RecordGhost("escrow-unknown", 1, "poc_unavailable_host")
 	if !errors.Is(err, ErrUnknownEscrow) {
 		t.Fatalf("RecordGhost() = %v, want ErrUnknownEscrow", err)
-	}
-	if rejected := book.Rejected(); rejected != 1 {
-		t.Fatalf("Rejected() = %d, want the dropped fact counted", rejected)
 	}
 }
 

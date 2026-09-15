@@ -264,7 +264,6 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 	}
 	// One wrapper for both readers, so the gauge reports the scale admission actually applies.
 	modelCapacities := modelCapacity{capacity: capacity, snapshots: observer, config: configHolder}
-	telemetry.Register(recorder.Collectors()...)
 	telemetry.Register(
 		metrics.NewLimitsCollector(metrics.LimitsSources{
 			Limiter:       gatewayLimiter,
@@ -417,29 +416,21 @@ type modelCapacity struct {
 }
 
 func (m modelCapacity) ForModel(model string) limits.ModelCapacity {
-	current, baseline := m.capacity.Weights(model)
+	weights := m.ModelWeights(model)
 	concurrency := m.config.Load().Limits.Concurrency
 	perWeight := concurrency.RequestsPer10000Weight
 	if m.snapshots.Snapshot().RequestsBlocked {
 		perWeight = concurrency.PoCRequestsPer10000Weight
 	}
 	return limits.ModelCapacity{
-		ScaleFactor:                 m.ScaleFactor(model),
-		CurrentWeight:               current,
-		BaselineWeight:              baseline,
+		ScaleFactor:                 weights.ScaleFactor,
+		CurrentWeight:               weights.CurrentWeight,
+		BaselineWeight:              weights.BaselineWeight,
 		MaxConcurrentPer10000Weight: perWeight,
 	}
 }
 
-// ScaleFactor folds in relaxed mode first, or PoC zeroes every cap. See README.md, "Relaxed mode, in one place".
-func (m modelCapacity) ScaleFactor(model string) float64 {
-	return m.capacity.ScaleFactor(model, m.config.Load().Modes.BlocksRequests(m.snapshots.Snapshot()))
-}
-
-func (m modelCapacity) Weights(model string) (current, baseline float64) {
-	return m.capacity.Weights(model)
-}
-
-func (m modelCapacity) WeightsUnobserved(model string) bool {
-	return m.capacity.WeightsUnobserved(model)
+// ModelWeights folds in relaxed mode first, or PoC zeroes every cap. See README.md, "Relaxed mode, in one place".
+func (m modelCapacity) ModelWeights(model string) limits.ModelWeights {
+	return m.capacity.ModelWeights(model, m.config.Load().Modes.BlocksRequests(m.snapshots.Snapshot()))
 }

@@ -155,8 +155,8 @@ func BenchmarkCapacityForModel(b *testing.B) {
 	capacity := benchCapacityModel(benchParticipants(benchHosts))
 	b.ReportAllocs()
 	for b.Loop() {
-		current, baseline := capacity.Weights(benchModel)
-		floatSink = current + baseline + capacity.ScaleFactor(benchModel, false)
+		weights := capacity.ModelWeights(benchModel, false)
+		floatSink = weights.CurrentWeight + weights.BaselineWeight + weights.ScaleFactor
 	}
 }
 
@@ -166,8 +166,8 @@ func BenchmarkCapacityForModelParallel(b *testing.B) {
 	b.ReportAllocs()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			current, baseline := capacity.Weights(benchModel)
-			floatSink = current + baseline + capacity.ScaleFactor(benchModel, false)
+			weights := capacity.ModelWeights(benchModel, false)
+			floatSink = weights.CurrentWeight + weights.BaselineWeight + weights.ScaleFactor
 		}
 	})
 }

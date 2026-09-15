@@ -60,6 +60,7 @@ func Defaults() Config {
 			RetentionMaxRows: 1_000_000,
 		},
 		NonceAccounting: NonceAccounting{
+			Port:            9091,
 			RetentionEpochs: 2,
 			SnapshotSeconds: 300,
 		},

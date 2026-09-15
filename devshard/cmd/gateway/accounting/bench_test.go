@@ -8,8 +8,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/prometheus/client_golang/prometheus"
-
 	"devshard/cmd/gateway/engine"
 	"devshard/cmd/gateway/scheduler"
 	"devshard/types"
@@ -187,24 +185,6 @@ func BenchmarkSnapshot(b *testing.B) {
 			b.Fatal("Snapshot() held nothing")
 		}
 	}
-}
-
-func BenchmarkCollect(b *testing.B) {
-	collector := NewCollector(benchBook(b))
-	metrics := make(chan prometheus.Metric, 1024)
-	drained := make(chan struct{})
-	go func() {
-		defer close(drained)
-		for range metrics {
-		}
-	}()
-	b.ReportAllocs()
-	for b.Loop() {
-		collector.Collect(metrics)
-	}
-	b.StopTimer()
-	close(metrics)
-	<-drained
 }
 
 // The write path: one race of a group's worth of attempts, each landing in a counter it did not hold

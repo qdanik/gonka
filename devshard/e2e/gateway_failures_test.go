@@ -148,7 +148,7 @@ func TestE2E_GatewayRestartInventsNoDisagreementWithTheChain(t *testing.T) {
 	env, client := startGatewayEnv(t, e2eEnvOptions{
 		gatewayVolumeName: fmt.Sprintf("devshard-e2e-%s-gateway", strings.ToLower(t.Name())),
 		gatewayEnvOverrides: map[string]string{
-			"GATEWAY_NONCE_ACCOUNTING_SNAPSHOT_SECONDS": "2",
+			"GATEWAY_ACCOUNTING_SNAPSHOT_SECONDS": "2",
 		},
 		hostEnvOverrides: map[int]map[string]string{1: brokenHost("502", "upstream connect error")},
 	})

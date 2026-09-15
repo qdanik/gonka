@@ -113,9 +113,9 @@ func TestCapacityGatewayParticipantLimiterComposeEndToEnd(t *testing.T) {
 		},
 	})
 
-	scale := capacity.ScaleFactor("modelA", false)
+	scale := capacity.ModelWeights("modelA", false).ScaleFactor
 	if scale != 0.8 {
-		t.Fatalf("Capacity.ScaleFactor(modelA) = %v, want 0.8 (80 current / 100 full)", scale)
+		t.Fatalf("Capacity.ModelWeights(modelA).ScaleFactor = %v, want 0.8 (80 current / 100 full)", scale)
 	}
 	modelCapacity := ModelCapacity{ScaleFactor: scale}
 

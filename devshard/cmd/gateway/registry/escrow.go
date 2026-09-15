@@ -12,24 +12,27 @@ import (
 
 // escrowEntry is one escrow's live state; inFlight is shared by every published set the entry appears in.
 type escrowEntry struct {
-	id        string
-	sessionID uint64
-	model     string
-	session   EscrowSession
-	slots     map[string]int
-	stream    nonceStream
-	inFlight  atomic.Int64
-	hold      func() (func(), bool)
+	id           string
+	sessionID    uint64
+	model        string
+	session      EscrowSession
+	slots        map[string]int
+	participants []string
+	stream       nonceStream
+	inFlight     atomic.Int64
+	hold         func() (func(), bool)
 }
 
 func newEscrowEntry(escrowID, model string, sessionID uint64, session EscrowSession, now func() time.Time) *escrowEntry {
+	slots := slotCounts(session.HostParticipantKeyList())
 	return &escrowEntry{
-		id:        escrowID,
-		sessionID: sessionID,
-		model:     model,
-		session:   session,
-		slots:     slotCounts(session.HostParticipantKeyList()),
-		stream:    newNonceStream(session, model, now),
+		id:           escrowID,
+		sessionID:    sessionID,
+		model:        model,
+		session:      session,
+		slots:        slots,
+		participants: sortedKeys(slots),
+		stream:       newNonceStream(session, model, now),
 	}
 }
 
@@ -54,6 +57,7 @@ func (e *escrowEntry) close() (bool, error) {
 type liveSet struct {
 	byID    map[string]*escrowEntry
 	byModel map[string][]*escrowEntry
+	ordered []*escrowEntry
 }
 
 func emptyLiveSet() *liveSet { return newLiveSet(map[string]*escrowEntry{}) }
@@ -70,12 +74,17 @@ func (s *liveSet) without(escrowID string) *liveSet {
 	return newLiveSet(byID)
 }
 
-// newLiveSet orders each model's candidates by escrow id: the stable order the tie-break assumes.
+// newLiveSet orders each model's candidates, and the full set, by escrow id: the stable order the tie-break assumes.
 func newLiveSet(byID map[string]*escrowEntry) *liveSet {
-	set := &liveSet{byID: byID, byModel: make(map[string][]*escrowEntry, len(byID))}
+	set := &liveSet{
+		byID:    byID,
+		byModel: make(map[string][]*escrowEntry, len(byID)),
+		ordered: make([]*escrowEntry, 0, len(byID)),
+	}
 	for _, id := range sortedKeys(byID) {
 		entry := byID[id]
 		set.byModel[entry.model] = append(set.byModel[entry.model], entry)
+		set.ordered = append(set.ordered, entry)
 	}
 	return set
 }

@@ -159,6 +159,9 @@ func (c *Config) Validate() error {
 	if c.NonceAccounting.SnapshotSeconds < 1 {
 		complain("nonce_accounting_snapshot_seconds: %d must be >= 1", c.NonceAccounting.SnapshotSeconds)
 	}
+	if portOutOfRange := c.NonceAccounting.Port < 1 || c.NonceAccounting.Port > 65535; c.NonceAccounting.Enabled && portOutOfRange {
+		complain("nonce_accounting_port: %d out of range 1..65535 while nonce accounting is enabled", c.NonceAccounting.Port)
+	}
 	if c.Capture.SampleRate < 0 || c.Capture.SampleRate > 1 {
 		complain("capture_sample_rate: %v must be in [0, 1]", c.Capture.SampleRate)
 	}

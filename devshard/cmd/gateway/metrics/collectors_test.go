@@ -24,12 +24,12 @@ func newLimitsHarness(clock *time.Time) (*limits.GatewayLimiter, *limits.Capacit
 }
 
 // servingCapacity is the composition root's wrapper reduced to what a collector reads: production
-// applies the operator's relaxed-mode override before asking for the ratio, and these tests are never
-// blocked, so the answer is always the unblocked one.
+// applies the operator's relaxed-mode override before reading a model's weights, and these tests are
+// never blocked, so the answer is always the unblocked one.
 type servingCapacity struct{ *limits.Capacity }
 
-func (c servingCapacity) ScaleFactor(model string) float64 {
-	return c.Capacity.ScaleFactor(model, false)
+func (c servingCapacity) ModelWeights(model string) limits.ModelWeights {
+	return c.Capacity.ModelWeights(model, false)
 }
 
 func TestTheLimitsCollectorReportsTheConfiguredCapsBeforeAnyTraffic(t *testing.T) {
@@ -75,6 +75,42 @@ func TestTheLimitsCollectorMatchesTheLimiterAfterTraffic(t *testing.T) {
 	expectGauge(t, telemetry, "devshard_gateway_effective_max_input_tokens_in_flight", labels{}, 4000)
 	expectGauge(t, telemetry, "devshard_gateway_enforced_max_concurrent_requests_by_model", labels{"model": "qwen"}, 4)
 	expectGauge(t, telemetry, "devshard_gateway_enforced_max_input_tokens_by_model", labels{"model": "qwen"}, 2000)
+}
+
+// A model can have traffic and be configured at once, and the registry refuses a scrape that carries one series twice.
+func TestTheLimitsCollectorReportsEveryModelOnce(t *testing.T) {
+	clock := time.Unix(1700000000, 0)
+	limiter, capacity, participants := newLimitsHarness(&clock)
+	telemetry := New()
+	telemetry.Register(NewLimitsCollector(LimitsSources{
+		Limiter: limiter, Capacity: servingCapacity{capacity}, Participants: participants,
+		Models: func() []string { return []string{"llama", "qwen"} },
+	}))
+
+	for _, model := range []string{"qwen", "mistral"} {
+		if err := limiter.AcquireForModel(context.Background(), model, 1, limits.ModelCapacity{ScaleFactor: 1}); err != nil {
+			t.Fatalf("acquire %s: %v", model, err)
+		}
+	}
+
+	expectSeriesCount(t, telemetry, "devshard_gateway_inflight_requests_by_model", 3)
+	expectSeriesCount(t, telemetry, "devshard_gateway_capacity_scale_by_model", 3)
+	expectGauge(t, telemetry, "devshard_gateway_inflight_requests_by_model", labels{"model": "qwen"}, 1)
+	expectGauge(t, telemetry, "devshard_gateway_inflight_requests_by_model", labels{"model": "mistral"}, 1)
+	expectGauge(t, telemetry, "devshard_gateway_inflight_requests_by_model", labels{"model": "llama"}, 0)
+}
+
+func TestTheLimitsCollectorReportsARepeatedConfiguredModelOnce(t *testing.T) {
+	clock := time.Unix(1700000000, 0)
+	limiter, capacity, participants := newLimitsHarness(&clock)
+	telemetry := New()
+	telemetry.Register(NewLimitsCollector(LimitsSources{
+		Limiter: limiter, Capacity: servingCapacity{capacity}, Participants: participants,
+		Models: func() []string { return []string{"llama", "llama", "qwen"} },
+	}))
+
+	expectSeriesCount(t, telemetry, "devshard_gateway_inflight_requests_by_model", 2)
+	expectSeriesCount(t, telemetry, "devshard_gateway_capacity_scale_by_model", 2)
 }
 
 func TestTheLimitsCollectorReportsCapacityPerModel(t *testing.T) {

@@ -24,7 +24,7 @@ The design principle across all three is **adaptation instead of punishment**. T
 scaleFactor(model) = clamp( Σ availableCurrentWeight / Σ fullWeight , 0, 1 )
 ```
 
-with three fixed answers at the edges (`limits/capacity.go`, `Capacity.ScaleFactor`; `limits/weights.go`, `scaleFactor`):
+with three fixed answers at the edges (`limits/capacity.go`, `Capacity.ModelWeights`; `limits/weights.go`, `scaleFactor`):
 
 - Requests blocked by the chain phase → **0**.
 - The model is not served → **0**.
@@ -46,7 +46,7 @@ escrowWeight(escrow, model) = Σ_participant currentWeight[p] × hostShare[p] ×
 
 **Unobserved weights fail open.** When neither weight view has any key at all, escrow scoring falls back to the availability-filtered membership share instead of zero (`limits/capacity.go`, `Capacity.EscrowWeight`). Zero would make every escrow score as unusable, so every request in the boot window would be refused. The test is *emptiness*, not staleness: a chain-reported participant is a key in the view whatever its weight, so an empty view means the chain named nobody.
 
-That fallback serves requests correctly and silently, which is its own hazard — an operator sees traffic flowing and cannot tell routing is running blind. So `WeightsUnobserved(model)` is derived from the *same two predicates the fallback branch itself reads* and published as `devshard_gateway_capacity_weights_unobserved_by_model`. A gauge computed from the same predicates cannot drift from the behaviour it reports.
+That fallback serves requests correctly and silently, which is its own hazard — an operator sees traffic flowing and cannot tell routing is running blind. So the `WeightsUnobserved` flag of `Capacity.ModelWeights` is derived from the *same two predicates the fallback branch itself reads* and published as `devshard_gateway_capacity_weights_unobserved_by_model`. A gauge computed from the same predicates cannot drift from the behaviour it reports.
 
 ## The gateway limiter
 

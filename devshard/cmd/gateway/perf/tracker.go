@@ -260,38 +260,32 @@ type HostState struct {
 	TimePerOutputToken time.Duration
 }
 
-// Snapshot returns every tracked pair in participant/model order, in-flight counts read after the host lock.
+// Snapshot returns every tracked pair, order unspecified; the decode quantile and in-flight count are read after the host lock releases.
 func (t *Tracker) Snapshot() []HostState {
 	now := t.now()
 	view := t.view.Load()
 
-	// One pass under one lock: a per-host read would relock and re-search for a report wanting one moment.
-	type hostDecode struct {
+	// One pass under one lock: copy each pair's decode window, nothing that sorts or computes a quantile.
+	type hostDecodeWindow struct {
 		key    hostKey
-		decode time.Duration
+		window latencyWindow
 	}
 	t.mu.Lock()
-	decoded := make([]hostDecode, 0, len(t.hosts))
+	copied := make([]hostDecodeWindow, 0, len(t.hosts))
 	for key, host := range t.hosts {
-		decode, _ := host.perf.decode.p75(latencyWindowMinimum)
-		decoded = append(decoded, hostDecode{key: key, decode: decode})
+		copied = append(copied, hostDecodeWindow{key: key, window: host.perf.decode})
 	}
 	t.mu.Unlock()
 
-	slices.SortFunc(decoded, func(first, second hostDecode) int {
-		if participants := strings.Compare(first.key.participant, second.key.participant); participants != 0 {
-			return participants
-		}
-		return strings.Compare(first.key.model, second.key.model)
-	})
-	states := make([]HostState, 0, len(decoded))
-	for _, host := range decoded {
+	states := make([]HostState, 0, len(copied))
+	for _, host := range copied {
+		decode, _ := host.window.p75(latencyWindowMinimum)
 		states = append(states, HostState{
 			Participant:        host.key.participant,
 			Model:              host.key.model,
 			Ejected:            view != nil && now.Before((*view)[host.key].ejectedUntil),
 			Inflight:           t.inflight.count(host.key.participant),
-			TimePerOutputToken: host.decode,
+			TimePerOutputToken: decode,
 		})
 	}
 	return states

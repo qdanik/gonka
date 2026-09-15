@@ -66,6 +66,7 @@ func TestDefaultsMatchSpec(t *testing.T) {
 		{"Engine.LoserGraceMS", configuration.Engine.LoserGraceMS, int64(600_000)},
 		{"Engine.MaxAttemptsPerRequest", configuration.Engine.MaxAttemptsPerRequest, int64(2)},
 		{"NonceAccounting.RetentionEpochs", configuration.NonceAccounting.RetentionEpochs, int64(2)},
+		{"NonceAccounting.Port", configuration.NonceAccounting.Port, int64(9091)},
 	}
 	for _, check := range checks {
 		if check.got != check.want {
@@ -167,6 +168,14 @@ func TestValidateCatchesEveryRuleBreach(t *testing.T) {
 			c.NonceAccounting.Enabled = true
 			c.NonceAccounting.RetentionEpochs = 0
 		}, "nonce_accounting_retention_epochs"},
+		{"nonce_accounting_port zero while the ledger is on", func(c *Config) {
+			c.NonceAccounting.Enabled = true
+			c.NonceAccounting.Port = 0
+		}, "nonce_accounting_port"},
+		{"nonce_accounting_port above the port range while the ledger is on", func(c *Config) {
+			c.NonceAccounting.Enabled = true
+			c.NonceAccounting.Port = 65_536
+		}, "nonce_accounting_port"},
 		{"scheduler_match_wait_ms negative", func(c *Config) { c.Scheduler.MatchWaitMS = -1 }, "scheduler_match_wait_ms"},
 		{"scheduler_match_wait_ms above ceiling", func(c *Config) { c.Scheduler.MatchWaitMS = 5_001 }, "scheduler_match_wait_ms"},
 		{"engine_receipt_timeout_ms too low", func(c *Config) { c.Engine.ReceiptTimeoutMS = 0 }, "engine_receipt_timeout_ms"},

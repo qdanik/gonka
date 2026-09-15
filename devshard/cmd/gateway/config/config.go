@@ -103,7 +103,7 @@ type Accounting struct {
 // NonceAccounting configures the per-nonce ledger, not the per-request one; RetentionEpochs must be at least 1 while Enabled. See docs/accounting.md, "Storage".
 type NonceAccounting struct {
 	Enabled         bool
-	ListenAddr      string
+	Port            int64
 	RetentionEpochs int64
 	SnapshotSeconds int64
 }

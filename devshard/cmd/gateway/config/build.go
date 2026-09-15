@@ -55,7 +55,7 @@ func Build(values env.Values, overrides Overrides) (*Config, error) {
 	overrideIfSet(&configuration.Accounting.RetentionMaxRows, values.AccountingRetentionMaxRows)
 
 	overrideIfSet(&configuration.NonceAccounting.Enabled, values.NonceAccountingEnabled)
-	overrideIfSet(&configuration.NonceAccounting.ListenAddr, values.NonceAccountingListenAddr)
+	overrideIfSet(&configuration.NonceAccounting.Port, values.NonceAccountingPort)
 	overrideIfSet(&configuration.NonceAccounting.RetentionEpochs, values.NonceAccountingRetentionEpochs)
 	overrideIfSet(&configuration.NonceAccounting.SnapshotSeconds, values.NonceAccountingSnapshotSeconds)
 	overrideIfSet(&configuration.TimeoutSweep.BudgetPerTick, values.TimeoutSweepBudgetPerTick)

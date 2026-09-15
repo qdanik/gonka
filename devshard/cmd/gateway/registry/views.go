@@ -48,12 +48,12 @@ type EscrowState struct {
 	Participants []string
 }
 
-// Snapshot takes no lock, and includes the retired escrows still draining. See capacity.md, "What in-flight actually counts".
+// Snapshot takes no registry lock, and includes the retired escrows still draining. See capacity.md, "What in-flight actually counts".
 func (r *Registry) Snapshot() []EscrowState {
 	published := r.live.Load()
-	states := make([]EscrowState, 0, len(published.byID))
-	for _, id := range sortedKeys(published.byID) {
-		states = append(states, stateOf(published.byID[id], false))
+	states := make([]EscrowState, 0, len(published.ordered))
+	for _, entry := range published.ordered {
+		states = append(states, stateOf(entry, false))
 	}
 	if draining := r.drainingView.Load(); draining != nil {
 		for _, entry := range *draining {
@@ -71,7 +71,7 @@ func stateOf(entry *escrowEntry, draining bool) EscrowState {
 		Model:        entry.model,
 		Accepting:    !draining && entry.accepting(),
 		InFlight:     entry.inFlight.Load(),
-		Participants: sortedKeys(entry.slots),
+		Participants: slices.Clone(entry.participants),
 	}
 }
 

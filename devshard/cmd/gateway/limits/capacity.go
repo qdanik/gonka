@@ -15,6 +15,14 @@ type Capacity struct {
 	membership map[string]map[string]float64
 }
 
+// ModelWeights is one model's weights and scale factor, read in one walk.
+type ModelWeights struct {
+	ScaleFactor       float64
+	CurrentWeight     float64
+	BaselineWeight    float64
+	WeightsUnobserved bool
+}
+
 func NewCapacity(available func(participant, model string) bool) *Capacity {
 	return &Capacity{
 		available:  available,
@@ -43,56 +51,44 @@ func (c *Capacity) RemoveEscrow(escrowID string) {
 	delete(c.membership, escrowID)
 }
 
-// ScaleFactor takes the EFFECTIVE blocking state, never the chain's raw one. See README.md, "The capacity model".
-func (c *Capacity) ScaleFactor(model string, blocked bool) float64 {
+// ModelWeights takes the EFFECTIVE blocking state, never the chain's raw one. See README.md, "The capacity model".
+func (c *Capacity) ModelWeights(model string, blocked bool) ModelWeights {
 	c.mu.RLock()
-	defer c.mu.RUnlock()
-	if blocked || !c.modelServedLocked(model) {
-		return 0
+	served := c.modelServedLocked(model)
+	current, full := c.currentWeightsLocked(model), c.fullWeightsLocked(model)
+	c.mu.RUnlock()
+	if !served {
+		return ModelWeights{}
 	}
-	current := c.sumAvailableLocked(c.currentWeightsLocked(model), model)
-	full := sumWeights(c.fullWeightsLocked(model))
-	return scaleFactor(current, full)
+	weights := ModelWeights{
+		CurrentWeight:     c.sumAvailable(current, model),
+		BaselineWeight:    sumWeights(full),
+		WeightsUnobserved: weightsUnobserved(current, full),
+	}
+	if !blocked {
+		weights.ScaleFactor = scaleFactor(weights.CurrentWeight, weights.BaselineWeight)
+	}
+	return weights
 }
 
 // EscrowWeight falls back to the membership share. See capacity.md, "Two fail-safes with opposite directions".
 func (c *Capacity) EscrowWeight(escrowID, model string) float64 {
 	c.mu.RLock()
-	defer c.mu.RUnlock()
-	if !c.modelServedLocked(model) {
+	served := c.modelServedLocked(model)
+	current, full := c.currentWeightsLocked(model), c.fullWeightsLocked(model)
+	shares := c.membership[escrowID]
+	c.mu.RUnlock()
+	if !served {
 		return 0
 	}
 	var availableForModel func(string) bool
 	if c.available != nil {
 		availableForModel = func(host string) bool { return c.available(host, model) }
 	}
-	shares := c.membership[escrowID]
-	if c.weightsUnobservedLocked(model) {
+	if weightsUnobserved(current, full) {
 		return availableShare(shares, availableForModel)
 	}
-	return escrowWeight(c.currentWeightsLocked(model), shares, availableForModel)
-}
-
-// WeightsUnobserved makes the membership-share fallback visible, since it serves requests silently.
-func (c *Capacity) WeightsUnobserved(model string) bool {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	return c.modelServedLocked(model) && c.weightsUnobservedLocked(model)
-}
-
-// An empty view means the chain named nobody, not that everybody weighs nothing.
-func (c *Capacity) weightsUnobservedLocked(model string) bool {
-	return len(c.currentWeightsLocked(model)) == 0 && len(c.fullWeightsLocked(model)) == 0
-}
-
-// Weights is ScaleFactor's numerator and denominator for one model.
-func (c *Capacity) Weights(model string) (current, baseline float64) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	if !c.modelServedLocked(model) {
-		return 0, 0
-	}
-	return c.sumAvailableLocked(c.currentWeightsLocked(model), model), sumWeights(c.fullWeightsLocked(model))
+	return escrowWeight(current, shares, availableForModel)
 }
 
 // A model absent from a populated by-model view is served by nobody, so it must not inherit the generic view.
@@ -122,7 +118,7 @@ func (c *Capacity) fullWeightsLocked(model string) map[string]float64 {
 	return c.snapshot.FullWeights
 }
 
-func (c *Capacity) sumAvailableLocked(weights map[string]float64, model string) float64 {
+func (c *Capacity) sumAvailable(weights map[string]float64, model string) float64 {
 	var sum float64
 	for host, weight := range weights {
 		if c.available != nil && !c.available(host, model) {
@@ -131,6 +127,11 @@ func (c *Capacity) sumAvailableLocked(weights map[string]float64, model string) 
 		sum += weight
 	}
 	return sum
+}
+
+// An empty view means the chain named nobody, not that everybody weighs nothing.
+func weightsUnobserved(current, full map[string]float64) bool {
+	return len(current) == 0 && len(full) == 0
 }
 
 func sumWeights(weights map[string]float64) float64 {

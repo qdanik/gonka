@@ -305,8 +305,8 @@ func TestASlowDecodeDuringPoCIsNotChargedToTheHost(t *testing.T) {
 	}
 }
 
-// A dashboard and an operator's alert select on these strings, and the ledger they were written
-// against is the one this gateway replaces. A rename is a silent alert that stops firing.
+// An external tracker reads these strings from the ledger's API, and the ledger they were written
+// against is the one this gateway replaces. A rename silently breaks every reader that matches on them.
 // "blocked_by_capability" is deliberately absent: nothing withholds a host from routing over a
 // capability refusal any more, so the code names a burn that can no longer happen.
 func TestTheFindingVocabularyKeepsTheNamesOperatorsAlertOn(t *testing.T) {

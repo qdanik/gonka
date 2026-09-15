@@ -5,13 +5,12 @@ package nonces
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"time"
-
-	"github.com/prometheus/client_golang/prometheus"
 
 	"devshard/cmd/gateway/accounting"
 	"devshard/cmd/gateway/chain"
@@ -109,12 +108,10 @@ func Open(settings config.NonceAccounting, storageDir string, epochs EpochSource
 		logging.Warn("nonce accounting started without its stored counters", "error", restoreErr)
 	}
 	ledger.service = service
-	if settings.ListenAddr != "" {
-		ledger.listener = &http.Server{
-			Addr:              settings.ListenAddr,
-			Handler:           accounting.NewHandler(service.Book, ledger.currentEpoch, ledger.hostCapability),
-			ReadHeaderTimeout: nonceAccountingReadHeaderTimeout,
-		}
+	ledger.listener = &http.Server{
+		Addr:              fmt.Sprintf(":%d", settings.Port),
+		Handler:           accounting.NewHandler(service.Book, ledger.currentEpoch, ledger.hostCapability),
+		ReadHeaderTimeout: nonceAccountingReadHeaderTimeout,
 	}
 	return ledger
 }
@@ -142,13 +139,6 @@ func (n *Recorder) ResetEpoch(epoch uint64) (int, error) {
 		return 0, nil
 	}
 	return n.service.ResetEpoch(epoch)
-}
-
-func (n *Recorder) Collectors() []prometheus.Collector {
-	if n == nil {
-		return nil
-	}
-	return []prometheus.Collector{accounting.NewCollector(n.service.Book)}
 }
 
 // Start sweeps until ctx ends; every escrow the sweep watches hands its composed diffs to diffs.

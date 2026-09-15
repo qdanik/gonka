@@ -16,11 +16,11 @@ Which escrows exist right now, what each serves, and who its hosts are.
 
 ## The published set and its readers
 
-`liveSet` is the published escrow set, replaced rather than mutated, so a reader takes it with one atomic load and never waits on a writer. `newLiveSet` orders each model's candidates by escrow id: the stable order the tie-break assumes.
+`liveSet` is the published escrow set, replaced rather than mutated, so a reader takes it with one atomic load and never waits on a writer. `newLiveSet` orders each model's candidates, and the full set `Snapshot` walks, by escrow id: the stable order the tie-break assumes, computed once when the set is published rather than sorted again on every read.
 
 `escrowEntry.inFlight` is shared by every published set the entry appears in, so a rotation never loses the count of requests already running against it.
 
-`Snapshot` returns every published escrow in id order plus the retired ones still draining, and takes no lock at all — `publishDrainingLocked` republishes the draining view under the registry lock precisely so a scrape cannot wait on a retirement.
+`Snapshot` returns every published escrow in id order plus the retired ones still draining. It takes no registry lock — only one O(1) read of each escrow's session phase, under that session's own read lock — and `publishDrainingLocked` republishes the draining view under the registry lock precisely so a scrape cannot wait on a retirement.
 
 `RoutableSession` is the read-only handle the status routes read. It takes no in-flight count and is not the dispatch path: a race resolves its escrow through `Acquire`, which returns the session and its release together, so a handle cannot be held without the hold. `holdFor` is the scheduler's view of the same count, taken in the step that commits a nonce; it is bound to the entry rather than to its id, and re-checks that the published entry is still that entry, so a hold cannot land on a replacement published under the same id.
 

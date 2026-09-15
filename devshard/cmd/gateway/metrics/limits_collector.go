@@ -1,21 +1,19 @@
 package metrics
 
 import (
-	"slices"
-
 	"github.com/prometheus/client_golang/prometheus"
 
 	"devshard/cmd/gateway/limits"
 )
+
+var cutoffStates = limits.AllCutoffStates()
 
 type LimiterSource interface {
 	Snapshot() limits.LimiterSnapshot
 }
 
 type CapacitySource interface {
-	ScaleFactor(model string) float64
-	Weights(model string) (current, baseline float64)
-	WeightsUnobserved(model string) bool
+	ModelWeights(model string) limits.ModelWeights
 }
 
 type ParticipantSource interface {
@@ -113,11 +111,11 @@ func (c *LimitsCollector) Collect(ch chan<- prometheus.Metric) {
 		enforced := snapshot.EnforcedByModel[model]
 		gauge(ch, c.enforcedMaxConcurrentByModel, float64(enforced.MaxConcurrentRequests), model)
 		gauge(ch, c.enforcedMaxTokensByModel, float64(enforced.MaxInputTokensInFlight), model)
-		gauge(ch, c.capacityScale, c.sources.Capacity.ScaleFactor(model), model)
-		current, baseline := c.sources.Capacity.Weights(model)
-		gauge(ch, c.capacityTotalWeight, current, model)
-		gauge(ch, c.capacityBaselineWeight, baseline, model)
-		gauge(ch, c.capacityWeightsUnobserved, boolGauge(c.sources.Capacity.WeightsUnobserved(model)), model)
+		weights := c.sources.Capacity.ModelWeights(model)
+		gauge(ch, c.capacityScale, weights.ScaleFactor, model)
+		gauge(ch, c.capacityTotalWeight, weights.CurrentWeight, model)
+		gauge(ch, c.capacityBaselineWeight, weights.BaselineWeight, model)
+		gauge(ch, c.capacityWeightsUnobserved, boolGauge(weights.WeightsUnobserved), model)
 	}
 
 	windows := c.sources.Participants.Snapshot()
@@ -128,7 +126,7 @@ func (c *LimitsCollector) Collect(ch chan<- prometheus.Metric) {
 		}
 		gauge(ch, c.windowSize, window.Window, window.Participant, window.Model)
 		gauge(ch, c.windowInflight, float64(window.Inflight), window.Participant, window.Model)
-		for _, state := range limits.AllCutoffStates() {
+		for _, state := range cutoffStates {
 			gauge(ch, c.cutoffState, boolGauge(window.Cutoff == state), window.Participant, window.Model, string(state))
 		}
 	}
@@ -138,13 +136,23 @@ func (c *LimitsCollector) Collect(ch chan<- prometheus.Metric) {
 
 // reportedModels folds the configured list into the live one, so an idle model still reports its capacity.
 func (c *LimitsCollector) reportedModels(snapshot limits.LimiterSnapshot) []string {
-	models := make([]string, 0, len(snapshot.ByModel))
+	var configured []string
+	if c.sources.Models != nil {
+		configured = c.sources.Models()
+	}
+	models := make([]string, 0, len(snapshot.ByModel)+len(configured))
 	for model := range snapshot.ByModel {
 		models = append(models, model)
 	}
-	if c.sources.Models != nil {
-		models = append(models, c.sources.Models()...)
+	added := make(map[string]struct{}, len(configured))
+	for _, model := range configured {
+		_, live := snapshot.ByModel[model]
+		_, alreadyAdded := added[model]
+		if live || alreadyAdded {
+			continue
+		}
+		added[model] = struct{}{}
+		models = append(models, model)
 	}
-	slices.Sort(models)
-	return slices.Compact(models)
+	return models
 }

@@ -246,6 +246,42 @@ func TestTrackerAcquireReleaseTracksInflight(t *testing.T) {
 	}
 }
 
+func TestSnapshotReportsTimePerOutputTokenP75PerPair(t *testing.T) {
+	tracker := newTestTracker(testPerf(), fixedNow(testEpoch))
+	for range latencyWindowMinimum {
+		tracker.RecordSample(Sample{ParticipantKey: "quick", Model: "qwen", Responsive: true, TimePerOutputToken: 10 * time.Millisecond})
+		tracker.RecordSample(Sample{ParticipantKey: "slow", Model: "qwen", Responsive: true, TimePerOutputToken: 20 * time.Millisecond})
+	}
+
+	states := map[string]HostState{}
+	for _, state := range tracker.Snapshot() {
+		states[state.Participant] = state
+	}
+
+	if got := states["quick"].TimePerOutputToken; got != 10*time.Millisecond {
+		t.Errorf("quick decode p75 = %v, want 10ms", got)
+	}
+	if got := states["slow"].TimePerOutputToken; got != 20*time.Millisecond {
+		t.Errorf("slow decode p75 = %v, want 20ms", got)
+	}
+}
+
+// A window short of the minimum reports zero, matching TimePerOutputTokenP75's own refusal.
+func TestSnapshotReportsZeroTimePerOutputTokenBelowTheMinimumWindow(t *testing.T) {
+	tracker := newTestTracker(testPerf(), fixedNow(testEpoch))
+	for range latencyWindowMinimum - 1 {
+		tracker.RecordSample(Sample{ParticipantKey: "host", Model: "qwen", Responsive: true, TimePerOutputToken: 20 * time.Millisecond})
+	}
+
+	states := tracker.Snapshot()
+	if len(states) != 1 {
+		t.Fatalf("tracked pairs = %d, want 1", len(states))
+	}
+	if got := states[0].TimePerOutputToken; got != 0 {
+		t.Errorf("decode p75 below the minimum window = %v, want 0", got)
+	}
+}
+
 func TestTrackerRecordSampleLazilyEvictsHostsUnseenPastStaleness(t *testing.T) {
 	perf := testPerf()
 	perf.HostStalenessSeconds = 60

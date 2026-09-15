@@ -61,7 +61,6 @@ func TestE2E_GatewayPublishesEveryMetricOrdinaryTrafficProduces(t *testing.T) {
 		"devshard_gateway_chain_snapshot_healthy",
 		"devshard_gateway_escrow_weight",
 		"devshard_gateway_participants_tracked",
-		"devshard_gateway_nonces_assigned",
 	})
 }
 
