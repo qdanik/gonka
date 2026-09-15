@@ -25,6 +25,7 @@ func GatewayConfigFromLimits(l config.Limits) GatewayConfig {
 
 func ParticipantConfigFromLimits(l config.Limits) ParticipantConfig {
 	return ParticipantConfig{
+		Min:           l.HostInflight.Min,
 		Initial:       l.HostInflight.Initial,
 		Max:           l.HostInflight.Max,
 		AfterFailures: l.HostCutoff.AfterFailures,

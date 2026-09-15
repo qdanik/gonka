@@ -1047,17 +1047,20 @@ func TestSimulatorBurnEmptyIsAModelOutcomeAndPlainEmptyIsNot(t *testing.T) {
 		model        string
 		wantTerminal Terminal
 		wantDenied   bool
+		wantVerdict  limits.Verdict
 	}{
 		{
 			name:         "thinking_budget_route_burned_the_tokens",
 			model:        kimiModel,
 			wantTerminal: TerminalBurnEmpty,
+			wantVerdict:  limits.ModelOutcome,
 		},
 		{
 			name:         "any_other_route_answered_with_nothing",
 			model:        qwenModel,
 			wantTerminal: TerminalEmptyStream,
 			wantDenied:   true,
+			wantVerdict:  limits.EmptyAnswer,
 		},
 	}
 
@@ -1078,10 +1081,36 @@ func TestSimulatorBurnEmptyIsAModelOutcomeAndPlainEmptyIsNot(t *testing.T) {
 			if reported.DeniesCrowning(attempt) != testCase.wantDenied {
 				t.Errorf("DeniesCrowning = %v, want %v", reported.DeniesCrowning(attempt), testCase.wantDenied)
 			}
-			if moves := sim.windows.recorded(); len(moves) != 1 || moves[0].verdict != limits.ModelOutcome {
-				t.Fatalf("window moves = %+v, want one ModelOutcome", moves)
+			if moves := sim.windows.recorded(); len(moves) != 1 || moves[0].verdict != testCase.wantVerdict {
+				t.Fatalf("window moves = %+v, want one %v", moves, testCase.wantVerdict)
 			}
 		})
+	}
+}
+
+// An empty answer closes its nonce but leaves the client nothing, so the request moves to another host and the empty host's window halves.
+func TestSimulatorAnEmptyAnswerHandsTheRequestToAnotherHost(t *testing.T) {
+	sim := newSimulator(t, speculativePolicy(2), 2, qwenModel)
+	sim.host(10, 0, "empty-host", &hostScript{receipt: true, confirmed: true, finished: true})
+	sim.host(11, 1, "content-host", &hostScript{
+		receipt: true, chunks: []string{contentEvent("hi")},
+		confirmed: true, finished: true,
+	})
+
+	outcome, err := sim.run(context.Background())
+
+	if err != nil {
+		t.Fatalf("Run() error = %v, want the second host's answer", err)
+	}
+	if outcome.WinnerNonce != 11 {
+		t.Fatalf("winner = %d, want the host that answered", outcome.WinnerNonce)
+	}
+	reported := sim.reported(t)
+	if escalated := attemptFor(t, reported, 11); escalated.StartReason != EscalationReasonAttemptFailed {
+		t.Errorf("second attempt start reason = %q, want %q", escalated.StartReason, EscalationReasonAttemptFailed)
+	}
+	if moves := sim.windows.recorded(); len(moves) != 2 || moves[0] != (windowMove{participant: "empty-host", verdict: limits.EmptyAnswer}) {
+		t.Fatalf("window moves = %+v, want the empty host's window halved, then the winner's", moves)
 	}
 }
 

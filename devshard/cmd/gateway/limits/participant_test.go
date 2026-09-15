@@ -212,6 +212,125 @@ func TestUpstreamFaultHalvesTheWindowAndKeepsTheBreakersCount(t *testing.T) {
 	}
 }
 
+func TestAMissedDeadlineHalvesTheWindowAndKeepsTheBreakersCount(t *testing.T) {
+	t.Parallel()
+	l := newTestLimiter(testConfig(), fixedNow(testEpoch)) // Initial=4, AfterFailures=3
+	l.Acquire("p", "m")
+	l.OnResult("p", "m", TransportFault)
+	l.OnResult("p", "m", TransportFault)
+
+	l.OnResult("p", "m", MissedDeadline)
+
+	if got := l.states[key{participant: "p", model: "m"}].window; got != 2 {
+		t.Fatalf("window after MissedDeadline = %v, want 2 (4*0.5)", got)
+	}
+	l.OnResult("p", "m", TransportFault)
+	if l.Acquire("p", "m") {
+		t.Fatal("Acquire() after the threshold-th transport fault = true, want false (a missed deadline must not clear the breaker's count)")
+	}
+}
+
+func TestALateSuccessKeepsTheWindowAndClearsTheBreakersCount(t *testing.T) {
+	t.Parallel()
+	l := newTestLimiter(testConfig(), fixedNow(testEpoch)) // Initial=4, AfterFailures=3
+	l.Acquire("p", "m")
+	l.Acquire("p", "m") // inflight=2, window/2=2: a timely Success would widen
+	l.OnResult("p", "m", TransportFault)
+	l.OnResult("p", "m", TransportFault)
+
+	l.OnResult("p", "m", LateSuccess)
+
+	if got := l.states[key{participant: "p", model: "m"}].window; got != 4 {
+		t.Fatalf("window after LateSuccess at the utilisation gate = %v, want unchanged 4", got)
+	}
+	l.OnResult("p", "m", TransportFault)
+	if !l.Acquire("p", "m") {
+		t.Fatal("Acquire() after one fault following a LateSuccess = false, want true (the answer must clear the breaker's count)")
+	}
+}
+
+func TestALateSuccessLiftsAHalfOpenCutoff(t *testing.T) {
+	t.Parallel()
+	clock := newMovingClock(testEpoch)
+	cfg := testConfig()
+	l := newTestLimiter(cfg, clock.now)
+	for range cfg.AfterFailures {
+		l.OnResult("p", "m", TransportFault)
+	}
+	clock.advance(cfg.BaseOpen)
+	l.Acquire("p", "m") // the half-open probe
+
+	l.OnResult("p", "m", LateSuccess)
+
+	if got := l.Snapshot()[0].Cutoff; got != CutoffClosed {
+		t.Fatalf("cutoff after a late answer to the probe = %q, want %q", got, CutoffClosed)
+	}
+}
+
+func TestAnEmptyAnswerHalvesTheWindowAndKeepsTheBreakersCount(t *testing.T) {
+	t.Parallel()
+	l := newTestLimiter(testConfig(), fixedNow(testEpoch)) // Initial=4, AfterFailures=3
+	l.Acquire("p", "m")
+	l.OnResult("p", "m", TransportFault)
+	l.OnResult("p", "m", TransportFault)
+
+	l.OnResult("p", "m", EmptyAnswer)
+
+	if got := l.states[key{participant: "p", model: "m"}].window; got != 2 {
+		t.Fatalf("window after EmptyAnswer = %v, want 2 (4*0.5)", got)
+	}
+	l.OnResult("p", "m", TransportFault)
+	if l.Acquire("p", "m") {
+		t.Fatal("Acquire() after the threshold-th transport fault = true, want false (an empty answer must not clear the breaker's count)")
+	}
+}
+
+func TestAnEmptyAnswerLeftOpenHalvesTheWindowAndCountsTowardsTheCutoff(t *testing.T) {
+	t.Parallel()
+	l := newTestLimiter(testConfig(), fixedNow(testEpoch)) // Initial=4, AfterFailures=3
+	l.Acquire("p", "m")
+	l.OnResult("p", "m", TransportFault)
+	l.OnResult("p", "m", TransportFault)
+
+	l.OnResult("p", "m", EmptyAnswerLeftOpen)
+
+	if got := l.states[key{participant: "p", model: "m"}].window; got != 2 {
+		t.Fatalf("window after EmptyAnswerLeftOpen = %v, want 2 (4*0.5)", got)
+	}
+	if l.Acquire("p", "m") {
+		t.Fatal("Acquire() after the threshold-th fault = true, want false (an empty answer left open counts towards the cutoff)")
+	}
+}
+
+func TestAHalvingStopsAtTheMinimumWindow(t *testing.T) {
+	t.Parallel()
+	testCases := []struct {
+		name    string
+		verdict Verdict
+	}{
+		{"overload", Overload},
+		{"upstream fault", UpstreamFault},
+		{"missed deadline", MissedDeadline},
+		{"empty answer", EmptyAnswer},
+		{"empty answer left open", EmptyAnswerLeftOpen},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			cfg := testConfig() // Initial=4
+			cfg.Min = 3
+			l := newTestLimiter(cfg, fixedNow(testEpoch))
+			l.Acquire("p", "m")
+
+			l.OnResult("p", "m", testCase.verdict)
+
+			if got := l.states[key{participant: "p", model: "m"}].window; got != 3 {
+				t.Fatalf("window after halving 4 = %v, want the minimum 3", got)
+			}
+		})
+	}
+}
+
 func TestTransportFaultTripsAtExactThreshold(t *testing.T) {
 	t.Parallel()
 	cfg := testConfig() // AfterFailures=3

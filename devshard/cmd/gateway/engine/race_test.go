@@ -15,6 +15,7 @@ import (
 
 	"devshard/cmd/gateway/chain"
 	"devshard/cmd/gateway/config"
+	"devshard/cmd/gateway/limits"
 	"devshard/cmd/gateway/scheduler"
 )
 
@@ -370,11 +371,20 @@ func (g *stubCrown) Observe(participant, _ string, contentless bool) {
 
 // slotLedger stands in for the host windows the scheduler drew each attempt's slot from. Releases are
 // reported on a channel so a test waits for the attempt goroutines instead of polling behind them.
-type slotLedger struct{ releases chan string }
+type slotLedger struct {
+	releases chan string
+	verdicts chan windowMove
+}
 
-func newSlotLedger() *slotLedger { return &slotLedger{releases: make(chan string, 64)} }
+func newSlotLedger() *slotLedger {
+	return &slotLedger{releases: make(chan string, 64), verdicts: make(chan windowMove, 64)}
+}
 
 func (l *slotLedger) Release(participant, model string) { l.releases <- participant }
+
+func (l *slotLedger) OnResult(participant, _ string, verdict limits.Verdict) {
+	l.verdicts <- windowMove{participant: participant, verdict: verdict}
+}
 
 type recordingSink struct {
 	mu      sync.Mutex
@@ -1155,6 +1165,13 @@ func failedAfterEscalating(sendTime time.Time) EscalationAttempt {
 	return EscalationAttempt{Done: true, Escalated: true, SendTime: sendTime, ReceiptTime: sendTime}
 }
 
+// judgedPendingAttempt was already judged on its receipt deadline, so only an escalation can still arm on it.
+func judgedPendingAttempt(sendTime time.Time) EscalationAttempt {
+	attempt := pendingAttempt(sendTime)
+	attempt.ReceiptDeadlineJudged = true
+	return attempt
+}
+
 func TestNextDeadlinePrecedence(t *testing.T) {
 	base := testEpoch
 	const hard = streamingHardTimeout
@@ -1176,7 +1193,7 @@ func TestNextDeadlinePrecedence(t *testing.T) {
 		wantTrigger   deadlineTrigger
 	}{
 		{
-			name: "escalation earliest", receipt: time.Second, stall: 2 * time.Second, budget: 4,
+			name: "escalation earliest, winning the tie with the deadline it arms on", receipt: time.Second, stall: 2 * time.Second, budget: 4,
 			attempts:    []EscalationAttempt{pendingAttempt(base), streamingAttempt(base, base)},
 			wantAt:      base.Add(time.Second),
 			wantTrigger: triggerEscalation,
@@ -1214,14 +1231,14 @@ func TestNextDeadlinePrecedence(t *testing.T) {
 		{
 			name: "a running pick is already the escalation", receipt: time.Second, stall: 2 * time.Second, budget: 4,
 			pick:        base.Add(schedulerPickTimeout),
-			attempts:    []EscalationAttempt{pendingAttempt(base), streamingAttempt(base, base)},
+			attempts:    []EscalationAttempt{judgedPendingAttempt(base), streamingAttempt(base, base)},
 			wantAt:      base.Add(2 * time.Second),
 			wantTrigger: triggerStall,
 		},
 		{
 			name: "a crowned winner ends escalation", receipt: time.Second, stall: 2 * time.Second, budget: 4,
 			attempts: []EscalationAttempt{
-				pendingAttempt(base),
+				judgedPendingAttempt(base),
 				func() EscalationAttempt {
 					attempt := streamingAttempt(base, base)
 					attempt.Crowned = true
@@ -1233,9 +1250,21 @@ func TestNextDeadlinePrecedence(t *testing.T) {
 		},
 		{
 			name: "an exhausted budget ends escalation", receipt: time.Second, stall: 2 * time.Second, budget: 2,
-			attempts:    []EscalationAttempt{pendingAttempt(base), streamingAttempt(base, base)},
+			attempts:    []EscalationAttempt{judgedPendingAttempt(base), streamingAttempt(base, base)},
 			wantAt:      base.Add(2 * time.Second),
 			wantTrigger: triggerStall,
+		},
+		{
+			name: "a missed deadline arms where escalation cannot", receipt: time.Second, stall: 2 * time.Second, budget: 2,
+			attempts:    []EscalationAttempt{pendingAttempt(base), streamingAttempt(base, base)},
+			wantAt:      base.Add(time.Second),
+			wantTrigger: triggerMissedDeadline,
+		},
+		{
+			name: "a missed deadline wins a tie with stall", receipt: 2 * time.Second, stall: 2 * time.Second, budget: 2,
+			attempts:    []EscalationAttempt{pendingAttempt(base), streamingAttempt(base, base)},
+			wantAt:      base.Add(2 * time.Second),
+			wantTrigger: triggerMissedDeadline,
 		},
 		{
 			name: "a failed attempt frees its place in the budget", receipt: time.Second, stall: 2 * time.Second, budget: 2,
@@ -1245,14 +1274,14 @@ func TestNextDeadlinePrecedence(t *testing.T) {
 		},
 		{
 			name: "the host group bounds the attempts a failure freed", receipt: time.Second, stall: 2 * time.Second, budget: 2, limit: 2,
-			attempts:    []EscalationAttempt{failedAfterEscalating(base), pendingAttempt(base)},
+			attempts:    []EscalationAttempt{failedAfterEscalating(base), judgedPendingAttempt(base)},
 			wantAt:      base.Add(hard),
 			wantTrigger: triggerHardTimeout,
 		},
 		{
 			name: "a refusal that rules out a retry ends escalation", receipt: time.Second, stall: 2 * time.Second, budget: 4,
 			retryRuledOut: true,
-			attempts:      []EscalationAttempt{pendingAttempt(base), streamingAttempt(base, base)},
+			attempts:      []EscalationAttempt{judgedPendingAttempt(base), streamingAttempt(base, base)},
 			wantAt:        base.Add(2 * time.Second),
 			wantTrigger:   triggerStall,
 		},
@@ -1297,14 +1326,14 @@ func TestNextDeadlinePrecedence(t *testing.T) {
 		{
 			name: "the drain deadline bounds a departed client's race", receipt: time.Second, stall: time.Hour, budget: 4,
 			drain:       base.Add(time.Minute),
-			attempts:    []EscalationAttempt{pendingAttempt(base), streamingAttempt(base, base)},
+			attempts:    []EscalationAttempt{judgedPendingAttempt(base), streamingAttempt(base, base)},
 			wantAt:      base.Add(time.Minute),
 			wantTrigger: triggerHardTimeout,
 		},
 		{
 			name: "a departed client is owed no escalation", receipt: time.Second, stall: time.Second, budget: 4,
 			drain:       base.Add(time.Hour),
-			attempts:    []EscalationAttempt{pendingAttempt(base), streamingAttempt(base, base)},
+			attempts:    []EscalationAttempt{judgedPendingAttempt(base), streamingAttempt(base, base)},
 			wantAt:      base.Add(time.Second),
 			wantTrigger: triggerStall,
 		},
@@ -1666,6 +1695,109 @@ func TestAFailedAttemptFreesItsPlaceForAnotherPick(t *testing.T) {
 
 	if !coordinator.picking() {
 		t.Fatal("no pick started, although the failed attempt left a place in the budget")
+	}
+}
+
+// The budget is spent, so nothing escalates; the host is still narrowed at the deadline, and its attempt keeps the nonce it owes.
+func TestAMissedFirstTokenDeadlineNarrowsTheHostWithoutStoppingItsAttempt(t *testing.T) {
+	policy := settledPolicy()
+	policy.FirstTokenFloor = time.Second
+	fixture := newRaceFixture(policy, 2)
+	cancelled := false
+	silent := &liveAttempt{
+		nonce:       460,
+		participant: "host-0",
+		sendTime:    testEpoch.Add(-2 * time.Second),
+		receiptTime: testEpoch.Add(-2 * time.Second),
+		cancel:      func() { cancelled = true },
+	}
+	coordinator := pausedCoordinator(fixture, 1, silent)
+	arm := nextDeadline(coordinator.deps.Now(), coordinator.plan())
+	if arm.Trigger != triggerMissedDeadline {
+		t.Fatalf("arm = %+v, want the missed first-token deadline", arm)
+	}
+
+	coordinator.expire(arm)
+
+	if move := waitForValue(t, fixture.limiter.verdicts, "the host's window being judged"); move != (windowMove{participant: "host-0", verdict: limits.MissedDeadline}) {
+		t.Fatalf("window move = %+v, want host-0 to have missed a deadline", move)
+	}
+	if cancelled {
+		t.Fatal("the missed deadline cancelled an attempt that still owes its nonce")
+	}
+	if !coordinator.outcome().Attempts[0].FirstTokenDeadlineMissed {
+		t.Fatal("the outcome does not record the first-token deadline the host missed")
+	}
+	if next := nextDeadline(coordinator.deps.Now(), coordinator.plan()); next.Trigger == triggerMissedDeadline {
+		t.Fatalf("arm = %+v, want a deadline judged only once", next)
+	}
+}
+
+// A proof-of-compute phase slows every host at once, so a deadline missed inside it narrows nobody.
+func TestADeadlineMissedDuringProofOfComputeIsExcused(t *testing.T) {
+	policy := settledPolicy()
+	policy.ReceiptTimeout = time.Second
+	fixture := newRaceFixture(policy, 1)
+	fixture.deps.Snapshots = stubSnapshots{snapshot: chain.PhaseSnapshot{EpochPhase: chain.EpochPhasePoCGenerate}}
+	fixture.deps.Modes = config.Modes{PoCMode: config.PoCModeRelaxed}
+	unreceipted := &liveAttempt{nonce: 480, participant: "host-0", sendTime: testEpoch.Add(-2 * time.Second), cancel: func() {}}
+	coordinator := pausedCoordinator(fixture, 1, unreceipted)
+	arm := nextDeadline(coordinator.deps.Now(), coordinator.plan())
+	if arm.Trigger != triggerMissedDeadline {
+		t.Fatalf("arm = %+v, want the missed receipt deadline", arm)
+	}
+
+	coordinator.expire(arm)
+
+	if moves := len(fixture.limiter.verdicts); moves != 0 {
+		t.Fatalf("window moves = %d, want none inside a proof-of-compute phase", moves)
+	}
+	if coordinator.outcome().Attempts[0].ReceiptDeadlineMissed {
+		t.Fatal("the outcome charges the host a deadline the phase excused")
+	}
+	if next := nextDeadline(coordinator.deps.Now(), coordinator.plan()); next.Trigger == triggerMissedDeadline {
+		t.Fatalf("arm = %+v, want the excused deadline settled rather than armed again", next)
+	}
+}
+
+// Narrowing happens when the deadline passes, not when the attempt ends; the late attempt then finishes as usual.
+func TestRunRaceNarrowsALateHostAtTheDeadlineAndLetsItFinish(t *testing.T) {
+	policy := settledPolicy()
+	policy.ReceiptTimeout = time.Second
+	fixture := newRaceFixture(policy, 1)
+	dispatched, release := make(chan uint64, 1), make(chan struct{})
+	fixture.host(470, 0, "host-0", &hostScript{
+		arrive:    dispatched,
+		release:   release,
+		receipt:   true,
+		chunks:    []string{contentChunk(470)},
+		confirmed: true,
+		finished:  true,
+	})
+	returned := make(chan RaceOutcome, 1)
+	go func() {
+		outcome, err := fixture.run(context.Background())
+		if err != nil {
+			t.Error(err)
+		}
+		returned <- outcome
+	}()
+	<-dispatched
+	fixture.clock.waitArmed(t, time.Second)
+
+	fixture.clock.advance(time.Second)
+
+	if move := waitForValue(t, fixture.limiter.verdicts, "the late host's window being judged"); move != (windowMove{participant: "host-0", verdict: limits.MissedDeadline}) {
+		t.Fatalf("window move = %+v, want host-0 to have missed a deadline", move)
+	}
+	close(release)
+	waitForValue(t, returned, "the late attempt finishing its race")
+	reported := waitForValue(t, fixture.reported, "the race's report")
+	if attempt := reported.Attempts[0]; attempt.Terminal != TerminalWon || !attempt.ReceiptDeadlineMissed {
+		t.Fatalf("attempt = %s with receipt deadline missed %t, want a won attempt that missed it", attempt.Terminal, attempt.ReceiptDeadlineMissed)
+	}
+	if moves := len(fixture.limiter.verdicts); moves != 0 {
+		t.Fatalf("window moves after the first = %d, want the deadline judged once", moves)
 	}
 }
 

@@ -75,11 +75,11 @@ Stages that can trigger another attempt. The reason column is the wire string an
 | `suspicious_host` | The first attempt's host is crown-denied or operator-pinned — escalate immediately. |
 | `receipt_timeout` | No receipt within the receipt timeout (doubled above 100 000 input tokens, because admitting a very large prompt is itself work). |
 | `first_token_timeout` | No first token within the first-token deadline. |
-| `attempt_failed` | An attempt ended without producing anything usable. |
+| `attempt_failed` | An attempt ended without producing anything usable, an empty stream that closed its nonce included. |
 
 An attempt launched at race start beside a primary the race distrusts carries a start reason rather than an escalation reason on `devshard_gateway_attempts_started_total{reason}`, and the two vocabularies do not overlap: `primary_suspicious` for a crown-denied or operator-pinned host, `primary_degraded` for one the outlier detector wanted out of rotation. The second exists because the routing gate that withholds an ejected host is capped, and a fleet failing together stays routable by design — see [capacity.md](./capacity.md).
 
-The first-token deadline is a fixed quadratic in prompt size, `1.7 + 3e-5·T + 5e-10·T²` seconds, with a floor from `engine_first_token_floor_ms` (`engine/escalation.go`, `EscalationPolicy.firstTokenTimeout`). At the default floor of twelve seconds the floor is what binds for ordinary traffic: the quadratic only overtakes it above roughly 117 000 input tokens.
+The first-token deadline is a fixed quadratic in prompt size, `1.7 + 3e-5·T + 5e-10·T²` seconds, with a floor from `engine_first_token_floor_ms` (`engine/escalation.go`, `EscalationPolicy.firstTokenTimeout`). At the default floor of six seconds the floor is what binds for ordinary traffic: the quadratic only overtakes it above roughly 67 000 input tokens.
 
 **Arming is not permission.** `NextEscalation` yields an `ArmedEscalation`, which is a deadline and nothing more. The only producer of an actionable escalation is `Confirm`, which re-derives the trigger *at fire time* and rejects a trigger that has vanished, a stage that has advanced, or a timer that fired early (`engine/escalation.go`, `ArmedEscalation` and `EscalationPolicy.Confirm`). This exists because an attempt's stage moves while its timer runs — a receipt landing just under the receipt timeout is the common case — and escalating on the armed stage would start a needless extra attempt on *every* healthy request. Confirming re-reads state, so the type system enforces it: an unconfirmed `ArmedEscalation` carries a deadline and no permission, and cannot be acted on.
 
@@ -95,14 +95,17 @@ The escalation pick runs on its own goroutine rather than inline in the coordina
 
 ## Deadlines
 
-One re-armed timer carries every deadline. `nextDeadline` takes the earliest of four families — the hard timeout, the escalation, the pick and the stall — and the declaration order of the trigger constants breaks *exact* ties only (`engine/race.go`, the `deadlineTrigger` constants; `engine/deadline.go`, `nextDeadline`):
+One re-armed timer carries every deadline. `nextDeadline` takes the earliest of five families — the hard timeout, the escalation, the missed deadline, the pick and the stall — and the declaration order of the trigger constants breaks *exact* ties only (`engine/race.go`, the `deadlineTrigger` constants; `engine/deadline.go`, `nextDeadline`):
 
 1. **Hard timeout** — the minimum of: the drain deadline once the client has left; 30 minutes of total wait and 20 minutes without content for a non-streaming race; the loser grace after a crowned attempt finishes; and 20 minutes per live attempt.
 2. **Escalation** — the next armed trigger, suppressed while a pick is already running, and once the race is crowned, detached, at its attempt budget — holding as many unfinished attempts as `engine_max_attempts_per_request` allows, or having started as many as its host group has — or once a trusted host's refusal or rejection of the request rules out a retry.
-3. **Pick** — when an unanswered escalation pick stops being worth waiting for; zero while no pick is running.
-4. **Stall** — the earliest `last chunk + inter-chunk stall` over attempts that have produced content and gone quiet.
+3. **Missed deadline** — the earliest receipt or first-token deadline a running attempt still owes: the deadline its escalation arms on, armed whether or not the race may still escalate, and judged once per attempt.
+4. **Pick** — when an unanswered escalation pick stops being worth waiting for; zero while no pick is running.
+5. **Stall** — the earliest `last chunk + inter-chunk stall` over attempts that have produced content and gone quiet.
 
-The tie-break order is itself the policy: a race that must stop gains nothing from spending a nonce, and a stall flag is telemetry either way.
+The tie-break order is itself the policy: a race that must stop gains nothing from spending a nonce, an escalation shares its instant with the deadline it arms on and the rescue goes first, and a stall flag is telemetry either way.
+
+**A missed deadline narrows the host, not the attempt.** When a running attempt passes its receipt or first-token deadline, the race halves its host's window on the spot and leaves the attempt running (`engine/deadline.go`, `raceCoordinator.judgeMissedDeadlines`): its nonce is committed, and cancelling it after the receipt would leave an execution-kind timeout holding the escrow for half an hour instead of an answer. A window judged only when the attempt ends would keep admitting work to a host that takes minutes to start, for all of those minutes. The answer that eventually arrives earns no wider window (see the limiter row under [The three translations](#the-three-translations)). A deadline that passes during proof-of-compute generation is excused: that phase slows every host at once, and narrowing the whole fleet for it would turn the minutes after it into ghost burns. The attempt's finish line names each deadline its host was narrowed for, as `missed_receipt_deadline` and `missed_first_token_deadline`, and `devshard_gateway_participant_missed_deadlines_total{deadline}` counts them per host and model.
 
 **Every select arm that reads race state drains the event queue first.** A buffered event and a fired timer can both be ready, and `select` picks at random, so an arm that reads state without draining acts on state a queued event has already invalidated. Three arms read state a queued event can change: the deadline timer, the pick's answer and the client's departure (`engine/deadline.go`, `engine/pick.go`, `engine/race.go`).
 
@@ -132,11 +135,11 @@ The exception is a 5xx that names a fault in what the gateway sent. A host repor
 
 | Consumer | Rule |
 |---|---|
-| Limiter verdict | Won/Lost → success; throttled and unavailable → overload; an upstream 5xx → upstream fault, which halves the window and leaves the breaker's count alone; transport-class terminals and an empty stream that never finished its nonce → transport fault; burn-empty, error stream, capability refusal, a reply past the gateway's own buffer cap, and an empty stream that did finish its nonce → model outcome, which never moves a host's window. |
+| Limiter verdict | Won/Lost → success, or late success when its host missed the receipt or first-token deadline, which clears the breaker's count without widening the window; throttled and unavailable → overload; an upstream 5xx → upstream fault, which halves the window and leaves the breaker's count alone; transport-class terminals → transport fault; an empty stream → empty answer, which halves the window and, when the stream left its nonce open, also counts towards the breaker; burn-empty, error stream, capability refusal and a reply past the gateway's own buffer cap → model outcome, which never moves a host's window. |
 | Performance sample | One sample per attempt, unless the exemption ladder excuses it. The sample carries participant, model, whether the host was responsive, and the two timings the escalation ladder reads back as quantiles. |
 | Metric labels | Bounded label vocabularies exported by the engine and referenced — not restated — by the metrics layer. |
 
-"An empty stream is what the model produced, not what the host failed to carry, so the host's window must not contract for it" (`engine/outcome.go`, `Terminal.verdict`) — but only once the nonce is closed. A host that said nothing and left the nonce open did not produce an empty answer; it took the work and parked the reserve until the timeout vote, so it answers to the breaker as well as to crown denial (`engine/outcome.go`, `RaceOutcome.Verdict`).
+An empty stream narrows its host whether or not it closed the nonce: a client can render nothing from it, and another host given the same prompt usually can, so the race escalates on it at once and the window halves (`engine/escalation.go`, `EscalationPolicy.triggerFor`; `engine/outcome.go`, `RaceOutcome.Verdict`). A host that said nothing and also left the nonce open took the work and parked the reserve until the timeout vote, so it answers to the breaker as well as to crown denial. A burn-empty stays a model outcome and starts no other attempt: the thinking budget went on reasoning, and another host given the same prompt would spend it the same way.
 
 ### The exemption ladder
 
@@ -188,8 +191,8 @@ Carried in the configuration snapshot (`config.Engine`, `config.Stream`) and bou
 
 | Field | Default | Effect |
 |---|---|---|
-| `engine_receipt_timeout_ms` | 5 000 | Receipt deadline; doubled above 100 000 input tokens. |
-| `engine_first_token_floor_ms` | 12 000 | Lower bound on the first-token curve. Binds below roughly 117 000 input tokens. |
+| `engine_receipt_timeout_ms` | 5 000 | Receipt deadline; doubled above 100 000 input tokens. A host that misses it has its window halved. |
+| `engine_first_token_floor_ms` | 6 000 | Lower bound on the first-token curve. Binds below roughly 67 000 input tokens. A host that misses the first-token deadline has its window halved. |
 | `engine_first_token_ceiling_ms` | 30 000 | Upper bound, whatever the host's own p75 asks for. |
 | `engine_inter_chunk_stall_ms` | 30 000 | Silence after first content before an attempt is flagged stalled. |
 | `engine_loser_grace_ms` | 600 000 | How long losers may keep streaming after the winner finishes. Must be at least the stall window, or losers merely between chunks are killed. |

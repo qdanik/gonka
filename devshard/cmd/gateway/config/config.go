@@ -42,6 +42,7 @@ type Concurrency struct {
 }
 
 type HostInflight struct {
+	Min     int64
 	Initial int64
 	Max     int64
 }

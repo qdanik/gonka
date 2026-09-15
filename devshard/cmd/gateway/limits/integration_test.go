@@ -70,6 +70,9 @@ func TestParticipantConfigFromLimits_MapsFieldsFromDefaults(t *testing.T) {
 	if got.Max != limits.HostInflight.Max {
 		t.Errorf("Max = %d, want %d", got.Max, limits.HostInflight.Max)
 	}
+	if got.Min != limits.HostInflight.Min {
+		t.Errorf("Min = %d, want %d", got.Min, limits.HostInflight.Min)
+	}
 	if got.AfterFailures != limits.HostCutoff.AfterFailures {
 		t.Errorf("AfterFailures = %d, want %d", got.AfterFailures, limits.HostCutoff.AfterFailures)
 	}

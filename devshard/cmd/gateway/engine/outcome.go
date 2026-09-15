@@ -14,7 +14,7 @@ import (
 const (
 	longResponseExemption = 280 * time.Second
 
-	// Below this an empty stream is the model's output; at or above it the host held it past the refusal point.
+	// Below this a burn-empty is the model's output; at or above it the host held it past the refusal point.
 	emptyStreamHeldTooLong = types.DefaultRefusalTimeoutSeconds * time.Second
 )
 
@@ -145,6 +145,9 @@ type AttemptOutcome struct {
 	NonceFinished       bool
 	FailureRateExceeded bool
 
+	ReceiptDeadlineMissed    bool
+	FirstTokenDeadlineMissed bool
+
 	// Capability is a refusal read off the dispatch error, where the SSE error fields stay empty.
 	Capability     CapabilitySignal
 	ContentSource  string
@@ -272,6 +275,10 @@ func (a AttemptOutcome) wonOrLost() bool {
 	return a.Terminal == TerminalWon || a.Terminal == TerminalLost
 }
 
+func (a AttemptOutcome) missedADeadline() bool {
+	return a.ReceiptDeadlineMissed || a.FirstTokenDeadlineMissed
+}
+
 func (a AttemptOutcome) stalledWithinFailureRateBudget() bool {
 	return a.Terminal == TerminalStalled && !a.FailureRateExceeded
 }
@@ -364,11 +371,15 @@ func (o RaceOutcome) Verdict(a AttemptOutcome) (limits.Verdict, bool) {
 	case o.exemptOnBothLadders(a):
 		return limits.ModelOutcome, false
 	case a.Terminal == TerminalEmptyStream && !a.NonceFinished:
-		return limits.TransportFault, true
+		return limits.EmptyAnswerLeftOpen, true
+	case a.Terminal == TerminalEmptyStream:
+		return limits.EmptyAnswer, true
 	case a.emptyStream() && a.elapsed() >= emptyStreamHeldTooLong:
 		return limits.Overload, true
 	case a.stalledWithinFailureRateBudget(), a.wonOrLost() && !o.responsive(a):
 		return limits.ModelOutcome, false
+	case a.wonOrLost() && a.missedADeadline():
+		return limits.LateSuccess, true
 	}
 	return a.Terminal.verdict()
 }

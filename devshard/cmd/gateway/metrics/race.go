@@ -35,6 +35,7 @@ type RaceRecorder struct {
 	attemptsTerminal *prometheus.CounterVec
 	attemptFailures  *prometheus.CounterVec
 	transportErrors  *prometheus.CounterVec
+	missedDeadlines  *prometheus.CounterVec
 	requests         *prometheus.CounterVec
 	hiddenFailures   *prometheus.CounterVec
 	sweeps           *prometheus.CounterVec
@@ -91,6 +92,10 @@ func NewRaceRecorder(telemetry *Metrics, now func() time.Time, staleness func() 
 			Name: "devshard_gateway_participant_transport_errors_total",
 			Help: "Total participant-bound request errors by participant, model, and upstream status.",
 		}, []string{"participant_key", "model", "status"}),
+		missedDeadlines: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "devshard_gateway_participant_missed_deadlines_total",
+			Help: "Total receipt and first-token deadlines a participant missed on a model, each of which narrowed its window.",
+		}, []string{"participant_key", "model", "deadline"}),
 		requests: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "devshard_gateway_requests_total",
 			Help: "Total gateway chat requests by model, user-visible outcome, and bounded reason.",
@@ -148,7 +153,7 @@ func NewRaceRecorder(telemetry *Metrics, now func() time.Time, staleness func() 
 	}
 	recorder.participantFamilies = []partialDeleter{
 		recorder.attemptsStarted, recorder.attemptsTerminal, recorder.attemptFailures, recorder.transportErrors,
-		recorder.timeoutActions, recorder.carryOverflows, recorder.receiptSeconds, recorder.firstContent,
+		recorder.missedDeadlines, recorder.timeoutActions, recorder.carryOverflows, recorder.receiptSeconds, recorder.firstContent,
 		recorder.prefillPerToken, recorder.outputTokens, recorder.totalAttempt, recorder.maxChunkGap, recorder.meanChunkGap,
 	}
 	telemetry.Register(recorder.collectors()...)
@@ -157,7 +162,7 @@ func NewRaceRecorder(telemetry *Metrics, now func() time.Time, staleness func() 
 
 func (r *RaceRecorder) collectors() []prometheus.Collector {
 	return []prometheus.Collector{
-		r.attemptsStarted, r.attemptsTerminal, r.attemptFailures, r.transportErrors, r.requests,
+		r.attemptsStarted, r.attemptsTerminal, r.attemptFailures, r.transportErrors, r.missedDeadlines, r.requests,
 		r.hiddenFailures, r.timeoutActions, r.carryOverflows, r.sweeps,
 		r.receiptSeconds, r.firstContent, r.prefillPerToken, r.outputTokens, r.totalAttempt,
 		r.maxChunkGap, r.meanChunkGap,
@@ -197,6 +202,7 @@ func (r *RaceRecorder) RecordRace(outcome engine.RaceOutcome) {
 				firstFailure = reason
 			}
 		}
+		r.countMissedDeadlines(participant, model, attempt)
 		r.observeAttemptLatency(participant, model, outcome.InputTokens, attempt)
 	}
 	r.recordRequest(model, outcome, firstFailure)
@@ -243,6 +249,15 @@ func transportStatus(attempt engine.AttemptOutcome) (string, bool) {
 		return statusNoCode, true
 	}
 	return "", false
+}
+
+func (r *RaceRecorder) countMissedDeadlines(participant, model string, attempt engine.AttemptOutcome) {
+	if attempt.ReceiptDeadlineMissed {
+		r.missedDeadlines.WithLabelValues(participant, model, engine.EscalationReasonReceipt).Inc()
+	}
+	if attempt.FirstTokenDeadlineMissed {
+		r.missedDeadlines.WithLabelValues(participant, model, engine.EscalationReasonFirstToken).Inc()
+	}
 }
 
 func (r *RaceRecorder) observeAttemptLatency(participant, model string, inputTokens uint64, attempt engine.AttemptOutcome) {

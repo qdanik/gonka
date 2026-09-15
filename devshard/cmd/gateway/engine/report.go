@@ -39,6 +39,7 @@ func (c *raceCoordinator) complete(attempt *liveAttempt, event AttemptEvent) {
 		})
 		return
 	}
+	attempt.recordDeadlines(attempt.outcome)
 	c.traceStep(RaceStep{
 		Kind: RaceStepAttemptFinished, RequestID: c.request.RequestID, EscrowID: c.escrowID,
 		Nonce: attempt.nonce, Participant: attempt.participant,
@@ -87,7 +88,7 @@ func (c *raceCoordinator) unreportedOutcome(attempt *liveAttempt) AttemptOutcome
 	if c.target != nil {
 		hostLabel = c.target.HostLabel(attempt.hostIdx)
 	}
-	return AttemptOutcome{
+	outcome := AttemptOutcome{
 		Nonce:       attempt.nonce,
 		Participant: attempt.participant,
 		HostIdx:     attempt.hostIdx,
@@ -96,6 +97,14 @@ func (c *raceCoordinator) unreportedOutcome(attempt *liveAttempt) AttemptOutcome
 		ReceiptTime: attempt.receiptTime,
 		Terminal:    TerminalUnclassified,
 	}
+	attempt.recordDeadlines(&outcome)
+	return outcome
+}
+
+// recordDeadlines marks the deadlines the host was narrowed for; an excused one charged it nothing.
+func (attempt *liveAttempt) recordDeadlines(outcome *AttemptOutcome) {
+	outcome.ReceiptDeadlineMissed = attempt.receiptDeadline == deadlineMissed
+	outcome.FirstTokenDeadlineMissed = attempt.firstTokenDeadline == deadlineMissed
 }
 
 // An attempt goroutine knows only its own cancellation, not the crown, the silence or the backstop.

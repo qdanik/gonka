@@ -83,8 +83,14 @@ func (c *Config) Validate() error {
 	if c.Limits.AdmissionQueueWaitMS < 0 {
 		complain("admission_queue_wait_ms: %d must be >= 0", c.Limits.AdmissionQueueWaitMS)
 	}
+	if c.Limits.HostInflight.Min < 1 {
+		complain("host_min_inflight: %d must be >= 1", c.Limits.HostInflight.Min)
+	}
 	if c.Limits.HostInflight.Initial < 1 {
 		complain("host_initial_inflight: %d must be >= 1", c.Limits.HostInflight.Initial)
+	}
+	if c.Limits.HostInflight.Initial < c.Limits.HostInflight.Min {
+		complain("host_initial_inflight: %d must be >= host_min_inflight %d", c.Limits.HostInflight.Initial, c.Limits.HostInflight.Min)
 	}
 	if c.Limits.HostInflight.Max < c.Limits.HostInflight.Initial {
 		complain("host_max_inflight: %d must be >= host_initial_inflight %d", c.Limits.HostInflight.Max, c.Limits.HostInflight.Initial)

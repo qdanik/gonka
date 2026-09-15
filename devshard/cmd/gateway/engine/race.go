@@ -57,7 +57,7 @@ type snapshotSource interface{ Snapshot() chain.PhaseSnapshot }
 type raceDeps struct {
 	Picker       picker
 	Targets      targets
-	Limiter      hostLimiter
+	Limiter      hostWindows
 	Perf         hostPerf
 	Crown        crownGate
 	Snapshots    snapshotSource
@@ -83,6 +83,7 @@ const (
 	triggerNone deadlineTrigger = iota
 	triggerHardTimeout
 	triggerEscalation
+	triggerMissedDeadline
 	triggerPick
 	triggerStall
 )
@@ -109,6 +110,9 @@ type liveAttempt struct {
 	backstopped   bool
 	nonceFinished bool
 	inInference   bool
+
+	receiptDeadline    deadlineJudgement
+	firstTokenDeadline deadlineJudgement
 
 	outcome   *AttemptOutcome
 	lifecycle Lifecycle

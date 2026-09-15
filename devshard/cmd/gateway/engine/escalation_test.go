@@ -175,6 +175,13 @@ func TestLadderRuleInIsolation(t *testing.T) {
 			wantStage: StageNone,
 		},
 		{
+			name:         "rule 4: a finished attempt that answered with an empty stream escalates immediately",
+			attempt:      EscalationAttempt{Done: true, NonceFinished: true, EmptyStream: true, SendTime: raceStart},
+			request:      streaming,
+			wantStage:    StageAttemptFailed,
+			wantDeadline: raceStart,
+		},
+		{
 			name:         "rule 5: a failed streaming attempt escalates immediately",
 			attempt:      EscalationAttempt{Done: true, SendTime: raceStart},
 			request:      streaming,
@@ -207,7 +214,7 @@ func TestLadderRuleInIsolation(t *testing.T) {
 			attempt:      receiptedNoToken,
 			request:      streaming,
 			wantStage:    StageFirstToken,
-			wantDeadline: raceStart.Add(13 * time.Second),
+			wantDeadline: raceStart.Add(7 * time.Second),
 		},
 	}
 	for _, testCase := range testCases {
@@ -227,6 +234,81 @@ func TestLadderRuleInIsolation(t *testing.T) {
 			}
 			if !armed.Deadline.Equal(testCase.wantDeadline) {
 				t.Fatalf("deadline = %v, want %v", armed.Deadline, testCase.wantDeadline)
+			}
+		})
+	}
+}
+
+// A host is judged on the same deadline its escalation arms on, whether or not the race may still escalate, and once per stage.
+func TestOwedDeadlineIsTheEscalationDeadlineJudgedOncePerStage(t *testing.T) {
+	policy := EscalationPolicy{ReceiptTimeout: 5 * time.Second, FirstTokenFloor: 6 * time.Second}
+	testCases := []struct {
+		name         string
+		attempt      EscalationAttempt
+		wantStage    EscalationStage
+		wantDeadline time.Time
+	}{
+		{
+			name:      "an undispatched attempt owes nothing",
+			attempt:   EscalationAttempt{},
+			wantStage: StageNone,
+		},
+		{
+			name:      "a finished attempt owes nothing",
+			attempt:   EscalationAttempt{Done: true, SendTime: raceStart},
+			wantStage: StageNone,
+		},
+		{
+			name:         "an attempt without a receipt owes the receipt deadline",
+			attempt:      dispatched(0),
+			wantStage:    StageReceiptTimeout,
+			wantDeadline: raceStart.Add(5 * time.Second),
+		},
+		{
+			name:         "an attempt that already escalated still owes its deadline",
+			attempt:      EscalationAttempt{Escalated: true, SendTime: raceStart},
+			wantStage:    StageReceiptTimeout,
+			wantDeadline: raceStart.Add(5 * time.Second),
+		},
+		{
+			name:      "a judged receipt deadline is not owed again",
+			attempt:   EscalationAttempt{SendTime: raceStart, ReceiptDeadlineJudged: true},
+			wantStage: StageNone,
+		},
+		{
+			name:         "a receipted attempt owes the first-token deadline",
+			attempt:      EscalationAttempt{SendTime: raceStart, ReceiptTime: raceStart.Add(time.Second)},
+			wantStage:    StageFirstToken,
+			wantDeadline: raceStart.Add(7 * time.Second),
+		},
+		{
+			name:         "a receipt that came after its judged deadline still owes the first-token deadline",
+			attempt:      EscalationAttempt{SendTime: raceStart, ReceiptTime: raceStart.Add(time.Second), ReceiptDeadlineJudged: true},
+			wantStage:    StageFirstToken,
+			wantDeadline: raceStart.Add(7 * time.Second),
+		},
+		{
+			name:      "a judged first-token deadline is not owed again",
+			attempt:   EscalationAttempt{SendTime: raceStart, ReceiptTime: raceStart.Add(time.Second), FirstTokenDeadlineJudged: true},
+			wantStage: StageNone,
+		},
+		{
+			name:      "an attempt that produced a token owes nothing",
+			attempt:   EscalationAttempt{SendTime: raceStart, ReceiptTime: raceStart.Add(time.Second), FirstToken: raceStart.Add(2 * time.Second)},
+			wantStage: StageNone,
+		},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			stage, deadline, owed := policy.owedDeadline(&testCase.attempt, streaming)
+			if testCase.wantStage == StageNone {
+				if owed {
+					t.Fatalf("owedDeadline = (%q, %v), want nothing owed", stage, deadline)
+				}
+				return
+			}
+			if !owed || stage != testCase.wantStage || !deadline.Equal(testCase.wantDeadline) {
+				t.Fatalf("owedDeadline = (%q, %v, %t), want (%q, %v, true)", stage, deadline, owed, testCase.wantStage, testCase.wantDeadline)
 			}
 		})
 	}
@@ -457,7 +539,7 @@ func TestShippedDefaultsBoundTheRaceAndItsFirstTokenWait(t *testing.T) {
 	if budget := policy.AttemptBudget(16, false); budget != 2 {
 		t.Fatalf("AttemptBudget over a 16-host group = %d, want 2", budget)
 	}
-	if wait := policy.firstTokenTimeout(3_460); wait != 12*time.Second {
-		t.Fatalf("first-token wait for a median prompt = %v, want the 12s floor", wait)
+	if wait := policy.firstTokenTimeout(3_460); wait != 6*time.Second {
+		t.Fatalf("first-token wait for a median prompt = %v, want the 6s floor", wait)
 	}
 }

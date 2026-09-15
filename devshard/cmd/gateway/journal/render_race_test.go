@@ -5,7 +5,6 @@ import (
 	"time"
 
 	"devshard/cmd/gateway/engine"
-	"devshard/cmd/gateway/internal/logkey"
 )
 
 var renderEpoch = time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC)
@@ -109,6 +108,8 @@ func widestFinishedStep() engine.RaceStep {
 			MaxChunkGap:           1200 * time.Millisecond, MaxChunkGapAt: 310,
 			MeanChunkGap:   21 * time.Millisecond,
 			UpstreamStatus: 502, UpstreamBody: "upstream is down",
+
+			ReceiptDeadlineMissed: true, FirstTokenDeadlineMissed: true,
 		},
 	}
 }
@@ -118,10 +119,24 @@ func TestAFinishLineFitsWhatItReserves(t *testing.T) {
 	t.Parallel()
 	step := widestFinishedStep()
 
-	fields := appendAttemptDeliveryFields(attemptFinishHead(&step), &step.Outcome)
-	fields = append(fields, logkey.PhaseAborted, true)
+	fields := appendAttemptMarks(appendAttemptDeliveryFields(attemptFinishHead(&step), &step.Outcome), &step)
 
 	if len(fields) != attemptFinishFields {
 		t.Fatalf("the widest finish line is %d fields, but %d are reserved", len(fields), attemptFinishFields)
+	}
+}
+
+// A slow host is found in the log by the line of the attempt it was late on.
+func TestAFinishLineNamesOnlyTheDeadlinesItsHostMissed(t *testing.T) {
+	t.Parallel()
+	step := engine.RaceStep{HasOutcome: true, Outcome: engine.AttemptOutcome{FirstTokenDeadlineMissed: true}}
+
+	fields := appendAttemptMarks(nil, &step)
+
+	if got, _ := loggedValue(fields, "missed_first_token_deadline"); got != true {
+		t.Errorf("missed_first_token_deadline = %v, want true", got)
+	}
+	if _, held := loggedValue(fields, "missed_receipt_deadline"); held {
+		t.Error("missed_receipt_deadline reported for a deadline the host met")
 	}
 }

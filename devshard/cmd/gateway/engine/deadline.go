@@ -2,6 +2,8 @@ package engine
 
 import (
 	"time"
+
+	"devshard/cmd/gateway/limits"
 )
 
 // raceTimer is the coordinator's one timer, re-armed to whatever nextDeadline chose.
@@ -19,6 +21,15 @@ type (
 		Trigger    deadlineTrigger
 		Escalation ArmedEscalation
 	}
+)
+
+// deadlineJudgement is what became of a receipt or first-token deadline a running attempt owed; an excused one passed inside a proof-of-compute phase.
+type deadlineJudgement uint8
+
+const (
+	deadlineOwed deadlineJudgement = iota
+	deadlineMissed
+	deadlineExcused
 )
 
 // Pick is when an unanswered pick stops being worth waiting for, and is zero while none is running.
@@ -56,6 +67,7 @@ func nextDeadline(now time.Time, plan deadlinePlan) deadlineArm {
 			arm.Escalation = armed
 		}
 	}
+	consider(plan.latencyDeadline(), triggerMissedDeadline)
 	consider(plan.Pick, triggerPick)
 	consider(plan.stall(), triggerStall)
 	if arm.Trigger != triggerEscalation {
@@ -86,6 +98,16 @@ func (p deadlinePlan) hardTimeout() time.Time {
 			}
 		case !attempt.SendTime.IsZero():
 			consider(attempt.SendTime.Add(p.Policy.hardTimeout()))
+		}
+	}
+	return earliest
+}
+
+func (p deadlinePlan) latencyDeadline() time.Time {
+	var earliest time.Time
+	for index := range p.Attempts {
+		if _, deadline, owed := p.Policy.owedDeadline(&p.Attempts[index], p.Request); owed {
+			earliest = earlierSet(earliest, deadline)
 		}
 	}
 	return earliest
@@ -175,6 +197,8 @@ func (c *raceCoordinator) fire(arm deadlineArm) {
 	switch arm.Trigger {
 	case triggerEscalation:
 		c.escalate(arm.Escalation)
+	case triggerMissedDeadline:
+		c.judgeMissedDeadlines()
 	case triggerPick:
 		c.stopPicking()
 	case triggerStall:
@@ -204,6 +228,36 @@ func (c *raceCoordinator) markStalls() {
 	}
 }
 
+// judgeMissedDeadlines narrows the window of every host past a deadline it owed and leaves its attempt running. See race.md, "Deadlines".
+func (c *raceCoordinator) judgeMissedDeadlines() {
+	now := c.deps.Now()
+	plan := c.plan()
+	judgement := deadlineMissed
+	if pocGenerating(c.deps.Snapshots.Snapshot(), c.deps.Modes) {
+		judgement = deadlineExcused
+	}
+	for index := range plan.Attempts {
+		stage, deadline, owed := c.deps.Policy.owedDeadline(&plan.Attempts[index], plan.Request)
+		if !owed || now.Before(deadline) {
+			continue
+		}
+		attempt := c.attempts[index]
+		attempt.judgeDeadline(stage, judgement)
+		if judgement == deadlineMissed {
+			c.deps.Limiter.OnResult(attempt.participant, c.request.Model, limits.MissedDeadline)
+		}
+	}
+}
+
+func (attempt *liveAttempt) judgeDeadline(stage EscalationStage, judgement deadlineJudgement) {
+	switch stage {
+	case StageReceiptTimeout:
+		attempt.receiptDeadline = judgement
+	case StageFirstToken:
+		attempt.firstTokenDeadline = judgement
+	}
+}
+
 func (c *raceCoordinator) cancelAll() {
 	c.cancelled = true
 	c.stopPicking()
@@ -229,6 +283,7 @@ func (c *raceCoordinator) plan() deadlinePlan {
 			Crowned:       attempt == c.winner,
 			Stalled:       attempt.stalled,
 			NonceFinished: attempt.nonceFinished,
+			EmptyStream:   attempt.outcome != nil && attempt.outcome.Terminal == TerminalEmptyStream,
 			SendTime:      attempt.sendTime,
 			ReceiptTime:   attempt.receiptTime,
 			FirstToken:    attempt.firstToken,
@@ -237,6 +292,9 @@ func (c *raceCoordinator) plan() deadlinePlan {
 			Completed:     attempt.completed,
 
 			FirstContentP75: attempt.observedFirst,
+
+			ReceiptDeadlineJudged:    attempt.receiptDeadline != deadlineOwed,
+			FirstTokenDeadlineJudged: attempt.firstTokenDeadline != deadlineOwed,
 		})
 	}
 	return deadlinePlan{

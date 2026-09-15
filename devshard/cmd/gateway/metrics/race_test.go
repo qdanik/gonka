@@ -58,6 +58,7 @@ func TestAWonRaceEmitsTheWinnerFamiliesWithTheirValues(t *testing.T) {
 		labels{"model": "qwen", "outcome": "success", "reason": "none"}, 1)
 	expectAbsent(t, telemetry, "devshard_gateway_attempt_failures_total")
 	expectAbsent(t, telemetry, "devshard_gateway_user_requests_with_hidden_failure_total")
+	expectAbsent(t, telemetry, "devshard_gateway_participant_missed_deadlines_total")
 
 	expectHistogram(t, telemetry, "devshard_gateway_participant_receipt_seconds",
 		labels{"participant_key": "gonka1winner", "model": "qwen"}, 1, 0.2)
@@ -297,6 +298,25 @@ func TestATimeoutVoteIsCountedWhateverItsAction(t *testing.T) {
 			}, 1)
 		})
 	}
+}
+
+// A deadline counts against the host that missed it, under the deadline's own name, even when the attempt went on to win.
+func TestAMissedDeadlineIsCountedAgainstTheHostThatMissedIt(t *testing.T) {
+	telemetry := New()
+	recorder := newTestRaceRecorder(telemetry)
+	late := winningAttempt()
+	late.ReceiptDeadlineMissed = true
+	late.FirstTokenDeadlineMissed = true
+
+	recorder.RecordRace(engine.RaceOutcome{
+		Model: "qwen", InputTokens: 100, Decision: "primary", WinnerNonce: 11,
+		Succeeded: true, Attempts: []engine.AttemptOutcome{late},
+	})
+
+	expectCounter(t, telemetry, "devshard_gateway_participant_missed_deadlines_total",
+		labels{"participant_key": "gonka1winner", "model": "qwen", "deadline": "receipt_timeout"}, 1)
+	expectCounter(t, telemetry, "devshard_gateway_participant_missed_deadlines_total",
+		labels{"participant_key": "gonka1winner", "model": "qwen", "deadline": "first_token_timeout"}, 1)
 }
 
 func TestAClassifyOverflowIsAttributedToItsHost(t *testing.T) {

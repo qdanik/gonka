@@ -5,13 +5,13 @@ Three limiters, each answering a different question.
 ## What it owns
 
 - **The gateway limiter** (`gateway.go`) — a FIFO admission queue over concurrent requests and in-flight input tokens, per model. Refuses with a typed rejection that names which cap turned the request away, so an operator is not left a wall of identical statuses.
-- **The participant limiter** (`participant.go`) — a per-host AIMD concurrency window with a circuit breaker. It narrows on host-attributable failures and widens on success, and half-opens after a cutoff to admit one real request rather than waiting for a probe.
+- **The participant limiter** (`participant.go`) — a per-host AIMD concurrency window with a circuit breaker. It narrows on host-attributable failures and missed deadlines, widens on answers that arrive in time, and half-opens after a cutoff to admit one real request rather than waiting for a probe.
 - **The capacity model** (`capacity.go`, `weights.go`) — scales the caps by the host weight the chain reports for each model, so a shard that has lost half its hosts admits proportionally less.
 
 ## Boundaries
 
 - **Zero means unlimited**, for both the concurrency cap and the token budget. With `max_concurrent_requests` unset, the effective cap comes from the per-10 000-weight rate instead.
-- **Only host-attributable verdicts move the window.** An empty stream or a model refusal is what the model produced, not what the host failed to carry, and narrowing for it would penalise the wrong party.
+- **Only host-attributable verdicts move the window.** A model refusal or a burn-empty is what the model produced, not what the host failed to carry, and narrowing for it would penalise the wrong party. An empty answer is the host's: it halves the window, and one that left its nonce open also counts towards the cutoff.
 - **A corrupted capacity scale fails closed.** A NaN must not be read as unlimited capacity.
 
 ## The gateway limiter's queue
@@ -40,6 +40,8 @@ The input-token cap only ever takes the second path.
 ## The AIMD window
 
 - **Growth is judged on peak in-flight since the last adjustment, not the live count.** The engine releases an attempt's slot in a `defer` and reports its verdict afterwards, so a live read would see the slot already given back and refuse to grow a window that was genuinely saturated. The peak is set when the slot is taken and nothing can undo it, which makes the decision independent of which of the two runs first.
+- **A missed deadline halves the window without touching the breaker, and the late answer does not widen it.** `MissedDeadline` arrives while its attempt is still running, so the fault count waits for that attempt's own verdict. `LateSuccess` clears the count and lifts a half-open probe like `Success` but skips the growth, or the next answer would undo the halving.
+- **A halving stops at `Min`, and never below one.** A host a run of bad answers narrowed still takes enough work to earn its window back; a half-open cutoff still admits exactly one probe.
 - **A half-open probe gets exactly one try.** Any fault while half-open reopens the cutoff immediately rather than after `AfterFailures` more.
 - **A successful probe clears the trip itself**, not just the half-open flag, or the next `Acquire` would re-flag half-open forever.
 - **Backoff is `base * 1.6^count` plus up to 20% jitter** (gRPC connection-backoff's `JITTER`), so reopened cutoffs across many hosts do not retry in lockstep. The count stops rising once the backoff saturates at `MaxOpen`, so `1.6^count` cannot overflow the duration.

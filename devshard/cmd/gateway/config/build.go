@@ -113,6 +113,7 @@ func Build(values env.Values, overrides Overrides) (*Config, error) {
 	if overrides.ParticipantAllowlist != nil {
 		configuration.Scheduler.ParticipantAllowlist = slices.Clone(*overrides.ParticipantAllowlist)
 	}
+	overrideIfSet(&configuration.Limits.HostInflight.Min, overrides.HostMinInflight)
 	overrideIfSet(&configuration.Limits.HostInflight.Initial, overrides.HostInitialInflight)
 	overrideIfSet(&configuration.Limits.HostInflight.Max, overrides.HostMaxInflight)
 	overrideIfSet(&configuration.Limits.HostCutoff.AfterFailures, overrides.HostCutoffAfterFailures)

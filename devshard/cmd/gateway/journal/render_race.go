@@ -7,8 +7,8 @@ import (
 	"devshard/cmd/gateway/internal/logkey"
 )
 
-// attemptFinishFields is the widest a finish line gets: the fixed head, every delivery field, and the phase mark.
-const attemptFinishFields = 42
+// attemptFinishFields is the widest a finish line gets: the fixed head, every delivery field, and every mark.
+const attemptFinishFields = 46
 
 func renderRaceStep(lines logSink, step *engine.RaceStep) {
 	switch step.Kind {
@@ -49,11 +49,21 @@ func renderAttemptFinished(lines logSink, step *engine.RaceStep) {
 			logkey.Host, logkey.ShortHost(step.Participant), logkey.NonceFinished, step.NonceFinished)
 		return
 	}
-	fields := appendAttemptDeliveryFields(attemptFinishHead(step), &step.Outcome)
+	fields := appendAttemptMarks(appendAttemptDeliveryFields(attemptFinishHead(step), &step.Outcome), step)
+	lines.Info("attempt finished", fields...)
+}
+
+func appendAttemptMarks(fields []any, step *engine.RaceStep) []any {
 	if step.PhaseAborted {
 		fields = append(fields, logkey.PhaseAborted, true)
 	}
-	lines.Info("attempt finished", fields...)
+	if step.Outcome.ReceiptDeadlineMissed {
+		fields = append(fields, logkey.MissedReceiptDeadline, true)
+	}
+	if step.Outcome.FirstTokenDeadlineMissed {
+		fields = append(fields, logkey.MissedFirstTokenDeadline, true)
+	}
+	return fields
 }
 
 // attemptFinishHead is what every finished attempt reports, in a line reserved for the widest one it can grow into.

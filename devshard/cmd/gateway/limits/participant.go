@@ -17,10 +17,15 @@ const (
 	UpstreamFault
 	TransportFault
 	ModelOutcome
-) // Overload=429/503; UpstreamFault=the host answered 5xx; ModelOutcome=model-caused (empty stream etc.), never a host signal
+	MissedDeadline
+	LateSuccess
+	EmptyAnswer
+	EmptyAnswerLeftOpen
+) // Overload=429/503; UpstreamFault=the host answered 5xx; ModelOutcome=model-caused (burn-empty, error stream etc.), never a host signal; MissedDeadline=a running attempt passed its receipt or first-token deadline; LateSuccess=an answer from an attempt that missed one; EmptyAnswer=a stream with no content that closed its nonce; EmptyAnswerLeftOpen=one that left its nonce open
 
-// ParticipantConfig's IdleEviction of zero keeps every pair for the life of the process.
+// ParticipantConfig's IdleEviction of zero keeps every pair for the life of the process; a Min below one floors halvings at one.
 type ParticipantConfig struct {
+	Min           int64
 	Initial       int64
 	Max           int64
 	AfterFailures int64
@@ -263,6 +268,10 @@ func (l *ParticipantLimiter) forgetIdleLocked(now time.Time) {
 	}
 }
 
+func (l *ParticipantLimiter) halved(window float64) float64 {
+	return max(window*0.5, float64(max(l.cfg.Min, 1)))
+}
+
 func cutoffReason(halfOpen bool) string {
 	if halfOpen {
 		return cutoffReasonProbeFailed
@@ -283,9 +292,9 @@ func (l *ParticipantLimiter) OnResult(participant, model string, verdict Verdict
 	state.lastUsed = now
 
 	switch verdict {
-	case Success:
+	case Success, LateSuccess:
 		// Peak since the last adjustment, not the live count: the engine frees the slot before reporting.
-		if float64(state.peakInflight) >= state.window/2 {
+		if verdict == Success && float64(state.peakInflight) >= state.window/2 {
 			state.peakInflight = state.inflight
 			state.window = min(state.window+1, float64(l.cfg.Max))
 		}
@@ -301,12 +310,15 @@ func (l *ParticipantLimiter) OnResult(participant, model string, verdict Verdict
 			}
 		}
 	case Overload:
-		state.window = max(state.window*0.5, 1)
+		state.window = l.halved(state.window)
 		state.consecutiveTransportFail = 0
-	case UpstreamFault:
-		// The breaker counts faults the host never answered, so a 5xx narrows the window without clearing its count.
-		state.window = max(state.window*0.5, 1)
-	case TransportFault:
+	case UpstreamFault, MissedDeadline, EmptyAnswer:
+		// The breaker counts faults the host never answered, so a 5xx or an empty answer narrows the window without clearing its count; a missed deadline's attempt is still running and is judged again when it ends.
+		state.window = l.halved(state.window)
+	case TransportFault, EmptyAnswerLeftOpen:
+		if verdict == EmptyAnswerLeftOpen {
+			state.window = l.halved(state.window)
+		}
 		state.consecutiveTransportFail++
 		// A half-open probe gets one try: any fault reopens immediately, not after AfterFailures-many.
 		if state.consecutiveTransportFail >= int(l.cfg.AfterFailures) || state.halfOpen {

@@ -37,6 +37,7 @@ func Defaults() Config {
 			AdmissionQueueWaitMS:   300_000,
 			AdmissionQueuePerSlot:  4,
 			HostInflight: HostInflight{
+				Min:     4,
 				Initial: 64,
 				Max:     256,
 			},
@@ -87,7 +88,7 @@ func Defaults() Config {
 		},
 		Engine: Engine{
 			ReceiptTimeoutMS:      5_000,
-			FirstTokenFloorMS:     12_000,
+			FirstTokenFloorMS:     6_000,
 			FirstTokenCeilingMS:   30_000,
 			InterChunkStallMS:     30_000,
 			LoserGraceMS:          600_000,

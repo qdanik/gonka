@@ -45,6 +45,12 @@ const (
 	MaxAttemptsPerRequest = "max_attempts_per_request"
 )
 
+// Which deadlines an attempt's host was narrowed for.
+const (
+	MissedReceiptDeadline    = "missed_receipt_deadline"
+	MissedFirstTokenDeadline = "missed_first_token_deadline"
+)
+
 const hostLabelLength = 8
 
 func ShortHost(address string) string {

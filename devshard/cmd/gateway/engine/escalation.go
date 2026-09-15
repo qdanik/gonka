@@ -89,12 +89,16 @@ type EscalationAttempt struct {
 	Crowned         bool
 	Stalled         bool
 	NonceFinished   bool
+	EmptyStream     bool
 	SendTime        time.Time
 	ReceiptTime     time.Time
 	FirstToken      time.Time
 	FirstContent    time.Time
 	LastChunk       time.Time
 	Completed       time.Time
+
+	ReceiptDeadlineJudged    bool
+	FirstTokenDeadlineJudged bool
 }
 
 // StartPlan is how a race begins; ImmediateAttempts counts the primary.
@@ -183,24 +187,57 @@ func (p EscalationPolicy) triggerFor(attempt *EscalationAttempt, request Escalat
 		return ArmedEscalation{}, false
 	case attempt.Suspicious:
 		return ArmedEscalation{Stage: StageSuspicious, Deadline: now}, true
-	case attempt.Done && attempt.NonceFinished:
+	case attempt.answered():
 		return ArmedEscalation{}, false
 	case attempt.Done:
 		return ArmedEscalation{Stage: StageAttemptFailed, Deadline: now}, true
 	case attempt.SendTime.IsZero():
 		return ArmedEscalation{}, false
 	case attempt.ReceiptTime.IsZero():
-		deadline := attempt.SendTime.Add(p.receiptTimeout(request.InputTokens))
-		return ArmedEscalation{Stage: StageReceiptTimeout, Deadline: deadline}, true
+		return ArmedEscalation{Stage: StageReceiptTimeout, Deadline: p.receiptDeadline(attempt, request)}, true
 	case !attempt.FirstToken.IsZero():
 		return ArmedEscalation{}, false
 	}
-	// Measured from dispatch, but the host owes a first token, not the time its receipt took.
+	return ArmedEscalation{Stage: StageFirstToken, Deadline: p.firstTokenDeadline(attempt, request)}, true
+}
+
+// answered reports an attempt that finished its nonce with something a client can render; an empty stream closes its nonce and still leaves nothing.
+func (attempt *EscalationAttempt) answered() bool {
+	return attempt.Done && attempt.NonceFinished && !attempt.EmptyStream
+}
+
+// owedDeadline is the deadline a running attempt's host is judged on once, the one its escalation arms on, whether or not the race may still escalate. See race.md, "Deadlines".
+func (p EscalationPolicy) owedDeadline(attempt *EscalationAttempt, request EscalationRequest) (EscalationStage, time.Time, bool) {
+	switch {
+	case attempt.owesNoDeadline():
+		return StageNone, time.Time{}, false
+	case attempt.ReceiptTime.IsZero():
+		return StageReceiptTimeout, p.receiptDeadline(attempt, request), true
+	}
+	return StageFirstToken, p.firstTokenDeadline(attempt, request), true
+}
+
+func (attempt *EscalationAttempt) owesNoDeadline() bool {
+	if attempt.Done || attempt.SendTime.IsZero() {
+		return true
+	}
+	if attempt.ReceiptTime.IsZero() {
+		return attempt.ReceiptDeadlineJudged
+	}
+	return !attempt.FirstToken.IsZero() || attempt.FirstTokenDeadlineJudged
+}
+
+func (p EscalationPolicy) receiptDeadline(attempt *EscalationAttempt, request EscalationRequest) time.Time {
+	return attempt.SendTime.Add(p.receiptTimeout(request.InputTokens))
+}
+
+// firstTokenDeadline is measured from dispatch, but the host owes a first token, not the time its receipt took.
+func (p EscalationPolicy) firstTokenDeadline(attempt *EscalationAttempt, request EscalationRequest) time.Time {
 	deadline := attempt.SendTime.Add(p.firstTokenBudget(request.InputTokens, attempt.FirstContentP75))
 	if graceFromReceipt := attempt.ReceiptTime.Add(p.FirstTokenFloor); graceFromReceipt.After(deadline) {
-		deadline = graceFromReceipt
+		return graceFromReceipt
 	}
-	return ArmedEscalation{Stage: StageFirstToken, Deadline: deadline}, true
+	return deadline
 }
 
 func (p EscalationPolicy) receiptTimeout(inputTokens uint64) time.Duration {

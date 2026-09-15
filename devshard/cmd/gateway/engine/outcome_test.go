@@ -129,8 +129,20 @@ func TestVerdictTable(t *testing.T) {
 	heldBurnEmpty := failedAttempt(TerminalBurnEmpty)
 	heldBurnEmpty.Completed = testEpoch.Add(15 * time.Minute)
 
-	briefEmpty := finishedEmpty
-	briefEmpty.Completed = testEpoch.Add(emptyStreamHeldTooLong - time.Millisecond)
+	briefBurnEmpty := failedAttempt(TerminalBurnEmpty)
+	briefBurnEmpty.Completed = testEpoch.Add(emptyStreamHeldTooLong - time.Millisecond)
+
+	// The window already halved when the deadline passed; widening it for the answer would undo that.
+	lateWinner := cleanAttempt()
+	lateWinner.FirstTokenDeadlineMissed = true
+
+	lateLoser := cleanAttempt()
+	lateLoser.Terminal = TerminalLost
+	lateLoser.Nonce = 8
+	lateLoser.ReceiptDeadlineMissed = true
+
+	lateThrottled := failedAttempt(TerminalThrottled)
+	lateThrottled.ReceiptDeadlineMissed = true
 
 	tests := []struct {
 		name         string
@@ -148,6 +160,9 @@ func TestVerdictTable(t *testing.T) {
 			attempt.Nonce = 8
 			return attempt
 		}(), limits.Success, true, 5, false},
+		{"clean finish after missing the first-token deadline", race(lateWinner), lateWinner, limits.LateSuccess, true, 4, false},
+		{"clean finish by a loser after missing the receipt deadline", race(cleanAttempt()), lateLoser, limits.LateSuccess, true, 4, false},
+		{"http 429 after missing the receipt deadline", race(cleanAttempt()), lateThrottled, limits.Overload, true, 2, false},
 		{"http 429", race(cleanAttempt()), failedAttempt(TerminalThrottled), limits.Overload, true, 2, false},
 		{"http 503", race(cleanAttempt()), failedAttempt(TerminalUnavailable), limits.Overload, true, 2, false},
 		{"http 404 on the inference path", race(cleanAttempt()), failedAttempt(TerminalNotFound), limits.TransportFault, true, 4, true},
@@ -158,18 +173,18 @@ func TestVerdictTable(t *testing.T) {
 		{"unexpected EOF", race(cleanAttempt()), failedAttempt(TerminalUnexpectedEOF), limits.TransportFault, true, 4, true},
 		{"truncated SSE stream", race(cleanAttempt()), failedAttempt(TerminalStreamTruncated), limits.TransportFault, true, 4, true},
 		{"failure on a non-inference path", race(cleanAttempt()), failedAttempt(TerminalOffPath), limits.ModelOutcome, false, 4, false},
-		{"empty stream that never finished its nonce", race(failedAttempt(TerminalEmptyStream)), failedAttempt(TerminalEmptyStream), limits.TransportFault, true, 4, true},
-		{"empty stream that finished its nonce", race(finishedEmpty), finishedEmpty, limits.ModelOutcome, true, 4, false},
+		{"empty stream that never finished its nonce", race(failedAttempt(TerminalEmptyStream)), failedAttempt(TerminalEmptyStream), limits.EmptyAnswerLeftOpen, true, 2, true},
+		{"empty stream that finished its nonce", race(finishedEmpty), finishedEmpty, limits.EmptyAnswer, true, 2, false},
 		{"empty stream with completion tokens burned", race(cleanAttempt()), failedAttempt(TerminalBurnEmpty), limits.ModelOutcome, true, 4, false},
 		{"error event inside the SSE stream", race(cleanAttempt()), failedAttempt(TerminalErrorStream), limits.ModelOutcome, true, 4, false},
 		{"capability refusal another host can serve", race(cleanAttempt()), failedAttempt(TerminalCapabilityRefused), limits.ModelOutcome, true, 4, false},
 		{"winner stalled after content, failure rate exceeded", race(stalledOverThreshold), stalledOverThreshold, limits.TransportFault, true, 4, true},
 		{"winner stalled after content, failure rate not exceeded", race(stalledUnderThreshold), stalledUnderThreshold, limits.ModelOutcome, false, 4, false},
 		{"content produced, past the exemption, nonce unfinished", race(longResponse), longResponse, limits.ModelOutcome, false, 4, false},
-		{"empty stream that held the request past the refusal point without finishing its nonce", race(heldEmpty), heldEmpty, limits.TransportFault, true, 4, true},
-		{"empty stream that finished its nonce and held the request past the refusal point", race(heldFinishedEmpty), heldFinishedEmpty, limits.Overload, true, 2, false},
+		{"empty stream that held the request past the refusal point without finishing its nonce", race(heldEmpty), heldEmpty, limits.EmptyAnswerLeftOpen, true, 2, true},
+		{"empty stream that finished its nonce and held the request past the refusal point", race(heldFinishedEmpty), heldFinishedEmpty, limits.EmptyAnswer, true, 2, false},
 		{"empty stream that burned tokens and held the request", race(heldBurnEmpty), heldBurnEmpty, limits.Overload, true, 2, false},
-		{"empty stream that finished its nonce one millisecond inside the refusal point", race(briefEmpty), briefEmpty, limits.ModelOutcome, true, 4, false},
+		{"empty stream that burned tokens one millisecond inside the refusal point", race(briefBurnEmpty), briefBurnEmpty, limits.ModelOutcome, true, 4, false},
 		{"empty stream that held the request while the PoC bypass is active", func() RaceOutcome {
 			outcome := race(heldEmpty)
 			outcome.PoCBypassActive = true
@@ -380,11 +395,11 @@ func TestEmptyStreamWithAnUnfinishedNonceDeniesCrowningAndOpensTheCutoff(t *test
 	outcome := race(attempt)
 
 	verdict, recorded := outcome.Verdict(attempt)
-	if verdict != limits.TransportFault || !recorded {
-		t.Fatalf("Verdict() = (%v, %v), want (TransportFault, true)", verdict, recorded)
+	if verdict != limits.EmptyAnswerLeftOpen || !recorded {
+		t.Fatalf("Verdict() = (%v, %v), want (EmptyAnswerLeftOpen, true)", verdict, recorded)
 	}
-	if window := observedWindow(verdict, recorded); window != 4 {
-		t.Fatalf("window after an empty stream = %d, want 4 (untouched)", window)
+	if window := observedWindow(verdict, recorded); window != 2 {
+		t.Fatalf("window after an empty stream = %d, want 2 (halved)", window)
 	}
 	if !observedCutoffOpen(verdict, recorded) {
 		t.Fatal("cutoff after an empty stream = closed, want open")
