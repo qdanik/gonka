@@ -140,6 +140,13 @@ type recordingObserver struct {
 	ghostNonces    []uint64
 	burnRequestIDs []string
 	excluded       []string
+	forced         []forcedSend
+}
+
+// forcedSend is one anti-burn rung firing, as the observer saw it.
+type forcedSend struct {
+	participant string
+	burnsInARow int64
 }
 
 func (o *recordingObserver) GhostBurned(_ string, burned Burn) {
@@ -202,6 +209,18 @@ func (o *recordingObserver) ExcludedHostServed(_ string, participant string) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	o.excluded = append(o.excluded, participant)
+}
+
+func (o *recordingObserver) ForcedSend(_ string, participant string, burnsInARow int64) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.forced = append(o.forced, forcedSend{participant: participant, burnsInARow: burnsInARow})
+}
+
+func (o *recordingObserver) forcedSends() []forcedSend {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return append([]forcedSend(nil), o.forced...)
 }
 
 func (o *recordingObserver) excludedServes() []string {
@@ -280,20 +299,22 @@ func (f *fakeSnapshots) fetches() int {
 }
 
 type harnessConfig struct {
-	slots           []string
-	pocRequired     func(string) bool
-	throttled       func(string) bool
-	ejected         func(string) bool
-	stateBlocked    func(string) bool
-	afterDecide     func(HostBinding)
-	failWith        error
-	failAfterDecide error
-	swallowCommit   bool
-	refused         []string
-	gate            chan struct{}
-	submitBuffer    int
-	holdStart       bool
-	escrowHold      func() (func(), bool)
+	slots               []string
+	pocRequired         func(string) bool
+	windowFull          func(string) bool
+	cutOff              func(string) bool
+	maxConsecutiveBurns int64
+	ejected             func(string) bool
+	stateBlocked        func(string) bool
+	afterDecide         func(HostBinding)
+	failWith            error
+	failAfterDecide     error
+	swallowCommit       bool
+	refused             []string
+	gate                chan struct{}
+	submitBuffer        int
+	holdStart           bool
+	escrowHold          func() (func(), bool)
 }
 
 type harness struct {
@@ -304,6 +325,7 @@ type harness struct {
 	snapshots  *fakeSnapshots
 	limiter    *fakeLimiter
 	exhausted  *atomic.Pointer[string]
+	burnLimit  *atomic.Int64
 }
 
 func newHarness(t *testing.T, cfg harnessConfig) *harness {
@@ -328,14 +350,22 @@ func newHarness(t *testing.T, cfg harnessConfig) *harness {
 	}
 
 	var exhausted atomic.Pointer[string]
+	burnLimit := &atomic.Int64{}
+	burnLimit.Store(cfg.maxConsecutiveBurns)
 
 	predicates := func(snapshot chain.PhaseSnapshot) availability {
 		return availability{
 			pocRequired: func(participant string) bool {
 				return snapshot.RequestsBlocked || (cfg.pocRequired != nil && cfg.pocRequired(participant))
 			},
-			throttled: func(participant string) bool {
-				return cfg.throttled != nil && cfg.throttled(participant)
+			congested: func(participant string) blockReason {
+				switch {
+				case cfg.cutOff != nil && cfg.cutOff(participant):
+					return blockCutOff
+				case cfg.windowFull != nil && cfg.windowFull(participant):
+					return blockWindowFull
+				}
+				return blockNone
 			},
 			ejected: func(participant string) bool {
 				return cfg.ejected != nil && cfg.ejected(participant)
@@ -351,16 +381,20 @@ func newHarness(t *testing.T, cfg harnessConfig) *harness {
 		session:    session,
 		snapshots:  snapshots,
 		predicates: predicates,
-		acquireSlot: func(participant string, cost limits.TokenCost) (func(), bool) {
+		acquireSlot: func(participant string, cost limits.TokenCost, overFullWindow bool) (func(), limits.Admission) {
+			if overFullWindow {
+				return limiter.Overdraft(participant, modelA, cost)
+			}
 			return limiter.Acquire(participant, modelA, cost)
 		},
-		observer:     observer,
-		now:          clock.Now,
-		matchWait:    matchWaitWindow,
-		newTimer:     clock.newTimer,
-		submitBuffer: cfg.submitBuffer,
-		onExhausted:  func(escrowID, reason string) { exhausted.Store(&escrowID) },
-		holdEscrow:   cfg.escrowHold,
+		observer:            observer,
+		now:                 clock.Now,
+		matchWait:           matchWaitWindow,
+		maxConsecutiveBurns: burnLimit.Load,
+		newTimer:            clock.newTimer,
+		submitBuffer:        cfg.submitBuffer,
+		onExhausted:         func(escrowID, reason string) { exhausted.Store(&escrowID) },
+		holdEscrow:          cfg.escrowHold,
 	})
 	t.Cleanup(dispatcher.stop)
 	if !cfg.holdStart {
@@ -374,6 +408,7 @@ func newHarness(t *testing.T, cfg harnessConfig) *harness {
 		exhausted:  &exhausted,
 		snapshots:  snapshots,
 		limiter:    limiter,
+		burnLimit:  burnLimit,
 	}
 }
 
@@ -393,7 +428,12 @@ func (h *harness) submit(t *testing.T, enqueued time.Time, excluded ...string) *
 
 func (h *harness) submitAs(t *testing.T, requestID string, enqueued time.Time, excluded ...string) *waiter {
 	t.Helper()
-	queued := newWaiter(RequestProfile{RequestID: requestID, Model: modelA, Exclude: excluded, Params: "payload"}, enqueued)
+	return h.submitCosting(t, RequestProfile{RequestID: requestID, Model: modelA, Exclude: excluded, Params: "payload"}, enqueued)
+}
+
+func (h *harness) submitCosting(t *testing.T, profile RequestProfile, enqueued time.Time) *waiter {
+	t.Helper()
+	queued := newWaiter(profile, enqueued)
 	if outcome := h.dispatcher.submitWaiter(queued); outcome != submitAccepted {
 		t.Fatalf("submitWaiter on a running dispatcher = %v, want submitAccepted", outcome)
 	}
@@ -593,7 +633,7 @@ func TestDispatcherFreezesAvailabilityWithinADrain(t *testing.T) {
 		calls++
 		return calls%2 == 1
 	}
-	test := newHarness(t, harnessConfig{throttled: flipping})
+	test := newHarness(t, harnessConfig{windowFull: flipping})
 
 	queued := test.submit(t, test.clock.Now().Add(-2*matchWaitWindow))
 
@@ -735,8 +775,8 @@ func TestDispatcherGhostsOnceWhenAdmissionRefusesEveryHost(t *testing.T) {
 	if len(commits) != 1 || !commits[0].ghost {
 		t.Fatalf("commits = %+v, want exactly one ghost for the nonce bound when admission refused", commits)
 	}
-	if burns := test.observer.burns(); len(burns) != 1 || burns[0] != ghostThrottled.reason() {
-		t.Fatalf("ghost burns = %v, want exactly one %q", burns, ghostThrottled.reason())
+	if burns := test.observer.burns(); len(burns) != 1 || burns[0] != ghostWindowFull.reason() {
+		t.Fatalf("ghost burns = %v, want exactly one %q", burns, ghostWindowFull.reason())
 	}
 	// The burn leaves an inference record on chain that stays started forever, so the observer has to
 	// name the nonce: nothing downstream can tell it apart from work still running without the number.
@@ -962,7 +1002,7 @@ func TestFreezeLeavesAnOmittedOptionalPredicateMissing(t *testing.T) {
 	t.Parallel()
 	frozen := freeze(availability{
 		pocRequired: always(false),
-		throttled:   always(false),
+		congested:   windowFullWhen(always(false)),
 		ejected:     always(false),
 	}, 1)
 

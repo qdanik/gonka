@@ -46,7 +46,7 @@ func TestAllowlistBurnNamesItself(t *testing.T) {
 	blocked := availability{
 		notAllowed:  func(string) bool { return true },
 		pocRequired: func(string) bool { return true },
-		throttled:   func(string) bool { return true },
+		congested:   windowFullWhen(always(true)),
 		ejected:     func(string) bool { return true },
 	}
 
@@ -62,14 +62,14 @@ func TestAllowlistBurnNamesItself(t *testing.T) {
 
 func TestAllowlistLetsTheOtherRungsSpeakForAnAdmittedHost(t *testing.T) {
 	t.Parallel()
-	throttled := availability{
+	windowFull := availability{
 		notAllowed:  func(string) bool { return false },
 		pocRequired: func(string) bool { return false },
-		throttled:   func(string) bool { return true },
+		congested:   windowFullWhen(always(true)),
 		ejected:     func(string) bool { return false },
 	}
 
-	if reason := throttled.participantBlocked("gonka1scskt"); reason != blockThrottled {
-		t.Errorf("reason = %v, want blockThrottled", reason)
+	if reason := windowFull.participantBlocked("gonka1scskt"); reason != blockWindowFull {
+		t.Errorf("reason = %v, want blockWindowFull", reason)
 	}
 }

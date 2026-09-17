@@ -169,13 +169,13 @@ func TestTheLedgerReceivesFactsInTheOrderTheyWereRecorded(t *testing.T) {
 	events := newJournal(t, Settings{Lines: &logcapture.Recorder{}, Ledger: ledger})
 
 	events.RecordRace(engine.RaceOutcome{RequestID: "request-1"})
-	events.GhostBurned("escrow-1", scheduler.Burn{Nonce: 5, Reason: "participant_throttled_no_send"})
+	events.GhostBurned("escrow-1", scheduler.Burn{Nonce: 5, Reason: "participant_window_full_no_send"})
 	events.RecordTimeout(engine.TimeoutEvent{EscrowID: "escrow-1", Nonce: 4, Action: engine.TimeoutActionCompleted})
 	events.Flush()
 
 	require.Equal(t, []string{
 		"race request-1",
-		"ghost escrow-1 5 participant_throttled_no_send",
+		"ghost escrow-1 5 participant_window_full_no_send",
 		"timeout escrow-1 4 completed",
 	}, ledger.arrived())
 }
@@ -328,7 +328,7 @@ func TestEveryKindHasANameAndTheLaneTheSpecAssigns(t *testing.T) {
 		KindRaceReported: true, KindTimeoutVote: true, KindNonceBurned: true, KindBurnBudgetExhausted: true,
 		KindDiffComposed: true, KindWarmupProbe: true, KindNonceStranded: true, KindHostDiverged: true,
 		KindReplyNotCached: true, KindRequestFinished: true, KindHostTransition: true, KindExcludedHostServed: true,
-		KindEscrowTransition: true, KindChainTransition: true,
+		KindForcedSend: true, KindEscrowTransition: true, KindChainTransition: true,
 	}
 	for kind := KindRaceReported; kind < kindCount; kind++ {
 		require.NotEqual(t, "unknown", kind.String(), "kind %d has no name", kind)

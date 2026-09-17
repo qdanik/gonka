@@ -201,6 +201,39 @@ func TestForcedStreamingIsOnByDefaultAndTurnedOffWithoutARedeploy(t *testing.T) 
 	}
 }
 
+// The rung trades burned nonces for latency, and which side of that trade a fleet wants is only visible
+// under load, so the run length has to be reachable while the gateway runs.
+func TestTheBurnRunIsReachableWithoutARedeploy(t *testing.T) {
+	tests := []struct {
+		name      string
+		values    env.Values
+		overrides Overrides
+		want      int64
+	}{
+		{name: "nothing configured", want: 6},
+		{name: "set by env", values: env.Values{MaxConsecutiveBurns: int64Pointer(3)}, want: 3},
+		{name: "set at runtime", overrides: Overrides{MaxConsecutiveBurns: int64Pointer(3)}, want: 3},
+		{
+			name:      "runtime wins over env",
+			values:    env.Values{MaxConsecutiveBurns: int64Pointer(3)},
+			overrides: Overrides{MaxConsecutiveBurns: int64Pointer(12)},
+			want:      12,
+		},
+		{name: "turned off at runtime", overrides: Overrides{MaxConsecutiveBurns: int64Pointer(0)}, want: 0},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			configuration, err := Build(testCase.values, testCase.overrides)
+			if err != nil {
+				t.Fatalf("Build(): %v", err)
+			}
+			if got := configuration.Scheduler.MaxConsecutiveBurns; got != testCase.want {
+				t.Errorf("scheduler_max_consecutive_burns = %d, want %d", got, testCase.want)
+			}
+		})
+	}
+}
+
 // The ejection detector decides which hosts a model may route to, so its thresholds have to be
 // reachable while the gateway runs: a threshold that needs a rebuild cannot be trialled against load.
 func TestEjectionThresholdsAreReachableWithoutARedeploy(t *testing.T) {

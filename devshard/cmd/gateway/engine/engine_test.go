@@ -473,7 +473,7 @@ func TestRecordWidensEachWindowByWhatItsOwnDimensionCarried(t *testing.T) {
 		Input:  probeStartingWindow / 2,
 		Output: probeStartingWindow / 2,
 	})
-	if !admitted {
+	if admitted != limits.AdmissionOpen {
 		t.Fatal("the limiter refused the attempt that fills half the window, which is the peak a healthy answer grows from")
 	}
 	outcome := race(cleanAttempt())

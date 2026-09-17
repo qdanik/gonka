@@ -24,10 +24,12 @@ const escrowB = "escrow-b"
 type fakeLimiter struct {
 	mu          sync.Mutex
 	unavailable map[string]bool
+	cutOff      map[string]bool
 	refused     map[string]bool
 	window      int
 	inflight    map[string]int
 	admitted    int
+	forced      int
 	models      []string
 	charged     []limits.TokenCost
 }
@@ -35,28 +37,52 @@ type fakeLimiter struct {
 func newFakeLimiter() *fakeLimiter {
 	return &fakeLimiter{
 		unavailable: map[string]bool{},
+		cutOff:      map[string]bool{},
 		refused:     map[string]bool{},
 		inflight:    map[string]int{},
 	}
 }
 
-func (f *fakeLimiter) Available(participant, model string) bool {
+func (f *fakeLimiter) Admits(participant, model string) limits.Admission {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.models = append(f.models, model)
-	return !f.unavailable[participant] && f.hasRoomLocked(participant)
+	switch {
+	case f.cutOff[participant]:
+		return limits.AdmissionCutOff
+	case f.unavailable[participant] || !f.hasRoomLocked(participant):
+		return limits.AdmissionWindowFull
+	}
+	return limits.AdmissionOpen
 }
 
-func (f *fakeLimiter) Acquire(participant, model string, cost limits.TokenCost) (func(), bool) {
+func (f *fakeLimiter) Acquire(participant, model string, cost limits.TokenCost) (func(), limits.Admission) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.charged = append(f.charged, cost)
+	if f.cutOff[participant] {
+		return nil, limits.AdmissionCutOff
+	}
 	if f.refused[participant] || !f.hasRoomLocked(participant) {
-		return nil, false
+		return nil, limits.AdmissionWindowFull
 	}
 	f.inflight[participant]++
 	f.admitted++
-	return func() { f.release(participant) }, true
+	return func() { f.release(participant) }, limits.AdmissionOpen
+}
+
+// Overdraft takes the tokens whatever the window says, which is what the forced send asks of the real limiter.
+func (f *fakeLimiter) Overdraft(participant, model string, cost limits.TokenCost) (func(), limits.Admission) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.charged = append(f.charged, cost)
+	if f.cutOff[participant] {
+		return nil, limits.AdmissionCutOff
+	}
+	f.inflight[participant]++
+	f.admitted++
+	f.forced++
+	return func() { f.release(participant) }, limits.AdmissionOpen
 }
 
 // release is not idempotent on purpose, so a slot given back twice shows up as a negative hold.
@@ -81,6 +107,19 @@ func (f *fakeLimiter) refuse(participant string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.refused[participant] = true
+}
+
+// cutOffHost is the block a forced send may not cross, unlike a full window.
+func (f *fakeLimiter) cutOffHost(participant string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.cutOff[participant] = true
+}
+
+func (f *fakeLimiter) overdrafts() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.forced
 }
 
 func (f *fakeLimiter) chargedCosts() []limits.TokenCost {
@@ -484,7 +523,13 @@ func TestPickWiresEachAvailabilityPredicateToItsSource(t *testing.T) {
 			name:       "a participant the limiter reports unavailable",
 			arrange:    func(test *schedulerHarness) { test.limiter.block(hostB) },
 			profile:    RequestProfile{Model: modelA},
-			wantReason: ghostThrottled.reason(),
+			wantReason: ghostWindowFull.reason(),
+		},
+		{
+			name:       "a participant the limiter has cut off",
+			arrange:    func(test *schedulerHarness) { test.limiter.cutOffHost(hostB) },
+			profile:    RequestProfile{Model: modelA},
+			wantReason: ghostCutOff.reason(),
 		},
 		{
 			name:       "a participant the outlier detector ejected",
@@ -589,8 +634,8 @@ func TestPickGhostsTheNonceWhenAdmissionRefusesTheBoundHost(t *testing.T) {
 	if commits[1].ghost || commits[1].participant != hostA {
 		t.Fatalf("commits = %+v, want the admitted host's nonce dispatched for real", commits)
 	}
-	if burns := test.observer.burns(); len(burns) != 1 || burns[0] != ghostThrottled.reason() {
-		t.Fatalf("ghost burns = %v, want exactly one %q", burns, ghostThrottled.reason())
+	if burns := test.observer.burns(); len(burns) != 1 || burns[0] != ghostWindowFull.reason() {
+		t.Fatalf("ghost burns = %v, want exactly one %q", burns, ghostWindowFull.reason())
 	}
 	if held, admitted := test.limiter.slots(); held != 1 || admitted != 1 {
 		t.Fatalf("slots held/admitted = %d/%d, want only the served host's slot taken", held, admitted)

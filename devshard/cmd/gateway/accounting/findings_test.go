@@ -130,17 +130,37 @@ func TestBurnedNoncesDoNotCountAgainstTheHostsFailureRates(t *testing.T) {
 	}
 }
 
+// A full window and an open cut-off are one finding: both are this gateway deciding not to send.
 func TestGatewaySideThrottlingIsReportedAsTheGatewaysOwn(t *testing.T) {
 	record := recordWith(100, map[Disposition]uint64{DispositionFinishedUsed: 60, DispositionGhost: 40})
 	record.Counters = []CounterRecord{{
-		CounterKey: CounterKey{Disposition: DispositionGhost, GhostReason: "participant_throttled_no_send"},
-		Count:      40,
+		CounterKey: CounterKey{Disposition: DispositionGhost, GhostReason: "participant_window_full_no_send"},
+		Count:      25,
+	}, {
+		CounterKey: CounterKey{Disposition: DispositionGhost, GhostReason: "participant_cut_off_no_send"},
+		Count:      15,
 	}}
 
 	finding := findingWithCode(t, findingsFor(record), FindingGatewayThrottled)
 
 	if finding.Part != 40 || finding.Whole != 100 {
 		t.Fatalf("finding = %d of %d, want the burns measured against assigned nonces", finding.Part, finding.Whole)
+	}
+}
+
+// Ledger rows outlive the deploy that renames a reason, so a gateway that has just been upgraded still has
+// to count what it wrote yesterday, or the finding reads as a fleet that stopped throttling overnight.
+func TestTheReasonWrittenBeforeTheBusyBrokenSplitStillCounts(t *testing.T) {
+	record := recordWith(100, map[Disposition]uint64{DispositionFinishedUsed: 60, DispositionGhost: 40})
+	record.Counters = []CounterRecord{{
+		CounterKey: CounterKey{Disposition: DispositionGhost, GhostReason: ghostReasonThrottledBeforeTheSplit},
+		Count:      40,
+	}}
+
+	finding := findingWithCode(t, findingsFor(record), FindingGatewayThrottled)
+
+	if finding.Part != 40 {
+		t.Fatalf("finding = %d of %d, want the rows written before the split counted too", finding.Part, finding.Whole)
 	}
 }
 

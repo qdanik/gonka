@@ -18,6 +18,7 @@ const (
 	Rewound             = "rewound"
 	Error               = "error"
 	BurnedDuringRequest = "burned_during_request"
+	BurnsInARow         = "burns_in_a_row"
 
 	BackoffCount        = "backoff_count"
 	Strikes             = "strikes"

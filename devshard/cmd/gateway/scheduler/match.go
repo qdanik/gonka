@@ -7,12 +7,13 @@ import (
 // availability is the host predicates for one drain. Its frozen map memoises the whole ladder per participant, and a nil one leaves every read live. See routing.md, "The drain".
 type availability struct {
 	pocRequired  func(participant string) bool
-	throttled    func(participant string) bool
+	congested    func(participant string) blockReason
 	ejected      func(participant string) bool
 	notAllowed   func(participant string) bool
 	stateBlocked func(participant string) bool
 
-	frozen map[string]blockReason
+	frozen          map[string]blockReason
+	overFullWindows bool
 }
 
 type blockReason int
@@ -20,7 +21,8 @@ type blockReason int
 const (
 	blockNone blockReason = iota
 	blockPoCRequired
-	blockThrottled
+	blockWindowFull
+	blockCutOff
 	blockEjected
 	blockNotAllowed
 	blockExcluded
@@ -30,7 +32,8 @@ const (
 // ghostFor names the burn each participant-only block earns, as one mapping rather than two switches.
 var ghostFor = map[blockReason]GhostKind{
 	blockPoCRequired:   ghostPoC,
-	blockThrottled:     ghostThrottled,
+	blockWindowFull:    ghostWindowFull,
+	blockCutOff:        ghostCutOff,
 	blockEjected:       ghostEjected,
 	blockNotAllowed:    ghostNotAllowed,
 	blockStateDiverged: ghostStateDiverged,
@@ -47,32 +50,61 @@ func (a availability) outsideAllowlist(participant string) bool {
 
 // participantBlocked is the half of blocks that needs no waiter, so match and blocks share one ladder.
 func (a availability) participantBlocked(participant string) blockReason {
+	reason := a.memoisedBlock(participant)
+	if reason == blockWindowFull && a.overFullWindows {
+		return blockNone
+	}
+	return reason
+}
+
+func (a availability) memoisedBlock(participant string) blockReason {
 	if reason, memoised := a.frozen[participant]; memoised {
 		return reason
 	}
-	reason := blockNone
-	switch {
-	case a.outsideAllowlist(participant):
-		reason = blockNotAllowed
-	case a.pocRequired(participant):
-		reason = blockPoCRequired
-	case a.throttled(participant):
-		reason = blockThrottled
-	case a.ejected(participant):
-		reason = blockEjected
-	case a.divergedFromEscrowState(participant):
-		reason = blockStateDiverged
-	}
+	reason := a.firstBlock(participant)
 	if a.frozen != nil {
 		a.frozen[participant] = reason
 	}
 	return reason
 }
 
-// refuseSlot folds a refused admission into the frozen ladder.
-func (a availability) refuseSlot(participant string) {
+// firstBlock stops at the first rung that holds, so no rung below it is asked.
+func (a availability) firstBlock(participant string) blockReason {
+	if a.outsideAllowlist(participant) {
+		return blockNotAllowed
+	}
+	if a.pocRequired(participant) {
+		return blockPoCRequired
+	}
+	if limited := a.congestionBlock(participant); limited != blockNone {
+		return limited
+	}
+	if a.ejected(participant) {
+		return blockEjected
+	}
+	if a.divergedFromEscrowState(participant) {
+		return blockStateDiverged
+	}
+	return blockNone
+}
+
+func (a availability) congestionBlock(participant string) blockReason {
+	if a.congested == nil {
+		return blockNone
+	}
+	return a.congested(participant)
+}
+
+// servingOverFullWindows shares this drain's memo and stops reading a full window as a block. See routing.md, "The forced send".
+func (a availability) servingOverFullWindows() availability {
+	a.overFullWindows = true
+	return a
+}
+
+// refuseSlot folds a refused admission into the frozen ladder, under the reason that refused it.
+func (a availability) refuseSlot(participant string, reason blockReason) {
 	if a.frozen != nil {
-		a.frozen[participant] = blockThrottled
+		a.frozen[participant] = reason
 	}
 }
 
@@ -87,7 +119,9 @@ func (a availability) blocks(participant string, queued *waiter) blockReason {
 	return blockNone
 }
 
+// onlyThisHostIsLeft asks about the fleet as it stands, so a binding allowed to cross a full window does not read every other full host as usable. See routing.md, "Serving a host the request excluded".
 func (a availability) onlyThisHostIsLeft(participant string, participants []string, queued *waiter) bool {
+	a.overFullWindows = false
 	for _, other := range participants {
 		if other != participant && a.blocks(other, queued) == blockNone {
 			return false

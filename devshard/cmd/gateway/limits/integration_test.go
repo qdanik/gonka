@@ -189,11 +189,11 @@ func TestCapacityGatewayParticipantLimiterComposeEndToEnd(t *testing.T) {
 	request := TokenCost{Input: limits.FallbackMaxModelLen, Output: limits.MaxTokensCap}
 	admitted := limits.HostWindows.Input.InitialRequests
 	for i := range admitted {
-		if _, ok := participantLimiter.Acquire("hostA", "modelA", request); !ok {
-			t.Fatalf("ParticipantLimiter.Acquire call %d = false, want true (the initial window fits %d of them)", i+1, admitted)
+		if _, ok := participantLimiter.Acquire("hostA", "modelA", request); ok != AdmissionOpen {
+			t.Fatalf("ParticipantLimiter.Acquire call %d = %s, want open (the initial window fits %d of them)", i+1, ok, admitted)
 		}
 	}
-	if _, ok := participantLimiter.Acquire("hostA", "modelA", request); ok {
+	if _, ok := participantLimiter.Acquire("hostA", "modelA", request); ok == AdmissionOpen {
 		t.Fatal("ParticipantLimiter.Acquire beyond the initial window = true, want false (per-host window must gate the host)")
 	}
 }

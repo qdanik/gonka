@@ -89,7 +89,7 @@ func assertDisposition(t *testing.T, book *Book, nonce uint64, groupSize int, wa
 
 func TestGhostIsCountedWithItsReason(t *testing.T) {
 	book := newTestBook(t, 4)
-	if err := book.RecordGhost(testEscrow, 5, "participant_throttled_no_send"); err != nil {
+	if err := book.RecordGhost(testEscrow, 5, "participant_window_full_no_send"); err != nil {
 		t.Fatalf("RecordGhost(): %v", err)
 	}
 	assertDisposition(t, book, 5, 4, DispositionGhost)
@@ -97,7 +97,7 @@ func TestGhostIsCountedWithItsReason(t *testing.T) {
 	records := book.Query(QueryFilter{})
 	for _, record := range records {
 		for _, counter := range record.Counters {
-			if counter.Disposition == DispositionGhost && counter.GhostReason != "participant_throttled_no_send" {
+			if counter.Disposition == DispositionGhost && counter.GhostReason != "participant_window_full_no_send" {
 				t.Fatalf("ghost reason = %q, want the scheduler's own label", counter.GhostReason)
 			}
 		}
@@ -217,7 +217,7 @@ func TestEveryAssignedNonceIsAccountedForExactlyOnce(t *testing.T) {
 	if err := book.ObserveLatestNonce(testEscrow, 12); err != nil {
 		t.Fatalf("ObserveLatestNonce(): %v", err)
 	}
-	if err := book.RecordGhost(testEscrow, 5, "participant_throttled_no_send"); err != nil {
+	if err := book.RecordGhost(testEscrow, 5, "participant_window_full_no_send"); err != nil {
 		t.Fatalf("RecordGhost(): %v", err)
 	}
 	if err := book.RecordRace(testEscrow, []Attempt{
@@ -277,7 +277,7 @@ func unclassifiedOfSlot(t *testing.T, book *Book, slotID uint32) uint64 {
 // drag its history into whichever epoch is current now.
 func TestReopeningAnEscrowKeepsTheEpochItWasFirstSeenIn(t *testing.T) {
 	book := newTestBook(t, 2)
-	if err := book.RecordGhost(testEscrow, 1, "participant_throttled_no_send"); err != nil {
+	if err := book.RecordGhost(testEscrow, 1, "participant_window_full_no_send"); err != nil {
 		t.Fatalf("RecordGhost(): %v", err)
 	}
 
@@ -451,7 +451,7 @@ func TestANonceRecordedOnlyByATimeoutStaysPendingThenReadsRefused(t *testing.T) 
 
 func TestAChargedBurnCarriesItsTimeoutOutcome(t *testing.T) {
 	book := newTestBook(t, 2)
-	if err := book.RecordGhost(testEscrow, 4, "participant_throttled_no_send"); err != nil {
+	if err := book.RecordGhost(testEscrow, 4, "participant_window_full_no_send"); err != nil {
 		t.Fatalf("RecordGhost: %v", err)
 	}
 
@@ -462,7 +462,7 @@ func TestAChargedBurnCarriesItsTimeoutOutcome(t *testing.T) {
 	var charged *CounterRecord
 	for _, record := range book.Query(QueryFilter{}) {
 		for index, counter := range record.Counters {
-			if counter.GhostReason == "participant_throttled_no_send" {
+			if counter.GhostReason == "participant_window_full_no_send" {
 				charged = &record.Counters[index]
 			}
 		}

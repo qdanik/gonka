@@ -32,7 +32,7 @@ func queuedWaiter(enqueued time.Time, model string, excluded ...string) *waiter 
 func openAvailability() availability {
 	return availability{
 		pocRequired:  func(string) bool { return false },
-		throttled:    func(string) bool { return false },
+		congested:    windowFullWhen(always(false)),
 		ejected:      func(string) bool { return false },
 		stateBlocked: func(string) bool { return false },
 	}
@@ -40,6 +40,16 @@ func openAvailability() availability {
 
 func always(blocked bool) func(string) bool {
 	return func(string) bool { return blocked }
+}
+
+// windowFullWhen states the limiter's verdict the way the drain reads it, so a test says "busy" and gets the block a full window earns.
+func windowFullWhen(full func(string) bool) func(string) blockReason {
+	return func(participant string) blockReason {
+		if full(participant) {
+			return blockWindowFull
+		}
+		return blockNone
+	}
 }
 
 // servable is the sweep's fast answer and match is the per-nonce decision, and they must be exactly
@@ -53,7 +63,7 @@ func TestServableAgreesWithMatchOverEveryFilterCombination(t *testing.T) {
 		bit := func(index int) bool { return combination&(1<<index) != 0 }
 		availability := availability{
 			pocRequired:  func(participant string) bool { return bit(0) && participant == hostA },
-			throttled:    func(participant string) bool { return bit(1) && participant == hostB },
+			congested:    windowFullWhen(func(participant string) bool { return bit(1) && participant == hostB }),
 			ejected:      func(participant string) bool { return bit(2) && participant == hostA },
 			stateBlocked: func(participant string) bool { return bit(3) && participant == hostB },
 		}
@@ -122,13 +132,13 @@ func TestMatchHostLevelFilters(t *testing.T) {
 	tests := []struct {
 		name        string
 		pocRequired bool
-		throttled   bool
+		windowFull  bool
 		wantServed  bool
 		wantKind    GhostKind
 	}{
 		{name: "poc required burns as poc ghost", pocRequired: true, wantKind: ghostPoC},
-		{name: "throttled burns as throttled ghost", throttled: true, wantKind: ghostThrottled},
-		{name: "poc wins over throttle", pocRequired: true, throttled: true, wantKind: ghostPoC},
+		{name: "a full window burns as a full window", windowFull: true, wantKind: ghostWindowFull},
+		{name: "poc wins over a full window", pocRequired: true, windowFull: true, wantKind: ghostPoC},
 		{name: "neither filter serves the waiter", wantServed: true},
 	}
 	for _, testCase := range tests {
@@ -137,7 +147,7 @@ func TestMatchHostLevelFilters(t *testing.T) {
 			queued := queuedWaiter(baseTime, "model-a")
 			availability := openAvailability()
 			availability.pocRequired = always(testCase.pocRequired)
-			availability.throttled = always(testCase.throttled)
+			availability.congested = windowFullWhen(always(testCase.windowFull))
 
 			decision := match(binding, []*waiter{queued}, soleHost, availability, baseTime, matchWaitWindow)
 
@@ -375,13 +385,13 @@ func TestMatchIsTotal(t *testing.T) {
 
 	for predicates := range 16 {
 		pocRequired := predicates&1 != 0
-		throttled := predicates&2 != 0
+		windowFull := predicates&2 != 0
 		stateBlocked := predicates&4 != 0
 		ejected := predicates&8 != 0
 
 		availability := availability{
 			pocRequired:  always(pocRequired),
-			throttled:    always(throttled),
+			congested:    windowFullWhen(always(windowFull)),
 			ejected:      always(ejected),
 			stateBlocked: always(stateBlocked),
 		}
@@ -389,7 +399,7 @@ func TestMatchIsTotal(t *testing.T) {
 		for _, queue := range queues {
 			for _, clock := range clocks {
 				name := queue.name + "/" + clock.name +
-					"/poc=" + boolLabel(pocRequired) + ",throttled=" + boolLabel(throttled) +
+					"/poc=" + boolLabel(pocRequired) + ",window_full=" + boolLabel(windowFull) +
 					",state=" + boolLabel(stateBlocked) +
 					",ejected=" + boolLabel(ejected)
 				t.Run(name, func(t *testing.T) {
@@ -404,14 +414,14 @@ func TestMatchIsTotal(t *testing.T) {
 					}
 					switch outcome := decision.(type) {
 					case serve:
-						if pocRequired || throttled || stateBlocked || ejected {
+						if pocRequired || windowFull || stateBlocked || ejected {
 							t.Fatalf("served through an active filter: %+v", availability)
 						}
 						if outcome.waiter.exclude[hostA] && !outcome.despiteExclusion {
 							t.Fatalf("served an excluded waiter without saying so %+v", outcome.waiter.profile)
 						}
 					case hold:
-						if pocRequired || throttled {
+						if pocRequired || windowFull {
 							t.Fatal("held a nonce past a host-level filter")
 						}
 						if len(queue.waiting) == 0 {
@@ -427,8 +437,8 @@ func TestMatchIsTotal(t *testing.T) {
 						switch {
 						case pocRequired && outcome.kind != ghostPoC:
 							t.Fatalf("burn kind = %s, want %s", outcome.kind.reason(), ghostPoC.reason())
-						case !pocRequired && throttled && outcome.kind != ghostThrottled:
-							t.Fatalf("burn kind = %s, want %s", outcome.kind.reason(), ghostThrottled.reason())
+						case !pocRequired && windowFull && outcome.kind != ghostWindowFull:
+							t.Fatalf("burn kind = %s, want %s", outcome.kind.reason(), ghostWindowFull.reason())
 						}
 					}
 				})

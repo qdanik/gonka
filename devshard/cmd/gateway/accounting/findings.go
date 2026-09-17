@@ -185,7 +185,7 @@ func countedOf(record ParticipantRecord) countedNonces {
 			}
 		case DispositionGhost:
 			switch key.GhostReason {
-			case scheduler.GhostReasonThrottled:
+			case scheduler.GhostReasonWindowFull, scheduler.GhostReasonCutOff, ghostReasonThrottledBeforeTheSplit:
 				counted.throttledGhosts += count
 			case scheduler.GhostReasonStateDiverged:
 				counted.stateDivergedGhosts += count

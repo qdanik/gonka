@@ -105,8 +105,9 @@ func Defaults() Config {
 			MaxAttemptsPerRequest: 2,
 		},
 		Scheduler: Scheduler{
-			MatchWaitMS:    2_000,
-			WarmNewEscrows: true,
+			MatchWaitMS:         2_000,
+			MaxConsecutiveBurns: 6,
+			WarmNewEscrows:      true,
 		},
 		TimeoutSweep: TimeoutSweep{
 			BudgetPerTick: 8,

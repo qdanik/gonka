@@ -69,13 +69,13 @@ The narrow interfaces make the mistake hard to express: an attempt to reproduce 
 
 Three resources move together: the nonce, the participant's concurrency slot, and the escrow's in-flight hold.
 
-**Acquisition is one atomic step**, inside the callback of `session.Advance`, under the session's own lock with the nonce-to-host binding already fixed (`scheduler/dispatcher_queue.go`). A refused slot becomes `burn{ghostThrottled}`.
+**Acquisition is one atomic step**, inside the callback of `session.Advance`, under the session's own lock with the nonce-to-host binding already fixed (`scheduler/dispatcher_queue.go`). A refused slot becomes the burn its refusal names: `ghostWindowFull`, or `ghostCutOff` when a forced send was refused too.
 
 **Release is by whoever spends it.** `Acquire` hands back a lease that releases exactly what it took, exactly once, and the assignment carries it to the attempt; the engine's view of the limiter can neither acquire nor release, so an interface that could pair them wrongly does not exist. Every scheduler path that cannot deliver an assignment gives the slot and the hold back *together*. A burn takes the hold and no slot, and gives the hold back whether its commit succeeds or fails.
 
 **The hold outlives the race**, released only after the settlement vote is posted, from inside the goroutine that posts it. The exception is the stranded case, where the assignment's own hold is kept, because the escrow being retired is exactly why there was no target and the vote still has to reach it.
 
-**The peek is a filter, never the authority.** `limits.Available` is a cheap pre-filter for routing, where a stale answer costs nothing; used as the authority it commits a nonce the acquire then refuses.
+**The peek is a filter, never the authority.** `limits.Admits` is a cheap pre-filter for routing, where a stale answer costs nothing; used as the authority it commits a nonce the acquire then refuses. It names why a host would refuse, because only one of the two reasons may be crossed; `limits.Available` is the same peek as a yes or no, for the capacity weights.
 
 ### 6. Shutdown order is a contract
 

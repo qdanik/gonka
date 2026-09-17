@@ -1237,7 +1237,7 @@ func waitForPrefillWindow(t *testing.T, composed *gateway, model string, want fl
 	deadline := time.Now().Add(5 * time.Second)
 	for attempt := 0; ; attempt++ {
 		participant := fmt.Sprintf("gonka1host%d", attempt)
-		if release, admitted := composed.participants.Acquire(participant, model, limits.TokenCost{Input: 1, Output: 1}); admitted {
+		if release, admitted := composed.participants.Acquire(participant, model, limits.TokenCost{Input: 1, Output: 1}); admitted == limits.AdmissionOpen {
 			release()
 		}
 		observed := prefillWindowFor(composed, participant)

@@ -69,7 +69,8 @@ func newTestLimiter(cfg ParticipantConfig, now func() time.Time) *ParticipantLim
 }
 
 func (l *ParticipantLimiter) admitOne(participant, model string) (func(), bool) {
-	return l.Acquire(participant, model, oneToken)
+	release, admission := l.Acquire(participant, model, oneToken)
+	return release, admission == AdmissionOpen
 }
 
 func (l *ParticipantLimiter) admits(participant, model string) bool {
@@ -126,8 +127,8 @@ func TestAHostWithNothingInFlightAdmitsARequestLargerThanItsWholeWindow(t *testi
 	t.Parallel()
 	l := newTestLimiter(testConfig(), fixedNow(testEpoch))
 
-	if _, admitted := l.Acquire("p", "m", TokenCost{Input: 1_000_000, Output: 1_000_000}); !admitted {
-		t.Fatal("Acquire() of a request larger than the window on an idle host = false, want true: a prompt no window fits must not become one no host can ever serve")
+	if _, admission := l.Acquire("p", "m", TokenCost{Input: 1_000_000, Output: 1_000_000}); admission != AdmissionOpen {
+		t.Fatalf("Acquire() of a request larger than the window on an idle host = %s, want open: a prompt no window fits must not become one no host can ever serve", admission)
 	}
 	if l.admits("p", "m") {
 		t.Fatal("Acquire() behind the oversized request = true, want false: the host is over its window until that one ends")

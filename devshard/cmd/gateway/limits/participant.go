@@ -230,25 +230,40 @@ func (l *ParticipantLimiter) freshState(model string) *hostState {
 	}
 }
 
-// smallestRequest is what Available peeks with: a host that cannot take one token of each has no headroom at all.
+// smallestRequest is what Admits peeks with: a host that cannot take one token of each has no headroom at all.
 var smallestRequest = TokenCost{Input: 1, Output: 1}
 
-func admitsLocked(state *hostState, cost TokenCost, now time.Time) bool {
+func admissionLocked(state *hostState, cost TokenCost, now time.Time) Admission {
 	switch cutoffState(state, now) {
 	case CutoffOpen:
-		return false
+		return AdmissionCutOff
 	case CutoffHalfOpen:
-		return state.idle()
+		if state.idle() {
+			return AdmissionOpen
+		}
+		return AdmissionCutOff
 	}
 	if state.idle() {
-		return true
+		return AdmissionOpen
 	}
-	return fits(state.input.inflight, cost.Input, state.input.tokens) &&
-		fits(state.output.inflight, cost.Output, state.output.tokens)
+	if fits(state.input.inflight, cost.Input, state.input.tokens) &&
+		fits(state.output.inflight, cost.Output, state.output.tokens) {
+		return AdmissionOpen
+	}
+	return AdmissionWindowFull
 }
 
-// Acquire takes the tokens one attempt needs and returns the release that gives them back exactly once.
-func (l *ParticipantLimiter) Acquire(participant, model string, cost TokenCost) (func(), bool) {
+// Acquire takes the tokens one attempt needs and hands back the release that gives them back exactly once, or the admission that refused them.
+func (l *ParticipantLimiter) Acquire(participant, model string, cost TokenCost) (func(), Admission) {
+	return l.take(participant, model, cost, false)
+}
+
+// Overdraft takes the tokens whether or not they fit, and is refused only by a cut-off. See routing.md, "The forced send".
+func (l *ParticipantLimiter) Overdraft(participant, model string, cost TokenCost) (func(), Admission) {
+	return l.take(participant, model, cost, true)
+}
+
+func (l *ParticipantLimiter) take(participant, model string, cost TokenCost, overFullWindow bool) (func(), Admission) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
@@ -258,15 +273,20 @@ func (l *ParticipantLimiter) Acquire(participant, model string, cost TokenCost) 
 	state.lastUsed = now
 	l.forgetIdleLocked(now)
 
-	if !admitsLocked(state, cost, now) {
-		return nil, false
+	switch refusedBy := admissionLocked(state, cost, now); refusedBy {
+	case AdmissionCutOff:
+		return nil, refusedBy
+	case AdmissionWindowFull:
+		if !overFullWindow {
+			return nil, refusedBy
+		}
 	}
 	if !state.openUntil.IsZero() {
 		state.halfOpen = true
 	}
 	state.input.take(max(cost.Input, 0))
 	state.output.take(max(cost.Output, 0))
-	return l.releaseFor(tracked, cost), true
+	return l.releaseFor(tracked, cost), AdmissionOpen
 }
 
 func (l *ParticipantLimiter) releaseFor(tracked key, cost TokenCost) func() {
@@ -291,6 +311,11 @@ func (l *ParticipantLimiter) release(tracked key, cost TokenCost) {
 
 // Available peeks whether a host would take the smallest request, mutating nothing. See capacity.md, "The participant limiter: IOCW".
 func (l *ParticipantLimiter) Available(participant, model string) bool {
+	return l.Admits(participant, model) == AdmissionOpen
+}
+
+// Admits peeks why a host would refuse the smallest request, mutating nothing. See capacity.md, "The participant limiter: IOCW".
+func (l *ParticipantLimiter) Admits(participant, model string) Admission {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
@@ -298,20 +323,7 @@ func (l *ParticipantLimiter) Available(participant, model string) bool {
 	if !ok {
 		state = l.freshState(model)
 	}
-	return admitsLocked(state, smallestRequest, l.now())
-}
-
-type CutoffState string
-
-const (
-	CutoffClosed   CutoffState = "closed"
-	CutoffOpen     CutoffState = "open"
-	CutoffHalfOpen CutoffState = "half_open"
-)
-
-// AllCutoffStates lets metrics enumerate without restating them. See rules.md, "11. Labels, ordering and determinism".
-func AllCutoffStates() []CutoffState {
-	return []CutoffState{CutoffClosed, CutoffOpen, CutoffHalfOpen}
+	return admissionLocked(state, smallestRequest, l.now())
 }
 
 // HostWindow is one tracked participant/model pair as a reader sees it.
@@ -342,7 +354,7 @@ func (l *ParticipantLimiter) Snapshot() []HostWindow {
 			InflightOutputTokens: state.output.inflight,
 			Cutoff:               cutoffState(state, now),
 			BackoffCount:         state.backoffCount,
-			Available:            admitsLocked(state, smallestRequest, now),
+			Available:            admissionLocked(state, smallestRequest, now) == AdmissionOpen,
 		})
 	}
 	l.mu.Unlock()

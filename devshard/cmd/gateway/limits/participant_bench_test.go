@@ -60,7 +60,7 @@ func benchLimiter(hosts []string) *ParticipantLimiter {
 		func() time.Time { return benchClock },
 	)
 	for _, participant := range hosts {
-		if release, admitted := limiter.Acquire(participant, benchModel, benchCost); admitted {
+		if release, admitted := limiter.Acquire(participant, benchModel, benchCost); admitted == AdmissionOpen {
 			release()
 		}
 	}
@@ -104,7 +104,7 @@ func BenchmarkParticipantAttempt(b *testing.B) {
 	for b.Loop() {
 		participant := hosts[index%len(hosts)]
 		index++
-		if release, admitted := limiter.Acquire(participant, benchModel, benchCost); admitted {
+		if release, admitted := limiter.Acquire(participant, benchModel, benchCost); admitted == AdmissionOpen {
 			release()
 		}
 		limiter.OnResult(benchResult(participant))
@@ -121,7 +121,7 @@ func BenchmarkParticipantAttemptParallel(b *testing.B) {
 		for pb.Next() {
 			participant := hosts[index%len(hosts)]
 			index++
-			if release, admitted := limiter.Acquire(participant, benchModel, benchCost); admitted {
+			if release, admitted := limiter.Acquire(participant, benchModel, benchCost); admitted == AdmissionOpen {
 				release()
 			}
 			limiter.OnResult(benchResult(participant))

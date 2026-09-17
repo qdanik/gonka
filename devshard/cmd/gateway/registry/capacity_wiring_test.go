@@ -30,10 +30,14 @@ const (
 
 type openLimiter struct{}
 
-func (openLimiter) Available(string, string) bool { return true }
+func (openLimiter) Admits(string, string) limits.Admission { return limits.AdmissionOpen }
 
-func (openLimiter) Acquire(string, string, limits.TokenCost) (func(), bool) {
-	return func() {}, true
+func (openLimiter) Acquire(string, string, limits.TokenCost) (func(), limits.Admission) {
+	return func() {}, limits.AdmissionOpen
+}
+
+func (openLimiter) Overdraft(string, string, limits.TokenCost) (func(), limits.Admission) {
+	return func() {}, limits.AdmissionOpen
 }
 
 type capablePerf struct{}

@@ -18,12 +18,12 @@ func TestABurnedNonceIsLoggedWithTheEscrowItCostAndWhy(t *testing.T) {
 	dispatches := tracedDispatches{recorder: metrics.NewDispatchRecorder(metrics.New()), events: events}
 
 	dispatches.GhostBurned("escrow-1", scheduler.Burn{
-		Nonce: 5, Participant: "gonka1bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", Reason: "participant_throttled_no_send",
+		Nonce: 5, Participant: "gonka1bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", Reason: "participant_window_full_no_send",
 	})
 	events.Flush()
 
 	logged.RequireLine(t, logcapture.Entry{Level: "warn", Msg: "nonce burned for nobody", Fields: []any{
-		"escrow", "escrow-1", "nonce", uint64(5), "host", "bbbbbbbb", "reason", "participant_throttled_no_send",
+		"escrow", "escrow-1", "nonce", uint64(5), "host", "bbbbbbbb", "reason", "participant_window_full_no_send",
 	}})
 }
 

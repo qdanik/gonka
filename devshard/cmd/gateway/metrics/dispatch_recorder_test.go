@@ -10,12 +10,12 @@ func TestTheDispatchRecorderCountsEachNonceOutcomeSeparately(t *testing.T) {
 
 	recorder.GhostBurned("7", "gonka1host", "poc_unavailable_host")
 	recorder.GhostBurned("7", "gonka1host", "poc_unavailable_host")
-	recorder.GhostBurned("7", "gonka1host", "participant_throttled_no_send")
+	recorder.GhostBurned("7", "gonka1host", "participant_window_full_no_send")
 	recorder.NonceHeld("7")
 	recorder.BurnBudgetExhausted("9")
 
 	expectCounter(t, telemetry, "devshard_gateway_ghost_nonces_burned_total", labels{"devshard_id": "7", "participant": "gonka1host", "reason": "poc_unavailable_host"}, 2)
-	expectCounter(t, telemetry, "devshard_gateway_ghost_nonces_burned_total", labels{"devshard_id": "7", "participant": "gonka1host", "reason": "participant_throttled_no_send"}, 1)
+	expectCounter(t, telemetry, "devshard_gateway_ghost_nonces_burned_total", labels{"devshard_id": "7", "participant": "gonka1host", "reason": "participant_window_full_no_send"}, 1)
 	expectCounter(t, telemetry, "devshard_gateway_nonce_holds_total", labels{"devshard_id": "7"}, 1)
 	expectCounter(t, telemetry, "devshard_gateway_burn_budget_exhausted_total", labels{"devshard_id": "9"}, 1)
 }
@@ -29,7 +29,7 @@ func TestDispatchRecorderDropsSeriesWhenAnEscrowRetires(t *testing.T) {
 	recorder.GhostBurned("escrow-1", "gonka1host", "poc_unavailable_host")
 	recorder.NonceHeld("escrow-1")
 	recorder.BurnBudgetExhausted("escrow-1")
-	recorder.GhostBurned("escrow-2", "gonka1host", "participant_throttled_no_send")
+	recorder.GhostBurned("escrow-2", "gonka1host", "participant_window_full_no_send")
 
 	recorder.EscrowRetired("escrow-1")
 

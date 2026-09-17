@@ -12,11 +12,12 @@ A chat request needs a nonce, and a nonce is bound to a host by `nonce % groupSi
 
 ## What it does not own
 
-It does not dispatch. It hands out an assignment and the [`engine`](../engine/) sends the request. It does not decide what a burn means for a host either: it names the reason and reports it, and the ledger excludes ghosts from every host rate by construction, because burning a nonce is the gateway's own decision (`accounting/findings.go`). The fan-out from one burn to its log line, its metric and its ledger entry lives in the composition root, not in a package of its own (`observers.go`, `tracedDispatches`). A nonce served on a host its request excluded reaches the same observer as `ExcludedHostServed`, so the scheduler writes no line of its own.
+It does not dispatch. It hands out an assignment and the [`engine`](../engine/) sends the request. It does not decide what a burn means for a host either: it names the reason and reports it, and the ledger excludes ghosts from every host rate by construction, because burning a nonce is the gateway's own decision (`accounting/findings.go`). The fan-out from one burn to its log line, its metric and its ledger entry lives in the composition root, not in a package of its own (`observers.go`, `tracedDispatches`). A nonce served on a host its request excluded reaches the same observer as `ExcludedHostServed`, and a nonce sent over a full congestion window as `ForcedSend`, so the scheduler writes no line of its own.
 
 ## Boundaries
 
-- **Six host gates, in this order**: outside the allowlist, proof-of-compute-required, throttled, ejected, state-diverged, then excluded by this waiter. The first five need no waiter and are memoised once per drain; only the sixth depends on who is asking, which is why `match` and `servable` read the same `blocks` definition rather than two ladders. A capability refusal is counted, never routed on.
+- **Seven host gates, in this order**: outside the allowlist, proof-of-compute-required, congestion windows full, cut off, ejected, state-diverged, then excluded by this waiter. The first six need no waiter and are memoised once per drain; only the seventh depends on who is asking, which is why `match` and `servable` read the same `blocks` definition rather than two ladders. A capability refusal is counted, never routed on.
+- **A full window is the one gate a burn run may cross.** After `scheduler_max_consecutive_burns` burns in a row the next binding is sent over it rather than burned; a cut-off, which holds a host already found broken, is never crossed. See [routing.md](../docs/routing.md), "The forced send".
 - **Predicates are frozen for the whole drain.** Reading them live lets a host look usable to the sweep that kept a waiter and unusable to the binding that would serve it — which burns a nonce every turn, forever.
 - **The divergence block and the spent replay outlive the escrow's actor.** Reaping an idle dispatcher is idleness, not resolution.
 - **A burn decided before the session could commit has no nonce to name**, and is reported without one.
@@ -38,7 +39,7 @@ See routing.md, "Picking an escrow".
 
 One pass of `drain` assigns nonces until the queue empties, a nonce is held, or the burn budget trips. The freeze and the budget are what bound its cost in nonces; the budget is `groupSize × (waiting + 1)`. It returns with a waiter still queued **only** when it reports a held nonce — the one exit the loop arms a timer for — so nothing is ever parked unwoken.
 
-The host predicates are frozen once per drain by memoising them. `admit` couples admission to that freeze: a participant whose congestion windows refused a request counts as throttled for the rest of the drain, but only when it would refuse the smallest request as well — a window with room for a smaller one is not full, and freezing a refusal this request's own size earned would answer every waiter behind it with a host that could have served it. A predicate nobody set stays nil rather than being wrapped, so a reader can tell "no allowlist" from "an allowlist that refuses everybody".
+The host predicates are frozen once per drain by memoising them. `admit` couples admission to that freeze: a participant whose congestion windows refused a request counts as full for the rest of the drain, under the reason that refused it. The fold is unconditional, which costs the waiters behind a large request a host that might have taken a smaller one; leaving the participant available costs more, because the same ill-fitting waiter is then re-offered on every binding and burns a nonce each time. A predicate nobody set stays nil rather than being wrapped, so a reader can tell "no allowlist" from "an allowlist that refuses everybody".
 
 `sweepExhausted` runs before every binding and drops the waiters no available participant can serve, instantly and without touching the nonce — a busy or chain-blocked pool answers `ErrHostsBusy`, anything else `ErrNoAvailableHost`. An excluded host is not a dead end there: past the stale window `match` spends the nonce on it rather than burning, and dropping the waiter would fail the one request that rescue exists for. `servable` and `match` read the same `blocks` definition and must be exactly as strict as each other: a `servable` that is stricter fails a request `match` would have served, and one that is laxer keeps a waiter queued that every drain can only answer by burning a chain-costed nonce.
 
@@ -83,8 +84,8 @@ The credit is returned to a participant that served since it was taken — but o
 
 | Error | What it means | Does waiting help? |
 | --- | --- | --- |
-| `ErrNoAvailableHost` | no participant can take the request: excluded, in PoC, throttled, ejected, state-blocked, or the drain's burn budget tripped | yes |
-| `ErrHostsBusy` | every host is at capacity right now — distinct from broken or excluded, and a client retries the two differently | yes |
+| `ErrNoAvailableHost` | no participant can take the request: outside the allowlist, ejected, state-blocked, or the drain's burn budget tripped | yes |
+| `ErrHostsBusy` | every host is unusable right now for a reason that clears on its own: windows full, cut off, or owing proof-of-compute — distinct from a host excluded or taken out of routing, and a client retries the two differently | yes |
 | `ErrAllowlistUnreachable` | no escrow this gateway serves holds a participant the allowlist admits; the operator narrowed routing to participants none of these escrow groups contains | no |
 | `ErrNoEscrowCapacity` | every candidate escrow is at zero spare weight; it names no host | — |
 | `ErrEscrowBusy` | an escrow's dispatch queue is full: the escrow is sound, the caller arrived faster than it can serve | yes |

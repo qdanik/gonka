@@ -22,6 +22,8 @@ const (
 	maxConcurrentRequests    = 10_000_000
 	maxAdmissionQueuePerSlot = 10_000
 
+	maxConsecutiveBurns = 1_000
+
 	maxSnapshotAgeSeconds   = 86_400
 	maxEngineTimingMS       = 86_400_000
 	snapshotAgePollMultiple = 7
@@ -282,6 +284,9 @@ func (c *Config) Validate() error {
 	// The ceiling is a budget guard: a long grace parks a committed-cost nonce on the chance of a co-arrival.
 	if c.Scheduler.MatchWaitMS < 0 || c.Scheduler.MatchWaitMS > 5_000 {
 		complain("scheduler_match_wait_ms: %d must be in [0, 5000]", c.Scheduler.MatchWaitMS)
+	}
+	if c.Scheduler.MaxConsecutiveBurns < 0 || c.Scheduler.MaxConsecutiveBurns > maxConsecutiveBurns {
+		complain("scheduler_max_consecutive_burns: %d must be in [0, %d]", c.Scheduler.MaxConsecutiveBurns, maxConsecutiveBurns)
 	}
 	for index, participant := range c.Scheduler.ParticipantAllowlist {
 		if strings.TrimSpace(participant) == "" {

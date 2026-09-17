@@ -359,7 +359,7 @@ func TestTheLimitsCollectorKeepsHostWindowsOffTheScrape(t *testing.T) {
 		Models: func() []string { return []string{"qwen"} },
 	}))
 	release, admitted := participants.Acquire("gonka1a", "qwen", limits.TokenCost{Input: 1_024, Output: 256})
-	if !admitted {
+	if admitted != limits.AdmissionOpen {
 		t.Fatal("the harness limiter refused the first request")
 	}
 	defer release()

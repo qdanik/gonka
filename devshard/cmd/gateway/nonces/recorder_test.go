@@ -111,7 +111,7 @@ func TestATimeoutClassifiesTheNonceItsRaceLeftPending(t *testing.T) {
 func TestABurnedNonceIsCountedAgainstTheSlotTheChainAssignsIt(t *testing.T) {
 	ledger := newLedgerForTest(t)
 
-	ledger.RecordGhost("escrow-1", 5, "participant_throttled_no_send")
+	ledger.RecordGhost("escrow-1", 5, "participant_window_full_no_send")
 
 	// Two slots, so nonce 5 belongs to slot 1 and to nobody else.
 	for _, record := range ledger.service.Book.Query(accounting.QueryFilter{}) {
@@ -275,8 +275,8 @@ func TestAWinnerWhoseClientLeftIsNamedApartFromOneThatWasRead(t *testing.T) {
 func TestABurnWithNoNonceIsNotRecordedAgainstNonceZero(t *testing.T) {
 	ledger := newLedgerForTest(t)
 
-	ledger.RecordGhost("escrow-1", 0, "participant_throttled_no_send")
-	ledger.RecordGhost("escrow-1", 0, "participant_throttled_no_send")
+	ledger.RecordGhost("escrow-1", 0, "participant_window_full_no_send")
+	ledger.RecordGhost("escrow-1", 0, "participant_window_full_no_send")
 
 	for _, record := range ledger.Book().Query(accounting.QueryFilter{}) {
 		if ghosts := record.Dispositions[accounting.DispositionGhost]; ghosts != 0 {

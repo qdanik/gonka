@@ -116,7 +116,7 @@ func benchBook(b *testing.B) *Book {
 					b.Fatalf("RecordTimeout(): %v", err)
 				}
 			case nonce%53 == 0:
-				if err := book.RecordGhost(escrowID, nonce, scheduler.GhostReasonThrottled); err != nil {
+				if err := book.RecordGhost(escrowID, nonce, scheduler.GhostReasonWindowFull); err != nil {
 					b.Fatalf("RecordGhost(): %v", err)
 				}
 			}

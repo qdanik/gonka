@@ -34,6 +34,11 @@ func (t tracedDispatches) ExcludedHostServed(escrowID, participant string) {
 	t.events.ExcludedHostServed(escrowID, participant)
 }
 
+// ForcedSend has no counter either: the burns it replaced are already counted, one by one, as ghosts.
+func (t tracedDispatches) ForcedSend(escrowID, participant string, burnsInARow int64) {
+	t.events.ForcedSend(escrowID, participant, burnsInARow)
+}
+
 // NonceHeld and EscrowRetired pass straight through: both are already written down where they happen.
 func (t tracedDispatches) NonceHeld(escrowID string) { t.recorder.NonceHeld(escrowID) }
 

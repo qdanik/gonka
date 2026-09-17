@@ -117,10 +117,9 @@ graph LR
     P --> STR["stranded:<br/>the race could not use it"]
     SRV --> FIN["finished on chain"]
     LOST --> VOTE["timeout vote"]
-    BURN --> CHG["charged to the host<br/>(if it earned it)"]
+    BURN --> REF["refunded at settlement:<br/>a ghost has no receipt"]
     STR --> VOTE
     VOTE --> APP["timeout applied"]
-    CHG --> APP
 ```
 
 A nonce that reaches none of the bottom row is money the escrow paid for silence. That is the failure mode the whole accounting layer exists to make visible.
@@ -137,7 +136,7 @@ Three places, each with its own guard:
 
 ## What runs in the background
 
-Beyond the request path, the process runs: the chain phase observer, the escrow lifecycle manager (rotation, depletion, settlement), the nonce ledger's sweep, the escrow warmup, and the burn charger. Each is started by the composition root and stopped by it in order — the race's drain barrier last, because it is the one that can still owe the chain something.
+Beyond the request path, the process runs: the chain phase observer, the escrow lifecycle manager (rotation, depletion, settlement), the nonce ledger's sweep, and the escrow warmup. Each is started by the composition root and stopped by it in order — the race's drain barrier last, because it is the one that can still owe the chain something.
 
 ## Divergences from the legacy gateway
 

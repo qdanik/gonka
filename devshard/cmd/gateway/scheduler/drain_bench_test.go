@@ -54,14 +54,19 @@ type leanLimiter struct {
 	admitted int
 }
 
-func (l *leanLimiter) Available(string, string) bool { return true }
+func (l *leanLimiter) Admits(string, string) limits.Admission { return limits.AdmissionOpen }
 
-func (l *leanLimiter) Acquire(participant, _ string, _ limits.TokenCost) (func(), bool) {
+func (l *leanLimiter) Acquire(participant, _ string, _ limits.TokenCost) (func(), limits.Admission) {
 	if l.refused[participant] {
-		return nil, false
+		return nil, limits.AdmissionWindowFull
 	}
 	l.admitted++
-	return func() { l.admitted-- }, true
+	return func() { l.admitted-- }, limits.AdmissionOpen
+}
+
+func (l *leanLimiter) Overdraft(_, _ string, _ limits.TokenCost) (func(), limits.Admission) {
+	l.admitted++
+	return func() { l.admitted-- }, limits.AdmissionOpen
 }
 
 type leanHealth struct{ ejected map[string]bool }

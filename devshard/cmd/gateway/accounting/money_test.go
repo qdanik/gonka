@@ -272,7 +272,7 @@ func TestABurnedNonceLeavesOutWhatItWasGivenAndNothingElse(t *testing.T) {
 	if err := book.OpenEscrow(EscrowMetadata{EscrowID: "5", Model: "Qwen/Test", Slots: []types.SlotAssignment{{SlotID: 0, ValidatorAddress: "gonka1aaa"}}}); err != nil {
 		t.Fatalf("OpenEscrow: %v", err)
 	}
-	if err := book.RecordGhost("5", 7, "participant_throttled_no_send"); err != nil {
+	if err := book.RecordGhost("5", 7, "participant_window_full_no_send"); err != nil {
 		t.Fatalf("RecordGhost: %v", err)
 	}
 

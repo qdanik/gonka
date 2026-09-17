@@ -9,7 +9,8 @@ func TestGhostKindReason(t *testing.T) {
 		want string
 	}{
 		{name: "poc", kind: ghostPoC, want: "poc_unavailable_host"},
-		{name: "throttled", kind: ghostThrottled, want: "participant_throttled_no_send"},
+		{name: "window full", kind: ghostWindowFull, want: "participant_window_full_no_send"},
+		{name: "cut off", kind: ghostCutOff, want: "participant_cut_off_no_send"},
 		{name: "state diverged", kind: ghostStateDiverged, want: "participant_state_diverged_no_send"},
 		{name: "exclude", kind: ghostExclude, want: "no_compatible_request_after_stale"},
 	}
@@ -25,7 +26,7 @@ func TestGhostKindReason(t *testing.T) {
 // An operator reads the reason to decide what to do, so two causes must never share one name.
 func TestEveryGhostKindNamesItselfDistinctly(t *testing.T) {
 	kinds := []GhostKind{
-		ghostPoC, ghostThrottled, ghostEjected, ghostNotAllowed,
+		ghostPoC, ghostWindowFull, ghostCutOff, ghostEjected, ghostNotAllowed,
 		ghostStateDiverged, ghostExclude, ghostAbandoned,
 	}
 	seen := make(map[string]GhostKind, len(kinds))

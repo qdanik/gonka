@@ -21,6 +21,7 @@ const (
 	KindRequestThrottled
 	KindHostTransition
 	KindExcludedHostServed
+	KindForcedSend
 	KindEscrowTransition
 	KindChainTransition
 )
@@ -46,6 +47,7 @@ var kindNames = [kindCount]string{
 	KindRequestThrottled:    "request_throttled",
 	KindHostTransition:      "host_transition",
 	KindExcludedHostServed:  "excluded_host_served",
+	KindForcedSend:          "forced_send",
 	KindEscrowTransition:    "escrow_transition",
 	KindChainTransition:     "chain_transition",
 }
@@ -62,7 +64,7 @@ func (k Kind) onMoneyLane() bool {
 	switch k {
 	case KindRaceReported, KindTimeoutVote, KindNonceBurned, KindBurnBudgetExhausted, KindDiffComposed,
 		KindWarmupProbe, KindNonceStranded, KindHostDiverged, KindReplyNotCached, KindRequestFinished,
-		KindHostTransition, KindExcludedHostServed, KindEscrowTransition, KindChainTransition:
+		KindHostTransition, KindExcludedHostServed, KindForcedSend, KindEscrowTransition, KindChainTransition:
 		return true
 	}
 	return false

@@ -95,3 +95,11 @@ func (j *Journal) ExcludedHostServed(escrowID, participant string) {
 			logkey.Host, logkey.ShortHost(participant))
 	})
 }
+
+// ForcedSend renders a nonce sent over a host's full congestion window, which the run of burns before it bought.
+func (j *Journal) ForcedSend(escrowID, participant string, burnsInARow int64) {
+	j.emitLine(KindForcedSend, func(lines logSink) {
+		lines.Info("nonce sent over a full congestion window", logkey.Escrow, escrowID,
+			logkey.Host, logkey.ShortHost(participant), logkey.BurnsInARow, burnsInARow)
+	})
+}

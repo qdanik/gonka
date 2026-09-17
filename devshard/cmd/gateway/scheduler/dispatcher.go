@@ -21,25 +21,27 @@ type dispatchObserver interface {
 	BurnBudgetExhausted(escrowID string)
 	EscrowRetired(escrowID string)
 	ExcludedHostServed(escrowID, participant string)
+	ForcedSend(escrowID, participant string, burnsInARow int64)
 }
 
 // dispatcherDeps wires one escrow's actor. See README, "Where the nonce, the slot and the hold are taken".
 type dispatcherDeps struct {
-	escrowID     string
-	sessionID    uint64
-	session      session
-	snapshots    snapshotSource
-	predicates   func(chain.PhaseSnapshot) availability
-	acquireSlot  func(participant string, cost limits.TokenCost) (func(), bool)
-	holdEscrow   func() (func(), bool)
-	observer     dispatchObserver
-	now          func() time.Time
-	matchWait    time.Duration
-	newTimer     func(time.Duration) (<-chan time.Time, func())
-	retire       func(*dispatcher) bool
-	idleGrace    time.Duration
-	submitBuffer int
-	onExhausted  func(escrowID, reason string)
+	escrowID            string
+	sessionID           uint64
+	session             session
+	snapshots           snapshotSource
+	predicates          func(chain.PhaseSnapshot) availability
+	acquireSlot         func(participant string, cost limits.TokenCost, overFullWindow bool) (func(), limits.Admission)
+	holdEscrow          func() (func(), bool)
+	observer            dispatchObserver
+	now                 func() time.Time
+	matchWait           time.Duration
+	maxConsecutiveBurns func() int64
+	newTimer            func(time.Duration) (<-chan time.Time, func())
+	retire              func(*dispatcher) bool
+	idleGrace           time.Duration
+	submitBuffer        int
+	onExhausted         func(escrowID, reason string)
 }
 
 type submitOutcome int
@@ -59,6 +61,7 @@ type dispatcher struct {
 	done    chan struct{}
 	waiting []*waiter
 
+	burnsInARow    int64
 	pendingSubmits atomic.Int64
 
 	lifecycleMu sync.RWMutex
@@ -78,6 +81,9 @@ func newDispatcher(deps dispatcherDeps) *dispatcher {
 	}
 	if deps.holdEscrow == nil {
 		deps.holdEscrow = func() (func(), bool) { return nil, true }
+	}
+	if deps.maxConsecutiveBurns == nil {
+		deps.maxConsecutiveBurns = func() int64 { return 0 }
 	}
 	return &dispatcher{
 		dispatcherDeps: deps,
@@ -257,6 +263,12 @@ func (d *dispatcher) recordExcludedServe(participant string) {
 	}
 }
 
+func (d *dispatcher) recordForcedSend(participant string, burnsInARow int64) {
+	if d.observer != nil {
+		d.observer.ForcedSend(d.escrowID, participant, burnsInARow)
+	}
+}
+
 func intentFor(decision Decision) NonceIntent {
 	switch outcome := decision.(type) {
 	case serve:
@@ -274,16 +286,18 @@ func freeze(live availability, hosts int) availability {
 	return live
 }
 
-// admit couples admission to the frozen predicates. See routing.md, "Where the nonce, the slot and the hold are taken".
-func admit(avail *availability, acquire func(string, limits.TokenCost) (func(), bool)) func(string, limits.TokenCost) (func(), bool) {
+// admit couples admission to the frozen predicates, and answers with the block that refused; blockNone means the tokens were taken. See routing.md, "Where the nonce, the slot and the hold are taken".
+func admit(avail *availability, acquire func(string, limits.TokenCost, bool) (func(), limits.Admission)) func(string, limits.TokenCost, bool) (func(), blockReason) {
 	if avail.frozen == nil {
 		avail.frozen = map[string]blockReason{}
 	}
-	return func(participant string, cost limits.TokenCost) (func(), bool) {
-		if release, admitted := acquire(participant, cost); admitted {
-			return release, true
+	return func(participant string, cost limits.TokenCost, overFullWindow bool) (func(), blockReason) {
+		release, admission := acquire(participant, cost, overFullWindow)
+		refused := blockForAdmission(admission)
+		if refused == blockNone {
+			return release, blockNone
 		}
-		avail.refuseSlot(participant)
-		return nil, false
+		avail.refuseSlot(participant, refused)
+		return nil, refused
 	}
 }

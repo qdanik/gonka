@@ -19,10 +19,11 @@ func (a *armedTimer) disarm() {
 
 // offer is what one Advance decided, kept across the loop so the decide closure is built once per drain.
 type offer struct {
-	decision        Decision
-	taken           reservation
-	escrowRetired   bool
-	throttledWaiter *waiter
+	decision      Decision
+	taken         reservation
+	escrowRetired bool
+	forced        bool
+	refusedWaiter *waiter
 }
 
 // drain assigns nonces until the queue empties, a nonce is held, or the burn budget trips. See README, "The drain".
@@ -31,17 +32,28 @@ func (d *dispatcher) drain() (time.Time, bool) {
 	avail := freeze(d.predicates(d.snapshots.Snapshot()), len(participants))
 	acquire := admit(&avail, d.acquireSlot)
 	burnBudget := d.session.GroupSize() * (len(d.waiting) + 1)
+	burnLimit := d.maxConsecutiveBurns()
 
 	var offered offer
 	decide := func(binding HostBinding) NonceIntent {
 		offered.taken.participant = binding.Participant
-		offered.decision = match(binding, d.waiting, participants, avail, d.now(), d.matchWait)
+		forcingDue := burnLimit > 0 && d.burnsInARow >= burnLimit
+		gates := avail
+		if forcingDue {
+			gates = avail.servingOverFullWindows()
+		}
+		offered.decision = match(binding, d.waiting, participants, gates, d.now(), d.matchWait)
 		switch decided := offered.decision.(type) {
 		case serve:
-			release, admitted := acquire(binding.Participant, slotCost(decided.waiter.profile))
-			if !admitted {
-				offered.throttledWaiter = decided.waiter
-				offered.decision = burn{kind: ghostThrottled}
+			cost := slotCost(decided.waiter.profile)
+			release, refused := acquire(binding.Participant, cost, false)
+			if refused != blockNone && forcingDue {
+				release, refused = acquire(binding.Participant, cost, true)
+				offered.forced = refused == blockNone
+			}
+			if refused != blockNone {
+				offered.refusedWaiter = decided.waiter
+				offered.decision = burn{kind: ghostFor[refused]}
 			}
 			offered.taken.hostSlot = release
 		case burn:
@@ -79,18 +91,24 @@ func (d *dispatcher) drain() (time.Time, bool) {
 			if outcome.despiteExclusion {
 				d.recordExcludedServe(offered.taken.participant)
 			}
-			d.handOff(outcome.waiter, offered.taken, prepared)
+			if d.handOff(outcome.waiter, offered.taken, prepared) {
+				if offered.forced {
+					d.recordForcedSend(offered.taken.participant, d.burnsInARow)
+				}
+				d.burnsInARow = 0
+			}
 		case burn:
 			// A real session always commits the ghost it was asked for; only a session double leaves Nonce zero.
 			burned := Burn{
 				Participant: offered.taken.participant, Reason: outcome.kind.reason(),
-				RequestID: d.burnedDuring(offered.throttledWaiter),
+				RequestID: d.burnedDuring(offered.refusedWaiter),
 			}
 			if prepared != nil {
 				burned.Nonce = prepared.Nonce()
 			}
 			d.recordGhost(burned)
 			offered.taken.releaseHold()
+			d.burnsInARow++
 			burnBudget--
 			if burnBudget <= 0 {
 				d.recordBudgetTrip()
@@ -137,9 +155,9 @@ func (d *dispatcher) dropAbandoned() {
 }
 
 // burnedDuring names the waiter a refused slot was meant for, else the oldest waiter still waiting. See README, "The boundary types".
-func (d *dispatcher) burnedDuring(throttledWaiter *waiter) string {
-	if throttledWaiter != nil {
-		return throttledWaiter.profile.RequestID
+func (d *dispatcher) burnedDuring(refusedWaiter *waiter) string {
+	if refusedWaiter != nil {
+		return refusedWaiter.profile.RequestID
 	}
 	for _, queued := range d.waiting {
 		if !queued.abandoned.Load() {
@@ -170,7 +188,7 @@ func servable(queued *waiter, participants []string, avail availability) (canSer
 		switch avail.blocks(participant, queued) {
 		case blockNone:
 			return true, false, false, false
-		case blockThrottled:
+		case blockWindowFull, blockCutOff:
 			anyBusy = true
 		case blockPoCRequired:
 			anyChainBlocked = true
@@ -205,19 +223,22 @@ func (d *dispatcher) giveBack(taken reservation) {
 	taken.releaseHold()
 }
 
-func (d *dispatcher) handOff(served *waiter, taken reservation, prepared Prepared) {
+// handOff reports whether the assignment reached its caller; anything else spent the nonce on nobody. See routing.md, "The forced send".
+func (d *dispatcher) handOff(served *waiter, taken reservation, prepared Prepared) bool {
 	d.dequeue(served)
 	if prepared == nil {
 		d.giveBack(taken)
 		served.deliver(pickResult{err: fmt.Errorf("escrow %s: session committed no nonce", d.escrowID)})
-		return
+		return false
 	}
 	assignment := Assignment{Escrow: d.escrowID, Host: taken.participant, Nonce: prepared, EscrowHold: taken.escrowHold, HostSlot: taken.hostSlot}
-	if !served.deliver(pickResult{assignment: assignment}) {
-		d.giveBack(taken)
-		d.recordGhost(Burn{
-			Nonce: prepared.Nonce(), Participant: taken.participant,
-			Reason: ghostAbandoned.reason(), RequestID: served.profile.RequestID,
-		})
+	if served.deliver(pickResult{assignment: assignment}) {
+		return true
 	}
+	d.giveBack(taken)
+	d.recordGhost(Burn{
+		Nonce: prepared.Nonce(), Participant: taken.participant,
+		Reason: ghostAbandoned.reason(), RequestID: served.profile.RequestID,
+	})
+	return false
 }

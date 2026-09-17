@@ -89,11 +89,11 @@ func TestABurnWithoutANonceNamesNone(t *testing.T) {
 	lines := &logcapture.Recorder{}
 	events := newJournal(t, Settings{Lines: lines})
 
-	events.GhostBurned("escrow-1", scheduler.Burn{Participant: hostAlpha, Reason: scheduler.GhostReasonThrottled})
+	events.GhostBurned("escrow-1", scheduler.Burn{Participant: hostAlpha, Reason: scheduler.GhostReasonWindowFull})
 	events.Flush()
 
 	lines.RequireLine(t, logcapture.Entry{Level: "warn", Msg: "nonce burned for nobody", Fields: []any{
-		"escrow", "escrow-1", "host", "aaaaaaaa", "reason", scheduler.GhostReasonThrottled,
+		"escrow", "escrow-1", "host", "aaaaaaaa", "reason", scheduler.GhostReasonWindowFull,
 	}})
 }
 
@@ -101,10 +101,10 @@ func TestABurnWithANonceNamesIt(t *testing.T) {
 	lines := &logcapture.Recorder{}
 	events := newJournal(t, Settings{Lines: lines})
 
-	events.GhostBurned("escrow-1", scheduler.Burn{Nonce: 42, Participant: hostAlpha, Reason: scheduler.GhostReasonThrottled})
+	events.GhostBurned("escrow-1", scheduler.Burn{Nonce: 42, Participant: hostAlpha, Reason: scheduler.GhostReasonWindowFull})
 	events.Flush()
 
 	lines.RequireLine(t, logcapture.Entry{Level: "warn", Msg: "nonce burned for nobody", Fields: []any{
-		"escrow", "escrow-1", "nonce", uint64(42), "host", "aaaaaaaa", "reason", scheduler.GhostReasonThrottled,
+		"escrow", "escrow-1", "nonce", uint64(42), "host", "aaaaaaaa", "reason", scheduler.GhostReasonWindowFull,
 	}})
 }

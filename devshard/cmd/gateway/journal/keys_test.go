@@ -133,6 +133,7 @@ func everyProducer() map[string]func(events *Journal) {
 		"HostDeniedCrown":       func(events *Journal) { events.HostDeniedCrown(hostAlpha, "qwen", 3) },
 		"HostCrownedAgain":      func(events *Journal) { events.HostCrownedAgain(hostAlpha, "qwen") },
 		"ExcludedHostServed":    func(events *Journal) { events.ExcludedHostServed("escrow-1", hostBravo) },
+		"ForcedSend":            func(events *Journal) { events.ForcedSend("escrow-1", hostBravo, 6) },
 		"EscrowServing":         func(events *Journal) { events.EscrowServing("7", "qwen") },
 		"EscrowRetired":         func(events *Journal) { events.EscrowRetired("7") },
 		"EscrowRetiredDraining": func(events *Journal) { events.EscrowRetiredDraining("7", 1) },

@@ -5,7 +5,8 @@ package scheduler
 // Why a nonce was burned instead of served.
 const (
 	GhostReasonPoCUnavailable      = "poc_unavailable_host"
-	GhostReasonThrottled           = "participant_throttled_no_send"
+	GhostReasonWindowFull          = "participant_window_full_no_send"
+	GhostReasonCutOff              = "participant_cut_off_no_send"
 	GhostReasonEjected             = "participant_ejected_no_send"
 	GhostReasonOutsideAllowlist    = "participant_outside_allowlist"
 	GhostReasonStateDiverged       = "participant_state_diverged_no_send"

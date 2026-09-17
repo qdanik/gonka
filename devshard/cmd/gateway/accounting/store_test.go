@@ -45,7 +45,7 @@ func TestCountersSurviveARestart(t *testing.T) {
 	if err := book.ObserveLatestNonce(testEscrow, 12); err != nil {
 		t.Fatalf("ObserveLatestNonce(): %v", err)
 	}
-	if err := book.RecordGhost(testEscrow, 5, "participant_throttled_no_send"); err != nil {
+	if err := book.RecordGhost(testEscrow, 5, "participant_window_full_no_send"); err != nil {
 		t.Fatalf("RecordGhost(): %v", err)
 	}
 	if err := book.ObserveHostStats(testEscrow, 1, types.HostStats{Missed: 2}); err != nil {
@@ -168,7 +168,7 @@ func TestAStoreFromAnotherSchemaIsRefused(t *testing.T) {
 func TestAFailedWriteLeavesThePreviousLedgerInPlace(t *testing.T) {
 	store := openTestStore(t)
 	book := newTestBook(t, 4)
-	if err := book.RecordGhost(testEscrow, 5, "participant_throttled_no_send"); err != nil {
+	if err := book.RecordGhost(testEscrow, 5, "participant_window_full_no_send"); err != nil {
 		t.Fatalf("RecordGhost(): %v", err)
 	}
 	if err := store.Save(context.Background(), book); err != nil {
@@ -230,7 +230,7 @@ func TestALateFinishLiftsANonceOutOfTheUnfinishedBucket(t *testing.T) {
 // file with the escrow's whole history to no purpose.
 func TestOnlyRevisableNoncesAreWrittenDown(t *testing.T) {
 	book := newTestBook(t, 4)
-	if err := book.RecordGhost(testEscrow, 5, "participant_throttled_no_send"); err != nil {
+	if err := book.RecordGhost(testEscrow, 5, "participant_window_full_no_send"); err != nil {
 		t.Fatalf("RecordGhost(): %v", err)
 	}
 	if err := book.RecordRace(testEscrow, []Attempt{

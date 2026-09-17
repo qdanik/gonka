@@ -203,21 +203,22 @@ func (s *Scheduler) dispatcherFor(escrow Escrow) (*dispatcher, error) {
 	target, known := s.dispatchers[escrow.ID]
 	if !known || target.isStopped() || target.sessionID != escrow.SessionID {
 		target = newDispatcher(dispatcherDeps{
-			escrowID:     escrow.ID,
-			sessionID:    escrow.SessionID,
-			session:      escrow.Session,
-			snapshots:    s.snapshots,
-			predicates:   s.predicates(escrow),
-			acquireSlot:  s.acquireSlot(escrow),
-			holdEscrow:   escrow.Hold,
-			observer:     s.observer,
-			now:          s.now,
-			matchWait:    s.matchWait(),
-			newTimer:     s.newTimer,
-			retire:       s.retire,
-			idleGrace:    idleDispatcherGrace,
-			submitBuffer: s.submitBuffer,
-			onExhausted:  s.onEscrowExhausted,
+			escrowID:            escrow.ID,
+			sessionID:           escrow.SessionID,
+			session:             escrow.Session,
+			snapshots:           s.snapshots,
+			predicates:          s.predicates(escrow),
+			acquireSlot:         s.acquireSlot(escrow),
+			holdEscrow:          escrow.Hold,
+			observer:            s.observer,
+			now:                 s.now,
+			matchWait:           s.matchWait(),
+			maxConsecutiveBurns: s.maxConsecutiveBurns,
+			newTimer:            s.newTimer,
+			retire:              s.retire,
+			idleGrace:           idleDispatcherGrace,
+			submitBuffer:        s.submitBuffer,
+			onExhausted:         s.onEscrowExhausted,
 		})
 		s.dispatchers[escrow.ID] = target
 		target.start()
@@ -251,16 +252,30 @@ func (s *Scheduler) predicates(escrow Escrow) func(chain.PhaseSnapshot) availabi
 		return availability{
 			notAllowed:   refusedByAllowlist(s.settings.Load().Scheduler.ParticipantAllowlist),
 			pocRequired:  func(participant string) bool { return preserved != nil && !preserved[participant] },
-			throttled:    func(participant string) bool { return !s.limiter.Available(participant, model) },
+			congested:    func(participant string) blockReason { return blockForAdmission(s.limiter.Admits(participant, model)) },
 			ejected:      func(participant string) bool { return s.perf.Ejected(participant, model) },
 			stateBlocked: s.stateBlocked(escrowID),
 		}
 	}
 }
 
-func (s *Scheduler) acquireSlot(escrow Escrow) func(participant string, cost limits.TokenCost) (func(), bool) {
+// blockForAdmission maps the limiter's verdict onto the drain's ladder, so only a full window is ever forced through. See routing.md, "The forced send".
+func blockForAdmission(admission limits.Admission) blockReason {
+	switch admission {
+	case limits.AdmissionWindowFull:
+		return blockWindowFull
+	case limits.AdmissionCutOff:
+		return blockCutOff
+	}
+	return blockNone
+}
+
+func (s *Scheduler) acquireSlot(escrow Escrow) func(participant string, cost limits.TokenCost, overFullWindow bool) (func(), limits.Admission) {
 	model := escrow.Model
-	return func(participant string, cost limits.TokenCost) (func(), bool) {
+	return func(participant string, cost limits.TokenCost, overFullWindow bool) (func(), limits.Admission) {
+		if overFullWindow {
+			return s.limiter.Overdraft(participant, model, cost)
+		}
 		return s.limiter.Acquire(participant, model, cost)
 	}
 }
@@ -284,6 +299,11 @@ func (s *Scheduler) stateBlocked(escrowID string) func(string) bool {
 
 func (s *Scheduler) matchWait() time.Duration {
 	return time.Duration(s.settings.Load().Scheduler.MatchWaitMS) * time.Millisecond
+}
+
+// maxConsecutiveBurns is read per drain rather than per dispatcher, so an admin change reaches an escrow already running. See routing.md, "The forced send".
+func (s *Scheduler) maxConsecutiveBurns() int64 {
+	return s.settings.Load().Scheduler.MaxConsecutiveBurns
 }
 
 // reserveTokens is what the request already sent plus the most this gateway will let the host answer with.
@@ -407,8 +427,9 @@ type escrowWeights interface {
 
 // hostLimiter is satisfied by *limits.ParticipantLimiter. See README, "The boundary types".
 type hostLimiter interface {
-	Available(participant, model string) bool
-	Acquire(participant, model string, cost limits.TokenCost) (func(), bool)
+	Admits(participant, model string) limits.Admission
+	Acquire(participant, model string, cost limits.TokenCost) (func(), limits.Admission)
+	Overdraft(participant, model string, cost limits.TokenCost) (func(), limits.Admission)
 }
 
 // hostHealth is satisfied by *perf.Tracker; Ejected is already capped, so honouring it cannot empty the pool.

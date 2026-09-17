@@ -30,9 +30,9 @@ They are therefore declared once, in a `vocabulary.go` beside the type that carr
 | `Finding*`, `Severity` | same | this gateway's reading of the counters |
 | `TimeoutKind/Action/Reason*` | [`engine/vocabulary.go`](../engine/vocabulary.go) | what a nonce was owed, what the gateway did, and why |
 | `Start*`, `Stage*`, `Role*`, `Visibility*` | same | why an attempt started, what escalated it, and what the client saw |
-| `GhostReason*` | [`scheduler/ghost.go`](../scheduler/ghost.go) | why a nonce was burned rather than served |
+| `GhostReason*` | [`scheduler/vocabulary.go`](../scheduler/vocabulary.go) | why a nonce was burned rather than served |
 
-The timeout vocabulary lives with `engine.TimeoutEvent` because three packages emit it — the race, the burn charge and the warmup — and only the ledger consumes it. One producer could own its own words; three cannot.
+The timeout vocabulary lives with `engine.TimeoutEvent` because two packages emit it — the race (`engine/settle.go`) and the warmup (`warmup/settle.go`) — and only the ledger consumes it. One producer could own its own words; two cannot.
 
 ### A nonce's dispositions
 
@@ -145,7 +145,7 @@ Thresholds are constants rather than configuration: two gateways must not report
 | `blocked_by_state_divergence` | assigned nonces burned because the host's escrow state no longer matches the group's | 1% |
 | `failure_terminals` | nonces that reached the host and produced no usable answer | any |
 
-**`throttled_by_gateway`** — this gateway stopped sending, so these nonces are its decision and not the host's failure. Its per-host congestion windows narrow after repeated failures and widen again as they stop, which makes this a consequence of the other findings rather than a fault of its own.
+**`throttled_by_gateway`** — this gateway stopped sending, so these nonces are its decision and not the host's failure. It counts two burn reasons together, `participant_window_full_no_send` and `participant_cut_off_no_send`, which the `counters` array beside the finding separates: the first is a host that was working and had no room, the second one this gateway had already found broken. Its per-host congestion windows narrow after repeated failures and widen again as they stop, which makes this a consequence of the other findings rather than a fault of its own. The forced send bounds how much of it one escrow may produce in a row: with the rung on, a sustained run produces one `forced_send` line per `scheduler_max_consecutive_burns` burns, so a high rate with no such line means the runs are being broken by serves and the nonces are going a few at a time rather than in sweeps (see [routing.md](./routing.md), "The forced send").
 
 **`blocked_by_state_divergence`** — the host returned a post-state-root that disagrees with the group's. It earns one replay of the retained chain first, because a host rolls its diff back on a mismatch and its state survives intact; this counts what it burned after that replay was spent. It is the only capability-shaped verdict that still withholds a host: a build that refuses tools, a version or a context length is counted and reported, never routed around.
 

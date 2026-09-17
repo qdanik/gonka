@@ -165,9 +165,10 @@ type Engine struct {
 	MaxAttemptsPerRequest int64
 }
 
-// Scheduler groups nonce-holding tuning; MatchWaitMS of 0 burns an unmatched nonce immediately.
+// Scheduler groups nonce-holding tuning; MatchWaitMS of 0 burns an unmatched nonce immediately, and MaxConsecutiveBurns of 0 never forces a send. See routing.md, "The forced send".
 type Scheduler struct {
 	MatchWaitMS          int64
+	MaxConsecutiveBurns  int64
 	WarmNewEscrows       bool
 	ParticipantAllowlist []string
 }
