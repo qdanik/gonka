@@ -28,11 +28,12 @@ type fakePrepared struct {
 func (p fakePrepared) Nonce() uint64 { return p.nonce }
 func (p fakePrepared) HostIdx() int  { return p.hostIdx }
 
-type fakeLimiter struct {
+// hostSlot stands in for the release the scheduler hands the attempt with its assignment.
+type hostSlot struct {
 	releases int
 }
 
-func (l *fakeLimiter) Release(participant, model string) { l.releases++ }
+func (s *hostSlot) release() { s.releases++ }
 
 type fakeClassifier struct {
 	perChunk []chunkFacts
@@ -88,7 +89,7 @@ func (d *fakeDispatcher) Send(ctx context.Context, nonce scheduler.Prepared, str
 
 type attemptFixture struct {
 	spec       AttemptSpec
-	limiter    *fakeLimiter
+	slot       *hostSlot
 	classifier *fakeClassifier
 	dispatch   *fakeDispatcher
 	sink       *bytes.Buffer
@@ -96,12 +97,12 @@ type attemptFixture struct {
 }
 
 func newAttemptFixture(dispatch *fakeDispatcher, classifier *fakeClassifier) *attemptFixture {
-	limiter := &fakeLimiter{}
+	slot := &hostSlot{}
 	sink := &bytes.Buffer{}
 	events := make(chan AttemptEvent, 64)
 	tick := testEpoch
 	return &attemptFixture{
-		limiter:    limiter,
+		slot:       slot,
 		classifier: classifier,
 		dispatch:   dispatch,
 		sink:       sink,
@@ -116,7 +117,7 @@ func newAttemptFixture(dispatch *fakeDispatcher, classifier *fakeClassifier) *at
 			StartReason: "receipt_timeout",
 			Nonce:       fakePrepared{nonce: 77, hostIdx: 3},
 			Dispatch:    dispatch,
-			Limiter:     limiter,
+			ReleaseSlot: slot.release,
 			Classifier:  classifier,
 			Sink:        sink,
 			Events:      events,
@@ -494,8 +495,8 @@ func TestRunAttempt_ReleasesTheHostSlotOnEveryExitPath(t *testing.T) {
 			runAttempt(ctx, fixture.spec)
 			fixture.drain()
 
-			if fixture.limiter.releases != 1 {
-				t.Fatalf("limiter releases = %d, want 1", fixture.limiter.releases)
+			if fixture.slot.releases != 1 {
+				t.Fatalf("host-slot releases = %d, want 1", fixture.slot.releases)
 			}
 			if classifier.releases != 1 {
 				t.Fatalf("classifier releases = %d, want 1", classifier.releases)

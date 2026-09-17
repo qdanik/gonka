@@ -180,10 +180,10 @@ type simWindows struct {
 	moves []windowMove
 }
 
-func (w *simWindows) OnResult(participant, _ string, verdict limits.Verdict) {
+func (w *simWindows) OnResult(result limits.Result) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	w.moves = append(w.moves, windowMove{participant: participant, verdict: verdict})
+	w.moves = append(w.moves, windowMove{participant: result.Participant, verdict: result.Verdict})
 }
 
 func (w *simWindows) recorded() []windowMove {
@@ -375,19 +375,21 @@ func (s *simulator) host(nonce uint64, hostIdx int, participant string, script *
 	s.target.mu.Unlock()
 	s.picker.mu.Lock()
 	s.picker.queue = append(s.picker.queue, scheduler.Assignment{
-		Escrow: "escrow-1",
-		Host:   participant,
-		Nonce:  fakePrepared{nonce: nonce, hostIdx: hostIdx},
+		Escrow:   "escrow-1",
+		Host:     participant,
+		Nonce:    fakePrepared{nonce: nonce, hostIdx: hostIdx},
+		HostSlot: s.windows.hostSlot(participant),
 	})
 	s.picker.mu.Unlock()
 }
 
 func (s *simulator) profile() Request {
 	return Request{
-		RequestID:   "request-1",
-		Model:       s.model,
-		InputTokens: 1_000,
-		Params:      simDispatchParams{prompt: "hello"},
+		RequestID:    "request-1",
+		Model:        s.model,
+		InputTokens:  1_000,
+		OutputTokens: 256,
+		Params:       simDispatchParams{prompt: "hello"},
 	}
 }
 

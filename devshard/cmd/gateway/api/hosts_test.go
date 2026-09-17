@@ -20,7 +20,9 @@ func TestAdminHostsReportsRoutingStateAndWindow(t *testing.T) {
 	}}
 	live.hosts.degraded = map[string]bool{"gonka1aaaa|qwen": true}
 	live.hosts.windows = []limits.HostWindow{{
-		Participant: "gonka1aaaa", Model: "qwen", Window: 8, Inflight: 2,
+		Participant: "gonka1aaaa", Model: "qwen",
+		InputWindowTokens: 8_192, OutputWindowTokens: 4_096,
+		InflightInputTokens: 2_048, InflightOutputTokens: 512,
 		Cutoff: limits.CutoffOpen, BackoffCount: 3, Available: false,
 	}}
 
@@ -37,7 +39,10 @@ func TestAdminHostsReportsRoutingStateAndWindow(t *testing.T) {
 	require.Equal(t, "qwen", host["model"])
 	require.Equal(t, true, host["ejected"])
 	require.Equal(t, true, host["degraded"])
-	require.Equal(t, float64(8), host["window"])
+	require.Equal(t, float64(8_192), host["input_window_tokens"])
+	require.Equal(t, float64(4_096), host["output_window_tokens"])
+	require.Equal(t, float64(2_048), host["inflight_input_tokens"])
+	require.Equal(t, float64(512), host["inflight_output_tokens"])
 	require.Equal(t, string(limits.CutoffOpen), host["cutoff"])
 	require.Equal(t, float64(3), host["backoff_count"])
 	require.Equal(t, false, host["available"])
@@ -46,7 +51,7 @@ func TestAdminHostsReportsRoutingStateAndWindow(t *testing.T) {
 func TestAdminHostsJoinsTheTwoSourcesByPair(t *testing.T) {
 	live := newHarness(t)
 	live.hosts.states = []perf.HostState{{Participant: "gonka1aaaa", Model: "qwen"}}
-	live.hosts.windows = []limits.HostWindow{{Participant: "gonka1bbbb", Model: "qwen", Window: 4}}
+	live.hosts.windows = []limits.HostWindow{{Participant: "gonka1bbbb", Model: "qwen", InputWindowTokens: 4_096}}
 
 	recorder := live.request(t, http.MethodGet, "/v1/admin/hosts", "", adminHeaders())
 

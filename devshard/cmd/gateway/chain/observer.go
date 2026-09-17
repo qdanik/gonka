@@ -174,6 +174,15 @@ func (o *PhaseObserver) refresh(ctx context.Context) {
 		LastUpdatedAt:          o.now(),
 	}
 
+	if models, fetched, modelsErr := o.fetchModels(ctx); fetched {
+		snapshot.Models = models
+	} else {
+		snapshot.Models = previous.Models
+		if modelsErr != nil {
+			snapshot.LastError = joinSnapshotError(snapshot.LastError, fmt.Sprintf("fetch governance models: %v", modelsErr))
+		}
+	}
+
 	if maxNonce, fetched, maxNonceErr := o.fetchMaxNonce(ctx); fetched {
 		snapshot.MaxNonce = maxNonce
 	} else {
@@ -288,6 +297,15 @@ func (o *PhaseObserver) fetchPreservedSnapshot(ctx context.Context, expectedAnch
 		return preservedSnapshotState{}, preservedSnapshotMissingCurrent, nil
 	}
 	return newPreservedSnapshotState(snapshot), preservedSnapshotCurrent, nil
+}
+
+// fetchModels reads what governance says about each model; fetched=false with a nil error means no chain access.
+func (o *PhaseObserver) fetchModels(ctx context.Context) (models map[string]ModelParams, fetched bool, err error) {
+	if o.chain == nil {
+		return nil, false, nil
+	}
+	models, err = o.chain.Models(ctx)
+	return models, err == nil && len(models) > 0, err
 }
 
 // fetchMaxNonce reads the nonce ceiling; fetched=false with a nil error means the chain carries no devshard escrow params.

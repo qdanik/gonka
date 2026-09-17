@@ -9,6 +9,7 @@ import (
 const (
 	latencyWindowSize    = 64
 	latencyWindowMinimum = 10
+	baselineRise         = 0.001
 )
 
 type hostKey struct {
@@ -108,10 +109,12 @@ func (h *hostPerf) failureRate(now time.Time) (rate, volume float64) {
 }
 
 // latencyWindow is a ring, not a decayed counter: the escalation needs a quantile, not a rate.
+// baseline is the best p75 the host has held. See README.md, "What a host is measured against".
 type latencyWindow struct {
-	samples [latencyWindowSize]time.Duration
-	next    int
-	filled  int
+	samples  [latencyWindowSize]time.Duration
+	next     int
+	filled   int
+	baseline time.Duration
 }
 
 func (w *latencyWindow) add(sample time.Duration) {
@@ -120,6 +123,29 @@ func (w *latencyWindow) add(sample time.Duration) {
 	if w.filled < latencyWindowSize {
 		w.filled++
 	}
+	w.trackBaseline()
+}
+
+// trackBaseline falls to a new best at once and rises by baselineRise of the gap. See README.md, "What a host is measured against".
+func (w *latencyWindow) trackBaseline() {
+	current, known := w.p75(latencyWindowMinimum)
+	if !known {
+		return
+	}
+	if w.baseline <= 0 || current < w.baseline {
+		w.baseline = current
+		return
+	}
+	w.baseline += time.Duration(float64(current-w.baseline) * baselineRise)
+}
+
+// pressure is the current p75 over the best the host has held; zero while the window is too young to say.
+func (w *latencyWindow) pressure() float64 {
+	current, known := w.p75(latencyWindowMinimum)
+	if !known || w.baseline <= 0 {
+		return 0
+	}
+	return float64(current) / float64(w.baseline)
 }
 
 func (w *latencyWindow) p75(minimum int) (time.Duration, bool) {

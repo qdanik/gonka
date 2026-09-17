@@ -100,6 +100,7 @@ type RaceOutcome struct {
 	EscrowID     string
 	Model        string
 	InputTokens  uint64
+	OutputTokens uint64
 	Decision     string
 	ClientStream bool
 
@@ -138,12 +139,11 @@ type AttemptOutcome struct {
 	MeanChunkGap          time.Duration
 	DroppedEvents         int64
 
-	Terminal            Terminal
-	LogprobsDecoded     bool
-	Confirmed           bool
-	ConfirmedAt         int64
-	NonceFinished       bool
-	FailureRateExceeded bool
+	Terminal        Terminal
+	LogprobsDecoded bool
+	Confirmed       bool
+	ConfirmedAt     int64
+	NonceFinished   bool
 
 	ReceiptDeadlineMissed    bool
 	FirstTokenDeadlineMissed bool
@@ -194,8 +194,10 @@ func (t Terminal) verdict() (limits.Verdict, bool) {
 	case TerminalUpstreamServerError:
 		return limits.UpstreamFault, true
 	case TerminalForbidden, TerminalNotFound, TerminalTimestampDrift,
-		TerminalDialFailure, TerminalStreamTruncated, TerminalUnexpectedEOF, TerminalStalled:
+		TerminalDialFailure, TerminalStreamTruncated, TerminalUnexpectedEOF:
 		return limits.TransportFault, true
+	case TerminalStalled:
+		return limits.DecodeStalled, true
 	case TerminalEmptyStream, TerminalBurnEmpty, TerminalErrorStream, TerminalCapabilityRefused,
 		TerminalResponseTooLarge:
 		return limits.ModelOutcome, true
@@ -279,10 +281,6 @@ func (a AttemptOutcome) missedADeadline() bool {
 	return a.ReceiptDeadlineMissed || a.FirstTokenDeadlineMissed
 }
 
-func (a AttemptOutcome) stalledWithinFailureRateBudget() bool {
-	return a.Terminal == TerminalStalled && !a.FailureRateExceeded
-}
-
 func (a AttemptOutcome) elapsed() time.Duration {
 	if a.SendTime.IsZero() || a.Completed.IsZero() {
 		return 0
@@ -330,7 +328,6 @@ func (o RaceOutcome) sampleExemption(a AttemptOutcome) SampleExemption {
 	switch {
 	case a.SendTime.IsZero():
 		return ExemptNeverDispatched
-	// An attempt that never reported says nothing about the host: judging it would charge our own cancellation.
 	case a.Terminal == TerminalUnclassified:
 		return ExemptNeverReported
 	case a.PhaseTransitionAborted:
@@ -345,7 +342,7 @@ func (o RaceOutcome) sampleExemption(a AttemptOutcome) SampleExemption {
 		return ExemptPoCSuppressed
 	case a.emptyStream() && !o.Succeeded:
 		return ExemptEmptyStreamNoWinner
-	// The race cancels its own losers; the sample and verdict ladders deliberately disagree here. See race.md, "The exemption ladder".
+	// See race.md, "The exemption ladder".
 	case a.Terminal == TerminalClientCancelled:
 		return ExemptClientCancelled
 	}
@@ -376,7 +373,7 @@ func (o RaceOutcome) Verdict(a AttemptOutcome) (limits.Verdict, bool) {
 		return limits.EmptyAnswer, true
 	case a.emptyStream() && a.elapsed() >= emptyStreamHeldTooLong:
 		return limits.Overload, true
-	case a.stalledWithinFailureRateBudget(), a.wonOrLost() && !o.responsive(a):
+	case a.wonOrLost() && !o.responsive(a):
 		return limits.ModelOutcome, false
 	case a.wonOrLost() && a.missedADeadline():
 		return limits.LateSuccess, true

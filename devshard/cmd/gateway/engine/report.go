@@ -148,6 +148,7 @@ func (c *raceCoordinator) outcome() RaceOutcome {
 		EscrowID:        c.escrowID,
 		Model:           c.request.Model,
 		InputTokens:     c.request.InputTokens,
+		OutputTokens:    c.request.OutputTokens,
 		ClientStream:    c.request.ClientStream,
 		Decision:        c.decision,
 		PoCBypassActive: c.pocBypass,
@@ -163,7 +164,6 @@ func (c *raceCoordinator) outcome() RaceOutcome {
 		}
 		record.StartedAt = c.started
 		record.NonceFinished = attempt.nonceFinished
-		record.FailureRateExceeded = c.deps.Perf.Ejected(attempt.participant, c.request.Model)
 		record.PhaseTransitionAborted = c.phaseAborted(attempt, record)
 		record.Terminal = c.racedTerminal(attempt, record)
 		if attempt == c.winner {

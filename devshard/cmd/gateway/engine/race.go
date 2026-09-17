@@ -8,6 +8,7 @@ import (
 
 	"devshard/cmd/gateway/chain"
 	"devshard/cmd/gateway/config"
+	"devshard/cmd/gateway/perf"
 	"devshard/cmd/gateway/scheduler"
 )
 
@@ -43,6 +44,7 @@ type hostPerf interface {
 	Ejected(participant, model string) bool
 	Degraded(participant, model string) bool
 	FirstContentP75(participant, model string) (time.Duration, bool)
+	Pressure(participant, model string) perf.Pressure
 }
 
 // crownGate carries the empty-stream crowning penalty between races.
@@ -260,7 +262,7 @@ func (c *raceCoordinator) strand(assignment scheduler.Assignment, role string) {
 		Nonce: assignment.Nonce.Nonce(), Participant: assignment.Host, Role: role,
 	})
 	c.escrowID = assignment.Escrow
-	c.deps.Limiter.Release(assignment.Host, c.request.Model)
+	assignment.ReleaseHostSlot()
 	if c.deps.Hold != nil {
 		c.deps.Hold(assignment.EscrowHold)
 	}

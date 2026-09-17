@@ -5,13 +5,15 @@ Three limiters, each answering a different question.
 ## What it owns
 
 - **The gateway limiter** (`gateway.go`) — a FIFO admission queue over concurrent requests and in-flight input tokens, per model. Refuses with a typed rejection that names which cap turned the request away, so an operator is not left a wall of identical statuses.
-- **The participant limiter** (`participant.go`) — a per-host AIMD concurrency window with a circuit breaker. It narrows on host-attributable failures and missed deadlines, widens on answers that arrive in time, and half-opens after a cutoff to admit one real request rather than waiting for a probe.
+- **The participant limiter** (`participant.go`, `congestion.go`) — two congestion windows per `{participant, model}` and a cut-off over them: one window over the input tokens an attempt must prefill, one over the output tokens it reserved. It narrows on host-attributable failures, missed deadlines and latency past the host's own best, widens on answers that arrive in time, and half-opens after a cut-off to admit one real request rather than waiting for a probe. `Acquire` hands back a lease that releases exactly what it took, exactly once.
 - **The capacity model** (`capacity.go`, `weights.go`) — scales the caps by the host weight the chain reports for each model, so a shard that has lost half its hosts admits proportionally less.
 
 ## Boundaries
 
 - **Zero means unlimited**, for both the concurrency cap and the token budget. With `max_concurrent_requests` unset, the effective cap comes from the per-10 000-weight rate instead.
-- **Only host-attributable verdicts move the window.** A model refusal or a burn-empty is what the model produced, not what the host failed to carry, and narrowing for it would penalise the wrong party. An empty answer is the host's: it halves the window, and one that left its nonce open also counts towards the cutoff.
+- **Only host-attributable verdicts move a window.** A model refusal or a burn-empty is what the model produced, not what the host failed to carry, and narrowing for it would penalise the wrong party. An empty answer is the host's: it narrows both windows, and one that left its nonce open narrows them harder and counts towards the cut-off.
+- **A busy host and a broken one are different answers.** Congestion narrows a window; a transport fault moves no window at all and counts towards the cut-off instead, because a host that cannot be reached is not a host with no room.
+- **A lease is the only way tokens come back.** `Acquire` returns the closure that releases exactly what it took and does so once; the package exposes no release keyed by participant, so nothing can give back what it never took.
 - **A corrupted capacity scale fails closed.** A NaN must not be read as unlimited capacity.
 
 ## The gateway limiter's queue
@@ -37,21 +39,50 @@ The concurrency cap is then derived one of two ways:
 
 The input-token cap only ever takes the second path.
 
-## The AIMD window
+## What blames which window
 
-- **Growth is judged on peak in-flight since the last adjustment, not the live count.** The engine releases an attempt's slot in a `defer` and reports its verdict afterwards, so a live read would see the slot already given back and refuse to grow a window that was genuinely saturated. The peak is set when the slot is taken and nothing can undo it, which makes the decision independent of which of the two runs first.
-- **A missed deadline halves the window without touching the breaker, and the late answer does not widen it.** `MissedDeadline` arrives while its attempt is still running, so the fault count waits for that attempt's own verdict. `LateSuccess` clears the count and lifts a half-open probe like `Success` but skips the growth, or the next answer would undo the halving.
-- **A halving stops at `Min`, and never below one.** A host a run of bad answers narrowed still takes enough work to earn its window back; a half-open cutoff still admits exactly one probe.
+A verdict is read once, into the tier it narrows by, the window it blames and what it does to the cut-off (`congestion.go`, `responseFor`). [`docs/capacity.md`](../docs/capacity.md), "The participant limiter: IOCW" sets the same table beside the factors and the units.
+
+| Verdict | Narrows | Blames | Cut-off |
+| --- | --- | --- | --- |
+| `Success` | nothing while the delay signal is quiet, soft otherwise | —, or the dimension the delay signal names, with the cross factor on the other | cleared, and a half-open probe recovers |
+| `LateSuccess` | nothing | — | cleared, and a half-open probe recovers |
+| `Overload` | soft | both | count cleared |
+| `UpstreamFault`, `EmptyAnswer` | hard | both | untouched |
+| `EmptyAnswerLeftOpen` | severe | both | counts |
+| `MissedReceiptDeadline` | severe | both | untouched |
+| `MissedFirstTokenDeadline` | severe | input, cross on output | untouched |
+| `DecodeStalled` | severe | output, cross on input | untouched |
+| `TransportFault` | nothing | — | counts |
+| `ModelOutcome` | nothing | — | untouched |
+
+- **Every signal that narrows moves both windows.** One that blames a single dimension applies its tier there and the cross factor to the other, because prefill and decode share one device; one that blames the host as a whole applies its tier to both and carries no cross factor, having nothing left to spread (`congestion.go`, `CongestionFactors.narrowingFor`).
+- **A receipt is owed before any prefill**, so a missed receipt deadline says nothing about which half of the host is slow and narrows both; a first token is what prefill produces and a mid-stream silence is what decode failed to, so those two blame one window each.
+- **A verdict that moves nothing returns before the lock.** `ModelOutcome` neither narrows nor touches the cut-off, so it takes no lock and creates no state for a pair (`congestion.go`, `response.inert`).
+- **Only two verdicts feed the cut-off**: `TransportFault`, which moves no window because a host that cannot be reached is broken rather than full, and `EmptyAnswerLeftOpen`, which took the work and parked the reserve. `DecodeStalled` narrows hard and leaves the cut-off alone — a slow answer is still an answer, and a host that stalls chronically is withheld by the outlier detector in [`perf`](../perf/) instead.
+- **Lateness is judged while the attempt still runs**, so it leaves the cut-off's count alone: the same attempt is judged again on its own verdict when it ends, and the answer it eventually sends is a `LateSuccess` that clears the count and lifts a half-open probe without widening anything.
+
+## Additive increase
+
+- **Growth is judged on peak in-flight since the last adjustment, not the live count.** The engine releases an attempt's lease in a `defer` and reports its verdict afterwards, so a live read would see the tokens already given back and refuse to grow a window that was genuinely saturated. The peak is set when the tokens are taken and nothing can undo it, which makes the decision independent of which of the two runs first.
+- **Each window is judged and credited on its own.** A window widens only when its own peak reached half its own size, by the tokens its own dimension carried (`participant.go`, `ParticipantLimiter.growLocked`).
+- **A window that has never been narrowed is still in slow start** and takes the whole of what the answer carried, doubling per window served. After the first narrowing it takes one step — one request of the model — per window's worth of tokens, so a wide window earns its next rung more slowly than a narrow one (`congestion.go`, `grownBy`).
+- **Nothing caps a window.** Where it stops is what the host's congestion signals say; the configuration names a floor and a starting size and no ceiling.
+- **A narrowing stops at `Min`, and never below one token.** A host a run of bad answers narrowed still takes one request of that model, and a half-open cut-off still admits exactly one probe.
+- **A narrowing ends slow start for the window it applies to**, and only for that one: past the first congestion signal that window's capacity is known well enough to approach one request at a time. It restarts that window's peak from what is in flight, because the growth that follows has to be earned against the narrower window. A factor that finds the window already at its floor still ends slow start, or a window configured with `Min` equal to `Initial` would double after every congestion signal for ever (`participant.go`, `narrowWindow`).
+
+## The cut-off, the peek and the sweep
+
 - **A half-open probe gets exactly one try.** Any fault while half-open reopens the cutoff immediately rather than after `AfterFailures` more.
 - **A successful probe clears the trip itself**, not just the half-open flag, or the next `Acquire` would re-flag half-open forever.
 - **Backoff is `base * 1.6^count` plus up to 20% jitter** (gRPC connection-backoff's `JITTER`), so reopened cutoffs across many hosts do not retry in lockstep. The count stops rising once the backoff saturates at `MaxOpen`, so `1.6^count` cannot overflow the duration.
-- **`Available` peeks the admit decision** without touching in-flight, the cutoff, or creating state for a participant never seen before, which is what lets routing ask about a host it has never dispatched to.
+- **`Available` peeks the admit decision** for the smallest possible request, without touching in-flight, the cutoff, or creating state for a participant never seen before, which is what lets routing ask about a host it has never dispatched to.
 - **`Snapshot` copies every pair under one lock acquisition**, so a report cannot mix two moments, then sorts into participant/model order after the lock releases.
-- **A pair idle past `IdleEviction` is forgotten.** `Acquire` marks the pair it is asked about as used, then scans at most once per tenth of the window and drops only a pair with nothing in flight and no cut-off still running, so a `Release` never lands on a state that is gone. The composition root sets the window to `perf_host_staleness_seconds` through `ParticipantConfigFromConfig`; an `IdleEviction` of zero keeps every pair.
+- **A pair idle past `IdleEviction` is forgotten.** `Acquire` marks the pair it is asked about as used, and so does the lease it handed out, so a host waiting on a verdict is not swept between the release and the result. The scan runs at most once per tenth of the window and drops only a pair with nothing in flight and no cut-off still running, so a lease released afterwards never lands on a state that is gone. The composition root sets the window to `perf_host_staleness_seconds` through `ParticipantConfigFromConfig`; an `IdleEviction` of zero keeps every pair.
 
 ## When a host stops taking work
 
-A cut-off is a decision an operator has to be able to explain afterwards, and its gauge cannot carry it: the first cut-off lasts 5 seconds against a gauge sampled every 15 or 30. `OnResult` therefore narrates each edge to the journal bound by `SetNarrator`, under its own lock, and nothing in between, naming which of the two triggers fired — a run of transport faults, or a half-open probe that failed on its single try — the backoff depth that set the duration, and how long the cut-off will last. The volume follows the host count and the backoff, never the request rate. The package imports no logger; the journal writes the line.
+A cut-off is a decision an operator has to be able to explain afterwards, and its gauge cannot carry it: the first cut-off lasts 5 seconds against a gauge sampled every 15 or 30. `OnResult` therefore narrates each edge to the journal bound by `SetNarrator`, under its own lock, and nothing in between, naming which of the two triggers fired — a run of faults, or a half-open probe that failed on its single try — the backoff depth that set the duration, and how long the cut-off will last. The run is counted in `consecutiveCutoffFaults`, over the transport faults and the nonce-abandoning empty answers alike, while the reason on the line stays `consecutive_transport_faults`: the string is what dashboards and log queries match on, so it is a wire contract rather than a description of the counter behind it (`vocabulary.go`). The volume follows the host count and the backoff, never the request rate. The package imports no logger; the journal writes the line.
 
 ## The capacity model
 

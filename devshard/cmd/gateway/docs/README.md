@@ -9,7 +9,7 @@ Each package has its own `README.md` describing what that layer owns. The docume
 | [race.md](./race.md) | the escalation ladder, the crown, the drain barrier |
 | [routing.md](./routing.md) | the drain loop, the host gates, every burn reason |
 | [escrows.md](./escrows.md) | escrow states, rotation, settlement, retirement |
-| [capacity.md](./capacity.md) | admission, the AIMD window, ejection, buffered replies |
+| [capacity.md](./capacity.md) | admission, the per-host congestion windows, ejection, buffered replies |
 | [accounting.md](./accounting.md) | the nonce ledger: vocabulary, surface, findings, storage |
 | [rules.md](./rules.md) | the invariants that must never stop being true, and the non-goals |
 | [operations.md](./operations.md) | every route, every environment variable, every metric |

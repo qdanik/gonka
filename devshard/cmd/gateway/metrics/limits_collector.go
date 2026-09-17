@@ -48,8 +48,6 @@ type LimitsCollector struct {
 	capacityWeightsUnobserved    *prometheus.Desc
 	participantsTracked          *prometheus.Desc
 	participantsExhausted        *prometheus.Desc
-	windowSize                   *prometheus.Desc
-	windowInflight               *prometheus.Desc
 	cutoffState                  *prometheus.Desc
 }
 
@@ -75,9 +73,7 @@ func NewLimitsCollector(sources LimitsSources) *LimitsCollector {
 
 		participantsTracked:   gaugeDesc("devshard_gateway_participants_tracked", "Participant/model pairs the per-host limiter is tracking."),
 		participantsExhausted: gaugeDesc("devshard_gateway_participants_exhausted", "Tracked participant/model pairs that would currently refuse an attempt."),
-		windowSize:            gaugeDesc("devshard_gateway_participant_window_size", "Requests allowed in flight to one host right now.", "participant_key", "model"),
-		windowInflight:        gaugeDesc("devshard_gateway_participant_window_inflight", "Attempts currently occupying a host's window.", "participant_key", "model"),
-		cutoffState:           gaugeDesc("devshard_gateway_participant_breaker_state", "Whether a host is currently cut off after repeated transport faults (1 for the current state).", "participant_key", "model", "state"),
+		cutoffState:           gaugeDesc("devshard_gateway_participant_breaker_state", "Whether a host is currently cut off after repeated faults it never answered, or a failed half-open probe (1 for the current state).", "participant_key", "model", "state"),
 	}
 }
 
@@ -87,7 +83,7 @@ func (c *LimitsCollector) Describe(ch chan<- *prometheus.Desc) {
 		c.inflightRequestsByModel, c.inflightInputTokensByModel, c.queueDepth,
 		c.enforcedMaxConcurrentByModel, c.enforcedMaxTokensByModel,
 		c.capacityScale, c.capacityTotalWeight, c.capacityBaselineWeight, c.capacityWeightsUnobserved,
-		c.participantsTracked, c.participantsExhausted, c.windowSize, c.windowInflight, c.cutoffState,
+		c.participantsTracked, c.participantsExhausted, c.cutoffState,
 	} {
 		ch <- desc
 	}
@@ -124,8 +120,6 @@ func (c *LimitsCollector) Collect(ch chan<- prometheus.Metric) {
 		if !window.Available {
 			exhausted++
 		}
-		gauge(ch, c.windowSize, window.Window, window.Participant, window.Model)
-		gauge(ch, c.windowInflight, float64(window.Inflight), window.Participant, window.Model)
 		for _, state := range cutoffStates {
 			gauge(ch, c.cutoffState, boolGauge(window.Cutoff == state), window.Participant, window.Model, string(state))
 		}

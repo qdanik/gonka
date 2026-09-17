@@ -82,7 +82,6 @@ func TestE2E_GatewayPublishesTheMetricsOnlyFailuresProduce(t *testing.T) {
 		"devshard_gateway_attempt_failures_total",
 		"devshard_gateway_participant_transport_errors_total",
 		"devshard_gateway_participant_breaker_state",
-		"devshard_gateway_participant_window_size",
 	})
 }
 

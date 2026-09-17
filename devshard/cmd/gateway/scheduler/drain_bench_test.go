@@ -7,6 +7,7 @@ import (
 
 	"devshard/cmd/gateway/chain"
 	"devshard/cmd/gateway/config"
+	"devshard/cmd/gateway/limits"
 )
 
 // The fakes in dispatcher_test.go record every call under a mutex, which a benchmark would measure
@@ -55,15 +56,13 @@ type leanLimiter struct {
 
 func (l *leanLimiter) Available(string, string) bool { return true }
 
-func (l *leanLimiter) Acquire(participant, _ string) bool {
+func (l *leanLimiter) Acquire(participant, _ string, _ limits.TokenCost) (func(), bool) {
 	if l.refused[participant] {
-		return false
+		return nil, false
 	}
 	l.admitted++
-	return true
+	return func() { l.admitted-- }, true
 }
-
-func (l *leanLimiter) Release(string, string) { l.admitted-- }
 
 type leanHealth struct{ ejected map[string]bool }
 
@@ -111,7 +110,6 @@ func newDrainBench(cfg drainBenchConfig) *drainBench {
 		snapshots:   &leanSnapshots{snapshot: chain.PhaseSnapshot{PreservedByModel: map[string][]string{benchModel: slots}}},
 		predicates:  scheduler.predicates(escrow),
 		acquireSlot: scheduler.acquireSlot(escrow),
-		releaseSlot: scheduler.releaseSlot(escrow),
 		now:         scheduler.now,
 		matchWait:   matchWaitWindow,
 	})

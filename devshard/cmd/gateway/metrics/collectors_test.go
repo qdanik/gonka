@@ -2,6 +2,7 @@ package metrics
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -13,11 +14,22 @@ import (
 	"devshard/cmd/gateway/store"
 )
 
+// trackedPricing prices a request at 1024 tokens on both sides, so every harness in this file starts a host
+// with windows of 4096 tokens.
+var trackedPricing = limits.WindowPricing{
+	Input:                 limits.RequestBounds{Min: 1, Initial: 4},
+	Output:                limits.RequestBounds{Min: 1, Initial: 4},
+	FallbackContextTokens: 1_024,
+	FallbackOutputTokens:  1_024,
+}
+
 func newLimitsHarness(clock *time.Time) (*limits.GatewayLimiter, *limits.Capacity, *limits.ParticipantLimiter) {
 	limiter := limits.NewGatewayLimiter(limits.GatewayConfig{MaxConcurrent: 8, MaxInputTokens: 4000})
 	participants := limits.NewParticipantLimiter(limits.ParticipantConfig{
-		Initial: 4, Max: 16, AfterFailures: 1,
-		BaseOpen: time.Minute, MaxOpen: time.Minute,
+		Pricing:       trackedPricing,
+		Factors:       limits.CongestionFactors{Soft: 0.85, Hard: 0.70, Severe: 0.50, Cross: 0.90},
+		AfterFailures: 1,
+		BaseOpen:      time.Minute, MaxOpen: time.Minute,
 	}, func() time.Time { return *clock })
 	capacity := limits.NewCapacity(participants.Available)
 	return limiter, capacity, participants
@@ -48,7 +60,7 @@ func TestTheLimitsCollectorReportsTheConfiguredCapsBeforeAnyTraffic(t *testing.T
 	expectGauge(t, telemetry, "devshard_gateway_participants_tracked", labels{}, 0)
 	expectGauge(t, telemetry, "devshard_gateway_participants_exhausted", labels{}, 0)
 	expectGauge(t, telemetry, "devshard_gateway_inflight_requests_by_model", labels{"model": "qwen"}, 0)
-	expectSeriesCount(t, telemetry, "devshard_gateway_participant_window_size", 0)
+	expectSeriesCount(t, telemetry, "devshard_gateway_participant_breaker_state", 0)
 }
 
 func TestTheLimitsCollectorMatchesTheLimiterAfterTraffic(t *testing.T) {
@@ -168,13 +180,10 @@ func TestTheLimitsCollectorReportsAnOpenCutoffAsExhausted(t *testing.T) {
 		Models: func() []string { return nil },
 	}))
 
-	participants.OnResult("gonka1down", "qwen", limits.TransportFault)
+	participants.OnResult(limits.Result{Participant: "gonka1down", Model: "qwen", Verdict: limits.TransportFault})
 
-	host := labels{"participant_key": "gonka1down", "model": "qwen"}
 	expectGauge(t, telemetry, "devshard_gateway_participants_tracked", labels{}, 1)
 	expectGauge(t, telemetry, "devshard_gateway_participants_exhausted", labels{}, 1)
-	expectGauge(t, telemetry, "devshard_gateway_participant_window_size", host, 4)
-	expectGauge(t, telemetry, "devshard_gateway_participant_window_inflight", host, 0)
 	expectGauge(t, telemetry, "devshard_gateway_participant_breaker_state",
 		labels{"participant_key": "gonka1down", "model": "qwen", "state": "open"}, 1)
 	expectGauge(t, telemetry, "devshard_gateway_participant_breaker_state",
@@ -185,8 +194,10 @@ func TestTheLimitsCollectorReportsAnOpenCutoffAsExhausted(t *testing.T) {
 func TestTheLimitsCollectorStopsReportingAPairTheLimiterForgot(t *testing.T) {
 	clock := time.Unix(1700000000, 0)
 	participants := limits.NewParticipantLimiter(limits.ParticipantConfig{
-		Initial: 4, Max: 16, AfterFailures: 1,
-		BaseOpen: time.Minute, MaxOpen: time.Minute, IdleEviction: time.Hour,
+		Pricing:       trackedPricing,
+		Factors:       limits.CongestionFactors{Soft: 0.85, Hard: 0.70, Severe: 0.50, Cross: 0.90},
+		AfterFailures: 1,
+		BaseOpen:      time.Minute, MaxOpen: time.Minute, IdleEviction: time.Hour,
 	}, func() time.Time { return clock })
 	telemetry := New()
 	telemetry.Register(NewLimitsCollector(LimitsSources{
@@ -195,16 +206,18 @@ func TestTheLimitsCollectorStopsReportingAPairTheLimiterForgot(t *testing.T) {
 		Participants: participants,
 		Models:       func() []string { return nil },
 	}))
-	participants.Acquire("gonka1gone", "qwen")
-	participants.Release("gonka1gone", "qwen")
-	participants.Acquire("gonka1busy", "qwen")
-	expectSeriesCount(t, telemetry, "devshard_gateway_participant_window_size", 2)
+	attemptCost := limits.TokenCost{Input: 1_024, Output: 256}
+	releaseForgotten, _ := participants.Acquire("gonka1gone", "qwen", attemptCost)
+	releaseForgotten()
+	participants.Acquire("gonka1busy", "qwen", attemptCost)
+	// One series per cutoff state, for each of the two pairs.
+	expectSeriesCount(t, telemetry, "devshard_gateway_participant_breaker_state", 6)
+	expectGauge(t, telemetry, "devshard_gateway_participants_tracked", labels{}, 2)
 
 	clock = clock.Add(time.Hour + time.Minute)
-	participants.Acquire("gonka1busy", "qwen")
+	participants.Acquire("gonka1busy", "qwen", attemptCost)
 
-	expectSeriesCount(t, telemetry, "devshard_gateway_participant_window_size", 1)
-	expectGauge(t, telemetry, "devshard_gateway_participant_window_inflight", labels{"participant_key": "gonka1busy", "model": "qwen"}, 2)
+	expectSeriesCount(t, telemetry, "devshard_gateway_participant_breaker_state", 3)
 	expectGauge(t, telemetry, "devshard_gateway_participants_tracked", labels{}, 1)
 }
 
@@ -333,4 +346,32 @@ func TestTheAccountingCollectorReportsEveryRowTheLedgerLost(t *testing.T) {
 	expectCounter(t, telemetry, "devshard_gateway_accounting_rows_lost_total", labels{"cause": "shed"}, 7)
 	expectCounter(t, telemetry, "devshard_gateway_accounting_rows_lost_total", labels{"cause": "write_failed"}, 2)
 	expectCounter(t, telemetry, "devshard_gateway_accounting_retention_sweeps_failed_total", labels{}, 3)
+}
+
+// A window is per participant and per model, and four gauges at that cardinality buy an operator nothing the
+// admin host view does not already answer. See capacity.md, "The participant limiter: IOCW".
+func TestTheLimitsCollectorKeepsHostWindowsOffTheScrape(t *testing.T) {
+	clock := time.Unix(1700000000, 0)
+	limiter, capacity, participants := newLimitsHarness(&clock)
+	telemetry := New()
+	telemetry.Register(NewLimitsCollector(LimitsSources{
+		Limiter: limiter, Capacity: servingCapacity{capacity}, Participants: participants,
+		Models: func() []string { return []string{"qwen"} },
+	}))
+	release, admitted := participants.Acquire("gonka1a", "qwen", limits.TokenCost{Input: 1_024, Output: 256})
+	if !admitted {
+		t.Fatal("the harness limiter refused the first request")
+	}
+	defer release()
+
+	gathered, err := telemetry.Registry().Gather()
+	if err != nil {
+		t.Fatalf("gather: %v", err)
+	}
+
+	for _, family := range gathered {
+		if strings.HasPrefix(family.GetName(), "devshard_gateway_host_") || strings.Contains(family.GetName(), "participant_window") {
+			t.Errorf("family %s is on the scrape: per-host window state belongs to /v1/admin/hosts, where its cardinality costs nothing", family.GetName())
+		}
+	}
 }

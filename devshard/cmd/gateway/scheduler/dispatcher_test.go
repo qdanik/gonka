@@ -11,6 +11,7 @@ import (
 	"go.uber.org/goleak"
 
 	"devshard/cmd/gateway/chain"
+	"devshard/cmd/gateway/limits"
 	"devshard/types"
 )
 
@@ -346,12 +347,13 @@ func newHarness(t *testing.T, cfg harnessConfig) *harness {
 	}
 
 	dispatcher := newDispatcher(dispatcherDeps{
-		escrowID:     escrowA,
-		session:      session,
-		snapshots:    snapshots,
-		predicates:   predicates,
-		acquireSlot:  func(participant string) bool { return limiter.Acquire(participant, modelA) },
-		releaseSlot:  func(participant string) { limiter.Release(participant, modelA) },
+		escrowID:   escrowA,
+		session:    session,
+		snapshots:  snapshots,
+		predicates: predicates,
+		acquireSlot: func(participant string, cost limits.TokenCost) (func(), bool) {
+			return limiter.Acquire(participant, modelA, cost)
+		},
 		observer:     observer,
 		now:          clock.Now,
 		matchWait:    matchWaitWindow,

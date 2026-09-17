@@ -24,6 +24,8 @@ Everything the gateway's behaviour depends on, in one value that is never mutate
 | `Tx` | fee, gas and the poll loop that waits for a transaction. |
 | `Limits` | admission tuning. A zero `MaxInputTokensInFlight` is unlimited. `MaxTokensCap` bounds what a client may *ask for* and does not clamp `DefaultMaxTokens`. `ModelAccess` maps a model to one of the tiers below. |
 | `Limits.Concurrency` | a zero `MaxRequests` is no static cap at all, leaving admission to the capacity-scaled per-weight limit alone. |
+| `Limits.HostWindows` | the per-host congestion windows, counted in requests of the model: a floor and a starting size for input and for output, and no ceiling — where a window stops is what the host's own congestion signals say. See [`docs/capacity.md`](../docs/capacity.md), "The participant limiter: IOCW". |
+| `Limits.Congestion` | the factors a narrowing multiplies the blamed window by, the factor the other window takes with it, and how far above the best latency it has held a host may drift before a healthy answer counts as congestion. |
 | `Limits.ModelLimits` | the per-model override set. The two token fields are required as a pair; the pointer fields are optional, and a `nil` inherits the global limit rather than meaning zero. |
 | `Modes` | PoC mode and the disabled/redirect switches. |
 | `Rotation` | escrow rotation, its settlement switch, and how far before PoC it runs. |
@@ -55,4 +57,6 @@ Every problem is collected and reported together, and the field names in the mes
 
 Readers call `Load` on every use and get a shared, immutable pointer. Reconfiguration calls `Swap`, which publishes the whole replacement and then notifies subscribers **synchronously and in no particular order** — so a subscriber must be fast, must be order-independent, and must never call `Swap` itself.
 
-`Overrides` is the admin-tunable subset that the store persists and `Build` merges over the environment layer; a nil field means "not overridden". `ParseOverrides` rejects unknown fields, because a typo in an admin `PUT` must be reported rather than silently ignored.
+## Overrides
+
+`Overrides` is the admin-tunable subset that the store persists and `Build` merges over the environment layer; a nil field means "not overridden". `ParseOverrides` rejects unknown fields, because a typo in an admin `PUT` must be reported rather than silently ignored. `ParseStoredOverrides` is the read-back path and accepts them, because the file on disk may name a knob this build does not have: a retired knob costs the operator that knob, never the boot.

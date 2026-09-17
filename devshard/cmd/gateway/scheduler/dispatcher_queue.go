@@ -38,19 +38,19 @@ func (d *dispatcher) drain() (time.Time, bool) {
 		offered.decision = match(binding, d.waiting, participants, avail, d.now(), d.matchWait)
 		switch decided := offered.decision.(type) {
 		case serve:
-			if !acquire(binding.Participant) {
+			release, admitted := acquire(binding.Participant, slotCost(decided.waiter.profile))
+			if !admitted {
 				offered.throttledWaiter = decided.waiter
 				offered.decision = burn{kind: ghostThrottled}
 			}
+			offered.taken.hostSlot = release
 		case burn:
 		default:
 			return intentFor(offered.decision)
 		}
 		var held bool
 		if offered.taken.escrowHold, held = d.holdEscrow(); !held {
-			if _, serving := offered.decision.(serve); serving {
-				d.releaseSlot(binding.Participant)
-			}
+			offered.taken.releaseSlot()
 			offered.escrowRetired = true
 			return NonceIntent{}
 		}
@@ -185,6 +185,7 @@ func servable(queued *waiter, participants []string, avail availability) (canSer
 type reservation struct {
 	participant string
 	escrowHold  func()
+	hostSlot    func()
 }
 
 func (r reservation) releaseHold() {
@@ -193,8 +194,14 @@ func (r reservation) releaseHold() {
 	}
 }
 
+func (r reservation) releaseSlot() {
+	if r.hostSlot != nil {
+		r.hostSlot()
+	}
+}
+
 func (d *dispatcher) giveBack(taken reservation) {
-	d.releaseSlot(taken.participant)
+	taken.releaseSlot()
 	taken.releaseHold()
 }
 
@@ -205,7 +212,7 @@ func (d *dispatcher) handOff(served *waiter, taken reservation, prepared Prepare
 		served.deliver(pickResult{err: fmt.Errorf("escrow %s: session committed no nonce", d.escrowID)})
 		return
 	}
-	assignment := Assignment{Escrow: d.escrowID, Host: taken.participant, Nonce: prepared, EscrowHold: taken.escrowHold}
+	assignment := Assignment{Escrow: d.escrowID, Host: taken.participant, Nonce: prepared, EscrowHold: taken.escrowHold, HostSlot: taken.hostSlot}
 	if !served.deliver(pickResult{assignment: assignment}) {
 		d.giveBack(taken)
 		d.recordGhost(Burn{

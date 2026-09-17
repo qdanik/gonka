@@ -85,6 +85,26 @@ func (t *Tracker) FirstContentP75(participant, model string) (time.Duration, boo
 	return host.perf.firstContent.p75(latencyWindowMinimum)
 }
 
+// Pressure is how far a host's latency sits above the best it has held, per stage; zero means not yet known.
+type Pressure struct {
+	FirstContent float64
+	Decode       float64
+}
+
+// Pressure reads the delay signal the congestion windows narrow on before anything has failed.
+func (t *Tracker) Pressure(participant, model string) Pressure {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	host := t.hosts[hostKey{participant: participant, model: model}]
+	if host == nil {
+		return Pressure{}
+	}
+	return Pressure{
+		FirstContent: host.perf.firstContent.pressure(),
+		Decode:       host.perf.decode.pressure(),
+	}
+}
+
 func (t *Tracker) TimePerOutputTokenP75(participant, model string) (time.Duration, bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()

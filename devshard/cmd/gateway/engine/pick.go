@@ -24,12 +24,13 @@ func (c *raceCoordinator) observePick(assignment scheduler.Assignment, err error
 
 func (c *raceCoordinator) requestProfile(params any) scheduler.RequestProfile {
 	return scheduler.RequestProfile{
-		RequestID:   c.request.RequestID,
-		Model:       c.request.Model,
-		Escrow:      c.escrowID,
-		InputTokens: int(c.request.InputTokens),
-		Exclude:     c.excluded,
-		Params:      params,
+		RequestID:    c.request.RequestID,
+		Model:        c.request.Model,
+		Escrow:       c.escrowID,
+		InputTokens:  int(c.request.InputTokens),
+		OutputTokens: int(c.request.OutputTokens),
+		Exclude:      c.excluded,
+		Params:       params,
 	}
 }
 
@@ -168,7 +169,7 @@ func (c *raceCoordinator) launch(assignment scheduler.Assignment, role, startRea
 		Suspicious:  attempt.suspicious,
 		Nonce:       assignment.Nonce,
 		Dispatch:    c.target,
-		Limiter:     c.deps.Limiter,
+		ReleaseSlot: assignment.ReleaseHostSlot,
 		Classifier:  contentGate{streamClassifier: c.deps.Classify(attempt.participant), sink: sink},
 		Sink:        sink,
 		Now:         c.deps.Now,

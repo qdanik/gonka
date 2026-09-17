@@ -29,10 +29,9 @@ type hostTracker interface {
 	RecordSample(sample perf.Sample)
 }
 
-// hostWindows is satisfied by *limits.ParticipantLimiter; Acquire is absent on purpose. See rules.md, "5. The slot and the escrow hold are taken with the nonce, and given back after the vote".
+// hostWindows is satisfied by *limits.ParticipantLimiter; neither Acquire nor a release is on it. See rules.md, "5. The slot and the escrow hold are taken with the nonce, and given back after the vote".
 type hostWindows interface {
-	hostLimiter
-	OnResult(participant, model string, verdict limits.Verdict)
+	OnResult(result limits.Result)
 }
 
 type raceMetrics interface {
@@ -85,6 +84,7 @@ type Request struct {
 	Model        string
 	Escrow       string
 	InputTokens  uint64
+	OutputTokens uint64
 	ClientStream bool
 
 	Params any
@@ -269,6 +269,12 @@ func (e *Engine) classify(model string) func(string) streamClassifier {
 	}
 }
 
+// latencyPressure reads how far a host sits above its own best, in the windows' vocabulary. See capacity.md, "The participant limiter: IOCW".
+func latencyPressure(tracker hostPerf, participant, model string) limits.Pressure {
+	observed := tracker.Pressure(participant, model)
+	return limits.Pressure{Input: observed.FirstContent, Output: observed.Decode}
+}
+
 // record translates one outcome into every consumer's vocabulary, applying the exemption ladder once. See rules.md, "2. Exactly one outcome and exactly one winner per race, on every path".
 func (e *Engine) record(outcome RaceOutcome, params any, registration *raceRegistration) {
 	for _, attempt := range outcome.Attempts {
@@ -276,7 +282,13 @@ func (e *Engine) record(outcome RaceOutcome, params any, registration *raceRegis
 			e.deps.Perf.RecordSample(sample)
 		}
 		if verdict, moves := outcome.Verdict(attempt); moves {
-			e.deps.Windows.OnResult(attempt.Participant, outcome.Model, verdict)
+			e.deps.Windows.OnResult(limits.Result{
+				Participant: attempt.Participant,
+				Model:       outcome.Model,
+				Verdict:     verdict,
+				Carried:     limits.TokenCost{Input: int64(outcome.InputTokens), Output: int64(outcome.OutputTokens)},
+				Pressure:    latencyPressure(e.deps.Perf, attempt.Participant, outcome.Model),
+			})
 		}
 	}
 	if e.deps.Metrics != nil {

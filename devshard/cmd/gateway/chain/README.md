@@ -5,7 +5,7 @@ Every read from the network and every transaction the gateway signs passes throu
 ## What it owns
 
 - **The transaction client** (`txclient.go`, `tx_build.go`, `protoencode.go`, `grpc.go`) — build, sign, broadcast, confirm. A transaction is not assumed to have landed because it was accepted.
-- **The phase observer** (`observer.go`, `observer_fetch.go`, `snapshot.go`) — polls the network's public API and publishes an immutable `PhaseSnapshot`: the epoch, its phase, which participants are preserved through proof-of-compute, and the host weights the capacity model scales by.
+- **The phase observer** (`observer.go`, `observer_fetch.go`, `snapshot.go`) — polls the network's public API and publishes an immutable `PhaseSnapshot`: the epoch, its phase, which participants are preserved through proof-of-compute, the host weights the capacity model scales by, and the context window governance gives each model.
 - **Escrow queries and settlement encoding** (`escrow_query.go`, `settlement.go`).
 - **Protocol versions** (`versions.go`) — the gateway serves exactly one, fixed at build time.
 
@@ -22,13 +22,14 @@ Every read from the network and every transaction the gateway signs passes throu
 
 A failed poll **republishes the previous snapshot with `LastError` set** rather than an empty one: a network hiccup must not read as "the epoch has no participants". `LastUpdatedAt` is how a reader tells fresh data from a held-over view.
 
-Three fields have absent values that are load-bearing, and each fails in a chosen direction:
+Four fields have absent values that are load-bearing, and each fails in a chosen direction:
 
 | Field | Absent means | Read as |
 | --- | --- | --- |
 | `RequestsBlocked` | derived, never absent — `false` outside every PoC phase (`rawPoCBlockingState`) | requests admitted |
 | `Preserved` / `PreservedByModel` | the chain holds no snapshot for this episode | **everyone** is preserved (`scheduler`, `pocPreserved`) — fail open, so a missing snapshot never empties routing |
 | `MaxNonce` | never observed: the chain has not enabled devshard escrow params, or no read has succeeded since start | the nonce gate falls back to `fallbackNonceCeiling` rather than to "no ceiling", and routing reports no escrow exhausted against it (`scheduler`, `reportExhausted`) |
+| `Models` | no read has succeeded since start. A reply naming no model counts as no observation rather than as a chain that named nobody, and a failed read keeps the previous answer, so each model holds the length it was last priced at (`observer.go`, `PhaseObserver.fetchModels`) | a model no length has ever been observed or configured for is priced at `fallback_max_model_len` by the participant limiter's input window (`limits`, `ParticipantLimiter.windowsForLocked`), which the floor would then hold for the life of the process — hence the direction |
 
 Weights follow the same rule: `CurrentWeightsByModel` is preferred, `CurrentWeights` is the fallback, and a model with neither scores by membership share rather than as zero.
 

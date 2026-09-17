@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"math"
 	"testing"
 	"time"
 
@@ -19,42 +20,91 @@ const (
 
 var testEpoch = time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC)
 
+// The probe prices a request at 16 tokens on both sides and starts each window 16 requests wide, so a
+// window starts at 256 tokens. One attempt fills the window, which is the peak a healthy answer needs
+// before it widens; nothing has narrowed the window yet, so that answer widens it by every token it carried.
+const (
+	probeRequestTokens    = 16
+	probeStartingRequests = 16
+	probeStartingWindow   = probeStartingRequests * probeRequestTokens
+)
+
+var probeAttempt = limits.TokenCost{Input: probeStartingWindow, Output: probeStartingWindow}
+
 func limiterConfig(tripThreshold int64) limits.ParticipantConfig {
 	return limits.ParticipantConfig{
-		Initial:       4,
-		Max:           10,
+		Pricing: limits.WindowPricing{
+			Input:                 limits.RequestBounds{Min: 1, Initial: probeStartingRequests},
+			Output:                limits.RequestBounds{Min: 1, Initial: probeStartingRequests},
+			FallbackContextTokens: probeRequestTokens,
+			FallbackOutputTokens:  probeRequestTokens,
+		},
+		Factors:       limits.CongestionFactors{Soft: 0.85, Hard: 0.70, Severe: 0.50, Cross: 0.90},
 		AfterFailures: tripThreshold,
 		BaseOpen:      time.Minute,
 		MaxOpen:       time.Hour,
 	}
 }
 
-// observedWindow measures the AIMD window through a real limiter instead of asserting against a
-// second copy of limits' own rules: with a trip threshold no single verdict can reach, the only
-// thing that can change the admitted count is the window itself.
-func observedWindow(verdict limits.Verdict, recorded bool) int {
-	limiter := limits.NewParticipantLimiter(limiterConfig(1000), func() time.Time { return testEpoch })
-	limiter.Acquire(testParticipant, testModel)
-	limiter.Acquire(testParticipant, testModel)
-	if recorded {
-		limiter.OnResult(testParticipant, testModel, verdict)
-	}
-	limiter.Release(testParticipant, testModel)
-	limiter.Release(testParticipant, testModel)
+// observedWindows drives one verdict through a real limiter instead of asserting against a second copy of
+// limits' own rules, and reads both windows back off the snapshot metrics and /v1/admin/hosts are served from.
+func observedWindows(t *testing.T, verdict limits.Verdict, recorded bool) (input, output float64) {
+	t.Helper()
 
-	admitted := 0
-	for limiter.Acquire(testParticipant, testModel) {
-		admitted++
+	limiter := limits.NewParticipantLimiter(limiterConfig(1000), func() time.Time { return testEpoch })
+	release, _ := limiter.Acquire(testParticipant, testModel, probeAttempt)
+	if recorded {
+		limiter.OnResult(probeResult(verdict))
 	}
-	return admitted
+	release()
+
+	return trackedWindows(t, limiter)
+}
+
+func trackedWindows(t *testing.T, limiter *limits.ParticipantLimiter) (input, output float64) {
+	t.Helper()
+
+	tracked := limiter.Snapshot()
+	if len(tracked) != 1 {
+		t.Fatalf("limiter tracks %d pairs, want the one host the test drove it with", len(tracked))
+	}
+	return tracked[0].InputWindowTokens, tracked[0].OutputWindowTokens
 }
 
 func observedCutoffOpen(verdict limits.Verdict, recorded bool) bool {
 	limiter := limits.NewParticipantLimiter(limiterConfig(1), func() time.Time { return testEpoch })
 	if recorded {
-		limiter.OnResult(testParticipant, testModel, verdict)
+		limiter.OnResult(probeResult(verdict))
 	}
 	return !limiter.Available(testParticipant, testModel)
+}
+
+func probeResult(verdict limits.Verdict) limits.Result {
+	return limits.Result{
+		Participant: testParticipant,
+		Model:       testModel,
+		Verdict:     verdict,
+		Carried:     probeAttempt,
+	}
+}
+
+// A window is a float, and the ladder's factors do not land on round token counts; anything the ladder
+// actually moves is wider apart than this.
+const windowTolerance = 0.5
+
+func assertWindowsAndCutoff(t *testing.T, verdict limits.Verdict, recorded bool, wantInput, wantOutput float64, wantCutoff bool) {
+	t.Helper()
+
+	input, output := observedWindows(t, verdict, recorded)
+	if math.Abs(input-wantInput) > windowTolerance {
+		t.Errorf("input window = %v, want %v: the tier this verdict blames prefill with, or the cross factor when it blames decode", input, wantInput)
+	}
+	if math.Abs(output-wantOutput) > windowTolerance {
+		t.Errorf("output window = %v, want %v: the tier this verdict blames decode with, or the cross factor when it blames prefill", output, wantOutput)
+	}
+	if open := observedCutoffOpen(verdict, recorded); open != wantCutoff {
+		t.Errorf("cutoff open = %v, want %v: only a fault the host never answered for counts towards cutting it off", open, wantCutoff)
+	}
 }
 
 func cleanAttempt() AttemptOutcome {
@@ -98,12 +148,8 @@ func race(attempt AttemptOutcome) RaceOutcome {
 // Every upstream condition in the verdict specification, asserting the verdict, whether it is
 // reported at all, and what a real limiter does with it.
 func TestVerdictTable(t *testing.T) {
-	stalledOverThreshold := failedAttempt(TerminalStalled)
-	stalledOverThreshold.ContentChunks = 5
-	stalledOverThreshold.FailureRateExceeded = true
-
-	stalledUnderThreshold := failedAttempt(TerminalStalled)
-	stalledUnderThreshold.ContentChunks = 5
+	stalled := failedAttempt(TerminalStalled)
+	stalled.ContentChunks = 5
 
 	// ContentSource is what makes this a long response rather than a long silence: ContentChunks
 	// counts error events too, and an error-only attempt must keep its timeout vote.
@@ -132,7 +178,7 @@ func TestVerdictTable(t *testing.T) {
 	briefBurnEmpty := failedAttempt(TerminalBurnEmpty)
 	briefBurnEmpty.Completed = testEpoch.Add(emptyStreamHeldTooLong - time.Millisecond)
 
-	// The window already halved when the deadline passed; widening it for the answer would undo that.
+	// The window already narrowed when the deadline passed; widening it for the answer would undo that.
 	lateWinner := cleanAttempt()
 	lateWinner.FirstTokenDeadlineMissed = true
 
@@ -145,75 +191,75 @@ func TestVerdictTable(t *testing.T) {
 	lateThrottled.ReceiptDeadlineMissed = true
 
 	tests := []struct {
-		name         string
-		outcome      RaceOutcome
-		attempt      AttemptOutcome
-		wantVerdict  limits.Verdict
-		wantRecorded bool
-		wantWindow   int
-		wantCutoff   bool
+		name             string
+		outcome          RaceOutcome
+		attempt          AttemptOutcome
+		wantVerdict      limits.Verdict
+		wantRecorded     bool
+		wantInputWindow  float64
+		wantOutputWindow float64
+		wantCutoff       bool
 	}{
-		{"clean finish, nonce finished, content present", race(cleanAttempt()), cleanAttempt(), limits.Success, true, 5, false},
+		{"clean finish, nonce finished, content present", race(cleanAttempt()), cleanAttempt(), limits.Success, true, 512, 512, false},
 		{"clean finish by a loser", race(cleanAttempt()), func() AttemptOutcome {
 			attempt := cleanAttempt()
 			attempt.Terminal = TerminalLost
 			attempt.Nonce = 8
 			return attempt
-		}(), limits.Success, true, 5, false},
-		{"clean finish after missing the first-token deadline", race(lateWinner), lateWinner, limits.LateSuccess, true, 4, false},
-		{"clean finish by a loser after missing the receipt deadline", race(cleanAttempt()), lateLoser, limits.LateSuccess, true, 4, false},
-		{"http 429 after missing the receipt deadline", race(cleanAttempt()), lateThrottled, limits.Overload, true, 2, false},
-		{"http 429", race(cleanAttempt()), failedAttempt(TerminalThrottled), limits.Overload, true, 2, false},
-		{"http 503", race(cleanAttempt()), failedAttempt(TerminalUnavailable), limits.Overload, true, 2, false},
-		{"http 404 on the inference path", race(cleanAttempt()), failedAttempt(TerminalNotFound), limits.TransportFault, true, 4, true},
-		{"http 403 on the inference path", race(cleanAttempt()), failedAttempt(TerminalForbidden), limits.TransportFault, true, 4, true},
-		{"http 401 with timestamp drift", race(cleanAttempt()), failedAttempt(TerminalTimestampDrift), limits.TransportFault, true, 4, true},
-		{"http 400 / 500 / any other status", race(cleanAttempt()), failedAttempt(TerminalRejected), limits.ModelOutcome, false, 4, false},
-		{"dial error, connection reset, TLS failure", race(cleanAttempt()), failedAttempt(TerminalDialFailure), limits.TransportFault, true, 4, true},
-		{"unexpected EOF", race(cleanAttempt()), failedAttempt(TerminalUnexpectedEOF), limits.TransportFault, true, 4, true},
-		{"truncated SSE stream", race(cleanAttempt()), failedAttempt(TerminalStreamTruncated), limits.TransportFault, true, 4, true},
-		{"failure on a non-inference path", race(cleanAttempt()), failedAttempt(TerminalOffPath), limits.ModelOutcome, false, 4, false},
-		{"empty stream that never finished its nonce", race(failedAttempt(TerminalEmptyStream)), failedAttempt(TerminalEmptyStream), limits.EmptyAnswerLeftOpen, true, 2, true},
-		{"empty stream that finished its nonce", race(finishedEmpty), finishedEmpty, limits.EmptyAnswer, true, 2, false},
-		{"empty stream with completion tokens burned", race(cleanAttempt()), failedAttempt(TerminalBurnEmpty), limits.ModelOutcome, true, 4, false},
-		{"error event inside the SSE stream", race(cleanAttempt()), failedAttempt(TerminalErrorStream), limits.ModelOutcome, true, 4, false},
-		{"capability refusal another host can serve", race(cleanAttempt()), failedAttempt(TerminalCapabilityRefused), limits.ModelOutcome, true, 4, false},
-		{"winner stalled after content, failure rate exceeded", race(stalledOverThreshold), stalledOverThreshold, limits.TransportFault, true, 4, true},
-		{"winner stalled after content, failure rate not exceeded", race(stalledUnderThreshold), stalledUnderThreshold, limits.ModelOutcome, false, 4, false},
-		{"content produced, past the exemption, nonce unfinished", race(longResponse), longResponse, limits.ModelOutcome, false, 4, false},
-		{"empty stream that held the request past the refusal point without finishing its nonce", race(heldEmpty), heldEmpty, limits.EmptyAnswerLeftOpen, true, 2, true},
-		{"empty stream that finished its nonce and held the request past the refusal point", race(heldFinishedEmpty), heldFinishedEmpty, limits.EmptyAnswer, true, 2, false},
-		{"empty stream that burned tokens and held the request", race(heldBurnEmpty), heldBurnEmpty, limits.Overload, true, 2, false},
-		{"empty stream that burned tokens one millisecond inside the refusal point", race(briefBurnEmpty), briefBurnEmpty, limits.ModelOutcome, true, 4, false},
+		}(), limits.Success, true, 512, 512, false},
+		{"clean finish after missing the first-token deadline", race(lateWinner), lateWinner, limits.LateSuccess, true, 256, 256, false},
+		{"clean finish by a loser after missing the receipt deadline", race(cleanAttempt()), lateLoser, limits.LateSuccess, true, 256, 256, false},
+		{"http 429 after missing the receipt deadline", race(cleanAttempt()), lateThrottled, limits.Overload, true, 217.6, 217.6, false},
+		{"http 429", race(cleanAttempt()), failedAttempt(TerminalThrottled), limits.Overload, true, 217.6, 217.6, false},
+		{"http 503", race(cleanAttempt()), failedAttempt(TerminalUnavailable), limits.Overload, true, 217.6, 217.6, false},
+		{"http 404 on the inference path", race(cleanAttempt()), failedAttempt(TerminalNotFound), limits.TransportFault, true, 256, 256, true},
+		{"http 403 on the inference path", race(cleanAttempt()), failedAttempt(TerminalForbidden), limits.TransportFault, true, 256, 256, true},
+		{"http 401 with timestamp drift", race(cleanAttempt()), failedAttempt(TerminalTimestampDrift), limits.TransportFault, true, 256, 256, true},
+		{"http 400 / 500 / any other status", race(cleanAttempt()), failedAttempt(TerminalRejected), limits.ModelOutcome, false, 256, 256, false},
+		{"dial error, connection reset, TLS failure", race(cleanAttempt()), failedAttempt(TerminalDialFailure), limits.TransportFault, true, 256, 256, true},
+		{"unexpected EOF", race(cleanAttempt()), failedAttempt(TerminalUnexpectedEOF), limits.TransportFault, true, 256, 256, true},
+		{"truncated SSE stream", race(cleanAttempt()), failedAttempt(TerminalStreamTruncated), limits.TransportFault, true, 256, 256, true},
+		{"failure on a non-inference path", race(cleanAttempt()), failedAttempt(TerminalOffPath), limits.ModelOutcome, false, 256, 256, false},
+		{"empty stream that never finished its nonce", race(failedAttempt(TerminalEmptyStream)), failedAttempt(TerminalEmptyStream), limits.EmptyAnswerLeftOpen, true, 128, 128, true},
+		{"empty stream that finished its nonce", race(finishedEmpty), finishedEmpty, limits.EmptyAnswer, true, 179.2, 179.2, false},
+		{"empty stream with completion tokens burned", race(cleanAttempt()), failedAttempt(TerminalBurnEmpty), limits.ModelOutcome, true, 256, 256, false},
+		{"error event inside the SSE stream", race(cleanAttempt()), failedAttempt(TerminalErrorStream), limits.ModelOutcome, true, 256, 256, false},
+		{"capability refusal another host can serve", race(cleanAttempt()), failedAttempt(TerminalCapabilityRefused), limits.ModelOutcome, true, 256, 256, false},
+		{"winner stalled after content", race(stalled), stalled, limits.DecodeStalled, true, 230.4, 128, false},
+		{"content produced, past the exemption, nonce unfinished", race(longResponse), longResponse, limits.ModelOutcome, false, 256, 256, false},
+		{"empty stream that held the request past the refusal point without finishing its nonce", race(heldEmpty), heldEmpty, limits.EmptyAnswerLeftOpen, true, 128, 128, true},
+		{"empty stream that finished its nonce and held the request past the refusal point", race(heldFinishedEmpty), heldFinishedEmpty, limits.EmptyAnswer, true, 179.2, 179.2, false},
+		{"empty stream that burned tokens and held the request", race(heldBurnEmpty), heldBurnEmpty, limits.Overload, true, 217.6, 217.6, false},
+		{"empty stream that burned tokens one millisecond inside the refusal point", race(briefBurnEmpty), briefBurnEmpty, limits.ModelOutcome, true, 256, 256, false},
 		{"empty stream that held the request while the PoC bypass is active", func() RaceOutcome {
 			outcome := race(heldEmpty)
 			outcome.PoCBypassActive = true
 			return outcome
-		}(), heldEmpty, limits.ModelOutcome, false, 4, false},
+		}(), heldEmpty, limits.ModelOutcome, false, 256, 256, false},
 		{"empty stream while the PoC bypass is active", func() RaceOutcome {
 			outcome := race(failedAttempt(TerminalEmptyStream))
 			outcome.PoCBypassActive = true
 			return outcome
-		}(), failedAttempt(TerminalEmptyStream), limits.ModelOutcome, false, 4, false},
+		}(), failedAttempt(TerminalEmptyStream), limits.ModelOutcome, false, 256, 256, false},
 		{"attempt aborted by a phase transition", race(cleanAttempt()), func() AttemptOutcome {
 			attempt := failedAttempt(TerminalEmptyStream)
 			attempt.PhaseTransitionAborted = true
 			return attempt
-		}(), limits.ModelOutcome, false, 4, false},
+		}(), limits.ModelOutcome, false, 256, 256, false},
 		{"escrow not found", func() RaceOutcome {
 			outcome := race(failedAttempt(TerminalRejected))
 			outcome.Lifecycle.EscrowMissing = true
 			return outcome
-		}(), failedAttempt(TerminalRejected), limits.ModelOutcome, false, 4, false},
+		}(), failedAttempt(TerminalRejected), limits.ModelOutcome, false, 256, 256, false},
 		{"post-state-root divergence", race(cleanAttempt()), func() AttemptOutcome {
 			attempt := cleanAttempt()
 			attempt.StateDivergent = true
 			return attempt
-		}(), limits.ModelOutcome, false, 4, false},
-		{"clean finish with the nonce still unfinished", race(unfinished), unfinished, limits.ModelOutcome, false, 4, false},
-		{"client cancelled", race(cleanAttempt()), failedAttempt(TerminalClientCancelled), limits.ModelOutcome, false, 4, false},
-		{"send returned without a receipt", race(cleanAttempt()), failedAttempt(TerminalNoReceipt), limits.ModelOutcome, false, 4, false},
-		{"unclassified", race(cleanAttempt()), failedAttempt(TerminalUnclassified), limits.ModelOutcome, false, 4, false},
+		}(), limits.ModelOutcome, false, 256, 256, false},
+		{"clean finish with the nonce still unfinished", race(unfinished), unfinished, limits.ModelOutcome, false, 256, 256, false},
+		{"client cancelled", race(cleanAttempt()), failedAttempt(TerminalClientCancelled), limits.ModelOutcome, false, 256, 256, false},
+		{"send returned without a receipt", race(cleanAttempt()), failedAttempt(TerminalNoReceipt), limits.ModelOutcome, false, 256, 256, false},
+		{"unclassified", race(cleanAttempt()), failedAttempt(TerminalUnclassified), limits.ModelOutcome, false, 256, 256, false},
 	}
 
 	for _, testCase := range tests {
@@ -224,12 +270,35 @@ func TestVerdictTable(t *testing.T) {
 			if verdict != testCase.wantVerdict || recorded != testCase.wantRecorded {
 				t.Fatalf("Verdict() = (%v, %v), want (%v, %v)", verdict, recorded, testCase.wantVerdict, testCase.wantRecorded)
 			}
-			if window := observedWindow(verdict, recorded); window != testCase.wantWindow {
-				t.Errorf("window after the verdict = %d, want %d", window, testCase.wantWindow)
+			assertWindowsAndCutoff(t, verdict, recorded, testCase.wantInputWindow, testCase.wantOutputWindow, testCase.wantCutoff)
+		})
+	}
+}
+
+// A deadline is judged while the attempt still runs, so these two verdicts reach the limiter with no
+// upstream condition to classify: the stage the deadline belongs to is the whole of what they carry.
+func TestMissedDeadlineVerdictTable(t *testing.T) {
+	tests := []struct {
+		name             string
+		stage            EscalationStage
+		wantVerdict      limits.Verdict
+		wantInputWindow  float64
+		wantOutputWindow float64
+		wantCutoff       bool
+	}{
+		{"receipt deadline missed", StageReceiptTimeout, limits.MissedReceiptDeadline, 128, 128, false},
+		{"first-token deadline missed", StageFirstToken, limits.MissedFirstTokenDeadline, 128, 230.4, false},
+	}
+
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			verdict := missedDeadlineVerdict(testCase.stage)
+			if verdict != testCase.wantVerdict {
+				t.Fatalf("missedDeadlineVerdict() = %v, want %v", verdict, testCase.wantVerdict)
 			}
-			if open := observedCutoffOpen(verdict, recorded); open != testCase.wantCutoff {
-				t.Errorf("cutoff open after the verdict = %v, want %v", open, testCase.wantCutoff)
-			}
+			assertWindowsAndCutoff(t, verdict, true, testCase.wantInputWindow, testCase.wantOutputWindow, testCase.wantCutoff)
 		})
 	}
 }
@@ -387,7 +456,7 @@ func TestSampleResponsive(t *testing.T) {
 }
 
 // The two penalties are independent: crown denial keeps the host off the client's answer, the cutoff
-// keeps it off the escrow's nonces, and neither moves the AIMD window.
+// keeps it off the escrow's nonces, and neither moves the congestion windows.
 func TestEmptyStreamWithAnUnfinishedNonceDeniesCrowningAndOpensTheCutoff(t *testing.T) {
 	t.Parallel()
 
@@ -398,8 +467,9 @@ func TestEmptyStreamWithAnUnfinishedNonceDeniesCrowningAndOpensTheCutoff(t *test
 	if verdict != limits.EmptyAnswerLeftOpen || !recorded {
 		t.Fatalf("Verdict() = (%v, %v), want (EmptyAnswerLeftOpen, true)", verdict, recorded)
 	}
-	if window := observedWindow(verdict, recorded); window != 2 {
-		t.Fatalf("window after an empty stream = %d, want 2 (halved)", window)
+	input, output := observedWindows(t, verdict, recorded)
+	if math.Abs(input-128) > windowTolerance || math.Abs(output-128) > windowTolerance {
+		t.Fatalf("windows after an empty stream = %v/%v, want 128/128: a nonce left open narrows both severely", input, output)
 	}
 	if !observedCutoffOpen(verdict, recorded) {
 		t.Fatal("cutoff after an empty stream = closed, want open")

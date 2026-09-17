@@ -49,7 +49,7 @@ Three layers, later wins:
 
 1. **Defaults** — `config/config.go`, `Defaults()`. The only place a default lives.
 2. **Environment** — read once at boot, in `env/` and nowhere else. `env.Load` returns *what is set* (a nil pointer is unset), so an unset variable can never overwrite a default with a zero.
-3. **Admin overrides** — 42 fields (`config.Overrides`), written through `PUT /v1/admin/settings`, persisted in the store and reloaded at boot. These take effect without a restart: the config is an immutable snapshot swapped whole, and every reader loads it per request.
+3. **Admin overrides** — 50 fields (`config.Overrides`), written through `PUT /v1/admin/settings`, persisted in the store and reloaded at boot. These take effect without a restart: the config is an immutable snapshot swapped whole, and every reader loads it per request.
 
 Parse failures are accumulated, so a boot reports **every** misconfigured variable at once rather than one per restart.
 
@@ -163,7 +163,7 @@ Three mechanisms withhold work from a host, each on its own trigger, and each is
 | --- | --- | --- |
 | `host withheld from routing` (`perf/tracker.go`) | five failures in a row, or a failure rate from 15% over a volume from 20 | **Warn** — which trigger fired, the rung, the run length, the rate and its volume, and how long the withholding lasts |
 | `host back in routing` (`perf/tracker.go`) | first sample after the withholding lapsed | the rung it decayed to |
-| `host cut off after transport faults` (`limits/participant.go`) | three transport faults in a row, or one failed half-open probe | **Warn** — which of the two, the backoff depth, and how long the cut-off lasts |
+| `host cut off after transport faults` (`limits/participant.go`) | three cut-off faults in a row — a transport fault, or an empty answer that left its nonce open — or one failed half-open probe | **Warn** — which of the two, the backoff depth, and how long the cut-off lasts. The line's name and its `consecutive_transport_faults` reason are what dashboards and log queries match on, so both keep the wording they have whatever the run was made of |
 | `host back after its cut-off` (`limits/participant.go`) | the probe answered | the backoff depth it decayed to |
 | `host denied the crown` (`engine/engine.go`) | three content-free answers in a row | **Warn** — the strike count. The host keeps drawing nonces and starts a second attempt beside itself, so this is a spend, not only a quality signal |
 | `host crowned again` (`engine/engine.go`) | one answer with content | — |
@@ -213,14 +213,14 @@ Admin lines carry the action and its subject, **never the request body** — an 
 
 ## Metrics
 
-`/metrics`, Prometheus: 75 gateway families beside the Go runtime and process collectors. The nonce ledger adds none; it is served by its own JSON API (see [accounting.md](./accounting.md)). Grouped by the question they answer:
+`/metrics`, Prometheus: 73 gateway families beside the Go runtime and process collectors. The nonce ledger adds none; it is served by its own JSON API (see [accounting.md](./accounting.md)). Grouped by the question they answer:
 
 | Question | Series |
 | --- | --- |
 | is the gateway serving | `devshard_gateway_requests_total`, `devshard_http_request_duration_seconds`, `devshard_gateway_attempts_terminal_total{visibility="user_visible_winner"}` |
 | is it hiding failures | `devshard_gateway_requests_total{outcome="failure"}`, `devshard_gateway_user_requests_with_hidden_failure_total`, `devshard_gateway_attempt_failures_total{visibility="no_winner"}` |
 | is it admitting or refusing | `devshard_gateway_limit_rejections_total`, `devshard_gateway_limiter_queue_depth`, and `devshard_gateway_inflight_requests_by_model` against `devshard_gateway_enforced_max_concurrent_requests_by_model`, the cap after overrides and capacity scaling (`devshard_gateway_effective_max_concurrent_requests` is the configured cap before either) |
-| how are the hosts | `devshard_gateway_participant_*` (receipt, first content, inter-chunk, transport errors, missed deadlines), `devshard_gateway_host_ejected`, `devshard_gateway_participant_window_size` |
+| how are the hosts | `devshard_gateway_participant_*` (receipt, first content, inter-chunk, transport errors, missed deadlines), `devshard_gateway_host_ejected`, `devshard_gateway_participant_breaker_state`; a host's congestion windows are read from `GET /v1/admin/hosts`, not from `/metrics` |
 | is money leaking | `devshard_gateway_ghost_nonces_burned_total`, `devshard_gateway_nonce_holds_total`, `devshard_gateway_timeout_actions_total`, `devshard_gateway_burn_budget_exhausted_total` |
 | is the chain view healthy | `devshard_gateway_chain_snapshot_healthy`, `devshard_gateway_chain_snapshot_age_seconds`, `devshard_gateway_chain_epoch_phase`, `devshard_gateway_chain_requests_blocked` |
 | is memory bounded | `devshard_gateway_buffered_response_bytes`, `devshard_gateway_cache_bytes`, `devshard_gateway_capture_bytes_held` |
@@ -246,6 +246,8 @@ A dashboard or alert outside this repository may query a family this gateway doe
 | `devshard_gateway_critical_user_failures_total` | `devshard_gateway_requests_total{outcome="failure"}` |
 | `devshard_inference_timeouts_total` | `devshard_gateway_timeout_actions_total{action=~"completed\|failed"}` |
 | `devshard_gateway_escrow_participant_limited` | `devshard_gateway_escrow_blocked_participants > bool 0` |
+| `devshard_gateway_participant_window_size` | `GET /v1/admin/hosts`, `input_window_tokens` and `output_window_tokens`. A host's admission window is two windows counted in tokens, per model; a gauge for each would add a per-participant, per-model series to every scrape for a number an operator reads when a host is behaving oddly, so the window state lives on the admin view alone. |
+| `devshard_gateway_participant_window_inflight` | `GET /v1/admin/hosts`, `inflight_input_tokens` and `inflight_output_tokens`, for the same reason. `devshard_gateway_participants_exhausted` is the scrape's answer to "how many pairs would refuse an attempt right now". |
 | `devshard_gateway_escalation_decisions_total` | `devshard_gateway_attempts_started_total{role="speculative"}` by `reason`; that family carried the race's start plan, never what triggered an escalation |
 
 The gateway emits neither label nor the value below, so a selector that names one matches nothing:
@@ -254,9 +256,9 @@ The gateway emits neither label nor the value below, so a selector that names on
 - `devshard_gateway_user_requests_with_hidden_failure_total` has no `severity`: every hidden failure it counts is on a protected request.
 - `outcome="due"` on `devshard_gateway_timeout_sweep_total`: `applied` plus `failed` is what a tick found, short of it only on a tick that shutdown cut off mid-round.
 
-Participant-labelled race series — `devshard_gateway_attempts_*`, `devshard_gateway_attempt_failures_total`, `devshard_gateway_timeout_actions_total`, `devshard_gateway_stream_carry_overflow_total` and every `devshard_gateway_participant_*` family except the window and breaker gauges — are deleted once their participant and model go unwritten for `perf_host_staleness_seconds`. A host that returns afterwards starts from fresh counters, which `rate()` reads as a reset.
+Participant-labelled race series — `devshard_gateway_attempts_*`, `devshard_gateway_attempt_failures_total`, `devshard_gateway_timeout_actions_total`, `devshard_gateway_stream_carry_overflow_total` and every `devshard_gateway_participant_*` family except the breaker gauge — are deleted once their participant and model go unwritten for `perf_host_staleness_seconds`. A host that returns afterwards starts from fresh counters, which `rate()` reads as a reset.
 
-`devshard_gateway_participant_window_size`, `devshard_gateway_participant_window_inflight` and `devshard_gateway_participant_breaker_state` stop reporting a pair the participant limiter forgot on the same window, and `devshard_gateway_participants_tracked` counts only the pairs it still holds.
+`devshard_gateway_participant_breaker_state` stops reporting a pair the participant limiter forgot on the same window, and `devshard_gateway_participants_tracked` counts only the pairs it still holds.
 
 ## Reading the gateway's state
 
@@ -273,12 +275,12 @@ Participant-labelled race series — `devshard_gateway_attempts_*`, `devshard_ga
 
 ### What a host answer carries
 
-`GET /v1/admin/hosts` joins the two snapshots that already exist, one row per participant and model. Nothing is computed for it: these are the same values the gauges carry, asked for on demand rather than waited for at the next scrape.
+`GET /v1/admin/hosts` joins the two snapshots that already exist, one row per participant and model. Nothing is computed for it: each field is a value one of the two limiters or the tracker already holds, asked for on demand rather than waited for at the next scrape. For the congestion windows it is the only surface there is — no gauge carries them.
 
 | Field | Where it comes from |
 | --- | --- |
 | `ejected`, `degraded`, `inflight`, `decode_seconds_per_token` | the performance tracker: whether routing withholds this host, whether it would without the pool-wide cap, and how fast it decodes |
-| `window`, `window_inflight`, `cutoff`, `backoff_count`, `available` | the participant limiter: the AIMD window, what is in flight against it, the breaker's state, how deep its backoff has gone, and whether the host would be admitted right now |
+| `input_window_tokens`, `output_window_tokens`, `inflight_input_tokens`, `inflight_output_tokens`, `cutoff`, `backoff_count`, `available` | the participant limiter: the size of each congestion window, what is in flight against it, the cut-off's state, how deep its backoff has gone, and whether the host would be admitted right now |
 | `context_limit`, `version_refusals`, `tool_refusals`, `context_refusals` | what this host's build refused |
 | `suspicious` | whether an operator pinned it |
 

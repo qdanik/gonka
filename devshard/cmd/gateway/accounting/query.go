@@ -249,6 +249,11 @@ func (e *escrowLedger) slots(escrowID string) []SlotRecord {
 		money.refunded += cost.refunded()
 		money.input += cost.input
 		money.output += cost.output
+		if e.isGhost(nonce) {
+			continue
+		}
+		money.inputLength += cost.inputLength
+		money.maxTokens += cost.maxTokens
 	}
 	for nonce, record := range e.nonces {
 		aggregate := &aggregates[e.slotOf(nonce)]
@@ -279,14 +284,16 @@ func (e *escrowLedger) slots(escrowID string) []SlotRecord {
 			Participant: e.metadata.Slots[slotID].ValidatorAddress,
 			rejected:    e.rejected[slotID],
 			nonceTotals: nonceTotals{
-				Assigned:     assignedForSlot(e.latest, groupSize, slotID),
-				Dispositions: aggregate.dispositions,
-				Pending:      aggregate.pending,
-				ReservedCost: aggregate.money.reserved,
-				ActualCost:   aggregate.money.actual,
-				RefundedCost: aggregate.money.refunded,
-				InputTokens:  aggregate.money.input,
-				OutputTokens: aggregate.money.output,
+				Assigned:         assignedForSlot(e.latest, groupSize, slotID),
+				Dispositions:     aggregate.dispositions,
+				Pending:          aggregate.pending,
+				ReservedCost:     aggregate.money.reserved,
+				ActualCost:       aggregate.money.actual,
+				RefundedCost:     aggregate.money.refunded,
+				InputLengthBytes: aggregate.money.inputLength,
+				MaxTokens:        aggregate.money.maxTokens,
+				InputTokens:      aggregate.money.input,
+				OutputTokens:     aggregate.money.output,
 			},
 			hostActivity: hostActivity{
 				InFlight:             aggregate.inFlight,

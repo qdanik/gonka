@@ -29,8 +29,10 @@ type hostView struct {
 	Suspicious            bool    `json:"suspicious"`
 	Inflight              int     `json:"inflight"`
 	DecodeSecondsPerToken float64 `json:"decode_seconds_per_token"`
-	Window                float64 `json:"window"`
-	WindowInflight        int     `json:"window_inflight"`
+	InputWindowTokens     float64 `json:"input_window_tokens"`
+	OutputWindowTokens    float64 `json:"output_window_tokens"`
+	InflightInputTokens   int64   `json:"inflight_input_tokens"`
+	InflightOutputTokens  int64   `json:"inflight_output_tokens"`
 	Cutoff                string  `json:"cutoff"`
 	BackoffCount          int     `json:"backoff_count"`
 	Available             bool    `json:"available"`
@@ -79,8 +81,10 @@ func (s *Server) hostViews() []hostView {
 	if s.hostWindows != nil {
 		for _, window := range s.hostWindows.Snapshot() {
 			view := viewFor(window.Participant, window.Model)
-			view.Window = window.Window
-			view.WindowInflight = window.Inflight
+			view.InputWindowTokens = window.InputWindowTokens
+			view.OutputWindowTokens = window.OutputWindowTokens
+			view.InflightInputTokens = window.InflightInputTokens
+			view.InflightOutputTokens = window.InflightOutputTokens
 			view.Cutoff = string(window.Cutoff)
 			view.BackoffCount = window.BackoffCount
 			view.Available = window.Available

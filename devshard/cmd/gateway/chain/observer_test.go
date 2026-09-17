@@ -32,6 +32,8 @@ type phaseObserverStub struct {
 	maxNonceHeld       bool
 	maxNonceErr        error
 	maxNonceHits       int
+	models             map[string]ModelParams
+	modelsErr          error
 	versionsStatus     int
 	versionsBody       string
 }
@@ -87,6 +89,12 @@ func (s *phaseObserverStub) PreservedNodes(context.Context) (*PreservedNodes, bo
 	return s.preserved, s.preservedFound, s.preservedErr
 }
 
+func (s *phaseObserverStub) Models(context.Context) (map[string]ModelParams, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.models, s.modelsErr
+}
+
 func (s *phaseObserverStub) MaxNonce(context.Context) (uint64, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -104,6 +112,12 @@ func (s *phaseObserverStub) setMaxNonceValue(value uint64, held bool, failure er
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.maxNonce, s.maxNonceHeld, s.maxNonceErr = value, held, failure
+}
+
+func (s *phaseObserverStub) setModels(models map[string]ModelParams, failure error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.models, s.modelsErr = models, failure
 }
 
 func (s *phaseObserverStub) setVersions(status int, body string) {
@@ -531,7 +545,7 @@ func TestPhaseObserver_CarriesEveryParticipantDerivedFieldForward(t *testing.T) 
 	}
 	phaseDerived := []string{
 		"BlockHeight", "EpochSwitchBlockHeight", "EpochIndex", "EpochPhase", "ConfirmationPoCPhase",
-		"RequestsBlocked", "BlockReason", "MaxNonce", "LastUpdatedAt", "LastError",
+		"RequestsBlocked", "BlockReason", "MaxNonce", "Models", "LastUpdatedAt", "LastError",
 	}
 
 	previous := PhaseSnapshot{
@@ -1076,5 +1090,34 @@ func TestSnapshotHealth_AdvanceSpeaksOnlyOnChange(t *testing.T) {
 				t.Errorf("recovered = %v, want %v", change.recovered, step.wantRecovered)
 			}
 		})
+	}
+}
+
+// Governance model parameters change only when governance does, so a failed read must leave the previous
+// answer standing rather than repricing every congestion window at the default.
+func TestPhaseObserver_ModelsFetchErrorKeepsPriorValue(t *testing.T) {
+	stub := newPhaseObserverStub()
+	server := httptest.NewServer(stub.handler())
+	defer server.Close()
+	stub.setEpoch(http.StatusOK, observerEpochJSON(42, 4, EpochPhaseInference))
+	stub.setParticipants(http.StatusOK, observerParticipantsJSON("gonka1abc", server.URL, 7))
+	stub.setModels(map[string]ModelParams{"model-a": {ContextWindow: 400_000}}, nil)
+
+	observer := newPoCPhaseObserver(t, server, stub)
+	observer.refresh(context.Background())
+	good := observer.Snapshot()
+	if got := good.Models["model-a"].ContextWindow; got != 400_000 {
+		t.Fatalf("precondition: context window = %d, want the 400000 governance reported", got)
+	}
+
+	stub.setModels(nil, errors.New("chain unreachable"))
+	observer.refresh(context.Background())
+	after := observer.Snapshot()
+
+	if got := after.Models["model-a"].ContextWindow; got != 400_000 {
+		t.Errorf("context window after a failed read = %d, want the prior 400000 preserved", got)
+	}
+	if !strings.Contains(after.LastError, "fetch governance models") {
+		t.Errorf("LastError = %q, want it to name the failed models read", after.LastError)
 	}
 }

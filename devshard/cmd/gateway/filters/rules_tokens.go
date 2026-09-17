@@ -10,6 +10,9 @@ import (
 const (
 	DefaultRequestMaxTokens uint64 = 4_096
 	RequestMaxTokensCap     uint64 = 4_096
+
+	// MaxOutputTokens is the most any request may answer with. See capacity.md, "The participant limiter: IOCW".
+	MaxOutputTokens uint64 = 10_000_000
 )
 
 type outputTokenLimits struct {
@@ -47,12 +50,12 @@ func resolveOutputTokenLimits(options Options, routedModel string) outputTokenLi
 func capOutputTokens(value uint64, bypassLimit bool, limits outputTokenLimits) uint64 {
 	limits = normalizedOutputTokenLimits(limits)
 	if value == 0 {
-		return limits.DefaultMaxTokens
+		return min(limits.DefaultMaxTokens, MaxOutputTokens)
 	}
 	if !bypassLimit && value > limits.MaxTokensCap {
-		return limits.MaxTokensCap
+		return min(limits.MaxTokensCap, MaxOutputTokens)
 	}
-	return value
+	return min(value, MaxOutputTokens)
 }
 
 // requestView is the typed projection of the 5 fields the pipeline needs outside the raw document.

@@ -4,11 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"testing"
 	"time"
 
 	"devshard/cmd/gateway/config"
+	"devshard/cmd/gateway/limits"
 	"devshard/cmd/gateway/perf"
+	"devshard/cmd/gateway/scheduler"
 	"devshard/host"
 	"devshard/user"
 )
@@ -442,5 +445,99 @@ func TestAGoneEscrowDoesNotRenameASettledVote(t *testing.T) {
 	}
 	if settled.Reason == TimeoutReasonEscrowGone {
 		t.Fatal("a settled vote was named as a gone escrow")
+	}
+}
+
+func engineRecordingInto(t *testing.T, windows hostWindows, hosts hostTracker) *Engine {
+	t.Helper()
+	deps := completeEngineDeps(t)
+	deps.Windows, deps.Perf = windows, hosts
+	races, err := NewEngine(deps)
+	if err != nil {
+		t.Fatalf("NewEngine() = %v, want a running engine", err)
+	}
+	t.Cleanup(races.Stop)
+	return races
+}
+
+func trackedHosts() *simTracker {
+	return &simTracker{stubPerf: &stubPerf{ejected: map[string]bool{}, degraded: map[string]bool{}}}
+}
+
+// Each window is credited in the currency it was charged: the prompt a host prefilled widens its input
+// window, and the answer it was allowed to produce widens its output one.
+func TestRecordWidensEachWindowByWhatItsOwnDimensionCarried(t *testing.T) {
+	windows := limits.NewParticipantLimiter(limiterConfig(1000), func() time.Time { return testEpoch })
+	races := engineRecordingInto(t, windows, trackedHosts())
+	release, admitted := windows.Acquire(testParticipant, testModel, limits.TokenCost{
+		Input:  probeStartingWindow / 2,
+		Output: probeStartingWindow / 2,
+	})
+	if !admitted {
+		t.Fatal("the limiter refused the attempt that fills half the window, which is the peak a healthy answer grows from")
+	}
+	outcome := race(cleanAttempt())
+	outcome.InputTokens, outcome.OutputTokens = 1_000, 40
+
+	races.record(outcome, nil, races.admit())
+	release()
+
+	input, output := trackedWindows(t, windows)
+	if input != probeStartingWindow+1_000 {
+		t.Errorf("input window = %v, want %v: prefill is credited the prompt the host read", input, probeStartingWindow+1_000)
+	}
+	if output != probeStartingWindow+40 {
+		t.Errorf("output window = %v, want %v: decode is credited the answer the host was allowed to produce", output, probeStartingWindow+40)
+	}
+}
+
+// A host slower than its own best is congested before it has failed anything, and the window it slowed
+// down in is the one that narrows; the other takes the cross factor.
+func TestRecordNarrowsTheWindowTheDelaySignalBlames(t *testing.T) {
+	windows := limits.NewParticipantLimiter(limiterConfig(1000), func() time.Time { return testEpoch })
+	hosts := trackedHosts()
+	hosts.pressure = perf.Pressure{FirstContent: 2}
+	races := engineRecordingInto(t, windows, hosts)
+
+	races.record(race(cleanAttempt()), nil, races.admit())
+
+	input, output := trackedWindows(t, windows)
+	if math.Abs(input-probeStartingWindow*0.85) > windowTolerance {
+		t.Errorf("input window = %v, want %v: a host slow to its first token is congested in prefill", input, probeStartingWindow*0.85)
+	}
+	if math.Abs(output-probeStartingWindow*0.90) > windowTolerance {
+		t.Errorf("output window = %v, want %v: the window the delay does not blame takes the cross factor", output, probeStartingWindow*0.90)
+	}
+}
+
+// Routing prices a request against both windows a host holds, so the pick carries both halves of what
+// the request is worth rather than the prompt alone.
+func TestThePickCarriesBothHalvesOfWhatTheRequestIsWorth(t *testing.T) {
+	sim := newSimulator(t, settledPolicy(), 1, qwenModel)
+	sim.host(10, 0, "host-0", &hostScript{
+		receipt:   true,
+		chunks:    []string{contentEvent("hello")},
+		confirmed: true,
+		finished:  true,
+	})
+
+	if _, err := sim.run(context.Background()); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	request := sim.profile()
+	sim.picker.mu.Lock()
+	profiles := append([]scheduler.RequestProfile(nil), sim.picker.profiles...)
+	sim.picker.mu.Unlock()
+	if len(profiles) != 1 {
+		t.Fatalf("Pick calls = %d, want 1", len(profiles))
+	}
+	if profiles[0].InputTokens != int(request.InputTokens) {
+		t.Errorf("profile input tokens = %d, want %d: a host is charged for the prompt it must prefill",
+			profiles[0].InputTokens, request.InputTokens)
+	}
+	if profiles[0].OutputTokens != int(request.OutputTokens) {
+		t.Errorf("profile output tokens = %d, want %d: a host is charged for the answer it may produce",
+			profiles[0].OutputTokens, request.OutputTokens)
 	}
 }

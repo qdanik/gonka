@@ -44,7 +44,7 @@ func TestCutoffIsNarratedWhenItOpens(t *testing.T) {
 	limiter.SetNarrator(narrator)
 
 	for range int(limiter.cfg.AfterFailures) {
-		limiter.OnResult("participant-a", "model-a", TransportFault)
+		limiter.answered("participant-a", "model-a", TransportFault)
 	}
 
 	require.Equal(t, []recordedCutoff{{
@@ -57,13 +57,13 @@ func TestCutoffIsNarratedWhenItOpens(t *testing.T) {
 func TestAFailedProbeIsNarratedAsItsOwnReason(t *testing.T) {
 	limiter := newTestParticipantLimiter(t)
 	for range int(limiter.cfg.AfterFailures) {
-		limiter.OnResult("participant-a", "model-a", TransportFault)
+		limiter.answered("participant-a", "model-a", TransportFault)
 	}
 	limiter.markHalfOpen("participant-a", "model-a")
 	narrator := &recordingCutoffNarrator{}
 	limiter.SetNarrator(narrator)
 
-	limiter.OnResult("participant-a", "model-a", TransportFault)
+	limiter.answered("participant-a", "model-a", TransportFault)
 
 	require.Len(t, narrator.cutoffs, 1)
 	require.Equal(t, "half_open_probe_failed", narrator.cutoffs[0].reason)
@@ -73,13 +73,13 @@ func TestAFailedProbeIsNarratedAsItsOwnReason(t *testing.T) {
 func TestCutoffCloseIsNarrated(t *testing.T) {
 	limiter := newTestParticipantLimiter(t)
 	for range int(limiter.cfg.AfterFailures) {
-		limiter.OnResult("participant-a", "model-a", TransportFault)
+		limiter.answered("participant-a", "model-a", TransportFault)
 	}
 	limiter.markHalfOpen("participant-a", "model-a")
 	narrator := &recordingCutoffNarrator{}
 	limiter.SetNarrator(narrator)
 
-	limiter.OnResult("participant-a", "model-a", Success)
+	limiter.answered("participant-a", "model-a", Success)
 
 	require.Equal(t, []recordedLift{{participant: "participant-a", model: "model-a", backoffCount: 0}}, narrator.lifts)
 }
@@ -90,9 +90,9 @@ func TestAnOrdinaryResultIsNotNarrated(t *testing.T) {
 	narrator := &recordingCutoffNarrator{}
 	limiter.SetNarrator(narrator)
 
-	limiter.OnResult("participant-a", "model-a", Success)
-	limiter.OnResult("participant-a", "model-a", Overload)
-	limiter.OnResult("participant-a", "model-a", UpstreamFault)
+	limiter.answered("participant-a", "model-a", Success)
+	limiter.answered("participant-a", "model-a", Overload)
+	limiter.answered("participant-a", "model-a", UpstreamFault)
 
 	require.Empty(t, narrator.cutoffs)
 	require.Empty(t, narrator.lifts)
@@ -102,7 +102,7 @@ func TestAnUnnarratedLimiterStillCutsOff(t *testing.T) {
 	limiter := newTestParticipantLimiter(t)
 
 	for range int(limiter.cfg.AfterFailures) {
-		limiter.OnResult("participant-a", "model-a", TransportFault)
+		limiter.answered("participant-a", "model-a", TransportFault)
 	}
 
 	require.False(t, limiter.Available("participant-a", "model-a"))
@@ -110,10 +110,9 @@ func TestAnUnnarratedLimiterStillCutsOff(t *testing.T) {
 
 func newTestParticipantLimiter(t *testing.T) *ParticipantLimiter {
 	t.Helper()
-	return NewParticipantLimiter(ParticipantConfig{
-		Initial: 4, Max: 16, AfterFailures: 3,
-		BaseOpen: 5 * time.Second, MaxOpen: time.Minute,
-	}, time.Now)
+	settings := testConfig()
+	settings.BaseOpen, settings.MaxOpen = 5*time.Second, time.Minute
+	return NewParticipantLimiter(settings, time.Now)
 }
 
 // markHalfOpen puts the breaker in the state an expired cut-off leaves it in.

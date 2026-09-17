@@ -12,13 +12,15 @@ import (
 	"devshard/cmd/gateway/chain"
 	"devshard/cmd/gateway/config"
 	"devshard/cmd/gateway/internal/leakcheck"
+	"devshard/cmd/gateway/limits"
 	"devshard/cmd/gateway/perf"
 )
 
 const escrowB = "escrow-b"
 
 // fakeLimiter keeps the peek and the authority separately settable: unavailable turns the pre-filter
-// off, refused lets a host pass the peek and still fail admission, and window is honoured by both.
+// off, refused lets a host pass the peek and still fail admission, and window is honoured by both. Its
+// window counts admissions rather than tokens, because routing branches on admitted or refused alone.
 type fakeLimiter struct {
 	mu          sync.Mutex
 	unavailable map[string]bool
@@ -27,6 +29,7 @@ type fakeLimiter struct {
 	inflight    map[string]int
 	admitted    int
 	models      []string
+	charged     []limits.TokenCost
 }
 
 func newFakeLimiter() *fakeLimiter {
@@ -44,18 +47,20 @@ func (f *fakeLimiter) Available(participant, model string) bool {
 	return !f.unavailable[participant] && f.hasRoomLocked(participant)
 }
 
-func (f *fakeLimiter) Acquire(participant, model string) bool {
+func (f *fakeLimiter) Acquire(participant, model string, cost limits.TokenCost) (func(), bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.charged = append(f.charged, cost)
 	if f.refused[participant] || !f.hasRoomLocked(participant) {
-		return false
+		return nil, false
 	}
 	f.inflight[participant]++
 	f.admitted++
-	return true
+	return func() { f.release(participant) }, true
 }
 
-func (f *fakeLimiter) Release(participant, model string) {
+// release is not idempotent on purpose, so a slot given back twice shows up as a negative hold.
+func (f *fakeLimiter) release(participant string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.inflight[participant]--
@@ -76,6 +81,12 @@ func (f *fakeLimiter) refuse(participant string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.refused[participant] = true
+}
+
+func (f *fakeLimiter) chargedCosts() []limits.TokenCost {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]limits.TokenCost(nil), f.charged...)
 }
 
 func (f *fakeLimiter) askedModels() []string {
@@ -394,7 +405,7 @@ func TestPickReleasesTheSlotWhenCancellationRacesTheAssignment(t *testing.T) {
 		assignment, err := test.scheduler.Pick(ctx, RequestProfile{Model: modelA})
 		if err == nil {
 			takenByCallers++
-			test.limiter.Release(assignment.Host, modelA)
+			assignment.ReleaseHostSlot()
 			assignment.ReleaseEscrow()
 		}
 	}
@@ -630,7 +641,7 @@ func TestPickAdmitsExactlyOneCallerThroughAWindowOfOne(t *testing.T) {
 		t.Fatalf("slots held/admitted = %d/%d, want the one admission still held by its caller", held, admitted)
 	}
 
-	test.limiter.Release((<-served).Host, modelA)
+	(<-served).ReleaseHostSlot()
 
 	if held, _ := test.limiter.slots(); held != 0 {
 		t.Fatalf("slots held after the caller released = %d, want 0", held)
@@ -649,6 +660,47 @@ func TestPickAsksTheLimiterAboutTheRequestsOwnModel(t *testing.T) {
 		if model != modelA {
 			t.Fatalf("limiter asked about model %q, want %q", model, modelA)
 		}
+	}
+}
+
+// A host's two windows are held in tokens, so what routing takes from them is the request's own worth:
+// the prompt it must prefill and the answer it may produce.
+func TestPickChargesTheHostWindowsWhatTheRequestIsWorth(t *testing.T) {
+	test := newSchedulerHarness(t, schedulerConfig{})
+
+	_, err := test.scheduler.Pick(context.Background(), RequestProfile{Model: modelA, InputTokens: 900, OutputTokens: 120})
+	if err != nil {
+		t.Fatalf("Pick: %v", err)
+	}
+
+	charged := test.limiter.chargedCosts()
+	if len(charged) != 1 {
+		t.Fatalf("limiter charged %d times, want once for the one admitted attempt", len(charged))
+	}
+	if charged[0] != (limits.TokenCost{Input: 900, Output: 120}) {
+		t.Errorf("charged %+v, want input 900 and output 120: each window is taken in its own currency", charged[0])
+	}
+}
+
+func TestSlotCostPricesARequestInBothCurrencies(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name    string
+		profile RequestProfile
+		want    limits.TokenCost
+	}{
+		{"both halves", RequestProfile{InputTokens: 900, OutputTokens: 120}, limits.TokenCost{Input: 900, Output: 120}},
+		{"an answer nobody capped", RequestProfile{InputTokens: 900}, limits.TokenCost{Input: 900}},
+		{"counts below zero are worth nothing", RequestProfile{InputTokens: -1, OutputTokens: -1}, limits.TokenCost{}},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := slotCost(testCase.profile); got != testCase.want {
+				t.Errorf("slotCost() = %+v, want %+v: prefill is priced from the prompt and decode from the answer", got, testCase.want)
+			}
+		})
 	}
 }
 

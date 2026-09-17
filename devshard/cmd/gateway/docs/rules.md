@@ -71,7 +71,7 @@ Three resources move together: the nonce, the participant's concurrency slot, an
 
 **Acquisition is one atomic step**, inside the callback of `session.Advance`, under the session's own lock with the nonce-to-host binding already fixed (`scheduler/dispatcher_queue.go`). A refused slot becomes `burn{ghostThrottled}`.
 
-**Release is by whoever spends it.** The engine's view of the limiter exposes only `Release` — an interface that cannot acquire cannot get the ownership wrong. Every scheduler path that cannot deliver an assignment gives the slot and the hold back *together*. A burn takes the hold and no slot, and gives the hold back whether its commit succeeds or fails.
+**Release is by whoever spends it.** `Acquire` hands back a lease that releases exactly what it took, exactly once, and the assignment carries it to the attempt; the engine's view of the limiter can neither acquire nor release, so an interface that could pair them wrongly does not exist. Every scheduler path that cannot deliver an assignment gives the slot and the hold back *together*. A burn takes the hold and no slot, and gives the hold back whether its commit succeeds or fails.
 
 **The hold outlives the race**, released only after the settlement vote is posted, from inside the goroutine that posts it. The exception is the stranded case, where the assignment's own hold is kept, because the escrow being retired is exactly why there was no target and the vote still has to reach it.
 
@@ -147,7 +147,17 @@ Three maps never evict, and each has a reason eviction would break:
 
 Both of the first two are keyed by participant, and the participant set is the bounded validator set.
 
-### 10. Labels, ordering and determinism
+### 10. Counters saturate
+
+A counter that wraps is worse than one that stops, because the value it wraps to is a number every comparison downstream believes. A host's in-flight token count that wraps negative reads as a window with room, and the limiter admits without bound; a window sized by multiplying a request count by a model's context length wraps into a negative window that never grows again.
+
+So every counter an admission or a window decision is read from, and every total one request's record carries, is added and multiplied through `internal/safemath`, which stops at the bound instead of passing it: a client's `max_tokens` and the in-flight tokens it becomes, a context length governance published, an operator's configuration, and the output tokens a host reports for one request (`limits/participant.go`, `api/accounting.go`). The ledger's roll-ups across rows are outside the rule — they aggregate what is already recorded, for a report nothing admits or refuses on. What is compared rather than stored is compared in `float64`, where a value near the `int64` ceiling widens instead of wrapping.
+
+The two other defences are the bounds themselves. `Validate` refuses a configuration whose knobs could be multiplied past the ceiling, and refuses a float that is not finite, because `NaN` is false in every ordering comparison and passes a range check written as one. `contextWindowsOf` drops a context length outside the range a model could plausibly have rather than clamping it, so a model governance reports nonsense for keeps the length it was last priced at — the fallback, where it has never had one — instead of being priced at the ceiling.
+
+Money is the exception: `safeMul` in the escrow pick and `safeAdd` in the state machine report an overflow rather than saturating, because a reserve that saturates is a reserve the chain will not honour. There the right answer is to refuse the request, not to serve it at the wrong price.
+
+### 11. Labels, ordering and determinism
 
 - Metric label **values** are exported by the package that emits them and referenced by the metrics layer, never restated. Renaming the constant breaks the build rather than the dashboard — but editing its *value* still compiles and moves the wire string under every panel and alert, so those constants are a contract with Grafana, not an internal vocabulary.
 - A route label is always a route pattern, never a raw path. Three of the legacy gateway's eight branches emitted unbounded strings, including a default that returned the path itself on unauthenticated traffic — one series per probe.
@@ -155,7 +165,7 @@ Both of the first two are keyed by participant, and the participant set is the b
 - Iteration with an observable effect is over **sorted** keys: membership publication, the escrow-missing drain, the registry's snapshot and close paths.
 - Request capture admits a deterministic **stride**, not a random sample, so a configured rate is honoured exactly and reproducibly.
 
-### 11. A dependency set is constructed, never assembled
+### 12. A dependency set is constructed, never assembled
 
 A package that takes a `Deps` refuses one it cannot work with, and says which field is missing: `api.New`, `engine.NewEngine`, `scheduler.NewScheduler`, `escrow.NewManager` and `store.NewLedger` all return an error rather than a half-wired object. Without that, a forgotten dependency is a nil interface the compiler accepts, and it surfaces as a panic — in the constructor for the engine, on the first request for the scheduler, on the first tick for the escrow manager.
 
@@ -174,13 +184,13 @@ The rule does not reach values. A struct the caller fills with already-checked n
 | **`/debug/pprof/*`** | legacy mounted it on the same mux as public traffic, where one unauthenticated request can stall the process. Adding it back belongs with a decision about where it is exposed |
 | **Short-content response capture** | capture has two triggers only: a request the filters rejected, and one every attempt failed. What answered the same question is now counted rather than kept — crown strikes, `attempt_failures_total{visibility="no_winner"}`, the per-request record |
 | **A configurable host route prefix** | derived from the binary's own version and not overridable (`main.go`, `ResolveRoutePrefix`). The prefix names the protocol version sessions are created with and settlements carry; a knob that sets them apart is a way to build a settlement the chain will not take |
-| **The quarantine state machine** (`probe`/`shadow`/`probation`, 30–60 minute sentences) | replaced by the AIMD window plus a circuit breaker whose worst case is minutes: adaptation instead of punishment. The operator escape hatch survives as `POST /v1/admin/participants/unquarantine` |
+| **The quarantine state machine** (`probe`/`shadow`/`probation`, 30–60 minute sentences) | replaced by the per-host congestion windows plus a cut-off whose worst case is minutes: adaptation instead of punishment. The operator escape hatch survives as `POST /v1/admin/participants/unquarantine` |
 | **The pairwise speed comparator and its 500 ms winner hold** | pairwise routing is gone, so there is no preference signal to hold for — and inline in the writer the hold stalled the eventual winner's own socket while buying nothing |
 | **Host-index-keyed performance metrics** | `host_idx` is not an identity any more; the four families duplicated participant-keyed twins from the same call site |
 | **`devshard_runtime_reserved_tokens`** | token reservation moved into the limiter; the legacy load formula that consumed it was already documented as misleading |
 | **Probe attempts inside the race engine** | unreachable: a nonce that cannot be served is burned inside the scheduler and never becomes an attempt. Every probe field and its seven guards were deleted rather than left unset; the concept survives as ghost burns |
 | **One of the three escalation rules** | rule 3 (switch to a measurably faster secondary) needed a latency model this gateway does not keep, and a faster host is not a reason to abandon an answer already streaming |
-| **Persisted participant health** | AIMD windows, breaker state and decayed counts all start empty. Minute-scale backoff self-heals faster than replaying stale penalties is worth. The cost is honest and small: a genuinely bad host gets one free window after every deploy |
+| **Persisted participant health** | Congestion windows, cut-off state and decayed counts all start empty. Minute-scale backoff self-heals faster than replaying stale penalties is worth. The cost is honest and small: a genuinely bad host gets one free window after every deploy |
 | **The legacy `state.db` migration** | state starts fresh, bootstrapped from `GATEWAY_ESCROWS_JSON` and the admin import endpoint |
 | **The `capacity_aware_limits` toggle** | it was read and never used. Making it real would mean *adding* a path that disables capacity scaling — new behaviour, not a restored one |
 
@@ -228,7 +238,7 @@ So a stand may shorten them, and only a stand. The values arrive as `engine.Deps
 
 ## Part 3 — What the tests do not verify
 
-The end-to-end suite is [`devshard/e2e`](../../../e2e) (`gateway_*_test.go`): the gateway as its shipped container beside three real host containers and a mock-chain process, reached over real HTTP and real gRPC. It replaced an in-process suite that composed the same packages in one process with no network.
+The end-to-end suite is [`devshard/e2e`](../../../e2e) (`gateway_*_test.go`): the gateway as its shipped container beside three real host containers and a mock-chain process, reached over real HTTP and real gRPC.
 
 A green run of that suite does not verify the following. These are not gaps more of the same suite closes; they are outside what the stand can reach.
 
@@ -236,11 +246,11 @@ A green run of that suite does not verify the following. These are not gaps more
 
 **That real hosts behave like these.** The hosts are the real host binary, but their inference engine is a stub. A vLLM version emitting a new SSE field, a valid receipt followed by a stream truncated at an unscripted byte boundary, TCP behaviour under packet loss — all unrepresented.
 
-**That the sweep is what posted a vote.** The execution-timeout path is now reachable on the stand — the deadlines arrive as `DEVSHARD_E2E_*` and a stalled nonce settles in seconds rather than half an hour — but the stand cannot attribute the vote. Leave the race alone and it votes first; restart the gateway to take the race away and the nonce ledger, which lives in memory, starts empty, so the vote that follows has nothing to be counted against. The sweep is proven in `user` and `state` instead, including a vote its verifiers actually apply.
+**That the sweep is what posted a vote.** The execution-timeout path is reachable on the stand — the deadlines arrive as `DEVSHARD_E2E_*` and a stalled nonce settles in seconds rather than half an hour — but the stand cannot attribute the vote. Leave the race alone and it votes first; restart the gateway to take the race away and the nonce ledger, which lives in memory, starts empty, so the vote that follows has nothing to be counted against. The sweep is proven in `user` and `state` instead, including a vote its verifiers actually apply.
 
 **Anything below the volume floor.** A finding needs 20 nonces from one participant, so a scenario spending a handful raises none however extreme its failure rate. The stand can show a rate is computed; it cannot show a finding fires.
 
-**Any tuning threshold.** Peak-EWMA, the hedging trigger, outlier ejection and the AIMD window all take a latency distribution as input. "Given these numbers, this decision" is asserted in the owning packages; "these thresholds are right for the fleet" is unanswerable without production traffic.
+**Any tuning threshold.** Peak-EWMA, the hedging trigger, outlier ejection and the congestion windows all take a latency distribution as input. "Given these numbers, this decision" is asserted in the owning packages; "these thresholds are right for the fleet" is unanswerable without production traffic.
 
 **Real concurrency at real scale.** The widest race in the stand is single digits. One scale hazard is known and needs load to observe: `ProcessResponse` serialising a wide race on one session mutex.
 

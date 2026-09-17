@@ -228,6 +228,14 @@ func (c *raceCoordinator) markStalls() {
 	}
 }
 
+// missedDeadlineVerdict names the verdict each deadline carries. See race.md, "Deadlines".
+func missedDeadlineVerdict(stage EscalationStage) limits.Verdict {
+	if stage == StageReceiptTimeout {
+		return limits.MissedReceiptDeadline
+	}
+	return limits.MissedFirstTokenDeadline
+}
+
 // judgeMissedDeadlines narrows the window of every host past a deadline it owed and leaves its attempt running. See race.md, "Deadlines".
 func (c *raceCoordinator) judgeMissedDeadlines() {
 	now := c.deps.Now()
@@ -244,7 +252,11 @@ func (c *raceCoordinator) judgeMissedDeadlines() {
 		attempt := c.attempts[index]
 		attempt.judgeDeadline(stage, judgement)
 		if judgement == deadlineMissed {
-			c.deps.Limiter.OnResult(attempt.participant, c.request.Model, limits.MissedDeadline)
+			c.deps.Limiter.OnResult(limits.Result{
+				Participant: attempt.participant,
+				Model:       c.request.Model,
+				Verdict:     missedDeadlineVerdict(stage),
+			})
 		}
 	}
 }

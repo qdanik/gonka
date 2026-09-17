@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"devshard/cmd/gateway/chain"
+	"devshard/cmd/gateway/limits"
 	"devshard/types"
 )
 
@@ -29,8 +30,7 @@ type dispatcherDeps struct {
 	session      session
 	snapshots    snapshotSource
 	predicates   func(chain.PhaseSnapshot) availability
-	acquireSlot  func(participant string) bool
-	releaseSlot  func(participant string)
+	acquireSlot  func(participant string, cost limits.TokenCost) (func(), bool)
 	holdEscrow   func() (func(), bool)
 	observer     dispatchObserver
 	now          func() time.Time
@@ -274,16 +274,16 @@ func freeze(live availability, hosts int) availability {
 	return live
 }
 
-// admit couples admission to the frozen predicates: a refused slot counts as throttled for the rest of the drain. See routing.md, "Where the nonce, the slot and the hold are taken".
-func admit(avail *availability, acquire func(string) bool) func(string) bool {
+// admit couples admission to the frozen predicates. See routing.md, "Where the nonce, the slot and the hold are taken".
+func admit(avail *availability, acquire func(string, limits.TokenCost) (func(), bool)) func(string, limits.TokenCost) (func(), bool) {
 	if avail.frozen == nil {
 		avail.frozen = map[string]blockReason{}
 	}
-	return func(participant string) bool {
-		if acquire(participant) {
-			return true
+	return func(participant string, cost limits.TokenCost) (func(), bool) {
+		if release, admitted := acquire(participant, cost); admitted {
+			return release, true
 		}
 		avail.refuseSlot(participant)
-		return false
+		return nil, false
 	}
 }

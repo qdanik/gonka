@@ -19,6 +19,13 @@ const (
 
 var benchClock = time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 
+// benchCost prices a benchmark request at one token per dimension, so a window of eight admits eight.
+var benchCost = TokenCost{Input: 1, Output: 1}
+
+func benchResult(participant string) Result {
+	return Result{Participant: participant, Model: benchModel, Verdict: Success, Carried: benchCost}
+}
+
 // The sinks keep what a benchmark measured from being optimised away.
 var (
 	windowSink []HostWindow
@@ -40,12 +47,22 @@ func benchParticipants(count int) []string {
 
 func benchLimiter(hosts []string) *ParticipantLimiter {
 	limiter := NewParticipantLimiter(
-		ParticipantConfig{Initial: 8, Max: 32, AfterFailures: 3, BaseOpen: time.Second, MaxOpen: time.Minute},
+		ParticipantConfig{
+			Pricing: WindowPricing{
+				Input:                 RequestBounds{Min: 1, Initial: 8},
+				Output:                RequestBounds{Min: 1, Initial: 8},
+				FallbackContextTokens: 1,
+				FallbackOutputTokens:  1,
+			},
+			Factors: CongestionFactors{Soft: 0.85, Hard: 0.70, Severe: 0.50, Cross: 0.90},
+			Slack:   0.30, AfterFailures: 3, BaseOpen: time.Second, MaxOpen: time.Minute,
+		},
 		func() time.Time { return benchClock },
 	)
 	for _, participant := range hosts {
-		limiter.Acquire(participant, benchModel)
-		limiter.Release(participant, benchModel)
+		if release, admitted := limiter.Acquire(participant, benchModel, benchCost); admitted {
+			release()
+		}
 	}
 	return limiter
 }
@@ -87,9 +104,10 @@ func BenchmarkParticipantAttempt(b *testing.B) {
 	for b.Loop() {
 		participant := hosts[index%len(hosts)]
 		index++
-		limiter.Acquire(participant, benchModel)
-		limiter.Release(participant, benchModel)
-		limiter.OnResult(participant, benchModel, Success)
+		if release, admitted := limiter.Acquire(participant, benchModel, benchCost); admitted {
+			release()
+		}
+		limiter.OnResult(benchResult(participant))
 	}
 }
 
@@ -103,9 +121,10 @@ func BenchmarkParticipantAttemptParallel(b *testing.B) {
 		for pb.Next() {
 			participant := hosts[index%len(hosts)]
 			index++
-			limiter.Acquire(participant, benchModel)
-			limiter.Release(participant, benchModel)
-			limiter.OnResult(participant, benchModel, Success)
+			if release, admitted := limiter.Acquire(participant, benchModel, benchCost); admitted {
+				release()
+			}
+			limiter.OnResult(benchResult(participant))
 		}
 	})
 }

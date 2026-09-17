@@ -19,7 +19,7 @@ func (s *Store) LoadOverrides(ctx context.Context) (config.Overrides, error) {
 		}
 		return config.Overrides{}, fmt.Errorf("loading overrides: %w", err)
 	}
-	overrides, err := config.ParseOverrides([]byte(raw))
+	overrides, err := config.ParseStoredOverrides([]byte(raw))
 	if err != nil {
 		return config.Overrides{}, fmt.Errorf("loading overrides: %w", err)
 	}

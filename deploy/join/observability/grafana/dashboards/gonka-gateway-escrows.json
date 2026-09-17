@@ -3241,33 +3241,13 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "devshard_gateway_participant_window_inflight",
-          "instant": false,
-          "legendFormat": "in flight · {{participant_key}} · {{model}}",
-          "refId": "A"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${datasource}"
-          },
-          "expr": "devshard_gateway_participant_window_size",
-          "instant": false,
-          "legendFormat": "window · {{participant_key}} · {{model}}",
-          "refId": "B"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${datasource}"
-          },
           "expr": "devshard_gateway_participant_breaker_state{state!=\"closed\"} == 1",
           "instant": false,
           "legendFormat": "breaker {{state}} · {{participant_key}} · {{model}}",
           "refId": "C"
         }
       ],
-      "title": "Participant windows and breakers",
+      "title": "Participant breakers",
       "type": "timeseries"
     },
     {

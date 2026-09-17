@@ -16,6 +16,7 @@ import (
 	"devshard/cmd/gateway/chain"
 	"devshard/cmd/gateway/config"
 	"devshard/cmd/gateway/limits"
+	"devshard/cmd/gateway/perf"
 	"devshard/cmd/gateway/scheduler"
 )
 
@@ -281,6 +282,7 @@ type stubPerf struct {
 	versionCalls []string
 	limits       []contextLimitCall
 	observed     map[string]time.Duration
+	pressure     perf.Pressure
 
 	contextLimitRecorded chan struct{}
 }
@@ -290,6 +292,12 @@ func (p *stubPerf) FirstContentP75(participant, _ string) (time.Duration, bool) 
 	defer p.mu.Unlock()
 	observed, known := p.observed[participant]
 	return observed, known
+}
+
+func (p *stubPerf) Pressure(participant, model string) perf.Pressure {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.pressure
 }
 
 func (p *stubPerf) Acquire(participant string) {
@@ -380,10 +388,13 @@ func newSlotLedger() *slotLedger {
 	return &slotLedger{releases: make(chan string, 64), verdicts: make(chan windowMove, 64)}
 }
 
-func (l *slotLedger) Release(participant, model string) { l.releases <- participant }
+// hostSlot is the release the scheduler hands an assignment, reporting the participant it gives back.
+func (l *slotLedger) hostSlot(participant string) func() {
+	return func() { l.releases <- participant }
+}
 
-func (l *slotLedger) OnResult(participant, _ string, verdict limits.Verdict) {
-	l.verdicts <- windowMove{participant: participant, verdict: verdict}
+func (l *slotLedger) OnResult(result limits.Result) {
+	l.verdicts <- windowMove{participant: result.Participant, verdict: result.Verdict}
 }
 
 type recordingSink struct {
@@ -473,9 +484,10 @@ func (f *raceFixture) host(nonce uint64, hostIdx int, participant string, script
 	f.target.mu.Unlock()
 	f.picker.mu.Lock()
 	f.picker.queue = append(f.picker.queue, scheduler.Assignment{
-		Escrow: "escrow-1",
-		Host:   participant,
-		Nonce:  fakePrepared{nonce: nonce, hostIdx: hostIdx},
+		Escrow:   "escrow-1",
+		Host:     participant,
+		Nonce:    fakePrepared{nonce: nonce, hostIdx: hostIdx},
+		HostSlot: f.limiter.hostSlot(participant),
 	})
 	f.picker.mu.Unlock()
 }
@@ -1719,8 +1731,8 @@ func TestAMissedFirstTokenDeadlineNarrowsTheHostWithoutStoppingItsAttempt(t *tes
 
 	coordinator.expire(arm)
 
-	if move := waitForValue(t, fixture.limiter.verdicts, "the host's window being judged"); move != (windowMove{participant: "host-0", verdict: limits.MissedDeadline}) {
-		t.Fatalf("window move = %+v, want host-0 to have missed a deadline", move)
+	if move := waitForValue(t, fixture.limiter.verdicts, "the host's window being judged"); move != (windowMove{participant: "host-0", verdict: limits.MissedFirstTokenDeadline}) {
+		t.Fatalf("window move = %+v, want host-0 to have missed the first-token deadline", move)
 	}
 	if cancelled {
 		t.Fatal("the missed deadline cancelled an attempt that still owes its nonce")
@@ -1787,8 +1799,8 @@ func TestRunRaceNarrowsALateHostAtTheDeadlineAndLetsItFinish(t *testing.T) {
 
 	fixture.clock.advance(time.Second)
 
-	if move := waitForValue(t, fixture.limiter.verdicts, "the late host's window being judged"); move != (windowMove{participant: "host-0", verdict: limits.MissedDeadline}) {
-		t.Fatalf("window move = %+v, want host-0 to have missed a deadline", move)
+	if move := waitForValue(t, fixture.limiter.verdicts, "the late host's window being judged"); move != (windowMove{participant: "host-0", verdict: limits.MissedReceiptDeadline}) {
+		t.Fatalf("window move = %+v, want host-0 to have missed the receipt deadline", move)
 	}
 	close(release)
 	waitForValue(t, returned, "the late attempt finishing its race")

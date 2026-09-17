@@ -100,7 +100,7 @@ A ghost commits a real inference into the escrow's local diff and never sends it
 | Kind | Recorded reason | Cause |
 |---|---|---|
 | `ghostPoC` | `poc_unavailable_host` | The host is **not** in the preserved set, so proof-of-compute is required of it and it cannot take work. Preserved means kept in service: `pocRequired` is the negation of `pocPreserved`, and a nil set counts everyone as preserved so an unloaded snapshot fails open rather than ghosting every nonce. |
-| `ghostThrottled` | `participant_throttled_no_send` | The host's concurrency window is full or its breaker is open. |
+| `ghostThrottled` | `participant_throttled_no_send` | The host's congestion windows cannot take this request, or its cut-off is open. |
 | `ghostEjected` | `participant_ejected_no_send` | The outlier detector ejected the host, and the pool-wide cap left room to honour it. |
 | `ghostExclude` | `no_compatible_request_after_stale` | The queue has already raced this host, and the hold grace expired. |
 | `ghostAbandoned` | `request_abandoned_before_dispatch` | The nonce was committed for a caller who vanished before the assignment reached it. |
@@ -122,7 +122,7 @@ This is the money path, and the ordering below is its fragile part. All three ac
 
 Admission lives *inside* the commit rather than beside it. The legacy gateway peeked during selection and called `Acquire` afterwards, in the engine. Those are two separate critical sections, so between them a window could fill; the acquire then failed *after* the nonce was already committed, and the failed attempt never entered the race outcome — so nothing ever posted its settlement vote. A peek used as authority where atomicity was required, and the result was an orphaned chain message. `Available` remains, but only as a pre-filter whose staleness costs nothing (`scheduler.go`, `hostLimiter`).
 
-Acquiring at the serve point with no memory trades that bug for another: with a full window every drain iteration takes, fails and burns a nonce, up to the whole budget, where the old code burned none. That is why `admit` folds a refused participant back into the drain's *frozen* `throttled` predicate (`dispatcher.go`, `admit`). The sweep then answers the affected waiters with `ErrNoAvailableHost` instead of the binding burning another nonce every turn.
+Acquiring at the serve point with no memory trades that bug for another: with a full window every drain iteration takes, fails and burns a nonce, up to the whole budget, where the old code burned none. That is why `admit` folds a refused participant back into the drain's *frozen* `throttled` predicate (`dispatcher.go`, `admit`). The sweep then answers the affected waiters with `ErrNoAvailableHost` instead of the binding burning another nonce every turn. The fold is unconditional, and that is a trade rather than a free win: a window is refused per request size, so a host that could not take one large request is frozen as throttled for the waiters behind it, which are refused a host that would have served them. The alternative costs more — leaving such a host available re-offers the same ill-fitting waiter on every binding and burns a nonce each time, up to the whole budget, where folding it burns one. What the trade is really asking for is a match that pairs a nonce with a waiter the host has room for, rather than with the oldest live one.
 
 The two reservations travel as one value (`dispatcher_queue.go`, `reservation`):
 

@@ -30,11 +30,6 @@ type Response interface {
 	ConfirmedAt() int64
 }
 
-// hostLimiter is satisfied by *limits.ParticipantLimiter. See rules.md, "5. The slot and the escrow hold are taken with the nonce, and given back after the vote".
-type hostLimiter interface {
-	Release(participant, model string)
-}
-
 // chunkFacts is what one SSE chunk carried. See README, "Classification and reassembly".
 type chunkFacts struct {
 	Content       bool
@@ -74,11 +69,11 @@ type AttemptSpec struct {
 
 	Nonce scheduler.Prepared
 
-	Dispatch   dispatcher
-	Limiter    hostLimiter
-	Classifier streamClassifier
-	Sink       io.Writer
-	Now        func() time.Time
+	Dispatch    dispatcher
+	ReleaseSlot func()
+	Classifier  streamClassifier
+	Sink        io.Writer
+	Now         func() time.Time
 
 	Events chan<- AttemptEvent
 }
@@ -144,7 +139,7 @@ type attemptState struct {
 
 func runAttempt(ctx context.Context, spec AttemptSpec) {
 	defer spec.Classifier.Release()
-	defer spec.Limiter.Release(spec.Participant, spec.Model)
+	defer spec.ReleaseSlot()
 
 	nonce := spec.Nonce.Nonce()
 	state := &attemptState{sendTime: spec.Now()}

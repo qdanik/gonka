@@ -41,10 +41,25 @@ type Concurrency struct {
 	PoCRequestsPer10000Weight float64
 }
 
-type HostInflight struct {
-	Min     int64
-	Initial int64
-	Max     int64
+// RequestWindow is one congestion window's floor and starting size, counted in requests. See capacity.md, "The participant limiter: IOCW".
+type RequestWindow struct {
+	MinRequests     int64
+	InitialRequests int64
+}
+
+// HostWindows caps what one host may hold in flight: the input tokens it must prefill and the output tokens it may still produce.
+type HostWindows struct {
+	Input  RequestWindow
+	Output RequestWindow
+}
+
+// Congestion is the narrowing ladder and the latency slack a host is judged against. See capacity.md, "The participant limiter: IOCW".
+type Congestion struct {
+	BetaSoft   float64
+	BetaHard   float64
+	BetaSevere float64
+	BetaCross  float64
+	Slack      float64
 }
 
 type HostCutoff struct {
@@ -57,6 +72,7 @@ type HostCutoff struct {
 type ModelLimits struct {
 	DefaultMaxTokens       int64  `json:"default_max_tokens"`
 	MaxTokensCap           int64  `json:"max_tokens_cap"`
+	MaxModelLen            *int64 `json:"max_model_len,omitempty"`
 	MaxConcurrentRequests  *int64 `json:"max_concurrent_requests,omitempty"`
 	MaxInputTokensInFlight *int64 `json:"max_input_tokens_in_flight,omitempty"`
 }
@@ -67,11 +83,13 @@ type Limits struct {
 	ForceUpstreamStreaming   bool
 	MaxBufferedResponseBytes int64
 	MaxTokensCap             int64
+	FallbackMaxModelLen      int64
 	Concurrency              Concurrency
 	MaxInputTokensInFlight   int64
 	AdmissionQueueWaitMS     int64
 	AdmissionQueuePerSlot    int64
-	HostInflight             HostInflight
+	HostWindows              HostWindows
+	Congestion               Congestion
 	HostCutoff               HostCutoff
 	ModelLimits              map[string]ModelLimits
 	ModelAccess              map[string]string
@@ -154,9 +172,7 @@ type Scheduler struct {
 	ParticipantAllowlist []string
 }
 
-// TimeoutSweep bounds the retry of execution timeouts no race is left to post. BudgetPerTick is the
-// ceiling on votes one tick attempts across every escrow, so the load it adds never follows the request
-// rate; zero turns the sweep off. GraceSeconds keeps it off a nonce whose own race is still due to vote.
+// TimeoutSweep bounds the retry of execution timeouts no race is left to post; a zero BudgetPerTick turns the sweep off.
 type TimeoutSweep struct {
 	BudgetPerTick int64
 	GraceSeconds  int64

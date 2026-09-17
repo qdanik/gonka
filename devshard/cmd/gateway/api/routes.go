@@ -294,6 +294,7 @@ func (s *Server) race(w http.ResponseWriter, r *http.Request, requestID string, 
 		Model:        normalized.Model,
 		Escrow:       escrowPin,
 		InputTokens:  inputTokens,
+		OutputTokens: outputTokens,
 		ClientStream: normalized.ClientStream,
 		OnEscrow:     func(escrowID string) { client.Header().Set(EscrowHeader, escrowID) },
 

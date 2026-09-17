@@ -64,14 +64,39 @@ func TestParticipantConfigFromLimits_MapsFieldsFromDefaults(t *testing.T) {
 
 	got := ParticipantConfigFromLimits(limits)
 
-	if got.Initial != limits.HostInflight.Initial {
-		t.Errorf("Initial = %d, want %d", got.Initial, limits.HostInflight.Initial)
+	wantInput := RequestBounds{
+		Min:     limits.HostWindows.Input.MinRequests,
+		Initial: limits.HostWindows.Input.InitialRequests,
 	}
-	if got.Max != limits.HostInflight.Max {
-		t.Errorf("Max = %d, want %d", got.Max, limits.HostInflight.Max)
+	if got.Pricing.Input != wantInput {
+		t.Errorf("Pricing.Input = %+v, want %+v", got.Pricing.Input, wantInput)
 	}
-	if got.Min != limits.HostInflight.Min {
-		t.Errorf("Min = %d, want %d", got.Min, limits.HostInflight.Min)
+	wantOutput := RequestBounds{
+		Min:     limits.HostWindows.Output.MinRequests,
+		Initial: limits.HostWindows.Output.InitialRequests,
+	}
+	if got.Pricing.Output != wantOutput {
+		t.Errorf("Pricing.Output = %+v, want %+v", got.Pricing.Output, wantOutput)
+	}
+	if got.Pricing.FallbackContextTokens != limits.FallbackMaxModelLen {
+		t.Errorf("FallbackContextTokens = %d, want %d: prefill is counted in the tokens of the model's own context length",
+			got.Pricing.FallbackContextTokens, limits.FallbackMaxModelLen)
+	}
+	if got.Pricing.FallbackOutputTokens != limits.MaxTokensCap {
+		t.Errorf("FallbackOutputTokens = %d, want %d: decode is counted in the tokens of the model's own output cap",
+			got.Pricing.FallbackOutputTokens, limits.MaxTokensCap)
+	}
+	wantFactors := CongestionFactors{
+		Soft:   limits.Congestion.BetaSoft,
+		Hard:   limits.Congestion.BetaHard,
+		Severe: limits.Congestion.BetaSevere,
+		Cross:  limits.Congestion.BetaCross,
+	}
+	if got.Factors != wantFactors {
+		t.Errorf("Factors = %+v, want %+v", got.Factors, wantFactors)
+	}
+	if got.Slack != limits.Congestion.Slack {
+		t.Errorf("Slack = %v, want %v", got.Slack, limits.Congestion.Slack)
 	}
 	if got.AfterFailures != limits.HostCutoff.AfterFailures {
 		t.Errorf("AfterFailures = %d, want %d", got.AfterFailures, limits.HostCutoff.AfterFailures)
@@ -84,6 +109,36 @@ func TestParticipantConfigFromLimits_MapsFieldsFromDefaults(t *testing.T) {
 	}
 }
 
+// Prefill and decode are separate settings priced in separate units, and the defaults make both windows
+// the same size: only a config that tells them apart can tell the mapping apart.
+func TestParticipantConfigFromLimits_PricesEachWindowFromItsOwnSetting(t *testing.T) {
+	t.Parallel()
+	configured := config.Defaults().Limits
+	configured.HostWindows.Input = config.RequestWindow{MinRequests: 1, InitialRequests: 2}
+	configured.HostWindows.Output = config.RequestWindow{MinRequests: 3, InitialRequests: 6}
+	namedContext := int64(32_768)
+	configured.ModelLimits = map[string]config.ModelLimits{
+		"model-a": {DefaultMaxTokens: 512, MaxTokensCap: 1_024, MaxModelLen: &namedContext},
+	}
+
+	got := ParticipantConfigFromLimits(configured)
+
+	if got.Pricing.Input != (RequestBounds{Min: 1, Initial: 2}) {
+		t.Errorf("Pricing.Input = %+v, want {Min:1 Initial:2}: prefill counts the requests the operator allowed it", got.Pricing.Input)
+	}
+	if got.Pricing.Output != (RequestBounds{Min: 3, Initial: 6}) {
+		t.Errorf("Pricing.Output = %+v, want {Min:3 Initial:6}: decode has its own request counts", got.Pricing.Output)
+	}
+	if got.Pricing.ContextTokensByModel["model-a"] != namedContext {
+		t.Errorf("ContextTokensByModel[model-a] = %d, want %d: a model's own context length is what its prefill window counts in",
+			got.Pricing.ContextTokensByModel["model-a"], namedContext)
+	}
+	if got.Pricing.OutputTokensByModel["model-a"] != 1_024 {
+		t.Errorf("OutputTokensByModel[model-a] = %d, want 1024: a model's own output cap is what its decode window counts in",
+			got.Pricing.OutputTokensByModel["model-a"])
+	}
+}
+
 func TestParticipantConfigFromConfig_ForgetsIdlePairsOnThePerfStalenessWindow(t *testing.T) {
 	t.Parallel()
 	configuration := config.Defaults()
@@ -91,10 +146,11 @@ func TestParticipantConfigFromConfig_ForgetsIdlePairsOnThePerfStalenessWindow(t 
 
 	got := ParticipantConfigFromConfig(&configuration)
 
-	want := ParticipantConfigFromLimits(configuration.Limits)
-	want.IdleEviction = 90 * time.Second
-	if got != want {
-		t.Fatalf("ParticipantConfigFromConfig() = %+v, want %+v", got, want)
+	if got.IdleEviction != 90*time.Second {
+		t.Fatalf("IdleEviction = %v, want 90s from perf_host_staleness_seconds", got.IdleEviction)
+	}
+	if got.Pricing.Input != ParticipantConfigFromLimits(configuration.Limits).Pricing.Input {
+		t.Fatal("ParticipantConfigFromConfig changed the windows it was only meant to add an eviction window to")
 	}
 }
 
@@ -128,12 +184,16 @@ func TestCapacityGatewayParticipantLimiterComposeEndToEnd(t *testing.T) {
 	}
 	gatewayLimiter.ReleaseForModel("modelA", 128)
 
-	for i := range limits.HostInflight.Initial {
-		if !participantLimiter.Acquire("hostA", "modelA") {
-			t.Fatalf("ParticipantLimiter.Acquire call %d = false, want true (Initial=%d)", i+1, limits.HostInflight.Initial)
+	// One request at the model's full context and output cap, so the initial window takes exactly the
+	// number of requests it is configured in.
+	request := TokenCost{Input: limits.FallbackMaxModelLen, Output: limits.MaxTokensCap}
+	admitted := limits.HostWindows.Input.InitialRequests
+	for i := range admitted {
+		if _, ok := participantLimiter.Acquire("hostA", "modelA", request); !ok {
+			t.Fatalf("ParticipantLimiter.Acquire call %d = false, want true (the initial window fits %d of them)", i+1, admitted)
 		}
 	}
-	if participantLimiter.Acquire("hostA", "modelA") {
-		t.Fatal("ParticipantLimiter.Acquire beyond Initial = true, want false (per-host window must gate the host)")
+	if _, ok := participantLimiter.Acquire("hostA", "modelA", request); ok {
+		t.Fatal("ParticipantLimiter.Acquire beyond the initial window = true, want false (per-host window must gate the host)")
 	}
 }

@@ -84,7 +84,7 @@ func (r *Registry) RoutableSession(escrowID string) (EscrowSession, bool) {
 	return entry.session, true
 }
 
-// SettlementSession resolves published or draining, deliberately asymmetric with routing. See rules.md, "4. Routing and settlement read the escrow set asymmetrically, on purpose".
+// SettlementSession resolves published or draining, deliberately asymmetric with routing. See rules.md, "4. Routing and settlement read the escrow set asymmetrically".
 func (r *Registry) SettlementSession(escrowID string) (EscrowSession, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()

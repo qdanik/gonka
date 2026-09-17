@@ -3,14 +3,25 @@ package config
 import (
 	"errors"
 	"fmt"
+	"math"
 	"net"
 	"net/url"
 	"strings"
 
 	"devshard/cmd/gateway/chain"
+	"devshard/cmd/gateway/filters"
 )
 
+func notFinite(value float64) bool { return math.IsNaN(value) || math.IsInf(value, 0) }
+
+// MaxContextTokens is the longest context a model may be priced at. See capacity.md, "The participant limiter: IOCW".
+const MaxContextTokens = 100_000_000
+
 const (
+	maxWindowRequests        = 1_000_000
+	maxConcurrentRequests    = 10_000_000
+	maxAdmissionQueuePerSlot = 10_000
+
 	maxSnapshotAgeSeconds   = 86_400
 	maxEngineTimingMS       = 86_400_000
 	snapshotAgePollMultiple = 7
@@ -62,19 +73,22 @@ func (c *Config) Validate() error {
 		complain("tx_poll_timeout_ms: %d must be >= tx_poll_interval_ms %d", c.Tx.PollTimeoutMS, c.Tx.PollIntervalMS)
 	}
 
-	if c.Limits.DefaultMaxTokens < 1 {
-		complain("default_max_tokens: %d must be >= 1", c.Limits.DefaultMaxTokens)
+	if c.Limits.DefaultMaxTokens < 1 || c.Limits.DefaultMaxTokens > int64(filters.MaxOutputTokens) {
+		complain("default_max_tokens: %d must be between 1 and %d", c.Limits.DefaultMaxTokens, filters.MaxOutputTokens)
 	}
-	if c.Limits.MaxTokensCap < 1 {
-		complain("max_tokens_cap: %d must be >= 1", c.Limits.MaxTokensCap)
+	if c.Limits.MaxTokensCap < 1 || c.Limits.MaxTokensCap > int64(filters.MaxOutputTokens) {
+		complain("max_tokens_cap: %d must be between 1 and %d", c.Limits.MaxTokensCap, filters.MaxOutputTokens)
 	}
-	if c.Limits.Concurrency.MaxRequests < 0 {
-		complain("max_concurrent_requests: %d must be >= 0", c.Limits.Concurrency.MaxRequests)
+	if c.Limits.Concurrency.MaxRequests < 0 || c.Limits.Concurrency.MaxRequests > maxConcurrentRequests {
+		complain("max_concurrent_requests: %d must be between 0 and %d", c.Limits.Concurrency.MaxRequests, maxConcurrentRequests)
 	}
-	if c.Limits.Concurrency.RequestsPer10000Weight < 0 {
+	if c.Limits.AdmissionQueuePerSlot < 0 || c.Limits.AdmissionQueuePerSlot > maxAdmissionQueuePerSlot {
+		complain("admission_queue_per_slot: %d must be between 0 and %d", c.Limits.AdmissionQueuePerSlot, maxAdmissionQueuePerSlot)
+	}
+	if notFinite(c.Limits.Concurrency.RequestsPer10000Weight) || c.Limits.Concurrency.RequestsPer10000Weight < 0 {
 		complain("max_concurrent_requests_per_10000_weight: %v must be >= 0", c.Limits.Concurrency.RequestsPer10000Weight)
 	}
-	if c.Limits.Concurrency.PoCRequestsPer10000Weight < 0 {
+	if notFinite(c.Limits.Concurrency.PoCRequestsPer10000Weight) || c.Limits.Concurrency.PoCRequestsPer10000Weight < 0 {
 		complain("poc_max_concurrent_requests_per_10000_weight: %v must be >= 0", c.Limits.Concurrency.PoCRequestsPer10000Weight)
 	}
 	if c.Limits.MaxInputTokensInFlight < 0 {
@@ -83,17 +97,25 @@ func (c *Config) Validate() error {
 	if c.Limits.AdmissionQueueWaitMS < 0 {
 		complain("admission_queue_wait_ms: %d must be >= 0", c.Limits.AdmissionQueueWaitMS)
 	}
-	if c.Limits.HostInflight.Min < 1 {
-		complain("host_min_inflight: %d must be >= 1", c.Limits.HostInflight.Min)
+	validateRequestWindow("host_input_window", c.Limits.HostWindows.Input, complain)
+	validateRequestWindow("host_output_window", c.Limits.HostWindows.Output, complain)
+	if c.Limits.FallbackMaxModelLen < 1 || c.Limits.FallbackMaxModelLen > MaxContextTokens {
+		complain("fallback_max_model_len: %d must be between 1 and %d", c.Limits.FallbackMaxModelLen, MaxContextTokens)
 	}
-	if c.Limits.HostInflight.Initial < 1 {
-		complain("host_initial_inflight: %d must be >= 1", c.Limits.HostInflight.Initial)
+	if notFinite(c.Limits.Congestion.BetaSoft) || c.Limits.Congestion.BetaSoft <= 0 || c.Limits.Congestion.BetaSoft >= 1 {
+		complain("io_aimd_beta_soft: %v must be > 0 and < 1", c.Limits.Congestion.BetaSoft)
 	}
-	if c.Limits.HostInflight.Initial < c.Limits.HostInflight.Min {
-		complain("host_initial_inflight: %d must be >= host_min_inflight %d", c.Limits.HostInflight.Initial, c.Limits.HostInflight.Min)
+	if notFinite(c.Limits.Congestion.BetaHard) || c.Limits.Congestion.BetaHard <= 0 || c.Limits.Congestion.BetaHard >= 1 {
+		complain("io_aimd_beta_hard: %v must be > 0 and < 1", c.Limits.Congestion.BetaHard)
 	}
-	if c.Limits.HostInflight.Max < c.Limits.HostInflight.Initial {
-		complain("host_max_inflight: %d must be >= host_initial_inflight %d", c.Limits.HostInflight.Max, c.Limits.HostInflight.Initial)
+	if notFinite(c.Limits.Congestion.BetaSevere) || c.Limits.Congestion.BetaSevere <= 0 || c.Limits.Congestion.BetaSevere >= 1 {
+		complain("io_aimd_beta_severe: %v must be > 0 and < 1", c.Limits.Congestion.BetaSevere)
+	}
+	if notFinite(c.Limits.Congestion.BetaCross) || c.Limits.Congestion.BetaCross <= 0 || c.Limits.Congestion.BetaCross > 1 {
+		complain("io_aimd_beta_cross: %v must be > 0 and <= 1", c.Limits.Congestion.BetaCross)
+	}
+	if notFinite(c.Limits.Congestion.Slack) || c.Limits.Congestion.Slack < 0 {
+		complain("host_congestion_slack: %v must be >= 0", c.Limits.Congestion.Slack)
 	}
 	if c.Limits.HostCutoff.AfterFailures < 1 {
 		complain("host_cutoff_after_failures: %d must be >= 1", c.Limits.HostCutoff.AfterFailures)
@@ -124,6 +146,12 @@ func (c *Config) Validate() error {
 	for model, limit := range c.Limits.ModelLimits {
 		if limit.DefaultMaxTokens < 1 || limit.MaxTokensCap < 1 {
 			complain("model_limits[%s]: default %d / cap %d invalid", model, limit.DefaultMaxTokens, limit.MaxTokensCap)
+		}
+		if limit.MaxTokensCap > int64(filters.MaxOutputTokens) || limit.DefaultMaxTokens > int64(filters.MaxOutputTokens) {
+			complain("model_limits[%s]: default %d / cap %d must be <= %d", model, limit.DefaultMaxTokens, limit.MaxTokensCap, filters.MaxOutputTokens)
+		}
+		if limit.MaxModelLen != nil && (*limit.MaxModelLen < 1 || *limit.MaxModelLen > MaxContextTokens) {
+			complain("model_limits[%s]: max_model_len %d must be between 1 and %d", model, *limit.MaxModelLen, MaxContextTokens)
 		}
 		if limit.MaxConcurrentRequests != nil && *limit.MaxConcurrentRequests < 1 {
 			complain("model_limits[%s]: max_concurrent_requests %d must be >= 1", model, *limit.MaxConcurrentRequests)
@@ -168,7 +196,7 @@ func (c *Config) Validate() error {
 	if portOutOfRange := c.NonceAccounting.Port < 1 || c.NonceAccounting.Port > 65535; c.NonceAccounting.Enabled && portOutOfRange {
 		complain("nonce_accounting_port: %d out of range 1..65535 while nonce accounting is enabled", c.NonceAccounting.Port)
 	}
-	if c.Capture.SampleRate < 0 || c.Capture.SampleRate > 1 {
+	if notFinite(c.Capture.SampleRate) || c.Capture.SampleRate < 0 || c.Capture.SampleRate > 1 {
 		complain("capture_sample_rate: %v must be in [0, 1]", c.Capture.SampleRate)
 	}
 	if c.Capture.MaxBytes < 1 {
@@ -193,10 +221,10 @@ func (c *Config) Validate() error {
 	if c.Perf.ConsecutiveFailThreshold < 1 {
 		complain("perf_consecutive_fail_threshold: %d must be >= 1", c.Perf.ConsecutiveFailThreshold)
 	}
-	if c.Perf.FailureRateThreshold <= 0 || c.Perf.FailureRateThreshold > 1 {
+	if notFinite(c.Perf.FailureRateThreshold) || c.Perf.FailureRateThreshold <= 0 || c.Perf.FailureRateThreshold > 1 {
 		complain("perf_failure_rate_threshold: %v must be in (0, 1]", c.Perf.FailureRateThreshold)
 	}
-	if c.Perf.FailureRateMinVolume < 1 {
+	if notFinite(c.Perf.FailureRateMinVolume) || c.Perf.FailureRateMinVolume < 1 {
 		complain("perf_failure_rate_min_volume: %v must be >= 1", c.Perf.FailureRateMinVolume)
 	}
 	if c.Perf.EjectionBaseSeconds < 1 {
@@ -205,7 +233,7 @@ func (c *Config) Validate() error {
 	if c.Perf.EjectionMaxSeconds < c.Perf.EjectionBaseSeconds {
 		complain("perf_ejection_max_seconds: %d must be >= perf_ejection_base_seconds %d", c.Perf.EjectionMaxSeconds, c.Perf.EjectionBaseSeconds)
 	}
-	if c.Perf.MaxEjectionFraction <= 0 || c.Perf.MaxEjectionFraction > 1 {
+	if notFinite(c.Perf.MaxEjectionFraction) || c.Perf.MaxEjectionFraction <= 0 || c.Perf.MaxEjectionFraction > 1 {
 		complain("perf_max_ejection_fraction: %v must be in (0, 1]", c.Perf.MaxEjectionFraction)
 	}
 	if c.Perf.MinAvailableHosts < 0 {
@@ -265,4 +293,19 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("%w: %w", ErrInvalid, errors.Join(problems...))
 	}
 	return nil
+}
+
+func validateRequestWindow(name string, window RequestWindow, complain func(string, ...any)) {
+	if window.MinRequests < 1 {
+		complain("%s_min_requests: %d must be >= 1", name, window.MinRequests)
+	}
+	if window.MinRequests > maxWindowRequests {
+		complain("%s_min_requests: %d must be <= %d", name, window.MinRequests, maxWindowRequests)
+	}
+	if window.InitialRequests > maxWindowRequests {
+		complain("%s_initial_requests: %d must be <= %d", name, window.InitialRequests, maxWindowRequests)
+	}
+	if window.InitialRequests < window.MinRequests {
+		complain("%s_initial_requests: %d must be >= %s_min_requests %d", name, window.InitialRequests, name, window.MinRequests)
+	}
 }

@@ -35,9 +35,16 @@ func TestDefaultsMatchSpec(t *testing.T) {
 		{"Limits.Concurrency.PoCRequestsPer10000Weight", configuration.Limits.Concurrency.PoCRequestsPer10000Weight, 16.0},
 		{"Limits.MaxInputTokensInFlight", configuration.Limits.MaxInputTokensInFlight, int64(0)},
 		{"Limits.AdmissionQueueWaitMS", configuration.Limits.AdmissionQueueWaitMS, int64(300_000)},
-		{"Limits.HostInflight.Min", configuration.Limits.HostInflight.Min, int64(4)},
-		{"Limits.HostInflight.Initial", configuration.Limits.HostInflight.Initial, int64(64)},
-		{"Limits.HostInflight.Max", configuration.Limits.HostInflight.Max, int64(256)},
+		{"Limits.FallbackMaxModelLen", configuration.Limits.FallbackMaxModelLen, int64(1_000_000)},
+		{"Limits.HostWindows.Input.MinRequests", configuration.Limits.HostWindows.Input.MinRequests, int64(1)},
+		{"Limits.HostWindows.Input.InitialRequests", configuration.Limits.HostWindows.Input.InitialRequests, int64(2)},
+		{"Limits.HostWindows.Output.MinRequests", configuration.Limits.HostWindows.Output.MinRequests, int64(1)},
+		{"Limits.HostWindows.Output.InitialRequests", configuration.Limits.HostWindows.Output.InitialRequests, int64(2)},
+		{"Limits.Congestion.BetaSoft", configuration.Limits.Congestion.BetaSoft, 0.85},
+		{"Limits.Congestion.BetaHard", configuration.Limits.Congestion.BetaHard, 0.70},
+		{"Limits.Congestion.BetaSevere", configuration.Limits.Congestion.BetaSevere, 0.50},
+		{"Limits.Congestion.BetaCross", configuration.Limits.Congestion.BetaCross, 0.90},
+		{"Limits.Congestion.Slack", configuration.Limits.Congestion.Slack, 0.30},
 		{"Limits.HostCutoff.AfterFailures", configuration.Limits.HostCutoff.AfterFailures, int64(3)},
 		{"Limits.HostCutoff.BaseMS", configuration.Limits.HostCutoff.BaseMS, int64(5_000)},
 		{"Limits.HostCutoff.MaxMS", configuration.Limits.HostCutoff.MaxMS, int64(60_000)},
@@ -80,14 +87,14 @@ func TestValidateRejectsBrokenConfigAndNamesEveryProblem(t *testing.T) {
 	configuration := Defaults()
 	configuration.Server.Port = 0
 	configuration.Limits.MaxTokensCap = 0
-	configuration.Limits.HostInflight.Initial = 0
+	configuration.Limits.HostWindows.Input.InitialRequests = 0
 	configuration.Chain.GRPCEndpoint = "not-host-port"
 
 	err := configuration.Validate()
 	if err == nil {
 		t.Fatal("Validate() on broken config: want error, got nil")
 	}
-	for _, fragment := range []string{"port", "max_tokens_cap", "host_initial_inflight", "chain_grpc"} {
+	for _, fragment := range []string{"port", "max_tokens_cap", "host_input_window_initial_requests", "chain_grpc"} {
 		if !strings.Contains(err.Error(), fragment) {
 			t.Errorf("Validate() error %q does not mention %q", err.Error(), fragment)
 		}
@@ -117,10 +124,20 @@ func TestValidateCatchesEveryRuleBreach(t *testing.T) {
 		{"poc_max_concurrent_requests_per_10000_weight negative", func(c *Config) { c.Limits.Concurrency.PoCRequestsPer10000Weight = -1 }, "poc_max_concurrent_requests_per_10000_weight"},
 		{"max_input_tokens_in_flight negative", func(c *Config) { c.Limits.MaxInputTokensInFlight = -1 }, "max_input_tokens_in_flight"},
 		{"admission_queue_wait_ms negative", func(c *Config) { c.Limits.AdmissionQueueWaitMS = -1 }, "admission_queue_wait_ms"},
-		{"host_min_inflight too low", func(c *Config) { c.Limits.HostInflight.Min = 0 }, "host_min_inflight"},
-		{"host_initial_inflight below min", func(c *Config) { c.Limits.HostInflight.Initial = 2 }, "host_initial_inflight"},
-		{"host_initial_inflight too low", func(c *Config) { c.Limits.HostInflight.Initial = 0 }, "host_initial_inflight"},
-		{"host_max_inflight below initial", func(c *Config) { c.Limits.HostInflight.Max = 1 }, "host_max_inflight"},
+		{"host_input_window_min_requests too low", func(c *Config) { c.Limits.HostWindows.Input.MinRequests = 0 }, "host_input_window_min_requests"},
+		{"host_input_window_initial_requests below min", func(c *Config) {
+			c.Limits.HostWindows.Input.InitialRequests = c.Limits.HostWindows.Input.MinRequests - 1
+		}, "host_input_window_initial_requests"},
+		{"host_output_window_min_requests too low", func(c *Config) { c.Limits.HostWindows.Output.MinRequests = 0 }, "host_output_window_min_requests"},
+		{"host_output_window_initial_requests below min", func(c *Config) {
+			c.Limits.HostWindows.Output.InitialRequests = c.Limits.HostWindows.Output.MinRequests - 1
+		}, "host_output_window_initial_requests"},
+		{"fallback_max_model_len too low", func(c *Config) { c.Limits.FallbackMaxModelLen = 0 }, "fallback_max_model_len"},
+		{"io_aimd_beta_soft never narrows", func(c *Config) { c.Limits.Congestion.BetaSoft = 1 }, "io_aimd_beta_soft"},
+		{"io_aimd_beta_hard closes the window", func(c *Config) { c.Limits.Congestion.BetaHard = 0 }, "io_aimd_beta_hard"},
+		{"io_aimd_beta_severe widens instead", func(c *Config) { c.Limits.Congestion.BetaSevere = 1.5 }, "io_aimd_beta_severe"},
+		{"io_aimd_beta_cross negative", func(c *Config) { c.Limits.Congestion.BetaCross = -0.1 }, "io_aimd_beta_cross"},
+		{"host_congestion_slack negative", func(c *Config) { c.Limits.Congestion.Slack = -0.1 }, "host_congestion_slack"},
 		{"host_cutoff_after_failures too low", func(c *Config) { c.Limits.HostCutoff.AfterFailures = 0 }, "host_cutoff_after_failures"},
 		{"host_cutoff_ms too low", func(c *Config) { c.Limits.HostCutoff.BaseMS = 0 }, "host_cutoff_ms"},
 		{"host_cutoff_max_ms below base", func(c *Config) { c.Limits.HostCutoff.MaxMS = 1 }, "host_cutoff_max_ms"},

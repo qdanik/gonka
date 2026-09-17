@@ -25,7 +25,7 @@ The hard part is not proxying. It is that **every nonce costs the escrow money w
 | [`registry/`](./registry/) | the live escrow set and the sessions that dispatch on it |
 | [`escrow/`](./escrow/) | escrow creation, rotation, depletion, settlement, retirement, crash recovery |
 | [`chain/`](./chain/) | all blockchain input and output, and the epoch phase snapshot |
-| [`limits/`](./limits/) | admission, the per-host AIMD window, and the chain-weight capacity model |
+| [`limits/`](./limits/) | admission, the per-host congestion windows, and the chain-weight capacity model |
 | [`perf/`](./perf/) | per-host history, outlier ejection, capability refusal counts |
 | [`accounting/`](./accounting/) | the per-nonce ledger and the findings derived from it |
 | [`nonces/`](./nonces/) | what feeds that ledger: live events, chain diffs, the sweep |

@@ -15,7 +15,7 @@ import (
 	"devshard/user"
 )
 
-// escrows is satisfied by *registry.Registry. See rules.md, "4. Routing and settlement read the escrow set asymmetrically, on purpose".
+// escrows is satisfied by *registry.Registry. See rules.md, "4. Routing and settlement read the escrow set asymmetrically".
 type escrows interface {
 	Acquire(escrowID string) (registry.EscrowSession, func(), bool)
 	SettlementSession(escrowID string) (registry.EscrowSession, bool)

@@ -428,3 +428,53 @@ func TestOnlyAChangedContextLimitIsAnnounced(t *testing.T) {
 		t.Errorf("a smaller limit reported previous=%d changed=%v, want 4096 and true", previous, changed)
 	}
 }
+
+// The two latencies are separate signals, and each names the congestion window it belongs to: a sample
+// carrying only one of them must leave the other dimension unmeasured.
+func TestPressureKeepsEachLatencyInItsOwnDimension(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name      string
+		sampleOf  func(latency time.Duration) Sample
+		slowed    func(Pressure) float64
+		untouched func(Pressure) float64
+	}{
+		{
+			name: "first content",
+			sampleOf: func(latency time.Duration) Sample {
+				return Sample{ParticipantKey: "participant-a", Model: "model-a", Responsive: true, FirstContent: latency}
+			},
+			slowed:    func(measured Pressure) float64 { return measured.FirstContent },
+			untouched: func(measured Pressure) float64 { return measured.Decode },
+		},
+		{
+			name: "decode",
+			sampleOf: func(latency time.Duration) Sample {
+				return Sample{ParticipantKey: "participant-a", Model: "model-a", Responsive: true, TimePerOutputToken: latency}
+			},
+			slowed:    func(measured Pressure) float64 { return measured.Decode },
+			untouched: func(measured Pressure) float64 { return measured.FirstContent },
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			tracker := newTestTracker(testPerf(), fixedNow(time.Unix(1_700_000_000, 0)))
+			for range latencyWindowSize {
+				tracker.RecordSample(testCase.sampleOf(time.Second))
+			}
+			for range latencyWindowSize {
+				tracker.RecordSample(testCase.sampleOf(2 * time.Second))
+			}
+
+			measured := tracker.Pressure("participant-a", "model-a")
+
+			if slowed := testCase.slowed(measured); slowed <= 1.5 {
+				t.Errorf("pressure on the slowed dimension = %v, want above 1.5: the host now answers at twice its own best", slowed)
+			}
+			if untouched := testCase.untouched(measured); untouched != 0 {
+				t.Errorf("pressure on the other dimension = %v, want 0: no sample carried that latency", untouched)
+			}
+		})
+	}
+}

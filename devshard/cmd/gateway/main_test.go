@@ -95,6 +95,10 @@ type chainWithoutADial struct{}
 
 func (chainWithoutADial) MaxNonce(context.Context) (uint64, bool, error) { return 0, false, nil }
 
+func (chainWithoutADial) Models(context.Context) (map[string]chain.ModelParams, error) {
+	return nil, nil
+}
+
 func (chainWithoutADial) PreservedNodes(context.Context) (*chain.PreservedNodes, bool, error) {
 	return nil, false, nil
 }
@@ -119,21 +123,41 @@ func (chainWithoutADial) Escrow(context.Context, uint64) (chain.EscrowInfo, bool
 
 // sessionsWithoutADial is chainBackedSessions with the gRPC client left out; only ReadOnly is reached.
 func sessionsWithoutADial(records devshardLookup, storageDir string) sessionSources {
+	return sessionsReading(records, storageDir, chainWithoutADial{})
+}
+
+func sessionsReading(records devshardLookup, storageDir string, reader chain.Reader) sessionSources {
 	return func(config.Chain, string) (chainSources, error) {
 		return chainSources{
 			Serving: func(context.Context, string) (registry.EscrowSession, error) {
 				return nil, errNoChainDialed
 			},
 			ReadOnly:  readOnlySessions(records, storageDir),
-			Reader:    chainWithoutADial{},
+			Reader:    reader,
 			Transport: chainWithoutADial{},
 		}, nil
 	}
 }
 
+// chainServingModels is governance answering what each model's context length is, which is the unit a
+// host's prefill window counts in.
+type chainServingModels struct {
+	chainWithoutADial
+	models map[string]chain.ModelParams
+}
+
+func (c chainServingModels) Models(context.Context) (map[string]chain.ModelParams, error) {
+	return c.models, nil
+}
+
 // composedGateway builds exactly what run() builds, so an assertion below reaches the wiring the
 // process uses rather than a re-declaration of it.
 func composedGateway(t *testing.T) *gateway {
+	t.Helper()
+	return composedGatewayReading(t, chainWithoutADial{})
+}
+
+func composedGatewayReading(t *testing.T, reader chain.Reader) *gateway {
 	t.Helper()
 	values, err := env.Load()
 	if err != nil {
@@ -147,7 +171,7 @@ func composedGateway(t *testing.T) *gateway {
 	if err != nil {
 		t.Fatalf("opening store: %v", err)
 	}
-	composed, err := compose(context.Background(), values, storageDir, gatewayStore, sessionsWithoutADial(gatewayStore, storageDir))
+	composed, err := compose(context.Background(), values, storageDir, gatewayStore, sessionsReading(gatewayStore, storageDir, reader))
 	if err != nil {
 		gatewayStore.Close()
 		t.Fatalf("compose(): %v", err)
@@ -835,7 +859,7 @@ func TestSettleStopsRoutingBeforeTheChainSettlementAndLeavesItRetiredWhenItFails
 func TestUnquarantiningAnUntrackedParticipantIsNotReportedAsDone(t *testing.T) {
 	configuration := config.Defaults()
 	limiter := limits.NewParticipantLimiter(limits.ParticipantConfigFromLimits(configuration.Limits), time.Now)
-	limiter.OnResult("validator-a", "model-a", limits.TransportFault)
+	limiter.OnResult(limits.Result{Participant: "validator-a", Model: "model-a", Verdict: limits.TransportFault})
 	operator := &operations{participants: limiter}
 
 	if err := operator.Unquarantine(context.Background(), "validator-typo"); !errors.Is(err, api.ErrUnknownParticipant) {
@@ -1132,7 +1156,11 @@ func TestTheComposedParticipantLimiterNarratesACutOffThroughTheJournal(t *testin
 	composed := composedGateway(t)
 
 	for range composed.config.Load().Limits.HostCutoff.AfterFailures {
-		composed.participants.OnResult("gonka1aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "model-a", limits.TransportFault)
+		composed.participants.OnResult(limits.Result{
+			Participant: "gonka1aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			Model:       "model-a",
+			Verdict:     limits.TransportFault,
+		})
 	}
 	composed.events.Flush()
 
@@ -1187,5 +1215,71 @@ func TestSuspiciousHostsAreWrittenThroughToTheStoreTheEngineReadsFrom(t *testing
 	}
 	if reloaded.Suspicious("validator-a") {
 		t.Error("the unpin did not reach the store")
+	}
+}
+
+// Governance names a model's context length, and a host's prefill window counts in exactly that unit;
+// without the subscription that carries it, every window falls back to fallback_max_model_len.
+func TestTheComposedParticipantLimiterPricesAModelByTheContextGovernanceReports(t *testing.T) {
+	gatewayEnvironment(t)
+	const governedContext = 4_096
+	composed := composedGatewayReading(t, chainServingModels{
+		models: map[string]chain.ModelParams{"model-a": {ContextWindow: governedContext}},
+	})
+	composed.observer.Start(context.Background())
+
+	prefill := float64(composed.config.Load().Limits.HostWindows.Input.InitialRequests * governedContext)
+	waitForPrefillWindow(t, composed, "model-a", prefill)
+}
+
+func waitForPrefillWindow(t *testing.T, composed *gateway, model string, want float64) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for attempt := 0; ; attempt++ {
+		participant := fmt.Sprintf("gonka1host%d", attempt)
+		if release, admitted := composed.participants.Acquire(participant, model, limits.TokenCost{Input: 1, Output: 1}); admitted {
+			release()
+		}
+		observed := prefillWindowFor(composed, participant)
+		if observed == want {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("prefill window for %s = %v, want %v: main.go never pushes governance's context windows into the limiter",
+				model, observed, want)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func prefillWindowFor(composed *gateway, participant string) float64 {
+	for _, window := range composed.participants.Snapshot() {
+		if window.Participant == participant {
+			return window.InputWindowTokens
+		}
+	}
+	return 0
+}
+
+// A context length of zero prices a window at nothing, and one absurdly large prices it at a ceiling no
+// host could ever fill; neither is a unit to count prefill in.
+func TestContextWindowsOfKeepsOnlyTheLengthsAHostCouldServe(t *testing.T) {
+	t.Parallel()
+
+	windows := contextWindowsOf(chain.PhaseSnapshot{Models: map[string]chain.ModelParams{
+		"served":     {ContextWindow: 32_768},
+		"unreported": {ContextWindow: 0},
+		"absurd":     {ContextWindow: config.MaxContextTokens + 1},
+		"at the cap": {ContextWindow: config.MaxContextTokens},
+	}})
+
+	want := map[string]int64{"served": 32_768, "at the cap": config.MaxContextTokens}
+	if len(windows) != len(want) {
+		t.Fatalf("context windows = %v, want only %v: a length no host could serve is not a unit to count prefill in", windows, want)
+	}
+	for model, tokens := range want {
+		if windows[model] != tokens {
+			t.Errorf("context window for %q = %d, want %d", model, windows[model], tokens)
+		}
 	}
 }

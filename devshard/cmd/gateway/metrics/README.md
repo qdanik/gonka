@@ -11,7 +11,7 @@ The only package that knows Prometheus exists.
 ## Boundaries
 
 - **Family names are frozen as `devshard_*`.** A dashboard and an operator's alert select on these strings; a rename is a silent alert that stops firing.
-- **Unbounded labels stay out.** A nonce or a request id is never a label: either would grow the series without end. An escrow id is a label only where [`docs/rules.md`](../docs/rules.md), "10. Labels, ordering and determinism", allows it — the three dispatch counters, deleted when the escrow's dispatcher is reaped, and the registry gauges, rebuilt from the live escrow set on every scrape. What a metric cannot carry, the JSON accounting API serves instead.
+- **Unbounded labels stay out.** A nonce or a request id is never a label: either would grow the series without end. An escrow id is a label only where [`docs/rules.md`](../docs/rules.md), "11. Labels, ordering and determinism", allows it — the three dispatch counters, deleted when the escrow's dispatcher is reaped, and the registry gauges, rebuilt from the live escrow set on every scrape. What a metric cannot carry, the JSON accounting API serves instead.
 - **A collector reads its source; it does not keep its own copy**, so a gauge cannot disagree with the thing it reports.
 
 ## Cardinality in practice

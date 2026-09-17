@@ -4,7 +4,7 @@ Per-host history, and the one verdict derived from it that routing honours.
 
 ## What it owns
 
-- **Samples and windows** (`sample.go`, `host.go`) — decayed success and failure counts, and the first-content quantile the escalation ladder measures a host against.
+- **Samples and windows** (`sample.go`, `host.go`) — decayed success and failure counts, and two latency rings: the quantiles the escalation ladder measures a host against, and the baseline each ring is compared with.
 - **Ejection** (`ejection.go`) — Envoy-style outlier detection: a host far worse than its peers is taken out of the rota, capped so ejection can never remove more than a fraction of the hosts serving a model.
 - **In-flight load** (`inflight.go`) — what each host is carrying right now.
 - **Capability refusals** (`capability.go`) — counts of what a host's build refused: an unsupported protocol version, a tool call it does not implement, a context length it will not take, plus the smallest context it has admitted to.
@@ -26,6 +26,12 @@ Two shapes, for two different questions.
 **Outcomes are decayed counters.** Success and failure each hold a running count and the time they were last touched; reading one multiplies it by `2^(-elapsed / halfLife)`. That answers "how has this host been doing lately" without keeping a history. A consecutive-failure integer sits beside them for the trigger that does not care about rates at all. When ejection trips, the outcome counters are reset, so the host is judged on what it does after the ejection rather than on the evidence that caused it.
 
 **Latencies are a ring, not a decayed counter**, because the escalation ladder needs a *quantile* and a decayed counter cannot produce one. Sixty-four samples per host and model, and the p75 is refused until at least ten of them exist rather than reported from a window too short to mean anything.
+
+## What a host is measured against
+
+A host is judged against its own history rather than a configured number of seconds: what counts as slow depends on the model and on the hardware behind it, so a fixed threshold would be wrong for both. Each latency ring keeps a **baseline** beside its samples, the best p75 that ring has held (`host.go`, `latencyWindow.trackBaseline`). The baseline falls to a new best at once and rises a thousandth of the gap towards the current p75 on every sample, so a lucky minimum is forgotten over about a thousand answers instead of being held against the host forever. That rise is an order of magnitude slower than the ring fills, and the gap is the point: a baseline that kept up with the ring would track the latency the host currently holds, and a host degrading steadily would never read as anything but normal.
+
+`Tracker.Pressure` is the current p75 over that baseline, for first content and for time per output token, and zero for a ring with fewer than ten samples or no baseline yet (`tracker.go`, `Tracker.Pressure`; `host.go`, `latencyWindow.pressure`). It is the delay signal the congestion windows read: past `host_congestion_slack` a host's own healthy answer narrows its window instead of widening it, which is admission backing off before anything has failed ([`limits/README.md`](../limits/README.md), "What blames which window"). Pressure withholds nothing from routing — it has no part in the ejection verdict.
 
 ## Ejection, and its two views
 

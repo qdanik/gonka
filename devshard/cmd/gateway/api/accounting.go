@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"devshard/cmd/gateway/engine"
+	"devshard/cmd/gateway/internal/safemath"
 	"devshard/cmd/gateway/store"
 )
 
@@ -34,7 +35,7 @@ func requestRecord(outcome engine.RaceOutcome) store.RequestRecord {
 		BalanceExhausted: outcome.Lifecycle.BalanceExhausted,
 	}
 	for _, attempt := range outcome.Attempts {
-		record.TotalOutputTokens += attempt.UsageCompletionTokens
+		record.TotalOutputTokens = safemath.AddSaturating(record.TotalOutputTokens, attempt.UsageCompletionTokens)
 		if !attempt.SendTime.IsZero() && (record.StartedAt.IsZero() || attempt.SendTime.Before(record.StartedAt)) {
 			record.StartedAt = attempt.SendTime
 		}

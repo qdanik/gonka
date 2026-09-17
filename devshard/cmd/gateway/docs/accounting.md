@@ -145,7 +145,7 @@ Thresholds are constants rather than configuration: two gateways must not report
 | `blocked_by_state_divergence` | assigned nonces burned because the host's escrow state no longer matches the group's | 1% |
 | `failure_terminals` | nonces that reached the host and produced no usable answer | any |
 
-**`throttled_by_gateway`** — this gateway stopped sending, so these nonces are its decision and not the host's failure. Its per-host window narrows after repeated failures and widens again as they stop, which makes this a consequence of the other findings rather than a fault of its own.
+**`throttled_by_gateway`** — this gateway stopped sending, so these nonces are its decision and not the host's failure. Its per-host congestion windows narrow after repeated failures and widen again as they stop, which makes this a consequence of the other findings rather than a fault of its own.
 
 **`blocked_by_state_divergence`** — the host returned a post-state-root that disagrees with the group's. It earns one replay of the retained chain first, because a host rolls its diff back on a mismatch and its state survives intact; this counts what it burned after that replay was spent. It is the only capability-shaped verdict that still withholds a host: a build that refuses tools, a version or a context length is counted and reported, never routed around.
 
@@ -188,7 +188,7 @@ Only the nonces whose disposition can still move are written down — those awai
 
 ## Money and tokens
 
-The ledger carries the chain's own arithmetic; it computes none of it. Six fields ride on all three levels — the slot, the participant record and the epoch summary:
+The ledger carries the chain's own arithmetic; it computes none of it. Eight fields ride on all three levels — the slot, the participant record and the epoch summary:
 
 | Field | Where it comes from |
 |---|---|
@@ -196,7 +196,15 @@ The ledger carries the chain's own arithmetic; it computes none of it. Six field
 | `reserved_cost` | `InferenceRecord.ReservedCost`, `(input_length + max_tokens) × token_price` |
 | `actual_cost` | `InferenceRecord.ActualCost`. The state machine clamps it to the reserve, and the ledger still refuses to derive a refund from a larger one rather than trusting that |
 | `refunded_cost` | derived at read time, never stored: `reserved − actual` for a nonce that paid, the **whole reserve** for one the chain timed out or invalidated (both return everything: `applyTimeout` never assigns a cost, and invalidation returns the cost on top of the surplus already released at finish), and **zero while a nonce is still open**, because a reserve nobody has paid out is money held, not money back |
+| `input_length_bytes` | `InferenceRecord.InputLength`, the size in **bytes** of the normalised body the gateway handed over (`api/routes.go`) |
+| `max_tokens` | `InferenceRecord.MaxTokens`, the output-side budget the gateway reserved |
 | `input_tokens` / `output_tokens` | `InferenceRecord`, the chain's counts rather than the gateway's four-bytes-per-token estimate |
+
+The first pair is what a host was **given**, the second what it **produced**. `input_length_bytes` is the one field that is not a token count, and the chain mixes the two units itself: its reserve is `(input_length + max_tokens) × token_price`, bytes added to tokens. A reader comparing the two sides has to divide before it subtracts.
+
+Those two fields are also the only ones a burn is left out of. A burn commits a chain record like any other nonce — the gateway's own prompt against the smallest output reserve the protocol accepts (`registry/session.go`, `ghostParams`) — and no host ever sees it, so folding it in would report a host this gateway burned nonces at as a host that wastes its reservations, which the rule that burns are excluded from every host rate forbids. The money fields still count them: a burn costs the escrow whoever decided it.
+
+Carrying both sides makes two readings available per host that neither side gives alone. `input_tokens ÷ (input_length_bytes ÷ 4)` is the error in the gateway's own four-bytes-per-token estimate (`api/finish.go`, `estimatePromptTokens`), which is what the limiter and the reserve are sized on. `output_tokens ÷ max_tokens` is how much of a reservation an answer actually used. The ledger serves the four numbers and divides none of them, in keeping with carrying the chain's arithmetic rather than computing its own.
 
 All of it is carried by the ten-second sweep (`nonces/recorder.go`), which already reads the escrow state for host stats — the request path is untouched, and the paid amount does not exist there anyway: it appears only once the host's `MsgFinishInference` lands in a diff. The sweep re-reads the same nonces every pass, so a record replaces its predecessor rather than adding to it.
 

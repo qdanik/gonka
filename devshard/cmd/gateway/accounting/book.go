@@ -37,20 +37,24 @@ type escrowLedger struct {
 
 // nonceCost is one nonce's money as the escrow recorded it. See docs/accounting.md, "Money and tokens".
 type nonceCost struct {
-	reserved uint64
-	actual   uint64
-	input    uint64
-	output   uint64
-	status   types.InferenceStatus
+	reserved    uint64
+	actual      uint64
+	inputLength uint64
+	maxTokens   uint64
+	input       uint64
+	output      uint64
+	status      types.InferenceStatus
 }
 
 // slotMoney is one slot's share of the escrow's money.
 type slotMoney struct {
-	reserved uint64
-	actual   uint64
-	refunded uint64
-	input    uint64
-	output   uint64
+	reserved    uint64
+	actual      uint64
+	refunded    uint64
+	inputLength uint64
+	maxTokens   uint64
+	input       uint64
+	output      uint64
 }
 
 func (c nonceCost) refunded() uint64 {
@@ -186,11 +190,13 @@ func (b *Book) ObserveInferences(escrowID string, inferences map[uint64]*types.I
 				continue
 			}
 			escrow.costs[nonce] = nonceCost{
-				reserved: record.ReservedCost,
-				actual:   record.ActualCost,
-				input:    record.InputTokens,
-				output:   record.OutputTokens,
-				status:   record.Status,
+				reserved:    record.ReservedCost,
+				actual:      record.ActualCost,
+				inputLength: record.InputLength,
+				maxTokens:   record.MaxTokens,
+				input:       record.InputTokens,
+				output:      record.OutputTokens,
+				status:      record.Status,
 			}
 			if record.Status == types.StatusChallenged {
 				challenged[record.ExecutorSlot]++
@@ -337,6 +343,12 @@ func (e *escrowLedger) record(nonce uint64) *nonceRecord {
 
 func (e *escrowLedger) slotOf(nonce uint64) uint32 {
 	return uint32(nonce % uint64(len(e.metadata.Slots)))
+}
+
+// A burn's record carries the gateway's own prompt and reserve. See docs/accounting.md, "Money and tokens".
+func (e *escrowLedger) isGhost(nonce uint64) bool {
+	record, known := e.nonces[nonce]
+	return known && record.ghostReason != ""
 }
 
 func (e *escrowLedger) reclassify(nonce uint64, record *nonceRecord) {

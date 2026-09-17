@@ -16,7 +16,7 @@ It records; it does not decide. Nothing here withholds a host from routing, chan
 ## Boundaries
 
 - **The response schema is frozen.** `ParticipantRecord`, `SlotRecord` and `EpochSummary` are read by a tracker outside this repository. Adding a key is tolerable; renaming or removing one is a regression. Internal carriers between `slots()` and `absorb()` stay unexported rather than taking a JSON tag.
-- **`SchemaVersion` is one number for two readers.** It is the report's `schema_version` and the value `sqlstore` checks on open; a mismatch drops the tables rather than migrating them, because the ledger is an epoch of observations, not a system of record. It is **7**, above the legacy `devshard/accounting`'s 6: both packages emit `schema_version` over different shapes, so the number is the only thing telling them apart.
+- **`SchemaVersion` is one number for two readers.** It is the report's `schema_version` and the value `sqlstore` checks on open; a mismatch drops the tables rather than migrating them, because the ledger is an epoch of observations, not a system of record. It is **8**, above the legacy `devshard/accounting`'s 6: both packages emit `schema_version` over different shapes, so the number is the only thing telling them apart.
 - **Aggregation happens on read, not on write.** Every total above the counters is derivable, so a stored total could only ever disagree with its own parts.
 - **`in_flight` and `in_flight_requests` are not live-request gauges.** A race reaches the ledger only once it has ended, so these count nonces the chain has yet to settle. The live number is the limiter's `devshard_gateway_inflight_requests`.
 

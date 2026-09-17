@@ -98,3 +98,60 @@ func TestParticipantsEndpointReturnsCostPerParticipantAndModel(t *testing.T) {
 		}
 	}
 }
+
+// The keys a tracker outside this repository reads, pinned on the slot row and the host row above it.
+func TestParticipantsEndpointServesWhatTheHostWasGiven(t *testing.T) {
+	t.Parallel()
+	book := NewBook(nil)
+	if err := book.OpenEscrow(EscrowMetadata{
+		EscrowID:      "5",
+		Model:         "Qwen/Test",
+		CreationEpoch: testEpoch,
+		Slots:         []types.SlotAssignment{{SlotID: 0, ValidatorAddress: "gonka1aaa"}},
+	}); err != nil {
+		t.Fatalf("OpenEscrow: %v", err)
+	}
+	if err := book.ObserveInferences("5", map[uint64]*types.InferenceRecord{2: {
+		InputLength: 2_048, MaxTokens: 256, InputTokens: 490, OutputTokens: 200, Status: types.StatusFinished,
+	}}); err != nil {
+		t.Fatalf("ObserveInferences: %v", err)
+	}
+
+	recorder := serve(t, book, "/api/v1/epochs/current/participants")
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", recorder.Code, recorder.Body)
+	}
+	var body struct {
+		Participants []struct {
+			InputLengthBytes uint64 `json:"input_length_bytes"`
+			MaxTokens        uint64 `json:"max_tokens"`
+			Slots            []struct {
+				InputLengthBytes uint64 `json:"input_length_bytes"`
+				MaxTokens        uint64 `json:"max_tokens"`
+			} `json:"slots"`
+		} `json:"participants"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decoding the reply: %v", err)
+	}
+
+	if len(body.Participants) != 1 || len(body.Participants[0].Slots) != 1 {
+		t.Fatalf("served %+v, want one host holding one slot", body.Participants)
+	}
+	host, slot := body.Participants[0], body.Participants[0].Slots[0]
+	for _, field := range []struct {
+		name string
+		got  uint64
+		want uint64
+	}{
+		{"host input_length_bytes", host.InputLengthBytes, 2_048},
+		{"host max_tokens", host.MaxTokens, 256},
+		{"slot input_length_bytes", slot.InputLengthBytes, 2_048},
+		{"slot max_tokens", slot.MaxTokens, 256},
+	} {
+		if field.got != field.want {
+			t.Errorf("%s = %d, want %d under exactly that key", field.name, field.got, field.want)
+		}
+	}
+}

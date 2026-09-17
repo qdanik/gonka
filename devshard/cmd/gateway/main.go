@@ -160,6 +160,7 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 	participants.SetNarrator(events)
 	capacity := limits.NewCapacity(participants.Available)
 	observer.Subscribe(capacity.Update)
+	observer.Subscribe(func(snapshot chain.PhaseSnapshot) { participants.ObserveModels(contextWindowsOf(snapshot)) })
 	observer.SetNarrator(events)
 	observer.Subscribe((&phaseNarrator{events: events}).observe)
 	gatewayLimiter := limits.NewGatewayLimiter(limits.GatewayConfigFromLimits(configuration.Limits))
@@ -433,4 +434,15 @@ func (m modelCapacity) ForModel(model string) limits.ModelCapacity {
 // ModelWeights folds in relaxed mode first, or PoC zeroes every cap. See README.md, "Relaxed mode, in one place".
 func (m modelCapacity) ModelWeights(model string) limits.ModelWeights {
 	return m.capacity.ModelWeights(model, m.config.Load().Modes.BlocksRequests(m.snapshots.Snapshot()))
+}
+
+// contextWindowsOf is the context length governance reports per model. See capacity.md, "The participant limiter: IOCW".
+func contextWindowsOf(snapshot chain.PhaseSnapshot) map[string]int64 {
+	windows := make(map[string]int64, len(snapshot.Models))
+	for model, params := range snapshot.Models {
+		if params.ContextWindow > 0 && params.ContextWindow <= config.MaxContextTokens {
+			windows[model] = int64(params.ContextWindow)
+		}
+	}
+	return windows
 }

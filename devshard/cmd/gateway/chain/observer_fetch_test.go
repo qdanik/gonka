@@ -626,6 +626,8 @@ type fakeReader struct {
 	maxNonce  uint64
 	nonceHeld bool
 	nonceErr  error
+	models    map[string]ModelParams
+	modelsErr error
 }
 
 func (f fakeReader) PreservedNodes(context.Context) (*PreservedNodes, bool, error) {
@@ -634,6 +636,10 @@ func (f fakeReader) PreservedNodes(context.Context) (*PreservedNodes, bool, erro
 
 func (f fakeReader) MaxNonce(context.Context) (uint64, bool, error) {
 	return f.maxNonce, f.nonceHeld, f.nonceErr
+}
+
+func (f fakeReader) Models(context.Context) (map[string]ModelParams, error) {
+	return f.models, f.modelsErr
 }
 
 // readPreserved drives the observer's own fetch, so these tests cover the path production takes rather

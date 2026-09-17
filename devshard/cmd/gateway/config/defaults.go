@@ -5,6 +5,9 @@ import (
 	"devshard/cmd/gateway/filters"
 )
 
+// fallbackMaxModelLen prices a model no context length has been named for. See capacity.md, "The participant limiter: IOCW".
+const fallbackMaxModelLen = 1_000_000
+
 func Defaults() Config {
 	return Config{
 		Server: Server{
@@ -36,10 +39,17 @@ func Defaults() Config {
 			MaxInputTokensInFlight: 0,
 			AdmissionQueueWaitMS:   300_000,
 			AdmissionQueuePerSlot:  4,
-			HostInflight: HostInflight{
-				Min:     4,
-				Initial: 64,
-				Max:     256,
+			FallbackMaxModelLen:    fallbackMaxModelLen,
+			HostWindows: HostWindows{
+				Input:  RequestWindow{MinRequests: 1, InitialRequests: 2},
+				Output: RequestWindow{MinRequests: 1, InitialRequests: 2},
+			},
+			Congestion: Congestion{
+				BetaSoft:   0.85,
+				BetaHard:   0.70,
+				BetaSevere: 0.50,
+				BetaCross:  0.90,
+				Slack:      0.30,
 			},
 			HostCutoff: HostCutoff{
 				AfterFailures: 3,

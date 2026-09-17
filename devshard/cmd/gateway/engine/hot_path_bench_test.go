@@ -131,8 +131,8 @@ func benchWriterChain(events chan AttemptEvent) (*attemptWriter, *benchSink) {
 	spec := AttemptSpec{
 		Escrow: "escrow-1", Model: testModel, Participant: testParticipant,
 		HostIdx: 3, HostLabel: "host-3", Role: RolePrimary, StartReason: StartPrimary,
-		Nonce:   fakePrepared{nonce: 77, hostIdx: 3},
-		Limiter: &fakeLimiter{}, Classifier: classifier, Sink: sink, Events: events,
+		Nonce:       fakePrepared{nonce: 77, hostIdx: 3},
+		ReleaseSlot: func() {}, Classifier: classifier, Sink: sink, Events: events,
 		Now: func() time.Time {
 			tick = tick.Add(40 * time.Millisecond)
 			return tick

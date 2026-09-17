@@ -31,8 +31,10 @@ const (
 type openLimiter struct{}
 
 func (openLimiter) Available(string, string) bool { return true }
-func (openLimiter) Acquire(string, string) bool   { return true }
-func (openLimiter) Release(string, string)        {}
+
+func (openLimiter) Acquire(string, string, limits.TokenCost) (func(), bool) {
+	return func() {}, true
+}
 
 type capablePerf struct{}
 

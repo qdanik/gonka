@@ -234,3 +234,73 @@ func queryTotals(t *testing.T, book *Book) nonceTotals {
 	}
 	return records[0].nonceTotals
 }
+
+func TestWhatTheHostWasGivenIsCarriedFromTheEscrowRecord(t *testing.T) {
+	t.Parallel()
+	book := NewBook(nil)
+	if err := book.OpenEscrow(EscrowMetadata{EscrowID: "5", Model: "Qwen/Test", Slots: []types.SlotAssignment{{SlotID: 0, ValidatorAddress: "gonka1aaa"}}}); err != nil {
+		t.Fatalf("OpenEscrow: %v", err)
+	}
+
+	if err := book.ObserveInferences("5", map[uint64]*types.InferenceRecord{7: {
+		InputLength:  2_048,
+		MaxTokens:    256,
+		InputTokens:  512,
+		OutputTokens: 128,
+		Status:       types.StatusFinished,
+	}}); err != nil {
+		t.Fatalf("ObserveInferences: %v", err)
+	}
+
+	totals := queryTotals(t, book)
+	if got := totals.InputLengthBytes; got != 2_048 {
+		t.Errorf("input length = %d, want the 2048 bytes the gateway handed over", got)
+	}
+	if got := totals.MaxTokens; got != 256 {
+		t.Errorf("max tokens = %d, want the 256 the gateway reserved on the output side", got)
+	}
+	if got := totals.InputTokens; got != 512 {
+		t.Errorf("input tokens = %d, want the chain's own count beside the bytes", got)
+	}
+}
+
+// A burn commits a chain record like any other nonce, so folding it in would report the reservations
+// this gateway chose never to send as reservations the host wasted.
+func TestABurnedNonceLeavesOutWhatItWasGivenAndNothingElse(t *testing.T) {
+	t.Parallel()
+	book := NewBook(nil)
+	if err := book.OpenEscrow(EscrowMetadata{EscrowID: "5", Model: "Qwen/Test", Slots: []types.SlotAssignment{{SlotID: 0, ValidatorAddress: "gonka1aaa"}}}); err != nil {
+		t.Fatalf("OpenEscrow: %v", err)
+	}
+	if err := book.RecordGhost("5", 7, "participant_throttled_no_send"); err != nil {
+		t.Fatalf("RecordGhost: %v", err)
+	}
+
+	if err := book.ObserveInferences("5", map[uint64]*types.InferenceRecord{
+		7: {InputLength: 60, MaxTokens: 64, ReservedCost: 124, Status: types.StatusTimedOut},
+		8: {
+			InputLength: 2_048, MaxTokens: 256, ReservedCost: 2_304, ActualCost: 1_000,
+			InputTokens: 512, OutputTokens: 128, Status: types.StatusFinished,
+		},
+	}); err != nil {
+		t.Fatalf("ObserveInferences: %v", err)
+	}
+
+	totals := queryTotals(t, book)
+	for _, field := range []struct {
+		name string
+		got  uint64
+		want uint64
+		why  string
+	}{
+		{"input length", totals.InputLengthBytes, 2_048, "the burn's 60 bytes are the gateway's own prompt"},
+		{"max tokens", totals.MaxTokens, 256, "the burn's 64 tokens were reserved by the gateway, not by a host"},
+		{"reserved", totals.ReservedCost, 2_428, "money still counts the burn: a burn costs the escrow"},
+		{"refunded", totals.RefundedCost, 1_428, "the burn's whole reserve came back, the served nonce's surplus with it"},
+		{"output tokens", totals.OutputTokens, 128, "the burn produced nothing to add"},
+	} {
+		if field.got != field.want {
+			t.Errorf("%s = %d, want %d -- %s", field.name, field.got, field.want, field.why)
+		}
+	}
+}

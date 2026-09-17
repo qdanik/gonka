@@ -48,6 +48,11 @@ func AllBlockReasons() []BlockReason {
 	return []BlockReason{BlockReasonNone, BlockReasonPoC, BlockReasonConfirmationPoC}
 }
 
+// ModelParams is what governance says about one model. See README.md, "What the chain observer provides".
+type ModelParams struct {
+	ContextWindow uint64
+}
+
 // PhaseSnapshot is an immutable published view folded from raw chain inputs; the absent-value semantics of RequestsBlocked, Preserved and MaxNonce are load-bearing: see README.md, "What the chain observer provides".
 type PhaseSnapshot struct {
 	BlockHeight            int64
@@ -67,6 +72,8 @@ type PhaseSnapshot struct {
 	InferenceURLs         map[string]string
 
 	MaxNonce uint64
+
+	Models map[string]ModelParams
 
 	LastUpdatedAt time.Time
 	LastHealthyAt time.Time

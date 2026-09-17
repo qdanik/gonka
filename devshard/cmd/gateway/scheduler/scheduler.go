@@ -11,6 +11,7 @@ import (
 
 	"devshard/cmd/gateway/chain"
 	"devshard/cmd/gateway/config"
+	"devshard/cmd/gateway/limits"
 )
 
 // idleDispatcherGrace is how long an escrow's actor stays alive with an empty queue. See routing.md, "Idle dispatchers are reaped".
@@ -139,7 +140,7 @@ func (s *Scheduler) claimAndSubmit(escrow Escrow, queued *waiter) (*dispatcher, 
 }
 
 func (s *Scheduler) dropAssignment(assignment Assignment, profile RequestProfile) {
-	s.limiter.Release(assignment.Host, profile.Model)
+	assignment.ReleaseHostSlot()
 	assignment.ReleaseEscrow()
 	if s.observer != nil {
 		s.observer.GhostBurned(assignment.Escrow, Burn{
@@ -208,7 +209,6 @@ func (s *Scheduler) dispatcherFor(escrow Escrow) (*dispatcher, error) {
 			snapshots:    s.snapshots,
 			predicates:   s.predicates(escrow),
 			acquireSlot:  s.acquireSlot(escrow),
-			releaseSlot:  s.releaseSlot(escrow),
 			holdEscrow:   escrow.Hold,
 			observer:     s.observer,
 			now:          s.now,
@@ -258,14 +258,19 @@ func (s *Scheduler) predicates(escrow Escrow) func(chain.PhaseSnapshot) availabi
 	}
 }
 
-func (s *Scheduler) acquireSlot(escrow Escrow) func(participant string) bool {
+func (s *Scheduler) acquireSlot(escrow Escrow) func(participant string, cost limits.TokenCost) (func(), bool) {
 	model := escrow.Model
-	return func(participant string) bool { return s.limiter.Acquire(participant, model) }
+	return func(participant string, cost limits.TokenCost) (func(), bool) {
+		return s.limiter.Acquire(participant, model, cost)
+	}
 }
 
-func (s *Scheduler) releaseSlot(escrow Escrow) func(participant string) {
-	model := escrow.Model
-	return func(participant string) { s.limiter.Release(participant, model) }
+// slotCost prices one request against a host's congestion windows: the input it must prefill, the output it may produce.
+func slotCost(profile RequestProfile) limits.TokenCost {
+	return limits.TokenCost{
+		Input:  int64(max(profile.InputTokens, 0)),
+		Output: int64(max(profile.OutputTokens, 0)),
+	}
 }
 
 // stateBlocked reads the blocks live: the drain asks once per participant, and a block that lands while it runs must reach the hosts it has not offered yet.
@@ -307,12 +312,13 @@ func pocPreserved(snapshot chain.PhaseSnapshot, model string) map[string]bool {
 
 // RequestProfile is one request as routing reads it; RequestID only names it on the burns it causes, and Params must be exactly devshard/user.InferenceParams. See README, "The boundary types".
 type RequestProfile struct {
-	RequestID   string
-	Model       string
-	Escrow      string
-	InputTokens int
-	Exclude     []string
-	Params      any
+	RequestID    string
+	Model        string
+	Escrow       string
+	InputTokens  int
+	OutputTokens int
+	Exclude      []string
+	Params       any
 }
 
 // Burn is a committed nonce the scheduler spent on nobody, and the request it was spent during.
@@ -329,12 +335,20 @@ type Assignment struct {
 	Host       string
 	Nonce      Prepared
 	EscrowHold func()
+	HostSlot   func()
 }
 
 // ReleaseEscrow gives the hold back: as soon as the caller has its own, or instead of dispatching.
 func (a Assignment) ReleaseEscrow() {
 	if a.EscrowHold != nil {
 		a.EscrowHold()
+	}
+}
+
+// ReleaseHostSlot gives the host's congestion tokens back: when the attempt ends, or instead of dispatching.
+func (a Assignment) ReleaseHostSlot() {
+	if a.HostSlot != nil {
+		a.HostSlot()
 	}
 }
 
@@ -394,8 +408,7 @@ type escrowWeights interface {
 // hostLimiter is satisfied by *limits.ParticipantLimiter. See README, "The boundary types".
 type hostLimiter interface {
 	Available(participant, model string) bool
-	Acquire(participant, model string) bool
-	Release(participant, model string)
+	Acquire(participant, model string, cost limits.TokenCost) (func(), bool)
 }
 
 // hostHealth is satisfied by *perf.Tracker; Ejected is already capped, so honouring it cannot empty the pool.

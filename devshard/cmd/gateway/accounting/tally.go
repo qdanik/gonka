@@ -2,19 +2,21 @@ package accounting
 
 // The three levels are the same shape, so each is the sum of the rows below it. See README.md.
 type nonceTotals struct {
-	Assigned     uint64                 `json:"assigned_nonces"`
-	Dispositions map[Disposition]uint64 `json:"dispositions"`
-	ChainMissed  uint32                 `json:"protocol_misses"`
-	ChainInvalid uint32                 `json:"protocol_invalid"`
-	Pending      uint64                 `json:"pending_classification"`
-	Unobserved   uint64                 `json:"unclassified"`
-	Overcounted  uint64                 `json:"overclassified"`
-	ChainCost    uint64                 `json:"chain_cost"`
-	ReservedCost uint64                 `json:"reserved_cost"`
-	ActualCost   uint64                 `json:"actual_cost"`
-	RefundedCost uint64                 `json:"refunded_cost"`
-	InputTokens  uint64                 `json:"input_tokens"`
-	OutputTokens uint64                 `json:"output_tokens"`
+	Assigned         uint64                 `json:"assigned_nonces"`
+	Dispositions     map[Disposition]uint64 `json:"dispositions"`
+	ChainMissed      uint32                 `json:"protocol_misses"`
+	ChainInvalid     uint32                 `json:"protocol_invalid"`
+	Pending          uint64                 `json:"pending_classification"`
+	Unobserved       uint64                 `json:"unclassified"`
+	Overcounted      uint64                 `json:"overclassified"`
+	ChainCost        uint64                 `json:"chain_cost"`
+	ReservedCost     uint64                 `json:"reserved_cost"`
+	ActualCost       uint64                 `json:"actual_cost"`
+	RefundedCost     uint64                 `json:"refunded_cost"`
+	InputLengthBytes uint64                 `json:"input_length_bytes"`
+	MaxTokens        uint64                 `json:"max_tokens"`
+	InputTokens      uint64                 `json:"input_tokens"`
+	OutputTokens     uint64                 `json:"output_tokens"`
 }
 
 func (t *nonceTotals) add(other nonceTotals) {
@@ -23,6 +25,8 @@ func (t *nonceTotals) add(other nonceTotals) {
 	t.ReservedCost += other.ReservedCost
 	t.ActualCost += other.ActualCost
 	t.RefundedCost += other.RefundedCost
+	t.InputLengthBytes += other.InputLengthBytes
+	t.MaxTokens += other.MaxTokens
 	t.InputTokens += other.InputTokens
 	t.OutputTokens += other.OutputTokens
 	t.ChainMissed += other.ChainMissed

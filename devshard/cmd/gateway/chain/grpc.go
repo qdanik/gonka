@@ -22,6 +22,7 @@ import (
 type Reader interface {
 	MaxNonce(ctx context.Context) (uint64, bool, error)
 	PreservedNodes(ctx context.Context) (*PreservedNodes, bool, error)
+	Models(ctx context.Context) (map[string]ModelParams, error)
 }
 
 // Transport is the chain access a transaction needs: the reads a signed body carries, the broadcast, and the query that says whether it executed.
@@ -182,6 +183,19 @@ func (g *GRPCChain) Escrow(ctx context.Context, escrowID uint64) (EscrowInfo, bo
 		EscrowID: fmt.Sprintf("%d", escrowID),
 		Balance:  response.GetEscrow().GetAmount(),
 	}, true, nil
+}
+
+// Models reads what governance says about every model; an empty map means the chain named none.
+func (g *GRPCChain) Models(ctx context.Context) (map[string]ModelParams, error) {
+	response, err := g.client.InferenceQueryClient().ModelsAll(ctx, &inferencetypes.QueryModelsAllRequest{})
+	if err != nil {
+		return nil, fmt.Errorf("fetch governance models: %w", err)
+	}
+	models := make(map[string]ModelParams, len(response.GetModel()))
+	for _, model := range response.GetModel() {
+		models[model.GetId()] = ModelParams{ContextWindow: model.GetContextWindow()}
+	}
+	return models, nil
 }
 
 // MaxNonce reports fetched=false when the chain carries no devshard escrow params -- not enabled, rather than unread.
