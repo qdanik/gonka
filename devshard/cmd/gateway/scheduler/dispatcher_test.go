@@ -99,6 +99,12 @@ func (s *scriptedSession) ParticipantKeys() []string {
 	return keys
 }
 
+func (s *scriptedSession) SlotParticipants() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.slots
+}
+
 func (s *scriptedSession) GroupSize() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()

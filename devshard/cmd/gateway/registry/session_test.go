@@ -71,6 +71,10 @@ func TestAdvanceCommitsTheServeParams(t *testing.T) {
 	if seen.Nonce != 1 || seen.HostIdx != 1 || seen.Participant != group[1].ValidatorAddress {
 		t.Errorf("binding handed to decide = %+v, want nonce 1 on %s", seen, group[1].ValidatorAddress)
 	}
+	slots := stream.SlotParticipants()
+	if indexed := slots[seen.Nonce%uint64(stream.GroupSize())]; indexed != seen.Participant {
+		t.Errorf("SlotParticipants()[nonce %%%% groupSize] = %q, want the bound participant %q", indexed, seen.Participant)
+	}
 	if got, want := session.Nonce(), uint64(1); got != want {
 		t.Errorf("session nonce after a commit = %d, want %d", got, want)
 	}

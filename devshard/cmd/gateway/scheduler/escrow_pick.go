@@ -18,7 +18,7 @@ const exhaustionFallbackNonceCeiling = "fallback_nonce_ceiling"
 // nonceInFlightMargin is room left under the hosts' nonce cap for work already routed. See routing.md, "Picking an escrow".
 const nonceInFlightMargin uint64 = 200
 
-func (s *Scheduler) pickEscrow(profile RequestProfile, snapshot chain.PhaseSnapshot) (Escrow, error) {
+func (s *Scheduler) pickEscrow(profile RequestProfile, snapshot chain.PhaseSnapshot, queued *waiter, avoid string) (Escrow, error) {
 	candidates := s.escrows.Candidates(profile.Model)
 	reserveTokens := s.reserveTokens(profile)
 
@@ -38,8 +38,10 @@ func (s *Scheduler) pickEscrow(profile RequestProfile, snapshot chain.PhaseSnaps
 	}
 	// Read here as well as at dispatch: an escrow whose whole group it refuses can never serve.
 	reachable := reachableByAllowlist(s.participantAllowlist())
+	fleet := s.fleetGates(profile.Model, snapshot)
+	ahead := s.queuedAhead(candidates)
 
-	// Indices, not candidates: an index does not escape, so the common case never touches the heap.
+	// Indices, not candidates: a returned Escrow escapes where an index does not.
 	bestScore := math.Inf(1)
 	var tied []int
 	admitted := 0
@@ -49,16 +51,22 @@ func (s *Scheduler) pickEscrow(profile RequestProfile, snapshot chain.PhaseSnaps
 			continue
 		}
 		admitted++
+		if candidate.ID == avoid {
+			continue
+		}
 		if reason := exhaustionReason(candidate, snapshot.MaxNonce, reserveTokens); reason != "" {
 			declined = reason
 			// Routing only declines; the rotation lifecycle is what replaces an exhausted escrow.
 			s.reportExhausted(candidate.ID, reason)
 			continue
 		}
-		score := loadScore(candidate.ActiveUsers, s.capacity.EscrowWeight(candidate.ID, profile.Model))
-		switch {
-		case math.IsInf(score, 1):
+		weight := s.capacity.EscrowWeight(candidate.ID, profile.Model)
+		if unusableWeight(weight) {
 			continue
+		}
+		forecast := expectedBurns(candidate, fleet.forEscrow(s.stateBlocked(candidate.ID)), queued, ahead[index])
+		score := float64(candidate.ActiveUsers+forecast) / weight
+		switch {
 		case score < bestScore:
 			bestScore, tied = score, append(tied[:0], index)
 		case score == bestScore:
@@ -96,12 +104,27 @@ func noCapacity(reason string) error {
 	return ErrNoEscrowCapacity
 }
 
-// loadScore is the ascending utilisation ratio; a non-positive or corrupt weight scores unusable. See routing.md, "Picking an escrow".
-func loadScore(activeUsers int, weight float64) float64 {
-	if weight <= 0 || math.IsNaN(weight) {
-		return math.Inf(1)
+// expectedBurns is how many nonces this escrow spends on nobody before one binds to a host that can take this request. See routing.md, "Pricing an escrow by the burns it will cost".
+func expectedBurns(candidate Escrow, gates availability, queued *waiter, queuedAhead uint64) int {
+	if candidate.Session == nil {
+		return 0
 	}
-	return float64(activeUsers) / weight
+	slots := candidate.Session.SlotParticipants()
+	if len(slots) == 0 {
+		return 0
+	}
+	cursor := int((candidate.Session.LatestNonce() + 1 + queuedAhead) % uint64(len(slots)))
+	for step := range slots {
+		if gates.blocks(slots[(cursor+step)%len(slots)], queued) == blockNone {
+			return step
+		}
+	}
+	return len(slots)
+}
+
+// unusableWeight holds for a weight no ratio can be taken against. See routing.md, "Picking an escrow".
+func unusableWeight(weight float64) bool {
+	return weight <= 0 || math.IsNaN(weight)
 }
 
 // nonceCeilingReason names the ceiling an escrow has reached, and is empty below it.
@@ -137,7 +160,7 @@ func exhaustionReason(candidate Escrow, maxNonce uint64, reserveTokens uint64) s
 	return ceilingReason
 }
 
-// belowBalanceFloor prices the reserve the way the chain does, (input+max_tokens)*token_price.
+// belowBalanceFloor prices the reserve the way the chain does, (input_length_bytes + max_tokens_cap) * token_price.
 func belowBalanceFloor(candidate Escrow, reserveTokens uint64) bool {
 	if candidate.Session == nil || reserveTokens == 0 {
 		return false

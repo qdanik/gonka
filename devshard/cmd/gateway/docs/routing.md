@@ -27,14 +27,54 @@ Dropping a capped escrow is only half the answer. Routing declines it; nothing a
 **Then the score.** Lower is better:
 
 ```
-loadScore(escrow) = activeUsers(escrow) / escrowWeight(escrow, model)
+score(escrow) = (activeUsers(escrow) + expectedBurns(escrow, request)) / escrowWeight(escrow, model)
 ```
 
-`activeUsers` is the escrow's in-flight count; `escrowWeight` is the capacity model's view of how much of the network's serving weight this escrow commands for this model (see [capacity.md](./capacity.md)). A weight that is zero, negative or NaN scores `+Inf` and the candidate is skipped: a plain ratio would score a broken escrow as perfectly idle (`escrow_pick.go`, `loadScore`).
+`activeUsers` is the escrow's in-flight count; `escrowWeight` is the capacity model's view of how much of the network's serving weight this escrow commands for this model (see [capacity.md](./capacity.md)). A weight that is zero, negative or NaN scores `+Inf` and the candidate is skipped: a plain ratio would score a broken escrow as perfectly idle (`escrow_pick.go`, `loadScore`). `expectedBurns` is the next section.
+
+The two terms are added rather than multiplied, and that is the whole reason the numerator is what it is. A burn and an in-flight request both consume the escrow — one its nonce budget, the other its capacity — so one burn is priced as one request already being served, and the two trade against each other. Multiplying the forecast into the load ratio would have read as the same thing and silently done nothing: an escrow with no in-flight requests scores zero however far its cursor sits from a usable host, and zero times anything is still zero. The additive form is the one that survives an idle gateway.
 
 Ties are broken by one process-wide atomic counter modulo the tie-set size. It is a pseudo-round-robin over whatever tie set exists at that moment, not a fair per-model rotation, and it depends on the candidate slice being in a stable order — which the registry guarantees by sorting each model's candidates by escrow id (`escrow.go`, `newLiveSet`). The registry's ordering and the scheduler's tie-break are coupled: an unsorted candidate slice makes the counter's modulo select arbitrarily.
 
 If nothing survives, `Pick` returns `ErrNoEscrowCapacity`, which names no host: it is a capacity condition, not an accusation (`errors.go`, `ErrNoEscrowCapacity`).
+
+## Pricing an escrow by the burns it will cost
+
+The nonce names the host. An escrow's next nonce is already bound to one slot of its group, the one after it to the next slot, and so on around the group — so "how loaded is this escrow" and "how soon can this escrow serve this request" are different questions, and a load ratio alone answers only the first. Two escrows of equal weight and equal in-flight count would score identically under it even when one serves on its very next nonce and the other must burn six to reach a host that can take the request.
+
+`expectedBurns` answers the second question by walking the group from where the cursor actually stands (`escrow_pick.go`, `expectedBurns`):
+
+```
+cursor        = latestNonce + 1 + waitersAlreadyQueuedOnThisEscrow
+expectedBurns = steps from cursor to the first slot whose participant can take this request
+```
+
+Three things about that walk are load-bearing.
+
+**It asks the same question the drain asks.** "Can take this request" is `availability.blocks`, the one ladder `match` and `servable` already share, plus this request's own exclusions — which is why the pick builds a waiter before it picks rather than after (`scheduler.go`, `pickOnce`). A second definition here would drift from the first, and the forecast would be confidently wrong about the very hosts the drain is about to refuse. The rungs that depend on the model alone are built once per pick and the one that belongs to a single escrow is added per candidate (`scheduler.go`, `fleetGates`; `match.go`, `availability.forEscrow`).
+
+**Waiters already queued spend the nonces ahead of ours.** The cursor is moved past them, because each of them draws a nonce before this request does. The count is the dispatcher's claimed-submit counter, read for every candidate under one acquisition of the registry lock (`scheduler.go`, `queuedAhead`). It is an estimate in both directions and the forecast treats it as one: a waiter whose host is blocked burns several nonces rather than one, and a pick still returning after its nonce was committed is counted once in the cursor and once again here. That counter's other job is the dispatcher's retire guard, so moving when it is claimed or released moves this cursor too.
+
+**A group no slot of which can take the request is priced at one lap, not refused.** The pick predicts; the drain decides. An escrow the forecast declined outright would answer `ErrNoEscrowCapacity` for a shard that is merely busy, and would skip the exhaustion sweep that answers `ErrHostsBusy` *without spending a nonce* (`dispatcher_queue.go`, `sweepExhausted`). Priced at a lap it is still picked when it is the only thing left, which is exactly what a busy shard should do.
+
+A lap is not a veto, because the forecast is divided by the escrow's weight along with the in-flight count. A heavy escrow whose whole group is busy can still outrank a light one that is free — a lap of 2 over weight 1 000 is 0.002 against 0.1 for one request in flight on weight 10 — and on a fleet whose weights are spread that far the re-pick below becomes the ordinary path rather than the exception. The cost of being wrong there is bounded and cheap: the sweep answers without a nonce and the second escrow serves. Pricing the lap outside the ratio would fix the ranking and break the unit the two terms share, which is the thing that makes them comparable at all.
+
+The walk stops at the first usable slot, so on a healthy fleet it costs one step per candidate; its price is set by how many slots of each group are blocked rather than by the group size (`escrow_pick_bench_test.go`, `BenchmarkPickEscrowForecast`). The gates it evaluates are not memoised across candidates, so a participant several escrows share is peeked once per escrow, and the congestion rung behind that peek takes the participant limiter's process-wide lock (`limits/participant.go`, `Admits`). That cost is real and is not what the benchmark measures.
+
+## One re-pick when an escrow gives up
+
+A drain that gives up answers `ErrHostsBusy`, and that error means "this escrow, right now" — not "this request" and not "this shard". Ending the request there 503s it while another escrow may be ready to serve it on its next nonce.
+
+`Pick` therefore routes a second time, once, excluding the escrow that gave up (`scheduler.go`, `Pick` and `pickOnce`). Four bounds keep it from becoming a retry loop:
+
+- **Only `ErrHostsBusy`.** A host the chain has stopped, a diverged escrow state, an exhausted budget — none of those is a condition another escrow fixes, and re-picking on them spends a second escrow's nonces to reach the same answer.
+- **Only an unpinned request.** An escalation pins its escrow because it is racing attempts inside one nonce stream; moving it would hand the race an escrow it knows nothing about. The guard also saves a second drain, because the pin branch of `pickEscrow` ignores the escrow to avoid — a re-picked pin would ask the same busy group twice.
+- **Once**, and not at all once the caller's context has ended, which would submit a waiter for a client that has already left.
+- **The second round may improve the answer and never worsen it.** `ErrHostsBusy` is the most actionable refusal a shard has: a 503 carrying a `Retry-After`. A second escrow refusing for any other reason — a group the chain has stopped answering `ErrNoAvailableHost`, a retiring dispatcher, no other routable escrow at all — would turn that into a 502 with no retry hint, for a shard that is merely full. So the first escrow's answer stands unless the second round served, the caller's own context ended it, or it carries `ErrInsufficientBalance`, which is the one fact no other error reports and which the engine latches to stop escalating (`scheduler.go`, `outranksBusy`; `engine/pick.go`, `observePick`).
+
+The escrow that gave up is still counted as reachable in the second round, so excluding the only candidate reads as "no capacity" rather than as an allowlist that refuses everybody (`escrow_pick.go`, the `avoid` branch).
+
+Nothing new is recorded for a re-pick. The two escrows' own ghost counters already carry whatever the attempts spent, and the journal's money lane is sized against a ceiling rather than a rate ([journal/README.md](../journal/README.md)), so a line here would buy volume and no fact. What is missing, and recorded as such, is a count of how often the second round fires and how often it serves: the feature's own value cannot be read off a running gateway today.
 
 ## The per-escrow dispatcher
 

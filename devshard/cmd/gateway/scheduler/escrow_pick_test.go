@@ -2,12 +2,14 @@ package scheduler
 
 import (
 	"errors"
+	"fmt"
 	"maps"
 	"math"
 	"slices"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"devshard/cmd/gateway/chain"
 	"devshard/cmd/gateway/config"
@@ -20,7 +22,7 @@ type fakeSession struct {
 	balance      uint64
 	tokenPrice   uint64
 	latestNonce  uint64
-	groupSize    int
+	slots        []string
 	participants []string
 	calls        []string
 }
@@ -35,9 +37,14 @@ func (f *fakeSession) ParticipantKeys() []string {
 	return f.participants
 }
 
+func (f *fakeSession) SlotParticipants() []string {
+	f.calls = append(f.calls, "SlotParticipants")
+	return f.slots
+}
+
 func (f *fakeSession) GroupSize() int {
 	f.calls = append(f.calls, "GroupSize")
-	return f.groupSize
+	return len(f.slots)
 }
 
 func (f *fakeSession) LatestNonce() uint64 {
@@ -77,8 +84,18 @@ type candidate struct {
 	weight      float64
 	latestNonce uint64
 	groupSize   int
+	slots       []string
 	balance     uint64
 	tokenPrice  uint64
+}
+
+// slotsOf gives one escrow its own hosts, so two candidates in one test never share a block.
+func slotsOf(escrowID string, groupSize int) []string {
+	slots := make([]string, 0, groupSize)
+	for slot := range groupSize {
+		slots = append(slots, fmt.Sprintf("%s-host-%d", escrowID, slot))
+	}
+	return slots
 }
 
 func newScheduler(candidates ...candidate) (*Scheduler, *fakeEscrows, *fakeWeights) {
@@ -89,15 +106,31 @@ func newScheduler(candidates ...candidate) (*Scheduler, *fakeEscrows, *fakeWeigh
 		if groupSize == 0 {
 			groupSize = 4
 		}
+		slots := entry.slots
+		if len(slots) == 0 {
+			slots = slotsOf(entry.id, groupSize)
+		}
 		escrows.byModel[modelA] = append(escrows.byModel[modelA], Escrow{
 			ID:          entry.id,
 			Model:       modelA,
-			Session:     &fakeSession{latestNonce: entry.latestNonce, groupSize: groupSize, balance: entry.balance, tokenPrice: entry.tokenPrice},
+			Session:     &fakeSession{latestNonce: entry.latestNonce, slots: slots, balance: entry.balance, tokenPrice: entry.tokenPrice},
 			ActiveUsers: entry.activeUsers,
 		})
 		weights.byEscrow[entry.id] = entry.weight
 	}
-	return &Scheduler{escrows: escrows, capacity: weights}, escrows, weights
+	return &Scheduler{
+		escrows:      escrows,
+		capacity:     weights,
+		limiter:      newFakeLimiter(),
+		perf:         &fakePerf{ejected: map[string]bool{}},
+		dispatchers:  map[string]*dispatcher{},
+		blockedHosts: map[string]map[string]bool{},
+	}, escrows, weights
+}
+
+// pickWith stands in for the part of Pick that precedes the dispatcher: one waiter built from the profile, nothing avoided.
+func pickWith(scheduler *Scheduler, profile RequestProfile, snapshot chain.PhaseSnapshot) (Escrow, error) {
+	return scheduler.pickEscrow(profile, snapshot, newWaiter(profile, time.Time{}), "")
 }
 
 func TestPickEscrowPinned(t *testing.T) {
@@ -111,7 +144,7 @@ func TestPickEscrowPinned(t *testing.T) {
 			candidate{id: "escrow-2", activeUsers: 99, weight: 1, latestNonce: 19_000},
 		)
 
-		picked, err := scheduler.pickEscrow(RequestProfile{Model: modelA, Escrow: "escrow-2"}, chain.PhaseSnapshot{})
+		picked, err := pickWith(scheduler, RequestProfile{Model: modelA, Escrow: "escrow-2"}, chain.PhaseSnapshot{})
 		if err != nil {
 			t.Fatalf("pickEscrow: %v", err)
 		}
@@ -127,7 +160,7 @@ func TestPickEscrowPinned(t *testing.T) {
 		t.Parallel()
 		scheduler, _, _ := newScheduler(candidate{id: "escrow-1", weight: 10})
 
-		_, err := scheduler.pickEscrow(RequestProfile{Model: modelA, Escrow: "escrow-gone"}, chain.PhaseSnapshot{})
+		_, err := pickWith(scheduler, RequestProfile{Model: modelA, Escrow: "escrow-gone"}, chain.PhaseSnapshot{})
 		if !errors.Is(err, ErrEscrowGone) {
 			t.Fatalf("err = %v, want ErrEscrowGone", err)
 		}
@@ -197,7 +230,7 @@ func TestPickEscrowLowestUtilisationWins(t *testing.T) {
 			t.Parallel()
 			scheduler, _, _ := newScheduler(testCase.candidates...)
 
-			picked, err := scheduler.pickEscrow(RequestProfile{Model: modelA}, chain.PhaseSnapshot{})
+			picked, err := pickWith(scheduler, RequestProfile{Model: modelA}, chain.PhaseSnapshot{})
 			if err != nil {
 				t.Fatalf("pickEscrow: %v", err)
 			}
@@ -216,15 +249,15 @@ func TestPickEscrowTieBreakAdvancesSharedCounter(t *testing.T) {
 	)
 	profile := RequestProfile{Model: modelA}
 
-	first, err := scheduler.pickEscrow(profile, chain.PhaseSnapshot{})
+	first, err := pickWith(scheduler, profile, chain.PhaseSnapshot{})
 	if err != nil {
 		t.Fatalf("pickEscrow: %v", err)
 	}
-	second, err := scheduler.pickEscrow(profile, chain.PhaseSnapshot{})
+	second, err := pickWith(scheduler, profile, chain.PhaseSnapshot{})
 	if err != nil {
 		t.Fatalf("pickEscrow: %v", err)
 	}
-	third, err := scheduler.pickEscrow(profile, chain.PhaseSnapshot{})
+	third, err := pickWith(scheduler, profile, chain.PhaseSnapshot{})
 	if err != nil {
 		t.Fatalf("pickEscrow: %v", err)
 	}
@@ -246,7 +279,7 @@ func TestPickEscrowTieBreakDoesNotAdvanceWithoutATie(t *testing.T) {
 	profile := RequestProfile{Model: modelA}
 
 	for attempt := range 3 {
-		picked, err := scheduler.pickEscrow(profile, chain.PhaseSnapshot{})
+		picked, err := pickWith(scheduler, profile, chain.PhaseSnapshot{})
 		if err != nil {
 			t.Fatalf("pickEscrow: %v", err)
 		}
@@ -383,7 +416,7 @@ func TestPickEscrowNonceCap(t *testing.T) {
 			t.Parallel()
 			scheduler, _, _ := newScheduler(testCase.candidates...)
 
-			picked, err := scheduler.pickEscrow(RequestProfile{Model: modelA}, chain.PhaseSnapshot{MaxNonce: testCase.maxNonce})
+			picked, err := pickWith(scheduler, RequestProfile{Model: modelA}, chain.PhaseSnapshot{MaxNonce: testCase.maxNonce})
 			if testCase.wantErr != nil {
 				if !errors.Is(err, testCase.wantErr) {
 					t.Fatalf("err = %v, want %v", err, testCase.wantErr)
@@ -410,7 +443,7 @@ func TestPickEscrowNoCapacity(t *testing.T) {
 			candidate{id: "escrow-2", activeUsers: 0, weight: -1},
 		)
 
-		_, err := scheduler.pickEscrow(RequestProfile{Model: modelA}, chain.PhaseSnapshot{})
+		_, err := pickWith(scheduler, RequestProfile{Model: modelA}, chain.PhaseSnapshot{})
 		if !errors.Is(err, ErrNoEscrowCapacity) {
 			t.Fatalf("err = %v, want ErrNoEscrowCapacity", err)
 		}
@@ -425,7 +458,7 @@ func TestPickEscrowNoCapacity(t *testing.T) {
 		t.Parallel()
 		scheduler, _, _ := newScheduler()
 
-		_, err := scheduler.pickEscrow(RequestProfile{Model: modelA}, chain.PhaseSnapshot{})
+		_, err := pickWith(scheduler, RequestProfile{Model: modelA}, chain.PhaseSnapshot{})
 		if !errors.Is(err, ErrNoEscrowCapacity) {
 			t.Fatalf("err = %v, want ErrNoEscrowCapacity", err)
 		}
@@ -435,7 +468,7 @@ func TestPickEscrowNoCapacity(t *testing.T) {
 		t.Parallel()
 		scheduler, _, _ := newScheduler(candidate{id: "escrow-1", weight: 10})
 
-		_, err := scheduler.pickEscrow(RequestProfile{Model: "model-b"}, chain.PhaseSnapshot{})
+		_, err := pickWith(scheduler, RequestProfile{Model: "model-b"}, chain.PhaseSnapshot{})
 		if !errors.Is(err, ErrNoEscrowCapacity) {
 			t.Fatalf("err = %v, want ErrNoEscrowCapacity", err)
 		}
@@ -449,7 +482,7 @@ func TestPickEscrowTouchesOnlyEnumerationAndWeights(t *testing.T) {
 		candidate{id: "escrow-2", activeUsers: 9, weight: 10, latestNonce: 19_900},
 	)
 
-	if _, err := scheduler.pickEscrow(RequestProfile{Model: modelA}, chain.PhaseSnapshot{}); err != nil {
+	if _, err := pickWith(scheduler, RequestProfile{Model: modelA}, chain.PhaseSnapshot{}); err != nil {
 		t.Fatalf("pickEscrow: %v", err)
 	}
 
@@ -461,9 +494,10 @@ func TestPickEscrowTouchesOnlyEnumerationAndWeights(t *testing.T) {
 	if len(weights.lookups) != 1 || weights.lookups[0] != "escrow-1/"+modelA {
 		t.Fatalf("weight lookups = %v, want only escrow-1", weights.lookups)
 	}
+	reads := map[string]bool{"LatestNonce": true, "GroupSize": true, "SlotParticipants": true}
 	for _, escrow := range escrows.byModel[modelA] {
 		for _, call := range escrow.Session.(*fakeSession).calls {
-			if call != "LatestNonce" && call != "GroupSize" {
+			if !reads[call] {
 				t.Fatalf("escrow %q session saw %q", escrow.ID, call)
 			}
 		}
@@ -540,7 +574,7 @@ func TestPickEscrowReportsAnExhaustedEscrowButNeverForTheFallbackCeilingAlone(t 
 				reported = append(reported, exhaustionReport{escrowID: escrowID, reason: reason})
 			}
 
-			picked, err := scheduler.pickEscrow(RequestProfile{Model: modelA, Escrow: testCase.pinned}, testCase.snapshot)
+			picked, err := pickWith(scheduler, RequestProfile{Model: modelA, Escrow: testCase.pinned}, testCase.snapshot)
 
 			if picked.ID != testCase.wantPicked || !errors.Is(err, testCase.wantErr) {
 				t.Fatalf("pickEscrow() = %q, %v; want %q, %v", picked.ID, err, testCase.wantPicked, testCase.wantErr)
@@ -562,7 +596,7 @@ func TestPickEscrowWithoutANonceExhaustedReporterStillPicks(t *testing.T) {
 		candidate{id: "escrow-fresh", weight: 100, latestNonce: 1},
 	)
 
-	picked, err := scheduler.pickEscrow(RequestProfile{Model: modelA}, chain.PhaseSnapshot{})
+	picked, err := pickWith(scheduler, RequestProfile{Model: modelA}, chain.PhaseSnapshot{})
 	if err != nil || picked.ID != "escrow-fresh" {
 		t.Fatalf("pickEscrow() = %q, %v; want escrow-fresh with a nil reporter", picked.ID, err)
 	}
@@ -575,7 +609,7 @@ func TestAPinnedEscrowStillHonoursTheNonceCeiling(t *testing.T) {
 	t.Parallel()
 	scheduler, _, _ := newScheduler(candidate{id: "escrow-1", weight: 1, latestNonce: 19_900})
 
-	_, err := scheduler.pickEscrow(RequestProfile{Model: modelA, Escrow: "escrow-1"}, chain.PhaseSnapshot{})
+	_, err := pickWith(scheduler, RequestProfile{Model: modelA, Escrow: "escrow-1"}, chain.PhaseSnapshot{})
 
 	if !errors.Is(err, ErrNoEscrowCapacity) {
 		t.Fatalf("pickEscrow() = %v, want the exhausted escrow refused", err)
@@ -598,7 +632,7 @@ func TestAPinnedEscrowMeetsTheInFlightMarginAtAFetchedCap(t *testing.T) {
 			t.Parallel()
 			scheduler, _, _ := newScheduler(candidate{id: "escrow-1", weight: 1, latestNonce: testCase.latestNonce, groupSize: 4})
 
-			picked, err := scheduler.pickEscrow(RequestProfile{Model: modelA, Escrow: "escrow-1"}, chain.PhaseSnapshot{MaxNonce: 1_000})
+			picked, err := pickWith(scheduler, RequestProfile{Model: modelA, Escrow: "escrow-1"}, chain.PhaseSnapshot{MaxNonce: 1_000})
 
 			if !errors.Is(err, testCase.wantErr) {
 				t.Fatalf("pickEscrow() = %v, want %v", err, testCase.wantErr)
@@ -614,7 +648,7 @@ func TestAPinnedEscrowUnderTheCeilingIsServed(t *testing.T) {
 	t.Parallel()
 	scheduler, _, _ := newScheduler(candidate{id: "escrow-1", weight: 1, latestNonce: 10})
 
-	picked, err := scheduler.pickEscrow(RequestProfile{Model: modelA, Escrow: "escrow-1"}, chain.PhaseSnapshot{})
+	picked, err := pickWith(scheduler, RequestProfile{Model: modelA, Escrow: "escrow-1"}, chain.PhaseSnapshot{})
 
 	if err != nil || picked.ID != "escrow-1" {
 		t.Fatalf("pickEscrow() = %v, %v, want the pinned escrow served", picked.ID, err)
@@ -689,11 +723,39 @@ func TestReserveTokensCountsThePromptAndTheAnswerCap(t *testing.T) {
 	settings.Limits.MaxTokensCap = 4_096
 	priced := &Scheduler{settings: config.NewHolder(&settings)}
 
-	if got := priced.reserveTokens(RequestProfile{InputTokens: 1_000}); got != 5_096 {
-		t.Fatalf("reserveTokens = %d, want the prompt and the answer cap together", got)
+	if got := priced.reserveTokens(RequestProfile{InputBytes: 4_000, InputTokens: 1_000}); got != 8_096 {
+		t.Fatalf("reserveTokens = %d, want the body and the answer cap together", got)
 	}
-	if got := (&Scheduler{}).reserveTokens(RequestProfile{InputTokens: 1_000}); got != 0 {
+	if got := (&Scheduler{}).reserveTokens(RequestProfile{InputBytes: 4_000}); got != 0 {
 		t.Fatalf("reserveTokens = %d before any configuration loaded, want an unpriced 0", got)
+	}
+}
+
+// A per-model cap may raise the global one and an admin request skips it entirely, so the chain can be handed a
+// max_tokens far above the cap. Pricing the floor at the cap alone under-prices exactly those requests.
+func TestTheFloorPricesTheAnswerAtWhateverTheChainIsHanded(t *testing.T) {
+	t.Parallel()
+	settings := config.Defaults()
+	settings.Limits.MaxTokensCap = 4_096
+	priced := &Scheduler{settings: config.NewHolder(&settings)}
+
+	if got := priced.reserveTokens(RequestProfile{InputBytes: 4_000, OutputTokens: 1_000_000}); got != 1_004_000 {
+		t.Fatalf("reserveTokens = %d, want the body and the answer this request reserved", got)
+	}
+}
+
+// The chain reserves against the body's bytes; the gateway's own input number is that same length divided
+// by four. A floor priced in the estimate budgets a quarter of what the chain takes, so it lets through
+// exactly the arrivals it exists to stop.
+func TestTheFloorPricesTheInputSideInBytesNotInTheEstimate(t *testing.T) {
+	t.Parallel()
+	settings := config.Defaults()
+	settings.Limits.MaxTokensCap = 0
+	priced := &Scheduler{settings: config.NewHolder(&settings)}
+
+	const bodyBytes = 8_192
+	if got := priced.reserveTokens(RequestProfile{InputBytes: bodyBytes, InputTokens: bodyBytes / 4}); got != bodyBytes {
+		t.Fatalf("reserveTokens = %d, want the %d bytes the chain reserves against", got, bodyBytes)
 	}
 }
 
@@ -711,11 +773,18 @@ func schedulerWithAllowlist(t *testing.T, allowlist []string, groups map[string]
 		escrows.byModel[modelA] = append(escrows.byModel[modelA], Escrow{
 			ID:      escrowID,
 			Model:   modelA,
-			Session: &fakeSession{groupSize: 4, participants: groups[escrowID]},
+			Session: &fakeSession{slots: groups[escrowID], participants: groups[escrowID]},
 		})
 		weights.byEscrow[escrowID] = 1
 	}
-	return &Scheduler{escrows: escrows, capacity: weights, settings: holder}
+	return &Scheduler{
+		escrows:     escrows,
+		capacity:    weights,
+		settings:    holder,
+		limiter:     newFakeLimiter(),
+		perf:        &fakePerf{ejected: map[string]bool{}},
+		dispatchers: map[string]*dispatcher{},
+	}
 }
 
 // The escrow is chosen before its participants are consulted, so an escrow whose whole group the
@@ -727,7 +796,7 @@ func TestPickEscrowSkipsAnEscrowHoldingNoAllowedParticipant(t *testing.T) {
 		"lonely":  {"allowed"},
 	})
 
-	picked, err := scheduler.pickEscrow(RequestProfile{Model: modelA}, chain.PhaseSnapshot{})
+	picked, err := pickWith(scheduler, RequestProfile{Model: modelA}, chain.PhaseSnapshot{})
 	if err != nil {
 		t.Fatalf("pickEscrow(): %v", err)
 	}
@@ -742,7 +811,7 @@ func TestPickEscrowReportsAnAllowlistNoEscrowCanReach(t *testing.T) {
 		"two": {"another"},
 	})
 
-	_, err := scheduler.pickEscrow(RequestProfile{Model: modelA}, chain.PhaseSnapshot{})
+	_, err := pickWith(scheduler, RequestProfile{Model: modelA}, chain.PhaseSnapshot{})
 
 	if !errors.Is(err, ErrAllowlistUnreachable) {
 		t.Fatalf("pickEscrow() = %v, want ErrAllowlistUnreachable", err)
@@ -752,7 +821,7 @@ func TestPickEscrowReportsAnAllowlistNoEscrowCanReach(t *testing.T) {
 func TestPickEscrowIgnoresTheAllowlistWhenItIsEmpty(t *testing.T) {
 	scheduler := schedulerWithAllowlist(t, nil, map[string][]string{"one": {"anybody"}})
 
-	if _, err := scheduler.pickEscrow(RequestProfile{Model: modelA}, chain.PhaseSnapshot{}); err != nil {
+	if _, err := pickWith(scheduler, RequestProfile{Model: modelA}, chain.PhaseSnapshot{}); err != nil {
 		t.Fatalf("pickEscrow() with no allowlist: %v", err)
 	}
 }

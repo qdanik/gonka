@@ -28,6 +28,7 @@ func (c *raceCoordinator) requestProfile(params any) scheduler.RequestProfile {
 		Model:        c.request.Model,
 		Escrow:       c.escrowID,
 		InputTokens:  int(c.request.InputTokens),
+		InputBytes:   int(c.request.InputBytes),
 		OutputTokens: int(c.request.OutputTokens),
 		Exclude:      c.excluded,
 		Params:       params,

@@ -12,6 +12,7 @@ import (
 	"devshard/cmd/gateway/chain"
 	"devshard/cmd/gateway/config"
 	"devshard/cmd/gateway/limits"
+	"devshard/types"
 )
 
 // idleDispatcherGrace is how long an escrow's actor stays alive with an empty queue. See routing.md, "Idle dispatchers are reaped".
@@ -91,17 +92,42 @@ func NewScheduler(deps Deps) (*Scheduler, error) {
 	}, nil
 }
 
-// Pick serves one request or one escalation attempt; an escalation reuses the pinned escrow.
+// Pick serves one request or one escalation attempt; an escalation reuses the pinned escrow. See routing.md, "One re-pick when an escrow gives up".
 func (s *Scheduler) Pick(ctx context.Context, profile RequestProfile) (Assignment, error) {
-	escrow, err := s.pickEscrow(profile, s.snapshots.Snapshot())
-	if err != nil {
+	assignment, routedTo, err := s.pickOnce(ctx, profile, "")
+	if profile.Escrow != "" || !errors.Is(err, ErrHostsBusy) {
+		return assignment, err
+	}
+
+	if ctx.Err() != nil {
 		return Assignment{}, err
 	}
 
+	retried, _, retryErr := s.pickOnce(ctx, profile, routedTo)
+	if retryErr == nil || outranksBusy(retryErr) {
+		return retried, retryErr
+	}
+	return Assignment{}, err
+}
+
+// outranksBusy holds for the answers a second round may return in place of a busy shard's. See routing.md, "One re-pick when an escrow gives up".
+func outranksBusy(err error) bool {
+	return errors.Is(err, context.Canceled) ||
+		errors.Is(err, context.DeadlineExceeded) ||
+		errors.Is(err, types.ErrInsufficientBalance)
+}
+
+// pickOnce names the escrow it routed to, so a caller that re-picks can leave that one out of the second round.
+func (s *Scheduler) pickOnce(ctx context.Context, profile RequestProfile, avoidEscrowID string) (Assignment, string, error) {
 	queued := newWaiter(profile, s.now())
+	escrow, err := s.pickEscrow(profile, s.snapshots.Snapshot(), queued, avoidEscrowID)
+	if err != nil {
+		return Assignment{}, "", err
+	}
+
 	claimed, err := s.claimAndSubmit(escrow, queued)
 	if err != nil {
-		return Assignment{}, err
+		return Assignment{}, escrow.ID, err
 	}
 	// Held until Pick returns, so the reaper cannot forget an escrow this caller may still burn a nonce on. See README, "Dispatcher lifecycle".
 	defer claimed.pendingSubmits.Add(-1)
@@ -109,16 +135,29 @@ func (s *Scheduler) Pick(ctx context.Context, profile RequestProfile) (Assignmen
 	select {
 	case result := <-queued.replyCh:
 		if result.err != nil {
-			return Assignment{}, result.err
+			return Assignment{}, escrow.ID, result.err
 		}
-		return result.assignment, nil
+		return result.assignment, escrow.ID, nil
 	case <-ctx.Done():
 		// Leaving and taking are one step: an assignment delivered in this instant holds a nonce and a slot.
 		if delivered, wasDelivered := queued.abandon(); wasDelivered && delivered.err == nil {
 			s.dropAssignment(delivered.assignment, profile)
 		}
-		return Assignment{}, ctx.Err()
+		return Assignment{}, escrow.ID, ctx.Err()
 	}
+}
+
+// queuedAhead estimates how far each candidate's cursor will have moved before this request draws a nonce. See routing.md, "Pricing an escrow by the burns it will cost".
+func (s *Scheduler) queuedAhead(candidates []Escrow) []uint64 {
+	ahead := make([]uint64, len(candidates))
+	s.registryMu.Lock()
+	defer s.registryMu.Unlock()
+	for index, candidate := range candidates {
+		if running := s.dispatchers[candidate.ID]; running != nil && running.sessionID == candidate.SessionID {
+			ahead[index] = uint64(max(running.pendingSubmits.Load(), 0))
+		}
+	}
+	return ahead
 }
 
 // claimAndSubmit returns the dispatcher that accepted the waiter, still claimed; a stopped one is replaced by the next get-or-create, so this retries at most once more.
@@ -248,14 +287,18 @@ func (s *Scheduler) retire(idle *dispatcher) bool {
 func (s *Scheduler) predicates(escrow Escrow) func(chain.PhaseSnapshot) availability {
 	model, escrowID := escrow.Model, escrow.ID
 	return func(snapshot chain.PhaseSnapshot) availability {
-		preserved := pocPreserved(snapshot, model)
-		return availability{
-			notAllowed:   refusedByAllowlist(s.settings.Load().Scheduler.ParticipantAllowlist),
-			pocRequired:  func(participant string) bool { return preserved != nil && !preserved[participant] },
-			congested:    func(participant string) blockReason { return blockForAdmission(s.limiter.Admits(participant, model)) },
-			ejected:      func(participant string) bool { return s.perf.Ejected(participant, model) },
-			stateBlocked: s.stateBlocked(escrowID),
-		}
+		return s.fleetGates(model, snapshot).forEscrow(s.stateBlocked(escrowID))
+	}
+}
+
+// fleetGates is the part of the ladder that depends on the model alone. See routing.md, "Pricing an escrow by the burns it will cost".
+func (s *Scheduler) fleetGates(model string, snapshot chain.PhaseSnapshot) availability {
+	preserved := pocPreserved(snapshot, model)
+	return availability{
+		notAllowed:  refusedByAllowlist(s.participantAllowlist()),
+		pocRequired: func(participant string) bool { return preserved != nil && !preserved[participant] },
+		congested:   func(participant string) blockReason { return blockForAdmission(s.limiter.Admits(participant, model)) },
+		ejected:     func(participant string) bool { return s.perf.Ejected(participant, model) },
 	}
 }
 
@@ -306,12 +349,13 @@ func (s *Scheduler) maxConsecutiveBurns() int64 {
 	return s.settings.Load().Scheduler.MaxConsecutiveBurns
 }
 
-// reserveTokens is what the request already sent plus the most this gateway will let the host answer with.
+// reserveTokens prices the request in the units the chain charges it in. See capacity.md, "The balance floor".
 func (s *Scheduler) reserveTokens(profile RequestProfile) uint64 {
 	if s.settings == nil {
 		return 0
 	}
-	return uint64(max(profile.InputTokens, 0)) + uint64(max(s.settings.Load().Limits.MaxTokensCap, 0))
+	outputTokens := max(int64(profile.OutputTokens), s.settings.Load().Limits.MaxTokensCap, 0)
+	return uint64(max(profile.InputBytes, 0)) + uint64(outputTokens)
 }
 
 // pocPreserved prefers the model's own set; a nil set means not loaded yet, so everybody counts as preserved. See rules.md, "8. Fail-closed and fail-open are chosen per signal".
@@ -336,6 +380,7 @@ type RequestProfile struct {
 	Model        string
 	Escrow       string
 	InputTokens  int
+	InputBytes   int
 	OutputTokens int
 	Exclude      []string
 	Params       any
@@ -397,11 +442,12 @@ type NonceIntent struct {
 // session is the narrow view of devshard/user.Session the scheduler needs; Advance is the atomic peek->decide->commit unit. See README, "The boundary types".
 type session interface {
 	Advance(decide func(HostBinding) NonceIntent) (Prepared, error)
-	ParticipantKeys() []string // distinct participants (slots deduped) -- the exclusion universe
-	GroupSize() int            // len(group); nonce % GroupSize == hostIdx
-	LatestNonce() uint64       // for the nonce-cap gate
-	Balance() uint64           // for the balance floor
-	TokenPrice() uint64        // for the balance floor
+	ParticipantKeys() []string  // distinct participants (slots deduped) -- the exclusion universe
+	SlotParticipants() []string // one per slot, duplicates kept, read-only; nonce % GroupSize indexes it
+	GroupSize() int             // len(group); nonce % GroupSize == hostIdx
+	LatestNonce() uint64        // for the nonce-cap gate and the burn forecast
+	Balance() uint64            // for the balance floor
+	TokenPrice() uint64         // for the balance floor
 }
 
 // HostBinding is the nonce the session is offering and the host it is bound to, deduped across a validator's slots.

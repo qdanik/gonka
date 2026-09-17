@@ -163,13 +163,14 @@ func (f *fakePerf) eject(participant string) {
 }
 
 type schedulerConfig struct {
-	escrows      []string
-	slots        []string
-	matchWaitMS  int64
-	submitBuffer int
-	hostWindow   int
-	gate         chan struct{}
-	health       hostHealth
+	escrows       []string
+	slots         []string
+	slotsByEscrow map[string][]string
+	matchWaitMS   int64
+	submitBuffer  int
+	hostWindow    int
+	gate          chan struct{}
+	health        hostHealth
 }
 
 // escrowHolds counts the in-flight holds the commit takes, so an assignment dropped without giving one
@@ -228,8 +229,12 @@ func newSchedulerHarness(t *testing.T, cfg schedulerConfig) *schedulerHarness {
 	sessions := map[string]*scriptedSession{}
 	holds := &escrowHolds{}
 	for _, escrowID := range cfg.escrows {
+		slots := cfg.slots
+		if own, named := cfg.slotsByEscrow[escrowID]; named {
+			slots = own
+		}
 		// Funded: routing now prices every candidate against its balance, and a penniless escrow is not one.
-		session := &scriptedSession{balance: 1 << 40, slots: cfg.slots, gate: cfg.gate, entered: make(chan struct{}, 1)}
+		session := &scriptedSession{balance: 1 << 40, slots: slots, gate: cfg.gate, entered: make(chan struct{}, 1)}
 		sessions[escrowID] = session
 		escrows.byModel[modelA] = append(escrows.byModel[modelA], Escrow{ID: escrowID, Model: modelA, Session: session, Hold: holds.source()})
 		weights.byEscrow[escrowID] = 10
@@ -301,6 +306,19 @@ func (h *schedulerHarness) liveDispatchers() map[string]*dispatcher {
 	live := make(map[string]*dispatcher, len(h.scheduler.dispatchers))
 	maps.Copy(live, h.scheduler.dispatchers)
 	return live
+}
+
+// loadEscrow raises a candidate's in-flight count, which is the only lever a test has over which escrow
+// the pick reaches first.
+func (h *schedulerHarness) loadEscrow(t *testing.T, escrowID string, activeUsers int) {
+	t.Helper()
+	for index, candidate := range h.escrows.byModel[modelA] {
+		if candidate.ID == escrowID {
+			h.escrows.byModel[modelA][index].ActiveUsers = activeUsers
+			return
+		}
+	}
+	t.Fatalf("no escrow %q to load", escrowID)
 }
 
 func (h *schedulerHarness) queueDepth(escrowID string) int {

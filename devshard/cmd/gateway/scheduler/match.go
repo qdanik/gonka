@@ -95,6 +95,12 @@ func (a availability) congestionBlock(participant string) blockReason {
 	return a.congested(participant)
 }
 
+// forEscrow adds the one rung that belongs to a single escrow rather than to the fleet, and must be applied before the ladder is frozen. See routing.md, "Pricing an escrow by the burns it will cost".
+func (a availability) forEscrow(stateBlocked func(participant string) bool) availability {
+	a.stateBlocked = stateBlocked
+	return a
+}
+
 // servingOverFullWindows shares this drain's memo and stops reading a full window as a block. See routing.md, "The forced send".
 func (a availability) servingOverFullWindows() availability {
 	a.overFullWindows = true

@@ -84,6 +84,7 @@ type Request struct {
 	Model        string
 	Escrow       string
 	InputTokens  uint64
+	InputBytes   uint64
 	OutputTokens uint64
 	ClientStream bool
 
