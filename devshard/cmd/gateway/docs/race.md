@@ -152,10 +152,13 @@ Whether an attempt contributes a performance sample at all is decided by one ord
 5. State-divergent.
 6. Long response after content — the host produced output, its nonce is still open, and the attempt has run past the exemption window, so the delay is a slow answer rather than an unresponsive host. An attempt the twenty-minute backstop cut does not take this rung; it is judged on its own terminal.
 7. Empty stream while the proof-of-compute bypass is active.
-8. Empty stream in a race nobody won.
-9. Cancelled by the race itself — a sample would say the host was unresponsive when it was told to stop.
+8. A body the gateway refused to send — the host never saw the request, so nothing about it is the host's.
+9. Empty stream in a race nobody won.
+10. Cancelled by the race itself — a sample would say the host was unresponsive when it was told to stop.
 
-Two parallel ladders use the same facts for different questions: the *verdict* ladder decides whether a congestion window moves, and the *timeout-skip* ladder decides whether a vote is posted. The sample ladder disagrees with the verdict ladder in exactly one place. A loser the race cancelled needs no verdict rung, because no terminal maps `client_cancelled` to a verdict at all; it does need a sample rung, because a recorded sample would report the host as unresponsive when the race is what told it to stop. That is rung 9.
+Two parallel ladders use the same facts for different questions: the *verdict* ladder decides whether a congestion window moves, and the *timeout-skip* ladder decides whether a vote is posted. The sample ladder disagrees with the verdict ladder in exactly one place. A loser the race cancelled needs no verdict rung, because no terminal maps `client_cancelled` to a verdict at all; it does need a sample rung, because a recorded sample would report the host as unresponsive when the race is what told it to stop. That is rung 10.
+
+Rung 8 is the same shape for a different cause. A host-bound body carries the escrow's catch-up diffs beside the prompt, and past what a host accepts the session refuses to send it — `transport.ErrHostRequestTooLarge`, raised after the nonce is already committed. Left unclassified it reached `TerminalDialFailure`: a negative perf sample, a push on the host's cut-off breaker, a `transport_error` in the ledger against the host's failure rate, and a 502 inviting a retry that would fail identically. The host saw none of it. `TerminalRequestTooLarge` names it, its verdict is a model outcome so no congestion window moves, the ledger excuses it the way it excuses a cancelled client, and the escalation still runs — the backlog belongs to this escrow, so another host is worth trying. The boundary keeps a reserve so that most of these are refused with a 413 before a nonce exists at all ([request.md](./request.md)).
 
 ### Timeout votes
 

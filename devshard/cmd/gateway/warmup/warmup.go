@@ -197,10 +197,14 @@ func (w *Prober) openLedger(escrowID, model string, session registry.EscrowSessi
 	if w.ledger == nil || w.epochs == nil {
 		return
 	}
+	epoch := w.epochs.Snapshot().EpochIndex
+	if epoch == 0 {
+		return
+	}
 	if err := w.ledger.OpenEscrow(accounting.EscrowMetadata{
 		EscrowID:      escrowID,
 		Model:         model,
-		CreationEpoch: w.epochs.Snapshot().EpochIndex,
+		CreationEpoch: epoch,
 		Slots:         session.SnapshotState().Group,
 	}); err != nil && w.narrator != nil {
 		w.narrator.WarmupLedgerOpenFailed(escrowID, err)

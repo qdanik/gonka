@@ -101,6 +101,7 @@ const (
 	ReasonStreamTruncated  = "sse_truncated"
 	ReasonUnexpectedEOF    = "eof_transport"
 	ReasonResponseTooLarge = "response_too_large"
+	ReasonRequestTooLarge  = "request_too_large"
 	ReasonClientCancelled  = "client_cancelled"
 	ReasonNoReceipt        = "no_receipt"
 	ReasonEmptyStream      = "empty_stream"

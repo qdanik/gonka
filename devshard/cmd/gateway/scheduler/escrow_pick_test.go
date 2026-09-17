@@ -715,47 +715,52 @@ func TestBalanceFloorIsInertWithoutAReserve(t *testing.T) {
 	}
 }
 
-// One request's reserve is what it already sent plus the most this gateway will let a host answer with:
-// pricing the answer alone would admit a prompt the escrow cannot pay for.
-func TestReserveTokensCountsThePromptAndTheAnswerCap(t *testing.T) {
+// The chain charges this request (input_length_bytes + max_tokens) x token_price, and both terms are the
+// request's own. Pricing either one differently lets through exactly the arrivals the floor exists to stop.
+func TestARequestIsPricedTheWayTheChainChargesIt(t *testing.T) {
+	t.Parallel()
+
+	testCases := []struct {
+		name    string
+		profile RequestProfile
+		want    uint64
+	}{
+		{
+			name:    "the body's bytes, not the char/4 estimate the windows use",
+			profile: RequestProfile{InputBytes: 8_192, InputTokens: 2_048},
+			want:    8_192,
+		},
+		{
+			name:    "the answer this request reserved, which a per-model cap or an admin request may raise far above the global one",
+			profile: RequestProfile{InputBytes: 4_000, OutputTokens: 1_000_000},
+			want:    1_004_000,
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			if got := requestReserve(testCase.profile); got != testCase.want {
+				t.Fatalf("requestReserve = %d, want %d", got, testCase.want)
+			}
+		})
+	}
+}
+
+// Whether an escrow is finished is a property of the escrow, so the price that retires it reads nothing from
+// the arriving request. A request-sized price lets one large arrival retire every escrow of a model at once:
+// the body alone reaches the ingest cap, and an admin request's max_tokens reaches ten million.
+func TestTheRetirementPriceIsOneCappedAnswerAndNothingElse(t *testing.T) {
 	t.Parallel()
 	settings := config.Defaults()
 	settings.Limits.MaxTokensCap = 4_096
 	priced := &Scheduler{settings: config.NewHolder(&settings)}
 
-	if got := priced.reserveTokens(RequestProfile{InputBytes: 4_000, InputTokens: 1_000}); got != 8_096 {
-		t.Fatalf("reserveTokens = %d, want the body and the answer cap together", got)
+	if got := priced.retirementReserve(); got != 4_096 {
+		t.Fatalf("retirementReserve = %d, want the answer cap alone", got)
 	}
-	if got := (&Scheduler{}).reserveTokens(RequestProfile{InputBytes: 4_000}); got != 0 {
-		t.Fatalf("reserveTokens = %d before any configuration loaded, want an unpriced 0", got)
-	}
-}
-
-// A per-model cap may raise the global one and an admin request skips it entirely, so the chain can be handed a
-// max_tokens far above the cap. Pricing the floor at the cap alone under-prices exactly those requests.
-func TestTheFloorPricesTheAnswerAtWhateverTheChainIsHanded(t *testing.T) {
-	t.Parallel()
-	settings := config.Defaults()
-	settings.Limits.MaxTokensCap = 4_096
-	priced := &Scheduler{settings: config.NewHolder(&settings)}
-
-	if got := priced.reserveTokens(RequestProfile{InputBytes: 4_000, OutputTokens: 1_000_000}); got != 1_004_000 {
-		t.Fatalf("reserveTokens = %d, want the body and the answer this request reserved", got)
-	}
-}
-
-// The chain reserves against the body's bytes; the gateway's own input number is that same length divided
-// by four. A floor priced in the estimate budgets a quarter of what the chain takes, so it lets through
-// exactly the arrivals it exists to stop.
-func TestTheFloorPricesTheInputSideInBytesNotInTheEstimate(t *testing.T) {
-	t.Parallel()
-	settings := config.Defaults()
-	settings.Limits.MaxTokensCap = 0
-	priced := &Scheduler{settings: config.NewHolder(&settings)}
-
-	const bodyBytes = 8_192
-	if got := priced.reserveTokens(RequestProfile{InputBytes: bodyBytes, InputTokens: bodyBytes / 4}); got != bodyBytes {
-		t.Fatalf("reserveTokens = %d, want the %d bytes the chain reserves against", got, bodyBytes)
+	if got := (&Scheduler{}).retirementReserve(); got != 0 {
+		t.Fatalf("retirementReserve = %d before any configuration loaded, want an unpriced 0", got)
 	}
 }
 

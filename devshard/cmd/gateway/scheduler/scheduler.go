@@ -253,6 +253,7 @@ func (s *Scheduler) dispatcherFor(escrow Escrow) (*dispatcher, error) {
 			now:                 s.now,
 			matchWait:           s.matchWait(),
 			maxConsecutiveBurns: s.maxConsecutiveBurns,
+			retirementReserve:   s.retirementReserve,
 			newTimer:            s.newTimer,
 			retire:              s.retire,
 			idleGrace:           idleDispatcherGrace,
@@ -349,13 +350,17 @@ func (s *Scheduler) maxConsecutiveBurns() int64 {
 	return s.settings.Load().Scheduler.MaxConsecutiveBurns
 }
 
-// reserveTokens prices the request in the units the chain charges it in. See capacity.md, "The balance floor".
-func (s *Scheduler) reserveTokens(profile RequestProfile) uint64 {
+// requestReserve prices this one request the way the chain will charge it. See capacity.md, "The balance floor".
+func requestReserve(profile RequestProfile) uint64 {
+	return uint64(max(profile.InputBytes, 0)) + uint64(max(profile.OutputTokens, 0))
+}
+
+// retirementReserve prices one capped answer and reads nothing from the arriving request. See capacity.md, "The balance floor".
+func (s *Scheduler) retirementReserve() uint64 {
 	if s.settings == nil {
 		return 0
 	}
-	outputTokens := max(int64(profile.OutputTokens), s.settings.Load().Limits.MaxTokensCap, 0)
-	return uint64(max(profile.InputBytes, 0)) + uint64(outputTokens)
+	return uint64(max(s.settings.Load().Limits.MaxTokensCap, 0))
 }
 
 // pocPreserved prefers the model's own set; a nil set means not loaded yet, so everybody counts as preserved. See rules.md, "8. Fail-closed and fail-open are chosen per signal".

@@ -354,9 +354,22 @@ func TestTheProbeOpensTheEscrowItIsAboutToRecordAgainst(t *testing.T) {
 	}
 	opened := ledger.opened[0]
 	if opened.EscrowID != "escrow-1" || opened.Model != "test-model" || opened.CreationEpoch != 42 {
-		t.Errorf("opened %+v, want escrow-1/test-model stamped with the epoch the ledger first saw it in", opened)
+		t.Errorf("opened %+v, want escrow-1/test-model stamped with the epoch it was created in", opened)
 	}
 	if len(opened.Slots) != 1 {
 		t.Errorf("opened with %d slots, want the group the session reports: a slotless escrow is refused", len(opened.Slots))
+	}
+}
+
+// Before the chain observer has published, the snapshot carries epoch 0. An escrow opened under it is pinned
+// there for good -- invisible to every epoch-scoped query, and past the admin reset, which refuses epoch 0.
+func TestTheProbeOpensNoEscrowBeforeTheChainHasNamedAnEpoch(t *testing.T) {
+	warmup, ledger, _ := newWarmupUnderTest(stubSession{}, nil)
+	warmup.epochs = stubEpochs{epoch: 0}
+
+	warmup.warm("escrow-1", "test-model")
+
+	if len(ledger.opened) != 0 {
+		t.Fatalf("opened %+v under an unknown epoch, want none", ledger.opened)
 	}
 }

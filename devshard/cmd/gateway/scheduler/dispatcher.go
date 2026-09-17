@@ -37,6 +37,7 @@ type dispatcherDeps struct {
 	now                 func() time.Time
 	matchWait           time.Duration
 	maxConsecutiveBurns func() int64
+	retirementReserve   func() uint64
 	newTimer            func(time.Duration) (<-chan time.Time, func())
 	retire              func(*dispatcher) bool
 	idleGrace           time.Duration
@@ -84,6 +85,9 @@ func newDispatcher(deps dispatcherDeps) *dispatcher {
 	}
 	if deps.maxConsecutiveBurns == nil {
 		deps.maxConsecutiveBurns = func() int64 { return 0 }
+	}
+	if deps.retirementReserve == nil {
+		deps.retirementReserve = func() uint64 { return 0 }
 	}
 	return &dispatcher{
 		dispatcherDeps: deps,
@@ -201,10 +205,23 @@ func (d *dispatcher) failAdvance(decision Decision, taken reservation, err error
 	case burn:
 		taken.releaseHold()
 	}
-	if errors.Is(err, types.ErrInsufficientBalance) && d.onExhausted != nil {
+	if errors.Is(err, types.ErrInsufficientBalance) && d.onExhausted != nil && d.escrowIsSpent() {
 		d.onExhausted(d.escrowID, "insufficient_balance")
 	}
 	d.failWaiting(fmt.Errorf("escrow %s: advancing nonce: %w", d.escrowID, err))
+}
+
+// escrowIsSpent asks whether the escrow can still pay for one capped answer. See capacity.md, "The balance floor".
+func (d *dispatcher) escrowIsSpent() bool {
+	reserve := d.retirementReserve()
+	if reserve == 0 || d.session == nil {
+		return true
+	}
+	priced, ok := safeMul(reserve, d.session.TokenPrice())
+	if !ok {
+		return true
+	}
+	return d.session.Balance() < priced
 }
 
 func (d *dispatcher) failWaiting(err error) {

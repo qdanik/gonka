@@ -682,12 +682,12 @@ func TestEveryRecoveredStatusRoundTripsThroughItsTerminal(t *testing.T) {
 // failed and is empty for the two outcomes that are not failures -- an empty log field reads as missing
 // data, and failureReason depends on that same emptiness to fall through.
 func TestEveryTerminalHasAName(t *testing.T) {
-	for terminal := TerminalUnclassified; terminal <= TerminalStalled; terminal++ {
+	for terminal := TerminalUnclassified; terminal <= TerminalHardTimeout; terminal++ {
 		if terminal.String() == "" {
 			t.Fatalf("terminal %d has no name", terminal)
 		}
-		if terminal.String() == "unnamed" {
-			t.Fatalf("terminal %d fell through to the placeholder, so a new terminal was added without one", terminal)
+		if terminal.String() == TerminalNameUnnamed || terminal.String() == ReasonUnknown {
+			t.Fatalf("terminal %d fell through to a placeholder, so a new terminal was added without a name", terminal)
 		}
 	}
 	if TerminalWon.reason() != "" || TerminalLost.reason() != "" {

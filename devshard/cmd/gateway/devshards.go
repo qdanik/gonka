@@ -19,6 +19,7 @@ import (
 	"devshard/cmd/gateway/env"
 	"devshard/cmd/gateway/escrow"
 	"devshard/cmd/gateway/internal/logkey"
+	"devshard/cmd/gateway/nonces"
 	"devshard/cmd/gateway/registry"
 	"devshard/cmd/gateway/store"
 	"devshard/logging"
@@ -171,6 +172,25 @@ type depletionNotice struct{ manager *escrow.Manager }
 
 func (d *depletionNotice) OnBalanceExhausted(escrowID, reason string) {
 	d.manager.OnBalanceExhausted(escrowID, reason)
+}
+
+// creationEpochOf resolves the epoch an escrow was created in. See nonces/README.md, "The judgements it does make".
+func creationEpochOf(chainClient *chain.TxClient, records *store.Store) nonces.CreationEpochFunc {
+	return func(ctx context.Context, escrowID string) (uint64, bool) {
+		if info, found, err := chainClient.GetEscrow(ctx, escrowID); err == nil && found && info.EpochIndex > 0 {
+			return info.EpochIndex, true
+		}
+		devshards, err := records.ListDevshards(ctx)
+		if err != nil {
+			return 0, false
+		}
+		for _, record := range devshards {
+			if record.EscrowID == escrowID && record.RotationEpoch > 0 {
+				return uint64(record.RotationEpoch), true
+			}
+		}
+		return 0, false
+	}
 }
 
 // sessionSources is a parameter so the transport an escrow is served over is chosen once, at compose.

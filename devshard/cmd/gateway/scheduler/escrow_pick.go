@@ -20,7 +20,7 @@ const nonceInFlightMargin uint64 = 200
 
 func (s *Scheduler) pickEscrow(profile RequestProfile, snapshot chain.PhaseSnapshot, queued *waiter, avoid string) (Escrow, error) {
 	candidates := s.escrows.Candidates(profile.Model)
-	reserveTokens := s.reserveTokens(profile)
+	retirement, request := s.retirementReserve(), requestReserve(profile)
 
 	if profile.Escrow != "" {
 		for _, candidate := range candidates {
@@ -28,9 +28,12 @@ func (s *Scheduler) pickEscrow(profile RequestProfile, snapshot chain.PhaseSnaps
 				continue
 			}
 			// A pinned escrow is capped too: the ceiling reserves room for the finalize and settlement. See routing.md, "Picking an escrow".
-			if reason := exhaustionReason(candidate, snapshot.MaxNonce, reserveTokens); reason != "" {
+			if reason := exhaustionReason(candidate, snapshot.MaxNonce, retirement); reason != "" {
 				s.reportExhausted(candidate.ID, reason)
 				return Escrow{}, noCapacity(reason)
+			}
+			if belowBalanceFloor(candidate, request) {
+				return Escrow{}, noCapacity(exhaustionBalanceFloor)
 			}
 			return candidate, nil
 		}
@@ -54,10 +57,14 @@ func (s *Scheduler) pickEscrow(profile RequestProfile, snapshot chain.PhaseSnaps
 		if candidate.ID == avoid {
 			continue
 		}
-		if reason := exhaustionReason(candidate, snapshot.MaxNonce, reserveTokens); reason != "" {
+		if reason := exhaustionReason(candidate, snapshot.MaxNonce, retirement); reason != "" {
 			declined = reason
 			// Routing only declines; the rotation lifecycle is what replaces an exhausted escrow.
 			s.reportExhausted(candidate.ID, reason)
+			continue
+		}
+		if belowBalanceFloor(candidate, request) {
+			declined = exhaustionBalanceFloor
 			continue
 		}
 		weight := s.capacity.EscrowWeight(candidate.ID, profile.Model)

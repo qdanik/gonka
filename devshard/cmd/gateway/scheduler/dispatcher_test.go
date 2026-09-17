@@ -321,6 +321,8 @@ type harnessConfig struct {
 	submitBuffer        int
 	holdStart           bool
 	escrowHold          func() (func(), bool)
+	balance             uint64
+	retirementReserve   uint64
 }
 
 type harness struct {
@@ -341,6 +343,7 @@ func newHarness(t *testing.T, cfg harnessConfig) *harness {
 	}
 	session := &scriptedSession{
 		slots:           cfg.slots,
+		balance:         cfg.balance,
 		failWith:        cfg.failWith,
 		failAfterDecide: cfg.failAfterDecide,
 		swallowCommit:   cfg.swallowCommit,
@@ -397,6 +400,7 @@ func newHarness(t *testing.T, cfg harnessConfig) *harness {
 		now:                 clock.Now,
 		matchWait:           matchWaitWindow,
 		maxConsecutiveBurns: burnLimit.Load,
+		retirementReserve:   func() uint64 { return cfg.retirementReserve },
 		newTimer:            clock.newTimer,
 		submitBuffer:        cfg.submitBuffer,
 		onExhausted:         func(escrowID, reason string) { exhausted.Store(&escrowID) },
@@ -892,13 +896,23 @@ func TestDispatcherRefetchesTheSnapshotEachDrain(t *testing.T) {
 // the caller to retry wastes their time and a nonce. Every other exhaustion is genuinely transient.
 func TestDispatcherReportsASpentDepositForReplacement(t *testing.T) {
 	t.Run("an exhausted deposit is reported", func(t *testing.T) {
-		test := newHarness(t, harnessConfig{failWith: types.ErrInsufficientBalance})
+		test := newHarness(t, harnessConfig{failWith: types.ErrInsufficientBalance, retirementReserve: 4_096, balance: 100})
 
 		awaitReply(t, test.submit(t, test.clock.Now()))
 
 		reported := test.exhausted.Load()
 		if reported == nil || *reported != escrowA {
 			t.Fatalf("reported escrow = %v, want %q", reported, escrowA)
+		}
+	})
+
+	t.Run("a deposit that still covers a capped answer is not", func(t *testing.T) {
+		test := newHarness(t, harnessConfig{failWith: types.ErrInsufficientBalance, retirementReserve: 4_096, balance: 1 << 20})
+
+		awaitReply(t, test.submit(t, test.clock.Now()))
+
+		if reported := test.exhausted.Load(); reported != nil {
+			t.Fatalf("reported escrow = %q, want no report: it still affords a capped answer", *reported)
 		}
 	})
 

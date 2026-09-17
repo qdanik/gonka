@@ -61,22 +61,24 @@ func IsCacheableUpstreamError(status int, body []byte) bool {
 	return isCacheableErrorDetails(details)
 }
 
+// UpstreamFailure reports the error a whole response body carries. See README.md, "Cacheability".
+func UpstreamFailure(body []byte) (UpstreamError, bool) {
+	return parseUpstreamErrorDetails(body)
+}
+
 func parseUpstreamErrorDetails(payload []byte) (UpstreamError, bool) {
 	scan := scanResponse(payload, false)
 	return scan.upstream, scan.failed
 }
 
-// Read on its own, so a host cannot hide its failure behind a sibling field it typed wrongly.
+// Read on its own, so a host cannot hide its failure behind a sibling field it typed wrongly. See README.md, "Cacheability".
 type scannedError struct {
-	Error *struct {
-		Type    string `json:"type"`
-		Code    any    `json:"code"`
-		Message string `json:"message"`
-	} `json:"error"`
-	Object  string `json:"object"`
-	Type    string `json:"type"`
-	Code    any    `json:"code"`
-	Message string `json:"message"`
+	Error     json.RawMessage `json:"error"`
+	ErrorType string          `json:"error_type"`
+	Object    string          `json:"object"`
+	Type      string          `json:"type"`
+	Code      any             `json:"code"`
+	Message   string          `json:"message"`
 }
 
 // The reasons stay raw: a wrong type in one would otherwise fail the decode that also finds the error.
@@ -168,7 +170,7 @@ func decodeScannedEvent(payload []byte, judgeAnswer bool) (scannedEvent, bool) {
 	return scannedEvent{scannedError: failure, choicesUnreadable: judgeAnswer}, true
 }
 
-// DecodeUpstreamError accepts both the nested {"error":{...}} shape and the flat {"object":"error",...} one vLLM emits.
+// DecodeUpstreamError accepts every error shape a host in this fleet answers with. See README.md, "Cacheability".
 func DecodeUpstreamError(payload []byte) (UpstreamError, bool) {
 	event, ok := decodeScannedEvent(payload, false)
 	if !ok {
@@ -178,14 +180,43 @@ func DecodeUpstreamError(payload []byte) (UpstreamError, bool) {
 }
 
 func (event scannedError) upstreamError() (UpstreamError, bool) {
-	if event.Error != nil {
-		return UpstreamError{Type: event.Error.Type, Code: codeString(event.Error.Code), Message: event.Error.Message}, true
+	if failure, named := event.namedError(); named {
+		return failure, true
 	}
-	if event.Object == "error" && event.Message != "" {
+	if event.Object == "error" {
 		return UpstreamError{Type: event.Type, Code: codeString(event.Code), Message: event.Message}, true
 	}
 	return UpstreamError{}, false
 }
+
+// namedError reads an "error" field in both shapes the fleet sends it in. See README.md, "Cacheability".
+func (event scannedError) namedError() (UpstreamError, bool) {
+	raw := bytes.TrimSpace(event.Error)
+	if len(raw) == 0 || bytes.Equal(raw, jsonNullLiteral) {
+		return UpstreamError{}, false
+	}
+	if raw[0] == '"' {
+		var message string
+		if err := json.Unmarshal(raw, &message); err != nil || strings.TrimSpace(message) == "" {
+			return UpstreamError{}, false
+		}
+		return UpstreamError{Type: event.ErrorType, Code: codeString(event.Code), Message: message}, true
+	}
+	var named struct {
+		Type    string `json:"type"`
+		Code    any    `json:"code"`
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal(raw, &named); err != nil {
+		return UpstreamError{}, false
+	}
+	if named.Type == "" {
+		named.Type = event.ErrorType
+	}
+	return UpstreamError{Type: named.Type, Code: codeString(named.Code), Message: named.Message}, true
+}
+
+var jsonNullLiteral = []byte("null")
 
 // codeString treats a JSON null code as absent rather than the literal text "<nil>".
 func codeString(code any) string {

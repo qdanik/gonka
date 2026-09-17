@@ -73,6 +73,18 @@ func SSEEventTerminated(events []byte) bool {
 	return bytes.HasSuffix(events, sseEventSeparator) || bytes.HasSuffix(events, sseEventSeparatorCRLF)
 }
 
+// TrimSSEDone drops a terminating [DONE] so the gateway writes its own. See api/README.md, "Streaming the reply".
+func TrimSSEDone(events []byte) []byte {
+	if !HasSSEDone(events) {
+		return events
+	}
+	cut := bytes.LastIndex(events, sseDataParsePrefix)
+	if cut < 0 {
+		return events
+	}
+	return bytes.TrimRight(events[:cut], " \t\r\n")
+}
+
 // HasSSEDone is line-anchored, so a "[DONE]" inside a content delta is not read as the terminator.
 func HasSSEDone(events []byte) bool {
 	terminated := false

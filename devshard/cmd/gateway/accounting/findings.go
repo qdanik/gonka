@@ -247,7 +247,7 @@ func offRecord(key CounterKey) bool { return excused(key) || servedNoUser(key) }
 
 // A failure the host did not cause. Slowness that drove the client away is measured by its own findings.
 func excused(key CounterKey) bool {
-	if key.Terminal == TerminalClientCancelled {
+	if key.Terminal == TerminalClientCancelled || key.Terminal == engine.ReasonRequestTooLarge {
 		return true
 	}
 	switch key.TimeoutReason {

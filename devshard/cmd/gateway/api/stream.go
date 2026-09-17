@@ -9,6 +9,7 @@ import (
 
 	json "github.com/goccy/go-json"
 
+	"devshard/cmd/gateway/engine"
 	"devshard/cmd/gateway/filters"
 )
 
@@ -98,8 +99,8 @@ func (c *clientStream) Write(chunk []byte) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	if len(rewritten) > 0 {
-		if _, writeErr := c.emitLocked(rewritten); writeErr != nil {
+	if forwarded := filters.TrimSSEDone(rewritten); len(forwarded) > 0 {
+		if _, writeErr := c.emitLocked(forwarded); writeErr != nil {
 			return 0, writeErr
 		}
 	}
@@ -173,8 +174,8 @@ func (c *clientStream) Fail(cause error) error {
 
 func (c *clientStream) flushTailLocked() error {
 	tail, err := c.rewriter.Close()
-	if len(tail) > 0 {
-		if _, writeErr := c.emitLocked(tail); writeErr != nil {
+	if forwarded := filters.TrimSSEDone(tail); len(forwarded) > 0 {
+		if _, writeErr := c.emitLocked(forwarded); writeErr != nil {
 			return writeErr
 		}
 	}
@@ -230,10 +231,13 @@ func writeChatHeaders(header http.Header, requestID, escrowID, contentType strin
 	}
 }
 
-// statusForAssembled answers 502 for a substituted body: the host is upstream, and the body carries no status.
+// statusForAssembled chooses the status from the whole body. See README.md, "Streaming the reply".
 func statusForAssembled(body []byte) int {
 	if bytes.Equal(body, filters.TruncatedResponseBody) || bytes.Equal(body, filters.NoResponseDataBody) {
 		return http.StatusBadGateway
+	}
+	if failure, carried := filters.UpstreamFailure(body); carried {
+		return (&engine.HostApplicationError{Code: failure.Code, Type: failure.Type, Message: failure.Message}).HTTPStatus()
 	}
 	return http.StatusOK
 }

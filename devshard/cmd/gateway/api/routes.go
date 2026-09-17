@@ -190,7 +190,7 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request, escrowPin string) 
 		writeErrorFor(w, err)
 		return
 	}
-	if !transport.InferenceRequestFits(len(normalized.Body), nil) {
+	if transport.PromptWireBytes(len(normalized.Body))+hostCatchUpReserveBytes > transport.MaxHostRequestBytes {
 		writeErrorFor(w, tooLargeForHosts(len(normalized.Body)))
 		return
 	}

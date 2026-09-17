@@ -118,8 +118,8 @@ func (e *BlockedError) phaseName() string {
 func tooLargeForHosts(bodyBytes int) error {
 	return &filters.RejectError{
 		Status: http.StatusRequestEntityTooLarge,
-		Message: fmt.Sprintf("request body of %d bytes does not fit the %d-byte limit once encoded for a host",
-			bodyBytes, transport.MaxHostRequestBytes),
+		Message: fmt.Sprintf("request body of %d bytes does not fit the %d-byte limit once encoded for a host, which also carries this escrow's catch-up",
+			bodyBytes, transport.MaxHostRequestBytes-hostCatchUpReserveBytes),
 	}
 }
 

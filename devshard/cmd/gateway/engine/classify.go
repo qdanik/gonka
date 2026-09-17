@@ -43,10 +43,8 @@ func thinkingBudgetRoute(model string) bool {
 
 func classifyChunk(events []byte, thinkingBudget bool) chunkSignal {
 	signal := chunkSignal{chunkScan: scanChunk(events, thinkingBudget)}
-	if signal.ContentSource == "" {
-		if failure, ok := errorPayload(events); ok {
-			signal.Error = failure
-		}
+	if failure, ok := errorPayload(events); ok {
+		signal.Error = failure
 	}
 	return signal
 }

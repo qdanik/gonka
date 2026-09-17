@@ -155,6 +155,7 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 	if err != nil {
 		return nil, err
 	}
+	recorder.SetCreationEpoch(creationEpochOf(txClient, gatewayStore))
 
 	participants := limits.NewParticipantLimiter(limits.ParticipantConfigFromConfig(configuration), clock)
 	participants.SetNarrator(events)

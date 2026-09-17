@@ -135,6 +135,21 @@ func TestContentSource(t *testing.T) {
 	}
 }
 
+// A host can put its failure in the same payload as the content it was still producing.
+func TestAnErrorIsSeenEvenInAChunkThatAlsoCarriedContent(t *testing.T) {
+	t.Parallel()
+	chunk := []byte(`data: {"choices":[{"delta":{"content":"hi"}}],"error":{"message":"boom","type":"server_error"}}` + "\n\n")
+
+	signal := classifyChunk(chunk, false)
+
+	if signal.ContentSource == "" {
+		t.Fatal("the content in the chunk was not seen")
+	}
+	if signal.Error.Message != "boom" {
+		t.Fatalf("Error.Message = %q, want the failure that rode with the content", signal.Error.Message)
+	}
+}
+
 func TestErrorPayload(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
@@ -190,9 +205,35 @@ func TestErrorPayload(t *testing.T) {
 			wantType:    "server_error",
 			wantMessage: "boom",
 		},
+		{
+			name:        "error_as_a_bare_string",
+			body:        `data: {"error":"boom"}` + "\n\n",
+			wantSource:  "error",
+			wantMessage: "boom",
+		},
+		{
+			name:        "error_as_a_bare_string_with_a_sibling_type",
+			body:        `data: {"error":"Request failed during generation","error_type":"generation"}` + "\n\n",
+			wantSource:  "error.generation",
+			wantType:    "generation",
+			wantMessage: "Request failed during generation",
+		},
+		{
+			name:       "flat_shape_without_message",
+			body:       `data: {"object":"error","type":"BadRequestError"}` + "\n\n",
+			wantSource: "error.BadRequestError",
+			wantType:   "BadRequestError",
+		},
+		{
+			name:        "an_error_riding_with_content_in_one_payload",
+			body:        `data: {"choices":[{"delta":{"content":"hi"}}],"error":{"message":"boom"}}` + "\n\n",
+			wantSource:  "error",
+			wantMessage: "boom",
+		},
 		{name: "done_only", body: "data: [DONE]\n\n"},
 		{name: "content_not_error", body: `data: {"choices":[{"delta":{"content":"hi"}}]}` + "\n\n"},
-		{name: "flat_shape_without_message", body: `data: {"object":"error","type":"BadRequestError"}` + "\n\n"},
+		{name: "empty_error_string_is_not_a_failure", body: `data: {"error":""}` + "\n\n"},
+		{name: "null_error_is_not_a_failure", body: `data: {"error":null}` + "\n\n"},
 	}
 
 	for _, testCase := range cases {
@@ -645,7 +686,6 @@ func TestGarbageAndTruncatedInputClassifyWithoutPanicking(t *testing.T) {
 		{name: "truncated_tool_calls", body: `data: {"choices":[{"delta":{"tool_calls":[`},
 		{name: "nul_bytes", body: "data: \x00\x00\x00\n\n"},
 		{name: "choices_not_an_array", body: `data: {"choices":{"delta":{"content":"hi"}}}` + "\n\n"},
-		{name: "error_not_an_object", body: `data: {"error":"boom"}` + "\n\n"},
 		{name: "usage_not_an_object", body: `data: {"usage":7}` + "\n\n"},
 		{name: "tool_calls_not_an_array", body: `data: {"choices":[{"delta":{"tool_calls":{"id":"x"}}}]}` + "\n\n"},
 		{name: "deeply_quoted", body: `data: "just a string"` + "\n\n"},

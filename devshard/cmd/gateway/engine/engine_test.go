@@ -302,6 +302,12 @@ func TestOutcomeFailureNamesWhatTheClientLost(t *testing.T) {
 	streamedThenFailed := failedAttempt(TerminalUnexpectedEOF)
 	streamedThenFailed.ContentChunks = 4
 
+	streamedThenNamedWhy := failedAttempt(TerminalErrorStream)
+	streamedThenNamedWhy.ContentChunks = 4
+	streamedThenNamedWhy.ErrorSource = "error.server_error"
+	streamedThenNamedWhy.ErrorType = "server_error"
+	streamedThenNamedWhy.ErrorMessage = "backend exploded"
+
 	hostRefused := failedAttempt(TerminalErrorStream)
 	hostRefused.ErrorSource = "error.BadRequestError"
 	hostRefused.ErrorType = "BadRequestError"
@@ -331,6 +337,11 @@ func TestOutcomeFailureNamesWhatTheClientLost(t *testing.T) {
 			name:    "the_winner_broke_after_streaming",
 			outcome: failedRace(streamedThenFailed),
 			want:    ErrWinnerIncomplete,
+		},
+		{
+			name:    "the_winner_broke_after_streaming_and_named_why",
+			outcome: failedRace(streamedThenNamedWhy),
+			want:    &HostApplicationError{Type: "server_error", Message: "backend exploded"},
 		},
 		{
 			name:    "the_host_refused_in_words_the_client_must_see",

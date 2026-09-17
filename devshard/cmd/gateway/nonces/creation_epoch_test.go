@@ -1,0 +1,119 @@
+package nonces
+
+import (
+	"context"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"devshard/cmd/gateway/accounting"
+)
+
+func newEpochlessLedger(t *testing.T) *Recorder {
+	t.Helper()
+	service, err := accounting.NewService(accounting.Settings{
+		Now: func() time.Time { return time.Unix(0, 0).UTC() },
+	})
+	if err != nil {
+		t.Fatalf("NewService(): %v", err)
+	}
+	ledger := &Recorder{service: service}
+	t.Cleanup(func() { _ = ledger.service.Close() })
+	return ledger
+}
+
+// An escrow's epoch is the one the chain stamped on it, not the one this process happened to notice it in.
+// The ledger's store is dropped whenever its schema version moves, so "first seen" is a property of the last
+// deploy, and a long-lived escrow's whole chain-side history lands under whatever epoch that was.
+func TestAnEscrowIsStampedWithTheEpochItWasCreatedIn(t *testing.T) {
+	t.Parallel()
+	ledger := newEpochlessLedger(t)
+	ledger.SetCreationEpoch(func(context.Context, string) (uint64, bool) { return 100, true })
+
+	epoch, known := ledger.epochOf(context.Background(), "escrow-1")
+
+	if !known || epoch != 100 {
+		t.Fatalf("epochOf = %d (known %v), want the epoch the chain stamped", epoch, known)
+	}
+}
+
+// The resolver's authority is a chain query, and an escrow's creation epoch never moves, so it is asked once.
+func TestTheCreationEpochIsResolvedOncePerEscrow(t *testing.T) {
+	t.Parallel()
+	ledger := newEpochlessLedger(t)
+	var calls atomic.Int64
+	ledger.SetCreationEpoch(func(context.Context, string) (uint64, bool) {
+		calls.Add(1)
+		return 100, true
+	})
+
+	for range 5 {
+		if _, known := ledger.epochOf(context.Background(), "escrow-1"); !known {
+			t.Fatal("the resolver stopped answering for an escrow it had already resolved")
+		}
+	}
+
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("resolver calls = %d, want 1", got)
+	}
+}
+
+// Filing an escrow under a guessed epoch is worse than filing it under none: the guess is indistinguishable
+// from a fact downstream, and the pin defends it forever.
+func TestAnEscrowWhoseEpochIsUnknownIsNotStampedAtAll(t *testing.T) {
+	t.Parallel()
+
+	testCases := []struct {
+		name    string
+		resolve CreationEpochFunc
+	}{
+		{name: "no resolver is wired yet"},
+		{
+			name:    "the chain and the local record both refuse",
+			resolve: func(context.Context, string) (uint64, bool) { return 0, false },
+		},
+		{
+			name:    "the resolver answers a zero epoch",
+			resolve: func(context.Context, string) (uint64, bool) { return 0, true },
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			ledger := newEpochlessLedger(t)
+			if testCase.resolve != nil {
+				ledger.SetCreationEpoch(testCase.resolve)
+			}
+
+			epoch, known := ledger.epochOf(context.Background(), "escrow-1")
+
+			if known || epoch != 0 {
+				t.Fatalf("epochOf = %d (known %v), want no stamp at all", epoch, known)
+			}
+		})
+	}
+}
+
+// A refusal must not be remembered as an answer: the chain comes back, and the escrow is stamped then.
+func TestARefusedEpochIsAskedAgain(t *testing.T) {
+	t.Parallel()
+	ledger := newEpochlessLedger(t)
+	var answered atomic.Bool
+	ledger.SetCreationEpoch(func(context.Context, string) (uint64, bool) {
+		if !answered.Swap(true) {
+			return 0, false
+		}
+		return 100, true
+	})
+
+	if _, known := ledger.epochOf(context.Background(), "escrow-1"); known {
+		t.Fatal("a refusal was answered as a known epoch")
+	}
+
+	epoch, known := ledger.epochOf(context.Background(), "escrow-1")
+
+	if !known || epoch != 100 {
+		t.Fatalf("epochOf = %d (known %v), want the epoch the chain answered on the second ask", epoch, known)
+	}
+}

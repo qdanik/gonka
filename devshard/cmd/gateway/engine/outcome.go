@@ -43,6 +43,7 @@ const (
 	TerminalBurnEmpty
 	TerminalErrorStream
 	TerminalCapabilityRefused
+	TerminalRequestTooLarge
 	TerminalStalled
 	TerminalHardTimeout
 )
@@ -82,6 +83,7 @@ const (
 	ExemptStateDivergent
 	ExemptLongResponse
 	ExemptPoCSuppressed
+	ExemptRequestTooLarge
 	ExemptEmptyStreamNoWinner
 	ExemptNeverDispatched
 	ExemptClientCancelled
@@ -199,7 +201,7 @@ func (t Terminal) verdict() (limits.Verdict, bool) {
 	case TerminalStalled:
 		return limits.DecodeStalled, true
 	case TerminalEmptyStream, TerminalBurnEmpty, TerminalErrorStream, TerminalCapabilityRefused,
-		TerminalResponseTooLarge:
+		TerminalResponseTooLarge, TerminalRequestTooLarge:
 		return limits.ModelOutcome, true
 	}
 	return limits.ModelOutcome, false
@@ -247,6 +249,8 @@ func (t Terminal) reason() string {
 		return ReasonStreamTruncated
 	case TerminalUnexpectedEOF:
 		return ReasonUnexpectedEOF
+	case TerminalRequestTooLarge:
+		return ReasonRequestTooLarge
 	case TerminalResponseTooLarge:
 		return ReasonResponseTooLarge
 	case TerminalClientCancelled:
@@ -340,6 +344,8 @@ func (o RaceOutcome) sampleExemption(a AttemptOutcome) SampleExemption {
 		return ExemptLongResponse
 	case o.emptyStreamUnderPoCBypass(a):
 		return ExemptPoCSuppressed
+	case a.Terminal == TerminalRequestTooLarge:
+		return ExemptRequestTooLarge
 	case a.emptyStream() && !o.Succeeded:
 		return ExemptEmptyStreamNoWinner
 	// See race.md, "The exemption ladder".

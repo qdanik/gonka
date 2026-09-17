@@ -45,12 +45,18 @@ type DiffJournal interface {
 	DiffComposed(escrowID string, diff *types.Diff)
 }
 
+// CreationEpochFunc resolves the chain epoch an escrow was created in. See README.md, "The judgements it does make".
+type CreationEpochFunc func(ctx context.Context, escrowID string) (uint64, bool)
+
 type Recorder struct {
 	service  *accounting.Service
 	listener *http.Server
 	epochs   EpochSource
 
-	capability atomic.Pointer[accounting.CapabilityFunc]
+	capability    atomic.Pointer[accounting.CapabilityFunc]
+	creationEpoch atomic.Pointer[CreationEpochFunc]
+
+	pinnedEpochs sync.Map
 
 	observing sync.Map
 }
@@ -75,6 +81,30 @@ func (n *Recorder) SetCapability(lookup accounting.CapabilityFunc) {
 	if n != nil && lookup != nil {
 		n.capability.Store(&lookup)
 	}
+}
+
+// SetCreationEpoch wires the resolver the sweep stamps escrows with. See README.md, "The judgements it does make".
+func (n *Recorder) SetCreationEpoch(resolve CreationEpochFunc) {
+	if n != nil && resolve != nil {
+		n.creationEpoch.Store(&resolve)
+	}
+}
+
+// epochOf answers the epoch an escrow was created in. See README.md, "The judgements it does make".
+func (n *Recorder) epochOf(ctx context.Context, escrowID string) (uint64, bool) {
+	if pinned, memoised := n.pinnedEpochs.Load(escrowID); memoised {
+		return pinned.(uint64), true
+	}
+	resolve := n.creationEpoch.Load()
+	if resolve == nil {
+		return 0, false
+	}
+	epoch, resolved := (*resolve)(ctx, escrowID)
+	if !resolved || epoch == 0 {
+		return 0, false
+	}
+	n.pinnedEpochs.Store(escrowID, epoch)
+	return epoch, true
 }
 
 func (n *Recorder) hostCapability(participant, model string) accounting.HostCapability {
@@ -171,8 +201,6 @@ func (n *Recorder) sweepUntil(ctx context.Context, escrows EscrowSource, diffs D
 }
 
 func (n *Recorder) sweep(ctx context.Context, escrows EscrowSource, diffs DiffJournal) {
-	// The epoch stamped here is the one the escrow was first seen in. See README.md, "The judgements it does make".
-	epoch, epochErr := n.currentEpoch(ctx)
 	states := escrows.Snapshot()
 	published := make(map[string]struct{}, len(states))
 	for _, state := range states {
@@ -182,7 +210,7 @@ func (n *Recorder) sweep(ctx context.Context, escrows EscrowSource, diffs DiffJo
 		}
 		published[state.ID] = struct{}{}
 		escrowState := session.SnapshotState()
-		if epochErr == nil {
+		if epoch, known := n.epochOf(ctx, state.ID); known {
 			n.report(n.service.Book.OpenEscrow(accounting.EscrowMetadata{
 				EscrowID:      state.ID,
 				Model:         state.Model,

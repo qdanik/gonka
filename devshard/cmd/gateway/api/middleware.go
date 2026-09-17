@@ -17,9 +17,12 @@ import (
 )
 
 const (
-	chatIngestLimit  = filters.MaxBodyBytes
-	adminIngestLimit = 64 << 10
-	bodyReadTimeout  = 30 * time.Second
+	chatIngestLimit = filters.MaxBodyBytes
+
+	// See README.md, "Streaming the reply".
+	hostCatchUpReserveBytes = 1 << 20
+	adminIngestLimit        = 64 << 10
+	bodyReadTimeout         = 30 * time.Second
 
 	bodyReadStart = 16 << 10
 )

@@ -10,6 +10,8 @@ import (
 const (
 	completionObject = "chat.completion"
 
+	errorObject = "error"
+
 	// The three bounds a host must not exceed. See README.md, "Folding a stream into one body".
 	maxIndexedElements = 256
 	maxTopLevelFields  = 64
@@ -115,7 +117,9 @@ func encodeCompletion(merged map[string]any) []byte {
 
 // finalizeCompletion rewrites the accumulator in place, so it runs once at the end, never as part of measuring it.
 func finalizeCompletion(merged map[string]any) {
-	merged["object"] = completionObject
+	if merged["object"] != errorObject {
+		merged["object"] = completionObject
+	}
 	choices, _ := merged["choices"].([]any)
 	for _, entry := range choices {
 		choice, isObject := entry.(map[string]any)

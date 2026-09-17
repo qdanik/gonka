@@ -180,8 +180,9 @@ func (g *GRPCChain) Escrow(ctx context.Context, escrowID uint64) (EscrowInfo, bo
 		return EscrowInfo{}, false, nil
 	}
 	return EscrowInfo{
-		EscrowID: fmt.Sprintf("%d", escrowID),
-		Balance:  response.GetEscrow().GetAmount(),
+		EscrowID:   fmt.Sprintf("%d", escrowID),
+		Balance:    response.GetEscrow().GetAmount(),
+		EpochIndex: response.GetEscrow().GetEpochIndex(),
 	}, true, nil
 }
 

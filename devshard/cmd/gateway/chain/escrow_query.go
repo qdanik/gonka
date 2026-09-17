@@ -7,10 +7,11 @@ import (
 	"strings"
 )
 
-// EscrowInfo is the escrow as the gateway reads it: the id asked about, and the balance that decides whether it can still pay.
+// EscrowInfo is the escrow as the gateway reads it. See README.md, "The gRPC transport".
 type EscrowInfo struct {
-	EscrowID string
-	Balance  uint64
+	EscrowID   string
+	Balance    uint64
+	EpochIndex uint64
 }
 
 // GetEscrow reports found=false only when the chain says the escrow is absent. See README.md, "The gRPC transport".

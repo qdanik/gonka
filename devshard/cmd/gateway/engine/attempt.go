@@ -320,6 +320,8 @@ func classifyDispatchError(ctx context.Context, err error) Terminal {
 	}
 
 	switch {
+	case errors.Is(err, transport.ErrHostRequestTooLarge):
+		return TerminalRequestTooLarge
 	case errors.Is(err, transport.ErrSSEEventTooLarge), errors.Is(err, transport.ErrResponseBodyTooLarge):
 		return TerminalResponseTooLarge
 	case errors.Is(err, transport.ErrSSEStreamTruncated):

@@ -100,11 +100,14 @@ The "always stripped" list is **derived** from the two above, not written out a 
 | --- | --- | --- |
 | `chatIngestLimit` | 10 MiB | one request body as it arrives |
 | `transport.MaxHostRequestBytes` | 10 MiB | one request body as a host receives it |
+| `hostCatchUpReserveBytes` | 1 MiB | the room inside that body kept for the escrow's catch-up |
 | `MaxStreamCarryBytes` | 32 MiB | one unterminated SSE event |
 | `maxBufferedResponseBytes` | 32 MiB | one reply being assembled |
 | `max_buffered_response_bytes` | 512 MiB | **every** reply being assembled, at once |
 
 The two 10 MiB bounds are not the same bound. A prompt travels base64 inside the host-bound JSON, so it costs four bytes for every three, and the catch-up diffs ride the same body. A request inside the ingest cap can therefore be past what the public proxy, the versiond router and a host accept — the shape [issue #1658](https://github.com/gonka-ai/gonka/issues/1658) reported. Step 3 refuses it before a nonce is spent. When the catch-up backlog is what would not fit, it is drained ahead of the request instead of riding it ([`user/session.go`](../../../user/session.go), `drainOversizedCatchUp`), and each drained chunk is cut by wire bytes rather than by diff count — a chunk a host refuses whole leaves its sync cursor where it was, so the next attempt rebuilds the same backlog, which is the loop [issue #1660](https://github.com/gonka-ai/gonka/issues/1660) describes. Only a body that still does not fit is refused at the send with `transport.ErrHostRequestTooLarge`.
+
+**Step 3 reserves room for the catch-up rather than measuring the prompt alone.** The diffs are the gateway's own state and a client cannot be refused for them, so the check asks whether the prompt fits inside `MaxHostRequestBytes` *less* `hostCatchUpReserveBytes`. Measuring the prompt against the whole budget admits a body that leaves nothing for the backlog, and the refusal then lands at the send — after the nonce is committed, which spends the escrow's reserve on nobody and used to be charged to the host as a transport fault ([race.md](./race.md), "The exemption ladder"). The reserve is a trade, and the numbers are worth stating: the prompt ceiling falls from about 7.86 MB to about 7.07 MB, which covers an ordinary backlog of a few thousand small diffs, while closing the hazard outright would mean reserving the full 4 MiB a backlog may ride inline and giving up roughly 40% of the usable prompt. What is left over is now refused correctly rather than blamed on a host.
 
 The last one exists because the request limiter does not stand in for it: with `max_concurrent_requests` unset the cap comes from network weight and admits thousands at a time. Past it, a request is refused 503; `devshard_gateway_buffered_response_bytes` is what is held right now.
 
