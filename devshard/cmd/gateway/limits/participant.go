@@ -1,15 +1,10 @@
 package limits
 
 import (
-	"cmp"
 	"maps"
-	"math"
 	"math/rand"
-	"slices"
 	"sync"
 	"time"
-
-	"devshard/cmd/gateway/internal/safemath"
 )
 
 type Verdict int
@@ -27,137 +22,6 @@ const (
 	EmptyAnswerLeftOpen
 	DecodeStalled
 ) // See README.md, "What blames which window".
-
-// WindowBounds is one congestion window's floor, starting size and additive step, in tokens.
-type WindowBounds struct {
-	Min     int64
-	Initial int64
-	Step    int64
-}
-
-// ModelWindows is one model's two congestion windows.
-type ModelWindows struct {
-	Input  WindowBounds
-	Output WindowBounds
-}
-
-// RequestBounds is one congestion window's floor and starting size, counted in requests.
-type RequestBounds struct {
-	Min     int64
-	Initial int64
-}
-
-// WindowPricing turns a model into the two windows a host gets for it. See capacity.md, "The participant limiter: IOCW".
-type WindowPricing struct {
-	Input                     RequestBounds
-	Output                    RequestBounds
-	ConcurrencyPer10000Weight float64
-	FallbackContextTokens     int64
-	FallbackOutputTokens      int64
-	ContextTokensByModel      map[string]int64
-	OutputTokensByModel       map[string]int64
-}
-
-// ParticipantConfig's IdleEviction of zero keeps every pair for the life of the process.
-type ParticipantConfig struct {
-	Pricing       WindowPricing
-	Factors       CongestionFactors
-	Slack         float64
-	AfterFailures int64
-	BaseOpen      time.Duration
-	MaxOpen       time.Duration
-	IdleEviction  time.Duration
-}
-
-func boundsIn(requests RequestBounds, requestTokens int64) WindowBounds {
-	return WindowBounds{
-		Min:     safemath.MulSaturating(requests.Min, requestTokens),
-		Initial: safemath.MulSaturating(requests.Initial, requestTokens),
-		Step:    requestTokens,
-	}
-}
-
-func pinnedOr(pinned map[string]int64, model string, fallback int64) int64 {
-	if tokens, named := pinned[model]; named && tokens > 0 {
-		return tokens
-	}
-	return fallback
-}
-
-// windowsForLocked prices one host's model. See capacity.md, "The participant limiter: IOCW".
-func (l *ParticipantLimiter) windowsForLocked(participant, model string) ModelWindows {
-	pricing := l.cfg.Pricing
-	contextTokens := pinnedOr(pricing.ContextTokensByModel, model, pinnedOr(l.observedContext, model, pricing.FallbackContextTokens))
-	outputTokens := pinnedOr(pricing.OutputTokensByModel, model, pricing.FallbackOutputTokens)
-	concurrency := earnedConcurrency(pricing.ConcurrencyPer10000Weight, l.observedWeights[model][participant])
-	if concurrency == 0 {
-		return ModelWindows{
-			Input:  boundsIn(pricing.Input, contextTokens),
-			Output: boundsIn(pricing.Output, outputTokens),
-		}
-	}
-	inputFloor := safemath.MulSaturating(concurrency, contextTokens)
-	outputFloor := safemath.MulSaturating(concurrency, outputTokens)
-	return ModelWindows{
-		Input:  WindowBounds{Min: inputFloor, Initial: safemath.MulSaturating(inputFloor, 2), Step: contextTokens},
-		Output: WindowBounds{Min: outputFloor, Initial: outputFloor, Step: outputTokens},
-	}
-}
-
-// earnedConcurrency is how many requests at full price the chain's weight buys a host, never fewer than one.
-func earnedConcurrency(per10000, weight float64) int64 {
-	if per10000 <= 0 || weight <= 0 {
-		return 0
-	}
-	return max(int64(weight*per10000/10000), 1)
-}
-
-type key struct {
-	participant string
-	model       string
-}
-
-// window is one congestion window and what is in flight against it. Peak is the high-water mark since the last adjustment.
-type window struct {
-	tokens   float64
-	inflight int64
-	peak     int64
-}
-
-func fits(inflight, cost int64, window float64) bool {
-	return float64(inflight)+float64(cost) <= window
-}
-
-func (w *window) take(tokens int64) {
-	w.inflight = safemath.AddSaturating(w.inflight, tokens)
-	if w.inflight > w.peak {
-		w.peak = w.inflight
-	}
-}
-
-func (w *window) give(tokens int64) {
-	w.inflight = max(w.inflight-tokens, 0)
-}
-
-func (w *window) reopen(tokens int64) {
-	w.tokens = float64(tokens)
-	w.peak = w.inflight
-}
-
-type hostState struct {
-	bounds                  ModelWindows
-	input                   window
-	output                  window
-	consecutiveCutoffFaults int
-	openUntil               time.Time
-	backoffCount            int
-	halfOpen                bool
-	lastUsed                time.Time
-}
-
-func (s *hostState) idle() bool {
-	return s.input.inflight == 0 && s.output.inflight == 0
-}
 
 // cutoffNarrator is satisfied by *journal.Journal; it is called under the limiter's lock, so it must queue and return. See README.md, "When a host stops taking work".
 type cutoffNarrator interface {
@@ -235,37 +99,6 @@ func (l *ParticipantLimiter) ObserveWeights(byModel map[string]map[string]float6
 		state.input.tokens = min(max(state.input.tokens, float64(state.bounds.Input.Min)), float64(state.bounds.Input.Initial))
 		state.output.tokens = min(max(state.output.tokens, float64(state.bounds.Output.Min)), float64(state.bounds.Output.Initial))
 	}
-}
-
-// ModelConcurrency is how many requests at full price the hosts of one model can take, "What a host's weight buys".
-func (l *ParticipantLimiter) ModelConcurrency(model string) int64 {
-	if l == nil {
-		return 0
-	}
-	l.mu.Lock()
-	defer l.mu.Unlock()
-
-	now := l.now()
-	var requests int64
-	for tracked, state := range l.states {
-		if tracked.model != model || cutoffState(state, now) == CutoffOpen || state.bounds.Output.Step <= 0 {
-			continue
-		}
-		requests = safemath.AddSaturating(requests, int64(state.output.tokens)/state.bounds.Output.Step)
-	}
-	return requests
-}
-
-// WindowFor answers one pair without walking every tracked one, for a reader asking about a single host.
-func (l *ParticipantLimiter) WindowFor(participant, model string) (HostWindow, bool) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-
-	state, tracked := l.states[key{participant: participant, model: model}]
-	if !tracked {
-		return HostWindow{}, false
-	}
-	return l.windowOf(key{participant: participant, model: model}, state, l.now()), true
 }
 
 // ObserveModels takes the context length governance reports for each model. See capacity.md, "The participant limiter: IOCW".
@@ -389,80 +222,6 @@ func (l *ParticipantLimiter) Admits(participant, model string) Admission {
 	return admissionLocked(state, smallestRequest, l.now())
 }
 
-// HostWindow is one tracked participant/model pair as a reader sees it.
-type HostWindow struct {
-	Participant          string
-	Model                string
-	InputWindowTokens    float64
-	OutputWindowTokens   float64
-	InflightInputTokens  int64
-	InflightOutputTokens int64
-	Cutoff               CutoffState
-	BackoffCount         int
-	Available            bool
-}
-
-func (l *ParticipantLimiter) windowOf(tracked key, state *hostState, now time.Time) HostWindow {
-	return HostWindow{
-		Participant:          tracked.participant,
-		Model:                tracked.model,
-		InputWindowTokens:    state.input.tokens,
-		OutputWindowTokens:   state.output.tokens,
-		InflightInputTokens:  state.input.inflight,
-		InflightOutputTokens: state.output.inflight,
-		Cutoff:               cutoffState(state, now),
-		BackoffCount:         state.backoffCount,
-		Available:            admissionLocked(state, smallestRequest, now) == AdmissionOpen,
-	}
-}
-
-// Snapshot returns every tracked pair in participant/model order, copied under one lock and sorted after it releases.
-func (l *ParticipantLimiter) Snapshot() []HostWindow {
-	l.mu.Lock()
-	now := l.now()
-	windows := make([]HostWindow, 0, len(l.states))
-	for tracked, state := range l.states {
-		windows = append(windows, l.windowOf(tracked, state, now))
-	}
-	l.mu.Unlock()
-
-	slices.SortFunc(windows, func(first, second HostWindow) int {
-		return cmp.Or(cmp.Compare(first.Participant, second.Participant), cmp.Compare(first.Model, second.Model))
-	})
-	return windows
-}
-
-func cutoffState(state *hostState, now time.Time) CutoffState {
-	switch {
-	case now.Before(state.openUntil):
-		return CutoffOpen
-	case state.halfOpen || !state.openUntil.IsZero():
-		return CutoffHalfOpen
-	}
-	return CutoffClosed
-}
-
-// ClearQuarantine reopens one participant's cutoffs. See capacity.md, "The participant limiter: IOCW".
-func (l *ParticipantLimiter) ClearQuarantine(participant string) bool {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-
-	cleared := false
-	for tracked, state := range l.states {
-		if tracked.participant != participant {
-			continue
-		}
-		state.input.reopen(state.bounds.Input.Initial)
-		state.output.reopen(state.bounds.Output.Initial)
-		state.consecutiveCutoffFaults = 0
-		state.openUntil = time.Time{}
-		state.backoffCount = 0
-		state.halfOpen = false
-		cleared = true
-	}
-	return cleared
-}
-
 // See capacity.md, "Nothing here is persisted".
 func (l *ParticipantLimiter) forgetIdleLocked(now time.Time) {
 	idleFor := l.cfg.IdleEviction
@@ -473,104 +232,6 @@ func (l *ParticipantLimiter) forgetIdleLocked(now time.Time) {
 	for tracked, state := range l.states {
 		if state.idle() && !now.Before(state.openUntil) && now.Sub(state.lastUsed) > idleFor {
 			delete(l.states, tracked)
-		}
-	}
-}
-
-func cutoffReason(halfOpen bool) string {
-	if halfOpen {
-		return cutoffReasonProbeFailed
-	}
-	return cutoffReasonConsecutiveFaults
-}
-
-// OnResult applies one finished attempt to the host's windows and its cutoff.
-func (l *ParticipantLimiter) OnResult(result Result) {
-	answer := responseFor(result.Verdict)
-	if answer.inert() {
-		return
-	}
-
-	l.mu.Lock()
-	defer l.mu.Unlock()
-
-	state := l.stateLocked(key{participant: result.Participant, model: result.Model})
-	now := l.now()
-	state.lastUsed = now
-
-	narrowingTier, blamed := answer.tier, answer.dimension
-	if narrowingTier == tierNone && result.Verdict == Success {
-		if congested := result.Pressure.congestedDimension(l.cfg.Slack); congested != dimensionNone {
-			narrowingTier, blamed = tierSoft, congested
-		} else {
-			l.growLocked(state, result.Carried)
-		}
-	}
-	if by := l.cfg.Factors.narrowingFor(narrowingTier, blamed); by.moves() {
-		l.narrowLocked(state, by)
-	}
-	l.applyBreakerLocked(state, answer.breaker, result.Participant, result.Model, now)
-}
-
-// growLocked widens each window whose peak earned it. See README.md, "Additive increase".
-func (l *ParticipantLimiter) growLocked(state *hostState, carried TokenCost) {
-	if float64(state.input.peak) >= state.input.tokens/2 {
-		state.input.tokens = grownBy(state.input.tokens, carried.Input, float64(state.bounds.Input.Step))
-		state.input.peak = state.input.inflight
-	}
-	if float64(state.output.peak) >= state.output.tokens/2 {
-		state.output.tokens = grownBy(state.output.tokens, carried.Output, float64(state.bounds.Output.Step))
-		state.output.peak = state.output.inflight
-	}
-}
-
-// narrowLocked applies one signal's factors to the two windows.
-func (l *ParticipantLimiter) narrowLocked(state *hostState, by narrowing) {
-	narrowWindow(&state.input, by.input, state.bounds.Input.Min)
-	narrowWindow(&state.output, by.output, state.bounds.Output.Min)
-}
-
-// narrowWindow ends slow start and restarts the peak, for a window it actually moved. See README.md, "Additive increase".
-func narrowWindow(w *window, factor float64, floor int64) {
-	if factor == 1 {
-		return
-	}
-	w.tokens = narrowedTo(w.tokens, factor, float64(floor))
-	w.peak = w.inflight
-}
-
-func (l *ParticipantLimiter) applyBreakerLocked(state *hostState, effect breakerEffect, participant, model string, now time.Time) {
-	switch effect {
-	case breakerClears:
-		state.consecutiveCutoffFaults = 0
-	case breakerRecovers:
-		state.consecutiveCutoffFaults = 0
-		if !state.halfOpen {
-			return
-		}
-		state.halfOpen = false
-		state.openUntil = time.Time{}
-		if state.backoffCount > 0 {
-			state.backoffCount--
-		}
-		if l.narrator != nil {
-			l.narrator.HostCutOffLifted(participant, model, state.backoffCount)
-		}
-	case breakerCounts:
-		state.consecutiveCutoffFaults++
-		if state.consecutiveCutoffFaults < int(l.cfg.AfterFailures) && !state.halfOpen {
-			return
-		}
-		capped := min(time.Duration(float64(l.cfg.BaseOpen)*math.Pow(1.6, float64(state.backoffCount))), l.cfg.MaxOpen)
-		state.openUntil = now.Add(capped + l.jitter(capped))
-		if capped < l.cfg.MaxOpen {
-			state.backoffCount++
-		}
-		reason := cutoffReason(state.halfOpen)
-		state.halfOpen = false
-		state.consecutiveCutoffFaults = 0
-		if l.narrator != nil {
-			l.narrator.HostCutOff(participant, model, reason, state.backoffCount, state.openUntil.Sub(now))
 		}
 	}
 }

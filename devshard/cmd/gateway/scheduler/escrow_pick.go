@@ -3,7 +3,6 @@ package scheduler
 import (
 	"fmt"
 	"math"
-	"slices"
 
 	"devshard/cmd/gateway/chain"
 	"devshard/types"
@@ -190,23 +189,4 @@ func safeMul(left, right uint64) (uint64, bool) {
 	}
 	product := left * right
 	return product, product/left == right
-}
-
-// reachableByAllowlist is built once per pick, and an empty allowlist skips the walk entirely.
-func reachableByAllowlist(allowlist []string) func(Escrow) bool {
-	if len(allowlist) == 0 {
-		return func(Escrow) bool { return true }
-	}
-	allowed := allowedParticipants(allowlist)
-	return func(candidate Escrow) bool {
-		return candidate.Session != nil &&
-			slices.ContainsFunc(candidate.Session.ParticipantKeys(), allowed)
-	}
-}
-
-func (s *Scheduler) participantAllowlist() []string {
-	if s.settings == nil {
-		return nil
-	}
-	return s.settings.Load().Scheduler.ParticipantAllowlist
 }

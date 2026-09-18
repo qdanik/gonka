@@ -1,0 +1,146 @@
+package accounting
+
+import (
+	"database/sql"
+	"fmt"
+	"strconv"
+)
+
+// The tables mirror the in-memory shape; a write empties and refills them in one transaction.
+const schema = `
+CREATE TABLE IF NOT EXISTS accounting_meta (
+	key   TEXT PRIMARY KEY,
+	value TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS accounting_escrows (
+	escrow_id      TEXT PRIMARY KEY,
+	model          TEXT    NOT NULL,
+	creation_epoch INTEGER NOT NULL,
+	latest_nonce   INTEGER NOT NULL,
+	retired        INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS accounting_slots (
+	escrow_id         TEXT    NOT NULL,
+	slot_id           INTEGER NOT NULL,
+	validator_address TEXT    NOT NULL,
+	PRIMARY KEY (escrow_id, slot_id)
+);
+CREATE TABLE IF NOT EXISTS accounting_host_stats (
+	escrow_id             TEXT    NOT NULL,
+	slot_id               INTEGER NOT NULL,
+	missed                INTEGER NOT NULL,
+	invalid               INTEGER NOT NULL,
+	cost                  INTEGER NOT NULL,
+	required_validations  INTEGER NOT NULL,
+	completed_validations INTEGER NOT NULL,
+	PRIMARY KEY (escrow_id, slot_id)
+);
+CREATE TABLE IF NOT EXISTS accounting_slot_activity (
+	escrow_id        TEXT    NOT NULL,
+	slot_id          INTEGER NOT NULL,
+	challenged       INTEGER NOT NULL,
+	validations      INTEGER NOT NULL,
+	timeouts_applied INTEGER NOT NULL,
+	rejected         INTEGER NOT NULL,
+	PRIMARY KEY (escrow_id, slot_id)
+);
+CREATE TABLE IF NOT EXISTS accounting_money (
+	escrow_id        TEXT    NOT NULL,
+	slot_id          INTEGER NOT NULL,
+	reserved_cost    INTEGER NOT NULL,
+	actual_cost      INTEGER NOT NULL,
+	refunded_cost    INTEGER NOT NULL,
+	estimated_input  INTEGER NOT NULL,
+	estimated_error  INTEGER NOT NULL,
+	max_tokens       INTEGER NOT NULL,
+	input_tokens     INTEGER NOT NULL,
+	counted_nonces   INTEGER NOT NULL,
+	output_tokens    INTEGER NOT NULL,
+	PRIMARY KEY (escrow_id, slot_id)
+);
+CREATE TABLE IF NOT EXISTS accounting_counters (
+	escrow_id      TEXT    NOT NULL,
+	slot_id        INTEGER NOT NULL,
+	disposition    TEXT    NOT NULL,
+	ghost_reason   TEXT    NOT NULL,
+	timeout_kind   TEXT    NOT NULL,
+	timeout_action TEXT    NOT NULL,
+	timeout_reason TEXT    NOT NULL,
+	terminal       TEXT    NOT NULL,
+	phase          TEXT    NOT NULL,
+	slow_receipt     INTEGER NOT NULL,
+	slow_chunk       INTEGER NOT NULL,
+	clock_drifted    INTEGER NOT NULL,
+	slow_decode      INTEGER NOT NULL,
+	logprobs_decoded INTEGER NOT NULL,
+	count            INTEGER NOT NULL,
+	PRIMARY KEY (escrow_id, slot_id, disposition, ghost_reason, timeout_kind, timeout_action, timeout_reason,
+	             terminal, phase, slow_receipt, slow_chunk, clock_drifted, slow_decode, logprobs_decoded)
+);
+CREATE TABLE IF NOT EXISTS accounting_nonces (
+	escrow_id      TEXT    NOT NULL,
+	nonce          INTEGER NOT NULL,
+	sent           INTEGER NOT NULL,
+	acknowledged   INTEGER NOT NULL,
+	usage          TEXT    NOT NULL,
+	timeout_kind   TEXT    NOT NULL,
+	timeout_action TEXT    NOT NULL,
+	timeout_reason TEXT    NOT NULL,
+	terminal       TEXT    NOT NULL,
+	phase          TEXT    NOT NULL,
+	slow_receipt     INTEGER NOT NULL,
+	slow_chunk       INTEGER NOT NULL,
+	clock_drifted    INTEGER NOT NULL,
+	slow_decode      INTEGER NOT NULL,
+	logprobs_decoded INTEGER NOT NULL,
+	PRIMARY KEY (escrow_id, nonce)
+);
+`
+
+var clearedTables = []string{
+	"accounting_nonces",
+	"accounting_counters",
+	"accounting_host_stats",
+	"accounting_slot_activity",
+	"accounting_money",
+	"accounting_slots",
+	"accounting_escrows",
+	"accounting_meta",
+}
+
+const (
+	metaSchemaVersion = "schema_version"
+	metaUpdatedAt     = "updated_at"
+)
+
+func discardOutdatedSchema(db *sql.DB) error {
+	if currentSchema(db) {
+		return nil
+	}
+	for _, table := range clearedTables {
+		if _, err := db.Exec(`DROP TABLE IF EXISTS ` + table); err != nil {
+			return fmt.Errorf("dropping %s of an accounting store this build cannot write: %w", table, err)
+		}
+	}
+	return nil
+}
+
+// An unreadable version says nothing about the tables beside it, so they are discarded rather than trusted.
+func currentSchema(db *sql.DB) bool {
+	var stored string
+	if err := db.QueryRow(`SELECT value FROM accounting_meta WHERE key = ?`, metaSchemaVersion).Scan(&stored); err != nil {
+		return false
+	}
+	if stored != strconv.Itoa(SchemaVersion) {
+		return false
+	}
+	for _, probe := range []string{
+		`SELECT terminal, phase, slow_receipt, slow_chunk, clock_drifted, slow_decode, logprobs_decoded FROM accounting_counters LIMIT 0`,
+		`SELECT terminal, phase, slow_receipt, slow_chunk, clock_drifted, slow_decode, logprobs_decoded FROM accounting_nonces LIMIT 0`,
+	} {
+		if _, err := db.Exec(probe); err != nil {
+			return false
+		}
+	}
+	return true
+}

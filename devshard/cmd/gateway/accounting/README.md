@@ -7,7 +7,7 @@ Every nonce the gateway commits costs the escrow money whether or not anyone was
 - **`Book`** — the ledger. Facts go in (`RecordRace`, `RecordGhost`, `RecordTimeout`, `RecordAppliedTimeout`, `RecordInvalidVerdict`, `ObserveHostStats`, …), and each nonce lands in exactly one counter keyed by `CounterKey`: how it ended, why, and the timing flags that were true of it.
 - **Findings** (`findings.go`) — the operator-facing verdicts derived from those counters: a ratio, a threshold, a severity. A finding is a claim about a host, so it fires only past `findingMinimumVolume` nonces.
 - **A read API** (`http.go`) — epochs, participants, one participant, and the protocol event feed (`events.go`), which maps a chain-applied verdict back to the nonce and the client request that spent it.
-- **Persistence** (`store.go`, `sqlstore.go`) — a periodic snapshot so a restart does not lose the epoch.
+- **Persistence** (`store.go`, `sqlstore.go`, `sqlschema.go`, `sqlsave.go`, `sqlload.go`) — a periodic snapshot so a restart does not lose the epoch.
 
 ## What it does not own
 

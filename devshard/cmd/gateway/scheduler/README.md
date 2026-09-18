@@ -4,7 +4,7 @@ A chat request needs a nonce, and a nonce is bound to a host by `nonce % groupSi
 
 ## What it owns
 
-- **Escrow choice** (`scheduler.go`, `escrow_pick.go`) — a load score over the live escrows, scaled by the chain's own host weights and carrying the burns each escrow's nonce cursor is about to cost.
+- **Escrow choice** (`request_pick.go`, `escrow_pick.go`) — a load score over the live escrows, scaled by the chain's own host weights and carrying the burns each escrow's nonce cursor is about to cost.
 - **One actor per escrow** (`dispatcher.go`, `dispatcher_queue.go`) — the only goroutine that advances that escrow's nonce stream, so two requests can never take the same nonce.
 - **The match decision** (`match.go`, `decision.go`) — for the nonce just offered, either serve a waiting request, hold it briefly for a compatible one, burn it, or decline.
 - **Burns** (`ghost.go`) — a nonce that will serve nobody, named by the reason it was burned, because an operator reads the reason to decide what to do.

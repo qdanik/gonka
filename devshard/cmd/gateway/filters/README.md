@@ -8,11 +8,11 @@ Everything a client sends is normalised here before it reaches a host, and every
 - `table.go` — one rule table, one row per top-level chat-completion parameter, each naming the stage it runs in and what it does. A parameter absent from the table is rejected: the gateway does not forward what it has not been taught.
 - `profiles.go`, `profile_*.go` — per-model divergences, kept next to the rule they change rather than scattered through it.
 - `rules_*.go` — the rule bodies: types, ranges, arrays, schemas, token budgets, reasoning controls.
-- `messages.go` — message hygiene, which is separate from parameter rules because a message is a nested document.
+- `messages.go`, `messages_validate.go` — message hygiene, which is separate from parameter rules because a message is a nested document: one file rewrites the array, the other decides whether what is left is admissible.
 
 **The response side.**
 - `fold.go` — `BodyFolder` folds the host's SSE stream into one JSON body **as chunks arrive**, stripping the fields the client must not see before merging rather than after. A client that did not ask for logprobs never accumulates them.
-- `stream.go` — the rewriter for a streaming client, which does the same strip per event on the way out.
+- `stream.go`, `sse.go`, `stream_chunks.go` — the rewriter for a streaming client, which does the same strip per event on the way out, over the SSE framing primitives and the fold that serves a whole completion as chunks.
 - `response.go` — which fields are stripped, and which a client can ask back.
 - `cacheable.go` — the one walk that decides whether a reply may be stored: what it failed with, and whether its answer finished.
 - `finish.go` — whether every choice a reply started also finished, which is what that walk asks besides the error.

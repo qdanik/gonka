@@ -7,8 +7,6 @@ import (
 	"sync"
 	"time"
 
-	"devshard/cmd/gateway/engine"
-	"devshard/cmd/gateway/filters"
 	"devshard/types"
 )
 
@@ -36,53 +34,6 @@ type escrowLedger struct {
 	produced    map[uint32]uint64
 	events      []protocolEvent
 	retired     bool
-}
-
-// nonceCost is one nonce's money as the escrow recorded it. See docs/accounting.md, "Money and tokens".
-type nonceCost struct {
-	reserved    uint64
-	actual      uint64
-	inputLength uint64
-	maxTokens   uint64
-	input       uint64
-	output      uint64
-	status      types.InferenceStatus
-}
-
-// SlotMoney is one slot's share of the escrow's money. See docs/accounting.md, "Money and tokens".
-type SlotMoney struct {
-	Reserved       uint64 `json:"reserved_cost,omitempty"`
-	Actual         uint64 `json:"actual_cost,omitempty"`
-	Refunded       uint64 `json:"refunded_cost,omitempty"`
-	EstimatedInput uint64 `json:"estimated_input_tokens,omitempty"`
-	EstimatedError uint64 `json:"estimated_error_tokens,omitempty"`
-	MaxTokens      uint64 `json:"max_tokens,omitempty"`
-	Input          uint64 `json:"input_tokens,omitempty"`
-	CountedNonces  uint64 `json:"counted_nonces,omitempty"`
-}
-
-func (m *SlotMoney) add(other SlotMoney) {
-	m.Reserved += other.Reserved
-	m.Actual += other.Actual
-	m.Refunded += other.Refunded
-	m.EstimatedInput += other.EstimatedInput
-	m.EstimatedError += other.EstimatedError
-	m.MaxTokens += other.MaxTokens
-	m.Input += other.Input
-	m.CountedNonces += other.CountedNonces
-}
-
-func (c nonceCost) refunded() uint64 {
-	switch c.status {
-	case types.StatusTimedOut, types.StatusInvalidated:
-		return c.reserved
-	case types.StatusPending, types.StatusStarted:
-		return 0
-	}
-	if c.actual > c.reserved {
-		return 0
-	}
-	return c.reserved - c.actual
 }
 
 // The only way to build one: a second site that forgot a map would panic on a path with no error to return.
@@ -181,46 +132,6 @@ func (b *Book) RetireEscrow(escrowID string) {
 		escrow.retired = true
 		b.touchLocked()
 	}
-}
-
-// foldMoney gives every slot its share of the escrow: what the chain says now, over the fold last saved for it.
-func (e *escrowLedger) foldMoney() []SlotMoney {
-	money := make([]SlotMoney, len(e.metadata.Slots))
-	for nonce, cost := range e.costs {
-		e.foldCost(&money[e.slotOf(nonce)], nonce, cost)
-	}
-	for slotID, saved := range e.folded {
-		if int(slotID) < len(money) {
-			money[slotID].add(saved)
-		}
-	}
-	return money
-}
-
-// addProduced counts an attempt's tokens once, on the slot that produced them. See docs/accounting.md, "Money and tokens".
-func (e *escrowLedger) addProduced(nonce uint64, record *nonceRecord, tokens int64) {
-	if record.outputAdded || tokens <= 0 {
-		return
-	}
-	record.outputAdded = true
-	e.produced[e.slotOf(nonce)] += uint64(tokens)
-}
-
-func (e *escrowLedger) foldCost(money *SlotMoney, nonce uint64, cost nonceCost) {
-	money.Reserved += cost.reserved
-	money.Actual += cost.actual
-	money.Refunded += cost.refunded()
-	if e.isGhost(nonce) {
-		return
-	}
-	if cost.status != types.StatusFinished {
-		money.EstimatedError += filters.EstimatedPromptTokens(int(cost.inputLength))
-		return
-	}
-	money.CountedNonces++
-	money.Input += cost.input
-	money.EstimatedInput += filters.EstimatedPromptTokens(int(cost.inputLength))
-	money.MaxTokens += cost.maxTokens
 }
 
 func (b *Book) ObserveLatestNonce(escrowID string, nonce uint64) error {
@@ -417,139 +328,6 @@ func (e *escrowLedger) record(nonce uint64) *nonceRecord {
 
 func (e *escrowLedger) slotOf(nonce uint64) uint32 {
 	return uint32(nonce % uint64(len(e.metadata.Slots)))
-}
-
-// A burn's record carries the gateway's own prompt and reserve. See docs/accounting.md, "Money and tokens".
-func (e *escrowLedger) isGhost(nonce uint64) bool {
-	record, known := e.nonces[nonce]
-	return known && record.ghostReason != ""
-}
-
-func (e *escrowLedger) reclassify(nonce uint64, record *nonceRecord) {
-	key, settled := classify(e.slotOf(nonce), record)
-	if record.isCounted {
-		if settled && record.countedAs == key {
-			return
-		}
-		e.counters[record.countedAs]--
-		if e.counters[record.countedAs] == 0 {
-			delete(e.counters, record.countedAs)
-		}
-		record.isCounted = false
-	}
-	if !settled {
-		return
-	}
-	e.counters[key]++
-	record.countedAs, record.isCounted = key, true
-}
-
-func classify(slotID uint32, record *nonceRecord) (CounterKey, bool) {
-	key := CounterKey{SlotID: slotID}
-	switch {
-	case record.ghostReason != "":
-		// A charged burn votes like any other nonce, so its outcome has to reach the key the burn already made.
-		key.Disposition = DispositionGhost
-		key.GhostReason = record.ghostReason
-		key.TimeoutKind = record.timeoutKind
-		key.TimeoutAction = record.timeoutAction
-		key.TimeoutReason = record.timeoutReason
-		return key, true
-	case record.finished:
-		key.Disposition = finishedDisposition(record.usage)
-		return raceFacts(key, record), true
-	case record.timeoutAction == "":
-		return key, false
-	case !record.sent:
-		// Committed and never dispatched: an unfinished refusal, not a ghost. See README.md.
-		key.Disposition = DispositionUnfinishedRefused
-	default:
-		key.Disposition = unfinishedDisposition(record)
-	}
-	key.TimeoutKind = record.timeoutKind
-	key.TimeoutAction = record.timeoutAction
-	key.TimeoutReason = record.timeoutReason
-	return raceFacts(key, record), true
-}
-
-// An empty terminal is itself a fact, so it is named rather than left blank. See README.md.
-func raceFacts(key CounterKey, record *nonceRecord) CounterKey {
-	key.Terminal = record.terminal
-	if key.Terminal == "" {
-		key.Terminal = TerminalUnreported
-	}
-	key.Phase = record.phase
-	key.SlowReceipt = record.slowReceipt
-	key.SlowChunk = record.slowChunk
-	key.ClockDrifted = record.clockDrifted
-	key.SlowDecode = record.slowDecode
-	key.LogprobsDecoded = record.logprobsDecoded
-	return key
-}
-
-func finishedDisposition(usage Usage) Disposition {
-	switch usage {
-	case UsageWinner:
-		return DispositionFinishedUsed
-	case UsageLoser:
-		return DispositionFinishedUnused
-	default:
-		return DispositionFinishedUsageUnknown
-	}
-}
-
-// isUnfinishedDisposition is the family unfinishedDisposition can ever return.
-func isUnfinishedDisposition(disposition Disposition) bool {
-	return disposition == DispositionUnfinishedRefused || disposition == DispositionUnfinishedExecution
-}
-
-func unfinishedDisposition(record *nonceRecord) Disposition {
-	switch {
-	case record.timeoutKind == engine.TimeoutKindRefused:
-		return DispositionUnfinishedRefused
-	case record.timeoutKind != "":
-		return DispositionUnfinishedExecution
-	case record.acknowledged:
-		return DispositionUnfinishedExecution
-	default:
-		return DispositionUnfinishedRefused
-	}
-}
-
-func assignedForSlot(latest uint64, groupSize, slotID uint32) uint64 {
-	if groupSize == 0 || latest == 0 {
-		return 0
-	}
-	group, slot := uint64(groupSize), uint64(slotID)
-	if slot == 0 {
-		return latest / group
-	}
-	if latest < slot {
-		return 0
-	}
-	return (latest-slot)/group + 1
-}
-
-func (e *escrowLedger) slotActivity() map[uint32]SlotActivity {
-	activity := make(map[uint32]SlotActivity, len(e.metadata.Slots))
-	record := func(slotID uint32, apply func(*SlotActivity)) {
-		entry := activity[slotID]
-		apply(&entry)
-		activity[slotID] = entry
-	}
-	for slotID, count := range e.challenged {
-		record(slotID, func(entry *SlotActivity) { entry.Challenged = count })
-	}
-	for slotID, count := range e.validations {
-		record(slotID, func(entry *SlotActivity) { entry.Validations = count })
-	}
-	for slotID, count := range e.timeouts {
-		record(slotID, func(entry *SlotActivity) { entry.TimeoutsApplied = count })
-	}
-	for slotID, count := range e.rejected {
-		record(slotID, func(entry *SlotActivity) { entry.Rejected = count })
-	}
-	return activity
 }
 
 func (e *escrowLedger) moneyBySlot() map[uint32]SlotMoney {

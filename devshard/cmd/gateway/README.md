@@ -40,7 +40,7 @@ The package root itself is the composition root: `main.go` wires the above, and 
 
 ## The composition root
 
-Five files, and what each is for: `main.go` wires everything, `lifecycle.go` starts and stops it, `devshards.go` turns stored rows into live escrow sessions, `observers.go` adapts one event into the several readers that want it, and `operations.go` is the admin surface behind [`api`](./api/).
+Seven files, and what each is for: `main.go` wires everything, `routing.go` builds the registry, scheduler and warmup together because each needs the others, `capacity.go` reads the chain snapshot into the numbers the limiters price by, `lifecycle.go` starts and stops it all, `devshards.go` turns stored rows into live escrow sessions, `observers.go` adapts one event into the several readers that want it, and `operations.go` is the admin surface behind [`api`](./api/).
 
 ### Wiring order, and the knots in it
 

@@ -1,0 +1,144 @@
+package scheduler
+
+import (
+	"context"
+	"errors"
+	"maps"
+
+	"devshard/types"
+)
+
+// Pick serves one request or one escalation attempt; an escalation reuses the pinned escrow. See routing.md, "One re-pick when an escrow gives up" and "Past every escrow that cannot pay".
+func (s *Scheduler) Pick(ctx context.Context, profile RequestProfile) (Assignment, error) {
+	if profile.Escrow != "" {
+		assignment, _, err := s.pickOnce(ctx, profile, nil)
+		return assignment, err
+	}
+
+	assignment, routedTo, err := s.pickPastEmptyEscrows(ctx, profile, nil)
+	if !errors.Is(err, ErrHostsBusy) {
+		return assignment, err
+	}
+
+	if ctx.Err() != nil {
+		return Assignment{}, err
+	}
+
+	retried, _, retryErr := s.pickPastEmptyEscrows(ctx, profile, map[string]bool{routedTo: true})
+	if retryErr == nil || outranksBusy(retryErr) {
+		return retried, retryErr
+	}
+	return Assignment{}, err
+}
+
+// pickPastEmptyEscrows steps over every escrow that cannot pay for this request, so a caller hears "no balance" only once no escrow has any. See routing.md, "Past every escrow that cannot pay".
+func (s *Scheduler) pickPastEmptyEscrows(ctx context.Context, profile RequestProfile, seed map[string]bool) (Assignment, string, error) {
+	assignment, routedTo, err := s.pickOnce(ctx, profile, seed)
+	if !outOfFunds(err) || routedTo == "" {
+		return assignment, routedTo, err
+	}
+
+	emptied := err
+	avoided := make(map[string]bool, len(seed)+1)
+	maps.Copy(avoided, seed)
+	for range len(s.escrows.Candidates(profile.Model)) {
+		avoided[routedTo] = true
+		if ctx.Err() != nil {
+			return Assignment{}, "", emptied
+		}
+		assignment, routedTo, err = s.pickOnce(ctx, profile, avoided)
+		switch {
+		case err == nil:
+			return assignment, routedTo, nil
+		case routedTo == "":
+			return Assignment{}, "", emptied
+		case !outOfFunds(err):
+			return assignment, routedTo, err
+		}
+	}
+	return Assignment{}, "", emptied
+}
+
+// outOfFunds holds for the one refusal another escrow's balance can answer. See routing.md, "Past every escrow that cannot pay".
+func outOfFunds(err error) bool {
+	return errors.Is(err, types.ErrInsufficientBalance)
+}
+
+// outranksBusy holds for the answers a second round may return in place of a busy shard's. See routing.md, "One re-pick when an escrow gives up".
+func outranksBusy(err error) bool {
+	return errors.Is(err, context.Canceled) ||
+		errors.Is(err, context.DeadlineExceeded) ||
+		errors.Is(err, types.ErrInsufficientBalance)
+}
+
+// pickOnce names the escrow it routed to, so a caller that re-picks can leave that one out of the second round.
+func (s *Scheduler) pickOnce(ctx context.Context, profile RequestProfile, avoided map[string]bool) (Assignment, string, error) {
+	queued := newWaiter(profile, s.now())
+	escrow, err := s.pickEscrow(profile, s.snapshots.Snapshot(), queued, avoided)
+	if err != nil {
+		return Assignment{}, "", err
+	}
+
+	claimed, err := s.claimAndSubmit(escrow, queued)
+	if err != nil {
+		return Assignment{}, escrow.ID, err
+	}
+	// Held until Pick returns, so the reaper cannot forget an escrow this caller may still burn a nonce on. See README, "Dispatcher lifecycle".
+	defer claimed.pendingSubmits.Add(-1)
+
+	select {
+	case result := <-queued.replyCh:
+		if result.err != nil {
+			return Assignment{}, escrow.ID, result.err
+		}
+		return result.assignment, escrow.ID, nil
+	case <-ctx.Done():
+		// Leaving and taking are one step: an assignment delivered in this instant holds a nonce and a slot.
+		if delivered, wasDelivered := queued.abandon(); wasDelivered && delivered.err == nil {
+			s.dropAssignment(delivered.assignment, profile)
+		}
+		return Assignment{}, escrow.ID, ctx.Err()
+	}
+}
+
+// queuedAhead estimates how far each candidate's cursor will have moved before this request draws a nonce. See routing.md, "Pricing an escrow by the burns it will cost".
+func (s *Scheduler) queuedAhead(candidates []Escrow) []uint64 {
+	ahead := make([]uint64, len(candidates))
+	s.registryMu.Lock()
+	defer s.registryMu.Unlock()
+	for index, candidate := range candidates {
+		if running := s.dispatchers[candidate.ID]; running != nil && running.sessionID == candidate.SessionID {
+			ahead[index] = uint64(max(running.pendingSubmits.Load(), 0))
+		}
+	}
+	return ahead
+}
+
+// claimAndSubmit returns the dispatcher that accepted the waiter, still claimed; a stopped one is replaced by the next get-or-create, so this retries at most once more.
+func (s *Scheduler) claimAndSubmit(escrow Escrow, queued *waiter) (*dispatcher, error) {
+	for {
+		target, err := s.dispatcherFor(escrow)
+		if err != nil {
+			return nil, err
+		}
+		outcome := target.submitWaiter(queued)
+		if outcome == submitAccepted {
+			return target, nil
+		}
+		target.pendingSubmits.Add(-1)
+		if outcome == submitFull {
+			return nil, ErrEscrowBusy
+		}
+	}
+}
+
+func (s *Scheduler) dropAssignment(assignment Assignment, profile RequestProfile) {
+	assignment.ReleaseHostSlot()
+	assignment.ReleaseEscrow()
+	if s.observer != nil {
+		s.observer.GhostBurned(assignment.Escrow, Burn{
+			Nonce: assignment.Nonce.Nonce(), Participant: assignment.Host,
+			Reason: ghostAbandoned.reason(), RequestID: profile.RequestID,
+		})
+	}
+}

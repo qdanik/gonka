@@ -203,7 +203,7 @@ The ledger carries the chain's own arithmetic; it computes none of it. Eight fie
 | `estimated_input_tokens` | `InferenceRecord.InputLength` — the normalised body's size in **bytes** — put through `filters.EstimatedPromptTokens`, so the field is served in the same unit as everything beside it |
 | `max_tokens` | `InferenceRecord.MaxTokens`, the output-side budget the gateway reserved |
 | `input_tokens` | `InferenceRecord.InputTokens`, the prompt the chain recorded when the inference finished |
-| `output_tokens` | what the **gateway** counted off the stream (`accounting/book.go`, `addProduced`): the host's own usage when it sent one, otherwise one token per logprob entry |
+| `output_tokens` | what the **gateway** counted off the stream (`accounting/money.go`, `addProduced`): the host's own usage when it sent one, otherwise one token per logprob entry |
 
 The first pair is what a host was **given**, the second what it **produced**, and all four are token counts so a reader can divide one by the other without converting anything. The chain itself mixes the units — its reserve is `(input_length + max_tokens) × token_price`, bytes added to tokens — and that is a fact about the price, not about the prompt. The ledger converts the byte length once, where the escrow reserve keeps it in bytes because bytes are what the chain charges ([capacity.md](./capacity.md), "The balance floor").
 

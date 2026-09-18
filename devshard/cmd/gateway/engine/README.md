@@ -8,11 +8,11 @@ One client request, several attempts on different hosts, one winner. This packag
 | --- | --- |
 | `race.go` | the coordinator: the event loop, the exits, and the outcome it reports once |
 | `pick.go` | asking the scheduler for a host and launching an attempt on it |
-| `attempt.go` | one attempt's life: dispatch, receipt, chunks, terminal |
+| `attempt.go`, `attempt_outcome.go` | one attempt's life: dispatch, receipt, chunks, terminal |
 | `escalation.go` | when to start another attempt — the deadline ladder measured from the host's own history |
 | `crown.go`, `stream.go` | crowning the first attempt to produce content, and forwarding only its bytes |
 | `deadline.go`, `drain.go` | the timers, and the barrier that outlives the client |
-| `classify.go`, `outcome.go` | what the attempt ended as, in the vocabulary the ledger admits |
+| `classify.go`, `outcome.go`, `terminal.go`, `judgement.go`, `failure.go` | what the attempt ended as, in the vocabulary the ledger admits, and what the race owes the client and the ladders because of it |
 | `settle.go`, `session.go` | the timeout vote every unfinished nonce owes |
 | `reassembly.go`, `carry.go` | rebuilding events split across chunk boundaries |
 | `vocabulary.go` | the wire strings — metric labels, log fields, ledger reasons — declared once |

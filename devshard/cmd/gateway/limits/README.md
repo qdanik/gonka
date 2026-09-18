@@ -5,7 +5,7 @@ Three limiters, each answering a different question.
 ## What it owns
 
 - **The gateway limiter** (`gateway.go`) — a FIFO admission queue over concurrent requests and in-flight input tokens, per model. Refuses with a typed rejection that names which cap turned the request away, so an operator is not left a wall of identical statuses.
-- **The participant limiter** (`participant.go`, `congestion.go`) — two congestion windows per `{participant, model}` and a cut-off over them: one window over the input tokens an attempt must prefill, one over the output tokens it reserved. It narrows on host-attributable failures, missed deadlines and latency past the host's own best, widens on answers that arrive in time, and half-opens after a cut-off to admit one real request rather than waiting for a probe. `Acquire` hands back a lease that releases exactly what it took, exactly once.
+- **The participant limiter** (`participant.go`, `pricing.go`, `window.go`, `reaction.go`, `congestion.go`) — two congestion windows per `{participant, model}` and a cut-off over them: one window over the input tokens an attempt must prefill, one over the output tokens it reserved. It narrows on host-attributable failures, missed deadlines and latency past the host's own best, widens on answers that arrive in time, and half-opens after a cut-off to admit one real request rather than waiting for a probe. `Acquire` hands back a lease that releases exactly what it took, exactly once.
 - **The capacity model** (`capacity.go`, `weights.go`) — scales the caps by the host weight the chain reports for each model, so a shard that has lost half its hosts admits proportionally less.
 
 ## Boundaries
@@ -65,11 +65,11 @@ A verdict is read once, into the tier it narrows by, the window it blames and wh
 ## Additive increase
 
 - **Growth is judged on peak in-flight since the last adjustment, not the live count.** The engine releases an attempt's lease in a `defer` and reports its verdict afterwards, so a live read would see the tokens already given back and refuse to grow a window that was genuinely saturated. The peak is set when the tokens are taken and nothing can undo it, which makes the decision independent of which of the two runs first.
-- **Each window is judged and credited on its own.** A window widens only when its own peak reached half its own size, by the tokens its own dimension carried (`participant.go`, `ParticipantLimiter.growLocked`).
+- **Each window is judged and credited on its own.** A window widens only when its own peak reached half its own size, by the tokens its own dimension carried (`reaction.go`, `ParticipantLimiter.growLocked`).
 - **A window that has never been narrowed is still in slow start** and takes the whole of what the answer carried, doubling per window served. After the first narrowing it takes one step — one request of the model — per window's worth of tokens, so a wide window earns its next rung more slowly than a narrow one (`congestion.go`, `grownBy`).
 - **Nothing caps a window.** Where it stops is what the host's congestion signals say; the configuration names a floor and a starting size and no ceiling.
 - **A narrowing stops at `Min`, and never below one token.** A host a run of bad answers narrowed still takes one request of that model, and a half-open cut-off still admits exactly one probe.
-- **A narrowing ends slow start for the window it applies to**, and only for that one: past the first congestion signal that window's capacity is known well enough to approach one request at a time. It restarts that window's peak from what is in flight, because the growth that follows has to be earned against the narrower window. A factor that finds the window already at its floor still ends slow start, or a window configured with `Min` equal to `Initial` would double after every congestion signal for ever (`participant.go`, `narrowWindow`).
+- **A narrowing ends slow start for the window it applies to**, and only for that one: past the first congestion signal that window's capacity is known well enough to approach one request at a time. It restarts that window's peak from what is in flight, because the growth that follows has to be earned against the narrower window. A factor that finds the window already at its floor still ends slow start, or a window configured with `Min` equal to `Initial` would double after every congestion signal for ever (`reaction.go`, `narrowWindow`).
 
 ## The cut-off, the peek and the sweep
 
