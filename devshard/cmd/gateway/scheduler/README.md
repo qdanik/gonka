@@ -105,10 +105,10 @@ The session adapter lives outside this package, so the two sides meet on a narro
 - `Prepared` is satisfied verbatim by `*user.PreparedInference`, so the api adapter needs no conversion code.
 - `Assignment.EscrowHold` gives back the escrow's in-flight count the commit took. It is idempotent, and nil when the escrow source counts nothing. A caller that has taken its own hold releases this one as soon as it has one; a caller that never dispatches releases it instead of dispatching.
 - `Escrow.Hold` is taken with the nonce commit and refused once the escrow has been retired. `Candidates` returns escrows in a stable order, already filtered to accepts-new-inferences.
-- On `hostLimiter`, `Acquire` is the admission authority and runs with the commit; `Available` is only a cheap pre-filter, so a match-wait answer from it costs nothing. A slot handed to a caller is released by the engine that spends it, never here.
+- On `hostLimiter`, `Acquire` is the admission authority and runs with the commit; `Admits` is only a cheap peek that names which rung would refuse, so a match-wait answer from it costs nothing. A slot handed to a caller is released by the engine that spends it, never here.
 - On `hostHealth`, `Ejected` is already capped to a fraction of the model's known hosts, so honouring it here can never empty the pool.
 - The PoC-preserved set is read per drain, preferring the model's own; a nil set means it has not loaded yet, so every participant counts as preserved. See rules.md, "8. Fail-closed and fail-open are chosen per signal".
-- `AffinityHint` is the extension point for KV-cache affinity: the per-request handle a later revision will rank hosts with. It carries nothing and changes no decision today.
+- `AffinityHint` is the per-request handle the boundary carries for KV-cache affinity. It holds nothing and no decision reads it.
 
 ## Read next
 

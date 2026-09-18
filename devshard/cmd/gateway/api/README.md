@@ -31,7 +31,7 @@ The only package that speaks HTTP to a client, and the one that decides what a f
 
 `Operations` holds the lifecycle actions the operator routes trigger. They span the chain client, the escrow manager and the registry, so the composition root implements them and this package only calls them.
 
-`admission` is the pre-queue chain check. Relaxed proof-of-compute mode is read at three further sites: the shutdown gate in `main`, and the race's own bypass and generating checks in `engine`.
+`admission` is the pre-queue chain check. Relaxed proof-of-compute mode is read at three further sites: the capacity fold in `main` (`modelCapacity.ModelWeights`), and the race's own bypass and generating checks in `engine`.
 
 `Journal` receives the request lines. The boundary builds a `journal.RequestLine` on the handler goroutine, reading the client stream's byte count under the stream's mutex (`api/stream.go`), because attempt goroutines can still write the stream, and the [`journal`](../journal/) renders it.
 
@@ -161,7 +161,7 @@ The caller and the escrow scope are in the key as well, so a cached reply never 
 
 **A reply that never finished its answer is served and never stored.** `put` asks `filters.CacheRefusal` of the bytes it is about to keep, outside the lock, and hands back what refused them — see [`filters/README.md`](../filters/README.md), "Finishing an answer" for what counts as finished. `chat` logs the one refusal that is news: a host that stopped mid-answer, which no other line names. The client still receives every byte that arrived; what stops is the replay, not the delivery.
 
-`get` re-asks only the error verdict, as it always has: the finish verdict cannot change under a stored entry, since `put` is the one way in and the stored bytes never move. That read runs the walk in its cheap form, which decodes no choices, so a hit costs what it always did rather than the store's price under the cache's lock.
+`get` re-asks only the error verdict: the finish verdict cannot change under a stored entry, since `put` is the one way in and the stored bytes never move. That read runs the walk in its cheap form, which decodes no choices, so a hit never pays the store's price under the cache's lock.
 
 Eviction drops entries in map order: with a per-caller key and an hour's TTL there is no access pattern a smarter policy would reward, and map order costs nothing.
 

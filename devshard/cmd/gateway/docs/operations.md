@@ -49,13 +49,13 @@ Three layers, later wins:
 
 1. **Defaults** — `config/config.go`, `Defaults()`. The only place a default lives.
 2. **Environment** — read once at boot, in `env/` and nowhere else. `env.Load` returns *what is set* (a nil pointer is unset), so an unset variable can never overwrite a default with a zero.
-3. **Admin overrides** — 50 fields (`config.Overrides`), written through `PUT /v1/admin/settings`, persisted in the store and reloaded at boot. These take effect without a restart: the config is an immutable snapshot swapped whole, and every reader loads it per request.
+3. **Admin overrides** — the fields of `config.Overrides`, written through `PUT /v1/admin/settings`, persisted in the store and reloaded at boot. These take effect without a restart: the config is an immutable snapshot swapped whole, and every reader loads it per request.
 
 Parse failures are accumulated, so a boot reports **every** misconfigured variable at once rather than one per restart.
 
 ### Variable names
 
-Each `GATEWAY_*` variable falls back to a `DEVSHARD_*` spelling from before the rename (`env/env.go`, `legacyNames`). An **empty** value counts as unset on both, so blanking a legacy variable does not resurrect it through the fallback.
+A variable devshardctl also had falls back to its `DEVSHARD_*` spelling; the pairs are listed in `env/env.go`, `legacyNames`, and anything the gateway added since is read under its `GATEWAY_*` name alone. An **empty** value counts as unset on both, so blanking a legacy variable does not resurrect it through the fallback.
 
 Signing keys are addressed **by the name of the variable that holds them**, never by value: `escrows_json` and `rotation.models_json` carry `private_key_env`. Log lines and errors name the variable, never the key.
 
@@ -99,9 +99,9 @@ The full list is `env/env.go`; the full set of defaults is `config.Defaults()`. 
 2. the warmup prober starts;
 3. `seedDevshards` applies `escrows_json` to the store — a seeded escrow that names no key variable is **refused**, not silently accepted;
 4. `publishEscrows` opens a session per active escrow and publishes it for routing, bounded by `MaxConcurrentRuntimeBuilds` (16) so a large set does not open 200 sessions at once;
-5. the escrow lifecycle manager starts its 15 s tick;
-6. the store's write notifications start republishing escrows on change;
-7. the nonce ledger starts;
+5. the nonce ledger starts, so nothing above it files a fact into a sink that is not yet reading;
+6. the escrow lifecycle manager starts its 15 s tick;
+7. the store's write notifications start republishing escrows on change;
 8. the HTTP listener opens — **last**, so the first request meets a gateway that is fully assembled.
 
 A failure in steps 3 or 4 shuts down cleanly rather than serving half-built.
@@ -163,10 +163,10 @@ Three mechanisms withhold work from a host, each on its own trigger, and each is
 | --- | --- | --- |
 | `host withheld from routing` (`perf/tracker.go`) | five failures in a row, or a failure rate from 15% over a volume from 20 | **Warn** — which trigger fired, the rung, the run length, the rate and its volume, and how long the withholding lasts |
 | `host back in routing` (`perf/tracker.go`) | first sample after the withholding lapsed | the rung it decayed to |
-| `host cut off after transport faults` (`limits/participant.go`) | three cut-off faults in a row — a transport fault, or an empty answer that left its nonce open — or one failed half-open probe | **Warn** — which of the two, the backoff depth, and how long the cut-off lasts. The line's name and its `consecutive_transport_faults` reason are what dashboards and log queries match on, so both keep the wording they have whatever the run was made of |
-| `host back after its cut-off` (`limits/participant.go`) | the probe answered | the backoff depth it decayed to |
-| `host denied the crown` (`engine/engine.go`) | three content-free answers in a row | **Warn** — the strike count. The host keeps drawing nonces and starts a second attempt beside itself, so this is a spend, not only a quality signal |
-| `host crowned again` (`engine/engine.go`) | one answer with content | — |
+| `host cut off after transport faults` (`limits/reaction.go`) | three cut-off faults in a row — a transport fault, or an empty answer that left its nonce open — or one failed half-open probe | **Warn** — which of the two, the backoff depth, and how long the cut-off lasts. The line's name and its `consecutive_transport_faults` reason are what dashboards and log queries match on, so both keep the wording they have whatever the run was made of |
+| `host back after its cut-off` (`limits/reaction.go`) | the probe answered | the backoff depth it decayed to |
+| `host denied the crown` (`engine/crown_strikes.go`) | three content-free answers in a row | **Warn** — the strike count. The host keeps drawing nonces and starts a second attempt beside itself, so this is a spend, not only a quality signal |
+| `host crowned again` (`engine/crown_strikes.go`) | one answer with content | — |
 
 One more line belongs to the same family, on the money side rather than the routing one: `execution timeouts swept` (`escrow/manager.go`), written by the escrow tick only when the sweep found nonces to re-vote, carrying how many were due, applied and failed. Silence means nothing was owed.
 

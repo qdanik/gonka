@@ -49,7 +49,7 @@ Most checks are ordinary range bounds. These are the ones that exist because a l
 - `host_cutoff_max_ms` must not exceed `perf_ejection_max_seconds`, so [`perf`](../perf/) stays the dominant ejection authority rather than the per-host cutoff.
 - `engine_loser_grace_ms` must be at least `engine_inter_chunk_stall_ms`. A loser is cancelled at the grace, so a grace under the stall window kills attempts that are merely between chunks — before the gateway would even call such a stream stalled.
 - `scheduler_match_wait_ms` is capped at 5000. A long grace parks a committed-cost nonce on the chance of a co-arrival, so the ceiling is a budget guard, not a taste judgement.
-- `scheduler_max_consecutive_burns` is capped at 1000, which is past any real group size: a run longer than the group is a rung that never fires. It defaults to 6, about one forced send per seven bindings.
+- `scheduler_max_consecutive_burns` is capped at 1000, which is past any real group size: a run longer than the group is a rung that never fires.
 - `chain_grpc` is checked as `host:port`, not as a URL: a gRPC target carries no scheme, so a URL check would pass anything.
 
 Every problem is collected and reported together, and the field names in the messages use the snake_case admin-API spelling rather than the Go one.

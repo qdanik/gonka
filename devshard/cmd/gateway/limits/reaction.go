@@ -89,7 +89,7 @@ func (l *ParticipantLimiter) narrowLocked(state *hostState, by narrowing) {
 	narrowWindow(&state.output, by.output, state.bounds.Output.Min)
 }
 
-// narrowWindow ends slow start and restarts the peak, for a window it actually moved. See README.md, "Additive increase".
+// narrowWindow restarts the peak of a window it actually moved. See README.md, "Additive increase".
 func narrowWindow(w *window, factor float64, floor int64) {
 	if factor == 1 {
 		return

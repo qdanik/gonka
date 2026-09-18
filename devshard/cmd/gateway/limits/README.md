@@ -5,7 +5,7 @@ Three limiters, each answering a different question.
 ## What it owns
 
 - **The gateway limiter** (`gateway.go`) — a FIFO admission queue over concurrent requests and in-flight input tokens, per model. Refuses with a typed rejection that names which cap turned the request away, so an operator is not left a wall of identical statuses.
-- **The participant limiter** (`participant.go`, `pricing.go`, `window.go`, `reaction.go`, `congestion.go`) — two congestion windows per `{participant, model}` and a cut-off over them: one window over the input tokens an attempt must prefill, one over the output tokens it reserved. It narrows on host-attributable failures, missed deadlines and latency past the host's own best, widens on answers that arrive in time, and half-opens after a cut-off to admit one real request rather than waiting for a probe. `Acquire` hands back a lease that releases exactly what it took, exactly once.
+- **The participant limiter** (`participant.go`, `pricing.go`, `window.go`, `reaction.go`, `report.go`, `congestion.go`) — two congestion windows per `{participant, model}` and a cut-off over them: one window over the input tokens an attempt must prefill, one over the output tokens it reserved. It narrows on host-attributable failures, missed deadlines and latency past the host's own best, widens on answers that arrive in time, and half-opens after a cut-off to admit one real request rather than waiting for a probe. `Acquire` hands back a lease that releases exactly what it took, exactly once.
 - **The capacity model** (`capacity.go`, `weights.go`) — scales the caps by the host weight the chain reports for each model, so a shard that has lost half its hosts admits proportionally less.
 
 ## Boundaries
@@ -32,12 +32,13 @@ Releasing leaves an idle model's counter in the map. Deleting it would cost an a
 
 The configured maxima are **each model's own** budget, not a shared pool, and a per-model override *replaces* the configured maximum rather than narrowing it further.
 
-The concurrency cap is then derived one of two ways:
+The concurrency cap is then derived one of three ways:
 
-- When a per-10 000-weight rate and a baseline weight are both present, the cap is `min(limit(currentWeight), limit(baselineWeight))` — the current weight must never lift the cap **above** the baseline-derived one.
+- When a per-10 000-weight rate and a baseline weight are both present, the cap is `min(limit(currentWeight), limit(baselineWeight))` — the current weight must never lift the cap **above** the baseline-derived one — raised to the concurrency the hosts' own windows have already earned where that is larger, and never above the configured maximum.
+- When only the host windows report a concurrency, that is the cap, bounded the same way.
 - Otherwise the configured maximum is scaled by the capacity scale factor, rounded to nearest rather than floored, and never above the configured maximum itself.
 
-The input-token cap only ever takes the second path.
+The input-token cap only ever takes the last path.
 
 ## What blames which window
 
@@ -59,17 +60,17 @@ A verdict is read once, into the tier it narrows by, the window it blames and wh
 - **Every signal that narrows moves both windows.** One that blames a single dimension applies its tier there and the cross factor to the other, because prefill and decode share one device; one that blames the host as a whole applies its tier to both and carries no cross factor, having nothing left to spread (`congestion.go`, `CongestionFactors.narrowingFor`).
 - **A receipt is owed before any prefill**, so a missed receipt deadline says nothing about which half of the host is slow and narrows both; a first token is what prefill produces and a mid-stream silence is what decode failed to, so those two blame one window each.
 - **A verdict that moves nothing returns before the lock.** `ModelOutcome` neither narrows nor touches the cut-off, so it takes no lock and creates no state for a pair (`congestion.go`, `response.inert`).
-- **Only two verdicts feed the cut-off**: `TransportFault`, which moves no window because a host that cannot be reached is broken rather than full, and `EmptyAnswerLeftOpen`, which took the work and parked the reserve. `DecodeStalled` narrows hard and leaves the cut-off alone — a slow answer is still an answer, and a host that stalls chronically is withheld by the outlier detector in [`perf`](../perf/) instead.
+- **Only two verdicts feed the cut-off**: `TransportFault`, which moves no window because a host that cannot be reached is broken rather than full, and `EmptyAnswerLeftOpen`, which took the work and parked the reserve. `DecodeStalled` narrows severely and leaves the cut-off alone — a slow answer is still an answer, and a host that stalls chronically is withheld by the outlier detector in [`perf`](../perf/) instead.
 - **Lateness is judged while the attempt still runs**, so it leaves the cut-off's count alone: the same attempt is judged again on its own verdict when it ends, and the answer it eventually sends is a `LateSuccess` that clears the count and lifts a half-open probe without widening anything.
 
 ## Additive increase
 
 - **Growth is judged on peak in-flight since the last adjustment, not the live count.** The engine releases an attempt's lease in a `defer` and reports its verdict afterwards, so a live read would see the tokens already given back and refuse to grow a window that was genuinely saturated. The peak is set when the tokens are taken and nothing can undo it, which makes the decision independent of which of the two runs first.
 - **Each window is judged and credited on its own.** A window widens only when its own peak reached half its own size, by the tokens its own dimension carried (`reaction.go`, `ParticipantLimiter.growLocked`).
-- **A window that has never been narrowed is still in slow start** and takes the whole of what the answer carried, doubling per window served. After the first narrowing it takes one step — one request of the model — per window's worth of tokens, so a wide window earns its next rung more slowly than a narrow one (`congestion.go`, `grownBy`).
+- **A window grows by one step per answer that used it** — one request of the model's worth of tokens, whatever the answer carried. A wide window earns the same rung as a narrow one and so takes proportionally longer to widen by half (`congestion.go`, `grownBy`).
 - **Nothing caps a window.** Where it stops is what the host's congestion signals say; the configuration names a floor and a starting size and no ceiling.
 - **A narrowing stops at `Min`, and never below one token.** A host a run of bad answers narrowed still takes one request of that model, and a half-open cut-off still admits exactly one probe.
-- **A narrowing ends slow start for the window it applies to**, and only for that one: past the first congestion signal that window's capacity is known well enough to approach one request at a time. It restarts that window's peak from what is in flight, because the growth that follows has to be earned against the narrower window. A factor that finds the window already at its floor still ends slow start, or a window configured with `Min` equal to `Initial` would double after every congestion signal for ever (`reaction.go`, `narrowWindow`).
+- **A narrowing restarts the peak of the window it applies to**, and only that one: the growth that follows has to be earned against the narrower window rather than credited to the width the host has just lost (`reaction.go`, `narrowWindow`).
 
 ## The cut-off, the peek and the sweep
 
@@ -104,7 +105,7 @@ Three fallbacks decide what a missing view means:
 - **An empty weight view means the chain named nobody**, not that everybody weighs nothing — a host the chain has reported is a key in the view whatever its weight. When neither view has been observed, escrow scoring falls back to the membership share alone, which serves requests correctly and silently; the `WeightsUnobserved` flag of `ModelWeights` is what makes that state visible.
 - **The current and full views fall back to the generic one independently**, so a missing full-by-model entry does not suppress a present current-by-model one.
 
-`ModelWeights` takes the **effective** blocking state, never the chain's raw one. Relaxed mode is the operator's override of that fact, so a capacity that read the snapshot itself would zero the scale exactly when the override was meant to keep serving — and a zero scale clamps every weight-derived cap to nothing. The composition root in [`main.go`](../main.go) passes `config.Modes.BlocksRequests`, which owns the fold.
+`ModelWeights` takes the **effective** blocking state, never the chain's raw one. Relaxed mode is the operator's override of that fact, so a capacity that read the snapshot itself would zero the scale exactly when the override was meant to keep serving — and a zero scale clamps every weight-derived cap to nothing. The composition root passes `config.Modes.BlocksRequests` from [`capacity.go`](../capacity.go), which owns the fold.
 
 ## Read next
 

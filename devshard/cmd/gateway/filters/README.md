@@ -165,7 +165,7 @@ Below `kimiThinkingBudgetForceZeroBelow` (256) output tokens, a profile that own
 
 ## Schema bounds
 
-Four fields carry a nested payload, and each has its own bound family, kept separate even where the values currently match: `tools`, `response_format`, `structured_outputs`, and `chat_template_kwargs`.
+Four fields carry a nested payload, and each has its own bound family, kept separate even where the values coincide: `tools`, `response_format`, `structured_outputs`, and `chat_template_kwargs`.
 
 `SchemaBounds.Check` walks a JSON-Schema payload before measuring its serialised size, and enforces:
 
@@ -253,7 +253,7 @@ When that rescue fires, the caller must receive the re-encoded bytes even if no 
 
 One walk decides all of it: `scanResponse` reads a plain JSON body whole and an SSE body **event by event, not `data:` line by line** — a client joins the lines of one event, so an object a host split across two of them must reach the decoder whole. Each event is decoded once into `scannedEvent`, the error shape and the choices together, because two walks would parse the same megabyte twice to ask two questions about it.
 
-**Every shape the fleet answers a failure in is read as one.** An `error` field arrives as an OpenAI object and as a bare string, and a host that sends the string may name its class in a sibling `error_type`; a flat document says `"object":"error"` and may carry only a type. So `error` is held raw and decoded by its shape rather than typed in the struct, which is what a bare string used to fail the whole decode on — and a failure nothing could decode read as a reply carrying no error at all. An empty string and a JSON null are not failures. The same widening is why `finalizeCompletion` leaves an error document labelled `"error"` instead of relabelling it a completion: the fold is what a non-streaming caller is handed, and a relabelled error is one nothing downstream can recognise.
+**Every shape the fleet answers a failure in is read as one.** An `error` field arrives as an OpenAI object and as a bare string, and a host that sends the string may name its class in a sibling `error_type`; a flat document says `"object":"error"` and may carry only a type. So `error` is held raw and decoded by its shape rather than typed in the struct: a bare string in a typed field fails the whole decode, and a failure nothing can decode reads as a reply carrying no error at all. An empty string and a JSON null are not failures. The same widening is why `finalizeCompletion` leaves an error document labelled `"error"` instead of relabelling it a completion: the fold is what a non-streaming caller is handed, and a relabelled error is one nothing downstream can recognise.
 
 A host that types its `choices` as something no client could render must not take the error in the same event down with it — that is how a rate-limit failure would end up replayed for an hour. So the decode falls back to the failure shape alone, and an event read that way counts as unreadable rather than as silence. An event nothing can read at all — a truncated tail, a payload that is not JSON — refuses the reply outright, since what it carried is unknowable.
 
@@ -261,7 +261,7 @@ Whether a host's error may be replayed is read from what the host itself said, i
 
 1. **The status it named.** A numeric `code` is the status the host would have answered with: 400 and 422 are about the request and may be stored, while 404 names a model another host may still serve, and 408, 429 and 5xx are about the moment.
 2. **The class it named.** A `type`, or a `code` that is not a status, is a class name — `server_error`, `BadRequestError`, `rate_limit_exceeded` — matched with every separator removed. A substring of a class field is still a class; a substring of a message is prose.
-3. **The words of the message**, when the host gave nothing else: `nonCacheableErrorMarkers` names cancellation, timeouts, rate limits, overload, unavailability and model availability.
+3. **The words of the message**, when the host gave nothing else: `momentaryFailureMessages` names cancellation, timeouts, rate limits, overload, unavailability and model availability.
 
 The two structured tiers are not guesses about the hosts: vLLM's `create_error_response` (`vllm/entrypoints/serve/exception_handling/error_response.py`) fills `ErrorInfo.code` with the `HTTPStatus` it would have answered with, and fills `type` with the class it raised — `BadRequestError` at 400, `UnprocessableEntityError` at 422, `NotFoundError` at 404, `InternalServerError` at 500 — or, for a graceful HTTP error, with the status phrase itself (`Service Unavailable`, `Too Many Requests`), which is why a class is matched with its separators removed. Older vLLM wrote the flat `{"object":"error",...}` shape instead; `DecodeUpstreamError` reads both.
 
@@ -275,7 +275,7 @@ The engine reads these rules through `IsCacheableUpstreamError` to stop escalati
 
 ### Finishing an answer
 
-The gateway appends its own `[DONE]` when a host sends none (`api/stream.go`, `terminateLocked`), so the terminator says nothing about whether the model finished: a host that streamed reasoning for twenty minutes and then dropped the connection is terminated by us and reads as a complete 200. The only signal left is a terminal reason on every choice the reply started, and storing a reply without one is how eight identical retries came back with the same unfinished body in under three seconds.
+The gateway appends its own `[DONE]` when a host sends none (`api/stream.go`, `terminateLocked`), so the terminator says nothing about whether the model finished: a host that streamed reasoning for twenty minutes and then dropped the connection is terminated by us and reads as a complete 200. The only signal left is a terminal reason on every choice the reply started, and storing a reply without one replays that unfinished body to every retry of the same request for as long as the entry lives.
 
 - `finish_reason` and `stop_reason` both end a choice, the way `completionAsChunks` ends one; `null`, `""` and absent are all still running. Both stay raw through the decode, because a wrong type in one of them would otherwise fail the decode that also finds the error.
 - Any reason a host names is terminal, `"length"` and a reason no spec lists included: the question is whether generation ended, not why. A reply cut short by `max_tokens` ended.
@@ -285,7 +285,7 @@ The gateway appends its own `[DONE]` when a host sends none (`api/stream.go`, `t
 
 A recorded host stream that finishes still earns its entry: `TestEveryRecordedStreamIsClassified` names the verdict for every fixture in `testdata/sse`, so a new one fails the suite until somebody says which side of the gate it belongs on.
 
-Reading the choices is what the answer costs: on a 64-chunk, 23 KB production stream the walk goes from ~26 µs to ~42 µs and from 138 allocations to 408 (`BenchmarkIsCacheableResponse`; absolutes are machine- and load-dependent, the 1.6× is what travels). It scales with the body, so a 1.3 MB reply pays about a millisecond of it on the store — against the seconds that same reply spends being written to the client. Only the store pays: the read path asks the failure alone. The events-side alternative, counting inside the rewriter and the fold as the events go past, costs a tenth of that, but it answers from writer state rather than from the bytes actually stored, and it cannot see a body that was never framed as events at all.
+Reading the choices is what the answer costs: the walk is about 1.6 times the price of asking for the error alone (`BenchmarkIsCacheableResponse`). It scales with the body, so a 1.3 MB reply pays about a millisecond of it on the store — against the seconds that same reply spends being written to the client. Only the store pays: the read path asks the failure alone. The events-side alternative, counting inside the rewriter and the fold as the events go past, costs a tenth of that, but it answers from writer state rather than from the bytes actually stored, and it cannot see a body that was never framed as events at all.
 
 ### Capability errors
 

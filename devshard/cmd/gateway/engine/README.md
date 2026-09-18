@@ -6,17 +6,20 @@ One client request, several attempts on different hosts, one winner. This packag
 
 | File | What it holds |
 | --- | --- |
-| `race.go` | the coordinator: the event loop, the exits, and the outcome it reports once |
+| `race.go` | the coordinator: the event loop and the exits |
+| `engine.go` | the engine itself: what it is given, the races it admits, and the barrier it stops behind |
+| `report.go` | what each attempt is recorded as, and the one outcome the race reports |
 | `pick.go` | asking the scheduler for a host and launching an attempt on it |
 | `attempt.go`, `attempt_outcome.go` | one attempt's life: dispatch, receipt, chunks, terminal |
 | `escalation.go` | when to start another attempt — the deadline ladder measured from the host's own history |
-| `crown.go`, `stream.go` | crowning the first attempt to produce content, and forwarding only its bytes |
+| `crown.go`, `crown_strikes.go`, `stream.go` | crowning the first attempt to produce content, withholding the crown from a host that keeps answering without, and forwarding only the winner's bytes |
 | `deadline.go`, `drain.go` | the timers, and the barrier that outlives the client |
 | `classify.go`, `outcome.go`, `terminal.go`, `judgement.go`, `failure.go` | what the attempt ended as, in the vocabulary the ledger admits, and what the race owes the client and the ladders because of it |
 | `settle.go`, `session.go` | the timeout vote every unfinished nonce owes |
 | `reassembly.go`, `carry.go` | rebuilding events split across chunk boundaries |
 | `vocabulary.go` | the wire strings — metric labels, log fields, ledger reasons — declared once |
 | `trace.go` | the `RaceStep` a coordinator copies at emit, for the journal |
+| `errors.go`, `capability.go` | what the race hands back, and what a host's refusal says about the host |
 
 ## What it does not own
 
@@ -110,7 +113,7 @@ What the classifier reads out of an event:
 
 ### The exemption ladder
 
-`sampleExemption` is the ordered set of reasons an attempt contributes no perf sample and therefore never counts toward its host's ejection: never dispatched, never reported (the race stopped listening, so judging it would charge a host for the gateway's own cancellation), phase aborted, error stream or capability refusal, state divergent, long response, empty stream under a PoC bypass, empty stream with no winner, and finally client-cancelled.
+`sampleExemption` is the ordered set of reasons an attempt contributes no perf sample and therefore never counts toward its host's ejection: never dispatched, never reported (the race stopped listening, so judging it would charge a host for the gateway's own cancellation), phase aborted, error stream or capability refusal, state divergent, long response, empty stream under a PoC bypass, a request the host refused as too large, empty stream with no winner, and finally client-cancelled.
 
 `Verdict` is a second ladder and **disagrees with the sample ladder at client cancellation** — the race cancels its own losers. An empty stream is an `EmptyAnswer`, or an `EmptyAnswerLeftOpen` when it left its nonce open, and a stream that went silent between chunks is a `DecodeStalled`. The ladder also turns a burn-empty held past `emptyStreamHeldTooLong` into an overload verdict: below that a burn-empty is the model's output, at or above it the host held the request past the refusal point and returned nothing. A won or lost attempt whose host missed a deadline is a `LateSuccess`: its windows were already narrowed at the deadline, and a success would widen them again.
 

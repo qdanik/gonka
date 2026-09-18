@@ -97,7 +97,7 @@ The escalation pick runs on its own goroutine rather than inline in the coordina
 
 One re-armed timer carries every deadline. `nextDeadline` takes the earliest of five families — the hard timeout, the escalation, the missed deadline, the pick and the stall — and the declaration order of the trigger constants breaks *exact* ties only (`engine/race.go`, the `deadlineTrigger` constants; `engine/deadline.go`, `nextDeadline`):
 
-1. **Hard timeout** — the minimum of: the drain deadline once the client has left; 30 minutes of total wait and 20 minutes without content for a non-streaming race; the loser grace after a crowned attempt finishes; and 20 minutes per live attempt.
+1. **Hard timeout** — the minimum of: the drain deadline once the client has left; the loser grace after a crowned attempt finishes; and 20 minutes per live attempt.
 2. **Escalation** — the next armed trigger, suppressed while a pick is already running, and once the race is crowned, detached, at its attempt budget — holding as many unfinished attempts as `engine_max_attempts_per_request` allows, or having started as many as its host group has — or once a trusted host's refusal or rejection of the request rules out a retry.
 3. **Missed deadline** — the earliest receipt or first-token deadline a running attempt still owes: the deadline its escalation arms on, armed whether or not the race may still escalate, and judged once per attempt.
 4. **Pick** — when an unanswered escalation pick stops being worth waiting for; zero while no pick is running.
@@ -206,7 +206,7 @@ A panicking race still releases its registration and then re-panics with the sam
 
 ## Tunables and backstops
 
-Carried in the configuration snapshot (`config.Engine`, `config.Stream`) and bounded by `Config.Validate`, at start-up and on every admin write. The five timings below take a `GATEWAY_ENGINE_*` variable and an admin override; a race reads the snapshot when it is admitted (`engine/engine.go`, `Engine.Run`), so a swap reaches the next race and never re-times one already running. `engine_max_attempts_per_request` is not among them: it multiplies nonces per request rather than moving a deadline, and stays a restart.
+Carried in the configuration snapshot (`config.Engine`, `config.Stream`) and bounded by `Config.Validate`, at start-up and on every admin write. The five timings below take a `GATEWAY_ENGINE_*` variable and an admin override; a race reads the snapshot when it is admitted (`engine/engine.go`, `Engine.Run`), so a swap reaches the next race and never re-times one already running. The four values under them take neither, and `engine_max_attempts_per_request` is deliberately one of those: it multiplies nonces per request rather than moving a deadline. All four are named here by the spelling `Config.Validate` reports them under and are bounded there, but nothing reads a variable or an override for any of them, so changing one is a build.
 
 | Field | Default | Effect |
 |---|---|---|
@@ -219,7 +219,7 @@ Carried in the configuration snapshot (`config.Engine`, `config.Stream`) and bou
 | `drain_timeout_seconds` | 2 400 | Bound on a race after its client leaves. |
 | `classify_max_attempt_bytes`, `classify_max_participant_bytes`, `classify_max_global_bytes` | 1 / 10 / 100 MiB | Reassembly budgets: attempt, participant, global. |
 
-Go constants rather than configuration — these bound a request that every value above already failed to bound (`engine/escalation.go`, the backstop constants):
+Go constants rather than configuration — these bound a request that every value above already failed to bound (`engine/escalation.go`, `engine/outcome.go`, `engine/engine.go`, `engine/race.go` and `filters/stream.go`):
 
 | Constant | Value |
 |---|---|
