@@ -20,6 +20,7 @@ type dispatchObserver interface {
 	NonceHeld(escrowID string)
 	BurnBudgetExhausted(escrowID string)
 	EscrowRetired(escrowID string)
+	NonceAssigned(escrowID string, nonce uint64, requestID string)
 	ExcludedHostServed(escrowID, participant string)
 	ForcedSend(escrowID, participant string, burnsInARow int64)
 }
@@ -271,6 +272,12 @@ func (d *dispatcher) recordHold() {
 func (d *dispatcher) recordBudgetTrip() {
 	if d.observer != nil {
 		d.observer.BurnBudgetExhausted(d.escrowID)
+	}
+}
+
+func (d *dispatcher) recordAssigned(nonce uint64, requestID string) {
+	if d.observer != nil {
+		d.observer.NonceAssigned(d.escrowID, nonce, requestID)
 	}
 }
 

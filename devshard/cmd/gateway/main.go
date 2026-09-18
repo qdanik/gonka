@@ -161,7 +161,10 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 	participants.SetNarrator(events)
 	capacity := limits.NewCapacity(participants.Available)
 	observer.Subscribe(capacity.Update)
-	observer.Subscribe(func(snapshot chain.PhaseSnapshot) { participants.ObserveModels(contextWindowsOf(snapshot)) })
+	observer.Subscribe(func(snapshot chain.PhaseSnapshot) {
+		participants.ObserveModels(contextWindowsOf(snapshot))
+		participants.ObserveWeights(participantWeightsOf(snapshot))
+	})
 	observer.SetNarrator(events)
 	observer.Subscribe((&phaseNarrator{events: events}).observe)
 	gatewayLimiter := limits.NewGatewayLimiter(limits.GatewayConfigFromLimits(configuration.Limits))
@@ -175,7 +178,7 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 	hosts.SetNarrator(events)
 	recorder.SetCapability(func(participant, model string) accounting.HostCapability {
 		contextLimit, versionRefusals, toolRefusals, contextRefusals := hosts.Capability(participant, model)
-		return accounting.HostCapability{
+		capability := accounting.HostCapability{
 			ProtocolVersionUnsupported: versionRefusals > 0,
 			ToolChoiceUnsupported:      toolRefusals > 0,
 			ContextLimit:               contextLimit,
@@ -183,6 +186,15 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 			ToolRefusals:               toolRefusals,
 			ContextRefusals:            contextRefusals,
 		}
+		if window, tracked := participants.WindowFor(participant, model); tracked {
+			capability.InputWindowTokens = uint64(max(window.InputWindowTokens, 0))
+			capability.OutputWindowTokens = uint64(max(window.OutputWindowTokens, 0))
+			capability.InflightInputTokens = uint64(max(window.InflightInputTokens, 0))
+			capability.InflightOutputTokens = uint64(max(window.InflightOutputTokens, 0))
+			capability.WindowCutoff = string(window.Cutoff)
+			capability.WindowWeight = uint64(max(capacity.ParticipantWeight(participant, model), 0))
+		}
+		return capability
 	})
 	telemetry := metrics.New()
 
@@ -265,7 +277,7 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 		return nil, err
 	}
 	// One wrapper for both readers, so the gauge reports the scale admission actually applies.
-	modelCapacities := modelCapacity{capacity: capacity, snapshots: observer, config: configHolder}
+	modelCapacities := modelCapacity{capacity: capacity, snapshots: observer, config: configHolder, participants: participants}
 	telemetry.Register(
 		metrics.NewLimitsCollector(metrics.LimitsSources{
 			Limiter:       gatewayLimiter,
@@ -373,6 +385,7 @@ func newRouting(deps routingDeps) (*registry.Registry, *scheduler.Scheduler, *wa
 		Membership:       deps.Capacity,
 		Exhaustion:       deps.Depletion,
 		Narrator:         deps.Journal,
+		Retiring:         deps.Ledger.EscrowRetiring,
 		Now:              deps.Now,
 	}
 	// A nil warmup must not reach the interface field: a typed nil there is non-nil to a nil check.
@@ -390,7 +403,7 @@ func newRouting(deps routingDeps) (*registry.Registry, *scheduler.Scheduler, *wa
 		Perf:              deps.Hosts,
 		Snapshots:         deps.Snapshots,
 		Config:            deps.Config,
-		Observer:          tracedDispatches{recorder: deps.Dispatches, events: deps.Journal},
+		Observer:          tracedDispatches{recorder: deps.Dispatches, events: deps.Journal, ledger: deps.Ledger},
 		Now:               deps.Now,
 		OnEscrowExhausted: escrows.Exhausted,
 	})
@@ -412,9 +425,10 @@ func (environmentSigner) SignerFor(privateKeyEnv string) (*signing.Secp256k1Sign
 
 // modelCapacity's per-weight allowance follows the raw chain phase: it bounds what the hosts can do.
 type modelCapacity struct {
-	capacity  *limits.Capacity
-	snapshots *chain.PhaseObserver
-	config    *config.Holder
+	capacity     *limits.Capacity
+	snapshots    *chain.PhaseObserver
+	config       *config.Holder
+	participants *limits.ParticipantLimiter
 }
 
 func (m modelCapacity) ForModel(model string) limits.ModelCapacity {
@@ -429,12 +443,31 @@ func (m modelCapacity) ForModel(model string) limits.ModelCapacity {
 		CurrentWeight:               weights.CurrentWeight,
 		BaselineWeight:              weights.BaselineWeight,
 		MaxConcurrentPer10000Weight: perWeight,
+		HostWindowRequests:          m.participants.ModelConcurrency(model),
 	}
 }
 
 // ModelWeights folds in relaxed mode first, or PoC zeroes every cap. See README.md, "Relaxed mode, in one place".
 func (m modelCapacity) ModelWeights(model string) limits.ModelWeights {
 	return m.capacity.ModelWeights(model, m.config.Load().Modes.BlocksRequests(m.snapshots.Snapshot()))
+}
+
+// participantWeightsOf is what each host earned for each model, taking the lower of the two views the chain
+// keeps: a current weight above the full one must not buy a wider window. See capacity.md, "What a host's weight buys".
+func participantWeightsOf(snapshot chain.PhaseSnapshot) map[string]map[string]float64 {
+	weights := make(map[string]map[string]float64, len(snapshot.FullWeightsByModel))
+	for model, full := range snapshot.FullWeightsByModel {
+		current, byModel := snapshot.CurrentWeightsByModel[model]
+		if !byModel {
+			current = snapshot.CurrentWeights
+		}
+		earned := make(map[string]float64, len(full))
+		for participant, fullWeight := range full {
+			earned[participant] = min(fullWeight, current[participant])
+		}
+		weights[model] = earned
+	}
+	return weights
 }
 
 // contextWindowsOf is the context length governance reports per model. See capacity.md, "The participant limiter: IOCW".

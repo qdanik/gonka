@@ -18,7 +18,7 @@ const exhaustionFallbackNonceCeiling = "fallback_nonce_ceiling"
 // nonceInFlightMargin is room left under the hosts' nonce cap for work already routed. See routing.md, "Picking an escrow".
 const nonceInFlightMargin uint64 = 200
 
-func (s *Scheduler) pickEscrow(profile RequestProfile, snapshot chain.PhaseSnapshot, queued *waiter, avoid string) (Escrow, error) {
+func (s *Scheduler) pickEscrow(profile RequestProfile, snapshot chain.PhaseSnapshot, queued *waiter, avoided map[string]bool) (Escrow, error) {
 	candidates := s.escrows.Candidates(profile.Model)
 	retirement, request := s.retirementReserve(), requestReserve(profile)
 
@@ -54,7 +54,7 @@ func (s *Scheduler) pickEscrow(profile RequestProfile, snapshot chain.PhaseSnaps
 			continue
 		}
 		admitted++
-		if candidate.ID == avoid {
+		if avoided[candidate.ID] {
 			continue
 		}
 		if reason := exhaustionReason(candidate, snapshot.MaxNonce, retirement); reason != "" {

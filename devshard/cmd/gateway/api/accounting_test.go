@@ -171,7 +171,7 @@ func TestTheLookupReturnsTheRecordedRow(t *testing.T) {
 		WinnerHost:         "host-3",
 		WinnerHostIdx:      3,
 		Attempts:           2,
-		InputTokens:        128,
+		EstimatedInput:     128,
 		WinnerOutputTokens: 256,
 		TotalOutputTokens:  381,
 		StartedAt:          "2023-11-14T22:13:19.500000000Z",

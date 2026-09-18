@@ -53,6 +53,8 @@ func classifyChunk(events []byte, thinkingBudget bool) chunkSignal {
 type chunkScan struct {
 	ContentSource         string
 	UsageCompletionTokens int64
+	UsagePromptTokens     int64
+	LogprobTokens         int64
 	LogprobsDecoded       bool
 }
 
@@ -80,6 +82,7 @@ type streamedLogprobs struct {
 
 type streamedUsage struct {
 	CompletionTokens int64 `json:"completion_tokens"`
+	PromptTokens     int64 `json:"prompt_tokens"`
 }
 
 // looseEvent is the same event with the parts a host can type against the schema left raw, so a wrong type in one of them costs that answer alone rather than every answer the event carries.
@@ -139,12 +142,15 @@ func scanChunk(events []byte, thinkingBudget bool) chunkScan {
 		if !decoded {
 			return false
 		}
-		tokens := int64(0)
+		tokens, prompt := int64(0), int64(0)
 		if event.Usage != nil {
-			tokens = event.Usage.CompletionTokens
+			tokens, prompt = event.Usage.CompletionTokens, event.Usage.PromptTokens
 		}
-		if scan.UsageCompletionTokens == 0 && tokens > 0 {
+		if tokens > 0 {
 			scan.UsageCompletionTokens = tokens
+		}
+		if prompt > 0 {
+			scan.UsagePromptTokens = prompt
 		}
 		for _, choice := range event.Choices {
 			if scan.ContentSource == "" {
@@ -153,6 +159,7 @@ func scanChunk(events []byte, thinkingBudget bool) chunkScan {
 			if !scan.LogprobsDecoded {
 				scan.LogprobsDecoded = choice.Logprobs.namesDecodedTokens()
 			}
+			scan.LogprobTokens += int64(len(choice.Logprobs.Content))
 		}
 		return false
 	})

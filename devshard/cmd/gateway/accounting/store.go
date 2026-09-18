@@ -23,6 +23,8 @@ type EscrowSnapshot struct {
 	Retired      bool                       `json:"retired"`
 	HostStats    map[uint32]types.HostStats `json:"host_stats,omitempty"`
 	SlotActivity map[uint32]SlotActivity    `json:"slot_activity,omitempty"`
+	Money        map[uint32]SlotMoney       `json:"money,omitempty"`
+	Produced     map[uint32]uint64          `json:"produced_tokens,omitempty"`
 	Counters     []PersistedCounter         `json:"counters,omitempty"`
 	Nonces       []PersistedNonce           `json:"nonces,omitempty"`
 }
@@ -77,6 +79,8 @@ func (b *Book) Snapshot() Snapshot {
 		}
 		maps.Copy(stored.HostStats, escrow.hostStats)
 		stored.SlotActivity = escrow.slotActivity()
+		stored.Money = escrow.moneyBySlot()
+		stored.Produced = maps.Clone(escrow.produced)
 		for key, count := range escrow.counters {
 			stored.Counters = append(stored.Counters, PersistedCounter{CounterKey: key, Count: count})
 		}
@@ -126,6 +130,8 @@ func (b *Book) Restore(snapshot Snapshot) error {
 		escrow.latest = stored.LatestNonce
 		escrow.retired = stored.Retired
 		maps.Copy(escrow.hostStats, stored.HostStats)
+		maps.Copy(escrow.folded, stored.Money)
+		maps.Copy(escrow.produced, stored.Produced)
 		for slotID, activity := range stored.SlotActivity {
 			escrow.challenged[slotID] = activity.Challenged
 			escrow.validations[slotID] = activity.Validations

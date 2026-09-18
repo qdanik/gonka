@@ -48,6 +48,7 @@ type ModelCapacity struct {
 	CurrentWeight               float64
 	BaselineWeight              float64
 	MaxConcurrentPer10000Weight float64
+	HostWindowRequests          int64
 }
 
 type ModelOverride struct {
@@ -332,12 +333,22 @@ func effectiveConcurrencyLimit(baseMaxConcurrent int64, capacity ModelCapacity) 
 	if capacity.MaxConcurrentPer10000Weight > 0 && capacity.BaselineWeight > 0 {
 		current := weightConcurrencyLimit(capacity.CurrentWeight, capacity.MaxConcurrentPer10000Weight)
 		baseline := weightConcurrencyLimit(capacity.BaselineWeight, capacity.MaxConcurrentPer10000Weight)
-		return min(current, baseline), true // current weight must never lift the cap above the baseline-derived one
+		return backstopped(max(min(current, baseline), capacity.HostWindowRequests), baseMaxConcurrent), true
+	}
+	if capacity.HostWindowRequests > 0 {
+		return backstopped(capacity.HostWindowRequests, baseMaxConcurrent), true
 	}
 	if baseMaxConcurrent <= 0 {
 		return 0, false
 	}
 	return scaleClamp(baseMaxConcurrent, capacity.ScaleFactor), true
+}
+
+func backstopped(limit, baseMaxConcurrent int64) int64 {
+	if baseMaxConcurrent <= 0 {
+		return limit
+	}
+	return min(limit, baseMaxConcurrent)
 }
 
 func effectiveInputTokenLimit(baseMaxInputTokens int64, capacity ModelCapacity) (limit int64, limited bool) {

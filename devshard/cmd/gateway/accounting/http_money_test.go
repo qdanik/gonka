@@ -42,6 +42,12 @@ func TestParticipantsEndpointReturnsCostPerParticipantAndModel(t *testing.T) {
 		if err := book.ObserveInferences(escrow.id, map[uint64]*types.InferenceRecord{escrow.nonce: escrow.record}); err != nil {
 			t.Fatalf("ObserveInferences %s: %v", escrow.id, err)
 		}
+		if err := book.RecordRace(escrow.id, []Attempt{{
+			Nonce: escrow.nonce, RequestID: "request-1", Sent: true, Finished: true,
+			Usage: UsageWinner, OutputTokens: int64(escrow.record.OutputTokens),
+		}}); err != nil {
+			t.Fatalf("RecordRace %s: %v", escrow.id, err)
+		}
 	}
 
 	recorder := serve(t, book, "/api/v1/epochs/current/participants")
@@ -124,11 +130,11 @@ func TestParticipantsEndpointServesWhatTheHostWasGiven(t *testing.T) {
 	}
 	var body struct {
 		Participants []struct {
-			InputLengthBytes uint64 `json:"input_length_bytes"`
-			MaxTokens        uint64 `json:"max_tokens"`
-			Slots            []struct {
-				InputLengthBytes uint64 `json:"input_length_bytes"`
-				MaxTokens        uint64 `json:"max_tokens"`
+			EstimatedInput uint64 `json:"estimated_input_tokens"`
+			MaxTokens      uint64 `json:"max_tokens"`
+			Slots          []struct {
+				EstimatedInput uint64 `json:"estimated_input_tokens"`
+				MaxTokens      uint64 `json:"max_tokens"`
 			} `json:"slots"`
 		} `json:"participants"`
 	}
@@ -145,9 +151,9 @@ func TestParticipantsEndpointServesWhatTheHostWasGiven(t *testing.T) {
 		got  uint64
 		want uint64
 	}{
-		{"host input_length_bytes", host.InputLengthBytes, 2_048},
+		{"host estimated_input_tokens", host.EstimatedInput, 512},
 		{"host max_tokens", host.MaxTokens, 256},
-		{"slot input_length_bytes", slot.InputLengthBytes, 2_048},
+		{"slot estimated_input_tokens", slot.EstimatedInput, 512},
 		{"slot max_tokens", slot.MaxTokens, 256},
 	} {
 		if field.got != field.want {

@@ -147,18 +147,12 @@ func (p Pressure) congestedDimension(slack float64) dimension {
 	return dimensionNone
 }
 
-// grownBy widens one window by what its dimension carried. See README.md, "Additive increase".
-func grownBy(window float64, tokens int64, step float64, slowStart bool) float64 {
-	if window <= 0 || tokens <= 0 {
+// grownBy widens one window by a whole request for an answer that used it. See README.md, "Additive increase".
+func grownBy(window float64, tokens int64, step float64) float64 {
+	if window <= 0 || tokens <= 0 || step <= 0 {
 		return window
 	}
-	if slowStart {
-		return window + float64(tokens)
-	}
-	if step <= 0 {
-		return window
-	}
-	return window + step*float64(tokens)/window
+	return window + step
 }
 
 // narrowedTo applies one factor, never below the floor and never below one token.

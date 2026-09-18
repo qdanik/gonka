@@ -130,7 +130,7 @@ func newScheduler(candidates ...candidate) (*Scheduler, *fakeEscrows, *fakeWeigh
 
 // pickWith stands in for the part of Pick that precedes the dispatcher: one waiter built from the profile, nothing avoided.
 func pickWith(scheduler *Scheduler, profile RequestProfile, snapshot chain.PhaseSnapshot) (Escrow, error) {
-	return scheduler.pickEscrow(profile, snapshot, newWaiter(profile, time.Time{}), "")
+	return scheduler.pickEscrow(profile, snapshot, newWaiter(profile, time.Time{}), nil)
 }
 
 func TestPickEscrowPinned(t *testing.T) {

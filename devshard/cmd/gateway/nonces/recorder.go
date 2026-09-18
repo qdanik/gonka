@@ -243,8 +243,11 @@ func (n *Recorder) observeEscrowState(escrowID string, escrowState types.EscrowS
 
 // The session handle is taken once: it is fixed for the sweep, and the ask behind it takes the lock a nonce commit holds.
 func (n *Recorder) reconcileFinished(escrowID string, session registry.EscrowSession) {
-	unfinished := n.service.Book.UnfinishedNonces(escrowID)
 	underlying := session.UserSession()
+	if underlying == nil {
+		return
+	}
+	unfinished := n.service.Book.UnfinishedNonces(escrowID)
 	var finished []uint64
 	for _, nonce := range unfinished {
 		if underlying.IsNonceFinished(nonce) {
@@ -252,6 +255,30 @@ func (n *Recorder) reconcileFinished(escrowID string, session registry.EscrowSes
 		}
 	}
 	n.report(n.service.Book.MarkFinished(escrowID, finished))
+}
+
+// EscrowRetiring takes the reading the sweep will never take again, and writes the ledger out.
+// See docs/accounting.md, "Money and tokens".
+func (n *Recorder) EscrowRetiring(escrowID string, session registry.EscrowSession) {
+	if n == nil || n.service == nil {
+		return
+	}
+	if session != nil {
+		n.observeEscrowState(escrowID, session.SnapshotState())
+		n.reconcileFinished(escrowID, session)
+	}
+	n.service.Book.RetireEscrow(escrowID)
+	n.observing.Delete(escrowID)
+	if err := n.service.Flush(); err != nil {
+		logging.Error("nonce accounting snapshot failed", "error", err)
+	}
+}
+
+func (n *Recorder) NonceAssigned(escrowID string, nonce uint64, requestID string) {
+	if n == nil || nonce == 0 {
+		return
+	}
+	n.report(n.service.Book.RecordAssigned(escrowID, nonce, requestID))
 }
 
 func (n *Recorder) RecordGhost(escrowID string, nonce uint64, reason string) {
@@ -274,6 +301,7 @@ func (n *Recorder) RecordRace(outcome engine.RaceOutcome) {
 		attempts = append(attempts, accounting.Attempt{
 			Nonce:           attempt.Nonce,
 			RequestID:       outcome.RequestID,
+			OutputTokens:    attempt.OutputTokens(),
 			Sent:            !attempt.SendTime.IsZero(),
 			Acknowledged:    !attempt.ReceiptTime.IsZero(),
 			Finished:        attempt.NonceFinished,

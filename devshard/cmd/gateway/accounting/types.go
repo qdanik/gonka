@@ -34,6 +34,7 @@ type EscrowMetadata struct {
 type Attempt struct {
 	Nonce           uint64
 	RequestID       string
+	OutputTokens    int64
 	Sent            bool
 	Finished        bool
 	Acknowledged    bool
@@ -118,6 +119,7 @@ type EpochSummary struct {
 	EpochIndex    uint64    `json:"epoch_index"`
 	Participants  int       `json:"participants"`
 	nonceTotals
+	hostActivity
 }
 
 // A zero field constrains nothing; epoch zero is unconstrained rather than selectable.

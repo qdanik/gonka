@@ -72,6 +72,40 @@ func TestTheSecondRoundLeavesOutTheEscrowThatGaveUp(t *testing.T) {
 	}
 }
 
+// An escrow that cannot pay for this request says nothing about the next one's balance.
+func TestARequestAnEscrowCannotPayForIsOfferedToAnotherEscrow(t *testing.T) {
+	test := busyEscrowHarness(t, escrowA, escrowB)
+	test.sessions[escrowA].failAdvancing(types.ErrInsufficientBalance)
+
+	assignment, err := test.scheduler.Pick(context.Background(), RequestProfile{Model: modelA})
+
+	if err != nil {
+		t.Fatalf("Pick: %v", err)
+	}
+	if assignment.Escrow != escrowB {
+		t.Fatalf("assignment escrow = %q, want the request carried to %q", assignment.Escrow, escrowB)
+	}
+}
+
+// The caller hears "no balance" only once every escrow has been asked for it.
+func TestOnlyAFleetWithNoBalanceLeftRefusesTheCaller(t *testing.T) {
+	test := busyEscrowHarness(t, escrowA, escrowB)
+	for _, escrowID := range []string{escrowA, escrowB} {
+		test.sessions[escrowID].failAdvancing(types.ErrInsufficientBalance)
+	}
+
+	_, err := test.scheduler.Pick(context.Background(), RequestProfile{Model: modelA})
+
+	if !errors.Is(err, types.ErrInsufficientBalance) {
+		t.Fatalf("Pick = %v, want the fleet's own out-of-funds answer", err)
+	}
+	for _, escrowID := range []string{escrowA, escrowB} {
+		if !test.reached(t, escrowID) {
+			t.Fatalf("escrow %s was never asked before the caller was refused", escrowID)
+		}
+	}
+}
+
 // One retry, never a loop, and a busy shard still answers busy rather than out of capacity.
 func TestABusyShardAnswersOnceAndStops(t *testing.T) {
 	test := busyEscrowHarness(t, escrowA, escrowB)

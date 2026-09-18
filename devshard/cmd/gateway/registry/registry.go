@@ -28,8 +28,13 @@ type Deps struct {
 	Exhaustion       exhaustion
 	Publications     publications
 	Narrator         escrowNarrator
+	Retiring         retiringObserver
 	Now              func() time.Time
 }
+
+// retiringObserver is told about an escrow once its last request has ended and before its session is
+// released, which is the last moment anything can be read from it. See README.md, "Publishing, retiring and draining".
+type retiringObserver func(escrowID string, session EscrowSession)
 
 // Registry owns the live escrow set: live is written only under mu and read without it. See routing.md, "The escrow registry".
 type Registry struct {
@@ -40,6 +45,7 @@ type Registry struct {
 	exhaustion       exhaustion
 	publications     publications
 	narrator         escrowNarrator
+	retiring         retiringObserver
 	now              func() time.Time
 
 	live         atomic.Pointer[liveSet]
@@ -68,6 +74,7 @@ func New(deps Deps) *Registry {
 		exhaustion:       deps.Exhaustion,
 		publications:     deps.Publications,
 		narrator:         deps.Narrator,
+		retiring:         deps.Retiring,
 		now:              deps.Now,
 		draining:         map[*escrowEntry]struct{}{},
 	}
@@ -186,6 +193,9 @@ func (r *Registry) unpublish(escrowID string) (*escrowEntry, bool) {
 
 // closeDraining releases the session with the registry lock free, in the session-then-registry lock order.
 func (r *Registry) closeDraining(entry *escrowEntry) error {
+	if r.retiring != nil {
+		r.retiring(entry.id, entry.session)
+	}
 	// Only an unreleased store leaves the entry in draining, so Add keeps refusing that id.
 	released, err := entry.close()
 	if !released {

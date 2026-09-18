@@ -49,6 +49,7 @@ func TestNonceCostsAreCarriedFromTheEscrowRecord(t *testing.T) {
 	}}); err != nil {
 		t.Fatalf("ObserveInferences: %v", err)
 	}
+	recordProduced(t, book, "5", 7, 128)
 
 	totals := queryTotals(t, book)
 	if got := totals.ReservedCost; got != 10_000 {
@@ -64,7 +65,7 @@ func TestNonceCostsAreCarriedFromTheEscrowRecord(t *testing.T) {
 		t.Errorf("input tokens = %d, want 512", got)
 	}
 	if got := totals.OutputTokens; got != 128 {
-		t.Errorf("output tokens = %d, want 128", got)
+		t.Errorf("output tokens = %d, want the 128 the gateway counted", got)
 	}
 }
 
@@ -119,6 +120,8 @@ func TestMoneyIsSummedAcrossTheNoncesOfOneSlot(t *testing.T) {
 	if err := book.ObserveInferences("5", map[uint64]*types.InferenceRecord{7: spent, 9: spent}); err != nil {
 		t.Fatalf("ObserveInferences: %v", err)
 	}
+	recordProduced(t, book, "5", 7, 4)
+	recordProduced(t, book, "5", 9, 4)
 
 	var totals nonceTotals
 	for _, record := range book.Query(QueryFilter{}) {
@@ -159,6 +162,8 @@ func TestMoneyIsSummedAcrossTheSlotsOfOneParticipant(t *testing.T) {
 	if err := book.ObserveInferences("5", map[uint64]*types.InferenceRecord{7: spent, 8: spent}); err != nil {
 		t.Fatalf("ObserveInferences: %v", err)
 	}
+	recordProduced(t, book, "5", 7, 4)
+	recordProduced(t, book, "5", 8, 4)
 
 	for slotID, cost := range map[uint32]uint64{0: 30, 1: 70} {
 		if err := book.ObserveHostStats("5", slotID, types.HostStats{Cost: cost}); err != nil {
@@ -215,6 +220,7 @@ func TestObservingTheSameNonceTwiceDoesNotDoubleTheMoney(t *testing.T) {
 		if err := book.ObserveInferences("5", map[uint64]*types.InferenceRecord{7: record}); err != nil {
 			t.Fatalf("ObserveInferences: %v", err)
 		}
+		recordProduced(t, book, "5", 7, 128)
 	}
 
 	totals := queryTotals(t, book)
@@ -222,7 +228,17 @@ func TestObservingTheSameNonceTwiceDoesNotDoubleTheMoney(t *testing.T) {
 		t.Errorf("reserved = %d, want 10000 after three sweeps of one nonce", got)
 	}
 	if got := totals.OutputTokens; got != 128 {
-		t.Errorf("output tokens = %d, want 128 after three sweeps", got)
+		t.Errorf("output tokens = %d, want 128 after three sweeps and three reports of the same attempt", got)
+	}
+}
+
+// recordProduced is the gateway reporting what an attempt streamed, which is where output tokens come from.
+func recordProduced(t *testing.T, book *Book, escrowID string, nonce uint64, tokens int64) {
+	t.Helper()
+	if err := book.RecordRace(escrowID, []Attempt{{
+		Nonce: nonce, RequestID: "request-1", Sent: true, Finished: true, Usage: UsageWinner, OutputTokens: tokens,
+	}}); err != nil {
+		t.Fatalf("RecordRace(): %v", err)
 	}
 }
 
@@ -253,8 +269,8 @@ func TestWhatTheHostWasGivenIsCarriedFromTheEscrowRecord(t *testing.T) {
 	}
 
 	totals := queryTotals(t, book)
-	if got := totals.InputLengthBytes; got != 2_048 {
-		t.Errorf("input length = %d, want the 2048 bytes the gateway handed over", got)
+	if got := totals.EstimatedInput; got != 512 {
+		t.Errorf("estimated input = %d, want the gateway's own estimate of the 2048 bytes it handed over", got)
 	}
 	if got := totals.MaxTokens; got != 256 {
 		t.Errorf("max tokens = %d, want the 256 the gateway reserved on the output side", got)
@@ -285,6 +301,7 @@ func TestABurnedNonceLeavesOutWhatItWasGivenAndNothingElse(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("ObserveInferences: %v", err)
 	}
+	recordProduced(t, book, "5", 8, 128)
 
 	totals := queryTotals(t, book)
 	for _, field := range []struct {
@@ -293,7 +310,7 @@ func TestABurnedNonceLeavesOutWhatItWasGivenAndNothingElse(t *testing.T) {
 		want uint64
 		why  string
 	}{
-		{"input length", totals.InputLengthBytes, 2_048, "the burn's 60 bytes are the gateway's own prompt"},
+		{"estimated input", totals.EstimatedInput, 512, "the burn's own prompt is not a request's"},
 		{"max tokens", totals.MaxTokens, 256, "the burn's 64 tokens were reserved by the gateway, not by a host"},
 		{"reserved", totals.ReservedCost, 2_428, "money still counts the burn: a burn costs the escrow"},
 		{"refunded", totals.RefundedCost, 1_428, "the burn's whole reserve came back, the served nonce's surplus with it"},

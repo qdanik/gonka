@@ -33,16 +33,16 @@ func Defaults() Config {
 			MaxTokensCap:             int64(filters.RequestMaxTokensCap),
 			Concurrency: Concurrency{
 				MaxRequests:               2048,
-				RequestsPer10000Weight:    8,
-				PoCRequestsPer10000Weight: 16,
+				RequestsPer10000Weight:    5,
+				PoCRequestsPer10000Weight: 10,
 			},
 			MaxInputTokensInFlight: 0,
 			AdmissionQueueWaitMS:   300_000,
 			AdmissionQueuePerSlot:  4,
 			FallbackMaxModelLen:    fallbackMaxModelLen,
 			HostWindows: HostWindows{
-				Input:  RequestWindow{MinRequests: 1, InitialRequests: 2},
-				Output: RequestWindow{MinRequests: 1, InitialRequests: 2},
+				Input:  RequestWindow{MinRequests: 16, InitialRequests: 32},
+				Output: RequestWindow{MinRequests: 16, InitialRequests: 32},
 			},
 			Congestion: Congestion{
 				BetaSoft:   0.85,
@@ -106,7 +106,7 @@ func Defaults() Config {
 		},
 		Scheduler: Scheduler{
 			MatchWaitMS:         2_000,
-			MaxConsecutiveBurns: 6,
+			MaxConsecutiveBurns: 2,
 			WarmNewEscrows:      true,
 		},
 		TimeoutSweep: TimeoutSweep{

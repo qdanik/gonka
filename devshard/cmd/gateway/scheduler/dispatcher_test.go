@@ -117,6 +117,12 @@ func (s *scriptedSession) LatestNonce() uint64 {
 	return s.nonce
 }
 
+func (s *scriptedSession) failAdvancing(err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.failWith = err
+}
+
 func (s *scriptedSession) stopFailing() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -147,6 +153,12 @@ type recordingObserver struct {
 	burnRequestIDs []string
 	excluded       []string
 	forced         []forcedSend
+	assigned       []assignedNonce
+}
+
+type assignedNonce struct {
+	nonce     uint64
+	requestID string
 }
 
 // forcedSend is one anti-burn rung firing, as the observer saw it.
@@ -209,6 +221,18 @@ func (o *recordingObserver) retiredEscrows() []string {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	return append([]string(nil), o.retired...)
+}
+
+func (o *recordingObserver) assignments() []assignedNonce {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return append([]assignedNonce(nil), o.assigned...)
+}
+
+func (o *recordingObserver) NonceAssigned(_ string, nonce uint64, requestID string) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.assigned = append(o.assigned, assignedNonce{nonce: nonce, requestID: requestID})
 }
 
 func (o *recordingObserver) ExcludedHostServed(_ string, participant string) {

@@ -1,0 +1,45 @@
+package engine
+
+import "testing"
+
+func TestTheGatewayCountsTheTokensItStreamed(t *testing.T) {
+	t.Parallel()
+	classifier := newSSEClassifier(testBudget(1<<20, 1<<20, 1<<20), testParticipant, testModel, nil)
+	attempt := &attemptState{}
+
+	for range 3 {
+		attempt.record(classifier.Classify([]byte(
+			`data: {"choices":[{"delta":{"content":"hi"},"logprobs":{"content":[{"token":"h"},{"token":"i"}]}}]}` + "\n\n")))
+	}
+
+	if attempt.logprobTokens != 6 {
+		t.Fatalf("counted %d tokens, want the 6 the stream carried", attempt.logprobTokens)
+	}
+}
+
+func TestAnInterruptedStreamStillReportsWhatItProduced(t *testing.T) {
+	t.Parallel()
+	cut := AttemptOutcome{LogprobTokens: 37}
+
+	if got := cut.OutputTokens(); got != 37 {
+		t.Fatalf("OutputTokens = %d, want the 37 counted before the stream was cut", got)
+	}
+}
+
+func TestAHostThatReportsItsOwnUsageIsBelieved(t *testing.T) {
+	t.Parallel()
+	reported := AttemptOutcome{UsageCompletionTokens: 4_096, LogprobTokens: 11}
+
+	if got := reported.OutputTokens(); got != 4_096 {
+		t.Fatalf("OutputTokens = %d, want the host's own count", got)
+	}
+}
+
+func TestAHostThatReportedNoUsageFallsBackToTheCount(t *testing.T) {
+	t.Parallel()
+	silent := AttemptOutcome{UsageCompletionTokens: 0, LogprobTokens: 4_096}
+
+	if got := silent.OutputTokens(); got != 4_096 {
+		t.Fatalf("OutputTokens = %d, want the tokens the gateway counted off the stream", got)
+	}
+}

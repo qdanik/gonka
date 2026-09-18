@@ -72,9 +72,19 @@ A drain that gives up answers `ErrHostsBusy`, and that error means "this escrow,
 - **Once**, and not at all once the caller's context has ended, which would submit a waiter for a client that has already left.
 - **The second round may improve the answer and never worsen it.** `ErrHostsBusy` is the most actionable refusal a shard has: a 503 carrying a `Retry-After`. A second escrow refusing for any other reason — a group the chain has stopped answering `ErrNoAvailableHost`, a retiring dispatcher, no other routable escrow at all — would turn that into a 502 with no retry hint, for a shard that is merely full. So the first escrow's answer stands unless the second round served, the caller's own context ended it, or it carries `ErrInsufficientBalance`, which is the one fact no other error reports and which the engine latches to stop escalating (`scheduler.go`, `outranksBusy`; `engine/pick.go`, `observePick`).
 
-The escrow that gave up is still counted as reachable in the second round, so excluding the only candidate reads as "no capacity" rather than as an allowlist that refuses everybody (`escrow_pick.go`, the `avoid` branch).
+The escrow that gave up is still counted as reachable in the second round, so excluding the only candidate reads as "no capacity" rather than as an allowlist that refuses everybody (`escrow_pick.go`, the `avoided` branch).
 
 Nothing new is recorded for a re-pick. The two escrows' own ghost counters already carry whatever the attempts spent, and the journal's money lane is sized against a ceiling rather than a rate ([journal/README.md](../journal/README.md)), so a line here would buy volume and no fact. What is missing, and recorded as such, is a count of how often the second round fires and how often it serves: the feature's own value cannot be read off a running gateway today.
+
+## Past every escrow that cannot pay
+
+An escrow that cannot pay for a request is the one refusal another escrow's balance answers. The pick already skips a candidate whose balance does not cover this request's reserve (`escrow_pick.go`, `belowBalanceFloor`), so it never chooses an escrow it can price out in advance. What it cannot see is the balance an escrow spends between being chosen and advancing its nonce: the drain then answers `ErrInsufficientBalance` to its whole queue, and that answer is about one escrow, not about the request.
+
+`Pick` therefore steps past it and asks the next escrow, leaving out every escrow that has already answered out of funds, until one serves or no candidate is left (`scheduler.go`, `pickPastEmptyEscrows`). Unlike a busy escrow, which passes on its own, an escrow out of funds stays out until rotation replaces it, so there is nothing to come back to: the walk never revisits one and is bounded by the candidate count. A busy shard's second round walks on its own terms, so the two bounds compose rather than multiply.
+
+The refusal the caller finally hears is the first out-of-funds answer, not the last round's. Once every candidate is excluded the pick declines with no reason left to carry, and passing that on would turn "no escrow has the balance" into a bare "no capacity" -- which the engine does not latch and the caller cannot act on.
+
+A pinned escrow never walks, for the same reason it is never re-picked: an escalation races attempts inside one nonce stream.
 
 ## The per-escrow dispatcher
 
@@ -156,7 +166,7 @@ A burn spends a nonce to step past a host the nonce is bound to. That is the rig
 
 The rung that breaks the loop is a counter, `burnsInARow`, owned by one escrow's dispatcher and reset by any serve (`dispatcher_queue.go`, `drain`). Once it reaches `scheduler_max_consecutive_burns` — 6 by default, 0 to turn the rung off — the next binding may cross a full congestion window. Two things change for that one binding: `match` stops reading `blockWindowFull` as a block (`match.go`, `servingOverFullWindows`), and an admission the window refuses is retried as an overdraft, which takes the tokens without asking whether they fit (`limits/participant.go`, `Overdraft`). The window is still asked first, so an ordinary serve stays ordinary; what changes is that its refusal no longer decides. The request's size is never what ends the pass — deferring to it is exactly what the rung exists to skip.
 
-Six is the trade written as a fraction: one binding in seven is a send rather than a burn, so a run can never cost more than six nonces per request served over a full window. An operator moves it through `max_consecutive_burns` in the admin API, and the drain reads it afresh, so a change reaches escrows already running rather than only new ones.
+Two is the trade written as a fraction: one binding in three is a send rather than a burn, so a run can never cost more than two nonces per request served over a full window. An operator moves it through `max_consecutive_burns` in the admin API, and the drain reads it afresh, so a change reaches escrows already running rather than only new ones.
 
 Three limits keep the rung from becoming its own fault.
 

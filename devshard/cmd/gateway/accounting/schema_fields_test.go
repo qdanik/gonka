@@ -200,6 +200,11 @@ func TestCrossCheckErrorDoesNotLetSlotsCancelEachOther(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("OpenEscrow: %v", err)
 	}
+	for slotID := range uint32(2) {
+		if err := book.ObserveHostStats("e1", slotID, types.HostStats{}); err != nil {
+			t.Fatalf("ObserveHostStats: %v", err)
+		}
+	}
 	if err := book.ObserveHostStats("e1", 0, types.HostStats{Missed: 4}); err != nil {
 		t.Fatalf("ObserveHostStats: %v", err)
 	}

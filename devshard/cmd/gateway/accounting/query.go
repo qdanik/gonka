@@ -7,7 +7,7 @@ import (
 	"strings"
 )
 
-// Aggregated on read, never stored: a stored total could only ever disagree with its own parts.
+// Participant and epoch totals are aggregated on read, never stored: a stored total could only ever disagree with its own parts.
 func (b *Book) Query(filter QueryFilter) []ParticipantRecord {
 	return b.query(filter, true)
 }
@@ -147,7 +147,8 @@ func (b *Book) Epochs(filter QueryFilter) []EpochSummary {
 
 func (s *EpochSummary) absorb(record ParticipantRecord) {
 	s.Participants++
-	s.add(record.nonceTotals)
+	s.nonceTotals.add(record.nonceTotals)
+	s.hostActivity.add(record.hostActivity)
 }
 
 func (b *Book) EscrowIDs() []string {
@@ -205,8 +206,7 @@ func (r *ParticipantRecord) absorb(slot SlotRecord) {
 	r.CrossChecks.HostInvalid += uint64(slot.ChainInvalid)
 	r.CrossChecks.RecordedInvalid += slot.rejected
 	// Per slot of one escrow: summing both sides first lets a surplus in one hide a shortfall in another.
-	r.CrossChecks.ErrorCount += absDiff(slot.TimeoutsApplied, uint64(slot.ChainMissed)) +
-		absDiff(slot.rejected, uint64(slot.ChainInvalid)) + slot.Overcounted
+	r.CrossChecks.ErrorCount += absDiff(slot.TimeoutsApplied, uint64(slot.ChainMissed)) + slot.Overcounted
 }
 
 func (e *escrowLedger) participantOf(slotID uint32) string {
@@ -224,7 +224,6 @@ type slotAggregate struct {
 	dispositions map[Disposition]uint64
 	openRequests map[string]struct{}
 	tally        timeoutTally
-	money        slotMoney
 }
 
 func (e *escrowLedger) slots(escrowID string) []SlotRecord {
@@ -242,19 +241,7 @@ func (e *escrowLedger) slots(escrowID string) []SlotRecord {
 		aggregate.dispositions[key.Disposition] += count
 		aggregate.tally.fold(key, count)
 	}
-	for nonce, cost := range e.costs {
-		money := &aggregates[e.slotOf(nonce)].money
-		money.reserved += cost.reserved
-		money.actual += cost.actual
-		money.refunded += cost.refunded()
-		money.input += cost.input
-		money.output += cost.output
-		if e.isGhost(nonce) {
-			continue
-		}
-		money.inputLength += cost.inputLength
-		money.maxTokens += cost.maxTokens
-	}
+	money := e.foldMoney()
 	for nonce, record := range e.nonces {
 		aggregate := &aggregates[e.slotOf(nonce)]
 		switch {
@@ -284,16 +271,18 @@ func (e *escrowLedger) slots(escrowID string) []SlotRecord {
 			Participant: e.metadata.Slots[slotID].ValidatorAddress,
 			rejected:    e.rejected[slotID],
 			nonceTotals: nonceTotals{
-				Assigned:         assignedForSlot(e.latest, groupSize, slotID),
-				Dispositions:     aggregate.dispositions,
-				Pending:          aggregate.pending,
-				ReservedCost:     aggregate.money.reserved,
-				ActualCost:       aggregate.money.actual,
-				RefundedCost:     aggregate.money.refunded,
-				InputLengthBytes: aggregate.money.inputLength,
-				MaxTokens:        aggregate.money.maxTokens,
-				InputTokens:      aggregate.money.input,
-				OutputTokens:     aggregate.money.output,
+				Assigned:       assignedForSlot(e.latest, groupSize, slotID),
+				Dispositions:   aggregate.dispositions,
+				Pending:        aggregate.pending,
+				ReservedCost:   money[slotID].Reserved,
+				ActualCost:     money[slotID].Actual,
+				RefundedCost:   money[slotID].Refunded,
+				CountedNonces:  money[slotID].CountedNonces,
+				EstimatedInput: money[slotID].EstimatedInput,
+				EstimatedError: money[slotID].EstimatedError,
+				MaxTokens:      money[slotID].MaxTokens,
+				InputTokens:    money[slotID].Input,
+				OutputTokens:   e.produced[slotID],
 			},
 			hostActivity: hostActivity{
 				InFlight:             aggregate.inFlight,

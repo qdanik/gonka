@@ -475,9 +475,9 @@ func trackedHosts() *simTracker {
 	return &simTracker{stubPerf: &stubPerf{ejected: map[string]bool{}, degraded: map[string]bool{}}}
 }
 
-// Each window is credited in the currency it was charged: the prompt a host prefilled widens its input
-// window, and the answer it was allowed to produce widens its output one.
-func TestRecordWidensEachWindowByWhatItsOwnDimensionCarried(t *testing.T) {
+// An answer buys a whole request of room on each window, priced in that window's own currency: one context
+// on the input side, one output budget on the output side, whatever the answer itself measured.
+func TestAnAnsweredRequestWidensEachWindowByOneRequest(t *testing.T) {
 	windows := limits.NewParticipantLimiter(limiterConfig(1000), func() time.Time { return testEpoch })
 	races := engineRecordingInto(t, windows, trackedHosts())
 	release, admitted := windows.Acquire(testParticipant, testModel, limits.TokenCost{
@@ -494,11 +494,13 @@ func TestRecordWidensEachWindowByWhatItsOwnDimensionCarried(t *testing.T) {
 	release()
 
 	input, output := trackedWindows(t, windows)
-	if input != probeStartingWindow+1_000 {
-		t.Errorf("input window = %v, want %v: prefill is credited the prompt the host read", input, probeStartingWindow+1_000)
+	if input != probeStartingWindow+probeRequestTokens {
+		t.Errorf("input window = %v, want %v: an answer is worth one context of room, not the prompt it read",
+			input, probeStartingWindow+probeRequestTokens)
 	}
-	if output != probeStartingWindow+40 {
-		t.Errorf("output window = %v, want %v: decode is credited the answer the host was allowed to produce", output, probeStartingWindow+40)
+	if output != probeStartingWindow+probeRequestTokens {
+		t.Errorf("output window = %v, want %v: an answer is worth one output budget of room, not the answer it produced",
+			output, probeStartingWindow+probeRequestTokens)
 	}
 }
 

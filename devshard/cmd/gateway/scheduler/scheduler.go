@@ -4,6 +4,7 @@ package scheduler
 import (
 	"context"
 	"errors"
+	"maps"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -92,10 +93,15 @@ func NewScheduler(deps Deps) (*Scheduler, error) {
 	}, nil
 }
 
-// Pick serves one request or one escalation attempt; an escalation reuses the pinned escrow. See routing.md, "One re-pick when an escrow gives up".
+// Pick serves one request or one escalation attempt; an escalation reuses the pinned escrow. See routing.md, "One re-pick when an escrow gives up" and "Past every escrow that cannot pay".
 func (s *Scheduler) Pick(ctx context.Context, profile RequestProfile) (Assignment, error) {
-	assignment, routedTo, err := s.pickOnce(ctx, profile, "")
-	if profile.Escrow != "" || !errors.Is(err, ErrHostsBusy) {
+	if profile.Escrow != "" {
+		assignment, _, err := s.pickOnce(ctx, profile, nil)
+		return assignment, err
+	}
+
+	assignment, routedTo, err := s.pickPastEmptyEscrows(ctx, profile, nil)
+	if !errors.Is(err, ErrHostsBusy) {
 		return assignment, err
 	}
 
@@ -103,11 +109,44 @@ func (s *Scheduler) Pick(ctx context.Context, profile RequestProfile) (Assignmen
 		return Assignment{}, err
 	}
 
-	retried, _, retryErr := s.pickOnce(ctx, profile, routedTo)
+	retried, _, retryErr := s.pickPastEmptyEscrows(ctx, profile, map[string]bool{routedTo: true})
 	if retryErr == nil || outranksBusy(retryErr) {
 		return retried, retryErr
 	}
 	return Assignment{}, err
+}
+
+// pickPastEmptyEscrows steps over every escrow that cannot pay for this request, so a caller hears "no balance" only once no escrow has any. See routing.md, "Past every escrow that cannot pay".
+func (s *Scheduler) pickPastEmptyEscrows(ctx context.Context, profile RequestProfile, seed map[string]bool) (Assignment, string, error) {
+	assignment, routedTo, err := s.pickOnce(ctx, profile, seed)
+	if !outOfFunds(err) || routedTo == "" {
+		return assignment, routedTo, err
+	}
+
+	emptied := err
+	avoided := make(map[string]bool, len(seed)+1)
+	maps.Copy(avoided, seed)
+	for range len(s.escrows.Candidates(profile.Model)) {
+		avoided[routedTo] = true
+		if ctx.Err() != nil {
+			return Assignment{}, "", emptied
+		}
+		assignment, routedTo, err = s.pickOnce(ctx, profile, avoided)
+		switch {
+		case err == nil:
+			return assignment, routedTo, nil
+		case routedTo == "":
+			return Assignment{}, "", emptied
+		case !outOfFunds(err):
+			return assignment, routedTo, err
+		}
+	}
+	return Assignment{}, "", emptied
+}
+
+// outOfFunds holds for the one refusal another escrow's balance can answer. See routing.md, "Past every escrow that cannot pay".
+func outOfFunds(err error) bool {
+	return errors.Is(err, types.ErrInsufficientBalance)
 }
 
 // outranksBusy holds for the answers a second round may return in place of a busy shard's. See routing.md, "One re-pick when an escrow gives up".
@@ -118,9 +157,9 @@ func outranksBusy(err error) bool {
 }
 
 // pickOnce names the escrow it routed to, so a caller that re-picks can leave that one out of the second round.
-func (s *Scheduler) pickOnce(ctx context.Context, profile RequestProfile, avoidEscrowID string) (Assignment, string, error) {
+func (s *Scheduler) pickOnce(ctx context.Context, profile RequestProfile, avoided map[string]bool) (Assignment, string, error) {
 	queued := newWaiter(profile, s.now())
-	escrow, err := s.pickEscrow(profile, s.snapshots.Snapshot(), queued, avoidEscrowID)
+	escrow, err := s.pickEscrow(profile, s.snapshots.Snapshot(), queued, avoided)
 	if err != nil {
 		return Assignment{}, "", err
 	}

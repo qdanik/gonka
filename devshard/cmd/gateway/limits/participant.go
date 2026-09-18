@@ -49,12 +49,13 @@ type RequestBounds struct {
 
 // WindowPricing turns a model into the two windows a host gets for it. See capacity.md, "The participant limiter: IOCW".
 type WindowPricing struct {
-	Input                 RequestBounds
-	Output                RequestBounds
-	FallbackContextTokens int64
-	FallbackOutputTokens  int64
-	ContextTokensByModel  map[string]int64
-	OutputTokensByModel   map[string]int64
+	Input                     RequestBounds
+	Output                    RequestBounds
+	ConcurrencyPer10000Weight float64
+	FallbackContextTokens     int64
+	FallbackOutputTokens      int64
+	ContextTokensByModel      map[string]int64
+	OutputTokensByModel       map[string]int64
 }
 
 // ParticipantConfig's IdleEviction of zero keeps every pair for the life of the process.
@@ -83,14 +84,32 @@ func pinnedOr(pinned map[string]int64, model string, fallback int64) int64 {
 	return fallback
 }
 
-// windowsForLocked prices one model. See capacity.md, "The participant limiter: IOCW".
-func (l *ParticipantLimiter) windowsForLocked(model string) ModelWindows {
+// windowsForLocked prices one host's model. See capacity.md, "The participant limiter: IOCW".
+func (l *ParticipantLimiter) windowsForLocked(participant, model string) ModelWindows {
 	pricing := l.cfg.Pricing
 	contextTokens := pinnedOr(pricing.ContextTokensByModel, model, pinnedOr(l.observedContext, model, pricing.FallbackContextTokens))
-	return ModelWindows{
-		Input:  boundsIn(pricing.Input, contextTokens),
-		Output: boundsIn(pricing.Output, pinnedOr(pricing.OutputTokensByModel, model, pricing.FallbackOutputTokens)),
+	outputTokens := pinnedOr(pricing.OutputTokensByModel, model, pricing.FallbackOutputTokens)
+	concurrency := earnedConcurrency(pricing.ConcurrencyPer10000Weight, l.observedWeights[model][participant])
+	if concurrency == 0 {
+		return ModelWindows{
+			Input:  boundsIn(pricing.Input, contextTokens),
+			Output: boundsIn(pricing.Output, outputTokens),
+		}
 	}
+	inputFloor := safemath.MulSaturating(concurrency, contextTokens)
+	outputFloor := safemath.MulSaturating(concurrency, outputTokens)
+	return ModelWindows{
+		Input:  WindowBounds{Min: inputFloor, Initial: safemath.MulSaturating(inputFloor, 2), Step: contextTokens},
+		Output: WindowBounds{Min: outputFloor, Initial: outputFloor, Step: outputTokens},
+	}
+}
+
+// earnedConcurrency is how many requests at full price the chain's weight buys a host, never fewer than one.
+func earnedConcurrency(per10000, weight float64) int64 {
+	if per10000 <= 0 || weight <= 0 {
+		return 0
+	}
+	return max(int64(weight*per10000/10000), 1)
 }
 
 type key struct {
@@ -103,7 +122,6 @@ type window struct {
 	tokens   float64
 	inflight int64
 	peak     int64
-	narrowed bool
 }
 
 func fits(inflight, cost int64, window float64) bool {
@@ -124,7 +142,6 @@ func (w *window) give(tokens int64) {
 func (w *window) reopen(tokens int64) {
 	w.tokens = float64(tokens)
 	w.peak = w.inflight
-	w.narrowed = false
 }
 
 type hostState struct {
@@ -152,6 +169,7 @@ type ParticipantLimiter struct {
 	mu              sync.Mutex
 	cfg             ParticipantConfig
 	observedContext map[string]int64
+	observedWeights map[string]map[string]float64
 	states          map[key]*hostState
 	now             func() time.Time
 	jitter          func(time.Duration) time.Duration
@@ -190,7 +208,7 @@ func (l *ParticipantLimiter) Reconfigure(cfg ParticipantConfig) {
 	defer l.mu.Unlock()
 	l.cfg = cfg
 	for tracked, state := range l.states {
-		state.bounds = l.windowsForLocked(tracked.model)
+		state.bounds = l.windowsForLocked(tracked.participant, tracked.model)
 		state.input.tokens = max(state.input.tokens, float64(state.bounds.Input.Initial))
 		state.output.tokens = max(state.output.tokens, float64(state.bounds.Output.Initial))
 	}
@@ -199,10 +217,55 @@ func (l *ParticipantLimiter) Reconfigure(cfg ParticipantConfig) {
 func (l *ParticipantLimiter) stateLocked(k key) *hostState {
 	state, ok := l.states[k]
 	if !ok {
-		state = l.freshState(k.model)
+		state = l.freshState(k.participant, k.model)
 		l.states[k] = state
 	}
 	return state
+}
+
+// ObserveWeights takes the weight the chain gave each host for each model, which is what its windows are
+// sized on. See capacity.md, "What a host's weight buys".
+func (l *ParticipantLimiter) ObserveWeights(byModel map[string]map[string]float64) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	l.observedWeights = byModel
+	for tracked, state := range l.states {
+		state.bounds = l.windowsForLocked(tracked.participant, tracked.model)
+		state.input.tokens = min(max(state.input.tokens, float64(state.bounds.Input.Min)), float64(state.bounds.Input.Initial))
+		state.output.tokens = min(max(state.output.tokens, float64(state.bounds.Output.Min)), float64(state.bounds.Output.Initial))
+	}
+}
+
+// ModelConcurrency is how many requests at full price the hosts of one model can take, "What a host's weight buys".
+func (l *ParticipantLimiter) ModelConcurrency(model string) int64 {
+	if l == nil {
+		return 0
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	now := l.now()
+	var requests int64
+	for tracked, state := range l.states {
+		if tracked.model != model || cutoffState(state, now) == CutoffOpen || state.bounds.Output.Step <= 0 {
+			continue
+		}
+		requests = safemath.AddSaturating(requests, int64(state.output.tokens)/state.bounds.Output.Step)
+	}
+	return requests
+}
+
+// WindowFor answers one pair without walking every tracked one, for a reader asking about a single host.
+func (l *ParticipantLimiter) WindowFor(participant, model string) (HostWindow, bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	state, tracked := l.states[key{participant: participant, model: model}]
+	if !tracked {
+		return HostWindow{}, false
+	}
+	return l.windowOf(key{participant: participant, model: model}, state, l.now()), true
 }
 
 // ObserveModels takes the context length governance reports for each model. See capacity.md, "The participant limiter: IOCW".
@@ -215,14 +278,14 @@ func (l *ParticipantLimiter) ObserveModels(contextTokens map[string]int64) {
 	}
 	maps.Copy(l.observedContext, contextTokens)
 	for tracked, state := range l.states {
-		state.bounds = l.windowsForLocked(tracked.model)
+		state.bounds = l.windowsForLocked(tracked.participant, tracked.model)
 		state.input.tokens = max(state.input.tokens, float64(state.bounds.Input.Min))
 		state.output.tokens = max(state.output.tokens, float64(state.bounds.Output.Min))
 	}
 }
 
-func (l *ParticipantLimiter) freshState(model string) *hostState {
-	bounds := l.windowsForLocked(model)
+func (l *ParticipantLimiter) freshState(participant, model string) *hostState {
+	bounds := l.windowsForLocked(participant, model)
 	return &hostState{
 		bounds: bounds,
 		input:  window{tokens: float64(bounds.Input.Initial)},
@@ -321,7 +384,7 @@ func (l *ParticipantLimiter) Admits(participant, model string) Admission {
 
 	state, ok := l.states[key{participant: participant, model: model}]
 	if !ok {
-		state = l.freshState(model)
+		state = l.freshState(participant, model)
 	}
 	return admissionLocked(state, smallestRequest, l.now())
 }
@@ -339,23 +402,27 @@ type HostWindow struct {
 	Available            bool
 }
 
+func (l *ParticipantLimiter) windowOf(tracked key, state *hostState, now time.Time) HostWindow {
+	return HostWindow{
+		Participant:          tracked.participant,
+		Model:                tracked.model,
+		InputWindowTokens:    state.input.tokens,
+		OutputWindowTokens:   state.output.tokens,
+		InflightInputTokens:  state.input.inflight,
+		InflightOutputTokens: state.output.inflight,
+		Cutoff:               cutoffState(state, now),
+		BackoffCount:         state.backoffCount,
+		Available:            admissionLocked(state, smallestRequest, now) == AdmissionOpen,
+	}
+}
+
 // Snapshot returns every tracked pair in participant/model order, copied under one lock and sorted after it releases.
 func (l *ParticipantLimiter) Snapshot() []HostWindow {
 	l.mu.Lock()
 	now := l.now()
 	windows := make([]HostWindow, 0, len(l.states))
 	for tracked, state := range l.states {
-		windows = append(windows, HostWindow{
-			Participant:          tracked.participant,
-			Model:                tracked.model,
-			InputWindowTokens:    state.input.tokens,
-			OutputWindowTokens:   state.output.tokens,
-			InflightInputTokens:  state.input.inflight,
-			InflightOutputTokens: state.output.inflight,
-			Cutoff:               cutoffState(state, now),
-			BackoffCount:         state.backoffCount,
-			Available:            admissionLocked(state, smallestRequest, now) == AdmissionOpen,
-		})
+		windows = append(windows, l.windowOf(tracked, state, now))
 	}
 	l.mu.Unlock()
 
@@ -448,11 +515,11 @@ func (l *ParticipantLimiter) OnResult(result Result) {
 // growLocked widens each window whose peak earned it. See README.md, "Additive increase".
 func (l *ParticipantLimiter) growLocked(state *hostState, carried TokenCost) {
 	if float64(state.input.peak) >= state.input.tokens/2 {
-		state.input.tokens = grownBy(state.input.tokens, carried.Input, float64(state.bounds.Input.Step), !state.input.narrowed)
+		state.input.tokens = grownBy(state.input.tokens, carried.Input, float64(state.bounds.Input.Step))
 		state.input.peak = state.input.inflight
 	}
 	if float64(state.output.peak) >= state.output.tokens/2 {
-		state.output.tokens = grownBy(state.output.tokens, carried.Output, float64(state.bounds.Output.Step), !state.output.narrowed)
+		state.output.tokens = grownBy(state.output.tokens, carried.Output, float64(state.bounds.Output.Step))
 		state.output.peak = state.output.inflight
 	}
 }
@@ -470,7 +537,6 @@ func narrowWindow(w *window, factor float64, floor int64) {
 	}
 	w.tokens = narrowedTo(w.tokens, factor, float64(floor))
 	w.peak = w.inflight
-	w.narrowed = true
 }
 
 func (l *ParticipantLimiter) applyBreakerLocked(state *hostState, effect breakerEffect, participant, model string, now time.Time) {

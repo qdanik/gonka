@@ -1,7 +1,6 @@
 package limits
 
 import (
-	"math"
 	"testing"
 )
 
@@ -98,40 +97,27 @@ func TestAHostWideSignalCarriesNoCrossFactor(t *testing.T) {
 	}
 }
 
-func TestAdditiveIncreaseAddsOneStepPerWindowOfTokens(t *testing.T) {
+// One answer buys one whole request of room, whatever the answer's own size: the step is the model's
+// price, so a host that keeps answering climbs at the rate it is actually serving.
+func TestAnAnsweredRequestWidensTheWindowByOneWholeRequest(t *testing.T) {
 	t.Parallel()
 
-	const (
-		start = 1000.0
-		step  = 100.0
-	)
+	const step = 100.0
 
-	window := start
-	carried := int64(0)
-	for carried < int64(start) {
-		window = grownBy(window, 10, step, false)
-		carried += 10
+	window := grownBy(1000, 10, step)
+
+	if window != 1000+step {
+		t.Fatalf("window = %v after one answer, want %v: a success is worth a whole request of room", window, 1000+step)
 	}
-
-	if math.Abs(window-(start+step)) > step/10 {
-		t.Fatalf("window = %v after a window's worth of tokens, want about %v: growth is paced by throughput, one step per window served", window, start+step)
-	}
-}
-
-func TestAWiderWindowEarnsItsNextRungMoreSlowly(t *testing.T) {
-	t.Parallel()
-
-	narrow := grownBy(1000, 100, 100, false) - 1000
-	wide := grownBy(10000, 100, 100, false) - 10000
-	if !(narrow > wide) {
-		t.Fatalf("narrow window grew by %v and wide by %v, want the narrow one to grow faster: growth divided by the window is what keeps a large window from running away", narrow, wide)
+	if again := grownBy(window, 4_000, step); again != window+step {
+		t.Fatalf("window = %v after a much larger answer, want %v: the step is the model's price, not the answer's", again, window+step)
 	}
 }
 
 func TestAnIdleOrCostlessAnswerDoesNotGrowTheWindow(t *testing.T) {
 	t.Parallel()
 
-	if got := grownBy(1000, 0, 100, false); got != 1000 {
+	if got := grownBy(1000, 0, 100); got != 1000 {
 		t.Fatalf("window = %v, want it unchanged at 1000: an answer that carried nothing proves no throughput", got)
 	}
 }
@@ -178,10 +164,10 @@ func TestNarrowingNeverGoesBelowOneToken(t *testing.T) {
 	}
 }
 
-func TestSlowStartTakesTheWholeOfWhatItCarried(t *testing.T) {
+func TestAWindowWithNoStepCannotGrow(t *testing.T) {
 	t.Parallel()
 
-	if got := grownBy(1000, 250, 100, true); got != 1250 {
-		t.Fatalf("window = %v, want 1250: a window still looking for the host's capacity doubles over a window served, rather than earning one step", got)
+	if got := grownBy(1000, 250, 0); got != 1000 {
+		t.Fatalf("window = %v, want it unchanged: a model with no price per request has no rung to climb", got)
 	}
 }

@@ -91,6 +91,16 @@ func (c *Capacity) EscrowWeight(escrowID, model string) float64 {
 	return escrowWeight(current, shares, availableForModel)
 }
 
+// ParticipantWeight is what one host earned for one model, the lower of the chain's two views.
+func (c *Capacity) ParticipantWeight(participant, model string) float64 {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if !c.modelServedLocked(model) {
+		return 0
+	}
+	return min(c.fullWeightsLocked(model)[participant], c.currentWeightsLocked(model)[participant])
+}
+
 // A model absent from a populated by-model view is served by nobody, so it must not inherit the generic view.
 func (c *Capacity) modelServedLocked(model string) bool {
 	if len(c.snapshot.CurrentWeightsByModel) == 0 && len(c.snapshot.FullWeightsByModel) == 0 {

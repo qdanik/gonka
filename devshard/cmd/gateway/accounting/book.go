@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"devshard/cmd/gateway/engine"
+	"devshard/cmd/gateway/filters"
 	"devshard/types"
 )
 
@@ -31,6 +32,8 @@ type escrowLedger struct {
 	counters    map[CounterKey]uint64
 	nonces      map[uint64]*nonceRecord
 	costs       map[uint64]nonceCost
+	folded      map[uint32]SlotMoney
+	produced    map[uint32]uint64
 	events      []protocolEvent
 	retired     bool
 }
@@ -46,15 +49,27 @@ type nonceCost struct {
 	status      types.InferenceStatus
 }
 
-// slotMoney is one slot's share of the escrow's money.
-type slotMoney struct {
-	reserved    uint64
-	actual      uint64
-	refunded    uint64
-	inputLength uint64
-	maxTokens   uint64
-	input       uint64
-	output      uint64
+// SlotMoney is one slot's share of the escrow's money. See docs/accounting.md, "Money and tokens".
+type SlotMoney struct {
+	Reserved       uint64 `json:"reserved_cost,omitempty"`
+	Actual         uint64 `json:"actual_cost,omitempty"`
+	Refunded       uint64 `json:"refunded_cost,omitempty"`
+	EstimatedInput uint64 `json:"estimated_input_tokens,omitempty"`
+	EstimatedError uint64 `json:"estimated_error_tokens,omitempty"`
+	MaxTokens      uint64 `json:"max_tokens,omitempty"`
+	Input          uint64 `json:"input_tokens,omitempty"`
+	CountedNonces  uint64 `json:"counted_nonces,omitempty"`
+}
+
+func (m *SlotMoney) add(other SlotMoney) {
+	m.Reserved += other.Reserved
+	m.Actual += other.Actual
+	m.Refunded += other.Refunded
+	m.EstimatedInput += other.EstimatedInput
+	m.EstimatedError += other.EstimatedError
+	m.MaxTokens += other.MaxTokens
+	m.Input += other.Input
+	m.CountedNonces += other.CountedNonces
 }
 
 func (c nonceCost) refunded() uint64 {
@@ -82,6 +97,8 @@ func newEscrowLedger(metadata EscrowMetadata) *escrowLedger {
 		counters:    make(map[CounterKey]uint64),
 		nonces:      make(map[uint64]*nonceRecord),
 		costs:       make(map[uint64]nonceCost),
+		folded:      make(map[uint32]SlotMoney),
+		produced:    make(map[uint32]uint64),
 	}
 }
 
@@ -91,6 +108,7 @@ type nonceRecord struct {
 	finished     bool
 	acknowledged bool
 	isCounted    bool
+	outputAdded  bool
 	usage        Usage
 	ghostReason  string
 
@@ -165,6 +183,46 @@ func (b *Book) RetireEscrow(escrowID string) {
 	}
 }
 
+// foldMoney gives every slot its share of the escrow: what the chain says now, over the fold last saved for it.
+func (e *escrowLedger) foldMoney() []SlotMoney {
+	money := make([]SlotMoney, len(e.metadata.Slots))
+	for nonce, cost := range e.costs {
+		e.foldCost(&money[e.slotOf(nonce)], nonce, cost)
+	}
+	for slotID, saved := range e.folded {
+		if int(slotID) < len(money) {
+			money[slotID].add(saved)
+		}
+	}
+	return money
+}
+
+// addProduced counts an attempt's tokens once, on the slot that produced them. See docs/accounting.md, "Money and tokens".
+func (e *escrowLedger) addProduced(nonce uint64, record *nonceRecord, tokens int64) {
+	if record.outputAdded || tokens <= 0 {
+		return
+	}
+	record.outputAdded = true
+	e.produced[e.slotOf(nonce)] += uint64(tokens)
+}
+
+func (e *escrowLedger) foldCost(money *SlotMoney, nonce uint64, cost nonceCost) {
+	money.Reserved += cost.reserved
+	money.Actual += cost.actual
+	money.Refunded += cost.refunded()
+	if e.isGhost(nonce) {
+		return
+	}
+	if cost.status != types.StatusFinished {
+		money.EstimatedError += filters.EstimatedPromptTokens(int(cost.inputLength))
+		return
+	}
+	money.CountedNonces++
+	money.Input += cost.input
+	money.EstimatedInput += filters.EstimatedPromptTokens(int(cost.inputLength))
+	money.MaxTokens += cost.maxTokens
+}
+
 func (b *Book) ObserveLatestNonce(escrowID string, nonce uint64) error {
 	return b.withEscrow(escrowID, func(escrow *escrowLedger) error {
 		if nonce > escrow.latest {
@@ -176,6 +234,9 @@ func (b *Book) ObserveLatestNonce(escrowID string, nonce uint64) error {
 
 func (b *Book) ObserveHostStats(escrowID string, slotID uint32, stats types.HostStats) error {
 	return b.withEscrow(escrowID, func(escrow *escrowLedger) error {
+		if _, seen := escrow.hostStats[slotID]; !seen && escrow.timeouts[slotID] == 0 {
+			escrow.timeouts[slotID] = uint64(stats.Missed)
+		}
 		escrow.hostStats[slotID] = stats
 		return nil
 	})
@@ -184,6 +245,7 @@ func (b *Book) ObserveHostStats(escrowID string, slotID uint32, stats types.Host
 // ObserveInferences replaces an escrow's per-nonce money and its open-challenge counts from one sweep.
 func (b *Book) ObserveInferences(escrowID string, inferences map[uint64]*types.InferenceRecord) error {
 	return b.withEscrow(escrowID, func(escrow *escrowLedger) error {
+		clear(escrow.folded)
 		challenged := make(map[uint32]uint64)
 		for nonce, record := range inferences {
 			if record == nil {
@@ -233,6 +295,17 @@ func (b *Book) RecordInvalidVerdict(escrowID string, nonce uint64) error {
 	})
 }
 
+func (b *Book) RecordAssigned(escrowID string, nonce uint64, requestID string) error {
+	return b.withEscrow(escrowID, func(escrow *escrowLedger) error {
+		record := escrow.record(nonce)
+		record.sent = true
+		if record.requestID == "" {
+			record.requestID = requestID
+		}
+		return nil
+	})
+}
+
 func (b *Book) RecordGhost(escrowID string, nonce uint64, reason string) error {
 	return b.withEscrow(escrowID, func(escrow *escrowLedger) error {
 		record := escrow.record(nonce)
@@ -258,6 +331,7 @@ func (b *Book) RecordRace(escrowID string, attempts []Attempt) error {
 			record.clockDrifted = attempt.ClockDrifted
 			record.slowDecode = attempt.SlowDecode
 			record.logprobsDecoded = attempt.LogprobsDecoded
+			escrow.addProduced(attempt.Nonce, record, attempt.OutputTokens)
 			escrow.reclassify(attempt.Nonce, record)
 		}
 		return nil
@@ -476,4 +550,15 @@ func (e *escrowLedger) slotActivity() map[uint32]SlotActivity {
 		record(slotID, func(entry *SlotActivity) { entry.Rejected = count })
 	}
 	return activity
+}
+
+func (e *escrowLedger) moneyBySlot() map[uint32]SlotMoney {
+	folded := e.foldMoney()
+	money := make(map[uint32]SlotMoney, len(folded))
+	for slotID, slot := range folded {
+		if slot != (SlotMoney{}) {
+			money[uint32(slotID)] = slot
+		}
+	}
+	return money
 }

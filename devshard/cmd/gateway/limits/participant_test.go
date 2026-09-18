@@ -83,15 +83,6 @@ func (l *ParticipantLimiter) answered(participant, model string, verdict Verdict
 	l.OnResult(Result{Participant: participant, Model: model, Verdict: verdict, Carried: oneToken})
 }
 
-// leaveSlowStart puts a host where its first congestion signal would: past the search for its capacity, so a
-// test of the additive rule is not measuring the doubling one.
-func (l *ParticipantLimiter) leaveSlowStart(participant, model string) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	state := l.stateLocked(key{participant: participant, model: model})
-	state.input.narrowed, state.output.narrowed = true, true
-}
-
 func (l *ParticipantLimiter) windowsOf(t *testing.T, participant, model string) (input, output float64) {
 	t.Helper()
 	state, tracked := l.states[key{participant: participant, model: model}]
@@ -185,7 +176,6 @@ func TestSuccessBelowUtilizationGateLeavesWindowUnchanged(t *testing.T) {
 func TestAnAnswerCarryingAWindowsWorthOfTokensEarnsOneStep(t *testing.T) {
 	t.Parallel()
 	l := newTestLimiter(testConfig(), fixedNow(testEpoch))
-	l.leaveSlowStart("p", "m")
 	l.admitOne("p", "m")
 	l.admitOne("p", "m") // peak=2, window/2=2: gate met
 
@@ -454,7 +444,6 @@ func TestADelayedButSuccessfulAnswerNarrowsInsteadOfWidening(t *testing.T) {
 func TestLatencyInsideTheSlackStillWidens(t *testing.T) {
 	t.Parallel()
 	l := newTestLimiter(testConfig(), fixedNow(testEpoch)) // Slack=0.30
-	l.leaveSlowStart("p", "m")
 	l.admitOne("p", "m")
 	l.admitOne("p", "m")
 
@@ -1182,9 +1171,9 @@ func TestObservingASmallerContextMovesTheFloorAndLeavesTheWindowAlone(t *testing
 	}
 }
 
-// A host opens at two requests, so it has to find its capacity quickly; the first congestion signal is what
-// says the search is over.
-func TestAWindowDoublesUntilItsFirstNarrowingThenEarnsOneStepAtATime(t *testing.T) {
+// Growth is one rung per answer, before any congestion and after it alike: a host that was narrowed climbs
+// back at the same rate it climbed in the first place, and no answer is worth more than one request of room.
+func TestAWindowEarnsOneStepPerAnswerWhetherOrNotItWasEverNarrowed(t *testing.T) {
 	t.Parallel()
 	l := newTestLimiter(testConfig(), fixedNow(testEpoch))
 	l.admitOne("p", "m")
@@ -1194,23 +1183,17 @@ func TestAWindowDoublesUntilItsFirstNarrowingThenEarnsOneStepAtATime(t *testing.
 	l.OnResult(wholeWindow)
 
 	input, output := l.windowsOf(t, "p", "m")
-	if input != 8 || output != 8 {
-		t.Fatalf("windows after a window's worth on a host that never congested = (%v, %v), want both 8: slow start doubles", input, output)
+	if input != 5 || output != 5 {
+		t.Fatalf("windows after one answer = (%v, %v), want both 5: one answer is worth one request of room", input, output)
 	}
 
 	l.answered("p", "m", Overload)
 	narrowedInput, _ := l.windowsOf(t, "p", "m")
 	l.admitOne("p", "m")
 	l.admitOne("p", "m")
-	l.admitOne("p", "m")
-	l.admitOne("p", "m")
 	l.OnResult(wholeWindow)
 
-	grown, _ := l.windowsOf(t, "p", "m")
-	if grown >= 2*narrowedInput {
-		t.Fatalf("window = %v after congestion, want well under twice the %v it was narrowed to: the first congestion signal ends slow start", grown, narrowedInput)
-	}
-	if grown <= narrowedInput {
-		t.Fatalf("window = %v, want growth past %v: additive increase still earns a rung", grown, narrowedInput)
+	if grown, _ := l.windowsOf(t, "p", "m"); grown != narrowedInput+1 {
+		t.Fatalf("window = %v after congestion, want %v: the rung is the same one on the way back up", grown, narrowedInput+1)
 	}
 }

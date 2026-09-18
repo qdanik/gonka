@@ -141,6 +141,14 @@ The exception is a 5xx that names a fault in what the gateway sent. A host repor
 
 An empty stream narrows its host whether or not it closed the nonce: a client can render nothing from it, and another host given the same prompt usually can, so the race escalates on it at once and both windows narrow (`engine/escalation.go`, `EscalationPolicy.triggerFor`; `engine/outcome.go`, `RaceOutcome.Verdict`). A host that said nothing and also left the nonce open took the work and parked the reserve until the timeout vote, so it answers to the breaker as well as to crown denial. A burn-empty stays a model outcome and starts no other attempt: the thinking budget went on reasoning, and another host given the same prompt would spend it the same way.
 
+### Counting what an attempt produced
+
+`logprobs` is forced on for every host request (`filters/table.go`, the `StagePostLimits` rule) and stripped again from what the client is handed, so every streamed chunk carries one `logprobs.content` entry per token the host generated. The gateway counts them as the chunks arrive (`engine/classify.go`, `chunkScan.LogprobTokens`), which gives it a token count that does not depend on the host reporting one and that exists for an answer cut off half way.
+
+`AttemptOutcome.OutputTokens` prefers the host's own `usage.completion_tokens` and falls back to that count. The host's number is authoritative where it exists — it is what the chain is handed and what the escrow pays against — but a fleet contains runtimes that ignore `include_usage`, and a stream the race cancelled never reaches its usage chunk at all. Either way the reply the client received is worth a number, and the count off the wire is the only one available.
+
+The two can disagree, and where they do the gateway's request ledger says what the gateway saw while the nonce ledger says what the chain recorded ([accounting.md](./accounting.md), "What the chain record carries"). That disagreement is a fact about the host's runtime, not about the gateway.
+
 ### The exemption ladder
 
 Whether an attempt contributes a performance sample at all is decided by one ordered ladder, applied in `Engine.record` and nowhere else (`engine/outcome.go`, `RaceOutcome.sampleExemption`).

@@ -56,6 +56,20 @@ CREATE TABLE IF NOT EXISTS accounting_slot_activity (
 	rejected         INTEGER NOT NULL,
 	PRIMARY KEY (escrow_id, slot_id)
 );
+CREATE TABLE IF NOT EXISTS accounting_money (
+	escrow_id        TEXT    NOT NULL,
+	slot_id          INTEGER NOT NULL,
+	reserved_cost    INTEGER NOT NULL,
+	actual_cost      INTEGER NOT NULL,
+	refunded_cost    INTEGER NOT NULL,
+	estimated_input  INTEGER NOT NULL,
+	estimated_error  INTEGER NOT NULL,
+	max_tokens       INTEGER NOT NULL,
+	input_tokens     INTEGER NOT NULL,
+	counted_nonces   INTEGER NOT NULL,
+	output_tokens    INTEGER NOT NULL,
+	PRIMARY KEY (escrow_id, slot_id)
+);
 CREATE TABLE IF NOT EXISTS accounting_counters (
 	escrow_id      TEXT    NOT NULL,
 	slot_id        INTEGER NOT NULL,
@@ -100,6 +114,7 @@ var clearedTables = []string{
 	"accounting_counters",
 	"accounting_host_stats",
 	"accounting_slot_activity",
+	"accounting_money",
 	"accounting_slots",
 	"accounting_escrows",
 	"accounting_meta",
@@ -247,6 +262,20 @@ func writeEscrow(ctx context.Context, transaction *sql.Tx, escrow EscrowSnapshot
 			return fmt.Errorf("writing slot activity for slot %d of %s: %w", slotID, identity, err)
 		}
 	}
+	for _, slotID := range slices.Sorted(maps.Keys(slotsWithTotals(escrow))) {
+		money := escrow.Money[slotID]
+		if _, err := transaction.ExecContext(ctx,
+			`INSERT INTO accounting_money
+			 (escrow_id, slot_id, reserved_cost, actual_cost, refunded_cost, estimated_input, estimated_error,
+			  max_tokens, input_tokens, counted_nonces, output_tokens)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			identity, slotID, money.Reserved, money.Actual, money.Refunded, money.EstimatedInput,
+			money.EstimatedError, money.MaxTokens, money.Input, money.CountedNonces,
+			escrow.Produced[slotID],
+		); err != nil {
+			return fmt.Errorf("writing money for slot %d of %s: %w", slotID, identity, err)
+		}
+	}
 	for _, counter := range escrow.Counters {
 		if _, err := transaction.ExecContext(ctx,
 			`INSERT INTO accounting_counters
@@ -300,7 +329,7 @@ func (s *Store) Load(ctx context.Context) (Snapshot, error) {
 		return Snapshot{}, err
 	}
 	for _, read := range []func(context.Context, map[string]*EscrowSnapshot) error{
-		s.readSlots, s.readHostStats, s.readSlotActivity, s.readCounters, s.readNonces,
+		s.readSlots, s.readHostStats, s.readSlotActivity, s.readMoney, s.readCounters, s.readNonces,
 	} {
 		if err := read(ctx, escrows); err != nil {
 			return Snapshot{}, err
@@ -350,6 +379,8 @@ func (s *Store) readEscrows(ctx context.Context) (map[string]*EscrowSnapshot, []
 			}
 			stored.HostStats = make(map[uint32]types.HostStats)
 			stored.SlotActivity = make(map[uint32]SlotActivity)
+			stored.Money = make(map[uint32]SlotMoney)
+			stored.Produced = make(map[uint32]uint64)
 			escrows[stored.Metadata.EscrowID] = &stored
 			order = append(order, stored.Metadata.EscrowID)
 			return nil
@@ -412,6 +443,33 @@ func (s *Store) readSlotActivity(ctx context.Context, escrows map[string]*Escrow
 		})
 }
 
+func (s *Store) readMoney(ctx context.Context, escrows map[string]*EscrowSnapshot) error {
+	return s.eachRow(ctx,
+		`SELECT escrow_id, slot_id, reserved_cost, actual_cost, refunded_cost, estimated_input, estimated_error,
+		        max_tokens, input_tokens, counted_nonces, output_tokens
+		 FROM accounting_money`, "money",
+		func(rows *sql.Rows) error {
+			var escrowID string
+			var slotID uint32
+			var money SlotMoney
+			var produced uint64
+			if err := rows.Scan(&escrowID, &slotID, &money.Reserved, &money.Actual, &money.Refunded,
+				&money.EstimatedInput, &money.EstimatedError, &money.MaxTokens,
+				&money.Input, &money.CountedNonces, &produced); err != nil {
+				return err
+			}
+			if escrow, known := escrows[escrowID]; known {
+				if money != (SlotMoney{}) {
+					escrow.Money[slotID] = money
+				}
+				if produced > 0 {
+					escrow.Produced[slotID] = produced
+				}
+			}
+			return nil
+		})
+}
+
 func (s *Store) readCounters(ctx context.Context, escrows map[string]*EscrowSnapshot) error {
 	return s.eachRow(ctx,
 		`SELECT escrow_id, slot_id, disposition, ghost_reason, timeout_kind, timeout_action, timeout_reason,
@@ -469,4 +527,15 @@ func (s *Store) eachRow(ctx context.Context, query, what string, scan func(*sql.
 		return fmt.Errorf("reading %s: %w", what, err)
 	}
 	return nil
+}
+
+func slotsWithTotals(escrow EscrowSnapshot) map[uint32]struct{} {
+	slots := make(map[uint32]struct{}, len(escrow.Money)+len(escrow.Produced))
+	for slotID := range escrow.Money {
+		slots[slotID] = struct{}{}
+	}
+	for slotID := range escrow.Produced {
+		slots[slotID] = struct{}{}
+	}
+	return slots
 }

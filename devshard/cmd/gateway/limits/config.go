@@ -52,12 +52,13 @@ func windowPricingOf(limitsConfig config.Limits) WindowPricing {
 		}
 	}
 	return WindowPricing{
-		Input:                 requestBoundsOf(limitsConfig.HostWindows.Input),
-		Output:                requestBoundsOf(limitsConfig.HostWindows.Output),
-		FallbackContextTokens: limitsConfig.FallbackMaxModelLen,
-		FallbackOutputTokens:  limitsConfig.MaxTokensCap,
-		ContextTokensByModel:  contextTokens,
-		OutputTokensByModel:   outputTokens,
+		Input:                     requestBoundsOf(limitsConfig.HostWindows.Input),
+		Output:                    requestBoundsOf(limitsConfig.HostWindows.Output),
+		ConcurrencyPer10000Weight: limitsConfig.Concurrency.RequestsPer10000Weight,
+		FallbackContextTokens:     limitsConfig.FallbackMaxModelLen,
+		FallbackOutputTokens:      limitsConfig.MaxTokensCap,
+		ContextTokensByModel:      contextTokens,
+		OutputTokensByModel:       outputTokens,
 	}
 }
 

@@ -94,6 +94,7 @@ var migrations = []string{
 	);`,
 	`ALTER TABLE devshards ADD COLUMN route_prefix TEXT NOT NULL DEFAULT ''`,
 	`ALTER TABLE devshards ADD COLUMN settle_tx_at TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE request_accounting ADD COLUMN prompt_tokens INTEGER NOT NULL DEFAULT 0`,
 }
 
 // Kept out of the migrations block: it decides whether the dir may be migrated at all, and those entries are raw SQL whose indentation is part of the literal.

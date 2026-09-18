@@ -261,8 +261,8 @@ func (r *RaceRecorder) countMissedDeadlines(participant, model string, attempt e
 }
 
 func (r *RaceRecorder) observeAttemptLatency(participant, model string, inputTokens uint64, attempt engine.AttemptOutcome) {
-	if attempt.UsageCompletionTokens > 0 {
-		r.outputTokens.WithLabelValues(participant, model).Add(float64(attempt.UsageCompletionTokens))
+	if produced := attempt.OutputTokens(); produced > 0 {
+		r.outputTokens.WithLabelValues(participant, model).Add(float64(produced))
 	}
 	if seconds := elapsedSeconds(attempt.SendTime, attempt.ReceiptTime); seconds > 0 {
 		r.receiptSeconds.WithLabelValues(participant, model).Observe(seconds)

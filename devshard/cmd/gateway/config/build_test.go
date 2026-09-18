@@ -210,7 +210,7 @@ func TestTheBurnRunIsReachableWithoutARedeploy(t *testing.T) {
 		overrides Overrides
 		want      int64
 	}{
-		{name: "nothing configured", want: 6},
+		{name: "nothing configured", want: 2},
 		{name: "set by env", values: env.Values{MaxConsecutiveBurns: int64Pointer(3)}, want: 3},
 		{name: "set at runtime", overrides: Overrides{MaxConsecutiveBurns: int64Pointer(3)}, want: 3},
 		{

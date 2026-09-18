@@ -87,6 +87,12 @@ Each `route` is one registered pattern. An empty label means the route is not in
 
 In `race`, the second `X-Devshard-ID` write is the authoritative one for a reply still holding its headers. The error from `client.Close()` is returned rather than only logged: a tail the rewriter could not finish is a failure the status can no longer carry — the reply is already 200 — and returning it is what makes the cache refuse a body that stops mid-answer. `race` reports that failure alongside the outcome for the same reason: a stream commits 200 on its first byte, so the caller needs the error itself to tell a response worth replaying from one that is not.
 
+## The request row carries two kinds of token count
+
+`estimated_input_tokens` is the gateway's own estimate of the prompt — the number the congestion windows are denominated in, from the one definition the nonce ledger also uses (`filters.EstimatedPromptTokens`). `prompt_tokens` and `winner_output_tokens` are what the host reported in its `usage` object. They are different kinds of number about the same request, so the row names them apart rather than serving an estimate beside a measurement under names that read as a pair. A host that reports no usage leaves the measured halves at zero; the estimate is never copied into them, or the estimate's own error would disappear from exactly the rows that would have shown it.
+
+Both halves of `usage` latch together over an attempt, so a row can never pair one usage object's prompt with another's completion. Across the two ledgers one word means one thing: `estimated_input_tokens` is always the gateway's estimate, `input_tokens` is always the chain's count, and `prompt_tokens` is always what the host measured.
+
 ## Errors and statuses
 
 - The gateway's own limiter is a quota the caller exceeded, which is 429; capacity and a busy escrow are the shard having no room, which is 503. The legacy gateway splits the two statuses at the same point, so client retry logic carries across.

@@ -15,6 +15,7 @@ import (
 type tracedDispatches struct {
 	recorder *metrics.DispatchRecorder
 	events   *journal.Journal
+	ledger   *nonces.Recorder
 }
 
 // GhostBurned is counted by escrow and reason, never by nonce: a counter keyed by nonce would grow without end.
@@ -27,6 +28,10 @@ func (t tracedDispatches) GhostBurned(escrowID string, burned scheduler.Burn) {
 func (t tracedDispatches) BurnBudgetExhausted(escrowID string) {
 	t.recorder.BurnBudgetExhausted(escrowID)
 	t.events.BurnBudgetExhausted(escrowID)
+}
+
+func (t tracedDispatches) NonceAssigned(escrowID string, nonce uint64, requestID string) {
+	t.ledger.NonceAssigned(escrowID, nonce, requestID)
 }
 
 // ExcludedHostServed has no counter: the line is the only record that a request's exclusion lapsed.

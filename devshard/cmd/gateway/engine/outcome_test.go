@@ -200,13 +200,13 @@ func TestVerdictTable(t *testing.T) {
 		wantOutputWindow float64
 		wantCutoff       bool
 	}{
-		{"clean finish, nonce finished, content present", race(cleanAttempt()), cleanAttempt(), limits.Success, true, 512, 512, false},
+		{"clean finish, nonce finished, content present", race(cleanAttempt()), cleanAttempt(), limits.Success, true, 272, 272, false},
 		{"clean finish by a loser", race(cleanAttempt()), func() AttemptOutcome {
 			attempt := cleanAttempt()
 			attempt.Terminal = TerminalLost
 			attempt.Nonce = 8
 			return attempt
-		}(), limits.Success, true, 512, 512, false},
+		}(), limits.Success, true, 272, 272, false},
 		{"clean finish after missing the first-token deadline", race(lateWinner), lateWinner, limits.LateSuccess, true, 256, 256, false},
 		{"clean finish by a loser after missing the receipt deadline", race(cleanAttempt()), lateLoser, limits.LateSuccess, true, 256, 256, false},
 		{"http 429 after missing the receipt deadline", race(cleanAttempt()), lateThrottled, limits.Overload, true, 217.6, 217.6, false},

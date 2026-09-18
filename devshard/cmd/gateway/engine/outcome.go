@@ -136,6 +136,8 @@ type AttemptOutcome struct {
 	StreamChunks          int64
 	OutputBytes           int64
 	UsageCompletionTokens int64
+	UsagePromptTokens     int64
+	LogprobTokens         int64
 	MaxChunkGap           time.Duration
 	MaxChunkGapAt         int64
 	MeanChunkGap          time.Duration
@@ -267,6 +269,14 @@ func (t Terminal) reason() string {
 		return ReasonHardTimeout
 	}
 	return ReasonUnknown
+}
+
+// OutputTokens is what the attempt produced. See race.md, "Counting what an attempt produced".
+func (a AttemptOutcome) OutputTokens() int64 {
+	if a.UsageCompletionTokens > 0 {
+		return a.UsageCompletionTokens
+	}
+	return a.LogprobTokens
 }
 
 func (a AttemptOutcome) emptyStream() bool {

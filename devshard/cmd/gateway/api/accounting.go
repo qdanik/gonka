@@ -35,7 +35,7 @@ func requestRecord(outcome engine.RaceOutcome) store.RequestRecord {
 		BalanceExhausted: outcome.Lifecycle.BalanceExhausted,
 	}
 	for _, attempt := range outcome.Attempts {
-		record.TotalOutputTokens = safemath.AddSaturating(record.TotalOutputTokens, attempt.UsageCompletionTokens)
+		record.TotalOutputTokens = safemath.AddSaturating(record.TotalOutputTokens, attempt.OutputTokens())
 		if !attempt.SendTime.IsZero() && (record.StartedAt.IsZero() || attempt.SendTime.Before(record.StartedAt)) {
 			record.StartedAt = attempt.SendTime
 		}
@@ -48,7 +48,8 @@ func requestRecord(outcome engine.RaceOutcome) store.RequestRecord {
 		record.WinnerParticipant = attempt.Participant
 		record.WinnerHost = attempt.HostLabel
 		record.WinnerHostIdx = attempt.HostIdx
-		record.WinnerOutputTokens = attempt.UsageCompletionTokens
+		record.WinnerOutputTokens = attempt.OutputTokens()
+		record.PromptTokens = attempt.UsagePromptTokens
 		record.FirstTokenMS = elapsedMS(attempt.SendTime, attempt.FirstToken)
 		record.DurationMS = elapsedMS(attempt.SendTime, attempt.Completed)
 	}
@@ -84,7 +85,8 @@ type requestAccountingResponse struct {
 	WinnerHost         string `json:"winner_host,omitempty"`
 	WinnerHostIdx      int    `json:"winner_host_idx"`
 	Attempts           int    `json:"attempts"`
-	InputTokens        uint64 `json:"input_tokens"`
+	EstimatedInput     uint64 `json:"estimated_input_tokens"`
+	PromptTokens       int64  `json:"prompt_tokens"`
 	WinnerOutputTokens int64  `json:"winner_output_tokens"`
 	TotalOutputTokens  int64  `json:"total_output_tokens"`
 	EscrowMissing      bool   `json:"escrow_missing,omitempty"`
@@ -129,7 +131,8 @@ func accountingResponse(record store.RequestRecord) requestAccountingResponse {
 		WinnerHost:         record.WinnerHost,
 		WinnerHostIdx:      record.WinnerHostIdx,
 		Attempts:           record.Attempts,
-		InputTokens:        record.InputTokens,
+		EstimatedInput:     record.InputTokens,
+		PromptTokens:       record.PromptTokens,
 		WinnerOutputTokens: record.WinnerOutputTokens,
 		TotalOutputTokens:  record.TotalOutputTokens,
 		EscrowMissing:      record.EscrowMissing,

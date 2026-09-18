@@ -45,6 +45,8 @@ type chunkFacts struct {
 	Capability        CapabilitySignal
 
 	UsageCompletionTokens int64
+	UsagePromptTokens     int64
+	LogprobTokens         int64
 	TokensBurned          bool
 	LogprobsDecoded       bool
 }
@@ -116,6 +118,8 @@ type attemptState struct {
 	droppedEvents int64
 
 	usageCompletionTokens int64
+	usagePromptTokens     int64
+	logprobTokens         int64
 	tokensBurned          bool
 	logprobsDecoded       bool
 	contentSource         string
@@ -252,6 +256,10 @@ func (s *attemptState) record(facts chunkFacts) {
 	if facts.UsageCompletionTokens > 0 {
 		s.usageCompletionTokens = facts.UsageCompletionTokens
 	}
+	if facts.UsagePromptTokens > 0 {
+		s.usagePromptTokens = facts.UsagePromptTokens
+	}
+	s.logprobTokens += facts.LogprobTokens
 	s.tokensBurned = s.tokensBurned || facts.TokensBurned
 	s.logprobsDecoded = s.logprobsDecoded || facts.LogprobsDecoded
 }
@@ -352,6 +360,8 @@ func (s *attemptState) outcome(spec AttemptSpec) *AttemptOutcome {
 		ContentChunks:         s.contentChunks,
 		StreamChunks:          s.streamChunks,
 		UsageCompletionTokens: s.usageCompletionTokens,
+		UsagePromptTokens:     s.usagePromptTokens,
+		LogprobTokens:         s.logprobTokens,
 		OutputBytes:           s.outputBytes,
 		LogprobsDecoded:       s.logprobsDecoded,
 		MaxChunkGap:           s.maxChunkGap,

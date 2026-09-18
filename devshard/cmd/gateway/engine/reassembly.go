@@ -37,6 +37,8 @@ func (c *sseClassifier) facts(signal chunkSignal) chunkFacts {
 		Content:               signal.crownsWinner(),
 		ContentSource:         signal.ContentSource,
 		UsageCompletionTokens: signal.UsageCompletionTokens,
+		UsagePromptTokens:     signal.UsagePromptTokens,
+		LogprobTokens:         signal.LogprobTokens,
 		TokensBurned:          signal.UsageCompletionTokens > 0 && c.thinkingBudget,
 		LogprobsDecoded:       signal.LogprobsDecoded,
 	}
