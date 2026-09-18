@@ -202,8 +202,27 @@ func (h *escrowHolds) outstanding() int {
 	return h.open
 }
 
+// exhaustionLog records the escrows routing asked the rotation lifecycle to replace.
+type exhaustionLog struct {
+	mu       sync.Mutex
+	reported []string
+}
+
+func (e *exhaustionLog) record(escrowID, reason string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.reported = append(e.reported, escrowID+":"+reason)
+}
+
+func (e *exhaustionLog) all() []string {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return append([]string(nil), e.reported...)
+}
+
 type schedulerHarness struct {
 	scheduler *Scheduler
+	exhausted *exhaustionLog
 	escrows   *fakeEscrows
 	holds     *escrowHolds
 	weights   *fakeWeights
@@ -255,21 +274,23 @@ func newSchedulerHarness(t *testing.T, cfg schedulerConfig) *schedulerHarness {
 		snapshots: &fakeSnapshots{},
 		observer:  &recordingObserver{},
 		clock:     newTestClock(),
+		exhausted: &exhaustionLog{},
 	}
 	health := cfg.health
 	if health == nil {
 		health = test.perf
 	}
 	scheduler, err := NewScheduler(Deps{
-		Escrows:      escrows,
-		Capacity:     weights,
-		Limiter:      test.limiter,
-		Perf:         health,
-		Snapshots:    test.snapshots,
-		Config:       config.NewHolder(&settings),
-		Observer:     test.observer,
-		Now:          test.clock.Now,
-		SubmitBuffer: cfg.submitBuffer,
+		Escrows:           escrows,
+		Capacity:          weights,
+		Limiter:           test.limiter,
+		Perf:              health,
+		Snapshots:         test.snapshots,
+		Config:            config.NewHolder(&settings),
+		Observer:          test.observer,
+		Now:               test.clock.Now,
+		SubmitBuffer:      cfg.submitBuffer,
+		OnEscrowExhausted: test.exhausted.record,
 	})
 	if err != nil {
 		t.Fatalf("NewScheduler() = %v, want a wired scheduler", err)

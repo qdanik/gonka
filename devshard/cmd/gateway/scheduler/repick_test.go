@@ -106,6 +106,65 @@ func TestOnlyAFleetWithNoBalanceLeftRefusesTheCaller(t *testing.T) {
 	}
 }
 
+// One empty escrow and an empty fleet are different operational facts, so the refusal counts what it asked.
+func TestAFundingRefusalNamesHowManyEscrowsWereAsked(t *testing.T) {
+	test := busyEscrowHarness(t, escrowA, escrowB)
+	for _, escrowID := range []string{escrowA, escrowB} {
+		test.sessions[escrowID].failAdvancing(types.ErrInsufficientBalance)
+	}
+
+	_, err := test.scheduler.Pick(context.Background(), RequestProfile{Model: modelA})
+
+	var refusal *EscrowsOutOfFunds
+	if !errors.As(err, &refusal) {
+		t.Fatalf("Pick = %v, want a refusal that counts the escrows it asked", err)
+	}
+	if refusal.Refused != 2 {
+		t.Fatalf("Refused = %d, want both escrows counted", refusal.Refused)
+	}
+	if !errors.Is(err, types.ErrInsufficientBalance) {
+		t.Fatal("the count hid the fact the caller acts on")
+	}
+	if !errors.Is(err, ErrNoEscrowCapacity) {
+		t.Fatal("the count hid the status the caller is answered with")
+	}
+}
+
+// An escrow that cannot pay for one request still holds the balance every smaller request needs, so
+// stepping past it must not ask the rotation lifecycle to replace it.
+func TestWalkingPastAnEscrowNeverAsksForItsReplacement(t *testing.T) {
+	test := busyEscrowHarness(t, escrowA, escrowB)
+	test.sessions[escrowA].failAdvancing(types.ErrInsufficientBalance)
+
+	if _, err := test.scheduler.Pick(context.Background(), RequestProfile{Model: modelA}); err != nil {
+		t.Fatalf("Pick: %v", err)
+	}
+
+	if reported := test.exhausted.all(); len(reported) != 0 {
+		t.Fatalf("escrows reported exhausted = %v, want none: one costly request is not a spent escrow", reported)
+	}
+}
+
+// The escrow that could not pay for one request keeps serving the next one it can.
+func TestAnEscrowThatCouldNotPayForOneRequestServesTheNext(t *testing.T) {
+	test := busyEscrowHarness(t, escrowA, escrowB)
+	test.sessions[escrowA].failAdvancing(types.ErrInsufficientBalance)
+
+	if _, err := test.scheduler.Pick(context.Background(), RequestProfile{Model: modelA}); err != nil {
+		t.Fatalf("the oversized request was not carried to the spare escrow: %v", err)
+	}
+	test.sessions[escrowA].failAdvancing(nil)
+
+	assignment, err := test.scheduler.Pick(context.Background(), RequestProfile{Model: modelA})
+
+	if err != nil {
+		t.Fatalf("Pick after the escrow recovered: %v", err)
+	}
+	if assignment.Escrow != escrowA {
+		t.Fatalf("assignment escrow = %q, want %q back in service", assignment.Escrow, escrowA)
+	}
+}
+
 // One retry, never a loop, and a busy shard still answers busy rather than out of capacity.
 func TestABusyShardAnswersOnceAndStops(t *testing.T) {
 	test := busyEscrowHarness(t, escrowA, escrowB)

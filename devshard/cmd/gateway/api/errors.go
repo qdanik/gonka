@@ -22,6 +22,7 @@ import (
 	"devshard/cmd/gateway/scheduler"
 	"devshard/logging"
 	"devshard/transport"
+	"devshard/types"
 )
 
 const noHostRetryAfter = time.Second
@@ -217,6 +218,11 @@ func modelUnavailable(err error) bool {
 	return errors.As(err, &unavailable)
 }
 
+// outOfFunds singles out a refusal that only a replacement escrow or a settling inference lifts. See README.md, "Errors and statuses".
+func outOfFunds(err error) bool {
+	return errors.Is(err, types.ErrInsufficientBalance)
+}
+
 func shardHasNoRoom(err error) bool {
 	return errors.Is(err, scheduler.ErrHostsBusy) ||
 		errors.Is(err, scheduler.ErrNoEscrowCapacity) ||
@@ -233,7 +239,7 @@ func writeErrorFor(w http.ResponseWriter, err error) {
 		w.Header().Set("Retry-After", strconv.FormatInt(seconds, 10))
 	case chainUnreadable(err):
 		w.Header().Set("Retry-After", strconv.FormatInt(int64(chain.DefaultObserverPollInterval.Seconds()), 10))
-	case modelUnavailable(err):
+	case modelUnavailable(err), outOfFunds(err):
 		w.Header().Set("Retry-After", strconv.FormatInt(int64(escrow.TickInterval.Seconds()), 10))
 	case ours, shardHasNoRoom(err):
 		w.Header().Set("Retry-After", strconv.FormatInt(int64(noHostRetryAfter.Seconds()), 10))

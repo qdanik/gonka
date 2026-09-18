@@ -1,6 +1,7 @@
 package api
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -10,6 +11,7 @@ import (
 	"devshard/cmd/gateway/escrow"
 	"devshard/cmd/gateway/limits"
 	"devshard/cmd/gateway/scheduler"
+	"devshard/types"
 )
 
 // Two documents promise a 429 carries Retry-After, and RateLimitError computes the wait, but nothing
@@ -82,6 +84,34 @@ func TestAModelUnavailableRejectionCarriesTheEscrowTickInterval(t *testing.T) {
 	want := strconv.Itoa(int(escrow.TickInterval.Seconds()))
 	if got := recorder.Header().Get("Retry-After"); got != want {
 		t.Fatalf("Retry-After = %q, want %q (the escrow tick interval)", got, want)
+	}
+}
+
+// A balance is restored by a replacement escrow or a settling inference, so a second is a retry that
+// cannot succeed; the refusal takes the same tick a model with no runtime does.
+func TestAFundingRefusalCarriesTheEscrowTickInterval(t *testing.T) {
+	recorder := httptest.NewRecorder()
+
+	writeErrorFor(recorder, fmt.Errorf("%w: %w", scheduler.ErrNoEscrowCapacity, types.ErrInsufficientBalance))
+
+	if recorder.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503", recorder.Code)
+	}
+	want := strconv.Itoa(int(escrow.TickInterval.Seconds()))
+	if got := recorder.Header().Get("Retry-After"); got != want {
+		t.Fatalf("Retry-After = %q, want %q (the escrow tick interval)", got, want)
+	}
+}
+
+// A shard that is merely full passes on its own, so it keeps the short retry.
+func TestABusyShardKeepsTheShortRetry(t *testing.T) {
+	recorder := httptest.NewRecorder()
+
+	writeErrorFor(recorder, scheduler.ErrNoEscrowCapacity)
+
+	want := strconv.Itoa(int(noHostRetryAfter.Seconds()))
+	if got := recorder.Header().Get("Retry-After"); got != want {
+		t.Fatalf("Retry-After = %q, want %q", got, want)
 	}
 }
 

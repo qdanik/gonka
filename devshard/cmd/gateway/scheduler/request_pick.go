@@ -3,6 +3,7 @@ package scheduler
 import (
 	"context"
 	"errors"
+	"fmt"
 	"maps"
 
 	"devshard/types"
@@ -39,24 +40,34 @@ func (s *Scheduler) pickPastEmptyEscrows(ctx context.Context, profile RequestPro
 	}
 
 	emptied := err
+	refused := 0
 	avoided := make(map[string]bool, len(seed)+1)
 	maps.Copy(avoided, seed)
 	for range len(s.escrows.Candidates(profile.Model)) {
 		avoided[routedTo] = true
+		refused++
 		if ctx.Err() != nil {
-			return Assignment{}, "", emptied
+			return Assignment{}, "", outOfFundsAfter(refused, emptied)
 		}
 		assignment, routedTo, err = s.pickOnce(ctx, profile, avoided)
 		switch {
 		case err == nil:
 			return assignment, routedTo, nil
 		case routedTo == "":
-			return Assignment{}, "", emptied
+			return Assignment{}, "", outOfFundsAfter(refused, emptied)
 		case !outOfFunds(err):
 			return assignment, routedTo, err
 		}
 	}
-	return Assignment{}, "", emptied
+	return Assignment{}, "", outOfFundsAfter(refused, emptied)
+}
+
+// outOfFundsAfter names how many escrows were asked and answers as the shard having no room, which a drain's own error does not. See routing.md, "Past every escrow that cannot pay".
+func outOfFundsAfter(refused int, err error) error {
+	if refused <= 0 {
+		return err
+	}
+	return &EscrowsOutOfFunds{Refused: refused, wrapped: fmt.Errorf("%w: %w", ErrNoEscrowCapacity, err)}
 }
 
 // outOfFunds holds for the one refusal another escrow's balance can answer. See routing.md, "Past every escrow that cannot pay".
