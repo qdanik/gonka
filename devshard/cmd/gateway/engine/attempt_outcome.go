@@ -37,6 +37,14 @@ func (s *attemptState) classify(ctx context.Context, spec AttemptSpec, err error
 	}
 }
 
+// emptyChunkHead is offered only where it answers something: an answer the gateway read as carrying nothing. See race.md, "Reading an empty answer back".
+func (s *attemptState) emptyChunkHead() string {
+	if s.terminal != TerminalEmptyStream && s.terminal != TerminalBurnEmpty {
+		return ""
+	}
+	return s.lastChunkHead
+}
+
 // upstreamRefusal keeps what the host said when it refused, truncated: a log line needs the reason, not the payload.
 func upstreamRefusal(err error) (int, string) {
 	var status *transport.UpstreamStatusError
@@ -121,6 +129,7 @@ func (s *attemptState) outcome(spec AttemptSpec) *AttemptOutcome {
 
 		UpstreamStatus: s.upstreamStatus,
 		UpstreamBody:   s.upstreamBody,
+		LastChunkHead:  s.emptyChunkHead(),
 
 		ContentSource: s.contentSource,
 		Capability:    s.capability,

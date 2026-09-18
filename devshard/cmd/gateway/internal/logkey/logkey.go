@@ -75,6 +75,7 @@ const (
 	MaxGapMS       = "max_gap_ms"
 	UpstreamStatus = "upstream_status"
 	UpstreamBody   = "upstream_body"
+	LastChunkHead  = "last_chunk_head"
 	MaxGapAtChunk  = "max_gap_at_chunk"
 	MeanGapMS      = "mean_gap_ms"
 	ReceiptMS      = "receipt_ms"

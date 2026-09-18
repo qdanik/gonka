@@ -64,7 +64,8 @@ func everyProducer() map[string]func(events *Journal) {
 		ContentChunks: 12, StreamChunks: 14, OutputBytes: 900,
 		MaxChunkGap: time.Second, MaxChunkGapAt: 3, MeanChunkGap: 200 * time.Millisecond,
 		UpstreamStatus: 502, UpstreamBody: "bad gateway", StateDivergent: true,
-		Confirmed: true, ConfirmedAt: sent.Add(100 * time.Millisecond).Unix(),
+		LastChunkHead: `data: {"choices":[{"delta":{}}]}`,
+		Confirmed:     true, ConfirmedAt: sent.Add(100 * time.Millisecond).Unix(),
 	}
 	widestOutcome := engine.RaceOutcome{
 		RequestID: "request-1", EscrowID: "escrow-1", Model: "qwen", InputTokens: 12,

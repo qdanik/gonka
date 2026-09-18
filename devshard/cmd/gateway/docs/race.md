@@ -149,6 +149,14 @@ An empty stream narrows its host whether or not it closed the nonce: a client ca
 
 The two can disagree, and where they do the gateway's request ledger says what the gateway saw while the nonce ledger says what the chain recorded ([accounting.md](./accounting.md), "What the chain record carries"). That disagreement is a fact about the host's runtime, not about the gateway.
 
+### Reading an empty answer back
+
+An attempt that ends `empty_stream` or `burn_empty` says the classifier found no content in the bytes that arrived, and that fact alone does not say which of two things happened: the host sent events carrying nothing, or it sent something the classifier could not read. An event whose `delta.content` is typed against the schema — an array of parts where the shape expects a string — fails every decode the classifier has, and is dropped whole, taking its `usage` block with it (`engine/classify.go`, `decodeEvent`). Both cases reach the log as the same two zeroes.
+
+So the attempt keeps the head of the last chunk that classified as nothing, cut to `maxEmptyChunkLogged`, and the finish line carries it as `last_chunk_head` (`engine/attempt.go`, `attemptState.keepChunkHead`). The stream's terminator is not that chunk: the transport forwards `[DONE]` as a write of its own, so it is the last thing every well-formed stream delivers and would be the head of every empty answer alike. It is trimmed the way the chunk-gap measurement already trims it, and a write that was nothing else leaves the previous head standing (`filters/sse.go`, `TrimSSEDone`). The head is enough to see the event's shape, which is the whole question. Three bounds keep it from becoming a copy of the answer: it is cut to the cap and validated as UTF-8 before it is kept, it is only ever taken while no chunk has classified as content, and it is offered on the outcome only for the two terminals that mean the gateway read nothing (`engine/attempt_outcome.go`, `attemptState.emptyChunkHead`). An answer that reached the client carries no head at all.
+
+It is host output, so it is untrusted text in a log line, and it is bounded rather than sanitised beyond its encoding: what a host sends is what a reader needs to see.
+
 ### The exemption ladder
 
 Whether an attempt contributes a performance sample at all is decided by one ordered ladder, applied in `Engine.record` and nowhere else (`engine/judgement.go`, `RaceOutcome.sampleExemption`).

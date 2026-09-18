@@ -8,7 +8,7 @@ import (
 )
 
 // attemptFinishFields is the widest a finish line gets: the fixed head, every delivery field, and every mark.
-const attemptFinishFields = 46
+const attemptFinishFields = 48
 
 func renderRaceStep(lines logSink, step *engine.RaceStep) {
 	switch step.Kind {
@@ -87,6 +87,9 @@ func appendAttemptDeliveryFields(fields []any, outcome *engine.AttemptOutcome) [
 			logkey.MaxGapMS, outcome.MaxChunkGap.Milliseconds(),
 			logkey.MaxGapAtChunk, outcome.MaxChunkGapAt,
 			logkey.MeanGapMS, outcome.MeanChunkGap.Milliseconds())
+	}
+	if outcome.LastChunkHead != "" {
+		fields = append(fields, logkey.LastChunkHead, outcome.LastChunkHead)
 	}
 	if outcome.UpstreamStatus != 0 {
 		fields = append(fields, logkey.UpstreamStatus, outcome.UpstreamStatus)

@@ -108,6 +108,7 @@ func widestFinishedStep() engine.RaceStep {
 			MaxChunkGap:           1200 * time.Millisecond, MaxChunkGapAt: 310,
 			MeanChunkGap:   21 * time.Millisecond,
 			UpstreamStatus: 502, UpstreamBody: "upstream is down",
+			LastChunkHead: `data: {"choices":[{"delta":{}}]}`,
 
 			ReceiptDeadlineMissed: true, FirstTokenDeadlineMissed: true,
 		},

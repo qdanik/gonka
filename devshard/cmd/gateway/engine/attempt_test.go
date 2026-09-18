@@ -540,6 +540,83 @@ func TestRunAttemptCountsEveryChunkEvenWhenNoneCarriedContent(t *testing.T) {
 	}
 }
 
+// An answer the gateway read as empty carries the head of its last chunk, so the line says what actually arrived.
+func TestRunAttempt_AnEmptyStreamCarriesTheHeadOfItsLastChunk(t *testing.T) {
+	t.Parallel()
+	tail := "data: {\"choices\":[{\"delta\":{\"content\":[{\"type\":\"text\"}]}}]}\n\n"
+	fixture := newAttemptFixture(
+		&fakeDispatcher{receipt: true, chunks: []string{"data: {}\n\n", tail}, response: fakeResponse{confirmed: true}},
+		&fakeClassifier{},
+	)
+
+	runAttempt(context.Background(), fixture.spec)
+	done := doneEvent(t, fixture.drain())
+
+	if done.Outcome.LastChunkHead != tail {
+		t.Fatalf("LastChunkHead = %q, want the last chunk %q", done.Outcome.LastChunkHead, tail)
+	}
+}
+
+// A stream ends on its terminator, and a terminator says nothing about why the answer was empty.
+func TestRunAttempt_TheTerminatorIsNotWhatTheHeadKeeps(t *testing.T) {
+	t.Parallel()
+	last := "data: {\"choices\":[{\"delta\":{}}]}\n\n"
+	fixture := newAttemptFixture(
+		&fakeDispatcher{
+			receipt:  true,
+			chunks:   []string{"data: {}\n\n", last, "data: [DONE]\n\n"},
+			response: fakeResponse{confirmed: true},
+		},
+		&fakeClassifier{},
+	)
+
+	runAttempt(context.Background(), fixture.spec)
+	done := doneEvent(t, fixture.drain())
+
+	if done.Outcome.StreamChunks != 3 {
+		t.Fatalf("StreamChunks = %d, want the terminator counted with the rest", done.Outcome.StreamChunks)
+	}
+	if done.Outcome.LastChunkHead != last {
+		t.Fatalf("LastChunkHead = %q, want the event before the terminator", done.Outcome.LastChunkHead)
+	}
+}
+
+// The head is a diagnostic for an answer nobody could read, so an answer that carried content offers none.
+func TestRunAttempt_AnAnsweredStreamCarriesNoChunkHead(t *testing.T) {
+	t.Parallel()
+	fixture := newAttemptFixture(
+		&fakeDispatcher{receipt: true, chunks: []string{"data: {}\n\n", "data: hello\n\n"}, response: fakeResponse{confirmed: true}},
+		&fakeClassifier{perChunk: []chunkFacts{{}, contentFacts("delta.content")}},
+	)
+
+	runAttempt(context.Background(), fixture.spec)
+	done := doneEvent(t, fixture.drain())
+
+	if done.Outcome.LastChunkHead != "" {
+		t.Fatalf("LastChunkHead = %q, want none where the answer carried content", done.Outcome.LastChunkHead)
+	}
+}
+
+// One oversized chunk may not write an oversized line.
+func TestRunAttempt_AChunkPastTheCapIsCutToIt(t *testing.T) {
+	t.Parallel()
+	oversized := "data: " + strings.Repeat("x", 4*maxEmptyChunkLogged)
+	fixture := newAttemptFixture(
+		&fakeDispatcher{receipt: true, chunks: []string{oversized}, response: fakeResponse{confirmed: true}},
+		&fakeClassifier{},
+	)
+
+	runAttempt(context.Background(), fixture.spec)
+	done := doneEvent(t, fixture.drain())
+
+	if len(done.Outcome.LastChunkHead) != maxEmptyChunkLogged {
+		t.Fatalf("the kept head is %d bytes, want it cut to %d", len(done.Outcome.LastChunkHead), maxEmptyChunkLogged)
+	}
+	if !strings.HasPrefix(oversized, done.Outcome.LastChunkHead) {
+		t.Fatal("the kept head is not the start of the chunk it came from")
+	}
+}
+
 func TestUpstreamRefusalKeepsTheHostsOwnWords(t *testing.T) {
 	t.Parallel()
 
