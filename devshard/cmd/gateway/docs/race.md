@@ -153,9 +153,24 @@ The two can disagree, and where they do the gateway's request ledger says what t
 
 An attempt that ends `empty_stream` or `burn_empty` says the classifier found no content in the bytes that arrived, and that fact alone does not say which of two things happened: the host sent events carrying nothing, or it sent something the classifier could not read. An event whose `delta.content` is typed against the schema — an array of parts where the shape expects a string — fails every decode the classifier has, and is dropped whole, taking its `usage` block with it (`engine/classify.go`, `decodeEvent`). Both cases reach the log as the same two zeroes.
 
-So the attempt keeps the head of the last chunk that classified as nothing, cut to `maxEmptyChunkLogged`, and the finish line carries it as `last_chunk_head` (`engine/attempt.go`, `attemptState.keepChunkHead`). The stream's terminator is not that chunk: the transport forwards `[DONE]` as a write of its own, so it is the last thing every well-formed stream delivers and would be the head of every empty answer alike. It is trimmed the way the chunk-gap measurement already trims it, and a write that was nothing else leaves the previous head standing (`filters/sse.go`, `TrimSSEDone`). The head is enough to see the event's shape, which is the whole question. Three bounds keep it from becoming a copy of the answer: it is cut to the cap and validated as UTF-8 before it is kept, it is only ever taken while no chunk has classified as content, and it is offered on the outcome only for the two terminals that mean the gateway read nothing (`engine/attempt_outcome.go`, `attemptState.emptyChunkHead`). An answer that reached the client carries no head at all.
+So the line carries both what the host said and what the gateway could not read, because one does not answer for the other.
 
-It is host output, so it is untrusted text in a log line, and it is bounded rather than sanitised beyond its encoding: what a host sends is what a reader needs to see.
+**What the host said** is already decoded by the classifier, which parses every event once, and was simply not written down: the line now carries `finish_reason`, `usage_prompt_tokens` and `logprob_tokens` beside the `usage_tokens` it always had (`journal/render_race.go`, `appendEmptyAnswerFields`). Those four say whether the host thinks it produced anything at all, and a host reporting zero completion tokens has answered the question on its own.
+
+**What the gateway could not read** is the raw head of two chunks, kept while no chunk has classified as content (`engine/chunk_head.go`, `attemptState.keepChunkHeads`):
+
+- **the first**, because that is where a `delta` arrives and so where a decode the classifier lost would show;
+- **the last**, because that is where the terminal event and its `usage` arrive.
+
+Keeping only the last is not enough, and that is what this started as: the last contentless chunk is systematically the terminal usage event, which says nothing about a delta that never decoded. Where one chunk is both, it is offered once.
+
+The stream's terminator is neither: the transport forwards `[DONE]` as a write of its own, so it is the last thing every well-formed stream delivers and would otherwise be the head of every empty answer alike. It is trimmed the way the chunk-gap measurement already trims it, and a write that was nothing else leaves the previous heads standing (`filters/sse.go`, `TrimSSEDone`).
+
+**The head elides what the gateway asked for and strips again.** The gateway forces `logprobs` and `return_token_ids` on every request ([request.md](./request.md), "The rule table") and removes them from the reply, so a contentless chunk is mostly `prompt_token_ids`: a 49 000-token prompt returns its ids as some 225 kB of numbers, which is the whole chunk. Copying its first few hundred bytes would spend the budget on ids and never reach the delta beside them. So each of those values is replaced by a marker as the head is built, and the head resumes after it (`engine/chunk_head.go`, `elideBulkyValues`). A value the log can read — a `"logprobs":null` — is left as it is, because the marker would hide an answer rather than a bulk. Skipping a value costs one pass over it, which the classifier's own decode has already paid for.
+
+Four bounds keep a head from becoming a copy of the answer: it stops at `maxEmptyChunkLogged` and is validated as UTF-8 before it is kept, it is only taken while no chunk has classified as content, and it is offered on the outcome only for the two terminals that mean the gateway read nothing (`engine/attempt_outcome.go`, `attemptState.emptyChunkHeads`). An answer that reached the client carries no head at all.
+
+A head is host output, so it is untrusted text in a log line, and it is bounded rather than sanitised beyond its encoding: what a host sends is what a reader needs to see.
 
 ### The exemption ladder
 

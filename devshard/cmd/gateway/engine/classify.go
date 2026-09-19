@@ -56,6 +56,7 @@ type chunkScan struct {
 	UsagePromptTokens     int64
 	LogprobTokens         int64
 	LogprobsDecoded       bool
+	FinishReason          string
 }
 
 // streamedEvent is every field one pass over an event reads, in the one shape the decoder is asked for.
@@ -153,6 +154,9 @@ func scanChunk(events []byte, thinkingBudget bool) chunkScan {
 			scan.UsagePromptTokens = prompt
 		}
 		for _, choice := range event.Choices {
+			if choice.FinishReason != "" {
+				scan.FinishReason = choice.FinishReason
+			}
 			if scan.ContentSource == "" {
 				scan.ContentSource = choiceSource(choice.Delta, choice.Message, choice.FinishReason, thinkingBudget && tokens > 0)
 			}

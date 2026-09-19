@@ -675,3 +675,49 @@ func TestRunAttempt_CarriesTheRefusalIntoTheOutcome(t *testing.T) {
 		t.Fatalf("upstream body = %q, want the host's reason", done.Outcome.UpstreamBody)
 	}
 }
+
+// The last contentless chunk is systematically the usage event, so the chunk that would have carried a
+// delta is the first one, and it must survive being overwritten by the ones behind it.
+func TestRunAttempt_AnEmptyStreamCarriesTheHeadOfItsFirstChunkToo(t *testing.T) {
+	t.Parallel()
+	first := "data: {\"choices\":[{\"delta\":{\"content\":[{\"type\":\"text\"}]}}]}\n\n"
+	usage := "data: {\"choices\":[],\"usage\":{\"completion_tokens\":0}}\n\n"
+	fixture := newAttemptFixture(
+		&fakeDispatcher{
+			receipt:  true,
+			chunks:   []string{first, usage, "data: [DONE]\n\n"},
+			response: fakeResponse{confirmed: true},
+		},
+		&fakeClassifier{},
+	)
+
+	runAttempt(context.Background(), fixture.spec)
+	done := doneEvent(t, fixture.drain())
+
+	if done.Outcome.FirstChunkHead != first {
+		t.Fatalf("FirstChunkHead = %q, want the chunk a delta would have arrived in", done.Outcome.FirstChunkHead)
+	}
+	if done.Outcome.LastChunkHead != usage {
+		t.Fatalf("LastChunkHead = %q, want the usage event", done.Outcome.LastChunkHead)
+	}
+}
+
+// One contentless chunk is both the first and the last; saying it twice only widens the line.
+func TestRunAttempt_ASingleChunkIsOfferedOnceNotTwice(t *testing.T) {
+	t.Parallel()
+	only := "data: {\"choices\":[]}\n\n"
+	fixture := newAttemptFixture(
+		&fakeDispatcher{receipt: true, chunks: []string{only, "data: [DONE]\n\n"}, response: fakeResponse{confirmed: true}},
+		&fakeClassifier{},
+	)
+
+	runAttempt(context.Background(), fixture.spec)
+	done := doneEvent(t, fixture.drain())
+
+	if done.Outcome.LastChunkHead != only {
+		t.Fatalf("LastChunkHead = %q, want the only chunk", done.Outcome.LastChunkHead)
+	}
+	if done.Outcome.FirstChunkHead != "" {
+		t.Fatalf("FirstChunkHead = %q, want none where it repeats the last", done.Outcome.FirstChunkHead)
+	}
+}

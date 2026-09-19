@@ -5,7 +5,6 @@ import (
 	"errors"
 	"io"
 	"net/http"
-	"strings"
 	"time"
 
 	"devshard/cmd/gateway/filters"
@@ -13,9 +12,6 @@ import (
 )
 
 const maxUpstreamBodyLogged = 256
-
-// maxEmptyChunkLogged is how much of a contentless chunk the log keeps. See race.md, "Reading an empty answer back".
-const maxEmptyChunkLogged = 256
 
 // ErrStateRootDivergence lets the race branch on a diverging post state root without reading error text.
 var ErrStateRootDivergence = errors.New("post state root divergence")
@@ -51,6 +47,7 @@ type chunkFacts struct {
 	LogprobTokens         int64
 	TokensBurned          bool
 	LogprobsDecoded       bool
+	FinishReason          string
 }
 
 // streamClassifier reassembles one attempt's SSE bytes and reports what they contained; Release frees the buffer.
@@ -114,17 +111,19 @@ type attemptState struct {
 	streamChunks  int64
 	outputBytes   int64
 
-	lastChunk     time.Time
-	lastChunkHead string
-	maxChunkGap   time.Duration
-	maxGapChunk   int64
-	droppedEvents int64
+	lastChunk      time.Time
+	firstChunkHead string
+	lastChunkHead  string
+	maxChunkGap    time.Duration
+	maxGapChunk    int64
+	droppedEvents  int64
 
 	usageCompletionTokens int64
 	usagePromptTokens     int64
 	logprobTokens         int64
 	tokensBurned          bool
 	logprobsDecoded       bool
+	finishReason          string
 	contentSource         string
 	capability            CapabilitySignal
 	errorSource           string
@@ -196,7 +195,7 @@ func (w *attemptWriter) Write(chunk []byte) (int, error) {
 	facts := w.spec.Classifier.Classify(chunk)
 	w.state.record(facts)
 	if w.state.contentChunks == 0 {
-		w.state.keepChunkHead(chunk)
+		w.state.keepChunkHeads(chunk)
 	}
 	if facts.Content && w.state.firstContent.IsZero() {
 		w.state.firstContent = now
@@ -234,18 +233,6 @@ func (s *attemptState) recordChunkGap(now time.Time, chunk []byte) {
 	s.maxChunkGap, s.maxGapChunk = gap, s.streamChunks
 }
 
-// keepChunkHead keeps the start of a chunk that classified as nothing, terminator aside, so an empty answer can be read back from its log line. See race.md, "Reading an empty answer back".
-func (s *attemptState) keepChunkHead(chunk []byte) {
-	chunk = filters.TrimSSEDone(chunk)
-	if len(chunk) == 0 {
-		return
-	}
-	if len(chunk) > maxEmptyChunkLogged {
-		chunk = chunk[:maxEmptyChunkLogged]
-	}
-	s.lastChunkHead = strings.ToValidUTF8(string(chunk), "")
-}
-
 // meanChunkGap is the average silence between chunks, which is the inverse of the delivered rate.
 func (s *attemptState) meanChunkGap() time.Duration {
 	if s.streamChunks < 2 || s.firstToken.IsZero() || !s.lastChunk.After(s.firstToken) {
@@ -273,6 +260,9 @@ func (s *attemptState) record(facts chunkFacts) {
 	}
 	if facts.UsageCompletionTokens > 0 {
 		s.usageCompletionTokens = facts.UsageCompletionTokens
+	}
+	if facts.FinishReason != "" {
+		s.finishReason = facts.FinishReason
 	}
 	if facts.UsagePromptTokens > 0 {
 		s.usagePromptTokens = facts.UsagePromptTokens

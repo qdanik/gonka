@@ -54,12 +54,6 @@ type TimeoutSweeper interface {
 	SweepExecutionTimeouts(ctx context.Context, grace time.Duration, budget int) (due, applied, failed int)
 }
 
-// ChallengeDrainer carries the votes a disputed nonce waits on into a diff, for the escrows holding one.
-// It runs on the same budget and only where a dispute is open, so an idle fleet spends no nonce on it.
-type ChallengeDrainer interface {
-	DrainStalledChallenges(ctx context.Context, budget int) (stalled, drained, failed int)
-}
-
 // SweepRecorder counts what one sweep tick did.
 type SweepRecorder interface {
 	RecordSweep(due, applied, failed int)
@@ -90,5 +84,4 @@ type lifecycleNarrator interface {
 	SettledRecordDropped(escrowID string)
 	EscrowTickFailed(err error)
 	TimeoutsSwept(due, applied, failed int)
-	ChallengesDrained(stalled, drained, failed int)
 }

@@ -8,7 +8,7 @@ import (
 )
 
 // attemptFinishFields is the widest a finish line gets: the fixed head, every delivery field, and every mark.
-const attemptFinishFields = 48
+const attemptFinishFields = 56
 
 func renderRaceStep(lines logSink, step *engine.RaceStep) {
 	switch step.Kind {
@@ -75,6 +75,27 @@ func attemptFinishHead(step *engine.RaceStep) []any {
 		logkey.NonceFinished, step.NonceFinished, logkey.StateDivergent, step.Outcome.StateDivergent)
 }
 
+// appendEmptyAnswerFields says what an answer the gateway read as empty actually carried. See race.md, "Reading an empty answer back".
+func appendEmptyAnswerFields(fields []any, outcome *engine.AttemptOutcome) []any {
+	if outcome.LastChunkHead == "" {
+		return fields
+	}
+	fields = append(fields, logkey.LastChunkHead, outcome.LastChunkHead)
+	if outcome.FirstChunkHead != "" {
+		fields = append(fields, logkey.FirstChunkHead, outcome.FirstChunkHead)
+	}
+	if outcome.FinishReason != "" {
+		fields = append(fields, logkey.FinishReason, outcome.FinishReason)
+	}
+	if outcome.UsagePromptTokens > 0 {
+		fields = append(fields, logkey.UsagePromptTokens, outcome.UsagePromptTokens)
+	}
+	if outcome.LogprobTokens > 0 {
+		fields = append(fields, logkey.LogprobTokens, outcome.LogprobTokens)
+	}
+	return fields
+}
+
 // appendAttemptDeliveryFields measures every duration from the dispatch, for a winner and a loser alike.
 func appendAttemptDeliveryFields(fields []any, outcome *engine.AttemptOutcome) []any {
 	fields = append(fields,
@@ -88,9 +109,7 @@ func appendAttemptDeliveryFields(fields []any, outcome *engine.AttemptOutcome) [
 			logkey.MaxGapAtChunk, outcome.MaxChunkGapAt,
 			logkey.MeanGapMS, outcome.MeanChunkGap.Milliseconds())
 	}
-	if outcome.LastChunkHead != "" {
-		fields = append(fields, logkey.LastChunkHead, outcome.LastChunkHead)
-	}
+	fields = appendEmptyAnswerFields(fields, outcome)
 	if outcome.UpstreamStatus != 0 {
 		fields = append(fields, logkey.UpstreamStatus, outcome.UpstreamStatus)
 		if outcome.UpstreamBody != "" {

@@ -225,7 +225,6 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 		Snapshots:   observer,
 		Settlement:  escrows,
 		Timeouts:    escrows,
-		Challenges:  escrows,
 		Sweeps:      raceRecorder,
 		Narrator:    events,
 		Signer:      environmentSigner{},

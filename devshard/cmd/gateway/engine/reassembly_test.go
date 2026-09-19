@@ -93,13 +93,14 @@ func TestClassifierMapsOneChunkToItsFacts(t *testing.T) {
 				ContentSource:         "message.empty_stop_completion_tokens",
 				UsageCompletionTokens: 90,
 				TokensBurned:          true,
+				FinishReason:          "stop",
 			},
 		},
 		{
 			name:  "an_empty_stop_with_usage_crowns_nobody_off_that_route",
 			model: qwenModel,
 			chunk: `data: {"choices":[{"message":{"content":""},"finish_reason":"stop"}],"usage":{"completion_tokens":90}}` + "\n\n",
-			want:  chunkFacts{UsageCompletionTokens: 90},
+			want:  chunkFacts{UsageCompletionTokens: 90, FinishReason: "stop"},
 		},
 	}
 

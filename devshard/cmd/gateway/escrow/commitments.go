@@ -38,13 +38,11 @@ type Manager struct {
 	depleted markSet
 	missing  markSet
 
-	timeoutSweeper   TimeoutSweeper
-	challengeDrainer ChallengeDrainer
-	sweepRecorder    SweepRecorder
-	narrator         lifecycleNarrator
-	sweeping         atomic.Bool
-	draining         atomic.Bool
-	sweepWork        sync.WaitGroup
+	timeoutSweeper TimeoutSweeper
+	sweepRecorder  SweepRecorder
+	narrator       lifecycleNarrator
+	sweeping       atomic.Bool
+	sweepWork      sync.WaitGroup
 
 	lifecycleMu sync.Mutex
 	done        chan struct{}

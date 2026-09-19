@@ -176,14 +176,6 @@ func (j *Journal) TimeoutsSwept(due, applied, failed int) {
 	})
 }
 
-// ChallengesDrained renders a sweep that carried the votes an open dispute was waiting on.
-func (j *Journal) ChallengesDrained(stalled, drained, failed int) {
-	j.emitLine(KindEscrowTransition, func(lines logSink) {
-		lines.Info("stalled challenges drained",
-			logkey.ChallengesStalled, stalled, logkey.SweptApplied, drained, logkey.SweptFailed, failed)
-	})
-}
-
 // SettleBroadcast renders a settle transaction the node accepted, before its commit is awaited.
 func (j *Journal) SettleBroadcast(escrowID, txHash, settler string) {
 	j.emitLine(KindEscrowTransition, func(lines logSink) {

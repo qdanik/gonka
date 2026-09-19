@@ -82,7 +82,9 @@ type AttemptOutcome struct {
 	ContentSource  string
 	UpstreamStatus int
 	UpstreamBody   string
+	FirstChunkHead string
 	LastChunkHead  string
+	FinishReason   string
 
 	ErrorSource  string
 	ErrorCode    string

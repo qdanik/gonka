@@ -64,8 +64,10 @@ func everyProducer() map[string]func(events *Journal) {
 		ContentChunks: 12, StreamChunks: 14, OutputBytes: 900,
 		MaxChunkGap: time.Second, MaxChunkGapAt: 3, MeanChunkGap: 200 * time.Millisecond,
 		UpstreamStatus: 502, UpstreamBody: "bad gateway", StateDivergent: true,
-		LastChunkHead: `data: {"choices":[{"delta":{}}]}`,
-		Confirmed:     true, ConfirmedAt: sent.Add(100 * time.Millisecond).Unix(),
+		LastChunkHead:  `data: {"choices":[],"usage":{"completion_tokens":0}}`,
+		FirstChunkHead: `data: {"choices":[{"delta":{}}],"prompt_token_ids":[...]}`,
+		FinishReason:   "length", UsagePromptTokens: 49_019, LogprobTokens: 5,
+		Confirmed: true, ConfirmedAt: sent.Add(100 * time.Millisecond).Unix(),
 	}
 	widestOutcome := engine.RaceOutcome{
 		RequestID: "request-1", EscrowID: "escrow-1", Model: "qwen", InputTokens: 12,
@@ -164,7 +166,6 @@ func everyProducer() map[string]func(events *Journal) {
 		"SettledRecordDropped":             func(events *Journal) { events.SettledRecordDropped("5") },
 		"EscrowTickFailed":                 func(events *Journal) { events.EscrowTickFailed(failure) },
 		"TimeoutsSwept":                    func(events *Journal) { events.TimeoutsSwept(4, 3, 1) },
-		"ChallengesDrained":                func(events *Journal) { events.ChallengesDrained(2, 1, 1) },
 		"RetirementPendingFlushed":         func(events *Journal) { events.RetirementPendingFlushed("escrow-1", 3, failure) },
 		"SettleBroadcast":                  func(events *Journal) { events.SettleBroadcast("123", "TX", "gonka1settler") },
 		"WarmupFoundNoNonce":               func(events *Journal) { events.WarmupFoundNoNonce("escrow-1", failure) },

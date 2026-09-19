@@ -93,10 +93,6 @@ func (n *recordingLifecycleNarrator) TimeoutsSwept(due, applied, failed int) {
 	n.note("swept due %d applied %d failed %d", due, applied, failed)
 }
 
-func (n *recordingLifecycleNarrator) ChallengesDrained(stalled, drained, failed int) {
-	n.note("drained stalled %d drained %d failed %d", stalled, drained, failed)
-}
-
 // The id is the text every other line names the escrow by, not the chain's number.
 func TestACreatedEscrowIsNarratedWithItsIDAsText(t *testing.T) {
 	narrator := &recordingLifecycleNarrator{}

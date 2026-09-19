@@ -15,6 +15,7 @@ One client request, several attempts on different hosts, one winner. This packag
 | `crown.go`, `crown_strikes.go`, `stream.go` | crowning the first attempt to produce content, withholding the crown from a host that keeps answering without, and forwarding only the winner's bytes |
 | `deadline.go`, `drain.go` | the timers, and the barrier that outlives the client |
 | `classify.go`, `outcome.go`, `terminal.go`, `judgement.go`, `failure.go` | what the attempt ended as, in the vocabulary the ledger admits, and what the race owes the client and the ladders because of it |
+| `chunk_head.go` | what a contentless chunk carried, with the ids and logprobs the gateway strips elided |
 | `settle.go`, `session.go`, `settle_queue.go` | the timeout vote every unfinished nonce owes, where it waits for its deadline, and how many post at once |
 | `reassembly.go`, `carry.go` | rebuilding events split across chunk boundaries |
 | `vocabulary.go` | the wire strings — metric labels, log fields, ledger reasons — declared once |
