@@ -95,9 +95,17 @@ func (l *ParticipantLimiter) ObserveWeights(byModel map[string]map[string]float6
 
 	l.observedWeights = byModel
 	for tracked, state := range l.states {
-		state.bounds = l.windowsForLocked(tracked.participant, tracked.model)
-		state.input.tokens = min(max(state.input.tokens, float64(state.bounds.Input.Min)), float64(state.bounds.Input.Initial))
-		state.output.tokens = min(max(state.output.tokens, float64(state.bounds.Output.Min)), float64(state.bounds.Output.Initial))
+		bounds := l.windowsForLocked(tracked.participant, tracked.model)
+		previous := state.bounds
+		state.bounds = bounds
+		state.input.tokens = max(state.input.tokens, float64(bounds.Input.Min))
+		if bounds.Input.Initial < previous.Input.Initial {
+			state.input.tokens = min(state.input.tokens, float64(bounds.Input.Initial))
+		}
+		state.output.tokens = max(state.output.tokens, float64(bounds.Output.Min))
+		if bounds.Output.Initial < previous.Output.Initial {
+			state.output.tokens = min(state.output.tokens, float64(bounds.Output.Initial))
+		}
 	}
 }
 

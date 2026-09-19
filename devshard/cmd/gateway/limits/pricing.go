@@ -1,6 +1,7 @@
 package limits
 
 import (
+	"math"
 	"time"
 
 	"devshard/cmd/gateway/internal/safemath"
@@ -87,5 +88,5 @@ func earnedConcurrency(per10000, weight float64) int64 {
 	if per10000 <= 0 || weight <= 0 {
 		return 0
 	}
-	return max(int64(weight*per10000/10000), 1)
+	return max(int64(math.Round(weight*per10000/10000)), 1)
 }

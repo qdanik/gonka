@@ -192,3 +192,74 @@ func TestTheConfiguredMaximumStillCapsADoorTheHostsLifted(t *testing.T) {
 		t.Fatalf("fleet limit = %d with no configured maximum, want the 5000 the hosts can take", limit)
 	}
 }
+
+// See capacity.md, "What a host's weight buys".
+func TestAGrownWindowSurvivesAWeightSnapshotThatChangedNothing(t *testing.T) {
+	t.Parallel()
+	limiter := newTestLimiter(weightedConfig(), fixedNow(earnedEpoch))
+	limiter.ObserveWeights(map[string]map[string]float64{earnedModel: {"host": 100}})
+
+	cost := TokenCost{Input: 40_000, Output: 4_096}
+	release, admission := limiter.Acquire("host", earnedModel, cost)
+	if admission != AdmissionOpen {
+		t.Fatalf("the host refused its first request with %v", admission)
+	}
+	release()
+	limiter.OnResult(Result{Participant: "host", Model: earnedModel, Verdict: Success, Carried: cost})
+
+	_, grown := limiter.windowsOf(t, "host", earnedModel)
+	if grown != 2*4_096 {
+		t.Fatalf("output window = %v after one answer, want %v: a success buys a whole request", grown, 2*4_096)
+	}
+
+	limiter.ObserveWeights(map[string]map[string]float64{earnedModel: {"host": 100}})
+
+	if _, after := limiter.windowsOf(t, "host", earnedModel); after != grown {
+		t.Fatalf("output window = %v after a snapshot that moved no weight, want the %v it earned", after, grown)
+	}
+}
+
+// See capacity.md, "What a host's weight buys".
+func TestAWeightBuyingMostOfASecondRequestIsNotRoundedAway(t *testing.T) {
+	t.Parallel()
+	limiter := newTestLimiter(weightedConfig(), fixedNow(earnedEpoch))
+	limiter.ObserveWeights(map[string]map[string]float64{earnedModel: {"host": 2_100}})
+
+	if admitted := concurrentRequests(t, limiter, "host"); admitted != 2 {
+		t.Fatalf("a host whose weight buys 1.68 requests took %d, want the 2 it rounds to", admitted)
+	}
+}
+
+// See capacity.md, "What a host's weight buys".
+func TestEarningMoreWeightDoesNotTakeBackAGrownWindow(t *testing.T) {
+	t.Parallel()
+	limiter := newTestLimiter(weightedConfig(), fixedNow(earnedEpoch))
+	limiter.ObserveWeights(map[string]map[string]float64{earnedModel: {"host": 10_000}})
+
+	cost := TokenCost{Input: 40_000, Output: 4_096}
+	held := make([]func(), 0, 8)
+	for range 8 {
+		release, admission := limiter.Acquire("host", earnedModel, cost)
+		if admission != AdmissionOpen {
+			t.Fatalf("the host refused a request inside the 8 its weight buys: %v", admission)
+		}
+		held = append(held, release)
+	}
+	for range 2 {
+		limiter.OnResult(Result{Participant: "host", Model: earnedModel, Verdict: Success, Carried: cost})
+	}
+	for _, release := range held {
+		release()
+	}
+
+	_, grown := limiter.windowsOf(t, "host", earnedModel)
+	if grown != 10*4_096 {
+		t.Fatalf("output window = %v after two answers on a full window, want %v", grown, 10*4_096)
+	}
+
+	limiter.ObserveWeights(map[string]map[string]float64{earnedModel: {"host": 11_000}})
+
+	if _, after := limiter.windowsOf(t, "host", earnedModel); after != grown {
+		t.Fatalf("output window = %v after the host earned more weight, want the %v it had", after, grown)
+	}
+}
