@@ -40,6 +40,10 @@ func (n *recordingEscrowNarrator) DrainingEscrowClosed(escrowID string, closeErr
 	n.note("closed %s error %v", escrowID, closeErr)
 }
 
+func (n *recordingEscrowNarrator) RetirementPendingFlushed(escrowID string, pending int, err error) {
+	n.note("flushed %s pending %d error %v", escrowID, pending, err)
+}
+
 func (n *recordingEscrowNarrator) SettlementUnverifiable(escrowID string, nonce uint64, _ error) {
 	n.note("unverifiable %s nonce %d", escrowID, nonce)
 }
@@ -74,6 +78,7 @@ func TestADrainingEscrowIsNarratedUntilItCloses(t *testing.T) {
 	require.NoError(t, registry.Retire("1"))
 
 	release()
+	awaitDrainClose(t, func() bool { return len(narrator.recorded()) == 3 })
 
 	require.Equal(t, []string{"serving 1 qwen", "retired draining 1 in flight 1", "closed 1 error <nil>"}, narrator.recorded())
 }
@@ -95,6 +100,7 @@ func TestADrainingEscrowThatFailsToCloseIsNarratedWithTheFailure(t *testing.T) {
 	require.NoError(t, registry.Retire("1"))
 
 	release()
+	awaitDrainClose(t, func() bool { return len(narrator.recorded()) == 3 })
 
 	require.Equal(t, []string{
 		"serving 1 qwen", "retired draining 1 in flight 1", "closed 1 error closing escrow 1: storage refused to close",

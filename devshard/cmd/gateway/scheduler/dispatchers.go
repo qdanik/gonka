@@ -23,7 +23,6 @@ func (s *Scheduler) dispatcherFor(escrow Escrow) (*dispatcher, error) {
 		return nil, ErrDispatcherStopped
 	}
 
-	// A reopened escrow needs its own dispatcher: the old one still holds the retired session.
 	target, known := s.dispatchers[escrow.ID]
 	if !known || target.isStopped() || target.sessionID != escrow.SessionID {
 		target = newDispatcher(dispatcherDeps{
@@ -48,7 +47,6 @@ func (s *Scheduler) dispatcherFor(escrow Escrow) (*dispatcher, error) {
 		s.dispatchers[escrow.ID] = target
 		target.start()
 	}
-	// Claimed under the registry lock and released when Pick returns, so an actor cannot retire while its caller holds a waiter or an assignment.
 	target.pendingSubmits.Add(1)
 	return target, nil
 }
@@ -65,6 +63,5 @@ func (s *Scheduler) retire(idle *dispatcher) bool {
 	if s.observer != nil {
 		s.observer.EscrowRetired(idle.escrowID)
 	}
-	// The block and the spent replay outlive the actor on purpose. See README, "Dispatcher lifecycle".
 	return true
 }

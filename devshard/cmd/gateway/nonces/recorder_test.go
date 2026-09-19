@@ -295,7 +295,6 @@ func TestDiffFactsLandOnTheSlotsTheChainAssigns(t *testing.T) {
 		{Kind: accounting.DiffFactAppliedTimeout, Nonce: 3},
 	})
 
-	// Two slots, so nonces 3 and 5 and validator slot 1 all belong to participant-1.
 	for _, record := range ledger.service.Book.Query(accounting.QueryFilter{}) {
 		want := uint64(0)
 		if record.Participant == "participant-1" {

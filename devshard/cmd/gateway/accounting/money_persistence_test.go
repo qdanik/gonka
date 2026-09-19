@@ -93,9 +93,9 @@ func TestTheSavedTokensComeBackOnTheSlotThatEarnedThem(t *testing.T) {
 	book.RetireEscrow(testEscrow)
 	expected := map[string]SlotMoney{
 		participantFor(0): {},
-		participantFor(1): {Input: 100, EstimatedInput: uint64(filters.EstimatedPromptTokens(400)), CountedNonces: 1},
-		participantFor(2): {Input: 200, EstimatedInput: uint64(filters.EstimatedPromptTokens(800)), CountedNonces: 1},
-		participantFor(3): {Reserved: 700, Refunded: 700, EstimatedError: uint64(filters.EstimatedPromptTokens(1200))},
+		participantFor(1): {Input: 100, EstimatedInput: filters.EstimatedPromptTokens(400), CountedNonces: 1},
+		participantFor(2): {Input: 200, EstimatedInput: filters.EstimatedPromptTokens(800), CountedNonces: 1},
+		participantFor(3): {Reserved: 700, Refunded: 700, EstimatedError: filters.EstimatedPromptTokens(1200)},
 	}
 
 	for _, book := range []*Book{book, saveAndReload(t, book, openTestStore(t))} {

@@ -77,7 +77,6 @@ func (o RaceOutcome) sampleExemption(a AttemptOutcome) SampleExemption {
 		return ExemptRequestTooLarge
 	case a.emptyStream() && !o.Succeeded:
 		return ExemptEmptyStreamNoWinner
-	// See race.md, "The exemption ladder".
 	case a.Terminal == TerminalClientCancelled:
 		return ExemptClientCancelled
 	}

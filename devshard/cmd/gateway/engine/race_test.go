@@ -1964,10 +1964,10 @@ func TestRunRaceStopsEscalatingOnceATrustedHostRejectsTheContextLength(t *testin
 	}
 
 	fixture.perf.mu.Lock()
-	limits := fixture.perf.limits
+	contextLimits := fixture.perf.limits
 	fixture.perf.mu.Unlock()
-	if len(limits) != 1 || limits[0] != (contextLimitCall{participant: "host-0", maxTokens: 40960}) {
-		t.Fatalf("recorded context limits = %+v, want one for host-0", limits)
+	if len(contextLimits) != 1 || contextLimits[0] != (contextLimitCall{participant: "host-0", maxTokens: 40960}) {
+		t.Fatalf("recorded context limits = %+v, want one for host-0", contextLimits)
 	}
 
 	fixture.picker.mu.Lock()

@@ -31,7 +31,6 @@ func classify(slotID uint32, record *nonceRecord) (CounterKey, bool) {
 	key := CounterKey{SlotID: slotID}
 	switch {
 	case record.ghostReason != "":
-		// A charged burn votes like any other nonce, so its outcome has to reach the key the burn already made.
 		key.Disposition = DispositionGhost
 		key.GhostReason = record.ghostReason
 		key.TimeoutKind = record.timeoutKind
@@ -44,7 +43,6 @@ func classify(slotID uint32, record *nonceRecord) (CounterKey, bool) {
 	case record.timeoutAction == "":
 		return key, false
 	case !record.sent:
-		// Committed and never dispatched: an unfinished refusal, not a ghost. See README.md.
 		key.Disposition = DispositionUnfinishedRefused
 	default:
 		key.Disposition = unfinishedDisposition(record)

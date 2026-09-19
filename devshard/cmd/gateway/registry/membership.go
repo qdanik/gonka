@@ -22,6 +22,7 @@ type escrowNarrator interface {
 	EscrowRetired(escrowID string)
 	EscrowRetiredDraining(escrowID string, inFlight int64)
 	DrainingEscrowClosed(escrowID string, closeErr error)
+	RetirementPendingFlushed(escrowID string, pending int, err error)
 	SettlementUnverifiable(escrowID string, nonce uint64, unverifiable error)
 }
 

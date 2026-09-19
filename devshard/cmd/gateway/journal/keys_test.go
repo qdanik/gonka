@@ -165,6 +165,7 @@ func everyProducer() map[string]func(events *Journal) {
 		"EscrowTickFailed":                 func(events *Journal) { events.EscrowTickFailed(failure) },
 		"TimeoutsSwept":                    func(events *Journal) { events.TimeoutsSwept(4, 3, 1) },
 		"ChallengesDrained":                func(events *Journal) { events.ChallengesDrained(2, 1, 1) },
+		"RetirementPendingFlushed":         func(events *Journal) { events.RetirementPendingFlushed("escrow-1", 3, failure) },
 		"SettleBroadcast":                  func(events *Journal) { events.SettleBroadcast("123", "TX", "gonka1settler") },
 		"WarmupFoundNoNonce":               func(events *Journal) { events.WarmupFoundNoNonce("escrow-1", failure) },
 		"EscrowWarmed":                     func(events *Journal) { events.EscrowWarmed("escrow-1", "qwen", 7, false, failure) },
@@ -198,7 +199,6 @@ func TestEveryProducerMethodIsSampled(t *testing.T) {
 func TestEveryRenderedKeyIsDeclared(t *testing.T) {
 	declared := declaredKeys(t)
 	lines := &logcapture.Recorder{}
-	// The ledger refuses the probe, so the line renderProbeRefused writes is checked too.
 	events := newJournal(t, Settings{Lines: lines, Ledger: &ledgerSpy{probeRefusal: errors.New("probe refused")}})
 
 	for _, produce := range everyProducer() {

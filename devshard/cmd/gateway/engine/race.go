@@ -225,7 +225,6 @@ func (c *raceCoordinator) begin() error {
 	defer cancelPick()
 	assignment, err := c.pick(pickCtx)
 	if err != nil {
-		// Read from the client's own context, so a pick's deadline or a scheduler stop is never taken for a departure.
 		if c.clientDeparted() {
 			c.clientGoneAt = c.deps.Now()
 		}

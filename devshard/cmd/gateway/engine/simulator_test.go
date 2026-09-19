@@ -261,6 +261,8 @@ func newSimPoster() *simPoster {
 	return &simPoster{entered: make(chan uint64, 8), vote: TimeoutKindExecution}
 }
 
+func (p *simPoster) VoteDeadline(uint64, time.Time) time.Time { return time.Time{} }
+
 func (p *simPoster) SettleTimeout(_ context.Context, nonce uint64, _ time.Time) (TimeoutVote, error) {
 	p.entered <- nonce
 	if p.release != nil {

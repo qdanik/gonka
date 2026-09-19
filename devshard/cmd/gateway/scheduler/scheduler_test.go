@@ -948,7 +948,6 @@ func TestAWaitingPickKeepsItsDispatcherClaimed(t *testing.T) {
 	test := newSchedulerHarness(t, schedulerConfig{matchWaitMS: 200})
 	ctx, cancel := context.WithCancel(t.Context())
 
-	// The nonce binds the one host this request excludes, so the waiter is held inside the dispatcher.
 	picked := make(chan error, 1)
 	go func() {
 		_, err := test.scheduler.Pick(ctx, RequestProfile{Model: modelA, Exclude: []string{hostB}})

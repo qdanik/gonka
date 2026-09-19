@@ -40,7 +40,6 @@ func validTools(bounds SchemaBounds, defaultToolChoice string) RuleFunc {
 	return func(ctx RuleContext) error {
 		raw, exists := ctx.Document.Get("tools")
 		if !exists {
-			// vLLM's check_tool_usage 400s any tool_choice other than "none" sent without tools; the gateway drops every value regardless.
 			ctx.Document.Delete("tool_choice")
 			return nil
 		}

@@ -51,6 +51,7 @@ type Overrides struct {
 	EngineFirstTokenCeilingMS              *int64                 `json:"engine_first_token_ceiling_ms,omitempty"`
 	EngineInterChunkStallMS                *int64                 `json:"engine_inter_chunk_stall_ms,omitempty"`
 	EngineLoserGraceMS                     *int64                 `json:"engine_loser_grace_ms,omitempty"`
+	EngineMaxConcurrentTimeoutVotes        *int64                 `json:"engine_max_concurrent_timeout_votes,omitempty"`
 	PerfEWMAHalfLifeSeconds                *int64                 `json:"perf_ewma_halflife_seconds,omitempty"`
 	PerfConsecutiveFailThreshold           *int64                 `json:"perf_consecutive_fail_threshold,omitempty"`
 	PerfFailureRateThreshold               *float64               `json:"perf_failure_rate_threshold,omitempty"`

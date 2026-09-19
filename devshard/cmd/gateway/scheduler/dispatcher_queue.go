@@ -98,7 +98,6 @@ func (d *dispatcher) drain() (time.Time, bool) {
 				d.burnsInARow = 0
 			}
 		case burn:
-			// A real session always commits the ghost it was asked for; only a session double leaves Nonce zero.
 			burned := Burn{
 				Participant: offered.taken.participant, Reason: outcome.kind.reason(),
 				RequestID: d.burnedDuring(offered.refusedWaiter),

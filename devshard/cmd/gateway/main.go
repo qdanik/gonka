@@ -43,7 +43,6 @@ const (
 )
 
 func main() {
-	// Before anything can log. See README.md, "Wiring order, and the knots in it".
 	logging.ConfigureFormat(env.LogFormat())
 	if err := serve(); err != nil {
 		logging.Error("gateway exited", logkey.Error, err)
@@ -135,7 +134,6 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 
 	recorder := nonces.Open(configuration.NonceAccounting, storageDir, observer, clock)
 	events := journal.New(journalSettings(recorder))
-	// A composed gateway closes the journal in shutdownOrder; a failed compose closes it here.
 	built := false
 	defer func() {
 		if !built {
@@ -254,7 +252,6 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 	}
 
 	sessions := api.NewSessions(escrows)
-	// The warmup votes through the poster the race uses and is counted by the race's recorder.
 	raceObserver := nonceAccountedRaces{recorder: raceRecorder, events: events}
 	prober.Settle(sessions.Poster, probeVotes{recorder: raceRecorder, events: events}, events)
 	e2e := env.LoadE2E()
@@ -286,6 +283,7 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 			Participants:  participants,
 			Models:        escrows.Models,
 			BufferedBytes: buffers.Held,
+			OwedVotes:     races.OwedTimeoutVotes,
 		}),
 		metrics.NewPerfCollector(hosts),
 		metrics.NewRegistryCollector(metrics.RegistrySources{

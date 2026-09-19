@@ -54,6 +54,11 @@ type fakeSession struct {
 	closeCalls    atomic.Int64
 	onFlush       func()
 	prepare       func(user.ParamsForHost) (*user.PreparedInference, error)
+
+	pendingTxs       []*types.DevshardTx
+	pendingDiffErr   error
+	pendingDiffCalls atomic.Int64
+	onPendingDiff    func()
 }
 
 func newFakeSession(perSlotKeys ...string) *fakeSession {
@@ -67,6 +72,16 @@ func newFakeSession(perSlotKeys ...string) *fakeSession {
 		session.participants = append(session.participants, participant)
 	}
 	return session
+}
+
+func (f *fakeSession) PendingTxs() []*types.DevshardTx { return f.pendingTxs }
+
+func (f *fakeSession) SendPendingDiff(context.Context) error {
+	f.pendingDiffCalls.Add(1)
+	if f.onPendingDiff != nil {
+		f.onPendingDiff()
+	}
+	return f.pendingDiffErr
 }
 
 func (f *fakeSession) ParticipantKeys() []string        { return f.participants }
@@ -174,6 +189,17 @@ type sessions struct {
 	calls                atomic.Int64
 	refuseConcurrentOpen bool
 	openInFlight         atomic.Bool
+}
+
+// awaitDrainClose waits for a close that runs off the request's goroutine.
+func awaitDrainClose(t *testing.T, closed func() bool) {
+	t.Helper()
+	for until := time.Now().Add(2 * time.Second); time.Now().Before(until); time.Sleep(time.Millisecond) {
+		if closed() {
+			return
+		}
+	}
+	t.Fatal("the drained escrow was never closed")
 }
 
 func newSessions(byEscrow map[string]*fakeSession) *sessions {
@@ -503,6 +529,7 @@ func TestRetireDefersCloseUntilInFlightRequestsDrain(t *testing.T) {
 	}
 
 	release()
+	awaitDrainClose(t, func() bool { return session.closeCalls.Load() == 1 })
 
 	if got := session.closeCalls.Load(); got != 1 {
 		t.Errorf("Close calls after the last release = %d, want 1", got)
@@ -536,6 +563,7 @@ func TestADrainedEscrowThatFailsToCloseIsCounted(t *testing.T) {
 	}
 
 	release()
+	awaitDrainClose(t, func() bool { return registry.DrainCloseFailures() == 1 })
 
 	if got := registry.DrainCloseFailures(); got != 1 {
 		t.Fatalf("DrainCloseFailures() = %d, want 1", got)
@@ -655,6 +683,10 @@ func TestSettlementLookupEndsWithTheDrain(t *testing.T) {
 	}
 
 	release()
+	awaitDrainClose(t, func() bool {
+		_, settling := registry.SettlementSession("1")
+		return !settling
+	})
 
 	if _, settling := registry.SettlementSession("1"); settling {
 		t.Error("SettlementSession(1) after the last release = found, want gone: its storage is closed")
@@ -1065,6 +1097,10 @@ func TestTheDrainingViewShrinksWhenAnEscrowFinishes(t *testing.T) {
 		}
 		release()
 	}
+	awaitDrainClose(t, func() bool {
+		view := registry.drainingView.Load()
+		return view == nil || len(*view) == 0
+	})
 
 	if view := registry.drainingView.Load(); view != nil && len(*view) != 0 {
 		t.Fatalf("draining view holds %d entries after both drained, want none", len(*view))

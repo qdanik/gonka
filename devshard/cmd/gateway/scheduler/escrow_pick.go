@@ -43,7 +43,6 @@ func (s *Scheduler) pickEscrow(profile RequestProfile, snapshot chain.PhaseSnaps
 	fleet := s.fleetGates(profile.Model, snapshot)
 	ahead := s.queuedAhead(candidates)
 
-	// Indices, not candidates: a returned Escrow escapes where an index does not.
 	bestScore := math.Inf(1)
 	var tied []int
 	admitted := 0

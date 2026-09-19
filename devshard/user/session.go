@@ -2112,9 +2112,8 @@ func (s *Session) HandleTimeout(ctx context.Context, nonce uint64, sendTime time
 	logging.Stage(ctx, "timeout_started", logFields("reason", result.Reason)...)
 
 	verifiers := s.TimeoutVerifiers()
-	storedDiffs := s.Diffs()
 
-	votes, verifierError, err := s.collectTimeoutVotes(ctx, nonce, reason, payload, verifiers, storedDiffs)
+	votes, verifierError, err := s.collectTimeoutVotes(ctx, nonce, reason, payload, verifiers, s.catchUpForVerifiers(verifiers))
 	if err != nil {
 		result.Outcome = "vote_collection_failed"
 		if ctx.Err() != nil {
@@ -2325,8 +2324,23 @@ func (s *Session) CollectTimeoutVotes(
 	verifiers map[int]TimeoutVerifier, // hostIdx -> verifier
 	diffs []types.Diff,
 ) ([]*types.TimeoutVote, error) {
-	votes, _, err := s.collectTimeoutVotes(ctx, inferenceID, reason, payload, verifiers, diffs)
+	sameForAll := make(map[int][]types.Diff, len(verifiers))
+	for hostIdx := range verifiers {
+		sameForAll[hostIdx] = diffs
+	}
+	votes, _, err := s.collectTimeoutVotes(ctx, inferenceID, reason, payload, verifiers, sameForAll)
 	return votes, err
+}
+
+// catchUpForVerifiers gives each verifier the diffs its own cursor is missing, not the whole log.
+func (s *Session) catchUpForVerifiers(verifiers map[int]TimeoutVerifier) map[int][]types.Diff {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	catchUp := make(map[int][]types.Diff, len(verifiers))
+	for hostIdx := range verifiers {
+		catchUp[hostIdx] = s.diffsForHost(hostIdx)
+	}
+	return catchUp
 }
 
 func (s *Session) collectTimeoutVotes(
@@ -2335,7 +2349,7 @@ func (s *Session) collectTimeoutVotes(
 	reason types.TimeoutReason,
 	payload *host.InferencePayload,
 	verifiers map[int]TimeoutVerifier,
-	diffs []types.Diff,
+	catchUp map[int][]types.Diff,
 ) ([]*types.TimeoutVote, string, error) {
 	// Cancel all in-flight verifier RPCs (and unblock any goroutines still
 	// waiting in the per-verifier queue) once we return — typically because
@@ -2452,12 +2466,13 @@ func (s *Session) collectTimeoutVotes(
 			logging.Stage(ctx, "timeout_vote_sent",
 				logFields(av.verifierAddr, "sent_at_ms", rec.SentAt.UnixMilli())...,
 			)
-			accept, sig, voterSlot, err := av.verifier.VerifyTimeout(ctx, inferenceID, reason, payload, diffs)
+			behind := catchUp[av.idx]
+			accept, sig, voterSlot, err := av.verifier.VerifyTimeout(ctx, inferenceID, reason, payload, behind)
 			// The slot is held and a vote is idempotent, so an unanswered request is asked once more.
 			if transport.IsTransientWriteError(err) && ctx.Err() == nil {
 				logging.Debug("retrying a vote the peer never answered", "subsystem", "session",
 					"inference_id", inferenceID, "verifier", av.verifierAddr, "error", err)
-				accept, sig, voterSlot, err = av.verifier.VerifyTimeout(ctx, inferenceID, reason, payload, diffs)
+				accept, sig, voterSlot, err = av.verifier.VerifyTimeout(ctx, inferenceID, reason, payload, behind)
 			}
 			logVoteRPC(ctx, logFields, av.verifierAddr, err, accept, time.Since(rec.SentAt))
 			if err != nil {

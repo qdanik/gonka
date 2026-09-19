@@ -158,11 +158,6 @@ func observedBy(t *testing.T, escrow *liveEscrow, reported func(book *accounting
 	return foldRecords(service.Book.Query(accounting.QueryFilter{}))
 }
 
-func observedTotals(t *testing.T, escrow *liveEscrow) accounting.ParticipantRecord {
-	t.Helper()
-	return observedBy(t, escrow, nil)
-}
-
 // streamed is the gateway reporting an attempt that produced tokens, which is where output tokens come from.
 func streamed(t *testing.T, nonce uint64, tokens int64) func(*accounting.Book) {
 	t.Helper()

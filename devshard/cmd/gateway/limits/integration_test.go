@@ -184,8 +184,6 @@ func TestCapacityGatewayParticipantLimiterComposeEndToEnd(t *testing.T) {
 	}
 	gatewayLimiter.ReleaseForModel("modelA", 128)
 
-	// One request at the model's full context and output cap, so the initial window takes exactly the
-	// number of requests it is configured in.
 	request := TokenCost{Input: limits.FallbackMaxModelLen, Output: limits.MaxTokensCap}
 	admitted := limits.HostWindows.Input.InitialRequests
 	for i := range admitted {

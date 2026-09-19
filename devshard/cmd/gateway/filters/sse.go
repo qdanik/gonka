@@ -76,7 +76,6 @@ func eventPayload(event []byte) (dataLines int, payload []byte, held bool) {
 		if dataLines == 2 {
 			joined = append(make([]byte, 0, len(payload)+len(data)+1), payload...)
 		}
-		// The separator follows the payload so far, not the line count: a leading empty data line adds none.
 		if len(joined) > 0 {
 			joined = append(joined, '\n')
 		}
@@ -101,7 +100,6 @@ func rebuildEvent(event, payload []byte) []byte {
 			continue
 		}
 		if !emitted {
-			// One data line per segment, the inverse of eventPayload's join: a client drops continuation lines with no data: prefix.
 			segments := 0
 			for segment := range bytes.SplitSeq(payload, sseLineSeparator) {
 				if segments > 0 {

@@ -17,6 +17,8 @@ type stubPoster struct {
 	calls int
 }
 
+func (p *stubPoster) VoteDeadline(uint64, time.Time) time.Time { return time.Time{} }
+
 func (p *stubPoster) SettleTimeout(context.Context, uint64, time.Time) (engine.TimeoutVote, error) {
 	p.calls++
 	return engine.TimeoutVote{Kind: p.vote}, p.err

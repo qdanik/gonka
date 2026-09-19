@@ -832,8 +832,6 @@ func TestClearQuarantineReopensEveryModelsCutoffForOneParticipant(t *testing.T) 
 func TestWindowGrowthDoesNotDependOnReleaseOrder(t *testing.T) {
 	base := time.Unix(0, 0)
 	grow := func(releaseFirst bool) float64 {
-		// Four tokens wide, two taken: the peak reaches exactly window/2 and passes the gate, while the
-		// live count after a release is one short of it. A window of two would pass either way and prove nothing.
 		limiter := newTestLimiter(testConfig(), func() time.Time { return base })
 		var first func()
 		for range 2 {

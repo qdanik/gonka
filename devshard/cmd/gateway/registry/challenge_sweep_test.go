@@ -18,10 +18,11 @@ func sessionWithChallenges(open int) *fakeSession {
 
 // A dispute costs a nonce to carry votes for; an escrow holding none must never be asked to spend one.
 func TestTheDrainCountsOnlyEscrowsHoldingADispute(t *testing.T) {
+	disputed, settled := sessionWithChallenges(3), sessionWithChallenges(0)
 	registry := New(Deps{
 		ServingSessions: newSessions(map[string]*fakeSession{
-			"disputed": sessionWithChallenges(3),
-			"settled":  sessionWithChallenges(0),
+			"disputed": disputed,
+			"settled":  settled,
 		}).open,
 		Membership: newRecordingMembership(),
 		Now:        fixedClock(),
@@ -35,11 +36,14 @@ func TestTheDrainCountsOnlyEscrowsHoldingADispute(t *testing.T) {
 
 	stalled, drained, failed := registry.DrainStalledChallenges(context.Background(), 8)
 
-	if stalled != 1 {
-		t.Fatalf("stalled = %d, want only the escrow holding a dispute", stalled)
+	if stalled != 1 || drained != 1 || failed != 0 {
+		t.Fatalf("stalled/drained/failed = %d/%d/%d, want only the escrow holding a dispute drained", stalled, drained, failed)
 	}
-	if drained != 0 || failed != 0 {
-		t.Fatalf("drained/failed = %d/%d, want none: the fake session hands back no user session", drained, failed)
+	if disputed.pendingDiffCalls.Load() != 1 {
+		t.Fatalf("disputed escrow sent %d diffs, want the votes carried once", disputed.pendingDiffCalls.Load())
+	}
+	if settled.pendingDiffCalls.Load() != 0 {
+		t.Fatalf("settled escrow sent %d diffs, want none", settled.pendingDiffCalls.Load())
 	}
 }
 

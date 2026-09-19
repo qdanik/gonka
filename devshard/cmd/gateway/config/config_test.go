@@ -74,6 +74,7 @@ func TestDefaultsMatchSpec(t *testing.T) {
 		{"Chain.SnapshotMaxAgeSeconds", configuration.Chain.SnapshotMaxAgeSeconds, int64(60)},
 		{"Engine.LoserGraceMS", configuration.Engine.LoserGraceMS, int64(600_000)},
 		{"Engine.MaxAttemptsPerRequest", configuration.Engine.MaxAttemptsPerRequest, int64(2)},
+		{"Engine.MaxConcurrentTimeoutVotes", configuration.Engine.MaxConcurrentTimeoutVotes, int64(2_048)},
 		{"NonceAccounting.RetentionEpochs", configuration.NonceAccounting.RetentionEpochs, int64(2)},
 		{"NonceAccounting.Port", configuration.NonceAccounting.Port, int64(9091)},
 	}
@@ -206,6 +207,7 @@ func TestValidateCatchesEveryRuleBreach(t *testing.T) {
 		{"engine_inter_chunk_stall_ms too low", func(c *Config) { c.Engine.InterChunkStallMS = 0 }, "engine_inter_chunk_stall_ms"},
 		{"engine_loser_grace_ms below inter-chunk stall", func(c *Config) { c.Engine.LoserGraceMS = c.Engine.InterChunkStallMS - 1 }, "engine_loser_grace_ms"},
 		{"engine_max_attempts_per_request negative", func(c *Config) { c.Engine.MaxAttemptsPerRequest = -1 }, "engine_max_attempts_per_request"},
+		{"engine_max_concurrent_timeout_votes negative", func(c *Config) { c.Engine.MaxConcurrentTimeoutVotes = -1 }, "engine_max_concurrent_timeout_votes"},
 		{"chain_grpc without a port", func(c *Config) { c.Chain.GRPCEndpoint = "node.example" }, "chain_grpc"},
 		{"chain_grpc as a URL", func(c *Config) { c.Chain.GRPCEndpoint = "http://node.example:9090" }, "chain_grpc"},
 	}
@@ -277,7 +279,7 @@ func TestEngineCarriesOnlyTheLiveTunables(t *testing.T) {
 	}
 	want := []string{
 		"ReceiptTimeoutMS", "FirstTokenFloorMS", "FirstTokenCeilingMS", "InterChunkStallMS", "LoserGraceMS",
-		"MaxAttemptsPerRequest",
+		"MaxAttemptsPerRequest", "MaxConcurrentTimeoutVotes",
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("Engine fields = %v, want %v", got, want)

@@ -67,7 +67,7 @@ func outOfFundsAfter(refused int, err error) error {
 	if refused <= 0 {
 		return err
 	}
-	return &EscrowsOutOfFunds{Refused: refused, wrapped: fmt.Errorf("%w: %w", ErrNoEscrowCapacity, err)}
+	return &EscrowsOutOfFundsError{Refused: refused, wrapped: fmt.Errorf("%w: %w", ErrNoEscrowCapacity, err)}
 }
 
 // outOfFunds holds for the one refusal another escrow's balance can answer. See routing.md, "Past every escrow that cannot pay".
@@ -94,7 +94,6 @@ func (s *Scheduler) pickOnce(ctx context.Context, profile RequestProfile, avoide
 	if err != nil {
 		return Assignment{}, escrow.ID, err
 	}
-	// Held until Pick returns, so the reaper cannot forget an escrow this caller may still burn a nonce on. See README, "Dispatcher lifecycle".
 	defer claimed.pendingSubmits.Add(-1)
 
 	select {
@@ -104,7 +103,6 @@ func (s *Scheduler) pickOnce(ctx context.Context, profile RequestProfile, avoide
 		}
 		return result.assignment, escrow.ID, nil
 	case <-ctx.Done():
-		// Leaving and taking are one step: an assignment delivered in this instant holds a nonce and a slot.
 		if delivered, wasDelivered := queued.abandon(); wasDelivered && delivered.err == nil {
 			s.dropAssignment(delivered.assignment, profile)
 		}

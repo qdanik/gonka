@@ -116,7 +116,6 @@ func TestAgingStaysConsistentUnderConcurrentWritesAndSweeps(t *testing.T) {
 	recorder := newAgingRecorder(telemetry, clock, 10*time.Second)
 	participants := []string{"gonka1a", "gonka1b", "gonka1c", "gonka1d"}
 
-	// The writers move the clock 8 s in total, short of the 10 s window: sweeps run among the writes, yet no pair can age out before the last write.
 	var writers sync.WaitGroup
 	for _, participant := range participants {
 		writers.Go(func() {

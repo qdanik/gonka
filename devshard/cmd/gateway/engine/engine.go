@@ -95,9 +95,10 @@ type Request struct {
 
 // Engine admits races and is the barrier that outlives them. See race.md, "Stop".
 type Engine struct {
-	deps  Deps
-	carry *carryBudget
-	crown *crownStrikes
+	deps    Deps
+	carry   *carryBudget
+	crown   *crownStrikes
+	settles *settleQueue
 
 	mu      sync.Mutex
 	stopped bool
@@ -120,10 +121,15 @@ func NewEngine(deps Deps) (*Engine, error) {
 	case deps.Snapshots == nil:
 		return nil, errors.New("engine: Snapshots is required")
 	}
+	clock := deps.Now
+	if clock == nil {
+		clock = time.Now
+	}
 	return &Engine{
-		deps:  deps,
-		carry: newCarryBudget(deps.Config.Load().Stream),
-		crown: newCrownStrikes(deps.Journal),
+		deps:    deps,
+		carry:   newCarryBudget(deps.Config.Load().Stream),
+		crown:   newCrownStrikes(deps.Journal),
+		settles: newSettleQueue(clock),
 	}, nil
 }
 
@@ -147,6 +153,9 @@ func (e *Engine) Run(ctx context.Context, request Request, client io.Writer) (Ra
 	}
 	return outcome, outcome.failure()
 }
+
+// OwedTimeoutVotes reports the votes taken and not yet posted. See race.md, "The timeout-vote queue".
+func (e *Engine) OwedTimeoutVotes() int64 { return e.settles.Owed() }
 
 // Stop returns once every race it admitted has posted the vote that settles its nonces. See race.md, "Stop".
 func (e *Engine) Stop() {
@@ -317,12 +326,36 @@ func (e *Engine) settle(outcome RaceOutcome, params any, registration *raceRegis
 			poster = resolved
 		}
 	}
-	go func() {
-		defer registration.release()
-		SettleTimeouts(settleContext(outcome.RequestID), poster, outcome, func(event TimeoutEvent) {
-			if e.deps.Metrics != nil {
-				e.deps.Metrics.RecordTimeout(event)
-			}
-		})
-	}()
+	task := settleTask{
+		deadline: func() time.Time { return earliestVote(outcome, poster) },
+		post: func() {
+			defer registration.release()
+			SettleTimeouts(settleContext(outcome.RequestID), poster, outcome, e.reportTimeout)
+		},
+	}
+	e.settles.Add(task, int(e.deps.Config.Load().Engine.MaxConcurrentTimeoutVotes))
+}
+
+// earliestVote is when the first of a race's votes may be posted. See race.md, "The timeout-vote queue".
+func earliestVote(outcome RaceOutcome, poster TimeoutPoster) time.Time {
+	var earliest time.Time
+	if poster == nil {
+		return earliest
+	}
+	for _, step := range outcome.TimeoutPlan() {
+		if !step.Post {
+			continue
+		}
+		deadline := poster.VoteDeadline(step.Nonce, step.StartedAt)
+		if earliest.IsZero() || deadline.Before(earliest) {
+			earliest = deadline
+		}
+	}
+	return earliest
+}
+
+func (e *Engine) reportTimeout(event TimeoutEvent) {
+	if e.deps.Metrics != nil {
+		e.deps.Metrics.RecordTimeout(event)
+	}
 }

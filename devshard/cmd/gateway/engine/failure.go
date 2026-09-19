@@ -6,7 +6,6 @@ func (o RaceOutcome) failure() error {
 		return nil
 	case len(o.Attempts) == 0:
 		return ErrAllAttemptsFailed
-	// The crowned attempt's bytes are already on the wire, so no other payload can take their place.
 	case o.winnerStreamed():
 		if hostErr := o.hostError(); hostErr != nil {
 			return hostErr

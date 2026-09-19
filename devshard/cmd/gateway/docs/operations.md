@@ -81,6 +81,7 @@ Signing keys are addressed **by the name of the variable that holds them**, neve
 | `GATEWAY_ENGINE_FIRST_TOKEN_CEILING_MS` | 30 000 | upper bound, whatever the host's own p75 asks for |
 | `GATEWAY_ENGINE_INTER_CHUNK_STALL_MS` | 30 000 | silence after first content before an attempt is stalled |
 | `GATEWAY_ENGINE_LOSER_GRACE_MS` | 600 000 | how long a loser may keep running after the crown |
+| `GATEWAY_ENGINE_MAX_CONCURRENT_TIMEOUT_VOTES` | 2 048 | chain votes for unfinished nonces being posted at once, not a bound on settling escrows; one past it waits for a poster rather than being dropped |
 | `GATEWAY_ACCOUNTING_ENABLED` | false | the per-nonce ledger and its JSON API on `GATEWAY_ACCOUNTING_PORT` (9091) |
 | `GATEWAY_ACCOUNTING_RETENTION_EPOCHS` | 2 | how many epochs before the current one the nonce ledger keeps retired escrows; below 1 is refused while the ledger is on |
 | `GATEWAY_PERF_EWMA_HALFLIFE_SECONDS` | 600 | how fast a host's history forgets |
@@ -93,7 +94,7 @@ The full list is `env/env.go`; the full set of defaults is `config.Defaults()`. 
 
 ## Boot
 
-`lifecycle.go`, `serve`. The order is load-bearing:
+`lifecycle.go`, `bootOrder` and `startAll`. The order is a declared list rather than a sequence of calls, so a test can read it back (`boot_order_test.go`), the way the shutdown order is. It is load-bearing:
 
 1. the chain observer starts — nothing downstream can score a host before a snapshot exists;
 2. the warmup prober starts;
@@ -104,7 +105,7 @@ The full list is `env/env.go`; the full set of defaults is `config.Defaults()`. 
 7. the store's write notifications start republishing escrows on change;
 8. the HTTP listener opens — **last**, so the first request meets a gateway that is fully assembled.
 
-A failure in steps 3 or 4 shuts down cleanly rather than serving half-built.
+`startAll` stops at the first step that fails and names it, and `serve` shuts down cleanly rather than serving half-built. Steps 3 and 4 are the only two that can fail: the rest start a goroutine or a listener and return.
 
 ## Shutdown
 
@@ -222,6 +223,7 @@ Admin lines carry the action and its subject, **never the request body** — an 
 | is it admitting or refusing | `devshard_gateway_limit_rejections_total`, `devshard_gateway_limiter_queue_depth`, and `devshard_gateway_inflight_requests_by_model` against `devshard_gateway_enforced_max_concurrent_requests_by_model`, the cap after overrides and capacity scaling (`devshard_gateway_effective_max_concurrent_requests` is the configured cap before either) |
 | how are the hosts | `devshard_gateway_participant_*` (receipt, first content, inter-chunk, transport errors, missed deadlines), `devshard_gateway_host_ejected`, `devshard_gateway_participant_breaker_state`; a host's congestion windows are read from `GET /v1/admin/hosts`, not from `/metrics` |
 | is money leaking | `devshard_gateway_ghost_nonces_burned_total`, `devshard_gateway_nonce_holds_total`, `devshard_gateway_timeout_actions_total`, `devshard_gateway_burn_budget_exhausted_total` |
+| is the shard behind on the votes it owes | `devshard_gateway_owed_timeout_votes`, against `engine_max_concurrent_timeout_votes` ([race.md](./race.md), "The timeout-vote queue") |
 | is the chain view healthy | `devshard_gateway_chain_snapshot_healthy`, `devshard_gateway_chain_snapshot_age_seconds`, `devshard_gateway_chain_epoch_phase`, `devshard_gateway_chain_requests_blocked` |
 | is memory bounded | `devshard_gateway_buffered_response_bytes`, `devshard_gateway_cache_bytes`, `devshard_gateway_capture_bytes_held` |
 | are the request records keeping up | `devshard_gateway_accounting_rows_written_total`, `devshard_gateway_accounting_rows_lost_total`, `devshard_gateway_accounting_retention_sweeps_failed_total` |

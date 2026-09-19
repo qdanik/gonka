@@ -1,6 +1,7 @@
 package registry
 
 import (
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -8,8 +9,7 @@ import (
 	"devshard/types"
 )
 
-// The reading taken as an escrow retires is the last one there will ever be, so it has to happen while
-// the session is still open: after the close its storage is released and the escrow's money ends there.
+// The reading taken as an escrow retires is the last one there will ever be.
 func TestARetiringEscrowIsReadBeforeItsSessionCloses(t *testing.T) {
 	t.Parallel()
 	session := newFakeSession("hostA")
@@ -33,16 +33,23 @@ func TestARetiringEscrowIsReadBeforeItsSessionCloses(t *testing.T) {
 	require.Equal(t, int64(1), session.closeCalls.Load())
 }
 
-// A retirement with a request still running is not over until the last release, and the inferences that
-// request is spending are exactly the ones the reading is for: it has to wait for the drain, not race it.
+// A retirement with a request still running is not over until the last release.
 func TestADrainingEscrowIsReadOnlyWhenItsLastRequestHasEnded(t *testing.T) {
 	t.Parallel()
 	session := newFakeSession("hostA")
 	session.escrowState = types.EscrowState{LatestNonce: 7}
+	var readMu sync.Mutex
 	var readNonces []uint64
+	read := func() []uint64 {
+		readMu.Lock()
+		defer readMu.Unlock()
+		return append([]uint64(nil), readNonces...)
+	}
 	registry := New(Deps{
 		ServingSessions: newSessions(map[string]*fakeSession{"1": session}).open,
 		Retiring: func(_ string, retiring EscrowSession) {
+			readMu.Lock()
+			defer readMu.Unlock()
 			readNonces = append(readNonces, retiring.SnapshotState().LatestNonce)
 		},
 		Now: fixedClock(),
@@ -52,16 +59,16 @@ func TestADrainingEscrowIsReadOnlyWhenItsLastRequestHasEnded(t *testing.T) {
 	require.True(t, acquired)
 
 	require.NoError(t, registry.Retire("1"))
-	require.Empty(t, readNonces, "the escrow was read while a request was still spending nonces on it")
+	require.Empty(t, read(), "the escrow was read while a request was still spending nonces on it")
 
 	session.escrowState = types.EscrowState{LatestNonce: 9}
 	release()
+	awaitDrainClose(t, func() bool { return len(read()) == 1 })
 
-	require.Equal(t, []uint64{9}, readNonces, "the reading did not wait for the last request to end")
+	require.Equal(t, []uint64{9}, read(), "the reading did not wait for the last request to end")
 }
 
-// Every reconciliation retires each inactive escrow again, and an escrow that was never published has
-// no session to release and nothing to read.
+// Every reconciliation retires each inactive escrow again.
 func TestRetiringAnEscrowThatIsNotRoutableReadsNothing(t *testing.T) {
 	t.Parallel()
 	reads := 0

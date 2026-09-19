@@ -285,7 +285,6 @@ func (t *Tracker) Snapshot() []HostState {
 	now := t.now()
 	view := t.view.Load()
 
-	// One pass under one lock: copy each pair's decode window, nothing that sorts or computes a quantile.
 	type hostDecodeWindow struct {
 		key    hostKey
 		window latencyWindow

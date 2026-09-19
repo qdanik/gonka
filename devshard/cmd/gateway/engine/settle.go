@@ -9,8 +9,11 @@ import (
 	"devshard/user"
 )
 
+// TimeoutPoster posts one nonce's vote and says when the protocol will accept it, so the queue can hold
+// the vote without a goroutine sleeping for it. See README, "Timeout votes".
 type TimeoutPoster interface {
 	SettleTimeout(ctx context.Context, nonce uint64, startedAt time.Time) (TimeoutVote, error)
+	VoteDeadline(nonce uint64, startedAt time.Time) time.Time
 }
 
 type TimeoutVote struct {

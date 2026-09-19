@@ -277,6 +277,9 @@ func (c *Config) Validate() error {
 		complain("engine_first_token_ceiling_ms: %d must be >= engine_first_token_floor_ms %d",
 			c.Engine.FirstTokenCeilingMS, c.Engine.FirstTokenFloorMS)
 	}
+	if c.Engine.MaxConcurrentTimeoutVotes < 0 {
+		complain("engine_max_concurrent_timeout_votes: %d must be >= 0 (0 = as many as races owe votes)", c.Engine.MaxConcurrentTimeoutVotes)
+	}
 	if c.Engine.MaxAttemptsPerRequest < 0 {
 		complain("engine_max_attempts_per_request: %d must be >= 0 (0 = bounded only by the host group)", c.Engine.MaxAttemptsPerRequest)
 	}

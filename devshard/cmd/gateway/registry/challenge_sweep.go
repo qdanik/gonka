@@ -29,11 +29,7 @@ func (r *Registry) DrainStalledChallenges(ctx context.Context, budget int) (stal
 				return false, false
 			}
 			stalled++
-			underlying := session.UserSession()
-			if underlying == nil {
-				return false, false
-			}
-			if err := underlying.SendPendingDiff(ctx); err != nil {
+			if err := session.SendPendingDiff(ctx); err != nil {
 				return false, true
 			}
 			return true, false

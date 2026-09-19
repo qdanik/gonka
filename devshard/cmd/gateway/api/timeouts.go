@@ -36,6 +36,11 @@ func (v escrowVotes) SettleTimeout(ctx context.Context, nonce uint64, startedAt 
 	return engine.NewSessionTimeouts(v.session.UserSession(), payload).SettleTimeout(ctx, nonce, startedAt)
 }
 
+// VoteDeadline reads the escrow's own deadline for this nonce, which is what the settle queue holds it by.
+func (v escrowVotes) VoteDeadline(nonce uint64, startedAt time.Time) time.Time {
+	return engine.NewSessionTimeouts(v.session.UserSession(), nil).VoteDeadline(nonce, startedAt)
+}
+
 // timeoutPayload rebuilds what the host was asked for, reading every field but the prompt back from the record.
 func timeoutPayload(escrow types.EscrowState, nonce uint64, prompt []byte) *host.InferencePayload {
 	record, committed := escrow.Inferences[nonce]

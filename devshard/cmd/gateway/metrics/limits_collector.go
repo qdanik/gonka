@@ -27,6 +27,7 @@ type LimitsSources struct {
 	Participants  ParticipantSource
 	Models        func() []string
 	BufferedBytes func() int64
+	OwedVotes     func() int64
 }
 
 type LimitsCollector struct {
@@ -34,6 +35,7 @@ type LimitsCollector struct {
 
 	inflightRequests             *prometheus.Desc
 	bufferedResponseBytes        *prometheus.Desc
+	owedTimeoutVotes             *prometheus.Desc
 	inflightInputTokens          *prometheus.Desc
 	effectiveMaxConcurrent       *prometheus.Desc
 	effectiveMaxTokens           *prometheus.Desc
@@ -56,6 +58,7 @@ func NewLimitsCollector(sources LimitsSources) *LimitsCollector {
 		sources:                sources,
 		inflightRequests:       gaugeDesc("devshard_gateway_inflight_requests", "Current in-flight requests tracked by the gateway limiter."),
 		bufferedResponseBytes:  gaugeDesc("devshard_gateway_buffered_response_bytes", "Bytes held for non-streaming replies being assembled, across every request at once."),
+		owedTimeoutVotes:       gaugeDesc("devshard_gateway_owed_timeout_votes", "Timeout votes taken from finished races and not yet posted, waiting out a protocol deadline or a free poster."),
 		inflightInputTokens:    gaugeDesc("devshard_gateway_inflight_input_tokens", "Current in-flight input tokens tracked by the gateway limiter."),
 		effectiveMaxConcurrent: gaugeDesc("devshard_gateway_effective_max_concurrent_requests", "Configured concurrent-request cap, before per-model overrides and capacity scaling."),
 		effectiveMaxTokens:     gaugeDesc("devshard_gateway_effective_max_input_tokens_in_flight", "Configured input-token cap, before per-model overrides and capacity scaling."),
@@ -79,7 +82,7 @@ func NewLimitsCollector(sources LimitsSources) *LimitsCollector {
 
 func (c *LimitsCollector) Describe(ch chan<- *prometheus.Desc) {
 	for _, desc := range []*prometheus.Desc{
-		c.inflightRequests, c.bufferedResponseBytes, c.inflightInputTokens, c.effectiveMaxConcurrent, c.effectiveMaxTokens,
+		c.inflightRequests, c.bufferedResponseBytes, c.owedTimeoutVotes, c.inflightInputTokens, c.effectiveMaxConcurrent, c.effectiveMaxTokens,
 		c.inflightRequestsByModel, c.inflightInputTokensByModel, c.queueDepth,
 		c.enforcedMaxConcurrentByModel, c.enforcedMaxTokensByModel,
 		c.capacityScale, c.capacityTotalWeight, c.capacityBaselineWeight, c.capacityWeightsUnobserved,
@@ -94,6 +97,9 @@ func (c *LimitsCollector) Collect(ch chan<- prometheus.Metric) {
 	gauge(ch, c.inflightRequests, float64(snapshot.Total.Requests))
 	if c.sources.BufferedBytes != nil {
 		gauge(ch, c.bufferedResponseBytes, float64(c.sources.BufferedBytes()))
+	}
+	if c.sources.OwedVotes != nil {
+		gauge(ch, c.owedTimeoutVotes, float64(c.sources.OwedVotes()))
 	}
 	gauge(ch, c.inflightInputTokens, float64(snapshot.Total.InputTokens))
 	gauge(ch, c.effectiveMaxConcurrent, float64(snapshot.ConfiguredMaxConcurrentRequests))

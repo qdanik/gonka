@@ -53,7 +53,6 @@ func TestMain(m *testing.M) {
 		goleak.IgnoreTopFunction("google.golang.org/grpc/internal/grpcsync.(*CallbackSerializer).run"),
 		goleak.IgnoreTopFunction("google.golang.org/grpc/internal/resolver/dns.(*dnsResolver).watcher"),
 		goleak.IgnoreTopFunction("google.golang.org/grpc.(*addrConn).resetTransportAndUnlock"),
-		// The keyring's init() opens a D-Bus session connection wherever a session bus answers, as on a Linux CI runner.
 		goleak.IgnoreAnyFunction("github.com/godbus/dbus.(*Conn).inWorker"),
 	)
 }
@@ -119,11 +118,6 @@ func (chainWithoutADial) Tx(context.Context, string) (chain.TxResult, bool, erro
 
 func (chainWithoutADial) Escrow(context.Context, uint64) (chain.EscrowInfo, bool, error) {
 	return chain.EscrowInfo{}, false, errNoChainDialed
-}
-
-// sessionsWithoutADial is chainBackedSessions with the gRPC client left out; only ReadOnly is reached.
-func sessionsWithoutADial(records devshardLookup, storageDir string) sessionSources {
-	return sessionsReading(records, storageDir, chainWithoutADial{})
 }
 
 func sessionsReading(records devshardLookup, storageDir string, reader chain.Reader) sessionSources {
@@ -643,7 +637,7 @@ func TestShutdownStopsAcceptingFirstAndClosesTheStoreLast(t *testing.T) {
 }
 
 // An escrow session is closed only once the work that reaches it has stopped. See
-// rules.md, "6. Shutdown order is a contract".
+// rules.md, "6. Boot and shutdown order is a contract".
 func TestShutdownSkipsEscrowSessionsWhenADrainOverran(t *testing.T) {
 	var sequence []string
 	record := func(name string) func(context.Context) error {
@@ -876,6 +870,9 @@ type weightlessSession struct{ participants []string }
 
 func (weightlessSession) Balance() uint64    { return 1 << 40 }
 func (weightlessSession) TokenPrice() uint64 { return 1 }
+
+func (weightlessSession) PendingTxs() []*types.DevshardTx       { return nil }
+func (weightlessSession) SendPendingDiff(context.Context) error { return nil }
 
 func (s weightlessSession) ParticipantKeys() []string        { return s.participants }
 func (s weightlessSession) HostParticipantKeyList() []string { return s.participants }
@@ -1168,7 +1165,6 @@ func TestTheComposedParticipantLimiterNarratesACutOffThroughTheJournal(t *testin
 	if !found {
 		t.Fatalf("no cut-off line among %+v: main.go did not bind the participant limiter's narrator to the journal", logged.All())
 	}
-	// The cut-off length carries jitter, so it is read back; every other field is pinned.
 	logged.RequireLine(t, logcapture.Entry{Level: "warn", Msg: "host cut off after transport faults", Fields: []any{
 		"host", "aaaaaaaa", "model", "model-a", "reason", "consecutive_transport_faults", "backoff_count", 1,
 		"cut_off_for_ms", logcapture.Field(cutOff, "cut_off_for_ms"),

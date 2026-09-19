@@ -55,10 +55,11 @@ type Registry struct {
 
 	drainCloseFailures atomic.Int64
 
+	closing sync.WaitGroup
+
 	// sweepCursor rotates where the timeout sweep starts, so one escrow's backlog cannot hold the budget.
 	sweepCursor atomic.Uint64
 
-	// challengeCursor rotates the challenge drain the same way, for the same reason.
 	challengeCursor atomic.Uint64
 
 	mu       sync.Mutex
@@ -196,6 +197,7 @@ func (r *Registry) unpublish(escrowID string) (*escrowEntry, bool) {
 
 // closeDraining releases the session with the registry lock free, in the session-then-registry lock order.
 func (r *Registry) closeDraining(entry *escrowEntry) error {
+	r.flushPendingAtRetirement(entry)
 	if r.retiring != nil {
 		r.retiring(entry.id, entry.session)
 	}
@@ -217,17 +219,21 @@ func (r *Registry) publishDrainingLocked() {
 	r.drainingView.Store(&entries)
 }
 
+// release closes a drained escrow off the request's goroutine. See README.md, "Publishing, retiring and draining".
 func (r *Registry) release(entry *escrowEntry) {
 	if !r.lastHoldDropped(entry) {
 		return
 	}
-	closeErr := r.closeDraining(entry)
-	if closeErr != nil {
-		r.drainCloseFailures.Add(1)
-	}
-	if r.narrator != nil {
-		r.narrator.DrainingEscrowClosed(entry.id, closeErr)
-	}
+	go func() {
+		defer r.closing.Done()
+		closeErr := r.closeDraining(entry)
+		if closeErr != nil {
+			r.drainCloseFailures.Add(1)
+		}
+		if r.narrator != nil {
+			r.narrator.DrainingEscrowClosed(entry.id, closeErr)
+		}
+	}()
 }
 
 // lastHoldDropped is true for exactly one caller: the count reaches zero once, and only a retired entry drains.
@@ -237,8 +243,11 @@ func (r *Registry) lastHoldDropped(entry *escrowEntry) bool {
 	if entry.inFlight.Add(-1) > 0 {
 		return false
 	}
-	_, isDraining := r.draining[entry]
-	return isDraining
+	if _, isDraining := r.draining[entry]; !isDraining || r.closed {
+		return false
+	}
+	r.closing.Add(1)
+	return true
 }
 
 // DrainCloseFailures counts a flush or close failure with no caller left to return it to.
@@ -271,6 +280,10 @@ func (r *Registry) Exhausted(escrowID, reason string) {
 func (r *Registry) Close() error {
 	r.mu.Lock()
 	r.closed = true
+	r.mu.Unlock()
+	r.closing.Wait()
+
+	r.mu.Lock()
 	published := r.live.Load()
 	closing := make([]*escrowEntry, 0, len(published.byID)+len(r.draining))
 	for _, id := range sortedKeys(published.byID) {

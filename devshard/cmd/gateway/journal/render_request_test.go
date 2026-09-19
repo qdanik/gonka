@@ -118,7 +118,6 @@ func TestHostClockOffsetReadsTheWinnersStamp(t *testing.T) {
 			wantFound:    true,
 		},
 		{
-			// The stamp landed inside the round trip, so half of it is ours, not the host's drift.
 			name: "a slow round trip is not charged to the host as drift",
 			outcome: engine.RaceOutcome{WinnerNonce: 7, Attempts: []engine.AttemptOutcome{
 				{

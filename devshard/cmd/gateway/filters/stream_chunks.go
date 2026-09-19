@@ -76,7 +76,6 @@ func carriesChoiceMessage(decoded any) bool {
 
 // completionAsChunks converts a complete chat.completion into the chunk events a streaming client renders. See README.md, "A complete reply on a streaming request is rewritten into chunks".
 func completionAsChunks(payload []byte) ([]byte, bool) {
-	// Standard library again: goccy errors past the float64 range even into a raw message.
 	var completion sseCompletion
 	if stdjson.Unmarshal(payload, &completion) != nil {
 		return nil, false
@@ -99,7 +98,6 @@ func completionAsChunks(payload []byte) ([]byte, bool) {
 			}
 		}
 		if len(delta) > 0 {
-			// The whole answer arrives as one delta, so the logprobs for it ride the same chunk.
 			emitChunk(&events, completion, []sseChunkChoice{{
 				Index:    rawOr(choice.Index, "0"),
 				Delta:    delta,

@@ -94,6 +94,12 @@ What it waits for is a diff. Votes reach this gateway inside the mempool a host 
 
 So the escrow tick carries them itself, for the escrows that hold an open dispute and no others (`registry/challenge_sweep.go`, `Registry.DrainStalledChallenges`). One pass sends one diff per escrow through `user.Session.SendPendingDiff`, which composes from the pending transactions without a `MsgStartInference` and processes the answer -- so the same pass both applies the votes it holds and collects the next host's. It costs the escrow a nonce, which is why the condition is the dispute rather than the clock: an escrow with nothing disputed is never asked to spend one, and a fleet at rest spends nothing. The pass shares the timeout sweep's per-tick budget, and a zero budget turns it off with the sweep.
 
+## The last diff of a retiring escrow
+
+The same pending transactions are what a retirement would otherwise throw away. A host's answer carries its mempool back, the gateway holds those transactions until a diff takes them, and a retiring escrow has no further request to compose one: whatever it is holding when its session closes -- a finish another host gossiped, a vote on a record still open -- is lost with the session, and the record it would have resolved stays in-flight until settlement.
+
+So the close carries them first (`registry/retirement_flush.go`, `Registry.flushPendingAtRetirement`). It runs inside `closeDraining`, after the last request has released the escrow and before the nonce ledger takes the reading it will never take again, so a finish carried here is a finish the ledger records. The gate is the same one the dispute drain uses: an escrow holding nothing pending is never asked to spend a nonce on an empty diff. The send is bounded by a few seconds -- about what a host gets to acknowledge a request -- because the close can run on the goroutine of the request that released the escrow, and a host that has stopped answering must not hold that request open; a diff that does not land is narrated and the escrow closes anyway -- the gossip is lost either way, and a session left open over it would block the id from being published again.
+
 ## The per-escrow dispatcher
 
 Once an escrow is chosen, the request becomes a *waiter* submitted to that escrow's dispatcher — a goroutine that is the sole owner of the escrow's nonce stream and of the queue of waiters. Nothing else touches either (`dispatcher.go`, `dispatcher` and `newDispatcher`). One escrow, one actor, no lock around the nonce sequence.

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"time"
 
+	"devshard/cmd/gateway/config"
 	"devshard/cmd/gateway/internal/logkey"
 	"devshard/logging"
 )
@@ -19,21 +20,11 @@ func (g *gateway) serve(ctx context.Context) error {
 	backgroundCtx, stopBackground := context.WithCancel(ctx)
 	defer stopBackground()
 
-	g.observer.Start(backgroundCtx)
-	g.warmup.Start(backgroundCtx)
 	configuration := g.config.Load()
-	if err := seedDevshards(ctx, g.store, configuration.Server.DevshardsJSON); err != nil {
+	var started bootState
+	if err := startAll(g.bootOrder(ctx, backgroundCtx, configuration, &started)); err != nil {
 		return errors.Join(err, g.shutdown(shutdownGracePeriod))
 	}
-	if err := g.publishEscrows(ctx); err != nil {
-		return errors.Join(err, g.shutdown(shutdownGracePeriod))
-	}
-	g.nonces.Start(backgroundCtx, g.escrows, g.events)
-	g.manager.Start(backgroundCtx)
-	republished := g.republishOnDevshardWrites(backgroundCtx)
-
-	serveResult := make(chan error, 1)
-	go func() { serveResult <- g.server.ListenAndServe() }()
 	engine := configuration.Engine
 	logging.Info("gateway started",
 		logkey.Version, Version, logkey.Port, configuration.Server.Port,
@@ -47,14 +38,14 @@ func (g *gateway) serve(ctx context.Context) error {
 
 	var listenErr error
 	select {
-	case listenErr = <-serveResult:
+	case listenErr = <-started.listening:
 	case <-ctx.Done():
 	}
 	stopBackground()
 	shutdownErr := g.shutdown(shutdownGracePeriod)
-	<-republished
+	<-started.republished
 	if listenErr == nil {
-		listenErr = <-serveResult
+		listenErr = <-started.listening
 	}
 	if listenErr != nil && !errors.Is(listenErr, http.ErrServerClosed) {
 		return errors.Join(fmt.Errorf("http server: %w", listenErr), shutdownErr)
@@ -63,7 +54,50 @@ func (g *gateway) serve(ctx context.Context) error {
 	return shutdownErr
 }
 
-// needsQuiesced marks a step that destroys state the steps above it may still use. See rules.md, "6. Shutdown order is a contract".
+// bootState carries out of the boot steps what serve blocks on once they have all run.
+type bootState struct {
+	republished <-chan struct{}
+	listening   chan error
+}
+
+// bootStep is one step of the boot contract; the boot stops at the first one that fails. See operations.md, "Boot".
+type bootStep struct {
+	name  string
+	start func() error
+}
+
+// bootOrder is the eight-step contract every boot follows. See operations.md, "Boot".
+func (g *gateway) bootOrder(ctx, backgroundCtx context.Context, settings *config.Config, started *bootState) []bootStep {
+	return []bootStep{
+		{name: "chain observer", start: func() error { g.observer.Start(backgroundCtx); return nil }},
+		{name: "warmup prober", start: func() error { g.warmup.Start(backgroundCtx); return nil }},
+		{name: "seed devshards", start: func() error { return seedDevshards(ctx, g.store, settings.Server.DevshardsJSON) }},
+		{name: "publish escrows", start: func() error { return g.publishEscrows(ctx) }},
+		{name: "nonce ledger", start: func() error { g.nonces.Start(backgroundCtx, g.escrows, g.events); return nil }},
+		{name: "escrow lifecycle", start: func() error { g.manager.Start(backgroundCtx); return nil }},
+		{name: "devshard write republish", start: func() error {
+			started.republished = g.republishOnDevshardWrites(backgroundCtx)
+			return nil
+		}},
+		{name: "http listener", start: func() error {
+			started.listening = make(chan error, 1)
+			go func() { started.listening <- g.server.ListenAndServe() }()
+			return nil
+		}},
+	}
+}
+
+// startAll stops at the first step that fails, so nothing behind a half-built one is started. See operations.md, "Boot".
+func startAll(steps []bootStep) error {
+	for _, step := range steps {
+		if err := step.start(); err != nil {
+			return fmt.Errorf("%s: %w", step.name, err)
+		}
+	}
+	return nil
+}
+
+// needsQuiesced marks a step that destroys state the steps above it may still use. See rules.md, "6. Boot and shutdown order is a contract".
 type shutdownStep struct {
 	name          string
 	stop          func(context.Context) error
@@ -86,7 +120,6 @@ func shutdownOrder(listener httpListener, races, dispatchers, escrowLifecycle, c
 		{name: "escrow lifecycle", stop: waitFor(escrowLifecycle)},
 		{name: "chain observer", stop: waitFor(chainObserver)},
 		{name: "escrow sessions", stop: closeOf(sessions), needsQuiesced: true},
-		// After every producer above and before the ledger it drains into, bounded so a stuck sink cannot hold the steps below. See README.md, "Shutdown".
 		{name: "journal", stop: closeWithin(events, journalCloseFloor)},
 		// After every emitter above, so the final snapshot holds the counters the run ended with.
 		{name: "nonce accounting", stop: closeOf(nonceLedger)},

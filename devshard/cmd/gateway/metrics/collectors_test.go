@@ -14,8 +14,7 @@ import (
 	"devshard/cmd/gateway/store"
 )
 
-// trackedPricing prices a request at 1024 tokens on both sides, so every harness in this file starts a host
-// with windows of 4096 tokens.
+// trackedPricing prices a request at 1024 tokens on both sides.
 var trackedPricing = limits.WindowPricing{
 	Input:                 limits.RequestBounds{Min: 1, Initial: 4},
 	Output:                limits.RequestBounds{Min: 1, Initial: 4},
@@ -35,9 +34,7 @@ func newLimitsHarness(clock *time.Time) (*limits.GatewayLimiter, *limits.Capacit
 	return limiter, capacity, participants
 }
 
-// servingCapacity is the composition root's wrapper reduced to what a collector reads: production
-// applies the operator's relaxed-mode override before reading a model's weights, and these tests are
-// never blocked, so the answer is always the unblocked one.
+// servingCapacity is the composition root's wrapper reduced to what a collector reads.
 type servingCapacity struct{ *limits.Capacity }
 
 func (c servingCapacity) ModelWeights(model string) limits.ModelWeights {
@@ -61,6 +58,36 @@ func TestTheLimitsCollectorReportsTheConfiguredCapsBeforeAnyTraffic(t *testing.T
 	expectGauge(t, telemetry, "devshard_gateway_participants_exhausted", labels{}, 0)
 	expectGauge(t, telemetry, "devshard_gateway_inflight_requests_by_model", labels{"model": "qwen"}, 0)
 	expectSeriesCount(t, telemetry, "devshard_gateway_participant_breaker_state", 0)
+}
+
+// A shard falling behind on the votes it owes has to be readable from a scrape.
+func TestTheLimitsCollectorReportsTheVotesTheShardStillOwes(t *testing.T) {
+	clock := time.Unix(1700000000, 0)
+	limiter, capacity, participants := newLimitsHarness(&clock)
+	owed := int64(7)
+	telemetry := New()
+	telemetry.Register(NewLimitsCollector(LimitsSources{
+		Limiter: limiter, Capacity: servingCapacity{capacity}, Participants: participants,
+		Models:    func() []string { return []string{"qwen"} },
+		OwedVotes: func() int64 { return owed },
+	}))
+
+	expectGauge(t, telemetry, "devshard_gateway_owed_timeout_votes", labels{}, 7)
+	owed = 0
+	expectGauge(t, telemetry, "devshard_gateway_owed_timeout_votes", labels{}, 0)
+}
+
+// A gateway built without the source says nothing rather than reporting a shard that owes nothing.
+func TestTheLimitsCollectorLeavesTheOwedVotesOffWithoutASource(t *testing.T) {
+	clock := time.Unix(1700000000, 0)
+	limiter, capacity, participants := newLimitsHarness(&clock)
+	telemetry := New()
+	telemetry.Register(NewLimitsCollector(LimitsSources{
+		Limiter: limiter, Capacity: servingCapacity{capacity}, Participants: participants,
+		Models: func() []string { return []string{"qwen"} },
+	}))
+
+	expectSeriesCount(t, telemetry, "devshard_gateway_owed_timeout_votes", 0)
 }
 
 func TestTheLimitsCollectorMatchesTheLimiterAfterTraffic(t *testing.T) {
@@ -89,7 +116,7 @@ func TestTheLimitsCollectorMatchesTheLimiterAfterTraffic(t *testing.T) {
 	expectGauge(t, telemetry, "devshard_gateway_enforced_max_input_tokens_by_model", labels{"model": "qwen"}, 2000)
 }
 
-// A model can have traffic and be configured at once, and the registry refuses a scrape that carries one series twice.
+// A model can have traffic and be configured at once.
 func TestTheLimitsCollectorReportsEveryModelOnce(t *testing.T) {
 	clock := time.Unix(1700000000, 0)
 	limiter, capacity, participants := newLimitsHarness(&clock)
@@ -190,7 +217,7 @@ func TestTheLimitsCollectorReportsAnOpenCutoffAsExhausted(t *testing.T) {
 		labels{"participant_key": "gonka1down", "model": "qwen", "state": "closed"}, 0)
 }
 
-// The collector reads the limiter's snapshot rather than a copy, so a pair the limiter forgot is gone from the next scrape.
+// The collector reads the limiter's snapshot rather than a copy.
 func TestTheLimitsCollectorStopsReportingAPairTheLimiterForgot(t *testing.T) {
 	clock := time.Unix(1700000000, 0)
 	participants := limits.NewParticipantLimiter(limits.ParticipantConfig{
@@ -210,7 +237,6 @@ func TestTheLimitsCollectorStopsReportingAPairTheLimiterForgot(t *testing.T) {
 	releaseForgotten, _ := participants.Acquire("gonka1gone", "qwen", attemptCost)
 	releaseForgotten()
 	participants.Acquire("gonka1busy", "qwen", attemptCost)
-	// One series per cutoff state, for each of the two pairs.
 	expectSeriesCount(t, telemetry, "devshard_gateway_participant_breaker_state", 6)
 	expectGauge(t, telemetry, "devshard_gateway_participants_tracked", labels{}, 2)
 
@@ -348,8 +374,7 @@ func TestTheAccountingCollectorReportsEveryRowTheLedgerLost(t *testing.T) {
 	expectCounter(t, telemetry, "devshard_gateway_accounting_retention_sweeps_failed_total", labels{}, 3)
 }
 
-// A window is per participant and per model, and four gauges at that cardinality buy an operator nothing the
-// admin host view does not already answer. See capacity.md, "The participant limiter: IOCW".
+// A window is per participant and per model.
 func TestTheLimitsCollectorKeepsHostWindowsOffTheScrape(t *testing.T) {
 	clock := time.Unix(1700000000, 0)
 	limiter, capacity, participants := newLimitsHarness(&clock)

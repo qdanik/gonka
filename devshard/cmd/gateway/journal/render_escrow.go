@@ -34,6 +34,19 @@ func (j *Journal) DrainingEscrowClosed(escrowID string, closeErr error) {
 	})
 }
 
+// RetirementPendingFlushed renders the last diff a retiring escrow carried its gossiped transactions in.
+func (j *Journal) RetirementPendingFlushed(escrowID string, pending int, err error) {
+	j.emitLine(KindEscrowTransition, func(lines logSink) {
+		if err != nil {
+			lines.Error("retiring escrow could not carry its pending transactions",
+				logkey.Escrow, escrowID, logkey.PendingTxs, pending, logkey.Error, err)
+			return
+		}
+		lines.Info("retiring escrow carried its pending transactions",
+			logkey.Escrow, escrowID, logkey.PendingTxs, pending)
+	})
+}
+
 // SettlementUnverifiable renders a settlement payload the chain would refuse, built anyway.
 func (j *Journal) SettlementUnverifiable(escrowID string, nonce uint64, unverifiable error) {
 	j.emitLine(KindEscrowTransition, func(lines logSink) {

@@ -115,7 +115,7 @@ func TestAFundingRefusalNamesHowManyEscrowsWereAsked(t *testing.T) {
 
 	_, err := test.scheduler.Pick(context.Background(), RequestProfile{Model: modelA})
 
-	var refusal *EscrowsOutOfFunds
+	var refusal *EscrowsOutOfFundsError
 	if !errors.As(err, &refusal) {
 		t.Fatalf("Pick = %v, want a refusal that counts the escrows it asked", err)
 	}

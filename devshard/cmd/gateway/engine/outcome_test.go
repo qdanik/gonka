@@ -178,7 +178,6 @@ func TestVerdictTable(t *testing.T) {
 	briefBurnEmpty := failedAttempt(TerminalBurnEmpty)
 	briefBurnEmpty.Completed = testEpoch.Add(emptyStreamHeldTooLong - time.Millisecond)
 
-	// The window already narrowed when the deadline passed; widening it for the answer would undo that.
 	lateWinner := cleanAttempt()
 	lateWinner.FirstTokenDeadlineMissed = true
 

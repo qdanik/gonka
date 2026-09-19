@@ -15,7 +15,7 @@ One client request, several attempts on different hosts, one winner. This packag
 | `crown.go`, `crown_strikes.go`, `stream.go` | crowning the first attempt to produce content, withholding the crown from a host that keeps answering without, and forwarding only the winner's bytes |
 | `deadline.go`, `drain.go` | the timers, and the barrier that outlives the client |
 | `classify.go`, `outcome.go`, `terminal.go`, `judgement.go`, `failure.go` | what the attempt ended as, in the vocabulary the ledger admits, and what the race owes the client and the ladders because of it |
-| `settle.go`, `session.go` | the timeout vote every unfinished nonce owes |
+| `settle.go`, `session.go`, `settle_queue.go` | the timeout vote every unfinished nonce owes, where it waits for its deadline, and how many post at once |
 | `reassembly.go`, `carry.go` | rebuilding events split across chunk boundaries |
 | `vocabulary.go` | the wire strings — metric labels, log fields, ledger reasons — declared once |
 | `trace.go` | the `RaceStep` a coordinator copies at emit, for the journal |
@@ -138,6 +138,10 @@ Every nonce the race did not leave settled owes a chain vote. `TimeoutStep.Start
 `SettleTimeout` reads the handler's own record of whether the vote reached the escrow state: the handler returns a non-nil error on its success path too — that error carries "the inference timed out" to the request — so the error alone cannot tell a settled vote from an unsettled one. `TimeoutOutcome` prefers the handler's own detail over the generic collection error, because that is the only place the refusing verifier is named; `escrowMissing` is the caller's reading, since vote collection reports a count and never the verifier's error.
 
 Every event `SettleTimeouts` reports goes to `Deps.Metrics`, and nowhere else. The composition root forwards it to the [`journal`](../journal/), which writes `timeout vote failed` for a vote that never reached the chain.
+
+`settleQueue` holds what a race owes on a runtime timer instead of a goroutine. A race's votes go in as one task, keyed by the earliest deadline among the votes it will actually post (`earliestVote`), and `time.AfterFunc` spends a goroutine only once that moment arrives. `TimeoutPoster.VoteDeadline` is what makes this possible: the deadline is read before the wait rather than inside `HandleTimeout`, so a vote due in an hour costs one timer until its hour is up.
+
+`Engine.settle` therefore returns as soon as the task is held, never when the vote is posted, and the race's registration is released by the task — so the escrow and the `Stop` barrier are held exactly as long as the vote is owed, as before. The configured limit is read on each `Add` and applies to posting only: a due vote takes a place if one is free and otherwise queues for the next place a finishing vote gives back, and no vote is dropped (race.md, "The timeout-vote queue").
 
 ## The Stop barrier and the escrow hold
 

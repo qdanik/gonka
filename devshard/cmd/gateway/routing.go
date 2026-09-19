@@ -36,7 +36,6 @@ func newRouting(deps routingDeps) (*registry.Registry, *scheduler.Scheduler, *wa
 	if deps.Journal == nil {
 		return nil, nil, nil, errors.New("routing: Journal is required")
 	}
-	// The warmup needs the registry it observes, so it is handed the registry once that exists.
 	registryDeps := registry.Deps{
 		ServingSessions:  deps.Sessions,
 		ReadOnlySessions: deps.ReadOnly,
@@ -46,7 +45,6 @@ func newRouting(deps routingDeps) (*registry.Registry, *scheduler.Scheduler, *wa
 		Retiring:         deps.Ledger.EscrowRetiring,
 		Now:              deps.Now,
 	}
-	// A nil warmup must not reach the interface field: a typed nil there is non-nil to a nil check.
 	prober := warmup.New(deps.Config, deps.Ledger.Book(), deps.Snapshots, deps.Now)
 	if prober != nil {
 		registryDeps.Publications = prober

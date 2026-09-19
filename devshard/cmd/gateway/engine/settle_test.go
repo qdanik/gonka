@@ -24,6 +24,8 @@ type stubPoster struct {
 	err    error
 }
 
+func (p *stubPoster) VoteDeadline(uint64, time.Time) time.Time { return time.Time{} }
+
 func (p *stubPoster) SettleTimeout(_ context.Context, nonce uint64, sentAt time.Time) (TimeoutVote, error) {
 	p.posts = append(p.posts, recordedPost{nonce: nonce, sentAt: sentAt})
 	return TimeoutVote{Kind: p.vote, Detail: p.detail}, p.err
@@ -47,6 +49,8 @@ type countingPoster struct {
 	reported   *[]TimeoutEvent
 	seenAtPost []int
 }
+
+func (p *countingPoster) VoteDeadline(uint64, time.Time) time.Time { return time.Time{} }
 
 func (p *countingPoster) SettleTimeout(context.Context, uint64, time.Time) (TimeoutVote, error) {
 	p.seenAtPost = append(p.seenAtPost, len(*p.reported))

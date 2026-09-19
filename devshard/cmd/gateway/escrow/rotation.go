@@ -19,7 +19,6 @@ func (m *Manager) ensureToTarget(ctx context.Context, role string, target int, m
 		return 0, nil
 	}
 	if served, known := servedByNetwork(snapshot, model.ModelID); known && !served {
-		// A rotation that produced nothing on purpose, narrated so the missing escrow has a reason somewhere.
 		if m.narrator != nil {
 			m.narrator.RotationSkipped(model.ModelID, role, snapshot.EpochIndex)
 		}

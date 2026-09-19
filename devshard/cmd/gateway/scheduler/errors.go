@@ -25,14 +25,14 @@ var (
 	ErrEscrowGone = errors.New("pinned escrow gone")
 )
 
-// EscrowsOutOfFunds counts the escrows that refused to pay for one request before the fleet ran out. See routing.md, "Past every escrow that cannot pay".
-type EscrowsOutOfFunds struct {
+// EscrowsOutOfFundsError counts the escrows that refused to pay for one request before the fleet ran out. See routing.md, "Past every escrow that cannot pay".
+type EscrowsOutOfFundsError struct {
 	Refused int
 	wrapped error
 }
 
-func (e *EscrowsOutOfFunds) Error() string {
+func (e *EscrowsOutOfFundsError) Error() string {
 	return fmt.Sprintf("no escrow can fund this request (%d refused): %v", e.Refused, e.wrapped)
 }
 
-func (e *EscrowsOutOfFunds) Unwrap() error { return e.wrapped }
+func (e *EscrowsOutOfFundsError) Unwrap() error { return e.wrapped }

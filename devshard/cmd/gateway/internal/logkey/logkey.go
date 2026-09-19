@@ -76,6 +76,7 @@ const (
 	UpstreamStatus    = "upstream_status"
 	UpstreamBody      = "upstream_body"
 	ChallengesStalled = "challenges_stalled"
+	PendingTxs        = "pending_txs"
 	LastChunkHead     = "last_chunk_head"
 	MaxGapAtChunk     = "max_gap_at_chunk"
 	MeanGapMS         = "mean_gap_ms"

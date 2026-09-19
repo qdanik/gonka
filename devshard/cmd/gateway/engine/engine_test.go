@@ -26,6 +26,10 @@ type scriptedTimeoutHandler struct {
 	calls  int
 }
 
+func (h *scriptedTimeoutHandler) TimeoutDeadline(uint64, time.Time) (string, time.Time) {
+	return TimeoutKindExecution, time.Time{}
+}
+
 func (h *scriptedTimeoutHandler) HandleTimeout(context.Context, uint64, time.Time, *host.InferencePayload) (user.TimeoutResult, error) {
 	h.calls++
 	return h.result, h.err

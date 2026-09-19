@@ -38,6 +38,8 @@ type EscrowSession interface {
 	SignatureStatus() (entries []user.SignatureStatusEntry, highestQuorum uint64, hasAny bool)
 	SnapshotState() types.EscrowState
 	SealedInferences() int
+	PendingTxs() []*types.DevshardTx
+	SendPendingDiff(ctx context.Context) error
 	Finalize(ctx context.Context) error
 	FlushSnapshot() error
 	Close() error
