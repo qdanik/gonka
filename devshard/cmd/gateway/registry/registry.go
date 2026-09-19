@@ -58,6 +58,9 @@ type Registry struct {
 	// sweepCursor rotates where the timeout sweep starts, so one escrow's backlog cannot hold the budget.
 	sweepCursor atomic.Uint64
 
+	// challengeCursor rotates the challenge drain the same way, for the same reason.
+	challengeCursor atomic.Uint64
+
 	mu       sync.Mutex
 	draining map[*escrowEntry]struct{}
 	closed   bool

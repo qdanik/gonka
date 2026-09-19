@@ -164,6 +164,7 @@ func everyProducer() map[string]func(events *Journal) {
 		"SettledRecordDropped":             func(events *Journal) { events.SettledRecordDropped("5") },
 		"EscrowTickFailed":                 func(events *Journal) { events.EscrowTickFailed(failure) },
 		"TimeoutsSwept":                    func(events *Journal) { events.TimeoutsSwept(4, 3, 1) },
+		"ChallengesDrained":                func(events *Journal) { events.ChallengesDrained(2, 1, 1) },
 		"SettleBroadcast":                  func(events *Journal) { events.SettleBroadcast("123", "TX", "gonka1settler") },
 		"WarmupFoundNoNonce":               func(events *Journal) { events.WarmupFoundNoNonce("escrow-1", failure) },
 		"EscrowWarmed":                     func(events *Journal) { events.EscrowWarmed("escrow-1", "qwen", 7, false, failure) },

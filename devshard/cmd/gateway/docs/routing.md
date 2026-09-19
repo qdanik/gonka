@@ -86,6 +86,14 @@ The refusal the caller finally hears is the first out-of-funds answer, not the l
 
 A pinned escrow never walks, for the same reason it is never re-picked: an escalation races attempts inside one nonce stream.
 
+## A challenge waits for votes no request carries
+
+A validator disputing a finished inference moves its record to `StatusChallenged` on the first invalid vote, before any threshold is reached (`devshard/state/machine.go`, `applyValidation`). The record leaves that state only when further votes push either tally past the threshold, and it cannot be sealed while it waits -- a disputed record is mid-vote, not finished. Nothing in the protocol ends the round: there is no deadline for a challenge and no timeout reason that applies to one, so a disputed record waits as long as it has to.
+
+What it waits for is a diff. Votes reach this gateway inside the mempool a host returns with its answer, and they reach the state machine only when a diff carries them, pending transactions first. A diff is composed when a request takes a nonce, so on a quiet escrow the votes exist, nobody carries them, and the dispute stays open. The execution-timeout sweep does not close the gap: it picks up records that are `Started`, never ones that are challenged.
+
+So the escrow tick carries them itself, for the escrows that hold an open dispute and no others (`registry/challenge_sweep.go`, `Registry.DrainStalledChallenges`). One pass sends one diff per escrow through `user.Session.SendPendingDiff`, which composes from the pending transactions without a `MsgStartInference` and processes the answer -- so the same pass both applies the votes it holds and collects the next host's. It costs the escrow a nonce, which is why the condition is the dispute rather than the clock: an escrow with nothing disputed is never asked to spend one, and a fleet at rest spends nothing. The pass shares the timeout sweep's per-tick budget, and a zero budget turns it off with the sweep.
+
 ## The per-escrow dispatcher
 
 Once an escrow is chosen, the request becomes a *waiter* submitted to that escrow's dispatcher — a goroutine that is the sole owner of the escrow's nonce stream and of the queue of waiters. Nothing else touches either (`dispatcher.go`, `dispatcher` and `newDispatcher`). One escrow, one actor, no lock around the nonce sequence.

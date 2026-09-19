@@ -18,6 +18,7 @@ type Deps struct {
 	Snapshots   snapshotSource
 	Settlement  SettlementSource
 	Timeouts    TimeoutSweeper
+	Challenges  ChallengeDrainer
 	Sweeps      SweepRecorder
 	Narrator    lifecycleNarrator
 	Signer      SignerSource
@@ -52,6 +53,7 @@ func NewManager(d Deps) (*Manager, error) {
 		config:           d.Config,
 		settlementSource: d.Settlement,
 		timeoutSweeper:   d.Timeouts,
+		challengeDrainer: d.Challenges,
 		sweepRecorder:    d.Sweeps,
 		narrator:         d.Narrator,
 		routePrefix:      d.RoutePrefix,
@@ -132,6 +134,26 @@ func (m *Manager) sweepTimeouts(ctx context.Context) {
 	})
 }
 
+// sweepChallenges spends a nonce only where a dispute is open: an escrow with none is never asked, so an
+// idle fleet costs nothing. See routing.md, "A challenge waits for votes no request carries".
+func (m *Manager) sweepChallenges(ctx context.Context) {
+	budget := int(m.config.Load().TimeoutSweep.BudgetPerTick)
+	if m.challengeDrainer == nil || budget <= 0 {
+		return
+	}
+	if !m.draining.CompareAndSwap(false, true) {
+		return
+	}
+	m.sweepWork.Go(func() {
+		defer m.draining.Store(false)
+		stalled, drained, failed := m.challengeDrainer.DrainStalledChallenges(ctx, budget)
+		if stalled == 0 || m.narrator == nil {
+			return
+		}
+		m.narrator.ChallengesDrained(stalled, drained, failed)
+	})
+}
+
 func (m *Manager) tick(ctx context.Context) error {
 	reconcileErr := m.reconcile(ctx) // crash recovery must not depend on the rotation toggle
 
@@ -144,6 +166,7 @@ func (m *Manager) tick(ctx context.Context) error {
 	// An escrow gone from chain must stop taking traffic whatever the rotation toggle says.
 	missingErr := m.checkMissing(ctx)
 	m.sweepTimeouts(ctx)
+	m.sweepChallenges(ctx)
 
 	cfg := m.config.Load()
 	// Pulled, not subscribed: a 15s poll is equivalent at this cadence and avoids callback races.
