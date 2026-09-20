@@ -31,9 +31,9 @@ type escrowVotes struct {
 
 var _ engine.TimeoutPoster = escrowVotes{}
 
-func (v escrowVotes) SettleTimeout(ctx context.Context, nonce uint64, startedAt time.Time) (engine.TimeoutVote, error) {
-	payload := timeoutPayload(v.session.SnapshotState(), nonce, v.prompt)
-	return engine.NewSessionTimeouts(v.session.UserSession(), payload).SettleTimeout(ctx, nonce, startedAt)
+func (v escrowVotes) SettleTimeout(ctx context.Context, step engine.TimeoutStep) (engine.TimeoutVote, error) {
+	payload := timeoutPayload(v.session.SnapshotState(), step.Nonce, v.prompt)
+	return engine.NewSessionTimeouts(v.session.UserSession(), payload).SettleTimeout(ctx, step)
 }
 
 // VoteDeadline reads the escrow's own deadline for this nonce, which is what the settle queue holds it by.

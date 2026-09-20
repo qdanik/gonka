@@ -40,6 +40,7 @@ type RaceRecorder struct {
 	hiddenFailures   *prometheus.CounterVec
 	sweeps           *prometheus.CounterVec
 	timeoutActions   *prometheus.CounterVec
+	missRejects      *prometheus.CounterVec
 	carryOverflows   *prometheus.CounterVec
 
 	receiptSeconds  *prometheus.HistogramVec
@@ -112,6 +113,10 @@ func NewRaceRecorder(telemetry *Metrics, now func() time.Time, staleness func() 
 			Name: "devshard_gateway_timeout_actions_total",
 			Help: "Total nonce timeout-vote actions by participant, model, kind, action, and reason.",
 		}, []string{"participant_key", "model", "kind", "action", "reason"}),
+		missRejects: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "devshard_gateway_error_miss_verify_rejects_total",
+			Help: "Total verifier rejections of an error-miss claim by cause and how whole the offered proof was.",
+		}, []string{"cause", "completeness"}),
 		carryOverflows: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "devshard_gateway_stream_carry_overflow_total",
 			Help: "Total SSE reassembly buffers that overflowed their carry budget.",
@@ -153,7 +158,7 @@ func NewRaceRecorder(telemetry *Metrics, now func() time.Time, staleness func() 
 	}
 	recorder.participantFamilies = []partialDeleter{
 		recorder.attemptsStarted, recorder.attemptsTerminal, recorder.attemptFailures, recorder.transportErrors,
-		recorder.missedDeadlines, recorder.timeoutActions, recorder.carryOverflows, recorder.receiptSeconds, recorder.firstContent,
+		recorder.missedDeadlines, recorder.timeoutActions, recorder.missRejects, recorder.carryOverflows, recorder.receiptSeconds, recorder.firstContent,
 		recorder.prefillPerToken, recorder.outputTokens, recorder.totalAttempt, recorder.maxChunkGap, recorder.meanChunkGap,
 	}
 	telemetry.Register(recorder.collectors()...)
@@ -163,7 +168,7 @@ func NewRaceRecorder(telemetry *Metrics, now func() time.Time, staleness func() 
 func (r *RaceRecorder) collectors() []prometheus.Collector {
 	return []prometheus.Collector{
 		r.attemptsStarted, r.attemptsTerminal, r.attemptFailures, r.transportErrors, r.missedDeadlines, r.requests,
-		r.hiddenFailures, r.timeoutActions, r.carryOverflows, r.sweeps,
+		r.hiddenFailures, r.timeoutActions, r.missRejects, r.carryOverflows, r.sweeps,
 		r.receiptSeconds, r.firstContent, r.prefillPerToken, r.outputTokens, r.totalAttempt,
 		r.maxChunkGap, r.meanChunkGap,
 	}
@@ -292,6 +297,10 @@ func (r *RaceRecorder) RecordTimeout(event engine.TimeoutEvent) {
 		metricLabel(event.Action, labelUnknown),
 		metricLabel(event.Reason, reasonNone),
 	).Inc()
+	completeness := metricLabel(event.Completeness, labelUnknown)
+	for _, cause := range event.VerifyRejects {
+		r.missRejects.WithLabelValues(metricLabel(cause, labelUnknown), completeness).Inc()
+	}
 }
 
 func (r *RaceRecorder) RecordClassifyOverflow(participant, model string) {

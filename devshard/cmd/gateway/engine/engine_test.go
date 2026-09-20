@@ -21,13 +21,22 @@ var errVoteCause = errors.New("collect timeout votes")
 // scriptedTimeoutHandler reproduces Session.HandleTimeout's four returns verbatim, so the adapter is
 // pinned against the shapes it actually normalizes rather than a paraphrase of them.
 type scriptedTimeoutHandler struct {
-	result user.TimeoutResult
-	err    error
-	calls  int
+	result    user.TimeoutResult
+	err       error
+	calls     int
+	missCalls int
+	finishTx  []byte
 }
 
 func (h *scriptedTimeoutHandler) TimeoutDeadline(uint64, time.Time) (string, time.Time) {
 	return TimeoutKindExecution, time.Time{}
+}
+
+func (h *scriptedTimeoutHandler) FinishTxFor(uint64) []byte { return h.finishTx }
+
+func (h *scriptedTimeoutHandler) HandleErrorMiss(context.Context, uint64, []byte, []byte) (user.TimeoutResult, error) {
+	h.missCalls++
+	return h.result, h.err
 }
 
 func (h *scriptedTimeoutHandler) HandleTimeout(context.Context, uint64, time.Time, *host.InferencePayload) (user.TimeoutResult, error) {
@@ -111,7 +120,7 @@ func TestSessionTimeoutsReadsAPostedVoteThroughTheHandlersAppliedFlag(t *testing
 			handler := &scriptedTimeoutHandler{result: testCase.result, err: testCase.err}
 			poster := &SessionTimeouts{handler: handler}
 
-			vote, err := poster.SettleTimeout(context.Background(), 7, testEpoch)
+			vote, err := poster.SettleTimeout(context.Background(), TimeoutStep{Nonce: 7, StartedAt: testEpoch})
 
 			if vote.Detail != testCase.wantDetail {
 				t.Errorf("vote detail = %q, want %q", vote.Detail, testCase.wantDetail)

@@ -149,7 +149,25 @@ func (s *attemptState) outcome(spec AttemptSpec) *AttemptOutcome {
 		ErrorType:     s.errorType,
 		ErrorMessage:  s.errorMessage,
 		ErrorPayload:  s.errorPayload,
+		MissProof:     s.missProof(spec),
 
 		StateDivergent: s.stateDivergent,
 	}
+}
+
+// missProof is offered only by a stream that ended in the host's own error.
+func (s *attemptState) missProof(spec AttemptSpec) *MissProof {
+	prover, holds := spec.Classifier.(missProver)
+	if !holds {
+		return nil
+	}
+	if s.terminal != TerminalErrorStream {
+		prover.releaseMissProof()
+		return nil
+	}
+	proof, held := prover.missProof()
+	if !held {
+		return nil
+	}
+	return &proof
 }

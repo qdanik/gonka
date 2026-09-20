@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"devshard/cmd/gateway/engine"
 	"devshard/cmd/gateway/registry"
 	"devshard/host"
 	"devshard/types"
@@ -151,7 +152,7 @@ func TestSettleTimeoutReportsACancelledWaitAsNoVote(t *testing.T) {
 	cancelled, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	vote, err := poster.SettleTimeout(cancelled, prepared.Nonce(), time.Now())
+	vote, err := poster.SettleTimeout(cancelled, engine.TimeoutStep{Nonce: prepared.Nonce(), StartedAt: time.Now()})
 
 	if !errors.Is(err, context.Canceled) {
 		t.Errorf("SettleTimeout error = %v, want it to match context.Canceled", err)
@@ -175,7 +176,7 @@ func TestSettleTimeoutReportsAnInsufficientVoteTallyAsAFailure(t *testing.T) {
 	// No host client is a verifier, so the tally is empty and cannot clear the threshold.
 	elapsedDeadline := time.Now().Add(-24 * time.Hour)
 
-	vote, err := poster.SettleTimeout(context.Background(), prepared.Nonce(), elapsedDeadline)
+	vote, err := poster.SettleTimeout(context.Background(), engine.TimeoutStep{Nonce: prepared.Nonce(), StartedAt: elapsedDeadline})
 
 	if !errors.Is(err, user.ErrTimeoutNotApplied) {
 		t.Errorf("SettleTimeout error = %v, want it to match user.ErrTimeoutNotApplied", err)

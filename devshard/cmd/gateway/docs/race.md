@@ -203,6 +203,16 @@ A vote carries each verifier only the diffs its own cursor is missing, not the e
 
 One external quirk is absorbed at the boundary: the shared session's timeout handler returns a **non-nil error on its success path**, so a posted vote is recognised by the handler's own `Applied` flag rather than by `err == nil` (`engine/session.go`, `SessionTimeouts.SettleTimeout`). The one failure that would otherwise be structurally indistinguishable from a posted vote — a diff the group carried without the timeout — is marked at its source with `user.ErrTimeoutNotApplied`, so a caller reading the error alone does not count it as one (`user/timeout_effect.go`, `timeoutSettledError`).
 
+### Error misses
+
+A host that answers with its own error envelope did not go silent: it finished, signed a `MsgFinishInference` over that error body, and would be paid for it if the nonce were left alone. That nonce is claimed as a **miss** rather than voted as a deadline nobody met (`engine/settle.go`, `SettleErrorMiss`).
+
+The claim is evidence, not judgement. A verifier recomputes `sha256` of the response payload and compares it against the hash inside the Finish the executor signed, so the gateway has to hand back the host's own event lines byte for byte (`host/timeout.go`, `VerifyErrorMiss`). The lines are retained while the stream is still speculative and released the moment the attempt turns out to be anything else, because most attempts are (`engine/miss_proof.go`, `errorStreamRetainer`). Two lines never count toward the hash: the `devshard_receipt` and `devshard_meta` events the host wraps around its answer after taking the hash. A stream that outgrew the retention bound, or whose reassembly dropped bytes, is marked truncated — the proof would hash to something else, and a claim that cannot be recomputed is worse than no claim.
+
+Two skips are deliberately overridden for a miss. The nonce **is** finished — that is the whole point, and the ordinary "already finished" skip would let the error be paid for. And a claim with no signed Finish behind it falls back to the ordinary vote, because every verifier would reject it as `no_finish_tx` (`engine/session.go`, `SessionTimeouts.settle`).
+
+A landed miss comes back as `user.ErrInferenceMissed`, which is the protocol reporting a settlement as an error because the nonce did not finish normally. It is read as completed, not failed (`engine/settle.go`, `TimeoutOutcome`).
+
 ### The timeout-vote queue
 
 This queue is over the chain votes a race owes for the nonces its hosts left unfinished, and over nothing else: it does not bound how many escrows may settle at once, which is a different transaction with no cap of its own beyond one settlement per escrow id (`escrow/dedup.go`, `inFlightSet`).

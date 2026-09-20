@@ -5,6 +5,7 @@ type sseClassifier struct {
 	thinkingBudget bool
 	carry          *carryBuffer
 	overflow       func()
+	retained       *errorStreamRetainer
 }
 
 func newSSEClassifier(budget *carryBudget, participant, model string, overflow func()) *sseClassifier {
@@ -12,24 +13,38 @@ func newSSEClassifier(budget *carryBudget, participant, model string, overflow f
 		thinkingBudget: thinkingBudgetRoute(model),
 		carry:          newCarryBuffer(budget, participant),
 		overflow:       overflow,
+		retained:       newErrorStreamRetainer(maxMissProofBytes),
 	}
 }
 
 func (c *sseClassifier) Classify(chunk []byte) chunkFacts {
 	events, firstDrop := c.carry.Take(chunk)
-	if firstDrop && c.overflow != nil {
-		c.overflow()
+	if firstDrop {
+		// Dropped bytes cannot be hashed back to what the host signed, so the proof says it lost some.
+		c.retained.truncate()
+		if c.overflow != nil {
+			c.overflow()
+		}
 	}
+	c.retained.retain(events)
 	return c.facts(classifyChunk(events, c.thinkingBudget))
 }
 
 // Flush classifies the unterminated final event, which reads as nothing at all until it does.
 func (c *sseClassifier) Flush() chunkFacts {
 	tail := c.carry.Tail()
+	c.retained.retain(tail)
 	return c.facts(classifyChunk(tail, c.thinkingBudget))
 }
 
-func (c *sseClassifier) Release() { c.carry.Release() }
+func (c *sseClassifier) Release() {
+	c.carry.Release()
+	c.retained.release()
+}
+
+func (c *sseClassifier) missProof() (MissProof, bool) { return c.retained.proof() }
+
+func (c *sseClassifier) releaseMissProof() { c.retained.release() }
 
 // facts keeps a capability refusal out of Error, while its message still reaches the perf recorder. See race.md, "An SSE error event counts as a chunk but never crowns".
 func (c *sseClassifier) facts(signal chunkSignal) chunkFacts {

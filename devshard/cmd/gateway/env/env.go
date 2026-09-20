@@ -108,6 +108,11 @@ func LogFormat() string {
 	return LogFormatJSON
 }
 
+func AllowPrivateAddresses() bool {
+	allowed, err := strconv.ParseBool(lookup("GATEWAY_ALLOW_PRIVATE_ADDRESSES"))
+	return err == nil && allowed
+}
+
 var (
 	// ErrPrivateKeyMissing marks a devshard whose signing key the environment does not hold.
 	ErrPrivateKeyMissing = errors.New("private key missing")
@@ -137,6 +142,7 @@ var (
 		"GATEWAY_ACCOUNTING_PORT":             "DEVSHARD_STATS_PORT",
 		"GATEWAY_ACCOUNTING_RETENTION_EPOCHS": "DEVSHARD_STATS_RETENTION_EPOCHS",
 		"GATEWAY_ACCOUNTING_SNAPSHOT_SECONDS": "DEVSHARD_STATS_SNAPSHOT_SECONDS",
+		"GATEWAY_ALLOW_PRIVATE_ADDRESSES":     "DEVSHARD_ALLOW_PRIVATE_ADDRESSES",
 	}
 )
 

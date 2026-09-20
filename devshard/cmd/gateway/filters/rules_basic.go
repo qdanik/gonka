@@ -87,6 +87,21 @@ func stripParameter() RuleFunc {
 	}
 }
 
+func capUint(max uint64) RuleFunc {
+	return func(ctx RuleContext) error {
+		raw, exists := ctx.Document.Get(ctx.Param)
+		if !presentField(raw, exists) {
+			return nil
+		}
+		asked, isNumber := devshard.JSONNumericUint64(raw)
+		if !isNumber || asked <= max {
+			return nil
+		}
+		ctx.Document.Set(ctx.Param, max)
+		return nil
+	}
+}
+
 func forceLiteral(value any) RuleFunc {
 	return func(ctx RuleContext) error {
 		ctx.Document.Set(ctx.Param, value)

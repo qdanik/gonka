@@ -174,10 +174,10 @@ type duePoster struct {
 
 func (p *duePoster) VoteDeadline(uint64, time.Time) time.Time { return time.Time{} }
 
-func (p *duePoster) SettleTimeout(_ context.Context, nonce uint64, _ time.Time) (TimeoutVote, error) {
+func (p *duePoster) SettleTimeout(_ context.Context, step TimeoutStep) (TimeoutVote, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.posts = append(p.posts, nonce)
+	p.posts = append(p.posts, step.Nonce)
 	return TimeoutVote{Kind: TimeoutKindRefused}, nil
 }
 

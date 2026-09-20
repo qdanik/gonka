@@ -617,9 +617,9 @@ func TestTheStripFollowsWhatTheClientAskedFor(t *testing.T) {
 	}
 }
 
-// The force rules overwrite logprobs at StagePostLimits, so reading the intent afterwards would
-// record what the gateway wants for validation rather than what the client sent.
-func TestTheLogprobIntentIsReadBeforeTheForceRules(t *testing.T) {
+// The intent drives the strip, so it has to be what the client wrote. Nothing in the request pipeline
+// fills logprobs in on the client's behalf any more, and a shape that is not an ask is refused outright.
+func TestTheLogprobIntentIsWhatTheClientWrote(t *testing.T) {
 	testCases := []struct {
 		name       string
 		body       string
@@ -629,7 +629,6 @@ func TestTheLogprobIntentIsReadBeforeTheForceRules(t *testing.T) {
 		{name: "asked_for_logprobs", body: `{"model":"qwen","messages":[{"role":"user","content":"hi"}],"logprobs":true}`, wantIntent: LogprobIntent{Keep: true}},
 		{name: "asked_for_alternatives", body: `{"model":"qwen","messages":[{"role":"user","content":"hi"}],"logprobs":true,"top_logprobs":3}`, wantIntent: LogprobIntent{Keep: true, KeepTop: true}},
 		{name: "alternatives_without_logprobs", body: `{"model":"qwen","messages":[{"role":"user","content":"hi"}],"top_logprobs":3}`},
-		{name: "logprobs_of_the_wrong_type", body: `{"model":"qwen","messages":[{"role":"user","content":"hi"}],"logprobs":"yes"}`},
 	}
 
 	for _, testCase := range testCases {
@@ -643,8 +642,9 @@ func TestTheLogprobIntentIsReadBeforeTheForceRules(t *testing.T) {
 			if result.Logprobs != testCase.wantIntent {
 				t.Fatalf("intent = %+v, want %+v", result.Logprobs, testCase.wantIntent)
 			}
-			if !strings.Contains(string(result.Body), `"logprobs":true`) {
-				t.Fatalf("the request that goes upstream must carry forced logprobs whatever the client asked: %s", result.Body)
+			if carries := strings.Contains(string(result.Body), `"logprobs":true`); carries != testCase.wantIntent.Keep {
+				t.Fatalf("the request upstream asks for logprobs = %v, want the client's own %v: %s",
+					carries, testCase.wantIntent.Keep, result.Body)
 			}
 		})
 	}

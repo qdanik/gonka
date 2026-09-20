@@ -253,6 +253,9 @@ func (e *e2eEnv) startGateway(ctx context.Context, t *testing.T, opts e2eEnvOpti
 		"GATEWAY_ACCOUNTING_ENABLED":          "true",
 		"GATEWAY_ACCOUNTING_PORT":             "9091",
 		"GATEWAY_ACCOUNTING_SNAPSHOT_SECONDS": "3600",
+		// Hosts are Docker DNS names that resolve to private IPs.
+		// Production leaves this unset so the dial-time SSRF guard stays on.
+		"GATEWAY_ALLOW_PRIVATE_ADDRESSES": "true",
 	}
 	for k, v := range opts.gatewayEnvOverrides {
 		gatewayEnv[k] = v

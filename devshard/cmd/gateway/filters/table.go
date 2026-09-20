@@ -63,6 +63,8 @@ const (
 	badWordsMaxEntries  = 64
 	badWordsMaxEntryLen = 128
 
+	logprobsWidthCap = uint64(completionapi.ForcedTopLogprobs)
+
 	logitBiasMinValue   = -100
 	logitBiasMaxValue   = 100
 	logitBiasMaxEntries = 1024
@@ -110,8 +112,11 @@ var (
 		spec("skip_special_tokens", StagePreValidation, requireBool()),
 		spec("detokenize", StagePreValidation, requireBool()),
 		spec("user", StagePreValidation, requireString(userMaxLen)),
-		spec("logprobs", StagePostLimits, forceLiteral(true)),
-		spec("top_logprobs", StagePostLimits, forceLiteral(completionapi.ForcedTopLogprobs)),
+		spec("logprobs", StagePreValidation, requireBool()),
+		{Name: "top_logprobs", Rules: []StagedRule{
+			{Stage: StagePreValidation, Apply: requireUint()},
+			{Stage: StagePostLimits, Apply: capUint(logprobsWidthCap)},
+		}},
 		spec("return_token_ids", StagePostLimits, forceLiteral(true)),
 		spec("service_tier", StagePreValidation, stripParameter()),
 		spec("store", StagePreValidation, stripParameter()),

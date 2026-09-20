@@ -92,6 +92,8 @@ type AttemptOutcome struct {
 	ErrorMessage string
 	ErrorPayload string
 
+	MissProof *MissProof
+
 	PhaseTransitionAborted bool
 	StateDivergent         bool
 }
@@ -118,6 +120,10 @@ func (a AttemptOutcome) OutputTokens() int64 {
 
 func (a AttemptOutcome) emptyStream() bool {
 	return a.Terminal == TerminalEmptyStream || a.Terminal == TerminalBurnEmpty
+}
+
+func (a AttemptOutcome) claimsMiss() bool {
+	return a.Terminal == TerminalErrorStream && a.MissProof != nil
 }
 
 func (a AttemptOutcome) errorStream() bool {

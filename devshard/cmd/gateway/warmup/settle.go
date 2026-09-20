@@ -40,7 +40,7 @@ func (w *Prober) settleUnfinishedProbe(ctx context.Context, escrowID, model stri
 	w.recordTimeout(event)
 
 	posted := event
-	vote, err := poster.SettleTimeout(ctx, nonce, time.Unix(params.StartedAt, 0))
+	vote, err := poster.SettleTimeout(ctx, engine.TimeoutStep{Nonce: nonce, StartedAt: time.Unix(params.StartedAt, 0)})
 	posted.Action, posted.Reason = engine.TimeoutOutcome(vote, err, false)
 	w.recordTimeout(posted)
 

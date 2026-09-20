@@ -61,6 +61,7 @@ const (
 const (
 	TimeoutKindRefused   = "refused"
 	TimeoutKindExecution = "execution"
+	TimeoutKindErrorMiss = "error_miss"
 
 	TimeoutActionSkipped   = "skipped"
 	TimeoutActionStarted   = "started"

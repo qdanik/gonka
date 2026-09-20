@@ -11,6 +11,8 @@ import (
 	"syscall"
 	"time"
 
+	"common/httpguard"
+
 	devshardpkg "devshard"
 	"devshard/cmd/gateway/accounting"
 	"devshard/cmd/gateway/api"
@@ -44,9 +46,19 @@ const (
 
 func main() {
 	logging.ConfigureFormat(env.LogFormat())
+	applyDialGuard()
 	if err := serve(); err != nil {
 		logging.Error("gateway exited", logkey.Error, err)
 		os.Exit(1)
+	}
+}
+
+func applyDialGuard() {
+	allowed := env.AllowPrivateAddresses()
+	httpguard.SetAllowPrivate(allowed)
+	if allowed {
+		logging.Warn("dials to private addresses are allowed: the SSRF guard is off",
+			logkey.Subsystem, "gateway", logkey.Used, "GATEWAY_ALLOW_PRIVATE_ADDRESSES")
 	}
 }
 

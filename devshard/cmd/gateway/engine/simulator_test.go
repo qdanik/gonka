@@ -263,13 +263,13 @@ func newSimPoster() *simPoster {
 
 func (p *simPoster) VoteDeadline(uint64, time.Time) time.Time { return time.Time{} }
 
-func (p *simPoster) SettleTimeout(_ context.Context, nonce uint64, _ time.Time) (TimeoutVote, error) {
-	p.entered <- nonce
+func (p *simPoster) SettleTimeout(_ context.Context, step TimeoutStep) (TimeoutVote, error) {
+	p.entered <- step.Nonce
 	if p.release != nil {
 		<-p.release
 	}
 	p.mu.Lock()
-	p.posted = append(p.posted, nonce)
+	p.posted = append(p.posted, step.Nonce)
 	p.mu.Unlock()
 	return TimeoutVote{Kind: p.vote}, p.err
 }
