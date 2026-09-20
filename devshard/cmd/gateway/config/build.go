@@ -67,6 +67,10 @@ func Build(values env.Values, overrides Overrides) (*Config, error) {
 	overrideIfSet(&configuration.Capture.SampleRate, values.CaptureSampleRate)
 	overrideIfSet(&configuration.Capture.MaxBytes, values.CaptureMaxBytes)
 
+	overrideIfSet(&configuration.HostPing.Disabled, values.HostPingDisabled)
+	overrideIfSet(&configuration.HostPing.IntervalMS, values.HostPingIntervalMS)
+	overrideIfSet(&configuration.HostPing.TimeoutMS, values.HostPingTimeoutMS)
+	overrideIfSet(&configuration.HostPing.Concurrency, values.HostPingConcurrency)
 	overrideIfSet(&configuration.Perf.EWMAHalfLifeSeconds, values.PerfEWMAHalfLifeSeconds)
 	overrideIfSet(&configuration.Perf.ConsecutiveFailThreshold, values.PerfConsecutiveFailThreshold)
 	overrideIfSet(&configuration.Perf.FailureRateThreshold, values.PerfFailureRateThreshold)

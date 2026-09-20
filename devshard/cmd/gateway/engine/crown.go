@@ -74,7 +74,6 @@ func (g contentGate) Classify(chunk []byte) chunkFacts {
 	return facts
 }
 
-// The gate wraps an interface, so proof has to be forwarded rather than promoted.
 func (g contentGate) missProof() (MissProof, bool) {
 	prover, holds := g.streamClassifier.(missProver)
 	if !holds {

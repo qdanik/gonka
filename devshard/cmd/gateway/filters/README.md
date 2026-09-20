@@ -44,7 +44,7 @@ Everything a client sends is normalised here before it reaches a host, and every
 12. Force streaming upstream, unless `Options.KeepClientStream` is set.
 13. Marshal.
 
-Step 8 has to sit where it does: `StagePostLimits` forces `logprobs` on for validation, so after it the document says what the gateway wants, not what the client asked for.
+Step 8 has to sit where it does: `StagePostLimits` caps `top_logprobs`, so after it the document says the width that goes on the wire, not the one the client asked for.
 
 ### Registration order is semantics
 
@@ -109,7 +109,8 @@ Collection rules:
 
 What the gateway forces, and what it strips:
 
-- `logprobs` → `true`, `top_logprobs` → `completionapi.ForcedTopLogprobs`, `return_token_ids` → `true`. Each is forced for validation and paired with a response-side strip, a pairing a test enforces.
+- `return_token_ids` → `true`, forced for validation and paired with a response-side strip, a pairing a test enforces.
+- `logprobs` and `top_logprobs` are **carried, not forced**: a non-boolean or negative ask is rejected, and a width above `completionapi.ForcedTopLogprobs` is capped to it. The host re-pins that same constant on every executed request, so overwriting the client here would buy nothing and lose what it asked for. A narrower ask is accepted but not honoured — the host executes at the pinned width and the answer carries it.
 - `n` is replaced with `1` when present: the reservation budgets one `max_tokens` worth of output, and `n` choices can produce `n` times what it signed for.
 - Silently stripped: `service_tier`, `store`, `provider`, `plugins`, `prompt_cache_key`, `cache_key`, `extra_headers`, `thinking_config`, `think`, `stop_token_ids`.
 - `model` must match `^[A-Za-z0-9._/-]+$` and stay under 256 bytes; `user` and `safety_identifier` under 512.
@@ -231,7 +232,7 @@ Content is accepted as a non-blank string, or as a non-empty array of `{type: "t
 
 ## Response stripping
 
-`LogprobIntent` is what the client's own request asked for, read before the force rules overwrite it. Without it the strip cannot tell a client who asked for logprobs from one who did not, and would answer both by removing them.
+`LogprobIntent` is what the client's own request asked for, read before the cap can narrow it. Without it the strip cannot tell a client who asked for logprobs from one who did not, and would answer both by removing them. `logprobs: true` without alternatives keeps `top_logprobs` as a present-but-empty array, which is OpenAI's shape for that ask.
 
 - A client that asked for nothing loses `clientStrippedFields`: the whole logprob family plus `token_ids`, `prompt_token_ids`, `prompt_logprobs`.
 - A client that asked for logprobs loses only `alwaysStrippedFields`, which is *derived* by subtracting `requestableFields` from the full list. A hand-written second list can omit a field the full list gained, which exposes `top_logprobs`.

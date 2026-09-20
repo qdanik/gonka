@@ -24,9 +24,17 @@ var (
 	errNonceDeclined = errors.New("nonce declined")
 )
 
+// HostDial is where one of an escrow's hosts answers. See README.md.
+type HostDial struct {
+	ParticipantKey string
+	BaseURL        string
+	RoutePrefix    string
+}
+
 // EscrowSession is one escrow's session as the registry uses it; two of its methods carry a trap. See README.md, "The two session kinds".
 type EscrowSession interface {
 	ParticipantKeys() []string
+	HostDials() []HostDial
 	HostParticipantKeyList() []string
 	Nonce() uint64
 	Balance() uint64
@@ -62,6 +70,29 @@ func (h sessionHandle) Phase() types.SessionPhase        { return h.machine.Phas
 func (h sessionHandle) SnapshotState() types.EscrowState { return h.machine.SnapshotState() }
 func (h sessionHandle) SealedInferences() int            { return len(h.machine.ExportSealedNonces()) }
 func (h sessionHandle) UserSession() *user.Session       { return h.Session }
+
+type hostDialer interface {
+	BaseURL() string
+	RoutePrefix() string
+}
+
+func (h sessionHandle) HostDials() []HostDial {
+	clients := h.Session.Clients()
+	keys := h.Session.HostParticipantKeyList()
+	dials := make([]HostDial, 0, len(clients))
+	for slot, client := range clients {
+		dialer, addressable := client.(hostDialer)
+		if !addressable || dialer == nil {
+			continue
+		}
+		key := ""
+		if slot < len(keys) {
+			key = keys[slot]
+		}
+		dials = append(dials, HostDial{ParticipantKey: key, BaseURL: dialer.BaseURL(), RoutePrefix: dialer.RoutePrefix()})
+	}
+	return dials
+}
 
 // slots is taken once: the group is fixed for the life of a session, and asking the session takes the lock a nonce commit holds.
 type nonceStream struct {

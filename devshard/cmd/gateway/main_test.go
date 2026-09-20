@@ -893,6 +893,7 @@ func (s weightlessSession) Finalize(context.Context) error          { return nil
 func (s weightlessSession) FlushSnapshot() error                    { return nil }
 func (s weightlessSession) Close() error                            { return nil }
 func (s weightlessSession) UserSession() *user.Session              { return nil }
+func (s weightlessSession) HostDials() []registry.HostDial          { return nil }
 
 func (s weightlessSession) PrepareInferenceFn(user.ParamsForHost) (*user.PreparedInference, error) {
 	return nil, nil

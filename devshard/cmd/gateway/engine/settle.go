@@ -36,7 +36,7 @@ type TimeoutEvent struct {
 	Completeness  string
 }
 
-// SettleKind is how a nonce is settled. See race.md, "Error misses".
+// SettleKind is how a nonce is settled. See ../docs/race.md, "Error misses".
 type SettleKind int
 
 const (
@@ -78,7 +78,6 @@ func (o RaceOutcome) nonceSettled(a AttemptOutcome) bool {
 
 // timeoutSkipReason names every skip; a diverged escrow state is deliberately not one. See race.md, "Timeout votes".
 func (o RaceOutcome) timeoutSkipReason(a AttemptOutcome) (string, bool) {
-	// The miss exists because the host finished -- with its own error. See race.md, "Error misses".
 	if a.claimsMiss() {
 		return "", false
 	}

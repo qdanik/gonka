@@ -143,3 +143,23 @@ func (r *Registry) holdLocked(entry *escrowEntry) func() {
 	var once sync.Once
 	return func() { once.Do(func() { r.release(entry) }) }
 }
+
+// HostDials is every address the live escrows can reach, once each. See README.md.
+func (r *Registry) HostDials() []HostDial {
+	published := r.live.Load()
+	seen := make(map[string]struct{}, len(published.ordered))
+	dials := make([]HostDial, 0, len(published.ordered))
+	for _, entry := range published.ordered {
+		for _, dial := range entry.session.HostDials() {
+			if dial.BaseURL == "" {
+				continue
+			}
+			if _, known := seen[dial.BaseURL]; known {
+				continue
+			}
+			seen[dial.BaseURL] = struct{}{}
+			dials = append(dials, dial)
+		}
+	}
+	return dials
+}

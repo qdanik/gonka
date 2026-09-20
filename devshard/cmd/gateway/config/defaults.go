@@ -96,6 +96,11 @@ func Defaults() Config {
 			MinAvailableHosts:        4,
 			HostStalenessSeconds:     3_600,
 		},
+		HostPing: HostPing{
+			IntervalMS:  15_000,
+			TimeoutMS:   2_000,
+			Concurrency: 8,
+		},
 		Engine: Engine{
 			ReceiptTimeoutMS:          5_000,
 			FirstTokenFloorMS:         6_000,

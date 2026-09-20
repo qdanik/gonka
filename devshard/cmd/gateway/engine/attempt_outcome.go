@@ -155,7 +155,6 @@ func (s *attemptState) outcome(spec AttemptSpec) *AttemptOutcome {
 	}
 }
 
-// missProof is offered only by a stream that ended in the host's own error.
 func (s *attemptState) missProof(spec AttemptSpec) *MissProof {
 	prover, holds := spec.Classifier.(missProver)
 	if !holds {

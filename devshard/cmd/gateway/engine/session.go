@@ -47,8 +47,6 @@ func (s *SessionTimeouts) SettleTimeout(ctx context.Context, step TimeoutStep) (
 	return vote, err
 }
 
-// settle claims the host's own error as a miss when the plan says so and a signed Finish backs it;
-// a claim with no Finish behind it would be refused by every verifier, so it takes the vote instead.
 func (s *SessionTimeouts) settle(ctx context.Context, step TimeoutStep) (user.TimeoutResult, error) {
 	if step.Kind == SettleErrorMiss && step.Proof != nil {
 		if finishTx := s.handler.FinishTxFor(step.Nonce); len(finishTx) > 0 {

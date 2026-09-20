@@ -21,6 +21,7 @@ import (
 	"devshard/cmd/gateway/engine"
 	"devshard/cmd/gateway/env"
 	"devshard/cmd/gateway/escrow"
+	"devshard/cmd/gateway/hostping"
 	"devshard/cmd/gateway/internal/logkey"
 	"devshard/cmd/gateway/journal"
 	"devshard/cmd/gateway/limits"
@@ -53,6 +54,7 @@ func main() {
 	}
 }
 
+// applyDialGuard arms the dial-time SSRF guard before anything can dial. See docs/operations.md.
 func applyDialGuard() {
 	allowed := env.AllowPrivateAddresses()
 	httpguard.SetAllowPrivate(allowed)
@@ -107,6 +109,7 @@ type gateway struct {
 	nonces       *nonces.Recorder
 	events       *journal.Journal
 	warmup       *warmup.Prober
+	hostPings    *hostping.Pinger
 
 	builders     int
 	devshardWork chan struct{}
@@ -363,6 +366,7 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 		nonces:       recorder,
 		events:       events,
 		warmup:       prober,
+		hostPings:    hostping.New(hostPingSettings(configuration.HostPing), escrows, metrics.NewHostPingRecorder(telemetry)),
 		builders:     boot.builders,
 		devshardWork: devshardWork,
 	}, nil
@@ -376,4 +380,13 @@ func (environmentSigner) SignerFor(privateKeyEnv string) (*signing.Secp256k1Sign
 		return nil, err
 	}
 	return signing.SignerFromHex(keyHex)
+}
+
+func hostPingSettings(settings config.HostPing) hostping.Settings {
+	return hostping.Settings{
+		Disabled:    settings.Disabled,
+		IntervalMS:  settings.IntervalMS,
+		TimeoutMS:   settings.TimeoutMS,
+		Concurrency: settings.Concurrency,
+	}
 }

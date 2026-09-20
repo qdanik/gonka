@@ -7,6 +7,7 @@ Which escrows exist right now, what each serves, and who its hosts are.
 - **The set itself** (`registry.go`, `escrow.go`) — escrow id to session, model, group, published or draining, behind a copy-on-write snapshot so a reader never blocks a writer.
 - **Sessions** (`session.go`) — two kinds. A serving session has host clients and can dispatch; a read-only one rehydrates from local storage alone and can build a settlement but can neither serve nor finalize.
 - **Membership and capacity** (`membership.go`, `views.go`) — the participant set each escrow contributes to the capacity model, and the in-flight count routing scores by.
+- **Where the hosts are** (`views.go`, `HostDials`) — each live escrow's reachable addresses, deduplicated per address, so an observer such as [`hostping`](../hostping/README.md) reads the live set instead of keeping a mirror of it. A retired escrow contributes none.
 - **Settlement handles** (`settlement.go`) — a retired escrow still resolves, because its committed nonces have no other settlement path.
 
 ## Boundaries

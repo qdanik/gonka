@@ -88,6 +88,9 @@ Signing keys are addressed **by the name of the variable that holds them**, neve
 | `GATEWAY_TIMEOUT_SWEEP_BUDGET_PER_TICK` | 8 | execution-timeout votes one tick may retry across every escrow; `0` turns the sweep off |
 | `GATEWAY_TIMEOUT_SWEEP_GRACE_SECONDS` | 120 | how far past its deadline a nonce must be before the sweep claims it from its own race |
 | `GATEWAY_POC_MODE` | relaxed | `relaxed` keeps serving through proof-of-compute; `off` refuses new requests while the chain blocks them |
+| `GATEWAY_HOST_PING_DISABLED` | false | whether the hosts the live escrows use are pinged for reachability and clock drift. Observability only — a host that stops answering a ping keeps its routing weight ([`hostping/README.md`](../hostping/README.md)) |
+| `GATEWAY_HOST_PING_INTERVAL_MS` / `GATEWAY_HOST_PING_TIMEOUT_MS` | 15 000 / 2 000 | the probe cadence and its patience; the timeout must be at most half the interval or the ping is refused and switched off |
+| `GATEWAY_HOST_PING_CONCURRENCY` | 8 | hosts probed at once within one wave |
 | `GATEWAY_ALLOW_PRIVATE_ADDRESSES` | false | whether dials to private addresses are allowed. A host URL comes from chain state, so the guard is on in production and only a stand whose hosts are Docker names turns it off; turning it off is logged |
 | `GATEWAY_LOG_FORMAT` | json | one JSON object per line, which promtail and the Loki panels read; `text` restores the text form, and any other value refuses to boot |
 
@@ -99,14 +102,15 @@ The full list is `env/env.go`; the full set of defaults is `config.Defaults()`. 
 
 1. the chain observer starts — nothing downstream can score a host before a snapshot exists;
 2. the warmup prober starts;
-3. `seedDevshards` applies `escrows_json` to the store — a seeded escrow that names no key variable is **refused**, not silently accepted;
-4. `publishEscrows` opens a session per active escrow and publishes it for routing, bounded by `MaxConcurrentRuntimeBuilds` (16) so a large set does not open 200 sessions at once;
-5. the nonce ledger starts, so nothing above it files a fact into a sink that is not yet reading;
-6. the escrow lifecycle manager starts its 15 s tick;
-7. the store's write notifications start republishing escrows on change;
-8. the HTTP listener opens — **last**, so the first request meets a gateway that is fully assembled.
+3. the host pings start — observability alone, and they read the live set per wave, so starting before anything is published costs nothing ([`hostping/README.md`](../hostping/README.md));
+4. `seedDevshards` applies `escrows_json` to the store — a seeded escrow that names no key variable is **refused**, not silently accepted;
+5. `publishEscrows` opens a session per active escrow and publishes it for routing, bounded by `MaxConcurrentRuntimeBuilds` (16) so a large set does not open 200 sessions at once;
+6. the nonce ledger starts, so nothing above it files a fact into a sink that is not yet reading;
+7. the escrow lifecycle manager starts its 15 s tick;
+8. the store's write notifications start republishing escrows on change;
+9. the HTTP listener opens — **last**, so the first request meets a gateway that is fully assembled.
 
-`startAll` stops at the first step that fails and names it, and `serve` shuts down cleanly rather than serving half-built. Steps 3 and 4 are the only two that can fail: the rest start a goroutine or a listener and return.
+`startAll` stops at the first step that fails and names it, and `serve` shuts down cleanly rather than serving half-built. Steps 4 and 5 are the only two that can fail: the rest start a goroutine or a listener and return.
 
 ## Shutdown
 

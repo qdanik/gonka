@@ -77,6 +77,11 @@ type Values struct {
 	PerfMinAvailableHosts        *int64
 	PerfHostStalenessSeconds     *int64
 
+	HostPingDisabled    *bool
+	HostPingIntervalMS  *int64
+	HostPingTimeoutMS   *int64
+	HostPingConcurrency *int64
+
 	ChainSnapshotMaxAgeSeconds *int64
 
 	EngineReceiptTimeoutMS    *int64
@@ -108,6 +113,7 @@ func LogFormat() string {
 	return LogFormatJSON
 }
 
+// AllowPrivateAddresses is read apart from Load because the dial guard is armed before anything dials. See operations.md.
 func AllowPrivateAddresses() bool {
 	allowed, err := strconv.ParseBool(lookup("GATEWAY_ALLOW_PRIVATE_ADDRESSES"))
 	return err == nil && allowed
@@ -272,6 +278,10 @@ func Load() (Values, error) {
 	readInt("GATEWAY_TIMEOUT_SWEEP_BUDGET_PER_TICK", &values.TimeoutSweepBudgetPerTick)
 	readInt("GATEWAY_TIMEOUT_SWEEP_GRACE_SECONDS", &values.TimeoutSweepGraceSeconds)
 
+	readBool("GATEWAY_HOST_PING_DISABLED", &values.HostPingDisabled)
+	readInt("GATEWAY_HOST_PING_INTERVAL_MS", &values.HostPingIntervalMS)
+	readInt("GATEWAY_HOST_PING_TIMEOUT_MS", &values.HostPingTimeoutMS)
+	readInt("GATEWAY_HOST_PING_CONCURRENCY", &values.HostPingConcurrency)
 	readBool("GATEWAY_CAPTURE_ENABLED", &values.CaptureEnabled)
 	readString("GATEWAY_CAPTURE_DIR", &values.CaptureDir)
 	readFloat("GATEWAY_CAPTURE_SAMPLE_RATE", &values.CaptureSampleRate)

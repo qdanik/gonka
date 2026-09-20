@@ -155,6 +155,14 @@ type Perf struct {
 	HostStalenessSeconds     int64
 }
 
+// HostPing groups the probe of the live escrows' hosts. See ../hostping/README.md.
+type HostPing struct {
+	Disabled    bool
+	IntervalMS  int64
+	TimeoutMS   int64
+	Concurrency int64
+}
+
 // Engine groups race-escalation tuning. See race.md, "Tunables and backstops".
 type Engine struct {
 	ReceiptTimeoutMS          int64
@@ -193,6 +201,7 @@ type Config struct {
 	Capture    Capture
 	Stream     Stream
 	Perf       Perf
+	HostPing   HostPing
 	Engine     Engine
 	Scheduler  Scheduler
 

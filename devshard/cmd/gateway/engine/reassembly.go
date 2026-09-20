@@ -20,7 +20,6 @@ func newSSEClassifier(budget *carryBudget, participant, model string, overflow f
 func (c *sseClassifier) Classify(chunk []byte) chunkFacts {
 	events, firstDrop := c.carry.Take(chunk)
 	if firstDrop {
-		// Dropped bytes cannot be hashed back to what the host signed, so the proof says it lost some.
 		c.retained.truncate()
 		if c.overflow != nil {
 			c.overflow()

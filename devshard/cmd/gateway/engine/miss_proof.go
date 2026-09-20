@@ -8,10 +8,9 @@ import (
 	"common/completionapi"
 )
 
-// maxMissProofBytes bounds what one attempt retains as proof.
 const maxMissProofBytes = 64 * 1024
 
-// MissProof is the evidence a verifier recomputes: the host's own event lines, hashed. See race.md, "Error misses".
+// MissProof is the evidence a verifier recomputes. See ../docs/race.md, "Error misses".
 type MissProof struct {
 	ResponsePayload []byte
 	Complete        bool
@@ -36,13 +35,11 @@ func (p *MissProof) completeness() string {
 	return MissProofPartial
 }
 
-// missProver is the half of a classifier that carries proof.
 type missProver interface {
 	missProof() (MissProof, bool)
 	releaseMissProof()
 }
 
-// errorStreamRetainer keeps one attempt's event lines while the stream is still speculative.
 type errorStreamRetainer struct {
 	maxBytes  int
 	lines     []string
@@ -56,7 +53,6 @@ func newErrorStreamRetainer(maxBytes int) *errorStreamRetainer {
 	return &errorStreamRetainer{maxBytes: maxBytes}
 }
 
-// retain adds the data lines of one reassembled chunk, stopping at the bound rather than growing past it.
 func (r *errorStreamRetainer) retain(events []byte) {
 	if r == nil || r.released || r.truncated || len(events) == 0 {
 		return
@@ -75,14 +71,12 @@ func (r *errorStreamRetainer) retain(events []byte) {
 	}
 }
 
-// truncate marks the proof as having lost bytes, which no later line can undo.
 func (r *errorStreamRetainer) truncate() {
 	if r != nil {
 		r.truncated = true
 	}
 }
 
-// release drops what was retained; a later retain adds nothing, so the decision is one-way per attempt.
 func (r *errorStreamRetainer) release() {
 	if r == nil {
 		return
@@ -90,8 +84,6 @@ func (r *errorStreamRetainer) release() {
 	r.lines, r.bytesHeld, r.released = nil, 0, true
 }
 
-// proof serializes the retained lines the way the executor serialized its own, and holds nothing back
-// when the result is not a body a verifier would read as a terminal error.
 func (r *errorStreamRetainer) proof() (MissProof, bool) {
 	if r == nil || len(r.lines) == 0 {
 		return MissProof{}, false
@@ -106,8 +98,6 @@ func (r *errorStreamRetainer) proof() (MissProof, bool) {
 	return MissProof{ResponsePayload: payload, Complete: r.complete, Truncated: r.truncated}, true
 }
 
-// eventDataLines returns the lines the executor hashed: its own data events, without the devshard
-// envelope it wraps around them after the hash is taken.
 func eventDataLines(events []byte) []string {
 	var lines []string
 	for _, raw := range bytes.Split(events, []byte("\n")) {

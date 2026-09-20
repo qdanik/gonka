@@ -41,6 +41,7 @@ type fakeSession struct {
 	sealed       int
 	perSlotKeys  []string
 	participants []string
+	dials        []HostDial
 
 	phase         atomic.Int32
 	nonce         atomic.Uint64
@@ -127,6 +128,8 @@ func (f *fakeSession) Close() error {
 }
 
 func (f *fakeSession) UserSession() *user.Session { return nil }
+
+func (f *fakeSession) HostDials() []HostDial { return f.dials }
 
 func (f *fakeSession) setPhase(phase types.SessionPhase) { f.phase.Store(int32(phase)) }
 

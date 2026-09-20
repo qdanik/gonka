@@ -23,7 +23,7 @@ func TestBootStartsTheChainObserverFirstAndTheListenerLast(t *testing.T) {
 	steps := (&gateway{}).bootOrder(context.Background(), context.Background(), &config.Config{}, &bootState{})
 
 	want := []string{
-		"chain observer", "warmup prober", "seed devshards", "publish escrows",
+		"chain observer", "warmup prober", "host pings", "seed devshards", "publish escrows",
 		"nonce ledger", "escrow lifecycle", "devshard write republish", "http listener",
 	}
 	assertSame(t, "boot sequence", bootStepNames(steps), want)
