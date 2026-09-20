@@ -142,14 +142,18 @@ func (s *Server) handleAdminDevshardSettle(w http.ResponseWriter, r *http.Reques
 		writeErrorFor(w, fmt.Errorf("%w: %s", ErrUnknownDevshard, escrowID))
 		return
 	}
-	if s.escrows.IsBusy(escrowID) {
+	forced := r.URL.Query().Get("force") == "true"
+	if !forced && s.escrows.IsBusy(escrowID) {
 		writeErrorFor(w, fmt.Errorf("%w: %s", escrow.ErrDevshardBusy, escrowID))
 		return
 	}
-	result, err := s.operations.Settle(r.Context(), escrowID)
+	result, err := s.operations.Settle(r.Context(), escrowID, forced)
 	if err != nil {
 		writeErrorFor(w, err)
 		return
+	}
+	if forced {
+		auditAdmin("escrow settled under force", "escrow", escrowID)
 	}
 	writeJSON(w, http.StatusOK, result)
 }

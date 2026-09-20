@@ -292,8 +292,13 @@ func (c *Config) Validate() error {
 		complain("scheduler_max_consecutive_burns: %d must be in [0, %d]", c.Scheduler.MaxConsecutiveBurns, maxConsecutiveBurns)
 	}
 	for index, participant := range c.Scheduler.ParticipantAllowlist {
-		if strings.TrimSpace(participant) == "" {
-			complain("scheduler_participant_allowlist[%d]: must not be blank", index)
+		if problem := participantEntryProblem(participant); problem != "" {
+			complain("scheduler_participant_allowlist[%d]: %s", index, problem)
+		}
+	}
+	for index, participant := range c.Scheduler.UnthrottledParticipants {
+		if problem := participantEntryProblem(participant); problem != "" {
+			complain("scheduler_unthrottled_participants[%d]: %s", index, problem)
 		}
 	}
 
@@ -316,4 +321,19 @@ func validateRequestWindow(name string, window RequestWindow, complain func(stri
 	if window.InitialRequests < window.MinRequests {
 		complain("%s_initial_requests: %d must be >= %s_min_requests %d", name, window.InitialRequests, name, window.MinRequests)
 	}
+}
+
+const minAddressDataLength = 4
+
+// participantEntryProblem refuses a short host label, which matches no participant. See ../docs/operations.md.
+func participantEntryProblem(participant string) string {
+	entry := strings.TrimSpace(participant)
+	if entry == "" {
+		return "must not be blank"
+	}
+	separator := strings.IndexByte(entry, '1')
+	if separator <= 0 || len(entry)-separator-1 < minAddressDataLength {
+		return fmt.Sprintf("%q is a host label, not a participant address", entry)
+	}
+	return ""
 }

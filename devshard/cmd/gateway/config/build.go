@@ -126,6 +126,9 @@ func Build(values env.Values, overrides Overrides) (*Config, error) {
 	if overrides.ParticipantAllowlist != nil {
 		configuration.Scheduler.ParticipantAllowlist = slices.Clone(*overrides.ParticipantAllowlist)
 	}
+	if overrides.UnthrottledParticipants != nil {
+		configuration.Scheduler.UnthrottledParticipants = slices.Clone(*overrides.UnthrottledParticipants)
+	}
 	overrideIfSet(&configuration.Limits.FallbackMaxModelLen, overrides.FallbackMaxModelLen)
 	overrideIfSet(&configuration.Limits.HostWindows.Input.MinRequests, overrides.HostInputWindowMinRequests)
 	overrideIfSet(&configuration.Limits.HostWindows.Input.InitialRequests, overrides.HostInputWindowInitialRequests)

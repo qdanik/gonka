@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"devshard/cmd/gateway/config"
+	"devshard/cmd/gateway/internal/logkey"
 	"devshard/heightsync"
 	"devshard/logging"
 )
@@ -64,7 +65,11 @@ func (s *Server) handleAdminSettings(w http.ResponseWriter, r *http.Request) {
 		writeErrorFor(w, err)
 		return
 	}
-	auditAdmin("settings replaced")
+	inForce := s.config.Load().Scheduler
+	auditAdmin("settings replaced",
+		logkey.ParticipantAllowlist, inForce.ParticipantAllowlist,
+		logkey.UnthrottledParticipants, inForce.UnthrottledParticipants,
+	)
 	writeJSON(w, http.StatusOK, overrides)
 }
 

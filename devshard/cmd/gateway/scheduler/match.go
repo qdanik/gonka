@@ -11,6 +11,7 @@ type availability struct {
 	ejected      func(participant string) bool
 	notAllowed   func(participant string) bool
 	stateBlocked func(participant string) bool
+	unthrottled  func(participant string) bool
 
 	frozen          map[string]blockReason
 	overFullWindows bool
@@ -48,6 +49,11 @@ func (a availability) outsideAllowlist(participant string) bool {
 	return a.notAllowed != nil && a.notAllowed(participant)
 }
 
+// throttlingWaived waives the rungs protecting a host from this gateway, never those protecting the nonce. See routing.md, "Unthrottled participants".
+func (a availability) throttlingWaived(participant string) bool {
+	return a.unthrottled != nil && a.unthrottled(participant)
+}
+
 // participantBlocked is the half of blocks that needs no waiter, so match and blocks share one ladder.
 func (a availability) participantBlocked(participant string) blockReason {
 	reason := a.memoisedBlock(participant)
@@ -70,16 +76,17 @@ func (a availability) memoisedBlock(participant string) blockReason {
 
 // firstBlock stops at the first rung that holds, so no rung below it is asked.
 func (a availability) firstBlock(participant string) blockReason {
-	if a.outsideAllowlist(participant) {
+	waived := a.throttlingWaived(participant)
+	if !waived && a.outsideAllowlist(participant) {
 		return blockNotAllowed
 	}
 	if a.pocRequired(participant) {
 		return blockPoCRequired
 	}
-	if limited := a.congestionBlock(participant); limited != blockNone {
+	if limited := a.congestionBlock(participant); limited == blockCutOff || (limited != blockNone && !waived) {
 		return limited
 	}
-	if a.ejected(participant) {
+	if !waived && a.ejected(participant) {
 		return blockEjected
 	}
 	if a.divergedFromEscrowState(participant) {

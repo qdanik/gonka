@@ -23,6 +23,7 @@ type Overrides struct {
 	MaxBufferedResponseBytes               *int64                 `json:"max_buffered_response_bytes,omitempty"`
 	WarmNewEscrows                         *bool                  `json:"warm_new_escrows,omitempty"`
 	ParticipantAllowlist                   *[]string              `json:"participant_allowlist,omitempty"`
+	UnthrottledParticipants                *[]string              `json:"unthrottled_participants,omitempty"`
 	FallbackMaxModelLen                    *int64                 `json:"fallback_max_model_len,omitempty"`
 	HostInputWindowMinRequests             *int64                 `json:"host_input_window_min_requests,omitempty"`
 	HostInputWindowInitialRequests         *int64                 `json:"host_input_window_initial_requests,omitempty"`

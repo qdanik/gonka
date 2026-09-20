@@ -278,6 +278,7 @@ Participant-labelled race series — `devshard_gateway_attempts_*`, `devshard_ga
 | what is routable, and the config in force | `GET /v1/admin/state` |
 | the effective settings including overrides | `GET /v1/admin/settings` |
 | every escrow row the process owns | `GET /v1/admin/devshards` |
+| the full participant keys to paste into either routing list | `GET /v1/admin/hosts` — never a log line's short host label, which is the last eight characters and matches nobody |
 | rotation's last outcome per model | `GET /v1/debug/rotation` |
 | which slot answered which height-sync turn | `GET /v1/debug/heightsync` |
 | one escrow's protocol state | `GET /devshard/{id}/v1/state` |
@@ -320,3 +321,20 @@ Participant-labelled race series — `devshard_gateway_attempts_*`, `devshard_ga
 | a route or its auth tier | `api/routes.go`, `routes()` |
 | what shuts down when | `lifecycle.go`, `shutdownOrder` |
 | a metric or its labels | `metrics/` |
+
+## The two routing lists
+
+`participant_allowlist` narrows **which participants this gateway routes to**. `unthrottled_participants` names participants whose congestion window and ejection it declines to apply, and admits them whether or not the allowlist names them. Both are set through `PUT /v1/admin/settings` and nowhere else: there is no env value and no default behind them.
+
+**That makes them one admin call away from being cleared.** The settings endpoint replaces the stored overrides document whole, so a call that does not resend a list drops it, and a dropped narrowing fails open: the gateway routes to everybody again without refusing anything. The same is true of a fresh or lost store. So send both lists in every document that touches either, and read them back: the `settings replaced` audit line carries `participant_allowlist` and `unthrottled_participants` as they stand after the call, which is the record of what a PUT actually left in force.
+
+An entry must look like an address. The shape is checked when the settings document is built, so a short host label pasted from a log or a Grafana `host=` tag is refused at the settings call rather than narrowing dispatch to nobody.
+
+Neither list restrains anything but routing. Host pings, catch-up, finalize, the retirement flush, the timeout sweep and the warmup prober all address the group the chain gave the escrow. See routing.md, "Paths that ignore the routing lists, by design".
+
+## Settling an escrow that is still busy
+
+`POST /v1/admin/devshards/{id}/settle` answers 409 `devshard busy` while requests are still spending the escrow's nonces. By then the escrow has already been parked and taken out of routing, so it is draining: calling again once it has drained settles it.
+
+`POST /v1/admin/devshards/{id}/settle?force=true` does not wait. It crosses the busy check and nothing else — a second concurrent settlement of the same escrow is still refused, and an escrow already settled is still not rebroadcast. **The requests still in flight are failed for their callers, and their full reserved cost is paid to the hosts that held them**, because finalize closes the door on new nonces and the records still live take the settlement default. The forced call is written to the audit log as `escrow settled under force`.
+

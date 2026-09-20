@@ -201,7 +201,7 @@ func (f *fakeOperations) ImportDevshard(context.Context, ImportDevshardRequest) 
 func (f *fakeOperations) Activate(context.Context, string) error   { return f.record("activate") }
 func (f *fakeOperations) Deactivate(context.Context, string) error { return f.record("deactivate") }
 
-func (f *fakeOperations) Settle(context.Context, string) (chain.SettleEscrowResult, error) {
+func (f *fakeOperations) Settle(context.Context, string, bool) (chain.SettleEscrowResult, error) {
 	return f.settle, f.record("settle")
 }
 

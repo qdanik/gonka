@@ -4,7 +4,7 @@ import "testing"
 
 func TestAllowlistEmptyAdmitsEveryone(t *testing.T) {
 	t.Parallel()
-	allowed := allowedParticipants(nil)
+	allowed := admittedParticipants(nil, nil)
 
 	for _, participant := range []string{"gonka1a", "gonka1b", ""} {
 		if !allowed(participant) {
@@ -15,7 +15,7 @@ func TestAllowlistEmptyAdmitsEveryone(t *testing.T) {
 
 func TestAllowlistAdmitsOnlyWhatItNames(t *testing.T) {
 	t.Parallel()
-	allowed := allowedParticipants([]string{"gonka1scskt", "gonka1f0u3y"})
+	allowed := admittedParticipants([]string{"gonka1scskt", "gonka1f0u3y"}, nil)
 
 	for _, participant := range []string{"gonka1scskt", "gonka1f0u3y"} {
 		if !allowed(participant) {
@@ -32,7 +32,7 @@ func TestAllowlistAdmitsOnlyWhatItNames(t *testing.T) {
 // An operator pasting keys from a console leaves spaces around them.
 func TestAllowlistIgnoresSurroundingSpace(t *testing.T) {
 	t.Parallel()
-	allowed := allowedParticipants([]string{"  gonka1scskt \t"})
+	allowed := admittedParticipants([]string{"  gonka1scskt \t"}, nil)
 
 	if !allowed("gonka1scskt") {
 		t.Error("a key padded with space must still admit its participant")

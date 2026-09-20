@@ -39,7 +39,7 @@ func (s *Scheduler) pickEscrow(profile RequestProfile, snapshot chain.PhaseSnaps
 		return Escrow{}, fmt.Errorf("escrow %q for model %q: %w", profile.Escrow, profile.Model, ErrEscrowGone)
 	}
 	// Read here as well as at dispatch: an escrow whose whole group it refuses can never serve.
-	reachable := reachableByAllowlist(s.participantAllowlist())
+	reachable := reachableByAllowlist(s.participantAllowlist(), s.unthrottledParticipants())
 	fleet := s.fleetGates(profile.Model, snapshot)
 	ahead := s.queuedAhead(candidates)
 

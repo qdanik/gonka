@@ -83,7 +83,7 @@ func (s *suspiciousHosts) Remove(ctx context.Context, participantKey string) err
 // escrowLifecycle is the chain-facing half of an operator action; *escrow.Manager satisfies it.
 type escrowLifecycle interface {
 	CreateEscrow(ctx context.Context, model escrow.ModelConfig) (chain.CreateEscrowResult, error)
-	Settle(ctx context.Context, escrowID string) (chain.SettleEscrowResult, error)
+	Settle(ctx context.Context, escrowID string, force bool) (chain.SettleEscrowResult, error)
 }
 type operations struct {
 	values       env.Values
@@ -177,11 +177,11 @@ func (o *operations) Deactivate(ctx context.Context, id string) error {
 	return o.store.SetDevshardActive(ctx, id, false)
 }
 
-func (o *operations) Settle(ctx context.Context, id string) (chain.SettleEscrowResult, error) {
+func (o *operations) Settle(ctx context.Context, id string, force bool) (chain.SettleEscrowResult, error) {
 	if err := o.escrows.Retire(id); err != nil {
 		return chain.SettleEscrowResult{}, err
 	}
-	return o.manager.Settle(ctx, id)
+	return o.manager.Settle(ctx, id, force)
 }
 
 func (o *operations) Unquarantine(_ context.Context, participantKey string) error {

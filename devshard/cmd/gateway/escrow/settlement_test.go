@@ -130,7 +130,7 @@ func TestSettleBusyMarksPendingAndReturnsErrDevshardBusy(t *testing.T) {
 		settlementSource: settlementSource,
 	}
 
-	_, err := m.settle(context.Background(), record)
+	_, err := m.settle(context.Background(), record, false)
 	if !errors.Is(err, ErrDevshardBusy) {
 		t.Fatalf("settle() = %v, want ErrDevshardBusy", err)
 	}
@@ -168,7 +168,7 @@ func TestSettleHappyPathOrderAndClearsPendingOnSuccess(t *testing.T) {
 		settlementSource: settlementSource,
 	}
 
-	if _, err := m.settle(context.Background(), record); err != nil {
+	if _, err := m.settle(context.Background(), record, false); err != nil {
 		t.Fatalf("settle() = %v, want nil", err)
 	}
 
@@ -212,7 +212,7 @@ func TestSettleBroadcastFailureLeavesSettlementPendingSet(t *testing.T) {
 		settlementSource: settlementSource,
 	}
 
-	_, err := m.settle(context.Background(), record)
+	_, err := m.settle(context.Background(), record, false)
 	if err == nil || !errors.Is(err, broadcastErr) {
 		t.Fatalf("settle() = %v, want wrapped %v", err, broadcastErr)
 	}
@@ -343,13 +343,13 @@ func TestSettleDedupesConcurrentCallsForSameEscrow(t *testing.T) {
 
 	var wg sync.WaitGroup
 	wg.Go(func() {
-		if _, err := m.settle(context.Background(), record); err != nil {
+		if _, err := m.settle(context.Background(), record, false); err != nil {
 			t.Errorf("first settle() = %v, want nil", err)
 		}
 	})
 
 	<-entered
-	if _, err := m.settle(context.Background(), record); !errors.Is(err, ErrSettlementInFlight) {
+	if _, err := m.settle(context.Background(), record, false); !errors.Is(err, ErrSettlementInFlight) {
 		t.Fatalf("second concurrent settle() = %v, want ErrSettlementInFlight", err)
 	}
 	close(release)
@@ -388,7 +388,7 @@ func TestSettleRefusesNonceCommitsOnceTheSettlementIsBroadcast(t *testing.T) {
 		settlementSource: routing,
 	}
 
-	if _, err := m.settle(context.Background(), record); err != nil {
+	if _, err := m.settle(context.Background(), record, false); err != nil {
 		t.Fatalf("settle() = %v, want nil", err)
 	}
 	if committedDuringBroadcast {
@@ -605,7 +605,7 @@ func TestASettleAlreadyOnChainIsReconciledInsteadOfRebroadcast(t *testing.T) {
 		settlementSource: &fakeSettlementSource{},
 	}
 
-	result, err := m.settle(context.Background(), record)
+	result, err := m.settle(context.Background(), record, false)
 	if err != nil {
 		t.Fatalf("settle() = %v, want the recorded settlement recognised", err)
 	}
@@ -637,7 +637,7 @@ func TestASettleThatNeverLandedIsRetried(t *testing.T) {
 		settlementSource: &fakeSettlementSource{},
 	}
 
-	if _, err := m.settle(context.Background(), record); err != nil {
+	if _, err := m.settle(context.Background(), record, false); err != nil {
 		t.Fatalf("settle() = %v, want a fresh settlement", err)
 	}
 
@@ -661,7 +661,7 @@ func TestASettleReadsTheHashFromTheRowNotTheCopyItWasHanded(t *testing.T) {
 	stale := stored
 	stale.SettleTxHash = ""
 
-	result, err := m.settle(context.Background(), stale)
+	result, err := m.settle(context.Background(), stale, false)
 
 	if err != nil {
 		t.Fatalf("settle() = %v, want the settle already on chain to be reconciled", err)
@@ -690,7 +690,7 @@ func TestASettleStillWithinItsTTLIsNotRebroadcast(t *testing.T) {
 		settlementSource: &fakeSettlementSource{}, now: time.Now,
 	}
 
-	_, err := m.settle(context.Background(), record)
+	_, err := m.settle(context.Background(), record, false)
 
 	if !errors.Is(err, ErrSettlementInFlight) {
 		t.Fatalf("settle() = %v, want the settle still on its way to be left alone", err)
@@ -713,7 +713,7 @@ func TestAnAlreadySettledEscrowIsStillTakenOutOfRouting(t *testing.T) {
 		signer: &fakeSignerSource{signer: testSigner(t)}, settlementSource: source, now: time.Now,
 	}
 
-	if _, err := m.settle(context.Background(), record); err != nil {
+	if _, err := m.settle(context.Background(), record, false); err != nil {
 		t.Fatalf("settle() = %v, want the settle already on chain reconciled", err)
 	}
 
@@ -721,4 +721,8 @@ func TestAnAlreadySettledEscrowIsStillTakenOutOfRouting(t *testing.T) {
 		// The caller deletes the row next; a row that is gone can no longer un-publish the escrow.
 		t.Error("the escrow was reconciled while still routable")
 	}
+}
+
+func (c *callLog) contains(call string) bool {
+	return slices.Contains(c.snapshot(), call)
 }

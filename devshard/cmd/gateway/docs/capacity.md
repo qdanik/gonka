@@ -198,7 +198,7 @@ A retired escrow stays in `Snapshot` until that count reaches zero, reporting `d
 
 `perf.Tracker` answers two questions in O(1) with no lock: **is this participant withheld from routing** (`Ejected`), and **did the detector want it out at all** (`Degraded`). They differ only by the pool-wide cap, and each has exactly one job.
 
-**`Ejected` is a routing gate.** It is one of the scheduler's seven host gates — outside the allowlist, proof-of-compute-required, windows full, cut off, ejected, state-blocked and excluded by this waiter — so a host it names receives no request while the gate holds.
+**`Ejected` is a routing gate.** It is one of the scheduler's seven host gates — outside the allowlist, proof-of-compute-required, windows full, cut off, ejected, state-blocked and excluded by this waiter — so a host it names receives no request while the gate holds, unless `scheduler_unthrottled_participants` names it (routing.md, "Unthrottled participants").
 
 **`Degraded` is why the gate is not the whole story.** The cap below refuses to honour an ejection once too many of a model's hosts are failing at once, which is exactly the moment the gate stops protecting anything: those hosts stay in rotation. `Degraded` reports the verdict *before* the cap, and the race reads it for one decision — a primary the detector wanted out starts its second attempt immediately, under `primary_degraded`, rather than waiting out the receipt or first-token deadline. That hedge is bounded by the attempt budget, so a correlated outage costs at most one extra attempt per request and never an unbounded retry storm.
 

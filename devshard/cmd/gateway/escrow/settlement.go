@@ -37,7 +37,7 @@ func (m *Manager) settlePending(ctx context.Context, devshards []store.DevshardR
 			continue
 		}
 		attempted++
-		if _, err := m.settle(ctx, record); err != nil {
+		if _, err := m.settle(ctx, record, false); err != nil {
 			errs = append(errs, err)
 			continue
 		}
@@ -48,8 +48,8 @@ func (m *Manager) settlePending(ctx context.Context, devshards []store.DevshardR
 	return errors.Join(errs...)
 }
 
-// Settle settles one escrow on demand, on the same path the rotation lifecycle uses.
-func (m *Manager) Settle(ctx context.Context, escrowID string) (chain.SettleEscrowResult, error) {
+// Settle settles one escrow on demand, on the same path the rotation lifecycle uses; force crosses the busy check alone. See ../docs/operations.md.
+func (m *Manager) Settle(ctx context.Context, escrowID string, force bool) (chain.SettleEscrowResult, error) {
 	devshards, err := m.store.ListDevshards(ctx)
 	if err != nil {
 		return chain.SettleEscrowResult{}, fmt.Errorf("listing devshards: %w", err)
@@ -58,7 +58,7 @@ func (m *Manager) Settle(ctx context.Context, escrowID string) (chain.SettleEscr
 		if record.EscrowID != escrowID {
 			continue
 		}
-		result, err := m.settle(ctx, record)
+		result, err := m.settle(ctx, record, force)
 		if err != nil {
 			return result, err
 		}
@@ -105,7 +105,7 @@ func (m *Manager) stopRoutingParked(escrowID string) error {
 }
 
 // settle clears SettlementPending only once the broadcast is confirmed. See README.md, "Settlement and retirement".
-func (m *Manager) settle(ctx context.Context, record store.DevshardRecord) (chain.SettleEscrowResult, error) {
+func (m *Manager) settle(ctx context.Context, record store.DevshardRecord, force bool) (chain.SettleEscrowResult, error) {
 	leave, busy := m.settlements.enter(record.EscrowID)
 	if busy {
 		return chain.SettleEscrowResult{}, ErrSettlementInFlight
@@ -124,7 +124,7 @@ func (m *Manager) settle(ctx context.Context, record store.DevshardRecord) (chai
 	}
 
 	// busy is a deferred-settle signal, not a failure: the now-retired escrow drains, then a retrigger settles it.
-	if m.settlementSource.IsBusy(record.EscrowID) {
+	if !force && m.settlementSource.IsBusy(record.EscrowID) {
 		return chain.SettleEscrowResult{}, ErrDevshardBusy
 	}
 
@@ -215,7 +215,7 @@ func (m *Manager) retire(ctx context.Context, record store.DevshardRecord) error
 		return m.park(ctx, record.EscrowID)
 	}
 
-	if _, err := m.settle(ctx, record); err != nil {
+	if _, err := m.settle(ctx, record, false); err != nil {
 		return err // busy, deduped or broadcast failure: stays registered, inactive, pending -- not deleted.
 	}
 	return m.deleteSettled(ctx, record.EscrowID)

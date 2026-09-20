@@ -336,6 +336,7 @@ type harnessConfig struct {
 	maxConsecutiveBurns int64
 	ejected             func(string) bool
 	stateBlocked        func(string) bool
+	unthrottled         func(string) bool
 	afterDecide         func(HostBinding)
 	failWith            error
 	failAfterDecide     error
@@ -405,6 +406,9 @@ func newHarness(t *testing.T, cfg harnessConfig) *harness {
 			},
 			stateBlocked: func(participant string) bool {
 				return cfg.stateBlocked != nil && cfg.stateBlocked(participant)
+			},
+			unthrottled: func(participant string) bool {
+				return cfg.unthrottled != nil && cfg.unthrottled(participant)
 			},
 		}
 	}

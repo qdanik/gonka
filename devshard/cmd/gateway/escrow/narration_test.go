@@ -314,7 +314,7 @@ func TestASettleAlreadyOnChainIsNarratedAsReconciled(t *testing.T) {
 		settlementSource: &fakeSettlementSource{}, narrator: narrator,
 	}
 
-	_, err := m.settle(context.Background(), record)
+	_, err := m.settle(context.Background(), record, false)
 
 	require.NoError(t, err)
 	require.Equal(t, []string{"parked 7", "reconciled 7 tx SETTLE-TX"}, narrator.recorded())

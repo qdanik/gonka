@@ -804,7 +804,7 @@ func (s *settleObserver) CreateEscrow(context.Context, escrow.ModelConfig) (chai
 	return chain.CreateEscrowResult{}, nil
 }
 
-func (s *settleObserver) Settle(_ context.Context, escrowID string) (chain.SettleEscrowResult, error) {
+func (s *settleObserver) Settle(_ context.Context, escrowID string, _ bool) (chain.SettleEscrowResult, error) {
 	_, s.routableAtSettle = s.escrows.RoutableSession(escrowID)
 	return chain.SettleEscrowResult{}, s.failure
 }
@@ -836,7 +836,7 @@ func TestSettleStopsRoutingBeforeTheChainSettlementAndLeavesItRetiredWhenItFails
 			settler := &settleObserver{escrows: escrows, failure: testCase.failure}
 			operator := &operations{escrows: escrows, manager: settler}
 
-			_, err := operator.Settle(context.Background(), "escrow-1")
+			_, err := operator.Settle(context.Background(), "escrow-1", false)
 
 			if !errors.Is(err, testCase.failure) {
 				t.Fatalf("Settle() = %v, want %v", err, testCase.failure)

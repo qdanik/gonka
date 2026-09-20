@@ -35,6 +35,9 @@ const (
 
 	ContextLimit         = "context_limit"
 	PreviousContextLimit = "previous_context_limit"
+
+	ParticipantAllowlist    = "participant_allowlist"
+	UnthrottledParticipants = "unthrottled_participants"
 )
 
 const (

@@ -192,6 +192,26 @@ The gateway writes a `forced_send` line naming the host and the run it ended (`j
 
 **The rung is inert when the whole fleet is full, by design.** The sweep runs first and on the strict view, so a waiter no participant can take is answered `ErrHostsBusy` before any nonce is bound (`dispatcher_queue.go`, `sweepExhausted`). That is backpressure rather than burning — nothing is being spent to avoid the load — and the rung exists for the opposite shape, where part of the fleet is usable and the nonce keeps landing on the part that is not.
 
+### Unthrottled participants
+
+`scheduler_unthrottled_participants` names the hosts whose quality-of-service gates this gateway declines to apply. When a nonce binds to one of them, a full congestion window and an outlier ejection stop being blocks, the slot is taken as an overdraft rather than a fitted acquire, and the nonce is therefore not burned for either reason. The list also admits its members whether or not the allowlist names them, because refusing a host this gateway was told to always serve would be two settings contradicting each other rather than one narrowing (`allowlist.go`, `admittedParticipants`).
+
+**It does not make the cursor land on those hosts more often.** Nothing can: the slot layout is sampled by the chain, weight-proportionally and deterministically per escrow id, and `hostIdx = nonce % groupSize`. The list changes what happens when a nonce arrives at a host, never how often it arrives.
+
+**Four rungs are never waived**, because each is a fact about the host or the chain that an operator list cannot make untrue. Proof-of-compute-required — the host owes the chain and will not take work. Cut-off — the host is already proven broken, and a send there spends exactly the nonce the waiver exists to save; the limiter refuses an overdraft past it whatever the caller asks, so the rule does not rest on the scheduler asking correctly. State-diverged — a correctness valve, where every further dispatch compounds the divergence. And excluded by this waiter, which is not a ceiling at all: the request itself refused this host after racing it.
+
+**Two burns survive the waiver.** `ghostExclude`, when every live waiter has already raced this host and another host can serve them, and `ghostAbandoned`, when the nonce was committed as a serve and the caller vanished — the commit structurally precedes the delivery. "Never burned" is therefore true of the throttling rungs and of nothing else.
+
+**The overdraft has no ceiling of its own, and that is deliberate.** `Overdraft` takes the tokens whether or not they fit, so an unthrottled host's in-flight total is not bounded by its own window. The bound is earlier and gateway-wide: `GatewayLimiter.AcquireForModel` refuses with 429 before the scheduler is reached. What the list waives is the participant's window, not the gateway's door.
+
+**What the waiver must not touch.** `Admits` and `Available` answer for the limiter, and `limits.Capacity` reads `Available` to size `EscrowWeight`, which sizes the gateway-wide concurrency limit. A participant that always reported itself available would inflate that door for every model it serves. The waiver lives in what the scheduler does with the answer, never in the answer.
+
+### Paths that ignore the routing lists, by design
+
+Both lists narrow **routing**, and nothing else. The traffic a gateway owes the whole group is not filtered by them: host pings (`/clock`, `/healthz`) walk every live escrow's dials, diff catch-up teaches the group, finalize collects signatures from every slot, the pending-diff flush on retirement tries hosts until one accepts, and the timeout sweep votes on what the group holds. Filtering them would blind the gateway to hosts it may route to the moment a list changes, and reachability and clock drift are wanted for the whole group either way.
+
+The warmup prober ignores them too. It spends one nonce on a newly published escrow so the group learns the escrow exists, and the group is the chain's, not this gateway's: the slot the nonce lands on is teaching a host that will hold state for this escrow whether or not routing ever chooses it (`warmup/warmup.go`, `dispatchProbe`).
+
 ## Where the nonce, the slot and the hold are taken
 
 This is the money path, and the ordering below is its fragile part. All three acquisitions happen inside one atomic step.

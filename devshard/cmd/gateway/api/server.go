@@ -95,7 +95,7 @@ type Operations interface {
 	ImportDevshard(ctx context.Context, request ImportDevshardRequest) error
 	Activate(ctx context.Context, escrowID string) error
 	Deactivate(ctx context.Context, escrowID string) error
-	Settle(ctx context.Context, escrowID string) (chain.SettleEscrowResult, error)
+	Settle(ctx context.Context, escrowID string, force bool) (chain.SettleEscrowResult, error)
 	Unquarantine(ctx context.Context, participantKey string) error
 	Reconfigure(ctx context.Context, overrides config.Overrides) error
 	ResetAccountingEpoch(ctx context.Context, epoch uint64) (cleared int, err error)

@@ -46,8 +46,9 @@ func (d *dispatcher) drain() (time.Time, bool) {
 		switch decided := offered.decision.(type) {
 		case serve:
 			cost := slotCost(decided.waiter.profile)
-			release, refused := acquire(binding.Participant, cost, false)
-			if refused != blockNone && forcingDue {
+			waived := gates.throttlingWaived(binding.Participant)
+			release, refused := acquire(binding.Participant, cost, waived)
+			if refused != blockNone && forcingDue && !waived {
 				release, refused = acquire(binding.Participant, cost, true)
 				offered.forced = refused == blockNone
 			}
