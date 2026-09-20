@@ -1,11 +1,13 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -16,10 +18,13 @@ import (
 	"testing"
 	"time"
 
+	"devshard/user"
+
 	"github.com/prometheus/client_golang/prometheus"
 	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/require"
 
+	"common/completionapi"
 	"devshard/bridge"
 	"devshard/internal/statetest"
 	"devshard/internal/testutil"
@@ -73,7 +78,7 @@ func gatewayTestRuntimeForLimits(t *testing.T, id string, balance, nonce uint64)
 	st := sm.ExportState()
 	st.Balance = balance
 	st.LatestNonce = nonce
-	sm.RestoreState(st)
+	require.NoError(t, sm.RestoreState(st))
 
 	return &devshardRuntime{
 		id:    id,
@@ -1063,9 +1068,9 @@ func TestGatewayHostRoutePrefixDefaultsToBuildVersion(t *testing.T) {
 	require.Error(t, validateGatewayHostRoutePrefix("/v1/devshard"))
 }
 
-func TestRuntimeRoutePrefixDefaultsToV4(t *testing.T) {
+func TestRuntimeRoutePrefixDefaultsToV5(t *testing.T) {
 	t.Setenv("DEVSHARD_ROUTE_PREFIX", "")
-	require.Equal(t, "/devshard/v4", resolveRuntimeRoutePrefix(""))
+	require.Equal(t, "/devshard/v5", resolveRuntimeRoutePrefix(""))
 }
 
 func TestRuntimeRoutePrefixPreservesExplicitDev(t *testing.T) {
@@ -1089,7 +1094,7 @@ func TestEscrowCheckerUsesBridgeGetEscrow(t *testing.T) {
 	})
 
 	deactivated := false
-	ec.TriggerCheck("83", func() { deactivated = true })
+	ec.TriggerCheck("83", func(string) { deactivated = true })
 	require.Equal(t, "83", gotID)
 	require.True(t, deactivated)
 }
@@ -1734,8 +1739,8 @@ func TestGatewayPooledChatRefreshesCapacityScaleBeforeAcquire(t *testing.T) {
 
 	g.handlePooledChat(rec, req)
 
-	require.Equal(t, http.StatusTooManyRequests, rec.Code)
-	require.Contains(t, rec.Body.String(), "too many concurrent requests")
+	require.Equal(t, http.StatusServiceUnavailable, rec.Code)
+	require.Contains(t, rec.Body.String(), "no live host capacity")
 	snap := g.limiter.Snapshot()
 	require.EqualValues(t, 2, snap.EffectiveMaxConcurrent)
 	require.EqualValues(t, 2, snap.InFlightRequests)
@@ -2326,6 +2331,56 @@ func TestParticipantRequestLimiterMarksParticipantExhaustedOn503(t *testing.T) {
 	require.Error(t, limiter.CanAcceptEscrow([]string{"shared-host"}))
 }
 
+func TestParticipantRequestLimiterSkipsUndeclaredVersionCatalog503(t *testing.T) {
+	limiter := NewParticipantRequestLimiter(2, 10)
+	limiter.ObserveResultWithBodyForModel("shared-host", "", "/sessions/1/height-sync",
+		http.StatusServiceUnavailable, "version v2 is not present in the governance routing catalog", "",
+		transport.DevshardErrorUndeclaredVersion)
+	require.False(t, limiter.IsBlocked("shared-host"))
+	require.Equal(t, 0, limiter.ExhaustedCount())
+	require.NoError(t, limiter.AllowRequest("shared-host", "/sessions/1/chat/completions"))
+}
+
+func TestParticipantRequestLimiterSkipsUndeclaredVersionHeader503(t *testing.T) {
+	limiter := NewParticipantRequestLimiter(2, 10)
+	limiter.ObserveResultWithBodyForModel("shared-host", "", "/sessions/1/height-sync",
+		http.StatusServiceUnavailable, "busy", "", transport.DevshardErrorUndeclaredVersion)
+	require.False(t, limiter.IsBlocked("shared-host"))
+	require.Equal(t, 0, limiter.ExhaustedCount())
+}
+
+func TestParticipantRequestLimiterDoesNotObserveHostSpoofedUndeclaredHeaderOnSeed(t *testing.T) {
+	limiter := NewParticipantRequestLimiter(2, 10)
+	limiter.ObserveResultWithBodyForModel("shared-host", "", "/sessions/1/height-sync",
+		http.StatusServiceUnavailable, "busy", transport.DevshardErrorUndeclaredVersion, "")
+	require.False(t, limiter.IsBlocked("shared-host"),
+		"seed path must never feed the limiter, including host-spoofed X-Devshard-Error")
+}
+
+func TestParticipantRequestLimiterDoesNotObserveCatalogBodyOnSeed(t *testing.T) {
+	limiter := NewParticipantRequestLimiter(2, 10)
+	limiter.ObserveResultWithBody("shared-host", "/sessions/1/height-sync", http.StatusServiceUnavailable,
+		"version v2 is not present in the governance routing catalog")
+	require.False(t, limiter.IsBlocked("shared-host"),
+		"seed path must never feed the limiter")
+}
+
+func TestParticipantRequestLimiterDoesNotSkipRouterHeaderOnChat(t *testing.T) {
+	limiter := NewParticipantRequestLimiter(2, 10)
+	limiter.ObserveResultWithBodyForModel("shared-host", "", "/sessions/1/chat/completions",
+		http.StatusServiceUnavailable, "busy", "", transport.DevshardErrorUndeclaredVersion)
+	require.True(t, limiter.IsBlocked("shared-host"),
+		"chat 503s always quarantine, even with X-Devshard-Router-Error")
+}
+
+func TestParticipantRequestLimiterDoesNotSkipCatalogPhraseOn404(t *testing.T) {
+	limiter := NewParticipantRequestLimiter(2, 10)
+	limiter.ObserveResultWithBody("shared-host", "/sessions/1/chat/completions", http.StatusNotFound,
+		"version v2 is not present in the governance routing catalog")
+	require.True(t, limiter.IsBlocked("shared-host"),
+		"catalog phrase on a non-503 must not grant quarantine immunity")
+}
+
 func TestParticipantRequestLimiterExpiresOnFullRecovery(t *testing.T) {
 	limiter := NewParticipantRequestLimiter(10, 10)
 	limiter.ObserveResult("shared-host", "/sessions/12/chat/completions", http.StatusServiceUnavailable)
@@ -2622,10 +2677,11 @@ func TestNormalizeChatRequestDefaultsAndCapsMaxTokens(t *testing.T) {
 	require.EqualValues(t, 3_072, req.MaxTokens)
 	require.Contains(t, string(body), `"max_tokens":3072`)
 
-	body, req, err = normalizeChatRequest([]byte(`{"max_tokens":64,"messages":[{"role":"user","content":"hello"}]}`))
+	floor := completionapi.MinTokensFloor
+	body, req, err = normalizeChatRequest([]byte(fmt.Sprintf(`{"max_tokens":%d,"messages":[{"role":"user","content":"hello"}]}`, floor)))
 	require.NoError(t, err)
-	require.EqualValues(t, 64, req.MaxTokens)
-	require.Contains(t, string(body), `"max_tokens":64`)
+	require.EqualValues(t, floor, req.MaxTokens)
+	require.Contains(t, string(body), fmt.Sprintf(`"max_tokens":%d`, floor))
 	require.NotContains(t, string(body), `"max_completion_tokens"`)
 
 	body, req, err = normalizeChatRequest([]byte(`{"max_tokens":10001,"messages":[{"role":"user","content":"hello"}]}`))
@@ -3126,6 +3182,39 @@ func TestGatewayStatusCodeForErrorMapsUpstream503To429(t *testing.T) {
 	require.Equal(t, http.StatusTooManyRequests, code)
 }
 
+func TestGatewayStatusCodeForErrorMapsUndeclaredVersionTo503(t *testing.T) {
+	code := gatewayStatusCodeForError(&transport.UpstreamStatusError{
+		Path:          "/sessions/12/chat/completions",
+		StatusCode:    http.StatusServiceUnavailable,
+		Body:          "version v2 is not present in the governance routing catalog",
+		DevshardError: transport.DevshardErrorUndeclaredVersion,
+	})
+	require.Equal(t, http.StatusServiceUnavailable, code)
+}
+
+func TestGatewayStatusCodeForErrorMapsZeroLiveWeightTo503(t *testing.T) {
+	require.Equal(t, http.StatusServiceUnavailable, gatewayStatusCodeForError(&LimiterRejection{
+		Kind: LimitedByZeroLiveWeight, Limit: 0,
+	}))
+	require.Equal(t, http.StatusServiceUnavailable, gatewayStatusCodeForError(&EscrowParticipantRateLimitError{}))
+	require.Equal(t, http.StatusTooManyRequests, gatewayStatusCodeForError(&LimiterRejection{
+		Kind: LimitedByConcurrentRequests, InFlight: 4, Limit: 4,
+	}))
+}
+
+func TestWriteGatewayErrorSetsUndeclaredVersionHeader(t *testing.T) {
+	rec := httptest.NewRecorder()
+	writeGatewayError(rec, &transport.UpstreamStatusError{
+		Path:          "/sessions/12/chat/completions",
+		StatusCode:    http.StatusServiceUnavailable,
+		Body:          "version v2 is not present in the governance routing catalog",
+		DevshardError: transport.DevshardErrorUndeclaredVersion,
+	})
+	require.Equal(t, http.StatusServiceUnavailable, rec.Code)
+	require.Equal(t, transport.DevshardErrorUndeclaredVersion, rec.Header().Get(transport.HeaderDevshardError))
+	require.Equal(t, transport.DevshardErrorUndeclaredVersion, rec.Header().Get(transport.HeaderDevshardRouterError))
+}
+
 func TestParticipantLimiterBypassedDuringRelaxedPoC(t *testing.T) {
 	setPoCModeForTest(t, pocRequestModeRelaxed)
 	setPoCPhaseState(true, "poc")
@@ -3222,4 +3311,30 @@ func metricLabelsMatch(metric *dto.Metric, want map[string]string) bool {
 		}
 	}
 	return true
+}
+
+// One stalled winner is one event. The strike sits outside the sample's once-guard so the settle path
+// cannot skip it, which leaves the call reachable twice per request -- once from the race and once from
+// the settle -- and each application slides the quarantine window forward.
+func TestStalledWinnerStrikeAppliesOncePerAttempt(t *testing.T) {
+	perf := NewPerfTracker(nil)
+	for range 2 {
+		perf.Record(RequestSample{ParticipantKey: "host:0", Responsive: false, SendTime: time.Now()})
+	}
+	require.True(t, perf.ParticipantFailureThresholdExceeded("host:0"), "precondition: the participant is past the failure threshold")
+
+	redundancy := &Redundancy{perf: perf, participantLimiter: NewParticipantRequestLimiter(10, 10)}
+	inf := &inflight{hostID: "host-A", escrowID: "escrow-x", nonce: 1}
+	inf.contentChunks.Store(1)
+
+	var logs bytes.Buffer
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+
+	redundancy.recordPostContentWinnerFailureOnce(inf, user.InferenceParams{Model: "m"})
+	redundancy.recordPostContentWinnerFailureOnce(inf, user.InferenceParams{Model: "m"})
+
+	if applied := strings.Count(logs.String(), "participant_limit_stalled_winner_quarantine"); applied != 1 {
+		t.Fatalf("stalled-winner quarantine applied %d times for one attempt, want 1", applied)
+	}
 }

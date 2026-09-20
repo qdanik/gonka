@@ -38,7 +38,7 @@ func startedNonce(t *testing.T, session *Session, hosts []*signing.Secp256k1Sign
 	require.NoError(t, session.ProcessResponse(int(nonce%3), &host.HostResponse{
 		Nonce: nonce, Receipt: signature, ConfirmedAt: confirmedAt,
 	}, nonce))
-	_, err = session.sendPendingDiff(context.Background())
+	_, err = session.sendPendingDiff(context.Background(), nil, nil)
 	require.NoError(t, err)
 
 	started, tracked := session.sm.GetInference(nonce)

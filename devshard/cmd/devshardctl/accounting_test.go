@@ -121,8 +121,18 @@ func (timeoutErrorClient) VerifyTimeout(
 	types.TimeoutReason,
 	*host.InferencePayload,
 	[]types.Diff,
-) (bool, []byte, uint32, error) {
-	return false, nil, 0, errors.New("verifier unavailable")
+	host.TimeoutArtifacts,
+) (bool, []byte, uint32, []*types.DevshardTx, string, error) {
+	return false, nil, 0, nil, "", errors.New("verifier unavailable")
+}
+
+func (timeoutErrorClient) VerifyErrorMiss(
+	context.Context,
+	uint64,
+	[]types.Diff,
+	host.TimeoutArtifacts,
+) (bool, []byte, uint32, []*types.DevshardTx, string, error) {
+	return false, nil, 0, nil, "", errors.New("verifier unavailable")
 }
 
 func TestAccountingObserverTracksCommittedSessionDiffs(t *testing.T) {
@@ -226,7 +236,6 @@ func TestAccountingProductionPendingClassification(t *testing.T) {
 }
 
 func TestAccountingProductionGhostFact(t *testing.T) {
-	disableThrottleProbe(t)
 	env := setupTestProxy(t, 3, nil, true)
 	env.proxy.redundancy.picker.stop()
 	tracker, err := accounting.OpenTracker(filepath.Join(t.TempDir(), "accounting.db"), 0, time.Hour)

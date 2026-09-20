@@ -12,10 +12,11 @@ import (
 
 // InferenceEngine returns fixed values for testing.
 type InferenceEngine struct {
-	ResponseHash []byte
-	InputTokens  uint64
-	OutputTokens uint64
-	ResponseBody []byte
+	ResponseHash          []byte
+	InputTokens           uint64
+	OutputTokens          uint64
+	ResponseBody          []byte
+	BlockUntilContextDone bool
 
 	// EchoRequest answers with the body the host received, so a test can read back what the gateway normalised.
 	EchoRequest bool
@@ -41,13 +42,19 @@ func NewInferenceEngine() *InferenceEngine {
 	}
 }
 
-func (e *InferenceEngine) Execute(_ context.Context, req devshard.ExecuteRequest) (*devshard.ExecuteResult, error) {
+func (e *InferenceEngine) Execute(ctx context.Context, req devshard.ExecuteRequest) (*devshard.ExecuteResult, error) {
+	if e.BlockUntilContextDone {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+
 	body, responseHash := e.ResponseBody, e.ResponseHash
 	if e.EchoRequest {
 		body = echoedRequestBody(req.Prompt)
 		sum := sha256.Sum256(body)
 		responseHash = sum[:]
 	}
+
 	if req.ResponseWriter != nil {
 		// Write mock SSE events to the response writer.
 		if rw, ok := req.ResponseWriter.(http.Flusher); ok {

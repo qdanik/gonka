@@ -135,7 +135,7 @@ func TestCreateRotationEscrowIntentFirstThenPersistAndClear(t *testing.T) {
 	require.NoError(t, err)
 
 	record := devshardIDs(t, store)["777"]
-	require.Equal(t, "4", record.ProtocolVersion, "replacement escrow uses the default protocol")
+	require.Equal(t, "5", record.ProtocolVersion, "replacement escrow uses the default protocol")
 	commitments, err := store.LoadCommitments()
 	require.NoError(t, err)
 	assert.Empty(t, commitments, "commitment cleared after persist")
@@ -157,19 +157,52 @@ func TestCreateRotationEscrowCarriesProtocolVersionFromRoutePrefix(t *testing.T)
 	assert.Equal(t, "3", record.ProtocolVersion, "persisted escrow inherits protocol from route prefix")
 }
 
-// A route prefix whose version segment is not a protocol version (e.g. a named
-// versiond runtime) uses the current default; semver-like versions map by major.
+func TestCreateRotationEscrowCarriesProtocolVersionFromV4RoutePrefix(t *testing.T) {
+	g, store, settings := newRecoveryGateway(t)
+	stubCreateOnChain(t, "TXPV4", 557)
+	t.Setenv("DEVSHARD_ROUTE_PREFIX", "/devshard/v4")
+	model := normalizedEscrowRotationModels(settings)[0]
+
+	_, err := g.createRotationEscrow(context.Background(), settings, model, rotationRoleTemp, 10)
+	require.NoError(t, err)
+
+	record := devshardIDs(t, store)["557"]
+	assert.Equal(t, "4", record.ProtocolVersion, "v4 route prefix stamps protocol 4, not empty")
+}
+
+func TestCreateRotationEscrowCarriesProtocolVersionFromV41RoutePrefix(t *testing.T) {
+	g, store, settings := newRecoveryGateway(t)
+	stubCreateOnChain(t, "TXPV41", 558)
+	t.Setenv("DEVSHARD_ROUTE_PREFIX", "/devshard/v4.1")
+	model := normalizedEscrowRotationModels(settings)[0]
+
+	_, err := g.createRotationEscrow(context.Background(), settings, model, rotationRoleTemp, 10)
+	require.NoError(t, err)
+
+	record := devshardIDs(t, store)["558"]
+	assert.Equal(t, "4.1", record.ProtocolVersion, "v4.1 route prefix stamps 4.1, not major 4")
+}
+
+// Named versiond runtimes stamp as-is; numeric versions stamp as N or N.x
+// (v2.1.0 -> 2.1, v4.1r5 -> 4.1). This is the gateway-DB protocol_version,
+// not the settlement StateRootAndProtocolVersion tag.
 func TestEscrowProtocolVersionRouteMapping(t *testing.T) {
 	for _, testCase := range []struct {
 		routePrefix     string
 		protocolVersion string
 	}{
-		{"/devshard/mainnet-canary", "4"},
+		{"/devshard/mainnet-canary", "mainnet-canary"},
 		{"/devshard/v3", "3"},
-		{"/devshard/v2.1.0", "2"},
+		{"/devshard/v2.1.0", "2.1"},
 		{"/devshard/3", "3"},
 		{"/devshard/v4", "4"},
 		{"/devshard/4", "4"},
+		{"/devshard/v4.1", "4.1"},
+		{"/devshard/4.1", "4.1"},
+		{"/devshard/v4.1r5", "4.1"},
+		{"/devshard/v4.2", "4.2"},
+		{"/devshard/v5", "5"},
+		{"/devshard/5", "5"},
 	} {
 		t.Run(testCase.routePrefix, func(t *testing.T) {
 			assert.Equal(t, testCase.protocolVersion, escrowProtocolVersionFor(testCase.routePrefix))
@@ -197,12 +230,20 @@ func TestRotationEscrowPinsRoutePrefixAgainstAGatewayThatMovesOn(t *testing.T) {
 
 func TestCommitmentRoutePrefixKeepsTheVersionTheEscrowWasMintedUnder(t *testing.T) {
 	t.Setenv("DEVSHARD_ROUTE_PREFIX", "/devshard/mainnet-canary")
-	assert.Equal(t, "/devshard/mainnet-canary", commitmentRoutePrefix(GatewayEscrowCommitment{ProtocolVersion: "4"}),
-		"a named runtime resolving to the same protocol keeps its own prefix")
+	assert.Equal(t, "/devshard/v4", commitmentRoutePrefix(GatewayEscrowCommitment{ProtocolVersion: "4"}),
+		"a numeric protocol does not ride the live named-runtime prefix")
+	assert.Equal(t, "/devshard/mainnet-canary", commitmentRoutePrefix(GatewayEscrowCommitment{ProtocolVersion: "mainnet-canary"}),
+		"a named runtime commitment keeps the live named prefix")
 	assert.Equal(t, "/devshard/v3", commitmentRoutePrefix(GatewayEscrowCommitment{ProtocolVersion: "3"}),
 		"a gateway that moved versions mid-recovery follows the commitment")
 	assert.Equal(t, "/devshard/mainnet-canary", commitmentRoutePrefix(GatewayEscrowCommitment{}),
 		"a commitment predating the field follows the live prefix")
+
+	t.Setenv("DEVSHARD_ROUTE_PREFIX", "/devshard/v4.1")
+	assert.Equal(t, "/devshard/v4.1", commitmentRoutePrefix(GatewayEscrowCommitment{ProtocolVersion: "4.1"}),
+		"a v4.1 gateway keeps a v4.1 commitment on v4.1")
+	assert.Equal(t, "/devshard/v4", commitmentRoutePrefix(GatewayEscrowCommitment{ProtocolVersion: "4"}),
+		"a v4.1 gateway must not drag a v4 commitment onto v4.1")
 }
 
 func TestReconcileCommitmentsCarriesProtocolVersion(t *testing.T) {

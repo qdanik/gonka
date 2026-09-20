@@ -2,10 +2,10 @@ package testutil
 
 import (
 	"os"
-	"strings"
 	"testing"
 	"time"
 
+	"devshard/internal/boolvalue"
 	"devshard/internal/e2econfig"
 )
 
@@ -47,8 +47,8 @@ func EnvDefault(key, fallback string) string {
 }
 
 func DebugEnabled() bool {
-	value := strings.ToLower(strings.TrimSpace(os.Getenv("DEVSHARD_E2E_DEBUG")))
-	return value == "1" || value == "true" || value == "yes"
+	enabled, err := boolvalue.Parse(os.Getenv("DEVSHARD_E2E_DEBUG"))
+	return err == nil && enabled
 }
 
 func DebugLogf(t *testing.T, format string, args ...any) {
