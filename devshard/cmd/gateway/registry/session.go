@@ -9,6 +9,7 @@ import (
 	"common/completionapi"
 
 	"devshard/cmd/gateway/scheduler"
+	"devshard/heightsync"
 	"devshard/state"
 	"devshard/types"
 	"devshard/user"
@@ -35,6 +36,7 @@ type HostDial struct {
 type EscrowSession interface {
 	ParticipantKeys() []string
 	HostDials() []HostDial
+	HeightSyncView() heightsync.OperatorView
 	HostParticipantKeyList() []string
 	Nonce() uint64
 	Balance() uint64
@@ -74,6 +76,15 @@ func (h sessionHandle) UserSession() *user.Session       { return h.Session }
 type hostDialer interface {
 	BaseURL() string
 	RoutePrefix() string
+}
+
+// HeightSyncView serves the cache only: taking a fresh snapshot on a debug read would move the
+// producer's own state. An unwired session reports nothing rather than an empty shape.
+func (h sessionHandle) HeightSyncView() heightsync.OperatorView {
+	if !h.Session.HeightSyncWired() {
+		return heightsync.OperatorView{}
+	}
+	return h.Session.CachedHeightSyncView()
 }
 
 func (h sessionHandle) HostDials() []HostDial {

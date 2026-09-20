@@ -77,6 +77,12 @@ type Values struct {
 	PerfMinAvailableHosts        *int64
 	PerfHostStalenessSeconds     *int64
 
+	HeightSyncEnabled     *bool
+	HeightSyncRequireSeed *bool
+	HeightSyncChainOracle *bool
+	HeightSyncAnchorK     *int64
+	HeightSyncAnchorSlots *int64
+
 	HostPingDisabled    *bool
 	HostPingIntervalMS  *int64
 	HostPingTimeoutMS   *int64
@@ -112,6 +118,9 @@ func LogFormat() string {
 	}
 	return LogFormatJSON
 }
+
+// NodeManagerAddr is the fleet's own spelling, shared with devshardd rather than renamed. See operations.md.
+func NodeManagerAddr() string { return lookup("NODE_MANAGER_ADDR") }
 
 // AllowPrivateAddresses is read apart from Load because the dial guard is armed before anything dials. See operations.md.
 func AllowPrivateAddresses() bool {
@@ -278,6 +287,11 @@ func Load() (Values, error) {
 	readInt("GATEWAY_TIMEOUT_SWEEP_BUDGET_PER_TICK", &values.TimeoutSweepBudgetPerTick)
 	readInt("GATEWAY_TIMEOUT_SWEEP_GRACE_SECONDS", &values.TimeoutSweepGraceSeconds)
 
+	readBool("GATEWAY_HEIGHT_SYNC_ENABLED", &values.HeightSyncEnabled)
+	readBool("GATEWAY_HEIGHT_SYNC_REQUIRE_SEED", &values.HeightSyncRequireSeed)
+	readBool("GATEWAY_HEIGHT_SYNC_CHAIN_ORACLE", &values.HeightSyncChainOracle)
+	readInt("GATEWAY_HEIGHT_SYNC_ANCHOR_K", &values.HeightSyncAnchorK)
+	readInt("GATEWAY_HEIGHT_SYNC_ANCHOR_SLOTS", &values.HeightSyncAnchorSlots)
 	readBool("GATEWAY_HOST_PING_DISABLED", &values.HostPingDisabled)
 	readInt("GATEWAY_HOST_PING_INTERVAL_MS", &values.HostPingIntervalMS)
 	readInt("GATEWAY_HOST_PING_TIMEOUT_MS", &values.HostPingTimeoutMS)

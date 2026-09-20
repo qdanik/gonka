@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"devshard/cmd/gateway/config"
+	"devshard/heightsync"
 	"devshard/logging"
 )
 
@@ -179,6 +180,27 @@ func (s *Server) handleDebugRotation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"rotation": statuses})
+}
+
+// See ../heights/README.md.
+func (s *Server) handleDebugHeightSync(w http.ResponseWriter, r *http.Request) {
+	if !allowMethods(w, r, http.MethodGet) {
+		return
+	}
+	held := s.escrows.Snapshot()
+	views := make([]heightsync.OperatorView, 0, len(held))
+	for _, state := range held {
+		session, live := s.escrows.RoutableSession(state.ID)
+		if !live {
+			continue
+		}
+		view := session.HeightSyncView()
+		if view.DevshardID == "" {
+			view.DevshardID = state.ID
+		}
+		views = append(views, view)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"escrows": views})
 }
 
 func (s *Server) handleDebugMemstats(w http.ResponseWriter, r *http.Request) {

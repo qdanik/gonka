@@ -113,7 +113,7 @@ type stopper interface{ Stop() }
 type idleConnections interface{ CloseIdleConnections() }
 
 // shutdownOrder is the ten-step contract every shutdown follows. See operations.md, "Shutdown".
-func shutdownOrder(listener httpListener, races, dispatchers, escrowLifecycle, chainObserver stopper, sessions, events, nonceLedger, storage io.Closer, publicAPI idleConnections) []shutdownStep {
+func shutdownOrder(listener httpListener, races, dispatchers, escrowLifecycle, chainObserver stopper, sessions, events, nonceLedger, heightFollower, storage io.Closer, publicAPI idleConnections) []shutdownStep {
 	return []shutdownStep{
 		{name: "http server", stop: listener.Shutdown},
 		{name: "races", stop: waitFor(races)},
@@ -124,6 +124,8 @@ func shutdownOrder(listener httpListener, races, dispatchers, escrowLifecycle, c
 		{name: "journal", stop: closeWithin(events, journalCloseFloor)},
 		// After every emitter above, so the final snapshot holds the counters the run ended with.
 		{name: "nonce accounting", stop: closeOf(nonceLedger)},
+		// After the sessions that carried its readings, before the store they persisted into.
+		{name: "height follower", stop: closeOf(heightFollower)},
 		{name: "store", stop: closeOf(storage)},
 		// Last: every step above can still reach the public API. See README.md, "Shutdown".
 		{name: "public api connections", stop: closeIdle(publicAPI)},
@@ -201,7 +203,7 @@ func stopAll(ctx context.Context, steps []shutdownStep) error {
 func (g *gateway) shutdown(grace time.Duration) error {
 	drainCtx, cancelDrain := context.WithTimeout(context.Background(), grace)
 	defer cancelDrain()
-	return stopAll(drainCtx, shutdownOrder(g.server, g.races, g.router, g.manager, g.observer, g.escrows, g.events, g.nonces, g.store, g.publicAPI))
+	return stopAll(drainCtx, shutdownOrder(g.server, g.races, g.router, g.manager, g.observer, g.escrows, g.events, g.nonces, g.heights, g.store, g.publicAPI))
 }
 
 // bootBudget sizes the build limit and the idle pool those builds reuse together. See README.md, "Wiring order, and the knots in it".

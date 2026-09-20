@@ -96,6 +96,10 @@ func Defaults() Config {
 			MinAvailableHosts:        4,
 			HostStalenessSeconds:     3_600,
 		},
+		HeightSync: HeightSync{
+			AnchorK:     10,
+			AnchorSlots: 1,
+		},
 		HostPing: HostPing{
 			IntervalMS:  15_000,
 			TimeoutMS:   2_000,

@@ -67,6 +67,11 @@ func Build(values env.Values, overrides Overrides) (*Config, error) {
 	overrideIfSet(&configuration.Capture.SampleRate, values.CaptureSampleRate)
 	overrideIfSet(&configuration.Capture.MaxBytes, values.CaptureMaxBytes)
 
+	overrideIfSet(&configuration.HeightSync.Enabled, values.HeightSyncEnabled)
+	overrideIfSet(&configuration.HeightSync.RequireSeed, values.HeightSyncRequireSeed)
+	overrideIfSet(&configuration.HeightSync.ChainOracle, values.HeightSyncChainOracle)
+	overrideIfSet(&configuration.HeightSync.AnchorK, values.HeightSyncAnchorK)
+	overrideIfSet(&configuration.HeightSync.AnchorSlots, values.HeightSyncAnchorSlots)
 	overrideIfSet(&configuration.HostPing.Disabled, values.HostPingDisabled)
 	overrideIfSet(&configuration.HostPing.IntervalMS, values.HostPingIntervalMS)
 	overrideIfSet(&configuration.HostPing.TimeoutMS, values.HostPingTimeoutMS)

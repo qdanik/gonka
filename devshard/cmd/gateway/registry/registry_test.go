@@ -13,6 +13,7 @@ import (
 	"devshard/cmd/gateway/chain"
 	"devshard/cmd/gateway/internal/leakcheck"
 	"devshard/cmd/gateway/scheduler"
+	"devshard/heightsync"
 	"devshard/types"
 	"devshard/user"
 )
@@ -42,6 +43,8 @@ type fakeSession struct {
 	perSlotKeys  []string
 	participants []string
 	dials        []HostDial
+
+	heightSyncView heightsync.OperatorView
 
 	phase         atomic.Int32
 	nonce         atomic.Uint64
@@ -130,6 +133,8 @@ func (f *fakeSession) Close() error {
 func (f *fakeSession) UserSession() *user.Session { return nil }
 
 func (f *fakeSession) HostDials() []HostDial { return f.dials }
+
+func (f *fakeSession) HeightSyncView() heightsync.OperatorView { return f.heightSyncView }
 
 func (f *fakeSession) setPhase(phase types.SessionPhase) { f.phase.Store(int32(phase)) }
 

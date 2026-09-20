@@ -136,3 +136,10 @@ const (
 
 	SkippedLines = "skipped_lines"
 )
+
+// Which sources the height follower came up on. See ../../heights/README.md.
+const (
+	NodeManager = "node_manager"
+	DirectChain = "direct_chain"
+	CometRPC    = "comet_rpc"
+)

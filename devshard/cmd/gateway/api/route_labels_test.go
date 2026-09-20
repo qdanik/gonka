@@ -32,6 +32,7 @@ var (
 		"/v1/admin/participants/unquarantine",
 		"/v1/admin/accounting/reset/{epoch}",
 		"/v1/debug/rotation",
+		"/v1/debug/heightsync",
 		"/v1/debug/memstats",
 		"/devshard/{id}/",
 		"/devshard/{id}/openapi.json",
@@ -86,6 +87,7 @@ func TestEveryRouteCarriesItsExactMetricLabel(t *testing.T) {
 		"/v1/admin/accounting/reset/{epoch}":    "/v1/admin/accounting/reset/{epoch}",
 		"/v1/admin/hosts":                       "/v1/admin/hosts",
 		"/v1/debug/rotation":                    "/v1/debug/rotation",
+		"/v1/debug/heightsync":                  "/v1/debug/heightsync",
 		"/v1/debug/memstats":                    "/v1/debug/memstats",
 		"/":                                     otherRouteLabel,
 	}

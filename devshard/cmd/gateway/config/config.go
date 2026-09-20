@@ -155,6 +155,15 @@ type Perf struct {
 	HostStalenessSeconds     int64
 }
 
+// HeightSync groups the escrow's height cadence. See ../docs/escrows.md, "Height sync".
+type HeightSync struct {
+	Enabled     bool
+	RequireSeed bool
+	ChainOracle bool
+	AnchorK     int64
+	AnchorSlots int64
+}
+
 // HostPing groups the probe of the live escrows' hosts. See ../hostping/README.md.
 type HostPing struct {
 	Disabled    bool
@@ -202,6 +211,7 @@ type Config struct {
 	Stream     Stream
 	Perf       Perf
 	HostPing   HostPing
+	HeightSync HeightSync
 	Engine     Engine
 	Scheduler  Scheduler
 

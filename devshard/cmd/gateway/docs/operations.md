@@ -14,7 +14,7 @@ Three tiers, and the tier decides both who may call it and whether the kill swit
 | `/metrics`, `/healthz` | none | yes |
 | `/v1/requests/{id}` | admin | yes |
 | `/devshard/{id}/v1/finalize`, `.../state`, `.../debug/*` | admin | yes |
-| `/v1/admin/*`, `/v1/debug/rotation`, `/v1/debug/memstats` | admin | yes |
+| `/v1/admin/*`, `/v1/debug/rotation`, `/v1/debug/memstats`, `/v1/debug/heightsync` | admin | yes |
 
 The `/devshard/{id}/…` prefix pins a request to one escrow instead of letting the scheduler choose — the recovery surface for an escrow that needs attention on its own.
 
@@ -88,6 +88,9 @@ Signing keys are addressed **by the name of the variable that holds them**, neve
 | `GATEWAY_TIMEOUT_SWEEP_BUDGET_PER_TICK` | 8 | execution-timeout votes one tick may retry across every escrow; `0` turns the sweep off |
 | `GATEWAY_TIMEOUT_SWEEP_GRACE_SECONDS` | 120 | how far past its deadline a nonce must be before the sweep claims it from its own race |
 | `GATEWAY_POC_MODE` | relaxed | `relaxed` keeps serving through proof-of-compute; `off` refuses new requests while the chain blocks them |
+| `GATEWAY_HEIGHT_SYNC_ENABLED` | false | whether the escrow's heartbeat cadence runs. Off unless the hosts carry height sync, or every interval logs a heartbeat it could not stamp ([`docs/escrows.md`](escrows.md), "Height sync") |
+| `GATEWAY_HEIGHT_SYNC_REQUIRE_SEED` | false | whether a session open must land a height seed before serving; the production posture, and off in the e2e stand |
+| `GATEWAY_HEIGHT_SYNC_CHAIN_ORACLE` | false | whether the gateway follows mainnet itself, from `NODE_MANAGER_ADDR`, the chain RPC and gRPC. It is not what the gateway stamps from — it only labels how much a carried tip is trusted ([`heights/README.md`](../heights/README.md)) |
 | `GATEWAY_HOST_PING_DISABLED` | false | whether the hosts the live escrows use are pinged for reachability and clock drift. Observability only — a host that stops answering a ping keeps its routing weight ([`hostping/README.md`](../hostping/README.md)) |
 | `GATEWAY_HOST_PING_INTERVAL_MS` / `GATEWAY_HOST_PING_TIMEOUT_MS` | 15 000 / 2 000 | the probe cadence and its patience; the timeout must be at most half the interval or the ping is refused and switched off |
 | `GATEWAY_HOST_PING_CONCURRENCY` | 8 | hosts probed at once within one wave |
@@ -114,7 +117,7 @@ The full list is `env/env.go`; the full set of defaults is `config.Defaults()`. 
 
 ## Shutdown
 
-`lifecycle.go`, `shutdownOrder`. Ten steps, in this order, bounded by the grace period, with up to one more second from the journal step's floor:
+`lifecycle.go`, `shutdownOrder`. Eleven steps, in this order, bounded by the grace period, with up to one more second from the journal step's floor:
 
 | # | Step | Why here |
 | --- | --- | --- |
@@ -126,8 +129,9 @@ The full list is `env/env.go`; the full set of defaults is `config.Defaults()`. 
 | 6 | escrow sessions | **destroys state** the steps above may still use |
 | 7 | journal | every producer with a shutdown step above has stopped; it drains its queue into the ledger below, waiting for whatever budget remains, or for one second when the steps above leave less, and counts anything later as a late event, such as a line from the warmup, which is only cancelled, or from the republish after a devshard write |
 | 8 | nonce accounting | after every emitter, so the final snapshot holds the counters the run ended with |
-| 9 | store | every step above may still write to it |
-| 10 | public API connections | every step above can still reach it; closing earlier just forces a re-dial |
+| 9 | height follower | after the sessions that carried its readings; it holds a block subscription and a dialled client |
+| 10 | store | every step above may still write to it |
+| 11 | public API connections | every step above can still reach it; closing earlier just forces a re-dial |
 
 `stopAll` runs every step **even after one fails**, except a step marked `needsQuiesced` (step 6): if anything above it failed, work may still be running, so closing the sessions would pull storage out from under it. That step is skipped and the skip is reported.
 
@@ -275,6 +279,7 @@ Participant-labelled race series — `devshard_gateway_attempts_*`, `devshard_ga
 | the effective settings including overrides | `GET /v1/admin/settings` |
 | every escrow row the process owns | `GET /v1/admin/devshards` |
 | rotation's last outcome per model | `GET /v1/debug/rotation` |
+| which slot answered which height-sync turn | `GET /v1/debug/heightsync` |
 | one escrow's protocol state | `GET /devshard/{id}/v1/state` |
 | what happened to one request's nonces | `GET /v1/requests/{id}` |
 | hosts the gateway distrusts | `GET /v1/admin/suspicious-hosts` |

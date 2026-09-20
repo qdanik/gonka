@@ -166,6 +166,16 @@ The close runs with the registry lock **released**: flushing takes the session l
 
 `entry.close()` flushes the snapshot and then closes the session **unconditionally**, and reports the two separately. The entry stays in `draining` only when the store was not released; a failed flush with a successful close frees the id, because holding it would refuse that escrow for the rest of the process's life. On the last release the failure is counted (`DrainCloseFailures`) rather than raised: the request that held the escrow open has already been answered, and there is nobody left to hand it to. A `Retire` with nothing in flight returns it to its caller instead.
 
+## Height sync
+
+Mainnet height is the escrow's logical clock: every host and the sequencer keep a signed `(height, hash)` inside the escrow's own log, so a verifier replaying the diffs recomputes the same time. The protocol lives in the session (`user/heartbeat.go`, `user/heightsync_seed.go`); the gateway's part is to open the cadence, and that is the whole of it.
+
+**Only the user side can open a turn.** A busy escrow pays nothing for this — a host's own stamp on `confirm`/`finish` discharges the cadence. A quiet one has no such traffic, and if nobody opens a heartbeat turn it never syncs at all, while its hosts count the silence toward arming close-ready. `StartHeartbeatLoop` is therefore started per serving session, and the session's `Close` stops it.
+
+**The gateway needs no block oracle of its own.** A heartbeat stamps the floor the log already holds (`referenceStampLocked` reads `HeightSyncFloorAsOf`, nothing else), and where a live tip is wanted the session falls back to the host clients' own response-leg anchors (`observedHeightLocked`). The gateway is a courier: it carries heights, and cannot raise the floor even if it wanted to — a sequencer-composed stamp never raises `F` and never counts toward a turnover. Running a follower here would buy a trust label and nothing the protocol reads.
+
+**It is off unless the fleet carries it.** Height sync is opt-in on the hosts, and a gateway whose hosts do not carry it would skip a heartbeat every interval and log it. `GATEWAY_HEIGHT_SYNC_ENABLED` gates the cadence; `GATEWAY_HEIGHT_SYNC_REQUIRE_SEED` additionally fails a session open that could not seed a tip, which is the production posture and off in the e2e stand, where hosts have no catalog and no oracle.
+
 ## Failure modes and their causes
 
 | Symptom | Cause |

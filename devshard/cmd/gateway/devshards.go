@@ -18,6 +18,7 @@ import (
 	"devshard/cmd/gateway/config"
 	"devshard/cmd/gateway/env"
 	"devshard/cmd/gateway/escrow"
+	"devshard/cmd/gateway/heights"
 	"devshard/cmd/gateway/internal/logkey"
 	"devshard/cmd/gateway/nonces"
 	"devshard/cmd/gateway/registry"
@@ -28,18 +29,27 @@ import (
 
 // chainBackedSessions owns the chain connection because it is the only provider that needs one.
 func chainBackedSessions(records devshardLookup, storageDir string) sessionSources {
-	return func(endpoints config.Chain, routePrefix string) (chainSources, error) {
+	return func(endpoints config.Chain, heightSettings config.HeightSync, routePrefix string) (chainSources, error) {
 		// This client carries the CometBFT RPC query fallback. See README.md, "Escrow sessions and the chain connection".
 		chainClient, err := commonchain.NewWithQueryFallback(endpoints.GRPCEndpoint, endpoints.RPCEndpoint)
 		if err != nil {
 			return chainSources{}, fmt.Errorf("dialing chain grpc %s: %w", endpoints.GRPCEndpoint, err)
 		}
 		grpcChain := chain.NewGRPCChain(chainClient, endpoints.ChainID)
+		follower, err := heights.NewOracle(heightSettings, heights.OracleSources{
+			NodeManagerAddr: env.NodeManagerAddr(),
+			CometRPC:        endpoints.RPCEndpoint,
+			Chain:           chainClient,
+		})
+		if err != nil {
+			return chainSources{}, err
+		}
 		return chainSources{
-			Serving:   servingSessions(records, storageDir, bridge.NewGRPCBridge(chainClient), routePrefix),
+			Serving:   servingSessions(records, storageDir, bridge.NewGRPCBridge(chainClient), heightSettings, follower, routePrefix),
 			ReadOnly:  readOnlySessions(records, storageDir),
 			Reader:    grpcChain,
 			Transport: grpcChain,
+			Heights:   follower,
 		}, nil
 	}
 }
@@ -194,7 +204,7 @@ func creationEpochOf(chainClient *chain.TxClient, records *store.Store) nonces.C
 }
 
 // sessionSources is a parameter so the transport an escrow is served over is chosen once, at compose.
-type sessionSources func(endpoints config.Chain, routePrefix string) (chainSources, error)
+type sessionSources func(endpoints config.Chain, heightSettings config.HeightSync, routePrefix string) (chainSources, error)
 
 // chainSources is what one dial yields; Reader and Transport are interfaces so a test dials nothing.
 type chainSources struct {
@@ -202,6 +212,7 @@ type chainSources struct {
 	ReadOnly  registry.SessionFactory
 	Reader    chain.Reader
 	Transport chain.Transport
+	Heights   *heights.Oracle
 }
 
 type seedDevshard struct {
@@ -290,7 +301,7 @@ func sessionInputs(ctx context.Context, records devshardLookup, storageDir, escr
 }
 
 // The bridge is one object for the process. See README.md, "Escrow sessions and the chain connection".
-func servingSessions(records devshardLookup, storageDir string, escrowBridge bridge.MainnetBridge, routePrefix string) registry.SessionFactory {
+func servingSessions(records devshardLookup, storageDir string, escrowBridge bridge.MainnetBridge, heightSettings config.HeightSync, follower *heights.Oracle, routePrefix string) registry.SessionFactory {
 	return func(ctx context.Context, escrowID string) (registry.EscrowSession, error) {
 		record, keyHex, storagePath, err := sessionInputs(ctx, records, storageDir, escrowID)
 		if err != nil {
@@ -305,10 +316,13 @@ func servingSessions(records devshardLookup, storageDir string, escrowBridge bri
 			RoutePrefix:             escrowRoutePrefix(record, routePrefix),
 			RefusalTimeoutSeconds:   sessionTimeouts.RefusalTimeoutSeconds,
 			ExecutionTimeoutSeconds: sessionTimeouts.ExecutionTimeoutSeconds,
+			RequireHeightSeed:       heightSettings.Enabled && heightSettings.RequireSeed,
+			ExtraClientConfig:       heights.Courier(heightSettings, follower),
 		})
 		if err != nil {
 			return nil, err
 		}
+		heights.StartCadence(session, heightSettings)
 		return registry.NewSessionHandle(session, machine), nil
 	}
 }

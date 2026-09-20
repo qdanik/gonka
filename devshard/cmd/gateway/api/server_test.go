@@ -60,6 +60,14 @@ func (f *fakeRegistry) Routable(escrowID string) (scheduler.Escrow, bool) {
 	return scheduler.Escrow{}, false
 }
 
+func (f *fakeRegistry) Snapshot() []registry.EscrowState {
+	held := make([]registry.EscrowState, 0, len(f.escrows))
+	for _, candidate := range f.escrows {
+		held = append(held, registry.EscrowState{ID: candidate.ID, Model: candidate.Model, Accepting: true})
+	}
+	return held
+}
+
 func (f *fakeRegistry) RoutableSession(escrowID string) (registry.EscrowSession, bool) {
 	session, held := f.sessions[escrowID]
 	return session, held
@@ -497,6 +505,9 @@ func TestEveryRouteAnswersItsDocumentedStatus(t *testing.T) {
 		{name: "debug rotation wrong method", method: http.MethodPost, target: "/v1/debug/rotation", headers: adminHeaders(), want: http.StatusMethodNotAllowed},
 		{name: "debug memstats", method: http.MethodGet, target: "/v1/debug/memstats", headers: adminHeaders(), want: http.StatusOK},
 		{name: "debug memstats wrong method", method: http.MethodDelete, target: "/v1/debug/memstats", headers: adminHeaders(), want: http.StatusMethodNotAllowed},
+		{name: "debug heightsync", method: http.MethodGet, target: "/v1/debug/heightsync", headers: adminHeaders(), want: http.StatusOK},
+		{name: "debug heightsync wrong method", method: http.MethodPost, target: "/v1/debug/heightsync", headers: adminHeaders(), want: http.StatusMethodNotAllowed},
+		{name: "debug heightsync without the admin key", method: http.MethodGet, target: "/v1/debug/heightsync", want: http.StatusUnauthorized},
 
 		{name: "unmatched path", method: http.MethodGet, target: "/favicon.ico", want: http.StatusNotFound},
 	}

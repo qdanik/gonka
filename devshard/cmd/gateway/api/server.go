@@ -26,6 +26,7 @@ type EscrowRegistry interface {
 	Models() []string
 	Candidates(model string) []scheduler.Escrow
 	Routable(escrowID string) (scheduler.Escrow, bool)
+	Snapshot() []registry.EscrowState
 	RoutableSession(escrowID string) (registry.EscrowSession, bool)
 	SettlementSession(escrowID string) (registry.EscrowSession, bool)
 	Inspect(ctx context.Context, escrowID string) (registry.EscrowSession, func(), error)

@@ -64,6 +64,7 @@ func (s *Server) routes() []route {
 		{pattern: "/v1/admin/participants/unquarantine", label: "/v1/admin/participants/unquarantine", admin: true, alwaysOn: true, handler: s.handleAdminUnquarantine},
 		{pattern: "/v1/admin/accounting/reset/{epoch}", label: "/v1/admin/accounting/reset/{epoch}", admin: true, alwaysOn: true, handler: s.handleAdminResetAccountingEpoch},
 		{pattern: "/v1/debug/rotation", label: "/v1/debug/rotation", admin: true, alwaysOn: true, handler: s.handleDebugRotation},
+		{pattern: "/v1/debug/heightsync", label: "/v1/debug/heightsync", admin: true, alwaysOn: true, handler: s.handleDebugHeightSync},
 		{pattern: "/v1/debug/memstats", label: "/v1/debug/memstats", admin: true, alwaysOn: true, handler: s.handleDebugMemstats},
 
 		{pattern: "/", label: otherRouteLabel, alwaysOn: true, handler: s.handleUnmatched},

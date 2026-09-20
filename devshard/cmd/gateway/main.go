@@ -21,6 +21,7 @@ import (
 	"devshard/cmd/gateway/engine"
 	"devshard/cmd/gateway/env"
 	"devshard/cmd/gateway/escrow"
+	"devshard/cmd/gateway/heights"
 	"devshard/cmd/gateway/hostping"
 	"devshard/cmd/gateway/internal/logkey"
 	"devshard/cmd/gateway/journal"
@@ -110,6 +111,7 @@ type gateway struct {
 	events       *journal.Journal
 	warmup       *warmup.Prober
 	hostPings    *hostping.Pinger
+	heights      *heights.Oracle
 
 	builders     int
 	devshardWork chan struct{}
@@ -133,7 +135,7 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 		return nil, fmt.Errorf("resolving host route prefix from version %q: %w", Version, err)
 	}
 
-	sources, err := openSessions(configuration.Chain, routePrefix)
+	sources, err := openSessions(configuration.Chain, configuration.HeightSync, routePrefix)
 	if err != nil {
 		return nil, err
 	}
@@ -367,6 +369,7 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 		events:       events,
 		warmup:       prober,
 		hostPings:    hostping.New(hostPingSettings(configuration.HostPing), escrows, metrics.NewHostPingRecorder(telemetry)),
+		heights:      sources.Heights,
 		builders:     boot.builders,
 		devshardWork: devshardWork,
 	}, nil

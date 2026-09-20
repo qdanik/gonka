@@ -33,6 +33,7 @@ import (
 	"devshard/cmd/gateway/registry"
 	"devshard/cmd/gateway/scheduler"
 	"devshard/cmd/gateway/store"
+	"devshard/heightsync"
 	"devshard/types"
 	"devshard/user"
 )
@@ -121,7 +122,7 @@ func (chainWithoutADial) Escrow(context.Context, uint64) (chain.EscrowInfo, bool
 }
 
 func sessionsReading(records devshardLookup, storageDir string, reader chain.Reader) sessionSources {
-	return func(config.Chain, string) (chainSources, error) {
+	return func(config.Chain, config.HeightSync, string) (chainSources, error) {
 		return chainSources{
 			Serving: func(context.Context, string) (registry.EscrowSession, error) {
 				return nil, errNoChainDialed
@@ -626,13 +627,14 @@ func TestShutdownStopsAcceptingFirstAndClosesTheStoreLast(t *testing.T) {
 	steps := shutdownOrder(
 		recorder("http server"), recorder("races"), recorder("dispatchers"),
 		recorder("escrow lifecycle"), recorder("chain observer"),
-		recorder("escrow sessions"), recorder("journal"), recorder("nonce accounting"), recorder("store"),
+		recorder("escrow sessions"), recorder("journal"), recorder("nonce accounting"),
+		recorder("height follower"), recorder("store"),
 		recorder("public api connections"))
 	if err := stopAll(context.Background(), steps); err != nil {
 		t.Fatalf("stopAll(): %v", err)
 	}
 
-	want := []string{"http server", "races", "dispatchers", "escrow lifecycle", "chain observer", "escrow sessions", "journal", "nonce accounting", "store", "public api connections"}
+	want := []string{"http server", "races", "dispatchers", "escrow lifecycle", "chain observer", "escrow sessions", "journal", "nonce accounting", "height follower", "store", "public api connections"}
 	assertSame(t, "shutdown sequence", sequence, want)
 }
 
@@ -674,7 +676,8 @@ func TestShutdownReachesTheStoreEvenWhenAnEarlierStepFails(t *testing.T) {
 	steps := shutdownOrder(
 		failing, recorder("races"), recorder("dispatchers"),
 		recorder("escrow lifecycle"), recorder("chain observer"),
-		recorder("escrow sessions"), recorder("journal"), recorder("nonce accounting"), recorder("store"),
+		recorder("escrow sessions"), recorder("journal"), recorder("nonce accounting"),
+		recorder("height follower"), recorder("store"),
 		recorder("public api connections"))
 	err := stopAll(context.Background(), steps)
 
@@ -894,6 +897,7 @@ func (s weightlessSession) FlushSnapshot() error                    { return nil
 func (s weightlessSession) Close() error                            { return nil }
 func (s weightlessSession) UserSession() *user.Session              { return nil }
 func (s weightlessSession) HostDials() []registry.HostDial          { return nil }
+func (s weightlessSession) HeightSyncView() heightsync.OperatorView { return heightsync.OperatorView{} }
 
 func (s weightlessSession) PrepareInferenceFn(user.ParamsForHost) (*user.PreparedInference, error) {
 	return nil, nil
