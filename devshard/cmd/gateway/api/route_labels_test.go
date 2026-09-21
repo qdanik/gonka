@@ -51,8 +51,10 @@ var (
 		"/devshard/{id}/v1/debug/sync-hosts",
 	}
 
-	// deliberateDivergences are the only labels allowed to sit outside the legacy domain.
-	deliberateDivergences = []string{otherRouteLabel, "/v1/requests/{id}", "/v1/admin/hosts"}
+	// deliberateDivergences are the only labels allowed to sit outside the legacy domain. The batch settle
+	// keeps a label of its own because one call settles a whole list: folded into the single-escrow series it
+	// would stretch that panel's latency past reading.
+	deliberateDivergences = []string{otherRouteLabel, "/v1/requests/{id}", "/v1/admin/hosts", "/v1/admin/devshards/settle"}
 )
 
 func TestEveryRouteCarriesItsExactMetricLabel(t *testing.T) {
@@ -76,6 +78,7 @@ func TestEveryRouteCarriesItsExactMetricLabel(t *testing.T) {
 		"/v1/admin/settings":                    "/v1/admin/settings",
 		"/v1/admin/devshards":                   "/v1/admin/devshards",
 		"/v1/admin/devshards/import":            "/v1/admin/devshards/{id}",
+		"/v1/admin/devshards/settle":            "/v1/admin/devshards/settle",
 		"/v1/admin/devshards/{id}":              "/v1/admin/devshards/{id}",
 		"/v1/admin/devshards/{id}/activate":     "/v1/admin/devshards/{id}/activate",
 		"/v1/admin/devshards/{id}/deactivate":   "/v1/admin/devshards/{id}/deactivate",

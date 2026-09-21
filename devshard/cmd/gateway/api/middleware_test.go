@@ -33,7 +33,7 @@ func TestAnOversizedAdminBodyIsRejectedAndTheConnectionIsClosed(t *testing.T) {
 	if !response.Close {
 		t.Fatal("the server kept the connection open after refusing an oversized body")
 	}
-	if got := len(live.operations.calls); got != 0 {
+	if got := len(live.operations.recordedCalls()); got != 0 {
 		t.Fatalf("an oversized body reached %d operations", got)
 	}
 }

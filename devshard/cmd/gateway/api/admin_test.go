@@ -180,8 +180,8 @@ func TestSettlingABusyDevshardIsRefusedAndCannotBeForced(t *testing.T) {
 			t.Fatalf("settle with body %q: got %d (%s), want 409", body, refused.Code, refused.Body.String())
 		}
 	}
-	if slices.Contains(live.operations.calls, "settle") {
-		t.Fatalf("a busy devshard reached the settle path: %v", live.operations.calls)
+	if calls := live.operations.recordedCalls(); slices.Contains(calls, "settle") {
+		t.Fatalf("a busy devshard reached the settle path: %v", calls)
 	}
 }
 

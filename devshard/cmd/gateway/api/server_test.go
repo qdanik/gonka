@@ -175,15 +175,26 @@ func (f *fakeControl) LoadRotationStatuses(context.Context) ([]store.RotationSta
 }
 
 type fakeOperations struct {
-	calls  []string
-	err    error
-	create chain.CreateEscrowResult
-	settle chain.SettleEscrowResult
+	mu       sync.Mutex
+	calls    []string
+	err      error
+	create   chain.CreateEscrowResult
+	settle   chain.SettleEscrowResult
+	onSettle func(escrowID string)
 }
 
 func (f *fakeOperations) record(name string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.calls = append(f.calls, name)
 	return f.err
+}
+
+// recordedCalls exists because a batch route calls these from several goroutines at once.
+func (f *fakeOperations) recordedCalls() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.calls)
 }
 
 func (f *fakeOperations) CreateEscrow(context.Context, CreateEscrowRequest) (chain.CreateEscrowResult, error) {
@@ -201,7 +212,13 @@ func (f *fakeOperations) ImportDevshard(context.Context, ImportDevshardRequest) 
 func (f *fakeOperations) Activate(context.Context, string) error   { return f.record("activate") }
 func (f *fakeOperations) Deactivate(context.Context, string) error { return f.record("deactivate") }
 
-func (f *fakeOperations) Settle(context.Context, string, bool) (chain.SettleEscrowResult, error) {
+func (f *fakeOperations) Settle(_ context.Context, escrowID string, _ bool) (chain.SettleEscrowResult, error) {
+	f.mu.Lock()
+	hold := f.onSettle
+	f.mu.Unlock()
+	if hold != nil {
+		hold(escrowID)
+	}
 	return f.settle, f.record("settle")
 }
 

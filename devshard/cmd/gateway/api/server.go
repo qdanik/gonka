@@ -88,6 +88,11 @@ type ImportDevshardRequest struct {
 	Activate      bool   `json:"activate"`
 }
 
+// SettleDevshardsRequest is the batch settle body. Force stays a query parameter: no body may buy its way past the busy check.
+type SettleDevshardsRequest struct {
+	EscrowIDs []string `json:"escrow_ids"`
+}
+
 // Operations are the lifecycle actions the operator routes trigger. See README.md, "What the server is given".
 type Operations interface {
 	CreateEscrow(ctx context.Context, request CreateEscrowRequest) (chain.CreateEscrowResult, error)
