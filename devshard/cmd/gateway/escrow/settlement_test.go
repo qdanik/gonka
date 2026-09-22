@@ -100,6 +100,15 @@ func holderWithSettlementEnabled(enabled bool) *config.Holder {
 	return config.NewHolder(&cfg)
 }
 
+func holderWithHold(t *testing.T, enabled bool) *config.Holder {
+	t.Helper()
+	gatewayConfig := config.Defaults()
+	gatewayConfig.Rotation.Enabled = true
+	gatewayConfig.Rotation.HoldEnabled = enabled
+	gatewayConfig.Rotation.SettlementEnabled = false
+	return config.NewHolder(&gatewayConfig)
+}
+
 func stringsEqual(got, want []string) bool {
 	if len(got) != len(want) {
 		return false

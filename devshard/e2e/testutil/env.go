@@ -31,6 +31,11 @@ func HostsAnswering(hostCount int, answer string) map[int]map[string]string {
 	return hostsCarrying(hostCount, e2econfig.StubInferenceResponseBodyEnv, answer)
 }
 
+// HostsStalling makes every host receipt and then stall its inference for the given milliseconds.
+func HostsStalling(hostCount int, delayMillis string) map[int]map[string]string {
+	return hostsCarrying(hostCount, e2econfig.StubInferenceDelayMillisEnv, delayMillis)
+}
+
 func hostsCarrying(hostCount int, key, value string) map[int]map[string]string {
 	hosts := make(map[int]map[string]string, hostCount)
 	for index := range hostCount {

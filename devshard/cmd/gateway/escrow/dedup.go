@@ -52,3 +52,37 @@ func (s *markSet) drain() map[string]bool {
 	s.keys = nil
 	return marks
 }
+
+// depletionMarks is markSet with the reason kept, so the tick can tell a nonce cap from a balance floor.
+type depletionMarks struct {
+	mu      sync.Mutex
+	reasons map[string]string
+}
+
+// mark reports whether the escrow was new to this tick; a nonce cap overwrites a balance reason, never the reverse.
+func (s *depletionMarks) mark(escrowID, reason string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.reasons == nil {
+		s.reasons = make(map[string]string)
+	}
+	previous, seen := s.reasons[escrowID]
+	if !seen || (reason == depletionReasonNonceCap && previous != depletionReasonNonceCap) {
+		s.reasons[escrowID] = reason
+	}
+	return !seen
+}
+
+func (s *depletionMarks) forget(escrowID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.reasons, escrowID)
+}
+
+func (s *depletionMarks) drain() map[string]string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	reasons := s.reasons
+	s.reasons = nil
+	return reasons
+}

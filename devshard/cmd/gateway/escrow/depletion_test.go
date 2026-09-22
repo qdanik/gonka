@@ -93,8 +93,8 @@ func TestOnBalanceExhaustedMarksAndDedups(t *testing.T) {
 	manager.OnBalanceExhausted("1", "test")
 	manager.OnBalanceExhausted("2", "test")
 
-	if len(manager.depleted.keys) != 2 || !manager.depleted.keys["1"] || !manager.depleted.keys["2"] {
-		t.Fatalf("depletedMarks = %v, want {1,2} deduped", manager.depleted.keys)
+	if len(manager.depleted.reasons) != 2 || manager.depleted.reasons["1"] != "test" || manager.depleted.reasons["2"] != "test" {
+		t.Fatalf("depletedMarks = %v, want {1,2} deduped", manager.depleted.reasons)
 	}
 }
 
@@ -117,8 +117,8 @@ func TestCheckDepletionReplacesMarkedEscrowThenClearsMark(t *testing.T) {
 	if _, ok := testStore.devshards["999"]; !ok {
 		t.Fatal("replacement escrow 999 not registered")
 	}
-	if len(manager.depleted.keys) != 0 {
-		t.Fatalf("depletedMarks = %v, want cleared after a successful replacement", manager.depleted.keys)
+	if len(manager.depleted.reasons) != 0 {
+		t.Fatalf("depletedMarks = %v, want cleared after a successful replacement", manager.depleted.reasons)
 	}
 	if err := manager.checkDepletion(context.Background(), servingSnapshot(), depletionModels(), devshards); err != nil {
 		t.Fatalf("second checkDepletion() = %v, want nil", err)

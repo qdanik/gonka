@@ -32,10 +32,11 @@ type Manager struct {
 	config           *config.Holder
 	routePrefix      string
 	settlementSource SettlementSource
+	holds            HoldGate
 	settlements      inFlightSet
 	checks           inFlightSet
 
-	depleted markSet
+	depleted depletionMarks
 	missing  markSet
 
 	timeoutSweeper TimeoutSweeper

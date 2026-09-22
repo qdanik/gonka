@@ -5,6 +5,7 @@ import (
 	"sync"
 
 	"devshard/cmd/gateway/scheduler"
+	"devshard/types"
 )
 
 // Candidates satisfies scheduler.escrowSource.
@@ -12,7 +13,7 @@ func (r *Registry) Candidates(model string) []scheduler.Escrow {
 	entries := r.live.Load().byModel[model]
 	candidates := make([]scheduler.Escrow, 0, len(entries))
 	for _, entry := range entries {
-		if !entry.accepting() {
+		if !entry.routable() {
 			continue
 		}
 		candidates = append(candidates, entry.candidate())
@@ -23,10 +24,48 @@ func (r *Registry) Candidates(model string) []scheduler.Escrow {
 // Routable answers for one escrow what Candidates answers for a model, by id rather than by scanning every model.
 func (r *Registry) Routable(escrowID string) (scheduler.Escrow, bool) {
 	entry, known := r.live.Load().byID[escrowID]
+	if !known || !entry.routable() {
+		return scheduler.Escrow{}, false
+	}
+	return entry.candidate(), true
+}
+
+// Held resolves a live, accepting escrow whether or not it is on hold, for the tick that decides when it may resume.
+func (r *Registry) Held(escrowID string) (scheduler.Escrow, bool) {
+	entry, known := r.live.Load().byID[escrowID]
 	if !known || !entry.accepting() {
 		return scheduler.Escrow{}, false
 	}
 	return entry.candidate(), true
+}
+
+func (r *Registry) OnHold(escrowID string) bool {
+	entry, known := r.live.Load().byID[escrowID]
+	return known && entry.onHold.Load()
+}
+
+// SetOnHold touches candidate selection alone: holds, membership, accounting and the session are unchanged.
+func (r *Registry) SetOnHold(escrowID string, onHold bool) {
+	if entry, known := r.live.Load().byID[escrowID]; known {
+		entry.onHold.Store(onHold)
+	}
+}
+
+// Funds reads the money an escrow holds for unresolved nonces; it deep-copies the state, so it is for rare events only.
+func (r *Registry) Funds(escrowID string) (balance, reserved, challenged uint64, known bool) {
+	entry, live := r.live.Load().byID[escrowID]
+	if !live {
+		return 0, 0, 0, false
+	}
+	for _, record := range entry.session.SnapshotState().Inferences {
+		switch record.Status {
+		case types.StatusPending, types.StatusStarted:
+			reserved += record.ReservedCost
+		case types.StatusChallenged:
+			challenged += record.ActualCost
+		}
+	}
+	return entry.session.Balance(), reserved, challenged, true
 }
 
 func (e *escrowEntry) candidate() scheduler.Escrow {
@@ -44,6 +83,7 @@ type EscrowState struct {
 	ID           string
 	Model        string
 	Accepting    bool
+	OnHold       bool
 	InFlight     int64
 	Participants []string
 }
@@ -70,6 +110,7 @@ func stateOf(entry *escrowEntry, draining bool) EscrowState {
 		ID:           entry.id,
 		Model:        entry.model,
 		Accepting:    !draining && entry.accepting(),
+		OnHold:       !draining && entry.onHold.Load(),
 		InFlight:     entry.inFlight.Load(),
 		Participants: slices.Clone(entry.participants),
 	}

@@ -11,7 +11,7 @@ import (
 
 // OnBalanceExhausted marks an escrow for replacement in the next tick, so this hook does no I/O.
 func (m *Manager) OnBalanceExhausted(escrowID, reason string) {
-	if m.depleted.mark(escrowID) && m.narrator != nil {
+	if m.depleted.mark(escrowID, reason) && m.narrator != nil {
 		m.narrator.EscrowMarkedForReplacement(escrowID, reason)
 	}
 }
@@ -25,13 +25,22 @@ func (m *Manager) checkDepletion(ctx context.Context, snapshot chain.PhaseSnapsh
 	for _, model := range models {
 		modelByID[model.ModelID] = model
 	}
+	counts := newModelCounts(devshards)
 
 	var errs []error
 	for _, record := range devshards {
-		if !record.Active || !marked[record.EscrowID] {
+		reason, isMarked := marked[record.EscrowID]
+		if !record.Active || !isMarked {
 			continue
 		}
-		if err := m.replaceDepleted(ctx, record, modelByID, snapshot); err != nil {
+		model, replaceable := modelByID[record.Model]
+		var err error
+		if m.holdApplies(replaceable) {
+			err = m.holdOrPark(ctx, record, reason, model, snapshot, counts)
+		} else {
+			err = m.replaceDepleted(ctx, record, reason, model, replaceable, snapshot)
+		}
+		if err != nil {
 			errs = append(errs, err)
 		}
 	}
@@ -39,17 +48,16 @@ func (m *Manager) checkDepletion(ctx context.Context, snapshot chain.PhaseSnapsh
 }
 
 // replaceDepleted parks an exhausted escrow, then makes one attempt at replacing it. See README.md, "Replacing a depleted escrow".
-func (m *Manager) replaceDepleted(ctx context.Context, record store.DevshardRecord, modelByID map[string]ModelConfig, snapshot chain.PhaseSnapshot) error {
-	model, replaceable := modelByID[record.Model]
+func (m *Manager) replaceDepleted(ctx context.Context, record store.DevshardRecord, reason string, model ModelConfig, replaceable bool, snapshot chain.PhaseSnapshot) error {
 	// An escrow created under an epoch-less snapshot is counted by no epoch at all, so the next bridge funds a full set on top of it.
 	if replaceable && snapshotHasNoEpochYet(snapshot) {
-		m.depleted.mark(record.EscrowID)
+		m.depleted.mark(record.EscrowID, reason)
 		return fmt.Errorf("replacing depleted escrow %s: the chain snapshot carries no epoch yet", record.EscrowID)
 	}
 	parked, err := m.parkIfServing(ctx, record.EscrowID)
 	if !parked {
 		if err != nil {
-			m.depleted.mark(record.EscrowID)
+			m.depleted.mark(record.EscrowID, reason)
 		}
 		return err
 	}

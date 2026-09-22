@@ -320,6 +320,25 @@ func TestThePerEscrowModelListIsScopedToThatEscrow(t *testing.T) {
 	}
 }
 
+// An escrow on hold is still the operator's, so a pin to it is a wait, not a wrong address.
+func TestAPinnedChatToAnEscrowOnHoldIsUnavailable(t *testing.T) {
+	live := newHarness(t)
+	live.escrows.onHold = map[string]bool{"8": true}
+
+	held := live.request(t, http.MethodPost, "/devshard/8/v1/chat/completions", chatBody, nil)
+	unknown := live.request(t, http.MethodPost, "/devshard/404/v1/chat/completions", chatBody, nil)
+
+	if held.Code != http.StatusServiceUnavailable {
+		t.Errorf("pin to an escrow on hold: got %d (%s), want 503", held.Code, held.Body.String())
+	}
+	if unknown.Code != http.StatusNotFound {
+		t.Errorf("pin to an unknown escrow: got %d (%s), want 404", unknown.Code, unknown.Body.String())
+	}
+	if got := live.inference.runs.Load(); got != 0 {
+		t.Errorf("races started: got %d, want 0", got)
+	}
+}
+
 func TestStatusReportsTheAdmissionDecisionNotTheRawChainFlag(t *testing.T) {
 	live := newHarness(t)
 	live.snapshots.snapshot.RequestsBlocked = true

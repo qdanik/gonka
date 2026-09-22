@@ -103,7 +103,7 @@ Each is an ordering whose reversal produces a plausible-looking program that los
 | Park before the settlement reconciliation, not after | `escrow/settlement.go`, `settle` | the row is deleted while the escrow is still routable, and nothing can un-publish it |
 | `settlement_pending` is cleared only after the broadcast is confirmed | `escrow/settlement.go`, `settle` | a settlement that failed looks completed |
 | The row is deleted only after settlement succeeds; with settlement off the escrow is parked, never deleted | `escrow/settlement.go`, `retire` | the row names the env variable of the settling key — delete it and the funds are unrecoverable |
-| A depleted escrow is parked before its replacement is created, and only the call that parked it creates one | `escrow/depletion.go`, `replaceDepleted`; `store/devshards.go`, `ParkForSettlementIfActive` | every tick that still finds the escrow serving after a failed create broadcasts another replacement |
+| A depleted escrow is parked or put on hold before its replacement is created, and only the call that moved it creates one | `escrow/depletion.go`, `replaceDepleted`; `escrow/hold.go`, `holdOrPark`; `store/devshards.go`, `ParkForSettlementIfActive`, `PutOnHoldIfServing` | every tick that still finds the escrow serving after a failed create broadcasts another replacement |
 | A zero-row UPDATE or DELETE is an error, never a silent success — except `ParkForSettlementIfActive`, for which zero rows is an answer, not an error | `store/devshards.go`, `requireOneRow` | state diverges from what the caller believes it wrote |
 | Private keys are never persisted — only the name of the variable holding one | `store/devshards.go`; `api/errors.go`, `ErrPrivateKeyEnvRequired` | a key reaches the row, the logs, and every operator in between |
 
@@ -122,7 +122,7 @@ Neither default is right everywhere. What matters is that each is decided rather
 **Fail open** — carry on rather than break a working system:
 
 - A failed chain poll republishes the previous snapshot with `LastError` set rather than an empty one.
-- `MaxNonce == 0` means "not fetched", not "no limit": the scheduler falls back to `fallbackNonceCeiling` (19 800) rather than disabling the cap, and reports no escrow exhausted against it, because the fallback is not the hosts' cap and a reported escrow is parked for good.
+- `MaxNonce == 0` means "not fetched", not "no limit": the scheduler falls back to `fallbackNonceCeiling` (19 800) rather than disabling the cap, and reports no escrow exhausted against it, because the fallback is not the hosts' cap and a reported escrow is parked or put on hold.
 - A nil preserved set means "not loaded yet", so everyone counts as preserved. Reading absent data as "nobody is preserved" would ghost every nonce the escrow owns.
 - With no weights reported at all, escrow scoring falls back to availability-filtered membership share instead of zero, which would reject every request during the boot window. Because that fallback serves requests correctly and *silently*, it publishes a gauge derived from the same two predicates the branch reads, so the signal cannot drift from the behaviour it reports.
 

@@ -73,6 +73,9 @@ Signing keys are addressed **by the name of the variable that holds them**, neve
 | `GATEWAY_DEFAULT_MAX_TOKENS` / `GATEWAY_MAX_TOKENS_CAP` | from `filters` | the output budget a request gets and may ask for |
 | `GATEWAY_ROTATION_ENABLED` | false | whether the epoch bridge creates and retires escrows |
 | `GATEWAY_ROTATION_SETTLEMENT_ENABLED` | false | whether retirement settles or only parks |
+| `GATEWAY_ROTATION_HOLD_ENABLED` | true | a balance-depleted escrow goes on hold instead of being parked; false is the rollback to parking |
+| `GATEWAY_ROTATION_HOLD_MAX_PER_MODEL` | 1 | escrows one model may keep on hold; past it a depleted escrow is parked |
+| `GATEWAY_ROTATION_HOLD_RESUME_ANSWERS` | 32 | capped answers an escrow's balance must cover before it leaves hold |
 | `GATEWAY_ROTATION_PRE_POC_BLOCKS` | 300 | how early the bridge starts |
 | `GATEWAY_WARM_NEW_ESCROWS` | true | whether a new escrow is taught to its group before serving |
 | `GATEWAY_CHAIN_SNAPSHOT_MAX_AGE_SECONDS` | 60 | how stale the chain snapshot may be before requests are refused 503; `0` disables the gate |

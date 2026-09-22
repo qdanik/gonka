@@ -14,7 +14,7 @@ import (
 // assertion runs against the served body, not the view builders, so removing the conversion fails it.
 func TestAdminStateSpellsStorageRowsInSnakeCase(t *testing.T) {
 	live := newHarness(t)
-	live.control.devshards = []store.DevshardRecord{{EscrowID: "47452", PrivateKeyEnv: "GATEWAY_PRIVATE_KEY"}}
+	live.control.devshards = []store.DevshardRecord{{EscrowID: "47452", PrivateKeyEnv: "GATEWAY_PRIVATE_KEY", OnHold: true}}
 	live.control.rotation = []store.RotationStatus{{Model: "model-a", Stage: "prepared"}}
 
 	body := live.request(t, http.MethodGet, "/v1/admin/state", "", adminHeaders()).Body.String()
@@ -23,13 +23,14 @@ func TestAdminStateSpellsStorageRowsInSnakeCase(t *testing.T) {
 		`"escrow_id":"47452"`,
 		`"private_key_env":"GATEWAY_PRIVATE_KEY"`,
 		`"rotation_epoch":0`,
+		`"on_hold":true`,
 		`"stage":"prepared"`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("state body %s is missing %s", body, want)
 		}
 	}
-	for _, goFieldName := range []string{"EscrowID", "PrivateKeyEnv", "RotationEpoch", "Stage"} {
+	for _, goFieldName := range []string{"EscrowID", "PrivateKeyEnv", "RotationEpoch", "OnHold", "Stage"} {
 		if strings.Contains(body, goFieldName) {
 			t.Fatalf("state body %s still carries the Go field name %s", body, goFieldName)
 		}

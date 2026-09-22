@@ -36,6 +36,7 @@ type fakeRegistry struct {
 	escrows  []scheduler.Escrow
 	sessions map[string]registry.EscrowSession
 	busy     map[string]bool
+	onHold   map[string]bool
 }
 
 func (f *fakeRegistry) Serves(model string) bool { return slices.Contains(f.models, model) }
@@ -88,6 +89,8 @@ func (f *fakeRegistry) Inspect(_ context.Context, escrowID string) (registry.Esc
 }
 
 func (f *fakeRegistry) IsBusy(escrowID string) bool { return f.busy[escrowID] }
+
+func (f *fakeRegistry) OnHold(escrowID string) bool { return f.onHold[escrowID] }
 
 // fakeEngine's ledger stands in for the real engine's recording point, which runs before Run returns.
 type fakeEngine struct {

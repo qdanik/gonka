@@ -47,6 +47,9 @@ type Values struct {
 	MaxBufferedResponseBytes  *int64
 	WarmNewEscrows            *bool
 	RotationSettlementEnabled *bool
+	RotationHoldEnabled       *bool
+	RotationHoldMaxPerModel   *int64
+	RotationHoldResumeAnswers *int64
 	RotationModelsJSON        *string
 
 	ChatCacheMaxBytes *int64
@@ -273,6 +276,9 @@ func Load() (Values, error) {
 	readInt("GATEWAY_MAX_BUFFERED_RESPONSE_BYTES", &values.MaxBufferedResponseBytes)
 	readBool("GATEWAY_WARM_NEW_ESCROWS", &values.WarmNewEscrows)
 	readBool("GATEWAY_ROTATION_SETTLEMENT_ENABLED", &values.RotationSettlementEnabled)
+	readBool("GATEWAY_ROTATION_HOLD_ENABLED", &values.RotationHoldEnabled)
+	readInt("GATEWAY_ROTATION_HOLD_MAX_PER_MODEL", &values.RotationHoldMaxPerModel)
+	readInt("GATEWAY_ROTATION_HOLD_RESUME_ANSWERS", &values.RotationHoldResumeAnswers)
 	readString("GATEWAY_ROTATION_MODELS_JSON", &values.RotationModelsJSON)
 
 	readInt("GATEWAY_CHAT_CACHE_MAX_BYTES", &values.ChatCacheMaxBytes)

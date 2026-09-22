@@ -41,7 +41,7 @@ func (m *Manager) ensureToTarget(ctx context.Context, role string, target int, m
 func countActive(devshards []store.DevshardRecord, modelID, role string, epoch int64) int {
 	count := 0
 	for _, record := range devshards {
-		if record.Active && record.RotationRole == role && record.RotationEpoch == epoch && record.Model == modelID {
+		if record.Active && !record.OnHold && record.RotationRole == role && record.RotationEpoch == epoch && record.Model == modelID {
 			count++
 		}
 	}

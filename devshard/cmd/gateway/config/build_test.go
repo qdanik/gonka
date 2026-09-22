@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -94,6 +95,42 @@ func TestBuildClonesOverridesModelLimits(t *testing.T) {
 	}
 	if _, present := configuration.Limits.ModelLimits["model-b"]; present {
 		t.Fatal("Limits.ModelLimits gained a key added to the source map after Build — map was aliased, not cloned")
+	}
+}
+
+func TestTheHoldIsOnByDefault(t *testing.T) {
+	configuration, err := Build(env.Values{}, Overrides{})
+	if err != nil {
+		t.Fatalf("Build() = %v, want nil", err)
+	}
+	rotation := configuration.Rotation
+	if !rotation.HoldEnabled || rotation.HoldMaxPerModel != 1 || rotation.HoldResumeAnswers != 32 {
+		t.Fatalf("rotation = %+v, want hold on, 1 per model, 32 answers", rotation)
+	}
+}
+
+func TestAnOverrideTurnsTheHoldOff(t *testing.T) {
+	disabled := false
+	configuration, err := Build(env.Values{}, Overrides{RotationHoldEnabled: &disabled})
+	if err != nil {
+		t.Fatalf("Build() = %v, want nil", err)
+	}
+	if configuration.Rotation.HoldEnabled {
+		t.Fatal("HoldEnabled = true, want the override to turn it off")
+	}
+}
+
+func TestHoldSettingsAreValidated(t *testing.T) {
+	negative, zero := int64(-1), int64(0)
+	for name, overrides := range map[string]Overrides{
+		"negative cap":       {RotationHoldMaxPerModel: &negative},
+		"no resume headroom": {RotationHoldResumeAnswers: &zero},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := Build(env.Values{}, overrides); !errors.Is(err, ErrInvalid) {
+				t.Fatalf("Build() = %v, want ErrInvalid", err)
+			}
+		})
 	}
 }
 

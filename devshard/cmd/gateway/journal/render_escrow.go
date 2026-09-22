@@ -104,6 +104,30 @@ func (j *Journal) EscrowDepletedWithoutReplacement(escrowID, model string) {
 	})
 }
 
+// EscrowPutOnHold renders a depleted escrow kept for its held money; an empty replacement means the model was not short.
+func (j *Journal) EscrowPutOnHold(escrowID, model, reason string, balance, reserved, challenged uint64, replacementID string) {
+	j.emitLine(KindEscrowTransition, func(lines logSink) {
+		lines.Warn("escrow put on hold",
+			logkey.Escrow, escrowID, logkey.Model, model, logkey.Reason, reason,
+			logkey.Balance, balance, logkey.Reserved, reserved, logkey.Challenged, challenged,
+			logkey.Replacement, replacementID)
+	})
+}
+
+// EscrowResumed renders an escrow on hold whose money came back.
+func (j *Journal) EscrowResumed(escrowID string, balance uint64) {
+	j.emitLine(KindEscrowTransition, func(lines logSink) {
+		lines.Info("escrow resumed from hold", logkey.Escrow, escrowID, logkey.Balance, balance)
+	})
+}
+
+// EscrowHoldEnded renders a hold the tick ended by parking the escrow instead of resuming it.
+func (j *Journal) EscrowHoldEnded(escrowID, reason string) {
+	j.emitLine(KindEscrowTransition, func(lines logSink) {
+		lines.Info("escrow hold ended, parked for settlement", logkey.Escrow, escrowID, logkey.Reason, reason)
+	})
+}
+
 // RotationSkipped renders a rotation that created nothing because the network serves no such model.
 func (j *Journal) RotationSkipped(model, role string, epoch uint64) {
 	j.emitLine(KindEscrowTransition, func(lines logSink) {

@@ -284,6 +284,26 @@ func TestEveryRotationKnobIsReachableFromTheEnvironment(t *testing.T) {
 	}
 }
 
+func TestTheHoldKnobsReadTheirVariables(t *testing.T) {
+	t.Setenv("GATEWAY_ROTATION_HOLD_ENABLED", "false")
+	t.Setenv("GATEWAY_ROTATION_HOLD_MAX_PER_MODEL", "3")
+	t.Setenv("GATEWAY_ROTATION_HOLD_RESUME_ANSWERS", "64")
+
+	values, err := Load()
+	if err != nil {
+		t.Fatalf("Load() = %v, want nil", err)
+	}
+	if values.RotationHoldEnabled == nil || *values.RotationHoldEnabled {
+		t.Fatalf("RotationHoldEnabled = %v, want false from the environment", values.RotationHoldEnabled)
+	}
+	if values.RotationHoldMaxPerModel == nil || *values.RotationHoldMaxPerModel != 3 {
+		t.Fatalf("RotationHoldMaxPerModel = %v, want 3", values.RotationHoldMaxPerModel)
+	}
+	if values.RotationHoldResumeAnswers == nil || *values.RotationHoldResumeAnswers != 64 {
+		t.Fatalf("RotationHoldResumeAnswers = %v, want 64", values.RotationHoldResumeAnswers)
+	}
+}
+
 // An escrow records the name of its key variable when it is created, so renaming the variable in the
 // deployment leaves the stored record pointing at a name nothing sets and the escrow goes inactive.
 func TestASigningKeyFallsBackToItsRenamedVariable(t *testing.T) {

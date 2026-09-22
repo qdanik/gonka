@@ -19,15 +19,18 @@ Every ordering rule below follows from that:
 
 ## The states a row can be in
 
-The state is not a column; it is the combination of four:
+The state is not a column; it is the combination of five:
 
-| `active` | `settlement_pending` | `settle_tx_hash` | Means |
-| --- | --- | --- | --- |
-| true | false | `""` | serving |
-| false | true | `""` | parked: out of routing, waiting to settle |
-| false | true | set | settled, broadcast not yet confirmed |
-| row deleted | — | — | settled and confirmed; the escrow is finished |
-| false | false | `""` | deactivated by hand, or gone from chain |
+| `active` | `on_hold` | `settlement_pending` | `settle_tx_hash` | Means |
+| --- | --- | --- | --- | --- |
+| true | false | false | `""` | serving |
+| true | true | false | `""` | on hold: still published, waiting for its held money, off the candidate list |
+| false | false | true | `""` | parked: out of routing, waiting to settle |
+| false | false | true | set | settled, broadcast not yet confirmed |
+| row deleted | — | — | — | settled and confirmed; the escrow is finished |
+| false | false | false | `""` | deactivated by hand, or gone from chain |
+
+`on_hold` means something only while `active=1`; every statement that clears `active` clears it too, so `active=0, on_hold=1` is never written (`store.DevshardRecord.OnHold`, `store/devshards.go`). See [`routing.md`](./routing.md), "An escrow on hold", and [`escrow/README.md`](../escrow/README.md), "An escrow on hold", for what holds it there and what brings it back.
 
 `rotation_role` (`regular` / `temp`) and `rotation_epoch` say which set the escrow belongs to; `route_prefix` is the URL path this escrow's hosts serve on, falling back to the gateway's own prefix when empty.
 
@@ -36,8 +39,12 @@ stateDiagram-v2
     [*] --> committed: row + intent written
     committed --> serving: create tx lands (reconcile)
     committed --> [*]: tx can no longer land
-    serving --> parked: retire / depleted / bridge swap
+    serving --> onHold: depleted, hold enabled
+    onHold --> serving: balance recovers, or Activate
+    onHold --> parked: rotation off / epoch passed / nonce cap
+    serving --> parked: retire / depleted, hold not applicable / bridge swap
     serving --> inactive: gone from chain
+    onHold --> inactive: gone from chain, or Deactivate
     parked --> broadcast: settle tx sent
     broadcast --> [*]: confirmed, row deleted
     broadcast --> parked: rejected, or past its TTL
@@ -45,7 +52,7 @@ stateDiagram-v2
 
 ## The tick
 
-`escrow/manager.go`, `tick`, every **15 s** (`TickInterval`), single-threaded per process. Order matters, and the first five steps run **whatever `rotation.enabled` says**:
+`escrow/manager.go`, `tick`, every **15 s** (`TickInterval`), single-threaded per process. Order matters, and the first six steps run **whatever `rotation.enabled` says**:
 
 | # | Step | Runs regardless of the toggle because |
 | --- | --- | --- |
@@ -53,8 +60,9 @@ stateDiagram-v2
 | 2 | `settlePending` | a parked escrow's row is the only record of its key; nothing else picks it up |
 | 3 | `checkMissing` | an escrow gone from chain must stop taking traffic |
 | 4 | `sweepTimeouts` | a nonce the chain still settles is owed a vote whether or not rotation is on |
-| 5 | `checkDepletion` | so must an empty one — only *creating its replacement* is rotation's business |
-| 6 | `prepareBridge` / `finishBridge` | rotation proper; skipped when the toggle is off |
+| 5 | `resumeHeld` | every row on hold is re-synced into the registry, resumed or parked, before this tick's own depletion pass runs against it — whatever the toggle says |
+| 6 | `checkDepletion` | so must an empty one — only *creating its replacement* is rotation's business |
+| 7 | `prepareBridge` / `finishBridge` | rotation proper; skipped when the toggle is off |
 
 Every step returns its error into an `errors.Join`; one failing model or escrow never stops the others. `Stop()` cancels the context and waits for the tick in flight, so shutdown never races a half-finished rotation.
 
@@ -106,18 +114,30 @@ Failures are recorded per model in `rotation_status` (`stage`, `epoch`, `create_
 
 ## Depletion
 
-A depleted escrow is worse than a dead one: its in-flight count is low precisely because every request fails, so the load score **prefers** it. `OnBalanceExhausted` marks it (no I/O — the request path never reaches the chain), and the next tick's `checkDepletion` acts:
+A depleted escrow is worse than a dead one: its in-flight count is low precisely because every request fails, so the load score **prefers** it. `OnBalanceExhausted` marks it (no I/O — the request path never reaches the chain), and the next tick's `checkDepletion` acts, choosing one of two paths per marked escrow (`escrow/depletion.go`, `escrow/hold.go`):
 
-- the depleted escrow is **parked first** — inactive and settlement-pending in one statement that matches only a serving row, then out of routing — and only the call that moved the row creates a replacement, so neither a later tick nor a restart creates a second one;
+- **hold disabled, rotation off, or the model not replaceable** — `replaceDepleted` runs: the same park-then-replace path rotation always ran, described below.
+- **otherwise** — `holdOrPark` decides among four outcomes:
+  1. the escrow is already on hold — nothing to do this tick, another mark already moved it;
+  2. the reason is the nonce cap, or the model already holds `hold_max_per_model` rows on hold — parked, the same as the disabled path, because nothing about a spent nonce budget comes back;
+  3. the escrow's creation epoch — the row's `rotation_epoch`, or the chain's escrow epoch when the row has none — is older than the current one or cannot be resolved — parked, never held, so no hold can outlive the chain's settlement window;
+  4. otherwise — put on hold (`PutOnHoldIfServing`), then judged for a replacement by the count rule below, not by the always-replace rule the parked path uses.
+
+Parking, in either path, is inactive and settlement-pending in one statement that matches only a serving row, then out of routing — and only the call that moved the row creates a replacement, so neither a later tick nor a restart creates a second one. Putting on hold is the same shape, one statement that matches only a serving row not already on hold, and only the call that moved it decides on a replacement.
+
+**The count rule decides who gets a replacement**, whether the escrow was parked or put on hold: a replacement is created only when the model has fewer than `TargetCount` **serving** escrows — `active=1, on_hold=0`, any role — once this one has left them (`replaceIfShort`, `escrow/hold.go`). An escrow that resumed from hold is surplus over the target, so when it depletes again the count is already full and no second replacement is funded; the same count repairs a replacement lost to a crash, at the model's next depletion.
+
 - the replacement gets **one attempt**: a failed create, including one that broadcast and never confirmed or one a shutdown cut short after the park, is not retried — a create that did land is still registered by `reconcile`; the model runs one escrow short until the next rotation, and if the escrow was the model's last active temp during proof-of-compute, `finishBridge` finds no temp to finish and the model serves nothing until the next epoch's bridge;
 - a failure to close the retired escrow's session after the park still counts as parked — routing has already stopped — so the create still runs, and the error is surfaced;
 - the replacement is always `regular` — inheriting `temp` would hand the next bridge an escrow to retire instead of lasting coverage;
 - with no model configured for replacement, the escrow is parked anyway, with a warning;
 - with settlement on, the parked escrow settles through `settlePending` on a later tick, like any other parked row;
-- a park that fails re-marks the escrow, so the next tick tries again, and nothing is created meanwhile;
-- a snapshot with no epoch yet (`EpochIndex == 0` or `BlockHeight == 0`) **refuses** the replacement before anything is parked — an escrow created under it belongs to no epoch, and the next bridge would fund a full set on top of it; the escrow stays marked and serving for the next tick.
+- a park or a hold that fails re-marks the escrow, so the next tick tries again, and nothing is created meanwhile;
+- a snapshot with no epoch yet (`EpochIndex == 0` or `BlockHeight == 0`) **refuses** the replacement before anything is parked or held — an escrow created under it belongs to no epoch, and the next bridge would fund a full set on top of it; the escrow stays marked and serving for the next tick.
 
 With rotation off, `checkDepletion` parks the drained escrow but creates no replacement. If the operator still offers the model (`limits.model_access` or `limits.model_limits` names it), `api/routes.go`'s `routableModel` answers `503` with `Retry-After` for that model until an operator acts, rather than the `400` a model nobody offers gets.
+
+An escrow put on hold rather than parked stays a different lifecycle from here on: see [`routing.md`](./routing.md), "An escrow on hold", and [`escrow/README.md`](../escrow/README.md), "An escrow on hold".
 
 ## Gone from chain
 
@@ -140,7 +160,7 @@ graph TD
     B -->|no| F["Finalize → BuildSettlement → broadcast → clear pending"]
 ```
 
-**Park comes before the reconciliation.** The caller deletes the row on success, and a row that is gone can no longer take the escrow out of routing — an escrow put back into service by hand would otherwise keep serving with nothing left to un-publish it. For the same reason `Activate` refuses a row that is parked or carries a settle hash (`ErrDevshardNotActivatable`, HTTP 409): serving from it again spends nonces the settlement does not account for.
+**Park comes before the reconciliation.** The caller deletes the row on success, and a row that is gone can no longer take the escrow out of routing — an escrow put back into service by hand would otherwise keep serving with nothing left to un-publish it. For the same reason `Activate`, and a re-registration through `register` (`POST /v1/admin/devshards`, `/import`), both refuse a row that is parked or carries a settle hash (`ErrDevshardNotActivatable`, HTTP 409): serving from it again spends nonces the settlement does not account for. `register` does not refuse a row on hold — the upsert it runs never puts a row on hold or resumes it, so an active row keeps whatever the flag already was; only a re-registration that writes `active = 0` clears `on_hold` with it.
 
 **`alreadySettled`** decides whether a previous broadcast counts, using the hash and the `settle_tx_at` stamp:
 
@@ -190,6 +210,7 @@ Mainnet height is the escrow's logical clock: every host and the sequencer keep 
 | the same escrow settles every tick and never clears | the broadcast is landing but `settle_tx_hash` is not being written — check the store |
 | rotation logs "the network serves no such model" | the chain's snapshot lists no host for that model; the escrow is skipped |
 | a bridge creates nothing and retires nothing | the create breaker is gated after repeated failures; look for the earlier create error |
+| an escrow's whole `Amount` is paid out to the group's slots instead of settling normally | it stayed unsettled past the chain's window — an escrow on hold must settle inside its epoch or epoch+1 exactly like a serving one (`inference-chain/x/inference/keeper/msg_server_settle_devshard_escrow.go:49`), or `DevshardPruningThreshold` (2) epochs after the one that funded it, the chain splits its entire balance across the group instead of paying by settlement; being on hold does not extend the window (`inference-chain/x/inference/keeper/devshard_pruning.go:9-25`) |
 
 ## Where to change what
 
@@ -200,5 +221,5 @@ Mainnet height is the escrow's logical clock: every host and the sequencer keep 
 | how many parked escrows settle per tick | `escrow/settlement.go`, `pendingSettleBudget` |
 | how hard a failing create is throttled | `escrow/breaker.go`, `escalatedCooldownTicks` |
 | when the bridge starts | `rotation.pre_poc_blocks`, read in `escrow/manager.go`, `tick` |
-| how many escrows a model gets | `rotation.models_json`: `temp_count`, `target_count` |
+| how many escrows a model gets | `rotation.models_json`: `temp_count`, `target_count` (1 when absent; an explicit value below 1 is rejected, `escrow/models.go`) |
 | what makes an escrow routable | `registry/registry.go`, `Add` / `unpublish` |

@@ -26,6 +26,8 @@ type escrowStore interface {
 	SetDevshardSettlementPending(ctx context.Context, escrowID string, pending bool) error
 	ParkForSettlement(ctx context.Context, escrowID string) error
 	ParkForSettlementIfActive(ctx context.Context, escrowID string) (bool, error)
+	PutOnHoldIfServing(ctx context.Context, escrowID string) (bool, error)
+	ResumeFromHold(ctx context.Context, escrowID string) (bool, error)
 	DevshardSettleTxHash(ctx context.Context, escrowID string) (string, time.Time, error)
 	SetDevshardRotationRole(ctx context.Context, escrowID, role string) error
 	SetDevshardSettleTxHash(ctx context.Context, escrowID, txHash string) error
@@ -66,6 +68,13 @@ type SettlementSource interface {
 	BuildSettlement(ctx context.Context, escrowID string) (chain.SettlementInput, error)
 }
 
+// HoldGate is the registry and scheduler side of an escrow on hold; the composition root satisfies it. See README.md, "An escrow on hold".
+type HoldGate interface {
+	SetOnHold(escrowID string, onHold bool)
+	Verdict(escrowID string, answers uint64) HoldVerdict
+	Funds(escrowID string) (balance, reserved, challenged uint64, known bool)
+}
+
 // lifecycleNarrator is satisfied by *journal.Journal; each method names one transition an operator reads the log for. See README.md, "What this package expects of others".
 type lifecycleNarrator interface {
 	EscrowCreated(escrowID, model, role string, epoch uint64, txHash string)
@@ -79,6 +88,9 @@ type lifecycleNarrator interface {
 	BridgePrepared(model string, epoch uint64, created, retired int)
 	BridgeFinished(model string, epoch uint64, created, retired int)
 	EscrowParked(escrowID string)
+	EscrowPutOnHold(escrowID, model, reason string, balance, reserved, challenged uint64, replacementID string)
+	EscrowResumed(escrowID string, balance uint64)
+	EscrowHoldEnded(escrowID, reason string)
 	EscrowSettled(escrowID, model, txHash, settler string)
 	SettlementReconciled(escrowID, txHash string)
 	SettledRecordDropped(escrowID string)

@@ -122,6 +122,7 @@ type devshardView struct {
 	RotationRole      string `json:"rotation_role"`
 	RotationEpoch     int64  `json:"rotation_epoch"`
 	SettlementPending bool   `json:"settlement_pending"`
+	OnHold            bool   `json:"on_hold"`
 	SettleTxHash      string `json:"settle_tx_hash,omitempty"`
 }
 
@@ -146,6 +147,7 @@ func devshardViews(records []store.DevshardRecord) []devshardView {
 			RotationRole:      record.RotationRole,
 			RotationEpoch:     record.RotationEpoch,
 			SettlementPending: record.SettlementPending,
+			OnHold:            record.OnHold,
 			SettleTxHash:      record.SettleTxHash,
 		})
 	}

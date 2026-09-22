@@ -93,7 +93,7 @@ func (s *Scheduler) pickEscrow(profile RequestProfile, snapshot chain.PhaseSnaps
 	}
 }
 
-// reportExhausted passes over the fallback ceiling: it is not the hosts' cap, and a reported escrow is parked for good. See routing.md, "Picking an escrow".
+// reportExhausted passes over the fallback ceiling: it is not the hosts' cap, and a reported escrow is parked or put on hold. See routing.md, "Picking an escrow".
 func (s *Scheduler) reportExhausted(escrowID, reason string) {
 	if s.onEscrowExhausted == nil || reason == exhaustionFallbackNonceCeiling {
 		return
@@ -179,6 +179,27 @@ func belowBalanceFloor(candidate Escrow, reserveTokens uint64) bool {
 		return true
 	}
 	return candidate.Session.Balance() < floor
+}
+
+// ResumeReadiness prices an escrow on hold the way a pick would, with headroom so it does not flap at the floor; nonceSpent means it can never serve again. See routing.md, "An escrow on hold".
+func (s *Scheduler) ResumeReadiness(candidate Escrow, answers uint64) (ready, nonceSpent bool) {
+	reserve := s.retirementReserve()
+	maxNonce := s.snapshots.Snapshot().MaxNonce
+	if nonceCeilingReason(candidate, maxNonce) == exhaustionNonceCap {
+		return false, true
+	}
+	if candidate.Session == nil || reserve == 0 || exhaustionReason(candidate, maxNonce, reserve) != "" {
+		return false, false
+	}
+	price, priced := safeMul(reserve, candidate.Session.TokenPrice())
+	if !priced {
+		return false, false
+	}
+	floor, priced := safeMul(price, answers)
+	if !priced {
+		return false, false
+	}
+	return candidate.Session.Balance() >= floor, false
 }
 
 // safeMul reports the product only when it did not wrap: an unaffordable price must not read as a small one.

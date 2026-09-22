@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -145,6 +146,9 @@ func (o *operations) register(ctx context.Context, record store.DevshardRecord) 
 	if _, err := env.PrivateKey(record.PrivateKeyEnv); err != nil {
 		return err
 	}
+	if err := o.refuseParked(ctx, record.EscrowID); err != nil {
+		return err
+	}
 	if err := o.store.UpsertDevshard(ctx, record); err != nil {
 		return err
 	}
@@ -154,19 +158,42 @@ func (o *operations) register(ctx context.Context, record store.DevshardRecord) 
 	return o.escrows.Add(ctx, record.EscrowID, record.Model)
 }
 
+// refuseParked keeps a re-registration from routing a parked escrow or erasing the hash of its settle.
+func (o *operations) refuseParked(ctx context.Context, id string) error {
+	existing, err := findDevshard(ctx, o.store, id)
+	if errors.Is(err, escrow.ErrUnknownEscrow) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	return refuseParkedRecord(existing)
+}
+
+// A parked escrow's balance is already committed: serving spends nonces the settlement misses.
+func refuseParkedRecord(record store.DevshardRecord) error {
+	if record.SettlementPending || record.SettleTxHash != "" {
+		return fmt.Errorf("%w: escrow %s is parked for settlement", api.ErrDevshardNotActivatable, record.EscrowID)
+	}
+	return nil
+}
+
 func (o *operations) Activate(ctx context.Context, id string) error {
 	record, err := findDevshard(ctx, o.store, id)
 	if err != nil {
 		return err
 	}
-	// A parked escrow's balance is already committed: serving spends nonces the settlement misses.
-	if record.SettlementPending || record.SettleTxHash != "" {
-		return fmt.Errorf("%w: escrow %s is parked for settlement", api.ErrDevshardNotActivatable, id)
+	if err := refuseParkedRecord(record); err != nil {
+		return err
 	}
 	if err := o.store.SetDevshardActive(ctx, id, true); err != nil {
 		return err
 	}
-	return o.escrows.Add(ctx, id, record.Model)
+	if err := o.escrows.Add(ctx, id, record.Model); err != nil {
+		return err
+	}
+	o.escrows.SetOnHold(id, false)
+	return nil
 }
 
 // Deactivate and Settle stop routing before the row changes. See operations.md, "What is exposed".

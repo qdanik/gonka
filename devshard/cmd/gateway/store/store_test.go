@@ -421,3 +421,186 @@ func TestEveryConnectionCarriesThePragmas(t *testing.T) {
 		}
 	}
 }
+
+func listOnlyDevshard(t *testing.T, gatewayStore *Store) DevshardRecord {
+	t.Helper()
+	records, err := gatewayStore.ListDevshards(context.Background())
+	if err != nil {
+		t.Fatalf("ListDevshards: %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("records = %d, want 1", len(records))
+	}
+	return records[0]
+}
+
+func servingDevshard(t *testing.T, gatewayStore *Store) {
+	t.Helper()
+	if err := gatewayStore.UpsertDevshard(context.Background(), DevshardRecord{EscrowID: "7", Model: "qwen", Active: true}); err != nil {
+		t.Fatalf("UpsertDevshard: %v", err)
+	}
+}
+
+func TestPuttingAServingEscrowOnHoldKeepsItActive(t *testing.T) {
+	gatewayStore := openTestStore(t)
+	servingDevshard(t, gatewayStore)
+
+	held, err := gatewayStore.PutOnHoldIfServing(context.Background(), "7")
+
+	if err != nil || !held {
+		t.Fatalf("PutOnHoldIfServing = %v, %v; want true, nil", held, err)
+	}
+	record := listOnlyDevshard(t, gatewayStore)
+	if !record.Active || !record.OnHold || record.SettlementPending {
+		t.Fatalf("record = %+v, want active, on hold, not pending", record)
+	}
+}
+
+func TestPuttingOnHoldMatchesOnce(t *testing.T) {
+	gatewayStore := openTestStore(t)
+	servingDevshard(t, gatewayStore)
+	if _, err := gatewayStore.PutOnHoldIfServing(context.Background(), "7"); err != nil {
+		t.Fatalf("first PutOnHoldIfServing: %v", err)
+	}
+
+	held, err := gatewayStore.PutOnHoldIfServing(context.Background(), "7")
+
+	if err != nil || held {
+		t.Fatalf("second PutOnHoldIfServing = %v, %v; want false, nil", held, err)
+	}
+}
+
+func TestAnInactiveEscrowCannotBePutOnHold(t *testing.T) {
+	gatewayStore := openTestStore(t)
+	if err := gatewayStore.UpsertDevshard(context.Background(), DevshardRecord{EscrowID: "7", Model: "qwen", Active: false}); err != nil {
+		t.Fatalf("UpsertDevshard: %v", err)
+	}
+
+	held, err := gatewayStore.PutOnHoldIfServing(context.Background(), "7")
+
+	if err != nil || held {
+		t.Fatalf("PutOnHoldIfServing = %v, %v; want false, nil", held, err)
+	}
+}
+
+func TestResumingMatchesOnlyAnActiveEscrowOnHold(t *testing.T) {
+	gatewayStore := openTestStore(t)
+	servingDevshard(t, gatewayStore)
+
+	resumed, err := gatewayStore.ResumeFromHold(context.Background(), "7")
+	if err != nil || resumed {
+		t.Fatalf("ResumeFromHold on a serving escrow = %v, %v; want false, nil", resumed, err)
+	}
+	if _, err := gatewayStore.PutOnHoldIfServing(context.Background(), "7"); err != nil {
+		t.Fatalf("PutOnHoldIfServing: %v", err)
+	}
+
+	resumed, err = gatewayStore.ResumeFromHold(context.Background(), "7")
+
+	if err != nil || !resumed {
+		t.Fatalf("ResumeFromHold = %v, %v; want true, nil", resumed, err)
+	}
+	if record := listOnlyDevshard(t, gatewayStore); !record.Active || record.OnHold {
+		t.Fatalf("record = %+v, want active and serving", record)
+	}
+}
+
+func TestADeactivatedEscrowOnHoldCannotBeResumed(t *testing.T) {
+	gatewayStore := openTestStore(t)
+	servingDevshard(t, gatewayStore)
+	if _, err := gatewayStore.PutOnHoldIfServing(context.Background(), "7"); err != nil {
+		t.Fatalf("PutOnHoldIfServing: %v", err)
+	}
+	if err := gatewayStore.SetDevshardActive(context.Background(), "7", false); err != nil {
+		t.Fatalf("SetDevshardActive: %v", err)
+	}
+
+	resumed, err := gatewayStore.ResumeFromHold(context.Background(), "7")
+
+	if err != nil || resumed {
+		t.Fatalf("ResumeFromHold = %v, %v; want false, nil: an operator's deactivation must stick", resumed, err)
+	}
+	if record := listOnlyDevshard(t, gatewayStore); record.Active || record.OnHold {
+		t.Fatalf("record = %+v, want inactive with the hold cleared", record)
+	}
+}
+
+func TestEveryStatementThatTakesAnEscrowOutOfServiceClearsTheHold(t *testing.T) {
+	takeOut := map[string]func(*Store) error{
+		"SetDevshardActive": func(gatewayStore *Store) error {
+			return gatewayStore.SetDevshardActive(context.Background(), "7", false)
+		},
+		"ParkForSettlement": func(gatewayStore *Store) error {
+			return gatewayStore.ParkForSettlement(context.Background(), "7")
+		},
+		"ParkForSettlementIfActive": func(gatewayStore *Store) error {
+			_, err := gatewayStore.ParkForSettlementIfActive(context.Background(), "7")
+			return err
+		},
+	}
+	for name, statement := range takeOut {
+		t.Run(name, func(t *testing.T) {
+			gatewayStore := openTestStore(t)
+			servingDevshard(t, gatewayStore)
+			if _, err := gatewayStore.PutOnHoldIfServing(context.Background(), "7"); err != nil {
+				t.Fatalf("PutOnHoldIfServing: %v", err)
+			}
+
+			if err := statement(gatewayStore); err != nil {
+				t.Fatalf("%s: %v", name, err)
+			}
+
+			if record := listOnlyDevshard(t, gatewayStore); record.OnHold {
+				t.Fatalf("record = %+v, want the hold cleared", record)
+			}
+		})
+	}
+}
+
+func TestActivatingAnEscrowOnHoldResumesIt(t *testing.T) {
+	gatewayStore := openTestStore(t)
+	servingDevshard(t, gatewayStore)
+	if _, err := gatewayStore.PutOnHoldIfServing(context.Background(), "7"); err != nil {
+		t.Fatalf("PutOnHoldIfServing: %v", err)
+	}
+
+	if err := gatewayStore.SetDevshardActive(context.Background(), "7", true); err != nil {
+		t.Fatalf("SetDevshardActive: %v", err)
+	}
+
+	if record := listOnlyDevshard(t, gatewayStore); !record.Active || record.OnHold {
+		t.Fatalf("record = %+v, want serving", record)
+	}
+}
+
+func TestAnUpsertThatDeactivatesClearsTheHold(t *testing.T) {
+	gatewayStore := openTestStore(t)
+	servingDevshard(t, gatewayStore)
+	if _, err := gatewayStore.PutOnHoldIfServing(context.Background(), "7"); err != nil {
+		t.Fatalf("PutOnHoldIfServing: %v", err)
+	}
+
+	if err := gatewayStore.UpsertDevshard(context.Background(), DevshardRecord{EscrowID: "7", Model: "qwen", Active: false}); err != nil {
+		t.Fatalf("UpsertDevshard: %v", err)
+	}
+
+	if record := listOnlyDevshard(t, gatewayStore); record.Active || record.OnHold {
+		t.Fatalf("record = %+v, want inactive and off hold", record)
+	}
+}
+
+func TestAnUpsertLeavesTheHoldAlone(t *testing.T) {
+	gatewayStore := openTestStore(t)
+	servingDevshard(t, gatewayStore)
+	if _, err := gatewayStore.PutOnHoldIfServing(context.Background(), "7"); err != nil {
+		t.Fatalf("PutOnHoldIfServing: %v", err)
+	}
+
+	if err := gatewayStore.UpsertDevshard(context.Background(), DevshardRecord{EscrowID: "7", Model: "qwen", Active: true}); err != nil {
+		t.Fatalf("UpsertDevshard: %v", err)
+	}
+
+	if record := listOnlyDevshard(t, gatewayStore); !record.OnHold {
+		t.Fatalf("record = %+v, want still on hold", record)
+	}
+}

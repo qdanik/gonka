@@ -19,13 +19,24 @@ type ModelConfig struct {
 	PrivateKeyEnv string `json:"private_key_env"`
 }
 
+// defaultTargetCount applies only when target_count is absent; an explicit 0 is still a mistake to reject.
+const defaultTargetCount = 1
+
 func parseModels(raw string) ([]ModelConfig, error) {
 	if strings.TrimSpace(raw) == "" {
 		return nil, nil
 	}
-	var models []ModelConfig
-	if err := json.Unmarshal([]byte(raw), &models); err != nil {
+	var entries []json.RawMessage
+	if err := json.Unmarshal([]byte(raw), &entries); err != nil {
 		return nil, fmt.Errorf("parse rotation models: %w", err)
+	}
+	models := make([]ModelConfig, 0, len(entries))
+	for _, entry := range entries {
+		model := ModelConfig{TargetCount: defaultTargetCount}
+		if err := json.Unmarshal(entry, &model); err != nil {
+			return nil, fmt.Errorf("parse rotation models: %w", err)
+		}
+		models = append(models, model)
 	}
 	for _, model := range models {
 		if model.ModelID == "" {

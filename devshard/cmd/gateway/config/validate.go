@@ -169,6 +169,12 @@ func (c *Config) Validate() error {
 	if c.Rotation.PrePoCBlocks < 0 {
 		complain("rotation_pre_poc_blocks: %d must be >= 0", c.Rotation.PrePoCBlocks)
 	}
+	if c.Rotation.HoldMaxPerModel < 0 {
+		complain("rotation_hold_max_per_model: %d must be >= 0", c.Rotation.HoldMaxPerModel)
+	}
+	if c.Rotation.HoldResumeAnswers < 1 {
+		complain("rotation_hold_resume_answers: %d must be >= 1", c.Rotation.HoldResumeAnswers)
+	}
 	if c.Cache.ChatCacheMaxBytes < 0 {
 		complain("chat_cache_max_bytes: %d must be >= 0", c.Cache.ChatCacheMaxBytes)
 	}

@@ -144,7 +144,7 @@ func (f *fakeStore) DeleteCommitment(ctx context.Context, txHash string) error {
 }
 
 // UpsertDevshard mirrors the store's contract: every field of an existing row is replaced except
-// SettlementPending, which only SetDevshardSettlementPending moves.
+// SettlementPending and OnHold, which only their own statements move.
 func (f *fakeStore) UpsertDevshard(ctx context.Context, record store.DevshardRecord) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -156,6 +156,7 @@ func (f *fakeStore) UpsertDevshard(ctx context.Context, record store.DevshardRec
 	}
 	if existing, ok := f.devshards[record.EscrowID]; ok {
 		record.SettlementPending = existing.SettlementPending
+		record.OnHold = existing.OnHold
 	}
 	f.devshards[record.EscrowID] = record
 	return nil
@@ -198,6 +199,7 @@ func (f *fakeStore) SetDevshardActive(ctx context.Context, escrowID string, acti
 		return store.ErrDevshardNotFound
 	}
 	record.Active = active
+	record.OnHold = false
 	f.devshards[escrowID] = record
 	return nil
 }
@@ -240,6 +242,7 @@ func (f *fakeStore) ParkForSettlement(_ context.Context, escrowID string) error 
 	}
 	record.Active = false
 	record.SettlementPending = true
+	record.OnHold = false
 	f.devshards[escrowID] = record
 	return nil
 }
@@ -262,6 +265,33 @@ func (f *fakeStore) ParkForSettlementIfActive(_ context.Context, escrowID string
 	}
 	record.Active = false
 	record.SettlementPending = true
+	record.OnHold = false
+	f.devshards[escrowID] = record
+	return true, nil
+}
+
+func (f *fakeStore) PutOnHoldIfServing(_ context.Context, escrowID string) (bool, error) {
+	return f.setOnHoldIf(escrowID, false, true)
+}
+
+func (f *fakeStore) ResumeFromHold(_ context.Context, escrowID string) (bool, error) {
+	return f.setOnHoldIf(escrowID, true, false)
+}
+
+func (f *fakeStore) setOnHoldIf(escrowID string, currentlyOnHold, onHold bool) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.calls != nil {
+		f.calls.record(fmt.Sprintf("SetOnHold(%v)", onHold))
+	}
+	if f.setActiveErr != nil {
+		return false, f.setActiveErr
+	}
+	record, held := f.devshards[escrowID]
+	if !held || !record.Active || record.OnHold != currentlyOnHold {
+		return false, nil
+	}
+	record.OnHold = onHold
 	f.devshards[escrowID] = record
 	return true, nil
 }

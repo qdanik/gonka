@@ -442,6 +442,7 @@ type escrowPublisher struct {
 	retired     []string
 	deactivated []string
 	unserved    []string
+	seen        []store.DevshardRecord
 
 	failures map[string]error
 
@@ -450,7 +451,8 @@ type escrowPublisher struct {
 	hold     chan struct{}
 }
 
-func (p *escrowPublisher) add(_ context.Context, escrowID, _ string) error {
+func (p *escrowPublisher) add(_ context.Context, record store.DevshardRecord) error {
+	escrowID := record.EscrowID
 	inFlight := p.inFlight.Add(1)
 	for {
 		peak := p.peak.Load()
@@ -466,6 +468,7 @@ func (p *escrowPublisher) add(_ context.Context, escrowID, _ string) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.added = append(p.added, escrowID)
+	p.seen = append(p.seen, record)
 	return p.failures[escrowID]
 }
 
@@ -555,6 +558,72 @@ func TestPublishEscrowsWalksTheThreeArmedBuildLadder(t *testing.T) {
 			assertSame(t, "deactivated", publisher.deactivated, testCase.wantDeactivated)
 			assertSame(t, "unserved", publisher.unserved, testCase.wantDeactivated)
 		})
+	}
+}
+
+// Without the flag a restart would publish a held escrow routable and spend the money its owed votes still need.
+func TestPublishEscrowsHandsTheHoldFlagToTheRegistry(t *testing.T) {
+	publisher := &escrowPublisher{}
+	records := []store.DevshardRecord{{EscrowID: "1", Model: "qwen", Active: true, OnHold: true}}
+
+	if err := publishEscrows(context.Background(), records, 4,
+		publisher.add, publisher.retire, publisher.deactivate, publisher.unservable); err != nil {
+		t.Fatalf("publishEscrows() = %v, want nil", err)
+	}
+
+	if len(publisher.seen) != 1 || !publisher.seen[0].OnHold {
+		t.Fatalf("records added = %+v, want escrow 1 with OnHold set", publisher.seen)
+	}
+}
+
+func TestAddingAnEscrowRowOnHoldPublishesItOnHold(t *testing.T) {
+	escrows := registry.New(registry.Deps{
+		ServingSessions: func(context.Context, string) (registry.EscrowSession, error) {
+			return weightlessSession{participants: []string{"validator-a"}}, nil
+		},
+		Now: time.Now,
+	})
+	t.Cleanup(func() { escrows.Close() })
+	composed := &gateway{escrows: escrows}
+
+	if err := composed.addEscrow(context.Background(), store.DevshardRecord{EscrowID: "held", Model: "model-a", Active: true, OnHold: true}); err != nil {
+		t.Fatalf("addEscrow(on hold) = %v", err)
+	}
+	if err := composed.addEscrow(context.Background(), store.DevshardRecord{EscrowID: "serving", Model: "model-a", Active: true}); err != nil {
+		t.Fatalf("addEscrow(serving) = %v", err)
+	}
+
+	if !escrows.OnHold("held") {
+		t.Error("the escrow whose row is on hold was published routable")
+	}
+	if escrows.OnHold("serving") {
+		t.Error("the serving escrow was published on hold")
+	}
+}
+
+func TestTheHoldGateKeepsAnEscrowTheRegistryDoesNotHold(t *testing.T) {
+	escrows, router := composedRouting(t, limits.NewCapacity(func(string, string) bool { return true }), []string{"validator-a"})
+	holds := escrowHolds{escrows: escrows, router: router}
+
+	if verdict := holds.Verdict("unknown", 1); verdict != escrow.HoldKeep {
+		t.Fatalf("Verdict(unknown) = %v, want HoldKeep", verdict)
+	}
+	if _, _, _, known := holds.Funds("unknown"); known {
+		t.Error("Funds(unknown) reported the escrow known")
+	}
+}
+
+func TestTheHoldGateMovesTheRegistryFlag(t *testing.T) {
+	escrows, router := composedRouting(t, limits.NewCapacity(func(string, string) bool { return true }), []string{"validator-a"})
+	holds := escrowHolds{escrows: escrows, router: router}
+
+	holds.SetOnHold("escrow-1", true)
+	if !escrows.OnHold("escrow-1") {
+		t.Fatal("SetOnHold(true) left the registry entry routable")
+	}
+	holds.SetOnHold("escrow-1", false)
+	if escrows.OnHold("escrow-1") {
+		t.Fatal("SetOnHold(false) left the registry entry on hold")
 	}
 }
 
@@ -851,6 +920,128 @@ func TestSettleStopsRoutingBeforeTheChainSettlementAndLeavesItRetiredWhenItFails
 	}
 }
 
+func openedStore(t *testing.T) *store.Store {
+	t.Helper()
+	records, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("Open(): %v", err)
+	}
+	t.Cleanup(func() {
+		if err := records.Close(); err != nil {
+			t.Errorf("Close(): %v", err)
+		}
+	})
+	return records
+}
+
+func servingRegistry(t *testing.T) *registry.Registry {
+	t.Helper()
+	escrows := registry.New(registry.Deps{
+		ServingSessions: func(context.Context, string) (registry.EscrowSession, error) {
+			return weightlessSession{participants: []string{"validator-a"}}, nil
+		},
+		Now: time.Now,
+	})
+	t.Cleanup(func() { escrows.Close() })
+	return escrows
+}
+
+func storedDevshard(t *testing.T, records *store.Store, escrowID string) store.DevshardRecord {
+	t.Helper()
+	record, err := findDevshard(context.Background(), records, escrowID)
+	if err != nil {
+		t.Fatalf("findDevshard(%s): %v", escrowID, err)
+	}
+	return record
+}
+
+// Activate is the operator's way out of a hold: Add alone is a no-op for a live entry, so the flag must be cleared too.
+func TestActivatingAnEscrowOnHoldResumesItInTheRegistry(t *testing.T) {
+	ctx := context.Background()
+	records := openedStore(t)
+	if err := records.UpsertDevshard(ctx, store.DevshardRecord{EscrowID: "escrow-1", Model: "model-a", PrivateKeyEnv: "DEVSHARD_HELD_KEY", Active: true}); err != nil {
+		t.Fatalf("UpsertDevshard(): %v", err)
+	}
+	if moved, err := records.PutOnHoldIfServing(ctx, "escrow-1"); err != nil || !moved {
+		t.Fatalf("PutOnHoldIfServing() = %v, %v, want true, nil", moved, err)
+	}
+	escrows := servingRegistry(t)
+	if err := escrows.AddOnHold(ctx, "escrow-1", "model-a"); err != nil {
+		t.Fatalf("AddOnHold(): %v", err)
+	}
+	operator := &operations{store: records, escrows: escrows}
+
+	if err := operator.Activate(ctx, "escrow-1"); err != nil {
+		t.Fatalf("Activate() = %v, want nil", err)
+	}
+
+	row := storedDevshard(t, records, "escrow-1")
+	if !row.Active || row.OnHold {
+		t.Errorf("row = active %v, on hold %v; want serving", row.Active, row.OnHold)
+	}
+	if escrows.OnHold("escrow-1") {
+		t.Error("the registry still holds the escrow the operator activated")
+	}
+	candidates := escrows.Candidates("model-a")
+	if len(candidates) != 1 || candidates[0].ID != "escrow-1" {
+		t.Errorf("Candidates = %+v, want escrow-1 routable again", candidates)
+	}
+}
+
+// A re-registration upserts the row: without the refusal it would route a parked escrow and erase the hash its settle is tracked by.
+func TestRegisteringAParkedEscrowIsRefused(t *testing.T) {
+	ctx := context.Background()
+	t.Setenv("DEVSHARD_PARKED_KEY", "0x01")
+	records := openedStore(t)
+	if err := records.UpsertDevshard(ctx, store.DevshardRecord{EscrowID: "escrow-1", Model: "model-a", PrivateKeyEnv: "DEVSHARD_PARKED_KEY", Active: true}); err != nil {
+		t.Fatalf("UpsertDevshard(): %v", err)
+	}
+	if err := records.ParkForSettlement(ctx, "escrow-1"); err != nil {
+		t.Fatalf("ParkForSettlement(): %v", err)
+	}
+	if err := records.SetDevshardSettleTxHash(ctx, "escrow-1", "SETTLE-HASH"); err != nil {
+		t.Fatalf("SetDevshardSettleTxHash(): %v", err)
+	}
+	escrows := servingRegistry(t)
+	operator := &operations{store: records, escrows: escrows}
+
+	err := operator.AddDevshard(ctx, api.AddDevshardRequest{
+		EscrowID: "escrow-1", Model: "model-a", PrivateKeyEnv: "DEVSHARD_PARKED_KEY", Activate: true,
+	})
+
+	if !errors.Is(err, api.ErrDevshardNotActivatable) {
+		t.Fatalf("AddDevshard(parked) = %v, want ErrDevshardNotActivatable", err)
+	}
+	row := storedDevshard(t, records, "escrow-1")
+	if row.Active || !row.SettlementPending || row.SettleTxHash != "SETTLE-HASH" {
+		t.Errorf("row = active %v, settlement pending %v, settle hash %q; want it still parked with its hash", row.Active, row.SettlementPending, row.SettleTxHash)
+	}
+	if _, routable := escrows.Routable("escrow-1"); routable {
+		t.Error("the parked escrow was published routable")
+	}
+}
+
+func TestRegisteringAnEscrowTheStoreHasNotSeenPublishesIt(t *testing.T) {
+	ctx := context.Background()
+	t.Setenv("DEVSHARD_FRESH_KEY", "0x01")
+	records := openedStore(t)
+	escrows := servingRegistry(t)
+	operator := &operations{store: records, escrows: escrows}
+
+	if err := operator.AddDevshard(ctx, api.AddDevshardRequest{
+		EscrowID: "escrow-1", Model: "model-a", PrivateKeyEnv: "DEVSHARD_FRESH_KEY", Activate: true,
+	}); err != nil {
+		t.Fatalf("AddDevshard(new) = %v, want nil", err)
+	}
+
+	if row := storedDevshard(t, records, "escrow-1"); !row.Active {
+		t.Errorf("row = %+v, want it stored active", row)
+	}
+	if _, routable := escrows.Routable("escrow-1"); !routable {
+		t.Error("the new escrow was not published")
+	}
+}
+
 // A key no limiter state is tracked under is a typo, not a cleared quarantine, and answering 200 tells
 // the operator a host was reopened that never existed.
 func TestUnquarantiningAnUntrackedParticipantIsNotReportedAsDone(t *testing.T) {
@@ -1043,6 +1234,12 @@ func blockedPhaseObserverForTest(t *testing.T) *chain.PhaseObserver {
 // is judged on the wiring the gateway actually runs rather than on a hand-built scheduler.
 func routingFor(t *testing.T, capacity *limits.Capacity, participants []string) *scheduler.Scheduler {
 	t.Helper()
+	_, router := composedRouting(t, capacity, participants)
+	return router
+}
+
+func composedRouting(t *testing.T, capacity *limits.Capacity, participants []string) (*registry.Registry, *scheduler.Scheduler) {
+	t.Helper()
 	configuration := config.Defaults()
 	configHolder := config.NewHolder(&configuration)
 	observer, err := chain.NewPhaseObserver(chain.ObserverConfig{PublicAPIBaseURL: "http://127.0.0.1:1"})
@@ -1070,7 +1267,7 @@ func routingFor(t *testing.T, capacity *limits.Capacity, participants []string) 
 	if err := escrows.Add(context.Background(), "escrow-1", "model-a"); err != nil {
 		t.Fatalf("Add(): %v", err)
 	}
-	return router
+	return escrows, router
 }
 
 // A scheduler without a journal would panic at its first burn, on a goroutine nothing recovers.

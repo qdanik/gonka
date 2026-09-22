@@ -9,11 +9,13 @@ Which escrows exist right now, what each serves, and who its hosts are.
 - **Membership and capacity** (`membership.go`, `views.go`) — the participant set each escrow contributes to the capacity model, and the in-flight count routing scores by.
 - **Where the hosts are** (`views.go`, `HostDials`) — each live escrow's reachable addresses, deduplicated per address, so an observer such as [`hostping`](../hostping/README.md) reads the live set instead of keeping a mirror of it. A retired escrow contributes none.
 - **Settlement handles** (`settlement.go`) — a retired escrow still resolves, because its committed nonces have no other settlement path.
+- **The on-hold flag** (`escrow.go`, `views.go`) — an entry's own atomic bool, set and read without the registry lock, that the escrow manager's tick uses to take a depleted-but-recoverable escrow off the candidate list without retiring it.
 
 ## Boundaries
 
 - **A retired escrow does not disappear.** Its nonces still owe votes, and the session that can post them outlives its routability.
 - **The in-flight hold is taken with the nonce commit and refused once retired**, so an escrow cannot start work it will not be able to settle.
+- **An escrow on hold is live for everything except being picked.** The flag touches `routable()` alone; every other reader of the entry — `Acquire`, `SettlementSession`, `Snapshot`, `IsBusy`, the sweep — cannot tell it apart from a serving one. See [`docs/routing.md`](../docs/routing.md), "An escrow on hold".
 
 ## The published set and its readers
 
@@ -26,6 +28,8 @@ Which escrows exist right now, what each serves, and who its hosts are.
 `RoutableSession` is the read-only handle the status routes read. It takes no in-flight count and is not the dispatch path: a race resolves its escrow through `Acquire`, which returns the session and its release together, so a handle cannot be held without the hold. `holdFor` is the scheduler's view of the same count, taken in the step that commits a nonce; it is bound to the entry rather than to its id, and re-checks that the published entry is still that entry, so a hold cannot land on a replacement published under the same id.
 
 `SettlementSession` resolves the handle this process still holds, published or draining — asymmetric with routing's published-only lookup. See `rules.md`, "4. Routing and settlement read the escrow set asymmetrically".
+
+**`routable()` narrows `accepting()` by one bit.** `accepting()` is the phase check alone; `routable()` additionally requires the on-hold flag clear, and it is the predicate behind `Candidates` and `Routable` — the two reads that decide what the scheduler may pick (`escrow.go`, `escrowEntry.routable`). `Held` answers `accepting()` without the hold check, so the escrow manager's tick can reach and price an entry on hold for resume without going through the routing-only lookup. `SetOnHold` stores the flag directly on the entry and nothing else: no membership push, no narrator call, no session touch (`views.go`, `SetOnHold`). `Add` publishes serving and `AddOnHold` publishes on hold — two exported entry points over one unexported `add(ctx, escrowID, model, onHold bool)` that takes the flag as its private parameter — so a boot or a republish that finds a row on hold calls `AddOnHold` and the entry is on hold from its first moment, rather than routing it for the one poll it takes the tick to notice. An id already live is a no-op either way, so a live entry's flag is corrected only by the escrow manager's tick, never by a second publish.
 
 ## Publishing, retiring and draining
 

@@ -333,3 +333,29 @@ func EscrowBalance(t *testing.T, client *http.Client, clientURL, escrowID, beare
 	t.Fatalf("gateway state carries no escrow %s: %s", escrowID, resp.Body)
 	return 0
 }
+
+// DevshardRow is one escrow as the gateway's admin listing stores it.
+type DevshardRow struct {
+	EscrowID          string `json:"escrow_id"`
+	Active            bool   `json:"active"`
+	OnHold            bool   `json:"on_hold"`
+	SettlementPending bool   `json:"settlement_pending"`
+}
+
+// ListedDevshard reads one escrow's row from GET /v1/admin/devshards.
+func ListedDevshard(t *testing.T, client *http.Client, clientURL, escrowID, bearerToken string) DevshardRow {
+	t.Helper()
+	resp := GetRaw(t, client, clientURL+"/v1/admin/devshards", bearerToken)
+	require.Equal(t, http.StatusOK, resp.StatusCode, "listing escrows: %s", resp.Body)
+	var listing struct {
+		Devshards []DevshardRow `json:"devshards"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(resp.Body), &listing), "parsing the escrow listing: %s", resp.Body)
+	for _, row := range listing.Devshards {
+		if row.EscrowID == escrowID {
+			return row
+		}
+	}
+	t.Fatalf("the escrow listing carries no escrow %s: %s", escrowID, resp.Body)
+	return DevshardRow{}
+}

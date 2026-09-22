@@ -25,6 +25,7 @@ type RegistryCollector struct {
 	activeRequests      *prometheus.Desc
 	escrowWeight        *prometheus.Desc
 	blockedParticipants *prometheus.Desc
+	onHold              *prometheus.Desc
 	drainCloseFailures  *prometheus.Desc
 }
 
@@ -35,6 +36,7 @@ func NewRegistryCollector(sources RegistrySources) *RegistryCollector {
 		activeRequests:      gaugeDesc("devshard_runtime_active_requests", "Nonces an escrow is still answerable for: the client may already have its reply while the chain vote is owed.", "devshard_id", "model"),
 		escrowWeight:        gaugeDesc("devshard_gateway_escrow_weight", "Per-escrow effective host weight used by the capacity-aware picker.", "devshard_id"),
 		blockedParticipants: gaugeDesc("devshard_gateway_escrow_blocked_participants", "Participants of an escrow that are currently unavailable.", "devshard_id", "model"),
+		onHold:              gaugeDesc("devshard_gateway_escrow_on_hold", "Whether an escrow is on hold: published, not routed, waiting for its held money.", "devshard_id", "model"),
 		drainCloseFailures:  counterDesc("devshard_gateway_escrow_drain_close_failures_total", "Drained escrows whose snapshot flush or session close failed."),
 	}
 }
@@ -42,7 +44,7 @@ func NewRegistryCollector(sources RegistrySources) *RegistryCollector {
 func (c *RegistryCollector) Describe(ch chan<- *prometheus.Desc) {
 	for _, desc := range []*prometheus.Desc{
 		c.active, c.activeRequests, c.escrowWeight, c.blockedParticipants,
-		c.drainCloseFailures,
+		c.onHold, c.drainCloseFailures,
 	} {
 		ch <- desc
 	}
@@ -55,6 +57,7 @@ func (c *RegistryCollector) Collect(ch chan<- prometheus.Metric) {
 	for _, escrow := range c.sources.Escrows.Snapshot() {
 		gauge(ch, c.active, boolGauge(escrow.Accepting), escrow.ID, escrow.Model)
 		gauge(ch, c.activeRequests, float64(escrow.InFlight), escrow.ID, escrow.Model)
+		gauge(ch, c.onHold, boolGauge(escrow.OnHold), escrow.ID, escrow.Model)
 		if c.sources.EscrowWeight != nil {
 			gauge(ch, c.escrowWeight, c.sources.EscrowWeight(escrow.ID, escrow.Model), escrow.ID)
 		}

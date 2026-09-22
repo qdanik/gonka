@@ -17,6 +17,7 @@ type Deps struct {
 	Store       escrowStore
 	Snapshots   snapshotSource
 	Settlement  SettlementSource
+	Holds       HoldGate
 	Timeouts    TimeoutSweeper
 	Sweeps      SweepRecorder
 	Narrator    lifecycleNarrator
@@ -51,6 +52,7 @@ func NewManager(d Deps) (*Manager, error) {
 		now:              d.Now,
 		config:           d.Config,
 		settlementSource: d.Settlement,
+		holds:            d.Holds,
 		timeoutSweeper:   d.Timeouts,
 		sweepRecorder:    d.Sweeps,
 		narrator:         d.Narrator,
@@ -145,15 +147,16 @@ func (m *Manager) tick(ctx context.Context) error {
 	missingErr := m.checkMissing(ctx)
 	m.sweepTimeouts(ctx)
 
-	cfg := m.config.Load()
+	configuration := m.config.Load()
 	// Pulled, not subscribed: a 15s poll is equivalent at this cadence and avoids callback races.
 	snapshot := m.snapshots.Snapshot()
-	models, modelsErr := rotationModels(cfg.Rotation)
+	models, modelsErr := rotationModels(configuration.Rotation)
+	resumedDevshards, holdErr := m.resumeHeld(ctx, snapshot, models, devshards)
 	// An exhausted escrow must stop taking traffic whatever the toggle says; models is empty unless rotation can supply a replacement.
-	depletionErr := m.checkDepletion(ctx, snapshot, models, devshards)
-	lifecycleErr := errors.Join(reconcileErr, pendingErr, missingErr, modelsErr, depletionErr)
+	depletionErr := m.checkDepletion(ctx, snapshot, models, resumedDevshards)
+	lifecycleErr := errors.Join(reconcileErr, pendingErr, missingErr, modelsErr, holdErr, depletionErr)
 
-	if !cfg.Rotation.Enabled || modelsErr != nil {
+	if !configuration.Rotation.Enabled || modelsErr != nil {
 		return lifecycleErr
 	}
 	if snapshotHasNoEpochYet(snapshot) {
@@ -162,7 +165,7 @@ func (m *Manager) tick(ctx context.Context) error {
 
 	var bridgeErr error
 	blocksToEpochSwitch := snapshot.EpochSwitchBlockHeight - snapshot.BlockHeight
-	if blocksToEpochSwitch >= 0 && blocksToEpochSwitch <= cfg.Rotation.PrePoCBlocks {
+	if blocksToEpochSwitch >= 0 && blocksToEpochSwitch <= configuration.Rotation.PrePoCBlocks {
 		bridgeErr = m.prepareBridge(ctx, snapshot, models, devshards) // wins even when PoC is also inactive
 	} else if !snapshot.RequestsBlocked {
 		bridgeErr = m.finishBridge(ctx, snapshot, models, devshards)

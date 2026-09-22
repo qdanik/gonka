@@ -86,6 +86,15 @@ func New(deps Deps) *Registry {
 
 // Add publishes one escrow for routing and releases an unpublished session without flushing. See routing.md, "The escrow registry".
 func (r *Registry) Add(ctx context.Context, escrowID, model string) error {
+	return r.add(ctx, escrowID, model, false)
+}
+
+// AddOnHold publishes an escrow whose row is on hold, so a restart does not route it for a moment first.
+func (r *Registry) AddOnHold(ctx context.Context, escrowID, model string) error {
+	return r.add(ctx, escrowID, model, true)
+}
+
+func (r *Registry) add(ctx context.Context, escrowID, model string, onHold bool) error {
 	switch {
 	case escrowID == "":
 		return fmt.Errorf("escrow id is required")
@@ -123,6 +132,7 @@ func (r *Registry) Add(ctx context.Context, escrowID, model string) error {
 		return session.Close()
 	}
 	entry := newEscrowEntry(escrowID, model, r.sessions.Add(1), session, r.now)
+	entry.onHold.Store(onHold)
 	entry.hold = r.holdFor(entry)
 	r.live.Store(published.with(entry))
 	r.pushMembershipLocked()

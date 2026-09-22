@@ -61,7 +61,10 @@ func Defaults() Config {
 			PoCMode: PoCModeRelaxed,
 		},
 		Rotation: Rotation{
-			PrePoCBlocks: 300,
+			PrePoCBlocks:      300,
+			HoldEnabled:       true,
+			HoldMaxPerModel:   1,
+			HoldResumeAnswers: 32,
 		},
 		Cache: Cache{
 			ChatCacheMaxBytes: 256 << 20,

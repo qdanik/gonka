@@ -22,6 +22,7 @@ import (
 	"devshard/cmd/gateway/internal/logkey"
 	"devshard/cmd/gateway/nonces"
 	"devshard/cmd/gateway/registry"
+	"devshard/cmd/gateway/scheduler"
 	"devshard/cmd/gateway/store"
 	"devshard/logging"
 	"devshard/user"
@@ -76,16 +77,23 @@ func (g *gateway) publishEscrows(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("listing devshards: %w", err)
 	}
-	return publishEscrows(ctx, records, g.builders, g.escrows.Add, g.escrows.Retire, func(escrowID string) error {
+	return publishEscrows(ctx, records, g.builders, g.addEscrow, g.escrows.Retire, func(escrowID string) error {
 		return g.store.SetDevshardActive(ctx, escrowID, false)
 	}, g.events.EscrowUnservable)
+}
+
+func (g *gateway) addEscrow(ctx context.Context, record store.DevshardRecord) error {
+	if record.OnHold {
+		return g.escrows.AddOnHold(ctx, record.EscrowID, record.Model)
+	}
+	return g.escrows.Add(ctx, record.EscrowID, record.Model)
 }
 
 func publishEscrows(
 	ctx context.Context,
 	records []store.DevshardRecord,
 	builders int,
-	add func(ctx context.Context, escrowID, model string) error,
+	add func(ctx context.Context, record store.DevshardRecord) error,
 	retire func(escrowID string) error,
 	deactivate func(escrowID string) error,
 	unservable func(escrowID string, err error),
@@ -109,7 +117,7 @@ func publishEscrows(
 	building.SetLimit(builders)
 	for index, record := range active {
 		building.Go(func() error {
-			built[index] = add(ctx, record.EscrowID, record.Model)
+			built[index] = add(ctx, record)
 			return nil
 		})
 	}
@@ -270,6 +278,33 @@ func seedDevshards(ctx context.Context, records devshardRegistry, raw string) er
 		}
 	}
 	return nil
+}
+
+// escrowHolds joins the registry's flag and the scheduler's pricing for the escrow manager.
+type escrowHolds struct {
+	escrows *registry.Registry
+	router  *scheduler.Scheduler
+}
+
+func (h escrowHolds) SetOnHold(escrowID string, onHold bool) { h.escrows.SetOnHold(escrowID, onHold) }
+
+func (h escrowHolds) Verdict(escrowID string, answers uint64) escrow.HoldVerdict {
+	candidate, live := h.escrows.Held(escrowID)
+	if !live {
+		return escrow.HoldKeep
+	}
+	ready, nonceSpent := h.router.ResumeReadiness(candidate, answers)
+	switch {
+	case nonceSpent:
+		return escrow.HoldNonceSpent
+	case ready:
+		return escrow.HoldResume
+	}
+	return escrow.HoldKeep
+}
+
+func (h escrowHolds) Funds(escrowID string) (balance, reserved, challenged uint64, known bool) {
+	return h.escrows.Funds(escrowID)
 }
 
 type devshardLookup interface {

@@ -171,6 +171,10 @@ func (s *Server) handleDevshardChat(w http.ResponseWriter, r *http.Request) {
 	}
 	escrowID := r.PathValue("id")
 	if _, routable := s.escrows.Routable(escrowID); !routable {
+		if s.escrows.OnHold(escrowID) {
+			writeErrorFor(w, fmt.Errorf("escrow %s is on hold: %w", escrowID, scheduler.ErrNoEscrowCapacity))
+			return
+		}
 		writeErrorFor(w, fmt.Errorf("%w: %s", ErrUnknownDevshard, escrowID))
 		return
 	}

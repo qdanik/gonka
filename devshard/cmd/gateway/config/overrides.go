@@ -44,6 +44,9 @@ type Overrides struct {
 	DisabledRedirectURL                    *string                `json:"disabled_redirect_url,omitempty"`
 	RotationEnabled                        *bool                  `json:"rotation_enabled,omitempty"`
 	RotationSettlementEnabled              *bool                  `json:"rotation_settlement_enabled,omitempty"`
+	RotationHoldEnabled                    *bool                  `json:"rotation_hold_enabled,omitempty"`
+	RotationHoldMaxPerModel                *int64                 `json:"rotation_hold_max_per_model,omitempty"`
+	RotationHoldResumeAnswers              *int64                 `json:"rotation_hold_resume_answers,omitempty"`
 	RotationPrePoCBlocks                   *int64                 `json:"rotation_pre_poc_blocks,omitempty"`
 	RotationModelsJSON                     *string                `json:"rotation_models_json,omitempty"`
 	ChainSnapshotMaxAgeSeconds             *int64                 `json:"chain_snapshot_max_age_seconds,omitempty"`

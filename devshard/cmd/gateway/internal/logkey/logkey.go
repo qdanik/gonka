@@ -123,6 +123,10 @@ const (
 	InFlight       = "in_flight"
 	Attempts       = "attempts"
 	EscrowBuilders = "escrow_builders"
+	Balance        = "balance"
+	Reserved       = "reserved"
+	Challenged     = "challenged"
+	Replacement    = "replacement"
 )
 
 // Process and transport.

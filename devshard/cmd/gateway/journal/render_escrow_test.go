@@ -130,6 +130,30 @@ func TestEscrowLifecycleTransitionsRenderTheLinesTheirProducersNarrate(t *testin
 			}},
 		},
 		{
+			name: "an escrow is put on hold",
+			produce: func(events *Journal) {
+				events.EscrowPutOnHold("1", "model-a", "balance_floor", 50, 400, 300, "9")
+			},
+			want: logcapture.Entry{Level: "warn", Msg: "escrow put on hold", Fields: []any{
+				"escrow", "1", "model", "model-a", "reason", "balance_floor",
+				"balance", uint64(50), "reserved", uint64(400), "challenged", uint64(300), "replacement", "9",
+			}},
+		},
+		{
+			name:    "an escrow resumes from hold",
+			produce: func(events *Journal) { events.EscrowResumed("1", 3200) },
+			want: logcapture.Entry{Level: "info", Msg: "escrow resumed from hold", Fields: []any{
+				"escrow", "1", "balance", uint64(3200),
+			}},
+		},
+		{
+			name:    "a hold ends by parking for settlement",
+			produce: func(events *Journal) { events.EscrowHoldEnded("1", "epoch_passed") },
+			want: logcapture.Entry{Level: "info", Msg: "escrow hold ended, parked for settlement", Fields: []any{
+				"escrow", "1", "reason", "epoch_passed",
+			}},
+		},
+		{
 			name:    "a rotation is skipped",
 			produce: func(events *Journal) { events.RotationSkipped("qwen", "regular", 4) },
 			want: logcapture.Entry{Level: "warn", Msg: "rotation skipped, the network serves no such model", Fields: []any{

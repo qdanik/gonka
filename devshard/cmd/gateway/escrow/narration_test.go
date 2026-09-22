@@ -75,6 +75,18 @@ func (n *recordingLifecycleNarrator) BridgeFinished(model string, epoch uint64, 
 
 func (n *recordingLifecycleNarrator) EscrowParked(escrowID string) { n.note("parked %s", escrowID) }
 
+func (n *recordingLifecycleNarrator) EscrowPutOnHold(escrowID, model, reason string, balance, reserved, challenged uint64, replacementID string) {
+	n.note("on hold %s %s: %s balance %d reserved %d challenged %d replacement %q", escrowID, model, reason, balance, reserved, challenged, replacementID)
+}
+
+func (n *recordingLifecycleNarrator) EscrowResumed(escrowID string, balance uint64) {
+	n.note("resumed %s balance %d", escrowID, balance)
+}
+
+func (n *recordingLifecycleNarrator) EscrowHoldEnded(escrowID, reason string) {
+	n.note("hold ended %s: %s", escrowID, reason)
+}
+
 func (n *recordingLifecycleNarrator) EscrowSettled(escrowID, model, txHash, settler string) {
 	n.note("settled %s %s tx %s settler %s", escrowID, model, txHash, settler)
 }

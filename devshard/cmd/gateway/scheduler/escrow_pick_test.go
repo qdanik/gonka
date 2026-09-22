@@ -508,7 +508,7 @@ type exhaustionReport struct{ escrowID, reason string }
 
 // Routing declines an exhausted escrow but cannot replace it, so it tells the rotation lifecycle why, and
 // never for the fallback ceiling alone: that ceiling can sit below the hosts' own, and a reported escrow is
-// parked for good.
+// parked or put on hold.
 func TestPickEscrowReportsAnExhaustedEscrowButNeverForTheFallbackCeilingAlone(t *testing.T) {
 	t.Parallel()
 
@@ -828,5 +828,77 @@ func TestPickEscrowIgnoresTheAllowlistWhenItIsEmpty(t *testing.T) {
 
 	if _, err := pickWith(scheduler, RequestProfile{Model: modelA}, chain.PhaseSnapshot{}); err != nil {
 		t.Fatalf("pickEscrow() with no allowlist: %v", err)
+	}
+}
+
+// An escrow on hold is priced the way a pick prices it: the same retirement reserve, the same token price,
+// the same nonce ceiling. It must clear headroom above the balance floor so it does not flap once resumed,
+// and a nonce past the hosts' own cap can never be resumed at all.
+func TestResumeReadiness(t *testing.T) {
+	t.Parallel()
+
+	const groupSize = 4
+	const knownMaxNonce = 1_000
+	cutoff := types.MaxActiveNonce(uint32(knownMaxNonce), groupSize)
+	cutoff -= min(nonceInFlightMargin, cutoff/2)
+
+	newHeldSession := func(balance, latestNonce uint64) *fakeSession {
+		return &fakeSession{balance: balance, tokenPrice: 1, latestNonce: latestNonce, slots: slotsOf("escrow-hold", groupSize)}
+	}
+
+	testCases := []struct {
+		name           string
+		maxTokensCap   int64
+		balance        uint64
+		latestNonce    uint64
+		snapshotNonce  uint64
+		answers        uint64
+		wantReady      bool
+		wantNonceSpent bool
+	}{
+		{
+			name: "covers the headroom", maxTokensCap: 100,
+			balance: 3_200, latestNonce: 10, snapshotNonce: knownMaxNonce, answers: 32,
+			wantReady: true, wantNonceSpent: false,
+		},
+		{
+			name: "one answer short", maxTokensCap: 100,
+			balance: 3_199, latestNonce: 10, snapshotNonce: knownMaxNonce, answers: 32,
+			wantReady: false, wantNonceSpent: false,
+		},
+		{
+			name: "past the hosts' nonce cutoff", maxTokensCap: 100,
+			balance: 1_000_000, latestNonce: cutoff, snapshotNonce: knownMaxNonce, answers: 32,
+			wantReady: false, wantNonceSpent: true,
+		},
+		{
+			name: "max nonce unknown, past the fallback", maxTokensCap: 100,
+			balance: 1_000_000, latestNonce: fallbackNonceCeiling, snapshotNonce: 0, answers: 32,
+			wantReady: false, wantNonceSpent: false,
+		},
+		{
+			name: "no retirement reserve configured", maxTokensCap: 0,
+			balance: 1_000_000, latestNonce: 10, snapshotNonce: knownMaxNonce, answers: 32,
+			wantReady: false, wantNonceSpent: false,
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			settings := config.Defaults()
+			settings.Limits.MaxTokensCap = testCase.maxTokensCap
+			scheduler := &Scheduler{
+				settings:  config.NewHolder(&settings),
+				snapshots: &fakeSnapshots{snapshot: chain.PhaseSnapshot{MaxNonce: testCase.snapshotNonce}},
+			}
+			candidate := Escrow{ID: "escrow-hold", Session: newHeldSession(testCase.balance, testCase.latestNonce)}
+
+			ready, nonceSpent := scheduler.ResumeReadiness(candidate, testCase.answers)
+
+			if ready != testCase.wantReady || nonceSpent != testCase.wantNonceSpent {
+				t.Fatalf("ResumeReadiness() = %v, %v; want %v, %v", ready, nonceSpent, testCase.wantReady, testCase.wantNonceSpent)
+			}
+		})
 	}
 }

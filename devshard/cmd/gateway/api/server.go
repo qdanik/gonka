@@ -31,6 +31,7 @@ type EscrowRegistry interface {
 	SettlementSession(escrowID string) (registry.EscrowSession, bool)
 	Inspect(ctx context.Context, escrowID string) (registry.EscrowSession, func(), error)
 	IsBusy(escrowID string) bool
+	OnHold(escrowID string) bool
 }
 
 type InferenceEngine interface {

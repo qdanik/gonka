@@ -25,6 +25,11 @@ func TestParseModels(t *testing.T) {
 				{ModelID: "model-b", TempCount: 1, TargetCount: 3, Amount: 2000000, PrivateKeyEnv: "MODEL_B_KEY"},
 			},
 		},
+		{
+			name: "missing target_count defaults to one",
+			raw:  `[{"model_id":"m","temp_count":1,"amount":1,"private_key_env":"K"}]`,
+			want: []ModelConfig{{ModelID: "m", TempCount: 1, TargetCount: 1, Amount: 1, PrivateKeyEnv: "K"}},
+		},
 		{name: "blank string returns nil", raw: "", want: nil},
 		{name: "whitespace-only returns nil", raw: "   \n\t ", want: nil},
 		{name: "malformed JSON errors", raw: "{not valid", wantErr: true},

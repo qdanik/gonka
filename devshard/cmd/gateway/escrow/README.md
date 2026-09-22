@@ -10,6 +10,7 @@ An escrow is funds on chain plus a group of hosts. This package creates one, kee
 | `rotation.go`, `commitments.go` | replacing an escrow across the proof-of-compute boundary, and the intent recorded before the transaction so a crash cannot lose it |
 | `settlement.go` | closing an escrow and paying what its hosts earned |
 | `depletion.go` | noticing the funds will not cover the work in flight |
+| `hold.go` | keeping a depleted escrow published instead of parking it, and resuming or ending that hold each tick |
 | `checker.go`, `dedup.go` | crash-recovery reconciliation: what the chain holds versus what this process recorded |
 | `breaker.go` | refusing to keep creating escrows when creation keeps failing |
 | `vocabulary.go` | the strings written into rows and log fields: rotation roles and stages, which are stored, and why a commitment was cleared |
@@ -26,7 +27,7 @@ An escrow is funds on chain plus a group of hosts. This package creates one, kee
 
 `TickInterval` is exported because `api` answers a drained offered model's 503 with it as `Retry-After`: the tick is the soonest the gateway itself parks, replaces and republishes a drained escrow.
 
-Five steps run whatever the `Rotation.Enabled` toggle says, because each of them is about an escrow that already exists rather than about creating one:
+Six steps run whatever the `Rotation.Enabled` toggle says, because each of them is about an escrow that already exists rather than about creating one:
 
 | Step | Why it ignores the toggle |
 | --- | --- |
@@ -34,13 +35,14 @@ Five steps run whatever the `Rotation.Enabled` toggle says, because each of them
 | `settlePending` | a parked escrow's row is the only record of which key can settle it, so nothing else will ever pick it up |
 | `checkMissing` | an escrow the chain no longer holds must stop taking traffic |
 | `sweepTimeouts` | a nonce the chain will still settle is owed a vote whether or not rotation is on |
+| `resumeHeld` | a row on hold is re-synced into the registry, resumed or parked, whether or not rotation could fund what it needs — and it runs before `checkDepletion` because that step counts against the slice `resumeHeld` returns, not the one the tick loaded |
 | `checkDepletion` | an exhausted escrow must stop taking traffic; only creating its replacement is rotation's business, which is why `rotationModels` returns an empty set when rotation is off and no caller downstream has to re-read the toggle |
 
-`sweepTimeouts` is the only one of the five that does not run *on* the tick: a vote round can outlast 15 s, so it runs in its own goroutine, a second tick starts nothing while the first is still voting, and `Stop` waits for it as well as for the tick.
+`sweepTimeouts` is the only one of the six that does not run *on* the tick: a vote round can outlast 15 s, so it runs in its own goroutine, a second tick starts nothing while the first is still voting, and `Stop` waits for it as well as for the tick.
 
-The chain snapshot is pulled from the observer once per tick rather than subscribed to: at this cadence a poll is equivalent and it avoids callback races. The devshard rows are likewise loaded once and passed down; the steps below filter that one slice rather than reloading it.
+The chain snapshot is pulled from the observer once per tick rather than subscribed to: at this cadence a poll is equivalent and it avoids callback races. The devshard rows are likewise loaded once and passed down; the steps below filter that one slice rather than reloading it, except `checkDepletion`, which reads the slice `resumeHeld` returns instead.
 
-Only after those five does the bridge run, and only when rotation is enabled and the snapshot carries chain data (`EpochIndex` and `BlockHeight` both non-zero — otherwise it is a cold start). Within `PrePoCBlocks` of the epoch switch `prepareBridge` runs and wins even when PoC is also inactive; otherwise `finishBridge` runs while requests are not blocked.
+Only after those six does the bridge run, and only when rotation is enabled and the snapshot carries chain data (`EpochIndex` and `BlockHeight` both non-zero — otherwise it is a cold start). Within `PrePoCBlocks` of the epoch switch `prepareBridge` runs and wins even when PoC is also inactive; otherwise `finishBridge` runs while requests are not blocked.
 
 ## Creating an escrow
 
@@ -87,11 +89,28 @@ The breaker is keyed by (model, role). A failed create opens a cooldown of `esca
 
 ## Replacing a depleted escrow
 
-An exhausted escrow is exactly the one the load score prefers, because its in-flight count stays low while it fails every request. So `OnBalanceExhausted` only marks it, and the next tick takes it out of service.
+An exhausted escrow is exactly the one the load score prefers, because its in-flight count stays low while it fails every request. So `OnBalanceExhausted` only marks it, and the next tick takes it out of service — parked, or put on hold when the hold feature applies (see "An escrow on hold", below).
 
-The escrow is **parked before** its replacement is created, and only the call that moved its row out of service creates one (`parkIfServing`). A create can fail after its broadcast, while it waits for the result; an escrow still serving then would be reported again and replaced on every tick, so the row is the guard, and it holds across ticks and restarts. The replacement always takes the `regular` role: inheriting a temp role would hand the next bridge an escrow to retire rather than the lasting coverage the depleted one was providing. Every rule is listed in [`docs/escrows.md`](../docs/escrows.md), "Depletion".
+The escrow is **moved out of service before** its replacement is created, and only the call that moved its row creates one: `parkIfServing` on the always-park path, `putOnHold` on the hold path (`hold.go`). A create can fail after its broadcast, while it waits for the result; an escrow still serving then would be reported again and replaced on every tick, so the row is the guard, and it holds across ticks and restarts. The replacement always takes the `regular` role: inheriting a temp role would hand the next bridge an escrow to retire rather than the lasting coverage the depleted one was providing. Every rule is listed in [`docs/escrows.md`](../docs/escrows.md), "Depletion".
 
-Replacement is refused when the snapshot carries no chain data yet, and refused before the escrow is parked, since no later tick replaces an escrow already out of service. A replacement is keyed by the epoch that funded it, and an escrow created under an epoch-less snapshot is counted by no epoch at all — so the next bridge would fund a full set on top of it. Refusing re-marks the escrow, and the next tick with a snapshot tries again.
+**The count rule stands in for `parkIfServing`'s always-replace trigger on the hold path.** The always-park path replaces whenever the model is replaceable at all; `holdOrPark`'s hold branch instead calls `replaceIfShort`, which funds a replacement only while the model has fewer than `TargetCount` **serving** escrows — `active=1, on_hold=0`, any role — once this one has left them (`hold.go`, `modelCounts`, `replaceIfShort`). An escrow resumed from hold already counts as serving, so it sits over the target rather than under it: when it depletes a second time the count is already full and nothing is created for it. The same count repairs a replacement a crash lost between the row moving on hold and the create running, at the model's next depletion — nothing else notices the gap until then.
+
+Replacement is refused when the snapshot carries no chain data yet, and refused before the escrow is parked or held, since no later tick replaces an escrow already out of service. A replacement is keyed by the epoch that funded it, and an escrow created under an epoch-less snapshot is counted by no epoch at all — so the next bridge would fund a full set on top of it. Refusing re-marks the escrow, and the next tick with a snapshot tries again.
+
+## An escrow on hold
+
+`resumeHeld` runs every tick, before `checkDepletion`, whatever the rotation toggle says (see [`docs/escrows.md`](../docs/escrows.md), "The tick"). It walks the tick's own devshard slice and re-syncs the registry's on-hold flag for every active row from it — a row not on hold clears the registry flag, a row on hold is judged for resume or for parking — and it has to run first because `checkDepletion` counts against the copy `resumeHeld` returns, not the slice the tick loaded.
+
+For a row on hold, `settleHold` asks two questions in order (`hold.go`):
+
+1. **Should the hold end and the row park instead?** `holdEndReason` answers with one of four reasons, or none: `Rotation.HoldEnabled` went false (`holdEndedDisabled`); rotation is off, or the model is no longer replaceable (`holdEndedRotationOff`); the escrow's creation epoch cannot be resolved (`holdEndedEpochUnknown`); or it is older than the snapshot's current one (`holdEndedEpochPassed`) — an epoch switch means the escrow has to settle inside the chain's window instead of continuing to serve on old-epoch hosts. Any of the four parks it through the same statement depletion uses (`endHold` → `parkIfServing`), which clears `active` and `on_hold` together.
+2. **Otherwise, is it ready to resume?** `Verdict` (`escrowHolds.Verdict`, wired in `main.go`) asks the scheduler's own pricing rather than a copy of it: `HoldNonceSpent` parks the row, because a nonce-exhausted escrow can never serve again; `HoldResume` calls `ResumeFromHold` then `registry.Resume`; anything else leaves the row on hold for another tick.
+
+**The creation epoch** is the row's `RotationEpoch`, or the chain's escrow epoch (`GetEscrow`) when the row has none — a seeded or admin-added row carries `rotation_epoch = 0` (`creationEpoch`, `hold.go`). The resolved epoch is never written back to the row, because a row with an epoch starts counting toward the bridge (`countActive`). An escrow whose epoch cannot be resolved — the chain errors, does not know it, or reports epoch 0 — is parked, never held: `holdOrPark` parks it instead of putting it on hold, and a tick that finds one already on hold ends the hold.
+
+A resumed row also drops its pending depletion mark (`depletionMarks.forget`), so a report already queued from just before the resume — a stale in-flight failure that reached the mark set a moment earlier — cannot put the escrow straight back on hold the same tick it came off.
+
+**The chain's window does not stretch for a hold.** Settlement lands only in the escrow's epoch or the next one (`inference-chain/x/inference/keeper/msg_server_settle_devshard_escrow.go:49`); an escrow still unsettled once `DevshardPruningThreshold` (2) epochs have passed since the one that funded it has its whole `Amount` split across the group's slots instead of being paid by settlement (`inference-chain/x/inference/keeper/devshard_pruning.go:9-25`). `holdEndedEpochPassed` exists so a hold ends and the row parks — and so enters `settlePending` — well inside that window rather than riding it to the edge.
 
 ## Settlement and retirement
 
@@ -143,7 +162,7 @@ Two hooks are called from the request path — `OnEscrowMissing` and `OnBalanceE
 - `escrowTxClient`, satisfied by `*chain.TxClient`. `TxCommitted` is what tells a row still marked pending apart from one whose settle genuinely failed: the settle may have reached the chain after the wait gave up.
 - `escrowStore`, satisfied by `*store.Store`; `snapshotSource`, satisfied by `*chain.PhaseObserver`.
 - `SettlementSource`, satisfied by `*registry.Registry` and wired by the composition root (`main.go`). `Retire` is synchronous — no nonce can be committed on the escrow after it returns — and that is what makes `IsBusy` monotone, so an idle answer stays true until the settlement it gates is broadcast. `Finalize` is idempotent.
-- **A narrator** (`Deps.Narrator`, satisfied by the journal) hears every transition an operator reads the log for — created, recovered, cleared, gone, marked, depleted with no replacement, rotation skipped, regulars promoted to temp, bridged, parked, settled, reconciled, dropped, a failed tick and a sweep that found work. The package writes no line itself, and every escrow id it hands over is the text form the rest of the gateway uses.
+- **A narrator** (`Deps.Narrator`, satisfied by the journal) hears every transition an operator reads the log for — created, recovered, cleared, gone, marked, depleted with no replacement, rotation skipped, regulars promoted to temp, bridged, parked, settled, reconciled, dropped, put on hold, resumed, a hold ended, a failed tick and a sweep that found work. The package writes no line itself, and every escrow id it hands over is the text form the rest of the gateway uses.
 - `ModelConfig`'s json tags are the `GATEWAY_ROTATION_MODELS_JSON` wire contract and are not renameable.
 
 ## Read next
