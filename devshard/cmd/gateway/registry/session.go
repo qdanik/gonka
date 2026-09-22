@@ -37,6 +37,8 @@ type EscrowSession interface {
 	ParticipantKeys() []string
 	HostDials() []HostDial
 	HeightSyncView() heightsync.OperatorView
+	WaitRouterCatalog(ctx context.Context) error
+	WaitHeightSeedReady(ctx context.Context) error
 	HostParticipantKeyList() []string
 	Nonce() uint64
 	Balance() uint64

@@ -146,3 +146,8 @@ const (
 	DirectChain = "direct_chain"
 	CometRPC    = "comet_rpc"
 )
+
+// Which feed answers for the chain's operational governance. See ../../runtime_params.go.
+const (
+	ParamsSource = "params_source"
+)

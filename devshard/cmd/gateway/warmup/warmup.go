@@ -116,6 +116,14 @@ func (w *Prober) warm(escrowID, model string) {
 		}
 	}()
 
+	// A probe teaches nobody before the group is reachable and before the escrow's log carries a height.
+	if err := session.WaitRouterCatalog(ctx); err != nil {
+		return
+	}
+	if err := session.WaitHeightSeedReady(ctx); err != nil {
+		return
+	}
+
 	// The probe's diff is signed before its send, so the group can be taught now instead of an inference later.
 	var catchUp chan error
 	onNonceCommitted := func() {

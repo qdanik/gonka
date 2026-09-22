@@ -256,6 +256,11 @@ func (e *e2eEnv) startGateway(ctx context.Context, t *testing.T, opts e2eEnvOpti
 		// Hosts are Docker DNS names that resolve to private IPs.
 		// Production leaves this unset so the dial-time SSRF guard stays on.
 		"GATEWAY_ALLOW_PRIVATE_ADDRESSES": "true",
+		// On in production, off here: the stand's hosts have no catalog and no oracle, so no session
+		// could seed a tip. The cadence itself is left on, as devshardctl runs it.
+		"GATEWAY_HEIGHT_SYNC_REQUIRE_SEED": "false",
+		// The stand runs no node manager, so governance is read from the mock chain.
+		"DEVSHARD_PARAMS_SOURCE": "chain",
 	}
 	for k, v := range opts.gatewayEnvOverrides {
 		gatewayEnv[k] = v

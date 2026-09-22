@@ -112,6 +112,7 @@ type gateway struct {
 	warmup       *warmup.Prober
 	hostPings    *hostping.Pinger
 	heights      *heights.Oracle
+	governance   *runtimeParams
 
 	builders     int
 	devshardWork chan struct{}
@@ -370,6 +371,7 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 		warmup:       prober,
 		hostPings:    hostping.New(hostPingSettings(configuration.HostPing), escrows, metrics.NewHostPingRecorder(telemetry)),
 		heights:      sources.Heights,
+		governance:   sources.Governance,
 		builders:     boot.builders,
 		devshardWork: devshardWork,
 	}, nil

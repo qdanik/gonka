@@ -44,12 +44,17 @@ func chainBackedSessions(records devshardLookup, storageDir string) sessionSourc
 		if err != nil {
 			return chainSources{}, err
 		}
+		governance, err := openRuntimeParams(chainClient)
+		if err != nil {
+			return chainSources{}, errors.Join(err, follower.Close())
+		}
 		return chainSources{
-			Serving:   servingSessions(records, storageDir, bridge.NewGRPCBridge(chainClient), heightSettings, follower, routePrefix),
-			ReadOnly:  readOnlySessions(records, storageDir),
-			Reader:    grpcChain,
-			Transport: grpcChain,
-			Heights:   follower,
+			Serving:    servingSessions(records, storageDir, bridge.NewGRPCBridge(chainClient), heightSettings, follower, governance, routePrefix),
+			ReadOnly:   readOnlySessions(records, storageDir),
+			Reader:     grpcChain,
+			Transport:  grpcChain,
+			Heights:    follower,
+			Governance: governance,
 		}, nil
 	}
 }
@@ -208,11 +213,12 @@ type sessionSources func(endpoints config.Chain, heightSettings config.HeightSyn
 
 // chainSources is what one dial yields; Reader and Transport are interfaces so a test dials nothing.
 type chainSources struct {
-	Serving   registry.SessionFactory
-	ReadOnly  registry.SessionFactory
-	Reader    chain.Reader
-	Transport chain.Transport
-	Heights   *heights.Oracle
+	Serving    registry.SessionFactory
+	ReadOnly   registry.SessionFactory
+	Reader     chain.Reader
+	Transport  chain.Transport
+	Heights    *heights.Oracle
+	Governance *runtimeParams
 }
 
 type seedDevshard struct {
@@ -301,7 +307,7 @@ func sessionInputs(ctx context.Context, records devshardLookup, storageDir, escr
 }
 
 // The bridge is one object for the process. See README.md, "Escrow sessions and the chain connection".
-func servingSessions(records devshardLookup, storageDir string, escrowBridge bridge.MainnetBridge, heightSettings config.HeightSync, follower *heights.Oracle, routePrefix string) registry.SessionFactory {
+func servingSessions(records devshardLookup, storageDir string, escrowBridge bridge.MainnetBridge, heightSettings config.HeightSync, follower *heights.Oracle, governance *runtimeParams, routePrefix string) registry.SessionFactory {
 	return func(ctx context.Context, escrowID string) (registry.EscrowSession, error) {
 		record, keyHex, storagePath, err := sessionInputs(ctx, records, storageDir, escrowID)
 		if err != nil {
@@ -318,6 +324,7 @@ func servingSessions(records devshardLookup, storageDir string, escrowBridge bri
 			ExecutionTimeoutSeconds: sessionTimeouts.ExecutionTimeoutSeconds,
 			RequireHeightSeed:       heightSettings.Enabled && heightSettings.RequireSeed,
 			ExtraClientConfig:       heights.Courier(heightSettings, follower),
+			Heartbeat:               governance.Heartbeat(),
 		})
 		if err != nil {
 			return nil, err

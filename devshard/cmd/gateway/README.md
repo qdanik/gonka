@@ -40,7 +40,7 @@ The package root itself is the composition root: `main.go` wires the above, and 
 
 ## The composition root
 
-Seven files, and what each is for: `main.go` wires everything, `routing.go` builds the registry, scheduler and warmup together because each needs the others, `capacity.go` reads the chain snapshot into the numbers the limiters price by, `lifecycle.go` starts and stops it all, `devshards.go` turns stored rows into live escrow sessions, `observers.go` adapts one event into the several readers that want it, and `operations.go` is the admin surface behind [`api`](./api/).
+Eight files, and what each is for: `main.go` wires everything, `routing.go` builds the registry, scheduler and warmup together because each needs the others, `capacity.go` reads the chain snapshot into the numbers the limiters price by, `lifecycle.go` starts and stops it all, `devshards.go` turns stored rows into live escrow sessions, `runtime_params.go` binds an escrow's heartbeat schedule to the chain's operational governance, `observers.go` adapts one event into the several readers that want it, and `operations.go` is the admin surface behind [`api`](./api/).
 
 ### Wiring order, and the knots in it
 
@@ -71,7 +71,7 @@ The per-weight *allowance* is the exception: it follows the raw chain phase rath
 
 ### Shutdown
 
-Ten steps, in a fixed order, described in [`docs/operations.md`](./docs/operations.md), "Shutdown". Every step runs even after an earlier one fails, except a step marked as needing a quiesced system — that one is skipped and the skip reported, because it destroys state the steps above it may still be using. A drain step is bounded by the shutdown budget without cancelling the work inside it.
+Twelve steps, in a fixed order, described in [`docs/operations.md`](./docs/operations.md), "Shutdown". Every step runs even after an earlier one fails, except a step marked as needing a quiesced system — that one is skipped and the skip reported, because it destroys state the steps above it may still be using. A drain step is bounded by the shutdown budget without cancelling the work inside it.
 
 Three positions in that order are load-bearing:
 
@@ -87,6 +87,7 @@ Boot has a matching budget: the concurrent-build limit and the idle connection p
 
 - **The bridge is one object for the process.** It holds the chain client every session reads escrow state through, so building one per session would open a connection per escrow and lose the client's cache.
 - **Production does not use upstream's `NewGRPCBridgeFromURL`**, which is its test constructor. The bridge is built over a client carrying the CometBFT RPC query fallback, so an escrow read survives the gRPC query path failing. An empty RPC endpoint lets `common/chain` derive one from the gRPC host at the standard port, which is how a default deployment is laid out — a deployment that moved it has to say so, or the fallback resolves to a host nobody is listening on and dies silently.
+- **The runtime-params feed rides the same connection**, because it asks the chain the same questions the bridge does. It answers what schedule an escrow's heartbeat runs on, and it cannot starve one: a chain it cannot reach is not an error but an empty snapshot, and zero on the wire means keep the compiled schedule. It holds its own context rather than the boot one, so the shutdown step owns its lifetime and a signal does not cancel it before that step is reached — the same reason `heights` builds its block feed that way ([`runtime_params.go`](./runtime_params.go), [`docs/escrows.md`](./docs/escrows.md), "Height sync").
 - **Seeding leaves a devshard it already knows alone**, so a restart cannot resurrect one an operator deactivated.
 - **Publication follows the store's `active` flag**, builders at a time; an escrow whose key or record is missing is marked inactive rather than failing the boot. A write to a devshard row wakes a republish, because the rotation lifecycle owns those rows and knows nothing about the registry. `depletionNotice` breaks the reverse cycle: the manager settles through the registry, so it cannot also be constructed before it.
 - **Importing an escrow copies its storage rather than referencing it**, so the gateway owns the only handle to what it serves. Only regular files are copied — session storage is a flat set of SQLite files, so a directory below it is not part of the escrow.

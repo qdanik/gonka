@@ -136,6 +136,9 @@ func (f *fakeSession) HostDials() []HostDial { return f.dials }
 
 func (f *fakeSession) HeightSyncView() heightsync.OperatorView { return f.heightSyncView }
 
+func (f *fakeSession) WaitRouterCatalog(context.Context) error   { return nil }
+func (f *fakeSession) WaitHeightSeedReady(context.Context) error { return nil }
+
 func (f *fakeSession) setPhase(phase types.SessionPhase) { f.phase.Store(int32(phase)) }
 
 type recordingMembership struct {

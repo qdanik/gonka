@@ -88,16 +88,18 @@ Signing keys are addressed **by the name of the variable that holds them**, neve
 | `GATEWAY_TIMEOUT_SWEEP_BUDGET_PER_TICK` | 8 | execution-timeout votes one tick may retry across every escrow; `0` turns the sweep off |
 | `GATEWAY_TIMEOUT_SWEEP_GRACE_SECONDS` | 120 | how far past its deadline a nonce must be before the sweep claims it from its own race |
 | `GATEWAY_POC_MODE` | relaxed | `relaxed` keeps serving through proof-of-compute; `off` refuses new requests while the chain blocks them |
-| `GATEWAY_HEIGHT_SYNC_ENABLED` | false | whether the escrow's heartbeat cadence runs. Off unless the hosts carry height sync, or every interval logs a heartbeat it could not stamp ([`docs/escrows.md`](escrows.md), "Height sync") |
-| `GATEWAY_HEIGHT_SYNC_REQUIRE_SEED` | false | whether a session open must land a height seed before serving; the production posture, and off in the e2e stand |
+| `GATEWAY_HEIGHT_SYNC_ENABLED` | true | whether the escrow's heartbeat cadence runs. Turn it off for a fleet whose hosts do not carry height sync, or every interval logs a heartbeat it could not stamp ([`docs/escrows.md`](escrows.md), "Height sync") |
+| `GATEWAY_HEIGHT_SYNC_REQUIRE_SEED` | true | whether a session chases a host-signed tip from the moment it opens and reports `seed_incomplete` when it cannot. It does not refuse requests — see [`docs/escrows.md`](escrows.md), "Height sync". Off in the e2e stand |
 | `GATEWAY_HEIGHT_SYNC_CHAIN_ORACLE` | false | whether the gateway follows mainnet itself, from `NODE_MANAGER_ADDR`, the chain RPC and gRPC. It is not what the gateway stamps from — it only labels how much a carried tip is trusted ([`heights/README.md`](../heights/README.md)) |
+| `NODE_MANAGER_ADDR` | — / localhost:9400 | one name, two readings: the height follower uses it only when set, while the runtime-params feed prefers `DEVSHARD_NODE_MANAGER_ADDR` and falls back to `localhost:9400` when neither is set. Unreachable is not fatal to either — the feed polls the chain instead, less promptly |
+| `DEVSHARD_PARAMS_SOURCE` | auto | which feed answers for governance: `auto` prefers the long poll with a chain fallback, `chain` polls the chain alone and dials no node manager |
 | `GATEWAY_HOST_PING_DISABLED` | false | whether the hosts the live escrows use are pinged for reachability and clock drift. Observability only — a host that stops answering a ping keeps its routing weight ([`hostping/README.md`](../hostping/README.md)) |
 | `GATEWAY_HOST_PING_INTERVAL_MS` / `GATEWAY_HOST_PING_TIMEOUT_MS` | 15 000 / 2 000 | the probe cadence and its patience; the timeout must be at most half the interval or the ping is refused and switched off |
 | `GATEWAY_HOST_PING_CONCURRENCY` | 8 | hosts probed at once within one wave |
 | `GATEWAY_ALLOW_PRIVATE_ADDRESSES` | false | whether dials to private addresses are allowed. A host URL comes from chain state, so the guard is on in production and only a stand whose hosts are Docker names turns it off; turning it off is logged |
 | `GATEWAY_LOG_FORMAT` | json | one JSON object per line, which promtail and the Loki panels read; `text` restores the text form, and any other value refuses to boot |
 
-The full list is `env/env.go`; the full set of defaults is `config.Defaults()`. Neither is duplicated here — a table that drifts is worse than a pointer that does not.
+The full list is `env/env.go`; the full set of defaults is `config.Defaults()`. Neither is duplicated here — a table that drifts is worse than a pointer that does not. One table sits outside `env/env.go`: the runtime-params feed reads the fleet-shared `DEVSHARD_*` / `DEVSHARDD_*` knobs declared in `devshard/runtimeparams/env.go`, because they are the same knobs every devshard binary honours.
 
 ## Boot
 
@@ -117,7 +119,7 @@ The full list is `env/env.go`; the full set of defaults is `config.Defaults()`. 
 
 ## Shutdown
 
-`lifecycle.go`, `shutdownOrder`. Eleven steps, in this order, bounded by the grace period, with up to one more second from the journal step's floor:
+`lifecycle.go`, `shutdownOrder`. Twelve steps, in this order, bounded by the grace period, with up to one more second from the journal step's floor:
 
 | # | Step | Why here |
 | --- | --- | --- |
@@ -129,9 +131,10 @@ The full list is `env/env.go`; the full set of defaults is `config.Defaults()`. 
 | 6 | escrow sessions | **destroys state** the steps above may still use |
 | 7 | journal | every producer with a shutdown step above has stopped; it drains its queue into the ledger below, waiting for whatever budget remains, or for one second when the steps above leave less, and counts anything later as a late event, such as a line from the warmup, which is only cancelled, or from the republish after a devshard write |
 | 8 | nonce accounting | after every emitter, so the final snapshot holds the counters the run ended with |
-| 9 | height follower | after the sessions that carried its readings; it holds a block subscription and a dialled client |
-| 10 | store | every step above may still write to it |
-| 11 | public API connections | every step above can still reach it; closing earlier just forces a re-dial |
+| 9 | runtime params | after the sessions whose schedule it answers for. It cancels the feed and closes the node-manager connection without waiting for an in-flight poll; nothing above it still reads a schedule by then |
+| 10 | height follower | after the sessions that carried its readings; it holds a block subscription and a dialled client |
+| 11 | store | every step above may still write to it |
+| 12 | public API connections | every step above can still reach it; closing earlier just forces a re-dial |
 
 `stopAll` runs every step **even after one fails**, except a step marked `needsQuiesced` (step 6): if anything above it failed, work may still be running, so closing the sessions would pull storage out from under it. That step is skipped and the skip is reported.
 

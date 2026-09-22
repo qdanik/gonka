@@ -628,13 +628,13 @@ func TestShutdownStopsAcceptingFirstAndClosesTheStoreLast(t *testing.T) {
 		recorder("http server"), recorder("races"), recorder("dispatchers"),
 		recorder("escrow lifecycle"), recorder("chain observer"),
 		recorder("escrow sessions"), recorder("journal"), recorder("nonce accounting"),
-		recorder("height follower"), recorder("store"),
+		recorder("runtime params"), recorder("height follower"), recorder("store"),
 		recorder("public api connections"))
 	if err := stopAll(context.Background(), steps); err != nil {
 		t.Fatalf("stopAll(): %v", err)
 	}
 
-	want := []string{"http server", "races", "dispatchers", "escrow lifecycle", "chain observer", "escrow sessions", "journal", "nonce accounting", "height follower", "store", "public api connections"}
+	want := []string{"http server", "races", "dispatchers", "escrow lifecycle", "chain observer", "escrow sessions", "journal", "nonce accounting", "runtime params", "height follower", "store", "public api connections"}
 	assertSame(t, "shutdown sequence", sequence, want)
 }
 
@@ -677,7 +677,7 @@ func TestShutdownReachesTheStoreEvenWhenAnEarlierStepFails(t *testing.T) {
 		failing, recorder("races"), recorder("dispatchers"),
 		recorder("escrow lifecycle"), recorder("chain observer"),
 		recorder("escrow sessions"), recorder("journal"), recorder("nonce accounting"),
-		recorder("height follower"), recorder("store"),
+		recorder("runtime params"), recorder("height follower"), recorder("store"),
 		recorder("public api connections"))
 	err := stopAll(context.Background(), steps)
 
@@ -889,15 +889,17 @@ func (s weightlessSession) SignatureStatus() ([]user.SignatureStatusEntry, uint6
 	return nil, 0, false
 }
 
-func (s weightlessSession) SignedSlots() map[uint64]types.Bitmap128 { return nil }
-func (s weightlessSession) SnapshotState() types.EscrowState        { return types.EscrowState{} }
-func (s weightlessSession) SealedInferences() int                   { return 0 }
-func (s weightlessSession) Finalize(context.Context) error          { return nil }
-func (s weightlessSession) FlushSnapshot() error                    { return nil }
-func (s weightlessSession) Close() error                            { return nil }
-func (s weightlessSession) UserSession() *user.Session              { return nil }
-func (s weightlessSession) HostDials() []registry.HostDial          { return nil }
-func (s weightlessSession) HeightSyncView() heightsync.OperatorView { return heightsync.OperatorView{} }
+func (s weightlessSession) SignedSlots() map[uint64]types.Bitmap128   { return nil }
+func (s weightlessSession) SnapshotState() types.EscrowState          { return types.EscrowState{} }
+func (s weightlessSession) SealedInferences() int                     { return 0 }
+func (s weightlessSession) Finalize(context.Context) error            { return nil }
+func (s weightlessSession) FlushSnapshot() error                      { return nil }
+func (s weightlessSession) Close() error                              { return nil }
+func (s weightlessSession) UserSession() *user.Session                { return nil }
+func (s weightlessSession) HostDials() []registry.HostDial            { return nil }
+func (s weightlessSession) HeightSyncView() heightsync.OperatorView   { return heightsync.OperatorView{} }
+func (s weightlessSession) WaitRouterCatalog(context.Context) error   { return nil }
+func (s weightlessSession) WaitHeightSeedReady(context.Context) error { return nil }
 
 func (s weightlessSession) PrepareInferenceFn(user.ParamsForHost) (*user.PreparedInference, error) {
 	return nil, nil

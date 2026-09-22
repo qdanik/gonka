@@ -97,6 +97,8 @@ func Defaults() Config {
 			HostStalenessSeconds:     3_600,
 		},
 		HeightSync: HeightSync{
+			Enabled:     true,
+			RequireSeed: true,
 			AnchorK:     10,
 			AnchorSlots: 1,
 		},

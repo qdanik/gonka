@@ -75,6 +75,8 @@ func TestDefaultsMatchSpec(t *testing.T) {
 		{"Engine.LoserGraceMS", configuration.Engine.LoserGraceMS, int64(600_000)},
 		{"Engine.MaxAttemptsPerRequest", configuration.Engine.MaxAttemptsPerRequest, int64(2)},
 		{"Engine.MaxConcurrentTimeoutVotes", configuration.Engine.MaxConcurrentTimeoutVotes, int64(2_048)},
+		{"HeightSync.Enabled", configuration.HeightSync.Enabled, true},
+		{"HeightSync.RequireSeed", configuration.HeightSync.RequireSeed, true},
 		{"NonceAccounting.RetentionEpochs", configuration.NonceAccounting.RetentionEpochs, int64(2)},
 		{"NonceAccounting.Port", configuration.NonceAccounting.Port, int64(9091)},
 	}

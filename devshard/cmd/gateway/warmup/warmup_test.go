@@ -218,6 +218,9 @@ type stubSession struct {
 
 func (s stubSession) Nonce() uint64 { return s.nonce }
 
+func (s stubSession) WaitRouterCatalog(context.Context) error   { return nil }
+func (s stubSession) WaitHeightSeedReady(context.Context) error { return nil }
+
 func (s stubSession) SnapshotState() types.EscrowState {
 	return types.EscrowState{Group: []types.SlotAssignment{{SlotID: 0, ValidatorAddress: "host-a"}}}
 }
