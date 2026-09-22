@@ -179,7 +179,7 @@ func TestFinalizeUsesTheResidentSessionWithoutRehydrating(t *testing.T) {
 	}
 }
 
-func TestFinalizeIsANoOpForAnEscrowAlreadyInSettlement(t *testing.T) {
+func TestFinalizeLetsAnEscrowAlreadyInSettlementCollectMissingSignatures(t *testing.T) {
 	t.Parallel()
 	resident := settleableSession(9)
 	resident.setPhase(types.PhaseSettlement)
@@ -193,8 +193,8 @@ func TestFinalizeIsANoOpForAnEscrowAlreadyInSettlement(t *testing.T) {
 		t.Fatalf("Finalize = %v, want nil", err)
 	}
 
-	if got := resident.finalizeCalls.Load(); got != 0 {
-		t.Errorf("Finalize calls on an already-settled escrow = %d, want 0", got)
+	if got := resident.finalizeCalls.Load(); got != 1 {
+		t.Errorf("Finalize calls on an escrow already in settlement = %d, want 1: only the session knows whether its quorum is held", got)
 	}
 }
 

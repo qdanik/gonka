@@ -83,6 +83,8 @@ The two notification interfaces are both called from paths that must not block. 
 
 `Finalize` and `BuildSettlement` both satisfy `escrow.SettlementSource` and both handle a non-resident escrow, but they rehydrate it differently. Finalizing collects host signatures, so it needs a serving session; a settlement payload comes entirely from local storage, so a read-only one is enough — no chain access, no host clients.
 
+`Finalize` runs even for an escrow already in settlement, because the phase does not say whether the quorum is held. Signatures live only in memory, and a finalize that fell short of quorum still leaves the escrow in settlement, so a rehydrated or retried escrow can sit there with none. `user.Session.Finalize` returns at once when the quorum is present and otherwise collects the missing signatures from the hosts; skipping it would broadcast the same unsigned payload on every retry.
+
 `Inspect` resolves a session for reading alone. A live or draining escrow answers from its own session; one already retired is rehydrated from local storage, which is exactly when an operator asks these questions. The returned release closes a rehydrated session and does nothing for a resident one.
 
 Before a payload leaves, `settlementUnverifiable` runs the chain's own check over it — recomputed state root, recovered signers, and weight against 2/3+1 — using the snapshot's group and warm keys, and against the same host stats the transaction will carry rather than the raw map, which may hold nil slots. It **warns and never blocks**: warm keys are populated lazily, so a refusal here can freeze a settlement the chain would have accepted.

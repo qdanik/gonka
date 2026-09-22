@@ -15,7 +15,7 @@ import (
 // Finalize collects host signatures, so a non-resident escrow is rehydrated with a serving session.
 func (r *Registry) Finalize(ctx context.Context, escrowID string) error {
 	if session, held := r.SettlementSession(escrowID); held {
-		return finalize(ctx, session)
+		return session.Finalize(ctx)
 	}
 	if r.servingSessions == nil {
 		return fmt.Errorf("escrow %s: no serving session factory", escrowID)
@@ -24,7 +24,7 @@ func (r *Registry) Finalize(ctx context.Context, escrowID string) error {
 	if err != nil {
 		return fmt.Errorf("rehydrating serving session for escrow %s: %w", escrowID, err)
 	}
-	return errors.Join(finalize(ctx, session), session.Close())
+	return errors.Join(session.Finalize(ctx), session.Close())
 }
 
 // BuildSettlement rehydrates a non-resident escrow read-only: the payload comes entirely from local storage.
@@ -56,13 +56,6 @@ func (r *Registry) Inspect(ctx context.Context, escrowID string) (EscrowSession,
 		return nil, nil, fmt.Errorf("inspecting escrow %s: %w", escrowID, err)
 	}
 	return session, func() { _ = session.Close() }, nil
-}
-
-func finalize(ctx context.Context, session EscrowSession) error {
-	if session.Phase() == types.PhaseSettlement {
-		return nil
-	}
-	return session.Finalize(ctx)
 }
 
 func (r *Registry) buildSettlement(escrowID string, session EscrowSession) (chain.SettlementInput, error) {
