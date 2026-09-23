@@ -95,6 +95,7 @@ func Build(values env.Values, overrides Overrides) (*Config, error) {
 	overrideIfSet(&configuration.Engine.InterChunkStallMS, values.EngineInterChunkStallMS)
 	overrideIfSet(&configuration.Engine.LoserGraceMS, values.EngineLoserGraceMS)
 	overrideIfSet(&configuration.Engine.MaxConcurrentTimeoutVotes, values.EngineMaxConcurrentTimeoutVotes)
+	overrideIfSet(&configuration.Engine.HedgeFirstTokenFloorMS, values.EngineHedgeFirstTokenFloorMS)
 
 	// Admin-override layer (wins over env).
 	overrideIfSet(&configuration.Limits.DefaultMaxTokens, overrides.DefaultMaxTokens)
@@ -117,6 +118,7 @@ func Build(values env.Values, overrides Overrides) (*Config, error) {
 	overrideIfSet(&configuration.Engine.InterChunkStallMS, overrides.EngineInterChunkStallMS)
 	overrideIfSet(&configuration.Engine.LoserGraceMS, overrides.EngineLoserGraceMS)
 	overrideIfSet(&configuration.Engine.MaxConcurrentTimeoutVotes, overrides.EngineMaxConcurrentTimeoutVotes)
+	overrideIfSet(&configuration.Engine.HedgeFirstTokenFloorMS, overrides.EngineHedgeFirstTokenFloorMS)
 	overrideIfSet(&configuration.Perf.EWMAHalfLifeSeconds, overrides.PerfEWMAHalfLifeSeconds)
 	overrideIfSet(&configuration.Perf.ConsecutiveFailThreshold, overrides.PerfConsecutiveFailThreshold)
 	overrideIfSet(&configuration.Perf.FailureRateThreshold, overrides.PerfFailureRateThreshold)

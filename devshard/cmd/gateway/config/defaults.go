@@ -118,6 +118,7 @@ func Defaults() Config {
 			LoserGraceMS:              600_000,
 			MaxAttemptsPerRequest:     2,
 			MaxConcurrentTimeoutVotes: 2_048,
+			HedgeFirstTokenFloorMS:    1_500,
 		},
 		Scheduler: Scheduler{
 			MatchWaitMS:         2_000,

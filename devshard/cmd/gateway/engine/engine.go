@@ -18,10 +18,18 @@ var (
 	ErrStopped = errors.New("engine stopped")
 
 	ErrAllAttemptsFailed = errors.New("every attempt failed")
+
+	// ErrHostsUnavailable is a race whose every attempt was refused as overloaded, not answered badly. See README.md, "Errors the engine returns".
+	ErrHostsUnavailable = errors.New("every host refused the request as unavailable")
 )
 
 // crownDenialStrikes is how many content-free answers cost a host the crown. See race.md, "Crown denial".
 const crownDenialStrikes = 3
+
+const (
+	refusedVoteFirstRetryDelay = 30 * time.Second
+	refusedVoteRetries         = 4
+)
 
 // hostTracker is satisfied by *perf.Tracker.
 type hostTracker interface {
@@ -32,6 +40,7 @@ type hostTracker interface {
 // hostWindows is satisfied by *limits.ParticipantLimiter; neither Acquire nor a release is on it. See rules.md, "5. The slot and the escrow hold are taken with the nonce, and given back after the vote".
 type hostWindows interface {
 	OnResult(result limits.Result)
+	CountRefusalIfIdle(participant, model string)
 }
 
 type raceMetrics interface {
@@ -95,10 +104,12 @@ type Request struct {
 
 // Engine admits races and is the barrier that outlives them. See race.md, "Stop".
 type Engine struct {
-	deps    Deps
-	carry   *carryBudget
-	crown   *crownStrikes
-	settles *settleQueue
+	deps           Deps
+	carry          *carryBudget
+	crown          *crownStrikes
+	settles        *settleQueue
+	stopping       context.Context
+	cancelStopping context.CancelFunc
 
 	mu      sync.Mutex
 	stopped bool
@@ -125,11 +136,14 @@ func NewEngine(deps Deps) (*Engine, error) {
 	if clock == nil {
 		clock = time.Now
 	}
+	stopping, cancelStopping := context.WithCancel(context.Background())
 	return &Engine{
-		deps:    deps,
-		carry:   newCarryBudget(deps.Config.Load().Stream),
-		crown:   newCrownStrikes(deps.Journal),
-		settles: newSettleQueue(clock),
+		deps:           deps,
+		carry:          newCarryBudget(deps.Config.Load().Stream),
+		crown:          newCrownStrikes(deps.Journal),
+		settles:        newSettleQueue(clock),
+		stopping:       stopping,
+		cancelStopping: cancelStopping,
 	}, nil
 }
 
@@ -162,6 +176,7 @@ func (e *Engine) Stop() {
 	e.mu.Lock()
 	e.stopped = true
 	e.mu.Unlock()
+	e.cancelStopping()
 	e.tracked.Wait()
 }
 
@@ -329,8 +344,25 @@ func (e *Engine) settle(outcome RaceOutcome, params any, registration *raceRegis
 	task := settleTask{
 		deadline: func() time.Time { return earliestVote(outcome, poster) },
 		post: func() {
-			defer registration.release()
-			SettleTimeouts(settleContext(outcome.RequestID), poster, outcome, e.reportTimeout)
+			retries := SettleTimeouts(settleContext(outcome.RequestID), poster, outcome, e.reportTimeout)
+			e.retryRefusedVotes(outcome, poster, retries, registration, 0)
+		},
+	}
+	e.settles.Add(task, int(e.deps.Config.Load().Engine.MaxConcurrentTimeoutVotes))
+}
+
+func (e *Engine) retryRefusedVotes(outcome RaceOutcome, poster TimeoutPoster, steps []TimeoutStep, registration *raceRegistration, round int) {
+	if len(steps) == 0 || round >= refusedVoteRetries || e.stopping.Err() != nil {
+		registration.release()
+		return
+	}
+	retryAt := e.settles.now().Add(refusedVoteFirstRetryDelay << round)
+	task := settleTask{
+		deadline: func() time.Time { return retryAt },
+		wake:     e.stopping,
+		post: func() {
+			remaining := postTimeouts(settleContext(outcome.RequestID), poster, steps, outcome.Lifecycle.EscrowMissing, e.reportTimeout)
+			e.retryRefusedVotes(outcome, poster, remaining, registration, round+1)
 		},
 	}
 	e.settles.Add(task, int(e.deps.Config.Load().Engine.MaxConcurrentTimeoutVotes))

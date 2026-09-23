@@ -31,7 +31,7 @@ func (s *Server) handleAdminDevshards(w http.ResponseWriter, r *http.Request) {
 	}
 	var request AddDevshardRequest
 	if err := decodeAdminBody(w, r, &request); err != nil {
-		writeErrorFor(w, badRequestUnlessOversized(err))
+		s.writeErrorFor(w, badRequestUnlessOversized(err))
 		return
 	}
 	if strings.TrimSpace(request.EscrowID) == "" || strings.TrimSpace(request.Model) == "" {
@@ -39,11 +39,11 @@ func (s *Server) handleAdminDevshards(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if strings.TrimSpace(request.PrivateKeyEnv) == "" {
-		writeErrorFor(w, ErrPrivateKeyEnvRequired)
+		s.writeErrorFor(w, ErrPrivateKeyEnvRequired)
 		return
 	}
 	if err := s.operations.AddDevshard(r.Context(), request); err != nil {
-		writeErrorFor(w, err)
+		s.writeErrorFor(w, err)
 		return
 	}
 	auditAdmin("escrow registered", "escrow", request.EscrowID, "model", request.Model)
@@ -56,7 +56,7 @@ func (s *Server) handleAdminDevshardImport(w http.ResponseWriter, r *http.Reques
 	}
 	var request ImportDevshardRequest
 	if err := decodeAdminBody(w, r, &request); err != nil {
-		writeErrorFor(w, badRequestUnlessOversized(err))
+		s.writeErrorFor(w, badRequestUnlessOversized(err))
 		return
 	}
 	if strings.TrimSpace(request.EscrowID) == "" || strings.TrimSpace(request.SourcePath) == "" {
@@ -64,11 +64,11 @@ func (s *Server) handleAdminDevshardImport(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	if strings.TrimSpace(request.PrivateKeyEnv) == "" {
-		writeErrorFor(w, ErrPrivateKeyEnvRequired)
+		s.writeErrorFor(w, ErrPrivateKeyEnvRequired)
 		return
 	}
 	if err := s.operations.ImportDevshard(r.Context(), request); err != nil {
-		writeErrorFor(w, err)
+		s.writeErrorFor(w, err)
 		return
 	}
 	auditAdmin("escrow imported", "escrow", request.EscrowID, "model", request.Model)
@@ -85,11 +85,11 @@ func (s *Server) handleAdminDevshardDelete(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	if !found {
-		writeErrorFor(w, fmt.Errorf("%w: %s", ErrUnknownDevshard, escrowID))
+		s.writeErrorFor(w, fmt.Errorf("%w: %s", ErrUnknownDevshard, escrowID))
 		return
 	}
 	if record.Active || s.escrows.IsBusy(escrowID) {
-		writeErrorFor(w, fmt.Errorf("%w: %s", escrow.ErrDevshardBusy, escrowID))
+		s.writeErrorFor(w, fmt.Errorf("%w: %s", escrow.ErrDevshardBusy, escrowID))
 		return
 	}
 	if writeControlFailure(w, s.control.DeleteDevshard(r.Context(), escrowID)) {
@@ -120,11 +120,11 @@ func (s *Server) lifecycle(w http.ResponseWriter, r *http.Request, action string
 		return
 	}
 	if !found {
-		writeErrorFor(w, fmt.Errorf("%w: %s", ErrUnknownDevshard, escrowID))
+		s.writeErrorFor(w, fmt.Errorf("%w: %s", ErrUnknownDevshard, escrowID))
 		return
 	}
 	if err := apply(r.Context(), escrowID); err != nil {
-		writeErrorFor(w, err)
+		s.writeErrorFor(w, err)
 		return
 	}
 	auditAdmin(action, "escrow", escrowID)
@@ -141,17 +141,17 @@ func (s *Server) handleAdminDevshardSettle(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	if !found {
-		writeErrorFor(w, fmt.Errorf("%w: %s", ErrUnknownDevshard, escrowID))
+		s.writeErrorFor(w, fmt.Errorf("%w: %s", ErrUnknownDevshard, escrowID))
 		return
 	}
 	forced := r.URL.Query().Get("force") == "true"
 	if !forced && s.escrows.IsBusy(escrowID) {
-		writeErrorFor(w, fmt.Errorf("%w: %s", escrow.ErrDevshardBusy, escrowID))
+		s.writeErrorFor(w, fmt.Errorf("%w: %s", escrow.ErrDevshardBusy, escrowID))
 		return
 	}
 	result, err := s.operations.Settle(r.Context(), escrowID, forced)
 	if err != nil {
-		writeErrorFor(w, err)
+		s.writeErrorFor(w, err)
 		return
 	}
 	if forced {
@@ -190,7 +190,7 @@ func (s *Server) handleAdminDevshardsSettleBatch(w http.ResponseWriter, r *http.
 	}
 	var request SettleDevshardsRequest
 	if err := decodeAdminBody(w, r, &request); err != nil {
-		writeErrorFor(w, badRequestUnlessOversized(err))
+		s.writeErrorFor(w, badRequestUnlessOversized(err))
 		return
 	}
 	escrowIDs := distinctEscrowIDs(request.EscrowIDs)
@@ -291,7 +291,7 @@ func (s *Server) handleAdminDevshardParticipants(w http.ResponseWriter, r *http.
 	escrowID := r.PathValue("id")
 	session, held := s.escrows.SettlementSession(escrowID)
 	if !held {
-		writeErrorFor(w, fmt.Errorf("%w: %s", ErrUnknownDevshard, escrowID))
+		s.writeErrorFor(w, fmt.Errorf("%w: %s", ErrUnknownDevshard, escrowID))
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -308,7 +308,7 @@ func (s *Server) handleDevshardFinalize(w http.ResponseWriter, r *http.Request) 
 	escrowID := r.PathValue("id")
 	session, held := s.escrows.SettlementSession(escrowID)
 	if !held {
-		writeErrorFor(w, fmt.Errorf("%w: %s", ErrUnknownDevshard, escrowID))
+		s.writeErrorFor(w, fmt.Errorf("%w: %s", ErrUnknownDevshard, escrowID))
 		return
 	}
 	state := session.SnapshotState()
@@ -325,7 +325,7 @@ func (s *Server) handleDevshardFinalize(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if s.escrows.IsBusy(escrowID) {
-		writeErrorFor(w, fmt.Errorf("%w: %s", escrow.ErrDevshardBusy, escrowID))
+		s.writeErrorFor(w, fmt.Errorf("%w: %s", escrow.ErrDevshardBusy, escrowID))
 		return
 	}
 	if writeControlFailure(w, session.Finalize(r.Context())) {

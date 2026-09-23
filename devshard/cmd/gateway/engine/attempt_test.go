@@ -505,6 +505,27 @@ func TestRunAttempt_ReleasesTheHostSlotOnEveryExitPath(t *testing.T) {
 	}
 }
 
+func TestRunAttempt_ReleasesTheHostSlotBeforeAnnouncingItIsDone(t *testing.T) {
+	t.Parallel()
+	fixture := newAttemptFixture(&fakeDispatcher{err: errors.New("503 service unavailable")}, &fakeClassifier{})
+	eventsQueuedAtRelease := -1
+	fixture.spec.ReleaseSlot = func() {
+		if eventsQueuedAtRelease < 0 {
+			eventsQueuedAtRelease = len(fixture.events)
+		}
+	}
+
+	runAttempt(context.Background(), fixture.spec)
+	events := fixture.drain()
+
+	if last := events[len(events)-1].Kind; last != AttemptDone {
+		t.Fatalf("last event = %v, want AttemptDone", last)
+	}
+	if eventsQueuedAtRelease != len(events)-1 {
+		t.Fatalf("events queued when the host slot came back = %d, want %d: a slot returned after AttemptDone lets the verdict read the host as still carrying this attempt", eventsQueuedAtRelease, len(events)-1)
+	}
+}
+
 func TestRunAttemptCountsEveryChunkEvenWhenNoneCarriedContent(t *testing.T) {
 	t.Parallel()
 	testCases := []struct {

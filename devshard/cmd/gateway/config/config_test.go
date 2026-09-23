@@ -74,6 +74,7 @@ func TestDefaultsMatchSpec(t *testing.T) {
 		{"Chain.SnapshotMaxAgeSeconds", configuration.Chain.SnapshotMaxAgeSeconds, int64(60)},
 		{"Engine.LoserGraceMS", configuration.Engine.LoserGraceMS, int64(600_000)},
 		{"Engine.MaxAttemptsPerRequest", configuration.Engine.MaxAttemptsPerRequest, int64(2)},
+		{"Engine.HedgeFirstTokenFloorMS", configuration.Engine.HedgeFirstTokenFloorMS, int64(1_500)},
 		{"Engine.MaxConcurrentTimeoutVotes", configuration.Engine.MaxConcurrentTimeoutVotes, int64(2_048)},
 		{"HeightSync.Enabled", configuration.HeightSync.Enabled, true},
 		{"HeightSync.RequireSeed", configuration.HeightSync.RequireSeed, true},
@@ -208,6 +209,7 @@ func TestValidateCatchesEveryRuleBreach(t *testing.T) {
 		{"engine_first_token_floor_ms too low", func(c *Config) { c.Engine.FirstTokenFloorMS = 0 }, "engine_first_token_floor_ms"},
 		{"engine_inter_chunk_stall_ms too low", func(c *Config) { c.Engine.InterChunkStallMS = 0 }, "engine_inter_chunk_stall_ms"},
 		{"engine_loser_grace_ms below inter-chunk stall", func(c *Config) { c.Engine.LoserGraceMS = c.Engine.InterChunkStallMS - 1 }, "engine_loser_grace_ms"},
+		{"engine_hedge_first_token_floor_ms negative", func(c *Config) { c.Engine.HedgeFirstTokenFloorMS = -1 }, "engine_hedge_first_token_floor_ms"},
 		{"engine_max_attempts_per_request negative", func(c *Config) { c.Engine.MaxAttemptsPerRequest = -1 }, "engine_max_attempts_per_request"},
 		{"engine_max_concurrent_timeout_votes negative", func(c *Config) { c.Engine.MaxConcurrentTimeoutVotes = -1 }, "engine_max_concurrent_timeout_votes"},
 		{"chain_grpc without a port", func(c *Config) { c.Chain.GRPCEndpoint = "node.example" }, "chain_grpc"},
@@ -281,7 +283,7 @@ func TestEngineCarriesOnlyTheLiveTunables(t *testing.T) {
 	}
 	want := []string{
 		"ReceiptTimeoutMS", "FirstTokenFloorMS", "FirstTokenCeilingMS", "InterChunkStallMS", "LoserGraceMS",
-		"MaxAttemptsPerRequest", "MaxConcurrentTimeoutVotes",
+		"MaxAttemptsPerRequest", "MaxConcurrentTimeoutVotes", "HedgeFirstTokenFloorMS",
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("Engine fields = %v, want %v", got, want)

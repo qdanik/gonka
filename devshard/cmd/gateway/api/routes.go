@@ -123,7 +123,7 @@ func (s *Server) handleDevshardModels(w http.ResponseWriter, r *http.Request) {
 	}
 	escrow, found := s.escrows.Routable(r.PathValue("id"))
 	if !found {
-		writeErrorFor(w, fmt.Errorf("%w: %s", ErrUnknownDevshard, r.PathValue("id")))
+		s.writeErrorFor(w, fmt.Errorf("%w: %s", ErrUnknownDevshard, r.PathValue("id")))
 		return
 	}
 	writeJSON(w, http.StatusOK, s.modelList([]string{escrow.Model}))
@@ -142,7 +142,7 @@ func (s *Server) handleDevshardStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	escrow, found := s.escrows.Routable(r.PathValue("id"))
 	if !found {
-		writeErrorFor(w, fmt.Errorf("%w: %s", ErrUnknownDevshard, r.PathValue("id")))
+		s.writeErrorFor(w, fmt.Errorf("%w: %s", ErrUnknownDevshard, r.PathValue("id")))
 		return
 	}
 	writeJSON(w, http.StatusOK, s.status([]scheduler.Escrow{escrow}))
@@ -172,10 +172,10 @@ func (s *Server) handleDevshardChat(w http.ResponseWriter, r *http.Request) {
 	escrowID := r.PathValue("id")
 	if _, routable := s.escrows.Routable(escrowID); !routable {
 		if s.escrows.OnHold(escrowID) {
-			writeErrorFor(w, fmt.Errorf("escrow %s is on hold: %w", escrowID, scheduler.ErrNoEscrowCapacity))
+			s.writeErrorFor(w, fmt.Errorf("escrow %s is on hold: %w", escrowID, scheduler.ErrNoEscrowCapacity))
 			return
 		}
-		writeErrorFor(w, fmt.Errorf("%w: %s", ErrUnknownDevshard, escrowID))
+		s.writeErrorFor(w, fmt.Errorf("%w: %s", ErrUnknownDevshard, escrowID))
 		return
 	}
 	s.chat(w, r, escrowID)
@@ -188,29 +188,29 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request, escrowPin string) 
 
 	body, err := readBody(w, r, chatIngestLimit)
 	if err != nil {
-		writeErrorFor(w, err)
+		s.writeErrorFor(w, err)
 		return
 	}
 	normalized, err := filters.NormalizeRequest(body, filterOptions(configuration.Limits, identity.admin))
 	if err != nil {
 		s.capture.filterRejected(r, requestID, body, err)
-		writeErrorFor(w, err)
+		s.writeErrorFor(w, err)
 		return
 	}
 	if transport.PromptWireBytes(len(normalized.Body))+hostCatchUpReserveBytes > transport.MaxHostRequestBytes {
-		writeErrorFor(w, tooLargeForHosts(len(normalized.Body)))
+		s.writeErrorFor(w, tooLargeForHosts(len(normalized.Body)))
 		return
 	}
 	if err := authorizeModel(configuration.Limits, normalized.Model, identity); err != nil {
-		writeErrorFor(w, err)
+		s.writeErrorFor(w, err)
 		return
 	}
 	if err := s.routableModel(configuration.Limits, normalized.Model); err != nil {
-		writeErrorFor(w, err)
+		s.writeErrorFor(w, err)
 		return
 	}
 	if err := admission(s.snapshots.Snapshot(), configuration.Modes, s.now(), configuration.Chain.SnapshotMaxAgeSeconds); err != nil {
-		writeErrorFor(w, err)
+		s.writeErrorFor(w, err)
 		return
 	}
 
@@ -235,7 +235,7 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request, escrowPin string) 
 				RequestID: requestID, Model: normalized.Model, LimiterReason: throttled.Label(),
 			})
 		}
-		writeErrorFor(w, err)
+		s.writeErrorFor(w, err)
 		return
 	}
 	defer s.limiter.ReleaseForModel(normalized.Model, int64(inputTokens))
@@ -322,7 +322,7 @@ func (s *Server) race(w http.ResponseWriter, r *http.Request, requestID string, 
 		}
 		s.finishRequest(requestID, normalized, outcome, deliveryFailedBeforeFirstByte, client, s.now().Sub(startedAt), err, nil)
 		w.Header().Set(RequestIDHeader, requestID)
-		writeErrorFor(w, err)
+		s.writeErrorFor(w, err)
 		return outcome, nil
 	}
 	// The authoritative X-Devshard-ID write. See README.md, "Streaming the reply".

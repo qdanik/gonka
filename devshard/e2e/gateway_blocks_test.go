@@ -108,10 +108,10 @@ func TestE2E_GatewayBurnsTheNoncesOfACutOffHost(t *testing.T) {
 
 // Test flow:
 //  1. Start the three-host environment with one host answering HTTP 503.
-//  2. Set a cutoff that trips on the first transport fault.
-//  3. Send nine completions.
-//  4. Assert no nonce was burned as throttled: a host that answers is busy, not faulty.
-func TestE2E_GatewayDoesNotCutOffAHostThatAnswers503(t *testing.T) {
+//  2. Set a cutoff that trips on the first counted fault.
+//  3. Send nine sequential completions, so the refusing host carries none of this gateway's other work.
+//  4. Assert the host is cut off and its nonces are burned as cut off.
+func TestE2E_GatewayCutsOffAHostRefusingWhileIdle(t *testing.T) {
 	env, client := startGatewayEnv(t, e2eEnvOptions{
 		hostEnvOverrides: map[int]map[string]string{1: brokenHost("503", "busy")},
 	})
@@ -124,11 +124,12 @@ func TestE2E_GatewayDoesNotCutOffAHostThatAnswers503(t *testing.T) {
 
 	for request := range 9 {
 		testutil.SendCompletionRaw(t, client, env.clientURL,
-			fmt.Sprintf("busy host %d", request), testutil.AdminAPIKey)
+			fmt.Sprintf("refusing host %d", request), testutil.AdminAPIKey)
 	}
 
-	if burned := gatewayGhostBurns(t, client, env.statsURL, "participant_throttled_no_send"); burned > 0 {
-		t.Errorf("a host that answered 503 was cut off %d time(s): an answer is not a transport fault", burned)
+	if burned := awaitGhostBurns(t, client, env.statsURL, "participant_cut_off_no_send", 60*time.Second); burned == 0 {
+		t.Errorf("a host refusing with 503 while idle kept being offered work; the burns were %v",
+			gatewayGhostReasons(t, client, env.statsURL))
 	}
 }
 

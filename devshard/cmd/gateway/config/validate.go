@@ -283,6 +283,12 @@ func (c *Config) Validate() error {
 		complain("engine_first_token_ceiling_ms: %d must be >= engine_first_token_floor_ms %d",
 			c.Engine.FirstTokenCeilingMS, c.Engine.FirstTokenFloorMS)
 	}
+	if c.Engine.HedgeFirstTokenFloorMS < 0 {
+		complain("engine_hedge_first_token_floor_ms: %d must be >= 0", c.Engine.HedgeFirstTokenFloorMS)
+	}
+	if c.Engine.HedgeFirstTokenFloorMS > maxEngineTimingMS {
+		complain("engine_hedge_first_token_floor_ms: %d must be <= %d", c.Engine.HedgeFirstTokenFloorMS, maxEngineTimingMS)
+	}
 	if c.Engine.MaxConcurrentTimeoutVotes < 0 {
 		complain("engine_max_concurrent_timeout_votes: %d must be >= 0 (0 = as many as races owe votes)", c.Engine.MaxConcurrentTimeoutVotes)
 	}

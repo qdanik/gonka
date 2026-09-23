@@ -25,7 +25,6 @@ type breakerEffect int
 
 const (
 	breakerUntouched breakerEffect = iota
-	breakerClears
 	breakerRecovers
 	breakerCounts
 )
@@ -63,7 +62,7 @@ func responseFor(verdict Verdict) response {
 	case Success, LateSuccess:
 		return response{tier: tierNone, dimension: dimensionNone, breaker: breakerRecovers}
 	case Overload:
-		return response{tier: tierSoft, dimension: dimensionBoth, breaker: breakerClears}
+		return response{tier: tierSoft, dimension: dimensionBoth, breaker: breakerUntouched}
 	case UpstreamFault, EmptyAnswer:
 		return response{tier: tierHard, dimension: dimensionBoth, breaker: breakerUntouched}
 	case EmptyAnswerLeftOpen:

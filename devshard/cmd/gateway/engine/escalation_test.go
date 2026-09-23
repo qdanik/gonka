@@ -10,9 +10,14 @@ import (
 
 var (
 	raceStart  = time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC)
-	testPolicy = EscalationPolicyFromConfig(config.Defaults().Engine)
+	testPolicy = judgedOnly(EscalationPolicyFromConfig(config.Defaults().Engine))
 	streaming  = EscalationRequest{InputTokens: 1_000}
 )
+
+func judgedOnly(policy EscalationPolicy) EscalationPolicy {
+	policy.HedgeFirstTokenFloor = 0
+	return policy
+}
 
 func dispatched(offset time.Duration) EscalationAttempt {
 	return EscalationAttempt{SendTime: raceStart.Add(offset)}
@@ -20,12 +25,13 @@ func dispatched(offset time.Duration) EscalationAttempt {
 
 func TestEscalationPolicyFromConfigConvertsEveryTunable(t *testing.T) {
 	policy := EscalationPolicyFromConfig(config.Engine{
-		ReceiptTimeoutMS:      1_500,
-		FirstTokenFloorMS:     250,
-		FirstTokenCeilingMS:   70_000,
-		InterChunkStallMS:     7_000,
-		LoserGraceMS:          90_000,
-		MaxAttemptsPerRequest: 4,
+		ReceiptTimeoutMS:       1_500,
+		FirstTokenFloorMS:      250,
+		FirstTokenCeilingMS:    70_000,
+		InterChunkStallMS:      7_000,
+		LoserGraceMS:           90_000,
+		MaxAttemptsPerRequest:  4,
+		HedgeFirstTokenFloorMS: 1_200,
 	})
 	want := EscalationPolicy{
 		ReceiptTimeout:        1_500 * time.Millisecond,
@@ -34,6 +40,7 @@ func TestEscalationPolicyFromConfigConvertsEveryTunable(t *testing.T) {
 		InterChunkStall:       7 * time.Second,
 		LoserGrace:            90 * time.Second,
 		MaxAttemptsPerRequest: 4,
+		HedgeFirstTokenFloor:  1_200 * time.Millisecond,
 	}
 	if policy != want {
 		t.Fatalf("EscalationPolicyFromConfig = %+v, want %+v", policy, want)
@@ -491,6 +498,7 @@ func TestStageReasonLabelsEveryTrigger(t *testing.T) {
 		{StageAttemptFailed, "attempt_failed"},
 		{StageReceiptTimeout, "receipt_timeout"},
 		{StageFirstToken, "first_token_timeout"},
+		{StageHedge, "slow_start"},
 		{StageNone, ""},
 	}
 	for _, testCase := range testCases {
@@ -541,5 +549,149 @@ func TestShippedDefaultsBoundTheRaceAndItsFirstTokenWait(t *testing.T) {
 	}
 	if wait := policy.firstTokenTimeout(3_460); wait != 6*time.Second {
 		t.Fatalf("first-token wait for a median prompt = %v, want the 6s floor", wait)
+	}
+}
+
+func TestAHedgeArmsOnTheCurveBeforeTheJudgedDeadline(t *testing.T) {
+	hedging := EscalationPolicy{
+		ReceiptTimeout:       5 * time.Second,
+		FirstTokenFloor:      6 * time.Second,
+		FirstTokenCeiling:    30 * time.Second,
+		HedgeFirstTokenFloor: 1_500 * time.Millisecond,
+	}
+	emptyPrompt := EscalationRequest{InputTokens: 0}
+	largePrompt := EscalationRequest{InputTokens: 100_000}
+	receipted := EscalationAttempt{SendTime: raceStart, ReceiptTime: raceStart.Add(time.Second)}
+	testCases := []struct {
+		name         string
+		policy       EscalationPolicy
+		attempt      EscalationAttempt
+		request      EscalationRequest
+		wantStage    EscalationStage
+		wantDeadline time.Time
+	}{
+		{
+			name:         "no receipt yet: the curve beats the floor and hedges before the receipt deadline",
+			policy:       hedging,
+			attempt:      dispatched(0),
+			request:      emptyPrompt,
+			wantStage:    StageHedge,
+			wantDeadline: raceStart.Add(1_700 * time.Millisecond),
+		},
+		{
+			name:         "no receipt yet: the curve grows with the prompt",
+			policy:       hedging,
+			attempt:      dispatched(0),
+			request:      streaming,
+			wantStage:    StageHedge,
+			wantDeadline: raceStart.Add(1_730_500 * time.Microsecond),
+		},
+		{
+			name:         "a hedge floor above the curve binds",
+			policy:       EscalationPolicy{ReceiptTimeout: 5 * time.Second, FirstTokenFloor: 6 * time.Second, HedgeFirstTokenFloor: 2 * time.Second},
+			attempt:      dispatched(0),
+			request:      emptyPrompt,
+			wantStage:    StageHedge,
+			wantDeadline: raceStart.Add(2 * time.Second),
+		},
+		{
+			name:         "a zero hedge floor waits the receipt deadline as before",
+			policy:       judgedOnly(hedging),
+			attempt:      dispatched(0),
+			request:      emptyPrompt,
+			wantStage:    StageReceiptTimeout,
+			wantDeadline: raceStart.Add(5 * time.Second),
+		},
+		{
+			name:         "receipted without a token: the hedge does not wait receipt plus the floor",
+			policy:       hedging,
+			attempt:      receipted,
+			request:      emptyPrompt,
+			wantStage:    StageHedge,
+			wantDeadline: raceStart.Add(1_700 * time.Millisecond),
+		},
+		{
+			name:         "receipted without a token under a zero hedge floor waits the judged deadline",
+			policy:       judgedOnly(hedging),
+			attempt:      receipted,
+			request:      emptyPrompt,
+			wantStage:    StageFirstToken,
+			wantDeadline: raceStart.Add(7 * time.Second),
+		},
+		{
+			name:         "a curve past the receipt deadline leaves the receipt deadline in charge",
+			policy:       hedging,
+			attempt:      dispatched(0),
+			request:      largePrompt,
+			wantStage:    StageReceiptTimeout,
+			wantDeadline: raceStart.Add(5 * time.Second),
+		},
+		{
+			name:         "a curve equal to the first-token deadline leaves the judged stage in charge",
+			policy:       hedging,
+			attempt:      receipted,
+			request:      largePrompt,
+			wantStage:    StageFirstToken,
+			wantDeadline: raceStart.Add(9_700 * time.Millisecond),
+		},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			armed, ok := testCase.policy.NextEscalation(raceStart, []EscalationAttempt{testCase.attempt}, testCase.request)
+			if !ok {
+				t.Fatalf("NextEscalation: want stage %q, got no trigger", testCase.wantStage)
+			}
+			if armed.Stage != testCase.wantStage || !armed.Deadline.Equal(testCase.wantDeadline) {
+				t.Fatalf("NextEscalation = (%q, %v), want (%q, %v)", armed.Stage, armed.Deadline, testCase.wantStage, testCase.wantDeadline)
+			}
+		})
+	}
+}
+
+func TestAHedgeLeavesTheJudgedDeadlineWhereItWas(t *testing.T) {
+	hedging := EscalationPolicy{ReceiptTimeout: 5 * time.Second, FirstTokenFloor: 6 * time.Second, HedgeFirstTokenFloor: 1_500 * time.Millisecond}
+	testCases := []struct {
+		name         string
+		attempt      EscalationAttempt
+		wantStage    EscalationStage
+		wantDeadline time.Time
+	}{
+		{"no receipt owes the receipt deadline", dispatched(0), StageReceiptTimeout, raceStart.Add(5 * time.Second)},
+		{"a receipt owes the floored first-token deadline", EscalationAttempt{SendTime: raceStart, ReceiptTime: raceStart.Add(time.Second)}, StageFirstToken, raceStart.Add(7 * time.Second)},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			stage, deadline, owed := hedging.owedDeadline(&testCase.attempt, streaming)
+			if !owed || stage != testCase.wantStage || !deadline.Equal(testCase.wantDeadline) {
+				t.Fatalf("owedDeadline = (%q, %v, %t), want (%q, %v, true)", stage, deadline, owed, testCase.wantStage, testCase.wantDeadline)
+			}
+		})
+	}
+}
+
+func TestConfirmHonoursTheHedgeDeadline(t *testing.T) {
+	hedging := EscalationPolicy{ReceiptTimeout: 5 * time.Second, FirstTokenFloor: 6 * time.Second, HedgeFirstTokenFloor: 1_500 * time.Millisecond}
+	attempts := []EscalationAttempt{dispatched(0)}
+	armed, ok := hedging.NextEscalation(raceStart, attempts, streaming)
+	if !ok || armed.Stage != StageHedge {
+		t.Fatalf("NextEscalation = (%+v, %t), want a hedge", armed, ok)
+	}
+
+	if confirmed, ok := hedging.Confirm(armed, armed.Deadline.Add(-time.Nanosecond), attempts, streaming); ok {
+		t.Fatalf("Confirm before the hedge deadline = %+v, want rejection", confirmed)
+	}
+	confirmed, ok := hedging.Confirm(armed, armed.Deadline, attempts, streaming)
+	if !ok || confirmed != (ConfirmedEscalation{Attempt: 0, Stage: StageHedge}) {
+		t.Fatalf("Confirm on the hedge deadline = (%+v, %t), want attempt 0 at %q", confirmed, ok, StageHedge)
+	}
+
+	receipted := []EscalationAttempt{{SendTime: raceStart, ReceiptTime: raceStart.Add(time.Second)}}
+	if _, ok := hedging.Confirm(armed, raceStart.Add(3*time.Second), receipted, streaming); !ok {
+		t.Fatal("Confirm of a hedge whose receipt landed before it fired: want the escalation, got rejection")
+	}
+
+	attempts[0].Escalated = true
+	if confirmed, ok := hedging.Confirm(armed, raceStart.Add(3*time.Second), attempts, streaming); ok {
+		t.Fatalf("Confirm after the hedge already escalated = %+v, want rejection", confirmed)
 	}
 }

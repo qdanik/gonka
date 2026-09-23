@@ -15,10 +15,17 @@ func (o RaceOutcome) failure() error {
 	if hostErr := o.hostError(); hostErr != nil {
 		return hostErr
 	}
+	if len(o.Attempts) > 0 && o.everyAttempt(refusedAsUnavailable) {
+		return ErrHostsUnavailable
+	}
 	if o.everyAttempt(AttemptOutcome.emptyStream) {
 		return ErrEmptyStream
 	}
 	return ErrAllAttemptsFailed
+}
+
+func refusedAsUnavailable(attempt AttemptOutcome) bool {
+	return attempt.Terminal == TerminalUnavailable || attempt.Terminal == TerminalThrottled
 }
 
 func (o RaceOutcome) winnerStreamed() bool {

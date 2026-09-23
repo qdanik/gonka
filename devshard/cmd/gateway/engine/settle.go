@@ -128,8 +128,9 @@ func (o RaceOutcome) TimeoutPlan() []TimeoutStep {
 	return steps
 }
 
-// SettleTimeouts reports a posted vote's started event before the post and its result after. See README, "Timeout votes".
-func SettleTimeouts(ctx context.Context, poster TimeoutPoster, outcome RaceOutcome, report func(TimeoutEvent)) {
+// SettleTimeouts reports a posted vote's started event before the post and its result after, and returns the refused votes worth a retry. See README, "Timeout votes".
+func SettleTimeouts(ctx context.Context, poster TimeoutPoster, outcome RaceOutcome, report func(TimeoutEvent)) []TimeoutStep {
+	var retries []TimeoutStep
 	for _, step := range outcome.TimeoutPlan() {
 		// A started event for a vote nobody attempts reads as a hung settle when no completion follows.
 		if !step.Post || poster == nil {
@@ -141,14 +142,33 @@ func SettleTimeouts(ctx context.Context, poster TimeoutPoster, outcome RaceOutco
 			report(skipped)
 			continue
 		}
-		report(step.Event)
-		vote, err := poster.SettleTimeout(ctx, step)
-		posted := step.Event
-		posted.Kind = timeoutVoteKind(vote.Kind, posted.Kind)
-		posted.Action, posted.Reason = TimeoutOutcome(vote, err, outcome.Lifecycle.EscrowMissing)
-		posted.VerifyRejects, posted.Completeness = vote.VerifyRejects, vote.Completeness
-		report(posted)
+		if postTimeout(ctx, poster, step, outcome.Lifecycle.EscrowMissing, report) {
+			retries = append(retries, step)
+		}
 	}
+	return retries
+}
+
+func postTimeouts(ctx context.Context, poster TimeoutPoster, steps []TimeoutStep, escrowMissing bool, report func(TimeoutEvent)) []TimeoutStep {
+	var retries []TimeoutStep
+	for _, step := range steps {
+		if postTimeout(ctx, poster, step, escrowMissing, report) {
+			retries = append(retries, step)
+		}
+	}
+	return retries
+}
+
+func postTimeout(ctx context.Context, poster TimeoutPoster, step TimeoutStep, escrowMissing bool, report func(TimeoutEvent)) bool {
+	report(step.Event)
+	vote, err := poster.SettleTimeout(ctx, step)
+	posted := step.Event
+	posted.Kind = timeoutVoteKind(vote.Kind, posted.Kind)
+	posted.Action, posted.Reason = TimeoutOutcome(vote, err, escrowMissing)
+	posted.VerifyRejects, posted.Completeness = vote.VerifyRejects, vote.Completeness
+	report(posted)
+	return step.Event.Kind == TimeoutKindRefused && posted.Kind == TimeoutKindRefused &&
+		posted.Action == TimeoutActionFailed && !escrowMissing && !errors.Is(err, user.ErrTimeoutNotApplied)
 }
 
 // TimeoutOutcome classifies what a posted vote came back as, preferring the handler's own detail. See README, "Timeout votes".

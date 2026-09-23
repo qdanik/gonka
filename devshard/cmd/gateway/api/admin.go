@@ -53,7 +53,7 @@ func (s *Server) handleAdminSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	body, err := readBody(w, r, adminIngestLimit)
 	if err != nil {
-		writeErrorFor(w, err)
+		s.writeErrorFor(w, err)
 		return
 	}
 	overrides, err := config.ParseOverrides(body)
@@ -62,7 +62,7 @@ func (s *Server) handleAdminSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.operations.Reconfigure(r.Context(), overrides); err != nil {
-		writeErrorFor(w, err)
+		s.writeErrorFor(w, err)
 		return
 	}
 	inForce := s.config.Load().Scheduler
@@ -84,7 +84,7 @@ func (s *Server) handleAdminEscrows(w http.ResponseWriter, r *http.Request) {
 	}
 	var request CreateEscrowRequest
 	if err := decodeAdminBody(w, r, &request); err != nil {
-		writeErrorFor(w, badRequestUnlessOversized(err))
+		s.writeErrorFor(w, badRequestUnlessOversized(err))
 		return
 	}
 	if strings.TrimSpace(request.Model) == "" || request.Amount == 0 {
@@ -97,7 +97,7 @@ func (s *Server) handleAdminEscrows(w http.ResponseWriter, r *http.Request) {
 	}
 	result, err := s.operations.CreateEscrow(r.Context(), request)
 	if err != nil {
-		writeErrorFor(w, err)
+		s.writeErrorFor(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, result)
@@ -117,7 +117,7 @@ func (s *Server) handleAdminSuspiciousHosts(w http.ResponseWriter, r *http.Reque
 	}
 	var request suspiciousHostRequest
 	if err := decodeAdminBody(w, r, &request); err != nil {
-		writeErrorFor(w, badRequestUnlessOversized(err))
+		s.writeErrorFor(w, badRequestUnlessOversized(err))
 		return
 	}
 	participantKey := strings.TrimSpace(request.ParticipantKey)
@@ -142,7 +142,7 @@ func (s *Server) handleAdminUnquarantine(w http.ResponseWriter, r *http.Request)
 	}
 	var request suspiciousHostRequest
 	if err := decodeAdminBody(w, r, &request); err != nil {
-		writeErrorFor(w, badRequestUnlessOversized(err))
+		s.writeErrorFor(w, badRequestUnlessOversized(err))
 		return
 	}
 	participantKey := strings.TrimSpace(request.ParticipantKey)
@@ -151,7 +151,7 @@ func (s *Server) handleAdminUnquarantine(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	if err := s.operations.Unquarantine(r.Context(), participantKey); err != nil {
-		writeErrorFor(w, err)
+		s.writeErrorFor(w, err)
 		return
 	}
 	auditAdmin("participant cutoff cleared", "participant", participantKey)
@@ -169,7 +169,7 @@ func (s *Server) handleAdminResetAccountingEpoch(w http.ResponseWriter, r *http.
 	}
 	cleared, err := s.operations.ResetAccountingEpoch(r.Context(), epoch)
 	if err != nil {
-		writeErrorFor(w, err)
+		s.writeErrorFor(w, err)
 		return
 	}
 	auditAdmin("accounting epoch reset", "epoch", epoch, "escrows", cleared)

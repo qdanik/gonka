@@ -125,6 +125,8 @@ func TestStatusForError(t *testing.T) {
 		{name: "empty_stream", err: ErrEmptyStream, wantStatus: http.StatusBadGateway},
 		{name: "winner_incomplete", err: ErrWinnerIncomplete, wantStatus: http.StatusBadGateway},
 		{name: "truncated_stream", err: transport.ErrSSEStreamTruncated, wantStatus: http.StatusBadGateway},
+		{name: "hosts_unavailable", err: ErrHostsUnavailable, wantStatus: http.StatusServiceUnavailable},
+		{name: "wrapped_hosts_unavailable", err: fmt.Errorf("race: %w", ErrHostsUnavailable), wantStatus: http.StatusServiceUnavailable},
 		{name: "unknown", err: errors.New("something else"), wantStatus: http.StatusBadGateway},
 	}
 

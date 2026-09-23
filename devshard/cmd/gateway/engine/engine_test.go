@@ -335,6 +335,11 @@ func TestOutcomeFailureNamesWhatTheClientLost(t *testing.T) {
 	suspiciousContextRejected := contextRejected
 	suspiciousContextRejected.Suspicious = true
 
+	throttledWithReason := failedAttempt(TerminalThrottled)
+	throttledWithReason.ErrorSource = "error.RateLimitError"
+	throttledWithReason.ErrorType = "RateLimitError"
+	throttledWithReason.ErrorMessage = "rate limited"
+
 	cases := []struct {
 		name    string
 		outcome RaceOutcome
@@ -385,6 +390,39 @@ func TestOutcomeFailureNamesWhatTheClientLost(t *testing.T) {
 			name:    "nothing_upstream_explained_itself",
 			outcome: failedRace(failedAttempt(TerminalDialFailure)),
 			want:    ErrAllAttemptsFailed,
+		},
+		{
+			name: "every_host_refused_as_unavailable",
+			outcome: RaceOutcome{Model: testModel, Attempts: []AttemptOutcome{
+				failedAttempt(TerminalUnavailable), failedAttempt(TerminalUnavailable),
+			}},
+			want: ErrHostsUnavailable,
+		},
+		{
+			name: "every_host_refused_as_throttled",
+			outcome: RaceOutcome{Model: testModel, Attempts: []AttemptOutcome{
+				failedAttempt(TerminalThrottled), failedAttempt(TerminalThrottled),
+			}},
+			want: ErrHostsUnavailable,
+		},
+		{
+			name: "a_mix_of_unavailable_and_throttled_refusals",
+			outcome: RaceOutcome{Model: testModel, Attempts: []AttemptOutcome{
+				failedAttempt(TerminalUnavailable), failedAttempt(TerminalThrottled),
+			}},
+			want: ErrHostsUnavailable,
+		},
+		{
+			name: "one_attempt_failed_a_way_that_is_not_unavailability",
+			outcome: RaceOutcome{Model: testModel, Attempts: []AttemptOutcome{
+				failedAttempt(TerminalUnavailable), failedAttempt(TerminalDialFailure),
+			}},
+			want: ErrAllAttemptsFailed,
+		},
+		{
+			name:    "a_trusted_host_error_still_wins_over_an_all_unavailable_race",
+			outcome: failedRace(throttledWithReason),
+			want:    &HostApplicationError{Type: "RateLimitError", Message: "rate limited"},
 		},
 	}
 

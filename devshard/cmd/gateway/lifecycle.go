@@ -34,6 +34,7 @@ func (g *gateway) serve(ctx context.Context) error {
 		logkey.FirstTokenCeilingMS, engine.FirstTokenCeilingMS,
 		logkey.InterChunkStallMS, engine.InterChunkStallMS,
 		logkey.LoserGraceMS, engine.LoserGraceMS,
+		logkey.HedgeFirstTokenFloorMS, engine.HedgeFirstTokenFloorMS,
 		logkey.MaxAttemptsPerRequest, engine.MaxAttemptsPerRequest)
 
 	var listenErr error

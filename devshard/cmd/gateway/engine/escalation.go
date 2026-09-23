@@ -34,6 +34,8 @@ func (s EscalationStage) Reason() string {
 		return EscalationReasonReceipt
 	case StageFirstToken:
 		return EscalationReasonFirstToken
+	case StageHedge:
+		return EscalationReasonHedge
 	}
 	return ""
 }
@@ -47,6 +49,7 @@ type EscalationPolicy struct {
 	LoserGrace            time.Duration
 	MaxAttemptsPerRequest int
 	HardTimeout           time.Duration
+	HedgeFirstTokenFloor  time.Duration
 }
 
 // E2EOverrides are the bounds a test stand may shorten; every zero keeps the production bound.
@@ -69,6 +72,7 @@ func EscalationPolicyFromConfig(engine config.Engine) EscalationPolicy {
 		InterChunkStall:       time.Duration(engine.InterChunkStallMS) * time.Millisecond,
 		LoserGrace:            time.Duration(engine.LoserGraceMS) * time.Millisecond,
 		MaxAttemptsPerRequest: int(engine.MaxAttemptsPerRequest),
+		HedgeFirstTokenFloor:  time.Duration(engine.HedgeFirstTokenFloorMS) * time.Millisecond,
 	}
 }
 
@@ -194,11 +198,21 @@ func (p EscalationPolicy) triggerFor(attempt *EscalationAttempt, request Escalat
 	case attempt.SendTime.IsZero():
 		return ArmedEscalation{}, false
 	case attempt.ReceiptTime.IsZero():
-		return ArmedEscalation{Stage: StageReceiptTimeout, Deadline: p.receiptDeadline(attempt, request)}, true
+		return p.hedgeBefore(StageReceiptTimeout, p.receiptDeadline(attempt, request), attempt, request), true
 	case !attempt.FirstToken.IsZero():
 		return ArmedEscalation{}, false
 	}
-	return ArmedEscalation{Stage: StageFirstToken, Deadline: p.firstTokenDeadline(attempt, request)}, true
+	return p.hedgeBefore(StageFirstToken, p.firstTokenDeadline(attempt, request), attempt, request), true
+}
+
+func (p EscalationPolicy) hedgeBefore(stage EscalationStage, judged time.Time, attempt *EscalationAttempt, request EscalationRequest) ArmedEscalation {
+	if p.HedgeFirstTokenFloor > 0 {
+		hedge := attempt.SendTime.Add(max(p.HedgeFirstTokenFloor, firstTokenCurve(request.InputTokens)))
+		if hedge.Before(judged) {
+			return ArmedEscalation{Stage: StageHedge, Deadline: hedge}
+		}
+	}
+	return ArmedEscalation{Stage: stage, Deadline: judged}
 }
 
 // answered reports an attempt that finished its nonce with something a client can render; an empty stream closes its nonce and still leaves nothing.
@@ -206,7 +220,7 @@ func (attempt *EscalationAttempt) answered() bool {
 	return attempt.Done && attempt.NonceFinished && !attempt.EmptyStream
 }
 
-// owedDeadline is the deadline a running attempt's host is judged on once, the one its escalation arms on, whether or not the race may still escalate. See race.md, "Deadlines".
+// owedDeadline is the deadline a running attempt's host is judged on once, whether or not the race may still escalate. See race.md, "Deadlines".
 func (p EscalationPolicy) owedDeadline(attempt *EscalationAttempt, request EscalationRequest) (EscalationStage, time.Time, bool) {
 	switch {
 	case attempt.owesNoDeadline():
@@ -262,10 +276,13 @@ func (p EscalationPolicy) firstTokenBudget(inputTokens uint64, observed time.Dur
 
 // firstTokenTimeout is the measured fit over prompt size, floored and capped. See race.md, "Escalation".
 func (p EscalationPolicy) firstTokenTimeout(inputTokens uint64) time.Duration {
+	return p.capToFirstTokenCeiling(max(p.FirstTokenFloor, firstTokenCurve(inputTokens)))
+}
+
+func firstTokenCurve(inputTokens uint64) time.Duration {
 	tokens := float64(inputTokens)
 	seconds := firstTokenBaseSeconds + firstTokenPerTokenSeconds*tokens + firstTokenQuadraticSeconds*tokens*tokens
-	wait := max(p.FirstTokenFloor, time.Duration(seconds*float64(time.Second)))
-	return p.capToFirstTokenCeiling(wait)
+	return time.Duration(seconds * float64(time.Second))
 }
 
 // capToFirstTokenCeiling keeps the curve under the backstop; a zero ceiling means the operator removed it.

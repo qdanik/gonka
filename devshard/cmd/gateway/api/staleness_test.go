@@ -59,7 +59,7 @@ func TestAStaleSnapshotRefusalCarriesRetryAfter(t *testing.T) {
 	t.Parallel()
 	recorder := httptest.NewRecorder()
 
-	writeErrorFor(recorder, &ChainStaleError{Age: time.Minute})
+	newErrorsTestServer().writeErrorFor(recorder, &ChainStaleError{Age: time.Minute})
 
 	if got, want := recorder.Header().Get("Retry-After"), "5"; got != want {
 		t.Fatalf("Retry-After = %q, want %q: one poll interval, not the one-second default", got, want)

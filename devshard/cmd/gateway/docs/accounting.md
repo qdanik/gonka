@@ -46,7 +46,7 @@ graph LR
     A --> G["unfinished_execution<br/>acknowledged, never finished"]
 ```
 
-`unfinished_refused` is the cheap failure — the nonce frees at the refusal deadline. `unfinished_execution` is the expensive one: the host took the work, so the nonce is held to the execution deadline, and a record left there settles at the full reserved cost in the executor's favour. The ledger reports one; the escrow tick's sweep is what tries to claim it back (see [`race.md`](./race.md), "The vote nobody retried").
+`unfinished_refused` is the cheap failure — the nonce frees at the refusal deadline. `unfinished_execution` is the expensive one: the host took the work, so the nonce is held to the execution deadline, and a record left there settles at the full reserved cost in the executor's favour. The ledger reports one; the escrow tick's sweep is what tries to claim it back (see [`race.md`](./race.md), "The swept vote and the retried vote").
 
 The kind is read from the receipt — `engine/settle.go`, `timeoutKind` — and then deferred to the verifiers' vote, which is the protocol's answer and can disagree: they judge on what they saw, and the receipt went to the gateway.
 

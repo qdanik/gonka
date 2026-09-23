@@ -156,7 +156,7 @@ func (s *Server) inspectable(w http.ResponseWriter, r *http.Request) (registry.E
 	session, release, err := s.escrows.Inspect(r.Context(), escrowID)
 	if err != nil {
 		if errors.Is(err, escrow.ErrUnknownEscrow) {
-			writeErrorFor(w, fmt.Errorf("%w: %s", ErrUnknownDevshard, escrowID))
+			s.writeErrorFor(w, fmt.Errorf("%w: %s", ErrUnknownDevshard, escrowID))
 			return nil, "", nil, false
 		}
 		writeError(w, http.StatusBadGateway, err.Error())

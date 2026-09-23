@@ -10,14 +10,15 @@ import (
 
 func TestEngineTimingsReachTheSnapshotFromAnOverride(t *testing.T) {
 	t.Parallel()
-	receipt, floor, ceiling, stall, grace := int64(7_000), int64(1_500), int64(25_000), int64(45_000), int64(120_000)
+	receipt, floor, ceiling, stall, grace, hedge := int64(7_000), int64(1_500), int64(25_000), int64(45_000), int64(120_000), int64(900)
 
 	built, err := Build(env.Values{}, Overrides{
-		EngineReceiptTimeoutMS:    &receipt,
-		EngineFirstTokenFloorMS:   &floor,
-		EngineFirstTokenCeilingMS: &ceiling,
-		EngineInterChunkStallMS:   &stall,
-		EngineLoserGraceMS:        &grace,
+		EngineReceiptTimeoutMS:       &receipt,
+		EngineFirstTokenFloorMS:      &floor,
+		EngineFirstTokenCeilingMS:    &ceiling,
+		EngineInterChunkStallMS:      &stall,
+		EngineLoserGraceMS:           &grace,
+		EngineHedgeFirstTokenFloorMS: &hedge,
 	})
 	if err != nil {
 		t.Fatalf("Build: %v", err)
@@ -33,6 +34,7 @@ func TestEngineTimingsReachTheSnapshotFromAnOverride(t *testing.T) {
 		{"first_token_ceiling_ms", built.Engine.FirstTokenCeilingMS, ceiling},
 		{"inter_chunk_stall_ms", built.Engine.InterChunkStallMS, stall},
 		{"loser_grace_ms", built.Engine.LoserGraceMS, grace},
+		{"hedge_first_token_floor_ms", built.Engine.HedgeFirstTokenFloorMS, hedge},
 	} {
 		if field.got != field.want {
 			t.Errorf("engine_%s = %d, want %d", field.name, field.got, field.want)
@@ -43,12 +45,13 @@ func TestEngineTimingsReachTheSnapshotFromAnOverride(t *testing.T) {
 func TestEngineTimingsReachTheSnapshotFromTheEnvironment(t *testing.T) {
 	t.Parallel()
 	built, err := Build(env.Values{
-		EngineReceiptTimeoutMS:     int64Pointer(9_000),
-		EngineFirstTokenFloorMS:    int64Pointer(1_200),
-		EngineFirstTokenCeilingMS:  int64Pointer(21_000),
-		EngineInterChunkStallMS:    int64Pointer(20_000),
-		EngineLoserGraceMS:         int64Pointer(90_000),
-		ChainSnapshotMaxAgeSeconds: int64Pointer(45),
+		EngineReceiptTimeoutMS:       int64Pointer(9_000),
+		EngineFirstTokenFloorMS:      int64Pointer(1_200),
+		EngineFirstTokenCeilingMS:    int64Pointer(21_000),
+		EngineInterChunkStallMS:      int64Pointer(20_000),
+		EngineLoserGraceMS:           int64Pointer(90_000),
+		EngineHedgeFirstTokenFloorMS: int64Pointer(0),
+		ChainSnapshotMaxAgeSeconds:   int64Pointer(45),
 	}, Overrides{})
 	if err != nil {
 		t.Fatalf("Build: %v", err)
@@ -64,6 +67,7 @@ func TestEngineTimingsReachTheSnapshotFromTheEnvironment(t *testing.T) {
 		{"engine_first_token_ceiling_ms", built.Engine.FirstTokenCeilingMS, 21_000},
 		{"engine_inter_chunk_stall_ms", built.Engine.InterChunkStallMS, 20_000},
 		{"engine_loser_grace_ms", built.Engine.LoserGraceMS, 90_000},
+		{"engine_hedge_first_token_floor_ms", built.Engine.HedgeFirstTokenFloorMS, 0},
 		{"chain_snapshot_max_age_seconds", built.Chain.SnapshotMaxAgeSeconds, 45},
 	} {
 		if field.got != field.want {
@@ -76,20 +80,22 @@ func TestAnEngineOverrideOutranksTheEnvironment(t *testing.T) {
 	t.Parallel()
 	fromEnv, fromAdmin := int64(9_000), int64(3_000)
 	values := env.Values{
-		EngineReceiptTimeoutMS:     &fromEnv,
-		EngineFirstTokenFloorMS:    &fromEnv,
-		EngineFirstTokenCeilingMS:  &fromEnv,
-		EngineInterChunkStallMS:    &fromEnv,
-		EngineLoserGraceMS:         &fromEnv,
-		ChainSnapshotMaxAgeSeconds: int64Pointer(90),
+		EngineReceiptTimeoutMS:       &fromEnv,
+		EngineFirstTokenFloorMS:      &fromEnv,
+		EngineFirstTokenCeilingMS:    &fromEnv,
+		EngineInterChunkStallMS:      &fromEnv,
+		EngineLoserGraceMS:           &fromEnv,
+		EngineHedgeFirstTokenFloorMS: &fromEnv,
+		ChainSnapshotMaxAgeSeconds:   int64Pointer(90),
 	}
 	overrides := Overrides{
-		EngineReceiptTimeoutMS:     &fromAdmin,
-		EngineFirstTokenFloorMS:    &fromAdmin,
-		EngineFirstTokenCeilingMS:  int64Pointer(12_000),
-		EngineInterChunkStallMS:    &fromAdmin,
-		EngineLoserGraceMS:         int64Pointer(30_000),
-		ChainSnapshotMaxAgeSeconds: int64Pointer(45),
+		EngineReceiptTimeoutMS:       &fromAdmin,
+		EngineFirstTokenFloorMS:      &fromAdmin,
+		EngineFirstTokenCeilingMS:    int64Pointer(12_000),
+		EngineInterChunkStallMS:      &fromAdmin,
+		EngineLoserGraceMS:           int64Pointer(30_000),
+		EngineHedgeFirstTokenFloorMS: &fromAdmin,
+		ChainSnapshotMaxAgeSeconds:   int64Pointer(45),
 	}
 
 	built, err := Build(values, overrides)
@@ -107,6 +113,7 @@ func TestAnEngineOverrideOutranksTheEnvironment(t *testing.T) {
 		{"engine_first_token_ceiling_ms", built.Engine.FirstTokenCeilingMS, 12_000},
 		{"engine_inter_chunk_stall_ms", built.Engine.InterChunkStallMS, fromAdmin},
 		{"engine_loser_grace_ms", built.Engine.LoserGraceMS, 30_000},
+		{"engine_hedge_first_token_floor_ms", built.Engine.HedgeFirstTokenFloorMS, fromAdmin},
 		{"chain_snapshot_max_age_seconds", built.Chain.SnapshotMaxAgeSeconds, 45},
 	} {
 		if field.got != field.want {
@@ -118,10 +125,11 @@ func TestAnEngineOverrideOutranksTheEnvironment(t *testing.T) {
 func TestTheBoundsThemselvesAreAccepted(t *testing.T) {
 	t.Parallel()
 	built, err := Build(env.Values{}, Overrides{
-		EngineReceiptTimeoutMS:     int64Pointer(maxEngineTimingMS),
-		EngineInterChunkStallMS:    int64Pointer(maxEngineTimingMS),
-		EngineLoserGraceMS:         int64Pointer(maxEngineTimingMS),
-		ChainSnapshotMaxAgeSeconds: int64Pointer(int64(chain.DefaultObserverPollInterval.Seconds()) * snapshotAgePollMultiple),
+		EngineReceiptTimeoutMS:       int64Pointer(maxEngineTimingMS),
+		EngineInterChunkStallMS:      int64Pointer(maxEngineTimingMS),
+		EngineLoserGraceMS:           int64Pointer(maxEngineTimingMS),
+		EngineHedgeFirstTokenFloorMS: int64Pointer(maxEngineTimingMS),
+		ChainSnapshotMaxAgeSeconds:   int64Pointer(int64(chain.DefaultObserverPollInterval.Seconds()) * snapshotAgePollMultiple),
 	})
 	if err != nil {
 		t.Fatalf("Build refused the documented limits: %v", err)
@@ -177,6 +185,16 @@ func TestEngineOverridesAreValidatedLikeTheDefaults(t *testing.T) {
 			name:      "a grace wide enough to overflow its own duration",
 			overrides: Overrides{EngineLoserGraceMS: int64Pointer(maxEngineTimingMS + 1)},
 			wantError: "engine_loser_grace_ms: 86400001 must be <= 86400000",
+		},
+		{
+			name:      "a negative hedge floor",
+			overrides: Overrides{EngineHedgeFirstTokenFloorMS: int64Pointer(-1)},
+			wantError: "engine_hedge_first_token_floor_ms: -1 must be >= 0",
+		},
+		{
+			name:      "a hedge floor wide enough to overflow its own duration",
+			overrides: Overrides{EngineHedgeFirstTokenFloorMS: int64Pointer(maxEngineTimingMS + 1)},
+			wantError: "engine_hedge_first_token_floor_ms: 86400001 must be <= 86400000",
 		},
 		{
 			name:      "a snapshot age wide enough to overflow its own duration",

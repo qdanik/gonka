@@ -3773,7 +3773,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum by (reason) (rate(devshard_gateway_attempts_started_total{model=~\"$model\",role=\"speculative\",reason=~\"suspicious_host|attempt_failed|receipt_timeout|first_token_timeout\"}[$__rate_interval]))",
+          "expr": "sum by (reason) (rate(devshard_gateway_attempts_started_total{model=~\"$model\",role=\"speculative\",reason=~\"suspicious_host|attempt_failed|receipt_timeout|first_token_timeout|slow_start\"}[$__rate_interval]))",
           "instant": false,
           "legendFormat": "{{reason}}",
           "refId": "A"
@@ -3839,7 +3839,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum(rate(devshard_gateway_attempts_started_total{model=~\"$model\",role=\"speculative\",reason=\"first_token_timeout\"}[$__range])) / clamp_min(sum(rate(devshard_gateway_attempts_started_total{model=~\"$model\",role=\"speculative\",reason=~\"suspicious_host|attempt_failed|receipt_timeout|first_token_timeout\"}[$__range])), 1e-9)",
+          "expr": "sum(rate(devshard_gateway_attempts_started_total{model=~\"$model\",role=\"speculative\",reason=\"first_token_timeout\"}[$__range])) / clamp_min(sum(rate(devshard_gateway_attempts_started_total{model=~\"$model\",role=\"speculative\",reason=~\"suspicious_host|attempt_failed|receipt_timeout|first_token_timeout|slow_start\"}[$__range])), 1e-9)",
           "instant": false,
           "legendFormat": "",
           "refId": "A"

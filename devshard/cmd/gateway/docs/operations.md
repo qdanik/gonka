@@ -84,6 +84,7 @@ Signing keys are addressed **by the name of the variable that holds them**, neve
 | `GATEWAY_ENGINE_FIRST_TOKEN_CEILING_MS` | 30 000 | upper bound, whatever the host's own p75 asks for |
 | `GATEWAY_ENGINE_INTER_CHUNK_STALL_MS` | 30 000 | silence after first content before an attempt is stalled |
 | `GATEWAY_ENGINE_LOSER_GRACE_MS` | 600 000 | how long a loser may keep running after the crown |
+| `GATEWAY_ENGINE_HEDGE_FIRST_TOKEN_FLOOR_MS` | 1 500 | lower bound on the slow-start hedge that starts a second attempt before the judged deadline; `0` turns it off |
 | `GATEWAY_ENGINE_MAX_CONCURRENT_TIMEOUT_VOTES` | 2 048 | chain votes for unfinished nonces being posted at once, not a bound on settling escrows; one past it waits for a poster rather than being dropped |
 | `GATEWAY_ACCOUNTING_ENABLED` | false | the per-nonce ledger and its JSON API on `GATEWAY_ACCOUNTING_PORT` (9091) |
 | `GATEWAY_ACCOUNTING_RETENTION_EPOCHS` | 2 | how many epochs before the current one the nonce ledger keeps retired escrows; below 1 is refused while the ledger is on |
@@ -179,7 +180,7 @@ Three mechanisms withhold work from a host, each on its own trigger, and each is
 | --- | --- | --- |
 | `host withheld from routing` (`perf/tracker.go`) | five failures in a row, or a failure rate from 15% over a volume from 20 | **Warn** — which trigger fired, the rung, the run length, the rate and its volume, and how long the withholding lasts |
 | `host back in routing` (`perf/tracker.go`) | first sample after the withholding lapsed | the rung it decayed to |
-| `host cut off after transport faults` (`limits/reaction.go`) | three cut-off faults in a row — a transport fault, or an empty answer that left its nonce open — or one failed half-open probe | **Warn** — which of the two, the backoff depth, and how long the cut-off lasts. The line's name and its `consecutive_transport_faults` reason are what dashboards and log queries match on, so both keep the wording they have whatever the run was made of |
+| `host cut off after transport faults` (`limits/reaction.go`) | three cut-off faults in a row — a transport fault, an empty answer that left its nonce open, or a `429`/`503` from a host that carried nothing else of ours for this model when it refused — or one failed half-open probe | **Warn** — which of the two, the backoff depth, and how long the cut-off lasts. The line's name and its `consecutive_transport_faults` reason are what dashboards and log queries match on, so both keep the wording they have whatever the run was made of |
 | `host back after its cut-off` (`limits/reaction.go`) | the probe answered | the backoff depth it decayed to |
 | `host denied the crown` (`engine/crown_strikes.go`) | three content-free answers in a row | **Warn** — the strike count. The host keeps drawing nonces and starts a second attempt beside itself, so this is a spend, not only a quality signal |
 | `host crowned again` (`engine/crown_strikes.go`) | one answer with content | — |

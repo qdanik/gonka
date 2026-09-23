@@ -3,6 +3,7 @@ package engine
 import (
 	"devshard/cmd/gateway/chain"
 	"devshard/cmd/gateway/config"
+	"devshard/cmd/gateway/limits"
 )
 
 func (c *raceCoordinator) apply(event AttemptEvent) {
@@ -40,6 +41,7 @@ func (c *raceCoordinator) complete(attempt *liveAttempt, event AttemptEvent) {
 		return
 	}
 	attempt.recordDeadlines(attempt.outcome)
+	c.countRefusal(attempt)
 	c.traceStep(RaceStep{
 		Kind: RaceStepAttemptFinished, RequestID: c.request.RequestID, EscrowID: c.escrowID,
 		Nonce: attempt.nonce, Participant: attempt.participant,
@@ -143,29 +145,10 @@ func (c *raceCoordinator) report() RaceOutcome {
 }
 
 func (c *raceCoordinator) outcome() RaceOutcome {
-	outcome := RaceOutcome{
-		RequestID:       c.request.RequestID,
-		EscrowID:        c.escrowID,
-		Model:           c.request.Model,
-		InputTokens:     c.request.InputTokens,
-		OutputTokens:    c.request.OutputTokens,
-		ClientStream:    c.request.ClientStream,
-		Decision:        c.decision,
-		PoCBypassActive: c.pocBypass,
-		Lifecycle:       Lifecycle{BalanceExhausted: c.balanceExhausted, ClientGone: !c.clientGoneAt.IsZero()},
-		Attempts:        make([]AttemptOutcome, 0, len(c.attempts)),
-	}
+	outcome := c.raceFacts()
+	outcome.Attempts = make([]AttemptOutcome, 0, len(c.attempts))
 	for _, attempt := range c.attempts {
-		var record AttemptOutcome
-		if attempt.outcome != nil {
-			record = *attempt.outcome
-		} else {
-			record = c.unreportedOutcome(attempt)
-		}
-		record.StartedAt = c.started
-		record.NonceFinished = attempt.nonceFinished
-		record.PhaseTransitionAborted = c.phaseAborted(attempt, record)
-		record.Terminal = c.racedTerminal(attempt, record)
+		record := c.attemptRecord(attempt)
 		if attempt == c.winner {
 			outcome.WinnerNonce = attempt.nonce
 			outcome.Succeeded = record.Terminal == TerminalWon
@@ -175,6 +158,40 @@ func (c *raceCoordinator) outcome() RaceOutcome {
 		outcome.Attempts = append(outcome.Attempts, record)
 	}
 	return outcome
+}
+
+func (c *raceCoordinator) raceFacts() RaceOutcome {
+	return RaceOutcome{
+		RequestID:       c.request.RequestID,
+		EscrowID:        c.escrowID,
+		Model:           c.request.Model,
+		InputTokens:     c.request.InputTokens,
+		OutputTokens:    c.request.OutputTokens,
+		ClientStream:    c.request.ClientStream,
+		Decision:        c.decision,
+		PoCBypassActive: c.pocBypass,
+		Lifecycle:       Lifecycle{BalanceExhausted: c.balanceExhausted, ClientGone: !c.clientGoneAt.IsZero()},
+	}
+}
+
+func (c *raceCoordinator) attemptRecord(attempt *liveAttempt) AttemptOutcome {
+	var record AttemptOutcome
+	if attempt.outcome != nil {
+		record = *attempt.outcome
+	} else {
+		record = c.unreportedOutcome(attempt)
+	}
+	record.StartedAt = c.started
+	record.NonceFinished = attempt.nonceFinished
+	record.PhaseTransitionAborted = c.phaseAborted(attempt, record)
+	record.Terminal = c.racedTerminal(attempt, record)
+	return record
+}
+
+func (c *raceCoordinator) countRefusal(attempt *liveAttempt) {
+	if verdict, moves := c.raceFacts().Verdict(c.attemptRecord(attempt)); moves && verdict == limits.Overload {
+		c.deps.Limiter.CountRefusalIfIdle(attempt.participant, c.request.Model)
+	}
 }
 
 // pocBypassActive reports the gateway serving through a chain phase that refuses new inferences.

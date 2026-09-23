@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"sync"
 	"time"
 
 	"devshard/cmd/gateway/filters"
@@ -145,7 +146,8 @@ type attemptState struct {
 
 func runAttempt(ctx context.Context, spec AttemptSpec) {
 	defer spec.Classifier.Release()
-	defer spec.ReleaseSlot()
+	releaseSlot := sync.OnceFunc(spec.ReleaseSlot)
+	defer releaseSlot()
 
 	nonce := spec.Nonce.Nonce()
 	state := &attemptState{sendTime: spec.Now()}
@@ -166,6 +168,7 @@ func runAttempt(ctx context.Context, spec AttemptSpec) {
 	}
 	state.classify(ctx, spec, err)
 
+	releaseSlot()
 	spec.emit(AttemptEvent{
 		Kind:      AttemptDone,
 		Nonce:     nonce,

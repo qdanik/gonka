@@ -67,6 +67,9 @@ func StatusForError(err error) int {
 	if errors.As(err, &hostErr) {
 		return hostErr.HTTPStatus()
 	}
+	if errors.Is(err, ErrHostsUnavailable) {
+		return http.StatusServiceUnavailable
+	}
 	if status, ok := UpstreamStatus(err); ok && isThrottleStatus(status) {
 		return http.StatusTooManyRequests
 	}

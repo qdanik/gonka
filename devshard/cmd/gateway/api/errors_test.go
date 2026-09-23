@@ -8,11 +8,18 @@ import (
 	"testing"
 	"time"
 
+	"devshard/cmd/gateway/config"
+	"devshard/cmd/gateway/engine"
 	"devshard/cmd/gateway/escrow"
 	"devshard/cmd/gateway/limits"
 	"devshard/cmd/gateway/scheduler"
 	"devshard/types"
 )
+
+func newErrorsTestServer() *Server {
+	defaults := config.Defaults()
+	return &Server{config: config.NewHolder(&defaults)}
+}
 
 // Two documents promise a 429 carries Retry-After, and RateLimitError computes the wait, but nothing
 // wrote it: a client told only "too many requests" retries on its own schedule, which is what the
@@ -20,7 +27,7 @@ import (
 func TestARateLimitRejectionCarriesRetryAfter(t *testing.T) {
 	recorder := httptest.NewRecorder()
 
-	writeErrorFor(recorder, &limits.RateLimitError{Reason: "queue timeout", RetryAfter: 1500 * time.Millisecond})
+	newErrorsTestServer().writeErrorFor(recorder, &limits.RateLimitError{Reason: "queue timeout", RetryAfter: 1500 * time.Millisecond})
 
 	if recorder.Code != http.StatusTooManyRequests {
 		t.Fatalf("status = %d, want 429", recorder.Code)
@@ -33,7 +40,7 @@ func TestARateLimitRejectionCarriesRetryAfter(t *testing.T) {
 func TestOtherRejectionsCarryNoRetryAfter(t *testing.T) {
 	recorder := httptest.NewRecorder()
 
-	writeErrorFor(recorder, ErrPrivateKeyEnvRequired)
+	newErrorsTestServer().writeErrorFor(recorder, ErrPrivateKeyEnvRequired)
 
 	if got := recorder.Header().Get("Retry-After"); got != "" {
 		t.Fatalf("Retry-After = %q on a client-fixable rejection, want none", got)
@@ -46,7 +53,7 @@ func TestOtherRejectionsCarryNoRetryAfter(t *testing.T) {
 func TestAHostlessRequestIsOurRefusalNotAnUpstreamFailure(t *testing.T) {
 	recorder := httptest.NewRecorder()
 
-	writeErrorFor(recorder, scheduler.ErrHostsBusy)
+	newErrorsTestServer().writeErrorFor(recorder, scheduler.ErrHostsBusy)
 
 	if recorder.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusServiceUnavailable)
@@ -62,7 +69,7 @@ func TestACapacityRefusalAnswersUnavailableWithAWait(t *testing.T) {
 	refusals := []error{scheduler.ErrHostsBusy, scheduler.ErrNoEscrowCapacity, scheduler.ErrEscrowBusy}
 	for _, refusal := range refusals {
 		recorder := httptest.NewRecorder()
-		writeErrorFor(recorder, refusal)
+		newErrorsTestServer().writeErrorFor(recorder, refusal)
 		if recorder.Code != http.StatusServiceUnavailable {
 			t.Fatalf("%v answered %d, want 503", refusal, recorder.Code)
 		}
@@ -76,7 +83,7 @@ func TestACapacityRefusalAnswersUnavailableWithAWait(t *testing.T) {
 func TestAModelUnavailableRejectionCarriesTheEscrowTickInterval(t *testing.T) {
 	recorder := httptest.NewRecorder()
 
-	writeErrorFor(recorder, &ModelUnavailableError{Model: "qwen"})
+	newErrorsTestServer().writeErrorFor(recorder, &ModelUnavailableError{Model: "qwen"})
 
 	if recorder.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status = %d, want 503", recorder.Code)
@@ -92,7 +99,7 @@ func TestAModelUnavailableRejectionCarriesTheEscrowTickInterval(t *testing.T) {
 func TestAFundingRefusalCarriesTheEscrowTickInterval(t *testing.T) {
 	recorder := httptest.NewRecorder()
 
-	writeErrorFor(recorder, fmt.Errorf("%w: %w", scheduler.ErrNoEscrowCapacity, types.ErrInsufficientBalance))
+	newErrorsTestServer().writeErrorFor(recorder, fmt.Errorf("%w: %w", scheduler.ErrNoEscrowCapacity, types.ErrInsufficientBalance))
 
 	if recorder.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status = %d, want 503", recorder.Code)
@@ -107,7 +114,7 @@ func TestAFundingRefusalCarriesTheEscrowTickInterval(t *testing.T) {
 func TestABusyShardKeepsTheShortRetry(t *testing.T) {
 	recorder := httptest.NewRecorder()
 
-	writeErrorFor(recorder, scheduler.ErrNoEscrowCapacity)
+	newErrorsTestServer().writeErrorFor(recorder, scheduler.ErrNoEscrowCapacity)
 
 	want := strconv.Itoa(int(noHostRetryAfter.Seconds()))
 	if got := recorder.Header().Get("Retry-After"); got != want {
@@ -120,12 +127,38 @@ func TestABusyShardKeepsTheShortRetry(t *testing.T) {
 func TestTheGatewaysOwnLimitAnswersTooManyRequests(t *testing.T) {
 	recorder := httptest.NewRecorder()
 
-	writeErrorFor(recorder, &limits.RateLimitError{Reason: "too many concurrent requests"})
+	newErrorsTestServer().writeErrorFor(recorder, &limits.RateLimitError{Reason: "too many concurrent requests"})
 
 	if recorder.Code != http.StatusTooManyRequests {
 		t.Fatalf("status = %d, want 429", recorder.Code)
 	}
 	if recorder.Header().Get("Retry-After") == "" {
 		t.Fatal("a limiter rejection carried no Retry-After")
+	}
+}
+
+func TestAHostsUnavailableRejectionCarriesTheHostCutoffBase(t *testing.T) {
+	recorder := httptest.NewRecorder()
+
+	newErrorsTestServer().writeErrorFor(recorder, engine.ErrHostsUnavailable)
+
+	if recorder.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503", recorder.Code)
+	}
+	if got := recorder.Header().Get("Retry-After"); got != "5" {
+		t.Fatalf("Retry-After = %q, want %q (the default host cutoff base, rounded up to seconds)", got, "5")
+	}
+}
+
+func TestAHostsUnavailableRejectionRoundsUpAConfiguredBase(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	configuration := config.Defaults()
+	configuration.Limits.HostCutoff.BaseMS = 2_500
+	server := &Server{config: config.NewHolder(&configuration)}
+
+	server.writeErrorFor(recorder, engine.ErrHostsUnavailable)
+
+	if got := recorder.Header().Get("Retry-After"); got != "3" {
+		t.Fatalf("Retry-After = %q, want %q (2.5s rounded up)", got, "3")
 	}
 }

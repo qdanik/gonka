@@ -19,6 +19,7 @@ const (
 	StageAttemptFailed  EscalationStage = "attempt_failed"
 	StageReceiptTimeout EscalationStage = "receipt_timeout_wait_elapsed"
 	StageFirstToken     EscalationStage = "first_token_timeout_wait_elapsed"
+	StageHedge          EscalationStage = "slow_start_wait_elapsed"
 )
 
 // What carried an answer's first renderable bytes, reported on every attempt that produced content.
@@ -119,4 +120,5 @@ const (
 	EscalationReasonAttemptFailed = "attempt_failed"
 	EscalationReasonReceipt       = "receipt_timeout"
 	EscalationReasonFirstToken    = "first_token_timeout"
+	EscalationReasonHedge         = "slow_start"
 )

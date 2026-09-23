@@ -184,6 +184,7 @@ type Engine struct {
 	LoserGraceMS              int64
 	MaxAttemptsPerRequest     int64
 	MaxConcurrentTimeoutVotes int64
+	HedgeFirstTokenFloorMS    int64
 }
 
 // Scheduler groups nonce-holding tuning; MatchWaitMS of 0 burns an unmatched nonce immediately, and MaxConsecutiveBurns of 0 never forces a send. See routing.md, "The forced send".

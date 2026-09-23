@@ -397,6 +397,8 @@ func (l *slotLedger) OnResult(result limits.Result) {
 	l.verdicts <- windowMove{participant: result.Participant, verdict: result.Verdict}
 }
 
+func (l *slotLedger) CountRefusalIfIdle(string, string) {}
+
 type recordingSink struct {
 	mu      sync.Mutex
 	writes  [][]byte
@@ -1931,6 +1933,64 @@ func TestOutcomeRewritesTerminalsTheCoordinatorAloneKnows(t *testing.T) {
 	}
 	if !outcome.Attempts[2].NonceFinished {
 		t.Fatal("NonceFinished = false on the winner, want true")
+	}
+}
+
+func TestARefusalFromAHostStillCarryingOurWorkLeavesItsCutoffCountAlone(t *testing.T) {
+	limiter := limits.NewParticipantLimiter(limiterConfig(1), func() time.Time { return testEpoch })
+	otherRequest, admission := limiter.Acquire(testParticipant, testModel, limits.TokenCost{Input: 1, Output: 1})
+	if admission != limits.AdmissionOpen || otherRequest == nil {
+		t.Fatalf("Acquire() for the host's other request = %s, want open", admission)
+	}
+	refused := refusedAttempt(100)
+	coordinator := refusalCoordinator(limiter, refused)
+
+	coordinator.complete(refused, unavailableDone(100))
+	otherRequest()
+	reportVerdicts(limiter, coordinator.outcome())
+
+	if admission := limiter.Admits(testParticipant, testModel); admission == limits.AdmissionCutOff {
+		t.Fatal("Admits() = cut_off, want the cut-off closed: the host refused while it still carried another request of ours, so it was busy rather than broken")
+	}
+}
+
+func TestARefusalFromAHostCarryingNothingElseCountsTheMomentItLands(t *testing.T) {
+	limiter := limits.NewParticipantLimiter(limiterConfig(1), func() time.Time { return testEpoch })
+	refused := refusedAttempt(100)
+	coordinator := refusalCoordinator(limiter, refused)
+
+	coordinator.complete(refused, unavailableDone(100))
+
+	if admission := limiter.Admits(testParticipant, testModel); admission != limits.AdmissionCutOff {
+		t.Fatalf("Admits() right after the refusal = %s, want cut_off: a host refusing while it carried nothing else of ours counts towards its cut-off when the refusal lands", admission)
+	}
+}
+
+func refusedAttempt(nonce uint64) *liveAttempt {
+	return &liveAttempt{nonce: nonce, participant: testParticipant, sendTime: testEpoch, receiptTime: testEpoch, cancel: func() {}}
+}
+
+func refusalCoordinator(limiter *limits.ParticipantLimiter, attempts ...*liveAttempt) *raceCoordinator {
+	fixture := newRaceFixture(settledPolicy(), 2)
+	fixture.deps.Limiter = limiter
+	return pausedCoordinator(fixture, 2, attempts...)
+}
+
+func unavailableDone(nonce uint64) AttemptEvent {
+	return AttemptEvent{Kind: AttemptDone, Nonce: nonce, At: testEpoch, Outcome: &AttemptOutcome{
+		Nonce:       nonce,
+		Participant: testParticipant,
+		SendTime:    testEpoch,
+		Completed:   testEpoch,
+		Terminal:    TerminalUnavailable,
+	}}
+}
+
+func reportVerdicts(limiter *limits.ParticipantLimiter, outcome RaceOutcome) {
+	for _, attempt := range outcome.Attempts {
+		if verdict, moves := outcome.Verdict(attempt); moves {
+			limiter.OnResult(limits.Result{Participant: attempt.Participant, Model: outcome.Model, Verdict: verdict})
+		}
 	}
 }
 

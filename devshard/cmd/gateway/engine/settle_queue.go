@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"context"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -10,7 +11,10 @@ import (
 type settleTask struct {
 	deadline func() time.Time
 	post     func()
+	wake     context.Context
 }
+
+func (t settleTask) woken() bool { return t.wake != nil && t.wake.Err() != nil }
 
 // settleQueue holds the votes a shard owes. See race.md, "The timeout-vote queue".
 type settleQueue struct {
@@ -35,12 +39,27 @@ func (q *settleQueue) Add(task settleTask, limit int) {
 }
 
 func (q *settleQueue) arm(task settleTask, limit int) {
-	q.after(task.deadline().Sub(q.now()), func() { q.fire(task, limit) })
+	delay := task.deadline().Sub(q.now())
+	if task.wake == nil {
+		q.after(delay, func() { q.fire(task, limit) })
+		return
+	}
+	var fired atomic.Bool
+	fireOnce := func() {
+		if fired.CompareAndSwap(false, true) {
+			q.fire(task, limit)
+		}
+	}
+	unregister := context.AfterFunc(task.wake, fireOnce)
+	q.after(delay, func() {
+		unregister()
+		fireOnce()
+	})
 }
 
 // fire asks the deadline again before taking a place. See race.md, "The timeout-vote queue".
 func (q *settleQueue) fire(task settleTask, limit int) {
-	if task.deadline().After(q.now()) {
+	if !task.woken() && task.deadline().After(q.now()) {
 		q.arm(task, limit)
 		return
 	}

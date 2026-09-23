@@ -159,6 +159,57 @@ func AccountingDispositionTotal(resp AccountingParticipantsResponse) uint64 {
 	return total
 }
 
+// SettledAccounting polls until nothing is in flight or awaiting a timeout vote, and returns the last reading either way; expectDispositions also waits for the served traffic to be classified.
+func SettledAccounting(t *testing.T, client *http.Client, statsURL, query string, within time.Duration, expectDispositions bool) AccountingParticipantsResponse {
+	t.Helper()
+	deadline := time.Now().Add(within)
+	var last AccountingParticipantsResponse
+	for {
+		reading, status, _, err := fetchAccountingParticipants(t, client, statsURL, query)
+		if err == nil && status == http.StatusOK {
+			last = reading
+			classified := !expectDispositions || AccountingDispositionTotal(reading) > 0
+			if classified && AccountingInFlightTotal(reading) == 0 && accountingTimeoutPendingTotal(reading) == 0 {
+				return reading
+			}
+		}
+		if time.Now().After(deadline) {
+			return last
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+}
+
+func accountingTimeoutPendingTotal(resp AccountingParticipantsResponse) uint64 {
+	var total uint64
+	for _, participant := range resp.Participants {
+		total += participant.TimeoutPending
+	}
+	return total
+}
+
+// AccountingTimeoutOutcomes sums every participant's timeout outcomes into one map.
+func AccountingTimeoutOutcomes(resp AccountingParticipantsResponse) map[string]uint64 {
+	totals := make(map[string]uint64)
+	for _, participant := range resp.Participants {
+		for outcome, count := range participant.TimeoutOutcomes {
+			totals[outcome] += count
+		}
+	}
+	return totals
+}
+
+// AccountingDispositions sums every participant's dispositions into one map.
+func AccountingDispositions(resp AccountingParticipantsResponse) map[string]uint64 {
+	totals := make(map[string]uint64)
+	for _, participant := range resp.Participants {
+		for disposition, count := range participant.Dispositions {
+			totals[disposition] += count
+		}
+	}
+	return totals
+}
+
 func AccountingDispositionCount(resp AccountingParticipantsResponse, disposition string) uint64 {
 	var total uint64
 	for _, participant := range resp.Participants {

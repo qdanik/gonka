@@ -21,7 +21,7 @@ func TestEveryVerdictNamesItsTierDimensionAndBreaker(t *testing.T) {
 		{"success", Success, tierNone, dimensionNone, breakerRecovers},
 		{"late success", LateSuccess, tierNone, dimensionNone, breakerRecovers},
 		{"model outcome", ModelOutcome, tierNone, dimensionNone, breakerUntouched},
-		{"overload", Overload, tierSoft, dimensionBoth, breakerClears},
+		{"overload", Overload, tierSoft, dimensionBoth, breakerUntouched},
 		{"upstream fault", UpstreamFault, tierHard, dimensionBoth, breakerUntouched},
 		{"empty answer", EmptyAnswer, tierHard, dimensionBoth, breakerUntouched},
 		{"empty answer left open", EmptyAnswerLeftOpen, tierSevere, dimensionBoth, breakerCounts},

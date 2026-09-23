@@ -191,6 +191,18 @@ func LatestSessionNonce(t *testing.T, client *http.Client, clientURL string) uin
 	return NumericField(t, session, "latest_nonce")
 }
 
+// EscrowSessionState reads an escrow's balance and latest nonce by id from either driver: devshardctl nests them under session, the gateway does not.
+func EscrowSessionState(t *testing.T, client *http.Client, clientURL, escrowID string, isGateway bool) (balance, latestNonce uint64) {
+	t.Helper()
+	state := GetJSON(t, client, clientURL+"/devshard/"+escrowID+"/v1/state")
+	if isGateway {
+		return NumericField(t, state, "balance"), NumericField(t, state, "latest_nonce")
+	}
+	session, ok := state["session"].(map[string]any)
+	require.True(t, ok, "state session should be an object")
+	return NumericField(t, session, "balance"), NumericField(t, session, "latest_nonce")
+}
+
 func GetSignatureStatus(t *testing.T, client *http.Client, clientURL string) map[string]any {
 	t.Helper()
 	return GetJSON(t, client, clientURL+"/v1/debug/signatures")

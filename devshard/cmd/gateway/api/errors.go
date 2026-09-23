@@ -223,6 +223,10 @@ func outOfFunds(err error) bool {
 	return errors.Is(err, types.ErrInsufficientBalance)
 }
 
+func hostsUnavailable(err error) bool {
+	return errors.Is(err, engine.ErrHostsUnavailable)
+}
+
 func shardHasNoRoom(err error) bool {
 	return errors.Is(err, scheduler.ErrHostsBusy) ||
 		errors.Is(err, scheduler.ErrNoEscrowCapacity) ||
@@ -231,7 +235,7 @@ func shardHasNoRoom(err error) bool {
 }
 
 // Retry-After is rounded up: a zero would tell a client to retry immediately, which a queue timeout does not mean.
-func writeErrorFor(w http.ResponseWriter, err error) {
+func (s *Server) writeErrorFor(w http.ResponseWriter, err error) {
 	throttled, ours := rateLimited(err)
 	switch {
 	case ours && throttled.RetryAfter > 0:
@@ -241,6 +245,10 @@ func writeErrorFor(w http.ResponseWriter, err error) {
 		w.Header().Set("Retry-After", strconv.FormatInt(int64(chain.DefaultObserverPollInterval.Seconds()), 10))
 	case modelUnavailable(err), outOfFunds(err):
 		w.Header().Set("Retry-After", strconv.FormatInt(int64(escrow.TickInterval.Seconds()), 10))
+	case hostsUnavailable(err):
+		baseMS := s.config.Load().Limits.HostCutoff.BaseMS
+		seconds := int64(math.Ceil(float64(baseMS) / 1000))
+		w.Header().Set("Retry-After", strconv.FormatInt(seconds, 10))
 	case ours, shardHasNoRoom(err):
 		w.Header().Set("Retry-After", strconv.FormatInt(int64(noHostRetryAfter.Seconds()), 10))
 	}

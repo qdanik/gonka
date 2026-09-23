@@ -100,6 +100,7 @@ type Values struct {
 	EngineLoserGraceMS        *int64
 
 	EngineMaxConcurrentTimeoutVotes *int64
+	EngineHedgeFirstTokenFloorMS    *int64
 }
 
 // PoCModeOff and PoCModeRelaxed are the accepted GATEWAY_POC_MODE values.
@@ -325,6 +326,7 @@ func Load() (Values, error) {
 	readInt("GATEWAY_ENGINE_INTER_CHUNK_STALL_MS", &values.EngineInterChunkStallMS)
 	readInt("GATEWAY_ENGINE_LOSER_GRACE_MS", &values.EngineLoserGraceMS)
 	readInt("GATEWAY_ENGINE_MAX_CONCURRENT_TIMEOUT_VOTES", &values.EngineMaxConcurrentTimeoutVotes)
+	readInt("GATEWAY_ENGINE_HEDGE_FIRST_TOKEN_FLOOR_MS", &values.EngineHedgeFirstTokenFloorMS)
 
 	if values.PoCMode != nil && *values.PoCMode != PoCModeOff && *values.PoCMode != PoCModeRelaxed {
 		problems = append(problems, fmt.Errorf("GATEWAY_POC_MODE: %q is not %q or %q", *values.PoCMode, PoCModeOff, PoCModeRelaxed))

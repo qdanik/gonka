@@ -73,6 +73,20 @@ func (l *ParticipantLimiter) admitOne(participant, model string) (func(), bool) 
 	return release, admission == AdmissionOpen
 }
 
+func (l *ParticipantLimiter) acquired(t *testing.T, participant, model string) func() {
+	t.Helper()
+	release, admitted := l.admitOne(participant, model)
+	if !admitted || release == nil {
+		t.Fatalf("Acquire(%q, %q) refused, want a lease: the test needs this request in flight", participant, model)
+	}
+	return release
+}
+
+func (l *ParticipantLimiter) acquiredAndReleased(t *testing.T, participant, model string) {
+	t.Helper()
+	l.acquired(t, participant, model)()
+}
+
 func (l *ParticipantLimiter) admits(participant, model string) bool {
 	_, admitted := l.admitOne(participant, model)
 	return admitted
@@ -215,19 +229,82 @@ func TestOverloadFloorsWindowAtTheMinimum(t *testing.T) {
 	}
 }
 
-func TestOverloadNeverTripsCutoff(t *testing.T) {
+func TestAnOverloadReportedAtRaceEndNeverTripsCutoff(t *testing.T) {
 	t.Parallel()
 	l := newTestLimiter(testConfig(), fixedNow(testEpoch))
 	for range 10 {
-		release, _ := l.admitOne("p", "m")
+		l.acquiredAndReleased(t, "p", "m")
 		l.answered("p", "m", Overload)
-		if release != nil {
-			release()
-		}
 	}
 
-	if !l.admits("p", "m") {
-		t.Fatal("Acquire() after repeated Overload verdicts = false, want true (cutoff must stay closed)")
+	if admission := l.Admits("p", "m"); admission == AdmissionCutOff {
+		t.Fatal("Admits() after repeated Overload results on an idle host = cut_off, want the cut-off closed: OnResult leaves the count to CountRefusalIfIdle")
+	}
+}
+
+func TestRefusalsFromAnIdleHostOpenTheCutoff(t *testing.T) {
+	t.Parallel()
+	l := newTestLimiter(testConfig(), fixedNow(testEpoch))
+	for range 3 {
+		l.acquiredAndReleased(t, "p", "m")
+		l.CountRefusalIfIdle("p", "m")
+	}
+
+	if admission := l.Admits("p", "m"); admission != AdmissionCutOff {
+		t.Fatalf("Admits() after three refusals with nothing else in flight = %s, want cut_off: a host refusing while it carried nothing of ours for this model is broken, not busy", admission)
+	}
+}
+
+func TestRefusalsWhileTheHostCarriesOtherWorkLeaveTheCutoffClosed(t *testing.T) {
+	t.Parallel()
+	l := newTestLimiter(testConfig(), fixedNow(testEpoch))
+	l.acquired(t, "p", "m")
+	for range 3 {
+		l.acquiredAndReleased(t, "p", "m")
+		l.CountRefusalIfIdle("p", "m")
+	}
+
+	if admission := l.Admits("p", "m"); admission == AdmissionCutOff {
+		t.Fatal("Admits() after three refusals while another request was in flight = cut_off, want the cut-off closed: a host busy with our work is busy, not broken")
+	}
+}
+
+func TestAnOverloadDoesNotClearTheTransportFaultStreak(t *testing.T) {
+	t.Parallel()
+	l := newTestLimiter(testConfig(), fixedNow(testEpoch))
+
+	l.answered("p", "m", TransportFault)
+	l.answered("p", "m", Overload)
+	l.answered("p", "m", TransportFault)
+	l.answered("p", "m", TransportFault)
+
+	if admission := l.Admits("p", "m"); admission != AdmissionCutOff {
+		t.Fatalf("Admits() after fault, overload, fault, fault = %s, want cut_off: a refusing host must not reset its own streak", admission)
+	}
+}
+
+func TestARefusalOnAHalfOpenProbeReopensTheCutoff(t *testing.T) {
+	t.Parallel()
+	l := newTestLimiter(testConfig(), fixedNow(testEpoch))
+	l.markHalfOpen("p", "m")
+	l.acquiredAndReleased(t, "p", "m")
+
+	l.CountRefusalIfIdle("p", "m")
+
+	if admission := l.Admits("p", "m"); admission != AdmissionCutOff {
+		t.Fatalf("Admits() after the half-open probe was refused = %s, want cut_off: a probe gets exactly one try", admission)
+	}
+}
+
+func TestARefusalFromAHostNeverSeenCreatesItsState(t *testing.T) {
+	t.Parallel()
+	l := newTestLimiter(testConfig(), fixedNow(testEpoch))
+	for range 3 {
+		l.CountRefusalIfIdle("never-acquired", "m")
+	}
+
+	if admission := l.Admits("never-acquired", "m"); admission != AdmissionCutOff {
+		t.Fatalf("Admits() after three refusals from an untracked host = %s, want cut_off: a pair swept between release and refusal was idle", admission)
 	}
 }
 
