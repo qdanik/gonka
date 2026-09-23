@@ -553,15 +553,16 @@ func TestMethodNotAllowedNamesTheMethodsItAccepts(t *testing.T) {
 	}
 }
 
-func TestMetricsAndHealthzAreNotInstrumented(t *testing.T) {
+func TestMetricsHealthzAndTheProfilerAreNotInstrumented(t *testing.T) {
 	live := newHarness(t)
-	for _, uninstrumented := range []string{"/metrics", "/healthz"} {
-		if slices.Contains(live.telemetry.labels, uninstrumented) {
-			t.Fatalf("%s was registered with an instrumentation label: %v", uninstrumented, live.telemetry.labels)
+	uninstrumented := []string{"/metrics", "/healthz", "/debug/pprof/", "/debug/pprof/cmdline", "/debug/pprof/profile", "/debug/pprof/symbol", "/debug/pprof/trace"}
+	for _, pattern := range uninstrumented {
+		if slices.Contains(live.telemetry.labels, pattern) {
+			t.Fatalf("%s was registered with an instrumentation label: %v", pattern, live.telemetry.labels)
 		}
 	}
-	if want := len(live.server.routes()) - 2; len(live.telemetry.labels) != want {
-		t.Fatalf("instrumented routes: got %d, want %d (every route but /metrics and /healthz)", len(live.telemetry.labels), want)
+	if want := len(live.server.routes()) - len(uninstrumented); len(live.telemetry.labels) != want {
+		t.Fatalf("instrumented routes: got %d, want %d (every route but %v)", len(live.telemetry.labels), want, uninstrumented)
 	}
 }
 

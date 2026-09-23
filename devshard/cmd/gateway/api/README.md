@@ -167,6 +167,8 @@ The caller and the escrow scope are in the key as well, so a cached reply never 
 
 Eviction drops entries in map order: with a per-caller key and an hour's TTL there is no access pattern a smarter policy would reward, and map order costs nothing.
 
+**A hit is served while proof-of-compute blocks requests.** `chat` runs admission first and keeps its refusal; a refusal that is proof-of-compute alone lets the lookup run, a hit is served, and a miss gets the same refusal. Every other refusal is written before the lookup. See [`docs/rules.md`](../docs/rules.md), "No cached reply behind any refusal but proof-of-compute".
+
 ## Read next
 
 - [`docs/request.md`](../docs/request.md) — one request from the socket to the settled nonce.

@@ -1502,14 +1502,14 @@ func (s *Session) sendCatchUpChunks(ctx context.Context, hostIdx int, client Hos
 	}
 
 	totalChunks := (len(catchUp) + catchUpChunkSize - 1) / catchUpChunkSize
-	logging.Info("sendCatchUp starting", "subsystem", "finalize", "escrow", s.escrowID,
+	logging.Info("catch-up starting", "subsystem", "finalize", "escrow", s.escrowID,
 		"nonce", nonce, "host", hostIdx,
 		"total_diffs", len(catchUp), "chunks", totalChunks)
 
 	chunkIdx := 0
 	for chunkIdx < len(catchUp) {
 		if err := ctx.Err(); err != nil {
-			logging.Warn("sendCatchUp context cancelled", "subsystem", "finalize", "escrow", s.escrowID,
+			logging.Warn("catch-up context cancelled", "subsystem", "finalize", "escrow", s.escrowID,
 				"nonce", nonce, "host", hostIdx,
 				"chunk", chunkIdx/catchUpChunkSize+1, "error", err)
 			return nil
@@ -1521,7 +1521,7 @@ func (s *Session) sendCatchUpChunks(ctx context.Context, hostIdx int, client Hos
 		chunkNonce := chunk[len(chunk)-1].Nonce
 		chunkNum := chunkIdx/catchUpChunkSize + 1
 
-		logging.Info("sendCatchUp chunk", "subsystem", "finalize", "escrow", s.escrowID,
+		logging.Info("catch-up chunk", "subsystem", "finalize", "escrow", s.escrowID,
 			"nonce", nonce, "host", hostIdx,
 			"chunk", chunkNum, "of", totalChunks,
 			"diffs_in_chunk", len(chunk),
@@ -1532,13 +1532,13 @@ func (s *Session) sendCatchUpChunks(ctx context.Context, hostIdx int, client Hos
 		resp, err := client.Send(chunkCtx, host.HostRequest{Diffs: chunk, Nonce: chunkNonce}, nil, nil)
 		cancel()
 		if err != nil {
-			logging.Warn("sendCatchUp chunk failed", "subsystem", "finalize", "escrow", s.escrowID,
+			logging.Warn("catch-up chunk failed", "subsystem", "finalize", "escrow", s.escrowID,
 				"nonce", nonce, "host", hostIdx,
 				"chunk", chunkNum, "error", err)
 			return fmt.Errorf("catch-up chunk %d to host %d: %w", chunkNum, hostIdx, err)
 		}
 
-		logging.Info("sendCatchUp chunk response", "subsystem", "finalize", "escrow", s.escrowID,
+		logging.Info("catch-up chunk response", "subsystem", "finalize", "escrow", s.escrowID,
 			"nonce", nonce, "host", hostIdx,
 			"chunk", chunkNum,
 			"resp_nonce", resp.Nonce, "has_sig", resp.StateSig != nil)
@@ -1568,7 +1568,7 @@ func (s *Session) sendCatchUpChunks(ctx context.Context, hostIdx int, client Hos
 			}
 			if skipTo > nextChunkIdx {
 				skippedChunks := (skipTo - nextChunkIdx) / catchUpChunkSize
-				logging.Info("sendCatchUp skip-forward", "subsystem", "finalize", "escrow", s.escrowID,
+				logging.Info("catch-up skip-forward", "subsystem", "finalize", "escrow", s.escrowID,
 					"nonce", nonce, "host", hostIdx,
 					"resp_nonce", resp.Nonce,
 					"skipping_from_idx", nextChunkIdx, "to_idx", skipTo,

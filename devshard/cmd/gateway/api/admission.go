@@ -1,6 +1,7 @@
 package api
 
 import (
+	"errors"
 	"time"
 
 	"devshard/cmd/gateway/chain"
@@ -20,6 +21,14 @@ func admission(snapshot chain.PhaseSnapshot, modes config.Modes, now time.Time, 
 		Phase:      snapshot.EpochPhase,
 		Confirming: snapshot.ConfirmationPoCPhase,
 	}
+}
+
+func blockedOnlyByPoC(refusal error) bool {
+	var blocked *BlockedError
+	if !errors.As(refusal, &blocked) {
+		return false
+	}
+	return blocked.Reason == chain.BlockReasonPoC || blocked.Reason == chain.BlockReasonConfirmationPoC
 }
 
 func staleness(snapshot chain.PhaseSnapshot, now time.Time, maxAgeSeconds int64) error {

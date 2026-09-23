@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"fmt"
 	"net/http"
+	"net/http/pprof"
 
 	"devshard/cmd/gateway/config"
 	"devshard/cmd/gateway/engine"
@@ -47,6 +48,7 @@ func (s *Server) routes() []route {
 		{pattern: "/devshard/{id}/v1/debug/inferences", label: "/devshard/{id}/v1/debug/inferences", admin: true, alwaysOn: true, handler: s.handleDevshardDebugInferences},
 		{pattern: "/devshard/{id}/v1/debug/pending", label: "/devshard/{id}/v1/debug/pending", admin: true, alwaysOn: true, handler: s.handleDevshardDebugPending},
 		{pattern: "/devshard/{id}/v1/debug/signatures", label: "/devshard/{id}/v1/debug/signatures", admin: true, alwaysOn: true, handler: s.handleDevshardDebugSignatures},
+		{pattern: "/devshard/{id}/v1/debug/signatures/collect", label: "/devshard/{id}/v1/debug/signatures/collect", admin: true, alwaysOn: true, handler: s.handleDevshardCollectSignatures},
 
 		{pattern: "/v1/admin/state", label: "/v1/admin/state", admin: true, alwaysOn: true, handler: s.handleAdminState},
 		{pattern: "/v1/admin/settings", label: "/v1/admin/settings", admin: true, alwaysOn: true, handler: s.handleAdminSettings},
@@ -68,6 +70,11 @@ func (s *Server) routes() []route {
 		{pattern: "/v1/debug/rotation", label: "/v1/debug/rotation", admin: true, alwaysOn: true, handler: s.handleDebugRotation},
 		{pattern: "/v1/debug/heightsync", label: "/v1/debug/heightsync", admin: true, alwaysOn: true, handler: s.handleDebugHeightSync},
 		{pattern: "/v1/debug/memstats", label: "/v1/debug/memstats", admin: true, alwaysOn: true, handler: s.handleDebugMemstats},
+		{pattern: "/debug/pprof/", admin: true, alwaysOn: true, handler: pprof.Index},
+		{pattern: "/debug/pprof/cmdline", admin: true, alwaysOn: true, handler: pprof.Cmdline},
+		{pattern: "/debug/pprof/profile", admin: true, alwaysOn: true, handler: pprof.Profile},
+		{pattern: "/debug/pprof/symbol", admin: true, alwaysOn: true, handler: pprof.Symbol},
+		{pattern: "/debug/pprof/trace", admin: true, alwaysOn: true, handler: pprof.Trace},
 
 		{pattern: "/", label: otherRouteLabel, alwaysOn: true, handler: s.handleUnmatched},
 	}
@@ -82,7 +89,7 @@ func (s *Server) buildHandler() http.Handler {
 	for _, registered := range s.routes() {
 		handler := registered.handler
 		if registered.admin {
-			handler = adminFailure(registered.label, s.requireAdmin(handler))
+			handler = adminFailure(cmp.Or(registered.label, registered.pattern), s.requireAdmin(handler))
 		}
 		if !registered.alwaysOn {
 			handler = s.disabled(handler)
@@ -209,8 +216,9 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request, escrowPin string) 
 		s.writeErrorFor(w, err)
 		return
 	}
-	if err := admission(s.snapshots.Snapshot(), configuration.Modes, s.now(), configuration.Chain.SnapshotMaxAgeSeconds); err != nil {
-		s.writeErrorFor(w, err)
+	refusal := admission(s.snapshots.Snapshot(), configuration.Modes, s.now(), configuration.Chain.SnapshotMaxAgeSeconds)
+	if refusal != nil && (s.cache == nil || !blockedOnlyByPoC(refusal)) {
+		s.writeErrorFor(w, refusal)
 		return
 	}
 
@@ -225,6 +233,10 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request, escrowPin string) 
 			})
 			return
 		}
+	}
+	if refusal != nil {
+		s.writeErrorFor(w, refusal)
+		return
 	}
 
 	inputTokens := estimatePromptTokens(normalized.Body)

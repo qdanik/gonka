@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"golang.org/x/sync/errgroup"
@@ -298,6 +299,42 @@ func (s *Server) handleAdminDevshardParticipants(w http.ResponseWriter, r *http.
 		"escrow_id":    escrowID,
 		"participants": session.ParticipantKeys(),
 		"slots":        session.HostParticipantKeyList(),
+	})
+}
+
+func (s *Server) handleDevshardCollectSignatures(w http.ResponseWriter, r *http.Request) {
+	if !allowMethods(w, r, http.MethodPost) {
+		return
+	}
+	escrowID := r.PathValue("id")
+	session, held := s.escrows.SettlementSession(escrowID)
+	if !held || session.UserSession() == nil {
+		s.writeErrorFor(w, fmt.Errorf("%w: %s", ErrUnknownDevshard, escrowID))
+		return
+	}
+	raw := r.URL.Query().Get("nonce")
+	if raw == "" {
+		writeError(w, http.StatusBadRequest, "missing 'nonce' query parameter")
+		return
+	}
+	nonce, err := strconv.ParseUint(raw, 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid 'nonce' query parameter")
+		return
+	}
+	if current := session.Nonce(); nonce > current {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("nonce %d is ahead of current nonce %d", nonce, current))
+		return
+	}
+	auditAdmin("collect signatures", "escrow", escrowID, "nonce", nonce)
+	weight, threshold, total := session.UserSession().CollectSignatures(r.Context(), nonce)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"escrow_id":        escrowID,
+		"nonce":            nonce,
+		"sig_weight":       weight,
+		"quorum_threshold": threshold,
+		"total_slots":      total,
+		"has_quorum":       weight >= threshold,
 	})
 }
 

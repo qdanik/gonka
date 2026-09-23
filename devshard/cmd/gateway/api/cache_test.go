@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"devshard/cmd/gateway/chain"
 	"devshard/cmd/gateway/config"
 	"devshard/cmd/gateway/engine"
 	"devshard/cmd/gateway/filters"
@@ -550,5 +551,75 @@ func TestACrlfFramedEventIsNotSeparatedTwice(t *testing.T) {
 
 	if delivered := first.Body.String(); strings.Contains(delivered, "\r\n\r\n\n\n") {
 		t.Fatalf("a separator was written after an event that already ended: %q", delivered)
+	}
+}
+
+func TestACachedReplyIsServedWhileTheChainIsInPoC(t *testing.T) {
+	live := newHarness(t)
+	live.swapConfig(func(next *config.Config) { next.Modes.PoCMode = config.PoCModeOff })
+	first := live.request(t, http.MethodPost, "/v1/chat/completions", chatBody, callerHeaders("caller-a"))
+	live.snapshots.snapshot = chain.PhaseSnapshot{RequestsBlocked: true, BlockReason: chain.BlockReasonPoC, EpochPhase: chain.EpochPhasePoCGenerate}
+	acquiresBefore := live.limiter.acquires.Load()
+
+	replay := live.request(t, http.MethodPost, "/v1/chat/completions", chatBody, callerHeaders("caller-a"))
+
+	if replay.Code != http.StatusOK || replay.Body.String() != first.Body.String() {
+		t.Fatalf("replay during PoC: got %d %q, want 200 with the cached body %q", replay.Code, replay.Body.String(), first.Body.String())
+	}
+	if got := live.inference.runs.Load(); got != 1 {
+		t.Fatalf("races: got %d, want 1 (the replay must not reach a host)", got)
+	}
+	if got := live.limiter.acquires.Load(); got != acquiresBefore {
+		t.Fatalf("the replay took %d limiter slots, want none", got-acquiresBefore)
+	}
+}
+
+func TestACacheMissWhileTheChainIsInPoCIsStillRefused(t *testing.T) {
+	live := newHarness(t)
+	live.swapConfig(func(next *config.Config) { next.Modes.PoCMode = config.PoCModeOff })
+	live.snapshots.snapshot = chain.PhaseSnapshot{RequestsBlocked: true, BlockReason: chain.BlockReasonConfirmationPoC, ConfirmationPoCPhase: chain.ConfirmationPoCGeneration}
+
+	refused := live.request(t, http.MethodPost, "/v1/chat/completions", chatBody, callerHeaders("caller-a"))
+
+	if refused.Code != http.StatusServiceUnavailable {
+		t.Fatalf("a miss during PoC: got %d, want 503", refused.Code)
+	}
+	if got := live.inference.runs.Load(); got != 0 {
+		t.Fatalf("a miss during PoC started %d races", got)
+	}
+}
+
+func TestAStaleChainServesNoCachedReply(t *testing.T) {
+	live := newHarness(t, func(configuration *config.Config) { configuration.Chain.SnapshotMaxAgeSeconds = 30 })
+	live.snapshots.snapshot = chain.PhaseSnapshot{LastHealthyAt: harnessClock}
+	live.request(t, http.MethodPost, "/v1/chat/completions", chatBody, callerHeaders("caller-a"))
+	live.snapshots.snapshot = chain.PhaseSnapshot{LastHealthyAt: harnessClock.Add(-time.Hour)}
+
+	refused := live.request(t, http.MethodPost, "/v1/chat/completions", chatBody, callerHeaders("caller-a"))
+
+	if refused.Code != http.StatusServiceUnavailable {
+		t.Fatalf("a replay behind a stale chain: got %d, want 503", refused.Code)
+	}
+	if got := live.inference.runs.Load(); got != 1 {
+		t.Fatalf("races: got %d, want only the one that filled the cache", got)
+	}
+}
+
+func TestASnapshotThatWentStaleDuringPoCStillServesACachedReply(t *testing.T) {
+	live := newHarness(t, func(configuration *config.Config) {
+		configuration.Chain.SnapshotMaxAgeSeconds = 30
+		configuration.Modes.PoCMode = config.PoCModeOff
+	})
+	live.snapshots.snapshot = chain.PhaseSnapshot{LastHealthyAt: harnessClock}
+	first := live.request(t, http.MethodPost, "/v1/chat/completions", chatBody, callerHeaders("caller-a"))
+	live.snapshots.snapshot = chain.PhaseSnapshot{
+		RequestsBlocked: true, BlockReason: chain.BlockReasonPoC, EpochPhase: chain.EpochPhasePoCGenerate,
+		LastHealthyAt: harnessClock.Add(-time.Hour),
+	}
+
+	replay := live.request(t, http.MethodPost, "/v1/chat/completions", chatBody, callerHeaders("caller-a"))
+
+	if replay.Code != http.StatusOK || replay.Body.String() != first.Body.String() {
+		t.Fatalf("replay during a PoC that went stale: got %d %q, want the cached 200", replay.Code, replay.Body.String())
 	}
 }
