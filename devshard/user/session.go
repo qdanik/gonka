@@ -1687,6 +1687,9 @@ func (s *Session) SyncHosts(ctx context.Context) error {
 // remained in pendingTxs after Phase A. This is the final nonce that
 // carries any txs. After this, state is frozen.
 //
+// A and A+1 run until the state machine leaves Finalizing, so a finalize a
+// restart cut short resumes from the persisted phase instead of refusing.
+//
 // Phase B (N iterations): Pure propagation + signature collection. No new
 // diffs created. Sends catch-up diffs so every host reaches the final
 // nonce and signs the same state.
@@ -1714,37 +1717,26 @@ func (s *Session) Finalize(ctx context.Context) error {
 		}
 		return nil
 	}
-	if phase == types.PhaseFinalizing {
-		return fmt.Errorf("finalize already in progress (phase=finalizing, nonce=%d)", s.nonce)
-	}
-
 	n := len(s.group)
 
-	logging.Info("finalize started", "subsystem", "finalize", "escrow", s.escrowID,
-		"group_size", n, "current_nonce", s.nonce,
-		"total_slots", s.sm.TotalSlots(), "threshold", threshold)
-
-	finalizeTx := &types.DevshardTx{Tx: &types.DevshardTx_FinalizeRound{
-		FinalizeRound: &types.MsgFinalizeRound{},
-	}}
-
-	// Phase A: N diffs collecting remaining txs. First carries MsgFinalizeRound.
-	logging.Info("finalize phase A: collecting reveals", "subsystem", "finalize", "escrow", s.escrowID,
-		"rounds", n)
-	for i := 0; i < n; i++ {
-		var extra []*types.DevshardTx
-		if i == 0 {
-			extra = []*types.DevshardTx{finalizeTx}
-		}
-		if err := s.sendDiffRound(ctx, extra); err != nil {
+	if phase == types.PhaseFinalizing {
+		logging.Info("finalize resumed", "subsystem", "finalize", "escrow", s.escrowID,
+			"group_size", n, "current_nonce", s.nonce, "threshold", threshold)
+	} else {
+		logging.Info("finalize started", "subsystem", "finalize", "escrow", s.escrowID,
+			"group_size", n, "current_nonce", s.nonce,
+			"total_slots", s.sm.TotalSlots(), "threshold", threshold)
+		finalizeTx := &types.DevshardTx{Tx: &types.DevshardTx_FinalizeRound{
+			FinalizeRound: &types.MsgFinalizeRound{},
+		}}
+		if err := s.sendDiffRound(ctx, []*types.DevshardTx{finalizeTx}); err != nil {
 			return err
 		}
 	}
-
-	// Phase A+1: drain the last host's reveal.
-	logging.Info("finalize phase A+1: draining last reveal", "subsystem", "finalize", "escrow", s.escrowID)
-	if err := s.sendDiffRound(ctx, nil); err != nil {
-		return err
+	for s.sm.Phase() == types.PhaseFinalizing {
+		if err := s.sendDiffRound(ctx, nil); err != nil {
+			return err
+		}
 	}
 
 	// Phase B: collect signatures with retries.

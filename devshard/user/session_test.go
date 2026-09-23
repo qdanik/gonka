@@ -341,6 +341,31 @@ func TestUser_Finalize_DiffCount(t *testing.T) {
 		"total diffs = pre-finalize(%d) + N+1(%d)", preFinalize, numHosts+1)
 }
 
+func TestUser_Finalize_ResumesAnInterruptedPhaseA(t *testing.T) {
+	numHosts := 3
+	session, _, _ := setupSession(t, numHosts, 100000, 100)
+	ctx := context.Background()
+	params := InferenceParams{
+		Model: "llama", Prompt: testutil.TestPrompt,
+		InputLength: 100, MaxTokens: testutil.TestMaxTokens, StartedAt: 1000,
+	}
+	for i := 0; i < 3; i++ {
+		_, err := session.SendInference(ctx, params)
+		require.NoError(t, err)
+	}
+	preFinalize := len(session.Diffs())
+	finalizeTx := &types.DevshardTx{Tx: &types.DevshardTx_FinalizeRound{FinalizeRound: &types.MsgFinalizeRound{}}}
+	require.NoError(t, session.sendDiffRound(ctx, []*types.DevshardTx{finalizeTx}))
+	require.Equal(t, types.PhaseFinalizing, session.StateMachine().Phase())
+
+	require.NoError(t, session.Finalize(ctx))
+
+	require.Equal(t, types.PhaseSettlement, session.StateMachine().Phase())
+	require.True(t, session.hasQuorum(session.Nonce(), session.StateMachine().QuorumThreshold()))
+	require.Equal(t, preFinalize+numHosts+1, len(session.Diffs()),
+		"a resumed finalize ends on the same nonce as an uninterrupted one")
+}
+
 func TestUser_PendingTxDedup(t *testing.T) {
 	session, _, _ := setupSession(t, 3, 100000, 100)
 	ctx := context.Background()

@@ -118,7 +118,7 @@ graph LR
     P --> STR["stranded:<br/>the race could not use it"]
     SRV --> FIN["finished on chain"]
     LOST --> VOTE["timeout vote"]
-    BURN --> REF["refunded at settlement:<br/>a ghost has no receipt"]
+    BURN --> REF["paid at settlement:<br/>a ghost stays pending and<br/>the drain credits its floor reserve"]
     STR --> VOTE
     VOTE --> APP["timeout applied"]
 ```
