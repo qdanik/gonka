@@ -18,6 +18,11 @@ const (
 	qwenModel = "Qwen/Qwen3-235B-A22B-Instruct-2507"
 )
 
+// Test flow:
+//  1. Build a table of SSE chunk bodies, each naming the field that should be read as content (delta or message content, reasoning, reasoning_content, tool_calls, or a stop finish reason with completion tokens on a thinking-budget route) or an input expected to yield none (empty body, malformed JSON, non-data lines, an empty tool_calls array).
+//  2. Run `contentSource` on the case's body and thinking-budget flag.
+//  3. Assert the returned source equals the case's wantSource.
+//  4. Assert ok is true exactly when wantSource is non-empty.
 func TestContentSource(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
@@ -135,7 +140,11 @@ func TestContentSource(t *testing.T) {
 	}
 }
 
-// A host can put its failure in the same payload as the content it was still producing.
+// Test flow:
+//  1. Build one SSE chunk whose payload carries both delta content and an error object.
+//  2. Classify the chunk with `classifyChunk`.
+//  3. Assert the signal's ContentSource is non-empty.
+//  4. Assert the signal's Error.Message is the error that rode with the content.
 func TestAnErrorIsSeenEvenInAChunkThatAlsoCarriedContent(t *testing.T) {
 	t.Parallel()
 	chunk := []byte(`data: {"choices":[{"delta":{"content":"hi"}}],"error":{"message":"boom","type":"server_error"}}` + "\n\n")
@@ -150,6 +159,11 @@ func TestAnErrorIsSeenEvenInAChunkThatAlsoCarriedContent(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a table of SSE chunk bodies covering OpenAI-shaped errors (nested and flat, with and without a type, a null or string code, a bare-string message, a bare string with a sibling error_type), non-error inputs, and an error riding alongside content.
+//  2. Run `errorPayload` on each case's body.
+//  3. Assert ok is true exactly when the case names a wantSource.
+//  4. Assert the returned failure's Source, Code, Type, and Message match the case's expectations.
 func TestErrorPayload(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
@@ -259,6 +273,11 @@ func TestErrorPayload(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build one SSE chunk carrying an error event.
+//  2. Extract its failure with `errorPayload`.
+//  3. Overwrite every byte of the original chunk buffer.
+//  4. Assert the extracted Payload still reads the original error text, unaffected by the mutation.
 func TestErrorPayloadCopiesTheEventBytes(t *testing.T) {
 	t.Parallel()
 	body := []byte(`data: {"error":{"message":"boom","type":"server_error"}}` + "\n\n")
@@ -280,6 +299,11 @@ func TestErrorPayloadCopiesTheEventBytes(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a table of SSE chunk bodies covering present, zero, absent, and null completion-token usage, a malformed event that must be skipped in favor of a later valid one, and usage alongside a non-finite logprob value.
+//  2. Run `usageCompletionTokens` on each case's body.
+//  3. Assert the returned token count matches the case's wantTokens.
+//  4. Assert ok is true exactly when wantTokens is greater than zero.
 func TestUsageCompletionTokens(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
@@ -323,6 +347,12 @@ func TestUsageCompletionTokens(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a table of error messages covering a tool-choice refusal, context-length refusals (with trailing text, at the end of the message, and matched case-insensitively), a plain model error, a marker without digits, and an empty message.
+//  2. Run `ParseCapabilityError` on each case's message.
+//  3. Assert Refused() matches the case's wantRefused.
+//  4. Assert Retriable() matches the case's wantRetriable.
+//  5. Assert ContextLimit matches the case's wantLimit.
 func TestParseCapabilityErrorRecognisesARefusal(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
@@ -372,8 +402,7 @@ func TestParseCapabilityErrorRecognisesARefusal(t *testing.T) {
 	}
 }
 
-// replayStream drives one attempt's real classifier and accumulator over chunks exactly as
-// attemptWriter and runAttempt do, and returns the state the terminal was decided from.
+// replayStream drives one attempt's real classifier and accumulator over chunks and returns the resulting state.
 func replayStream(t *testing.T, model string, receipted bool, chunks ...[]byte) *attemptState {
 	t.Helper()
 	classifier := newTestClassifier(model, nil)
@@ -398,9 +427,11 @@ func fixedChunks(body []byte, size int) [][]byte {
 	return chunks
 }
 
-// An error event is a chunk but never content: crowning on one would let a host answering instantly
-// with an error beat a slower host that goes on to produce tokens. A capability refusal is neither,
-// because another host can still serve the request it names.
+// Test flow:
+//  1. Build a table of one-chunk SSE bodies: a plain server error, a tool-choice capability refusal, a context-length capability refusal, and a content-bearing chunk.
+//  2. Replay each body through `replayStream` (the real classifier and `attemptState` accumulator) on a receipted attempt.
+//  3. Assert the resulting contentSource, contentChunks, and errorSource match the case's expectations.
+//  4. Assert the terminal matches the case's wantTerminal.
 func TestAccumulatorCountsErrorEventsWithoutCrowningThem(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
@@ -460,8 +491,10 @@ func TestAccumulatorCountsErrorEventsWithoutCrowningThem(t *testing.T) {
 	}
 }
 
-// The whole terminal ladder over already-accumulated facts. An attempt with no receipt failed at the
-// transport, so no reading of its stream may be charged to the host's answer.
+// Test flow:
+//  1. Build a table of pre-accumulated `attemptState` values covering the receipt, content, error, capability-refusal, and burned-tokens combinations that decide a terminal.
+//  2. Run `state.classify` on each case's state with a fake classifier and no dispatch error.
+//  3. Assert the resulting terminal matches the case's want.
 func TestTerminalLadderOverAccumulatedFacts(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
@@ -513,8 +546,11 @@ func TestTerminalLadderOverAccumulatedFacts(t *testing.T) {
 	}
 }
 
-// completion_tokens is host-reported, so only a thinking-budget route may spend it to escape the
-// empty-stream penalty; anywhere else a host could fake usage to do the same.
+// Test flow:
+//  1. Build one SSE chunk carrying only usage.completion_tokens and a length finish reason, no content.
+//  2. Replay it through `replayStream` once for a thinking-budget model and once for a plain model.
+//  3. Assert usageCompletionTokens is recorded and contentChunks stays 0 in both cases.
+//  4. Assert the thinking-budget route classifies as TerminalBurnEmpty and the other route as TerminalEmptyStream.
 func TestBurnEmptyIsOnlyReachableOnAThinkingBudgetRoute(t *testing.T) {
 	t.Parallel()
 	const usageOnly = `data: {"choices":[{"delta":{},"finish_reason":"length"}],"usage":{"prompt_tokens":12,"completion_tokens":100,"total_tokens":112}}` + "\n\n"
@@ -545,6 +581,12 @@ func TestBurnEmptyIsOnlyReachableOnAThinkingBudgetRoute(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Replay four chunks through `replayStream`: a reasoning delta, a content delta, then two different error events.
+//  2. Assert contentSource keeps the first content-bearing field seen (delta.reasoning), not the later content chunk.
+//  3. Assert errorSource and errorMessage keep the first error ("error.server_error"/"first"), not the second.
+//  4. Assert errorPayload holds the first error event's raw bytes.
+//  5. Assert contentChunks counts all four chunks, since each carried either content or an error.
 func TestFirstContentAndFirstErrorAreTheOnesRecorded(t *testing.T) {
 	t.Parallel()
 	state := replayStream(t, qwenModel, true,
@@ -620,6 +662,10 @@ func assertFixtureState(t *testing.T, fixture fixtureExpectation, state *attempt
 	}
 }
 
+// Test flow:
+//  1. For each recorded SSE fixture file, read its raw bytes.
+//  2. Replay the whole file as a single chunk through `replayStream`.
+//  3. Assert the resulting state's contentSource, errorSource, and usageCompletionTokens match the fixture's recorded expectations, and that the stream was not classified as empty.
 func TestFixtureStreamsClassifyWholeBlob(t *testing.T) {
 	t.Parallel()
 	for _, fixture := range sseFixtures {
@@ -630,6 +676,10 @@ func TestFixtureStreamsClassifyWholeBlob(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. For each recorded SSE fixture file, read its raw bytes and split them into randomly sized chunks (1-64 bytes, seeded per fixture).
+//  2. Replay the chunk sequence through `replayStream`.
+//  3. Assert the resulting state matches the same fixture expectations as the whole-blob replay, proving chunk boundaries do not change what is classified.
 func TestFixtureStreamsClassifyIdenticallyUnderRandomChunking(t *testing.T) {
 	t.Parallel()
 	for fixtureIndex, fixture := range sseFixtures {
@@ -649,6 +699,12 @@ func TestFixtureStreamsClassifyIdenticallyUnderRandomChunking(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Read the newlineless_final_content.sse fixture, whose last event has no trailing newline.
+//  2. Feed its whole body into the classifier's Classify and record the facts, without flushing yet.
+//  3. Assert contentChunks is still 0, since the unflushed final event carries nothing.
+//  4. Run state.classify, which flushes the classifier's tail.
+//  5. Assert the terminal becomes TerminalLost and contentSource becomes delta.content once the tail is flushed.
 func TestNewlineLessFinalEventLooksEmptyUntilTheStreamCloses(t *testing.T) {
 	t.Parallel()
 	body := readFixture(t, "newlineless_final_content.sse")
@@ -672,6 +728,10 @@ func TestNewlineLessFinalEventLooksEmptyUntilTheStreamCloses(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a table of garbage and truncated SSE bodies: empty input, a bare "data:" prefix, an open brace or bracket, a truncated tool_calls array, NUL bytes, wrongly typed choices/usage/tool_calls fields, a quoted-string body, a CRLF-only [DONE], and a truncated event followed by [DONE].
+//  2. Replay each body through `replayStream`.
+//  3. Assert no panic occurs, contentSource and errorSource stay empty, and the terminal is TerminalEmptyStream.
 func TestGarbageAndTruncatedInputClassifyWithoutPanicking(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
@@ -711,6 +771,10 @@ func TestGarbageAndTruncatedInputClassifyWithoutPanicking(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build one SSE chunk whose content field holds invalid UTF-8 bytes.
+//  2. Run `contentSource` on it.
+//  3. Assert it still reports "delta.content" with ok true.
 func TestInvalidUTF8ContentStillCountsAsContent(t *testing.T) {
 	t.Parallel()
 	source, ok := contentSource([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"\xff\xfe\"}}]}\n\n"), false)
@@ -720,6 +784,10 @@ func TestInvalidUTF8ContentStillCountsAsContent(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build one SSE chunk carrying content and completion-token usage, and keep a clone of its original bytes.
+//  2. Run `classifyChunk` on the chunk.
+//  3. Assert the chunk's bytes are unchanged after classification.
 func TestClassifyIsPureOverItsInput(t *testing.T) {
 	t.Parallel()
 	body := []byte(`data: {"choices":[{"delta":{"content":"hi"}}],"usage":{"completion_tokens":5}}` + "\n\n")
@@ -732,8 +800,11 @@ func TestClassifyIsPureOverItsInput(t *testing.T) {
 	}
 }
 
-// classify is the only place a dispatch error is read, and a 404 carries no SSE error event, so this is
-// the sole path by which a permanent refusal can reach the capability tracker.
+// Test flow:
+//  1. Build a table of 404 dispatch errors: one whose body names an unsupported protocol version, one whose body reports a torn-down escrow.
+//  2. Run `state.classify` with each error as the dispatch failure.
+//  3. Assert the terminal is TerminalNotFound in both cases.
+//  4. Assert capability.VersionUnsupported is true only for the version-refusal body.
 func TestClassifyCarriesAVersionRefusalOffTheDispatchError(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
@@ -765,6 +836,10 @@ func TestClassifyCarriesAVersionRefusalOffTheDispatchError(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a table of SSE chunk bodies covering logprobs where every token and alternative is an id, and ones where the first token, a later token, an alternative, or a later event names its decoded text; plus a chunk with no logprobs at all.
+//  2. Run `logprobsDecoded` on each case's body.
+//  3. Assert the result matches the case's wantDecoded.
 func TestLogprobsDecoded(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
@@ -809,7 +884,10 @@ func TestLogprobsDecoded(t *testing.T) {
 	}
 }
 
-// A host that types one sub-shape wrong must not cost the answers the rest of the event carries.
+// Test flow:
+//  1. Build a table of SSE chunk bodies where one sub-field is typed against the schema (logprobs as a list, a logprob token as a number, a completion-token count as a string), each still carrying valid delta content.
+//  2. Run `scanChunk` on each case's body.
+//  3. Assert ContentSource, UsageCompletionTokens, and LogprobsDecoded match the case's expectations, showing the mistyped field costs only its own value.
 func TestAWrongTypedFieldOnlyCostsItsOwnAnswer(t *testing.T) {
 	t.Parallel()
 	cases := []struct {

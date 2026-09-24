@@ -8,9 +8,6 @@ import (
 	"devshard/cmd/gateway/chain"
 )
 
-// Routing consults the participant limiter for every host of a group, and the capacity model consults
-// it again for every host of every candidate escrow, so these run over a whole group rather than one host.
-
 const (
 	benchModel   = "model-bench"
 	benchHosts   = 16

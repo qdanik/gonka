@@ -83,8 +83,7 @@ func (f *fakeRegistry) HoldSettlement(escrowID string) (registry.EscrowSession, 
 	return session, func() {}, held
 }
 
-// Inspect mirrors the production contract: a resident escrow answers, an absent one reports the
-// sentinel so the boundary can answer 404 rather than 502. This fake holds no storage to rehydrate.
+// Inspect mirrors the production contract: a resident escrow answers, an absent one reports the sentinel.
 func (f *fakeRegistry) Inspect(_ context.Context, escrowID string) (registry.EscrowSession, func(), error) {
 	session, held := f.SettlementSession(escrowID)
 	if !held {
@@ -111,8 +110,6 @@ type fakeEngine struct {
 func (e *fakeEngine) Run(_ context.Context, request engine.Request, client io.Writer) (engine.RaceOutcome, error) {
 	e.runs.Add(1)
 	e.raced.Store(&request)
-	// The real engine settles on an escrow before it writes, which is the only moment a streaming
-	// reply can still take a header.
 	if request.OnEscrow != nil && e.outcome.EscrowID != "" {
 		request.OnEscrow(e.outcome.EscrowID)
 	}
@@ -286,8 +283,7 @@ func (a *fakeAccounting) rowsRecorded() []store.RequestRecord {
 	return slices.Clone(a.recorded)
 }
 
-// fakeTelemetry records the labels registered at build time and the label the last served request
-// was counted under.
+// fakeTelemetry records the labels registered at build time and the label the last served request was counted under.
 type fakeTelemetry struct {
 	labels []string
 	served string
@@ -301,8 +297,7 @@ func (t *fakeTelemetry) InstrumentRoute(routeLabel string, next http.Handler) ht
 	})
 }
 
-// instrumentedWriter mirrors the wrapper metrics.InstrumentRoute puts in front of every route, so the
-// handlers under test see the writer chain production hands them rather than a bare recorder.
+// instrumentedWriter mirrors the wrapper metrics.InstrumentRoute puts in front of every route.
 type instrumentedWriter struct{ http.ResponseWriter }
 
 func (w *instrumentedWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
@@ -443,6 +438,10 @@ func (h *harness) swapConfig(mutate func(*config.Config)) {
 	h.config.Swap(&next)
 }
 
+// Test flow:
+//  1. Define a table of every route the gateway serves, varying method, target, body and headers across success, wrong-method, unauthenticated, malformed-body, and not-found cases for public, devshard-pinned, and admin routes.
+//  2. For each case, send the request through a fresh harness.
+//  3. Assert the response status matches the case's documented expectation.
 func TestEveryRouteAnswersItsDocumentedStatus(t *testing.T) {
 	testCases := []struct {
 		name    string
@@ -547,6 +546,10 @@ func TestEveryRouteAnswersItsDocumentedStatus(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. POST to the models route, which only accepts GET and HEAD.
+//  2. Assert the Allow header lists "GET, HEAD".
+//  3. Assert the Content-Type is application/json.
 func TestMethodNotAllowedNamesTheMethodsItAccepts(t *testing.T) {
 	live := newHarness(t)
 	recorder := live.request(t, http.MethodPost, "/v1/models", "", nil)
@@ -558,6 +561,10 @@ func TestMethodNotAllowedNamesTheMethodsItAccepts(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. List the uninstrumented paths: /metrics, /healthz, and the pprof endpoints.
+//  2. Assert none of them appear among the telemetry's registered instrumentation labels.
+//  3. Assert the number of instrumented labels equals every registered route minus those uninstrumented ones.
 func TestMetricsHealthzAndTheProfilerAreNotInstrumented(t *testing.T) {
 	live := newHarness(t)
 	uninstrumented := []string{"/metrics", "/healthz", "/debug/pprof/", "/debug/pprof/cmdline", "/debug/pprof/profile", "/debug/pprof/symbol", "/debug/pprof/trace"}
@@ -571,6 +578,9 @@ func TestMetricsHealthzAndTheProfilerAreNotInstrumented(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Assert the import route never registered its own instrumentation label.
+//  2. Assert the templated devshards label is registered instead, so import shares its series rather than splitting it.
 func TestImportKeepsTheTemplatedMetricLabel(t *testing.T) {
 	live := newHarness(t)
 	if slices.Contains(live.telemetry.labels, "/v1/admin/devshards/import") {
@@ -581,6 +591,10 @@ func TestImportKeepsTheTemplatedMetricLabel(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Disable the gateway with a custom disabled message.
+//  2. Assert a client route now answers 503.
+//  3. Assert /metrics, /healthz, and an admin-keyed operator route still answer 200.
 func TestKillSwitchSparesMetricsHealthzAndTheOperatorRoutes(t *testing.T) {
 	live := newHarness(t)
 	live.swapConfig(func(next *config.Config) {
@@ -601,6 +615,10 @@ func TestKillSwitchSparesMetricsHealthzAndTheOperatorRoutes(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Disable the gateway with a redirect URL configured.
+//  2. Send a client route request.
+//  3. Assert the response is 308 with the Location header set to the configured destination.
 func TestKillSwitchRedirectsOnlyWithADestination(t *testing.T) {
 	live := newHarness(t)
 	live.swapConfig(func(next *config.Config) {
@@ -616,6 +634,10 @@ func TestKillSwitchRedirectsOnlyWithADestination(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build the `http.Server` the gateway serves from.
+//  2. Assert WriteTimeout is unset, so an absolute deadline never cuts an SSE stream.
+//  3. Assert ReadHeaderTimeout is set, so a slowloris connection is not left open.
 func TestHTTPServerLeavesWriteTimeoutUnsetSoStreamsSurvive(t *testing.T) {
 	live := newHarness(t)
 	server := live.server.HTTPServer(":0")
@@ -627,6 +649,9 @@ func TestHTTPServerLeavesWriteTimeoutUnsetSoStreamsSurvive(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Call `New` with an empty `Deps`.
+//  2. Assert it returns an error.
 func TestNewRejectsAnIncompleteWiring(t *testing.T) {
 	if _, err := New(Deps{}); err == nil {
 		t.Fatal("New accepted an empty Deps")

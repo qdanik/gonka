@@ -37,6 +37,10 @@ func runHeldFinishAttempt(t *testing.T, facts chunkFacts) (AttemptOutcome, *atom
 	return *doneEvent(t, fixture.drain()).Outcome, releases
 }
 
+// Test flow:
+//  1. Run an attempt via `runHeldFinishAttempt` with an error chunk the classifier proves as a miss.
+//  2. Assert the outcome claims a miss.
+//  3. Assert its Finish has not been released yet.
 func TestAnAttemptWithAMissToClaimKeepsItsFinishHeld(t *testing.T) {
 	outcome, releases := runHeldFinishAttempt(t, chunkFacts{Error: true, ErrorSource: "sse", ErrorCode: "500", ErrorType: "server_error", ErrorMessage: "boom"})
 
@@ -44,6 +48,10 @@ func TestAnAttemptWithAMissToClaimKeepsItsFinishHeld(t *testing.T) {
 	require.Zero(t, releases.Load(), "the Finish the miss is claimed against must stay out of every diff until the claim is posted")
 }
 
+// Test flow:
+//  1. Run an attempt via `runHeldFinishAttempt` with a content chunk.
+//  2. Assert the outcome does not claim a miss.
+//  3. Assert its Finish was released exactly once.
 func TestAnAttemptWithNoMissToClaimReleasesItsFinish(t *testing.T) {
 	outcome, releases := runHeldFinishAttempt(t, contentFacts("content"))
 
@@ -62,6 +70,11 @@ func (p *releaseWatchingPoster) SettleTimeout(ctx context.Context, step TimeoutS
 	return p.failingPoster.SettleTimeout(ctx, step)
 }
 
+// Test flow:
+//  1. Build a `releaseWatchingPoster` wrapping a `failingPoster`, admit a registration, and prepare an unsettled attempt whose `MissProof` releases a counter on `releaseFinish`.
+//  2. Settle the race and fire the timeout so the poster posts the timeout vote.
+//  3. Await the post and the registration's release.
+//  4. Assert the Finish was still held while the claim was being posted, and released exactly once after.
 func TestSettlingARaceReleasesTheFinishItsMissWasClaimedAgainstOnlyAfterTheClaim(t *testing.T) {
 	released := &atomic.Int32{}
 	poster := &releaseWatchingPoster{released: released}

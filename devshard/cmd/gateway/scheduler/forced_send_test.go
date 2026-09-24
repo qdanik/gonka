@@ -7,7 +7,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// groupOf names a host per slot, so a nonce walks several of them before the sequence comes back round.
+// groupOf names one host per slot of a group of the given size.
 func groupOf(size int) []string {
 	group := make([]string, 0, size)
 	for index := range size {
@@ -16,13 +16,12 @@ func groupOf(size int) []string {
 	return group
 }
 
-// busyExcept marks every host but one as out of window, which is the shape a loaded fleet has: the nonce
-// keeps landing on hosts that are working, and burning it is what the rung is there to stop.
+// busyExcept marks every host but the given one as out of window.
 func busyExcept(open string) func(string) bool {
 	return func(participant string) bool { return participant != open }
 }
 
-// everyHostBut is what the fake limiter refuses at the acquire, where the real one weighs the request's size.
+// everyHostBut lists every host of the group except the given one.
 func everyHostBut(group []string, open string) []string {
 	refused := make([]string, 0, len(group))
 	for _, participant := range group {
@@ -33,8 +32,12 @@ func everyHostBut(group []string, open string) []string {
 	return refused
 }
 
-// The rung's whole claim: a run of burns buys one send, and the run then starts again, so a busy fleet
-// costs a bounded share of an escrow's nonces instead of all of them.
+// Test flow:
+//  1. Build a harness with a 16-host group, every host but the first busy, every host refused, and a max of 6 consecutive burns.
+//  2. Submit and await two requests in turn.
+//  3. Assert the first lands on host 7 and the second on host 14, each after a run of burns.
+//  4. Assert 12 burns were recorded, 6 for each send, and each forced send names its 6-burn run.
+//  5. Assert the limiter recorded 2 overdrafts, one per forced send crossing the window.
 func TestABurnRunBuysOneSendAndThenStartsOver(t *testing.T) {
 	group := groupOf(16)
 	test := newHarness(t, harnessConfig{
@@ -60,8 +63,12 @@ func TestABurnRunBuysOneSendAndThenStartsOver(t *testing.T) {
 	require.Equal(t, 2, test.limiter.overdrafts(), "a forced send crosses the window rather than asking it")
 }
 
-// The run is reset by any serve, not only by a forced one. Without that, one long run latches the counter
-// and every later full window is crossed -- the opposite of the bounded share the rung is for.
+// Test flow:
+//  1. Build a harness with a 16-host group, every host but host 3 busy, every host but host 3 refused, and a max of 6 consecutive burns.
+//  2. Submit and await a first request that lands on host 3, an ordinary serve, and assert no forced send was recorded for it.
+//  3. Submit and await a second request that lands on host 10.
+//  4. Assert 8 burns were recorded, two before the ordinary serve and a full run of six after.
+//  5. Assert the one forced send names a fresh 6-burn run, reset by the ordinary serve in between.
 func TestAnOrdinaryServeStartsTheRunOver(t *testing.T) {
 	group := groupOf(16)
 	test := newHarness(t, harnessConfig{
@@ -84,8 +91,12 @@ func TestAnOrdinaryServeStartsTheRunOver(t *testing.T) {
 		"the second send must be bought by a run that started from zero")
 }
 
-// A host with room for one token and none for this request is the ordinary refusal: the peek says open and
-// the acquire says no. The rung covers it too, and the send that ends a run is never weighed against the window.
+// Test flow:
+//  1. Build a harness with a 16-host group, every host refused at the acquire, and a max of 3 consecutive burns.
+//  2. Submit and await a costly request.
+//  3. Assert it lands on host 4 after 3 burns, and the forced send names that 3-burn run.
+//  4. Assert the limiter recorded 1 overdraft.
+//  5. Assert the last charged cost matches the request's own cost, not the window it crossed.
 func TestTheRungAlsoCoversARefusalThePeekDidNotPredict(t *testing.T) {
 	group := groupOf(16)
 	test := newHarness(t, harnessConfig{
@@ -106,7 +117,11 @@ func TestTheRungAlsoCoversARefusalThePeekDidNotPredict(t *testing.T) {
 		"the tokens a forced send spends are the request's own, or the window it crossed means nothing")
 }
 
-// A cut-off host is broken rather than busy. Forcing work onto it spends the nonce the rung was meant to save.
+// Test flow:
+//  1. Build a harness with a 16-host group, every host but the first cut off, and a max of 6 consecutive burns.
+//  2. Submit and await a request.
+//  3. Assert it lands on host 0 after 15 burns, all of them cut-off ghosts, as if the rung did not exist.
+//  4. Assert no forced send was recorded and the limiter recorded no overdraft.
 func TestAForcedSendNeverCrossesACutOff(t *testing.T) {
 	group := groupOf(16)
 	test := newHarness(t, harnessConfig{
@@ -125,8 +140,12 @@ func TestAForcedSendNeverCrossesACutOff(t *testing.T) {
 	require.Zero(t, test.limiter.overdrafts())
 }
 
-// Zero is the off switch an operator turns when the rung costs more than the burns it replaces, and the
-// rung is read per drain, so moving it reaches an escrow that is already running.
+// Test flow:
+//  1. Build a harness with a 16-host group, every host but host 0 busy and refused, and the rung off (no max set).
+//  2. Submit and await a request with the rung off, land on host 0 after 15 burns, and assert no forced send was recorded.
+//  3. Set the burn limit to 3.
+//  4. Submit and await a second request.
+//  5. Assert it lands on host 4 and the forced send names a fresh 3-burn run, the limit picked up mid-drain.
 func TestTheRunLengthIsReadAfreshOnEveryDrain(t *testing.T) {
 	group := groupOf(16)
 	test := newHarness(t, harnessConfig{
@@ -151,8 +170,12 @@ func TestTheRunLengthIsReadAfreshOnEveryDrain(t *testing.T) {
 		"the drain must pick up a run length set after it started")
 }
 
-// Crossing a full window is a licence for the bound host alone. Read as a licence for the whole fleet it
-// hides the one host left that could serve an excluded waiter, and burns the nonce the rescue exists to spend.
+// Test flow:
+//  1. Build a harness with two hosts, `hostA` and `hostB`, `hostA` busy and a max of 1 consecutive burn.
+//  2. Submit a stale request bound to `hostA` and await its reply.
+//  3. Assert it lands on `hostA` after crossing the full window.
+//  4. Assert only that one burn was recorded, and `hostA` is recorded as an excluded serve.
+//  5. Assert no forced send was recorded, since `hostA` had room once the rescue served it.
 func TestAForcedBindingStillRescuesAWaiterThatExcludedIt(t *testing.T) {
 	test := newHarness(t, harnessConfig{
 		slots:               []string{hostA, hostB},

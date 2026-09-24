@@ -6,9 +6,10 @@ import (
 	"devshard/cmd/gateway/engine"
 )
 
-// The ledger's rates answer "is this host failing". A body the gateway refused to send never reached the host,
-// so counting it there reports the gateway's own decision as the host's fault — which docs/accounting.md
-// forbids by construction for ghosts, and for the same reason.
+// Test flow:
+//  1. Build a counter key with terminal `engine.ReasonRequestTooLarge`.
+//  2. Assert `excused` reports it excused from the host's failure rate.
+//  3. Assert `offRecord` reports it kept off the record.
 func TestABodyTheGatewayRefusedToSendLeavesTheHostsRatesAlone(t *testing.T) {
 	t.Parallel()
 

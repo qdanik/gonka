@@ -8,6 +8,10 @@ func testFactors() CongestionFactors {
 	return CongestionFactors{Soft: 0.85, Hard: 0.70, Severe: 0.50, Cross: 0.90}
 }
 
+// Test flow:
+//  1. Build a table mapping each `Verdict` to its expected tier, dimension and breaker effect.
+//  2. Assert every verdict from Success through DecodeStalled has a row in the table.
+//  3. For each case, call `responseFor` and assert the returned tier, dimension and breaker effect match, varying the verdict under test.
 func TestEveryVerdictNamesItsTierDimensionAndBreaker(t *testing.T) {
 	t.Parallel()
 
@@ -59,6 +63,9 @@ func TestEveryVerdictNamesItsTierDimensionAndBreaker(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build `testFactors` and a table of narrowing tier/blamed-dimension combinations with expected input and output multipliers.
+//  2. For each case, call `narrowingFor` and assert the blamed window takes its tier's factor while the other takes the cross factor, varying which dimension is blamed and how severely.
 func TestABlamedWindowTakesItsTierAndTheOtherTakesTheCrossFactor(t *testing.T) {
 	t.Parallel()
 
@@ -88,6 +95,9 @@ func TestABlamedWindowTakesItsTierAndTheOtherTakesTheCrossFactor(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Call `narrowingFor` with `tierSevere` and `dimensionBoth`.
+//  2. Assert both input and output narrow to the same severe factor, with no separate cross-dimension penalty.
 func TestAHostWideSignalCarriesNoCrossFactor(t *testing.T) {
 	t.Parallel()
 
@@ -97,8 +107,11 @@ func TestAHostWideSignalCarriesNoCrossFactor(t *testing.T) {
 	}
 }
 
-// One answer buys one whole request of room, whatever the answer's own size: the step is the model's
-// price, so a host that keeps answering climbs at the rate it is actually serving.
+// Test flow:
+//  1. Grow a 1000-token window by a small 10-token answer with a 100-token step.
+//  2. Assert the window widens by exactly one step, not by the answer's own size.
+//  3. Grow the resulting window again by a much larger answer.
+//  4. Assert it again widens by exactly one step.
 func TestAnAnsweredRequestWidensTheWindowByOneWholeRequest(t *testing.T) {
 	t.Parallel()
 
@@ -114,6 +127,9 @@ func TestAnAnsweredRequestWidensTheWindowByOneWholeRequest(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Grow a 1000-token window by an answer that carried zero tokens.
+//  2. Assert the window is unchanged.
 func TestAnIdleOrCostlessAnswerDoesNotGrowTheWindow(t *testing.T) {
 	t.Parallel()
 
@@ -122,6 +138,9 @@ func TestAnIdleOrCostlessAnswerDoesNotGrowTheWindow(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a table of `Pressure` readings against a fixed slack, from unobserved to both sides slower than their best.
+//  2. For each case, call `congestedDimension` and assert it names the expected dimension, varying which side (or neither) is slower.
 func TestDelayPressureNamesTheCongestedWindow(t *testing.T) {
 	t.Parallel()
 
@@ -148,6 +167,9 @@ func TestDelayPressureNamesTheCongestedWindow(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Call `narrowedTo` with a window of 100, a factor of 0.5 and a floor of 80.
+//  2. Assert the result stops at the floor instead of narrowing below it.
 func TestNarrowingStopsAtTheFloor(t *testing.T) {
 	t.Parallel()
 
@@ -156,6 +178,9 @@ func TestNarrowingStopsAtTheFloor(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Call `narrowedTo` with a window of 1 token, a factor of 0.5 and a floor of 0.
+//  2. Assert the result stays at 1, never narrowing to zero.
 func TestNarrowingNeverGoesBelowOneToken(t *testing.T) {
 	t.Parallel()
 
@@ -164,6 +189,9 @@ func TestNarrowingNeverGoesBelowOneToken(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Grow a 1000-token window by a 250-token answer with a step of 0.
+//  2. Assert the window is unchanged.
 func TestAWindowWithNoStepCannotGrow(t *testing.T) {
 	t.Parallel()
 

@@ -40,7 +40,10 @@ func (n *recordingHostNarrator) HostVersionUnsupported(participant string) {
 	n.versionsUnsupported = append(n.versionsUnsupported, participant)
 }
 
-// The first rung lasts thirty seconds against a gauge sampled every fifteen, so the whole withholding can pass between two scrapes.
+// Test flow:
+//  1. Build a tracker with a no-cap perf config and a recording narrator attached.
+//  2. Drive participant-a/model-a to consecutive failures past the ejection threshold.
+//  3. Assert exactly one withholding was narrated, with reason "consecutive_failures", ejection count 1, the threshold's consecutive-failure count, and a 30-second withheld-for duration.
 func TestEjectionIsNarratedWhenItStarts(t *testing.T) {
 	perf := noCap(testPerf())
 	tracker := newTestTracker(perf, fixedNow(testEpoch))
@@ -59,7 +62,10 @@ func TestEjectionIsNarratedWhenItStarts(t *testing.T) {
 	require.Equal(t, 30*time.Second, withheld.WithheldFor)
 }
 
-// The return matters as much as the withholding: it is what says the fleet recovered.
+// Test flow:
+//  1. Build a tracker and eject participant-a/model-a via consecutive failures before attaching a recording narrator.
+//  2. Advance the clock past the ejection window and record one responsive sample.
+//  3. Assert the narrator recorded exactly one return for participant-a/model-a.
 func TestReturnToRoutingIsNarrated(t *testing.T) {
 	perf := noCap(testPerf())
 	instant := testEpoch
@@ -74,7 +80,10 @@ func TestReturnToRoutingIsNarrated(t *testing.T) {
 	require.Equal(t, []recordedReturn{{participant: "participant-a", model: "model-a"}}, narrator.returned)
 }
 
-// A failure that changes nothing says nothing: a narration per sample would be a line per request.
+// Test flow:
+//  1. Build a tracker with a recording narrator attached.
+//  2. Drive participant-a/model-a to one failure short of the ejection threshold.
+//  3. Assert nothing was narrated as withheld.
 func TestASampleThatChangesNothingIsNotNarrated(t *testing.T) {
 	perf := noCap(testPerf())
 	tracker := newTestTracker(perf, fixedNow(testEpoch))
@@ -86,7 +95,11 @@ func TestASampleThatChangesNothingIsNotNarrated(t *testing.T) {
 	require.Empty(t, narrator.withheld)
 }
 
-// Only the smallest context a host admits is news; a larger refusal later does not lift the bound.
+// Test flow:
+//  1. Build a tracker with a recording narrator attached.
+//  2. Record context limits 8192, then 16384, then 4096 for participant-a/model-a.
+//  3. Record two tool-unsupported refusals and two version-unsupported refusals for participant-a.
+//  4. Assert only the tightening context-limit transitions were narrated ({8192,0} and {4096,8192}), along with a single tools-unsupported entry and a single version-unsupported entry.
 func TestACapabilityRefusalIsNarratedOnceAndOnlyWhenItTightens(t *testing.T) {
 	tracker := newTestTracker(testPerf(), fixedNow(testEpoch))
 	narrator := &recordingHostNarrator{}
@@ -105,7 +118,10 @@ func TestACapabilityRefusalIsNarratedOnceAndOnlyWhenItTightens(t *testing.T) {
 	require.Equal(t, []string{"participant-a"}, narrator.versionsUnsupported)
 }
 
-// Most tests build a tracker with no journal; routing must still honour the ejection.
+// Test flow:
+//  1. Build a tracker with no narrator attached.
+//  2. Drive participant-a/model-a to consecutive failures past the ejection threshold.
+//  3. Assert the tracker still reports the participant/model pair as ejected.
 func TestAnUnnarratedTrackerStillWithholds(t *testing.T) {
 	perf := noCap(testPerf())
 	tracker := newTestTracker(perf, fixedNow(testEpoch))

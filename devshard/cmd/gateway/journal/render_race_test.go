@@ -18,7 +18,10 @@ func loggedValue(fields []any, name string) (any, bool) {
 	return nil, false
 }
 
-// A loser is what the winner has to be compared against, so its line has to carry the same facts.
+// Test flow:
+//  1. Build an `engine.AttemptOutcome` with send, receipt, first-token, and completion times plus chunk and usage counts set.
+//  2. Render its delivery fields via `appendAttemptDeliveryFields`.
+//  3. Assert each expected field ("content_chunks", "stream_chunks", "usage_tokens", "receipt_ms", "first_token_ms", "attempt_ms") holds the expected value.
 func TestAttemptDeliveryFields_ReportWhatTheHostReturned(t *testing.T) {
 	t.Parallel()
 	dispatchedAt := time.Unix(1786114580, 0)
@@ -55,7 +58,11 @@ func TestAttemptDeliveryFields_ReportWhatTheHostReturned(t *testing.T) {
 	}
 }
 
-// A host that never sent a receipt has no receipt duration; reporting one would date it to the epoch.
+// Test flow:
+//  1. Build an `engine.AttemptOutcome` with only `SendTime` and `Completed` set, so receipt and first-token never happened.
+//  2. Render its delivery fields via `appendAttemptDeliveryFields`.
+//  3. Assert "receipt_ms" and "first_token_ms" are absent.
+//  4. Assert "attempt_ms" still reports the elapsed time to completion.
 func TestAttemptDeliveryFields_SkipAStageThatNeverHappened(t *testing.T) {
 	t.Parallel()
 	dispatchedAt := time.Unix(1786114580, 0)
@@ -75,7 +82,11 @@ func TestAttemptDeliveryFields_SkipAStageThatNeverHappened(t *testing.T) {
 	}
 }
 
-// An attempt that never left the gateway has no dispatch to measure from.
+// Test flow:
+//  1. Build an `engine.AttemptOutcome` with only `Completed` and `StreamChunks` set, with no dispatch (`SendTime`) recorded.
+//  2. Render its delivery fields via `appendAttemptDeliveryFields`.
+//  3. Assert "receipt_ms", "first_token_ms", and "attempt_ms" are all absent.
+//  4. Assert "stream_chunks" still reports its value.
 func TestAttemptDeliveryFields_SkipEveryDurationWithoutADispatch(t *testing.T) {
 	t.Parallel()
 
@@ -119,7 +130,10 @@ func widestFinishedStep() engine.RaceStep {
 	}
 }
 
-// The reservation is hand-counted, so the widest line the code can build must be measured against it.
+// Test flow:
+//  1. Build the `widestFinishedStep` fixture, the widest finish line the code can build.
+//  2. Render its fields via `attemptFinishHead`, `appendAttemptDeliveryFields`, and `appendAttemptMarks`.
+//  3. Assert the number of fields produced equals `attemptFinishFields`, the hand-counted reservation.
 func TestAFinishLineFitsWhatItReserves(t *testing.T) {
 	t.Parallel()
 	step := widestFinishedStep()
@@ -131,7 +145,10 @@ func TestAFinishLineFitsWhatItReserves(t *testing.T) {
 	}
 }
 
-// A slow host is found in the log by the line of the attempt it was late on.
+// Test flow:
+//  1. Build a `RaceStep` whose outcome missed only the first-token deadline.
+//  2. Render its deadline marks via `appendAttemptMarks`.
+//  3. Assert "missed_first_token_deadline" is true and "missed_receipt_deadline" is absent.
 func TestAFinishLineNamesOnlyTheDeadlinesItsHostMissed(t *testing.T) {
 	t.Parallel()
 	step := engine.RaceStep{HasOutcome: true, Outcome: engine.AttemptOutcome{FirstTokenDeadlineMissed: true}}

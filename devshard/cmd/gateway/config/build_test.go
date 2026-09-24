@@ -15,18 +15,21 @@ func float64Pointer(value float64) *float64 { return &value }
 func stringPointer(value string) *string    { return &value }
 func boolPointer(value bool) *bool          { return &value }
 
+// Test flow:
+//  1. Build a config from environment values (port, capture sample rate, capture max bytes) and admin overrides (max tokens, disabled flag, per-weight concurrency) that mix env-only, override-only, and both-set fields.
+//  2. Assert each built field takes the right source: an override beats the same env value, an env value beats an untouched default, and an override-only field takes the override.
 func TestBuildAppliesPrecedenceDefaultsEnvOverrides(t *testing.T) {
 	values := env.Values{
-		Port:             int64Pointer(9000), // env overrides default 8080
-		DefaultMaxTokens: int64Pointer(2000), // env sets 2000...
+		Port:             int64Pointer(9000),
+		DefaultMaxTokens: int64Pointer(2000),
 
 		CaptureSampleRate: float64Pointer(0.1),
 		CaptureMaxBytes:   int64Pointer(4096),
 	}
 	overrides := Overrides{
-		DefaultMaxTokens:                    int64Pointer(1500), // ...but admin override wins over env
+		DefaultMaxTokens:                    int64Pointer(1500),
 		Disabled:                            boolPointer(true),
-		MaxConcurrentRequestsPer10000Weight: float64Pointer(2.5), // per-weight has no env var; admin override is its only source
+		MaxConcurrentRequestsPer10000Weight: float64Pointer(2.5),
 	}
 
 	configuration, err := Build(values, overrides)
@@ -56,6 +59,9 @@ func TestBuildAppliesPrecedenceDefaultsEnvOverrides(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a config from an `APIKeys` environment value listing keys separated by commas with extra whitespace and an empty entry.
+//  2. Assert the built server's API keys are the three keys, trimmed and with the blank entry dropped.
 func TestBuildSplitsAPIKeys(t *testing.T) {
 	values := env.Values{APIKeys: stringPointer("key-one, key-two ,,key-three")}
 	configuration, err := Build(values, Overrides{})
@@ -68,6 +74,9 @@ func TestBuildSplitsAPIKeys(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a config with `MaxTokensCap` set to 0 in the environment.
+//  2. Assert `Build` returns an error naming `max_tokens_cap`.
 func TestBuildRejectsInvalidMergedConfig(t *testing.T) {
 	values := env.Values{MaxTokensCap: int64Pointer(0)}
 	_, err := Build(values, Overrides{})
@@ -76,6 +85,10 @@ func TestBuildRejectsInvalidMergedConfig(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a config from an override whose `ModelLimits` map has one entry.
+//  2. Mutate the source map's existing entry and add a new one.
+//  3. Assert the built config's model limits are unaffected by either mutation, since `Build` clones the map rather than aliasing it.
 func TestBuildClonesOverridesModelLimits(t *testing.T) {
 	sourceModelLimits := map[string]ModelLimits{
 		"model-a": {DefaultMaxTokens: 100, MaxTokensCap: 200},
@@ -98,6 +111,9 @@ func TestBuildClonesOverridesModelLimits(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a config with no overrides.
+//  2. Assert the rotation hold defaults to enabled, one per model, with 32 resume answers.
 func TestTheHoldIsOnByDefault(t *testing.T) {
 	configuration, err := Build(env.Values{}, Overrides{})
 	if err != nil {
@@ -109,6 +125,9 @@ func TestTheHoldIsOnByDefault(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a config with `RotationHoldEnabled` overridden to false.
+//  2. Assert the built rotation hold is disabled.
 func TestAnOverrideTurnsTheHoldOff(t *testing.T) {
 	disabled := false
 	configuration, err := Build(env.Values{}, Overrides{RotationHoldEnabled: &disabled})
@@ -120,6 +139,10 @@ func TestAnOverrideTurnsTheHoldOff(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Table-driven: each case sets one invalid hold setting — a negative per-model cap or zero resume-answer headroom.
+//  2. For each case, call `Build`.
+//  3. Assert it returns `ErrInvalid`.
 func TestHoldSettingsAreValidated(t *testing.T) {
 	negative, zero := int64(-1), int64(0)
 	for name, overrides := range map[string]Overrides{
@@ -134,13 +157,15 @@ func TestHoldSettingsAreValidated(t *testing.T) {
 	}
 }
 
-// deployedEnvTemplate is the file an operator sources to start the gateway, read here rather than
-// copied so a value that drifts out of what Build accepts fails this test instead of a deploy.
+// deployedEnvTemplates are the operator-facing deploy files Build must accept without failing.
 var deployedEnvTemplates = []string{
 	"../../../../deploy/join/config.devshard.env.template",
 	"../deploy/config.devshard-gateway.env.template",
 }
 
+// Test flow:
+//  1. For each deployed env template file (`deployedEnvTemplates`), export every `GATEWAY_` variable it sets, substituting placeholder secrets, then load and build a config from the real environment via `buildFromTemplate`.
+//  2. Assert the gateway builds without error from its own shipped deploy files.
 func TestBuildAcceptsTheShippedEnvTemplate(t *testing.T) {
 	for _, path := range deployedEnvTemplates {
 		t.Run(filepath.Base(filepath.Dir(path)), func(t *testing.T) {
@@ -149,8 +174,7 @@ func TestBuildAcceptsTheShippedEnvTemplate(t *testing.T) {
 	}
 }
 
-// The templates ship key placeholders for an operator to replace, so the shipped text is not a key and
-// is not what this test judges.
+// templateSecrets substitutes the templates' placeholder keys so parsing them is not judged as a real secret.
 var templateSecrets = map[string]string{
 	"API_KEYS":      "sk-template-placeholder",
 	"ADMIN_API_KEY": "sk-admin-template-placeholder",
@@ -191,10 +215,9 @@ func buildFromTemplate(t *testing.T, deployedEnvTemplate string) {
 	}
 }
 
-// The CometBFT RPC endpoint is what every chain read falls back to when the gRPC query path fails.
-// Left to derivation it lands on the standard port of the gRPC host, which is right for a default
-// deployment and wrong for one that moved it -- and wrong there means a fallback nobody is listening
-// on, which fails only when it is needed.
+// Test flow:
+//  1. Build a config with `ChainRPC` set to a custom CometBFT endpoint.
+//  2. Assert the built chain config's RPC endpoint matches it, rather than the derived default.
 func TestTheChainRPCFallbackIsConfigurable(t *testing.T) {
 	configuration, err := Build(env.Values{ChainRPC: stringPointer("http://cometbft.internal:26657")}, Overrides{})
 	if err != nil {
@@ -206,8 +229,10 @@ func TestTheChainRPCFallbackIsConfigurable(t *testing.T) {
 	}
 }
 
-// A rollback lever is worth nothing if it cannot be pulled without a redeploy, and a default-true flag
-// is the kind that regresses to false unnoticed.
+// Test flow:
+//  1. Table-driven: each case configures forced upstream streaming from nothing, from the environment, from a runtime override, or from a runtime override overriding an environment value.
+//  2. For each case, build a config.
+//  3. Assert the forced-streaming flag matches the case's expectation, proving the default-true flag can be turned off, and back on, without a redeploy.
 func TestForcedStreamingIsOnByDefaultAndTurnedOffWithoutARedeploy(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -238,8 +263,10 @@ func TestForcedStreamingIsOnByDefaultAndTurnedOffWithoutARedeploy(t *testing.T) 
 	}
 }
 
-// The rung trades burned nonces for latency, and which side of that trade a fleet wants is only visible
-// under load, so the run length has to be reachable while the gateway runs.
+// Test flow:
+//  1. Table-driven: each case configures the max-consecutive-burns run length from nothing, from the environment, from a runtime override, from a runtime override winning over the environment, or turned off entirely.
+//  2. For each case, build a config.
+//  3. Assert the scheduler's burn-run length matches the case's expectation.
 func TestTheBurnRunIsReachableWithoutARedeploy(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -271,8 +298,10 @@ func TestTheBurnRunIsReachableWithoutARedeploy(t *testing.T) {
 	}
 }
 
-// The ejection detector decides which hosts a model may route to, so its thresholds have to be
-// reachable while the gateway runs: a threshold that needs a rebuild cannot be trialled against load.
+// Test flow:
+//  1. Table-driven: each case configures the failure-rate threshold and ejection-max-seconds from nothing, from the environment, from a runtime override, or from a runtime override winning over the environment.
+//  2. For each case, build a config.
+//  3. Assert the perf config's threshold and max-seconds match the case's expectation.
 func TestEjectionThresholdsAreReachableWithoutARedeploy(t *testing.T) {
 	tests := []struct {
 		name          string

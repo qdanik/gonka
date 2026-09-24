@@ -10,7 +10,10 @@ import (
 	"devshard/cmd/gateway/filters"
 )
 
-// A reply that folded an upstream failure into itself must not be handed over as a success.
+// Test flow:
+//  1. Define a table of buffered SSE event bodies, varying across: an error object beside interrupted content, an error the host sent as a bare string, a request error the host names with its own status, the flat error shape vLLM answers with, and a genuine completed answer.
+//  2. For each case, write the events through a buffered `clientStream` and close it.
+//  3. Assert the recorded HTTP status matches the case's expectation, so an assembled failure is never served as a success.
 func TestAnAssembledFailureIsNotServedAsASuccess(t *testing.T) {
 	testCases := []struct {
 		name       string
@@ -63,7 +66,11 @@ func TestAnAssembledFailureIsNotServedAsASuccess(t *testing.T) {
 	}
 }
 
-// A failure written behind the host's terminator is invisible, because a client stops reading at [DONE].
+// Test flow:
+//  1. Write a streaming reply that already contains content and the host's [DONE] terminator.
+//  2. Fail the stream after that point.
+//  3. Assert an error appears in the body before the terminator, so a client reading up to [DONE] still sees the failure.
+//  4. Assert the terminator appears exactly once.
 func TestAFailureAfterTheHostFinishedStillReachesTheClient(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	stream := newClientStream(recorder, "req-1", true, true, filters.LogprobIntent{}, nil)
@@ -91,7 +98,10 @@ func TestAFailureAfterTheHostFinishedStillReachesTheClient(t *testing.T) {
 	}
 }
 
-// A clean stream still ends exactly once.
+// Test flow:
+//  1. Write a streaming reply that ends with the host's [DONE] terminator, then close the stream cleanly.
+//  2. Assert the terminator appears exactly once in the body.
+//  3. Assert the body ends on that terminator.
 func TestACleanStreamEndsWithOneTerminator(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	stream := newClientStream(recorder, "req-1", true, true, filters.LogprobIntent{}, nil)

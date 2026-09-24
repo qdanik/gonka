@@ -10,8 +10,12 @@ import (
 	"devshard/cmd/gateway/store"
 )
 
-// A host's "escrow not found" must end in a deactivated escrow, without the confirming chain lookup
-// running on the request path that reported it.
+// Test flow:
+//  1. Store one active devshard record and a tx client whose GetEscrow reports the escrow not found.
+//  2. Call OnEscrowMissing for that escrow ID.
+//  3. Assert GetEscrow was not called synchronously inside the hook.
+//  4. Call tick and assert it succeeds.
+//  5. Assert the stored record's Active flag is now false.
 func TestOnEscrowMissingDeactivatesTheEscrowOnTheNextTick(t *testing.T) {
 	testStore := newFakeStore()
 	testStore.devshards["1"] = store.DevshardRecord{EscrowID: "1", Model: "model-a", Active: true}
@@ -40,7 +44,11 @@ func TestOnEscrowMissingDeactivatesTheEscrowOnTheNextTick(t *testing.T) {
 	}
 }
 
-// A drained mark must not deactivate a second escrow's worth of traffic on the tick after it.
+// Test flow:
+//  1. Store one active devshard record and a tx client whose GetEscrow reports the escrow not found.
+//  2. Call OnEscrowMissing once, then call tick twice.
+//  3. Count how many times "GetEscrow" appears in the call log.
+//  4. Assert GetEscrow ran exactly once, proving the missing mark is consumed by the first tick and not rechecked by the second.
 func TestOnEscrowMissingChecksEachMarkOnce(t *testing.T) {
 	testStore := newFakeStore()
 	testStore.devshards["1"] = store.DevshardRecord{EscrowID: "1", Model: "model-a", Active: true}
@@ -74,7 +82,10 @@ func TestOnEscrowMissingChecksEachMarkOnce(t *testing.T) {
 	}
 }
 
-// INVARIANT 8: only a positive "chain confirms not found" resolves to deactivation.
+// Test flow:
+//  1. Store one active devshard record and a tx client whose GetEscrow reports the escrow not found.
+//  2. Call TriggerEscrowCheck for that escrow ID and assert it returns no error.
+//  3. Assert the stored record's Active flag is now false.
 func TestTriggerEscrowCheckNotFoundDeactivates(t *testing.T) {
 	testStore := newFakeStore()
 	testStore.devshards["1"] = store.DevshardRecord{EscrowID: "1", Model: "model-a", Active: true}
@@ -93,8 +104,11 @@ func TestTriggerEscrowCheckNotFoundDeactivates(t *testing.T) {
 	}
 }
 
-// INVARIANT 8: the confirmation must stop traffic, not merely record a flag -- a request arriving
-// after it must find no nonce to commit on the escrow.
+// Test flow:
+//  1. Store one active devshard record and a tx client whose GetEscrow reports the escrow not found.
+//  2. Assert the `fakeSettlementSource` accepts a nonce commit as a precondition.
+//  3. Call TriggerEscrowCheck for that escrow ID and assert it returns no error.
+//  4. Assert the settlement source no longer accepts a nonce commit on that escrow.
 func TestTriggerEscrowCheckNotFoundStopsTraffic(t *testing.T) {
 	testStore := newFakeStore()
 	testStore.devshards["1"] = store.DevshardRecord{EscrowID: "1", Model: "model-a", Active: true}
@@ -118,7 +132,11 @@ func TestTriggerEscrowCheckNotFoundStopsTraffic(t *testing.T) {
 	}
 }
 
-// INVARIANT 8: a found escrow means the host's "missing" report was false -- no state change.
+// Test flow:
+//  1. Store one active devshard record and a tx client whose GetEscrow reports the escrow found with a balance.
+//  2. Call TriggerEscrowCheck for that escrow ID and assert it returns no error.
+//  3. Assert the stored record's Active flag stays true.
+//  4. Assert the call log contains no "SetDevshardActive(false)" call.
 func TestTriggerEscrowCheckFoundKeepsActive(t *testing.T) {
 	testStore := newFakeStore()
 	testStore.devshards["1"] = store.DevshardRecord{EscrowID: "1", Model: "model-a", Active: true}
@@ -144,7 +162,11 @@ func TestTriggerEscrowCheckFoundKeepsActive(t *testing.T) {
 	}
 }
 
-// INVARIANT 8: ambiguity (a lookup failure) must never be read as confirmation -- keep active.
+// Test flow:
+//  1. Store one active devshard record and a tx client whose GetEscrow returns an error.
+//  2. Call TriggerEscrowCheck for that escrow ID.
+//  3. Assert the returned error wraps the chain error.
+//  4. Assert the stored record's Active flag stays true and no "SetDevshardActive(false)" call was logged.
 func TestTriggerEscrowCheckChainErrorKeepsActive(t *testing.T) {
 	testStore := newFakeStore()
 	testStore.devshards["1"] = store.DevshardRecord{EscrowID: "1", Model: "model-a", Active: true}
@@ -172,8 +194,12 @@ func TestTriggerEscrowCheckChainErrorKeepsActive(t *testing.T) {
 	}
 }
 
-// INVARIANT 8 + dedup: N concurrent checks for the same escrow must resolve to exactly one
-// chain lookup and one deactivation -- a concurrent check finding the flag already set is a no-op.
+// Test flow:
+//  1. Store one active devshard record and a tx client whose GetEscrow blocks on a release channel before reporting not found.
+//  2. Launch 10 concurrent calls to TriggerEscrowCheck for the same escrow ID.
+//  3. Drain the 9 deduped callers that return without touching the chain, then close the release channel and drain the winner.
+//  4. Assert every call returned no error.
+//  5. Count "GetEscrow" and "SetDevshardActive(false)" in the call log and assert each happened exactly once.
 func TestTriggerEscrowCheckDedupesConcurrentCallers(t *testing.T) {
 	const callerCount = 10
 	testStore := newFakeStore()
@@ -201,8 +227,6 @@ func TestTriggerEscrowCheckDedupesConcurrentCallers(t *testing.T) {
 		}()
 	}
 
-	// The callerCount-1 deduped callers return without touching the chain; only the
-	// winner blocks on release, so draining callerCount-1 signals first is deterministic.
 	for range callerCount - 1 {
 		<-done
 	}

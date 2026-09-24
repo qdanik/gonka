@@ -2,6 +2,11 @@ package accounting
 
 import "testing"
 
+// Test flow:
+//  1. Build two participant records, one refused and one clean.
+//  2. Attach capabilities using a lookup that flags only the refused participant.
+//  3. Assert the refused record carries the verdict and its refusal count.
+//  4. Assert the clean record carries no capability block.
 func TestCapabilityAttachesOnlyWhenSomethingIsKnown(t *testing.T) {
 	records := []ParticipantRecord{{Participant: "refused"}, {Participant: "clean"}}
 
@@ -23,6 +28,10 @@ func TestCapabilityAttachesOnlyWhenSomethingIsKnown(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build one participant record.
+//  2. Attach capabilities with a nil lookup function.
+//  3. Assert the record's capability block stays nil.
 func TestCapabilityNoLookupLeavesRecordsUntouched(t *testing.T) {
 	records := []ParticipantRecord{{Participant: "any"}}
 
@@ -33,6 +42,11 @@ func TestCapabilityNoLookupLeavesRecordsUntouched(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build one participant record.
+//  2. Attach capabilities using a lookup that reports refusals but a lapsed verdict.
+//  3. Assert the capability block still carries the refusal total.
+//  4. Assert the expired verdict is not reported as currently blocking.
 func TestCapabilityStillReportsAHostWhoseVerdictExpired(t *testing.T) {
 	records := []ParticipantRecord{{Participant: "recovered"}}
 

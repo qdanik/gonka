@@ -2,6 +2,9 @@ package filters
 
 import "testing"
 
+// Test flow:
+//  1. Look up the profile for kimiModelID.
+//  2. Assert it equals kimiProfile.
 func TestProfileForMatchesKimi(t *testing.T) {
 	profile := ProfileFor(kimiModelID)
 	if profile != kimiProfile {
@@ -9,6 +12,9 @@ func TestProfileForMatchesKimi(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Look up the profile for minimaxModelID.
+//  2. Assert it equals minimaxProfile.
 func TestProfileForMatchesMinimax(t *testing.T) {
 	profile := ProfileFor(minimaxModelID)
 	if profile != minimaxProfile {
@@ -16,6 +22,9 @@ func TestProfileForMatchesMinimax(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Look up the profile for a table of routed model names: the default qwen model, an empty string, near-miss version strings for kimi, minimax and glm, and a kimi ID with leading whitespace.
+//  2. Assert ProfileFor returns nil for every case.
 func TestProfileForUnknownModelReturnsNil(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -37,7 +46,9 @@ func TestProfileForUnknownModelReturnsNil(t *testing.T) {
 	}
 }
 
-// Pins the exact model-ID literals the parameter table dispatches on.
+// Test flow:
+//  1. Compare kimiModelID, minimaxModelID and glm53FlashModelID against their expected literal strings.
+//  2. Assert each constant equals its expected value.
 func TestModelIDLiterals(t *testing.T) {
 	if kimiModelID != "moonshotai/Kimi-K2.6" {
 		t.Errorf("kimiModelID = %q, want %q", kimiModelID, "moonshotai/Kimi-K2.6")

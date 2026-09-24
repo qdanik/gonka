@@ -25,8 +25,11 @@ type parityGolden struct {
 	Message    string `json:"message"`
 }
 
-// TestGoldenParity requires every corpus case to reproduce the recorded
-// golden's exact bytes (ok) or exact status+message (rejected).
+// Test flow:
+//  1. Read every case file from testdata/corpus and its matching golden from testdata/goldens.
+//  2. Run NormalizeRequest on each case's body with its recorded options.
+//  3. For an "ok" golden, assert the result is accepted and its body matches the golden's body once forced fields are stripped from both sides.
+//  4. For a "rejected" golden, assert the result is rejected with the golden's HTTP status and exact error message.
 func TestGoldenParity(t *testing.T) {
 	corpusEntries, err := os.ReadDir(filepath.Join("testdata", "corpus"))
 	if err != nil {
@@ -50,7 +53,6 @@ func TestGoldenParity(t *testing.T) {
 			}
 			rawGolden, err := os.ReadFile(filepath.Join("testdata", "goldens", entry.Name()))
 			if err != nil {
-				// Goldens track this pipeline's intended output, not the legacy generator's: regenerating from it undoes deliberate divergences.
 				t.Fatalf("reading golden (a new corpus case needs its golden written from this pipeline's output): %v", err)
 			}
 			var golden parityGolden
@@ -74,7 +76,6 @@ func TestGoldenParity(t *testing.T) {
 				if decodeErr != nil {
 					t.Fatalf("decoding golden body: %v", decodeErr)
 				}
-				// Both sides drop what the new pipeline deliberately forces, so parity covers the rest.
 				if got, want := withoutForcedFields(t, result.Body), withoutForcedFields(t, wantBody); !bytes.Equal(got, want) {
 					t.Fatalf("body mismatch\n golden: %s\n got: %s", want, got)
 				}

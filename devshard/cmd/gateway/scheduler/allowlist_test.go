@@ -2,6 +2,9 @@ package scheduler
 
 import "testing"
 
+// Test flow:
+//  1. Build an admission check from a nil allowlist and nil unthrottled list.
+//  2. Assert every participant tried, including an empty string, is admitted.
 func TestAllowlistEmptyAdmitsEveryone(t *testing.T) {
 	t.Parallel()
 	allowed := admittedParticipants(nil, nil)
@@ -13,6 +16,10 @@ func TestAllowlistEmptyAdmitsEveryone(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build an admission check from a two-participant allowlist.
+//  2. Assert both listed participants are admitted.
+//  3. Assert an unlisted participant and an empty string are refused.
 func TestAllowlistAdmitsOnlyWhatItNames(t *testing.T) {
 	t.Parallel()
 	allowed := admittedParticipants([]string{"gonka1scskt", "gonka1f0u3y"}, nil)
@@ -29,7 +36,9 @@ func TestAllowlistAdmitsOnlyWhatItNames(t *testing.T) {
 	}
 }
 
-// An operator pasting keys from a console leaves spaces around them.
+// Test flow:
+//  1. Build an admission check from an allowlist entry padded with surrounding whitespace.
+//  2. Assert the trimmed participant is still admitted.
 func TestAllowlistIgnoresSurroundingSpace(t *testing.T) {
 	t.Parallel()
 	allowed := admittedParticipants([]string{"  gonka1scskt \t"}, nil)
@@ -39,8 +48,11 @@ func TestAllowlistIgnoresSurroundingSpace(t *testing.T) {
 	}
 }
 
-// The allowlist is the first rung: a host outside it is not asked whether it is throttled or ejected,
-// and its burn names the allowlist rather than a fleet problem the operator does not have.
+// Test flow:
+//  1. Build an `availability` where every gate would block, including `notAllowed`.
+//  2. Ask whether the participant is blocked.
+//  3. Assert the reason is `blockNotAllowed`, the first rung, rather than any other gate.
+//  4. Assert its ghost reason string is "participant_outside_allowlist".
 func TestAllowlistBurnNamesItself(t *testing.T) {
 	t.Parallel()
 	blocked := availability{
@@ -60,6 +72,10 @@ func TestAllowlistBurnNamesItself(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build an `availability` where the host is allowed but its window is full.
+//  2. Ask whether the participant is blocked.
+//  3. Assert the reason is `blockWindowFull`, the next rung down.
 func TestAllowlistLetsTheOtherRungsSpeakForAnAdmittedHost(t *testing.T) {
 	t.Parallel()
 	windowFull := availability{

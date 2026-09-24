@@ -54,6 +54,11 @@ func recordEveryParticipantSeries(recorder *RaceRecorder, participant string) {
 	recorder.RecordClassifyOverflow(participant, "qwen")
 }
 
+// Test flow:
+//  1. Build an aging race recorder with a `handClock` and a staleness window.
+//  2. Record every participant-labelled series for two participants, and assert both carry all 13 series.
+//  3. Advance the clock past the staleness window and record again only for the surviving participant.
+//  4. Assert the unseen participant's series are gone and the surviving participant's remain.
 func TestAParticipantUnseenPastTheStalenessWindowLosesEverySeries(t *testing.T) {
 	clock := &handClock{current: raceStart}
 	telemetry := New()
@@ -69,7 +74,11 @@ func TestAParticipantUnseenPastTheStalenessWindowLosesEverySeries(t *testing.T) 
 	require.Equal(t, 13, familiesCarrying(t, telemetry, "participant_key", "gonka1stays"))
 }
 
-// Pairs age out over an hour, so scanning them on every write would cost the response path for nothing.
+// Test flow:
+//  1. Build an aging race recorder and record every series for a participant that will go stale.
+//  2. Advance the clock by 58 minutes and record for a surviving participant.
+//  3. Advance by 3 more minutes and record again; assert the stale participant's series are still present, since three minutes since the last sweep is inside a tenth of the staleness window.
+//  4. Advance by another 3 minutes and record again; assert the stale participant's series are now gone.
 func TestTheSweepRunsAtMostOncePerTenthOfTheStalenessWindow(t *testing.T) {
 	clock := &handClock{current: raceStart}
 	telemetry := New()
@@ -88,7 +97,11 @@ func TestTheSweepRunsAtMostOncePerTenthOfTheStalenessWindow(t *testing.T) {
 	require.Zero(t, familiesCarrying(t, telemetry, "participant_key", "gonka1gone"))
 }
 
-// A vote can settle after its host went quiet: the write brings the pair back, and the pair ages out again.
+// Test flow:
+//  1. Build an aging race recorder and let one participant's series age out past the staleness window.
+//  2. Assert its series are gone.
+//  3. Record a late timeout vote for that participant and assert its series come back.
+//  4. Advance the clock past the staleness window again and assert the series age out a second time.
 func TestALateTimeoutVoteRecreatesAForgottenParticipantUntilItAgesOutAgain(t *testing.T) {
 	clock := &handClock{current: raceStart}
 	telemetry := New()
@@ -110,6 +123,11 @@ func TestALateTimeoutVoteRecreatesAForgottenParticipantUntilItAgesOutAgain(t *te
 	require.Zero(t, familiesCarrying(t, telemetry, "participant_key", "gonka1late"))
 }
 
+// Test flow:
+//  1. Build an aging race recorder with a 10-second staleness window.
+//  2. Run four participants' writers concurrently, each advancing the clock and recording its series 200 times.
+//  3. Advance the clock past the staleness window and record one more series for a fifth, surviving participant.
+//  4. Assert all four concurrent participants' series aged out and only the surviving participant's remain.
 func TestAgingStaysConsistentUnderConcurrentWritesAndSweeps(t *testing.T) {
 	clock := &handClock{current: raceStart}
 	telemetry := New()

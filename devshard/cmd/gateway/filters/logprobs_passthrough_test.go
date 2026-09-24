@@ -7,8 +7,10 @@ import (
 	"common/completionapi"
 )
 
-// The host re-pins the width it validates against, so the gateway does not have to overwrite what the
-// client wrote. It passes the ask through, caps an absurd one, and refuses a shape that is not an ask.
+// Test flow:
+//  1. Normalize a request body via NormalizeRequest, varying the case across no logprobs ask, a width narrower than the pinned cap, a width wider than the cap, a decline, a non-boolean logprobs value, and a negative width.
+//  2. For a case expecting rejection, assert NormalizeRequest returns an error.
+//  3. For an accepted case, parse the normalized body and assert the logprobs and top_logprobs fields match the expected values, since the host re-pins the width it validates against rather than the gateway overwriting the client's ask.
 func TestTheLogprobsAskIsCarriedRatherThanOverwritten(t *testing.T) {
 	testCases := []struct {
 		name          string
@@ -76,7 +78,9 @@ func TestTheLogprobsAskIsCarriedRatherThanOverwritten(t *testing.T) {
 	}
 }
 
-// The cap is the width the host pins, so the two never drift apart.
+// Test flow:
+//  1. Compare logprobsWidthCap against completionapi.ForcedTopLogprobs.
+//  2. Assert the two stay equal so the cap never drifts from what the host pins.
 func TestTheCapIsTheWidthTheHostPins(t *testing.T) {
 	if logprobsWidthCap != completionapi.ForcedTopLogprobs {
 		t.Fatalf("logprobsWidthCap = %d, want the pinned %d", logprobsWidthCap, completionapi.ForcedTopLogprobs)

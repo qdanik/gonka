@@ -8,6 +8,11 @@ import (
 	"devshard/cmd/gateway/config"
 )
 
+// Test flow:
+//  1. Define a table of chain phase snapshots and PoC modes, varying across: an admitting inference phase, a PoC generation block, a PoC validation block, a confirmation-PoC-generation block, relaxed mode admitting a blocked PoC generation, relaxed mode admitting a blocked confirmation PoC, and an unnamed block reason.
+//  2. For each case, run `admission` against the snapshot, mode, and a stale epoch.
+//  3. Assert whether it blocked matches the case's expectation.
+//  4. For a blocked case, assert the error message and that `statusForError` maps it to 503.
 func TestAdmissionFoldsRelaxedModeOverTheRawChainState(t *testing.T) {
 	testCases := []struct {
 		name        string
@@ -79,6 +84,12 @@ func TestAdmissionFoldsRelaxedModeOverTheRawChainState(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a chain snapshot blocked for PoC generation.
+//  2. Start a harness in PoC-off mode with that snapshot and send a chat completion.
+//  3. Assert the request is rejected with 503, and that it never took a limiter slot or started a race.
+//  4. Start a second harness with the same snapshot in relaxed mode and send the identical chat completion.
+//  5. Assert it is served with 200 and started exactly one race.
 func TestChatIsRejectedDuringPoCAndServedUnderRelaxedMode(t *testing.T) {
 	blocked := chain.PhaseSnapshot{RequestsBlocked: true, BlockReason: chain.BlockReasonPoC, EpochPhase: chain.EpochPhasePoCGenerate}
 

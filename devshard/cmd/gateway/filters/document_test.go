@@ -19,6 +19,11 @@ func nestedObjectBody(depth int) []byte {
 	return []byte(builder.String())
 }
 
+// Test flow:
+//  1. Build a JSON body nested one level past the parser's depth limit via `nestedObjectBody`.
+//  2. Parse the body.
+//  3. Assert parsing fails with the exact "nesting depth exceeds limit" message.
+//  4. Assert the error maps to HTTP 400.
 func TestDocumentParseRejectsNestingDepthAboveLimit(t *testing.T) {
 	_, err := ParseDocument(nestedObjectBody(33))
 	if err == nil {
@@ -33,6 +38,10 @@ func TestDocumentParseRejectsNestingDepthAboveLimit(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a JSON body nested exactly at the parser's depth limit via `nestedObjectBody`.
+//  2. Parse the body.
+//  3. Assert parsing succeeds and returns a non-nil document.
 func TestDocumentParseAcceptsNestingDepthAtLimit(t *testing.T) {
 	document, err := ParseDocument(nestedObjectBody(32))
 	if err != nil {
@@ -60,6 +69,11 @@ func structuralNodeBody(nodes int) []byte {
 	return []byte(builder.String())
 }
 
+// Test flow:
+//  1. Build a JSON body one byte past `MaxBodyBytes` via `paddedBody`.
+//  2. Parse the body.
+//  3. Assert parsing fails with the exact "body size exceeds limit" message.
+//  4. Assert the error maps to HTTP 400.
 func TestDocumentParseRejectsBodySizeAboveLimit(t *testing.T) {
 	oversize := MaxBodyBytes + 1
 	_, err := ParseDocument(paddedBody(oversize))
@@ -75,12 +89,21 @@ func TestDocumentParseRejectsBodySizeAboveLimit(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a JSON body exactly at `MaxBodyBytes` via `paddedBody`.
+//  2. Parse the body.
+//  3. Assert parsing succeeds with no error.
 func TestDocumentParseAcceptsBodySizeAtLimit(t *testing.T) {
 	if _, err := ParseDocument(paddedBody(MaxBodyBytes)); err != nil {
 		t.Fatalf("ParseDocument() at %d bytes: want nil error, got %v", MaxBodyBytes, err)
 	}
 }
 
+// Test flow:
+//  1. Build a JSON array body one structural node past the parser's node-count limit via `structuralNodeBody`.
+//  2. Parse the body.
+//  3. Assert parsing fails with the exact "node count exceeds limit" message.
+//  4. Assert the error maps to HTTP 400.
 func TestDocumentParseRejectsNodeCountAboveLimit(t *testing.T) {
 	_, err := ParseDocument(structuralNodeBody(250001))
 	if err == nil {
@@ -95,13 +118,20 @@ func TestDocumentParseRejectsNodeCountAboveLimit(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a JSON array body exactly at the parser's node-count limit via `structuralNodeBody`.
+//  2. Parse the body.
+//  3. Assert parsing succeeds with no error.
 func TestDocumentParseAcceptsNodeCountAtLimit(t *testing.T) {
 	if _, err := ParseDocument(structuralNodeBody(250000)); err != nil {
 		t.Fatalf("ParseDocument() at 250000 nodes: want nil error, got %v", err)
 	}
 }
 
-// Structural characters inside string literals are content, not nodes.
+// Test flow:
+//  1. Build a body whose string value repeats structural characters ({[,) 250000 times.
+//  2. Parse the body.
+//  3. Assert parsing succeeds because characters inside a string literal are not counted as structural nodes.
 func TestDocumentParseIgnoresStructuralCharactersInsideStrings(t *testing.T) {
 	body := []byte(`{"user":"` + strings.Repeat(`{[,`, 250000) + `"}`)
 	if _, err := ParseDocument(body); err != nil {
@@ -109,8 +139,9 @@ func TestDocumentParseIgnoresStructuralCharactersInsideStrings(t *testing.T) {
 	}
 }
 
-// An escaped quote does not end the literal, so the structural scan must not read a message's own
-// braces as nesting, nor treat the rest of the body as content.
+// Test flow:
+//  1. Run each case's raw byte string through `stringLiteralEnd`, varying plain, escaped-quote, escaped-backslash, unterminated and empty literals.
+//  2. Assert the returned end offset matches the case's expected count.
 func TestStringLiteralEndCountsEscapes(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
@@ -134,7 +165,10 @@ func TestStringLiteralEndCountsEscapes(t *testing.T) {
 	}
 }
 
-// The depth the scan counts must not change when the same document carries escapes in its content.
+// Test flow:
+//  1. Parse a document whose string value contains escaped quotes, brackets and a trailing escaped backslash alongside a nested object.
+//  2. Assert parsing succeeds with no error.
+//  3. Assert the escaped content survives the parse under the "user" key.
 func TestDocumentParseCountsDepthAroundEscapedQuotes(t *testing.T) {
 	t.Parallel()
 	body := []byte(`{"user":"a\"{[,\\","nested":{"deep":[1,2]}}`)
@@ -147,6 +181,10 @@ func TestDocumentParseCountsDepthAroundEscapedQuotes(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Parse a nil body.
+//  2. Assert parsing fails.
+//  3. Assert the error message is exactly "parse request: EOF".
 func TestDocumentParseEmptyBodyRejectsWithEOF(t *testing.T) {
 	_, err := ParseDocument(nil)
 	if err == nil {
@@ -158,6 +196,10 @@ func TestDocumentParseEmptyBodyRejectsWithEOF(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Parse a JSON string literal instead of an object.
+//  2. Assert parsing fails.
+//  3. Assert the error message reports the JSON string could not unmarshal into the expected map type.
 func TestDocumentParseNonObjectBodyRejects(t *testing.T) {
 	_, err := ParseDocument([]byte(`"not a json object"`))
 	if err == nil {
@@ -169,6 +211,12 @@ func TestDocumentParseNonObjectBodyRejects(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Parse a document with a single "model" field.
+//  2. Assert Get returns the parsed value.
+//  3. Set a new "stream" field and assert Get returns it.
+//  4. Assert Has reports "model" present, then Delete it.
+//  5. Assert Has and Get both report "model" absent afterward.
 func TestDocumentGetSetDeleteRoundTrip(t *testing.T) {
 	document, err := ParseDocument([]byte(`{"model":"qwen"}`))
 	if err != nil {
@@ -198,6 +246,11 @@ func TestDocumentGetSetDeleteRoundTrip(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Parse a document with a nested "metadata" object and a "model" string field.
+//  2. Assert Object("metadata") returns the nested map.
+//  3. Assert Object on a missing key returns not-ok.
+//  4. Assert Object on a non-object field ("model") returns not-ok.
 func TestDocumentObject(t *testing.T) {
 	document, err := ParseDocument([]byte(`{"metadata":{"key":"value"},"model":"qwen"}`))
 	if err != nil {
@@ -216,6 +269,11 @@ func TestDocumentObject(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Parse a document with a "messages" array and a "model" string field.
+//  2. Assert Array("messages") returns the parsed slice.
+//  3. Assert Array on a missing key returns not-ok.
+//  4. Assert Array on a non-array field ("model") returns not-ok.
 func TestDocumentArray(t *testing.T) {
 	document, err := ParseDocument([]byte(`{"messages":["a","b"],"model":"qwen"}`))
 	if err != nil {
@@ -234,6 +292,12 @@ func TestDocumentArray(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Parse a document with a positive "seed", a "model" string, and a negative "negative" field.
+//  2. Assert Uint("seed") returns the parsed value.
+//  3. Assert Uint on a missing key returns not-ok.
+//  4. Assert Uint on a non-numeric field ("model") returns not-ok.
+//  5. Assert Uint on a negative number returns not-ok.
 func TestDocumentUint(t *testing.T) {
 	document, err := ParseDocument([]byte(`{"seed":42,"model":"qwen","negative":-5}`))
 	if err != nil {
@@ -255,6 +319,11 @@ func TestDocumentUint(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Parse a document with a nested "metadata" object and a "model" string field.
+//  2. Assert ObjectField("metadata") reports present and isObject with the nested map.
+//  3. Assert ObjectField on a missing key reports absent and not an object.
+//  4. Assert ObjectField on a non-object field ("model") reports present but not an object.
 func TestDocumentObjectField(t *testing.T) {
 	document, err := ParseDocument([]byte(`{"metadata":{"key":"value"},"model":"qwen"}`))
 	if err != nil {
@@ -273,6 +342,10 @@ func TestDocumentObjectField(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Parse an empty document.
+//  2. Set a "model" field.
+//  3. Assert Raw() reflects the mutation.
 func TestDocumentRawReflectsMutations(t *testing.T) {
 	document, err := ParseDocument([]byte(`{}`))
 	if err != nil {
@@ -284,7 +357,10 @@ func TestDocumentRawReflectsMutations(t *testing.T) {
 	}
 }
 
-// Pins Marshal's exact bytes for a 3-key document (key sort order).
+// Test flow:
+//  1. Parse an empty document and set three keys out of alphabetical order.
+//  2. Marshal the document.
+//  3. Assert the output bytes list the keys sorted alphabetically.
 func TestDocumentMarshalSortsKeys(t *testing.T) {
 	document, err := ParseDocument([]byte(`{}`))
 	if err != nil {

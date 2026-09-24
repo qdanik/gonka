@@ -67,6 +67,12 @@ func depleteOnce(t *testing.T, manager *Manager, testStore *fakeStore, escrowID 
 	return manager.checkDepletion(context.Background(), servingSnapshot(), depletionModels(), devshards)
 }
 
+// Test flow:
+//  1. Store one active record at the current epoch and build a manager with the hold enabled and a working createEscrowFn.
+//  2. Deplete the record once with reason "balance_floor" via `depleteOnce`.
+//  3. Assert the record stays active, goes on hold, and is not marked for settlement.
+//  4. Assert the hold gate was told the escrow is on hold.
+//  5. Assert one replacement escrow was created.
 func TestABalanceDepletedEscrowGoesOnHoldAndIsReplaced(t *testing.T) {
 	testStore := newFakeStore()
 	testStore.devshards["1"] = currentEpochRecord("1")
@@ -90,6 +96,11 @@ func TestABalanceDepletedEscrowGoesOnHoldAndIsReplaced(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Store one active record and build a manager with the hold enabled and a working createEscrowFn.
+//  2. Deplete the record once with reason `scheduler.ExhaustionNonceCap` via `depleteOnce`.
+//  3. Assert the record is parked, not held, even though holding is enabled.
+//  4. Assert one replacement escrow was created since the model is now short.
 func TestANonceCappedEscrowIsParkedEvenWithTheHoldOn(t *testing.T) {
 	testStore := newFakeStore()
 	testStore.devshards["1"] = activeRecord("1", "model-a")
@@ -106,6 +117,10 @@ func TestANonceCappedEscrowIsParkedEvenWithTheHoldOn(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Store one active record and build a manager with the hold enabled.
+//  2. Mark the record balance-exhausted with reason "balance_floor", then deplete it again via `depleteOnce` with reason `scheduler.ExhaustionNonceCap`.
+//  3. Assert the record is parked, showing the nonce-cap reason wins over the earlier balance reason in the same tick.
 func TestNonceCapWinsOverABalanceReasonInTheSameTick(t *testing.T) {
 	testStore := newFakeStore()
 	testStore.devshards["1"] = activeRecord("1", "model-a")
@@ -119,6 +134,11 @@ func TestNonceCapWinsOverABalanceReasonInTheSameTick(t *testing.T) {
 	assertParked(t, testStore, "1")
 }
 
+// Test flow:
+//  1. Store one record at the current epoch and a second active record, both for the same model, and build a manager with the hold enabled.
+//  2. Deplete the first record with reason "balance_floor" via `depleteOnce`.
+//  3. Assert no replacement escrow was created, since the second record still meets the target of 1.
+//  4. Assert the first record is on hold.
 func TestAResumedEscrowThatDepletesAgainGetsNoSecondReplacement(t *testing.T) {
 	testStore := newFakeStore()
 	testStore.devshards["1"] = currentEpochRecord("1")
@@ -138,6 +158,10 @@ func TestAResumedEscrowThatDepletesAgainGetsNoSecondReplacement(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Store one record already on hold and a second active record, both for the same model, and build a manager with the hold enabled.
+//  2. Deplete the second record with reason "balance_floor" via `depleteOnce`.
+//  3. Assert the second record is parked, since the model already has one escrow on hold at the hold cap.
 func TestPastTheCapADepletedEscrowIsParked(t *testing.T) {
 	testStore := newFakeStore()
 	held := activeRecord("1", "model-a")
@@ -153,6 +177,11 @@ func TestPastTheCapADepletedEscrowIsParked(t *testing.T) {
 	assertParked(t, testStore, "2")
 }
 
+// Test flow:
+//  1. Store one record already on hold and build a manager with the hold enabled and a working createEscrowFn.
+//  2. Deplete the record with reason "insufficient_balance" via `depleteOnce`.
+//  3. Assert the record stays active and on hold, unchanged.
+//  4. Assert no replacement escrow was created.
 func TestAnEscrowAlreadyOnHoldIsLeftAlone(t *testing.T) {
 	testStore := newFakeStore()
 	held := activeRecord("1", "model-a")
@@ -173,6 +202,11 @@ func TestAnEscrowAlreadyOnHoldIsLeftAlone(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Store two active records for the same model and build a manager with the hold disabled.
+//  2. Deplete the first record with reason "balance_floor" via `depleteOnce`.
+//  3. Assert the first record is parked.
+//  4. Assert one replacement escrow was created, matching the pre-hold behavior of replacing every depletion.
 func TestWithTheHoldOffDepletionParksAsBefore(t *testing.T) {
 	testStore := newFakeStore()
 	testStore.devshards["1"] = activeRecord("1", "model-a")
@@ -191,6 +225,10 @@ func TestWithTheHoldOffDepletionParksAsBefore(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build one record on hold and one serving record, both for model-a at epoch 3.
+//  2. Call countActive for model-a, roleRegular, epoch 3.
+//  3. Assert it counts only the serving record, since an escrow on hold is not part of the serving set.
 func TestTheBridgeCountsOnlyServingEscrows(t *testing.T) {
 	held := activeRecord("1", "model-a")
 	held.OnHold = true
@@ -230,6 +268,11 @@ func findRecord(t *testing.T, devshards []store.DevshardRecord, escrowID string)
 	return store.DevshardRecord{}
 }
 
+// Test flow:
+//  1. Store a held record at the current epoch, and set the hold gate to report it on hold with a `HoldResume` verdict.
+//  2. Call `resumeTick`.
+//  3. Assert resumeTick returns no error.
+//  4. Assert the stored record is now active and off hold, the hold gate no longer reports it on hold, and the returned devshards slice reflects the same resumed state.
 func TestAnEscrowWhoseMoneyCameBackResumes(t *testing.T) {
 	testStore := newFakeStore()
 	epoch := int64(servingSnapshot().EpochIndex)
@@ -255,6 +298,11 @@ func TestAnEscrowWhoseMoneyCameBackResumes(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Store a held record at the current epoch, with a hold gate that gives it no verdict (still short of money).
+//  2. Call `resumeTick` and assert it returns no error.
+//  3. Assert the stored record and the hold gate both still report the escrow on hold.
+//  4. Assert the returned devshards slice also reports the escrow on hold.
 func TestAnEscrowStillShortOfMoneyStaysOnHold(t *testing.T) {
 	testStore := newFakeStore()
 	epoch := int64(servingSnapshot().EpochIndex)
@@ -275,6 +323,11 @@ func TestAnEscrowStillShortOfMoneyStaysOnHold(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Store a record held since the previous epoch, with a hold gate returning `HoldResume`.
+//  2. Call `resumeTick` and assert it returns no error.
+//  3. Assert the record is parked rather than resumed.
+//  4. Assert the returned devshards slice shows the record inactive, off hold, and marked SettlementPending.
 func TestAHoldFromAnEarlierEpochIsParkedForSettlement(t *testing.T) {
 	testStore := newFakeStore()
 	epoch := int64(servingSnapshot().EpochIndex)
@@ -294,6 +347,10 @@ func TestAHoldFromAnEarlierEpochIsParkedForSettlement(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Store a held record at the current epoch, with a hold gate returning `HoldNonceSpent`.
+//  2. Call `resumeTick` and assert it returns no error.
+//  3. Assert the record is parked.
 func TestANonceSpentHoldIsParked(t *testing.T) {
 	testStore := newFakeStore()
 	epoch := int64(servingSnapshot().EpochIndex)
@@ -309,6 +366,10 @@ func TestANonceSpentHoldIsParked(t *testing.T) {
 	assertParked(t, testStore, "1")
 }
 
+// Test flow:
+//  1. Store a held record at the current epoch and build a manager with the hold disabled.
+//  2. Call `resumeTick` and assert it returns no error.
+//  3. Assert the record is parked even though nothing changed about its funds.
 func TestTurningTheHoldOffParksEveryEscrowOnHold(t *testing.T) {
 	testStore := newFakeStore()
 	epoch := int64(servingSnapshot().EpochIndex)
@@ -323,6 +384,10 @@ func TestTurningTheHoldOffParksEveryEscrowOnHold(t *testing.T) {
 	assertParked(t, testStore, "1")
 }
 
+// Test flow:
+//  1. Store one held record and one active record, but seed the hold gate with the opposite flags (record 2 marked on hold).
+//  2. Call `resumeTick` and assert it returns no error.
+//  3. Assert the hold gate ends up matching the rows' own state: record 1 on hold, record 2 serving.
 func TestTheTickReSyncsTheRegistryFromTheRows(t *testing.T) {
 	testStore := newFakeStore()
 	epoch := int64(servingSnapshot().EpochIndex)
@@ -341,6 +406,10 @@ func TestTheTickReSyncsTheRegistryFromTheRows(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Store a record with Active set to false, with a hold gate returning `HoldResume`.
+//  2. Call `resumeTick` and assert it returns no error.
+//  3. Assert the record is still inactive, since an operator's deactivation must not be reversed by a resume verdict.
 func TestAnInactiveRowIsNeverResumed(t *testing.T) {
 	testStore := newFakeStore()
 	record := activeRecord("1", "model-a")
@@ -359,6 +428,10 @@ func TestAnInactiveRowIsNeverResumed(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a devshards slice containing one held record and pass it directly to resumeHeld, with a hold gate returning `HoldResume`.
+//  2. Assert resumeHeld returns no error.
+//  3. Assert the caller's own slice element is left with OnHold still true, proving resumeHeld does not rewrite it in place.
 func TestResumeHeldLeavesTheCallersSliceUntouched(t *testing.T) {
 	testStore := newFakeStore()
 	epoch := int64(servingSnapshot().EpochIndex)
@@ -377,6 +450,11 @@ func TestResumeHeldLeavesTheCallersSliceUntouched(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Store a held record and a serving record, both for model-a at the current epoch, with a hold gate returning `HoldResume` for the held one; build a manager with rotation, hold enabled and settlement disabled.
+//  2. Mark the serving record balance-exhausted, then call tick and assert it returns no error.
+//  3. Assert no replacement escrow was created, since the resumed record meets the target of 1 within the same tick.
+//  4. Assert the first record is now active and serving, and the second is active but on hold.
 func TestAnEscrowResumedInTheTickCountsAsServingForADepletionInTheSameTick(t *testing.T) {
 	testStore := newFakeStore()
 	snapshot := servingSnapshot()
@@ -414,6 +492,11 @@ func TestAnEscrowResumedInTheTickCountsAsServingForADepletionInTheSameTick(t *te
 	}
 }
 
+// Test flow:
+//  1. Store a held record for model-a at the current epoch, with a hold gate returning `HoldResume`; build a manager with rotation, hold enabled and settlement disabled, target count 2.
+//  2. Mark the same record balance-exhausted (a stale report), then call tick and assert it returns no error.
+//  3. Assert the record is active and off hold, and the hold gate no longer reports it on hold.
+//  4. Assert no replacement escrow was created, since a stale depletion report must not fund one.
 func TestALeftoverDepletionReportDoesNotPutAResumedEscrowBackOnHold(t *testing.T) {
 	testStore := newFakeStore()
 	snapshot := servingSnapshot()
@@ -457,6 +540,12 @@ func failingChainEpochFn(context.Context, string) (chain.EscrowInfo, bool, error
 	return chain.EscrowInfo{}, false, errors.New("chain unreachable")
 }
 
+// Test flow:
+//  1. Store a held record whose RotationEpoch is 0 (the row has no epoch of its own), with a hold gate returning `HoldResume`; vary the tx client's getEscrowFn, whether rotation is off, and the models list across cases (chain reports current epoch, an older epoch, errors, reports no epoch, rotation off, model missing from the list).
+//  2. Call resumeHeld directly.
+//  3. Assert resumeHeld returns no error.
+//  4. For a case expected to resume, assert the record is active, off hold, and its RotationEpoch is still 0 (the resolved epoch is never written back).
+//  5. For a case expected to end the hold, assert the record is parked and the narrator recorded the expected "hold ended" reason.
 func TestAHoldIsSettledAgainstTheChainsEpochWhenTheRowHasNone(t *testing.T) {
 	currentEpoch := servingSnapshot().EpochIndex
 	cases := []struct {
@@ -515,6 +604,11 @@ func TestAHoldIsSettledAgainstTheChainsEpochWhenTheRowHasNone(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Store one active record and vary the tx client's getEscrowFn across cases: chain reports the current epoch, an older epoch, or errors.
+//  2. Deplete the record with reason "balance_floor" via `depleteOnce`.
+//  3. Assert checkDepletion returns no error.
+//  4. For the case where the epoch resolves to current, assert the record is on hold with RotationEpoch still 0; otherwise assert the record is parked.
 func TestADepletedEscrowWhoseEpochCannotBeResolvedIsParkedNotHeld(t *testing.T) {
 	cases := []struct {
 		name        string

@@ -9,7 +9,10 @@ import (
 	"devshard/cmd/gateway/internal/logcapture"
 )
 
-// Each want pins one escrow transition's level, message and every key with its type.
+// Test flow:
+//  1. Table-driven: each case pairs an escrow-transition producer call with the exact log entry it must render (level, message, and every key with its type).
+//  2. For each case, build a journal with a `logcapture.Recorder`, run the case's `produce` function, and flush.
+//  3. Assert the recorder captured exactly the case's expected entry.
 func TestEscrowTransitionsRenderTheLinesTheirProducersNarrate(t *testing.T) {
 	closeFailure := errors.New("storage refused to close")
 	unverifiable := errors.New("slot 2 signature does not verify")
@@ -78,7 +81,10 @@ func TestEscrowTransitionsRenderTheLinesTheirProducersNarrate(t *testing.T) {
 	}
 }
 
-// Each want pins a line the escrow manager or the transaction client narrates, with the escrow id as text.
+// Test flow:
+//  1. Table-driven: each case pairs a lifecycle producer call (creation, recovery, hold, rotation, settlement, sweep, and more) with the exact log entry it must render, escrow id included as text.
+//  2. For each case, build a journal with a `logcapture.Recorder`, run the case's `produce` function, and flush.
+//  3. Assert the recorder captured exactly the case's expected entry.
 func TestEscrowLifecycleTransitionsRenderTheLinesTheirProducersNarrate(t *testing.T) {
 	tickFailure := errors.New("store unavailable")
 

@@ -57,8 +57,7 @@ func activeRecord(id, model string) store.DevshardRecord {
 	return store.DevshardRecord{EscrowID: id, Model: model, PrivateKeyEnv: "MODEL_A_KEY", Active: true, RotationRole: roleRegular}
 }
 
-// assertParked pins the retirement outcome when settlement is off: the row survives (it carries the
-// only key that can settle the escrow) and is marked for a later settle.
+// assertParked asserts a retired escrow's row survives, inactive and marked for a later settle.
 func assertParked(t *testing.T, testStore *fakeStore, escrowID string) {
 	t.Helper()
 	record, ok := testStore.devshards[escrowID]
@@ -87,6 +86,9 @@ func depletionTick(t *testing.T, manager *Manager, testStore *fakeStore, escrowI
 	return manager.checkDepletion(context.Background(), servingSnapshot(), depletionModels(), devshards)
 }
 
+// Test flow:
+//  1. Call `OnBalanceExhausted` for escrow "1" twice with the same reason, then once for escrow "2".
+//  2. Assert `depleted.reasons` holds exactly one entry per escrow, deduping the repeated call.
 func TestOnBalanceExhaustedMarksAndDedups(t *testing.T) {
 	manager := &Manager{}
 	manager.OnBalanceExhausted("1", "test")
@@ -98,6 +100,10 @@ func TestOnBalanceExhaustedMarksAndDedups(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Register an active escrow "1", mark it exhausted, and run `checkDepletion`.
+//  2. Assert one replacement escrow is created, "1" is parked via `assertParked`, escrow "999" is registered, and the exhaustion mark is cleared.
+//  3. Run `checkDepletion` again with no new marks and assert no second replacement is created.
 func TestCheckDepletionReplacesMarkedEscrowThenClearsMark(t *testing.T) {
 	testStore := newFakeStore()
 	testStore.devshards["1"] = activeRecord("1", "model-a")
@@ -128,6 +134,9 @@ func TestCheckDepletionReplacesMarkedEscrowThenClearsMark(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Register an active escrow "1" with no exhaustion mark and run `checkDepletion`.
+//  2. Assert no replacement is created and the escrow stays active.
 func TestCheckDepletionUnmarkedEscrowIsLeftAlone(t *testing.T) {
 	testStore := newFakeStore()
 	testStore.devshards["1"] = activeRecord("1", "model-a")
@@ -146,8 +155,9 @@ func TestCheckDepletionUnmarkedEscrowIsLeftAlone(t *testing.T) {
 	}
 }
 
-// An exhausted escrow fails every request routed to it, and its idle in-flight count is what makes the
-// load score prefer it, so it must stop taking traffic even where no replacement can be created.
+// Test flow:
+//  1. Mark escrow "1" (model-a) exhausted and run `checkDepletion` with model configs that only cover model-b.
+//  2. Assert the escrow is parked via `assertParked` even though no replacement can be created for its model.
 func TestCheckDepletionParksEscrowWhoseModelHasNoReplacementConfigured(t *testing.T) {
 	testStore := newFakeStore()
 	testStore.devshards["1"] = activeRecord("1", "model-a")
@@ -167,6 +177,10 @@ func TestCheckDepletionParksEscrowWhoseModelHasNoReplacementConfigured(t *testin
 	}
 }
 
+// Test flow:
+//  1. Wire a `createEscrowFn` that records whether the depleted escrow is still saved active and still routed at the moment it runs.
+//  2. Run `depletionTick` for escrow "1" via `OnBalanceExhausted` and `checkDepletion`.
+//  3. Assert the replacement was created only after the escrow was saved inactive and had already left routing.
 func TestADepletedEscrowLeavesServiceBeforeItsReplacementIsCreated(t *testing.T) {
 	testStore := newFakeStore()
 	testStore.devshards["1"] = activeRecord("1", "model-a")
@@ -197,6 +211,10 @@ func TestADepletedEscrowLeavesServiceBeforeItsReplacementIsCreated(t *testing.T)
 	}
 }
 
+// Test flow:
+//  1. Wire an `unconfirmedCreateEscrowFn` that prepares a tx but never confirms it, and run `depletionTick` twice.
+//  2. Assert the first tick surfaces the unconfirmed error and the second succeeds.
+//  3. Assert only one create call was made across both ticks.
 func TestAReplacementThatNeverConfirmedIsNotBroadcastAgain(t *testing.T) {
 	testStore := newFakeStore()
 	testStore.devshards["1"] = activeRecord("1", "model-a")
@@ -215,6 +233,10 @@ func TestAReplacementThatNeverConfirmedIsNotBroadcastAgain(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Wire an unconfirmed create whose transaction later resolves to escrow 999 via `getTxEscrowIDFn`, and run `depletionTick`, which surfaces the unconfirmed error.
+//  2. Call `manager.reconcile`.
+//  3. Assert escrow 999 is now registered and active.
 func TestAReplacementThatLandedWithoutConfirmationIsRegisteredByReconcile(t *testing.T) {
 	testStore := newFakeStore()
 	testStore.devshards["1"] = activeRecord("1", "model-a")
@@ -239,6 +261,9 @@ func TestAReplacementThatLandedWithoutConfirmationIsRegisteredByReconcile(t *tes
 	}
 }
 
+// Test flow:
+//  1. Wire a `failingCreateEscrowFn` and run `depletionTick` for escrow "1".
+//  2. Assert the failed replacement is surfaced as an error and the escrow is still parked via `assertParked`.
 func TestADepletedEscrowLeavesServiceWhenItsReplacementFails(t *testing.T) {
 	testStore := newFakeStore()
 	testStore.devshards["1"] = activeRecord("1", "model-a")
@@ -252,6 +277,10 @@ func TestADepletedEscrowLeavesServiceWhenItsReplacementFails(t *testing.T) {
 	assertParked(t, testStore, "1")
 }
 
+// Test flow:
+//  1. Build a table of scenarios varying whether a replacement can be created, fails, or has no model configured, each with routing's retire forced to fail.
+//  2. For each case, mark escrow "1" exhausted and run `checkDepletion`.
+//  3. Assert the routing failure is always surfaced via `errors.Is`, the create-call count matches the case, and the escrow is still parked via `assertParked`.
 func TestAFailureToStopRoutingAParkedEscrowIsSurfaced(t *testing.T) {
 	routingFailure := errors.New("flushing session snapshot: disk full")
 	testCases := []struct {
@@ -286,6 +315,10 @@ func TestAFailureToStopRoutingAParkedEscrowIsSurfaced(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Make the store's park write fail via `setActiveErr` and run `depletionTick` for escrow "1".
+//  2. Assert the failed park is surfaced as an error.
+//  3. Assert no replacement was created and the escrow never left routing.
 func TestNoReplacementIsCreatedWhileADepletedEscrowCannotBeParked(t *testing.T) {
 	testStore := newFakeStore()
 	testStore.devshards["1"] = activeRecord("1", "model-a")
@@ -307,6 +340,10 @@ func TestNoReplacementIsCreatedWhileADepletedEscrowCannotBeParked(t *testing.T) 
 	}
 }
 
+// Test flow:
+//  1. Make the store's park write fail via `setActiveErr` and run `depletionTick`, which surfaces the failed park with no replacement created.
+//  2. Clear `setActiveErr` and run `checkDepletion` again with the refreshed device list.
+//  3. Assert the escrow is now parked via `assertParked` and exactly one replacement is created.
 func TestADepletedEscrowIsReplacedOnceTheStoreRecovers(t *testing.T) {
 	testStore := newFakeStore()
 	testStore.devshards["1"] = activeRecord("1", "model-a")
@@ -335,6 +372,9 @@ func TestADepletedEscrowIsReplacedOnceTheStoreRecovers(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Park escrow "1" in the store directly, then mark it exhausted and run `checkDepletion` with a stale device list that still shows it active.
+//  2. Assert no replacement is created, since the escrow had already left service before this tick.
 func TestAnEscrowAlreadyOutOfServiceGetsNoReplacement(t *testing.T) {
 	testStore := newFakeStore()
 	testStore.devshards["1"] = parkedRecord("1")
@@ -351,8 +391,9 @@ func TestAnEscrowAlreadyOutOfServiceGetsNoReplacement(t *testing.T) {
 	}
 }
 
-// A depleted temp replaced by another temp is coverage the next bridge immediately retires, so the
-// model loses the escrow the replacement was meant to preserve.
+// Test flow:
+//  1. Register a depleted escrow "1" with `RotationRole` set to `roleTemp` and run `depletionTick`.
+//  2. Assert its replacement is created with `roleRegular`, not carrying the temp role forward.
 func TestADepletedTempIsReplacedByARegular(t *testing.T) {
 	testStore := newFakeStore()
 	depleted := activeRecord("1", "model-a")
@@ -370,7 +411,11 @@ func TestADepletedTempIsReplacedByARegular(t *testing.T) {
 	}
 }
 
-// The picker rediscovers an exhausted escrow on every request; the operator hears it once.
+// Test flow:
+//  1. Mark "escrow-1" twice and "escrow-2" once on a `markSet`.
+//  2. Assert the first mark of "escrow-1" is new, the repeat is not, and "escrow-2" is new.
+//  3. Drain the set and assert both escrows come out.
+//  4. Assert "escrow-1" can be marked again after the drain.
 func TestExhaustionIsAnnouncedOncePerTick(t *testing.T) {
 	t.Parallel()
 	var marks markSet
@@ -393,6 +438,11 @@ func TestExhaustionIsAnnouncedOncePerTick(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Mark escrow "1" exhausted and run `checkDepletion` under an empty `chain.PhaseSnapshot` with no epoch.
+//  2. Assert it errors, creates no replacement, and leaves the escrow active and still routed.
+//  3. Run `checkDepletion` again under `servingSnapshot`, once the chain is known.
+//  4. Assert it succeeds and exactly one replacement is created.
 func TestADepletedEscrowIsNotReplacedBeforeTheChainIsKnown(t *testing.T) {
 	testStore := newFakeStore()
 	testStore.devshards["1"] = activeRecord("1", "model-a")

@@ -10,7 +10,10 @@ import (
 	"devshard/cmd/gateway/perf"
 )
 
-// Each want pins one host transition's level, message and every key with its type.
+// Test flow:
+//  1. Table-driven: each case pairs a host-transition producer call with the exact log entry it must render (level, message, and every key with its type).
+//  2. For each case, build a journal with a `logcapture.Recorder`, run the case's `produce` function, and flush.
+//  3. Assert the recorder captured exactly the case's expected entry.
 func TestHostTransitionsRenderTheLinesTheirProducersNarrate(t *testing.T) {
 	testCases := []struct {
 		name    string

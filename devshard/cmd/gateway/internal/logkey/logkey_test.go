@@ -27,7 +27,6 @@ func declared(t *testing.T) map[string]string {
 		}
 		for _, spec := range general.Specs {
 			value := spec.(*ast.ValueSpec)
-			// Only string constants are keys; the package may hold a numeric one beside them.
 			if literal, ok := value.Values[0].(*ast.BasicLit); ok && literal.Kind == token.STRING {
 				unquoted, _ := strconv.Unquote(literal.Value)
 				names[unquoted] = value.Names[0].Name
@@ -71,8 +70,7 @@ func keyLiterals(args []ast.Expr, start int) []*ast.BasicLit {
 	return keys
 }
 
-// anyElement reports []any in both spellings the parser hands back: the alias is an identifier,
-// the written-out form an empty interface.
+// anyElement reports []any in both spellings the parser hands back: as the alias or as the written-out empty interface.
 func anyElement(element ast.Expr) bool {
 	if name, isIdent := element.(*ast.Ident); isIdent {
 		return name.Name == "any"
@@ -81,8 +79,7 @@ func anyElement(element ast.Expr) bool {
 	return isInterface && iface.Methods.NumFields() == 0
 }
 
-// loggedKeys finds every key the gateway puts on a log line, in all three shapes it builds them:
-// straight into a logging call, into an []any the call spreads, and appended onto one.
+// loggedKeys finds every key the gateway puts on a log line, in each of the three shapes it builds them in.
 func loggedKeys(t *testing.T) map[string]map[string]bool {
 	t.Helper()
 	set := token.NewFileSet()
@@ -130,8 +127,10 @@ func loggedKeys(t *testing.T) map[string]map[string]bool {
 	return keys
 }
 
-// Every key a gateway log line carries must be in the vocabulary. A rename that reaches only the
-// emitting side breaks a dashboard silently; this is what turns that into a failure here.
+// Test flow:
+//  1. Parse logkey.go for its declared string constants.
+//  2. Scan every non-test gateway source file for the log keys it puts on a line.
+//  3. Assert every logged key found is among the declared constants, reporting each undeclared key's location.
 func TestEveryLoggedKeyIsDeclared(t *testing.T) {
 	t.Parallel()
 	vocabulary := declared(t)
@@ -149,6 +148,9 @@ func TestEveryLoggedKeyIsDeclared(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Parse logkey.go for its declared string constants.
+//  2. Assert every declared value is lowercase and non-empty.
 func TestKeysAreLowercase(t *testing.T) {
 	t.Parallel()
 	for value, name := range declared(t) {

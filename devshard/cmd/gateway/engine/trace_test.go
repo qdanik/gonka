@@ -32,7 +32,10 @@ func (r *recordingJournal) recorded() []RaceStep {
 	return append([]RaceStep(nil), r.steps...)
 }
 
-// A step crosses to the journal's goroutine, so it is a copy the coordinator can go on writing.
+// Test flow:
+//  1. Complete an attempt with a widest-shaped finished outcome through a `pausedCoordinator` recording into a `recordingJournal`.
+//  2. Mutate the outcome's `ContentChunks` field after reporting.
+//  3. Assert the journal recorded one `RaceStepAttemptFinished` step carrying a snapshot equal to the outcome before the mutation.
 func TestAFinishedAttemptIsReportedAsACopyOfWhatItDelivered(t *testing.T) {
 	steps := &recordingJournal{}
 	fixture := newRaceFixture(settledPolicy(), 1)
@@ -54,7 +57,10 @@ func TestAFinishedAttemptIsReportedAsACopyOfWhatItDelivered(t *testing.T) {
 	}}, steps.recorded())
 }
 
-// A failed pick is traced by its error, not by the race's state: a refusal that answers after the served winner was handed off is still a refusal.
+// Test flow:
+//  1. Hand off the winner of a two-attempt race, then apply a failed pick carrying either a scheduler refusal or the race's own cancellation error.
+//  2. Assert a scheduler refusal after hand-off is traced as a `RaceStepEscalationUnfilled` step.
+//  3. Assert the race's own cancellation is traced as nothing at all.
 func TestAFailedPickIsTracedUnlessTheRaceCancelledIt(t *testing.T) {
 	testCases := []struct {
 		name    string

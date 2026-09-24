@@ -2,6 +2,9 @@ package scheduler
 
 import "testing"
 
+// Test flow:
+//  1. For each table case of a `GhostKind`, call its `reason` method.
+//  2. Assert the returned string matches the case's expected reason.
 func TestGhostKindReason(t *testing.T) {
 	tests := []struct {
 		name string
@@ -23,7 +26,11 @@ func TestGhostKindReason(t *testing.T) {
 	}
 }
 
-// An operator reads the reason to decide what to do, so two causes must never share one name.
+// Test flow:
+//  1. List every `GhostKind` the scheduler emits.
+//  2. Call `reason` on each and track which reason string has already been seen.
+//  3. Assert no kind returns an empty reason.
+//  4. Assert no two kinds share the same reason string.
 func TestEveryGhostKindNamesItselfDistinctly(t *testing.T) {
 	kinds := []GhostKind{
 		ghostPoC, ghostWindowFull, ghostCutOff, ghostEjected, ghostNotAllowed,

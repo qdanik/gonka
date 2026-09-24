@@ -10,6 +10,11 @@ import (
 	"devshard/cmd/gateway/config"
 )
 
+// Test flow:
+//  1. Start a real HTTP server over the harness handler.
+//  2. PUT an admin settings body one byte past `adminIngestLimit`.
+//  3. Assert the response is 413 and the connection is closed rather than kept alive.
+//  4. Assert the oversized body reached no operations.
 func TestAnOversizedAdminBodyIsRejectedAndTheConnectionIsClosed(t *testing.T) {
 	live := newHarness(t)
 	upstream := httptest.NewServer(live.server.Handler())
@@ -38,6 +43,9 @@ func TestAnOversizedAdminBodyIsRejectedAndTheConnectionIsClosed(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. PUT an admin settings body well within the ingest limit.
+//  2. Assert the response is 200.
 func TestAnAdminBodyInsideTheBoundIsAccepted(t *testing.T) {
 	live := newHarness(t)
 	body := `{"disabled_message":"` + strings.Repeat("A", 1024) + `"}`
@@ -47,6 +55,10 @@ func TestAnAdminBodyInsideTheBoundIsAccepted(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. POST a chat completion whose prompt fills `chatIngestLimit`.
+//  2. Assert the response is 413.
+//  3. Assert the oversized body took no limiter slots and started no races.
 func TestAnOversizedChatBodyIsRejectedBeforeAnythingRuns(t *testing.T) {
 	live := newHarness(t)
 	prompt := strings.Repeat("A", chatIngestLimit)
@@ -74,9 +86,12 @@ func (w *deadlineRecorder) SetReadDeadline(deadline time.Time) error {
 	return nil
 }
 
-// A dripped body holds a goroutine before admission and before the limiter, so the read carries its
-// own deadline. It has to be cleared again: a deadline left armed expires mid-stream and cancels the
-// request the response is still being written for.
+// Test flow:
+//  1. Read a chat body through `readBody`, using a `deadlineRecorder` that records every read deadline set.
+//  2. Assert the returned body matches what was sent.
+//  3. Assert exactly two deadlines were recorded: one armed and one cleared.
+//  4. Assert the armed deadline sits at least `bodyReadTimeout` past when the read began.
+//  5. Assert the cleared deadline is zero, so it cannot expire mid-response.
 func TestAReadDeadlineBoundsTheBodyAndIsClearedBeforeTheResponse(t *testing.T) {
 	writer := &deadlineRecorder{ResponseRecorder: httptest.NewRecorder()}
 	request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(chatBody))
@@ -100,8 +115,10 @@ func TestAReadDeadlineBoundsTheBodyAndIsClearedBeforeTheResponse(t *testing.T) {
 	}
 }
 
-// The declared length only sizes the buffer the body is read into; what the client actually sent is
-// what the handler must see.
+// Test flow:
+//  1. Define a table of declared Content-Length values, varying across exact, undeclared (-1), overstated, and understated.
+//  2. For each case, read the chat body through `readBody`.
+//  3. Assert the returned body always matches the whole body actually sent, regardless of the declared length.
 func TestABodyIsReadWholeWhateverLengthItDeclares(t *testing.T) {
 	testCases := []struct {
 		name          string
@@ -129,6 +146,10 @@ func TestABodyIsReadWholeWhateverLengthItDeclares(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Define a table of public route probes: models, status, metrics, healthz, devshard models, devshard status, and an unmatched path.
+//  2. For each probe, send the request with a guessed bearer token.
+//  3. Assert the admin key was never compared, so a cheap public route is not a timing oracle.
 func TestThePublicRoutesNeverReachTheKeyComparison(t *testing.T) {
 	probes := []struct {
 		name   string
@@ -154,6 +175,9 @@ func TestThePublicRoutesNeverReachTheKeyComparison(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Send an admin-state request with no Authorization header.
+//  2. Assert the admin key was never compared.
 func TestAnUnauthenticatedRequestNeverReachesTheKeyComparison(t *testing.T) {
 	live := newHarness(t)
 	live.request(t, http.MethodGet, "/v1/admin/state", "", nil)
@@ -162,6 +186,11 @@ func TestAnUnauthenticatedRequestNeverReachesTheKeyComparison(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Create a key gate for the configured admin key.
+//  2. Define a table of Authorization header values, varying across the exact key, whitespace-padded variants, a wrong key, a key prefix, a missing bearer scheme, a basic scheme, and an empty header.
+//  3. For each case, call `gate.authenticate`.
+//  4. Assert the result matches the case's expectation.
 func TestTheAdminKeyGateAcceptsOnlyTheConfiguredKey(t *testing.T) {
 	testCases := []struct {
 		name          string
@@ -187,6 +216,9 @@ func TestTheAdminKeyGateAcceptsOnlyTheConfiguredKey(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Create a key gate configured with only blank keys.
+//  2. Assert it authenticates neither an empty bearer token nor an arbitrary one.
 func TestAnUnconfiguredKeyGateAuthenticatesNothing(t *testing.T) {
 	gate := newKeyGate("", "   ")
 	if gate.authenticate("Bearer ") || gate.authenticate("Bearer anything") {
@@ -194,6 +226,11 @@ func TestAnUnconfiguredKeyGateAuthenticatesNothing(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Send an admin-state request with a key one character off from the configured one.
+//  2. Assert the response is 401.
+//  3. Assert exactly one key comparison happened.
+//  4. Assert the response's Content-Type is application/json.
 func TestTheOperatorRoutesRefuseAWrongKey(t *testing.T) {
 	live := newHarness(t)
 	recorder := live.request(t, http.MethodGet, "/v1/admin/state", "", map[string]string{"Authorization": "Bearer " + adminKey + "x"})
@@ -208,6 +245,10 @@ func TestTheOperatorRoutesRefuseAWrongKey(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Clear the configured admin API key.
+//  2. Send an admin-state request with the now-stale admin key.
+//  3. Assert the response is 404, so an unconfigured admin surface does not even reveal the route exists.
 func TestTheOperatorRoutesAre404WhenNoAdminKeyIsConfigured(t *testing.T) {
 	live := newHarness(t)
 	live.swapConfig(func(next *config.Config) { next.Server.AdminAPIKey = "" })
@@ -217,8 +258,11 @@ func TestTheOperatorRoutesAre404WhenNoAdminKeyIsConfigured(t *testing.T) {
 	}
 }
 
-// The configured keys are hashed once per configuration snapshot, so a rotation has to reach the
-// very next request: the retired key is refused and the new one is not.
+// Test flow:
+//  1. Confirm the originally configured admin key is accepted.
+//  2. Rotate the configured admin key to a new value.
+//  3. Send one request with the retired key and one with the rotated key.
+//  4. Assert the retired key is now refused with 401 and the rotated key is accepted with 200.
 func TestARotatedAdminKeyTakesEffectOnTheNextRequest(t *testing.T) {
 	live := newHarness(t)
 	if served := live.request(t, http.MethodGet, "/v1/admin/state", "", adminHeaders()); served.Code != http.StatusOK {
@@ -239,6 +283,11 @@ func TestARotatedAdminKeyTakesEffectOnTheNextRequest(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Configure a low default and cap on max tokens.
+//  2. Send an admin-keyed chat completion whose requested max_tokens exceeds the cap.
+//  3. Assert the response is 200, so the admin flag lets the request through while filters still apply.
+//  4. Assert the admin key was compared exactly once.
 func TestTheAdminFlagStillReachesTheRequestFilters(t *testing.T) {
 	live := newHarness(t)
 	live.swapConfig(func(next *config.Config) {
@@ -255,6 +304,10 @@ func TestTheAdminFlagStillReachesTheRequestFilters(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Restrict the requested model to API-key access.
+//  2. Send an anonymous chat completion and assert it is refused with 401.
+//  3. Send the same completion with a client API key and assert it is served with 200.
 func TestAClientAPIKeyOpensAnAPIKeyGatedModel(t *testing.T) {
 	live := newHarness(t)
 	live.swapConfig(func(next *config.Config) {
@@ -271,6 +324,10 @@ func TestAClientAPIKeyOpensAnAPIKeyGatedModel(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Grant open access to a different, unrelated model, leaving the requested model admin-only by omission.
+//  2. Send a chat completion for the requested model with a client API key.
+//  3. Assert the response is 401 and the request took no limiter slot.
 func TestAnAdminOnlyModelRefusesAClientKey(t *testing.T) {
 	live := newHarness(t)
 	live.swapConfig(func(next *config.Config) {

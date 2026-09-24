@@ -5,8 +5,10 @@ import (
 	"testing"
 )
 
-// A ping is owed to each host an escrow can actually reach, once per address: a validator holding
-// several slots answers on one socket, and pinging it per slot would say the same thing three times.
+// Test flow:
+//  1. Build a registry with two escrows: one session dialing hostA's address twice plus hostB, another session dialing hostB again.
+//  2. Add both escrows to the registry.
+//  3. Assert `HostDials` reports each address exactly once, for hostA and hostB.
 func TestHostDialsNameEachAddressOnce(t *testing.T) {
 	t.Parallel()
 	first := newFakeSession("hostA", "hostA", "hostB")
@@ -33,7 +35,10 @@ func TestHostDialsNameEachAddressOnce(t *testing.T) {
 	}
 }
 
-// A retired escrow's hosts are nobody's to ping: the gateway stopped routing to them.
+// Test flow:
+//  1. Build a registry with one escrow for hostA and add it.
+//  2. Retire that escrow.
+//  3. Assert `HostDials` reports no addresses.
 func TestARetiredEscrowsHostsAreNotPinged(t *testing.T) {
 	t.Parallel()
 	session := newFakeSession("hostA")
@@ -52,7 +57,9 @@ func TestARetiredEscrowsHostsAreNotPinged(t *testing.T) {
 	}
 }
 
-// An address the session cannot name is not a target; a blank one would probe the gateway itself.
+// Test flow:
+//  1. Build a registry with one escrow whose dial has a blank BaseURL and add it.
+//  2. Assert `HostDials` reports no addresses.
 func TestAHostWithNoAddressIsNoTarget(t *testing.T) {
 	t.Parallel()
 	session := newFakeSession("hostA")

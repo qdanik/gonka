@@ -9,6 +9,11 @@ import (
 	"testing"
 )
 
+// Test flow:
+//  1. Wrap a handler that always answers 418 with `InstrumentRoute`.
+//  2. Serve one GET request through it.
+//  3. Assert the response status passes through unchanged.
+//  4. Scrape the exposition and assert it carries the request counter and duration histogram for the route.
 func TestInstrumentRouteCountsRequestsWithPreservedFamilyNames(t *testing.T) {
 	gatewayMetrics := New()
 	instrumented := gatewayMetrics.InstrumentRoute("/v1/test", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -32,6 +37,9 @@ func TestInstrumentRouteCountsRequestsWithPreservedFamilyNames(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Scrape the metrics handler's exposition.
+//  2. Assert it includes the Go runtime collector's `go_goroutines` series.
 func TestHandlerServesGoRuntimeCollectors(t *testing.T) {
 	gatewayMetrics := New()
 	exposition := scrape(t, gatewayMetrics)
@@ -40,10 +48,14 @@ func TestHandlerServesGoRuntimeCollectors(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Wrap a handler that writes a body without calling `WriteHeader` explicitly.
+//  2. Serve one POST request through it.
+//  3. Scrape the exposition and assert the request was recorded with the implicit 200 status.
 func TestDefaultStatusIsRecordedAs200WhenHandlerWritesBody(t *testing.T) {
 	gatewayMetrics := New()
 	instrumented := gatewayMetrics.InstrumentRoute("/plain", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte("ok")) // implicit 200, WriteHeader never called
+		_, _ = w.Write([]byte("ok"))
 	}))
 	recorder := httptest.NewRecorder()
 	instrumented.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/plain", nil))
@@ -65,9 +77,11 @@ func scrape(t *testing.T, gatewayMetrics *Metrics) string {
 	return string(body)
 }
 
-// net/http hands the handler whatever RFC 7230 token the client sent, and InstrumentRoute wraps the
-// catch-all route outside authentication. A raw method label would let one unauthenticated caller mint
-// a permanent series per probe -- the hazard the route label already avoids by never carrying a path.
+// Test flow:
+//  1. Wrap a handler behind `InstrumentRoute` with route "other".
+//  2. Serve 200 requests, each using a distinct client-chosen HTTP method, plus one ordinary GET.
+//  3. Gather the request-count metric family.
+//  4. Assert it holds only 2 series total (the bounded "other" method plus GET), not one per client-chosen method.
 func TestInstrumentRouteBoundsTheMethodLabel(t *testing.T) {
 	telemetry := New()
 	handler := telemetry.InstrumentRoute("other", http.HandlerFunc(

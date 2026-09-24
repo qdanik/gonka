@@ -27,6 +27,9 @@ func getFloat64(t *testing.T, document *Document, param string) float64 {
 	return value
 }
 
+// Test flow:
+//  1. Run table cases of `requireUint()` against a `seed` body, varying absent, null, zero, positive, negative, string-encoded, boolean, and fractional values.
+//  2. Assert each case's error message matches, or is nil, and that an error carries ErrorStatus 400.
 func TestBasicRequireUint(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -65,6 +68,9 @@ func TestBasicRequireUint(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Run table cases of `requireBool()` against varying fields and bodies: absent, null, true, false, a string, and a number.
+//  2. Assert each case's error message matches, or is nil.
 func TestBasicRequireBool(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -99,6 +105,9 @@ func TestBasicRequireBool(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Run table cases of `requireString(maxBytes)` against varying params and byte caps, with bodies around the length cap plus non-string and null values.
+//  2. Assert each case's error message matches, or is nil.
 func TestBasicRequireString(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -135,6 +144,9 @@ func TestBasicRequireString(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Run table cases of `stripParameter()` against a present scalar field, a present object field, and an absent field.
+//  2. Assert the parameter is always absent afterward.
 func TestBasicStripParameter(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -158,6 +170,9 @@ func TestBasicStripParameter(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Run table cases of `forceLiteral(value)` overwriting a present false value, setting the value on an absent field, and overwriting a present out-of-range int.
+//  2. Assert Get returns the forced value in every case.
 func TestBasicForceLiteral(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -186,6 +201,10 @@ func TestBasicForceLiteral(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Run table cases of `clampFloat(0, 2)` against a `temperature` body, varying in-range, below-min, above-max, boundary, and non-finite/unparseable values.
+//  2. For a stripped case, assert Has reports the field removed; otherwise assert the clamped float matches the expected result.
+//  3. Assert an absent field is a no-op.
 func TestBasicClampFloat(t *testing.T) {
 	const param = "temperature"
 	tests := []struct {
@@ -232,6 +251,10 @@ func TestBasicClampFloat(t *testing.T) {
 	})
 }
 
+// Test flow:
+//  1. Run table cases of `rejectNonPositiveThenClamp(2)` against a `repetition_penalty` body, varying in-range, at-max, above-max, zero, negative, and non-finite or unparseable values.
+//  2. Assert a non-positive value is rejected with an error, a stripped case leaves the field absent, and an otherwise valid value is clamped to the expected result.
+//  3. Assert an absent field is a no-op.
 func TestBasicRejectNonPositiveThenClamp(t *testing.T) {
 	const param = "repetition_penalty"
 	tests := []struct {
@@ -287,6 +310,10 @@ func TestBasicRejectNonPositiveThenClamp(t *testing.T) {
 	})
 }
 
+// Test flow:
+//  1. Run table cases of `validTopK(topKMax)` against a `top_k` body, varying the disabled sentinel, fractional truncation, values around the max cap, invalid values, and a non-finite value.
+//  2. Assert a rejected case's error message matches, a stripped case leaves the field absent, and an accepted case's int64 result matches the expected value.
+//  3. Assert an absent field is a no-op.
 func TestBasicValidTopK(t *testing.T) {
 	const param = "top_k"
 	tests := []struct {
@@ -353,6 +380,9 @@ func TestBasicValidTopK(t *testing.T) {
 	})
 }
 
+// Test flow:
+//  1. Run table cases of `validModelName(modelMaxLen)` against a `model` body, varying accepted name shapes, length boundaries, empty/whitespace values, non-string types, and characters outside the allowed set.
+//  2. Assert each case's error message matches, or is nil, and that an error carries ErrorStatus 400.
 func TestBasicValidModelName(t *testing.T) {
 	const param = "model"
 	tests := []struct {
@@ -401,6 +431,9 @@ func TestBasicValidModelName(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Call `validModelName(modelMaxLen)` on a model name one megabyte long.
+//  2. Assert it is rejected with the exact length-exceeded error.
 func TestBasicValidModelNameRejectsMegabyteNameOnLength(t *testing.T) {
 	document := parseTestDocument(t, `{"model":"`+strings.Repeat("a", 1<<20)+`"}`)
 	err := validModelName(modelMaxLen)(RuleContext{Document: document, Param: "model"})
@@ -413,6 +446,10 @@ func TestBasicValidModelNameRejectsMegabyteNameOnLength(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Run table cases of `replaceIfPresent(uint64(1))` against a present numeric, zero, huge, and non-numeric value.
+//  2. Assert Get returns the replacement value in every case.
+//  3. Assert an absent field stays absent.
 func TestBasicReplaceIfPresent(t *testing.T) {
 	const param = "n"
 	tests := []struct {

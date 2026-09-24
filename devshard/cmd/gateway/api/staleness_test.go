@@ -13,6 +13,10 @@ import (
 
 var staleTestEpoch = time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
 
+// Test flow:
+//  1. For each snapshot age, varying across fresh, just inside the limit, on the limit, far past it, the limit disabled, and relaxed PoC mode with a stale clock, call admission with that snapshot age, mode and max age.
+//  2. Assert the call returns a ChainStaleError exactly when the case expects a refusal.
+//  3. When refused, assert the error maps to a 503 status.
 func TestAdmissionRefusesAnUnrefreshedSnapshot(t *testing.T) {
 	t.Parallel()
 	for _, testCase := range []struct {
@@ -55,6 +59,9 @@ func TestAdmissionRefusesAnUnrefreshedSnapshot(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Write a ChainStaleError through the errors test server.
+//  2. Assert the response carries a Retry-After of 5 seconds and a 503 status.
 func TestAStaleSnapshotRefusalCarriesRetryAfter(t *testing.T) {
 	t.Parallel()
 	recorder := httptest.NewRecorder()
@@ -69,6 +76,9 @@ func TestAStaleSnapshotRefusalCarriesRetryAfter(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Call admission with a zero-value phase snapshot that was never published.
+//  2. Assert it returns a ChainStaleError.
 func TestAdmissionRefusesASnapshotThatWasNeverPublished(t *testing.T) {
 	t.Parallel()
 	err := admission(chain.PhaseSnapshot{}, config.Modes{}, staleTestEpoch, 30)
@@ -79,6 +89,10 @@ func TestAdmissionRefusesASnapshotThatWasNeverPublished(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a phase snapshot that is both blocked and stale.
+//  2. Call admission on it.
+//  3. Assert the error is the blocked-phase error, not a staleness refusal.
 func TestABlockedPhaseOutranksStaleness(t *testing.T) {
 	t.Parallel()
 	snapshot := chain.PhaseSnapshot{

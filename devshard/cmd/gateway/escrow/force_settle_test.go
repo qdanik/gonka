@@ -24,8 +24,11 @@ func busyManager(t *testing.T, record store.DevshardRecord, log *callLog) (*Mana
 	}, testStore
 }
 
-// The operator's override: the escrow is closed now, and the requests still in flight are paid for and
-// failed. Finalize shuts the door on new nonces, and the live records take the settlement default.
+// Test flow:
+//  1. Build a busy manager (settlementSource reports busy) with one active record.
+//  2. Call settle with force=true.
+//  3. Assert settle returns no error and "SettleEscrow" was broadcast.
+//  4. Assert the stored record's SettlementPending is cleared.
 func TestForcedSettleProceedsWithRequestsStillInFlight(t *testing.T) {
 	record := store.DevshardRecord{EscrowID: "11", PrivateKeyEnv: "MODEL_A_KEY", Model: "model-a", Active: true}
 	log := &callLog{}
@@ -43,7 +46,11 @@ func TestForcedSettleProceedsWithRequestsStillInFlight(t *testing.T) {
 	}
 }
 
-// Unforced, the refusal stands: the escrow is parked and drains, and nothing is broadcast.
+// Test flow:
+//  1. Build a busy manager with one active record.
+//  2. Call settle with force=false.
+//  3. Assert settle returns ErrDevshardBusy.
+//  4. Assert "SettleEscrow" was never broadcast.
 func TestUnforcedSettleStillDefersWhileBusy(t *testing.T) {
 	record := store.DevshardRecord{EscrowID: "12", PrivateKeyEnv: "MODEL_A_KEY", Model: "model-a", Active: true}
 	log := &callLog{}
@@ -59,8 +66,11 @@ func TestUnforcedSettleStillDefersWhileBusy(t *testing.T) {
 	}
 }
 
-// Force overrides a busy escrow, never a second settlement of the same one: that guard stops a double
-// broadcast rather than reporting load.
+// Test flow:
+//  1. Build a busy manager with one active record.
+//  2. Claim the record's settlement slot directly via manager.settlements.enter, simulating a settlement already in flight.
+//  3. Call settle with force=true.
+//  4. Assert settle returns ErrSettlementInFlight and never broadcasts "SettleEscrow".
 func TestForcedSettleStillRefusesAConcurrentSettlement(t *testing.T) {
 	record := store.DevshardRecord{EscrowID: "13", PrivateKeyEnv: "MODEL_A_KEY", Model: "model-a", Active: true}
 	log := &callLog{}

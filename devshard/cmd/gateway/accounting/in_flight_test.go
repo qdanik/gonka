@@ -2,6 +2,11 @@ package accounting
 
 import "testing"
 
+// Test flow:
+//  1. Open a book and observe the chain's latest nonce as 4.
+//  2. Record nonce 4 as assigned under request "req-a".
+//  3. Assert the slot-0 record reports 1 nonce and 1 request in flight.
+//  4. Assert its unobserved count is 0, since a nonce out with a host is accounted for.
 func TestANonceIsInFlightFromTheMomentItLeavesForAHost(t *testing.T) {
 	book := newTestBook(t, 4)
 	if err := book.ObserveLatestNonce(testEscrow, 4); err != nil {
@@ -24,6 +29,10 @@ func TestANonceIsInFlightFromTheMomentItLeavesForAHost(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Open a book and observe the chain's latest nonce as 4.
+//  2. Record nonce 4 as assigned and assert overcounted and unobserved stay 0, with 1 nonce in flight.
+//  3. Record the race finishing that nonce and assert overcounted and unobserved still stay 0.
 func TestTheSlotIdentityHoldsFromHandOffToSettlement(t *testing.T) {
 	book := newTestBook(t, 4)
 	if err := book.ObserveLatestNonce(testEscrow, 4); err != nil {
@@ -53,6 +62,10 @@ func TestTheSlotIdentityHoldsFromHandOffToSettlement(t *testing.T) {
 	assertIdentity("the race reported")
 }
 
+// Test flow:
+//  1. Record a race and then a timeout that settles nonce 4.
+//  2. Record a late hand-off assignment for the same nonce, arriving after settlement.
+//  3. Assert the slot-0 record's in-flight count stays 0.
 func TestALateHandOffDoesNotReopenASettledNonce(t *testing.T) {
 	book := newTestBook(t, 4)
 	if err := book.ObserveLatestNonce(testEscrow, 4); err != nil {

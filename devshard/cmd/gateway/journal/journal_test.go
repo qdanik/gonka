@@ -163,7 +163,11 @@ func awaitClosed(t *testing.T, events *Journal) {
 	}
 }
 
-// The ledger applies facts in the order they happened, whichever producer reported them.
+// Test flow:
+//  1. Build a journal with a `ledgerSpy`.
+//  2. Record a race, a ghost burn, and a timeout vote, from different producers.
+//  3. Flush the journal.
+//  4. Assert the ledger spy received the facts in the order they were recorded.
 func TestTheLedgerReceivesFactsInTheOrderTheyWereRecorded(t *testing.T) {
 	ledger := &ledgerSpy{}
 	events := newJournal(t, Settings{Lines: &logcapture.Recorder{}, Ledger: ledger})
@@ -180,6 +184,11 @@ func TestTheLedgerReceivesFactsInTheOrderTheyWereRecorded(t *testing.T) {
 	}, ledger.arrived())
 }
 
+// Test flow:
+//  1. Build a journal with no `Ledger` configured.
+//  2. Record a race, a ghost burn, and a timeout vote.
+//  3. Flush the journal.
+//  4. Assert `Close` returns no error.
 func TestAJournalWithoutALedgerAcceptsEveryFact(t *testing.T) {
 	events := newJournal(t, Settings{Lines: &logcapture.Recorder{}})
 
@@ -191,7 +200,11 @@ func TestAJournalWithoutALedgerAcceptsEveryFact(t *testing.T) {
 	require.NoError(t, events.Close())
 }
 
-// A money-lane event is refused only past the ceiling, the one the consumer holds included, and the refusal is counted and returned by Close.
+// Test flow:
+//  1. Build a journal with a `heldLedger` and a `MoneyCeiling` of 3, and park the consumer via `holdConsumer`.
+//  2. Record three race outcomes while the consumer is parked, filling the ceiling (the held request counts too).
+//  3. Release the consumer and flush.
+//  4. Assert only the held request and the first two races reached the ledger, one refusal is counted, and `Close` reports it.
 func TestAMoneyFactPastTheCeilingIsRefusedCountedAndReported(t *testing.T) {
 	ledger := newHeldLedger()
 	events := newJournal(t, Settings{Lines: &logcapture.Recorder{}, Ledger: ledger, MoneyCeiling: 3})
@@ -211,7 +224,11 @@ func TestAMoneyFactPastTheCeilingIsRefusedCountedAndReported(t *testing.T) {
 	require.True(t, strings.Contains(err.Error(), "refused 1 money-lane events"), "Close() = %v", err)
 }
 
-// A progress line past the backlog is dropped and counted, and the batch after the drop says how many.
+// Test flow:
+//  1. Build a journal with a `heldLedger` and `ProgressBacklog` of 1, and park the consumer via `holdConsumer`.
+//  2. Record three progress steps while the consumer is parked, past the backlog limit.
+//  3. Release the consumer and flush.
+//  4. Assert the drop count is 2 and the "journal skipped progress lines" line reports it.
 func TestAProgressLinePastTheBacklogIsDroppedAndTheNextBatchSaysHowMany(t *testing.T) {
 	lines := &logcapture.Recorder{}
 	ledger := newHeldLedger()
@@ -231,7 +248,10 @@ func TestAProgressLinePastTheBacklogIsDroppedAndTheNextBatchSaysHowMany(t *testi
 	}})
 }
 
-// A drop with nothing accepted after it is still written, and Flush waits for its line.
+// Test flow:
+//  1. Build a journal with a `heldVoteLedger` and `ProgressBacklog` of 1, then set up a drop with nothing accepted after it via `dropWhileTheQueueIsEmpty`.
+//  2. Release the consumer and flush.
+//  3. Assert the "journal skipped progress lines" line is already written when `Flush` returns.
 func TestADropNothingFollowsIsWrittenBeforeFlushReturns(t *testing.T) {
 	lines := &logcapture.Recorder{}
 	ledger := newHeldVoteLedger()
@@ -246,6 +266,10 @@ func TestADropNothingFollowsIsWrittenBeforeFlushReturns(t *testing.T) {
 	}})
 }
 
+// Test flow:
+//  1. Build a journal with a `heldVoteLedger` and `ProgressBacklog` of 1, then set up a drop with nothing accepted after it via `dropWhileTheQueueIsEmpty`.
+//  2. Release the consumer and close the journal.
+//  3. Assert `Close` writes the "journal skipped progress lines" line it still owed.
 func TestCloseWritesTheWarningOwedForADropNothingFollowed(t *testing.T) {
 	lines := &logcapture.Recorder{}
 	ledger := newHeldVoteLedger()
@@ -260,7 +284,11 @@ func TestCloseWritesTheWarningOwedForADropNothingFollowed(t *testing.T) {
 	}})
 }
 
-// Close waits for everything already accepted, so the ledger closing after it holds every fact.
+// Test flow:
+//  1. Build a journal with a `heldLedger`, park the consumer via `holdConsumer`, and record one more race behind it.
+//  2. Call `Close` in a goroutine and wait, via `awaitClosed`, until it has marked the journal closed.
+//  3. Release the consumer.
+//  4. Assert `Close` returns without error and the ledger received both the held and the queued race.
 func TestCloseDrainsWhatWasAcceptedBeforeIt(t *testing.T) {
 	ledger := newHeldLedger()
 	events := newJournal(t, Settings{Lines: &logcapture.Recorder{}, Ledger: ledger})
@@ -281,7 +309,10 @@ func TestCloseDrainsWhatWasAcceptedBeforeIt(t *testing.T) {
 	require.Equal(t, []string{"race holding", "race request-1"}, ledger.arrived())
 }
 
-// An event after Close reaches no sink; it is counted, and the first of each kind is written as an error.
+// Test flow:
+//  1. Build and immediately close a journal.
+//  2. Record two timeout votes and one ghost burn after close.
+//  3. Assert nothing reached the ledger, the late-event count is 3, and only the first event of each kind logged an "after it closed" error line.
 func TestAnEventAfterCloseIsCountedAndItsKindWrittenOnce(t *testing.T) {
 	lines := &logcapture.Recorder{}
 	ledger := &ledgerSpy{}
@@ -301,7 +332,11 @@ func TestAnEventAfterCloseIsCountedAndItsKindWrittenOnce(t *testing.T) {
 	}, lines.All())
 }
 
-// KindRequestFinished rides the money lane, so a progress backlog that drops a throttled request leaves the finished-request record standing.
+// Test flow:
+//  1. Build a journal with a `heldLedger` and `ProgressBacklog` of 1, and park the consumer via `holdConsumer`.
+//  2. Record a progress step to fill the backlog, then a finished request and a throttled request.
+//  3. Release the consumer and flush.
+//  4. Assert the finished-request line was logged (it rides the money lane) and the drop count reflects the dropped throttled line.
 func TestARequestFinishedLineSurvivesAFullProgressBacklogThatDropsARequestThrottledLine(t *testing.T) {
 	lines := &logcapture.Recorder{}
 	ledger := newHeldLedger()
@@ -323,6 +358,10 @@ func TestARequestFinishedLineSurvivesAFullProgressBacklogThatDropsARequestThrott
 	require.Equal(t, uint64(1), progressDropped)
 }
 
+// Test flow:
+//  1. Build the expected money-lane membership for every `Kind`.
+//  2. Iterate every `Kind` from `KindRaceReported` to `kindCount`.
+//  3. Assert each kind has a non-"unknown" name and sits on the lane the expected map assigns.
 func TestEveryKindHasANameAndTheLaneTheSpecAssigns(t *testing.T) {
 	moneyLane := map[Kind]bool{
 		KindRaceReported: true, KindTimeoutVote: true, KindNonceBurned: true, KindBurnBudgetExhausted: true,
@@ -336,6 +375,10 @@ func TestEveryKindHasANameAndTheLaneTheSpecAssigns(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Table-driven: each case pairs an `engine.RaceStepKind` with the `Kind` and lane (money or progress) it must map to.
+//  2. For each case, convert the step via `raceStepKind`.
+//  3. Assert the resulting kind matches and its lane, from `onMoneyLane`, matches the case's expectation.
 func TestRaceStepKindMapsEveryStepToItsLane(t *testing.T) {
 	testCases := []struct {
 		name     string

@@ -185,7 +185,10 @@ func everyProducer() map[string]func(events *Journal) {
 	}
 }
 
-// A producer method added without a sample would leave its keys unchecked; this keeps the sample table complete.
+// Test flow:
+//  1. Build the `everyProducer` sample table and list every method on `*Journal` via reflection.
+//  2. Skip the methods listed in `methodsThatWriteNoLine`.
+//  3. Assert every remaining method name appears as a key in the sample table.
 func TestEveryProducerMethodIsSampled(t *testing.T) {
 	samples := everyProducer()
 	journalType := reflect.TypeFor[*Journal]()
@@ -201,7 +204,11 @@ func TestEveryProducerMethodIsSampled(t *testing.T) {
 	}
 }
 
-// A key renamed on one side reaches a dashboard silently; every key the journal writes must be a declared logkey value.
+// Test flow:
+//  1. Load the declared key vocabulary from `internal/logkey` via `declaredKeys`.
+//  2. Build a journal with a `logcapture.Recorder` and a ledger that refuses every probe.
+//  3. Drive every producer in `everyProducer`, then flush.
+//  4. Assert every field key in every logged entry is a declared logkey value.
 func TestEveryRenderedKeyIsDeclared(t *testing.T) {
 	declared := declaredKeys(t)
 	lines := &logcapture.Recorder{}

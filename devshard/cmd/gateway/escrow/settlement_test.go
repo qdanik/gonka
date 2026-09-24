@@ -14,8 +14,7 @@ import (
 	"devshard/signing"
 )
 
-// callLog records call names in the order they happen, shared across fakes to
-// pin cross-object ordering under concurrent access.
+// callLog records call names in the order they happen, shared across fakes.
 type callLog struct {
 	mu    sync.Mutex
 	calls []string
@@ -33,8 +32,7 @@ func (c *callLog) snapshot() []string {
 	return append([]string(nil), c.calls...)
 }
 
-// fakeSettlementSource models the registry: Retire stops routing synchronously, and commit stands in
-// for the request path taking a nonce -- refused once retired, counted as in-flight work until then.
+// fakeSettlementSource models the registry that routing and nonce commits go through.
 type fakeSettlementSource struct {
 	mu        sync.Mutex
 	retired   bool
@@ -121,8 +119,12 @@ func stringsEqual(got, want []string) bool {
 	return true
 }
 
-// busy is a deferred-settle signal, not a failure: the escrow is deactivated (so it can drain)
-// and marked pending, but no finalize/build/broadcast happens while it is busy.
+// Test flow:
+//  1. Seed the store with one active devshard record and a shared call log across the fake store, settlement source and chain client.
+//  2. Configure the fake settlement source to report busy.
+//  3. Call `settle` and assert it returns `ErrDevshardBusy`.
+//  4. Assert the call log shows park and retire happening before the busy check short-circuits any chain call.
+//  5. Assert the devshard ends up SettlementPending=true and Active=false.
 func TestSettleBusyMarksPendingAndReturnsErrDevshardBusy(t *testing.T) {
 	testStore := newFakeStore()
 	record := store.DevshardRecord{EscrowID: "1", PrivateKeyEnv: "MODEL_A_KEY", Model: "model-a", Active: true}
@@ -153,8 +155,12 @@ func TestSettleBusyMarksPendingAndReturnsErrDevshardBusy(t *testing.T) {
 	}
 }
 
-// INVARIANT 2: deactivation happens before any chain call, and the pending
-// marker clears only after a confirmed broadcast.
+// Test flow:
+//  1. Seed the store with one active devshard record and a shared call log.
+//  2. Configure the fake settlement source and chain client to succeed, recording the settle tx hash inside SettleEscrow before the broadcast completes.
+//  3. Call `settle` and assert it returns nil.
+//  4. Assert the call log shows the full ordered sequence: park, retire, busy check, finalize, build, broadcast, then hash and pending recorded.
+//  5. Assert the devshard ends up Active=false and SettlementPending=false.
 func TestSettleHappyPathOrderAndClearsPendingOnSuccess(t *testing.T) {
 	testStore := newFakeStore()
 	record := store.DevshardRecord{EscrowID: "2", PrivateKeyEnv: "MODEL_A_KEY", Model: "model-a", Active: true}
@@ -181,8 +187,6 @@ func TestSettleHappyPathOrderAndClearsPendingOnSuccess(t *testing.T) {
 		t.Fatalf("settle() = %v, want nil", err)
 	}
 
-	// The hash is recorded inside SettleEscrow, before the broadcast: a settle that commits while the
-	// gateway is not looking must be recognisable on the next tick rather than rebuilt.
 	want := []string{
 		"ParkForSettlement", "Retire", "IsBusy",
 		"Finalize", "BuildSettlement", "SettleEscrow", `SetDevshardSettleTxHash("SETTLE-TX")`,
@@ -200,8 +204,11 @@ func TestSettleHappyPathOrderAndClearsPendingOnSuccess(t *testing.T) {
 	}
 }
 
-// INVARIANT 2: any broadcast failure must leave SettlementPending set --
-// clearing it is the one thing that only happens on confirmed success.
+// Test flow:
+//  1. Seed the store with one active devshard record.
+//  2. Configure the fake chain client's SettleEscrow to fail with a broadcast error.
+//  3. Call `settle` and assert the error wraps the broadcast error.
+//  4. Assert the devshard stays Active=false (already deactivated) with SettlementPending still true.
 func TestSettleBroadcastFailureLeavesSettlementPendingSet(t *testing.T) {
 	testStore := newFakeStore()
 	record := store.DevshardRecord{EscrowID: "3", PrivateKeyEnv: "MODEL_A_KEY", Model: "model-a", Active: true}
@@ -234,8 +241,12 @@ func TestSettleBroadcastFailureLeavesSettlementPendingSet(t *testing.T) {
 	}
 }
 
-// retire with the toggle off never touches the chain: the escrow is parked, not dropped, because its
-// row carries the only key that can settle it later.
+// Test flow:
+//  1. Seed the store with one active devshard record.
+//  2. Build a fake chain client that fails the test if SettleEscrow is ever called.
+//  3. Configure the Manager with the settlement toggle disabled.
+//  4. Call `retire` and assert it returns nil.
+//  5. Assert the record ends up parked rather than deleted.
 func TestRetireSettlementDisabledSkipsChainAndParksEscrow(t *testing.T) {
 	testStore := newFakeStore()
 	record := store.DevshardRecord{EscrowID: "4", PrivateKeyEnv: "MODEL_A_KEY", Model: "model-a", Active: true}
@@ -261,7 +272,11 @@ func TestRetireSettlementDisabledSkipsChainAndParksEscrow(t *testing.T) {
 	assertParked(t, testStore, record.EscrowID)
 }
 
-// retire with the toggle on settles first, then drops the row only after settle succeeds.
+// Test flow:
+//  1. Seed the store with one active devshard record.
+//  2. Configure the fake chain client to settle successfully with the settlement toggle enabled.
+//  3. Call `retire` and assert it returns nil.
+//  4. Assert the devshard row is deleted once the settlement completes.
 func TestRetireSettlementEnabledHappyPathSettlesThenDeletes(t *testing.T) {
 	testStore := newFakeStore()
 	record := store.DevshardRecord{EscrowID: "5", PrivateKeyEnv: "MODEL_A_KEY", Model: "model-a", Active: true}
@@ -289,8 +304,11 @@ func TestRetireSettlementEnabledHappyPathSettlesThenDeletes(t *testing.T) {
 	}
 }
 
-// retire must not delete the row when settle fails (including the busy case):
-// the escrow stays registered, inactive, and pending for a later deferred-settle completion.
+// Test flow:
+//  1. Seed the store with one active devshard record.
+//  2. Configure the fake settlement source as busy and build a chain client that fails the test if SettleEscrow is called.
+//  3. Call `retire` with the settlement toggle enabled and assert it returns `ErrDevshardBusy`.
+//  4. Assert the devshard row stays registered with SettlementPending set for a later deferred-settle attempt.
 func TestRetireSettlementEnabledBusyLeavesDevshardRegistered(t *testing.T) {
 	testStore := newFakeStore()
 	record := store.DevshardRecord{EscrowID: "6", PrivateKeyEnv: "MODEL_A_KEY", Model: "model-a", Active: true}
@@ -324,7 +342,11 @@ func TestRetireSettlementEnabledBusyLeavesDevshardRegistered(t *testing.T) {
 	}
 }
 
-// INVARIANT 7: two concurrent settle calls for the same escrow must broadcast exactly once.
+// Test flow:
+//  1. Seed the store with one active devshard record and a chain client whose SettleEscrow blocks until released.
+//  2. Start a first `settle` call in a goroutine and wait until it has entered the broadcast.
+//  3. Call `settle` again concurrently for the same escrow and assert it returns `ErrSettlementInFlight`.
+//  4. Release the blocked call, wait for it to finish, and assert the call log recorded exactly one SettleEscrow broadcast.
 func TestSettleDedupesConcurrentCallsForSameEscrow(t *testing.T) {
 	testStore := newFakeStore()
 	record := store.DevshardRecord{EscrowID: "7", PrivateKeyEnv: "MODEL_A_KEY", Model: "model-a", Active: true}
@@ -375,8 +397,11 @@ func TestSettleDedupesConcurrentCallsForSameEscrow(t *testing.T) {
 	}
 }
 
-// A settlement claims the escrow's funds, so by the time it is broadcast the escrow must already be
-// out of routing: a nonce committed after that point can never be settled.
+// Test flow:
+//  1. Seed the store with one active devshard record and a fake settlement source used as the routing registry.
+//  2. Configure the chain client's SettleEscrow to attempt a nonce `commit` against that same routing registry mid-broadcast.
+//  3. Call `settle` and assert it returns nil.
+//  4. Assert the nonce commit attempted during the broadcast was refused, since the escrow was already retired from routing before the broadcast.
 func TestSettleRefusesNonceCommitsOnceTheSettlementIsBroadcast(t *testing.T) {
 	testStore := newFakeStore()
 	record := store.DevshardRecord{EscrowID: "20", PrivateKeyEnv: "MODEL_A_KEY", Model: "model-a", Active: true}
@@ -405,8 +430,11 @@ func TestSettleRefusesNonceCommitsOnceTheSettlementIsBroadcast(t *testing.T) {
 	}
 }
 
-// The deduped caller must leave the row alone: it carries the private-key env name that is the only
-// way to settle the escrow, and it belongs to the caller that is really settling.
+// Test flow:
+//  1. Seed the store with one active devshard record and a chain client whose SettleEscrow blocks until released.
+//  2. Start a first `retire` call in a goroutine and wait until it has entered the broadcast.
+//  3. Call `retire` again for the same escrow while the first is still in flight, and assert it returns `ErrSettlementInFlight` while the row stays present with its private-key env preserved.
+//  4. Release the blocked call, wait for it to finish, and assert the row is deleted once the real settlement completes.
 func TestDedupedSettleLeavesTheRowForTheCallerThatIsReallySettling(t *testing.T) {
 	testStore := newFakeStore()
 	record := store.DevshardRecord{EscrowID: "21", PrivateKeyEnv: "MODEL_A_KEY", Model: "model-a", Active: true}
@@ -468,7 +496,10 @@ func settlingTxClient() *fakeTxClient {
 	}
 }
 
-// A parked escrow is only reachable through the pending sweep, so without it the funds are stranded.
+// Test flow:
+//  1. Seed the store with one parked devshard record.
+//  2. Call `settlePending` for that record with the settlement toggle enabled.
+//  3. Assert it returns nil and the row is deleted after the confirmed settle.
 func TestSettlePendingSettlesParkedEscrowAndDropsRow(t *testing.T) {
 	testStore := newFakeStore()
 	record := parkedRecord("9")
@@ -490,8 +521,11 @@ func TestSettlePendingSettlesParkedEscrowAndDropsRow(t *testing.T) {
 	}
 }
 
-// Re-importing a parked escrow writes the record with SettlementPending at its zero value; the sweep
-// keys on that marker, so an upsert that cleared it would strand the escrow silently.
+// Test flow:
+//  1. Seed the store with one parked devshard record.
+//  2. Upsert an unrelated copy of the record with SettlementPending cleared, mirroring how the real store still preserves the existing pending marker on upsert.
+//  3. Load the updated records and call `settlePending` with them.
+//  4. Assert it returns nil and the escrow is still settled and dropped, not stranded by the upsert.
 func TestSettlePendingStillSettlesAfterAnUnrelatedUpsert(t *testing.T) {
 	testStore := newFakeStore()
 	record := parkedRecord("13")
@@ -523,6 +557,11 @@ func TestSettlePendingStillSettlesAfterAnUnrelatedUpsert(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Seed the store with one parked devshard record.
+//  2. Configure the fake settlement source to report busy.
+//  3. Call `settlePending` and assert it returns `ErrDevshardBusy`.
+//  4. Assert the record stays parked for the next sweep.
 func TestSettlePendingBusyEscrowStaysParkedForTheNextTick(t *testing.T) {
 	testStore := newFakeStore()
 	record := parkedRecord("10")
@@ -542,6 +581,11 @@ func TestSettlePendingBusyEscrowStaysParkedForTheNextTick(t *testing.T) {
 	assertParked(t, testStore, record.EscrowID)
 }
 
+// Test flow:
+//  1. Seed the store with one parked devshard record.
+//  2. Build a fake chain client that fails the test if SettleEscrow is ever called.
+//  3. Call `settlePending` with the settlement toggle disabled and assert it returns nil.
+//  4. Assert the record stays parked untouched.
 func TestSettlePendingIsNoOpWhileSettlementDisabled(t *testing.T) {
 	testStore := newFakeStore()
 	record := parkedRecord("11")
@@ -567,8 +611,11 @@ func TestSettlePendingIsNoOpWhileSettlementDisabled(t *testing.T) {
 	assertParked(t, testStore, record.EscrowID)
 }
 
-// The sweep is keyed on the pending marker, not merely on being inactive: a deactivated escrow that
-// was never marked has no settlement intent and must not be settled.
+// Test flow:
+//  1. Seed the store with a devshard record that is inactive but has no settlement-pending marker.
+//  2. Build a fake chain client that fails the test if SettleEscrow is ever called.
+//  3. Call `settlePending` and assert it returns nil.
+//  4. Assert the unmarked record is left in place, neither settled nor dropped.
 func TestSettlePendingIgnoresInactiveEscrowWithoutPendingMarker(t *testing.T) {
 	testStore := newFakeStore()
 	record := store.DevshardRecord{EscrowID: "12", PrivateKeyEnv: "MODEL_A_KEY", Model: "model-a", Active: false, SettlementPending: false}
@@ -596,9 +643,11 @@ func TestSettlePendingIgnoresInactiveEscrowWithoutPendingMarker(t *testing.T) {
 	}
 }
 
-// A settle whose wait times out may commit moments later. Building a fresh transaction on the next
-// tick produces a new hash the keeper rejects as already-settled, and the tick burns a fee for it
-// every fifteen seconds forever. Asking the chain about the recorded hash first is what stops that.
+// Test flow:
+//  1. Seed the store with a devshard record that already carries a recorded settle tx hash.
+//  2. Configure the fake chain client's TxCommitted to report that transaction as already on chain.
+//  3. Call `settle` and assert it returns nil with the result's TxHash equal to the recorded hash.
+//  4. Assert the call log shows no second SettleEscrow broadcast.
 func TestASettleAlreadyOnChainIsReconciledInsteadOfRebroadcast(t *testing.T) {
 	log := &callLog{}
 	record := store.DevshardRecord{EscrowID: "7", Model: "model-a", SettlementPending: true, SettleTxHash: "SETTLE-TX"}
@@ -628,8 +677,11 @@ func TestASettleAlreadyOnChainIsReconciledInsteadOfRebroadcast(t *testing.T) {
 	}
 }
 
-// The mirror case: a recorded transaction that never landed must not block a genuine retry, and the
-// stale hash has to go so the next attempt is judged on its own.
+// Test flow:
+//  1. Seed the store with a devshard record whose recorded settle tx hash never landed on chain.
+//  2. Configure the fake chain client's TxCommitted to report the hash as not found, and SettleEscrow to broadcast a fresh transaction.
+//  3. Call `settle` and assert it returns nil.
+//  4. Assert the store now records the fresh transaction hash in place of the stale one.
 func TestASettleThatNeverLandedIsRetried(t *testing.T) {
 	record := store.DevshardRecord{EscrowID: "7", Model: "model-a", SettlementPending: true, SettleTxHash: "GONE"}
 	testStore := newFakeStore()
@@ -655,6 +707,11 @@ func TestASettleThatNeverLandedIsRetried(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Seed the store with a devshard record that carries a recorded settle tx hash.
+//  2. Build a stale copy of that record with the hash cleared, simulating a caller holding an older snapshot from earlier in the same tick.
+//  3. Configure the fake chain client's TxCommitted to report the row's actual hash as already on chain.
+//  4. Call `settle` with the stale copy and assert it reads the hash from the store's row, returning nil with the recorded hash and no second broadcast.
 func TestASettleReadsTheHashFromTheRowNotTheCopyItWasHanded(t *testing.T) {
 	log := &callLog{}
 	stored := store.DevshardRecord{EscrowID: "7", Model: "model-a", SettlementPending: true, SettleTxHash: "SETTLE-TX"}
@@ -666,7 +723,6 @@ func TestASettleReadsTheHashFromTheRowNotTheCopyItWasHanded(t *testing.T) {
 		tx: txClient, store: testStore, signer: &fakeSignerSource{signer: testSigner(t)},
 		settlementSource: &fakeSettlementSource{},
 	}
-	// What an earlier step in the same tick broadcast is in the row; the tick's own slice predates it.
 	stale := stored
 	stale.SettleTxHash = ""
 
@@ -683,6 +739,11 @@ func TestASettleReadsTheHashFromTheRowNotTheCopyItWasHanded(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Seed the store with a devshard record and record an in-flight settle tx hash still within its TTL.
+//  2. Configure the fake chain client's TxCommitted to report that hash as not yet found on chain.
+//  3. Call `settle` and assert it returns `ErrSettlementInFlight`.
+//  4. Assert the recorded hash stays the in-flight one, not rebroadcast.
 func TestASettleStillWithinItsTTLIsNotRebroadcast(t *testing.T) {
 	record := store.DevshardRecord{EscrowID: "7", Model: "model-a", SettlementPending: true}
 	testStore := newFakeStore()
@@ -709,6 +770,11 @@ func TestASettleStillWithinItsTTLIsNotRebroadcast(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Seed the store with a devshard record whose settlement is already confirmed on chain.
+//  2. Configure the fake chain client's TxCommitted to report it as already settled.
+//  3. Call `settle` and assert it returns nil.
+//  4. Assert the call log recorded a Retire call, since the caller deletes the row next and a row that is gone can no longer un-publish the escrow from routing.
 func TestAnAlreadySettledEscrowIsStillTakenOutOfRouting(t *testing.T) {
 	log := &callLog{}
 	record := store.DevshardRecord{EscrowID: "7", Model: "model-a", SettlementPending: true, SettleTxHash: "SETTLE-TX"}
@@ -727,7 +793,6 @@ func TestAnAlreadySettledEscrowIsStillTakenOutOfRouting(t *testing.T) {
 	}
 
 	if !slices.Contains(log.snapshot(), "Retire") {
-		// The caller deletes the row next; a row that is gone can no longer un-publish the escrow.
 		t.Error("the escrow was reconciled while still routable")
 	}
 }

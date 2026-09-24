@@ -30,6 +30,12 @@ func settleableSession(nonce uint64) *fakeSession {
 	return session
 }
 
+// Test flow:
+//  1. Build a registry with separate serving and read-only session factories, neither holding a resident session for escrow 5.
+//  2. Call `BuildSettlement` for escrow 5.
+//  3. Assert it returns a settlement input for escrow 5 nonce 9.
+//  4. Assert the read-only factory was called once and the serving factory was never called: building a payload needs neither chain nor hosts.
+//  5. Assert the rehydrated read-only session was closed once.
 func TestBuildSettlementRehydratesANonResidentEscrowReadOnly(t *testing.T) {
 	t.Parallel()
 	serving := newSessions(map[string]*fakeSession{"5": settleableSession(9)})
@@ -54,6 +60,11 @@ func TestBuildSettlementRehydratesANonResidentEscrowReadOnly(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a registry with a resident serving session for escrow 5 at nonce 4, added to the registry, plus a separate read-only factory.
+//  2. Call `BuildSettlement` for escrow 5.
+//  3. Assert it returns the resident session's nonce 4.
+//  4. Assert the read-only factory was never called and the resident session was never closed.
 func TestBuildSettlementUsesTheResidentSessionWithoutRehydrating(t *testing.T) {
 	t.Parallel()
 	resident := settleableSession(4)
@@ -77,6 +88,11 @@ func TestBuildSettlementUsesTheResidentSessionWithoutRehydrating(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a registry around a settleable read-only session with host stats and signatures on slots 0, 1 (nil), and 2.
+//  2. Call `BuildSettlement`.
+//  3. Assert the host stats and slot signatures come back ordered by slot with nil entries dropped.
+//  4. Assert fees, version, state root, and rest hash are all populated as expected.
 func TestBuildSettlementOrdersHostStatsAndSignaturesBySlot(t *testing.T) {
 	t.Parallel()
 	registry := New(Deps{
@@ -113,6 +129,10 @@ func TestBuildSettlementOrdersHostStatsAndSignaturesBySlot(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a registry around a read-only session keyed by a non-numeric escrow ID.
+//  2. Call `BuildSettlement` for that ID.
+//  3. Assert it returns an error: the chain message carries a numeric escrow id.
 func TestBuildSettlementRejectsANonNumericEscrowID(t *testing.T) {
 	t.Parallel()
 	registry := New(Deps{
@@ -127,7 +147,11 @@ func TestBuildSettlementRejectsANonNumericEscrowID(t *testing.T) {
 	}
 }
 
-// Finalizing collects signatures from the hosts, so a read-only rehydration cannot do it.
+// Test flow:
+//  1. Build a registry with separate serving and read-only factories, neither holding a resident session for escrow 5.
+//  2. Call `Finalize` for escrow 5.
+//  3. Assert the serving factory was called once and the read-only factory was never called: finalizing collects host signatures, which a read-only rehydration cannot do.
+//  4. Assert the rehydrated serving session's Finalize and Close were each called once.
 func TestFinalizeRehydratesANonResidentEscrowWithAServingSession(t *testing.T) {
 	t.Parallel()
 	serving := newSessions(map[string]*fakeSession{"5": settleableSession(9)})
@@ -153,6 +177,11 @@ func TestFinalizeRehydratesANonResidentEscrowWithAServingSession(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a registry with a resident serving session for escrow 5, added to the registry, plus a separate read-only factory.
+//  2. Call `Finalize` for escrow 5.
+//  3. Assert the serving factory was called only for the Add and the read-only factory was never called.
+//  4. Assert Finalize was called once on the resident session and it was never closed.
 func TestFinalizeUsesTheResidentSessionWithoutRehydrating(t *testing.T) {
 	t.Parallel()
 	resident := settleableSession(9)
@@ -179,6 +208,10 @@ func TestFinalizeUsesTheResidentSessionWithoutRehydrating(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a registry around a resident session already in the settlement phase, added to the registry.
+//  2. Call `Finalize`.
+//  3. Assert Finalize is still called once: only the session itself knows whether its quorum is held.
 func TestFinalizeLetsAnEscrowAlreadyInSettlementCollectMissingSignatures(t *testing.T) {
 	t.Parallel()
 	resident := settleableSession(9)
@@ -198,6 +231,11 @@ func TestFinalizeLetsAnEscrowAlreadyInSettlementCollectMissingSignatures(t *test
 	}
 }
 
+// Test flow:
+//  1. Build a registry with one escrow, acquire a request, then retire the escrow so it starts draining.
+//  2. Arm the session's onFinalize hook to release the request and wait for the registry to finish closing before recording the close-call count.
+//  3. Call `Finalize`.
+//  4. Assert the session had not yet been closed while Finalize was running, and was closed exactly once afterward: the drain closed the store under the settlement, not before or during it.
 func TestADrainedEscrowClosesOnlyAfterTheFinalizeRunningOnIt(t *testing.T) {
 	t.Parallel()
 	session := newFakeSession("hostA")
@@ -233,6 +271,10 @@ func TestADrainedEscrowClosesOnlyAfterTheFinalizeRunningOnIt(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a registry with one escrow and hold it for settlement.
+//  2. Assert the escrow does not report as busy under the hold.
+//  3. Assert its routable candidate reports zero active users: routing must not price a read as traffic.
 func TestASettlementHoldIsNotARequest(t *testing.T) {
 	t.Parallel()
 	session := newFakeSession("hostA")
@@ -256,6 +298,11 @@ func TestASettlementHoldIsNotARequest(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a registry with one escrow, hold it for settlement, then retire it.
+//  2. Assert the session was not closed while the hold was held.
+//  3. Release the hold and wait for the registry to finish closing.
+//  4. Assert the session was closed exactly once afterward.
 func TestRetiringAnEscrowUnderASettlementHoldClosesItOnlyAfterTheHold(t *testing.T) {
 	t.Parallel()
 	session := newFakeSession("hostA")
@@ -284,6 +331,12 @@ func TestRetiringAnEscrowUnderASettlementHoldClosesItOnlyAfterTheHold(t *testing
 	}
 }
 
+// Test flow:
+//  1. Build a registry with one escrow, acquire and then retire it, and arm the session's onFlush hook to block until signaled.
+//  2. Release the acquired request so the drain starts flushing, then attempt to hold the escrow for settlement while the flush is blocked.
+//  3. Let the flush finish and wait for the close to complete.
+//  4. Assert the hold was refused: a hold on a closing session must not outlive its store.
+//  5. Assert the session was closed exactly once.
 func TestASettlementHoldIsRefusedOnceTheCloseHasStarted(t *testing.T) {
 	t.Parallel()
 	session := newFakeSession("hostA")
@@ -321,6 +374,10 @@ func TestASettlementHoldIsRefusedOnceTheCloseHasStarted(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a registry around a resident session whose Finalize call always fails, added to the registry.
+//  2. Call `Finalize`.
+//  3. Assert the returned error wraps the resident session's failure.
 func TestFinalizeReportsTheSessionFailure(t *testing.T) {
 	t.Parallel()
 	resident := settleableSession(9)
@@ -338,6 +395,10 @@ func TestFinalizeReportsTheSessionFailure(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a registry with neither a serving nor a read-only session factory configured.
+//  2. Call `Finalize` and assert it returns an error.
+//  3. Call `BuildSettlement` and assert it also returns an error.
 func TestSettlementPathsReportAMissingFactory(t *testing.T) {
 	t.Parallel()
 	registry := New(Deps{Now: fixedClock()})

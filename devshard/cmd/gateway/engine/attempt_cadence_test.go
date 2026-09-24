@@ -27,7 +27,10 @@ type timedChunk = struct {
 	payload string
 }
 
-// A steady host and one that emits a chunk then stops carry the same chunk count.
+// Test flow:
+//  1. Replay a steady stream of three chunks 40ms apart, and a stalled stream with the same three chunks but a 55-second gap in the middle, both through `stream`.
+//  2. Assert the steady attempt's `maxChunkGap` is 40ms and the stalled attempt's is 55s.
+//  3. Assert both attempts recorded the same chunk count, so the gap comparison is meaningful.
 func TestAttemptCadence_PartsAStalledHostFromASlowOne(t *testing.T) {
 	t.Parallel()
 	start := time.Unix(1786114580, 0)
@@ -52,7 +55,9 @@ func TestAttemptCadence_PartsAStalledHostFromASlowOne(t *testing.T) {
 	}
 }
 
-// The silence before [DONE] ends the stream; counting it reports a stall on every healthy host.
+// Test flow:
+//  1. Replay a content chunk followed by a `[DONE]` chunk 90 seconds later through `stream`.
+//  2. Assert `maxChunkGap` stays 0 — the silence before `[DONE]` is not counted as a stall.
 func TestAttemptCadence_IgnoresTheSilenceBeforeDone(t *testing.T) {
 	t.Parallel()
 	start := time.Unix(1786114580, 0)
@@ -66,6 +71,10 @@ func TestAttemptCadence_IgnoresTheSilenceBeforeDone(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Replay four chunks through `stream`, with a 30-second gap between the second and third.
+//  2. Assert `maxGapChunk` names chunk 3 as the one the largest gap preceded.
+//  3. Assert `outputBytes` totals the bytes of all four chunks.
 func TestAttemptCadence_NamesTheChunkTheSilenceFollowed(t *testing.T) {
 	t.Parallel()
 	start := time.Unix(1786114580, 0)
@@ -84,6 +93,10 @@ func TestAttemptCadence_NamesTheChunkTheSilenceFollowed(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Replay four evenly-spaced chunks (100ms/200ms/300ms gaps) through `stream` and compute `meanChunkGap`.
+//  2. Assert the mean gap is 200ms.
+//  3. Replay a single chunk and assert both its mean gap and max gap are 0.
 func TestAttemptCadence_AveragesTheGapsAndReportsNothingBeforeASecondChunk(t *testing.T) {
 	t.Parallel()
 	start := time.Unix(1786114580, 0)
@@ -104,8 +117,10 @@ func TestAttemptCadence_AveragesTheGapsAndReportsNothingBeforeASecondChunk(t *te
 	}
 }
 
-// A coordinator that cannot keep up loses progress silently; the count is what turns that from an
-// assumption into a fact.
+// Test flow:
+//  1. Build an `AttemptSpec` with an events channel buffered for one event.
+//  2. Offer a chunk event (accepted), then offer another with no room left (reports the drop).
+//  3. Drain the channel and offer again, asserting the freed room is usable.
 func TestAttemptOffer_ReportsTheProgressItCouldNotHandOver(t *testing.T) {
 	t.Parallel()
 	events := make(chan AttemptEvent, 1)

@@ -49,6 +49,12 @@ func capturedFiles(t *testing.T, storageDir, kind string) []string {
 	return names
 }
 
+// Test flow:
+//  1. Enable capture on a harness and send a chat completion the filters reject.
+//  2. Assert the response is 400.
+//  3. Read the single captured file back from disk and decode it as a `capturedRequest`.
+//  4. Assert its kind is `captureFilterRejected` and it carries the model, path and error.
+//  5. Assert its stored body matches the original rejected request.
 func TestAFilterRejectedRequestIsCaptured(t *testing.T) {
 	live := newHarness(t, capturing())
 	rejected := `{"model":"qwen","messages":[{"role":"wizard","content":"hi"}]}`
@@ -85,6 +91,9 @@ func TestAFilterRejectedRequestIsCaptured(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Enable capture on a harness and send a chat completion that gets served.
+//  2. Assert no filter-rejected capture file was written.
 func TestAServedRequestIsNotCaptured(t *testing.T) {
 	live := newHarness(t, capturing())
 
@@ -95,6 +104,10 @@ func TestAServedRequestIsNotCaptured(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Enable capture on a harness whose inference fails every attempt with `engine.ErrStopped`.
+//  2. Send a chat completion.
+//  3. Assert exactly one attempts-failed capture file was written.
 func TestARaceThatFailsEveryAttemptIsCaptured(t *testing.T) {
 	live := newHarness(t, capturing())
 	live.inference.reply = ""
@@ -107,6 +120,10 @@ func TestARaceThatFailsEveryAttemptIsCaptured(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Start a harness with capture left at its default (disabled).
+//  2. Send a chat completion the filters reject.
+//  3. Assert the capture directory was never created on disk.
 func TestCaptureIsOffUnlessEnabled(t *testing.T) {
 	live := newHarness(t)
 	rejected := `{"model":"qwen","messages":[{"role":"wizard","content":"hi"}]}`
@@ -118,6 +135,11 @@ func TestCaptureIsOffUnlessEnabled(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Enable capture with a 900-byte cap on a harness.
+//  2. Send the same rejected chat completion 20 times.
+//  3. Assert some files were captured but fewer than all 20, so the cap tripped partway.
+//  4. Assert the total bytes held on disk stay at or under the 900-byte cap.
 func TestTheCaptureCapStopsWritingOnceTheBudgetIsSpent(t *testing.T) {
 	live := newHarness(t, capturing(func(capture *config.Capture) { capture.MaxBytes = 900 }))
 	rejected := `{"model":"qwen","messages":[{"role":"wizard","content":"hi"}]}`
@@ -146,6 +168,11 @@ func TestTheCaptureCapStopsWritingOnceTheBudgetIsSpent(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Seed a capture directory on disk with one 900-byte file already present.
+//  2. Create a `requestCapture` with a 900-byte cap over that same directory.
+//  3. Filter-reject one chat request through it.
+//  4. Assert the directory still holds only the seeded file, so the cap counts what is already on disk rather than a restart resetting it.
 func TestTheCapCountsWhatIsAlreadyOnDisk(t *testing.T) {
 	storageDir := t.TempDir()
 	captureDir := filepath.Join(storageDir, captureDirName, captureFilterRejected)
@@ -167,6 +194,10 @@ func TestTheCapCountsWhatIsAlreadyOnDisk(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Define a table of sample rates, varying across every request, one in four, one in two, and none.
+//  2. For each case, create a `requestCapture` at that rate and filter-reject the same request 20 times.
+//  3. Assert the number of captured files matches the expected count for that rate.
 func TestSamplingHonoursItsRate(t *testing.T) {
 	testCases := []struct {
 		name  string
@@ -198,8 +229,11 @@ func TestSamplingHonoursItsRate(t *testing.T) {
 	}
 }
 
-// Nothing evicts capture files, so once the directory reaches its cap the sink is off until an
-// operator empties it. The refusal count is the only signal that has happened.
+// Test flow:
+//  1. Create a `requestCapture` with a 512-byte cap.
+//  2. Write 20 records of 64-byte request IDs directly through it.
+//  3. Read back its stats.
+//  4. Assert no writes failed, some were refused once the cap was reached, some succeeded, and the bytes held stay within the 512-byte cap.
 func TestCaptureCountsWhatItRefusesAtTheCap(t *testing.T) {
 	capture, err := newRequestCapture(config.Capture{Enabled: true, SampleRate: 1, MaxBytes: 512}, t.TempDir(), time.Now)
 	if err != nil {
@@ -227,9 +261,12 @@ func TestCaptureCountsWhatItRefusesAtTheCap(t *testing.T) {
 	}
 }
 
-// An unwritable capture directory is the other way the sink goes dark, and it needs its own count:
-// refusal is the byte cap doing its job, but a failed write means nobody is capturing anything and
-// no operator has been told.
+// Test flow:
+//  1. Create a `requestCapture` over a fresh directory.
+//  2. Block its filter-rejected subdirectory path with a plain file instead of a directory.
+//  3. Filter-reject one chat request through it.
+//  4. Read back its stats.
+//  5. Assert the write is counted as failed, not as written or refused, so an unwritable directory is distinguished from a capped one.
 func TestCaptureCountsWritesItCouldNotMake(t *testing.T) {
 	storageDir := t.TempDir()
 	capture, err := newRequestCapture(config.Capture{Enabled: true, SampleRate: 1, MaxBytes: 1 << 20}, storageDir, time.Now)

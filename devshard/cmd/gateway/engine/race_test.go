@@ -20,8 +20,7 @@ import (
 	"devshard/cmd/gateway/scheduler"
 )
 
-// stubPicker's hold parks every pick its queue cannot answer, which is the scheduler's own queue holding a
-// waiter nothing will wake; parked reports each pick that got that far.
+// stubPicker answers picks from a queue, parking any it cannot answer until released.
 type stubPicker struct {
 	mu       sync.Mutex
 	queue    []scheduler.Assignment
@@ -59,8 +58,7 @@ func (p *stubPicker) Pick(ctx context.Context, profile scheduler.RequestProfile)
 	}
 }
 
-// next answers a released pick with whatever was queued while it was parked, which is how a test puts a
-// replacement host in flight at a chosen moment rather than at whatever moment the race asked for one.
+// next answers a released pick with whatever was queued while it was parked.
 func (p *stubPicker) next() (scheduler.Assignment, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -99,10 +97,7 @@ func (p *stubPicker) blockHost(escrowID, participant string) {
 	p.blocked = append(p.blocked, [2]string{escrowID, participant})
 }
 
-// hostScript is one nonce's scripted host. arrive/release let several attempts be held at the same point so
-// their first content chunks contend for the crown; streaming/resume hold one mid-stream, after its first
-// chunk and before the rest. flush makes the script assert the transport's own contract on the writer it
-// was handed and flush per chunk, which is how a client learns a token arrived before the response is over.
+// hostScript is one nonce's scripted host: arrive/release hold an attempt before it sends, streaming/resume hold it mid-stream, and flush flushes each chunk as it is written.
 type hostScript struct {
 	arrive    chan<- uint64
 	release   <-chan struct{}
@@ -198,8 +193,7 @@ func (t *scriptedTarget) NonceFinished(nonce uint64) bool {
 
 func (t *scriptedTarget) Target(string) (DispatchTarget, bool) { return t, true }
 
-// simTargets is the boundary main wires: a resolved target arrives holding its escrow, and the engine
-// gives that hold back only once the race's vote is posted.
+// simTargets is the boundary main wires, holding a resolved target's escrow until the race's vote is posted.
 type simTargets struct {
 	*scriptedTarget
 	panicking atomic.Bool
@@ -223,8 +217,7 @@ type unusableTarget struct{ DispatchTarget }
 
 func (unusableTarget) HostCount() int { panic("dispatch target is unusable") }
 
-// markerClassifier reads its verdict out of the chunk itself so a script's bytes and their
-// classification cannot drift apart.
+// markerClassifier reads its verdict out of the chunk's own marker text.
 type markerClassifier struct{}
 
 func (markerClassifier) Classify(chunk []byte) chunkFacts {
@@ -254,8 +247,7 @@ func (markerClassifier) Classify(chunk []byte) chunkFacts {
 func (markerClassifier) Flush() chunkFacts { return chunkFacts{} }
 func (markerClassifier) Release()          {}
 
-// claimWatch reports the content chunk an attempt is about to hand to its sink, which is the last point a
-// test can observe before that write claims the crown.
+// claimWatch reports each content chunk just before it is handed to its sink.
 type claimWatch struct {
 	streamClassifier
 	claiming chan<- struct{}
@@ -377,8 +369,7 @@ func (g *stubCrown) Observe(participant, _ string, contentless bool) {
 	g.observed[participant] = contentless
 }
 
-// slotLedger stands in for the host windows the scheduler drew each attempt's slot from. Releases are
-// reported on a channel so a test waits for the attempt goroutines instead of polling behind them.
+// slotLedger stands in for the host windows the scheduler drew each attempt's slot from.
 type slotLedger struct {
 	releases chan string
 	verdicts chan windowMove
@@ -498,8 +489,7 @@ func (f *raceFixture) run(ctx context.Context) (RaceOutcome, error) {
 	return runRace(ctx, f.deps, f.request)
 }
 
-// racePolicy escalates the moment an attempt is dispatched without a receipt, which is the only way a
-// second crownable attempt joins a race that has no suspicious host.
+// racePolicy escalates the moment an attempt is dispatched without a receipt.
 func racePolicy(maxAttempts int) EscalationPolicy {
 	return EscalationPolicy{
 		ReceiptTimeout:        0,
@@ -520,8 +510,7 @@ func settledPolicy() EscalationPolicy {
 	}
 }
 
-// waitForValue bounds a wait on the race, so a regression that blocks it fails the test rather than
-// hanging the package.
+// waitForValue bounds a wait on the race so a regression that blocks it fails the test.
 func waitForValue[T any](t *testing.T, values <-chan T, what string) T {
 	t.Helper()
 	select {
@@ -538,6 +527,12 @@ func contentChunk(nonce uint64) string {
 	return fmt.Sprintf("data: {\"content\":\"%d\"}\n\n", nonce)
 }
 
+// Test flow:
+//  1. Start a race with two hosts each scripted to receipt and then race to produce content once released.
+//  2. Let both attempts arrive, then release them together so their first content chunks contend for the crown.
+//  3. Assert exactly one attempt is reported as `TerminalWon` and the race succeeded.
+//  4. Assert the client stream carries the winner's content chunk.
+//  5. Assert only one outcome is reported.
 func TestRunRaceCrownsExactlyOneWinnerUnderConcurrentContent(t *testing.T) {
 	fixture := newRaceFixture(racePolicy(2), 4)
 	arrive := make(chan uint64, 2)
@@ -596,6 +591,11 @@ func TestRunRaceCrownsExactlyOneWinnerUnderConcurrentContent(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Start a race with two hosts each scripted to race to content once released.
+//  2. Let both attempts arrive, then release them together.
+//  3. Determine the losing nonce from the reported winner.
+//  4. Assert the client stream does not contain the losing attempt's content chunk.
 func TestRunRaceWithholdsLosingAttemptBytes(t *testing.T) {
 	fixture := newRaceFixture(racePolicy(2), 4)
 	arrive := make(chan uint64, 2)
@@ -631,6 +631,12 @@ func TestRunRaceWithholdsLosingAttemptBytes(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Start a race with a single host whose attempt fails immediately with a dial error.
+//  2. Run the race to completion.
+//  3. Assert `runRace` returns no error but the outcome and the report both mark the race unsuccessful.
+//  4. Assert the one attempt is reported as `TerminalDialFailure` with no winner nonce.
+//  5. Assert the perf tracker records one `Acquire` and one `Release`.
 func TestRunRaceReportsOneOutcomeWhenEveryAttemptFails(t *testing.T) {
 	fixture := newRaceFixture(settledPolicy(), 1)
 	fixture.host(30, 0, "host-0", &hostScript{receipt: true, err: errors.New("dial failed")})
@@ -658,6 +664,12 @@ func TestRunRaceReportsOneOutcomeWhenEveryAttemptFails(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Start a race with two hosts: one scripted to send only the role chunk and hang until released, the other scripted to win with content once released.
+//  2. Let both attempts arrive, release the winner, and assert the race returns nonce 41 to the client.
+//  3. Release the still-pending loser and read the coordinator's final report.
+//  4. Assert the report carries both attempts and only one outcome was reported.
+//  5. Assert the perf tracker records two acquires and two releases.
 func TestRunRaceReportsOneOutcomeAfterHandingOffPendingLosers(t *testing.T) {
 	fixture := newRaceFixture(racePolicy(2), 4)
 	arrive := make(chan uint64, 2)
@@ -710,6 +722,12 @@ func TestRunRaceReportsOneOutcomeAfterHandingOffPendingLosers(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Start a race with two hosts both scripted to hold their attempt until the context ends, a fast drain timeout, and a clock that advances a second on every read.
+//  2. Let both attempts arrive, then cancel the client context.
+//  3. Assert `runRace` returns `context.Canceled`.
+//  4. Assert the report carries both attempts terminalled `TerminalClientCancelled` and only one outcome was reported.
+//  5. Assert the perf tracker records two acquires and two releases.
 func TestRunRaceReportsOneOutcomeWhenTerminatedWithEveryAttemptPending(t *testing.T) {
 	fixture := newRaceFixture(racePolicy(2), 4)
 	fixture.deps.DrainTimeout = time.Millisecond
@@ -751,10 +769,14 @@ func TestRunRaceReportsOneOutcomeWhenTerminatedWithEveryAttemptPending(t *testin
 	}
 }
 
+// Test flow:
+//  1. Start a race with a single host that receipts and then holds forever, using a clock that jumps 30 minutes on every read to reach the hard timeout without sleeping.
+//  2. Run the race to completion.
+//  3. Assert `runRace` returns no error and the report carries exactly one attempt.
+//  4. Assert that attempt's terminal is `TerminalHardTimeout`.
 func TestRunRaceReportsOneOutcomeOnHardTimeoutWithPendingAttempts(t *testing.T) {
 	fixture := newRaceFixture(settledPolicy(), 1)
 	fixture.host(60, 0, "host-0", &hostScript{receipt: true, hold: true})
-	// A clock that jumps past every backstop on each reading drives the hard timeout without a sleep.
 	fixture.clock.step = 30 * time.Minute
 
 	outcome, err := fixture.run(context.Background())
@@ -768,14 +790,16 @@ func TestRunRaceReportsOneOutcomeOnHardTimeoutWithPendingAttempts(t *testing.T) 
 	if len(reported.Attempts) != 1 || len(outcome.Attempts) != 1 {
 		t.Fatalf("attempts = %d, want 1", len(reported.Attempts))
 	}
-	// The host receipted and then held until the backstop, with a client still waiting and nobody
-	// crowned. Reported as cancelled it would be exempt from the sample ladder like a loser the race
-	// outran, and a host that hangs for the whole timeout would cost its own health nothing.
 	if reported.Attempts[0].Terminal != TerminalHardTimeout {
 		t.Fatalf("terminal = %v, want hard_timeout", reported.Attempts[0].Terminal)
 	}
 }
 
+// Test flow:
+//  1. Start a race with no host queued behind the picker.
+//  2. Run the race.
+//  3. Assert the error wraps `scheduler.ErrNoAvailableHost`.
+//  4. Assert exactly one outcome is reported with no attempts.
 func TestRunRaceReturnsPickErrorAndReportsNoAttempts(t *testing.T) {
 	fixture := newRaceFixture(settledPolicy(), 1)
 
@@ -792,7 +816,11 @@ func TestRunRaceReturnsPickErrorAndReportsNoAttempts(t *testing.T) {
 	}
 }
 
-// A client that leaves while its primary waits in the scheduler is owed no primary, so the pick is given up and nothing is committed for a vote to settle.
+// Test flow:
+//  1. Start a race whose picker parks the primary pick instead of answering it.
+//  2. Wait for the pick to reach the scheduler, then cancel the client context.
+//  3. Assert the race gives up the pick and returns `context.Canceled`.
+//  4. Assert the report has no attempts, no vote in its timeout plan, and a `Lifecycle` recording only that the client left.
 func TestRunRaceGivesUpThePrimaryPickWhenTheClientLeavesWhileItWaits(t *testing.T) {
 	fixture := newRaceFixture(settledPolicy(), 1)
 	hold := make(chan struct{})
@@ -837,7 +865,11 @@ func (expiredPicker) Pick(context.Context, scheduler.RequestProfile) (scheduler.
 	return scheduler.Assignment{}, context.DeadlineExceeded
 }
 
-// A pick that runs out its own deadline is the scheduler's failure, so a client still waiting is not recorded as gone.
+// Test flow:
+//  1. Start a race whose picker always answers the primary pick with its own deadline exceeded, not a client cancellation.
+//  2. Run the race.
+//  3. Assert the error wraps `context.DeadlineExceeded`.
+//  4. Assert the report has no attempts and does not mark the client as gone.
 func TestRunRaceDoesNotReadAPrimaryPickDeadlineAsADeparture(t *testing.T) {
 	fixture := newRaceFixture(settledPolicy(), 1)
 	fixture.deps.Picker = expiredPicker{stubPicker: fixture.picker}
@@ -856,8 +888,13 @@ func TestRunRaceDoesNotReadAPrimaryPickDeadlineAsADeparture(t *testing.T) {
 	}
 }
 
-// The escrow can rotate out between the pick that committed a nonce on it and the registry lookup that
-// finds its session, which is why the handle is fetched per race. That assignment is already paid for.
+// Test flow:
+//  1. Start a race with one host queued but a target registry that no longer resolves the escrow.
+//  2. Run the race.
+//  3. Assert the error wraps `errNoDispatchTarget` and the scheduler slot taken for host-0 is released.
+//  4. Assert the report's timeout plan posts one vote for the undispatched nonce 300.
+//  5. Settle that vote through `settleEvents` and assert it posts carrying the race's own start time, not a zero time that would land the vote too early to collect.
+//  6. Assert the attempt's sample exemption is `ExemptNeverDispatched`.
 func TestRunRaceGivesBackTheSlotAndVotesForANonceItCannotDispatch(t *testing.T) {
 	fixture := newRaceFixture(settledPolicy(), 1)
 	fixture.host(300, 0, "host-0", &hostScript{receipt: true})
@@ -876,8 +913,6 @@ func TestRunRaceGivesBackTheSlotAndVotesForANonceItCannotDispatch(t *testing.T) 
 	if len(plan) != 1 || !plan[0].Post || plan[0].Nonce != 300 {
 		t.Fatalf("timeout plan = %+v, want one posted vote for nonce 300", plan)
 	}
-	// A verifier recomputes the refusal deadline from the committed record, so a zero here posts the
-	// vote in year 1: too early to be collectable, and the nonce is stranded for good.
 	poster := &stubPoster{vote: "refused"}
 	settleEvents(reported, poster)
 	if len(poster.posts) != 1 || !poster.posts[0].sentAt.Equal(testEpoch) {
@@ -893,8 +928,11 @@ type missingTarget struct{}
 
 func (missingTarget) Target(string) (DispatchTarget, bool) { return nil, false }
 
-// Every attempt the race starts arrives holding a slot the scheduler took for it, so the race owes one
-// release per attempt however each ended.
+// Test flow:
+//  1. Start a race with two hosts: one that receipts and returns immediately, one that receipts, streams content, and finishes.
+//  2. Run the race to completion.
+//  3. Assert the report carries both attempts.
+//  4. Assert exactly one host-slot release is reported per attempt, with none left over.
 func TestRunRaceReleasesOneHostSlotPerAttempt(t *testing.T) {
 	fixture := newRaceFixture(racePolicy(2), 2)
 	fixture.host(70, 0, "host-0", &hostScript{receipt: true})
@@ -921,6 +959,12 @@ func TestRunRaceReleasesOneHostSlotPerAttempt(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Start a race with a single host whose attempt fails with `ErrStateRootDivergence`.
+//  2. Run the race to completion.
+//  3. Assert the reported attempt is flagged `StateDivergent`.
+//  4. Assert the picker recorded the host as diverged once but did not block it on this first divergence.
+//  5. Assert the target rewound the divergent host's catch-up.
 func TestRunRaceRewindsADivergentHostBeforeBlockingIt(t *testing.T) {
 	fixture := newRaceFixture(settledPolicy(), 1)
 	fixture.host(80, 0, "host-0", &hostScript{receipt: true, err: ErrStateRootDivergence})
@@ -949,8 +993,11 @@ func TestRunRaceRewindsADivergentHostBeforeBlockingIt(t *testing.T) {
 	}
 }
 
-// Both attempts report arrival before either can produce content, so the rival is provably live for the
-// whole window in which the denied host claims the crown, whichever order the two goroutines run in.
+// Test flow:
+//  1. Start a race with a denied host and a rival, both scripted to report arrival before producing any content.
+//  2. Let both attempts arrive, then release the rival to produce its content.
+//  3. Assert the rival wins the race and it succeeded.
+//  4. Assert the client stream carries none of the denied host's bytes.
 func TestRunRaceSuppressesCrownForDeniedHostWhileARivalIsLive(t *testing.T) {
 	fixture := newRaceFixture(racePolicy(2), 2)
 	fixture.crown.denied["host-0"] = true
@@ -995,9 +1042,12 @@ func TestRunRaceSuppressesCrownForDeniedHostWhileARivalIsLive(t *testing.T) {
 	}
 }
 
-// The replacement a denied primary earns is a rival from the moment the race commits to fetching it, not
-// from the moment it launches: crowning inside that window strands the replacement's nonce unspent and
-// credits the denied host for the answer.
+// Test flow:
+//  1. Start a race with a denied host and a picker that parks its escalation pick, using a classifier that reports the moment content is about to claim the crown.
+//  2. Let the denied host's content reach the point of claiming the crown while its replacement pick is still parked.
+//  3. Queue the replacement host and release the parked pick.
+//  4. Assert the replacement wins the race and it succeeded.
+//  5. Assert the client stream carries none of the denied host's bytes.
 func TestRunRaceSuppressesCrownForDeniedHostWhileItsReplacementIsBeingPicked(t *testing.T) {
 	fixture := newRaceFixture(racePolicy(2), 2)
 	fixture.crown.denied["host-0"] = true
@@ -1043,8 +1093,11 @@ func TestRunRaceSuppressesCrownForDeniedHostWhileItsReplacementIsBeingPicked(t *
 	}
 }
 
-// Holding the claim must not become a way to lose a paid-for answer: once the replacement pick comes back
-// empty, the denied host is the last one standing and its content is the client's response.
+// Test flow:
+//  1. Start a race with a denied host and a picker that parks its escalation pick with no replacement queued behind it.
+//  2. Let the attempt arrive, then release the parked pick so it comes back with no available host.
+//  3. Assert the denied host still wins the race and it succeeded.
+//  4. Assert the client stream is exactly the denied host's content and the report carries only that one attempt.
 func TestRunRaceCrownsADeniedHostWhenItsReplacementPickFindsNoHost(t *testing.T) {
 	fixture := newRaceFixture(racePolicy(2), 2)
 	fixture.crown.denied["host-0"] = true
@@ -1085,8 +1138,12 @@ func TestRunRaceCrownsADeniedHostWhenItsReplacementPickFindsNoHost(t *testing.T)
 	}
 }
 
-// A denied host that is the last one standing has already been paid for: refusing its answer hands the
-// client an error for a response the race committed a nonce to produce.
+// Test flow:
+//  1. Start a race with a single denied host that answers with content.
+//  2. Run the race to completion.
+//  3. Assert the outcome's winner is that host and the race succeeded.
+//  4. Assert the client stream is exactly the host's content.
+//  5. Assert the report does not deny the host's crown for producing content.
 func TestRunRaceCrownsADeniedHostThatIsTheLastOneStanding(t *testing.T) {
 	fixture := newRaceFixture(settledPolicy(), 1)
 	fixture.crown.denied["host-0"] = true
@@ -1113,6 +1170,10 @@ func TestRunRaceCrownsADeniedHostThatIsTheLastOneStanding(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build attempt/phase combinations covering stream truncation, phase timing, nonce completion, host errors, and a missing receipt: "aborted mid stream", "started during generation", "generation over", "nonce finished", "host answered with an error", "never receipted".
+//  2. Call `phaseAborted` with each case's `attempt`, `startedInInference`, and `generating` flags.
+//  3. Assert each result matches the case's `want`.
 func TestPhaseAborted(t *testing.T) {
 	cases := []struct {
 		name               string
@@ -1138,6 +1199,11 @@ func TestPhaseAborted(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a PoC-validate snapshot and a PoC-generate snapshot, plus relaxed and strict PoC modes.
+//  2. Assert the validate snapshot reads as a bypass but not as generation under relaxed mode.
+//  3. Assert the generate snapshot reads as generation under relaxed mode.
+//  4. Assert neither bypass nor generation is active for the generate snapshot under strict mode.
 func TestPoCFactsAreDistinct(t *testing.T) {
 	generating := chain.PhaseSnapshot{
 		RequestsBlocked: true,
@@ -1186,6 +1252,11 @@ func judgedPendingAttempt(sendTime time.Time) EscalationAttempt {
 	return attempt
 }
 
+// Test flow:
+//  1. Build a `deadlinePlan` from each case's policy timings (`receipt`, `stall`), `attempts`, `budget`, host-group `limit`, `drain` deadline, `pick` time, `cancelled` flag, and `retryRuledOut` flag.
+//  2. Call `nextDeadline` with the plan.
+//  3. Assert the returned trigger and deadline match the case's `wantTrigger` and `wantAt`, covering precedence and ties among escalation, stall, and hard-timeout triggers; budget exhaustion; a running pick; a crowned winner; a failure freeing the budget; host-group limits; a ruled-out retry; an already-stalled attempt; a missing stall knob; loser grace; the drain deadline; cancellation; and no attempts armed yet.
+//  4. Assert an escalation stage is carried only on a `triggerEscalation` arm, and is `StageReceiptTimeout` there.
 func TestNextDeadlinePrecedence(t *testing.T) {
 	base := testEpoch
 	const hard = streamingHardTimeout
@@ -1429,8 +1500,12 @@ func stalledFixtureCoordinator(policy EscalationPolicy, attempts ...*liveAttempt
 	return pausedCoordinator(newRaceFixture(policy, 1), 1, attempts...)
 }
 
-// A pick's answer and a rejection can be ready at once; the answer is judged after the rejection, so its
-// committed nonce is stranded, not dispatched.
+// Test flow:
+//  1. Start a paused coordinator with one refused attempt.
+//  2. Queue an `AttemptDone` event for that attempt reporting a trusted context-length rejection.
+//  3. Apply a pick's answer for a second nonce after the rejection event is already queued.
+//  4. Assert the coordinator now tracks two attempts: the rejected one and the picked one.
+//  5. Assert the picked attempt is marked done with `TerminalNoReceipt`, since the rejection had already ended the search before its nonce could be dispatched.
 func TestAPickAnswerIsJudgedAgainstTheEventsAlreadyDelivered(t *testing.T) {
 	fixture := newRaceFixture(refusalPolicy(), 2)
 	refused := &liveAttempt{nonce: 100, participant: "host-0", sendTime: testEpoch, receiptTime: testEpoch, cancel: func() {}}
@@ -1459,7 +1534,11 @@ func TestAPickAnswerIsJudgedAgainstTheEventsAlreadyDelivered(t *testing.T) {
 	}
 }
 
-// The rejection ends the search for another host, not the race: a sibling still running keeps its context.
+// Test flow:
+//  1. Start a paused coordinator with a refused attempt and a sibling attempt still running.
+//  2. Apply an `AttemptDone` event on the first attempt reporting a trusted context-length rejection.
+//  3. Assert the next deadline no longer arms an escalation.
+//  4. Assert the sibling's context was not cancelled.
 func TestATrustedContextLengthRejectionDisarmsEscalationWithoutCancellingASibling(t *testing.T) {
 	fixture := newRaceFixture(refusalPolicy(), 3)
 	siblingCancelled := false
@@ -1490,8 +1569,11 @@ func TestATrustedContextLengthRejectionDisarmsEscalationWithoutCancellingASiblin
 	}
 }
 
-// A timer fire and a queued event are equally ready in the select, so every deadline must be judged
-// against the events already delivered. Each case below queues the event that clears its deadline.
+// Test flow:
+//  1. For "a delivered first token withdraws the escalation it would have confirmed", "a delivered context-length rejection withdraws the escalation it would have confirmed", and "a delivered chunk withdraws the stall it would have flagged": compute the next deadline, queue the event that already resolves it, then call `expire` on that deadline.
+//  2. Assert each queued event pre-empts its deadline: no successor pick is started and the attempt is not flagged stalled.
+//  3. For "a delivered completion releases the client instead of cancelling it": queue the winner's completion event, then call `depart`.
+//  4. Assert `depart` reports the client as released rather than gone, since the winner had already completed.
 func TestADeadlineIsJudgedAgainstTheEventsAlreadyDelivered(t *testing.T) {
 	t.Run("a delivered first token withdraws the escalation it would have confirmed", func(t *testing.T) {
 		policy := settledPolicy()
@@ -1616,9 +1698,13 @@ func TestADeadlineIsJudgedAgainstTheEventsAlreadyDelivered(t *testing.T) {
 	})
 }
 
-// An escalation's pick waits on the scheduler's queue, which can leave it unanswered for as long as that
-// queue has nothing to wake it. A coordinator that waited for it inline would answer no crown claim and
-// service no deadline, so the winner it is racing to would reach neither its client nor an outcome.
+// Test flow:
+//  1. Start a race with one host and a picker that parks the escalation pick the policy triggers immediately.
+//  2. Let the host attempt arrive and its escalation pick reach the scheduler while parked.
+//  3. Release the host to stream its first content chunk and assert the crowned content already reaches the client stream.
+//  4. Let the host resume to finish, then advance the clock past the scheduler's pick timeout to expire the parked pick.
+//  5. Assert the race ends with the host as winner and succeeded.
+//  6. Assert the report carries only the one attempt the race actually started.
 func TestAParkedEscalationPickBlocksNeitherTheWinnerNorTheRace(t *testing.T) {
 	fixture := newRaceFixture(racePolicy(2), 2)
 	held, parked := make(chan struct{}), make(chan struct{}, 1)
@@ -1668,7 +1754,11 @@ func TestAParkedEscalationPickBlocksNeitherTheWinnerNorTheRace(t *testing.T) {
 	}
 }
 
-// The departure and a due escalation are separate select arms, so the pick reads the departure itself rather than trusting the select to take it first.
+// Test flow:
+//  1. Start a paused coordinator for an already-departed client with one failed attempt due for an escalation.
+//  2. Compute the next deadline and assert it arms the failed attempt's escalation.
+//  3. Call `expire` on that deadline.
+//  4. Assert no pick was started and the picker received no profile, since the client had already left.
 func TestAnEscalationDueAsTheClientLeavesStartsNoPick(t *testing.T) {
 	fixture := newRaceFixture(refusalPolicy(), 2)
 	failed := &liveAttempt{nonce: 440, participant: "host-0", sendTime: testEpoch, receiptTime: testEpoch, done: true, cancel: func() {}}
@@ -1691,6 +1781,11 @@ func TestAnEscalationDueAsTheClientLeavesStartsNoPick(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Start a paused coordinator with one already-failed, escalated attempt and one attempt still awaiting its receipt.
+//  2. Compute the next deadline and assert it arms the waiting attempt's receipt timeout, now that the failure freed a budget slot.
+//  3. Call `expire` on that deadline.
+//  4. Assert a pick was started for a replacement.
 func TestAFailedAttemptFreesItsPlaceForAnotherPick(t *testing.T) {
 	policy := refusalPolicy()
 	policy.ReceiptTimeout = time.Second
@@ -1712,7 +1807,13 @@ func TestAFailedAttemptFreesItsPlaceForAnotherPick(t *testing.T) {
 	}
 }
 
-// The budget is spent, so nothing escalates; the host is still narrowed at the deadline, and its attempt keeps the nonce it owes.
+// Test flow:
+//  1. Start a paused coordinator with one silent attempt and a budget already spent.
+//  2. Compute the next deadline and assert it is a missed first-token deadline, not an escalation.
+//  3. Call `expire` on that deadline.
+//  4. Assert the limiter records the host's window as having missed the first-token deadline and the attempt was not cancelled.
+//  5. Assert the outcome flags the attempt's `FirstTokenDeadlineMissed`.
+//  6. Assert computing the next deadline again does not re-arm the same missed deadline.
 func TestAMissedFirstTokenDeadlineNarrowsTheHostWithoutStoppingItsAttempt(t *testing.T) {
 	policy := settledPolicy()
 	policy.FirstTokenFloor = time.Second
@@ -1747,7 +1848,12 @@ func TestAMissedFirstTokenDeadlineNarrowsTheHostWithoutStoppingItsAttempt(t *tes
 	}
 }
 
-// A proof-of-compute phase slows every host at once, so a deadline missed inside it narrows nobody.
+// Test flow:
+//  1. Start a paused coordinator inside a relaxed-mode proof-of-compute generation phase, with one attempt overdue for its receipt.
+//  2. Compute the next deadline and assert it is a missed receipt deadline.
+//  3. Call `expire` on that deadline.
+//  4. Assert the limiter recorded no window move and the outcome does not flag the deadline as missed, since the PoC phase excuses it.
+//  5. Assert computing the next deadline again does not re-arm the excused deadline.
 func TestADeadlineMissedDuringProofOfComputeIsExcused(t *testing.T) {
 	policy := settledPolicy()
 	policy.ReceiptTimeout = time.Second
@@ -1774,7 +1880,13 @@ func TestADeadlineMissedDuringProofOfComputeIsExcused(t *testing.T) {
 	}
 }
 
-// Narrowing happens when the deadline passes, not when the attempt ends; the late attempt then finishes as usual.
+// Test flow:
+//  1. Start a race with a single host held after arrival, using a one-second receipt timeout.
+//  2. Let the attempt arrive, wait for the receipt deadline to arm, then advance the clock past it.
+//  3. Assert the limiter records the host's window as having missed the receipt deadline.
+//  4. Release the host to finish with content.
+//  5. Assert the finished race reports the attempt as `TerminalWon` with the receipt deadline flagged missed.
+//  6. Assert the deadline was judged only once, with no further window moves.
 func TestRunRaceNarrowsALateHostAtTheDeadlineAndLetsItFinish(t *testing.T) {
 	policy := settledPolicy()
 	policy.ReceiptTimeout = time.Second
@@ -1815,7 +1927,10 @@ func TestRunRaceNarrowsALateHostAtTheDeadlineAndLetsItFinish(t *testing.T) {
 	}
 }
 
-// An immediate attempt still owed when a pick answers is no different: a client that has left is owed no further nonce.
+// Test flow:
+//  1. Start a paused coordinator for an already-departed client with one attempt live and another immediate slot still owed.
+//  2. Apply a pick answering that immediate slot's nonce, then wait for its attempt to finish.
+//  3. Assert no further pick was started and the picker received no profile, since the client had already left.
 func TestAnImmediateAttemptOwedAsTheClientLeavesStartsNoPick(t *testing.T) {
 	fixture := newRaceFixture(refusalPolicy(), 3)
 	fixture.target.scripts[451] = &hostScript{receipt: true, finished: true}
@@ -1841,8 +1956,11 @@ func TestAnImmediateAttemptOwedAsTheClientLeavesStartsNoPick(t *testing.T) {
 	}
 }
 
-// The budget clamp turns on the one fact that makes a nonce scarce, which is not the same fact as the
-// phase refusing new inferences: serving through that phase deliberately is what makes it spendable.
+// Test flow:
+//  1. Start a race during a chain phase that blocks new requests, with two hosts queued behind a two-attempt budget.
+//  2. Vary the gateway's PoC mode across the table's cases: strict mode, and relaxed mode serving through the block.
+//  3. Run the race to completion.
+//  4. Assert the number of attempts started matches each case's `want`: one attempt clamped in strict mode, both attempts allowed in relaxed mode.
 func TestBudgetClampsOnlyWhenTheGatewayIsNotServingThroughTheBlock(t *testing.T) {
 	blocked := chain.PhaseSnapshot{RequestsBlocked: true, EpochPhase: chain.EpochPhasePoCGenerate}
 	cases := []struct {
@@ -1873,6 +1991,10 @@ func TestBudgetClampsOnlyWhenTheGatewayIsNotServingThroughTheBlock(t *testing.T)
 	}
 }
 
+// Test flow:
+//  1. Start a coordinator with four attempts: one silent since its first content, one with a recent chunk, one that never produced content, and one already done.
+//  2. Set the clock two minutes past the attempts' timestamps and call `markStalls`.
+//  3. Assert only the silent, still-live, content-bearing attempt is flagged stalled.
 func TestMarkStallsFlagsOnlySilentContentAttempts(t *testing.T) {
 	base := testEpoch
 	policy := settledPolicy()
@@ -1897,6 +2019,11 @@ func TestMarkStallsFlagsOnlySilentContentAttempts(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Start a coordinator with three attempts: one stalled with content, one cancelled with no content, and one crowned as the winner.
+//  2. Assemble the outcome.
+//  3. Assert the stalled content-bearing attempt is rewritten to `TerminalStalled`, the empty cancelled attempt keeps `TerminalClientCancelled`, and the winner is rewritten to `TerminalWon`.
+//  4. Assert the outcome reports nonce 3 as the winner, succeeded, with `NonceFinished` set.
 func TestOutcomeRewritesTerminalsTheCoordinatorAloneKnows(t *testing.T) {
 	base := testEpoch
 	stalledOut := &liveAttempt{
@@ -1936,6 +2063,11 @@ func TestOutcomeRewritesTerminalsTheCoordinatorAloneKnows(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Acquire another in-flight request for the same participant on a limiter with a cut-off threshold of one.
+//  2. Start a coordinator with one attempt and complete it as unavailable while the other request is still open.
+//  3. Release the other request, then report the outcome's verdicts to the limiter.
+//  4. Assert the participant is not cut off, since the refusal landed while the host was still carrying other work of ours.
 func TestARefusalFromAHostStillCarryingOurWorkLeavesItsCutoffCountAlone(t *testing.T) {
 	limiter := limits.NewParticipantLimiter(limiterConfig(1), func() time.Time { return testEpoch })
 	otherRequest, admission := limiter.Acquire(testParticipant, testModel, limits.TokenCost{Input: 1, Output: 1})
@@ -1954,6 +2086,10 @@ func TestARefusalFromAHostStillCarryingOurWorkLeavesItsCutoffCountAlone(t *testi
 	}
 }
 
+// Test flow:
+//  1. Start a coordinator with one attempt on a limiter with a cut-off threshold of one and nothing else in flight.
+//  2. Complete the attempt as unavailable.
+//  3. Assert the participant is cut off immediately, since the refusal landed with the host carrying nothing else of ours.
 func TestARefusalFromAHostCarryingNothingElseCountsTheMomentItLands(t *testing.T) {
 	limiter := limits.NewParticipantLimiter(limiterConfig(1), func() time.Time { return testEpoch })
 	refused := refusedAttempt(100)
@@ -2002,8 +2138,12 @@ func refusalPolicy() EscalationPolicy {
 	return policy
 }
 
-// The race takes a trusted host's rejection as every host's, so a second attempt would only commit a nonce
-// and leave its host a timeout vote.
+// Test flow:
+//  1. Start a race with two hosts queued: one scripted to reject the request as past the model's context length, one scripted to answer with content.
+//  2. Run the race to completion.
+//  3. Assert the outcome carries only the rejected attempt, terminalled `TerminalCapabilityRefused`.
+//  4. Assert the perf tracker records the context limit for the rejecting host.
+//  5. Assert only one pick was made, since a trusted rejection stops the search for another host.
 func TestRunRaceStopsEscalatingOnceATrustedHostRejectsTheContextLength(t *testing.T) {
 	fixture := newRaceFixture(refusalPolicy(), 3)
 	fixture.host(100, 0, "host-0", &hostScript{receipt: true, chunks: []string{"data: too-long\n\n"}})
@@ -2038,7 +2178,10 @@ func TestRunRaceStopsEscalatingOnceATrustedHostRejectsTheContextLength(t *testin
 	}
 }
 
-// The rejection ends only the search for another host: an attempt already running is left to answer.
+// Test flow:
+//  1. Start a race with two hosts: one held until released with content queued, one scripted to reject as past the model's context length immediately.
+//  2. Wait for the rejection's context limit to reach the race, then release the held host.
+//  3. Assert the race ends with the held host as winner and succeeded, since the rejection only cut short the search for another host, not the attempt already running.
 func TestRunRaceLetsARunningAttemptFinishAfterATrustedContextLengthRejection(t *testing.T) {
 	fixture := newRaceFixture(racePolicy(2), 2)
 	release := make(chan struct{})
@@ -2073,7 +2216,11 @@ func TestRunRaceLetsARunningAttemptFinishAfterATrustedContextLengthRejection(t *
 	}
 }
 
-// A suspicious host's word is not taken on trust, so the rival its race is already fetching still runs.
+// Test flow:
+//  1. Start a race with a denied host and a picker that parks its rival pick, then queue the denied host to reject as past the model's context length.
+//  2. Wait for the rival's pick to reach the scheduler and the rejection to reach the race.
+//  3. Queue the rival host and release the parked pick.
+//  4. Assert the race ends with the rival as winner and succeeded, since a suspicious host's rejection does not stop its rival.
 func TestRunRaceKeepsTheRivalOfASuspiciousHostThatRejectsTheContextLength(t *testing.T) {
 	fixture := newRaceFixture(refusalPolicy(), 2)
 	fixture.crown.denied["host-0"] = true
@@ -2110,7 +2257,10 @@ func TestRunRaceKeepsTheRivalOfASuspiciousHostThatRejectsTheContextLength(t *tes
 	}
 }
 
-// The pick is given up rather than waited out, so the rejection commits no nonce nobody will answer.
+// Test flow:
+//  1. Start a race with one host held until released and a picker that parks the escalation pick the policy triggers immediately.
+//  2. Wait for the escalation pick to reach the scheduler, then release the host to send its context-length rejection.
+//  3. Assert the race ends without waiting for its parked pick, reporting only the refused attempt.
 func TestRunRaceGivesUpThePickInFlightWhenATrustedHostRejectsTheContextLength(t *testing.T) {
 	fixture := newRaceFixture(racePolicy(2), 2)
 	hold, release := make(chan struct{}), make(chan struct{})
@@ -2137,7 +2287,11 @@ func TestRunRaceGivesUpThePickInFlightWhenATrustedHostRejectsTheContextLength(t 
 	waitForValue(t, fixture.reported, "the race's report")
 }
 
-// Every host receives the same body, so a trusted host's rejection of the request is every host's, and a second attempt would only commit a nonce and leave its host a timeout vote.
+// Test flow:
+//  1. Start a race with two hosts queued: one scripted to reject the request body as malformed, one scripted to answer with content.
+//  2. Run the race to completion.
+//  3. Assert the outcome carries only the rejected attempt, terminalled `TerminalErrorStream`.
+//  4. Assert only one pick was made, since every host would reject the same request body.
 func TestRunRaceStopsEscalatingOnceATrustedHostRejectsTheRequest(t *testing.T) {
 	fixture := newRaceFixture(refusalPolicy(), 3)
 	fixture.host(100, 0, "host-0", &hostScript{receipt: true, chunks: []string{"data: malformed-request\n\n"}})
@@ -2178,7 +2332,11 @@ func (finishWatch) HostDeniedCrown(string, string, int) {}
 
 func (finishWatch) HostCrownedAgain(string, string) {}
 
-// A suspicious host's word is not taken on trust, so its rejection of the request still lets the rival's pick through.
+// Test flow:
+//  1. Start a race with a denied host and a picker that parks its rival pick, using a journal that reports each attempt's finish, then queue the denied host to reject the request as malformed.
+//  2. Wait for the rival's pick to reach the scheduler and the journal to report the denied host's attempt finished.
+//  3. Queue the rival host and release the parked pick.
+//  4. Assert the race ends with the rival as winner and succeeded.
 func TestRunRaceKeepsTheRivalOfASuspiciousHostThatRejectsTheRequest(t *testing.T) {
 	fixture := newRaceFixture(refusalPolicy(), 2)
 	fixture.crown.denied["host-0"] = true
@@ -2218,6 +2376,11 @@ func TestRunRaceKeepsTheRivalOfASuspiciousHostThatRejectsTheRequest(t *testing.T
 	}
 }
 
+// Test flow:
+//  1. Start a race with two hosts: one scripted to fail with a connection reset, one scripted to answer with content.
+//  2. Run the race to completion.
+//  3. Assert the outcome carries both the failed attempt and its escalation, with the escalation as winner and the race succeeded.
+//  4. Assert the escalation's start reason is the failed-attempt stage.
 func TestRunRaceEscalatesAfterItsLastAttemptFailed(t *testing.T) {
 	fixture := newRaceFixture(refusalPolicy(), 3)
 	fixture.host(110, 0, "host-0", &hostScript{receipt: true, err: errors.New("connection reset")})
@@ -2244,8 +2407,11 @@ func TestRunRaceEscalatesAfterItsLastAttemptFailed(t *testing.T) {
 	}
 }
 
-// Redundancy is the reason a second attempt exists, so the host already asked must be off the table
-// for the escalation -- including when it failed for a reason that says nothing about its capabilities.
+// Test flow:
+//  1. Start a race with two hosts: one scripted to fail with a connection reset, one scripted to answer with content.
+//  2. Run the race to completion.
+//  3. Assert two picks were made, the primary and its escalation.
+//  4. Assert the escalation's pick excludes the host already dispatched to, even though its failure said nothing about its capabilities.
 func TestRunRaceExcludesEveryHostItAlreadyDispatchedTo(t *testing.T) {
 	fixture := newRaceFixture(refusalPolicy(), 3)
 	fixture.host(120, 0, "host-0", &hostScript{receipt: true, err: errors.New("connection reset")})
@@ -2272,6 +2438,10 @@ func TestRunRaceExcludesEveryHostItAlreadyDispatchedTo(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Start a race whose request is pinned to a specific escrow.
+//  2. Run the race to completion.
+//  3. Assert the first pick asked the scheduler for that pinned escrow.
 func TestARacePinnedToAnEscrowAsksTheSchedulerForThatOne(t *testing.T) {
 	fixture := newRaceFixture(racePolicy(1), 2)
 	fixture.request.Escrow = "escrow-pinned"
@@ -2296,6 +2466,10 @@ func TestARacePinnedToAnEscrowAsksTheSchedulerForThatOne(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Start a coordinator with one cancelled attempt and no winner, then mark the race cancelled.
+//  2. Assemble the outcome.
+//  3. Assert the attempt's terminal is rewritten to `TerminalStalled`, since nobody won and this host answered nothing.
 func TestABackstopCancelWithNoWinnerIsNotACancelledLoser(t *testing.T) {
 	base := time.Now()
 	hung := &liveAttempt{
@@ -2313,8 +2487,10 @@ func TestABackstopCancelWithNoWinnerIsNotACancelledLoser(t *testing.T) {
 	}
 }
 
-// The same backstop fires as the losers' grace period once a winner is crowned. Those are cancelled
-// losers in the proper sense and must stay exempt, or every race penalises the hosts it outran.
+// Test flow:
+//  1. Start a coordinator with a losing attempt and a crowned winner, then mark the race cancelled.
+//  2. Assemble the outcome.
+//  3. Assert the loser's terminal stays `TerminalClientCancelled`, since it lost the race rather than failing one.
 func TestABackstopCancelAfterAWinnerLeavesLosersExempt(t *testing.T) {
 	base := time.Now()
 	loser := &liveAttempt{
@@ -2339,8 +2515,10 @@ func TestABackstopCancelAfterAWinnerLeavesLosersExempt(t *testing.T) {
 	}
 }
 
-// The drain deadline after a client leaves is the same backstop, so a departure must not be charged to
-// the hosts still finishing their nonces for it.
+// Test flow:
+//  1. Start a coordinator with one attempt handed off after the client left, then mark the race cancelled.
+//  2. Assemble the outcome.
+//  3. Assert the attempt's terminal stays `TerminalClientCancelled`, since the client left rather than the host failing.
 func TestABackstopCancelAfterTheClientLeftLeavesHostsExempt(t *testing.T) {
 	base := time.Now()
 	draining := &liveAttempt{
@@ -2359,9 +2537,11 @@ func TestABackstopCancelAfterTheClientLeftLeavesHostsExempt(t *testing.T) {
 	}
 }
 
-// TerminalStalled is assigned in one place, inside the outcome assembly, so a log line that reads the
-// attempt goroutine's own terminal can never show it: a host that hangs for the whole backstop reads as
-// an ordinary cancelled loser while the metric, the limiter and the sample ladder all call it stalled.
+// Test flow:
+//  1. Call `racedTerminal` on a stalled attempt with content chunks and a cancelled outcome.
+//  2. Assert it is rewritten to `TerminalStalled`.
+//  3. Call `racedTerminal` on a non-stalled attempt with a cancelled outcome carrying no content.
+//  4. Assert the cancellation is left unchanged.
 func TestRacedTerminalPromotesAStalledHostForEveryReader(t *testing.T) {
 	t.Parallel()
 	coordinator := &raceCoordinator{}
@@ -2378,9 +2558,11 @@ func TestRacedTerminalPromotesAStalledHostForEveryReader(t *testing.T) {
 	}
 }
 
-// An attempt whose goroutine never reported used to vanish from the outcome, taking its committed nonce
-// with it: no ledger row and, since TimeoutPlan reads only the outcome, no vote for a nonce already
-// spent. Production logs showed 8 of 255 nonces leaving no trace beyond the line that committed them.
+// Test flow:
+//  1. Start a coordinator with one attempt whose goroutine never reported and one answered, crowned attempt.
+//  2. Assemble the outcome.
+//  3. Assert the unreported attempt is kept in the outcome, named and terminalled `TerminalUnclassified`.
+//  4. Assert the timeout plan still posts a vote for that attempt's committed nonce.
 func TestAnUnreportedAttemptStaysInTheOutcome(t *testing.T) {
 	t.Parallel()
 	base := raceStart
@@ -2413,9 +2595,10 @@ func TestAnUnreportedAttemptStaysInTheOutcome(t *testing.T) {
 	}
 }
 
-// The race context deliberately never cancels so a departed client still leaves its nonces settling.
-// A pick issued on it must carry its own deadline: once the scheduler waits for capacity instead of
-// refusing, an unbounded pick hangs the request until the client disconnects.
+// Test flow:
+//  1. Detach a race context from cancellation and derive a pick context from it with the scheduler's pick timeout.
+//  2. Assert the race context carries no deadline.
+//  3. Assert the pick context carries a deadline no further out than the scheduler's pick timeout.
 func TestEveryPickIsBounded(t *testing.T) {
 	t.Parallel()
 	raceCtx := context.WithoutCancel(t.Context())
@@ -2435,9 +2618,12 @@ func TestEveryPickIsBounded(t *testing.T) {
 	}
 }
 
-// The race outlives the client on purpose, to settle the nonce it committed. What must not outlive the
-// client is the claim that the answer reached one: production crowned 64 attempts after telling their
-// clients the request had failed, and every one was labelled user-visible.
+// Test flow:
+//  1. Start a race with one host held until released, then cancel the client context once the attempt has arrived.
+//  2. Assert `runRace` returns `context.Canceled` to the departed client before releasing the host to answer.
+//  3. Release the host so it still crowns a winner after the client left.
+//  4. Assert the report records the client as gone.
+//  5. Assert the winning attempt's visibility label is `VisibilityWinnerClientGone`, not the ordinary winner label.
 func TestAWinnerCrownedAfterTheClientLeftIsNotLabelledUserVisible(t *testing.T) {
 	fixture := newRaceFixture(racePolicy(1), 1)
 	fixture.deps.DrainTimeout = time.Minute
@@ -2464,7 +2650,6 @@ func TestAWinnerCrownedAfterTheClientLeftIsNotLabelledUserVisible(t *testing.T) 
 
 	<-arrive
 	cancel()
-	// Released only once the race has answered the departed client, so the departure lands before the answer.
 	if err := waitForValue(t, returned, "the race answering the departed client"); !errors.Is(err, context.Canceled) {
 		t.Fatalf("runRace error = %v, want context.Canceled", err)
 	}
@@ -2485,7 +2670,11 @@ func TestAWinnerCrownedAfterTheClientLeftIsNotLabelledUserVisible(t *testing.T) 
 	}
 }
 
-// A winner served to a client that stayed keeps the label that says so.
+// Test flow:
+//  1. Start a race with one host that answers with content while the client stays.
+//  2. Run the race to completion.
+//  3. Assert the report does not record the client as gone.
+//  4. Assert the winning attempt's visibility label is the ordinary `VisibilityWinner`.
 func TestAWinnerServedToAWaitingClientStaysUserVisible(t *testing.T) {
 	fixture := newRaceFixture(settledPolicy(), 1)
 	fixture.host(60, 0, "host-0", &hostScript{

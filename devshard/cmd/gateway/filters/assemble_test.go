@@ -19,6 +19,11 @@ func sseStream(events ...string) []byte {
 	return append(stream, "data: [DONE]\n\n"...)
 }
 
+// Test flow:
+//  1. Encode each test case's SSE chunk payloads into an event stream via `sseStream`.
+//  2. Assemble the stream with assembleSSEBody.
+//  3. Assert the result matches the case's expected completion body.
+//  4. Vary the case across delta merging, a trailing usage-only chunk, reasoning content, split tool-call arguments, per-token logprobs, choice ordering, and an already-whole completion.
 func TestAssembleSSEBodyMergesDeltas(t *testing.T) {
 	t.Parallel()
 	testCases := []struct {
@@ -95,6 +100,10 @@ func TestAssembleSSEBodyMergesDeltas(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Send one SSE event with two choices, each carrying its own logprobs content.
+//  2. Assemble the stream with assembleSSEBody.
+//  3. Assert both choices keep their own logprobs in the assembled completion.
 func TestAssembleSSEBodyKeepsLogprobsOfEveryChoice(t *testing.T) {
 	t.Parallel()
 	assembled := string(assembleSSEBody(sseStream(
@@ -106,7 +115,10 @@ func TestAssembleSSEBodyKeepsLogprobsOfEveryChoice(t *testing.T) {
 	}
 }
 
-// Upstream restates a tool call's id and type in every delta, and its name in the last one.
+// Test flow:
+//  1. Send two deltas for one tool call, each repeating its id and type, with the name and split arguments spread across them.
+//  2. Assemble the stream with assembleSSEBody.
+//  3. Assert the merged tool call keeps its id, type and name whole alongside the joined arguments.
 func TestAssembleSSEBodyKeepsIdentityFieldsWhole(t *testing.T) {
 	t.Parallel()
 	assembled := string(assembleSSEBody(sseStream(
@@ -119,6 +131,10 @@ func TestAssembleSSEBodyKeepsIdentityFieldsWhole(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a raw SSE payload whose JSON is split mid-object across two consecutive `data:` lines.
+//  2. Assemble the stream with assembleSSEBody.
+//  3. Assert the split lines are rejoined into one delta before assembly.
 func TestAssembleSSEBodyJoinsSplitDataLines(t *testing.T) {
 	t.Parallel()
 	split := []byte("data: {\"id\":\"a\",\"choices\":[{\"index\":0,\"delta\":\ndata: {\"content\":\"hi\"}}]}\n\ndata: [DONE]\n\n")
@@ -131,7 +147,10 @@ func TestAssembleSSEBodyJoinsSplitDataLines(t *testing.T) {
 	}
 }
 
-// An index-less choice compared equal to every other, which is not a total order.
+// Test flow:
+//  1. Send three choice deltas out of order: index 1, an index-less delta, then index 0.
+//  2. Assemble the stream with assembleSSEBody.
+//  3. Assert indexed choices sort by index first, and the index-less choice, which compares equal to every other, lands last.
 func TestAssembleSSEBodyOrdersChoicesWithAnIndexFirst(t *testing.T) {
 	t.Parallel()
 	assembled := string(assembleSSEBody(sseStream(
@@ -145,6 +164,11 @@ func TestAssembleSSEBodyOrdersChoicesWithAnIndexFirst(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Send maxIndexedElements+8 delta events, each carrying a distinct choice index.
+//  2. Assemble the stream with assembleSSEBody.
+//  3. Decode the assembled choices.
+//  4. Assert the merge is bounded at maxIndexedElements.
 func TestAssembleSSEBodyBoundsTheIndexedMerge(t *testing.T) {
 	t.Parallel()
 	events := make([]string, 0, maxIndexedElements+8)
@@ -165,6 +189,12 @@ func TestAssembleSSEBodyBoundsTheIndexedMerge(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Send maxTopLevelFields+8 events, each adding one invented top-level field alongside the choices delta.
+//  2. Assemble the stream with assembleSSEBody.
+//  3. Decode the assembled body into a field map.
+//  4. Assert the merged key count stays bounded at maxTopLevelFields, plus the object field the assembler always writes regardless of what the host sent.
+//  5. Assert the choices field survives the bound.
 func TestAssembleSSEBodyBoundsTheKeySet(t *testing.T) {
 	t.Parallel()
 	events := make([]string, 0, maxTopLevelFields+8)
@@ -178,7 +208,6 @@ func TestAssembleSSEBodyBoundsTheKeySet(t *testing.T) {
 	if err := json.Unmarshal(assembled, &decoded); err != nil {
 		t.Fatalf("unmarshalling the assembled body: %v", err)
 	}
-	// The bound counts merged keys; the assembler then always writes object, whatever the host sent.
 	if len(decoded) > maxTopLevelFields+1 {
 		t.Fatalf("fields = %d, want the key set bounded at %d", len(decoded), maxTopLevelFields)
 	}
@@ -187,7 +216,10 @@ func TestAssembleSSEBodyBoundsTheKeySet(t *testing.T) {
 	}
 }
 
-// token_ids arrive as a per-chunk delta, unlike every other choice-level field.
+// Test flow:
+//  1. Send two chunks whose choice each carries its own token_ids array alongside the content delta.
+//  2. Assemble the stream with assembleSSEBody.
+//  3. Assert the assembled choice concatenates the per-chunk token_ids, unlike every other choice-level field, which merges by delta.
 func TestAssembleSSEBodyAccumulatesTokenIds(t *testing.T) {
 	t.Parallel()
 	assembled := string(assembleSSEBody(sseStream(
@@ -200,6 +232,10 @@ func TestAssembleSSEBodyAccumulatesTokenIds(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Send maxAssembledEvents+16 identical content-delta events.
+//  2. Assemble the stream with assembleSSEBody.
+//  3. Assert the assembler refuses with TruncatedResponseBody instead of returning a silently truncated answer.
 func TestAssembleSSEBodyRefusesRatherThanTruncate(t *testing.T) {
 	t.Parallel()
 	events := make([]string, 0, maxAssembledEvents+16)
@@ -214,6 +250,11 @@ func TestAssembleSSEBodyRefusesRatherThanTruncate(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Send two content deltas followed by a trailing whole chat.completion chunk carrying different content.
+//  2. Assemble the stream with assembleSSEBody.
+//  3. Decode the assembled choices.
+//  4. Assert the folded deltas survive and the trailing completion's content does not win.
 func TestAssembleSSEBodyKeepsFoldedDeltasWhenACompletionFollows(t *testing.T) {
 	t.Parallel()
 	assembled := assembleSSEBody(sseStream(
@@ -240,6 +281,10 @@ func TestAssembleSSEBodyKeepsFoldedDeltasWhenACompletionFollows(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Send one SSE event whose payload is already a complete chat.completion object.
+//  2. Assemble the stream with assembleSSEBody.
+//  3. Assert the payload passes through unchanged.
 func TestAssembleSSEBodyPassesASoleCompletionThrough(t *testing.T) {
 	t.Parallel()
 	payload := `{"object":"chat.completion","choices":[{"index":0,"message":{"content":"whole"}}]}`
@@ -251,6 +296,10 @@ func TestAssembleSSEBodyPassesASoleCompletionThrough(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a raw `data:` line carrying two JSON objects back to back.
+//  2. Assemble the stream with assembleSSEBody.
+//  3. Assert the smuggled second object causes the payload to be rejected as NoResponseDataBody.
 func TestAssembleSSEBodyRejectsAPayloadCarryingTwoObjects(t *testing.T) {
 	t.Parallel()
 
@@ -261,7 +310,10 @@ func TestAssembleSSEBodyRejectsAPayloadCarryingTwoObjects(t *testing.T) {
 	}
 }
 
-// Some upstream versions re-send a tool call's arguments whole on the finish chunk.
+// Test flow:
+//  1. Send three tool-call argument deltas where the last chunk resends the whole assembled argument string instead of a fragment, as some upstream versions do on the finish chunk.
+//  2. Assemble the stream with assembleSSEBody.
+//  3. Assert the assembled arguments equal the resent whole string rather than the fragments doubled up with it.
 func TestAssembleSSEBodyDoesNotDoubleArgumentsResentWhole(t *testing.T) {
 	t.Parallel()
 	assembled := string(assembleSSEBody(sseStream(
@@ -275,8 +327,10 @@ func TestAssembleSSEBodyDoesNotDoubleArgumentsResentWhole(t *testing.T) {
 	}
 }
 
-// A recorded Kimi reply: thinking tags inline in content, an empty tool_calls on every chunk, and the
-// usage event last.
+// Test flow:
+//  1. Load the recorded Kimi reply fixture, which carries thinking tags inline in content, an empty tool_calls array on every chunk, and a trailing usage event.
+//  2. Assemble the fixture stream with assembleSSEBody.
+//  3. Assert the assembled completion matches the exact expected JSON.
 func TestAssembleSSEBodyOnARecordedKimiReply(t *testing.T) {
 	t.Parallel()
 	stream, err := os.ReadFile(filepath.Join("testdata", "sse", "kimi_thinking_stream.sse"))
@@ -292,7 +346,10 @@ func TestAssembleSSEBodyOnARecordedKimiReply(t *testing.T) {
 	}
 }
 
-// Empty first chunks leave the accumulator empty, and an empty accumulator grows like any other on both the string and the growing path.
+// Test flow:
+//  1. Send two tool-call argument deltas with an empty string, followed by two deltas that build up the real arguments.
+//  2. Assemble the stream with assembleSSEBody.
+//  3. Assert the empty leading chunks leave the accumulator empty and the later chunks still grow it into the full arguments.
 func TestAssembleSSEBodyGrowsArgumentsThatStartEmpty(t *testing.T) {
 	t.Parallel()
 	assembled := string(assembleSSEBody(sseStream(

@@ -18,8 +18,7 @@ func benchParticipant(index int) string {
 	return "gonka1participant" + strconv.Itoa(index)
 }
 
-// benchClock is the clock the tracker sees in production: monotonic, and never twice the
-// same instant, so decay and the stale sweep both do the work they really do.
+// benchClock returns a monotonically increasing clock that never repeats an instant.
 func benchClock() func() time.Time {
 	start := time.Now()
 	elapsed := time.Duration(0)
@@ -82,7 +81,6 @@ func BenchmarkTrackerRebuildEjectedView(b *testing.B) {
 
 	b.ReportAllocs()
 	for b.Loop() {
-		// The tracker lock is the caller's; this measures the rebuild alone.
 		tracker.rebuildEjectedViewLocked(testEpoch, perf)
 	}
 }

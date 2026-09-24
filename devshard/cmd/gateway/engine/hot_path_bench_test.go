@@ -144,7 +144,6 @@ func benchWriterChain(events chan AttemptEvent) (*attemptWriter, *benchSink) {
 // attemptWriter.Write runs once per streamed chunk, on the goroutine that writes to the client.
 func BenchmarkAttemptWriterWrite(b *testing.B) {
 	chunk := []byte(`data: {"choices":[{"index":0,"delta":{"content":"hello there"}}]}` + "\n\n")
-	// A full queue is the steady state a busy coordinator leaves behind, so every chunk takes offer's drop path.
 	events := make(chan AttemptEvent, eventBuffer)
 	for range eventBuffer {
 		events <- AttemptEvent{}
@@ -178,7 +177,6 @@ func benchCoordinator(attemptCount int) *raceCoordinator {
 	policy := settledPolicy()
 	policy.InterChunkStall = 30 * time.Second
 	fixture := newRaceFixture(policy, attemptCount)
-	// Production's HostLabel is a substring of a known slot; without a label the double formats one and allocates.
 	for index := range attemptCount {
 		fixture.target.labels[index] = "label-host-" + strconv.Itoa(index)
 	}

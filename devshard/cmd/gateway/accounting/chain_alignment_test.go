@@ -7,6 +7,11 @@ import (
 	"devshard/types"
 )
 
+// Test flow:
+//  1. Open a book and observe the chain's latest nonce as 40.
+//  2. Observe host stats reporting 30 misses, all before the ledger started watching.
+//  3. Assert the queried record raises no chain-disagreement finding.
+//  4. Assert its cross-check error count is 0.
 func TestAWipedLedgerDoesNotInventADisagreementWithTheChain(t *testing.T) {
 	book := newTestBook(t, 1)
 	if err := book.ObserveLatestNonce(testEscrow, 40); err != nil {
@@ -26,6 +31,10 @@ func TestAWipedLedgerDoesNotInventADisagreementWithTheChain(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Open a book and observe the chain's latest nonce as 40.
+//  2. Observe host stats reporting 30 misses before the ledger watched, then 35 misses after.
+//  3. Assert the cross-check error count is 5, the misses counted while the ledger was watching.
 func TestADriftAfterTheLedgerStartedWatchingIsStillReported(t *testing.T) {
 	book := newTestBook(t, 1)
 	if err := book.ObserveLatestNonce(testEscrow, 40); err != nil {
@@ -46,6 +55,11 @@ func TestADriftAfterTheLedgerStartedWatchingIsStillReported(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Open a book and observe the chain's latest nonce as 40 with no misses.
+//  2. Record an invalid verdict for four separate nonces.
+//  3. Assert the record's recorded-invalid count is 4.
+//  4. Assert the cross-check error count stays 0, since a validator's challenge is not the chain invalidating a nonce.
 func TestADissentingValidatorIsNotADisagreementWithTheChain(t *testing.T) {
 	book := newTestBook(t, 1)
 	if err := book.ObserveLatestNonce(testEscrow, 40); err != nil {
@@ -71,6 +85,12 @@ func TestADissentingValidatorIsNotADisagreementWithTheChain(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Open a book, observe the latest nonce as 40, and apply 30 timeouts.
+//  2. Observe host stats reporting 30 misses.
+//  3. Save and reload the book, then observe the same 30 misses again on the restored book.
+//  4. Assert the restored record's applied-timeouts count stays 30.
+//  5. Assert the cross-check error count is 0, since a restored half is not re-seeded.
 func TestARestoredLedgerKeepsItsOwnHalfRatherThanReseeding(t *testing.T) {
 	book := newTestBook(t, 1)
 	if err := book.ObserveLatestNonce(testEscrow, 40); err != nil {

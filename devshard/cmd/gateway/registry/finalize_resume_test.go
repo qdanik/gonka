@@ -70,6 +70,11 @@ func interruptedFinalizeSession(t *testing.T) (EscrowSession, *user.Session) {
 	return NewSessionHandle(session, machine), session
 }
 
+// Test flow:
+//  1. Build an interrupted finalize session via `interruptedFinalizeSession`, whose finalize was cut short by a broken state hash and left mid-finalizing.
+//  2. Resume finalize on the session handle.
+//  3. Assert it completes with no error and the phase reaches settlement.
+//  4. Assert the session has a signature quorum at its own nonce.
 func TestFinalizeResumesAFinalizeARestartCutShort(t *testing.T) {
 	handle, session := interruptedFinalizeSession(t)
 

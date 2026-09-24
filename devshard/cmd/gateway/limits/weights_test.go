@@ -5,6 +5,9 @@ import (
 	"testing"
 )
 
+// Test flow:
+//  1. Build a table of weight and per-10000-weight-share combinations, including zero, negative, NaN and Inf inputs.
+//  2. For each case, call `weightConcurrencyLimit` and assert it returns the expected concurrency, flooring fractional results and disabling on invalid input.
 func TestWeightConcurrencyLimit(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -33,6 +36,9 @@ func TestWeightConcurrencyLimit(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a table of current-available and full weight pairs, including zero and negative baselines.
+//  2. For each case, call `scaleFactor` and assert it clamps to [0,1] and treats a non-positive baseline as unlimited.
 func TestScaleFactor(t *testing.T) {
 	tests := []struct {
 		name             string
@@ -57,6 +63,9 @@ func TestScaleFactor(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a table of current weights, host shares and an optional availability filter, covering hosts missing from one side or the other.
+//  2. For each case, call `escrowWeight` and assert it sums the current weight of hosts that are both members and available, varying the table's inputs.
 func TestEscrowWeight(t *testing.T) {
 	tests := []struct {
 		name           string

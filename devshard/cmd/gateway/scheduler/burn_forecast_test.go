@@ -7,7 +7,7 @@ import (
 	"devshard/cmd/gateway/chain"
 )
 
-// forecastGates is the ladder as the pick reads it, with the window rung a test can move.
+// forecastGates builds an `availability` whose window rung blocks the given participants.
 func forecastGates(blocked ...string) availability {
 	refused := asSet(blocked)
 	gates := openAvailability()
@@ -19,7 +19,10 @@ func forecastEscrow(latestNonce uint64, slots ...string) Escrow {
 	return Escrow{ID: "escrow-forecast", Model: modelA, Session: &fakeSession{latestNonce: latestNonce, slots: slots}}
 }
 
-// The distance from the cursor to the first host that can take the request is what this escrow will spend on nobody.
+// Test flow:
+//  1. For each table case of a latest nonce, blocked hosts, excluded hosts and nonces already queued ahead, build a `forecastEscrow` and `forecastGates`.
+//  2. Call `expectedBurns` for a waiter with the case's exclusions.
+//  3. Assert the result matches the case's expected burn count: the distance from the cursor to the first usable host.
 func TestTheForecastCountsTheNoncesBetweenTheCursorAndAUsableHost(t *testing.T) {
 	t.Parallel()
 
@@ -90,7 +93,11 @@ func TestTheForecastCountsTheNoncesBetweenTheCursorAndAUsableHost(t *testing.T) 
 	}
 }
 
-// An escrow whose group cannot be read is priced neutrally rather than on a guess.
+// Test flow:
+//  1. Call `expectedBurns` on an escrow with no session at all.
+//  2. Assert the result is 0.
+//  3. Call `expectedBurns` on an escrow whose group is empty.
+//  4. Assert the result is 0, priced neutrally rather than on a guess.
 func TestTheForecastIsNeutralWithoutAGroupToWalk(t *testing.T) {
 	t.Parallel()
 	queued := newWaiter(RequestProfile{Model: modelA}, time.Time{})
@@ -103,7 +110,11 @@ func TestTheForecastIsNeutralWithoutAGroupToWalk(t *testing.T) {
 	}
 }
 
-// Same weight and same in-flight count, so only the cursor's distance separates these two.
+// Test flow:
+//  1. Build a scheduler with two equally weighted, equally loaded candidates: "far" and "near".
+//  2. Block the first three hosts of "far"'s group, so its next usable host is farther from the cursor.
+//  3. Pick an escrow.
+//  4. Assert "near" is picked, the escrow whose next nonce lands on a usable host.
 func TestThePickPrefersTheEscrowThatServesOnItsNextNonce(t *testing.T) {
 	t.Parallel()
 	scheduler, _, _ := newScheduler(
@@ -125,7 +136,10 @@ func TestThePickPrefersTheEscrowThatServesOnItsNextNonce(t *testing.T) {
 	}
 }
 
-// The forecast ranks and never refuses: the drain's sweep answers a busy group without spending a nonce.
+// Test flow:
+//  1. Build a scheduler with one candidate whose whole two-host group is blocked.
+//  2. Pick an escrow.
+//  3. Assert the pick succeeds and returns the busy escrow, so the drain's sweep can answer for it.
 func TestAnEscrowWhoseWholeGroupIsBusyIsStillPicked(t *testing.T) {
 	t.Parallel()
 	scheduler, _, _ := newScheduler(
@@ -145,7 +159,10 @@ func TestAnEscrowWhoseWholeGroupIsBusyIsStillPicked(t *testing.T) {
 	}
 }
 
-// The forecast is counted in the same unit as the load, so a burn and a request in flight trade against each other.
+// Test flow:
+//  1. Build a scheduler with a "burning" candidate whose group forces two burns to reach a usable host, and a "loaded" candidate carrying the table case's active-user count.
+//  2. Pick an escrow.
+//  3. Assert the picked escrow matches the case: burning is chosen when two burns cost less than three in-flight requests, loaded when they cost more than one.
 func TestABurnCostsTheSameAsARequestAlreadyInFlight(t *testing.T) {
 	t.Parallel()
 
@@ -181,8 +198,11 @@ func TestABurnCostsTheSameAsARequestAlreadyInFlight(t *testing.T) {
 	}
 }
 
-// The forecast must read the whole ladder the drain reads, not the congestion rung alone: a host the chain has
-// stopped, one perf ejected, and one this escrow blocked all cost a nonce to step past exactly like a full window.
+// Test flow:
+//  1. Build a scheduler with two candidates, "far" and "near".
+//  2. For each table case (a full congestion window, a cut-off host, an ejected host, a host this escrow blocked for diverging), block the first three hosts of "far"'s group that way.
+//  3. Pick an escrow.
+//  4. Assert "near" is picked in every case, since the forecast steps over every rung the drain reads.
 func TestTheForecastStepsOverEveryRungTheDrainReads(t *testing.T) {
 	t.Parallel()
 
@@ -233,8 +253,11 @@ func TestTheForecastStepsOverEveryRungTheDrainReads(t *testing.T) {
 	}
 }
 
-// One escrow's divergence block is not another's, so the forecast must ask it per candidate rather than once for
-// the fleet: a shared answer would price every escrow against the blocks of whichever one was walked first.
+// Test flow:
+//  1. Build a scheduler with two candidates sharing the same slot names, "blocked" and "clean".
+//  2. Block both of "blocked"'s hosts for diverging.
+//  3. Pick an escrow.
+//  4. Assert "clean" is picked, so one escrow's divergence block does not cost another sharing the same host names.
 func TestADivergenceBlockOnlyCostsTheEscrowThatCarriesIt(t *testing.T) {
 	t.Parallel()
 	scheduler, _, _ := newScheduler(
@@ -254,8 +277,11 @@ func TestADivergenceBlockOnlyCostsTheEscrowThatCarriesIt(t *testing.T) {
 	}
 }
 
-// The waiters a dispatcher already holds draw their nonces first, so the cursor the pick forecasts from is past
-// them. Reading that count from the live registry is what the escrow score actually depends on.
+// Test flow:
+//  1. Build a scheduler with a "queued" candidate whose two middle hosts are blocked, and a "quiet" candidate carrying one active user.
+//  2. Pick an escrow before any dispatcher queue exists and assert "queued" is picked, its cursor clear.
+//  3. Register a dispatcher for the "queued" escrow with one pending submit.
+//  4. Pick again and assert "quiet" is now picked, since the live dispatcher's queue depth now weighs against "queued".
 func TestThePickReadsAQueuesDepthFromTheLiveDispatcher(t *testing.T) {
 	t.Parallel()
 	scheduler, escrows, _ := newScheduler(

@@ -7,6 +7,10 @@ import (
 	"devshard/cmd/gateway/chain"
 )
 
+// Test flow:
+//  1. Run parseModels against a raw JSON string, varied across cases: a valid multi-model array, a missing target_count, blank/whitespace input, malformed JSON, and each field-validation rejection (empty model_id, zero/negative target_count, zero amount).
+//  2. For an error case, assert parseModels returns an error.
+//  3. For a success case, assert the returned models match the expected slice (or nil for blank input).
 func TestParseModels(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -69,6 +73,10 @@ func TestParseModels(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Call parseModels with a model whose temp_count and target_count are both zero.
+//  2. Assert parseModels returns an error.
+//  3. Assert the error message names the offending model ID.
 func TestParseModelsErrorNamesOffendingModel(t *testing.T) {
 	_, err := parseModels(`[{"model_id":"broken-model","temp_count":0,"target_count":0,"amount":5,"private_key_env":"K"}]`)
 	if err == nil {
@@ -79,6 +87,9 @@ func TestParseModelsErrorNamesOffendingModel(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Call servedByNetwork with a chain.PhaseSnapshot and a model ID, varied across cases: model present in FullWeightsByModel, model absent with a non-empty network, an empty snapshot, and a model present only in CurrentWeightsByModel.
+//  2. Assert the returned served and known flags match the expected values for that case.
 func TestServedByNetwork(t *testing.T) {
 	tests := []struct {
 		name       string

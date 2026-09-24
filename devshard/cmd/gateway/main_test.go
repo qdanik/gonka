@@ -40,16 +40,11 @@ import (
 
 var errNoChainDialed = errors.New("the composed test gateway dials no chain")
 
+// TestMain ignores the goroutines that live for the process: database/sql's cleaner, the sqlite finalizer and the unclosable chain client.
 func TestMain(m *testing.M) {
 	goleak.VerifyTestMain(m,
-		// database/sql keeps its connection cleaner alive for the process, and the sqlite driver's
-		// own finalizer goroutine outlives every handle we close.
 		goleak.IgnoreTopFunction("database/sql.(*DB).connectionOpener"),
 		goleak.IgnoreTopFunction("modernc.org/sqlite.(*conn).interruptOnDone.func1"),
-		// The chain client is dialed once and lives for the process: common/chain exposes no Close, and
-		// its grpc connection and desertbit/timer's wheel both outlive every gateway this test composes.
-		// The connection now carries every chain read, so its resolver and transport goroutines start
-		// where before only the bridge held an idle handle.
 		goleak.IgnoreTopFunction("github.com/desertbit/timer.timerRoutine"),
 		goleak.IgnoreTopFunction("google.golang.org/grpc/internal/grpcsync.(*CallbackSerializer).run"),
 		goleak.IgnoreTopFunction("google.golang.org/grpc/internal/resolver/dns.(*dnsResolver).watcher"),
@@ -68,8 +63,7 @@ func freePort(t *testing.T) int {
 	return listener.Addr().(*net.TCPAddr).Port
 }
 
-// fakeChain answers the observer's polls with an empty epoch, so a composed gateway boots without
-// reaching a real node and without waiting on one.
+// fakeChain answers the observer's polls with an empty epoch, so a composed gateway boots without reaching a real node.
 func fakeChain(t *testing.T) string {
 	t.Helper()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -84,13 +78,11 @@ func gatewayEnvironment(t *testing.T) {
 	t.Helper()
 	chainURL := fakeChain(t)
 	t.Setenv("GATEWAY_STORAGE_DIR", t.TempDir())
-	// An IP literal keeps grpc.NewClient from starting a DNS resolver goroutine nothing can close.
 	t.Setenv("GATEWAY_CHAIN_GRPC", "127.0.0.1:9090")
 	t.Setenv("GATEWAY_PUBLIC_API", chainURL)
 }
 
-// chainWithoutADial replaces the one dial in composedGateway: grpc.NewClient starts a DNS resolver
-// goroutine nothing can close, and no test here reaches the chain over it.
+// chainWithoutADial is a chain.Reader that never dials, so no test here reaches a real node.
 type chainWithoutADial struct{}
 
 func (chainWithoutADial) MaxNonce(context.Context) (uint64, bool, error) { return 0, false, nil }
@@ -134,8 +126,7 @@ func sessionsReading(records devshardLookup, storageDir string, reader chain.Rea
 	}
 }
 
-// chainServingModels is governance answering what each model's context length is, which is the unit a
-// host's prefill window counts in.
+// chainServingModels is a chain.Reader that answers Models with a fixed context-length map.
 type chainServingModels struct {
 	chainWithoutADial
 	models map[string]chain.ModelParams
@@ -145,8 +136,7 @@ func (c chainServingModels) Models(context.Context) (map[string]chain.ModelParam
 	return c.models, nil
 }
 
-// composedGateway builds exactly what run() builds, so an assertion below reaches the wiring the
-// process uses rather than a re-declaration of it.
+// composedGateway builds exactly what run() builds, through compose().
 func composedGateway(t *testing.T) *gateway {
 	t.Helper()
 	return composedGatewayReading(t, chainWithoutADial{})
@@ -187,6 +177,11 @@ func newTestJournal(t *testing.T) *journal.Journal {
 	return events
 }
 
+// Test flow:
+//  1. Start run() in the background against a free port with a fake chain and metrics environment.
+//  2. Poll /metrics until it responds 200, since go_goroutines from the process collector is present on the very first scrape.
+//  3. Assert the scraped body contains go_goroutines.
+//  4. Cancel the context and assert run() returns nil within 10s.
 func TestRunServesMetricsAndShutsDownGracefully(t *testing.T) {
 	port := freePort(t)
 	gatewayEnvironment(t)
@@ -214,8 +209,6 @@ func TestRunServesMetricsAndShutsDownGracefully(t *testing.T) {
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	// go_goroutines comes from the process collector, so it is present on the very first scrape,
-	// unlike the request counter which only appears once a route has been served.
 	if !strings.Contains(body, "go_goroutines") {
 		t.Fatalf("/metrics exposition is missing the process collector:\n%s", body)
 	}
@@ -231,6 +224,11 @@ func TestRunServesMetricsAndShutsDownGracefully(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Start run() in the background against a free port with a fake chain environment.
+//  2. Poll POST /v1/chat/completions with an unserved model until it responds.
+//  3. Assert the status is 503 rather than 404, since 404 would mean main is serving the metrics mux instead of the api server's routes.
+//  4. Cancel the context and assert run() returns nil within 10s.
 func TestRunServesTheChatCompletionsRouteFromTheComposedServer(t *testing.T) {
 	port := freePort(t)
 	gatewayEnvironment(t)
@@ -256,7 +254,6 @@ func TestRunServesTheChatCompletionsRouteFromTheComposedServer(t *testing.T) {
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	// 404 would mean main serves the Phase-1 metrics mux instead of the api server's routes.
 	if status != http.StatusServiceUnavailable {
 		t.Fatalf("POST /v1/chat/completions with an empty registry = %d, want %d", status, http.StatusServiceUnavailable)
 	}
@@ -272,6 +269,10 @@ func TestRunServesTheChatCompletionsRouteFromTheComposedServer(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Set GATEWAY_PORT to a non-numeric value.
+//  2. Call run().
+//  3. Assert it returns an error naming GATEWAY_PORT.
 func TestRunFailsFastOnInvalidEnvironment(t *testing.T) {
 	gatewayEnvironment(t)
 	t.Setenv("GATEWAY_PORT", "not-a-port")
@@ -280,6 +281,10 @@ func TestRunFailsFastOnInvalidEnvironment(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Set GATEWAY_MAX_TOKENS_CAP to 0.
+//  2. Call run().
+//  3. Assert it returns an error naming max_tokens_cap.
 func TestRunFailsFastOnInvalidMergedConfig(t *testing.T) {
 	gatewayEnvironment(t)
 	t.Setenv("GATEWAY_MAX_TOKENS_CAP", "0")
@@ -288,6 +293,11 @@ func TestRunFailsFastOnInvalidMergedConfig(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Compose a gateway and run one race with no escrows configured.
+//  2. Assert Run() fails.
+//  3. Poll the store for an accounting row keyed by the request's ID.
+//  4. Assert the row records the raced request's model and input tokens.
 func TestARacePutsAnAccountingRowInTheStoreTheGatewayOpened(t *testing.T) {
 	gatewayEnvironment(t)
 	composed := composedGateway(t)
@@ -324,6 +334,11 @@ func waitForAccountingRow(t *testing.T, records *store.Store, requestID string) 
 	}
 }
 
+// Test flow:
+//  1. Compose a gateway and scrape /metrics before any race runs.
+//  2. Run one race with no escrows configured, which fails.
+//  3. Scrape /metrics again.
+//  4. Assert the race-total metric family is absent before the race and present after.
 func TestARaceMovesTheMetricsTheGatewayExposes(t *testing.T) {
 	gatewayEnvironment(t)
 	composed := composedGateway(t)
@@ -363,12 +378,15 @@ func scrape(t *testing.T, baseURL string) string {
 	return string(body)
 }
 
+// Test flow:
+//  1. Compose a gateway.
+//  2. For each owner (limits, perf, registry, chain, transport, accounting, journal), build a fresh collector describing the same families.
+//  3. Try registering it on the gateway's own telemetry registry.
+//  4. Assert registration is refused, since a refusal proves compose already registered that owner's collector.
 func TestEveryOwnerCollectorIsRegisteredOnTheGatewaysRegistry(t *testing.T) {
 	gatewayEnvironment(t)
 	composed := composedGateway(t)
 
-	// A collector describing families the registry already knows is refused, so a refusal is proof
-	// compose registered that owner's collector and nothing else is.
 	testCases := []struct {
 		name      string
 		collector prometheus.Collector
@@ -390,7 +408,10 @@ func TestEveryOwnerCollectorIsRegisteredOnTheGatewaysRegistry(t *testing.T) {
 	}
 }
 
-// The ledger is read through its own API; none of it may ride on the scrape Prometheus polls every few seconds.
+// Test flow:
+//  1. Compose a gateway with accounting enabled.
+//  2. Gather every metric family from the telemetry registry.
+//  3. Assert no family name carries the nonce-accounting prefix or names, since the ledger is read through its own API, not a Prometheus scrape.
 func TestTheAccountingLedgerExportsNothingToPrometheus(t *testing.T) {
 	gatewayEnvironment(t)
 	t.Setenv("GATEWAY_ACCOUNTING_ENABLED", "true")
@@ -408,6 +429,11 @@ func TestTheAccountingLedgerExportsNothingToPrometheus(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. For each builder limit (1, 4, 16, 64), build a boot budget.
+//  2. Assert its client transport is an *http.Transport.
+//  3. Assert the budget's builder count matches the limit.
+//  4. Assert MaxIdleConnsPerHost and MaxIdleConns both match the limit.
 func TestBootBudgetSizesTheIdlePoolToTheBuilderLimit(t *testing.T) {
 	for _, builders := range []int{1, 4, 16, 64} {
 		t.Run(fmt.Sprintf("%d builders", builders), func(t *testing.T) {
@@ -430,6 +456,9 @@ func TestBootBudgetSizesTheIdlePoolToTheBuilderLimit(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a boot budget with a builder limit of 0.
+//  2. Assert the budget falls back to 1 builder.
 func TestBootBudgetRefusesANonPositiveBuilderLimit(t *testing.T) {
 	if budget := newBootBudget(0); budget.builders != 1 {
 		t.Fatalf("newBootBudget(0).builders = %d, want 1", budget.builders)
@@ -496,6 +525,11 @@ func devshard(escrowID string, active bool) store.DevshardRecord {
 	return store.DevshardRecord{EscrowID: escrowID, Model: "model-a", Active: active}
 }
 
+// Test flow:
+//  1. Build a table of devshard records and per-escrow build failures, varying whether the record is inactive, missing from the chain, missing its key, failing for another reason, or healthy.
+//  2. Run publishEscrows over each case's records with a fake publisher.
+//  3. Assert the returned error matches the case's expectation.
+//  4. Assert the publisher's added, retired, deactivated and unserved lists match the case's expectations.
 func TestPublishEscrowsWalksTheThreeArmedBuildLadder(t *testing.T) {
 	buildFailure := errors.New("chain REST unreachable")
 	testCases := []struct {
@@ -561,7 +595,10 @@ func TestPublishEscrowsWalksTheThreeArmedBuildLadder(t *testing.T) {
 	}
 }
 
-// Without the flag a restart would publish a held escrow routable and spend the money its owed votes still need.
+// Test flow:
+//  1. Run publishEscrows over one record with OnHold set.
+//  2. Assert it succeeds.
+//  3. Assert the record the publisher saw carries OnHold.
 func TestPublishEscrowsHandsTheHoldFlagToTheRegistry(t *testing.T) {
 	publisher := &escrowPublisher{}
 	records := []store.DevshardRecord{{EscrowID: "1", Model: "qwen", Active: true, OnHold: true}}
@@ -576,6 +613,10 @@ func TestPublishEscrowsHandsTheHoldFlagToTheRegistry(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a registry and a gateway wrapping it.
+//  2. Call addEscrow for one record with OnHold set and one without.
+//  3. Assert the registry reports the first escrow on hold and the second not.
 func TestAddingAnEscrowRowOnHoldPublishesItOnHold(t *testing.T) {
 	escrows := registry.New(registry.Deps{
 		ServingSessions: func(context.Context, string) (registry.EscrowSession, error) {
@@ -601,6 +642,11 @@ func TestAddingAnEscrowRowOnHoldPublishesItOnHold(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build an escrowHolds gate over a fresh registry and router.
+//  2. Ask its Verdict for an unknown escrow.
+//  3. Assert the verdict is HoldKeep.
+//  4. Assert Funds reports the unknown escrow as not known.
 func TestTheHoldGateKeepsAnEscrowTheRegistryDoesNotHold(t *testing.T) {
 	escrows, router := composedRouting(t, limits.NewCapacity(func(string, string) bool { return true }), []string{"validator-a"})
 	holds := escrowHolds{escrows: escrows, router: router}
@@ -613,6 +659,11 @@ func TestTheHoldGateKeepsAnEscrowTheRegistryDoesNotHold(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build an escrowHolds gate over a fresh registry and router.
+//  2. Call SetOnHold(true) for an escrow.
+//  3. Assert the registry reports it on hold.
+//  4. Call SetOnHold(false) and assert the registry reports it no longer on hold.
 func TestTheHoldGateMovesTheRegistryFlag(t *testing.T) {
 	escrows, router := composedRouting(t, limits.NewCapacity(func(string, string) bool { return true }), []string{"validator-a"})
 	holds := escrowHolds{escrows: escrows, router: router}
@@ -639,6 +690,11 @@ func assertSame(t *testing.T, label string, got, want []string) {
 	}
 }
 
+// Test flow:
+//  1. Run publishEscrows over 12 records with a builder limit of 3 and a publisher that blocks until released.
+//  2. Wait until the publisher's in-flight count reaches the builder limit.
+//  3. Release the hold and let publishEscrows finish.
+//  4. Assert the peak in-flight count never exceeded the builder limit.
 func TestPublishEscrowsBuildsNoMoreThanTheBuilderLimitAtOnce(t *testing.T) {
 	const builders = 3
 	records := make([]store.DevshardRecord, 0, 12)
@@ -704,6 +760,11 @@ func recordedShutdownParts(listener *shutdownRecorder, recorder func(name string
 	}
 }
 
+// Test flow:
+//  1. Build a shutdown step list from a set of recorders wired through shutdownOrder.
+//  2. Run stopAll.
+//  3. Assert it succeeds.
+//  4. Assert the recorded stop order runs from the http server through to the store and public API connections.
 func TestShutdownStopsAcceptingFirstAndClosesTheStoreLast(t *testing.T) {
 	var sequence []string
 	recorder := func(name string) *shutdownRecorder {
@@ -719,8 +780,11 @@ func TestShutdownStopsAcceptingFirstAndClosesTheStoreLast(t *testing.T) {
 	assertSame(t, "shutdown sequence", sequence, want)
 }
 
-// An escrow session is closed only once the work that reaches it has stopped. See
-// rules.md, "6. Boot and shutdown order is a contract".
+// Test flow:
+//  1. Build a step list where "races" fails to drain and "escrow sessions" needs a quiesced drain.
+//  2. Run stopAll.
+//  3. Assert it returns an error.
+//  4. Assert "escrow sessions" never ran and only "store" was reached.
 func TestShutdownSkipsEscrowSessionsWhenADrainOverran(t *testing.T) {
 	var sequence []string
 	record := func(name string) func(context.Context) error {
@@ -747,6 +811,11 @@ func TestShutdownSkipsEscrowSessionsWhenADrainOverran(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a shutdown step list where the http server step fails.
+//  2. Run stopAll.
+//  3. Assert the returned error names the listener failure.
+//  4. Assert the store still appears in the recorded stop sequence.
 func TestShutdownReachesTheStoreEvenWhenAnEarlierStepFails(t *testing.T) {
 	var sequence []string
 	recorder := func(name string) *shutdownRecorder {
@@ -788,7 +857,10 @@ func (c *blockingCloser) Close() error {
 	return c.result
 }
 
-// A stuck journal must not keep nonce accounting, the store and the connections below it from closing.
+// Test flow:
+//  1. Build a blocking closer that never returns on its own and an already-expired context.
+//  2. Run closeWithin with a zero budget against the expired context.
+//  3. Assert it returns an error reporting the step abandoned with events still queued.
 func TestTheJournalStepGivesUpWhenItsCloseOutlivesTheBudget(t *testing.T) {
 	stuck := newBlockingCloser(t, nil)
 	expired, cancel := context.WithCancel(t.Context())
@@ -801,7 +873,11 @@ func TestTheJournalStepGivesUpWhenItsCloseOutlivesTheBudget(t *testing.T) {
 	}
 }
 
-// The floor lets the journal drain after a step above spent the budget, and the step reports the close's own result.
+// Test flow:
+//  1. Build a blocking closer that returns a specific refusal error and an already-expired context.
+//  2. Run closeWithin with an hour-long floor against the expired context, in the background.
+//  3. Wait for the close to start, then release it.
+//  4. Assert closeWithin returns the close's own refusal error within 5 seconds.
 func TestTheJournalStepWaitsOutItsFloorWhenTheBudgetIsAlreadySpent(t *testing.T) {
 	refusal := errors.New("journal refused 1 money-lane events past its ceiling of 1")
 	closing := newBlockingCloser(t, refusal)
@@ -848,8 +924,10 @@ func (b *blockingStopper) Stop() {
 	close(b.returned)
 }
 
-// A drain that cannot finish inside the budget must yield it to the steps below. See
-// README.md, "Shutdown".
+// Test flow:
+//  1. Build a context with a 50ms timeout and a stopper whose drain never finishes on its own.
+//  2. Run waitFor against that context.
+//  3. Assert it returns the context's deadline-exceeded error.
 func TestWaitForYieldsTheBudgetToTheStepsBelowADrainThatOutlastsIt(t *testing.T) {
 	drainCtx, cancelDrain := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancelDrain()
@@ -861,6 +939,10 @@ func TestWaitForYieldsTheBudgetToTheStepsBelowADrainThatOutlastsIt(t *testing.T)
 	}
 }
 
+// Test flow:
+//  1. Run waitFor over a recorder that stops immediately.
+//  2. Assert it returns nil.
+//  3. Assert the recorder is in the drained sequence.
 func TestWaitForReportsNothingWhenTheDrainFinishesInTime(t *testing.T) {
 	var sequence []string
 	if err := waitFor(&shutdownRecorder{sequence: &sequence, name: "races"})(context.Background()); err != nil {
@@ -885,10 +967,12 @@ func (s *settleObserver) Settle(_ context.Context, escrowID string, _ bool) (cha
 	return chain.SettleEscrowResult{}, s.failure
 }
 
-// A nonce committed after the settlement payload has been built is either missing from the state root
-// the chain recomputes or rejects the transaction outright, so routing must stop first. A settlement
-// that fails leaves the escrow retired: its row is inactive and settlement-pending by then, which is
-// where the lifecycle picks it up again.
+// Test flow:
+//  1. For a settlement that succeeds and one the chain refuses, build a registry with one active escrow and an operator wrapping a settle observer.
+//  2. Call operator.Settle for that escrow.
+//  3. Assert the returned error matches the case's failure.
+//  4. Assert the escrow was not routable at the moment settlement began.
+//  5. Assert the escrow is not routable after Settle returns.
 func TestSettleStopsRoutingBeforeTheChainSettlementAndLeavesItRetiredWhenItFails(t *testing.T) {
 	testCases := []struct {
 		name    string
@@ -962,7 +1046,12 @@ func storedDevshard(t *testing.T, records *store.Store, escrowID string) store.D
 	return record
 }
 
-// Activate is the operator's way out of a hold: Add alone is a no-op for a live entry, so the flag must be cleared too.
+// Test flow:
+//  1. Store an active devshard record and put it on hold, then add it to the registry on hold.
+//  2. Call operator.Activate for that escrow.
+//  3. Assert it succeeds.
+//  4. Assert the stored row is active and no longer on hold.
+//  5. Assert the registry no longer reports it on hold and lists it as a candidate.
 func TestActivatingAnEscrowOnHoldResumesItInTheRegistry(t *testing.T) {
 	ctx := context.Background()
 	records := openedStore(t)
@@ -995,7 +1084,12 @@ func TestActivatingAnEscrowOnHoldResumesItInTheRegistry(t *testing.T) {
 	}
 }
 
-// A re-registration upserts the row: without the refusal it would route a parked escrow and erase the hash its settle is tracked by.
+// Test flow:
+//  1. Store an active devshard record, park it for settlement, and set its settle transaction hash.
+//  2. Call operator.AddDevshard for the same escrow with Activate set.
+//  3. Assert it returns ErrDevshardNotActivatable.
+//  4. Assert the stored row is still inactive, settlement-pending, and keeps its settle hash.
+//  5. Assert the escrow was not published routable.
 func TestRegisteringAParkedEscrowIsRefused(t *testing.T) {
 	ctx := context.Background()
 	t.Setenv("DEVSHARD_PARKED_KEY", "0x01")
@@ -1028,6 +1122,11 @@ func TestRegisteringAParkedEscrowIsRefused(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Call operator.AddDevshard for an escrow the store has never seen, with Activate set.
+//  2. Assert it succeeds.
+//  3. Assert the stored row is active.
+//  4. Assert the escrow is published routable.
 func TestRegisteringAnEscrowTheStoreHasNotSeenPublishesIt(t *testing.T) {
 	ctx := context.Background()
 	t.Setenv("DEVSHARD_FRESH_KEY", "0x01")
@@ -1049,8 +1148,11 @@ func TestRegisteringAnEscrowTheStoreHasNotSeenPublishesIt(t *testing.T) {
 	}
 }
 
-// A key no limiter state is tracked under is a typo, not a cleared quarantine, and answering 200 tells
-// the operator a host was reopened that never existed.
+// Test flow:
+//  1. Build a participant limiter and record one transport-fault result for a known participant.
+//  2. Call operator.Unquarantine for a participant key the limiter has never tracked.
+//  3. Assert it returns ErrUnknownParticipant.
+//  4. Call operator.Unquarantine for the tracked participant and assert it succeeds.
 func TestUnquarantiningAnUntrackedParticipantIsNotReportedAsDone(t *testing.T) {
 	configuration := config.Defaults()
 	limiter := limits.NewParticipantLimiter(limits.ParticipantConfigFromLimits(configuration.Limits), time.Now)
@@ -1065,8 +1167,7 @@ func TestUnquarantiningAnUntrackedParticipantIsNotReportedAsDone(t *testing.T) {
 	}
 }
 
-// weightlessSession is enough of an escrow for the registry to publish it and push its membership;
-// it cannot commit a nonce, because *user.PreparedInference has no constructor outside its package.
+// weightlessSession is enough of an escrow session for the registry to publish and route, but cannot commit a nonce.
 type weightlessSession struct{ participants []string }
 
 func (weightlessSession) Balance() uint64    { return 1 << 40 }
@@ -1103,6 +1204,12 @@ func (s weightlessSession) PrepareInferenceFn(user.ParamsForHost) (*user.Prepare
 	return nil, nil
 }
 
+// Test flow:
+//  1. Build capacity, config and a phase observer, then wire a router through newRouting for two weighted participants.
+//  2. Add one escrow to the registry.
+//  3. Assert the escrow's capacity weight is greater than zero.
+//  4. Call router.Pick with a bounded timeout, since the fake session cannot hand back a committed nonce.
+//  5. Assert the pick does not fail with ErrNoEscrowCapacity, meaning the escrow was selected rather than skipped as weightless.
 func TestPublishingAnEscrowGivesItWeightAndMakesItPickable(t *testing.T) {
 	participants := []string{"validator-a", "validator-b"}
 	capacity := limits.NewCapacity(func(string, string) bool { return true })
@@ -1144,8 +1251,6 @@ func TestPublishingAnEscrowGivesItWeightAndMakesItPickable(t *testing.T) {
 	if weight := capacity.EscrowWeight("escrow-1", "model-a"); weight <= 0 {
 		t.Fatalf("EscrowWeight() = %v, want > 0; membership never reached the capacity model, so every candidate scores as weightless", weight)
 	}
-	// The fake session cannot hand back a committed nonce, so the pick is bounded and judged on which
-	// failure it reaches: a weightless escrow is never selected at all.
 	pickCtx, cancelPick := context.WithTimeout(context.Background(), 250*time.Millisecond)
 	defer cancelPick()
 	_, err = router.Pick(pickCtx, scheduler.RequestProfile{Model: "model-a", InputTokens: 4})
@@ -1154,7 +1259,11 @@ func TestPublishingAnEscrowGivesItWeightAndMakesItPickable(t *testing.T) {
 	}
 }
 
-// TestModelCapacityScaleFactorFoldsRelaxedModeOverTheBlockedChainState pins modelCapacity.ScaleFactor. See README.md, "Relaxed mode, in one place".
+// Test flow:
+//  1. Start a blocked phase observer and a capacity model with a partial weight cut.
+//  2. For PoC mode relaxed and off, build a modelCapacity wrapping the same capacity and observer.
+//  3. Read ModelWeights("model-a").ScaleFactor.
+//  4. Assert relaxed mode keeps a positive scale factor and off leaves it at zero.
 func TestModelCapacityScaleFactorFoldsRelaxedModeOverTheBlockedChainState(t *testing.T) {
 	observer := blockedPhaseObserverForTest(t)
 	capacity := limits.NewCapacity(func(string, string) bool { return true })
@@ -1237,8 +1346,7 @@ func blockedPhaseObserverForTest(t *testing.T) *chain.PhaseObserver {
 	return observer
 }
 
-// routingFor builds the escrow set, the capacity model and the picker the way compose does, so a pick
-// is judged on the wiring the gateway actually runs rather than on a hand-built scheduler.
+// routingFor builds the escrow set, capacity model and picker the way compose does.
 func routingFor(t *testing.T, capacity *limits.Capacity, participants []string) *scheduler.Scheduler {
 	t.Helper()
 	_, router := composedRouting(t, capacity, participants)
@@ -1277,7 +1385,9 @@ func composedRouting(t *testing.T, capacity *limits.Capacity, participants []str
 	return escrows, router
 }
 
-// A scheduler without a journal would panic at its first burn, on a goroutine nothing recovers.
+// Test flow:
+//  1. Call newRouting with an empty routingDeps carrying no journal.
+//  2. Assert it returns an error naming the journal as required.
 func TestRoutingIsRefusedWithoutAJournal(t *testing.T) {
 	_, _, _, err := newRouting(routingDeps{})
 
@@ -1286,8 +1396,10 @@ func TestRoutingIsRefusedWithoutAJournal(t *testing.T) {
 	}
 }
 
-// The chain reporting nothing is missing data, not zero capacity: routing on it must still reach a
-// host, because ErrNoEscrowCapacity is what the client is served as a 429.
+// Test flow:
+//  1. Build a table of phase snapshots: a fresh poll naming no participants, a stale poll with last-known weights, and a fresh poll naming every participant at zero weight.
+//  2. Update capacity from each snapshot and route one request through a picker wired for two participants.
+//  3. Assert whether the pick reaches ErrNoEscrowCapacity matches the case's expected routed outcome.
 func TestChainWeightsTheGatewayHasNotObservedStillRouteARequest(t *testing.T) {
 	cases := []struct {
 		name       string
@@ -1325,8 +1437,6 @@ func TestChainWeightsTheGatewayHasNotObservedStillRouteARequest(t *testing.T) {
 			capacity.Update(testCase.snapshot)
 			router := routingFor(t, capacity, []string{"validator-a", "validator-b"})
 
-			// The fake session cannot hand back a committed nonce, so the pick is bounded and judged on
-			// which failure it reaches: a weightless escrow is never selected at all.
 			pickCtx, cancelPick := context.WithTimeout(context.Background(), 250*time.Millisecond)
 			defer cancelPick()
 			_, err := router.Pick(pickCtx, scheduler.RequestProfile{Model: "model-a", InputTokens: 4})
@@ -1338,6 +1448,11 @@ func TestChainWeightsTheGatewayHasNotObservedStillRouteARequest(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Compose a gateway and swap its config for one with a concurrency cap of 1 and no admission queue wait.
+//  2. Acquire once for a model under that cap.
+//  3. Assert the first acquire is admitted.
+//  4. Assert a second acquire is refused with a rate-limit error.
 func TestReconfiguringTheGatewayChangesTheCapTheNextRequestIsJudgedAgainst(t *testing.T) {
 	gatewayEnvironment(t)
 	composed := composedGateway(t)
@@ -1357,7 +1472,11 @@ func TestReconfiguringTheGatewayChangesTheCapTheNextRequestIsJudgedAgainst(t *te
 	composed.limiter.ReleaseForModel("model-a", 1)
 }
 
-// A limiter compose leaves without its narrator cuts hosts off in silence, so the composed limiter's cut-off must reach the journal.
+// Test flow:
+//  1. Compose a gateway and install a log capture.
+//  2. Feed the configured number of transport-fault results into the composed participant limiter for one host.
+//  3. Flush the journal.
+//  4. Assert the log carries a "host cut off after transport faults" line with the expected fields.
 func TestTheComposedParticipantLimiterNarratesACutOffThroughTheJournal(t *testing.T) {
 	gatewayEnvironment(t)
 	logged := logcapture.Install(t)
@@ -1382,6 +1501,11 @@ func TestTheComposedParticipantLimiterNarratesACutOffThroughTheJournal(t *testin
 	}})
 }
 
+// Test flow:
+//  1. Open a store and build a suspicious-hosts tracker over it.
+//  2. Add one host and assert it is reported suspicious.
+//  3. Rebuild the tracker from the same store and assert the pin survived the restart.
+//  4. Remove the host, rebuild again, and assert the unpin survived too.
 func TestSuspiciousHostsAreWrittenThroughToTheStoreTheEngineReadsFrom(t *testing.T) {
 	records, err := store.Open(t.TempDir())
 	if err != nil {
@@ -1425,8 +1549,10 @@ func TestSuspiciousHostsAreWrittenThroughToTheStoreTheEngineReadsFrom(t *testing
 	}
 }
 
-// Governance names a model's context length, and a host's prefill window counts in exactly that unit;
-// without the subscription that carries it, every window falls back to fallback_max_model_len.
+// Test flow:
+//  1. Compose a gateway reading a chain that serves a fixed context window for one model, and start its observer.
+//  2. Poll the participant limiter's prefill window for that model.
+//  3. Assert it converges to the initial-requests count times the governed context window.
 func TestTheComposedParticipantLimiterPricesAModelByTheContextGovernanceReports(t *testing.T) {
 	gatewayEnvironment(t)
 	const governedContext = 4_096
@@ -1468,8 +1594,9 @@ func prefillWindowFor(composed *gateway, participant string) float64 {
 	return 0
 }
 
-// A context length of zero prices a window at nothing, and one absurdly large prices it at a ceiling no
-// host could ever fill; neither is a unit to count prefill in.
+// Test flow:
+//  1. Call contextWindowsOf with a snapshot naming a served model, one with a zero context window, one above the max, and one at the max.
+//  2. Assert the result keeps only the served model and the one at the cap, each with its own length.
 func TestContextWindowsOfKeepsOnlyTheLengthsAHostCouldServe(t *testing.T) {
 	t.Parallel()
 

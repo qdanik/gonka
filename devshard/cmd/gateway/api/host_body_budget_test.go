@@ -9,10 +9,12 @@ import (
 	"devshard/transport"
 )
 
-// A host-bound body carries the escrow's catch-up diffs beside the prompt, and the diffs are the gateway's own
-// state, so a client cannot be refused for them. A prompt admitted against the whole budget therefore fails at
-// send time — after the nonce is committed, which spends the escrow's reserve on nobody. The reserve moves that
-// refusal to the boundary, where it costs a 413 and no nonce.
+// Test flow:
+//  1. Build a chat prompt sized to fit the host request budget alone but overflow it once the escrow's catch-up reserve is added.
+//  2. Send the chat completion request through the harness.
+//  3. Assert the fixture prompt does not already exceed the host budget by itself.
+//  4. Assert the response is refused with 413.
+//  5. Assert no limiter slot was acquired, since the refusal must happen before admission.
 func TestChatLeavesRoomForTheEscrowsCatchUp(t *testing.T) {
 	live := newHarness(t)
 	promptBytes := 3 * (transport.MaxHostRequestBytes - hostCatchUpReserveBytes/2) / 4

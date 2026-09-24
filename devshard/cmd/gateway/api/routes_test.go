@@ -18,6 +18,11 @@ import (
 	"devshard/types"
 )
 
+// Test flow:
+//  1. POST a chat completion naming a model nobody serves.
+//  2. Assert the response is 400 and names the model in its message.
+//  3. Assert no limiter slots, token budget, or races were consumed.
+//  4. Assert the response carries no Retry-After header.
 func TestAnUnroutableModelIsRejectedBeforeTheLimiterAndTheRace(t *testing.T) {
 	live := newHarness(t)
 	recorder := live.request(t, http.MethodPost, "/v1/chat/completions",
@@ -43,7 +48,11 @@ func TestAnUnroutableModelIsRejectedBeforeTheLimiterAndTheRace(t *testing.T) {
 	}
 }
 
-// A model named in limits.model_access is offered, so with nothing routable it answers 503, not a 400 the client could take as its own error.
+// Test flow:
+//  1. Configure `limits.model_access` to offer a model nothing routes to.
+//  2. POST a chat completion for that model.
+//  3. Assert the response is 503 with Retry-After set to the escrow tick interval, not the 400 an unlisted model gets.
+//  4. Assert no limiter slots or races were consumed.
 func TestAModelOfferedThroughAccessAnswersUnavailableWithTheEscrowTick(t *testing.T) {
 	live := newHarness(t, func(configuration *config.Config) {
 		configuration.Limits.ModelAccess = map[string]string{"offered-model": config.ModelAccessOpen}
@@ -66,7 +75,10 @@ func TestAModelOfferedThroughAccessAnswersUnavailableWithTheEscrowTick(t *testin
 	}
 }
 
-// A model named only in limits.model_limits is offered too.
+// Test flow:
+//  1. Configure `limits.model_limits` alone to offer a model nothing routes to.
+//  2. POST a chat completion for that model.
+//  3. Assert the response is 503 with Retry-After set to the escrow tick interval.
 func TestAModelOfferedOnlyThroughModelLimitsAnswersUnavailable(t *testing.T) {
 	live := newHarness(t, func(configuration *config.Config) {
 		configuration.Limits.ModelLimits = map[string]config.ModelLimits{"offered-model": {}}
@@ -83,6 +95,11 @@ func TestAModelOfferedOnlyThroughModelLimitsAnswersUnavailable(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Clear the harness's registry of every model and escrow.
+//  2. POST a chat completion.
+//  3. Assert the response is 503 with Retry-After set to the escrow tick interval, so an empty registry reads as not ready rather than open.
+//  4. Assert no limiter slots or races were consumed.
 func TestAnEmptyRegistryFailsClosed(t *testing.T) {
 	live := newHarness(t)
 	live.escrows.models = nil
@@ -104,6 +121,9 @@ func TestAnEmptyRegistryFailsClosed(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. POST a chat completion body with no model field.
+//  2. Assert the response is 400 and no limiter slot was taken.
 func TestAChatRequestWithoutAModelIsAClientError(t *testing.T) {
 	live := newHarness(t)
 	recorder := live.request(t, http.MethodPost, "/v1/chat/completions",
@@ -116,8 +136,10 @@ func TestAChatRequestWithoutAModelIsAClientError(t *testing.T) {
 	}
 }
 
-// Capacity the gateway does not have is not the client exceeding a quota, so the refusal is 503 with a
-// hint of when to return -- 429 blamed a caller that had exceeded nothing and carried no such hint.
+// Test flow:
+//  1. Make the limiter refuse with a "too many concurrent requests" reason.
+//  2. POST a chat completion.
+//  3. Assert the response is 429 and no race started.
 func TestTheLimiterRejectionReachesTheClientAsTooManyRequests(t *testing.T) {
 	live := newHarness(t)
 	live.limiter.err = &limits.RateLimitError{Reason: "too many concurrent requests"}
@@ -130,6 +152,11 @@ func TestTheLimiterRejectionReachesTheClientAsTooManyRequests(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Make inference fail every attempt.
+//  2. POST a chat completion.
+//  3. Assert the response is 502 with the limiter slot released and its input-token budget freed.
+//  4. Assert the X-Request-Id header is still set on the error path.
 func TestAFailedRaceIsA502AndReturnsItsSlot(t *testing.T) {
 	live := newHarness(t)
 	live.inference.reply = ""
@@ -149,8 +176,11 @@ func TestAFailedRaceIsA502AndReturnsItsSlot(t *testing.T) {
 	}
 }
 
-// A devshard host answers in SSE whether or not the caller asked to stream, so a non-streaming reply
-// is only JSON if the gateway assembles it. Asserting the header alone passes on the raw envelope.
+// Test flow:
+//  1. Make inference reply with a multi-event SSE stream ending in a final data event.
+//  2. POST a non-streaming chat completion.
+//  3. Assert the response is 200 with Content-Type application/json and the request/devshard ID headers set.
+//  4. Decode the body as JSON and assert it is the assembled last event, not the raw SSE envelope.
 func TestASuccessfulNonStreamingReplyIsJSONAndCarriesItsIdentifiers(t *testing.T) {
 	live := newHarness(t)
 	live.inference.reply = "data: {\"id\":\"first\",\"choices\":[]}\n\ndata: {\"id\":\"resp\",\"choices\":[{\"message\":{\"content\":\"hi\"}}]}\n\ndata: [DONE]\n\n"
@@ -178,8 +208,10 @@ func TestASuccessfulNonStreamingReplyIsJSONAndCarriesItsIdentifiers(t *testing.T
 	}
 }
 
-// The strip is a privacy filter, and an unassembled body silently bypasses it: StripResponseBody
-// returns an unparseable payload unchanged.
+// Test flow:
+//  1. Make inference reply with a stream carrying logprobs and prompt_token_ids fields.
+//  2. POST a non-streaming chat completion.
+//  3. Assert the assembled body drops both internal fields while keeping the actual content.
 func TestANonStreamingReplyIsStrippedOfItsInternalFields(t *testing.T) {
 	live := newHarness(t)
 	live.inference.reply = "data: {\"id\":\"resp\",\"choices\":[{\"logprobs\":{\"content\":[]},\"message\":{\"content\":\"hi\"}}],\"prompt_token_ids\":[1,2]}\n\ndata: [DONE]\n\n"
@@ -197,6 +229,11 @@ func TestANonStreamingReplyIsStrippedOfItsInternalFields(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Define a table of streamed outcomes, varying across a host that never terminated, a host that terminated itself, a failure after the client saw bytes, and a winner that produced nothing.
+//  2. For each case, POST a streaming chat completion with that outcome.
+//  3. Assert the body ends with the case's expected tail.
+//  4. Where specified, assert the terminator appears exactly once.
 func TestAStreamCarriesTheTerminatorOnEveryExit(t *testing.T) {
 	testCases := []struct {
 		name     string
@@ -247,6 +284,11 @@ func TestAStreamCarriesTheTerminatorOnEveryExit(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Make inference reply with one SSE chunk.
+//  2. POST a streaming chat completion.
+//  3. Assert the response is 200 with Content-Type text/event-stream, the request ID header set, and the recorder flushed.
+//  4. Assert the body matches the chunk followed by the terminator.
 func TestAStreamedReplyIsFlushedAsEventStream(t *testing.T) {
 	live := newHarness(t)
 	live.inference.reply = "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\n"
@@ -271,6 +313,11 @@ func TestAStreamedReplyIsFlushedAsEventStream(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Make inference emit one chunk and then fail.
+//  2. POST a streaming chat completion.
+//  3. Assert the response still reports the 200 the client already saw.
+//  4. Assert the failure is named in the body instead.
 func TestAFailureAfterTheFirstByteKeepsTheStatusTheClientAlreadySaw(t *testing.T) {
 	live := newHarness(t)
 	live.inference.reply = "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\n"
@@ -285,6 +332,10 @@ func TestAFailureAfterTheFirstByteKeepsTheStatusTheClientAlreadySaw(t *testing.T
 	}
 }
 
+// Test flow:
+//  1. Register two routable models.
+//  2. GET /v1/models.
+//  3. Assert the decoded list carries both model IDs in order with a created timestamp from the injected clock.
 func TestTheModelListNamesEveryRoutableModel(t *testing.T) {
 	live := newHarness(t)
 	live.escrows.models = []string{"qwen", "kimi"}
@@ -305,6 +356,10 @@ func TestTheModelListNamesEveryRoutableModel(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Register two models but scope one escrow to only one of them.
+//  2. GET that escrow's pinned models route.
+//  3. Assert the decoded list carries only that escrow's model.
 func TestThePerEscrowModelListIsScopedToThatEscrow(t *testing.T) {
 	live := newHarness(t)
 	live.escrows.models = []string{"qwen", "kimi"}
@@ -320,7 +375,11 @@ func TestThePerEscrowModelListIsScopedToThatEscrow(t *testing.T) {
 	}
 }
 
-// An escrow on hold is still the operator's, so a pin to it is a wait, not a wrong address.
+// Test flow:
+//  1. Mark one escrow on hold.
+//  2. POST a chat completion pinned to the on-hold escrow and to an unknown escrow.
+//  3. Assert the held escrow answers 503 and the unknown one answers 404.
+//  4. Assert neither request started a race.
 func TestAPinnedChatToAnEscrowOnHoldIsUnavailable(t *testing.T) {
 	live := newHarness(t)
 	live.escrows.onHold = map[string]bool{"8": true}
@@ -339,6 +398,10 @@ func TestAPinnedChatToAnEscrowOnHoldIsUnavailable(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Set the chain snapshot's blocked flag while configuring relaxed PoC mode.
+//  2. GET /v1/status.
+//  3. Assert the decoded status reports not blocked, since relaxed mode is serving traffic, and lists the registered devshard.
 func TestStatusReportsTheAdmissionDecisionNotTheRawChainFlag(t *testing.T) {
 	live := newHarness(t)
 	live.snapshots.snapshot.RequestsBlocked = true
@@ -357,6 +420,10 @@ func TestStatusReportsTheAdmissionDecisionNotTheRawChainFlag(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Define a table of request bodies, varying across empty, one byte, four bytes, and five bytes.
+//  2. For each case, call `estimatePromptTokens`.
+//  3. Assert the result matches the expected token count, with a floor of one even for an empty body.
 func TestEstimatePromptTokensHasAFloorOfOne(t *testing.T) {
 	testCases := []struct {
 		name string
@@ -377,6 +444,11 @@ func TestEstimatePromptTokensHasAFloorOfOne(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Make inference stream two chunks over a real HTTP server wrapping the harness handler.
+//  2. POST a streaming chat completion over the wire, not through the recorder.
+//  3. Assert the response is 200.
+//  4. Assert the X-Devshard-ID header read from the live response carries the serving escrow's ID, since reading from a recorder instead could pass even on a broken stream.
 func TestALiveStreamCarriesTheEscrowHeader(t *testing.T) {
 	live := newHarness(t)
 	live.inference.chunks = []string{
@@ -400,13 +472,15 @@ func TestALiveStreamCarriesTheEscrowHeader(t *testing.T) {
 	if response.StatusCode != http.StatusOK {
 		t.Fatalf("status: got %d", response.StatusCode)
 	}
-	// Read over the wire, not from a recorder: a recorder keeps a live header map, so a header set
-	// after the first byte still shows up there and the assertion would pass on a broken stream.
 	if got := response.Header.Get("X-Devshard-ID"); got != "7" {
 		t.Fatalf("X-Devshard-ID on a live stream: got %q, want the escrow that served it", got)
 	}
 }
 
+// Test flow:
+//  1. Register a live session for an escrow.
+//  2. GET /v1/status.
+//  3. Assert the body carries the session's effective state-root-and-protocol version.
 func TestTheStatusReportsTheSessionVersion(t *testing.T) {
 	live := newHarness(t)
 	session, machine := newLiveSession(t)
@@ -423,8 +497,10 @@ func TestTheStatusReportsTheSessionVersion(t *testing.T) {
 	}
 }
 
-// A 429 tells an operator that the gateway pushed back; only the reason says which cap did it, and
-// without it a throttling incident is a wall of identical statuses.
+// Test flow:
+//  1. Make the limiter refuse with a "too many concurrent requests" reason.
+//  2. POST a chat completion.
+//  3. Assert exactly one rejection was recorded with reason `concurrent_requests` and the model that was turned away.
 func TestALimiterRejectionNamesTheCapItHit(t *testing.T) {
 	live := newHarness(t)
 	live.limiter.err = &limits.RateLimitError{Reason: "too many concurrent requests"}
@@ -440,8 +516,10 @@ func TestALimiterRejectionNamesTheCapItHit(t *testing.T) {
 	}
 }
 
-// The prompt travels base64 in the host request, so a body inside the ingest cap can still be past
-// what a host accepts.
+// Test flow:
+//  1. Build a chat completion whose content is large enough to exceed what a host accepts once base64-encoded, but still under the raw ingest cap.
+//  2. POST it.
+//  3. Assert the response is 413 and no limiter slot was taken, so the refusal precedes admission.
 func TestChatRefusesABodyNoHostCouldBeSent(t *testing.T) {
 	live := newHarness(t)
 	oversized := fmt.Sprintf(`{"model":"qwen","messages":[{"role":"user","content":%q}]}`,
@@ -457,6 +535,10 @@ func TestChatRefusesABodyNoHostCouldBeSent(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a chat completion sized to still fit a host's limit once base64-encoded.
+//  2. POST it.
+//  3. Assert the response is not refused as too large.
 func TestChatServesABodyThatStillFitsOnceEncoded(t *testing.T) {
 	live := newHarness(t)
 	large := fmt.Sprintf(`{"model":"qwen","messages":[{"role":"user","content":%q}]}`,

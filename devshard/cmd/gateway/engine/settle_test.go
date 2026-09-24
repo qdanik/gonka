@@ -44,7 +44,7 @@ func settleEvents(outcome RaceOutcome, poster TimeoutPoster) []TimeoutEvent {
 	return events
 }
 
-// countingPoster reads how many events had been reported when each vote was posted.
+// countingPoster records how many events had been reported when each vote was posted.
 type countingPoster struct {
 	reported   *[]TimeoutEvent
 	seenAtPost []int
@@ -57,7 +57,10 @@ func (p *countingPoster) SettleTimeout(context.Context, TimeoutStep) (TimeoutVot
 	return TimeoutVote{Kind: TimeoutKindRefused}, nil
 }
 
-// A vote round runs for minutes; a started event held back until it ends hides the vote in flight.
+// Test flow:
+//  1. Build a race outcome with two unsettled attempts and settle it through a `countingPoster` that records how many events had already been reported at each post.
+//  2. Assert the first post saw one reported event and the second post saw three.
+//  3. Assert both attempts' first reported event is a started action.
 func TestAStartedEventIsReportedBeforeItsVoteIsPosted(t *testing.T) {
 	first := unsettledAttempt()
 	first.Nonce = 11
@@ -75,6 +78,10 @@ func TestAStartedEventIsReportedBeforeItsVoteIsPosted(t *testing.T) {
 	require.Equal(t, TimeoutActionStarted, reported[2].Action)
 }
 
+// Test flow:
+//  1. Settle a race with one unsettled attempt through a `stubPoster` that votes refused.
+//  2. Assert exactly one post landed, for the attempt's own nonce, sent at its `StartedAt`.
+//  3. Assert two events were reported: started then completed.
 func TestTimeoutLadderPostsWhenNoSkipConditionHolds(t *testing.T) {
 	poster := &stubPoster{vote: "refused"}
 
@@ -94,8 +101,10 @@ func TestTimeoutLadderPostsWhenNoSkipConditionHolds(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. For each table case's attempt shape (no skip condition, phase transition aborted, an already-finished empty/error/capability-refused stream, a long response past/just-under its exemption — where `ContentSource` is what marks a stream as carrying real content, since `ContentChunks` alone also counts error events — or a state-divergent host), settle it and check whether a vote posted and what reason the first event carries.
+//  2. For a separately tabled case of an attempt whose nonce already finished successfully, assert it produces neither a post nor any event at all.
 func TestTimeoutLadderSkipConditions(t *testing.T) {
-	// ContentSource is what makes these "after content": ContentChunks alone counts error events too.
 	longResponse := unsettledAttempt()
 	longResponse.ContentChunks = 3
 	longResponse.ContentSource = "delta.content"
@@ -185,6 +194,9 @@ func TestTimeoutLadderSkipConditions(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build an attempt that matches several skip conditions at once (phase aborted, an already-finished empty stream, and a long response past its exemption).
+//  2. Settle it and assert the reported reason is the first matching rung of the ladder, phase-aborted, not any of the later ones.
 func TestTimeoutSkipLadderOrder(t *testing.T) {
 	attempt := unsettledAttempt()
 	attempt.PhaseTransitionAborted = true
@@ -201,6 +213,9 @@ func TestTimeoutSkipLadderOrder(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. For each table case's attempt (one that never received a receipt, one that received a receipt but then failed), settle it.
+//  2. Assert the reported timeout kind is refused for the unreceipted attempt and execution for the receipted one.
 func TestTimeoutKindFollowsReceipt(t *testing.T) {
 	received := unsettledAttempt()
 	received.ReceiptTime = testEpoch.Add(300 * time.Millisecond)
@@ -227,6 +242,10 @@ func TestTimeoutKindFollowsReceipt(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Settle an unsettled attempt through a `stubPoster` that votes an execution kind.
+//  2. Assert the started event still reports the refused kind guessed before posting.
+//  3. Assert the completed event's kind is overridden to the kind the poster actually voted.
 func TestTimeoutVoteOverridesKind(t *testing.T) {
 	poster := &stubPoster{vote: "execution"}
 
@@ -240,6 +259,9 @@ func TestTimeoutVoteOverridesKind(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Settle an unsettled attempt through a `stubPoster` that votes refused but fails to post.
+//  2. Assert the completed event reports a failed action with the collection-error reason.
 func TestTimeoutPostFailureIsReported(t *testing.T) {
 	poster := &stubPoster{vote: "refused", err: errors.New("collect timeout votes")}
 
@@ -250,6 +272,10 @@ func TestTimeoutPostFailureIsReported(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a race outcome with two unsettled attempts and one already-settled attempt.
+//  2. Settle it through a `stubPoster`.
+//  3. Assert exactly one post landed per unsettled nonce, and the settled attempt's nonce was never posted.
 func TestEveryUnsettledNonceIsPostedOnce(t *testing.T) {
 	first := unsettledAttempt()
 	first.Nonce = 11
@@ -272,6 +298,9 @@ func TestEveryUnsettledNonceIsPostedOnce(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Settle a race with one unsettled attempt.
+//  2. Assert the reported event carries the attempt's participant, the race's model, and the attempt's nonce.
 func TestTimeoutEventCarriesRaceIdentity(t *testing.T) {
 	events := settleEvents(race(unsettledAttempt()), &stubPoster{})
 
@@ -280,13 +309,13 @@ func TestTimeoutEventCarriesRaceIdentity(t *testing.T) {
 	}
 }
 
-// A host that emits one SSE error event and then holds the stream open past the long-response exemption
-// leaves its nonce committed, unfinished, and unvoted: the exemption counts error chunks as content, so
-// the timeout vote it exists to defer is dropped instead. Nothing else sweeps an unfinished nonce, so
-// the escrow can never reclaim what that nonce cost. See rules.md, invariant 1.
+// Test flow:
+//  1. Build an attempt that ended in an error stream, whose only chunk was the error event itself, held open past the long-response exemption.
+//  2. Compute its `TimeoutPlan`.
+//  3. Assert the plan still posts a timeout vote for the unfinished nonce, since the long-response exemption does not apply to a stream with no real content.
 func TestAnErrorOnlyStreamStillVotesItsTimeout(t *testing.T) {
 	attempt := failedAttempt(TerminalErrorStream)
-	attempt.ContentChunks = 1 // the error event itself, counted as a chunk
+	attempt.ContentChunks = 1
 	attempt.ContentSource = ""
 	attempt.Completed = attempt.StartedAt.Add(longResponseExemption)
 	outcome := RaceOutcome{Attempts: []AttemptOutcome{attempt}}
@@ -301,8 +330,10 @@ func TestAnErrorOnlyStreamStillVotesItsTimeout(t *testing.T) {
 	}
 }
 
-// The exemption it must not break: a host genuinely streaming content for longer than the window is
-// still working, and voting a timeout against it would settle a race that has not finished.
+// Test flow:
+//  1. Build an attempt truncated after streaming real content past the long-response exemption.
+//  2. Compute its `TimeoutPlan`.
+//  3. Assert the plan reports the attempt but does not post — the long-response exemption still holds.
 func TestALongRunningContentStreamKeepsItsExemption(t *testing.T) {
 	attempt := failedAttempt(TerminalStreamTruncated)
 	attempt.ContentChunks = 40
@@ -317,8 +348,9 @@ func TestALongRunningContentStreamKeepsItsExemption(t *testing.T) {
 	}
 }
 
-// A nonce the host finished during the wait owes no timeout. Reported as a collection failure it
-// would read as a broken vote, and the verifiers that refused it were right to.
+// Test flow:
+//  1. Settle an unsettled attempt through a `stubPoster` that fails posting with `user.ErrNonceFinishedWhileWaiting`.
+//  2. Assert the completed event reports a skipped action with the nonce-finished reason, not a failure.
 func TestANonceFinishedWhileWaitingIsSkippedRatherThanFailed(t *testing.T) {
 	poster := &stubPoster{vote: "execution", err: user.ErrNonceFinishedWhileWaiting}
 
@@ -329,6 +361,9 @@ func TestANonceFinishedWhileWaitingIsSkippedRatherThanFailed(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. For each table case's poster detail and error (a named verifier failure, an unnamed collection failure, a named short vote, an unnamed unapplied timeout), settle an outcome through a `stubPoster` returning that failure.
+//  2. Assert the final reported event's reason matches the case's expected reason, falling back to the generic reason only when the poster named none.
 func TestSettleTimeoutsCarriesTheVerifierFailureItWasGiven(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -356,6 +391,9 @@ func TestSettleTimeoutsCarriesTheVerifierFailureItWasGiven(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Settle a race with one unsettled attempt.
+//  2. Assert both the started and completed events carry the race's request id.
 func TestEveryTimeoutEventNamesTheRequestThatOwedIt(t *testing.T) {
 	events := settleEvents(race(unsettledAttempt()), &stubPoster{})
 
@@ -364,7 +402,9 @@ func TestEveryTimeoutEventNamesTheRequestThatOwedIt(t *testing.T) {
 	require.Equal(t, "req-1", events[1].RequestID)
 }
 
-// The shared session writes its timeout stages with the context it is handed; this is the only way they learn the request.
+// Test flow:
+//  1. Build a settle context for a named request id.
+//  2. Assert `logging.RequestID` reads the same request id back out of it.
 func TestTheSettleContextCarriesTheRequestIntoTheSharedStages(t *testing.T) {
 	requestID, carried := logging.RequestID(settleContext("req-9"))
 
@@ -372,7 +412,9 @@ func TestTheSettleContextCarriesTheRequestIntoTheSharedStages(t *testing.T) {
 	require.Equal(t, "req-9", requestID)
 }
 
-// logging.WithRequestID mints an id for an empty one, which would stamp a vote with a request that never existed.
+// Test flow:
+//  1. Build a settle context for an empty request id.
+//  2. Assert `logging.RequestID` reports no request id carried.
 func TestTheSettleContextOfAnUnnamedRaceCarriesNoRequest(t *testing.T) {
 	_, carried := logging.RequestID(settleContext(""))
 

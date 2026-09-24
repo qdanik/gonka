@@ -20,9 +20,6 @@ const (
 
 var testEpoch = time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC)
 
-// The probe prices a request at 16 tokens on both sides and starts each window 16 requests wide, so a
-// window starts at 256 tokens. One attempt fills the window, which is the peak a healthy answer needs
-// before it widens; nothing has narrowed the window yet, so that answer widens it by every token it carried.
 const (
 	probeRequestTokens    = 16
 	probeStartingRequests = 16
@@ -46,8 +43,7 @@ func limiterConfig(tripThreshold int64) limits.ParticipantConfig {
 	}
 }
 
-// observedWindows drives one verdict through a real limiter instead of asserting against a second copy of
-// limits' own rules, and reads both windows back off the snapshot metrics and /v1/admin/hosts are served from.
+// observedWindows drives one verdict through a real limiter and reads both windows back off its snapshot.
 func observedWindows(t *testing.T, verdict limits.Verdict, recorded bool) (input, output float64) {
 	t.Helper()
 
@@ -88,8 +84,6 @@ func probeResult(verdict limits.Verdict) limits.Result {
 	}
 }
 
-// A window is a float, and the ladder's factors do not land on round token counts; anything the ladder
-// actually moves is wider apart than this.
 const windowTolerance = 0.5
 
 func assertWindowsAndCutoff(t *testing.T, verdict limits.Verdict, recorded bool, wantInput, wantOutput float64, wantCutoff bool) {
@@ -145,14 +139,14 @@ func race(attempt AttemptOutcome) RaceOutcome {
 	}
 }
 
-// Every upstream condition in the verdict specification, asserting the verdict, whether it is
-// reported at all, and what a real limiter does with it.
+// Test flow:
+//  1. Build a table covering every upstream condition the verdict specification classifies: a clean finish by the winner and by a loser, missed first-token and receipt deadlines, overload (429/503), transport faults (404/403/401-drift/dial-failure/unexpected-EOF/truncated-stream), on-path and off-path rejections, an empty stream that never finished its nonce versus one that did (a finished nonce still counts as an answer; an unfinished one keeps its reserve parked for the timeout vote), a burned-token empty stream, an error-stream and a capability refusal, a stalled winner, a long response past the exemption (marked by ContentSource so it reads as a long response rather than a silent error-only attempt), the PoC bypass, a phase-transition abort, an escrow-missing signal, state-root divergence, and a still-unfinished clean attempt.
+//  2. For each case, assert Verdict() returns the table's verdict and recorded flag.
+//  3. Drive that verdict through a real limiter and assert the resulting input/output windows and cutoff state match the table.
 func TestVerdictTable(t *testing.T) {
 	stalled := failedAttempt(TerminalStalled)
 	stalled.ContentChunks = 5
 
-	// ContentSource is what makes this a long response rather than a long silence: ContentChunks
-	// counts error events too, and an error-only attempt must keep its timeout vote.
 	longResponse := cleanAttempt()
 	longResponse.NonceFinished = false
 	longResponse.ContentSource = "delta.content"
@@ -164,8 +158,6 @@ func TestVerdictTable(t *testing.T) {
 	heldEmpty := failedAttempt(TerminalEmptyStream)
 	heldEmpty.Completed = testEpoch.Add(emptyStreamHeldTooLong)
 
-	// A host that closed its nonce answered, even with nothing in it; one that did not took the work
-	// and left its reserve parked until the timeout vote.
 	finishedEmpty := failedAttempt(TerminalEmptyStream)
 	finishedEmpty.NonceFinished = true
 
@@ -274,8 +266,10 @@ func TestVerdictTable(t *testing.T) {
 	}
 }
 
-// A deadline is judged while the attempt still runs, so these two verdicts reach the limiter with no
-// upstream condition to classify: the stage the deadline belongs to is the whole of what they carry.
+// Test flow:
+//  1. Build a table of the two deadlines a still-running attempt can miss (receipt, first-token) with the verdict each should produce.
+//  2. For each stage, assert missedDeadlineVerdict returns the table's verdict.
+//  3. Drive that verdict through a real limiter and assert the resulting windows and cutoff match the table.
 func TestMissedDeadlineVerdictTable(t *testing.T) {
 	tests := []struct {
 		name             string
@@ -302,9 +296,11 @@ func TestMissedDeadlineVerdictTable(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a table of every exemption rung: a healthy attempt, a phase-transition abort, an error stream, a capability refusal, state-root divergence, a long response past the exemption (marked by ContentSource, distinct from a silent error-only attempt), an empty stream under the PoC bypass, an empty stream in a race nobody won, an empty stream in a race someone else won, a client-cancelled loser, and an assignment no attempt could spend.
+//  2. For each case, assert sampleExemption returns the table's exemption.
+//  3. Assert Sample reports a sample only for the cases the table expects SampleRecorded.
 func TestSampleExemptionLadderRungs(t *testing.T) {
-	// ContentSource is what makes this a long response rather than a long silence: ContentChunks
-	// counts error events too, and an error-only attempt must keep its timeout vote.
 	longResponse := cleanAttempt()
 	longResponse.NonceFinished = false
 	longResponse.ContentSource = "delta.content"
@@ -360,8 +356,9 @@ func TestSampleExemptionLadderRungs(t *testing.T) {
 	}
 }
 
-// Earlier rungs must win: each combination is exempt for two reasons at once and the ladder has to
-// report the first, or the order it claims to have is not the order it applies.
+// Test flow:
+//  1. Build one attempt that is both phase-transition-aborted and state-divergent, and another that is both state-divergent and racing under an active PoC bypass.
+//  2. Assert sampleExemption reports the earlier rung in each case: phase abort before state divergence, and state divergence before the PoC bypass.
 func TestSampleExemptionLadderOrder(t *testing.T) {
 	abortedAndDivergent := failedAttempt(TerminalEmptyStream)
 	abortedAndDivergent.PhaseTransitionAborted = true
@@ -394,6 +391,10 @@ func TestSampleExemptionLadderOrder(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a race around a clean, winning attempt.
+//  2. Call Sample and assert it returns SampleRecorded.
+//  3. Assert the sample's participant, model, and responsiveness fields match the attempt.
 func TestSampleFields(t *testing.T) {
 	t.Parallel()
 
@@ -413,6 +414,10 @@ func TestSampleFields(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a table of attempt shapes: a clean finish, a nonce left unfinished, a receipt left unconfirmed, and an empty stream that finished its nonce and was confirmed.
+//  2. For each case, call Sample and assert it returns SampleRecorded.
+//  3. Assert the sample's Responsive field matches the table's expectation.
 func TestSampleResponsive(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -454,8 +459,11 @@ func TestSampleResponsive(t *testing.T) {
 	}
 }
 
-// The two penalties are independent: crown denial keeps the host off the client's answer, the cutoff
-// keeps it off the escrow's nonces, and neither moves the congestion windows.
+// Test flow:
+//  1. Build a race around an empty-stream attempt whose nonce never finished.
+//  2. Assert Verdict reports EmptyAnswerLeftOpen and that it is recorded.
+//  3. Drive that verdict through a real limiter and assert both windows narrow to 128 and the cutoff opens.
+//  4. Assert DeniesCrowning reports true.
 func TestEmptyStreamWithAnUnfinishedNonceDeniesCrowningAndOpensTheCutoff(t *testing.T) {
 	t.Parallel()
 
@@ -478,6 +486,9 @@ func TestEmptyStreamWithAnUnfinishedNonceDeniesCrowningAndOpensTheCutoff(t *test
 	}
 }
 
+// Test flow:
+//  1. Build a table of attempt shapes: an empty stream, a burned-token empty stream, a clean finish, a phase-transition-aborted empty stream, and an empty stream under an active PoC bypass.
+//  2. For each case, assert DeniesCrowning matches the table's expectation.
 func TestDeniesCrowning(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -511,6 +522,9 @@ func TestDeniesCrowning(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build attempt variants: a winner, a suppressed loser, a shadow-quarantined host whose loser attempt another host served for, a shadow-quarantined host that served alone, a role-less attempt, an unfinished nonce, a throttled attempt, a truncated stream, and a phase-transition-aborted empty stream.
+//  2. For each case, assert Labels returns the table's participant, model, role, outcome, visibility, and reason.
 func TestLabels(t *testing.T) {
 	loser := cleanAttempt()
 	loser.Terminal = TerminalLost
@@ -589,6 +603,9 @@ func TestLabels(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a table pairing every terminal with the failure reason string it should report.
+//  2. For each terminal, assert reason() returns the table's string.
 func TestTerminalFailureReasons(t *testing.T) {
 	tests := []struct {
 		terminal Terminal
@@ -623,8 +640,9 @@ func TestTerminalFailureReasons(t *testing.T) {
 	}
 }
 
-// The engine reports lifecycle signals and does nothing with them: no verdict, sample, label or
-// crowning decision may read them, or the engine would be acting on escrow state it cannot own.
+// Test flow:
+//  1. Build two races around the same clean attempt, one with no lifecycle signals and one with EscrowMissing and BalanceExhausted both set.
+//  2. Assert Verdict, Sample, Labels, and DeniesCrowning all return the same result for both races.
 func TestLifecycleSignalsAreInert(t *testing.T) {
 	t.Parallel()
 
@@ -655,9 +673,10 @@ func TestLifecycleSignalsAreInert(t *testing.T) {
 	}
 }
 
-// classifyDispatchError and metrics read one table in opposite directions. A status that classifies
-// to one terminal and reports back as a different one mislabels the transport-error metric with a
-// status no host returned, and nothing else would notice.
+// Test flow:
+//  1. For every terminal/status pair in terminalStatuses, build an UpstreamStatusError carrying that status (and the timestamp-drift body when the terminal calls for it).
+//  2. Classify the error and assert it maps back to the same terminal.
+//  3. Assert StatusFor recovers the same status code from that terminal.
 func TestEveryRecoveredStatusRoundTripsThroughItsTerminal(t *testing.T) {
 	for terminal, status := range terminalStatuses {
 		body := ""
@@ -677,9 +696,10 @@ func TestEveryRecoveredStatusRoundTripsThroughItsTerminal(t *testing.T) {
 	}
 }
 
-// The log field is called terminal, so it carries the terminal's name. reason() answers why an attempt
-// failed and is empty for the two outcomes that are not failures -- an empty log field reads as missing
-// data, and failureReason depends on that same emptiness to fall through.
+// Test flow:
+//  1. Walk every terminal from TerminalUnclassified to TerminalHardTimeout.
+//  2. Assert each one has a non-empty name that is not the unnamed/unknown placeholder.
+//  3. Assert a win and a loss both report an empty failure reason.
 func TestEveryTerminalHasAName(t *testing.T) {
 	for terminal := TerminalUnclassified; terminal <= TerminalHardTimeout; terminal++ {
 		if terminal.String() == "" {
@@ -694,9 +714,10 @@ func TestEveryTerminalHasAName(t *testing.T) {
 	}
 }
 
-// A committed nonce whose attempt never reported used to be dropped from the outcome entirely: no log
-// line, no ledger row, and -- because TimeoutPlan reads only the outcome -- no timeout vote for a nonce
-// already spent on chain. Production logs showed 8 of 255 nonces leaving no trace at all.
+// Test flow:
+//  1. Build an outcome with one attempt that was dispatched (SendTime set) and never classified past TerminalUnclassified.
+//  2. Call TimeoutPlan and assert it returns one step for that nonce with Post set, since the nonce was spent on chain and never finished.
+//  3. Assert Sample exempts it as ExemptNeverReported.
 func TestAnAttemptThatNeverReportedStillOwesAVote(t *testing.T) {
 	outcome := RaceOutcome{
 		Model: testModel,
@@ -721,7 +742,9 @@ func TestAnAttemptThatNeverReportedStillOwesAVote(t *testing.T) {
 	}
 }
 
-// Prefill must not be charged to decode speed; first-content already measures it.
+// Test flow:
+//  1. Build an attempt whose first content arrived 5 seconds in and last chunk 15 seconds in, with 100 completion tokens reported.
+//  2. Assert TimePerOutputToken divides only the 10-second decode window by the token count, not the prefill time before first content.
 func TestTimePerOutputTokenMeasuresTheDecodeWindowAlone(t *testing.T) {
 	t.Parallel()
 	attempt := cleanAttempt()
@@ -734,7 +757,10 @@ func TestTimePerOutputTokenMeasuresTheDecodeWindowAlone(t *testing.T) {
 	}
 }
 
-// A missing input leaves the measure unreported rather than wrong.
+// Test flow:
+//  1. Build a baseline attempt with a measurable decode window and completion token count.
+//  2. Vary it per case: no completion tokens reported, content never arriving, a one-chunk-wide answer, or a last chunk that predates the first.
+//  3. Assert TimePerOutputToken reports 0 for every case that leaves no measurable window.
 func TestTimePerOutputTokenIsUnreportedWithoutAMeasurableWindow(t *testing.T) {
 	t.Parallel()
 	measurable := cleanAttempt()
@@ -765,7 +791,10 @@ func TestTimePerOutputTokenIsUnreportedWithoutAMeasurableWindow(t *testing.T) {
 	}
 }
 
-// The sample is the only route from a finished attempt to the tracker.
+// Test flow:
+//  1. Build an attempt with a 2-second decode window and 40 completion tokens.
+//  2. Call Sample and assert it is recorded.
+//  3. Assert the sample's TimePerOutputToken matches the decode measure.
 func TestSampleCarriesTheDecodeMeasure(t *testing.T) {
 	t.Parallel()
 	attempt := cleanAttempt()
@@ -783,8 +812,9 @@ func TestSampleCarriesTheDecodeMeasure(t *testing.T) {
 	}
 }
 
-// A strike is cleared by a host that answered, not by one that never got the chance. Judging every
-// terminal lets a host alternate empty streams with dial failures and never reach the threshold.
+// Test flow:
+//  1. Build a table of attempt shapes: content answered, an empty stream, never reaching the host, the client leaving, and a win that was never confirmed.
+//  2. For each case, assert JudgesCrowning matches the table's expectation, so a host alternating empty streams with dial failures cannot dodge the crown-denial strike threshold.
 func TestOnlyAnAnswerOrAnEmptyStreamJudgesCrowning(t *testing.T) {
 	t.Parallel()
 	for _, testCase := range []struct {
@@ -807,8 +837,10 @@ func TestOnlyAnAnswerOrAnEmptyStreamJudgesCrowning(t *testing.T) {
 	}
 }
 
-// A host that never answered must keep the strikes it earned. Reporting every attempt clears them on a
-// dial failure, so a host alternating empty streams with failures never reaches the threshold.
+// Test flow:
+//  1. Build a crown-strikes tracker and record all but one of the strikes needed to deny a host's crown.
+//  2. Report a race the host never answered (TerminalNoReceipt) through observeCrowning.
+//  3. Record the final strike and assert the host is denied, proving the never-answered race left its strikes untouched.
 func TestARaceTheHostNeverAnsweredLeavesItsStrikesAlone(t *testing.T) {
 	t.Parallel()
 	crown := newCrownStrikes(nil)
@@ -824,8 +856,9 @@ func TestARaceTheHostNeverAnsweredLeavesItsStrikesAlone(t *testing.T) {
 	}
 }
 
-// The oversize cap is the gateway's own buffer limit, so an attempt it kills says nothing about the
-// host's transport and must not open its cutoff.
+// Test flow:
+//  1. Build an attempt that failed because the gateway's own oversize cap killed it.
+//  2. Assert Verdict reports ModelOutcome, since the response-too-large cap says nothing about the host's transport.
 func TestResponseTooLargeIsNotChargedToTheHostAsATransportFault(t *testing.T) {
 	t.Parallel()
 
@@ -838,8 +871,10 @@ func TestResponseTooLargeIsNotChargedToTheHostAsATransportFault(t *testing.T) {
 	}
 }
 
-// A 5xx is the host's upstream failing while the host itself answers, so the window should narrow for it.
-// A 4xx, and a 5xx that names a fault in what the gateway sent, must not move the host's window at all.
+// Test flow:
+//  1. Build a table of upstream status/body pairs: bare 500/502/504 server errors, a 400 client error, and 500s whose body names a fault the gateway caused (escrow not found, nonce cap exceeded, prompt hash mismatch).
+//  2. Classify each error and assert it lands on the table's terminal.
+//  3. Assert Verdict reports the table's verdict, moving the window only for the bare 5xx server errors and never for the 4xx or gateway-caused 5xx cases.
 func TestUpstreamServerErrorsNarrowTheWindowAndClientErrorsDoNot(t *testing.T) {
 	t.Parallel()
 	testCases := []struct {

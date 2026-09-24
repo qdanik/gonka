@@ -9,6 +9,9 @@ import (
 	"devshard/cmd/gateway/config"
 )
 
+// Test flow:
+//  1. Map `config.Defaults().Limits` through `GatewayConfigFromLimits`.
+//  2. Assert MaxConcurrent, MaxInputTokens and AcquireWait each match the corresponding defaults field.
 func TestGatewayConfigFromLimits_MapsFieldsFromDefaults(t *testing.T) {
 	t.Parallel()
 	limits := config.Defaults().Limits
@@ -26,6 +29,11 @@ func TestGatewayConfigFromLimits_MapsFieldsFromDefaults(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a `config.Limits` with per-model overrides: modelA sets MaxConcurrentRequests, modelB sets nothing.
+//  2. Map it through `GatewayConfigFromLimits`.
+//  3. Assert modelA's mapped override carries MaxConcurrent=7 and a nil MaxInputTokens.
+//  4. Assert modelB's mapped override has both fields nil.
 func TestGatewayConfigFromLimits_MapsPerModelOverrides(t *testing.T) {
 	t.Parallel()
 	maxConcurrent := int64(7)
@@ -58,6 +66,11 @@ func TestGatewayConfigFromLimits_MapsPerModelOverrides(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Map `config.Defaults().Limits` through `ParticipantConfigFromLimits`.
+//  2. Assert the input and output pricing bounds match the configured host windows.
+//  3. Assert the fallback context and output token counts match the model length and token cap defaults.
+//  4. Assert the congestion factors, slack, failure threshold and breaker open durations all match the defaults.
 func TestParticipantConfigFromLimits_MapsFieldsFromDefaults(t *testing.T) {
 	t.Parallel()
 	limits := config.Defaults().Limits
@@ -109,8 +122,11 @@ func TestParticipantConfigFromLimits_MapsFieldsFromDefaults(t *testing.T) {
 	}
 }
 
-// Prefill and decode are separate settings priced in separate units, and the defaults make both windows
-// the same size: only a config that tells them apart can tell the mapping apart.
+// Test flow:
+//  1. Configure distinct input and output host windows and a named model with its own context length and token cap.
+//  2. Map the configuration through `ParticipantConfigFromLimits`.
+//  3. Assert the input and output pricing bounds each keep their own configured values, not shared.
+//  4. Assert the model's context and output token limits are taken from its own settings.
 func TestParticipantConfigFromLimits_PricesEachWindowFromItsOwnSetting(t *testing.T) {
 	t.Parallel()
 	configured := config.Defaults().Limits
@@ -139,6 +155,11 @@ func TestParticipantConfigFromLimits_PricesEachWindowFromItsOwnSetting(t *testin
 	}
 }
 
+// Test flow:
+//  1. Set `Perf.HostStalenessSeconds` to 90 on a default configuration.
+//  2. Map it through `ParticipantConfigFromConfig`.
+//  3. Assert IdleEviction equals the 90-second staleness window.
+//  4. Assert the pricing windows still match the plain `ParticipantConfigFromLimits` mapping, unaffected by the eviction setting.
 func TestParticipantConfigFromConfig_ForgetsIdlePairsOnThePerfStalenessWindow(t *testing.T) {
 	t.Parallel()
 	configuration := config.Defaults()
@@ -154,8 +175,12 @@ func TestParticipantConfigFromConfig_ForgetsIdlePairsOnThePerfStalenessWindow(t 
 	}
 }
 
-// Capacity's derived scale feeds GatewayLimiter's admission, and ParticipantLimiter (built from
-// the same mapped config) independently gates a single host at its per-host window.
+// Test flow:
+//  1. Build a `GatewayLimiter`, a `ParticipantLimiter` and a `Capacity`, all from the same default limits.
+//  2. Update `Capacity` with current and full chain weights for "modelA" and assert its scale factor is 0.8.
+//  3. Acquire and release one request on the gateway limiter under that scale factor.
+//  4. Acquire on the participant limiter up to its initial window size and assert every one is admitted.
+//  5. Assert one more acquire beyond the window is refused.
 func TestCapacityGatewayParticipantLimiterComposeEndToEnd(t *testing.T) {
 	t.Parallel()
 	limits := config.Defaults().Limits

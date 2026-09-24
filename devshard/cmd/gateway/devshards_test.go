@@ -7,7 +7,11 @@ import (
 	"devshard/cmd/gateway/store"
 )
 
-// The prefix an escrow was created under outranks the one this gateway is currently serving.
+// Test flow:
+//  1. Call escrowRoutePrefix with a pinned record naming its own route prefix.
+//  2. Assert the pinned prefix wins over the gateway's own running prefix.
+//  3. Call escrowRoutePrefix with an unpinned record.
+//  4. Assert it falls back to the gateway's own running prefix.
 func TestEscrowRoutePrefixPrefersThePinOverTheRunningGateway(t *testing.T) {
 	pinned := store.DevshardRecord{EscrowID: "58128", RoutePrefix: "/devshard/v3"}
 	if got := escrowRoutePrefix(pinned, "/devshard/v4"); got != "/devshard/v3" {
@@ -34,8 +38,11 @@ func (r *recordingRegistry) UpsertDevshard(_ context.Context, record store.Devsh
 	return nil
 }
 
-// A seed naming no key variable can never be signed for, and every other path that registers a
-// devshard rejects that outright.
+// Test flow:
+//  1. Call seedDevshards with a seed JSON that names no private_key_env.
+//  2. Assert it returns an error and stores nothing in the registry.
+//  3. Call seedDevshards again with the same seed plus private_key_env set.
+//  4. Assert it succeeds and stores exactly one record.
 func TestSeedDevshardsRejectsASeedThatNamesNoKeyVariable(t *testing.T) {
 	registry := &recordingRegistry{}
 	if err := seedDevshards(context.Background(), registry, `[{"escrow_id":"58128","model":"Qwen/Test"}]`); err == nil {

@@ -105,7 +105,11 @@ func (n *recordingLifecycleNarrator) TimeoutsSwept(due, applied, failed int) {
 	n.note("swept due %d applied %d failed %d", due, applied, failed)
 }
 
-// The id is the text every other line names the escrow by, not the chain's number.
+// Test flow:
+//  1. Build a manager with a `recordingLifecycleNarrator` and a tx client whose createEscrowFn returns escrow ID 42.
+//  2. Call createEscrow for a temp role at epoch 7.
+//  3. Assert createEscrow returns no error.
+//  4. Assert the narrator recorded the escrow ID as text ("42"), not the chain's numeric type.
 func TestACreatedEscrowIsNarratedWithItsIDAsText(t *testing.T) {
 	narrator := &recordingLifecycleNarrator{}
 	txClient := &fakeTxClient{createEscrowFn: func(_ context.Context, _ *signing.Secp256k1Signer, _ uint64, _ string, onPrepared func(string) error) (chain.CreateEscrowResult, error) {
@@ -126,6 +130,11 @@ func TestACreatedEscrowIsNarratedWithItsIDAsText(t *testing.T) {
 	require.Equal(t, []string{"created 42 model-a temp epoch 7 tx TX-HAPPY"}, narrator.recorded())
 }
 
+// Test flow:
+//  1. Save a commitment and stub getTxEscrowIDFn, varied across cases: a create that landed while the gateway was down, a transaction that committed and created nothing, and a transaction past its reconcile window.
+//  2. Call reconcile.
+//  3. Assert reconcile returns no error.
+//  4. Assert the narrator recorded the expected "recovered" or "cleared" line for that case.
 func TestReconcileNarratesWhatItRecoveredAndWhatItCleared(t *testing.T) {
 	fixedNow := time.Date(2026, 3, 3, 12, 0, 0, 0, time.UTC)
 	testCases := []struct {
@@ -171,6 +180,10 @@ func TestReconcileNarratesWhatItRecoveredAndWhatItCleared(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Store one active devshard record and a tx client whose GetEscrow reports it not found.
+//  2. Call TriggerEscrowCheck for that escrow and assert it returns no error.
+//  3. Assert the narrator recorded "gone from chain 1".
 func TestAnEscrowGoneFromChainIsNarrated(t *testing.T) {
 	testStore := newFakeStore()
 	testStore.devshards["1"] = store.DevshardRecord{EscrowID: "1", Model: "model-a", Active: true}
@@ -187,6 +200,9 @@ func TestAnEscrowGoneFromChainIsNarrated(t *testing.T) {
 	require.Equal(t, []string{"gone from chain 1"}, narrator.recorded())
 }
 
+// Test flow:
+//  1. Call OnBalanceExhausted for the same escrow ID twice with the same reason.
+//  2. Assert the narrator recorded the "marked for replacement" line only once.
 func TestADepletedEscrowIsNarratedOnceWhenMarked(t *testing.T) {
 	narrator := &recordingLifecycleNarrator{}
 	m := &Manager{narrator: narrator}
@@ -197,6 +213,11 @@ func TestADepletedEscrowIsNarratedOnceWhenMarked(t *testing.T) {
 	require.Equal(t, []string{"marked for replacement 1: nonce_cap"}, narrator.recorded())
 }
 
+// Test flow:
+//  1. Build a `depletionManager` with one active record and a working createEscrowFn, then mark the record's balance exhausted.
+//  2. Call checkDepletion with a model list that excludes the depleted record's model, so no replacement can be created.
+//  3. Assert checkDepletion returns no error.
+//  4. Assert the narrator recorded, in order, the mark, the park, and the depleted-without-replacement lines.
 func TestADepletedEscrowWithNoReplacementIsNarratedAfterItIsParked(t *testing.T) {
 	testStore := newFakeStore()
 	testStore.devshards["1"] = activeRecord("1", "model-a")
@@ -216,7 +237,11 @@ func TestADepletedEscrowWithNoReplacementIsNarratedAfterItIsParked(t *testing.T)
 	}, narrator.recorded())
 }
 
-// A rotation that creates nothing on purpose is a decision; the narration is the only place its reason appears.
+// Test flow:
+//  1. Build a manager with a `recordingLifecycleNarrator` and a snapshot where the target model has no served weight.
+//  2. Call ensureToTarget for that model and role.
+//  3. Assert it returns no error and created zero escrows.
+//  4. Assert the narrator recorded the "rotation skipped" line, since that is the only record of why nothing was created.
 func TestASkippedRotationIsNarrated(t *testing.T) {
 	narrator := &recordingLifecycleNarrator{}
 	manager := &Manager{narrator: narrator}
@@ -233,6 +258,11 @@ func TestASkippedRotationIsNarrated(t *testing.T) {
 	require.Equal(t, []string{"rotation skipped qwen regular epoch 4"}, narrator.recorded())
 }
 
+// Test flow:
+//  1. Build a rotation manager with one active regular record and a createEscrowFn that broadcasts and then fails.
+//  2. Call prepareBridge for that model.
+//  3. Assert prepareBridge returns an error.
+//  4. Assert the narrator recorded the regular-to-temp promotion despite the failure.
 func TestAFailedBridgePreparationNarratesThePromotion(t *testing.T) {
 	testStore := newFakeStore()
 	regular := store.DevshardRecord{EscrowID: "reg-1", Model: "model-a", Active: true, RotationRole: roleRegular, PrivateKeyEnv: "MODEL_A_KEY"}
@@ -253,6 +283,10 @@ func TestAFailedBridgePreparationNarratesThePromotion(t *testing.T) {
 	require.Equal(t, []string{"promoted model-a epoch 9: 1"}, narrator.recorded())
 }
 
+// Test flow:
+//  1. Build a rotation manager with two active regular records and a succeeding createEscrowFn.
+//  2. Call prepareBridge for that model and assert it returns no error.
+//  3. Assert the narrator recorded, in order, the new temp escrow's creation, both regulars being parked, and the bridge-prepared summary.
 func TestAPreparedBridgeNarratesWhatItCreatedAndRetired(t *testing.T) {
 	testStore := newFakeStore()
 	regularOne := store.DevshardRecord{EscrowID: "reg-1", Model: "model-a", Active: true, RotationRole: roleRegular, PrivateKeyEnv: "MODEL_A_KEY"}
@@ -274,6 +308,10 @@ func TestAPreparedBridgeNarratesWhatItCreatedAndRetired(t *testing.T) {
 	}, narrator.recorded())
 }
 
+// Test flow:
+//  1. Build a rotation manager with one active temp record and a succeeding createEscrowFn.
+//  2. Call finishBridge for that model and assert it returns no error.
+//  3. Assert the narrator recorded, in order, the two new regular escrows' creation, the temp record being parked, and the bridge-finished summary.
 func TestAFinishedBridgeNarratesWhatItCreatedAndRetired(t *testing.T) {
 	testStore := newFakeStore()
 	temp := store.DevshardRecord{EscrowID: "temp-1", Model: "model-a", Active: true, RotationRole: roleTemp, RotationEpoch: 5, PrivateKeyEnv: "MODEL_A_KEY"}
@@ -293,6 +331,10 @@ func TestAFinishedBridgeNarratesWhatItCreatedAndRetired(t *testing.T) {
 	}, narrator.recorded())
 }
 
+// Test flow:
+//  1. Build a manager with one active record, settlement enabled, and a settleEscrowFn that succeeds.
+//  2. Call retire for that record and assert it returns no error.
+//  3. Assert the narrator recorded, in order, the park, the settlement, and the record drop.
 func TestASettledRetirementIsNarratedFromParkToDrop(t *testing.T) {
 	testStore := newFakeStore()
 	record := store.DevshardRecord{EscrowID: "5", PrivateKeyEnv: "MODEL_A_KEY", Model: "model-a", Active: true}
@@ -315,6 +357,10 @@ func TestASettledRetirementIsNarratedFromParkToDrop(t *testing.T) {
 	}, narrator.recorded())
 }
 
+// Test flow:
+//  1. Store a record already SettlementPending with a settle tx hash, and a tx client whose txCommittedFn reports the transaction committed.
+//  2. Call settle unforced for that record and assert it returns no error.
+//  3. Assert the narrator recorded the park followed by the reconciled line.
 func TestASettleAlreadyOnChainIsNarratedAsReconciled(t *testing.T) {
 	record := store.DevshardRecord{EscrowID: "7", Model: "model-a", SettlementPending: true, SettleTxHash: "SETTLE-TX"}
 	testStore := newFakeStore()
@@ -332,6 +378,10 @@ func TestASettleAlreadyOnChainIsNarratedAsReconciled(t *testing.T) {
 	require.Equal(t, []string{"parked 7", "reconciled 7 tx SETTLE-TX"}, narrator.recorded())
 }
 
+// Test flow:
+//  1. Build a manager whose store fails ListDevshards with a fixed error.
+//  2. Call runTick.
+//  3. Assert the narrator recorded a "tick failed" line naming that error.
 func TestAFailedTickIsNarratedWithItsError(t *testing.T) {
 	testStore := newFakeStore()
 	testStore.listDevshardsErr = errors.New("store unavailable")
@@ -346,6 +396,10 @@ func TestAFailedTickIsNarratedWithItsError(t *testing.T) {
 	require.Equal(t, []string{"tick failed: store unavailable"}, narrator.recorded())
 }
 
+// Test flow:
+//  1. Configure a sweep budget and build a manager with a `recordingSweeper` (default fields: reports 1 due, 1 applied, 0 failed).
+//  2. Call sweepTimeouts and wait for the sweep work to finish.
+//  3. Assert the narrator recorded the "swept due 1 applied 1 failed 0" line.
 func TestASweepThatFoundVotesOwedIsNarrated(t *testing.T) {
 	cfg := config.Defaults()
 	cfg.TimeoutSweep.BudgetPerTick = 3

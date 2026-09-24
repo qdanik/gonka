@@ -5,7 +5,10 @@ import (
 	"testing"
 )
 
-// The format is applied before anything can log, so it is read apart from Load and defaults to what a collector parses.
+// Test flow:
+//  1. Table-driven: each case sets the log-format environment variable to unset, "json", "text", or a differently-cased and padded spelling.
+//  2. For each case, call `LogFormat`.
+//  3. Assert the result is JSON by default and text only when explicitly asked for, case-insensitively and trimmed.
 func TestTheLogFormatIsJSONUnlessTextIsAskedFor(t *testing.T) {
 	testCases := []struct {
 		name string
@@ -28,7 +31,10 @@ func TestTheLogFormatIsJSONUnlessTextIsAskedFor(t *testing.T) {
 	}
 }
 
-// A typo must not silently pick a format; Load reports it with every other misconfigured variable.
+// Test flow:
+//  1. Set the log-format environment variable to an unrecognized value.
+//  2. Call `Load`.
+//  3. Assert it returns an error naming the unknown format alongside "json" or "text".
 func TestLoadRefusesALogFormatItDoesNotKnow(t *testing.T) {
 	t.Setenv("GATEWAY_LOG_FORMAT", "logfmt")
 

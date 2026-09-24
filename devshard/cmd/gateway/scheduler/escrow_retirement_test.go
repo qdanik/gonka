@@ -9,8 +9,7 @@ import (
 	"devshard/types"
 )
 
-// retirementHarness funds an escrow well enough to answer a capped request and nothing like well enough to
-// answer a huge one, which is the gap the two prices have to tell apart.
+// retirementHarness builds a scheduler with one candidate escrow funded to the given balance, with a max-tokens cap of 4096.
 func retirementHarness(t *testing.T, balance uint64) (*Scheduler, *[]exhaustionReport) {
 	t.Helper()
 	settings := config.Defaults()
@@ -26,9 +25,11 @@ func retirementHarness(t *testing.T, balance uint64) (*Scheduler, *[]exhaustionR
 	return scheduler, &reported
 }
 
-// A request the escrow cannot pay for is a fact about the request. Retiring the escrow over it mints a
-// replacement and deactivates a perfectly solvent escrow, and one oversized arrival does it to every
-// candidate of the model at once, because the pick prices them all against the same request.
+// Test flow:
+//  1. Build a `retirementHarness` funded well enough for a capped request.
+//  2. Pick an escrow for a request whose output tokens are far larger than the cap allows.
+//  3. Assert the pick fails with `types.ErrInsufficientBalance`.
+//  4. Assert no exhaustion was reported, since a solvent escrow is not retired over one oversized request.
 func TestARequestTooDearForAnEscrowDoesNotRetireIt(t *testing.T) {
 	t.Parallel()
 	scheduler, reported := retirementHarness(t, 1<<20)
@@ -43,7 +44,11 @@ func TestARequestTooDearForAnEscrowDoesNotRetireIt(t *testing.T) {
 	}
 }
 
-// The escrow is genuinely below one capped answer, which is what being finished means.
+// Test flow:
+//  1. Build a `retirementHarness` funded below what even a capped request costs.
+//  2. Pick an escrow for a small request.
+//  3. Assert the pick fails with `types.ErrInsufficientBalance`.
+//  4. Assert the escrow was reported exhausted with `ExhaustionBalanceFloor`.
 func TestAnEscrowThatCannotAffordACappedAnswerIsRetired(t *testing.T) {
 	t.Parallel()
 	scheduler, reported := retirementHarness(t, 100)
@@ -59,8 +64,11 @@ func TestAnEscrowThatCannotAffordACappedAnswerIsRetired(t *testing.T) {
 	}
 }
 
-// A pinned escrow takes the same two prices: an escalation naming an escrow it cannot pay for is refused
-// without the escrow being marked, or one oversized escalation retires the escrow its own race is pinned to.
+// Test flow:
+//  1. Build a `retirementHarness` funded well enough for a capped request.
+//  2. Pick the escrow by name for a request whose output tokens are far larger than the cap allows.
+//  3. Assert the pick fails with `types.ErrInsufficientBalance`.
+//  4. Assert no exhaustion was reported for the pinned escrow.
 func TestAPinnedEscrowIsRefusedWithoutBeingRetired(t *testing.T) {
 	t.Parallel()
 	scheduler, reported := retirementHarness(t, 1<<20)

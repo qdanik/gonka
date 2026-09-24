@@ -10,8 +10,11 @@ import (
 	"devshard/user"
 )
 
-// The bug this pins was a join, not a rule: the filters produced one budget, the chain demanded
-// another, and nothing exercised the two together. Every path that commits a nonce runs here.
+// Test flow:
+//  1. For each of four request bodies (the table varies whether max_tokens, max_completion_tokens, or neither is set), normalize the request through `filters.NormalizeRequest`.
+//  2. Assert normalization succeeds and the resulting MaxTokens is at or above `completionapi.MinTokensFloor`.
+//  3. Advance a live stream, committing a nonce intent built from the normalized body.
+//  4. Assert the commit succeeds and a nonce was prepared.
 func TestWhatTheFiltersProduceTheChainAccepts(t *testing.T) {
 	for _, body := range []string{
 		`{"messages":[{"role":"user","content":"x"}],"max_tokens":1}`,
@@ -51,6 +54,10 @@ func TestWhatTheFiltersProduceTheChainAccepts(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a live stream.
+//  2. Advance it, committing a nonce intent built from the stream's ghost params.
+//  3. Assert the commit succeeds and a nonce was prepared.
 func TestAGhostBurnStillCommits(t *testing.T) {
 	stream, _, _ := newLiveStream(t, 1, 1, 1)
 

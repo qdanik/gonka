@@ -52,7 +52,7 @@ With `disabled_redirect_url` set it answers **308** with the new URL in both the
 
 Three layers, later wins:
 
-1. **Defaults** — `config/config.go`, `Defaults()`. The only place a default lives.
+1. **Defaults** — `config/defaults.go`, `Defaults()`. The only place a default lives.
 2. **Environment** — read once at boot, in `env/` and nowhere else. `env.Load` returns *what is set* (a nil pointer is unset), so an unset variable can never overwrite a default with a zero.
 3. **Admin overrides** — the fields of `config.Overrides`, written through `PUT /v1/admin/settings`, persisted in the store and reloaded at boot. These take effect without a restart: the config is an immutable snapshot swapped whole, and every reader loads it per request.
 
@@ -329,7 +329,7 @@ Participant-labelled race series — `devshard_gateway_attempts_*`, `devshard_ga
 
 | To change | Go to |
 | --- | --- |
-| a default | `config/config.go`, `Defaults()` |
+| a default | `config/defaults.go`, `Defaults()` |
 | which variables are read | `env/env.go` — and nowhere else |
 | what an admin may override at runtime | `config.Overrides` |
 | a route or its auth tier | `api/routes.go`, `routes()` |

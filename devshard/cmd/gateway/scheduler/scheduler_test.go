@@ -18,9 +18,7 @@ import (
 
 const escrowB = "escrow-b"
 
-// fakeLimiter keeps the peek and the authority separately settable: unavailable turns the pre-filter
-// off, refused lets a host pass the peek and still fail admission, and window is honoured by both. Its
-// window counts admissions rather than tokens, because routing branches on admitted or refused alone.
+// fakeLimiter keeps the peek (`unavailable`) and the admission authority (`refused`) separately settable.
 type fakeLimiter struct {
 	mu          sync.Mutex
 	unavailable map[string]bool
@@ -134,8 +132,7 @@ func (f *fakeLimiter) askedModels() []string {
 	return append([]string(nil), f.models...)
 }
 
-// slots reports how many admissions have not been given back; a release without an acquire drives it
-// negative rather than clamping, so a double release is visible.
+// slots reports how many admissions have not been given back.
 func (f *fakeLimiter) slots() (held, admitted int) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -173,8 +170,7 @@ type schedulerConfig struct {
 	health        hostHealth
 }
 
-// escrowHolds counts the in-flight holds the commit takes, so an assignment dropped without giving one
-// back shows up as a hold that never came home.
+// escrowHolds counts the in-flight holds the commit takes.
 type escrowHolds struct {
 	mu   sync.Mutex
 	open int
@@ -252,7 +248,6 @@ func newSchedulerHarness(t *testing.T, cfg schedulerConfig) *schedulerHarness {
 		if own, named := cfg.slotsByEscrow[escrowID]; named {
 			slots = own
 		}
-		// Funded: routing now prices every candidate against its balance, and a penniless escrow is not one.
 		session := &scriptedSession{balance: 1 << 40, slots: slots, gate: cfg.gate, entered: make(chan struct{}, 1)}
 		sessions[escrowID] = session
 		escrows.byModel[modelA] = append(escrows.byModel[modelA], Escrow{ID: escrowID, Model: modelA, Session: session, Hold: holds.source()})
@@ -329,8 +324,7 @@ func (h *schedulerHarness) liveDispatchers() map[string]*dispatcher {
 	return live
 }
 
-// loadEscrow raises a candidate's in-flight count, which is the only lever a test has over which escrow
-// the pick reaches first.
+// loadEscrow raises a candidate's in-flight count.
 func (h *schedulerHarness) loadEscrow(t *testing.T, escrowID string, activeUsers int) {
 	t.Helper()
 	for index, candidate := range h.escrows.byModel[modelA] {
@@ -380,6 +374,10 @@ func wantHost(t *testing.T, assignment Assignment, err error, escrowID, host str
 	}
 }
 
+// Test flow:
+//  1. Build a scheduler harness and pick for a request.
+//  2. Assert the assignment lands on `escrowA`'s `hostB` at nonce 1.
+//  3. Assert the escrow's session committed one real dispatch carrying the request's params.
 func TestPickAssignsFromTheEscrowItChose(t *testing.T) {
 	test := newSchedulerHarness(t, schedulerConfig{})
 
@@ -392,6 +390,11 @@ func TestPickAssignsFromTheEscrowItChose(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a scheduler harness with two escrows and load `escrowA` with 9 active users.
+//  2. Pick for a request.
+//  3. Assert the assignment lands on `escrowB`.
+//  4. Assert the busier `escrowA` advanced no nonces.
 func TestPickRoutesToTheLeastLoadedEscrow(t *testing.T) {
 	test := newSchedulerHarness(t, schedulerConfig{escrows: []string{escrowA, escrowB}})
 	test.escrows.byModel[modelA][0].ActiveUsers = 9
@@ -404,6 +407,11 @@ func TestPickRoutesToTheLeastLoadedEscrow(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Pick a first request and assert it lands on `escrowA`'s `hostB` at nonce 1, recording the live dispatchers and weight lookups so far.
+//  2. Pick again, pinned to the same escrow and excluding the first host.
+//  3. Assert the escalation lands on `hostA` at nonce 2.
+//  4. Assert only one dispatcher is live, the same one as before, and no new weight lookup happened.
 func TestPickEscalationReusesTheEscrowsDispatcher(t *testing.T) {
 	test := newSchedulerHarness(t, schedulerConfig{})
 
@@ -428,12 +436,17 @@ func TestPickEscalationReusesTheEscrowsDispatcher(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a scheduler harness with a 200ms match wait, and start a `Pick` in a goroutine for a request excluding the one host its nonce binds, so it holds rather than serves or burns.
+//  2. Assert the hold timer armed with the configured 200ms delay.
+//  3. Cancel the context and assert `Pick` returns `context.Canceled`.
+//  4. Advance the clock past the hold and fire the timer, waiting for the drain that follows.
+//  5. Assert the session advanced once, declined once, and committed nothing, with no ghost burns, since the abandoned request cost no nonce.
 func TestPickReturnsTheContextErrorWhenCancelledWhileQueued(t *testing.T) {
 	leakcheck.VerifyNone(t)
 	test := newSchedulerHarness(t, schedulerConfig{matchWaitMS: 200})
 	ctx, cancel := context.WithCancel(context.Background())
 
-	// The nonce binds the one host this request excludes, so it is held rather than served or burned.
 	picked := make(chan error, 1)
 	go func() {
 		_, err := test.scheduler.Pick(ctx, RequestProfile{Model: modelA, Exclude: []string{hostB}})
@@ -469,8 +482,11 @@ func TestPickReturnsTheContextErrorWhenCancelledWhileQueued(t *testing.T) {
 	test.scheduler.Stop()
 }
 
-// Every admission and every escrow hold ends up either with the caller that will release it or given
-// back here; a cancellation racing the handoff must not be able to strand one in between.
+// Test flow:
+//  1. Run 200 races of `Pick` against an immediately cancelled context, releasing the host slot and escrow hold whenever a caller wins one.
+//  2. Assert no slots are left held after every race.
+//  3. Assert no escrow holds are left outstanding.
+//  4. Assert every admission is accounted for: taken by a caller or recorded as an abandoned ghost burn.
 func TestPickReleasesTheSlotWhenCancellationRacesTheAssignment(t *testing.T) {
 	leakcheck.VerifyNone(t)
 	test := newSchedulerHarness(t, schedulerConfig{})
@@ -508,6 +524,11 @@ func TestPickReleasesTheSlotWhenCancellationRacesTheAssignment(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a scheduler harness with two escrows and block `hostB` on `escrowA` alone.
+//  2. Pick pinned to `escrowA` and assert it lands on `hostA` at nonce 2.
+//  3. Pick pinned to `escrowB` and assert it lands on `hostB` at nonce 1, unaffected.
+//  4. Assert `escrowA`'s commits show the blocked host ghosted then a real dispatch, and `escrowB`'s commits show one plain dispatch.
 func TestBlockHostAppliesToOneEscrowOnly(t *testing.T) {
 	test := newSchedulerHarness(t, schedulerConfig{escrows: []string{escrowA, escrowB}})
 
@@ -528,8 +549,11 @@ func TestBlockHostAppliesToOneEscrowOnly(t *testing.T) {
 	}
 }
 
-// A drain builds the predicate once and asks it per participant, so a block landing mid-drain must be
-// visible to the hosts it has not offered yet rather than waiting for the next drain.
+// Test flow:
+//  1. Read the scheduler's state-blocked predicate for `escrowA` before blocking `hostB`.
+//  2. Assert it does not yet report `hostB` blocked.
+//  3. Block `hostB` on `escrowA`.
+//  4. Assert the same predicate, held from before the block, now reports `hostB` blocked.
 func TestABlockIsVisibleToThePredicateADrainAlreadyHolds(t *testing.T) {
 	test := newSchedulerHarness(t, schedulerConfig{escrows: []string{escrowA}})
 
@@ -545,6 +569,11 @@ func TestABlockIsVisibleToThePredicateADrainAlreadyHolds(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. For each table case, arrange one source of unavailability for `hostB`: outside the PoC-preserved set, reported unavailable by the limiter, cut off by the limiter, ejected by the outlier detector, or already excluded by the request.
+//  2. Pick for a request.
+//  3. Assert the assignment lands on `hostA` at nonce 2.
+//  4. Assert exactly one burn was recorded, with the reason matching the case's source.
 func TestPickWiresEachAvailabilityPredicateToItsSource(t *testing.T) {
 	testCases := []struct {
 		name       string
@@ -599,8 +628,7 @@ func TestPickWiresEachAvailabilityPredicateToItsSource(t *testing.T) {
 	}
 }
 
-// failUntilEjected feeds one host enough consecutive failures to trip the detector, and every other host
-// one success, so the model's known membership is what the pool-wide cap is computed over.
+// failUntilEjected feeds the failing hosts enough consecutive failures to trip the detector, and the healthy hosts one success each.
 func failUntilEjected(tracker *perf.Tracker, healthy []string, failing ...string) {
 	for _, participant := range healthy {
 		tracker.RecordSample(perf.Sample{ParticipantKey: participant, Model: modelA, Responsive: true})
@@ -612,8 +640,12 @@ func failUntilEjected(tracker *perf.Tracker, healthy []string, failing ...string
 	}
 }
 
-// The routing gate reads the detector itself, not a predicate a test wrote: samples go into a real
-// tracker and the ejected host is simply never handed the request.
+// Test flow:
+//  1. Build a real `perf.Tracker` and feed it enough failure samples to eject `hostB`, then build a scheduler harness using that tracker as its health source.
+//  2. Pick for a request.
+//  3. Assert the assignment lands on `hostA` at nonce 2.
+//  4. Assert exactly one burn was recorded for `ghostEjected`.
+//  5. Assert no commit ever dispatched for real to the ejected host.
 func TestPickWithholdsAHostTheOutlierDetectorEjected(t *testing.T) {
 	leakcheck.VerifyNone(t)
 	settings := config.Defaults()
@@ -636,8 +668,11 @@ func TestPickWithholdsAHostTheOutlierDetectorEjected(t *testing.T) {
 	}
 }
 
-// The cap inside the tracker is what makes the gate safe to honour: when every host fails at once, the
-// gate must still leave the fleet servable rather than turning an outage into a total refusal.
+// Test flow:
+//  1. Build a real `perf.Tracker` and feed it enough failure samples to fail both hosts, then build a scheduler harness using that tracker.
+//  2. Pick for a request.
+//  3. Assert the pick succeeds with a host the pool-wide cap kept in rotation.
+//  4. Assert the tracker does not report that host ejected, though it reports it degraded.
 func TestPickStillServesWhenEveryHostIsFailingAtOnce(t *testing.T) {
 	leakcheck.VerifyNone(t)
 	settings := config.Defaults()
@@ -657,8 +692,13 @@ func TestPickStillServesWhenEveryHostIsFailingAtOnce(t *testing.T) {
 	}
 }
 
-// Admission is decided inside the same step that commits the nonce, so a host that passes the peek and
-// then fails the window costs a ghost the accounting can see -- never a live nonce nobody settles.
+// Test flow:
+//  1. Build a scheduler harness and make `hostB` pass the peek but fail admission.
+//  2. Pick for a request.
+//  3. Assert the assignment lands on `hostA` at nonce 2.
+//  4. Assert the refused host's nonce was committed as a ghost and the admitted host's nonce dispatched for real.
+//  5. Assert exactly one burn was recorded for `ghostWindowFull`.
+//  6. Assert only the served host's slot is held and admitted.
 func TestPickGhostsTheNonceWhenAdmissionRefusesTheBoundHost(t *testing.T) {
 	test := newSchedulerHarness(t, schedulerConfig{})
 	test.limiter.refuse(hostB)
@@ -681,6 +721,12 @@ func TestPickGhostsTheNonceWhenAdmissionRefusesTheBoundHost(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a scheduler harness with one host and a window of one, and run 8 callers picking concurrently.
+//  2. Assert exactly one caller is served and the rest are rejected with `ErrHostsBusy`.
+//  3. Assert every nonce but the served one was ghosted and recorded as a burn.
+//  4. Assert only the one served slot is held and admitted.
+//  5. Release the served caller's host slot and assert no slots are left held.
 func TestPickAdmitsExactlyOneCallerThroughAWindowOfOne(t *testing.T) {
 	leakcheck.VerifyNone(t)
 	test := newSchedulerHarness(t, schedulerConfig{slots: []string{hostA}, hostWindow: 1})
@@ -732,6 +778,10 @@ func TestPickAdmitsExactlyOneCallerThroughAWindowOfOne(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Pick for a request naming `modelA`.
+//  2. Assert the pick succeeds.
+//  3. Assert every model the limiter was asked about is `modelA`.
 func TestPickAsksTheLimiterAboutTheRequestsOwnModel(t *testing.T) {
 	test := newSchedulerHarness(t, schedulerConfig{})
 
@@ -747,8 +797,10 @@ func TestPickAsksTheLimiterAboutTheRequestsOwnModel(t *testing.T) {
 	}
 }
 
-// A host's two windows are held in tokens, so what routing takes from them is the request's own worth:
-// the prompt it must prefill and the answer it may produce.
+// Test flow:
+//  1. Pick for a request carrying 900 input tokens and 120 output tokens.
+//  2. Assert the pick succeeds.
+//  3. Assert the limiter was charged exactly once, for input 900 and output 120, each window taken in its own currency.
 func TestPickChargesTheHostWindowsWhatTheRequestIsWorth(t *testing.T) {
 	test := newSchedulerHarness(t, schedulerConfig{})
 
@@ -766,6 +818,9 @@ func TestPickChargesTheHostWindowsWhatTheRequestIsWorth(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. For each table case of a request profile, call `slotCost`.
+//  2. Assert the result matches the case: both halves priced when both are set, only the input half when nothing capped the output, and negative counts priced as zero.
 func TestSlotCostPricesARequestInBothCurrencies(t *testing.T) {
 	t.Parallel()
 
@@ -788,6 +843,11 @@ func TestSlotCostPricesARequestInBothCurrencies(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Set a nil preserved set on the snapshot, pick for a request, and assert it lands on `hostB` at nonce 1 with no burns, since an unloaded set must not ghost the whole group.
+//  2. Set an empty, loaded preserved set and assert the pick fails with `ErrHostsBusy`, since a loaded but empty set preserves nobody.
+//  3. Set a global preserved set and a narrower per-model one, and assert the per-model set wins, ghosting the host it excludes with `ghostPoC`.
+//  4. Set a per-model set for a different model beside a global one, and assert the other model's set does not shadow the global one.
 func TestPickTreatsAnUnloadedPreservedSetAsAllPreserved(t *testing.T) {
 	t.Run("a nil set serves every participant", func(t *testing.T) {
 		test := newSchedulerHarness(t, schedulerConfig{})
@@ -840,6 +900,12 @@ func TestPickTreatsAnUnloadedPreservedSetAsAllPreserved(t *testing.T) {
 	})
 }
 
+// Test flow:
+//  1. Build a scheduler harness with two escrows and pick concurrently 8 times pinned to each.
+//  2. Assert no picks failed.
+//  3. Assert each escrow served exactly 8 requests.
+//  4. Assert exactly one dispatcher is live per escrow.
+//  5. Assert each escrow's session advanced and committed exactly 8 times.
 func TestPickRunsEscrowsOnIndependentDispatchers(t *testing.T) {
 	test := newSchedulerHarness(t, schedulerConfig{escrows: []string{escrowA, escrowB}})
 	const perEscrow = 8
@@ -883,6 +949,12 @@ func TestPickRunsEscrowsOnIndependentDispatchers(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a scheduler harness with a submit buffer of 1 and a gated session, then start one `Pick` and wait until it reaches the session.
+//  2. Start a second `Pick` and wait until the submit queue fills to depth 1.
+//  3. Pick a third time.
+//  4. Assert the third pick fails with `ErrEscrowBusy`.
+//  5. Open the gate and let the first two picks finish.
 func TestPickSurfacesBackPressureWhenTheQueueIsFull(t *testing.T) {
 	gate := make(chan struct{})
 	test := newSchedulerHarness(t, schedulerConfig{submitBuffer: 1, gate: gate})
@@ -916,8 +988,11 @@ func TestPickSurfacesBackPressureWhenTheQueueIsFull(t *testing.T) {
 	inFlight.Wait()
 }
 
-// A caller claims its escrow's dispatcher under the registry lock and submits after releasing it, so
-// the window this covers is the one an idle actor could otherwise retire underneath the caller.
+// Test flow:
+//  1. Claim `escrowA`'s dispatcher directly.
+//  2. Attempt to retire it and assert the retirement is refused while it is still claimed.
+//  3. Release the claim and attempt to retire it again.
+//  4. Assert the retirement now succeeds and no dispatcher is left live.
 func TestClaimedDispatcherOutlivesTheIdleReaper(t *testing.T) {
 	leakcheck.VerifyNone(t)
 	test := newSchedulerHarness(t, schedulerConfig{})
@@ -942,7 +1017,12 @@ func TestClaimedDispatcherOutlivesTheIdleReaper(t *testing.T) {
 	test.scheduler.Stop()
 }
 
-// Holding the claim until Pick returns keeps the reaper from forgetting an escrow a waiting caller may still burn a nonce on.
+// Test flow:
+//  1. Start a `Pick` in a goroutine for a request excluding the host its nonce would bind, and wait for its hold timer to arm.
+//  2. Attempt to retire the escrow's dispatcher and assert it is refused while the waiting `Pick` still holds it.
+//  3. Cancel the context and assert `Pick` returns `context.Canceled`.
+//  4. Attempt to retire the dispatcher again and assert it now succeeds.
+//  5. Assert the escrow was announced retired.
 func TestAWaitingPickKeepsItsDispatcherClaimed(t *testing.T) {
 	leakcheck.VerifyNone(t)
 	test := newSchedulerHarness(t, schedulerConfig{matchWaitMS: 200})
@@ -977,6 +1057,11 @@ func TestAWaitingPickKeepsItsDispatcherClaimed(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Claim `escrowA`'s dispatcher, release the claim, and mark it stopped.
+//  2. Pick for a request.
+//  3. Assert the assignment lands on `hostB` at nonce 1.
+//  4. Assert the live registry no longer holds the stopped dispatcher.
 func TestPickReplacesAStoppedDispatcher(t *testing.T) {
 	leakcheck.VerifyNone(t)
 	test := newSchedulerHarness(t, schedulerConfig{})
@@ -999,6 +1084,10 @@ func TestPickReplacesAStoppedDispatcher(t *testing.T) {
 	test.scheduler.Stop()
 }
 
+// Test flow:
+//  1. Pick for a request and assert it succeeds.
+//  2. Stop the scheduler twice in a row.
+//  3. Pick again and assert the error is `ErrDispatcherStopped`.
 func TestSchedulerStopIsIdempotent(t *testing.T) {
 	leakcheck.VerifyNone(t)
 	test := newSchedulerHarness(t, schedulerConfig{})
@@ -1015,6 +1104,11 @@ func TestSchedulerStopIsIdempotent(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Pick a first request and assert it lands on `hostB` at nonce 1.
+//  2. Assert the idle timer armed for `idleDispatcherGrace`, then fire it and wait for the dispatcher to retire.
+//  3. Assert the escrow was announced retired.
+//  4. Pick again and assert the recreated dispatcher lands on `hostA` at nonce 2, with one dispatcher live.
 func TestSchedulerReapsAnIdleDispatcherAndRecreatesItOnDemand(t *testing.T) {
 	leakcheck.VerifyNone(t)
 	test := newSchedulerHarness(t, schedulerConfig{})
@@ -1041,6 +1135,11 @@ func TestSchedulerReapsAnIdleDispatcherAndRecreatesItOnDemand(t *testing.T) {
 	test.scheduler.Stop()
 }
 
+// Test flow:
+//  1. Claim `escrowA`'s dispatcher, release the claim, and block a host on that escrow.
+//  2. Retire the idle dispatcher and assert the retirement succeeds.
+//  3. Assert the host is still reported state-blocked after the dispatcher went idle.
+//  4. Claim a fresh dispatcher for the same escrow and assert the host stays blocked on it too.
 func TestReapingADispatcherKeepsTheEscrowBlockedForADivergentHost(t *testing.T) {
 	leakcheck.VerifyNone(t)
 	test := newSchedulerHarness(t, schedulerConfig{})
@@ -1069,6 +1168,11 @@ func TestReapingADispatcherKeepsTheEscrowBlockedForADivergentHost(t *testing.T) 
 	}
 }
 
+// Test flow:
+//  1. Claim `escrowA`'s dispatcher, release the claim, and spend a host's divergence replay credit.
+//  2. Assert the first divergence did spend the replay.
+//  3. Retire the idle dispatcher and assert the retirement succeeds.
+//  4. Assert a later divergence on the same host is not given a second replay just for the dispatcher having gone idle.
 func TestReapingADispatcherDoesNotHandBackTheSpentReplay(t *testing.T) {
 	leakcheck.VerifyNone(t)
 	test := newSchedulerHarness(t, schedulerConfig{})
@@ -1092,6 +1196,9 @@ func TestReapingADispatcherDoesNotHandBackTheSpentReplay(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Drop an assignment directly, naming a request that had already left.
+//  2. Assert the recorded burn was made during that same request, the one whose `Pick` gave up with the assignment already in hand.
 func TestADroppedAssignmentNamesTheRequestThatLeft(t *testing.T) {
 	test := newSchedulerHarness(t, schedulerConfig{})
 

@@ -5,10 +5,6 @@ import (
 	"testing"
 )
 
-// NormalizeRequest is the only place an untrusted client body reaches parsing, and whatever it emits is
-// what a host is asked to run. Three properties have to hold for any input at all: it must not panic,
-// an accepted body must still be valid JSON, and it must never forward a parameter the gateway forces
-// for its own accounting -- a client that sets those decides what the network validates.
 func FuzzNormalizeRequestHoldsItsContract(f *testing.F) {
 	for _, seed := range []string{
 		`{"model":"m","messages":[{"role":"user","content":"hi"}]}`,
@@ -28,7 +24,7 @@ func FuzzNormalizeRequestHoldsItsContract(f *testing.F) {
 	f.Fuzz(func(t *testing.T, body string) {
 		result, err := NormalizeRequest([]byte(body), options)
 		if err != nil {
-			return // a rejection is a valid outcome for anything a client sends
+			return
 		}
 		if !json.Valid(result.Body) {
 			t.Fatalf("accepted %q and produced invalid JSON: %s", body, result.Body)
@@ -37,8 +33,6 @@ func FuzzNormalizeRequestHoldsItsContract(f *testing.F) {
 		if err := json.Unmarshal(result.Body, &decoded); err != nil {
 			t.Fatalf("accepted body does not decode as an object: %s: %v", result.Body, err)
 		}
-		// The gateway forces these upstream for validation; a client-supplied value reaching a host
-		// would let the caller choose what the network can check its own inference against.
 		for field, forced := range map[string]any{"logprobs": true, "return_token_ids": true} {
 			if got, held := decoded[field]; held && got != forced {
 				t.Fatalf("client kept control of %q: got %v, want the forced %v, from %q", field, got, forced, body)

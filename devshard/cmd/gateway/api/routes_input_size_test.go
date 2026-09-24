@@ -5,10 +5,11 @@ import (
 	"testing"
 )
 
-// The balance floor prices a request against the escrow the way the chain does, and the chain reserves against
-// the body's byte length. The gateway's own input number is that length divided by four, so the two must arrive
-// separately and neither may be derived from the other downstream: a floor fed the estimate budgets a quarter of
-// what the chain takes. See docs/capacity.md, "The balance floor".
+// Test flow:
+//  1. Send a chat completion request through the harness and assert it succeeds.
+//  2. Read the recorded race attempt.
+//  3. Assert the race was handed a non-zero body byte length.
+//  4. Assert the race's token estimate is the byte length divided by four, rounded up.
 func TestTheRaceIsHandedTheBodysBytesBesideTheTokenEstimate(t *testing.T) {
 	live := newHarness(t)
 

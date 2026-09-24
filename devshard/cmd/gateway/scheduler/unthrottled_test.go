@@ -2,7 +2,7 @@ package scheduler
 
 import "testing"
 
-// laddered builds the fleet ladder a drain freezes, with every rung open unless a test closes it.
+// laddered builds an `availability` with every gate open unless `closed` shuts one.
 func laddered(closed func(*availability)) availability {
 	gates := availability{
 		pocRequired:  always(false),
@@ -14,8 +14,10 @@ func laddered(closed func(*availability)) availability {
 	return gates
 }
 
-// A full window is the gate this list exists to cross: the host is working, and the burn it would
-// earn is a queueing decision rather than a fact about the host.
+// Test flow:
+//  1. Build a `laddered` availability with a full window and the participant marked unthrottled.
+//  2. Ask whether the participant is blocked.
+//  3. Assert the reason is `blockNone`, since an unthrottled host is served over a full window.
 func TestUnthrottledCrossesAFullWindow(t *testing.T) {
 	t.Parallel()
 	gates := laddered(func(gates *availability) {
@@ -28,6 +30,10 @@ func TestUnthrottledCrossesAFullWindow(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a `laddered` availability with the participant ejected and marked unthrottled.
+//  2. Ask whether the participant is blocked.
+//  3. Assert the reason is `blockNone`.
 func TestUnthrottledCrossesEjection(t *testing.T) {
 	t.Parallel()
 	gates := laddered(func(gates *availability) {
@@ -40,8 +46,11 @@ func TestUnthrottledCrossesEjection(t *testing.T) {
 	}
 }
 
-// The two lists are one admission decision: naming a host unthrottled admits it whether or not the
-// allowlist names it, and says nothing about anybody else.
+// Test flow:
+//  1. Build a `laddered` availability where `hostB` is allowlisted and `hostA` is unthrottled.
+//  2. Ask whether `hostA` is blocked and assert the reason is `blockNone`.
+//  3. Ask whether `hostB` is blocked and assert the reason is `blockNone`.
+//  4. Ask whether an unlisted stranger is blocked and assert the reason is `blockNotAllowed`.
 func TestUnthrottledIsAdmittedOutsideTheAllowlist(t *testing.T) {
 	t.Parallel()
 	gates := laddered(func(gates *availability) {
@@ -60,7 +69,10 @@ func TestUnthrottledIsAdmittedOutsideTheAllowlist(t *testing.T) {
 	}
 }
 
-// Each of these is a fact about the host or the chain that no operator list can make untrue.
+// Test flow:
+//  1. For each table case (cut off, owes proof-of-compute, escrow state diverged), close that one gate on a `laddered` availability with the participant marked unthrottled.
+//  2. Ask whether the participant is blocked.
+//  3. Assert the reason matches the case's expected block, since unthrottled does not cross these gates.
 func TestUnthrottledStopsAtTheGatesThatProtectTheNonce(t *testing.T) {
 	t.Parallel()
 	cases := map[string]struct {
@@ -98,7 +110,10 @@ func TestUnthrottledStopsAtTheGatesThatProtectTheNonce(t *testing.T) {
 	}
 }
 
-// Reachability is read at escrow pick as well as at dispatch, so it has to admit the same set.
+// Test flow:
+//  1. Build a reachability check with a fake allowlist naming nobody and `hostA` marked unthrottled.
+//  2. Assert an escrow whose slots and participants are `hostA` is reachable.
+//  3. Assert an escrow held by a stranger is not.
 func TestEscrowHoldingOnlyAnUnthrottledParticipantIsReachable(t *testing.T) {
 	t.Parallel()
 	reachable := reachableByAllowlist([]string{"nobody-holds-this"}, []string{hostA})
@@ -112,7 +127,11 @@ func TestEscrowHoldingOnlyAnUnthrottledParticipantIsReachable(t *testing.T) {
 	}
 }
 
-// The end the operator asked for: the nonce reaches its host instead of being spent on nobody.
+// Test flow:
+//  1. Build a harness with one host whose window is always full but who is marked unthrottled.
+//  2. Submit a stale request and await its reply.
+//  3. Assert the reply carries an assignment rather than an error.
+//  4. Assert no ghost burns were recorded.
 func TestUnthrottledServesOverAFullWindowWithoutBurning(t *testing.T) {
 	test := newHarness(t, harnessConfig{
 		slots:       soleHost,

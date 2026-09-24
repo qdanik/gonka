@@ -8,9 +8,10 @@ import (
 	"devshard/types"
 )
 
-// Every recording path writes into a map and has no error to return if that map is nil, so a restored
-// escrow that lost one panics on the first validation, timeout or challenge after a restart — inside a
-// goroutine, which takes the gateway with it.
+// Test flow:
+//  1. Open a book, observe the latest nonce, save and reload it.
+//  2. On the restored book, record a validation, an applied timeout and a challenged inference.
+//  3. Assert none of those recording paths return an error.
 func TestARestoredEscrowAcceptsEveryRecordingPath(t *testing.T) {
 	book := newTestBook(t, 4)
 	if err := book.ObserveLatestNonce(testEscrow, 4); err != nil {
@@ -29,8 +30,10 @@ func TestARestoredEscrowAcceptsEveryRecordingPath(t *testing.T) {
 	}
 }
 
-// The two construction sites drifted once already. A ledger built by hand somewhere else would pass
-// every test above while still carrying a nil map nothing exercised yet.
+// Test flow:
+//  1. Build an `escrowLedger` through `newEscrowLedger`.
+//  2. Walk every field of the struct by reflection.
+//  3. Assert no map field is left nil.
 func TestEveryMapOfAnEscrowLedgerIsBuilt(t *testing.T) {
 	ledger := reflect.ValueOf(newEscrowLedger(EscrowMetadata{EscrowID: "e1"})).Elem()
 	for i := range ledger.NumField() {
@@ -41,9 +44,11 @@ func TestEveryMapOfAnEscrowLedgerIsBuilt(t *testing.T) {
 	}
 }
 
-// The chain's side of the cross-check is restored from host stats; the gateway's side is these four
-// per-slot counts. Restoring one without the other reads every applied timeout as a nonce the chain
-// counted and the gateway did not, so a restart alone raises a disagreement no host behaviour produces.
+// Test flow:
+//  1. Observe the latest nonce as 40, apply 30 timeouts, and observe host stats reporting 30 misses.
+//  2. Assert no chain-disagreement finding before any restart.
+//  3. Save and reload the book.
+//  4. Assert the restored record still raises no chain-disagreement finding.
 func TestARestartDoesNotInventADisagreementWithTheChain(t *testing.T) {
 	book := newTestBook(t, 1)
 	if err := book.ObserveLatestNonce(testEscrow, 40); err != nil {

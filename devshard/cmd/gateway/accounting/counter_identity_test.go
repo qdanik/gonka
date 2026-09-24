@@ -7,9 +7,11 @@ import (
 	"testing"
 )
 
-// Two nonces that differ only in a flag are two counters. A flag the table does not carry collapses
-// them onto one primary key, and the whole snapshot write fails on the second row — every fact the
-// gateway gathered since the last snapshot goes with it.
+// Test flow:
+//  1. For each table case, one attempt flagged `SlowDecode` and one flagged `LogprobsDecoded`, build a book.
+//  2. Observe the chain's latest nonce and record a race of two attempts on nonces 4 and 8, which share slot 0.
+//  3. Save and reload the book.
+//  4. Assert the restored book still holds both counters for that slot.
 func TestCountersThatDifferOnlyInAFlagBothSurviveARestart(t *testing.T) {
 	for _, testCase := range []struct {
 		name    string
@@ -23,7 +25,6 @@ func TestCountersThatDifferOnlyInAFlagBothSurviveARestart(t *testing.T) {
 			if err := book.ObserveLatestNonce(testEscrow, 8); err != nil {
 				t.Fatalf("ObserveLatestNonce(): %v", err)
 			}
-			// Nonces 4 and 8 share slot 0 in a group of four, so the two counters differ in the flag alone.
 			if err := book.RecordRace(testEscrow, []Attempt{
 				{Nonce: 4, Sent: true, Finished: true, Usage: UsageWinner},
 				testCase.attempt,
@@ -41,8 +42,10 @@ func TestCountersThatDifferOnlyInAFlagBothSurviveARestart(t *testing.T) {
 	}
 }
 
-// The identity of a counter is its key, and the table's primary key is where that identity is enforced.
-// A field added to one and not the other silently merges two counters into one row.
+// Test flow:
+//  1. Open a store and query the primary-key columns of the `accounting_counters` table.
+//  2. Walk every field of `CounterKey` that has a JSON tag.
+//  3. Assert each such field's column name is among the table's primary-key columns.
 func TestEveryCounterKeyFieldIsPartOfTheStoredIdentity(t *testing.T) {
 	store := openTestStore(t)
 	rows, err := store.db.QueryContext(context.Background(), `SELECT name FROM pragma_table_info('accounting_counters') WHERE pk > 0`)

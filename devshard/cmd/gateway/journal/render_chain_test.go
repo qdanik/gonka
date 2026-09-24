@@ -9,7 +9,10 @@ import (
 	"devshard/cmd/gateway/internal/logcapture"
 )
 
-// Each want pins one chain transition's level, message and every key with its type.
+// Test flow:
+//  1. Table-driven: each case pairs a chain producer call (`ChainEpoch`, `ChainRequestsBlocked`, `ChainRequestsUnblocked`, `ChainSnapshotStale`, `ChainSnapshotRecovered`) with the exact entry it must render.
+//  2. For each case, build a journal with a `logcapture.Recorder`, run the case's `produce` function, and flush.
+//  3. Assert the recorder captured exactly the case's expected entry.
 func TestChainTransitionsRenderTheLinesTheirProducersNarrate(t *testing.T) {
 	testCases := []struct {
 		name    string
@@ -66,7 +69,11 @@ func TestChainTransitionsRenderTheLinesTheirProducersNarrate(t *testing.T) {
 	}
 }
 
-// A first poll that failed publishes a snapshot with epoch 0, which announces no epoch: epoch 0 reads as a restarted chain.
+// Test flow:
+//  1. Build a journal with a `logcapture.Recorder`.
+//  2. Record a `ChainEpoch` event with epoch 0, the placeholder a failed first poll publishes.
+//  3. Flush the journal.
+//  4. Assert no chain epoch line was logged.
 func TestAnEpochlessSnapshotAnnouncesNoEpoch(t *testing.T) {
 	lines := &logcapture.Recorder{}
 	events := newJournal(t, Settings{Lines: lines})

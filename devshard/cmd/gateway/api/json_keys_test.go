@@ -13,8 +13,9 @@ import (
 
 var snakeCaseKey = regexp.MustCompile(`^[a-z][a-z0-9]*(_[a-z0-9]+)*$`)
 
-// A response type without tags serialises as Go field names, so one PascalCase key reaches a client
-// that parses every other key as snake_case.
+// Test flow:
+//  1. For each of the gateway's response types, varying across store/chain/config records and the local response, entry and envelope types, run assertSnakeCaseKeys on it.
+//  2. Assert every exported field's JSON key is snake_case, recursing into nested gateway-owned types.
 func TestEveryResponseTypeSpeaksSnakeCase(t *testing.T) {
 	for _, payload := range []any{
 		store.DevshardRecord{},

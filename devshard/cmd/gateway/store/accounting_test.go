@@ -74,6 +74,11 @@ func openLedger(t *testing.T, testStore *Store, retention Retention, clock *test
 	return ledger
 }
 
+// Test flow:
+//  1. Open a ledger with generous retention and a fixed test clock.
+//  2. Record a fully-populated `sampleRecord` and close the ledger.
+//  3. Assert `FindRequest` returns the same record with `RecordedAt` set from the clock.
+//  4. Assert the ledger's stats report one written row and no losses.
 func TestLedgerWritesEveryFieldItWasGiven(t *testing.T) {
 	leakcheck.VerifyNone(t)
 
@@ -104,6 +109,10 @@ func TestLedgerWritesEveryFieldItWasGiven(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Open a ledger and record the same request ID twice.
+//  2. Close the ledger.
+//  3. Assert the accounting table holds exactly one row.
 func TestLedgerWritesExactlyOneRowPerRequestID(t *testing.T) {
 	leakcheck.VerifyNone(t)
 
@@ -123,6 +132,10 @@ func TestLedgerWritesExactlyOneRowPerRequestID(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Open a ledger and record one request with no ID set.
+//  2. Look up a missing ID and a blank ID via `Find`.
+//  3. Assert both report not found.
 func TestLedgerFindReportsUnknownAndBlankIDs(t *testing.T) {
 	leakcheck.VerifyNone(t)
 
@@ -144,6 +157,12 @@ func TestLedgerFindReportsUnknownAndBlankIDs(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Open a ledger and hold the store's single database connection in an open transaction, stalling every insert behind `busy_timeout`.
+//  2. Record more requests than the ledger's queue depth from a goroutine.
+//  3. Assert `Record` returns promptly rather than blocking behind the stalled writer.
+//  4. Assert the ledger's dropped-row count is nonzero, then roll back the blocking transaction and close the ledger.
+//  5. Assert `Close` succeeds and the dropped count still reports the shed rows afterward.
 func TestRecordDoesNotBlockWhileTheWriterIsStalled(t *testing.T) {
 	leakcheck.VerifyNone(t)
 
@@ -151,8 +170,6 @@ func TestRecordDoesNotBlockWhileTheWriterIsStalled(t *testing.T) {
 	clock := newTestClock(time.Unix(1700000010, 0).UTC())
 	ledger := openLedger(t, testStore, generousRetention(), clock)
 
-	// Holding the single connection in an open transaction stalls every ledger insert behind
-	// busy_timeout; Record must still return at once and shed rows rather than wait.
 	blocking, err := testStore.db.Begin()
 	if err != nil {
 		t.Fatalf("Begin(): %v", err)
@@ -187,6 +204,10 @@ func TestRecordDoesNotBlockWhileTheWriterIsStalled(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Record a stale row under an old clock, close and reopen the store.
+//  2. Record a fresh row under a clock 48 hours later, using the same 24-hour max-age retention.
+//  3. Assert the stale row is gone and the fresh row survives.
 func TestRetentionEvictsRowsPastTheMaxAge(t *testing.T) {
 	leakcheck.VerifyNone(t)
 
@@ -224,6 +245,10 @@ func TestRetentionEvictsRowsPastTheMaxAge(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Open a ledger with a max-rows retention of 2 and record three rows, advancing the clock between each.
+//  2. Close the ledger.
+//  3. Assert only 2 rows remain, the oldest evicted and the newest surviving.
 func TestRetentionEvictsTheOldestRowsPastMaxRows(t *testing.T) {
 	leakcheck.VerifyNone(t)
 
@@ -251,8 +276,10 @@ func TestRetentionEvictsTheOldestRowsPastMaxRows(t *testing.T) {
 	}
 }
 
-// A sweep that cannot delete leaves the ledger growing past both of its bounds, so the two deletes
-// report rather than pass. They are attempted independently, which is why both are counted.
+// Test flow:
+//  1. Open a ledger, then drop the accounting table out from under it.
+//  2. Run one sweep directly.
+//  3. Assert `SweepFailed` counts 2, since the age bound and the row bound are each attempted, and each fail, independently.
 func TestAFailedRetentionSweepIsCountedPerBound(t *testing.T) {
 	leakcheck.VerifyNone(t)
 
@@ -275,6 +302,10 @@ func TestAFailedRetentionSweepIsCountedPerBound(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Table-driven: each case leaves out one required setting — no clock, no age bound, or no row bound.
+//  2. For each case, call `NewLedger`.
+//  3. Assert it returns an error.
 func TestNewLedgerRejectsAnUnboundedOrClocklessLedger(t *testing.T) {
 	leakcheck.VerifyNone(t)
 
@@ -298,6 +329,10 @@ func TestNewLedgerRejectsAnUnboundedOrClocklessLedger(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Open a store, record one request, and close the store without closing the ledger first.
+//  2. Reopen the store from the same directory.
+//  3. Assert the queued row survived the shutdown.
 func TestStoreCloseDrainsAPendingLedgerWrite(t *testing.T) {
 	leakcheck.VerifyNone(t)
 
@@ -324,6 +359,10 @@ func TestStoreCloseDrainsAPendingLedgerWrite(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Open and close a ledger.
+//  2. Record a request after close.
+//  3. Assert it is counted as dropped rather than panicking, and a second `Close` still succeeds.
 func TestRecordAfterCloseIsCountedNotPanicked(t *testing.T) {
 	leakcheck.VerifyNone(t)
 
@@ -343,9 +382,10 @@ func TestRecordAfterCloseIsCountedNotPanicked(t *testing.T) {
 	}
 }
 
-// Retention compares and orders these timestamps as text, so byte order has to agree with time order.
-// RFC3339Nano trims a trailing zero fraction, which puts a whole second after the same second plus a
-// tenth and prunes the wrong rows.
+// Test flow:
+//  1. Build a strictly increasing sequence of timestamps, including ones a nanosecond, a tenth of a second, and a whole second apart.
+//  2. Format each with `FormatTime`.
+//  3. Assert every formatted timestamp sorts as text strictly before the next, since retention compares these strings byte by byte.
 func TestStoredTimestampsSortInTimeOrder(t *testing.T) {
 	base := time.Date(2026, 8, 2, 3, 0, 5, 0, time.UTC)
 	ascending := []time.Time{

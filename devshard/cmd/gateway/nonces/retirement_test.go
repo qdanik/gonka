@@ -34,8 +34,10 @@ func newOpenedLedger(t *testing.T, escrow *liveEscrow) *Recorder {
 	return &Recorder{service: service}
 }
 
-// The sweep reads an escrow only while it is routable, and deactivating one stops that for good. Whatever
-// the chain finished since the last sweep is counted here or nowhere.
+// Test flow:
+//  1. Start and finish one inference on a live 3-slot escrow.
+//  2. Retire the escrow through `ledger.EscrowRetiring`.
+//  3. Assert the folded records' input tokens equal the finish's own count and counted nonces equal 1, so retirement counts what the chain finished since the last sweep.
 func TestRetiringAnEscrowCountsWhatTheChainFinishedSinceTheLastSweep(t *testing.T) {
 	t.Parallel()
 	escrow := newLiveEscrow(t, 3)
@@ -54,6 +56,9 @@ func TestRetiringAnEscrowCountsWhatTheChainFinishedSinceTheLastSweep(t *testing.
 	}
 }
 
+// Test flow:
+//  1. Retire a freshly opened escrow with no traffic through `ledger.EscrowRetiring`.
+//  2. Assert every record's latest-nonce entries are marked retired.
 func TestARetiredEscrowIsMarkedRetiredInTheLedger(t *testing.T) {
 	t.Parallel()
 	escrow := newLiveEscrow(t, 3)
@@ -70,8 +75,10 @@ func TestARetiredEscrowIsMarkedRetiredInTheLedger(t *testing.T) {
 	}
 }
 
-// A retirement the registry cannot hand a session for -- one already closed, or never published --
-// still has to leave the ledger consistent.
+// Test flow:
+//  1. Retire an escrow by passing a nil session to `ledger.EscrowRetiring`.
+//  2. Assert the ledger still holds records for the escrow.
+//  3. Assert every one of them is marked retired, so a session the registry could not hand back still leaves the ledger consistent.
 func TestRetiringWithoutASessionStillRetiresTheEscrow(t *testing.T) {
 	t.Parallel()
 	escrow := newLiveEscrow(t, 3)
@@ -92,8 +99,10 @@ func TestRetiringWithoutASessionStillRetiresTheEscrow(t *testing.T) {
 	}
 }
 
-// The composition root binds the retirement observer whether or not accounting is switched on, so the
-// bound method has to survive a recorder that was never opened.
+// Test flow:
+//  1. Bind `EscrowRetiring` from a nil `*Recorder`.
+//  2. Call the bound method with a nil session.
+//  3. Assert it does not panic.
 func TestARecorderThatWasNeverOpenedStillAnswersARetirement(t *testing.T) {
 	t.Parallel()
 	var ledger *Recorder

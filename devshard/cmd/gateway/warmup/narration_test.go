@@ -36,7 +36,11 @@ func (n *recordingWarmupNarrator) WarmupVoted(escrowID string, nonce uint64, act
 	n.calls = append(n.calls, fmt.Sprintf("voted %s nonce %d %s %s", escrowID, nonce, action, reason))
 }
 
-// A probe that committed nothing hands over the error it had, and nil when it had none; the journal decides what that renders.
+// Test flow:
+//  1. Build a `Prober` whose probe commits no nonce and returns no error.
+//  2. Warm one escrow through it with a recording narrator attached.
+//  3. Assert the narrator recorded a single "no nonce" call for the escrow.
+//  4. Assert the recorded probe error is nil.
 func TestAProbeThatCommittedNothingIsNarratedWithTheErrorItHad(t *testing.T) {
 	narrator := &recordingWarmupNarrator{}
 	warmup := &Prober{
@@ -56,6 +60,11 @@ func TestAProbeThatCommittedNothingIsNarratedWithTheErrorItHad(t *testing.T) {
 	require.Equal(t, []error{nil}, narrator.probeErrors)
 }
 
+// Test flow:
+//  1. Build a warmup under test that serves its probe and attach a recording narrator.
+//  2. Warm one escrow.
+//  3. Assert the narrator recorded it as warmed, naming the model, nonce, and served flag.
+//  4. Assert the recorded catch-up error is nil.
 func TestAServedProbeIsNarratedAsWarmed(t *testing.T) {
 	narrator := &recordingWarmupNarrator{}
 	warmup, _, _ := newWarmupUnderTest(stubSession{}, nil)
@@ -67,7 +76,10 @@ func TestAServedProbeIsNarratedAsWarmed(t *testing.T) {
 	require.Equal(t, []error{nil}, narrator.catchUpErrors)
 }
 
-// The vote is narrated with its action, which is what the journal reads to write a failed vote at Warn.
+// Test flow:
+//  1. Build a refused warmup whose poster answers a refused vote with a timeout-collection error.
+//  2. Warm one escrow with a recording narrator attached.
+//  3. Assert the narrator recorded the vote's action and reason before recording the escrow as warmed but not served.
 func TestAFailedWarmupVoteIsNarratedWithItsAction(t *testing.T) {
 	narrator := &recordingWarmupNarrator{}
 	warmup := refusedWarmup(&stubPoster{vote: "refused", err: errors.New("collect timeout votes")}, &spyTimeouts{}, true)
@@ -81,6 +93,10 @@ func TestAFailedWarmupVoteIsNarratedWithItsAction(t *testing.T) {
 	}, narrator.calls)
 }
 
+// Test flow:
+//  1. Build a `Prober` whose ledger refuses to open.
+//  2. Open the ledger for one escrow with a recording narrator attached.
+//  3. Assert the narrator recorded the ledger-open failure with the escrow ID and the refusal's error text.
 func TestALedgerThatRefusesTheEscrowIsNarrated(t *testing.T) {
 	narrator := &recordingWarmupNarrator{}
 	warmup := &Prober{ledger: &spyLedger{openRefusal: errors.New("ledger closed")}, epochs: stubEpochs{epoch: 3}, now: warmupClock()}
@@ -91,7 +107,9 @@ func TestALedgerThatRefusesTheEscrowIsNarrated(t *testing.T) {
 	require.Equal(t, []string{"ledger open failed escrow-1: ledger closed"}, narrator.calls)
 }
 
-// main binds the narrator whether or not warming is on, and a warmup that is off is nil.
+// Test flow:
+//  1. Call `SetNarrator` on a nil `*Prober`.
+//  2. Assert it does not panic.
 func TestBindingANarratorToAnAbsentWarmupDoesNothing(t *testing.T) {
 	var warmup *Prober
 

@@ -8,6 +8,10 @@ import (
 
 const capabilityModel = "model-a"
 
+// Test flow:
+//  1. Build a capability tracker.
+//  2. Record a context limit of 4096 for host-0/model-a.
+//  3. Assert the tracker reports that limit and one context refusal.
 func TestARecordedContextLimitIsWhatTheHostAdmittedTo(t *testing.T) {
 	t.Parallel()
 	tracker := newCapabilityTracker()
@@ -20,8 +24,10 @@ func TestARecordedContextLimitIsWhatTheHostAdmittedTo(t *testing.T) {
 	}
 }
 
-// Zero is what a host sends when it will not say how large its context is, and storing it would report
-// a limit of nothing rather than an unknown one.
+// Test flow:
+//  1. Build a capability tracker.
+//  2. Record a context limit of 0 for host-0/model-a.
+//  3. Assert nothing was recorded: the limit and refusal count both stay zero.
 func TestAZeroContextLimitIsNotRecorded(t *testing.T) {
 	t.Parallel()
 	tracker := newCapabilityTracker()
@@ -34,6 +40,10 @@ func TestAZeroContextLimitIsNotRecorded(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a capability tracker.
+//  2. Record a context limit of 8192, then a tighter 2048, for host-0/model-a.
+//  3. Assert the tracker reports the newer 2048 limit with both refusals counted.
 func TestTheLatestContextLimitReplacesTheOneBefore(t *testing.T) {
 	t.Parallel()
 	tracker := newCapabilityTracker()
@@ -47,8 +57,10 @@ func TestTheLatestContextLimitReplacesTheOneBefore(t *testing.T) {
 	}
 }
 
-// Nothing here withholds a host from routing, so the only question a reader can ask is how often each
-// refusal happened -- and a repeat is a build that refuses everything, not a one-off.
+// Test flow:
+//  1. Build a capability tracker.
+//  2. Record two version-unsupported refusals and one tool-unsupported refusal for host-0.
+//  3. Assert the tracker reports 2 version refusals and 1 tool refusal for model-a.
 func TestRefusalsAreCountedRatherThanJudged(t *testing.T) {
 	t.Parallel()
 	tracker := newCapabilityTracker()
@@ -63,8 +75,11 @@ func TestRefusalsAreCountedRatherThanJudged(t *testing.T) {
 	}
 }
 
-// A tool call and a context length belong to the model; a protocol version belongs to the build, so a
-// refusal on one model must not be reported against another.
+// Test flow:
+//  1. Build a capability tracker.
+//  2. Record a tool-unsupported refusal and a context limit for host-0/model-a, and a version-unsupported refusal for host-0.
+//  3. Assert querying host-0/model-b reports no context limit and no tool or context refusals.
+//  4. Assert host-0/model-b still reports the build-level version refusal.
 func TestAModelsRefusalIsNotReportedAgainstAnotherModel(t *testing.T) {
 	t.Parallel()
 	tracker := newCapabilityTracker()
@@ -83,6 +98,11 @@ func TestAModelsRefusalIsNotReportedAgainstAnotherModel(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a capability tracker.
+//  2. For each of 8 participants, launch concurrent goroutines that record context limits, record tool-unsupported refusals, and read capability, 200 iterations each.
+//  3. Wait for all goroutines to finish.
+//  4. Assert each participant's tool-refusal count equals the iteration count.
 func TestCapabilityTrackerConcurrentAccessIsRaceFree(t *testing.T) {
 	tracker := newCapabilityTracker()
 	const participantCount = 8
@@ -121,8 +141,11 @@ func TestCapabilityTrackerConcurrentAccessIsRaceFree(t *testing.T) {
 	}
 }
 
-// The report names the tightest context a host has admitted to. Keeping the latest lets one refusal at
-// a larger size erase the smaller bound, and the operator reads a limit the host has already denied.
+// Test flow:
+//  1. Build a capability tracker.
+//  2. Record a context limit of 16000, then a larger 32000, for host-a/model-a.
+//  3. Assert the second record reports no change and returns the earlier 16000 as the previous value.
+//  4. Assert the tracker still reports the smaller 16000 limit with both refusals counted.
 func TestTheReportedContextLimitIsTheSmallestRefusal(t *testing.T) {
 	tracker := newCapabilityTracker()
 

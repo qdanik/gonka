@@ -5,6 +5,11 @@ import (
 	"testing"
 )
 
+// Test flow:
+//  1. Build a harness and submit a request, then await its reply.
+//  2. Assert the submit succeeded.
+//  3. Assert exactly one assignment was reported.
+//  4. Assert that assignment's nonce and request id match the ones handed off.
 func TestAHandedOffNonceIsReportedWithItsRequest(t *testing.T) {
 	test := newHarness(t, harnessConfig{})
 
@@ -26,6 +31,10 @@ func TestAHandedOffNonceIsReportedWithItsRequest(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Submit a waiter that abandons itself right after the decision is made.
+//  2. Submit and await a second request that takes its place.
+//  3. Assert no reported assignment carries the abandoned waiter's request id.
 func TestAnAbandonedNonceIsNotReportedAsHandedOff(t *testing.T) {
 	var abandonOnce sync.Once
 	var lost *waiter

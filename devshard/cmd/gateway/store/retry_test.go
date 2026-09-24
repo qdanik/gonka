@@ -7,11 +7,15 @@ import (
 	"time"
 )
 
+// Test flow:
+//  1. Build a test store with a fast retry backoff and a `retryable` function that always says yes, so every error the subtests return drives the retry ladder.
+//  2. Subtest "succeeds on first try": run a function that returns nil and assert it is called once.
+//  3. Subtest "fails twice then succeeds": run a function that fails twice then succeeds and assert it is called three times.
+//  4. Subtest "always fails returns last error after exhausting attempts": run a function that always fails and assert it is called exactly `retryAttempts` times and returns the last error.
+//  5. Subtest "cancelled context aborts before exhausting attempts": cancel the context mid-backoff and assert the retry aborts with `context.Canceled` before exhausting attempts.
 func TestWithRetry(t *testing.T) {
 	testStore := openTestStore(t)
 	testStore.retryBackoff = time.Millisecond
-	// The ladder is for a locked database; these cases drive its mechanics, so every error they
-	// return counts as one.
 	testStore.retryable = func(error) bool { return true }
 
 	t.Run("succeeds on first try", func(t *testing.T) {
@@ -80,6 +84,9 @@ func TestWithRetry(t *testing.T) {
 	})
 }
 
+// Test flow:
+//  1. Build a test store and cancel the context before calling `WithRetry`.
+//  2. Assert `WithRetry` returns `context.Canceled` and the function was never called.
 func TestWithRetryAlreadyCancelledNeverCallsFn(t *testing.T) {
 	testStore := openTestStore(t)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -98,8 +105,9 @@ func TestWithRetryAlreadyCancelledNeverCallsFn(t *testing.T) {
 	}
 }
 
-// An error that answers the same way on every attempt is returned at once. Riding the whole ladder for
-// it costs the caller seconds to receive the answer the first call already had.
+// Test flow:
+//  1. Build a test store and call `WithRetry` around `SetDevshardActive` for a nonexistent escrow, a permanent error.
+//  2. Assert `WithRetry` returns `ErrDevshardNotFound` and the function was called only once, since a missing row answers the same way every time.
 func TestWithRetryReturnsAPermanentErrorImmediately(t *testing.T) {
 	testStore := openTestStore(t)
 	testStore.retryBackoff = time.Millisecond

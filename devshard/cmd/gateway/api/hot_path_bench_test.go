@@ -22,8 +22,7 @@ import (
 	"devshard/logging"
 )
 
-// sinkWriter stands in for the server's own writer: it drops what it is given and answers the
-// Flusher assertion an SSE reply makes on every event.
+// sinkWriter stands in for the server's own writer, discarding what it is given.
 type sinkWriter struct {
 	header http.Header
 	status int
@@ -61,9 +60,7 @@ func (benchSnapshots) Snapshot() chain.PhaseSnapshot {
 	return chain.PhaseSnapshot{LastUpdatedAt: harnessClock, LastHealthyAt: harnessClock}
 }
 
-// benchServer is the boundary with the fakes production would put behind it. The engine writes the
-// chunks it is given, and the outcome carries no escrow so the cache records but never stores: every
-// iteration measures the same miss.
+// benchServer builds a Server wired with fakes, so every iteration measures the same cache miss.
 func benchServer(b *testing.B, chunks []string) *Server {
 	b.Helper()
 	quietLogging(b)

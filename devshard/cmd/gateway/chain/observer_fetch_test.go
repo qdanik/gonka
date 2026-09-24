@@ -33,6 +33,9 @@ func epochInfoWithConfirmationPhase(phaseJSON string) string {
 	}`, phaseJSON)
 }
 
+// Test flow:
+//  1. Parse a numeric-JSON epoch info body.
+//  2. Assert every decoded field matches the expected epochInfo value exactly.
 func TestParseEpochInfoNumericFields(t *testing.T) {
 	info, err := parseEpochInfo([]byte(epochInfoNumericJSON))
 	if err != nil {
@@ -50,6 +53,9 @@ func TestParseEpochInfoNumericFields(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Parse an epoch info body whose scalars are wire-typed as JSON strings, including a confirmation PoC event.
+//  2. Assert every decoded field matches the expected epochInfo value exactly.
 func TestParseEpochInfoStringTypedScalars(t *testing.T) {
 	info, err := parseEpochInfo([]byte(epochInfoStringScalarsJSON))
 	if err != nil {
@@ -70,6 +76,11 @@ func TestParseEpochInfoStringTypedScalars(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a table of confirmation-phase JSON encodings: table varies between known integer codes, an unknown integer, a verbatim string, and an unsupported JSON type.
+//  2. Parse an epoch info body embedding each phase encoding.
+//  3. For the unsupported-type case, assert parseEpochInfo returns an error.
+//  4. For the other cases, assert the decoded ConfirmationPoCPhase matches the expected value.
 func TestParseEpochInfoConfirmationPhaseFlexibleDecode(t *testing.T) {
 	cases := []struct {
 		name      string
@@ -106,6 +117,9 @@ func TestParseEpochInfoConfirmationPhaseFlexibleDecode(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Call parseEpochInfo with malformed JSON.
+//  2. Assert it returns an error.
 func TestParseEpochInfoMalformedJSONErrors(t *testing.T) {
 	_, err := parseEpochInfo([]byte(`{not-json`))
 	if err == nil {
@@ -126,8 +140,10 @@ func epochSwitchJSON(blockHeight, setNewValidators, nextSetNewValidators, nextPo
 	}`, blockHeight, setNewValidators, nextPoCStart, nextSetNewValidators)
 }
 
-// TestParseEpochInfoEpochSwitchBlockHeightFallbackLadder covers all four ladder rungs, including
-// the rung-1 guard that ignores a SetNewValidators height already behind the current block.
+// Test flow:
+//  1. Build a table of block-height and fallback-ladder inputs: table varies which rung (current-epoch set_new_validators, next-epoch set_new_validators, next_poc_start, or latest_epoch poc_start_block_height) determines the expected switch height, including the rung-1 guard against a stale set_new_validators.
+//  2. Parse each generated epoch info body.
+//  3. Assert the decoded EpochSwitchBlockHeight matches the case's expectation.
 func TestParseEpochInfoEpochSwitchBlockHeightFallbackLadder(t *testing.T) {
 	cases := []struct {
 		name                 string
@@ -198,6 +214,10 @@ const participantsMultiModelJSON = `{
 	}
 }`
 
+// Test flow:
+//  1. Parse the multi-model participants fixture in legacy preservation mode with an empty snapshot.
+//  2. Assert the current and full weight maps, per-model weight maps, inference URLs, preserved/excluded participant lists, per-model preserved lists and per-participant node list all match the fixture's timeslot-preserved shares.
+//  3. Assert the blank-index participant was dropped, leaving exactly two participants.
 func TestParseParticipantsPoCActiveWeightsAndPreservation(t *testing.T) {
 	state, err := parseParticipants([]byte(participantsMultiModelJSON), preservationModeLegacy, preservedSnapshotState{})
 	if err != nil {
@@ -263,6 +283,10 @@ func TestParseParticipantsPoCActiveWeightsAndPreservation(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Parse the multi-model participants fixture in preservationModeAll (PoC inactive) with an empty snapshot.
+//  2. Assert current weights equal the full all-node weights for both participants.
+//  3. Assert every participant is preserved and none is excluded.
 func TestParseParticipantsPoCInactiveTreatsAllNodesAsPreserved(t *testing.T) {
 	state, err := parseParticipants([]byte(participantsMultiModelJSON), preservationModeAll, preservedSnapshotState{})
 	if err != nil {
@@ -284,9 +308,6 @@ func TestParseParticipantsPoCInactiveTreatsAllNodesAsPreserved(t *testing.T) {
 	}
 }
 
-// participantsSnapshotOverrideJSON, parsed with preservationModeSnapshot, exercises membership
-// that contradicts the timeslot flags: node2/node4 are timeslot-non-preserved but listed in the
-// snapshot, node1/node3 are timeslot-preserved but absent from it.
 // participantsSnapshotOverride is the snapshot whose membership replaces the timeslot rule.
 func participantsSnapshotOverride() *PreservedNodes {
 	return &PreservedNodes{
@@ -301,9 +322,12 @@ func participantsSnapshotOverride() *PreservedNodes {
 	}
 }
 
-// TestParseParticipantsSnapshotModeUsesSnapshotMembership covers preservationModeSnapshot: the
-// snapshot's (model, participant, node) membership replaces the timeslot-allocation rule for
-// current weights and preserved sets, while full weights stay all-node.
+// Test flow:
+//  1. Build a preserved-nodes snapshot for model-x whose membership deliberately contradicts the timeslot flags: it lists node2/node4 (timeslot-non-preserved) and omits node1/node3 (timeslot-preserved).
+//  2. Read that snapshot through readPreserved and assert it comes back current.
+//  3. Parse the multi-model participants fixture in preservationModeSnapshot with that snapshot.
+//  4. Assert current weights and per-model weights follow the snapshot's membership rather than the timeslot flags, while full weights stay the all-node totals.
+//  5. Assert both participants are preserved, none is excluded, and the per-model preserved list reflects the snapshot.
 func TestParseParticipantsSnapshotModeUsesSnapshotMembership(t *testing.T) {
 	preservedNodes, status, err := readPreserved(t, fakeReader{preserved: participantsSnapshotOverride(), found: true}, 950)
 	if err != nil || status != preservedSnapshotCurrent {
@@ -343,8 +367,9 @@ func TestParseParticipantsSnapshotModeUsesSnapshotMembership(t *testing.T) {
 	}
 }
 
-// TestParseParticipantsPreservedIsSorted covers the Preserved list coming back sorted regardless
-// of wire order.
+// Test flow:
+//  1. Parse a participants body listing two participants in reverse alphabetical wire order.
+//  2. Assert the Preserved list comes back sorted, not in wire order.
 func TestParseParticipantsPreservedIsSorted(t *testing.T) {
 	reverseOrderJSON := `{
 		"active_participants": {
@@ -374,9 +399,11 @@ func TestParseParticipantsPreservedIsSorted(t *testing.T) {
 	}
 }
 
-// TestMergePreservedWithValidationCapable covers the validation-phase merge: an excluded miner
-// rejoins with the summed weight of its capable nodes, a non-capable or nil capability check
-// leaves the views unchanged, and the input state is never mutated.
+// Test flow:
+//  1. Build a base participants state from the multi-model fixture, where gonka1def starts excluded.
+//  2. Merge with a capability check that marks gonka1def's node4 as validation-capable; assert it rejoins preserved/preservedByModel with its node's weight added, while the input state's own fields stay unmutated.
+//  3. Merge with a capability check that marks no node capable; assert gonka1def stays excluded with zero weight.
+//  4. Merge with a nil capability check; assert the preserved list and weights are unchanged copies of the input state.
 func TestMergePreservedWithValidationCapable(t *testing.T) {
 	buildState := func(t *testing.T) participantsState {
 		t.Helper()
@@ -453,8 +480,9 @@ func TestMergePreservedWithValidationCapable(t *testing.T) {
 	})
 }
 
-// TestParseFlexibleIntegersUseStrictDecimalParsing covers the string branch of the flexible
-// scalar decoders: surrounding whitespace is tolerated, embedded whitespace is an error.
+// Test flow:
+//  1. Parse a numeric string with surrounding whitespace through parseFlexibleInt64 and parseFlexibleUint64 and assert both return the trimmed value.
+//  2. Parse a string with embedded whitespace through both decoders and assert both return an error.
 func TestParseFlexibleIntegersUseStrictDecimalParsing(t *testing.T) {
 	if value, err := parseFlexibleInt64([]byte(`" 950 "`)); err != nil || value != 950 {
 		t.Fatalf(`parseFlexibleInt64(" 950 ") = (%d, %v), want (950, nil)`, value, err)
@@ -470,8 +498,10 @@ func TestParseFlexibleIntegersUseStrictDecimalParsing(t *testing.T) {
 	}
 }
 
-// TestParseParticipantsEmptyArrayYieldsEmptyMapsNotNil covers an empty participants array: every
-// map must be non-nil and empty so callers never hit a nil-map panic.
+// Test flow:
+//  1. Parse a participants body with an empty participants array.
+//  2. Assert every map field (Weights, FullWeights, WeightsByModel, FullWeightsByModel, InferenceURLs, PreservedByModel, NodesByParticipant) has length zero and is non-nil.
+//  3. Assert the Preserved and Excluded lists are both empty.
 func TestParseParticipantsEmptyArrayYieldsEmptyMapsNotNil(t *testing.T) {
 	state, err := parseParticipants([]byte(`{"active_participants":{"participants":[]}}`), preservationModeLegacy, preservedSnapshotState{})
 	if err != nil {
@@ -502,6 +532,9 @@ func TestParseParticipantsEmptyArrayYieldsEmptyMapsNotNil(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Call parseParticipants with malformed JSON.
+//  2. Assert it returns an error.
 func TestParseParticipantsMalformedJSONErrors(t *testing.T) {
 	_, err := parseParticipants([]byte(`{not-json`), preservationModeLegacy, preservedSnapshotState{})
 	if err == nil {
@@ -509,10 +542,10 @@ func TestParseParticipantsMalformedJSONErrors(t *testing.T) {
 	}
 }
 
-// TestParsePreservedSnapshotStatusMatrix covers the found/anchor-match/anchor-mismatch/malformed
-// status matrix: current only when found and the anchor matches (or isn't checked).
-// The status is what routing acts on: current means the snapshot describes this episode, missing means
-// the chain has none for it, and unavailable means the chain could not be read at all.
+// Test flow:
+//  1. Build a table of reader outcomes and expected anchor heights: table varies between an anchor match, a skipped anchor check, an anchor mismatch, no snapshot on chain, a found-but-empty snapshot, and a failed chain read.
+//  2. Call readPreserved for each case.
+//  3. Assert the returned status matches the case's expectation (current, missing, or unavailable) and that an error is returned only for the failed read.
 func TestPreservedSnapshotStatusMatrix(t *testing.T) {
 	stale := preservedFixture()
 	testCases := []struct {
@@ -545,6 +578,10 @@ func TestPreservedSnapshotStatusMatrix(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Read the preserved-nodes fixture through readPreserved and assert it comes back current.
+//  2. Build a table of (model, participant, node) lookups: table varies between a preserved node, an absent node, the wrong model, and the wrong participant.
+//  3. Call Has for each case and assert it returns the expected boolean.
 func TestParsePreservedSnapshotHasLooksUpByModelParticipantNode(t *testing.T) {
 	state, status, err := readPreserved(t, fakeReader{preserved: preservedFixture(), found: true}, 950)
 	if err != nil {
@@ -575,7 +612,10 @@ func TestParsePreservedSnapshotHasLooksUpByModelParticipantNode(t *testing.T) {
 	}
 }
 
-// TestParsePreservedSnapshotEmptyModelsHasIsSafe covers Has() against an empty-but-current snapshot: no panic, always false.
+// Test flow:
+//  1. Read an empty-but-current preserved-nodes snapshot (no models) through readPreserved.
+//  2. Assert the status comes back current.
+//  3. Call Has against it and assert it returns false without panicking.
 func TestParsePreservedSnapshotEmptyModelsHasIsSafe(t *testing.T) {
 	state, status, err := readPreserved(t, fakeReader{preserved: &PreservedNodes{EpisodeAnchorHeight: 950}, found: true}, 950)
 	if err != nil {
@@ -589,8 +629,10 @@ func TestParsePreservedSnapshotEmptyModelsHasIsSafe(t *testing.T) {
 	}
 }
 
-// The same flip reaches the epoch payload: block_height, poc_start_block_height and the stage heights
-// are all int64 on the wire.
+// Test flow:
+//  1. Parse two epoch info bodies carrying the same values, one with numeric JSON integers and one with the same values as JSON strings.
+//  2. Assert both parses produce identical epochInfo values.
+//  3. Assert the numeric parse's BlockHeight is the expected 1000.
 func TestParseEpochAcceptsStringAndNumericIntegers(t *testing.T) {
 	numeric := `{"block_height": 1000, "phase": "Inference",
 		"latest_epoch": {"index": 7, "poc_start_block_height": 900},

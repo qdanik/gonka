@@ -7,17 +7,17 @@ import (
 	"devshard/types"
 )
 
-// The sink keeps what a benchmark built from being optimised away.
+// sinkFields keeps benchmark results from being optimized away.
 var sinkFields []any
 
-// discardLines keeps nothing, so a benchmark measures the journal rather than a log handler.
+// discardLines is a Lines sink that discards everything.
 type discardLines struct{}
 
 func (discardLines) Info(string, ...any)  {}
 func (discardLines) Warn(string, ...any)  {}
 func (discardLines) Error(string, ...any) {}
 
-// The finish line every completed attempt writes, built the way the consumer builds it.
+// BenchmarkAttemptFinishFields benchmarks building the fields for a finished attempt.
 func BenchmarkAttemptFinishFields(b *testing.B) {
 	step := widestFinishedStep()
 
@@ -27,7 +27,7 @@ func BenchmarkAttemptFinishFields(b *testing.B) {
 	}
 }
 
-// RecordStep runs on the coordinator for every step it traces; the reported allocations include the consumer's rendering.
+// BenchmarkRecordStep benchmarks recording a step through the journal.
 func BenchmarkRecordStep(b *testing.B) {
 	events := New(Settings{Lines: discardLines{}})
 	b.Cleanup(func() { _ = events.Close() })
@@ -39,7 +39,7 @@ func BenchmarkRecordStep(b *testing.B) {
 	}
 }
 
-// Every finished request builds its record once, whatever it did.
+// BenchmarkRequestFinishedFields benchmarks building the fields for a finished request.
 func BenchmarkRequestFinishedFields(b *testing.B) {
 	line := RequestLine{
 		RequestID: "request-1", Model: "qwen", ClientStream: true, Outcome: servedOutcome(),
@@ -52,7 +52,7 @@ func BenchmarkRequestFinishedFields(b *testing.B) {
 	}
 }
 
-// DiffComposed runs under the session lock for every diff an escrow composes that carries a ledger fact.
+// BenchmarkDiffComposed benchmarks recording a composed diff that carries a ledger fact.
 func BenchmarkDiffComposed(b *testing.B) {
 	events := New(Settings{Lines: discardLines{}})
 	b.Cleanup(func() { _ = events.Close() })
@@ -64,7 +64,7 @@ func BenchmarkDiffComposed(b *testing.B) {
 	}
 }
 
-// Almost every composed diff carries no ledger fact; that one must cost the session lock no allocation.
+// BenchmarkDiffComposedWithoutFacts benchmarks recording a composed diff that carries no ledger fact.
 func BenchmarkDiffComposedWithoutFacts(b *testing.B) {
 	events := New(Settings{Lines: discardLines{}})
 	b.Cleanup(func() { _ = events.Close() })

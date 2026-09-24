@@ -9,8 +9,7 @@ import (
 	"devshard/cmd/gateway/filters"
 )
 
-// A recorder stands in for the real http.ResponseWriter, which Go invalidates the moment the handler
-// returns. In production that invalidation is a nil buffer and the flush below is a panic.
+// closedStream returns a clientStream that has already been written to once and closed.
 func closedStream(t *testing.T) *clientStream {
 	t.Helper()
 	stream := newClientStream(httptest.NewRecorder(), "req-1", true, false, filters.LogprobIntent{}, nil)
@@ -23,7 +22,7 @@ func closedStream(t *testing.T) *clientStream {
 	return stream
 }
 
-// The real writer panics when flushed after the handler returned, so the count matters, not the bytes.
+// flushSpy counts flushes instead of touching the underlying writer.
 type flushSpy struct {
 	http.ResponseWriter
 	flushes int
@@ -31,6 +30,11 @@ type flushSpy struct {
 
 func (f *flushSpy) Flush() { f.flushes++ }
 
+// Test flow:
+//  1. Create a `clientStream` wrapping a `flushSpy`.
+//  2. Write one SSE chunk and close the stream, then record the flush count at that point.
+//  3. Call Flush again after close.
+//  4. Assert the flush count did not grow, so no flush reaches the writer after close.
 func TestClientStreamStopsFlushingAfterClose(t *testing.T) {
 	spy := &flushSpy{ResponseWriter: httptest.NewRecorder()}
 	stream := newClientStream(spy, "req-1", true, false, filters.LogprobIntent{}, nil)
@@ -50,6 +54,11 @@ func TestClientStreamStopsFlushingAfterClose(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a `closedStream`, a clientStream already written to once and closed.
+//  2. Record its delivered byte count, then call Flush and Write one more chunk.
+//  3. Assert the late write reports the chunk consumed, not an error.
+//  4. Assert delivered bytes did not grow, so the late write never reached the client.
 func TestClientStreamIsInertAfterClose(t *testing.T) {
 	stream := closedStream(t)
 	written, _ := stream.delivered()
@@ -67,6 +76,10 @@ func TestClientStreamIsInertAfterClose(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a `closedStream` and record its delivered byte count.
+//  2. Call Close a second time.
+//  3. Assert delivered bytes stay unchanged, so the second Close wrote nothing new.
 func TestClientStreamCloseIsIdempotent(t *testing.T) {
 	stream := closedStream(t)
 	written, _ := stream.delivered()
@@ -80,8 +93,11 @@ func TestClientStreamCloseIsIdempotent(t *testing.T) {
 	}
 }
 
-// Two attempt goroutines racing on one stream corrupted the rewriter's carry, which surfaced as a
-// slice bounds panic rather than a wrong answer.
+// Test flow:
+//  1. Create a `clientStream` over an `httptest.ResponseRecorder`.
+//  2. Run 8 goroutines that each write and flush an SSE chunk 50 times concurrently.
+//  3. Close the stream once every goroutine finishes.
+//  4. Assert Close returns no error, so the concurrent writers left the stream's internal state intact.
 func TestClientStreamSurvivesConcurrentWriters(t *testing.T) {
 	stream := newClientStream(httptest.NewRecorder(), "req-1", true, false, filters.LogprobIntent{}, nil)
 

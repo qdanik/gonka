@@ -2,6 +2,10 @@ package filters
 
 import "testing"
 
+// Test flow:
+//  1. Inspect `minimaxProfile`'s Models slice and Thinking mode.
+//  2. Assert Models holds exactly minimaxModelID and Thinking is ThinkingStrip.
+//  3. Assert each boolean hook (ForceZeroPenalties, RejectStructuredOutput, AllowSafetyIdentifier, KeepReasoningSplit, ThinkingTokenBudget) matches its expected value.
 func TestMinimaxProfileHooks(t *testing.T) {
 	if len(minimaxProfile.Models) != 1 || minimaxProfile.Models[0] != minimaxModelID {
 		t.Errorf("minimaxProfile.Models = %v, want [%q]", minimaxProfile.Models, minimaxModelID)

@@ -54,6 +54,11 @@ func failOnCreate(t *testing.T) func(context.Context, *signing.Secp256k1Signer, 
 	}
 }
 
+// Test flow:
+//  1. Seed the store with one existing active temp devshard record for model-a.
+//  2. Call `ensureToTarget` with a target of 3 against that one existing record.
+//  3. Assert it returns nil with created=2, the shortfall between the target and what already exists.
+//  4. Assert the chain client's CreateEscrow was called exactly twice.
 func TestEnsureToTargetCreatesExactlyTheShortfall(t *testing.T) {
 	testStore := newFakeStore()
 	existing := store.DevshardRecord{EscrowID: "existing-1", Model: "model-a", Active: true, RotationRole: roleTemp, RotationEpoch: 5}
@@ -75,6 +80,10 @@ func TestEnsureToTargetCreatesExactlyTheShortfall(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Seed a devshard record for each of the case's existing count, and build a chain client that fails the test if CreateEscrow is ever called.
+//  2. Call `ensureToTarget` with the case's target.
+//  3. Assert it returns nil with created=0, since nothing new is needed. The table varies existing count vs target: exactly at target, and over target.
 func TestEnsureToTargetAlreadyAtOrOverTarget(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -108,14 +117,18 @@ func TestEnsureToTargetAlreadyAtOrOverTarget(t *testing.T) {
 	}
 }
 
-// At/over target must short-circuit before the breaker is even consulted: gated() has a
-// side effect (it decrements a cooldown tick), so a no-op call must never spend one.
+// Test flow:
+//  1. Record a create-breaker failure for model-a/temp so its cooldown is armed.
+//  2. Build a snapshot with no weights, so the model is never treated as served or unserved (a cold start).
+//  3. Call `ensureToTarget` already at target with one existing record.
+//  4. Assert it returns nil with created=0.
+//  5. Assert the breaker is still gated, since an at-target call must short-circuit before reaching the breaker and must not consume its cooldown.
 func TestEnsureToTargetAtTargetDoesNotConsumeBreakerCooldown(t *testing.T) {
 	testStore := newFakeStore()
 	m := newRotationManager(t, testStore, &fakeTxClient{createEscrowFn: failOnCreate(t)}, false)
-	m.breaker.recordFailure("model-a", roleTemp) // cooldown=1: a short-circuited call must leave it untouched
+	m.breaker.recordFailure("model-a", roleTemp)
 	model := ModelConfig{ModelID: "model-a", Amount: 1000, PrivateKeyEnv: "MODEL_A_KEY"}
-	snapshot := chain.PhaseSnapshot{EpochIndex: 5, BlockHeight: 100} // no weights: cold-start, never treated as unserved
+	snapshot := chain.PhaseSnapshot{EpochIndex: 5, BlockHeight: 100}
 	existing := []store.DevshardRecord{{EscrowID: "existing-1", Model: "model-a", Active: true, RotationRole: roleTemp, RotationEpoch: 5}}
 
 	created, err := m.ensureToTarget(context.Background(), roleTemp, 1, model, snapshot, existing)
@@ -130,11 +143,14 @@ func TestEnsureToTargetAtTargetDoesNotConsumeBreakerCooldown(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a snapshot where the network serves only model-b, so model-a is known but not served.
+//  2. Call `ensureToTarget` for model-a against that snapshot.
+//  3. Assert it returns nil with created=0, since an unserved model is skipped.
 func TestEnsureToTargetSkipsWhenModelNotServedByNetwork(t *testing.T) {
 	testStore := newFakeStore()
 	m := newRotationManager(t, testStore, &fakeTxClient{createEscrowFn: failOnCreate(t)}, false)
 	model := ModelConfig{ModelID: "model-a", Amount: 1000, PrivateKeyEnv: "MODEL_A_KEY"}
-	// the network serves only model-b: known=true, served=false for model-a.
 	snapshot := servedSnapshot(5, 100, "model-b")
 
 	created, err := m.ensureToTarget(context.Background(), roleTemp, 3, model, snapshot, nil)
@@ -146,6 +162,10 @@ func TestEnsureToTargetSkipsWhenModelNotServedByNetwork(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Record a create-breaker failure for model-a/temp so it is gated.
+//  2. Call `ensureToTarget` against a served snapshot.
+//  3. Assert it returns `errCreateSuppressed` with created=0.
 func TestEnsureToTargetReportsSuppressionWhenBreakerGated(t *testing.T) {
 	testStore := newFakeStore()
 	m := newRotationManager(t, testStore, &fakeTxClient{createEscrowFn: failOnCreate(t)}, false)
@@ -162,6 +182,10 @@ func TestEnsureToTargetReportsSuppressionWhenBreakerGated(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a chain client whose CreateEscrow broadcasts then fails.
+//  2. Call `ensureToTarget` and assert the broadcast failure is surfaced, created=0, and CreateEscrow was called exactly once.
+//  3. Call `ensureToTarget` again and assert it now returns `errCreateSuppressed` from the gated breaker, without any further CreateEscrow call.
 func TestEnsureToTargetStopsOnFirstErrorAndGatesBreaker(t *testing.T) {
 	testStore := newFakeStore()
 	broadcastErr := errors.New("broadcast rejected")
@@ -198,6 +222,12 @@ func TestEnsureToTargetStopsOnFirstErrorAndGatesBreaker(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Seed the store with two active regular devshard records for model-a (one with an empty rotation role).
+//  2. Call `prepareBridge` with a TempCount of 1 against a snapshot that serves model-a.
+//  3. Assert it returns nil.
+//  4. Assert both regulars end up parked and exactly one temp escrow is created for model-a.
+//  5. Assert the saved rotation status is Completed with Stage stagePrepareTemp.
 func TestPrepareBridgeTempReachesTargetRetiresRegulars(t *testing.T) {
 	testStore := newFakeStore()
 	regularOne := store.DevshardRecord{EscrowID: "reg-1", Model: "model-a", Active: true, RotationRole: roleRegular, PrivateKeyEnv: "MODEL_A_KEY"}
@@ -234,6 +264,12 @@ func TestPrepareBridgeTempReachesTargetRetiresRegulars(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Seed the store with one active regular devshard record for model-a.
+//  2. Build a chain client whose CreateEscrow broadcasts then fails.
+//  3. Call `prepareBridge` and assert the create failure is surfaced.
+//  4. Assert the regular is kept active but promoted to the temp role instead of being retired.
+//  5. Assert the saved rotation status is not Completed and carries a non-empty CreateError.
 func TestPrepareBridgeTempCreateFailsPromotesRegularsInstead(t *testing.T) {
 	testStore := newFakeStore()
 	regular := store.DevshardRecord{EscrowID: "reg-1", Model: "model-a", Active: true, RotationRole: roleRegular, PrivateKeyEnv: "MODEL_A_KEY"}
@@ -276,8 +312,12 @@ func TestPrepareBridgeTempCreateFailsPromotesRegularsInstead(t *testing.T) {
 	}
 }
 
-// The breaker is gated only after creation has been failing, so a gated pass has no replacement to
-// show for the escrows it would retire. Retiring them there settles away the coverage that is left.
+// Test flow:
+//  1. Seed the store with one active regular devshard record for model-a and gate the create breaker for model-a/temp.
+//  2. Build a chain client that fails the test if CreateEscrow is ever called.
+//  3. Call `prepareBridge`.
+//  4. Assert the regular is kept active and promoted to the temp role, since no temp was created to take over from it.
+//  5. Assert the returned error is `errCreateSuppressed`.
 func TestPrepareBridgeGatedBreakerPromotesRegularsInsteadOfRetiringThem(t *testing.T) {
 	testStore := newFakeStore()
 	regular := store.DevshardRecord{EscrowID: "reg-1", Model: "model-a", Active: true, RotationRole: roleRegular, PrivateKeyEnv: "MODEL_A_KEY"}
@@ -302,6 +342,12 @@ func TestPrepareBridgeGatedBreakerPromotesRegularsInsteadOfRetiringThem(t *testi
 	}
 }
 
+// Test flow:
+//  1. Seed the store with one active temp devshard record for model-a and gate the create breaker for model-a/regular.
+//  2. Build a chain client that fails the test if CreateEscrow is ever called.
+//  3. Call `finishBridge`.
+//  4. Assert the temp is kept active, since no regular was created to take over from it.
+//  5. Assert the returned error is `errCreateSuppressed`.
 func TestFinishBridgeGatedBreakerKeepsTempsInsteadOfRetiringThem(t *testing.T) {
 	testStore := newFakeStore()
 	temp := store.DevshardRecord{EscrowID: "temp-1", Model: "model-a", Active: true, RotationRole: roleTemp, RotationEpoch: 9, PrivateKeyEnv: "MODEL_A_KEY"}
@@ -323,6 +369,11 @@ func TestFinishBridgeGatedBreakerKeepsTempsInsteadOfRetiringThem(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a chain client whose CreateEscrow fails for model-a but succeeds for model-b.
+//  2. Call `prepareBridge` for both models against a snapshot that serves both.
+//  3. Assert the returned error surfaces model-a's failure.
+//  4. Assert model-b's rotation status is still saved and Completed, while model-a's is not.
 func TestPrepareBridgeOneModelFailureDoesNotStopOthers(t *testing.T) {
 	testStore := newFakeStore()
 	broadcastErr := errors.New("broadcast rejected")
@@ -363,6 +414,10 @@ func TestPrepareBridgeOneModelFailureDoesNotStopOthers(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Configure the fake store's SaveRotationStatus to fail.
+//  2. Call `prepareBridge` with a chain client that otherwise succeeds.
+//  3. Assert the returned error surfaces the rotation-status save failure even though the rotation itself succeeded.
 func TestPrepareBridgeSurfacesSaveRotationStatusFailure(t *testing.T) {
 	testStore := newFakeStore()
 	testStore.saveRotationStatusErr = errors.New("status store unavailable")
@@ -376,6 +431,11 @@ func TestPrepareBridgeSurfacesSaveRotationStatusFailure(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Seed the store with one active regular devshard record for model-a and a shared call log across the store and chain client.
+//  2. Build a Manager with the settlement toggle enabled and a chain client that both creates and settles successfully.
+//  3. Call `prepareBridge`.
+//  4. Assert it returns nil, the call log recorded a SettleEscrow broadcast, and the regular's row is gone after the settle-then-retire.
 func TestPrepareBridgeSettlementEnabledSettlesRegularsBeforeRetiring(t *testing.T) {
 	testStore := newFakeStore()
 	regular := store.DevshardRecord{EscrowID: "reg-1", Model: "model-a", Active: true, RotationRole: roleRegular, PrivateKeyEnv: "MODEL_A_KEY"}
@@ -417,6 +477,12 @@ func TestPrepareBridgeSettlementEnabledSettlesRegularsBeforeRetiring(t *testing.
 	}
 }
 
+// Test flow:
+//  1. Seed the store with one active temp devshard record for model-a.
+//  2. Call `finishBridge` with a TargetCount of 2 against a snapshot that serves model-a.
+//  3. Assert it returns nil.
+//  4. Assert the temp ends up parked and exactly two regular escrows are created for model-a at the new epoch.
+//  5. Assert the saved rotation status is Completed with Stage stageFinishRegular.
 func TestFinishBridgeActiveTempPresentCreatesRegularsAndRetiresTemps(t *testing.T) {
 	testStore := newFakeStore()
 	temp := store.DevshardRecord{EscrowID: "temp-1", Model: "model-a", Active: true, RotationRole: roleTemp, RotationEpoch: 5, PrivateKeyEnv: "MODEL_A_KEY"}
@@ -450,6 +516,11 @@ func TestFinishBridgeActiveTempPresentCreatesRegularsAndRetiresTemps(t *testing.
 	}
 }
 
+// Test flow:
+//  1. Seed the store with one active regular devshard record for model-a and no temp.
+//  2. Build a chain client that fails the test if CreateEscrow is ever called.
+//  3. Call `finishBridge` and assert it returns nil.
+//  4. Assert no rotation status is saved and the regular is left untouched, since there is no temp to finish.
 func TestFinishBridgeSkipsModelWithNoActiveTemp(t *testing.T) {
 	testStore := newFakeStore()
 	regular := store.DevshardRecord{EscrowID: "reg-1", Model: "model-a", Active: true, RotationRole: roleRegular, PrivateKeyEnv: "MODEL_A_KEY"}
@@ -471,6 +542,11 @@ func TestFinishBridgeSkipsModelWithNoActiveTemp(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Seed the store with five devshard records for model-a and model-b spanning active regular, active with an empty role, already-temp, another model's regular, and an inactive regular.
+//  2. Call `promoteRegularsToTemp` for model-a.
+//  3. Assert it returns nil with promoted=2.
+//  4. Assert only the active model-a regulars are relabeled to the temp role; the other model's record and the inactive record stay unchanged.
 func TestPromoteRegularsToTempRelabelsActiveRegularsOnly(t *testing.T) {
 	testStore := newFakeStore()
 	regularOne := store.DevshardRecord{EscrowID: "reg-1", Model: "model-a", Active: true, RotationRole: roleRegular}
@@ -506,6 +582,11 @@ func TestPromoteRegularsToTempRelabelsActiveRegularsOnly(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Seed the store with two active regular devshard records for model-a and configure the fake store to fail the rotation-role write for reg-1.
+//  2. Call `promoteRegularsToTemp`.
+//  3. Assert the returned error wraps reg-1's write failure, with promoted=1.
+//  4. Assert reg-2 is promoted to the temp role despite reg-1's failure, while reg-1 stays unchanged.
 func TestPromoteRegularsToTempContinuesPastErrorReturnsFirst(t *testing.T) {
 	testStore := newFakeStore()
 	regularOne := store.DevshardRecord{EscrowID: "reg-1", Model: "model-a", Active: true, RotationRole: roleRegular}
@@ -536,9 +617,9 @@ func TestPromoteRegularsToTempContinuesPastErrorReturnsFirst(t *testing.T) {
 	}
 }
 
-// A retire that fails for a reason the next tick will not fix must reach the tick's error. Draining and
-// an in-flight settlement are the two that resolve themselves; anything else is a bridge that silently
-// never completes, visible only as Completed=false in a row nobody watches.
+// Test flow:
+//  1. Call `deferredRetire` with each case's error.
+//  2. Assert the result matches the case's expected deferred flag. The table varies the error: a draining escrow (ErrDevshardBusy), a settlement already in flight (ErrSettlementInFlight), the same busy error wrapped, a missing signing key, and an unknown escrow — the first three are retried later, the last two are terminal.
 func TestDeferredRetireSeparatesNotYetFromFailed(t *testing.T) {
 	testCases := []struct {
 		name     string
@@ -563,13 +644,16 @@ func TestDeferredRetireSeparatesNotYetFromFailed(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Seed the store with one active regular devshard record for model-a, then build a stale slice holding a copy of it from before the current tick's other writes.
+//  2. Deactivate the row and record a settle tx hash directly on the store, simulating an earlier step in the same tick.
+//  3. Call `promoteRegularsToTemp` with the stale slice.
+//  4. Assert it returns nil, the row is promoted to the temp role, stays inactive rather than being resurrected, and keeps the settle tx hash the tick already recorded.
 func TestPromotingToTempKeepsWhatTheSameTickAlreadyWrote(t *testing.T) {
 	testStore := newFakeStore()
 	stored := store.DevshardRecord{EscrowID: "reg-1", Model: "model-a", Active: true, RotationRole: roleRegular}
 	testStore.devshards[stored.EscrowID] = stored
 	m := newRotationManager(t, testStore, &fakeTxClient{}, false)
-	// What the tick's own slice holds: a copy taken before an earlier step deactivated the escrow and
-	// recorded the settlement it broadcast.
 	stale := []store.DevshardRecord{stored}
 	if err := testStore.SetDevshardActive(context.Background(), "reg-1", false); err != nil {
 		t.Fatalf("SetDevshardActive(): %v", err)

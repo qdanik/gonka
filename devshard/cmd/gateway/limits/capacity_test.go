@@ -7,6 +7,10 @@ import (
 	"devshard/cmd/gateway/chain"
 )
 
+// Test flow:
+//  1. Build a capacity with `NewCapacity`, varying the availability callback across subtests.
+//  2. Update it with a snapshot that varies per subtest: full by-model and generic weights, a partial by-model view (whose full weight falls back to the generic sum), a blocked flag, or no snapshot update at all.
+//  3. Read `ModelWeights` for a chosen model and assert its ScaleFactor.
 func TestCapacityScaleFactor(t *testing.T) {
 	baseSnapshot := func() chain.PhaseSnapshot {
 		return chain.PhaseSnapshot{
@@ -72,16 +76,11 @@ func TestCapacityScaleFactor(t *testing.T) {
 		snapshot := baseSnapshot()
 		snapshot.CurrentWeightsByModel["modelPartial"] = map[string]float64{"hostA": 50}
 		capacity.Update(snapshot)
-		// full falls back to the generic FullWeights sum (200) since FullWeightsByModel has no
-		// "modelPartial" entry; current stays the real per-model 50, not the generic sum of 100.
 		if got := capacity.ModelWeights("modelPartial", false).ScaleFactor; got != 0.25 {
 			t.Errorf("ModelWeights(modelPartial).ScaleFactor = %v, want 0.25 (real current 50 / generic full 200)", got)
 		}
 	})
 
-	// The caller passes the EFFECTIVE blocking state, not the chain's raw one: relaxed mode is the
-	// operator's override, and a scale of zero clamps every weight-derived cap to nothing, so reading
-	// the raw fact here would kill relaxed mode in exactly the deployments that configured a cap.
 	t.Run("a blocked caller forces scale to zero regardless of weights", func(t *testing.T) {
 		t.Parallel()
 		capacity := NewCapacity(nil)
@@ -114,6 +113,11 @@ func TestCapacityScaleFactor(t *testing.T) {
 	})
 }
 
+// Test flow:
+//  1. Define a shared per-model snapshot and an always-available function used by most cases.
+//  2. For each case, vary the snapshot shape, availability function, model name, and blocked flag.
+//  3. Update a fresh capacity with the case's snapshot.
+//  4. Call `ModelWeights` and assert it equals the case's expected ModelWeights struct.
 func TestCapacityModelWeights(t *testing.T) {
 	byModelViews := chain.PhaseSnapshot{
 		CurrentWeightsByModel: map[string]map[string]float64{"modelX": {"hostA": 40, "hostB": 20}},
@@ -222,6 +226,10 @@ func TestCapacityModelWeights(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Update a capacity with a first snapshot giving hostA a current and full weight.
+//  2. Update it again with a second snapshot giving hostZ a different current and full weight.
+//  3. Assert `ModelWeights` reflects only the second snapshot's scale factor.
 func TestCapacityUpdateReplacesPriorSnapshot(t *testing.T) {
 	t.Parallel()
 	capacity := NewCapacity(nil)
@@ -238,6 +246,10 @@ func TestCapacityUpdateReplacesPriorSnapshot(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Update a capacity with per-model current weights, varying the availability callback per subtest to eject a host or leave every host in.
+//  2. Set an escrow's membership shares over those hosts, in some subtests calling `SetEscrowMembership` twice with different shares.
+//  3. Call `EscrowWeight` and assert the weighted contribution, covering an ejected host, an unknown escrow, and a second `SetEscrowMembership` call replacing rather than merging.
 func TestCapacityEscrowWeight(t *testing.T) {
 	t.Run("membership share weighted by per-model current weight", func(t *testing.T) {
 		t.Parallel()
@@ -296,6 +308,11 @@ func TestCapacityEscrowWeight(t *testing.T) {
 	})
 }
 
+// Test flow:
+//  1. Update a capacity with a per-model current weight for hostA and register an escrow's full membership in it.
+//  2. Assert `EscrowWeight` reflects that membership before removal.
+//  3. Call `RemoveEscrow`.
+//  4. Assert `EscrowWeight` returns zero after removal.
 func TestCapacityRemoveEscrow(t *testing.T) {
 	t.Parallel()
 	capacity := NewCapacity(nil)
@@ -312,6 +329,11 @@ func TestCapacityRemoveEscrow(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Start goroutines that repeatedly call `Update` with new per-model weights, one host of which is excluded by the availability callback.
+//  2. Start goroutines that repeatedly set an escrow's membership and read its `EscrowWeight`.
+//  3. Start goroutines that repeatedly read `ModelWeights`' ScaleFactor.
+//  4. Wait for every goroutine, then remove the escrow, relying on `go test -race` to catch any unsynchronized access.
 func TestCapacityConcurrentUpdateAndRead(t *testing.T) {
 	capacity := NewCapacity(func(participant, model string) bool { return participant != "hostEjected" })
 	const goroutineCount = 8
@@ -355,6 +377,10 @@ func TestCapacityConcurrentUpdateAndRead(t *testing.T) {
 	capacity.RemoveEscrow("escrowA")
 }
 
+// Test flow:
+//  1. Vary the chain snapshot across cases: no weights observed at all, an unavailable host among the escrow's shares, a stale snapshot that still carries prior weights, and weights observed as explicit zero.
+//  2. Update a capacity, whose availability callback excludes hostUnavailable, with the case's snapshot and register the case's escrow shares.
+//  3. Call `EscrowWeight` and assert it matches the case's expected fallback or observed weight.
 func TestCapacityEscrowWeightOnUnobservedChainWeights(t *testing.T) {
 	cases := []struct {
 		name     string
@@ -410,6 +436,11 @@ func TestCapacityEscrowWeightOnUnobservedChainWeights(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a capacity via `newCapacityWatchingItsLock`, whose availability callback tries to re-acquire the capacity's own lock and reports every host unavailable.
+//  2. Call `ModelWeights` in one subtest and `EscrowWeight` in the other.
+//  3. Assert the result is zero because the only host is unavailable.
+//  4. Assert the availability callback never found the lock already held, i.e. it ran outside the critical section.
 func TestCapacityAsksAvailabilityAfterReleasingItsLock(t *testing.T) {
 	t.Run("model weights", func(t *testing.T) {
 		t.Parallel()

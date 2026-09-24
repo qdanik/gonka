@@ -21,9 +21,10 @@ func newErrorsTestServer() *Server {
 	return &Server{config: config.NewHolder(&defaults)}
 }
 
-// Two documents promise a 429 carries Retry-After, and RateLimitError computes the wait, but nothing
-// wrote it: a client told only "too many requests" retries on its own schedule, which is what the
-// queue timeout exists to avoid.
+// Test flow:
+//  1. Write a `RateLimitError` with a 1.5s retry-after through `writeErrorFor`.
+//  2. Assert the response status is 429.
+//  3. Assert the Retry-After header is "2" (1.5s rounded up).
 func TestARateLimitRejectionCarriesRetryAfter(t *testing.T) {
 	recorder := httptest.NewRecorder()
 
@@ -37,6 +38,9 @@ func TestARateLimitRejectionCarriesRetryAfter(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Write `ErrPrivateKeyEnvRequired` through `writeErrorFor`.
+//  2. Assert the response carries no Retry-After header.
 func TestOtherRejectionsCarryNoRetryAfter(t *testing.T) {
 	recorder := httptest.NewRecorder()
 
@@ -47,9 +51,10 @@ func TestOtherRejectionsCarryNoRetryAfter(t *testing.T) {
 	}
 }
 
-// A request refused because every host is at capacity is the gateway's own admission refusing, not an upstream answering badly. It used
-// to render as 502 with no Retry-After, so a client read it as a broken node and retried at once --
-// which is what a load test measured as 35 of 100 requests failing.
+// Test flow:
+//  1. Write `scheduler.ErrHostsBusy` through `writeErrorFor`.
+//  2. Assert the response status is 503, not 502.
+//  3. Assert the Retry-After header is "1".
 func TestAHostlessRequestIsOurRefusalNotAnUpstreamFailure(t *testing.T) {
 	recorder := httptest.NewRecorder()
 
@@ -63,8 +68,10 @@ func TestAHostlessRequestIsOurRefusalNotAnUpstreamFailure(t *testing.T) {
 	}
 }
 
-// A client that ran into the shard's own capacity exceeded no quota, so 429 would misname it. The old
-// gateway drew the same line: its limiter answered 429, its admission control 503.
+// Test flow:
+//  1. For each capacity-refusal error in `ErrHostsBusy`, `ErrNoEscrowCapacity` and `ErrEscrowBusy`, write it through `writeErrorFor`.
+//  2. Assert every one answers 503, not 429.
+//  3. Assert every one carries a non-empty Retry-After header.
 func TestACapacityRefusalAnswersUnavailableWithAWait(t *testing.T) {
 	refusals := []error{scheduler.ErrHostsBusy, scheduler.ErrNoEscrowCapacity, scheduler.ErrEscrowBusy}
 	for _, refusal := range refusals {
@@ -79,7 +86,10 @@ func TestACapacityRefusalAnswersUnavailableWithAWait(t *testing.T) {
 	}
 }
 
-// ModelUnavailableError takes the escrow tick as Retry-After, as ChainStaleError takes the chain poll interval.
+// Test flow:
+//  1. Write a `ModelUnavailableError` for model "qwen" through `writeErrorFor`.
+//  2. Assert the response status is 503.
+//  3. Assert Retry-After equals the escrow tick interval, in seconds.
 func TestAModelUnavailableRejectionCarriesTheEscrowTickInterval(t *testing.T) {
 	recorder := httptest.NewRecorder()
 
@@ -94,8 +104,10 @@ func TestAModelUnavailableRejectionCarriesTheEscrowTickInterval(t *testing.T) {
 	}
 }
 
-// A balance is restored by a replacement escrow or a settling inference, so a second is a retry that
-// cannot succeed; the refusal takes the same tick a model with no runtime does.
+// Test flow:
+//  1. Write an error wrapping both `scheduler.ErrNoEscrowCapacity` and `types.ErrInsufficientBalance` through `writeErrorFor`.
+//  2. Assert the response status is 503.
+//  3. Assert Retry-After equals the escrow tick interval, in seconds.
 func TestAFundingRefusalCarriesTheEscrowTickInterval(t *testing.T) {
 	recorder := httptest.NewRecorder()
 
@@ -110,7 +122,9 @@ func TestAFundingRefusalCarriesTheEscrowTickInterval(t *testing.T) {
 	}
 }
 
-// A shard that is merely full passes on its own, so it keeps the short retry.
+// Test flow:
+//  1. Write `scheduler.ErrNoEscrowCapacity` alone through `writeErrorFor`.
+//  2. Assert Retry-After equals `noHostRetryAfter`, in seconds, the short retry rather than the escrow tick interval.
 func TestABusyShardKeepsTheShortRetry(t *testing.T) {
 	recorder := httptest.NewRecorder()
 
@@ -122,8 +136,10 @@ func TestABusyShardKeepsTheShortRetry(t *testing.T) {
 	}
 }
 
-// The gateway's own limiter is a quota, and an OpenAI client reads 429 as backpressure to retry with
-// backoff where 503 reads as an outage worth failing over.
+// Test flow:
+//  1. Write a `RateLimitError` for "too many concurrent requests" through `writeErrorFor`.
+//  2. Assert the response status is 429.
+//  3. Assert the response carries a non-empty Retry-After header.
 func TestTheGatewaysOwnLimitAnswersTooManyRequests(t *testing.T) {
 	recorder := httptest.NewRecorder()
 
@@ -137,6 +153,10 @@ func TestTheGatewaysOwnLimitAnswersTooManyRequests(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Write `engine.ErrHostsUnavailable` through `writeErrorFor` on a default-configured server.
+//  2. Assert the response status is 503.
+//  3. Assert Retry-After is "5", the default host cutoff base rounded up to seconds.
 func TestAHostsUnavailableRejectionCarriesTheHostCutoffBase(t *testing.T) {
 	recorder := httptest.NewRecorder()
 
@@ -150,6 +170,10 @@ func TestAHostsUnavailableRejectionCarriesTheHostCutoffBase(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a server configured with a 2500ms host cutoff base.
+//  2. Write `engine.ErrHostsUnavailable` through `writeErrorFor`.
+//  3. Assert Retry-After is "3" (2.5s rounded up).
 func TestAHostsUnavailableRejectionRoundsUpAConfiguredBase(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	configuration := config.Defaults()

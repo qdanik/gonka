@@ -9,7 +9,10 @@ import (
 	"devshard/cmd/gateway/scheduler"
 )
 
-// Every trace line is read by an operator and a log collector: level, message, keys and value types are its contract.
+// Test flow:
+//  1. For each table case, drive one of the exported `engine.Trace*` helpers (a committed nonce, an unfilled escalation, a crowned attempt, a finished attempt with every delivery field, a finished attempt with no outcome, a host that diverged twice, a stranded nonce) against a real `journal.Journal` with log capture installed.
+//  2. Flush the journal.
+//  3. Assert every expected log line was recorded with its exact level, message and typed fields.
 func TestEveryRaceTraceLineKeepsItsLevelMessageAndTypedFields(t *testing.T) {
 	testCases := []struct {
 		name  string

@@ -50,6 +50,11 @@ func loggingIdentifier(parsed *ast.File) string {
 	return "logging"
 }
 
+// Test flow:
+//  1. Collect every non-test source file in `lifecyclePackages` plus `observers.go`, skipping the files `plainLoggingFiles` allows to log directly.
+//  2. Parse each file's AST.
+//  3. Walk the AST for calls to `logging.Info`, `Warn`, `Error`, or `Debug`, resolving the file's own import alias via `loggingIdentifier`.
+//  4. Assert no such call exists outside the journal.
 func TestLifecyclePackagesWriteNoLineAroundTheJournal(t *testing.T) {
 	paths := []string{filepath.Join("..", "observers.go")}
 	for _, packageName := range lifecyclePackages {
@@ -89,6 +94,10 @@ func TestLifecyclePackagesWriteNoLineAroundTheJournal(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Collect every non-test source file in `narratingPackages`.
+//  2. Parse each file's imports only.
+//  3. Assert none of them imports `devshard/cmd/gateway/journal` directly.
 func TestProducersNeverImportTheJournal(t *testing.T) {
 	set := token.NewFileSet()
 	for _, packageName := range narratingPackages {

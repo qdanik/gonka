@@ -16,8 +16,7 @@ import (
 	"devshard/user"
 )
 
-// fixedEscrows publishes one escrow. retired takes it out of the acquirable set while leaving it
-// settling, which is the state a rotation between the end of a race and its votes leaves behind.
+// fixedEscrows publishes one escrow; retired takes it out of the acquirable set while leaving it settling.
 type fixedEscrows struct {
 	escrowID string
 	session  registry.EscrowSession
@@ -47,6 +46,11 @@ func (f *fixedEscrows) SettlementSession(escrowID string) (registry.EscrowSessio
 	return f.session, true
 }
 
+// Test flow:
+//  1. Build an escrow state with one committed inference record for nonce 4.
+//  2. Define a table of nonces to look up, varying across a committed nonce, a nonce the escrow never committed, and an empty escrow state.
+//  3. For each case, call `timeoutPayload` with the state, nonce and prompt.
+//  4. Assert the resulting payload matches the case's expectation: the record's own numbers for the committed case, nil otherwise.
 func TestTimeoutPayloadIsRebuiltFromTheCommittedRecord(t *testing.T) {
 	t.Parallel()
 	committed := types.EscrowState{Inferences: map[uint64]*types.InferenceRecord{
@@ -95,6 +99,11 @@ func TestTimeoutPayloadIsRebuiltFromTheCommittedRecord(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a live session and a `fixedEscrows` publishing only that escrow.
+//  2. Ask `sessions.Poster` for an escrow ID it does not hold.
+//  3. Assert it reports not found.
+//  4. Ask for the live escrow ID and assert it resolves a poster.
 func TestPosterRefusesAnEscrowThisProcessNoLongerHolds(t *testing.T) {
 	t.Parallel()
 	session, machine := newLiveSession(t)
@@ -108,8 +117,11 @@ func TestPosterRefusesAnEscrowThisProcessNoLongerHolds(t *testing.T) {
 	}
 }
 
-// A retired escrow keeps every nonce its last race committed, and those nonces have no other settlement
-// path: routing must lose it, the poster must not.
+// Test flow:
+//  1. Build a live session inside a `fixedEscrows` marked `retired`.
+//  2. Ask `sessions.Target` for the retired escrow and assert it is not routable.
+//  3. Ask `sessions.Poster` for the same escrow.
+//  4. Assert it still resolves, so a retired escrow can still settle the votes its last race owed.
 func TestPosterSettlesARetiredEscrowThatRoutingHasLost(t *testing.T) {
 	t.Parallel()
 	session, machine := newLiveSession(t)
@@ -128,8 +140,10 @@ func TestPosterSettlesARetiredEscrowThatRoutingHasLost(t *testing.T) {
 	}
 }
 
-// A params value the dispatch adapter could not commit never committed a nonce either, so there is
-// nothing for a poster to settle.
+// Test flow:
+//  1. Build a live session and a `fixedEscrows` publishing it.
+//  2. Ask `sessions.Poster` with a raw prompt body instead of dispatch params.
+//  3. Assert it reports not found, since no nonce could have committed such params.
 func TestPosterRefusesParamsNoNonceCouldHaveCommitted(t *testing.T) {
 	t.Parallel()
 	session, machine := newLiveSession(t)
@@ -140,6 +154,12 @@ func TestPosterRefusesParamsNoNonceCouldHaveCommitted(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Prepare a live session with one committed nonce and resolve its poster.
+//  2. Cancel the context up front.
+//  3. Call `SettleTimeout` with the cancelled context.
+//  4. Assert the error matches `context.Canceled`.
+//  5. Assert the returned vote is empty, since the protocol deadline was never reached.
 func TestSettleTimeoutReportsACancelledWaitAsNoVote(t *testing.T) {
 	t.Parallel()
 	session, machine := newLiveSession(t)
@@ -162,8 +182,11 @@ func TestSettleTimeoutReportsACancelledWaitAsNoVote(t *testing.T) {
 	}
 }
 
-// An insufficient tally is a timeout the group never applied, and it reaches the poster looking like a
-// posted vote: same populated result, same non-nil error. Only the handler's sentinel separates them.
+// Test flow:
+//  1. Prepare a live session with one committed nonce and resolve its poster.
+//  2. Call `SettleTimeout` with a deadline 24 hours in the past, with no host client registered as a verifier so the tally stays empty.
+//  3. Assert the error matches `user.ErrTimeoutNotApplied`.
+//  4. Assert the returned vote kind is "refused".
 func TestSettleTimeoutReportsAnInsufficientVoteTallyAsAFailure(t *testing.T) {
 	t.Parallel()
 	session, machine := newLiveSession(t)
@@ -173,7 +196,6 @@ func TestSettleTimeoutReportsAnInsufficientVoteTallyAsAFailure(t *testing.T) {
 	if !ok {
 		t.Fatalf("Poster(%q) = not found, want the live escrow's poster", liveEscrowID)
 	}
-	// No host client is a verifier, so the tally is empty and cannot clear the threshold.
 	elapsedDeadline := time.Now().Add(-24 * time.Hour)
 
 	vote, err := poster.SettleTimeout(context.Background(), engine.TimeoutStep{Nonce: prepared.Nonce(), StartedAt: elapsedDeadline})

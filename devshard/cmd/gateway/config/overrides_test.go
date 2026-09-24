@@ -4,6 +4,10 @@ import (
 	"testing"
 )
 
+// Test flow:
+//  1. Build an `Overrides` value with every field populated, including per-model limits with both `MaxConcurrentRequests` and `MaxInputTokensInFlight` pointers set.
+//  2. Encode it via `EncodeOverrides` and decode it back via `ParseOverrides`.
+//  3. Assert every top-level and per-model field round-trips, including both per-model pointer fields, and that fields never set decode back to nil.
 func TestOverridesJSONRoundTrip(t *testing.T) {
 	maxTokens := int64(2048)
 	disabled := true
@@ -47,14 +51,15 @@ func TestOverridesJSONRoundTrip(t *testing.T) {
 	if decodedMaxConcurrentRequests == nil || *decodedMaxConcurrentRequests != 64 {
 		t.Fatalf("ModelLimits[model-a].MaxConcurrentRequests = %v, want 64", decodedMaxConcurrentRequests)
 	}
-	// The round trip must also preserve the per-model MaxInputTokensInFlight
-	// pointer, not just MaxConcurrentRequests.
 	decodedMaxInputTokensInFlight := decoded.ModelLimits["model-a"].MaxInputTokensInFlight
 	if decodedMaxInputTokensInFlight == nil || *decodedMaxInputTokensInFlight != 8192 {
 		t.Fatalf("ModelLimits[model-a].MaxInputTokensInFlight = %v, want 8192", decodedMaxInputTokensInFlight)
 	}
 }
 
+// Test flow:
+//  1. Parse a JSON object containing a field name the schema does not recognize.
+//  2. Assert `ParseOverrides` returns an error rather than silently ignoring the typo.
 func TestParseOverridesRejectsUnknownFields(t *testing.T) {
 	_, err := ParseOverrides([]byte(`{"no_such_setting": 1}`))
 	if err == nil {
@@ -62,6 +67,9 @@ func TestParseOverridesRejectsUnknownFields(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Parse an empty JSON object.
+//  2. Assert every field decodes to its zero value.
 func TestParseOverridesOfEmptyObjectIsEmpty(t *testing.T) {
 	decoded, err := ParseOverrides([]byte(`{}`))
 	if err != nil {

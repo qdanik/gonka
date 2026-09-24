@@ -2,8 +2,10 @@ package env
 
 import "testing"
 
-// The dial-time SSRF guard is process-wide and must be set before the first host dial, so it is read
-// apart from Load. Production leaves it unset; only a stand whose hosts are private addresses opts out.
+// Test flow:
+//  1. Table-driven: each case sets the gateway and/or legacy environment spellings for allowing private addresses, expecting the guard to stay on unless explicitly opted out.
+//  2. For each case, set both environment variables and call `AllowPrivateAddresses`.
+//  3. Assert the result matches the case's expectation, including the gateway spelling winning over the legacy one and any non-boolean value keeping the guard on.
 func TestPrivateAddressesAreRefusedUnlessTheStandAsksForThem(t *testing.T) {
 	testCases := []struct {
 		name    string

@@ -27,6 +27,9 @@ func newFakeTxClient(t *testing.T, transport *fakeTransport) *TxClient {
 	return client
 }
 
+// Test flow:
+//  1. Call NewTxClient with an empty Config (no transport).
+//  2. Assert it returns an error.
 func TestNewTxClientRequiresATransport(t *testing.T) {
 	_, err := NewTxClient(Config{})
 	if err == nil {
@@ -34,6 +37,9 @@ func TestNewTxClientRequiresATransport(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Call NewTxClient with only a transport set, leaving every other field zero.
+//  2. Assert fee denom, fee amount, gas limit, poll interval, poll timeout and the clock all fall back to their documented defaults.
 func TestNewTxClientAppliesDefaultsForZeroFields(t *testing.T) {
 	client, err := NewTxClient(Config{Transport: newFakeTransport()})
 	if err != nil {
@@ -59,7 +65,10 @@ func TestNewTxClientAppliesDefaultsForZeroFields(t *testing.T) {
 	}
 }
 
-// The guards reject before anything is signed or sent, which the transport's empty record proves.
+// Test flow:
+//  1. Build a table of invalid CreateEscrow inputs: table varies between a nil signer, a zero amount, and a blank model id.
+//  2. Call CreateEscrow with each invalid input.
+//  3. Assert it returns an error and the transport recorded no broadcast.
 func TestCreateEscrowValidatesInput(t *testing.T) {
 	validSigner := fixedSigner(t)
 
@@ -91,8 +100,11 @@ func TestCreateEscrowValidatesInput(t *testing.T) {
 	}
 }
 
-// The intent is recorded before the broadcast, because the broadcast cannot be taken back: a crash
-// between the two leaves an escrow on chain that the gateway can still find by its hash.
+// Test flow:
+//  1. Configure a fake transport and client, and an onPrepared callback that records the tx hash, whether it ran before any broadcast, and pre-registers the create-escrow commit result.
+//  2. Call CreateEscrow with that callback.
+//  3. Assert the intent was recorded before the broadcast happened.
+//  4. Assert the returned result's tx hash, escrow id and creator match what onPrepared and the commit event produced.
 func TestCreateEscrowRecordsTheIntentBeforeItBroadcasts(t *testing.T) {
 	signer := fixedSigner(t)
 	transport := newFakeTransport()
@@ -126,6 +138,9 @@ func TestCreateEscrowRecordsTheIntentBeforeItBroadcasts(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Call CreateEscrow with an onPrepared callback that returns an error.
+//  2. Assert CreateEscrow returns an error and the transport recorded no broadcast.
 func TestCreateEscrowOnPreparedErrorAbortsBeforeBroadcast(t *testing.T) {
 	transport := newFakeTransport()
 	client := newFakeTxClient(t, transport)
@@ -142,8 +157,10 @@ func TestCreateEscrowOnPreparedErrorAbortsBeforeBroadcast(t *testing.T) {
 	}
 }
 
-// The hash is computed before the broadcast and must match what the node acknowledges: the intent is
-// filed under the local one, so a divergence means recovery would look for a transaction nobody has.
+// Test flow:
+//  1. Configure a fake transport whose Broadcast reports a hash different from the one the client computed locally.
+//  2. Call CreateEscrow.
+//  3. Assert it returns a "hash mismatch" error.
 func TestCreateEscrowHashMismatchErrors(t *testing.T) {
 	transport := newFakeTransport()
 	transport.broadcastHash = "0000000000000000000000000000000000000000000000000000000000000000"
@@ -156,6 +173,10 @@ func TestCreateEscrowHashMismatchErrors(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a table of invalid SettleEscrow inputs: table varies between a nil signer and a zero-value settlement input.
+//  2. Call SettleEscrow with each invalid input.
+//  3. Assert it returns an error and the transport recorded no broadcast.
 func TestSettleEscrowValidatesInput(t *testing.T) {
 	validSigner := fixedSigner(t)
 
@@ -185,14 +206,15 @@ func TestSettleEscrowValidatesInput(t *testing.T) {
 	}
 }
 
-// Settlement waits for the transaction to execute, not merely to be accepted. Sync broadcast reports
-// only that the transaction entered the queue, and the caller destroys the key that could retry, so
-// returning early would strand the deposit of every settle the chain later rejects.
+// Test flow:
+//  1. Configure a fake transport whose onTx hook makes the broadcast transaction appear only from the second poll onward.
+//  2. Call SettleEscrow with a full settlement input.
+//  3. Assert it succeeded only after polling at least twice.
+//  4. Assert the result's escrow id and settler match the input and signer.
 func TestSettleEscrowWaitsForTheTransactionToCommit(t *testing.T) {
 	signer := fixedSigner(t)
 	transport := newFakeTransport()
 	transport.account = Account{Number: 9}
-	// The transaction appears only on the second poll, so a client that did not wait would miss it.
 	var polls atomic.Int64
 	transport.onTx = func(call int) {
 		polls.Store(int64(call))
@@ -220,8 +242,10 @@ func TestSettleEscrowWaitsForTheTransactionToCommit(t *testing.T) {
 	}
 }
 
-// A settlement the chain accepted and then rejected must reach the caller as a failure: it is the only
-// signal that the deposit is still there and the row must not be cleared.
+// Test flow:
+//  1. Configure a fake transport whose onTx hook resolves the broadcast transaction with a nonzero result code and a rejection log.
+//  2. Call SettleEscrow.
+//  3. Assert it returns an error containing the chain's rejection message.
 func TestSettleEscrowFailsWhenTheChainRejectsTheCommittedTransaction(t *testing.T) {
 	transport := newFakeTransport()
 	transport.onTx = func(int) {
@@ -238,8 +262,11 @@ func TestSettleEscrowFailsWhenTheChainRejectsTheCommittedTransaction(t *testing.
 	}
 }
 
-// The three answers a caller must tell apart: the escrow id of a create that worked, "no escrow" for a
-// transaction that committed and failed, and "not on chain" for one the chain does not have.
+// Test flow:
+//  1. Build a table of transaction outcomes: table varies between a committed create-escrow result, a committed-but-failed result, and no transaction on chain.
+//  2. Call GetTxEscrowID for each case.
+//  3. For the not-on-chain case, assert it returns ErrTxNotFound.
+//  4. For the other cases, assert the escrow id and found flag match the case's expectation.
 func TestGetTxEscrowIDThreeWaySemantics(t *testing.T) {
 	testCases := []struct {
 		name       string
@@ -282,8 +309,10 @@ func TestGetTxEscrowIDThreeWaySemantics(t *testing.T) {
 	}
 }
 
-// A read that failed is not an absent transaction. Reading it as absence would rebuild and rebroadcast
-// a settlement that already moved the money.
+// Test flow:
+//  1. Configure a fake transport whose transaction read always fails.
+//  2. Call GetTxEscrowID and assert it returns the transport failure.
+//  3. Call TxCommitted and assert it also returns the transport failure.
 func TestATransportFailureIsNeverReadAsAbsence(t *testing.T) {
 	transport := newFakeTransport()
 	transport.txErr = errTransportRefused
@@ -297,6 +326,11 @@ func TestATransportFailureIsNeverReadAsAbsence(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a table of transaction outcomes: table varies between an executed transaction, a committed-but-failed one, and no transaction on chain.
+//  2. Call TxCommitted for each case.
+//  3. For the not-on-chain case, assert it returns ErrTxNotFound.
+//  4. For the other cases, assert the succeeded flag matches the case's expectation.
 func TestTxCommittedReportsExecution(t *testing.T) {
 	testCases := []struct {
 		name          string
@@ -336,7 +370,11 @@ func TestTxCommittedReportsExecution(t *testing.T) {
 	}
 }
 
-// The wait is bounded: a create whose transaction never lands must fail rather than hold the caller.
+// Test flow:
+//  1. Create a TxClient with a short poll timeout against a transport that never has the transaction.
+//  2. Call waitForCreatedEscrowID.
+//  3. Assert it returns an error reporting the transaction is not confirmed within the timeout.
+//  4. Assert the same error tells the caller not to create another escrow, since misreading a timeout as a failure would risk a duplicate.
 func TestWaitForCreatedEscrowIDTimesOutWhenNeverFound(t *testing.T) {
 	transport := newFakeTransport()
 	client, err := NewTxClient(Config{Transport: transport, PollInterval: time.Millisecond, PollTimeout: 10 * time.Millisecond})
@@ -346,8 +384,6 @@ func TestWaitForCreatedEscrowIDTimesOutWhenNeverFound(t *testing.T) {
 
 	_, err = client.waitForCreatedEscrowID(t.Context(), "HASH")
 
-	// The wording matters as much as the giving up: an operator who reads this as "the transaction
-	// failed" creates a second escrow while the first is still landing.
 	if err == nil || !strings.Contains(err.Error(), "not confirmed within") {
 		t.Fatalf("waitForCreatedEscrowID = %v, want a bounded wait that reports the broadcast", err)
 	}
@@ -356,6 +392,10 @@ func TestWaitForCreatedEscrowIDTimesOutWhenNeverFound(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Create a TxClient with a long poll interval and timeout.
+//  2. Cancel the context immediately.
+//  3. Call waitForCreatedEscrowID and assert it returns context.Canceled.
 func TestWaitForCreatedEscrowIDReturnsOnContextCancel(t *testing.T) {
 	transport := newFakeTransport()
 	client, err := NewTxClient(Config{Transport: transport, PollInterval: time.Hour, PollTimeout: time.Hour})
@@ -378,7 +418,11 @@ func (n *recordingSettlementNarrator) SettleBroadcast(escrowID, txHash, settler 
 	n.broadcasts = append(n.broadcasts, escrowID+" "+txHash+" "+settler)
 }
 
-// The hash is the one handle on a settlement whose commit wait fails, so it is narrated before the wait begins.
+// Test flow:
+//  1. Configure a fake transport and a recording settlement narrator, with onTx recording how many broadcasts were narrated by the first poll and then resolving the transaction.
+//  2. Call SettleEscrow with a full settlement input.
+//  3. Assert exactly one broadcast was already narrated by the time the first poll ran.
+//  4. Assert the narrator recorded the escrow id, tx hash and settler address of that broadcast.
 func TestASettleBroadcastIsNarratedBeforeItsCommitIsAwaited(t *testing.T) {
 	signer := fixedSigner(t)
 	transport := newFakeTransport()

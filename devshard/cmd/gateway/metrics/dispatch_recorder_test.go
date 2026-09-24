@@ -2,8 +2,10 @@ package metrics
 
 import "testing"
 
-// The burn family is asserted end to end against a real burn in cmd/gateway's e2e suite; a hold and an
-// exhausted burn budget are per-escrow counts no request-level assertion reaches.
+// Test flow:
+//  1. Build a `DispatchRecorder`.
+//  2. Record two ghost burns for one reason and one for another, plus one nonce hold and one exhausted burn budget, across two escrow ids.
+//  3. Assert each ghost-burn reason, the nonce-hold count, and the exhausted-budget count are each counted separately by their labels.
 func TestTheDispatchRecorderCountsEachNonceOutcomeSeparately(t *testing.T) {
 	telemetry := New()
 	recorder := NewDispatchRecorder(telemetry)
@@ -20,8 +22,10 @@ func TestTheDispatchRecorderCountsEachNonceOutcomeSeparately(t *testing.T) {
 	expectCounter(t, telemetry, "devshard_gateway_burn_budget_exhausted_total", labels{"devshard_id": "9"}, 1)
 }
 
-// Escrow ids are monotonic chain identifiers and are never reused, so a series that outlives its
-// escrow grows with uptime alone. Rotation is the normal case, not an edge one.
+// Test flow:
+//  1. Build a `DispatchRecorder` and record a ghost burn, a nonce hold, and an exhausted burn budget for one escrow, plus a ghost burn for a second escrow.
+//  2. Retire the first escrow via `EscrowRetired`.
+//  3. Gather every metric family and assert none still carries a `devshard_id` label for the retired escrow.
 func TestDispatchRecorderDropsSeriesWhenAnEscrowRetires(t *testing.T) {
 	telemetry := New()
 	recorder := NewDispatchRecorder(telemetry)
@@ -48,7 +52,10 @@ func TestDispatchRecorderDropsSeriesWhenAnEscrowRetires(t *testing.T) {
 	}
 }
 
-// A write trims the escrow id before it becomes a label, so a delete that did not would miss the series it was called for.
+// Test flow:
+//  1. Build a `DispatchRecorder` and record a ghost burn, a nonce hold, and an exhausted burn budget using an escrow id padded with spaces.
+//  2. Retire the escrow via `EscrowRetired`, passing the same padded id.
+//  3. Assert every series for that escrow was dropped, proving retirement trims the id the same way the writes did.
 func TestDispatchRecorderDropsTheSeriesItWroteForAnUntrimmedEscrowID(t *testing.T) {
 	telemetry := New()
 	recorder := NewDispatchRecorder(telemetry)

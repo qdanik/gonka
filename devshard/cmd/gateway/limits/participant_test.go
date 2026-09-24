@@ -41,8 +41,7 @@ func (c *movingClock) advance(d time.Duration) {
 
 func zeroJitter(time.Duration) time.Duration { return 0 }
 
-// oneToken prices a request at a single token on each dimension, so a window counted in tokens still
-// reads as a count of requests and an expectation stays legible.
+// oneToken prices a request at a single token on each dimension.
 var oneToken = TokenCost{Input: 1, Output: 1}
 
 func testConfig() ParticipantConfig {
@@ -114,6 +113,11 @@ func withinTolerance(got, want time.Duration) bool {
 	return diff <= time.Millisecond
 }
 
+// Test flow:
+//  1. Build a limiter from the default test config, whose window holds four one-token requests.
+//  2. Acquire four one-token requests for the same participant and model.
+//  3. Assert every one of the four is admitted.
+//  4. Assert a fifth request is refused with the window full.
 func TestAcquireAdmitsUpToWindowThenBlocks(t *testing.T) {
 	t.Parallel()
 	l := newTestLimiter(testConfig(), fixedNow(testEpoch))
@@ -128,6 +132,11 @@ func TestAcquireAdmitsUpToWindowThenBlocks(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a limiter from the default test config.
+//  2. Acquire a request whose token cost is far larger than the host's whole window while the host has nothing in flight.
+//  3. Assert it is admitted anyway, since an idle host must not refuse a prompt no window fits.
+//  4. Assert a further request behind it is refused, since the host is over its window until the oversized request ends.
 func TestAHostWithNothingInFlightAdmitsARequestLargerThanItsWholeWindow(t *testing.T) {
 	t.Parallel()
 	l := newTestLimiter(testConfig(), fixedNow(testEpoch))
@@ -140,6 +149,10 @@ func TestAHostWithNothingInFlightAdmitsARequestLargerThanItsWholeWindow(t *testi
 	}
 }
 
+// Test flow:
+//  1. Acquire the window's four one-token requests, keeping the release for the first.
+//  2. Release that first lease.
+//  3. Assert another one-token request is now admitted.
 func TestReleaseAllowsAnotherAcquire(t *testing.T) {
 	t.Parallel()
 	l := newTestLimiter(testConfig(), fixedNow(testEpoch))
@@ -155,6 +168,11 @@ func TestReleaseAllowsAnotherAcquire(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Acquire the window's four one-token requests, keeping the release for the first.
+//  2. Call that release twice.
+//  3. Assert exactly one further request is admitted.
+//  4. Assert a second further request is refused, since a lease released twice must not hand back tokens it never took.
 func TestReleasingALeaseTwiceGivesBackOnlyWhatItTook(t *testing.T) {
 	t.Parallel()
 	l := newTestLimiter(testConfig(), fixedNow(testEpoch))
@@ -174,10 +192,14 @@ func TestReleasingALeaseTwiceGivesBackOnlyWhatItTook(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Acquire a single one-token request, leaving the host's peak in-flight count (1) below half the window (2), the growth gate.
+//  2. Post a Success verdict carrying a full window's worth of tokens.
+//  3. Assert both windows stay unchanged at their initial value, since an idle host must not accumulate an imaginary window.
 func TestSuccessBelowUtilizationGateLeavesWindowUnchanged(t *testing.T) {
 	t.Parallel()
 	l := newTestLimiter(testConfig(), fixedNow(testEpoch))
-	l.admitOne("p", "m") // peak=1, window/2=2: gate not met
+	l.admitOne("p", "m")
 
 	l.OnResult(Result{Participant: "p", Model: "m", Verdict: Success, Carried: TokenCost{Input: 4, Output: 4}})
 
@@ -187,11 +209,15 @@ func TestSuccessBelowUtilizationGateLeavesWindowUnchanged(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Acquire two one-token requests, meeting the growth gate of half the window (peak 2 against window/2 = 2).
+//  2. Post a Success verdict carrying a full window's worth of tokens.
+//  3. Assert both windows grow by one step (from 4 to 5).
 func TestAnAnswerCarryingAWindowsWorthOfTokensEarnsOneStep(t *testing.T) {
 	t.Parallel()
 	l := newTestLimiter(testConfig(), fixedNow(testEpoch))
 	l.admitOne("p", "m")
-	l.admitOne("p", "m") // peak=2, window/2=2: gate met
+	l.admitOne("p", "m")
 
 	l.OnResult(Result{Participant: "p", Model: "m", Verdict: Success, Carried: TokenCost{Input: 4, Output: 4}})
 
@@ -201,6 +227,10 @@ func TestAnAnswerCarryingAWindowsWorthOfTokensEarnsOneStep(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Acquire one request for a participant and model.
+//  2. Post an Overload verdict for it.
+//  3. Assert both windows narrow to the soft congestion factor (4 × 0.85 = 3.4), since an Overload blames neither dimension and no cross factor applies.
 func TestOverloadNarrowsBothWindowsSoftly(t *testing.T) {
 	t.Parallel()
 	l := newTestLimiter(testConfig(), fixedNow(testEpoch))
@@ -214,6 +244,10 @@ func TestOverloadNarrowsBothWindowsSoftly(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Configure the minimum window pricing at 1 for both dimensions.
+//  2. Acquire one request and post an Overload verdict for it.
+//  3. Assert both windows land at the floor of 1.
 func TestOverloadFloorsWindowAtTheMinimum(t *testing.T) {
 	t.Parallel()
 	cfg := testConfig()
@@ -229,6 +263,9 @@ func TestOverloadFloorsWindowAtTheMinimum(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Repeat ten times: acquire and release a request, then post an Overload verdict for it once the host is idle.
+//  2. Assert the cutoff never opens, since `OnResult` leaves counting a race-end overload to `CountRefusalIfIdle`.
 func TestAnOverloadReportedAtRaceEndNeverTripsCutoff(t *testing.T) {
 	t.Parallel()
 	l := newTestLimiter(testConfig(), fixedNow(testEpoch))
@@ -242,6 +279,9 @@ func TestAnOverloadReportedAtRaceEndNeverTripsCutoff(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Repeat three times: acquire and release a request, then call `CountRefusalIfIdle` while the host carries nothing else.
+//  2. Assert the cutoff opens, since a host refusing while idle for this model is broken, not busy.
 func TestRefusalsFromAnIdleHostOpenTheCutoff(t *testing.T) {
 	t.Parallel()
 	l := newTestLimiter(testConfig(), fixedNow(testEpoch))
@@ -255,6 +295,10 @@ func TestRefusalsFromAnIdleHostOpenTheCutoff(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Acquire one request and keep it in flight.
+//  2. Repeat three times: acquire and release another request, then call `CountRefusalIfIdle`.
+//  3. Assert the cutoff stays closed, since a host busy with other work is busy, not broken.
 func TestRefusalsWhileTheHostCarriesOtherWorkLeaveTheCutoffClosed(t *testing.T) {
 	t.Parallel()
 	l := newTestLimiter(testConfig(), fixedNow(testEpoch))
@@ -269,6 +313,9 @@ func TestRefusalsWhileTheHostCarriesOtherWorkLeaveTheCutoffClosed(t *testing.T) 
 	}
 }
 
+// Test flow:
+//  1. Post a TransportFault, an Overload, then two more TransportFault verdicts in sequence.
+//  2. Assert the cutoff is open, since a refusing host must not reset its own fault streak by answering an Overload in between.
 func TestAnOverloadDoesNotClearTheTransportFaultStreak(t *testing.T) {
 	t.Parallel()
 	l := newTestLimiter(testConfig(), fixedNow(testEpoch))
@@ -283,6 +330,10 @@ func TestAnOverloadDoesNotClearTheTransportFaultStreak(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Mark the pair half-open and acquire/release its one probe.
+//  2. Call `CountRefusalIfIdle` for that probe.
+//  3. Assert the cutoff reopens, since a half-open probe gets exactly one try.
 func TestARefusalOnAHalfOpenProbeReopensTheCutoff(t *testing.T) {
 	t.Parallel()
 	l := newTestLimiter(testConfig(), fixedNow(testEpoch))
@@ -296,6 +347,9 @@ func TestARefusalOnAHalfOpenProbeReopensTheCutoff(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Call `CountRefusalIfIdle` three times for a participant that was never acquired.
+//  2. Assert the cutoff opens for it, since a pair swept between release and refusal must still be tracked as idle.
 func TestARefusalFromAHostNeverSeenCreatesItsState(t *testing.T) {
 	t.Parallel()
 	l := newTestLimiter(testConfig(), fixedNow(testEpoch))
@@ -308,13 +362,18 @@ func TestARefusalFromAHostNeverSeenCreatesItsState(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a config with the default AfterFailures of 3, acquire one request.
+//  2. Post alternating TransportFault and UpstreamFault verdicts for AfterFailures-1 rounds, since a host answering 5xx between resets must not clear the fault streak.
+//  3. Assert both windows narrowed twice at the hard congestion factor.
+//  4. Post one more TransportFault (the threshold-th).
+//  5. Assert the cutoff is now open.
 func TestUpstreamFaultNarrowsBothWindowsAndKeepsTheBreakersCount(t *testing.T) {
 	t.Parallel()
-	cfg := testConfig() // AfterFailures=3
+	cfg := testConfig()
 	l := newTestLimiter(cfg, fixedNow(testEpoch))
 	l.admitOne("p", "m")
 
-	// A host answering 5xx between resets must not clear the count that opens the cutoff.
 	for range cfg.AfterFailures - 1 {
 		l.answered("p", "m", TransportFault)
 		l.answered("p", "m", UpstreamFault)
@@ -333,6 +392,11 @@ func TestUpstreamFaultNarrowsBothWindowsAndKeepsTheBreakersCount(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Acquire one request and post two TransportFault verdicts.
+//  2. Post a MissedReceiptDeadline verdict.
+//  3. Assert both windows narrow at the severe factor (4 × 0.5 = 2), since a receipt arrives before any prefill and lateness there blames the host, not a dimension.
+//  4. Post one more TransportFault and assert the cutoff opens, since a missed deadline must not clear the fault streak.
 func TestAMissedReceiptDeadlineNarrowsBothWindowsAndKeepsTheBreakersCount(t *testing.T) {
 	t.Parallel()
 	l := newTestLimiter(testConfig(), fixedNow(testEpoch))
@@ -352,6 +416,11 @@ func TestAMissedReceiptDeadlineNarrowsBothWindowsAndKeepsTheBreakersCount(t *tes
 	}
 }
 
+// Test flow:
+//  1. Acquire one request.
+//  2. Post a MissedFirstTokenDeadline verdict.
+//  3. Assert the input window narrows at the hard factor (4 × 0.5 = 2), since the receipt arrived but the first content did not, which is prefill.
+//  4. Assert the output window only takes the cross factor (4 × 0.9 = 3.6), since prefill and decode share one device.
 func TestAMissedFirstTokenDeadlineBlamesPrefillAndOnlyGrazesDecode(t *testing.T) {
 	t.Parallel()
 	l := newTestLimiter(testConfig(), fixedNow(testEpoch))
@@ -368,6 +437,12 @@ func TestAMissedFirstTokenDeadlineBlamesPrefillAndOnlyGrazesDecode(t *testing.T)
 	}
 }
 
+// Test flow:
+//  1. Acquire one request and post two TransportFault verdicts.
+//  2. Post a DecodeStalled verdict.
+//  3. Assert the output window narrows at the severe factor (4 × 0.5 = 2), since a stream gone silent between chunks is decode starved.
+//  4. Assert the input window only takes the cross factor (4 × 0.9 = 3.6).
+//  5. Assert a further request is still admitted, since a host that answered slowly is not one the cutoff is for.
 func TestAStalledStreamBlamesDecodeAndLeavesTheCutoffAlone(t *testing.T) {
 	t.Parallel()
 	l := newTestLimiter(testConfig(), fixedNow(testEpoch))
@@ -389,11 +464,16 @@ func TestAStalledStreamBlamesDecodeAndLeavesTheCutoffAlone(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Acquire two requests, meeting the growth gate that a timely Success would otherwise widen, then post two TransportFault verdicts.
+//  2. Post a LateSuccess verdict carrying a full window's worth of tokens.
+//  3. Assert both windows stay unchanged, since widening would undo the narrowing the lateness already earned.
+//  4. Post one more TransportFault and assert a further request is still admitted, since the LateSuccess must have cleared the fault streak.
 func TestALateSuccessKeepsTheWindowAndClearsTheBreakersCount(t *testing.T) {
 	t.Parallel()
 	l := newTestLimiter(testConfig(), fixedNow(testEpoch))
 	l.admitOne("p", "m")
-	l.admitOne("p", "m") // peak=2, window/2=2: a timely Success would widen
+	l.admitOne("p", "m")
 	l.answered("p", "m", TransportFault)
 	l.answered("p", "m", TransportFault)
 
@@ -409,6 +489,10 @@ func TestALateSuccessKeepsTheWindowAndClearsTheBreakersCount(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Trip the cutoff with AfterFailures TransportFault verdicts, advance the clock past BaseOpen, and acquire the half-open probe.
+//  2. Post a LateSuccess verdict for that probe.
+//  3. Assert the snapshot reports the cutoff closed.
 func TestALateSuccessLiftsAHalfOpenCutoff(t *testing.T) {
 	t.Parallel()
 	clock := newMovingClock(testEpoch)
@@ -418,7 +502,7 @@ func TestALateSuccessLiftsAHalfOpenCutoff(t *testing.T) {
 		l.answered("p", "m", TransportFault)
 	}
 	clock.advance(cfg.BaseOpen)
-	l.admitOne("p", "m") // the half-open probe
+	l.admitOne("p", "m")
 
 	l.answered("p", "m", LateSuccess)
 
@@ -427,6 +511,11 @@ func TestALateSuccessLiftsAHalfOpenCutoff(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Acquire one request and post two TransportFault verdicts.
+//  2. Post an EmptyAnswer verdict.
+//  3. Assert both windows narrow to 2.8 (4 × 0.7).
+//  4. Post one more TransportFault and assert the cutoff opens, since an empty answer must not clear the fault streak.
 func TestAnEmptyAnswerNarrowsBothWindowsAndKeepsTheBreakersCount(t *testing.T) {
 	t.Parallel()
 	l := newTestLimiter(testConfig(), fixedNow(testEpoch))
@@ -446,6 +535,11 @@ func TestAnEmptyAnswerNarrowsBothWindowsAndKeepsTheBreakersCount(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Acquire one request and post two TransportFault verdicts.
+//  2. Post an EmptyAnswerLeftOpen verdict.
+//  3. Assert both windows narrow to the severe factor (4 × 0.5 = 2).
+//  4. Assert a further request is refused, since an empty answer that left its nonce open counts towards the cutoff.
 func TestAnEmptyAnswerLeftOpenNarrowsSeverelyAndCountsTowardsTheCutoff(t *testing.T) {
 	t.Parallel()
 	l := newTestLimiter(testConfig(), fixedNow(testEpoch))
@@ -464,6 +558,10 @@ func TestAnEmptyAnswerLeftOpenNarrowsSeverelyAndCountsTowardsTheCutoff(t *testin
 	}
 }
 
+// Test flow:
+//  1. For each case, set both window minimums to 3 and acquire one request.
+//  2. Post the case's verdict twenty times in a row; the table varies the verdict across every congestion and fault outcome that narrows a window.
+//  3. Assert both windows land at the minimum of 3, not below it.
 func TestNoNarrowingGoesBelowTheMinimumWindow(t *testing.T) {
 	t.Parallel()
 	for _, testCase := range []struct {
@@ -497,11 +595,16 @@ func TestNoNarrowingGoesBelowTheMinimumWindow(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Acquire two requests, meeting the growth gate that a healthy answer would otherwise widen.
+//  2. Post a Success verdict carrying a full window's worth of tokens but reporting input pressure of 1.5 against a baseline of 1.
+//  3. Assert the input window narrows at the hard factor (4 × 0.85 = 3.4), since a host slower than its own best is congested before it has failed anything.
+//  4. Assert the output window takes the cross factor (4 × 0.9 = 3.6).
 func TestADelayedButSuccessfulAnswerNarrowsInsteadOfWidening(t *testing.T) {
 	t.Parallel()
 	l := newTestLimiter(testConfig(), fixedNow(testEpoch))
 	l.admitOne("p", "m")
-	l.admitOne("p", "m") // the utilisation gate is met, so a healthy answer would widen
+	l.admitOne("p", "m")
 
 	l.OnResult(Result{
 		Participant: "p", Model: "m", Verdict: Success,
@@ -518,9 +621,13 @@ func TestADelayedButSuccessfulAnswerNarrowsInsteadOfWidening(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a limiter whose config allows 0.30 of slack, and acquire two requests to meet the growth gate.
+//  2. Post a Success verdict whose pressure (1.29 on both dimensions) sits inside that slack.
+//  3. Assert both windows still widen to 5, since ordinary jitter is not congestion.
 func TestLatencyInsideTheSlackStillWidens(t *testing.T) {
 	t.Parallel()
-	l := newTestLimiter(testConfig(), fixedNow(testEpoch)) // Slack=0.30
+	l := newTestLimiter(testConfig(), fixedNow(testEpoch))
 	l.admitOne("p", "m")
 	l.admitOne("p", "m")
 
@@ -536,9 +643,14 @@ func TestLatencyInsideTheSlackStillWidens(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a config with the default AfterFailures of 3 and post TransportFault verdicts for AfterFailures-1 rounds.
+//  2. Acquire and release one request, asserting it is still admitted since the cutoff has not yet opened.
+//  3. Post the AfterFailures-th consecutive TransportFault verdict.
+//  4. Assert a further request is refused, since the cutoff must now be open.
 func TestTransportFaultTripsAtExactThreshold(t *testing.T) {
 	t.Parallel()
-	cfg := testConfig() // AfterFailures=3
+	cfg := testConfig()
 	l := newTestLimiter(cfg, fixedNow(testEpoch))
 
 	for range cfg.AfterFailures - 1 {
@@ -550,13 +662,17 @@ func TestTransportFaultTripsAtExactThreshold(t *testing.T) {
 	}
 	release()
 
-	l.answered("p", "m", TransportFault) // the AfterFailures-th consecutive fault
+	l.answered("p", "m", TransportFault)
 
 	if l.admits("p", "m") {
 		t.Fatal("Acquire() at AfterFailures = true, want false (cutoff must open)")
 	}
 }
 
+// Test flow:
+//  1. Build a config with AfterFailures 1 (so every fault re-trips the cutoff), BaseOpen 1s, and MaxOpen 3s.
+//  2. Post one TransportFault verdict at a time, four times, following the backoff ladder base × 1.6^n (1s, 1.6s, 2.56s, then capped at the 3s MaxOpen).
+//  3. After each fault, assert the cutoff's openUntil matches the expected ladder value within tolerance.
 func TestTransportFaultBackoffLadderGrowsThenCaps(t *testing.T) {
 	t.Parallel()
 	cfg := testConfig()
@@ -564,13 +680,13 @@ func TestTransportFaultBackoffLadderGrowsThenCaps(t *testing.T) {
 	l := newTestLimiter(cfg, fixedNow(testEpoch))
 
 	want := []time.Duration{
-		1 * time.Second, // base * 1.6^0
-		time.Duration(1.6 * float64(time.Second)),  // base * 1.6^1 = 1.6s
-		time.Duration(2.56 * float64(time.Second)), // base * 1.6^2 = 2.56s
-		3 * time.Second, // base * 1.6^3 = 4.096s, capped at MaxOpen
+		1 * time.Second,
+		time.Duration(1.6 * float64(time.Second)),
+		time.Duration(2.56 * float64(time.Second)),
+		3 * time.Second,
 	}
 	for i, wantBackoff := range want {
-		l.answered("p", "m", TransportFault) // AfterFailures=1: every call re-trips
+		l.answered("p", "m", TransportFault)
 		got := l.states[key{participant: "p", model: "m"}].openUntil.Sub(testEpoch)
 		if !withinTolerance(got, wantBackoff) {
 			t.Fatalf("trip %d: openUntil-now = %v, want %v", i+1, got, wantBackoff)
@@ -578,6 +694,11 @@ func TestTransportFaultBackoffLadderGrowsThenCaps(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Trip the cutoff with AfterFailures TransportFault verdicts and assert a request is refused immediately after.
+//  2. Advance the clock past the trip's cooldown.
+//  3. Assert one request is admitted as the half-open probe.
+//  4. Assert a second concurrent request is refused, since exactly one probe is allowed.
 func TestHalfOpenAllowsExactlyOneProbeAfterCooldown(t *testing.T) {
 	t.Parallel()
 	cfg := testConfig()
@@ -602,6 +723,12 @@ func TestHalfOpenAllowsExactlyOneProbeAfterCooldown(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Trip the cutoff with AfterFailures TransportFault verdicts and record the backoff count.
+//  2. Advance the clock past the cooldown and acquire the half-open probe.
+//  3. Post a Success verdict for that probe.
+//  4. Assert the cutoff is no longer half-open, its openUntil is zero, and its backoff count decayed by one.
+//  5. Release the probe and assert a further request is admitted.
 func TestHalfOpenSuccessClosesCutoffAndDecaysBackoff(t *testing.T) {
 	t.Parallel()
 	cfg := testConfig()
@@ -614,7 +741,7 @@ func TestHalfOpenSuccessClosesCutoffAndDecaysBackoff(t *testing.T) {
 	state := l.states[key{participant: "p", model: "m"}]
 	backoffCountAfterTrip := state.backoffCount
 	clock.advance(state.openUntil.Sub(clock.now()) + time.Millisecond)
-	release, _ := l.admitOne("p", "m") // admits the half-open probe
+	release, _ := l.admitOne("p", "m")
 
 	l.answered("p", "m", Success)
 
@@ -633,6 +760,12 @@ func TestHalfOpenSuccessClosesCutoffAndDecaysBackoff(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Trip the cutoff with AfterFailures TransportFault verdicts, record the first cooldown, and advance the clock past it.
+//  2. Acquire the half-open probe.
+//  3. Post a single TransportFault verdict for that probe, not AfterFailures-many.
+//  4. Assert the cutoff fully reopens (no longer half-open) with a second cooldown longer than the first.
+//  5. Assert a request right after reopening is refused.
 func TestHalfOpenTransportFaultReopensWithLongerCooldown(t *testing.T) {
 	t.Parallel()
 	cfg := testConfig()
@@ -645,10 +778,10 @@ func TestHalfOpenTransportFaultReopensWithLongerCooldown(t *testing.T) {
 	state := l.states[key{participant: "p", model: "m"}]
 	firstCooldown := state.openUntil.Sub(clock.now())
 	clock.advance(firstCooldown + time.Millisecond)
-	l.admitOne("p", "m") // half-open probe admitted
+	l.admitOne("p", "m")
 	probeTime := clock.now()
 
-	l.answered("p", "m", TransportFault) // the probe itself fails: a single fault, not AfterFailures-many
+	l.answered("p", "m", TransportFault)
 
 	if state.halfOpen {
 		t.Fatal("halfOpen after failed probe = true, want false (fully reopened)")
@@ -662,6 +795,10 @@ func TestHalfOpenTransportFaultReopensWithLongerCooldown(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Acquire one request and post twenty ModelOutcome verdicts for it.
+//  2. Assert both windows stay unchanged at 4.
+//  3. Assert the cutoff state (openUntil, half-open flag, fault streak, backoff count) is entirely untouched.
 func TestModelOutcomeNeverPenalizes(t *testing.T) {
 	t.Parallel()
 	l := newTestLimiter(testConfig(), fixedNow(testEpoch))
@@ -683,6 +820,9 @@ func TestModelOutcomeNeverPenalizes(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Post a ModelOutcome verdict for a participant that was never acquired.
+//  2. Assert no state was created for that participant and model, a true no-op.
 func TestModelOutcomeWithoutPriorAcquireCreatesNoState(t *testing.T) {
 	t.Parallel()
 	l := newTestLimiter(testConfig(), fixedNow(testEpoch))
@@ -694,6 +834,10 @@ func TestModelOutcomeWithoutPriorAcquireCreatesNoState(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Start many goroutines, each with its own random source, that repeatedly pick a random participant, model, and verdict.
+//  2. Each goroutine acquires a request and, if admitted, posts a random verdict and releases it.
+//  3. Wait for every goroutine, relying on `go test -race` to catch unsynchronized access.
 func TestParticipantLimiterConcurrentAccessIsRaceFree(t *testing.T) {
 	l := newTestLimiter(testConfig(), fixedNow(testEpoch))
 
@@ -722,8 +866,9 @@ func TestParticipantLimiterConcurrentAccessIsRaceFree(t *testing.T) {
 	wg.Wait()
 }
 
-// The cutoff's cooldown must stay strictly below perf's ejection horizon so perf
-// remains the pool authority, not the cutoff.
+// Test flow:
+//  1. Read the default cutoff MaxOpen and the default perf ejection horizon from `config.Defaults()`.
+//  2. Assert the cutoff's MaxOpen stays strictly below the perf ejection horizon, so perf remains the pool authority, not the cutoff.
 func TestCutoffMaxOpenDefaultStaysBelowPerfEjectionHorizon(t *testing.T) {
 	t.Parallel()
 	defaults := config.Defaults()
@@ -735,6 +880,10 @@ func TestCutoffMaxOpenDefaultStaysBelowPerfEjectionHorizon(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Call `Available` on a participant and model that were never acquired.
+//  2. Assert it reports true, since a fresh window is available.
+//  3. Assert the call created no state for that pair.
 func TestAvailableTrueOnFreshParticipant(t *testing.T) {
 	t.Parallel()
 	l := newTestLimiter(testConfig(), fixedNow(testEpoch))
@@ -747,6 +896,11 @@ func TestAvailableTrueOnFreshParticipant(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Trip the cutoff with AfterFailures TransportFault verdicts.
+//  2. Assert `Available` reports false while the cutoff is open.
+//  3. Advance the clock past the cooldown.
+//  4. Assert `Available` reports true (a half-open probe is available), and assert acquiring right after still succeeds, since the peek must not consume the probe.
 func TestAvailableFalseWhileCutoffOpenThenTrueAfterCooldown(t *testing.T) {
 	t.Parallel()
 	cfg := testConfig()
@@ -771,6 +925,10 @@ func TestAvailableFalseWhileCutoffOpenThenTrueAfterCooldown(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Trip the cutoff with AfterFailures TransportFault verdicts and advance the clock past the cooldown.
+//  2. Acquire the half-open probe, keeping it in flight.
+//  3. Assert `Available` reports false while that probe is still outstanding.
 func TestAvailableFalseDuringHalfOpenProbeInFlight(t *testing.T) {
 	t.Parallel()
 	cfg := testConfig()
@@ -791,6 +949,11 @@ func TestAvailableFalseDuringHalfOpenProbeInFlight(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Acquire the window's four one-token requests, keeping the release for the first.
+//  2. Assert `Available` reports false with the window full.
+//  3. Release the first lease.
+//  4. Assert `Available` reports true again.
 func TestAvailableFalseAtWindowThenTrueAfterRelease(t *testing.T) {
 	t.Parallel()
 	l := newTestLimiter(testConfig(), fixedNow(testEpoch))
@@ -809,6 +972,10 @@ func TestAvailableFalseAtWindowThenTrueAfterRelease(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Call `Available` ten times on a never-acquired pair and assert it created no state.
+//  2. Acquire four one-token requests and assert every one is admitted.
+//  3. Assert a fifth is refused, showing the earlier `Available` peeks never consumed tokens.
 func TestAvailableDoesNotConsumeWindowTokens(t *testing.T) {
 	t.Parallel()
 	l := newTestLimiter(testConfig(), fixedNow(testEpoch))
@@ -830,6 +997,10 @@ func TestAvailableDoesNotConsumeWindowTokens(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Acquire one request and post a TransportFault verdict, then snapshot the resulting state.
+//  2. Call `Available` ten times.
+//  3. Assert the state afterwards is byte-for-byte identical to the snapshot taken before.
 func TestAvailableLeavesExistingStateUnchanged(t *testing.T) {
 	t.Parallel()
 	l := newTestLimiter(testConfig(), fixedNow(testEpoch))
@@ -847,6 +1018,10 @@ func TestAvailableLeavesExistingStateUnchanged(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Start many goroutines, each with its own random source, that repeatedly pick a random participant, model, and verdict.
+//  2. Each goroutine calls `Available`, then acquires a request and, if admitted, posts a random verdict and releases it.
+//  3. Wait for every goroutine, relying on `go test -race` to catch unsynchronized access.
 func TestAvailableConcurrentWithAcquireIsRaceFree(t *testing.T) {
 	l := newTestLimiter(testConfig(), fixedNow(testEpoch))
 
@@ -876,6 +1051,13 @@ func TestAvailableConcurrentWithAcquireIsRaceFree(t *testing.T) {
 	wg.Wait()
 }
 
+// Test flow:
+//  1. Build a config where a single TransportFault trips a cutoff for a full minute.
+//  2. Trip host-a on model-a and model-b, and host-b on model-a.
+//  3. Assert host-a/model-a is unavailable before the quarantine is cleared.
+//  4. Call `ClearQuarantine` on host-a and assert it reports true.
+//  5. Assert host-a is available again on both models, while host-b/model-a stays unavailable.
+//  6. Assert `ClearQuarantine` on a never-seen host reports false.
 func TestClearQuarantineReopensEveryModelsCutoffForOneParticipant(t *testing.T) {
 	now := time.Now()
 	cfg := testConfig()
@@ -903,9 +1085,11 @@ func TestClearQuarantineReopensEveryModelsCutoffForOneParticipant(t *testing.T) 
 	}
 }
 
-// The engine releases an attempt's lease in a defer and reports its verdict afterwards, so a growth gate
-// reading the live count sees the tokens already given back and refuses to grow a window that was
-// genuinely saturated. The decision must come out the same whichever call lands first.
+// Test flow:
+//  1. Define a `grow` helper that acquires two requests, then either releases the first lease before posting a Success `OnResult` or posts the result before releasing, and reads back the resulting input window from the snapshot.
+//  2. Run `grow` once with the release first and once with the result first.
+//  3. Assert both orders report the same window, since the engine's release-in-a-defer pattern must not change the growth decision.
+//  4. Assert that window actually grew past the initial 4.
 func TestWindowGrowthDoesNotDependOnReleaseOrder(t *testing.T) {
 	base := time.Unix(0, 0)
 	grow := func(releaseFirst bool) float64 {
@@ -961,8 +1145,10 @@ func windowOf(t *testing.T, limiter *ParticipantLimiter, participant string) flo
 	return 0
 }
 
-// An operator raising the initial window after a bad episode expects the raise to reach participants
-// already tracked. Without that the setting only ever applies to a restarted gateway.
+// Test flow:
+//  1. Acquire one request and post an Overload verdict, shrinking the window below the initial 4.
+//  2. Reconfigure the limiter with a new initial window of 32.
+//  3. Assert the tracked participant's window is lifted to the new initial 32.
 func TestReconfigureLiftsAWindowThatCollapsedBelowTheNewInitial(t *testing.T) {
 	t.Parallel()
 	limiter := newTestLimiter(testConfig(), fixedNow(testEpoch))
@@ -981,8 +1167,10 @@ func TestReconfigureLiftsAWindowThatCollapsedBelowTheNewInitial(t *testing.T) {
 	}
 }
 
-// A window a host earned is its own: raising the initial lifts one that collapsed below it and leaves a wider
-// one alone, because where a window stops is what the host's congestion signals say.
+// Test flow:
+//  1. Acquire and answer forty Success results, growing the window well past 8.
+//  2. Reconfigure the limiter with a new initial window of 1.
+//  3. Assert the tracked participant's window is left at the value it had already grown to, since a lowered initial is a floor, not a ceiling.
 func TestReconfigureLeavesAWindowThatAlreadyGrewPastTheNewInitial(t *testing.T) {
 	t.Parallel()
 	limiter := newTestLimiter(testConfig(), fixedNow(testEpoch))
@@ -1007,8 +1195,10 @@ func TestReconfigureLeavesAWindowThatAlreadyGrewPastTheNewInitial(t *testing.T) 
 	}
 }
 
-// Jitter exists so hosts that trip together do not reopen together; clamping after it would erase it
-// exactly when every host is saturated at MaxOpen.
+// Test flow:
+//  1. Build a config with AfterFailures 1, BaseOpen 1s, MaxOpen 3s, and a fixed jitter function of one fifth of the backoff.
+//  2. Post four TransportFault verdicts, one at a time, so the ladder saturates well before the fourth trip.
+//  3. Assert the resulting openUntil equals MaxOpen plus its jitter, showing jitter survives clamping at the ceiling.
 func TestSaturatedBackoffStillCarriesJitter(t *testing.T) {
 	t.Parallel()
 	cfg := testConfig()
@@ -1016,7 +1206,7 @@ func TestSaturatedBackoffStillCarriesJitter(t *testing.T) {
 	l := NewParticipantLimiter(cfg, fixedNow(testEpoch))
 	l.jitter = func(backoff time.Duration) time.Duration { return backoff / 5 }
 
-	for range 4 { // the ladder saturates well before the fourth trip
+	for range 4 {
 		l.answered("p", "m", TransportFault)
 	}
 
@@ -1041,7 +1231,12 @@ func openWindow(participant string, inflight int64) HostWindow {
 	}
 }
 
-// A pair nothing has used for the eviction window is forgotten; one still carrying an attempt is not.
+// Test flow:
+//  1. Configure a one-hour idle eviction window.
+//  2. Acquire and release a request for host-released, and acquire (without releasing) one for host-busy.
+//  3. Advance the clock past the eviction window.
+//  4. Acquire a request for host-new.
+//  5. Assert the snapshot now contains only host-busy and host-new: the idle, fully released host-released pair was forgotten.
 func TestAcquireForgetsAPairIdlePastTheEvictionWindow(t *testing.T) {
 	t.Parallel()
 	clock := newMovingClock(testEpoch)
@@ -1060,7 +1255,12 @@ func TestAcquireForgetsAPairIdlePastTheEvictionWindow(t *testing.T) {
 	}, limiter.Snapshot())
 }
 
-// A running cut-off survives idle eviction; an idle half-open pair past the window does not.
+// Test flow:
+//  1. Configure a one-hour idle eviction window and a cutoff whose cooldown runs from 2 to 4 hours.
+//  2. Trip host-probing's cutoff, advance the clock past its cooldown, and acquire/release its half-open probe.
+//  3. Trip host-cut-off's cutoff too, without letting its cooldown expire.
+//  4. Advance the clock past the idle eviction window and acquire a request for host-trigger.
+//  5. Assert the snapshot keeps host-cut-off with its cutoff still open, while the idle, half-open host-probing pair was forgotten.
 func TestAcquireForgetsAnIdleHalfOpenPairButKeepsARunningCutoff(t *testing.T) {
 	t.Parallel()
 	settings := idleEvictionConfig()
@@ -1087,7 +1287,11 @@ func TestAcquireForgetsAnIdleHalfOpenPairButKeepsARunningCutoff(t *testing.T) {
 	}, limiter.Snapshot())
 }
 
-// A lease released now stamps lastUsed, so a pair whose verdict is still pending is kept.
+// Test flow:
+//  1. Configure a one-hour idle eviction window and acquire a request for host-pending.
+//  2. Advance the clock past the eviction window, then release that lease.
+//  3. Acquire a request for host-trigger, which runs the idle scan.
+//  4. Assert the snapshot still holds both pairs, since a lease released just now stamps lastUsed and its verdict may still be pending.
 func TestAcquireKeepsAPairJustReleasedEvenPastTheEvictionWindow(t *testing.T) {
 	t.Parallel()
 	clock := newMovingClock(testEpoch)
@@ -1102,7 +1306,11 @@ func TestAcquireKeepsAPairJustReleasedEvenPastTheEvictionWindow(t *testing.T) {
 	require.Len(t, limiter.Snapshot(), 2, "host-pending was released just now; its verdict may still be reported")
 }
 
-// OnResult stamps lastUsed too, so a verdict arriving after a release keeps postponing the pair's eviction.
+// Test flow:
+//  1. Configure a one-hour idle eviction window, acquire and release a request for host-late-result.
+//  2. Advance the clock 55 minutes and post a Success verdict for that pair.
+//  3. Advance the clock 10 more minutes and acquire a request for host-trigger.
+//  4. Assert the snapshot still holds both pairs, since `OnResult` refreshed lastUsed only 10 minutes ago, not the full 1h5m since release.
 func TestAcquireKeepsAPairWhoseVerdictArrivedAfterItWasReleased(t *testing.T) {
 	t.Parallel()
 	clock := newMovingClock(testEpoch)
@@ -1120,7 +1328,11 @@ func TestAcquireKeepsAPairWhoseVerdictArrivedAfterItWasReleased(t *testing.T) {
 	require.Len(t, limiter.Snapshot(), 2, "the verdict landed 10m ago, not 1h5m, because OnResult refreshed lastUsed")
 }
 
-// The scan runs under the limiter's one lock on the admission path, so it runs at most once per tenth of the window.
+// Test flow:
+//  1. Configure a one-hour idle eviction window, acquire and release a request for host-idle.
+//  2. Advance the clock 58 minutes and acquire for host-trigger, running the idle scan.
+//  3. Advance the clock 3 more minutes and acquire for host-trigger again; assert host-idle is still present, since three minutes after the last scan is too soon for the next one.
+//  4. Advance the clock 3 more minutes and acquire for host-trigger a third time; assert host-idle is now gone, since a full tenth of the window has elapsed since the last scan.
 func TestAcquireScansForIdlePairsAtMostOncePerTenthOfTheWindow(t *testing.T) {
 	t.Parallel()
 	clock := newMovingClock(testEpoch)
@@ -1140,6 +1352,11 @@ func TestAcquireScansForIdlePairsAtMostOncePerTenthOfTheWindow(t *testing.T) {
 	require.Len(t, limiter.Snapshot(), 1)
 }
 
+// Test flow:
+//  1. Configure a one-minute idle eviction window shared by three participants.
+//  2. Start one goroutine per participant that repeatedly advances a shared clock, acquires a request, and, if admitted, posts a Success verdict and releases it.
+//  3. Wait for every goroutine, relying on `go test -race` to catch unsynchronized access between admission and idle eviction.
+//  4. Assert every window in the final snapshot reports zero in-flight input and output tokens.
 func TestIdleEvictionIsRaceFreeUnderConcurrentAdmission(t *testing.T) {
 	settings := idleEvictionConfig()
 	settings.IdleEviction = time.Minute
@@ -1167,8 +1384,7 @@ func TestIdleEvictionIsRaceFreeUnderConcurrentAdmission(t *testing.T) {
 	}
 }
 
-// pricedConfig counts windows in requests the way production does, so a test can state a context length
-// in tokens and read the window back in tokens.
+// pricedConfig prices windows in tokens the way production does.
 func pricedConfig() ParticipantConfig {
 	settings := testConfig()
 	settings.Pricing.Input = RequestBounds{Min: 1, Initial: 4}
@@ -1178,6 +1394,11 @@ func pricedConfig() ParticipantConfig {
 	return settings
 }
 
+// Test flow:
+//  1. Build a limiter with the priced test config and observe a context length of 400,000 for "long-context".
+//  2. Acquire one request each for "long-context" and an unnamed model governance never reported.
+//  3. Assert the long-context input window is priced at the model's own context length (4 × 400,000) while its output window uses the fallback output tokens (4 × 100).
+//  4. Assert the unnamed model's input window falls back to the configured default context length (4 × 1,000).
 func TestAFreshHostIsPricedAtTheContextLengthGovernanceReports(t *testing.T) {
 	t.Parallel()
 	l := newTestLimiter(pricedConfig(), fixedNow(testEpoch))
@@ -1198,6 +1419,11 @@ func TestAFreshHostIsPricedAtTheContextLengthGovernanceReports(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Configure an operator pin of 8,000 context tokens for "pinned".
+//  2. Observe governance reporting a context length of 400,000 for the same model.
+//  3. Acquire one request for "pinned".
+//  4. Assert its input window is priced at the pinned 8,000 tokens, not governance's 400,000.
 func TestAnOperatorsPinOutranksWhatGovernanceReports(t *testing.T) {
 	t.Parallel()
 	settings := pricedConfig()
@@ -1212,7 +1438,10 @@ func TestAnOperatorsPinOutranksWhatGovernanceReports(t *testing.T) {
 	}
 }
 
-// An escrow created later must not hand a host back the window a run of bad answers took from it.
+// Test flow:
+//  1. Observe a context length for "model-a", acquire a request, and post an EmptyAnswerLeftOpen verdict that narrows its window.
+//  2. Observe the same context length for "model-a" again.
+//  3. Assert the window stays at the narrowed value, since observing a model again is not an operator raising the initial window.
 func TestObservingModelsKeepsAWindowAHostHasAlreadyEarned(t *testing.T) {
 	t.Parallel()
 	l := newTestLimiter(pricedConfig(), fixedNow(testEpoch))
@@ -1228,6 +1457,11 @@ func TestObservingModelsKeepsAWindowAHostHasAlreadyEarned(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Observe a context length of 1,000 for "model-a" and acquire a request, recording the opened window.
+//  2. Observe a smaller context length of 100 for "model-a".
+//  3. Assert the window stays at the value it already had, since renaming a context is not a reason to take a window away.
+//  4. Assert the tracked bounds now use a floor and step of 100, following the new context unit.
 func TestObservingASmallerContextMovesTheFloorAndLeavesTheWindowAlone(t *testing.T) {
 	t.Parallel()
 	l := newTestLimiter(pricedConfig(), fixedNow(testEpoch))
@@ -1246,8 +1480,12 @@ func TestObservingASmallerContextMovesTheFloorAndLeavesTheWindowAlone(t *testing
 	}
 }
 
-// Growth is one rung per answer, before any congestion and after it alike: a host that was narrowed climbs
-// back at the same rate it climbed in the first place, and no answer is worth more than one request of room.
+// Test flow:
+//  1. Acquire two requests to meet the growth gate and post a Success verdict carrying a full window's worth of tokens.
+//  2. Assert both windows grow by one step to 5, since one answer is worth one request of room.
+//  3. Post an Overload verdict, narrowing the window, and record the narrowed input value.
+//  4. Acquire two more requests and post the same whole-window Success verdict again.
+//  5. Assert the window grows by exactly one step above the narrowed value, since growth climbs back at the same rate whether or not it was ever narrowed.
 func TestAWindowEarnsOneStepPerAnswerWhetherOrNotItWasEverNarrowed(t *testing.T) {
 	t.Parallel()
 	l := newTestLimiter(testConfig(), fixedNow(testEpoch))

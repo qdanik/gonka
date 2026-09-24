@@ -6,9 +6,10 @@ import (
 	"devshard/cmd/gateway/engine"
 )
 
-// The row carries two numbers about one prompt: the char/4 estimate the gateway sized its reserve and its
-// congestion windows on, and the count the host reported. Serving only the estimate beside a measured output
-// put two different kinds of number under names that read as a pair.
+// Test flow:
+//  1. Build a race outcome with a gateway input-token estimate and a winning attempt reporting its own prompt and completion token usage.
+//  2. Call requestRecord on it.
+//  3. Assert InputTokens keeps the gateway's estimate and PromptTokens/WinnerOutputTokens carry the host-reported counts.
 func TestTheRequestRowCarriesTheEstimateAndTheMeasuredPromptApart(t *testing.T) {
 	t.Parallel()
 	winner := engine.AttemptOutcome{
@@ -40,6 +41,10 @@ func TestTheRequestRowCarriesTheEstimateAndTheMeasuredPromptApart(t *testing.T) 
 	}
 }
 
+// Test flow:
+//  1. Build a race outcome whose winning attempt reports no usage tokens but has logprob tokens counted off the stream.
+//  2. Call requestRecord on it.
+//  3. Assert WinnerOutputTokens and TotalOutputTokens fall back to the tokens counted off the stream.
 func TestAHostThatReportedNoUsageStillHasItsOutputCounted(t *testing.T) {
 	t.Parallel()
 	outcome := engine.RaceOutcome{
@@ -65,8 +70,10 @@ func TestAHostThatReportedNoUsageStillHasItsOutputCounted(t *testing.T) {
 	}
 }
 
-// A host that reports no usage leaves the measured half at zero rather than borrowing the estimate, or the
-// estimate's own error becomes invisible in exactly the rows that would have shown it.
+// Test flow:
+//  1. Build a race outcome with a gateway input-token estimate whose winning attempt reports no usage.
+//  2. Call requestRecord on it.
+//  3. Assert PromptTokens stays zero rather than borrowing the estimate, and InputTokens still reports the estimate.
 func TestAnUnreportedPromptIsNotFilledInFromTheEstimate(t *testing.T) {
 	t.Parallel()
 	outcome := engine.RaceOutcome{

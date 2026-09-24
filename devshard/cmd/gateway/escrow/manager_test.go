@@ -21,8 +21,7 @@ type fakeSnapshotSource struct {
 
 func (f *fakeSnapshotSource) Snapshot() chain.PhaseSnapshot { return f.snapshot }
 
-// blockingSnapshotSource blocks Snapshot() until release is closed, signaling started first;
-// it lets a test deterministically catch a tick mid-flight.
+// blockingSnapshotSource blocks Snapshot() until release is closed, signaling started first.
 type blockingSnapshotSource struct {
 	started  chan struct{}
 	release  chan struct{}
@@ -52,6 +51,11 @@ func testManagerDeps(t *testing.T, testStore *fakeStore, txClient *fakeTxClient,
 	}
 }
 
+// Test flow:
+//  1. Build a manager with rotation disabled.
+//  2. Call tick and assert it returns no error.
+//  3. Assert the call log contains "LoadCommitments" (reconcile still ran).
+//  4. Assert the call log contains no "SaveRotationStatus" (no rotation work happened).
 func TestTickReconcileRunsEvenWhenRotationDisabled(t *testing.T) {
 	testStore := newFakeStore()
 	log := &callLog{}
@@ -73,6 +77,10 @@ func TestTickReconcileRunsEvenWhenRotationDisabled(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a manager with rotation enabled and a snapshot that is a cold start, varied across cases: zero epoch index, zero block height.
+//  2. Call tick and assert it returns no error.
+//  3. Assert the call log contains no "SaveRotationStatus", since rotation must skip until the chain snapshot is populated.
 func TestTickColdStartReturnsAfterReconcile(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -101,6 +109,10 @@ func TestTickColdStartReturnsAfterReconcile(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a manager with rotation enabled and an invalid ModelsJSON config string.
+//  2. Call tick.
+//  3. Assert tick returns an error surfacing the bad rotation config.
 func TestTickInvalidModelsJSONSurfacesErrorAlongsideReconcile(t *testing.T) {
 	testStore := newFakeStore()
 	cfg := config.Defaults()
@@ -113,6 +125,10 @@ func TestTickInvalidModelsJSONSurfacesErrorAlongsideReconcile(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a manager with rotation enabled and a store whose ListDevshards always fails.
+//  2. Call tick.
+//  3. Assert tick returns an error surfacing the ListDevshards failure.
 func TestTickListDevshardsFailureSurfacesErrorAlongsideReconcile(t *testing.T) {
 	testStore := newFakeStore()
 	testStore.listDevshardsErr = errors.New("store unavailable")
@@ -126,6 +142,11 @@ func TestTickListDevshardsFailureSurfacesErrorAlongsideReconcile(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a manager with rotation enabled and a snapshot inside the pre-PoC window while RequestsBlocked is false (PoC not active).
+//  2. Call tick and assert it returns no error.
+//  3. Assert a temp escrow was created for the model (prepareBridge ran, the pre-PoC window wins even though PoC is inactive).
+//  4. Assert no regular escrow was created.
 func TestTickPrePoCWindowRunsPrepareBridgeEvenWhenPoCInactive(t *testing.T) {
 	testStore := newFakeStore()
 	txClient := &fakeTxClient{createEscrowFn: succeedingCreateEscrowFn(700)}
@@ -134,7 +155,7 @@ func TestTickPrePoCWindowRunsPrepareBridgeEvenWhenPoCInactive(t *testing.T) {
 	cfg.Rotation.ModelsJSON = `[{"model_id":"model-a","temp_count":1,"target_count":1,"amount":1000,"private_key_env":"MODEL_A_KEY"}]`
 	snapshot := chain.PhaseSnapshot{
 		EpochIndex: 9, BlockHeight: 500, EpochSwitchBlockHeight: 500 + cfg.Rotation.PrePoCBlocks/2,
-		RequestsBlocked:    false, // pre-PoC must win even though PoC is not active
+		RequestsBlocked:    false,
 		FullWeightsByModel: map[string]map[string]float64{"model-a": {"p": 1}},
 	}
 	m := mustManager(t, testManagerDeps(t, testStore, txClient, &fakeSnapshotSource{snapshot: snapshot}, &cfg))
@@ -163,6 +184,11 @@ func TestTickPrePoCWindowRunsPrepareBridgeEvenWhenPoCInactive(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Store one active temp record and build a manager with rotation enabled and a snapshot outside the pre-PoC window (EpochSwitchBlockHeight 100, BlockHeight 800) with RequestsBlocked false (PoC over).
+//  2. Call tick and assert it returns no error.
+//  3. Assert the temp record is now parked.
+//  4. Assert a regular escrow was created for the model (finishBridge ran).
 func TestTickPoCOverRunsFinishBridge(t *testing.T) {
 	testStore := newFakeStore()
 	temp := store.DevshardRecord{EscrowID: "temp-1", Model: "model-a", Active: true, RotationRole: roleTemp, RotationEpoch: 9, PrivateKeyEnv: "MODEL_A_KEY"}
@@ -172,8 +198,8 @@ func TestTickPoCOverRunsFinishBridge(t *testing.T) {
 	cfg.Rotation.Enabled = true
 	cfg.Rotation.ModelsJSON = `[{"model_id":"model-a","target_count":1,"amount":1000,"private_key_env":"MODEL_A_KEY"}]`
 	snapshot := chain.PhaseSnapshot{
-		EpochIndex: 9, BlockHeight: 800, EpochSwitchBlockHeight: 100, // outside the pre-PoC window: 100-800 < 0
-		RequestsBlocked:    false, // PoC over
+		EpochIndex: 9, BlockHeight: 800, EpochSwitchBlockHeight: 100,
+		RequestsBlocked:    false,
 		FullWeightsByModel: map[string]map[string]float64{"model-a": {"p": 1}},
 	}
 	m := mustManager(t, testManagerDeps(t, testStore, txClient, &fakeSnapshotSource{snapshot: snapshot}, &cfg))
@@ -194,6 +220,12 @@ func TestTickPoCOverRunsFinishBridge(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Store a regular record that is on hold and a temp record, both for the same model, and set the hold gate to resume the held record.
+//  2. Build a manager whose createEscrowFn counts its calls, with rotation enabled and a snapshot that serves the model.
+//  3. Call tick and assert it returns no error.
+//  4. Assert the held record is now active and off hold.
+//  5. Assert no new escrow was created, since the resumed escrow already meets the target within the same tick.
 func TestTheBridgeSeesAnEscrowResumedInTheSameTickAsServing(t *testing.T) {
 	testStore := newFakeStore()
 	held := store.DevshardRecord{EscrowID: "1", Model: "model-a", Active: true, OnHold: true, RotationRole: roleRegular, RotationEpoch: 9, PrivateKeyEnv: "MODEL_A_KEY"}
@@ -231,8 +263,10 @@ func TestTheBridgeSeesAnEscrowResumedInTheSameTickAsServing(t *testing.T) {
 	}
 }
 
-// Neither branch fires here (PoC active, outside the pre-PoC window), which also proves
-// checkDepletion is independent of the bridge outcome.
+// Test flow:
+//  1. Store one active regular record marked depleted (via OnBalanceExhausted) and build a manager with rotation enabled and a snapshot that is outside the pre-PoC window with RequestsBlocked true, so neither bridge branch fires.
+//  2. Call tick and assert it returns no error.
+//  3. Assert the depleted record is now parked, proving checkDepletion ran independently of the bridge outcome.
 func TestTickCheckDepletionRunsRegardlessOfBridgeBranch(t *testing.T) {
 	testStore := newFakeStore()
 	depleted := store.DevshardRecord{EscrowID: "1", Model: "model-a", Active: true, RotationRole: roleRegular, PrivateKeyEnv: "MODEL_A_KEY"}
@@ -243,7 +277,7 @@ func TestTickCheckDepletionRunsRegardlessOfBridgeBranch(t *testing.T) {
 	cfg.Rotation.ModelsJSON = `[{"model_id":"model-a","target_count":1,"amount":1000,"private_key_env":"MODEL_A_KEY"}]`
 	snapshot := chain.PhaseSnapshot{
 		EpochIndex: 9, BlockHeight: 800, EpochSwitchBlockHeight: 100,
-		RequestsBlocked:    true, // PoC active and outside the window: neither bridge branch runs
+		RequestsBlocked:    true,
 		FullWeightsByModel: map[string]map[string]float64{"model-a": {"p": 1}},
 	}
 	m := mustManager(t, testManagerDeps(t, testStore, txClient, &fakeSnapshotSource{snapshot: snapshot}, &cfg))
@@ -256,8 +290,10 @@ func TestTickCheckDepletionRunsRegardlessOfBridgeBranch(t *testing.T) {
 	assertParked(t, testStore, "1")
 }
 
-// If Start were not idempotent, the first goroutine's stop/done channels would be overwritten
-// and orphaned by the second call, leaking a goroutine that the leak check would catch.
+// Test flow:
+//  1. Build a manager and call Start twice in a row.
+//  2. Call Stop twice in a row.
+//  3. Assert no goroutine leak, which would show if the second Start overwrote and orphaned the first goroutine's stop/done channels, and that neither call blocks or panics.
 func TestStartStopIdempotent(t *testing.T) {
 	defer leakcheck.VerifyNone(t)
 
@@ -266,22 +302,27 @@ func TestStartStopIdempotent(t *testing.T) {
 
 	ctx := context.Background()
 	m.Start(ctx)
-	m.Start(ctx) // no-op: must not spawn a second goroutine
+	m.Start(ctx)
 	m.Stop()
-	m.Stop() // no-op: must not block or panic on an already-stopped Manager
+	m.Stop()
 }
 
+// Test flow:
+//  1. Build a manager with rotation enabled (so tick reaches the snapshot fetch) and a `blockingSnapshotSource`.
+//  2. Call Start and wait for the immediate first tick to block inside Snapshot().
+//  3. Call Stop in a goroutine and assert it has not returned after 100ms, while the tick is still blocked.
+//  4. Release the block and assert Stop then returns within 2 seconds.
 func TestStopBlocksUntilInFlightTickExits(t *testing.T) {
 	defer leakcheck.VerifyNone(t)
 
 	started := make(chan struct{})
 	release := make(chan struct{})
 	cfg := config.Defaults()
-	cfg.Rotation.Enabled = true // reach the snapshot fetch, where this test blocks the tick
+	cfg.Rotation.Enabled = true
 	m := mustManager(t, testManagerDeps(t, newFakeStore(), &fakeTxClient{}, &blockingSnapshotSource{started: started, release: release}, &cfg))
 
 	m.Start(context.Background())
-	<-started // the immediate first tick is now blocked inside Snapshot()
+	<-started
 
 	stopReturned := make(chan struct{})
 	go func() {
@@ -304,9 +345,10 @@ func TestStopBlocksUntilInFlightTickExits(t *testing.T) {
 	}
 }
 
-// Mirrors chain.PhaseObserver's own lifecycle test: canceling the ctx passed to Start, without
-// ever calling Stop, must still terminate the tick goroutine (accessing m.done directly, same
-// package as chain/observer_test.go does with doneCh).
+// Test flow:
+//  1. Build a manager, call Start with a cancelable context, and capture m.done.
+//  2. Cancel the context without ever calling Stop.
+//  3. Assert m.done closes within 2 seconds, proving the tick goroutine terminates on context cancel alone.
 func TestContextCancelAloneStopsTickGoroutine(t *testing.T) {
 	defer leakcheck.VerifyNone(t)
 
@@ -325,6 +367,10 @@ func TestContextCancelAloneStopsTickGoroutine(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a manager and launch 10 pairs of goroutines each calling Start and Stop concurrently.
+//  2. Wait for all goroutines to finish.
+//  3. Call Stop once more and assert it completes cleanly, whichever Start last won the race.
 func TestStartStopConcurrentCallsAreRaceFree(t *testing.T) {
 	defer leakcheck.VerifyNone(t)
 
@@ -338,10 +384,13 @@ func TestStartStopConcurrentCallsAreRaceFree(t *testing.T) {
 		go func() { defer wg.Done(); m.Stop() }()
 	}
 	wg.Wait()
-	m.Stop() // whichever Start last won the race must still be cleanly stoppable
+	m.Stop()
 }
 
-// The sweep must not depend on the rotation toggle: a parked escrow still has to settle.
+// Test flow:
+//  1. Store a parked record and build a manager with rotation disabled but settlement enabled, and a `settlingTxClient`.
+//  2. Call tick and assert it returns no error.
+//  3. Assert the parked record is gone from the store, since settlement must not depend on the rotation toggle.
 func TestTickSettlesParkedEscrowWhileRotationDisabled(t *testing.T) {
 	testStore := newFakeStore()
 	record := parkedRecord("42")
@@ -360,8 +409,10 @@ func TestTickSettlesParkedEscrowWhileRotationDisabled(t *testing.T) {
 	}
 }
 
-// Rotation off is the default, and an exhausted escrow left in the live set scores best on load
-// precisely because it serves nothing, so it attracts traffic and fails it.
+// Test flow:
+//  1. Store one active regular record for a model, mark it balance-exhausted, and build a manager with rotation disabled.
+//  2. Call tick and assert it returns no error.
+//  3. Assert the record is now parked, since an exhausted escrow left active would otherwise attract and fail traffic.
 func TestTickParksDepletedEscrowWhileRotationDisabled(t *testing.T) {
 	testStore := newFakeStore()
 	depleted := store.DevshardRecord{EscrowID: "1", Model: "model-a", Active: true, RotationRole: roleRegular, PrivateKeyEnv: "MODEL_A_KEY"}
@@ -379,7 +430,12 @@ func TestTickParksDepletedEscrowWhileRotationDisabled(t *testing.T) {
 	assertParked(t, testStore, "1")
 }
 
-// Pins the documented cost of one replacement attempt. See escrows.md, "Depletion".
+// Test flow:
+//  1. Store one active temp record, mark it balance-exhausted, and build a manager with rotation enabled, a failing createEscrowFn, and a snapshot with RequestsBlocked true.
+//  2. Call tick during proof-of-compute and assert it returns an error surfacing the failed replacement.
+//  3. Flip RequestsBlocked to false and call tick again, asserting it now returns no error.
+//  4. Assert only 1 create call happened in total, since finishBridge finds no active temp and does not replace the failed attempt.
+//  5. Assert the record is parked.
 func TestTickLeavesAModelUnservedUntilTheNextBridgeAfterItsLastTempFailsToBeReplaced(t *testing.T) {
 	testStore := newFakeStore()
 	temp := store.DevshardRecord{EscrowID: "1", Model: "model-a", Active: true, RotationRole: roleTemp, RotationEpoch: 9, PrivateKeyEnv: "MODEL_A_KEY"}
@@ -410,9 +466,11 @@ func TestTickLeavesAModelUnservedUntilTheNextBridgeAfterItsLastTempFailsToBeRepl
 	assertParked(t, testStore, "1")
 }
 
-// Stop must not return while a tick is still writing: the caller closes the store right after, so an
-// early return means a settlement write can land on a closed database. A second concurrent Stop has
-// to wait with the first rather than racing past it.
+// Test flow:
+//  1. Build a manager with rotation enabled and a `blockingSnapshotSource`, then Start it and wait for the tick to block inside Snapshot.
+//  2. Launch two concurrent Stop calls.
+//  3. Assert neither has returned after 100ms, while the tick is still running.
+//  4. Release the block, wait for both Stop calls, and assert both returned.
 func TestManagerStopIsABarrierForConcurrentCallers(t *testing.T) {
 	defer leakcheck.VerifyNone(t)
 	testStore := newFakeStore()
@@ -422,7 +480,7 @@ func TestManagerStopIsABarrierForConcurrentCallers(t *testing.T) {
 	m := mustManager(t, testManagerDeps(t, testStore, &fakeTxClient{createEscrowFn: failOnCreate(t)}, blocking, &cfg))
 
 	m.Start(context.Background())
-	<-blocking.started // a tick is inside Snapshot and cannot finish until released
+	<-blocking.started
 
 	returned := make(chan struct{}, 2)
 	var stoppers sync.WaitGroup

@@ -5,8 +5,10 @@ import (
 	"testing"
 )
 
-// A configured chain id is the operator's decision and is not checked against the node: a mismatch
-// invalidates every signature, so the value that signs must be the one that was configured.
+// Test flow:
+//  1. Create a GRPCChain configured with a padded chain id and no gRPC connection.
+//  2. Call ChainID.
+//  3. Assert it returns the configured id trimmed, without asking the node.
 func TestAConfiguredChainIDIsUsedWithoutAskingTheNode(t *testing.T) {
 	grpcChain := NewGRPCChain(nil, "  gonka-mainnet  ")
 

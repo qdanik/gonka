@@ -2,8 +2,6 @@ package filters
 
 import "testing"
 
-// The bodies are the ones the legacy gateway's own benchmark uses, so the two sides answer the same
-// question on the same input rather than on whatever each happened to pick.
 var (
 	benchBodyMinimal = []byte(`{"model":"moonshotai/Kimi-K2.6","messages":[{"role":"user","content":"hi"}]}`)
 	benchBodyTypical = []byte(`{"model":"moonshotai/Kimi-K2.6","messages":[{"role":"user","content":"hello"}],"temperature":0.7,"top_p":0.95,"max_tokens":512}`)
@@ -27,8 +25,7 @@ func BenchmarkNormalizeRequest(b *testing.B) {
 	}
 }
 
-// conversationBody is the shape a chat client actually resends: a long multi-turn history plus tools,
-// so the per-message hygiene and the body scan carry their real weight rather than a two-token toy.
+// conversationBody builds the shape a chat client actually resends: a long multi-turn history plus tools.
 func conversationBody(turns int) []byte {
 	const paragraph = `The quick brown fox jumps over the lazy dog, and then explains at some length ` +
 		`why it did so, quoting a \"source\" and a path like /usr/local/share for good measure. `
@@ -83,7 +80,6 @@ func BenchmarkEnsureStructuralBounds(b *testing.B) {
 	}
 }
 
-// The hygiene chain on its own: every normalizer walks the whole history on every request.
 func BenchmarkNormalizeMessages(b *testing.B) {
 	document, err := ParseDocument(conversationBody(20))
 	if err != nil {

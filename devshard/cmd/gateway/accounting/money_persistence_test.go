@@ -37,8 +37,11 @@ func moneyOf(t *testing.T, book *Book) SlotMoney {
 	return money
 }
 
-// The escrow an operator deactivated is never read from the chain again, so its money has to be the
-// gateway's own: a restart that leaves the nonce counts standing must leave the tokens standing too.
+// Test flow:
+//  1. Observe the latest nonce and a finished inference on the escrow, then retire the escrow.
+//  2. Read the money totals before and after saving and reloading the book.
+//  3. Assert the totals before the restart show 100 input tokens and 1 counted nonce.
+//  4. Assert the totals after the restart equal the totals before it.
 func TestTheTokensOfARetiredEscrowSurviveARestart(t *testing.T) {
 	book := newTestBook(t, 4)
 	if err := book.ObserveLatestNonce(testEscrow, 8); err != nil {
@@ -60,8 +63,11 @@ func TestTheTokensOfARetiredEscrowSurviveARestart(t *testing.T) {
 	}
 }
 
-// A live escrow is read from the chain every sweep, and that reading is the whole truth: the saved
-// fold stands in only until it arrives, and adding the two would count every token twice.
+// Test flow:
+//  1. Observe a finished inference with 100 input and 42 output tokens, then save and reload the book.
+//  2. Observe the same nonce again on the restored book, this time with 55 output tokens.
+//  3. Read the money totals.
+//  4. Assert input tokens, max tokens and counted nonces reflect the fresh reading rather than adding to the saved fold.
 func TestAChainReadingReplacesTheSavedTokensRatherThanAddingToThem(t *testing.T) {
 	book := newTestBook(t, 4)
 	if err := book.ObserveInferences(testEscrow, finishedInference(100, 42)); err != nil {
@@ -79,8 +85,11 @@ func TestAChainReadingReplacesTheSavedTokensRatherThanAddingToThem(t *testing.T)
 	}
 }
 
-// Every slot keeps its own share, over a restart as well: the two hosts that answered are told apart
-// from each other and from the one whose nonce timed out.
+// Test flow:
+//  1. Observe three inferences on three slots: two finished with different token counts, one timed out with a reserved cost.
+//  2. Retire the escrow and build the expected per-slot money for all four slots, including the untouched one.
+//  3. For both the live book and a saved-and-reloaded copy of it, compute slot totals.
+//  4. Assert every slot's money matches its expected value in both cases.
 func TestTheSavedTokensComeBackOnTheSlotThatEarnedThem(t *testing.T) {
 	book := newTestBook(t, 4)
 	if err := book.ObserveInferences(testEscrow, map[uint64]*types.InferenceRecord{
@@ -122,8 +131,11 @@ func slotTotals(records []ParticipantRecord) map[string]SlotMoney {
 	return totals
 }
 
-// The money table is an addition to a store this gateway already writes, so the deploy that brings it
-// must find the ledger it left behind rather than drop an epoch of counters to make room.
+// Test flow:
+//  1. Open a fresh store, record a ghost, save the book, and close the store.
+//  2. Drop the `accounting_money` table to simulate a store written before that table existed.
+//  3. Reopen the store and load its snapshot.
+//  4. Assert the snapshot still holds the one escrow and that escrow's counters.
 func TestAStoreWrittenBeforeTheMoneyTableIsKeptRatherThanDropped(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "accounting.db")
 	store, err := OpenStore(path)

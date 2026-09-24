@@ -9,7 +9,10 @@ import (
 	"devshard/cmd/gateway/internal/logcapture"
 )
 
-// Each want pins a warmup line: a nil error writes no error key, and a failed vote writes Warn.
+// Test flow:
+//  1. Table-driven: each case pairs a warmup producer call with the exact log entry it must render, covering a nil error that carries no error key and a failed vote logged at warn.
+//  2. For each case, build a journal with a `logcapture.Recorder`, run the case's `produce` function, and flush.
+//  3. Assert the recorder captured exactly the case's expected entry.
 func TestWarmupTransitionsRenderWithoutNilErrorsAndWithAFailedVoteAtWarn(t *testing.T) {
 	probeFailure := errors.New("host stopped answering")
 	catchUpFailure := errors.New("catch-up timed out")

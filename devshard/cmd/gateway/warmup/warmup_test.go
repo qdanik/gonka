@@ -63,6 +63,10 @@ func warmupClock() func() time.Time {
 	return func() time.Time { return moment }
 }
 
+// Test flow:
+//  1. Build a config holder with warming left off.
+//  2. Call `New`.
+//  3. Assert it returns nil, so nothing observes publications.
 func TestWarmupIsSkippedWhenTheOperatorTurnedItOff(t *testing.T) {
 	holder := config.NewHolder(&config.Config{})
 
@@ -71,6 +75,10 @@ func TestWarmupIsSkippedWhenTheOperatorTurnedItOff(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a config holder with `Scheduler.WarmNewEscrows` on.
+//  2. Call `New`.
+//  3. Assert it returns a non-nil warmup.
 func TestWarmupIsBuiltWhenWarmingIsOn(t *testing.T) {
 	holder := config.NewHolder(&config.Config{Scheduler: config.Scheduler{WarmNewEscrows: true}})
 
@@ -79,6 +87,9 @@ func TestWarmupIsBuiltWhenWarmingIsOn(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a warmup with warming on and no ledger passed in.
+//  2. Assert its `ledger` field is a nil interface, not a typed nil that would panic on the first record.
 func TestWarmupKeepsATypedNilLedgerOutOfItsInterface(t *testing.T) {
 	holder := config.NewHolder(&config.Config{Scheduler: config.Scheduler{WarmNewEscrows: true}})
 
@@ -89,6 +100,10 @@ func TestWarmupKeepsATypedNilLedgerOutOfItsInterface(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a `Prober` whose escrow registry reports the escrow as no longer live.
+//  2. Warm that escrow.
+//  3. Assert no probe was recorded.
 func TestWarmupSkipsAnEscrowThatIsAlreadyGone(t *testing.T) {
 	escrows := &stubEscrows{live: false}
 	ledger := &spyLedger{}
@@ -101,6 +116,10 @@ func TestWarmupSkipsAnEscrowThatIsAlreadyGone(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Record a served probe's nonce through `warmup.record`.
+//  2. Assert one probe attempt was recorded for that nonce.
+//  3. Assert it is marked sent and finished, with usage `UsageLoser`, since nobody consumed a warmup answer.
 func TestWarmupSettlesItsNonceAsWorkNobodyUsed(t *testing.T) {
 	ledger := &spyLedger{}
 	warmup := &Prober{ledger: ledger, probes: ledger, now: warmupClock()}
@@ -123,6 +142,9 @@ func TestWarmupSettlesItsNonceAsWorkNobodyUsed(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Record a refused probe's nonce and error through `warmup.record`.
+//  2. Assert the recorded attempt is marked sent but not finished or acknowledged.
 func TestARefusedProbeIsNotSettledAsFinished(t *testing.T) {
 	ledger := &spyLedger{}
 	warmup := &Prober{ledger: ledger, probes: ledger, now: warmupClock()}
@@ -140,7 +162,10 @@ func TestARefusedProbeIsNotSettledAsFinished(t *testing.T) {
 	}
 }
 
-// A nil *Book assigned straight to the interface field is not a nil interface, so openLedger would call OpenEscrow on it.
+// Test flow:
+//  1. Build a warmup with warming on and no ledger, so the ledger field holds a nil interface.
+//  2. Call `openLedger` for one escrow.
+//  3. Assert the ledger field is still nil rather than a typed nil `openLedger` would dereference.
 func TestWarmupWithoutALedgerRecordsNothingAndDoesNotPanic(t *testing.T) {
 	holder := config.NewHolder(&config.Config{Scheduler: config.Scheduler{WarmNewEscrows: true}})
 
@@ -152,6 +177,9 @@ func TestWarmupWithoutALedgerRecordsNothingAndDoesNotPanic(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Parse the probe's fixed prompt body.
+//  2. Assert its declared `max_tokens` matches `probeMaxTokens`, the amount the warmup actually reserves.
 func TestABurnedNonceAndAWarmupProbeAgreeOnTheirTokenFloor(t *testing.T) {
 	var body struct {
 		MaxTokens uint64 `json:"max_tokens"`
@@ -165,8 +193,11 @@ func TestABurnedNonceAndAWarmupProbeAgreeOnTheirTokenFloor(t *testing.T) {
 	}
 }
 
-// warm spawns a watchdog bound to a twenty-minute budget; without the deferred cancel it outlives the
-// escrow by that whole budget, once per publication.
+// Test flow:
+//  1. Build a `Prober` whose probe commits a nonce and whose catch-up signals completion.
+//  2. Publish one escrow through `EscrowPublished`.
+//  3. Assert the catch-up runs within 5 seconds.
+//  4. Assert no goroutine the warmup started is still running afterward.
 func TestEscrowPublishedLeavesNoGoroutineBehind(t *testing.T) {
 	defer leakcheck.VerifyNoneStarted(t)()
 
@@ -195,6 +226,10 @@ func TestEscrowPublishedLeavesNoGoroutineBehind(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Start the warmup against a cancellable context.
+//  2. Cancel that context.
+//  3. Assert the warmup's stop channel closes within a second.
 func TestTheWarmupStopsWithTheGateway(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	warmup := &Prober{now: warmupClock()}
@@ -209,8 +244,7 @@ func TestTheWarmupStopsWithTheGateway(t *testing.T) {
 	}
 }
 
-// stubSession implements only what the warmup reads; anything else panics, which is the signal that the
-// warmup grew a dependency this test does not describe.
+// stubSession implements only what the warmup reads; anything else panics.
 type stubSession struct {
 	registry.EscrowSession
 	nonce uint64
@@ -245,6 +279,9 @@ func newWarmupUnderTest(session registry.EscrowSession, probeErr error) (*Prober
 	return warmup, ledger, &caughtUp
 }
 
+// Test flow:
+//  1. Warm an escrow whose probe succeeds.
+//  2. Assert the catch-up ran exactly once, so every host the dispatch might have missed still comes to hold the escrow.
 func TestEveryHostLearnsTheEscrowAfterTheProbe(t *testing.T) {
 	warmup, _, caughtUp := newWarmupUnderTest(stubSession{}, nil)
 
@@ -255,6 +292,9 @@ func TestEveryHostLearnsTheEscrowAfterTheProbe(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Warm an escrow whose probe is refused.
+//  2. Assert the catch-up still ran exactly once, since the diff is persisted before the send regardless of the answer.
 func TestTheGroupLearnsTheEscrowEvenWhenTheProbeWasRefused(t *testing.T) {
 	warmup, _, caughtUp := newWarmupUnderTest(stubSession{}, errors.New("host refused"))
 
@@ -265,6 +305,9 @@ func TestTheGroupLearnsTheEscrowEvenWhenTheProbeWasRefused(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Warm an escrow whose session already reports a non-zero nonce.
+//  2. Assert no probe was recorded and no catch-up ran, since its hosts already hold the escrow.
 func TestAnEscrowThatAlreadyServedIsNeitherProbedNorCaughtUp(t *testing.T) {
 	warmup, ledger, caughtUp := newWarmupUnderTest(stubSession{nonce: 917}, nil)
 
@@ -275,6 +318,10 @@ func TestAnEscrowThatAlreadyServedIsNeitherProbedNorCaughtUp(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Define a table of host responses, varying across an executor receipt, a state signature only, an empty response, and no response at all.
+//  2. For each case, call `executorAcknowledged`.
+//  3. Assert the result matches the case's expectation, true only for the executor's own receipt.
 func TestOnlyAnExecutorReceiptCountsAsAnAnsweredProbe(t *testing.T) {
 	for _, testCase := range []struct {
 		name     string
@@ -295,8 +342,10 @@ func TestOnlyAnExecutorReceiptCountsAsAnAnsweredProbe(t *testing.T) {
 	}
 }
 
-// A host cannot sign or vote until it holds the session, and the first request lands long before the
-// probe's answer, so the catch-up must not wait for it.
+// Test flow:
+//  1. Build a `Prober` whose probe blocks until it observes the catch-up complete, and whose catch-up closes immediately.
+//  2. Warm one escrow.
+//  3. Assert the probe observed the catch-up finish before the probe itself returned, so the group is taught while the probe is still streaming.
 func TestTheGroupIsTaughtWhileTheProbeIsStillStreaming(t *testing.T) {
 	caughtUp := make(chan struct{})
 	sawCatchUp := make(chan struct{})
@@ -328,8 +377,10 @@ func TestTheGroupIsTaughtWhileTheProbeIsStillStreaming(t *testing.T) {
 	}
 }
 
-// The probe is answered for this gateway, not for a client, and the ledger can only tell the two apart
-// if the nonce says so. Without the mark every rotation reads as a race the host lost.
+// Test flow:
+//  1. Warm an escrow whose probe succeeds.
+//  2. Assert exactly one attempt was recorded for the one nonce the warmup spends.
+//  3. Assert its terminal is `accounting.TerminalWarmupProbe`.
 func TestTheWarmupNonceIsSettledAsAProbe(t *testing.T) {
 	warmup, ledger, _ := newWarmupUnderTest(stubSession{}, nil)
 
@@ -343,9 +394,10 @@ func TestTheWarmupNonceIsSettledAsAProbe(t *testing.T) {
 	}
 }
 
-// The ledger opens escrows on a ten-second sweep that has not run for an escrow published a moment ago
-// -- at boot it has not started at all. An unopened escrow refuses the attempt, and the probe's nonce
-// loses the marker that keeps this gateway's own request out of the host's record.
+// Test flow:
+//  1. Stamp the chain snapshot with a known epoch and warm an escrow whose probe succeeds.
+//  2. Assert the ledger opened exactly one escrow, stamped with the escrow ID, model, and the epoch it was created in.
+//  3. Assert the opened escrow carries the slots the session's group reports.
 func TestTheProbeOpensTheEscrowItIsAboutToRecordAgainst(t *testing.T) {
 	warmup, ledger, _ := newWarmupUnderTest(stubSession{}, nil)
 	warmup.epochs = stubEpochs{epoch: 42}
@@ -364,8 +416,9 @@ func TestTheProbeOpensTheEscrowItIsAboutToRecordAgainst(t *testing.T) {
 	}
 }
 
-// Before the chain observer has published, the snapshot carries epoch 0. An escrow opened under it is pinned
-// there for good -- invisible to every epoch-scoped query, and past the admin reset, which refuses epoch 0.
+// Test flow:
+//  1. Stamp the chain snapshot with epoch 0 and warm an escrow whose probe succeeds.
+//  2. Assert the ledger opened no escrow, since an unknown epoch would pin it there for good.
 func TestTheProbeOpensNoEscrowBeforeTheChainHasNamedAnEpoch(t *testing.T) {
 	warmup, ledger, _ := newWarmupUnderTest(stubSession{}, nil)
 	warmup.epochs = stubEpochs{epoch: 0}

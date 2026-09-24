@@ -7,7 +7,11 @@ import (
 	"devshard/logging"
 )
 
-// A golden line is a contract on the type of every value, not only on how it prints.
+// Test flow:
+//  1. Install a log recorder and log a warn line with a uint64 nonce and an error field.
+//  2. Assert Contains reports true for an identical entry.
+//  3. Assert Contains reports false when the nonce is given as an int instead of a uint64.
+//  4. Assert Contains reports false when the level is given as info instead of warn.
 func TestContainsComparesTheLevelTheMessageAndEveryTypedField(t *testing.T) {
 	recorder := Install(t)
 	refusal := errors.New("refused")

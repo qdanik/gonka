@@ -8,9 +8,6 @@ import (
 	"devshard/cmd/gateway/limits"
 )
 
-// The fakes in escrow_pick_test.go record every call under a mutex, which a benchmark would measure
-// instead of the code under test. These record nothing.
-
 // benchGroupSize stays under ten slots, which benchLimiter's single-digit read needs.
 const benchGroupSize = 4
 
@@ -116,8 +113,7 @@ func BenchmarkPickEscrowParallel(b *testing.B) {
 	})
 }
 
-// BenchmarkPickEscrowDegraded measures the selection path as capacity disappears: the cost of
-// deciding "no" is what a partial outage pays on every request.
+// BenchmarkPickEscrowDegraded times selection as capacity disappears.
 func BenchmarkPickEscrowDegraded(b *testing.B) {
 	snapshot := chain.PhaseSnapshot{}
 	for _, deadPercent := range []int{0, 50, 90, 100} {
@@ -136,8 +132,7 @@ func BenchmarkPickEscrowDegraded(b *testing.B) {
 	}
 }
 
-// BenchmarkPickEscrowNonceSweep walks one escrow's whole nonce budget to its governance cap, which is
-// what an escrow's lifetime costs in selection alone.
+// BenchmarkPickEscrowNonceSweep walks one escrow's whole nonce budget to its governance cap.
 func BenchmarkPickEscrowNonceSweep(b *testing.B) {
 	snapshot := chain.PhaseSnapshot{MaxNonce: 20_000}
 	scheduler, modelNames := benchScheduler(100, 4)
@@ -169,8 +164,7 @@ func BenchmarkPickEscrowForecast(b *testing.B) {
 	}
 }
 
-// BenchmarkPickEscrowSingleModel isolates per-candidate cost from the model-filter effect: with one
-// model both trees scan the same number of escrows.
+// BenchmarkPickEscrowSingleModel isolates per-candidate cost from the model-filter effect.
 func BenchmarkPickEscrowSingleModel(b *testing.B) {
 	snapshot := chain.PhaseSnapshot{}
 	for _, escrows := range []int{10, 100, 1000} {

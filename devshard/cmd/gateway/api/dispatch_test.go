@@ -46,8 +46,7 @@ func liveParams() user.InferenceParams {
 	}
 }
 
-// newLiveSession builds a real *user.Session over in-memory storage so the dispatch boundary is
-// exercised through the same plumbing production uses; hostClients are the only injected part.
+// newLiveSession builds a real *user.Session over in-memory storage, with hostClients as the only injected part.
 func newLiveSession(t *testing.T, hostClients ...user.HostClient) (*user.Session, *state.StateMachine) {
 	t.Helper()
 	signers := []*signing.Secp256k1Signer{testutil.MustGenerateKey(t), testutil.MustGenerateKey(t)}
@@ -71,8 +70,7 @@ func newLiveSession(t *testing.T, hostClients ...user.HostClient) (*user.Session
 	return session, machine
 }
 
-// prepareNonce commits one real nonce, so the prepared value the adapter type-asserts and the record the
-// timeout payload is rebuilt from are both the genuine article.
+// prepareNonce commits one real nonce through the session, for use as a genuine prepared inference.
 func prepareNonce(t *testing.T, session *user.Session) *user.PreparedInference {
 	t.Helper()
 	prepared, err := session.PrepareInferenceFn(func(user.HostBinding) (user.InferenceParams, bool, error) {
@@ -134,6 +132,13 @@ type foreignNonce struct{}
 func (foreignNonce) Nonce() uint64 { return 3 }
 func (foreignNonce) HostIdx() int  { return 1 }
 
+// Test flow:
+//  1. Prepare a real nonce on a live session and wrap a `recordingSession` in an `escrowTarget`.
+//  2. Call `target.Send` with a receipt callback.
+//  3. Assert the calls happened in order: SendOnly, PinPendingFinish, ProcessResponse.
+//  4. Assert SendOnly received the same prepared nonce and the caller's stream unwrapped, and the receipt callback fired once.
+//  5. Assert ProcessResponse applied the reply with the prepared nonce's host index and nonce.
+//  6. Assert the returned response reports Confirmed, since the reply carried a ConfirmedAt.
 func TestSendDispatchesThenAppliesTheReply(t *testing.T) {
 	t.Parallel()
 	session, _ := newLiveSession(t)
@@ -166,6 +171,10 @@ func TestSendDispatchesThenAppliesTheReply(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Send through a `recordingSession` and get back a response.
+//  2. Call `response.ReleaseFinish` twice.
+//  3. Assert UnpinPendingFinish appears exactly once in the recorded call order.
 func TestAReplysFinishIsReleasedOnceHoweverOftenItIsAsked(t *testing.T) {
 	t.Parallel()
 	session, _ := newLiveSession(t)
@@ -185,6 +194,12 @@ func TestAReplysFinishIsReleasedOnceHoweverOftenItIsAsked(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Define a table of send/apply outcomes, varying across a clean reply, a reply that arrived beside a send error, no reply at all, an unapplicable reply, and both a failed send and a failed apply together.
+//  2. For each case, call `target.Send` against a `recordingSession` configured with that outcome.
+//  3. Assert the returned error matches the case's expected error.
+//  4. Assert the recorded call order matches the case's expectation.
+//  5. Assert a response is returned only when the case expects one, so a typed nil is never handed to the engine.
 func TestSendAppliesEveryReplyTheHostProduced(t *testing.T) {
 	t.Parallel()
 	reply := &host.HostResponse{StreamBytesRead: 12}
@@ -259,6 +274,10 @@ func TestSendAppliesEveryReplyTheHostProduced(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Define a table of send/apply errors, varying across a host that could not apply the diff, a host state hash differing from the local root, both a failed send and a state hash mismatch together, and an ordinary dispatch failure with neither.
+//  2. For each case, call `target.Send`.
+//  3. Assert whether the returned error matches `engine.ErrStateRootDivergence` matches the case's expectation.
 func TestSendReportsADivergedStateRootFromEitherSideOfTheWire(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
@@ -314,6 +333,10 @@ func TestSendReportsADivergedStateRootFromEitherSideOfTheWire(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Configure a `recordingSession` whose send fails with an `*transport.UpstreamStatusError`.
+//  2. Call `target.Send`.
+//  3. Assert `errors.As` recovers that exact upstream error, so the engine can still classify on it.
 func TestSendKeepsTheUpstreamErrorInspectable(t *testing.T) {
 	t.Parallel()
 	session, _ := newLiveSession(t)
@@ -333,6 +356,10 @@ func TestSendKeepsTheUpstreamErrorInspectable(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Call `target.Send` with a `foreignNonce` the session never prepared.
+//  2. Assert it returns an error naming the wrong nonce type and no response.
+//  3. Assert the session recorded no calls.
 func TestSendRefusesANonceItCannotDispatch(t *testing.T) {
 	t.Parallel()
 	recorded := &recordingSession{}
@@ -351,8 +378,7 @@ func TestSendRefusesANonceItCannotDispatch(t *testing.T) {
 	}
 }
 
-// clientSink stands in for the HTTP response writer: it satisfies http.Flusher, which is the only way
-// the transport's per-line flush can reach a client.
+// clientSink stands in for the HTTP response writer, and satisfies http.Flusher.
 type clientSink struct {
 	written []byte
 	flushes int
@@ -365,8 +391,7 @@ func (s *clientSink) Write(chunk []byte) (int, error) {
 
 func (s *clientSink) Flush() { s.flushes++ }
 
-// flushingHost mirrors transport.writeSSELine: it writes a line and flushes only if the writer it was
-// handed satisfies http.Flusher. Its reply finishes the inference the way a real host's does.
+// flushingHost mirrors transport.writeSSELine: it writes a line and flushes only if the writer satisfies http.Flusher.
 type flushingHost struct {
 	line       string
 	sawFlusher bool
@@ -393,6 +418,10 @@ func (h *flushingHost) Send(_ context.Context, req host.HostRequest, stream io.W
 	}, nil
 }
 
+// Test flow:
+//  1. Send a prepared nonce through a real session backed by two `flushingHost`s that finish the inference.
+//  2. Assert `target.Send` succeeds.
+//  3. Assert `target.NonceFinished` reports true afterward.
 func TestSendSettlesTheNonceItDispatched(t *testing.T) {
 	t.Parallel()
 	upstream := &flushingHost{line: "data: [DONE]\n\n"}
@@ -410,6 +439,10 @@ func TestSendSettlesTheNonceItDispatched(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Send a prepared nonce through a real session backed by `flushingHost`s, writing into a `clientSink`.
+//  2. Assert the host saw a writer implementing `http.Flusher`.
+//  3. Assert the sink was flushed once and received exactly the host's line.
 func TestSendLeavesTheClientWriterFlushable(t *testing.T) {
 	t.Parallel()
 	upstream := &flushingHost{line: "data: {\"choices\":[]}\n\n"}
@@ -433,8 +466,12 @@ func TestSendLeavesTheClientWriterFlushable(t *testing.T) {
 	}
 }
 
-// Resolving a target counts the request against its escrow, and the release is the only thing that
-// gives that count back, so it must survive being called more than once.
+// Test flow:
+//  1. Resolve a live escrow's target and hold it.
+//  2. Assert the target reports the session's host count and host labels, and exactly one hold was taken.
+//  3. Release the target twice.
+//  4. Assert exactly one release reached the escrow registry despite the doubled call.
+//  5. Assert resolving an unregistered escrow reports not found.
 func TestTargetResolvesOnlyTheLiveEscrowAndHoldsItUntilReleased(t *testing.T) {
 	t.Parallel()
 	session, machine := newLiveSession(t)
@@ -467,6 +504,9 @@ func TestTargetResolvesOnlyTheLiveEscrowAndHoldsItUntilReleased(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Prepare a nonce on a live session without ever sending it.
+//  2. Assert `target.NonceFinished` reports false before any reply was applied.
 func TestTargetReportsWhetherTheNonceIsFinished(t *testing.T) {
 	t.Parallel()
 	session, _ := newLiveSession(t)
@@ -478,8 +518,9 @@ func TestTargetReportsWhetherTheNonceIsFinished(t *testing.T) {
 	}
 }
 
-// The engine's target lookup is an unexported interface returning an exported one, so assignment to the
-// field is the only compile-time proof the adapter satisfies it.
+// Test flow:
+//  1. Wire a `Sessions` adapter into `engine.Deps` as both its Targets and Timeouts.
+//  2. Assert both fields are non-nil, proving the adapter satisfies the engine's unexported interfaces at compile time.
 func TestSessionsSatisfyTheEngineDeps(t *testing.T) {
 	t.Parallel()
 	sessions := NewSessions(&fixedEscrows{})

@@ -22,8 +22,7 @@ func readSSEFixture(t *testing.T, name string) []byte {
 	return data
 }
 
-// rewriteWholeStream drives one StreamRewriter over the whole stream and returns everything it
-// emits, so the fixtures assert against the rewriter production streams through.
+// rewriteWholeStream drives one StreamRewriter over the whole stream and returns everything it emits.
 func rewriteWholeStream(t *testing.T, stream []byte) []byte {
 	t.Helper()
 	rewriter := NewStreamRewriter(LogprobIntent{}, true)
@@ -38,8 +37,7 @@ func rewriteWholeStream(t *testing.T, stream []byte) []byte {
 	return append(emitted, final...)
 }
 
-// splitCompleteEvents splits an SSE stream into its "\n\n"-terminated events, dropping the
-// trailing empty piece SplitAfter produces when the input ends on the separator.
+// splitCompleteEvents splits an SSE stream into its "\n\n"-terminated events.
 func splitCompleteEvents(t *testing.T, stream []byte) [][]byte {
 	t.Helper()
 	var events [][]byte
@@ -52,6 +50,9 @@ func splitCompleteEvents(t *testing.T, stream []byte) [][]byte {
 	return events
 }
 
+// Test flow:
+//  1. Build the expected list of client-stripped field names.
+//  2. Assert clientStrippedFields equals that exact list.
 func TestClientStrippedFieldsExactList(t *testing.T) {
 	want := []string{
 		"logprob",
@@ -66,8 +67,7 @@ func TestClientStrippedFieldsExactList(t *testing.T) {
 	}
 }
 
-// forcedParameterNames derives the forced set from parameterTable itself by running every rule
-// against an empty document: only a force rule writes its own parameter with nothing to act on.
+// forcedParameterNames derives the forced set from parameterTable by running every rule against an empty document.
 func forcedParameterNames(t *testing.T) []string {
 	t.Helper()
 	var forced []string
@@ -89,15 +89,15 @@ func forcedParameterNames(t *testing.T) []string {
 	return forced
 }
 
-// forcedParameterResponseField maps a forced request parameter to its response field, for the one
-// case where the names differ: return_token_ids (request) makes vLLM emit token_ids.
+// forcedParameterResponseField maps a forced request parameter to its response field when the names differ.
 var forcedParameterResponseField = map[string]string{
 	"return_token_ids": "token_ids",
 }
 
-// TestForcedRequestParametersHaveResponseStripCounterpart is the pairing test: every field
-// parameterTable forces on must have a matching clientStrippedFields entry, so a force rule added
-// without a strip counterpart leaks internal fields to the client.
+// Test flow:
+//  1. Build a set of clientStrippedFields and collect every parameter parameterTable forces via `forcedParameterNames`.
+//  2. Assert at least one forced parameter was found, so the pairing check is not vacuous.
+//  3. For each forced parameter, map it to its response field (via `forcedParameterResponseField` when the names differ) and assert that field is in the stripped set.
 func TestForcedRequestParametersHaveResponseStripCounterpart(t *testing.T) {
 	stripped := make(map[string]bool, len(clientStrippedFields))
 	for _, field := range clientStrippedFields {
@@ -118,6 +118,10 @@ func TestForcedRequestParametersHaveResponseStripCounterpart(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. For each fixture (`content_stream.sse`, `tool_calls_stream.sse`, `newlineless_final_content.sse`, `newlineless_final_error.sse`), read the SSE fixture.
+//  2. Rewrite the whole stream through a StreamRewriter.
+//  3. Assert the rewritten output is byte-for-byte identical to the input.
 func TestStreamRewriterFixture_PureContentPassthrough(t *testing.T) {
 	tests := []string{
 		"content_stream.sse",
@@ -136,6 +140,9 @@ func TestStreamRewriterFixture_PureContentPassthrough(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Rewrite a nil input and, separately, an empty byte slice through a StreamRewriter.
+//  2. Assert both produce empty output.
 func TestStreamRewriterFixture_EmptyAndNilInput(t *testing.T) {
 	for _, name := range []string{"nil", "empty"} {
 		t.Run(name, func(t *testing.T) {
@@ -151,6 +158,9 @@ func TestStreamRewriterFixture_EmptyAndNilInput(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Read the `logprobs_stream.sse` fixture and rewrite the whole stream.
+//  2. Assert the rewritten output still ends with the unchanged "data: [DONE]\n\n" marker.
 func TestStreamRewriterFixture_DoneMarkerPreservedExactly(t *testing.T) {
 	input := readSSEFixture(t, "logprobs_stream.sse")
 	got := rewriteWholeStream(t, input)
@@ -159,6 +169,10 @@ func TestStreamRewriterFixture_DoneMarkerPreservedExactly(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Read the `logprobs_stream.sse` fixture and rewrite the whole stream.
+//  2. Assert the output no longer contains "logprobs", "top_logprobs" or "logprob".
+//  3. Assert the sibling content and finish_reason fields are still present.
 func TestStreamRewriterFixture_StripsLogprobsFamily(t *testing.T) {
 	input := readSSEFixture(t, "logprobs_stream.sse")
 	got := rewriteWholeStream(t, input)
@@ -175,6 +189,10 @@ func TestStreamRewriterFixture_StripsLogprobsFamily(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Read the `token_ids_stream.sse` fixture and rewrite the whole stream.
+//  2. Assert the output no longer contains "token_ids", "prompt_token_ids" or "prompt_logprobs".
+//  3. Assert the sibling content field is still present.
 func TestStreamRewriterFixture_StripsTokenIdFamily(t *testing.T) {
 	input := readSSEFixture(t, "token_ids_stream.sse")
 	got := rewriteWholeStream(t, input)
@@ -188,6 +206,11 @@ func TestStreamRewriterFixture_StripsTokenIdFamily(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Read the `malformed_data_line.sse` fixture and rewrite the whole stream.
+//  2. Assert the well-formed event's logprobs field was stripped.
+//  3. Assert no "logprob" field or the malformed event's own content leaked into the output.
+//  4. Assert the output still ends with the [DONE] marker.
 func TestStreamRewriterFixture_MalformedEventIsDroppedNotForwarded(t *testing.T) {
 	input := readSSEFixture(t, "malformed_data_line.sse")
 	got := rewriteWholeStream(t, input)
@@ -205,6 +228,10 @@ func TestStreamRewriterFixture_MalformedEventIsDroppedNotForwarded(t *testing.T)
 	}
 }
 
+// Test flow:
+//  1. Read the `comment_and_blank_lines.sse` fixture and rewrite the whole stream.
+//  2. Assert the leading SSE comment line is preserved verbatim.
+//  3. Assert the data event's logprobs field was stripped while its content field is preserved.
 func TestStreamRewriterFixture_CommentAndBlankLinesPassThrough(t *testing.T) {
 	input := readSSEFixture(t, "comment_and_blank_lines.sse")
 	got := rewriteWholeStream(t, input)
@@ -219,6 +246,10 @@ func TestStreamRewriterFixture_CommentAndBlankLinesPassThrough(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. For each fixture, rewrite the whole stream in one call to get a reference output.
+//  2. Split the same fixture into complete SSE events and feed them one at a time to a fresh StreamRewriter, buffering everything it emits.
+//  3. Assert the chunk-by-chunk result equals the whole-stream result.
 func TestStreamRewriterFixture_ChunkByChunkMatchesWholeStream(t *testing.T) {
 	fixtures := []string{
 		"content_stream.sse",
@@ -253,8 +284,10 @@ func TestStreamRewriterFixture_ChunkByChunkMatchesWholeStream(t *testing.T) {
 	}
 }
 
-// A stream ending mid-event must drop the fragment rather than emit the internal fields it still
-// carries, and must report the truncation so the response fails instead of completing short.
+// Test flow:
+//  1. Read the `logprobs_stream.sse` fixture and split it into events, then cut the second event mid-way through its "top_logprobs" field.
+//  2. Write the truncated fragment to a StreamRewriter and assert nothing is emitted yet.
+//  3. Close the rewriter and assert it returns ErrStreamTruncatedEvent with nothing emitted, so a mid-event cutoff is dropped and reported rather than forwarded with its internal fields.
 func TestStreamRewriterFixture_TruncatedEventIsDroppedAndReported(t *testing.T) {
 	input := readSSEFixture(t, "logprobs_stream.sse")
 	events := splitCompleteEvents(t, input)
@@ -282,6 +315,11 @@ func TestStreamRewriterFixture_TruncatedEventIsDroppedAndReported(t *testing.T) 
 	}
 }
 
+// Test flow:
+//  1. Build a response body carrying logprobs, token_ids, prompt_token_ids and prompt_logprobs at different nesting depths.
+//  2. Strip the body with an empty LogprobIntent.
+//  3. Assert the result is valid JSON and contains none of the internal field names.
+//  4. Assert finish_reason and message.content survive the strip.
 func TestStripResponseBody_RemovesAllInternalFieldsAtAnyDepth(t *testing.T) {
 	body := []byte(`{
 		"id": "chatcmpl-full",
@@ -325,6 +363,9 @@ func TestStripResponseBody_RemovesAllInternalFieldsAtAnyDepth(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Strip a response body that carries none of the internal fields.
+//  2. Assert the output is byte-for-byte unchanged.
 func TestStripResponseBody_NoChangeReturnsEquivalentBytes(t *testing.T) {
 	body := []byte(`{"id":"chatcmpl-plain","choices":[{"message":{"content":"hi"}}]}`)
 	got := stripResponseBody(body, LogprobIntent{})
@@ -333,6 +374,9 @@ func TestStripResponseBody_NoChangeReturnsEquivalentBytes(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Strip a body that is not valid JSON.
+//  2. Assert the output passes through unchanged.
 func TestStripResponseBody_MalformedBodyPassesThroughUnchanged(t *testing.T) {
 	body := []byte(`this is not json`)
 	got := stripResponseBody(body, LogprobIntent{})
@@ -341,6 +385,9 @@ func TestStripResponseBody_MalformedBodyPassesThroughUnchanged(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Strip an empty byte slice.
+//  2. Assert the output stays empty.
 func TestStripResponseBody_EmptyBodyPassesThroughUnchanged(t *testing.T) {
 	got := stripResponseBody([]byte{}, LogprobIntent{})
 	if len(got) != 0 {
@@ -348,6 +395,9 @@ func TestStripResponseBody_EmptyBodyPassesThroughUnchanged(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Strip a body whose prompt_logprobs field is set to null.
+//  2. Assert the decoded output no longer has a prompt_logprobs key at all.
 func TestStripResponseBody_NullValuedFieldAlsoStripped(t *testing.T) {
 	body := []byte(`{"id":"x","prompt_logprobs":null,"choices":[]}`)
 	got := stripResponseBody(body, LogprobIntent{})
@@ -360,6 +410,9 @@ func TestStripResponseBody_NullValuedFieldAlsoStripped(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Call IsCacheableUpstreamError with a table of status codes and error bodies, varying between deterministic validation errors, transient/capability errors, malformed bodies and non-400 statuses.
+//  2. Assert each case's result matches the expected cacheability.
 func TestIsCacheableUpstreamError(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -391,8 +444,9 @@ func TestIsCacheableUpstreamError(t *testing.T) {
 	}
 }
 
-// What the host said about its own failure, in the order the rule reads it: the status it would have
-// answered with, then the class it named, then the words of the message.
+// Test flow:
+//  1. Call IsCacheableUpstreamError(400, ...) with a table of error bodies that name a failure through a numeric code, a type/class string, or only a message, in the order the rule reads them: status, then class, then message.
+//  2. Assert each case's cacheability matches whether the host named a request problem or a momentary one.
 func TestAnErrorIsJudgedByWhatTheHostNamed(t *testing.T) {
 	tests := []struct {
 		name string
@@ -420,6 +474,9 @@ func TestAnErrorIsJudgedByWhatTheHostNamed(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. For every marker in momentaryFailureMessages, build three error bodies that place the marker in the message, in the type field (uppercased), and in the code field.
+//  2. Assert IsCacheableUpstreamError(400, ...) is false for all three placements.
 func TestIsCacheableUpstreamError_EveryMarkerExcludes(t *testing.T) {
 	for _, marker := range momentaryFailureMessages {
 		t.Run("marker in message: "+marker, func(t *testing.T) {
@@ -443,6 +500,9 @@ func TestIsCacheableUpstreamError_EveryMarkerExcludes(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Call IsCacheableResponse with a table of status/body pairs covering plain successes, a 204, an empty body, a completed SSE stream, SSE-embedded transient and deterministic errors under both success and error statuses, a 500, and CRLF-framed SSE.
+//  2. Assert each case's result matches the expected cacheability.
 func TestIsCacheableResponseCoversSuccessesAndSSEEmbeddedFailures(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -470,6 +530,9 @@ func TestIsCacheableResponseCoversSuccessesAndSSEEmbeddedFailures(t *testing.T) 
 	}
 }
 
+// Test flow:
+//  1. Call HasNonCacheableError with a table of bodies covering a clean completion, plain and SSE-embedded transient/deterministic errors, a malformed body, a failure hidden behind wrongly typed choices, and a stream with two errors.
+//  2. Assert each case's result matches whether a momentary failure is present, and that when two errors appear only the first is considered.
 func TestHasNonCacheableErrorFindsFailuresRegardlessOfFraming(t *testing.T) {
 	tests := []struct {
 		name string
@@ -494,9 +557,10 @@ func TestHasNonCacheableErrorFindsFailuresRegardlessOfFraming(t *testing.T) {
 	}
 }
 
-// The strip must not rewrite numbers it was not asked to touch. Decoding into any turns every number
-// into a float64, and seed is the one field a client uses to make a completion reproducible: handing
-// back a different seed than the host reported breaks exactly the guarantee seed exists for.
+// Test flow:
+//  1. Strip a body carrying a seed integer too large to round-trip through float64, alongside a logprobs field.
+//  2. Assert the seed value in the output is byte-for-byte the same as sent.
+//  3. Assert logprobs was actually removed, so the seed check is not vacuous.
 func TestStripKeepsIntegersTooLargeForFloat64(t *testing.T) {
 	body := []byte(`{"id":"c","seed":9007199254740993,"logprobs":{"content":[]},"choices":[]}`)
 
@@ -510,8 +574,9 @@ func TestStripKeepsIntegersTooLargeForFloat64(t *testing.T) {
 	}
 }
 
-// A body with a second value after the first is malformed and must pass through untouched, the way
-// json.Unmarshal treated it. A Decoder alone would read the first value and drop the rest.
+// Test flow:
+//  1. Strip a body that has a second JSON value trailing after the first object.
+//  2. Assert the output is byte-for-byte unchanged, the way json.Unmarshal treats a malformed body.
 func TestStripLeavesABodyWithTrailingJunkAlone(t *testing.T) {
 	body := []byte(`{"logprobs":{"content":[]}} {"and":"more"}`)
 
@@ -520,10 +585,10 @@ func TestStripLeavesABodyWithTrailingJunkAlone(t *testing.T) {
 	}
 }
 
-// A host controls the response body, so nesting is an input it chooses. A recursive strip with no depth
-// bound answers that with a stack overflow, which runtime.throw makes uncatchable: the process dies and
-// takes every in-flight race and pending settlement with it. The decoder's own limit is what prevents
-// it, and this pins that the limit is still there.
+// Test flow:
+//  1. Build a response body nested to depths of 1,000, 1,000,000 and 3,000,000 brackets.
+//  2. Strip each body.
+//  3. Assert stripping produces non-empty output for every depth, so the decoder's own depth bound catches the nesting instead of overflowing the stack.
 func TestADeeplyNestedResponseCannotCrashTheProcess(t *testing.T) {
 	for _, depth := range []int{1_000, 1_000_000, 3_000_000} {
 		body := []byte(`{"logprobs":1,"a":` + strings.Repeat("[", depth) + strings.Repeat("]", depth) + `}`)
@@ -534,9 +599,10 @@ func TestADeeplyNestedResponseCannotCrashTheProcess(t *testing.T) {
 	}
 }
 
-// Past the decoder's depth limit the body is unparseable, so it goes to the client whole -- internal
-// fields included. The gateway that this replaces behaves the same way, and the alternative is dropping
-// a reply a client is waiting for, but a host wanting its logprobs seen can nest its way there.
+// Test flow:
+//  1. Strip a shallow body carrying logprobs and assert the field is removed.
+//  2. Strip a body nested 100,000 levels deep, past the decoder's depth limit, also carrying logprobs.
+//  3. Assert the deep body still contains logprobs, since past the limit the body is unparseable and passes through whole.
 func TestPastTheDepthLimitTheStripIsBypassed(t *testing.T) {
 	shallow := []byte(`{"logprobs":1,"a":[[]]}`)
 	if strings.Contains(string(stripResponseBody(shallow, LogprobIntent{})), "logprobs") {
@@ -550,8 +616,10 @@ func TestPastTheDepthLimitTheStripIsBypassed(t *testing.T) {
 	}
 }
 
-// A number past float64 range is well-formed JSON a client parses fine. Treating it as unparseable
-// forwards the whole body, internal fields and all -- the strip failing open on input the host chooses.
+// Test flow:
+//  1. Strip a body carrying a seed of 1e999, a number past float64 range, alongside a logprobs field.
+//  2. Assert logprobs was removed, so one out-of-range number does not turn the strip off.
+//  3. Assert the seed is passed through as "1e999" rather than rewritten.
 func TestAnOutOfRangeNumberDoesNotDisableTheStrip(t *testing.T) {
 	body := []byte(`{"choices":[{"message":{"content":"hi"},"logprobs":{"a":1}}],"seed":1e999}`)
 
@@ -565,8 +633,9 @@ func TestAnOutOfRangeNumberDoesNotDisableTheStrip(t *testing.T) {
 	}
 }
 
-// The host's own bytes reach the client: the encoder's default would inflate every < > & in generated
-// content to a six-byte escape, which is the same string to a decoder and a much larger one on the wire.
+// Test flow:
+//  1. Strip a body whose message content contains "<div> a & b".
+//  2. Assert the output still contains that content unescaped, rather than the encoder's default HTML-escaped form.
 func TestGeneratedMarkupIsNotEscaped(t *testing.T) {
 	body := []byte(`{"choices":[{"message":{"content":"<div> a & b"}}],"logprobs":{}}`)
 
@@ -575,9 +644,11 @@ func TestGeneratedMarkupIsNotEscaped(t *testing.T) {
 	}
 }
 
-// The gateway forces logprobs on upstream for validation whatever the client sent, so the response
-// strip is the only place that can tell a client who asked for them from one who did not. Stripping
-// both alike takes from a paying client exactly what it asked for.
+// Test flow:
+//  1. Strip a response body carrying logprobs with alternatives, prompt_logprobs and token_ids, once for each LogprobIntent: asking for neither, logprobs only, and logprobs with alternatives.
+//  2. Assert the logprob field's presence matches whether logprobs were asked for.
+//  3. Assert the alternative token's presence matches whether alternatives were asked for, and that logprobs-without-alternatives still leaves an empty top_logprobs array.
+//  4. Assert prompt_logprobs and token_ids never reach the client, since internals are never anyone's to ask for.
 func TestTheStripFollowsWhatTheClientAskedFor(t *testing.T) {
 	body := []byte(`{"choices":[{"message":{"content":"hi"},"logprobs":{"content":[{"token":"hi","logprob":-0.5,"top_logprobs":[{"token":"hello","logprob":-1.5}]}]}}],"prompt_logprobs":[1],"token_ids":[7]}`)
 
@@ -607,7 +678,6 @@ func TestTheStripFollowsWhatTheClientAskedFor(t *testing.T) {
 			if testCase.wantLogprobs && !testCase.wantTopFilled && !strings.Contains(stripped, `"top_logprobs":[]`) {
 				t.Fatalf("top_logprobs must stay present and empty, which is the shape a client without alternatives expects: %s", stripped)
 			}
-			// Internals are never anyone's to ask for.
 			for _, internal := range []string{"prompt_logprobs", "token_ids"} {
 				if strings.Contains(stripped, internal) {
 					t.Fatalf("%s reached the client: %s", internal, stripped)
@@ -617,8 +687,10 @@ func TestTheStripFollowsWhatTheClientAskedFor(t *testing.T) {
 	}
 }
 
-// The intent drives the strip, so it has to be what the client wrote. Nothing in the request pipeline
-// fills logprobs in on the client's behalf any more, and a shape that is not an ask is refused outright.
+// Test flow:
+//  1. Normalize a request body for each case: no logprobs ask, logprobs alone, logprobs with top_logprobs, and top_logprobs without logprobs.
+//  2. Assert the returned LogprobIntent matches what the client actually asked for.
+//  3. Assert the upstream request body carries "logprobs":true only when the client's own intent asked to keep logprobs.
 func TestTheLogprobIntentIsWhatTheClientWrote(t *testing.T) {
 	testCases := []struct {
 		name       string
@@ -650,9 +722,9 @@ func TestTheLogprobIntentIsWhatTheClientWrote(t *testing.T) {
 	}
 }
 
-// The two field sets are one list split in two, and the split is what decides whether a field can
-// ever reach a client. A field in neither set is stripped from nobody; a requestable field missing
-// from the full list is stripped from everybody.
+// Test flow:
+//  1. Assert every field in requestableFields also appears in clientStrippedFields.
+//  2. For every field in clientStrippedFields, assert it belongs to exactly one of requestableFields or alwaysStrippedFields, never both or neither.
 func TestTheStripSetsPartitionTheFullList(t *testing.T) {
 	for _, field := range requestableFields {
 		if !slices.Contains(clientStrippedFields, field) {
@@ -669,8 +741,10 @@ func TestTheStripSetsPartitionTheFullList(t *testing.T) {
 	}
 }
 
-// Every field in the list must actually leave a response that carries it; the strip decides on the
-// decoded payload, so this is the test that a field added to the list is reachable by the delete.
+// Test flow:
+//  1. For every field in clientStrippedFields, build a response body carrying that field on choices[0].
+//  2. Strip the body.
+//  3. Assert the field name no longer appears in the output.
 func TestEveryStrippedFieldIsRemoved(t *testing.T) {
 	for _, field := range clientStrippedFields {
 		body := []byte(`{"choices":[{"index":0,"` + field + `":{"content":[]}}]}`)
@@ -683,9 +757,11 @@ func TestEveryStrippedFieldIsRemoved(t *testing.T) {
 	}
 }
 
-// A backend writes NaN and Infinity as barewords for a probability of zero, and neither is JSON. Left
-// alone the body is inspected by nobody: the buffered path forwards it with every internal field in
-// it, and the streaming path drops the event, taking the client's answer with it.
+// Test flow:
+//  1. Strip a response body whose logprobs field carries a bareword -Infinity value, alongside token_ids and prompt_logprobs.
+//  2. Assert token_ids, prompt_logprobs and logprob are all gone from the output.
+//  3. Assert the client's content survives.
+//  4. Assert the stripped output decodes as valid JSON.
 func TestABodyCarryingNonFiniteNumbersIsStillStrippedAndDelivered(t *testing.T) {
 	body := []byte(`{"choices":[{"message":{"content":"hi"},"logprobs":{"content":[{"logprob":-Infinity}]}}],"token_ids":[7],"prompt_logprobs":[1]}`)
 
@@ -705,8 +781,11 @@ func TestABodyCarryingNonFiniteNumbersIsStillStrippedAndDelivered(t *testing.T) 
 	}
 }
 
-// A bareword inside a string is content, not a number. The body must also fail to parse on its own,
-// or normalisation never runs and the test proves nothing about what it leaves alone.
+// Test flow:
+//  1. Assert the raw body fails to parse on its own, since it carries a bareword NaN, so this test proves something about what stripping changes.
+//  2. Strip a body whose message content contains the words "NaN" and "-Infinity" as plain text, alongside a bareword NaN inside logprobs and a token_ids field.
+//  3. Assert the content string is left unchanged.
+//  4. Assert token_ids no longer appears in the output.
 func TestNonFiniteWordsInsideStringsAreLeftAlone(t *testing.T) {
 	body := []byte(`{"choices":[{"message":{"content":"the value is NaN, or -Infinity"},"logprobs":{"content":[{"logprob":NaN}]}}],"token_ids":[7]}`)
 	var probe any
@@ -724,8 +803,10 @@ func TestNonFiniteWordsInsideStringsAreLeftAlone(t *testing.T) {
 	}
 }
 
-// A real error in a later event must still be found. An empty {"error":{}} decodes without carrying
-// anything, and stopping on it would leave the stream readable as cacheable.
+// Test flow:
+//  1. Build an SSE payload with an empty {"error":{}} event followed by an event naming a real error message.
+//  2. Parse the upstream error details from the payload.
+//  3. Assert the scan found an error and reports the later event's message, so an empty error does not stop it.
 func TestAnEmptyErrorEventDoesNotStopTheScan(t *testing.T) {
 	payload := []byte("data: {\"error\":{}}\n\n" + "data: {\"object\":\"error\",\"message\":\"service unavailable\"}\n\n")
 
@@ -739,8 +820,9 @@ func TestAnEmptyErrorEventDoesNotStopTheScan(t *testing.T) {
 	}
 }
 
-// The gateway appends its own [DONE] when a host sends none, so the terminator cannot say whether the
-// model finished. A reply that stopped mid-answer is served and must never be replayed from the cache.
+// Test flow:
+//  1. Call IsCacheableResponse(200, ...) with a table of stream and completion bodies, varying how a choice signals it finished: no finish_reason, a later event supplying it, a terminal reason not repeated later, null/empty finish_reason, multiple choices where only some finish, stop_reason alone, differently cased "Choices", split-across-lines events, error-only bodies, and malformed or cut-off bodies.
+//  2. Assert each case's cacheability matches whether every choice the reply started was actually brought to an end.
 func TestAnAnswerThatNeverFinishedIsNotCacheable(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -870,19 +952,21 @@ func TestAnAnswerThatNeverFinishedIsNotCacheable(t *testing.T) {
 	}
 }
 
-// The rule is only worth having if a real answer still earns its entry, so every recorded host stream is
-// classified here and a fixture added to testdata/sse fails until someone says which side it belongs on.
+// Test flow:
+//  1. List every SSE fixture under testdata/sse and check it exists in a manually classified storable/not-storable map.
+//  2. Assert the fixture count matches the classified count, so no fixture is missing from the classification.
+//  3. For each fixture, assert IsCacheableResponse(200, ...) matches its classified expectation.
 func TestEveryRecordedStreamIsClassified(t *testing.T) {
 	t.Parallel()
 	storable := map[string]bool{
-		"comment_and_blank_lines.sse":   false, // its one choice carries finish_reason null
+		"comment_and_blank_lines.sse":   false,
 		"completion_wrapped_stream.sse": true,
 		"content_stream.sse":            true,
 		"kimi_thinking_stream.sse":      true,
 		"logprobs_stream.sse":           true,
-		"malformed_data_line.sse":       false, // an event nobody can read
-		"newlineless_final_content.sse": false, // ends on content, never on a reason
-		"newlineless_final_error.sse":   false, // type server_error: the host named a failure of the moment
+		"malformed_data_line.sse":       false,
+		"newlineless_final_content.sse": false,
+		"newlineless_final_error.sse":   false,
 		"token_ids_stream.sse":          true,
 		"tool_calls_stream.sse":         true,
 	}
@@ -907,7 +991,9 @@ func TestEveryRecordedStreamIsClassified(t *testing.T) {
 	}
 }
 
-// The refusal is not just a boolean: routes.go branches on the name, and operations.md documents it.
+// Test flow:
+//  1. Call CacheRefusal with a table of status/body pairs covering a finished success, an empty body, transient and non-momentary failures, unreadable bodies and choices, an unfinished answer, and a disallowed status both with a finished and an unfinished body.
+//  2. Assert each case returns the matching named refusal reason (or CacheStorable).
 func TestCacheRefusalNamesWhyItRefused(t *testing.T) {
 	t.Parallel()
 	finished := `{"choices":[{"index":0,"message":{"content":"hi"},"finish_reason":"stop"}]}`
@@ -938,7 +1024,10 @@ func TestCacheRefusalNamesWhyItRefused(t *testing.T) {
 	}
 }
 
-// A host naming more choices than the fold would ever merge is not one to replay, however it ends them.
+// Test flow:
+//  1. Build a response body naming maxIndexedElements choices, and separately one with maxIndexedElements+1 choices, every choice finished.
+//  2. Call IsCacheableResponse(200, ...) on each.
+//  3. Assert the body at the limit is cacheable and the one past it is not.
 func TestAFloodOfChoicesIsNotStored(t *testing.T) {
 	t.Parallel()
 	for _, choices := range []int{maxIndexedElements, maxIndexedElements + 1} {
@@ -961,8 +1050,11 @@ func TestAFloodOfChoicesIsNotStored(t *testing.T) {
 	}
 }
 
-// The strip rewrites a host's NaN/Infinity barewords into null on the way out, so what the cache is handed
-// is decodable. If that ever stops holding, the terminal chunk becomes unreadable and nothing is cached.
+// Test flow:
+//  1. Build an SSE event whose logprobs field carries a bareword -Infinity value.
+//  2. Rewrite it through a StreamRewriter with logprobs and alternatives requested.
+//  3. Assert the rewritten output no longer contains "Infinity".
+//  4. Assert CacheRefusal(200, ...) on the rewritten output reports CacheStorable.
 func TestAStreamCarryingBarewordsStaysCacheableAfterTheStrip(t *testing.T) {
 	t.Parallel()
 	event := []byte(`data: {"choices":[{"index":0,"delta":{"content":"ok"},` +

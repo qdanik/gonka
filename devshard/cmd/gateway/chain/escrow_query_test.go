@@ -5,8 +5,11 @@ import (
 	"testing"
 )
 
-// found=false retires an escrow, so it must mean the chain said the escrow is absent and nothing else.
-// A read that failed is returned as an error: retiring an escrow that still holds funds strands them.
+// Test flow:
+//  1. Configure a fake transport for each case: table varies between an escrow present, no escrow, and a transport read failure.
+//  2. Call GetEscrow through a fake tx client for each case.
+//  3. For the failed-read case, assert the transport error is returned and found is false.
+//  4. For the other cases, assert found and the escrow balance match the case's expectation.
 func TestGetEscrowSeparatesAbsenceFromFailure(t *testing.T) {
 	testCases := []struct {
 		name      string
@@ -53,7 +56,9 @@ func TestGetEscrowSeparatesAbsenceFromFailure(t *testing.T) {
 	}
 }
 
-// An id the chain cannot be asked about is a caller error, not an absent escrow.
+// Test flow:
+//  1. Call GetEscrow with a non-numeric escrow id.
+//  2. Assert it returns an error and found is false.
 func TestGetEscrowRejectsANonNumericID(t *testing.T) {
 	client := newFakeTxClient(t, newFakeTransport())
 

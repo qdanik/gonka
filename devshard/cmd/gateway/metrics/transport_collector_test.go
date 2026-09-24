@@ -12,6 +12,9 @@ type fixedConnections struct {
 
 func (f fixedConnections) Snapshots() []transport.HostConnectionSnapshot { return f.snapshots }
 
+// Test flow:
+//  1. Register a `TransportCollector` backed by a `fixedConnections` fake reporting one host's connection snapshot.
+//  2. Assert the open-connections gauge and the per-state connection gauges (active, idle, hold-after-close) report the snapshot's values.
 func TestTransportCollectorReportsOneSeriesPerConnectionState(t *testing.T) {
 	telemetry := New()
 	telemetry.Register(NewTransportCollector(fixedConnections{snapshots: []transport.HostConnectionSnapshot{

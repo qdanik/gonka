@@ -27,6 +27,9 @@ func openTestStore(t *testing.T) *Store {
 	return testStore
 }
 
+// Test flow:
+//  1. Open a store at a path whose parent directories do not yet exist.
+//  2. Assert `Open` succeeds and creates `gateway.db` under that path.
 func TestOpenCreatesDatabaseFileAndDirectory(t *testing.T) {
 	baseDir := filepath.Join(t.TempDir(), "nested", "storage")
 	testStore, err := Open(baseDir)
@@ -39,6 +42,10 @@ func TestOpenCreatesDatabaseFileAndDirectory(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Load overrides from a fresh store and assert they come back zero-valued.
+//  2. Save an override and load it back, asserting it matches.
+//  3. Save a second override and load again, asserting it replaces rather than appends to the first.
 func TestOverridesRoundTripAndEmptyLoad(t *testing.T) {
 	testStore := openTestStore(t)
 	ctx := context.Background()
@@ -64,7 +71,6 @@ func TestOverridesRoundTripAndEmptyLoad(t *testing.T) {
 		t.Fatalf("loaded overrides = %+v, want DefaultMaxTokens 1234", loaded)
 	}
 
-	// Second save replaces, not appends.
 	newTokens := int64(999)
 	if err := testStore.SaveOverrides(ctx, config.Overrides{DefaultMaxTokens: &newTokens}); err != nil {
 		t.Fatalf("second SaveOverrides(): %v", err)
@@ -78,6 +84,11 @@ func TestOverridesRoundTripAndEmptyLoad(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Upsert a `DevshardRecord` and assert `ListDevshards` returns exactly it.
+//  2. Deactivate it and mark it settlement-pending, and assert the listed record reflects both.
+//  3. Upsert the same escrow again with a different model and active state, and assert the upsert replaces the record's fields.
+//  4. Delete the escrow and assert `ListDevshards` returns nothing.
 func TestDevshardCRUDLifecycle(t *testing.T) {
 	testStore := openTestStore(t)
 	ctx := context.Background()
@@ -116,7 +127,6 @@ func TestDevshardCRUDLifecycle(t *testing.T) {
 		t.Fatalf("after updates got %+v, want inactive + settlement pending", listed[0])
 	}
 
-	// Upsert replaces fields for the same escrow.
 	record.Model = "model-b"
 	record.Active = false
 	if err := testStore.UpsertDevshard(ctx, record); err != nil {
@@ -136,8 +146,10 @@ func TestDevshardCRUDLifecycle(t *testing.T) {
 	}
 }
 
-// Re-importing a parked escrow builds the record with SettlementPending at its zero value. Clearing
-// the marker with it would strand the escrow: no traffic, never settled, no error.
+// Test flow:
+//  1. Upsert a devshard and mark it settlement-pending.
+//  2. Re-import (upsert again) the same escrow with a different model and active state, the way a re-import would build the record with `SettlementPending` at its zero value.
+//  3. Assert the settlement-pending flag survived the re-import while every other field was replaced.
 func TestUpsertDevshardKeepsAQueuedSettlementWhileReplacingEveryOtherField(t *testing.T) {
 	testStore := openTestStore(t)
 	ctx := context.Background()
@@ -172,6 +184,9 @@ func TestUpsertDevshardKeepsAQueuedSettlementWhileReplacingEveryOtherField(t *te
 	}
 }
 
+// Test flow:
+//  1. Call `SetDevshardActive`, `SetDevshardSettlementPending`, and `DeleteDevshard` on an escrow id that was never registered.
+//  2. Assert each returns `ErrDevshardNotFound`.
 func TestMissingDevshardReturnsSentinel(t *testing.T) {
 	testStore := openTestStore(t)
 	ctx := context.Background()
@@ -186,6 +201,10 @@ func TestMissingDevshardReturnsSentinel(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Open a store, upsert one devshard, and close it.
+//  2. Reopen the store from the same directory, re-running its migrations.
+//  3. Assert the devshard survived the restart.
 func TestOpenIsIdempotentAcrossRestarts(t *testing.T) {
 	baseDir := t.TempDir()
 	first, err := Open(baseDir)
@@ -200,7 +219,7 @@ func TestOpenIsIdempotentAcrossRestarts(t *testing.T) {
 		t.Fatalf("Close(): %v", err)
 	}
 
-	second, err := Open(baseDir) // migrations must be re-runnable
+	second, err := Open(baseDir)
 	if err != nil {
 		t.Fatalf("second Open(): %v", err)
 	}
@@ -214,7 +233,10 @@ func TestOpenIsIdempotentAcrossRestarts(t *testing.T) {
 	}
 }
 
-// The DDL below is devshardctl's own, reduced to the colliding tables; see operations.md.
+// Test flow:
+//  1. Seed a database file with devshardctl's own table names (`gateway_settings`, `gateway_devshards`, `gateway_rotation_status`) and one row.
+//  2. Open the store against that same file.
+//  3. Assert `Open` refuses it with `ErrLegacyDatabase`.
 func TestOpenRefusesADevshardctlDatabase(t *testing.T) {
 	dir := t.TempDir()
 
@@ -246,6 +268,11 @@ func TestOpenRefusesADevshardctlDatabase(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Seed a database file at schema version 1 with one legacy devshard row.
+//  2. Open the store against that file.
+//  3. Assert the v1 devshard survived the upgrade.
+//  4. Save and load a commitment through the upgraded store, asserting the v2 table works.
 func TestOpenUpgradesExistingV1Database(t *testing.T) {
 	dir := t.TempDir()
 	ctx := context.Background()
@@ -295,9 +322,10 @@ func TestOpenUpgradesExistingV1Database(t *testing.T) {
 	}
 }
 
-// Parking is one statement because a crash between two would leave the row inactive and not pending,
-// and no recovery path picks that up: settlement looks for pending rows, so the escrow would be out of
-// service and never settled.
+// Test flow:
+//  1. Upsert an active devshard.
+//  2. Park it for settlement via `ParkForSettlement`.
+//  3. Assert the listed record is both inactive and settlement-pending, set together as one statement so a crash between the two can never leave the escrow out of service and never settled.
 func TestParkingForSettlementSetsBothFieldsAtOnce(t *testing.T) {
 	gatewayStore := openTestStore(t)
 	ctx := context.Background()
@@ -324,6 +352,9 @@ func TestParkingForSettlementSetsBothFieldsAtOnce(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Call `ParkForSettlement` on an escrow id that was never registered.
+//  2. Assert it returns `ErrDevshardNotFound`.
 func TestParkingAnUnknownEscrowIsReported(t *testing.T) {
 	gatewayStore := openTestStore(t)
 
@@ -334,6 +365,10 @@ func TestParkingAnUnknownEscrowIsReported(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Upsert an active devshard.
+//  2. Call `ParkForSettlementIfActive`.
+//  3. Assert it reports that it parked the escrow, and the listed record is inactive and settlement-pending.
 func TestParkingIfActiveParksAServingEscrow(t *testing.T) {
 	gatewayStore := openTestStore(t)
 	ctx := context.Background()
@@ -361,6 +396,9 @@ func TestParkingIfActiveParksAServingEscrow(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Call `ParkForSettlementIfActive` on an escrow id that was never registered.
+//  2. Assert it returns no error and reports that nothing was parked.
 func TestParkingIfActiveReportsNoParkForAnUnknownEscrow(t *testing.T) {
 	gatewayStore := openTestStore(t)
 
@@ -371,6 +409,10 @@ func TestParkingIfActiveReportsNoParkForAnUnknownEscrow(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Upsert an inactive devshard.
+//  2. Call `ParkForSettlementIfActive`.
+//  3. Assert it reports no park happened and the record's settlement-pending flag stays clear.
 func TestParkingIfActiveLeavesAnEscrowAlreadyOutOfServiceUntouched(t *testing.T) {
 	gatewayStore := openTestStore(t)
 	ctx := context.Background()
@@ -398,9 +440,9 @@ func TestParkingIfActiveLeavesAnEscrowAlreadyOutOfServiceUntouched(t *testing.T)
 	}
 }
 
-// The pragmas are per-connection. Carried in the DSN they hold for every connection the pool opens;
-// applied as statements afterwards they hold only for the one connection that ran them, and a
-// recreated connection would come back with busy_timeout at 0 and synchronous back at FULL.
+// Test flow:
+//  1. Query the store's connection for `journal_mode`, `synchronous`, and `busy_timeout`.
+//  2. Assert each pragma reports the value the store carries in its DSN for every connection the pool opens, not one applied as a statement that a recreated connection would lose.
 func TestEveryConnectionCarriesThePragmas(t *testing.T) {
 	gatewayStore := openTestStore(t)
 
@@ -441,6 +483,10 @@ func servingDevshard(t *testing.T, gatewayStore *Store) {
 	}
 }
 
+// Test flow:
+//  1. Upsert an active, serving devshard.
+//  2. Call `PutOnHoldIfServing`.
+//  3. Assert it reports the hold succeeded, and the record stays active while now on hold and not settlement-pending.
 func TestPuttingAServingEscrowOnHoldKeepsItActive(t *testing.T) {
 	gatewayStore := openTestStore(t)
 	servingDevshard(t, gatewayStore)
@@ -456,6 +502,10 @@ func TestPuttingAServingEscrowOnHoldKeepsItActive(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Put a serving devshard on hold once.
+//  2. Call `PutOnHoldIfServing` again on the same escrow.
+//  3. Assert the second call reports no hold happened.
 func TestPuttingOnHoldMatchesOnce(t *testing.T) {
 	gatewayStore := openTestStore(t)
 	servingDevshard(t, gatewayStore)
@@ -470,6 +520,10 @@ func TestPuttingOnHoldMatchesOnce(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Upsert an inactive devshard.
+//  2. Call `PutOnHoldIfServing`.
+//  3. Assert it reports no hold happened.
 func TestAnInactiveEscrowCannotBePutOnHold(t *testing.T) {
 	gatewayStore := openTestStore(t)
 	if err := gatewayStore.UpsertDevshard(context.Background(), DevshardRecord{EscrowID: "7", Model: "qwen", Active: false}); err != nil {
@@ -483,6 +537,10 @@ func TestAnInactiveEscrowCannotBePutOnHold(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Call `ResumeFromHold` on a serving (not held) escrow and assert it reports nothing resumed.
+//  2. Put the escrow on hold, then call `ResumeFromHold` again.
+//  3. Assert it reports the resume succeeded and the record is active and off hold.
 func TestResumingMatchesOnlyAnActiveEscrowOnHold(t *testing.T) {
 	gatewayStore := openTestStore(t)
 	servingDevshard(t, gatewayStore)
@@ -505,6 +563,10 @@ func TestResumingMatchesOnlyAnActiveEscrowOnHold(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Put a serving devshard on hold, then deactivate it via `SetDevshardActive`.
+//  2. Call `ResumeFromHold`.
+//  3. Assert it reports nothing resumed, since an operator's deactivation must stick, and the record stays inactive with the hold cleared.
 func TestADeactivatedEscrowOnHoldCannotBeResumed(t *testing.T) {
 	gatewayStore := openTestStore(t)
 	servingDevshard(t, gatewayStore)
@@ -525,6 +587,10 @@ func TestADeactivatedEscrowOnHoldCannotBeResumed(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Table-driven: each case is one statement that takes an escrow out of service (`SetDevshardActive` to false, `ParkForSettlement`, `ParkForSettlementIfActive`).
+//  2. For each case, put a serving devshard on hold, then run the case's statement.
+//  3. Assert the resulting record's hold is cleared.
 func TestEveryStatementThatTakesAnEscrowOutOfServiceClearsTheHold(t *testing.T) {
 	takeOut := map[string]func(*Store) error{
 		"SetDevshardActive": func(gatewayStore *Store) error {
@@ -557,6 +623,10 @@ func TestEveryStatementThatTakesAnEscrowOutOfServiceClearsTheHold(t *testing.T) 
 	}
 }
 
+// Test flow:
+//  1. Put a serving devshard on hold.
+//  2. Reactivate it via `SetDevshardActive`.
+//  3. Assert the record is active and off hold.
 func TestActivatingAnEscrowOnHoldResumesIt(t *testing.T) {
 	gatewayStore := openTestStore(t)
 	servingDevshard(t, gatewayStore)
@@ -573,6 +643,10 @@ func TestActivatingAnEscrowOnHoldResumesIt(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Put a serving devshard on hold.
+//  2. Upsert the same escrow with `Active: false`.
+//  3. Assert the record is inactive and off hold.
 func TestAnUpsertThatDeactivatesClearsTheHold(t *testing.T) {
 	gatewayStore := openTestStore(t)
 	servingDevshard(t, gatewayStore)
@@ -589,6 +663,10 @@ func TestAnUpsertThatDeactivatesClearsTheHold(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Put a serving devshard on hold.
+//  2. Upsert the same escrow with `Active: true`.
+//  3. Assert the record is still on hold.
 func TestAnUpsertLeavesTheHoldAlone(t *testing.T) {
 	gatewayStore := openTestStore(t)
 	servingDevshard(t, gatewayStore)

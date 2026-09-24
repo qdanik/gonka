@@ -7,6 +7,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// Test flow:
+//  1. Build a race recorder via `newTestRaceRecorder`.
+//  2. Record two sweeps with different applied and failed counts via `RecordSweep`.
+//  3. Assert only the applied and failed outcomes are published, and their totals sum across the two sweeps.
 func TestSweepCountsWhatEachTickAppliedAndFailed(t *testing.T) {
 	recorder := newTestRaceRecorder(New())
 
@@ -18,6 +22,10 @@ func TestSweepCountsWhatEachTickAppliedAndFailed(t *testing.T) {
 	require.Equal(t, float64(2), testutil.ToFloat64(recorder.sweeps.WithLabelValues(sweepOutcomeFailed)))
 }
 
+// Test flow:
+//  1. Build a race recorder via `newTestRaceRecorder`.
+//  2. Record a sweep with zero due, applied, and failed.
+//  3. Assert nothing was published.
 func TestSweepWithNothingDueCountsNothing(t *testing.T) {
 	recorder := newTestRaceRecorder(New())
 

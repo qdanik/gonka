@@ -6,7 +6,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// A missing dependency used to be a panic on the first tick rather than a refusal at boot.
+// Test flow:
+//  1. Call NewManager with an empty Deps.
+//  2. Assert the returned error names the missing "Config" field.
 func TestNewManagerNamesTheDependencyItWasNotGiven(t *testing.T) {
 	_, err := NewManager(Deps{})
 

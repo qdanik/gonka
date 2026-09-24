@@ -8,9 +8,10 @@ import (
 
 const secondTestEscrow = "escrow-2"
 
-// TestEscrowsFromDifferentEpochsAreNotMerged pins the aggregation key. A rotation leaves escrows of
-// adjacent epochs live at once and one participant holds a slot in both; merging them would report
-// one epoch's work under the other's index.
+// Test flow:
+//  1. Open a second escrow one epoch ahead of the default and record a ghost on slot 0 of each escrow.
+//  2. Group ghost counts by epoch for the slot-0 participant.
+//  3. Assert each epoch shows exactly its own one ghost, not the two merged.
 func TestEscrowsFromDifferentEpochsAreNotMerged(t *testing.T) {
 	book := newTestBook(t, 2)
 	openTestEscrow(t, book, secondTestEscrow, testEpoch+1, 2)
@@ -35,9 +36,9 @@ func TestEscrowsFromDifferentEpochsAreNotMerged(t *testing.T) {
 	}
 }
 
-// A participant's counters are sized from the slot rows that fed them, before a single one is copied
-// in. Drift in that count still reports the right numbers -- it only rebuilds the slice several times
-// over -- so nothing but the capacity it came out with catches it.
+// Test flow:
+//  1. Build a `twoEpochBook` fixture and query its records.
+//  2. Assert every record's counters slice has capacity equal to its length, with no leftover pre-allocation.
 func TestACountersSliceIsSizedForExactlyWhatItHolds(t *testing.T) {
 	book := twoEpochBook(t)
 
@@ -49,9 +50,10 @@ func TestACountersSliceIsSizedForExactlyWhatItHolds(t *testing.T) {
 	}
 }
 
-// The rows come out ordered by compareCounterRecord, but nothing sorts the whole slice: the groups
-// arrive in escrow order and only the rows inside one group are put in order. A group that arrived out
-// of turn would reorder the report and break nothing else.
+// Test flow:
+//  1. Open a second escrow and record the same three-attempt race, with three distinct terminals, against both escrows.
+//  2. Assert each record holds at least two counters, enough for an order to be visible.
+//  3. Assert every record's counters are sorted by `compareCounterRecord`.
 func TestCountersComeOutOrderedByEscrowThenSlot(t *testing.T) {
 	book := newTestBook(t, 2)
 	openTestEscrow(t, book, secondTestEscrow, testEpoch, 2)
@@ -89,6 +91,10 @@ func twoEpochBook(t *testing.T) *Book {
 	return book
 }
 
+// Test flow:
+//  1. Build a `twoEpochBook` fixture and query it filtered to the default epoch.
+//  2. Assert every returned record's epoch matches the filter.
+//  3. Assert the filter returned at least one record.
 func TestQueryNarrowsToOneEpoch(t *testing.T) {
 	book := twoEpochBook(t)
 
@@ -104,6 +110,10 @@ func TestQueryNarrowsToOneEpoch(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a `twoEpochBook` fixture and query it filtered to the slot-1 participant.
+//  2. Assert every returned record's participant matches the filter.
+//  3. Assert exactly two records come back, one per epoch that participant holds a slot in.
 func TestQueryNarrowsToOneParticipant(t *testing.T) {
 	book := twoEpochBook(t)
 
@@ -119,8 +129,9 @@ func TestQueryNarrowsToOneParticipant(t *testing.T) {
 	}
 }
 
-// TestQueryWithoutFilterIsTheWholeLedger keeps the zero filter meaning "no constraint", which is what
-// lets every caller take one path into the ledger.
+// Test flow:
+//  1. Build a `twoEpochBook` fixture and query it with a zero-value filter.
+//  2. Assert 4 records come back: two participants in each of two epochs.
 func TestQueryWithoutFilterIsTheWholeLedger(t *testing.T) {
 	book := twoEpochBook(t)
 
@@ -129,6 +140,10 @@ func TestQueryWithoutFilterIsTheWholeLedger(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a `twoEpochBook` fixture and read its epoch summaries.
+//  2. Assert there are two summaries, ascending by epoch index.
+//  3. Assert the default epoch's summary covers both slot holders and sums its one recorded ghost.
 func TestEpochsSummariseEveryParticipantOfTheEpoch(t *testing.T) {
 	book := twoEpochBook(t)
 
@@ -149,8 +164,10 @@ func TestEpochsSummariseEveryParticipantOfTheEpoch(t *testing.T) {
 	}
 }
 
-// A participant holds the same slot id in several escrows at once, so a slot row that does not name
-// its escrow is unreadable: two rows differ only by numbers the reader cannot attribute.
+// Test flow:
+//  1. Open a second escrow with the same slot-0 participant as the default escrow.
+//  2. Query the slot-0 participant's record and read its slot rows.
+//  3. Assert there is exactly one slot row per escrow, each naming its own escrow id.
 func TestSlotRowsNameTheirEscrow(t *testing.T) {
 	book := newTestBook(t, 2)
 	openTestEscrow(t, book, secondTestEscrow, testEpoch, 2)
@@ -166,8 +183,9 @@ func TestSlotRowsNameTheirEscrow(t *testing.T) {
 	}
 }
 
-// The ledger's own honesty check has to be able to fire, or a gap in instrumentation reads as a clean
-// host. These are the fallbacks the engine and the scheduler emit when they cannot name a cause.
+// Test flow:
+//  1. For each table case of a counter key, call `namesNoReason`, covering an unnamed terminal, an unclassified attempt, a burn with no reason, an unreported race, a named burn, and an ordinary answer.
+//  2. Assert the result matches the case's expected boolean.
 func TestTheUnknownReasonCheckCatchesWhatNothingCouldName(t *testing.T) {
 	tests := []struct {
 		name string

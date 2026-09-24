@@ -20,7 +20,10 @@ func composedDiff() *types.Diff {
 	}}
 }
 
-// Only a copy of what the diff said crosses into the queue, in the order the diff said it.
+// Test flow:
+//  1. Build a `composedDiff` (two validations, an applied timeout, and one ignored transaction).
+//  2. Convert it to facts via `diffFacts`.
+//  3. Assert the returned facts match the expected sequence, in the diff's own order.
 func TestADiffIsReadIntoFactsInOrder(t *testing.T) {
 	require.Equal(t, []DiffFact{
 		{Kind: DiffFactValidation, Nonce: 4, ValidatorSlot: 1},
@@ -30,6 +33,11 @@ func TestADiffIsReadIntoFactsInOrder(t *testing.T) {
 	}, diffFacts(composedDiff()))
 }
 
+// Test flow:
+//  1. Build a journal with a `ledgerSpy` and a `composedDiff`.
+//  2. Record the diff via `DiffComposed`, then immediately clear the diff's `Txs`.
+//  3. Flush the journal.
+//  4. Assert the ledger spy received the facts as copies, unaffected by clearing `Txs`.
 func TestAComposedDiffReachesTheLedgerAsFacts(t *testing.T) {
 	ledger := &ledgerSpy{}
 	events := newJournal(t, Settings{Lines: &logcapture.Recorder{}, Ledger: ledger})
@@ -47,7 +55,10 @@ func TestAComposedDiffReachesTheLedgerAsFacts(t *testing.T) {
 	}, ledger.arrived())
 }
 
-// Almost every composed diff carries no verdict and no timeout; queueing it would cost the session lock for nothing.
+// Test flow:
+//  1. Build a journal with a `ledgerSpy`.
+//  2. Record a diff via `DiffComposed` that carries no ledger fact (only a `StartInference` transaction).
+//  3. Assert `events.accepted` stays zero under the session lock.
 func TestADiffWithNoLedgerFactQueuesNothing(t *testing.T) {
 	events := newJournal(t, Settings{Lines: &logcapture.Recorder{}, Ledger: &ledgerSpy{}})
 
@@ -58,6 +69,11 @@ func TestADiffWithNoLedgerFactQueuesNothing(t *testing.T) {
 	require.Zero(t, events.accepted, "a diff with no ledger fact must not take a queue slot under the session lock")
 }
 
+// Test flow:
+//  1. Build a journal with a `ledgerSpy`.
+//  2. Record a warmup probe attempt via `ProbeRecorded`.
+//  3. Flush the journal.
+//  4. Assert the ledger spy received the probe fact.
 func TestAWarmupProbeReachesTheLedger(t *testing.T) {
 	ledger := &ledgerSpy{}
 	events := newJournal(t, Settings{Lines: &logcapture.Recorder{}, Ledger: ledger})

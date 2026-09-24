@@ -24,8 +24,7 @@ type committedNonce struct {
 	params      any
 }
 
-// scriptedSession binds nonce N to slot N%len(slots), the same rule the real session uses, so a test
-// picks the host sequence by choosing the slot list.
+// scriptedSession binds nonce N to slot N%len(slots), the same rule the real session uses.
 type scriptedSession struct {
 	balance         uint64
 	mu              sync.Mutex
@@ -514,6 +513,11 @@ func wantNoReply(t *testing.T, queued *waiter) {
 	}
 }
 
+// Test flow:
+//  1. Build a default harness and submit a request.
+//  2. Await the reply and assert it lands on `hostB` at nonce 1.
+//  3. Assert the session advanced once, declined nothing, and committed the one real dispatch carrying the request's params.
+//  4. Assert no ghost burns were recorded.
 func TestDispatcherServesFirstUsableNonce(t *testing.T) {
 	test := newHarness(t, harnessConfig{})
 
@@ -534,6 +538,11 @@ func TestDispatcherServesFirstUsableNonce(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a default harness and submit a stale request excluding `hostB`.
+//  2. Await the reply and assert it lands on `hostA` at nonce 2.
+//  3. Assert the session committed a ghost on the first nonce, then a real dispatch on the second.
+//  4. Assert the one recorded burn is `ghostExclude`.
 func TestDispatcherBurnsUntilACompatibleHostIsBound(t *testing.T) {
 	test := newHarness(t, harnessConfig{})
 	stale := test.clock.Now().Add(-2 * matchWaitWindow)
@@ -552,6 +561,11 @@ func TestDispatcherBurnsUntilACompatibleHostIsBound(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a default harness and submit two waiters at the same time: one excluding `hostB`, one compatible with either host.
+//  2. Await both replies.
+//  3. Assert the compatible waiter lands on `hostB` at nonce 1 and the excluding one lands on `hostA` at nonce 2.
+//  4. Assert no ghost burns were recorded, since the excluded nonce was usable by the queued request.
 func TestDispatcherConservesNonceAcrossWaiters(t *testing.T) {
 	test := newHarness(t, harnessConfig{})
 	now := test.clock.Now()
@@ -568,7 +582,11 @@ func TestDispatcherConservesNonceAcrossWaiters(t *testing.T) {
 	}
 }
 
-// A host no participant can reach is a dead end, and answering it costs no nonce at all.
+// Test flow:
+//  1. Build a harness where every participant is ejected.
+//  2. Submit a request and await its reply.
+//  3. Assert the error is `ErrNoAvailableHost`.
+//  4. Assert the session advanced and committed nothing, so answering a dead end costs no nonce.
 func TestDispatcherSweepsAnUnreachableWaiterWithoutAdvancing(t *testing.T) {
 	test := newHarness(t, harnessConfig{ejected: func(string) bool { return true }})
 
@@ -588,9 +606,10 @@ func TestDispatcherSweepsAnUnreachableWaiterWithoutAdvancing(t *testing.T) {
 	}
 }
 
-// A host the request itself excluded is not a dead end. Sweeping the waiter out here fails the one
-// request the exclusion rescue exists for, which is why that rescue was unreachable from the day it
-// was written: the sweep judged the waiter one statement earlier, on the same ladder.
+// Test flow:
+//  1. Build a default harness and submit a stale request excluding both `hostA` and `hostB`.
+//  2. Await the reply.
+//  3. Assert there is no error and the assignment carries a nonce, since the request is served rather than swept out as unreachable.
 func TestAWaiterEveryHostExcludedIsServedRatherThanFailed(t *testing.T) {
 	test := newHarness(t, harnessConfig{})
 
@@ -606,7 +625,10 @@ func TestAWaiterEveryHostExcludedIsServedRatherThanFailed(t *testing.T) {
 	test.dispatcher.stop()
 }
 
-// Nonce 1 binds hostB; the request excluded both hosts and waited past the match wait, so hostB serves it anyway.
+// Test flow:
+//  1. Build a default harness and submit a stale request excluding both `hostA` and `hostB`.
+//  2. Await the reply and assert it lands on `hostB`, the host nonce 1 binds, at nonce 1.
+//  3. Assert the observer recorded `hostB` as an excluded serve.
 func TestAServeDespiteExclusionIsReported(t *testing.T) {
 	test := newHarness(t, harnessConfig{})
 
@@ -619,6 +641,9 @@ func TestAServeDespiteExclusionIsReported(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Submit a waiter excluding `hostB`, then submit a compatible co-arrival shortly after; assert the co-arrival is served on the held nonce and the excluding waiter on the next one, with one recorded hold and no burns.
+//  2. Submit a waiter excluding `hostB` alone, let its hold expire, and assert the expired hold burns the nonce before serving the waiter on the next one.
 func TestDispatcherHoldsNonceForCoArrivingWaiter(t *testing.T) {
 	t.Run("a compatible co-arrival is served on the held nonce", func(t *testing.T) {
 		test := newHarness(t, harnessConfig{})
@@ -662,6 +687,11 @@ func TestDispatcherHoldsNonceForCoArrivingWaiter(t *testing.T) {
 	})
 }
 
+// Test flow:
+//  1. Build a harness whose window-full predicate flips between calls, and submit a stale request.
+//  2. Await the reply.
+//  3. Assert there is no error, since a flipping predicate must not starve the waiter.
+//  4. Assert no burns and no burn-budget trips were recorded, since availability was frozen for the drain.
 func TestDispatcherFreezesAvailabilityWithinADrain(t *testing.T) {
 	var calls int
 	var mu sync.Mutex
@@ -689,6 +719,11 @@ func TestDispatcherFreezesAvailabilityWithinADrain(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Submit a waiter that is abandoned right after its nonce is decided, then submit and await a second request.
+//  2. Assert the second request lands on `hostA` at nonce 2, the abandoned waiter gets no reply, and the one recorded burn is `ghostAbandoned`, with the admitted slot given back.
+//  3. Submit a waiter whose reply buffer is already full, then submit and await a second request.
+//  4. Assert the second request lands the same way, with the same abandoned burn and slot accounting.
 func TestDispatcherReclassifiesALostAssignmentAsAGhost(t *testing.T) {
 	t.Run("a waiter abandoned after the commit", func(t *testing.T) {
 		var abandonOnce sync.Once
@@ -731,7 +766,9 @@ func TestDispatcherReclassifiesALostAssignmentAsAGhost(t *testing.T) {
 	})
 }
 
-// Two paths between admission and dispatch never reach a caller; each gives back the slot and hold it took.
+// Test flow:
+//  1. Build a harness whose session fails right after deciding, and submit a request; assert the caller's error is the session's own, and the admitted slot was given back with its escrow hold.
+//  2. Build a harness whose session swallows the commit, and submit a request; assert the caller gets a missing-nonce error and the admitted slot is given back.
 func TestDispatcherReleasesAnAdmissionThatNeverReachesACaller(t *testing.T) {
 	t.Run("the session fails after admitting the request", func(t *testing.T) {
 		sessionErr := errors.New("commit rejected")
@@ -761,7 +798,11 @@ func TestDispatcherReleasesAnAdmissionThatNeverReachesACaller(t *testing.T) {
 	})
 }
 
-// A burn's hold must come back if its commit fails, or a retired escrow never finishes draining.
+// Test flow:
+//  1. For each table case (admission refuses the bound host, the bound host owes proof of compute), build a harness whose commit fails after deciding, tracking escrow holds.
+//  2. Submit a request and await its reply.
+//  3. Assert the error is the failed commit's `types.ErrInsufficientBalance`.
+//  4. Assert no escrow holds are left outstanding, so the burn's own hold came back.
 func TestDispatcherGivesBackTheHoldOfABurnWhoseCommitFailed(t *testing.T) {
 	testCases := []struct {
 		name   string
@@ -793,8 +834,12 @@ func TestDispatcherGivesBackTheHoldOfABurnWhoseCommitFailed(t *testing.T) {
 	}
 }
 
-// A window that fills between the peek and the commit must cost one ghost, not one per turn: the
-// refusal is what tells the sweep to answer the rest of the queue.
+// Test flow:
+//  1. Build a harness with one host, refused at admission, and submit two requests before starting the dispatcher.
+//  2. Start the dispatcher and await both replies.
+//  3. Assert both fail with `ErrHostsBusy`.
+//  4. Assert exactly one ghost was committed for the bound nonce, and the recorded burn is `ghostWindowFull` naming that same nonce.
+//  5. Assert no slots are left held or admitted.
 func TestDispatcherGhostsOnceWhenAdmissionRefusesEveryHost(t *testing.T) {
 	test := newHarness(t, harnessConfig{slots: []string{hostA}, refused: []string{hostA}, holdStart: true})
 	first := test.submit(t, test.clock.Now())
@@ -816,14 +861,17 @@ func TestDispatcherGhostsOnceWhenAdmissionRefusesEveryHost(t *testing.T) {
 	if burns := test.observer.burns(); len(burns) != 1 || burns[0] != ghostWindowFull.reason() {
 		t.Fatalf("ghost burns = %v, want exactly one %q", burns, ghostWindowFull.reason())
 	}
-	// The burn leaves an inference record on chain that stays started forever, so the observer has to
-	// name the nonce: nothing downstream can tell it apart from work still running without the number.
 	if nonces := test.observer.burnedNonces(); len(nonces) != 1 || nonces[0] != commits[0].nonce {
 		t.Fatalf("burned nonces = %v, want the committed nonce %d", nonces, commits[0].nonce)
 	}
 	test.wantSlots(t, 0, 0)
 }
 
+// Test flow:
+//  1. Submit two abandoned waiters excluding `hostB`, then submit and await a live one.
+//  2. Assert the live waiter lands on `hostB` at nonce 1.
+//  3. Assert neither abandoned waiter gets a reply.
+//  4. Assert no hold timer was armed and no hold was recorded, since an abandoned queue never holds.
 func TestDispatcherNeverHoldsForAnAbandonedQueue(t *testing.T) {
 	test := newHarness(t, harnessConfig{})
 	now := test.clock.Now()
@@ -855,6 +903,9 @@ func TestDispatcherNeverHoldsForAnAbandonedQueue(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Submit two waiters before the dispatcher's loop ever runs, then stop it; assert both fail with `ErrDispatcherStopped` and a later submit reports `submitStopped`.
+//  2. Submit four waiters while the actor is busy behind a gate, close the gate, and stop the dispatcher; assert every waiter still received a reply.
 func TestDispatcherFailsBufferedWaitersOnStop(t *testing.T) {
 	t.Run("waiters submitted before the loop ever ran", func(t *testing.T) {
 		test := newHarness(t, harnessConfig{holdStart: true})
@@ -901,6 +952,11 @@ func TestDispatcherFailsBufferedWaitersOnStop(t *testing.T) {
 	})
 }
 
+// Test flow:
+//  1. Submit and await a request, served normally.
+//  2. Set the snapshot to report requests blocked, then submit and await another request.
+//  3. Assert the second reply fails with `ErrHostsBusy` from the refetched snapshot.
+//  4. Assert at least two snapshot fetches happened, one per drain.
 func TestDispatcherRefetchesTheSnapshotEachDrain(t *testing.T) {
 	test := newHarness(t, harnessConfig{})
 
@@ -920,8 +976,10 @@ func TestDispatcherRefetchesTheSnapshotEachDrain(t *testing.T) {
 	}
 }
 
-// A host that has answered "I do not implement tools" will answer the same way tomorrow, so telling
-// the caller to retry wastes their time and a nonce. Every other exhaustion is genuinely transient.
+// Test flow:
+//  1. Build a harness whose session fails with `types.ErrInsufficientBalance` and a balance below the retirement reserve, submit and await a request, then assert the escrow was reported exhausted.
+//  2. Build the same failure with a balance that still covers a capped answer, and assert no report, since it can still recover.
+//  3. Build an unrelated session failure and assert no report either, since only a genuine deposit exhaustion is reported.
 func TestDispatcherReportsASpentDepositForReplacement(t *testing.T) {
 	t.Run("an exhausted deposit is reported", func(t *testing.T) {
 		test := newHarness(t, harnessConfig{failWith: types.ErrInsufficientBalance, retirementReserve: 4_096, balance: 100})
@@ -955,6 +1013,10 @@ func TestDispatcherReportsASpentDepositForReplacement(t *testing.T) {
 	})
 }
 
+// Test flow:
+//  1. Build a harness whose session always fails advancing with a plain error.
+//  2. Submit a request and await its reply.
+//  3. Assert the error is the session's own.
 func TestDispatcherFailsWaitersWhenTheSessionErrors(t *testing.T) {
 	sessionErr := errors.New("session broken")
 	test := newHarness(t, harnessConfig{failWith: sessionErr})
@@ -967,8 +1029,9 @@ func TestDispatcherFailsWaitersWhenTheSessionErrors(t *testing.T) {
 	}
 }
 
-// Every drain that ends without holding a nonce must leave the queue empty: a waiter left behind has no
-// timer of its own, so its only wake-up would be a later arrival -- which is served ahead of it.
+// Test flow:
+//  1. Submit two waiters before starting a dispatcher whose advance fails after deciding, then start it; assert both fail with the depleted escrow's error and one slot stays admitted.
+//  2. Build a harness that swallows the commit, submit a stale request excluding `hostB`; assert it fails with `ErrNoAvailableHost` and one burn-budget trip is recorded.
 func TestDispatcherLeavesNoWaiterWithoutAWakeUp(t *testing.T) {
 	t.Run("an advance that failed on the chosen waiter answers the rest too", func(t *testing.T) {
 		test := newHarness(t, harnessConfig{failAfterDecide: types.ErrInsufficientBalance, holdStart: true})
@@ -999,7 +1062,11 @@ func TestDispatcherLeavesNoWaiterWithoutAWakeUp(t *testing.T) {
 	})
 }
 
-// The actor wakes on the next submit, so a queue it left behind is served after the request that woke it.
+// Test flow:
+//  1. Submit three waiters before starting a dispatcher whose advance fails after deciding, then start it.
+//  2. Assert every one of the three fails, the failed advance reported to each.
+//  3. Clear the failure and submit a later arrival.
+//  4. Assert the later arrival succeeds once the escrow advances again, served after the failed queue that woke it rather than ahead of it.
 func TestDispatcherServesNoLaterArrivalAheadOfAFailedQueue(t *testing.T) {
 	test := newHarness(t, harnessConfig{failAfterDecide: types.ErrInsufficientBalance, holdStart: true})
 	queued := []*waiter{
@@ -1021,6 +1088,11 @@ func TestDispatcherServesNoLaterArrivalAheadOfAFailedQueue(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Start an already-started dispatcher, submit a holding waiter, and wait for its hold timer to arm.
+//  2. Stop the dispatcher twice in a row.
+//  3. Assert the held waiter's reply is `ErrDispatcherStopped`.
+//  4. Start the dispatcher again and assert a fresh submit still reports `submitStopped`.
 func TestDispatcherLifecycleIsIdempotent(t *testing.T) {
 	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
 
@@ -1045,7 +1117,10 @@ func TestDispatcherLifecycleIsIdempotent(t *testing.T) {
 func (s *scriptedSession) Balance() uint64    { return s.balance }
 func (s *scriptedSession) TokenPrice() uint64 { return 1 }
 
-// freeze must not turn an omitted optional predicate into a panicking closure; match reads a missing one as no block.
+// Test flow:
+//  1. Freeze an availability that omits the optional `stateBlocked` and `unthrottled` predicates.
+//  2. Ask whether a participant is blocked.
+//  3. Assert the answer is `blockNone`, so the missing predicates read as no block rather than panicking.
 func TestFreezeLeavesAnOmittedOptionalPredicateMissing(t *testing.T) {
 	t.Parallel()
 	frozen := freeze(availability{
@@ -1059,7 +1134,10 @@ func TestFreezeLeavesAnOmittedOptionalPredicateMissing(t *testing.T) {
 	}
 }
 
-// Nonce 1 binds hostB, the host the request excluded, past the match wait: the drain burns it while serving request-7.
+// Test flow:
+//  1. Build a default harness and submit "request-7" stale, excluding `hostB`, the host nonce 1 binds.
+//  2. Await the reply and assert it lands on `hostA` at nonce 2.
+//  3. Assert the burn was recorded during "request-7", the drain that burned nonce 1.
 func TestABurnNamesTheRequestItsDrainWasServing(t *testing.T) {
 	test := newHarness(t, harnessConfig{})
 	stale := test.clock.Now().Add(-2 * matchWaitWindow)
@@ -1073,7 +1151,10 @@ func TestABurnNamesTheRequestItsDrainWasServing(t *testing.T) {
 	}
 }
 
-// The waiter leaves after its nonce is committed, so the burn is charged to the request that left, not to the one served next.
+// Test flow:
+//  1. Submit "request-lost", abandoned right after its nonce is decided, then submit and await "request-next".
+//  2. Assert "request-next" lands on `hostA` at nonce 2.
+//  3. Assert the burn was recorded during "request-lost", the request that left, not the one served next.
 func TestAnAbandonedAssignmentNamesTheRequestThatLeft(t *testing.T) {
 	var abandonOnce sync.Once
 	var lost *waiter
@@ -1093,7 +1174,10 @@ func TestAnAbandonedAssignmentNamesTheRequestThatLeft(t *testing.T) {
 	}
 }
 
-// request-first excluded hostB, so nonce 1 was meant for request-second until admission refused the slot; nonce 3 finds hostB throttled with request-second the oldest waiter left.
+// Test flow:
+//  1. Submit "request-first" excluding `hostB` and "request-second" compatible, before starting a dispatcher where `hostB` is refused at admission.
+//  2. Start the dispatcher and await both replies, landing on `hostA` at nonces 2 and 4.
+//  3. Assert both recorded burns name "request-second", the oldest waiter left when each slot meant for it was throttled.
 func TestAThrottledBurnNamesTheRequestItsSlotWasMeantFor(t *testing.T) {
 	test := newHarness(t, harnessConfig{refused: []string{hostB}, holdStart: true})
 	first := test.submitAs(t, "request-first", test.clock.Now(), hostB)
@@ -1109,7 +1193,11 @@ func TestAThrottledBurnNamesTheRequestItsSlotWasMeantFor(t *testing.T) {
 	}
 }
 
-// head is abandoned mid-decide, before its own burn is named: the drain must skip it for the oldest live waiter, never the newest.
+// Test flow:
+//  1. Submit "request-head" excluding `hostB`, abandoned mid-decide, then submit "request-middle" and "request-tail" also excluding `hostB`, all stale, before starting the dispatcher.
+//  2. Start the dispatcher and await "request-middle" and "request-tail", landing on `hostA` at nonces 2 and 4.
+//  3. Assert "request-head" never gets a reply.
+//  4. Assert the recorded burns name "request-middle" then "request-tail", the oldest live waiter each time, skipping the abandoned head.
 func TestABurnSkipsAnAbandonedWaiterAndNamesTheOldestLiveOne(t *testing.T) {
 	var abandonOnce sync.Once
 	var head *waiter

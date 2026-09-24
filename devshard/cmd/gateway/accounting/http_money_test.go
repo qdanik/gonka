@@ -8,6 +8,12 @@ import (
 	"devshard/types"
 )
 
+// Test flow:
+//  1. Open two escrows for the same host address on two different models, each observing host stats, an inference record and a race attempt.
+//  2. Request the current-epoch participants route.
+//  3. Assert the response status is 200 and decode it.
+//  4. Assert the host appears as two separate rows, one per model.
+//  5. Assert each row's chain, reserved, actual and refunded costs and input/output tokens match what was observed.
 func TestParticipantsEndpointReturnsCostPerParticipantAndModel(t *testing.T) {
 	t.Parallel()
 	book := NewBook(nil)
@@ -105,7 +111,11 @@ func TestParticipantsEndpointReturnsCostPerParticipantAndModel(t *testing.T) {
 	}
 }
 
-// The keys a tracker outside this repository reads, pinned on the slot row and the host row above it.
+// Test flow:
+//  1. Open an escrow with one slot and observe an inference record carrying input length, max tokens and token counts.
+//  2. Request the current-epoch participants route and decode the response.
+//  3. Assert one host row holding one slot comes back.
+//  4. Assert both the host row and its slot carry the same estimated-input and max-tokens values under the keys an outside tracker reads.
 func TestParticipantsEndpointServesWhatTheHostWasGiven(t *testing.T) {
 	t.Parallel()
 	book := NewBook(nil)

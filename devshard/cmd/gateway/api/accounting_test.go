@@ -55,6 +55,10 @@ func completedRace() engine.RaceOutcome {
 	}
 }
 
+// Test flow:
+//  1. Record a completed, two-attempt race outcome through `NewRaceLedger`.
+//  2. Read back the single row the accounting store recorded.
+//  3. Assert every field matches the outcome's own numbers: settled outcome, winner nonce/participant/host, attempt count, token counts, and timing.
 func TestACompletedRaceIsAccountedWithTheOutcomesOwnNumbers(t *testing.T) {
 	live := newHarness(t)
 
@@ -89,6 +93,10 @@ func TestACompletedRaceIsAccountedWithTheOutcomesOwnNumbers(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Define a table of race outcomes, varying across a race where every attempt failed with an exhausted balance, and a race for which no escrow was ever picked.
+//  2. For each case, record the outcome through `NewRaceLedger`.
+//  3. Assert the recorded row matches the case's expected record, with `RequestFailed` or `RequestNoEscrow` outcomes respectively.
 func TestAFailedRaceAndARaceWithoutAnEscrowAreBothAccounted(t *testing.T) {
 	testCases := []struct {
 		name     string
@@ -146,6 +154,10 @@ func TestAFailedRaceAndARaceWithoutAnEscrowAreBothAccounted(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Record a completed race.
+//  2. GET its request accounting by ID as an admin.
+//  3. Assert the response is 200 and decodes to the expected `requestAccountingResponse`, with timestamps rendered as RFC3339 strings.
 func TestTheLookupReturnsTheRecordedRow(t *testing.T) {
 	live := newHarness(t)
 	NewRaceLedger(live.accounting).RecordRequest(completedRace())
@@ -184,6 +196,11 @@ func TestTheLookupReturnsTheRecordedRow(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Record a completed race.
+//  2. Define a table of lookup requests, varying across an unknown ID, a blank ID, the wrong HTTP method, a missing admin key, and a store lookup failure.
+//  3. For each case, send the request.
+//  4. Assert the response status matches the case's documented expectation (404, 400, 405, 401, or 500 respectively).
 func TestTheLookupAnswersItsDocumentedStatuses(t *testing.T) {
 	testCases := []struct {
 		name     string
@@ -214,6 +231,10 @@ func TestTheLookupAnswersItsDocumentedStatuses(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Record a completed race, then disable the gateway's modes.
+//  2. GET the request accounting by ID as an admin.
+//  3. Assert the response is still 200, so the lookup route stays available while the gateway itself is disabled.
 func TestTheLookupStaysAvailableWhileTheGatewayIsDisabled(t *testing.T) {
 	live := newHarness(t)
 	NewRaceLedger(live.accounting).RecordRequest(completedRace())
@@ -226,8 +247,7 @@ func TestTheLookupStaysAvailableWhileTheGatewayIsDisabled(t *testing.T) {
 	}
 }
 
-// wedgedLedger is a real ledger over a real database whose write lock is held by another connection,
-// so every insert it attempts sits in busy_timeout for the whole test.
+// wedgedLedger is a real ledger over a real database whose write lock another connection holds for the whole test.
 func wedgedLedger(t *testing.T) (*store.Ledger, func()) {
 	t.Helper()
 	storageDir := t.TempDir()
@@ -261,6 +281,12 @@ func wedgedLedger(t *testing.T) (*store.Ledger, func()) {
 	return ledger, release
 }
 
+// Test flow:
+//  1. Build a `wedgedLedger` whose write lock another connection holds, and wire it as the inference outcome's ledger.
+//  2. Send a chat completion on its own goroutine while the ledger stays wedged.
+//  3. Assert the response returns within 3 seconds, shorter than the store's busy_timeout, with 200 and the expected body.
+//  4. Assert nothing was written to the ledger while the lock was held.
+//  5. Release the wedge, close the ledger, and assert the stalled row eventually lands.
 func TestASlowLedgerNeitherDelaysNorFailsTheClientsResponse(t *testing.T) {
 	live := newHarness(t)
 	ledger, releaseTheWedge := wedgedLedger(t)
@@ -281,7 +307,6 @@ func TestASlowLedgerNeitherDelaysNorFailsTheClientsResponse(t *testing.T) {
 		if response.body != live.inference.reply {
 			t.Fatalf("body = %q, want %q", response.body, live.inference.reply)
 		}
-	// Shorter than the store's busy_timeout, so a write that ran on this goroutine would miss it.
 	case <-time.After(3 * time.Second):
 		t.Fatal("the client's response was held behind the wedged ledger write")
 	}

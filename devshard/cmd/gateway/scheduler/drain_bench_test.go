@@ -10,9 +10,6 @@ import (
 	"devshard/cmd/gateway/limits"
 )
 
-// The fakes in dispatcher_test.go record every call under a mutex, which a benchmark would measure
-// instead of the drain. These record nothing and lock nothing.
-
 const benchModel = "model-bench"
 
 var benchNow = time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
@@ -167,8 +164,7 @@ func BenchmarkDrainServe(b *testing.B) {
 	}
 }
 
-// BenchmarkDrainThrottledBurn walks a group whose slots all refuse admission: every binding burns,
-// and each refusal folds back into the drain's frozen throttled predicate.
+// BenchmarkDrainThrottledBurn walks a group whose slots all refuse admission.
 func BenchmarkDrainThrottledBurn(b *testing.B) {
 	hosts := 16
 	refused := make([]string, 0, hosts)
@@ -183,8 +179,7 @@ func BenchmarkDrainThrottledBurn(b *testing.B) {
 	}
 }
 
-// BenchmarkDrainSweepDrop is the outage shape: no host can serve, so the sweep answers the whole
-// queue without touching a nonce.
+// BenchmarkDrainSweepDrop is the outage shape, where no host can serve.
 func BenchmarkDrainSweepDrop(b *testing.B) {
 	hosts := 16
 	ejected := make([]string, 0, hosts)
@@ -203,8 +198,7 @@ func BenchmarkDrainSweepDrop(b *testing.B) {
 	}
 }
 
-// BenchmarkDrainHold is the wake-up that decides nothing: the queue excludes the bound host and the
-// hold window is still open, so the drain pays its fixed cost and returns.
+// BenchmarkDrainHold is the wake-up that decides nothing.
 func BenchmarkDrainHold(b *testing.B) {
 	bench := newDrainBench(drainBenchConfig{hosts: 16, waiters: 4, excluded: []string{benchParticipant(1)}})
 	b.ReportAllocs()
@@ -216,8 +210,7 @@ func BenchmarkDrainHold(b *testing.B) {
 	}
 }
 
-// BenchmarkFreezePredicates is the drain's fixed cost: one snapshot, the per-drain predicate build,
-// and the memo tables the freeze puts in front of them.
+// BenchmarkFreezePredicates times the drain's fixed cost.
 func BenchmarkFreezePredicates(b *testing.B) {
 	bench := newDrainBench(drainBenchConfig{hosts: 16, waiters: 1})
 	target := bench.dispatcher

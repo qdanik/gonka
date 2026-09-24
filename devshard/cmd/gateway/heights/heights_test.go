@@ -13,8 +13,9 @@ type cadenceSpy struct{ started int }
 
 func (s *cadenceSpy) StartHeartbeatLoop() { s.started++ }
 
-// A quiet escrow syncs only because the user side opens a heartbeat turn; nothing else can. The
-// cadence is started per session, once.
+// Test flow:
+//  1. Call StartCadence with a cadence spy and height sync enabled.
+//  2. Assert the cadence started exactly once.
 func TestAHeightSyncingSessionOpensItsOwnCadence(t *testing.T) {
 	cadence := &cadenceSpy{}
 
@@ -25,8 +26,9 @@ func TestAHeightSyncingSessionOpensItsOwnCadence(t *testing.T) {
 	}
 }
 
-// Height sync is opt-in across the fleet. A gateway whose hosts do not carry it would log a skipped
-// heartbeat every interval and stamp nothing, so the cadence stays absent rather than idling.
+// Test flow:
+//  1. Call StartCadence with a cadence spy and an empty (disabled) height sync config.
+//  2. Assert the cadence never started.
 func TestAGatewayWithoutHeightSyncOpensNoCadence(t *testing.T) {
 	cadence := &cadenceSpy{}
 
@@ -37,9 +39,12 @@ func TestAGatewayWithoutHeightSyncOpensNoCadence(t *testing.T) {
 	}
 }
 
-// The gateway stamps its own anchors from what the hosts told it, so the scheduler has to read the
-// very cache the clients write into. A scheduler over a second, empty cache would stamp nothing and
-// the fault would show only as a quiet escrow that never syncs.
+// Test flow:
+//  1. Build a courier with height sync enabled.
+//  2. Assert the courier is non-nil and carries a peer-tip cache.
+//  3. Record a signed origin tip with a blob into that cache.
+//  4. Ask the courier's scheduler to decide an anchor.
+//  5. Assert it decides without an oracle miss and returns the recorded height.
 func TestTheCourierStampsFromTheCacheItsClientsFill(t *testing.T) {
 	courier := BuildCourier(config.HeightSync{Enabled: true}, nil)
 
@@ -69,15 +74,20 @@ func TestTheCourierStampsFromTheCacheItsClientsFill(t *testing.T) {
 	}
 }
 
-// Height sync is opt-in: a gateway without it dials as it always did, carrying no envelope.
+// Test flow:
+//  1. Call BuildCourier with an empty (disabled) height sync config.
+//  2. Assert it returns nil.
 func TestAGatewayWithoutHeightSyncCarriesNoCourier(t *testing.T) {
 	if courier := BuildCourier(config.HeightSync{}, nil); courier != nil {
 		t.Fatalf("BuildCourier() = %+v, want nothing", courier)
 	}
 }
 
-// A height nobody signed is a height anybody could have claimed. The cache holds it and refuses to
-// serve it, so the gateway never carries an unattributable tip into the log.
+// Test flow:
+//  1. Build a courier with height sync enabled.
+//  2. Record an unsigned origin tip into its peer-tip cache.
+//  3. Ask the courier's scheduler to decide an anchor.
+//  4. Assert it reports an oracle miss and returns no section.
 func TestAnUnsignedTipIsNeverStamped(t *testing.T) {
 	courier := BuildCourier(config.HeightSync{Enabled: true}, nil)
 	courier.HeightSyncPeerTips.RecordOrigin(&heightsync.HeightSyncSection{

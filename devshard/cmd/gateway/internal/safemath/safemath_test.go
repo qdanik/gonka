@@ -5,6 +5,10 @@ import (
 	"testing"
 )
 
+// Test flow:
+//  1. Build a table of int64 pairs varying ordinary sums, values at or past the int64 ceiling and floor, and operands whose sum would cross both bounds.
+//  2. Call AddSaturating for each pair.
+//  3. Assert the result matches the case's expected saturated sum.
 func TestAddSaturatingStopsAtTheBound(t *testing.T) {
 	t.Parallel()
 
@@ -33,6 +37,10 @@ func TestAddSaturatingStopsAtTheBound(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a table of int64 pairs varying ordinary products, multiplication by zero, values at or past the int64 ceiling and floor, and sign combinations that would overflow across a bound.
+//  2. Call MulSaturating for each pair.
+//  3. Assert the result matches the case's expected saturated product.
 func TestMulSaturatingStopsAtTheBound(t *testing.T) {
 	t.Parallel()
 
@@ -63,8 +71,11 @@ func TestMulSaturatingStopsAtTheBound(t *testing.T) {
 	}
 }
 
-// The helper exists so a quantity the gateway does not choose cannot wrap a counter, so the property has to
-// hold for every pair, not only the ones a table names.
+// Test flow:
+//  1. Build a set of interesting int64 values spanning the extremes, small magnitudes, and both signs.
+//  2. Compute AddSaturating and MulSaturating over every pair drawn from that set.
+//  3. Assert a sum of two same-signed values never lands on the other side of either operand.
+//  4. Assert a product of two nonzero values has a positive sign only when the operands share a sign, and a negative sign only when they differ.
 func TestSaturatingArithmeticNeverWraps(t *testing.T) {
 	t.Parallel()
 

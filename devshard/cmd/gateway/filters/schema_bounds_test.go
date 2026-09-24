@@ -52,6 +52,10 @@ func generousBounds() SchemaBounds {
 	return SchemaBounds{MaxDepth: 100, MaxNodes: 100, MaxSizeBytes: 1 << 20, MaxBranch: 100, MaxEnum: 100, MaxPatternLen: 100}
 }
 
+// Test flow:
+//  1. Check a `properties` chain and a `not`-keyword chain each at the depth limit, then one level over.
+//  2. Check an `if`-keyword chain one level over the limit too, to confirm the walker isn't special-casing `not`.
+//  3. Assert the at-limit chains pass and the over-limit chains fail with the nesting-depth error.
 func TestSchemaBoundsCheckDepth(t *testing.T) {
 	bounds := generousBounds()
 	bounds.MaxDepth = 4
@@ -80,7 +84,6 @@ func TestSchemaBoundsCheckDepth(t *testing.T) {
 		}
 	})
 	t.Run("keyword chain (if) one over limit rejected", func(t *testing.T) {
-		// A second, distinct keyword proves the walker isn't special-casing "not" alone.
 		err := bounds.Check(nestedKeywordSchema("if", 5))
 		if err == nil || err.Error() != wantErr {
 			t.Fatalf("Check() = %v, want %q", err, wantErr)
@@ -88,17 +91,21 @@ func TestSchemaBoundsCheckDepth(t *testing.T) {
 	})
 }
 
+// Test flow:
+//  1. Check a schema with node count exactly at the limit (1 root + 4 properties = 5).
+//  2. Check a schema one node over the limit (1 root + 5 properties = 6).
+//  3. Assert the at-limit schema passes and the over-limit schema fails with the node-count error.
 func TestSchemaBoundsCheckNodes(t *testing.T) {
 	bounds := generousBounds()
 	bounds.MaxNodes = 5
 
 	t.Run("at limit accepted", func(t *testing.T) {
-		if err := bounds.Check(manyPropertiesSchema(4)); err != nil { // 1 root + 4 children = 5
+		if err := bounds.Check(manyPropertiesSchema(4)); err != nil {
 			t.Fatalf("Check() = %v, want nil", err)
 		}
 	})
 	t.Run("one over limit rejected", func(t *testing.T) {
-		err := bounds.Check(manyPropertiesSchema(5)) // 1 root + 5 children = 6
+		err := bounds.Check(manyPropertiesSchema(5))
 		want := "node count exceeded: limit 5"
 		if err == nil || err.Error() != want {
 			t.Fatalf("Check() = %v, want %q", err, want)
@@ -106,6 +113,10 @@ func TestSchemaBoundsCheckNodes(t *testing.T) {
 	})
 }
 
+// Test flow:
+//  1. Compute the marshaled size of a fixed schema.
+//  2. Check the schema with MaxSizeBytes set exactly to that size, one byte under it, and zero.
+//  3. Assert the exact-size case passes, the one-byte-under case fails with the serialized-size error, and zero disables the check.
 func TestSchemaBoundsCheckSize(t *testing.T) {
 	schema := map[string]any{"type": "string", "description": "abcdef"}
 	size, err := jsonMarshaledSize(schema)
@@ -139,6 +150,10 @@ func TestSchemaBoundsCheckSize(t *testing.T) {
 	})
 }
 
+// Test flow:
+//  1. For each branch keyword (`anyOf`, `oneOf`, `allOf`), build a schema with three arms.
+//  2. Check it with MaxBranch at 3, then at 2.
+//  3. Assert the at-limit case passes and the over-limit case fails with the branch-arms error naming the keyword.
 func TestSchemaBoundsCheckBranch(t *testing.T) {
 	for _, branchKey := range []string{"anyOf", "oneOf", "allOf"} {
 		t.Run(branchKey, func(t *testing.T) {
@@ -161,6 +176,9 @@ func TestSchemaBoundsCheckBranch(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Check an enum with 3 values against MaxEnum=3, then a 4-value enum.
+//  2. Assert the at-limit enum passes and the over-limit enum fails with the enum-size error.
 func TestSchemaBoundsCheckEnum(t *testing.T) {
 	bounds := generousBounds()
 	bounds.MaxEnum = 3
@@ -178,6 +196,9 @@ func TestSchemaBoundsCheckEnum(t *testing.T) {
 	})
 }
 
+// Test flow:
+//  1. Run table cases placing `$ref`, `$defs`, and `definitions` at the schema's top level and hidden under a `not` or a `properties` value.
+//  2. Assert every case is rejected with the forbidden-reference-keyword error naming the keyword.
 func TestSchemaBoundsCheckForbiddenRef(t *testing.T) {
 	bounds := generousBounds()
 	tests := []struct {
@@ -201,6 +222,11 @@ func TestSchemaBoundsCheckForbiddenRef(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Run accept-table cases: a primitive string type, an array of primitive types, and an absent type.
+//  2. Assert each accept case passes.
+//  3. Run reject-table cases: an unknown type string, an unknown type inside an array, a non-string array element, a non-string non-array type, and a bad type nested under `properties`.
+//  4. Assert each reject case fails with the matching type error.
 func TestSchemaBoundsCheckType(t *testing.T) {
 	bounds := generousBounds()
 	acceptTests := []struct {
@@ -240,6 +266,12 @@ func TestSchemaBoundsCheckType(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Check a compiling pattern and a non-compiling pattern.
+//  2. Check a pattern exactly at the length cap and one character over it.
+//  3. Check a non-string pattern value.
+//  4. Check a non-compiling pattern again with MaxPatternLen set to zero.
+//  5. Assert each pass/fail outcome matches, including that zero MaxPatternLen disables the pattern check entirely, even for a non-compiling pattern.
 func TestSchemaBoundsCheckPattern(t *testing.T) {
 	bounds := generousBounds()
 	bounds.MaxPatternLen = 16
@@ -284,8 +316,11 @@ func TestSchemaBoundsCheckPattern(t *testing.T) {
 	})
 }
 
+// Test flow:
+//  1. Set MaxDepth to 1, a limit that would reject any nested schema if walked as one.
+//  2. For each data key (`enum`, `const`, `default`, `examples`, `required`, `dependentRequired`), build a schema holding a `$ref`-bearing object inside that key.
+//  3. Assert every case passes, showing data keys are treated as opaque values rather than nested schemas.
 func TestSchemaBoundsCheckDataKeysNotWalked(t *testing.T) {
-	// MaxDepth=1 would reject any nested schema; a $ref hidden inside a data key must survive.
 	bounds := generousBounds()
 	bounds.MaxDepth = 1
 	for _, key := range []string{"enum", "const", "default", "examples", "required", "dependentRequired"} {
@@ -298,6 +333,9 @@ func TestSchemaBoundsCheckDataKeysNotWalked(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. For each child-map keyword (`properties`, `patternProperties`, `dependentSchemas`), build a schema whose entry holds a `$ref`.
+//  2. Assert every case is rejected with the forbidden-reference error, showing the walker does descend into these keywords' values.
 func TestSchemaBoundsCheckChildMapKeysWalkValues(t *testing.T) {
 	bounds := generousBounds()
 	for _, key := range []string{"properties", "patternProperties", "dependentSchemas"} {
@@ -312,6 +350,9 @@ func TestSchemaBoundsCheckChildMapKeysWalkValues(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Check a plain object nested exactly to the depth limit, then one level deeper.
+//  2. Assert the at-limit object passes and the over-limit object fails with the nesting-depth error.
 func TestObjectBoundsCheckDepth(t *testing.T) {
 	bounds := ObjectBounds{MaxDepth: 3, MaxNodes: 100, MaxSizeBytes: 1 << 20}
 	if err := bounds.Check(nestedObjectMap(3)); err != nil {
@@ -324,18 +365,26 @@ func TestObjectBoundsCheckDepth(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Check a flat object with node count exactly at the limit (1 root + 2 entries = 3).
+//  2. Check a flat object one node over the limit (1 root + 3 entries = 4).
+//  3. Assert the at-limit object passes and the over-limit object fails with the node-count error.
 func TestObjectBoundsCheckNodes(t *testing.T) {
 	bounds := ObjectBounds{MaxDepth: 100, MaxNodes: 3, MaxSizeBytes: 1 << 20}
-	if err := bounds.Check(flatObjectMap(2)); err != nil { // 1 root + 2 children = 3
+	if err := bounds.Check(flatObjectMap(2)); err != nil {
 		t.Fatalf("Check() at limit = %v, want nil", err)
 	}
-	err := bounds.Check(flatObjectMap(3)) // 1 root + 3 children = 4
+	err := bounds.Check(flatObjectMap(3))
 	want := "node count exceeded: limit 3"
 	if err == nil || err.Error() != want {
 		t.Fatalf("Check() over limit = %v, want %q", err, want)
 	}
 }
 
+// Test flow:
+//  1. Compute the marshaled size of a fixed object.
+//  2. Check the object with MaxSizeBytes set exactly to that size, then one byte under it.
+//  3. Assert the exact-size case passes and the one-byte-under case fails with the serialized-size error.
 func TestObjectBoundsCheckSize(t *testing.T) {
 	obj := map[string]any{"thinking": true, "note": "abcdef"}
 	size, err := jsonMarshaledSize(obj)
@@ -354,8 +403,10 @@ func TestObjectBoundsCheckSize(t *testing.T) {
 	}
 }
 
-// Guards against a future SchemaBounds/ObjectBounds merge silently adding schema
-// rejections ($ref/type/pattern/enum) to chat_template_kwargs.
+// Test flow:
+//  1. Build a plain object whose keys look like schema keywords (`$ref`, `type`, `pattern`, `enum`) with values that would fail schema validation.
+//  2. Check it against ObjectBounds.
+//  3. Assert it passes, guarding against a future SchemaBounds/ObjectBounds merge silently adding schema rejections to plain objects like chat_template_kwargs.
 func TestObjectBoundsCheckHasNoSchemaSemantics(t *testing.T) {
 	bounds := ObjectBounds{MaxDepth: 10, MaxNodes: 10, MaxSizeBytes: 1 << 20}
 	obj := map[string]any{

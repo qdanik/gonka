@@ -49,6 +49,11 @@ func newVersionsStub(t *testing.T, status int, body string) *httptest.Server {
 	return server
 }
 
+// Test flow:
+//  1. Start a versions stub reporting one PoC-validation-capable node and a fake clock at time zero.
+//  2. Create a VersionsCache with a one-minute TTL against the stub and register the candidate miner.
+//  3. Poll the cache.
+//  4. Assert the node reads as validation-capable within the TTL.
 func TestVersionsCache_PollSucceeds_NodeCapableWithinTTL(t *testing.T) {
 	server := newVersionsStub(t, http.StatusOK, `{"mlnodes":[{"node_id":"node-1","poc_validation_inference":true}]}`)
 	clock := newFakeClock(time.Unix(0, 0))
@@ -62,6 +67,9 @@ func TestVersionsCache_PollSucceeds_NodeCapableWithinTTL(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Create a VersionsCache with a fake clock and no registered candidates.
+//  2. Assert IsNodeValidationCapable for a miner that was never polled returns false (fails closed).
 func TestVersionsCache_UnknownMiner_FailsClosed(t *testing.T) {
 	clock := newFakeClock(time.Unix(0, 0))
 	cache := NewVersionsCache(http.DefaultClient, time.Minute, clock.Now)
@@ -71,6 +79,11 @@ func TestVersionsCache_UnknownMiner_FailsClosed(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Start a versions stub returning HTTP 500 and a fake clock at time zero.
+//  2. Create a VersionsCache against the stub and register the candidate miner.
+//  3. Poll the cache.
+//  4. Assert the node reads as not validation-capable (fails closed) after the failed poll.
 func TestVersionsCache_ServerError_FailsClosed(t *testing.T) {
 	server := newVersionsStub(t, http.StatusInternalServerError, "")
 	clock := newFakeClock(time.Unix(0, 0))
@@ -84,6 +97,11 @@ func TestVersionsCache_ServerError_FailsClosed(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Start a versions stub reporting one node with poc_validation_inference=false, and a fake clock.
+//  2. Create a VersionsCache against the stub and register the candidate miner.
+//  3. Poll the cache.
+//  4. Assert the node reads as not validation-capable.
 func TestVersionsCache_NodeExplicitlyIncapable_ReturnsFalse(t *testing.T) {
 	server := newVersionsStub(t, http.StatusOK, `{"mlnodes":[{"node_id":"node-1","poc_validation_inference":false}]}`)
 	clock := newFakeClock(time.Unix(0, 0))
@@ -97,6 +115,12 @@ func TestVersionsCache_NodeExplicitlyIncapable_ReturnsFalse(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Start a versions stub reporting one capable node and a fake clock at time zero.
+//  2. Create a VersionsCache with a one-minute TTL, register the candidate miner, and poll.
+//  3. Assert the node is capable before the TTL elapses (precondition).
+//  4. Advance the clock past the TTL.
+//  5. Assert the node now reads as not validation-capable (fails closed).
 func TestVersionsCache_EntryOlderThanTTL_FailsClosed(t *testing.T) {
 	server := newVersionsStub(t, http.StatusOK, `{"mlnodes":[{"node_id":"node-1","poc_validation_inference":true}]}`)
 	clock := newFakeClock(time.Unix(0, 0))
@@ -114,6 +138,11 @@ func TestVersionsCache_EntryOlderThanTTL_FailsClosed(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Start a versions stub reporting one capable node and a fake clock, register the candidate miner, and poll.
+//  2. Assert the node is capable before its miner is removed (precondition).
+//  3. Call SetCandidates again without that miner.
+//  4. Assert the node now reads as not validation-capable even though its cached entry is still fresh.
 func TestVersionsCache_SetCandidates_DropsRemovedMiner(t *testing.T) {
 	server := newVersionsStub(t, http.StatusOK, `{"mlnodes":[{"node_id":"node-1","poc_validation_inference":true}]}`)
 	clock := newFakeClock(time.Unix(0, 0))
@@ -131,10 +160,12 @@ func TestVersionsCache_SetCandidates_DropsRemovedMiner(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Register a leak check deferred first so it runs last, after the server and its client connections are closed.
+//  2. Start a versions stub server, a fake clock, and a VersionsCache with one candidate miner.
+//  3. Start Run in a goroutine against a cancellable context, then cancel the context.
+//  4. Assert Run's goroutine exits within 2 seconds of the cancellation.
 func TestVersionsCache_Run_ExitsOnContextCancel(t *testing.T) {
-	// Registered first so it runs last: after the server (and its client
-	// connections) are closed below, so the httptest listener goroutine
-	// isn't mistaken for a leak.
 	defer leakcheck.VerifyNone(t)
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -162,9 +193,12 @@ func TestVersionsCache_Run_ExitsOnContextCancel(t *testing.T) {
 	}
 }
 
-// A sequential pass over hundreds of miners takes longer than the freshness window, so every entry
-// reads as stale and no node is ever reported validation-capable. This pins that a pass overlaps:
-// every fetch must arrive before any is allowed to finish, which is impossible one at a time.
+// Test flow:
+//  1. Start a server whose handler reports arrival then blocks until released, and register a release-once deferred before server.Close so it runs first and a failed assertion can't leave handlers parked blocking Close.
+//  2. Create a VersionsCache with several candidate miners all pointing at that server.
+//  3. Start Poll in a goroutine.
+//  4. Within a deadline shorter than one fetch's timeout, wait for every candidate's request to arrive, asserting they could not all have arrived if fetches were serialized one per timeout.
+//  5. Release all handlers and assert Poll returns.
 func TestVersionsPollFetchesConcurrently(t *testing.T) {
 	defer leakcheck.VerifyNone(t)
 
@@ -177,8 +211,6 @@ func TestVersionsPollFetchesConcurrently(t *testing.T) {
 		w.Write([]byte(`{"ml_nodes":[]}`))
 	}))
 	defer server.Close()
-	// Declared after server.Close so it runs first: a failed assertion must not leave handlers
-	// parked on release, which would block Close and bury the real failure under a timeout.
 	var releaseOnce sync.Once
 	releaseAll := func() { releaseOnce.Do(func() { close(release) }) }
 	defer releaseAll()
@@ -194,8 +226,6 @@ func TestVersionsPollFetchesConcurrently(t *testing.T) {
 	polled := make(chan struct{})
 	go func() { defer close(polled); cache.Poll(context.Background()) }()
 
-	// One deadline for the whole set, shorter than a single fetch's timeout: serialized fetches
-	// arrive one per timeout, so they cannot all land inside this window.
 	allStarted := time.After(versionsFetchTimeout / 2)
 	for i := range candidateCount {
 		select {

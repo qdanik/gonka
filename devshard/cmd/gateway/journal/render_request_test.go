@@ -44,7 +44,10 @@ func fieldValue(fields []any, key string) any {
 	return nil
 }
 
-// The reservation is hand-counted, so the widest line the code can build must be measured against it.
+// Test flow:
+//  1. Build a `RequestLine` from `servedOutcome` with both a race error and a deliver error set.
+//  2. Render its fields via `requestFinishedFields`.
+//  3. Assert the field count equals `loggedFieldSlots`, the widest finished-request line's hand-counted reservation.
 func TestARequestFinishedLineFitsWhatItReserves(t *testing.T) {
 	line := RequestLine{
 		RequestID: "request-1", Model: "qwen", EscrowID: "escrow-1", ClientStream: true, Outcome: servedOutcome(),
@@ -56,7 +59,10 @@ func TestARequestFinishedLineFitsWhatItReserves(t *testing.T) {
 	require.Len(t, fields, loggedFieldSlots, "the widest finished-request line must fill its reservation exactly")
 }
 
-// A served answer can leave its nonce open, and the escrow owing a vote for it.
+// Test flow:
+//  1. Build a `RequestLine` from `servedOutcome` whose winning attempt never closed its nonce.
+//  2. Render its fields via `requestFinishedFields`.
+//  3. Assert the `logkey.NonceFinished` field is false.
 func TestARequestFinishedLineSaysTheWinnersNonceNeverClosed(t *testing.T) {
 	line := RequestLine{RequestID: "request-1", Model: "qwen", Outcome: servedOutcome(), Verdict: "served", Elapsed: time.Second}
 
@@ -66,6 +72,10 @@ func TestARequestFinishedLineSaysTheWinnersNonceNeverClosed(t *testing.T) {
 		"a served request whose nonce never closed must say so where an operator reads it")
 }
 
+// Test flow:
+//  1. Build a `RequestLine` from `servedOutcome` with the winning attempt's `NonceFinished` set to true.
+//  2. Render its fields via `requestFinishedFields`.
+//  3. Assert the `logkey.NonceFinished` field is true.
 func TestARequestFinishedLineSaysTheWinnersNonceClosed(t *testing.T) {
 	outcome := servedOutcome()
 	outcome.Attempts[0].NonceFinished = true
@@ -76,6 +86,10 @@ func TestARequestFinishedLineSaysTheWinnersNonceClosed(t *testing.T) {
 	require.Equal(t, true, fieldValue(fields, logkey.NonceFinished))
 }
 
+// Test flow:
+//  1. Build a `RequestLine` for a request that failed before any winner was crowned.
+//  2. Render its fields via `requestFinishedFields`.
+//  3. Assert the `logkey.NonceFinished` field is absent.
 func TestARequestFinishedLineOmitsTheNonceNobodyWon(t *testing.T) {
 	line := RequestLine{
 		RequestID: "request-1", Model: "qwen", Verdict: "failed_before_first_byte", Elapsed: time.Second,
@@ -88,6 +102,10 @@ func TestARequestFinishedLineOmitsTheNonceNobodyWon(t *testing.T) {
 	require.Nil(t, fieldValue(fields, logkey.NonceFinished))
 }
 
+// Test flow:
+//  1. Table-driven: each case builds a `RaceOutcome` and expects an offset, a round trip, and whether a stamp was found — covering an agreeing clock, a drifted clock, a slow round trip not charged as drift, the loser's stamp being ignored, and a reply with no receipt or completion-only stamp.
+//  2. For each case, call `hostClockOffset`.
+//  3. Assert the returned offset, round trip, and found flag match the case's expectation.
 func TestHostClockOffsetReadsTheWinnersStamp(t *testing.T) {
 	t.Parallel()
 	dispatchedAt := time.Unix(1786114580, 0)
@@ -171,7 +189,10 @@ func TestHostClockOffsetReadsTheWinnersStamp(t *testing.T) {
 	}
 }
 
-// The executor stamps whole seconds by truncation, which a late dispatch could misread as up to a second of host clock drift.
+// Test flow:
+//  1. Build a `RaceOutcome` whose dispatch time carries sub-second precision, one the executor's whole-second stamp truncates.
+//  2. Call `hostClockOffset`.
+//  3. Assert a stamp was found and the offset stays within the truncated second rather than reading as host clock drift.
 func TestHostClockOffsetDoesNotReadTruncationAsDrift(t *testing.T) {
 	t.Parallel()
 	dispatchedAt := time.Unix(1786114580, 0).Add(900 * time.Millisecond)
@@ -193,7 +214,10 @@ func TestHostClockOffsetDoesNotReadTruncationAsDrift(t *testing.T) {
 	}
 }
 
-// A host error with no message renders its whole raw payload as text, unbounded content that could otherwise fill a disk one failed request at a time.
+// Test flow:
+//  1. Build a `HostApplicationError` whose raw payload is a 100,000-byte string.
+//  2. Render it via `loggedError`.
+//  3. Assert the result stays bounded near `maxLoggedErrorBytes` and ends with the truncation marker.
 func TestLoggedErrorBoundsHostControlledText(t *testing.T) {
 	huge := &engine.HostApplicationError{Payload: strings.Repeat("A", 100_000)}
 
@@ -207,12 +231,20 @@ func TestLoggedErrorBoundsHostControlledText(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a plain error with a short message.
+//  2. Render it via `loggedError`.
+//  3. Assert the message comes back unchanged.
 func TestLoggedErrorLeavesAShortErrorAlone(t *testing.T) {
 	if got := loggedError(errors.New("no host available")); got != "no host available" {
 		t.Fatalf("loggedError() = %q, want the error unchanged", got)
 	}
 }
 
+// Test flow:
+//  1. Build a `HostApplicationError` whose payload is 1000 multi-byte runes.
+//  2. Render it via `loggedError`.
+//  3. Assert the truncated result is still valid UTF-8.
 func TestLoggedErrorCutsOnARuneBoundary(t *testing.T) {
 	if maxLoggedErrorBytes%3 == 0 {
 		t.Fatalf("maxLoggedErrorBytes = %d divides by the test rune width, so this asserts nothing", maxLoggedErrorBytes)

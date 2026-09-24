@@ -15,8 +15,11 @@ func slotsSigned(slots ...uint32) types.Bitmap128 {
 	return signed
 }
 
-// The question this route answers is "why will this escrow not finalize", and a slot list alone cannot
-// answer it: whether those slots are enough depends on their weight against the group's threshold.
+// Test flow:
+//  1. Build signed slot bitmaps for two nonces and matching signature-status entries with their weight and quorum.
+//  2. Call signatureEntries with both.
+//  3. Assert one entry per nonce, in order.
+//  4. Assert each entry carries the status weight, quorum flag and total slots from its status entry.
 func TestSignatureEntriesCarryTheWeightBesideTheSlots(t *testing.T) {
 	signed := map[uint64]types.Bitmap128{
 		1: slotsSigned(0, 1),
@@ -40,8 +43,10 @@ func TestSignatureEntriesCarryTheWeightBesideTheSlots(t *testing.T) {
 	}
 }
 
-// A nonce the status pass did not reach still lists its slots; reporting nothing for it would hide the
-// signatures this gateway does hold.
+// Test flow:
+//  1. Call signatureEntries with a signed-slots map for one nonce and no status entries.
+//  2. Assert the nonce still appears with both of its slots.
+//  3. Assert it carries no weight and no quorum, since no status was reported for it.
 func TestANonceWithoutAStatusEntryStillListsItsSlots(t *testing.T) {
 	entries := signatureEntries(map[uint64]types.Bitmap128{7: slotsSigned(3, 5)}, nil)
 

@@ -2,8 +2,7 @@ package filters
 
 import "testing"
 
-// What a chunk actually looks like in production: the gateway forces logprobs, top_logprobs and
-// return_token_ids upstream, so every chunk carries the fields it then has to strip.
+// realChunk is a production-shaped chunk carrying the logprobs, top_logprobs, and token_ids fields the rewriter strips.
 const realChunk = `data: {"id":"chatcmpl-1","object":"chat.completion.chunk","created":1700000000,` +
 	`"model":"model-a","choices":[{"index":0,"delta":{"content":" the"},"finish_reason":null,` +
 	`"logprobs":{"content":[{"token":" the","logprob":-0.31,"bytes":[32,116,104,101],` +
@@ -30,8 +29,7 @@ func BenchmarkRewriteEventRealChunk(b *testing.B) {
 	}
 }
 
-// productionStream is what a host actually sends back: the gateway forces logprobs, top_logprobs and
-// return_token_ids upstream, so every content chunk carries the fields the rewriter then has to strip.
+// productionStream returns a production-shaped SSE stream whose content chunks carry the fields the rewriter strips.
 func productionStream(chunks int) [][]byte {
 	events := make([][]byte, 0, chunks+2)
 	events = append(events, []byte(`data: {"id":"chatcmpl-1","object":"chat.completion.chunk","created":1700000000,`+
@@ -75,8 +73,7 @@ func BenchmarkEventPayload(b *testing.B) {
 	}
 }
 
-// The final event of every response: the gateway forces include_usage upstream, so a client that did
-// not ask for usage has this one stripped out of its stream.
+// BenchmarkRewriteEventForcedUsage times stripping a forced usage field from the stream's final event.
 func BenchmarkRewriteEventForcedUsage(b *testing.B) {
 	event := []byte(`data: {"id":"chatcmpl-1","object":"chat.completion.chunk","created":1700000000,` +
 		`"model":"model-a","choices":[{"index":0,"delta":{"content":"!"},"finish_reason":"stop"}],` +

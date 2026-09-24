@@ -8,6 +8,9 @@ import (
 	"devshard/cmd/gateway/env"
 )
 
+// Test flow:
+//  1. Build a config with every engine timing override set (receipt, first-token floor and ceiling, inter-chunk stall, loser grace, hedge first-token floor).
+//  2. Assert each built engine field matches its override's value.
 func TestEngineTimingsReachTheSnapshotFromAnOverride(t *testing.T) {
 	t.Parallel()
 	receipt, floor, ceiling, stall, grace, hedge := int64(7_000), int64(1_500), int64(25_000), int64(45_000), int64(120_000), int64(900)
@@ -42,6 +45,9 @@ func TestEngineTimingsReachTheSnapshotFromAnOverride(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a config with every engine timing and the chain snapshot max age set via environment values, with no overrides.
+//  2. Assert each built field matches its environment value.
 func TestEngineTimingsReachTheSnapshotFromTheEnvironment(t *testing.T) {
 	t.Parallel()
 	built, err := Build(env.Values{
@@ -76,6 +82,10 @@ func TestEngineTimingsReachTheSnapshotFromTheEnvironment(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Set every engine timing and the chain snapshot max age in the environment, then set a conflicting value for each in the overrides.
+//  2. Build a config from both.
+//  3. Assert every built field takes the override's value over the environment's.
 func TestAnEngineOverrideOutranksTheEnvironment(t *testing.T) {
 	t.Parallel()
 	fromEnv, fromAdmin := int64(9_000), int64(3_000)
@@ -122,6 +132,9 @@ func TestAnEngineOverrideOutranksTheEnvironment(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a config with every bounded engine timing override set to its documented maximum, and the chain snapshot max age set to its documented floor.
+//  2. Assert `Build` accepts them and the snapshot max age lands exactly on that floor.
 func TestTheBoundsThemselvesAreAccepted(t *testing.T) {
 	t.Parallel()
 	built, err := Build(env.Values{}, Overrides{
@@ -139,6 +152,10 @@ func TestTheBoundsThemselvesAreAccepted(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Table-driven: each case sets one invalid override — a grace shorter than the stall it must outlive, a ceiling under its own floor, a zero or negative bound, a value overflowing its own duration, or a snapshot age outside its allowed range — paired with the exact error message it must produce.
+//  2. For each case, call `Build`.
+//  3. Assert it returns an error and that error names the case's expected complaint.
 func TestEngineOverridesAreValidatedLikeTheDefaults(t *testing.T) {
 	t.Parallel()
 	for _, testCase := range []struct {

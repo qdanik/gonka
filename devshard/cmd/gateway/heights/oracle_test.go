@@ -6,8 +6,10 @@ import (
 	"devshard/cmd/gateway/config"
 )
 
-// The follower is the gateway's own reading of mainnet, kept for the trust label on a carried tip.
-// It is not what the gateway stamps from, so it stays off unless asked for.
+// Test flow:
+//  1. Call NewOracle with height sync enabled but the oracle flag off, and a Comet RPC source set.
+//  2. Assert it returns no error.
+//  3. Assert the returned oracle is nil.
 func TestNoFollowerUnlessItIsAskedFor(t *testing.T) {
 	oracle, err := NewOracle(config.HeightSync{Enabled: true}, OracleSources{CometRPC: "http://127.0.0.1:26657"})
 
@@ -19,7 +21,10 @@ func TestNoFollowerUnlessItIsAskedFor(t *testing.T) {
 	}
 }
 
-// Height sync off means the follower is off too, whatever the oracle flag says on its own.
+// Test flow:
+//  1. Call NewOracle with height sync off but the oracle flag on, and a Comet RPC source set.
+//  2. Assert it returns no error.
+//  3. Assert the returned oracle is nil.
 func TestNoFollowerWhileHeightSyncIsOff(t *testing.T) {
 	oracle, err := NewOracle(config.HeightSync{ChainOracle: true}, OracleSources{CometRPC: "http://127.0.0.1:26657"})
 
@@ -31,8 +36,10 @@ func TestNoFollowerWhileHeightSyncIsOff(t *testing.T) {
 	}
 }
 
-// A follower with nothing to follow is not a follower: it would answer every read with a miss and
-// label every carried tip untrusted.
+// Test flow:
+//  1. Call NewOracle with height sync and the oracle flag both enabled, but no source set.
+//  2. Assert it returns no error.
+//  3. Assert the returned oracle is nil.
 func TestNoFollowerWithoutASource(t *testing.T) {
 	oracle, err := NewOracle(config.HeightSync{Enabled: true, ChainOracle: true}, OracleSources{})
 
@@ -44,8 +51,11 @@ func TestNoFollowerWithoutASource(t *testing.T) {
 	}
 }
 
-// The follower owns a live subscription and a dialled client, so closing it has to be possible and
-// has to be safe twice: shutdown runs it, and a failed boot may too.
+// Test flow:
+//  1. Build an oracle with height sync and the oracle flag enabled, and a named Comet endpoint.
+//  2. Assert it builds successfully and returns a non-nil oracle.
+//  3. Call Close on it twice.
+//  4. Assert both calls return nil.
 func TestClosingTheFollowerTwiceIsSafe(t *testing.T) {
 	oracle, err := NewOracle(config.HeightSync{Enabled: true, ChainOracle: true},
 		OracleSources{CometRPC: "http://127.0.0.1:1"})
@@ -64,7 +74,10 @@ func TestClosingTheFollowerTwiceIsSafe(t *testing.T) {
 	}
 }
 
-// A nil follower is what an off gateway holds, and shutdown closes it like any other.
+// Test flow:
+//  1. Hold a nil *Oracle.
+//  2. Call Close on it.
+//  3. Assert it returns nil.
 func TestClosingNothingIsFine(t *testing.T) {
 	var oracle *Oracle
 
@@ -73,8 +86,10 @@ func TestClosingNothingIsFine(t *testing.T) {
 	}
 }
 
-// A nil *Oracle assigned into an interface field is not nil, and the transport would call it on every
-// carried tip. The courier must leave the field unset instead.
+// Test flow:
+//  1. Hold a nil *Oracle and build a courier with height sync enabled, passing that nil oracle.
+//  2. Assert the courier is non-nil.
+//  3. Assert the courier's HeightSyncLogOracle field is nil.
 func TestACourierWithoutAFollowerHoldsNoOracle(t *testing.T) {
 	var absent *Oracle
 
@@ -88,7 +103,10 @@ func TestACourierWithoutAFollowerHoldsNoOracle(t *testing.T) {
 	}
 }
 
-// A follower that does exist is what labels a carried tip trusted, so the courier has to carry it.
+// Test flow:
+//  1. Build an oracle with height sync and the oracle flag enabled, and a named Comet endpoint.
+//  2. Build a courier with height sync enabled, passing that oracle.
+//  3. Assert the courier's HeightSyncLogOracle field is not nil.
 func TestACourierCarriesTheFollowerItWasGiven(t *testing.T) {
 	oracle, err := NewOracle(config.HeightSync{Enabled: true, ChainOracle: true},
 		OracleSources{CometRPC: "http://127.0.0.1:1"})

@@ -7,13 +7,12 @@ import (
 	"unicode"
 )
 
-// A field added to DevshardRecord is written once by the insert and then never again, because the
-// update clause names its columns by hand. Nothing else in the package notices: the insert compiles,
-// the scan compiles, and only a re-registration quietly keeps the old value. This is the notice.
+// Test flow:
+//  1. Build a `deliberatelyNotUpdated` map naming the columns the upsert intentionally leaves alone: `escrow_id` (the conflict key), `settlement_pending` (moved only by `SetDevshardSettlementPending`), `route_prefix` (pinned for the escrow's life), and `on_hold` (moved only by `PutOnHoldIfServing`/`ResumeFromHold`).
+//  2. Iterate every field of `DevshardRecord` via reflection, converting each to its column name via `columnName`.
+//  3. Assert each deliberately-excluded column is indeed absent from the upsert's `column = excluded.column` clauses.
+//  4. Assert every other column is present in the upsert's update clause, so a re-registration cannot silently keep its old value.
 func TestTheDevshardUpsertCarriesEveryFieldItShould(t *testing.T) {
-	// escrow_id is the conflict key, settlement_pending is left out on purpose so an unrelated upsert
-	// cannot clear a queued settlement, route_prefix is pinned for the escrow's life, and on_hold is
-	// moved only by PutOnHoldIfServing/ResumeFromHold. Everything else must survive a re-registration.
 	deliberatelyNotUpdated := map[string]string{
 		"escrow_id":          "the conflict key",
 		"settlement_pending": "only SetDevshardSettlementPending moves it",
@@ -38,8 +37,7 @@ func TestTheDevshardUpsertCarriesEveryFieldItShould(t *testing.T) {
 	}
 }
 
-// columnName turns a Go field name into the snake_case column this schema uses. An acronym stays one
-// word: EscrowID is escrow_id, not escrow_i_d.
+// columnName turns a Go field name into the snake_case column this schema uses.
 func columnName(field string) string {
 	runes := []rune(field)
 	var column strings.Builder
@@ -56,6 +54,9 @@ func columnName(field string) string {
 	return column.String()
 }
 
+// Test flow:
+//  1. Build a table of Go field names, including one with an acronym (`EscrowID`), each paired with its expected snake_case column name.
+//  2. Assert `columnName` returns the expected name for each, keeping the acronym whole rather than splitting each letter.
 func TestColumnNameKeepsAcronymsWhole(t *testing.T) {
 	for field, want := range map[string]string{
 		"EscrowID":          "escrow_id",

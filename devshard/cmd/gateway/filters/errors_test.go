@@ -6,6 +6,10 @@ import (
 	"testing"
 )
 
+// Test flow:
+//  1. Build an error case from the table: a Reject, a WrapReject around an oversized-body error, a WrapReject around a plain error, a plain non-RejectError, or nil.
+//  2. Call ErrorStatus with the case's error and fallback status.
+//  3. Assert the returned status matches the case's expectation.
 func TestErrorsStatus(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -28,6 +32,9 @@ func TestErrorsStatus(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a Reject error with a formatted message.
+//  2. Assert the error's message matches the formatted text.
 func TestErrorsRejectFormatsMessage(t *testing.T) {
 	err := Reject("field %q must be %d", "n", 5)
 	want := `field "n" must be 5`
@@ -36,6 +43,10 @@ func TestErrorsRejectFormatsMessage(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a Reject error with no wrapped cause.
+//  2. Assert errors.As resolves it to a *RejectError.
+//  3. Assert Unwrap returns nil.
 func TestErrorsUnwrapReturnsNilWithoutWrapped(t *testing.T) {
 	err := Reject("boom")
 	var rejectErr *RejectError
@@ -47,6 +58,11 @@ func TestErrorsUnwrapReturnsNilWithoutWrapped(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Wrap a sentinel error with WrapReject.
+//  2. Assert errors.Is still matches the sentinel through the wrapped error.
+//  3. Assert the wrapped error's message equals the sentinel's message.
+//  4. Assert ErrorStatus reports 400 for the wrapped error.
 func TestErrorsWrapRejectPreservesChain(t *testing.T) {
 	sentinel := errors.New("sentinel failure")
 	wrapped := WrapReject(sentinel)
@@ -62,13 +78,18 @@ func TestErrorsWrapRejectPreservesChain(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Call WrapReject with a nil error.
+//  2. Assert the result is nil.
 func TestErrorsWrapRejectNilReturnsNil(t *testing.T) {
 	if err := WrapReject(nil); err != nil {
 		t.Errorf("WrapReject(nil) = %v, want nil", err)
 	}
 }
 
-// Pins the whitelist text verbatim; every whitelist_ golden asserts this exact string.
+// Test flow:
+//  1. Call unsupportedParameterMessage with a rejected field name.
+//  2. Assert the returned text matches the pinned wording verbatim, since every whitelist_ golden depends on this exact string.
 func TestErrorsUnsupportedParameterMessageExactText(t *testing.T) {
 	got := unsupportedParameterMessage("weird_field")
 	want := `Chat completions parameter "weird_field" is currently rejected by the Gonka network. Some non-standard parameters can crash the vLLM engine on Gonka Host MLNodes, so the network rejects parameters that are not explicitly supported (see: https://github.com/gonka-ai/gonka/blob/main/docs/chat-api/README.md). If you do not need this parameter, remove it from the request; if you need it, file a request at https://github.com/gonka-ai/gonka/issues`

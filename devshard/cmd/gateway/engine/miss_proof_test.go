@@ -8,8 +8,11 @@ import (
 	"common/completionapi"
 )
 
-// The verifier hashes the bytes the host signed, so the proof has to be the host's own event lines:
-// the devshard envelope the host wraps around them is added after the hash and must not be counted.
+// Test flow:
+//  1. Build an `errorStreamRetainer` and retain two reads: one carrying a devshard receipt line plus an error line, another carrying a devshard meta line plus `[DONE]`.
+//  2. Get the retainer's proof.
+//  3. Assert the proof was held, is complete, and is not truncated.
+//  4. Unmarshal the proof payload and assert its events are only the host's own error and `[DONE]` lines, with the devshard envelope lines stripped out.
 func TestTheProofHoldsTheHostsOwnLines(t *testing.T) {
 	retainer := newErrorStreamRetainer(64 * 1024)
 	retainer.retain([]byte("data: {\"devshard_receipt\":{\"nonce\":1}}\n\ndata: {\"error\":{\"message\":\"boom\"}}\n\n"))
@@ -41,7 +44,10 @@ func TestTheProofHoldsTheHostsOwnLines(t *testing.T) {
 	}
 }
 
-// A body the verifier would not read as an error is no proof at all, whatever else survived.
+// Test flow:
+//  1. Retain a stream carrying only content and `[DONE]`, no error, in an `errorStreamRetainer`.
+//  2. Get the retainer's proof.
+//  3. Assert nothing is held.
 func TestAStreamWithoutAnErrorProvesNothing(t *testing.T) {
 	retainer := newErrorStreamRetainer(64 * 1024)
 	retainer.retain([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\ndata: [DONE]\n\n"))
@@ -53,7 +59,10 @@ func TestAStreamWithoutAnErrorProvesNothing(t *testing.T) {
 	}
 }
 
-// Retention is bounded, and a proof that lost bytes says so rather than hashing to something else.
+// Test flow:
+//  1. Build an `errorStreamRetainer` with a small byte bound, then retain an error line followed by `[DONE]`.
+//  2. Get the retainer's proof.
+//  3. Assert something is held, marked truncated, and not complete.
 func TestAProofThatLostBytesSaysSo(t *testing.T) {
 	retainer := newErrorStreamRetainer(40)
 	retainer.retain([]byte("data: {\"error\":{\"message\":\"boom\"}}\n\n"))
@@ -72,7 +81,10 @@ func TestAProofThatLostBytesSaysSo(t *testing.T) {
 	}
 }
 
-// Released retention frees the lines: most attempts never turn out to be a miss.
+// Test flow:
+//  1. Retain an error line in an `errorStreamRetainer`.
+//  2. Release the retainer.
+//  3. Assert its proof holds nothing afterward.
 func TestReleasingRetentionDropsTheLines(t *testing.T) {
 	retainer := newErrorStreamRetainer(64 * 1024)
 	retainer.retain([]byte("data: {\"error\":{\"message\":\"boom\"}}\n\n"))
@@ -84,7 +96,11 @@ func TestReleasingRetentionDropsTheLines(t *testing.T) {
 	}
 }
 
-// The hash the gateway offers is the one the verifier recomputes, so the two are pinned together.
+// Test flow:
+//  1. Retain an error line followed by `[DONE]` in an `errorStreamRetainer`.
+//  2. Get the retainer's proof and assert it is held.
+//  3. Assert the verifier reads the payload as a terminal error.
+//  4. Assert hashing the response payload twice produces the same digest.
 func TestTheProofHashesToWhatTheVerifierRecomputes(t *testing.T) {
 	retainer := newErrorStreamRetainer(64 * 1024)
 	retainer.retain([]byte("data: {\"error\":{\"message\":\"boom\"}}\n\ndata: [DONE]\n\n"))

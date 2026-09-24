@@ -13,6 +13,9 @@ func almostEqual(a, b, epsilon float64) bool {
 	return math.Abs(a-b) <= epsilon
 }
 
+// Test flow:
+//  1. Build a decayed counter with a 10-minute half-life.
+//  2. Assert its value at the epoch, before any add, is 0.
 func TestDecayedCounterValueBeforeAnyAddIsZero(t *testing.T) {
 	c := newDecayedCounter(10 * time.Minute)
 	if got := c.value(testEpoch); got != 0 {
@@ -20,6 +23,10 @@ func TestDecayedCounterValueBeforeAnyAddIsZero(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a decayed counter.
+//  2. Add to it three times at the same instant.
+//  3. Assert its value at that instant is 3.
 func TestDecayedCounterAddAccumulatesAtSameInstant(t *testing.T) {
 	c := newDecayedCounter(10 * time.Minute)
 	c.add(testEpoch)
@@ -30,6 +37,10 @@ func TestDecayedCounterAddAccumulatesAtSameInstant(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a decayed counter with a fixed half-life.
+//  2. Add to it once at the epoch.
+//  3. Assert its value one half-life later is approximately 0.5.
 func TestDecayedCounterValueAfterOneHalfLifeIsHalved(t *testing.T) {
 	const halfLife = 10 * time.Minute
 	c := newDecayedCounter(halfLife)
@@ -40,6 +51,10 @@ func TestDecayedCounterValueAfterOneHalfLifeIsHalved(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a host-perf tracker.
+//  2. Record three non-responsive samples at increasing instants.
+//  3. Assert `consecutiveFail` is 3.
 func TestHostPerfConsecutiveFailIncrementsOnEachNonResponsiveSample(t *testing.T) {
 	h := newHostPerf(10 * time.Minute)
 	fail := Sample{Responsive: false}
@@ -53,6 +68,10 @@ func TestHostPerfConsecutiveFailIncrementsOnEachNonResponsiveSample(t *testing.T
 	}
 }
 
+// Test flow:
+//  1. Build a host-perf tracker.
+//  2. Record two failing samples, then one responsive sample.
+//  3. Assert `consecutiveFail` resets to 0.
 func TestHostPerfConsecutiveFailResetsToZeroOnResponsiveSample(t *testing.T) {
 	h := newHostPerf(10 * time.Minute)
 	fail := Sample{Responsive: false}
@@ -67,6 +86,10 @@ func TestHostPerfConsecutiveFailResetsToZeroOnResponsiveSample(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a host-perf tracker.
+//  2. Record one failing sample at a fixed time.
+//  3. Assert `lastSeen` is updated to that time.
 func TestHostPerfRecordSampleUpdatesLastSeenEvenOnFailure(t *testing.T) {
 	h := newHostPerf(10 * time.Minute)
 	failTime := testEpoch.Add(5 * time.Minute)
@@ -78,6 +101,9 @@ func TestHostPerfRecordSampleUpdatesLastSeenEvenOnFailure(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a host-perf tracker with no recorded samples.
+//  2. Assert `failureRate` returns rate 0 and volume 0 rather than NaN.
 func TestHostPerfFailureRateZeroVolumeReturnsZeroRateNotNaN(t *testing.T) {
 	h := newHostPerf(10 * time.Minute)
 
@@ -88,6 +114,10 @@ func TestHostPerfFailureRateZeroVolumeReturnsZeroRateNotNaN(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a host-perf tracker.
+//  2. Record three failing samples at the same instant.
+//  3. Assert `failureRate` reports rate 1 and decayed volume 3.
 func TestHostPerfFailureRateAllFailuresAtSameInstant(t *testing.T) {
 	h := newHostPerf(10 * time.Minute)
 	fail := Sample{Responsive: false}
@@ -105,9 +135,11 @@ func TestHostPerfFailureRateAllFailuresAtSameInstant(t *testing.T) {
 	}
 }
 
-// TestHostPerfFailureRateDecaysAsSuccessesFollowFailures pins that both the
-// rate and the decayed volume move as time passes and new outcomes land,
-// rather than the volume resetting or the rate ignoring decay.
+// Test flow:
+//  1. Build a host-perf tracker with a fixed half-life.
+//  2. Record three failing samples at the epoch.
+//  3. Record one successful sample one half-life later.
+//  4. Assert `failureRate` at that later instant reports rate 0.6 and decayed volume 2.5 (the three failures decay to 1.5, the fresh success adds 1, for rate 1.5/2.5 and volume 2.5).
 func TestHostPerfFailureRateDecaysAsSuccessesFollowFailures(t *testing.T) {
 	const halfLife = 10 * time.Minute
 	h := newHostPerf(halfLife)
@@ -122,7 +154,6 @@ func TestHostPerfFailureRateDecaysAsSuccessesFollowFailures(t *testing.T) {
 	h.recordSample(success, later)
 
 	rate, volume := h.failureRate(later)
-	// fail decays to 3*0.5=1.5, success is a fresh 1 -> rate=1.5/2.5=0.6, volume=2.5.
 	if !almostEqual(rate, 0.6, 1e-9) {
 		t.Fatalf("failureRate() rate after decay = %v, want 0.6", rate)
 	}

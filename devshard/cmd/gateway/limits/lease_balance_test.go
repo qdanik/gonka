@@ -13,9 +13,10 @@ func inflightOutput(l *ParticipantLimiter, participant, model string) int64 {
 	return -1
 }
 
-// The window's in-flight is the sum of what admission charged, so the lease has to give back exactly that.
-// Releasing a different number is how the counter drifts away from the requests it is supposed to be counting,
-// and a drifted counter refuses a host that is idle.
+// Test flow:
+//  1. Build a limiter and call `Overdraft` with a cost of 1024 input and 4096 output tokens.
+//  2. Assert the admission is open and both in-flight input and output equal what was charged.
+//  3. Release the lease (twice, to check idempotency) and assert both in-flight counts return to 0.
 func TestALeaseGivesBackExactlyWhatItTook(t *testing.T) {
 	t.Parallel()
 	limiter := newTestLimiter(testConfig(), fixedNow(testEpoch))
@@ -44,9 +45,10 @@ func TestALeaseGivesBackExactlyWhatItTook(t *testing.T) {
 	}
 }
 
-// A window admits in reservations, so it must grow in reservations. Crediting the tokens an answer actually
-// produced would earn a rung several times more slowly than the admission arithmetic implies, and earn nothing
-// at all against a host that reports no usage.
+// Test flow:
+//  1. Build a limiter and call `Overdraft` with a small charged cost, then release it.
+//  2. Report a successful result carrying the same charged cost.
+//  3. Assert the output window grew, crediting the reservation the window was charged rather than what the answer produced.
 func TestAWindowGrowsInTheCurrencyItCharges(t *testing.T) {
 	t.Parallel()
 	limiter := newTestLimiter(testConfig(), fixedNow(testEpoch))

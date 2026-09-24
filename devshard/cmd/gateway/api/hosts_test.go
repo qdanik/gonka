@@ -12,6 +12,10 @@ import (
 	"devshard/cmd/gateway/perf"
 )
 
+// Test flow:
+//  1. Seed the harness with one host state, one degraded flag and one host window for the same participant/model pair.
+//  2. Request the /v1/admin/hosts endpoint.
+//  3. Assert the single returned host row carries the routing state and window fields from both sources.
 func TestAdminHostsReportsRoutingStateAndWindow(t *testing.T) {
 	live := newHarness(t)
 	live.hosts.states = []perf.HostState{{
@@ -48,6 +52,10 @@ func TestAdminHostsReportsRoutingStateAndWindow(t *testing.T) {
 	require.Equal(t, false, host["available"])
 }
 
+// Test flow:
+//  1. Seed one host state for one participant/model pair and one host window for a different pair.
+//  2. Request the /v1/admin/hosts endpoint.
+//  3. Assert both pairs appear as separate rows, since either source alone should list a host.
 func TestAdminHostsJoinsTheTwoSourcesByPair(t *testing.T) {
 	live := newHarness(t)
 	live.hosts.states = []perf.HostState{{Participant: "gonka1aaaa", Model: "qwen"}}
@@ -62,6 +70,9 @@ func TestAdminHostsJoinsTheTwoSourcesByPair(t *testing.T) {
 	require.Len(t, answer.Hosts, 2, "a pair known to either source is a host the operator can ask about")
 }
 
+// Test flow:
+//  1. Request the /v1/admin/hosts endpoint without any admin key.
+//  2. Assert the response is 401.
 func TestAdminHostsNeedsTheAdminKey(t *testing.T) {
 	live := newHarness(t)
 
@@ -70,6 +81,10 @@ func TestAdminHostsNeedsTheAdminKey(t *testing.T) {
 	require.Equal(t, http.StatusUnauthorized, recorder.Code)
 }
 
+// Test flow:
+//  1. Clear the harness's host states and windows.
+//  2. Request the /v1/admin/hosts endpoint with the admin key.
+//  3. Assert the response is 200 with an empty hosts list.
 func TestAdminHostsWithoutSourcesAnswersEmpty(t *testing.T) {
 	live := newHarness(t)
 	live.hosts.states = nil

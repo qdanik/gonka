@@ -28,8 +28,10 @@ func decodeParticipants(t *testing.T, recorder *httptest.ResponseRecorder) []Par
 	return append(body.Participants, body.Records...)
 }
 
-// TestParticipantRouteAnswersOnlyAboutThatParticipant is the route the whole surface exists for: a
-// host asking what this gateway saw of it must not receive its neighbours' records.
+// Test flow:
+//  1. Build a `twoEpochBook` fixture and request the current-epoch route for one participant.
+//  2. Assert the response status is 200.
+//  3. Assert exactly one record comes back, for that participant in the current epoch.
 func TestParticipantRouteAnswersOnlyAboutThatParticipant(t *testing.T) {
 	book := twoEpochBook(t)
 
@@ -48,6 +50,9 @@ func TestParticipantRouteAnswersOnlyAboutThatParticipant(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a `twoEpochBook` fixture and request the current-epoch route for an address the ledger never recorded.
+//  2. Assert the response status is 404.
 func TestParticipantRouteReportsAnAddressTheEpochNeverSaw(t *testing.T) {
 	book := twoEpochBook(t)
 
@@ -58,8 +63,9 @@ func TestParticipantRouteReportsAnAddressTheEpochNeverSaw(t *testing.T) {
 	}
 }
 
-// TestEpochZeroIsRefused keeps the path selector honest: the filter reads a zero epoch as "every
-// epoch", so serving it would answer a question about one epoch with all of them.
+// Test flow:
+//  1. Build a `twoEpochBook` fixture and request the participants route for epoch 0.
+//  2. Assert the response status is 400, since epoch 0 would otherwise be read as "every epoch".
 func TestEpochZeroIsRefused(t *testing.T) {
 	book := twoEpochBook(t)
 
@@ -70,6 +76,10 @@ func TestEpochZeroIsRefused(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a `twoEpochBook` fixture and request the participants route for epoch 8.
+//  2. Assert the response holds at least one record.
+//  3. Assert every returned record's epoch index is 8.
 func TestParticipantsRouteNarrowsToItsEpoch(t *testing.T) {
 	book := twoEpochBook(t)
 
@@ -86,6 +96,10 @@ func TestParticipantsRouteNarrowsToItsEpoch(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a `twoEpochBook` fixture and request the epochs listing route.
+//  2. Decode the response body.
+//  3. Assert it lists both epochs the ledger holds.
 func TestEpochsRouteListsEveryEpochTheLedgerHolds(t *testing.T) {
 	book := twoEpochBook(t)
 
@@ -102,8 +116,10 @@ func TestEpochsRouteListsEveryEpochTheLedgerHolds(t *testing.T) {
 	}
 }
 
-// TestParticipantRouteCarriesFindings is the feature seen from where a host operator stands: one GET
-// about its own address, answered with what to look at rather than only with what was counted.
+// Test flow:
+//  1. Build a `troubledBook` fixture and request the current-epoch route for its participant.
+//  2. Assert exactly one record comes back.
+//  3. Assert that record's findings carry `FindingExecutionTimeouts`.
 func TestParticipantRouteCarriesFindings(t *testing.T) {
 	recorder := serve(t, troubledBook(t), "/api/v1/epochs/current/participants/"+participantFor(0))
 
@@ -114,6 +130,9 @@ func TestParticipantRouteCarriesFindings(t *testing.T) {
 	findingWithCode(t, records[0].Findings, FindingExecutionTimeouts)
 }
 
+// Test flow:
+//  1. Build a `twoEpochBook` fixture and request a path the epoch selector replaced.
+//  2. Assert the response status is 404.
 func TestUnknownPathIsRefused(t *testing.T) {
 	book := twoEpochBook(t)
 

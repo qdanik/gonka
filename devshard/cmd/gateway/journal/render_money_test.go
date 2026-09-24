@@ -11,7 +11,11 @@ import (
 	"devshard/cmd/gateway/internal/logcapture"
 )
 
-// A vote is the only thing that undoes a charge, and the counter beside it cannot name the nonce.
+// Test flow:
+//  1. Install a `logcapture` recorder and build a journal.
+//  2. Record a failed execution timeout vote via `RecordTimeout`.
+//  3. Flush the journal.
+//  4. Assert the logged "timeout vote failed" line names the nonce, host, and reason.
 func TestAFailedTimeoutVoteIsLogged(t *testing.T) {
 	logged := logcapture.Install(t)
 	events := newJournal(t, Settings{})
@@ -28,7 +32,11 @@ func TestAFailedTimeoutVoteIsLogged(t *testing.T) {
 	}})
 }
 
-// An escrow gone from the chain fails every vote it owed at once, and has its own line already.
+// Test flow:
+//  1. Install a `logcapture` recorder and build a journal.
+//  2. Record a failed timeout vote whose reason is `TimeoutReasonEscrowGone`.
+//  3. Flush the journal.
+//  4. Assert nothing was logged, since the escrow's own transition line already covers it.
 func TestAVoteLostWithItsEscrowIsSilent(t *testing.T) {
 	logged := logcapture.Install(t)
 	events := newJournal(t, Settings{})
@@ -42,6 +50,11 @@ func TestAVoteLostWithItsEscrowIsSilent(t *testing.T) {
 	require.Empty(t, logged.All(), "the escrow's own line already says this, once instead of per nonce")
 }
 
+// Test flow:
+//  1. Install a `logcapture` recorder and build a journal.
+//  2. Record a completed, a started, and a skipped timeout vote.
+//  3. Flush the journal.
+//  4. Assert nothing was logged.
 func TestAPostedVoteIsSilent(t *testing.T) {
 	logged := logcapture.Install(t)
 	events := newJournal(t, Settings{})
@@ -54,7 +67,11 @@ func TestAPostedVoteIsSilent(t *testing.T) {
 	require.Empty(t, logged.All())
 }
 
-// A warmup's vote reaches the ledger like a race's and writes no race line: the warmup writes its own.
+// Test flow:
+//  1. Install a `logcapture` recorder and build a journal with a `ledgerSpy`.
+//  2. Record a failed refused-timeout probe vote via `RecordProbeTimeout`.
+//  3. Flush the journal.
+//  4. Assert nothing was logged but the ledger spy received the timeout fact (a warmup's vote reaches the ledger like a race's, but writes no race line).
 func TestAFailedProbeVoteReachesTheLedgerWithoutARaceLine(t *testing.T) {
 	logged := logcapture.Install(t)
 	ledger := &ledgerSpy{}
@@ -70,7 +87,11 @@ func TestAFailedProbeVoteReachesTheLedgerWithoutARaceLine(t *testing.T) {
 	require.Equal(t, []string{"timeout 7 42 failed"}, ledger.arrived())
 }
 
-// Only the book sees a refused probe; the journal names it from the refusal the ledger returns.
+// Test flow:
+//  1. Install a `logcapture` recorder and build a journal whose ledger refuses every probe with a known error.
+//  2. Record a probe via `ProbeRecorded`.
+//  3. Flush the journal.
+//  4. Assert the logged "escrow warmup could not settle its nonce" line carries the escrow, nonce, and the ledger's refusal error.
 func TestAProbeTheLedgerRefusedIsLogged(t *testing.T) {
 	logged := logcapture.Install(t)
 	refusal := fmt.Errorf("%w: %s", accounting.ErrUnknownEscrow, "escrow-9")

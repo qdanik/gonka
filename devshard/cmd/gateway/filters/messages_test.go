@@ -6,6 +6,10 @@ import (
 	"testing"
 )
 
+// Test flow:
+//  1. Build the expected map of role to messageRolePolicy.
+//  2. Assert messageRolePolicies has the same number of entries.
+//  3. Assert each expected role's policy matches exactly.
 func TestMessageRolePoliciesTableIsComplete(t *testing.T) {
 	want := map[string]messageRolePolicy{
 		roleDeveloper: {disallowedFields: []string{"tool_calls", "tool_call_id", "function_call"}},
@@ -30,6 +34,10 @@ func TestMessageRolePoliciesTableIsComplete(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Define message sequences covering a matched id, an unmatched id, a second reply to an already-consumed id, several distinct pending ids, a mix of matched and orphaned, and a non-map entry.
+//  2. Run dropOrphanToolMessages on each sequence.
+//  3. Assert no error, the reported changed flag, and the survivor roles in order.
 func TestDropOrphanToolMessages(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -112,6 +120,10 @@ func TestDropOrphanToolMessages(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Define single assistant messages varying content, tool_calls, and function_call between absent, nil, empty, and non-empty.
+//  2. Run dropEmptyAssistantTurns on each one-message slice.
+//  3. Assert no error, the reported changed flag, and the survivor count.
 func TestDropEmptyAssistantTurns(t *testing.T) {
 	tests := []struct {
 		name              string
@@ -146,8 +158,10 @@ func TestDropEmptyAssistantTurns(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Run dropEmptyAssistantTurns on a single user message with empty content.
+//  2. Assert it is left unchanged as the sole survivor: empty user content is the validator's concern, not the normalizer's.
 func TestDropEmptyAssistantTurnsLeavesOtherRolesAlone(t *testing.T) {
-	// An empty-looking user message is the validator's concern, not the normalizer's.
 	out, changed, err := dropEmptyAssistantTurns([]any{map[string]any{"role": "user", "content": ""}})
 	if err != nil {
 		t.Fatalf("dropEmptyAssistantTurns() error = %v, want nil", err)
@@ -157,6 +171,9 @@ func TestDropEmptyAssistantTurnsLeavesOtherRolesAlone(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Run dropEmptyAssistantTurns on a slice containing one non-map entry.
+//  2. Assert it passes through unchanged as the sole survivor.
 func TestDropEmptyAssistantTurnsSkipsNonMapEntries(t *testing.T) {
 	out, changed, err := dropEmptyAssistantTurns([]any{"not-a-message"})
 	if err != nil {
@@ -167,6 +184,10 @@ func TestDropEmptyAssistantTurnsSkipsNonMapEntries(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Define tool messages with missing, nil, empty string, and empty array content.
+//  2. Run normalizeEmptyMessageContent on each.
+//  3. Assert changed is true and content becomes the emptyToolResultContent sentinel.
 func TestNormalizeEmptyMessageContentFillsToolSentinel(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -193,6 +214,10 @@ func TestNormalizeEmptyMessageContentFillsToolSentinel(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Define assistant messages with empty string or empty array content alongside a tool_calls or function_call payload.
+//  2. Run normalizeEmptyMessageContent on each.
+//  3. Assert changed is true and content becomes nil.
 func TestNormalizeEmptyMessageContentNullifiesAssistantWithCallPayload(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -218,9 +243,10 @@ func TestNormalizeEmptyMessageContentNullifiesAssistantWithCallPayload(t *testin
 	}
 }
 
+// Test flow:
+//  1. Run normalizeEmptyMessageContent on an assistant message with empty content and no tool_calls or function_call.
+//  2. Assert it is left unchanged: validateMessages rejects this case, so the normalizer must not paper over it by inventing content.
 func TestNormalizeEmptyMessageContentLeavesAssistantWithoutCallsAlone(t *testing.T) {
-	// No tool_calls/function_call payload: validateMessages rejects this. The normalizer
-	// must not paper over it by inventing content.
 	message := map[string]any{"role": "assistant", "content": ""}
 	_, changed, err := normalizeEmptyMessageContent([]any{message})
 	if err != nil {
@@ -231,6 +257,9 @@ func TestNormalizeEmptyMessageContentLeavesAssistantWithoutCallsAlone(t *testing
 	}
 }
 
+// Test flow:
+//  1. Run normalizeEmptyMessageContent on a user message with empty content.
+//  2. Assert changed is false, since empty user content is the validator's concern.
 func TestNormalizeEmptyMessageContentLeavesUserRoleAlone(t *testing.T) {
 	message := map[string]any{"role": "user", "content": ""}
 	_, changed, err := normalizeEmptyMessageContent([]any{message})
@@ -242,6 +271,10 @@ func TestNormalizeEmptyMessageContentLeavesUserRoleAlone(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Define tool, user, and assistant messages with and without a legacy name field.
+//  2. Run stripLegacyToolName on each.
+//  3. Assert the reported changed flag and whether the name field survives.
 func TestStripLegacyToolName(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -271,6 +304,10 @@ func TestStripLegacyToolName(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a user message whose content is two text parts.
+//  2. Run flattenMessageTextParts on it.
+//  3. Assert changed is true and content becomes the parts joined with a newline.
 func TestFlattenMessageTextPartsJoinsMultipleParts(t *testing.T) {
 	message := map[string]any{"role": "user", "content": []any{
 		map[string]any{"type": "text", "text": "hello"},
@@ -288,6 +325,10 @@ func TestFlattenMessageTextPartsJoinsMultipleParts(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a user message whose content is a single text part.
+//  2. Run flattenMessageTextParts on it.
+//  3. Assert changed is true and content becomes that part's text.
 func TestFlattenMessageTextPartsSinglePart(t *testing.T) {
 	message := map[string]any{"role": "user", "content": []any{map[string]any{"type": "text", "text": "solo"}}}
 	_, changed, err := flattenMessageTextParts([]any{message})
@@ -299,6 +340,10 @@ func TestFlattenMessageTextPartsSinglePart(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a user message whose content is already a plain string.
+//  2. Run flattenMessageTextParts on it.
+//  3. Assert changed is false.
 func TestFlattenMessageTextPartsLeavesStringContentAlone(t *testing.T) {
 	message := map[string]any{"role": "user", "content": "already a string"}
 	_, changed, err := flattenMessageTextParts([]any{message})
@@ -310,9 +355,11 @@ func TestFlattenMessageTextPartsLeavesStringContentAlone(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a user message whose content is an empty array.
+//  2. Run flattenMessageTextParts on it.
+//  3. Assert changed is false: combineTextContentParts returns "" for an empty slice, and the flattener treats "" as nothing to write back, so an explicitly empty array survives unflattened.
 func TestFlattenMessageTextPartsLeavesEmptyArrayAlone(t *testing.T) {
-	// combineTextContentParts returns "" for an empty slice; the flattener treats "" as
-	// "nothing to write back", so an explicitly empty array survives unflattened.
 	message := map[string]any{"role": "user", "content": []any{}}
 	_, changed, err := flattenMessageTextParts([]any{message})
 	if err != nil {
@@ -323,6 +370,10 @@ func TestFlattenMessageTextPartsLeavesEmptyArrayAlone(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build user messages with missing content and with nil content.
+//  2. Run flattenMessageTextParts on each.
+//  3. Assert changed is false for both.
 func TestFlattenMessageTextPartsSkipsMissingOrNilContent(t *testing.T) {
 	for _, message := range []map[string]any{
 		{"role": "user"},
@@ -338,6 +389,9 @@ func TestFlattenMessageTextPartsSkipsMissingOrNilContent(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Run flattenMessageTextParts on a slice containing one non-map entry.
+//  2. Assert changed is false.
 func TestFlattenMessageTextPartsSkipsNonMapEntry(t *testing.T) {
 	_, changed, err := flattenMessageTextParts([]any{"not-a-message"})
 	if err != nil {
@@ -348,6 +402,10 @@ func TestFlattenMessageTextPartsSkipsNonMapEntry(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build two messages where the second has a content part with an unsupported type.
+//  2. Run flattenMessageTextParts on the slice.
+//  3. Assert the error names the message index, part index, and the unsupported type.
 func TestFlattenMessageTextPartsReportsMessageAndPartIndexOnNonTextPart(t *testing.T) {
 	messages := []any{
 		map[string]any{"role": "user", "content": "ok"},
@@ -360,9 +418,12 @@ func TestFlattenMessageTextPartsReportsMessageAndPartIndexOnNonTextPart(t *testi
 	}
 }
 
+// Test flow:
+//  1. Parse a document with a user message and an orphan tool message whose content has an unsupported part type.
+//  2. Run normalizeMessages on the document.
+//  3. Assert it returns no error: the real chain order must silently drop the orphan tool message -- including its malformed content -- rather than surface a flatten error for a message on its way out.
+//  4. Assert only the user message survives.
 func TestMessageNormalizerChainDropsOrphanBeforeFlatteningContent(t *testing.T) {
-	// The real chain order must silently drop this orphan tool message -- including its
-	// malformed content -- rather than surface a flatten error for a message on its way out.
 	document := parseTestDocument(t, `{"messages":[
 		{"role":"user","content":"q"},
 		{"role":"tool","tool_call_id":"ghost","content":[{"type":"image_url","text":"x"}]}
@@ -376,9 +437,11 @@ func TestMessageNormalizerChainDropsOrphanBeforeFlatteningContent(t *testing.T) 
 	}
 }
 
+// Test flow:
+//  1. Build the same user-plus-orphan-tool-message pair as a raw slice.
+//  2. Run flattenMessageTextParts directly on it, bypassing the orphan drop.
+//  3. Assert it surfaces the unsupported-part-type error, proving that running the flatten step before the orphan drop instead of after changes the outcome.
 func TestMessageNormalizerChainOrderIsObservable(t *testing.T) {
-	// The same input, with the flatten step run before the orphan drop instead of after,
-	// surfaces an error -- proving the chain's fixed order changes the outcome.
 	messages := []any{
 		map[string]any{"role": "user", "content": "q"},
 		map[string]any{"role": "tool", "tool_call_id": "ghost", "content": []any{
@@ -392,6 +455,10 @@ func TestMessageNormalizerChainOrderIsObservable(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Parse an empty document.
+//  2. Run normalizeMessages on it.
+//  3. Assert no error and that no messages field was created.
 func TestNormalizeMessagesAbsentIsNoOp(t *testing.T) {
 	document := parseTestDocument(t, `{}`)
 	if err := normalizeMessages(document); err != nil {
@@ -402,6 +469,10 @@ func TestNormalizeMessagesAbsentIsNoOp(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Parse a document with a single already-normalized user message.
+//  2. Run normalizeMessages on it.
+//  3. Assert no error and the message survives untouched.
 func TestNormalizeMessagesNoOpWhenNothingToNormalize(t *testing.T) {
 	document := parseTestDocument(t, `{"messages":[{"role":"user","content":"hi"}]}`)
 	if err := normalizeMessages(document); err != nil {
@@ -413,8 +484,12 @@ func TestNormalizeMessagesNoOpWhenNothingToNormalize(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Parse a document with a user message holding two text parts, an assistant message with a tool call, and a tool reply carrying a legacy name field.
+//  2. Run normalizeMessages on the document in one pass.
+//  3. Assert the user content is flattened into one newline-joined string.
+//  4. Assert the tool message's legacy name field is stripped.
 func TestNormalizeMessagesRunsTheFullChain(t *testing.T) {
-	// One pass strips a legacy tool name and flattens a text-parts array together.
 	document := parseTestDocument(t, `{"messages":[
 		{"role":"user","content":[{"type":"text","text":"a"},{"type":"text","text":"b"}]},
 		{"role":"assistant","content":null,"tool_calls":[{"id":"c1","type":"function","function":{"name":"fn"}}]},
@@ -434,6 +509,10 @@ func TestNormalizeMessagesRunsTheFullChain(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Parse a document whose message content has an unsupported part type.
+//  2. Run normalizeMessages on the document.
+//  3. Assert it returns a 400 rejection carrying the flatten error's message.
 func TestNormalizeMessagesPropagatesFlattenErrorAsRejection(t *testing.T) {
 	document := parseTestDocument(t, `{"messages":[{"role":"user","content":[{"type":"image_url","text":"x"}]}]}`)
 	err := normalizeMessages(document)
@@ -449,24 +528,38 @@ func TestNormalizeMessagesPropagatesFlattenErrorAsRejection(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Run validateMessages on a document with no messages field.
+//  2. Assert it is rejected as required.
 func TestValidateMessagesRequiredWhenAbsent(t *testing.T) {
 	assertValidateMessagesRejects(t, `{}`, "messages is required")
 }
 
+// Test flow:
+//  1. Run validateMessages on a document whose messages field is a string, not an array.
+//  2. Assert it is rejected as required, the same as a missing field: Document.Array's type assertion fails the same way for the wrong type as for a missing key.
 func TestValidateMessagesNonArrayTreatedAsAbsent(t *testing.T) {
-	// Document.Array's type assertion fails the same way for the wrong type as for a
-	// missing key, so a non-array "messages" is reported as absent, not malformed.
 	assertValidateMessagesRejects(t, `{"messages":"not-an-array"}`, "messages is required")
 }
 
+// Test flow:
+//  1. Run validateMessages on a document with an empty messages array.
+//  2. Assert it is rejected as must not be empty.
 func TestValidateMessagesMustNotBeEmpty(t *testing.T) {
 	assertValidateMessagesRejects(t, `{"messages":[]}`, "messages must not be empty")
 }
 
+// Test flow:
+//  1. Run validateMessages on a document whose messages array holds a non-object entry.
+//  2. Assert it is rejected for that entry not being an object.
 func TestValidateMessagesRejectsNonObjectEntry(t *testing.T) {
 	assertValidateMessagesRejects(t, `{"messages":["not-an-object"]}`, "messages[0] must be an object")
 }
 
+// Test flow:
+//  1. Define messages with a missing role, a null role, a non-string role, and a whitespace-only role.
+//  2. Run validateMessages on each.
+//  3. Assert each is rejected with the matching role error.
 func TestValidateMessagesRoleRequired(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -485,10 +578,17 @@ func TestValidateMessagesRoleRequired(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Run validateMessages on a message with an unrecognized role value.
+//  2. Assert it is rejected as an unsupported value.
 func TestValidateMessagesRoleEnumRejectsUnknownValue(t *testing.T) {
 	assertValidateMessagesRejects(t, `{"messages":[{"role":"pirate","content":"arr"}]}`, `messages[0].role has unsupported value "pirate"`)
 }
 
+// Test flow:
+//  1. Parse a document with one message for each known role: developer, system, user, assistant, and function.
+//  2. Run validateMessages on the document.
+//  3. Assert no error.
 func TestValidateMessagesAcceptsEveryKnownRole(t *testing.T) {
 	document := parseTestDocument(t, `{"messages":[
 		{"role":"developer","content":"a"},
@@ -502,6 +602,10 @@ func TestValidateMessagesAcceptsEveryKnownRole(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Define messages pairing each role with a field its policy disallows: tool_calls, tool_call_id, or function_call.
+//  2. Run validateMessages on each.
+//  3. Assert each is rejected naming the disallowed field for that role.
 func TestValidateMessagesRejectsDisallowedFieldPerRole(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -531,6 +635,10 @@ func TestValidateMessagesRejectsDisallowedFieldPerRole(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Define developer, system, and user messages with missing, null, or empty content.
+//  2. Run validateMessages on each.
+//  3. Assert each is rejected with the matching content error.
 func TestValidateMessagesRequiresContentForSimpleRoles(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -549,10 +657,17 @@ func TestValidateMessagesRequiresContentForSimpleRoles(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Run validateMessages on a tool message that has content but no tool_call_id.
+//  2. Assert it is rejected for the missing tool_call_id, ahead of any content check.
 func TestValidateMessagesToolRequiresToolCallIDBeforeContent(t *testing.T) {
 	assertValidateMessagesRejects(t, `{"messages":[{"role":"tool","content":"result"}]}`, "messages[0].tool_call_id: is required")
 }
 
+// Test flow:
+//  1. Parse a document with an assistant tool call followed by a tool reply that matches its id but carries no content.
+//  2. Run validateMessages on the document.
+//  3. Assert it is rejected for the missing content, after the id match succeeds.
 func TestValidateMessagesToolContentRequiredAfterMatch(t *testing.T) {
 	assertValidateMessagesRejects(t, `{"messages":[
 		{"role":"assistant","content":null,"tool_calls":[{"id":"c1","type":"function","function":{"name":"fn"}}]},
@@ -560,14 +675,24 @@ func TestValidateMessagesToolContentRequiredAfterMatch(t *testing.T) {
 	]}`, "messages[1].content: is required")
 }
 
+// Test flow:
+//  1. Run validateMessages on a function-role message with content but no name.
+//  2. Assert it is rejected for the missing name.
 func TestValidateMessagesFunctionRequiresName(t *testing.T) {
 	assertValidateMessagesRejects(t, `{"messages":[{"role":"function","content":"result"}]}`, "messages[0].name: is required")
 }
 
+// Test flow:
+//  1. Run validateMessages on a function-role message with a name but no content.
+//  2. Assert it is rejected for the missing content.
 func TestValidateMessagesFunctionContentRequiredAfterName(t *testing.T) {
 	assertValidateMessagesRejects(t, `{"messages":[{"role":"function","name":"fn"}]}`, "messages[0].content: is required")
 }
 
+// Test flow:
+//  1. Define assistant messages varying content presence together with tool_calls or function_call presence.
+//  2. Run validateMessages on each.
+//  3. Assert acceptance or rejection matches the expected content rule for that combination.
 func TestValidateMessagesAssistantContentRules(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -617,6 +742,10 @@ func TestValidateMessagesAssistantContentRules(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Define assistant messages with malformed tool_calls: wrong type, empty array, non-object element, missing or duplicate id, wrong call type, and a malformed function field.
+//  2. Run validateMessages on each.
+//  3. Assert each is rejected with the matching shape error.
 func TestValidateMessagesAssistantToolCallsShapeErrors(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -640,6 +769,10 @@ func TestValidateMessagesAssistantToolCallsShapeErrors(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Define assistant messages with malformed function_call: not an object, missing name, and non-string arguments.
+//  2. Run validateMessages on each.
+//  3. Assert each is rejected with the matching shape error.
 func TestValidateMessagesAssistantFunctionCallShapeErrors(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -657,6 +790,11 @@ func TestValidateMessagesAssistantFunctionCallShapeErrors(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Parse an assistant message with content plus explicit null tool_calls and null function_call.
+//  2. Run validateMessages on the document.
+//  3. Assert no error.
+//  4. Assert both null fields are deleted from the message.
 func TestValidateMessagesAssistantNullToolCallsAndFunctionCallTreatedAsAbsent(t *testing.T) {
 	document := parseTestDocument(t, `{"messages":[{"role":"assistant","content":"hello","tool_calls":null,"function_call":null}]}`)
 	if err := validateMessages(document); err != nil {
@@ -672,13 +810,18 @@ func TestValidateMessagesAssistantNullToolCallsAndFunctionCallTreatedAsAbsent(t 
 	}
 }
 
+// Test flow:
+//  1. Run validateMessages directly, without normalizeMessages first, on a tool message whose tool_call_id has no pending assistant call.
+//  2. Assert it is rejected for not matching any previous tool_calls -- reachable only because the real pipeline's orphan-tool-message dropper would remove this case earlier.
 func TestValidateMessagesToolCallIDMustMatchPendingAssistantCall(t *testing.T) {
-	// Reachable only when validateMessages runs without normalizeMessages first: in the
-	// real pipeline the orphan-tool-message dropper removes this case earlier.
 	assertValidateMessagesRejects(t, `{"messages":[{"role":"tool","tool_call_id":"ghost","content":"x"}]}`,
 		"messages[0].tool_call_id does not match any previous assistant tool_calls")
 }
 
+// Test flow:
+//  1. Parse a document with a user message, an assistant tool call, and a tool reply that matches the call's id.
+//  2. Run validateMessages on the document.
+//  3. Assert no error.
 func TestValidateMessagesToolCallIDMatchesAndConsumesPending(t *testing.T) {
 	document := parseTestDocument(t, `{"messages":[
 		{"role":"user","content":"q"},
@@ -690,8 +833,11 @@ func TestValidateMessagesToolCallIDMatchesAndConsumesPending(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Parse a document with one assistant tool call answered by two tool replies sharing the same id.
+//  2. Run validateMessages on the document.
+//  3. Assert the second reply is rejected for not matching any previous tool_calls, since the first reply already consumed the pending call.
 func TestValidateMessagesToolCallIDConsumedOnlyOnce(t *testing.T) {
-	// The second tool reply to the same id has nothing left pending to match.
 	assertValidateMessagesRejects(t, `{"messages":[
 		{"role":"assistant","content":null,"tool_calls":[{"id":"c1","type":"function","function":{"name":"fn"}}]},
 		{"role":"tool","tool_call_id":"c1","content":"first"},
@@ -699,6 +845,10 @@ func TestValidateMessagesToolCallIDConsumedOnlyOnce(t *testing.T) {
 	]}`, "messages[2].tool_call_id does not match any previous assistant tool_calls")
 }
 
+// Test flow:
+//  1. Define content values covering empty and whitespace strings, empty and non-empty arrays, nil, a number, and an object.
+//  2. Call isEmptyContent on each value.
+//  3. Assert the result matches the expected emptiness.
 func TestIsEmptyContent(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -723,6 +873,10 @@ func TestIsEmptyContent(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Define assistant messages varying content, tool_calls, and function_call between absent, nil, empty, and non-empty.
+//  2. Call isAssistantTurnEmpty on each message.
+//  3. Assert the result matches the expected emptiness.
 func TestIsAssistantTurnEmpty(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -760,8 +914,7 @@ func toolMessage(toolCallID, content string) map[string]any {
 	return map[string]any{"role": "tool", "tool_call_id": toolCallID, "content": content}
 }
 
-// rolesOf joins the role of every map entry in messages with ",", using "" for entries
-// that aren't messages -- so callers can assert survivor identity and order in one string.
+// rolesOf joins the role of every map entry in messages with ",", using "" for non-message entries.
 func rolesOf(t *testing.T, messages []any) string {
 	t.Helper()
 	roles := make([]string, len(messages))

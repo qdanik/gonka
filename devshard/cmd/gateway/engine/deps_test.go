@@ -8,13 +8,19 @@ import (
 	"devshard/cmd/gateway/config"
 )
 
-// A missing dependency used to be a panic on the first request, or inside the constructor itself.
+// Test flow:
+//  1. Build a `NewEngine` with an empty `Deps{}`.
+//  2. Assert the returned error names the missing `Config` dependency.
 func TestNewEngineNamesTheDependencyItWasNotGiven(t *testing.T) {
 	_, err := NewEngine(Deps{})
 
 	require.ErrorContains(t, err, "Config")
 }
 
+// Test flow:
+//  1. Build a complete `Deps` via `completeEngineDeps`, then clear the one required field the table case names.
+//  2. Build a `NewEngine` with the incomplete deps.
+//  3. Assert the returned error names the missing dependency.
 func TestNewEngineRefusesEveryRequiredDependencyByName(t *testing.T) {
 	for _, missing := range []string{"Picker", "Targets", "Windows", "Perf", "Snapshots"} {
 		t.Run(missing, func(t *testing.T) {
@@ -39,7 +45,9 @@ func TestNewEngineRefusesEveryRequiredDependencyByName(t *testing.T) {
 	}
 }
 
-// The optional ones stay optional: every use of them is already guarded.
+// Test flow:
+//  1. Build a `NewEngine` with `completeEngineDeps`, leaving the optional dependencies unset.
+//  2. Assert it returns no error and a non-nil engine.
 func TestNewEngineAcceptsTheOptionalDependenciesUnset(t *testing.T) {
 	engine, err := NewEngine(completeEngineDeps(t))
 

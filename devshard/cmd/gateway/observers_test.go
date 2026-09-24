@@ -6,9 +6,11 @@ import (
 	"devshard/cmd/gateway/chain"
 )
 
-// The observer republishes every five seconds whether or not anything moved, so the narrator's whole
-// job is deciding when there is something to say. Getting this wrong is either a flooded log or a
-// silent one, and neither shows up anywhere else.
+// Test flow:
+//  1. Advance a phaseNarrator through a steady first snapshot.
+//  2. For each case (the same snapshot again, a new epoch, or requests becoming blocked), advance it with the case's next snapshot.
+//  3. Assert the first advance was reported as the first.
+//  4. Assert the resulting phaseChange matches the case's expectation.
 func TestThePhaseNarratorSpeaksOnlyOnChange(t *testing.T) {
 	steady := chain.PhaseSnapshot{EpochIndex: 7, BlockHeight: 100}
 
@@ -49,6 +51,10 @@ func TestThePhaseNarratorSpeaksOnlyOnChange(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Advance a phaseNarrator twice through a snapshot with requests blocked.
+//  2. Advance it again with a snapshot where the block is gone.
+//  3. Assert the resulting phaseChange reports the block cleared.
 func TestThePhaseNarratorReportsABlockClearing(t *testing.T) {
 	narrator := &phaseNarrator{}
 	blocked := chain.PhaseSnapshot{EpochIndex: 7, RequestsBlocked: true, BlockReason: chain.BlockReasonPoC}
@@ -62,7 +68,9 @@ func TestThePhaseNarratorReportsABlockClearing(t *testing.T) {
 	}
 }
 
-// A nil *nonces.Recorder in the journal's interface field is non-nil to its check, so the consumer would call a disabled ledger on every fact.
+// Test flow:
+//  1. Call journalSettings with a nil ledger.
+//  2. Assert the resulting settings' Ledger field is a nil interface.
 func TestADisabledLedgerIsKeptOutOfTheJournal(t *testing.T) {
 	if settings := journalSettings(nil); settings.Ledger != nil {
 		t.Fatalf("Ledger = %#v, want a nil interface", settings.Ledger)

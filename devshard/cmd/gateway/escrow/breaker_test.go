@@ -18,6 +18,9 @@ func countSuppressedCalls(b *createBreaker, model, role string) int {
 	return count
 }
 
+// Test flow:
+//  1. Create a fresh createBreaker.
+//  2. Assert gated returns false for a key that has never recorded a failure.
 func TestCreateBreakerFreshKeyNotGated(t *testing.T) {
 	b := newCreateBreaker()
 
@@ -26,6 +29,10 @@ func TestCreateBreakerFreshKeyNotGated(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Record a number of failures on one key, varied across cases from 1 to 5.
+//  2. Count how many subsequent calls stay gated via `countSuppressedCalls`.
+//  3. Assert the suppressed count matches the expected escalation ladder (1, 2, 4, capping at 4).
 func TestCreateBreakerEscalationLadder(t *testing.T) {
 	tests := []struct {
 		name           string
@@ -54,10 +61,14 @@ func TestCreateBreakerEscalationLadder(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Record two failures on (model-a, temp), leaving a cooldown of 2 suppressed calls on that key.
+//  2. Assert gated is false for the same model with a different role, and for a different model with the same role.
+//  3. Assert (model-a, temp) still has its own 2 suppressed calls, untouched by checking the other keys.
 func TestCreateBreakerKeysAreIndependent(t *testing.T) {
 	b := newCreateBreaker()
 	b.recordFailure("model-a", "temp")
-	b.recordFailure("model-a", "temp") // cooldown=2: leaves a residual tick a colliding key would visibly steal
+	b.recordFailure("model-a", "temp")
 
 	if b.gated("model-a", "regular") {
 		t.Fatal("gated(model-a, regular) = true, want a different role to stay ungated")
@@ -72,11 +83,16 @@ func TestCreateBreakerKeysAreIndependent(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Record three failures on (model-a, temp), which would set the next cooldown to 4 if the ladder were not wiped.
+//  2. Call reset on that key.
+//  3. Assert gated is false immediately after reset.
+//  4. Record one more failure and assert only 1 call is suppressed, proving the ladder restarted instead of resuming.
 func TestCreateBreakerResetClearsFailuresNotJustCooldown(t *testing.T) {
 	b := newCreateBreaker()
 	b.recordFailure("model-a", "temp")
 	b.recordFailure("model-a", "temp")
-	b.recordFailure("model-a", "temp") // 3 failures: next cooldown would be 4 if the ladder weren't wiped
+	b.recordFailure("model-a", "temp")
 
 	b.reset("model-a", "temp")
 
@@ -91,6 +107,10 @@ func TestCreateBreakerResetClearsFailuresNotJustCooldown(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Start 8 goroutines, each cycling through recordFailure, gated, and reset on one of two model/role keys.
+//  2. Wait for all goroutines to finish.
+//  3. Assert nothing panics or races (the -race detector guards the actual assertion).
 func TestCreateBreakerConcurrentAccess(t *testing.T) {
 	b := newCreateBreaker()
 	models := []string{"model-a", "model-b"}

@@ -79,6 +79,11 @@ func awaitReleased(t *testing.T, registration *raceRegistration) {
 		"the race's registration must be released after its last post")
 }
 
+// Test flow:
+//  1. Settle an unsettled attempt through a poster that fails its first post, then fire the queue's timer.
+//  2. Assert one post landed, a retry is scheduled 30 seconds out, and the race's registration stays held with one owed vote.
+//  3. Advance the clock past the retry delay and fire the retry timer.
+//  4. Assert the second post lands, the registration is released, no further retry is scheduled, and nothing is owed.
 func TestAFailedRefusedVoteIsPostedAgainAfterTheFirstDelay(t *testing.T) {
 	poster := &failingPoster{failures: alwaysFailing(1)}
 	races, harness := retryEngine(t, poster)
@@ -102,6 +107,9 @@ func TestAFailedRefusedVoteIsPostedAgainAfterTheFirstDelay(t *testing.T) {
 	require.Eventually(t, func() bool { return races.OwedTimeoutVotes() == 0 }, 2*time.Second, time.Millisecond)
 }
 
+// Test flow:
+//  1. For each table case's failure (the group judged the vote, the hosts dropped the escrow, an execution vote that belongs to the sweep), settle an outcome through a poster that fails with that error once, then fire the timer.
+//  2. Assert one post landed, the registration was released, and no retry was scheduled — the failure is one a retry cannot change.
 func TestAVoteARetryCannotChangeIsNotRetried(t *testing.T) {
 	executionAttempt := unsettledAttempt()
 	executionAttempt.ReceiptTime = testEpoch.Add(200 * time.Millisecond)
@@ -137,6 +145,11 @@ func TestAVoteARetryCannotChangeIsNotRetried(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Settle an unsettled attempt through a poster that always fails, and advance/fire the queue's timer for four retry rounds.
+//  2. Assert each round still owes a retry and holds the registration.
+//  3. Advance and fire a fifth time.
+//  4. Assert the fifth post lands, the registration releases, the four retry delays doubled from 30s to 240s, nothing is owed, and releasing the registration again is a no-op.
 func TestARefusedVoteIsRetriedFourTimesAtMost(t *testing.T) {
 	poster := &failingPoster{failures: alwaysFailing(10)}
 	races, harness := retryEngine(t, poster)
@@ -162,6 +175,10 @@ func TestARefusedVoteIsRetriedFourTimesAtMost(t *testing.T) {
 	races.Stop()
 }
 
+// Test flow:
+//  1. Settle an unsettled attempt through a poster that always fails, fire the first post, and wait for the retry to be scheduled.
+//  2. Call `Stop` on the engine and assert it returns promptly without waiting on the retry's timer.
+//  3. Assert the waiting retry was posted immediately at `Stop`, no further retry was scheduled, and the registration was released.
 func TestStopPostsAWaitingRetryAtOnceAndSchedulesNoMore(t *testing.T) {
 	poster := &failingPoster{failures: alwaysFailing(10)}
 	races, harness := retryEngine(t, poster)
@@ -184,6 +201,10 @@ func TestStopPostsAWaitingRetryAtOnceAndSchedulesNoMore(t *testing.T) {
 	require.True(t, registration.released.Load())
 }
 
+// Test flow:
+//  1. Post the timeout plan for an unsettled attempt through a poster that fails once, collecting emitted events.
+//  2. Assert the failed vote is handed back as one retry for the next round.
+//  3. Assert exactly a started event followed by a failed event were reported.
 func TestARetryRoundReportsItsOwnStartedAndFinishedEvents(t *testing.T) {
 	poster := &failingPoster{failures: alwaysFailing(1)}
 	steps := race(unsettledAttempt()).TimeoutPlan()

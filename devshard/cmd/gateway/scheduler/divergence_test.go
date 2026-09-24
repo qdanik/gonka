@@ -5,6 +5,11 @@ import (
 	"time"
 )
 
+// Test flow:
+//  1. Spend the replay credit for "host-a" on "escrow-1".
+//  2. Assert spending it again for the same pair fails.
+//  3. Assert spending it for a different participant on the same escrow succeeds.
+//  4. Assert spending it for the same participant on a different escrow succeeds.
 func TestReplayCreditIsSpentOncePerParticipantAndEscrow(t *testing.T) {
 	var credit replayCredit
 	now := time.Unix(1_700_000_000, 0)
@@ -23,8 +28,10 @@ func TestReplayCreditIsSpentOncePerParticipantAndEscrow(t *testing.T) {
 	}
 }
 
-// Requests to one participant overlap, so a send that started before the rewind never exercised the
-// replayed state and must not hand the credit back.
+// Test flow:
+//  1. Spend the replay credit at a rewind time, then for each table case restore it with a send timestamped before, at, or after the rewind.
+//  2. Attempt to spend the credit again.
+//  3. Assert the credit is available again only for the case where the send started after the rewind.
 func TestOnlyASendStartedAfterTheRewindRestoresTheReplay(t *testing.T) {
 	rewoundAt := time.Unix(1_700_000_000, 0)
 	tests := []struct {
@@ -50,6 +57,10 @@ func TestOnlyASendStartedAfterTheRewindRestoresTheReplay(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Spend the replay credit for "host-a" on "escrow-1".
+//  2. Forget the escrow.
+//  3. Assert the credit can be spent again, since a retired escrow leaves no credit behind.
 func TestForgettingAnEscrowDropsItsCredits(t *testing.T) {
 	var credit replayCredit
 	now := time.Unix(1_700_000_000, 0)

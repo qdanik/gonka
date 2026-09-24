@@ -8,7 +8,10 @@ import (
 	"devshard/cmd/gateway/scheduler"
 )
 
-// The scheduler names this id on every burn the pick causes, so every pick of a race must carry it.
+// Test flow:
+//  1. Build a `raceCoordinator` for a request with a known id, model, escrow, input tokens and bytes.
+//  2. Build its request profile with a params string.
+//  3. Assert the profile carries the request id, model, escrow, input tokens/bytes and params through unchanged.
 func TestAPickCarriesTheRequestItServes(t *testing.T) {
 	coordinator := &raceCoordinator{
 		request:  raceRequest{Request: Request{RequestID: "request-3", Model: testModel, InputTokens: 12, InputBytes: 47}},

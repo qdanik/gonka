@@ -103,7 +103,10 @@ func (h *queueHarness) assertNothingPosted(t *testing.T) {
 	}
 }
 
-// Waiting for a deadline must cost a timer and no goroutine.
+// Test flow:
+//  1. Add two votes to the queue harness with different due-in durations.
+//  2. Assert the queue scheduled timers matching each vote's own deadline.
+//  3. Assert nothing has been posted yet.
 func TestAVoteWaitsOnATimerSetToItsOwnDeadline(t *testing.T) {
 	harness := newQueueHarness()
 
@@ -114,7 +117,9 @@ func TestAVoteWaitsOnATimerSetToItsOwnDeadline(t *testing.T) {
 	harness.assertNothingPosted(t)
 }
 
-// A vote whose deadline has not come holds no poster, or one due in an hour would stall every vote behind it.
+// Test flow:
+//  1. Add a vote due in an hour and a vote due now, then fire the due-now timer.
+//  2. Assert only the due-now vote is posted, unblocked by the vote still waiting.
 func TestAVoteStillWaitingHoldsNoPoster(t *testing.T) {
 	harness := newQueueHarness()
 
@@ -127,7 +132,10 @@ func TestAVoteStillWaitingHoldsNoPoster(t *testing.T) {
 	}
 }
 
-// A vote past the limit waits for a place; it is never dropped, because only the vote undoes the charge.
+// Test flow:
+//  1. Add five votes all due now, sharing a poster limit of one, then fire every timer.
+//  2. Collect every posted vote.
+//  3. Assert all five votes were posted and the queue owes nothing afterward.
 func TestEveryVotePastTheLimitIsStillPosted(t *testing.T) {
 	harness := newQueueHarness()
 	names := []string{"first", "second", "third", "fourth", "fifth"}
@@ -147,7 +155,10 @@ func TestEveryVotePastTheLimitIsStillPosted(t *testing.T) {
 	require.Zero(t, harness.queue.Owed(), "a posted vote is no longer owed")
 }
 
-// The limit is on posting, which is what reaches the hosts: one place means one vote in flight.
+// Test flow:
+//  1. Add a blocking vote holding the single poster slot, then add and fire a second vote waiting for a place.
+//  2. Assert the first vote posts and the second stays unposted while the place is held.
+//  3. Release the first vote's poster and assert the second vote posts once the place frees up.
 func TestTheLimitBoundsTheVotesInFlight(t *testing.T) {
 	harness := newQueueHarness()
 
@@ -187,7 +198,10 @@ func (p *duePoster) posted() int {
 	return len(p.posts)
 }
 
-// A shard that owes more votes than it may post at once still posts every one of them.
+// Test flow:
+//  1. Build an engine whose settle queue allows only one concurrent timeout vote, backed by a `duePoster`.
+//  2. Settle six races with unsettled attempts, each owing a timeout vote, then stop the engine.
+//  3. Assert every one of the six votes reached the poster and the queue owes nothing once stopped.
 func TestNoVoteIsLostWhenRacesOweMoreThanTheLimit(t *testing.T) {
 	poster := &duePoster{}
 	settings := engineSettings(EscalationPolicy{}, config.Modes{})
@@ -209,7 +223,10 @@ func TestNoVoteIsLostWhenRacesOweMoreThanTheLimit(t *testing.T) {
 	require.Zero(t, races.settles.Owed(), "no vote may be left owed once the engine has stopped")
 }
 
-// A deadline that moved out must be waited out on a timer, not inside a poster.
+// Test flow:
+//  1. Add a vote due in a minute, then move its deadline out to an hour before its timer fires.
+//  2. Fire the original timer; assert nothing posts and the queue rearmed a new timer for the later deadline.
+//  3. Move the deadline back into the past and fire the new timer; assert the vote now posts.
 func TestAVoteWhoseDeadlineMovedOutIsArmedAgainRatherThanPosted(t *testing.T) {
 	harness := newQueueHarness()
 	var deadline time.Time

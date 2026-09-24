@@ -18,8 +18,7 @@ import (
 
 var errVoteCause = errors.New("collect timeout votes")
 
-// scriptedTimeoutHandler reproduces Session.HandleTimeout's four returns verbatim, so the adapter is
-// pinned against the shapes it actually normalizes rather than a paraphrase of them.
+// scriptedTimeoutHandler reproduces Session.HandleTimeout's four returns verbatim.
 type scriptedTimeoutHandler struct {
 	result    user.TimeoutResult
 	err       error
@@ -44,8 +43,11 @@ func (h *scriptedTimeoutHandler) HandleTimeout(context.Context, uint64, time.Tim
 	return h.result, h.err
 }
 
-// Every one of these returns carries a non-nil error, including the settled one, so only the handler's
-// own Applied flag separates a vote that reached the escrow state from one that did not.
+// Test flow:
+//  1. For each table case's handler result and error (a vote that reached the escrow state, one shaped like a settled vote but unapplied, votes that sufficed but landed no timeout, insufficient votes, a diff-send failure, a vote-collection failure, a named verifier failure, a deadline never reached), settle a timeout step through a `SessionTimeouts` wrapping a `scriptedTimeoutHandler` scripted with that result and error.
+//  2. Assert the returned vote's kind and detail match the case's expectation.
+//  3. Assert whether the call reports failure matches the case's expectation, driven only by the handler's own `Applied` flag rather than by whether an error came back.
+//  4. Assert the handler was called exactly once.
 func TestSessionTimeoutsReadsAPostedVoteThroughTheHandlersAppliedFlag(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
@@ -63,7 +65,6 @@ func TestSessionTimeoutsReadsAPostedVoteThroughTheHandlersAppliedFlag(t *testing
 			wantVote: "execution",
 		},
 		{
-			// The shape a settled vote has, minus the settlement: trusting the error here is the whole bug.
 			name:       "unsettled_but_shaped_like_a_settled_vote",
 			result:     user.TimeoutResult{Reason: "execution"},
 			err:        fmt.Errorf("inference %d timed out: %s", 7, "execution"),
@@ -138,8 +139,9 @@ func TestSessionTimeoutsReadsAPostedVoteThroughTheHandlersAppliedFlag(t *testing
 	}
 }
 
-// The adapter is the only route from a live session to the vote poster, so the wiring is pinned here
-// rather than reached through a struct literal no caller can build.
+// Test flow:
+//  1. Build a `NewSessionTimeouts` from a session and a payload.
+//  2. Assert its handler is the session itself and its payload is the one it was given.
 func TestNewSessionTimeoutsWiresTheSessionAndItsPayload(t *testing.T) {
 	t.Parallel()
 	session := &user.Session{}
@@ -155,8 +157,10 @@ func TestNewSessionTimeoutsWiresTheSessionAndItsPayload(t *testing.T) {
 	}
 }
 
-// SettleTimeouts is where a mislabelled vote would surface, so the normalization is asserted through
-// it rather than only on the adapter's own return.
+// Test flow:
+//  1. Settle a race with a failed attempt through a `SessionTimeouts` wrapping a handler scripted with an applied execution result.
+//  2. Assert two events were reported.
+//  3. Assert the completed event's action and kind reflect the applied execution vote.
 func TestSettleTimeoutsRecordsAPostedVoteAsCompleted(t *testing.T) {
 	t.Parallel()
 	handler := &scriptedTimeoutHandler{
@@ -178,8 +182,9 @@ func TestSettleTimeoutsRecordsAPostedVoteAsCompleted(t *testing.T) {
 	}
 }
 
-// A timeout the diff never carried is not a collection failure, and an operator reading the reason has
-// only this label to tell the two apart.
+// Test flow:
+//  1. Settle a race through a `SessionTimeouts` wrapping a handler whose error reports the diff landed no timeout.
+//  2. Assert the final event's action is failed with the not-applied reason.
 func TestSettleTimeoutsNamesADiffThatCarriedNoTimeout(t *testing.T) {
 	t.Parallel()
 	handler := &scriptedTimeoutHandler{
@@ -198,8 +203,10 @@ func TestSettleTimeoutsNamesADiffThatCarriedNoTimeout(t *testing.T) {
 	}
 }
 
-// Routing and settlement must both receive the caller's own params value. The engine never reads it, so
-// a payload it substituted here would fail only at the far end, where the request is already lost.
+// Test flow:
+//  1. Run a simulated race whose one host refuses.
+//  2. Assert the run fails, drain the reported outcome, and settle it.
+//  3. Assert both the routing pick and the settlement poster saw the caller's own params value.
 func TestRunHandsTheCallersParamsToRoutingAndToSettlement(t *testing.T) {
 	sim := newSimulator(t, settledPolicy(), 1, qwenModel)
 	sim.host(10, 0, "host-0", &hostScript{receipt: true, err: errors.New("host refused")})
@@ -221,9 +228,10 @@ func TestRunHandsTheCallersParamsToRoutingAndToSettlement(t *testing.T) {
 	}
 }
 
-// The pool-wide ejection cap deliberately leaves hosts in rotation once too many fail at once, so the
-// routing gate cannot be the whole protection: the race hedges a primary the detector wanted out. Nothing
-// else in this policy can start a second attempt — both timeouts are an hour out and the primary answers.
+// Test flow:
+//  1. Push a primary host's failure streak to the pool-wide ejection cap so the health tracker would eject it, while confirming routing itself still leaves it eligible.
+//  2. Run a race where the ejected-but-routable primary refuses and a second host answers as a hedge.
+//  3. Assert the race succeeds, its decision is `StartPrimaryDegraded`, and both the primary and its hedge are recorded as attempts.
 func TestRunHedgesAPrimaryTheDetectorWantedOutOfRotation(t *testing.T) {
 	sim := newSimulator(t, speculativePolicy(2), 2, qwenModel)
 	settings := config.Defaults()
@@ -258,6 +266,10 @@ func TestRunHedgesAPrimaryTheDetectorWantedOutOfRotation(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Run a simulated race whose one host refuses, drain the reported outcome, and settle it.
+//  2. Assert the ledger receives exactly one accounting row matching the reported outcome's request, winner nonce and attempt count.
+//  3. Assert no extra row was accounted.
 func TestTheRecordingPointAccountsEveryRaceExactlyOnce(t *testing.T) {
 	sim := newSimulator(t, settledPolicy(), 1, qwenModel)
 	sim.host(10, 0, "host-0", &hostScript{receipt: true, err: errors.New("host refused")})
@@ -284,6 +296,10 @@ func TestTheRecordingPointAccountsEveryRaceExactlyOnce(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Observe one fewer than `crownDenialStrikes` contentless answers for a participant/model and assert crowning is not yet denied.
+//  2. Observe one more contentless answer, crossing the threshold, and assert crowning is now denied for that model but not for another model.
+//  3. Observe a content-bearing answer and assert crowning is restored.
 func TestCrownStrikesDenyOnlyAfterRepeatedContentlessAnswers(t *testing.T) {
 	t.Parallel()
 	gate := newCrownStrikes(nil)
@@ -310,6 +326,9 @@ func TestCrownStrikesDenyOnlyAfterRepeatedContentlessAnswers(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. For each table case's race outcome (no attempt started, the winner breaking after streaming with and without a named reason, a host's own refusal, a trusted or suspicious context-length rejection competing with an earlier refusal, the crowned attempt's refusal outranking a rejection, an empty stream, an unexplained failure, hosts refusing as unavailable/throttled/mixed, one non-availability failure among unavailable ones, a trusted host error over an all-unavailable race), compute `outcome.failure()`.
+//  2. Assert a `HostApplicationError` case matches by type and message, and any other case matches the expected sentinel via `errors.Is`.
 func TestOutcomeFailureNamesWhatTheClientLost(t *testing.T) {
 	t.Parallel()
 	streamedThenFailed := failedAttempt(TerminalUnexpectedEOF)
@@ -452,9 +471,9 @@ func failedRace(attempt AttemptOutcome) RaceOutcome {
 	return outcome
 }
 
-// A vote can fail because the network blinked or because the hosts no longer have the escrow. Only the
-// second is permanent, and it is the one that leaves the nonce paying its full reserve at settlement.
-// The verifier's own error never reaches this far, so the fact comes from the attempts instead.
+// Test flow:
+//  1. For each table case's `EscrowMissing` flag, settle a race through a `SessionTimeouts` whose handler fails with a collection error.
+//  2. Assert the final event is failed with the collection-error reason when the escrow is still there, and the escrow-gone reason when it is not.
 func TestSettleTimeoutsSeparatesAGoneEscrowFromACollectionFailure(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
@@ -489,7 +508,9 @@ func TestSettleTimeoutsSeparatesAGoneEscrowFromACollectionFailure(t *testing.T) 
 	}
 }
 
-// A vote that succeeded must not be renamed by an escrow that went missing for some other attempt.
+// Test flow:
+//  1. Settle a race whose escrow is marked missing through a `SessionTimeouts` wrapping a handler scripted with an applied execution result.
+//  2. Assert the final event's action is completed and its reason is not the escrow-gone reason.
 func TestAGoneEscrowDoesNotRenameASettledVote(t *testing.T) {
 	t.Parallel()
 	handler := &scriptedTimeoutHandler{
@@ -526,8 +547,11 @@ func trackedHosts() *simTracker {
 	return &simTracker{stubPerf: &stubPerf{ejected: map[string]bool{}, degraded: map[string]bool{}}}
 }
 
-// An answer buys a whole request of room on each window, priced in that window's own currency: one context
-// on the input side, one output budget on the output side, whatever the answer itself measured.
+// Test flow:
+//  1. Build a participant limiter and an engine recording into it, then acquire half of each window for the attempt.
+//  2. Record a clean outcome carrying its own input/output token counts.
+//  3. Release the acquired half and read both windows back.
+//  4. Assert each window widened by exactly one request's worth of room, not by the raw prompt or answer size.
 func TestAnAnsweredRequestWidensEachWindowByOneRequest(t *testing.T) {
 	windows := limits.NewParticipantLimiter(limiterConfig(1000), func() time.Time { return testEpoch })
 	races := engineRecordingInto(t, windows, trackedHosts())
@@ -555,8 +579,10 @@ func TestAnAnsweredRequestWidensEachWindowByOneRequest(t *testing.T) {
 	}
 }
 
-// A host slower than its own best is congested before it has failed anything, and the window it slowed
-// down in is the one that narrows; the other takes the cross factor.
+// Test flow:
+//  1. Build a participant limiter and an engine over a host tracker reporting first-content pressure.
+//  2. Record a clean outcome for that host.
+//  3. Assert the input window narrows to the congestion factor its own delay signal blames, while the output window takes the smaller cross factor.
 func TestRecordNarrowsTheWindowTheDelaySignalBlames(t *testing.T) {
 	windows := limits.NewParticipantLimiter(limiterConfig(1000), func() time.Time { return testEpoch })
 	hosts := trackedHosts()
@@ -574,8 +600,10 @@ func TestRecordNarrowsTheWindowTheDelaySignalBlames(t *testing.T) {
 	}
 }
 
-// Routing prices a request against both windows a host holds, so the pick carries both halves of what
-// the request is worth rather than the prompt alone.
+// Test flow:
+//  1. Run a simulated race whose one host answers successfully.
+//  2. Assert exactly one routing pick was made.
+//  3. Assert the pick's profile carries both the request's input token count and its output token count.
 func TestThePickCarriesBothHalvesOfWhatTheRequestIsWorth(t *testing.T) {
 	sim := newSimulator(t, settledPolicy(), 1, qwenModel)
 	sim.host(10, 0, "host-0", &hostScript{

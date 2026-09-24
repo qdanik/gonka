@@ -37,16 +37,17 @@ func failAllConsecutive(tracker *Tracker, participant, model string, count int64
 	}
 }
 
-// noCap disables the max-ejection cap (see the dedicated Ejected*Cap* tests)
-// so a lone host's own trigger can be observed in isolation: with only one
-// known host, any fraction < 1 or MinAvailableHosts >= 1 floors the cap's
-// "allowed" count to 0 and would otherwise mask the trigger under test.
+// noCap disables the max-ejection cap so a lone host's own trigger can be observed in isolation.
 func noCap(perf config.Perf) config.Perf {
 	perf.MaxEjectionFraction = 1.0
 	perf.MinAvailableHosts = 0
 	return perf
 }
 
+// Test flow:
+//  1. Build a tracker with the max-ejection cap disabled.
+//  2. Drive participant-a/model-a to consecutive failures at the threshold.
+//  3. Assert `Ejected` reports true.
 func TestTrackerEjectedTrueAfterConsecutiveFailThreshold(t *testing.T) {
 	perf := noCap(testPerf())
 	tracker := newTestTracker(perf, fixedNow(testEpoch))
@@ -58,6 +59,10 @@ func TestTrackerEjectedTrueAfterConsecutiveFailThreshold(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a tracker with the max-ejection cap disabled.
+//  2. Drive participant-a/model-a to one failure short of the consecutive-fail threshold.
+//  3. Assert `Ejected` reports false.
 func TestTrackerEjectedFalseBeforeConsecutiveFailThreshold(t *testing.T) {
 	perf := noCap(testPerf())
 	tracker := newTestTracker(perf, fixedNow(testEpoch))
@@ -69,6 +74,9 @@ func TestTrackerEjectedFalseBeforeConsecutiveFailThreshold(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a tracker.
+//  2. Assert `Ejected` reports false for a participant/model pair that was never recorded.
 func TestTrackerEjectedFalseForNeverRecordedHost(t *testing.T) {
 	tracker := newTestTracker(testPerf(), fixedNow(testEpoch))
 
@@ -77,6 +85,11 @@ func TestTrackerEjectedFalseForNeverRecordedHost(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a tracker with a 10-second ejection base, a consecutive-fail threshold of 1, and the cap disabled.
+//  2. Record one failing sample and assert `Ejected` reports true immediately.
+//  3. Advance the clock 9 seconds and assert `Ejected` is still true, within the window.
+//  4. Advance the clock 2 more seconds (11s total) and assert `Ejected` is now false, past the window.
 func TestTrackerEjectedRespectsConfiguredEjectionBaseSeconds(t *testing.T) {
 	perf := noCap(testPerf())
 	perf.EjectionBaseSeconds = 10
@@ -94,14 +107,18 @@ func TestTrackerEjectedRespectsConfiguredEjectionBaseSeconds(t *testing.T) {
 		t.Fatal("Ejected() 9s into a 10s ejection base = false, want true (still within window)")
 	}
 
-	current = current.Add(2 * time.Second) // 11s total, past the configured 10s base
+	current = current.Add(2 * time.Second)
 	if tracker.Ejected("participant-a", "model-a") {
 		t.Fatal("Ejected() 11s into a 10s ejection base = true, want false (window elapsed)")
 	}
 }
 
-// The cap decides which degraded hosts keep serving, so it must pardon the least chronic ones. Ordering
-// by name instead would keep the same alphabetically-early hosts out of rotation whatever they measure.
+// Test flow:
+//  1. Build a tracker with a max-ejection fraction of 0.5 and min-available-hosts of 1.
+//  2. Drive p2 and p3 to a first round of consecutive failures.
+//  3. Once the ejection window elapses, drive all of p0-p3 to a second round of consecutive failures.
+//  4. Assert p2 and p3, ejected twice each, still report as ejected.
+//  5. Assert p0 and p1, ejected once each, are pardoned by the ejection cap.
 func TestTrackerEjectedCapKeepsTheMostChronicHostsEjected(t *testing.T) {
 	perf := testPerf()
 	perf.MaxEjectionFraction = 0.5
@@ -109,7 +126,6 @@ func TestTrackerEjectedCapKeepsTheMostChronicHostsEjected(t *testing.T) {
 	instant := testEpoch
 	tracker := newTestTracker(perf, func() time.Time { return instant })
 
-	// p2 and p3 earn a second rung of the ejection ladder before all four are ejected together.
 	for _, participant := range []string{"p2", "p3"} {
 		failAllConsecutive(tracker, participant, "model-a", perf.ConsecutiveFailThreshold)
 	}
@@ -126,8 +142,12 @@ func TestTrackerEjectedCapKeepsTheMostChronicHostsEjected(t *testing.T) {
 	}
 }
 
-// The cap pardons a host for routing only; the detector's own verdict must stay visible, because that is
-// what the race hedges on once a correlated outage puts failing hosts back in rotation.
+// Test flow:
+//  1. Build a tracker with a max-ejection fraction of 0.5 and min-available-hosts of 1.
+//  2. Drive p0-p3 to consecutive failures past the threshold.
+//  3. Assert every participant still reports `Degraded` true: the detector's verdict survives the cap.
+//  4. Assert p3 is pardoned from routing (`Ejected` false) even though it is degraded.
+//  5. Assert `Degraded` is not keyed by model: p0 against a different model reports false.
 func TestTrackerReportsCapPardonedHostsAsDegradedButNotEjected(t *testing.T) {
 	perf := testPerf()
 	perf.MaxEjectionFraction = 0.5
@@ -152,7 +172,11 @@ func TestTrackerReportsCapPardonedHostsAsDegradedButNotEjected(t *testing.T) {
 	}
 }
 
-// Each model's cap divides that model's own host count, so a crowded model cannot spend a sparse one's budget.
+// Test flow:
+//  1. Build a tracker with a max-ejection fraction of 0.5 and min-available-hosts of 1.
+//  2. Drive p0-p3 to consecutive failures on model-a, and q0-q1 to consecutive failures on model-b.
+//  3. Assert model-a's cap (min(0.5*4, 4-1) = 2) keeps its two lexicographically first hosts, p0 and p1, ejected and pardons p2 and p3.
+//  4. Assert model-b's own cap (min(0.5*2, 2-1) = 1) keeps q0 ejected and pardons q1, independent of what model-a's cap spent.
 func TestTrackerEjectedCapIsCountedPerModel(t *testing.T) {
 	perf := testPerf()
 	perf.MaxEjectionFraction = 0.5
@@ -166,14 +190,12 @@ func TestTrackerEjectedCapIsCountedPerModel(t *testing.T) {
 		failAllConsecutive(tracker, participant, "model-b", perf.ConsecutiveFailThreshold)
 	}
 
-	// model-a knows four hosts: min(0.5*4, 4-1) = 2 ejected, the rest pardoned.
 	if !tracker.Ejected("p0", "model-a") || !tracker.Ejected("p1", "model-a") {
 		t.Fatal("expected model-a's two lexicographically first hosts to stay ejected")
 	}
 	if tracker.Ejected("p2", "model-a") || tracker.Ejected("p3", "model-a") {
 		t.Fatal("expected model-a's cap of 2 to pardon p2 and p3")
 	}
-	// model-b knows two hosts: min(0.5*2, 2-1) = 1 ejected, whatever model-a spent.
 	if !tracker.Ejected("q0", "model-b") {
 		t.Fatal("expected model-b's own cap of 1 to keep q0 ejected")
 	}
@@ -182,9 +204,14 @@ func TestTrackerEjectedCapIsCountedPerModel(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a tracker with max-ejection fraction 1.0 (which alone would allow ejecting all hosts) but min-available-hosts of 2.
+//  2. Drive p0, p1, p2 to consecutive failures past the threshold.
+//  3. Assert p0 (lexicographically first) stays ejected.
+//  4. Assert p1 and p2 are pardoned: MinAvailableHosts=2 of 3 known hosts allows only 1 ejected.
 func TestTrackerEjectedCapBoundByMinAvailableHosts(t *testing.T) {
 	perf := testPerf()
-	perf.MaxEjectionFraction = 1.0 // fraction alone would allow all 3 ejected
+	perf.MaxEjectionFraction = 1.0
 	perf.MinAvailableHosts = 2
 	tracker := newTestTracker(perf, fixedNow(testEpoch))
 
@@ -201,6 +228,10 @@ func TestTrackerEjectedCapBoundByMinAvailableHosts(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a tracker with min-available-hosts of 1.
+//  2. Drive the only known host, lone-host, to consecutive failures past the threshold.
+//  3. Assert `Ejected` reports false: the min-available-hosts floor protects the only known host.
 func TestTrackerEjectedCapNeverEjectsTheOnlyKnownHost(t *testing.T) {
 	perf := testPerf()
 	perf.MinAvailableHosts = 1
@@ -213,6 +244,11 @@ func TestTrackerEjectedCapNeverEjectsTheOnlyKnownHost(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a tracker.
+//  2. Record a tool-unsupported refusal for participant-a and a context limit for participant-b.
+//  3. Assert `Capability` reports the tool refusal for participant-a and the limit plus context refusal for participant-b.
+//  4. Assert `Capability` for an unrecorded participant-c reports nothing.
 func TestTrackerCapabilityDelegatesToTheRefusalCounts(t *testing.T) {
 	tracker := newTestTracker(testPerf(), fixedNow(testEpoch))
 
@@ -230,6 +266,10 @@ func TestTrackerCapabilityDelegatesToTheRefusalCounts(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a tracker and record one responsive sample for participant-a/model-a.
+//  2. Acquire participant-a twice and assert its snapshot inflight count is 2.
+//  3. Release once and assert the snapshot inflight count drops to 1.
 func TestTrackerAcquireReleaseTracksInflight(t *testing.T) {
 	tracker := newTestTracker(testPerf(), fixedNow(testEpoch))
 	tracker.RecordSample(Sample{ParticipantKey: "participant-a", Model: "model-a", Responsive: true})
@@ -246,6 +286,10 @@ func TestTrackerAcquireReleaseTracksInflight(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a tracker.
+//  2. Fill the latency window for "quick" (10ms decode latency) and "slow" (20ms decode latency), both on model qwen.
+//  3. Assert the snapshot reports each participant's own TimePerOutputToken p75.
 func TestSnapshotReportsTimePerOutputTokenP75PerPair(t *testing.T) {
 	tracker := newTestTracker(testPerf(), fixedNow(testEpoch))
 	for range latencyWindowMinimum {
@@ -266,7 +310,11 @@ func TestSnapshotReportsTimePerOutputTokenP75PerPair(t *testing.T) {
 	}
 }
 
-// A window short of the minimum reports zero, matching TimePerOutputTokenP75's own refusal.
+// Test flow:
+//  1. Build a tracker.
+//  2. Record one fewer sample than the minimum window for a single host.
+//  3. Assert the snapshot has exactly one tracked pair.
+//  4. Assert that pair's TimePerOutputToken reports 0, matching `TimePerOutputTokenP75`'s own refusal below the minimum.
 func TestSnapshotReportsZeroTimePerOutputTokenBelowTheMinimumWindow(t *testing.T) {
 	tracker := newTestTracker(testPerf(), fixedNow(testEpoch))
 	for range latencyWindowMinimum - 1 {
@@ -282,6 +330,11 @@ func TestSnapshotReportsZeroTimePerOutputTokenBelowTheMinimumWindow(t *testing.T
 	}
 }
 
+// Test flow:
+//  1. Build a tracker with a 60-second host-staleness window.
+//  2. Record one sample for stale-host and assert the hosts map holds 1 entry.
+//  3. Advance the clock 61 seconds, past the staleness window, and record a sample for fresh-host.
+//  4. Assert the hosts map still holds only 1 entry, and that it is fresh-host, not the swept stale-host.
 func TestTrackerRecordSampleLazilyEvictsHostsUnseenPastStaleness(t *testing.T) {
 	perf := testPerf()
 	perf.HostStalenessSeconds = 60
@@ -293,7 +346,7 @@ func TestTrackerRecordSampleLazilyEvictsHostsUnseenPastStaleness(t *testing.T) {
 		t.Fatalf("hosts map len after the first sample = %d, want 1", got)
 	}
 
-	current = current.Add(61 * time.Second) // past HostStalenessSeconds
+	current = current.Add(61 * time.Second)
 	tracker.RecordSample(Sample{ParticipantKey: "fresh-host", Model: "model-a", Responsive: true})
 
 	if got := len(tracker.hosts); got != 1 {
@@ -307,6 +360,10 @@ func TestTrackerRecordSampleLazilyEvictsHostsUnseenPastStaleness(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a tracker.
+//  2. Across 50 iterations over 5 participants, launch concurrent goroutines that record samples, take snapshots, check ejection, and acquire/snapshot/release.
+//  3. Wait for all goroutines to finish without the race detector reporting a conflict.
 func TestTrackerConcurrentRecordAndQueryNoRace(t *testing.T) {
 	tracker := newTestTracker(testPerf(), fixedNow(testEpoch))
 
@@ -336,7 +393,12 @@ func TestTrackerConcurrentRecordAndQueryNoRace(t *testing.T) {
 	wg.Wait()
 }
 
-// A quantile off two samples would rank hosts on noise.
+// Test flow:
+//  1. Build a tracker.
+//  2. Record one fewer sample than the minimum window with a 20ms decode latency.
+//  3. Assert `TimePerOutputTokenP75` reports unknown.
+//  4. Record one more sample to fill the window.
+//  5. Assert `TimePerOutputTokenP75` now reports known and returns 20ms.
 func TestTimePerOutputTokenP75NeedsAFullEnoughWindow(t *testing.T) {
 	tracker := newTestTracker(testPerf(), fixedNow(time.Unix(1700000000, 0)))
 
@@ -358,7 +420,10 @@ func TestTimePerOutputTokenP75NeedsAFullEnoughWindow(t *testing.T) {
 	}
 }
 
-// The measure ranks hosts against each other, so the ratio has to survive.
+// Test flow:
+//  1. Build a tracker.
+//  2. Fill the latency window for "quick" (10ms decode latency) and "slow" (20ms decode latency), both on model qwen.
+//  3. Assert `TimePerOutputTokenP75` reports 10ms for quick and 20ms for slow.
 func TestTimePerOutputTokenP75SeparatesASlowDecoderFromAFastOne(t *testing.T) {
 	tracker := newTestTracker(testPerf(), fixedNow(time.Unix(1700000000, 0)))
 
@@ -375,8 +440,10 @@ func TestTimePerOutputTokenP75SeparatesASlowDecoderFromAFastOne(t *testing.T) {
 	}
 }
 
-// A zero folded into the window would report a speed no host achieved. The unmeasured runs outnumber the
-// measured ones far enough that a folded zero lands on the quantile itself, not merely below it.
+// Test flow:
+//  1. Build a tracker.
+//  2. Record enough measured samples with a 20ms decode latency to fill the window, then record four times as many unmeasured samples carrying no decode latency.
+//  3. Assert `TimePerOutputTokenP75` still reports the measured 20ms rather than a folded-in zero.
 func TestAnUnmeasuredDecodeIsNotFoldedIntoTheWindow(t *testing.T) {
 	const measured, unmeasured = latencyWindowMinimum, 4 * latencyWindowMinimum
 	tracker := newTestTracker(testPerf(), fixedNow(time.Unix(1700000000, 0)))
@@ -395,8 +462,12 @@ func TestAnUnmeasuredDecodeIsNotFoldedIntoTheWindow(t *testing.T) {
 	}
 }
 
-// An operator learns a build refuses only from this line, now that nothing routes on it -- and a host
-// that refuses every request must not repeat it into the log.
+// Test flow:
+//  1. Build a capability tracker.
+//  2. Record a version-unsupported refusal for participant-a twice.
+//  3. Assert the first call reports itself as new and the repeat does not.
+//  4. Record a tool-unsupported refusal for participant-a twice.
+//  5. Assert the first call reports itself as new and the repeat does not.
 func TestARefusalIsAnnouncedOnceRatherThanOnEveryRepeat(t *testing.T) {
 	tracker := newCapabilityTracker()
 
@@ -414,7 +485,11 @@ func TestARefusalIsAnnouncedOnceRatherThanOnEveryRepeat(t *testing.T) {
 	}
 }
 
-// The limit is the one capability value that moves, so a change is worth saying and a restatement is not.
+// Test flow:
+//  1. Build a capability tracker.
+//  2. Record a context limit of 4096 for participant-a; assert it reports previous 0 and changed true.
+//  3. Record the same 4096 limit again; assert it reports changed false.
+//  4. Record a smaller 2048 limit; assert it reports previous 4096 and changed true.
 func TestOnlyAChangedContextLimitIsAnnounced(t *testing.T) {
 	tracker := newCapabilityTracker()
 
@@ -429,8 +504,11 @@ func TestOnlyAChangedContextLimitIsAnnounced(t *testing.T) {
 	}
 }
 
-// The two latencies are separate signals, and each names the congestion window it belongs to: a sample
-// carrying only one of them must leave the other dimension unmeasured.
+// Test flow:
+//  1. For each case (first-content latency or decode latency, naming which dimension the table varies), fill the window with 1-second samples on that case's own latency field, then with 2-second samples.
+//  2. Compute the tracker's `Pressure` for participant-a/model-a.
+//  3. Assert the case's own dimension reports pressure above 1.5.
+//  4. Assert the other dimension stays at 0, since no sample carried that latency.
 func TestPressureKeepsEachLatencyInItsOwnDimension(t *testing.T) {
 	t.Parallel()
 

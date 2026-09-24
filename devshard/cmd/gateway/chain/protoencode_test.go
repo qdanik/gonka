@@ -62,8 +62,6 @@ func buildTxFixtures(t *testing.T, signer *signing.Secp256k1Signer) txFixtures {
 	t.Helper()
 	pubKeyBytes := encodeSecp256k1PubKey(signer.CompressedPublicKeyBytes())
 	pubKeyAny := encodeAny(secp256k1PubKeyTypeURL, pubKeyBytes)
-	// createMsgBytes comes from its own golden as opaque fixed input; this
-	// file only exercises the generic wrapping encoders, not message encoding.
 	createMsgBytes := loadGolden(t, "create_msg")
 	anyCreateMsgBytes := encodeAny(createEscrowMsgTypeURL, createMsgBytes)
 	unorderedTxBody := encodeUnorderedTxBody(anyCreateMsgBytes, fixedTTL)
@@ -77,8 +75,10 @@ func buildTxFixtures(t *testing.T, signer *signing.Secp256k1Signer) txFixtures {
 	}
 }
 
-// TestEncodersMatchGoldens pins every encoder's output to the byte-exact
-// recording from the reference implementation for the same fixed inputs.
+// Test flow:
+//  1. Build shared tx fixtures (pub key, wrapped create message, tx body, auth info) from the fixed signer and inputs.
+//  2. Encode each remaining primitive (signer info, fee, sign doc, tx raw, timestamp, tx hash) alongside the fixtures.
+//  3. For each named case, load its golden fixture and assert the bytes match exactly.
 func TestEncodersMatchGoldens(t *testing.T) {
 	fixtures := buildTxFixtures(t, fixedSigner(t))
 	placeholderSignature := bytes.Repeat([]byte{0xCD}, 64)
@@ -131,8 +131,10 @@ func readLengthDelimitedField(t *testing.T, b []byte) (field int, value []byte, 
 	return int(tag >> 3), b[:length], b[length:]
 }
 
-// TestEncodeAnySelfConsistency proves encodeAny's field numbering directly,
-// independent of the golden corpus.
+// Test flow:
+//  1. Encode an arbitrary type URL and value with encodeAny.
+//  2. Decode the first field and assert it is field 1 and carries the type URL.
+//  3. Decode the second field and assert it is field 2, carries the value, and no trailing bytes remain.
 func TestEncodeAnySelfConsistency(t *testing.T) {
 	typeURL := "/example.SelfConsistencyType"
 	value := []byte("arbitrary-any-value-bytes")
@@ -158,7 +160,9 @@ func TestEncodeAnySelfConsistency(t *testing.T) {
 	}
 }
 
-// TestAppendVarintFieldTag asserts the varint-field tag byte is field<<3|0.
+// Test flow:
+//  1. For each field number in a fixed list, call appendVarintField with value 0.
+//  2. Assert the resulting first byte equals field<<3.
 func TestAppendVarintFieldTag(t *testing.T) {
 	for _, field := range []int{1, 2, 3, 4, 5, 8, 9} {
 		got := appendVarintField(nil, field, 0)
@@ -169,7 +173,9 @@ func TestAppendVarintFieldTag(t *testing.T) {
 	}
 }
 
-// TestAppendBytesFieldTag asserts the bytes-field tag byte is field<<3|2.
+// Test flow:
+//  1. For each field number in a fixed list, call appendBytesField with a one-byte value.
+//  2. Assert the resulting first byte equals field<<3|2.
 func TestAppendBytesFieldTag(t *testing.T) {
 	for _, field := range []int{1, 2, 3, 4, 5, 8, 9} {
 		got := appendBytesField(nil, field, []byte("x"))
@@ -180,8 +186,10 @@ func TestAppendBytesFieldTag(t *testing.T) {
 	}
 }
 
-// TestEncodeTimestampIncludesNanosWhenNonzero covers the one branch no
-// golden exercises: the fixed TTL used elsewhere always has zero nanoseconds.
+// Test flow:
+//  1. Build a timestamp with a nonzero nanosecond component.
+//  2. Call encodeTimestamp on it.
+//  3. Independently encode the expected seconds and nanos fields as varints and assert the two byte slices match.
 func TestEncodeTimestampIncludesNanosWhenNonzero(t *testing.T) {
 	ts := time.Unix(1700000000, 123).UTC()
 	got := encodeTimestamp(ts)

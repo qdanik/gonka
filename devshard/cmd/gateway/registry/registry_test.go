@@ -32,8 +32,7 @@ type settlementSource interface {
 
 var (
 	_ settlementSource = (*Registry)(nil)
-	// Assigning the registry into the scheduler's own dependency struct is the only way to assert its
-	// unexported escrowSource interface is satisfied.
+	// Assigns the registry into the scheduler's dependency struct to assert its unexported escrowSource interface.
 	_ = func() scheduler.Deps { return scheduler.Deps{Escrows: (*Registry)(nil)} }
 	_ = func() scheduler.Escrow { return scheduler.Escrow{Session: nonceStream{}} }
 )
@@ -218,8 +217,7 @@ func newSessions(byEscrow map[string]*fakeSession) *sessions {
 	return &sessions{byEscrow: byEscrow}
 }
 
-// open stands in for a SQLite session: with refuseConcurrentOpen set, a second open that overlaps the
-// first fails the way a locked database file does.
+// open stands in for a SQLite session, refusing a concurrent open when refuseConcurrentOpen is set.
 func (s *sessions) open(_ context.Context, escrowID string) (EscrowSession, error) {
 	s.calls.Add(1)
 	if s.refuseConcurrentOpen {
@@ -244,9 +242,13 @@ func fixedClock() func() time.Time {
 	return func() time.Time { return moment }
 }
 
+// Test flow:
+//  1. Build a registry with two escrows: escrow 1 where hostA holds two slots and hostB one, and escrow 2 where hostA holds a single slot.
+//  2. Add both escrows.
+//  3. Assert escrow 1's pushed membership gives hostA 2/3 (its slots in escrow 1 over its 3 total slots across both escrows) and hostB 1 (its only slot, in escrow 1 alone).
+//  4. Assert escrow 2's pushed membership gives hostA 1/3, the same total-slots denominator, not the escrow-internal ratio of 1 that counting only escrow 2's own slot would give.
 func TestAddPushesSharesSplitAcrossSharedParticipants(t *testing.T) {
 	t.Parallel()
-	// Participant A holds two slots in escrow 1 and one in escrow 2; B holds one slot in escrow 1 only.
 	shared := newSessions(map[string]*fakeSession{
 		"1": newFakeSession("hostA", "hostA", "hostB"),
 		"2": newFakeSession("hostA"),
@@ -261,8 +263,6 @@ func TestAddPushesSharesSplitAcrossSharedParticipants(t *testing.T) {
 		t.Fatalf("Add(2) = %v, want nil", err)
 	}
 
-	// Slot counts would be {hostA:2, hostB:1} and {hostA:1}; escrow-internal ratios would be
-	// {hostA:0.667, hostB:0.333} and {hostA:1}. Both are wrong for limits.escrowWeight.
 	wantFirst := map[string]float64{"hostA": 2.0 / 3.0, "hostB": 1}
 	wantSecond := map[string]float64{"hostA": 1.0 / 3.0}
 	if got := capacity.sharesFor("1"); !reflect.DeepEqual(got, wantFirst) {
@@ -273,6 +273,12 @@ func TestAddPushesSharesSplitAcrossSharedParticipants(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a registry with two escrows sharing hostA (two slots in escrow 1, one in escrow 2) plus hostB (one slot in escrow 1), and add both.
+//  2. Retire escrow 2.
+//  3. Assert `RemoveEscrow` was called for escrow 2 only.
+//  4. Assert escrow 1's membership is republished with hostA and hostB each now at share 1, since hostA no longer shares its slots with escrow 2.
+//  5. Assert escrow 2's membership is gone.
 func TestRetireRemovesMembershipAndRepublishesTheRest(t *testing.T) {
 	t.Parallel()
 	shared := newSessions(map[string]*fakeSession{
@@ -300,6 +306,10 @@ func TestRetireRemovesMembershipAndRepublishesTheRest(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. For each case (the table varies the escrow's session phase: active, finalizing, or settlement), build a registry with one escrow in that phase.
+//  2. Assert `Candidates` returns the case's expected count (1 for active, 0 otherwise).
+//  3. Assert `Serves` agrees with whether any candidates were returned.
 func TestCandidatesReturnOnlyAcceptingEscrows(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -332,6 +342,10 @@ func TestCandidatesReturnOnlyAcceptingEscrows(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a registry with two escrows: one accepting (with one request acquired) and one in settlement.
+//  2. Assert the snapshot reports both, with the accepting escrow's InFlight and Accepting fields set and the settling one reported not accepting with no in-flight requests.
+//  3. Assert `Candidates` returns only the one accepting escrow.
 func TestSnapshotKeepsEscrowsCandidatesDrop(t *testing.T) {
 	t.Parallel()
 	accepting := newFakeSession("hostA", "hostA", "hostB")
@@ -361,6 +375,9 @@ func TestSnapshotKeepsEscrowsCandidatesDrop(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a registry with no escrows added.
+//  2. Assert `Snapshot` returns none.
 func TestSnapshotOfAnEmptyRegistryIsEmpty(t *testing.T) {
 	t.Parallel()
 	if got := New(Deps{Now: fixedClock()}).Snapshot(); len(got) != 0 {
@@ -368,6 +385,9 @@ func TestSnapshotOfAnEmptyRegistryIsEmpty(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a registry and add three escrows, IDs 3, 1, and 2, across two different models, in that order.
+//  2. Assert `Snapshot` reports them ordered by escrow ID (1, 2, 3) regardless of model or add order.
 func TestSnapshotOrdersEveryEscrowByIDAcrossModels(t *testing.T) {
 	t.Parallel()
 	registry := New(Deps{
@@ -392,6 +412,11 @@ func TestSnapshotOrdersEveryEscrowByIDAcrossModels(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a registry with one escrow over two participants and take a first snapshot.
+//  2. Mutate that first snapshot's Participants slice.
+//  3. Take a second snapshot.
+//  4. Assert the second snapshot's Participants are unaffected by the earlier mutation.
 func TestSnapshotParticipantsAreIndependentCopies(t *testing.T) {
 	t.Parallel()
 	registry := New(Deps{
@@ -409,6 +434,10 @@ func TestSnapshotParticipantsAreIndependentCopies(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a registry with two escrows on different models, qwen and kimi.
+//  2. Assert `Candidates("qwen")` returns only the qwen escrow.
+//  3. Assert `Models` reports both model names.
 func TestCandidatesSkipOtherModels(t *testing.T) {
 	t.Parallel()
 	registry := New(Deps{
@@ -430,6 +459,9 @@ func TestCandidatesSkipOtherModels(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a registry and add three escrows, IDs 3, 1, and 2, in that order, on the same model.
+//  2. Assert `Candidates` reports them ordered by escrow ID (1, 2, 3) regardless of add order.
 func TestCandidatesAreOrderedByEscrowID(t *testing.T) {
 	t.Parallel()
 	registry := New(Deps{
@@ -454,8 +486,11 @@ func TestCandidatesAreOrderedByEscrowID(t *testing.T) {
 	}
 }
 
-// An escrow can be retired between the moment Candidates named it and the moment anything asks for it,
-// so the routable lookup must report it gone rather than hand back a session nothing will settle.
+// Test flow:
+//  1. Build a registry with one escrow and confirm it is a candidate and routable.
+//  2. Retire the escrow.
+//  3. Assert `RoutableSession` now reports it gone and `Candidates` returns none.
+//  4. Assert the candidate slice returned before the retire still names the escrow: the caller must re-resolve the target through the registry instead of trusting a stale assignment.
 func TestRetiredEscrowVanishesBetweenCandidatesAndTheRoutableLookup(t *testing.T) {
 	t.Parallel()
 	session := newFakeSession("hostA")
@@ -483,13 +518,15 @@ func TestRetiredEscrowVanishesBetweenCandidatesAndTheRoutableLookup(t *testing.T
 	if got := len(registry.Candidates("qwen")); got != 0 {
 		t.Errorf("len(Candidates(qwen)) after retire = %d, want 0", got)
 	}
-	// The slice handed out before the retire keeps naming the escrow, which is exactly why the engine
-	// must re-resolve the target instead of trusting the assignment.
 	if candidates[0].ID != "1" {
 		t.Errorf("previously returned candidate = %q, want 1", candidates[0].ID)
 	}
 }
 
+// Test flow:
+//  1. Build a registry with one escrow and a recording exhaustion sink.
+//  2. Report the escrow exhausted.
+//  3. Assert the sink recorded that escrow ID.
 func TestNonceExhaustionReachesTheRotationSink(t *testing.T) {
 	t.Parallel()
 	rotation := &recordingExhaustion{}
@@ -507,6 +544,12 @@ func TestNonceExhaustionReachesTheRotationSink(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a registry with one escrow and acquire it, holding a request in flight.
+//  2. Retire the escrow.
+//  3. Assert the session is not closed yet, the escrow reports busy, and it accepts neither a routable lookup nor a new acquire while draining.
+//  4. Release the request and wait for the drain to close.
+//  5. Assert the session closed once, its snapshot was flushed once, and the escrow no longer reports busy.
 func TestRetireDefersCloseUntilInFlightRequestsDrain(t *testing.T) {
 	t.Parallel()
 	session := newFakeSession("hostA")
@@ -554,9 +597,10 @@ func TestRetireDefersCloseUntilInFlightRequestsDrain(t *testing.T) {
 	}
 }
 
-// The last release closes a drained escrow with nobody left to hand a failure to: the request that
-// held it open has already been answered. An unflushed escrow replays its whole diff tail when it is
-// rehydrated, so the failure is counted rather than lost.
+// Test flow:
+//  1. Build a registry with one escrow whose flush always fails, acquire it, and retire it.
+//  2. Release the request and wait for the drain to close.
+//  3. Assert `DrainCloseFailures` counts the failed close, since nobody is left to hand the failure to directly.
 func TestADrainedEscrowThatFailsToCloseIsCounted(t *testing.T) {
 	t.Parallel()
 	session := newFakeSession("hostA")
@@ -582,8 +626,11 @@ func TestADrainedEscrowThatFailsToCloseIsCounted(t *testing.T) {
 	}
 }
 
-// Close releases the store even when the flush before it failed, so the id is free again. Holding it in
-// draining on a flush failure would refuse that escrow for the rest of the process's life.
+// Test flow:
+//  1. Build a registry with one escrow whose flush always fails, and add it.
+//  2. Retire the escrow and assert the flush failure is reported.
+//  3. Add the same escrow ID again.
+//  4. Assert the add succeeds: Close still releases the store on a failed flush, freeing the id.
 func TestAnEscrowWhoseFlushFailedCanBePublishedAgain(t *testing.T) {
 	t.Parallel()
 	session := newFakeSession("hostA")
@@ -602,8 +649,10 @@ func TestAnEscrowWhoseFlushFailedCanBePublishedAgain(t *testing.T) {
 	}
 }
 
-// A retired escrow's committed nonces still owe their votes and their settlement, so the two lookups
-// must disagree about it: one serving both would either route to a retired escrow or strand those nonces.
+// Test flow:
+//  1. Build a registry with one escrow, acquire it, and retire it while the request is still in flight.
+//  2. Assert `RoutableSession` reports it gone: a retired escrow takes no new request.
+//  3. Assert `SettlementSession` still finds the same draining session: its committed nonces still owe their votes and settlement.
 func TestRoutingLosesARetiredEscrowWhileSettlementKeepsIt(t *testing.T) {
 	t.Parallel()
 	session := newFakeSession("hostA")
@@ -634,8 +683,12 @@ func TestRoutingLosesARetiredEscrowWhileSettlementKeepsIt(t *testing.T) {
 	}
 }
 
-// Re-publishing an id an earlier entry is still draining would resolve that entry's committed nonces
-// to a session that never saw them, and hold a second handle on the storage they settle through.
+// Test flow:
+//  1. Build a registry whose session factory returns a first "draining" session, then a "replacement" one.
+//  2. Add, acquire, and retire the escrow so the draining session is still holding an in-flight request.
+//  3. Add the same escrow ID again while it drains.
+//  4. Assert the second add fails with `ErrDraining`.
+//  5. Assert `SettlementSession` still resolves to the original draining session, that only one session was ever opened, and the escrow is not routable.
 func TestAddRefusesAnIdAnEarlierEntryIsStillDraining(t *testing.T) {
 	t.Parallel()
 	draining := newFakeSession("hostA")
@@ -677,8 +730,10 @@ func TestAddRefusesAnIdAnEarlierEntryIsStillDraining(t *testing.T) {
 	}
 }
 
-// The last release closes the draining session, so the settlement lookup outlives retirement but not the
-// drain: whatever counts a request in flight must keep counting it until that request's votes are posted.
+// Test flow:
+//  1. Build a registry with one escrow, acquire it, and retire it while the request is in flight.
+//  2. Release the request and wait for the drain to close.
+//  3. Assert `SettlementSession` no longer finds the escrow once its storage is closed: the settlement lookup outlives retirement but not the drain itself.
 func TestSettlementLookupEndsWithTheDrain(t *testing.T) {
 	t.Parallel()
 	registry := New(Deps{
@@ -705,6 +760,10 @@ func TestSettlementLookupEndsWithTheDrain(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a registry with one idle escrow (no acquired request).
+//  2. Retire it.
+//  3. Assert the session closed immediately, once.
 func TestRetireClosesAnIdleEscrowImmediately(t *testing.T) {
 	t.Parallel()
 	session := newFakeSession("hostA")
@@ -723,10 +782,11 @@ func TestRetireClosesAnIdleEscrowImmediately(t *testing.T) {
 	}
 }
 
-// The whole point of holding a retired entry in draining is that Add refuses its id until the storage
-// is actually released. A close that failed released nothing, so the refusal has to outlive it --
-// otherwise a second session opens over storage the first still holds, and two state machines drive one
-// escrow's nonces.
+// Test flow:
+//  1. Build a registry with one escrow whose close always fails, and add it.
+//  2. Retire the escrow and assert the close failure is reported.
+//  3. Add the same escrow ID again.
+//  4. Assert the add fails with `ErrDraining` and the failed close was not retried: a close that failed released nothing, so the refusal must outlive it.
 func TestAddRefusesAnEscrowWhoseCloseFailed(t *testing.T) {
 	t.Parallel()
 	session := newFakeSession("hostA")
@@ -748,6 +808,9 @@ func TestAddRefusesAnEscrowWhoseCloseFailed(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a registry with one escrow and retire it.
+//  2. Assert `Acquire` refuses it.
 func TestAcquireRefusesARetiredEscrow(t *testing.T) {
 	t.Parallel()
 	registry := New(Deps{
@@ -764,8 +827,11 @@ func TestAcquireRefusesARetiredEscrow(t *testing.T) {
 	}
 }
 
-// The scheduler takes Hold in the step that commits a nonce, holding a candidate published before the
-// retire. Refusing it there is what makes IsBusy monotone for the settlement that follows.
+// Test flow:
+//  1. Build a registry with one escrow and take a candidate's `Hold` before retiring, then release it.
+//  2. Retire the escrow.
+//  3. Assert that same candidate's `Hold` is now refused, since a nonce was committed against a retired escrow.
+//  4. Assert `IsBusy` reports false: nothing is in flight after the refused commit.
 func TestRetireRefusesTheNonceCommitHoldTakenBeforeIt(t *testing.T) {
 	t.Parallel()
 	registry := New(Deps{
@@ -792,6 +858,11 @@ func TestRetireRefusesTheNonceCommitHoldTakenBeforeIt(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a registry with one escrow and acquire it twice.
+//  2. Assert the candidate's ActiveUsers is 2.
+//  3. Release one acquire.
+//  4. Assert ActiveUsers drops to 1.
 func TestActiveUsersFeedsTheLoadScore(t *testing.T) {
 	t.Parallel()
 	registry := New(Deps{
@@ -815,6 +886,10 @@ func TestActiveUsersFeedsTheLoadScore(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a registry with one escrow and acquire it twice.
+//  2. Release the first acquire's release function twice.
+//  3. Assert ActiveUsers still reflects only one release: a doubled release counts once.
 func TestReleasingTwiceCountsOnce(t *testing.T) {
 	t.Parallel()
 	registry := New(Deps{
@@ -835,8 +910,10 @@ func TestReleasingTwiceCountsOnce(t *testing.T) {
 	}
 }
 
-// A published escrow is not opened a second time: the session is a SQLite file, and the open would
-// fail against the live one rather than produce a handle to discard.
+// Test flow:
+//  1. Build a registry and add one escrow.
+//  2. Add the same escrow ID again.
+//  3. Assert the factory was called only once, the live session was never closed, and `Candidates` still reports exactly one escrow: a published escrow is not opened a second time.
 func TestAddIsIdempotentAndOpensNoSecondSession(t *testing.T) {
 	t.Parallel()
 	session := newFakeSession("hostA")
@@ -857,10 +934,11 @@ func TestAddIsIdempotentAndOpensNoSecondSession(t *testing.T) {
 	}
 }
 
-// Two callers publish the same escrow at once whenever an operator creates one: the create path adds
-// it, and the devshard row it writes wakes the republish watcher, which adds it again. A session
-// factory that refuses a concurrent open -- which is what SQLite does to a second writer -- must not
-// turn that into a failure for either caller.
+// Test flow:
+//  1. Build a registry whose session factory refuses a concurrent open, the way SQLite refuses a second writer.
+//  2. Call `Add` for the same escrow ID from two goroutines at once.
+//  3. Assert both callers succeed with no error.
+//  4. Assert the factory was called only once and `Candidates` reports exactly one escrow.
 func TestConcurrentAddsOfOneEscrowOpenItOnce(t *testing.T) {
 	t.Parallel()
 	factory := newSessions(map[string]*fakeSession{"1": newFakeSession("hostA")})
@@ -889,6 +967,11 @@ func TestConcurrentAddsOfOneEscrowOpenItOnce(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a registry whose session factory always fails to open.
+//  2. Call `Add`.
+//  3. Assert the returned error wraps the factory's failure.
+//  4. Assert `Candidates` reports none: the failed escrow was never published.
 func TestAddReportsAFailedSessionOpen(t *testing.T) {
 	t.Parallel()
 	factory := newSessions(nil)
@@ -905,6 +988,11 @@ func TestAddReportsAFailedSessionOpen(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a registry with one live escrow and one escrow acquired then retired (draining).
+//  2. Call `Close` on the registry.
+//  3. Assert both the live and the draining sessions were each closed once.
+//  4. Assert `Add` after `Close` fails with `ErrClosed`.
 func TestCloseReleasesLiveAndDrainingSessions(t *testing.T) {
 	t.Parallel()
 	live := newFakeSession("hostA")
@@ -937,6 +1025,11 @@ func TestCloseReleasesLiveAndDrainingSessions(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a registry with four escrows.
+//  2. For each escrow, run concurrent goroutines that repeatedly add and retire it, acquire and release it, and read candidates/routable sessions/`Serves`, 200 iterations each.
+//  3. Wait for all goroutines to finish.
+//  4. Assert every escrow ends up not busy and was closed by at least one rotation.
 func TestConcurrentPicksRotationsAndRequestsStayConsistent(t *testing.T) {
 	t.Parallel()
 	byEscrow := map[string]*fakeSession{}
@@ -998,10 +1091,12 @@ func mustAdd(t *testing.T, registry *Registry, escrowID, model string) {
 	}
 }
 
-// A real session flushes its snapshot under its own lock, and a dispatch holds that lock while it asks
-// the registry for a hold -- session lock, then registry lock. Retiring under the registry lock takes
-// the same two in the opposite order, and the two orders together freeze every later route and every
-// settlement of an already-committed nonce, process-wide, until a restart.
+// Test flow:
+//  1. Build a registry with one escrow whose session flush blocks on an external lock held by the test.
+//  2. Retire the escrow in a goroutine, letting it block inside the flush while holding the registry lock's path.
+//  3. Call `IsBusy` from another goroutine while the retire is blocked.
+//  4. Assert `IsBusy` answers promptly rather than deadlocking: the registry lock must not be held across the session flush, or the two locks would be taken in opposite orders.
+//  5. Release the external lock and assert `Retire` completes with no error.
 func TestRetireClosesTheSessionOutsideTheRegistryLock(t *testing.T) {
 	t.Parallel()
 	session := newFakeSession("hostA")
@@ -1021,8 +1116,6 @@ func TestRetireClosesTheSessionOutsideTheRegistryLock(t *testing.T) {
 	go func() { retired <- registry.Retire("1") }()
 	<-flushing
 
-	// The dispatch side: any registry call needing the registry lock while the retire waits on the
-	// session lock. It returns promptly or the two locks are held in opposite orders.
 	answered := make(chan bool, 1)
 	go func() { answered <- registry.IsBusy("1") }()
 
@@ -1038,6 +1131,11 @@ func TestRetireClosesTheSessionOutsideTheRegistryLock(t *testing.T) {
 	sessionLock.Lock()
 }
 
+// Test flow:
+//  1. Build a registry with one escrow, acquire it, and retire it while the request is in flight.
+//  2. Assert the snapshot still reports the escrow, not accepting, with one request in flight.
+//  3. Release the request.
+//  4. Assert the snapshot no longer reports the escrow once the last request has drained.
 func TestSnapshotKeepsARetiredEscrowUntilItDrains(t *testing.T) {
 	t.Parallel()
 	session := newFakeSession("hostA")
@@ -1073,6 +1171,10 @@ func TestSnapshotKeepsARetiredEscrowUntilItDrains(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a registry with one escrow whose close always fails, acquire it, and retire it.
+//  2. Release the request.
+//  3. Assert the snapshot reports no series for that escrow even though its close failed: there is nothing left to report.
 func TestSnapshotDropsADrainedEscrowWhoseCloseFailed(t *testing.T) {
 	t.Parallel()
 	session := newFakeSession("hostA")
@@ -1094,6 +1196,10 @@ func TestSnapshotDropsADrainedEscrowWhoseCloseFailed(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a registry with two escrows; for each, add, acquire, retire, then release it.
+//  2. Wait for the drain to close both.
+//  3. Assert the registry's internal draining view ends up empty once both escrows have drained.
 func TestTheDrainingViewShrinksWhenAnEscrowFinishes(t *testing.T) {
 	t.Parallel()
 	sessions := map[string]*fakeSession{"1": newFakeSession("hostA"), "2": newFakeSession("hostB")}

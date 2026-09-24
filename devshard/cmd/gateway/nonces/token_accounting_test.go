@@ -115,6 +115,11 @@ func (e *liveEscrow) timeOut(t *testing.T, inferenceID uint64) {
 	}}})
 }
 
+// Test flow:
+//  1. Start one inference on a live escrow without confirming or finishing it.
+//  2. Report that nonce as a burn (ghost) and observe the escrow's state through the ledger.
+//  3. Assert the folded totals show zero in-flight nonces.
+//  4. Assert the ghost disposition counts exactly the one burned nonce.
 func TestABurnIsNotCountedAsInFlight(t *testing.T) {
 	t.Parallel()
 	escrow := newLiveEscrow(t, 3)
@@ -130,8 +135,7 @@ func TestABurnIsNotCountedAsInFlight(t *testing.T) {
 	}
 }
 
-// observedBy is the ledger reading one escrow the way the sweep does, after whatever the gateway itself
-// reported about the nonces -- a burn it took, the tokens an attempt streamed.
+// observedBy is the ledger reading one escrow the way the sweep does, after whatever the gateway itself reported about the nonces.
 func observedBy(t *testing.T, escrow *liveEscrow, reported func(book *accounting.Book)) accounting.ParticipantRecord {
 	t.Helper()
 	service, err := accounting.NewService(accounting.Settings{Now: func() time.Time { return time.Unix(0, 0).UTC() }})
@@ -200,10 +204,13 @@ func foldRecords(records []accounting.ParticipantRecord) accounting.ParticipantR
 	return total
 }
 
-// The chain books a reservation at StartInference and counts tokens only at FinishInference, so a nonce that
-// never finished carries its estimated input and its max_tokens while both counted numbers stay zero.
-// Summing the two sides over different populations is what made a dashboard read two million bytes of prompt
-// against twenty-seven thousand counted tokens: the given side covered every request, the counted side one.
+// Test flow:
+//  1. Start three inferences on a live escrow: one that finishes, one that stays confirmed and running, and one that times out after being confirmed.
+//  2. Report the finished nonce's streamed output tokens and observe the escrow's state.
+//  3. Assert counted nonces equal 1, matching only the nonce the chain counted tokens for.
+//  4. Assert input and output tokens match the finish's own numbers.
+//  5. Assert estimated input and max tokens cover only the finished nonce's reservation, not the unfinished ones.
+//  6. Assert reserved cost is non-zero, since it covers every started nonce regardless of how it ended.
 func TestTheGivenAndCountedTokensCoverTheSameNonces(t *testing.T) {
 	t.Parallel()
 	escrow := newLiveEscrow(t, 3)
@@ -235,7 +242,10 @@ func TestTheGivenAndCountedTokensCoverTheSameNonces(t *testing.T) {
 	}
 }
 
-// One request that finished is the whole population, so the two ratios docs/accounting.md names read true.
+// Test flow:
+//  1. Start and finish one inference on a live escrow, then report its streamed output tokens and observe the escrow's state.
+//  2. Assert the input-estimate bias is exactly 1, since the prompt estimate matched the finish exactly.
+//  3. Assert the output-reservation-use ratio matches the finished answer's share of its max-tokens reservation.
 func TestTheTokenRatiosReadTrueOverOneFinishedNonce(t *testing.T) {
 	t.Parallel()
 	escrow := newLiveEscrow(t, 3)
@@ -253,8 +263,9 @@ func TestTheTokenRatiosReadTrueOverOneFinishedNonce(t *testing.T) {
 	}
 }
 
-// The count reaches the ledger through the report the race already makes. A host that sent no usage at all
-// is the case that matters: without the tokens the gateway counted off the stream, the answer reads as empty.
+// Test flow:
+//  1. Record a race with a losing attempt that only counted logprob tokens and a winning attempt with its own usage-reported completion tokens.
+//  2. Assert the folded output tokens equal the sum of the loser's counted stream and the winner's reported usage.
 func TestARaceReportsTheTokensItsAttemptsStreamed(t *testing.T) {
 	t.Parallel()
 	escrow := newLiveEscrow(t, 3)

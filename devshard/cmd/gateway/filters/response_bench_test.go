@@ -42,7 +42,6 @@ func BenchmarkStripResponseBody(b *testing.B) {
 	}
 }
 
-// A delta with nothing to strip still pays the walk, so this measures the walk rather than the delete.
 func BenchmarkDeleteFields(b *testing.B) {
 	var decoded any
 	if err := stdjson.Unmarshal([]byte(benchCleanChoice), &decoded); err != nil {
@@ -54,12 +53,9 @@ func BenchmarkDeleteFields(b *testing.B) {
 	}
 }
 
-// The cache asks this of every reply it stores and of every hit it replays, so its cost is paid twice
-// per entry on bodies that reach a megabyte.
 func BenchmarkIsCacheableResponse(b *testing.B) {
 	events := productionStream(64)
 	var body bytes.Buffer
-	// Everything but the terminator, then the terminal chunk the fixture leaves out, then the terminator.
 	for _, event := range events[:len(events)-1] {
 		body.Write(event)
 	}
@@ -75,7 +71,6 @@ func BenchmarkIsCacheableResponse(b *testing.B) {
 	}
 }
 
-// What a cache hit pays: the read path asks only whether the stored reply carries a failure.
 func BenchmarkHasNonCacheableError(b *testing.B) {
 	events := productionStream(64)
 	var body bytes.Buffer

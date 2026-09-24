@@ -49,8 +49,7 @@ type fixedSnapshots struct{ snapshot chain.PhaseSnapshot }
 
 func (f fixedSnapshots) Snapshot() chain.PhaseSnapshot { return f.snapshot }
 
-// liveSessionFactory builds a real *user.Session over in-memory storage with nil host clients, so the
-// participant keys the registry derives membership from are real group addresses.
+// liveSessionFactory builds a real *user.Session over in-memory storage with nil host clients.
 func liveSessionFactory(t *testing.T) (registry.SessionFactory, []string) {
 	t.Helper()
 	signers := []*signing.Secp256k1Signer{testutil.MustGenerateKey(t), testutil.MustGenerateKey(t)}
@@ -75,6 +74,12 @@ func liveSessionFactory(t *testing.T) (registry.SessionFactory, []string) {
 	}, participants
 }
 
+// Test flow:
+//  1. Build a live session factory and capacity limiter seeded with two participants' weights (40 and 60), and add one escrow to a registry wired to that capacity as membership.
+//  2. Assert the escrow's weight is 100: the sum of its two hosts' current weights, since each holds one of the two slots and serves no other escrow.
+//  3. Wire a scheduler around the registry, the capacity limiter, an open admission limiter, and a perf model that reports every host capable.
+//  4. Ask the scheduler to pick a host for the wired model.
+//  5. Assert the pick succeeds, names the wired escrow, and carries a committed nonce.
 func TestPushedMembershipIsWhatMakesTheGatewayRouteAtAll(t *testing.T) {
 	t.Parallel()
 
@@ -89,8 +94,6 @@ func TestPushedMembershipIsWhatMakesTheGatewayRouteAtAll(t *testing.T) {
 		t.Fatalf("Add = %v, want nil", err)
 	}
 
-	// Each participant holds one of the two slots and serves no other escrow, so its share is 1 and the
-	// escrow's weight is the sum of the two hosts' current weights.
 	if got, want := capacity.EscrowWeight(wiredEscrowID, wiredModel), 100.0; got != want {
 		t.Fatalf("EscrowWeight = %v, want %v", got, want)
 	}
@@ -124,6 +127,12 @@ func TestPushedMembershipIsWhatMakesTheGatewayRouteAtAll(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a live session factory and capacity limiter seeded with two participants' weights, and add one escrow to a registry built with no membership wired in (nil, matching the gateway before this package existed).
+//  2. Assert the escrow's weight stays 0 without a membership push, even though the escrow is published and looks healthy among the candidates.
+//  3. Wire a scheduler around the registry and capacity limiter.
+//  4. Ask the scheduler to pick a host for the wired model.
+//  5. Assert the pick fails with `scheduler.ErrNoEscrowCapacity`: the gateway boots green and serves nothing.
 func TestWithoutTheMembershipPushEveryEscrowScoresUnusable(t *testing.T) {
 	t.Parallel()
 
@@ -132,7 +141,6 @@ func TestWithoutTheMembershipPushEveryEscrowScoresUnusable(t *testing.T) {
 	capacity := limits.NewCapacity(nil)
 	capacity.Update(chain.PhaseSnapshot{CurrentWeights: weights, FullWeights: weights})
 
-	// Membership left nil is exactly what the gateway did before this package existed.
 	escrows := registry.New(registry.Deps{ServingSessions: sessions, Now: time.Now})
 	t.Cleanup(func() { _ = escrows.Close() })
 	if err := escrows.Add(context.Background(), wiredEscrowID, wiredModel); err != nil {
@@ -167,6 +175,12 @@ func TestWithoutTheMembershipPushEveryEscrowScoresUnusable(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a capacity limiter seeded with a shared participant's weight of 90 and an exclusive participant's weight of 10.
+//  2. Set escrow "1"'s membership to half the shared participant plus the whole exclusive participant, and escrow "2"'s membership to the other half of the shared participant.
+//  3. Assert escrow "1"'s weight is 55 and escrow "2"'s weight is 45: the shared host's weight splits between the two escrows rather than counting twice.
+//  4. Re-set escrow "1"'s membership to the full, unshared weight of both participants.
+//  5. Assert escrow "1"'s weight becomes 100: raw slot counts would hand the shared host's full weight to both escrows.
 func TestMembershipSharesFeedTheWeightSplitOfASharedParticipant(t *testing.T) {
 	t.Parallel()
 	shared := testutil.MustGenerateKey(t)
@@ -175,8 +189,6 @@ func TestMembershipSharesFeedTheWeightSplitOfASharedParticipant(t *testing.T) {
 	weights := map[string]float64{shared.Address(): 90, exclusive.Address(): 10}
 	capacity.Update(chain.PhaseSnapshot{CurrentWeights: weights, FullWeights: weights})
 
-	// The shared participant holds one slot in each of two escrows; limits must see half of it per
-	// escrow, not the whole of it twice.
 	capacity.SetEscrowMembership("1", map[string]float64{shared.Address(): 0.5, exclusive.Address(): 1})
 	capacity.SetEscrowMembership("2", map[string]float64{shared.Address(): 0.5})
 
@@ -186,7 +198,6 @@ func TestMembershipSharesFeedTheWeightSplitOfASharedParticipant(t *testing.T) {
 	if got, want := capacity.EscrowWeight("2", wiredModel), 45.0; got != want {
 		t.Errorf("EscrowWeight(2) = %v, want %v", got, want)
 	}
-	// Raw slot counts would hand the shared host's full weight to both escrows.
 	capacity.SetEscrowMembership("1", map[string]float64{shared.Address(): 1, exclusive.Address(): 1})
 	if got, want := capacity.EscrowWeight("1", wiredModel), 100.0; got != want {
 		t.Errorf("EscrowWeight(1) with raw slot counts = %v, want %v -- the double count", got, want)

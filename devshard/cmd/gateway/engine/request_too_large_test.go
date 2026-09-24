@@ -9,9 +9,11 @@ import (
 	"devshard/transport"
 )
 
-// A body the gateway refused to send says nothing about the host: the host never saw the request. Classifying
-// it as a transport fault charges the host a negative perf sample, pushes its cut-off breaker and counts
-// against its failure rate for a decision this gateway made.
+// Test flow:
+//  1. Classify a dispatch error of `transport.ErrHostRequestTooLarge`.
+//  2. Assert it maps to `TerminalRequestTooLarge` with reason `ReasonRequestTooLarge`.
+//  3. Assert its verdict moves the outcome to the model, not the host.
+//  4. Assert a failed attempt with that terminal gets the `ExemptRequestTooLarge` sample exemption.
 func TestABodyTheGatewayRefusedToSendIsNotChargedToTheHost(t *testing.T) {
 	t.Parallel()
 
@@ -34,7 +36,10 @@ func TestABodyTheGatewayRefusedToSendIsNotChargedToTheHost(t *testing.T) {
 	}
 }
 
-// SendOnly wraps the sentinel with the escrow and the nonce, so the classifier must read it through the wrap.
+// Test flow:
+//  1. Wrap `transport.ErrHostRequestTooLarge` with escrow and nonce context via `fmt.Errorf`.
+//  2. Classify the wrapped error.
+//  3. Assert it still resolves to `TerminalRequestTooLarge`.
 func TestARefusedBodyIsRecognisedThroughItsWrapping(t *testing.T) {
 	t.Parallel()
 	wrapped := fmt.Errorf("escrow %s nonce %d: %w", "escrow-1", 7, transport.ErrHostRequestTooLarge)

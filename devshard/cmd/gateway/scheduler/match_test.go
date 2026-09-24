@@ -52,9 +52,11 @@ func windowFullWhen(full func(string) bool) func(string) blockReason {
 	}
 }
 
-// servable is the sweep's fast answer and match is the per-nonce decision, and they must be exactly
-// as strict as each other: a stricter servable fails a request match would have served, and a laxer
-// one keeps a waiter that every drain can only answer by burning a chain-costed nonce.
+// Test flow:
+//  1. For every combination of poc-required, congested, ejected, state-blocked and exclusion bits, build an `availability` and a queued waiter.
+//  2. Compute `servable`'s verdict for the combination.
+//  3. Compute whether `match` would serve the waiter on either participant.
+//  4. Assert the two verdicts agree for every combination.
 func TestServableAgreesWithMatchOverEveryFilterCombination(t *testing.T) {
 	t.Parallel()
 	participants := []string{hostA, hostB}
@@ -125,6 +127,12 @@ func wantServe(t *testing.T, decision Decision, expected *waiter) {
 	}
 }
 
+// Test flow:
+//  1. For each table case of poc-required and window-full flags, build an availability and match one waiter against a binding.
+//  2. Assert poc required alone burns as `ghostPoC`.
+//  3. Assert a full window alone burns as `ghostWindowFull`.
+//  4. Assert poc wins when both are set.
+//  5. Assert neither filter serves the waiter.
 func TestMatchHostLevelFilters(t *testing.T) {
 	t.Parallel()
 	binding := HostBinding{Nonce: 7, HostIdx: 1, Participant: hostA}
@@ -160,6 +168,10 @@ func TestMatchHostLevelFilters(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Queue three compatible waiters at increasing enqueue times.
+//  2. Match a binding against all three.
+//  3. Assert the decision serves the oldest one.
 func TestMatchServesOldestCompatibleWaiter(t *testing.T) {
 	t.Parallel()
 	oldest := queuedWaiter(baseTime, "model-a")
@@ -172,6 +184,10 @@ func TestMatchServesOldestCompatibleWaiter(t *testing.T) {
 	wantServe(t, decision, oldest)
 }
 
+// Test flow:
+//  1. Queue an older waiter that excludes the host and a newer, compatible waiter.
+//  2. Match the binding.
+//  3. Assert the decision serves the compatible, newer waiter rather than burning the nonce.
 func TestMatchConservesNonceForLaterWaiter(t *testing.T) {
 	t.Parallel()
 	excluding := queuedWaiter(baseTime, "model-a", hostA)
@@ -183,6 +199,11 @@ func TestMatchConservesNonceForLaterWaiter(t *testing.T) {
 	wantServe(t, decision, compatible)
 }
 
+// Test flow:
+//  1. Queue an older waiter that excludes the host and a newer one that also excludes it.
+//  2. For each table case of the current clock time, relative to the stale window's expiry, match the binding.
+//  3. Assert the decision holds until the oldest waiter's deadline while inside the window.
+//  4. Assert the decision serves the excluded waiter, marked despite exclusion, once the window has expired.
 func TestMatchHoldsInsideStaleWindow(t *testing.T) {
 	t.Parallel()
 	oldest := queuedWaiter(baseTime, "model-a", hostA)
@@ -222,6 +243,10 @@ func TestMatchHoldsInsideStaleWindow(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Past the stale window's expiry, for each table case build a queue and an optional state-blocked availability.
+//  2. Match the binding.
+//  3. Assert every case burns with the case's expected `GhostKind`: an exclusion with another host able to serve it burns `ghostExclude` (unlike the sole-host case, served instead), and a diverged state burns `ghostStateDiverged` regardless of the queue.
 func TestMatchBurnKindPastStaleWindow(t *testing.T) {
 	t.Parallel()
 	binding := HostBinding{Nonce: 4, HostIdx: 0, Participant: hostA}
@@ -235,8 +260,6 @@ func TestMatchBurnKindPastStaleWindow(t *testing.T) {
 		wantKind     GhostKind
 	}{
 		{
-			// With another host able to take it, the exclusion stands and the nonce burns; the sole-host
-			// case is served despite the exclusion instead, and has its own test.
 			name:         "every waiter excludes the host and another can serve it",
 			waiting:      []*waiter{queuedWaiter(baseTime, "model-a", hostA)},
 			participants: []string{hostA, hostB},
@@ -275,6 +298,10 @@ func TestMatchBurnKindPastStaleWindow(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Queue a waiter that excludes `hostA` and match it against two bindings on different slots of that same participant.
+//  2. Assert both bindings hold inside the stale window.
+//  3. Assert both bindings serve the excluded waiter, marked despite exclusion, once the window has expired.
 func TestMatchKeysExclusionByParticipantNotSlot(t *testing.T) {
 	t.Parallel()
 	excluding := queuedWaiter(baseTime, "model-a", hostA)
@@ -297,8 +324,10 @@ func TestMatchKeysExclusionByParticipantNotSlot(t *testing.T) {
 	}
 }
 
-// A hold parks a nonce for a waiter to come back to, so an empty queue must never produce one. The
-// host filters still burn: they are facts about the host, decided before the queue is consulted at all.
+// Test flow:
+//  1. Match a binding against a nil queue, for each table case of no filters, poc required, or state blocked.
+//  2. Assert an empty queue with no filters declines, never holds.
+//  3. Assert a host-level filter still burns even with nobody queued.
 func TestMatchEmptyQueueNeverHolds(t *testing.T) {
 	t.Parallel()
 	binding := HostBinding{Nonce: 4, HostIdx: 0, Participant: hostA}
@@ -337,6 +366,11 @@ func TestMatchEmptyQueueNeverHolds(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Queue two waiters, one excluding `hostA`, into a slice.
+//  2. Match a binding against them.
+//  3. Assert the queue slice is neither reordered nor resized.
+//  4. Assert neither waiter's enqueue time, exclusion set or profile was mutated.
 func TestMatchDoesNotMutateItsInputs(t *testing.T) {
 	t.Parallel()
 	first := queuedWaiter(baseTime, "model-a", hostA)
@@ -356,9 +390,12 @@ func TestMatchDoesNotMutateItsInputs(t *testing.T) {
 	}
 }
 
-// TestMatchIsTotal walks every predicate combination against every queue/clock shape and asserts a
-// single non-nil Decision plus the invariant each kind claims -- the exhaustiveness that makes every
-// committed nonce accountable to exactly one party.
+// Test flow:
+//  1. For every combination of poc-required, window-full, state-blocked and ejected predicates, and every queue shape and clock position, match the binding.
+//  2. Assert the decision is never nil and always one of the known kinds.
+//  3. Assert a serve never crosses an active filter, and an excluded waiter served is marked despite exclusion.
+//  4. Assert a hold never crosses a host-level filter, always has a waiter to hold for, and its deadline is the oldest waiter's enqueue time plus the wait window, still ahead of the clock.
+//  5. Assert a burn's kind matches whichever host-level filter was active.
 func TestMatchIsTotal(t *testing.T) {
 	t.Parallel()
 	binding := HostBinding{Nonce: 4, HostIdx: 0, Participant: hostA}
@@ -454,6 +491,10 @@ func boolLabel(value bool) string {
 	return "false"
 }
 
+// Test flow:
+//  1. Queue an abandoned waiter beside a live one and match the binding, asserting the decision serves the live waiter.
+//  2. Queue an abandoned excluding waiter beside a live excluding one and match past the abandoned one's deadline, asserting the hold's deadline comes from the live waiter, not the abandoned one.
+//  3. Queue only an abandoned excluding waiter and match the binding, asserting the decision declines rather than holding or burning for nobody.
 func TestMatchSkipsAbandonedWaiters(t *testing.T) {
 	t.Parallel()
 	binding := HostBinding{Nonce: 4, HostIdx: 0, Participant: hostA}
@@ -487,8 +528,6 @@ func TestMatchSkipsAbandonedWaiters(t *testing.T) {
 		}
 	})
 
-	// A nonce costs the escrow whether or not anyone is served by it, so a queue with nobody left in
-	// it must give the nonce back rather than spend one recording that nobody wanted it.
 	t.Run("an entirely abandoned queue neither holds nor burns", func(t *testing.T) {
 		t.Parallel()
 		abandoned := queuedWaiter(baseTime, "model-a", hostA)

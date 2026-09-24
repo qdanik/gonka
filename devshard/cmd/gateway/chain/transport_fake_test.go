@@ -6,9 +6,7 @@ import (
 	"sync"
 )
 
-// fakeTransport answers a TxClient without a connection. It records what it was asked to broadcast so
-// a test can assert on the signed bytes, serves transactions from a table a test fills in, and runs
-// onTx before each answer so a test can make a transaction appear after a chosen number of polls.
+// fakeTransport is an in-memory TxClient transport double.
 type fakeTransport struct {
 	mu sync.Mutex
 

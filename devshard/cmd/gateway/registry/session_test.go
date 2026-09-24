@@ -18,8 +18,7 @@ import (
 
 const liveEscrowID = "7"
 
-// newLiveStream builds a real *user.Session over in-memory storage and nil host clients: composing and
-// committing a nonce is local work, so the whole peek-decide-commit unit runs without a chain or a host.
+// newLiveStream builds a real *user.Session over in-memory storage and nil host clients.
 func newLiveStream(t *testing.T, slotsPerSigner ...int) (nonceStream, EscrowSession, []types.SlotAssignment) {
 	t.Helper()
 	signers := make([]*signing.Secp256k1Signer, len(slotsPerSigner))
@@ -46,6 +45,12 @@ func newLiveStream(t *testing.T, slotsPerSigner ...int) (nonceStream, EscrowSess
 	return newNonceStream(handle, "qwen", fixedClock()), handle, group
 }
 
+// Test flow:
+//  1. Build a live stream over a 3-slot group and advance it, committing inference params for model qwen.
+//  2. Assert the commit succeeds and returns a prepared nonce of 1 on host index 1.
+//  3. Assert the binding handed to the decide callback names nonce 1 and the group's slot-1 participant.
+//  4. Assert `SlotParticipants` maps that nonce's slot to the same bound participant.
+//  5. Assert the session's nonce advances to 1 after the commit.
 func TestAdvanceCommitsTheServeParams(t *testing.T) {
 	t.Parallel()
 	stream, session, group := newLiveStream(t, 1, 1, 1)
@@ -80,6 +85,10 @@ func TestAdvanceCommitsTheServeParams(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a live stream over a 2-slot group and advance it, committing a ghost intent with no request params.
+//  2. Assert the commit succeeds and returns a prepared nonce.
+//  3. Assert the session's nonce advances to 1.
 func TestAdvanceBurnsAGhostNonceWithoutARequest(t *testing.T) {
 	t.Parallel()
 	stream, session, _ := newLiveStream(t, 1, 1)
@@ -98,6 +107,10 @@ func TestAdvanceBurnsAGhostNonceWithoutARequest(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a live stream and advance it with an intent that declines to commit.
+//  2. Assert `Advance` returns no error and no prepared nonce.
+//  3. Assert the session's nonce stays at 0.
 func TestAdvanceLeavesADeclinedNonceUnconsumed(t *testing.T) {
 	t.Parallel()
 	stream, session, _ := newLiveStream(t, 1, 1)
@@ -116,6 +129,10 @@ func TestAdvanceLeavesADeclinedNonceUnconsumed(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a live stream and advance it, committing params of the wrong type.
+//  2. Assert `Advance` returns an error naming the wrong params type.
+//  3. Assert the session's nonce stays at 0.
 func TestAdvanceRejectsParamsItCannotDispatch(t *testing.T) {
 	t.Parallel()
 	stream, session, _ := newLiveStream(t, 1, 1)
@@ -132,6 +149,10 @@ func TestAdvanceRejectsParamsItCannotDispatch(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a nonce stream over a fake session whose prepare call always fails.
+//  2. Advance it, committing inference params.
+//  3. Assert the returned error wraps the fake session's failure.
 func TestAdvanceReportsASessionFailure(t *testing.T) {
 	t.Parallel()
 	failure := errors.New("storage gone")
@@ -148,9 +169,14 @@ func TestAdvanceReportsASessionFailure(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a live stream over two signers, the first holding two slots, so the group spans three slots over two participants.
+//  2. Assert `GroupSize` matches the group and `ParticipantKeys` reports the two distinct participants.
+//  3. Assert `LatestNonce` starts at 0 on a fresh session.
+//  4. Advance the stream with a ghost commit.
+//  5. Assert `LatestNonce` reports 1 after the commit.
 func TestStreamReportsTheGroupAndTheLatestNonce(t *testing.T) {
 	t.Parallel()
-	// Two signers, the first holding two slots: the group is three slots over two participants.
 	stream, _, group := newLiveStream(t, 2, 1)
 
 	if got, want := stream.GroupSize(), len(group); got != want {
@@ -174,6 +200,10 @@ func TestStreamReportsTheGroupAndTheLatestNonce(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a nonce stream for model kimi over a fake session with a fixed clock.
+//  2. Read the stream's ghost params.
+//  3. Assert they carry the model, the ghost prompt and its length, the ghost max-tokens reservation, and the clock's fixed instant as StartedAt.
 func TestGhostParamsCarryTheEscrowModelAndTheInjectedClock(t *testing.T) {
 	t.Parallel()
 	stream := newNonceStream(newFakeSession("hostA"), "kimi", fixedClock())
@@ -192,6 +222,10 @@ func TestGhostParamsCarryTheEscrowModelAndTheInjectedClock(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a live stream and take its session handle.
+//  2. Assert `Phase` reports the machine as active.
+//  3. Assert `UserSession` returns the concrete handle rather than nil.
 func TestSessionHandleReportsThePhaseOfItsOwnStateMachine(t *testing.T) {
 	t.Parallel()
 	_, session, _ := newLiveStream(t, 1, 1)
@@ -204,8 +238,10 @@ func TestSessionHandleReportsThePhaseOfItsOwnStateMachine(t *testing.T) {
 	}
 }
 
-// The burn's body and its reservation are one fact written twice. They never meet a host today, but a
-// probe that starts being sent would be refused for declaring less than it reserved.
+// Test flow:
+//  1. Parse the ghost prompt's JSON body.
+//  2. Assert its max_tokens field matches the ghostMaxTokens reservation.
+//  3. Assert ghostMaxTokens is at or above the chain's minimum tokens floor.
 func TestGhostPromptAgreesWithItsReservation(t *testing.T) {
 	var body struct {
 		MaxTokens uint64 `json:"max_tokens"`

@@ -10,8 +10,7 @@ const earnedModel = "model-a"
 
 var earnedEpoch = testEpoch
 
-// The arithmetic is pinned here rather than taken from the defaults, so a retuned fleet figure does not
-// silently restate what these tests claim.
+// weightedConfig returns a ParticipantConfig with pricing constants pinned independently of the defaults.
 func weightedConfig() ParticipantConfig {
 	settings := ParticipantConfigFromLimits(config.Defaults().Limits)
 	settings.Pricing.ConcurrencyPer10000Weight = 8
@@ -33,8 +32,10 @@ func concurrentRequests(t *testing.T, limiter *ParticipantLimiter, participant s
 	return admitted
 }
 
-// A window is what the chain's weight buys: the host that earned four times the weight takes four times
-// the work, instead of both being handed the same flat window and the weaker one drowning in it.
+// Test flow:
+//  1. Build a limiter from `weightedConfig` and observe weights of 40000 for "strong" and 10000 for "weak".
+//  2. Drive concurrent requests for both hosts via `concurrentRequests`.
+//  3. Assert "weak" admits 8 requests and "strong" admits 32, matching what each weight buys.
 func TestAHostsWindowIsSizedByTheWeightItEarned(t *testing.T) {
 	t.Parallel()
 	limiter := newTestLimiter(weightedConfig(), fixedNow(earnedEpoch))
@@ -53,7 +54,10 @@ func TestAHostsWindowIsSizedByTheWeightItEarned(t *testing.T) {
 	}
 }
 
-// Nothing in the chain's view is guaranteed: a host with no weight observed keeps the configured window.
+// Test flow:
+//  1. Build a limiter from `weightedConfig` without observing any weights.
+//  2. Drive concurrent requests for an "unweighed" host via `concurrentRequests`.
+//  3. Assert it admits the configured 32 requests.
 func TestAHostWithNoWeightKeepsTheConfiguredWindow(t *testing.T) {
 	t.Parallel()
 	limiter := newTestLimiter(weightedConfig(), fixedNow(earnedEpoch))
@@ -63,8 +67,10 @@ func TestAHostWithNoWeightKeepsTheConfiguredWindow(t *testing.T) {
 	}
 }
 
-// The chain moves weight every epoch, and PoC takes most of it away. A window already open has to follow it
-// down, or the host keeps a window its weight no longer pays for.
+// Test flow:
+//  1. Build a limiter and observe a weight of 40000 for "host", then confirm `concurrentRequests` admits 32.
+//  2. Observe the weight drop to 10000 for the same host.
+//  3. Assert `WindowFor` still tracks the host and its output window shrank to the 8 requests the new weight buys.
 func TestAWindowFollowsTheWeightDown(t *testing.T) {
 	t.Parallel()
 	limiter := newTestLimiter(weightedConfig(), fixedNow(earnedEpoch))
@@ -84,9 +90,11 @@ func TestAWindowFollowsTheWeightDown(t *testing.T) {
 	}
 }
 
-// The two windows are priced differently on purpose. A request reserves its whole output budget, so the
-// output window is exactly the concurrency the weight bought. A request almost never fills the context, so
-// the input window opens at twice what that concurrency would reserve and only floors there.
+// Test flow:
+//  1. Build a limiter and observe a weight of 10000 for "host".
+//  2. Admit one request for the host and read its `bounds` from the limiter's internal state.
+//  3. Assert the output window's floor and start both equal the 8 requests the weight buys.
+//  4. Assert the input window floors at 8 contexts and starts at twice that, and each window's step is one request's cost.
 func TestTheTwoWindowsArePricedOnWhatARequestCosts(t *testing.T) {
 	t.Parallel()
 	limiter := newTestLimiter(weightedConfig(), fixedNow(earnedEpoch))
@@ -110,7 +118,10 @@ func TestTheTwoWindowsArePricedOnWhatARequestCosts(t *testing.T) {
 	}
 }
 
-// A host with a weight too small to buy a whole request still gets one, or it can never earn its way up.
+// Test flow:
+//  1. Build a limiter and observe a weight of 100, too small to buy a whole request, for "tiny".
+//  2. Drive concurrent requests for "tiny" via `concurrentRequests`.
+//  3. Assert it still admits exactly 1 request.
 func TestTheSmallestWeightStillBuysOneRequest(t *testing.T) {
 	t.Parallel()
 	limiter := newTestLimiter(weightedConfig(), fixedNow(earnedEpoch))
@@ -121,6 +132,11 @@ func TestTheSmallestWeightStillBuysOneRequest(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a limiter and call `WindowFor` for a host it has never admitted.
+//  2. Assert the pair is not tracked.
+//  3. Admit one request for "host" and call `WindowFor` again.
+//  4. Assert the pair is now tracked.
 func TestWindowForAnswersOnlyForATrackedPair(t *testing.T) {
 	t.Parallel()
 	limiter := newTestLimiter(weightedConfig(), fixedNow(earnedEpoch))
@@ -134,8 +150,11 @@ func TestWindowForAnswersOnlyForATrackedPair(t *testing.T) {
 	}
 }
 
-// The fleet's front door is what keeps a request from being admitted only to burn a nonce at a full host,
-// so it has to follow what the hosts have earned: a window a host grew into is capacity the gateway has.
+// Test flow:
+//  1. Build a `ModelCapacity` with a weight that buys 5 concurrent requests and call `effectiveConcurrencyLimit`.
+//  2. Assert the limit is capped at the 5 the weight buys.
+//  3. Grow the same capacity's `HostWindowRequests` to 40 and call `effectiveConcurrencyLimit` again.
+//  4. Assert the limit follows the grown window up to 40.
 func TestTheFrontDoorFollowsWhatTheHostsEarned(t *testing.T) {
 	t.Parallel()
 	weightDerived := ModelCapacity{CurrentWeight: 10_000, BaselineWeight: 10_000, MaxConcurrentPer10000Weight: 5}
@@ -152,7 +171,9 @@ func TestTheFrontDoorFollowsWhatTheHostsEarned(t *testing.T) {
 	}
 }
 
-// With no weight to price it from, the hosts' own windows are still an answer.
+// Test flow:
+//  1. Call `effectiveConcurrencyLimit` with a `ModelCapacity` that has host windows but no weight data.
+//  2. Assert the limit equals the 24 requests the host windows allow.
 func TestTheFrontDoorTakesTheHostWindowsWithoutAWeight(t *testing.T) {
 	t.Parallel()
 
@@ -163,7 +184,10 @@ func TestTheFrontDoorTakesTheHostWindowsWithoutAWeight(t *testing.T) {
 	}
 }
 
-// One model's door is one model's hosts, and a host whose cut-off is open can take nothing at all.
+// Test flow:
+//  1. Build a limiter, observe weights for hosts "a" and "b", and admit one request each on `earnedModel`, plus one for host "c" on a different model.
+//  2. Assert `ModelConcurrency` for `earnedModel` equals the sum of what "a" and "b" earned, excluding "c".
+//  3. Assert `ModelConcurrency` for a model no host serves is 0.
 func TestTheFleetsRoomIsTheSumOfItsHostsWindows(t *testing.T) {
 	t.Parallel()
 	limiter := newTestLimiter(weightedConfig(), fixedNow(earnedEpoch))
@@ -180,7 +204,10 @@ func TestTheFleetsRoomIsTheSumOfItsHostsWindows(t *testing.T) {
 	}
 }
 
-// Windows grow without a ceiling, so the configured maximum has to stay one over the door they lift.
+// Test flow:
+//  1. Build a `ModelCapacity` whose host windows grew to 5000 requests.
+//  2. Call `effectiveConcurrencyLimit` with a configured maximum of 2048 and assert the limit is capped there.
+//  3. Call it again with no configured maximum (0) and assert the limit follows the hosts up to 5000.
 func TestTheConfiguredMaximumStillCapsADoorTheHostsLifted(t *testing.T) {
 	t.Parallel()
 	grown := ModelCapacity{CurrentWeight: 10_000, BaselineWeight: 10_000, MaxConcurrentPer10000Weight: 5, HostWindowRequests: 5_000}
@@ -193,7 +220,11 @@ func TestTheConfiguredMaximumStillCapsADoorTheHostsLifted(t *testing.T) {
 	}
 }
 
-// See capacity.md, "What a host's weight buys".
+// Test flow:
+//  1. Build a limiter, observe a weight of 100 for "host", and acquire one request.
+//  2. Release it and report a successful result, growing the output window to 2 requests.
+//  3. Observe the same weight snapshot again, unchanged.
+//  4. Assert the output window still reflects what the host earned, not reverted by the snapshot.
 func TestAGrownWindowSurvivesAWeightSnapshotThatChangedNothing(t *testing.T) {
 	t.Parallel()
 	limiter := newTestLimiter(weightedConfig(), fixedNow(earnedEpoch))
@@ -219,7 +250,10 @@ func TestAGrownWindowSurvivesAWeightSnapshotThatChangedNothing(t *testing.T) {
 	}
 }
 
-// See capacity.md, "What a host's weight buys".
+// Test flow:
+//  1. Build a limiter and observe a weight of 2100 for "host", enough to buy 1.68 requests.
+//  2. Drive concurrent requests for "host" via `concurrentRequests`.
+//  3. Assert it admits 2 requests, rounding the fractional buy up.
 func TestAWeightBuyingMostOfASecondRequestIsNotRoundedAway(t *testing.T) {
 	t.Parallel()
 	limiter := newTestLimiter(weightedConfig(), fixedNow(earnedEpoch))
@@ -230,7 +264,11 @@ func TestAWeightBuyingMostOfASecondRequestIsNotRoundedAway(t *testing.T) {
 	}
 }
 
-// See capacity.md, "What a host's weight buys".
+// Test flow:
+//  1. Build a limiter, observe a weight of 10000 for "host", and acquire 8 requests, filling the window.
+//  2. Report 2 successful results, then release all 8 held requests.
+//  3. Assert the output window grew to 10 requests after the two successes.
+//  4. Observe the host earning more weight (11000) and assert the grown window is unchanged.
 func TestEarningMoreWeightDoesNotTakeBackAGrownWindow(t *testing.T) {
 	t.Parallel()
 	limiter := newTestLimiter(weightedConfig(), fixedNow(earnedEpoch))

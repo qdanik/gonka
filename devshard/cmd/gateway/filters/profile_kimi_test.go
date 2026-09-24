@@ -2,6 +2,10 @@ package filters
 
 import "testing"
 
+// Test flow:
+//  1. Inspect `kimiProfile`'s Models slice and Thinking mode.
+//  2. Assert Models holds exactly kimiModelID and Thinking is ThinkingMirrorToKwargs.
+//  3. Assert each boolean hook (ForceZeroPenalties, RejectStructuredOutput, AllowSafetyIdentifier, KeepReasoningSplit, ThinkingTokenBudget) matches its expected value.
 func TestKimiProfileHooks(t *testing.T) {
 	if len(kimiProfile.Models) != 1 || kimiProfile.Models[0] != kimiModelID {
 		t.Errorf("kimiProfile.Models = %v, want [%q]", kimiProfile.Models, kimiModelID)
@@ -27,7 +31,9 @@ func TestKimiProfileHooks(t *testing.T) {
 	}
 }
 
-// Pins the thinking_token_budget resolution constants against their documented values.
+// Test flow:
+//  1. Compare the kimi thinking-budget constants (force-zero threshold, absolute max, content headroom) against their documented values.
+//  2. Assert each constant equals its expected value.
 func TestKimiThinkingBudgetConstants(t *testing.T) {
 	tests := []struct {
 		name string

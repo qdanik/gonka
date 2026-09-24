@@ -10,8 +10,11 @@ type dialsHeld []registry.HostDial
 
 func (d dialsHeld) HostDials() []registry.HostDial { return d }
 
-// A probe reaches a host on its own route prefix, and asks the clock first because that is the only
-// answer carrying the host's own time; liveness is the fallback when the host has no clock.
+// Test flow:
+//  1. Build a Targets source over one live host dial that carries a participant key, base URL and route prefix.
+//  2. Call Targets().
+//  3. Assert it returns exactly one target keyed by the participant.
+//  4. Assert the clock URL and fallback URL are both built under the host's own route prefix.
 func TestATargetIsBuiltFromTheHostsOwnPrefix(t *testing.T) {
 	source := Targets{Live: dialsHeld{{ParticipantKey: "gonka1abc", BaseURL: "http://a:8080/", RoutePrefix: "/api"}}}
 
@@ -31,7 +34,11 @@ func TestATargetIsBuiltFromTheHostsOwnPrefix(t *testing.T) {
 	}
 }
 
-// A host that named no prefix still has to be reachable, so the dial takes the one every host serves.
+// Test flow:
+//  1. Build a Targets source over one live host dial that carries no route prefix.
+//  2. Call Targets().
+//  3. Assert it returns exactly one target.
+//  4. Assert the clock URL is not built under an empty prefix, i.e. it falls back to the default one.
 func TestAHostWithoutAPrefixTakesTheDefaultOne(t *testing.T) {
 	source := Targets{Live: dialsHeld{{ParticipantKey: "gonka1abc", BaseURL: "http://a:8080"}}}
 
@@ -45,7 +52,10 @@ func TestAHostWithoutAPrefixTakesTheDefaultOne(t *testing.T) {
 	}
 }
 
-// Nothing live means nothing to ping, rather than one probe against an empty address.
+// Test flow:
+//  1. Build a Targets source over an empty (nil) set of live host dials.
+//  2. Call Targets().
+//  3. Assert it returns no targets.
 func TestNothingLiveIsNothingToPing(t *testing.T) {
 	source := Targets{Live: dialsHeld(nil)}
 

@@ -22,9 +22,10 @@ func newEpochlessLedger(t *testing.T) *Recorder {
 	return ledger
 }
 
-// An escrow's epoch is the one the chain stamped on it, not the one this process happened to notice it in.
-// The ledger's store is dropped whenever its schema version moves, so "first seen" is a property of the last
-// deploy, and a long-lived escrow's whole chain-side history lands under whatever epoch that was.
+// Test flow:
+//  1. Wire a creation-epoch resolver that answers epoch 100 for any escrow.
+//  2. Look up the epoch of an unstamped escrow.
+//  3. Assert it resolves to epoch 100, known.
 func TestAnEscrowIsStampedWithTheEpochItWasCreatedIn(t *testing.T) {
 	t.Parallel()
 	ledger := newEpochlessLedger(t)
@@ -37,7 +38,11 @@ func TestAnEscrowIsStampedWithTheEpochItWasCreatedIn(t *testing.T) {
 	}
 }
 
-// The resolver's authority is a chain query, and an escrow's creation epoch never moves, so it is asked once.
+// Test flow:
+//  1. Wire a creation-epoch resolver that counts its own calls and answers epoch 100.
+//  2. Look up the same escrow's epoch 5 times.
+//  3. Assert every lookup reports known.
+//  4. Assert the resolver was called exactly once, so a resolved epoch is cached rather than re-asked.
 func TestTheCreationEpochIsResolvedOncePerEscrow(t *testing.T) {
 	t.Parallel()
 	ledger := newEpochlessLedger(t)
@@ -58,8 +63,10 @@ func TestTheCreationEpochIsResolvedOncePerEscrow(t *testing.T) {
 	}
 }
 
-// Filing an escrow under a guessed epoch is worse than filing it under none: the guess is indistinguishable
-// from a fact downstream, and the pin defends it forever.
+// Test flow:
+//  1. Define a table of resolver behaviors, varying across no resolver wired at all, a resolver that refuses, and a resolver that answers a zero epoch.
+//  2. For each case, wire the resolver where one is given and look up the escrow's epoch.
+//  3. Assert every case reports unknown with a zero epoch, never a guessed stamp.
 func TestAnEscrowWhoseEpochIsUnknownIsNotStampedAtAll(t *testing.T) {
 	t.Parallel()
 
@@ -95,7 +102,11 @@ func TestAnEscrowWhoseEpochIsUnknownIsNotStampedAtAll(t *testing.T) {
 	}
 }
 
-// A refusal must not be remembered as an answer: the chain comes back, and the escrow is stamped then.
+// Test flow:
+//  1. Wire a resolver that refuses on its first call and answers epoch 100 on its second.
+//  2. Look up the escrow's epoch once and assert it comes back unknown.
+//  3. Look up the same escrow's epoch again.
+//  4. Assert it now resolves to epoch 100, known, so a refusal is never cached as an answer.
 func TestARefusedEpochIsAskedAgain(t *testing.T) {
 	t.Parallel()
 	ledger := newEpochlessLedger(t)

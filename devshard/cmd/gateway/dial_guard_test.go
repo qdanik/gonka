@@ -10,8 +10,11 @@ import (
 
 const dialGuardOffMessage = "dials to private addresses are allowed: the SSRF guard is off"
 
-// The guard is process-wide and a host URL is participant-controlled, so the gateway arms it before
-// anything can dial, and a stand that opts out is told about it in the log.
+// Test flow:
+//  1. For each case (GATEWAY_ALLOW_PRIVATE_ADDRESSES unset, "false", or "true"), set httpguard to the opposite of the expected outcome and set the env var.
+//  2. Call applyDialGuard.
+//  3. Assert httpguard.AllowPrivate() matches the case's wantOpen.
+//  4. Assert the log carries the guard-off warning only when wantWarns is set.
 func TestTheDialGuardIsArmedBeforeAnythingDials(t *testing.T) {
 	testCases := []struct {
 		name      string

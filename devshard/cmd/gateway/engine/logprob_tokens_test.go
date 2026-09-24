@@ -2,8 +2,9 @@ package engine
 
 import "testing"
 
-// A validator replays an answer from its logprob token ids. Text cannot be replayed, so the host that
-// sent it votes itself invalid — and nothing else in the stream says so.
+// Test flow:
+//  1. Classify each table case's chunk: a token-id replay, decoded text, a negative number, a chunk with no logprobs, and the `[DONE]` terminator.
+//  2. For each case, assert `LogprobsDecoded` matches the case's expected verdict.
 func TestLogprobTokensAreReadAsIdsOrText(t *testing.T) {
 	for _, testCase := range []struct {
 		name  string

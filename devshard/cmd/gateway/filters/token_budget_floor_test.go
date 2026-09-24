@@ -36,34 +36,53 @@ func requireUintField(t *testing.T, document map[string]any, name string, want u
 	}
 }
 
+// Test flow:
+//  1. Normalize a request with max_tokens set and min_tokens omitted.
+//  2. Assert min_tokens is injected at completionapi.MinTokensFloor.
 func TestFloorInjectsMinTokensWhenTheClientOmitsIt(t *testing.T) {
 	document := normalizedDocument(t, `{"messages":[{"role":"user","content":"x"}],"max_tokens":4096}`, "Qwen/Test")
 	requireUintField(t, document, "min_tokens", completionapi.MinTokensFloor)
 }
 
+// Test flow:
+//  1. Normalize a request with min_tokens set below the floor.
+//  2. Assert min_tokens is lifted to completionapi.MinTokensFloor.
 func TestFloorLiftsAMinTokensBelowIt(t *testing.T) {
 	document := normalizedDocument(t, `{"messages":[{"role":"user","content":"x"}],"max_tokens":4096,"min_tokens":4}`, "Qwen/Test")
 	requireUintField(t, document, "min_tokens", completionapi.MinTokensFloor)
 }
 
+// Test flow:
+//  1. Normalize a request with min_tokens set above the floor.
+//  2. Assert min_tokens is left unchanged at its original value.
 func TestFloorKeepsAMinTokensAboveIt(t *testing.T) {
 	document := normalizedDocument(t, `{"messages":[{"role":"user","content":"x"}],"max_tokens":4096,"min_tokens":100}`, "Qwen/Test")
 	requireUintField(t, document, "min_tokens", 100)
 }
 
-// min_tokens has to fit inside the budget it is measured against, whatever the client asked for.
+// Test flow:
+//  1. Normalize a request whose max_tokens is above the floor but whose min_tokens is far larger than that resolved budget.
+//  2. Assert max_tokens stays at the value the client asked for.
+//  3. Assert min_tokens is clamped down to that same resolved budget, since it has to fit inside the budget it is measured against, whatever the client asked for.
 func TestFloorClampsMinTokensToTheResolvedBudget(t *testing.T) {
 	document := normalizedDocument(t, `{"messages":[{"role":"user","content":"x"}],"max_tokens":300,"min_tokens":9000}`, "Qwen/Test")
 	requireUintField(t, document, "max_tokens", 300)
 	requireUintField(t, document, "min_tokens", 300)
 }
 
+// Test flow:
+//  1. Normalize a request whose max_tokens is below the floor.
+//  2. Assert max_tokens is lifted to completionapi.MinTokensFloor.
+//  3. Assert min_tokens is injected at the same floor.
 func TestFloorLiftsASmallMaxTokensAndInjectsMinTokens(t *testing.T) {
 	document := normalizedDocument(t, `{"messages":[{"role":"user","content":"x"}],"max_tokens":8}`, "Qwen/Test")
 	requireUintField(t, document, "max_tokens", completionapi.MinTokensFloor)
 	requireUintField(t, document, "min_tokens", completionapi.MinTokensFloor)
 }
 
+// Test flow:
+//  1. Normalize a request that sends max_completion_tokens, below the floor, instead of max_tokens.
+//  2. Assert max_tokens, max_completion_tokens, and min_tokens are all lifted to completionapi.MinTokensFloor.
 func TestFloorMirrorsMaxCompletionTokensWhenTheClientSentIt(t *testing.T) {
 	document := normalizedDocument(t, `{"messages":[{"role":"user","content":"x"}],"max_completion_tokens":8}`, "Qwen/Test")
 	requireUintField(t, document, "max_tokens", completionapi.MinTokensFloor)
@@ -71,8 +90,9 @@ func TestFloorMirrorsMaxCompletionTokensWhenTheClientSentIt(t *testing.T) {
 	requireUintField(t, document, "min_tokens", completionapi.MinTokensFloor)
 }
 
-// Every route, not only a profile that declares a floor of its own: the chain refuses a sub-floor
-// reservation whatever model it was for.
+// Test flow:
+//  1. Normalize a below-floor request once per routed model: `kimiModelID`, `minimaxModelID`, and a plain "Qwen/Test" model.
+//  2. Assert max_tokens and min_tokens are lifted to completionapi.MinTokensFloor for every route, not only for a profile that declares a floor of its own.
 func TestFloorAppliesToEveryRoute(t *testing.T) {
 	for _, model := range []string{kimiModelID, minimaxModelID, "Qwen/Test"} {
 		t.Run(model, func(t *testing.T) {
@@ -83,8 +103,10 @@ func TestFloorAppliesToEveryRoute(t *testing.T) {
 	}
 }
 
-// The reservation the gateway signs is (input + max_tokens), so the body it sends has to carry the
-// same max_tokens the accounting was told about.
+// Test flow:
+//  1. Normalize a below-floor request and capture the returned result's declared MaxTokens.
+//  2. Assert the normalized body's max_tokens field matches the declared MaxTokens exactly, since the gateway signs its reservation (input + max_tokens) against that same field.
+//  3. Assert the declared MaxTokens is not below completionapi.MinTokensFloor.
 func TestFloorLeavesTheBodyAgreeingWithTheDeclaredBudget(t *testing.T) {
 	result, err := NormalizeRequest([]byte(`{"messages":[{"role":"user","content":"x"}],"max_tokens":8}`),
 		Options{RoutedModel: "Qwen/Test", DefaultMaxTokens: 3072, MaxTokensCap: 4096})
@@ -103,8 +125,9 @@ func TestFloorLeavesTheBodyAgreeingWithTheDeclaredBudget(t *testing.T) {
 	}
 }
 
-// stop_token_ids goes without being inspected: the floor puts min_tokens on every request, and vLLM
-// masks stop-token logits when it is set, where an out-of-vocab id asserts device-side.
+// Test flow:
+//  1. Normalize requests carrying stop_token_ids as valid ids, a non-numeric id, a negative id, and a non-array value.
+//  2. Assert stop_token_ids is stripped from every case without being validated, since vLLM masks stop-token logits when it is set and an out-of-vocab id asserts device-side.
 func TestStopTokenIdsAreStrippedWithoutBeingValidated(t *testing.T) {
 	for _, body := range []string{
 		`{"messages":[{"role":"user","content":"x"}],"max_tokens":4096,"stop_token_ids":[1,2,3]}`,
@@ -121,6 +144,9 @@ func TestStopTokenIdsAreStrippedWithoutBeingValidated(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Normalize a request carrying both stop_token_ids and an above-floor min_tokens.
+//  2. Assert stop_token_ids is stripped and min_tokens is left at its original value.
 func TestStopTokenIdsDoNotCostTheRequestItsMinTokens(t *testing.T) {
 	document := normalizedDocument(t, `{"messages":[{"role":"user","content":"x"}],"max_tokens":4096,"min_tokens":100,"stop_token_ids":[1,2]}`, "Qwen/Test")
 	if _, present := document["stop_token_ids"]; present {
@@ -129,8 +155,9 @@ func TestStopTokenIdsDoNotCostTheRequestItsMinTokens(t *testing.T) {
 	requireUintField(t, document, "min_tokens", 100)
 }
 
-// The smaller of the two output-budget fields wins, but it cannot carry the request below the floor
-// validation is measured against, whichever field the client made small.
+// Test flow:
+//  1. Normalize requests where either max_tokens or max_completion_tokens is set far below the floor while the other field is large.
+//  2. Assert max_tokens, max_completion_tokens, and min_tokens are all lifted to completionapi.MinTokensFloor regardless of which field the client made tiny — the smaller of the two output-budget fields wins but cannot carry the request below the floor.
 func TestFloorHoldsWhenOneOutputBudgetFieldIsTiny(t *testing.T) {
 	for _, body := range []string{
 		`{"messages":[{"role":"user","content":"x"}],"max_tokens":4096,"max_completion_tokens":16}`,
@@ -145,7 +172,9 @@ func TestFloorHoldsWhenOneOutputBudgetFieldIsTiny(t *testing.T) {
 	}
 }
 
-// Both fields leave agreeing, so no downstream layer has to decide which of them it believes.
+// Test flow:
+//  1. Normalize a request where max_tokens and max_completion_tokens agree above the floor.
+//  2. Assert both fields leave the normalizer still agreeing on that same value, so no downstream layer has to decide which one it believes.
 func TestBothOutputBudgetFieldsLeaveAgreeing(t *testing.T) {
 	document := normalizedDocument(t, `{"messages":[{"role":"user","content":"x"}],"max_tokens":4096,"max_completion_tokens":200}`, "Qwen/Test")
 	requireUintField(t, document, "max_tokens", 200)

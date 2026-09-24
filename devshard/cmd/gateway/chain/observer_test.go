@@ -15,9 +15,7 @@ import (
 	"devshard/cmd/gateway/internal/leakcheck"
 )
 
-// phaseObserverStub serves the public-API endpoints PhaseObserver polls plus the chain-REST
-// preserved-nodes-snapshot and miner /v1/versions endpoints; status/body are mutable mid-test to
-// simulate phase transitions and errors.
+// phaseObserverStub serves the public-API and chain-REST endpoints PhaseObserver polls, with mutable status and body for each.
 type phaseObserverStub struct {
 	mu                 sync.Mutex
 	epochStatus        int
@@ -270,6 +268,9 @@ func waitForSnapshot(t *testing.T, snapshots <-chan PhaseSnapshot, timeout time.
 	}
 }
 
+// Test flow:
+//  1. Call NewPhaseObserver with an empty PublicAPIBaseURL.
+//  2. Assert it returns an error.
 func TestNewPhaseObserver_EmptyPublicAPIBaseURL_Errors(t *testing.T) {
 	_, err := NewPhaseObserver(ObserverConfig{})
 	if err == nil {
@@ -277,6 +278,9 @@ func TestNewPhaseObserver_EmptyPublicAPIBaseURL_Errors(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Call NewPhaseObserver with only PublicAPIBaseURL set, leaving every other field zero.
+//  2. Assert the poll interval, HTTP client (and its timeout), clock and versions cache all fall back to their documented defaults.
 func TestNewPhaseObserver_AppliesDefaultsForZeroFields(t *testing.T) {
 	observer, err := NewPhaseObserver(ObserverConfig{PublicAPIBaseURL: "http://chain.example.invalid"})
 	if err != nil {
@@ -298,9 +302,11 @@ func TestNewPhaseObserver_AppliesDefaultsForZeroFields(t *testing.T) {
 	}
 }
 
-// TestPhaseObserver_StartPublishesFirstSnapshotAndNotifiesSubscribers covers the immediate first
-// refresh on Start (a long PollInterval proves this isn't waiting on the ticker), the derived
-// epoch fields, and weights/inferenceURLs folded in from participants.
+// Test flow:
+//  1. Configure the stub with one inference-phase epoch and one participant, and create an observer with an hour-long poll interval.
+//  2. Subscribe to snapshots, call Start, and wait for the first published snapshot.
+//  3. Assert the first snapshot arrives immediately (proving Start doesn't wait for the ticker) with the epoch's block height, index, phase and timestamp.
+//  4. Assert requests are unblocked and the current weights and inference URLs are folded in from the participant.
 func TestPhaseObserver_StartPublishesFirstSnapshotAndNotifiesSubscribers(t *testing.T) {
 	stub := newPhaseObserverStub()
 	server := httptest.NewServer(stub.handler())
@@ -355,8 +361,10 @@ func TestPhaseObserver_StartPublishesFirstSnapshotAndNotifiesSubscribers(t *test
 	}
 }
 
-// TestPhaseObserver_BlockedPoCPhaseSetsRequestsBlockedAndReason covers a PoC-blocking epoch phase
-// via a single direct refresh (no ticker involved).
+// Test flow:
+//  1. Configure the stub with a PoCGenerate-phase epoch and one participant.
+//  2. Call refresh directly (no ticker) and read the snapshot.
+//  3. Assert requests are blocked with BlockReasonPoC and the epoch phase is PoCGenerate.
 func TestPhaseObserver_BlockedPoCPhaseSetsRequestsBlockedAndReason(t *testing.T) {
 	stub := newPhaseObserverStub()
 	server := httptest.NewServer(stub.handler())
@@ -388,9 +396,10 @@ func TestPhaseObserver_BlockedPoCPhaseSetsRequestsBlockedAndReason(t *testing.T)
 	}
 }
 
-// TestPhaseObserver_EpochSwitchBlockHeightUsesFallbackLadder covers the top two ladder rungs end
-// to end through Snapshot(): the current epoch's SetNewValidators wins when present, and omitting
-// it falls through to the next epoch's SetNewValidators.
+// Test flow:
+//  1. Create an observer over the stub with one participant.
+//  2. Refresh with an epoch body carrying both the current and next epoch's set_new_validators heights and assert EpochSwitchBlockHeight picks the current epoch's value.
+//  3. Refresh again with the current epoch's set_new_validators omitted and assert EpochSwitchBlockHeight falls through to the next epoch's value.
 func TestPhaseObserver_EpochSwitchBlockHeightUsesFallbackLadder(t *testing.T) {
 	stub := newPhaseObserverStub()
 	server := httptest.NewServer(stub.handler())
@@ -412,8 +421,11 @@ func TestPhaseObserver_EpochSwitchBlockHeightUsesFallbackLadder(t *testing.T) {
 	}
 }
 
-// TestPhaseObserver_TickerDrivesRepeatedRefreshOnPhaseChange covers the ticker loop actually
-// re-polling: a stub phase change made after the first notification must surface in a later one.
+// Test flow:
+//  1. Configure the stub with an inference-phase epoch and one participant, and start an observer with a millisecond poll interval.
+//  2. Subscribe to snapshots and wait for the first inference-phase snapshot.
+//  3. Change the stub's epoch to a blocking PoCValidate phase.
+//  4. Wait for a later snapshot reporting that phase and assert it is blocked with BlockReasonPoC and carries the new block height and epoch index.
 func TestPhaseObserver_TickerDrivesRepeatedRefreshOnPhaseChange(t *testing.T) {
 	stub := newPhaseObserverStub()
 	server := httptest.NewServer(stub.handler())
@@ -451,8 +463,11 @@ func TestPhaseObserver_TickerDrivesRepeatedRefreshOnPhaseChange(t *testing.T) {
 	}
 }
 
-// TestPhaseObserver_CancelStopsFurtherNotifications drives refresh directly (no ticker) so the
-// cancel-vs-publish ordering is deterministic instead of racing a background poll loop.
+// Test flow:
+//  1. Create an observer over the stub with one participant and subscribe two counting handlers.
+//  2. Call refresh once and assert both subscribers were notified.
+//  3. Cancel one subscription, then call refresh twice more.
+//  4. Assert the cancelled subscriber's count is unchanged while the remaining subscriber keeps counting.
 func TestPhaseObserver_CancelStopsFurtherNotifications(t *testing.T) {
 	stub := newPhaseObserverStub()
 	server := httptest.NewServer(stub.handler())
@@ -492,8 +507,11 @@ func TestPhaseObserver_CancelStopsFurtherNotifications(t *testing.T) {
 	}
 }
 
-// TestPhaseObserver_EpochFetchErrorKeepsPreviousSnapshotWithLastError documents the chosen
-// fetch-error behavior: republish the previous snapshot unchanged except LastError.
+// Test flow:
+//  1. Refresh once against a healthy stub and capture the resulting snapshot as the known-good baseline.
+//  2. Make the epoch endpoint return HTTP 500 and refresh again.
+//  3. Assert LastError is now set.
+//  4. Clear LastError from the new snapshot and assert it otherwise equals the known-good baseline.
 func TestPhaseObserver_EpochFetchErrorKeepsPreviousSnapshotWithLastError(t *testing.T) {
 	stub := newPhaseObserverStub()
 	server := httptest.NewServer(stub.handler())
@@ -530,13 +548,11 @@ func TestPhaseObserver_EpochFetchErrorKeepsPreviousSnapshotWithLastError(t *test
 	}
 }
 
-// TestPhaseObserver_ParticipantsFetchErrorKeepsPreviousWeightsWithLastError covers the
-// participants-only failure: epoch-derived fields still advance, weights/URLs stay stale.
-// A participants fetch failing is routine, and the carry-forward path restates every participant-derived
-// field by hand. A field added to the fresh path and missed here is not published as unknown, it is
-// published as zero -- and a zero weight map means "everything weighs nothing", which stops routing with
-// no error anywhere. The second half of this test fails when a new field belongs to neither list, so the
-// omission cannot be silent.
+// Test flow:
+//  1. Build a previous snapshot with sample values for every participant-derived field and LastHealthyAt.
+//  2. Call publishWithPreviousParticipants with a fresh snapshot carrying only BlockHeight, plus the previous snapshot, simulating a participants-fetch failure.
+//  3. Assert every participant-derived field and LastHealthyAt on the published snapshot equal the previous snapshot's values.
+//  4. Reflect over every field of PhaseSnapshot and assert each one is accounted for in the participant-derived, phase-derived, or carried-across-failure list, so a newly added field cannot go unclassified.
 func TestPhaseObserver_CarriesEveryParticipantDerivedFieldForward(t *testing.T) {
 	carriedAcrossFailure := []string{"LastHealthyAt"}
 	participantDerived := []string{
@@ -581,6 +597,11 @@ func TestPhaseObserver_CarriesEveryParticipantDerivedFieldForward(t *testing.T) 
 	}
 }
 
+// Test flow:
+//  1. Refresh once against a healthy stub and capture the resulting snapshot as the known-good baseline.
+//  2. Advance the epoch body to a new block height while making the participants endpoint return HTTP 500, then refresh again.
+//  3. Assert LastError is now set while BlockHeight still reflects the epoch fetch that succeeded.
+//  4. Assert CurrentWeights and InferenceURLs stayed at their stale, known-good values.
 func TestPhaseObserver_ParticipantsFetchErrorKeepsPreviousWeightsWithLastError(t *testing.T) {
 	stub := newPhaseObserverStub()
 	server := httptest.NewServer(stub.handler())
@@ -623,6 +644,10 @@ func TestPhaseObserver_ParticipantsFetchErrorKeepsPreviousWeightsWithLastError(t
 	}
 }
 
+// Test flow:
+//  1. Configure the stub with an epoch, one participant, and a max-nonce value from the chain reader.
+//  2. Create an observer with the stub as its chain reader and refresh.
+//  3. Assert LastError is empty and MaxNonce reflects the chain's reported value.
 func TestPhaseObserver_DecodesMaxNonceFromDevshardEscrowParams(t *testing.T) {
 	stub := newPhaseObserverStub()
 	server := httptest.NewServer(stub.handler())
@@ -643,9 +668,10 @@ func TestPhaseObserver_DecodesMaxNonceFromDevshardEscrowParams(t *testing.T) {
 	}
 }
 
-// The cold-start contract: with no chain access configured, MaxNonce stays 0 through active
-// polling and the params route is never dialed. Zero means "not fetched", never "no cap" -- routing
-// falls back to a conservative ceiling rather than treating the budget as unlimited.
+// Test flow:
+//  1. Configure the stub with an epoch, one participant, and a max-nonce value, but create the observer with no chain reader configured.
+//  2. Assert MaxNonce reads 0 before any refresh.
+//  3. Refresh and assert LastError stays empty, MaxNonce stays 0, and the stub's max-nonce endpoint was never hit.
 func TestPhaseObserver_MaxNonceZeroBeforeFirstSuccessfulFetch(t *testing.T) {
 	stub := newPhaseObserverStub()
 	server := httptest.NewServer(stub.handler())
@@ -673,8 +699,11 @@ func TestPhaseObserver_MaxNonceZeroBeforeFirstSuccessfulFetch(t *testing.T) {
 	}
 }
 
-// TestPhaseObserver_MaxNonceFetchErrorKeepsPriorValueAndRestOfSnapshot covers fail-open: a broken
-// params endpoint keeps the last known-good MaxNonce and every other field; only LastError changes.
+// Test flow:
+//  1. Refresh once against a stub reporting a max-nonce value and capture the snapshot as the known-good baseline.
+//  2. Make the max-nonce read fail and refresh again.
+//  3. Assert LastError is now set while MaxNonce still holds the prior value.
+//  4. Clear LastError from the new snapshot and assert it otherwise equals the known-good baseline.
 func TestPhaseObserver_MaxNonceFetchErrorKeepsPriorValueAndRestOfSnapshot(t *testing.T) {
 	stub := newPhaseObserverStub()
 	server := httptest.NewServer(stub.handler())
@@ -709,9 +738,11 @@ func TestPhaseObserver_MaxNonceFetchErrorKeepsPriorValueAndRestOfSnapshot(t *tes
 	}
 }
 
-// TestPhaseObserver_ContextCancelAloneStopsAllGoroutines covers shutdown driven purely by the
-// parent context: every goroutine Start spawned must exit without Stop ever being called.
-// leakcheck.VerifyNone is registered first so it runs last, after server.Close().
+// Test flow:
+//  1. Register a leak check deferred first so it runs last, after the server is closed.
+//  2. Configure the stub, subscribe to snapshots, and call Start with a cancellable context.
+//  3. Wait for the first snapshot, then cancel the context without ever calling Stop.
+//  4. Assert the observer's done channel closes within 2 seconds of the cancellation.
 func TestPhaseObserver_ContextCancelAloneStopsAllGoroutines(t *testing.T) {
 	defer leakcheck.VerifyNone(t)
 
@@ -747,8 +778,11 @@ func TestPhaseObserver_ContextCancelAloneStopsAllGoroutines(t *testing.T) {
 	}
 }
 
-// TestPhaseObserver_StopTerminatesLoopAndVersionsLoop covers clean shutdown of both goroutines
-// Start spawns; leakcheck.VerifyNone is registered first so it runs last, after server.Close().
+// Test flow:
+//  1. Register a leak check deferred first so it runs last, after the server is closed.
+//  2. Configure the stub, subscribe to snapshots, and call Start.
+//  3. Wait for the first snapshot, then call Stop.
+//  4. Rely on the deferred leak check to assert both the poll loop and the versions loop exited.
 func TestPhaseObserver_StopTerminatesLoopAndVersionsLoop(t *testing.T) {
 	defer leakcheck.VerifyNone(t)
 
@@ -778,8 +812,11 @@ func TestPhaseObserver_StopTerminatesLoopAndVersionsLoop(t *testing.T) {
 	observer.Stop()
 }
 
-// TestPhaseObserver_StopIsIdempotentAndConcurrentSafe covers repeated and racing Stop calls: all
-// must return without panicking and leave no goroutines behind.
+// Test flow:
+//  1. Register a leak check deferred first so it runs last, after the server is closed.
+//  2. Configure the stub, subscribe to snapshots, and call Start; wait for the first snapshot.
+//  3. Call Stop concurrently from four goroutines, then call Stop once more from the main goroutine.
+//  4. Rely on the deferred leak check to assert no goroutine is left behind and no call panicked.
 func TestPhaseObserver_StopIsIdempotentAndConcurrentSafe(t *testing.T) {
 	defer leakcheck.VerifyNone(t)
 
@@ -816,8 +853,9 @@ func TestPhaseObserver_StopIsIdempotentAndConcurrentSafe(t *testing.T) {
 	observer.Stop()
 }
 
-// TestPhaseObserver_StopBeforeStartIsNoOp covers Stop on a never-started observer: it must return
-// immediately instead of blocking on the done latch.
+// Test flow:
+//  1. Create an observer that is never started.
+//  2. Call Stop and assert it returns immediately instead of blocking.
 func TestPhaseObserver_StopBeforeStartIsNoOp(t *testing.T) {
 	observer, err := NewPhaseObserver(ObserverConfig{PublicAPIBaseURL: "http://chain.example.invalid"})
 	if err != nil {
@@ -826,9 +864,11 @@ func TestPhaseObserver_StopBeforeStartIsNoOp(t *testing.T) {
 	observer.Stop()
 }
 
-// TestPhaseObserver_PoCCurrentPreservedSnapshotReplacesTimeslotRule covers preservation mode
-// selection when the chain-REST snapshot is found at the expected anchor: its membership fully
-// replaces the participants' timeslot-allocation proxy in both directions.
+// Test flow:
+//  1. Configure the stub with a PoCGenerate-phase epoch, two miners, and a preserved-nodes snapshot found at the expected anchor.
+//  2. Create an observer with the stub as its chain reader and refresh.
+//  3. Assert LastError is empty and Preserved reflects the snapshot's membership rather than the timeslot flags.
+//  4. Assert CurrentWeights, FullWeights and PreservedByModel all follow the snapshot in both directions (adding and removing weight).
 func TestPhaseObserver_PoCCurrentPreservedSnapshotReplacesTimeslotRule(t *testing.T) {
 	stub := newPhaseObserverStub()
 	server := httptest.NewServer(stub.handler())
@@ -858,8 +898,11 @@ func TestPhaseObserver_PoCCurrentPreservedSnapshotReplacesTimeslotRule(t *testin
 	}
 }
 
-// TestPhaseObserver_ConfirmationGraceMissingSnapshotPreservesAll covers the confirmation-PoC
-// grace period with the snapshot not published yet: every participant stays preserved.
+// Test flow:
+//  1. Configure the stub with a confirmation-PoC grace-period epoch, two miners, and no preserved-nodes snapshot.
+//  2. Create an observer with the stub as its chain reader and refresh.
+//  3. Assert requests are blocked with BlockReasonConfirmationPoC and LastError is empty.
+//  4. Assert every participant stays preserved with its full, all-node weight.
 func TestPhaseObserver_ConfirmationGraceMissingSnapshotPreservesAll(t *testing.T) {
 	stub := newPhaseObserverStub()
 	server := httptest.NewServer(stub.handler())
@@ -886,9 +929,11 @@ func TestPhaseObserver_ConfirmationGraceMissingSnapshotPreservesAll(t *testing.T
 	}
 }
 
-// TestPhaseObserver_PoCPreservedSnapshotMissesFallBackToLegacyRule covers every miss that must keep
-// the participants-endpoint timeslot rule: the chain has no snapshot, the read fails, the anchor is
-// stale, and no chain access is configured at all.
+// Test flow:
+//  1. Build a table of snapshot-miss scenarios: table varies between no snapshot on chain, a failed read, an anchor mismatch, and no chain access configured at all.
+//  2. Configure the stub with a PoCGenerate-phase epoch and two miners, and set the case's preserved-nodes response and chain reader.
+//  3. Refresh and assert Preserved and CurrentWeights fall back to the participants-endpoint timeslot rule in every case.
+//  4. Assert LastError matches the case's expected substring (or stays empty), and that no chain access means the preserved-nodes endpoint was never hit.
 func TestPhaseObserver_PoCPreservedSnapshotMissesFallBackToLegacyRule(t *testing.T) {
 	cases := []struct {
 		name          string
@@ -948,9 +993,10 @@ func observerVersionsJSON(node1Capable, node2Capable bool) string {
 	]}`, node1Capable, node2Capable)
 }
 
-// TestPhaseObserver_ValidationMergeAddsCapableExcludedMiner covers the published validation-phase
-// view: with a cold capability cache the merge stays conservative, and after a versions poll the
-// legacy-excluded miner rejoins with its capable node's weight.
+// Test flow:
+//  1. Configure the stub with a PoCValidate-phase epoch, two miners, and a versions response marking both nodes capable.
+//  2. Refresh before polling versions and assert the cold snapshot stays conservative: the legacy-excluded miner has zero weight and is absent from Preserved.
+//  3. Poll versions, refresh again, and assert the merged snapshot's Preserved, CurrentWeights, CurrentWeightsByModel, PreservedByModel and FullWeights all now include the capable miner's weight.
 func TestPhaseObserver_ValidationMergeAddsCapableExcludedMiner(t *testing.T) {
 	stub := newPhaseObserverStub()
 	server := httptest.NewServer(stub.handler())
@@ -991,8 +1037,10 @@ func TestPhaseObserver_ValidationMergeAddsCapableExcludedMiner(t *testing.T) {
 	}
 }
 
-// TestPhaseObserver_ValidationMergeExcludesNonCapableNode covers the fail-closed side: a miner
-// whose only node is not validation-inference capable never enters the published preserved set.
+// Test flow:
+//  1. Configure the stub with a PoCValidate-phase epoch, two miners, and a versions response marking only the second miner's node capable.
+//  2. Poll versions and refresh.
+//  3. Assert Preserved and PreservedByModel exclude the non-capable miner and its current weight stays zero.
 func TestPhaseObserver_ValidationMergeExcludesNonCapableNode(t *testing.T) {
 	stub := newPhaseObserverStub()
 	server := httptest.NewServer(stub.handler())
@@ -1018,8 +1066,10 @@ func TestPhaseObserver_ValidationMergeExcludesNonCapableNode(t *testing.T) {
 	}
 }
 
-// TestPhaseObserver_GenerationPhaseSkipsValidationMerge covers the merge's phase gate: outside a
-// validation stage, known capability must not add excluded miners back.
+// Test flow:
+//  1. Configure the stub with a PoCGenerate-phase epoch, two miners, and a versions response marking both nodes capable.
+//  2. Poll versions and refresh.
+//  3. Assert the excluded miner stays out of Preserved and its current weight stays zero, since the merge only applies during a validation stage.
 func TestPhaseObserver_GenerationPhaseSkipsValidationMerge(t *testing.T) {
 	stub := newPhaseObserverStub()
 	server := httptest.NewServer(stub.handler())
@@ -1042,8 +1092,11 @@ func TestPhaseObserver_GenerationPhaseSkipsValidationMerge(t *testing.T) {
 	}
 }
 
-// A second Start used to close an already-closed channel, panicking, and to orphan the first pair of
-// pollers by overwriting their cancel. goleak catches the orphan; the panic would fail outright.
+// Test flow:
+//  1. Register a leak check deferred first so it runs last, after the server is closed.
+//  2. Configure the stub and create an observer with the stub as its chain reader.
+//  3. Call Start twice in a row without panicking, then Stop.
+//  4. Call Start and Stop once more, relying on the deferred leak check to assert no poller from either round was orphaned.
 func TestPhaseObserver_StartTwiceIsANoOpAndRestartWorks(t *testing.T) {
 	defer leakcheck.VerifyNone(t)
 	stub := newPhaseObserverStub()
@@ -1062,8 +1115,10 @@ func TestPhaseObserver_StartTwiceIsANoOpAndRestartWorks(t *testing.T) {
 	observer.Stop()
 }
 
-// The narration's whole value is silence while a failure persists, so the detector is tested apart
-// from the line it drives.
+// Test flow:
+//  1. Build a sequence of steps for a shared snapshotHealth: table varies through a healthy start, a first failure, the same failure repeated, a different failure, recovery, and staying healthy.
+//  2. Advance the snapshotHealth through each step in order.
+//  3. Assert each step reports degraded or recovered only on the steps that actually turn, and stays silent on every repeat.
 func TestSnapshotHealth_AdvanceSpeaksOnlyOnChange(t *testing.T) {
 	t.Parallel()
 	steps := []struct {
@@ -1093,8 +1148,11 @@ func TestSnapshotHealth_AdvanceSpeaksOnlyOnChange(t *testing.T) {
 	}
 }
 
-// Governance model parameters change only when governance does, so a failed read must leave the previous
-// answer standing rather than repricing every congestion window at the default.
+// Test flow:
+//  1. Configure the stub with an epoch, one participant, and a governance model parameter, then refresh and capture the snapshot as the known-good baseline.
+//  2. Make the models read fail and refresh again.
+//  3. Assert the model's context window still reflects the prior value.
+//  4. Assert LastError names the failed governance-models read.
 func TestPhaseObserver_ModelsFetchErrorKeepsPriorValue(t *testing.T) {
 	stub := newPhaseObserverStub()
 	server := httptest.NewServer(stub.handler())

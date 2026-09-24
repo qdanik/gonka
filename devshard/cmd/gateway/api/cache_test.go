@@ -51,6 +51,11 @@ func (w *chunkRecorder) Write(chunk []byte) (int, error) {
 
 func (w *chunkRecorder) Flush() { w.flushes++ }
 
+// Test flow:
+//  1. Send the same chat completion twice from the same caller.
+//  2. Assert both responses carry identical bodies.
+//  3. Assert only one race ran, so the second request was a cache hit.
+//  4. Assert the replay still carries the escrow's X-Devshard-ID header.
 func TestASecondIdenticalRequestFromTheSameCallerIsServedFromTheCache(t *testing.T) {
 	live := newHarness(t)
 
@@ -68,6 +73,9 @@ func TestASecondIdenticalRequestFromTheSameCallerIsServedFromTheCache(t *testing
 	}
 }
 
+// Test flow:
+//  1. Send the same chat completion from two different callers.
+//  2. Assert two races ran, so a second caller is never served the first caller's reply.
 func TestTheSameRequestFromADifferentCallerIsAMiss(t *testing.T) {
 	live := newHarness(t)
 
@@ -79,6 +87,9 @@ func TestTheSameRequestFromADifferentCallerIsAMiss(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Send the same chat completion once from an authenticated caller and once with no Authorization header.
+//  2. Assert two races ran.
 func TestAnUnauthenticatedCallerIsNotServedAnAuthenticatedCallersReply(t *testing.T) {
 	live := newHarness(t)
 
@@ -90,6 +101,10 @@ func TestAnUnauthenticatedCallerIsNotServedAnAuthenticatedCallersReply(t *testin
 	}
 }
 
+// Test flow:
+//  1. Build a cache key for the same caller and body pinned to different escrow IDs.
+//  2. Store one entry under escrow "7".
+//  3. Assert a lookup pinned to escrow "7" hits, a lookup pinned to escrow "9" misses, and an unpinned lookup misses.
 func TestTheSameCallerOnADifferentEscrowIsAMiss(t *testing.T) {
 	pinned := func(escrowID string) cacheKey {
 		request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
@@ -114,6 +129,12 @@ func TestTheSameCallerOnADifferentEscrowIsAMiss(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Make inference stream three separate chunks.
+//  2. Send the same streaming chat completion twice from the same caller, recording chunks with a `chunkRecorder`.
+//  3. Assert only one race ran.
+//  4. Assert the live recording matches the inference chunks exactly.
+//  5. Assert the replay reproduces the same chunk boundaries, with at least one flush per chunk and the same Content-Type.
 func TestAStreamedReplyReplaysChunkForChunk(t *testing.T) {
 	live := newHarness(t)
 	live.inference.chunks = []string{
@@ -145,6 +166,10 @@ func TestAStreamedReplyReplaysChunkForChunk(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Send a chat completion once to fill the cache, and record the limiter's acquire and token counts.
+//  2. Send the identical completion again.
+//  3. Assert the replay is 200 and neither the limiter's acquire count nor its token budget moved.
 func TestACacheHitTakesNoLimiterSlotAndNoTokenBudget(t *testing.T) {
 	live := newHarness(t)
 
@@ -168,6 +193,10 @@ func TestACacheHitTakesNoLimiterSlotAndNoTokenBudget(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Make inference fail with `engine.ErrStopped`.
+//  2. Send the same chat completion twice.
+//  3. Assert two races ran, so a failure is never replayed.
 func TestAFailedRaceIsNotCached(t *testing.T) {
 	live := newHarness(t)
 	live.inference.reply = ""
@@ -182,6 +211,10 @@ func TestAFailedRaceIsNotCached(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Make inference stream an SSE error event under what would otherwise be a 200.
+//  2. Send the same chat completion twice.
+//  3. Assert two races ran, so an error folded into a success is not treated as an answer to replay.
 func TestAnErrorFoldedIntoASuccessIsNotCached(t *testing.T) {
 	live := newHarness(t)
 	live.inference.reply = ""
@@ -196,8 +229,11 @@ func TestAnErrorFoldedIntoASuccessIsNotCached(t *testing.T) {
 	}
 }
 
-// A stream commits 200 on its first byte, so a race that fails afterwards is recorded as a success
-// carrying an SSE error event. Replaying it would freeze one transient host failure for the whole TTL.
+// Test flow:
+//  1. Make inference emit one chunk and then fail with `engine.ErrAllAttemptsFailed`.
+//  2. Send the same streaming chat completion twice, recording the first with a `chunkRecorder`.
+//  3. Assert the first response keeps its already-committed 200 status.
+//  4. Assert two races ran, so a stream that failed after starting is not replayed.
 func TestAStreamThatFailsAfterItStartedIsNotCached(t *testing.T) {
 	live := newHarness(t)
 	live.inference.reply = ""
@@ -217,6 +253,10 @@ func TestAStreamThatFailsAfterItStartedIsNotCached(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Configure the chat cache's max bytes to zero.
+//  2. Send the same chat completion twice.
+//  3. Assert two races ran, so the cache is effectively off.
 func TestZeroMaxBytesDisablesTheCache(t *testing.T) {
 	live := newHarness(t, func(next *config.Config) { next.Cache.ChatCacheMaxBytes = 0 })
 
@@ -228,6 +268,10 @@ func TestZeroMaxBytesDisablesTheCache(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Seed a cache entry directly with a body carrying an upstream-failure SSE error.
+//  2. Read it back.
+//  3. Assert the read is a miss, and the poisoned entry is removed from the cache afterward.
 func TestAnEntryPoisonedAfterItWasStoredDropsItselfOnRead(t *testing.T) {
 	cache := newResponseCache(1 << 20)
 	now := time.Unix(1700000000, 0)
@@ -244,6 +288,11 @@ func TestAnEntryPoisonedAfterItWasStoredDropsItselfOnRead(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Store an entry, then read it back at a time past `cacheEntryTTL`.
+//  2. Assert that read is a miss.
+//  3. Store the same entry into a cache sized smaller than the entry.
+//  4. Assert `put` refuses it as `cacheRefusedTooLarge` and nothing is stored.
 func TestAnExpiredEntryIsAMissAndAnOversizedOneIsNeverStored(t *testing.T) {
 	now := time.Unix(1700000000, 0)
 	key := cacheKey{caller: sha256.Sum256([]byte("a")), model: "qwen", body: sha256.Sum256([]byte("b"))}
@@ -265,9 +314,13 @@ func TestAnExpiredEntryIsAMissAndAnOversizedOneIsNeverStored(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a storable body of a known size, so the cache only ever accounts for replies it agreed to keep.
+//  2. Store 10 distinct entries into a cache sized to hold only 4.
+//  3. Assert the cache's total bytes never exceed its cap.
+//  4. Assert eviction left at least one entry rather than emptying the cache.
 func TestTheCapEvictsUntilTheCacheFits(t *testing.T) {
 	now := time.Unix(1700000000, 0)
-	// A storable body of a known size: the cache only ever accounts for replies it agreed to keep.
 	answer := strings.Repeat("x", 512-len(`{"choices":[{"index":0,"message":{"content":""},"finish_reason":"stop"}]}`))
 	body := []byte(`{"choices":[{"index":0,"message":{"content":"` + answer + `"},"finish_reason":"stop"}]}`)
 	cache := newResponseCache(4 * (int64(len(body)) + cacheEntryOverhead))
@@ -285,8 +338,10 @@ func TestTheCapEvictsUntilTheCacheFits(t *testing.T) {
 	}
 }
 
-// A client must not be able to tell a cache replay from a live race by its headers. The two paths
-// never meet -- serveCached short-circuits above the race -- so only this test links them.
+// Test flow:
+//  1. For both a non-streaming and a streaming reply, begin a live `clientStream` and set its headers.
+//  2. Serve a cached entry with the same escrow, content type and streaming flag through `serveCached`.
+//  3. Assert the live and replayed responses carry identical headers.
 func TestCachedReplayAndLiveStreamAgreeOnHeaders(t *testing.T) {
 	for _, streaming := range []bool{false, true} {
 		name := "non_streaming"
@@ -315,9 +370,10 @@ func TestCachedReplayAndLiveStreamAgreeOnHeaders(t *testing.T) {
 	}
 }
 
-// The recorder holds one buffer per request in flight for the request's whole life, and put would
-// reject anything larger than the cache itself. Recording past that point costs memory for nothing,
-// and at full concurrency it is the difference between bounded and not.
+// Test flow:
+//  1. Write past a `cacheRecorder`'s limit in repeated chunks.
+//  2. Assert the recorder marks itself overflowed and releases its buffer.
+//  3. Assert an overflowed recording is never offered to the cache as storable.
 func TestCacheRecorderStopsBufferingPastWhatTheCacheCouldStore(t *testing.T) {
 	const limit = 4096
 	recorder := &cacheRecorder{ResponseWriter: httptest.NewRecorder(), limit: limit}
@@ -340,6 +396,9 @@ func TestCacheRecorderStopsBufferingPastWhatTheCacheCouldStore(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Write one chunk within a `cacheRecorder`'s limit.
+//  2. Assert the recording is offered to the cache as storable.
 func TestCacheRecorderKeepsARecordingInsideTheLimit(t *testing.T) {
 	recorder := &cacheRecorder{ResponseWriter: httptest.NewRecorder(), limit: 1 << 20}
 	recorder.WriteHeader(http.StatusOK)
@@ -353,9 +412,11 @@ func TestCacheRecorderKeepsARecordingInsideTheLimit(t *testing.T) {
 	}
 }
 
-// The force rules make one client's normalized body identical to another's, so the intent has to be
-// part of the key: without it a request that asked for logprobs is answered from an entry stripped of
-// them, or the reverse hands a client a shape it never asked for.
+// Test flow:
+//  1. Build cache keys for the same request and body, varying the logprob intent across keep, keep-with-alternatives, and neither.
+//  2. Assert each pair of intents produces a distinct key, since the normalized body alone cannot tell them apart.
+//  3. Build a further key for the same "keep" intent but with a usage chunk requested.
+//  4. Assert it too differs from the plain "keep" key.
 func TestTheCacheKeySeparatesRequestsByWhatTheyAskedFor(t *testing.T) {
 	request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
 	request.Header.Set("Authorization", "Bearer one-caller")
@@ -371,15 +432,15 @@ func TestTheCacheKeySeparatesRequestsByWhatTheyAskedFor(t *testing.T) {
 	if asked == askedForAlternatives {
 		t.Fatal("a request that asked for alternatives shares an entry with one that did not")
 	}
-	// The body asks every host to report usage, so only the remembered intent separates these two.
 	askedForUsage := cacheKeyFor(request, "qwen", body, filters.LogprobIntent{Keep: true}, false, true)
 	if asked == askedForUsage {
 		t.Fatal("a request that asked for a usage chunk shares an entry with one that did not")
 	}
 }
 
-// TestTheCacheSeparatesReplyShapes guards the key against the forced upstream stream: two callers whose
-// bodies are now identical must not share an entry when they asked for different reply shapes.
+// Test flow:
+//  1. Build cache keys for the same request and body, once buffered and once forced to stream.
+//  2. Assert the two keys differ, so a buffered and a streamed caller never share an entry.
 func TestTheCacheSeparatesReplyShapes(t *testing.T) {
 	t.Parallel()
 	request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
@@ -393,9 +454,10 @@ func TestTheCacheSeparatesReplyShapes(t *testing.T) {
 	}
 }
 
-// A stream that stops mid-event is delivered under a 200 the status can no longer take back, so the
-// only thing that can keep it out of the cache is the close failure. Cached, it is replayed to every
-// identical request for the whole entry lifetime.
+// Test flow:
+//  1. Make inference stream one complete chunk followed by a chunk cut off mid-event.
+//  2. Send the same streaming chat completion twice.
+//  3. Assert two races ran, so a stream that stopped mid-event is never replayed.
 func TestAStreamThatEndedMidEventIsNotCached(t *testing.T) {
 	live := newHarness(t)
 	live.inference.reply = ""
@@ -413,8 +475,11 @@ func TestAStreamThatEndedMidEventIsNotCached(t *testing.T) {
 	}
 }
 
-// The recorder buffers into memory per in-flight request. Bounding it by the whole cache lets each
-// concurrent request hold the entire cache on its own, outside every budget that reports held bytes.
+// Test flow:
+//  1. Read `entryLimit()` off a cache sized at 1 GiB.
+//  2. Assert it caps at `maxBufferedResponseBytes`, not the cache's own size.
+//  3. Read `entryLimit()` off a cache sized at 1 KiB.
+//  4. Assert it caps at the cache's own ceiling instead.
 func TestOneRecordedEntryIsBoundedByOneReplyNotByTheWholeCache(t *testing.T) {
 	if limit := newResponseCache(1 << 30).entryLimit(); limit != maxBufferedResponseBytes {
 		t.Errorf("entryLimit() on a 1 GiB cache = %d, want %d", limit, int64(maxBufferedResponseBytes))
@@ -424,8 +489,10 @@ func TestOneRecordedEntryIsBoundedByOneReplyNotByTheWholeCache(t *testing.T) {
 	}
 }
 
-// The cache is bounded in bytes, so an entry must hold exactly what it is charged for: a buffer handed
-// over with its growth slack costs the cache memory no ledger knows about.
+// Test flow:
+//  1. Write 40 chunks through a `cacheRecorder` and take its stored entry.
+//  2. Assert the entry was accepted for storage.
+//  3. Assert the entry's body and bounds slices carry no spare capacity beyond their length.
 func TestAStoredEntryHoldsExactlyWhatItIsChargedFor(t *testing.T) {
 	recorder := newCacheRecorder(httptest.NewRecorder(), 1<<20, true)
 	for range 40 {
@@ -446,9 +513,11 @@ func TestAStoredEntryHoldsExactlyWhatItIsChargedFor(t *testing.T) {
 	}
 }
 
-// The gateway writes the terminator itself when a host sends none, so a reply that stopped mid-answer
-// reads as complete to the client that receives it and to the cache that stores it. Replaying one for
-// an hour is how eight identical retries got the same unfinished body.
+// Test flow:
+//  1. Make inference stream one reasoning chunk and stop without a finish reason.
+//  2. Send the same streaming chat completion twice.
+//  3. Assert the first response still delivers what arrived, terminator included.
+//  4. Assert two races ran, so an unfinished answer is never replayed.
 func TestAStreamThatStoppedMidAnswerIsNotCached(t *testing.T) {
 	live := newHarness(t)
 	live.inference.chunks = []string{`data: {"choices":[{"index":0,"delta":{"reasoning":"still working"}}]}` + "\n\n"}
@@ -464,7 +533,10 @@ func TestAStreamThatStoppedMidAnswerIsNotCached(t *testing.T) {
 	}
 }
 
-// The gate reads finish_reason, so an answer that did finish must still be worth a cache hit.
+// Test flow:
+//  1. Make inference stream content followed by a chunk carrying `finish_reason: "stop"`.
+//  2. Send the same streaming chat completion twice.
+//  3. Assert only one race ran, since a finished answer is what the cache is for.
 func TestAStreamThatFinishedItsAnswerIsCached(t *testing.T) {
 	live := newHarness(t)
 	live.inference.chunks = []string{
@@ -480,8 +552,10 @@ func TestAStreamThatFinishedItsAnswerIsCached(t *testing.T) {
 	}
 }
 
-// A non-streaming caller is served the same host stream, folded. The fold hides the defect better: the
-// merged body carries no finish_reason at all, and nothing in it says the answer stopped early.
+// Test flow:
+//  1. Make inference stream one chunk with no finish reason.
+//  2. Send the same non-streaming chat completion twice.
+//  3. Assert two races ran, so a folded, unfinished answer is never replayed either.
 func TestAFoldedAnswerThatStoppedMidAnswerIsNotCached(t *testing.T) {
 	live := newHarness(t)
 	live.inference.chunks = []string{`data: {"object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"still w"}}]}` + "\n\n"}
@@ -494,7 +568,10 @@ func TestAFoldedAnswerThatStoppedMidAnswerIsNotCached(t *testing.T) {
 	}
 }
 
-// put is the only way into the cache, so the refusal it returns is the gate itself, not a log message.
+// Test flow:
+//  1. Build a streaming entry whose body carries content but no finish reason.
+//  2. Call `cache.put` with it.
+//  3. Assert the refusal is `filters.CacheRefusedUnfinished` and nothing was stored.
 func TestPutRefusesAnUnfinishedAnswerAndNamesIt(t *testing.T) {
 	cache := newResponseCache(1 << 20)
 	now := time.Unix(1700000000, 0)
@@ -511,8 +588,10 @@ func TestPutRefusesAnUnfinishedAnswerAndNamesIt(t *testing.T) {
 	}
 }
 
-// A host may split one JSON object over two data lines, which a client joins and the gate must too. Read
-// line by line, neither half decodes and the finished answer below would never earn its entry.
+// Test flow:
+//  1. Make inference stream one JSON object split across two `data:` lines with a finish reason on the second.
+//  2. Send the same streaming chat completion twice.
+//  3. Assert only one race ran, so a finished answer split across data lines still reads as finished.
 func TestAStreamSplitAcrossDataLinesIsJudgedWhole(t *testing.T) {
 	live := newHarness(t)
 	live.inference.chunks = []string{"data: {\"choices\":[{\"index\":0,\ndata: \"delta\":{},\"finish_reason\":\"stop\"}]}\n\n"}
@@ -525,8 +604,11 @@ func TestAStreamSplitAcrossDataLinesIsJudgedWhole(t *testing.T) {
 	}
 }
 
-// A host may end its last event without the blank line that closes it. Our terminator must not glue onto
-// that event: one frame no client can read is also one the cache cannot judge, and the host loses caching.
+// Test flow:
+//  1. Make inference stream one finished event with no trailing blank line.
+//  2. Send the same streaming chat completion twice.
+//  3. Assert the first response's terminator is written on its own line, not glued onto the host's event.
+//  4. Assert only one race ran, so the finished answer still earned its cache entry.
 func TestATerminatorIsNotGluedOntoAnUnterminatedEvent(t *testing.T) {
 	live := newHarness(t)
 	live.inference.chunks = []string{`data: {"choices":[{"index":0,"delta":{"content":"ok"},"finish_reason":"stop"}]}`}
@@ -542,7 +624,10 @@ func TestATerminatorIsNotGluedOntoAnUnterminatedEvent(t *testing.T) {
 	}
 }
 
-// A host that framed its last event with CRLF closed it already; a second separator would open an empty one.
+// Test flow:
+//  1. Make inference stream one finished event already closed with a CRLF blank line.
+//  2. Send one streaming chat completion.
+//  3. Assert no extra separator was written after the event that already ended.
 func TestACrlfFramedEventIsNotSeparatedTwice(t *testing.T) {
 	live := newHarness(t)
 	live.inference.chunks = []string{"data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\r\n\r\n"}
@@ -554,6 +639,11 @@ func TestACrlfFramedEventIsNotSeparatedTwice(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Fill the cache with one chat completion, then flip the chain snapshot to blocked for PoC generation.
+//  2. Send the identical completion again, having recorded the limiter's acquire count beforehand.
+//  3. Assert the replay is 200 with the same cached body.
+//  4. Assert no race ran and no limiter slot was taken for the replay.
 func TestACachedReplyIsServedWhileTheChainIsInPoC(t *testing.T) {
 	live := newHarness(t)
 	live.swapConfig(func(next *config.Config) { next.Modes.PoCMode = config.PoCModeOff })
@@ -574,6 +664,10 @@ func TestACachedReplyIsServedWhileTheChainIsInPoC(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Set the chain snapshot blocked for confirmation-PoC generation.
+//  2. Send a chat completion that has never been cached.
+//  3. Assert the response is 503 and no race started.
 func TestACacheMissWhileTheChainIsInPoCIsStillRefused(t *testing.T) {
 	live := newHarness(t)
 	live.swapConfig(func(next *config.Config) { next.Modes.PoCMode = config.PoCModeOff })
@@ -589,6 +683,11 @@ func TestACacheMissWhileTheChainIsInPoCIsStillRefused(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Fill the cache with one chat completion while the chain snapshot is healthy.
+//  2. Age the snapshot's last-healthy time past the configured staleness bound.
+//  3. Send the identical completion again.
+//  4. Assert the replay is refused with 503 and only the original race ever ran.
 func TestAStaleChainServesNoCachedReply(t *testing.T) {
 	live := newHarness(t, func(configuration *config.Config) { configuration.Chain.SnapshotMaxAgeSeconds = 30 })
 	live.snapshots.snapshot = chain.PhaseSnapshot{LastHealthyAt: harnessClock}
@@ -605,6 +704,11 @@ func TestAStaleChainServesNoCachedReply(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Fill the cache with one chat completion while the chain snapshot is healthy.
+//  2. Flip the snapshot to blocked for PoC generation with a last-healthy time past the staleness bound.
+//  3. Send the identical completion again.
+//  4. Assert the replay still returns the cached 200 body.
 func TestASnapshotThatWentStaleDuringPoCStillServesACachedReply(t *testing.T) {
 	live := newHarness(t, func(configuration *config.Config) {
 		configuration.Chain.SnapshotMaxAgeSeconds = 30

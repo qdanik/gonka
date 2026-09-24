@@ -36,7 +36,10 @@ func (n *recordingCutoffNarrator) HostCutOffLifted(participant, model string, ba
 	n.lifts = append(n.lifts, recordedLift{participant: participant, model: model, backoffCount: backoffCount})
 }
 
-// The first cut-off lasts five seconds against a gauge sampled every fifteen.
+// Test flow:
+//  1. Build a `newTestParticipantLimiter` with jitter disabled and attach a `recordingCutoffNarrator`.
+//  2. Answer with `TransportFault` enough times to trip the breaker.
+//  3. Assert one cut-off is recorded with reason "consecutive_transport_faults", backoff count 1 and a 5-second duration.
 func TestCutoffIsNarratedWhenItOpens(t *testing.T) {
 	limiter := newTestParticipantLimiter(t)
 	limiter.jitter = func(time.Duration) time.Duration { return 0 }
@@ -53,7 +56,10 @@ func TestCutoffIsNarratedWhenItOpens(t *testing.T) {
 	}}, narrator.cutoffs)
 }
 
-// A probe that fails reopens the breaker at once, and it is a different fact from a run of faults.
+// Test flow:
+//  1. Trip the breaker with `TransportFault` answers, then force it half-open via `markHalfOpen`, before attaching a narrator.
+//  2. Attach a `recordingCutoffNarrator` and answer with `TransportFault` again.
+//  3. Assert the recorded cut-off's reason is "half_open_probe_failed", distinct from the earlier trip.
 func TestAFailedProbeIsNarratedAsItsOwnReason(t *testing.T) {
 	limiter := newTestParticipantLimiter(t)
 	for range int(limiter.cfg.AfterFailures) {
@@ -69,7 +75,10 @@ func TestAFailedProbeIsNarratedAsItsOwnReason(t *testing.T) {
 	require.Equal(t, "half_open_probe_failed", narrator.cutoffs[0].reason)
 }
 
-// The close is what says the host came back, and it happens on a success the gauge may never sample.
+// Test flow:
+//  1. Trip the breaker with `TransportFault` answers and force it half-open via `markHalfOpen`, before attaching a narrator.
+//  2. Attach a `recordingCutoffNarrator` and answer with `Success`.
+//  3. Assert one lift is recorded for the participant with backoff count 0.
 func TestCutoffCloseIsNarrated(t *testing.T) {
 	limiter := newTestParticipantLimiter(t)
 	for range int(limiter.cfg.AfterFailures) {
@@ -84,7 +93,10 @@ func TestCutoffCloseIsNarrated(t *testing.T) {
 	require.Equal(t, []recordedLift{{participant: "participant-a", model: "model-a", backoffCount: 0}}, narrator.lifts)
 }
 
-// Ordinary traffic stays silent: a narration per result is a line per request.
+// Test flow:
+//  1. Attach a `recordingCutoffNarrator` to a fresh limiter.
+//  2. Answer with `Success`, `Overload` and `UpstreamFault` in turn.
+//  3. Assert nothing was recorded as a cut-off or a lift.
 func TestAnOrdinaryResultIsNotNarrated(t *testing.T) {
 	limiter := newTestParticipantLimiter(t)
 	narrator := &recordingCutoffNarrator{}
@@ -98,6 +110,9 @@ func TestAnOrdinaryResultIsNotNarrated(t *testing.T) {
 	require.Empty(t, narrator.lifts)
 }
 
+// Test flow:
+//  1. Build a limiter with no narrator attached and answer with `TransportFault` enough times to trip the breaker.
+//  2. Assert the participant is no longer `Available`.
 func TestAnUnnarratedLimiterStillCutsOff(t *testing.T) {
 	limiter := newTestParticipantLimiter(t)
 

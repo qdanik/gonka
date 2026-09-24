@@ -11,13 +11,16 @@ import (
 	"devshard/cmd/gateway/scheduler"
 )
 
-// The last eight characters of each are what logkey.ShortHost renders.
 const (
 	hostAlpha = "gonka1aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	hostBravo = "gonka1bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 )
 
-// A race whose first pick failed ran on no escrow and asked no host; an empty value reads as a subject with no name.
+// Test flow:
+//  1. Build a journal with a `logcapture.Recorder`.
+//  2. Finish a request whose race failed before any escrow was picked (`RaceErr` is `ErrAllAttemptsFailed`).
+//  3. Flush the journal.
+//  4. Assert the logged "request finished" line carries no escrow and no host field.
 func TestARequestThatReachedNoEscrowNamesNoEscrowAndNoHost(t *testing.T) {
 	lines := &logcapture.Recorder{}
 	events := newJournal(t, Settings{Lines: lines})
@@ -38,7 +41,11 @@ func TestARequestThatReachedNoEscrowNamesNoEscrowAndNoHost(t *testing.T) {
 	require.Len(t, lines.All(), 1)
 }
 
-// With nobody crowned there is no winner to name, only the hosts that were asked.
+// Test flow:
+//  1. Build a journal with a `logcapture.Recorder`.
+//  2. Finish a request whose outcome tried `hostAlpha` and `hostBravo` but crowned no winner.
+//  3. Flush the journal.
+//  4. Assert the logged "request finished" line names every host tried, keyed as "hosts".
 func TestARequestNobodyWonNamesEveryHostItTried(t *testing.T) {
 	lines := &logcapture.Recorder{}
 	events := newJournal(t, Settings{Lines: lines})
@@ -61,7 +68,11 @@ func TestARequestNobodyWonNamesEveryHostItTried(t *testing.T) {
 	}})
 }
 
-// host names the crowned attempt only; the loser beside it is not the answer the client got.
+// Test flow:
+//  1. Build a journal with a `logcapture.Recorder`.
+//  2. Finish a request whose outcome has one winning attempt (`WinnerNonce`, `Succeeded`) and one losing attempt.
+//  3. Flush the journal.
+//  4. Assert the logged "request finished" line names only the winning host, keyed as "host".
 func TestARequestWithAWinnerNamesOnlyTheWinner(t *testing.T) {
 	lines := &logcapture.Recorder{}
 	events := newJournal(t, Settings{Lines: lines})
@@ -84,7 +95,11 @@ func TestARequestWithAWinnerNamesOnlyTheWinner(t *testing.T) {
 	}})
 }
 
-// Nonce 0 names no record; writing it sends an operator looking for a nonce that was never committed.
+// Test flow:
+//  1. Build a journal with a `logcapture.Recorder`.
+//  2. Record a `GhostBurned` event with no nonce set.
+//  3. Flush the journal.
+//  4. Assert the logged "nonce burned for nobody" line carries no "nonce" field.
 func TestABurnWithoutANonceNamesNone(t *testing.T) {
 	lines := &logcapture.Recorder{}
 	events := newJournal(t, Settings{Lines: lines})
@@ -97,6 +112,11 @@ func TestABurnWithoutANonceNamesNone(t *testing.T) {
 	}})
 }
 
+// Test flow:
+//  1. Build a journal with a `logcapture.Recorder`.
+//  2. Record a `GhostBurned` event with a nonce set.
+//  3. Flush the journal.
+//  4. Assert the logged "nonce burned for nobody" line carries the "nonce" field.
 func TestABurnWithANonceNamesIt(t *testing.T) {
 	lines := &logcapture.Recorder{}
 	events := newJournal(t, Settings{Lines: lines})

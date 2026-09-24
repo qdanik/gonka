@@ -7,8 +7,11 @@ import (
 	"testing"
 )
 
+// Test flow:
+//  1. Clear the port variable to empty (`t.Setenv` treats empty as unset), asserting pristine-environment behavior.
+//  2. Call `Load`.
+//  3. Assert `Port` comes back nil.
 func TestLoadReturnsNilForUnsetVariables(t *testing.T) {
-	// t.Setenv only clears the two probes (empty = unset); the test asserts pristine-environment behavior.
 	t.Setenv("GATEWAY_PORT", "")
 
 	values, err := Load()
@@ -20,6 +23,10 @@ func TestLoadReturnsNilForUnsetVariables(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Set one environment variable of each type `Load` parses: int, bool, float.
+//  2. Call `Load`.
+//  3. Assert each parsed field matches its set value.
 func TestLoadParsesTypedValues(t *testing.T) {
 	t.Setenv("GATEWAY_PORT", "9191")
 	t.Setenv("GATEWAY_ROTATION_ENABLED", "true")
@@ -56,6 +63,10 @@ func TestLoadParsesTypedValues(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Set a string variable padded with whitespace and an int variable containing only whitespace.
+//  2. Call `Load`.
+//  3. Assert the string value is trimmed and the blank int variable loads as unset (nil).
 func TestLoadWhitespaceIsTrimmedAndEmptyMeansUnset(t *testing.T) {
 	t.Setenv("GATEWAY_DISABLED_MESSAGE", "  gateway paused  ")
 	t.Setenv("GATEWAY_TX_GAS_LIMIT", "   ")
@@ -72,6 +83,10 @@ func TestLoadWhitespaceIsTrimmedAndEmptyMeansUnset(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Set three variables of different types to malformed values.
+//  2. Call `Load`.
+//  3. Assert it returns an error naming all three variables, since errors must accumulate rather than stop at the first.
 func TestLoadRejectsMalformedValuesWithVariableName(t *testing.T) {
 	t.Setenv("GATEWAY_PORT", "not-a-number")
 	t.Setenv("GATEWAY_DISABLED", "maybe")
@@ -93,6 +108,10 @@ func TestLoadRejectsMalformedValuesWithVariableName(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Set the PoC mode variable to a value outside its enum.
+//  2. Call `Load`.
+//  3. Assert it returns an error naming the variable.
 func TestLoadRejectsInvalidPoCMode(t *testing.T) {
 	t.Setenv("GATEWAY_POC_MODE", "aggressive")
 	_, err := Load()
@@ -101,6 +120,11 @@ func TestLoadRejectsInvalidPoCMode(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Set a private key variable with surrounding whitespace and read it via `PrivateKey`.
+//  2. Assert the key comes back trimmed.
+//  3. Look up a blank and an unset variable name.
+//  4. Assert both return `ErrPrivateKeyMissing` and neither error embeds the key material.
 func TestPrivateKeyReadsTheNamedVariableAndNamesOnlyTheVariableOnFailure(t *testing.T) {
 	t.Setenv("DEVSHARD_KEY_A", "  deadbeef  ")
 	key, err := PrivateKey("DEVSHARD_KEY_A")
@@ -119,8 +143,14 @@ func TestPrivateKeyReadsTheNamedVariableAndNamesOnlyTheVariableOnFailure(t *test
 	}
 }
 
-// The shipped deployment template still spells these the devshardctl way, so a gateway that read only
-// its own names would start on defaults: wrong port, no API keys, no chain endpoint.
+// Test flow:
+//  1. Subtest "the legacy name is read when the gateway name is unset": set devshardctl-spelled variables and assert `Load` reads them (the shipped deployment template still spells these the devshardctl way).
+//  2. Subtest "the gateway name wins when both are set": set both spellings and assert the gateway's own name wins.
+//  3. Subtest "the host-ping and height-sync variables devshardctl had are read too": set every devshardctl host-ping and height-sync variable and assert each loads, including a duration converted to milliseconds.
+//  4. Subtest "legacy spellings devshardctl accepted are read the way it read them": set devshardctl's own boolean spellings (on/off/yes) and assert they parse the same way.
+//  5. Subtest "a legacy value devshardctl ignored is ignored, not refused": set legacy values devshardctl could not parse and assert `Load` succeeds with those fields left unset.
+//  6. Subtest "the gateway's own spelling stays strict": set the gateway's own variable to a loose spelling devshardctl would have accepted and assert `Load` still refuses it.
+//  7. Subtest "every alias names a variable Load actually reads": read `env.go`'s own source and assert every legacy name and legacy duration name in the alias tables appears in a matching reader call.
 func TestLoadFallsBackToTheDevshardctlSpelling(t *testing.T) {
 	t.Run("the legacy name is read when the gateway name is unset", func(t *testing.T) {
 		t.Setenv("DEVSHARD_PORT", "9999")
@@ -255,6 +285,10 @@ func TestLoadFallsBackToTheDevshardctlSpelling(t *testing.T) {
 	})
 }
 
+// Test flow:
+//  1. Set every nonce-accounting ledger variable under its `GATEWAY_ACCOUNTING_` prefix.
+//  2. Call `Load`.
+//  3. Assert each field loads with its set value.
 func TestLoadReadsTheAccountingLedgerUnderTheAccountingPrefix(t *testing.T) {
 	t.Setenv("GATEWAY_ACCOUNTING_ENABLED", "true")
 	t.Setenv("GATEWAY_ACCOUNTING_PORT", "9191")
@@ -279,7 +313,10 @@ func TestLoadReadsTheAccountingLedgerUnderTheAccountingPrefix(t *testing.T) {
 	}
 }
 
-// devshardctl called the same ledger "stats", so a node carrying its config over keeps the ledger it had.
+// Test flow:
+//  1. Set every nonce-accounting ledger variable under devshardctl's `DEVSHARD_STATS_` prefix (devshardctl called the same ledger "stats").
+//  2. Call `Load`.
+//  3. Assert each field loads with its set value, the same as the gateway's own prefix would.
 func TestTheAccountingLedgerAnswersToTheDevshardctlStatsNames(t *testing.T) {
 	t.Setenv("DEVSHARD_STATS_ENABLED", "true")
 	t.Setenv("DEVSHARD_STATS_PORT", "9292")
@@ -304,6 +341,10 @@ func TestTheAccountingLedgerAnswersToTheDevshardctlStatsNames(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Set the request-record retention hours and max-rows variables under the `GATEWAY_REQUESTS_` prefix.
+//  2. Call `Load`.
+//  3. Assert both fields load with their set values.
 func TestLoadReadsTheRequestRecordRetentionUnderTheRequestsPrefix(t *testing.T) {
 	t.Setenv("GATEWAY_REQUESTS_RETENTION_HOURS", "24")
 	t.Setenv("GATEWAY_REQUESTS_RETENTION_MAX_ROWS", "500")
@@ -320,7 +361,10 @@ func TestLoadReadsTheRequestRecordRetentionUnderTheRequestsPrefix(t *testing.T) 
 	}
 }
 
-// The ACCOUNTING prefix now names the ledger, so the request records' former names must not be read as theirs.
+// Test flow:
+//  1. Set the request-record retention variables under the old `GATEWAY_ACCOUNTING_` prefix.
+//  2. Call `Load`.
+//  3. Assert both fields stay nil, since that prefix now names the ledger and no longer reads the request records' former names.
 func TestTheRequestRecordRetentionNoLongerAnswersToTheAccountingPrefix(t *testing.T) {
 	t.Setenv("GATEWAY_ACCOUNTING_RETENTION_HOURS", "24")
 	t.Setenv("GATEWAY_ACCOUNTING_RETENTION_MAX_ROWS", "500")
@@ -337,8 +381,10 @@ func TestTheRequestRecordRetentionNoLongerAnswersToTheAccountingPrefix(t *testin
 	}
 }
 
-// The fallback is the devshardctl spelling, as every other entry in the table is. A node still on the
-// gateway's own former name must be migrated: nothing reads it, and the gateway starts serving nothing.
+// Test flow:
+//  1. Set the escrow list under its former `DEVSHARDS_JSON` name.
+//  2. Call `Load`.
+//  3. Assert the escrow list loads from that former name.
 func TestTheEscrowListStillAnswersToItsFormerName(t *testing.T) {
 	t.Setenv("DEVSHARDS_JSON", `[{"escrow_id":"1"}]`)
 
@@ -351,8 +397,10 @@ func TestTheEscrowListStillAnswersToItsFormerName(t *testing.T) {
 	}
 }
 
-// Three of the four rotation knobs were reachable from the environment and this one was not, so an
-// operator reading the deployment file concluded it did not exist while it quietly ran on its default.
+// Test flow:
+//  1. Set all four rotation environment variables (enabled, settlement enabled, pre-PoC blocks, models JSON).
+//  2. Call `Load`.
+//  3. Assert every one of the four knobs loaded its own variable.
 func TestEveryRotationKnobIsReachableFromTheEnvironment(t *testing.T) {
 	t.Setenv("GATEWAY_ROTATION_ENABLED", "true")
 	t.Setenv("GATEWAY_ROTATION_SETTLEMENT_ENABLED", "true")
@@ -371,6 +419,10 @@ func TestEveryRotationKnobIsReachableFromTheEnvironment(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Set the rotation hold's enabled, max-per-model, and resume-answers variables.
+//  2. Call `Load`.
+//  3. Assert each field loads with its set value.
 func TestTheHoldKnobsReadTheirVariables(t *testing.T) {
 	t.Setenv("GATEWAY_ROTATION_HOLD_ENABLED", "false")
 	t.Setenv("GATEWAY_ROTATION_HOLD_MAX_PER_MODEL", "3")
@@ -391,8 +443,10 @@ func TestTheHoldKnobsReadTheirVariables(t *testing.T) {
 	}
 }
 
-// An escrow records the name of its key variable when it is created, so renaming the variable in the
-// deployment leaves the stored record pointing at a name nothing sets and the escrow goes inactive.
+// Test flow:
+//  1. Set the key under its current gateway name while looking it up by its old, renamed name (an escrow records the name of its key variable when created, so a rename would otherwise leave it inactive).
+//  2. Call `PrivateKey` with the old name.
+//  3. Assert it falls back to the renamed variable and returns the key.
 func TestASigningKeyFallsBackToItsRenamedVariable(t *testing.T) {
 	t.Setenv("GATEWAY_PRIVATE_KEY", "deadbeef")
 
@@ -405,14 +459,19 @@ func TestASigningKeyFallsBackToItsRenamedVariable(t *testing.T) {
 	}
 }
 
-// The fallback must not invent a key: an unset pair still fails, and the error names the recorded
-// variable so an operator fixes the record rather than guessing.
+// Test flow:
+//  1. Call `PrivateKey` with neither the old nor the current variable set.
+//  2. Assert it returns `ErrPrivateKeyMissing`, since the fallback must not invent a key.
 func TestASigningKeyWithNeitherNameSetStillFails(t *testing.T) {
 	if _, err := PrivateKey("DEVSHARD_PRIVATE_KEY"); !errors.Is(err, ErrPrivateKeyMissing) {
 		t.Fatalf("PrivateKey() = %v, want ErrPrivateKeyMissing", err)
 	}
 }
 
+// Test flow:
+//  1. Set every engine timing and the chain snapshot max age environment variable.
+//  2. Call `Load`.
+//  3. Assert each field loads with its set value.
 func TestLoadParsesEngineTimings(t *testing.T) {
 	for name, value := range map[string]string{
 		"GATEWAY_ENGINE_RECEIPT_TIMEOUT_MS":         "7000",

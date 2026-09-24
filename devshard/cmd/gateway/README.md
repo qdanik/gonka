@@ -104,11 +104,7 @@ Boot has a matching budget: the concurrent-build limit and the idle connection p
 
 ## Working on it
 
-```
-go build ./...
-go test ./... -count=1
-golangci-lint run ./...
-```
+[`CONTRIBUTING.md`](./CONTRIBUTING.md) is the checklist every change is reviewed against: how to run the gate (`make verify`, from this directory, so the linter reads `.golangci.yml`), where code goes, how files are laid out, naming, comments, and the `Test flow` format every test carries.
 
 The tests are the specification. Where a rule exists because something went wrong once, the test that pins it says so in its name — `TestAWinnerCrownedAfterTheClientLeftIsNotLabelledUserVisible` is a bug report that cannot rot.
 

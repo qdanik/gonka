@@ -10,21 +10,17 @@ import (
 	"devshard/cmd/gateway/engine"
 )
 
-// recordWith builds the totals a finding reads, so a test states the shape of a participant's epoch
-// rather than the sequence of facts that would produce it.
+// recordWith builds the totals a finding reads from an assigned count and a disposition breakdown.
 func recordWith(assigned uint64, dispositions map[Disposition]uint64) ParticipantRecord {
 	return ParticipantRecord{nonceTotals: nonceTotals{Assigned: assigned, Dispositions: dispositions}}
 }
 
-// troubledBook drives a book through the facts a struggling host produces, so the tests above the
-// derivation are joined by one that proves the derivation is reached at all. A group of one puts
-// every nonce on the same participant.
+// troubledBook drives a book through the facts a struggling host produces, on a group of one so every
+// nonce lands on the same participant.
 func troubledBook(t *testing.T) *Book {
 	t.Helper()
 	const total, unfinished = 100, 10
 	book := newTestBook(t, 1)
-	// Nonce numbering starts at one, as the chain counts it: starting at zero would classify a nonce
-	// outside the assigned range and raise a disagreement finding this fixture does not mean to raise.
 	if err := book.ObserveLatestNonce(testEscrow, total); err != nil {
 		t.Fatalf("ObserveLatestNonce(): %v", err)
 	}
@@ -46,8 +42,10 @@ func troubledBook(t *testing.T) *Book {
 	return book
 }
 
-// TestQueryAttachesFindingsToTheRecord is the join: the derivation is tested above on totals alone,
-// and this is what proves a reader of the ledger ever reaches it.
+// Test flow:
+//  1. Build a `troubledBook` fixture and query its records.
+//  2. Assert the query returns the single participant of a group of one.
+//  3. Assert that record's findings carry `FindingExecutionTimeouts`.
 func TestQueryAttachesFindingsToTheRecord(t *testing.T) {
 	records := troubledBook(t).Query(QueryFilter{})
 
@@ -76,6 +74,11 @@ func findingWithCode(t *testing.T, findings []Finding, code string) Finding {
 	return Finding{}
 }
 
+// Test flow:
+//  1. Build a record of 100 assigned nonces, 90 finished and used, 10 unfinished by execution.
+//  2. Find the `FindingExecutionTimeouts` finding for it.
+//  3. Assert its severity is critical at the 10% rate.
+//  4. Assert its part and whole are 10 of 100.
 func TestAcknowledgedButUnfinishedNoncesAreReported(t *testing.T) {
 	record := recordWith(100, map[Disposition]uint64{
 		DispositionFinishedUsed:        90,
@@ -92,8 +95,9 @@ func TestAcknowledgedButUnfinishedNoncesAreReported(t *testing.T) {
 	}
 }
 
-// A rate is only worth reading once the sample is worth reading. Without the floor, a participant the
-// gateway barely used would be reported as its worst host.
+// Test flow:
+//  1. Build a record of 5 assigned nonces, 1 finished and used, 4 unfinished by execution.
+//  2. Assert findings are empty, below the volume floor.
 func TestARateOverTooFewNoncesIsNotReported(t *testing.T) {
 	record := recordWith(5, map[Disposition]uint64{
 		DispositionFinishedUsed:        1,
@@ -105,6 +109,9 @@ func TestARateOverTooFewNoncesIsNotReported(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a record of 100 assigned nonces, all finished and used.
+//  2. Assert findings are empty.
 func TestACleanParticipantIsReportedAsClean(t *testing.T) {
 	record := recordWith(100, map[Disposition]uint64{DispositionFinishedUsed: 100})
 
@@ -113,9 +120,10 @@ func TestACleanParticipantIsReportedAsClean(t *testing.T) {
 	}
 }
 
-// Burns are the gateway's own decision. Counting them against the host would report our throttling as
-// its failure, which is the one reading a host operator cannot act on. The assertion names the
-// denominator rather than the severity, so it pins which nonces the rate is taken over.
+// Test flow:
+//  1. Build a record of 500 assigned nonces: 95 finished and used, 5 unfinished by execution, 400 ghost burns.
+//  2. Find the `FindingExecutionTimeouts` finding.
+//  3. Assert its part and whole are 5 of 100, excluding the 400 burned nonces from the denominator.
 func TestBurnedNoncesDoNotCountAgainstTheHostsFailureRates(t *testing.T) {
 	record := recordWith(500, map[Disposition]uint64{
 		DispositionFinishedUsed:        95,
@@ -130,7 +138,10 @@ func TestBurnedNoncesDoNotCountAgainstTheHostsFailureRates(t *testing.T) {
 	}
 }
 
-// A full window and an open cut-off are one finding: both are this gateway deciding not to send.
+// Test flow:
+//  1. Build a record of 100 assigned nonces with 40 ghosted under two reasons: a full window and an open cut-off.
+//  2. Find the `FindingGatewayThrottled` finding.
+//  3. Assert its part and whole are 40 of 100, both reasons counted as one gateway-side finding.
 func TestGatewaySideThrottlingIsReportedAsTheGatewaysOwn(t *testing.T) {
 	record := recordWith(100, map[Disposition]uint64{DispositionFinishedUsed: 60, DispositionGhost: 40})
 	record.Counters = []CounterRecord{{
@@ -148,8 +159,10 @@ func TestGatewaySideThrottlingIsReportedAsTheGatewaysOwn(t *testing.T) {
 	}
 }
 
-// Ledger rows outlive the deploy that renames a reason, so a gateway that has just been upgraded still has
-// to count what it wrote yesterday, or the finding reads as a fleet that stopped throttling overnight.
+// Test flow:
+//  1. Build a record with 40 nonces ghosted under `ghostReasonThrottledBeforeTheSplit`, the reason string written before that split existed.
+//  2. Find the `FindingGatewayThrottled` finding.
+//  3. Assert its part is 40, so the pre-split reason still counts.
 func TestTheReasonWrittenBeforeTheBusyBrokenSplitStillCounts(t *testing.T) {
 	record := recordWith(100, map[Disposition]uint64{DispositionFinishedUsed: 60, DispositionGhost: 40})
 	record.Counters = []CounterRecord{{
@@ -164,7 +177,10 @@ func TestTheReasonWrittenBeforeTheBusyBrokenSplitStillCounts(t *testing.T) {
 	}
 }
 
-// Counting more than the chain assigned is this gateway's own bug, so it is reported at any volume.
+// Test flow:
+//  1. Build a record of 10 assigned nonces, all finished and used, with 3 nonces overcounted.
+//  2. Find the `FindingLedgerOvercounted` finding.
+//  3. Assert its severity is warning, since no host behaviour produces this.
 func TestLedgerOvercountingIsAlwaysReported(t *testing.T) {
 	record := recordWith(10, map[Disposition]uint64{DispositionFinishedUsed: 10})
 	record.Overcounted = 3
@@ -176,9 +192,10 @@ func TestLedgerOvercountingIsAlwaysReported(t *testing.T) {
 	}
 }
 
-// Overcounting has its own code, so the disagreement code must report what is left after it: an
-// operator alerting on drift would otherwise be reading the overcount bug under a name that means
-// something else, and would never see real drift at all.
+// Test flow:
+//  1. Build a record of 100 assigned nonces, all finished and used, with 2 nonces overcounted and a cross-check error count of 7.
+//  2. Find the `FindingChainDisagreement` finding.
+//  3. Assert its part and whole are 5 of 100, the drift left over once the overcount is subtracted.
 func TestChainDisagreementReportsTheDriftBesideTheOvercount(t *testing.T) {
 	record := recordWith(100, map[Disposition]uint64{DispositionFinishedUsed: 100})
 	record.Overcounted = 2
@@ -192,6 +209,10 @@ func TestChainDisagreementReportsTheDriftBesideTheOvercount(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a record of 100 assigned nonces, 70 finished and used, 30 finished and unused.
+//  2. Find the `FindingUnusedAnswers` finding.
+//  3. Assert its part and whole are 30 of 100.
 func TestUnusedAnswersReadAgainstWhatWasDelivered(t *testing.T) {
 	record := recordWith(100, map[Disposition]uint64{
 		DispositionFinishedUsed:   70,
@@ -214,6 +235,10 @@ func recordCrossing(assigned uint64, delivered uint64, key CounterKey, crossings
 	return record
 }
 
+// Test flow:
+//  1. Build a `recordCrossing` fixture of 200 assigned, 100 delivered, with 20 slow-chunk crossings.
+//  2. Find the `FindingSlowChunks` finding.
+//  3. Assert its part and whole are 20 of 100.
 func TestSlowChunksAreReportedAgainstDeliveredAnswers(t *testing.T) {
 	record := recordCrossing(200, 100,
 		CounterKey{Disposition: DispositionFinishedUsed, SlowChunk: true}, 20)
@@ -225,6 +250,10 @@ func TestSlowChunksAreReportedAgainstDeliveredAnswers(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a `recordCrossing` fixture of 200 assigned, 100 delivered, with 10 clock-drift crossings.
+//  2. Find the `FindingClockDrift` finding.
+//  3. Assert its part is 10.
 func TestDriftedClocksAreReported(t *testing.T) {
 	record := recordCrossing(200, 100,
 		CounterKey{Disposition: DispositionFinishedUsed, ClockDrifted: true}, 10)
@@ -236,8 +265,11 @@ func TestDriftedClocksAreReported(t *testing.T) {
 	}
 }
 
-// The breakdown lives in the counters, which carry the terminal and the phase; the finding carries only
-// how many failures reached the host at all.
+// Test flow:
+//  1. Build a record of 100 assigned nonces, 80 finished and used, 20 unfinished by execution, split into two "empty_stream" counters: 5 in PoC phase and 15 outside it.
+//  2. Find the `FindingFailureTerminals` finding.
+//  3. Assert its part is 20, both the PoC and the normal failure counted.
+//  4. Sum the counters outside PoC that failed without an answer and assert that sum is 15.
 func TestFailureTerminalsCountEveryFailureThatReachedTheHost(t *testing.T) {
 	record := recordWith(100, map[Disposition]uint64{
 		DispositionFinishedUsed:        80,
@@ -264,6 +296,10 @@ func TestFailureTerminalsCountEveryFailureThatReachedTheHost(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a record of 200 assigned nonces, 100 finished and used, split into slow-chunk counters: 40 in PoC phase, 10 outside it, and 50 with no slow chunk.
+//  2. Find the `FindingSlowChunks` finding.
+//  3. Assert its part and whole are 10 of 60, excluding the PoC counter from both.
 func TestStallsDuringPoCAreNotChargedToTheHost(t *testing.T) {
 	record := recordWith(200, map[Disposition]uint64{DispositionFinishedUsed: 100})
 	record.Counters = []CounterRecord{
@@ -279,8 +315,9 @@ func TestStallsDuringPoCAreNotChargedToTheHost(t *testing.T) {
 	}
 }
 
-// The settlement already declined to vote this nonce timed out, so counting it as the host's failure
-// would charge it for a judgement the gateway itself refused to make.
+// Test flow:
+//  1. Build a record of 200 assigned nonces, 100 finished and used, 10 unfinished by execution, all tagged `engine.TimeoutReasonLongResponse`.
+//  2. Assert findings carry no `FindingExecutionTimeouts` code.
 func TestALongResponseTheGatewayExcusedIsNotAFailure(t *testing.T) {
 	record := recordWith(200, map[Disposition]uint64{
 		DispositionFinishedUsed:        100,
@@ -299,8 +336,10 @@ func TestALongResponseTheGatewayExcusedIsNotAFailure(t *testing.T) {
 	}
 }
 
-// Two hosts held 39.5% of a model's traffic at a sixth of their peers' rate and nothing named it: the
-// answers arrived and were correct, they just took six times as long to write.
+// Test flow:
+//  1. Build a `recordCrossing` fixture of 200 assigned, 100 delivered, with 20 slow-decode crossings.
+//  2. Find the `FindingSlowDecode` finding.
+//  3. Assert its part and whole are 20 of 100.
 func TestSlowDecodersAreReportedAgainstDeliveredAnswers(t *testing.T) {
 	record := recordCrossing(200, 100,
 		CounterKey{Disposition: DispositionFinishedUsed, SlowDecode: true}, 20)
@@ -312,8 +351,9 @@ func TestSlowDecodersAreReportedAgainstDeliveredAnswers(t *testing.T) {
 	}
 }
 
-// A host serving under PoC is proving computation, not serving, so its rate says nothing about how it
-// writes for a client.
+// Test flow:
+//  1. Build a `recordCrossing` fixture of 200 assigned, 100 delivered, with 40 slow-decode crossings tagged PoC phase.
+//  2. Assert none of the findings carry the `FindingSlowDecode` code.
 func TestASlowDecodeDuringPoCIsNotChargedToTheHost(t *testing.T) {
 	record := recordCrossing(200, 100,
 		CounterKey{Disposition: DispositionFinishedUsed, SlowDecode: true, Phase: PhasePoC}, 40)
@@ -325,10 +365,9 @@ func TestASlowDecodeDuringPoCIsNotChargedToTheHost(t *testing.T) {
 	}
 }
 
-// An external tracker reads these strings from the ledger's API, and the ledger they were written
-// against is the one this gateway replaces. A rename silently breaks every reader that matches on them.
-// "blocked_by_capability" is deliberately absent: nothing withholds a host from routing over a
-// capability refusal any more, so the code names a burn that can no longer happen.
+// Test flow:
+//  1. List every finding code an external tracker alerts on, deliberately excluding "blocked_by_capability" since no burn can produce it any more.
+//  2. Assert each listed code is still present in `findingCodes`.
 func TestTheFindingVocabularyKeepsTheNamesOperatorsAlertOn(t *testing.T) {
 	for _, code := range []string{
 		"execution_timeouts", "refusals", "answers_unused", "throttled_by_gateway",
@@ -343,8 +382,10 @@ func TestTheFindingVocabularyKeepsTheNamesOperatorsAlertOn(t *testing.T) {
 	}
 }
 
-// A skipped round asked nobody, so counting it as decided would hide a host whose every real round
-// ends without a verdict behind the rounds that were never raised.
+// Test flow:
+//  1. Build a record of 100 assigned nonces, all finished and used, with timeout outcomes: 500 skipped, 15 applied, 3 insufficient votes, 2 vote-collection failures.
+//  2. Find the `FindingUndecidedTimeouts` finding.
+//  3. Assert its part and whole are 5 of 20, the rounds that voted rather than the skipped ones.
 func TestUndecidedTimeoutsAreMeasuredAgainstTheRoundsThatVoted(t *testing.T) {
 	record := recordWith(100, map[Disposition]uint64{DispositionFinishedUsed: 100})
 	record.TimeoutOutcomes = map[TimeoutOutcome]uint64{
@@ -361,8 +402,10 @@ func TestUndecidedTimeoutsAreMeasuredAgainstTheRoundsThatVoted(t *testing.T) {
 	}
 }
 
-// A host blocked by capability burns every nonce it is assigned; reading that as ordinary throttling
-// hides a defect only its operator can fix.
+// Test flow:
+//  1. Build a record of 100 assigned nonces, all finished and used, with 30 ghosted under "participant_state_diverged_no_send".
+//  2. Find the `FindingStateDiverged` finding and assert its part is 30.
+//  3. Assert the findings carry no `FindingGatewayThrottled` code, so the divergence is not double-counted as throttling.
 func TestStateDivergenceBurnsAreReportedApartFromThrottling(t *testing.T) {
 	record := recordWith(100, map[Disposition]uint64{DispositionFinishedUsed: 100})
 	record.Counters = []CounterRecord{{
@@ -381,8 +424,10 @@ func TestStateDivergenceBurnsAreReportedApartFromThrottling(t *testing.T) {
 	}
 }
 
-// The threshold is a tenth of a percent because a single unreplayable answer is already a lost reward,
-// and a host that does it once does it for every answer with logprobs.
+// Test flow:
+//  1. Build a record of 100 assigned nonces, all finished and used, with 1 counter flagged `LogprobsDecoded`.
+//  2. Find the `FindingDecodedLogprobs` finding.
+//  3. Assert its part and whole are 1 of 100, since a single unreplayable answer is already worth reporting.
 func TestDecodedLogprobsAreReportedAtOnce(t *testing.T) {
 	record := recordWith(100, map[Disposition]uint64{DispositionFinishedUsed: 100})
 	record.Counters = []CounterRecord{{
@@ -398,8 +443,10 @@ func TestDecodedLogprobsAreReportedAtOnce(t *testing.T) {
 	}
 }
 
-// The doc is what an operator reads when a finding fires, so a code that exists in neither place is
-// unexplainable and one that exists only in the doc is a promise this gateway does not keep.
+// Test flow:
+//  1. Read `docs/accounting.md`.
+//  2. Walk every code in `findingCodes`.
+//  3. Assert each code appears backtick-quoted somewhere in the doc.
 func TestEveryFindingCodeIsDocumented(t *testing.T) {
 	doc, err := os.ReadFile(filepath.Join("..", "docs", "accounting.md"))
 	if err != nil {
@@ -412,9 +459,9 @@ func TestEveryFindingCodeIsDocumented(t *testing.T) {
 	}
 }
 
-// A refusal this gateway caused is not the host's to answer for. Charging it anyway is how a host that
-// refused nothing ends up flagged for refusals — the phase transition, the vote round that reached no
-// verdict and the poster that was gone are all ours.
+// Test flow:
+//  1. For each gateway-caused timeout reason (phase aborted, collection error, not applied, no poster, long response), build a record of 100 assigned nonces, 50 finished and used, 50 unfinished-refused tagged with that reason.
+//  2. Assert the findings for each case carry no `FindingRefusals` code.
 func TestFailuresThisGatewayCausedAreNotChargedToTheHost(t *testing.T) {
 	for _, reason := range []string{
 		engine.TimeoutReasonPhaseAborted, engine.TimeoutReasonCollectionError,
@@ -437,7 +484,10 @@ func TestFailuresThisGatewayCausedAreNotChargedToTheHost(t *testing.T) {
 	}
 }
 
-// An unnamed reason still counts: excusing what the ledger could not classify would empty the rates.
+// Test flow:
+//  1. Build a record of 100 assigned nonces, 50 finished and used, 50 unfinished-refused with no counter breakdown.
+//  2. Find the `FindingRefusals` finding.
+//  3. Assert its part is 50, all of it charged.
 func TestARefusalWithNoNamedCauseStillCountsAgainstTheHost(t *testing.T) {
 	record := recordWith(100, map[Disposition]uint64{
 		DispositionFinishedUsed:      50,
@@ -451,8 +501,9 @@ func TestARefusalWithNoNamedCauseStillCountsAgainstTheHost(t *testing.T) {
 	}
 }
 
-// The warmup nonce is answered for this gateway, not for a client. Counting it as an answer nobody used
-// reads a host that lost no race as one that keeps losing them, and it happens on every rotation.
+// Test flow:
+//  1. Build a record of 40 assigned nonces, 20 finished and used, 20 finished and unused, all 20 tagged terminal `TerminalWarmupProbe`.
+//  2. Assert findings carry no `FindingUnusedAnswers` code.
 func TestTheWarmupProbeIsNotAnAnswerNobodyUsed(t *testing.T) {
 	record := recordWith(40, map[Disposition]uint64{
 		DispositionFinishedUsed:   20,
@@ -468,7 +519,10 @@ func TestTheWarmupProbeIsNotAnAnswerNobodyUsed(t *testing.T) {
 	}
 }
 
-// A real losing answer still counts: the probe exclusion must not swallow the races a host loses.
+// Test flow:
+//  1. Build a record of 40 assigned nonces, 20 finished and used, 20 finished and unused, with no probe tag.
+//  2. Find the `FindingUnusedAnswers` finding.
+//  3. Assert its part and whole are 20 of 40.
 func TestALostRaceIsStillAnAnswerNobodyUsed(t *testing.T) {
 	record := recordWith(40, map[Disposition]uint64{
 		DispositionFinishedUsed:   20,
@@ -482,9 +536,9 @@ func TestALostRaceIsStillAnAnswerNobodyUsed(t *testing.T) {
 	}
 }
 
-// refusals and execution_timeouts are the two findings that can reach critical. A client that stops
-// waiting produces neither a refusal nor a timeout the host caused, so counting it there flags a host
-// for work it never turned down.
+// Test flow:
+//  1. For each table case (an abandoned refusal, an abandoned execution), build a record of 100 assigned nonces, 60 finished and used, 40 in the case's disposition, all tagged terminal `TerminalClientCancelled`.
+//  2. Assert the findings for that case carry none of the case's finding code.
 func TestAClientThatStoppedWaitingIsNotChargedToTheHost(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -514,8 +568,9 @@ func TestAClientThatStoppedWaitingIsNotChargedToTheHost(t *testing.T) {
 	}
 }
 
-// The same shape without the client's fingerprint must still reach the host, or the exclusion above
-// would excuse every failure.
+// Test flow:
+//  1. Build a record of 100 assigned nonces, 60 finished and used, 40 unfinished-refused tagged terminal "no_receipt" rather than client-cancelled.
+//  2. Assert findings carry `FindingRefusals`, since only the client-cancelled shape is excused.
 func TestAnAbandonedAttemptIsTheOnlyOneExcused(t *testing.T) {
 	record := recordWith(100, map[Disposition]uint64{
 		DispositionFinishedUsed:      60,
@@ -533,8 +588,9 @@ func TestAnAbandonedAttemptIsTheOnlyOneExcused(t *testing.T) {
 	}
 }
 
-// A host that refuses the gateway's own warmup probe refused no client. Excluding the probe only when
-// it succeeded would report the failures and hide the successes -- the flattering half of the rule.
+// Test flow:
+//  1. Build a record of 100 assigned nonces, 20 finished and used, 5 unfinished-refused tagged terminal `TerminalWarmupProbe`.
+//  2. Assert findings carry no `FindingRefusals` code, whether the probe succeeded or was itself refused.
 func TestARefusedWarmupProbeIsNotChargedToTheHost(t *testing.T) {
 	record := recordWith(100, map[Disposition]uint64{
 		DispositionFinishedUsed:      20,
@@ -550,8 +606,10 @@ func TestARefusedWarmupProbeIsNotChargedToTheHost(t *testing.T) {
 	}
 }
 
-// The probes subtracted from a bucket are the ones in it. Subtracting every probe from the delivered
-// bucket empties it when a probe ended elsewhere, and each rate then divides by the smaller total.
+// Test flow:
+//  1. Build a record of 100 assigned nonces, 10 finished and used, 10 unfinished by execution, with a warmup probe counter recorded as unfinished-refused rather than delivered.
+//  2. Find the `FindingExecutionTimeouts` finding.
+//  3. Assert its whole is 20, so the probe's own bucket is subtracted rather than the delivered total.
 func TestAProbeThatFailedDoesNotEmptyTheDeliveredTotal(t *testing.T) {
 	record := recordWith(100, map[Disposition]uint64{
 		DispositionFinishedUsed:        10,

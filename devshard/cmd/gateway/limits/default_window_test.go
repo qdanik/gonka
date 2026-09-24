@@ -6,6 +6,11 @@ import (
 	"devshard/cmd/gateway/config"
 )
 
+// Test flow:
+//  1. Build a limiter from `config.Defaults()` and price a request at the fallback context length and token cap.
+//  2. Acquire requests in a loop until one is refused.
+//  3. Assert a cold host admits exactly 32 requests before slow start narrows anything.
+//  4. Assert the next request is refused with `AdmissionWindowFull`.
 func TestTheDefaultWindowsAdmitAFullBurstBeforeTheyGrow(t *testing.T) {
 	t.Parallel()
 	settings := config.Defaults()
@@ -31,6 +36,10 @@ func TestTheDefaultWindowsAdmitAFullBurstBeforeTheyGrow(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a limiter from `config.Defaults()` and beat its window down with 40 rounds of `MissedFirstTokenDeadline` and `DecodeStalled` results.
+//  2. Acquire requests in a loop until one is refused.
+//  3. Assert the host still admits the 16 requests its floor reserves, even after being beaten as hard as possible.
 func TestTheWindowFloorKeepsAHostOffASingleRequest(t *testing.T) {
 	t.Parallel()
 	settings := config.Defaults()

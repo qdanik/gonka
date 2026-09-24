@@ -8,7 +8,9 @@ import (
 	"common/completionapi"
 )
 
-// Pins capOutputTokens's contract directly: 0 always means "unset, use default".
+// Test flow:
+//  1. Run table cases of `capOutputTokens(value, bypassLimit, limits)`, varying a zero value with and without admin bypass, a value under the cap, and a value over the cap with and without bypass.
+//  2. Assert each case's result, pinning that a zero value always means "unset, use default" regardless of bypass.
 func TestTokensCapOutputTokens(t *testing.T) {
 	limits := outputTokenLimits{DefaultMaxTokens: 100, MaxTokensCap: 200}
 	tests := []struct {
@@ -33,10 +35,9 @@ func TestTokensCapOutputTokens(t *testing.T) {
 	}
 }
 
-// The deployed configuration pairs a 10000 default with a 4096 cap, and the two bound different
-// things: the cap bounds what a client may ASK for, the default is what an operator grants a client
-// that asks for nothing. Clamping the default to the cap would silently cut every unbounded request
-// on the shipped template from 10000 tokens to 4096.
+// Test flow:
+//  1. Run table cases of `capOutputTokens` with a default (10000) larger than the cap (4096), varying an unset request, an admin's unset request, an explicit ask matching the default, and an admin's explicit ask.
+//  2. Assert an unset request takes the operator's default in full, uncapped, while an explicit ask is clamped to the cap unless bypassed — the cap bounds what a client may ask for, not what an operator grants a client that asks for nothing.
 func TestTokensTheCapBoundsTheAskAndNotTheDefault(t *testing.T) {
 	limits := outputTokenLimits{DefaultMaxTokens: 10_000, MaxTokensCap: 4_096}
 	tests := []struct {
@@ -60,6 +61,9 @@ func TestTokensTheCapBoundsTheAskAndNotTheDefault(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Call `normalizedOutputTokenLimits` with a zero-valued `outputTokenLimits`.
+//  2. Assert it falls back to `DefaultRequestMaxTokens` and `RequestMaxTokensCap`.
 func TestTokensNormalizedLimitsFallBackWhenZero(t *testing.T) {
 	got := normalizedOutputTokenLimits(outputTokenLimits{})
 	want := outputTokenLimits{DefaultMaxTokens: DefaultRequestMaxTokens, MaxTokensCap: RequestMaxTokensCap}
@@ -68,6 +72,9 @@ func TestTokensNormalizedLimitsFallBackWhenZero(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Call `normalizedOutputTokenLimits` with explicit default and cap values.
+//  2. Assert both values are kept unchanged.
 func TestTokensNormalizedLimitsKeepExplicitValues(t *testing.T) {
 	got := normalizedOutputTokenLimits(outputTokenLimits{DefaultMaxTokens: 10, MaxTokensCap: 20})
 	want := outputTokenLimits{DefaultMaxTokens: 10, MaxTokensCap: 20}
@@ -91,6 +98,10 @@ func applyLimits(t *testing.T, body string, options Options) (*Document, request
 	return document, view
 }
 
+// Test flow:
+//  1. Apply output-token limits via the `applyLimits` helper to an empty body.
+//  2. Assert the view's MaxTokens takes the default and MaxCompletionTokens stays zero.
+//  3. Assert the document's max_tokens is set to the default and max_completion_tokens is not created.
 func TestTokensApplyLimitsNeitherSetUsesDefault(t *testing.T) {
 	document, view := applyLimits(t, `{}`, Options{DefaultMaxTokens: 1000, MaxTokensCap: 2000})
 
@@ -108,6 +119,10 @@ func TestTokensApplyLimitsNeitherSetUsesDefault(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Run table cases of `applyLimits` with only max_tokens set, varying a value under the cap, over the cap, over the cap with admin bypass, and an explicit zero.
+//  2. Assert the view's MaxTokens and the document's max_tokens match the expected result in every case.
+//  3. Assert MaxCompletionTokens stays zero and max_completion_tokens is never created.
 func TestTokensApplyLimitsOnlyMaxTokensSet(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -141,6 +156,9 @@ func TestTokensApplyLimitsOnlyMaxTokensSet(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Run table cases of `applyLimits` with only max_completion_tokens set, varying a value under the cap, over the cap, over the cap with admin bypass, and an explicit zero.
+//  2. Assert both view fields and both document fields mirror the same resolved value, since a completion-tokens-only request mirrors into both fields.
 func TestTokensApplyLimitsOnlyMaxCompletionTokensSet(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -158,7 +176,6 @@ func TestTokensApplyLimitsOnlyMaxCompletionTokensSet(t *testing.T) {
 			body := fmt.Sprintf(`{"max_completion_tokens":%d}`, testCase.value)
 			document, view := applyLimits(t, body, Options{Admin: testCase.admin, DefaultMaxTokens: 1000, MaxTokensCap: 2000})
 
-			// max_completion_tokens-only mirrors into both fields.
 			if view.MaxTokens != testCase.want {
 				t.Errorf("view.MaxTokens = %d, want %d", view.MaxTokens, testCase.want)
 			}
@@ -175,6 +192,9 @@ func TestTokensApplyLimitsOnlyMaxCompletionTokensSet(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Run table cases of `applyLimits` with both max_tokens and max_completion_tokens set, varying which field is smaller, both over the cap, an admin bypass, and an explicit zero on one field.
+//  2. Assert the view and document both settle on the smaller of the two values (or the admin-bypassed raw minimum), with an explicit zero treated as unset before the comparison.
 func TestTokensApplyLimitsBothSet(t *testing.T) {
 	tests := []struct {
 		name                string
@@ -210,6 +230,10 @@ func TestTokensApplyLimitsBothSet(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Parse a document with model, stream, max_tokens, max_completion_tokens, and n all set.
+//  2. Decode it into a requestView.
+//  3. Assert every field matches the expected view.
 func TestTokensDecodeRequestViewHappyPath(t *testing.T) {
 	document, err := ParseDocument([]byte(`{"model":"qwen","stream":true,"max_tokens":10,"max_completion_tokens":20,"n":2}`))
 	if err != nil {
@@ -225,6 +249,10 @@ func TestTokensDecodeRequestViewHappyPath(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Parse an empty document.
+//  2. Decode it into a requestView.
+//  3. Assert the view is the zero value.
 func TestTokensDecodeRequestViewAbsentFieldsAreZeroValue(t *testing.T) {
 	document, err := ParseDocument([]byte(`{}`))
 	if err != nil {
@@ -239,7 +267,9 @@ func TestTokensDecodeRequestViewAbsentFieldsAreZeroValue(t *testing.T) {
 	}
 }
 
-// Pins the exact error text for each of the 5 typed fields.
+// Test flow:
+//  1. Run table cases of `decodeRequestView` against each of the five typed fields (model, stream, max_tokens, max_completion_tokens, n) given a value of the wrong type.
+//  2. Assert each case's exact error message and that ErrorStatus is 400.
 func TestTokensDecodeRequestViewTypeErrors(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -272,6 +302,9 @@ func TestTokensDecodeRequestViewTypeErrors(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Apply `liftNonPositiveOutputTokens()` under the kimi profile to a document with either max_tokens or max_completion_tokens set to 0.
+//  2. Assert the field is raised to `completionapi.MinTokensFloor`.
 func TestLiftNonPositiveOutputTokensRaisesAZeroToTheFloor(t *testing.T) {
 	for _, param := range []string{"max_tokens", "max_completion_tokens"} {
 		t.Run(param, func(t *testing.T) {
@@ -286,6 +319,9 @@ func TestLiftNonPositiveOutputTokensRaisesAZeroToTheFloor(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Apply `liftNonPositiveOutputTokens()` to a document with max_tokens:0 under the default (nil), minimax, and deepseek profiles.
+//  2. Assert the value is left at 0 for every profile without the lift, leaving it for the downstream refusal.
 func TestLiftNonPositiveOutputTokensLeavesEveryOtherProfileToTheRefusal(t *testing.T) {
 	for _, profile := range []*Profile{nil, minimaxProfile, deepseekProfile} {
 		document := parseTestDocument(t, `{"max_tokens":0}`)
@@ -298,9 +334,9 @@ func TestLiftNonPositiveOutputTokensLeavesEveryOtherProfileToTheRefusal(t *testi
 	}
 }
 
-// The refusal stays absolute on every profile; a profile that wants its zero raised gets that from
-// liftNonPositiveOutputTokens ahead of it, because capOutputTokens reads a zero as "unset" and would
-// otherwise hand it the default rather than the floor.
+// Test flow:
+//  1. Apply `rejectNonPositiveOutputTokens()` to a document with max_tokens:0 under the default (nil), kimi, minimax, and deepseek profiles.
+//  2. Assert every profile is rejected, since the refusal stays absolute — a profile that wants its zero raised gets that from `liftNonPositiveOutputTokens` running ahead of it, because capOutputTokens would otherwise read the zero as "unset" and hand it the default rather than the floor.
 func TestRejectNonPositiveOutputTokensRejectsZeroOnEveryProfile(t *testing.T) {
 	for _, profile := range []*Profile{nil, kimiProfile, minimaxProfile, deepseekProfile} {
 		document := parseTestDocument(t, `{"max_tokens":0}`)
@@ -310,6 +346,9 @@ func TestRejectNonPositiveOutputTokensRejectsZeroOnEveryProfile(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Apply `rejectNonPositiveOutputTokens()` to a document with max_tokens set to 0, -1, and -100.
+//  2. Assert every value is rejected with the must-be-greater-than-0 error.
 func TestRejectNonPositiveOutputTokensRejectsZeroAndNegative(t *testing.T) {
 	for _, value := range []string{"0", "-1", "-100"} {
 		t.Run(value, func(t *testing.T) {
@@ -323,6 +362,9 @@ func TestRejectNonPositiveOutputTokensRejectsZeroAndNegative(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Apply `rejectNonPositiveOutputTokens()` to a document with max_completion_tokens:5.
+//  2. Assert it returns no error.
 func TestRejectNonPositiveOutputTokensAcceptsPositive(t *testing.T) {
 	document := parseTestDocument(t, `{"max_completion_tokens":5}`)
 	err := rejectNonPositiveOutputTokens()(RuleContext{Document: document, Param: "max_completion_tokens"})
@@ -331,6 +373,9 @@ func TestRejectNonPositiveOutputTokensAcceptsPositive(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Apply `rejectNonPositiveOutputTokens()` to a document with no max_tokens.
+//  2. Assert it returns no error.
 func TestRejectNonPositiveOutputTokensAbsentIsNoOp(t *testing.T) {
 	document := parseTestDocument(t, `{}`)
 	if err := rejectNonPositiveOutputTokens()(RuleContext{Document: document, Param: "max_tokens"}); err != nil {
@@ -338,6 +383,9 @@ func TestRejectNonPositiveOutputTokensAbsentIsNoOp(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Apply `rejectNonPositiveOutputTokens()` to a document with a non-numeric max_tokens.
+//  2. Assert it returns no error, since type-checking happens elsewhere.
 func TestRejectNonPositiveOutputTokensNonNumericIsNoOp(t *testing.T) {
 	document := parseTestDocument(t, `{"max_tokens":"abc"}`)
 	if err := rejectNonPositiveOutputTokens()(RuleContext{Document: document, Param: "max_tokens"}); err != nil {
@@ -345,6 +393,9 @@ func TestRejectNonPositiveOutputTokensNonNumericIsNoOp(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Apply output-token limits for a model with a per-model override and for an unlisted model, using the same global default and cap.
+//  2. Assert the overridden model's MaxTokens uses the per-model default while the unlisted model falls back to the global default.
 func TestTokensPerModelOverrideBeatsTheGlobalDefaultAndCap(t *testing.T) {
 	options := Options{
 		DefaultMaxTokens: 1000,
@@ -368,6 +419,9 @@ func TestTokensPerModelOverrideBeatsTheGlobalDefaultAndCap(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Apply output-token limits for a model with a per-model cap lower than both the request and the global cap.
+//  2. Assert MaxTokens is clamped to the per-model cap.
 func TestTokensPerModelOverrideCapClampsTheRequestedValue(t *testing.T) {
 	options := Options{
 		DefaultMaxTokens: 1000,
@@ -382,8 +436,9 @@ func TestTokensPerModelOverrideCapClampsTheRequestedValue(t *testing.T) {
 	}
 }
 
-// A cap under the floor buys a budget too small to reason in, which the floor exists to prevent, so
-// the floor wins and the operator's cap is the one that gives way.
+// Test flow:
+//  1. Apply output-token limits for a model whose per-model cap is set below `completionapi.MinTokensFloor`.
+//  2. Assert MaxTokens is raised to the floor rather than clamped to the too-small cap, since a cap under the floor would buy a budget too small to reason in.
 func TestTokensCapBelowTheFloorLosesToIt(t *testing.T) {
 	options := Options{
 		DefaultMaxTokens: 1000,
@@ -398,8 +453,9 @@ func TestTokensCapBelowTheFloorLosesToIt(t *testing.T) {
 	}
 }
 
-// Every route, not just a profile that declares its own floor: MiniMax and the default profile have
-// none, and a reservation under the floor is refused for them exactly the same.
+// Test flow:
+//  1. Normalize a below-floor request once per routed model: kimi, minimax, and a plain "Qwen/Test" model.
+//  2. Assert the declared MaxTokens is never below `completionapi.MinTokensFloor` for any route, not only for a profile that declares a floor of its own.
 func TestTokensFloorAppliesToEveryRoute(t *testing.T) {
 	for _, model := range []string{kimiModelID, minimaxModelID, "Qwen/Test"} {
 		t.Run(model, func(t *testing.T) {

@@ -11,6 +11,11 @@ func recordFailures(h *hostPerf, count int, at time.Time) {
 	}
 }
 
+// Test flow:
+//  1. Build an ejection policy with a consecutive-fail threshold of 3.
+//  2. Record 3 consecutive failures on a host.
+//  3. Evaluate the policy.
+//  4. Assert the host is ejected.
 func TestEjectionPolicyEvaluateConsecutiveFailThresholdEjects(t *testing.T) {
 	policy := newEjectionPolicy(3, 0.99, 1e9, time.Minute, 10*time.Minute)
 	h := newHostPerf(10 * time.Minute)
@@ -24,6 +29,11 @@ func TestEjectionPolicyEvaluateConsecutiveFailThresholdEjects(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build an ejection policy with a consecutive-fail threshold of 3.
+//  2. Record 2 consecutive failures on a host.
+//  3. Evaluate the policy.
+//  4. Assert the host is not ejected and the ejection count stays 0.
 func TestEjectionPolicyEvaluateBelowConsecutiveFailThresholdDoesNotEject(t *testing.T) {
 	policy := newEjectionPolicy(3, 0.99, 1e9, time.Minute, 10*time.Minute)
 	h := newHostPerf(10 * time.Minute)
@@ -40,13 +50,16 @@ func TestEjectionPolicyEvaluateBelowConsecutiveFailThresholdDoesNotEject(t *test
 	}
 }
 
-// The key Envoy property: refuse to judge a host on a handful of requests,
-// no matter how bad the rate looks.
+// Test flow:
+//  1. Build an ejection policy with a minimum volume of 5.
+//  2. Record 3 failures on a host: a 100% failure rate but below the minimum volume.
+//  3. Evaluate the policy.
+//  4. Assert the host is not ejected.
 func TestEjectionPolicyEvaluateFailureRateBelowMinVolumeNeverEjects(t *testing.T) {
 	policy := newEjectionPolicy(1000, 0.5, 5, time.Minute, 10*time.Minute)
 	h := newHostPerf(10 * time.Minute)
 	state := &ejectionState{}
-	recordFailures(h, 3, testEpoch) // 100% failure, but volume 3 < minVolume 5
+	recordFailures(h, 3, testEpoch)
 
 	policy.evaluate(h, state, testEpoch)
 
@@ -55,11 +68,16 @@ func TestEjectionPolicyEvaluateFailureRateBelowMinVolumeNeverEjects(t *testing.T
 	}
 }
 
+// Test flow:
+//  1. Build an ejection policy with a minimum volume of 5.
+//  2. Record 5 failures on a host: a 100% failure rate at the minimum volume.
+//  3. Evaluate the policy.
+//  4. Assert the host is ejected.
 func TestEjectionPolicyEvaluateFailureRateAboveMinVolumeAndThresholdEjects(t *testing.T) {
 	policy := newEjectionPolicy(1000, 0.5, 5, time.Minute, 10*time.Minute)
 	h := newHostPerf(10 * time.Minute)
 	state := &ejectionState{}
-	recordFailures(h, 5, testEpoch) // 100% failure, volume 5 >= minVolume 5
+	recordFailures(h, 5, testEpoch)
 
 	policy.evaluate(h, state, testEpoch)
 
@@ -68,13 +86,18 @@ func TestEjectionPolicyEvaluateFailureRateAboveMinVolumeAndThresholdEjects(t *te
 	}
 }
 
+// Test flow:
+//  1. Build an ejection policy with a 100-second base backoff and a 250-second cap.
+//  2. Record one failure that never resets, then evaluate exactly when each prior ejection window expires, three times.
+//  3. Assert the ejected-until doubles from base to 2x base, then is clamped at the 250-second cap (3x base would exceed it).
+//  4. Assert the ejection count increments to 1, 2, then 3 across the three evaluations.
 func TestEjectionPolicyEvaluateBackoffLadderDoublesThenCaps(t *testing.T) {
 	const base = 100 * time.Second
 	const max = 250 * time.Second
 	policy := newEjectionPolicy(1, 0.99, 1e9, base, max)
 	h := newHostPerf(10 * time.Minute)
 	state := &ejectionState{}
-	recordFailures(h, 1, testEpoch) // consecutiveFail=1, never reset in this test
+	recordFailures(h, 1, testEpoch)
 
 	step1 := testEpoch
 	policy.evaluate(h, state, step1)
@@ -82,7 +105,7 @@ func TestEjectionPolicyEvaluateBackoffLadderDoublesThenCaps(t *testing.T) {
 		t.Fatalf("after 1st ejection: ejectedUntil=%v count=%d, want %v count=1", state.ejectedUntil, state.ejectionCount, want)
 	}
 
-	step2 := state.ejectedUntil // exactly when the timer expires -> re-triggers
+	step2 := state.ejectedUntil
 	policy.evaluate(h, state, step2)
 	if want := step2.Add(2 * base); !state.ejectedUntil.Equal(want) || state.ejectionCount != 2 {
 		t.Fatalf("after 2nd ejection: ejectedUntil=%v count=%d, want %v count=2", state.ejectedUntil, state.ejectionCount, want)
@@ -90,11 +113,15 @@ func TestEjectionPolicyEvaluateBackoffLadderDoublesThenCaps(t *testing.T) {
 
 	step3 := state.ejectedUntil
 	policy.evaluate(h, state, step3)
-	if want := step3.Add(max); !state.ejectedUntil.Equal(want) || state.ejectionCount != 3 { // 3*base=300s > max, so clamped
+	if want := step3.Add(max); !state.ejectedUntil.Equal(want) || state.ejectionCount != 3 {
 		t.Fatalf("after 3rd ejection: ejectedUntil=%v count=%d, want %v count=3 (capped at max)", state.ejectedUntil, state.ejectionCount, want)
 	}
 }
 
+// Test flow:
+//  1. Build an ejection policy and eject a host with one failure.
+//  2. Re-evaluate the policy midway through the ejection window while the host is still failing.
+//  3. Assert the ejected-until and ejection count are unchanged.
 func TestEjectionPolicyEvaluateDoesNotReExtendWhileAlreadyEjected(t *testing.T) {
 	const base = 100 * time.Second
 	policy := newEjectionPolicy(1, 0.99, 1e9, base, 250*time.Second)
@@ -104,7 +131,7 @@ func TestEjectionPolicyEvaluateDoesNotReExtendWhileAlreadyEjected(t *testing.T) 
 	policy.evaluate(h, state, testEpoch)
 	firstEjectedUntil := state.ejectedUntil
 
-	midWindow := testEpoch.Add(50 * time.Second) // still inside the ejection window, still triggering
+	midWindow := testEpoch.Add(50 * time.Second)
 	policy.evaluate(h, state, midWindow)
 
 	if !state.ejectedUntil.Equal(firstEjectedUntil) || state.ejectionCount != 1 {
@@ -112,6 +139,9 @@ func TestEjectionPolicyEvaluateDoesNotReExtendWhileAlreadyEjected(t *testing.T) 
 	}
 }
 
+// Test flow:
+//  1. Build a zero-value ejection state.
+//  2. Assert `ejected` reports false.
 func TestEjectionStateEjectedFalseBeforeAnyEjection(t *testing.T) {
 	state := &ejectionState{}
 	if state.ejected(testEpoch) {
@@ -119,6 +149,10 @@ func TestEjectionStateEjectedFalseBeforeAnyEjection(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build an ejection state with an ejected-until 30 seconds after the epoch.
+//  2. Assert `ejected` is true one second before expiry.
+//  3. Assert `ejected` is false exactly at expiry and one second after expiry.
 func TestEjectionStateEjectedRecoversWhenTimerExpires(t *testing.T) {
 	state := &ejectionState{ejectedUntil: testEpoch.Add(30 * time.Second)}
 
@@ -133,6 +167,11 @@ func TestEjectionStateEjectedRecoversWhenTimerExpires(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build an ejection policy with a 100-second base backoff and a 200-second healthy window, then eject a host with one failure.
+//  2. Record one successful sample just after the ejection timer expires, resetting the consecutive-failure streak, and re-evaluate.
+//  3. Assert the host is no longer ejected.
+//  4. Assert the ejection count still holds at 1 because the healthy window has not elapsed yet.
 func TestEjectionPolicyEvaluateDoesNotDecayBeforeHealthyWindowElapses(t *testing.T) {
 	const base = 100 * time.Second
 	const window = 200 * time.Second
@@ -144,7 +183,7 @@ func TestEjectionPolicyEvaluateDoesNotDecayBeforeHealthyWindowElapses(t *testing
 
 	recoverTime := state.ejectedUntil.Add(time.Millisecond)
 	success := Sample{Responsive: true}
-	h.recordSample(success, recoverTime) // resets consecutiveFail so evaluate stops re-triggering
+	h.recordSample(success, recoverTime)
 	policy.evaluate(h, state, recoverTime)
 
 	if state.ejected(recoverTime) {
@@ -155,6 +194,12 @@ func TestEjectionPolicyEvaluateDoesNotDecayBeforeHealthyWindowElapses(t *testing
 	}
 }
 
+// Test flow:
+//  1. Build an ejection policy with a 100-second base backoff and a 200-second healthy window, then eject a host with one failure.
+//  2. Record a successful sample right after expiry, and evaluate again once a full healthy window has passed.
+//  3. Assert the ejection count resets to 0.
+//  4. Record a fresh single failure and evaluate again.
+//  5. Assert it re-ejects at the base backoff, with the ejection count back to 1 rather than continuing the old multiplier.
 func TestEjectionPolicyEvaluateDecaysEjectionCountAndResetsLadderAfterHealthyWindow(t *testing.T) {
 	const base = 100 * time.Second
 	const window = 200 * time.Second
@@ -167,7 +212,7 @@ func TestEjectionPolicyEvaluateDecaysEjectionCountAndResetsLadderAfterHealthyWin
 
 	recoverTime := firstEjectedUntil.Add(time.Millisecond)
 	success := Sample{Responsive: true}
-	h.recordSample(success, recoverTime) // host healthy from here on
+	h.recordSample(success, recoverTime)
 
 	pastWindow := firstEjectedUntil.Add(window + time.Second)
 	policy.evaluate(h, state, pastWindow)
@@ -175,18 +220,24 @@ func TestEjectionPolicyEvaluateDecaysEjectionCountAndResetsLadderAfterHealthyWin
 		t.Fatalf("ejectionCount after a full healthy window = %d, want 0 (relaxed)", state.ejectionCount)
 	}
 
-	recordFailures(h, 1, pastWindow) // a fresh single failure re-triggers
+	recordFailures(h, 1, pastWindow)
 	policy.evaluate(h, state, pastWindow)
 	if want := pastWindow.Add(base); !state.ejectedUntil.Equal(want) || state.ejectionCount != 1 {
 		t.Fatalf("re-ejection after decay: ejectedUntil=%v count=%d, want %v count=1 (base, not punished at the old multiplier)", state.ejectedUntil, state.ejectionCount, want)
 	}
 }
 
+// Test flow:
+//  1. Build an ejection policy driven by failure rate, with a minimum volume of 20.
+//  2. Record 25 failures (above the minimum volume, 100% failure rate) and evaluate.
+//  3. Assert the host is ejected by the rate trigger.
+//  4. Record one successful sample right after rejoin and evaluate again.
+//  5. Assert the host is not re-ejected: stale decayed failures must not re-trigger the rate check.
 func TestEjectionPolicyEvaluateDoesNotReEjectOnFirstSuccessAfterRateTrigger(t *testing.T) {
 	policy := newEjectionPolicy(1000, 0.5, 20, 30*time.Second, 300*time.Second)
 	h := newHostPerf(10 * time.Minute)
 	state := &ejectionState{}
-	recordFailures(h, 25, testEpoch) // volume 25 >= minVolume 20, rate 100% >= 0.5
+	recordFailures(h, 25, testEpoch)
 
 	policy.evaluate(h, state, testEpoch)
 	if !state.ejected(testEpoch) {

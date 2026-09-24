@@ -15,9 +15,10 @@ func outputOf(t *testing.T, book *Book) uint64 {
 	return output
 }
 
-// The chain's output count is the host's own claim, and a host whose runtime reports usage before it has
-// generated anything claims nothing. The gateway read the answer off the wire, so it is the gateway that
-// says how long the answer was.
+// Test flow:
+//  1. Observe a finished inference reporting 0 output tokens from the host.
+//  2. Record the attempt as produced with 834 output tokens, the gateway's own count off the stream.
+//  3. Assert the summed output tokens equal 834, not the host's claim.
 func TestTheAnswerIsCountedByTheGatewayNotByTheHostsClaim(t *testing.T) {
 	book := newTestBook(t, 4)
 	if err := book.ObserveInferences(testEscrow, map[uint64]*types.InferenceRecord{
@@ -33,8 +34,9 @@ func TestTheAnswerIsCountedByTheGatewayNotByTheHostsClaim(t *testing.T) {
 	}
 }
 
-// An attempt that lost its race still cost the escrow and still produced tokens; the host's finish for it
-// carries nothing, so dropping the gateway's count would lose them entirely.
+// Test flow:
+//  1. Record a race of two attempts under one request: one losing with 834 output tokens, one winning with 4096.
+//  2. Assert the summed output tokens equal 4930, both attempts counted.
 func TestALostAttemptStillReportsWhatItProduced(t *testing.T) {
 	book := newTestBook(t, 4)
 
@@ -50,6 +52,9 @@ func TestALostAttemptStillReportsWhatItProduced(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Record the same attempt as produced with 834 output tokens three times.
+//  2. Assert the summed output tokens stay 834, not tripled.
 func TestAnAttemptReportedTwiceIsCountedOnce(t *testing.T) {
 	book := newTestBook(t, 4)
 
@@ -62,7 +67,11 @@ func TestAnAttemptReportedTwiceIsCountedOnce(t *testing.T) {
 	}
 }
 
-// Nothing re-reads an attempt the gateway already streamed, so the count it made has to be the one it saves.
+// Test flow:
+//  1. Record two attempts as produced on slots 1 and 2, with 834 and 4096 output tokens.
+//  2. Save and reload the book.
+//  3. Assert the restored summed output tokens equal 4930.
+//  4. Assert slot 1 and slot 2's records each carry their own output-token count.
 func TestWhatTheGatewayCountedSurvivesARestart(t *testing.T) {
 	book := newTestBook(t, 4)
 	recordProduced(t, book, testEscrow, 5, 834)
@@ -83,7 +92,10 @@ func TestWhatTheGatewayCountedSurvivesARestart(t *testing.T) {
 	}
 }
 
-// A sweep re-reads the chain over and over; it must not carry the gateway's own count away with it.
+// Test flow:
+//  1. Record an attempt as produced with 834 output tokens.
+//  2. Observe the same nonce's inference from the chain three times, with no output tokens reported.
+//  3. Assert the summed output tokens stay at 834, the gateway's own count.
 func TestAChainReadingDoesNotDisturbWhatTheGatewayCounted(t *testing.T) {
 	book := newTestBook(t, 4)
 	recordProduced(t, book, testEscrow, 5, 834)

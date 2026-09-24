@@ -2,14 +2,16 @@ package accounting
 
 import "testing"
 
-// A race spends several nonces for one client, and a loser's nonce stays open long after the winner
-// answered. Open nonces therefore say how much work is outstanding, not how many clients are waiting.
+// Test flow:
+//  1. Open a book and observe the chain's latest nonce as 8.
+//  2. Record a race of nonces 4 and 8, both landing on slot 0 and both belonging to request "req-a".
+//  3. Assert the slot-0 record reports 2 nonces in flight.
+//  4. Assert it reports 1 in-flight request, since both nonces belong to the same request.
 func TestOpenNoncesAndOpenRequestsAreCountedApart(t *testing.T) {
 	book := newTestBook(t, 4)
 	if err := book.ObserveLatestNonce(testEscrow, 8); err != nil {
 		t.Fatalf("ObserveLatestNonce(): %v", err)
 	}
-	// Nonces 4 and 8 both land on slot 0 in a group of four, and both belong to one client request.
 	if err := book.RecordRace(testEscrow, []Attempt{
 		{Nonce: 4, RequestID: "req-a", Sent: true},
 		{Nonce: 8, RequestID: "req-a", Sent: true},
@@ -30,8 +32,11 @@ func TestOpenNoncesAndOpenRequestsAreCountedApart(t *testing.T) {
 	}
 }
 
-// The winner answered the client and its nonce settled; the loser's did not. The request stays counted
-// while that work is outstanding on the chain, which is what the number measures -- not a live client.
+// Test flow:
+//  1. Record a race of nonces 4 (finished, the winner) and 8 (unfinished, the loser) under request "req-a".
+//  2. Assert the record reports 1 nonce and 1 request still in flight while the loser is unfinished.
+//  3. Mark nonce 8 finished.
+//  4. Assert the record now reports 0 nonces and 0 requests in flight.
 func TestARequestStaysCountedWhileALoserNonceIsUnfinished(t *testing.T) {
 	book := newTestBook(t, 4)
 	if err := book.ObserveLatestNonce(testEscrow, 8); err != nil {

@@ -2,8 +2,9 @@ package scheduler
 
 import "testing"
 
-// The assignment carries a committed nonce and an admitted concurrency slot, so a cancellation landing
-// in the same instant as the handoff must leave it owned by exactly one side.
+// Test flow:
+//  1. For a waiter delivered an assignment before it abandons, assert the delivery succeeds and the abandon call reports that same assignment.
+//  2. For a waiter that abandons before any delivery, assert the abandon call reports nothing and a later delivery attempt fails.
 func TestWaiterHandsOffToExactlyOneSide(t *testing.T) {
 	t.Run("a caller that leaves after the handoff takes the assignment with it", func(t *testing.T) {
 		queued := newWaiter(RequestProfile{Model: modelA}, baseTime)

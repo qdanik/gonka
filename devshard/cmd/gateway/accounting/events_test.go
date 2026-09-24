@@ -8,8 +8,7 @@ import (
 	"time"
 )
 
-// tickingBook advances one second per reading, so the feed's order is a fact of the test rather than
-// of how fast it runs.
+// tickingBook builds a Book whose clock advances one second per reading.
 func tickingBook(t *testing.T, groupSize int) *Book {
 	t.Helper()
 	tick := time.Unix(0, 0).UTC()
@@ -32,8 +31,11 @@ func decodeEvents(t *testing.T, recorder *httptest.ResponseRecorder) []ProtocolE
 	return body.Events
 }
 
-// The counters say a host took three misses; this says which nonce and, through it, which client
-// request took them. Without the request id the number has no drill-down.
+// Test flow:
+//  1. Record a race on nonce 3 tagged with request id "req-a", then apply a timeout on that nonce.
+//  2. Read the events feed.
+//  3. Assert it holds exactly one applied-timeout event.
+//  4. Assert that event carries the escrow, participant, nonce, slot, kind and request id.
 func TestAVerdictNamesTheNonceAndTheRequestThatSpentIt(t *testing.T) {
 	book := tickingBook(t, 2)
 	if err := book.RecordRace(testEscrow, []Attempt{{Nonce: 3, RequestID: "req-a", Sent: true}}); err != nil {
@@ -57,6 +59,11 @@ func TestAVerdictNamesTheNonceAndTheRequestThatSpentIt(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Record an invalid verdict on nonce 2.
+//  2. Read the events feed.
+//  3. Assert it holds exactly one event.
+//  4. Assert the event's kind is `ProtocolInvalidated` and its participant is nonce 2's executor.
 func TestAnInvalidVerdictReachesTheFeedUnderItsOwnKind(t *testing.T) {
 	book := tickingBook(t, 2)
 	if err := book.RecordInvalidVerdict(testEscrow, 2); err != nil {
@@ -76,6 +83,10 @@ func TestAnInvalidVerdictReachesTheFeedUnderItsOwnKind(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Apply timeouts on nonces 2, 4 and 6, in that order.
+//  2. Read the events feed.
+//  3. Assert the nonces come back newest first: 6, 4, 2.
 func TestTheFeedReadsNewestFirst(t *testing.T) {
 	book := tickingBook(t, 2)
 	for _, nonce := range []uint64{2, 4, 6} {
@@ -92,8 +103,11 @@ func TestTheFeedReadsNewestFirst(t *testing.T) {
 	}
 }
 
-// An escrow that goes badly wrong must not grow the feed without bound, and what it keeps must be the
-// end of the run rather than its beginning.
+// Test flow:
+//  1. Apply timeouts on 10 more nonces than the ring holds, `maxEventsPerEscrow`.
+//  2. Read the events feed.
+//  3. Assert the feed's length equals the ring's capacity.
+//  4. Assert the newest event is the last nonce recorded and the oldest is the first the ring still holds.
 func TestTheRingKeepsTheNewestVerdictsOnly(t *testing.T) {
 	book := tickingBook(t, 2)
 	for nonce := range uint64(maxEventsPerEscrow + 10) {
@@ -115,6 +129,10 @@ func TestTheRingKeepsTheNewestVerdictsOnly(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Apply timeouts on nonce 2, which lands on slot 0, and nonce 3, which lands on slot 1.
+//  2. Read the events feed filtered to the slot-1 participant.
+//  3. Assert it holds exactly the one event for nonce 3.
 func TestTheFeedAnswersOnlyAboutTheHostAsked(t *testing.T) {
 	book := tickingBook(t, 2)
 	if err := book.RecordAppliedTimeout(testEscrow, 2); err != nil {
@@ -131,6 +149,10 @@ func TestTheFeedAnswersOnlyAboutTheHostAsked(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Apply a timeout on nonce 3.
+//  2. For both the query-parameter route and the path-segment route to the slot-1 participant's events, serve the request.
+//  3. Assert each route answers 200 with exactly the one event for nonce 3.
 func TestBothEventRoutesAnswerTheSameFeed(t *testing.T) {
 	book := tickingBook(t, 2)
 	if err := book.RecordAppliedTimeout(testEscrow, 3); err != nil {
@@ -155,7 +177,10 @@ func TestBothEventRoutesAnswerTheSameFeed(t *testing.T) {
 	}
 }
 
-// A host with nothing against it is healthy, not missing.
+// Test flow:
+//  1. Serve a request for the events feed of a participant with no recorded verdicts.
+//  2. Assert the response status is 200.
+//  3. Assert the decoded feed is empty rather than missing.
 func TestAHostWithNoVerdictsGetsAnEmptyFeed(t *testing.T) {
 	book := tickingBook(t, 2)
 

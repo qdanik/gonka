@@ -30,6 +30,10 @@ func (r *flushRecorder) Write(chunk []byte) (int, error) {
 
 func (r *flushRecorder) Flush() { r.flushes++ }
 
+// Test flow:
+//  1. Compute `DrainTimeoutFromConfig` from a config with `DrainTimeoutSeconds` set to 2,400.
+//  2. Assert it converts to 40 minutes.
+//  3. Assert `newDrain` with a zero timeout falls back to `defaultDrainTimeout`.
 func TestDrainTimeoutFromConfig(t *testing.T) {
 	timeout := DrainTimeoutFromConfig(config.Stream{DrainTimeoutSeconds: 2_400})
 	if timeout != 40*time.Minute {
@@ -40,6 +44,11 @@ func TestDrainTimeoutFromConfig(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a `newDrain` over a cancellable client context carrying a trace value.
+//  2. Cancel the client context.
+//  3. Assert the drain's `clientGone()` signal fires while its race context stays uncancelled and keeps the client's trace value.
+//  4. Assert `clientErr()` reports the client's cancellation.
 func TestDrainRaceContextOutlivesTheClientKeepingItsValues(t *testing.T) {
 	clientCtx, cancel := context.WithCancel(context.WithValue(context.Background(), traceKey{}, "request-1"))
 	contexts := newDrain(clientCtx, time.Minute)
@@ -61,6 +70,10 @@ func TestDrainRaceContextOutlivesTheClientKeepingItsValues(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a `newDrain` with a one-minute timeout.
+//  2. Compute its deadline for a zero client-done time and assert none is armed.
+//  3. Compute its deadline for a real client-done time and assert it lands one minute later.
 func TestDrainDeadlineArmsOnlyOnClientDone(t *testing.T) {
 	contexts := newDrain(context.Background(), time.Minute)
 	if armed := contexts.deadline(time.Time{}); !armed.IsZero() {
@@ -71,6 +84,12 @@ func TestDrainDeadlineArmsOnlyOnClientDone(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a `newDrain` gate over a `flushRecorder` while the client is still connected.
+//  2. Write and flush while connected; assert the bytes and flush reached the recorder.
+//  3. Cancel the client context, then write again.
+//  4. Assert the write still succeeds (the host's send is not blocked) but the bytes never reach the recorder, and that flushes already made were not repeated.
+//  5. Assert gating a nil client returns no gate at all.
 func TestClientStreamDropsBytesOnceTheClientIsGoneAndKeepsFlushing(t *testing.T) {
 	clientCtx, cancel := context.WithCancel(context.Background())
 	recorder := &flushRecorder{}
@@ -100,7 +119,10 @@ func TestClientStreamDropsBytesOnceTheClientIsGoneAndKeepsFlushing(t *testing.T)
 	}
 }
 
-// A write error would end the attempt carrying it, so only a connected client's error propagates.
+// Test flow:
+//  1. Build a `newDrain` gate over a `flushRecorder` configured to fail on write, while the client is still connected.
+//  2. Write through the gate.
+//  3. Assert the recorder's failure propagates unchanged.
 func TestClientStreamPropagatesAConnectedClientsWriteError(t *testing.T) {
 	failure := errors.New("client write failed")
 	recorder := &flushRecorder{writeErr: failure}
@@ -111,6 +133,13 @@ func TestClientStreamPropagatesAConnectedClientsWriteError(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Start a race with one host that streams content then a tail chunk it is paused before sending.
+//  2. Run the race in the background and disconnect the client mid-stream.
+//  3. Assert `run` returns `context.Canceled` to the caller.
+//  4. Resume the host and assert exactly one outcome is reported, with the winner nonce confirmed, finished, and marked `TerminalWon`.
+//  5. Assert the client received only the content sent before it left, not the tail sent after.
+//  6. Assert the host slot and perf bracket were released exactly once.
 func TestRunRaceCompletesTheWinnerAfterTheClientDisconnects(t *testing.T) {
 	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
 
@@ -165,6 +194,12 @@ func TestRunRaceCompletesTheWinnerAfterTheClientDisconnects(t *testing.T) {
 	assertOneSlotPerAttempt(t, fixture, len(reported.Attempts))
 }
 
+// Test flow:
+//  1. Start a race with one host streaming a role chunk then a content chunk that will claim the crown, paused before the claim resolves.
+//  2. Run the race in the background and disconnect the client before the claim is answered.
+//  3. Assert `run` returns `context.Canceled`.
+//  4. Resume the host and assert the crown claim still wins, with the client receiving nothing sent after it left.
+//  5. Assert the host slot and perf bracket were released exactly once.
 func TestRunRaceAnswersACrownClaimRaisedAfterTheClientLeft(t *testing.T) {
 	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
 
@@ -208,6 +243,12 @@ func TestRunRaceAnswersACrownClaimRaisedAfterTheClientLeft(t *testing.T) {
 	assertOneSlotPerAttempt(t, fixture, len(reported.Attempts))
 }
 
+// Test flow:
+//  1. Start a race with a one-millisecond drain timeout and a host streaming content whose `resume` channel is never closed, so only the drain deadline can end the attempt.
+//  2. Run the race in the background and disconnect the client while it streams.
+//  3. Assert `run` returns `context.Canceled`.
+//  4. Assert the reported outcome names the winner nonce and marks its terminal as `TerminalClientCancelled`.
+//  5. Assert the host slot and perf bracket were released exactly once.
 func TestRunRaceDrainTimeoutBoundsAHostStreamingPastTheClient(t *testing.T) {
 	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
 
@@ -215,7 +256,6 @@ func TestRunRaceDrainTimeoutBoundsAHostStreamingPastTheClient(t *testing.T) {
 	fixture.deps.DrainTimeout = time.Millisecond
 	fixture.clock.step = time.Second
 	streaming := make(chan uint64, 1)
-	// resume is never closed: only the drain deadline can end this attempt.
 	fixture.host(220, 0, "host-0", &hostScript{
 		receipt:   true,
 		chunks:    []string{contentChunk(220)},

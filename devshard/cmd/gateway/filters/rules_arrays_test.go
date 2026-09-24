@@ -8,6 +8,11 @@ import (
 	"devshard"
 )
 
+// Test flow:
+//  1. Run table cases of `validListLength(16, 256)` against a `stop` body, varying array length and element length around the entry and per-element length caps, plus a non-string element and a non-array value.
+//  2. Assert each case's error message matches, or is nil, and that an error carries ErrorStatus 400.
+//  3. Assert an absent field is a no-op.
+//  4. Assert a zero entry cap disables the entry-count check.
 func TestArraysValidListLength(t *testing.T) {
 	const param = "stop"
 	tests := []struct {
@@ -58,6 +63,9 @@ func TestArraysValidListLength(t *testing.T) {
 	})
 }
 
+// Test flow:
+//  1. Run table cases of `requireStringElements()` against a `stop` body, varying string vs non-string elements, an absent field, and a non-array value.
+//  2. Assert each case's error message matches, or is nil.
 func TestArraysRequireStringElements(t *testing.T) {
 	const param = "stop"
 	tests := []struct {
@@ -90,6 +98,10 @@ func TestArraysRequireStringElements(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Run table cases of `dropBlankStringListElements()` against a `bad_words` body, varying blank, non-blank, and non-string entries.
+//  2. For a case that empties the list, assert Has reports the field dropped; otherwise assert Get returns the surviving elements matching the case's expected result.
+//  3. Assert an absent field is a no-op and stays absent.
 func TestArraysDropBlankStringListElements(t *testing.T) {
 	const param = "bad_words"
 	tests := []struct {
@@ -144,6 +156,12 @@ func TestArraysDropBlankStringListElements(t *testing.T) {
 	})
 }
 
+// Test flow:
+//  1. Run table cases of `validFloatMap(-100, 100, 1024)` against a `logit_bias` body, varying values around the min and max range boundaries.
+//  2. For a case that drops the field, assert Has reports it dropped; otherwise assert Object matches the expected map via `JSONNumericFloat64`.
+//  3. Assert a map whose entry count exceeds the size cap is rejected, even when every entry is otherwise in range.
+//  4. Assert an absent field is a no-op.
+//  5. Assert a non-map value passes through untouched.
 func TestArraysValidFloatMap(t *testing.T) {
 	const param = "logit_bias"
 	tests := []struct {
@@ -214,6 +232,11 @@ func TestArraysValidFloatMap(t *testing.T) {
 	})
 }
 
+// Test flow:
+//  1. Run table cases of `requireTokenIDKeys()` against a `logit_bias` body, varying valid token ids and invalid keys (negative, non-numeric, fractional, padded, hex, and one past the largest 32-bit id).
+//  2. Assert each case's error message matches, or is nil, and that an error carries ErrorStatus 400.
+//  3. Assert an absent field and a non-map value are both no-ops.
+//  4. Repeat the check 64 times over a multi-key map to assert the reported invalid key is always the lexicographically first one, despite random map iteration order.
 func TestArraysRequireTokenIDKeys(t *testing.T) {
 	const param = "logit_bias"
 	tests := []struct {
@@ -265,7 +288,6 @@ func TestArraysRequireTokenIDKeys(t *testing.T) {
 			t.Fatalf("requireTokenIDKeys() = %v, want nil", err)
 		}
 	})
-	// Map iteration order is random, so the reported key must be chosen deterministically.
 	t.Run("reports the lexicographically first invalid key across runs", func(t *testing.T) {
 		want := `logit_bias: key invalid: "aaa" is not a non-negative integer token id`
 		for range 64 {
@@ -278,8 +300,9 @@ func TestArraysRequireTokenIDKeys(t *testing.T) {
 	})
 }
 
-// Pins the table's rule order: a bad key must reject even when validFloatMap would have
-// dropped that entry's out-of-range value and deleted the whole field.
+// Test flow:
+//  1. Call NormalizeRequest with a `logit_bias` entry whose key is invalid and whose value is also out of range (so it would otherwise be dropped by validFloatMap).
+//  2. Assert normalization rejects the request with the bad-key error rather than silently dropping the value and passing.
 func TestArraysLogitBiasBadKeyRejectsDespiteDroppableValue(t *testing.T) {
 	result, err := NormalizeRequest([]byte(`{"model":"model-a","messages":[{"role":"user","content":"hi"}],"logit_bias":{"nope":1e30}}`), Options{
 		DefaultMaxTokens: 3072,
@@ -295,6 +318,9 @@ func TestArraysLogitBiasBadKeyRejectsDespiteDroppableValue(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Run table cases of `validMetadata(16, 64, 512)` against a `metadata` body, varying key count, key length, value type, and value length around their caps.
+//  2. Assert each case's error message matches, or is nil, and that an error carries ErrorStatus 400.
 func TestArraysValidMetadata(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -335,6 +361,10 @@ func TestArraysValidMetadata(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Run table cases of `validStreamOptions()` against a `stream_options` body, varying whitelisted and unknown keys, `stream` set to true, false, absent, or a wrong type, and a non-object shape.
+//  2. Assert each case's error message, dropped state, or surviving whitelisted keys matches expectations.
+//  3. Assert an absent field is a no-op and stays absent.
 func TestArraysValidStreamOptions(t *testing.T) {
 	tests := []struct {
 		name       string

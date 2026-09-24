@@ -23,6 +23,9 @@ func dispatched(offset time.Duration) EscalationAttempt {
 	return EscalationAttempt{SendTime: raceStart.Add(offset)}
 }
 
+// Test flow:
+//  1. Build an `EscalationPolicyFromConfig` from a `config.Engine` with every millisecond-tuned field set.
+//  2. Assert the resulting `EscalationPolicy` converts each field to its `time.Duration` equivalent unchanged.
 func TestEscalationPolicyFromConfigConvertsEveryTunable(t *testing.T) {
 	policy := EscalationPolicyFromConfig(config.Engine{
 		ReceiptTimeoutMS:       1_500,
@@ -47,6 +50,9 @@ func TestEscalationPolicyFromConfigConvertsEveryTunable(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. For each table case's budget and primary suspicion/degradation flags, call `Decide`.
+//  2. Assert a healthy primary with budget starts alone and waits for the ladder; a suspicious or degraded primary with room for a second attempt starts two at once, naming the matching reason; either case with no budget for a second attempt still starts only one; and a primary that is both reports the suspicious reason it was pinned for.
 func TestDecideStartsOneAttemptUnlessThePrimaryIsDistrusted(t *testing.T) {
 	testCases := []struct {
 		name              string
@@ -102,6 +108,9 @@ func TestDecideStartsOneAttemptUnlessThePrimaryIsDistrusted(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. For each table case's `MaxAttemptsPerRequest` knob, host count, and nonce-scarcity flag, call `AttemptBudget`.
+//  2. Assert the budget is bounded by the host group when the knob is unset or above it, follows the knob when it is smaller, drops to one for a single or empty host group, and drops to one whenever nonces are scarce.
 func TestAttemptBudgetClampsToOneWhenNoncesAreScarce(t *testing.T) {
 	testCases := []struct {
 		name           string
@@ -130,6 +139,9 @@ func TestAttemptBudgetClampsToOneWhenNoncesAreScarce(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. For each table case's host count and nonce-scarcity flag, call `AttemptLimit`.
+//  2. Assert the limit tracks the host group size, floors at one for an empty group, and drops to one whenever nonces are scarce.
 func TestAttemptLimitIsTheHostGroupUnlessNoncesAreScarce(t *testing.T) {
 	testCases := []struct {
 		name        string
@@ -153,6 +165,9 @@ func TestAttemptLimitIsTheHostGroupUnlessNoncesAreScarce(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. For each table case's attempt state and request (an already-escalated attempt, a suspicious attempt, a finished attempt with and without an empty stream, a failed streaming attempt, an undispatched attempt, a dispatched attempt awaiting receipt, a streaming attempt that already produced a token, and a receipted attempt still waiting on its first token — where the first-token floor pushes its deadline out to receipt time plus the floor, since the raw curve would fire before the receipt even landed), call `triggerFor`.
+//  2. Assert each rule fires (or does not) with the expected stage and deadline.
 func TestLadderRuleInIsolation(t *testing.T) {
 	receiptedNoToken := EscalationAttempt{SendTime: raceStart, ReceiptTime: raceStart.Add(time.Second)}
 	testCases := []struct {
@@ -215,8 +230,6 @@ func TestLadderRuleInIsolation(t *testing.T) {
 			wantStage: StageNone,
 		},
 		{
-			// The curve puts this at 1.7305s, before the receipt has even landed; the floor is what the
-			// host is owed from the moment it acknowledged, so the deadline moves out to receipt plus floor.
 			name:         "rule 10: a receipted streaming attempt waits the first-token deadline",
 			attempt:      receiptedNoToken,
 			request:      streaming,
@@ -246,7 +259,9 @@ func TestLadderRuleInIsolation(t *testing.T) {
 	}
 }
 
-// A host is judged on the same deadline its escalation arms on, whether or not the race may still escalate, and once per stage.
+// Test flow:
+//  1. For each table case's attempt state (undispatched, finished, awaiting receipt, already escalated, a judged receipt deadline, receipted and awaiting first token, a late receipt after its deadline was judged, a judged first-token deadline, an attempt that already produced a token), call `owedDeadline`.
+//  2. Assert the owed stage and deadline match the case, and that a deadline already judged for its stage is never owed again.
 func TestOwedDeadlineIsTheEscalationDeadlineJudgedOncePerStage(t *testing.T) {
 	policy := EscalationPolicy{ReceiptTimeout: 5 * time.Second, FirstTokenFloor: 6 * time.Second}
 	testCases := []struct {
@@ -321,6 +336,9 @@ func TestOwedDeadlineIsTheEscalationDeadlineJudgedOncePerStage(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. For each table case's input token count (just under, exactly at, and just over the large-input boundary), call `receiptTimeout`.
+//  2. Assert the timeout only doubles once the input strictly exceeds the boundary.
 func TestReceiptTimeoutDoublesOnlyAboveTheLargeInputBoundary(t *testing.T) {
 	testCases := []struct {
 		name        string
@@ -340,9 +358,11 @@ func TestReceiptTimeoutDoublesOnlyAboveTheLargeInputBoundary(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. For each table case's policy and input token count (a curve just under, on, and just over a configured floor; an unfloored curve at zero and growing input; and a prompt so large its curve — which would otherwise reach nearly nine minutes, past the streaming backstop that cancels the attempt — is capped at the ceiling instead), call `firstTokenTimeout`.
+//  2. Assert the returned wait matches the floor, the curve, or the ceiling as the case demands.
 func TestFirstTokenTimeoutHoldsTheFloorAndGrowsWithInput(t *testing.T) {
 	floored := EscalationPolicy{FirstTokenFloor: 3_988 * time.Millisecond}
-	// No floor, so the curve itself is observable below the shipped floor.
 	curveOnly := EscalationPolicy{FirstTokenCeiling: testPolicy.FirstTokenCeiling}
 	testCases := []struct {
 		name        string
@@ -355,8 +375,6 @@ func TestFirstTokenTimeoutHoldsTheFloorAndGrowsWithInput(t *testing.T) {
 		{"curve just over the floor", floored, 44_001, 3_988_074 * time.Microsecond},
 		{"empty prompt sits on the curve", curveOnly, 0, 1_700 * time.Millisecond},
 		{"linear term grows the wait", curveOnly, 1_000, 1_730_500 * time.Microsecond},
-		// The curve reaches 8m51s at a million tokens -- past the streaming backstop that cancels the
-		// attempt, so an uncapped rung would never fire on a body the ingest limit still admits.
 		{"a prompt no retry could beat stops at the ceiling", testPolicy, 1_000_000, testPolicy.FirstTokenCeiling},
 	}
 	for _, testCase := range testCases {
@@ -368,6 +386,10 @@ func TestFirstTokenTimeoutHoldsTheFloorAndGrowsWithInput(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a mix of a dispatched attempt, an already-escalated attempt, an earlier-dispatched attempt, and an undispatched attempt.
+//  2. Call `NextEscalation`.
+//  3. Assert it picks the earliest live deadline among them, naming that attempt's index and deadline.
 func TestNextEscalationPicksTheEarliestDeadline(t *testing.T) {
 	attempts := []EscalationAttempt{
 		dispatched(0),
@@ -389,6 +411,10 @@ func TestNextEscalationPicksTheEarliestDeadline(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a finished attempt and an already-escalated attempt.
+//  2. Call `NextEscalation`.
+//  3. Assert it reports no trigger.
 func TestNextEscalationReportsNothingWhenNoAttemptQualifies(t *testing.T) {
 	attempts := []EscalationAttempt{
 		{Done: true, NonceFinished: true, SendTime: raceStart},
@@ -400,8 +426,11 @@ func TestNextEscalationReportsNothingWhenNoAttemptQualifies(t *testing.T) {
 	}
 }
 
-// A timer fires on the state the race is in then, not the state it was armed in: without the
-// re-check every primary that receipts under the receipt timeout starts a needless second attempt.
+// Test flow:
+//  1. Arm the next escalation for a freshly dispatched attempt.
+//  2. Confirm it against a snapshot where the attempt has since receipted and streamed a token, and assert rejection.
+//  3. Confirm it against a snapshot where the attempt has receipted but the stage has since advanced past receipt-timeout, and assert rejection.
+//  4. Confirm it against the original, still-silent snapshot and assert it now succeeds at the receipt-timeout stage.
 func TestConfirmRejectsAnEscalationWhoseConditionCleared(t *testing.T) {
 	attempts := []EscalationAttempt{dispatched(0)}
 	armed, ok := testPolicy.NextEscalation(raceStart, attempts, streaming)
@@ -433,6 +462,10 @@ func TestConfirmRejectsAnEscalationWhoseConditionCleared(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Arm the next escalation for a dispatched attempt.
+//  2. For each table case's fire time (one nanosecond early, exactly on the deadline, one nanosecond late), call `Confirm`.
+//  3. Assert confirmation only succeeds at or after the armed deadline.
 func TestConfirmHonoursTheDeadlineBoundary(t *testing.T) {
 	attempts := []EscalationAttempt{dispatched(0)}
 	armed, ok := testPolicy.NextEscalation(raceStart, attempts, streaming)
@@ -457,6 +490,9 @@ func TestConfirmHonoursTheDeadlineBoundary(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. For each table case's out-of-range `ArmedEscalation` index (negative, past the last attempt), call `Confirm`.
+//  2. Assert it is rejected.
 func TestConfirmRejectsAnAttemptIndexOutsideTheRace(t *testing.T) {
 	attempts := []EscalationAttempt{dispatched(0)}
 	testCases := []struct {
@@ -475,6 +511,10 @@ func TestConfirmRejectsAnAttemptIndexOutsideTheRace(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Arm the next escalation across two dispatched attempts.
+//  2. Mark the armed attempt as already escalated.
+//  3. Confirm the same armed escalation and assert it is rejected, since its escalation was already spent.
 func TestConfirmSpendsOnlyTheArmedAttemptsEscalation(t *testing.T) {
 	attempts := []EscalationAttempt{dispatched(0), dispatched(0)}
 	armed, ok := testPolicy.NextEscalation(raceStart, attempts, streaming)
@@ -489,6 +529,9 @@ func TestConfirmSpendsOnlyTheArmedAttemptsEscalation(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. For each `EscalationStage` value, call `Reason()`.
+//  2. Assert it returns the stage's expected label string, and an unnamed stage returns an empty string.
 func TestStageReasonLabelsEveryTrigger(t *testing.T) {
 	testCases := []struct {
 		stage EscalationStage
@@ -510,9 +553,10 @@ func TestStageReasonLabelsEveryTrigger(t *testing.T) {
 	}
 }
 
-// Both rungs measure from dispatch, and the receipt allowance is the larger of the two. A receipt that
-// used more than the first-token curve allows left the next rung already past due, so the host was
-// hedged the instant it acknowledged the request -- with no time to answer it.
+// Test flow:
+//  1. Build an attempt whose receipt landed later than the first-token curve alone would allow.
+//  2. Call `triggerFor` at the moment of that receipt.
+//  3. Assert it arms the first-token stage with a deadline still ahead of the receipt, not one already past due.
 func TestAReceiptAlwaysBuysItsHostFirstTokenGrace(t *testing.T) {
 	slowReceipt := EscalationAttempt{SendTime: raceStart, ReceiptTime: raceStart.Add(4 * time.Second)}
 
@@ -526,8 +570,9 @@ func TestAReceiptAlwaysBuysItsHostFirstTokenGrace(t *testing.T) {
 	}
 }
 
-// A stream held past the chain's execution deadline is work nobody can be paid for, so the backstop has to
-// fire inside that deadline however either number is later retuned.
+// Test flow:
+//  1. Compute the chain's default execution timeout.
+//  2. Assert the engine's streaming hard timeout stays strictly inside it.
 func TestTheStreamingBackstopFiresInsideTheChainsExecutionDeadline(t *testing.T) {
 	t.Parallel()
 	settlementDeadline := types.DefaultExecutionTimeoutSeconds * time.Second
@@ -538,8 +583,10 @@ func TestTheStreamingBackstopFiresInsideTheChainsExecutionDeadline(t *testing.T)
 	}
 }
 
-// The shipped defaults are a production tuning decision, not an accident: the race hedges a bounded
-// number of times, and it waits long enough that a healthy primary answers before it is hedged at all.
+// Test flow:
+//  1. Build the policy from the shipped config defaults.
+//  2. Assert its attempt budget over a 16-host group is 2.
+//  3. Assert its first-token wait for a median prompt sits at the shipped 6-second floor.
 func TestShippedDefaultsBoundTheRaceAndItsFirstTokenWait(t *testing.T) {
 	t.Parallel()
 	policy := EscalationPolicyFromConfig(config.Defaults().Engine)
@@ -552,6 +599,9 @@ func TestShippedDefaultsBoundTheRaceAndItsFirstTokenWait(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. For each table case's policy, attempt state and request size (no receipt with the curve beating the floor, a growing curve with the prompt, a hedge floor above the curve, a zero hedge floor falling back to the receipt deadline, a receipt without a token under both a real and a zero hedge floor, and a curve overtaken by the receipt or first-token deadline for a large prompt), call `NextEscalation`.
+//  2. Assert it arms the expected stage and deadline.
 func TestAHedgeArmsOnTheCurveBeforeTheJudgedDeadline(t *testing.T) {
 	hedging := EscalationPolicy{
 		ReceiptTimeout:       5 * time.Second,
@@ -648,6 +698,9 @@ func TestAHedgeArmsOnTheCurveBeforeTheJudgedDeadline(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. For each table case's attempt state (no receipt, a receipt), call `owedDeadline` under a hedging policy.
+//  2. Assert the owed stage and deadline still match the judged ladder, unaffected by hedging.
 func TestAHedgeLeavesTheJudgedDeadlineWhereItWas(t *testing.T) {
 	hedging := EscalationPolicy{ReceiptTimeout: 5 * time.Second, FirstTokenFloor: 6 * time.Second, HedgeFirstTokenFloor: 1_500 * time.Millisecond}
 	testCases := []struct {
@@ -669,6 +722,11 @@ func TestAHedgeLeavesTheJudgedDeadlineWhereItWas(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Arm the next escalation for a dispatched attempt under a hedging policy and assert it arms the hedge stage.
+//  2. Confirm it one nanosecond before the hedge deadline and assert rejection; confirm it exactly on the deadline and assert success.
+//  3. Confirm the same armed hedge against a snapshot where the attempt has since receipted before the hedge fired, and assert it still succeeds.
+//  4. Confirm it again after marking the attempt as already escalated, and assert rejection.
 func TestConfirmHonoursTheHedgeDeadline(t *testing.T) {
 	hedging := EscalationPolicy{ReceiptTimeout: 5 * time.Second, FirstTokenFloor: 6 * time.Second, HedgeFirstTokenFloor: 1_500 * time.Millisecond}
 	attempts := []EscalationAttempt{dispatched(0)}

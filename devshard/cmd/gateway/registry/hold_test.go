@@ -17,6 +17,11 @@ func holdRegistry(t *testing.T) *Registry {
 	return registry
 }
 
+// Test flow:
+//  1. Build a registry with one escrow and put it on hold.
+//  2. Assert `Candidates` returns none for that model.
+//  3. Assert `Routable` reports the escrow as not routable.
+//  4. Assert `OnHold` reports true.
 func TestAnEscrowOnHoldIsNoCandidate(t *testing.T) {
 	t.Parallel()
 	registry := holdRegistry(t)
@@ -34,6 +39,11 @@ func TestAnEscrowOnHoldIsNoCandidate(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a registry with one escrow and put it on hold.
+//  2. Acquire and release the escrow, asserting the acquire succeeds.
+//  3. Assert `SettlementSession` and `ResumeCandidate` both still find the escrow.
+//  4. Assert the snapshot reports one escrow with OnHold true.
 func TestAnEscrowOnHoldStaysLiveForEverythingButRouting(t *testing.T) {
 	t.Parallel()
 	registry := holdRegistry(t)
@@ -56,6 +66,11 @@ func TestAnEscrowOnHoldStaysLiveForEverythingButRouting(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a registry with one escrow on hold, then acquire it so a request is in flight.
+//  2. Retire the escrow while the request is still running.
+//  3. Assert the snapshot reports one draining escrow: not accepting, with one request in flight.
+//  4. Assert that draining escrow no longer reports OnHold.
 func TestADrainingEscrowIsNotReportedOnHold(t *testing.T) {
 	t.Parallel()
 	registry := holdRegistry(t)
@@ -79,6 +94,9 @@ func TestADrainingEscrowIsNotReportedOnHold(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a registry with one escrow, put it on hold, then take it off hold.
+//  2. Assert `Candidates` reports the escrow again after resuming.
 func TestResumingPutsTheEscrowBackAmongTheCandidates(t *testing.T) {
 	t.Parallel()
 	registry := holdRegistry(t)
@@ -91,6 +109,10 @@ func TestResumingPutsTheEscrowBackAmongTheCandidates(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a registry and add one escrow directly via `AddOnHold`.
+//  2. Assert `Candidates` reports none: a row added on hold must not route after a restart.
+//  3. Assert `OnHold` reports true.
 func TestAddOnHoldPublishesTheEscrowOnHold(t *testing.T) {
 	t.Parallel()
 	registry := New(Deps{
@@ -110,6 +132,10 @@ func TestAddOnHoldPublishesTheEscrowOnHold(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a registry with one escrow.
+//  2. Call `SetOnHold` for an escrow ID that is not live.
+//  3. Assert `OnHold` for that unknown ID still reports false.
 func TestSettingTheHoldOnAnUnknownEscrowDoesNothing(t *testing.T) {
 	t.Parallel()
 	registry := holdRegistry(t)
@@ -121,6 +147,10 @@ func TestSettingTheHoldOnAnUnknownEscrowDoesNothing(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a registry with one escrow whose state carries a balance and four inferences: pending, started, challenged, and finished.
+//  2. Read `Funds` for that escrow.
+//  3. Assert reserved is 30 (the pending and started reserved costs) and challenged is 30 (the challenged inference's actual cost).
 func TestFundsSplitsWhatTheEscrowHolds(t *testing.T) {
 	t.Parallel()
 	session := settleableSession(9)

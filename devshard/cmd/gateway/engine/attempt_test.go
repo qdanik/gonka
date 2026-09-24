@@ -65,8 +65,7 @@ func (r fakeResponse) ConfirmedAt() int64 { return r.confirmedAt }
 func (r fakeResponse) StreamBytes() int64 { return r.bytesRead }
 func (r fakeResponse) ReleaseFinish()     {}
 
-// fakeDispatcher runs a script in place of a host: it writes the scripted chunks into the attempt's
-// writer, optionally announcing a receipt first, then returns the scripted reply.
+// fakeDispatcher runs a script in place of a host: it writes the scripted chunks, optionally announcing a receipt first, then returns the scripted reply.
 type fakeDispatcher struct {
 	receipt  bool
 	chunks   []string
@@ -162,6 +161,13 @@ func contentFacts(source string) chunkFacts {
 	return chunkFacts{Content: true, ContentSource: source}
 }
 
+// Test flow:
+//  1. Configure a `fakeDispatcher` that announces a receipt and writes two chunks, the second carrying content, and a `fakeClassifier` that reports content only on that second chunk.
+//  2. Drain `fixture.events` concurrently while running `runAttempt`, so -race exercises the same handover the coordinator performs.
+//  3. Assert the event kinds arrive in order: Dispatched, Receipt, FirstToken, Chunk, Content, Chunk, Done.
+//  4. Assert each event's timestamp is not before the previous one's.
+//  5. Assert the AttemptDone outcome carries TerminalLost, the attempt's identity (nonce, host index, participant), one content chunk, Confirmed true with ContentSource "delta.content", and non-zero receipt/first-token/completed timestamps.
+//  6. Assert the sink received both chunks verbatim.
 func TestRunAttempt_HealthyAttemptEmitsEveryEventInOrder(t *testing.T) {
 	t.Parallel()
 
@@ -172,7 +178,6 @@ func TestRunAttempt_HealthyAttemptEmitsEveryEventInOrder(t *testing.T) {
 	}
 	fixture := newAttemptFixture(dispatch, &fakeClassifier{perChunk: []chunkFacts{{}, contentFacts("delta.content")}})
 
-	// Read concurrently so -race exercises the handover the coordinator actually performs.
 	observed := make(chan []AttemptEvent, 1)
 	go func() {
 		collected := []AttemptEvent{}
@@ -242,6 +247,11 @@ func statusError(path string, code int, body string) error {
 	return fmt.Errorf("send: %w", &transport.UpstreamStatusError{Path: path, StatusCode: code, Body: body})
 }
 
+// Test flow:
+//  1. Build a table of dispatcher/classifier combinations covering: streamed content, a receipt with nothing after it, content only in the unflushed tail, tokens burned on an empty stream, an SSE error event, a capability refusal, a stream with no receipt at all, each HTTP status code the gateway distinguishes (429/503/403/404/401 with and without timestamp drift/400/500), an escrow-not-found 500, a failure off the inference path, a truncated SSE stream, an oversized SSE event or body, an unexpected or clean EOF, a dial failure, a context-cancelled dispatch, and a post-state-root divergence.
+//  2. Run `runAttempt`, cancelling the context first for the cases that need it.
+//  3. Assert the AttemptDone outcome's Terminal matches the case's want.
+//  4. Assert StateDivergent and the lifecycle's EscrowMissing match the case's wantDivergent and wantEscrowGone.
 func TestRunAttempt_TerminalClassification(t *testing.T) {
 	t.Parallel()
 
@@ -444,8 +454,11 @@ func TestRunAttempt_TerminalClassification(t *testing.T) {
 	}
 }
 
-// The slot the scheduler took when it committed the nonce comes back exactly once, whatever ends the
-// attempt -- an attempt that never got as far as the host has one to give back just the same.
+// Test flow:
+//  1. Build a table of dispatch outcomes: an outright dial failure, a stream that fails mid-read after producing content, a cancelled context, and a clean completion.
+//  2. Run `runAttempt` for each case and drain its events.
+//  3. Assert the host slot's `release` was called exactly once.
+//  4. Assert the classifier's `Release` was called exactly once.
 func TestRunAttempt_ReleasesTheHostSlotOnEveryExitPath(t *testing.T) {
 	t.Parallel()
 
@@ -506,6 +519,11 @@ func TestRunAttempt_ReleasesTheHostSlotOnEveryExitPath(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Configure a dispatcher that always fails, and override ReleaseSlot to record how many events were already queued the first time it runs.
+//  2. Run `runAttempt` and drain the events.
+//  3. Assert the last event is AttemptDone.
+//  4. Assert the host slot was released while exactly the events before AttemptDone were queued, proving the slot comes back before AttemptDone is announced.
 func TestRunAttempt_ReleasesTheHostSlotBeforeAnnouncingItIsDone(t *testing.T) {
 	t.Parallel()
 	fixture := newAttemptFixture(&fakeDispatcher{err: errors.New("503 service unavailable")}, &fakeClassifier{})
@@ -527,6 +545,11 @@ func TestRunAttempt_ReleasesTheHostSlotBeforeAnnouncingItIsDone(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a table of dispatchers that send either no chunks at all or several contentless events ending in [DONE].
+//  2. Run `runAttempt` with a classifier that reports no content for any chunk.
+//  3. Assert the outcome's Terminal is TerminalEmptyStream.
+//  4. Assert StreamChunks counts every chunk written, whether or not it carried content.
 func TestRunAttemptCountsEveryChunkEvenWhenNoneCarriedContent(t *testing.T) {
 	t.Parallel()
 	testCases := []struct {
@@ -562,7 +585,10 @@ func TestRunAttemptCountsEveryChunkEvenWhenNoneCarriedContent(t *testing.T) {
 	}
 }
 
-// An answer the gateway read as empty carries the head of its last chunk, so the line says what actually arrived.
+// Test flow:
+//  1. Configure a dispatcher that writes an empty event, then a tail event shaped like content but reported by the fake classifier as carrying nothing.
+//  2. Run `runAttempt`.
+//  3. Assert the outcome's LastChunkHead is exactly the tail chunk's bytes.
 func TestRunAttempt_AnEmptyStreamCarriesTheHeadOfItsLastChunk(t *testing.T) {
 	t.Parallel()
 	tail := "data: {\"choices\":[{\"delta\":{\"content\":[{\"type\":\"text\"}]}}]}\n\n"
@@ -579,7 +605,11 @@ func TestRunAttempt_AnEmptyStreamCarriesTheHeadOfItsLastChunk(t *testing.T) {
 	}
 }
 
-// A stream ends on its terminator, and a terminator says nothing about why the answer was empty.
+// Test flow:
+//  1. Configure a dispatcher that writes an empty event, a second empty event, then the [DONE] terminator.
+//  2. Run `runAttempt` with a classifier reporting no content.
+//  3. Assert StreamChunks counts the terminator along with the other two chunks.
+//  4. Assert LastChunkHead is the event before the terminator, not the terminator itself.
 func TestRunAttempt_TheTerminatorIsNotWhatTheHeadKeeps(t *testing.T) {
 	t.Parallel()
 	last := "data: {\"choices\":[{\"delta\":{}}]}\n\n"
@@ -603,7 +633,10 @@ func TestRunAttempt_TheTerminatorIsNotWhatTheHeadKeeps(t *testing.T) {
 	}
 }
 
-// The head is a diagnostic for an answer nobody could read, so an answer that carried content offers none.
+// Test flow:
+//  1. Configure a dispatcher that writes an empty event followed by one carrying content, with a classifier that reports content only on the second.
+//  2. Run `runAttempt`.
+//  3. Assert the outcome's LastChunkHead is empty, since an answered stream keeps no diagnostic head.
 func TestRunAttempt_AnAnsweredStreamCarriesNoChunkHead(t *testing.T) {
 	t.Parallel()
 	fixture := newAttemptFixture(
@@ -619,7 +652,11 @@ func TestRunAttempt_AnAnsweredStreamCarriesNoChunkHead(t *testing.T) {
 	}
 }
 
-// One oversized chunk may not write an oversized line.
+// Test flow:
+//  1. Configure a dispatcher that writes one oversized contentless chunk, several times past maxEmptyChunkLogged.
+//  2. Run `runAttempt`.
+//  3. Assert the kept LastChunkHead is exactly maxEmptyChunkLogged bytes long.
+//  4. Assert that head is a prefix of the original oversized chunk.
 func TestRunAttempt_AChunkPastTheCapIsCutToIt(t *testing.T) {
 	t.Parallel()
 	oversized := "data: " + strings.Repeat("x", 4*maxEmptyChunkLogged)
@@ -639,6 +676,11 @@ func TestRunAttempt_AChunkPastTheCapIsCutToIt(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a 503 `UpstreamStatusError` whose body has leading and trailing spaces.
+//  2. Run `upstreamRefusal` on it.
+//  3. Assert the returned status is the host's own status code.
+//  4. Assert the returned body is the host's reason with whitespace trimmed.
 func TestUpstreamRefusalKeepsTheHostsOwnWords(t *testing.T) {
 	t.Parallel()
 
@@ -652,8 +694,10 @@ func TestUpstreamRefusalKeepsTheHostsOwnWords(t *testing.T) {
 	}
 }
 
-// A log line needs the reason, not the payload: an unbounded body would put a host's whole error
-// document into every line that carried it.
+// Test flow:
+//  1. Build a 503 `UpstreamStatusError` whose body is three times longer than maxUpstreamBodyLogged.
+//  2. Run `upstreamRefusal` on it.
+//  3. Assert the returned body length is capped at maxUpstreamBodyLogged.
 func TestUpstreamRefusalTruncatesALongBody(t *testing.T) {
 	t.Parallel()
 
@@ -665,6 +709,9 @@ func TestUpstreamRefusalTruncatesALongBody(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Run `upstreamRefusal` on a plain io.EOF, which carries no upstream status.
+//  2. Assert the returned status is 0 and the body is empty.
 func TestUpstreamRefusalIsEmptyForANonStatusError(t *testing.T) {
 	t.Parallel()
 
@@ -675,8 +722,11 @@ func TestUpstreamRefusalIsEmptyForANonStatusError(t *testing.T) {
 	}
 }
 
-// The refusal must survive the whole attempt, not just the helper that reads it: without this the
-// wiring can be removed and only the isolated unit test would still pass.
+// Test flow:
+//  1. Configure a dispatcher that fails with a 503 `UpstreamStatusError` carrying the host's own reason.
+//  2. Run `runAttempt`.
+//  3. Assert the outcome's Terminal is TerminalUnavailable.
+//  4. Assert UpstreamStatus and UpstreamBody carry the host's status code and reason through to the outcome.
 func TestRunAttempt_CarriesTheRefusalIntoTheOutcome(t *testing.T) {
 	t.Parallel()
 
@@ -698,8 +748,11 @@ func TestRunAttempt_CarriesTheRefusalIntoTheOutcome(t *testing.T) {
 	}
 }
 
-// The last contentless chunk is systematically the usage event, so the chunk that would have carried a
-// delta is the first one, and it must survive being overwritten by the ones behind it.
+// Test flow:
+//  1. Configure a dispatcher that writes a content-shaped first chunk, then a usage-only chunk, then [DONE], with a classifier that reports no content for any of them.
+//  2. Run `runAttempt`.
+//  3. Assert FirstChunkHead is the first chunk (where a delta would have arrived).
+//  4. Assert LastChunkHead is the usage chunk, not the terminator.
 func TestRunAttempt_AnEmptyStreamCarriesTheHeadOfItsFirstChunkToo(t *testing.T) {
 	t.Parallel()
 	first := "data: {\"choices\":[{\"delta\":{\"content\":[{\"type\":\"text\"}]}}]}\n\n"
@@ -724,7 +777,11 @@ func TestRunAttempt_AnEmptyStreamCarriesTheHeadOfItsFirstChunkToo(t *testing.T) 
 	}
 }
 
-// One contentless chunk is both the first and the last; saying it twice only widens the line.
+// Test flow:
+//  1. Configure a dispatcher that writes exactly one contentless chunk, then [DONE].
+//  2. Run `runAttempt`.
+//  3. Assert LastChunkHead is that one chunk.
+//  4. Assert FirstChunkHead is empty, since a single chunk that is both first and last is not repeated.
 func TestRunAttempt_ASingleChunkIsOfferedOnceNotTwice(t *testing.T) {
 	t.Parallel()
 	only := "data: {\"choices\":[]}\n\n"

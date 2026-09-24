@@ -21,6 +21,11 @@ func harnessWithLiveEscrow(t *testing.T) *harness {
 	return live
 }
 
+// Test flow:
+//  1. Start a harness with a live escrow session.
+//  2. Send a collect-signatures request for nonce 0 through the handler directly, using an already-cancelled request context and the admin key.
+//  3. Assert the response is 200.
+//  4. Decode the answer and assert it names the escrow's own slots and quorum threshold with no quorum reached yet.
 func TestCollectingSignaturesReportsTheQuorumAtTheNonce(t *testing.T) {
 	live := harnessWithLiveEscrow(t)
 	cancelled, cancel := context.WithCancel(context.Background())
@@ -50,6 +55,10 @@ func TestCollectingSignaturesReportsTheQuorumAtTheNonce(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. For each malformed request, varying across a missing nonce, an unparseable nonce, a nonce ahead of the session, an unknown escrow and a GET instead of POST, send it to a harness with a live escrow.
+//  2. Assert the response has the case's expected status code.
+//  3. Assert the body names the expected reason, when one is given.
 func TestCollectingSignaturesRefusesAMalformedRequest(t *testing.T) {
 	testCases := []struct {
 		name   string
@@ -80,6 +89,9 @@ func TestCollectingSignaturesRefusesAMalformedRequest(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Send a collect-signatures request without the admin key.
+//  2. Assert the response is refused with 401 or 403.
 func TestCollectingSignaturesNeedsTheAdminKey(t *testing.T) {
 	live := harnessWithLiveEscrow(t)
 

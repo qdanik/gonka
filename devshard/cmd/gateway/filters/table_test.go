@@ -5,12 +5,18 @@ import (
 	"testing"
 )
 
+// Test flow:
+//  1. Inspect the length of `parameterTable`.
+//  2. Assert it is not empty.
 func TestTableIsNotEmpty(t *testing.T) {
 	if len(parameterTable) == 0 {
 		t.Fatal("parameterTable must not be empty")
 	}
 }
 
+// Test flow:
+//  1. Walk `parameterTable`, tracking names already seen.
+//  2. Assert no entry's Name repeats an earlier one.
 func TestTableNamesAreUnique(t *testing.T) {
 	seen := make(map[string]bool, len(parameterTable))
 	for _, spec := range parameterTable {
@@ -21,7 +27,9 @@ func TestTableNamesAreUnique(t *testing.T) {
 	}
 }
 
-// Covers the names the framework itself depends on.
+// Test flow:
+//  1. Look up the framework-critical parameter names (model, stream, max_tokens, max_completion_tokens, messages) in `knownParameterSet`.
+//  2. Assert each name is present.
 func TestTableKnownParametersContainsFrameworkFields(t *testing.T) {
 	for _, name := range []string{"model", "stream", "max_tokens", "max_completion_tokens", "messages"} {
 		if _, ok := knownParameterSet[name]; !ok {
@@ -30,6 +38,10 @@ func TestTableKnownParametersContainsFrameworkFields(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Compare the size of `knownParameterSet` against `parameterTable`.
+//  2. Assert the two have the same number of entries.
+//  3. Assert every `parameterTable` entry's Name is present in `knownParameterSet`.
 func TestTableKnownParametersDerivedFromTable(t *testing.T) {
 	if len(knownParameterSet) != len(parameterTable) {
 		t.Fatalf("knownParameterSet has %d entries, want %d (one per parameterTable entry)", len(knownParameterSet), len(parameterTable))
@@ -41,6 +53,10 @@ func TestTableKnownParametersDerivedFromTable(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Normalize request bodies that vary the "n" field between present (5) and absent.
+//  2. Parse the normalized body back into a document.
+//  3. Assert "n" is rewritten to json.Number("1") when present, and stays absent otherwise.
 func TestTableForcesASingleChoice(t *testing.T) {
 	for _, testCase := range []struct {
 		name string

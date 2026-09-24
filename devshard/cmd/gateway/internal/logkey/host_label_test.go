@@ -2,7 +2,11 @@ package logkey
 
 import "testing"
 
-// A full address is 45 characters of shared prefix; the tail is what tells two participants apart.
+// Test flow:
+//  1. Call ShortHost with a full-length address.
+//  2. Assert it returns the address's last eight characters.
+//  3. Call ShortHost with a short string and assert it is returned unchanged.
+//  4. Call ShortHost with an empty string and assert it returns empty.
 func TestAHostIsNamedByItsTail(t *testing.T) {
 	if got := ShortHost("gonka1gvpv7vhk5gyxhmf9u8sc8pw5j8fr6lzalyrmkx"); got != "zalyrmkx" {
 		t.Fatalf("ShortHost() = %q, want the last eight characters", got)

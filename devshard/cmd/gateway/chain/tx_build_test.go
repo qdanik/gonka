@@ -47,8 +47,10 @@ func fixedSettlementEmptyOptional() SettlementInput {
 	}
 }
 
-// TestMessageEncodersMatchGoldens pins the escrow message encoders byte-for-byte
-// against the goldens recorded from the reference implementation.
+// Test flow:
+//  1. Marshal a settlement host-stats message and a slot-signature message directly.
+//  2. Encode a create-escrow message and two settle-escrow messages (full and empty-optional) via the message encoders.
+//  3. For each encoded case, load its golden fixture and assert the bytes match exactly.
 func TestMessageEncodersMatchGoldens(t *testing.T) {
 	hostStats, err := (&inferencetypes.DevshardSettlementHostStats{
 		SlotId: 42, Missed: 3, Invalid: 1, Cost: 555, RequiredValidations: 10, CompletedValidations: 9,
@@ -101,8 +103,10 @@ func mustEncode(t *testing.T, encode func() ([]byte, error)) []byte {
 	return encoded
 }
 
-// TestTruncateSignatureRealSecp256k1SignatureTruncatesTo64 feeds a genuine
-// 65-byte secp256k1 signature and asserts only r||s (64 bytes) survives.
+// Test flow:
+//  1. Sign an arbitrary message with a real secp256k1 signer to get a genuine 65-byte signature.
+//  2. Call truncateSignature on it.
+//  3. Assert the result is 64 bytes and equals the signature's first 64 bytes (r||s).
 func TestTruncateSignatureRealSecp256k1SignatureTruncatesTo64(t *testing.T) {
 	signer := fixedSigner(t)
 	sig, err := signer.Sign([]byte("arbitrary message"))
@@ -125,6 +129,9 @@ func TestTruncateSignatureRealSecp256k1SignatureTruncatesTo64(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Call truncateSignature with a 63-byte input.
+//  2. Assert it returns an error with the exact "invalid signature length 63" message.
 func TestTruncateSignatureShortSignatureErrors(t *testing.T) {
 	_, err := truncateSignature(make([]byte, 63))
 	if err == nil {
@@ -136,9 +143,12 @@ func TestTruncateSignatureShortSignatureErrors(t *testing.T) {
 	}
 }
 
-// TestBuildCreateEscrowTxStructural decodes the outer TxRaw and independently
-// reconstructs body/authInfo via already golden-matched sub-encoders; the
-// signature itself isn't pinned (no whole-tx golden), only its length.
+// Test flow:
+//  1. Build a create-escrow tx with the fixed signer and inputs.
+//  2. Decode the outer TxRaw into its body, auth-info and signature fields and assert their field numbers and that no trailing bytes remain.
+//  3. Assert the signature is 64 bytes.
+//  4. Recompute the expected body and auth-info bytes from the golden-matched sub-encoders and assert they match the decoded ones.
+//  5. Recompute the expected signature over the reconstructed sign-doc and assert it matches the decoded signature, so the builder is pinned to signing the correct bytes rather than just producing a signature of the right length.
 func TestBuildCreateEscrowTxStructural(t *testing.T) {
 	signer := fixedSigner(t)
 	txBytes, err := buildCreateEscrowTx(signer, fixedChainID, fixedAccountNumber, fixedFeeDenom, fixedFeeAmount, fixedGasLimit, fixedAmount, fixedModelID, fixedTTL)
@@ -179,9 +189,6 @@ func TestBuildCreateEscrowTxStructural(t *testing.T) {
 		t.Fatalf("auth info = %x, want %x", authInfoBytes, wantAuthInfo)
 	}
 
-	// Pin the signature to the correct sign-doc, not just its length: a
-	// builder that signs the wrong bytes (body instead of SignDoc, dropped
-	// chainID, wrong accountNumber) would still pass every check above.
 	wantSig, err := signer.Sign(encodeSignDoc(wantBody, wantAuthInfo, fixedChainID, fixedAccountNumber))
 	if err != nil {
 		t.Fatalf("recompute expected signature: %v", err)
@@ -191,6 +198,9 @@ func TestBuildCreateEscrowTxStructural(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Call buildCreateEscrowTx with a blank (whitespace-only) chain id.
+//  2. Assert it returns an error.
 func TestBuildCreateEscrowTxEmptyChainIDErrors(t *testing.T) {
 	_, err := buildCreateEscrowTx(fixedSigner(t), "   ", fixedAccountNumber, fixedFeeDenom, fixedFeeAmount, fixedGasLimit, fixedAmount, fixedModelID, fixedTTL)
 	if err == nil {
@@ -198,8 +208,12 @@ func TestBuildCreateEscrowTxEmptyChainIDErrors(t *testing.T) {
 	}
 }
 
-// TestBuildSettleEscrowTxStructural mirrors TestBuildCreateEscrowTxStructural
-// for the settle-escrow tx, using the decoupled settler address.
+// Test flow:
+//  1. Build a settle-escrow tx with the fixed signer, a decoupled settler address, and a full settlement input.
+//  2. Decode the outer TxRaw into its body, auth-info and signature fields and assert their field numbers and that no trailing bytes remain.
+//  3. Assert the signature is 64 bytes.
+//  4. Recompute the expected body and auth-info bytes from the golden-matched sub-encoders and assert they match the decoded ones.
+//  5. Recompute the expected signature over the reconstructed sign-doc and assert it matches the decoded signature, so the builder is pinned to signing the correct bytes rather than just producing a signature of the right length.
 func TestBuildSettleEscrowTxStructural(t *testing.T) {
 	signer := fixedSigner(t)
 	input := fixedSettlementFull()
@@ -241,9 +255,6 @@ func TestBuildSettleEscrowTxStructural(t *testing.T) {
 		t.Fatalf("auth info = %x, want %x", authInfoBytes, wantAuthInfo)
 	}
 
-	// Pin the signature to the correct sign-doc, not just its length: a
-	// builder that signs the wrong bytes (body instead of SignDoc, dropped
-	// chainID, wrong accountNumber) would still pass every check above.
 	wantSig, err := signer.Sign(encodeSignDoc(wantBody, wantAuthInfo, fixedChainID, fixedAccountNumber))
 	if err != nil {
 		t.Fatalf("recompute expected signature: %v", err)
@@ -253,6 +264,9 @@ func TestBuildSettleEscrowTxStructural(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Call buildSettleEscrowTx with an empty chain id.
+//  2. Assert it returns an error.
 func TestBuildSettleEscrowTxEmptyChainIDErrors(t *testing.T) {
 	_, err := buildSettleEscrowTx(fixedSigner(t), "", fixedAccountNumber, fixedFeeDenom, fixedFeeAmount, fixedGasLimit, fixedSettler, fixedSettlementFull(), fixedTTL)
 	if err == nil {

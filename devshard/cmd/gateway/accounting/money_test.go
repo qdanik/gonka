@@ -6,6 +6,10 @@ import (
 	"devshard/types"
 )
 
+// Test flow:
+//  1. Open an escrow with one slot and observe host stats reporting a cost and a miss.
+//  2. Query the book.
+//  3. Assert the single record's chain cost and chain-missed tallies match what was observed.
 func TestSlotRecordCarriesWhatTheChainChargedTheSlot(t *testing.T) {
 	t.Parallel()
 	book := NewBook(nil)
@@ -33,6 +37,11 @@ func TestSlotRecordCarriesWhatTheChainChargedTheSlot(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Open an escrow with one slot and observe a finished inference record with reserved and actual cost and token counts.
+//  2. Record the attempt's output as produced.
+//  3. Query the totals.
+//  4. Assert reserved, actual and refunded costs and input/output tokens match the record.
 func TestNonceCostsAreCarriedFromTheEscrowRecord(t *testing.T) {
 	t.Parallel()
 	book := NewBook(nil)
@@ -69,6 +78,10 @@ func TestNonceCostsAreCarriedFromTheEscrowRecord(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. For each of the table's two statuses, pending and started, observe an inference record reserving cost but not finished.
+//  2. Query the totals.
+//  3. Assert the reserved cost is carried but the refunded cost is 0 while the nonce is still open.
 func TestAnUnfinishedNonceRefundsNothing(t *testing.T) {
 	t.Parallel()
 	for _, status := range []types.InferenceStatus{types.StatusPending, types.StatusStarted} {
@@ -103,6 +116,11 @@ func statusName(status types.InferenceStatus) string {
 	return "started"
 }
 
+// Test flow:
+//  1. Open an escrow with two slots and observe the same finished cost record on two nonces of slot 1.
+//  2. Record both nonces' output as produced.
+//  3. Query the totals for the slot-1 participant.
+//  4. Assert reserved, actual, refunded costs and input/output tokens are summed across the two nonces.
 func TestMoneyIsSummedAcrossTheNoncesOfOneSlot(t *testing.T) {
 	t.Parallel()
 	book := NewBook(nil)
@@ -146,6 +164,11 @@ func TestMoneyIsSummedAcrossTheNoncesOfOneSlot(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Open an escrow with two slots owned by the same validator and observe the same finished cost record on one nonce per slot.
+//  2. Record both nonces' output as produced and observe host-stats cost on each slot.
+//  3. Query the totals.
+//  4. Assert reserved, actual, refunded costs, input/output tokens and chain cost are summed across the two slots.
 func TestMoneyIsSummedAcrossTheSlotsOfOneParticipant(t *testing.T) {
 	t.Parallel()
 	book := NewBook(nil)
@@ -190,6 +213,10 @@ func TestMoneyIsSummedAcrossTheSlotsOfOneParticipant(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Observe an inference record with reserved and actual cost whose status is invalidated.
+//  2. Query the totals.
+//  3. Assert the refunded cost equals the whole reserve, not just the surplus.
 func TestInvalidationRefundsTheWholeReserve(t *testing.T) {
 	t.Parallel()
 	book := NewBook(nil)
@@ -208,6 +235,10 @@ func TestInvalidationRefundsTheWholeReserve(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Observe the same finished cost record for one nonce and record its output three times, as three sweeps would.
+//  2. Query the totals.
+//  3. Assert the reserved cost and output tokens stay at their single-sweep values rather than tripling.
 func TestObservingTheSameNonceTwiceDoesNotDoubleTheMoney(t *testing.T) {
 	t.Parallel()
 	book := NewBook(nil)
@@ -251,6 +282,10 @@ func queryTotals(t *testing.T, book *Book) nonceTotals {
 	return records[0].nonceTotals
 }
 
+// Test flow:
+//  1. Observe an inference record with input length, max tokens and input tokens.
+//  2. Query the totals.
+//  3. Assert estimated input, max tokens and input tokens carry the gateway's own estimate and the chain's own count.
 func TestWhatTheHostWasGivenIsCarriedFromTheEscrowRecord(t *testing.T) {
 	t.Parallel()
 	book := NewBook(nil)
@@ -280,8 +315,12 @@ func TestWhatTheHostWasGivenIsCarriedFromTheEscrowRecord(t *testing.T) {
 	}
 }
 
-// A burn commits a chain record like any other nonce, so folding it in would report the reservations
-// this gateway chose never to send as reservations the host wasted.
+// Test flow:
+//  1. Record a ghost on nonce 7, then observe inference records for both the burned nonce 7 and a served, finished nonce 8.
+//  2. Record nonce 8's output as produced.
+//  3. Query the totals.
+//  4. Assert estimated input and max tokens come only from the served nonce, not the burn's own prompt.
+//  5. Assert reserved and refunded costs include the burn's reserve, and output tokens come only from the served nonce.
 func TestABurnedNonceLeavesOutWhatItWasGivenAndNothingElse(t *testing.T) {
 	t.Parallel()
 	book := NewBook(nil)

@@ -17,8 +17,11 @@ func inflightInput(l *ParticipantLimiter, participant, model string) int64 {
 	return -1
 }
 
-// The forced send exists because a burned nonce costs more than a queued request, so the window is told
-// rather than asked — and the tokens it spends are still counted, or the window it crossed means nothing.
+// Test flow:
+//  1. Build a limiter and fill the input window to `cfg.Pricing.Input.Initial` admitted requests.
+//  2. Assert `Admits` now reports the window full.
+//  3. Call `Overdraft` and assert it is admitted anyway, crossing the full window, and that its token is counted as in flight.
+//  4. Release the overdraft and assert the in-flight count drops back to the window's size.
 func TestAnOverdraftCrossesAFullWindowAndStillCountsItsTokens(t *testing.T) {
 	t.Parallel()
 	cfg := testConfig()
@@ -37,7 +40,10 @@ func TestAnOverdraftCrossesAFullWindowAndStillCountsItsTokens(t *testing.T) {
 	require.Equal(t, cfg.Pricing.Input.Initial, inflightInput(l, "p", "m"), "an overdraft gives its tokens back")
 }
 
-// A cut-off host is broken rather than busy, and forcing work onto it spends the nonce the rung was saving.
+// Test flow:
+//  1. Trip the breaker by answering with `TransportFault` `cfg.AfterFailures` times.
+//  2. Assert `Admits` reports the participant cut off.
+//  3. Call `Overdraft` and assert it is refused with `AdmissionCutOff`, since an overdraft cannot cross a broken host.
 func TestAnOverdraftIsRefusedByAnOpenCutOff(t *testing.T) {
 	t.Parallel()
 	cfg := testConfig()
@@ -52,7 +58,11 @@ func TestAnOverdraftIsRefusedByAnOpenCutOff(t *testing.T) {
 	require.Equal(t, AdmissionCutOff, admitted, "an overdraft is the window's business and never the cut-off's")
 }
 
-// A half-open host is spending its single probe, and a second request would answer the probe's question for it.
+// Test flow:
+//  1. Trip the breaker with `TransportFault` answers and advance the clock past the cut-off's expiry.
+//  2. Acquire the single half-open probe and assert `Admits` still reports cut off while it is in flight.
+//  3. Call `Overdraft` while the probe is outstanding and assert it is refused.
+//  4. Release the probe and assert a subsequent `Overdraft` is admitted.
 func TestAnOverdraftIsRefusedWhileAHalfOpenProbeIsInFlight(t *testing.T) {
 	t.Parallel()
 	cfg := testConfig()

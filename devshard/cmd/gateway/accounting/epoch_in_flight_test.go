@@ -6,6 +6,11 @@ import (
 	"devshard/types"
 )
 
+// Test flow:
+//  1. Open an escrow with four slot assignments and observe the chain's latest nonce.
+//  2. Record a race with three sent attempts, two of them racing the same request.
+//  3. Assert the epoch summary reports 3 nonces in flight.
+//  4. Assert it reports 2 in-flight requests, since one client is racing two hosts.
 func TestTheEpochSummaryCarriesWhatIsInFlight(t *testing.T) {
 	book := NewBook(nil)
 	slots := make([]types.SlotAssignment, 0, 4)
@@ -40,6 +45,13 @@ func TestTheEpochSummaryCarriesWhatIsInFlight(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Open a book and observe the chain's latest nonce.
+//  2. Observe three inferences: one finished, one timed out, one still started.
+//  3. Sum the nonce totals across the queried records.
+//  4. Assert estimated input tokens come only from the finished nonce's bytes.
+//  5. Assert estimated error tokens sum the bytes of the two nonces that never came back.
+//  6. Assert counted nonces is 1, the one the chain counted tokens for.
 func TestTheEstimateSeparatesWhatFinishedFromWhatDidNot(t *testing.T) {
 	book := newTestBook(t, 4)
 	if err := book.ObserveLatestNonce(testEscrow, 12); err != nil {

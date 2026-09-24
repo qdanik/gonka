@@ -9,7 +9,10 @@ import (
 	"devshard/types"
 )
 
-// The reading taken as an escrow retires is the last one there will ever be.
+// Test flow:
+//  1. Build a registry with one escrow session reporting a LatestNonce of 7, and a Retiring hook that records the session's close-call count and the nonce it reads at the moment it fires.
+//  2. Add and then retire that escrow.
+//  3. Assert the hook read nonce 7, saw zero close calls at read time, and the session's close-call count is 1 afterward.
 func TestARetiringEscrowIsReadBeforeItsSessionCloses(t *testing.T) {
 	t.Parallel()
 	session := newFakeSession("hostA")
@@ -33,7 +36,12 @@ func TestARetiringEscrowIsReadBeforeItsSessionCloses(t *testing.T) {
 	require.Equal(t, int64(1), session.closeCalls.Load())
 }
 
-// A retirement with a request still running is not over until the last release.
+// Test flow:
+//  1. Build a registry with one escrow session reporting LatestNonce 7, and a Retiring hook that appends each read nonce to a slice.
+//  2. Add the escrow and acquire it so a request is in flight.
+//  3. Retire the escrow and assert nothing was read yet, since the request is still spending nonces on it.
+//  4. Update the session's state to LatestNonce 9, release the request, and wait for the drain to close.
+//  5. Assert the hook finally read nonce 9, from after the last request ended.
 func TestADrainingEscrowIsReadOnlyWhenItsLastRequestHasEnded(t *testing.T) {
 	t.Parallel()
 	session := newFakeSession("hostA")
@@ -68,7 +76,10 @@ func TestADrainingEscrowIsReadOnlyWhenItsLastRequestHasEnded(t *testing.T) {
 	require.Equal(t, []uint64{9}, read(), "the reading did not wait for the last request to end")
 }
 
-// Every reconciliation retires each inactive escrow again.
+// Test flow:
+//  1. Build a registry with one escrow session that was never added, and a Retiring hook counting reads.
+//  2. Retire that escrow.
+//  3. Assert the hook was never called: an escrow that was never published is not read as if it were retiring.
 func TestRetiringAnEscrowThatIsNotRoutableReadsNothing(t *testing.T) {
 	t.Parallel()
 	reads := 0

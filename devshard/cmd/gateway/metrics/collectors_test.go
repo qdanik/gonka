@@ -41,6 +41,10 @@ func (c servingCapacity) ModelWeights(model string) limits.ModelWeights {
 	return c.Capacity.ModelWeights(model, false)
 }
 
+// Test flow:
+//  1. Build a limits harness (`newLimitsHarness`) with no traffic yet and register a `LimitsCollector`.
+//  2. Assert every gauge reports its configured cap or zero traffic: inflight requests, inflight tokens, effective concurrency and token caps, tracked/exhausted participants, and per-model inflight.
+//  3. Assert no participant-breaker-state series exists yet.
 func TestTheLimitsCollectorReportsTheConfiguredCapsBeforeAnyTraffic(t *testing.T) {
 	clock := time.Unix(1700000000, 0)
 	limiter, capacity, participants := newLimitsHarness(&clock)
@@ -60,7 +64,10 @@ func TestTheLimitsCollectorReportsTheConfiguredCapsBeforeAnyTraffic(t *testing.T
 	expectSeriesCount(t, telemetry, "devshard_gateway_participant_breaker_state", 0)
 }
 
-// A shard falling behind on the votes it owes has to be readable from a scrape.
+// Test flow:
+//  1. Build a limits harness and register a `LimitsCollector` whose `OwedVotes` source starts at 7.
+//  2. Assert the owed-timeout-votes gauge reports 7.
+//  3. Change the source to 0 and assert the gauge follows it.
 func TestTheLimitsCollectorReportsTheVotesTheShardStillOwes(t *testing.T) {
 	clock := time.Unix(1700000000, 0)
 	limiter, capacity, participants := newLimitsHarness(&clock)
@@ -77,7 +84,9 @@ func TestTheLimitsCollectorReportsTheVotesTheShardStillOwes(t *testing.T) {
 	expectGauge(t, telemetry, "devshard_gateway_owed_timeout_votes", labels{}, 0)
 }
 
-// A gateway built without the source says nothing rather than reporting a shard that owes nothing.
+// Test flow:
+//  1. Build a limits harness and register a `LimitsCollector` with no `OwedVotes` source configured.
+//  2. Assert no owed-timeout-votes series exists.
 func TestTheLimitsCollectorLeavesTheOwedVotesOffWithoutASource(t *testing.T) {
 	clock := time.Unix(1700000000, 0)
 	limiter, capacity, participants := newLimitsHarness(&clock)
@@ -90,6 +99,11 @@ func TestTheLimitsCollectorLeavesTheOwedVotesOffWithoutASource(t *testing.T) {
 	expectSeriesCount(t, telemetry, "devshard_gateway_owed_timeout_votes", 0)
 }
 
+// Test flow:
+//  1. Build a limits harness and register a `LimitsCollector`.
+//  2. Acquire one request for "qwen" with 250 input tokens and a 0.5 scale factor.
+//  3. Assert the inflight requests, inflight tokens, per-model inflight, and queue-depth gauges report the acquired traffic.
+//  4. Assert the unlabelled effective caps still report the configured caps, while the per-model enforced caps report the model's own scaled limits (overrides and capacity weights apply per model).
 func TestTheLimitsCollectorMatchesTheLimiterAfterTraffic(t *testing.T) {
 	clock := time.Unix(1700000000, 0)
 	limiter, capacity, participants := newLimitsHarness(&clock)
@@ -108,15 +122,16 @@ func TestTheLimitsCollectorMatchesTheLimiterAfterTraffic(t *testing.T) {
 	expectGauge(t, telemetry, "devshard_gateway_inflight_requests_by_model", labels{"model": "qwen"}, 1)
 	expectGauge(t, telemetry, "devshard_gateway_inflight_input_tokens_by_model", labels{"model": "qwen"}, 250)
 	expectGauge(t, telemetry, "devshard_gateway_limiter_queue_depth", labels{"model": "qwen"}, 0)
-	// The unlabelled pair reports what was configured; the caps a model is actually judged against are
-	// per model, because overrides and capacity weights apply per model.
 	expectGauge(t, telemetry, "devshard_gateway_effective_max_concurrent_requests", labels{}, 8)
 	expectGauge(t, telemetry, "devshard_gateway_effective_max_input_tokens_in_flight", labels{}, 4000)
 	expectGauge(t, telemetry, "devshard_gateway_enforced_max_concurrent_requests_by_model", labels{"model": "qwen"}, 4)
 	expectGauge(t, telemetry, "devshard_gateway_enforced_max_input_tokens_by_model", labels{"model": "qwen"}, 2000)
 }
 
-// A model can have traffic and be configured at once.
+// Test flow:
+//  1. Build a limits harness and register a `LimitsCollector` configured for models "llama" and "qwen".
+//  2. Acquire traffic for "qwen" and for "mistral", a model with no configuration (a model can have traffic and be configured at once).
+//  3. Assert the per-model series count is 3, and each model's inflight gauge matches its own traffic.
 func TestTheLimitsCollectorReportsEveryModelOnce(t *testing.T) {
 	clock := time.Unix(1700000000, 0)
 	limiter, capacity, participants := newLimitsHarness(&clock)
@@ -139,6 +154,9 @@ func TestTheLimitsCollectorReportsEveryModelOnce(t *testing.T) {
 	expectGauge(t, telemetry, "devshard_gateway_inflight_requests_by_model", labels{"model": "llama"}, 0)
 }
 
+// Test flow:
+//  1. Build a limits harness and register a `LimitsCollector` whose configured models list repeats "llama" twice.
+//  2. Assert the per-model series count is 2, one per distinct model.
 func TestTheLimitsCollectorReportsARepeatedConfiguredModelOnce(t *testing.T) {
 	clock := time.Unix(1700000000, 0)
 	limiter, capacity, participants := newLimitsHarness(&clock)
@@ -152,6 +170,10 @@ func TestTheLimitsCollectorReportsARepeatedConfiguredModelOnce(t *testing.T) {
 	expectSeriesCount(t, telemetry, "devshard_gateway_capacity_scale_by_model", 2)
 }
 
+// Test flow:
+//  1. Build a limits harness and update its capacity with a chain snapshot carrying current and full weights for "qwen".
+//  2. Register a `LimitsCollector`.
+//  3. Assert the total-weight, baseline-weight, and scale gauges for "qwen" report the values derived from that snapshot.
 func TestTheLimitsCollectorReportsCapacityPerModel(t *testing.T) {
 	clock := time.Unix(1700000000, 0)
 	limiter, capacity, participants := newLimitsHarness(&clock)
@@ -170,8 +192,11 @@ func TestTheLimitsCollectorReportsCapacityPerModel(t *testing.T) {
 	expectGauge(t, telemetry, "devshard_gateway_capacity_scale_by_model", labels{"model": "qwen"}, 0.5)
 }
 
-// Routing on the membership-share fallback serves requests and looks like health; the gauge is the
-// only thing that separates it from routing on real chain weights.
+// Test flow:
+//  1. Build a limits harness, set an escrow's membership shares before any chain weights arrive, and register a `LimitsCollector`.
+//  2. Assert `EscrowWeight` returns the membership-share fallback and the weights-unobserved gauge reports 1.
+//  3. Update the capacity with real chain weights.
+//  4. Assert `EscrowWeight` now returns the chain-derived weight and the weights-unobserved gauge drops to 0.
 func TestTheLimitsCollectorReportsWhileEscrowScoringRunsOnTheMembershipFallback(t *testing.T) {
 	clock := time.Unix(1700000000, 0)
 	limiter, capacity, participants := newLimitsHarness(&clock)
@@ -198,6 +223,10 @@ func TestTheLimitsCollectorReportsWhileEscrowScoringRunsOnTheMembershipFallback(
 	expectGauge(t, telemetry, "devshard_gateway_capacity_weights_unobserved_by_model", labels{"model": "qwen"}, 0)
 }
 
+// Test flow:
+//  1. Build a limits harness with no configured models and register a `LimitsCollector`.
+//  2. Report a transport-fault result for one participant via `OnResult`.
+//  3. Assert the tracked and exhausted participant gauges both report 1, and the breaker-state gauge reports that participant open, not closed.
 func TestTheLimitsCollectorReportsAnOpenCutoffAsExhausted(t *testing.T) {
 	clock := time.Unix(1700000000, 0)
 	limiter, capacity, participants := newLimitsHarness(&clock)
@@ -217,7 +246,11 @@ func TestTheLimitsCollectorReportsAnOpenCutoffAsExhausted(t *testing.T) {
 		labels{"participant_key": "gonka1down", "model": "qwen", "state": "closed"}, 0)
 }
 
-// The collector reads the limiter's snapshot rather than a copy.
+// Test flow:
+//  1. Build a participant limiter with idle eviction and register a `LimitsCollector` over it (the collector reads the limiter's own snapshot, not a copy).
+//  2. Acquire and release for one participant, then acquire for a second, busy participant; assert the breaker-state series count and tracked-participants gauge cover both.
+//  3. Advance the clock past the idle-eviction window and acquire again for the busy participant.
+//  4. Assert the forgotten participant's series are gone and only the busy participant remains.
 func TestTheLimitsCollectorStopsReportingAPairTheLimiterForgot(t *testing.T) {
 	clock := time.Unix(1700000000, 0)
 	participants := limits.NewParticipantLimiter(limits.ParticipantConfig{
@@ -247,6 +280,12 @@ func TestTheLimitsCollectorStopsReportingAPairTheLimiterForgot(t *testing.T) {
 	expectGauge(t, telemetry, "devshard_gateway_participants_tracked", labels{}, 1)
 }
 
+// Test flow:
+//  1. Build a perf tracker and register a `PerfCollector` over it.
+//  2. Assert no host-ejected series exists before any sample.
+//  3. Record a responsive sample and an acquire for one host; assert the ejected and inflight-requests gauges report it.
+//  4. Assert the seconds-per-output-token gauge is absent for a host with no timing samples yet (unmeasured hosts publish no series, so a scrape never shows an invented zero).
+//  5. Record ten timed samples and assert the seconds-per-output-token gauge reports their average.
 func TestThePerfCollectorMatchesTheTracker(t *testing.T) {
 	configuration := config.Defaults()
 	clock := time.Unix(1700000000, 0)
@@ -262,7 +301,6 @@ func TestThePerfCollectorMatchesTheTracker(t *testing.T) {
 	expectGauge(t, telemetry, "devshard_gateway_host_ejected", labels{"participant_key": "gonka1host", "model": "qwen"}, 0)
 	expectGauge(t, telemetry, "devshard_gateway_host_inflight_requests", labels{"participant_key": "gonka1host"}, 1)
 
-	// Unmeasured hosts publish no series at all, so a scrape never shows an invented zero.
 	expectSeriesCount(t, telemetry, "devshard_gateway_host_seconds_per_output_token", 0)
 
 	for range 10 {
@@ -277,6 +315,11 @@ type fixedEscrows struct{ states []registry.EscrowState }
 
 func (f fixedEscrows) Snapshot() []registry.EscrowState { return f.states }
 
+// Test flow:
+//  1. Register a `RegistryCollector` backed by `fixedEscrows` reporting two escrows, one accepting traffic and one not, plus escrow-weight, availability, and drain-close-failure sources.
+//  2. Assert the active, active-requests, escrow-weight, and blocked-participants gauges report each escrow's own state.
+//  3. Assert the drain-close-failures counter reports the source's value.
+//  4. Assert no participant-limited series exists.
 func TestTheRegistryCollectorReportsEveryPublishedEscrow(t *testing.T) {
 	telemetry := New()
 	telemetry.Register(NewRegistryCollector(RegistrySources{
@@ -304,6 +347,9 @@ func TestTheRegistryCollectorReportsEveryPublishedEscrow(t *testing.T) {
 	expectAbsent(t, telemetry, "devshard_gateway_escrow_participant_limited")
 }
 
+// Test flow:
+//  1. Register a `RegistryCollector` backed by `fixedEscrows` with one escrow on hold and one not.
+//  2. Assert the on-hold gauge reports 1 for the held escrow and 0 for the other.
 func TestTheRegistryCollectorReportsAnEscrowOnHold(t *testing.T) {
 	telemetry := New()
 	telemetry.Register(NewRegistryCollector(RegistrySources{
@@ -317,6 +363,9 @@ func TestTheRegistryCollectorReportsAnEscrowOnHold(t *testing.T) {
 	expectGauge(t, telemetry, "devshard_gateway_escrow_on_hold", labels{"devshard_id": "9", "model": "qwen"}, 0)
 }
 
+// Test flow:
+//  1. Register a `RegistryCollector` backed by an empty `fixedEscrows`.
+//  2. Assert the active and escrow-weight series counts are both zero.
 func TestTheRegistryCollectorIsSilentOnAnEmptyRegistry(t *testing.T) {
 	telemetry := New()
 	telemetry.Register(NewRegistryCollector(RegistrySources{Escrows: fixedEscrows{}}))
@@ -329,6 +378,10 @@ type fixedPhases struct{ snapshot chain.PhaseSnapshot }
 
 func (f fixedPhases) Snapshot() chain.PhaseSnapshot { return f.snapshot }
 
+// Test flow:
+//  1. Register a `ChainCollector` backed by a `fixedPhases` snapshot carrying a block height, epoch, a blocked-requests reason, a max nonce, and a stale `LastUpdatedAt`.
+//  2. Assert every chain gauge (block height, epoch switch height, epoch index, max nonce, requests blocked, snapshot age, snapshot health) reports the snapshot's own values.
+//  3. Assert the epoch-phase and block-reason gauges report only the snapshot's own phase and reason as 1, every other value as 0.
 func TestTheChainCollectorMatchesThePublishedSnapshot(t *testing.T) {
 	clock := time.Unix(1700000000, 0)
 	telemetry := New()
@@ -357,6 +410,9 @@ func TestTheChainCollectorMatchesThePublishedSnapshot(t *testing.T) {
 	expectGauge(t, telemetry, "devshard_gateway_chain_block_reason", labels{"reason": "none"}, 0)
 }
 
+// Test flow:
+//  1. Register a `ChainCollector` backed by a zero-value `fixedPhases` snapshot.
+//  2. Assert the block-height, requests-blocked, and snapshot-age gauges report zero, the snapshot-healthy gauge reports 1, and the block-reason gauge reports "none".
 func TestTheChainCollectorReportsTheZeroSnapshot(t *testing.T) {
 	clock := time.Unix(1700000000, 0)
 	telemetry := New()
@@ -373,8 +429,11 @@ type fixedLedger struct{ stats store.LedgerStats }
 
 func (f fixedLedger) Stats() store.LedgerStats { return f.stats }
 
-// A row the ledger sheds under load never reaches the request history, and the only place that loss is
-// visible is the exposition: nothing else in the process reports it.
+// Test flow:
+//  1. Register an `AccountingCollector` backed by a `fixedLedger` reporting written, dropped, failed, and sweep-failed counts.
+//  2. Assert the rows-written counter reports the written count.
+//  3. Assert the rows-lost counter reports the dropped count under cause "shed" and the failed count under cause "write_failed".
+//  4. Assert the retention-sweeps-failed counter reports its own count.
 func TestTheAccountingCollectorReportsEveryRowTheLedgerLost(t *testing.T) {
 	telemetry := New()
 	telemetry.Register(NewAccountingCollector(fixedLedger{
@@ -387,7 +446,11 @@ func TestTheAccountingCollectorReportsEveryRowTheLedgerLost(t *testing.T) {
 	expectCounter(t, telemetry, "devshard_gateway_accounting_retention_sweeps_failed_total", labels{}, 3)
 }
 
-// A window is per participant and per model.
+// Test flow:
+//  1. Build a limits harness and register a `LimitsCollector`.
+//  2. Acquire one request for a participant and model (a window is per participant and per model), keeping it held.
+//  3. Gather every metric family.
+//  4. Assert no family name is a per-host window series or carries "participant_window", since that state belongs to the admin hosts endpoint rather than the scrape.
 func TestTheLimitsCollectorKeepsHostWindowsOffTheScrape(t *testing.T) {
 	clock := time.Unix(1700000000, 0)
 	limiter, capacity, participants := newLimitsHarness(&clock)

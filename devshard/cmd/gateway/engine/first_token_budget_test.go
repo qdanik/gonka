@@ -9,6 +9,10 @@ func budgetPolicy() EscalationPolicy {
 	return EscalationPolicy{FirstTokenFloor: time.Second, FirstTokenCeiling: 60 * time.Second}
 }
 
+// Test flow:
+//  1. Build a policy via `budgetPolicy` and compute its baseline first-token curve for 400 input tokens.
+//  2. Compute the budget for a host observed answering in 5 seconds.
+//  3. Assert the budget exceeds the curve and equals the expected 7.5 seconds.
 func TestFirstTokenBudget_GivesRoomToAHostThatReliablyAnswers(t *testing.T) {
 	t.Parallel()
 	policy := budgetPolicy()
@@ -24,6 +28,10 @@ func TestFirstTokenBudget_GivesRoomToAHostThatReliablyAnswers(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a policy and compute its curve for 400 tokens.
+//  2. Compute the budget for hosts observed answering in 75s and 300s.
+//  3. Assert each budget falls back to the curve, unrewarded.
 func TestFirstTokenBudget_KeepsTheCurveForAHostThatNeverAnswersInTime(t *testing.T) {
 	t.Parallel()
 	policy := budgetPolicy()
@@ -36,6 +44,10 @@ func TestFirstTokenBudget_KeepsTheCurveForAHostThatNeverAnswersInTime(t *testing
 	}
 }
 
+// Test flow:
+//  1. Build a policy and compute its curve for 400 tokens.
+//  2. Compute the budget with a zero observed duration (no history).
+//  3. Assert the budget equals the curve.
 func TestFirstTokenBudget_FallsBackToTheCurveWithoutAHistory(t *testing.T) {
 	t.Parallel()
 	policy := budgetPolicy()
@@ -46,6 +58,10 @@ func TestFirstTokenBudget_FallsBackToTheCurveWithoutAHistory(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a policy and compute its curve for 400 tokens.
+//  2. Compute the budget for a host observed answering in 200 milliseconds.
+//  3. Assert the budget still equals the curve rather than shrinking below it.
 func TestFirstTokenBudget_NeverShortensTheDeadline(t *testing.T) {
 	t.Parallel()
 	policy := budgetPolicy()
@@ -56,6 +72,10 @@ func TestFirstTokenBudget_NeverShortensTheDeadline(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a policy with a 4-second ceiling.
+//  2. Compute the budget for a host observed answering in 5 seconds.
+//  3. Assert the budget is capped at the 4-second ceiling.
 func TestFirstTokenBudget_StaysUnderTheConfiguredCeiling(t *testing.T) {
 	t.Parallel()
 	policy := budgetPolicy()
@@ -66,6 +86,10 @@ func TestFirstTokenBudget_StaysUnderTheConfiguredCeiling(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a policy and compute its curve for 400 tokens.
+//  2. Compute the budget at exactly `firstTokenObservedLimit*curve` and assert it still counts as reliable (the budget exceeds the curve).
+//  3. Compute the budget one nanosecond past that limit and assert it falls back to the curve.
 func TestFirstTokenBudget_AtTheEdgeOfWhatCountsAsReliable(t *testing.T) {
 	t.Parallel()
 	policy := budgetPolicy()
@@ -79,7 +103,10 @@ func TestFirstTokenBudget_AtTheEdgeOfWhatCountsAsReliable(t *testing.T) {
 	}
 }
 
-// A deployment may leave the ceiling unset; the limit on what counts as reliable still bounds it.
+// Test flow:
+//  1. Build a policy with no configured ceiling and compute its curve for 400 tokens.
+//  2. Compute the budget at the reliability limit.
+//  3. Assert the budget stays within the bound derived from the observed limit and slack, even without a configured ceiling.
 func TestFirstTokenBudget_StaysBoundedWithoutACeiling(t *testing.T) {
 	t.Parallel()
 	policy := budgetPolicy()
@@ -93,7 +120,10 @@ func TestFirstTokenBudget_StaysBoundedWithoutACeiling(t *testing.T) {
 	}
 }
 
-// A clock that hands back a negative reading must not read as a fast host.
+// Test flow:
+//  1. Build a policy and compute its curve for 400 tokens.
+//  2. Compute the budget for a negative observed duration.
+//  3. Assert the budget falls back to the curve rather than reading the negative value as a fast host.
 func TestFirstTokenBudget_IgnoresANegativeObservation(t *testing.T) {
 	t.Parallel()
 	policy := budgetPolicy()

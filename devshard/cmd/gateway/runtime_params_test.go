@@ -2,8 +2,10 @@ package main
 
 import "testing"
 
-// A provider that dials nothing leaves a feed that was never built, and a typed nil in an interface
-// field is not nil — the session factory and the shutdown order both reach this one through it.
+// Test flow:
+//  1. Hold a nil *runtimeParams.
+//  2. Call Heartbeat on it and assert it returns nil.
+//  3. Call Close on it and assert it returns nil.
 func TestAnUnbuiltParamsFeedAnswersAndClosesWithoutPanicking(t *testing.T) {
 	var absent *runtimeParams
 

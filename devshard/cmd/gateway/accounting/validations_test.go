@@ -6,6 +6,10 @@ import (
 	"devshard/types"
 )
 
+// Test flow:
+//  1. Open an escrow with two slots and observe host stats on slot 1 reporting required and completed validation counts.
+//  2. Find slot 1's record.
+//  3. Assert its required and completed validation counts match what was observed.
 func TestValidationCountsReachTheRecordFromHostStats(t *testing.T) {
 	book := NewBook(nil)
 	if err := book.OpenEscrow(EscrowMetadata{

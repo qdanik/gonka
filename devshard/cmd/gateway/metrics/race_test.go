@@ -35,6 +35,11 @@ func winningAttempt() engine.AttemptOutcome {
 	}
 }
 
+// Test flow:
+//  1. Build a race recorder and record a successful race with one winning attempt (`winningAttempt`).
+//  2. Assert the started, terminal, output-token, and request counters report the winner's values.
+//  3. Assert no failure, hidden-failure, or missed-deadline series exist.
+//  4. Assert the receipt, first-content, prefill, and total-attempt histograms report the winner's timings.
 func TestAWonRaceEmitsTheWinnerFamiliesWithTheirValues(t *testing.T) {
 	telemetry := New()
 	recorder := newTestRaceRecorder(telemetry)
@@ -70,8 +75,10 @@ func TestAWonRaceEmitsTheWinnerFamiliesWithTheirValues(t *testing.T) {
 		labels{"participant_key": "gonka1winner", "model": "qwen"}, 1, 2)
 }
 
-// A role-only chunk is a token, not content: charging its arrival to the content metrics reports a
-// prefill no client ever waited for.
+// Test flow:
+//  1. Build a race recorder and record a winning attempt whose `FirstContent` was never set (a role-only chunk, not content).
+//  2. Assert the first-content and prefill-per-input-token histograms are absent.
+//  3. Assert the receipt histogram still reports the winner's receipt time.
 func TestAContentlessStreamLeavesTheContentLatenciesUnobserved(t *testing.T) {
 	telemetry := New()
 	recorder := newTestRaceRecorder(telemetry)
@@ -89,7 +96,9 @@ func TestAContentlessStreamLeavesTheContentLatenciesUnobserved(t *testing.T) {
 		labels{"participant_key": "gonka1winner", "model": "qwen"}, 1, 0.2)
 }
 
-// A stalled host and a slow one carry the same chunk count; the longest silence is what parts them.
+// Test flow:
+//  1. Build a race recorder and record a winning attempt with a long max chunk gap.
+//  2. Assert the max-inter-chunk-seconds histogram reports the longest silence and the inter-chunk histogram reports the mean gap.
 func TestAStalledAttemptReportsItsLongestSilence(t *testing.T) {
 	telemetry := New()
 	recorder := newTestRaceRecorder(telemetry)
@@ -107,6 +116,10 @@ func TestAStalledAttemptReportsItsLongestSilence(t *testing.T) {
 		labels{"participant_key": "gonka1winner", "model": "qwen"}, 1, 0.04)
 }
 
+// Test flow:
+//  1. Build a race recorder and record a race with a winning attempt plus a losing attempt that failed with a 503.
+//  2. Assert the loser's attempt-failure and transport-error counters, and the request's hidden-failure counter, all report the failure.
+//  3. Assert the loser's output tokens are still counted and the request is still counted as an overall success.
 func TestAHiddenLoserFailureIsCountedAgainstASuccessfulRequest(t *testing.T) {
 	telemetry := New()
 	recorder := newTestRaceRecorder(telemetry)
@@ -144,6 +157,10 @@ func TestAHiddenLoserFailureIsCountedAgainstASuccessfulRequest(t *testing.T) {
 		labels{"model": "qwen", "outcome": "success", "reason": "none"}, 1)
 }
 
+// Test flow:
+//  1. Build a race recorder and record a race whose only attempt is marked suspicious with no winner.
+//  2. Assert the attempt-failure counter reports it with visibility "no_winner" and the request counter reports an overall failure.
+//  3. Assert no transport-error series exists.
 func TestASuspiciousAttemptIsCountedAsNoWinner(t *testing.T) {
 	telemetry := New()
 	recorder := newTestRaceRecorder(telemetry)
@@ -171,6 +188,10 @@ func TestASuspiciousAttemptIsCountedAsNoWinner(t *testing.T) {
 	expectAbsent(t, telemetry, "devshard_gateway_participant_transport_errors_total")
 }
 
+// Test flow:
+//  1. Table-driven: each case builds a `RaceOutcome` with a distinct lifecycle state (no attempts, escrow missing, balance exhausted, client gone before any attempt, client gone with a losing attempt) and the failure reason it must report.
+//  2. For each case, record the race.
+//  3. Assert the request counter reports a failure under the case's expected reason.
 func TestALifecycleFailureNamesItselfRatherThanAnAttempt(t *testing.T) {
 	testCases := []struct {
 		name     string
@@ -226,6 +247,10 @@ func TestALifecycleFailureNamesItselfRatherThanAnAttempt(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a race recorder and record a race whose only attempt never dispatched (off-path, no `SendTime`).
+//  2. Assert no attempts-started series exists.
+//  3. Assert the terminal counter still reports the attempt as failed and not finished.
 func TestAnUndispatchedAttemptIsNotCountedAsStarted(t *testing.T) {
 	telemetry := New()
 	newTestRaceRecorder(telemetry).RecordRace(engine.RaceOutcome{
@@ -239,6 +264,9 @@ func TestAnUndispatchedAttemptIsNotCountedAsStarted(t *testing.T) {
 		labels{"participant_key": "gonka1ghost", "model": "qwen", "role": "extra", "outcome": "failed", "visibility": "failed_not_finished"}, 1)
 }
 
+// Test flow:
+//  1. Build a race recorder and record a race whose attempt failed with an upstream server error at status 502.
+//  2. Assert the transport-error counter reports it under status "502".
 func TestAnUpstreamServerErrorIsCountedUnderTheStatusTheHostSent(t *testing.T) {
 	telemetry := New()
 	newTestRaceRecorder(telemetry).RecordRace(engine.RaceOutcome{
@@ -254,6 +282,9 @@ func TestAnUpstreamServerErrorIsCountedUnderTheStatusTheHostSent(t *testing.T) {
 		labels{"participant_key": "gonka1host", "model": "qwen", "status": "502"}, 1)
 }
 
+// Test flow:
+//  1. Build a race recorder and record a race with no model and an attempt with no participant.
+//  2. Assert the started and transport-error counters fall back to "unknown" labels rather than blank ones.
 func TestEmptyLabelsFallBackRatherThanShippingBlank(t *testing.T) {
 	telemetry := New()
 	newTestRaceRecorder(telemetry).RecordRace(engine.RaceOutcome{
@@ -266,6 +297,10 @@ func TestEmptyLabelsFallBackRatherThanShippingBlank(t *testing.T) {
 		labels{"participant_key": "unknown", "model": "unknown", "status": "0"}, 1)
 }
 
+// Test flow:
+//  1. Table-driven: each case is a `TimeoutEvent` with a distinct action (posted, failed, never attempted).
+//  2. For each case, record the timeout.
+//  3. Assert the timeout-actions counter reports it under the event's own kind, action, and reason.
 func TestATimeoutVoteIsCountedWhateverItsAction(t *testing.T) {
 	testCases := []struct {
 		name  string
@@ -300,7 +335,9 @@ func TestATimeoutVoteIsCountedWhateverItsAction(t *testing.T) {
 	}
 }
 
-// A deadline counts against the host that missed it, under the deadline's own name, even when the attempt went on to win.
+// Test flow:
+//  1. Build a race recorder and record a winning attempt that missed both its receipt and first-token deadlines.
+//  2. Assert the missed-deadlines counter reports both deadlines under the winner's own name, even though the attempt went on to win.
 func TestAMissedDeadlineIsCountedAgainstTheHostThatMissedIt(t *testing.T) {
 	telemetry := New()
 	recorder := newTestRaceRecorder(telemetry)
@@ -319,6 +356,9 @@ func TestAMissedDeadlineIsCountedAgainstTheHostThatMissedIt(t *testing.T) {
 		labels{"participant_key": "gonka1winner", "model": "qwen", "deadline": "first_token_timeout"}, 1)
 }
 
+// Test flow:
+//  1. Build a race recorder and record a classify overflow for one host.
+//  2. Assert the stream-carry-overflow counter reports it against that host.
 func TestAClassifyOverflowIsAttributedToItsHost(t *testing.T) {
 	telemetry := New()
 	newTestRaceRecorder(telemetry).RecordClassifyOverflow("gonka1host", "qwen")
@@ -327,7 +367,9 @@ func TestAClassifyOverflowIsAttributedToItsHost(t *testing.T) {
 		labels{"participant_key": "gonka1host", "model": "qwen"}, 1)
 }
 
-// Each removed family duplicated one that stays. See operations.md, "Metric changes".
+// Test flow:
+//  1. Build a race recorder and drive a won race, a suspicious no-winner race, and a timeout vote.
+//  2. Assert none of the retired metric families (no-winner attempts, user-visible wins, critical user failures, escalation decisions, inference timeouts) were published.
 func TestTheRecorderPublishesNoRemovedFamily(t *testing.T) {
 	telemetry := New()
 	recorder := newTestRaceRecorder(telemetry)
@@ -357,8 +399,9 @@ var _ interface {
 	RecordClassifyOverflow(participant, model string)
 } = (*RaceRecorder)(nil)
 
-// The label values below reach dashboards verbatim. Changing one empties the panel that reads it
-// without failing a build or a query, so the wire strings are pinned here rather than inferred.
+// Test flow:
+//  1. Build a table pairing every engine label constant with the literal wire string a dashboard reads.
+//  2. Assert each constant's value still equals its pinned wire string.
 func TestEmittedLabelValuesMatchTheirWireStrings(t *testing.T) {
 	pinned := []struct{ emitted, want string }{
 		{engine.AttemptOutcomeSuccess, "success"},

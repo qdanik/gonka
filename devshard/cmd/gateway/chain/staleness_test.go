@@ -9,6 +9,12 @@ import (
 	"time"
 )
 
+// Test flow:
+//  1. Start a stub public-API server returning epoch and participants data, and a fake clock at a fixed instant.
+//  2. Create a PhaseObserver against the stub with an hour-long poll interval and the fake clock.
+//  3. Run one refresh and assert LastHealthyAt is set to that instant.
+//  4. Make the participants read fail, advance the clock, and run refresh again.
+//  5. Assert LastUpdatedAt moves to the new instant but LastHealthyAt stays at the last complete poll, and an error is published.
 func TestOnlyACompletePollRefreshesTheHealthyClock(t *testing.T) {
 	stub := newPhaseObserverStub()
 	server := httptest.NewServer(stub.handler())
@@ -49,6 +55,11 @@ func TestOnlyACompletePollRefreshesTheHealthyClock(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Start a stub public-API server returning epoch and participants data, with the chain's max-nonce lookup failing.
+//  2. Create a PhaseObserver against the stub with an hour-long poll interval, the failing chain and a fake clock.
+//  3. Run one refresh.
+//  4. Assert LastHealthyAt still reflects the poll's instant and the tolerated failure is reported as an error.
 func TestANonceCeilingFailureStillRefreshesTheHealthyClock(t *testing.T) {
 	stub := newPhaseObserverStub()
 	server := httptest.NewServer(stub.handler())
@@ -80,6 +91,11 @@ func TestANonceCeilingFailureStillRefreshesTheHealthyClock(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Start an upstream server whose handler blocks until the request context is done.
+//  2. Create and start a PhaseObserver against it with a short poll interval.
+//  3. Wait until the hung request is reached, then poll the observer's snapshot until it reports an error within a bounded deadline.
+//  4. Assert the deadline error appears; fail the test if it never does.
 func TestAHungReadDoesNotWedgeThePollLoop(t *testing.T) {
 	reached := make(chan struct{})
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

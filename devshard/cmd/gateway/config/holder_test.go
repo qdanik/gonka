@@ -5,6 +5,9 @@ import (
 	"testing"
 )
 
+// Test flow:
+//  1. Build a `Holder` from an initial config.
+//  2. Assert `Load` returns the exact pointer given to `NewHolder`.
 func TestHolderLoadReturnsInitialSnapshot(t *testing.T) {
 	initial := Defaults()
 	holder := NewHolder(&initial)
@@ -13,6 +16,10 @@ func TestHolderLoadReturnsInitialSnapshot(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a `Holder` and subscribe a callback that records every snapshot it sees.
+//  2. Swap in a new config.
+//  3. Assert `Load` returns the new config and the subscriber was notified exactly once with the swapped snapshot.
 func TestHolderSwapNotifiesSubscribersWithNewSnapshot(t *testing.T) {
 	initial := Defaults()
 	holder := NewHolder(&initial)
@@ -40,6 +47,10 @@ func TestHolderSwapNotifiesSubscribersWithNewSnapshot(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Subscribe a callback, then cancel it immediately.
+//  2. Swap in a new config.
+//  3. Assert the cancelled subscriber was never notified.
 func TestHolderCancelledSubscriberIsNotNotified(t *testing.T) {
 	initial := Defaults()
 	holder := NewHolder(&initial)
@@ -55,6 +66,10 @@ func TestHolderCancelledSubscriberIsNotNotified(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a `Holder`.
+//  2. Run four pairs of goroutines concurrently: one swapping in a fresh config 500 times, one loading the port 500 times.
+//  3. Assert the run completes without a data race (verified under `go test -race`).
 func TestHolderConcurrentLoadAndSwapIsRaceFree(t *testing.T) {
 	initial := Defaults()
 	holder := NewHolder(&initial)

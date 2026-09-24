@@ -48,6 +48,10 @@ func (n *recordingEscrowNarrator) SettlementUnverifiable(escrowID string, nonce 
 	n.note("unverifiable %s nonce %d", escrowID, nonce)
 }
 
+// Test flow:
+//  1. Build a registry with a recording narrator and add one idle escrow.
+//  2. Retire that escrow.
+//  3. Assert the narrator recorded "serving 1 qwen" then "retired 1".
 func TestPublishingAndRetiringAnIdleEscrowIsNarrated(t *testing.T) {
 	t.Parallel()
 	narrator := &recordingEscrowNarrator{}
@@ -63,7 +67,11 @@ func TestPublishingAndRetiringAnIdleEscrowIsNarrated(t *testing.T) {
 	require.Equal(t, []string{"serving 1 qwen", "retired 1"}, narrator.recorded())
 }
 
-// A retirement with a request still running is not over until the last release closes the session.
+// Test flow:
+//  1. Build a registry with a recording narrator, add one escrow, and acquire it so a request is in flight.
+//  2. Retire the escrow while the request is still running.
+//  3. Release the request and wait for the drain to close.
+//  4. Assert the narrator recorded serving, then draining with one in-flight, then closed with no error.
 func TestADrainingEscrowIsNarratedUntilItCloses(t *testing.T) {
 	t.Parallel()
 	narrator := &recordingEscrowNarrator{}
@@ -83,7 +91,11 @@ func TestADrainingEscrowIsNarratedUntilItCloses(t *testing.T) {
 	require.Equal(t, []string{"serving 1 qwen", "retired draining 1 in flight 1", "closed 1 error <nil>"}, narrator.recorded())
 }
 
-// Nobody is left to hand this failure to; the narration and the counter are the only records of it.
+// Test flow:
+//  1. Build a registry with a recording narrator around a session whose close always fails, add and acquire the escrow.
+//  2. Retire it, release the request, and wait for the drain to close.
+//  3. Assert the narrator recorded serving, draining, then closed with the close error.
+//  4. Assert the registry's drain-close-failure counter is 1.
 func TestADrainingEscrowThatFailsToCloseIsNarratedWithTheFailure(t *testing.T) {
 	t.Parallel()
 	session := newFakeSession("hostA")
@@ -108,7 +120,10 @@ func TestADrainingEscrowThatFailsToCloseIsNarratedWithTheFailure(t *testing.T) {
 	require.Equal(t, int64(1), registry.DrainCloseFailures())
 }
 
-// A registry built without a narrator publishes and retires all the same.
+// Test flow:
+//  1. Build a registry with no narrator configured and add one escrow.
+//  2. Retire that escrow.
+//  3. Assert the session's close-call count is 1: publishing and retiring still work without a narrator.
 func TestARegistryWithoutANarratorStillRetires(t *testing.T) {
 	t.Parallel()
 	session := newFakeSession("hostA")

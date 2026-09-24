@@ -27,7 +27,10 @@ func runnableSettings() config.HostPing {
 	return config.HostPing{IntervalMS: 40, TimeoutMS: 10, Concurrency: 2}
 }
 
-// A ping nobody asked for costs a goroutine and a connection per host per tick, so off means absent.
+// Test flow:
+//  1. Build runnable settings and mark them disabled.
+//  2. Call New with those settings, one live host dial, and a counting sink.
+//  3. Assert it returns nil.
 func TestAPingerIsAbsentWhenTheProbeIsOff(t *testing.T) {
 	settings := runnableSettings()
 	settings.Disabled = true
@@ -37,8 +40,10 @@ func TestAPingerIsAbsentWhenTheProbeIsOff(t *testing.T) {
 	}
 }
 
-// The probe primitive refuses a schedule whose wave could outlast its own period; that refusal must
-// cost the gateway the ping, not its boot.
+// Test flow:
+//  1. Build settings whose wave could outlast its own period (interval and timeout both 10ms).
+//  2. Call New with those settings, one live host dial, and a counting sink.
+//  3. Assert it returns nil rather than a pinger.
 func TestAScheduleThatDoesNotHoldCostsThePingNotTheBoot(t *testing.T) {
 	settings := config.HostPing{IntervalMS: 10, TimeoutMS: 10, Concurrency: 1}
 
@@ -47,7 +52,11 @@ func TestAScheduleThatDoesNotHoldCostsThePingNotTheBoot(t *testing.T) {
 	}
 }
 
-// The wave reads the live escrows each time rather than a list handed to it once.
+// Test flow:
+//  1. Build a pinger over runnable settings, one live host dial, and a counting sink with a buffered channel.
+//  2. Start the pinger.
+//  3. Read the reported target count from the sink's channel.
+//  4. Assert it counts the one live host.
 func TestEachWaveReadsWhoIsLiveNow(t *testing.T) {
 	sink := countingSink{targets: make(chan int, 1)}
 	pinger := New(runnableSettings(), dialsHeld{

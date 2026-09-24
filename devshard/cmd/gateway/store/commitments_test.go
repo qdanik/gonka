@@ -6,6 +6,10 @@ import (
 	"time"
 )
 
+// Test flow:
+//  1. Save a `Commitment` with every field populated, including a nanosecond-precision `CreatedAt`.
+//  2. Load it back and assert every field matches, checking `CreatedAt` separately for exact round-trip precision.
+//  3. Delete the commitment and assert `LoadCommitments` returns no rows.
 func TestCommitmentSaveLoadDeleteRoundTrip(t *testing.T) {
 	testStore := openTestStore(t)
 	ctx := context.Background()
@@ -32,7 +36,7 @@ func TestCommitmentSaveLoadDeleteRoundTrip(t *testing.T) {
 	}
 	got := loaded[0]
 	want := commitment
-	got.CreatedAt, want.CreatedAt = time.Time{}, time.Time{} // compared separately below
+	got.CreatedAt, want.CreatedAt = time.Time{}, time.Time{}
 	if got != want {
 		t.Fatalf("LoadCommitments()[0] = %+v, want %+v", loaded[0], commitment)
 	}
@@ -52,6 +56,9 @@ func TestCommitmentSaveLoadDeleteRoundTrip(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Save a `Commitment`, then save a second one with the same `TxHash` but a different model, epoch, and block height.
+//  2. Assert `LoadCommitments` returns exactly one row, holding the second save's fields.
 func TestSaveCommitmentUpsertReplacesNotDuplicates(t *testing.T) {
 	testStore := openTestStore(t)
 	ctx := context.Background()
@@ -88,13 +95,14 @@ func TestSaveCommitmentUpsertReplacesNotDuplicates(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Save three commitments whose hashes and timestamps disagree on sort order: one that sorts first by hash but last by time, and two that tie on time and must fall back to hash.
+//  2. Assert `LoadCommitments` returns them ordered by time then hash, proving the compound `ORDER BY` rather than luck.
 func TestLoadCommitmentsDeterministicOrder(t *testing.T) {
 	testStore := openTestStore(t)
 	ctx := context.Background()
 
 	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	// tx-z sorts first by hash but last by time; tx-a/tx-b tie on time and
-	// must fall back to tx_hash — proves the compound ORDER BY, not luck.
 	rows := []Commitment{
 		{TxHash: "tx-z", CreatedAt: base.Add(time.Second)},
 		{TxHash: "tx-b", CreatedAt: base},
@@ -121,6 +129,9 @@ func TestLoadCommitmentsDeterministicOrder(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Delete a commitment that was never saved.
+//  2. Assert `DeleteCommitment` returns no error, an idempotent no-op.
 func TestDeleteCommitmentAbsentIsNoOp(t *testing.T) {
 	testStore := openTestStore(t)
 	ctx := context.Background()
@@ -129,9 +140,9 @@ func TestDeleteCommitmentAbsentIsNoOp(t *testing.T) {
 	}
 }
 
-// FormatTime renders the zero time as "", so a row with no created_at is something the writer can
-// produce. A raw time.Parse rejects it and fails the whole load, which took the reconcile pass with it
-// and made the manager's own zero-CreatedAt defence unreachable.
+// Test flow:
+//  1. Save a `Commitment` with no `CreatedAt` set.
+//  2. Assert `LoadCommitments` loads the row without error and its `CreatedAt` comes back zero, rather than failing the whole load the way a raw `time.Parse` on an empty string would.
 func TestLoadCommitmentsAcceptsARowWithNoCreatedAt(t *testing.T) {
 	testStore := openTestStore(t)
 	ctx := context.Background()

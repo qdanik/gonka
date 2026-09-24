@@ -18,7 +18,10 @@ func normalizeForTest(t *testing.T, body string) Result {
 	return result
 }
 
-// The divergence the goldens deliberately do not record.
+// Test flow:
+//  1. Normalize request bodies that vary the client's stream and stream_options fields (absent, false, true, true+usage, false+usage).
+//  2. Assert the body sent upstream always asks for stream:true and stream_options include_usage:true.
+//  3. Assert the reported ClientStream and ClientUsage match what each case's client actually asked for.
 func TestForcesStreamingUpstream(t *testing.T) {
 	t.Parallel()
 	testCases := []struct {
@@ -73,6 +76,11 @@ func TestForcesStreamingUpstream(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Normalize a request whose client set stream_options to include_usage:false plus an unlisted sub-field.
+//  2. Assert the unlisted sub-field is gone from the body sent upstream.
+//  3. Assert the body still forces include_usage:true upstream.
+//  4. Assert ClientUsage reports false, matching the client's own include_usage:false.
 func TestForcedStreamOptionsReplaceWhatTheClientSent(t *testing.T) {
 	t.Parallel()
 
@@ -89,6 +97,9 @@ func TestForcedStreamOptionsReplaceWhatTheClientSent(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Feed a stream rewriter SSE chunks that vary content-only, usage-only, content-with-usage events and the [DONE] terminator, with keepUsage toggled per case.
+//  2. Assert the rewritten output matches each case's expected chunk, dropping forced usage only when the client did not ask to keep it.
 func TestStreamRewriterDropsForcedUsage(t *testing.T) {
 	t.Parallel()
 	const contentEvent = "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hi\"}}]}\n\n"
@@ -137,7 +148,10 @@ func TestStreamRewriterDropsForcedUsage(t *testing.T) {
 	}
 }
 
-// A host's error event carries no choices either, so it must not be dropped as an empty one.
+// Test flow:
+//  1. Write an SSE error event that carries no choices but includes a usage field.
+//  2. Assert the rewritten output still contains the error message.
+//  3. Assert the usage field is stripped from the output.
 func TestStreamRewriterKeepsAnErrorEventThatCarriesUsage(t *testing.T) {
 	t.Parallel()
 	event := []byte("data: {\"error\":{\"message\":\"upstream exploded\"},\"usage\":{\"completion_tokens\":1}}\n\n")
@@ -154,7 +168,9 @@ func TestStreamRewriterKeepsAnErrorEventThatCarriesUsage(t *testing.T) {
 	}
 }
 
-// Upstream restates usage as null on every chunk once include_usage is forced.
+// Test flow:
+//  1. Write an SSE content event whose usage field is null.
+//  2. Assert the rewritten output no longer mentions usage.
 func TestStreamRewriterRemovesANullUsage(t *testing.T) {
 	t.Parallel()
 	event := []byte("data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hi\"}}],\"usage\":null}\n\n")
@@ -168,7 +184,11 @@ func TestStreamRewriterRemovesANullUsage(t *testing.T) {
 	}
 }
 
-// A dropped usage tail is not a truncated stream.
+// Test flow:
+//  1. Write a usage-only SSE chunk without its trailing blank-line terminator.
+//  2. Close the rewriter.
+//  3. Assert Close returns no error for the dropped usage tail.
+//  4. Assert Close emits nothing.
 func TestStreamRewriterCloseSeparatesADropFromATruncation(t *testing.T) {
 	t.Parallel()
 	rewriter := NewStreamRewriter(LogprobIntent{}, false)
@@ -185,8 +205,10 @@ func TestStreamRewriterCloseSeparatesADropFromATruncation(t *testing.T) {
 	}
 }
 
-// The switch exists to roll the forcing back without a redeploy, so what it produces must be the
-// client's own request rather than a third shape of its own.
+// Test flow:
+//  1. Normalize requests with KeepClientStream set, varying the client's stream field between false and true.
+//  2. Assert the body sent upstream preserves the client's own stream value.
+//  3. Assert no stream_options field is forced into the body.
 func TestKeepingTheClientStreamSendsWhatTheClientAsked(t *testing.T) {
 	t.Parallel()
 	testCases := []struct {
@@ -229,7 +251,9 @@ func TestKeepingTheClientStreamSendsWhatTheClientAsked(t *testing.T) {
 	}
 }
 
-// A client that never said "stream" must not have the field invented for it.
+// Test flow:
+//  1. Normalize a request with KeepClientStream set whose client body never mentions "stream".
+//  2. Assert the body sent upstream still has no "stream" field.
 func TestKeepingTheClientStreamLeavesAnUnaskedRequestAlone(t *testing.T) {
 	t.Parallel()
 

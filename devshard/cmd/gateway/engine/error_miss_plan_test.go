@@ -24,8 +24,10 @@ func raceEndingIn(attempt AttemptOutcome) RaceOutcome {
 	return RaceOutcome{RequestID: "req-1", EscrowID: "escrow-1", Model: "qwen", Attempts: []AttemptOutcome{attempt}}
 }
 
-// A host that answered with its own signed error is not a host that went silent: claiming the miss
-// settles the nonce on the evidence, where a timeout vote would ask the group to guess.
+// Test flow:
+//  1. Build a race ending in an attempt whose error stream carries a signed `MissProof`.
+//  2. Compute its `TimeoutPlan`.
+//  3. Assert the plan has one posted step of kind `SettleByMissClaim`, carrying the retained proof and the `TimeoutKindErrorMiss` event kind.
 func TestAnErrorTheHostSignedIsSettledAsAMiss(t *testing.T) {
 	proof := &MissProof{ResponsePayload: []byte(`{"events":["data: {\"error\":{}}"]}`), Complete: true}
 
@@ -48,8 +50,10 @@ func TestAnErrorTheHostSignedIsSettledAsAMiss(t *testing.T) {
 	}
 }
 
-// Without the body a verifier recomputes, there is nothing to claim: the nonce goes back to the
-// ordinary vote rather than being posted as a miss no one can check.
+// Test flow:
+//  1. Build a race ending in an attempt whose error carries no `MissProof`.
+//  2. Compute its `TimeoutPlan`.
+//  3. Assert the plan falls back to one posted `SettleByVote` step with the `TimeoutKindExecution` event kind.
 func TestAnErrorWithoutProofFallsBackToTheVote(t *testing.T) {
 	steps := raceEndingIn(attemptEndingInError(nil)).TimeoutPlan()
 
@@ -64,8 +68,10 @@ func TestAnErrorWithoutProofFallsBackToTheVote(t *testing.T) {
 	}
 }
 
-// The miss exists precisely because the host did finish -- with its own error. Skipping the nonce for
-// being finished is what would pay a host for an error, so proof overrides that skip.
+// Test flow:
+//  1. Build an attempt ending in a signed error, with `NonceFinished` also set.
+//  2. Compute its `TimeoutPlan`.
+//  3. Assert the plan still posts a `SettleByMissClaim` step rather than skipping the finished nonce.
 func TestAMissIsClaimedEvenThoughTheHostFinished(t *testing.T) {
 	attempt := attemptEndingInError(&MissProof{ResponsePayload: []byte(`{"events":["data: {\"error\":{}}"]}`)})
 	attempt.NonceFinished = true
@@ -80,7 +86,10 @@ func TestAMissIsClaimedEvenThoughTheHostFinished(t *testing.T) {
 	}
 }
 
-// Without proof the ordinary skip stands: a finished nonce is settled and asks the group for nothing.
+// Test flow:
+//  1. Build an attempt ending in error with no proof and `NonceFinished` set.
+//  2. Compute its `TimeoutPlan`.
+//  3. Assert the single resulting step is not posted.
 func TestAFinishedNonceWithoutProofIsStillSkipped(t *testing.T) {
 	attempt := attemptEndingInError(nil)
 	attempt.NonceFinished = true
@@ -95,8 +104,10 @@ func TestAFinishedNonceWithoutProofIsStillSkipped(t *testing.T) {
 	}
 }
 
-// The claim is only worth making with the host's signature behind it: the session holds the Finish,
-// the plan holds the body, and the verifier checks one against the other.
+// Test flow:
+//  1. Build a `SessionTimeouts` poster over a `scriptedTimeoutHandler` that holds a signed Finish.
+//  2. Settle a `SettleByMissClaim` timeout step through it.
+//  3. Assert the miss handler ran once and the ordinary vote handler did not run.
 func TestAClaimedMissGoesToTheMissHandler(t *testing.T) {
 	handler := &scriptedTimeoutHandler{finishTx: []byte("signed-finish")}
 	poster := &SessionTimeouts{handler: handler}
@@ -118,8 +129,10 @@ func TestAClaimedMissGoesToTheMissHandler(t *testing.T) {
 	}
 }
 
-// A Finish the session does not hold means every verifier would reject the claim for no_finish_tx,
-// so the nonce is better served by the ordinary vote than by a claim that cannot land.
+// Test flow:
+//  1. Build a `SessionTimeouts` poster over a `scriptedTimeoutHandler` holding no Finish.
+//  2. Settle a `SettleByMissClaim` timeout step through it.
+//  3. Assert the miss handler did not run and the ordinary vote handler ran once instead.
 func TestAMissWithNoSignedFinishFallsBackToTheVote(t *testing.T) {
 	handler := &scriptedTimeoutHandler{}
 	poster := &SessionTimeouts{handler: handler}
@@ -141,8 +154,9 @@ func TestAMissWithNoSignedFinishFallsBackToTheVote(t *testing.T) {
 	}
 }
 
-// A landed miss comes back as ErrInferenceMissed: the protocol says so and the caller must read it as
-// the settlement it is. Reading it as a failure would report every successful miss as a broken vote.
+// Test flow:
+//  1. Compute `TimeoutOutcome` for a `TimeoutKindErrorMiss` vote whose error wraps `user.ErrInferenceMissed`.
+//  2. Assert the action is `TimeoutActionCompleted` with no failure reason.
 func TestALandedMissIsReadAsSettledNotFailed(t *testing.T) {
 	action, reason := TimeoutOutcome(
 		TimeoutVote{Kind: TimeoutKindErrorMiss},
@@ -158,8 +172,10 @@ func TestALandedMissIsReadAsSettledNotFailed(t *testing.T) {
 	}
 }
 
-// A refused claim has to say why the group refused it and how whole the proof was, or a
-// reconstruction that keeps drifting is indistinguishable from one more failed vote.
+// Test flow:
+//  1. Build a `scriptedTimeoutHandler` whose result reports two verifier rejection reasons for a truncated proof.
+//  2. Settle a `SettleByMissClaim` step carrying that truncated proof.
+//  3. Assert the returned vote carries both rejection reasons and marks completeness as truncated.
 func TestARefusedClaimReportsWhatTheVerifiersSaid(t *testing.T) {
 	handler := &scriptedTimeoutHandler{
 		finishTx: []byte("signed-finish"),
@@ -182,7 +198,9 @@ func TestARefusedClaimReportsWhatTheVerifiersSaid(t *testing.T) {
 	}
 }
 
-// An ordinary vote carries no proof, so it names no completeness rather than guessing one.
+// Test flow:
+//  1. Settle a plain timeout step carrying no proof.
+//  2. Assert the returned vote's completeness is left unnamed.
 func TestAnOrdinaryVoteNamesNoCompleteness(t *testing.T) {
 	poster := &SessionTimeouts{handler: &scriptedTimeoutHandler{}}
 

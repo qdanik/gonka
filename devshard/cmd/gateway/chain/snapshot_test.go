@@ -2,8 +2,10 @@ package chain
 
 import "testing"
 
-// TestRawPoCBlockingStateAllCombinations covers all 5x5 epoch-phase x
-// confirmation-phase combinations; each expectation is a literal, not derived.
+// Test flow:
+//  1. Build the table of all 25 epoch-phase x confirmation-phase combinations, each with a literal expected blocked flag and reason.
+//  2. Assert the table has exactly 25 entries.
+//  3. For each combination, call rawPoCBlockingState and assert it returns the expected blocked flag and reason.
 func TestRawPoCBlockingStateAllCombinations(t *testing.T) {
 	cases := []struct {
 		name              string

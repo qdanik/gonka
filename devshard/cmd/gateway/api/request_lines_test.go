@@ -9,6 +9,10 @@ import (
 	"devshard/cmd/gateway/limits"
 )
 
+// Test flow:
+//  1. Start a harness and install a log capture.
+//  2. Send one non-streaming chat completion.
+//  3. Assert the flushed "request finished" info line carries the served outcome's fields.
 func TestAServedRequestWritesItsRecord(t *testing.T) {
 	logged := logcapture.Install(t)
 	live := newHarness(t)
@@ -23,7 +27,10 @@ func TestAServedRequestWritesItsRecord(t *testing.T) {
 	}})
 }
 
-// A crowned winner adds whether its nonce closed and how far its host's clock sits from the gateway's.
+// Test flow:
+//  1. Start a harness whose inference outcome is a won race (`benchOutcome`) tied to escrow "7".
+//  2. Send one non-streaming chat completion.
+//  3. Assert the flushed "request finished" line adds the winner's host, token counts, nonce-finished flag and clock-offset facts.
 func TestAServedRequestWithAWinnerWritesTheWinnersFacts(t *testing.T) {
 	logged := logcapture.Install(t)
 	live := newHarness(t)
@@ -41,6 +48,10 @@ func TestAServedRequestWithAWinnerWritesTheWinnersFacts(t *testing.T) {
 	}})
 }
 
+// Test flow:
+//  1. Start a harness whose inference fails with `ErrAllAttemptsFailed` before producing any reply.
+//  2. Send one non-streaming chat completion.
+//  3. Assert the flushed "request finished" line is logged at warn with the failed_before_first_byte outcome and the error text.
 func TestARaceThatFailedBeforeItsFirstByteWritesItsRecordAtWarn(t *testing.T) {
 	logged := logcapture.Install(t)
 	live := newHarness(t)
@@ -59,6 +70,10 @@ func TestARaceThatFailedBeforeItsFirstByteWritesItsRecordAtWarn(t *testing.T) {
 	}})
 }
 
+// Test flow:
+//  1. Start a harness whose inference streams one chunk and then fails with `ErrAllAttemptsFailed`.
+//  2. Send one streaming chat completion.
+//  3. Assert the flushed "request finished" line is logged at warn with the failed_mid_stream outcome, terminated true, and the error text.
 func TestAStreamThatFailedMidAnswerWritesItsRecordAtWarn(t *testing.T) {
 	logged := logcapture.Install(t)
 	live := newHarness(t)
@@ -77,6 +92,9 @@ func TestAStreamThatFailedMidAnswerWritesItsRecordAtWarn(t *testing.T) {
 	}})
 }
 
+// Test flow:
+//  1. Start a harness and send the same chat completion twice from the same caller.
+//  2. Assert the second, replayed request's flushed "request finished" line carries the cache_hit outcome and the replayed body's byte count.
 func TestACacheHitWritesTheShortRecord(t *testing.T) {
 	logged := logcapture.Install(t)
 	live := newHarness(t)
@@ -91,6 +109,10 @@ func TestACacheHitWritesTheShortRecord(t *testing.T) {
 	}})
 }
 
+// Test flow:
+//  1. Start a harness whose limiter refuses with a "too many concurrent requests" reason.
+//  2. Send one chat completion.
+//  3. Assert the flushed line logs the refusal at warn with the reason mapped to `concurrent_requests`.
 func TestALimiterRefusalIsLoggedWithTheCapItHit(t *testing.T) {
 	logged := logcapture.Install(t)
 	live := newHarness(t)
@@ -104,7 +126,10 @@ func TestALimiterRefusalIsLoggedWithTheCapItHit(t *testing.T) {
 	}})
 }
 
-// The refusal is the only place a truncated answer is named, so this line is the operator's contract.
+// Test flow:
+//  1. Start a harness whose inference streams one reasoning chunk and then stops without an answer.
+//  2. Send one streaming chat completion.
+//  3. Assert the flushed line warns that a host stopped mid-answer with the request, model and escrow fields.
 func TestAHostThatStoppedMidAnswerIsLogged(t *testing.T) {
 	logged := logcapture.Install(t)
 	live := newHarness(t)

@@ -17,6 +17,10 @@ func foldChunked(t *testing.T, body []byte, intent LogprobIntent, size int) []by
 	return folder.Body()
 }
 
+// Test flow:
+//  1. Compute the expected body by assembling the case's raw SSE body whole and stripping it per the case's LogprobIntent.
+//  2. Fold the same body through `foldChunked` at several chunk sizes: 1, 7, 64 bytes and the whole body at once.
+//  3. Assert every chunk size arrives at the same body as the whole-body assembly, across deltas merging into one completion, an already-whole completion, an empty stream, a non-SSE body, internal fields hidden from the client, and logprobs the client asked to keep.
 func TestFoldingArrivesAtWhatTheWholeBodyWouldHaveAssembled(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -65,6 +69,10 @@ func TestFoldingArrivesAtWhatTheWholeBodyWouldHaveAssembled(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build an SSE stream with one more event than maxAssembledEvents.
+//  2. Fold the stream through `foldChunked`.
+//  3. Assert the folded result is TruncatedResponseBody, matching what the assembler reports.
 func TestFoldingStopsAtTheEventBudget(t *testing.T) {
 	var body bytes.Buffer
 	for range maxAssembledEvents + 1 {

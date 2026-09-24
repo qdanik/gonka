@@ -5,6 +5,11 @@ import (
 	"testing"
 )
 
+// Test flow:
+//  1. Build an inflight gauge and acquire "alice" three times.
+//  2. Release once and assert the count drops to 2.
+//  3. Release a second time and assert the count drops to 1.
+//  4. Release a third time and assert the count reaches 0 and the participant's key is dropped from the counts map.
 func TestInflightGaugeAcquireReleaseBalance(t *testing.T) {
 	g := newInflightGauge()
 	g.acquire("alice")
@@ -30,6 +35,10 @@ func TestInflightGaugeAcquireReleaseBalance(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. For each case, acquire "alice" the case's acquire count and then release it the case's release count, varying combinations of extra releases: none, one, and several past zero.
+//  2. Assert the count settles at 0 for every case.
+//  3. Assert the counts map is empty afterward.
 func TestInflightGaugeReleaseNeverGoesNegative(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -59,6 +68,9 @@ func TestInflightGaugeReleaseNeverGoesNegative(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build an inflight gauge.
+//  2. Assert the count for a participant that was never acquired is 0.
 func TestInflightGaugeCountUnknownParticipantIsZero(t *testing.T) {
 	g := newInflightGauge()
 	if got := g.count("nobody"); got != 0 {
@@ -66,16 +78,23 @@ func TestInflightGaugeCountUnknownParticipantIsZero(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build an inflight gauge, acquire and release "alice" so her count returns to 0 and her key is dropped.
+//  2. Assert alice's count matches "bob", a participant never seen.
 func TestInflightGaugeFreshParticipantMatchesDroppedParticipant(t *testing.T) {
 	g := newInflightGauge()
 	g.acquire("alice")
-	g.release("alice") // back to 0, key must be dropped
+	g.release("alice")
 
 	if got := g.count("alice"); got != g.count("bob") {
 		t.Fatalf("count(alice, dropped) = %d, count(bob, never seen) = %d, want equal", got, g.count("bob"))
 	}
 }
 
+// Test flow:
+//  1. Build an inflight gauge; acquire "alice" twice and "bob" once.
+//  2. Assert alice's count is 2 and bob's is 1.
+//  3. Release alice once and assert bob's count is unaffected at 1.
 func TestInflightGaugeTracksParticipantsIndependently(t *testing.T) {
 	g := newInflightGauge()
 	g.acquire("alice")
@@ -95,6 +114,11 @@ func TestInflightGaugeTracksParticipantsIndependently(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build an inflight gauge.
+//  2. Run 200 goroutines that each acquire then release the same participant "shared".
+//  3. Wait for all goroutines to finish.
+//  4. Assert the count settles at 0 and the participant's key is dropped.
 func TestInflightGaugeConcurrentAcquireReleaseSettlesAtZero(t *testing.T) {
 	g := newInflightGauge()
 	const goroutines = 200
@@ -117,9 +141,11 @@ func TestInflightGaugeConcurrentAcquireReleaseSettlesAtZero(t *testing.T) {
 	}
 }
 
-// TestInflightGaugeConcurrentAcquireReachesExactTotalBeforeRelease uses a
-// start/release barrier (no sleeps) to pin the exact in-flight peak under
-// concurrency, not just the settled-to-zero end state.
+// Test flow:
+//  1. Build an inflight gauge and start 200 goroutines that each acquire "shared", then block on a shared release channel before releasing.
+//  2. Wait until all goroutines have acquired.
+//  3. Assert the count is exactly 200 while none have released yet.
+//  4. Close the release channel, wait for all goroutines to release, and assert the count settles back to 0.
 func TestInflightGaugeConcurrentAcquireReachesExactTotalBeforeRelease(t *testing.T) {
 	g := newInflightGauge()
 	const goroutines = 200

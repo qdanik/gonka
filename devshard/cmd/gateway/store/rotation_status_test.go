@@ -6,6 +6,10 @@ import (
 	"time"
 )
 
+// Test flow:
+//  1. Save a `RotationStatus` row for one model and role.
+//  2. Save a second row for the same model and role with a different stage, epoch, completion, and timestamp.
+//  3. Assert `LoadRotationStatuses` returns exactly one row, holding the second save's fields.
 func TestRotationStatusUpsertByModelRoleReplaces(t *testing.T) {
 	testStore := openTestStore(t)
 	ctx := context.Background()
@@ -49,6 +53,9 @@ func TestRotationStatusUpsertByModelRoleReplaces(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Save a `RotationStatus` row for role "temp" and another for role "regular", both under the same model.
+//  2. Assert `LoadRotationStatuses` returns both as distinct rows.
 func TestRotationStatusDistinguishesRoleWithinSameModel(t *testing.T) {
 	testStore := openTestStore(t)
 	ctx := context.Background()
@@ -71,6 +78,9 @@ func TestRotationStatusDistinguishesRoleWithinSameModel(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Save three `RotationStatus` rows across two models and mixed roles, in an arbitrary insertion order.
+//  2. Assert `LoadRotationStatuses` returns them sorted by model then role.
 func TestLoadRotationStatusesDeterministicOrder(t *testing.T) {
 	testStore := openTestStore(t)
 	ctx := context.Background()

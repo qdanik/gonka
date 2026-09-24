@@ -13,7 +13,7 @@ import (
 	"devshard/types"
 )
 
-// An epoch's worth of traffic: tens of escrows, a group each, thousands of nonces across them.
+// An epoch's worth of traffic.
 const (
 	benchEscrows         = 20
 	benchGroupSize       = 16
@@ -29,8 +29,7 @@ func benchParticipant(index int) string {
 	return "gonka1participant" + string(rune('a'+index/26)) + string(rune('a'+index%26))
 }
 
-// benchBook fills a book the way a live epoch does: every nonce classified, a quarter of them still
-// carrying escrow money, host stats and challenges on every slot.
+// benchBook fills a book the way a live epoch does, with every nonce classified.
 func benchBook(b *testing.B) *Book {
 	b.Helper()
 	book := NewBook(func() time.Time { return time.Unix(1700000000, 0).UTC() })
@@ -187,8 +186,7 @@ func BenchmarkSnapshot(b *testing.B) {
 	}
 }
 
-// The write path: one race of a group's worth of attempts, each landing in a counter it did not hold
-// before, which is what every reclassification does.
+// BenchmarkRecordRace times one race of a group's worth of attempts.
 func BenchmarkRecordRace(b *testing.B) {
 	book := benchBook(b)
 	escrowID := benchEscrowID(0)
@@ -217,7 +215,7 @@ func BenchmarkRecordRace(b *testing.B) {
 	}
 }
 
-// The sweep's per-escrow read: every nonce walked, the unfinished ones gathered and ordered.
+// BenchmarkUnfinishedNonces times the sweep's per-escrow read of unfinished nonces.
 func BenchmarkUnfinishedNonces(b *testing.B) {
 	book := benchBook(b)
 	escrowID := benchEscrowID(0)
@@ -229,7 +227,7 @@ func BenchmarkUnfinishedNonces(b *testing.B) {
 	}
 }
 
-// The sweep's money pass over one escrow, as the escrow state hands it over.
+// BenchmarkObserveInferences times the sweep's money pass over one escrow.
 func BenchmarkObserveInferences(b *testing.B) {
 	book := benchBook(b)
 	escrowID := benchEscrowID(0)
@@ -258,7 +256,7 @@ func BenchmarkEvents(b *testing.B) {
 	}
 }
 
-// The whole participants route: the query, the findings and the JSON that leaves the gateway.
+// BenchmarkServeParticipants times the whole participants route: query, findings and JSON encoding.
 func BenchmarkServeParticipants(b *testing.B) {
 	handler := NewHandler(benchBook(b), func(context.Context) (uint64, error) { return 41, nil }, nil)
 	request := httptest.NewRequest(http.MethodGet, "/api/v1/epochs/41/participants", nil)

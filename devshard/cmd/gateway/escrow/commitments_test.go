@@ -14,9 +14,7 @@ import (
 	"devshard/signing"
 )
 
-// fakeTxClient stubs escrowTxClient. createEscrowFn should mirror the real
-// chain.TxClient.CreateEscrow contract: call onPrepared(txHash) and only
-// produce a result if onPrepared returns nil.
+// fakeTxClient stubs escrowTxClient.
 type fakeTxClient struct {
 	createEscrowFn  func(ctx context.Context, signer *signing.Secp256k1Signer, amount uint64, modelID string, onPrepared func(string) error) (chain.CreateEscrowResult, error)
 	getTxEscrowIDFn func(ctx context.Context, txHash string) (uint64, bool, error)
@@ -48,8 +46,7 @@ func (f *fakeTxClient) SettleEscrow(ctx context.Context, signer *signing.Secp256
 	return chain.SettleEscrowResult{}, errors.New("fakeTxClient: SettleEscrow not stubbed")
 }
 
-// TxCommitted answers for a settle already broadcast. The zero value reports "not on chain", which is
-// what a fake with no recorded settle should say.
+// TxCommitted answers for a settle already broadcast.
 func (f *fakeTxClient) TxCommitted(_ context.Context, txHash string) (bool, error) {
 	if f.calls != nil {
 		f.calls.record("TxCommitted")
@@ -74,8 +71,7 @@ func (f *fakeTxClient) GetEscrow(ctx context.Context, escrowID string) (chain.Es
 	return chain.EscrowInfo{}, false, errors.New("fakeTxClient: GetEscrow not stubbed")
 }
 
-// fakeStore stubs escrowStore in memory. WithRetry calls fn once; retry timing is store/retry_test.go's.
-// upsertDevshardErrByID overrides the blanket upsertDevshardErr, and savedCommitments keeps deleted ones.
+// fakeStore stubs escrowStore in memory.
 type fakeStore struct {
 	mu sync.Mutex
 
@@ -143,8 +139,7 @@ func (f *fakeStore) DeleteCommitment(ctx context.Context, txHash string) error {
 	return nil
 }
 
-// UpsertDevshard mirrors the store's contract: every field of an existing row is replaced except
-// SettlementPending and OnHold, which only their own statements move.
+// UpsertDevshard mirrors the store's contract for replacing an existing row.
 func (f *fakeStore) UpsertDevshard(ctx context.Context, record store.DevshardRecord) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -222,8 +217,7 @@ func (f *fakeStore) SetDevshardSettlementPending(ctx context.Context, escrowID s
 	return nil
 }
 
-// ParkForSettlement writes both fields at once, the way the store does: a fake that wrote them
-// separately would let a test pass against the shape the real one cannot produce.
+// ParkForSettlement writes both fields at once, the way the store does.
 func (f *fakeStore) ParkForSettlement(_ context.Context, escrowID string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -389,8 +383,11 @@ func testSigner(t *testing.T) *signing.Secp256k1Signer {
 	return signer
 }
 
-// INVARIANT 1: a failed intent write must abort before any chain broadcast,
-// leaving zero commitments and zero devshards -- never a broadcast with a lost intent.
+// Test flow:
+//  1. Configure a fake store whose SaveCommitment and UpsertDevshard both fail.
+//  2. Build a fake chain client that fails the test if CreateEscrow ever broadcasts past `onPrepared`.
+//  3. Call `createEscrow` and assert it returns an error.
+//  4. Assert the store holds zero devshards and zero commitments afterward.
 func TestCreateEscrowAbortsWhenIntentWriteFails(t *testing.T) {
 	testStore := newFakeStore()
 	testStore.saveCommitmentErr = errors.New("store unavailable")
@@ -428,7 +425,11 @@ func TestCreateEscrowAbortsWhenIntentWriteFails(t *testing.T) {
 	}
 }
 
-// A signer that cannot be resolved must abort before the chain client is even called.
+// Test flow:
+//  1. Build a fake chain client that fails the test if CreateEscrow is ever called.
+//  2. Configure the signer source to fail resolution.
+//  3. Call `createEscrow` and assert it returns an error.
+//  4. Assert the chain client's CreateEscrow was never invoked.
 func TestCreateEscrowSignerResolutionFailureNeverCallsChain(t *testing.T) {
 	txClient := &fakeTxClient{
 		createEscrowFn: func(ctx context.Context, signer *signing.Secp256k1Signer, amount uint64, modelID string, onPrepared func(string) error) (chain.CreateEscrowResult, error) {
@@ -453,8 +454,12 @@ func TestCreateEscrowSignerResolutionFailureNeverCallsChain(t *testing.T) {
 	}
 }
 
-// Happy path: the intent commitment is written (with every field) before the
-// chain call returns, and the devshard is persisted once it does.
+// Test flow:
+//  1. Build a fake chain client that validates the amount and model id, then completes CreateEscrow with escrow id 42.
+//  2. Call `createEscrow` with a fixed clock, an epoch and a block height.
+//  3. Assert the signer was resolved with the model's configured private key env.
+//  4. Assert the intent commitment was saved with every field populated before it is cleared.
+//  5. Assert the resulting devshard record is persisted and the commitment store ends up empty.
 func TestCreateEscrowHappyPathPersistsDevshardAndClearsCommitment(t *testing.T) {
 	testStore := newFakeStore()
 	fixedNow := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
@@ -515,8 +520,11 @@ func TestCreateEscrowHappyPathPersistsDevshardAndClearsCommitment(t *testing.T) 
 	}
 }
 
-// INVARIANT 1/6: when the post-broadcast registry write fails, the commitment
-// survives so a later reconcile can recover the escrow by tx hash.
+// Test flow:
+//  1. Configure the fake store's UpsertDevshard to fail so the post-broadcast registry write fails.
+//  2. Call `createEscrow`, which broadcasts successfully but then fails to persist; assert the error, an empty devshard list, and the commitment kept for recovery.
+//  3. Clear the store failure and stub GetTxEscrowID to resolve the same tx hash to its escrow id.
+//  4. Run `reconcile` and assert it clears the commitment and persists the recovered devshard record.
 func TestCreateEscrowPersistFailureRecoversViaReconcile(t *testing.T) {
 	testStore := newFakeStore()
 	testStore.upsertDevshardErr = errors.New("registry unavailable")
@@ -553,7 +561,6 @@ func TestCreateEscrowPersistFailureRecoversViaReconcile(t *testing.T) {
 		t.Fatalf("LoadCommitments() = %+v, want exactly the TX-CRASH commitment kept for recovery", commitments)
 	}
 
-	// The store recovers, and reconcile resolves the same tx hash to its escrow id.
 	testStore.upsertDevshardErr = nil
 	txClient.getTxEscrowIDFn = func(ctx context.Context, txHash string) (uint64, bool, error) {
 		if txHash != "TX-CRASH" {
@@ -577,8 +584,11 @@ func TestCreateEscrowPersistFailureRecoversViaReconcile(t *testing.T) {
 	}
 }
 
-// reconcile's decision table (INVARIANTS 5/6): every GetTxEscrowID outcome
-// must map to exactly the documented clear/keep/recover action.
+// Test flow:
+//  1. Seed the fake store with one commitment matching the case, and pre-record a create-breaker failure when the case expects a persisted devshard.
+//  2. Run `reconcile` with the case's stubbed GetTxEscrowID.
+//  3. Assert the returned error, whether the commitment is kept or cleared, and whether a devshard record is persisted with the breaker reset.
+//  4. The table varies the GetTxEscrowID outcome: escrow id found, committed but failed with no escrow event, not found within the retry grace window, not found past the grace window, and an unreachable endpoint.
 func TestReconcileDecisionTable(t *testing.T) {
 	fixedNow := time.Date(2026, 3, 3, 12, 0, 0, 0, time.UTC)
 
@@ -634,7 +644,6 @@ func TestReconcileDecisionTable(t *testing.T) {
 			}
 			breaker := newCreateBreaker()
 			if tt.wantDevshard != nil {
-				// pre-record a failure so a successful persist's breaker reset is observable.
 				breaker.recordFailure(tt.commitment.Model, tt.commitment.Role)
 			}
 			m := &Manager{
@@ -683,8 +692,10 @@ func TestReconcileDecisionTable(t *testing.T) {
 	}
 }
 
-// txMayStillLand gates the reconcile clear-vs-keep decision on the unordered-tx
-// TTL grace window, with a zero CreatedAt defensively treated as still-pending.
+// Test flow:
+//  1. Build a Manager with a fixed clock.
+//  2. Call `txMayStillLand` with a commitment whose CreatedAt varies across the table.
+//  3. Assert the result matches the case's expectation. The table varies CreatedAt across: the zero value, freshly created, exactly at the grace boundary, and just past the grace boundary.
 func TestTxMayStillLand(t *testing.T) {
 	fixedNow := time.Date(2026, 4, 4, 0, 0, 0, 0, time.UTC)
 	m := &Manager{now: func() time.Time { return fixedNow }}
@@ -709,7 +720,10 @@ func TestTxMayStillLand(t *testing.T) {
 	}
 }
 
-// Recorded at creation, not re-derived on the next boot, which is a different version after a redeploy.
+// Test flow:
+//  1. Build a Manager configured with route prefix "/devshard/v3".
+//  2. Call `persistEscrow` for one commitment.
+//  3. Assert the resulting devshard record's RoutePrefix is stamped with the Manager's route prefix at persist time.
 func TestPersistEscrowStampsTheVersionItWasMintedUnder(t *testing.T) {
 	testStore := newFakeStore()
 	m := &Manager{store: testStore, breaker: newCreateBreaker(), now: time.Now, routePrefix: "/devshard/v3"}
@@ -732,7 +746,10 @@ func TestPersistEscrowStampsTheVersionItWasMintedUnder(t *testing.T) {
 	}
 }
 
-// INVARIANT 4: registering the same escrow id twice is a success no-op, not an error.
+// Test flow:
+//  1. Call `persistEscrow` twice for the same escrow id and commitment.
+//  2. Assert both calls return nil.
+//  3. Assert the store ends up with exactly one devshard record, not a duplicate.
 func TestPersistEscrowSameEscrowIDTwiceIsSuccessNoOp(t *testing.T) {
 	testStore := newFakeStore()
 	m := &Manager{store: testStore, breaker: newCreateBreaker(), now: time.Now}
@@ -754,10 +771,11 @@ func TestPersistEscrowSameEscrowIDTwiceIsSuccessNoOp(t *testing.T) {
 	}
 }
 
-// A commitment can outlive its own create: the gateway dies between registering the escrow and
-// dropping the commitment. By the time reconcile finds it, that escrow may already be parked with a
-// settle transaction recorded — and re-registering it would flip it active and wipe the hash the
-// settlement reconciliation depends on.
+// Test flow:
+//  1. Seed the store with an already-parked devshard record that has a settle tx hash recorded.
+//  2. Seed a commitment that resolves via GetTxEscrowID to the same escrow id.
+//  3. Run `reconcile`.
+//  4. Assert the record stays inactive with its settle tx hash untouched, and the commitment is cleared so it is not retried again.
 func TestReconcileLeavesAnAlreadyRegisteredEscrowAlone(t *testing.T) {
 	testStore := newFakeStore()
 	parked := store.DevshardRecord{

@@ -24,8 +24,7 @@ func newTestBook(t *testing.T, groupSize int) *Book {
 	return book
 }
 
-// openTestEscrow gives every escrow the same slot-to-participant mapping, so a test that opens a
-// second one varies the epoch and nothing else.
+// openTestEscrow gives every escrow the same slot-to-participant mapping.
 func openTestEscrow(t *testing.T, book *Book, escrowID string, epoch uint64, groupSize int) {
 	t.Helper()
 	slots := make([]types.SlotAssignment, 0, groupSize)
@@ -87,6 +86,10 @@ func assertDisposition(t *testing.T, book *Book, nonce uint64, groupSize int, wa
 	}
 }
 
+// Test flow:
+//  1. Record a ghost on nonce 5 with reason "participant_window_full_no_send".
+//  2. Assert the nonce's disposition is `DispositionGhost`.
+//  3. Assert every ghost counter carries that same reason string.
 func TestGhostIsCountedWithItsReason(t *testing.T) {
 	book := newTestBook(t, 4)
 	if err := book.RecordGhost(testEscrow, 5, "participant_window_full_no_send"); err != nil {
@@ -104,6 +107,9 @@ func TestGhostIsCountedWithItsReason(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. For each table case, record a finished race attempt with the case's usage: winner, loser or unknown.
+//  2. Assert the nonce's disposition matches the case's expected disposition.
 func TestFinishedNoncesSplitByWhoUsedTheAnswer(t *testing.T) {
 	for _, testCase := range []struct {
 		name  string
@@ -125,8 +131,11 @@ func TestFinishedNoncesSplitByWhoUsedTheAnswer(t *testing.T) {
 	}
 }
 
-// An unfinished nonce is worth nothing until its timeout settles: classifying it early would name a
-// disposition the settlement is still free to change.
+// Test flow:
+//  1. Record a race with one sent, unfinished attempt on nonce 6.
+//  2. Assert the slot has no disposition yet and counts the nonce as pending.
+//  3. Record a timeout for nonce 6 with outcome "completed".
+//  4. Assert the disposition becomes `DispositionUnfinishedExecution` and pending drops to 0.
 func TestUnfinishedNonceStaysPendingUntilItsTimeoutSettles(t *testing.T) {
 	book := newTestBook(t, 4)
 	attempt := Attempt{Nonce: 6, Sent: true, Finished: false}
@@ -151,6 +160,10 @@ func TestUnfinishedNonceStaysPendingUntilItsTimeoutSettles(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Record a race with one sent, unfinished attempt on nonce 6.
+//  2. Record a timeout for nonce 6 with kind `engine.TimeoutKindRefused`.
+//  3. Assert the disposition is `DispositionUnfinishedRefused`.
 func TestUnfinishedNonceThatWasNeverAcknowledgedCountsAsRefused(t *testing.T) {
 	book := newTestBook(t, 4)
 	attempt := Attempt{Nonce: 6, Sent: true, Finished: false}
@@ -163,8 +176,10 @@ func TestUnfinishedNonceThatWasNeverAcknowledgedCountsAsRefused(t *testing.T) {
 	assertDisposition(t, book, 6, 4, DispositionUnfinishedRefused)
 }
 
-// The counters describe the present, so a nonce that changes disposition must move rather than be
-// counted twice. This is the property that keeps the ledger's total equal to the nonces it saw.
+// Test flow:
+//  1. Record a race on nonce 8 with usage loser and assert the disposition is `DispositionFinishedUnused`.
+//  2. Record the same nonce again, now with usage winner.
+//  3. Assert the disposition moved to `DispositionFinishedUsed` rather than adding a second count.
 func TestReclassificationMovesANonceRatherThanDuplicatingIt(t *testing.T) {
 	book := newTestBook(t, 4)
 	if err := book.RecordRace(testEscrow, []Attempt{{Nonce: 8, Sent: true, Finished: true, Usage: UsageLoser}}); err != nil {
@@ -172,13 +187,15 @@ func TestReclassificationMovesANonceRatherThanDuplicatingIt(t *testing.T) {
 	}
 	assertDisposition(t, book, 8, 4, DispositionFinishedUnused)
 
-	// The same race is reported again with the answer now known to have reached the client.
 	if err := book.RecordRace(testEscrow, []Attempt{{Nonce: 8, Sent: true, Finished: true, Usage: UsageWinner}}); err != nil {
 		t.Fatalf("RecordRace(): %v", err)
 	}
 	assertDisposition(t, book, 8, 4, DispositionFinishedUsed)
 }
 
+// Test flow:
+//  1. Record a ghost against an escrow id the book never opened.
+//  2. Assert the call returns `ErrUnknownEscrow`.
 func TestAFactForAnUnopenedEscrowIsRefused(t *testing.T) {
 	book := newTestBook(t, 4)
 	err := book.RecordGhost("escrow-unknown", 1, "poc_unavailable_host")
@@ -187,6 +204,9 @@ func TestAFactForAnUnopenedEscrowIsRefused(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. For each table case of latest nonce, group size and slot id, call `assignedForSlot`.
+//  2. Assert the result matches the case's expected assigned count, covering slot zero, an inner slot, the last slot, a slot beyond the latest nonce, and nothing spent yet.
 func TestAssignedFollowsTheChainsModuloConvention(t *testing.T) {
 	for _, testCase := range []struct {
 		name      string
@@ -210,7 +230,10 @@ func TestAssignedFollowsTheChainsModuloConvention(t *testing.T) {
 	}
 }
 
-// Every assigned nonce is accounted for exactly once: classified, pending, or never seen.
+// Test flow:
+//  1. Open a book, observe the latest nonce as 12, record a ghost on nonce 5, and record a race with one finished and one unfinished attempt.
+//  2. For each slot, sum classified dispositions, pending, in-flight and unobserved counts.
+//  3. Assert that sum equals the slot's assigned count with nothing overcounted.
 func TestEveryAssignedNonceIsAccountedForExactlyOnce(t *testing.T) {
 	const groupSize = 4
 	book := newTestBook(t, groupSize)
@@ -245,6 +268,10 @@ func TestEveryAssignedNonceIsAccountedForExactlyOnce(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Observe host stats for slot 2 reporting 3 misses and 1 invalid.
+//  2. Find the record for slot 2's participant.
+//  3. Assert its chain-missed and chain-invalid tallies match the observed 3 and 1.
 func TestChainTalliesTravelBesideTheLedgersOwn(t *testing.T) {
 	book := newTestBook(t, 4)
 	if err := book.ObserveHostStats(testEscrow, 2, types.HostStats{Missed: 3, Invalid: 1}); err != nil {
@@ -273,8 +300,10 @@ func unclassifiedOfSlot(t *testing.T, book *Book, slotID uint32) uint64 {
 	return 0
 }
 
-// The per-epoch view groups by the escrow's epoch, so re-opening a live escrow every sweep must not
-// drag its history into whichever epoch is current now.
+// Test flow:
+//  1. Record a ghost against a freshly opened escrow.
+//  2. Re-open the same escrow id with a later creation epoch.
+//  3. Assert every record still reports the original epoch it was first seen in.
 func TestReopeningAnEscrowKeepsTheEpochItWasFirstSeenIn(t *testing.T) {
 	book := newTestBook(t, 2)
 	if err := book.RecordGhost(testEscrow, 1, "participant_window_full_no_send"); err != nil {
@@ -298,8 +327,10 @@ func TestReopeningAnEscrowKeepsTheEpochItWasFirstSeenIn(t *testing.T) {
 	}
 }
 
-// Every race fact must survive the trip into the bucket; a dropped one is invisible in the totals and
-// only shows up as a finding that never fires.
+// Test flow:
+//  1. Observe the latest nonce as 1 and record a race attempt carrying every race fact: terminal, phase, slow receipt, slow chunk and clock drift.
+//  2. Assert the query returns one record holding exactly one counter bucket.
+//  3. Assert that bucket's key carries every one of those race facts.
 func TestRaceFactsReachTheCounters(t *testing.T) {
 	book := newTestBook(t, 1)
 	if err := book.ObserveLatestNonce(testEscrow, 1); err != nil {
@@ -324,8 +355,11 @@ func TestRaceFactsReachTheCounters(t *testing.T) {
 	}
 }
 
-// A nonce classified without the race ever reporting on it must still name a terminal: a blank one
-// reads as missing data and silently drops the bucket from any grouping by terminal.
+// Test flow:
+//  1. Observe the latest nonce as 1 and record a race attempt on nonce 1 with no terminal reported.
+//  2. Mark nonce 1 finished directly, bypassing the race's own terminal report.
+//  3. Assert the query returns exactly one counter bucket.
+//  4. Assert that bucket's terminal is `TerminalUnreported` rather than blank.
 func TestANonceWithoutRaceFactsStillNamesATerminal(t *testing.T) {
 	book := newTestBook(t, 1)
 	if err := book.ObserveLatestNonce(testEscrow, 1); err != nil {
@@ -348,7 +382,11 @@ func TestANonceWithoutRaceFactsStillNamesATerminal(t *testing.T) {
 	}
 }
 
-// Epochs overlap during a rotation, so clearing one must not take the neighbour that is still live.
+// Test flow:
+//  1. Build a `twoEpochBook` fixture and confirm the target epoch has records to clear.
+//  2. Reset that epoch.
+//  3. Assert the reset reports 1 escrow cleared.
+//  4. Assert the target epoch's records are gone while the neighbouring epoch's records and escrow id remain.
 func TestResetClearsOneEpochAndLeavesTheRest(t *testing.T) {
 	book := twoEpochBook(t)
 	if len(book.Query(QueryFilter{EpochIndex: testEpoch})) == 0 {
@@ -371,9 +409,12 @@ func TestResetClearsOneEpochAndLeavesTheRest(t *testing.T) {
 	}
 }
 
-// A reset that is not written out is undone by the next restart, which is the one moment an operator
-// is least likely to be watching. The service is exercised rather than the book, because writing it
-// out is the service's half of the job.
+// Test flow:
+//  1. Build a `Service` over a real store, open an escrow, and record a ghost against it.
+//  2. Flush the ledger to the store before resetting.
+//  3. Reset the epoch through the service.
+//  4. Load the store's snapshot into a fresh book and restore it.
+//  5. Assert the restored book has no records for the escrow, so the reset survives a restart.
 func TestResetIsWrittenOutSoARestartCannotUndoIt(t *testing.T) {
 	store := openTestStore(t)
 	service, err := NewService(Settings{Store: store, Now: func() time.Time { return time.Unix(0, 0).UTC() }})
@@ -385,7 +426,6 @@ func TestResetIsWrittenOutSoARestartCannotUndoIt(t *testing.T) {
 	if err := service.Book.RecordGhost(testEscrow, 1, "poc_unavailable_host"); err != nil {
 		t.Fatalf("RecordGhost(): %v", err)
 	}
-	// Written out first, so the store holds something a reset that forgot to flush would leave behind.
 	if err := service.Flush(); err != nil {
 		t.Fatalf("Flush(): %v", err)
 	}
@@ -407,9 +447,9 @@ func TestResetIsWrittenOutSoARestartCannotUndoIt(t *testing.T) {
 	}
 }
 
-// The chain's latest nonce is polled on a sweep while races report continuously, so between sweeps a
-// busy escrow classifies nonces beyond the last polled range. Counting that as overcounted blames the
-// chain for the gateway's own polling interval.
+// Test flow:
+//  1. Record a race with two finished, winning attempts on nonces 10 and 12, ahead of any latest-nonce sweep.
+//  2. Assert no record reports a nonzero overcounted total.
 func TestNoncesSeenBetweenSweepsDoNotReadAsADisagreement(t *testing.T) {
 	book := newTestBook(t, 2)
 
@@ -428,7 +468,11 @@ func TestNoncesSeenBetweenSweepsDoNotReadAsADisagreement(t *testing.T) {
 	}
 }
 
-// A nonce only a timeout ever touched stays pending until its timeout action arrives, then reads as an unfinished refusal, not a ghost. See README.md.
+// Test flow:
+//  1. Record a timeout for nonce 6 with no timeout action yet, before any race ever touched it.
+//  2. Assert the slot has no disposition and counts the nonce as pending.
+//  3. Record the same nonce's timeout again, now with action "completed".
+//  4. Assert the disposition becomes `DispositionUnfinishedRefused`, not a ghost.
 func TestANonceRecordedOnlyByATimeoutStaysPendingThenReadsRefused(t *testing.T) {
 	book := newTestBook(t, 4)
 	slot := slotOfNonce(6, 4)
@@ -449,6 +493,10 @@ func TestANonceRecordedOnlyByATimeoutStaysPendingThenReadsRefused(t *testing.T) 
 	assertDisposition(t, book, 6, 4, DispositionUnfinishedRefused)
 }
 
+// Test flow:
+//  1. Record a ghost on nonce 4, then record its timeout with kind "refused" and action "completed".
+//  2. Find the counter carrying that ghost reason.
+//  3. Assert its timeout action is "completed" and its disposition stays `DispositionGhost`.
 func TestAChargedBurnCarriesItsTimeoutOutcome(t *testing.T) {
 	book := newTestBook(t, 2)
 	if err := book.RecordGhost(testEscrow, 4, "participant_window_full_no_send"); err != nil {

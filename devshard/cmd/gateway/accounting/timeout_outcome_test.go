@@ -6,6 +6,10 @@ import (
 	"devshard/types"
 )
 
+// Test flow:
+//  1. For each table case of a legacy action and reason string, call `timeoutOutcomeOf`.
+//  2. Assert the settled flag matches the case's expectation.
+//  3. Where settled is true, assert the returned outcome matches the case's wanted `TimeoutOutcome`.
 func TestTimeoutOutcomeOfSpeaksTheOldLedgersVocabulary(t *testing.T) {
 	cases := []struct {
 		action, reason string
@@ -33,6 +37,10 @@ func TestTimeoutOutcomeOfSpeaksTheOldLedgersVocabulary(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Open an escrow with two slots and record two timeouts: one completed, one failed with no votes applied.
+//  2. Sum the timeout outcomes across the epoch's records.
+//  3. Assert `TimeoutApplied` is 1 and `TimeoutInsufficientVotes` is 1.
 func TestTimeoutOutcomesReachTheParticipantRecord(t *testing.T) {
 	book := NewBook(nil)
 	if err := book.OpenEscrow(EscrowMetadata{

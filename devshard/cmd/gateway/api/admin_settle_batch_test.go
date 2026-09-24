@@ -34,8 +34,12 @@ func decodeBatchSettle(t *testing.T, body []byte) batchSettleAnswer {
 	return answer
 }
 
-// A list must not fail whole over its worst entry: each escrow carries the status the single-escrow
-// route would have returned for it, so an operator reads one 200 instead of replaying the list.
+// Test flow:
+//  1. Register two devshards (escrows "7" and "9"), mark "9" busy, and set the settle result for escrow 7.
+//  2. POST a batch settle for escrows "7", "9", and an unregistered "404".
+//  3. Assert the response is 200 with settled=1 and failed=2 across 3 results.
+//  4. Assert escrow 7's result carries its transaction hash and settler with no failure status.
+//  5. Assert escrow 9 answers 409 (busy) and escrow 404 answers 404 (unregistered).
 func TestABatchSettleAnswersForEveryEscrowItWasGiven(t *testing.T) {
 	live := newHarness(t)
 	live.control.devshards = []store.DevshardRecord{
@@ -79,8 +83,7 @@ func TestABatchSettleAnswersForEveryEscrowItWasGiven(t *testing.T) {
 // settleBarrierGrace lets a sequential run finish and be judged on its peak rather than hang.
 const settleBarrierGrace = 200 * time.Millisecond
 
-// settleBarrier holds every settle it sees until the batch has the expected number of them in flight at
-// once, which tells a parallel run from a sequential one without timing guesses.
+// settleBarrier tracks how many settles are in flight at once, to tell a parallel run from a sequential one.
 type settleBarrier struct {
 	mu        sync.Mutex
 	inFlight  int
@@ -129,8 +132,11 @@ func registeredDevshardRows(escrowIDs ...string) []store.DevshardRecord {
 	return records
 }
 
-// Settling waits on a chain commit, so a batch that walks its list one escrow at a time is the defect
-// the route exists to remove.
+// Test flow:
+//  1. Register 4 devshards and wire a `settleBarrier` that tracks concurrent settles into the operations' onSettle hook.
+//  2. POST a batch settle naming all 4 escrows.
+//  3. Assert the response is 200.
+//  4. Assert the barrier's peak in-flight count reached 4, so the batch settled them concurrently rather than one after another.
 func TestABatchSettlesItsEscrowsAtTheSameTime(t *testing.T) {
 	live := newHarness(t)
 	live.control.devshards = registeredDevshardRows("1", "2", "3", "4")
@@ -148,8 +154,11 @@ func TestABatchSettlesItsEscrowsAtTheSameTime(t *testing.T) {
 	}
 }
 
-// Building a settlement asks every host in the escrow's group to sign, so a batch that starts all of its
-// escrows at once turns one operator call into a fan-out the hosts feel.
+// Test flow:
+//  1. Register 6 devshards and wire the same concurrency-tracking barrier.
+//  2. POST a batch settle naming all 6 escrows.
+//  3. Assert the response is 200 and the peak in-flight count never exceeded `settleBatchConcurrency`.
+//  4. Assert all 6 escrows were reported settled, so the pool queues the rest rather than dropping them.
 func TestABatchKeepsItsSettlementsWithinThePool(t *testing.T) {
 	live := newHarness(t)
 	escrowIDs := []string{"1", "2", "3", "4", "5", "6"}
@@ -171,7 +180,11 @@ func TestABatchKeepsItsSettlementsWithinThePool(t *testing.T) {
 	}
 }
 
-// The single-escrow route refuses a body-supplied force, and a list must not become the way around it.
+// Test flow:
+//  1. Register a busy escrow "9".
+//  2. POST a batch settle for it with `force: true` in the body.
+//  3. Assert the single result answers 409.
+//  4. Assert no "settle" call was recorded, so a body-supplied force never reaches the settle path.
 func TestABatchBodyCannotBuyItsWayPastTheBusyCheck(t *testing.T) {
 	live := newHarness(t)
 	live.control.devshards = registeredDevshardRows("9")
@@ -189,7 +202,10 @@ func TestABatchBodyCannotBuyItsWayPastTheBusyCheck(t *testing.T) {
 	}
 }
 
-// Force is one flag over the whole list, as the query parameter the single-escrow route already reads.
+// Test flow:
+//  1. Register a busy escrow "9" and set its settle result.
+//  2. POST a batch settle for it with `force=true` as a query parameter.
+//  3. Assert the escrow was settled and its result carries the expected transaction hash.
 func TestAForcedBatchCrossesTheBusyCheck(t *testing.T) {
 	live := newHarness(t)
 	live.control.devshards = registeredDevshardRows("9")
@@ -205,7 +221,11 @@ func TestAForcedBatchCrossesTheBusyCheck(t *testing.T) {
 	}
 }
 
-// A settlement is irreversible, so a list naming an escrow twice must not broadcast for it twice.
+// Test flow:
+//  1. Register escrow "7".
+//  2. POST a batch settle naming escrow "7" three times, with whitespace variants.
+//  3. Assert the response carries exactly one result.
+//  4. Assert exactly one "settle" call was recorded.
 func TestABatchSettlesARepeatedEscrowOnce(t *testing.T) {
 	live := newHarness(t)
 	live.control.devshards = registeredDevshardRows("7")
@@ -225,6 +245,12 @@ func TestABatchSettlesARepeatedEscrowOnce(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build an oversized escrow-ID list one entry past `settleBatchLimit`.
+//  2. Define a table of request bodies, varying across no body at all, an empty list, blanks only, and the oversized list.
+//  3. For each case, POST it to the batch settle route on a fresh harness.
+//  4. Assert the response is 400.
+//  5. Assert no "settle" call was recorded, so a refused list never reaches the settle path.
 func TestABatchRefusesAListItCannotAnswerFor(t *testing.T) {
 	oversized := make([]string, settleBatchLimit+1)
 	for index := range oversized {

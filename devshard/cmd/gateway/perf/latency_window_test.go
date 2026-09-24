@@ -5,6 +5,10 @@ import (
 	"time"
 )
 
+// Test flow:
+//  1. Build an empty latency window.
+//  2. Add samples one at a time up to one short of the minimum sample count, asserting `p75` reports unknown each time.
+//  3. Add one more sample to reach the minimum and assert `p75` now reports known.
 func TestLatencyWindow_SaysNothingUntilItHasAHistory(t *testing.T) {
 	t.Parallel()
 	var window latencyWindow
@@ -22,6 +26,9 @@ func TestLatencyWindow_SaysNothingUntilItHasAHistory(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a latency window and add samples of 1s through 20s.
+//  2. Assert `p75` reports known and returns 16 seconds.
 func TestLatencyWindow_ReportsTheQuartileNotTheAverage(t *testing.T) {
 	t.Parallel()
 	var window latencyWindow
@@ -39,6 +46,10 @@ func TestLatencyWindow_ReportsTheQuartileNotTheAverage(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Fill the window's full ring capacity with 5-minute samples.
+//  2. Fill it again with 2-second samples, aging the slow ones out.
+//  3. Assert `p75` reports 2 seconds.
 func TestLatencyWindow_ForgetsWhatFellOutOfTheRing(t *testing.T) {
 	t.Parallel()
 	var window latencyWindow
@@ -56,6 +67,10 @@ func TestLatencyWindow_ForgetsWhatFellOutOfTheRing(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a host-perf tracker.
+//  2. Record enough responsive samples carrying a 4-second first-content latency to satisfy the minimum, then record one responsive sample with no latency.
+//  3. Assert the host's first-content `p75` still reports 4 seconds, from the samples that carried one.
 func TestRecordSample_KeepsTheLatencyItWasGiven(t *testing.T) {
 	t.Parallel()
 	host := newHostPerf(time.Minute)
@@ -71,6 +86,9 @@ func TestRecordSample_KeepsTheLatencyItWasGiven(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a latency window and add one fewer sample than the minimum.
+//  2. Assert `pressure` reports 0: a window too young to name a quantile cannot name a baseline either.
 func TestLatencyWindow_SaysNothingAboutPressureUntilItHasAHistory(t *testing.T) {
 	t.Parallel()
 	var window latencyWindow
@@ -84,6 +102,9 @@ func TestLatencyWindow_SaysNothingAboutPressureUntilItHasAHistory(t *testing.T) 
 	}
 }
 
+// Test flow:
+//  1. Fill the window's full ring capacity with 1-second samples.
+//  2. Assert `pressure` reports 1: a host holding the latency it always held is not congested.
 func TestLatencyWindow_ReportsAHostAtItsOwnBestAsUnpressured(t *testing.T) {
 	t.Parallel()
 	var window latencyWindow
@@ -97,6 +118,9 @@ func TestLatencyWindow_ReportsAHostAtItsOwnBestAsUnpressured(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Fill the window with 1-second samples, then fill it again with 2-second samples.
+//  2. Assert `pressure` reports above 1.5: a host now twice as slow as its best is congested before it has failed anything.
 func TestLatencyWindow_ReportsSlowingDownAgainstTheBestItHeld(t *testing.T) {
 	t.Parallel()
 	var window latencyWindow
@@ -113,7 +137,9 @@ func TestLatencyWindow_ReportsSlowingDownAgainstTheBestItHeld(t *testing.T) {
 	}
 }
 
-// The baseline falls to a new best at once, so a host that genuinely got faster is not reported as congested.
+// Test flow:
+//  1. Fill the window with 10-second samples, then fill it again with faster 1-second samples.
+//  2. Assert `pressure` reports 1: the best the host has held becomes what it is measured against, at once.
 func TestLatencyWindow_TakesANewBestImmediately(t *testing.T) {
 	t.Parallel()
 	var window latencyWindow
@@ -130,7 +156,10 @@ func TestLatencyWindow_TakesANewBestImmediately(t *testing.T) {
 	}
 }
 
-// A lucky minimum must be forgotten, or one fast answer condemns the host to permanent congestion.
+// Test flow:
+//  1. Fill the window with 1-second samples, then with 2-second samples, and record the settled pressure.
+//  2. Add 20 more full rings of 2-second samples.
+//  3. Assert the pressure afterward is lower than the settled value: the baseline rises toward the latency the host now sustains.
 func TestLatencyWindow_ForgetsALuckyMinimumOverTime(t *testing.T) {
 	t.Parallel()
 	var window latencyWindow

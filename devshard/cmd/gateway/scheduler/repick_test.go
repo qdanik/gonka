@@ -42,7 +42,11 @@ func (h *schedulerHarness) reached(t *testing.T, escrowID string) bool {
 	return live
 }
 
-// A drain that gives up answers "this escrow, right now", so another escrow may still serve on its next nonce.
+// Test flow:
+//  1. Build a `busyEscrowHarness` where `escrowA` outweighs `escrowB`, then fill `escrowA`'s whole group.
+//  2. Pick an escrow for a request.
+//  3. Assert the assignment lands on `escrowB`'s second host at nonce 1.
+//  4. Assert the pick reached `escrowA` first, and `escrowA`'s session advanced no nonces giving up.
 func TestARequestAnEscrowGivesUpOnIsOfferedToAnotherEscrow(t *testing.T) {
 	test := busyEscrowHarness(t, escrowA, escrowB)
 	test.busyGroup(t, escrowA)
@@ -58,7 +62,10 @@ func TestARequestAnEscrowGivesUpOnIsOfferedToAnotherEscrow(t *testing.T) {
 	}
 }
 
-// The escrow that gave up still scores best, so without the exclusion the second round is a second 503.
+// Test flow:
+//  1. Build a `busyEscrowHarness` where `escrowA` outweighs `escrowB`, then fill `escrowA`'s whole group.
+//  2. Pick an escrow for a request.
+//  3. Assert `escrowB` advanced exactly the one nonce it served with, so the second round excluded `escrowA` rather than retrying it.
 func TestTheSecondRoundLeavesOutTheEscrowThatGaveUp(t *testing.T) {
 	test := busyEscrowHarness(t, escrowA, escrowB)
 	test.busyGroup(t, escrowA)
@@ -72,7 +79,10 @@ func TestTheSecondRoundLeavesOutTheEscrowThatGaveUp(t *testing.T) {
 	}
 }
 
-// An escrow that cannot pay for this request says nothing about the next one's balance.
+// Test flow:
+//  1. Build a `busyEscrowHarness` and make `escrowA` fail advancing with `types.ErrInsufficientBalance`.
+//  2. Pick an escrow for a request.
+//  3. Assert the pick succeeds and the assignment carries the escrow to `escrowB`.
 func TestARequestAnEscrowCannotPayForIsOfferedToAnotherEscrow(t *testing.T) {
 	test := busyEscrowHarness(t, escrowA, escrowB)
 	test.sessions[escrowA].failAdvancing(types.ErrInsufficientBalance)
@@ -87,7 +97,11 @@ func TestARequestAnEscrowCannotPayForIsOfferedToAnotherEscrow(t *testing.T) {
 	}
 }
 
-// The caller hears "no balance" only once every escrow has been asked for it.
+// Test flow:
+//  1. Build a `busyEscrowHarness` and make both escrows fail advancing with `types.ErrInsufficientBalance`.
+//  2. Pick an escrow for a request.
+//  3. Assert the pick fails with `types.ErrInsufficientBalance`.
+//  4. Assert both escrows were reached before the caller was refused.
 func TestOnlyAFleetWithNoBalanceLeftRefusesTheCaller(t *testing.T) {
 	test := busyEscrowHarness(t, escrowA, escrowB)
 	for _, escrowID := range []string{escrowA, escrowB} {
@@ -106,7 +120,11 @@ func TestOnlyAFleetWithNoBalanceLeftRefusesTheCaller(t *testing.T) {
 	}
 }
 
-// One empty escrow and an empty fleet are different operational facts, so the refusal counts what it asked.
+// Test flow:
+//  1. Build a `busyEscrowHarness` and make both escrows fail advancing with `types.ErrInsufficientBalance`.
+//  2. Pick an escrow for a request.
+//  3. Assert the error is an `*EscrowsOutOfFundsError` reporting 2 escrows refused.
+//  4. Assert it still matches `types.ErrInsufficientBalance` and `ErrNoEscrowCapacity`.
 func TestAFundingRefusalNamesHowManyEscrowsWereAsked(t *testing.T) {
 	test := busyEscrowHarness(t, escrowA, escrowB)
 	for _, escrowID := range []string{escrowA, escrowB} {
@@ -130,8 +148,10 @@ func TestAFundingRefusalNamesHowManyEscrowsWereAsked(t *testing.T) {
 	}
 }
 
-// An escrow that cannot pay for one request still holds the balance every smaller request needs, so
-// stepping past it must not ask the rotation lifecycle to replace it.
+// Test flow:
+//  1. Build a `busyEscrowHarness` and make `escrowA` fail advancing with `types.ErrInsufficientBalance`.
+//  2. Pick an escrow for a request.
+//  3. Assert no escrow was reported exhausted, since one costly request is not a spent escrow.
 func TestWalkingPastAnEscrowNeverAsksForItsReplacement(t *testing.T) {
 	test := busyEscrowHarness(t, escrowA, escrowB)
 	test.sessions[escrowA].failAdvancing(types.ErrInsufficientBalance)
@@ -145,7 +165,11 @@ func TestWalkingPastAnEscrowNeverAsksForItsReplacement(t *testing.T) {
 	}
 }
 
-// The escrow that could not pay for one request keeps serving the next one it can.
+// Test flow:
+//  1. Build a `busyEscrowHarness` and make `escrowA` fail advancing with `types.ErrInsufficientBalance`.
+//  2. Pick an escrow for a request and assert the pick succeeds, carried to `escrowB`.
+//  3. Clear `escrowA`'s failure.
+//  4. Pick again and assert the assignment now lands back on `escrowA`.
 func TestAnEscrowThatCouldNotPayForOneRequestServesTheNext(t *testing.T) {
 	test := busyEscrowHarness(t, escrowA, escrowB)
 	test.sessions[escrowA].failAdvancing(types.ErrInsufficientBalance)
@@ -165,7 +189,11 @@ func TestAnEscrowThatCouldNotPayForOneRequestServesTheNext(t *testing.T) {
 	}
 }
 
-// One retry, never a loop, and a busy shard still answers busy rather than out of capacity.
+// Test flow:
+//  1. Build a `busyEscrowHarness` and fill both escrows' whole groups.
+//  2. Pick an escrow for a request.
+//  3. Assert the pick fails with `ErrHostsBusy`.
+//  4. Assert 4 snapshot reads happened, the two rounds' worth, and no escrow advanced any nonce.
 func TestABusyShardAnswersOnceAndStops(t *testing.T) {
 	test := busyEscrowHarness(t, escrowA, escrowB)
 	test.busyGroup(t, escrowA)
@@ -189,7 +217,11 @@ func TestABusyShardAnswersOnceAndStops(t *testing.T) {
 	}
 }
 
-// ErrNoAvailableHost carries no Retry-After and reads as a broken gateway, so it may not replace a busy answer.
+// Test flow:
+//  1. Build a `busyEscrowHarness`, fill `escrowA`'s group, and block every host of `escrowB` outright.
+//  2. Pick an escrow for a request.
+//  3. Assert the error is `ErrHostsBusy`, the first escrow's own answer.
+//  4. Assert the error is not `ErrNoAvailableHost`, the second escrow's worse one.
 func TestAWorseRefusalFromTheSecondEscrowDoesNotReplaceTheBusyAnswer(t *testing.T) {
 	test := busyEscrowHarness(t, escrowA, escrowB)
 	test.busyGroup(t, escrowA)
@@ -207,7 +239,10 @@ func TestAWorseRefusalFromTheSecondEscrowDoesNotReplaceTheBusyAnswer(t *testing.
 	}
 }
 
-// An escrow out of money is the one fact no other error reports, and the engine latches it to stop escalating.
+// Test flow:
+//  1. Build a `busyEscrowHarness`, fill `escrowA`'s group, and zero `escrowB`'s balance.
+//  2. Pick an escrow for a request.
+//  3. Assert the error is `types.ErrInsufficientBalance`, surviving the fold over the busy first escrow.
 func TestASecondRoundOutOfFundsReachesTheCaller(t *testing.T) {
 	test := busyEscrowHarness(t, escrowA, escrowB)
 	test.busyGroup(t, escrowA)
@@ -220,7 +255,11 @@ func TestASecondRoundOutOfFundsReachesTheCaller(t *testing.T) {
 	}
 }
 
-// Nothing else was routable, so a shard that is merely busy must not answer as a missing one.
+// Test flow:
+//  1. Build a scheduler harness with one escrow and block both of its hosts.
+//  2. Pick an escrow for a request.
+//  3. Assert the error is `ErrHostsBusy`.
+//  4. Assert the error is not `ErrNoEscrowCapacity`, since a merely busy shard must not read as a missing one.
 func TestTheOnlyEscrowsAnswerSurvivesARePickWithNowhereToGo(t *testing.T) {
 	test := newSchedulerHarness(t, schedulerConfig{escrows: []string{escrowA}})
 	for _, participant := range []string{hostA, hostB} {
@@ -237,7 +276,11 @@ func TestTheOnlyEscrowsAnswerSurvivesARePickWithNowhereToGo(t *testing.T) {
 	}
 }
 
-// An escalation races attempts inside one escrow's nonce stream, so a re-pick would hand it an escrow the race knows nothing about.
+// Test flow:
+//  1. Build a `busyEscrowHarness` and fill `escrowA`'s whole group.
+//  2. Pick pinned to `escrowA` for a request.
+//  3. Assert the error is `ErrHostsBusy`, the pinned escrow's own answer.
+//  4. Assert `escrowB` advanced no nonces and only one round's two snapshot reads happened, since a pinned pick is never re-picked.
 func TestAPinnedEscrowIsNeverRePicked(t *testing.T) {
 	test := busyEscrowHarness(t, escrowA, escrowB)
 	test.busyGroup(t, escrowA)
@@ -255,7 +298,11 @@ func TestAPinnedEscrowIsNeverRePicked(t *testing.T) {
 	}
 }
 
-// Only "busy" earns a second escrow; a host the chain has stopped is not a condition another escrow fixes.
+// Test flow:
+//  1. Build a scheduler harness with `escrowA` outweighing `escrowB`, then block every host of `escrowA`'s group outright.
+//  2. Pick an escrow for a request.
+//  3. Assert the error is `ErrNoAvailableHost`.
+//  4. Assert `escrowB` advanced no nonces, since a state-blocked refusal is not a condition another escrow gets a re-pick for.
 func TestARefusalThatIsNotBusyIsAnsweredWhereItHappened(t *testing.T) {
 	test := newSchedulerHarness(t, schedulerConfig{
 		escrows: []string{escrowA, escrowB},

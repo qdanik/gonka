@@ -34,8 +34,9 @@ const (
 	malformedToolCallRejection = `{"error":{"code":400,"message":"` + malformedToolCallMessage + `","type":"BadRequestError"}}`
 )
 
-// The host controls this text, and U+212A lowers to a one-byte k: a phrase index taken from the
-// lowered message lands two bytes early in the original.
+// Test flow:
+//  1. For each table case's error message (context-length phrasing, total-of-at-least phrasing, a tool-choice refusal, a rune that shrinks when lowercased, the limit at the end of the message, a case-insensitive phrase, lookalikes without a number, an unrelated error, an empty message, and an overflowing number), call `ParseCapabilityError`.
+//  2. Assert the parsed `CapabilitySignal` matches the case's expectation.
 func TestParseCapabilityError(t *testing.T) {
 	testCases := []struct {
 		name    string
@@ -110,8 +111,9 @@ func TestParseCapabilityError(t *testing.T) {
 	}
 }
 
-// A tool or version refusal belongs to the answering host's build, so another host may serve the request; a
-// context length is the one the chain registers for the model, so no other host is expected to lift it.
+// Test flow:
+//  1. For each table case's `CapabilitySignal` (context limit, tools unsupported, version unsupported, nothing parsed), call `Refused()` and `Retriable()`.
+//  2. Assert a context-limit signal is refused but not retriable, tool/version-unsupported signals are both refused and retriable, and an empty signal is neither.
 func TestCapabilitySignalTellsARetriableRefusalFromAContextLengthRejection(t *testing.T) {
 	testCases := []struct {
 		name          string
@@ -139,6 +141,11 @@ func TestCapabilitySignalTellsARetriableRefusalFromAContextLengthRejection(t *te
 	}
 }
 
+// Test flow:
+//  1. Record a parsed context-limit capability and assert it lands in `contextLimits` with the right participant and token value, with nothing recorded as tools-unsupported.
+//  2. Record a parsed tool-choice capability and assert it lands in `toolsUnsupported`, with no context limit recorded.
+//  3. Record a lookalike phrase that parses to nothing and assert nothing is recorded.
+//  4. Record a parsed context-limit capability against an unnamed participant and assert nothing is recorded.
 func TestRecordCapability(t *testing.T) {
 	t.Run("context_limit_is_recorded_with_its_parsed_value", func(t *testing.T) {
 		t.Parallel()
@@ -194,6 +201,10 @@ func TestRecordCapability(t *testing.T) {
 	})
 }
 
+// Test flow:
+//  1. Build an attempt whose error stream carries a context-length refusal, and a copy with its error source cleared.
+//  2. Call `CapabilityOf` on each.
+//  3. Assert the error-stream attempt yields the parsed context limit, and the attempt with no error source yields an empty signal.
 func TestCapabilityOfAttempt(t *testing.T) {
 	errorStream := failedAttempt(TerminalCapabilityRefused)
 	errorStream.ErrorSource = "sse_error"
@@ -222,7 +233,7 @@ func TestCapabilityOfAttempt(t *testing.T) {
 	}
 }
 
-// errorEventAttempt is an attempt whose host answered with this one error event, as the engine's own classifier reads it.
+// errorEventAttempt builds an attempt whose host answered with this one error event, as the engine's own classifier reads it.
 func errorEventAttempt(t *testing.T, payload string) AttemptOutcome {
 	t.Helper()
 	event := classifyChunk([]byte("data: "+payload+"\n\n"), false).Error
@@ -238,7 +249,10 @@ func errorEventAttempt(t *testing.T, payload string) AttemptOutcome {
 	}
 }
 
-// Every host receives the same body, so a trusted host's answer about the request is every host's; an answer about the host, the moment, or from a host nobody trusts is not.
+// Test flow:
+//  1. For each table case's error payload, suspicion flag and content source, build an attempt via `errorEventAttempt` and set those fields.
+//  2. Call `rulesOutRetry` on it.
+//  3. Assert it rules out a retry only for a trusted, class-recognized error body from a non-suspicious host with no content already streamed.
 func TestRulesOutRetryOnlyForATrustedAnswerEveryHostWouldRepeat(t *testing.T) {
 	const (
 		contextLengthRejection = `{"error":{"code":400,"message":"` + vllmContextTotalMessage + `","type":"BadRequestError"}}`
@@ -279,9 +293,9 @@ func TestRulesOutRetryOnlyForATrustedAnswerEveryHostWouldRepeat(t *testing.T) {
 	}
 }
 
-// Both refusals arrive as the same status with the same two words in the body. One is the host's build
-// and waiting cannot fix it; the other is an escrow being torn down and waiting is exactly the fix.
-// Confusing them bans a healthy host for the life of the process.
+// Test flow:
+//  1. For each table case's dispatch error body (a version-mismatch message, an escrow-not-found message, a missing route, and other lookalikes), call `ParseVersionRefusal`.
+//  2. Assert `VersionUnsupported` is true only for the version-mismatch and session-version-conflict bodies.
 func TestOnlyAVersionRefusalIsReadAsAPermanentCapability(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
@@ -313,8 +327,11 @@ func TestOnlyAVersionRefusalIsReadAsAPermanentCapability(t *testing.T) {
 	}
 }
 
-// The refusal reaches the capability path only through the dispatch error: a 404 carries no SSE error
-// event, so the fields CapabilityOf used to read are empty.
+// Test flow:
+//  1. Build an `AttemptOutcome` whose `Capability` field already carries a parsed version refusal.
+//  2. Call `CapabilityOf` on it.
+//  3. Assert the signal reports `VersionUnsupported` and is retriable.
+//  4. Assert an attempt with no refusal at all reports none.
 func TestAVersionRefusalReachesCapabilityOfThroughTheDispatchError(t *testing.T) {
 	t.Parallel()
 	refused := AttemptOutcome{Capability: ParseVersionRefusal(`version "v3" not found`)}
@@ -332,7 +349,9 @@ func TestAVersionRefusalReachesCapabilityOfThroughTheDispatchError(t *testing.T)
 	}
 }
 
-// The recorder is the only route from a refusal to the tracker that blocks routing.
+// Test flow:
+//  1. Record a parsed version refusal against a participant.
+//  2. Assert it lands only in `versionsUnsupported` for that participant, with nothing recorded as tools-unsupported or context-limited.
 func TestAVersionRefusalIsRecordedAgainstTheParticipant(t *testing.T) {
 	t.Parallel()
 	recorder := &stubCapabilityRecorder{}

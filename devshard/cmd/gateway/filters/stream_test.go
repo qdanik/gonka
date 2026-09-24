@@ -9,8 +9,7 @@ import (
 	"testing"
 )
 
-// feedInChunks streams data through rewriter in fixed-size pieces and returns everything emitted,
-// failing the test on any Write or Close error.
+// feedInChunks streams data through rewriter in fixed-size pieces and returns everything emitted.
 func feedInChunks(t *testing.T, rewriter *StreamRewriter, data []byte, chunkSize int) []byte {
 	t.Helper()
 	var emitted bytes.Buffer
@@ -39,9 +38,10 @@ func assertNoInternalFields(t *testing.T, out []byte) {
 	}
 }
 
-// The streaming rewriter skips any event a cheap byte pre-check calls uninteresting, so a stripped
-// field the pre-check cannot see is forwarded verbatim. Every field must be reachable on its own,
-// because nothing guarantees a host emits it next to a sibling that happens to be recognised.
+// Test flow:
+//  1. For each field in `clientStrippedFields`, write an event carrying that field alone alongside a `content` sibling.
+//  2. Assert the field never leaks to the client output, since the rewriter's cheap byte pre-check must catch every field on its own rather than relying on a recognized sibling.
+//  3. Assert the sibling `content` field survives.
 func TestStreamRewriter_StripsEveryFieldEvenWhenItArrivesAlone(t *testing.T) {
 	for _, field := range clientStrippedFields {
 		t.Run(field, func(t *testing.T) {
@@ -62,8 +62,10 @@ func TestStreamRewriter_StripsEveryFieldEvenWhenItArrivesAlone(t *testing.T) {
 	}
 }
 
-// The space after "data:" is optional on the wire, and an event may carry lines of its own, so a
-// framing the strip does not recognise would forward every field the non-streaming path removes.
+// Test flow:
+//  1. Run table cases of an event framed with and without a space after `data:`, after an `event:` or `id:` line, after a comment line, and with CRLF line endings.
+//  2. Feed each framing through the rewriter one chunk at a time.
+//  3. Assert every framing strips internal fields while the sibling `content` field survives.
 func TestStreamRewriter_StripsEveryDataLineFraming(t *testing.T) {
 	payload := `{"choices":[{"delta":{"content":"ok"},"token_ids":[7]}]}`
 	cases := []struct {
@@ -89,8 +91,11 @@ func TestStreamRewriter_StripsEveryDataLineFraming(t *testing.T) {
 	}
 }
 
-// A host may answer a streaming request with one SSE-wrapped complete response. An OpenAI streaming
-// client reads choices[].delta, so it renders nothing from the message the completion carries.
+// Test flow:
+//  1. Read the `completion_wrapped_stream.sse` fixture, an SSE-wrapped complete response, since an OpenAI streaming client reads choices[].delta and renders nothing from a wrapped message.
+//  2. Rewrite the whole stream.
+//  3. Assert no internal fields leak and the wrapped message is converted into delta chunks.
+//  4. Assert the synthesized stream matches byte-for-byte, including the `usage` object rebuilt in alphabetical order from a map.
 func TestStreamRewriter_WrappedCompletionBecomesChunks(t *testing.T) {
 	stream := readSSEFixture(t, "completion_wrapped_stream.sse")
 
@@ -104,8 +109,6 @@ func TestStreamRewriter_WrappedCompletionBecomesChunks(t *testing.T) {
 		`data: {"id":"chatcmpl-cw1","object":"chat.completion.chunk","created":13,"model":"model-a","choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}]}`,
 		`data: {"id":"chatcmpl-cw1","object":"chat.completion.chunk","created":13,"model":"model-a","choices":[{"index":0,"delta":{"content":"ok"},"finish_reason":null}]}`,
 		`data: {"id":"chatcmpl-cw1","object":"chat.completion.chunk","created":13,"model":"model-a","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`,
-		// usage comes back in alphabetical order: the strip rebuilds the object from a map, which has
-		// none, so the client sees a reordered copy of what the host sent.
 		`data: {"id":"chatcmpl-cw1","object":"chat.completion.chunk","created":13,"model":"model-a","choices":[],"usage":{"completion_tokens":2,"prompt_tokens":3,"total_tokens":5}}`,
 		`data: [DONE]`,
 		``,
@@ -115,6 +118,9 @@ func TestStreamRewriter_WrappedCompletionBecomesChunks(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Write an already-chunked event whose content quotes the word "message", and an error event carrying a `message` field.
+//  2. Assert both events pass through the rewriter verbatim, unconverted.
 func TestStreamRewriter_ChunkEventsAndErrorsAreNotConverted(t *testing.T) {
 	cases := []struct {
 		name  string
@@ -143,6 +149,10 @@ func TestStreamRewriter_ChunkEventsAndErrorsAreNotConverted(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Split a fixture event's bytes mid-way through its `top_logprobs` field.
+//  2. Write the two halves to the rewriter in two separate calls.
+//  3. Assert the first (incomplete) write emits nothing, and the joined output strips internal fields while keeping the sibling `content`.
 func TestStreamRewriter_SplitFrameIsRewritten(t *testing.T) {
 	stream := readSSEFixture(t, "logprobs_stream.sse")
 	target := splitCompleteEvents(t, stream)[1]
@@ -171,6 +181,9 @@ func TestStreamRewriter_SplitFrameIsRewritten(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Feed the `logprobs_stream.sse` fixture through the rewriter one byte at a time.
+//  2. Assert internal fields are stripped, the sibling `content` survives, and the output ends with the `[DONE]` marker.
 func TestStreamRewriter_ByteByByteFeedStripsLogprobs(t *testing.T) {
 	stream := readSSEFixture(t, "logprobs_stream.sse")
 
@@ -185,6 +198,9 @@ func TestStreamRewriter_ByteByByteFeedStripsLogprobs(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. For each of several SSE fixtures and several chunk sizes, feed the stream through the rewriter both in one write and split into chunks.
+//  2. Assert the chunked output matches the whole-stream output byte-for-byte.
 func TestStreamRewriter_ChunkSizeDoesNotChangeOutput(t *testing.T) {
 	fixtures := []string{
 		"content_stream.sse",
@@ -211,6 +227,9 @@ func TestStreamRewriter_ChunkSizeDoesNotChangeOutput(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Write the entire `token_ids_stream.sse` fixture to the rewriter in a single call.
+//  2. Assert internal fields are stripped and the expected number of events is emitted.
 func TestStreamRewriter_SeveralFramesInOneChunk(t *testing.T) {
 	stream := readSSEFixture(t, "token_ids_stream.sse")
 	rewriter := NewStreamRewriter(LogprobIntent{}, true)
@@ -226,6 +245,10 @@ func TestStreamRewriter_SeveralFramesInOneChunk(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Write a fixture event's bytes with its terminator stripped off.
+//  2. Write the terminator separately.
+//  3. Assert nothing is emitted until the terminator arrives, and the event is then emitted with internal fields stripped.
 func TestStreamRewriter_RetainsPartialUntilTerminatorArrives(t *testing.T) {
 	stream := readSSEFixture(t, "logprobs_stream.sse")
 	target := splitCompleteEvents(t, stream)[1]
@@ -249,6 +272,9 @@ func TestStreamRewriter_RetainsPartialUntilTerminatorArrives(t *testing.T) {
 	assertNoInternalFields(t, afterTerminator)
 }
 
+// Test flow:
+//  1. Feed a CRLF-terminated event followed by a CRLF `[DONE]` marker through the rewriter at several chunk sizes.
+//  2. Assert internal fields are stripped, the sibling `content` survives, and the CRLF `[DONE]` marker is preserved.
 func TestStreamRewriter_CRLFTerminatedEventIsRewritten(t *testing.T) {
 	event := []byte("data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"logprobs\":{\"content\":[]}}]}\r\n\r\ndata: [DONE]\r\n\r\n")
 	for _, chunkSize := range []int{1, 3, len(event)} {
@@ -266,6 +292,10 @@ func TestStreamRewriter_CRLFTerminatedEventIsRewritten(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Write exactly `MaxStreamCarryBytes` of unterminated data to the rewriter.
+//  2. Write one more byte past the cap.
+//  3. Assert the at-cap write emits nothing without error, the overflow write fails with `ErrStreamCarryOverflow`, and the carry buffer is released rather than retained.
 func TestStreamRewriter_CarryOverflowFailsInsteadOfGrowing(t *testing.T) {
 	rewriter := NewStreamRewriter(LogprobIntent{}, true)
 	atCap, err := rewriter.Write(bytes.Repeat([]byte("x"), MaxStreamCarryBytes))
@@ -289,6 +319,10 @@ func TestStreamRewriter_CarryOverflowFailsInsteadOfGrowing(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Overflow the rewriter's carry buffer.
+//  2. Write a well-formed fixture stream and then close the rewriter.
+//  3. Assert both the write and the close continue to fail with `ErrStreamCarryOverflow` and emit nothing.
 func TestStreamRewriter_StaysFailedAfterOverflow(t *testing.T) {
 	rewriter := NewStreamRewriter(LogprobIntent{}, true)
 	if _, err := rewriter.Write(bytes.Repeat([]byte("x"), MaxStreamCarryBytes+1)); !errors.Is(err, ErrStreamCarryOverflow) {
@@ -306,6 +340,10 @@ func TestStreamRewriter_StaysFailedAfterOverflow(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Write a complete, properly terminated fixture stream to the rewriter.
+//  2. Close the rewriter.
+//  3. Assert Close emits nothing and returns no error.
 func TestStreamRewriter_CloseOnCleanEndEmitsNothing(t *testing.T) {
 	rewriter := NewStreamRewriter(LogprobIntent{}, true)
 	if _, err := rewriter.Write(readSSEFixture(t, "logprobs_stream.sse")); err != nil {
@@ -321,6 +359,10 @@ func TestStreamRewriter_CloseOnCleanEndEmitsNothing(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Write the `newlineless_final_content.sse` fixture, whose final event has no trailing terminator.
+//  2. Close the rewriter.
+//  3. Assert the write and close outputs together reproduce the original stream exactly.
 func TestStreamRewriter_CloseEmitsUnterminatedFinalEvent(t *testing.T) {
 	stream := readSSEFixture(t, "newlineless_final_content.sse")
 	rewriter := NewStreamRewriter(LogprobIntent{}, true)
@@ -338,6 +380,10 @@ func TestStreamRewriter_CloseEmitsUnterminatedFinalEvent(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Write an event with no trailing terminator carrying an internal `token_ids` field.
+//  2. Close the rewriter.
+//  3. Assert the closed output strips the internal field while the sibling `content` survives.
 func TestStreamRewriter_CloseRewritesUnterminatedFinalEvent(t *testing.T) {
 	event := []byte(`data: {"choices":[{"delta":{"content":"ok"},"token_ids":[7]}]}`)
 	rewriter := NewStreamRewriter(LogprobIntent{}, true)
@@ -355,6 +401,10 @@ func TestStreamRewriter_CloseRewritesUnterminatedFinalEvent(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Write a truncated, unparseable final event.
+//  2. Close the rewriter.
+//  3. Assert Close fails with `ErrStreamTruncatedEvent` and forwards nothing.
 func TestStreamRewriter_CloseDropsTruncatedFinalEvent(t *testing.T) {
 	truncated := []byte(`data: {"choices":[{"delta":{"content":"ok"},"logprobs":{"content":[{"logprob":-0.1`)
 	rewriter := NewStreamRewriter(LogprobIntent{}, true)
@@ -372,6 +422,10 @@ func TestStreamRewriter_CloseDropsTruncatedFinalEvent(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Write an unterminated comment line.
+//  2. Close the rewriter.
+//  3. Assert Close returns the comment line verbatim.
 func TestStreamRewriter_CloseKeepsUnterminatedNonDataLine(t *testing.T) {
 	comment := []byte(": keep-alive")
 	rewriter := NewStreamRewriter(LogprobIntent{}, true)
@@ -388,6 +442,9 @@ func TestStreamRewriter_CloseKeepsUnterminatedNonDataLine(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Feed the `malformed_data_line.sse` fixture through the rewriter one byte at a time.
+//  2. Assert the malformed event is dropped rather than forwarded, and the stream still ends with `[DONE]`.
 func TestStreamRewriter_MalformedFrameIsDropped(t *testing.T) {
 	stream := readSSEFixture(t, "malformed_data_line.sse")
 
@@ -402,6 +459,9 @@ func TestStreamRewriter_MalformedFrameIsDropped(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Write an event whose content text merely mentions the word "logprobs".
+//  2. Assert the event passes through the rewriter verbatim.
 func TestStreamRewriter_ParseableFrameMentioningLogprobsInTextSurvives(t *testing.T) {
 	event := []byte(`data: {"choices":[{"delta":{"content":"the \"logprobs\" field"}}]}` + "\n\n")
 	rewriter := NewStreamRewriter(LogprobIntent{}, true)
@@ -416,6 +476,9 @@ func TestStreamRewriter_ParseableFrameMentioningLogprobsInTextSurvives(t *testin
 	}
 }
 
+// Test flow:
+//  1. Run table cases of `assembleSSEBody` against a restated header, a space-less data line, CRLF framing, comment/event lines mixed in, an already-assembled plain JSON body, a terminator-only body, and an empty body.
+//  2. Assert each case's exact assembled result.
 func TestAssembleSSEBody(t *testing.T) {
 	testCases := []struct {
 		name string
@@ -455,6 +518,9 @@ func TestAssembleSSEBody(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Run table cases of `HasSSEDone` against the terminator, the terminator over CRLF, a plain payload, the marker appearing inside a content delta, and an empty string.
+//  2. Assert each case's boolean result.
 func TestHasSSEDone(t *testing.T) {
 	testCases := []struct {
 		name   string
@@ -476,12 +542,9 @@ func TestHasSSEDone(t *testing.T) {
 	}
 }
 
-// The wire format lets one event carry several data lines, and declining to rewrite those forwards
-// whatever the extra lines hold: a host puts a renderable delta on the first and its internal fields
-// on the second, and the second reaches the client verbatim.
-// A client joins an event's data lines with a newline before parsing, so one object split across two
-// lines is one object to the client and must be one to the strip. Two objects on two lines join into
-// something no client can parse, and forwarding it would carry whatever the second line hides.
+// Test flow:
+//  1. Write an event whose two data lines each hold a separate, independently parseable JSON object — one with a renderable delta, one with internal fields.
+//  2. Assert the rewriter drops the whole event rather than forwarding it, since a client would join the two lines into something no client can parse, carrying whatever the second line hides.
 func TestStreamRewriter_DropsAMultiLineEventNoClientCouldParse(t *testing.T) {
 	event := []byte("data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n" +
 		"data: {\"prompt_logprobs\":[1,2],\"token_ids\":[7]}\n\n")
@@ -497,8 +560,9 @@ func TestStreamRewriter_DropsAMultiLineEventNoClientCouldParse(t *testing.T) {
 	}
 }
 
-// The split a host would actually use: one object across two lines, so neither half parses alone and a
-// byte-wise gate sees nothing to do, while the client rejoins it and reads every field.
+// Test flow:
+//  1. Write an event whose single JSON object is split across two data lines, so neither line parses on its own.
+//  2. Assert internal fields are stripped from the rejoined object while the sibling `content` survives.
 func TestStreamRewriter_StripsAnObjectSplitAcrossDataLines(t *testing.T) {
 	event := []byte("data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}],\n" +
 		"data: \"prompt_logprobs\":[1,2],\"token_ids\":[7]}\n\n")
@@ -514,8 +578,10 @@ func TestStreamRewriter_StripsAnObjectSplitAcrossDataLines(t *testing.T) {
 	}
 }
 
-// A host can spell an internal field with a \u escape. The pre-check reads raw bytes, so the key
-// matches no marker, while the client's decoder turns it back into logprobs and renders it.
+// Test flow:
+//  1. Write an event whose `logprobs` key is spelled with a `\u` escape, confirming the raw-byte pre-check cannot see it as plain text.
+//  2. Rewrite the event and decode the result as JSON.
+//  3. Assert the escaped `logprobs` key does not survive in the decoded delta while `content` does.
 func TestAnEscapedInternalKeyIsStrippedFromAStreamedDelta(t *testing.T) {
 	event := []byte(`data: {"choices":[{"delta":{"content":"hi","\u006cogprobs":{"x":1}}}]}` + "\n\n")
 	if bytes.Contains(event, []byte("logprobs")) {
@@ -546,9 +612,10 @@ func TestAnEscapedInternalKeyIsStrippedFromAStreamedDelta(t *testing.T) {
 	}
 }
 
-// A host answering a stream with a whole chat.completion has its response converted into the chunks a
-// streaming client renders. Typing any host-controlled field lets the host fail that conversion with a
-// value of the wrong shape, and the client then renders nothing while the nonce is settled regardless.
+// Test flow:
+//  1. Run table cases of a whole chat.completion response whose `id`, `created`, `choices[].index`, or `model` field is given the wrong type.
+//  2. Rewrite each event.
+//  3. Assert every case still converts to chunks and carries its content, since a host-controlled identity field must not be allowed to fail the conversion and leave a streaming client rendering nothing.
 func TestAPoisonedIdentityFieldStillConvertsToChunks(t *testing.T) {
 	for _, testCase := range []struct {
 		name  string
@@ -577,9 +644,9 @@ func TestAPoisonedIdentityFieldStillConvertsToChunks(t *testing.T) {
 	}
 }
 
-// The conversion re-encodes the delta, so the encoder it uses decides how generated content reaches
-// the client. Escaping is lossless but inflates every < > & to six bytes on a path that carries whole
-// model responses.
+// Test flow:
+//  1. Rewrite a whole chat.completion response whose content contains `< > &`.
+//  2. Assert the converted chunk carries that content unescaped, rather than inflated by HTML escaping on a path that carries whole model responses.
 func TestConvertedChunksCarryGeneratedContentUnescaped(t *testing.T) {
 	event := []byte(`data: {"id":"x","object":"chat.completion","choices":[{"index":0,"message":{"content":"a < b & c"}}]}` + "\n\n")
 
@@ -590,8 +657,9 @@ func TestConvertedChunksCarryGeneratedContentUnescaped(t *testing.T) {
 	}
 }
 
-// The streaming path strips separately from the buffered one, so the client's intent has to reach it
-// too: a client that asked for logprobs and streams would otherwise get them only when it does not.
+// Test flow:
+//  1. Run table cases of `rewriteEventOnly` against the same event with a `LogprobIntent` asking for neither, logprobs only, and logprobs with alternatives.
+//  2. Assert the rewritten output carries logprobs and alternatives exactly matching what the intent asked for, and never leaks `token_ids`, since the streaming path strips separately from the buffered one and must follow the same client intent.
 func TestTheStreamStripFollowsWhatTheClientAskedFor(t *testing.T) {
 	event := []byte(`data: {"choices":[{"delta":{"content":"hi","logprobs":{"content":[{"token":"hi","logprob":-0.5,"top_logprobs":[{"token":"hello"}]}]}},"index":0}],"token_ids":[7]}` + "\n\n")
 
@@ -625,9 +693,10 @@ func TestTheStreamStripFollowsWhatTheClientAskedFor(t *testing.T) {
 	}
 }
 
-// A host controls the bytes of its own response, so it can spell "message" with a \u escape. A gate
-// that reads raw bytes sees no completion to convert and forwards it whole, and a streaming client
-// reading choices[].delta renders nothing -- while the nonce settles and the client pays for it.
+// Test flow:
+//  1. Write a chat.completion event whose `message` key is spelled with a `\u` escape, confirming the raw-byte pre-check cannot see it as plain text.
+//  2. Rewrite the event.
+//  3. Assert it still converts to chunks, carries its content, and leaks no internal fields.
 func TestAnEscapedMessageKeyStillConvertsToChunks(t *testing.T) {
 	event := []byte(`data: {"object":"chat.completion","choices":[{"index":0,"\u006dessage":{"content":"hi","\u006cogprobs":{"x":1}}}]}` + "\n\n")
 	if bytes.Contains(event, []byte(`"message"`)) {
@@ -645,9 +714,10 @@ func TestAnEscapedMessageKeyStillConvertsToChunks(t *testing.T) {
 	assertNoInternalFields(t, rewritten)
 }
 
-// An event whose payload spans two data lines and carries nothing to strip must come back out as the
-// same object. Written after one prefix, its embedded newline starts a line with no data: prefix, and
-// a client drops that line and rejoins a truncated object.
+// Test flow:
+//  1. Write an event whose content string embeds a raw newline, splitting its payload across two lines with nothing to strip.
+//  2. Rewrite the event and extract its data payload.
+//  3. Assert the payload still parses as one JSON object and the content survives, rather than being dropped as a line with no `data:` prefix.
 func TestAMultiLineEventWithNothingToStripSurvivesIntact(t *testing.T) {
 	event := []byte("data: {\"choices\":[{\"delta\":{\"content\":\n" + "data: \"hi\"}}]}\n\n")
 
@@ -666,10 +736,9 @@ func TestAMultiLineEventWithNothingToStripSurvivesIntact(t *testing.T) {
 	}
 }
 
-// A completion carrying a non-finite bareword must still convert. Normalisation makes it parseable,
-// but only if the parseable bytes are what travels on: handed the original, the conversion fails on
-// the barewords and forwards a response a streaming client renders nothing from -- while the attempt
-// is crowned on its content, because the content detector is lenient where the conversion is strict.
+// Test flow:
+//  1. Rewrite a whole chat.completion response whose logprobs carry the non-finite bareword `-Infinity`.
+//  2. Assert it still converts to chunks and carries its content, with the unparseable bareword normalized away before conversion rather than reaching the client.
 func TestACompletionWithNonFiniteNumbersStillConvertsToChunks(t *testing.T) {
 	event := []byte(`data: {"id":"x","object":"chat.completion","choices":[{"index":0,"message":{"content":"hi"},` +
 		`"logprobs":{"content":[{"token":"hi","logprob":-Infinity,"top_logprobs":[{"token":"hi","logprob":-Infinity}]}]}}]}` + "\n\n")
@@ -692,8 +761,9 @@ func rewriteEventOnly(event []byte, intent LogprobIntent, keepUsage bool) []byte
 	return rewritten
 }
 
-// The client's own logprobs intent is applied before this conversion, so anything still here was asked
-// for. Dropping it hands a streaming client an answer without the logprobs it paid for.
+// Test flow:
+//  1. Run table cases of `completionAsChunks` against a completion carrying the logprobs the client asked for, a completion with `logprobs:null`, and a completion with no `logprobs` field at all.
+//  2. Assert every case converts, and that the carried logprobs (or their absence) are preserved rather than dropped, since the client's own intent is applied before this conversion runs.
 func TestACompletionConvertedToChunksKeepsTheLogprobsItCarried(t *testing.T) {
 	const logprobs = `{"content":[{"token":"ok","logprob":-0.5,"bytes":[111,107],"top_logprobs":[]}]}`
 	tests := []struct {
@@ -737,8 +807,9 @@ func TestACompletionConvertedToChunksKeepsTheLogprobsItCarried(t *testing.T) {
 	}
 }
 
-// The conversion's decoder binds a key case-insensitively, so the gate in front of it must not turn a
-// conversion away because the host spelled the key another way.
+// Test flow:
+//  1. Run table cases of a chat.completion response with `Choices`, an empty `choices` beside a capitalised `Choices`, and a capitalised `Message` key.
+//  2. Assert every case still converts to chunks and carries its content, regardless of key casing, since the conversion's decoder binds keys case-insensitively.
 func TestACompletionConvertsWhateverWayItsKeysAreSpelled(t *testing.T) {
 	t.Parallel()
 	for _, testCase := range []struct {

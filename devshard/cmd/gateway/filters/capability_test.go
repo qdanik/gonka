@@ -5,10 +5,13 @@ import (
 	"testing"
 )
 
-// kelvinSign lowercases to a one-byte "k", so an index taken from the lowered copy and applied to
-// the original lands two bytes early.
+// kelvinSign is a multi-byte rune that lowercases to a single-byte "k".
 const kelvinSign = "K"
 
+// Test flow:
+//  1. Build a message prefixed with kelvinSign, whose lowercased copy is two bytes shorter than the original, followed by a context-length refusal.
+//  2. Call CapabilityLimits on the message.
+//  3. Assert the parsed context limit is correct despite the byte-offset shift between the lowered copy and the original.
 func TestCapabilityLimitsSurvivesALowercasingThatShortensTheMessage(t *testing.T) {
 	t.Parallel()
 	message := kelvinSign + " Maximum context length is 8192 tokens, however you requested 9000"
@@ -20,6 +23,9 @@ func TestCapabilityLimitsSurvivesALowercasingThatShortensTheMessage(t *testing.T
 	}
 }
 
+// Test flow:
+//  1. Call CapabilityLimits on a message whose digits are the last characters.
+//  2. Assert the parsed context limit is correct.
 func TestCapabilityLimitsReadsDigitsThatEndTheMessage(t *testing.T) {
 	t.Parallel()
 	contextLimit, _ := CapabilityLimits("This model's maximum context length is 8192")
@@ -29,6 +35,9 @@ func TestCapabilityLimitsReadsDigitsThatEndTheMessage(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Call CapabilityLimits on a message stating both the maximum context length and the requested total.
+//  2. Assert both the context limit and the requested total are parsed correctly.
 func TestCapabilityLimitsReadsTheRequestedTotal(t *testing.T) {
 	t.Parallel()
 	message := "This model's maximum context length is 8192 tokens. However, you requested for a total of at least 9001 tokens."
@@ -40,6 +49,9 @@ func TestCapabilityLimitsReadsTheRequestedTotal(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Call CapabilityLimits on a message that mentions the maximum context length without any digits.
+//  2. Assert both returned values are zero.
 func TestCapabilityLimitsIgnoresAPhraseWithoutDigits(t *testing.T) {
 	t.Parallel()
 	contextLimit, contextRequested := CapabilityLimits("maximum context length is unknown")
@@ -49,6 +61,10 @@ func TestCapabilityLimitsIgnoresAPhraseWithoutDigits(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build an error body for each case's capability-refusal message via `errorBody`, varying the phrasing between a shortening-lowercase message, a message whose digits end it, and the tool-choice-unsupported message.
+//  2. Assert IsCacheableResponse reports the 400 response as not cacheable.
+//  3. Assert HasNonCacheableError reports the body as a non-cacheable error.
 func TestContextRefusalStaysOutOfTheCacheHoweverItIsSpelled(t *testing.T) {
 	t.Parallel()
 	cases := []struct {

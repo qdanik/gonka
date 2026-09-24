@@ -6,6 +6,9 @@ import (
 	"testing"
 )
 
+// Test flow:
+//  1. Build the default config.
+//  2. Assert `Validate` accepts it with no error.
 func TestDefaultsAreValid(t *testing.T) {
 	configuration := Defaults()
 	if err := configuration.Validate(); err != nil {
@@ -13,6 +16,9 @@ func TestDefaultsAreValid(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build the default config and a table of every documented default field paired with its expected value.
+//  2. Assert each field matches the spec's documented default.
 func TestDefaultsMatchSpec(t *testing.T) {
 	configuration := Defaults()
 	checks := []struct {
@@ -88,6 +94,10 @@ func TestDefaultsMatchSpec(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Break four unrelated fields in a default config at once (port, max tokens cap, host window initial requests, chain gRPC endpoint).
+//  2. Call `Validate`.
+//  3. Assert it returns an error naming every one of the four broken fields.
 func TestValidateRejectsBrokenConfigAndNamesEveryProblem(t *testing.T) {
 	configuration := Defaults()
 	configuration.Server.Port = 0
@@ -106,8 +116,10 @@ func TestValidateRejectsBrokenConfigAndNamesEveryProblem(t *testing.T) {
 	}
 }
 
-// TestValidateCatchesEveryRuleBreach hits every complain() branch in Validate
-// individually, so a flipped comparison operator anywhere fails exactly one case.
+// Test flow:
+//  1. Table-driven: each case mutates a default config to break exactly one validation rule and names the message fragment the error must contain.
+//  2. For each case, mutate a fresh default config and call `Validate`.
+//  3. Assert it returns an error naming the case's own fragment, so a flipped comparison anywhere fails exactly one case.
 func TestValidateCatchesEveryRuleBreach(t *testing.T) {
 	testCases := []struct {
 		name            string
@@ -230,7 +242,9 @@ func TestValidateCatchesEveryRuleBreach(t *testing.T) {
 	}
 }
 
-// A ledger that is off holds nothing, so a retention of 0 cannot grow anything and stays accepted.
+// Test flow:
+//  1. Build a default config with the nonce ledger disabled and its retention set to 0.
+//  2. Assert `Validate` accepts it, since a ledger that is off holds nothing for the retention to grow.
 func TestValidateAcceptsAnUnboundedRetentionWhileTheLedgerIsOff(t *testing.T) {
 	configuration := Defaults()
 	configuration.NonceAccounting.Enabled = false
@@ -241,8 +255,9 @@ func TestValidateAcceptsAnUnboundedRetentionWhileTheLedgerIsOff(t *testing.T) {
 	}
 }
 
-// Zero is what the limiter reads as "no static cap"; rejecting it here left the two disagreeing and
-// the shipped template unbootable.
+// Test flow:
+//  1. Build a default config with `MaxRequests` set to 0.
+//  2. Assert `Validate` accepts it, since the limiter reads zero as "no static cap".
 func TestValidateAcceptsAnUncappedConcurrency(t *testing.T) {
 	configuration := Defaults()
 	configuration.Limits.Concurrency.MaxRequests = 0
@@ -251,8 +266,9 @@ func TestValidateAcceptsAnUncappedConcurrency(t *testing.T) {
 	}
 }
 
-// The cap is the ceiling and the default is clamped to it at request time, so a default above the
-// cap is a generous setting the gateway narrows, not a reason to refuse to start.
+// Test flow:
+//  1. Build a default config whose default max tokens exceeds a model's own token cap.
+//  2. Assert `Validate` accepts it, since the gateway clamps the default at request time rather than refusing to start.
 func TestValidateAcceptsADefaultAboveTheCap(t *testing.T) {
 	configuration := Defaults()
 	configuration.Limits.DefaultMaxTokens = 10_000
@@ -262,6 +278,9 @@ func TestValidateAcceptsADefaultAboveTheCap(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a default config with a model-limits entry that leaves its optional pointer fields nil.
+//  2. Assert `Validate` accepts it.
 func TestValidateAcceptsModelLimitsWithNilOptionalPointers(t *testing.T) {
 	configuration := Defaults()
 	configuration.Limits.ModelLimits = map[string]ModelLimits{
@@ -272,9 +291,9 @@ func TestValidateAcceptsModelLimitsWithNilOptionalPointers(t *testing.T) {
 	}
 }
 
-// TestEngineCarriesOnlyTheLiveTunables pins the section's field set: the legacy per-input-token
-// first-token lag and minimum-samples-for-decision were never read, and must not reappear under
-// new names.
+// Test flow:
+//  1. List every field name on the `Engine` struct via reflection.
+//  2. Assert the field list matches exactly the documented set of live tunables, so a retired field (like the legacy per-input-token first-token lag or minimum-samples-for-decision) cannot reappear under a new name.
 func TestEngineCarriesOnlyTheLiveTunables(t *testing.T) {
 	engineType := reflect.TypeFor[Engine]()
 	got := make([]string, 0, engineType.NumField())
@@ -290,6 +309,9 @@ func TestEngineCarriesOnlyTheLiveTunables(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Assert `AdminEnabled` reports false for a `Server` with no admin key set.
+//  2. Assert it reports true once an admin key is configured.
 func TestAdminEnabledDistinguishesUnsetFromConfigured(t *testing.T) {
 	if (Server{}).AdminEnabled() {
 		t.Error("AdminEnabled() = true for an unset key; admin routes would authenticate an empty credential")
@@ -299,6 +321,9 @@ func TestAdminEnabledDistinguishesUnsetFromConfigured(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Table-driven: each case builds a `Limits.ModelAccess` policy and asks `AccessFor` about a model that is unconfigured, listed in the policy, or outside an existing policy.
+//  2. Assert `AccessFor` returns open access when no policy exists, the model's own tier when listed, and admin-only for a model outside an existing policy.
 func TestAccessForFailsClosedOnceAPolicyExists(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -319,6 +344,9 @@ func TestAccessForFailsClosedOnceAPolicyExists(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Table-driven: each case names a model in `ModelAccess`, in `ModelLimits`, in neither, or leaves both maps empty.
+//  2. Assert `Offers` reports true whenever the model is named in either map, and false otherwise.
 func TestOffersReadsBothModelMapsWithoutRequiringEither(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -342,6 +370,9 @@ func TestOffersReadsBothModelMapsWithoutRequiringEither(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a default config with the admin API key cleared.
+//  2. Assert `Validate` accepts it, since an unset admin key disables admin routes rather than being invalid.
 func TestValidateAcceptsUnsetAdminKey(t *testing.T) {
 	configuration := Defaults()
 	configuration.Server.AdminAPIKey = ""

@@ -12,6 +12,10 @@ import (
 	"devshard/cmd/gateway/filters"
 )
 
+// Test flow:
+//  1. Create a non-streaming `clientStream` and write 1MB chunks to it in a loop, past `maxBufferedResponseBytes`.
+//  2. Assert the loop eventually fails with `filters.ErrStreamCarryOverflow`.
+//  3. Assert the bytes written before the refusal never exceeded `maxBufferedResponseBytes`.
 func TestAnUnterminatedEventIsBoundedInMemory(t *testing.T) {
 	stream := newClientStream(httptest.NewRecorder(), "req-1", false, true, filters.LogprobIntent{}, nil)
 	chunk := bytes.Repeat([]byte("x"), 1<<20)
@@ -38,8 +42,10 @@ func TestAnUnterminatedEventIsBoundedInMemory(t *testing.T) {
 	}
 }
 
-// The reply is folded as it arrives, so what a non-streaming client costs is the answer it will be
-// given, not the stream it was assembled from.
+// Test flow:
+//  1. Write 200 SSE chunks, each carrying content plus logprobs, into a non-streaming `clientStream`.
+//  2. Read the folder's held byte count.
+//  3. Assert it stays well below a quarter of the raw bytes written, so the discarded logprobs are not retained.
 func TestAFoldedReplyHoldsTheAnswerRatherThanTheStream(t *testing.T) {
 	stream := newClientStream(httptest.NewRecorder(), "req-1", false, true, filters.LogprobIntent{}, nil)
 
@@ -58,6 +64,9 @@ func TestAFoldedReplyHoldsTheAnswerRatherThanTheStream(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Write one small SSE chunk into a non-streaming `clientStream` and close it.
+//  2. Assert the recorded body contains the assembled reply's content.
 func TestNonStreamingRepliesUnderTheBoundAreKept(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	stream := newClientStream(recorder, "req-1", false, true, filters.LogprobIntent{}, nil)
@@ -74,8 +83,11 @@ func TestNonStreamingRepliesUnderTheBoundAreKept(t *testing.T) {
 	}
 }
 
-// A reply the shared budget refuses must be shed, not served. The reply has to clear the fold's own
-// measuring step, which is what the budget is charged from: below it the fold reports nothing held.
+// Test flow:
+//  1. Create a non-streaming `clientStream` backed by a `BufferBudget` sized to 1 byte.
+//  2. Write an oversized SSE chunk to it.
+//  3. Assert both the write and the close fail with `ErrResponseBufferFull`.
+//  4. Assert the recorded status is 503 and the oversized content never reached the body.
 func TestAReplyPastTheBufferBudgetIsRefused(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	stream := newClientStream(recorder, "req-1", false, true, filters.LogprobIntent{}, NewBufferBudget(1))
@@ -95,9 +107,11 @@ func TestAReplyPastTheBufferBudgetIsRefused(t *testing.T) {
 	}
 }
 
-// A finished request cannot be asked afterwards how much of it the client actually received, so the
-// stream has to count as it goes. Byte counts come from the recorder, not from what the caller handed
-// in: the strip rewrites events on the way out, so the two differ.
+// Test flow:
+//  1. Write one SSE content chunk into a streaming `clientStream` and close it.
+//  2. Read the delivered byte count and terminated flag.
+//  3. Assert delivered bytes match what the recorder actually received.
+//  4. Assert the stream reports terminated.
 func TestAStreamCountsWhatReachedTheClient(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	stream := newClientStream(recorder, "req-1", true, true, filters.LogprobIntent{}, nil)
@@ -118,6 +132,9 @@ func TestAStreamCountsWhatReachedTheClient(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Write one SSE content chunk into a non-streaming `clientStream` and close it.
+//  2. Assert delivered bytes match what the recorder received and are non-zero.
 func TestANonStreamingReplyCountsItsBody(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	stream := newClientStream(recorder, "req-1", false, true, filters.LogprobIntent{}, nil)
@@ -138,8 +155,11 @@ func TestANonStreamingReplyCountsItsBody(t *testing.T) {
 	}
 }
 
-// A caller that reads the status must not be told the request succeeded and then handed a body saying
-// it did not. The old gateway chose the status from the assembled body for exactly this reason.
+// Test flow:
+//  1. Define a table of raw SSE event bodies, varying across a stream that carried no payload and a genuine host answer.
+//  2. For each case, write the events into a non-streaming `clientStream` and close it.
+//  3. Assert the recorded status matches the case's expectation.
+//  4. For the no-payload case, assert the body equals `filters.NoResponseDataBody`.
 func TestABodyTheAssemblerCouldNotFoldIsNotServedAsSuccess(t *testing.T) {
 	tests := []struct {
 		name       string

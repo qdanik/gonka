@@ -6,6 +6,10 @@ import (
 	"testing"
 )
 
+// Test flow:
+//  1. Open a store, add three suspicious hosts, then remove one.
+//  2. Close and reopen the store from the same directory.
+//  3. Assert `ListSuspiciousHosts` returns only the two hosts still pinned, sorted.
 func TestSuspiciousHostsSurviveAReopen(t *testing.T) {
 	storageDir := t.TempDir()
 	first, err := Open(storageDir)
@@ -44,6 +48,10 @@ func TestSuspiciousHostsSurviveAReopen(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Open a test store.
+//  2. Add the same host twice and remove a host that was never pinned.
+//  3. Assert `ListSuspiciousHosts` returns the host once, unaffected by the repeat or the unknown removal.
 func TestSuspiciousHostsToleratesRepeatedPinsAndUnknownUnpins(t *testing.T) {
 	testStore := openTestStore(t)
 	ctx := context.Background()

@@ -21,10 +21,7 @@ import (
 	"devshard/cmd/gateway/scheduler"
 )
 
-// virtualTime is the simulator's clock and the coordinator's timer in one value, so a deadline is reached
-// only by a test advancing time, never by a slow host. step is what one read of the clock costs, which buys
-// latency without losing control of deadlines; arms reports every deadline the coordinator sets, which is
-// how a test learns an event was applied rather than merely delivered.
+// virtualTime is a fake clock and timer in one, so a deadline fires only when a test advances it.
 type virtualTime struct {
 	mu       sync.Mutex
 	step     time.Duration
@@ -84,8 +81,7 @@ func (v *virtualTime) advance(step time.Duration) {
 	}
 }
 
-// waitArmed blocks until a deadline no further out than limit is armed. Only a per-chunk deadline is
-// that close, so it proves the coordinator has accounted for the chunk before time is advanced.
+// waitArmed blocks until a deadline no further out than limit is armed.
 func (v *virtualTime) waitArmed(t *testing.T, limit time.Duration) {
 	t.Helper()
 	for {
@@ -115,8 +111,7 @@ func (v *virtualTime) discard() {
 	}
 }
 
-// simSnapshots lets a test move the chain phase mid-attempt, which is the only way an attempt can be
-// ended by a phase transition rather than by its host.
+// simSnapshots lets a test move the chain phase mid-attempt.
 type simSnapshots struct {
 	current atomic.Pointer[chain.PhaseSnapshot]
 }
@@ -131,8 +126,7 @@ func (s *simSnapshots) Snapshot() chain.PhaseSnapshot { return *s.current.Load()
 
 func (s *simSnapshots) set(next chain.PhaseSnapshot) { s.current.Store(&next) }
 
-// simTracker records what the engine reported and, when a test sets health, answers the health questions
-// from the real tracker so an escalation is driven by the detector rather than by a flag the test set.
+// simTracker records what the engine reported and, when health is set, answers ejection and degradation from a real perf.Tracker.
 type simTracker struct {
 	*stubPerf
 	health  *perf.Tracker
@@ -228,12 +222,10 @@ func newSimLedger() *simLedger { return &simLedger{rows: make(chan RaceOutcome, 
 
 func (l *simLedger) RecordRequest(outcome RaceOutcome) { l.rows <- outcome }
 
-// simDispatchParams stands in for the concrete params the caller builds. The engine must forward the
-// value unread to both routing and settlement, so a shape it could not possibly interpret is the point.
+// simDispatchParams stands in for the concrete params the caller builds.
 type simDispatchParams struct{ prompt string }
 
-// simPoster stands in for the chain vote. entered/release let a test hold a vote open and observe
-// that shutdown waits for it.
+// simPoster stands in for the chain vote poster.
 type simPoster struct {
 	entered chan uint64
 	release chan struct{}
@@ -280,8 +272,7 @@ func (p *simPoster) settled() []uint64 {
 	return append([]uint64(nil), p.posted...)
 }
 
-// simulator's pinned is the operator's suspicious list, set before run() so the engine reads it from the
-// same dependency main supplies rather than from a policy the test built itself.
+// simulator wires an Engine to test doubles for each of its dependencies.
 type simulator struct {
 	engine    *Engine
 	picker    *stubPicker
@@ -395,9 +386,7 @@ func (s *simulator) profile() Request {
 	}
 }
 
-// parkVotes holds every vote inside the poster and returns the gate. Cleanup opens it too, because Stop
-// is a barrier over the vote a race owes: a failed assertion that left one parked would hang the package
-// rather than fail it.
+// parkVotes holds every vote inside the poster and returns the gate that releases them.
 func (s *simulator) parkVotes(t *testing.T) func() {
 	t.Helper()
 	s.poster.release = make(chan struct{})
@@ -444,8 +433,7 @@ func (s *simulator) assertNoSlotLeaked(t *testing.T, attempts int) {
 	}
 }
 
-// settleAll waits out the votes the race left owing, so what was posted can be asserted rather than
-// polled for.
+// settleAll waits out the votes the race left owing.
 func (s *simulator) settleAll() { s.engine.Stop() }
 
 func (s *simulator) timeoutEvents() []TimeoutEvent {
@@ -472,8 +460,7 @@ func attemptFor(t *testing.T, outcome RaceOutcome, nonce uint64) AttemptOutcome 
 	return AttemptOutcome{}
 }
 
-// speculativePolicy escalates only when an attempt has finished, so a re-pick is attributable to the
-// attempt that failed rather than to a receipt clock.
+// speculativePolicy escalates only when an attempt has finished.
 func speculativePolicy(maxAttempts int) EscalationPolicy {
 	policy := settledPolicy()
 	policy.MaxAttemptsPerRequest = maxAttempts
@@ -486,6 +473,13 @@ func contentEvent(text string) string {
 
 const roleEvent = `data: {"choices":[{"delta":{"role":"assistant"}}]}` + "\n\n"
 
+// Test flow:
+//  1. Start a one-host simulator and script host-0 to stream the content_stream.sse fixture across two chunks with a receipt and a finished nonce.
+//  2. Run the race and assert it returns no error.
+//  3. Assert the outcome succeeded with host-0's nonce as the winner.
+//  4. Assert the client received the fixture bytes unchanged.
+//  5. Assert the winning attempt is TerminalWon with content source delta.content.
+//  6. Assert one Success window move, one responsive perf sample, no classify overflows, no timeout events, no leaked slot, and exactly one reported outcome.
 func TestSimulatorStreamsAHealthyRequestByteForByte(t *testing.T) {
 	sim := newSimulator(t, settledPolicy(), 1, qwenModel)
 	sim.clock.step = time.Millisecond
@@ -528,8 +522,10 @@ func TestSimulatorStreamsAHealthyRequestByteForByte(t *testing.T) {
 	sim.assertOneOutcome(t)
 }
 
-// Every hop from the transport's writer to the client must carry the flush, or the client sees
-// nothing until the response is over.
+// Test flow:
+//  1. Start a one-host simulator and script host-0 to stream two content chunks, flushing on each write.
+//  2. Run the race, assert it returns no error, and read the reported outcome.
+//  3. Assert the client's sink recorded one flush per streamed chunk.
 func TestSimulatorFlushesEveryChunkThroughToTheClient(t *testing.T) {
 	sim := newSimulator(t, settledPolicy(), 1, qwenModel)
 	sim.host(10, 0, "host-0", &hostScript{
@@ -550,7 +546,11 @@ func TestSimulatorFlushesEveryChunkThroughToTheClient(t *testing.T) {
 	}
 }
 
-// The host's own refusal is the response: the client must see it as the host wrote it, not a rewrite.
+// Test flow:
+//  1. Start a one-host simulator and script host-0 to reply with a 400 "model does not exist" error event.
+//  2. Run the race and assert the returned error is a HostApplicationError.
+//  3. Assert the error's payload is the host's own refusal body and its HTTP status is 400.
+//  4. Read the reported outcome.
 func TestSimulatorForwardsTheHostsRefusalVerbatim(t *testing.T) {
 	const refusal = `{"error":{"code":400,"message":"model does not exist","type":"BadRequestError"}}`
 	sim := newSimulator(t, settledPolicy(), 1, qwenModel)
@@ -575,6 +575,11 @@ func TestSimulatorForwardsTheHostsRefusalVerbatim(t *testing.T) {
 	sim.reported(t)
 }
 
+// Test flow:
+//  1. Start a two-host simulator racing an empty-answering host against a content-producing host, both held at arrive/release so they contend for the crown together.
+//  2. Release both hosts at once and run the race to completion.
+//  3. Assert the content-producing host's nonce wins and the empty host's attempt is TerminalEmptyStream.
+//  4. Assert the client received only the content host's bytes, and exactly one outcome was reported.
 func TestSimulatorContentProducerWinsOverAnEmptyStream(t *testing.T) {
 	sim := newSimulator(t, racePolicy(2), 2, qwenModel)
 	arrive, release := make(chan uint64, 2), make(chan struct{})
@@ -614,6 +619,12 @@ func TestSimulatorContentProducerWinsOverAnEmptyStream(t *testing.T) {
 	sim.assertOneOutcome(t)
 }
 
+// Test flow:
+//  1. Start a one-host simulator and script host-0 to emit a single SSE error event instead of content.
+//  2. Run the race and assert the returned error carries the host's own error message.
+//  3. Assert the outcome did not succeed and crowned no winner.
+//  4. Assert the attempt is TerminalErrorStream, still counts the error event as a content chunk, and does not deny crowning.
+//  5. Assert the client received nothing and the window moved once with ModelOutcome.
 func TestSimulatorErrorStreamNeitherCrownsNorReadsAsEmpty(t *testing.T) {
 	sim := newSimulator(t, settledPolicy(), 1, qwenModel)
 	sim.host(10, 0, "host-0", &hostScript{
@@ -650,6 +661,11 @@ func TestSimulatorErrorStreamNeitherCrownsNorReadsAsEmpty(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Start a one-host simulator and script host-0 to send two role-only chunks before its first content chunk.
+//  2. Run the race and assert it returns no error.
+//  3. Assert the client received the buffered role chunks flushed in order ahead of the content that won the crown.
+//  4. Read the reported outcome.
 func TestSimulatorHoldsPreContentChunksUntilTheCrownIsWon(t *testing.T) {
 	sim := newSimulator(t, settledPolicy(), 1, qwenModel)
 	sim.host(10, 0, "host-0", &hostScript{
@@ -670,6 +686,11 @@ func TestSimulatorHoldsPreContentChunksUntilTheCrownIsWon(t *testing.T) {
 	sim.reported(t)
 }
 
+// Test flow:
+//  1. Start a two-host simulator where host-0 refuses with a tool-choice-unsupported error and host-1 can serve the tool call.
+//  2. Run the race and assert it returns no error with host-1's nonce as the winner.
+//  3. Assert host-0's attempt is TerminalCapabilityRefused.
+//  4. Assert the scheduler was asked to pick twice, the second pick excluding "toolless-host", and the refusal was recorded against it.
 func TestSimulatorToolRefusalDoesNotCrownAndRepicksElsewhere(t *testing.T) {
 	sim := newSimulator(t, speculativePolicy(2), 2, qwenModel)
 	sim.host(10, 0, "toolless-host", &hostScript{
@@ -708,8 +729,11 @@ func TestSimulatorToolRefusalDoesNotCrownAndRepicksElsewhere(t *testing.T) {
 	}
 }
 
-// A prompt past the model's context length is past every host's, so the client gets the host's own words
-// at once, and the refused nonce is still voted.
+// Test flow:
+//  1. Start a two-host simulator and script host-0 to reject the request for exceeding the model's context length while host-1 could otherwise answer.
+//  2. Run the race and assert the returned error is the host's own rejection payload.
+//  3. Assert the scheduler was picked only once, since every host would reject the same body, and that the rejection recorded a context limit of 40960 tokens for host-0.
+//  4. Settle the race and assert the rejected nonce still got its vote posted.
 func TestSimulatorContextLengthRejectionReachesTheClientWithoutAnotherAttempt(t *testing.T) {
 	const rejection = `{"error":{"code":400,"message":"` + vllmContextTotalMessage + `","type":"BadRequestError"}}`
 	sim := newSimulator(t, speculativePolicy(2), 2, qwenModel)
@@ -741,7 +765,11 @@ func TestSimulatorContextLengthRejectionReachesTheClientWithoutAnotherAttempt(t 
 	}
 }
 
-// Every host receives the same body, so the client gets a trusted host's rejection of the request at once, and the rejected nonce is still voted.
+// Test flow:
+//  1. Start a two-host simulator and script host-0 to reject the request body with a malformed-tool-call error while host-1 could otherwise answer.
+//  2. Run the race and assert the returned error is host-0's own rejection payload.
+//  3. Assert the scheduler was picked only once, since every host would reject the same body.
+//  4. Settle the race and assert the rejected nonce still got its vote posted.
 func TestSimulatorRequestRejectionReachesTheClientWithoutAnotherAttempt(t *testing.T) {
 	sim := newSimulator(t, speculativePolicy(2), 2, qwenModel)
 	sim.host(10, 0, "host-0", &hostScript{receipt: true, chunks: []string{"data: " + malformedToolCallRejection + "\n\n"}})
@@ -769,6 +797,10 @@ func TestSimulatorRequestRejectionReachesTheClientWithoutAnotherAttempt(t *testi
 	}
 }
 
+// Test flow:
+//  1. Split the content_stream.sse fixture into chunks of a given size (1, 3, 64, 1024, or 8192 bytes) and script host-0 to stream them.
+//  2. Run the race and assert it returns no error.
+//  3. Assert the client received the fixture bytes unchanged and the winning attempt's content source is delta.content, for every chunk size.
 func TestSimulatorForwardsTheFixtureCorpusUnchangedAtEveryChunkSize(t *testing.T) {
 	body := readFixture(t, "content_stream.sse")
 	for _, chunkSize := range []int{1, 3, 64, 1024, 8192} {
@@ -796,8 +828,10 @@ func TestSimulatorForwardsTheFixtureCorpusUnchangedAtEveryChunkSize(t *testing.T
 	}
 }
 
-// A stream whose last event never gets its newline is classified when the stream closes, so the host
-// is not charged for an empty answer it did not give.
+// Test flow:
+//  1. Start a one-host simulator and script host-0 to stream the newlineless_final_content.sse fixture, whose last event never gets a trailing newline.
+//  2. Run the race and assert it fails with ErrAllAttemptsFailed.
+//  3. Assert the attempt is TerminalLost with content source delta.content from the flushed tail, and does not deny crowning.
 func TestSimulatorFlushesTheFinalEventBeforeDecidingEmptiness(t *testing.T) {
 	sim := newSimulator(t, settledPolicy(), 1, qwenModel)
 	sim.host(10, 0, "host-0", &hostScript{
@@ -823,6 +857,11 @@ func TestSimulatorFlushesTheFinalEventBeforeDecidingEmptiness(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Start a simulator in PoC-relaxed mode and hold host-0's attempt at arrive before it sends any chunks.
+//  2. Move the chain snapshot to EpochPhasePoCGenerate while the attempt is held, then release it and run the race to completion.
+//  3. Assert the attempt is marked PhaseTransitionAborted with sample exemption ExemptPhaseAborted, and that no perf sample or window move was recorded.
+//  4. Settle the race and assert the timeout event was skipped for TimeoutReasonPhaseAborted with no vote posted.
 func TestSimulatorPhaseTransitionAbortSkipsTheSampleAndTheVote(t *testing.T) {
 	sim := newSimulatorInPhase(t, settledPolicy(), 1, qwenModel,
 		config.Modes{PoCMode: config.PoCModeRelaxed}, chain.PhaseSnapshot{})
@@ -863,8 +902,11 @@ func TestSimulatorPhaseTransitionAbortSkipsTheSampleAndTheVote(t *testing.T) {
 	}
 }
 
-// The shutdown barrier: the vote a finished race still owes is registered before its goroutine
-// starts, so Stop can never observe the engine as idle while a nonce is unsettled.
+// Test flow:
+//  1. Start a one-host simulator, park the poster's vote by leaving release closed, and script host-0 to fail with "host refused".
+//  2. Run the race, read the reported outcome, and wait until the failed nonce's vote has entered the poster.
+//  3. Call Stop in a goroutine and assert it has not returned while the vote is still parked.
+//  4. Release the vote, wait for Stop to return, and assert the nonce's vote was posted.
 func TestSimulatorStopWaitsForTheVoteAFinishedRaceStillOwes(t *testing.T) {
 	sim := newSimulator(t, settledPolicy(), 1, qwenModel)
 	sim.poster.release = make(chan struct{})
@@ -894,9 +936,11 @@ func TestSimulatorStopWaitsForTheVoteAFinishedRaceStillOwes(t *testing.T) {
 	}
 }
 
-// The escrow the race dispatched through is held past Run's return, because the vote its nonce owes is
-// posted from a goroutine that outlives the race. A hold given back at Run's return lets a rotation
-// close the session the vote still needs.
+// Test flow:
+//  1. Start a one-host simulator, park the poster's votes, and script host-0 to fail with "host refused".
+//  2. Run the race, read the reported outcome, and wait until the failed nonce's vote has entered the poster.
+//  3. Assert the escrow's hold was taken and not yet given back while the vote is still parked.
+//  4. Release the parked vote, stop the engine, and assert the escrow's hold was given back.
 func TestSimulatorTheEscrowStaysHeldUntilTheVoteIsPosted(t *testing.T) {
 	sim := newSimulator(t, settledPolicy(), 1, qwenModel)
 	postVote := sim.parkVotes(t)
@@ -924,8 +968,10 @@ func TestSimulatorTheEscrowStaysHeldUntilTheVoteIsPosted(t *testing.T) {
 	}
 }
 
-// A race that panics owes the escrow its hold back, or the rotation that retires it waits on a request
-// nobody is running.
+// Test flow:
+//  1. Start a one-host simulator and force its dispatch target to panic on every send.
+//  2. Run the race inside a recover and assert the panic re-raises out of Run instead of being swallowed.
+//  3. Assert the escrow's hold was taken and given back despite the panic.
 func TestSimulatorAPanickingRaceGivesTheEscrowHoldBack(t *testing.T) {
 	sim := newSimulator(t, settledPolicy(), 1, qwenModel)
 	sim.host(10, 0, "host-0", &hostScript{receipt: true})
@@ -946,9 +992,11 @@ func TestSimulatorAPanickingRaceGivesTheEscrowHoldBack(t *testing.T) {
 	}
 }
 
-// The shutdown invariant: a race that is still running when Stop is called owes a vote, so Stop cannot
-// return until that race has posted it. Waiting only for races that had already finished would leave
-// the nonce of an in-flight one stranded when the process exits.
+// Test flow:
+//  1. Start a one-host simulator and script host-0 to pause mid-stream at streaming before its remaining chunks.
+//  2. Run the race in the background and wait for it to reach that pause.
+//  3. Call Stop in a goroutine and assert it does not return within 250ms while the race is still running.
+//  4. Resume the host, wait for the race and Stop to finish, and assert the nonce's vote was posted before Stop returned.
 func TestSimulatorStopWaitsForARaceThatIsStillRunning(t *testing.T) {
 	sim := newSimulator(t, settledPolicy(), 1, qwenModel)
 	streaming, resume := make(chan uint64, 1), make(chan struct{})
@@ -987,13 +1035,12 @@ func TestSimulatorStopWaitsForARaceThatIsStillRunning(t *testing.T) {
 	sim.reported(t)
 }
 
-// A host that produces content and then goes silent has not finished its nonce and is not credited
-// with one. Its own attempt is still cancelled and accounted for, and because reaching the streaming
-// hard timeout puts it past the long-response exemption, the vote is skipped for that reason rather
-// than dropped unrecorded.
-// A host the backstop cut answers for it: it held the request for twenty minutes and finished
-// nothing, so its window contracts and its nonce goes to a timeout vote rather than being excused as
-// a long response still in progress.
+// Test flow:
+//  1. Start a one-host simulator with a 500ms inter-chunk-stall policy and script host-0 to send one content chunk, pause at streaming, then hold the request open past its deadlines.
+//  2. Run the race, wait for the pause, wait for the inter-chunk-stall deadline to arm, then advance the virtual clock past the streaming hard timeout backstop.
+//  3. Resume the host and let the race finish.
+//  4. Assert the attempt is TerminalHardTimeout, neither finished its nonce nor was confirmed, and the host's window moved.
+//  5. Settle the race and assert the timeout vote ran to completion rather than being skipped, and no slot leaked.
 func TestSimulatorAHostCutAtTheBackstopAnswersForIt(t *testing.T) {
 	policy := settledPolicy()
 	policy.InterChunkStall = 500 * time.Millisecond
@@ -1044,6 +1091,10 @@ func TestSimulatorAHostCutAtTheBackstopAnswersForIt(t *testing.T) {
 	sim.assertNoSlotLeaked(t, 1)
 }
 
+// Test flow:
+//  1. Script host-0 to answer with a completion-tokens-only chunk that carries no content, for a model that varies across the case table.
+//  2. Run the race and assert it fails with ErrEmptyStream.
+//  3. Assert the attempt's terminal, crowning denial, and window verdict match the case's model: a thinking-budget route (kimiModel) reads as TerminalBurnEmpty/ModelOutcome without denying crowning, while any other route (qwenModel) reads as TerminalEmptyStream/EmptyAnswer and denies crowning.
 func TestSimulatorBurnEmptyIsAModelOutcomeAndPlainEmptyIsNot(t *testing.T) {
 	burnStream := `data: {"choices":[{"delta":{}}],"usage":{"completion_tokens":90}}` + "\n\n"
 	cases := []struct {
@@ -1092,7 +1143,11 @@ func TestSimulatorBurnEmptyIsAModelOutcomeAndPlainEmptyIsNot(t *testing.T) {
 	}
 }
 
-// An empty answer closes its nonce but leaves the client nothing, so the request moves to another host and the empty host's window halves.
+// Test flow:
+//  1. Start a two-host simulator where host-0 finishes its nonce with no content and host-1 answers.
+//  2. Run the race and assert it returns no error with host-1's nonce as the winner.
+//  3. Assert the second attempt started because the first one failed (EscalationReasonAttemptFailed).
+//  4. Assert the empty host's window moved first with EmptyAnswer, followed by the winner's move.
 func TestSimulatorAnEmptyAnswerHandsTheRequestToAnotherHost(t *testing.T) {
 	sim := newSimulator(t, speculativePolicy(2), 2, qwenModel)
 	sim.host(10, 0, "empty-host", &hostScript{receipt: true, confirmed: true, finished: true})
@@ -1118,6 +1173,11 @@ func TestSimulatorAnEmptyAnswerHandsTheRequestToAnotherHost(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Start a two-host simulator racing a slow role-only host against a fast content-producing host, both held at arrive/release.
+//  2. Release both hosts at once and run the race to completion.
+//  3. Assert the fast host's nonce wins and the client received only its bytes.
+//  4. Assert exactly one of the two attempts is crowned TerminalWon, no slot leaked, and exactly one outcome was reported.
 func TestSimulatorSpeculativeSecondaryWinsAndItsLosersAreDrained(t *testing.T) {
 	sim := newSimulator(t, racePolicy(2), 2, qwenModel)
 	arrive, release := make(chan uint64, 2), make(chan struct{})
@@ -1163,6 +1223,12 @@ func TestSimulatorSpeculativeSecondaryWinsAndItsLosersAreDrained(t *testing.T) {
 	sim.assertOneOutcome(t)
 }
 
+// Test flow:
+//  1. Register a goroutine-leak check with goleak, start a one-host simulator, and script host-0 to pause mid-stream at streaming before a second content chunk.
+//  2. Run the race with a cancellable client context, wait for the pause, then cancel the context and assert Run returns context.Canceled.
+//  3. Resume the host so it finishes streaming after the client disconnected.
+//  4. Assert the attempt finished its nonce and is TerminalWon.
+//  5. Settle the race and assert no vote was posted for the already-finished nonce, no slot leaked, and exactly one outcome reported.
 func TestSimulatorClientDisconnectStillSettlesTheNonce(t *testing.T) {
 	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
 	sim := newSimulator(t, settledPolicy(), 1, qwenModel)
@@ -1206,6 +1272,11 @@ func TestSimulatorClientDisconnectStillSettlesTheNonce(t *testing.T) {
 	sim.assertOneOutcome(t)
 }
 
+// Test flow:
+//  1. Start a one-host simulator and script host-0 to emit unparsable garbage bytes followed by [DONE].
+//  2. Run the race and assert it fails with ErrEmptyStream.
+//  3. Assert no nonce was crowned and the client received nothing.
+//  4. Assert the attempt is TerminalEmptyStream.
 func TestSimulatorGarbageStreamNeverCrowns(t *testing.T) {
 	sim := newSimulator(t, settledPolicy(), 1, qwenModel)
 	sim.host(10, 0, "host-0", &hostScript{
@@ -1234,8 +1305,12 @@ func TestSimulatorGarbageStreamNeverCrowns(t *testing.T) {
 	}
 }
 
-// The suspicious list reaches Decide through the engine's own dependency, so the branch is proven
-// reachable from what main wires rather than from a policy the test constructed.
+// Test flow:
+//  1. Start a two-host simulator, pin "pinned-host" as suspicious, and script it alongside a trusted host, both held at arrive/release.
+//  2. Run the race and wait for both attempts to arrive before releasing either, proving the second attempt started immediately rather than after the first failed or timed out.
+//  3. Release both hosts and run the race to completion.
+//  4. Assert the decision was StartPrimarySuspicious with two attempts started, the pinned host's attempt marked suspicious and the trusted host's not.
+//  5. Assert no slot leaked and exactly one outcome was reported.
 func TestSimulatorPinnedPrimaryStartsASecondAttemptImmediately(t *testing.T) {
 	sim := newSimulator(t, racePolicy(2), 2, qwenModel)
 	sim.pinned["pinned-host"] = true
@@ -1257,8 +1332,6 @@ func TestSimulatorPinnedPrimaryStartsASecondAttemptImmediately(t *testing.T) {
 		}
 		outcomes <- outcome
 	}()
-	// Both attempts arrive before either is released, which is only possible if the second was started
-	// at once rather than after the first had failed or timed out.
 	<-arrive
 	<-arrive
 	close(release)
@@ -1291,10 +1364,10 @@ func (p *panickingPicker) HostDiverged(string, string, time.Time) bool { return 
 
 func (p *panickingPicker) HostServed(string, string, time.Time) {}
 
-// net/http recovers a handler panic per connection, so a race that panics without releasing its
-// registration leaves the process alive and Stop waiting forever. The engine is built here rather
-// than through the simulator because the simulator's cleanup is itself a Stop, which would turn a
-// failing assertion into a hung suite.
+// Test flow:
+//  1. Build an engine directly, not through the simulator (whose cleanup is itself a Stop that would hang here), with a picker that panics on every Pick.
+//  2. Run the race in a goroutine wrapped in a recover, and assert the panic reaches the caller rather than being swallowed.
+//  3. Call Stop in a goroutine and assert it returns, proving the panicking race released its registration.
 func TestPanickingRaceReleasesTheStopBarrierAndRepanics(t *testing.T) {
 	races, err := NewEngine(Deps{
 		Picker:    &panickingPicker{},

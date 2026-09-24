@@ -18,7 +18,11 @@ func sessionHoldingGossip(pending int) *fakeSession {
 	return session
 }
 
-// A last diff costs a nonce; an escrow holding nothing gossiped must never be asked to spend one.
+// Test flow:
+//  1. Build a registry with a session holding no pending gossip, and add one escrow.
+//  2. Retire that escrow.
+//  3. Assert no pending-diff call was sent.
+//  4. Assert the narrator recorded nothing about a flush.
 func TestAnEscrowWithNothingPendingRetiresWithoutADiff(t *testing.T) {
 	t.Parallel()
 	session := sessionHoldingGossip(0)
@@ -46,8 +50,12 @@ func TestAnEscrowWithNothingPendingRetiresWithoutADiff(t *testing.T) {
 	}
 }
 
-// The gossiped transactions reach a diff while the session can still send one, and before the ledger
-// takes the reading it will never take again.
+// Test flow:
+//  1. Build a registry with a session holding 3 pending gossip transactions, recording the order in which the diff send and the ledger's Retiring hook fire, and add one escrow.
+//  2. Retire that escrow.
+//  3. Assert exactly one pending-diff call was sent.
+//  4. Assert the diff fired before the ledger read.
+//  5. Assert the narrator recorded "flushed 1 pending 3 error <nil>".
 func TestARetiringEscrowCarriesItsGossipBeforeTheLedgerReadsIt(t *testing.T) {
 	t.Parallel()
 	session := sessionHoldingGossip(3)
@@ -77,7 +85,11 @@ func TestARetiringEscrowCarriesItsGossipBeforeTheLedgerReadsIt(t *testing.T) {
 	assertNarrated(t, narrator, "flushed 1 pending 3 error <nil>")
 }
 
-// A host that will not take the last diff loses the gossip, not the retirement: the session still closes.
+// Test flow:
+//  1. Build a registry with a session holding 2 pending gossip transactions whose diff send always fails, and add one escrow.
+//  2. Retire that escrow.
+//  3. Assert the session still closed once, despite the failed diff.
+//  4. Assert the narrator recorded "flushed 1 pending 2 error host unreachable".
 func TestAFailedLastDiffIsNarratedAndTheEscrowStillCloses(t *testing.T) {
 	t.Parallel()
 	session := sessionHoldingGossip(2)

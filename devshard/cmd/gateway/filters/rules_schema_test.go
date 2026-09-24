@@ -29,6 +29,9 @@ func runRule(t *testing.T, document *Document, param string, rule RuleFunc) erro
 	return rule(RuleContext{Document: document, Param: param})
 }
 
+// Test flow:
+//  1. Run table cases of `validTools(bounds, "auto")` against bodies with no tools, an empty tools array, a parameter-less tool, a tool with simple parameters, and two valid tools.
+//  2. Assert every case is accepted.
 func TestValidToolsAccepts(t *testing.T) {
 	rule := validTools(testToolsBounds(), "auto")
 	tests := []struct {
@@ -51,6 +54,9 @@ func TestValidToolsAccepts(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Run table cases of `validTools(bounds, "auto")` against malformed tools: wrong wrapper shape, a non-object element, a missing or invalid type, a missing or invalid function, a missing or invalid function name, a forbidden `$ref` in parameters, and a bad schema in a second tool.
+//  2. Assert each case's exact error message.
 func TestValidToolsRejects(t *testing.T) {
 	rule := validTools(testToolsBounds(), "auto")
 	tests := []struct {
@@ -83,8 +89,9 @@ func TestValidToolsRejects(t *testing.T) {
 	}
 }
 
-// Proves validTools wires bounds.Check with the tools[i].function.parameters prefix; a
-// small MaxDepth keeps the body under the framework's own 32-level nesting cap.
+// Test flow:
+//  1. Run `validTools` with a shallow MaxDepth bound against a tool whose parameters nest one level past that depth.
+//  2. Assert the rejection is prefixed with `tools[0].function.parameters`, proving the bounds check is wired with that field path.
 func TestValidToolsAppliesBoundsWithFieldPathPrefix(t *testing.T) {
 	shallow := SchemaBounds{MaxDepth: 3, MaxNodes: 100, MaxSizeBytes: 100000, MaxBranch: 100, MaxEnum: 100}
 	rule := validTools(shallow, "auto")
@@ -96,6 +103,9 @@ func TestValidToolsAppliesBoundsWithFieldPathPrefix(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Run `validTools` against an empty tools array with `tool_choice:"auto"`.
+//  2. Assert both `tools` and `tool_choice` are dropped.
 func TestValidToolsStripsBothWhenToolsEmpty(t *testing.T) {
 	rule := validTools(testToolsBounds(), "auto")
 	document := parseTestDocument(t, `{"tools":[],"tool_choice":"auto"}`)
@@ -107,6 +117,9 @@ func TestValidToolsStripsBothWhenToolsEmpty(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Run `validTools` against an empty tools array with `tool_choice:"required"`.
+//  2. Assert both `tools` and `tool_choice` are dropped, even though the tool_choice value is otherwise invalid.
 func TestValidToolsStripsBothWhenToolsEmptyEvenWithBadToolChoice(t *testing.T) {
 	rule := validTools(testToolsBounds(), "auto")
 	document := parseTestDocument(t, `{"tools":[],"tool_choice":"required"}`)
@@ -118,6 +131,9 @@ func TestValidToolsStripsBothWhenToolsEmptyEvenWithBadToolChoice(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Run `validTools` against a valid tool with no `tool_choice`.
+//  2. Assert `tool_choice` is defaulted to "auto".
 func TestValidToolsDefaultsToolChoiceToAutoWhenAbsent(t *testing.T) {
 	rule := validTools(testToolsBounds(), "auto")
 	document := parseTestDocument(t, `{"tools":[{"type":"function","function":{"name":"x"}}]}`)
@@ -129,6 +145,9 @@ func TestValidToolsDefaultsToolChoiceToAutoWhenAbsent(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Run `validTools` against a valid tool with `tool_choice:"required"`.
+//  2. Assert `tool_choice` is coerced to "auto".
 func TestValidToolsCoercesRequiredToDefault(t *testing.T) {
 	rule := validTools(testToolsBounds(), "auto")
 	document := parseTestDocument(t, `{"tools":[{"type":"function","function":{"name":"x"}}],"tool_choice":"required"}`)
@@ -140,7 +159,9 @@ func TestValidToolsCoercesRequiredToDefault(t *testing.T) {
 	}
 }
 
-// vLLM's check_tool_usage rejects a tool_choice other than "none" sent without tools; the gateway deletes every value here regardless.
+// Test flow:
+//  1. Run table cases of `validTools` against a `tool_choice` value (required, auto, a malformed number, a malformed unknown string, or a valid function object) with tools absent.
+//  2. Assert `tool_choice` is deleted in every case, since vLLM's check_tool_usage would otherwise reject a non-"none" choice sent without tools.
 func TestValidToolsDeletesToolChoiceWhenToolsAbsentRegardlessOfValue(t *testing.T) {
 	rule := validTools(testToolsBounds(), "auto")
 	for _, testCase := range []struct {
@@ -165,6 +186,9 @@ func TestValidToolsDeletesToolChoiceWhenToolsAbsentRegardlessOfValue(t *testing.
 	}
 }
 
+// Test flow:
+//  1. Run `validTools` against a valid tool with `tool_choice:"none"`.
+//  2. Assert `tool_choice` stays "none".
 func TestValidToolsDoesNotOverrideExplicitToolChoice(t *testing.T) {
 	rule := validTools(testToolsBounds(), "auto")
 	document := parseTestDocument(t, `{"tools":[{"type":"function","function":{"name":"x"}}],"tool_choice":"none"}`)
@@ -176,6 +200,9 @@ func TestValidToolsDoesNotOverrideExplicitToolChoice(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Run `validTools` against a document with neither `tools` nor `tool_choice`.
+//  2. Assert `tool_choice` stays absent.
 func TestValidToolsLeavesToolChoiceAbsentWhenToolsAbsent(t *testing.T) {
 	rule := validTools(testToolsBounds(), "auto")
 	document := parseTestDocument(t, `{"messages":[]}`)
@@ -187,6 +214,9 @@ func TestValidToolsLeavesToolChoiceAbsentWhenToolsAbsent(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Run `validTools` against a tool whose function carries `strict:true` alongside `parameters`.
+//  2. Assert `function.strict` is deleted while `name` and `parameters` survive.
 func TestValidToolsStripsFunctionStrict(t *testing.T) {
 	rule := validTools(testToolsBounds(), "auto")
 	document := parseTestDocument(t, `{"tools":[{"type":"function","function":{"name":"x","strict":true,"parameters":{"type":"object"}}}]}`)
@@ -206,6 +236,9 @@ func TestValidToolsStripsFunctionStrict(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Run `validTools` against two tools, each with a different `strict` value.
+//  2. Assert `function.strict` is deleted from every tool.
 func TestValidToolsStripsFunctionStrictAcrossMultipleTools(t *testing.T) {
 	rule := validTools(testToolsBounds(), "auto")
 	document := parseTestDocument(t, `{"tools":[{"type":"function","function":{"name":"a","strict":true}},{"type":"function","function":{"name":"b","strict":false}}]}`)
@@ -221,6 +254,9 @@ func TestValidToolsStripsFunctionStrictAcrossMultipleTools(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Run table cases of `validToolChoice(toolChoiceMaxNameLen)` against an absent field, "auto", "none", and a function object.
+//  2. Assert every case is accepted.
 func TestValidToolChoiceAccepts(t *testing.T) {
 	rule := validToolChoice(toolChoiceMaxNameLen)
 	tests := []struct {
@@ -242,6 +278,9 @@ func TestValidToolChoiceAccepts(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Run table cases of `validToolChoice(toolChoiceMaxNameLen)` against unknown strings, numbers, booleans, arrays, and malformed function objects (missing or wrong type, missing or invalid function, missing, blank, non-string, or over-length name).
+//  2. Assert each case's exact error message.
 func TestValidToolChoiceRejects(t *testing.T) {
 	rule := validToolChoice(toolChoiceMaxNameLen)
 	tests := []struct {
@@ -275,7 +314,10 @@ func TestValidToolChoiceRejects(t *testing.T) {
 	}
 }
 
-// A tool whose parameters serialize to exactly toolsMaxSizeBytes is accepted; one byte more is rejected.
+// Test flow:
+//  1. Build a tool's `parameters` schema padded to serialize to exactly `toolsMaxSizeBytes`, and check it.
+//  2. Build the same schema padded one byte past that cap, and check it.
+//  3. Assert the exact-size case is accepted and the one-byte-over case is rejected with the serialized-size error.
 func TestValidToolsParametersByteCapBoundary(t *testing.T) {
 	rule := validTools(testToolsBounds(), "auto")
 	buildParameters := func(t *testing.T, size int) map[string]any {
@@ -304,7 +346,9 @@ func TestValidToolsParametersByteCapBoundary(t *testing.T) {
 	})
 }
 
-// The empty tools array is covered by TestNormalizeRequestDropsToolControlsWithoutTools, because only the pipeline runs validTools before this rule.
+// Test flow:
+//  1. Run table cases of `parallelToolCalls()` against a valid true, a valid false, and a malformed `parallel_tool_calls` value, all with `tools` absent.
+//  2. Assert `parallel_tool_calls` is deleted in every case (the empty-tools-array case is covered separately by `TestNormalizeRequestDropsToolControlsWithoutTools`, since only the pipeline runs `validTools` before this rule).
 func TestParallelToolCallsDropsWhenToolsAbsentRegardlessOfValue(t *testing.T) {
 	rule := parallelToolCalls()
 	for _, testCase := range []struct {
@@ -327,6 +371,9 @@ func TestParallelToolCallsDropsWhenToolsAbsentRegardlessOfValue(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Run `parallelToolCalls()` against a document with `tools` present and a malformed `parallel_tool_calls` value.
+//  2. Assert it is rejected with the must-be-a-boolean error.
 func TestParallelToolCallsValidatesWhenToolsPresent(t *testing.T) {
 	rule := parallelToolCalls()
 	document := parseTestDocument(t, `{"tools":[{"type":"function","function":{"name":"x"}}],"parallel_tool_calls":"yes"}`)
@@ -337,6 +384,9 @@ func TestParallelToolCallsValidatesWhenToolsPresent(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Run `parallelToolCalls()` against a document with `tools` present and `parallel_tool_calls:true`.
+//  2. Assert the value passes through unchanged.
 func TestParallelToolCallsPassesThroughAValidBoolWhenToolsPresent(t *testing.T) {
 	rule := parallelToolCalls()
 	document := parseTestDocument(t, `{"tools":[{"type":"function","function":{"name":"x"}}],"parallel_tool_calls":true}`)
@@ -362,6 +412,10 @@ func normalizeToolsTestRequest(t *testing.T, body string) (*Document, error) {
 	return document, nil
 }
 
+// Test flow:
+//  1. Call NormalizeRequest through the `normalizeToolsTestRequest` helper for bodies with a required or malformed `tool_choice` and `parallel_tool_calls` but no tools, and for an empty tools array with both controls set.
+//  2. Assert every case is accepted rather than rejected.
+//  3. Assert `tools`, `tool_choice`, and `parallel_tool_calls` are all dropped from the normalized body.
 func TestNormalizeRequestDropsToolControlsWithoutTools(t *testing.T) {
 	for _, testCase := range []struct {
 		name string
@@ -388,6 +442,9 @@ func TestNormalizeRequestDropsToolControlsWithoutTools(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Call NormalizeRequest with a valid tool and `tool_choice:"required"`.
+//  2. Assert the normalized body's `tool_choice` is coerced to "auto".
 func TestNormalizeRequestCoercesRequiredToolChoiceOnlyWhenToolsPresent(t *testing.T) {
 	body := `{"messages":[{"role":"user","content":"hi"}],"tools":[{"type":"function","function":{"name":"x"}}],"tool_choice":"required"}`
 	document, err := normalizeToolsTestRequest(t, body)
@@ -399,6 +456,9 @@ func TestNormalizeRequestCoercesRequiredToolChoiceOnlyWhenToolsPresent(t *testin
 	}
 }
 
+// Test flow:
+//  1. Call NormalizeRequest with a valid tool and a malformed `parallel_tool_calls` value.
+//  2. Assert normalization rejects the request with the must-be-a-boolean error.
 func TestNormalizeRequestRejectsMalformedParallelToolCallsWhenToolsPresent(t *testing.T) {
 	body := `{"messages":[{"role":"user","content":"hi"}],"tools":[{"type":"function","function":{"name":"x"}}],"parallel_tool_calls":"yes"}`
 	_, err := normalizeToolsTestRequest(t, body)
@@ -417,6 +477,9 @@ func jsonSchemaResponseFormatBody(t *testing.T, schema map[string]any) string {
 	return `{"response_format":{"type":"json_schema","json_schema":{"name":"r","schema":` + mustMarshalJSON(t, schema) + `}}}`
 }
 
+// Test flow:
+//  1. Run table cases of `validResponseFormat(bounds, maxNameLen)` against an absent field, `type:"text"`, `type:"json_object"`, a simple `json_schema`, a name with dots/dashes/underscores, and a schema type given as an array of primitives.
+//  2. Assert every case is accepted.
 func TestValidResponseFormatAccepts(t *testing.T) {
 	rule := validResponseFormat(testResponseFormatBounds(), responseFormatMaxNameLen)
 	tests := []struct {
@@ -440,6 +503,9 @@ func TestValidResponseFormatAccepts(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Run table cases of `validResponseFormat(bounds, maxNameLen)` against a non-object wrapper, a missing/empty/unknown type, a missing/invalid `json_schema` wrapper, a missing/blank/invalid/over-length schema name, a missing/non-object schema, and a forbidden `$ref` inside the schema.
+//  2. Assert each case's exact error message.
 func TestValidResponseFormatRejects(t *testing.T) {
 	rule := validResponseFormat(testResponseFormatBounds(), responseFormatMaxNameLen)
 	tests := []struct {
@@ -471,8 +537,9 @@ func TestValidResponseFormatRejects(t *testing.T) {
 	}
 }
 
-// Proves validResponseFormat wires bounds.Check with the response_format.json_schema.schema
-// prefix; a small MaxDepth keeps the body under the framework's 32-level nesting cap.
+// Test flow:
+//  1. Run `validResponseFormat` with a shallow MaxDepth bound against a `json_schema` whose schema nests one level past that depth.
+//  2. Assert the rejection is prefixed with `response_format.json_schema.schema`, proving the bounds check is wired with that field path.
 func TestValidResponseFormatAppliesBoundsWithFieldPathPrefix(t *testing.T) {
 	shallow := SchemaBounds{MaxDepth: 3, MaxNodes: 100, MaxSizeBytes: 100000, MaxBranch: 100, MaxEnum: 100}
 	rule := validResponseFormat(shallow, responseFormatMaxNameLen)
@@ -495,8 +562,9 @@ func testStructuredOutputsBounds() structuredOutputsBounds {
 	}
 }
 
-// TestStructuredOutputsConstraintValidatorsCoverAllFields is the lockstep test: every field in
-// structuredOutputsConstraintFields must have a validator, so the two can't drift apart.
+// Test flow:
+//  1. Look up `structuredOutputsConstraintValidators(bounds)` for every field in `structuredOutputsConstraintFields`.
+//  2. Assert every field has a validator, keeping the two lists from drifting apart.
 func TestStructuredOutputsConstraintValidatorsCoverAllFields(t *testing.T) {
 	validators := structuredOutputsConstraintValidators(testStructuredOutputsBounds())
 	for _, field := range structuredOutputsConstraintFields {
@@ -506,6 +574,9 @@ func TestStructuredOutputsConstraintValidatorsCoverAllFields(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Run `validStructuredOutputs(bounds)` against a document with no `structured_outputs` field.
+//  2. Assert it returns no error.
 func TestValidStructuredOutputsAbsent(t *testing.T) {
 	rule := validStructuredOutputs(testStructuredOutputsBounds())
 	document := parseTestDocument(t, `{"messages":[]}`)
@@ -514,6 +585,9 @@ func TestValidStructuredOutputsAbsent(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Run `validStructuredOutputs(bounds)` against `structured_outputs` values that are a string, a number, and an array.
+//  2. Assert every case is rejected with the invalid-wrapper-shape error.
 func TestValidStructuredOutputsRejectsNonObjectWrapper(t *testing.T) {
 	rule := validStructuredOutputs(testStructuredOutputsBounds())
 	for _, body := range []string{`{"structured_outputs":"x"}`, `{"structured_outputs":42}`, `{"structured_outputs":[]}`} {
@@ -528,6 +602,9 @@ func TestValidStructuredOutputsRejectsNonObjectWrapper(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Run `validStructuredOutputs(bounds)` against a document carrying both `response_format` and `structured_outputs`.
+//  2. Assert it is rejected as an unsupported combination.
 func TestValidStructuredOutputsRejectsResponseFormatConflict(t *testing.T) {
 	rule := validStructuredOutputs(testStructuredOutputsBounds())
 	document := parseTestDocument(t, `{"response_format":{"type":"json_object"},"structured_outputs":{"json_object":true}}`)
@@ -538,8 +615,9 @@ func TestValidStructuredOutputsRejectsResponseFormatConflict(t *testing.T) {
 	}
 }
 
-// Exact message is golden-pinned by schema_structured_outputs_rejected_for_kimi and
-// profile_kimi_structured_outputs_rejected.
+// Test flow:
+//  1. Run `validStructuredOutputs(bounds)` under the kimi profile against a `structured_outputs` request.
+//  2. Assert the rejection's exact message text, which is golden-pinned by `schema_structured_outputs_rejected_for_kimi` and `profile_kimi_structured_outputs_rejected`.
 func TestValidStructuredOutputsRejectsForProfileHook(t *testing.T) {
 	rule := validStructuredOutputs(testStructuredOutputsBounds())
 	document := parseTestDocument(t, `{"structured_outputs":{"json_object":true}}`)
@@ -550,6 +628,9 @@ func TestValidStructuredOutputsRejectsForProfileHook(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. For the default (nil) and minimax profiles, run `validStructuredOutputs(bounds)` against a `structured_outputs` request.
+//  2. Assert it is accepted for every profile without the hook.
 func TestValidStructuredOutputsAcceptsWithoutProfileHook(t *testing.T) {
 	rule := validStructuredOutputs(testStructuredOutputsBounds())
 	for _, profile := range []*Profile{nil, minimaxProfile} {
@@ -560,6 +641,9 @@ func TestValidStructuredOutputsAcceptsWithoutProfileHook(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Run table cases of `validStructuredOutputs(bounds)` against an empty envelope, an envelope with only an auxiliary field set, and an envelope with two constraints set.
+//  2. Assert each case's exact error message reporting the wrong constraint count.
 func TestValidStructuredOutputsEnforcesExactlyOne(t *testing.T) {
 	rule := validStructuredOutputs(testStructuredOutputsBounds())
 	tests := []struct {
@@ -582,6 +666,11 @@ func TestValidStructuredOutputsEnforcesExactlyOne(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Run `validStructuredOutputs(bounds)` against an envelope with one explicit `null` constraint alongside one set constraint.
+//  2. Assert it is accepted, since a null constraint counts as absent.
+//  3. Run it again against an envelope where all six constraints are explicit `null`.
+//  4. Assert the rejection reports zero constraints set.
 func TestValidStructuredOutputsTreatsExplicitNullAsAbsent(t *testing.T) {
 	rule := validStructuredOutputs(testStructuredOutputsBounds())
 	t.Run("null plus one set counts as one", func(t *testing.T) {
@@ -599,6 +688,9 @@ func TestValidStructuredOutputsTreatsExplicitNullAsAbsent(t *testing.T) {
 	})
 }
 
+// Test flow:
+//  1. Run `validStructuredOutputs(bounds)` against a `structured_outputs` object carrying `_backend` and `_backend_was_auto` alongside `json_object`.
+//  2. Assert both private fields are stripped while `json_object` survives.
 func TestValidStructuredOutputsStripsPrivateFields(t *testing.T) {
 	rule := validStructuredOutputs(testStructuredOutputsBounds())
 	document := parseTestDocument(t, `{"structured_outputs":{"json_object":true,"_backend":"xgrammar","_backend_was_auto":true}}`)
@@ -617,6 +709,9 @@ func TestValidStructuredOutputsStripsPrivateFields(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Run `validStructuredOutputs(bounds)` against a `structured_outputs` object carrying an unrecognized `backend` key.
+//  2. Assert it is rejected as an unknown sub-field.
 func TestValidStructuredOutputsRejectsUnknownSubField(t *testing.T) {
 	rule := validStructuredOutputs(testStructuredOutputsBounds())
 	document := parseTestDocument(t, `{"structured_outputs":{"json_object":true,"backend":"outlines"}}`)
@@ -627,6 +722,9 @@ func TestValidStructuredOutputsRejectsUnknownSubField(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Run `validStructuredOutputs(bounds)` against a bounded `json` schema, a string-encoded schema, and a schema whose nested value carries a `$ref`.
+//  2. Assert the bounded schema is accepted, the string-encoded schema is rejected, and the `$ref` case is rejected with the `structured_outputs.json:` prefix.
 func TestValidStructuredOutputsJSON(t *testing.T) {
 	rule := validStructuredOutputs(testStructuredOutputsBounds())
 	t.Run("accepts a bounded schema", func(t *testing.T) {
@@ -652,6 +750,9 @@ func TestValidStructuredOutputsJSON(t *testing.T) {
 	})
 }
 
+// Test flow:
+//  1. Run `validStructuredOutputs(bounds)` against a normal pattern, a non-string value, an over-length pattern, and an uncompilable pattern.
+//  2. Assert the normal pattern is accepted and each invalid case fails with its matching error.
 func TestValidStructuredOutputsRegex(t *testing.T) {
 	rule := validStructuredOutputs(testStructuredOutputsBounds())
 	t.Run("accepts a normal pattern", func(t *testing.T) {
@@ -685,6 +786,9 @@ func TestValidStructuredOutputsRegex(t *testing.T) {
 	})
 }
 
+// Test flow:
+//  1. Run `validStructuredOutputs(bounds)` against a bounded list, an empty array, a non-string item, a list exactly at the entry-count limit, a list one entry over the limit, a single entry at the exact per-entry byte limit, entries summed exactly to the shared size cap, and entries that exceed the shared size cap.
+//  2. Assert each case's pass/fail outcome and, where relevant, its exact or prefixed error message.
 func TestValidStructuredOutputsChoice(t *testing.T) {
 	rule := validStructuredOutputs(testStructuredOutputsBounds())
 	t.Run("accepts a bounded list", func(t *testing.T) {
@@ -738,7 +842,6 @@ func TestValidStructuredOutputsChoice(t *testing.T) {
 			t.Fatalf("validStructuredOutputs() = %v, want nil", err)
 		}
 	})
-	// Sums entries capped at the per-entry limit up to exactly the shared total-bytes cap.
 	t.Run("accepts total length exactly at the shared size cap", func(t *testing.T) {
 		var entries []string
 		remaining := structuredOutputsMaxSizeBytes
@@ -766,6 +869,9 @@ func TestValidStructuredOutputsChoice(t *testing.T) {
 	})
 }
 
+// Test flow:
+//  1. Run `validStructuredOutputs(bounds)` against a simple grammar, a grammar nested exactly at the depth limit, a grammar one level past the limit (the CVE-2026-25048 proof-of-concept pattern), and a grammar whose balanced brackets do not accumulate depth.
+//  2. Assert the accepted cases pass and the over-limit case fails with the nesting-depth error.
 func TestValidStructuredOutputsGrammar(t *testing.T) {
 	rule := validStructuredOutputs(testStructuredOutputsBounds())
 	t.Run("accepts a simple grammar", func(t *testing.T) {
@@ -796,6 +902,9 @@ func TestValidStructuredOutputsGrammar(t *testing.T) {
 	})
 }
 
+// Test flow:
+//  1. Run `validStructuredOutputs(bounds)` against `json_object` set to true and to false, and against a non-boolean value.
+//  2. Assert the boolean cases are accepted and the non-boolean case fails with the must-be-a-boolean error.
 func TestValidStructuredOutputsJSONObject(t *testing.T) {
 	rule := validStructuredOutputs(testStructuredOutputsBounds())
 	t.Run("accepts true and false", func(t *testing.T) {
@@ -816,6 +925,9 @@ func TestValidStructuredOutputsJSONObject(t *testing.T) {
 	})
 }
 
+// Test flow:
+//  1. Run `validStructuredOutputs(bounds)` against the object form of `structural_tag`, its rejected string form, an object padded to exactly the byte limit, and an oversize object.
+//  2. Assert each case's pass/fail outcome and, where relevant, its exact or prefixed error message.
 func TestValidStructuredOutputsStructuralTag(t *testing.T) {
 	rule := validStructuredOutputs(testStructuredOutputsBounds())
 	t.Run("accepts the object form", func(t *testing.T) {
@@ -832,8 +944,6 @@ func TestValidStructuredOutputsStructuralTag(t *testing.T) {
 			t.Fatalf("validStructuredOutputs() = %v, want %q", err, want)
 		}
 	})
-	// Pads a same-shape template to the byte target so the fixture accounts for JSON
-	// structural overhead instead of hand-counted padding.
 	t.Run("accepts a structural_tag object at exactly the byte limit", func(t *testing.T) {
 		template := map[string]any{"type": "structural_tag", "blob": ""}
 		baseSize, err := jsonMarshaledSize(template)
@@ -855,6 +965,9 @@ func TestValidStructuredOutputsStructuralTag(t *testing.T) {
 	})
 }
 
+// Test flow:
+//  1. Run `validStructuredOutputs(bounds)` against a `whitespace_pattern` alongside `json`, and against an uncompilable pattern.
+//  2. Assert the valid pattern is accepted and the uncompilable one fails with the compile error.
 func TestValidStructuredOutputsWhitespacePattern(t *testing.T) {
 	rule := validStructuredOutputs(testStructuredOutputsBounds())
 	t.Run("accepts a pattern alongside json", func(t *testing.T) {
@@ -872,6 +985,9 @@ func TestValidStructuredOutputsWhitespacePattern(t *testing.T) {
 	})
 }
 
+// Test flow:
+//  1. Run `validStructuredOutputs(bounds)` against both flags set to booleans, and against a non-boolean flag value.
+//  2. Assert the boolean case is accepted and the non-boolean case fails, naming the offending flag.
 func TestValidStructuredOutputsBoolFlags(t *testing.T) {
 	rule := validStructuredOutputs(testStructuredOutputsBounds())
 	t.Run("accepts bools on both flags", func(t *testing.T) {
@@ -894,6 +1010,9 @@ func testChatTemplateKwargsBounds() ObjectBounds {
 	return ObjectBounds{MaxDepth: chatTemplateKwargsMaxDepth, MaxNodes: chatTemplateKwargsMaxNodes, MaxSizeBytes: chatTemplateKwargsMaxSizeBytes}
 }
 
+// Test flow:
+//  1. Run table cases of `validChatTemplateKwargs(bounds)` against an absent field, an empty object, a kimi thinking shape, a qwen enable_thinking/preserve_thinking pair, an `add_generation_prompt` flag, and an array-valued entry.
+//  2. Assert every case is accepted.
 func TestValidChatTemplateKwargsAccepts(t *testing.T) {
 	rule := validChatTemplateKwargs(testChatTemplateKwargsBounds())
 	tests := []struct {
@@ -917,6 +1036,9 @@ func TestValidChatTemplateKwargsAccepts(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Run table cases of `validChatTemplateKwargs(bounds)` against a non-object wrapper, an array wrapper, each forbidden key that overrides an `apply_hf_chat_template` positional argument, a forbidden key alongside a legitimate one, and an object nested one level past the depth limit.
+//  2. Assert each case's exact error message.
 func TestValidChatTemplateKwargsRejects(t *testing.T) {
 	rule := validChatTemplateKwargs(testChatTemplateKwargsBounds())
 	tests := []struct {
@@ -947,12 +1069,11 @@ func TestValidChatTemplateKwargsRejects(t *testing.T) {
 	}
 }
 
-// An auxiliary field is what a client sends alongside its one constraint, and the known-field set is
-// the only thing keeping it from being rejected as an unknown sub-field. Drop a name from that list
-// and every request carrying it starts failing, with nothing else in the package noticing.
+// Test flow:
+//  1. Assert every field in `structuredOutputsAuxiliaryFields` has a hand-written value in the local `valueByField` table, keeping the table honest as the field list grows (each field needs a value of its own type, so the table is written out rather than derived).
+//  2. Run `validStructuredOutputs(bounds)` once per auxiliary field, alongside a `regex` constraint.
+//  3. Assert every auxiliary field is accepted, since the known-field set is the only thing keeping it from being rejected as an unknown sub-field.
 func TestStructuredOutputsAcceptsEveryAuxiliaryFieldBesideAConstraint(t *testing.T) {
-	// Each field needs a value of its own type, so the table is written out rather than derived. The
-	// coverage check below is what keeps it honest when the list grows.
 	valueByField := map[string]string{
 		"whitespace_pattern":            `" "`,
 		"disable_any_whitespace":        `true`,
@@ -977,6 +1098,9 @@ func TestStructuredOutputsAcceptsEveryAuxiliaryFieldBesideAConstraint(t *testing
 	}
 }
 
+// Test flow:
+//  1. Run `validStructuredOutputs(bounds)` against a `structured_outputs` object carrying an invented field alongside a `regex` constraint.
+//  2. Assert it is rejected as an unknown sub-field.
 func TestStructuredOutputsRejectsAFieldThatIsNeitherConstraintNorAuxiliary(t *testing.T) {
 	rule := validStructuredOutputs(testStructuredOutputsBounds())
 	document := parseTestDocument(t, `{"structured_outputs":{"regex":"a+","invented":true}}`)

@@ -9,7 +9,10 @@ func classifiedState() (*attemptState, *sseClassifier) {
 	return &attemptState{}, newSSEClassifier(testBudget(1<<20, 1<<20, 1<<20), "participant", "model", nil)
 }
 
-// A role-only chunk is a token, not content: it is what the two stamps exist to tell apart.
+// Test flow:
+//  1. Classify a role-only chunk with empty content, then a chunk carrying real content, through a fresh `attemptState`/`sseClassifier`.
+//  2. Assert the role chunk is not counted as content and the content chunk is.
+//  3. Assert the state's first-token and first-content stamps can diverge when a role chunk arrives before content.
 func TestFirstContentIsNotTheFirstChunk(t *testing.T) {
 	t.Parallel()
 	state, classifier := classifiedState()
@@ -34,7 +37,9 @@ func TestFirstContentIsNotTheFirstChunk(t *testing.T) {
 	}
 }
 
-// Reasoning and a tool call are content too: a host that opens with either has already started work.
+// Test flow:
+//  1. Classify each of a reasoning chunk, a reasoning_content chunk, and a tool_calls chunk in turn.
+//  2. Assert each is counted as content.
 func TestFirstContentCountsReasoningAndToolCalls(t *testing.T) {
 	t.Parallel()
 	for _, chunk := range []string{
@@ -49,7 +54,9 @@ func TestFirstContentCountsReasoningAndToolCalls(t *testing.T) {
 	}
 }
 
-// An empty tool_calls array is the shape a host sends before it has decided anything.
+// Test flow:
+//  1. Classify each of an empty tool_calls array, an empty delta, and a role-only delta in turn.
+//  2. Assert none of them is counted as content.
 func TestFirstContentIgnoresAnEmptyOpening(t *testing.T) {
 	t.Parallel()
 	for _, chunk := range []string{

@@ -11,7 +11,11 @@ import (
 	"devshard/cmd/gateway/scheduler"
 )
 
-// A burned nonce is money spent on nobody; the line is the only place its nonce is named.
+// Test flow:
+//  1. Build a tracedDispatches over a dispatch recorder and a journal.
+//  2. Call GhostBurned for one escrow and burn.
+//  3. Flush the journal.
+//  4. Assert the log carries a "nonce burned for nobody" line naming the escrow, nonce, host and reason.
 func TestABurnedNonceIsLoggedWithTheEscrowItCostAndWhy(t *testing.T) {
 	logged := logcapture.Install(t)
 	events := newTestJournal(t)
@@ -27,6 +31,11 @@ func TestABurnedNonceIsLoggedWithTheEscrowItCostAndWhy(t *testing.T) {
 	}})
 }
 
+// Test flow:
+//  1. Build a tracedDispatches over a dispatch recorder and a journal.
+//  2. Call BurnBudgetExhausted for one escrow.
+//  3. Flush the journal.
+//  4. Assert the log carries an "escrow stopped burning nonces at its budget" line naming the escrow.
 func TestAnEscrowAtItsBurnBudgetSaysSo(t *testing.T) {
 	logged := logcapture.Install(t)
 	events := newTestJournal(t)
@@ -40,7 +49,11 @@ func TestAnEscrowAtItsBurnBudgetSaysSo(t *testing.T) {
 	}})
 }
 
-// The line is the only record that a request's exclusion lapsed, so its escrow and host must not trade places.
+// Test flow:
+//  1. Build a tracedDispatches over a dispatch recorder and a journal.
+//  2. Call ExcludedHostServed for one escrow and host.
+//  3. Flush the journal.
+//  4. Assert the log carries a "nonce spent on a host the request excluded" line naming the escrow and host.
 func TestANonceSpentOnAnExcludedHostNamesItsEscrowAndHost(t *testing.T) {
 	logged := logcapture.Install(t)
 	events := newTestJournal(t)
@@ -54,7 +67,12 @@ func TestANonceSpentOnAnExcludedHostNamesItsEscrowAndHost(t *testing.T) {
 	}})
 }
 
-// A warmup vote reaches the ledger through RecordProbeTimeout, not RecordTimeout, so it never writes the race vote's own line.
+// Test flow:
+//  1. Build a race recorder and a failed timeout event.
+//  2. Run the event through nonceAccountedRaces.RecordTimeout and flush the journal.
+//  3. Assert the log carries a "timeout vote failed" line.
+//  4. Run the same event through probeVotes.RecordTimeout and flush again.
+//  5. Assert the log still holds exactly one line, since a warmup vote reaches RecordProbeTimeout rather than writing the race vote's own line again.
 func TestAFailedWarmupVoteWritesNoTimeoutVoteLine(t *testing.T) {
 	logged := logcapture.Install(t)
 	events := newTestJournal(t)
@@ -80,7 +98,12 @@ func TestAFailedWarmupVoteWritesNoTimeoutVoteLine(t *testing.T) {
 	}
 }
 
-// phaseNarrator decides what moved and the journal writes it; a first poll that read no epoch announces none.
+// Test flow:
+//  1. Build a phaseNarrator over a journal.
+//  2. Observe an error-only snapshot, then one that opens a PoC block, then one that clears it.
+//  3. Flush the journal.
+//  4. Assert the log carries a "chain epoch" line, a "chain blocked requests" line, and a "chain unblocked requests" line with the expected fields.
+//  5. Assert exactly three lines were recorded, since the epoch-less first snapshot announces nothing.
 func TestThePhaseNarratorHandsItsChangesToTheJournal(t *testing.T) {
 	logged := logcapture.Install(t)
 	events := newTestJournal(t)

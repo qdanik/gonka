@@ -13,8 +13,7 @@ import (
 )
 
 var (
-	// legacyRouteLabels is the label domain the existing dashboards select on. A string that differs here
-	// empties every panel filtered on it, with no error anywhere.
+	// legacyRouteLabels is the label domain the existing dashboards select on.
 	legacyRouteLabels = []string{
 		"/v1/models",
 		"/v1/chat/completions",
@@ -51,12 +50,15 @@ var (
 		"/devshard/{id}/v1/debug/sync-hosts",
 	}
 
-	// deliberateDivergences are the only labels allowed to sit outside the legacy domain. The batch settle
-	// keeps a label of its own because one call settles a whole list: folded into the single-escrow series it
-	// would stretch that panel's latency past reading.
+	// deliberateDivergences are the only labels allowed to sit outside the legacy domain.
 	deliberateDivergences = []string{otherRouteLabel, "/v1/requests/{id}", "/v1/admin/hosts", "/v1/admin/devshards/settle"}
 )
 
+// Test flow:
+//  1. Build a map pinning every expected route pattern to its metric label.
+//  2. Read the registered routes off a harness server.
+//  3. Assert the registered route count matches the pinned map.
+//  4. Assert every registered route's label matches its pinned entry.
 func TestEveryRouteCarriesItsExactMetricLabel(t *testing.T) {
 	expected := map[string]string{
 		"/v1/models":                                 "/v1/models",
@@ -117,6 +119,9 @@ func TestEveryRouteCarriesItsExactMetricLabel(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Walk every registered route on a harness server.
+//  2. Assert every non-empty label is either in `legacyRouteLabels` or `deliberateDivergences`.
 func TestEveryInstrumentedLabelIsALegacyLabelOrADeclaredDivergence(t *testing.T) {
 	live := newHarness(t)
 	for _, route := range live.server.routes() {
@@ -130,6 +135,11 @@ func TestEveryInstrumentedLabelIsALegacyLabelOrADeclaredDivergence(t *testing.T)
 	}
 }
 
+// Test flow:
+//  1. Define a table of unmatched paths, varying across a favicon request, an unmatched devshard subpath, and an unmatched devshard request-id subpath.
+//  2. For each probe, send a GET request through a fresh harness.
+//  3. Assert the response is 404.
+//  4. Assert the telemetry-served label is `otherRouteLabel`.
 func TestUnmatchedPathsFoldIntoOneLabel(t *testing.T) {
 	probes := []string{
 		"/favicon.ico",
@@ -150,8 +160,11 @@ func TestUnmatchedPathsFoldIntoOneLabel(t *testing.T) {
 	}
 }
 
-// A traversal probe is answered by the mux's path-cleaning redirect, above every registered route, so
-// it reaches no label at all.
+// Test flow:
+//  1. Define a table of traversal probe paths using dot-dot segments.
+//  2. For each probe, send a GET request through a fresh harness.
+//  3. Assert the response is a path-cleaning redirect (301 or 307), answered above every registered route.
+//  4. Assert no telemetry label was served.
 func TestATraversalProbeReachesNoLabel(t *testing.T) {
 	for _, probe := range []string{"/../etc/passwd", "/v1/models/../../secret"} {
 		t.Run(probe, func(t *testing.T) {
@@ -167,6 +180,10 @@ func TestATraversalProbeReachesNoLabel(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Send an admin-authorized GET request for a status by request ID.
+//  2. Assert the served label is the templated `/v1/requests/{id}`, not the raw ID.
+//  3. Assert none of the recorded labels contain the raw request ID.
 func TestARequestIDNeverReachesALabel(t *testing.T) {
 	requestID := "9f2c1d4e-0000-4444-8888-aaaabbbbcccc"
 	live := newHarness(t)
@@ -181,8 +198,12 @@ func TestARequestIDNeverReachesALabel(t *testing.T) {
 	}
 }
 
-// TestMetricsScrapeDoesNotCountItself drives the real telemetry rather than the harness fake: the
-// families it would populate are the point of the assertion.
+// Test flow:
+//  1. Build a real `metrics.Metrics` telemetry and wire it into a harness server, replacing the harness's fake.
+//  2. Scrape /metrics twice.
+//  3. Send one instrumented request to /v1/models so the counted family exists at all.
+//  4. Gather the `devshard_http_requests_total` and `devshard_http_request_duration_seconds` families.
+//  5. Assert neither family carries a metric labelled with the /metrics path itself.
 func TestMetricsScrapeDoesNotCountItself(t *testing.T) {
 	telemetry := metrics.New()
 	live := newHarness(t)
@@ -196,7 +217,6 @@ func TestMetricsScrapeDoesNotCountItself(t *testing.T) {
 			t.Fatalf("scrape status: got %d", recorder.Code)
 		}
 	}
-	// One instrumented request proves the family exists at all, so an empty result cannot pass by accident.
 	live.server.Handler().ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/v1/models", nil))
 
 	requests := gatheredFamily(t, telemetry, "devshard_http_requests_total")

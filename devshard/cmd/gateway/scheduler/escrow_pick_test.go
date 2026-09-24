@@ -133,12 +133,16 @@ func pickWith(scheduler *Scheduler, profile RequestProfile, snapshot chain.Phase
 	return scheduler.pickEscrow(profile, snapshot, newWaiter(profile, time.Time{}), nil)
 }
 
+// Test flow:
+//  1. Build two candidates where the pinned one scores worst by every measure, and pin the request to it.
+//  2. Pick an escrow.
+//  3. Assert the pinned escrow is returned directly, with no weight lookups at all.
+//  4. Pin a request to an escrow id that does not exist and assert the pick fails with `ErrEscrowGone`.
 func TestPickEscrowPinned(t *testing.T) {
 	t.Parallel()
 
 	t.Run("returns the pinned escrow directly", func(t *testing.T) {
 		t.Parallel()
-		// The pinned escrow is the worst by every score, and still wins because it is pinned.
 		scheduler, _, weights := newScheduler(
 			candidate{id: "escrow-1", activeUsers: 0, weight: 10},
 			candidate{id: "escrow-2", activeUsers: 99, weight: 1, latestNonce: 19_000},
@@ -167,6 +171,9 @@ func TestPickEscrowPinned(t *testing.T) {
 	})
 }
 
+// Test flow:
+//  1. For each table case of two candidates' active-user counts and weights, pick an escrow.
+//  2. Assert the winner matches the case: equal weight sorts by in-flight requests, equal in-flight sorts by weight, and the ratio of the two beats either raw number, with a zero or negative weight never winning.
 func TestPickEscrowLowestUtilisationWins(t *testing.T) {
 	t.Parallel()
 
@@ -241,6 +248,11 @@ func TestPickEscrowLowestUtilisationWins(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build two candidates tied on both weight and active users.
+//  2. Pick an escrow three times in a row for the same profile.
+//  3. Assert the first two picks differ.
+//  4. Assert the third pick wraps back to the first escrow.
 func TestPickEscrowTieBreakAdvancesSharedCounter(t *testing.T) {
 	t.Parallel()
 	scheduler, _, _ := newScheduler(
@@ -270,6 +282,10 @@ func TestPickEscrowTieBreakAdvancesSharedCounter(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build two candidates with a clear winner by active-user count.
+//  2. Pick an escrow three times in a row for the same profile.
+//  3. Assert every pick returns the same winning escrow.
 func TestPickEscrowTieBreakDoesNotAdvanceWithoutATie(t *testing.T) {
 	t.Parallel()
 	scheduler, _, _ := newScheduler(
@@ -289,6 +305,9 @@ func TestPickEscrowTieBreakDoesNotAdvanceWithoutATie(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. For each table case of a governance max-nonce cap and one or two candidates' latest nonces and group sizes, pick an escrow.
+//  2. Assert the winner or error matches the case: a capped candidate is dropped in favor of a fresh one, an escrow one nonce below its cutoff is served, one at or past the cutoff is refused with `ErrNoEscrowCapacity`, and the cutoff scales correctly across small, large and oversized caps without wrapping.
 func TestPickEscrowNonceCap(t *testing.T) {
 	t.Parallel()
 
@@ -299,7 +318,6 @@ func TestPickEscrowNonceCap(t *testing.T) {
 		want       string
 		wantErr    error
 	}{
-		// Cap 1_000, group 4: hosts' cap 995, cutoff 795.
 		{
 			name:     "governance cap drops the capped escrow",
 			maxNonce: 1_000,
@@ -325,7 +343,6 @@ func TestPickEscrowNonceCap(t *testing.T) {
 			},
 			wantErr: ErrNoEscrowCapacity,
 		},
-		// Cap 1_000_000, group 3: hosts' cap 999_996, cutoff 999_796.
 		{
 			name:     "a large cap keeps an escrow one nonce below the cutoff",
 			maxNonce: 1_000_000,
@@ -342,7 +359,6 @@ func TestPickEscrowNonceCap(t *testing.T) {
 			},
 			wantErr: ErrNoEscrowCapacity,
 		},
-		// Cap 150, group 4: hosts' cap 145, margin at most half of it (72), cutoff 73.
 		{
 			name:     "a small cap keeps an escrow one nonce below the half-cap cutoff",
 			maxNonce: 150,
@@ -359,7 +375,6 @@ func TestPickEscrowNonceCap(t *testing.T) {
 			},
 			wantErr: ErrNoEscrowCapacity,
 		},
-		// Cap 206, group 4: hosts' cap 201, cutoff 101.
 		{
 			name:     "the cutoff does not collapse once the hosts' cap passes the margin",
 			maxNonce: 206,
@@ -433,6 +448,10 @@ func TestPickEscrowNonceCap(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Pick an escrow with every candidate at zero or negative weight, and assert the error is `ErrNoEscrowCapacity` naming neither escrow id nor the model.
+//  2. Pick an escrow with an empty candidate set and assert the same error.
+//  3. Pick an escrow for a model with no candidates and assert the same error.
 func TestPickEscrowNoCapacity(t *testing.T) {
 	t.Parallel()
 
@@ -475,6 +494,12 @@ func TestPickEscrowNoCapacity(t *testing.T) {
 	})
 }
 
+// Test flow:
+//  1. Build two candidates, one of them past the fallback nonce ceiling.
+//  2. Pick an escrow.
+//  3. Assert candidate enumeration queried the model exactly once.
+//  4. Assert only the uncapped escrow was weighed, since the capped one is dropped without a rotation or replacement side effect reaching its session.
+//  5. Assert every session call across all candidates was a plain read: `LatestNonce`, `GroupSize` or `SlotParticipants`.
 func TestPickEscrowTouchesOnlyEnumerationAndWeights(t *testing.T) {
 	t.Parallel()
 	scheduler, escrows, weights := newScheduler(
@@ -489,8 +514,6 @@ func TestPickEscrowTouchesOnlyEnumerationAndWeights(t *testing.T) {
 	if len(escrows.queries) != 1 || escrows.queries[0] != modelA {
 		t.Fatalf("candidate enumeration = %v, want one query for %q", escrows.queries, modelA)
 	}
-	// The nonce-capped escrow must be dropped without being weighed, and without any rotation or
-	// replacement side effect reaching its session.
 	if len(weights.lookups) != 1 || weights.lookups[0] != "escrow-1/"+modelA {
 		t.Fatalf("weight lookups = %v, want only escrow-1", weights.lookups)
 	}
@@ -509,9 +532,11 @@ type exhaustionReport struct {
 	reason   ExhaustionReason
 }
 
-// Routing declines an exhausted escrow but cannot replace it, so it tells the rotation lifecycle why, and
-// never for the fallback ceiling alone: that ceiling can sit below the hosts' own, and a reported escrow is
-// parked or put on hold.
+// Test flow:
+//  1. For each table case of an optional pin, a chain snapshot's nonce cap, and a spent candidate's balance, pick an escrow beside a fresh one.
+//  2. Assert the picked escrow or error matches the case.
+//  3. Assert the out-of-funds classification of the error matches the case.
+//  4. Assert the exhaustion reports match the case: the chain's own cap reports `ExhaustionNonceCap` and outranks a dry balance, while past the fallback ceiling alone a dry balance reports `ExhaustionBalanceFloor` and the fallback ceiling alone reports nothing.
 func TestPickEscrowReportsAnExhaustedEscrowButNeverForTheFallbackCeilingAlone(t *testing.T) {
 	t.Parallel()
 
@@ -592,6 +617,10 @@ func TestPickEscrowReportsAnExhaustedEscrowButNeverForTheFallbackCeilingAlone(t 
 	}
 }
 
+// Test flow:
+//  1. Build a spent candidate past the fallback ceiling and a fresh one, with no exhaustion reporter set.
+//  2. Pick an escrow.
+//  3. Assert the pick succeeds and returns the fresh escrow, so a nil reporter does not break the pick.
 func TestPickEscrowWithoutANonceExhaustedReporterStillPicks(t *testing.T) {
 	t.Parallel()
 	scheduler, _, _ := newScheduler(
@@ -605,9 +634,10 @@ func TestPickEscrowWithoutANonceExhaustedReporterStillPicks(t *testing.T) {
 	}
 }
 
-// A client names the escrow on the per-escrow route, so the pinned path takes untrusted input. The
-// nonce ceiling reserves room for the finalize and settlement that follow; past it the chain rejects
-// the settlement and the escrow's funds can never be reclaimed.
+// Test flow:
+//  1. Build one candidate whose latest nonce is past the fallback ceiling, and pin the request to it.
+//  2. Pick an escrow.
+//  3. Assert the pick fails with `ErrNoEscrowCapacity`, since the pinned path still honours the nonce ceiling.
 func TestAPinnedEscrowStillHonoursTheNonceCeiling(t *testing.T) {
 	t.Parallel()
 	scheduler, _, _ := newScheduler(candidate{id: "escrow-1", weight: 1, latestNonce: 19_900})
@@ -619,6 +649,10 @@ func TestAPinnedEscrowStillHonoursTheNonceCeiling(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. For each table case of the pinned candidate's latest nonce, one below and one at the governance cutoff, pick the pinned escrow.
+//  2. Assert the escrow one nonce below the cutoff is served.
+//  3. Assert the escrow at the cutoff is refused with `ErrNoEscrowCapacity`.
 func TestAPinnedEscrowMeetsTheInFlightMarginAtAFetchedCap(t *testing.T) {
 	t.Parallel()
 	testCases := []struct {
@@ -647,6 +681,10 @@ func TestAPinnedEscrowMeetsTheInFlightMarginAtAFetchedCap(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build one candidate with a low latest nonce, and pin the request to it.
+//  2. Pick an escrow.
+//  3. Assert the pinned escrow is served.
 func TestAPinnedEscrowUnderTheCeilingIsServed(t *testing.T) {
 	t.Parallel()
 	scheduler, _, _ := newScheduler(candidate{id: "escrow-1", weight: 1, latestNonce: 10})
@@ -661,10 +699,13 @@ func TestAPinnedEscrowUnderTheCeilingIsServed(t *testing.T) {
 func (f *fakeSession) Balance() uint64    { return f.balance }
 func (f *fakeSession) TokenPrice() uint64 { return f.tokenPrice }
 
-// An escrow must leave routing while it can still refuse cleanly, not once it fails requests.
+// Test flow:
+//  1. Build three escrows priced so one request reserves 200: a poor one holding 500 across 4 in-flight requests, a rich one, and an empty one that cannot afford even one.
+//  2. Check `belowBalanceFloor` against a 20-token reserve for each.
+//  3. Assert the poor escrow is below the floor, the rich one is not, and the empty one is.
 func TestPickEscrowSkipsAnEscrowBelowItsBalanceFloor(t *testing.T) {
 	t.Parallel()
-	const reserveTokens, price = 20, 10 // one request reserves 200
+	const reserveTokens, price = 20, 10
 
 	poor := Escrow{ID: "poor", Session: &fakeSession{balance: 500, tokenPrice: price}, ActiveUsers: 4}
 	rich := Escrow{ID: "rich", Session: &fakeSession{balance: 1 << 30, tokenPrice: price}, ActiveUsers: 4}
@@ -681,8 +722,11 @@ func TestPickEscrowSkipsAnEscrowBelowItsBalanceFloor(t *testing.T) {
 	}
 }
 
-// The reserve is priced by the escrow itself rather than by a number an operator had to guess, so a dearer
-// escrow leaves routing on a balance a cheaper one still serves from.
+// Test flow:
+//  1. Build two escrows with the same balance but different token prices: cheap and dear.
+//  2. Check `belowBalanceFloor` against a 100-token reserve for each.
+//  3. Assert the cheap escrow, affording ten more requests at its price, is not below the floor.
+//  4. Assert the dear escrow, unable to afford one request at its price, is below the floor.
 func TestTheBalanceFloorIsPricedByTheEscrowsOwnTokenPrice(t *testing.T) {
 	t.Parallel()
 	const reserveTokens = 100
@@ -698,8 +742,10 @@ func TestTheBalanceFloorIsPricedByTheEscrowsOwnTokenPrice(t *testing.T) {
 	}
 }
 
-// A price that overflows the reserve is one no balance could ever cover, and it must not wrap into a small
-// affordable number.
+// Test flow:
+//  1. Build an escrow priced at the maximum uint64 token price.
+//  2. Check `belowBalanceFloor` against a reserve so large the price calculation would overflow.
+//  3. Assert the escrow is below the floor, rather than the overflow wrapping into a small affordable number.
 func TestABalanceFloorThatOverflowsTakesTheEscrowOutOfRouting(t *testing.T) {
 	t.Parallel()
 	ruinous := Escrow{ID: "ruinous", Session: &fakeSession{balance: math.MaxUint64, tokenPrice: math.MaxUint64}, ActiveUsers: 0}
@@ -709,8 +755,9 @@ func TestABalanceFloorThatOverflowsTakesTheEscrowOutOfRouting(t *testing.T) {
 	}
 }
 
-// Without a token cap loaded the gateway cannot price a request at all, and a floor it cannot price must
-// not eject anyone.
+// Test flow:
+//  1. Check `belowBalanceFloor` with a zero reserve against an escrow with zero balance and 99 active users.
+//  2. Assert it is not below the floor, since an unpriced floor must not eject anyone.
 func TestBalanceFloorIsInertWithoutAReserve(t *testing.T) {
 	t.Parallel()
 	if belowBalanceFloor(Escrow{ID: "any", Session: &fakeSession{balance: 0, tokenPrice: 10}, ActiveUsers: 99}, 0) {
@@ -718,8 +765,9 @@ func TestBalanceFloorIsInertWithoutAReserve(t *testing.T) {
 	}
 }
 
-// The chain charges this request (input_length_bytes + max_tokens) x token_price, and both terms are the
-// request's own. Pricing either one differently lets through exactly the arrivals the floor exists to stop.
+// Test flow:
+//  1. For each table case of a request profile, call `requestReserve`.
+//  2. Assert the result matches the case: input bytes rather than the char/4 window estimate, and the request's own reserved output tokens even far above the global cap.
 func TestARequestIsPricedTheWayTheChainChargesIt(t *testing.T) {
 	t.Parallel()
 
@@ -750,9 +798,11 @@ func TestARequestIsPricedTheWayTheChainChargesIt(t *testing.T) {
 	}
 }
 
-// Whether an escrow is finished is a property of the escrow, so the price that retires it reads nothing from
-// the arriving request. A request-sized price lets one large arrival retire every escrow of a model at once:
-// the body alone reaches the ingest cap, and an admin request's max_tokens reaches ten million.
+// Test flow:
+//  1. Build a scheduler configured with a max-tokens cap of 4096.
+//  2. Call its `retirementReserve`.
+//  3. Assert it returns the answer cap alone, reading nothing from any arriving request.
+//  4. Assert an unconfigured scheduler's `retirementReserve` returns 0.
 func TestTheRetirementPriceIsOneCappedAnswerAndNothingElse(t *testing.T) {
 	t.Parallel()
 	settings := config.Defaults()
@@ -795,9 +845,10 @@ func schedulerWithAllowlist(t *testing.T, allowlist []string, groups map[string]
 	}
 }
 
-// The escrow is chosen before its participants are consulted, so an escrow whose whole group the
-// allowlist refuses must not be a candidate at all: picking it by load spends the request on a group
-// holding nobody, and the caller sees "no available host" for a routing decision it cannot influence.
+// Test flow:
+//  1. Build a scheduler with an allowlist naming one participant, and two escrows: one whose group holds nobody allowed, one whose group is that one allowed participant.
+//  2. Pick an escrow.
+//  3. Assert the escrow with an allowed participant is picked, since the disallowed one is never a candidate at all.
 func TestPickEscrowSkipsAnEscrowHoldingNoAllowedParticipant(t *testing.T) {
 	scheduler := schedulerWithAllowlist(t, []string{"allowed"}, map[string][]string{
 		"crowded": {"someone-else", "another"},
@@ -813,6 +864,10 @@ func TestPickEscrowSkipsAnEscrowHoldingNoAllowedParticipant(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a scheduler with an allowlist naming a participant no escrow's group holds.
+//  2. Pick an escrow.
+//  3. Assert the pick fails with `ErrAllowlistUnreachable`.
 func TestPickEscrowReportsAnAllowlistNoEscrowCanReach(t *testing.T) {
 	scheduler := schedulerWithAllowlist(t, []string{"nobody-holds-this"}, map[string][]string{
 		"one": {"someone-else"},
@@ -826,6 +881,10 @@ func TestPickEscrowReportsAnAllowlistNoEscrowCanReach(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a scheduler with no allowlist configured.
+//  2. Pick an escrow.
+//  3. Assert the pick succeeds.
 func TestPickEscrowIgnoresTheAllowlistWhenItIsEmpty(t *testing.T) {
 	scheduler := schedulerWithAllowlist(t, nil, map[string][]string{"one": {"anybody"}})
 
@@ -834,9 +893,10 @@ func TestPickEscrowIgnoresTheAllowlistWhenItIsEmpty(t *testing.T) {
 	}
 }
 
-// An escrow on hold is priced the way a pick prices it: the same retirement reserve, the same token price,
-// the same nonce ceiling. It must clear headroom above the balance floor so it does not flap once resumed,
-// and a nonce past the hosts' own cap can never be resumed at all.
+// Test flow:
+//  1. For each table case of a max-tokens cap, balance, latest nonce, chain snapshot nonce and answer count, build a held escrow.
+//  2. Call `ResumeReadiness` on it.
+//  3. Assert readiness and nonce-spent both match the case: covering the headroom above the balance floor is ready, one answer short is not, a nonce past the hosts' own cutoff is refused as nonce-spent, and an unknown max nonce or an unconfigured reserve leaves the escrow held without being marked nonce-spent.
 func TestResumeReadiness(t *testing.T) {
 	t.Parallel()
 

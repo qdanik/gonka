@@ -4,8 +4,10 @@ import (
 	"testing"
 )
 
-// A host reports both halves of its usage, and the gateway kept only one. The other is what tells an operator
-// whether the char/4 estimate the windows and the escrow reserve are sized on is anywhere near the truth.
+// Test flow:
+//  1. Build an SSE classifier.
+//  2. Classify a content chunk with no usage, then a chunk carrying `usage.prompt_tokens` and `usage.completion_tokens`.
+//  3. Assert the returned facts carry both `UsagePromptTokens` and `UsageCompletionTokens` as reported.
 func TestBothHalvesOfAHostsUsageAreRead(t *testing.T) {
 	t.Parallel()
 	classifier := newSSEClassifier(testBudget(1<<20, 1<<20, 1<<20), testParticipant, testModel, nil)
@@ -21,8 +23,10 @@ func TestBothHalvesOfAHostsUsageAreRead(t *testing.T) {
 	}
 }
 
-// Both halves latch the same way over an attempt, so a recorded row can never pair one usage object's prompt
-// with another's completion.
+// Test flow:
+//  1. Build a fresh `attemptState`.
+//  2. Record one chunk with both usage halves, an empty chunk, then another chunk with different usage halves.
+//  3. Assert the attempt's latched usage keeps only the last chunk's paired prompt and completion counts.
 func TestBothHalvesOfTheUsageLatchTogether(t *testing.T) {
 	t.Parallel()
 	attempt := &attemptState{}
@@ -37,8 +41,10 @@ func TestBothHalvesOfTheUsageLatchTogether(t *testing.T) {
 	}
 }
 
-// A host whose runtime reports running usage puts one on every event, counting up. One read carries many of
-// them, so the last is the answer: the first says what had been produced when the answer had barely started.
+// Test flow:
+//  1. Build an SSE classifier.
+//  2. Classify one read containing three SSE events, each with a growing `usage.completion_tokens` count.
+//  3. Assert the returned facts carry the last event's completion and prompt token counts, not an earlier one.
 func TestRunningUsageIsReadAtItsLastValueWithinOneRead(t *testing.T) {
 	t.Parallel()
 	classifier := newSSEClassifier(testBudget(1<<20, 1<<20, 1<<20), testParticipant, testModel, nil)

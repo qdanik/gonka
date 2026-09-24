@@ -18,7 +18,10 @@ func (n *recordingHealthNarrator) ChainSnapshotRecovered(epoch uint64, height in
 	n.turns = append(n.turns, fmt.Sprintf("recovered epoch %d height %d", epoch, height))
 }
 
-// The observer publishes every five seconds; only a turn of its health is narrated, and a failure that persists says nothing.
+// Test flow:
+//  1. Create a PhaseObserver and attach a recording health narrator.
+//  2. Publish the same stale error twice, then a recovered snapshot twice.
+//  3. Assert the narrator recorded only the stale-to-recovered turn, not each repeated publish.
 func TestTheHealthEdgeIsNarratedOnlyWhenItTurns(t *testing.T) {
 	observer, err := NewPhaseObserver(ObserverConfig{PublicAPIBaseURL: "http://127.0.0.1:1"})
 	if err != nil {
@@ -38,7 +41,10 @@ func TestTheHealthEdgeIsNarratedOnlyWhenItTurns(t *testing.T) {
 	}
 }
 
-// An observer built without a journal still publishes; it only says nothing.
+// Test flow:
+//  1. Create a PhaseObserver without setting a narrator.
+//  2. Publish a snapshot carrying an error.
+//  3. Assert Snapshot() still reflects the published error.
 func TestAnUnnarratedObserverStillPublishes(t *testing.T) {
 	observer, err := NewPhaseObserver(ObserverConfig{PublicAPIBaseURL: "http://127.0.0.1:1"})
 	if err != nil {

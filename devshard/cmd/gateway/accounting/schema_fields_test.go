@@ -29,8 +29,10 @@ func recordFor(t *testing.T, book *Book, participant string) ParticipantRecord {
 	return ParticipantRecord{}
 }
 
-// A nonce a host is working on is not the same as one nothing has decided yet. Folding both into
-// pending hides how much of the unclassified tail is live work.
+// Test flow:
+//  1. Build a `schemaTestBook` fixture and record a sent, unfinished race attempt on slot 1.
+//  2. Read slot 1's record.
+//  3. Assert its in-flight count is 1 and its pending count is 0.
 func TestInFlightIsSeparateFromPending(t *testing.T) {
 	book := schemaTestBook(t)
 	if err := book.RecordRace("e1", []Attempt{{Nonce: 1, Sent: true}}); err != nil {
@@ -47,8 +49,10 @@ func TestInFlightIsSeparateFromPending(t *testing.T) {
 	}
 }
 
-// A raised timeout that has settled on nothing is owed one; the old ledger reports that separately
-// from a nonce whose round is over.
+// Test flow:
+//  1. Build a `schemaTestBook` fixture and record a started, unsettled timeout on nonce 1.
+//  2. Read slot 1's record.
+//  3. Assert its timeout-pending count is 1 and its timeout outcomes are empty.
 func TestTimeoutPendingCountsRoundsStillOwedAnOutcome(t *testing.T) {
 	book := schemaTestBook(t)
 	if err := book.RecordTimeout("e1", 1, "refused", "started", "none"); err != nil {
@@ -65,7 +69,10 @@ func TestTimeoutPendingCountsRoundsStillOwedAnOutcome(t *testing.T) {
 	}
 }
 
-// Both sides of every count the chain also keeps, so a reader can see them disagree.
+// Test flow:
+//  1. Build a `schemaTestBook` fixture, observe host stats reporting misses and invalids, and record a completed timeout.
+//  2. Read slot 1's record.
+//  3. Assert the cross-checks carry both the chain's side (host missed, host invalid) and the ledger's side (timeout applied).
 func TestCrossChecksCarryBothSides(t *testing.T) {
 	book := schemaTestBook(t)
 	if err := book.ObserveHostStats("e1", 1, types.HostStats{Missed: 5, Invalid: 2}); err != nil {
@@ -85,7 +92,10 @@ func TestCrossChecksCarryBothSides(t *testing.T) {
 	}
 }
 
-// A participant holding several slots of one escrow must not have that escrow listed once per slot.
+// Test flow:
+//  1. Open an escrow where one participant holds two slots, then observe the chain's latest nonce.
+//  2. Read that participant's record.
+//  3. Assert its latest-nonces list holds exactly one entry, naming the escrow and its latest nonce.
 func TestLatestNoncesListEachEscrowOnce(t *testing.T) {
 	book := NewBook(nil)
 	if err := book.OpenEscrow(EscrowMetadata{
@@ -112,6 +122,10 @@ func TestLatestNoncesListEachEscrowOnce(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a `schemaTestBook` fixture, observe the latest nonce, then retire the escrow.
+//  2. Read slot 1's record.
+//  3. Assert its one latest-nonces entry is marked retired.
 func TestLatestNoncesMarkARetiredEscrow(t *testing.T) {
 	book := schemaTestBook(t)
 	if err := book.ObserveLatestNonce("e1", 7); err != nil {
@@ -126,6 +140,11 @@ func TestLatestNoncesMarkARetiredEscrow(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a `schemaTestBook` fixture and observe 3 challenged nonces on slot 1.
+//  2. Assert slot 1's unresolved-challenges count is 3 and slot 0's is 0.
+//  3. Observe the challenge count dropping to 1 on slot 1.
+//  4. Assert slot 1's unresolved-challenges count reads 1, a gauge rather than a running total.
 func TestUnresolvedChallengesAreAGaugePerSlot(t *testing.T) {
 	book := schemaTestBook(t)
 	if err := book.ObserveInferences("e1", challengedNonces(1, 3)); err != nil {
@@ -147,6 +166,10 @@ func TestUnresolvedChallengesAreAGaugePerSlot(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a `schemaTestBook` fixture and record two validations from slot 0.
+//  2. Assert slot 0's validations-performed count is 2.
+//  3. Assert slot 1, the slot that was checked, carries no validations-performed credit.
 func TestValidationsCreditTheSlotThatChecked(t *testing.T) {
 	book := schemaTestBook(t)
 	if err := book.RecordValidation("e1", 0); err != nil {
@@ -164,6 +187,9 @@ func TestValidationsCreditTheSlotThatChecked(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a `schemaTestBook` fixture and record a validation from slot 9, outside the two-slot group.
+//  2. Assert the call returns an error.
 func TestValidationsRejectASlotOutsideTheGroup(t *testing.T) {
 	book := schemaTestBook(t)
 
@@ -172,7 +198,10 @@ func TestValidationsRejectASlotOutsideTheGroup(t *testing.T) {
 	}
 }
 
-// The chain counts a miss on the executor slot, and nonce % groupSize is that binding.
+// Test flow:
+//  1. Build a `schemaTestBook` fixture and record an applied timeout on nonce 3, whose executor is slot 1.
+//  2. Assert slot 1's timeouts-applied count is 1.
+//  3. Assert slot 0 was not credited.
 func TestAppliedTimeoutsCreditTheExecutorSlot(t *testing.T) {
 	book := schemaTestBook(t)
 	if err := book.RecordAppliedTimeout("e1", 3); err != nil {
@@ -187,8 +216,11 @@ func TestAppliedTimeoutsCreditTheExecutorSlot(t *testing.T) {
 	}
 }
 
-// Disagreement is measured per slot: one participant holding two slots must not have a surplus on
-// one cancel a shortfall on the other, which is what summing both sides first would do.
+// Test flow:
+//  1. Open an escrow where one participant, "both", holds two slots.
+//  2. Observe host stats on both slots, but put 4 misses only on slot 0, then apply 4 timeouts, which credit slot 1.
+//  3. Assert the participant's totals agree, 4 timeouts applied and 4 host misses.
+//  4. Assert the cross-check error count is 8, since slot 0 is short 4 and slot 1 has 4 the chain never counted.
 func TestCrossCheckErrorDoesNotLetSlotsCancelEachOther(t *testing.T) {
 	book := NewBook(nil)
 	if err := book.OpenEscrow(EscrowMetadata{
@@ -226,7 +258,10 @@ func TestCrossCheckErrorDoesNotLetSlotsCancelEachOther(t *testing.T) {
 	}
 }
 
-// A validator rejects someone else's answer, so the two halves of one message land on two slots.
+// Test flow:
+//  1. Build a `schemaTestBook` fixture, record a validation from slot 0, then record an invalid verdict against nonce 3, executed by slot 1.
+//  2. Assert slot 1, the executor, is charged 1 recorded-invalid.
+//  3. Assert slot 0, the validator that rejected it, carries none.
 func TestARejectedAnswerChargesTheExecutorNotTheValidator(t *testing.T) {
 	book := schemaTestBook(t)
 	const executedBySlotOne = uint64(3)
@@ -246,8 +281,11 @@ func TestARejectedAnswerChargesTheExecutorNotTheValidator(t *testing.T) {
 	}
 }
 
-// The per-escrow rows carried these as null while the host row above them was populated, so an escrow
-// could not be told apart from a quiet one.
+// Test flow:
+//  1. Build a `schemaTestBook` fixture and record a started, unsettled timeout on nonce 1.
+//  2. Read slot 1's record and its one escrow row.
+//  3. Assert the escrow row's timeout-pending count is 1.
+//  4. Assert the host row's timeout-pending count matches the same 1.
 func TestASlotCarriesTheTimeoutsOfItsOwnEscrow(t *testing.T) {
 	book := schemaTestBook(t)
 	if err := book.RecordTimeout("e1", 1, "refused", "started", "none"); err != nil {

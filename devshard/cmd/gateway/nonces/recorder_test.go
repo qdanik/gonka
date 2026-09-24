@@ -43,8 +43,10 @@ func dispositionCount(t *testing.T, ledger *Recorder, want accounting.Dispositio
 	return total
 }
 
-// The losing attempt of a won race did real work the client never received. Counting it as used would
-// hide exactly the overscheduling this ledger exists to measure.
+// Test flow:
+//  1. Record a won race with a winning attempt and a losing attempt on different nonces.
+//  2. Assert `finished_used` counts only the winner.
+//  3. Assert `finished_unused` counts the losing attempt, since its work was real but never delivered.
 func TestALosingAttemptOfAWonRaceIsCountedAsUnused(t *testing.T) {
 	ledger := newLedgerForTest(t)
 	sent := time.Unix(100, 0)
@@ -67,8 +69,9 @@ func TestALosingAttemptOfAWonRaceIsCountedAsUnused(t *testing.T) {
 	}
 }
 
-// A race nobody won leaves usage unknowable: the client may have been streamed part of an answer
-// before everything failed, so claiming the work went unused would be a guess.
+// Test flow:
+//  1. Record a lost race whose single attempt finished.
+//  2. Assert `finished_usage_unknown` counts that attempt, since a lost race's partial delivery to the client cannot be known.
 func TestAFinishedAttemptOfALostRaceIsCountedAsUnknown(t *testing.T) {
 	ledger := newLedgerForTest(t)
 
@@ -85,7 +88,11 @@ func TestAFinishedAttemptOfALostRaceIsCountedAsUnknown(t *testing.T) {
 	}
 }
 
-// A timeout arrives after its race and must name its escrow: a nonce is unique only within one.
+// Test flow:
+//  1. Record a lost race whose attempt never reports a terminal, leaving its nonce pending.
+//  2. Assert `unfinished_execution` counts nothing before the timeout settles.
+//  3. Record a completed execution timeout for that nonce and escrow.
+//  4. Assert `unfinished_execution` now counts the nonce the timeout classified.
 func TestATimeoutClassifiesTheNonceItsRaceLeftPending(t *testing.T) {
 	ledger := newLedgerForTest(t)
 
@@ -108,12 +115,15 @@ func TestATimeoutClassifiesTheNonceItsRaceLeftPending(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Record a ghosted nonce naming a burn reason.
+//  2. Query every participant's disposition counts.
+//  3. Assert only the participant holding the slot the chain assigns to that nonce (with a two-slot escrow, nonce 5 belongs to slot 1) is charged a ghost, and every other participant is charged none.
 func TestABurnedNonceIsCountedAgainstTheSlotTheChainAssignsIt(t *testing.T) {
 	ledger := newLedgerForTest(t)
 
 	ledger.RecordGhost("escrow-1", 5, "participant_window_full_no_send")
 
-	// Two slots, so nonce 5 belongs to slot 1 and to nobody else.
 	for _, record := range ledger.service.Book.Query(accounting.QueryFilter{}) {
 		want := uint64(0)
 		if record.Participant == "participant-1" {
@@ -125,7 +135,9 @@ func TestABurnedNonceIsCountedAgainstTheSlotTheChainAssignsIt(t *testing.T) {
 	}
 }
 
-// Every emitter is called from a path that must not care whether accounting is configured.
+// Test flow:
+//  1. Call every recording method (ghost, race, timeout, diff facts, probe) and Start/Close on a nil `*Recorder`.
+//  2. Assert none of them panic and RecordProbe/Close return no error.
 func TestADisabledLedgerAcceptsEveryFactWithoutPanicking(t *testing.T) {
 	var ledger *Recorder
 
@@ -142,7 +154,11 @@ func TestADisabledLedgerAcceptsEveryFactWithoutPanicking(t *testing.T) {
 	}
 }
 
-// The API is the ledger's only surface, so an enabled ledger always has a listener on its port.
+// Test flow:
+//  1. Open a ledger configured as enabled on a given port.
+//  2. Assert it is built with a listener bound to that port.
+//  3. Open a second ledger with accounting left disabled.
+//  4. Assert `Open` returns nothing for it.
 func TestAnEnabledLedgerServesItsAPIOnItsPortAndADisabledOneIsNotBuilt(t *testing.T) {
 	ledger := Open(
 		config.NonceAccounting{Enabled: true, Port: 9191, SnapshotSeconds: 300},
@@ -181,8 +197,10 @@ func counterCount(t *testing.T, ledger *Recorder, match func(accounting.CounterK
 	return total
 }
 
-// Decode speed is derived here, from stamps the engine reports, so nothing but a race driven end to end
-// proves the derivation is wired to the ledger at all.
+// Test flow:
+//  1. Define a table of winning attempts, varying the gap between first content and the last chunk and the reported completion tokens across a slow decode, a fast decode, and a host that reported no tokens at all.
+//  2. For each case, record the race outcome.
+//  3. Assert the `slow_decode` counter matches the case's expectation.
 func TestASlowDecodeReachesTheLedgerAsAFactAboutTheHost(t *testing.T) {
 	sent := time.Unix(100, 0)
 	firstContent := sent.Add(time.Second)
@@ -236,6 +254,11 @@ func terminalsOf(t *testing.T, ledger *Recorder) map[string]uint64 {
 	return terminals
 }
 
+// Test flow:
+//  1. Define a table of race lifecycles, varying whether the client was still waiting or had already left when the winner finished.
+//  2. For each case, record a won race with a winning and a losing attempt.
+//  3. Assert the winner's terminal is named accordingly (`TerminalWon` or `accounting.TerminalClientGone`).
+//  4. Assert the loser's terminal is left untouched.
 func TestAWinnerWhoseClientLeftIsNamedApartFromOneThatWasRead(t *testing.T) {
 	sent := time.Unix(100, 0)
 	tests := []struct {
@@ -272,6 +295,9 @@ func TestAWinnerWhoseClientLeftIsNamedApartFromOneThatWasRead(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Record two ghosted burns that name no nonce.
+//  2. Assert no participant is charged a ghost disposition, so a burn with no nonce is never misfiled against nonce zero.
 func TestABurnWithNoNonceIsNotRecordedAgainstNonceZero(t *testing.T) {
 	ledger := newLedgerForTest(t)
 
@@ -285,7 +311,9 @@ func TestABurnWithNoNonceIsNotRecordedAgainstNonceZero(t *testing.T) {
 	}
 }
 
-// A composed diff's verdicts and applied timeouts land on the slot the chain assigns their nonce.
+// Test flow:
+//  1. Record a validation, an invalid verdict, and an applied timeout as diff facts, two of them naming a validator slot.
+//  2. Assert only the participant holding that slot has its validation, invalid-verdict, and timeout counts incremented, and every other participant has none.
 func TestDiffFactsLandOnTheSlotsTheChainAssigns(t *testing.T) {
 	ledger := newLedgerForTest(t)
 
@@ -307,7 +335,10 @@ func TestDiffFactsLandOnTheSlotsTheChainAssigns(t *testing.T) {
 	}
 }
 
-// The probe is the gateway's own work; its terminal keeps it out of every serving ratio.
+// Test flow:
+//  1. Record a warmup probe attempt.
+//  2. Assert it settles with no error.
+//  3. Assert its terminal is counted under `accounting.TerminalWarmupProbe`, kept apart from every serving ratio.
 func TestAProbeLandsUnderItsOwnTerminal(t *testing.T) {
 	ledger := newLedgerForTest(t)
 
@@ -323,7 +354,9 @@ func TestAProbeLandsUnderItsOwnTerminal(t *testing.T) {
 	}
 }
 
-// Only the book sees a refused probe, so it hands the refusal back for the journal to name.
+// Test flow:
+//  1. Record a warmup probe attempt against an escrow that was never opened.
+//  2. Assert the call returns `accounting.ErrUnknownEscrow`.
 func TestAProbeOnAnUnopenedEscrowIsRefused(t *testing.T) {
 	ledger := newLedgerForTest(t)
 

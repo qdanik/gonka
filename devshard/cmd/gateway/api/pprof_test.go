@@ -6,6 +6,11 @@ import (
 	"testing"
 )
 
+// Test flow:
+//  1. For each pprof target, varying across the index, goroutine dump, heap summary, command line and CPU profile, request it with the admin key.
+//  2. Assert the response is 200.
+//  3. Assert the body is non-empty, except for the command-line target.
+//  4. Assert the body contains the expected marker text.
 func TestTheProfilerAnswersTheAdmin(t *testing.T) {
 	testCases := []struct {
 		name   string
@@ -37,6 +42,9 @@ func TestTheProfilerAnswersTheAdmin(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. For each pprof target, request it with a caller key that is not the admin key.
+//  2. Assert the response is refused with 401 or 403.
 func TestTheProfilerRefusesACallerWithoutTheAdminKey(t *testing.T) {
 	for _, target := range []string{"/debug/pprof/", "/debug/pprof/heap", "/debug/pprof/profile?seconds=1", "/debug/pprof/trace?seconds=1"} {
 		t.Run(target, func(t *testing.T) {
@@ -51,6 +59,9 @@ func TestTheProfilerRefusesACallerWithoutTheAdminKey(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Request the pprof goroutine endpoint with the admin key.
+//  2. Assert no route-metrics label was recorded for it.
 func TestTheProfilerIsNotPartOfTheRouteMetrics(t *testing.T) {
 	live := newHarness(t)
 

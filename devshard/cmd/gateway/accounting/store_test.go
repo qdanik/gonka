@@ -40,6 +40,10 @@ func saveAndReload(t *testing.T, book *Book, store *Store) *Book {
 	return restored
 }
 
+// Test flow:
+//  1. Observe the latest nonce, record a ghost, and observe host stats reporting misses.
+//  2. Save and reload the book.
+//  3. Assert the restored records match the originals in participant, assigned count, ghost count and chain-missed tally.
 func TestCountersSurviveARestart(t *testing.T) {
 	book := newTestBook(t, 4)
 	if err := book.ObserveLatestNonce(testEscrow, 12); err != nil {
@@ -73,9 +77,11 @@ func TestCountersSurviveARestart(t *testing.T) {
 	}
 }
 
-// A nonce awaiting its timeout will never be told it, because the race that would settle it died with
-// the process. Naming that is worth more than leaving it pending for ever: the nonce still settles as
-// a completed inference, and nobody checked it.
+// Test flow:
+//  1. Observe the latest nonce and record an unfinished race on nonce 6, leaving it pending.
+//  2. Save and reload the book.
+//  3. Assert the restored slot has no pending count, and its disposition is `DispositionUnfinishedRefused` since no receipt ever arrived.
+//  4. Assert every counter of the nonce's participant carries `engine.TimeoutActionAbandoned`.
 func TestANonceLeftPendingByARestartIsNamedRatherThanLost(t *testing.T) {
 	book := newTestBook(t, 4)
 	if err := book.ObserveLatestNonce(testEscrow, 12); err != nil {
@@ -93,7 +99,6 @@ func TestANonceLeftPendingByARestartIsNamedRatherThanLost(t *testing.T) {
 	if pending := unclassifiedOfSlot(t, restored, slotOfNonce(6, 4)); pending != 0 {
 		t.Fatalf("pending = %d after the restart, want the nonce classified", pending)
 	}
-	// No receipt ever arrived for it, so it is a refusal rather than a failed execution.
 	assertDisposition(t, restored, 6, 4, DispositionUnfinishedRefused)
 	for _, record := range restored.Query(QueryFilter{}) {
 		if record.Participant != participantFor(2) {
@@ -107,7 +112,11 @@ func TestANonceLeftPendingByARestartIsNamedRatherThanLost(t *testing.T) {
 	}
 }
 
-// A vote still posting when the process stopped never reports its result, so the restart names it as it names a vote never posted.
+// Test flow:
+//  1. Observe the latest nonce, record a race on nonce 6, and record its timeout as `engine.TimeoutActionStarted`, a vote still posting.
+//  2. Save and reload the book.
+//  3. Assert no counter still reads `engine.TimeoutActionStarted` after the restart.
+//  4. Assert at least one counter now reads `engine.TimeoutActionAbandoned`.
 func TestAVoteStillPostingAtARestartIsNamedAbandoned(t *testing.T) {
 	book := newTestBook(t, 4)
 	if err := book.ObserveLatestNonce(testEscrow, 12); err != nil {
@@ -138,6 +147,10 @@ func TestAVoteStillPostingAtARestartIsNamedAbandoned(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Load a snapshot from a freshly opened, never-written store.
+//  2. Restore it into a new book.
+//  3. Assert the book holds no escrow ids.
 func TestAnEmptyStoreStartsAnEmptyLedger(t *testing.T) {
 	snapshot, err := openTestStore(t).Load(context.Background())
 	if err != nil {
@@ -152,6 +165,10 @@ func TestAnEmptyStoreStartsAnEmptyLedger(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Write a schema-version row of "99" directly into the store's meta table.
+//  2. Attempt to load the store.
+//  3. Assert the load returns an error rather than accepting a ledger from another schema.
 func TestAStoreFromAnotherSchemaIsRefused(t *testing.T) {
 	store := openTestStore(t)
 	if _, err := store.db.Exec(
@@ -163,8 +180,11 @@ func TestAStoreFromAnotherSchemaIsRefused(t *testing.T) {
 	}
 }
 
-// A failed write must leave the previous ledger whole. The failure has to land after the tables are
-// emptied, which is the only moment a missing rollback would cost the ledger everything.
+// Test flow:
+//  1. Save a book holding one ghost record.
+//  2. Build a second, broken book whose escrow has two slots claiming the same slot id, which collides on the store's primary key.
+//  3. Save the broken book and assert the save fails.
+//  4. Load the store and assert it still holds the previous ledger's one escrow and one counter, untouched by the failed write.
 func TestAFailedWriteLeavesThePreviousLedgerInPlace(t *testing.T) {
 	store := openTestStore(t)
 	book := newTestBook(t, 4)
@@ -175,8 +195,6 @@ func TestAFailedWriteLeavesThePreviousLedgerInPlace(t *testing.T) {
 		t.Fatalf("Save(): %v", err)
 	}
 
-	// Two slots claiming the same id collide on the slot table's primary key, so the write fails with
-	// every table already emptied.
 	broken := NewBook(func() time.Time { return time.Unix(0, 0).UTC() })
 	if err := broken.OpenEscrow(EscrowMetadata{
 		EscrowID: testEscrow, Model: testModel, CreationEpoch: testEpoch,
@@ -200,8 +218,11 @@ func TestAFailedWriteLeavesThePreviousLedgerInPlace(t *testing.T) {
 	}
 }
 
-// A nonce the protocol finishes after its race gave up on it must leave the unfinished bucket: that
-// bucket is what settlement reads as work the participant failed to do.
+// Test flow:
+//  1. Record a losing race on nonce 6, then time it out with a collection error, and assert it lands in `DispositionUnfinishedExecution`.
+//  2. Read the unfinished nonces and assert nonce 6 is the only one.
+//  3. Mark it finished.
+//  4. Assert its disposition moves to `DispositionFinishedUnused` and the unfinished list becomes empty.
 func TestALateFinishLiftsANonceOutOfTheUnfinishedBucket(t *testing.T) {
 	book := newTestBook(t, 4)
 	if err := book.RecordRace(testEscrow, []Attempt{{Nonce: 6, Sent: true, Usage: UsageLoser}}); err != nil {
@@ -226,8 +247,10 @@ func TestALateFinishLiftsANonceOutOfTheUnfinishedBucket(t *testing.T) {
 	}
 }
 
-// Only nonces that can still move are written down. A restart that carried every nonce would grow the
-// file with the escrow's whole history to no purpose.
+// Test flow:
+//  1. Record a ghost on nonce 5, a finished winning race on nonce 9, and a losing unfinished race on nonce 6, then time nonce 6 out with a collection error.
+//  2. Read the snapshot's stored nonces for the escrow.
+//  3. Assert only nonce 6, the one that can still move, is written down.
 func TestOnlyRevisableNoncesAreWrittenDown(t *testing.T) {
 	book := newTestBook(t, 4)
 	if err := book.RecordGhost(testEscrow, 5, "participant_window_full_no_send"); err != nil {
@@ -249,7 +272,10 @@ func TestOnlyRevisableNoncesAreWrittenDown(t *testing.T) {
 	}
 }
 
-// A restored nonce must move out of its bucket, not into a second one.
+// Test flow:
+//  1. Record a losing unfinished race on nonce 6, then time it out with a collection error.
+//  2. Save and reload the book, then mark the restored book's unfinished nonces finished.
+//  3. Assert the disposition is `DispositionFinishedUnused`, moved out of its bucket rather than counted twice.
 func TestARestoredUnfinishedNonceIsLiftedRatherThanCountedTwice(t *testing.T) {
 	book := newTestBook(t, 4)
 	if err := book.RecordRace(testEscrow, []Attempt{{Nonce: 6, Sent: true, Usage: UsageLoser}}); err != nil {
@@ -267,7 +293,11 @@ func TestARestoredUnfinishedNonceIsLiftedRatherThanCountedTwice(t *testing.T) {
 	assertDisposition(t, restored, 6, 4, DispositionFinishedUnused)
 }
 
-// Retention is counted back from the current epoch: 2 keeps the current one and the two before it.
+// Test flow:
+//  1. Build a service with retention of 2 epochs and a current epoch of 10.
+//  2. Open and retire an escrow in each of epochs 7, 8, 9 and 10.
+//  3. Run the service's prune.
+//  4. Assert only the escrows of epochs 10, 9 and 8 remain, the current epoch and the two before it.
 func TestRetentionKeepsTheCurrentEpochAndTheOnesBeforeIt(t *testing.T) {
 	const currentEpoch = 10
 	service, err := NewService(Settings{
@@ -300,7 +330,11 @@ func TestRetentionKeepsTheCurrentEpochAndTheOnesBeforeIt(t *testing.T) {
 	}
 }
 
-// A live escrow is not dropped however old it is: it is still the one serving traffic.
+// Test flow:
+//  1. Build a service with retention of 2 epochs and a current epoch of 10.
+//  2. Open a live (not retired) escrow created back in epoch 1.
+//  3. Run the service's prune.
+//  4. Assert the escrow is still kept, since it is still being served however old it is.
 func TestRetentionNeverDropsAnEscrowStillBeingServed(t *testing.T) {
 	service, err := NewService(Settings{
 		RetentionEpochs: 2,
@@ -326,9 +360,10 @@ func TestRetentionNeverDropsAnEscrowStillBeingServed(t *testing.T) {
 	}
 }
 
-// Two buckets that differ only by a race fact are distinct keys in memory. Until the table knew those
-// columns they collided on its primary key, and every snapshot failed on the constraint while the
-// gateway kept running: the ledger was live in memory and empty on disk.
+// Test flow:
+//  1. Record a race of two attempts on nonces 1 and 2, differing only by phase, terminal and a slow-chunk flag.
+//  2. Save the book, then save and reload it again.
+//  3. Assert the restored counters still hold both `PhaseNormal` and `PhasePoC` buckets.
 func TestCountersDifferingOnlyByARaceFactBothPersist(t *testing.T) {
 	store := openTestStore(t)
 	book := newTestBook(t, 1)
@@ -356,8 +391,10 @@ func TestCountersDifferingOnlyByARaceFactBothPersist(t *testing.T) {
 	}
 }
 
-// A store written under an earlier schema has tables no current writer can fill. Opening it must
-// discard them rather than leave a shape whose every snapshot fails on a constraint.
+// Test flow:
+//  1. Seed a database with an old-shaped `accounting_meta` and `accounting_counters` table at schema version 1.
+//  2. Open a store over that file and save a book with one race attempt.
+//  3. Assert the save succeeds, so the old tables were discarded rather than left in place.
 func TestAStoreFromAnEarlierSchemaIsDiscarded(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "accounting.db")
 	stale, err := sql.Open("sqlite", path+connectionPragmas)
@@ -395,11 +432,11 @@ func TestAStoreFromAnEarlierSchemaIsDiscarded(t *testing.T) {
 	}
 }
 
-// Every persisted field is set to a distinguishable value and compared after a write and a read. A
-// column the table lacks, an INSERT that skips it or a SELECT that forgets it all fail here, which is
-// the only check that does not depend on someone re-reading four lists in sync. The stored snapshot is
-// compared rather than the restored book, because Restore deliberately reclassifies a nonce whose race
-// died with the process.
+// Test flow:
+//  1. Observe the latest nonce and record a race of two attempts, each field set to a distinguishable value: terminal, phase, slow receipt, slow chunk, clock drift.
+//  2. Take the book's own snapshot, then save and load the store's snapshot.
+//  3. Assert the escrow counts match between the two snapshots.
+//  4. Assert each escrow's counters and nonces are equal between what was written and what was read back.
 func TestEveryPersistedFieldSurvivesTheRoundTrip(t *testing.T) {
 	store := openTestStore(t)
 	book := newTestBook(t, 1)
@@ -443,9 +480,10 @@ func TestEveryPersistedFieldSurvivesTheRoundTrip(t *testing.T) {
 	}
 }
 
-// The case that actually happened: a build added columns to the Go structs, bumped the version and
-// left the table alone, so the file on disk carried the current version beside a table no write could
-// fill. Comparing versions agreed; every snapshot failed.
+// Test flow:
+//  1. Seed a database whose `accounting_meta` already carries the current `SchemaVersion` but whose `accounting_counters` table is the old shape.
+//  2. Open a store over that file and save a book with one race attempt.
+//  3. Assert the save succeeds, so a shape mismatch is caught even when the version number agrees.
 func TestAStoreWhoseVersionAgreesButShapeDoesNotIsDiscarded(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "accounting.db")
 	stale, err := sql.Open("sqlite", path+connectionPragmas)
@@ -483,8 +521,10 @@ func TestAStoreWhoseVersionAgreesButShapeDoesNotIsDiscarded(t *testing.T) {
 	}
 }
 
-// A store carrying tables this build cannot write, with no version to say so. Trusting the missing
-// version leaves the old tables in place and every later write fails on a column they lack.
+// Test flow:
+//  1. For each table case (an empty version table, and no version table at all), seed a database with the old-shaped `accounting_counters` table.
+//  2. Open a store over that file and save a book with one race attempt.
+//  3. Assert the save succeeds, so a store with no readable version is discarded rather than trusted.
 func TestAStoreWhoseVersionCannotBeReadIsDiscarded(t *testing.T) {
 	staleCounters := `
 		CREATE TABLE accounting_counters (

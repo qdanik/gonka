@@ -28,6 +28,11 @@ func guardedTree(t *testing.T) (base, guarded string) {
 	return base, guarded
 }
 
+// Test flow:
+//  1. Build a base storage tree and a sibling `guarded` directory outside it.
+//  2. Define a table of target paths, varying across an in-base escrow path, parent traversal, an absolute path outside the base, a URL-encoded traversal, and a sibling directory sharing the base's prefix.
+//  3. For each case, call `removeDevshardStorage` on the target and the base.
+//  4. Assert the in-base case removes cleanly, and every other case fails with the guarded directory left untouched.
 func TestRemoveDevshardStorageRefusesAPathOutsideItsBase(t *testing.T) {
 	testCases := []struct {
 		name       string
@@ -77,6 +82,11 @@ func TestRemoveDevshardStorageRefusesAPathOutsideItsBase(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a base storage tree and a sibling `guarded` directory outside it.
+//  2. Define a table of escrow IDs, varying across parent segments after a real one, repeated parent segments, and URL-encoded parent segments.
+//  3. For each case, resolve the escrow ID through `DevshardStoragePath` and call `removeDevshardStorage`.
+//  4. Assert every case fails and the guarded directory survives.
 func TestAnEscrowIdCannotEscapeTheBaseStorageDir(t *testing.T) {
 	testCases := []struct {
 		name     string
@@ -100,6 +110,10 @@ func TestAnEscrowIdCannotEscapeTheBaseStorageDir(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Call `removeDevshardStorage` with the base directory as both its own target and base.
+//  2. Assert it fails.
+//  3. Assert the base directory still exists.
 func TestRemoveDevshardStorageRefusesTheBaseDirectoryItself(t *testing.T) {
 	base := t.TempDir()
 	if err := removeDevshardStorage(base, base); err == nil {
@@ -110,6 +124,10 @@ func TestRemoveDevshardStorageRefusesTheBaseDirectoryItself(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Create an escrow directory holding a `state.db` file.
+//  2. Call `removeDevshardStorage` on the state file's path.
+//  3. Assert it succeeds and removes the whole escrow directory.
 func TestRemoveDevshardStorageTreatsAStateFileAsItsDirectory(t *testing.T) {
 	base := t.TempDir()
 	escrowDir := filepath.Join(base, "escrow-7")
@@ -124,12 +142,20 @@ func TestRemoveDevshardStorageTreatsAStateFileAsItsDirectory(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Call `removeDevshardStorage` with a blank path.
+//  2. Assert it returns no error.
 func TestRemoveDevshardStorageIgnoresAnEmptyPath(t *testing.T) {
 	if err := removeDevshardStorage("  ", t.TempDir()); err != nil {
 		t.Fatalf("got %v, want nil", err)
 	}
 }
 
+// Test flow:
+//  1. Seed an escrow's storage directory on disk.
+//  2. Send a DELETE for that escrow through the admin route.
+//  3. Assert the response is 200 and the store recorded exactly that escrow as deleted.
+//  4. Assert the escrow's storage directory no longer exists.
 func TestDeletingADevshardRemovesItsRowAndItsStorage(t *testing.T) {
 	live := newHarness(t)
 	escrowDir := filepath.Join(live.storageDir, "escrow-7")
@@ -148,6 +174,10 @@ func TestDeletingADevshardRemovesItsRowAndItsStorage(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Mark escrow "7" busy.
+//  2. Send a DELETE for it through the admin route.
+//  3. Assert the response is 409 and no row was deleted.
 func TestDeletingABusyDevshardIsRefused(t *testing.T) {
 	live := newHarness(t)
 	live.escrows.busy["7"] = true
@@ -160,6 +190,10 @@ func TestDeletingABusyDevshardIsRefused(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Make the control store's list call fail.
+//  2. GET the admin devshards list.
+//  3. Assert the response is 500.
 func TestAStoreFailureOnTheOperatorRoutesIsA500(t *testing.T) {
 	live := newHarness(t)
 	live.control.listErr = errStoreUnavailable
@@ -169,8 +203,11 @@ func TestAStoreFailureOnTheOperatorRoutesIsA500(t *testing.T) {
 	}
 }
 
-// A settle claims funds against nonces requests are still spending, so no request body may buy its
-// way past the busy check.
+// Test flow:
+//  1. Mark escrow "7" busy.
+//  2. POST a settle for it twice, once with no body and once with `force: true`.
+//  3. Assert both attempts answer 409.
+//  4. Assert no "settle" call was recorded, so a body-supplied force cannot buy past the busy check.
 func TestSettlingABusyDevshardIsRefusedAndCannotBeForced(t *testing.T) {
 	live := newHarness(t)
 	live.escrows.busy["7"] = true
@@ -185,6 +222,10 @@ func TestSettlingABusyDevshardIsRefusedAndCannotBeForced(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Seed the control store with one devshard record.
+//  2. GET the admin devshards list.
+//  3. Assert the response is 200 and its body contains that escrow's ID.
 func TestAnAdminListReflectsTheStore(t *testing.T) {
 	live := newHarness(t)
 	live.control.devshards = []store.DevshardRecord{{EscrowID: "42", Model: "kimi", Active: true}}
@@ -197,8 +238,10 @@ func TestAnAdminListReflectsTheStore(t *testing.T) {
 	}
 }
 
-// The failure log is the contract here: an operator action that returns 5xx is otherwise invisible,
-// since auditAdmin only records the successful path.
+// Test flow:
+//  1. Make the control store's list call fail and install a log capture.
+//  2. GET the admin devshards list.
+//  3. Assert an "admin request failed" line was logged at error with the 500 status, the route, and the store failure's text.
 func TestAFailedAdminOperationIsLogged(t *testing.T) {
 	entries := logcapture.Install(t)
 	live := newHarness(t)
@@ -224,8 +267,9 @@ func TestAFailedAdminOperationIsLogged(t *testing.T) {
 	}
 }
 
-// An unkeyed call on an admin route is the shape an intrusion attempt takes, so the refusal is
-// recorded even though nothing failed.
+// Test flow:
+//  1. Install a log capture and send an admin GET request with no admin key.
+//  2. Assert an "admin request refused" line was logged at warn with a 401 status.
 func TestAnUnkeyedAdminCallIsLogged(t *testing.T) {
 	entries := logcapture.Install(t)
 	live := newHarness(t)
@@ -244,6 +288,9 @@ func TestAnUnkeyedAdminCallIsLogged(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Install a log capture and send a properly keyed admin GET request.
+//  2. Assert neither an "admin request failed" nor an "admin request refused" line was logged.
 func TestASuccessfulAdminOperationIsNotLoggedAsAFailure(t *testing.T) {
 	entries := logcapture.Install(t)
 	live := newHarness(t)

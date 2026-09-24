@@ -69,6 +69,11 @@ func guardGoroutines(t *testing.T) {
 	t.Cleanup(func() { goleak.VerifyNone(t, existing) })
 }
 
+// Test flow:
+//  1. Build a `winnerWriter` over a `recordingClient` and a crown desk that will award it the win.
+//  2. Write two pre-content chunks (buffered, nothing forwarded yet), then two content chunks that trigger crowning.
+//  3. Assert the client received all four chunks in order once crowned.
+//  4. Assert the crown was claimed exactly once, with the right nonce.
 func TestWinnerWriterFlushesPrefixInOrderOnCrowning(t *testing.T) {
 	guardGoroutines(t)
 	desk := newCrownDesk(t, streamWinner)
@@ -102,6 +107,9 @@ func TestWinnerWriterFlushesPrefixInOrderOnCrowning(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. For each table case's prefix sizes (at the cap, one byte over, or a single oversized chunk), write prefix chunks up to or past `filters.MaxStreamCarryBytes`, then a content chunk that wins the crown.
+//  2. Assert the forwarded bytes keep only up to the cap's worth of prefix (or none, once the cap is exceeded) followed by the content chunk.
 func TestWinnerWriterCappedPrefixStillWins(t *testing.T) {
 	guardGoroutines(t)
 	tests := []struct {
@@ -142,6 +150,10 @@ func TestWinnerWriterCappedPrefixStillWins(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a `winnerWriter` over a crown desk that will suppress it.
+//  2. Write a mix of pre-content and content chunks.
+//  3. Assert nothing reached the client, its buffered prefix was dropped, and the crown was claimed once.
 func TestWinnerWriterDiscardsLoserBytes(t *testing.T) {
 	guardGoroutines(t)
 	desk := newCrownDesk(t, streamSuppressed)
@@ -174,6 +186,10 @@ func TestWinnerWriterDiscardsLoserBytes(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a `winnerWriter` against an already-closed race-done channel.
+//  2. Write a pre-content chunk then a content chunk.
+//  3. Assert nothing reached the client and the writer's verdict settled as suppressed.
 func TestWinnerWriterAbandonsClaimWhenRaceEnds(t *testing.T) {
 	guardGoroutines(t)
 	raceDone := make(chan struct{})
@@ -195,6 +211,10 @@ func TestWinnerWriterAbandonsClaimWhenRaceEnds(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a `winnerWriter` over a crown desk that would award it the win.
+//  2. Write a pre-content chunk, call `Abandon`, then write a content chunk.
+//  3. Assert nothing reached the client and the crown was never claimed.
 func TestWinnerWriterAbandonForfeitsTheClient(t *testing.T) {
 	guardGoroutines(t)
 	desk := newCrownDesk(t, streamWinner)
@@ -216,6 +236,10 @@ func TestWinnerWriterAbandonForfeitsTheClient(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a `winnerWriter` over a `flushingClient` and a crown desk that will award it the win.
+//  2. Flush before any content is written and assert no flush reached the client.
+//  3. Write a content chunk that crowns the writer, flush again, and assert exactly one flush reached the client.
 func TestWinnerWriterFlushOnlyAfterCrowning(t *testing.T) {
 	guardGoroutines(t)
 	desk := newCrownDesk(t, streamWinner)
@@ -235,6 +259,10 @@ func TestWinnerWriterFlushOnlyAfterCrowning(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a `winnerWriter` over a `recordingClient` configured to fail on write.
+//  2. Write a pre-content chunk (succeeds, buffered) then a content chunk.
+//  3. Assert the content write returns the client's failure.
 func TestWinnerWriterReportsClientFailure(t *testing.T) {
 	guardGoroutines(t)
 	desk := newCrownDesk(t, streamWinner)
@@ -250,6 +278,10 @@ func TestWinnerWriterReportsClientFailure(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a `winnerWriter` with a nil client over a crown desk that will award it the win.
+//  2. Write a pre-content chunk then a content chunk that crowns it.
+//  3. Assert no buffered prefix outlives the crowning, and that flushing a nil client does not panic.
 func TestWinnerWriterWithoutClientConsumesBytes(t *testing.T) {
 	guardGoroutines(t)
 	desk := newCrownDesk(t, streamWinner)

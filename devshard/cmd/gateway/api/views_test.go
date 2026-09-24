@@ -9,9 +9,11 @@ import (
 	"devshard/cmd/gateway/store"
 )
 
-// The state endpoint speaks snake_case everywhere else in the same document; a storage row rendered
-// straight to JSON spells its fields the way Go declares them and breaks that in one block. The
-// assertion runs against the served body, not the view builders, so removing the conversion fails it.
+// Test flow:
+//  1. Seed the harness's admin control with a devshard record and a rotation status.
+//  2. Request the /v1/admin/state endpoint.
+//  3. Assert the response body carries the expected fields in snake_case.
+//  4. Assert the body does not carry the underlying Go struct field names.
 func TestAdminStateSpellsStorageRowsInSnakeCase(t *testing.T) {
 	live := newHarness(t)
 	live.control.devshards = []store.DevshardRecord{{EscrowID: "47452", PrivateKeyEnv: "GATEWAY_PRIVATE_KEY", OnHold: true}}
@@ -37,8 +39,9 @@ func TestAdminStateSpellsStorageRowsInSnakeCase(t *testing.T) {
 	}
 }
 
-// The switch is one negation wide, and a flipped sign here would leave the operator's rollback lever
-// doing the opposite of what it says.
+// Test flow:
+//  1. For each case, varying ForceUpstreamStreaming across on and rolled back, build filter options from that config.
+//  2. Assert KeepClientStream is the opposite of ForceUpstreamStreaming in each case.
 func TestTheForcedStreamingSwitchReachesTheFilters(t *testing.T) {
 	tests := []struct {
 		name                 string

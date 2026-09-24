@@ -54,6 +54,11 @@ func unfinishedWarmup(poster *stubPoster, timeouts *spyTimeouts, resolved, ackno
 	}
 }
 
+// Test flow:
+//  1. Build a refused warmup whose probe fails and whose poster answers a "refused" vote.
+//  2. Warm one escrow.
+//  3. Assert `SettleTimeout` was called exactly once.
+//  4. Assert two timeout events were recorded: a started one followed by a completed one naming the nonce the probe spent.
 func TestARefusedWarmupProbeIsVotedOn(t *testing.T) {
 	poster := &stubPoster{vote: "refused"}
 	timeouts := &spyTimeouts{}
@@ -77,7 +82,10 @@ func TestARefusedWarmupProbeIsVotedOn(t *testing.T) {
 	}
 }
 
-// A receipted probe is an execution failure: the host took the work before it hung.
+// Test flow:
+//  1. Build an unfinished warmup whose probe commits a nonce, gets acknowledged, and then fails.
+//  2. Warm one escrow.
+//  3. Assert the recorded timeout event's kind is `TimeoutKindExecution`, since the host took the work before it hung.
 func TestAReceiptedWarmupProbeIsVotedAnExecutionTimeout(t *testing.T) {
 	poster := &stubPoster{vote: "refused"}
 	timeouts := &spyTimeouts{}
@@ -92,6 +100,10 @@ func TestAReceiptedWarmupProbeIsVotedAnExecutionTimeout(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build an unfinished warmup whose probe commits a nonce with no acknowledgement and then fails.
+//  2. Warm one escrow.
+//  3. Assert the recorded timeout event's kind is `TimeoutKindRefused`, since no receipt was ever seen.
 func TestAnUnreceiptedWarmupProbeStaysARefusal(t *testing.T) {
 	timeouts := &spyTimeouts{}
 
@@ -102,6 +114,10 @@ func TestAnUnreceiptedWarmupProbeStaysARefusal(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. Build a refused warmup, then replace its probe with one that commits a nonce and returns a served answer.
+//  2. Warm one escrow.
+//  3. Assert `SettleTimeout` was never called and no timeout event was recorded, since the host served it.
 func TestAServedWarmupProbeIsNotVotedOn(t *testing.T) {
 	poster := &stubPoster{}
 	timeouts := &spyTimeouts{}
@@ -121,7 +137,11 @@ func TestAServedWarmupProbeIsNotVotedOn(t *testing.T) {
 	}
 }
 
-// A retired escrow resolves no poster. The nonce still has to read as something other than in flight.
+// Test flow:
+//  1. Build a refused warmup whose poster resolution fails to find one.
+//  2. Warm one escrow.
+//  3. Assert `SettleTimeout` was never called.
+//  4. Assert one skipped timeout event was recorded with the reason `TimeoutReasonNoPoster`.
 func TestAWarmupProbeWithNoPosterIsRecordedAsSkipped(t *testing.T) {
 	poster := &stubPoster{}
 	timeouts := &spyTimeouts{}
