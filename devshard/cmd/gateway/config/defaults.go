@@ -63,7 +63,7 @@ func Defaults() Config {
 		Rotation: Rotation{
 			PrePoCBlocks:      300,
 			HoldEnabled:       true,
-			HoldMaxPerModel:   1,
+			HoldMaxPerModel:   16,
 			HoldResumeAnswers: 32,
 		},
 		Cache: Cache{

@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"devshard/cmd/gateway/chain"
 	"devshard/cmd/gateway/config"
@@ -17,10 +19,18 @@ type fakeHoldGate struct {
 	mu       sync.Mutex
 	onHold   map[string]bool
 	verdicts map[string]HoldVerdict
+	returnBy map[string]time.Time
 }
 
 func newFakeHoldGate() *fakeHoldGate {
-	return &fakeHoldGate{onHold: map[string]bool{}, verdicts: map[string]HoldVerdict{}}
+	return &fakeHoldGate{onHold: map[string]bool{}, verdicts: map[string]HoldVerdict{}, returnBy: map[string]time.Time{}}
+}
+
+func (g *fakeHoldGate) ReservationsReturnBy(escrowID string) (time.Time, bool) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	returnBy, bounded := g.returnBy[escrowID]
+	return returnBy, bounded
 }
 
 func (g *fakeHoldGate) SetOnHold(escrowID string, onHold bool) {
@@ -295,6 +305,105 @@ func TestAnEscrowWhoseMoneyCameBackResumes(t *testing.T) {
 	}
 	if record := findRecord(t, devshards, "1"); !record.Active || record.OnHold {
 		t.Errorf("returned record = %+v, want serving", record)
+	}
+}
+
+// Test flow:
+//  1. Put a current-epoch escrow on hold whose balance is still short, varying when its reservations could all have come back and whether any is left to the sweep or a dispute.
+//  2. Run one resume tick at a clock of zero.
+//  3. Assert the hold expires only once every reservation could have come back and a tick has passed, narrated once with the money still held, and never while a reservation has no deadline.
+func TestAHoldExpiresOnceItsReservationsCouldAllHaveComeBack(t *testing.T) {
+	now := time.Unix(0, 0)
+	cases := []struct {
+		name        string
+		returnBy    time.Time
+		bounded     bool
+		wantExpired bool
+	}{
+		{name: "every reservation was due a tick ago", returnBy: now.Add(-TickInterval), bounded: true, wantExpired: true},
+		{name: "nothing is in flight", returnBy: time.Time{}, bounded: true, wantExpired: true},
+		{name: "the last reservation is due now", returnBy: now, bounded: true, wantExpired: false},
+		{name: "a reservation is still in its window", returnBy: now.Add(time.Minute), bounded: true, wantExpired: false},
+		{name: "a reservation is left to the sweep or a dispute", bounded: false, wantExpired: false},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			testStore := newFakeStore()
+			testStore.devshards["1"] = heldRecord("1", int64(servingSnapshot().EpochIndex))
+			gate := newFakeHoldGate()
+			gate.onHold["1"] = true
+			gate.verdicts["1"] = HoldKeep
+			if testCase.bounded {
+				gate.returnBy["1"] = testCase.returnBy
+			}
+			manager := holdManager(t, testStore, &fakeTxClient{}, gate)
+			narrator := &recordingLifecycleNarrator{}
+			manager.narrator = narrator
+
+			if _, err := resumeTick(t, manager, testStore); err != nil {
+				t.Fatalf("resumeHeld = %v, want nil", err)
+			}
+
+			if !testCase.wantExpired {
+				if record := testStore.devshards["1"]; !record.Active || !record.OnHold {
+					t.Fatalf("record = %+v, want still on hold", record)
+				}
+				return
+			}
+			assertParked(t, testStore, "1")
+			if !slices.Contains(narrator.recorded(), "hold expired 1: balance 50 reserved 400") {
+				t.Errorf("narrated %v, want what was still held when the hold expired", narrator.recorded())
+			}
+			if slices.ContainsFunc(narrator.recorded(), func(note string) bool { return strings.HasPrefix(note, "hold ended") }) {
+				t.Errorf("narrated %v, want the expiry told once, not also as a hold ending", narrator.recorded())
+			}
+		})
+	}
+}
+
+// Test flow:
+//  1. Put an escrow on hold whose reservations could all have come back an hour ago, once with its money back and once from a past epoch.
+//  2. Run one resume tick at a clock of zero.
+//  3. Assert the escrow with its money back resumes and the past-epoch one ends as epoch_passed: expiry is asked last.
+func TestAnEarlierHoldRuleWinsOverExpiry(t *testing.T) {
+	servingEpoch := int64(servingSnapshot().EpochIndex)
+	cases := []struct {
+		name        string
+		epoch       int64
+		verdict     HoldVerdict
+		wantServing bool
+		wantNote    string
+	}{
+		{name: "the money came back", epoch: servingEpoch, verdict: HoldResume, wantServing: true},
+		{name: "the epoch passed", epoch: servingEpoch - 1, verdict: HoldKeep, wantNote: "hold ended 1: epoch_passed"},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			testStore := newFakeStore()
+			testStore.devshards["1"] = heldRecord("1", testCase.epoch)
+			gate := newFakeHoldGate()
+			gate.onHold["1"] = true
+			gate.verdicts["1"] = testCase.verdict
+			gate.returnBy["1"] = time.Unix(0, 0).Add(-time.Hour)
+			manager := holdManager(t, testStore, &fakeTxClient{}, gate)
+			narrator := &recordingLifecycleNarrator{}
+			manager.narrator = narrator
+
+			if _, err := resumeTick(t, manager, testStore); err != nil {
+				t.Fatalf("resumeHeld = %v, want nil", err)
+			}
+
+			if testCase.wantServing {
+				if record := testStore.devshards["1"]; !record.Active || record.OnHold {
+					t.Fatalf("record = %+v, want serving", record)
+				}
+				return
+			}
+			assertParked(t, testStore, "1")
+			if !slices.Contains(narrator.recorded(), testCase.wantNote) {
+				t.Errorf("narrated %v, want %q", narrator.recorded(), testCase.wantNote)
+			}
+		})
 	}
 }
 

@@ -1204,6 +1204,10 @@ func (s weightlessSession) PrepareInferenceFn(user.ParamsForHost) (*user.Prepare
 	return nil, nil
 }
 
+func (s weightlessSession) LiveInferences() (types.SessionConfig, []types.InferenceRecord) {
+	return types.SessionConfig{}, nil
+}
+
 // Test flow:
 //  1. Build capacity, config and a phase observer, then wire a router through newRouting for two weighted participants.
 //  2. Add one escrow to the registry.

@@ -50,6 +50,7 @@ type EscrowSession interface {
 	SignedSlots() map[uint64]types.Bitmap128
 	SignatureStatus() (entries []user.SignatureStatusEntry, highestQuorum uint64, hasAny bool)
 	SnapshotState() types.EscrowState
+	LiveInferences() (types.SessionConfig, []types.InferenceRecord)
 	SealedInferences() int
 	PendingTxs() []*types.DevshardTx
 	SendPendingDiff(ctx context.Context) error
@@ -88,6 +89,17 @@ func (h sessionHandle) Phase() types.SessionPhase        { return h.machine.Phas
 func (h sessionHandle) SnapshotState() types.EscrowState { return h.machine.SnapshotState() }
 func (h sessionHandle) SealedInferences() int            { return len(h.machine.ExportSealedNonces()) }
 func (h sessionHandle) UserSession() *user.Session       { return h.Session }
+
+func (h sessionHandle) LiveInferences() (types.SessionConfig, []types.InferenceRecord) {
+	ids := h.machine.LiveInferenceIDs()
+	records := make([]types.InferenceRecord, 0, len(ids))
+	for id := range ids {
+		if record, tracked := h.machine.GetInference(id); tracked {
+			records = append(records, record)
+		}
+	}
+	return h.machine.Config(), records
+}
 
 type hostDialer interface {
 	BaseURL() string

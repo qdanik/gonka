@@ -112,6 +112,14 @@ func (f *fakeSession) SignedSlots() map[uint64]types.Bitmap128 { return nil }
 func (f *fakeSession) SnapshotState() types.EscrowState        { return f.escrowState }
 func (f *fakeSession) SealedInferences() int                   { return f.sealed }
 
+func (f *fakeSession) LiveInferences() (types.SessionConfig, []types.InferenceRecord) {
+	records := make([]types.InferenceRecord, 0, len(f.escrowState.Inferences))
+	for _, record := range f.escrowState.Inferences {
+		records = append(records, *record)
+	}
+	return f.escrowState.Config, records
+}
+
 func (f *fakeSession) Finalize(context.Context) error {
 	f.finalizeCalls.Add(1)
 	if f.onFinalize != nil {

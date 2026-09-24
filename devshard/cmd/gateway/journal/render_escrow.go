@@ -128,6 +128,13 @@ func (j *Journal) EscrowHoldEnded(escrowID, reason string) {
 	})
 }
 
+// EscrowHoldExpired renders what an escrow still held once every reservation could have come back. See ../docs/routing.md, "An escrow on hold".
+func (j *Journal) EscrowHoldExpired(escrowID string, balance, reserved uint64) {
+	j.emitLine(KindEscrowTransition, func(lines logSink) {
+		lines.Warn("escrow hold expired with money still held", logkey.Escrow, escrowID, logkey.Balance, balance, logkey.Reserved, reserved)
+	})
+}
+
 // RotationSkipped renders a rotation that created nothing because the network serves no such model.
 func (j *Journal) RotationSkipped(model, role string, epoch uint64) {
 	j.emitLine(KindEscrowTransition, func(lines logSink) {

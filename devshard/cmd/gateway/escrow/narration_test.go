@@ -87,6 +87,10 @@ func (n *recordingLifecycleNarrator) EscrowHoldEnded(escrowID, reason string) {
 	n.note("hold ended %s: %s", escrowID, reason)
 }
 
+func (n *recordingLifecycleNarrator) EscrowHoldExpired(escrowID string, balance, reserved uint64) {
+	n.note("hold expired %s: balance %d reserved %d", escrowID, balance, reserved)
+}
+
 func (n *recordingLifecycleNarrator) EscrowSettled(escrowID, model, txHash, settler string) {
 	n.note("settled %s %s tx %s settler %s", escrowID, model, txHash, settler)
 }

@@ -161,6 +161,7 @@ func everyProducer() map[string]func(events *Journal) {
 		},
 		"EscrowResumed":            func(events *Journal) { events.EscrowResumed("1", 3200) },
 		"EscrowHoldEnded":          func(events *Journal) { events.EscrowHoldEnded("1", "epoch_passed") },
+		"EscrowHoldExpired":        func(events *Journal) { events.EscrowHoldExpired("1", 50, 400) },
 		"RotationSkipped":          func(events *Journal) { events.RotationSkipped("qwen", "regular", 4) },
 		"RegularsPromotedToTemp":   func(events *Journal) { events.RegularsPromotedToTemp("qwen", 9, 2) },
 		"BridgePrepared":           func(events *Journal) { events.BridgePrepared("qwen", 9, 1, 2) },

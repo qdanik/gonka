@@ -3,9 +3,11 @@ package registry
 import (
 	"slices"
 	"sync"
+	"time"
 
 	"devshard/cmd/gateway/scheduler"
 	"devshard/types"
+	"devshard/user"
 )
 
 // Candidates satisfies scheduler.escrowSource.
@@ -66,6 +68,28 @@ func (r *Registry) Funds(escrowID string) (balance, reserved, challenged uint64,
 		}
 	}
 	return entry.session.Balance(), reserved, challenged, true
+}
+
+// ReservationsReturnBy: see README.md, "The published set and its readers".
+func (r *Registry) ReservationsReturnBy(escrowID string) (time.Time, bool) {
+	entry, live := r.live.Load().byID[escrowID]
+	if !live {
+		return time.Time{}, false
+	}
+	config, records := entry.session.LiveInferences()
+	refusalWindow := time.Duration(config.RefusalTimeout)*time.Second + user.TimeoutBuffer
+	var returnBy time.Time
+	for _, record := range records {
+		switch record.Status {
+		case types.StatusStarted, types.StatusChallenged:
+			return time.Time{}, false
+		case types.StatusPending:
+			if due := time.Unix(record.StartedAt, 0).Add(refusalWindow); due.After(returnBy) {
+				returnBy = due
+			}
+		}
+	}
+	return returnBy, true
 }
 
 func (e *escrowEntry) candidate() scheduler.Escrow {

@@ -113,15 +113,15 @@ func TestBuildClonesOverridesModelLimits(t *testing.T) {
 
 // Test flow:
 //  1. Build a config with no overrides.
-//  2. Assert the rotation hold defaults to enabled, one per model, with 32 resume answers.
+//  2. Assert the rotation hold defaults to enabled, sixteen per model, with 32 resume answers.
 func TestTheHoldIsOnByDefault(t *testing.T) {
 	configuration, err := Build(env.Values{}, Overrides{})
 	if err != nil {
 		t.Fatalf("Build() = %v, want nil", err)
 	}
 	rotation := configuration.Rotation
-	if !rotation.HoldEnabled || rotation.HoldMaxPerModel != 1 || rotation.HoldResumeAnswers != 32 {
-		t.Fatalf("rotation = %+v, want hold on, 1 per model, 32 answers", rotation)
+	if !rotation.HoldEnabled || rotation.HoldMaxPerModel != 16 || rotation.HoldResumeAnswers != 32 {
+		t.Fatalf("rotation = %+v, want hold on, 16 per model, 32 answers", rotation)
 	}
 }
 

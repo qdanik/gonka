@@ -73,6 +73,7 @@ type HoldGate interface {
 	SetOnHold(escrowID string, onHold bool)
 	Verdict(escrowID string, answers uint64) HoldVerdict
 	Funds(escrowID string) (balance, reserved, challenged uint64, known bool)
+	ReservationsReturnBy(escrowID string) (returnBy time.Time, bounded bool)
 }
 
 // lifecycleNarrator is satisfied by *journal.Journal; each method names one transition an operator reads the log for. See README.md, "What this package expects of others".
@@ -91,6 +92,7 @@ type lifecycleNarrator interface {
 	EscrowPutOnHold(escrowID, model, reason string, balance, reserved, challenged uint64, replacementID string)
 	EscrowResumed(escrowID string, balance uint64)
 	EscrowHoldEnded(escrowID, reason string)
+	EscrowHoldExpired(escrowID string, balance, reserved uint64)
 	EscrowSettled(escrowID, model, txHash, settler string)
 	SettlementReconciled(escrowID, txHash string)
 	SettledRecordDropped(escrowID string)

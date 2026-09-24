@@ -160,6 +160,13 @@ func TestEscrowLifecycleTransitionsRenderTheLinesTheirProducersNarrate(t *testin
 			}},
 		},
 		{
+			name:    "a hold expires with money still held",
+			produce: func(events *Journal) { events.EscrowHoldExpired("1", 50, 400) },
+			want: logcapture.Entry{Level: "warn", Msg: "escrow hold expired with money still held", Fields: []any{
+				"escrow", "1", "balance", uint64(50), "reserved", uint64(400),
+			}},
+		},
+		{
 			name:    "a rotation is skipped",
 			produce: func(events *Journal) { events.RotationSkipped("qwen", "regular", 4) },
 			want: logcapture.Entry{Level: "warn", Msg: "rotation skipped, the network serves no such model", Fields: []any{

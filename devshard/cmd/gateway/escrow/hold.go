@@ -150,10 +150,17 @@ func (m *Manager) settleHold(ctx context.Context, record store.DevshardRecord, r
 		return m.endHold(ctx, record, holdEndedNonceSpent)
 	case HoldResume:
 		return m.resume(ctx, record)
-	default:
-		m.holds.SetOnHold(record.EscrowID, true)
-		return record, nil
 	}
+	if m.holdExpired(record.EscrowID) {
+		return m.expireHold(ctx, record)
+	}
+	m.holds.SetOnHold(record.EscrowID, true)
+	return record, nil
+}
+
+func (m *Manager) holdExpired(escrowID string) bool {
+	returnBy, bounded := m.holds.ReservationsReturnBy(escrowID)
+	return bounded && !m.now().Before(returnBy.Add(TickInterval))
 }
 
 func holdEndReason(rotation config.Rotation, replaceable bool, epoch int64, known bool, snapshot chain.PhaseSnapshot) holdEnding {
@@ -186,13 +193,22 @@ func (m *Manager) creationEpoch(ctx context.Context, record store.DevshardRecord
 
 // endHold parks through the same statement depletion uses, which clears the hold with active.
 func (m *Manager) endHold(ctx context.Context, record store.DevshardRecord, reason holdEnding) (store.DevshardRecord, error) {
+	return m.parkHeld(ctx, record, func() { m.narrator.EscrowHoldEnded(record.EscrowID, string(reason)) })
+}
+
+func (m *Manager) expireHold(ctx context.Context, record store.DevshardRecord) (store.DevshardRecord, error) {
+	balance, reserved, _, _ := m.holds.Funds(record.EscrowID)
+	return m.parkHeld(ctx, record, func() { m.narrator.EscrowHoldExpired(record.EscrowID, balance, reserved) })
+}
+
+func (m *Manager) parkHeld(ctx context.Context, record store.DevshardRecord, narrate func()) (store.DevshardRecord, error) {
 	parked, err := m.parkIfServing(ctx, record.EscrowID)
 	if parked {
 		record.Active = false
 		record.OnHold = false
 		record.SettlementPending = true
 		if m.narrator != nil {
-			m.narrator.EscrowHoldEnded(record.EscrowID, string(reason))
+			narrate()
 		}
 	}
 	return record, err

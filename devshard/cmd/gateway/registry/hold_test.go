@@ -3,8 +3,10 @@ package registry
 import (
 	"context"
 	"testing"
+	"time"
 
 	"devshard/types"
+	"devshard/user"
 )
 
 func holdRegistry(t *testing.T) *Registry {
@@ -168,5 +170,61 @@ func TestFundsSplitsWhatTheEscrowHolds(t *testing.T) {
 
 	if !known || reserved != 30 || challenged != 30 {
 		t.Fatalf("Funds = %d, %d, %d, %v; want reserved 30, challenged 30", balance, reserved, challenged, known)
+	}
+}
+
+// Test flow:
+//  1. Publish an escrow whose session holds in-flight records, varying their statuses and timestamps.
+//  2. Ask when every reservation could have come back.
+//  3. Assert a pending record counts from its start plus the refusal window, a finished one not at all, and a started or disputed one leaves the answer unbounded.
+func TestReservationsReturnByWaitsOnlyForWhatTheRefusalWindowReturns(t *testing.T) {
+	config := types.SessionConfig{RefusalTimeout: 60, ExecutionTimeout: 1800}
+	refusal := 60*time.Second + user.TimeoutBuffer
+	cases := []struct {
+		name         string
+		inferences   map[uint64]*types.InferenceRecord
+		wantReturnBy time.Time
+		wantBounded  bool
+	}{
+		{name: "nothing in flight", inferences: nil, wantReturnBy: time.Time{}, wantBounded: true},
+		{name: "the latest pending record", inferences: map[uint64]*types.InferenceRecord{
+			1: {Status: types.StatusPending, StartedAt: 1000},
+			2: {Status: types.StatusPending, StartedAt: 1500},
+		}, wantReturnBy: time.Unix(1500, 0).Add(refusal), wantBounded: true},
+		{name: "a finished record is not waited for", inferences: map[uint64]*types.InferenceRecord{1: {Status: types.StatusFinished, StartedAt: 9000, ConfirmedAt: 9000}}, wantReturnBy: time.Time{}, wantBounded: true},
+		{name: "a started record is left to the sweep", inferences: map[uint64]*types.InferenceRecord{
+			1: {Status: types.StatusPending, StartedAt: 1500},
+			2: {Status: types.StatusStarted, StartedAt: 900, ConfirmedAt: 1000},
+		}, wantBounded: false},
+		{name: "a disputed record has no deadline", inferences: map[uint64]*types.InferenceRecord{1: {Status: types.StatusChallenged}}, wantBounded: false},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			session := newFakeSession("hostA")
+			session.escrowState = types.EscrowState{Config: config, Inferences: testCase.inferences}
+			registry := New(Deps{ServingSessions: newSessions(map[string]*fakeSession{"1": session}).open, Now: fixedClock()})
+			mustAdd(t, registry, "1", "qwen")
+
+			returnBy, bounded := registry.ReservationsReturnBy("1")
+
+			if bounded != testCase.wantBounded {
+				t.Fatalf("ReservationsReturnBy(1) bounded = %t, want %t", bounded, testCase.wantBounded)
+			}
+			if bounded && !returnBy.Equal(testCase.wantReturnBy) {
+				t.Fatalf("ReservationsReturnBy(1) = %v, want %v", returnBy, testCase.wantReturnBy)
+			}
+		})
+	}
+}
+
+// Test flow:
+//  1. Build a registry that publishes no escrow.
+//  2. Ask when an unknown escrow's reservations could have come back.
+//  3. Assert the answer is unbounded, so no hold expires on an escrow the registry does not hold.
+func TestReservationsReturnByIsUnboundedForAnUnknownEscrow(t *testing.T) {
+	registry := New(Deps{ServingSessions: newSessions(map[string]*fakeSession{}).open, Now: fixedClock()})
+
+	if _, bounded := registry.ReservationsReturnBy("missing"); bounded {
+		t.Fatal("ReservationsReturnBy(missing) bounded = true, want false")
 	}
 }

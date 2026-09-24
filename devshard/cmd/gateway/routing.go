@@ -93,6 +93,10 @@ func (h escrowHolds) Verdict(escrowID string, answers uint64) escrow.HoldVerdict
 	return escrow.HoldKeep
 }
 
+func (h escrowHolds) ReservationsReturnBy(escrowID string) (time.Time, bool) {
+	return h.escrows.ReservationsReturnBy(escrowID)
+}
+
 func (h escrowHolds) Funds(escrowID string) (balance, reserved, challenged uint64, known bool) {
 	return h.escrows.Funds(escrowID)
 }
