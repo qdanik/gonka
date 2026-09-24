@@ -75,7 +75,7 @@ func (g contentGate) Classify(chunk []byte) chunkFacts {
 }
 
 func (g contentGate) missProof() (MissProof, bool) {
-	prover, holds := g.streamClassifier.(missProver)
+	prover, holds := g.asMissProver()
 	if !holds {
 		return MissProof{}, false
 	}
@@ -83,7 +83,12 @@ func (g contentGate) missProof() (MissProof, bool) {
 }
 
 func (g contentGate) releaseMissProof() {
-	if prover, holds := g.streamClassifier.(missProver); holds {
+	if prover, holds := g.asMissProver(); holds {
 		prover.releaseMissProof()
 	}
+}
+
+func (g contentGate) asMissProver() (missProver, bool) {
+	prover, holds := g.streamClassifier.(missProver)
+	return prover, holds
 }

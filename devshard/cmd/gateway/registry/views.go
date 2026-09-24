@@ -30,8 +30,8 @@ func (r *Registry) Routable(escrowID string) (scheduler.Escrow, bool) {
 	return entry.candidate(), true
 }
 
-// Held resolves a live, accepting escrow whether or not it is on hold, for the tick that decides when it may resume.
-func (r *Registry) Held(escrowID string) (scheduler.Escrow, bool) {
+// ResumeCandidate resolves a live, accepting escrow whether or not it is on hold, for the tick that decides when it may resume.
+func (r *Registry) ResumeCandidate(escrowID string) (scheduler.Escrow, bool) {
 	entry, known := r.live.Load().byID[escrowID]
 	if !known || !entry.accepting() {
 		return scheduler.Escrow{}, false
@@ -129,12 +129,33 @@ func (r *Registry) RoutableSession(escrowID string) (EscrowSession, bool) {
 func (r *Registry) SettlementSession(escrowID string) (EscrowSession, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if entry, known := r.live.Load().byID[escrowID]; known {
-		return entry.session, true
+	entry, known := r.settlementEntryLocked(escrowID)
+	if !known {
+		return nil, false
 	}
-	for _, entry := range drainingInIDOrder(r.draining) {
+	return entry.session, true
+}
+
+// HoldSettlement: see README.md, "The published set and its readers".
+func (r *Registry) HoldSettlement(escrowID string) (EscrowSession, func(), bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	entry, known := r.settlementEntryLocked(escrowID)
+	if !known || entry.closeClaimed {
+		return nil, nil, false
+	}
+	entry.settlementHolds.Add(1)
+	var once sync.Once
+	return entry.session, func() { once.Do(func() { r.releaseSettlement(entry) }) }, true
+}
+
+func (r *Registry) settlementEntryLocked(escrowID string) (*escrowEntry, bool) {
+	if entry, known := r.live.Load().byID[escrowID]; known {
+		return entry, true
+	}
+	for entry := range r.draining {
 		if entry.id == escrowID {
-			return entry.session, true
+			return entry, true
 		}
 	}
 	return nil, false

@@ -63,7 +63,7 @@ func pinnedOr(pinned map[string]int64, model string, fallback int64) int64 {
 	return fallback
 }
 
-// windowsForLocked prices one host's model. See capacity.md, "The participant limiter: IOCW".
+// windowsForLocked prices one host's model.
 func (l *ParticipantLimiter) windowsForLocked(participant, model string) ModelWindows {
 	pricing := l.cfg.Pricing
 	contextTokens := pinnedOr(pricing.ContextTokensByModel, model, pinnedOr(l.observedContext, model, pricing.FallbackContextTokens))

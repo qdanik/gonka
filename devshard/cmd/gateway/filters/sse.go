@@ -32,7 +32,7 @@ func SSEEventTerminated(events []byte) bool {
 	return bytes.HasSuffix(events, sseEventSeparator) || bytes.HasSuffix(events, sseEventSeparatorCRLF)
 }
 
-// TrimSSEDone drops a terminating [DONE] so the gateway writes its own. See api/README.md, "Streaming the reply".
+// TrimSSEDone drops a terminating [DONE] so the gateway writes its own. See ../api/README.md, "Streaming the reply".
 func TrimSSEDone(events []byte) []byte {
 	if !HasSSEDone(events) {
 		return events

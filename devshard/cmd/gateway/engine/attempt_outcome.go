@@ -42,7 +42,7 @@ func (s *attemptState) readEmpty() bool {
 	return s.terminal == TerminalEmptyStream || s.terminal == TerminalBurnEmpty
 }
 
-// emptyChunkHeads are offered only where they answer something. See race.md, "Reading an empty answer back".
+// emptyChunkHeads are offered only where they answer something.
 func (s *attemptState) emptyChunkHeads() (first, last string) {
 	if !s.readEmpty() {
 		return "", ""

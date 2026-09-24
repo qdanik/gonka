@@ -37,7 +37,7 @@ func TestAnErrorTheHostSignedIsSettledAsAMiss(t *testing.T) {
 	if !steps[0].Post {
 		t.Fatal("the step must be posted")
 	}
-	if steps[0].Kind != SettleErrorMiss {
+	if steps[0].Kind != SettleByMissClaim {
 		t.Fatalf("kind = %v, want the miss", steps[0].Kind)
 	}
 	if steps[0].Proof != proof {
@@ -56,7 +56,7 @@ func TestAnErrorWithoutProofFallsBackToTheVote(t *testing.T) {
 	if len(steps) != 1 || !steps[0].Post {
 		t.Fatalf("plan = %+v, want one posted step", steps)
 	}
-	if steps[0].Kind != SettleTimeout {
+	if steps[0].Kind != SettleByVote {
 		t.Fatalf("kind = %v, want the ordinary vote", steps[0].Kind)
 	}
 	if steps[0].Event.Kind != TimeoutKindExecution {
@@ -75,7 +75,7 @@ func TestAMissIsClaimedEvenThoughTheHostFinished(t *testing.T) {
 	if len(steps) != 1 {
 		t.Fatalf("plan = %d steps, want 1", len(steps))
 	}
-	if !steps[0].Post || steps[0].Kind != SettleErrorMiss {
+	if !steps[0].Post || steps[0].Kind != SettleByMissClaim {
 		t.Fatalf("a finished nonce with proof is still claimed as a miss: %+v", steps[0])
 	}
 }
@@ -102,7 +102,7 @@ func TestAClaimedMissGoesToTheMissHandler(t *testing.T) {
 	poster := &SessionTimeouts{handler: handler}
 	step := TimeoutStep{
 		Nonce: 7,
-		Kind:  SettleErrorMiss,
+		Kind:  SettleByMissClaim,
 		Proof: &MissProof{ResponsePayload: []byte(`{"events":[]}`)},
 	}
 
@@ -125,7 +125,7 @@ func TestAMissWithNoSignedFinishFallsBackToTheVote(t *testing.T) {
 	poster := &SessionTimeouts{handler: handler}
 	step := TimeoutStep{
 		Nonce: 7,
-		Kind:  SettleErrorMiss,
+		Kind:  SettleByMissClaim,
 		Proof: &MissProof{ResponsePayload: []byte(`{"events":[]}`)},
 	}
 
@@ -168,7 +168,7 @@ func TestARefusedClaimReportsWhatTheVerifiersSaid(t *testing.T) {
 	poster := &SessionTimeouts{handler: handler}
 	step := TimeoutStep{
 		Nonce: 7,
-		Kind:  SettleErrorMiss,
+		Kind:  SettleByMissClaim,
 		Proof: &MissProof{ResponsePayload: []byte(`{"events":[]}`), Truncated: true},
 	}
 

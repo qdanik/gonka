@@ -9,6 +9,7 @@ import (
 
 	"devshard/cmd/gateway/chain"
 	"devshard/cmd/gateway/config"
+	"devshard/cmd/gateway/scheduler"
 	"devshard/cmd/gateway/store"
 )
 
@@ -37,7 +38,7 @@ func (m *Manager) holdApplies(replaceable bool) bool {
 	return m.holds != nil && replaceable && m.config.Load().Rotation.HoldEnabled
 }
 
-func (m *Manager) holdOrPark(ctx context.Context, record store.DevshardRecord, reason string, model ModelConfig, snapshot chain.PhaseSnapshot, counts modelCounts) error {
+func (m *Manager) holdOrPark(ctx context.Context, record store.DevshardRecord, reason scheduler.ExhaustionReason, model ModelConfig, snapshot chain.PhaseSnapshot, counts modelCounts) error {
 	if snapshotHasNoEpochYet(snapshot) {
 		m.depleted.mark(record.EscrowID, reason)
 		return fmt.Errorf("handling depleted escrow %s: the chain snapshot carries no epoch yet", record.EscrowID)
@@ -45,7 +46,7 @@ func (m *Manager) holdOrPark(ctx context.Context, record store.DevshardRecord, r
 	if record.OnHold {
 		return nil
 	}
-	if reason == depletionReasonNonceCap || counts.onHold[record.Model] >= int(m.config.Load().Rotation.HoldMaxPerModel) {
+	if reason == scheduler.ExhaustionNonceCap || counts.onHold[record.Model] >= int(m.config.Load().Rotation.HoldMaxPerModel) {
 		return m.parkDepleted(ctx, record, reason, model, snapshot, counts)
 	}
 	if epoch, known := m.creationEpoch(ctx, record); !known || epoch < int64(snapshot.EpochIndex) {
@@ -63,12 +64,12 @@ func (m *Manager) holdOrPark(ctx context.Context, record store.DevshardRecord, r
 	replacementID, replacementErr := m.replaceIfShort(ctx, model, snapshot, counts)
 	if m.narrator != nil {
 		balance, reserved, challenged, _ := m.holds.Funds(record.EscrowID)
-		m.narrator.EscrowPutOnHold(record.EscrowID, record.Model, reason, balance, reserved, challenged, replacementID)
+		m.narrator.EscrowPutOnHold(record.EscrowID, record.Model, string(reason), balance, reserved, challenged, replacementID)
 	}
 	return replacementErr
 }
 
-func (m *Manager) parkDepleted(ctx context.Context, record store.DevshardRecord, reason string, model ModelConfig, snapshot chain.PhaseSnapshot, counts modelCounts) error {
+func (m *Manager) parkDepleted(ctx context.Context, record store.DevshardRecord, reason scheduler.ExhaustionReason, model ModelConfig, snapshot chain.PhaseSnapshot, counts modelCounts) error {
 	parked, err := m.parkIfServing(ctx, record.EscrowID)
 	if !parked {
 		if err != nil {
@@ -155,7 +156,7 @@ func (m *Manager) settleHold(ctx context.Context, record store.DevshardRecord, r
 	}
 }
 
-func holdEndReason(rotation config.Rotation, replaceable bool, epoch int64, known bool, snapshot chain.PhaseSnapshot) string {
+func holdEndReason(rotation config.Rotation, replaceable bool, epoch int64, known bool, snapshot chain.PhaseSnapshot) holdEnding {
 	switch {
 	case !rotation.HoldEnabled:
 		return holdEndedDisabled
@@ -184,14 +185,14 @@ func (m *Manager) creationEpoch(ctx context.Context, record store.DevshardRecord
 }
 
 // endHold parks through the same statement depletion uses, which clears the hold with active.
-func (m *Manager) endHold(ctx context.Context, record store.DevshardRecord, reason string) (store.DevshardRecord, error) {
+func (m *Manager) endHold(ctx context.Context, record store.DevshardRecord, reason holdEnding) (store.DevshardRecord, error) {
 	parked, err := m.parkIfServing(ctx, record.EscrowID)
 	if parked {
 		record.Active = false
 		record.OnHold = false
 		record.SettlementPending = true
 		if m.narrator != nil {
-			m.narrator.EscrowHoldEnded(record.EscrowID, reason)
+			m.narrator.EscrowHoldEnded(record.EscrowID, string(reason))
 		}
 	}
 	return record, err

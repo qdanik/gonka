@@ -67,7 +67,7 @@ type bootStep struct {
 	start func() error
 }
 
-// bootOrder is the eight-step contract every boot follows. See operations.md, "Boot".
+// bootOrder is the nine-step contract every boot follows. See operations.md, "Boot".
 func (g *gateway) bootOrder(ctx, backgroundCtx context.Context, settings *config.Config, started *bootState) []bootStep {
 	return []bootStep{
 		{name: "chain observer", start: func() error { g.observer.Start(backgroundCtx); return nil }},
@@ -113,24 +113,39 @@ type stopper interface{ Stop() }
 // idleConnections is satisfied by *http.Client, whose pooled sockets nothing above it closes.
 type idleConnections interface{ CloseIdleConnections() }
 
+type shutdownParts struct {
+	listener        httpListener
+	races           stopper
+	dispatchers     stopper
+	escrowLifecycle stopper
+	chainObserver   stopper
+	sessions        io.Closer
+	events          io.Closer
+	nonceLedger     io.Closer
+	governanceFeed  io.Closer
+	heightFollower  io.Closer
+	storage         io.Closer
+	publicAPI       idleConnections
+}
+
 // shutdownOrder is the twelve-step contract every shutdown follows. See operations.md, "Shutdown".
-func shutdownOrder(listener httpListener, races, dispatchers, escrowLifecycle, chainObserver stopper, sessions, events, nonceLedger, governanceFeed, heightFollower, storage io.Closer, publicAPI idleConnections) []shutdownStep {
+func shutdownOrder(parts shutdownParts) []shutdownStep {
 	return []shutdownStep{
-		{name: "http server", stop: listener.Shutdown},
-		{name: "races", stop: waitFor(races)},
-		{name: "dispatchers", stop: waitFor(dispatchers)},
-		{name: "escrow lifecycle", stop: waitFor(escrowLifecycle)},
-		{name: "chain observer", stop: waitFor(chainObserver)},
-		{name: "escrow sessions", stop: closeOf(sessions), needsQuiesced: true},
-		{name: "journal", stop: closeWithin(events, journalCloseFloor)},
+		{name: "http server", stop: parts.listener.Shutdown},
+		{name: "races", stop: waitFor(parts.races)},
+		{name: "dispatchers", stop: waitFor(parts.dispatchers)},
+		{name: "escrow lifecycle", stop: waitFor(parts.escrowLifecycle)},
+		{name: "chain observer", stop: waitFor(parts.chainObserver)},
+		{name: "escrow sessions", stop: closeOf(parts.sessions), needsQuiesced: true},
+		{name: "journal", stop: closeWithin(parts.events, journalCloseFloor)},
 		// After every emitter above, so the final snapshot holds the counters the run ended with.
-		{name: "nonce accounting", stop: closeOf(nonceLedger)},
-		{name: "runtime params", stop: closeOf(governanceFeed)},
+		{name: "nonce accounting", stop: closeOf(parts.nonceLedger)},
+		{name: "runtime params", stop: closeOf(parts.governanceFeed)},
 		// After the sessions that carried its readings, before the store they persisted into.
-		{name: "height follower", stop: closeOf(heightFollower)},
-		{name: "store", stop: closeOf(storage)},
+		{name: "height follower", stop: closeOf(parts.heightFollower)},
+		{name: "store", stop: closeOf(parts.storage)},
 		// Last: every step above can still reach the public API. See README.md, "Shutdown".
-		{name: "public api connections", stop: closeIdle(publicAPI)},
+		{name: "public api connections", stop: closeIdle(parts.publicAPI)},
 	}
 }
 
@@ -205,7 +220,20 @@ func stopAll(ctx context.Context, steps []shutdownStep) error {
 func (g *gateway) shutdown(grace time.Duration) error {
 	drainCtx, cancelDrain := context.WithTimeout(context.Background(), grace)
 	defer cancelDrain()
-	return stopAll(drainCtx, shutdownOrder(g.server, g.races, g.router, g.manager, g.observer, g.escrows, g.events, g.nonces, g.governance, g.heights, g.store, g.publicAPI))
+	return stopAll(drainCtx, shutdownOrder(shutdownParts{
+		listener:        g.server,
+		races:           g.races,
+		dispatchers:     g.router,
+		escrowLifecycle: g.manager,
+		chainObserver:   g.observer,
+		sessions:        g.escrows,
+		events:          g.events,
+		nonceLedger:     g.nonces,
+		governanceFeed:  g.governance,
+		heightFollower:  g.heights,
+		storage:         g.store,
+		publicAPI:       g.publicAPI,
+	}))
 }
 
 // bootBudget sizes the build limit and the idle pool those builds reuse together. See README.md, "Wiring order, and the knots in it".

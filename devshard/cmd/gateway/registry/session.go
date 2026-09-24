@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"common/completionapi"
@@ -63,11 +64,24 @@ type SessionFactory func(ctx context.Context, escrowID string) (EscrowSession, e
 
 type sessionHandle struct {
 	*user.Session
-	machine *state.StateMachine
+	machine    *state.StateMachine
+	finalizing *sync.Mutex
 }
 
 func NewSessionHandle(session *user.Session, machine *state.StateMachine) EscrowSession {
-	return sessionHandle{Session: session, machine: machine}
+	return sessionHandle{Session: session, machine: machine, finalizing: &sync.Mutex{}}
+}
+
+func (h sessionHandle) Finalize(ctx context.Context) error {
+	h.finalizing.Lock()
+	defer h.finalizing.Unlock()
+	for h.machine.Phase() == types.PhaseFinalizing {
+		nonce := h.Nonce()
+		if err := h.SendPendingDiff(ctx); err != nil && h.Nonce() == nonce {
+			return fmt.Errorf("resuming the finalize cut short at nonce %d: %w", nonce, err)
+		}
+	}
+	return h.Session.Finalize(ctx)
 }
 
 func (h sessionHandle) Phase() types.SessionPhase        { return h.machine.Phase() }

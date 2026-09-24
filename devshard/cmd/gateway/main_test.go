@@ -687,18 +687,30 @@ func (r *shutdownRecorder) Stop()                          { r.note() }
 func (r *shutdownRecorder) Close() error                   { r.note(); return r.err }
 func (r *shutdownRecorder) CloseIdleConnections()          { r.note() }
 
+func recordedShutdownParts(listener *shutdownRecorder, recorder func(name string) *shutdownRecorder) shutdownParts {
+	return shutdownParts{
+		listener:        listener,
+		races:           recorder("races"),
+		dispatchers:     recorder("dispatchers"),
+		escrowLifecycle: recorder("escrow lifecycle"),
+		chainObserver:   recorder("chain observer"),
+		sessions:        recorder("escrow sessions"),
+		events:          recorder("journal"),
+		nonceLedger:     recorder("nonce accounting"),
+		governanceFeed:  recorder("runtime params"),
+		heightFollower:  recorder("height follower"),
+		storage:         recorder("store"),
+		publicAPI:       recorder("public api connections"),
+	}
+}
+
 func TestShutdownStopsAcceptingFirstAndClosesTheStoreLast(t *testing.T) {
 	var sequence []string
 	recorder := func(name string) *shutdownRecorder {
 		return &shutdownRecorder{sequence: &sequence, name: name}
 	}
 
-	steps := shutdownOrder(
-		recorder("http server"), recorder("races"), recorder("dispatchers"),
-		recorder("escrow lifecycle"), recorder("chain observer"),
-		recorder("escrow sessions"), recorder("journal"), recorder("nonce accounting"),
-		recorder("runtime params"), recorder("height follower"), recorder("store"),
-		recorder("public api connections"))
+	steps := shutdownOrder(recordedShutdownParts(recorder("http server"), recorder))
 	if err := stopAll(context.Background(), steps); err != nil {
 		t.Fatalf("stopAll(): %v", err)
 	}
@@ -742,12 +754,7 @@ func TestShutdownReachesTheStoreEvenWhenAnEarlierStepFails(t *testing.T) {
 	}
 	failing := &shutdownRecorder{sequence: &sequence, name: "http server", err: errors.New("listener stuck")}
 
-	steps := shutdownOrder(
-		failing, recorder("races"), recorder("dispatchers"),
-		recorder("escrow lifecycle"), recorder("chain observer"),
-		recorder("escrow sessions"), recorder("journal"), recorder("nonce accounting"),
-		recorder("runtime params"), recorder("height follower"), recorder("store"),
-		recorder("public api connections"))
+	steps := shutdownOrder(recordedShutdownParts(failing, recorder))
 	err := stopAll(context.Background(), steps)
 
 	if err == nil || !strings.Contains(err.Error(), "listener stuck") {

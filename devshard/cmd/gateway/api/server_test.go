@@ -78,6 +78,11 @@ func (f *fakeRegistry) SettlementSession(escrowID string) (registry.EscrowSessio
 	return f.RoutableSession(escrowID)
 }
 
+func (f *fakeRegistry) HoldSettlement(escrowID string) (registry.EscrowSession, func(), bool) {
+	session, held := f.SettlementSession(escrowID)
+	return session, func() {}, held
+}
+
 // Inspect mirrors the production contract: a resident escrow answers, an absent one reports the
 // sentinel so the boundary can answer 404 rather than 502. This fake holds no storage to rehydrate.
 func (f *fakeRegistry) Inspect(_ context.Context, escrowID string) (registry.EscrowSession, func(), error) {

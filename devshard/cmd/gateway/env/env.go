@@ -8,8 +8,10 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"devshard/cmd/gateway/internal/logkey"
+	"devshard/internal/boolvalue"
 	"devshard/logging"
 )
 
@@ -123,9 +125,6 @@ func LogFormat() string {
 	return LogFormatJSON
 }
 
-// NodeManagerAddr is the fleet's own spelling, shared with devshardd rather than renamed. See operations.md.
-func NodeManagerAddr() string { return lookup("NODE_MANAGER_ADDR") }
-
 // AllowPrivateAddresses is read apart from Load because the dial guard is armed before anything dials. See operations.md.
 func AllowPrivateAddresses() bool {
 	allowed, err := strconv.ParseBool(lookup("GATEWAY_ALLOW_PRIVATE_ADDRESSES"))
@@ -162,6 +161,17 @@ var (
 		"GATEWAY_ACCOUNTING_RETENTION_EPOCHS": "DEVSHARD_STATS_RETENTION_EPOCHS",
 		"GATEWAY_ACCOUNTING_SNAPSHOT_SECONDS": "DEVSHARD_STATS_SNAPSHOT_SECONDS",
 		"GATEWAY_ALLOW_PRIVATE_ADDRESSES":     "DEVSHARD_ALLOW_PRIVATE_ADDRESSES",
+		"GATEWAY_HOST_PING_DISABLED":          "DEVSHARD_GATEWAY_HOST_PING_DISABLED",
+		"GATEWAY_HOST_PING_CONCURRENCY":       "DEVSHARD_GATEWAY_HOST_PING_CONCURRENCY",
+		"GATEWAY_HEIGHT_SYNC_ANCHOR_K":        "DEVSHARD_HEIGHTSYNC_K",
+		"GATEWAY_HEIGHT_SYNC_ANCHOR_SLOTS":    "DEVSHARD_HEIGHTSYNC_SLOTS",
+		"GATEWAY_HEIGHT_SYNC_REQUIRE_SEED":    "DEVSHARD_REQUIRE_HEIGHT_SEED",
+		"GATEWAY_HEIGHT_SYNC_CHAIN_ORACLE":    "DEVSHARD_GATEWAY_CHAIN_ORACLE",
+	}
+
+	legacyDurationNames = map[string]string{
+		"GATEWAY_HOST_PING_INTERVAL_MS": "DEVSHARD_GATEWAY_HOST_PING_INTERVAL",
+		"GATEWAY_HOST_PING_TIMEOUT_MS":  "DEVSHARD_GATEWAY_HOST_PING_TIMEOUT",
 	}
 )
 
@@ -187,13 +197,22 @@ func PrivateKey(name string) (string, error) {
 
 // lookup prefers the gateway's spelling; empty counts as unset on both, so blanking a legacy variable sticks.
 func lookup(name string) string {
+	raw, _ := lookupWithSource(name)
+	return raw
+}
+
+func lookupWithSource(name string) (raw, source string) {
 	if raw := strings.TrimSpace(os.Getenv(name)); raw != "" {
-		return raw
+		return raw, name
 	}
 	if legacy, aliased := legacyNames[name]; aliased {
-		return strings.TrimSpace(os.Getenv(legacy))
+		return strings.TrimSpace(os.Getenv(legacy)), legacy
 	}
-	return ""
+	return "", name
+}
+
+func ignoreLegacyValue(source, raw string) {
+	logging.Warn("devshardctl variable ignored: its value is not usable", logkey.Subsystem, "env", logkey.Recorded, source, logkey.Used, raw)
 }
 
 // Load reads every gateway environment variable, accumulating parse failures so none is reported alone.
@@ -220,6 +239,24 @@ func Load() (Values, error) {
 		}
 		*target = &parsed
 	}
+	readMilliseconds := func(name string, target **int64) {
+		if strings.TrimSpace(os.Getenv(name)) != "" {
+			readInt(name, target)
+			return
+		}
+		legacy := legacyDurationNames[name]
+		raw := strings.TrimSpace(os.Getenv(legacy))
+		if raw == "" {
+			return
+		}
+		parsed, err := time.ParseDuration(raw)
+		if err != nil || parsed.Milliseconds() <= 0 {
+			ignoreLegacyValue(legacy, raw)
+			return
+		}
+		milliseconds := parsed.Milliseconds()
+		*target = &milliseconds
+	}
 	readFloat := func(name string, target **float64) {
 		raw := lookup(name)
 		if raw == "" {
@@ -233,8 +270,17 @@ func Load() (Values, error) {
 		*target = &parsed
 	}
 	readBool := func(name string, target **bool) {
-		raw := lookup(name)
+		raw, source := lookupWithSource(name)
 		if raw == "" {
+			return
+		}
+		if source != name {
+			parsed, err := boolvalue.Parse(raw)
+			if err != nil {
+				ignoreLegacyValue(source, raw)
+				return
+			}
+			*target = &parsed
 			return
 		}
 		parsed, err := strconv.ParseBool(raw)
@@ -300,8 +346,8 @@ func Load() (Values, error) {
 	readInt("GATEWAY_HEIGHT_SYNC_ANCHOR_K", &values.HeightSyncAnchorK)
 	readInt("GATEWAY_HEIGHT_SYNC_ANCHOR_SLOTS", &values.HeightSyncAnchorSlots)
 	readBool("GATEWAY_HOST_PING_DISABLED", &values.HostPingDisabled)
-	readInt("GATEWAY_HOST_PING_INTERVAL_MS", &values.HostPingIntervalMS)
-	readInt("GATEWAY_HOST_PING_TIMEOUT_MS", &values.HostPingTimeoutMS)
+	readMilliseconds("GATEWAY_HOST_PING_INTERVAL_MS", &values.HostPingIntervalMS)
+	readMilliseconds("GATEWAY_HOST_PING_TIMEOUT_MS", &values.HostPingTimeoutMS)
 	readInt("GATEWAY_HOST_PING_CONCURRENCY", &values.HostPingConcurrency)
 	readBool("GATEWAY_CAPTURE_ENABLED", &values.CaptureEnabled)
 	readString("GATEWAY_CAPTURE_DIR", &values.CaptureDir)

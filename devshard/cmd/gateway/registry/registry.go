@@ -11,6 +11,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"devshard/cmd/gateway/scheduler"
 )
 
 var (
@@ -191,12 +193,13 @@ func (r *Registry) unpublish(escrowID string) (*escrowEntry, bool) {
 	r.pushMembershipLocked()
 	r.draining[entry] = struct{}{}
 	r.publishDrainingLocked()
-	if entry.busy() {
+	if entry.busy() || entry.settlementHolds.Load() > 0 {
 		if r.narrator != nil {
 			r.narrator.EscrowRetiredDraining(escrowID, entry.inFlight.Load())
 		}
 		return nil, false
 	}
+	entry.closeClaimed = true
 	if r.narrator != nil {
 		r.narrator.EscrowRetired(escrowID)
 	}
@@ -212,6 +215,9 @@ func (r *Registry) closeDraining(entry *escrowEntry) error {
 	// Only an unreleased store leaves the entry in draining, so Add keeps refusing that id.
 	released, err := entry.close()
 	if !released {
+		r.mu.Lock()
+		entry.closeClaimed = false
+		r.mu.Unlock()
 		return err
 	}
 	r.mu.Lock()
@@ -229,9 +235,26 @@ func (r *Registry) publishDrainingLocked() {
 
 // release closes a drained escrow off the request's goroutine. See README.md, "Publishing, retiring and draining".
 func (r *Registry) release(entry *escrowEntry) {
-	if !r.lastHoldDropped(entry) {
-		return
+	r.mu.Lock()
+	entry.inFlight.Add(-1)
+	claimed := r.claimCloseLocked(entry)
+	r.mu.Unlock()
+	if claimed {
+		r.closeInBackground(entry)
 	}
+}
+
+func (r *Registry) releaseSettlement(entry *escrowEntry) {
+	r.mu.Lock()
+	entry.settlementHolds.Add(-1)
+	claimed := r.claimCloseLocked(entry)
+	r.mu.Unlock()
+	if claimed {
+		r.closeInBackground(entry)
+	}
+}
+
+func (r *Registry) closeInBackground(entry *escrowEntry) {
 	go func() {
 		defer r.closing.Done()
 		closeErr := r.closeDraining(entry)
@@ -244,16 +267,14 @@ func (r *Registry) release(entry *escrowEntry) {
 	}()
 }
 
-// lastHoldDropped is true for exactly one caller: the count reaches zero once, and only a retired entry drains.
-func (r *Registry) lastHoldDropped(entry *escrowEntry) bool {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if entry.inFlight.Add(-1) > 0 {
+func (r *Registry) claimCloseLocked(entry *escrowEntry) bool {
+	if entry.inFlight.Load() > 0 || entry.settlementHolds.Load() > 0 || entry.closeClaimed || r.closed {
 		return false
 	}
-	if _, isDraining := r.draining[entry]; !isDraining || r.closed {
+	if _, isDraining := r.draining[entry]; !isDraining {
 		return false
 	}
+	entry.closeClaimed = true
 	r.closing.Add(1)
 	return true
 }
@@ -277,7 +298,7 @@ func (r *Registry) IsBusy(escrowID string) bool {
 }
 
 // Exhausted reports an escrow routing declined as spent to the rotation lifecycle, which is what replaces it.
-func (r *Registry) Exhausted(escrowID, reason string) {
+func (r *Registry) Exhausted(escrowID string, reason scheduler.ExhaustionReason) {
 	if r.exhaustion == nil {
 		return
 	}

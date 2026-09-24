@@ -504,7 +504,10 @@ func TestPickEscrowTouchesOnlyEnumerationAndWeights(t *testing.T) {
 	}
 }
 
-type exhaustionReport struct{ escrowID, reason string }
+type exhaustionReport struct {
+	escrowID string
+	reason   ExhaustionReason
+}
 
 // Routing declines an exhausted escrow but cannot replace it, so it tells the rotation lifecycle why, and
 // never for the fallback ceiling alone: that ceiling can sit below the hosts' own, and a reported escrow is
@@ -527,17 +530,17 @@ func TestPickEscrowReportsAnExhaustedEscrowButNeverForTheFallbackCeilingAlone(t 
 		{
 			name: "the chain's cap reports the spent candidate", snapshot: chainCap, spentBalance: funded,
 			wantPicked:   "escrow-fresh",
-			wantReported: []exhaustionReport{{escrowID: "escrow-spent", reason: exhaustionNonceCap}},
+			wantReported: []exhaustionReport{{escrowID: "escrow-spent", reason: ExhaustionNonceCap}},
 		},
 		{
 			name: "the chain's cap reports a pinned spent escrow", pinned: "escrow-spent", snapshot: chainCap, spentBalance: funded,
 			wantErr:      ErrNoEscrowCapacity,
-			wantReported: []exhaustionReport{{escrowID: "escrow-spent", reason: exhaustionNonceCap}},
+			wantReported: []exhaustionReport{{escrowID: "escrow-spent", reason: ExhaustionNonceCap}},
 		},
 		{
 			name: "the chain's cap outranks a dry balance", pinned: "escrow-spent", snapshot: chainCap, spentBalance: dry,
 			wantErr:      ErrNoEscrowCapacity,
-			wantReported: []exhaustionReport{{escrowID: "escrow-spent", reason: exhaustionNonceCap}},
+			wantReported: []exhaustionReport{{escrowID: "escrow-spent", reason: ExhaustionNonceCap}},
 		},
 		{
 			name: "the fallback ceiling declines the spent candidate unreported", spentBalance: funded,
@@ -550,13 +553,13 @@ func TestPickEscrowReportsAnExhaustedEscrowButNeverForTheFallbackCeilingAlone(t 
 		{
 			name: "past the fallback ceiling a dry candidate is reported for its balance", spentBalance: dry,
 			wantPicked:   "escrow-fresh",
-			wantReported: []exhaustionReport{{escrowID: "escrow-spent", reason: exhaustionBalanceFloor}},
+			wantReported: []exhaustionReport{{escrowID: "escrow-spent", reason: ExhaustionBalanceFloor}},
 		},
 		{
 			name: "past the fallback ceiling a pinned dry escrow is refused as out of funds", pinned: "escrow-spent", spentBalance: dry,
 			wantErr:        ErrNoEscrowCapacity,
 			wantOutOfFunds: true,
-			wantReported:   []exhaustionReport{{escrowID: "escrow-spent", reason: exhaustionBalanceFloor}},
+			wantReported:   []exhaustionReport{{escrowID: "escrow-spent", reason: ExhaustionBalanceFloor}},
 		},
 	}
 	for _, testCase := range testCases {
@@ -570,7 +573,7 @@ func TestPickEscrowReportsAnExhaustedEscrowButNeverForTheFallbackCeilingAlone(t 
 			)
 			scheduler.settings = config.NewHolder(&settings)
 			var reported []exhaustionReport
-			scheduler.onEscrowExhausted = func(escrowID, reason string) {
+			scheduler.onEscrowExhausted = func(escrowID string, reason ExhaustionReason) {
 				reported = append(reported, exhaustionReport{escrowID: escrowID, reason: reason})
 			}
 

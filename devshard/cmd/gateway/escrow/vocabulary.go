@@ -1,5 +1,7 @@
 package escrow
 
+import "devshard/cmd/gateway/scheduler"
+
 const (
 	roleTemp    = "temp"
 	roleRegular = "regular"
@@ -23,13 +25,12 @@ const (
 	HoldNonceSpent
 )
 
-// depletionReasonNonceCap is the scheduler's exhaustionNonceCap wire string; a nonce-capped escrow can never recover.
-const depletionReasonNonceCap = "nonce_cap"
+type holdEnding string
 
 const (
-	holdEndedDisabled     = "hold_disabled"
-	holdEndedRotationOff  = "rotation_off"
-	holdEndedEpochPassed  = "epoch_passed"
-	holdEndedEpochUnknown = "epoch_unknown"
-	holdEndedNonceSpent   = "nonce_cap"
+	holdEndedDisabled     holdEnding = "hold_disabled"
+	holdEndedRotationOff  holdEnding = "rotation_off"
+	holdEndedEpochPassed  holdEnding = "epoch_passed"
+	holdEndedEpochUnknown holdEnding = "epoch_unknown"
+	holdEndedNonceSpent   holdEnding = holdEnding(scheduler.ExhaustionNonceCap)
 )

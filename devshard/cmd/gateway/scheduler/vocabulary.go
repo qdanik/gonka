@@ -14,8 +14,13 @@ const (
 	GhostReasonAbandoned           = "request_abandoned_before_dispatch"
 )
 
-// Why an escrow may no longer be picked.
+// ExhaustionReason is why routing will no longer pick an escrow, reported to the lifecycle that replaces it.
+type ExhaustionReason string
+
 const (
-	exhaustionNonceCap     = "nonce_cap"
-	exhaustionBalanceFloor = "balance_floor"
+	ExhaustionNonceCap            ExhaustionReason = "nonce_cap"
+	ExhaustionBalanceFloor        ExhaustionReason = "balance_floor"
+	ExhaustionInsufficientBalance ExhaustionReason = "insufficient_balance"
+	// exhaustionFallbackNonceCeiling is the one decline reason never reported, so it never leaves this package. See routing.md, "Picking an escrow".
+	exhaustionFallbackNonceCeiling ExhaustionReason = "fallback_nonce_ceiling"
 )

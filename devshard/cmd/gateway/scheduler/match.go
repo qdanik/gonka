@@ -76,10 +76,10 @@ func (a availability) memoisedBlock(participant string) blockReason {
 
 // firstBlock stops at the first rung that holds, so no rung below it is asked.
 func (a availability) firstBlock(participant string) blockReason {
-	waived := a.throttlingWaived(participant)
-	if !waived && a.outsideAllowlist(participant) {
+	if a.outsideAllowlist(participant) {
 		return blockNotAllowed
 	}
+	waived := a.throttlingWaived(participant)
 	if a.pocRequired(participant) {
 		return blockPoCRequired
 	}

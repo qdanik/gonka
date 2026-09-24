@@ -27,6 +27,8 @@ type Response interface {
 	Confirmed() bool
 	// ConfirmedAt is the executor's wall clock in seconds when it signed; 0 when not an executor.
 	ConfirmedAt() int64
+	// ReleaseFinish lets the host's Finish for this nonce into a diff again; the session holds it from the moment the reply lands.
+	ReleaseFinish()
 }
 
 // chunkFacts is what one SSE chunk carried. See README, "Classification and reassembly".
@@ -169,13 +171,26 @@ func runAttempt(ctx context.Context, spec AttemptSpec) {
 	state.classify(ctx, spec, err)
 
 	releaseSlot()
+	outcome := state.outcome(spec)
+	holdFinishForClaim(response, outcome)
 	spec.emit(AttemptEvent{
 		Kind:      AttemptDone,
 		Nonce:     nonce,
 		At:        state.completed,
-		Outcome:   state.outcome(spec),
+		Outcome:   outcome,
 		Lifecycle: state.lifecycle,
 	})
+}
+
+func holdFinishForClaim(response Response, outcome *AttemptOutcome) {
+	if response == nil {
+		return
+	}
+	if outcome.claimsMiss() {
+		outcome.MissProof.releaseFinish = response.ReleaseFinish
+		return
+	}
+	response.ReleaseFinish()
 }
 
 type attemptWriter struct {

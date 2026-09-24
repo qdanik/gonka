@@ -78,10 +78,10 @@ func TestClosingNothingIsFine(t *testing.T) {
 func TestACourierWithoutAFollowerHoldsNoOracle(t *testing.T) {
 	var absent *Oracle
 
-	courier := Courier(config.HeightSync{Enabled: true}, absent)
+	courier := BuildCourier(config.HeightSync{Enabled: true}, absent)
 
 	if courier == nil {
-		t.Fatal("Courier() = nil for an enabled height sync")
+		t.Fatal("BuildCourier() = nil for an enabled height sync")
 	}
 	if courier.HeightSyncLogOracle != nil {
 		t.Fatal("the courier holds a follower that does not exist")
@@ -97,7 +97,7 @@ func TestACourierCarriesTheFollowerItWasGiven(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = oracle.Close() })
 
-	courier := Courier(config.HeightSync{Enabled: true}, oracle)
+	courier := BuildCourier(config.HeightSync{Enabled: true}, oracle)
 
 	if courier.HeightSyncLogOracle == nil {
 		t.Fatal("the courier dropped the follower it was given")

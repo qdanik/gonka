@@ -1,5 +1,7 @@
 package registry
 
+import "devshard/cmd/gateway/scheduler"
+
 // membership is satisfied by *limits.Capacity.
 type membership interface {
 	SetEscrowMembership(escrowID string, hostShares map[string]float64)
@@ -8,7 +10,7 @@ type membership interface {
 
 // exhaustion is satisfied by *escrow.Manager. Called from the request path, so it must mark and return, not do I/O.
 type exhaustion interface {
-	OnBalanceExhausted(escrowID, reason string)
+	OnBalanceExhausted(escrowID string, reason scheduler.ExhaustionReason)
 }
 
 // publications is called while the registry holds its lock, so an implementation must return without doing work.

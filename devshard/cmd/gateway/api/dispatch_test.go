@@ -118,6 +118,11 @@ func (s *recordingSession) ProcessResponse(hostIdx int, reply *host.HostResponse
 	return s.applyErr
 }
 
+func (s *recordingSession) PinPendingFinish(uint64) { s.calls = append(s.calls, "PinPendingFinish") }
+func (s *recordingSession) UnpinPendingFinish(uint64) {
+	s.calls = append(s.calls, "UnpinPendingFinish")
+}
+
 func (s *recordingSession) IsNonceFinished(uint64) bool        { return true }
 func (s *recordingSession) HostParticipantKeyList() []string   { return []string{"hostA", "hostB"} }
 func (s *recordingSession) RewindHostCatchUp(int, string) bool { return true }
@@ -140,7 +145,7 @@ func TestSendDispatchesThenAppliesTheReply(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Send = %v, want nil", err)
 	}
-	if got, want := recorded.calls, []string{"SendOnly", "ProcessResponse"}; !slices.Equal(got, want) {
+	if got, want := recorded.calls, []string{"SendOnly", "PinPendingFinish", "ProcessResponse"}; !slices.Equal(got, want) {
 		t.Errorf("call order = %v, want %v", got, want)
 	}
 	if recorded.sent != prepared {
@@ -161,6 +166,25 @@ func TestSendDispatchesThenAppliesTheReply(t *testing.T) {
 	}
 }
 
+func TestAReplysFinishIsReleasedOnceHoweverOftenItIsAsked(t *testing.T) {
+	t.Parallel()
+	session, _ := newLiveSession(t)
+	prepared := prepareNonce(t, session)
+	recorded := &recordingSession{reply: &host.HostResponse{}}
+	target := escrowTarget{session: recorded}
+	response, err := target.Send(context.Background(), prepared, io.Discard, nil)
+	if err != nil {
+		t.Fatalf("Send = %v, want nil", err)
+	}
+
+	response.ReleaseFinish()
+	response.ReleaseFinish()
+
+	if got, want := recorded.calls, []string{"SendOnly", "PinPendingFinish", "ProcessResponse", "UnpinPendingFinish"}; !slices.Equal(got, want) {
+		t.Errorf("call order = %v, want %v", got, want)
+	}
+}
+
 func TestSendAppliesEveryReplyTheHostProduced(t *testing.T) {
 	t.Parallel()
 	reply := &host.HostResponse{StreamBytesRead: 12}
@@ -176,14 +200,14 @@ func TestSendAppliesEveryReplyTheHostProduced(t *testing.T) {
 		{
 			name:         "a clean reply",
 			reply:        reply,
-			wantCalls:    []string{"SendOnly", "ProcessResponse"},
+			wantCalls:    []string{"SendOnly", "PinPendingFinish", "ProcessResponse"},
 			wantResponse: true,
 		},
 		{
 			name:         "a reply that arrived beside an error is still applied",
 			reply:        reply,
 			sendErr:      errHostGone,
-			wantCalls:    []string{"SendOnly", "ProcessResponse"},
+			wantCalls:    []string{"SendOnly", "PinPendingFinish", "ProcessResponse"},
 			wantResponse: true,
 			wantErr:      errHostGone,
 		},
@@ -197,7 +221,7 @@ func TestSendAppliesEveryReplyTheHostProduced(t *testing.T) {
 			name:         "an unapplicable reply fails the attempt",
 			reply:        reply,
 			applyErr:     errApplyFailure,
-			wantCalls:    []string{"SendOnly", "ProcessResponse"},
+			wantCalls:    []string{"SendOnly", "PinPendingFinish", "ProcessResponse"},
 			wantResponse: true,
 			wantErr:      errApplyFailure,
 		},
@@ -206,7 +230,7 @@ func TestSendAppliesEveryReplyTheHostProduced(t *testing.T) {
 			reply:        reply,
 			sendErr:      errHostGone,
 			applyErr:     errApplyFailure,
-			wantCalls:    []string{"SendOnly", "ProcessResponse"},
+			wantCalls:    []string{"SendOnly", "PinPendingFinish", "ProcessResponse"},
 			wantResponse: true,
 			wantErr:      errHostGone,
 		},

@@ -20,7 +20,7 @@ func retirementHarness(t *testing.T, balance uint64) (*Scheduler, *[]exhaustionR
 	)
 	scheduler.settings = config.NewHolder(&settings)
 	var reported []exhaustionReport
-	scheduler.onEscrowExhausted = func(escrowID, reason string) {
+	scheduler.onEscrowExhausted = func(escrowID string, reason ExhaustionReason) {
 		reported = append(reported, exhaustionReport{escrowID: escrowID, reason: reason})
 	}
 	return scheduler, &reported
@@ -53,7 +53,7 @@ func TestAnEscrowThatCannotAffordACappedAnswerIsRetired(t *testing.T) {
 	if !errors.Is(err, types.ErrInsufficientBalance) {
 		t.Fatalf("pickEscrow = %v, want the dry escrow refused", err)
 	}
-	want := []exhaustionReport{{escrowID: "only", reason: exhaustionBalanceFloor}}
+	want := []exhaustionReport{{escrowID: "only", reason: ExhaustionBalanceFloor}}
 	if len(*reported) != 1 || (*reported)[0] != want[0] {
 		t.Fatalf("reported = %v, want %v", *reported, want)
 	}

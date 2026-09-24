@@ -5,6 +5,15 @@ package engine
 // a stored counter -- so they are declared here once and referenced by name. Renaming a constant breaks
 // the build; editing its value silently moves the wire string under every panel that reads it.
 
+// MissProofCompleteness is how much of an error stream a miss claim carried, reported on a claim the verifiers rejected.
+type MissProofCompleteness string
+
+const (
+	MissProofWhole     MissProofCompleteness = "whole"
+	MissProofPartial   MissProofCompleteness = "partial"
+	MissProofTruncated MissProofCompleteness = "truncated"
+)
+
 // Why an attempt started, reported on every nonce the race commits.
 const (
 	StartPrimary           = "primary"

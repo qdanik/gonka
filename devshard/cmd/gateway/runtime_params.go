@@ -21,8 +21,7 @@ type runtimeParams struct {
 	closeNodeManager func()
 }
 
-func openRuntimeParams(chainClient *commonchain.Client) (*runtimeParams, error) {
-	settings := runtimeparams.SettingsFromEnv()
+func openRuntimeParams(chainClient *commonchain.Client, settings runtimeparams.EnvSettings) (*runtimeParams, error) {
 	setup := runtimeparams.SetupConfig{
 		Chain:  runtimeparams.NewGRPCChainFetcher(chainClient),
 		Logger: slog.Default(),

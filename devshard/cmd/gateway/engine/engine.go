@@ -332,6 +332,7 @@ func (e *Engine) record(outcome RaceOutcome, params any, registration *raceRegis
 // settle posts the chain vote for every nonce the race left unfinished, on its own goroutine. See race.md, "Timeout votes".
 func (e *Engine) settle(outcome RaceOutcome, params any, registration *raceRegistration) {
 	if len(outcome.TimeoutPlan()) == 0 {
+		outcome.releaseHeldFinishes()
 		registration.release()
 		return
 	}
@@ -345,6 +346,7 @@ func (e *Engine) settle(outcome RaceOutcome, params any, registration *raceRegis
 		deadline: func() time.Time { return earliestVote(outcome, poster) },
 		post: func() {
 			retries := SettleTimeouts(settleContext(outcome.RequestID), poster, outcome, e.reportTimeout)
+			outcome.releaseHeldFinishes()
 			e.retryRefusedVotes(outcome, poster, retries, registration, 0)
 		},
 	}
@@ -368,7 +370,7 @@ func (e *Engine) retryRefusedVotes(outcome RaceOutcome, poster TimeoutPoster, st
 	e.settles.Add(task, int(e.deps.Config.Load().Engine.MaxConcurrentTimeoutVotes))
 }
 
-// earliestVote is when the first of a race's votes may be posted. See race.md, "The timeout-vote queue".
+// earliestVote is when the first of a race's votes may be posted.
 func earliestVote(outcome RaceOutcome, poster TimeoutPoster) time.Time {
 	var earliest time.Time
 	if poster == nil {

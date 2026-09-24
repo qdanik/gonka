@@ -1,6 +1,10 @@
 package escrow
 
-import "sync"
+import (
+	"sync"
+
+	"devshard/cmd/gateway/scheduler"
+)
 
 // inFlightSet dedups concurrent operations by key. See README.md, "Keeping the request path off the chain".
 type inFlightSet struct {
@@ -56,18 +60,18 @@ func (s *markSet) drain() map[string]bool {
 // depletionMarks is markSet with the reason kept, so the tick can tell a nonce cap from a balance floor.
 type depletionMarks struct {
 	mu      sync.Mutex
-	reasons map[string]string
+	reasons map[string]scheduler.ExhaustionReason
 }
 
 // mark reports whether the escrow was new to this tick; a nonce cap overwrites a balance reason, never the reverse.
-func (s *depletionMarks) mark(escrowID, reason string) bool {
+func (s *depletionMarks) mark(escrowID string, reason scheduler.ExhaustionReason) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.reasons == nil {
-		s.reasons = make(map[string]string)
+		s.reasons = make(map[string]scheduler.ExhaustionReason)
 	}
 	previous, seen := s.reasons[escrowID]
-	if !seen || (reason == depletionReasonNonceCap && previous != depletionReasonNonceCap) {
+	if !seen || (reason == scheduler.ExhaustionNonceCap && previous != scheduler.ExhaustionNonceCap) {
 		s.reasons[escrowID] = reason
 	}
 	return !seen
@@ -79,7 +83,7 @@ func (s *depletionMarks) forget(escrowID string) {
 	delete(s.reasons, escrowID)
 }
 
-func (s *depletionMarks) drain() map[string]string {
+func (s *depletionMarks) drain() map[string]scheduler.ExhaustionReason {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	reasons := s.reasons

@@ -6,6 +6,7 @@ import (
 
 	"common/probe"
 
+	"devshard/cmd/gateway/config"
 	"devshard/cmd/gateway/internal/logkey"
 	"devshard/logging"
 )
@@ -16,20 +17,13 @@ type Sink interface {
 	probe.SchedObserver
 }
 
-type Settings struct {
-	Disabled    bool
-	IntervalMS  int64
-	TimeoutMS   int64
-	Concurrency int64
-}
-
 // Pinger reaches the live escrows' hosts on a wall-clock cadence. See README.md.
 type Pinger struct {
 	scheduler *probe.Scheduler
 }
 
 // New returns nil when the probe is off or its schedule does not hold. See README.md.
-func New(settings Settings, live liveDials, sink Sink) *Pinger {
+func New(settings config.HostPing, live liveDials, sink Sink) *Pinger {
 	if settings.Disabled || live == nil || sink == nil {
 		return nil
 	}

@@ -53,7 +53,7 @@ type HostWindows struct {
 	Output RequestWindow
 }
 
-// Congestion is the narrowing ladder and the latency slack a host is judged against. See capacity.md, "The participant limiter: IOCW".
+// Congestion is the narrowing ladder and the latency slack a host is judged against.
 type Congestion struct {
 	BetaSoft   float64
 	BetaHard   float64

@@ -109,7 +109,7 @@ func (l *ParticipantLimiter) ObserveWeights(byModel map[string]map[string]float6
 	}
 }
 
-// ObserveModels takes the context length governance reports for each model. See capacity.md, "The participant limiter: IOCW".
+// ObserveModels takes the context length governance reports for each model.
 func (l *ParticipantLimiter) ObserveModels(contextTokens map[string]int64) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -213,12 +213,12 @@ func (l *ParticipantLimiter) release(tracked key, cost TokenCost) {
 	state.lastUsed = l.now()
 }
 
-// Available peeks whether a host would take the smallest request, mutating nothing. See capacity.md, "The participant limiter: IOCW".
+// Available peeks whether a host would take the smallest request, mutating nothing.
 func (l *ParticipantLimiter) Available(participant, model string) bool {
 	return l.Admits(participant, model) == AdmissionOpen
 }
 
-// Admits peeks why a host would refuse the smallest request, mutating nothing. See capacity.md, "The participant limiter: IOCW".
+// Admits peeks why a host would refuse the smallest request, mutating nothing.
 func (l *ParticipantLimiter) Admits(participant, model string) Admission {
 	l.mu.Lock()
 	defer l.mu.Unlock()

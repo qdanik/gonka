@@ -71,7 +71,7 @@ func rulesOutRetry(attempt AttemptOutcome) bool {
 	return (refusal.Refused() && !refusal.Retriable()) || rejectsRequest(attempt)
 }
 
-// rejectsRequest reports an error event from an attempt that streamed no content, with a structured 400 that filters reads as about the request, not the host. See filters/README.md, "Cacheability".
+// rejectsRequest reports an error event from an attempt that streamed no content, with a structured 400 that filters reads as about the request, not the host. See ../filters/README.md, "Cacheability".
 func rejectsRequest(attempt AttemptOutcome) bool {
 	if attempt.ErrorSource == "" || attempt.ContentSource != "" {
 		return false

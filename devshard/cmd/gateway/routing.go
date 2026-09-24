@@ -6,6 +6,7 @@ import (
 
 	"devshard/cmd/gateway/chain"
 	"devshard/cmd/gateway/config"
+	"devshard/cmd/gateway/escrow"
 	"devshard/cmd/gateway/journal"
 	"devshard/cmd/gateway/limits"
 	"devshard/cmd/gateway/metrics"
@@ -67,4 +68,31 @@ func newRouting(deps routingDeps) (*registry.Registry, *scheduler.Scheduler, *wa
 		return nil, nil, nil, err
 	}
 	return escrows, router, prober, nil
+}
+
+// escrowHolds joins the registry's flag and the scheduler's pricing for the escrow manager.
+type escrowHolds struct {
+	escrows *registry.Registry
+	router  *scheduler.Scheduler
+}
+
+func (h escrowHolds) SetOnHold(escrowID string, onHold bool) { h.escrows.SetOnHold(escrowID, onHold) }
+
+func (h escrowHolds) Verdict(escrowID string, answers uint64) escrow.HoldVerdict {
+	candidate, live := h.escrows.ResumeCandidate(escrowID)
+	if !live {
+		return escrow.HoldKeep
+	}
+	ready, nonceSpent := h.router.ResumeReadiness(candidate, answers)
+	switch {
+	case nonceSpent:
+		return escrow.HoldNonceSpent
+	case ready:
+		return escrow.HoldResume
+	}
+	return escrow.HoldKeep
+}
+
+func (h escrowHolds) Funds(escrowID string) (balance, reserved, challenged uint64, known bool) {
+	return h.escrows.Funds(escrowID)
 }

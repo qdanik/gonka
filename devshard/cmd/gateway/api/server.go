@@ -29,6 +29,7 @@ type EscrowRegistry interface {
 	Snapshot() []registry.EscrowState
 	RoutableSession(escrowID string) (registry.EscrowSession, bool)
 	SettlementSession(escrowID string) (registry.EscrowSession, bool)
+	HoldSettlement(escrowID string) (registry.EscrowSession, func(), bool)
 	Inspect(ctx context.Context, escrowID string) (registry.EscrowSession, func(), error)
 	IsBusy(escrowID string) bool
 	OnHold(escrowID string) bool

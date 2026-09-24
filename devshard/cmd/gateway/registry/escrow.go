@@ -22,6 +22,9 @@ type escrowEntry struct {
 	inFlight     atomic.Int64
 	onHold       atomic.Bool
 	hold         func() (func(), bool)
+
+	settlementHolds atomic.Int64
+	closeClaimed    bool
 }
 
 func newEscrowEntry(escrowID, model string, sessionID uint64, session EscrowSession, now func() time.Time) *escrowEntry {

@@ -370,7 +370,7 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 		nonces:       recorder,
 		events:       events,
 		warmup:       prober,
-		hostPings:    hostping.New(hostPingSettings(configuration.HostPing), escrows, metrics.NewHostPingRecorder(telemetry)),
+		hostPings:    hostping.New(configuration.HostPing, escrows, metrics.NewHostPingRecorder(telemetry)),
 		heights:      sources.Heights,
 		governance:   sources.Governance,
 		builders:     boot.builders,
@@ -386,13 +386,4 @@ func (environmentSigner) SignerFor(privateKeyEnv string) (*signing.Secp256k1Sign
 		return nil, err
 	}
 	return signing.SignerFromHex(keyHex)
-}
-
-func hostPingSettings(settings config.HostPing) hostping.Settings {
-	return hostping.Settings{
-		Disabled:    settings.Disabled,
-		IntervalMS:  settings.IntervalMS,
-		TimeoutMS:   settings.TimeoutMS,
-		Concurrency: settings.Concurrency,
-	}
 }

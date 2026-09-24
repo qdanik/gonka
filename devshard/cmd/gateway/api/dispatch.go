@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sync"
 
 	"devshard/cmd/gateway/engine"
 	"devshard/cmd/gateway/registry"
@@ -39,6 +40,8 @@ func (s Sessions) Target(escrowID string) (engine.DispatchTarget, func(), bool) 
 type dispatchSession interface {
 	SendOnly(ctx context.Context, prepared *user.PreparedInference, stream io.Writer, onReceipt func()) (*host.HostResponse, error)
 	ProcessResponse(hostIdx int, reply *host.HostResponse, inferenceNonce uint64) error
+	PinPendingFinish(inferenceID uint64)
+	UnpinPendingFinish(inferenceID uint64)
 	IsNonceFinished(nonce uint64) bool
 	HostParticipantKeyList() []string
 	HostLabel(hostIdx int) string
@@ -65,6 +68,7 @@ func (t escrowTarget) Send(ctx context.Context, nonce scheduler.Prepared, stream
 	// stream is handed on unwrapped: the transport type-asserts http.Flusher on it to flush each SSE line.
 	reply, err := t.session.SendOnly(ctx, prepared, stream, onReceipt)
 	if reply != nil {
+		t.session.PinPendingFinish(prepared.Nonce())
 		// Applies for a reply that arrived beside an error too, and keeps both: a failed send must not hide a diverged state. See rules.md.
 		if applyErr := t.session.ProcessResponse(prepared.HostIdx(), reply, prepared.Nonce()); applyErr != nil {
 			err = errors.Join(err, applyErr)
@@ -76,7 +80,8 @@ func (t escrowTarget) Send(ctx context.Context, nonce scheduler.Prepared, stream
 	if reply == nil {
 		return nil, err
 	}
-	return hostReply{reply: reply}, err
+	inferenceID := prepared.Nonce()
+	return hostReply{reply: reply, releaseFinish: sync.OnceFunc(func() { t.session.UnpinPendingFinish(inferenceID) })}, err
 }
 
 // divergedState reads a rejected post state root from either side of the wire: the host's diff or the local hash.
@@ -84,10 +89,15 @@ func divergedState(err error) bool {
 	return state.IsPostStateRootMismatchError(err) || errors.Is(err, types.ErrStateHashMismatch)
 }
 
-type hostReply struct{ reply *host.HostResponse }
+type hostReply struct {
+	reply         *host.HostResponse
+	releaseFinish func()
+}
 
 var _ engine.Response = hostReply{}
 
 func (r hostReply) Confirmed() bool { return r.reply.ConfirmedAt > 0 }
 
 func (r hostReply) ConfirmedAt() int64 { return r.reply.ConfirmedAt }
+
+func (r hostReply) ReleaseFinish() { r.releaseFinish() }

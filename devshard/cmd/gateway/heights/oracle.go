@@ -26,7 +26,7 @@ type OracleSources struct {
 	Chain           *chain.Client
 }
 
-// Oracle is the gateway's own reading of mainnet. See README.md, "The follower".
+// Oracle is the gateway's own reading of mainnet. See README.md, "What it owns".
 type Oracle struct {
 	blocks.BlockOracle
 
@@ -82,8 +82,8 @@ func (o *Oracle) Close() error {
 		return nil
 	}
 	o.closeOnce.Do(func() {
-		for _, close := range o.closers {
-			close()
+		for _, closeFeed := range o.closers {
+			closeFeed()
 		}
 	})
 	return nil

@@ -14,7 +14,8 @@ import (
 
 // Finalize collects host signatures, so a non-resident escrow is rehydrated with a serving session.
 func (r *Registry) Finalize(ctx context.Context, escrowID string) error {
-	if session, held := r.SettlementSession(escrowID); held {
+	if session, release, held := r.HoldSettlement(escrowID); held {
+		defer release()
 		return session.Finalize(ctx)
 	}
 	if r.servingSessions == nil {
@@ -29,7 +30,8 @@ func (r *Registry) Finalize(ctx context.Context, escrowID string) error {
 
 // BuildSettlement rehydrates a non-resident escrow read-only: the payload comes entirely from local storage.
 func (r *Registry) BuildSettlement(ctx context.Context, escrowID string) (chain.SettlementInput, error) {
-	if session, held := r.SettlementSession(escrowID); held {
+	if session, release, held := r.HoldSettlement(escrowID); held {
+		defer release()
 		return r.buildSettlement(escrowID, session)
 	}
 	if r.readOnlySessions == nil {
@@ -43,10 +45,10 @@ func (r *Registry) BuildSettlement(ctx context.Context, escrowID string) (chain.
 	return input, errors.Join(buildErr, session.Close())
 }
 
-// Inspect resolves a session for reading alone; its release closes a rehydrated one and does nothing for a resident one.
+// Inspect resolves a session for reading alone; its release closes a rehydrated one and drops the hold on a resident one.
 func (r *Registry) Inspect(ctx context.Context, escrowID string) (EscrowSession, func(), error) {
-	if session, held := r.SettlementSession(escrowID); held {
-		return session, func() {}, nil
+	if session, release, held := r.HoldSettlement(escrowID); held {
+		return session, release, nil
 	}
 	if r.readOnlySessions == nil {
 		return nil, nil, fmt.Errorf("escrow %s: no read-only session factory", escrowID)

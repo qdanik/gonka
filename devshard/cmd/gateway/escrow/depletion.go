@@ -6,13 +6,14 @@ import (
 	"fmt"
 
 	"devshard/cmd/gateway/chain"
+	"devshard/cmd/gateway/scheduler"
 	"devshard/cmd/gateway/store"
 )
 
 // OnBalanceExhausted marks an escrow for replacement in the next tick, so this hook does no I/O.
-func (m *Manager) OnBalanceExhausted(escrowID, reason string) {
+func (m *Manager) OnBalanceExhausted(escrowID string, reason scheduler.ExhaustionReason) {
 	if m.depleted.mark(escrowID, reason) && m.narrator != nil {
-		m.narrator.EscrowMarkedForReplacement(escrowID, reason)
+		m.narrator.EscrowMarkedForReplacement(escrowID, string(reason))
 	}
 }
 
@@ -48,7 +49,7 @@ func (m *Manager) checkDepletion(ctx context.Context, snapshot chain.PhaseSnapsh
 }
 
 // replaceDepleted parks an exhausted escrow, then makes one attempt at replacing it. See README.md, "Replacing a depleted escrow".
-func (m *Manager) replaceDepleted(ctx context.Context, record store.DevshardRecord, reason string, model ModelConfig, replaceable bool, snapshot chain.PhaseSnapshot) error {
+func (m *Manager) replaceDepleted(ctx context.Context, record store.DevshardRecord, reason scheduler.ExhaustionReason, model ModelConfig, replaceable bool, snapshot chain.PhaseSnapshot) error {
 	// An escrow created under an epoch-less snapshot is counted by no epoch at all, so the next bridge funds a full set on top of it.
 	if replaceable && snapshotHasNoEpochYet(snapshot) {
 		m.depleted.mark(record.EscrowID, reason)

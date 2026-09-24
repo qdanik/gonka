@@ -9,10 +9,10 @@ import (
 // maxEmptyChunkLogged is how much of a contentless chunk the log keeps. See race.md, "Reading an empty answer back".
 const maxEmptyChunkLogged = 512
 
-// elidedValue stands in for an array the log drops. See race.md, "Reading an empty answer back".
+// elidedValue stands in for an array the log drops.
 const elidedValue = "[...]"
 
-// bulkyFields name the values the gateway asks a host for and strips again. See race.md, "Reading an empty answer back".
+// bulkyFields name the values the gateway asks a host for and strips again.
 var bulkyFields = [][]byte{
 	[]byte(`"prompt_token_ids":`),
 	[]byte(`"token_ids":`),
@@ -20,7 +20,7 @@ var bulkyFields = [][]byte{
 	[]byte(`"logprobs":`),
 }
 
-// keepChunkHeads keeps the start of the first and the last chunk that carried nothing. See race.md, "Reading an empty answer back".
+// keepChunkHeads keeps the start of the first and the last chunk that carried nothing.
 func (s *attemptState) keepChunkHeads(chunk []byte) {
 	head := chunkHead(chunk)
 	if head == "" {
@@ -32,7 +32,7 @@ func (s *attemptState) keepChunkHeads(chunk []byte) {
 	s.lastChunkHead = head
 }
 
-// chunkHead renders a chunk's start with the bulky values elided, terminator aside. See race.md, "Reading an empty answer back".
+// chunkHead renders a chunk's start with the bulky values elided, terminator aside.
 func chunkHead(chunk []byte) string {
 	chunk = filters.TrimSSEDone(chunk)
 	if len(chunk) == 0 {
@@ -41,7 +41,7 @@ func chunkHead(chunk []byte) string {
 	return strings.ToValidUTF8(string(elideBulkyValues(chunk, maxEmptyChunkLogged)), "")
 }
 
-// elideBulkyValues copies a chunk up to budget bytes, writing a marker in place of each bulky value. See race.md, "Reading an empty answer back".
+// elideBulkyValues copies a chunk up to budget bytes, writing a marker in place of each bulky value.
 func elideBulkyValues(chunk []byte, budget int) []byte {
 	head := make([]byte, 0, budget+len(elidedValue))
 	for index := 0; index < len(chunk) && len(head) < budget; {

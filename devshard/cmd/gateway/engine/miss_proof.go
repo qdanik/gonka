@@ -15,15 +15,17 @@ type MissProof struct {
 	ResponsePayload []byte
 	Complete        bool
 	Truncated       bool
+
+	releaseFinish func()
 }
 
-const (
-	MissProofWhole     = "whole"
-	MissProofPartial   = "partial"
-	MissProofTruncated = "truncated"
-)
+func (p *MissProof) releaseHeldFinish() {
+	if p != nil && p.releaseFinish != nil {
+		p.releaseFinish()
+	}
+}
 
-func (p *MissProof) completeness() string {
+func (p *MissProof) completeness() MissProofCompleteness {
 	switch {
 	case p == nil:
 		return ""

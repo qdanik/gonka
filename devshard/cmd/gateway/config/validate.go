@@ -27,6 +27,8 @@ const (
 	maxSnapshotAgeSeconds   = 86_400
 	maxEngineTimingMS       = 86_400_000
 	snapshotAgePollMultiple = 7
+
+	minAddressDataLength = 4
 )
 
 // ErrInvalid marks a configuration the operator got wrong, so the surface answers 400 rather than 502.
@@ -334,8 +336,6 @@ func validateRequestWindow(name string, window RequestWindow, complain func(stri
 		complain("%s_initial_requests: %d must be >= %s_min_requests %d", name, window.InitialRequests, name, window.MinRequests)
 	}
 }
-
-const minAddressDataLength = 4
 
 // participantEntryProblem refuses a short host label, which matches no participant. See ../docs/operations.md.
 func participantEntryProblem(participant string) string {

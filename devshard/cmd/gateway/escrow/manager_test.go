@@ -12,6 +12,7 @@ import (
 	"devshard/cmd/gateway/config"
 	"devshard/cmd/gateway/internal/leakcheck"
 	"devshard/cmd/gateway/store"
+	"devshard/signing"
 )
 
 type fakeSnapshotSource struct {
@@ -190,6 +191,43 @@ func TestTickPoCOverRunsFinishBridge(t *testing.T) {
 	}
 	if !regularCreated {
 		t.Fatal("no regular escrow created, want finishBridge to run")
+	}
+}
+
+func TestTheBridgeSeesAnEscrowResumedInTheSameTickAsServing(t *testing.T) {
+	testStore := newFakeStore()
+	held := store.DevshardRecord{EscrowID: "1", Model: "model-a", Active: true, OnHold: true, RotationRole: roleRegular, RotationEpoch: 9, PrivateKeyEnv: "MODEL_A_KEY"}
+	testStore.devshards[held.EscrowID] = held
+	temp := store.DevshardRecord{EscrowID: "temp-1", Model: "model-a", Active: true, RotationRole: roleTemp, RotationEpoch: 9, PrivateKeyEnv: "MODEL_A_KEY"}
+	testStore.devshards[temp.EscrowID] = temp
+	created := 0
+	createEscrow := succeedingCreateEscrowFn(800)
+	txClient := &fakeTxClient{createEscrowFn: func(ctx context.Context, signer *signing.Secp256k1Signer, amount uint64, modelID string, onPrepared func(string) error) (chain.CreateEscrowResult, error) {
+		created++
+		return createEscrow(ctx, signer, amount, modelID, onPrepared)
+	}}
+	cfg := config.Defaults()
+	cfg.Rotation.Enabled = true
+	cfg.Rotation.ModelsJSON = `[{"model_id":"model-a","target_count":1,"amount":1000,"private_key_env":"MODEL_A_KEY"}]`
+	snapshot := chain.PhaseSnapshot{
+		EpochIndex: 9, BlockHeight: 800, EpochSwitchBlockHeight: 100,
+		FullWeightsByModel: map[string]map[string]float64{"model-a": {"p": 1}},
+	}
+	m := mustManager(t, testManagerDeps(t, testStore, txClient, &fakeSnapshotSource{snapshot: snapshot}, &cfg))
+	gate := newFakeHoldGate()
+	gate.onHold["1"] = true
+	gate.verdicts["1"] = HoldResume
+	m.holds = gate
+
+	if err := m.tick(context.Background()); err != nil {
+		t.Fatalf("tick(): %v", err)
+	}
+
+	if record := testStore.devshards["1"]; !record.Active || record.OnHold {
+		t.Fatalf("record = %+v, want resumed", record)
+	}
+	if created != 0 {
+		t.Fatalf("created %d escrows, want 0: the resumed escrow already meets the target", created)
 	}
 }
 

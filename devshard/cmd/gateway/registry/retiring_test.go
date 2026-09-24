@@ -63,7 +63,7 @@ func TestADrainingEscrowIsReadOnlyWhenItsLastRequestHasEnded(t *testing.T) {
 
 	session.escrowState = types.EscrowState{LatestNonce: 9}
 	release()
-	awaitDrainClose(t, func() bool { return len(read()) == 1 })
+	awaitDrainClose(t, registry, func() bool { return len(read()) == 1 })
 
 	require.Equal(t, []uint64{9}, read(), "the reading did not wait for the last request to end")
 }

@@ -431,7 +431,7 @@ func newHarness(t *testing.T, cfg harnessConfig) *harness {
 		retirementReserve:   func() uint64 { return cfg.retirementReserve },
 		newTimer:            clock.newTimer,
 		submitBuffer:        cfg.submitBuffer,
-		onExhausted:         func(escrowID, reason string) { exhausted.Store(&escrowID) },
+		onExhausted:         func(escrowID string, reason ExhaustionReason) { exhausted.Store(&escrowID) },
 		holdEscrow:          cfg.escrowHold,
 	})
 	t.Cleanup(dispatcher.stop)

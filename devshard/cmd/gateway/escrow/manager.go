@@ -166,9 +166,9 @@ func (m *Manager) tick(ctx context.Context) error {
 	var bridgeErr error
 	blocksToEpochSwitch := snapshot.EpochSwitchBlockHeight - snapshot.BlockHeight
 	if blocksToEpochSwitch >= 0 && blocksToEpochSwitch <= configuration.Rotation.PrePoCBlocks {
-		bridgeErr = m.prepareBridge(ctx, snapshot, models, devshards) // wins even when PoC is also inactive
+		bridgeErr = m.prepareBridge(ctx, snapshot, models, resumedDevshards) // wins even when PoC is also inactive
 	} else if !snapshot.RequestsBlocked {
-		bridgeErr = m.finishBridge(ctx, snapshot, models, devshards)
+		bridgeErr = m.finishBridge(ctx, snapshot, models, resumedDevshards)
 	}
 	return errors.Join(lifecycleErr, bridgeErr)
 }

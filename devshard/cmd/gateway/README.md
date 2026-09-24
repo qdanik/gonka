@@ -31,9 +31,11 @@ The hard part is not proxying. It is that **every nonce costs the escrow money w
 | [`nonces/`](./nonces/) | what feeds that ledger: live events, chain diffs, the sweep |
 | [`journal/`](./journal/) | one ordered path for race, request and ledger events to their log line or ledger fact |
 | [`warmup/`](./warmup/) | teaching a newly published escrow to its own group |
+| [`heights/`](./heights/) | carrying mainnet height into the escrow's log: the courier, and the optional follower |
+| [`hostping/`](./hostping/) | pinging the live escrows' hosts for reachability and clock drift |
 | [`store/`](./store/) | control-plane state in SQLite |
 | [`config/`](./config/) | the immutable configuration snapshot and its atomic holder |
-| [`env/`](./env/) | the only place environment variables are read |
+| [`env/`](./env/) | every gateway environment variable; the runtime-params feed reads its own through `devshard/runtimeparams` |
 | [`metrics/`](./metrics/) | the Prometheus registry and every collector |
 
 The package root itself is the composition root: `main.go` wires the above, and its neighbours hold the escrow records this process owns and the admin operations over them.

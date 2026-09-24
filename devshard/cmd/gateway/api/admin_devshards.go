@@ -12,11 +12,31 @@ import (
 
 	"golang.org/x/sync/errgroup"
 
+	"devshard/cmd/gateway/chain"
 	"devshard/cmd/gateway/escrow"
 	"devshard/cmd/gateway/filters"
 	"devshard/cmd/gateway/store"
 	"devshard/types"
 )
+
+const (
+	settleBatchConcurrency = 4
+	settleBatchLimit       = 50
+)
+
+type settleOutcome struct {
+	EscrowID string `json:"escrow_id"`
+	TxHash   string `json:"tx_hash,omitempty"`
+	Settler  string `json:"settler,omitempty"`
+	Status   int    `json:"status,omitempty"`
+	Error    string `json:"error,omitempty"`
+}
+
+type settleBatchResponse struct {
+	Settled int             `json:"settled"`
+	Failed  int             `json:"failed"`
+	Results []settleOutcome `json:"results"`
+}
 
 func (s *Server) handleAdminDevshards(w http.ResponseWriter, r *http.Request) {
 	if !allowMethods(w, r, http.MethodGet, http.MethodPost) {
@@ -145,44 +165,41 @@ func (s *Server) handleAdminDevshardSettle(w http.ResponseWriter, r *http.Reques
 		s.writeErrorFor(w, fmt.Errorf("%w: %s", ErrUnknownDevshard, escrowID))
 		return
 	}
-	forced := r.URL.Query().Get("force") == "true"
-	if !forced && s.escrows.IsBusy(escrowID) {
-		s.writeErrorFor(w, fmt.Errorf("%w: %s", escrow.ErrDevshardBusy, escrowID))
-		return
-	}
-	result, err := s.operations.Settle(r.Context(), escrowID, forced)
+	result, err := s.settleOne(r.Context(), escrowID, isForcedSettle(r))
 	if err != nil {
 		s.writeErrorFor(w, err)
 		return
 	}
-	if forced {
-		auditAdmin("escrow settled under force", "escrow", escrowID)
-	}
 	writeJSON(w, http.StatusOK, result)
 }
 
-// settleBatchConcurrency bounds how many escrows one batch settles at once. Building a settlement asks every
-// host in the escrow's group for its signature, so an unbounded batch is an unbounded fan-out onto the same hosts.
-const settleBatchConcurrency = 4
+func isForcedSettle(r *http.Request) bool { return r.URL.Query().Get("force") == "true" }
 
-// settleBatchLimit bounds one call. The batch runs on the caller's context, so a list long enough to
-// outlive the operator's patience would be cancelled halfway, with transactions already broadcast.
-const settleBatchLimit = 50
-
-// settleOutcome is one escrow's place in a batch: either the transaction that settled it, or the status
-// and message the single-escrow route would have answered with.
-type settleOutcome struct {
-	EscrowID string `json:"escrow_id"`
-	TxHash   string `json:"tx_hash,omitempty"`
-	Settler  string `json:"settler,omitempty"`
-	Status   int    `json:"status,omitempty"`
-	Error    string `json:"error,omitempty"`
+func (s *Server) settleOne(ctx context.Context, escrowID string, forced bool) (chain.SettleEscrowResult, error) {
+	var overridden int64
+	switch {
+	case forced:
+		overridden = s.countInFlight(escrowID)
+	case s.escrows.IsBusy(escrowID):
+		return chain.SettleEscrowResult{}, fmt.Errorf("%w: %s", escrow.ErrDevshardBusy, escrowID)
+	}
+	result, err := s.operations.Settle(ctx, escrowID, forced)
+	if err != nil {
+		return result, err
+	}
+	if forced {
+		auditAdmin("escrow settled under force", "escrow", escrowID, "in_flight", overridden)
+	}
+	return result, nil
 }
 
-type settleBatchResponse struct {
-	Settled int             `json:"settled"`
-	Failed  int             `json:"failed"`
-	Results []settleOutcome `json:"results"`
+func (s *Server) countInFlight(escrowID string) int64 {
+	for _, escrowState := range s.escrows.Snapshot() {
+		if escrowState.ID == escrowID {
+			return escrowState.InFlight
+		}
+	}
+	return 0
 }
 
 func (s *Server) handleAdminDevshardsSettleBatch(w http.ResponseWriter, r *http.Request) {
@@ -207,7 +224,7 @@ func (s *Server) handleAdminDevshardsSettleBatch(w http.ResponseWriter, r *http.
 	if writeControlFailure(w, err) {
 		return
 	}
-	forced := r.URL.Query().Get("force") == "true"
+	forced := isForcedSettle(r)
 
 	results := make([]settleOutcome, len(escrowIDs))
 	var settling errgroup.Group
@@ -223,20 +240,14 @@ func (s *Server) handleAdminDevshardsSettleBatch(w http.ResponseWriter, r *http.
 	writeJSON(w, http.StatusOK, countSettlements(results))
 }
 
-// settleEntry walks the same three steps as the single-escrow route, and renders a refusal instead of returning it.
+// settleEntry takes the single-escrow route's path, and renders a refusal instead of returning it.
 func (s *Server) settleEntry(ctx context.Context, escrowID string, registered, forced bool) settleOutcome {
 	if !registered {
 		return settleRefused(escrowID, fmt.Errorf("%w: %s", ErrUnknownDevshard, escrowID))
 	}
-	if !forced && s.escrows.IsBusy(escrowID) {
-		return settleRefused(escrowID, fmt.Errorf("%w: %s", escrow.ErrDevshardBusy, escrowID))
-	}
-	result, err := s.operations.Settle(ctx, escrowID, forced)
+	result, err := s.settleOne(ctx, escrowID, forced)
 	if err != nil {
 		return settleRefused(escrowID, err)
-	}
-	if forced {
-		auditAdmin("escrow settled under force", "escrow", escrowID)
 	}
 	return settleOutcome{EscrowID: escrowID, TxHash: result.TxHash, Settler: result.Settler}
 }
@@ -307,8 +318,13 @@ func (s *Server) handleDevshardCollectSignatures(w http.ResponseWriter, r *http.
 		return
 	}
 	escrowID := r.PathValue("id")
-	session, held := s.escrows.SettlementSession(escrowID)
-	if !held || session.UserSession() == nil {
+	session, release, held := s.escrows.HoldSettlement(escrowID)
+	if !held {
+		s.writeErrorFor(w, fmt.Errorf("%w: %s", ErrUnknownDevshard, escrowID))
+		return
+	}
+	defer release()
+	if session.UserSession() == nil {
 		s.writeErrorFor(w, fmt.Errorf("%w: %s", ErrUnknownDevshard, escrowID))
 		return
 	}
@@ -343,11 +359,12 @@ func (s *Server) handleDevshardFinalize(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	escrowID := r.PathValue("id")
-	session, held := s.escrows.SettlementSession(escrowID)
+	session, release, held := s.escrows.HoldSettlement(escrowID)
 	if !held {
 		s.writeErrorFor(w, fmt.Errorf("%w: %s", ErrUnknownDevshard, escrowID))
 		return
 	}
+	defer release()
 	state := session.SnapshotState()
 	if r.Method == http.MethodGet {
 		if state.Phase == types.PhaseActive {

@@ -47,8 +47,8 @@ func TestAnEscrowOnHoldStaysLiveForEverythingButRouting(t *testing.T) {
 	if _, held := registry.SettlementSession("5"); !held {
 		t.Error("SettlementSession refused an escrow on hold; owed votes could not post")
 	}
-	if _, held := registry.Held("5"); !held {
-		t.Error("Held refused an escrow on hold")
+	if _, held := registry.ResumeCandidate("5"); !held {
+		t.Error("ResumeCandidate refused an escrow on hold")
 	}
 	states := registry.Snapshot()
 	if len(states) != 1 || !states[0].OnHold {

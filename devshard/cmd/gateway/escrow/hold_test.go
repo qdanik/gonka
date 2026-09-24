@@ -9,6 +9,7 @@ import (
 
 	"devshard/cmd/gateway/chain"
 	"devshard/cmd/gateway/config"
+	"devshard/cmd/gateway/scheduler"
 	"devshard/cmd/gateway/store"
 )
 
@@ -56,7 +57,7 @@ func currentEpochRecord(id string) store.DevshardRecord {
 	return record
 }
 
-func depleteOnce(t *testing.T, manager *Manager, testStore *fakeStore, escrowID, reason string) error {
+func depleteOnce(t *testing.T, manager *Manager, testStore *fakeStore, escrowID string, reason scheduler.ExhaustionReason) error {
 	t.Helper()
 	manager.OnBalanceExhausted(escrowID, reason)
 	devshards, err := testStore.ListDevshards(context.Background())
@@ -95,7 +96,7 @@ func TestANonceCappedEscrowIsParkedEvenWithTheHoldOn(t *testing.T) {
 	txClient := &fakeTxClient{createEscrowFn: workingCreateEscrowFn(999)}
 	manager := holdManager(t, testStore, txClient, newFakeHoldGate())
 
-	if err := depleteOnce(t, manager, testStore, "1", depletionReasonNonceCap); err != nil {
+	if err := depleteOnce(t, manager, testStore, "1", scheduler.ExhaustionNonceCap); err != nil {
 		t.Fatalf("checkDepletion = %v, want nil", err)
 	}
 
@@ -111,7 +112,7 @@ func TestNonceCapWinsOverABalanceReasonInTheSameTick(t *testing.T) {
 	manager := holdManager(t, testStore, &fakeTxClient{createEscrowFn: workingCreateEscrowFn(999)}, newFakeHoldGate())
 	manager.OnBalanceExhausted("1", "balance_floor")
 
-	if err := depleteOnce(t, manager, testStore, "1", depletionReasonNonceCap); err != nil {
+	if err := depleteOnce(t, manager, testStore, "1", scheduler.ExhaustionNonceCap); err != nil {
 		t.Fatalf("checkDepletion = %v, want nil", err)
 	}
 

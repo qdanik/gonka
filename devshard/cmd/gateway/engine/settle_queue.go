@@ -16,7 +16,7 @@ type settleTask struct {
 
 func (t settleTask) woken() bool { return t.wake != nil && t.wake.Err() != nil }
 
-// settleQueue holds the votes a shard owes. See race.md, "The timeout-vote queue".
+// settleQueue holds the votes a shard owes.
 type settleQueue struct {
 	now   func() time.Time
 	after func(time.Duration, func()) *time.Timer
@@ -32,7 +32,7 @@ func newSettleQueue(now func() time.Time) *settleQueue {
 	return &settleQueue{now: now, after: time.AfterFunc}
 }
 
-// Add holds a vote the queue owes, and returns before it is posted. See race.md, "The timeout-vote queue".
+// Add holds a vote the queue owes, and returns before it is posted.
 func (q *settleQueue) Add(task settleTask, limit int) {
 	q.owed.Add(1)
 	q.arm(task, limit)
@@ -57,7 +57,7 @@ func (q *settleQueue) arm(task settleTask, limit int) {
 	})
 }
 
-// fire asks the deadline again before taking a place. See race.md, "The timeout-vote queue".
+// fire asks the deadline again before taking a place.
 func (q *settleQueue) fire(task settleTask, limit int) {
 	if !task.woken() && task.deadline().After(q.now()) {
 		q.arm(task, limit)
@@ -66,10 +66,10 @@ func (q *settleQueue) fire(task settleTask, limit int) {
 	q.due(task.post, limit)
 }
 
-// Owed reports the votes taken and not yet posted. See race.md, "The timeout-vote queue".
+// Owed reports the votes taken and not yet posted.
 func (q *settleQueue) Owed() int64 { return q.owed.Load() }
 
-// due posts when a place is free and queues the vote otherwise. See race.md, "The timeout-vote queue".
+// due posts when a place is free and queues the vote otherwise.
 func (q *settleQueue) due(post func(), limit int) {
 	q.mu.Lock()
 	if limit > 0 && q.posting >= limit {
@@ -84,7 +84,7 @@ func (q *settleQueue) due(post func(), limit int) {
 	}
 }
 
-// postThenTake takes the next vote or gives the place back, under one lock. See race.md, "The timeout-vote queue".
+// postThenTake takes the next vote or gives the place back, under one lock.
 func (q *settleQueue) postThenTake(post func()) func() {
 	post()
 	q.owed.Add(-1)

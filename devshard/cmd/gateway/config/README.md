@@ -28,7 +28,9 @@ Everything the gateway's behaviour depends on, in one value that is never mutate
 | `Limits.Congestion` | the factors a narrowing multiplies the blamed window by, the factor the other window takes with it, and how far above the best latency it has held a host may drift before a healthy answer counts as congestion. |
 | `Limits.ModelLimits` | the per-model override set. The two token fields are required as a pair; the pointer fields are optional, and a `nil` inherits the global limit rather than meaning zero. |
 | `Modes` | PoC mode and the disabled/redirect switches. |
-| `Rotation` | escrow rotation, its settlement switch, and how far before PoC it runs. |
+| `Rotation` | escrow rotation, its settlement switch, and how far before PoC it runs; `HoldEnabled`, `HoldMaxPerModel` and `HoldResumeAnswers` keep a depleted escrow on hold instead of parking it ([`docs/escrows.md`](../docs/escrows.md)). |
+| `HeightSync` | whether the heartbeat cadence runs, whether a session chases a seeded tip, the optional mainnet follower, and the anchor cadence `AnchorK` / `AnchorSlots` ([`heights/README.md`](../heights/README.md)). |
+| `HostPing` | the reachability and clock-drift probe of the live escrows' hosts: interval and timeout in milliseconds, concurrency, and a switch to turn it off ([`hostping/README.md`](../hostping/README.md)). |
 | `Cache` | the response cache's byte ceiling. |
 | `Accounting` | the request records, bounded on both axes; neither bound may be zero. |
 | `NonceAccounting` | the per-nonce ledger, which answers a different question than `Accounting`: where every committed nonce went, rather than what became of one client request. It reaches an operator only through its own JSON API, listening on `Port` whenever the ledger is enabled. `RetentionEpochs` counts epochs back from the current one, defaults to 2, and must be at least 1 while the ledger is enabled: 0 keeps every retired escrow for the life of the process. |

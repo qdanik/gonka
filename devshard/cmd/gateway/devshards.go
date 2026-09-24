@@ -25,6 +25,7 @@ import (
 	"devshard/cmd/gateway/scheduler"
 	"devshard/cmd/gateway/store"
 	"devshard/logging"
+	"devshard/runtimeparams"
 	"devshard/user"
 )
 
@@ -37,15 +38,16 @@ func chainBackedSessions(records devshardLookup, storageDir string) sessionSourc
 			return chainSources{}, fmt.Errorf("dialing chain grpc %s: %w", endpoints.GRPCEndpoint, err)
 		}
 		grpcChain := chain.NewGRPCChain(chainClient, endpoints.ChainID)
+		governanceSettings := runtimeparams.SettingsFromEnv()
 		follower, err := heights.NewOracle(heightSettings, heights.OracleSources{
-			NodeManagerAddr: env.NodeManagerAddr(),
+			NodeManagerAddr: governanceSettings.NodeManagerAddr,
 			CometRPC:        endpoints.RPCEndpoint,
 			Chain:           chainClient,
 		})
 		if err != nil {
 			return chainSources{}, err
 		}
-		governance, err := openRuntimeParams(chainClient)
+		governance, err := openRuntimeParams(chainClient, governanceSettings)
 		if err != nil {
 			return chainSources{}, errors.Join(err, follower.Close())
 		}
@@ -193,7 +195,7 @@ func (w devshardWrites) report(err error) error {
 // depletionNotice breaks the registry/manager cycle: the manager settles through the registry.
 type depletionNotice struct{ manager *escrow.Manager }
 
-func (d *depletionNotice) OnBalanceExhausted(escrowID, reason string) {
+func (d *depletionNotice) OnBalanceExhausted(escrowID string, reason scheduler.ExhaustionReason) {
 	d.manager.OnBalanceExhausted(escrowID, reason)
 }
 
@@ -280,33 +282,6 @@ func seedDevshards(ctx context.Context, records devshardRegistry, raw string) er
 	return nil
 }
 
-// escrowHolds joins the registry's flag and the scheduler's pricing for the escrow manager.
-type escrowHolds struct {
-	escrows *registry.Registry
-	router  *scheduler.Scheduler
-}
-
-func (h escrowHolds) SetOnHold(escrowID string, onHold bool) { h.escrows.SetOnHold(escrowID, onHold) }
-
-func (h escrowHolds) Verdict(escrowID string, answers uint64) escrow.HoldVerdict {
-	candidate, live := h.escrows.Held(escrowID)
-	if !live {
-		return escrow.HoldKeep
-	}
-	ready, nonceSpent := h.router.ResumeReadiness(candidate, answers)
-	switch {
-	case nonceSpent:
-		return escrow.HoldNonceSpent
-	case ready:
-		return escrow.HoldResume
-	}
-	return escrow.HoldKeep
-}
-
-func (h escrowHolds) Funds(escrowID string) (balance, reserved, challenged uint64, known bool) {
-	return h.escrows.Funds(escrowID)
-}
-
 type devshardLookup interface {
 	ListDevshards(ctx context.Context) ([]store.DevshardRecord, error)
 }
@@ -358,7 +333,7 @@ func servingSessions(records devshardLookup, storageDir string, escrowBridge bri
 			RefusalTimeoutSeconds:   sessionTimeouts.RefusalTimeoutSeconds,
 			ExecutionTimeoutSeconds: sessionTimeouts.ExecutionTimeoutSeconds,
 			RequireHeightSeed:       heightSettings.Enabled && heightSettings.RequireSeed,
-			ExtraClientConfig:       heights.Courier(heightSettings, follower),
+			ExtraClientConfig:       heights.BuildCourier(heightSettings, follower),
 			Heartbeat:               governance.Heartbeat(),
 		})
 		if err != nil {

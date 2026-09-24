@@ -63,6 +63,7 @@ type fakeResponse struct {
 func (r fakeResponse) Confirmed() bool    { return r.confirmed }
 func (r fakeResponse) ConfirmedAt() int64 { return r.confirmedAt }
 func (r fakeResponse) StreamBytes() int64 { return r.bytesRead }
+func (r fakeResponse) ReleaseFinish()     {}
 
 // fakeDispatcher runs a script in place of a host: it writes the scripted chunks into the attempt's
 // writer, optionally announcing a receipt first, then returns the scripted reply.

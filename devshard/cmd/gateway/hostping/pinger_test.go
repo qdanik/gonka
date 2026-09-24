@@ -6,6 +6,7 @@ import (
 
 	"common/probe"
 
+	"devshard/cmd/gateway/config"
 	"devshard/cmd/gateway/registry"
 )
 
@@ -22,8 +23,8 @@ func (s countingSink) TargetCount(count int) {
 	}
 }
 
-func runnableSettings() Settings {
-	return Settings{IntervalMS: 40, TimeoutMS: 10, Concurrency: 2}
+func runnableSettings() config.HostPing {
+	return config.HostPing{IntervalMS: 40, TimeoutMS: 10, Concurrency: 2}
 }
 
 // A ping nobody asked for costs a goroutine and a connection per host per tick, so off means absent.
@@ -39,7 +40,7 @@ func TestAPingerIsAbsentWhenTheProbeIsOff(t *testing.T) {
 // The probe primitive refuses a schedule whose wave could outlast its own period; that refusal must
 // cost the gateway the ping, not its boot.
 func TestAScheduleThatDoesNotHoldCostsThePingNotTheBoot(t *testing.T) {
-	settings := Settings{IntervalMS: 10, TimeoutMS: 10, Concurrency: 1}
+	settings := config.HostPing{IntervalMS: 10, TimeoutMS: 10, Concurrency: 1}
 
 	if pinger := New(settings, dialsHeld{{BaseURL: "http://a:8080"}}, countingSink{}); pinger != nil {
 		t.Fatal("New() accepted a wave that can outlast its own period")

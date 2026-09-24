@@ -48,7 +48,7 @@ func (s *SessionTimeouts) SettleTimeout(ctx context.Context, step TimeoutStep) (
 }
 
 func (s *SessionTimeouts) settle(ctx context.Context, step TimeoutStep) (user.TimeoutResult, error) {
-	if step.Kind == SettleErrorMiss && step.Proof != nil {
+	if step.Kind == SettleByMissClaim && step.Proof != nil {
 		if finishTx := s.handler.FinishTxFor(step.Nonce); len(finishTx) > 0 {
 			return s.handler.HandleErrorMiss(ctx, step.Nonce, finishTx, step.Proof.ResponsePayload)
 		}

@@ -22,4 +22,4 @@ One typed table: name, type, and nothing else.
 
 ## The renaming table
 
-`legacyNames` maps each gateway variable to the `devshardctl` spelling it falls back to; a variable absent from that table has no `devshardctl` equivalent and is read under its `GATEWAY_` name only. `PrivateKey` runs the fallback in the other direction — a devshard record that names a `DEVSHARD_`-prefixed key variable is also looked up under the `GATEWAY_` prefix, and the gateway logs which spelling it used. See [`docs/operations.md`](../docs/operations.md), "Variable names".
+`legacyNames` maps each gateway variable to the `devshardctl` spelling it falls back to, and `legacyDurationNames` does the same for the two devshardctl durations the gateway reads as milliseconds; a variable absent from both tables has no `devshardctl` equivalent and is read under its `GATEWAY_` name only. `PrivateKey` runs the fallback in the other direction — a devshard record that names a `DEVSHARD_`-prefixed key variable is also looked up under the `GATEWAY_` prefix, and the gateway logs which spelling it used. See [`docs/operations.md`](../docs/operations.md), "Variable names".

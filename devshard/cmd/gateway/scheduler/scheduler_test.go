@@ -208,10 +208,10 @@ type exhaustionLog struct {
 	reported []string
 }
 
-func (e *exhaustionLog) record(escrowID, reason string) {
+func (e *exhaustionLog) record(escrowID string, reason ExhaustionReason) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	e.reported = append(e.reported, escrowID+":"+reason)
+	e.reported = append(e.reported, escrowID+":"+string(reason))
 }
 
 func (e *exhaustionLog) all() []string {

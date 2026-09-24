@@ -9,8 +9,8 @@ import (
 	"devshard/transport"
 )
 
-// Courier builds the envelope the gateway's host clients carry, or nil when height sync is off.
-func Courier(settings config.HeightSync, follower *Oracle) *transport.ClientConfig {
+// BuildCourier builds the envelope the gateway's host clients carry, or nil when height sync is off.
+func BuildCourier(settings config.HeightSync, follower *Oracle) *transport.ClientConfig {
 	if !settings.Enabled {
 		return nil
 	}

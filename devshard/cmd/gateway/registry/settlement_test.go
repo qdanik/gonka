@@ -198,6 +198,129 @@ func TestFinalizeLetsAnEscrowAlreadyInSettlementCollectMissingSignatures(t *test
 	}
 }
 
+func TestADrainedEscrowClosesOnlyAfterTheFinalizeRunningOnIt(t *testing.T) {
+	t.Parallel()
+	session := newFakeSession("hostA")
+	registry := New(Deps{
+		ServingSessions: newSessions(map[string]*fakeSession{"1": session}).open,
+		Now:             fixedClock(),
+	})
+	mustAdd(t, registry, "1", "qwen")
+	_, releaseRequest, acquired := registry.Acquire("1")
+	if !acquired {
+		t.Fatal("Acquire(1) = false, want true")
+	}
+	if err := registry.Retire("1"); err != nil {
+		t.Fatalf("Retire(1) = %v, want nil", err)
+	}
+	var closedDuringFinalize int64
+	session.onFinalize = func() {
+		releaseRequest()
+		registry.closing.Wait()
+		closedDuringFinalize = session.closeCalls.Load()
+	}
+
+	if err := registry.Finalize(context.Background(), "1"); err != nil {
+		t.Fatalf("Finalize(1) = %v, want nil", err)
+	}
+	registry.closing.Wait()
+
+	if closedDuringFinalize != 0 {
+		t.Fatalf("Close calls while Finalize ran = %d, want 0: the drain closed the store under the settlement", closedDuringFinalize)
+	}
+	if got := session.closeCalls.Load(); got != 1 {
+		t.Fatalf("Close calls after Finalize = %d, want 1", got)
+	}
+}
+
+func TestASettlementHoldIsNotARequest(t *testing.T) {
+	t.Parallel()
+	session := newFakeSession("hostA")
+	registry := New(Deps{
+		ServingSessions: newSessions(map[string]*fakeSession{"1": session}).open,
+		Now:             fixedClock(),
+	})
+	mustAdd(t, registry, "1", "qwen")
+
+	_, release, held := registry.HoldSettlement("1")
+	if !held {
+		t.Fatal("HoldSettlement(1) = false, want true")
+	}
+	defer release()
+
+	if registry.IsBusy("1") {
+		t.Error("IsBusy(1) under a settlement hold = true: a finalize would refuse itself as busy")
+	}
+	if candidate, _ := registry.Routable("1"); candidate.ActiveUsers != 0 {
+		t.Errorf("ActiveUsers under a settlement hold = %d, want 0: routing must not price a read as traffic", candidate.ActiveUsers)
+	}
+}
+
+func TestRetiringAnEscrowUnderASettlementHoldClosesItOnlyAfterTheHold(t *testing.T) {
+	t.Parallel()
+	session := newFakeSession("hostA")
+	registry := New(Deps{
+		ServingSessions: newSessions(map[string]*fakeSession{"1": session}).open,
+		Now:             fixedClock(),
+	})
+	mustAdd(t, registry, "1", "qwen")
+	_, release, held := registry.HoldSettlement("1")
+	if !held {
+		t.Fatal("HoldSettlement(1) = false, want true")
+	}
+
+	if err := registry.Retire("1"); err != nil {
+		t.Fatalf("Retire(1) = %v, want nil", err)
+	}
+	closedUnderTheHold := session.closeCalls.Load()
+	release()
+	registry.closing.Wait()
+
+	if closedUnderTheHold != 0 {
+		t.Fatalf("Close calls under the settlement hold = %d, want 0", closedUnderTheHold)
+	}
+	if got := session.closeCalls.Load(); got != 1 {
+		t.Fatalf("Close calls after the hold = %d, want 1", got)
+	}
+}
+
+func TestASettlementHoldIsRefusedOnceTheCloseHasStarted(t *testing.T) {
+	t.Parallel()
+	session := newFakeSession("hostA")
+	registry := New(Deps{
+		ServingSessions: newSessions(map[string]*fakeSession{"1": session}).open,
+		Now:             fixedClock(),
+	})
+	mustAdd(t, registry, "1", "qwen")
+	_, releaseRequest, acquired := registry.Acquire("1")
+	if !acquired {
+		t.Fatal("Acquire(1) = false, want true")
+	}
+	if err := registry.Retire("1"); err != nil {
+		t.Fatalf("Retire(1) = %v, want nil", err)
+	}
+	flushing, finishFlush := make(chan struct{}), make(chan struct{})
+	session.onFlush = func() {
+		close(flushing)
+		<-finishFlush
+	}
+
+	releaseRequest()
+	<-flushing
+	_, releaseHold, held := registry.HoldSettlement("1")
+	close(finishFlush)
+	registry.closing.Wait()
+
+	if held {
+		releaseHold()
+		registry.closing.Wait()
+		t.Fatal("HoldSettlement(1) during the close = true, want false: a hold on a closing session outlives its store")
+	}
+	if got := session.closeCalls.Load(); got != 1 {
+		t.Fatalf("Close calls = %d, want exactly 1", got)
+	}
+}
+
 func TestFinalizeReportsTheSessionFailure(t *testing.T) {
 	t.Parallel()
 	resident := settleableSession(9)

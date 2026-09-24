@@ -20,7 +20,7 @@ type TimeoutVote struct {
 	Kind          string
 	Detail        string
 	VerifyRejects []string
-	Completeness  string
+	Completeness  MissProofCompleteness
 }
 
 type TimeoutEvent struct {
@@ -33,15 +33,15 @@ type TimeoutEvent struct {
 	Action        string
 	Reason        string
 	VerifyRejects []string
-	Completeness  string
+	Completeness  MissProofCompleteness
 }
 
 // SettleKind is how a nonce is settled. See ../docs/race.md, "Error misses".
 type SettleKind int
 
 const (
-	SettleTimeout SettleKind = iota
-	SettleErrorMiss
+	SettleByVote SettleKind = iota
+	SettleByMissClaim
 )
 
 // TimeoutStep is one nonce's vote; StartedAt is the record's, not the attempt's dispatch. See README, "Timeout votes".
@@ -94,6 +94,12 @@ func (o RaceOutcome) timeoutSkipReason(a AttemptOutcome) (string, bool) {
 	return "", false
 }
 
+func (o RaceOutcome) releaseHeldFinishes() {
+	for _, attempt := range o.Attempts {
+		attempt.MissProof.releaseHeldFinish()
+	}
+}
+
 func (o RaceOutcome) TimeoutPlan() []TimeoutStep {
 	steps := make([]TimeoutStep, 0, len(o.Attempts))
 	for _, attempt := range o.Attempts {
@@ -118,7 +124,7 @@ func (o RaceOutcome) TimeoutPlan() []TimeoutStep {
 		} else {
 			step.Post = true
 			if attempt.claimsMiss() {
-				step.Kind, step.Proof = SettleErrorMiss, attempt.MissProof
+				step.Kind, step.Proof = SettleByMissClaim, attempt.MissProof
 			}
 			step.Event.Action = TimeoutActionStarted
 			step.Event.Reason = TimeoutReasonNone

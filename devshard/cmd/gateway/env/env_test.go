@@ -155,6 +155,88 @@ func TestLoadFallsBackToTheDevshardctlSpelling(t *testing.T) {
 		}
 	})
 
+	t.Run("the host-ping and height-sync variables devshardctl had are read too", func(t *testing.T) {
+		t.Setenv("DEVSHARD_GATEWAY_HOST_PING_DISABLED", "true")
+		t.Setenv("DEVSHARD_GATEWAY_HOST_PING_INTERVAL", "15s")
+		t.Setenv("DEVSHARD_GATEWAY_HOST_PING_TIMEOUT", "2s")
+		t.Setenv("DEVSHARD_GATEWAY_HOST_PING_CONCURRENCY", "8")
+		t.Setenv("DEVSHARD_HEIGHTSYNC_K", "12")
+		t.Setenv("DEVSHARD_HEIGHTSYNC_SLOTS", "3")
+		t.Setenv("DEVSHARD_REQUIRE_HEIGHT_SEED", "false")
+		t.Setenv("DEVSHARD_GATEWAY_CHAIN_ORACLE", "true")
+
+		values, err := Load()
+		if err != nil {
+			t.Fatalf("Load(): %v", err)
+		}
+		if values.HostPingDisabled == nil || !*values.HostPingDisabled {
+			t.Errorf("HostPingDisabled = %v, want true", values.HostPingDisabled)
+		}
+		if values.HostPingIntervalMS == nil || *values.HostPingIntervalMS != 15_000 {
+			t.Errorf("HostPingIntervalMS = %v, want 15000 from the duration 15s", values.HostPingIntervalMS)
+		}
+		if values.HostPingTimeoutMS == nil || *values.HostPingTimeoutMS != 2_000 {
+			t.Errorf("HostPingTimeoutMS = %v, want 2000 from the duration 2s", values.HostPingTimeoutMS)
+		}
+		if values.HostPingConcurrency == nil || *values.HostPingConcurrency != 8 {
+			t.Errorf("HostPingConcurrency = %v, want 8", values.HostPingConcurrency)
+		}
+		if values.HeightSyncAnchorK == nil || *values.HeightSyncAnchorK != 12 {
+			t.Errorf("HeightSyncAnchorK = %v, want 12", values.HeightSyncAnchorK)
+		}
+		if values.HeightSyncAnchorSlots == nil || *values.HeightSyncAnchorSlots != 3 {
+			t.Errorf("HeightSyncAnchorSlots = %v, want 3", values.HeightSyncAnchorSlots)
+		}
+		if values.HeightSyncRequireSeed == nil || *values.HeightSyncRequireSeed {
+			t.Errorf("HeightSyncRequireSeed = %v, want false", values.HeightSyncRequireSeed)
+		}
+		if values.HeightSyncChainOracle == nil || !*values.HeightSyncChainOracle {
+			t.Errorf("HeightSyncChainOracle = %v, want true", values.HeightSyncChainOracle)
+		}
+	})
+
+	t.Run("legacy spellings devshardctl accepted are read the way it read them", func(t *testing.T) {
+		t.Setenv("DEVSHARD_GATEWAY_CHAIN_ORACLE", "on")
+		t.Setenv("DEVSHARD_REQUIRE_HEIGHT_SEED", "off")
+		t.Setenv("DEVSHARD_GATEWAY_HOST_PING_DISABLED", "yes")
+
+		values, err := Load()
+		if err != nil {
+			t.Fatalf("Load() = %v, want the devshardctl spellings accepted", err)
+		}
+		if values.HeightSyncChainOracle == nil || !*values.HeightSyncChainOracle {
+			t.Errorf("HeightSyncChainOracle = %v, want true from on", values.HeightSyncChainOracle)
+		}
+		if values.HeightSyncRequireSeed == nil || *values.HeightSyncRequireSeed {
+			t.Errorf("HeightSyncRequireSeed = %v, want false from off", values.HeightSyncRequireSeed)
+		}
+		if values.HostPingDisabled == nil || !*values.HostPingDisabled {
+			t.Errorf("HostPingDisabled = %v, want true from yes", values.HostPingDisabled)
+		}
+	})
+
+	t.Run("a legacy value devshardctl ignored is ignored, not refused", func(t *testing.T) {
+		t.Setenv("DEVSHARD_GATEWAY_HOST_PING_INTERVAL", "fifteen")
+		t.Setenv("DEVSHARD_GATEWAY_HOST_PING_TIMEOUT", "0s")
+		t.Setenv("DEVSHARD_GATEWAY_CHAIN_ORACLE", "maybe")
+
+		values, err := Load()
+		if err != nil {
+			t.Fatalf("Load() = %v, want the unusable legacy values left unset", err)
+		}
+		if values.HostPingIntervalMS != nil || values.HostPingTimeoutMS != nil || values.HeightSyncChainOracle != nil {
+			t.Errorf("interval %v, timeout %v, chain oracle %v: want all unset so the defaults apply", values.HostPingIntervalMS, values.HostPingTimeoutMS, values.HeightSyncChainOracle)
+		}
+	})
+
+	t.Run("the gateway's own spelling stays strict", func(t *testing.T) {
+		t.Setenv("GATEWAY_HEIGHT_SYNC_CHAIN_ORACLE", "on")
+
+		if _, err := Load(); err == nil {
+			t.Fatal("Load() = nil, want GATEWAY_HEIGHT_SYNC_CHAIN_ORACLE=on refused as before")
+		}
+	})
+
 	t.Run("every alias names a variable Load actually reads", func(t *testing.T) {
 		source, err := os.ReadFile("env.go")
 		if err != nil {
@@ -163,6 +245,11 @@ func TestLoadFallsBackToTheDevshardctlSpelling(t *testing.T) {
 		for name := range legacyNames {
 			if !strings.Contains(string(source), `("`+name+`"`) {
 				t.Errorf("legacyNames has %s, which no reader in Load asks for", name)
+			}
+		}
+		for name := range legacyDurationNames {
+			if !strings.Contains(string(source), `readMilliseconds("`+name+`"`) {
+				t.Errorf("legacyDurationNames has %s, which no readMilliseconds in Load asks for", name)
 			}
 		}
 	})

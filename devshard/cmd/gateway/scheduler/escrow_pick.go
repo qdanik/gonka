@@ -11,9 +11,6 @@ import (
 // fallbackNonceCeiling applies until governance max_nonce has been fetched. See routing.md, "Picking an escrow".
 const fallbackNonceCeiling uint64 = 19_800
 
-// exhaustionFallbackNonceCeiling is the one decline reason never reported, so it never leaves this package. See routing.md, "Picking an escrow".
-const exhaustionFallbackNonceCeiling = "fallback_nonce_ceiling"
-
 // nonceInFlightMargin is room left under the hosts' nonce cap for work already routed. See routing.md, "Picking an escrow".
 const nonceInFlightMargin uint64 = 200
 
@@ -32,7 +29,7 @@ func (s *Scheduler) pickEscrow(profile RequestProfile, snapshot chain.PhaseSnaps
 				return Escrow{}, noCapacity(reason)
 			}
 			if belowBalanceFloor(candidate, request) {
-				return Escrow{}, noCapacity(exhaustionBalanceFloor)
+				return Escrow{}, noCapacity(ExhaustionBalanceFloor)
 			}
 			return candidate, nil
 		}
@@ -46,7 +43,7 @@ func (s *Scheduler) pickEscrow(profile RequestProfile, snapshot chain.PhaseSnaps
 	bestScore := math.Inf(1)
 	var tied []int
 	admitted := 0
-	declined := ""
+	var declined ExhaustionReason
 	for index, candidate := range candidates {
 		if !reachable(candidate) {
 			continue
@@ -62,7 +59,7 @@ func (s *Scheduler) pickEscrow(profile RequestProfile, snapshot chain.PhaseSnaps
 			continue
 		}
 		if belowBalanceFloor(candidate, request) {
-			declined = exhaustionBalanceFloor
+			declined = ExhaustionBalanceFloor
 			continue
 		}
 		weight := s.capacity.EscrowWeight(candidate.ID, profile.Model)
@@ -94,7 +91,7 @@ func (s *Scheduler) pickEscrow(profile RequestProfile, snapshot chain.PhaseSnaps
 }
 
 // reportExhausted passes over the fallback ceiling: it is not the hosts' cap, and a reported escrow is parked or put on hold. See routing.md, "Picking an escrow".
-func (s *Scheduler) reportExhausted(escrowID, reason string) {
+func (s *Scheduler) reportExhausted(escrowID string, reason ExhaustionReason) {
 	if s.onEscrowExhausted == nil || reason == exhaustionFallbackNonceCeiling {
 		return
 	}
@@ -102,8 +99,8 @@ func (s *Scheduler) reportExhausted(escrowID, reason string) {
 }
 
 // noCapacity carries why the last candidate was declined, so running dry is not read as a model nobody serves.
-func noCapacity(reason string) error {
-	if reason == exhaustionBalanceFloor {
+func noCapacity(reason ExhaustionReason) error {
+	if reason == ExhaustionBalanceFloor {
 		return fmt.Errorf("%w: %w", ErrNoEscrowCapacity, types.ErrInsufficientBalance)
 	}
 	return ErrNoEscrowCapacity
@@ -133,7 +130,7 @@ func unusableWeight(weight float64) bool {
 }
 
 // nonceCeilingReason names the ceiling an escrow has reached, and is empty below it.
-func nonceCeilingReason(candidate Escrow, maxNonce uint64) string {
+func nonceCeilingReason(candidate Escrow, maxNonce uint64) ExhaustionReason {
 	if candidate.Session == nil {
 		return ""
 	}
@@ -145,7 +142,7 @@ func nonceCeilingReason(candidate Escrow, maxNonce uint64) string {
 		}
 		cutoff = types.MaxActiveNonce(uint32(maxNonce), candidate.Session.GroupSize())
 		cutoff -= min(nonceInFlightMargin, cutoff/2)
-		reason = exhaustionNonceCap
+		reason = ExhaustionNonceCap
 	}
 	if candidate.Session.LatestNonce() < cutoff {
 		return ""
@@ -154,13 +151,13 @@ func nonceCeilingReason(candidate Escrow, maxNonce uint64) string {
 }
 
 // exhaustionReason is empty while the escrow may still be picked; the fallback ceiling ranks last, so an escrow past it is still reported when its balance floor catches it. See routing.md, "Picking an escrow".
-func exhaustionReason(candidate Escrow, maxNonce uint64, reserveTokens uint64) string {
+func exhaustionReason(candidate Escrow, maxNonce uint64, reserveTokens uint64) ExhaustionReason {
 	ceilingReason := nonceCeilingReason(candidate, maxNonce)
 	switch {
-	case ceilingReason == exhaustionNonceCap:
-		return exhaustionNonceCap
+	case ceilingReason == ExhaustionNonceCap:
+		return ExhaustionNonceCap
 	case belowBalanceFloor(candidate, reserveTokens):
-		return exhaustionBalanceFloor
+		return ExhaustionBalanceFloor
 	}
 	return ceilingReason
 }
@@ -185,7 +182,7 @@ func belowBalanceFloor(candidate Escrow, reserveTokens uint64) bool {
 func (s *Scheduler) ResumeReadiness(candidate Escrow, answers uint64) (ready, nonceSpent bool) {
 	reserve := s.retirementReserve()
 	maxNonce := s.snapshots.Snapshot().MaxNonce
-	if nonceCeilingReason(candidate, maxNonce) == exhaustionNonceCap {
+	if nonceCeilingReason(candidate, maxNonce) == ExhaustionNonceCap {
 		return false, true
 	}
 	if candidate.Session == nil || reserve == 0 || exhaustionReason(candidate, maxNonce, reserve) != "" {

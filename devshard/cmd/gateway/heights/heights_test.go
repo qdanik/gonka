@@ -41,10 +41,10 @@ func TestAGatewayWithoutHeightSyncOpensNoCadence(t *testing.T) {
 // very cache the clients write into. A scheduler over a second, empty cache would stamp nothing and
 // the fault would show only as a quiet escrow that never syncs.
 func TestTheCourierStampsFromTheCacheItsClientsFill(t *testing.T) {
-	courier := Courier(config.HeightSync{Enabled: true}, nil)
+	courier := BuildCourier(config.HeightSync{Enabled: true}, nil)
 
 	if courier == nil {
-		t.Fatal("Courier() = nil for an enabled height sync")
+		t.Fatal("BuildCourier() = nil for an enabled height sync")
 	}
 	if courier.HeightSyncPeerTips == nil {
 		t.Fatal("the courier carries no peer-tip cache, so the seed has nowhere to land")
@@ -71,15 +71,15 @@ func TestTheCourierStampsFromTheCacheItsClientsFill(t *testing.T) {
 
 // Height sync is opt-in: a gateway without it dials as it always did, carrying no envelope.
 func TestAGatewayWithoutHeightSyncCarriesNoCourier(t *testing.T) {
-	if courier := Courier(config.HeightSync{}, nil); courier != nil {
-		t.Fatalf("Courier() = %+v, want nothing", courier)
+	if courier := BuildCourier(config.HeightSync{}, nil); courier != nil {
+		t.Fatalf("BuildCourier() = %+v, want nothing", courier)
 	}
 }
 
 // A height nobody signed is a height anybody could have claimed. The cache holds it and refuses to
 // serve it, so the gateway never carries an unattributable tip into the log.
 func TestAnUnsignedTipIsNeverStamped(t *testing.T) {
-	courier := Courier(config.HeightSync{Enabled: true}, nil)
+	courier := BuildCourier(config.HeightSync{Enabled: true}, nil)
 	courier.HeightSyncPeerTips.RecordOrigin(&heightsync.HeightSyncSection{
 		MainnetHeight:         4242,
 		MainnetBlockHashHex:   "ab",
