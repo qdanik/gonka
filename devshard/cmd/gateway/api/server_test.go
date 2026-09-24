@@ -302,6 +302,12 @@ type instrumentedWriter struct{ http.ResponseWriter }
 
 func (w *instrumentedWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
 
+func (w *instrumentedWriter) Flush() {
+	if flusher, ok := w.ResponseWriter.(http.Flusher); ok {
+		flusher.Flush()
+	}
+}
+
 func (t *fakeTelemetry) Handler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte("# exposition\n"))

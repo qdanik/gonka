@@ -356,8 +356,16 @@ A forced settlement runs on an escrow that still has requests, so the one that f
 
 ## Settling a list of escrows
 
-`POST /v1/admin/devshards/settle` with the body `{"escrow_ids": ["93033", "93040"]}`, and `?force=true` to cross the busy check for every one of them, settles each escrow the way the single-escrow route does and answers `settled`, `failed` and one result per escrow: its transaction, or the status and message the single route would have answered with. A repeated id is settled once.
+`POST /v1/admin/devshards/settle` with the body `{"escrow_ids": ["93033", "93040"], "batch_size": 8, "force": true}` settles each escrow the way the single-escrow route does. `force` crosses the busy check for every escrow in the list; `?force=true`, as on the single-escrow route, does the same. A repeated id is settled once.
 
-- **Four at a time.** Building a settlement asks every host in the escrow's group for its signature, so an unbounded batch is an unbounded fan-out onto the same hosts (`api/admin_devshards.go`, `settleBatchConcurrency`).
+The answer is a stream of NDJSON (`application/x-ndjson`): `200` goes out before the first settle starts, then one line per escrow the moment it finishes, in finishing order (its transaction, or the status and message the single route would have answered with), and a last line `{"settled": N, "failed": M}`. A line for a client that has left is dropped. A list the route refuses outright (no ids, too many, a bad `batch_size`) still answers a plain `400`. Read it with `curl -N`:
+
+```bash
+curl -sS -N -X POST "$GATEWAY/v1/admin/devshards/settle" \
+  -H "Authorization: Bearer $ADMIN_KEY" -H "Content-Type: application/json" \
+  -d '{"escrow_ids": ["93033", "93040"], "batch_size": 8, "force": true}' | jq -c
+```
+
+- **`batch_size` at a time, four by default, sixteen at most.** Building a settlement asks every host in the escrow's group for its signature, so an unbounded batch is an unbounded fan-out onto the same hosts (`api/admin_settle.go`, `defaultSettleBatchSize`, `maxSettleBatchSize`).
 - **At most fifty per call.** The batch runs on the caller's context, so a list long enough to outlive the operator's patience would be cancelled halfway, with transactions already broadcast (`settleBatchLimit`).
 

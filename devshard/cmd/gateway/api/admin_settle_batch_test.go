@@ -3,8 +3,10 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -13,25 +15,73 @@ import (
 	"devshard/cmd/gateway/store"
 )
 
-type batchSettleAnswer struct {
-	Settled int `json:"settled"`
-	Failed  int `json:"failed"`
-	Results []struct {
-		EscrowID string `json:"escrow_id"`
-		TxHash   string `json:"tx_hash"`
-		Settler  string `json:"settler"`
-		Status   int    `json:"status"`
-		Error    string `json:"error"`
-	} `json:"results"`
+type batchSettleResult struct {
+	EscrowID string `json:"escrow_id"`
+	TxHash   string `json:"tx_hash"`
+	Settler  string `json:"settler"`
+	Status   int    `json:"status"`
+	Error    string `json:"error"`
 }
 
+type batchSettleAnswer struct {
+	Settled int
+	Failed  int
+	Results []batchSettleResult
+}
+
+// decodeBatchSettle reads one result per line and the closing {settled, failed} line.
 func decodeBatchSettle(t *testing.T, body []byte) batchSettleAnswer {
 	t.Helper()
-	var answer batchSettleAnswer
-	if err := json.Unmarshal(body, &answer); err != nil {
-		t.Fatalf("decoding %s: %v", body, err)
+	lines := strings.Split(strings.TrimSpace(string(body)), "\n")
+	var summary struct {
+		Settled int `json:"settled"`
+		Failed  int `json:"failed"`
+	}
+	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &summary); err != nil {
+		t.Fatalf("decoding the summary line of %s: %v", body, err)
+	}
+	answer := batchSettleAnswer{Settled: summary.Settled, Failed: summary.Failed}
+	for _, line := range lines[:len(lines)-1] {
+		var result batchSettleResult
+		if err := json.Unmarshal([]byte(line), &result); err != nil {
+			t.Fatalf("decoding result line %s: %v", line, err)
+		}
+		answer.Results = append(answer.Results, result)
 	}
 	return answer
+}
+
+// flushProbe hands the test the body written so far at every flush, the way a streaming client would see it.
+type flushProbe struct {
+	*httptest.ResponseRecorder
+	flushed chan string
+}
+
+func newFlushProbe() *flushProbe {
+	return &flushProbe{ResponseRecorder: httptest.NewRecorder(), flushed: make(chan string, 64)}
+}
+
+func (p *flushProbe) Flush() {
+	p.ResponseRecorder.Flush()
+	select {
+	case p.flushed <- p.Body.String():
+	default:
+	}
+}
+
+func waitForFlushedLine(t *testing.T, probe *flushProbe, fragment string) {
+	t.Helper()
+	deadline := time.After(5 * time.Second)
+	for {
+		select {
+		case body := <-probe.flushed:
+			if strings.Contains(body, fragment) {
+				return
+			}
+		case <-deadline:
+			t.Fatalf("no flushed line carried %s before the batch finished", fragment)
+		}
+	}
 }
 
 // Test flow:
@@ -62,21 +112,21 @@ func TestABatchSettleAnswersForEveryEscrowItWasGiven(t *testing.T) {
 	if len(answer.Results) != 3 {
 		t.Fatalf("results: got %d entries, want 3", len(answer.Results))
 	}
-	byEscrow := map[string]int{}
+	byEscrow := map[string]batchSettleResult{}
 	for _, result := range answer.Results {
-		byEscrow[result.EscrowID] = result.Status
+		byEscrow[result.EscrowID] = result
 	}
-	if answer.Results[0].TxHash != "TX7" || answer.Results[0].Settler != "gonka1settler" {
-		t.Fatalf("the settled escrow lost its transaction: %+v", answer.Results[0])
+	if settled := byEscrow["7"]; settled.TxHash != "TX7" || settled.Settler != "gonka1settler" {
+		t.Fatalf("the settled escrow lost its transaction: %+v", settled)
 	}
-	if byEscrow["7"] != 0 {
-		t.Fatalf("a settled escrow carries a failure status: %d", byEscrow["7"])
+	if byEscrow["7"].Status != 0 {
+		t.Fatalf("a settled escrow carries a failure status: %d", byEscrow["7"].Status)
 	}
-	if byEscrow["9"] != http.StatusConflict {
-		t.Fatalf("a draining escrow: got %d, want 409", byEscrow["9"])
+	if byEscrow["9"].Status != http.StatusConflict {
+		t.Fatalf("a draining escrow: got %d, want 409", byEscrow["9"].Status)
 	}
-	if byEscrow["404"] != http.StatusNotFound {
-		t.Fatalf("an unregistered escrow: got %d, want 404", byEscrow["404"])
+	if byEscrow["404"].Status != http.StatusNotFound {
+		t.Fatalf("an unregistered escrow: got %d, want 404", byEscrow["404"].Status)
 	}
 }
 
@@ -157,7 +207,7 @@ func TestABatchSettlesItsEscrowsAtTheSameTime(t *testing.T) {
 // Test flow:
 //  1. Register 6 devshards and wire the same concurrency-tracking barrier.
 //  2. POST a batch settle naming all 6 escrows.
-//  3. Assert the response is 200 and the peak in-flight count never exceeded `settleBatchConcurrency`.
+//  3. Assert the response is 200 and the peak in-flight count never exceeded `defaultSettleBatchSize`.
 //  4. Assert all 6 escrows were reported settled, so the pool queues the rest rather than dropping them.
 func TestABatchKeepsItsSettlementsWithinThePool(t *testing.T) {
 	live := newHarness(t)
@@ -172,8 +222,8 @@ func TestABatchKeepsItsSettlementsWithinThePool(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("status: got %d (%s), want 200", response.Code, response.Body.String())
 	}
-	if peak := barrier.peakInFlight(); peak > settleBatchConcurrency {
-		t.Fatalf("settles in flight at once: got %d, want at most %d", peak, settleBatchConcurrency)
+	if peak := barrier.peakInFlight(); peak > defaultSettleBatchSize {
+		t.Fatalf("settles in flight at once: got %d, want at most %d", peak, defaultSettleBatchSize)
 	}
 	if answer := decodeBatchSettle(t, response.Body.Bytes()); answer.Settled != len(escrowIDs) {
 		t.Fatalf("settled: got %d, want %d -- the pool must queue the rest, not drop them", answer.Settled, len(escrowIDs))
@@ -181,24 +231,21 @@ func TestABatchKeepsItsSettlementsWithinThePool(t *testing.T) {
 }
 
 // Test flow:
-//  1. Register a busy escrow "9".
-//  2. POST a batch settle for it with `force: true` in the body.
-//  3. Assert the single result answers 409.
-//  4. Assert no "settle" call was recorded, so a body-supplied force never reaches the settle path.
-func TestABatchBodyCannotBuyItsWayPastTheBusyCheck(t *testing.T) {
+//  1. Register a busy escrow "9" and set its settle result.
+//  2. POST a batch settle for it with `force: true` in the body, next to `batch_size`.
+//  3. Assert the escrow was settled and its result carries the expected transaction hash.
+func TestABatchBodyForceCrossesTheBusyCheck(t *testing.T) {
 	live := newHarness(t)
 	live.control.devshards = registeredDevshardRows("9")
 	live.escrows.busy["9"] = true
+	live.operations.settle = chain.SettleEscrowResult{EscrowID: 9, TxHash: "TX9"}
 
 	response := live.request(t, http.MethodPost, "/v1/admin/devshards/settle",
-		`{"escrow_ids":["9"],"force":true}`, adminHeaders())
+		`{"escrow_ids":["9"],"batch_size":2,"force":true}`, adminHeaders())
 
 	answer := decodeBatchSettle(t, response.Body.Bytes())
-	if len(answer.Results) != 1 || answer.Results[0].Status != http.StatusConflict {
-		t.Fatalf("a busy escrow: got %+v, want one 409", answer.Results)
-	}
-	if calls := live.operations.recordedCalls(); slices.Contains(calls, "settle") {
-		t.Fatalf("a body-supplied force reached the settle path: %v", calls)
+	if answer.Settled != 1 || len(answer.Results) != 1 || answer.Results[0].TxHash != "TX9" {
+		t.Fatalf("a forced settle: got %+v, want escrow 9 settled", answer)
 	}
 }
 
@@ -247,7 +294,7 @@ func TestABatchSettlesARepeatedEscrowOnce(t *testing.T) {
 
 // Test flow:
 //  1. Build an oversized escrow-ID list one entry past `settleBatchLimit`.
-//  2. Define a table of request bodies, varying across no body at all, an empty list, blanks only, and the oversized list.
+//  2. Define a table of request bodies, varying across no body at all, an empty list, blanks only, the oversized list, and a batch size outside 0..`maxSettleBatchSize`.
 //  3. For each case, POST it to the batch settle route on a fresh harness.
 //  4. Assert the response is 400.
 //  5. Assert no "settle" call was recorded, so a refused list never reaches the settle path.
@@ -268,6 +315,8 @@ func TestABatchRefusesAListItCannotAnswerFor(t *testing.T) {
 		{name: "an empty list", body: `{"escrow_ids":[]}`},
 		{name: "blanks only", body: `{"escrow_ids":["  "]}`},
 		{name: "more escrows than one call settles", body: string(oversizedBody)},
+		{name: "a batch size past the ceiling", body: `{"escrow_ids":["7"],"batch_size":` + strconv.Itoa(maxSettleBatchSize+1) + `}`},
+		{name: "a negative batch size", body: `{"escrow_ids":["7"],"batch_size":-1}`},
 	}
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -280,5 +329,119 @@ func TestABatchRefusesAListItCannotAnswerFor(t *testing.T) {
 				t.Fatalf("a refused list reached the settle path: %v", calls)
 			}
 		})
+	}
+}
+
+// Test flow:
+//  1. Register escrows "1" and "2", and hold escrow 2's settle until the test lets it go.
+//  2. POST a batch settle for both through a writer that reports every flush.
+//  3. Assert escrow 1's result line was flushed while escrow 2 was still settling.
+//  4. Release escrow 2 and assert the response is NDJSON that ends with settled=2.
+func TestABatchStreamsEachResultAsItsEscrowSettles(t *testing.T) {
+	live := newHarness(t)
+	live.control.devshards = registeredDevshardRows("1", "2")
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	letGo := func() { releaseOnce.Do(func() { close(release) }) }
+	t.Cleanup(letGo)
+	live.operations.onSettle = func(escrowID string) {
+		if escrowID == "2" {
+			<-release
+		}
+	}
+	probe := newFlushProbe()
+	finished := make(chan struct{})
+
+	go func() {
+		defer close(finished)
+		live.requestInto(t, probe, http.MethodPost, "/v1/admin/devshards/settle", `{"escrow_ids":["1","2"]}`, adminHeaders())
+	}()
+	waitForFlushedLine(t, probe, `"escrow_id":"1"`)
+	letGo()
+	<-finished
+
+	if contentType := probe.Header().Get("Content-Type"); contentType != "application/x-ndjson" {
+		t.Fatalf("content type: got %q, want application/x-ndjson", contentType)
+	}
+	if answer := decodeBatchSettle(t, probe.Body.Bytes()); answer.Settled != 2 || len(answer.Results) != 2 {
+		t.Fatalf("a streamed batch: got %+v, want both escrows settled", answer)
+	}
+}
+
+// Test flow:
+//  1. Register 6 devshards and wire a barrier that only opens at 3 settles in flight.
+//  2. POST a batch settle naming all 6 with `batch_size` 2.
+//  3. Assert the peak in-flight count was exactly 2, so the caller's size replaced the default of 4.
+//  4. Assert all 6 escrows were reported settled.
+func TestABatchSettlesNoMoreAtOnceThanItsBatchSize(t *testing.T) {
+	live := newHarness(t)
+	live.control.devshards = registeredDevshardRows("1", "2", "3", "4", "5", "6")
+	barrier := newSettleBarrier(3)
+	live.operations.onSettle = func(string) { barrier.hold() }
+
+	response := live.request(t, http.MethodPost, "/v1/admin/devshards/settle",
+		`{"escrow_ids":["1","2","3","4","5","6"],"batch_size":2}`, adminHeaders())
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status: got %d (%s), want 200", response.Code, response.Body.String())
+	}
+	if peak := barrier.peakInFlight(); peak != 2 {
+		t.Fatalf("settles in flight at once: got %d, want 2", peak)
+	}
+	if answer := decodeBatchSettle(t, response.Body.Bytes()); answer.Settled != 6 {
+		t.Fatalf("settled: got %d, want 6", answer.Settled)
+	}
+}
+
+// Test flow:
+//  1. Register escrow "1" and hold its settle until the test lets it go.
+//  2. POST a batch settle for it through a writer that reports every flush.
+//  3. Assert a flush reached the client with status 200 while the escrow was still settling.
+func TestABatchAnswersBeforeItsFirstSettleEnds(t *testing.T) {
+	live := newHarness(t)
+	live.control.devshards = registeredDevshardRows("1")
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	letGo := func() { releaseOnce.Do(func() { close(release) }) }
+	t.Cleanup(letGo)
+	live.operations.onSettle = func(string) { <-release }
+	probe := newFlushProbe()
+	finished := make(chan struct{})
+
+	go func() {
+		defer close(finished)
+		live.requestInto(t, probe, http.MethodPost, "/v1/admin/devshards/settle", `{"escrow_ids":["1"]}`, adminHeaders())
+	}()
+	select {
+	case <-probe.flushed:
+	case <-time.After(5 * time.Second):
+		letGo()
+		<-finished
+		t.Fatal("nothing was flushed while the escrow was still settling")
+	}
+	letGo()
+	<-finished
+
+	if probe.Code != http.StatusOK {
+		t.Fatalf("status: got %d, want 200", probe.Code)
+	}
+}
+
+// Test flow:
+//  1. Register escrow "7".
+//  2. POST a batch settle for it with `batch_size` at `maxSettleBatchSize`.
+//  3. Assert the escrow was settled, so the ceiling itself is accepted.
+func TestABatchAcceptsTheLargestBatchSize(t *testing.T) {
+	live := newHarness(t)
+	live.control.devshards = registeredDevshardRows("7")
+
+	response := live.request(t, http.MethodPost, "/v1/admin/devshards/settle",
+		`{"escrow_ids":["7"],"batch_size":`+strconv.Itoa(maxSettleBatchSize)+`}`, adminHeaders())
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status: got %d (%s), want 200", response.Code, response.Body.String())
+	}
+	if answer := decodeBatchSettle(t, response.Body.Bytes()); answer.Settled != 1 {
+		t.Fatalf("settled: got %d, want 1", answer.Settled)
 	}
 }

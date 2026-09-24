@@ -10,33 +10,11 @@ import (
 	"strconv"
 	"strings"
 
-	"golang.org/x/sync/errgroup"
-
-	"devshard/cmd/gateway/chain"
 	"devshard/cmd/gateway/escrow"
 	"devshard/cmd/gateway/filters"
 	"devshard/cmd/gateway/store"
 	"devshard/types"
 )
-
-const (
-	settleBatchConcurrency = 4
-	settleBatchLimit       = 50
-)
-
-type settleOutcome struct {
-	EscrowID string `json:"escrow_id"`
-	TxHash   string `json:"tx_hash,omitempty"`
-	Settler  string `json:"settler,omitempty"`
-	Status   int    `json:"status,omitempty"`
-	Error    string `json:"error,omitempty"`
-}
-
-type settleBatchResponse struct {
-	Settled int             `json:"settled"`
-	Failed  int             `json:"failed"`
-	Results []settleOutcome `json:"results"`
-}
 
 func (s *Server) handleAdminDevshards(w http.ResponseWriter, r *http.Request) {
 	if !allowMethods(w, r, http.MethodGet, http.MethodPost) {
@@ -150,150 +128,6 @@ func (s *Server) lifecycle(w http.ResponseWriter, r *http.Request, action string
 	}
 	auditAdmin(action, "escrow", escrowID)
 	writeJSON(w, http.StatusOK, map[string]any{"escrow_id": escrowID})
-}
-
-func (s *Server) handleAdminDevshardSettle(w http.ResponseWriter, r *http.Request) {
-	if !allowMethods(w, r, http.MethodPost) {
-		return
-	}
-	escrowID := r.PathValue("id")
-	_, found, err := s.devshardRecord(r, escrowID)
-	if writeControlFailure(w, err) {
-		return
-	}
-	if !found {
-		s.writeErrorFor(w, fmt.Errorf("%w: %s", ErrUnknownDevshard, escrowID))
-		return
-	}
-	result, err := s.settleOne(r.Context(), escrowID, isForcedSettle(r))
-	if err != nil {
-		s.writeErrorFor(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, result)
-}
-
-func isForcedSettle(r *http.Request) bool { return r.URL.Query().Get("force") == "true" }
-
-func (s *Server) settleOne(ctx context.Context, escrowID string, forced bool) (chain.SettleEscrowResult, error) {
-	var overridden int64
-	switch {
-	case forced:
-		overridden = s.countInFlight(escrowID)
-	case s.escrows.IsBusy(escrowID):
-		return chain.SettleEscrowResult{}, fmt.Errorf("%w: %s", escrow.ErrDevshardBusy, escrowID)
-	}
-	result, err := s.operations.Settle(ctx, escrowID, forced)
-	if err != nil {
-		return result, err
-	}
-	if forced {
-		auditAdmin("escrow settled under force", "escrow", escrowID, "in_flight", overridden)
-	}
-	return result, nil
-}
-
-func (s *Server) countInFlight(escrowID string) int64 {
-	for _, escrowState := range s.escrows.Snapshot() {
-		if escrowState.ID == escrowID {
-			return escrowState.InFlight
-		}
-	}
-	return 0
-}
-
-func (s *Server) handleAdminDevshardsSettleBatch(w http.ResponseWriter, r *http.Request) {
-	if !allowMethods(w, r, http.MethodPost) {
-		return
-	}
-	var request SettleDevshardsRequest
-	if err := decodeAdminBody(w, r, &request); err != nil {
-		s.writeErrorFor(w, badRequestUnlessOversized(err))
-		return
-	}
-	escrowIDs := distinctEscrowIDs(request.EscrowIDs)
-	switch {
-	case len(escrowIDs) == 0:
-		writeError(w, http.StatusBadRequest, "escrow_ids is required")
-		return
-	case len(escrowIDs) > settleBatchLimit:
-		writeError(w, http.StatusBadRequest, fmt.Sprintf("escrow_ids holds %d escrows; at most %d settle in one call", len(escrowIDs), settleBatchLimit))
-		return
-	}
-	registered, err := s.registeredDevshards(r)
-	if writeControlFailure(w, err) {
-		return
-	}
-	forced := isForcedSettle(r)
-
-	results := make([]settleOutcome, len(escrowIDs))
-	var settling errgroup.Group
-	settling.SetLimit(settleBatchConcurrency)
-	for index, escrowID := range escrowIDs {
-		settling.Go(func() error {
-			results[index] = s.settleEntry(r.Context(), escrowID, registered[escrowID], forced)
-			return nil
-		})
-	}
-	// Every refusal is already carried in its own row; there is no error left for Wait to report.
-	_ = settling.Wait()
-	writeJSON(w, http.StatusOK, countSettlements(results))
-}
-
-// settleEntry takes the single-escrow route's path, and renders a refusal instead of returning it.
-func (s *Server) settleEntry(ctx context.Context, escrowID string, registered, forced bool) settleOutcome {
-	if !registered {
-		return settleRefused(escrowID, fmt.Errorf("%w: %s", ErrUnknownDevshard, escrowID))
-	}
-	result, err := s.settleOne(ctx, escrowID, forced)
-	if err != nil {
-		return settleRefused(escrowID, err)
-	}
-	return settleOutcome{EscrowID: escrowID, TxHash: result.TxHash, Settler: result.Settler}
-}
-
-func settleRefused(escrowID string, err error) settleOutcome {
-	return settleOutcome{EscrowID: escrowID, Status: statusForError(err), Error: err.Error()}
-}
-
-func countSettlements(results []settleOutcome) settleBatchResponse {
-	answer := settleBatchResponse{Results: results}
-	for _, result := range results {
-		if result.Error == "" {
-			answer.Settled++
-			continue
-		}
-		answer.Failed++
-	}
-	return answer
-}
-
-// distinctEscrowIDs keeps the caller's order and settles a repeated id once.
-func distinctEscrowIDs(escrowIDs []string) []string {
-	seen := make(map[string]bool, len(escrowIDs))
-	distinct := make([]string, 0, len(escrowIDs))
-	for _, escrowID := range escrowIDs {
-		escrowID = strings.TrimSpace(escrowID)
-		if escrowID == "" || seen[escrowID] {
-			continue
-		}
-		seen[escrowID] = true
-		distinct = append(distinct, escrowID)
-	}
-	return distinct
-}
-
-// registeredDevshards reads the store once for the whole batch, where a per-escrow lookup would read it per entry.
-func (s *Server) registeredDevshards(r *http.Request) (map[string]bool, error) {
-	records, err := s.control.ListDevshards(r.Context())
-	if err != nil {
-		return nil, err
-	}
-	registered := make(map[string]bool, len(records))
-	for _, record := range records {
-		registered[record.EscrowID] = true
-	}
-	return registered, nil
 }
 
 func (s *Server) handleAdminDevshardParticipants(w http.ResponseWriter, r *http.Request) {

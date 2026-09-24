@@ -45,7 +45,7 @@ A `//nolint:<linter> // reason` is a last resort and carries its reason; `nolint
 
 - Top to bottom: package doc, imports, constants, variables, types, constructors, methods, helpers.
 - Imports in three groups — standard library, third-party including `common/...`, then `devshard/...` — which `gci` enforces.
-- A non-test file past about four hundred lines is split along the seam its declarations already have. A test file follows the file it tests.
+- A Go source file other than a test past about four hundred lines is split along the seam its declarations already have. A test file follows the file it tests. Markdown and other docs carry no line limit.
 
 ## Naming
 
