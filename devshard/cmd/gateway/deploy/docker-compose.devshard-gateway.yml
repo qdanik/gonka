@@ -1,23 +1,23 @@
 services:
   devshard-gateway:
-    container_name: ${GATEWAY_INSTANCE_NAME:-devshard-gateway}
+    container_name: ${DEVSHARD_INSTANCE_NAME:-devshard-gateway}
     image: ${GATEWAY_IMAGE:-kovec/gateway:v4.1.1}
     env_file:
-      - ${GATEWAY_ENV_FILE:-./config.devshard-gateway.env}
+      - ${DEVSHARD_ENV_FILE:-./config.devshard-gateway.env}
     volumes:
-      - ${GATEWAY_STORAGE_HOST_DIR:-.devshard-gateway}:${GATEWAY_STORAGE_DIR:-/root/.devshard-gateway}
+      - ${DEVSHARD_STORAGE_HOST_DIR:-.devshard-gateway}:${DEVSHARD_STORAGE_DIR:-/root/.devshard-gateway}
     environment:
-      GOMEMLIMIT: ${GATEWAY_GOMEMLIMIT:-3400MiB}
+      GOMEMLIMIT: ${DEVSHARD_GOMEMLIMIT:-3400MiB}
     expose:
       - "8080"
       - "9091"
     ports:
       - "127.0.0.1:${GATEWAY_HOST_PORT:-18080}:8080"
-      - "127.0.0.1:${GATEWAY_ACCOUNTING_HOST_PORT:-19091}:9091"
+      - "127.0.0.1:${DEVSHARD_STATS_HOST_PORT:-19091}:9091"
     networks:
       join_default:
         aliases:
-          - ${GATEWAY_INSTANCE_NAME:-devshard-gateway}
+          - ${DEVSHARD_INSTANCE_NAME:-devshard-gateway}
           - devshard-pool
     restart: unless-stopped
     healthcheck:

@@ -22,11 +22,12 @@ func TestAdminStateSpellsStorageRowsInSnakeCase(t *testing.T) {
 	body := live.request(t, http.MethodGet, "/v1/admin/state", "", adminHeaders()).Body.String()
 
 	for _, want := range []string{
-		`"escrow_id":"47452"`,
+		`"id":"47452"`,
 		`"private_key_env":"GATEWAY_PRIVATE_KEY"`,
 		`"rotation_epoch":0`,
 		`"on_hold":true`,
 		`"stage":"prepared"`,
+		`"model_id":"model-a"`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("state body %s is missing %s", body, want)

@@ -26,7 +26,7 @@ The protocol lives in the session (`user/heartbeat.go`, `user/heightsync_seed.go
 
 ## Knobs
 
-`GATEWAY_HEIGHT_SYNC_ENABLED` (on), `GATEWAY_HEIGHT_SYNC_REQUIRE_SEED` (on), `GATEWAY_HEIGHT_SYNC_CHAIN_ORACLE` (off), `GATEWAY_HEIGHT_SYNC_ANCHOR_K` (10), `GATEWAY_HEIGHT_SYNC_ANCHOR_SLOTS` (1). The follower dials node-manager at the address the runtime-params feed resolved (`DEVSHARD_NODE_MANAGER_ADDR`, then `NODE_MANAGER_ADDR`, then `localhost:9400`). The cadence's own schedule is not a knob here: it comes from governance through [`runtime_params.go`](../runtime_params.go). See [`docs/operations.md`](../docs/operations.md).
+`GATEWAY_HEIGHT_SYNC_ENABLED` (on), `DEVSHARD_REQUIRE_HEIGHT_SEED` (on), `DEVSHARD_GATEWAY_CHAIN_ORACLE` (off), `DEVSHARD_HEIGHTSYNC_K` (10), `DEVSHARD_HEIGHTSYNC_SLOTS` (1). The follower dials node-manager at the address the runtime-params feed resolved (`DEVSHARD_NODE_MANAGER_ADDR`, then `NODE_MANAGER_ADDR`, then `localhost:9400`). The cadence's own schedule is not a knob here: it comes from governance through [`runtime_params.go`](../runtime_params.go). See [`docs/operations.md`](../docs/operations.md).
 
 ## Read next
 

@@ -10,7 +10,7 @@ import (
 	"devshard/cmd/gateway/chain"
 )
 
-// json tags are the GATEWAY_ROTATION_MODELS_JSON wire contract, not renameable.
+// json tags are the DEVSHARD_ESCROW_ROTATION_MODELS_JSON wire contract, not renameable.
 type ModelConfig struct {
 	ModelID       string `json:"model_id"`
 	TempCount     int    `json:"temp_count"`

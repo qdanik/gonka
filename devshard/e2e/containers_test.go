@@ -241,24 +241,24 @@ func startE2EEnv(ctx context.Context, t *testing.T, images e2eImages, opts e2eEn
 func (e *e2eEnv) startGateway(ctx context.Context, t *testing.T, opts e2eEnvOptions) {
 	t.Helper()
 	gatewayEnv := map[string]string{
-		"GATEWAY_ESCROWS_JSON":   fmt.Sprintf(`[{"escrow_id":%q,"model":%q,"private_key_env":"GATEWAY_ESCROW_KEY"}]`, defaultEscrowID, standModel(opts)),
+		"DEVSHARDS_JSON":         fmt.Sprintf(`[{"id":%q,"model":%q,"private_key_env":"GATEWAY_ESCROW_KEY"}]`, defaultEscrowID, standModel(opts)),
 		"GATEWAY_ESCROW_KEY":     testutil.EnvDefault("DEVSHARD_E2E_USER_PRIVATE_KEY", testutil.UserPrivateKey),
-		"GATEWAY_CHAIN_GRPC":     mockChainAlias + ":9090",
-		"GATEWAY_PUBLIC_API":     "http://" + mockChainAlias + ":9191",
-		"GATEWAY_ADMIN_API_KEY":  testutil.AdminAPIKey,
-		"GATEWAY_STORAGE_DIR":    "/tmp/gateway",
+		"DEVSHARD_CHAIN_GRPC":    mockChainAlias + ":9090",
+		"DEVSHARD_PUBLIC_API":    "http://" + mockChainAlias + ":9191",
+		"DEVSHARD_ADMIN_API_KEY": testutil.AdminAPIKey,
+		"DEVSHARD_STORAGE_DIR":   "/tmp/gateway",
 		"GATEWAY_MAX_TOKENS_CAP": "4096",
-		"GATEWAY_PORT":           "8080",
+		"DEVSHARD_PORT":          "8080",
 		// Off in production, on here: it is the only surface that says what became of each nonce.
-		"GATEWAY_ACCOUNTING_ENABLED":          "true",
-		"GATEWAY_ACCOUNTING_PORT":             "9091",
-		"GATEWAY_ACCOUNTING_SNAPSHOT_SECONDS": "3600",
+		"DEVSHARD_STATS_ENABLED":          "true",
+		"DEVSHARD_STATS_PORT":             "9091",
+		"DEVSHARD_STATS_SNAPSHOT_SECONDS": "3600",
 		// Hosts are Docker DNS names that resolve to private IPs.
 		// Production leaves this unset so the dial-time SSRF guard stays on.
-		"GATEWAY_ALLOW_PRIVATE_ADDRESSES": "true",
+		"DEVSHARD_ALLOW_PRIVATE_ADDRESSES": "true",
 		// On in production, off here: the stand's hosts have no catalog and no oracle, so no session
 		// could seed a tip. The cadence itself is left on, as devshardctl runs it.
-		"GATEWAY_HEIGHT_SYNC_REQUIRE_SEED": "false",
+		"DEVSHARD_REQUIRE_HEIGHT_SEED": "false",
 		// The stand runs no node manager, so governance is read from the mock chain.
 		"DEVSHARD_PARAMS_SOURCE": "chain",
 	}

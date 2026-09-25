@@ -30,13 +30,13 @@ The `/devshard/{id}/…` prefix pins a request to one escrow instead of letting 
 | Tier | Who |
 | --- | --- |
 | `open` | anyone |
-| `api_key` | a caller presenting one of `GATEWAY_API_KEYS` |
-| `admin_only` | a caller presenting `GATEWAY_ADMIN_API_KEY` |
+| `api_key` | a caller presenting one of `DEVSHARD_API_KEYS` |
+| `admin_only` | a caller presenting `DEVSHARD_ADMIN_API_KEY` |
 
 **Two behaviours to know before editing it:**
 
 - An **empty** `model_access` map means every model is `open`. A **populated** one makes every model *not listed in it* `admin_only`. Adding your first entry silently closes every other model.
-- With `GATEWAY_ADMIN_API_KEY` unset the whole admin surface answers **404, not 401** — the routes do not exist rather than rejecting the caller. A "route not found" on `/v1/admin/…` usually means the key is missing, not the path.
+- With `DEVSHARD_ADMIN_API_KEY` unset the whole admin surface answers **404, not 401** — the routes do not exist rather than rejecting the caller. A "route not found" on `/v1/admin/…` usually means the key is missing, not the path.
 
 An admin key satisfies every tier, so admin calls never need a second key.
 
@@ -44,7 +44,7 @@ An admin key satisfies every tier, so admin calls never need a second key.
 
 ### The kill switch
 
-`modes.disabled` (env `GATEWAY_DISABLED`, or `disabled` through the admin settings endpoint) stops serving clients while leaving `/metrics`, `/healthz`, the admin surface and the recovery surface up — so a gateway can be taken out of service and still be inspected, settled and drained.
+`modes.disabled` (env `DEVSHARD_GATEWAY_DISABLED`, or `disabled` through the admin settings endpoint) stops serving clients while leaving `/metrics`, `/healthz`, the admin surface and the recovery surface up — so a gateway can be taken out of service and still be inspected, settled and drained.
 
 With `disabled_redirect_url` set it answers **308** with the new URL in both the header and the body; without one, **503** with `disabled_message`. The distinction matters to clients: a 308 is a permanent move, a 503 is "come back later".
 
@@ -60,7 +60,17 @@ Parse failures are accumulated, so a boot reports **every** misconfigured variab
 
 ### Variable names
 
-A variable devshardctl also had falls back to its `DEVSHARD_*` spelling; the pairs are listed in `env/env.go`, `legacyNames`, and anything the gateway added since is read under its `GATEWAY_*` name alone. Two devshardctl variables were durations where the gateway takes milliseconds — `DEVSHARD_GATEWAY_HOST_PING_INTERVAL` and `_TIMEOUT`, written `15s` — and are converted rather than read as integers (`legacyDurationNames`). A devshardctl spelling is read the way devshardctl read it: booleans in devshard's shared grammar (`on`, `off`, `yes`, `no` as well as `true` and `false`), and a value it would have ignored — an unparsable boolean, a duration that does not parse or is not positive — is ignored here too, with a warning naming the variable, so the gateway's default applies. The gateway's own spellings stay strict and refuse a bad value at boot. An **empty** value counts as unset on both, so blanking a legacy variable does not resurrect it through the fallback.
+A variable devshardctl had is read under devshardctl's name and no other, so a devshardctl env file works unchanged; anything the gateway added since is read under its `GATEWAY_*` name. `DEVSHARD_CHAIN_GRPC` and `DEVSHARD_CHAIN_RPC` fall back to `NODE_GRPC_URL` and `NODE_RPC_URL`, as they did. A devshardctl variable is read the way devshardctl read it: booleans in devshard's shared grammar (`on`, `off`, `yes`, `no` as well as `true` and `false`), except the two height-sync switches, which keep their own spellings: `DEVSHARD_GATEWAY_CHAIN_ORACLE` is on only for `true`, `1` or `on`, and `DEVSHARD_REQUIRE_HEIGHT_SEED` is off only for `0`, `false`, `off` or `no`; `DEVSHARD_GATEWAY_HOST_PING_INTERVAL` and `_TIMEOUT` as durations (`15s`); `DEVSHARD_POC_REQUEST_MODE` in any letter case. A value devshardctl would have ignored — unparsable, negative, or zero where devshardctl read zero as its default (`GATEWAY_DEFAULT_MAX_TOKENS`, `GATEWAY_MAX_TOKENS_CAP`, the two `_PER_10000_WEIGHT` limits, the transaction, cache, port and snapshot settings) — is ignored here too, with a warning naming the variable, so the gateway's default applies. As in devshardctl, a `GATEWAY_MAX_CONCURRENT_REQUESTS_PER_10000_WEIGHT` set alone also sets the PoC limit unless it equals the default. A `GATEWAY_*` variable devshardctl never had stays strict and refuses a bad value at boot. An **empty** value counts as unset.
+
+The defaults are the gateway's, not devshardctl's, and four differ: the nonce ledger (`DEVSHARD_STATS_ENABLED`) is off, `DEVSHARD_POC_REQUEST_MODE` is `relaxed`, `DEVSHARD_LOG_FORMAT` is `json`, and `GATEWAY_MAX_CONCURRENT_REQUESTS` is 2048 rather than 512. These devshardctl variables are not read, because the gateway has no counterpart for them:
+
+- `DEVSHARD_CAPACITY_AWARE_LIMITS` — the weight model is always on;
+- `DEVSHARD_ROUTE_PREFIX` — a prefix is set per escrow, through `route_prefix` in `DEVSHARDS_JSON`;
+- the single-escrow `DEVSHARD_ESCROW_ID`, `DEVSHARD_MODEL`, `DEVSHARD_STORAGE_PATH` and a raw `DEVSHARD_PRIVATE_KEY` — use `DEVSHARDS_JSON`, whose entries also need `model` and `private_key_env`;
+- `DEVSHARD_LOG_LEVEL`, `DEVSHARD_HEIGHTSYNC_PROBE_INTERVAL`, `DEVSHARD_GATEWAY_HEIGHTSYNC_PEER_MATRIX`, `DEVSHARD_META_DRAIN_TIMEOUT_SECONDS`, `DEVSHARD_CAPTURE_SHORT_CONTENT_*`;
+- `GATEWAY_AGGREGATE_*`, `GATEWAY_CLASSIFY_*` and `GATEWAY_ERROR_STREAM_MAX_ATTEMPT_BYTES` — replaced by `GATEWAY_MAX_BUFFERED_RESPONSE_BYTES`.
+
+`DEVSHARD_PUBLIC_API=none` is refused: the phase observer needs the public API.
 
 Signing keys are addressed **by the name of the variable that holds them**, never by value: `escrows_json` and `rotation.models_json` carry `private_key_env`. Log lines and errors name the variable, never the key.
 
@@ -68,20 +78,20 @@ Signing keys are addressed **by the name of the variable that holds them**, neve
 
 | Variable | Default | What it decides |
 | --- | --- | --- |
-| `GATEWAY_PORT` | 8080 | the listening port |
-| `GATEWAY_STORAGE_DIR` | `$HOME/.cache/gonka-gateway` | where `gateway.db` and the escrow storage live |
+| `DEVSHARD_PORT` | 8080 | the listening port |
+| `DEVSHARD_STORAGE_DIR` | `$HOME/.cache/gonka-gateway` | where `gateway.db` and the escrow storage live |
 | `GATEWAY_MAX_CONCURRENT_REQUESTS` | 2048 | the hard admission ceiling; unset lets the weight model decide |
 | `GATEWAY_ADMISSION_QUEUE_WAIT_MS` | 300000 | how long a request waits for a slot before 429 |
 | `GATEWAY_ADMISSION_QUEUE_PER_SLOT` | 4 | how deep the queue is allowed to grow per slot |
 | `GATEWAY_MAX_BUFFERED_RESPONSE_BYTES` | 512 MiB | **every** non-streaming reply being assembled, at once |
-| `GATEWAY_CHAT_CACHE_MAX_BYTES` | 256 MiB | the response cache |
+| `DEVSHARD_CHAT_CACHE_MAX_BYTES` | 256 MiB | the response cache |
 | `GATEWAY_DEFAULT_MAX_TOKENS` / `GATEWAY_MAX_TOKENS_CAP` | from `filters` | the output budget a request gets and may ask for |
-| `GATEWAY_ROTATION_ENABLED` | false | whether the epoch bridge creates and retires escrows |
-| `GATEWAY_ROTATION_SETTLEMENT_ENABLED` | false | whether retirement settles or only parks |
+| `DEVSHARD_ESCROW_ROTATION_ENABLED` | false | whether the epoch bridge creates and retires escrows |
+| `DEVSHARD_ESCROW_ROTATION_SETTLEMENT_ENABLED` | false | whether retirement settles or only parks |
 | `GATEWAY_ROTATION_HOLD_ENABLED` | true | a balance-depleted escrow goes on hold instead of being parked; false is the rollback to parking |
 | `GATEWAY_ROTATION_HOLD_MAX_PER_MODEL` | 16 | escrows one model may keep on hold; past it a depleted escrow is parked |
 | `GATEWAY_ROTATION_HOLD_RESUME_ANSWERS` | 32 | capped answers an escrow's balance must cover before it leaves hold |
-| `GATEWAY_ROTATION_PRE_POC_BLOCKS` | 300 | how early the bridge starts |
+| `DEVSHARD_ESCROW_ROTATION_PRE_POC_BLOCKS` | 300 | how early the bridge starts |
 | `GATEWAY_WARM_NEW_ESCROWS` | true | whether a new escrow is taught to its group before serving |
 | `GATEWAY_CHAIN_SNAPSHOT_MAX_AGE_SECONDS` | 60 | how stale the chain snapshot may be before requests are refused 503; `0` disables the gate |
 | `GATEWAY_ENGINE_RECEIPT_TIMEOUT_MS` | 5 000 | receipt deadline; doubled above 100 000 input tokens |
@@ -91,23 +101,23 @@ Signing keys are addressed **by the name of the variable that holds them**, neve
 | `GATEWAY_ENGINE_LOSER_GRACE_MS` | 600 000 | how long a loser may keep running after the crown |
 | `GATEWAY_ENGINE_HEDGE_FIRST_TOKEN_FLOOR_MS` | 1 500 | lower bound on the slow-start hedge that starts a second attempt before the judged deadline; `0` turns it off |
 | `GATEWAY_ENGINE_MAX_CONCURRENT_TIMEOUT_VOTES` | 2 048 | chain votes for unfinished nonces being posted at once, not a bound on settling escrows; one past it waits for a poster rather than being dropped |
-| `GATEWAY_ACCOUNTING_ENABLED` | false | the per-nonce ledger and its JSON API on `GATEWAY_ACCOUNTING_PORT` (9091) |
-| `GATEWAY_ACCOUNTING_RETENTION_EPOCHS` | 2 | how many epochs before the current one the nonce ledger keeps retired escrows; below 1 is refused while the ledger is on |
+| `DEVSHARD_STATS_ENABLED` | false | the per-nonce ledger and its JSON API on `DEVSHARD_STATS_PORT` (9091) |
+| `DEVSHARD_STATS_RETENTION_EPOCHS` | 2 | how many epochs before the current one the nonce ledger keeps retired escrows; `0` keeps every epoch, as in devshardctl |
 | `GATEWAY_PERF_EWMA_HALFLIFE_SECONDS` | 600 | how fast a host's history forgets |
 | `GATEWAY_TIMEOUT_SWEEP_BUDGET_PER_TICK` | 8 | execution-timeout votes one tick may retry across every escrow; `0` turns the sweep off |
 | `GATEWAY_TIMEOUT_SWEEP_GRACE_SECONDS` | 120 | how far past its deadline a nonce must be before the sweep claims it from its own race |
-| `GATEWAY_POC_MODE` | relaxed | `relaxed` keeps serving through proof-of-compute; `off` refuses new requests while the chain blocks them |
+| `DEVSHARD_POC_REQUEST_MODE` | relaxed | `relaxed` keeps serving through proof-of-compute; `off` refuses new requests while the chain blocks them |
 | `GATEWAY_HEIGHT_SYNC_ENABLED` | true | whether the escrow's heartbeat cadence runs. Turn it off for a fleet whose hosts do not carry height sync, or every interval logs a heartbeat it could not stamp ([`docs/escrows.md`](escrows.md), "Height sync") |
-| `GATEWAY_HEIGHT_SYNC_REQUIRE_SEED` | true | whether a session chases a host-signed tip from the moment it opens and reports `seed_incomplete` when it cannot. It does not refuse requests — see [`docs/escrows.md`](escrows.md), "Height sync". Off in the e2e stand |
-| `GATEWAY_HEIGHT_SYNC_ANCHOR_K` / `GATEWAY_HEIGHT_SYNC_ANCHOR_SLOTS` | 10 / 1 | the anchor cadence carried on the height-sync envelope, devshardctl's `DEVSHARD_HEIGHTSYNC_K` and `_SLOTS` |
-| `GATEWAY_HEIGHT_SYNC_CHAIN_ORACLE` | false | whether the gateway follows mainnet itself, from `NODE_MANAGER_ADDR`, the chain RPC and gRPC. It is not what the gateway stamps from — it only labels how much a carried tip is trusted ([`heights/README.md`](../heights/README.md)) |
+| `DEVSHARD_REQUIRE_HEIGHT_SEED` | true | whether a session chases a host-signed tip from the moment it opens and reports `seed_incomplete` when it cannot. It does not refuse requests — see [`docs/escrows.md`](escrows.md), "Height sync". Off in the e2e stand |
+| `DEVSHARD_HEIGHTSYNC_K` / `DEVSHARD_HEIGHTSYNC_SLOTS` | 10 / 1 | the anchor cadence carried on the height-sync envelope |
+| `DEVSHARD_GATEWAY_CHAIN_ORACLE` | false | whether the gateway follows mainnet itself, from `NODE_MANAGER_ADDR`, the chain RPC and gRPC. It is not what the gateway stamps from — it only labels how much a carried tip is trusted ([`heights/README.md`](../heights/README.md)) |
 | `DEVSHARD_NODE_MANAGER_ADDR` / `NODE_MANAGER_ADDR` | localhost:9400 | node-manager's address, resolved once (`runtimeparams.SettingsFromEnv`) for both its readers: the runtime-params feed and, when it is on, the height follower. Unreachable is not fatal to either — the feed polls the chain instead, less promptly, and the follower fails over to the chain RPC and gRPC |
 | `DEVSHARD_PARAMS_SOURCE` | auto | which feed answers for governance: `auto` prefers the long poll with a chain fallback, `chain` polls the chain alone and dials no node manager |
-| `GATEWAY_HOST_PING_DISABLED` | false | whether the hosts the live escrows use are pinged for reachability and clock drift. Observability only — a host that stops answering a ping keeps its routing weight ([`hostping/README.md`](../hostping/README.md)) |
-| `GATEWAY_HOST_PING_INTERVAL_MS` / `GATEWAY_HOST_PING_TIMEOUT_MS` | 15 000 / 2 000 | the probe cadence and its patience; the timeout must be at most half the interval or the ping is refused and switched off |
-| `GATEWAY_HOST_PING_CONCURRENCY` | 8 | hosts probed at once within one wave |
-| `GATEWAY_ALLOW_PRIVATE_ADDRESSES` | false | whether dials to private addresses are allowed. A host URL comes from chain state, so the guard is on in production and only a stand whose hosts are Docker names turns it off; turning it off is logged |
-| `GATEWAY_LOG_FORMAT` | json | one JSON object per line, which promtail and the Loki panels read; `text` restores the text form, and any other value refuses to boot |
+| `DEVSHARD_GATEWAY_HOST_PING_DISABLED` | false | whether the hosts the live escrows use are pinged for reachability and clock drift. Observability only — a host that stops answering a ping keeps its routing weight ([`hostping/README.md`](../hostping/README.md)) |
+| `DEVSHARD_GATEWAY_HOST_PING_INTERVAL` / `DEVSHARD_GATEWAY_HOST_PING_TIMEOUT` | 15s / 2s | the probe cadence and its patience; the timeout must be at most half the interval or the ping is refused and switched off |
+| `DEVSHARD_GATEWAY_HOST_PING_CONCURRENCY` | 8 | hosts probed at once within one wave |
+| `DEVSHARD_ALLOW_PRIVATE_ADDRESSES` | false | whether dials to private addresses are allowed. A host URL comes from chain state, so the guard is on in production and only a stand whose hosts are Docker names turns it off; turning it off is logged |
+| `DEVSHARD_LOG_FORMAT` | json | one JSON object per line, which promtail and the Loki panels read; any other value is the text form, as in devshardctl |
 
 The full list is `env/env.go`; the full set of defaults is `config.Defaults()`. Neither is duplicated here — a table that drifts is worse than a pointer that does not. One table sits outside `env/env.go`: the runtime-params feed reads the fleet-shared `DEVSHARD_*` / `DEVSHARDD_*` knobs declared in `devshard/runtimeparams/env.go`, because they are the same knobs every devshard binary honours.
 
@@ -156,7 +166,7 @@ The `journal` step (7) is bounded the same way, but with a floor: it waits for i
 
 The gateway writes a line for every event that **moves money, changes what it will serve, or is an operator's own doing** — and for very little else. Failures on the money path are not logged separately: each is returned as an error naming its own step (`resolving signer for escrow X`, `building settlement for escrow X`) and the escrow tick logs the joined result once. A success has no such carrier, which is why the successful transitions are the ones written down.
 
-Lines are JSON objects by default. Promtail lifts `level` into a Loki label (`deploy/join/observability/promtail-config.yaml`), and the Loki panels parse the rest with `| json`, so a gateway switched to `GATEWAY_LOG_FORMAT=text` empties those panels.
+Lines are JSON objects by default. Promtail lifts `level` into a Loki label (`deploy/join/observability/promtail-config.yaml`), and the Loki panels parse the rest with `| json`, so a gateway switched to `DEVSHARD_LOG_FORMAT=text` empties those panels.
 
 Every lifecycle line is written by the journal (`journal/`) in the order its steps happened. A file named beside a line below is the step's producer, unless it names a `journal/render_*.go` renderer or says "written by". A test fails on a lifecycle line written around the journal and on a key the log vocabulary does not declare (`journal/guard_test.go`, `journal/keys_test.go`).
 
@@ -321,7 +331,7 @@ Participant-labelled race series — `devshard_gateway_attempts_*`, `devshard_ga
 | every request 503 with no model listed | the chain snapshot is stale, or the escrow set is empty — check `chain_snapshot_healthy` and `/v1/admin/devshards` |
 | 503 on a healthy-looking gateway | `buffered_response_bytes` at the ceiling: non-streaming replies are holding the whole budget |
 | a model returns 403 for everyone | `model_access` was populated and this model was not listed |
-| the admin surface 404s | `GATEWAY_ADMIN_API_KEY` is unset |
+| the admin surface 404s | `DEVSHARD_ADMIN_API_KEY` is unset |
 | burns climbing | `ghost_nonces_burned_total` by reason — see [accounting.md](./accounting.md) |
 | shutdown reports "abandoned with work still running" | a host stopped answering and the drain hit the grace period; the votes it owed were not paid |
 

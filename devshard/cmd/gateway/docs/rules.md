@@ -190,7 +190,7 @@ The rule does not reach values. A struct the caller fills with already-checked n
 | **Probe attempts inside the race engine** | unreachable: a nonce that cannot be served is burned inside the scheduler and never becomes an attempt. No probe field and no guard for one remains; the concept survives as ghost burns |
 | **One of the three escalation rules** | rule 3 (switch to a measurably faster secondary) needed a latency model this gateway does not keep, and a faster host is not a reason to abandon an answer already streaming |
 | **Persisted participant health** | Congestion windows, cut-off state and decayed counts all start empty. Minute-scale backoff self-heals faster than replaying stale penalties is worth. The cost is honest and small: a genuinely bad host gets one free window after every deploy |
-| **The legacy `state.db` migration** | state starts fresh, bootstrapped from `GATEWAY_ESCROWS_JSON` and the admin import endpoint |
+| **The legacy `state.db` migration** | state starts fresh, bootstrapped from `DEVSHARDS_JSON` and the admin import endpoint |
 | **The `capacity_aware_limits` toggle** | it was read and never used. Making it real would mean *adding* a path that disables capacity scaling — new behaviour, not a restored one |
 
 The metric families that described the deleted quarantine machinery went with it and have no successor, so a binary swap does not leave the in-repo Grafana dashboard working: it needs an edit either way.

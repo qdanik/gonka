@@ -61,7 +61,7 @@ func applyDialGuard() {
 	httpguard.SetAllowPrivate(allowed)
 	if allowed {
 		logging.Warn("dials to private addresses are allowed: the SSRF guard is off",
-			logkey.Subsystem, "gateway", logkey.Used, "GATEWAY_ALLOW_PRIVATE_ADDRESSES")
+			logkey.Subsystem, "gateway", logkey.Used, env.AllowPrivateAddressesVariable)
 	}
 }
 

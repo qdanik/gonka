@@ -233,7 +233,7 @@ func TestAnAdminListReflectsTheStore(t *testing.T) {
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("status: got %d", recorder.Code)
 	}
-	if got := recorder.Body.String(); !strings.Contains(got, `"escrow_id":"42"`) {
+	if got := recorder.Body.String(); !strings.Contains(got, `"id":"42"`) {
 		t.Fatalf("body: %s", got)
 	}
 }

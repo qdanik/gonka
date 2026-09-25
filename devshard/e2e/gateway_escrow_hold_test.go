@@ -28,12 +28,12 @@ func holdStandOptions() e2eEnvOptions {
 	return e2eEnvOptions{
 		hostEnvOverrides: testutil.HostsStalling(e2eHostCount, "600000"),
 		gatewayEnvOverrides: map[string]string{
-			"GATEWAY_MAX_TOKENS_CAP":          strconv.Itoa(holdReserveTokens),
-			"GATEWAY_WARM_NEW_ESCROWS":        "false",
-			"GATEWAY_ROTATION_ENABLED":        "true",
-			"GATEWAY_ROTATION_HOLD_ENABLED":   "true",
-			"GATEWAY_ROTATION_PRE_POC_BLOCKS": "0",
-			"GATEWAY_ROTATION_MODELS_JSON": fmt.Sprintf(
+			"GATEWAY_MAX_TOKENS_CAP":                  strconv.Itoa(holdReserveTokens),
+			"GATEWAY_WARM_NEW_ESCROWS":                "false",
+			"DEVSHARD_ESCROW_ROTATION_ENABLED":        "true",
+			"GATEWAY_ROTATION_HOLD_ENABLED":           "true",
+			"DEVSHARD_ESCROW_ROTATION_PRE_POC_BLOCKS": "0",
+			"DEVSHARD_ESCROW_ROTATION_MODELS_JSON": fmt.Sprintf(
 				`[{"model_id":%q,"target_count":1,"amount":1000000,"private_key_env":"GATEWAY_REPLACEMENT_KEY"}]`,
 				defaultStandModel),
 		},

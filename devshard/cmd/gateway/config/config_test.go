@@ -201,10 +201,6 @@ func TestValidateCatchesEveryRuleBreach(t *testing.T) {
 		{"perf_min_available_hosts negative", func(c *Config) { c.Perf.MinAvailableHosts = -1 }, "perf_min_available_hosts"},
 		{"perf_host_staleness_seconds too low", func(c *Config) { c.Perf.HostStalenessSeconds = 0 }, "perf_host_staleness_seconds"},
 		{"nonce_accounting_retention_epochs negative", func(c *Config) { c.NonceAccounting.RetentionEpochs = -1 }, "nonce_accounting_retention_epochs"},
-		{"nonce_accounting_retention_epochs unbounded while the ledger is on", func(c *Config) {
-			c.NonceAccounting.Enabled = true
-			c.NonceAccounting.RetentionEpochs = 0
-		}, "nonce_accounting_retention_epochs"},
 		{"nonce_accounting_port zero while the ledger is on", func(c *Config) {
 			c.NonceAccounting.Enabled = true
 			c.NonceAccounting.Port = 0
@@ -243,15 +239,17 @@ func TestValidateCatchesEveryRuleBreach(t *testing.T) {
 }
 
 // Test flow:
-//  1. Build a default config with the nonce ledger disabled and its retention set to 0.
-//  2. Assert `Validate` accepts it, since a ledger that is off holds nothing for the retention to grow.
-func TestValidateAcceptsAnUnboundedRetentionWhileTheLedgerIsOff(t *testing.T) {
-	configuration := Defaults()
-	configuration.NonceAccounting.Enabled = false
-	configuration.NonceAccounting.RetentionEpochs = 0
+//  1. Table-driven: build a default config with retention 0, once with the nonce ledger off and once on.
+//  2. Assert `Validate` accepts both, since devshardctl read DEVSHARD_STATS_RETENTION_EPOCHS=0 as "keep every epoch".
+func TestValidateAcceptsAnUnboundedRetention(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		configuration := Defaults()
+		configuration.NonceAccounting.Enabled = enabled
+		configuration.NonceAccounting.RetentionEpochs = 0
 
-	if err := configuration.Validate(); err != nil {
-		t.Fatalf("Validate() with the nonce ledger off and retention 0 = %v, want nil", err)
+		if err := configuration.Validate(); err != nil {
+			t.Fatalf("Validate() with the nonce ledger enabled=%v and retention 0 = %v, want nil", enabled, err)
+		}
 	}
 }
 

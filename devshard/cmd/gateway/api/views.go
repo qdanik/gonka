@@ -115,7 +115,7 @@ type statusResponse struct {
 
 // The two views below keep the storage rows out of the response: a column rename would change the API.
 type devshardView struct {
-	EscrowID          string `json:"escrow_id"`
+	EscrowID          string `json:"id"`
 	PrivateKeyEnv     string `json:"private_key_env"`
 	Model             string `json:"model"`
 	Active            bool   `json:"active"`
@@ -124,10 +124,11 @@ type devshardView struct {
 	SettlementPending bool   `json:"settlement_pending"`
 	OnHold            bool   `json:"on_hold"`
 	SettleTxHash      string `json:"settle_tx_hash,omitempty"`
+	RoutePrefix       string `json:"route_prefix,omitempty"`
 }
 
 type rotationView struct {
-	Model       string    `json:"model"`
+	Model       string    `json:"model_id"`
 	Role        string    `json:"role"`
 	Stage       string    `json:"stage"`
 	Epoch       uint64    `json:"epoch"`
@@ -149,6 +150,7 @@ func devshardViews(records []store.DevshardRecord) []devshardView {
 			SettlementPending: record.SettlementPending,
 			OnHold:            record.OnHold,
 			SettleTxHash:      record.SettleTxHash,
+			RoutePrefix:       record.RoutePrefix,
 		})
 	}
 	return views
@@ -172,9 +174,9 @@ func rotationViews(statuses []store.RotationStatus) []rotationView {
 
 // SessionVersion is the protocol tag an escrow is bound to. See README.md, "The views a response is built from".
 type devshardStatus struct {
-	EscrowID       string `json:"escrow_id"`
+	EscrowID       string `json:"id"`
 	Model          string `json:"model"`
-	ActiveUsers    int    `json:"active_users"`
+	ActiveRequests int    `json:"active_requests"`
 	Nonce          uint64 `json:"nonce"`
 	Phase          string `json:"phase"`
 	Balance        uint64 `json:"balance,omitempty"`
@@ -197,7 +199,7 @@ type capacityStatus struct {
 	FullWeight                  float64 `json:"full_weight"`
 	ScaleFactor                 float64 `json:"scale_factor"`
 	LimitShare                  float64 `json:"limit_share"`
-	MaxConcurrentPer10000Weight float64 `json:"max_concurrent_per_10000_weight"`
+	MaxConcurrentPer10000Weight float64 `json:"max_concurrent_requests_per_10000_weight"`
 }
 
 func (s *Server) status(escrows []scheduler.Escrow) statusResponse {
@@ -244,7 +246,7 @@ func (s *Server) status(escrows []scheduler.Escrow) statusResponse {
 }
 
 func (s *Server) devshardStatus(escrow scheduler.Escrow) devshardStatus {
-	status := devshardStatus{EscrowID: escrow.ID, Model: escrow.Model, ActiveUsers: escrow.ActiveUsers}
+	status := devshardStatus{EscrowID: escrow.ID, Model: escrow.Model, ActiveRequests: escrow.ActiveUsers}
 	session, held := s.escrows.RoutableSession(escrow.ID)
 	if !held {
 		return status

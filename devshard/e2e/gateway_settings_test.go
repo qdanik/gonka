@@ -62,7 +62,7 @@ func TestE2E_GatewayAppliesANewLimitWithoutARestart(t *testing.T) {
 //  4. Assert the same completion with the key is served.
 func TestE2E_GatewayLocksAModelBehindAKeyAtRuntime(t *testing.T) {
 	env, client := startGatewayEnv(t, e2eEnvOptions{
-		gatewayEnvOverrides: map[string]string{"GATEWAY_API_KEYS": testutil.AdminAPIKey},
+		gatewayEnvOverrides: map[string]string{"DEVSHARD_API_KEYS": testutil.AdminAPIKey},
 	})
 
 	putSettings(t, client, env.clientURL, map[string]any{"model_access": map[string]string{"stub-model": "api_key"}})

@@ -69,7 +69,7 @@ func TestE2E_GatewayStopsServingWhileTheChainIsInPoC(t *testing.T) {
 //  4. Assert the unpreserved host is not sent work and its nonces are burned under their own reason.
 func TestE2E_GatewayBurnsTheNoncesOfAHostPoCDidNotPreserve(t *testing.T) {
 	env, client := startGatewayEnv(t, e2eEnvOptions{
-		gatewayEnvOverrides: map[string]string{"GATEWAY_POC_MODE": "relaxed"},
+		gatewayEnvOverrides: map[string]string{"DEVSHARD_POC_REQUEST_MODE": "relaxed"},
 	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)

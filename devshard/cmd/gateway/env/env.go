@@ -5,7 +5,9 @@ package env
 import (
 	"errors"
 	"fmt"
+	"math"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -15,26 +17,33 @@ import (
 	"devshard/logging"
 )
 
-// Values mirrors every GATEWAY_* environment variable the gateway reads; nil = unset.
+// Values mirrors every environment variable the gateway reads; nil = unset.
 type Values struct {
-	Port          *int64
-	StorageDir    *string
-	APIKeys       *string
-	AdminAPIKey   *string
-	DevshardsJSON *string
+	Port                       *int64
+	StorageDir                 *string
+	APIKeys                    *string
+	AdminAPIKey                *string
+	DevshardsJSON              *string
+	MaxConcurrentRuntimeBuilds *int64
 
-	ChainGRPC   *string
-	PublicAPI   *string
-	ChainID     *string
-	ChainRPC    *string
-	TxFeeAmount *int64
-	TxGasLimit  *int64
+	ChainGRPC        *string
+	PublicAPI        *string
+	ChainID          *string
+	ChainRPC         *string
+	TxFeeDenom       *string
+	TxFeeAmount      *int64
+	TxGasLimit       *int64
+	TxPollIntervalMS *int64
+	TxPollTimeoutMS  *int64
 
-	DefaultMaxTokens      *int64
-	MaxTokensCap          *int64
-	MaxConcurrentRequests *int64
-	AdmissionQueueWaitMS  *int64
-	AdmissionQueuePerSlot *int64
+	DefaultMaxTokens                       *int64
+	MaxTokensCap                           *int64
+	MaxConcurrentRequests                  *int64
+	MaxConcurrentRequestsPer10000Weight    *float64
+	PoCMaxConcurrentRequestsPer10000Weight *float64
+	MaxInputTokensInFlight                 *int64
+	AdmissionQueueWaitMS                   *int64
+	AdmissionQueuePerSlot                  *int64
 
 	PoCMode             *string
 	Disabled            *bool
@@ -105,75 +114,38 @@ type Values struct {
 	EngineHedgeFirstTokenFloorMS    *int64
 }
 
-// PoCModeOff and PoCModeRelaxed are the accepted GATEWAY_POC_MODE values.
+// PoCModeOff and PoCModeRelaxed are the accepted DEVSHARD_POC_REQUEST_MODE values.
 const (
 	PoCModeOff     = "off"
 	PoCModeRelaxed = "relaxed"
 )
 
-// LogFormatJSON and LogFormatText are the accepted GATEWAY_LOG_FORMAT values; empty means LogFormatJSON.
+// LogFormatJSON and LogFormatText are the formats DEVSHARD_LOG_FORMAT selects; empty means LogFormatJSON.
 const (
 	LogFormatJSON = "json"
 	LogFormatText = "text"
 )
 
+// AllowPrivateAddressesVariable is named in the log line that reports the dial guard switched off.
+const AllowPrivateAddressesVariable = "DEVSHARD_ALLOW_PRIVATE_ADDRESSES"
+
+// ErrPrivateKeyMissing marks a devshard whose signing key the environment does not hold.
+var ErrPrivateKeyMissing = errors.New("private key missing")
+
 // LogFormat is read apart from Load because it must be applied before anything can log. See README.md, "The log format".
 func LogFormat() string {
-	if strings.EqualFold(lookup("GATEWAY_LOG_FORMAT"), LogFormatText) {
-		return LogFormatText
+	raw := lookup("DEVSHARD_LOG_FORMAT")
+	if raw == "" || strings.EqualFold(raw, LogFormatJSON) {
+		return LogFormatJSON
 	}
-	return LogFormatJSON
+	return LogFormatText
 }
 
 // AllowPrivateAddresses is read apart from Load because the dial guard is armed before anything dials. See operations.md.
 func AllowPrivateAddresses() bool {
-	allowed, err := strconv.ParseBool(lookup("GATEWAY_ALLOW_PRIVATE_ADDRESSES"))
+	allowed, err := boolvalue.Parse(lookup(AllowPrivateAddressesVariable))
 	return err == nil && allowed
 }
-
-var (
-	// ErrPrivateKeyMissing marks a devshard whose signing key the environment does not hold.
-	ErrPrivateKeyMissing = errors.New("private key missing")
-
-	// legacyNames is the devshardctl spelling each variable falls back to. See operations.md, "Variable names".
-	legacyNames = map[string]string{
-		"GATEWAY_ESCROWS_JSON":                "DEVSHARDS_JSON",
-		"GATEWAY_PORT":                        "DEVSHARD_PORT",
-		"GATEWAY_STORAGE_DIR":                 "DEVSHARD_STORAGE_DIR",
-		"GATEWAY_API_KEYS":                    "DEVSHARD_API_KEYS",
-		"GATEWAY_ADMIN_API_KEY":               "DEVSHARD_ADMIN_API_KEY",
-		"GATEWAY_CHAIN_GRPC":                  "DEVSHARD_CHAIN_GRPC",
-		"GATEWAY_PUBLIC_API":                  "DEVSHARD_PUBLIC_API",
-		"GATEWAY_CHAIN_ID":                    "DEVSHARD_CHAIN_ID",
-		"GATEWAY_CHAIN_RPC":                   "DEVSHARD_CHAIN_RPC",
-		"GATEWAY_TX_FEE_AMOUNT":               "DEVSHARD_TX_FEE_AMOUNT",
-		"GATEWAY_TX_GAS_LIMIT":                "DEVSHARD_TX_GAS_LIMIT",
-		"GATEWAY_POC_MODE":                    "DEVSHARD_POC_REQUEST_MODE",
-		"GATEWAY_DISABLED":                    "DEVSHARD_GATEWAY_DISABLED",
-		"GATEWAY_DISABLED_MESSAGE":            "DEVSHARD_GATEWAY_DISABLED_MESSAGE",
-		"GATEWAY_DISABLED_REDIRECT_URL":       "DEVSHARD_GATEWAY_DISABLED_NEW_URL",
-		"GATEWAY_ROTATION_ENABLED":            "DEVSHARD_ESCROW_ROTATION_ENABLED",
-		"GATEWAY_ROTATION_SETTLEMENT_ENABLED": "DEVSHARD_ESCROW_ROTATION_SETTLEMENT_ENABLED",
-		"GATEWAY_ROTATION_MODELS_JSON":        "DEVSHARD_ESCROW_ROTATION_MODELS_JSON",
-		"GATEWAY_CHAT_CACHE_MAX_BYTES":        "DEVSHARD_CHAT_CACHE_MAX_BYTES",
-		"GATEWAY_ACCOUNTING_ENABLED":          "DEVSHARD_STATS_ENABLED",
-		"GATEWAY_ACCOUNTING_PORT":             "DEVSHARD_STATS_PORT",
-		"GATEWAY_ACCOUNTING_RETENTION_EPOCHS": "DEVSHARD_STATS_RETENTION_EPOCHS",
-		"GATEWAY_ACCOUNTING_SNAPSHOT_SECONDS": "DEVSHARD_STATS_SNAPSHOT_SECONDS",
-		"GATEWAY_ALLOW_PRIVATE_ADDRESSES":     "DEVSHARD_ALLOW_PRIVATE_ADDRESSES",
-		"GATEWAY_HOST_PING_DISABLED":          "DEVSHARD_GATEWAY_HOST_PING_DISABLED",
-		"GATEWAY_HOST_PING_CONCURRENCY":       "DEVSHARD_GATEWAY_HOST_PING_CONCURRENCY",
-		"GATEWAY_HEIGHT_SYNC_ANCHOR_K":        "DEVSHARD_HEIGHTSYNC_K",
-		"GATEWAY_HEIGHT_SYNC_ANCHOR_SLOTS":    "DEVSHARD_HEIGHTSYNC_SLOTS",
-		"GATEWAY_HEIGHT_SYNC_REQUIRE_SEED":    "DEVSHARD_REQUIRE_HEIGHT_SEED",
-		"GATEWAY_HEIGHT_SYNC_CHAIN_ORACLE":    "DEVSHARD_GATEWAY_CHAIN_ORACLE",
-	}
-
-	legacyDurationNames = map[string]string{
-		"GATEWAY_HOST_PING_INTERVAL_MS": "DEVSHARD_GATEWAY_HOST_PING_INTERVAL",
-		"GATEWAY_HOST_PING_TIMEOUT_MS":  "DEVSHARD_GATEWAY_HOST_PING_TIMEOUT",
-	}
-)
 
 // PrivateKey reads the key held by the named variable; errors and logs name the variable, never the value.
 func PrivateKey(name string) (string, error) {
@@ -181,38 +153,24 @@ func PrivateKey(name string) (string, error) {
 	if name == "" {
 		return "", fmt.Errorf("%w: no environment variable named", ErrPrivateKeyMissing)
 	}
-	if key := strings.TrimSpace(os.Getenv(name)); key != "" {
+	if key := lookup(name); key != "" {
 		return key, nil
-	}
-	if renamed, aliased := strings.CutPrefix(name, "DEVSHARD_"); aliased {
-		renamed = "GATEWAY_" + renamed
-		if key := strings.TrimSpace(os.Getenv(renamed)); key != "" {
-			logging.Warn("signing key read from the renamed variable",
-				logkey.Subsystem, "env", logkey.Recorded, name, logkey.Used, renamed)
-			return key, nil
-		}
 	}
 	return "", fmt.Errorf("%w: %s is unset", ErrPrivateKeyMissing, name)
 }
 
-// lookup prefers the gateway's spelling; empty counts as unset on both, so blanking a legacy variable sticks.
-func lookup(name string) string {
-	raw, _ := lookupWithSource(name)
-	return raw
+func lookup(names ...string) string {
+	for _, name := range names {
+		if raw := strings.TrimSpace(os.Getenv(name)); raw != "" {
+			return raw
+		}
+	}
+	return ""
 }
 
-func lookupWithSource(name string) (raw, source string) {
-	if raw := strings.TrimSpace(os.Getenv(name)); raw != "" {
-		return raw, name
-	}
-	if legacy, aliased := legacyNames[name]; aliased {
-		return strings.TrimSpace(os.Getenv(legacy)), legacy
-	}
-	return "", name
-}
-
-func ignoreLegacyValue(source, raw string) {
-	logging.Warn("devshardctl variable ignored: its value is not usable", logkey.Subsystem, "env", logkey.Recorded, source, logkey.Used, raw)
+func ignoreUnusableValue(name, raw string) {
+	logging.Warn("environment value ignored: devshardctl would not have used it either, so the default applies",
+		logkey.Subsystem, "env", logkey.Recorded, name, logkey.Used, raw)
 }
 
 // Load reads every gateway environment variable, accumulating parse failures so none is reported alone.
@@ -220,14 +178,65 @@ func Load() (Values, error) {
 	var values Values
 	var problems []error
 
-	readString := func(name string, target **string) {
-		raw := lookup(name)
+	readString := func(name string, target **string, fallbacks ...string) {
+		raw := lookup(append([]string{name}, fallbacks...)...)
 		if raw == "" {
 			return
 		}
 		*target = &raw
 	}
-	readInt := func(name string, target **int64) {
+
+	readLenientInt := func(name string, minimum int64, target **int64) {
+		raw := lookup(name)
+		if raw == "" {
+			return
+		}
+		parsed, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil || parsed < minimum {
+			ignoreUnusableValue(name, raw)
+			return
+		}
+		*target = &parsed
+	}
+	readLenientPositiveFloat := func(name string, target **float64) {
+		raw := lookup(name)
+		if raw == "" {
+			return
+		}
+		parsed, err := strconv.ParseFloat(raw, 64)
+		if err != nil || math.IsNaN(parsed) || math.IsInf(parsed, 0) || parsed <= 0 {
+			ignoreUnusableValue(name, raw)
+			return
+		}
+		*target = &parsed
+	}
+	readLenientBool := func(name string, target **bool) {
+		raw := lookup(name)
+		if raw == "" {
+			return
+		}
+		parsed, err := boolvalue.Parse(raw)
+		if err != nil {
+			ignoreUnusableValue(name, raw)
+			return
+		}
+		*target = &parsed
+	}
+	readDurationAsMilliseconds := func(name string, target **int64) {
+		raw := lookup(name)
+		if raw == "" {
+			return
+		}
+		parsed, err := time.ParseDuration(raw)
+		if err != nil || parsed.Milliseconds() <= 0 {
+			ignoreUnusableValue(name, raw)
+			return
+		}
+		milliseconds := parsed.Milliseconds()
+		*target = &milliseconds
+	}
+
+	readStrictInt := func(name string, target **int64) {
 		raw := lookup(name)
 		if raw == "" {
 			return
@@ -239,25 +248,7 @@ func Load() (Values, error) {
 		}
 		*target = &parsed
 	}
-	readMilliseconds := func(name string, target **int64) {
-		if strings.TrimSpace(os.Getenv(name)) != "" {
-			readInt(name, target)
-			return
-		}
-		legacy := legacyDurationNames[name]
-		raw := strings.TrimSpace(os.Getenv(legacy))
-		if raw == "" {
-			return
-		}
-		parsed, err := time.ParseDuration(raw)
-		if err != nil || parsed.Milliseconds() <= 0 {
-			ignoreLegacyValue(legacy, raw)
-			return
-		}
-		milliseconds := parsed.Milliseconds()
-		*target = &milliseconds
-	}
-	readFloat := func(name string, target **float64) {
+	readStrictFloat := func(name string, target **float64) {
 		raw := lookup(name)
 		if raw == "" {
 			return
@@ -269,18 +260,9 @@ func Load() (Values, error) {
 		}
 		*target = &parsed
 	}
-	readBool := func(name string, target **bool) {
-		raw, source := lookupWithSource(name)
+	readStrictBool := func(name string, target **bool) {
+		raw := lookup(name)
 		if raw == "" {
-			return
-		}
-		if source != name {
-			parsed, err := boolvalue.Parse(raw)
-			if err != nil {
-				ignoreLegacyValue(source, raw)
-				return
-			}
-			*target = &parsed
 			return
 		}
 		parsed, err := strconv.ParseBool(raw)
@@ -291,95 +273,107 @@ func Load() (Values, error) {
 		*target = &parsed
 	}
 
-	readInt("GATEWAY_PORT", &values.Port)
-	readString("GATEWAY_STORAGE_DIR", &values.StorageDir)
-	readString("GATEWAY_API_KEYS", &values.APIKeys)
-	readString("GATEWAY_ADMIN_API_KEY", &values.AdminAPIKey)
-	readString("GATEWAY_ESCROWS_JSON", &values.DevshardsJSON)
+	readLenientInt("DEVSHARD_PORT", 1, &values.Port)
+	readString("DEVSHARD_STORAGE_DIR", &values.StorageDir)
+	readString("DEVSHARD_API_KEYS", &values.APIKeys)
+	readString("DEVSHARD_ADMIN_API_KEY", &values.AdminAPIKey)
+	readString("DEVSHARDS_JSON", &values.DevshardsJSON)
+	readLenientInt("DEVSHARD_MAX_CONCURRENT_RUNTIME_BUILDS", 1, &values.MaxConcurrentRuntimeBuilds)
 
-	readString("GATEWAY_CHAIN_GRPC", &values.ChainGRPC)
-	readString("GATEWAY_PUBLIC_API", &values.PublicAPI)
-	readString("GATEWAY_CHAIN_ID", &values.ChainID)
-	readString("GATEWAY_CHAIN_RPC", &values.ChainRPC)
-	readInt("GATEWAY_TX_FEE_AMOUNT", &values.TxFeeAmount)
-	readInt("GATEWAY_TX_GAS_LIMIT", &values.TxGasLimit)
+	readString("DEVSHARD_CHAIN_GRPC", &values.ChainGRPC, "NODE_GRPC_URL")
+	readString("DEVSHARD_PUBLIC_API", &values.PublicAPI)
+	readString("DEVSHARD_CHAIN_ID", &values.ChainID)
+	readString("DEVSHARD_CHAIN_RPC", &values.ChainRPC, "NODE_RPC_URL")
+	readString("DEVSHARD_TX_FEE_DENOM", &values.TxFeeDenom)
+	readLenientInt("DEVSHARD_TX_FEE_AMOUNT", 1, &values.TxFeeAmount)
+	readLenientInt("DEVSHARD_TX_GAS_LIMIT", 1, &values.TxGasLimit)
+	readLenientInt("DEVSHARD_TX_POLL_INTERVAL_MS", 1, &values.TxPollIntervalMS)
+	readLenientInt("DEVSHARD_TX_POLL_TIMEOUT_MS", 1, &values.TxPollTimeoutMS)
 
-	readInt("GATEWAY_DEFAULT_MAX_TOKENS", &values.DefaultMaxTokens)
-	readInt("GATEWAY_MAX_TOKENS_CAP", &values.MaxTokensCap)
-	readInt("GATEWAY_MAX_CONCURRENT_REQUESTS", &values.MaxConcurrentRequests)
-	readInt("GATEWAY_ADMISSION_QUEUE_WAIT_MS", &values.AdmissionQueueWaitMS)
-	readInt("GATEWAY_ADMISSION_QUEUE_PER_SLOT", &values.AdmissionQueuePerSlot)
+	readLenientInt("GATEWAY_DEFAULT_MAX_TOKENS", 1, &values.DefaultMaxTokens)
+	readLenientInt("GATEWAY_MAX_TOKENS_CAP", 1, &values.MaxTokensCap)
+	readLenientInt("GATEWAY_MAX_CONCURRENT_REQUESTS", 0, &values.MaxConcurrentRequests)
+	readLenientPositiveFloat("GATEWAY_MAX_CONCURRENT_REQUESTS_PER_10000_WEIGHT", &values.MaxConcurrentRequestsPer10000Weight)
+	readLenientPositiveFloat("GATEWAY_POC_MAX_CONCURRENT_REQUESTS_PER_10000_WEIGHT", &values.PoCMaxConcurrentRequestsPer10000Weight)
+	readLenientInt("GATEWAY_MAX_INPUT_TOKENS_IN_FLIGHT", 0, &values.MaxInputTokensInFlight)
+	readStrictInt("GATEWAY_ADMISSION_QUEUE_WAIT_MS", &values.AdmissionQueueWaitMS)
+	readStrictInt("GATEWAY_ADMISSION_QUEUE_PER_SLOT", &values.AdmissionQueuePerSlot)
 
-	readString("GATEWAY_POC_MODE", &values.PoCMode)
-	readBool("GATEWAY_DISABLED", &values.Disabled)
-	readString("GATEWAY_DISABLED_MESSAGE", &values.DisabledMessage)
-	readString("GATEWAY_DISABLED_REDIRECT_URL", &values.DisabledRedirectURL)
-
-	readBool("GATEWAY_ROTATION_ENABLED", &values.RotationEnabled)
-	readInt("GATEWAY_ROTATION_PRE_POC_BLOCKS", &values.RotationPrePoCBlocks)
-	readInt("GATEWAY_MATCH_WAIT_MS", &values.MatchWaitMS)
-	readInt("GATEWAY_MAX_CONSECUTIVE_BURNS", &values.MaxConsecutiveBurns)
-	readBool("GATEWAY_FORCE_UPSTREAM_STREAMING", &values.ForceUpstreamStreaming)
-	readInt("GATEWAY_MAX_BUFFERED_RESPONSE_BYTES", &values.MaxBufferedResponseBytes)
-	readBool("GATEWAY_WARM_NEW_ESCROWS", &values.WarmNewEscrows)
-	readBool("GATEWAY_ROTATION_SETTLEMENT_ENABLED", &values.RotationSettlementEnabled)
-	readBool("GATEWAY_ROTATION_HOLD_ENABLED", &values.RotationHoldEnabled)
-	readInt("GATEWAY_ROTATION_HOLD_MAX_PER_MODEL", &values.RotationHoldMaxPerModel)
-	readInt("GATEWAY_ROTATION_HOLD_RESUME_ANSWERS", &values.RotationHoldResumeAnswers)
-	readString("GATEWAY_ROTATION_MODELS_JSON", &values.RotationModelsJSON)
-
-	readInt("GATEWAY_CHAT_CACHE_MAX_BYTES", &values.ChatCacheMaxBytes)
-
-	readInt("GATEWAY_REQUESTS_RETENTION_HOURS", &values.AccountingRetentionHours)
-	readInt("GATEWAY_REQUESTS_RETENTION_MAX_ROWS", &values.AccountingRetentionMaxRows)
-
-	readBool("GATEWAY_ACCOUNTING_ENABLED", &values.NonceAccountingEnabled)
-	readInt("GATEWAY_ACCOUNTING_PORT", &values.NonceAccountingPort)
-	readInt("GATEWAY_ACCOUNTING_RETENTION_EPOCHS", &values.NonceAccountingRetentionEpochs)
-	readInt("GATEWAY_ACCOUNTING_SNAPSHOT_SECONDS", &values.NonceAccountingSnapshotSeconds)
-	readInt("GATEWAY_TIMEOUT_SWEEP_BUDGET_PER_TICK", &values.TimeoutSweepBudgetPerTick)
-	readInt("GATEWAY_TIMEOUT_SWEEP_GRACE_SECONDS", &values.TimeoutSweepGraceSeconds)
-
-	readBool("GATEWAY_HEIGHT_SYNC_ENABLED", &values.HeightSyncEnabled)
-	readBool("GATEWAY_HEIGHT_SYNC_REQUIRE_SEED", &values.HeightSyncRequireSeed)
-	readBool("GATEWAY_HEIGHT_SYNC_CHAIN_ORACLE", &values.HeightSyncChainOracle)
-	readInt("GATEWAY_HEIGHT_SYNC_ANCHOR_K", &values.HeightSyncAnchorK)
-	readInt("GATEWAY_HEIGHT_SYNC_ANCHOR_SLOTS", &values.HeightSyncAnchorSlots)
-	readBool("GATEWAY_HOST_PING_DISABLED", &values.HostPingDisabled)
-	readMilliseconds("GATEWAY_HOST_PING_INTERVAL_MS", &values.HostPingIntervalMS)
-	readMilliseconds("GATEWAY_HOST_PING_TIMEOUT_MS", &values.HostPingTimeoutMS)
-	readInt("GATEWAY_HOST_PING_CONCURRENCY", &values.HostPingConcurrency)
-	readBool("GATEWAY_CAPTURE_ENABLED", &values.CaptureEnabled)
-	readString("GATEWAY_CAPTURE_DIR", &values.CaptureDir)
-	readFloat("GATEWAY_CAPTURE_SAMPLE_RATE", &values.CaptureSampleRate)
-	readInt("GATEWAY_CAPTURE_MAX_BYTES", &values.CaptureMaxBytes)
-
-	readInt("GATEWAY_PERF_EWMA_HALFLIFE_SECONDS", &values.PerfEWMAHalfLifeSeconds)
-	readInt("GATEWAY_PERF_CONSECUTIVE_FAIL_THRESHOLD", &values.PerfConsecutiveFailThreshold)
-	readFloat("GATEWAY_PERF_FAILURE_RATE_THRESHOLD", &values.PerfFailureRateThreshold)
-	readFloat("GATEWAY_PERF_FAILURE_RATE_MIN_VOLUME", &values.PerfFailureRateMinVolume)
-	readInt("GATEWAY_PERF_EJECTION_BASE_SECONDS", &values.PerfEjectionBaseSeconds)
-	readInt("GATEWAY_PERF_EJECTION_MAX_SECONDS", &values.PerfEjectionMaxSeconds)
-	readFloat("GATEWAY_PERF_MAX_EJECTION_FRACTION", &values.PerfMaxEjectionFraction)
-	readInt("GATEWAY_PERF_MIN_AVAILABLE_HOSTS", &values.PerfMinAvailableHosts)
-	readInt("GATEWAY_PERF_HOST_STALENESS_SECONDS", &values.PerfHostStalenessSeconds)
-
-	readInt("GATEWAY_CHAIN_SNAPSHOT_MAX_AGE_SECONDS", &values.ChainSnapshotMaxAgeSeconds)
-
-	readInt("GATEWAY_ENGINE_RECEIPT_TIMEOUT_MS", &values.EngineReceiptTimeoutMS)
-	readInt("GATEWAY_ENGINE_FIRST_TOKEN_FLOOR_MS", &values.EngineFirstTokenFloorMS)
-	readInt("GATEWAY_ENGINE_FIRST_TOKEN_CEILING_MS", &values.EngineFirstTokenCeilingMS)
-	readInt("GATEWAY_ENGINE_INTER_CHUNK_STALL_MS", &values.EngineInterChunkStallMS)
-	readInt("GATEWAY_ENGINE_LOSER_GRACE_MS", &values.EngineLoserGraceMS)
-	readInt("GATEWAY_ENGINE_MAX_CONCURRENT_TIMEOUT_VOTES", &values.EngineMaxConcurrentTimeoutVotes)
-	readInt("GATEWAY_ENGINE_HEDGE_FIRST_TOKEN_FLOOR_MS", &values.EngineHedgeFirstTokenFloorMS)
-
-	if values.PoCMode != nil && *values.PoCMode != PoCModeOff && *values.PoCMode != PoCModeRelaxed {
-		problems = append(problems, fmt.Errorf("GATEWAY_POC_MODE: %q is not %q or %q", *values.PoCMode, PoCModeOff, PoCModeRelaxed))
+	if raw := lookup("DEVSHARD_POC_REQUEST_MODE"); raw != "" {
+		if mode := strings.ToLower(raw); mode == PoCModeOff || mode == PoCModeRelaxed {
+			values.PoCMode = &mode
+		} else {
+			ignoreUnusableValue("DEVSHARD_POC_REQUEST_MODE", raw)
+		}
 	}
-	if raw := lookup("GATEWAY_LOG_FORMAT"); raw != "" && !strings.EqualFold(raw, LogFormatJSON) && !strings.EqualFold(raw, LogFormatText) {
-		problems = append(problems, fmt.Errorf("GATEWAY_LOG_FORMAT: %q is not %q or %q", raw, LogFormatJSON, LogFormatText))
+	readLenientBool("DEVSHARD_GATEWAY_DISABLED", &values.Disabled)
+	readString("DEVSHARD_GATEWAY_DISABLED_MESSAGE", &values.DisabledMessage)
+	readString("DEVSHARD_GATEWAY_DISABLED_NEW_URL", &values.DisabledRedirectURL)
+
+	readLenientBool("DEVSHARD_ESCROW_ROTATION_ENABLED", &values.RotationEnabled)
+	readLenientInt("DEVSHARD_ESCROW_ROTATION_PRE_POC_BLOCKS", 0, &values.RotationPrePoCBlocks)
+	readLenientBool("DEVSHARD_ESCROW_ROTATION_SETTLEMENT_ENABLED", &values.RotationSettlementEnabled)
+	readString("DEVSHARD_ESCROW_ROTATION_MODELS_JSON", &values.RotationModelsJSON)
+	readStrictInt("GATEWAY_MATCH_WAIT_MS", &values.MatchWaitMS)
+	readStrictInt("GATEWAY_MAX_CONSECUTIVE_BURNS", &values.MaxConsecutiveBurns)
+	readStrictBool("GATEWAY_FORCE_UPSTREAM_STREAMING", &values.ForceUpstreamStreaming)
+	readStrictInt("GATEWAY_MAX_BUFFERED_RESPONSE_BYTES", &values.MaxBufferedResponseBytes)
+	readStrictBool("GATEWAY_WARM_NEW_ESCROWS", &values.WarmNewEscrows)
+	readStrictBool("GATEWAY_ROTATION_HOLD_ENABLED", &values.RotationHoldEnabled)
+	readStrictInt("GATEWAY_ROTATION_HOLD_MAX_PER_MODEL", &values.RotationHoldMaxPerModel)
+	readStrictInt("GATEWAY_ROTATION_HOLD_RESUME_ANSWERS", &values.RotationHoldResumeAnswers)
+
+	readLenientInt("DEVSHARD_CHAT_CACHE_MAX_BYTES", 1, &values.ChatCacheMaxBytes)
+
+	readStrictInt("GATEWAY_REQUESTS_RETENTION_HOURS", &values.AccountingRetentionHours)
+	readStrictInt("GATEWAY_REQUESTS_RETENTION_MAX_ROWS", &values.AccountingRetentionMaxRows)
+
+	readLenientBool("DEVSHARD_STATS_ENABLED", &values.NonceAccountingEnabled)
+	readLenientInt("DEVSHARD_STATS_PORT", 1, &values.NonceAccountingPort)
+	readLenientInt("DEVSHARD_STATS_RETENTION_EPOCHS", 0, &values.NonceAccountingRetentionEpochs)
+	readLenientInt("DEVSHARD_STATS_SNAPSHOT_SECONDS", 1, &values.NonceAccountingSnapshotSeconds)
+	readStrictInt("GATEWAY_TIMEOUT_SWEEP_BUDGET_PER_TICK", &values.TimeoutSweepBudgetPerTick)
+	readStrictInt("GATEWAY_TIMEOUT_SWEEP_GRACE_SECONDS", &values.TimeoutSweepGraceSeconds)
+
+	readStrictBool("GATEWAY_HEIGHT_SYNC_ENABLED", &values.HeightSyncEnabled)
+	if raw := strings.ToLower(lookup("DEVSHARD_REQUIRE_HEIGHT_SEED")); raw != "" {
+		requireSeed := !slices.Contains([]string{"0", "false", "off", "no"}, raw)
+		values.HeightSyncRequireSeed = &requireSeed
 	}
+	if raw := strings.ToLower(lookup("DEVSHARD_GATEWAY_CHAIN_ORACLE")); raw != "" {
+		chainOracle := slices.Contains([]string{"true", "1", "on"}, raw)
+		values.HeightSyncChainOracle = &chainOracle
+	}
+	readLenientInt("DEVSHARD_HEIGHTSYNC_K", 0, &values.HeightSyncAnchorK)
+	readLenientInt("DEVSHARD_HEIGHTSYNC_SLOTS", 0, &values.HeightSyncAnchorSlots)
+	readLenientBool("DEVSHARD_GATEWAY_HOST_PING_DISABLED", &values.HostPingDisabled)
+	readDurationAsMilliseconds("DEVSHARD_GATEWAY_HOST_PING_INTERVAL", &values.HostPingIntervalMS)
+	readDurationAsMilliseconds("DEVSHARD_GATEWAY_HOST_PING_TIMEOUT", &values.HostPingTimeoutMS)
+	readLenientInt("DEVSHARD_GATEWAY_HOST_PING_CONCURRENCY", 1, &values.HostPingConcurrency)
+	readLenientBool("DEVSHARD_REQUEST_CAPTURE_ENABLED", &values.CaptureEnabled)
+	readString("DEVSHARD_REQUEST_CAPTURE_DIR", &values.CaptureDir)
+	readStrictFloat("GATEWAY_CAPTURE_SAMPLE_RATE", &values.CaptureSampleRate)
+	readStrictInt("GATEWAY_CAPTURE_MAX_BYTES", &values.CaptureMaxBytes)
+
+	readStrictInt("GATEWAY_PERF_EWMA_HALFLIFE_SECONDS", &values.PerfEWMAHalfLifeSeconds)
+	readStrictInt("GATEWAY_PERF_CONSECUTIVE_FAIL_THRESHOLD", &values.PerfConsecutiveFailThreshold)
+	readStrictFloat("GATEWAY_PERF_FAILURE_RATE_THRESHOLD", &values.PerfFailureRateThreshold)
+	readStrictFloat("GATEWAY_PERF_FAILURE_RATE_MIN_VOLUME", &values.PerfFailureRateMinVolume)
+	readStrictInt("GATEWAY_PERF_EJECTION_BASE_SECONDS", &values.PerfEjectionBaseSeconds)
+	readStrictInt("GATEWAY_PERF_EJECTION_MAX_SECONDS", &values.PerfEjectionMaxSeconds)
+	readStrictFloat("GATEWAY_PERF_MAX_EJECTION_FRACTION", &values.PerfMaxEjectionFraction)
+	readStrictInt("GATEWAY_PERF_MIN_AVAILABLE_HOSTS", &values.PerfMinAvailableHosts)
+	readStrictInt("GATEWAY_PERF_HOST_STALENESS_SECONDS", &values.PerfHostStalenessSeconds)
+
+	readStrictInt("GATEWAY_CHAIN_SNAPSHOT_MAX_AGE_SECONDS", &values.ChainSnapshotMaxAgeSeconds)
+
+	readStrictInt("GATEWAY_ENGINE_RECEIPT_TIMEOUT_MS", &values.EngineReceiptTimeoutMS)
+	readStrictInt("GATEWAY_ENGINE_FIRST_TOKEN_FLOOR_MS", &values.EngineFirstTokenFloorMS)
+	readStrictInt("GATEWAY_ENGINE_FIRST_TOKEN_CEILING_MS", &values.EngineFirstTokenCeilingMS)
+	readStrictInt("GATEWAY_ENGINE_INTER_CHUNK_STALL_MS", &values.EngineInterChunkStallMS)
+	readStrictInt("GATEWAY_ENGINE_LOSER_GRACE_MS", &values.EngineLoserGraceMS)
+	readStrictInt("GATEWAY_ENGINE_MAX_CONCURRENT_TIMEOUT_VOTES", &values.EngineMaxConcurrentTimeoutVotes)
+	readStrictInt("GATEWAY_ENGINE_HEDGE_FIRST_TOKEN_FLOOR_MS", &values.EngineHedgeFirstTokenFloorMS)
 
 	if len(problems) > 0 {
 		return Values{}, fmt.Errorf("reading environment: %w", errors.Join(problems...))

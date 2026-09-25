@@ -106,7 +106,7 @@ func (s *Server) handleDevshardDebugSignatures(w http.ResponseWriter, r *http.Re
 		"escrow_id":            escrowID,
 		"highest_quorum_nonce": highestQuorum,
 		"has_quorum":           hasQuorum,
-		"signatures":           signatureEntries(session.SignedSlots(), status),
+		"nonces":               signatureEntries(session.SignedSlots(), status),
 	})
 }
 

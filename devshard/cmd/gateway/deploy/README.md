@@ -31,23 +31,23 @@ The container's healthcheck deliberately probes a *different* route, `/healthz`,
 
 Nothing has a working default for these:
 
-- `GATEWAY_CHAIN_RPC`, `GATEWAY_CHAIN_GRPC`, `GATEWAY_CHAIN_ID`, `GATEWAY_PUBLIC_API` — the chain the gateway reads and broadcasts to. A wrong `GATEWAY_CHAIN_ID` invalidates every transaction it signs.
-- `GATEWAY_API_KEYS` — the keys clients present. Empty leaves the chat API open to anyone who can reach the port.
-- `GATEWAY_ADMIN_API_KEY` — empty disables the admin routes entirely, including creating escrows. Set it, or serve only what `GATEWAY_ESCROWS_JSON` seeds.
+- `DEVSHARD_CHAIN_RPC`, `DEVSHARD_CHAIN_GRPC`, `DEVSHARD_CHAIN_ID`, `DEVSHARD_PUBLIC_API` — the chain the gateway reads and broadcasts to. A wrong `DEVSHARD_CHAIN_ID` invalidates every transaction it signs.
+- `DEVSHARD_API_KEYS` — the keys clients present. Empty leaves the chat API open to anyone who can reach the port.
+- `DEVSHARD_ADMIN_API_KEY` — empty disables the admin routes entirely, including creating escrows. Set it, or serve only what `DEVSHARDS_JSON` seeds.
 
 ## Signing keys are named, never pasted
 
-`GATEWAY_ESCROWS_JSON` seeds the escrows to serve at startup, and each entry names the **variable** that holds the key rather than the key:
+`DEVSHARDS_JSON` seeds the escrows to serve at startup, and each entry names the **variable** that holds the key rather than the key:
 
 ```json
-[{"escrow_id": "63362", "private_key_env": "GATEWAY_PRIVATE_KEY", "model": "deepseek-ai/DeepSeek-V4-Flash-0731"}]
+[{"id": "63362", "private_key_env": "DEVSHARD_PRIVATE_KEY", "model": "deepseek-ai/DeepSeek-V4-Flash-0731"}]
 ```
 
-The gateway then reads `GATEWAY_PRIVATE_KEY` from its environment. This is why the admin API takes a variable name too: a key pasted into a request body would reach the logs, the shell history and the audit trail. Leave `GATEWAY_ESCROWS_JSON` empty to start with no escrows and add them through the admin API.
+The gateway then reads `DEVSHARD_PRIVATE_KEY` from its environment. This is why the admin API takes a variable name too: a key pasted into a request body would reach the logs, the shell history and the audit trail. Leave `DEVSHARDS_JSON` empty to start with no escrows and add them through the admin API.
 
 ## Storage
 
-`GATEWAY_STORAGE_HOST_DIR` (default `.devshard-gateway`, next to the compose file) is mounted at `GATEWAY_STORAGE_DIR` in the container. It holds the escrow database, the per-escrow session state and the nonce ledger. Losing it loses the gateway's memory of the escrows it serves, so back it up or point it somewhere durable before running anything that matters.
+`DEVSHARD_STORAGE_HOST_DIR` (default `.devshard-gateway`, next to the compose file) is mounted at `DEVSHARD_STORAGE_DIR` in the container. It holds the escrow database, the per-escrow session state and the nonce ledger. Losing it loses the gateway's memory of the escrows it serves, so back it up or point it somewhere durable before running anything that matters.
 
 ## Tuning without a redeploy
 
@@ -55,5 +55,5 @@ Most limits are also runtime overrides through the admin API, so the values here
 
 Two settings decide behaviour before the first run:
 
-- `GATEWAY_ACCOUNTING_ENABLED` ships as `false` and the built-in default is also off. The old gateway had its ledger **on** unless `DEVSHARD_STATS_ENABLED` turned it off, so an operator porting a config that never set that variable gets no counters, no findings and no `accounting.db` — without an error. Left off, the gateway runs without counters or findings.
-- `GATEWAY_POC_MODE` ships as `relaxed` and the built-in default is also relaxed: the gateway serves through the chain phase that otherwise blocks new inferences. It is the right setting for a gateway that must keep answering across an epoch boundary; set `off` where the chain's own admission must hold.
+- `DEVSHARD_STATS_ENABLED` ships as `false` and the built-in default is also off. The old gateway had its ledger **on** unless `DEVSHARD_STATS_ENABLED` turned it off, so an operator porting a config that never set that variable gets no counters, no findings and no `accounting.db` — without an error. Left off, the gateway runs without counters or findings.
+- `DEVSHARD_POC_REQUEST_MODE` ships as `relaxed` and the built-in default is also relaxed: the gateway serves through the chain phase that otherwise blocks new inferences. It is the right setting for a gateway that must keep answering across an epoch boundary; set `off` where the chain's own admission must hold.

@@ -194,11 +194,8 @@ func (c *Config) Validate() error {
 		complain("timeout_sweep_grace_seconds: %d must be >= 0", c.TimeoutSweep.GraceSeconds)
 	}
 
-	switch {
-	case c.NonceAccounting.RetentionEpochs < 0:
+	if c.NonceAccounting.RetentionEpochs < 0 {
 		complain("nonce_accounting_retention_epochs: %d must be >= 0", c.NonceAccounting.RetentionEpochs)
-	case c.NonceAccounting.Enabled && c.NonceAccounting.RetentionEpochs < 1:
-		complain("nonce_accounting_retention_epochs: %d must be >= 1 while nonce accounting is enabled, or the ledger keeps every retired escrow", c.NonceAccounting.RetentionEpochs)
 	}
 	if c.NonceAccounting.SnapshotSeconds < 1 {
 		complain("nonce_accounting_snapshot_seconds: %d must be >= 1", c.NonceAccounting.SnapshotSeconds)

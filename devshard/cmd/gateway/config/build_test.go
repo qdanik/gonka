@@ -164,8 +164,8 @@ var deployedEnvTemplates = []string{
 }
 
 // Test flow:
-//  1. For each deployed env template file (`deployedEnvTemplates`), export every `GATEWAY_` variable it sets, substituting placeholder secrets, then load and build a config from the real environment via `buildFromTemplate`.
-//  2. Assert the gateway builds without error from its own shipped deploy files.
+//  1. For each deployed env template file (`deployedEnvTemplates`), export every variable it sets the way a shell would, substituting placeholder secrets, then load and build a config from the real environment via `buildFromTemplate`.
+//  2. Assert the gateway builds without error from its own deploy file and from devshardctl's.
 func TestBuildAcceptsTheShippedEnvTemplate(t *testing.T) {
 	for _, path := range deployedEnvTemplates {
 		t.Run(filepath.Base(filepath.Dir(path)), func(t *testing.T) {
@@ -176,8 +176,8 @@ func TestBuildAcceptsTheShippedEnvTemplate(t *testing.T) {
 
 // templateSecrets substitutes the templates' placeholder keys so parsing them is not judged as a real secret.
 var templateSecrets = map[string]string{
-	"API_KEYS":      "sk-template-placeholder",
-	"ADMIN_API_KEY": "sk-admin-template-placeholder",
+	"DEVSHARD_API_KEYS":      "sk-template-placeholder",
+	"DEVSHARD_ADMIN_API_KEY": "sk-admin-template-placeholder",
 }
 
 func buildFromTemplate(t *testing.T, deployedEnvTemplate string) {
@@ -188,7 +188,7 @@ func buildFromTemplate(t *testing.T, deployedEnvTemplate string) {
 	}
 	exported := 0
 	for line := range strings.SplitSeq(string(template), "\n") {
-		assignment, isExport := strings.CutPrefix(strings.TrimSpace(line), "export GATEWAY_")
+		assignment, isExport := strings.CutPrefix(strings.TrimSpace(line), "export ")
 		if !isExport {
 			continue
 		}
@@ -200,10 +200,10 @@ func buildFromTemplate(t *testing.T, deployedEnvTemplate string) {
 		if placeholder, isSecret := templateSecrets[name]; isSecret {
 			value = placeholder
 		}
-		t.Setenv("GATEWAY_"+name, value)
+		t.Setenv(name, unquoteShellValue(value))
 	}
 	if exported == 0 {
-		t.Fatalf("%s exports no GATEWAY_ variable, so this test asserts nothing", deployedEnvTemplate)
+		t.Fatalf("%s exports no variable, so this test asserts nothing", deployedEnvTemplate)
 	}
 
 	values, err := env.Load()
@@ -342,6 +342,49 @@ func TestEjectionThresholdsAreReachableWithoutARedeploy(t *testing.T) {
 			}
 			if got := configuration.Perf.EjectionMaxSeconds; got != testCase.wantMaxSecond {
 				t.Errorf("perf_ejection_max_seconds = %d, want %d", got, testCase.wantMaxSecond)
+			}
+		})
+	}
+}
+
+func unquoteShellValue(value string) string {
+	for _, quote := range []string{"'", `"`} {
+		if len(value) >= 2 && strings.HasPrefix(value, quote) && strings.HasSuffix(value, quote) {
+			return value[1 : len(value)-1]
+		}
+	}
+	return value
+}
+
+// Test flow:
+//  1. Table-driven: each case sets the weight-model limit, the PoC one, both, or neither, as devshardctl's env file would.
+//  2. Build a config from those values.
+//  3. Assert the PoC limit follows the plain one when only a non-default plain one is set, as devshardctl derived it, and is otherwise its own value or default.
+func TestThePoCWeightLimitFollowsThePlainOneAsDevshardctlDerivedIt(t *testing.T) {
+	plainDefault := Defaults().Limits.Concurrency.RequestsPer10000Weight
+	pocDefault := Defaults().Limits.Concurrency.PoCRequestsPer10000Weight
+	testCases := []struct {
+		name    string
+		plain   *float64
+		poc     *float64
+		wantPoC float64
+	}{
+		{name: "neither set keeps the default", wantPoC: pocDefault},
+		{name: "a plain limit alone carries over to PoC", plain: float64Pointer(7.5), wantPoC: 7.5},
+		{name: "a plain limit at its default leaves the PoC default", plain: float64Pointer(plainDefault), wantPoC: pocDefault},
+		{name: "an explicit PoC limit wins", plain: float64Pointer(7.5), poc: float64Pointer(12), wantPoC: 12},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			values := env.Values{MaxConcurrentRequestsPer10000Weight: testCase.plain, PoCMaxConcurrentRequestsPer10000Weight: testCase.poc}
+
+			built, err := Build(values, Overrides{})
+
+			if err != nil {
+				t.Fatalf("Build() = %v", err)
+			}
+			if got := built.Limits.Concurrency.PoCRequestsPer10000Weight; got != testCase.wantPoC {
+				t.Fatalf("PoC limit = %v, want %v", got, testCase.wantPoC)
 			}
 		})
 	}

@@ -25,6 +25,7 @@ import (
 	"devshard/cmd/gateway/engine"
 	"devshard/cmd/gateway/env"
 	"devshard/cmd/gateway/escrow"
+	"devshard/cmd/gateway/filters"
 	"devshard/cmd/gateway/internal/logcapture"
 	"devshard/cmd/gateway/journal"
 	"devshard/cmd/gateway/limits"
@@ -77,9 +78,9 @@ func fakeChain(t *testing.T) string {
 func gatewayEnvironment(t *testing.T) {
 	t.Helper()
 	chainURL := fakeChain(t)
-	t.Setenv("GATEWAY_STORAGE_DIR", t.TempDir())
-	t.Setenv("GATEWAY_CHAIN_GRPC", "127.0.0.1:9090")
-	t.Setenv("GATEWAY_PUBLIC_API", chainURL)
+	t.Setenv("DEVSHARD_STORAGE_DIR", t.TempDir())
+	t.Setenv("DEVSHARD_CHAIN_GRPC", "127.0.0.1:9090")
+	t.Setenv("DEVSHARD_PUBLIC_API", chainURL)
 }
 
 // chainWithoutADial is a chain.Reader that never dials, so no test here reaches a real node.
@@ -185,7 +186,7 @@ func newTestJournal(t *testing.T) *journal.Journal {
 func TestRunServesMetricsAndShutsDownGracefully(t *testing.T) {
 	port := freePort(t)
 	gatewayEnvironment(t)
-	t.Setenv("GATEWAY_PORT", fmt.Sprintf("%d", port))
+	t.Setenv("DEVSHARD_PORT", fmt.Sprintf("%d", port))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	runResult := make(chan error, 1)
@@ -232,7 +233,7 @@ func TestRunServesMetricsAndShutsDownGracefully(t *testing.T) {
 func TestRunServesTheChatCompletionsRouteFromTheComposedServer(t *testing.T) {
 	port := freePort(t)
 	gatewayEnvironment(t)
-	t.Setenv("GATEWAY_PORT", fmt.Sprintf("%d", port))
+	t.Setenv("DEVSHARD_PORT", fmt.Sprintf("%d", port))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	runResult := make(chan error, 1)
@@ -270,24 +271,24 @@ func TestRunServesTheChatCompletionsRouteFromTheComposedServer(t *testing.T) {
 }
 
 // Test flow:
-//  1. Set GATEWAY_PORT to a non-numeric value.
+//  1. Set GATEWAY_MATCH_WAIT_MS, a variable devshardctl never had, to a non-numeric value.
 //  2. Call run().
-//  3. Assert it returns an error naming GATEWAY_PORT.
+//  3. Assert it returns an error naming GATEWAY_MATCH_WAIT_MS.
 func TestRunFailsFastOnInvalidEnvironment(t *testing.T) {
 	gatewayEnvironment(t)
-	t.Setenv("GATEWAY_PORT", "not-a-port")
-	if err := run(context.Background()); err == nil || !strings.Contains(err.Error(), "GATEWAY_PORT") {
-		t.Fatalf("run() with bad env = %v, want error naming GATEWAY_PORT", err)
+	t.Setenv("GATEWAY_MATCH_WAIT_MS", "not-a-number")
+	if err := run(context.Background()); err == nil || !strings.Contains(err.Error(), "GATEWAY_MATCH_WAIT_MS") {
+		t.Fatalf("run() with bad env = %v, want error naming GATEWAY_MATCH_WAIT_MS", err)
 	}
 }
 
 // Test flow:
-//  1. Set GATEWAY_MAX_TOKENS_CAP to 0.
+//  1. Set GATEWAY_MAX_TOKENS_CAP above the largest output any request may ask for.
 //  2. Call run().
 //  3. Assert it returns an error naming max_tokens_cap.
 func TestRunFailsFastOnInvalidMergedConfig(t *testing.T) {
 	gatewayEnvironment(t)
-	t.Setenv("GATEWAY_MAX_TOKENS_CAP", "0")
+	t.Setenv("GATEWAY_MAX_TOKENS_CAP", fmt.Sprintf("%d", filters.MaxOutputTokens+1))
 	if err := run(context.Background()); err == nil || !strings.Contains(err.Error(), "max_tokens_cap") {
 		t.Fatalf("run() with invalid merged config = %v, want max_tokens_cap error", err)
 	}
@@ -414,7 +415,7 @@ func TestEveryOwnerCollectorIsRegisteredOnTheGatewaysRegistry(t *testing.T) {
 //  3. Assert no family name carries the nonce-accounting prefix or names, since the ledger is read through its own API, not a Prometheus scrape.
 func TestTheAccountingLedgerExportsNothingToPrometheus(t *testing.T) {
 	gatewayEnvironment(t)
-	t.Setenv("GATEWAY_ACCOUNTING_ENABLED", "true")
+	t.Setenv("DEVSHARD_STATS_ENABLED", "true")
 	composed := composedGateway(t)
 
 	families, err := composed.telemetry.Registry().Gather()

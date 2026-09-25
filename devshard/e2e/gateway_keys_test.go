@@ -15,7 +15,7 @@ func TestE2E_GatewayTakesAKeyByEnvNameOrNotAtAll(t *testing.T) {
 	env, client := startGatewayEnv(t, e2eEnvOptions{})
 
 	unnamed := testutil.PostJSONRaw(t, client, env.clientURL+"/v1/admin/escrows",
-		map[string]any{"model": "stub-model", "amount": 1000}, testutil.AdminAPIKey)
+		map[string]any{"model_id": "stub-model", "amount": 1000}, testutil.AdminAPIKey)
 	if unnamed.StatusCode != http.StatusBadRequest {
 		t.Errorf("creating an escrow without naming a key env = %d %s, want 400", unnamed.StatusCode, unnamed.Body)
 	}
@@ -68,7 +68,7 @@ func TestE2E_GatewayRefusesAnImportWithNothingToImport(t *testing.T) {
 	env, client := startGatewayEnv(t, e2eEnvOptions{})
 
 	empty := testutil.PostJSONRaw(t, client, env.clientURL+"/v1/admin/devshards/import",
-		map[string]any{"escrow_id": defaultEscrowID}, testutil.AdminAPIKey)
+		map[string]any{"id": defaultEscrowID}, testutil.AdminAPIKey)
 	if empty.StatusCode != http.StatusBadRequest {
 		t.Errorf("importing with no source path = %d %s, want 400", empty.StatusCode, empty.Body)
 	}

@@ -9,8 +9,8 @@ Two stores answer different questions, and confusing them wastes an investigatio
 | | Request records | Nonce ledger |
 | --- | --- | --- |
 | Answers | what became of one client request | where every committed nonce went |
-| Configured by | `GATEWAY_REQUESTS_RETENTION_*` | `GATEWAY_ACCOUNTING_*` |
-| Served at | `GET /v1/requests/{id}` | its own JSON port, `GATEWAY_ACCOUNTING_PORT` |
+| Configured by | `GATEWAY_REQUESTS_RETENTION_*` | `DEVSHARD_STATS_*` |
+| Served at | `GET /v1/requests/{id}` | its own JSON port, `DEVSHARD_STATS_PORT` |
 | Owned by | [`store/`](../store/) | [`accounting/`](../accounting/), fed by [`nonces/`](../nonces/) |
 
 The rest of this document is the nonce ledger.
@@ -52,9 +52,9 @@ The kind is read from the receipt — `engine/settle.go`, `timeoutKind` — and 
 
 ## The surface
 
-`GATEWAY_ACCOUNTING_ENABLED` builds the ledger, and the ledger serves itself only as JSON on its own port, `GATEWAY_ACCOUNTING_PORT` (9091 by default, on every interface). Nothing of it reaches Prometheus: a gauge aggregated from the ledger would walk every nonce it holds under the book's lock on every scrape.
+`DEVSHARD_STATS_ENABLED` builds the ledger, and the ledger serves itself only as JSON on its own port, `DEVSHARD_STATS_PORT` (9091 by default, on every interface). Nothing of it reaches Prometheus: a gauge aggregated from the ledger would walk every nonce it holds under the book's lock on every scrape.
 
-devshardctl spelled these `DEVSHARD_STATS_ENABLED`, `DEVSHARD_STATS_PORT`, `DEVSHARD_STATS_RETENTION_EPOCHS` and `DEVSHARD_STATS_SNAPSHOT_SECONDS`, and each is still read when the gateway's own name is unset. One value does not carry over: a legacy retention of `0` kept everything, and the gateway refuses it while the ledger is on (see "Storage").
+These are devshardctl's names for the same ledger, which devshardctl called "stats". A retention of `0` keeps every epoch, as it did there (see "Storage").
 
 | Route | Answers |
 | --- | --- |
@@ -179,9 +179,9 @@ It holds nonce dispositions, not timings, so no finding speaks to prefill or dec
 
 ## Storage
 
-The ledger lives in memory and is written whole to `accounting.db` under the storage directory every `GATEWAY_ACCOUNTING_SNAPSHOT_SECONDS`, and once more at shutdown. Nothing queries that database except the ledger's own load at start-up, so its tables mirror the in-memory shape one for one and a write is a single transaction that empties and refills them. The transaction is what makes a half-written ledger impossible: a crash or a failed insert rolls back to the previous contents rather than leaving the tables empty.
+The ledger lives in memory and is written whole to `accounting.db` under the storage directory every `DEVSHARD_STATS_SNAPSHOT_SECONDS`, and once more at shutdown. Nothing queries that database except the ledger's own load at start-up, so its tables mirror the in-memory shape one for one and a write is a single transaction that empties and refills them. The transaction is what makes a half-written ledger impossible: a crash or a failed insert rolls back to the previous contents rather than leaving the tables empty.
 
-Retired escrows are pruned once a minute: an escrow that is retired and was created more than `GATEWAY_ACCOUNTING_RETENTION_EPOCHS` epochs before the current one leaves the ledger and the next snapshot together, while a live escrow stays however old it is (`accounting/service.go`, `Service.prune`). The default is 2. At two to three million nonces a day an unpruned ledger grows by close to a gigabyte a day, so the gateway refuses to boot with the ledger on and a retention below 1.
+Retired escrows are pruned once a minute: an escrow that is retired and was created more than `DEVSHARD_STATS_RETENTION_EPOCHS` epochs before the current one leaves the ledger and the next snapshot together, while a live escrow stays however old it is (`accounting/service.go`, `Service.prune`). The default is 2. `0` turns pruning off, as in devshardctl. The ledger is held in memory and written whole on every snapshot, so at two to three million nonces a day an unpruned ledger grows by close to a gigabyte a day in memory and on disk alike, and only a restart with a nonzero retention shrinks it.
 
 A snapshot that cannot be read is reported and the gateway starts with an **empty ledger**: refusing to start over an unreadable observability file would trade a gateway for a graph.
 

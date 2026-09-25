@@ -20,6 +20,7 @@ func Build(values env.Values, overrides Overrides) (*Config, error) {
 	}
 	overrideIfSet(&configuration.Server.AdminAPIKey, values.AdminAPIKey)
 	overrideIfSet(&configuration.Server.DevshardsJSON, values.DevshardsJSON)
+	overrideIfSet(&configuration.Server.MaxConcurrentRuntimeBuilds, values.MaxConcurrentRuntimeBuilds)
 
 	overrideIfSet(&configuration.Chain.GRPCEndpoint, values.ChainGRPC)
 	overrideIfSet(&configuration.Chain.PublicAPIBaseURL, values.PublicAPI)
@@ -28,12 +29,18 @@ func Build(values env.Values, overrides Overrides) (*Config, error) {
 	overrideIfSet(&configuration.Chain.SnapshotMaxAgeSeconds, values.ChainSnapshotMaxAgeSeconds)
 	overrideIfSet(&configuration.Tx.FeeAmount, values.TxFeeAmount)
 	overrideIfSet(&configuration.Tx.GasLimit, values.TxGasLimit)
+	overrideIfSet(&configuration.Tx.FeeDenom, values.TxFeeDenom)
+	overrideIfSet(&configuration.Tx.PollIntervalMS, values.TxPollIntervalMS)
+	overrideIfSet(&configuration.Tx.PollTimeoutMS, values.TxPollTimeoutMS)
 
 	overrideIfSet(&configuration.Limits.DefaultMaxTokens, values.DefaultMaxTokens)
 	overrideIfSet(&configuration.Limits.MaxTokensCap, values.MaxTokensCap)
 	overrideIfSet(&configuration.Limits.ForceUpstreamStreaming, values.ForceUpstreamStreaming)
 	overrideIfSet(&configuration.Limits.MaxBufferedResponseBytes, values.MaxBufferedResponseBytes)
 	overrideIfSet(&configuration.Limits.Concurrency.MaxRequests, values.MaxConcurrentRequests)
+	overrideIfSet(&configuration.Limits.Concurrency.RequestsPer10000Weight, values.MaxConcurrentRequestsPer10000Weight)
+	overrideIfSet(&configuration.Limits.Concurrency.PoCRequestsPer10000Weight, pocWeightLimit(values, Defaults().Limits.Concurrency.RequestsPer10000Weight))
+	overrideIfSet(&configuration.Limits.MaxInputTokensInFlight, values.MaxInputTokensInFlight)
 	overrideIfSet(&configuration.Limits.AdmissionQueueWaitMS, values.AdmissionQueueWaitMS)
 	overrideIfSet(&configuration.Limits.AdmissionQueuePerSlot, values.AdmissionQueuePerSlot)
 	overrideIfSet(&configuration.Scheduler.MatchWaitMS, values.MatchWaitMS)
@@ -188,4 +195,12 @@ func splitCommaSeparated(raw string) []string {
 		}
 	}
 	return cleaned
+}
+
+func pocWeightLimit(values env.Values, plainDefault float64) *float64 {
+	if values.PoCMaxConcurrentRequestsPer10000Weight != nil || values.MaxConcurrentRequestsPer10000Weight == nil ||
+		*values.MaxConcurrentRequestsPer10000Weight == plainDefault {
+		return values.PoCMaxConcurrentRequestsPer10000Weight
+	}
+	return values.MaxConcurrentRequestsPer10000Weight
 }

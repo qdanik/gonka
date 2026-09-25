@@ -25,7 +25,7 @@ func (s *Server) handleAdminDevshards(w http.ResponseWriter, r *http.Request) {
 		if writeControlFailure(w, err) {
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"devshards": records})
+		writeJSON(w, http.StatusOK, map[string]any{"devshards": devshardViews(records)})
 		return
 	}
 	var request AddDevshardRequest
@@ -34,7 +34,7 @@ func (s *Server) handleAdminDevshards(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if strings.TrimSpace(request.EscrowID) == "" || strings.TrimSpace(request.Model) == "" {
-		writeError(w, http.StatusBadRequest, "escrow_id and model are required")
+		writeError(w, http.StatusBadRequest, "id and model are required")
 		return
 	}
 	if strings.TrimSpace(request.PrivateKeyEnv) == "" {
@@ -46,7 +46,7 @@ func (s *Server) handleAdminDevshards(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	auditAdmin("escrow registered", "escrow", request.EscrowID, "model", request.Model)
-	writeJSON(w, http.StatusOK, map[string]any{"escrow_id": request.EscrowID})
+	writeJSON(w, http.StatusOK, map[string]any{"id": request.EscrowID})
 }
 
 func (s *Server) handleAdminDevshardImport(w http.ResponseWriter, r *http.Request) {
@@ -59,7 +59,7 @@ func (s *Server) handleAdminDevshardImport(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	if strings.TrimSpace(request.EscrowID) == "" || strings.TrimSpace(request.SourcePath) == "" {
-		writeError(w, http.StatusBadRequest, "escrow_id and source_path are required")
+		writeError(w, http.StatusBadRequest, "id and source_path are required")
 		return
 	}
 	if strings.TrimSpace(request.PrivateKeyEnv) == "" {
@@ -71,7 +71,7 @@ func (s *Server) handleAdminDevshardImport(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	auditAdmin("escrow imported", "escrow", request.EscrowID, "model", request.Model)
-	writeJSON(w, http.StatusOK, map[string]any{"escrow_id": request.EscrowID})
+	writeJSON(w, http.StatusOK, map[string]any{"id": request.EscrowID})
 }
 
 func (s *Server) handleAdminDevshardDelete(w http.ResponseWriter, r *http.Request) {
@@ -98,7 +98,7 @@ func (s *Server) handleAdminDevshardDelete(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	auditAdmin("escrow deleted with its session storage", "escrow", escrowID, "model", record.Model)
-	writeJSON(w, http.StatusOK, map[string]any{"escrow_id": escrowID, "deleted": true})
+	writeJSON(w, http.StatusOK, map[string]any{"id": escrowID, "deleted": true})
 }
 
 func (s *Server) handleAdminDevshardActivate(w http.ResponseWriter, r *http.Request) {
@@ -127,7 +127,7 @@ func (s *Server) lifecycle(w http.ResponseWriter, r *http.Request, action string
 		return
 	}
 	auditAdmin(action, "escrow", escrowID)
-	writeJSON(w, http.StatusOK, map[string]any{"escrow_id": escrowID})
+	writeJSON(w, http.StatusOK, map[string]any{"id": escrowID})
 }
 
 func (s *Server) handleAdminDevshardParticipants(w http.ResponseWriter, r *http.Request) {
@@ -141,7 +141,7 @@ func (s *Server) handleAdminDevshardParticipants(w http.ResponseWriter, r *http.
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"escrow_id":    escrowID,
+		"id":           escrowID,
 		"participants": session.ParticipantKeys(),
 		"slots":        session.HostParticipantKeyList(),
 	})

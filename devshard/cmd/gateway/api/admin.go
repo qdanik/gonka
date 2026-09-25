@@ -88,7 +88,7 @@ func (s *Server) handleAdminEscrows(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if strings.TrimSpace(request.Model) == "" || request.Amount == 0 {
-		writeError(w, http.StatusBadRequest, "model and a non-zero amount are required")
+		writeError(w, http.StatusBadRequest, "model_id and a non-zero amount are required")
 		return
 	}
 	if strings.TrimSpace(request.PrivateKeyEnv) == "" {
@@ -112,7 +112,7 @@ func (s *Server) handleAdminSuspiciousHosts(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	if r.Method == http.MethodGet {
-		writeJSON(w, http.StatusOK, map[string]any{"hosts": s.suspicious.List()})
+		writeJSON(w, http.StatusOK, map[string]any{"suspicious_hosts": s.suspicious.List()})
 		return
 	}
 	var request suspiciousHostRequest
@@ -133,7 +133,7 @@ func (s *Server) handleAdminSuspiciousHosts(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	auditAdmin(action, "participant", participantKey)
-	writeJSON(w, http.StatusOK, map[string]any{"hosts": s.suspicious.List()})
+	writeJSON(w, http.StatusOK, map[string]any{"suspicious_hosts": s.suspicious.List()})
 }
 
 func (s *Server) handleAdminUnquarantine(w http.ResponseWriter, r *http.Request) {
@@ -173,7 +173,7 @@ func (s *Server) handleAdminResetAccountingEpoch(w http.ResponseWriter, r *http.
 		return
 	}
 	auditAdmin("accounting epoch reset", "epoch", epoch, "escrows", cleared)
-	writeJSON(w, http.StatusOK, map[string]any{"reset": true, "epoch": epoch, "escrows": cleared})
+	writeJSON(w, http.StatusOK, map[string]any{"reset": true, "epoch": epoch, "escrows_removed": cleared})
 }
 
 func (s *Server) handleDebugRotation(w http.ResponseWriter, r *http.Request) {
@@ -184,7 +184,7 @@ func (s *Server) handleDebugRotation(w http.ResponseWriter, r *http.Request) {
 	if writeControlFailure(w, err) {
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"rotation": statuses})
+	writeJSON(w, http.StatusOK, map[string]any{"latest": rotationViews(statuses)})
 }
 
 // See ../heights/README.md.
@@ -227,7 +227,7 @@ func (s *Server) handleDebugMemstats(w http.ResponseWriter, r *http.Request) {
 		"stack_inuse":     memory.StackInuse,
 		"next_gc":         memory.NextGC,
 		"num_gc":          memory.NumGC,
-		"loaded_escrows":  len(s.routableEscrows()),
+		"loaded_runtimes": len(s.routableEscrows()),
 		"num_goroutine":   runtime.NumGoroutine(),
 		"gc_cpu_fraction": memory.GCCPUFraction,
 	})

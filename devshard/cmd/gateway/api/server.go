@@ -69,25 +69,25 @@ type ControlStore interface {
 
 // CreateEscrowRequest names the variable holding the signing key, never the key. See operations.md, "What is exposed".
 type CreateEscrowRequest struct {
-	Model         string `json:"model"`
+	Model         string `json:"model_id"`
 	Amount        uint64 `json:"amount"`
 	PrivateKeyEnv string `json:"private_key_env"`
 	Activate      bool   `json:"activate"`
 }
 
 type AddDevshardRequest struct {
-	EscrowID      string `json:"escrow_id"`
+	EscrowID      string `json:"id"`
 	Model         string `json:"model"`
 	PrivateKeyEnv string `json:"private_key_env"`
 	Activate      bool   `json:"activate"`
 }
 
 type ImportDevshardRequest struct {
-	EscrowID      string `json:"escrow_id"`
+	EscrowID      string `json:"id"`
 	Model         string `json:"model"`
 	PrivateKeyEnv string `json:"private_key_env"`
 	SourcePath    string `json:"source_path"`
-	Activate      bool   `json:"activate"`
+	Activate      bool   `json:"active"`
 }
 
 // SettleDevshardsRequest is the batch settle body. See docs/operations.md, "Settling a list of escrows".

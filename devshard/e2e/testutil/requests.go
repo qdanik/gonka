@@ -331,7 +331,7 @@ func EscrowBalance(t *testing.T, client *http.Client, clientURL, escrowID, beare
 	var state struct {
 		Status struct {
 			Devshards []struct {
-				EscrowID string `json:"escrow_id"`
+				EscrowID string `json:"id"`
 				Balance  uint64 `json:"balance"`
 			} `json:"devshards"`
 		} `json:"status"`
@@ -348,7 +348,7 @@ func EscrowBalance(t *testing.T, client *http.Client, clientURL, escrowID, beare
 
 // DevshardRow is one escrow as the gateway's admin listing stores it.
 type DevshardRow struct {
-	EscrowID          string `json:"escrow_id"`
+	EscrowID          string `json:"id"`
 	Active            bool   `json:"active"`
 	OnHold            bool   `json:"on_hold"`
 	SettlementPending bool   `json:"settlement_pending"`

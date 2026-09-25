@@ -186,6 +186,9 @@ type fakeOperations struct {
 	create   chain.CreateEscrowResult
 	settle   chain.SettleEscrowResult
 	onSettle func(escrowID string)
+	created  []CreateEscrowRequest
+	added    []AddDevshardRequest
+	imported []ImportDevshardRequest
 }
 
 func (f *fakeOperations) record(name string) error {
@@ -202,15 +205,24 @@ func (f *fakeOperations) recordedCalls() []string {
 	return slices.Clone(f.calls)
 }
 
-func (f *fakeOperations) CreateEscrow(context.Context, CreateEscrowRequest) (chain.CreateEscrowResult, error) {
+func (f *fakeOperations) CreateEscrow(_ context.Context, request CreateEscrowRequest) (chain.CreateEscrowResult, error) {
+	f.mu.Lock()
+	f.created = append(f.created, request)
+	f.mu.Unlock()
 	return f.create, f.record("create")
 }
 
-func (f *fakeOperations) AddDevshard(context.Context, AddDevshardRequest) error {
+func (f *fakeOperations) AddDevshard(_ context.Context, request AddDevshardRequest) error {
+	f.mu.Lock()
+	f.added = append(f.added, request)
+	f.mu.Unlock()
 	return f.record("add")
 }
 
-func (f *fakeOperations) ImportDevshard(context.Context, ImportDevshardRequest) error {
+func (f *fakeOperations) ImportDevshard(_ context.Context, request ImportDevshardRequest) error {
+	f.mu.Lock()
+	f.imported = append(f.imported, request)
+	f.mu.Unlock()
 	return f.record("import")
 }
 
@@ -490,14 +502,14 @@ func TestEveryRouteAnswersItsDocumentedStatus(t *testing.T) {
 		{name: "admin settings wrong method", method: http.MethodDelete, target: "/v1/admin/settings", headers: adminHeaders(), want: http.StatusMethodNotAllowed},
 
 		{name: "admin devshards list", method: http.MethodGet, target: "/v1/admin/devshards", headers: adminHeaders(), want: http.StatusOK},
-		{name: "admin devshards add", method: http.MethodPost, target: "/v1/admin/devshards", body: `{"escrow_id":"11","model":"qwen","private_key_env":"GATEWAY_KEY_11"}`, headers: adminHeaders(), want: http.StatusOK},
-		{name: "admin devshards add without model", method: http.MethodPost, target: "/v1/admin/devshards", body: `{"escrow_id":"11"}`, headers: adminHeaders(), want: http.StatusBadRequest},
-		{name: "admin devshards add without a key variable", method: http.MethodPost, target: "/v1/admin/devshards", body: `{"escrow_id":"11","model":"qwen"}`, headers: adminHeaders(), want: http.StatusBadRequest},
+		{name: "admin devshards add", method: http.MethodPost, target: "/v1/admin/devshards", body: `{"id":"11","model":"qwen","private_key_env":"GATEWAY_KEY_11"}`, headers: adminHeaders(), want: http.StatusOK},
+		{name: "admin devshards add without model", method: http.MethodPost, target: "/v1/admin/devshards", body: `{"id":"11"}`, headers: adminHeaders(), want: http.StatusBadRequest},
+		{name: "admin devshards add without a key variable", method: http.MethodPost, target: "/v1/admin/devshards", body: `{"id":"11","model":"qwen"}`, headers: adminHeaders(), want: http.StatusBadRequest},
 		{name: "admin devshards wrong method", method: http.MethodDelete, target: "/v1/admin/devshards", headers: adminHeaders(), want: http.StatusMethodNotAllowed},
 
-		{name: "admin import", method: http.MethodPost, target: "/v1/admin/devshards/import", body: `{"escrow_id":"11","source_path":"/tmp/x","private_key_env":"GATEWAY_KEY_11"}`, headers: adminHeaders(), want: http.StatusOK},
-		{name: "admin import without source", method: http.MethodPost, target: "/v1/admin/devshards/import", body: `{"escrow_id":"11"}`, headers: adminHeaders(), want: http.StatusBadRequest},
-		{name: "admin import without a key variable", method: http.MethodPost, target: "/v1/admin/devshards/import", body: `{"escrow_id":"11","source_path":"/tmp/x"}`, headers: adminHeaders(), want: http.StatusBadRequest},
+		{name: "admin import", method: http.MethodPost, target: "/v1/admin/devshards/import", body: `{"id":"11","source_path":"/tmp/x","private_key_env":"GATEWAY_KEY_11"}`, headers: adminHeaders(), want: http.StatusOK},
+		{name: "admin import without source", method: http.MethodPost, target: "/v1/admin/devshards/import", body: `{"id":"11"}`, headers: adminHeaders(), want: http.StatusBadRequest},
+		{name: "admin import without a key variable", method: http.MethodPost, target: "/v1/admin/devshards/import", body: `{"id":"11","source_path":"/tmp/x"}`, headers: adminHeaders(), want: http.StatusBadRequest},
 
 		{name: "admin delete inactive", method: http.MethodDelete, target: "/v1/admin/devshards/7", headers: adminHeaders(), want: http.StatusOK},
 		{name: "admin delete active", method: http.MethodDelete, target: "/v1/admin/devshards/9", headers: adminHeaders(), want: http.StatusConflict},
@@ -512,10 +524,10 @@ func TestEveryRouteAnswersItsDocumentedStatus(t *testing.T) {
 		{name: "admin settle unknown", method: http.MethodPost, target: "/v1/admin/devshards/404/settle", headers: adminHeaders(), want: http.StatusNotFound},
 		{name: "admin participants unknown", method: http.MethodGet, target: "/v1/admin/devshards/404/participants", headers: adminHeaders(), want: http.StatusNotFound},
 
-		{name: "admin escrows", method: http.MethodPost, target: "/v1/admin/escrows", body: `{"model":"qwen","amount":10,"private_key_env":"KEY"}`, headers: adminHeaders(), want: http.StatusOK},
-		{name: "admin escrows without key", method: http.MethodPost, target: "/v1/admin/escrows", body: `{"model":"qwen","amount":10}`, headers: adminHeaders(), want: http.StatusBadRequest},
-		{name: "admin escrows without amount", method: http.MethodPost, target: "/v1/admin/escrows", body: `{"model":"qwen"}`, headers: adminHeaders(), want: http.StatusBadRequest},
-		{name: "admin escrows with a raw private key are refused at the boundary, not as a server error", method: http.MethodPost, target: "/v1/admin/escrows", body: `{"model":"qwen","amount":10,"private_key":"deadbeef"}`, headers: adminHeaders(), want: http.StatusBadRequest},
+		{name: "admin escrows", method: http.MethodPost, target: "/v1/admin/escrows", body: `{"model_id":"qwen","amount":10,"private_key_env":"KEY"}`, headers: adminHeaders(), want: http.StatusOK},
+		{name: "admin escrows without key", method: http.MethodPost, target: "/v1/admin/escrows", body: `{"model_id":"qwen","amount":10}`, headers: adminHeaders(), want: http.StatusBadRequest},
+		{name: "admin escrows without amount", method: http.MethodPost, target: "/v1/admin/escrows", body: `{"model_id":"qwen"}`, headers: adminHeaders(), want: http.StatusBadRequest},
+		{name: "admin escrows with a raw private key are refused at the boundary, not as a server error", method: http.MethodPost, target: "/v1/admin/escrows", body: `{"model_id":"qwen","amount":10,"private_key":"deadbeef"}`, headers: adminHeaders(), want: http.StatusBadRequest},
 
 		{name: "suspicious list", method: http.MethodGet, target: "/v1/admin/suspicious-hosts", headers: adminHeaders(), want: http.StatusOK},
 		{name: "suspicious add", method: http.MethodPost, target: "/v1/admin/suspicious-hosts", body: `{"participant_key":"gonka1abc"}`, headers: adminHeaders(), want: http.StatusOK},

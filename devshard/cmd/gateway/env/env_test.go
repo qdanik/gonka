@@ -2,17 +2,17 @@ package env
 
 import (
 	"errors"
-	"os"
 	"strings"
 	"testing"
 )
 
 // Test flow:
-//  1. Clear the port variable to empty (`t.Setenv` treats empty as unset), asserting pristine-environment behavior.
+//  1. Clear the port variable to empty (`t.Setenv` treats empty as unset) and set its retired GATEWAY_ spelling.
 //  2. Call `Load`.
 //  3. Assert `Port` comes back nil.
 func TestLoadReturnsNilForUnsetVariables(t *testing.T) {
-	t.Setenv("GATEWAY_PORT", "")
+	t.Setenv("DEVSHARD_PORT", "")
+	t.Setenv("GATEWAY_PORT", "9191")
 
 	values, err := Load()
 	if err != nil {
@@ -28,10 +28,10 @@ func TestLoadReturnsNilForUnsetVariables(t *testing.T) {
 //  2. Call `Load`.
 //  3. Assert each parsed field matches its set value.
 func TestLoadParsesTypedValues(t *testing.T) {
-	t.Setenv("GATEWAY_PORT", "9191")
-	t.Setenv("GATEWAY_ROTATION_ENABLED", "true")
-	t.Setenv("GATEWAY_DISABLED", "true")
-	t.Setenv("GATEWAY_TX_FEE_AMOUNT", "500")
+	t.Setenv("DEVSHARD_PORT", "9191")
+	t.Setenv("DEVSHARD_ESCROW_ROTATION_ENABLED", "true")
+	t.Setenv("DEVSHARD_GATEWAY_DISABLED", "true")
+	t.Setenv("DEVSHARD_TX_FEE_AMOUNT", "500")
 	t.Setenv("GATEWAY_PERF_EWMA_HALFLIFE_SECONDS", "900")
 	t.Setenv("GATEWAY_CAPTURE_SAMPLE_RATE", "0.25")
 	t.Setenv("GATEWAY_CAPTURE_MAX_BYTES", "4096")
@@ -68,8 +68,8 @@ func TestLoadParsesTypedValues(t *testing.T) {
 //  2. Call `Load`.
 //  3. Assert the string value is trimmed and the blank int variable loads as unset (nil).
 func TestLoadWhitespaceIsTrimmedAndEmptyMeansUnset(t *testing.T) {
-	t.Setenv("GATEWAY_DISABLED_MESSAGE", "  gateway paused  ")
-	t.Setenv("GATEWAY_TX_GAS_LIMIT", "   ")
+	t.Setenv("DEVSHARD_GATEWAY_DISABLED_MESSAGE", "  gateway paused  ")
+	t.Setenv("DEVSHARD_TX_GAS_LIMIT", "   ")
 
 	values, err := Load()
 	if err != nil {
@@ -84,12 +84,12 @@ func TestLoadWhitespaceIsTrimmedAndEmptyMeansUnset(t *testing.T) {
 }
 
 // Test flow:
-//  1. Set three variables of different types to malformed values.
+//  1. Set three gateway-only variables of different types to malformed values.
 //  2. Call `Load`.
 //  3. Assert it returns an error naming all three variables, since errors must accumulate rather than stop at the first.
-func TestLoadRejectsMalformedValuesWithVariableName(t *testing.T) {
-	t.Setenv("GATEWAY_PORT", "not-a-number")
-	t.Setenv("GATEWAY_DISABLED", "maybe")
+func TestLoadRejectsMalformedGatewayValuesWithVariableName(t *testing.T) {
+	t.Setenv("GATEWAY_MATCH_WAIT_MS", "not-a-number")
+	t.Setenv("GATEWAY_WARM_NEW_ESCROWS", "maybe")
 	t.Setenv("GATEWAY_CAPTURE_SAMPLE_RATE", "half")
 
 	_, err := Load()
@@ -97,26 +97,285 @@ func TestLoadRejectsMalformedValuesWithVariableName(t *testing.T) {
 		t.Fatal("Load() with malformed values: want error, got nil")
 	}
 	message := err.Error()
-	if !strings.Contains(message, "GATEWAY_PORT") {
-		t.Fatalf("error %q does not name GATEWAY_PORT", message)
-	}
-	if !strings.Contains(message, "GATEWAY_CAPTURE_SAMPLE_RATE") {
-		t.Fatalf("error %q does not name GATEWAY_CAPTURE_SAMPLE_RATE", message)
-	}
-	if !strings.Contains(message, "GATEWAY_DISABLED") {
-		t.Fatalf("error %q does not name GATEWAY_DISABLED (errors must accumulate, not stop at first)", message)
+	for _, name := range []string{"GATEWAY_MATCH_WAIT_MS", "GATEWAY_WARM_NEW_ESCROWS", "GATEWAY_CAPTURE_SAMPLE_RATE"} {
+		if !strings.Contains(message, name) {
+			t.Fatalf("error %q does not name %s (errors must accumulate, not stop at first)", message, name)
+		}
 	}
 }
 
 // Test flow:
-//  1. Set the PoC mode variable to a value outside its enum.
+//  1. Set devshardctl variables to values devshardctl would have ignored or read as "use the default": unparsable, zero, or negative.
 //  2. Call `Load`.
-//  3. Assert it returns an error naming the variable.
-func TestLoadRejectsInvalidPoCMode(t *testing.T) {
-	t.Setenv("GATEWAY_POC_MODE", "aggressive")
-	_, err := Load()
-	if err == nil || !strings.Contains(err.Error(), "GATEWAY_POC_MODE") {
-		t.Fatalf("want error naming GATEWAY_POC_MODE, got %v", err)
+//  3. Assert `Load` succeeds and leaves each field unset, so the gateway's default applies the way devshardctl's did.
+func TestADevshardctlValueDevshardctlIgnoredIsIgnoredNotRefused(t *testing.T) {
+	for name, value := range map[string]string{
+		"DEVSHARD_PORT":                                    "eighty",
+		"DEVSHARD_GATEWAY_DISABLED":                        "maybe",
+		"DEVSHARD_TX_FEE_AMOUNT":                           "0",
+		"DEVSHARD_TX_POLL_INTERVAL_MS":                     "-5",
+		"DEVSHARD_STATS_SNAPSHOT_SECONDS":                  "0",
+		"DEVSHARD_STATS_RETENTION_EPOCHS":                  "-1",
+		"DEVSHARD_CHAT_CACHE_MAX_BYTES":                    "0",
+		"DEVSHARD_POC_REQUEST_MODE":                        "aggressive",
+		"DEVSHARD_GATEWAY_HOST_PING_INTERVAL":              "fifteen",
+		"DEVSHARD_GATEWAY_HOST_PING_TIMEOUT":               "0s",
+		"GATEWAY_DEFAULT_MAX_TOKENS":                       "0",
+		"GATEWAY_MAX_TOKENS_CAP":                           "0",
+		"GATEWAY_MAX_CONCURRENT_REQUESTS_PER_10000_WEIGHT": "0",
+		"GATEWAY_MAX_INPUT_TOKENS_IN_FLIGHT":               "-1",
+		"DEVSHARD_ESCROW_ROTATION_PRE_POC_BLOCKS":          "-300",
+		"GATEWAY_MAX_CONCURRENT_REQUESTS":                  "lots",
+		"DEVSHARD_MAX_CONCURRENT_RUNTIME_BUILDS":           "0",
+	} {
+		t.Setenv(name, value)
+	}
+
+	values, err := Load()
+	if err != nil {
+		t.Fatalf("Load() = %v, want the unusable devshardctl values left unset", err)
+	}
+	for name, isSet := range map[string]bool{
+		"Port":                                values.Port != nil,
+		"Disabled":                            values.Disabled != nil,
+		"TxFeeAmount":                         values.TxFeeAmount != nil,
+		"TxPollIntervalMS":                    values.TxPollIntervalMS != nil,
+		"NonceAccountingSnapshotSeconds":      values.NonceAccountingSnapshotSeconds != nil,
+		"NonceAccountingRetentionEpochs":      values.NonceAccountingRetentionEpochs != nil,
+		"ChatCacheMaxBytes":                   values.ChatCacheMaxBytes != nil,
+		"PoCMode":                             values.PoCMode != nil,
+		"HostPingIntervalMS":                  values.HostPingIntervalMS != nil,
+		"HostPingTimeoutMS":                   values.HostPingTimeoutMS != nil,
+		"DefaultMaxTokens":                    values.DefaultMaxTokens != nil,
+		"MaxTokensCap":                        values.MaxTokensCap != nil,
+		"MaxConcurrentRequestsPer10000Weight": values.MaxConcurrentRequestsPer10000Weight != nil,
+		"MaxInputTokensInFlight":              values.MaxInputTokensInFlight != nil,
+		"RotationPrePoCBlocks":                values.RotationPrePoCBlocks != nil,
+		"MaxConcurrentRequests":               values.MaxConcurrentRequests != nil,
+		"MaxConcurrentRuntimeBuilds":          values.MaxConcurrentRuntimeBuilds != nil,
+	} {
+		if isSet {
+			t.Errorf("%s is set, want unset so the default applies", name)
+		}
+	}
+}
+
+// Test flow:
+//  1. Set the renamed gateway spellings the gateway used before it went back to devshardctl's names, and clear the names it reads now.
+//  2. Call `Load`.
+//  3. Assert none of them is read.
+func TestTheRenamedGatewaySpellingsAreNotRead(t *testing.T) {
+	for _, name := range []string{
+		"GATEWAY_PORT", "GATEWAY_STORAGE_DIR", "GATEWAY_ESCROWS_JSON", "GATEWAY_CHAIN_GRPC",
+		"GATEWAY_POC_MODE", "GATEWAY_ROTATION_ENABLED", "GATEWAY_ACCOUNTING_ENABLED", "GATEWAY_HOST_PING_INTERVAL_MS",
+	} {
+		t.Setenv(name, "1")
+	}
+	for _, name := range []string{
+		"DEVSHARD_PORT", "DEVSHARD_STORAGE_DIR", "DEVSHARDS_JSON", "DEVSHARD_CHAIN_GRPC", "NODE_GRPC_URL",
+		"DEVSHARD_POC_REQUEST_MODE", "DEVSHARD_ESCROW_ROTATION_ENABLED", "DEVSHARD_STATS_ENABLED", "DEVSHARD_GATEWAY_HOST_PING_INTERVAL",
+	} {
+		t.Setenv(name, "")
+	}
+
+	values, err := Load()
+	if err != nil {
+		t.Fatalf("Load() = %v, want nil", err)
+	}
+	if values.Port != nil || values.StorageDir != nil || values.DevshardsJSON != nil || values.ChainGRPC != nil ||
+		values.PoCMode != nil || values.RotationEnabled != nil || values.NonceAccountingEnabled != nil || values.HostPingIntervalMS != nil {
+		t.Fatalf("a renamed GATEWAY_ spelling was read: %+v", values)
+	}
+}
+
+// Test flow:
+//  1. Set every devshardctl host-ping and height-sync variable, in devshardctl's own spellings (durations, on/off/yes).
+//  2. Call `Load`.
+//  3. Assert each loads, the durations converted to milliseconds.
+func TestTheHostPingAndHeightSyncVariablesAreReadTheWayDevshardctlReadThem(t *testing.T) {
+	t.Setenv("DEVSHARD_GATEWAY_HOST_PING_DISABLED", "yes")
+	t.Setenv("DEVSHARD_GATEWAY_HOST_PING_INTERVAL", "15s")
+	t.Setenv("DEVSHARD_GATEWAY_HOST_PING_TIMEOUT", "2s")
+	t.Setenv("DEVSHARD_GATEWAY_HOST_PING_CONCURRENCY", "8")
+	t.Setenv("DEVSHARD_HEIGHTSYNC_K", "12")
+	t.Setenv("DEVSHARD_HEIGHTSYNC_SLOTS", "3")
+	t.Setenv("DEVSHARD_REQUIRE_HEIGHT_SEED", "off")
+	t.Setenv("DEVSHARD_GATEWAY_CHAIN_ORACLE", "on")
+
+	values, err := Load()
+	if err != nil {
+		t.Fatalf("Load(): %v", err)
+	}
+	if values.HostPingDisabled == nil || !*values.HostPingDisabled {
+		t.Errorf("HostPingDisabled = %v, want true from yes", values.HostPingDisabled)
+	}
+	if values.HostPingIntervalMS == nil || *values.HostPingIntervalMS != 15_000 {
+		t.Errorf("HostPingIntervalMS = %v, want 15000 from the duration 15s", values.HostPingIntervalMS)
+	}
+	if values.HostPingTimeoutMS == nil || *values.HostPingTimeoutMS != 2_000 {
+		t.Errorf("HostPingTimeoutMS = %v, want 2000 from the duration 2s", values.HostPingTimeoutMS)
+	}
+	if values.HostPingConcurrency == nil || *values.HostPingConcurrency != 8 {
+		t.Errorf("HostPingConcurrency = %v, want 8", values.HostPingConcurrency)
+	}
+	if values.HeightSyncAnchorK == nil || *values.HeightSyncAnchorK != 12 {
+		t.Errorf("HeightSyncAnchorK = %v, want 12", values.HeightSyncAnchorK)
+	}
+	if values.HeightSyncAnchorSlots == nil || *values.HeightSyncAnchorSlots != 3 {
+		t.Errorf("HeightSyncAnchorSlots = %v, want 3", values.HeightSyncAnchorSlots)
+	}
+	if values.HeightSyncRequireSeed == nil || *values.HeightSyncRequireSeed {
+		t.Errorf("HeightSyncRequireSeed = %v, want false from off", values.HeightSyncRequireSeed)
+	}
+	if values.HeightSyncChainOracle == nil || !*values.HeightSyncChainOracle {
+		t.Errorf("HeightSyncChainOracle = %v, want true from on", values.HeightSyncChainOracle)
+	}
+}
+
+// Test flow:
+//  1. Table-driven: each case sets one of the two height-sync switches to a spelling, including ones outside the boolean grammar.
+//  2. Call `Load`.
+//  3. Assert the switch reads the way devshardctl read it: the chain oracle is on only for true/1/on, and the seed gate is off only for 0/false/off/no.
+func TestTheHeightSyncSwitchesKeepDevshardctlsExactSpellings(t *testing.T) {
+	testCases := []struct {
+		name     string
+		variable string
+		raw      string
+		want     bool
+	}{
+		{name: "the chain oracle turns on for on", variable: "DEVSHARD_GATEWAY_CHAIN_ORACLE", raw: "ON", want: true},
+		{name: "the chain oracle stays off for yes", variable: "DEVSHARD_GATEWAY_CHAIN_ORACLE", raw: "yes", want: false},
+		{name: "the chain oracle stays off for an unknown value", variable: "DEVSHARD_GATEWAY_CHAIN_ORACLE", raw: "maybe", want: false},
+		{name: "the seed gate turns off for no", variable: "DEVSHARD_REQUIRE_HEIGHT_SEED", raw: "no", want: false},
+		{name: "the seed gate stays on for f", variable: "DEVSHARD_REQUIRE_HEIGHT_SEED", raw: "f", want: true},
+		{name: "the seed gate stays on for an unknown value", variable: "DEVSHARD_REQUIRE_HEIGHT_SEED", raw: "maybe", want: true},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Setenv(testCase.variable, testCase.raw)
+
+			values, err := Load()
+			if err != nil {
+				t.Fatalf("Load(): %v", err)
+			}
+			switchValue := values.HeightSyncChainOracle
+			if testCase.variable == "DEVSHARD_REQUIRE_HEIGHT_SEED" {
+				switchValue = values.HeightSyncRequireSeed
+			}
+			if switchValue == nil || *switchValue != testCase.want {
+				t.Fatalf("%s=%s read as %v, want %v", testCase.variable, testCase.raw, switchValue, testCase.want)
+			}
+		})
+	}
+}
+
+// Test flow:
+//  1. Set the PoC mode in devshardctl's case-insensitive spelling.
+//  2. Call `Load`.
+//  3. Assert it loads lower-cased.
+func TestThePoCModeIsReadCaseInsensitively(t *testing.T) {
+	t.Setenv("DEVSHARD_POC_REQUEST_MODE", " Relaxed ")
+
+	values, err := Load()
+	if err != nil {
+		t.Fatalf("Load(): %v", err)
+	}
+	if values.PoCMode == nil || *values.PoCMode != PoCModeRelaxed {
+		t.Fatalf("PoCMode = %v, want %q", values.PoCMode, PoCModeRelaxed)
+	}
+}
+
+// Test flow:
+//  1. Subtest "the chain endpoints fall back to the node's variables": set only NODE_GRPC_URL and NODE_RPC_URL and assert both are read.
+//  2. Subtest "the devshardctl name wins over the node's": set both spellings and assert the DEVSHARD_ one wins.
+func TestTheChainEndpointsFallBackToTheNodeVariables(t *testing.T) {
+	t.Run("the chain endpoints fall back to the node's variables", func(t *testing.T) {
+		t.Setenv("NODE_GRPC_URL", "node:9090")
+		t.Setenv("NODE_RPC_URL", "http://node:26657")
+
+		values, err := Load()
+		if err != nil {
+			t.Fatalf("Load(): %v", err)
+		}
+		if values.ChainGRPC == nil || *values.ChainGRPC != "node:9090" {
+			t.Errorf("ChainGRPC = %v, want node:9090 from NODE_GRPC_URL", values.ChainGRPC)
+		}
+		if values.ChainRPC == nil || *values.ChainRPC != "http://node:26657" {
+			t.Errorf("ChainRPC = %v, want the value of NODE_RPC_URL", values.ChainRPC)
+		}
+	})
+
+	t.Run("the devshardctl name wins over the node's", func(t *testing.T) {
+		t.Setenv("NODE_GRPC_URL", "node:9090")
+		t.Setenv("DEVSHARD_CHAIN_GRPC", "chain:9090")
+
+		values, err := Load()
+		if err != nil {
+			t.Fatalf("Load(): %v", err)
+		}
+		if values.ChainGRPC == nil || *values.ChainGRPC != "chain:9090" {
+			t.Errorf("ChainGRPC = %v, want chain:9090 from DEVSHARD_CHAIN_GRPC", values.ChainGRPC)
+		}
+	})
+}
+
+// Test flow:
+//  1. Set the transaction, weight-model, input-token and runtime-build variables devshardctl read.
+//  2. Call `Load`.
+//  3. Assert each loads with its set value.
+func TestTheDevshardctlLimitsAndTransactionVariablesAreRead(t *testing.T) {
+	t.Setenv("DEVSHARD_TX_FEE_DENOM", "ngonka")
+	t.Setenv("DEVSHARD_TX_POLL_INTERVAL_MS", "250")
+	t.Setenv("DEVSHARD_TX_POLL_TIMEOUT_MS", "9000")
+	t.Setenv("GATEWAY_MAX_CONCURRENT_REQUESTS_PER_10000_WEIGHT", "7.5")
+	t.Setenv("GATEWAY_POC_MAX_CONCURRENT_REQUESTS_PER_10000_WEIGHT", "12")
+	t.Setenv("GATEWAY_MAX_INPUT_TOKENS_IN_FLIGHT", "0")
+	t.Setenv("DEVSHARD_MAX_CONCURRENT_RUNTIME_BUILDS", "4")
+
+	values, err := Load()
+	if err != nil {
+		t.Fatalf("Load(): %v", err)
+	}
+	if values.TxFeeDenom == nil || *values.TxFeeDenom != "ngonka" {
+		t.Errorf("TxFeeDenom = %v, want ngonka", values.TxFeeDenom)
+	}
+	if values.TxPollIntervalMS == nil || *values.TxPollIntervalMS != 250 {
+		t.Errorf("TxPollIntervalMS = %v, want 250", values.TxPollIntervalMS)
+	}
+	if values.TxPollTimeoutMS == nil || *values.TxPollTimeoutMS != 9000 {
+		t.Errorf("TxPollTimeoutMS = %v, want 9000", values.TxPollTimeoutMS)
+	}
+	if values.MaxConcurrentRequestsPer10000Weight == nil || *values.MaxConcurrentRequestsPer10000Weight != 7.5 {
+		t.Errorf("MaxConcurrentRequestsPer10000Weight = %v, want 7.5", values.MaxConcurrentRequestsPer10000Weight)
+	}
+	if values.PoCMaxConcurrentRequestsPer10000Weight == nil || *values.PoCMaxConcurrentRequestsPer10000Weight != 12 {
+		t.Errorf("PoCMaxConcurrentRequestsPer10000Weight = %v, want 12", values.PoCMaxConcurrentRequestsPer10000Weight)
+	}
+	if values.MaxInputTokensInFlight == nil || *values.MaxInputTokensInFlight != 0 {
+		t.Errorf("MaxInputTokensInFlight = %v, want 0", values.MaxInputTokensInFlight)
+	}
+	if values.MaxConcurrentRuntimeBuilds == nil || *values.MaxConcurrentRuntimeBuilds != 4 {
+		t.Errorf("MaxConcurrentRuntimeBuilds = %v, want 4", values.MaxConcurrentRuntimeBuilds)
+	}
+}
+
+// Test flow:
+//  1. Set the request capture's enabled and directory variables under devshardctl's names.
+//  2. Call `Load`.
+//  3. Assert both load.
+func TestTheRequestCaptureAnswersToTheDevshardctlNames(t *testing.T) {
+	t.Setenv("DEVSHARD_REQUEST_CAPTURE_ENABLED", "true")
+	t.Setenv("DEVSHARD_REQUEST_CAPTURE_DIR", "/captures")
+
+	values, err := Load()
+	if err != nil {
+		t.Fatalf("Load(): %v", err)
+	}
+	if values.CaptureEnabled == nil || !*values.CaptureEnabled {
+		t.Errorf("CaptureEnabled = %v, want true", values.CaptureEnabled)
+	}
+	if values.CaptureDir == nil || *values.CaptureDir != "/captures" {
+		t.Errorf("CaptureDir = %v, want /captures", values.CaptureDir)
 	}
 }
 
@@ -144,183 +403,25 @@ func TestPrivateKeyReadsTheNamedVariableAndNamesOnlyTheVariableOnFailure(t *test
 }
 
 // Test flow:
-//  1. Subtest "the legacy name is read when the gateway name is unset": set devshardctl-spelled variables and assert `Load` reads them (the shipped deployment template still spells these the devshardctl way).
-//  2. Subtest "the gateway name wins when both are set": set both spellings and assert the gateway's own name wins.
-//  3. Subtest "the host-ping and height-sync variables devshardctl had are read too": set every devshardctl host-ping and height-sync variable and assert each loads, including a duration converted to milliseconds.
-//  4. Subtest "legacy spellings devshardctl accepted are read the way it read them": set devshardctl's own boolean spellings (on/off/yes) and assert they parse the same way.
-//  5. Subtest "a legacy value devshardctl ignored is ignored, not refused": set legacy values devshardctl could not parse and assert `Load` succeeds with those fields left unset.
-//  6. Subtest "the gateway's own spelling stays strict": set the gateway's own variable to a loose spelling devshardctl would have accepted and assert `Load` still refuses it.
-//  7. Subtest "every alias names a variable Load actually reads": read `env.go`'s own source and assert every legacy name and legacy duration name in the alias tables appears in a matching reader call.
-func TestLoadFallsBackToTheDevshardctlSpelling(t *testing.T) {
-	t.Run("the legacy name is read when the gateway name is unset", func(t *testing.T) {
-		t.Setenv("DEVSHARD_PORT", "9999")
-		t.Setenv("DEVSHARD_ESCROW_ROTATION_ENABLED", "true")
-		t.Setenv("DEVSHARD_GATEWAY_DISABLED_NEW_URL", "https://example.invalid/v1")
+//  1. Set the key under the GATEWAY_ spelling of a DEVSHARD_ variable name.
+//  2. Call `PrivateKey` with the DEVSHARD_ name.
+//  3. Assert it returns `ErrPrivateKeyMissing`, since the key is read under the recorded name only.
+func TestASigningKeyIsReadUnderItsRecordedNameOnly(t *testing.T) {
+	t.Setenv("GATEWAY_PRIVATE_KEY", "deadbeef")
 
-		values, err := Load()
-		if err != nil {
-			t.Fatalf("Load(): %v", err)
-		}
-		if values.Port == nil || *values.Port != 9999 {
-			t.Errorf("Port = %v, want 9999 from DEVSHARD_PORT", values.Port)
-		}
-		if values.RotationEnabled == nil || !*values.RotationEnabled {
-			t.Errorf("RotationEnabled = %v, want true from the renamed legacy variable", values.RotationEnabled)
-		}
-		if values.DisabledRedirectURL == nil || *values.DisabledRedirectURL != "https://example.invalid/v1" {
-			t.Errorf("DisabledRedirectURL = %v, want the value from DEVSHARD_GATEWAY_DISABLED_NEW_URL", values.DisabledRedirectURL)
-		}
-	})
-
-	t.Run("the gateway name wins when both are set", func(t *testing.T) {
-		t.Setenv("GATEWAY_PORT", "8080")
-		t.Setenv("DEVSHARD_PORT", "9999")
-
-		values, err := Load()
-		if err != nil {
-			t.Fatalf("Load(): %v", err)
-		}
-		if values.Port == nil || *values.Port != 8080 {
-			t.Errorf("Port = %v, want 8080 from the gateway's own name", values.Port)
-		}
-	})
-
-	t.Run("the host-ping and height-sync variables devshardctl had are read too", func(t *testing.T) {
-		t.Setenv("DEVSHARD_GATEWAY_HOST_PING_DISABLED", "true")
-		t.Setenv("DEVSHARD_GATEWAY_HOST_PING_INTERVAL", "15s")
-		t.Setenv("DEVSHARD_GATEWAY_HOST_PING_TIMEOUT", "2s")
-		t.Setenv("DEVSHARD_GATEWAY_HOST_PING_CONCURRENCY", "8")
-		t.Setenv("DEVSHARD_HEIGHTSYNC_K", "12")
-		t.Setenv("DEVSHARD_HEIGHTSYNC_SLOTS", "3")
-		t.Setenv("DEVSHARD_REQUIRE_HEIGHT_SEED", "false")
-		t.Setenv("DEVSHARD_GATEWAY_CHAIN_ORACLE", "true")
-
-		values, err := Load()
-		if err != nil {
-			t.Fatalf("Load(): %v", err)
-		}
-		if values.HostPingDisabled == nil || !*values.HostPingDisabled {
-			t.Errorf("HostPingDisabled = %v, want true", values.HostPingDisabled)
-		}
-		if values.HostPingIntervalMS == nil || *values.HostPingIntervalMS != 15_000 {
-			t.Errorf("HostPingIntervalMS = %v, want 15000 from the duration 15s", values.HostPingIntervalMS)
-		}
-		if values.HostPingTimeoutMS == nil || *values.HostPingTimeoutMS != 2_000 {
-			t.Errorf("HostPingTimeoutMS = %v, want 2000 from the duration 2s", values.HostPingTimeoutMS)
-		}
-		if values.HostPingConcurrency == nil || *values.HostPingConcurrency != 8 {
-			t.Errorf("HostPingConcurrency = %v, want 8", values.HostPingConcurrency)
-		}
-		if values.HeightSyncAnchorK == nil || *values.HeightSyncAnchorK != 12 {
-			t.Errorf("HeightSyncAnchorK = %v, want 12", values.HeightSyncAnchorK)
-		}
-		if values.HeightSyncAnchorSlots == nil || *values.HeightSyncAnchorSlots != 3 {
-			t.Errorf("HeightSyncAnchorSlots = %v, want 3", values.HeightSyncAnchorSlots)
-		}
-		if values.HeightSyncRequireSeed == nil || *values.HeightSyncRequireSeed {
-			t.Errorf("HeightSyncRequireSeed = %v, want false", values.HeightSyncRequireSeed)
-		}
-		if values.HeightSyncChainOracle == nil || !*values.HeightSyncChainOracle {
-			t.Errorf("HeightSyncChainOracle = %v, want true", values.HeightSyncChainOracle)
-		}
-	})
-
-	t.Run("legacy spellings devshardctl accepted are read the way it read them", func(t *testing.T) {
-		t.Setenv("DEVSHARD_GATEWAY_CHAIN_ORACLE", "on")
-		t.Setenv("DEVSHARD_REQUIRE_HEIGHT_SEED", "off")
-		t.Setenv("DEVSHARD_GATEWAY_HOST_PING_DISABLED", "yes")
-
-		values, err := Load()
-		if err != nil {
-			t.Fatalf("Load() = %v, want the devshardctl spellings accepted", err)
-		}
-		if values.HeightSyncChainOracle == nil || !*values.HeightSyncChainOracle {
-			t.Errorf("HeightSyncChainOracle = %v, want true from on", values.HeightSyncChainOracle)
-		}
-		if values.HeightSyncRequireSeed == nil || *values.HeightSyncRequireSeed {
-			t.Errorf("HeightSyncRequireSeed = %v, want false from off", values.HeightSyncRequireSeed)
-		}
-		if values.HostPingDisabled == nil || !*values.HostPingDisabled {
-			t.Errorf("HostPingDisabled = %v, want true from yes", values.HostPingDisabled)
-		}
-	})
-
-	t.Run("a legacy value devshardctl ignored is ignored, not refused", func(t *testing.T) {
-		t.Setenv("DEVSHARD_GATEWAY_HOST_PING_INTERVAL", "fifteen")
-		t.Setenv("DEVSHARD_GATEWAY_HOST_PING_TIMEOUT", "0s")
-		t.Setenv("DEVSHARD_GATEWAY_CHAIN_ORACLE", "maybe")
-
-		values, err := Load()
-		if err != nil {
-			t.Fatalf("Load() = %v, want the unusable legacy values left unset", err)
-		}
-		if values.HostPingIntervalMS != nil || values.HostPingTimeoutMS != nil || values.HeightSyncChainOracle != nil {
-			t.Errorf("interval %v, timeout %v, chain oracle %v: want all unset so the defaults apply", values.HostPingIntervalMS, values.HostPingTimeoutMS, values.HeightSyncChainOracle)
-		}
-	})
-
-	t.Run("the gateway's own spelling stays strict", func(t *testing.T) {
-		t.Setenv("GATEWAY_HEIGHT_SYNC_CHAIN_ORACLE", "on")
-
-		if _, err := Load(); err == nil {
-			t.Fatal("Load() = nil, want GATEWAY_HEIGHT_SYNC_CHAIN_ORACLE=on refused as before")
-		}
-	})
-
-	t.Run("every alias names a variable Load actually reads", func(t *testing.T) {
-		source, err := os.ReadFile("env.go")
-		if err != nil {
-			t.Fatalf("reading env.go: %v", err)
-		}
-		for name := range legacyNames {
-			if !strings.Contains(string(source), `("`+name+`"`) {
-				t.Errorf("legacyNames has %s, which no reader in Load asks for", name)
-			}
-		}
-		for name := range legacyDurationNames {
-			if !strings.Contains(string(source), `readMilliseconds("`+name+`"`) {
-				t.Errorf("legacyDurationNames has %s, which no readMilliseconds in Load asks for", name)
-			}
-		}
-	})
-}
-
-// Test flow:
-//  1. Set every nonce-accounting ledger variable under its `GATEWAY_ACCOUNTING_` prefix.
-//  2. Call `Load`.
-//  3. Assert each field loads with its set value.
-func TestLoadReadsTheAccountingLedgerUnderTheAccountingPrefix(t *testing.T) {
-	t.Setenv("GATEWAY_ACCOUNTING_ENABLED", "true")
-	t.Setenv("GATEWAY_ACCOUNTING_PORT", "9191")
-	t.Setenv("GATEWAY_ACCOUNTING_RETENTION_EPOCHS", "3")
-	t.Setenv("GATEWAY_ACCOUNTING_SNAPSHOT_SECONDS", "60")
-
-	values, err := Load()
-	if err != nil {
-		t.Fatalf("Load(): %v", err)
-	}
-	if values.NonceAccountingEnabled == nil || !*values.NonceAccountingEnabled {
-		t.Errorf("NonceAccountingEnabled = %v, want true", values.NonceAccountingEnabled)
-	}
-	if values.NonceAccountingPort == nil || *values.NonceAccountingPort != 9191 {
-		t.Errorf("NonceAccountingPort = %v, want 9191", values.NonceAccountingPort)
-	}
-	if values.NonceAccountingRetentionEpochs == nil || *values.NonceAccountingRetentionEpochs != 3 {
-		t.Errorf("NonceAccountingRetentionEpochs = %v, want 3", values.NonceAccountingRetentionEpochs)
-	}
-	if values.NonceAccountingSnapshotSeconds == nil || *values.NonceAccountingSnapshotSeconds != 60 {
-		t.Errorf("NonceAccountingSnapshotSeconds = %v, want 60", values.NonceAccountingSnapshotSeconds)
+	if _, err := PrivateKey("DEVSHARD_PRIVATE_KEY"); !errors.Is(err, ErrPrivateKeyMissing) {
+		t.Fatalf("PrivateKey() = %v, want ErrPrivateKeyMissing", err)
 	}
 }
 
 // Test flow:
 //  1. Set every nonce-accounting ledger variable under devshardctl's `DEVSHARD_STATS_` prefix (devshardctl called the same ledger "stats").
 //  2. Call `Load`.
-//  3. Assert each field loads with its set value, the same as the gateway's own prefix would.
+//  3. Assert each field loads with its set value.
 func TestTheAccountingLedgerAnswersToTheDevshardctlStatsNames(t *testing.T) {
 	t.Setenv("DEVSHARD_STATS_ENABLED", "true")
 	t.Setenv("DEVSHARD_STATS_PORT", "9292")
-	t.Setenv("DEVSHARD_STATS_RETENTION_EPOCHS", "4")
+	t.Setenv("DEVSHARD_STATS_RETENTION_EPOCHS", "0")
 	t.Setenv("DEVSHARD_STATS_SNAPSHOT_SECONDS", "120")
 
 	values, err := Load()
@@ -333,8 +434,8 @@ func TestTheAccountingLedgerAnswersToTheDevshardctlStatsNames(t *testing.T) {
 	if values.NonceAccountingPort == nil || *values.NonceAccountingPort != 9292 {
 		t.Errorf("NonceAccountingPort = %v, want 9292 from DEVSHARD_STATS_PORT", values.NonceAccountingPort)
 	}
-	if values.NonceAccountingRetentionEpochs == nil || *values.NonceAccountingRetentionEpochs != 4 {
-		t.Errorf("NonceAccountingRetentionEpochs = %v, want 4 from DEVSHARD_STATS_RETENTION_EPOCHS", values.NonceAccountingRetentionEpochs)
+	if values.NonceAccountingRetentionEpochs == nil || *values.NonceAccountingRetentionEpochs != 0 {
+		t.Errorf("NonceAccountingRetentionEpochs = %v, want 0 (keep every epoch) from DEVSHARD_STATS_RETENTION_EPOCHS", values.NonceAccountingRetentionEpochs)
 	}
 	if values.NonceAccountingSnapshotSeconds == nil || *values.NonceAccountingSnapshotSeconds != 120 {
 		t.Errorf("NonceAccountingSnapshotSeconds = %v, want 120 from DEVSHARD_STATS_SNAPSHOT_SECONDS", values.NonceAccountingSnapshotSeconds)
@@ -362,38 +463,18 @@ func TestLoadReadsTheRequestRecordRetentionUnderTheRequestsPrefix(t *testing.T) 
 }
 
 // Test flow:
-//  1. Set the request-record retention variables under the old `GATEWAY_ACCOUNTING_` prefix.
+//  1. Set the escrow list under `DEVSHARDS_JSON`.
 //  2. Call `Load`.
-//  3. Assert both fields stay nil, since that prefix now names the ledger and no longer reads the request records' former names.
-func TestTheRequestRecordRetentionNoLongerAnswersToTheAccountingPrefix(t *testing.T) {
-	t.Setenv("GATEWAY_ACCOUNTING_RETENTION_HOURS", "24")
-	t.Setenv("GATEWAY_ACCOUNTING_RETENTION_MAX_ROWS", "500")
-
-	values, err := Load()
-	if err != nil {
-		t.Fatalf("Load(): %v", err)
-	}
-	if values.AccountingRetentionHours != nil {
-		t.Errorf("AccountingRetentionHours = %v, want nil: GATEWAY_ACCOUNTING_RETENTION_HOURS is no longer read", *values.AccountingRetentionHours)
-	}
-	if values.AccountingRetentionMaxRows != nil {
-		t.Errorf("AccountingRetentionMaxRows = %v, want nil: GATEWAY_ACCOUNTING_RETENTION_MAX_ROWS is no longer read", *values.AccountingRetentionMaxRows)
-	}
-}
-
-// Test flow:
-//  1. Set the escrow list under its former `DEVSHARDS_JSON` name.
-//  2. Call `Load`.
-//  3. Assert the escrow list loads from that former name.
-func TestTheEscrowListStillAnswersToItsFormerName(t *testing.T) {
-	t.Setenv("DEVSHARDS_JSON", `[{"escrow_id":"1"}]`)
+//  3. Assert the escrow list loads.
+func TestTheEscrowListIsReadFromDevshardsJSON(t *testing.T) {
+	t.Setenv("DEVSHARDS_JSON", `[{"id":"1"}]`)
 
 	values, err := Load()
 	if err != nil {
 		t.Fatalf("Load() = %v, want nil", err)
 	}
-	if values.DevshardsJSON == nil || *values.DevshardsJSON != `[{"escrow_id":"1"}]` {
-		t.Fatalf("escrow list = %v, want the value read from the former name", values.DevshardsJSON)
+	if values.DevshardsJSON == nil || *values.DevshardsJSON != `[{"id":"1"}]` {
+		t.Fatalf("escrow list = %v, want the value of DEVSHARDS_JSON", values.DevshardsJSON)
 	}
 }
 
@@ -402,10 +483,10 @@ func TestTheEscrowListStillAnswersToItsFormerName(t *testing.T) {
 //  2. Call `Load`.
 //  3. Assert every one of the four knobs loaded its own variable.
 func TestEveryRotationKnobIsReachableFromTheEnvironment(t *testing.T) {
-	t.Setenv("GATEWAY_ROTATION_ENABLED", "true")
-	t.Setenv("GATEWAY_ROTATION_SETTLEMENT_ENABLED", "true")
-	t.Setenv("GATEWAY_ROTATION_PRE_POC_BLOCKS", "42")
-	t.Setenv("GATEWAY_ROTATION_MODELS_JSON", "[]")
+	t.Setenv("DEVSHARD_ESCROW_ROTATION_ENABLED", "true")
+	t.Setenv("DEVSHARD_ESCROW_ROTATION_SETTLEMENT_ENABLED", "true")
+	t.Setenv("DEVSHARD_ESCROW_ROTATION_PRE_POC_BLOCKS", "42")
+	t.Setenv("DEVSHARD_ESCROW_ROTATION_MODELS_JSON", "[]")
 
 	values, err := Load()
 	if err != nil {
@@ -440,31 +521,6 @@ func TestTheHoldKnobsReadTheirVariables(t *testing.T) {
 	}
 	if values.RotationHoldResumeAnswers == nil || *values.RotationHoldResumeAnswers != 64 {
 		t.Fatalf("RotationHoldResumeAnswers = %v, want 64", values.RotationHoldResumeAnswers)
-	}
-}
-
-// Test flow:
-//  1. Set the key under its current gateway name while looking it up by its old, renamed name (an escrow records the name of its key variable when created, so a rename would otherwise leave it inactive).
-//  2. Call `PrivateKey` with the old name.
-//  3. Assert it falls back to the renamed variable and returns the key.
-func TestASigningKeyFallsBackToItsRenamedVariable(t *testing.T) {
-	t.Setenv("GATEWAY_PRIVATE_KEY", "deadbeef")
-
-	key, err := PrivateKey("DEVSHARD_PRIVATE_KEY")
-	if err != nil {
-		t.Fatalf("PrivateKey() = %v, want the key read from the renamed variable", err)
-	}
-	if key != "deadbeef" {
-		t.Fatalf("key = %q, want the value the renamed variable holds", key)
-	}
-}
-
-// Test flow:
-//  1. Call `PrivateKey` with neither the old nor the current variable set.
-//  2. Assert it returns `ErrPrivateKeyMissing`, since the fallback must not invent a key.
-func TestASigningKeyWithNeitherNameSetStillFails(t *testing.T) {
-	if _, err := PrivateKey("DEVSHARD_PRIVATE_KEY"); !errors.Is(err, ErrPrivateKeyMissing) {
-		t.Fatalf("PrivateKey() = %v, want ErrPrivateKeyMissing", err)
 	}
 }
 

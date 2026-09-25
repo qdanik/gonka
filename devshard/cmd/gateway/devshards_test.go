@@ -45,18 +45,34 @@ func (r *recordingRegistry) UpsertDevshard(_ context.Context, record store.Devsh
 //  4. Assert it succeeds and stores exactly one record.
 func TestSeedDevshardsRejectsASeedThatNamesNoKeyVariable(t *testing.T) {
 	registry := &recordingRegistry{}
-	if err := seedDevshards(context.Background(), registry, `[{"escrow_id":"58128","model":"Qwen/Test"}]`); err == nil {
+	if err := seedDevshards(context.Background(), registry, `[{"id":"58128","model":"Qwen/Test"}]`); err == nil {
 		t.Fatal("seedDevshards accepted a seed with no private_key_env")
 	}
 	if len(registry.upserted) != 0 {
 		t.Fatalf("seedDevshards stored %d records, want none", len(registry.upserted))
 	}
 
-	complete := `[{"escrow_id":"58128","model":"Qwen/Test","private_key_env":"GATEWAY_PRIVATE_KEY"}]`
+	complete := `[{"id":"58128","model":"Qwen/Test","private_key_env":"DEVSHARD_PRIVATE_KEY"}]`
 	if err := seedDevshards(context.Background(), registry, complete); err != nil {
 		t.Fatalf("seedDevshards(complete) = %v, want nil", err)
 	}
 	if len(registry.upserted) != 1 {
 		t.Fatalf("seedDevshards stored %d records, want 1", len(registry.upserted))
+	}
+}
+
+// Test flow:
+//  1. Call seedDevshards with a devshardctl-shaped seed that names a per-escrow route prefix.
+//  2. Assert the stored record carries that prefix, so the escrow's hosts are dialled under it as devshardctl did.
+func TestSeedDevshardsKeepsTheSeedsRoutePrefix(t *testing.T) {
+	registry := &recordingRegistry{}
+	seed := `[{"id":"58128","model":"Qwen/Test","private_key_env":"DEVSHARD_PRIVATE_KEY","route_prefix":"/v4"}]`
+
+	if err := seedDevshards(context.Background(), registry, seed); err != nil {
+		t.Fatalf("seedDevshards() = %v, want nil", err)
+	}
+
+	if len(registry.upserted) != 1 || registry.upserted[0].RoutePrefix != "/v4" {
+		t.Fatalf("stored %+v, want one record with route prefix /v4", registry.upserted)
 	}
 }
