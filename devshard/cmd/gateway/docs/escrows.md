@@ -61,8 +61,11 @@ stateDiagram-v2
 | 3 | `checkMissing` | an escrow gone from chain must stop taking traffic |
 | 4 | `sweepTimeouts` | a nonce the chain still settles is owed a vote whether or not rotation is on |
 | 5 | `resumeHeld` | every row on hold is re-synced into the registry, resumed or parked, before this tick's own depletion pass runs against it — whatever the toggle says |
-| 6 | `checkDepletion` | so must an empty one — only *creating its replacement* is rotation's business |
-| 7 | `prepareBridge` / `finishBridge` | rotation proper; skipped when the toggle is off |
+| 6 | `promoteTakenReserves` | a reserve a request took is already a regular in routing; its row follows before depletion counts the model |
+| 7 | `checkDepletion` | so must an empty one — only *creating its replacement* is rotation's business |
+| 8 | `prepareBridge`, or `finishBridge` then `ensureReserves` | rotation proper; skipped when the toggle is off |
+
+A taken reserve also wakes the tick at once rather than at the next 15 s (`escrow/reserve.go`, `OnReserveTaken`).
 
 Every step returns its error into an `errors.Join`; one failing model or escrow never stops the others. `Stop()` cancels the context and waits for the tick in flight, so shutdown never races a half-finished rotation.
 
@@ -76,6 +79,8 @@ Every step returns its error into an `errors.Join`; one failing model or escrow 
 2. `onPrepared`: write the **commitment** row (tx hash, model, role, epoch, created-at) *before* broadcasting. A failed write aborts with no broadcast: **no broadcast without durable intent.**
 3. Broadcast. If the process dies here, the commitment is the only trace — and it is enough.
 4. On the next tick, `reconcile` resolves every commitment.
+
+Before step 2 the chain client refuses a create the wallet cannot pay for — spendable `ngonka` below `amount` plus the fee — without writing a commitment or broadcasting (`chain/txclient.go`, `CreateEscrow`). The refusal does not open the create breaker and is narrated once per (model, role) until a create succeeds (`escrow/commitments.go`, `narrateUnderfunded`).
 
 `reconcileOne` has exactly five outcomes:
 
@@ -138,6 +143,10 @@ Parking, in either path, is inactive and settlement-pending in one statement tha
 With rotation off, `checkDepletion` parks the drained escrow but creates no replacement. If the operator still offers the model (`limits.model_access` or `limits.model_limits` names it), `api/routes.go`'s `routableModel` answers `503` with `Retry-After` for that model until an operator acts, rather than the `400` a model nobody offers gets.
 
 An escrow put on hold rather than parked stays a different lifecycle from here on: see [`routing.md`](./routing.md), "An escrow on hold", and [`escrow/README.md`](../escrow/README.md), "An escrow on hold".
+
+## The reserve
+
+Each model keeps `reserve_count` (default 1) full escrows in the `reserve` role that routing takes only when no regular escrow can pay for a request — the case a large prompt against evenly drained regulars hits, which depletion never catches because each regular still covers an ordinary request. A reserve is funded at the model's `amount` once the model has a serving non-reserve escrow, never across the proof-of-compute bridge, and after the tick's replacements; the first request that takes it turns it into a regular escrow, and the tick it wakes rewrites the row and funds the next reserve. A reserve does not count toward `target_count`; a promoted one does. A depleted reserve is parked with no replacement, and a reserve left over from an earlier epoch or past a lowered `reserve_count` is retired on the next tick outside the bridge. See [`escrow/README.md`](../escrow/README.md), "The reserve".
 
 ## Gone from chain
 
@@ -221,5 +230,5 @@ Mainnet height is the escrow's logical clock: every host and the sequencer keep 
 | how many parked escrows settle per tick | `escrow/settlement.go`, `pendingSettleBudget` |
 | how hard a failing create is throttled | `escrow/breaker.go`, `escalatedCooldownTicks` |
 | when the bridge starts | `rotation.pre_poc_blocks`, read in `escrow/manager.go`, `tick` |
-| how many escrows a model gets | `rotation.models_json`: `temp_count`, `target_count` (1 when absent; an explicit value below 1 is rejected, `escrow/models.go`) |
+| how many escrows a model gets | `rotation.models_json`: `temp_count`, `target_count` (1 when absent; an explicit value below 1 is rejected), `reserve_count` (1 when absent; 0 turns reserves off; negative is rejected), `escrow/models.go` |
 | what makes an escrow routable | `registry/registry.go`, `Add` / `unpublish` |

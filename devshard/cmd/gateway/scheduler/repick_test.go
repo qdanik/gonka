@@ -3,6 +3,7 @@ package scheduler
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 
 	"devshard/types"
@@ -325,5 +326,46 @@ func TestARefusalThatIsNotBusyIsAnsweredWhereItHappened(t *testing.T) {
 	}
 	if advances, _, _ := test.session(t, escrowB).report(); advances != 0 {
 		t.Fatalf("a state-blocked escrow re-picked onto %s, which advanced %d nonces", escrowB, advances)
+	}
+}
+
+// Test flow:
+//  1. Build a scheduler with one regular escrow whose whole group is busy and one reserve with hosts of its own.
+//  2. Pick for a small request.
+//  3. Assert the busy answer reaches the caller and the reserve is neither dispatched to nor taken: a reserve covers what no regular can pay for, not hosts that are busy.
+func TestABusyRegularDoesNotSpendTheReserve(t *testing.T) {
+	test := busyEscrowHarness(t, escrowA, escrowB)
+	test.markReserve(escrowB)
+	test.busyGroup(t, escrowA)
+
+	_, err := test.scheduler.Pick(context.Background(), RequestProfile{Model: modelA})
+
+	if !errors.Is(err, ErrHostsBusy) {
+		t.Fatalf("Pick = %v, want ErrHostsBusy", err)
+	}
+	if test.reached(t, escrowB) {
+		t.Fatal("the busy retry routed to the reserve")
+	}
+	if taken := test.reserves.recorded(); len(taken) != 0 {
+		t.Fatalf("reserves taken = %v, want none", taken)
+	}
+}
+
+// Test flow:
+//  1. Build a scheduler with one regular escrow whose session refuses for insufficient balance and one reserve.
+//  2. Pick for a request.
+//  3. Assert the request is served on the reserve and the take is reported: a regular that cannot pay is what the reserve is for.
+func TestARegularThatCannotPayHandsTheRequestToTheReserve(t *testing.T) {
+	test := busyEscrowHarness(t, escrowA, escrowB)
+	test.markReserve(escrowB)
+	test.session(t, escrowA).failWith = types.ErrInsufficientBalance
+
+	assignment, err := test.scheduler.Pick(context.Background(), RequestProfile{Model: modelA})
+
+	if err != nil || assignment.Escrow != escrowB {
+		t.Fatalf("Pick = %+v, %v; want a nonce on the reserve", assignment, err)
+	}
+	if taken := test.reserves.recorded(); !slices.Equal(taken, []string{escrowB}) {
+		t.Fatalf("reserves taken = %v, want [%s]", taken, escrowB)
 	}
 }

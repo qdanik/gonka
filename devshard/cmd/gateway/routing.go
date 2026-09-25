@@ -63,6 +63,7 @@ func newRouting(deps routingDeps) (*registry.Registry, *scheduler.Scheduler, *wa
 		Observer:          tracedDispatches{recorder: deps.Dispatches, events: deps.Journal, ledger: deps.Ledger},
 		Now:               deps.Now,
 		OnEscrowExhausted: escrows.Exhausted,
+		OnReserveTaken:    escrows.ReserveTaken,
 	})
 	if err != nil {
 		return nil, nil, nil, err

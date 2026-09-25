@@ -36,9 +36,12 @@ func (m *Manager) checkDepletion(ctx context.Context, snapshot chain.PhaseSnapsh
 		}
 		model, replaceable := modelByID[record.Model]
 		var err error
-		if m.holdApplies(replaceable) {
+		switch {
+		case record.RotationRole == RoleReserve:
+			err = m.parkReserve(ctx, record, reason)
+		case m.holdApplies(replaceable):
 			err = m.holdOrPark(ctx, record, reason, model, snapshot, counts)
-		} else {
+		default:
 			err = m.replaceDepleted(ctx, record, reason, model, replaceable, snapshot)
 		}
 		if err != nil {

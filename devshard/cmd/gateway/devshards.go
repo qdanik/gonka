@@ -88,7 +88,15 @@ func (g *gateway) addEscrow(ctx context.Context, record store.DevshardRecord) er
 	if record.OnHold {
 		return g.escrows.AddOnHold(ctx, record.EscrowID, record.Model)
 	}
-	return g.escrows.Add(ctx, record.EscrowID, record.Model)
+	return addServing(ctx, g.escrows, record)
+}
+
+// addServing publishes a row that is not on hold, a reserve as one, so every path that routes a row reads its role.
+func addServing(ctx context.Context, escrows *registry.Registry, record store.DevshardRecord) error {
+	if record.RotationRole == escrow.RoleReserve {
+		return escrows.AddReserve(ctx, record.EscrowID, record.Model)
+	}
+	return escrows.Add(ctx, record.EscrowID, record.Model)
 }
 
 func publishEscrows(
@@ -192,11 +200,15 @@ func (w devshardWrites) report(err error) error {
 	return err
 }
 
-// depletionNotice breaks the registry/manager cycle: the manager settles through the registry.
+// depletionNotice breaks the registry/manager cycle for both rotation notices: the manager settles through the registry.
 type depletionNotice struct{ manager *escrow.Manager }
 
 func (d *depletionNotice) OnBalanceExhausted(escrowID string, reason scheduler.ExhaustionReason) {
 	d.manager.OnBalanceExhausted(escrowID, reason)
+}
+
+func (d *depletionNotice) OnReserveTaken(escrowID string) {
+	d.manager.OnReserveTaken(escrowID)
 }
 
 // creationEpochOf resolves the epoch an escrow was created in. See nonces/README.md, "The judgements it does make".

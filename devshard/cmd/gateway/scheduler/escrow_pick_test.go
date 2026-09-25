@@ -87,6 +87,7 @@ type candidate struct {
 	slots       []string
 	balance     uint64
 	tokenPrice  uint64
+	isReserve   bool
 }
 
 // slotsOf gives one escrow its own hosts, so two candidates in one test never share a block.
@@ -115,6 +116,7 @@ func newScheduler(candidates ...candidate) (*Scheduler, *fakeEscrows, *fakeWeigh
 			Model:       modelA,
 			Session:     &fakeSession{latestNonce: entry.latestNonce, slots: slots, balance: entry.balance, tokenPrice: entry.tokenPrice},
 			ActiveUsers: entry.activeUsers,
+			IsReserve:   entry.isReserve,
 		})
 		weights.byEscrow[entry.id] = entry.weight
 	}
@@ -963,5 +965,199 @@ func TestResumeReadiness(t *testing.T) {
 				t.Fatalf("ResumeReadiness() = %v, %v; want %v, %v", ready, nonceSpent, testCase.wantReady, testCase.wantNonceSpent)
 			}
 		})
+	}
+}
+
+type reserveTakenRecorder struct {
+	mu    sync.Mutex
+	taken []string
+}
+
+func (r *reserveTakenRecorder) record(escrowID string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.taken = append(r.taken, escrowID)
+}
+
+func (r *reserveTakenRecorder) recorded() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return slices.Clone(r.taken)
+}
+
+const (
+	reserveTestPrice      = 10
+	reserveTestSmallBytes = 1_000
+	reserveTestLargeBytes = 400_000
+)
+
+// schedulerWithReserve prices a small request at 10 000 and a large one at 4 000 000.
+func schedulerWithReserve(candidates ...candidate) (*Scheduler, *reserveTakenRecorder) {
+	scheduler, _, _ := newScheduler(candidates...)
+	recorder := &reserveTakenRecorder{}
+	scheduler.onReserveTaken = recorder.record
+	return scheduler, recorder
+}
+
+// Test flow:
+//  1. Build a busy regular escrow and an idle, full reserve escrow.
+//  2. Pick an escrow for a small request.
+//  3. Assert the regular is picked although the reserve scores better, and no reserve was reported taken.
+func TestAReserveIsNotPickedWhileARegularCanServe(t *testing.T) {
+	t.Parallel()
+	scheduler, recorder := schedulerWithReserve(
+		candidate{id: "regular", activeUsers: 5, weight: 1, balance: 1 << 30, tokenPrice: reserveTestPrice},
+		candidate{id: "reserve", weight: 1, balance: 1 << 30, tokenPrice: reserveTestPrice, isReserve: true},
+	)
+
+	picked, err := pickWith(scheduler, RequestProfile{Model: modelA, InputBytes: reserveTestSmallBytes}, chain.PhaseSnapshot{})
+
+	if err != nil || picked.ID != "regular" {
+		t.Fatalf("picked %q, err %v; want the regular", picked.ID, err)
+	}
+	if taken := recorder.recorded(); len(taken) != 0 {
+		t.Fatalf("reserves taken = %v, want none", taken)
+	}
+}
+
+// Test flow:
+//  1. Build two regular escrows whose balance cannot cover a large request, and a full reserve that can.
+//  2. Pick an escrow for the large request.
+//  3. Assert the reserve is picked, and nothing is reported taken yet: the take waits for the nonce.
+func TestALargeRequestNoRegularCanAffordTakesTheReserve(t *testing.T) {
+	t.Parallel()
+	scheduler, recorder := schedulerWithReserve(
+		candidate{id: "regular-1", weight: 1, balance: 1_000_000, tokenPrice: reserveTestPrice},
+		candidate{id: "regular-2", weight: 1, balance: 1_000_000, tokenPrice: reserveTestPrice},
+		candidate{id: "reserve", weight: 1, balance: 10_000_000, tokenPrice: reserveTestPrice, isReserve: true},
+	)
+
+	picked, err := pickWith(scheduler, RequestProfile{Model: modelA, InputBytes: reserveTestLargeBytes}, chain.PhaseSnapshot{})
+
+	if err != nil || picked.ID != "reserve" {
+		t.Fatalf("picked %q, err %v; want the reserve", picked.ID, err)
+	}
+	if taken := recorder.recorded(); len(taken) != 0 {
+		t.Fatalf("reserves taken at pick time = %v, want none: the take is reported once a nonce is served", taken)
+	}
+}
+
+// Test flow:
+//  1. Build one regular escrow and one reserve, neither able to cover a large request.
+//  2. Pick an escrow.
+//  3. Assert the pick fails with ErrNoEscrowCapacity wrapping ErrInsufficientBalance, and no reserve was reported taken.
+func TestAReserveTooSmallForTheRequestIsNotTaken(t *testing.T) {
+	t.Parallel()
+	scheduler, recorder := schedulerWithReserve(
+		candidate{id: "regular", weight: 1, balance: 1_000_000, tokenPrice: reserveTestPrice},
+		candidate{id: "reserve", weight: 1, balance: 1_000_000, tokenPrice: reserveTestPrice, isReserve: true},
+	)
+
+	_, err := pickWith(scheduler, RequestProfile{Model: modelA, InputBytes: reserveTestLargeBytes}, chain.PhaseSnapshot{})
+
+	if !errors.Is(err, ErrNoEscrowCapacity) || !errors.Is(err, types.ErrInsufficientBalance) {
+		t.Fatalf("err = %v, want no capacity for insufficient balance", err)
+	}
+	if taken := recorder.recorded(); len(taken) != 0 {
+		t.Fatalf("reserves taken = %v, want none", taken)
+	}
+}
+
+// Test flow:
+//  1. Pin a request to a reserve escrow that can cover it.
+//  2. Pick an escrow.
+//  3. Assert the pinned reserve is returned, and nothing is reported taken yet.
+func TestAPinnedReserveIsPicked(t *testing.T) {
+	t.Parallel()
+	scheduler, recorder := schedulerWithReserve(
+		candidate{id: "regular", weight: 1, balance: 1 << 30, tokenPrice: reserveTestPrice},
+		candidate{id: "reserve", weight: 1, balance: 1 << 30, tokenPrice: reserveTestPrice, isReserve: true},
+	)
+
+	picked, err := pickWith(scheduler, RequestProfile{Model: modelA, Escrow: "reserve", InputBytes: reserveTestSmallBytes}, chain.PhaseSnapshot{})
+
+	if err != nil || picked.ID != "reserve" {
+		t.Fatalf("picked %q, err %v; want the pinned reserve", picked.ID, err)
+	}
+	if taken := recorder.recorded(); len(taken) != 0 {
+		t.Fatalf("reserves taken at pick time = %v, want none", taken)
+	}
+}
+
+// Test flow:
+//  1. Build a regular escrow with an unusable weight and a full reserve.
+//  2. Pick an escrow.
+//  3. Assert the pick finds no capacity rather than the reserve: a regular passed over for its hosts is not one that could not pay.
+func TestARegularPassedOverForItsHostsDoesNotOpenTheReserve(t *testing.T) {
+	t.Parallel()
+	scheduler, _ := schedulerWithReserve(
+		candidate{id: "regular", weight: 0, balance: 1 << 30, tokenPrice: reserveTestPrice},
+		candidate{id: "reserve", weight: 1, balance: 1 << 30, tokenPrice: reserveTestPrice, isReserve: true},
+	)
+
+	_, err := pickWith(scheduler, RequestProfile{Model: modelA, InputBytes: reserveTestSmallBytes}, chain.PhaseSnapshot{})
+
+	if !errors.Is(err, ErrNoEscrowCapacity) {
+		t.Fatalf("err = %v, want ErrNoEscrowCapacity", err)
+	}
+}
+
+// Test flow:
+//  1. Configure an allowlist that rules out the regular escrow's whole group but admits the reserve's.
+//  2. Pick an escrow.
+//  3. Assert the pick reports the allowlist as unreachable rather than taking the reserve: an operator's host restriction is not a regular failing for money.
+func TestAnAllowlistThatRulesOutTheRegularsDoesNotOpenTheReserve(t *testing.T) {
+	scheduler := schedulerWithAllowlist(t, []string{"allowed"}, map[string][]string{
+		"regular": {"someone-else"},
+		"reserve": {"allowed"},
+	})
+	for index, candidate := range scheduler.escrows.(*fakeEscrows).byModel[modelA] {
+		if candidate.ID == "reserve" {
+			scheduler.escrows.(*fakeEscrows).byModel[modelA][index].IsReserve = true
+		}
+	}
+
+	picked, err := pickWith(scheduler, RequestProfile{Model: modelA}, chain.PhaseSnapshot{})
+
+	if !errors.Is(err, ErrAllowlistUnreachable) {
+		t.Fatalf("pickEscrow() = %q, %v; want ErrAllowlistUnreachable", picked.ID, err)
+	}
+}
+
+// Test flow:
+//  1. Build a busy regular, a regular that refused for insufficient balance, and a full reserve.
+//  2. Pick with both regulars avoided, each for its own reason, as the busy re-pick's walk past empty escrows does.
+//  3. Assert the reserve stays shut: one regular gave up for its hosts, so the reserves are not what this request lacks.
+func TestABusyRegularKeepsTheReserveShutBesideOneThatCannotPay(t *testing.T) {
+	t.Parallel()
+	scheduler, _ := schedulerWithReserve(
+		candidate{id: "busy", weight: 1, balance: 1 << 30, tokenPrice: reserveTestPrice},
+		candidate{id: "broke", weight: 1, balance: 1 << 30, tokenPrice: reserveTestPrice},
+		candidate{id: "reserve", weight: 1, balance: 1 << 30, tokenPrice: reserveTestPrice, isReserve: true},
+	)
+	profile := RequestProfile{Model: modelA, InputBytes: reserveTestSmallBytes}
+
+	_, err := scheduler.pickEscrow(profile, chain.PhaseSnapshot{}, newWaiter(profile, time.Time{}), avoidedEscrows{"busy": avoidedHostsBusy, "broke": avoidedOutOfFunds})
+
+	if !errors.Is(err, ErrNoEscrowCapacity) {
+		t.Fatalf("err = %v, want ErrNoEscrowCapacity", err)
+	}
+}
+
+// Test flow:
+//  1. Build a regular escrow past the chain's nonce cap and a full reserve.
+//  2. Pick an escrow.
+//  3. Assert the reserve is picked: a regular whose nonce budget is spent failed for money, which is what the reserve covers.
+func TestARegularPastItsNonceCapOpensTheReserve(t *testing.T) {
+	t.Parallel()
+	scheduler, _ := schedulerWithReserve(
+		candidate{id: "spent", weight: 1, latestNonce: 1_000_000, balance: 1 << 30, tokenPrice: reserveTestPrice},
+		candidate{id: "reserve", weight: 1, balance: 1 << 30, tokenPrice: reserveTestPrice, isReserve: true},
+	)
+
+	picked, err := pickWith(scheduler, RequestProfile{Model: modelA, InputBytes: reserveTestSmallBytes}, chain.PhaseSnapshot{MaxNonce: 1_000})
+
+	if err != nil || picked.ID != "reserve" {
+		t.Fatalf("picked %q, err %v; want the reserve", picked.ID, err)
 	}
 }

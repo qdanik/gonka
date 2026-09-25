@@ -2179,6 +2179,38 @@ func TestRunRaceStopsEscalatingOnceATrustedHostRejectsTheContextLength(t *testin
 }
 
 // Test flow:
+//  1. Start a race for a model known to run 400 000 tokens, with two hosts queued: one scripted to reject the request as past its own 40 960-token limit, one scripted to answer with content.
+//  2. Run the race to completion.
+//  3. Assert the race succeeds on the second host, after a second pick, since a longer host could still serve a request that fits the model.
+func TestRunRaceKeepsSearchingWhenTheRejectingHostRunsShorterThanTheModel(t *testing.T) {
+	fixture := newRaceFixture(refusalPolicy(), 3)
+	fixture.deps.ModelContextLength = 400_000
+	fixture.host(100, 0, "host-0", &hostScript{receipt: true, chunks: []string{"data: too-long\n\n"}})
+	fixture.host(101, 1, "host-1", &hostScript{
+		receipt:   true,
+		chunks:    []string{contentChunk(101)},
+		confirmed: true,
+		finished:  true,
+	})
+
+	outcome, err := fixture.run(context.Background())
+	if err != nil {
+		t.Fatalf("runRace error = %v", err)
+	}
+	<-fixture.reported
+	if !outcome.Succeeded || outcome.WinnerNonce != 101 {
+		t.Fatalf("outcome = %+v, want host-1 to win", outcome)
+	}
+
+	fixture.picker.mu.Lock()
+	picks := len(fixture.picker.profiles)
+	fixture.picker.mu.Unlock()
+	if picks != 2 {
+		t.Fatalf("picks = %d, want 2: a host running the whole model context can take the request", picks)
+	}
+}
+
+// Test flow:
 //  1. Start a race with two hosts: one held until released with content queued, one scripted to reject as past the model's context length immediately.
 //  2. Wait for the rejection's context limit to reach the race, then release the held host.
 //  3. Assert the race ends with the held host as winner and succeeded, since the rejection only cut short the search for another host, not the attempt already running.

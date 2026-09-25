@@ -1,6 +1,12 @@
 package engine
 
-import "testing"
+import (
+	"fmt"
+	"testing"
+
+	"devshard/cmd/gateway/chain"
+	"devshard/cmd/gateway/config"
+)
 
 type contextLimitCall struct {
 	participant string
@@ -46,12 +52,12 @@ func TestParseCapabilityError(t *testing.T) {
 		{
 			name:    "maximum_context_length",
 			message: vllmContextLengthMessage,
-			want:    CapabilitySignal{ContextLimit: 131072},
+			want:    CapabilitySignal{ContextLimit: 131072, ContextRequested: 140000},
 		},
 		{
 			name:    "total_of_at_least",
 			message: vllmContextTotalMessage,
-			want:    CapabilitySignal{ContextLimit: 40960},
+			want:    CapabilitySignal{ContextLimit: 40960, ContextRequested: 41200},
 		},
 		{
 			name:    "tool_choice_unsupported",
@@ -218,7 +224,7 @@ func TestCapabilityOfAttempt(t *testing.T) {
 		attempt AttemptOutcome
 		want    CapabilitySignal
 	}{
-		{name: "error_stream_attempt", attempt: errorStream, want: CapabilitySignal{ContextLimit: 131072}},
+		{name: "error_stream_attempt", attempt: errorStream, want: CapabilitySignal{ContextLimit: 131072, ContextRequested: 140000}},
 		{name: "attempt_without_an_error_event_is_ignored", attempt: noErrorSource},
 	}
 
@@ -286,11 +292,74 @@ func TestRulesOutRetryOnlyForATrustedAnswerEveryHostWouldRepeat(t *testing.T) {
 			attempt.Suspicious = testCase.suspicious
 			attempt.ContentSource = testCase.contentSource
 
-			if got := rulesOutRetry(attempt); got != testCase.want {
+			if got := rulesOutRetry(attempt, 0); got != testCase.want {
 				t.Fatalf("rulesOutRetry = %v, want %v", got, testCase.want)
 			}
 		})
 	}
+}
+
+// Test flow:
+//  1. For each table case's model context length and a trusted host's context-length rejection (its own limit and the total it was asked for), build an attempt via `errorEventAttempt`.
+//  2. Call `rulesOutRetry` with the model's context length.
+//  3. Assert the rejection rules out a retry unless the model is known to run longer than the rejecting host and the request fits the model.
+func TestAContextLengthRejectionRulesOutARetryOnlyWhenNoHostCouldServeTheRequest(t *testing.T) {
+	testCases := []struct {
+		name               string
+		modelContextLength uint64
+		message            string
+		want               bool
+	}{
+		{name: "model_context_length_unknown", message: contextRejection(180000, 200000), want: true},
+		{name: "host_runs_shorter_than_the_model_and_the_request_fits_the_model", modelContextLength: 400000, message: contextRejection(180000, 200000)},
+		{name: "host_already_runs_the_whole_model_context", modelContextLength: 400000, message: contextRejection(400000, 450000), want: true},
+		{name: "request_exceeds_the_model_context", modelContextLength: 400000, message: contextRejection(180000, 450000), want: true},
+		{name: "older_phrasing_request_fits_the_model", modelContextLength: 400000, message: vllmContextLengthMessage},
+		{name: "older_phrasing_request_exceeds_the_model", modelContextLength: 400000, message: "This model's maximum context length is 131072 tokens. However, you requested 500000 tokens (490000 in the messages, 10000 in the completion). Please reduce the length of the messages or completion.", want: true},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			attempt := errorEventAttempt(t, `{"error":{"code":400,"message":"`+testCase.message+`","type":"BadRequestError"}}`)
+
+			if got := rulesOutRetry(attempt, testCase.modelContextLength); got != testCase.want {
+				t.Fatalf("rulesOutRetry = %v, want %v", got, testCase.want)
+			}
+		})
+	}
+}
+
+// Test flow:
+//  1. For each table case's operator pin in `model_limits` and governance's --max-model-len for the model, call `modelContextLength`.
+//  2. Assert the operator's pin wins, governance fills in without one, and a model neither names, or governance names past config.MaxContextTokens, is unknown (0).
+func TestModelContextLengthTakesTheOperatorsPinOverGovernance(t *testing.T) {
+	pinned := int64(262_144)
+	governed := chain.PhaseSnapshot{Models: map[string]chain.ModelParams{testModel: {MaxModelLen: 400_000}}}
+	testCases := []struct {
+		name     string
+		limits   config.Limits
+		snapshot chain.PhaseSnapshot
+		want     uint64
+	}{
+		{name: "operator_pin", limits: config.Limits{ModelLimits: map[string]config.ModelLimits{testModel: {MaxModelLen: &pinned}}}, snapshot: governed, want: 262_144},
+		{name: "governance_without_a_pin", limits: config.Limits{ModelLimits: map[string]config.ModelLimits{testModel: {}}}, snapshot: governed, want: 400_000},
+		{name: "neither_names_the_model"},
+		{name: "governance_past_what_a_window_could_hold", snapshot: chain.PhaseSnapshot{Models: map[string]chain.ModelParams{testModel: {MaxModelLen: config.MaxContextTokens + 1}}}},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			if got := modelContextLength(testCase.limits, testCase.snapshot, testModel); got != testCase.want {
+				t.Fatalf("modelContextLength = %d, want %d", got, testCase.want)
+			}
+		})
+	}
+}
+
+func contextRejection(hostLimit, requested uint64) string {
+	return fmt.Sprintf("This model's maximum context length is %d tokens. However, you requested %d tokens (%d in the messages, 0 in the completion), for a total of at least %d tokens.", hostLimit, requested, requested, requested)
 }
 
 // Test flow:

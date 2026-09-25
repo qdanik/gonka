@@ -10,11 +10,16 @@ const (
 	ToolChoiceUnsupportedMessage = "tool choice requires --enable-auto-tool-choice and --tool-call-parser to be set"
 	contextLimitPhrase           = "maximum context length is "
 	contextRequestedPhrase       = "for a total of at least "
+	contextRequestedOlderPhrase  = "you requested "
 )
 
-// CapabilityLimits reads the context window and the tokens needed from a vLLM refusal; 0 when absent.
+// CapabilityLimits reads the context window and the tokens needed from a vLLM refusal, in either phrasing; 0 when absent.
 func CapabilityLimits(message string) (contextLimit, contextRequested uint64) {
-	return uintAfterPhrase(message, contextLimitPhrase), uintAfterPhrase(message, contextRequestedPhrase)
+	contextRequested = uintAfterPhrase(message, contextRequestedPhrase)
+	if contextRequested == 0 {
+		contextRequested = uintAfterPhrase(message, contextRequestedOlderPhrase)
+	}
+	return uintAfterPhrase(message, contextLimitPhrase), contextRequested
 }
 
 // Search and slice both run on the lowered copy: lowercasing can shorten a string, so a mixed index lands mid-word.

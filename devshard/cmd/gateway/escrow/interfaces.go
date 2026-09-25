@@ -80,6 +80,8 @@ type HoldGate interface {
 type lifecycleNarrator interface {
 	EscrowCreated(escrowID, model, role string, epoch uint64, txHash string)
 	EscrowRecovered(escrowID, model, role string, epoch uint64, txHash string)
+	EscrowCreateUnderfunded(model, role string, have, need uint64)
+	EscrowReserveTaken(escrowID string)
 	CommitmentCleared(txHash, model, role string, epoch uint64, reason string)
 	EscrowGoneFromChain(escrowID string)
 	EscrowMarkedForReplacement(escrowID, reason string)

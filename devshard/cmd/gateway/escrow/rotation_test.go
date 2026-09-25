@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
+
 	"devshard/cmd/gateway/chain"
 	"devshard/cmd/gateway/store"
 	"devshard/signing"
@@ -676,4 +678,54 @@ func TestPromotingToTempKeepsWhatTheSameTickAlreadyWrote(t *testing.T) {
 	if row.SettleTxHash != "SETTLE-TX" {
 		t.Errorf("settle_tx_hash = %q, want the hash this tick broadcast kept", row.SettleTxHash)
 	}
+}
+
+// Test flow:
+//  1. Build a manager whose tx client refuses every create as underfunded, with a recording narrator.
+//  2. Call ensureToTarget for a model short of one regular three times.
+//  3. Assert every call attempted the create, since the breaker never gated it, and the underfunded refusal was narrated once.
+//  4. Let one create succeed, then refuse again; assert the refusal is narrated a second time.
+func TestAnUnderfundedCreateIsRetriedEveryTickAndNarratedOncePerEpisode(t *testing.T) {
+	narrator := &recordingLifecycleNarrator{}
+	underfunded := true
+	nextEscrowID := uint64(40)
+	txClient := &fakeTxClient{createEscrowFn: func(_ context.Context, _ *signing.Secp256k1Signer, amount uint64, _ string, onPrepared func(string) error) (chain.CreateEscrowResult, error) {
+		if underfunded {
+			return chain.CreateEscrowResult{}, &chain.WalletUnderfundedError{Address: "gonka1wallet", Have: 5, Need: amount + 1}
+		}
+		nextEscrowID++
+		txHash := fmt.Sprintf("TX-%d", nextEscrowID)
+		if err := onPrepared(txHash); err != nil {
+			return chain.CreateEscrowResult{}, err
+		}
+		return chain.CreateEscrowResult{EscrowID: nextEscrowID, TxHash: txHash}, nil
+	}}
+	m := &Manager{
+		tx: txClient, store: newFakeStore(), signer: &fakeSignerSource{signer: testSigner(t)},
+		breaker: newCreateBreaker(), now: func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) },
+		narrator: narrator,
+	}
+	model := ModelConfig{ModelID: "model-a", TargetCount: 1, Amount: 100}
+	snapshot := chain.PhaseSnapshot{EpochIndex: 3, BlockHeight: 10}
+
+	for range 3 {
+		_, err := m.ensureToTarget(t.Context(), roleRegular, 1, model, snapshot, nil)
+		require.ErrorIs(t, err, chain.ErrWalletUnderfunded)
+	}
+	require.Equal(t, 3, txClient.createCalls, "an underfunded wallet must not open the create breaker")
+
+	underfunded = false
+	_, err := m.ensureToTarget(t.Context(), roleRegular, 1, model, snapshot, nil)
+	require.NoError(t, err)
+	underfunded = true
+	_, err = m.ensureToTarget(t.Context(), roleRegular, 1, model, snapshot, nil)
+	require.ErrorIs(t, err, chain.ErrWalletUnderfunded)
+
+	refusals := 0
+	for _, call := range narrator.recorded() {
+		if call == "underfunded model-a regular have 5 need 101" {
+			refusals++
+		}
+	}
+	require.Equal(t, 2, refusals, "narrated: %v", narrator.recorded())
 }

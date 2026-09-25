@@ -3,6 +3,7 @@ package chain
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -457,5 +458,111 @@ func TestASettleBroadcastIsNarratedBeforeItsCommitIsAwaited(t *testing.T) {
 	}
 	if want := "123 " + result.TxHash + " " + signer.Address(); len(narrator.broadcasts) != 1 || narrator.broadcasts[0] != want {
 		t.Fatalf("narrated broadcasts = %v, want [%s]", narrator.broadcasts, want)
+	}
+}
+
+// Test flow:
+//  1. Give the fake transport a spendable balance one below amount + fee, the fee paid in the escrow denom.
+//  2. Call CreateEscrow with an onPrepared hook that records its call.
+//  3. Assert the error is a WalletUnderfundedError carrying have and need, onPrepared never ran, and nothing was broadcast.
+func TestCreateEscrowRefusesAWalletThatCannotPayWithoutBroadcasting(t *testing.T) {
+	const amount = 1_000_000
+	transport := newFakeTransport()
+	transport.balance = amount + DefaultFeeAmount - 1
+	client := newFakeTxClient(t, transport)
+	prepared := false
+
+	_, err := client.CreateEscrow(t.Context(), fixedSigner(t), amount, fixedModelID, func(string) error {
+		prepared = true
+		return nil
+	})
+
+	var underfunded *WalletUnderfundedError
+	if !errors.As(err, &underfunded) || !errors.Is(err, ErrWalletUnderfunded) {
+		t.Fatalf("CreateEscrow = %v, want a WalletUnderfundedError", err)
+	}
+	if underfunded.Have != amount+DefaultFeeAmount-1 || underfunded.Need != amount+DefaultFeeAmount {
+		t.Fatalf("have/need = %d/%d, want %d/%d", underfunded.Have, underfunded.Need, amount+DefaultFeeAmount-1, amount+DefaultFeeAmount)
+	}
+	if prepared || len(transport.broadcasts()) != 0 {
+		t.Fatalf("prepared = %v, broadcasts = %d: an underfunded create must not reach the chain", prepared, len(transport.broadcasts()))
+	}
+}
+
+// Test flow:
+//  1. Give the fake transport exactly amount + fee, and resolve the create's commit in onPrepared.
+//  2. Call CreateEscrow.
+//  3. Assert the create is broadcast, and the balance was read once for the signer's address in the escrow denom.
+func TestCreateEscrowBroadcastsWhenTheWalletCoversAmountAndFee(t *testing.T) {
+	const amount = 1_000_000
+	signer := fixedSigner(t)
+	transport := newFakeTransport()
+	transport.balance = amount + DefaultFeeAmount
+	client := newFakeTxClient(t, transport)
+
+	_, err := client.CreateEscrow(t.Context(), signer, amount, fixedModelID, func(txHash string) error {
+		transport.setTx(txHash, escrowCreatedResult("42"))
+		return nil
+	})
+
+	if err != nil {
+		t.Fatalf("CreateEscrow: %v", err)
+	}
+	if len(transport.broadcasts()) != 1 {
+		t.Fatalf("broadcasts = %d, want 1", len(transport.broadcasts()))
+	}
+	if want := []balanceCall{{address: signer.Address(), denom: EscrowDenom}}; !slices.Equal(transport.balanceCalls, want) {
+		t.Fatalf("balance reads = %+v, want %+v", transport.balanceCalls, want)
+	}
+}
+
+// Test flow:
+//  1. Configure the TxClient with a fee denom other than the escrow denom.
+//  2. Give the wallet exactly the amount in the escrow denom.
+//  3. Assert the create is broadcast: a fee paid in another denom is not added to the escrow denom's need.
+func TestCreateEscrowAddsTheFeeOnlyWhenItIsPaidInTheEscrowDenom(t *testing.T) {
+	const amount = 1_000_000
+	transport := newFakeTransport()
+	transport.balance = amount
+	client, err := NewTxClient(Config{
+		Transport:    transport,
+		FeeDenom:     "uother",
+		PollInterval: time.Millisecond,
+		PollTimeout:  time.Second,
+		Now:          func() time.Time { return time.Unix(1_800_000_000, 0).UTC() },
+	})
+	if err != nil {
+		t.Fatalf("NewTxClient: %v", err)
+	}
+
+	_, err = client.CreateEscrow(t.Context(), fixedSigner(t), amount, fixedModelID, func(txHash string) error {
+		transport.setTx(txHash, escrowCreatedResult("42"))
+		return nil
+	})
+
+	if err != nil {
+		t.Fatalf("CreateEscrow: %v", err)
+	}
+	if len(transport.broadcasts()) != 1 {
+		t.Fatalf("broadcasts = %d, want 1", len(transport.broadcasts()))
+	}
+}
+
+// Test flow:
+//  1. Make the fake transport's balance query fail.
+//  2. Call CreateEscrow.
+//  3. Assert the query error is returned, it is not ErrWalletUnderfunded, and nothing was broadcast.
+func TestCreateEscrowStopsWhenTheBalanceCannotBeRead(t *testing.T) {
+	transport := newFakeTransport()
+	transport.balanceErr = errTransportRefused
+	client := newFakeTxClient(t, transport)
+
+	_, err := client.CreateEscrow(t.Context(), fixedSigner(t), 1_000_000, fixedModelID, nil)
+
+	if !errors.Is(err, errTransportRefused) || errors.Is(err, ErrWalletUnderfunded) {
+		t.Fatalf("CreateEscrow = %v, want the balance query's own error", err)
+	}
+	if len(transport.broadcasts()) != 0 {
+		t.Fatal("a create was broadcast although the wallet balance could not be read")
 	}
 }

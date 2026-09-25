@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/require"
+
 	"devshard/cmd/gateway/chain"
 )
 
@@ -25,14 +27,14 @@ func TestParseModels(t *testing.T) {
 				{"model_id":"model-b","temp_count":1,"target_count":3,"amount":2000000,"private_key_env":"MODEL_B_KEY"}
 			]`,
 			want: []ModelConfig{
-				{ModelID: "model-a", TempCount: 2, TargetCount: 5, Amount: 1000000, PrivateKeyEnv: "MODEL_A_KEY"},
-				{ModelID: "model-b", TempCount: 1, TargetCount: 3, Amount: 2000000, PrivateKeyEnv: "MODEL_B_KEY"},
+				{ModelID: "model-a", TempCount: 2, TargetCount: 5, ReserveCount: 1, Amount: 1000000, PrivateKeyEnv: "MODEL_A_KEY"},
+				{ModelID: "model-b", TempCount: 1, TargetCount: 3, ReserveCount: 1, Amount: 2000000, PrivateKeyEnv: "MODEL_B_KEY"},
 			},
 		},
 		{
 			name: "missing target_count defaults to one",
 			raw:  `[{"model_id":"m","temp_count":1,"amount":1,"private_key_env":"K"}]`,
-			want: []ModelConfig{{ModelID: "m", TempCount: 1, TargetCount: 1, Amount: 1, PrivateKeyEnv: "K"}},
+			want: []ModelConfig{{ModelID: "m", TempCount: 1, TargetCount: 1, ReserveCount: 1, Amount: 1, PrivateKeyEnv: "K"}},
 		},
 		{name: "blank string returns nil", raw: "", want: nil},
 		{name: "whitespace-only returns nil", raw: "   \n\t ", want: nil},
@@ -147,6 +149,36 @@ func TestServedByNetwork(t *testing.T) {
 				t.Errorf("servedByNetwork(%q) = (served=%v, known=%v), want (served=%v, known=%v)",
 					tt.modelID, served, known, tt.wantServed, tt.wantKnown)
 			}
+		})
+	}
+}
+
+// Test flow:
+//  1. For each table case's rotation models JSON (reserve_count absent, 0, 3, negative), call parseModels.
+//  2. Assert an absent key reads as 1, an explicit 0 and 3 are kept, and a negative count is refused naming the model.
+func TestReserveCountDefaultsToOneAndRefusesANegativeCount(t *testing.T) {
+	t.Parallel()
+	testCases := []struct {
+		name    string
+		raw     string
+		want    int
+		wantErr string
+	}{
+		{name: "absent", raw: `[{"model_id":"m","amount":5}]`, want: 1},
+		{name: "explicit_zero_turns_reserves_off", raw: `[{"model_id":"m","amount":5,"reserve_count":0}]`, want: 0},
+		{name: "several", raw: `[{"model_id":"m","amount":5,"reserve_count":3}]`, want: 3},
+		{name: "negative", raw: `[{"model_id":"m","amount":5,"reserve_count":-1}]`, wantErr: `rotation model "m": reserve_count must be >= 0`},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			models, err := parseModels(testCase.raw)
+			if testCase.wantErr != "" {
+				require.ErrorContains(t, err, testCase.wantErr)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, testCase.want, models[0].ReserveCount)
 		})
 	}
 }

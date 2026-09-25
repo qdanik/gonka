@@ -3,6 +3,7 @@ package chain
 import (
 	"context"
 	"errors"
+	"math"
 	"sync"
 )
 
@@ -15,6 +16,10 @@ type fakeTransport struct {
 
 	account    Account
 	accountErr error
+
+	balance      uint64
+	balanceErr   error
+	balanceCalls []balanceCall
 
 	broadcastHash string
 	broadcastErr  error
@@ -32,8 +37,10 @@ type fakeTransport struct {
 }
 
 func newFakeTransport() *fakeTransport {
-	return &fakeTransport{chainID: "gonka-test", txs: map[string]TxResult{}}
+	return &fakeTransport{chainID: "gonka-test", txs: map[string]TxResult{}, balance: math.MaxUint64}
 }
+
+type balanceCall struct{ address, denom string }
 
 func (f *fakeTransport) ChainID(context.Context) (string, error) {
 	if f.chainIDErr != nil {
@@ -47,6 +54,16 @@ func (f *fakeTransport) Account(context.Context, string) (Account, error) {
 		return Account{}, f.accountErr
 	}
 	return f.account, nil
+}
+
+func (f *fakeTransport) SpendableBalance(_ context.Context, address, denom string) (uint64, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.balanceCalls = append(f.balanceCalls, balanceCall{address: address, denom: denom})
+	if f.balanceErr != nil {
+		return 0, f.balanceErr
+	}
+	return f.balance, nil
 }
 
 func (f *fakeTransport) Broadcast(_ context.Context, txBytes []byte) (string, error) {

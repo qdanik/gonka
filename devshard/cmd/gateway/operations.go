@@ -155,7 +155,7 @@ func (o *operations) register(ctx context.Context, record store.DevshardRecord) 
 	if !record.Active {
 		return nil
 	}
-	return o.escrows.Add(ctx, record.EscrowID, record.Model)
+	return addServing(ctx, o.escrows, record)
 }
 
 // refuseParked keeps a re-registration from routing a parked escrow or erasing the hash of its settle.
@@ -189,7 +189,7 @@ func (o *operations) Activate(ctx context.Context, id string) error {
 	if err := o.store.SetDevshardActive(ctx, id, true); err != nil {
 		return err
 	}
-	if err := o.escrows.Add(ctx, id, record.Model); err != nil {
+	if err := addServing(ctx, o.escrows, record); err != nil {
 		return err
 	}
 	o.escrows.SetOnHold(id, false)

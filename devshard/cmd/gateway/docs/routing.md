@@ -36,6 +36,8 @@ The two terms are added rather than multiplied, and that is the whole reason the
 
 Ties are broken by one process-wide atomic counter modulo the tie-set size. It is a pseudo-round-robin over whatever tie set exists at that moment, not a fair per-model rotation, and it depends on the candidate slice being in a stable order — which the registry guarantees by sorting each model's candidates by escrow id (`escrow.go`, `newLiveSet`). The registry's ordering and the scheduler's tie-break are coupled: an unsorted candidate slice makes the counter's modulo select arbitrarily.
 
+**Regulars first, reserves last.** The walk above runs over the regular escrows alone; only when it picks none, and passed none over for its hosts, does the same walk run over the model's reserve escrows, and the admitted counts of both tiers decide `ErrAllowlistUnreachable` together (`escrow_pick.go`, `pickEscrow` and `rankCandidates`). See "A reserve escrow", below.
+
 If nothing survives, `Pick` returns `ErrNoEscrowCapacity`, which names no host: it is a capacity condition, not an accusation (`errors.go`, `ErrNoEscrowCapacity`).
 
 ## Pricing an escrow by the burns it will cost
@@ -300,6 +302,14 @@ A depleted escrow is not always retired. `OnBalanceExhausted` only marks it — 
 **The row is the authority.** Every active row is re-synced into the registry at the top of every tick, before `checkDepletion` runs: a row not on hold clears the registry flag, a row on hold is judged for resume or for parking (`escrow/hold.go`, `resumeHeld`). That leaves two windows that close only at the next tick, around 15 s: a boot or a republish that publishes a new registry entry can carry a flag already stale by the moment the registry sees it, and route the escrow for up to one tick before `resumeHeld` corrects it; and a tick that read its devshard slice before an operator's `Activate` landed can put the flag back on hold right after `Activate` cleared it, because `resumeHeld` still judges the row it read at the start of the tick.
 
 **The epoch a hold is measured against.** A hold ends once the escrow's creation epoch is older than the current one, so it never rides the chain's epoch+1 settlement window. The creation epoch is the row's `rotation_epoch`, or the chain's escrow epoch when the row has none, as a seeded or admin-added row does; an escrow whose epoch cannot be resolved is parked, never held (`escrow/hold.go`, `creationEpoch`).
+
+## A reserve escrow
+
+A reserve is an escrow the registry publishes with its `reserve` flag set, from a row in the `reserve` role (`devshards.go`, `addEscrow`; `registry/registry.go`, `AddReserve`). It routes like any escrow, with every gate above, but ranks in a tier of its own that a pick reaches only when no regular escrow was picked and none was passed over for its hosts (below), so the least-loaded score cannot spread ordinary traffic onto it and drain it like the rest.
+
+**A reserve covers money, not hosts.** The reserve tier opens only when every regular failed for money: below this request's balance floor, past its nonce or balance retirement, or stepped over after its dispatcher refused for insufficient balance. A regular stepped over because its hosts are busy — the one re-pick after `ErrHostsBusy` — skipped for an unusable weight, or holding no participant the allowlist admits keeps the reserves shut, and the caller gets the busy, no-capacity or allowlist answer (`escrow_pick.go`, `avoidedEscrows` and `rankedPick.passedOverForHosts`). A reserve usually shares the model's host group, so spending one on busy hosts would fund an escrow that is no less busy.
+
+Taking it — from the unpinned walk or from a pin that names it — calls `OnReserveTaken` once the dispatcher has handed the request a nonce on it, never at pick time, so a pick whose submit fails or whose client leaves leaves it a reserve (`request_pick.go`, `pickOnce`). The call is wired to `Registry.ReserveTaken`: the flag is cleared with a compare-and-swap, so the escrow is a regular candidate from the very next pick and the manager is told once however many picks raced for it (`registry/registry.go`, `ReserveTaken`). The manager marks it and wakes its tick, which rewrites the row and funds a new reserve (see [`escrow/README.md`](../escrow/README.md), "The reserve"). A reserve that cannot pay for the request is declined like any escrow and is not taken.
 
 ## Membership: what the capacity model is told
 

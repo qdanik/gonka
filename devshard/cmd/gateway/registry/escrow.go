@@ -21,6 +21,7 @@ type escrowEntry struct {
 	stream       nonceStream
 	inFlight     atomic.Int64
 	onHold       atomic.Bool
+	isReserve    atomic.Bool
 	hold         func() (func(), bool)
 
 	settlementHolds atomic.Int64

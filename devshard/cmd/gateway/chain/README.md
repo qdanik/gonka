@@ -31,6 +31,8 @@ Four fields have absent values that are load-bearing, and each fails in a chosen
 | `MaxNonce` | never observed: the chain has not enabled devshard escrow params, or no read has succeeded since start | the nonce gate falls back to `fallbackNonceCeiling` rather than to "no ceiling", and routing reports no escrow exhausted against it (`scheduler`, `reportExhausted`) |
 | `Models` | no read has succeeded since start. A reply naming no model counts as no observation rather than as a chain that named nobody, and a failed read keeps the previous answer, so each model holds the length it was last priced at (`observer.go`, `PhaseObserver.fetchModels`) | a model no length has ever been observed or configured for is priced at `fallback_max_model_len` by the participant limiter's input window (`limits`, `ParticipantLimiter.windowsForLocked`), which the floor would then hold for the life of the process — hence the direction |
 
+Each model carries governance's `context_window` and the `--max-model-len` parsed from its `model_args` (`grpc.go`, `maxModelLenOf`; 0 when the args carry no plain number for it); the engine reads the second as the model's context length when the operator pins none (`engine/capability.go`, `modelContextLength`).
+
 Weights follow the same rule: `CurrentWeightsByModel` is preferred, `CurrentWeights` is the fallback, and a model with neither scores by membership share rather than as zero.
 
 `versions.go` fetches per-node protocol versions with `versionsPollConcurrency` = 16 workers and a `versionsFetchTimeout` of 2 s each, which keeps one full pass inside the poll's freshness window even on a large network.
@@ -106,6 +108,8 @@ The signature is truncated to `r||s`, 64 bytes: the recovery byte the signer pro
 `GRPCChain` answers both `Reader` and `Transport` over one connection: the gateway dials the chain once, for the escrow bridge, and every other chain read rides that same connection and its query fallback. Both are interfaces rather than the client itself, which is what lets tests answer them without a connection and keeps the gateway's own tests off the network.
 
 `ChainID` asks the node unless a value was configured; a configured value is taken as the operator's decision and wins over what the node reports, because a mismatch invalidates every signature.
+
+`SpendableBalance` reads one denom through `x/bank`'s `SpendableBalanceByDenom`, which leaves out vesting coins still locked; `CreateEscrow` calls it for the signer before it prepares anything and refuses with `WalletUnderfundedError` (`ErrWalletUnderfunded`) when the wallet holds less than the amount plus the fee, the fee counted only when it is paid in `EscrowDenom`. A read that fails stops the create too: an unknown balance is not permission to broadcast.
 
 `Account` reads the number and sequence through the account's own registered type, so a vesting or module account answers correctly instead of by whichever nested field a search happened to reach first.
 

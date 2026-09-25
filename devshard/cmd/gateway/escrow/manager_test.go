@@ -240,7 +240,7 @@ func TestTheBridgeSeesAnEscrowResumedInTheSameTickAsServing(t *testing.T) {
 	}}
 	cfg := config.Defaults()
 	cfg.Rotation.Enabled = true
-	cfg.Rotation.ModelsJSON = `[{"model_id":"model-a","target_count":1,"amount":1000,"private_key_env":"MODEL_A_KEY"}]`
+	cfg.Rotation.ModelsJSON = `[{"model_id":"model-a","target_count":1,"reserve_count":0,"amount":1000,"private_key_env":"MODEL_A_KEY"}]`
 	snapshot := chain.PhaseSnapshot{
 		EpochIndex: 9, BlockHeight: 800, EpochSwitchBlockHeight: 100,
 		FullWeightsByModel: map[string]map[string]float64{"model-a": {"p": 1}},

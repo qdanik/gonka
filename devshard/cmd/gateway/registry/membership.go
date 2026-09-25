@@ -8,9 +8,10 @@ type membership interface {
 	RemoveEscrow(escrowID string)
 }
 
-// exhaustion is satisfied by *escrow.Manager. Called from the request path, so it must mark and return, not do I/O.
+// exhaustion carries routing's two rotation notices, a spent escrow and a taken reserve; satisfied by *escrow.Manager. Called from the request path, so it must mark and return, not do I/O.
 type exhaustion interface {
 	OnBalanceExhausted(escrowID string, reason scheduler.ExhaustionReason)
+	OnReserveTaken(escrowID string)
 }
 
 // publications is called while the registry holds its lock, so an implementation must return without doing work.

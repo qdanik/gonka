@@ -23,7 +23,7 @@ func newModelCounts(devshards []store.DevshardRecord) modelCounts {
 	counts := modelCounts{serving: map[string]int{}, onHold: map[string]int{}}
 	for _, record := range devshards {
 		switch {
-		case !record.Active:
+		case !record.Active, record.RotationRole == RoleReserve:
 		case record.OnHold:
 			counts.onHold[record.Model]++
 		default:

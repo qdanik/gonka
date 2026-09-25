@@ -580,7 +580,7 @@ func TestAnEscrowResumedInTheTickCountsAsServingForADepletionInTheSameTick(t *te
 	configuration.Rotation.Enabled = true
 	configuration.Rotation.HoldEnabled = true
 	configuration.Rotation.SettlementEnabled = false
-	configuration.Rotation.ModelsJSON = `[{"model_id":"model-a","target_count":1,"amount":1000,"private_key_env":"MODEL_A_KEY"}]`
+	configuration.Rotation.ModelsJSON = `[{"model_id":"model-a","target_count":1,"reserve_count":0,"amount":1000,"private_key_env":"MODEL_A_KEY"}]`
 	deps := testManagerDeps(t, testStore, txClient, &fakeSnapshotSource{snapshot: snapshot}, &configuration)
 	deps.Holds = gate
 	manager := mustManager(t, deps)
@@ -618,7 +618,7 @@ func TestALeftoverDepletionReportDoesNotPutAResumedEscrowBackOnHold(t *testing.T
 	configuration.Rotation.Enabled = true
 	configuration.Rotation.HoldEnabled = true
 	configuration.Rotation.SettlementEnabled = false
-	configuration.Rotation.ModelsJSON = `[{"model_id":"model-a","target_count":2,"amount":1000,"private_key_env":"MODEL_A_KEY"}]`
+	configuration.Rotation.ModelsJSON = `[{"model_id":"model-a","target_count":2,"reserve_count":0,"amount":1000,"private_key_env":"MODEL_A_KEY"}]`
 	deps := testManagerDeps(t, testStore, txClient, &fakeSnapshotSource{snapshot: snapshot}, &configuration)
 	deps.Holds = gate
 	manager := mustManager(t, deps)
@@ -747,5 +747,20 @@ func TestADepletedEscrowWhoseEpochCannotBeResolvedIsParkedNotHeld(t *testing.T) 
 				t.Fatalf("record = %+v, want on hold with RotationEpoch still 0", record)
 			}
 		})
+	}
+}
+
+// Test flow:
+//  1. Build newModelCounts over one serving regular, one serving reserve and one on hold, for one model.
+//  2. Assert serving is 1 and onHold is 1: a reserve does not stand in for a regular in the target check.
+func TestAReserveDoesNotCountAsServing(t *testing.T) {
+	counts := newModelCounts([]store.DevshardRecord{
+		{EscrowID: "regular", Model: "model-a", Active: true, RotationRole: roleRegular},
+		{EscrowID: "reserve", Model: "model-a", Active: true, RotationRole: RoleReserve},
+		{EscrowID: "held", Model: "model-a", Active: true, OnHold: true, RotationRole: roleRegular},
+	})
+
+	if counts.serving["model-a"] != 1 || counts.onHold["model-a"] != 1 {
+		t.Fatalf("serving = %d, onHold = %d, want 1 and 1", counts.serving["model-a"], counts.onHold["model-a"])
 	}
 }

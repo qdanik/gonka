@@ -25,7 +25,7 @@ func (s *Scheduler) Pick(ctx context.Context, profile RequestProfile) (Assignmen
 		return Assignment{}, err
 	}
 
-	retried, _, retryErr := s.pickPastEmptyEscrows(ctx, profile, map[string]bool{routedTo: true})
+	retried, _, retryErr := s.pickPastEmptyEscrows(ctx, profile, avoidedEscrows{routedTo: avoidedHostsBusy})
 	if retryErr == nil || outranksBusy(retryErr) {
 		return retried, retryErr
 	}
@@ -33,7 +33,7 @@ func (s *Scheduler) Pick(ctx context.Context, profile RequestProfile) (Assignmen
 }
 
 // pickPastEmptyEscrows steps over every escrow that cannot pay for this request, so a caller hears "no balance" only once no escrow has any. See routing.md, "Past every escrow that cannot pay".
-func (s *Scheduler) pickPastEmptyEscrows(ctx context.Context, profile RequestProfile, seed map[string]bool) (Assignment, string, error) {
+func (s *Scheduler) pickPastEmptyEscrows(ctx context.Context, profile RequestProfile, seed avoidedEscrows) (Assignment, string, error) {
 	assignment, routedTo, err := s.pickOnce(ctx, profile, seed)
 	if !outOfFunds(err) || routedTo == "" {
 		return assignment, routedTo, err
@@ -41,10 +41,10 @@ func (s *Scheduler) pickPastEmptyEscrows(ctx context.Context, profile RequestPro
 
 	emptied := err
 	refused := 0
-	avoided := make(map[string]bool, len(seed)+1)
+	avoided := make(avoidedEscrows, len(seed)+1)
 	maps.Copy(avoided, seed)
 	for range len(s.escrows.Candidates(profile.Model)) {
-		avoided[routedTo] = true
+		avoided[routedTo] = avoidedOutOfFunds
 		refused++
 		if ctx.Err() != nil {
 			return Assignment{}, "", outOfFundsAfter(refused, emptied)
@@ -83,7 +83,7 @@ func outranksBusy(err error) bool {
 }
 
 // pickOnce names the escrow it routed to, so a caller that re-picks can leave that one out of the second round.
-func (s *Scheduler) pickOnce(ctx context.Context, profile RequestProfile, avoided map[string]bool) (Assignment, string, error) {
+func (s *Scheduler) pickOnce(ctx context.Context, profile RequestProfile, avoided avoidedEscrows) (Assignment, string, error) {
 	queued := newWaiter(profile, s.now())
 	escrow, err := s.pickEscrow(profile, s.snapshots.Snapshot(), queued, avoided)
 	if err != nil {
@@ -100,6 +100,10 @@ func (s *Scheduler) pickOnce(ctx context.Context, profile RequestProfile, avoide
 	case result := <-queued.replyCh:
 		if result.err != nil {
 			return Assignment{}, escrow.ID, result.err
+		}
+		// Only a reserve that served a nonce is taken: a failed pick leaves it a reserve.
+		if escrow.IsReserve {
+			s.reportReserveTaken(escrow.ID)
 		}
 		return result.assignment, escrow.ID, nil
 	case <-ctx.Done():

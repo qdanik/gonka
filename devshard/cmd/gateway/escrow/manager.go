@@ -57,6 +57,7 @@ func NewManager(d Deps) (*Manager, error) {
 		sweepRecorder:    d.Sweeps,
 		narrator:         d.Narrator,
 		routePrefix:      d.RoutePrefix,
+		wakeup:           make(chan struct{}, 1),
 	}, nil
 }
 
@@ -82,6 +83,8 @@ func (m *Manager) Start(ctx context.Context) {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
+				m.runTick(ctx)
+			case <-m.wakeup:
 				m.runTick(ctx)
 			}
 		}
@@ -152,9 +155,10 @@ func (m *Manager) tick(ctx context.Context) error {
 	snapshot := m.snapshots.Snapshot()
 	models, modelsErr := rotationModels(configuration.Rotation)
 	resumedDevshards, holdErr := m.resumeHeld(ctx, snapshot, models, devshards)
+	promotedDevshards, promoteErr := m.promoteTakenReserves(ctx, resumedDevshards)
 	// An exhausted escrow must stop taking traffic whatever the toggle says; models is empty unless rotation can supply a replacement.
-	depletionErr := m.checkDepletion(ctx, snapshot, models, resumedDevshards)
-	lifecycleErr := errors.Join(reconcileErr, pendingErr, missingErr, modelsErr, holdErr, depletionErr)
+	depletionErr := m.checkDepletion(ctx, snapshot, models, promotedDevshards)
+	lifecycleErr := errors.Join(reconcileErr, pendingErr, missingErr, modelsErr, holdErr, promoteErr, depletionErr)
 
 	if !configuration.Rotation.Enabled || modelsErr != nil {
 		return lifecycleErr
@@ -166,9 +170,12 @@ func (m *Manager) tick(ctx context.Context) error {
 	var bridgeErr error
 	blocksToEpochSwitch := snapshot.EpochSwitchBlockHeight - snapshot.BlockHeight
 	if blocksToEpochSwitch >= 0 && blocksToEpochSwitch <= configuration.Rotation.PrePoCBlocks {
-		bridgeErr = m.prepareBridge(ctx, snapshot, models, resumedDevshards) // wins even when PoC is also inactive
+		bridgeErr = m.prepareBridge(ctx, snapshot, models, promotedDevshards) // wins even when PoC is also inactive
 	} else if !snapshot.RequestsBlocked {
-		bridgeErr = m.finishBridge(ctx, snapshot, models, resumedDevshards)
+		bridgeErr = errors.Join(
+			m.finishBridge(ctx, snapshot, models, promotedDevshards),
+			m.ensureReserves(ctx, snapshot, models, promotedDevshards),
+		)
 	}
 	return errors.Join(lifecycleErr, bridgeErr)
 }

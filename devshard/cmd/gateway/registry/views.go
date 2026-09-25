@@ -99,6 +99,7 @@ func (e *escrowEntry) candidate() scheduler.Escrow {
 		SessionID:   e.sessionID,
 		Session:     e.stream,
 		ActiveUsers: int(e.inFlight.Load()),
+		IsReserve:   e.isReserve.Load(),
 		Hold:        e.hold,
 	}
 }

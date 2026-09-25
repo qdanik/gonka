@@ -50,6 +50,20 @@ func TestCapabilityLimitsReadsTheRequestedTotal(t *testing.T) {
 }
 
 // Test flow:
+//  1. Call CapabilityLimits on the older vLLM phrasing, which names the request as "you requested N tokens" and carries no total phrase.
+//  2. Assert the requested count is read from that phrase.
+func TestCapabilityLimitsReadsTheOlderRequestedPhrase(t *testing.T) {
+	t.Parallel()
+	message := "This model's maximum context length is 131072 tokens. However, you requested 500000 tokens (490000 in the messages, 10000 in the completion). Please reduce the length of the messages or completion."
+
+	contextLimit, contextRequested := CapabilityLimits(message)
+
+	if contextLimit != 131072 || contextRequested != 500000 {
+		t.Fatalf("limits = (%d, %d), want (131072, 500000)", contextLimit, contextRequested)
+	}
+}
+
+// Test flow:
 //  1. Call CapabilityLimits on a message that mentions the maximum context length without any digits.
 //  2. Assert both returned values are zero.
 func TestCapabilityLimitsIgnoresAPhraseWithoutDigits(t *testing.T) {

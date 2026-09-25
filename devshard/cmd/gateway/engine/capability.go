@@ -6,6 +6,8 @@ import (
 	"regexp"
 	"strings"
 
+	"devshard/cmd/gateway/chain"
+	"devshard/cmd/gateway/config"
 	"devshard/cmd/gateway/filters"
 	"devshard/storage"
 	"devshard/transport"
@@ -17,11 +19,17 @@ type CapabilitySignal struct {
 	ToolsUnsupported   bool
 	VersionUnsupported bool
 	ContextLimit       uint64
+	ContextRequested   uint64
 }
 
 // Retriable reports a refusal another host may not repeat: a tool call or protocol version the answering host's build lacks.
 func (s CapabilitySignal) Retriable() bool {
 	return s.ToolsUnsupported || s.VersionUnsupported
+}
+
+// ServableByALongerHost reports a context-length refusal from a host running shorter than the model, for a request the model's full length would take.
+func (s CapabilitySignal) ServableByALongerHost(modelContextLength uint64) bool {
+	return s.ContextLimit > 0 && s.ContextLimit < modelContextLength && s.ContextRequested <= modelContextLength
 }
 
 // Refused reports any refusal the gateway recognises, retriable or not.
@@ -40,8 +48,11 @@ func ParseCapabilityError(message string) CapabilitySignal {
 	if strings.Contains(message, filters.ToolChoiceUnsupportedMessage) {
 		return CapabilitySignal{ToolsUnsupported: true}
 	}
-	contextLimit, _ := filters.CapabilityLimits(message)
-	return CapabilitySignal{ContextLimit: contextLimit}
+	contextLimit, contextRequested := filters.CapabilityLimits(message)
+	if contextLimit == 0 {
+		return CapabilitySignal{}
+	}
+	return CapabilitySignal{ContextLimit: contextLimit, ContextRequested: contextRequested}
 }
 
 func capabilityOfDispatchError(err error) CapabilitySignal {
@@ -62,8 +73,24 @@ func CapabilityOf(attempt AttemptOutcome) CapabilitySignal {
 	return ParseCapabilityError(attempt.ErrorMessage)
 }
 
-// rulesOutRetry reports a trusted host's answer the race takes as every host's: a refusal that is not Retriable, or a rejection of the request itself. See race.md, "Escalation".
-func rulesOutRetry(attempt AttemptOutcome) bool {
+// rulesOutRetry reports a trusted answer no other host would change: a context-length refusal a longer host could still serve keeps the search going. See race.md, "Escalation".
+func rulesOutRetry(attempt AttemptOutcome, modelContextLength uint64) bool {
+	return answersForEveryHost(attempt) && !CapabilityOf(attempt).ServableByALongerHost(modelContextLength)
+}
+
+// modelContextLength is the operator's model_limits pin, else governance's --max-model-len; 0 when neither names a usable one. See race.md, "Escalation".
+func modelContextLength(limits config.Limits, snapshot chain.PhaseSnapshot, model string) uint64 {
+	if pinned := limits.ModelLimits[model].MaxModelLen; pinned != nil && *pinned > 0 {
+		return uint64(*pinned)
+	}
+	if governed := snapshot.Models[model].MaxModelLen; governed <= config.MaxContextTokens {
+		return governed
+	}
+	return 0
+}
+
+// answersForEveryHost reports a trusted host's answer the race takes as every host's: a refusal that is not Retriable, or a rejection of the request itself.
+func answersForEveryHost(attempt AttemptOutcome) bool {
 	if attempt.Suspicious {
 		return false
 	}

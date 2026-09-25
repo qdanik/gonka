@@ -167,6 +167,18 @@ func TestEscrowLifecycleTransitionsRenderTheLinesTheirProducersNarrate(t *testin
 			}},
 		},
 		{
+			name:    "a create is refused for an underfunded wallet",
+			produce: func(events *Journal) { events.EscrowCreateUnderfunded("qwen", "reserve", 5, 101) },
+			want: logcapture.Entry{Level: "warn", Msg: "escrow create refused: wallet underfunded", Fields: []any{
+				"model", "qwen", "role", "reserve", "have", uint64(5), "need", uint64(101),
+			}},
+		},
+		{
+			name:    "a reserve escrow is taken",
+			produce: func(events *Journal) { events.EscrowReserveTaken("1") },
+			want:    logcapture.Entry{Level: "info", Msg: "reserve escrow taken", Fields: []any{"escrow", "1"}},
+		},
+		{
 			name:    "a rotation is skipped",
 			produce: func(events *Journal) { events.RotationSkipped("qwen", "regular", 4) },
 			want: logcapture.Entry{Level: "warn", Msg: "rotation skipped, the network serves no such model", Fields: []any{

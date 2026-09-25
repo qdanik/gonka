@@ -31,6 +31,8 @@ type RaceOutcome struct {
 	Decision     string
 	ClientStream bool
 
+	ModelContextLength uint64
+
 	WinnerNonce uint64
 	Succeeded   bool
 	Attempts    []AttemptOutcome

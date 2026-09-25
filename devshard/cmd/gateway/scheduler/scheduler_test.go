@@ -219,6 +219,7 @@ func (e *exhaustionLog) all() []string {
 type schedulerHarness struct {
 	scheduler *Scheduler
 	exhausted *exhaustionLog
+	reserves  *reserveTakenRecorder
 	escrows   *fakeEscrows
 	holds     *escrowHolds
 	weights   *fakeWeights
@@ -270,6 +271,7 @@ func newSchedulerHarness(t *testing.T, cfg schedulerConfig) *schedulerHarness {
 		observer:  &recordingObserver{},
 		clock:     newTestClock(),
 		exhausted: &exhaustionLog{},
+		reserves:  &reserveTakenRecorder{},
 	}
 	health := cfg.health
 	if health == nil {
@@ -286,6 +288,7 @@ func newSchedulerHarness(t *testing.T, cfg schedulerConfig) *schedulerHarness {
 		Now:               test.clock.Now,
 		SubmitBuffer:      cfg.submitBuffer,
 		OnEscrowExhausted: test.exhausted.record,
+		OnReserveTaken:    test.reserves.record,
 	})
 	if err != nil {
 		t.Fatalf("NewScheduler() = %v, want a wired scheduler", err)
@@ -1209,5 +1212,47 @@ func TestADroppedAssignmentNamesTheRequestThatLeft(t *testing.T) {
 
 	if got := test.observer.burnRequests(); !slices.Equal(got, []string{"request-gone"}) {
 		t.Fatalf("burned during = %v, want the request whose Pick gave up with the assignment in hand", got)
+	}
+}
+
+func (h *schedulerHarness) markReserve(escrowID string) {
+	for index, candidate := range h.escrows.byModel[modelA] {
+		if candidate.ID == escrowID {
+			h.escrows.byModel[modelA][index].IsReserve = true
+		}
+	}
+}
+
+// Test flow:
+//  1. Build a scheduler whose only escrow is a reserve, and pick for a request.
+//  2. Assert the pick is served on the reserve and the take is reported once, after the dispatcher handed out the nonce.
+func TestAServedPickOnAReserveReportsItTaken(t *testing.T) {
+	test := newSchedulerHarness(t, schedulerConfig{})
+	test.markReserve(escrowA)
+
+	assignment, err := test.scheduler.Pick(context.Background(), RequestProfile{Model: modelA})
+
+	if err != nil || assignment.Escrow != escrowA {
+		t.Fatalf("Pick = %+v, %v; want a nonce on the reserve", assignment, err)
+	}
+	if taken := test.reserves.recorded(); !slices.Equal(taken, []string{escrowA}) {
+		t.Fatalf("reserves taken = %v, want [%s]", taken, escrowA)
+	}
+}
+
+// Test flow:
+//  1. Build a scheduler whose only escrow is a reserve whose session refuses to advance.
+//  2. Pick for a request and assert it fails.
+//  3. Assert no take was reported: a reserve that served nothing stays a reserve, so no second one is funded for it.
+func TestAFailedPickOnAReserveDoesNotTakeIt(t *testing.T) {
+	test := newSchedulerHarness(t, schedulerConfig{})
+	test.markReserve(escrowA)
+	test.session(t, escrowA).failWith = errors.New("session refused")
+
+	if _, err := test.scheduler.Pick(context.Background(), RequestProfile{Model: modelA}); err == nil {
+		t.Fatal("Pick succeeded on a session that refuses every advance")
+	}
+	if taken := test.reserves.recorded(); len(taken) != 0 {
+		t.Fatalf("reserves taken = %v, want none", taken)
 	}
 }

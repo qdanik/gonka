@@ -52,7 +52,7 @@ func (c *raceCoordinator) complete(attempt *liveAttempt, event AttemptEvent) {
 		RecordCapability(c.deps.Perf, attempt.participant, c.request.Model, signal)
 		c.exclude(attempt.participant)
 	}
-	if rulesOutRetry(*attempt.outcome) {
+	if rulesOutRetry(*attempt.outcome, c.deps.ModelContextLength) {
 		c.retryRuledOut = true
 		c.stopPicking()
 	}
@@ -171,6 +171,8 @@ func (c *raceCoordinator) raceFacts() RaceOutcome {
 		Decision:        c.decision,
 		PoCBypassActive: c.pocBypass,
 		Lifecycle:       Lifecycle{BalanceExhausted: c.balanceExhausted, ClientGone: !c.clientGoneAt.IsZero()},
+
+		ModelContextLength: c.deps.ModelContextLength,
 	}
 }
 

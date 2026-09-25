@@ -3,6 +3,8 @@ package chain
 import (
 	"context"
 	"fmt"
+	"math"
+	"strconv"
 	"strings"
 
 	commonchain "common/chain"
@@ -12,11 +14,14 @@ import (
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	txtypes "github.com/cosmos/cosmos-sdk/types/tx"
 	authtypes "github.com/cosmos/cosmos-sdk/x/auth/types"
+	banktypes "github.com/cosmos/cosmos-sdk/x/bank/types"
 	inferencetypes "github.com/productscience/inference/x/inference/types"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
+
+const maxModelLenFlag = "--max-model-len"
 
 // Reader is the chain state the observer polls, an interface so tests answer it without a connection.
 type Reader interface {
@@ -29,6 +34,7 @@ type Reader interface {
 type Transport interface {
 	ChainID(ctx context.Context) (string, error)
 	Account(ctx context.Context, address string) (Account, error)
+	SpendableBalance(ctx context.Context, address, denom string) (uint64, error)
 	Broadcast(ctx context.Context, txBytes []byte) (string, error)
 	Tx(ctx context.Context, txHash string) (TxResult, bool, error)
 	Escrow(ctx context.Context, escrowID uint64) (EscrowInfo, bool, error)
@@ -123,6 +129,22 @@ func (g *GRPCChain) Account(ctx context.Context, address string) (Account, error
 	return Account{Number: account.GetAccountNumber(), Sequence: account.GetSequence()}, nil
 }
 
+// SpendableBalance leaves out vesting coins still locked, which a create cannot spend.
+func (g *GRPCChain) SpendableBalance(ctx context.Context, address, denom string) (uint64, error) {
+	response, err := banktypes.NewQueryClient(g.conn()).SpendableBalanceByDenom(ctx, &banktypes.QuerySpendableBalanceByDenomRequest{Address: address, Denom: denom})
+	if err != nil {
+		return 0, fmt.Errorf("fetch spendable %s of %s: %w", denom, address, err)
+	}
+	balance := response.GetBalance()
+	switch {
+	case balance == nil || balance.Amount.IsNil():
+		return 0, nil
+	case !balance.Amount.IsUint64():
+		return math.MaxUint64, nil
+	}
+	return balance.Amount.Uint64(), nil
+}
+
 func (g *GRPCChain) Broadcast(ctx context.Context, txBytes []byte) (string, error) {
 	response, err := txtypes.NewServiceClient(g.conn()).BroadcastTx(ctx, &txtypes.BroadcastTxRequest{
 		TxBytes: txBytes,
@@ -194,9 +216,29 @@ func (g *GRPCChain) Models(ctx context.Context) (map[string]ModelParams, error) 
 	}
 	models := make(map[string]ModelParams, len(response.GetModel()))
 	for _, model := range response.GetModel() {
-		models[model.GetId()] = ModelParams{ContextWindow: model.GetContextWindow()}
+		models[model.GetId()] = ModelParams{ContextWindow: model.GetContextWindow(), MaxModelLen: maxModelLenOf(model.GetModelArgs())}
 	}
 	return models, nil
+}
+
+// maxModelLenOf reads vLLM's --max-model-len from governance model_args; 0 when the args carry no plain number for it.
+func maxModelLenOf(args []string) uint64 {
+	for index, arg := range args {
+		value, joined := strings.CutPrefix(arg, maxModelLenFlag+"=")
+		switch {
+		case joined:
+		case arg == maxModelLenFlag && index+1 < len(args):
+			value = args[index+1]
+		default:
+			continue
+		}
+		parsed, err := strconv.ParseUint(value, 10, 64)
+		if err != nil {
+			return 0
+		}
+		return parsed
+	}
+	return 0
 }
 
 // MaxNonce reports fetched=false when the chain carries no devshard escrow params -- not enabled, rather than unread.

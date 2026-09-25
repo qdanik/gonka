@@ -359,12 +359,48 @@ func TestOutcomeFailureNamesWhatTheClientLost(t *testing.T) {
 	throttledWithReason.ErrorType = "RateLimitError"
 	throttledWithReason.ErrorMessage = "rate limited"
 
+	shorterHostRefused := failedAttempt(TerminalCapabilityRefused)
+	shorterHostRefused.Nonce = 11
+	shorterHostRefused.ErrorSource = "error.BadRequestError"
+	shorterHostRefused.ErrorType = "BadRequestError"
+	shorterHostRefused.ErrorMessage = contextRejection(180_000, 200_000)
+
+	longerHostRefused := shorterHostRefused
+	longerHostRefused.Nonce = 12
+	longerHostRefused.ErrorMessage = contextRejection(262_144, 200_000)
+
+	fullHostBroke := failedAttempt(TerminalErrorStream)
+	fullHostBroke.Nonce = 13
+	fullHostBroke.ErrorSource = "error.server_error"
+	fullHostBroke.ErrorType = "server_error"
+	fullHostBroke.ErrorMessage = "backend failed"
+
+	fullHostSilent := failedAttempt(TerminalDialFailure)
+	fullHostSilent.Nonce = 14
+
+	const modelContextLength = 400_000
+
 	cases := []struct {
 		name    string
 		outcome RaceOutcome
 		want    error
 	}{
 		{name: "a_served_race_has_no_failure", outcome: race(cleanAttempt())},
+		{
+			name:    "a_full_length_hosts_own_error_outranks_a_shorter_hosts_context_refusal",
+			outcome: RaceOutcome{Model: testModel, ModelContextLength: modelContextLength, Attempts: []AttemptOutcome{shorterHostRefused, fullHostBroke}},
+			want:    &HostApplicationError{Type: "server_error", Message: "backend failed"},
+		},
+		{
+			name:    "a_shorter_hosts_context_refusal_is_not_the_answer_when_another_host_failed_unexplained",
+			outcome: RaceOutcome{Model: testModel, ModelContextLength: modelContextLength, Attempts: []AttemptOutcome{shorterHostRefused, fullHostSilent}},
+			want:    ErrAllAttemptsFailed,
+		},
+		{
+			name:    "when_every_host_refused_the_context_the_longest_limit_is_the_answer",
+			outcome: RaceOutcome{Model: testModel, ModelContextLength: modelContextLength, Attempts: []AttemptOutcome{shorterHostRefused, longerHostRefused}},
+			want:    &HostApplicationError{Type: "BadRequestError", Message: contextRejection(262_144, 200_000)},
+		},
 		{
 			name:    "no_attempt_ever_started",
 			outcome: RaceOutcome{Model: testModel},

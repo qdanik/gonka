@@ -14,7 +14,17 @@ const fallbackNonceCeiling uint64 = 19_800
 // nonceInFlightMargin is room left under the hosts' nonce cap for work already routed. See routing.md, "Picking an escrow".
 const nonceInFlightMargin uint64 = 200
 
-func (s *Scheduler) pickEscrow(profile RequestProfile, snapshot chain.PhaseSnapshot, queued *waiter, avoided map[string]bool) (Escrow, error) {
+// avoidReason is why one round of a pick steps over an escrow; only a busy one keeps the reserves shut.
+type avoidReason int
+
+const (
+	avoidedOutOfFunds avoidReason = iota + 1
+	avoidedHostsBusy
+)
+
+type avoidedEscrows map[string]avoidReason
+
+func (s *Scheduler) pickEscrow(profile RequestProfile, snapshot chain.PhaseSnapshot, queued *waiter, avoided avoidedEscrows) (Escrow, error) {
 	candidates := s.escrows.Candidates(profile.Model)
 	retirement, request := s.retirementReserve(), requestReserve(profile)
 
@@ -36,37 +46,88 @@ func (s *Scheduler) pickEscrow(profile RequestProfile, snapshot chain.PhaseSnaps
 		return Escrow{}, fmt.Errorf("escrow %q for model %q: %w", profile.Escrow, profile.Model, ErrEscrowGone)
 	}
 	// Read here as well as at dispatch: an escrow whose whole group it refuses can never serve.
-	reachable := reachableByAllowlist(s.participantAllowlist(), s.unthrottledParticipants())
-	fleet := s.fleetGates(profile.Model, snapshot)
-	ahead := s.queuedAhead(candidates)
+	ranking := escrowRanking{
+		profile: profile, snapshot: snapshot, queued: queued, avoided: avoided,
+		retirement: retirement, request: request,
+		reachable: reachableByAllowlist(s.participantAllowlist(), s.unthrottledParticipants()),
+		fleet:     s.fleetGates(profile.Model, snapshot),
+		ahead:     s.queuedAhead(candidates),
+	}
+	regular := s.rankCandidates(candidates, ranking, false)
+	picked, admitted, declined := regular.picked, regular.admitted, regular.declined
+	if picked < 0 && regular.passedOverForHosts == 0 {
+		reserve := s.rankCandidates(candidates, ranking, true)
+		picked, admitted = reserve.picked, admitted+reserve.admitted
+		if reserve.declined != "" {
+			declined = reserve.declined
+		}
+	}
 
+	if admitted == 0 && len(candidates) > 0 {
+		return Escrow{}, ErrAllowlistUnreachable
+	}
+	if picked < 0 {
+		return Escrow{}, noCapacity(declined)
+	}
+	return candidates[picked], nil
+}
+
+// escrowRanking is what one pick reads for every candidate it ranks.
+type escrowRanking struct {
+	profile    RequestProfile
+	snapshot   chain.PhaseSnapshot
+	queued     *waiter
+	avoided    avoidedEscrows
+	retirement uint64
+	request    uint64
+	reachable  func(Escrow) bool
+	fleet      availability
+	ahead      []uint64
+}
+
+type rankedPick struct {
+	picked             int
+	admitted           int
+	declined           ExhaustionReason
+	passedOverForHosts int
+}
+
+// rankCandidates scores one tier, regulars or reserves, and counts the ones it passed over for their hosts. See routing.md, "A reserve escrow".
+func (s *Scheduler) rankCandidates(candidates []Escrow, ranking escrowRanking, reserveTier bool) rankedPick {
 	bestScore := math.Inf(1)
 	var tied []int
-	admitted := 0
-	var declined ExhaustionReason
+	result := rankedPick{picked: -1}
 	for index, candidate := range candidates {
-		if !reachable(candidate) {
+		if candidate.IsReserve != reserveTier {
 			continue
 		}
-		admitted++
-		if avoided[candidate.ID] {
+		if !ranking.reachable(candidate) {
+			result.passedOverForHosts++
 			continue
 		}
-		if reason := exhaustionReason(candidate, snapshot.MaxNonce, retirement); reason != "" {
-			declined = reason
+		result.admitted++
+		if reason, avoided := ranking.avoided[candidate.ID]; avoided {
+			if reason == avoidedHostsBusy {
+				result.passedOverForHosts++
+			}
+			continue
+		}
+		if reason := exhaustionReason(candidate, ranking.snapshot.MaxNonce, ranking.retirement); reason != "" {
+			result.declined = reason
 			// Routing only declines; the rotation lifecycle is what replaces an exhausted escrow.
 			s.reportExhausted(candidate.ID, reason)
 			continue
 		}
-		if belowBalanceFloor(candidate, request) {
-			declined = ExhaustionBalanceFloor
+		if belowBalanceFloor(candidate, ranking.request) {
+			result.declined = ExhaustionBalanceFloor
 			continue
 		}
-		weight := s.capacity.EscrowWeight(candidate.ID, profile.Model)
+		weight := s.capacity.EscrowWeight(candidate.ID, ranking.profile.Model)
 		if unusableWeight(weight) {
+			result.passedOverForHosts++
 			continue
 		}
-		forecast := expectedBurns(candidate, fleet.forEscrow(s.stateBlocked(candidate.ID)), queued, ahead[index])
+		forecast := expectedBurns(candidate, ranking.fleet.forEscrow(s.stateBlocked(candidate.ID)), ranking.queued, ranking.ahead[index])
 		score := float64(candidate.ActiveUsers+forecast) / weight
 		switch {
 		case score < bestScore:
@@ -76,17 +137,19 @@ func (s *Scheduler) pickEscrow(profile RequestProfile, snapshot chain.PhaseSnaps
 		}
 	}
 
-	if admitted == 0 && len(candidates) > 0 {
-		return Escrow{}, ErrAllowlistUnreachable
-	}
-
 	switch len(tied) {
 	case 0:
-		return Escrow{}, noCapacity(declined)
 	case 1:
-		return candidates[tied[0]], nil
+		result.picked = tied[0]
 	default:
-		return candidates[tied[int(uint64(s.tieBreak.Add(1)-1)%uint64(len(tied)))]], nil
+		result.picked = tied[int(uint64(s.tieBreak.Add(1)-1)%uint64(len(tied)))]
+	}
+	return result
+}
+
+func (s *Scheduler) reportReserveTaken(escrowID string) {
+	if s.onReserveTaken != nil {
+		s.onReserveTaken(escrowID)
 	}
 }
 

@@ -5,6 +5,7 @@ import "devshard/cmd/gateway/scheduler"
 const (
 	roleTemp    = "temp"
 	roleRegular = "regular"
+	RoleReserve = "reserve"
 )
 
 const (

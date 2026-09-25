@@ -126,6 +126,8 @@ const (
 	EscrowBuilders = "escrow_builders"
 	Balance        = "balance"
 	Reserved       = "reserved"
+	Have           = "have"
+	Need           = "need"
 	Challenged     = "challenged"
 	Replacement    = "replacement"
 )

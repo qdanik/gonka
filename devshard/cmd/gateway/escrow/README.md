@@ -27,7 +27,7 @@ An escrow is funds on chain plus a group of hosts. This package creates one, kee
 
 `TickInterval` is exported because `api` answers a drained offered model's 503 with it as `Retry-After`: the tick is the soonest the gateway itself parks, replaces and republishes a drained escrow.
 
-Six steps run whatever the `Rotation.Enabled` toggle says, because each of them is about an escrow that already exists rather than about creating one:
+Seven steps run whatever the `Rotation.Enabled` toggle says, because each of them is about an escrow that already exists rather than about creating one:
 
 | Step | Why it ignores the toggle |
 | --- | --- |
@@ -36,21 +36,26 @@ Six steps run whatever the `Rotation.Enabled` toggle says, because each of them 
 | `checkMissing` | an escrow the chain no longer holds must stop taking traffic |
 | `sweepTimeouts` | a nonce the chain will still settle is owed a vote whether or not rotation is on |
 | `resumeHeld` | a row on hold is re-synced into the registry, resumed or parked, whether or not rotation could fund what it needs — and it runs before `checkDepletion` because that step counts against the slice `resumeHeld` returns, not the one the tick loaded |
+| `promoteTakenReserves` | a reserve a request already took is a regular escrow in routing, so its row says so before `checkDepletion` counts the model's serving escrows |
 | `checkDepletion` | an exhausted escrow must stop taking traffic; only creating its replacement is rotation's business, which is why `rotationModels` returns an empty set when rotation is off and no caller downstream has to re-read the toggle |
 
-`sweepTimeouts` is the only one of the six that does not run *on* the tick: a vote round can outlast 15 s, so it runs in its own goroutine, a second tick starts nothing while the first is still voting, and `Stop` waits for it as well as for the tick.
+`sweepTimeouts` is the only one of the seven that does not run *on* the tick: a vote round can outlast 15 s, so it runs in its own goroutine, a second tick starts nothing while the first is still voting, and `Stop` waits for it as well as for the tick.
 
-The chain snapshot is pulled from the observer once per tick rather than subscribed to: at this cadence a poll is equivalent and it avoids callback races. The devshard rows are likewise loaded once and passed down; the steps below filter that one slice rather than reloading it, except `checkDepletion`, which reads the slice `resumeHeld` returns instead.
+The chain snapshot is pulled from the observer once per tick rather than subscribed to: at this cadence a poll is equivalent and it avoids callback races. The devshard rows are likewise loaded once and passed down; the steps below filter that one slice rather than reloading it, except `checkDepletion`, which reads the slice `resumeHeld` and `promoteTakenReserves` return instead.
 
-Only after those six does the bridge run, and only when rotation is enabled and the snapshot carries chain data (`EpochIndex` and `BlockHeight` both non-zero — otherwise it is a cold start). Within `PrePoCBlocks` of the epoch switch `prepareBridge` runs and wins even when PoC is also inactive; otherwise `finishBridge` runs while requests are not blocked.
+Only after those seven does the bridge run, and only when rotation is enabled and the snapshot carries chain data (`EpochIndex` and `BlockHeight` both non-zero — otherwise it is a cold start). Within `PrePoCBlocks` of the epoch switch `prepareBridge` runs and wins even when PoC is also inactive; otherwise `finishBridge` runs while requests are not blocked, followed by `ensureReserves` (see "The reserve", below).
+
+Besides the 15 s ticker, a taken reserve wakes the loop at once (`OnReserveTaken` → `wakeup`), so its replacement is funded without waiting for the next interval.
 
 ## Creating an escrow
 
-Every create — the bridge's, an operator's `CreateEscrow`, and a depleted escrow's replacement — goes down one path, so all three are recovered by `reconcile` in the same way. See [`docs/escrows.md`](../docs/escrows.md), "Creating an escrow".
+Every create — the bridge's, an operator's `CreateEscrow`, a depleted escrow's replacement and a reserve — goes down one path, so all four are recovered by `reconcile` in the same way. See [`docs/escrows.md`](../docs/escrows.md), "Creating an escrow".
 
 1. Resolve the signer named by the model's `private_key_env`.
 2. `onPrepared` writes the commitment row — model, role, epoch, key env, block height, tx hash, creation time. A failure there aborts before any chain broadcast: no broadcast without durable intent.
 3. Broadcast, wait for the escrow id, register the devshard row, then drop the commitment.
+
+Before step 2 the chain client reads the signer's spendable `ngonka` and refuses the create when it is below `amount` plus the fee (the fee counts only when it is paid in the same denom), so an empty wallet never reaches `onPrepared` or the broadcast (`chain/txclient.go`, `WalletUnderfundedError`). That refusal is a state of the wallet, not a failing chain, so it does not open the create breaker: an operator who tops the wallet up gets the next tick's create, not one up to four ticks later. It is narrated once per (model, role) as `EscrowCreateUnderfunded` and again only after a create of that pair has succeeded (`commitments.go`, `narrateUnderfunded`).
 
 `persistEscrow` resets the create breaker on both of its paths. An escrow found already registered is a create that succeeded, and leaving the breaker tripped would back off the next create for a failure that did not happen.
 
@@ -113,6 +118,14 @@ A resumed row also drops its pending depletion mark (`depletionMarks.forget`), s
 
 **The chain's window does not stretch for a hold.** Settlement lands only in the escrow's epoch or the next one (`inference-chain/x/inference/keeper/msg_server_settle_devshard_escrow.go`, `SettleDevshardEscrow`); an escrow still unsettled once `DevshardPruningThreshold` (2) epochs have passed since the one that funded it has its whole `Amount` split across the group's slots instead of being paid by settlement (`inference-chain/x/inference/keeper/devshard_pruning.go`, `DevshardPruningThreshold` and `distributeUnsettledEscrow`). `holdEndedEpochPassed` exists so a hold ends and the row parks — and so enters `settlePending` — well inside that window rather than riding it to the edge.
 
+## The reserve
+
+A request is served by one escrow, so what a large prompt needs is one escrow that can cover it, not a pool whose sum can. Eight escrows drained evenly each hold an eighth of what one fresh escrow holds, and a request priced above that — a 400k-token prompt reserves its body's bytes — fits none of them, while the depletion path never fires, because each still covers an ordinary request. The reserve is the escrow kept full for that case.
+
+`ensureReserves` funds up to `reserve_count` (default 1, 0 turns it off; `models.go`) escrows in the `reserve` role per model, at the model's own `amount`, once some non-reserve escrow of the model is serving (`reserve.go`, `hasServingEscrow`). It runs only after `finishBridge`, never inside the pre-PoC window or while requests are blocked: `prepareBridge` retires every non-temp escrow, a reserve included, and a reserve created there would be retired on the next tick. It goes through `ensureToTarget`, so it is counted per epoch and role, skipped for a model the network does not serve, and gated by its own breaker key. A replacement for a depleted regular runs earlier in the same tick, in `checkDepletion`, so when the wallet affords only one create the regular gets it.
+
+A reserve is not counted as serving (`hold.go`, `newModelCounts`), so it never hides a missing regular from `replaceIfShort`. Routing picks it only when no regular escrow was picked and every regular failed for money, never for its hosts (busy, an unusable weight, or none the allowlist admits), and taking it turns it into a regular escrow in the registry at once; `OnReserveTaken` marks it and wakes the tick, and `promoteTakenReserves` rewrites the row's role to `regular` before `checkDepletion`, after which it counts toward `target_count` like any regular and `ensureReserves` funds the next reserve. A failed role write is marked again for the next tick. A reserve reported exhausted while its row still reads `reserve` (a failed role write, or its nonce cap) is parked without a replacement (`reserve.go`, `parkReserve`), and a reserve no longer wanted — one an earlier epoch funded that the bridge did not retire because the gateway missed the pre-PoC window, or one past a lowered `reserve_count`, 0 included — is retired before this epoch's is funded (`retireSurplusReserves`). The bridge's degrade path, which relabels regulars as temps when temps cannot be funded, leaves a reserve in its role (`promoteRegularsToTemp`). After a crash between the take and the tick, the row still reads `reserve` and the escrow is published as one again; it is used only when regulars cannot pay, and promoted again then. See [`docs/routing.md`](../docs/routing.md), "A reserve escrow".
+
 ## Settlement and retirement
 
 See [`docs/escrows.md`](../docs/escrows.md), "Settlement and retirement", for the states this walks through.
@@ -163,7 +176,7 @@ Two hooks are called from the request path — `OnEscrowMissing` and `OnBalanceE
 - `escrowTxClient`, satisfied by `*chain.TxClient`. `TxCommitted` is what tells a row still marked pending apart from one whose settle genuinely failed: the settle may have reached the chain after the wait gave up.
 - `escrowStore`, satisfied by `*store.Store`; `snapshotSource`, satisfied by `*chain.PhaseObserver`.
 - `SettlementSource`, satisfied by `*registry.Registry` and wired by the composition root (`main.go`). `Retire` is synchronous — no nonce can be committed on the escrow after it returns — and that is what makes `IsBusy` monotone, so an idle answer stays true until the settlement it gates is broadcast. `Finalize` is idempotent.
-- **A narrator** (`Deps.Narrator`, satisfied by the journal) hears every transition an operator reads the log for — created, recovered, cleared, gone, marked, depleted with no replacement, rotation skipped, regulars promoted to temp, bridged, parked, settled, reconciled, dropped, put on hold, resumed, a hold ended, a failed tick and a sweep that found work. The package writes no line itself, and every escrow id it hands over is the text form the rest of the gateway uses.
+- **A narrator** (`Deps.Narrator`, satisfied by the journal) hears every transition an operator reads the log for — created, recovered, cleared, gone, marked, depleted with no replacement, rotation skipped, regulars promoted to temp, bridged, parked, settled, reconciled, dropped, put on hold, resumed, a hold ended, a create refused as underfunded, a reserve taken, a failed tick and a sweep that found work. The package writes no line itself, and every escrow id it hands over is the text form the rest of the gateway uses.
 - `ModelConfig`'s json tags are the `DEVSHARD_ESCROW_ROTATION_MODELS_JSON` wire contract and are not renameable.
 
 ## Read next

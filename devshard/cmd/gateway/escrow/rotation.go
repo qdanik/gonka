@@ -30,7 +30,9 @@ func (m *Manager) ensureToTarget(ctx context.Context, role string, target int, m
 
 	for i := existing; i < target; i++ {
 		if _, err = m.createEscrow(ctx, model, role, snapshot.EpochIndex, snapshot.BlockHeight); err != nil {
-			m.breaker.recordFailure(model.ModelID, role)
+			if !errors.Is(err, chain.ErrWalletUnderfunded) {
+				m.breaker.recordFailure(model.ModelID, role)
+			}
 			return created, err
 		}
 		created++
@@ -66,13 +68,15 @@ func (m *Manager) prepareBridge(ctx context.Context, snapshot chain.PhaseSnapsho
 			if saveErr := m.saveRotationStatus(ctx, status); saveErr != nil {
 				errs = append(errs, saveErr)
 			}
-			errs = append(errs, fmt.Errorf("prepare bridge for %s: %w", model.ModelID, err))
+			if !errors.Is(err, chain.ErrWalletUnderfunded) {
+				errs = append(errs, fmt.Errorf("prepare bridge for %s: %w", model.ModelID, err))
+			}
 			continue
 		}
 
 		retired, settleFailed := 0, 0
 		for _, record := range devshards {
-			if isActiveRegular(record, model.ModelID) {
+			if isActiveNonTemp(record, model.ModelID) {
 				if err := m.retire(ctx, record); err != nil {
 					settleFailed++
 					if !deferredRetire(err) {
@@ -108,7 +112,9 @@ func (m *Manager) finishBridge(ctx context.Context, snapshot chain.PhaseSnapshot
 			if saveErr := m.saveRotationStatus(ctx, status); saveErr != nil {
 				errs = append(errs, saveErr)
 			}
-			errs = append(errs, fmt.Errorf("finish bridge for %s: %w", model.ModelID, err))
+			if !errors.Is(err, chain.ErrWalletUnderfunded) {
+				errs = append(errs, fmt.Errorf("finish bridge for %s: %w", model.ModelID, err))
+			}
 			continue
 		}
 
@@ -150,8 +156,8 @@ func hasActiveTemp(devshards []store.DevshardRecord, modelID string, epoch int64
 	return false
 }
 
-// isActiveRegular is any active escrow not already in the temp role, whatever epoch it was created under.
-func isActiveRegular(record store.DevshardRecord, modelID string) bool {
+// isActiveNonTemp is any active escrow not already in the temp role, a reserve included, whatever epoch it was created under.
+func isActiveNonTemp(record store.DevshardRecord, modelID string) bool {
 	return record.Active && record.RotationRole != roleTemp && record.Model == modelID
 }
 
@@ -163,7 +169,7 @@ func deferredRetire(err error) bool {
 // The prepareBridge degrade path: it relabels regulars in place, and keeps going past a write failure.
 func (m *Manager) promoteRegularsToTemp(ctx context.Context, model ModelConfig, devshards []store.DevshardRecord) (promoted int, err error) {
 	for _, record := range devshards {
-		if !isActiveRegular(record, model.ModelID) {
+		if !isActiveNonTemp(record, model.ModelID) || record.RotationRole == RoleReserve {
 			continue
 		}
 		if writeErr := m.store.WithRetry(ctx, func() error {

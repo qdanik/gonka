@@ -190,6 +190,19 @@ func (m *recordingMembership) removed() []string {
 type recordingExhaustion struct {
 	mu        sync.Mutex
 	exhausted []string
+	reserves  []string
+}
+
+func (e *recordingExhaustion) OnReserveTaken(escrowID string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.reserves = append(e.reserves, escrowID)
+}
+
+func (e *recordingExhaustion) reservesTaken() []string {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return append([]string(nil), e.reserves...)
 }
 
 func (e *recordingExhaustion) OnBalanceExhausted(escrowID string, reason scheduler.ExhaustionReason) {

@@ -69,6 +69,20 @@ func (j *Journal) EscrowCreated(escrowID, model, role string, epoch uint64, txHa
 	})
 }
 
+// EscrowCreateUnderfunded renders a create refused before broadcast because the wallet cannot pay for it.
+func (j *Journal) EscrowCreateUnderfunded(model, role string, have, need uint64) {
+	j.emitLine(KindEscrowTransition, func(lines logSink) {
+		lines.Warn("escrow create refused: wallet underfunded", logkey.Model, model, logkey.Role, role, logkey.Have, have, logkey.Need, need)
+	})
+}
+
+// EscrowReserveTaken renders a reserve escrow a request needed; it serves as a regular escrow from now on.
+func (j *Journal) EscrowReserveTaken(escrowID string) {
+	j.emitLine(KindEscrowTransition, func(lines logSink) {
+		lines.Info("reserve escrow taken", logkey.Escrow, escrowID)
+	})
+}
+
 // EscrowRecovered renders a create that landed while the gateway was down.
 func (j *Journal) EscrowRecovered(escrowID, model, role string, epoch uint64, txHash string) {
 	j.emitLine(KindEscrowTransition, func(lines logSink) {

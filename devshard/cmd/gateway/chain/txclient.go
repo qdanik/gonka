@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -15,7 +16,7 @@ import (
 
 // Defaults applied by NewTxClient for zero-value fields, and the single source config.Defaults reads.
 const (
-	DefaultFeeDenom     = "ngonka"
+	DefaultFeeDenom     = EscrowDenom
 	DefaultFeeAmount    = uint64(1_000_000)
 	DefaultGasLimit     = uint64(700_000)
 	DefaultPollInterval = 2 * time.Second
@@ -23,6 +24,25 @@ const (
 	// UnorderedTxTTL is how far past "now" a built tx's timeout_timestamp is set.
 	UnorderedTxTTL = 9 * time.Minute
 )
+
+// EscrowDenom is the denom CreateDevshardEscrow locks the amount in.
+const EscrowDenom = "ngonka"
+
+// ErrWalletUnderfunded marks a create refused before it was prepared, because the wallet cannot pay for it.
+var ErrWalletUnderfunded = errors.New("wallet cannot pay for the escrow")
+
+// WalletUnderfundedError names the wallet and the shortfall of a refused create.
+type WalletUnderfundedError struct {
+	Address string
+	Have    uint64
+	Need    uint64
+}
+
+func (e *WalletUnderfundedError) Error() string {
+	return fmt.Sprintf("%s: %s holds %d%s, needs %d", ErrWalletUnderfunded, e.Address, e.Have, EscrowDenom, e.Need)
+}
+
+func (e *WalletUnderfundedError) Unwrap() error { return ErrWalletUnderfunded }
 
 // ErrTxNotFound marks a tx absent from the chain -- not terminal, and distinct from one that committed and failed. See README.md, "Transaction encoding".
 var ErrTxNotFound = errors.New("tx not found on chain")
@@ -123,6 +143,13 @@ func (c *TxClient) CreateEscrow(ctx context.Context, signer *signing.Secp256k1Si
 		return CreateEscrowResult{}, fmt.Errorf("amount is required")
 	}
 	creator := signer.Address()
+	have, err := c.transport.SpendableBalance(ctx, creator, EscrowDenom)
+	if err != nil {
+		return CreateEscrowResult{}, err
+	}
+	if need := c.createCost(amount); have < need {
+		return CreateEscrowResult{}, &WalletUnderfundedError{Address: creator, Have: have, Need: need}
+	}
 	chainID, err := c.resolveChainID(ctx)
 	if err != nil {
 		return CreateEscrowResult{}, err
@@ -154,6 +181,17 @@ func (c *TxClient) CreateEscrow(ctx context.Context, signer *signing.Secp256k1Si
 		return CreateEscrowResult{}, err
 	}
 	return CreateEscrowResult{EscrowID: escrowID, TxHash: txHash, Creator: creator}, nil
+}
+
+// createCost is the amount plus the fee when both are paid in the escrow denom.
+func (c *TxClient) createCost(amount uint64) uint64 {
+	if c.feeDenom != EscrowDenom {
+		return amount
+	}
+	if amount > math.MaxUint64-c.feeAmount {
+		return math.MaxUint64
+	}
+	return amount + c.feeAmount
 }
 
 // SettleEscrow builds, signs, broadcasts and confirms a MsgSettleDevshardEscrow tx; unlike CreateEscrow it waits for the commit. See README.md, "Transaction encoding".

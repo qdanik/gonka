@@ -37,7 +37,7 @@ func (o RaceOutcome) winnerStreamed() bool {
 	return false
 }
 
-// hostError prefers the crowned attempt's refusal, the answer the client asked for, then a trusted refusal or rejection that rules out a retry. See race.md, "Escalation".
+// hostError prefers the crowned attempt's refusal, then a trusted refusal or rejection that rules out a retry; a shorter host's context refusal answers only when every host refused. See race.md, "Escalation".
 func (o RaceOutcome) hostError() *HostApplicationError {
 	var found *AttemptOutcome
 	foundRetryRuledOut := false
@@ -50,10 +50,16 @@ func (o RaceOutcome) hostError() *HostApplicationError {
 			found = attempt
 			break
 		}
-		retryRuledOut := rulesOutRetry(*attempt)
+		if o.refusedByAShorterHost(*attempt) {
+			continue
+		}
+		retryRuledOut := answersForEveryHost(*attempt)
 		if found == nil || (retryRuledOut && !foundRetryRuledOut) {
 			found, foundRetryRuledOut = attempt, retryRuledOut
 		}
+	}
+	if found == nil {
+		found = o.longestShorterHostRefusal()
 	}
 	if found == nil {
 		return nil
@@ -64,6 +70,25 @@ func (o RaceOutcome) hostError() *HostApplicationError {
 		Message: found.ErrorMessage,
 		Payload: found.ErrorPayload,
 	}
+}
+
+func (o RaceOutcome) refusedByAShorterHost(attempt AttemptOutcome) bool {
+	return CapabilityOf(attempt).ServableByALongerHost(o.ModelContextLength)
+}
+
+// longestShorterHostRefusal names the most any host offered, and only once every host refused: a host that failed otherwise may have run the whole length.
+func (o RaceOutcome) longestShorterHostRefusal() *AttemptOutcome {
+	var longest *AttemptOutcome
+	for index := range o.Attempts {
+		attempt := &o.Attempts[index]
+		if !o.refusedByAShorterHost(*attempt) {
+			return nil
+		}
+		if longest == nil || CapabilityOf(*attempt).ContextLimit > CapabilityOf(*longest).ContextLimit {
+			longest = attempt
+		}
+	}
+	return longest
 }
 
 func (o RaceOutcome) everyAttempt(holds func(AttemptOutcome) bool) bool {

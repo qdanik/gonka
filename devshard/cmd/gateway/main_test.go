@@ -102,6 +102,10 @@ func (chainWithoutADial) Account(context.Context, string) (chain.Account, error)
 	return chain.Account{}, errNoChainDialed
 }
 
+func (chainWithoutADial) SpendableBalance(context.Context, string, string) (uint64, error) {
+	return 0, errNoChainDialed
+}
+
 func (chainWithoutADial) Broadcast(context.Context, []byte) (string, error) {
 	return "", errNoChainDialed
 }
@@ -644,6 +648,36 @@ func TestAddingAnEscrowRowOnHoldPublishesItOnHold(t *testing.T) {
 }
 
 // Test flow:
+//  1. Build a registry and a gateway wrapping it.
+//  2. Call addEscrow for one row in the reserve role and one regular row.
+//  3. Assert the registry publishes the first as a reserve candidate and the second as a regular one.
+func TestAddingAReserveRowPublishesItAsAReserve(t *testing.T) {
+	escrows := registry.New(registry.Deps{
+		ServingSessions: func(context.Context, string) (registry.EscrowSession, error) {
+			return weightlessSession{participants: []string{"validator-a"}}, nil
+		},
+		Now: time.Now,
+	})
+	t.Cleanup(func() { escrows.Close() })
+	composed := &gateway{escrows: escrows}
+
+	if err := composed.addEscrow(context.Background(), store.DevshardRecord{EscrowID: "reserve", Model: "model-a", Active: true, RotationRole: escrow.RoleReserve}); err != nil {
+		t.Fatalf("addEscrow(reserve) = %v", err)
+	}
+	if err := composed.addEscrow(context.Background(), store.DevshardRecord{EscrowID: "serving", Model: "model-a", Active: true, RotationRole: "regular"}); err != nil {
+		t.Fatalf("addEscrow(serving) = %v", err)
+	}
+
+	reserves := map[string]bool{}
+	for _, candidate := range escrows.Candidates("model-a") {
+		reserves[candidate.ID] = candidate.IsReserve
+	}
+	if !reserves["reserve"] || reserves["serving"] || len(reserves) != 2 {
+		t.Fatalf("candidate reserve flags = %v, want only the reserve row flagged", reserves)
+	}
+}
+
+// Test flow:
 //  1. Build an escrowHolds gate over a fresh registry and router.
 //  2. Ask its Verdict for an unknown escrow.
 //  3. Assert the verdict is HoldKeep.
@@ -1082,6 +1116,29 @@ func TestActivatingAnEscrowOnHoldResumesItInTheRegistry(t *testing.T) {
 	candidates := escrows.Candidates("model-a")
 	if len(candidates) != 1 || candidates[0].ID != "escrow-1" {
 		t.Errorf("Candidates = %+v, want escrow-1 routable again", candidates)
+	}
+}
+
+// Test flow:
+//  1. Store an inactive devshard row in the reserve role.
+//  2. Call operator.Activate for that escrow.
+//  3. Assert the registry publishes it as a reserve, so routing keeps it for the requests no regular escrow can take.
+func TestActivatingAReserveRowPublishesItAsAReserve(t *testing.T) {
+	ctx := context.Background()
+	records := openedStore(t)
+	if err := records.UpsertDevshard(ctx, store.DevshardRecord{EscrowID: "escrow-1", Model: "model-a", PrivateKeyEnv: "DEVSHARD_HELD_KEY", RotationRole: escrow.RoleReserve}); err != nil {
+		t.Fatalf("UpsertDevshard(): %v", err)
+	}
+	escrows := servingRegistry(t)
+	operator := &operations{store: records, escrows: escrows}
+
+	if err := operator.Activate(ctx, "escrow-1"); err != nil {
+		t.Fatalf("Activate() = %v, want nil", err)
+	}
+
+	candidates := escrows.Candidates("model-a")
+	if len(candidates) != 1 || !candidates[0].IsReserve {
+		t.Fatalf("Candidates = %+v, want escrow-1 published as a reserve", candidates)
 	}
 }
 

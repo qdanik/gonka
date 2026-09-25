@@ -88,15 +88,26 @@ func New(deps Deps) *Registry {
 
 // Add publishes one escrow for routing and releases an unpublished session without flushing. See routing.md, "The escrow registry".
 func (r *Registry) Add(ctx context.Context, escrowID, model string) error {
-	return r.add(ctx, escrowID, model, false)
+	return r.add(ctx, escrowID, model, entryFlags{})
 }
 
 // AddOnHold publishes an escrow whose row is on hold, so a restart does not route it for a moment first.
 func (r *Registry) AddOnHold(ctx context.Context, escrowID, model string) error {
-	return r.add(ctx, escrowID, model, true)
+	return r.add(ctx, escrowID, model, entryFlags{onHold: true})
 }
 
-func (r *Registry) add(ctx context.Context, escrowID, model string, onHold bool) error {
+// AddReserve publishes an escrow kept back until no regular escrow can take a request. See routing.md, "A reserve escrow".
+func (r *Registry) AddReserve(ctx context.Context, escrowID, model string) error {
+	return r.add(ctx, escrowID, model, entryFlags{isReserve: true})
+}
+
+// entryFlags are what a restart reads off the row before the escrow first routes.
+type entryFlags struct {
+	onHold    bool
+	isReserve bool
+}
+
+func (r *Registry) add(ctx context.Context, escrowID, model string, flags entryFlags) error {
 	switch {
 	case escrowID == "":
 		return fmt.Errorf("escrow id is required")
@@ -134,7 +145,8 @@ func (r *Registry) add(ctx context.Context, escrowID, model string, onHold bool)
 		return session.Close()
 	}
 	entry := newEscrowEntry(escrowID, model, r.sessions.Add(1), session, r.now)
-	entry.onHold.Store(onHold)
+	entry.onHold.Store(flags.onHold)
+	entry.isReserve.Store(flags.isReserve)
 	entry.hold = r.holdFor(entry)
 	r.live.Store(published.with(entry))
 	r.pushMembershipLocked()
@@ -295,6 +307,15 @@ func (r *Registry) IsBusy(escrowID string) bool {
 		}
 	}
 	return false
+}
+
+// ReserveTaken turns a reserve into a regular escrow at once; the manager rewrites the row and funds the next reserve.
+func (r *Registry) ReserveTaken(escrowID string) {
+	entry, known := r.live.Load().byID[escrowID]
+	if !known || !entry.isReserve.CompareAndSwap(true, false) || r.exhaustion == nil {
+		return
+	}
+	r.exhaustion.OnReserveTaken(escrowID)
 }
 
 // Exhausted reports an escrow routing declined as spent to the rotation lifecycle, which is what replaces it.

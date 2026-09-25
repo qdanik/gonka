@@ -60,6 +60,7 @@ type Escrow struct {
 	SessionID   uint64
 	Session     session
 	ActiveUsers int
+	IsReserve   bool
 	Hold        func() (release func(), ok bool)
 }
 

@@ -15,12 +15,15 @@ type ModelConfig struct {
 	ModelID       string `json:"model_id"`
 	TempCount     int    `json:"temp_count"`
 	TargetCount   int    `json:"target_count"`
+	ReserveCount  int    `json:"reserve_count"`
 	Amount        uint64 `json:"amount"`
 	PrivateKeyEnv string `json:"private_key_env"`
 }
 
-// defaultTargetCount applies only when target_count is absent; an explicit 0 is still a mistake to reject.
-const defaultTargetCount = 1
+const (
+	defaultTargetCount  = 1 // applies only when target_count is absent; an explicit 0 is still a mistake to reject
+	defaultReserveCount = 1 // applies only when reserve_count is absent; an explicit 0 turns reserves off
+)
 
 func parseModels(raw string) ([]ModelConfig, error) {
 	if strings.TrimSpace(raw) == "" {
@@ -32,7 +35,7 @@ func parseModels(raw string) ([]ModelConfig, error) {
 	}
 	models := make([]ModelConfig, 0, len(entries))
 	for _, entry := range entries {
-		model := ModelConfig{TargetCount: defaultTargetCount}
+		model := ModelConfig{TargetCount: defaultTargetCount, ReserveCount: defaultReserveCount}
 		if err := json.Unmarshal(entry, &model); err != nil {
 			return nil, fmt.Errorf("parse rotation models: %w", err)
 		}
@@ -44,6 +47,9 @@ func parseModels(raw string) ([]ModelConfig, error) {
 		}
 		if model.TargetCount < 1 {
 			return nil, fmt.Errorf("rotation model %q: target_count must be >= 1", model.ModelID)
+		}
+		if model.ReserveCount < 0 {
+			return nil, fmt.Errorf("rotation model %q: reserve_count must be >= 0", model.ModelID)
 		}
 		if model.Amount == 0 {
 			return nil, fmt.Errorf("rotation model %q: amount must be > 0", model.ModelID)

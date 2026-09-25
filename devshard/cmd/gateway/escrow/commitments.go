@@ -36,8 +36,11 @@ type Manager struct {
 	settlements      inFlightSet
 	checks           inFlightSet
 
-	depleted depletionMarks
-	missing  markSet
+	depleted            depletionMarks
+	missing             markSet
+	underfundedNarrated markSet
+	reserveTaken        markSet
+	wakeup              chan struct{}
 
 	timeoutSweeper TimeoutSweeper
 	sweepRecorder  SweepRecorder
@@ -78,6 +81,7 @@ func (m *Manager) createEscrow(ctx context.Context, model ModelConfig, role stri
 
 	result, err := m.tx.CreateEscrow(ctx, signer, model.Amount, model.ModelID, onPrepared)
 	if err != nil {
+		m.narrateUnderfunded(model.ModelID, role, err)
 		return chain.CreateEscrowResult{}, fmt.Errorf("creating escrow for %s/%s: %w", model.ModelID, role, err)
 	}
 	escrowID := strconv.FormatUint(result.EscrowID, 10)
@@ -112,7 +116,17 @@ func (m *Manager) persistEscrow(ctx context.Context, escrowID string, c store.Co
 	}
 	// Both paths: an escrow found already registered is a create that succeeded.
 	m.breaker.reset(c.Model, c.Role)
+	m.underfundedNarrated.forget(createBreakerKey(c.Model, c.Role))
 	return nil
+}
+
+// narrateUnderfunded names a wallet that cannot pay once per (model, role), until a create of it succeeds.
+func (m *Manager) narrateUnderfunded(modelID, role string, err error) {
+	var underfunded *chain.WalletUnderfundedError
+	if !errors.As(err, &underfunded) || !m.underfundedNarrated.mark(createBreakerKey(modelID, role)) || m.narrator == nil {
+		return
+	}
+	m.narrator.EscrowCreateUnderfunded(modelID, role, underfunded.Have, underfunded.Need)
 }
 
 func (m *Manager) escrowRegistered(ctx context.Context, escrowID string) (bool, error) {

@@ -49,6 +49,12 @@ func (s *markSet) mark(key string) bool {
 	return true
 }
 
+func (s *markSet) forget(key string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.keys, key)
+}
+
 func (s *markSet) drain() map[string]bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()

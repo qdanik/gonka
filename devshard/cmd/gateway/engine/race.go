@@ -71,6 +71,8 @@ type raceDeps struct {
 	Timer        func() raceTimer
 	Journal      raceJournal
 
+	ModelContextLength uint64
+
 	Hold func(release func())
 
 	Report func(RaceOutcome)
