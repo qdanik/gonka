@@ -2,20 +2,34 @@ package hostping
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
+	"common/httpguard"
 	"common/probe"
 
 	"devshard/cmd/gateway/config"
 	"devshard/cmd/gateway/registry"
 )
 
-type countingSink struct{ targets chan int }
+type countingSink struct {
+	targets chan int
+	results chan probe.Result
+}
 
-func (s countingSink) Observe(probe.Result) {}
-func (s countingSink) Forget(string)        {}
-func (s countingSink) TickStarted()         {}
-func (s countingSink) TickSkipped()         {}
+func (s countingSink) Observe(result probe.Result) {
+	select {
+	case s.results <- result:
+	default:
+	}
+}
+func (s countingSink) Forget(string) {}
+func (s countingSink) TickStarted()  {}
+func (s countingSink) TickSkipped()  {}
 func (s countingSink) TargetCount(count int) {
 	select {
 	case s.targets <- count:
@@ -77,3 +91,49 @@ func TestEachWaveReadsWhoIsLiveNow(t *testing.T) {
 
 var _ liveDials = dialsHeld(nil)
 var _ = registry.HostDial{}
+
+// Test flow:
+//  1. Start a loopback stub that counts hits and close the dial guard.
+//  2. Build a pinger over two live host dials, one by the stub's IP and one by the host name localhost, and start it.
+//  3. Read probe results from the sink until both hosts have reported, failing if they do not within five seconds.
+//  4. Assert each result is down with the guard's refusal and the stub was never reached.
+func TestAPingDoesNotDialAHostOnAPrivateAddress(t *testing.T) {
+	var hits atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(server.Close)
+	previous := httpguard.AllowPrivate()
+	httpguard.SetAllowPrivate(false)
+	t.Cleanup(func() { httpguard.SetAllowPrivate(previous) })
+	byName := "http://localhost:" + strings.TrimPrefix(server.URL, "http://127.0.0.1:")
+	sink := countingSink{results: make(chan probe.Result, 2)}
+	pinger := New(runnableSettings(), dialsHeld{
+		{ParticipantKey: "gonka1byip", BaseURL: server.URL},
+		{ParticipantKey: "gonka1byname", BaseURL: byName},
+	}, sink)
+	if pinger == nil {
+		t.Fatal("New() returned nothing for a runnable schedule")
+	}
+	ctx, stop := context.WithTimeout(t.Context(), 5*time.Second)
+	defer stop()
+
+	pinger.Start(ctx)
+
+	reported := map[string]bool{}
+	for len(reported) < 2 {
+		select {
+		case result := <-sink.results:
+			if result.Up || result.Err == nil || !strings.Contains(result.Err.Error(), "ssrf guard") {
+				t.Fatalf("probe of %s = up %v, err %v, want down with the ssrf guard's refusal", result.Key, result.Up, result.Err)
+			}
+			reported[result.Key] = true
+		case <-ctx.Done():
+			t.Fatalf("hosts reported = %v, want gonka1byip and gonka1byname", reported)
+		}
+	}
+	if got := hits.Load(); got != 0 {
+		t.Fatalf("hits on the private host = %d, want 0", got)
+	}
+}

@@ -5,9 +5,13 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	"common/httpguard"
 
 	"devshard/cmd/gateway/internal/leakcheck"
 )
@@ -240,5 +244,31 @@ func TestVersionsPollFetchesConcurrently(t *testing.T) {
 	case <-polled:
 	case <-time.After(3 * time.Second):
 		t.Fatal("Poll did not return after every fetch was released")
+	}
+}
+
+// Test flow:
+//  1. Start a loopback stub that counts hits, build an observer whose chain API client is the stub's unguarded client the versions poll used to share, and close the dial guard.
+//  2. Register one miner by the stub's IP and one by the host name localhost as versions candidates.
+//  3. Poll the observer's versions cache.
+//  4. Assert the stub was never reached.
+func TestTheVersionsPollDoesNotDialAMinerOnAPrivateAddress(t *testing.T) {
+	var hits atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits.Add(1)
+		w.Write([]byte(`{"mlnodes":[]}`))
+	}))
+	t.Cleanup(server.Close)
+	observer := newPoCPhaseObserver(t, server, nil)
+	previous := httpguard.AllowPrivate()
+	httpguard.SetAllowPrivate(false)
+	t.Cleanup(func() { httpguard.SetAllowPrivate(previous) })
+	byName := "http://localhost:" + strings.TrimPrefix(server.URL, "http://127.0.0.1:")
+	observer.versions.SetCandidates(map[string]string{"miner-by-ip": server.URL, "miner-by-name": byName})
+
+	observer.versions.Poll(t.Context())
+
+	if got := hits.Load(); got != 0 {
+		t.Fatalf("hits on the private miner = %d, want 0", got)
 	}
 }

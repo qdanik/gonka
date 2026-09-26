@@ -2,8 +2,10 @@ package hostping
 
 import (
 	"context"
+	"net/http"
 	"time"
 
+	"common/httpguard"
 	"common/probe"
 
 	"devshard/cmd/gateway/config"
@@ -31,6 +33,7 @@ func New(settings config.HostPing, live liveDials, sink Sink) *Pinger {
 		Interval:    time.Duration(settings.IntervalMS) * time.Millisecond,
 		Timeout:     time.Duration(settings.TimeoutMS) * time.Millisecond,
 		Concurrency: int(settings.Concurrency),
+		Transport:   newGuardedTransport(),
 	})
 	if err != nil {
 		logging.Warn("host pings are off: the probe schedule does not hold",
@@ -45,4 +48,11 @@ func (p *Pinger) Start(ctx context.Context) {
 		return
 	}
 	go p.scheduler.Run(ctx)
+}
+
+func newGuardedTransport() *http.Transport {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.Proxy = nil
+	transport.DialContext = httpguard.NewDialer().DialContext
+	return transport
 }

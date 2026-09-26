@@ -82,7 +82,7 @@ func NewPhaseObserver(cfg ObserverConfig) (*PhaseObserver, error) {
 		client:           client,
 		pollInterval:     pollInterval,
 		now:              now,
-		versions:         NewVersionsCache(client, versionsTTLPollMultiplier*pollInterval, now),
+		versions:         NewVersionsCache(newVersionsClient(), versionsTTLPollMultiplier*pollInterval, now),
 		subscribers:      make(map[int]func(PhaseSnapshot)),
 	}
 	observer.current.Store(&PhaseSnapshot{})

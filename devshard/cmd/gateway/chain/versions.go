@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"common/httpguard"
 	json "github.com/goccy/go-json"
 	"golang.org/x/sync/errgroup"
 )
@@ -43,6 +44,13 @@ type VersionsCache struct {
 	candidates map[string]string
 	entries    map[string]versionsEntry
 	now        func() time.Time
+}
+
+func newVersionsClient() *http.Client {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.Proxy = nil
+	transport.DialContext = httpguard.NewDialer().DialContext
+	return &http.Client{Transport: transport}
 }
 
 // NewVersionsCache builds a cache that polls through client with the given staleness ttl.

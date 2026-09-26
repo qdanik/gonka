@@ -5,7 +5,7 @@ A host answers requests, but only when there are requests. Between them the gate
 ## What it owns
 
 - **`Targets`** — the probe destinations, snapshotted once per wave from the registry's live escrows. `/clock` first, because that is the only answer carrying the host's own time; `/healthz` as the fallback for a host that serves no clock. Both are joined under the route prefix that host serves its protocol on.
-- **`Pinger`** — the wave itself, on a wall-clock cadence, built on `common/probe`. `nil` when the probe is off or its schedule does not hold, so a misconfigured ping costs a log line rather than the boot.
+- **`Pinger`** — the wave itself, on a wall-clock cadence, built on `common/probe`. Its transport carries the `common/httpguard` dial-time SSRF guard and, like the signed host transport, no proxy, since the targets are hosts' on-chain base URLs. `nil` when the probe is off or its schedule does not hold, so a misconfigured ping costs a log line rather than the boot.
 
 ## What it does not own
 

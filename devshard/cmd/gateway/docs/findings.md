@@ -1,6 +1,6 @@
 # Defects outside the gateway
 
-Four defects the gateway runs into and cannot fix inside `cmd/gateway`. All four are now closed; each entry states the rule that replaced it and where that rule lives.
+Five defects the gateway runs into and cannot fix inside `cmd/gateway`. The first four are closed and the fifth is patched locally pending upstream; each entry states the rule that replaced it and where that rule lives.
 
 ---
 
@@ -47,3 +47,13 @@ With an empty map a nonce a host already receipted yielded reason `refused`, and
 **The rule now.** The cap is `MaxJSONResponseBytes` (16 MiB), the largest body the JSON path already reads, and the legacy fold reads its scanner cap from the transport constant ([`cmd/devshardctl/stream_aggregate.go`](../../devshardctl/stream_aggregate.go)). See [`race.md`](./race.md), "Classification and reassembly", for why a complete event never reaches the attempt budget.
 
 **Why it is sound.** No bound grew: the JSON path already buffers a body of that size ([`transport/client.go`](../../../transport/client.go), `readBoundedResponseBody`), and the carry budget charges only an unterminated tail, which the transport never hands over, because `writeSSELine` writes an event and its terminator in one write.
+
+---
+
+## 5. The router-catalog probe dialed private addresses — patched pending upstream
+
+**What it was.** `Session.WaitRouterCatalog` ([`user/catalog.go`](../../../user/catalog.go)) probed each host's public base URL with a plain `http.Client`. That URL is the host's on-chain `InferenceUrl`, and the registration check rejects only literal private IPs, so a host name resolving to `127.0.0.1`, `169.254.169.254` or an RFC1918 address sent the gateway's warmup probe into its own network. The gateway cannot wrap the client: it is built inside the call.
+
+**The rule now.** The probe goes through a package-level client carrying the `common/httpguard` dial-time guard. The patch is upstream's [gonka-ai/gonka#1853](https://github.com/gonka-ai/gonka/pull/1853) byte for byte, with its test [`user/catalog_ssrf_test.go`](../../../user/catalog_ssrf_test.go), so the local copy drops out when that PR lands.
+
+**Why it is sound.** `DialControl` checks the resolved address on every dial, redirect hops included, and `DEVSHARD_ALLOW_PRIVATE_ADDRESSES` keeps compose and e2e stands, whose hosts resolve to Docker-internal addresses, working.
