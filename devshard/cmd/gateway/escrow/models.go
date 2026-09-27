@@ -8,16 +8,18 @@ import (
 	json "github.com/goccy/go-json"
 
 	"devshard/cmd/gateway/chain"
+	"devshard/cmd/gateway/config"
 )
 
 // json tags are the DEVSHARD_ESCROW_ROTATION_MODELS_JSON wire contract, not renameable.
 type ModelConfig struct {
-	ModelID       string `json:"model_id"`
-	TempCount     int    `json:"temp_count"`
-	TargetCount   int    `json:"target_count"`
-	ReserveCount  int    `json:"reserve_count"`
-	Amount        uint64 `json:"amount"`
-	PrivateKeyEnv string `json:"private_key_env"`
+	ModelID           string `json:"model_id"`
+	TempCount         int    `json:"temp_count"`
+	TargetCount       int    `json:"target_count"`
+	ReserveCount      int    `json:"reserve_count"`
+	Amount            uint64 `json:"amount"`
+	PrivateKeyEnv     string `json:"private_key_env"`
+	SettlementEnabled *bool  `json:"settlement_enabled,omitempty"`
 }
 
 const (
@@ -56,6 +58,34 @@ func parseModels(raw string) ([]ModelConfig, error) {
 		}
 	}
 	return models, nil
+}
+
+// settlementPolicy lets a model's own settlement_enabled win over the global toggle. See README.md, "Settlement and retirement".
+type settlementPolicy struct {
+	global  bool
+	byModel map[string]bool
+}
+
+// newSettlementPolicy reads the models list whatever the rotation toggle says; a list that does not parse leaves every model on the global toggle.
+func newSettlementPolicy(rotation config.Rotation) settlementPolicy {
+	policy := settlementPolicy{global: rotation.SettlementEnabled, byModel: map[string]bool{}}
+	models, err := parseModels(rotation.ModelsJSON)
+	if err != nil {
+		return policy
+	}
+	for _, model := range models {
+		if model.SettlementEnabled != nil {
+			policy.byModel[model.ModelID] = *model.SettlementEnabled
+		}
+	}
+	return policy
+}
+
+func (p settlementPolicy) enabled(modelID string) bool {
+	if enabled, set := p.byModel[modelID]; set {
+		return enabled
+	}
+	return p.global
 }
 
 // known is false only when both weight-by-model maps are empty (cold start): callers must not skip an unknown model.

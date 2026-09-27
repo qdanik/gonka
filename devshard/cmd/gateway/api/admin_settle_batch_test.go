@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"devshard/cmd/gateway/chain"
+	"devshard/cmd/gateway/escrow"
 	"devshard/cmd/gateway/store"
 )
 
@@ -127,6 +129,26 @@ func TestABatchSettleAnswersForEveryEscrowItWasGiven(t *testing.T) {
 	}
 	if byEscrow["404"].Status != http.StatusNotFound {
 		t.Fatalf("an unregistered escrow: got %d, want 404", byEscrow["404"].Status)
+	}
+}
+
+// Test flow:
+//  1. Register escrow "7" and make its settle report that the chain pruned it.
+//  2. POST a single settle and a batch settle for it.
+//  3. Assert both answer 410 Gone rather than a not-found failure.
+func TestASettleOfAnEscrowTheChainPrunedAnswersGone(t *testing.T) {
+	live := newHarness(t)
+	live.control.devshards = []store.DevshardRecord{{EscrowID: "7", Model: "qwen"}}
+	live.operations.err = fmt.Errorf("settling escrow 7: %w", escrow.ErrEscrowPruned)
+
+	single := live.request(t, http.MethodPost, "/v1/admin/devshards/7/settle", "", adminHeaders())
+	batch := live.request(t, http.MethodPost, "/v1/admin/devshards/settle", `{"escrow_ids":["7"]}`, adminHeaders())
+
+	if single.Code != http.StatusGone {
+		t.Fatalf("single settle: got %d (%s), want 410", single.Code, single.Body.String())
+	}
+	if answer := decodeBatchSettle(t, batch.Body.Bytes()); answer.Results[0].Status != http.StatusGone {
+		t.Fatalf("batch settle: got %+v, want status 410", answer.Results[0])
 	}
 }
 

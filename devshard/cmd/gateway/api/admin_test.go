@@ -2,6 +2,7 @@ package api
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"net/url"
 	"os"
@@ -10,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"devshard/cmd/gateway/chain"
 	"devshard/cmd/gateway/internal/logcapture"
 	"devshard/cmd/gateway/store"
 )
@@ -315,3 +317,21 @@ func mustUnescape(t *testing.T, encoded string) string {
 }
 
 var errStoreUnavailable = errors.New("store unavailable")
+
+// Test flow:
+//  1. Make the escrow create fail because the wallet cannot pay for the amount and the fee.
+//  2. POST an escrow create.
+//  3. Assert it answers 402 with the wallet's shortfall, not a 502 that reads like a chain outage.
+func TestAnEscrowCreateTheWalletCannotPayForAnswersPaymentRequired(t *testing.T) {
+	live := newHarness(t)
+	live.operations.err = fmt.Errorf("creating escrow for qwen/regular: %w", &chain.WalletUnderfundedError{Address: "gonka1wallet", Have: 5, Need: 11})
+
+	response := live.request(t, http.MethodPost, "/v1/admin/escrows", `{"model_id":"qwen","amount":10,"private_key_env":"KEY"}`, adminHeaders())
+
+	if response.Code != http.StatusPaymentRequired {
+		t.Fatalf("status: got %d (%s), want 402", response.Code, response.Body.String())
+	}
+	if !strings.Contains(response.Body.String(), "gonka1wallet holds 5") {
+		t.Fatalf("body %s does not name the wallet's shortfall", response.Body.String())
+	}
+}

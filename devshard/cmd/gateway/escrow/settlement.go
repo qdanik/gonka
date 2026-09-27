@@ -20,6 +20,9 @@ var (
 
 	// ErrSettlementInFlight marks a settlement another caller is already running -- not success.
 	ErrSettlementInFlight = errors.New("settlement already in flight")
+
+	// ErrEscrowPruned marks an escrow the chain no longer holds: pruned after its settlement window, so there is nothing left to settle.
+	ErrEscrowPruned = errors.New("escrow pruned on chain")
 )
 
 // pendingSettleBudget bounds how many parked escrows one tick settles. See escrows.md, "Settlement and retirement".
@@ -27,21 +30,15 @@ const pendingSettleBudget = 4
 
 // settlePending drains escrows parked by retire or by depletion; a busy or failing escrow simply stays parked.
 func (m *Manager) settlePending(ctx context.Context, devshards []store.DevshardRecord) error {
-	if !m.config.Load().Rotation.SettlementEnabled {
-		return nil
-	}
+	policy := newSettlementPolicy(m.config.Load().Rotation)
 	var errs []error
 	attempted := 0
 	for _, record := range devshards {
-		if record.Active || !record.SettlementPending || attempted >= pendingSettleBudget {
+		if record.Active || !record.SettlementPending || attempted >= pendingSettleBudget || !policy.enabled(record.Model) {
 			continue
 		}
 		attempted++
-		if _, err := m.settle(ctx, record, false); err != nil {
-			errs = append(errs, err)
-			continue
-		}
-		if err := m.deleteSettled(ctx, record.EscrowID); err != nil {
+		if _, err := m.settleAndDrop(ctx, record, false); err != nil && !errors.Is(err, ErrEscrowPruned) {
 			errs = append(errs, err)
 		}
 	}
@@ -58,12 +55,7 @@ func (m *Manager) Settle(ctx context.Context, escrowID string, force bool) (chai
 		if record.EscrowID != escrowID {
 			continue
 		}
-		result, err := m.settle(ctx, record, force)
-		if err != nil {
-			return result, err
-		}
-		// The settlement the row was kept for has happened; retirement drops it on its own paths, this one has to as well.
-		return result, m.deleteSettled(ctx, escrowID)
+		return m.settleAndDrop(ctx, record, force)
 	}
 	return chain.SettleEscrowResult{}, fmt.Errorf("settling escrow %s: %w", escrowID, ErrUnknownEscrow)
 }
@@ -128,6 +120,10 @@ func (m *Manager) settle(ctx context.Context, record store.DevshardRecord, force
 		return chain.SettleEscrowResult{}, ErrDevshardBusy
 	}
 
+	if m.prunedOnChain(ctx, record.EscrowID) {
+		return chain.SettleEscrowResult{}, fmt.Errorf("settling escrow %s: %w", record.EscrowID, ErrEscrowPruned)
+	}
+
 	signer, err := m.signer.SignerFor(record.PrivateKeyEnv)
 	if err != nil {
 		return chain.SettleEscrowResult{}, fmt.Errorf("resolving signer for escrow %s: %w", record.EscrowID, err)
@@ -156,6 +152,24 @@ func (m *Manager) settle(ctx context.Context, record store.DevshardRecord, force
 		return result, fmt.Errorf("clearing settlement pending for escrow %s: %w", record.EscrowID, err)
 	}
 	return result, nil
+}
+
+// prunedOnChain fails open: only the chain answering that the escrow is absent counts, never a failed query.
+func (m *Manager) prunedOnChain(ctx context.Context, escrowID string) bool {
+	_, found, err := m.tx.GetEscrow(ctx, escrowID)
+	return err == nil && !found
+}
+
+// settleAndDrop drops the row once nothing is left to settle: after a confirmed settlement, or once the chain has pruned the escrow.
+func (m *Manager) settleAndDrop(ctx context.Context, record store.DevshardRecord, force bool) (chain.SettleEscrowResult, error) {
+	result, err := m.settle(ctx, record, force)
+	if err != nil && !errors.Is(err, ErrEscrowPruned) {
+		return result, err
+	}
+	if dropErr := m.deleteSettled(ctx, record.EscrowID); dropErr != nil {
+		return result, dropErr
+	}
+	return result, err
 }
 
 // alreadySettled reports whether the transaction this escrow last broadcast landed. See escrows.md, "Settlement and retirement".
@@ -208,17 +222,17 @@ func numericEscrowID(escrowID string) uint64 {
 	return parsed
 }
 
-// retire honors the SettlementEnabled toggle. See README.md, "Settlement and retirement".
+// retire honors the model's settlement policy. See README.md, "Settlement and retirement".
 func (m *Manager) retire(ctx context.Context, record store.DevshardRecord) error {
 	// Parked only: the row names the sole key that can settle this escrow later, so it outlives retirement.
-	if !m.config.Load().Rotation.SettlementEnabled {
+	if !newSettlementPolicy(m.config.Load().Rotation).enabled(record.Model) {
 		return m.park(ctx, record.EscrowID)
 	}
 
-	if _, err := m.settle(ctx, record, false); err != nil {
+	if _, err := m.settleAndDrop(ctx, record, false); err != nil && !errors.Is(err, ErrEscrowPruned) {
 		return err // busy, deduped or broadcast failure: stays registered, inactive, pending -- not deleted.
 	}
-	return m.deleteSettled(ctx, record.EscrowID)
+	return nil
 }
 
 // deleteSettled drops the row that named the only key able to settle the escrow, so it runs only after success.

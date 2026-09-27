@@ -187,6 +187,10 @@ A row written before `settle_tx_at` existed carries no stamp and counts as **pas
 
 **With `rotation.settlement_enabled` off**, `retire` only parks. The row survives, carrying the key name, and `settlePending` picks it up the moment settlement is switched on. One tick settles at most `pendingSettleBudget` = 4 parked escrows, so a backlog drains without one tick spending minutes in chain calls.
 
+**Per model.** A model's own `settlement_enabled` in `rotation.models_json` overrides the global toggle for that model's escrows, both ways; a model that sets nothing, or an escrow whose model is not in the list, follows the global toggle (`models.go`, `settlementPolicy`). `retire` and `settlePending` read it; an admin settle ignores it, since an operator asked for that one. The list is read whatever `rotation.enabled` says, and a list that does not parse leaves every model on the global toggle.
+
+**An escrow the chain has pruned.** The chain deletes an escrow `DevshardPruningThreshold` epochs after the one that funded it, distributing an unsettled one's amount across the group (`inference-chain/x/inference/keeper/pruning.go`), so a row parked past that has nothing left to settle and every attempt would fail on `escrow N not found`. After the busy check and before `Finalize`, `settle` asks the chain for the escrow (`prunedOnChain`); only an answer that it is absent counts, and a failed query lets the settle go on. An absent escrow returns `ErrEscrowPruned` and the row is dropped (`settleAndDrop`): the tick moves on silently, and the admin settle answers 410 Gone.
+
 ## Draining: the registry side
 
 `Retire` takes the escrow out of the routing set immediately, but its session stays alive until the requests already dispatched on it finish. The entry sits in `draining` for that whole time, and `Add` refuses the same id with `ErrDraining` — a second session over storage the first still holds would corrupt it.
@@ -230,5 +234,5 @@ Mainnet height is the escrow's logical clock: every host and the sequencer keep 
 | how many parked escrows settle per tick | `escrow/settlement.go`, `pendingSettleBudget` |
 | how hard a failing create is throttled | `escrow/breaker.go`, `escalatedCooldownTicks` |
 | when the bridge starts | `rotation.pre_poc_blocks`, read in `escrow/manager.go`, `tick` |
-| how many escrows a model gets | `rotation.models_json`: `temp_count`, `target_count` (1 when absent; an explicit value below 1 is rejected), `reserve_count` (1 when absent; 0 turns reserves off; negative is rejected), `escrow/models.go` |
+| how many escrows a model gets | `rotation.models_json`: `temp_count`, `target_count` (1 when absent; an explicit value below 1 is rejected), `reserve_count` (1 when absent; 0 turns reserves off; negative is rejected), `settlement_enabled` (absent follows `rotation.settlement_enabled`), `escrow/models.go` |
 | what makes an escrow routable | `registry/registry.go`, `Add` / `unpublish` |

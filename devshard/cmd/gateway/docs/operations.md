@@ -87,7 +87,7 @@ Signing keys are addressed **by the name of the variable that holds them**, neve
 | `DEVSHARD_CHAT_CACHE_MAX_BYTES` | 256 MiB | the response cache |
 | `GATEWAY_DEFAULT_MAX_TOKENS` / `GATEWAY_MAX_TOKENS_CAP` | from `filters` | the output budget a request gets and may ask for |
 | `DEVSHARD_ESCROW_ROTATION_ENABLED` | false | whether the epoch bridge creates and retires escrows |
-| `DEVSHARD_ESCROW_ROTATION_SETTLEMENT_ENABLED` | false | whether retirement settles or only parks |
+| `DEVSHARD_ESCROW_ROTATION_SETTLEMENT_ENABLED` | false | whether retirement settles or only parks; a model's own `settlement_enabled` in the models JSON overrides it |
 | `GATEWAY_ROTATION_HOLD_ENABLED` | true | a balance-depleted escrow goes on hold instead of being parked; false is the rollback to parking |
 | `GATEWAY_ROTATION_HOLD_MAX_PER_MODEL` | 16 | escrows one model may keep on hold; past it a depleted escrow is parked |
 | `GATEWAY_ROTATION_HOLD_RESUME_ANSWERS` | 32 | capped answers an escrow's balance must cover before it leaves hold |
@@ -363,6 +363,14 @@ Neither list restrains anything but routing. Host pings, catch-up, finalize, the
 `POST /v1/admin/devshards/{id}/settle?force=true` does not wait. It crosses the busy check and nothing else — a second concurrent settlement of the same escrow is still refused, and an escrow already settled is still not rebroadcast. **The requests still in flight are failed for their callers, and their full reserved cost is paid to the hosts that held them**, because finalize closes the door on new nonces and the records still live take the settlement default. The forced call is written to the audit log as `escrow settled under force`, with `in_flight` naming how many requests it overrode.
 
 A forced settlement runs on an escrow that still has requests, so the one that finishes last would close the escrow's store while finalize is still collecting signatures. Finalizing, building the settlement, inspecting and the admin finalize and signature-collection routes therefore each take a settlement hold, and the draining escrow closes only after they return. The hold is counted apart from requests, so it neither makes the escrow busy nor moves routing (`registry/views.go`, `Registry.HoldSettlement`).
+
+## Settling an escrow the chain has pruned
+
+The chain deletes an escrow a couple of epochs after the one that funded it. A settle of one it no longer holds answers 410 `escrow pruned on chain` and drops the escrow's row, so it is gone from the list afterwards; nothing is finalized or broadcast. See escrows.md, "Settlement and retirement".
+
+## Creating an escrow the wallet cannot pay for
+
+`POST /v1/admin/escrows` reads the wallet's spendable balance before it builds the transaction, and answers 402 naming the wallet, what it holds and what the amount plus the fee needs, without broadcasting anything.
 
 ## Settling a list of escrows
 

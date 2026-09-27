@@ -159,7 +159,7 @@ func TestSettleBusyMarksPendingAndReturnsErrDevshardBusy(t *testing.T) {
 //  1. Seed the store with one active devshard record and a shared call log.
 //  2. Configure the fake settlement source and chain client to succeed, recording the settle tx hash inside SettleEscrow before the broadcast completes.
 //  3. Call `settle` and assert it returns nil.
-//  4. Assert the call log shows the full ordered sequence: park, retire, busy check, finalize, build, broadcast, then hash and pending recorded.
+//  4. Assert the call log shows the full ordered sequence: park, retire, busy check, chain lookup, finalize, build, broadcast, then hash and pending recorded.
 //  5. Assert the devshard ends up Active=false and SettlementPending=false.
 func TestSettleHappyPathOrderAndClearsPendingOnSuccess(t *testing.T) {
 	testStore := newFakeStore()
@@ -188,7 +188,7 @@ func TestSettleHappyPathOrderAndClearsPendingOnSuccess(t *testing.T) {
 	}
 
 	want := []string{
-		"ParkForSettlement", "Retire", "IsBusy",
+		"ParkForSettlement", "Retire", "IsBusy", "GetEscrow",
 		"Finalize", "BuildSettlement", "SettleEscrow", `SetDevshardSettleTxHash("SETTLE-TX")`,
 		"SetDevshardSettlementPending(false)",
 	}
@@ -799,4 +799,135 @@ func TestAnAlreadySettledEscrowIsStillTakenOutOfRouting(t *testing.T) {
 
 func (c *callLog) contains(call string) bool {
 	return slices.Contains(c.snapshot(), call)
+}
+
+func prunedTxClient(t *testing.T) *fakeTxClient {
+	t.Helper()
+	return &fakeTxClient{
+		getEscrowFn: func(context.Context, string) (chain.EscrowInfo, bool, error) { return chain.EscrowInfo{}, false, nil },
+		settleEscrowFn: func(context.Context, *signing.Secp256k1Signer, chain.SettlementInput) (chain.SettleEscrowResult, error) {
+			t.Fatal("SettleEscrow must not be broadcast for an escrow the chain no longer holds")
+			return chain.SettleEscrowResult{}, nil
+		},
+	}
+}
+
+// Test flow:
+//  1. Seed the store with one parked record whose escrow the chain no longer holds.
+//  2. Settle it through the admin entry.
+//  3. Assert it reports ErrEscrowPruned without finalizing or broadcasting, and the row is dropped.
+func TestSettleDropsAnEscrowTheChainNoLongerHolds(t *testing.T) {
+	testStore := newFakeStore()
+	record := parkedRecord("21")
+	testStore.devshards[record.EscrowID] = record
+	calls := &callLog{}
+	m := &Manager{
+		tx:               prunedTxClient(t),
+		store:            testStore,
+		signer:           &fakeSignerSource{signer: testSigner(t)},
+		settlementSource: &fakeSettlementSource{calls: calls},
+		config:           holderWithSettlementEnabled(true),
+	}
+
+	_, err := m.Settle(context.Background(), record.EscrowID, false)
+
+	if !errors.Is(err, ErrEscrowPruned) {
+		t.Fatalf("Settle() = %v, want ErrEscrowPruned", err)
+	}
+	if calls.contains("Finalize") {
+		t.Error("finalized an escrow the chain no longer holds")
+	}
+	if _, ok := testStore.snapshotDevshard(record.EscrowID); ok {
+		t.Fatal("row still present for an escrow the chain pruned, want it dropped")
+	}
+}
+
+// Test flow:
+//  1. Seed the store with one parked record whose escrow the chain no longer holds.
+//  2. Run `settlePending` with the settlement toggle enabled.
+//  3. Assert it returns nil and the row is dropped, so the tick stops retrying it.
+func TestSettlePendingDropsAnEscrowTheChainNoLongerHolds(t *testing.T) {
+	testStore := newFakeStore()
+	record := parkedRecord("22")
+	testStore.devshards[record.EscrowID] = record
+	m := &Manager{
+		tx:               prunedTxClient(t),
+		store:            testStore,
+		signer:           &fakeSignerSource{signer: testSigner(t)},
+		settlementSource: &fakeSettlementSource{},
+		config:           holderWithSettlementEnabled(true),
+	}
+
+	if err := m.settlePending(context.Background(), []store.DevshardRecord{record}); err != nil {
+		t.Fatalf("settlePending() = %v, want nil", err)
+	}
+	if _, ok := testStore.snapshotDevshard(record.EscrowID); ok {
+		t.Fatal("row still present for an escrow the chain pruned, want it dropped")
+	}
+}
+
+func holderWithModelSettlement(globalEnabled bool, modelsJSON string) *config.Holder {
+	cfg := config.Defaults()
+	cfg.Rotation.SettlementEnabled = globalEnabled
+	cfg.Rotation.ModelsJSON = modelsJSON
+	return config.NewHolder(&cfg)
+}
+
+// Test flow:
+//  1. Seed the store with a parked record for model-a, which turns settlement on for itself, and one for model-b, which says nothing.
+//  2. Run `settlePending` with the global settlement toggle off.
+//  3. Assert model-a's escrow is settled and dropped while model-b's stays parked under the global toggle.
+func TestSettlePendingFollowsAModelsOwnSettlementFlag(t *testing.T) {
+	testStore := newFakeStore()
+	ownFlag := parkedRecord("31")
+	inherited := parkedRecord("32")
+	inherited.Model = "model-b"
+	testStore.devshards[ownFlag.EscrowID] = ownFlag
+	testStore.devshards[inherited.EscrowID] = inherited
+	m := &Manager{
+		tx:               settlingTxClient(),
+		store:            testStore,
+		signer:           &fakeSignerSource{signer: testSigner(t)},
+		settlementSource: &fakeSettlementSource{},
+		config: holderWithModelSettlement(false, `[
+			{"model_id": "model-a", "amount": 1000, "settlement_enabled": true},
+			{"model_id": "model-b", "amount": 1000}
+		]`),
+	}
+
+	if err := m.settlePending(context.Background(), []store.DevshardRecord{ownFlag, inherited}); err != nil {
+		t.Fatalf("settlePending() = %v, want nil", err)
+	}
+	if _, ok := testStore.snapshotDevshard(ownFlag.EscrowID); ok {
+		t.Error("model-a's escrow was not settled though the model turns settlement on")
+	}
+	assertParked(t, testStore, inherited.EscrowID)
+}
+
+// Test flow:
+//  1. Seed the store with one active record for model-a, which turns settlement off for itself.
+//  2. Call `retire` with the global settlement toggle on and a chain client that fails the test if SettleEscrow is called.
+//  3. Assert the escrow is parked, not settled.
+func TestRetireParksAModelThatTurnsSettlementOff(t *testing.T) {
+	testStore := newFakeStore()
+	record := store.DevshardRecord{EscrowID: "33", PrivateKeyEnv: "MODEL_A_KEY", Model: "model-a", Active: true}
+	testStore.devshards[record.EscrowID] = record
+	txClient := &fakeTxClient{
+		settleEscrowFn: func(context.Context, *signing.Secp256k1Signer, chain.SettlementInput) (chain.SettleEscrowResult, error) {
+			t.Fatal("SettleEscrow must not be called for a model that turns settlement off")
+			return chain.SettleEscrowResult{}, nil
+		},
+	}
+	m := &Manager{
+		tx:               txClient,
+		store:            testStore,
+		signer:           &fakeSignerSource{signer: testSigner(t)},
+		settlementSource: &fakeSettlementSource{},
+		config:           holderWithModelSettlement(true, `[{"model_id": "model-a", "amount": 1000, "settlement_enabled": false}]`),
+	}
+
+	if err := m.retire(context.Background(), record); err != nil {
+		t.Fatalf("retire() = %v, want nil", err)
+	}
+	assertParked(t, testStore, record.EscrowID)
 }
