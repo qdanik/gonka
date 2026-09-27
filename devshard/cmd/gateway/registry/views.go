@@ -92,6 +92,29 @@ func (r *Registry) ReservationsReturnBy(escrowID string) (time.Time, bool) {
 	return returnBy, true
 }
 
+// Recoverable: see README.md, "The published set and its readers".
+func (r *Registry) Recoverable(escrowID string, grace time.Duration) (uint64, bool) {
+	entry, live := r.live.Load().byID[escrowID]
+	if !live {
+		return 0, false
+	}
+	config, records := entry.session.LiveInferences()
+	overdueBefore := r.now().Add(-(time.Duration(config.RefusalTimeout)*time.Second + user.TimeoutBuffer + grace))
+	keepOverdue := entry.busy()
+	var recoverable uint64
+	for _, record := range records {
+		switch record.Status {
+		case types.StatusStarted, types.StatusChallenged:
+			return 0, false
+		case types.StatusPending:
+			if keepOverdue || time.Unix(record.StartedAt, 0).After(overdueBefore) {
+				recoverable += record.ReservedCost
+			}
+		}
+	}
+	return recoverable, true
+}
+
 func (e *escrowEntry) candidate() scheduler.Escrow {
 	return scheduler.Escrow{
 		ID:          e.id,

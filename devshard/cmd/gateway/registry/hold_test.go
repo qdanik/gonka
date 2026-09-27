@@ -228,3 +228,73 @@ func TestReservationsReturnByIsUnboundedForAnUnknownEscrow(t *testing.T) {
 		t.Fatal("ReservationsReturnBy(missing) bounded = true, want false")
 	}
 }
+
+// Test flow:
+//  1. Publish an escrow whose session holds records of a table case's statuses, with pending ones inside and past the refusal window plus grace.
+//  2. Ask what could still come back, idle or with a request in flight.
+//  3. Assert pending reservations count, an overdue one only while the escrow is busy, a finished one never, and a started or disputed record leaves the answer undecided.
+func TestRecoverableCountsWhatCanStillComeBack(t *testing.T) {
+	now := fixedClock()()
+	grace := 15 * time.Second
+	overdue := now.Add(-(60*time.Second + user.TimeoutBuffer + grace)).Unix()
+	pendingRecords := map[uint64]*types.InferenceRecord{
+		1: {Status: types.StatusPending, ReservedCost: 10, StartedAt: now.Unix()},
+		2: {Status: types.StatusPending, ReservedCost: 40, StartedAt: overdue},
+		3: {Status: types.StatusFinished, ReservedCost: 70, ActualCost: 60},
+	}
+	cases := []struct {
+		name            string
+		busy            bool
+		inferences      map[uint64]*types.InferenceRecord
+		wantRecoverable uint64
+		wantDecided     bool
+	}{
+		{name: "idle escrow drops the overdue reservation", inferences: pendingRecords, wantRecoverable: 10, wantDecided: true},
+		{name: "busy escrow keeps the overdue reservation", busy: true, inferences: pendingRecords, wantRecoverable: 50, wantDecided: true},
+		{name: "a started record is left to the sweep", inferences: map[uint64]*types.InferenceRecord{
+			1: {Status: types.StatusPending, ReservedCost: 10, StartedAt: now.Unix()},
+			2: {Status: types.StatusStarted, ReservedCost: 20, StartedAt: overdue, ConfirmedAt: overdue},
+		}, wantDecided: false},
+		{name: "a disputed record is left to the dispute", inferences: map[uint64]*types.InferenceRecord{
+			1: {Status: types.StatusChallenged, ReservedCost: 50, ActualCost: 30},
+		}, wantDecided: false},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			session := newFakeSession("hostA")
+			session.escrowState = types.EscrowState{
+				Config:     types.SessionConfig{RefusalTimeout: 60, ExecutionTimeout: 1800},
+				Inferences: testCase.inferences,
+			}
+			registry := New(Deps{ServingSessions: newSessions(map[string]*fakeSession{"1": session}).open, Now: fixedClock()})
+			mustAdd(t, registry, "1", "qwen")
+			if testCase.busy {
+				_, release, held := registry.Acquire("1")
+				if !held {
+					t.Fatal("Acquire(1) refused a published escrow")
+				}
+				defer release()
+			}
+
+			recoverable, decided := registry.Recoverable("1", grace)
+
+			if decided != testCase.wantDecided {
+				t.Fatalf("Recoverable(1) decided = %v, want %v", decided, testCase.wantDecided)
+			}
+			if decided && recoverable != testCase.wantRecoverable {
+				t.Fatalf("Recoverable(1) = %d, want %d", recoverable, testCase.wantRecoverable)
+			}
+		})
+	}
+}
+
+// Test flow:
+//  1. Build a registry that publishes nothing.
+//  2. Assert Recoverable leaves an unknown escrow undecided.
+func TestRecoverableIsUnknownForAnUnknownEscrow(t *testing.T) {
+	registry := New(Deps{ServingSessions: newSessions(map[string]*fakeSession{}).open, Now: fixedClock()})
+
+	if _, decided := registry.Recoverable("missing", time.Second); decided {
+		t.Fatal("Recoverable(missing) decided = true, want false")
+	}
+}

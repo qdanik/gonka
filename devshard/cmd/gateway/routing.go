@@ -90,8 +90,20 @@ func (h escrowHolds) Verdict(escrowID string, answers uint64) escrow.HoldVerdict
 		return escrow.HoldNonceSpent
 	case ready:
 		return escrow.HoldResume
+	case h.unrecoverable(candidate, answers):
+		return escrow.HoldUnrecoverable
 	}
 	return escrow.HoldKeep
+}
+
+// unrecoverable: see escrow/README.md, "An escrow on hold".
+func (h escrowHolds) unrecoverable(candidate scheduler.Escrow, answers uint64) bool {
+	floor, priced := h.router.ResumeFloor(candidate, answers)
+	if !priced || candidate.Session == nil {
+		return false
+	}
+	recoverable, decided := h.escrows.Recoverable(candidate.ID, escrow.TickInterval)
+	return decided && candidate.Session.Balance()+recoverable < floor
 }
 
 func (h escrowHolds) ReservationsReturnBy(escrowID string) (time.Time, bool) {

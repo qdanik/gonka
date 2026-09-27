@@ -46,6 +46,7 @@ type fakeSession struct {
 	heightSyncView heightsync.OperatorView
 
 	phase         atomic.Int32
+	sweepReport   user.SweepReport
 	nonce         atomic.Uint64
 	signatures    map[uint64]map[uint32][]byte
 	escrowState   types.EscrowState
@@ -142,6 +143,10 @@ func (f *fakeSession) Close() error {
 }
 
 func (f *fakeSession) UserSession() *user.Session { return nil }
+
+func (f *fakeSession) SweepExecutionTimeouts(context.Context, time.Duration, int) user.SweepReport {
+	return f.sweepReport
+}
 
 func (f *fakeSession) HostDials() []HostDial { return f.dials }
 

@@ -3,6 +3,8 @@ package registry
 import (
 	"context"
 	"time"
+
+	"devshard/types"
 )
 
 // SweepExecutionTimeouts retries the execution timeouts no race is left to post. The budget is the
@@ -28,11 +30,10 @@ func (r *Registry) SweepExecutionTimeouts(ctx context.Context, grace time.Durati
 		}
 		report := func() sweepCounts {
 			defer release()
-			underlying := session.UserSession()
-			if underlying == nil {
+			if session.Phase() != types.PhaseActive {
 				return sweepCounts{}
 			}
-			swept := underlying.SweepExecutionTimeouts(ctx, grace, remaining)
+			swept := session.SweepExecutionTimeouts(ctx, grace, remaining)
 			return sweepCounts{due: swept.Due, applied: swept.Applied, failed: swept.Failed}
 		}()
 		remaining -= report.due

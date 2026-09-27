@@ -251,15 +251,21 @@ func (s *Scheduler) ResumeReadiness(candidate Escrow, answers uint64) (ready, no
 	if candidate.Session == nil || reserve == 0 || exhaustionReason(candidate, maxNonce, reserve) != "" {
 		return false, false
 	}
+	floor, priced := s.ResumeFloor(candidate, answers)
+	return priced && candidate.Session.Balance() >= floor, false
+}
+
+// ResumeFloor is the balance ResumeReadiness waits for; unpriced when no reserve is configured or the price overflows.
+func (s *Scheduler) ResumeFloor(candidate Escrow, answers uint64) (uint64, bool) {
+	reserve := s.retirementReserve()
+	if candidate.Session == nil || reserve == 0 {
+		return 0, false
+	}
 	price, priced := safeMul(reserve, candidate.Session.TokenPrice())
 	if !priced {
-		return false, false
+		return 0, false
 	}
-	floor, priced := safeMul(price, answers)
-	if !priced {
-		return false, false
-	}
-	return candidate.Session.Balance() >= floor, false
+	return safeMul(price, answers)
 }
 
 // safeMul reports the product only when it did not wrap: an unaffordable price must not read as a small one.

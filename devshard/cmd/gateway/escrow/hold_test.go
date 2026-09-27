@@ -476,6 +476,54 @@ func TestANonceSpentHoldIsParked(t *testing.T) {
 }
 
 // Test flow:
+//  1. Store a held record at the current epoch, with a hold gate returning `HoldUnrecoverable`.
+//  2. Call `resumeTick` and assert it returns no error.
+//  3. Assert the record is parked and the hold is narrated as ended for being unrecoverable.
+func TestAHoldThatCannotRecoverIsParked(t *testing.T) {
+	testStore := newFakeStore()
+	testStore.devshards["1"] = heldRecord("1", int64(servingSnapshot().EpochIndex))
+	gate := newFakeHoldGate()
+	gate.verdicts["1"] = HoldUnrecoverable
+	narrator := &recordingLifecycleNarrator{}
+	manager := holdManager(t, testStore, &fakeTxClient{}, gate)
+	manager.narrator = narrator
+
+	if _, err := resumeTick(t, manager, testStore); err != nil {
+		t.Fatalf("resumeHeld = %v, want nil", err)
+	}
+
+	assertParked(t, testStore, "1")
+	if !slices.Contains(narrator.recorded(), "hold ended 1: unrecoverable") {
+		t.Errorf("narration = %q, want the hold ended as unrecoverable", narrator.recorded())
+	}
+}
+
+// Test flow:
+//  1. Store one active record at the current epoch, with a hold gate returning `HoldUnrecoverable` for it.
+//  2. Deplete the record once with reason "balance_floor" via `depleteOnce`.
+//  3. Assert the record is parked, never put on hold, and one replacement was created.
+func TestADepletedEscrowThatCannotRecoverIsParkedNotHeld(t *testing.T) {
+	testStore := newFakeStore()
+	testStore.devshards["1"] = currentEpochRecord("1")
+	txClient := &fakeTxClient{createEscrowFn: workingCreateEscrowFn(999)}
+	gate := newFakeHoldGate()
+	gate.verdicts["1"] = HoldUnrecoverable
+	manager := holdManager(t, testStore, txClient, gate)
+
+	if err := depleteOnce(t, manager, testStore, "1", "balance_floor"); err != nil {
+		t.Fatalf("checkDepletion = %v, want nil", err)
+	}
+
+	assertParked(t, testStore, "1")
+	if testStore.devshards["1"].OnHold || gate.isOnHold("1") {
+		t.Error("an escrow that cannot recover was put on hold")
+	}
+	if txClient.createCalls != 1 {
+		t.Errorf("createCalls = %d, want 1 replacement", txClient.createCalls)
+	}
+}
+
+// Test flow:
 //  1. Store a held record at the current epoch and build a manager with the hold disabled.
 //  2. Call `resumeTick` and assert it returns no error.
 //  3. Assert the record is parked even though nothing changed about its funds.

@@ -51,6 +51,7 @@ func (v acceptingVoter) VerifyErrorMiss(context.Context, uint64, []types.Diff, h
 
 type longResponseEscrow struct {
 	registry *Registry
+	handle   sessionHandle
 	session  *user.Session
 	machine  *state.StateMachine
 	signers  []*signing.Secp256k1Signer
@@ -74,12 +75,13 @@ func publishLongResponseEscrow(t *testing.T) longResponseEscrow {
 	session, err := user.NewSession(machine, creator, longResponseEscrowID, group, clients, verifier)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = session.Close() })
+	handle := NewSessionHandle(session, machine).(sessionHandle)
 	registry := New(Deps{
-		ServingSessions: func(context.Context, string) (EscrowSession, error) { return NewSessionHandle(session, machine), nil },
+		ServingSessions: func(context.Context, string) (EscrowSession, error) { return handle, nil },
 		Now:             fixedClock(),
 	})
 	require.NoError(t, registry.Add(context.Background(), longResponseEscrowID, "llama"))
-	return longResponseEscrow{registry: registry, session: session, machine: machine, signers: signers}
+	return longResponseEscrow{registry: registry, handle: handle, session: session, machine: machine, signers: signers}
 }
 
 func startedTwoHoursAgo(t *testing.T, escrow longResponseEscrow) uint64 {
@@ -151,4 +153,22 @@ func TestALongResponseTheRaceDoesNotVoteOnIsReturnedByTheSweep(t *testing.T) {
 	require.True(t, tracked)
 	require.Equal(t, types.StatusTimedOut, swept.Status)
 	require.Equal(t, balanceWhileHeld+record.ReservedCost, escrow.machine.Balance(), "the timed-out reservation must return to the balance")
+}
+
+// Test flow:
+//  1. Publish a real escrow session with one inference started two hours ago and never finished.
+//  2. Take the escrow's finalize lock, as a running Finalize does, and run the registry's execution-timeout sweep.
+//  3. Assert the sweep left the escrow alone: nothing due, and the record still started with its reserve held.
+func TestTheSweepLeavesAnEscrowAloneWhileItFinalizes(t *testing.T) {
+	escrow := publishLongResponseEscrow(t)
+	nonce := startedTwoHoursAgo(t, escrow)
+	escrow.handle.finalizing.Lock()
+	defer escrow.handle.finalizing.Unlock()
+
+	due, applied, failed := escrow.registry.SweepExecutionTimeouts(context.Background(), 0, 8)
+
+	require.Equal(t, [3]int{0, 0, 0}, [3]int{due, applied, failed})
+	record, tracked := escrow.machine.GetInference(nonce)
+	require.True(t, tracked)
+	require.Equal(t, types.StatusStarted, record.Status)
 }

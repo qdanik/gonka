@@ -968,6 +968,45 @@ func TestResumeReadiness(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. For each table case of a max-tokens cap and token price, build a held escrow.
+//  2. Call `ResumeFloor` on it for 32 answers.
+//  3. Assert the floor is the balance ResumeReadiness waits for, and an unconfigured reserve or an overflowing price is reported unpriced.
+func TestResumeFloor(t *testing.T) {
+	t.Parallel()
+
+	testCases := []struct {
+		name         string
+		maxTokensCap int64
+		tokenPrice   uint64
+		wantFloor    uint64
+		wantPriced   bool
+	}{
+		{name: "the resume headroom", maxTokensCap: 100, tokenPrice: 1, wantFloor: 3_200, wantPriced: true},
+		{name: "no retirement reserve configured", maxTokensCap: 0, tokenPrice: 1, wantFloor: 0, wantPriced: false},
+		{name: "a price that overflows", maxTokensCap: 100, tokenPrice: 1 << 62, wantFloor: 0, wantPriced: false},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			settings := config.Defaults()
+			settings.Limits.MaxTokensCap = testCase.maxTokensCap
+			scheduler := &Scheduler{
+				settings:  config.NewHolder(&settings),
+				snapshots: &fakeSnapshots{snapshot: chain.PhaseSnapshot{MaxNonce: 1_000}},
+			}
+			candidate := Escrow{ID: "escrow-hold", Session: &fakeSession{balance: 1, tokenPrice: testCase.tokenPrice, slots: slotsOf("escrow-hold", 4)}}
+
+			floor, priced := scheduler.ResumeFloor(candidate, 32)
+
+			if floor != testCase.wantFloor || priced != testCase.wantPriced {
+				t.Fatalf("ResumeFloor() = %d, %v; want %d, %v", floor, priced, testCase.wantFloor, testCase.wantPriced)
+			}
+		})
+	}
+}
+
 type reserveTakenRecorder struct {
 	mu    sync.Mutex
 	taken []string

@@ -417,6 +417,39 @@ func TestPrepareBridgeOneModelFailureDoesNotStopOthers(t *testing.T) {
 }
 
 // Test flow:
+//  1. Build a chain client whose wallet pays for two creates and refuses every later one as underfunded.
+//  2. Call `prepareBridge` for two models that each want two temps.
+//  3. Assert each model got one temp: a pass funds one create per model before any model gets a second.
+func TestPrepareBridgeSharesAShortWalletAcrossModels(t *testing.T) {
+	testStore := newFakeStore()
+	paidCreates := 0
+	createdByModel := map[string]int{}
+	fundedCreate := succeedingCreateEscrowFn(900)
+	txClient := &fakeTxClient{createEscrowFn: func(ctx context.Context, signer *signing.Secp256k1Signer, amount uint64, modelID string, onPrepared func(string) error) (chain.CreateEscrowResult, error) {
+		if paidCreates == 2 {
+			return chain.CreateEscrowResult{}, &chain.WalletUnderfundedError{Address: "gonka1wallet", Have: 0, Need: amount}
+		}
+		paidCreates++
+		createdByModel[modelID]++
+		return fundedCreate(ctx, signer, amount, modelID, onPrepared)
+	}}
+	m := newRotationManager(t, testStore, txClient, false)
+	models := []ModelConfig{
+		{ModelID: "model-a", TempCount: 2, TargetCount: 2, Amount: 1000, PrivateKeyEnv: "MODEL_A_KEY"},
+		{ModelID: "model-b", TempCount: 2, TargetCount: 2, Amount: 1000, PrivateKeyEnv: "MODEL_B_KEY"},
+	}
+	snapshot := chain.PhaseSnapshot{EpochIndex: 9, BlockHeight: 500, FullWeightsByModel: map[string]map[string]float64{
+		"model-a": {"p": 1}, "model-b": {"p": 1},
+	}}
+
+	_ = m.prepareBridge(context.Background(), snapshot, models, nil)
+
+	if createdByModel["model-a"] != 1 || createdByModel["model-b"] != 1 {
+		t.Fatalf("creates by model = %v, want one each: a short wallet must not fund one model twice while another gets none", createdByModel)
+	}
+}
+
+// Test flow:
 //  1. Configure the fake store's SaveRotationStatus to fail.
 //  2. Call `prepareBridge` with a chain client that otherwise succeeds.
 //  3. Assert the returned error surfaces the rotation-status save failure even though the rotation itself succeeded.

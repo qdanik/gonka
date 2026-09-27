@@ -695,6 +695,19 @@ func TestTheHoldGateKeepsAnEscrowTheRegistryDoesNotHold(t *testing.T) {
 }
 
 // Test flow:
+//  1. Build an escrowHolds gate over a registry whose escrow has a balance of one and nothing in flight.
+//  2. Ask its Verdict for that escrow.
+//  3. Assert the verdict is HoldUnrecoverable: nothing can lift the balance to the resume floor.
+func TestTheHoldGateEndsAHoldNothingCanLiftToTheResumeFloor(t *testing.T) {
+	escrows, router := composedRoutingOver(t, limits.NewCapacity(func(string, string) bool { return true }), poorSession{weightlessSession{participants: []string{"validator-a"}}})
+	holds := escrowHolds{escrows: escrows, router: router}
+
+	if verdict := holds.Verdict("escrow-1", 1); verdict != escrow.HoldUnrecoverable {
+		t.Fatalf("Verdict(escrow-1) = %v, want HoldUnrecoverable", verdict)
+	}
+}
+
+// Test flow:
 //  1. Build an escrowHolds gate over a fresh registry and router.
 //  2. Call SetOnHold(true) for an escrow.
 //  3. Assert the registry reports it on hold.
@@ -1228,6 +1241,10 @@ func TestUnquarantiningAnUntrackedParticipantIsNotReportedAsDone(t *testing.T) {
 // weightlessSession is enough of an escrow session for the registry to publish and route, but cannot commit a nonce.
 type weightlessSession struct{ participants []string }
 
+type poorSession struct{ weightlessSession }
+
+func (poorSession) Balance() uint64 { return 1 }
+
 func (weightlessSession) Balance() uint64    { return 1 << 40 }
 func (weightlessSession) TokenPrice() uint64 { return 1 }
 
@@ -1246,13 +1263,16 @@ func (s weightlessSession) SignatureStatus() ([]user.SignatureStatusEntry, uint6
 	return nil, 0, false
 }
 
-func (s weightlessSession) SignedSlots() map[uint64]types.Bitmap128   { return nil }
-func (s weightlessSession) SnapshotState() types.EscrowState          { return types.EscrowState{} }
-func (s weightlessSession) SealedInferences() int                     { return 0 }
-func (s weightlessSession) Finalize(context.Context) error            { return nil }
-func (s weightlessSession) FlushSnapshot() error                      { return nil }
-func (s weightlessSession) Close() error                              { return nil }
-func (s weightlessSession) UserSession() *user.Session                { return nil }
+func (s weightlessSession) SignedSlots() map[uint64]types.Bitmap128 { return nil }
+func (s weightlessSession) SnapshotState() types.EscrowState        { return types.EscrowState{} }
+func (s weightlessSession) SealedInferences() int                   { return 0 }
+func (s weightlessSession) Finalize(context.Context) error          { return nil }
+func (s weightlessSession) FlushSnapshot() error                    { return nil }
+func (s weightlessSession) Close() error                            { return nil }
+func (s weightlessSession) UserSession() *user.Session              { return nil }
+func (s weightlessSession) SweepExecutionTimeouts(context.Context, time.Duration, int) user.SweepReport {
+	return user.SweepReport{}
+}
 func (s weightlessSession) HostDials() []registry.HostDial            { return nil }
 func (s weightlessSession) HeightSyncView() heightsync.OperatorView   { return heightsync.OperatorView{} }
 func (s weightlessSession) WaitRouterCatalog(context.Context) error   { return nil }
@@ -1417,6 +1437,11 @@ func routingFor(t *testing.T, capacity *limits.Capacity, participants []string) 
 
 func composedRouting(t *testing.T, capacity *limits.Capacity, participants []string) (*registry.Registry, *scheduler.Scheduler) {
 	t.Helper()
+	return composedRoutingOver(t, capacity, weightlessSession{participants: participants})
+}
+
+func composedRoutingOver(t *testing.T, capacity *limits.Capacity, session registry.EscrowSession) (*registry.Registry, *scheduler.Scheduler) {
+	t.Helper()
 	configuration := config.Defaults()
 	configHolder := config.NewHolder(&configuration)
 	observer, err := chain.NewPhaseObserver(chain.ObserverConfig{PublicAPIBaseURL: "http://127.0.0.1:1"})
@@ -1425,7 +1450,7 @@ func composedRouting(t *testing.T, capacity *limits.Capacity, participants []str
 	}
 	escrows, router, _, routingErr := newRouting(routingDeps{
 		Sessions: func(context.Context, string) (registry.EscrowSession, error) {
-			return weightlessSession{participants: participants}, nil
+			return session, nil
 		},
 		Capacity:     capacity,
 		Participants: limits.NewParticipantLimiter(limits.ParticipantConfigFromLimits(configuration.Limits), time.Now),

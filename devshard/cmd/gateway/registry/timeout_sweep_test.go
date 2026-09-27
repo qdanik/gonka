@@ -6,6 +6,9 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+
+	"devshard/types"
+	"devshard/user"
 )
 
 func registryWithOneEscrow(t *testing.T) *Registry {
@@ -53,4 +56,33 @@ func TestSweepStopsWalkingOnACancelledContext(t *testing.T) {
 	due, applied, failed := registry.SweepExecutionTimeouts(cancelled, time.Minute, 4)
 
 	require.Equal(t, [3]int{0, 0, 0}, [3]int{due, applied, failed})
+}
+
+// Test flow:
+//  1. Build a registry with one escrow whose session has one execution timeout due, in each table case's phase.
+//  2. Sweep execution timeouts.
+//  3. Assert the active escrow is swept and an escrow finalizing or settled is left alone.
+func TestSweepVotesOnlyWhileTheSessionIsActive(t *testing.T) {
+	cases := []struct {
+		name      string
+		phase     types.SessionPhase
+		wantSwept [3]int
+	}{
+		{name: "active", phase: types.PhaseActive, wantSwept: [3]int{1, 1, 0}},
+		{name: "finalizing", phase: types.PhaseFinalizing, wantSwept: [3]int{0, 0, 0}},
+		{name: "settled", phase: types.PhaseSettlement, wantSwept: [3]int{0, 0, 0}},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			session := newFakeSession("participant-a")
+			session.sweepReport = user.SweepReport{Due: 1, Applied: 1}
+			registry := New(Deps{ServingSessions: newSessions(map[string]*fakeSession{"1": session}).open, Membership: newRecordingMembership(), Now: fixedClock()})
+			require.NoError(t, registry.Add(context.Background(), "1", "qwen"))
+			session.setPhase(testCase.phase)
+
+			due, applied, failed := registry.SweepExecutionTimeouts(context.Background(), time.Minute, 4)
+
+			require.Equal(t, testCase.wantSwept, [3]int{due, applied, failed})
+		})
+	}
 }

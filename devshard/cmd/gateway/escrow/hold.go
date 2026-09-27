@@ -52,6 +52,9 @@ func (m *Manager) holdOrPark(ctx context.Context, record store.DevshardRecord, r
 	if epoch, known := m.creationEpoch(ctx, record); !known || epoch < int64(snapshot.EpochIndex) {
 		return m.parkDepleted(ctx, record, reason, model, snapshot, counts)
 	}
+	if m.holds.Verdict(record.EscrowID, uint64(m.config.Load().Rotation.HoldResumeAnswers)) == HoldUnrecoverable {
+		return m.parkDepleted(ctx, record, reason, model, snapshot, counts)
+	}
 	held, err := m.putOnHold(ctx, record.EscrowID)
 	if !held {
 		if err != nil {
@@ -148,6 +151,8 @@ func (m *Manager) settleHold(ctx context.Context, record store.DevshardRecord, r
 	switch m.holds.Verdict(record.EscrowID, uint64(rotation.HoldResumeAnswers)) {
 	case HoldNonceSpent:
 		return m.endHold(ctx, record, holdEndedNonceSpent)
+	case HoldUnrecoverable:
+		return m.endHold(ctx, record, holdEndedUnrecoverable)
 	case HoldResume:
 		return m.resume(ctx, record)
 	}

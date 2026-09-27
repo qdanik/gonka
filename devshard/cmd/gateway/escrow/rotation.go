@@ -12,8 +12,49 @@ import (
 // errCreateSuppressed marks a create the breaker refused -- not "nothing needed". See README.md, "The bridge across proof-of-compute".
 var errCreateSuppressed = errors.New("escrow creation suppressed by the create breaker")
 
+// rotationFill is one model's share of a fill: the creates it wants, the ones that landed, and the error that stopped it.
+type rotationFill struct {
+	model   ModelConfig
+	wanted  int
+	created int
+	err     error
+}
+
 // ensureToTarget creates escrows up to target for (model, role, epoch), filtering the tick's own devshard slice.
 func (m *Manager) ensureToTarget(ctx context.Context, role string, target int, model ModelConfig, snapshot chain.PhaseSnapshot, devshards []store.DevshardRecord) (created int, err error) {
+	fill := m.fillToTargets(ctx, role, []ModelConfig{model}, func(ModelConfig) int { return target }, snapshot, devshards)[0]
+	return fill.created, fill.err
+}
+
+// fillToTargets funds one create per model per pass. See README.md, "The bridge across proof-of-compute".
+func (m *Manager) fillToTargets(ctx context.Context, role string, models []ModelConfig, targetOf func(ModelConfig) int, snapshot chain.PhaseSnapshot, devshards []store.DevshardRecord) []rotationFill {
+	fills := make([]rotationFill, len(models))
+	for index, model := range models {
+		wanted, err := m.createsWanted(role, targetOf(model), model, snapshot, devshards)
+		fills[index] = rotationFill{model: model, wanted: wanted, err: err}
+	}
+	for creating := true; creating; {
+		creating = false
+		for index := range fills {
+			fill := &fills[index]
+			if fill.err != nil || fill.created >= fill.wanted {
+				continue
+			}
+			if _, err := m.createEscrow(ctx, fill.model, role, snapshot.EpochIndex, snapshot.BlockHeight); err != nil {
+				if !errors.Is(err, chain.ErrWalletUnderfunded) {
+					m.breaker.recordFailure(fill.model.ModelID, role)
+				}
+				fill.err = err
+				continue
+			}
+			fill.created++
+			creating = true
+		}
+	}
+	return fills
+}
+
+func (m *Manager) createsWanted(role string, target int, model ModelConfig, snapshot chain.PhaseSnapshot, devshards []store.DevshardRecord) (int, error) {
 	existing := countActive(devshards, model.ModelID, role, int64(snapshot.EpochIndex))
 	if existing >= target {
 		return 0, nil
@@ -27,17 +68,7 @@ func (m *Manager) ensureToTarget(ctx context.Context, role string, target int, m
 	if m.breaker.gated(model.ModelID, role) {
 		return 0, errCreateSuppressed
 	}
-
-	for i := existing; i < target; i++ {
-		if _, err = m.createEscrow(ctx, model, role, snapshot.EpochIndex, snapshot.BlockHeight); err != nil {
-			if !errors.Is(err, chain.ErrWalletUnderfunded) {
-				m.breaker.recordFailure(model.ModelID, role)
-			}
-			return created, err
-		}
-		created++
-	}
-	return created, nil
+	return target - existing, nil
 }
 
 func countActive(devshards []store.DevshardRecord, modelID, role string, epoch int64) int {
@@ -53,8 +84,8 @@ func countActive(devshards []store.DevshardRecord, modelID, role string, epoch i
 // prepareBridge swaps temp escrows in ahead of an epoch switch, one model at a time, failure-isolated.
 func (m *Manager) prepareBridge(ctx context.Context, snapshot chain.PhaseSnapshot, models []ModelConfig, devshards []store.DevshardRecord) error {
 	var errs []error
-	for _, model := range models {
-		created, err := m.ensureToTarget(ctx, roleTemp, model.TempCount, model, snapshot, devshards)
+	for _, fill := range m.fillToTargets(ctx, roleTemp, models, func(model ModelConfig) int { return model.TempCount }, snapshot, devshards) {
+		model, created, err := fill.model, fill.created, fill.err
 		if err != nil {
 			// degrade, don't abort: relabel existing regulars as temp so this epoch still has bridge coverage.
 			promoted, promoteErr := m.promoteRegularsToTemp(ctx, model, devshards)
@@ -100,13 +131,15 @@ func (m *Manager) prepareBridge(ctx context.Context, snapshot chain.PhaseSnapsho
 
 // finishBridge swaps regulars back in once PoC is over (per-model, failure-isolated like prepareBridge).
 func (m *Manager) finishBridge(ctx context.Context, snapshot chain.PhaseSnapshot, models []ModelConfig, devshards []store.DevshardRecord) error {
-	var errs []error
+	bridged := make([]ModelConfig, 0, len(models))
 	for _, model := range models {
-		if !hasActiveTemp(devshards, model.ModelID, int64(snapshot.EpochIndex)) {
-			continue // nothing bridged for this model, nothing to finish this tick.
+		if hasActiveTemp(devshards, model.ModelID, int64(snapshot.EpochIndex)) {
+			bridged = append(bridged, model)
 		}
-
-		created, err := m.ensureToTarget(ctx, roleRegular, model.TargetCount, model, snapshot, devshards)
+	}
+	var errs []error
+	for _, fill := range m.fillToTargets(ctx, roleRegular, bridged, func(model ModelConfig) int { return model.TargetCount }, snapshot, devshards) {
+		model, created, err := fill.model, fill.created, fill.err
 		if err != nil {
 			status := store.RotationStatus{Model: model.ModelID, Role: roleRegular, Stage: stageFinishRegular, Epoch: snapshot.EpochIndex, CreateError: err.Error()}
 			if saveErr := m.saveRotationStatus(ctx, status); saveErr != nil {

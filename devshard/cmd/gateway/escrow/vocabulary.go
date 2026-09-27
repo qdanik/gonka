@@ -24,14 +24,16 @@ const (
 	HoldKeep HoldVerdict = iota
 	HoldResume
 	HoldNonceSpent
+	HoldUnrecoverable
 )
 
 type holdEnding string
 
 const (
-	holdEndedDisabled     holdEnding = "hold_disabled"
-	holdEndedRotationOff  holdEnding = "rotation_off"
-	holdEndedEpochPassed  holdEnding = "epoch_passed"
-	holdEndedEpochUnknown holdEnding = "epoch_unknown"
-	holdEndedNonceSpent   holdEnding = holdEnding(scheduler.ExhaustionNonceCap)
+	holdEndedDisabled      holdEnding = "hold_disabled"
+	holdEndedRotationOff   holdEnding = "rotation_off"
+	holdEndedEpochPassed   holdEnding = "epoch_passed"
+	holdEndedEpochUnknown  holdEnding = "epoch_unknown"
+	holdEndedNonceSpent    holdEnding = holdEnding(scheduler.ExhaustionNonceCap)
+	holdEndedUnrecoverable holdEnding = "unrecoverable"
 )
