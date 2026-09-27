@@ -2,7 +2,7 @@
 
 Provider: Z.ai. This doc documents how GLM-5.3-Flash deviates from the [universal contract](README.md). For params that behave the same as universal, see the universal contract directly.
 
-Mirrors the structure of [DeepSeek-V4-Flash-0731](deepseek-v4-flash-0731.md) and [MiniMax-M2.7](minimax-m2.7.md). Thinking cannot be switched off on this model, so the whole thinking contract is documented here. Chain-side wiring (HuggingFace revision pin, ModelArgs) comes from the chain model registry, read through the [`models_all` query](../../inference-chain/proto/inference/inference/query.proto#L182), because no pull request in this repository registers the model.
+Mirrors the structure of [DeepSeek-V4-Flash-0731](deepseek-v4-flash-0731.md) and [MiniMax-M2.7](minimax-m2.7.md). Thinking cannot be switched off on this model, so the whole thinking contract is documented here. Chain-side wiring (HuggingFace revision pin, ModelArgs) comes from the chain model registry, read through the [`models_all` query](../../inference-chain/proto/inference/inference/query.proto#L183), because no pull request in this repository registers the model.
 
 ## Model facts
 
@@ -24,7 +24,7 @@ Infrastructure-level constraints that must hold BEFORE this route is served — 
 
 - **vLLM ≥ 0.29.0 per the vLLM recipe**, which also marks a nightly build as required and ships the model in a dedicated `vllm/vllm-openai:glm53-flash` image until support lands in the standard one ([[vLLM-43]](references.md#vllm)). The gonka-ai vLLM fork has a `release/v0.28.0-glm53` branch ([[vLLM-45]](references.md#vllm)); which build the hosts run is not recorded in this repository.
 - **`--trust-remote-code` is in the registered ModelArgs**, which puts the deployment inside the blast radius of [[CVE-12]](references.md#security-advisories). Mitigation is the same as every other route: the chain pins the HuggingFace revision above, never `main`.
-- **Parsers as registered: `--tool-call-parser glm47` and `--reasoning-parser glm45`**, matching the recipe ([[vLLM-43]](references.md#vllm)). That reasoning parser can leave the scratchpad in `content`, which the gateway works around — see [Known model-side bugs we work around](#known-model-side-bugs-we-work-around).
+- **Parsers as registered: `--tool-call-parser glm47` and `--reasoning-parser glm45`**, matching the recipe ([[vLLM-43]](references.md#vllm)). That reasoning parser switches extraction off on a false `thinking`/`enable_thinking` kwarg this template never reads, which the gateway works around — see [Known model-side bugs we work around](#known-model-side-bugs-we-work-around).
 
 ## The thinking contract
 
@@ -73,7 +73,7 @@ vLLM's canonical response field is `reasoning`; `reasoning_content` is the depre
 
 ## Known model-side bugs we work around
 
-- **Reasoning leaks into `content` on a false thinking kwarg** ([[vLLM-40]](references.md#vllm)): vLLM's `glm47_moe` parser switches extraction off when at least one of `thinking`/`enable_thinking` is present and none is true [[vLLM-41]](references.md#vllm), though this template reads neither, so a request carrying only false values — sent by the client, lifted by the gateway, or derived by vLLM from `reasoning_effort: "none"` — gets the scratchpad and a dangling `</think>` as its answer. Worked around request-side by the gateway ([why](troubleshooting.md#coerce-enable_thinking-glm53)); the upstream issue is still open.
+- **Reasoning leaks into `content` on a false thinking kwarg** ([[vLLM-40]](references.md#vllm)): vLLM's `glm47_moe` parser gates extraction on `thinking`/`enable_thinking`, which this template never reads, so a request carrying a false value — sent by the client, lifted by the gateway, or derived by vLLM from `reasoning_effort: "none"` — gets the scratchpad and a dangling `</think>` as its answer. Worked around request-side by the gateway ([why](troubleshooting.md#coerce-enable_thinking-glm53)); the upstream issue is still open.
 
 ## Known issues (not worked around)
 
@@ -81,7 +81,7 @@ vLLM's canonical response field is `reasoning`; `reasoning_content` is the depre
 
 ## Gateway wiring
 
-The override is one rule on the `chat_template_kwargs` table row, scoped to the exact route id and run at the `PostLimits` stage, after every lift: by then a top-level `enable_thinking` has been moved into `chat_template_kwargs`, and `reasoning: {"enabled": false}` has become `reasoning_effort: "none"`. Setting `enable_thinking` explicitly also stops vLLM from deriving `false` from `reasoning_effort: "none"`, because vLLM derives the kwarg only when the caller did not set it ([[vLLM-35]](references.md#vllm)). The rendered prompt does not change, since the template never reads the variable.
+The override is one rule on the `chat_template_kwargs` catalog entry, scoped to the exact route id and run at the `PostLimits` stage, after every lift: by then a top-level `enable_thinking` has been moved into `chat_template_kwargs`, and `reasoning: {"enabled": false}` has become `reasoning_effort: "none"`. Setting `enable_thinking` explicitly also stops vLLM from deriving `false` from `reasoning_effort: "none"`, because vLLM derives the kwarg only when the caller did not set it ([[vLLM-35]](references.md#vllm)). The rendered prompt does not change, since the template never reads the variable.
 
 The scope is the exact id on purpose: the GLM-5.2-FP8 template does read `enable_thinking` and renders an empty `<think></think>` when it is false ([[Zai-2]](references.md#zai)), so forcing it there would take away a switch that works.
 

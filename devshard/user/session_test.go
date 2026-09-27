@@ -2349,15 +2349,6 @@ func countRecoveryFinish(txs []*types.DevshardTx, inferenceID uint64) int {
 	return count
 }
 
-func findRecoveryConfirmStart(txs []*types.DevshardTx, inferenceID uint64) *types.DevshardTx {
-	for _, tx := range txs {
-		if cs := tx.GetConfirmStart(); cs != nil && cs.InferenceId == inferenceID {
-			return tx
-		}
-	}
-	return nil
-}
-
 func findRecoveryFinish(txs []*types.DevshardTx, inferenceID uint64) *types.DevshardTx {
 	for _, tx := range txs {
 		if fi := tx.GetFinishInference(); fi != nil && fi.InferenceId == inferenceID {

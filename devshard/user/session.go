@@ -316,6 +316,9 @@ type Session struct {
 	heartbeatClosed   bool
 	heartbeatStop     context.CancelFunc
 	heartbeatDone     chan struct{}
+	// heartbeatPoke is buffered 1. A turnover off the loop sends without
+	// blocking; the loop re-arms from lastTurnover and does not tick early.
+	heartbeatPoke chan struct{}
 
 	// heightSeedMu serializes seed state. The session loop (gate on) retries
 	// forever after catalog admission; missed is not terminal.
@@ -509,6 +512,8 @@ func NewSession(
 		sess.clock = time.Now
 	}
 	sess.heartbeat = heightsync.NewHeartbeat(sess.heartbeatCfg)
+	sess.heartbeatPoke = make(chan struct{}, 1)
+	sess.heartbeat.SetTurnoverWake(sess.pokeHeartbeat)
 	slots := uint64(len(group))
 	sess.heartbeat.SetRoster(slots, 0)
 	cfg := sess.heartbeat.Config()
@@ -1502,15 +1507,16 @@ func (s *Session) sendCatchUpChunks(ctx context.Context, hostIdx int, client Hos
 	}
 
 	totalChunks := (len(catchUp) + catchUpChunkSize - 1) / catchUpChunkSize
+	hostLabel := s.HostLabel(hostIdx)
 	logging.Info("catch-up starting", "subsystem", "finalize", "escrow", s.escrowID,
-		"nonce", nonce, "host", hostIdx,
+		"nonce", nonce, "host", hostLabel, "host_idx", hostIdx,
 		"total_diffs", len(catchUp), "chunks", totalChunks)
 
 	chunkIdx := 0
 	for chunkIdx < len(catchUp) {
 		if err := ctx.Err(); err != nil {
 			logging.Warn("catch-up context cancelled", "subsystem", "finalize", "escrow", s.escrowID,
-				"nonce", nonce, "host", hostIdx,
+				"nonce", nonce, "host", hostLabel, "host_idx", hostIdx,
 				"chunk", chunkIdx/catchUpChunkSize+1, "error", err)
 			return nil
 		}
@@ -1522,7 +1528,7 @@ func (s *Session) sendCatchUpChunks(ctx context.Context, hostIdx int, client Hos
 		chunkNum := chunkIdx/catchUpChunkSize + 1
 
 		logging.Info("catch-up chunk", "subsystem", "finalize", "escrow", s.escrowID,
-			"nonce", nonce, "host", hostIdx,
+			"nonce", nonce, "host", hostLabel, "host_idx", hostIdx,
 			"chunk", chunkNum, "of", totalChunks,
 			"diffs_in_chunk", len(chunk),
 			"chunk_first_nonce", chunk[0].Nonce,
@@ -1533,13 +1539,13 @@ func (s *Session) sendCatchUpChunks(ctx context.Context, hostIdx int, client Hos
 		cancel()
 		if err != nil {
 			logging.Warn("catch-up chunk failed", "subsystem", "finalize", "escrow", s.escrowID,
-				"nonce", nonce, "host", hostIdx,
+				"nonce", nonce, "host", hostLabel, "host_idx", hostIdx,
 				"chunk", chunkNum, "error", err)
-			return fmt.Errorf("catch-up chunk %d to host %d: %w", chunkNum, hostIdx, err)
+			return fmt.Errorf("catch-up chunk %d to host %s: %w", chunkNum, hostLabel, err)
 		}
 
 		logging.Info("catch-up chunk response", "subsystem", "finalize", "escrow", s.escrowID,
-			"nonce", nonce, "host", hostIdx,
+			"nonce", nonce, "host", hostLabel, "host_idx", hostIdx,
 			"chunk", chunkNum,
 			"resp_nonce", resp.Nonce, "has_sig", resp.StateSig != nil)
 
@@ -1569,7 +1575,7 @@ func (s *Session) sendCatchUpChunks(ctx context.Context, hostIdx int, client Hos
 			if skipTo > nextChunkIdx {
 				skippedChunks := (skipTo - nextChunkIdx) / catchUpChunkSize
 				logging.Info("catch-up skip-forward", "subsystem", "finalize", "escrow", s.escrowID,
-					"nonce", nonce, "host", hostIdx,
+					"nonce", nonce, "host", hostLabel, "host_idx", hostIdx,
 					"resp_nonce", resp.Nonce,
 					"skipping_from_idx", nextChunkIdx, "to_idx", skipTo,
 					"skipped_chunks", skippedChunks)
@@ -1618,7 +1624,7 @@ func (s *Session) CatchUpAllHosts(ctx context.Context) error {
 	for i, target := range hosts {
 		wg.Go(func() {
 			if err := s.sendCatchUpWith(ctx, target.idx, finalizeClients[target.idx]); err != nil {
-				perHost[i] = fmt.Errorf("host %d: %w", target.idx, err)
+				perHost[i] = fmt.Errorf("host %s: %w", s.HostLabel(target.idx), err)
 			}
 		})
 	}
@@ -1649,7 +1655,7 @@ func (s *Session) SyncHosts(ctx context.Context) error {
 	for cycle := 0; cycle < syncCycles; cycle++ {
 		for _, h := range hosts {
 			if err := s.sendCatchUp(ctx, h.idx); err != nil {
-				failures = append(failures, fmt.Errorf("cycle %d host %d: %w", cycle+1, h.idx, err))
+				failures = append(failures, fmt.Errorf("cycle %d host %s: %w", cycle+1, s.HostLabel(h.idx), err))
 			}
 		}
 		for i := 0; i < len(s.group); i++ {
@@ -1667,7 +1673,7 @@ func (s *Session) SyncHosts(ctx context.Context) error {
 
 	for _, h := range hosts {
 		if err := s.sendCatchUp(ctx, h.idx); err != nil {
-			failures = append(failures, fmt.Errorf("final host %d: %w", h.idx, err))
+			failures = append(failures, fmt.Errorf("final host %s: %w", s.HostLabel(h.idx), err))
 		}
 	}
 
@@ -3073,20 +3079,20 @@ func sleepUntilDeadlineWithHeartbeat(ctx context.Context, deadline time.Time, he
 	timer := time.NewTimer(d)
 	defer timer.Stop()
 	var heartbeatC <-chan time.Time
-	var ticker *time.Ticker
 	if heartbeat != nil && TimeoutHeartbeatInterval > 0 {
-		ticker = time.NewTicker(TimeoutHeartbeatInterval)
+		ticker := time.NewTicker(TimeoutHeartbeatInterval)
 		defer ticker.Stop()
 		heartbeatC = ticker.C
 	}
-	select {
-	case <-timer.C:
-		return true
-	case <-heartbeatC:
-		heartbeat()
-		return sleepUntilDeadlineWithHeartbeat(ctx, deadline, heartbeat)
-	case <-ctx.Done():
-		return false
+	for {
+		select {
+		case <-timer.C:
+			return true
+		case <-heartbeatC:
+			heartbeat()
+		case <-ctx.Done():
+			return false
+		}
 	}
 }
 
