@@ -2100,6 +2100,11 @@ func (s *Session) TokenPrice() uint64 {
 	return s.sm.Config().TokenPrice
 }
 
+// FeePerNonce reads the fee the escrow pays for every nonce it advances while active.
+func (s *Session) FeePerNonce() uint64 {
+	return s.sm.Config().FeePerNonce
+}
+
 func (s *Session) Diffs() []types.Diff {
 	s.mu.Lock()
 	defer s.mu.Unlock()

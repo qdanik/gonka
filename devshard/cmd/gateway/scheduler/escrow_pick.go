@@ -225,16 +225,16 @@ func exhaustionReason(candidate Escrow, maxNonce uint64, reserveTokens uint64) E
 	return ceilingReason
 }
 
-// belowBalanceFloor prices the reserve the way the chain does, (input_length_bytes + max_tokens_cap) * token_price.
+// belowBalanceFloor prices each request the way the chain does, (input_length_bytes + max_tokens_cap) * token_price + fee_per_nonce.
 func belowBalanceFloor(candidate Escrow, reserveTokens uint64) bool {
 	if candidate.Session == nil || reserveTokens == 0 {
 		return false
 	}
-	reserve, ok := safeMul(reserveTokens, candidate.Session.TokenPrice())
+	cost, ok := requestCost(candidate.Session, reserveTokens)
 	if !ok {
 		return true
 	}
-	floor, ok := safeMul(reserve, uint64(candidate.ActiveUsers+1))
+	floor, ok := safeMul(cost, uint64(candidate.ActiveUsers+1))
 	if !ok {
 		return true
 	}
@@ -261,11 +261,21 @@ func (s *Scheduler) ResumeFloor(candidate Escrow, answers uint64) (uint64, bool)
 	if candidate.Session == nil || reserve == 0 {
 		return 0, false
 	}
-	price, priced := safeMul(reserve, candidate.Session.TokenPrice())
+	cost, priced := requestCost(candidate.Session, reserve)
 	if !priced {
 		return 0, false
 	}
-	return safeMul(price, answers)
+	return safeMul(cost, answers)
+}
+
+// requestCost is what the chain takes for one request: its reserve and the fee for the nonce it draws; unpriced when that overflows.
+func requestCost(escrowSession session, reserveTokens uint64) (uint64, bool) {
+	reserve, ok := safeMul(reserveTokens, escrowSession.TokenPrice())
+	if !ok {
+		return 0, false
+	}
+	cost := reserve + escrowSession.FeePerNonce()
+	return cost, cost >= reserve
 }
 
 // safeMul reports the product only when it did not wrap: an unaffordable price must not read as a small one.

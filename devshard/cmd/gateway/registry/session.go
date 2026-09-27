@@ -44,6 +44,7 @@ type EscrowSession interface {
 	Nonce() uint64
 	Balance() uint64
 	TokenPrice() uint64
+	FeePerNonce() uint64
 	Phase() types.SessionPhase
 	PrepareInferenceFn(chooser user.ParamsForHost) (*user.PreparedInference, error)
 	Signatures() map[uint64]map[uint32][]byte
@@ -165,6 +166,7 @@ func (s nonceStream) GroupSize() int             { return len(s.slots) }
 func (s nonceStream) LatestNonce() uint64        { return s.session.Nonce() }
 func (s nonceStream) Balance() uint64            { return s.session.Balance() }
 func (s nonceStream) TokenPrice() uint64         { return s.session.TokenPrice() }
+func (s nonceStream) FeePerNonce() uint64        { return s.session.FeePerNonce() }
 
 func (s nonceStream) Advance(decide func(scheduler.HostBinding) scheduler.NonceIntent) (scheduler.Prepared, error) {
 	prepared, err := s.session.PrepareInferenceFn(func(binding user.HostBinding) (user.InferenceParams, bool, error) {

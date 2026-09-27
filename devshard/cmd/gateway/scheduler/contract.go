@@ -80,6 +80,7 @@ type session interface {
 	LatestNonce() uint64        // for the nonce-cap gate and the burn forecast
 	Balance() uint64            // for the balance floor
 	TokenPrice() uint64         // for the balance floor
+	FeePerNonce() uint64        // for the balance floor
 }
 
 // HostBinding is the nonce the session is offering and the host it is bound to, deduped across a validator's slots.

@@ -27,6 +27,7 @@ type committedNonce struct {
 // scriptedSession binds nonce N to slot N%len(slots), the same rule the real session uses.
 type scriptedSession struct {
 	balance         uint64
+	feePerNonce     uint64
 	mu              sync.Mutex
 	slots           []string
 	nonce           uint64
@@ -346,6 +347,7 @@ type harnessConfig struct {
 	holdStart           bool
 	escrowHold          func() (func(), bool)
 	balance             uint64
+	feePerNonce         uint64
 	retirementReserve   uint64
 }
 
@@ -368,6 +370,7 @@ func newHarness(t *testing.T, cfg harnessConfig) *harness {
 	session := &scriptedSession{
 		slots:           cfg.slots,
 		balance:         cfg.balance,
+		feePerNonce:     cfg.feePerNonce,
 		failWith:        cfg.failWith,
 		failAfterDecide: cfg.failAfterDecide,
 		swallowCommit:   cfg.swallowCommit,
@@ -979,7 +982,8 @@ func TestDispatcherRefetchesTheSnapshotEachDrain(t *testing.T) {
 // Test flow:
 //  1. Build a harness whose session fails with `types.ErrInsufficientBalance` and a balance below the retirement reserve, submit and await a request, then assert the escrow was reported exhausted.
 //  2. Build the same failure with a balance that still covers a capped answer, and assert no report, since it can still recover.
-//  3. Build an unrelated session failure and assert no report either, since only a genuine deposit exhaustion is reported.
+//  3. Build the same failure with a balance that covers a capped answer but not the per-nonce fee on top, and assert the escrow was reported exhausted.
+//  4. Build an unrelated session failure and assert no report either, since only a genuine deposit exhaustion is reported.
 func TestDispatcherReportsASpentDepositForReplacement(t *testing.T) {
 	t.Run("an exhausted deposit is reported", func(t *testing.T) {
 		test := newHarness(t, harnessConfig{failWith: types.ErrInsufficientBalance, retirementReserve: 4_096, balance: 100})
@@ -999,6 +1003,17 @@ func TestDispatcherReportsASpentDepositForReplacement(t *testing.T) {
 
 		if reported := test.exhausted.Load(); reported != nil {
 			t.Fatalf("reported escrow = %q, want no report: it still affords a capped answer", *reported)
+		}
+	})
+
+	t.Run("a deposit that covers a capped answer but not its nonce fee is reported", func(t *testing.T) {
+		test := newHarness(t, harnessConfig{failWith: types.ErrInsufficientBalance, retirementReserve: 4_096, feePerNonce: 100, balance: 4_195})
+
+		awaitReply(t, test.submit(t, test.clock.Now()))
+
+		reported := test.exhausted.Load()
+		if reported == nil || *reported != escrowA {
+			t.Fatalf("reported escrow = %v, want %q: the chain charges the nonce fee on top of the reserve", reported, escrowA)
 		}
 	})
 
@@ -1114,8 +1129,9 @@ func TestDispatcherLifecycleIsIdempotent(t *testing.T) {
 	}
 }
 
-func (s *scriptedSession) Balance() uint64    { return s.balance }
-func (s *scriptedSession) TokenPrice() uint64 { return 1 }
+func (s *scriptedSession) Balance() uint64     { return s.balance }
+func (s *scriptedSession) TokenPrice() uint64  { return 1 }
+func (s *scriptedSession) FeePerNonce() uint64 { return s.feePerNonce }
 
 // Test flow:
 //  1. Freeze an availability that omits the optional `stateBlocked` and `unthrottled` predicates.

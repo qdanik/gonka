@@ -46,6 +46,7 @@ func (s *drainSession) GroupSize() int             { return len(s.slots) }
 func (s *drainSession) LatestNonce() uint64        { return s.nonce }
 func (s *drainSession) Balance() uint64            { return 1 << 40 }
 func (s *drainSession) TokenPrice() uint64         { return 1 }
+func (s *drainSession) FeePerNonce() uint64        { return 0 }
 
 type leanLimiter struct {
 	refused  map[string]bool

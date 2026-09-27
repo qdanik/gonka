@@ -1245,8 +1245,9 @@ type poorSession struct{ weightlessSession }
 
 func (poorSession) Balance() uint64 { return 1 }
 
-func (weightlessSession) Balance() uint64    { return 1 << 40 }
-func (weightlessSession) TokenPrice() uint64 { return 1 }
+func (weightlessSession) Balance() uint64     { return 1 << 40 }
+func (weightlessSession) TokenPrice() uint64  { return 1 }
+func (weightlessSession) FeePerNonce() uint64 { return 0 }
 
 func (weightlessSession) PendingTxs() []*types.DevshardTx       { return nil }
 func (weightlessSession) SendPendingDiff(context.Context) error { return nil }

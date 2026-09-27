@@ -23,6 +23,7 @@ func (b *benchSession) GroupSize() int                                          
 func (b *benchSession) LatestNonce() uint64                                     { return b.latestNonce }
 func (b *benchSession) Balance() uint64                                         { return 1 << 40 }
 func (b *benchSession) TokenPrice() uint64                                      { return 1 }
+func (b *benchSession) FeePerNonce() uint64                                     { return 0 }
 
 // benchLimiter answers without a lock, so the benchmark holds the walk's own length rather than what one rung of the ladder costs.
 type benchLimiter struct{ blockedSlots int }

@@ -218,11 +218,11 @@ func (d *dispatcher) escrowIsSpent() bool {
 	if reserve == 0 || d.session == nil {
 		return true
 	}
-	priced, ok := safeMul(reserve, d.session.TokenPrice())
+	cost, ok := requestCost(d.session, reserve)
 	if !ok {
 		return true
 	}
-	return d.session.Balance() < priced
+	return d.session.Balance() < cost
 }
 
 func (d *dispatcher) failWaiting(err error) {

@@ -21,6 +21,7 @@ const modelA = "model-a"
 type fakeSession struct {
 	balance      uint64
 	tokenPrice   uint64
+	feePerNonce  uint64
 	latestNonce  uint64
 	slots        []string
 	participants []string
@@ -698,8 +699,9 @@ func TestAPinnedEscrowUnderTheCeilingIsServed(t *testing.T) {
 	}
 }
 
-func (f *fakeSession) Balance() uint64    { return f.balance }
-func (f *fakeSession) TokenPrice() uint64 { return f.tokenPrice }
+func (f *fakeSession) Balance() uint64     { return f.balance }
+func (f *fakeSession) TokenPrice() uint64  { return f.tokenPrice }
+func (f *fakeSession) FeePerNonce() uint64 { return f.feePerNonce }
 
 // Test flow:
 //  1. Build three escrows priced so one request reserves 200: a poor one holding 500 across 4 in-flight requests, a rich one, and an empty one that cannot afford even one.
@@ -741,6 +743,37 @@ func TestTheBalanceFloorIsPricedByTheEscrowsOwnTokenPrice(t *testing.T) {
 	}
 	if !belowBalanceFloor(dear, reserveTokens) {
 		t.Fatal("an escrow that cannot afford one request at its own price was kept in routing")
+	}
+}
+
+// Test flow:
+//  1. Price one request at 200 for its reserve and 50 for the nonce it draws.
+//  2. Check `belowBalanceFloor` for an idle escrow one unit short of 250 and one holding exactly 250, then for a busy one short of two requests and one holding exactly two.
+//  3. Assert each short escrow is below the floor and each exact one is not, so the floor charges the per-nonce fee the chain charges.
+func TestTheBalanceFloorCountsThePerNonceFee(t *testing.T) {
+	t.Parallel()
+	const reserveTokens, price, fee = 20, 10, 50
+
+	testCases := []struct {
+		name        string
+		balance     uint64
+		activeUsers int
+		wantBelow   bool
+	}{
+		{name: "idle, short of the fee", balance: 249, wantBelow: true},
+		{name: "idle, covering the fee", balance: 250, wantBelow: false},
+		{name: "busy, short of the fee", balance: 499, activeUsers: 1, wantBelow: true},
+		{name: "busy, covering the fee", balance: 500, activeUsers: 1, wantBelow: false},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			candidate := Escrow{ID: "escrow", Session: &fakeSession{balance: testCase.balance, tokenPrice: price, feePerNonce: fee}, ActiveUsers: testCase.activeUsers}
+
+			if below := belowBalanceFloor(candidate, reserveTokens); below != testCase.wantBelow {
+				t.Fatalf("belowBalanceFloor() = %v, want %v", below, testCase.wantBelow)
+			}
+		})
 	}
 }
 
@@ -979,10 +1012,12 @@ func TestResumeFloor(t *testing.T) {
 		name         string
 		maxTokensCap int64
 		tokenPrice   uint64
+		feePerNonce  uint64
 		wantFloor    uint64
 		wantPriced   bool
 	}{
 		{name: "the resume headroom", maxTokensCap: 100, tokenPrice: 1, wantFloor: 3_200, wantPriced: true},
+		{name: "the resume headroom with the nonce fee", maxTokensCap: 100, tokenPrice: 1, feePerNonce: 10, wantFloor: 3_520, wantPriced: true},
 		{name: "no retirement reserve configured", maxTokensCap: 0, tokenPrice: 1, wantFloor: 0, wantPriced: false},
 		{name: "a price that overflows", maxTokensCap: 100, tokenPrice: 1 << 62, wantFloor: 0, wantPriced: false},
 	}
@@ -996,7 +1031,7 @@ func TestResumeFloor(t *testing.T) {
 				settings:  config.NewHolder(&settings),
 				snapshots: &fakeSnapshots{snapshot: chain.PhaseSnapshot{MaxNonce: 1_000}},
 			}
-			candidate := Escrow{ID: "escrow-hold", Session: &fakeSession{balance: 1, tokenPrice: testCase.tokenPrice, slots: slotsOf("escrow-hold", 4)}}
+			candidate := Escrow{ID: "escrow-hold", Session: &fakeSession{balance: 1, tokenPrice: testCase.tokenPrice, feePerNonce: testCase.feePerNonce, slots: slotsOf("escrow-hold", 4)}}
 
 			floor, priced := scheduler.ResumeFloor(candidate, 32)
 
