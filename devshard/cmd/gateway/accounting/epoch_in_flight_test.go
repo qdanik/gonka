@@ -8,7 +8,7 @@ import (
 
 // Test flow:
 //  1. Open an escrow with four slot assignments and observe the chain's latest nonce.
-//  2. Record a race with three sent attempts, two of them racing the same request.
+//  2. Assign three nonces, two of them racing the same request.
 //  3. Assert the epoch summary reports 3 nonces in flight.
 //  4. Assert it reports 2 in-flight requests, since one client is racing two hosts.
 func TestTheEpochSummaryCarriesWhatIsInFlight(t *testing.T) {
@@ -23,12 +23,10 @@ func TestTheEpochSummaryCarriesWhatIsInFlight(t *testing.T) {
 	if err := book.ObserveLatestNonce("e1", 8); err != nil {
 		t.Fatalf("ObserveLatestNonce(): %v", err)
 	}
-	if err := book.RecordRace("e1", []Attempt{
-		{Nonce: 1, RequestID: "a", Sent: true},
-		{Nonce: 2, RequestID: "a", Sent: true},
-		{Nonce: 3, RequestID: "b", Sent: true},
-	}); err != nil {
-		t.Fatalf("RecordRace(): %v", err)
+	for nonce, requestID := range map[uint64]string{1: "a", 2: "a", 3: "b"} {
+		if err := book.RecordAssigned("e1", nonce, requestID); err != nil {
+			t.Fatalf("RecordAssigned(%d): %v", nonce, err)
+		}
 	}
 
 	summaries := book.Epochs(QueryFilter{})

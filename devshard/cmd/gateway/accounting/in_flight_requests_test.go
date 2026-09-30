@@ -1,10 +1,14 @@
 package accounting
 
-import "testing"
+import (
+	"testing"
+
+	"devshard/cmd/gateway/engine"
+)
 
 // Test flow:
 //  1. Open a book and observe the chain's latest nonce as 8.
-//  2. Record a race of nonces 4 and 8, both landing on slot 0 and both belonging to request "req-a".
+//  2. Assign nonces 4 and 8, both landing on slot 0 and both belonging to request "req-a".
 //  3. Assert the slot-0 record reports 2 nonces in flight.
 //  4. Assert it reports 1 in-flight request, since both nonces belong to the same request.
 func TestOpenNoncesAndOpenRequestsAreCountedApart(t *testing.T) {
@@ -12,11 +16,10 @@ func TestOpenNoncesAndOpenRequestsAreCountedApart(t *testing.T) {
 	if err := book.ObserveLatestNonce(testEscrow, 8); err != nil {
 		t.Fatalf("ObserveLatestNonce(): %v", err)
 	}
-	if err := book.RecordRace(testEscrow, []Attempt{
-		{Nonce: 4, RequestID: "req-a", Sent: true},
-		{Nonce: 8, RequestID: "req-a", Sent: true},
-	}); err != nil {
-		t.Fatalf("RecordRace(): %v", err)
+	for _, nonce := range []uint64{4, 8} {
+		if err := book.RecordAssigned(testEscrow, nonce, "req-a"); err != nil {
+			t.Fatalf("RecordAssigned(%d): %v", nonce, err)
+		}
 	}
 
 	records := book.Query(QueryFilter{Participant: participantFor(0)})
@@ -33,26 +36,37 @@ func TestOpenNoncesAndOpenRequestsAreCountedApart(t *testing.T) {
 }
 
 // Test flow:
-//  1. Record a race of nonces 4 (finished, the winner) and 8 (unfinished, the loser) under request "req-a".
-//  2. Assert the record reports 1 nonce and 1 request still in flight while the loser is unfinished.
-//  3. Mark nonce 8 finished.
-//  4. Assert the record now reports 0 nonces and 0 requests in flight.
-func TestARequestStaysCountedWhileALoserNonceIsUnfinished(t *testing.T) {
+//  1. Assign nonces 4 and 8 to request "req-a" and assert 2 nonces and 1 request in flight.
+//  2. Record the race: nonce 4 won and finished, nonce 8 lost and is still unfinished.
+//  3. Assert the loser nonce stays in flight while the request is closed: the client has its answer.
+//  4. Mark nonce 8 finished and assert nothing is in flight.
+func TestARequestClosesWhenItsRaceReportsWhileALoserNonceStaysOpen(t *testing.T) {
 	book := newTestBook(t, 4)
 	if err := book.ObserveLatestNonce(testEscrow, 8); err != nil {
 		t.Fatalf("ObserveLatestNonce(): %v", err)
 	}
+	for _, nonce := range []uint64{4, 8} {
+		if err := book.RecordAssigned(testEscrow, nonce, "req-a"); err != nil {
+			t.Fatalf("RecordAssigned(%d): %v", nonce, err)
+		}
+	}
+	racing := book.Query(QueryFilter{Participant: participantFor(0)})
+	if racing[0].InFlight != 2 || racing[0].InFlightRequests != 1 {
+		t.Fatalf("open = %d nonces / %d requests while racing, want 2 and 1",
+			racing[0].InFlight, racing[0].InFlightRequests)
+	}
+
 	if err := book.RecordRace(testEscrow, []Attempt{
-		{Nonce: 4, RequestID: "req-a", Sent: true, Finished: true},
-		{Nonce: 8, RequestID: "req-a", Sent: true},
+		{Nonce: 4, RequestID: "req-a", Sent: true, Finished: true, Terminal: engine.TerminalNameWon},
+		{Nonce: 8, RequestID: "req-a", Sent: true, Terminal: engine.TerminalNameLost},
 	}); err != nil {
 		t.Fatalf("RecordRace(): %v", err)
 	}
 
-	served := book.Query(QueryFilter{Participant: participantFor(0)})
-	if served[0].InFlight != 1 || served[0].InFlightRequests != 1 {
-		t.Fatalf("open = %d nonces / %d requests, want 1 and 1: the loser has not settled",
-			served[0].InFlight, served[0].InFlightRequests)
+	answered := book.Query(QueryFilter{Participant: participantFor(0)})
+	if answered[0].InFlight != 1 || answered[0].InFlightRequests != 0 {
+		t.Fatalf("open = %d nonces / %d requests after the race reported, want 1 and 0: the loser waits for its timeout, the client does not",
+			answered[0].InFlight, answered[0].InFlightRequests)
 	}
 
 	if err := book.MarkFinished(testEscrow, []uint64{8}); err != nil {
