@@ -19,6 +19,7 @@ type Service struct {
 	store           *Store
 	retentionEpochs uint64
 	currentEpoch    CurrentEpochFunc
+	flushRequests   chan struct{}
 	cancel          context.CancelFunc
 	stopped         chan struct{}
 }
@@ -44,6 +45,7 @@ func NewService(settings Settings) (*Service, error) {
 		store:           settings.Store,
 		retentionEpochs: settings.RetentionEpochs,
 		currentEpoch:    settings.CurrentEpoch,
+		flushRequests:   make(chan struct{}, 1),
 		cancel:          cancel,
 		stopped:         make(chan struct{}),
 	}
@@ -70,6 +72,17 @@ func (s *Service) Flush() error {
 	return s.store.Save(context.Background(), s.Book)
 }
 
+// RequestFlush asks the service's own goroutine for a write and returns at once; requests made before it runs share one write.
+func (s *Service) RequestFlush() {
+	if s == nil {
+		return
+	}
+	select {
+	case s.flushRequests <- struct{}{}:
+	default:
+	}
+}
+
 func (s *Service) run(ctx context.Context, snapshotInterval time.Duration) {
 	defer close(s.stopped)
 	pruning := time.NewTicker(pruneInterval)
@@ -81,12 +94,18 @@ func (s *Service) run(ctx context.Context, snapshotInterval time.Duration) {
 		case <-pruning.C:
 			s.prune(ctx)
 		case <-snapshots.C:
-			if err := s.Flush(); err != nil {
-				logging.Error("nonce accounting snapshot failed", "error", err)
-			}
+			s.flushLogged()
+		case <-s.flushRequests:
+			s.flushLogged()
 		case <-ctx.Done():
 			return
 		}
+	}
+}
+
+func (s *Service) flushLogged() {
+	if err := s.Flush(); err != nil {
+		logging.Error("nonce accounting snapshot failed", "error", err)
 	}
 }
 
@@ -125,6 +144,7 @@ func (b *Book) PruneBefore(epoch uint64) {
 	for escrowID, escrow := range b.escrows {
 		if escrow.retired && escrow.metadata.CreationEpoch < epoch {
 			delete(b.escrows, escrowID)
+			b.unsaved[escrowID] = struct{}{}
 		}
 	}
 }

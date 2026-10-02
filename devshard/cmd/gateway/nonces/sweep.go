@@ -115,7 +115,7 @@ func (n *Recorder) reconcileFinished(escrowID string, session registry.EscrowSes
 	n.report(n.service.Book.MarkFinished(escrowID, finished))
 }
 
-// EscrowRetiring takes the reading the sweep will never take again, and writes the ledger out.
+// EscrowRetiring takes the reading the sweep will never take again, and asks the ledger's own goroutine to write it out.
 // See docs/accounting.md, "Money and tokens".
 func (n *Recorder) EscrowRetiring(escrowID string, session registry.EscrowSession) {
 	if n == nil || n.service == nil {
@@ -127,7 +127,5 @@ func (n *Recorder) EscrowRetiring(escrowID string, session registry.EscrowSessio
 	}
 	n.service.Book.RetireEscrow(escrowID)
 	n.observing.Delete(escrowID)
-	if err := n.service.Flush(); err != nil {
-		logging.Error("nonce accounting snapshot failed", "error", err)
-	}
+	n.service.RequestFlush()
 }

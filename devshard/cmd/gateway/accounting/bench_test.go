@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -182,6 +183,47 @@ func BenchmarkSnapshot(b *testing.B) {
 	for b.Loop() {
 		if snapshot := book.Snapshot(); len(snapshot.Escrows) == 0 {
 			b.Fatal("Snapshot() held nothing")
+		}
+	}
+}
+
+func benchStore(b *testing.B) *Store {
+	b.Helper()
+	store, err := OpenStore(filepath.Join(b.TempDir(), "accounting.db"))
+	if err != nil {
+		b.Fatalf("OpenStore(): %v", err)
+	}
+	b.Cleanup(func() { _ = store.Close() })
+	return store
+}
+
+// BenchmarkSaveEveryEscrow times the write a start-up pays once: every escrow of the epoch.
+func BenchmarkSaveEveryEscrow(b *testing.B) {
+	book := benchBook(b)
+	store := benchStore(b)
+	escrowIDs := book.EscrowIDs()
+	b.ReportAllocs()
+	for b.Loop() {
+		book.requeueUnsaved(escrowIDs)
+		if err := store.Save(context.Background(), book); err != nil {
+			b.Fatalf("Save(): %v", err)
+		}
+	}
+}
+
+// BenchmarkSaveOneChangedEscrow times the steady write: one escrow moved since the last save.
+func BenchmarkSaveOneChangedEscrow(b *testing.B) {
+	book := benchBook(b)
+	store := benchStore(b)
+	if err := store.Save(context.Background(), book); err != nil {
+		b.Fatalf("Save(): %v", err)
+	}
+	escrowID := benchEscrowID(0)
+	b.ReportAllocs()
+	for b.Loop() {
+		book.requeueUnsaved([]string{escrowID})
+		if err := store.Save(context.Background(), book); err != nil {
+			b.Fatalf("Save(): %v", err)
 		}
 	}
 }

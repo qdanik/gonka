@@ -416,3 +416,17 @@ curl -sS -N -X POST "$GATEWAY/v1/admin/devshards/settle" \
 - **`batch_size` at a time, four by default, sixteen at most.** Building a settlement asks every host in the escrow's group for its signature, so an unbounded batch is an unbounded fan-out onto the same hosts (`api/admin_settle.go`, `defaultSettleBatchSize`, `maxSettleBatchSize`).
 - **At most fifty per call.** The batch runs on the caller's context, so a list long enough to outlive the operator's patience would be cancelled halfway, with transactions already broadcast (`settleBatchLimit`).
 
+## Deactivating a list of escrows
+
+`POST /v1/admin/devshards/deactivate` with the body `{"escrow_ids": ["93033", "93040"], "batch_size": 8}` deactivates each escrow the way `/v1/admin/devshards/{id}/deactivate` does: routing stops first, then the row goes inactive. A repeated id is deactivated once, and an id the gateway has no row for answers `404` on its own line.
+
+The answer has the shape of the settle batch: `200` NDJSON with one line per escrow in finishing order (`{"escrow_id": "93033"}`, or its `status` and `error`), then `{"deactivated": N, "failed": M}`. The same limits apply — `batch_size` four by default and sixteen at most, fifty ids per call — and a list it refuses outright answers a plain `400` (`api/admin_deactivate.go`).
+
+```bash
+curl -sS -N -X POST "$GATEWAY/v1/admin/devshards/deactivate" \
+  -H "Authorization: Bearer $ADMIN_KEY" -H "Content-Type: application/json" \
+  -d '{"escrow_ids": ["93033", "93040"]}' | jq -c
+```
+
+A deactivation does not wait on the nonce ledger: the escrow's last reading is taken in memory and the ledger's own goroutine writes it out (`accounting.Service.RequestFlush`). What it can still wait on is the escrow's last diff to its hosts, up to five seconds when the escrow holds gossiped transactions no request composed (`registry/retirement_flush.go`).
+

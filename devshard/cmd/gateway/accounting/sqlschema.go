@@ -3,10 +3,11 @@ package accounting
 import (
 	"database/sql"
 	"fmt"
+	"slices"
 	"strconv"
 )
 
-// The tables mirror the in-memory shape; a write empties and refills them in one transaction.
+// The tables mirror the in-memory shape; a write replaces the rows of the escrows it carries in one transaction.
 const schema = `
 CREATE TABLE IF NOT EXISTS accounting_meta (
 	key   TEXT PRIMARY KEY,
@@ -97,7 +98,7 @@ CREATE TABLE IF NOT EXISTS accounting_nonces (
 );
 `
 
-var clearedTables = []string{
+var escrowTables = []string{
 	"accounting_nonces",
 	"accounting_counters",
 	"accounting_host_stats",
@@ -105,8 +106,9 @@ var clearedTables = []string{
 	"accounting_money",
 	"accounting_slots",
 	"accounting_escrows",
-	"accounting_meta",
 }
+
+var clearedTables = append(slices.Clone(escrowTables), "accounting_meta")
 
 const (
 	metaSchemaVersion = "schema_version"

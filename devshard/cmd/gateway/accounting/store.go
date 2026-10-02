@@ -69,51 +69,78 @@ func (b *Book) Snapshot() Snapshot {
 		Escrows:       make([]EscrowSnapshot, 0, len(b.escrows)),
 	}
 	for _, escrowID := range slices.Sorted(maps.Keys(b.escrows)) {
-		escrow := b.escrows[escrowID]
-		stored := EscrowSnapshot{
-			Metadata:    escrow.metadata,
-			LatestNonce: escrow.latest,
-			Retired:     escrow.retired,
-			HostStats:   make(map[uint32]types.HostStats, len(escrow.hostStats)),
-			Counters:    make([]PersistedCounter, 0, len(escrow.counters)),
-		}
-		maps.Copy(stored.HostStats, escrow.hostStats)
-		stored.SlotActivity = escrow.slotActivity()
-		stored.Money = escrow.moneyBySlot()
-		stored.Produced = maps.Clone(escrow.produced)
-		for key, count := range escrow.counters {
-			stored.Counters = append(stored.Counters, PersistedCounter{CounterKey: key, Count: count})
-		}
-		for nonce, record := range escrow.nonces {
-			if !revisable(record) {
-				continue
-			}
-			stored.Nonces = append(stored.Nonces, PersistedNonce{
-				Nonce:           nonce,
-				Sent:            record.sent,
-				Acknowledged:    record.acknowledged,
-				Usage:           record.usage,
-				TimeoutKind:     record.timeoutKind,
-				TimeoutAction:   record.timeoutAction,
-				TimeoutReason:   record.timeoutReason,
-				Terminal:        record.terminal,
-				Phase:           record.phase,
-				SlowReceipt:     record.slowReceipt,
-				SlowChunk:       record.slowChunk,
-				ClockDrifted:    record.clockDrifted,
-				SlowDecode:      record.slowDecode,
-				LogprobsDecoded: record.logprobsDecoded,
-			})
-		}
-		slices.SortFunc(stored.Nonces, func(left, right PersistedNonce) int {
-			return cmp.Compare(left.Nonce, right.Nonce)
-		})
-		slices.SortFunc(stored.Counters, func(left, right PersistedCounter) int {
-			return compareCounterKey(left.CounterKey, right.CounterKey)
-		})
-		snapshot.Escrows = append(snapshot.Escrows, stored)
+		snapshot.Escrows = append(snapshot.Escrows, snapshotEscrow(b.escrows[escrowID]))
 	}
 	return snapshot
+}
+
+// takeUnsaved hands over the escrows changed since the last save and every id marked, gone ones included.
+func (b *Book) takeUnsaved() (Snapshot, []string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	escrowIDs := slices.Sorted(maps.Keys(b.unsaved))
+	clear(b.unsaved)
+	snapshot := Snapshot{SchemaVersion: SchemaVersion, UpdatedAt: b.updatedAt}
+	for _, escrowID := range escrowIDs {
+		if escrow, known := b.escrows[escrowID]; known {
+			snapshot.Escrows = append(snapshot.Escrows, snapshotEscrow(escrow))
+		}
+	}
+	return snapshot, escrowIDs
+}
+
+// requeueUnsaved marks again what a failed save took, so the next save carries it.
+func (b *Book) requeueUnsaved(escrowIDs []string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for _, escrowID := range escrowIDs {
+		b.unsaved[escrowID] = struct{}{}
+	}
+}
+
+func snapshotEscrow(escrow *escrowLedger) EscrowSnapshot {
+	stored := EscrowSnapshot{
+		Metadata:    escrow.metadata,
+		LatestNonce: escrow.latest,
+		Retired:     escrow.retired,
+		HostStats:   make(map[uint32]types.HostStats, len(escrow.hostStats)),
+		Counters:    make([]PersistedCounter, 0, len(escrow.counters)),
+	}
+	maps.Copy(stored.HostStats, escrow.hostStats)
+	stored.SlotActivity = escrow.slotActivity()
+	stored.Money = escrow.moneyBySlot()
+	stored.Produced = maps.Clone(escrow.produced)
+	for key, count := range escrow.counters {
+		stored.Counters = append(stored.Counters, PersistedCounter{CounterKey: key, Count: count})
+	}
+	for nonce, record := range escrow.nonces {
+		if !revisable(record) {
+			continue
+		}
+		stored.Nonces = append(stored.Nonces, PersistedNonce{
+			Nonce:           nonce,
+			Sent:            record.sent,
+			Acknowledged:    record.acknowledged,
+			Usage:           record.usage,
+			TimeoutKind:     record.timeoutKind,
+			TimeoutAction:   record.timeoutAction,
+			TimeoutReason:   record.timeoutReason,
+			Terminal:        record.terminal,
+			Phase:           record.phase,
+			SlowReceipt:     record.slowReceipt,
+			SlowChunk:       record.slowChunk,
+			ClockDrifted:    record.clockDrifted,
+			SlowDecode:      record.slowDecode,
+			LogprobsDecoded: record.logprobsDecoded,
+		})
+	}
+	slices.SortFunc(stored.Nonces, func(left, right PersistedNonce) int {
+		return cmp.Compare(left.Nonce, right.Nonce)
+	})
+	slices.SortFunc(stored.Counters, func(left, right PersistedCounter) int {
+		return compareCounterKey(left.CounterKey, right.CounterKey)
+	})
+	return stored
 }
 
 // A snapshot from another schema is refused rather than half-read.
@@ -172,6 +199,10 @@ func (b *Book) Restore(snapshot Snapshot) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.escrows = restored
+	b.unsaved = make(map[string]struct{}, len(restored))
+	for escrowID := range restored {
+		b.unsaved[escrowID] = struct{}{}
+	}
 	b.updatedAt = snapshot.UpdatedAt
 	return nil
 }

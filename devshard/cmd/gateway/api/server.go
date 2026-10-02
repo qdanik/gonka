@@ -97,6 +97,12 @@ type SettleDevshardsRequest struct {
 	Force     bool     `json:"force"`
 }
 
+// DeactivateDevshardsRequest is the batch deactivate body. See docs/operations.md, "Deactivating a list of escrows".
+type DeactivateDevshardsRequest struct {
+	EscrowIDs []string `json:"escrow_ids"`
+	BatchSize int      `json:"batch_size"`
+}
+
 // Operations are the lifecycle actions the operator routes trigger. See README.md, "What the server is given".
 type Operations interface {
 	CreateEscrow(ctx context.Context, request CreateEscrowRequest) (chain.CreateEscrowResult, error)

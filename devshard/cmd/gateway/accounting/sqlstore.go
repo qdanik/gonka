@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"sync"
 
 	_ "modernc.org/sqlite"
 )
@@ -12,7 +13,8 @@ import (
 const connectionPragmas = "?_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=busy_timeout(5000)"
 
 type Store struct {
-	db *sql.DB
+	db      *sql.DB
+	writing sync.Mutex
 }
 
 func OpenStore(path string) (*Store, error) {

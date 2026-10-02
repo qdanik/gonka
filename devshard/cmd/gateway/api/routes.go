@@ -57,6 +57,7 @@ func (s *Server) routes() []route {
 		{pattern: "/v1/admin/devshards/import", label: "/v1/admin/devshards/{id}", admin: true, alwaysOn: true, handler: s.handleAdminDevshardImport},
 		// A literal beats the {id} template, and escrow ids are numeric, so this shadows no escrow.
 		{pattern: "/v1/admin/devshards/settle", label: "/v1/admin/devshards/settle", admin: true, alwaysOn: true, handler: s.handleAdminDevshardsSettleBatch},
+		{pattern: "/v1/admin/devshards/deactivate", label: "/v1/admin/devshards/deactivate", admin: true, alwaysOn: true, handler: s.handleAdminDevshardsDeactivateBatch},
 		{pattern: "/v1/admin/devshards/{id}", label: "/v1/admin/devshards/{id}", admin: true, alwaysOn: true, handler: s.handleAdminDevshardDelete},
 		{pattern: "/v1/admin/devshards/{id}/activate", label: "/v1/admin/devshards/{id}/activate", admin: true, alwaysOn: true, handler: s.handleAdminDevshardActivate},
 		{pattern: "/v1/admin/devshards/{id}/deactivate", label: "/v1/admin/devshards/{id}/deactivate", admin: true, alwaysOn: true, handler: s.handleAdminDevshardDeactivate},

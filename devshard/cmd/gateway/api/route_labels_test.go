@@ -51,7 +51,7 @@ var (
 	}
 
 	// deliberateDivergences are the only labels allowed to sit outside the legacy domain.
-	deliberateDivergences = []string{otherRouteLabel, "/v1/requests/{id}", "/v1/admin/hosts", "/v1/admin/devshards/settle"}
+	deliberateDivergences = []string{otherRouteLabel, "/v1/requests/{id}", "/v1/admin/hosts", "/v1/admin/devshards/settle", "/v1/admin/devshards/deactivate"}
 )
 
 // Test flow:
@@ -82,6 +82,7 @@ func TestEveryRouteCarriesItsExactMetricLabel(t *testing.T) {
 		"/v1/admin/devshards":                        "/v1/admin/devshards",
 		"/v1/admin/devshards/import":                 "/v1/admin/devshards/{id}",
 		"/v1/admin/devshards/settle":                 "/v1/admin/devshards/settle",
+		"/v1/admin/devshards/deactivate":             "/v1/admin/devshards/deactivate",
 		"/v1/admin/devshards/{id}":                   "/v1/admin/devshards/{id}",
 		"/v1/admin/devshards/{id}/activate":          "/v1/admin/devshards/{id}/activate",
 		"/v1/admin/devshards/{id}/deactivate":        "/v1/admin/devshards/{id}/deactivate",

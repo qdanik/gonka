@@ -248,7 +248,6 @@ func (e *escrowLedger) slots(escrowID string) []SlotRecord {
 		case record.isCounted:
 		case record.sent && !record.finished:
 			aggregate.inFlight++
-			// A reported race carries a terminal: its client has an answer even while a loser nonce awaits its timeout.
 			if record.requestID != "" && record.terminal == "" {
 				if aggregate.openRequests == nil {
 					aggregate.openRequests = make(map[string]struct{})

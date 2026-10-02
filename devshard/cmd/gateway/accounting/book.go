@@ -15,6 +15,7 @@ var ErrUnknownEscrow = errors.New("accounting: unknown escrow")
 type Book struct {
 	mu        sync.RWMutex
 	escrows   map[string]*escrowLedger
+	unsaved   map[string]struct{}
 	updatedAt time.Time
 	now       func() time.Time
 }
@@ -82,7 +83,7 @@ func NewBook(now func() time.Time) *Book {
 	if now == nil {
 		now = time.Now
 	}
-	return &Book{escrows: make(map[string]*escrowLedger), now: now}
+	return &Book{escrows: make(map[string]*escrowLedger), unsaved: make(map[string]struct{}), now: now}
 }
 
 // Re-opening keeps the counters and pins the epoch at first sighting. See README.md, "How a nonce is classified".
@@ -100,11 +101,11 @@ func (b *Book) OpenEscrow(metadata EscrowMetadata) error {
 		existing.metadata = metadata
 		existing.metadata.CreationEpoch = pinnedEpoch
 		existing.retired = false
-		b.touchLocked()
+		b.touchLocked(metadata.EscrowID)
 		return nil
 	}
 	b.escrows[metadata.EscrowID] = newEscrowLedger(metadata)
-	b.touchLocked()
+	b.touchLocked(metadata.EscrowID)
 	return nil
 }
 
@@ -116,11 +117,9 @@ func (b *Book) ResetEpoch(epoch uint64) int {
 	for escrowID, escrow := range b.escrows {
 		if escrow.metadata.CreationEpoch == epoch {
 			delete(b.escrows, escrowID)
+			b.touchLocked(escrowID)
 			cleared++
 		}
-	}
-	if cleared > 0 {
-		b.touchLocked()
 	}
 	return cleared
 }
@@ -130,7 +129,7 @@ func (b *Book) RetireEscrow(escrowID string) {
 	defer b.mu.Unlock()
 	if escrow, known := b.escrows[escrowID]; known {
 		escrow.retired = true
-		b.touchLocked()
+		b.touchLocked(escrowID)
 	}
 }
 
@@ -303,14 +302,19 @@ func (b *Book) withEscrow(escrowID string, apply func(*escrowLedger) error) erro
 	if !known {
 		return fmt.Errorf("%w: %s", ErrUnknownEscrow, escrowID)
 	}
+	b.unsaved[escrowID] = struct{}{}
 	if err := apply(escrow); err != nil {
 		return err
 	}
-	b.touchLocked()
+	b.touchLocked(escrowID)
 	return nil
 }
 
-func (b *Book) touchLocked() { b.updatedAt = b.now().UTC() }
+// touchLocked also marks the escrow for the next save, which writes only the escrows marked since the last one.
+func (b *Book) touchLocked(escrowID string) {
+	b.updatedAt = b.now().UTC()
+	b.unsaved[escrowID] = struct{}{}
+}
 
 // Seeing a nonce raises the assigned watermark too, or the counters outrun the range they are measured against.
 func (e *escrowLedger) record(nonce uint64) *nonceRecord {

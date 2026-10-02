@@ -45,9 +45,9 @@ Re-opening an escrow keeps its counters and **pins the epoch at first sighting**
 
 ## Storage
 
-The pragmas ride the connection string rather than a first statement, because the pool recreates connections and a recreated one would come back without them. One connection, because the ledger is written whole inside a single transaction and has no concurrent writer to gain from more.
+The pragmas ride the connection string rather than a first statement, because the pool recreates connections and a recreated one would come back without them. One connection, because every write is a single transaction and `Store.writing` admits one at a time: two saves committing out of order would let the older copy of an escrow overwrite the newer one.
 
-Nothing queries this database except the ledger's own load at start-up — every question an operator asks is answered from memory. The tables therefore mirror the in-memory shape one for one, and a write is one transaction that empties and refills them. That is what makes a half-written ledger impossible: a reader sees the previous contents until the commit, and a crash leaves them.
+Nothing queries this database except the ledger's own load at start-up — every question an operator asks is answered from memory. The tables therefore mirror the in-memory shape one for one. The book marks every escrow a mutation touches, and a save rewrites only the escrows marked since the last one: it deletes their rows by `escrow_id` and inserts them again, and an escrow the book dropped (pruned, or cleared by an epoch reset) is only deleted. A save that fails marks them again, and a restore marks everything, so the first save after a start writes the ledger whole. The cost of a save follows the escrows that changed, not the size of the ledger. Each save is one transaction, which is what makes a half-written ledger impossible: a reader sees the previous contents until the commit, and a crash leaves them.
 
 `SlotActivity` is the gateway's own side of the counts `HostStats` holds the chain's side of. Restoring one without the other reports every restart as a disagreement between the two.
 

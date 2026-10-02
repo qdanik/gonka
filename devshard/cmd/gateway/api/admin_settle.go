@@ -98,15 +98,8 @@ func (s *Server) handleAdminDevshardsSettleBatch(w http.ResponseWriter, r *http.
 		return
 	}
 	escrowIDs := distinctEscrowIDs(request.EscrowIDs)
-	switch {
-	case len(escrowIDs) == 0:
-		writeError(w, http.StatusBadRequest, "escrow_ids is required")
-		return
-	case len(escrowIDs) > settleBatchLimit:
-		writeError(w, http.StatusBadRequest, fmt.Sprintf("escrow_ids holds %d escrows; at most %d settle in one call", len(escrowIDs), settleBatchLimit))
-		return
-	case request.BatchSize < 0 || request.BatchSize > maxSettleBatchSize:
-		writeError(w, http.StatusBadRequest, fmt.Sprintf("batch_size must be at most %d, or omitted for %d", maxSettleBatchSize, defaultSettleBatchSize))
+	if refusal := refuseBatch(escrowIDs, request.BatchSize); refusal != "" {
+		writeError(w, http.StatusBadRequest, refusal)
 		return
 	}
 	registered, err := s.registeredDevshards(r)
@@ -173,6 +166,19 @@ func (s *Server) settleEntry(ctx context.Context, escrowID string, registered, f
 
 func settleRefused(escrowID string, err error) settleOutcome {
 	return settleOutcome{EscrowID: escrowID, Status: statusForError(err), Error: err.Error()}
+}
+
+// refuseBatch names what makes a list unanswerable, or returns "" for one a batch route can take.
+func refuseBatch(escrowIDs []string, batchSize int) string {
+	switch {
+	case len(escrowIDs) == 0:
+		return "escrow_ids is required"
+	case len(escrowIDs) > settleBatchLimit:
+		return fmt.Sprintf("escrow_ids holds %d escrows; at most %d are taken in one call", len(escrowIDs), settleBatchLimit)
+	case batchSize < 0 || batchSize > maxSettleBatchSize:
+		return fmt.Sprintf("batch_size must be at most %d, or omitted for %d", maxSettleBatchSize, defaultSettleBatchSize)
+	}
+	return ""
 }
 
 func distinctEscrowIDs(escrowIDs []string) []string {
