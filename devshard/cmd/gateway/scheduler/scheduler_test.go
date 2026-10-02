@@ -14,6 +14,7 @@ import (
 	"devshard/cmd/gateway/internal/leakcheck"
 	"devshard/cmd/gateway/limits"
 	"devshard/cmd/gateway/perf"
+	"devshard/types"
 )
 
 const escrowB = "escrow-b"
@@ -1254,5 +1255,52 @@ func TestAFailedPickOnAReserveDoesNotTakeIt(t *testing.T) {
 	}
 	if taken := test.reserves.recorded(); len(taken) != 0 {
 		t.Fatalf("reserves taken = %v, want none", taken)
+	}
+}
+
+// Test flow:
+//  1. For each table case, build a scheduler whose escrow holds plenty, its model's context length named by an operator pin or by the chain's --max-model-len, with the session's advance held at a gate.
+//  2. Pick for a small request; once the advance is entered, drop the balance between one capped answer and one full-context request and make the session refuse it as unaffordable.
+//  3. Release the gate and assert the pick fails and the escrow is reported exhausted, priced on the model's context rather than on one capped answer.
+func TestADispatcherRetiresAnEscrowThatCanNoLongerAffordAFullContextRequest(t *testing.T) {
+	testCases := []struct {
+		name   string
+		pinned bool
+	}{
+		{name: "operator_pin", pinned: true},
+		{name: "chain_length"},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			gate := make(chan struct{})
+			test := newSchedulerHarness(t, schedulerConfig{gate: gate})
+			if testCase.pinned {
+				pinContextLength(test.scheduler)
+			} else {
+				test.snapshots.mu.Lock()
+				test.snapshots.snapshot.Models = map[string]chain.ModelParams{modelA: {MaxModelLen: fullContextTokens}}
+				test.snapshots.mu.Unlock()
+			}
+			session := test.session(t, escrowA)
+			picked := make(chan error, 1)
+			go func() {
+				_, err := test.scheduler.Pick(context.Background(), RequestProfile{Model: modelA, InputBytes: 10, OutputTokens: 16})
+				picked <- err
+			}()
+			<-session.entered
+			session.mu.Lock()
+			session.balance = 100_000
+			session.failWith = types.ErrInsufficientBalance
+			session.mu.Unlock()
+
+			close(gate)
+
+			if err := <-picked; !errors.Is(err, types.ErrInsufficientBalance) {
+				t.Fatalf("Pick = %v, want the refused advance's error", err)
+			}
+			if reported := test.exhausted.all(); !slices.Equal(reported, []string{escrowA + ":" + string(ExhaustionInsufficientBalance)}) {
+				t.Fatalf("reported = %v, want %s exhausted for an unaffordable balance", reported, escrowA)
+			}
+		})
 	}
 }

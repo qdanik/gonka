@@ -6,8 +6,6 @@ import (
 	"regexp"
 	"strings"
 
-	"devshard/cmd/gateway/chain"
-	"devshard/cmd/gateway/config"
 	"devshard/cmd/gateway/filters"
 	"devshard/storage"
 	"devshard/transport"
@@ -76,17 +74,6 @@ func CapabilityOf(attempt AttemptOutcome) CapabilitySignal {
 // rulesOutRetry reports a trusted answer no other host would change: a context-length refusal a longer host could still serve keeps the search going. See race.md, "Escalation".
 func rulesOutRetry(attempt AttemptOutcome, modelContextLength uint64) bool {
 	return answersForEveryHost(attempt) && !CapabilityOf(attempt).ServableByALongerHost(modelContextLength)
-}
-
-// modelContextLength is the operator's model_limits pin, else governance's --max-model-len; 0 when neither names a usable one. See race.md, "Escalation".
-func modelContextLength(limits config.Limits, snapshot chain.PhaseSnapshot, model string) uint64 {
-	if pinned := limits.ModelLimits[model].MaxModelLen; pinned != nil && *pinned > 0 {
-		return uint64(*pinned)
-	}
-	if governed := snapshot.Models[model].MaxModelLen; governed <= config.MaxContextTokens {
-		return governed
-	}
-	return 0
 }
 
 // answersForEveryHost reports a trusted host's answer the race takes as every host's: a refusal that is not Retriable, or a rejection of the request itself.

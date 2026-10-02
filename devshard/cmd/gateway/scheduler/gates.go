@@ -80,12 +80,29 @@ func requestReserve(profile RequestProfile) uint64 {
 	return uint64(max(profile.InputBytes, 0)) + uint64(max(profile.OutputTokens, 0))
 }
 
-// retirementReserve prices one capped answer and reads nothing from the arriving request. See capacity.md, "The balance floor".
-func (s *Scheduler) retirementReserve() uint64 {
+// retirementReserve prices the largest request the model's hosts accept, and never less than one capped answer. See capacity.md, "The balance floor".
+func (s *Scheduler) retirementReserve(model string, snapshot chain.PhaseSnapshot) uint64 {
 	if s.settings == nil {
 		return 0
 	}
-	return uint64(max(s.settings.Load().Limits.MaxTokensCap, 0))
+	configured := s.settings.Load().Limits
+	return max(uint64(max(configured.MaxTokensCap, 0)), configured.ContextLength(model, snapshot.Models[model].MaxModelLen))
+}
+
+// retirementPriceOf pairs the model's floor with one capped answer, the unit load and resume headroom are counted in. See capacity.md, "The balance floor".
+func (s *Scheduler) retirementPriceOf(model string, snapshot chain.PhaseSnapshot) retirementPrice {
+	if s.settings == nil {
+		return retirementPrice{}
+	}
+	return retirementPrice{
+		floorTokens:  s.retirementReserve(model, snapshot),
+		answerTokens: uint64(max(s.settings.Load().Limits.MaxTokensCap, 0)),
+	}
+}
+
+// retirementReserveFor reads the model's floor per call, so a dispatcher follows a pin or a chain length that moves.
+func (s *Scheduler) retirementReserveFor(escrow Escrow) func() uint64 {
+	return func() uint64 { return s.retirementReserve(escrow.Model, s.snapshots.Snapshot()) }
 }
 
 // pocPreserved prefers the model's own set; a nil set means not loaded yet, so everybody counts as preserved. See rules.md, "8. Fail-closed and fail-open are chosen per signal".

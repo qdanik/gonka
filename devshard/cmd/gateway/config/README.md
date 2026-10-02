@@ -40,7 +40,7 @@ Everything the gateway's behaviour depends on, in one value that is never mutate
 | `Engine` | race-escalation tuning. A zero `MaxAttemptsPerRequest` is bounded only by the host group, and the backstops this struct does not carry are engine constants — see [`docs/race.md`](../docs/race.md), "Tunables and backstops". |
 | `Scheduler` | `MatchWaitMS` is how long a bound nonce waits for a co-arriving compatible request before it is burned; 0 burns immediately. `MaxConsecutiveBurns` is how many nonces one escrow may burn in a row before the next binding is sent over a full congestion window instead; 0 turns that off. |
 
-Two accessors carry rules of their own. `Server.AdminEnabled` is what callers must gate on — comparing a presented credential against `AdminAPIKey` directly would authenticate an empty one. `Limits.AccessFor` resolves a model outside a *populated* `ModelAccess` to admin-only rather than open; with no map at all every model is open. See [`docs/operations.md`](../docs/operations.md), "Who may call what".
+Three accessors carry rules of their own. `Server.AdminEnabled` is what callers must gate on — comparing a presented credential against `AdminAPIKey` directly would authenticate an empty one. `Limits.AccessFor` resolves a model outside a *populated* `ModelAccess` to admin-only rather than open; with no map at all every model is open. See [`docs/operations.md`](../docs/operations.md), "Who may call what". `Limits.ContextLength` takes the operator's `max_model_len` pin over the `--max-model-len` governance registers and reads a length above `MaxContextTokens` as none; the race judges a context refusal against it and the scheduler prices an escrow's retirement floor on it.
 
 ## The combinations `Validate` refuses
 

@@ -378,3 +378,31 @@ func TestValidateAcceptsUnsetAdminKey(t *testing.T) {
 		t.Fatalf("Validate() = %v, want nil: an unset admin key disables admin routes rather than being invalid", err)
 	}
 }
+
+// Test flow:
+//  1. For each table case's operator pin in `model_limits` and governance's --max-model-len for the model, call `Limits.ContextLength`.
+//  2. Assert the operator's pin wins, governance fills in without one, and a model neither names, or governance names past MaxContextTokens, is unknown (0).
+func TestContextLengthTakesTheOperatorsPinOverGovernance(t *testing.T) {
+	const model = "model-a"
+	pinned := int64(262_144)
+	testCases := []struct {
+		name     string
+		limits   Limits
+		governed uint64
+		want     uint64
+	}{
+		{name: "operator_pin", limits: Limits{ModelLimits: map[string]ModelLimits{model: {MaxModelLen: &pinned}}}, governed: 400_000, want: 262_144},
+		{name: "governance_without_a_pin", limits: Limits{ModelLimits: map[string]ModelLimits{model: {}}}, governed: 400_000, want: 400_000},
+		{name: "neither_names_the_model"},
+		{name: "governance_past_what_a_window_could_hold", governed: MaxContextTokens + 1},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			if got := testCase.limits.ContextLength(model, testCase.governed); got != testCase.want {
+				t.Fatalf("ContextLength = %d, want %d", got, testCase.want)
+			}
+		})
+	}
+}

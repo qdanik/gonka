@@ -26,7 +26,7 @@ type avoidedEscrows map[string]avoidReason
 
 func (s *Scheduler) pickEscrow(profile RequestProfile, snapshot chain.PhaseSnapshot, queued *waiter, avoided avoidedEscrows) (Escrow, error) {
 	candidates := s.escrows.Candidates(profile.Model)
-	retirement, request := s.retirementReserve(), requestReserve(profile)
+	retirement, request := s.retirementPriceOf(profile.Model, snapshot), requestReserve(profile)
 
 	if profile.Escrow != "" {
 		for _, candidate := range candidates {
@@ -78,7 +78,7 @@ type escrowRanking struct {
 	snapshot   chain.PhaseSnapshot
 	queued     *waiter
 	avoided    avoidedEscrows
-	retirement uint64
+	retirement retirementPrice
 	request    uint64
 	reachable  func(Escrow) bool
 	fleet      availability
@@ -214,15 +214,46 @@ func nonceCeilingReason(candidate Escrow, maxNonce uint64) ExhaustionReason {
 }
 
 // exhaustionReason is empty while the escrow may still be picked; the fallback ceiling ranks last, so an escrow past it is still reported when its balance floor catches it. See routing.md, "Picking an escrow".
-func exhaustionReason(candidate Escrow, maxNonce uint64, reserveTokens uint64) ExhaustionReason {
+func exhaustionReason(candidate Escrow, maxNonce uint64, retirement retirementPrice) ExhaustionReason {
 	ceilingReason := nonceCeilingReason(candidate, maxNonce)
 	switch {
 	case ceilingReason == ExhaustionNonceCap:
 		return ExhaustionNonceCap
-	case belowBalanceFloor(candidate, reserveTokens):
+	case belowRetirementFloor(candidate, retirement):
 		return ExhaustionBalanceFloor
 	}
 	return ceilingReason
+}
+
+func belowRetirementFloor(candidate Escrow, retirement retirementPrice) bool {
+	if candidate.Session == nil || retirement.floorTokens == 0 {
+		return false
+	}
+	floor, ok := retirement.floorWith(candidate.Session, uint64(candidate.ActiveUsers))
+	return !ok || candidate.Session.Balance() < floor
+}
+
+type retirementPrice struct {
+	floorTokens  uint64
+	answerTokens uint64
+}
+
+// floorWith is the model's floor once and one capped answer for each further request; unpriced when that overflows.
+func (price retirementPrice) floorWith(escrowSession session, furtherAnswers uint64) (uint64, bool) {
+	floor, ok := requestCost(escrowSession, price.floorTokens)
+	if !ok {
+		return 0, false
+	}
+	answer, ok := requestCost(escrowSession, price.answerTokens)
+	if !ok {
+		return 0, false
+	}
+	load, ok := safeMul(answer, furtherAnswers)
+	if !ok {
+		return 0, false
+	}
+	total := floor + load
+	return total, total >= floor
 }
 
 // belowBalanceFloor prices each request the way the chain does, (input_length_bytes + max_tokens_cap) * token_price + fee_per_nonce.
@@ -243,29 +274,28 @@ func belowBalanceFloor(candidate Escrow, reserveTokens uint64) bool {
 
 // ResumeReadiness prices an escrow on hold the way a pick would, with headroom so it does not flap at the floor; nonceSpent means it can never serve again. See routing.md, "An escrow on hold".
 func (s *Scheduler) ResumeReadiness(candidate Escrow, answers uint64) (ready, nonceSpent bool) {
-	reserve := s.retirementReserve()
-	maxNonce := s.snapshots.Snapshot().MaxNonce
+	snapshot := s.snapshots.Snapshot()
+	retirement, maxNonce := s.retirementPriceOf(candidate.Model, snapshot), snapshot.MaxNonce
 	if nonceCeilingReason(candidate, maxNonce) == ExhaustionNonceCap {
 		return false, true
 	}
-	if candidate.Session == nil || reserve == 0 || exhaustionReason(candidate, maxNonce, reserve) != "" {
+	if candidate.Session == nil || retirement.floorTokens == 0 || exhaustionReason(candidate, maxNonce, retirement) != "" {
 		return false, false
 	}
 	floor, priced := s.ResumeFloor(candidate, answers)
 	return priced && candidate.Session.Balance() >= floor, false
 }
 
-// ResumeFloor is the balance ResumeReadiness waits for; unpriced when no reserve is configured or the price overflows.
+// ResumeFloor is the balance ResumeReadiness waits for: the model's floor and answers-1 capped answers past it; unpriced when no reserve is configured or the price overflows.
 func (s *Scheduler) ResumeFloor(candidate Escrow, answers uint64) (uint64, bool) {
-	reserve := s.retirementReserve()
-	if candidate.Session == nil || reserve == 0 {
+	retirement := s.retirementPriceOf(candidate.Model, s.snapshots.Snapshot())
+	if candidate.Session == nil || retirement.answerTokens == 0 {
 		return 0, false
 	}
-	cost, priced := requestCost(candidate.Session, reserve)
-	if !priced {
-		return 0, false
+	if answers == 0 {
+		return 0, true
 	}
-	return safeMul(cost, answers)
+	return retirement.floorWith(candidate.Session, answers-1)
 }
 
 // requestCost is what the chain takes for one request: its reserve and the fee for the nonce it draws; unpriced when that overflows.

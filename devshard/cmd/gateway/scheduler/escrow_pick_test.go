@@ -835,19 +835,28 @@ func TestARequestIsPricedTheWayTheChainChargesIt(t *testing.T) {
 
 // Test flow:
 //  1. Build a scheduler configured with a max-tokens cap of 4096.
-//  2. Call its `retirementReserve`.
-//  3. Assert it returns the answer cap alone, reading nothing from any arriving request.
+//  2. Call its `retirementReserve` for a model the chain registers at 180 000 tokens, for one at 1 024, and for one it does not name.
+//  3. Assert the first is priced at its context length, the other two at the answer cap, reading nothing from any arriving request.
 //  4. Assert an unconfigured scheduler's `retirementReserve` returns 0.
-func TestTheRetirementPriceIsOneCappedAnswerAndNothingElse(t *testing.T) {
+func TestTheRetirementPriceIsTheModelsContextAndNeverLessThanOneCappedAnswer(t *testing.T) {
 	t.Parallel()
 	settings := config.Defaults()
 	settings.Limits.MaxTokensCap = 4_096
 	priced := &Scheduler{settings: config.NewHolder(&settings)}
+	snapshot := chain.PhaseSnapshot{Models: map[string]chain.ModelParams{
+		modelA: {MaxModelLen: fullContextTokens}, "short-model": {MaxModelLen: 1_024},
+	}}
 
-	if got := priced.retirementReserve(); got != 4_096 {
-		t.Fatalf("retirementReserve = %d, want the answer cap alone", got)
+	if got := priced.retirementReserve(modelA, snapshot); got != fullContextTokens {
+		t.Fatalf("retirementReserve(%s) = %d, want the model's context length", modelA, got)
 	}
-	if got := (&Scheduler{}).retirementReserve(); got != 0 {
+	if got := priced.retirementReserve("short-model", snapshot); got != 4_096 {
+		t.Fatalf("retirementReserve(short-model) = %d, want the answer cap above a shorter context", got)
+	}
+	if got := priced.retirementReserve("unnamed-model", snapshot); got != 4_096 {
+		t.Fatalf("retirementReserve(unnamed) = %d, want the answer cap alone", got)
+	}
+	if got := (&Scheduler{}).retirementReserve(modelA, snapshot); got != 0 {
 		t.Fatalf("retirementReserve = %d before any configuration loaded, want an unpriced 0", got)
 	}
 }

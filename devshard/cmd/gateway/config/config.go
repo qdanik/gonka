@@ -252,6 +252,17 @@ func (l Limits) AccessFor(model string) string {
 	return ModelAccessAdminOnly
 }
 
+// ContextLength is the operator's max_model_len pin, else the --max-model-len governance registers; 0 when neither names a usable one. See race.md, "Escalation".
+func (l Limits) ContextLength(model string, governedMaxModelLen uint64) uint64 {
+	if pinned := l.ModelLimits[model].MaxModelLen; pinned != nil && *pinned > 0 {
+		return uint64(*pinned)
+	}
+	if governedMaxModelLen <= MaxContextTokens {
+		return governedMaxModelLen
+	}
+	return 0
+}
+
 // Offers reports whether the operator names the model in ModelAccess or ModelLimits. See operations.md, "Who may call what".
 func (l Limits) Offers(model string) bool {
 	if _, ok := l.ModelAccess[model]; ok {

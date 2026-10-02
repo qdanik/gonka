@@ -212,7 +212,7 @@ func (d *dispatcher) failAdvance(decision Decision, taken reservation, err error
 	d.failWaiting(fmt.Errorf("escrow %s: advancing nonce: %w", d.escrowID, err))
 }
 
-// escrowIsSpent asks whether the escrow can still pay for one capped answer. See capacity.md, "The balance floor".
+// escrowIsSpent asks whether the escrow can still pay for the largest request its model's hosts accept. See capacity.md, "The balance floor".
 func (d *dispatcher) escrowIsSpent() bool {
 	reserve := d.retirementReserve()
 	if reserve == 0 || d.session == nil {

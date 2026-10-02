@@ -3,9 +3,6 @@ package engine
 import (
 	"fmt"
 	"testing"
-
-	"devshard/cmd/gateway/chain"
-	"devshard/cmd/gateway/config"
 )
 
 type contextLimitCall struct {
@@ -325,34 +322,6 @@ func TestAContextLengthRejectionRulesOutARetryOnlyWhenNoHostCouldServeTheRequest
 
 			if got := rulesOutRetry(attempt, testCase.modelContextLength); got != testCase.want {
 				t.Fatalf("rulesOutRetry = %v, want %v", got, testCase.want)
-			}
-		})
-	}
-}
-
-// Test flow:
-//  1. For each table case's operator pin in `model_limits` and governance's --max-model-len for the model, call `modelContextLength`.
-//  2. Assert the operator's pin wins, governance fills in without one, and a model neither names, or governance names past config.MaxContextTokens, is unknown (0).
-func TestModelContextLengthTakesTheOperatorsPinOverGovernance(t *testing.T) {
-	pinned := int64(262_144)
-	governed := chain.PhaseSnapshot{Models: map[string]chain.ModelParams{testModel: {MaxModelLen: 400_000}}}
-	testCases := []struct {
-		name     string
-		limits   config.Limits
-		snapshot chain.PhaseSnapshot
-		want     uint64
-	}{
-		{name: "operator_pin", limits: config.Limits{ModelLimits: map[string]config.ModelLimits{testModel: {MaxModelLen: &pinned}}}, snapshot: governed, want: 262_144},
-		{name: "governance_without_a_pin", limits: config.Limits{ModelLimits: map[string]config.ModelLimits{testModel: {}}}, snapshot: governed, want: 400_000},
-		{name: "neither_names_the_model"},
-		{name: "governance_past_what_a_window_could_hold", snapshot: chain.PhaseSnapshot{Models: map[string]chain.ModelParams{testModel: {MaxModelLen: config.MaxContextTokens + 1}}}},
-	}
-
-	for _, testCase := range testCases {
-		t.Run(testCase.name, func(t *testing.T) {
-			t.Parallel()
-			if got := modelContextLength(testCase.limits, testCase.snapshot, testModel); got != testCase.want {
-				t.Fatalf("modelContextLength = %d, want %d", got, testCase.want)
 			}
 		})
 	}

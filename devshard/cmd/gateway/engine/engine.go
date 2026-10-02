@@ -266,7 +266,7 @@ func (e *Engine) raceDeps(settings *config.Config, request Request, registration
 		Timer:        e.deps.Timer,
 		Journal:      e.deps.Journal,
 
-		ModelContextLength: modelContextLength(settings.Limits, e.deps.Snapshots.Snapshot(), request.Model),
+		ModelContextLength: settings.Limits.ContextLength(request.Model, e.deps.Snapshots.Snapshot().Models[request.Model].MaxModelLen),
 
 		Hold:   registration.holdEscrow,
 		Report: func(outcome RaceOutcome) { e.record(outcome, request.Params, registration) },
