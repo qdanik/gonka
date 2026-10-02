@@ -1,7 +1,6 @@
 package state
 
 import (
-	"encoding/json"
 	"fmt"
 	"maps"
 	"slices"
@@ -364,17 +363,21 @@ func (sm *StateMachine) AutoSealStateClock() StateClockWindow {
 	return sm.stateClockLocked()
 }
 
-// autoSealCandidate is one seal-eligible live inference and how the grace gates
-// evaluated at this seal nonce. Emitted in auto-seal info logs on host/user.
-type autoSealCandidate struct {
-	ID               uint64 `json:"id"`
-	Status           uint8  `json:"status"`
-	ConfirmedAt      int64  `json:"confirmed_at"`
-	NonceGateOK      bool   `json:"nonce_gate_ok"`
-	ClockGateSkipped bool   `json:"clock_gate_skipped"`
-	ClockGateOK      bool   `json:"clock_gate_ok"`
-	GraceRemaining   int64  `json:"grace_remaining_sec,omitempty"`
-	Eligible         bool   `json:"eligible"`
+// autoSealTally counts how one seal pass judged the live window. It is logged instead of the
+// window itself, which on a busy escrow is tens of thousands of records on every pass.
+type autoSealTally struct {
+	candidates       int
+	waitingNonceGate int
+	waitingClockGate int
+	// nextClockGateSeconds is the least grace left among records the clock gate still holds.
+	nextClockGateSeconds int64
+}
+
+func (tally *autoSealTally) holdOnClock(remaining int64) {
+	if tally.waitingClockGate == 0 || remaining < tally.nextClockGateSeconds {
+		tally.nextClockGateSeconds = remaining
+	}
+	tally.waitingClockGate++
 }
 
 func (sm *StateMachine) logAutoSealDiagnosticLocked(
@@ -384,15 +387,11 @@ func (sm *StateMachine) logAutoSealDiagnosticLocked(
 	sealGraceNonces uint64,
 	graceSeconds int64,
 	stateClock int64,
-	candidates []autoSealCandidate,
+	tally autoSealTally,
 	sealed []uint64,
 ) {
-	if len(candidates) == 0 && len(sealed) == 0 {
+	if tally.candidates == 0 && len(sealed) == 0 {
 		return
-	}
-	candidatesJSON, err := json.Marshal(candidates)
-	if err != nil {
-		candidatesJSON = []byte(fmt.Sprintf("marshal error: %v", err))
 	}
 	executionTimeout := sm.state.Config.ExecutionTimeout
 	args := []any{
@@ -406,10 +405,15 @@ func (sm *StateMachine) logAutoSealDiagnosticLocked(
 		"execution_timeout", executionTimeout,
 		"finished_clock_required_seconds", FinishedClockRequiredSeconds(graceSeconds, executionTimeout),
 		"state_clock_confirmed_at", stateClock,
-		"candidates", string(candidatesJSON),
-		"sealed_ids", sealed,
+		"candidates_count", tally.candidates,
+		"waiting_nonce_gate", tally.waitingNonceGate,
+		"waiting_clock_gate", tally.waitingClockGate,
+		"next_clock_gate_in_sec", tally.nextClockGateSeconds,
 		"sealed_count", len(sealed),
 		"live_inferences_count", len(sm.state.Inferences),
+	}
+	if len(sealed) > 0 {
+		args = append(args, "sealed_first_id", sealed[0], "sealed_last_id", sealed[len(sealed)-1])
 	}
 	if clockWin.Known {
 		args = append(args,
@@ -459,52 +463,29 @@ func (sm *StateMachine) autoSealLocked(side string, sealNonce uint64) ([]uint64,
 		return nil, StateClockWindow{}, nil
 	}
 
-	var candidates []autoSealCandidate
+	var tally autoSealTally
 	var eligible []uint64
 	for id, rec := range sm.state.Inferences {
 		if !sealEligibleStatus(rec.Status) {
 			continue
 		}
-		candidate := autoSealCandidate{
-			ID:          id,
-			Status:      uint8(rec.Status),
-			ConfirmedAt: rec.ConfirmedAt,
-		}
-		candidate.NonceGateOK = sealNonce >= id+sealGraceNonces
-		if !candidate.NonceGateOK {
-			candidates = append(candidates, candidate)
+		tally.candidates++
+		if sealNonce < id+sealGraceNonces {
+			tally.waitingNonceGate++
 			continue
 		}
 		if terminalAutoSealStatus(rec.Status) {
-			candidate.ClockGateSkipped = true
-			candidate.ClockGateOK = true
-			candidate.Eligible = true
-			candidates = append(candidates, candidate)
 			eligible = append(eligible, id)
 			continue
 		}
-		remaining := requiredClockSeconds - (stateClock - rec.ConfirmedAt)
-		candidate.GraceRemaining = remaining
-		candidate.ClockGateOK = remaining <= 0
-		candidate.Eligible = candidate.ClockGateOK
-		candidates = append(candidates, candidate)
-		if !candidate.ClockGateOK {
+		if remaining := requiredClockSeconds - (stateClock - rec.ConfirmedAt); remaining > 0 {
+			tally.holdOnClock(remaining)
 			continue
 		}
 		eligible = append(eligible, id)
 	}
-	slices.SortFunc(candidates, func(a, b autoSealCandidate) int {
-		switch {
-		case a.ID < b.ID:
-			return -1
-		case a.ID > b.ID:
-			return 1
-		default:
-			return 0
-		}
-	})
 	if len(eligible) == 0 {
-		sm.logAutoSealDiagnosticLocked(side, sealNonce, clockWin, sealGraceNonces, graceSeconds, stateClock, candidates, nil)
+		sm.logAutoSealDiagnosticLocked(side, sealNonce, clockWin, sealGraceNonces, graceSeconds, stateClock, tally, nil)
 		return nil, clockWin, nil
 	}
 	slices.Sort(eligible)
@@ -534,7 +515,7 @@ func (sm *StateMachine) autoSealLocked(side string, sealNonce uint64) ([]uint64,
 		delete(sm.state.Inferences, id)
 	}
 	sm.state.SealedAcc = append([]byte(nil), cur[:]...)
-	sm.logAutoSealDiagnosticLocked(side, sealNonce, clockWin, sealGraceNonces, graceSeconds, stateClock, candidates, eligible)
+	sm.logAutoSealDiagnosticLocked(side, sealNonce, clockWin, sealGraceNonces, graceSeconds, stateClock, tally, eligible)
 	return eligible, clockWin, nil
 }
 

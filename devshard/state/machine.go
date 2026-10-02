@@ -373,7 +373,7 @@ func (sm *StateMachine) ApplyLocalPersisted(nonce uint64, txs []*types.DevshardT
 func (sm *StateMachine) ApplyLocalBestEffort(nonce uint64, txs []*types.DevshardTx) ([]byte, []*types.DevshardTx, error) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
-	return sm.localBestEffortLocked(nonce, txs)
+	return sm.localBestEffortLocked(nonce, txs, sm.snapshotMutable())
 }
 
 // PreviewLocalBestEffort is the validate-on-clone form of ApplyLocalBestEffort:
@@ -390,7 +390,7 @@ func (sm *StateMachine) PreviewLocalBestEffort(nonce uint64, txs []*types.Devsha
 	var marks []heightsync.AttributableMark
 	sm.obsDeferred = &obs
 	sm.marksDeferred = &marks
-	root, applied, err := sm.localBestEffortLocked(nonce, txs)
+	root, applied, err := sm.localBestEffortLocked(nonce, txs, pre)
 	sm.obsDeferred = nil
 	sm.marksDeferred = nil
 	if err != nil {
@@ -398,7 +398,7 @@ func (sm *StateMachine) PreviewLocalBestEffort(nonce uint64, txs []*types.Devsha
 		return nil, err
 	}
 	warmAfter := copyStringMap(sm.state.WarmKeys)
-	post := sm.snapshotMutable()
+	post := sm.handOverMutable()
 	sm.restoreMutable(pre)
 	return &ValidatedDiff{Root: root, WarmAfter: warmAfter, Applied: applied, nonce: nonce, post: post, obs: obs, marks: marks}, nil
 }
@@ -476,10 +476,10 @@ func heightSyncTraffic(tx *types.DevshardTx) bool {
 // state before returning. Caller must hold sm.mu. The preview/restore-on-success
 // and warm-key capture that persist-first needs are handled by the
 // PreviewLocalBestEffort wrapper.
-func (sm *StateMachine) localBestEffortLocked(nonce uint64, txs []*types.DevshardTx) ([]byte, []*types.DevshardTx, error) {
-	// Snapshot mutable state so fee charging and root computation remain atomic
-	// with respect to this nonce, matching applyCore semantics.
-	snap := sm.snapshotMutable()
+// localBestEffortLocked restores snap on every error path, so fee charging and root computation stay
+// atomic with respect to this nonce, matching applyCore semantics. The caller takes snap, so a preview
+// that already holds the pre-state copies the live window once rather than twice.
+func (sm *StateMachine) localBestEffortLocked(nonce uint64, txs []*types.DevshardTx, snap mutableSnapshot) ([]byte, []*types.DevshardTx, error) {
 
 	expectedNonce := sm.state.LatestNonce + 1
 	if nonce != expectedNonce {
@@ -1043,6 +1043,35 @@ func (sm *StateMachine) snapshotMutable() mutableSnapshot {
 		HeightSyncLatestTurnStart:     sm.state.HeightSyncLatestTurnStart,
 		turnTracker:                   sm.turnTracker.Clone(),
 		heightSyncFloor:               sm.heightSyncFloor.Clone(),
+	}
+}
+
+// handOverMutable gives away the live mutable state by reference, without copying. Only for a caller
+// that installs another snapshot straight after, so the handed-over maps have no other reader.
+func (sm *StateMachine) handOverMutable() mutableSnapshot {
+	return mutableSnapshot{
+		Balance:                       sm.state.Balance,
+		Fees:                          sm.state.Fees,
+		Phase:                         sm.state.Phase,
+		FinalizeNonce:                 sm.state.FinalizeNonce,
+		LatestNonce:                   sm.state.LatestNonce,
+		Inferences:                    sm.state.Inferences,
+		Committed:                     sm.committedEntries,
+		HostStats:                     sm.state.HostStats,
+		WarmKeys:                      sm.state.WarmKeys,
+		SealedAcc:                     sm.state.SealedAcc,
+		SealedNonces:                  sm.sealedNonces,
+		HeightSyncForcedStart:         sm.state.HeightSyncForcedStart,
+		HeightSyncForcedEnd:           sm.state.HeightSyncForcedEnd,
+		HeightSyncCadenceSwallowUntil: sm.state.HeightSyncCadenceSwallowUntil,
+		HeightSyncSwallowFe:           sm.state.HeightSyncSwallowFe,
+		HeightSyncTurnK:               sm.state.HeightSyncTurnK,
+		HeightSyncTurnSlots:           sm.state.HeightSyncTurnSlots,
+		HeightSyncTurnReason:          sm.state.HeightSyncTurnReason,
+		HeightSyncLastCompletedHeight: sm.state.HeightSyncLastCompletedHeight,
+		HeightSyncLatestTurnStart:     sm.state.HeightSyncLatestTurnStart,
+		turnTracker:                   sm.turnTracker,
+		heightSyncFloor:               sm.heightSyncFloor,
 	}
 }
 
