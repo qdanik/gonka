@@ -74,28 +74,52 @@ func (b *Book) Snapshot() Snapshot {
 	return snapshot
 }
 
-// takeUnsaved hands over the escrows changed since the last save and every id marked, gone ones included.
-func (b *Book) takeUnsaved() (Snapshot, []string) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	escrowIDs := slices.Sorted(maps.Keys(b.unsaved))
-	clear(b.unsaved)
-	snapshot := Snapshot{SchemaVersion: SchemaVersion, UpdatedAt: b.updatedAt}
-	for _, escrowID := range escrowIDs {
-		if escrow, known := b.escrows[escrowID]; known {
-			snapshot.Escrows = append(snapshot.Escrows, snapshotEscrow(escrow))
-		}
-	}
-	return snapshot, escrowIDs
+type unsavedChanges struct {
+	snapshot      Snapshot
+	escrowIDs     []string
+	replaceStored bool
 }
 
-// requeueUnsaved marks again what a failed save took, so the next save carries it.
-func (b *Book) requeueUnsaved(escrowIDs []string) {
+func (changes unsavedChanges) empty() bool {
+	return len(changes.escrowIDs) == 0 && !changes.replaceStored
+}
+
+func (b *Book) takeUnsaved() unsavedChanges {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	for _, escrowID := range escrowIDs {
+	if b.replaceStored {
+		for escrowID := range b.escrows {
+			b.unsaved[escrowID] = struct{}{}
+		}
+	}
+	changes := unsavedChanges{
+		snapshot:      Snapshot{SchemaVersion: SchemaVersion, UpdatedAt: b.updatedAt},
+		escrowIDs:     slices.Sorted(maps.Keys(b.unsaved)),
+		replaceStored: b.replaceStored,
+	}
+	clear(b.unsaved)
+	b.replaceStored = false
+	for _, escrowID := range changes.escrowIDs {
+		if escrow, known := b.escrows[escrowID]; known {
+			changes.snapshot.Escrows = append(changes.snapshot.Escrows, snapshotEscrow(escrow))
+		}
+	}
+	return changes
+}
+
+func (b *Book) requeueUnsaved(changes unsavedChanges) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for _, escrowID := range changes.escrowIDs {
 		b.unsaved[escrowID] = struct{}{}
 	}
+	b.replaceStored = b.replaceStored || changes.replaceStored
+}
+
+func (b *Book) replaceStoredOnNextSave() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.replaceStored = true
 }
 
 func snapshotEscrow(escrow *escrowLedger) EscrowSnapshot {

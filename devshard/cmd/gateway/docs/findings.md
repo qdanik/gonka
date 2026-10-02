@@ -1,6 +1,6 @@
 # Defects outside the gateway
 
-Five defects the gateway runs into and cannot fix inside `cmd/gateway`. The first four are closed and the fifth is patched locally pending upstream; each entry states the rule that replaced it and where that rule lives.
+Seven defects the gateway runs into and cannot fix inside `cmd/gateway`. The first four are closed and the last three are patched locally pending upstream; each entry states the rule that replaced it and where that rule lives.
 
 ---
 
@@ -57,3 +57,23 @@ With an empty map a nonce a host already receipted yielded reason `refused`, and
 **The rule now.** The probe goes through a package-level client carrying the `common/httpguard` dial-time guard. The patch is upstream's [gonka-ai/gonka#1853](https://github.com/gonka-ai/gonka/pull/1853) byte for byte, with its test [`user/catalog_ssrf_test.go`](../../../user/catalog_ssrf_test.go), so the local copy drops out when that PR lands.
 
 **Why it is sound.** `DialControl` checks the resolved address on every dial, redirect hops included, and `DEVSHARD_ALLOW_PRIVATE_ADDRESSES` keeps compose and e2e stands, whose hosts resolve to Docker-internal addresses, working.
+
+---
+
+## 6. Every composed diff copied the live window three times — patched pending upstream
+
+**What it was.** `StateMachine.PreviewLocalBestEffort` ([`state/machine.go`](../../../state/machine.go)), which composes every diff the gateway sends, heartbeat turns included, deep-copied the mutable state before the trial apply, `localBestEffortLocked` copied it again for its own rollback, and the preview copied it a third time to hand back the post-state. Each copy walks every live inference and every nonce the escrow ever sealed, so the cost grew with the escrow's age. A devshardctl profile under production load spent 32% of its CPU in `snapshotMutable`. The gateway cannot wrap it: the copies happen under the state machine's own lock.
+
+**The rule now.** `localBestEffortLocked` takes its rollback snapshot from the caller, so the preview passes the copy it already holds, and the preview hands the trial-applied maps over by reference (`handOverMutable`) while the copy goes back in their place. One copy per composed diff instead of three: on an escrow with twenty thousand live and a hundred thousand sealed inferences a preview went from 22 ms and 39.5 MB to 14 ms and 24 MB (`BenchmarkPreviewOfALongLivedEscrow`).
+
+**Why it is sound.** Nothing about the root changes: the same transactions are applied to the same state, and only which of two equal copies ends up live differs. The handed-over maps are reachable only through the returned handle, because the live state switches to the copy before the lock is released; `TestAPreviewLeavesTheLiveStateUntouchedUntilItsHandleIsCommitted` and `TestADiscardedPreviewLeavesNothingBehindForTheNextApply` ([`state/preview_isolation_test.go`](../../../state/preview_isolation_test.go)) fail if the pre-state is ever shared.
+
+---
+
+## 7. The auto-seal log wrote out the whole live window — patched pending upstream
+
+**What it was.** Every seal pass ([`state/seal.go`](../../../state/seal.go), `autoSealLocked`), one per 150 nonces of every escrow on the gateway and on every host, built a record of each live inference, sorted it and logged it as JSON at Info. On a 20 000-record window that was 24 ms, 29 MB and a 3.6 MB log line per pass; one participant's host logged 327 MB of these lines in four hours, 60% of its log.
+
+**The rule now.** The pass counts instead of listing: `candidates_count`, `waiting_nonce_gate`, `waiting_clock_gate`, `next_clock_gate_seconds` when something waits on the clock, `sealed_count` and the first and last sealed ids. The same pass costs 1.4 ms and 166 KB (`BenchmarkAutoSealEvaluationOfAWindowNotYetDue`).
+
+**Why it is sound.** The list was only ever read by the log. Which inferences are sealed is decided by the same nonce gate, terminal-status shortcut and clock gate as before, and the eligible ids are still sorted before they fold into the sealed accumulator.

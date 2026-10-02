@@ -204,7 +204,7 @@ func BenchmarkSaveEveryEscrow(b *testing.B) {
 	escrowIDs := book.EscrowIDs()
 	b.ReportAllocs()
 	for b.Loop() {
-		book.requeueUnsaved(escrowIDs)
+		book.requeueUnsaved(unsavedChanges{escrowIDs: escrowIDs})
 		if err := store.Save(context.Background(), book); err != nil {
 			b.Fatalf("Save(): %v", err)
 		}
@@ -221,7 +221,7 @@ func BenchmarkSaveOneChangedEscrow(b *testing.B) {
 	escrowID := benchEscrowID(0)
 	b.ReportAllocs()
 	for b.Loop() {
-		book.requeueUnsaved([]string{escrowID})
+		book.requeueUnsaved(unsavedChanges{escrowIDs: []string{escrowID}})
 		if err := store.Save(context.Background(), book); err != nil {
 			b.Fatalf("Save(): %v", err)
 		}

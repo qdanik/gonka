@@ -2,6 +2,7 @@ package accounting
 
 import (
 	"context"
+	"path/filepath"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -138,4 +139,105 @@ func TestARequestedFlushIsWrittenByTheServiceItself(t *testing.T) {
 			t.Fatalf("stored latest_nonce = %d, want 5", got)
 		}
 	})
+}
+
+// Test flow:
+//  1. Save a book holding escrow-1, then corrupt the stored updated_at so the next load fails.
+//  2. Start a service over that store, which starts empty, open escrow-2 and close the service.
+//  3. Reopen the store and assert it holds only escrow-2, as a ledger that started empty must.
+func TestALedgerThatFailedToLoadIsReplacedWholeByTheFirstSave(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "accounting.db")
+	store, err := OpenStore(path)
+	if err != nil {
+		t.Fatalf("OpenStore() = %v, want nil", err)
+	}
+	if err := store.Save(t.Context(), newTestBook(t, 4)); err != nil {
+		t.Fatalf("Save() = %v, want nil", err)
+	}
+	if _, err := store.db.ExecContext(t.Context(),
+		`UPDATE accounting_meta SET value = 'garbage' WHERE key = ?`, metaUpdatedAt); err != nil {
+		t.Fatalf("corrupting updated_at: %v", err)
+	}
+	service, err := NewService(Settings{Store: store, Now: func() time.Time { return time.Unix(0, 0).UTC() }})
+	if err == nil {
+		t.Fatal("NewService() over a corrupt ledger = nil, want the load error")
+	}
+	openTestEscrow(t, service.Book, otherEscrow, testEpoch, 4)
+	if err := service.Close(); err != nil {
+		t.Fatalf("Close() = %v, want nil", err)
+	}
+
+	reopened, err := OpenStore(path)
+	if err != nil {
+		t.Fatalf("OpenStore() = %v, want nil", err)
+	}
+	t.Cleanup(func() { _ = reopened.Close() })
+	snapshot, err := reopened.Load(t.Context())
+	if err != nil {
+		t.Fatalf("Load() = %v, want nil", err)
+	}
+
+	if len(snapshot.Escrows) != 1 || snapshot.Escrows[0].Metadata.EscrowID != otherEscrow {
+		t.Fatalf("stored escrows = %d, want only %s", len(snapshot.Escrows), otherEscrow)
+	}
+}
+
+// Test flow:
+//  1. Open and retire escrow-1 in an old epoch, open escrow-2 in the current one, and save.
+//  2. Prune the epochs before the current one, save and reload.
+//  3. Assert only escrow-2 comes back.
+func TestAPrunedEscrowLeavesTheStore(t *testing.T) {
+	book := newTestBook(t, 4)
+	book.RetireEscrow(testEscrow)
+	openTestEscrow(t, book, otherEscrow, testEpoch+5, 4)
+	store := openTestStore(t)
+	if err := store.Save(t.Context(), book); err != nil {
+		t.Fatalf("Save() = %v, want nil", err)
+	}
+	book.PruneBefore(testEpoch + 5)
+
+	restored := saveAndReload(t, book, store)
+
+	if got := restored.EscrowIDs(); len(got) != 1 || got[0] != otherEscrow {
+		t.Fatalf("restored escrows = %v, want [%s]", got, otherEscrow)
+	}
+}
+
+// Test flow:
+//  1. Save a book holding escrow-1, corrupt the stored updated_at, and restore a fresh book from it, which fails.
+//  2. Open escrow-2, save it with a cancelled context, then save again with a live one.
+//  3. Assert the store holds only escrow-2: the failed save kept the duty to replace the ledger whole.
+func TestAFailedSaveKeepsTheDutyToReplaceALedgerThatFailedToLoad(t *testing.T) {
+	store := openTestStore(t)
+	if err := store.Save(t.Context(), newTestBook(t, 4)); err != nil {
+		t.Fatalf("Save() = %v, want nil", err)
+	}
+	if _, err := store.db.ExecContext(t.Context(),
+		`UPDATE accounting_meta SET value = 'garbage' WHERE key = ?`, metaUpdatedAt); err != nil {
+		t.Fatalf("corrupting updated_at: %v", err)
+	}
+	service, err := NewService(Settings{Store: store, Now: func() time.Time { return time.Unix(0, 0).UTC() }})
+	if err == nil {
+		t.Fatal("NewService() over a corrupt ledger = nil, want the load error")
+	}
+	service.cancel()
+	<-service.stopped
+	openTestEscrow(t, service.Book, otherEscrow, testEpoch, 4)
+	cancelled, cancel := context.WithCancel(t.Context())
+	cancel()
+	if err := store.Save(cancelled, service.Book); err == nil {
+		t.Fatal("Save(cancelled) = nil, want an error")
+	}
+
+	if err := store.Save(t.Context(), service.Book); err != nil {
+		t.Fatalf("Save() = %v, want nil", err)
+	}
+
+	stored, err := store.Load(t.Context())
+	if err != nil {
+		t.Fatalf("Load() = %v, want nil", err)
+	}
+	if len(stored.Escrows) != 1 || stored.Escrows[0].Metadata.EscrowID != otherEscrow {
+		t.Fatalf("stored escrows = %d, want only %s", len(stored.Escrows), otherEscrow)
+	}
 }

@@ -1,11 +1,9 @@
 package api
 
 import (
-	"cmp"
+	"context"
 	"fmt"
 	"net/http"
-
-	"golang.org/x/sync/errgroup"
 )
 
 type deactivateOutcome struct {
@@ -19,7 +17,6 @@ type deactivateBatchSummary struct {
 	Failed      int `json:"failed"`
 }
 
-// handleAdminDevshardsDeactivateBatch answers the way the settle batch does. See docs/operations.md, "Deactivating a list of escrows".
 func (s *Server) handleAdminDevshardsDeactivateBatch(w http.ResponseWriter, r *http.Request) {
 	if !allowMethods(w, r, http.MethodPost) {
 		return
@@ -29,47 +26,23 @@ func (s *Server) handleAdminDevshardsDeactivateBatch(w http.ResponseWriter, r *h
 		s.writeErrorFor(w, badRequestUnlessOversized(err))
 		return
 	}
-	escrowIDs := distinctEscrowIDs(request.EscrowIDs)
-	if refusal := refuseBatch(escrowIDs, request.BatchSize); refusal != "" {
-		writeError(w, http.StatusBadRequest, refusal)
+	escrowIDs, registered, admitted := s.admitBatch(w, r, request.EscrowIDs, request.BatchSize)
+	if !admitted {
 		return
 	}
-	registered, err := s.registeredDevshards(r)
-	if writeControlFailure(w, err) {
-		return
-	}
-
 	stream := newNDJSONStream(w)
-	outcomes := make(chan deactivateOutcome, len(escrowIDs))
-	go func() {
-		defer close(outcomes)
-		var deactivating errgroup.Group
-		deactivating.SetLimit(cmp.Or(request.BatchSize, defaultSettleBatchSize))
-		for _, escrowID := range escrowIDs {
-			deactivating.Go(func() error {
-				outcomes <- s.deactivateEntry(r, escrowID, registered[escrowID])
-				return nil
-			})
-		}
-		_ = deactivating.Wait()
-	}()
-
-	var summary deactivateBatchSummary
-	for outcome := range outcomes {
-		if outcome.Error == "" {
-			summary.Deactivated++
-		} else {
-			summary.Failed++
-		}
-		stream.send(outcome)
-	}
-	stream.send(summary)
+	deactivated, failed := streamBatch(stream, escrowIDs, request.BatchSize,
+		func(escrowID string) deactivateOutcome {
+			return s.deactivateEntry(r.Context(), escrowID, registered[escrowID])
+		},
+		func(outcome deactivateOutcome) bool { return outcome.Error != "" })
+	stream.send(deactivateBatchSummary{Deactivated: deactivated, Failed: failed})
 }
 
-func (s *Server) deactivateEntry(r *http.Request, escrowID string, registered bool) deactivateOutcome {
+func (s *Server) deactivateEntry(ctx context.Context, escrowID string, registered bool) deactivateOutcome {
 	err := fmt.Errorf("%w: %s", ErrUnknownDevshard, escrowID)
 	if registered {
-		err = s.operations.Deactivate(r.Context(), escrowID)
+		err = s.operations.Deactivate(ctx, escrowID)
 	}
 	if err != nil {
 		return deactivateOutcome{EscrowID: escrowID, Status: statusForError(err), Error: err.Error()}

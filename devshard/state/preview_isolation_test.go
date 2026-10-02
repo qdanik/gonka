@@ -10,9 +10,9 @@ import (
 	"devshard/types"
 )
 
-func startInferenceTx(inferenceID uint64) *types.DevshardTx {
+func startInferenceTx(inferenceID uint64, prompt string) *types.DevshardTx {
 	return txStart(&types.MsgStartInference{
-		InferenceId: inferenceID, PromptHash: []byte("prompt"), Model: "llama",
+		InferenceId: inferenceID, PromptHash: []byte(prompt), Model: "llama",
 		InputLength: 100, MaxTokens: testutil.TestMaxTokens, StartedAt: 1000,
 	})
 }
@@ -25,13 +25,13 @@ func startInferenceTx(inferenceID uint64) *types.DevshardTx {
 func TestAPreviewLeavesTheLiveStateUntouchedUntilItsHandleIsCommitted(t *testing.T) {
 	hosts := []*signing.Secp256k1Signer{testutil.MustGenerateKey(t), testutil.MustGenerateKey(t)}
 	sm, _ := newTestSM(t, hosts, 10000)
-	_, _, err := sm.ApplyLocalBestEffort(1, []*types.DevshardTx{startInferenceTx(1)})
+	_, _, err := sm.ApplyLocalBestEffort(1, []*types.DevshardTx{startInferenceTx(1, "prompt")})
 	require.NoError(t, err)
 	rootBefore, err := sm.ComputeStateRoot()
 	require.NoError(t, err)
 	balanceBefore := sm.SnapshotState().Balance
 
-	handle, err := sm.PreviewLocalBestEffort(2, []*types.DevshardTx{startInferenceTx(2)})
+	handle, err := sm.PreviewLocalBestEffort(2, []*types.DevshardTx{startInferenceTx(2, "prompt")})
 	require.NoError(t, err)
 
 	rootBetween, err := sm.ComputeStateRoot()
@@ -55,15 +55,12 @@ func TestAPreviewLeavesTheLiveStateUntouchedUntilItsHandleIsCommitted(t *testing
 func TestADiscardedPreviewLeavesNothingBehindForTheNextApply(t *testing.T) {
 	hosts := []*signing.Secp256k1Signer{testutil.MustGenerateKey(t), testutil.MustGenerateKey(t)}
 	sm, _ := newTestSM(t, hosts, 10000)
-	_, _, err := sm.ApplyLocalBestEffort(1, []*types.DevshardTx{startInferenceTx(1)})
+	_, _, err := sm.ApplyLocalBestEffort(1, []*types.DevshardTx{startInferenceTx(1, "prompt")})
 	require.NoError(t, err)
-	_, err = sm.PreviewLocalBestEffort(2, []*types.DevshardTx{startInferenceTx(2)})
+	_, err = sm.PreviewLocalBestEffort(2, []*types.DevshardTx{startInferenceTx(2, "prompt")})
 	require.NoError(t, err)
 
-	_, applied, err := sm.ApplyLocalBestEffort(2, []*types.DevshardTx{txStart(&types.MsgStartInference{
-		InferenceId: 2, PromptHash: []byte("another prompt"), Model: "llama",
-		InputLength: 100, MaxTokens: testutil.TestMaxTokens, StartedAt: 1000,
-	})})
+	_, applied, err := sm.ApplyLocalBestEffort(2, []*types.DevshardTx{startInferenceTx(2, "another prompt")})
 	require.NoError(t, err)
 	require.Len(t, applied, 1)
 

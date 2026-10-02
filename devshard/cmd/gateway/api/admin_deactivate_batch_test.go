@@ -51,7 +51,7 @@ func decodeBatchDeactivate(t *testing.T, body []byte) batchDeactivateAnswer {
 //  1. Register escrows "7" and "9".
 //  2. POST a batch deactivate for "7", "9", a repeated "7", and an unregistered "404".
 //  3. Assert the answer is 200 NDJSON with deactivated=2 and failed=1, and "404" answers 404.
-//  4. Assert the deactivate operation ran once per registered escrow.
+//  4. Assert the deactivate operation ran once for each registered escrow, and for no other.
 func TestABatchDeactivateAnswersForEveryEscrowItWasGiven(t *testing.T) {
 	live := newHarness(t)
 	live.control.devshards = []store.DevshardRecord{
@@ -72,17 +72,17 @@ func TestABatchDeactivateAnswersForEveryEscrowItWasGiven(t *testing.T) {
 	if got := answer.Results["404"].Status; got != http.StatusNotFound {
 		t.Fatalf("status of the unregistered escrow = %d, want 404", got)
 	}
-	if calls := live.operations.recordedCalls(); !slices.Equal(calls, []string{"deactivate", "deactivate"}) {
-		t.Fatalf("operations = %v, want two deactivations", calls)
+	if deactivated := live.operations.deactivatedEscrows(); !slices.Equal(deactivated, []string{"7", "9"}) {
+		t.Fatalf("deactivated escrows = %v, want [7 9]", deactivated)
 	}
 }
 
 // Test flow:
-//  1. Build an escrow-ID list one entry past `settleBatchLimit`.
+//  1. Build an escrow-ID list one entry past `batchEscrowLimit`.
 //  2. POST each refused body (no body, an empty list, the oversized list, a batch size past the ceiling) to the batch deactivate route.
 //  3. Assert each answers 400 and no deactivation ran.
 func TestABatchDeactivateRefusesAListItCannotAnswerFor(t *testing.T) {
-	oversized := make([]string, settleBatchLimit+1)
+	oversized := make([]string, batchEscrowLimit+1)
 	for index := range oversized {
 		oversized[index] = strconv.Itoa(index)
 	}
@@ -97,7 +97,7 @@ func TestABatchDeactivateRefusesAListItCannotAnswerFor(t *testing.T) {
 		{name: "no body at all", body: ""},
 		{name: "an empty list", body: `{"escrow_ids":[]}`},
 		{name: "more escrows than one call takes", body: string(oversizedBody)},
-		{name: "a batch size past the ceiling", body: `{"escrow_ids":["7"],"batch_size":` + strconv.Itoa(maxSettleBatchSize+1) + `}`},
+		{name: "a batch size past the ceiling", body: `{"escrow_ids":["7"],"batch_size":` + strconv.Itoa(maxBatchSize+1) + `}`},
 	}
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {

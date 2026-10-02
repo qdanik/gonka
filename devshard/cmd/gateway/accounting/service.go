@@ -59,10 +59,13 @@ func (s *Service) restore() error {
 		return nil
 	}
 	snapshot, err := s.store.Load(context.Background())
-	if err != nil {
-		return err
+	if err == nil {
+		err = s.Book.Restore(snapshot)
 	}
-	return s.Book.Restore(snapshot)
+	if err != nil {
+		s.Book.replaceStoredOnNextSave()
+	}
+	return err
 }
 
 func (s *Service) Flush() error {
@@ -94,18 +97,18 @@ func (s *Service) run(ctx context.Context, snapshotInterval time.Duration) {
 		case <-pruning.C:
 			s.prune(ctx)
 		case <-snapshots.C:
-			s.flushLogged()
+			s.flushAndLogFailure()
 		case <-s.flushRequests:
-			s.flushLogged()
+			s.flushAndLogFailure()
 		case <-ctx.Done():
 			return
 		}
 	}
 }
 
-func (s *Service) flushLogged() {
+func (s *Service) flushAndLogFailure() {
 	if err := s.Flush(); err != nil {
-		logging.Error("nonce accounting snapshot failed", "error", err)
+		logging.Error("nonce accounting save failed", "error", err)
 	}
 }
 
@@ -144,7 +147,7 @@ func (b *Book) PruneBefore(epoch uint64) {
 	for escrowID, escrow := range b.escrows {
 		if escrow.retired && escrow.metadata.CreationEpoch < epoch {
 			delete(b.escrows, escrowID)
-			b.unsaved[escrowID] = struct{}{}
+			b.markUnsavedLocked(escrowID)
 		}
 	}
 }

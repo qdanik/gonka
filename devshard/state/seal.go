@@ -366,16 +366,15 @@ func (sm *StateMachine) AutoSealStateClock() StateClockWindow {
 // autoSealTally counts how one seal pass judged the live window. It is logged instead of the
 // window itself, which on a busy escrow is tens of thousands of records on every pass.
 type autoSealTally struct {
-	candidates       int
-	waitingNonceGate int
-	waitingClockGate int
-	// nextClockGateSeconds is the least grace left among records the clock gate still holds.
-	nextClockGateSeconds int64
+	candidates             int
+	waitingNonceGate       int
+	waitingClockGate       int
+	leastClockGraceSeconds int64
 }
 
-func (tally *autoSealTally) holdOnClock(remaining int64) {
-	if tally.waitingClockGate == 0 || remaining < tally.nextClockGateSeconds {
-		tally.nextClockGateSeconds = remaining
+func (tally *autoSealTally) countClockHold(remainingSeconds int64) {
+	if tally.waitingClockGate == 0 || remainingSeconds < tally.leastClockGraceSeconds {
+		tally.leastClockGraceSeconds = remainingSeconds
 	}
 	tally.waitingClockGate++
 }
@@ -408,9 +407,11 @@ func (sm *StateMachine) logAutoSealDiagnosticLocked(
 		"candidates_count", tally.candidates,
 		"waiting_nonce_gate", tally.waitingNonceGate,
 		"waiting_clock_gate", tally.waitingClockGate,
-		"next_clock_gate_in_sec", tally.nextClockGateSeconds,
 		"sealed_count", len(sealed),
 		"live_inferences_count", len(sm.state.Inferences),
+	}
+	if tally.waitingClockGate > 0 {
+		args = append(args, "next_clock_gate_seconds", tally.leastClockGraceSeconds)
 	}
 	if len(sealed) > 0 {
 		args = append(args, "sealed_first_id", sealed[0], "sealed_last_id", sealed[len(sealed)-1])
@@ -479,7 +480,7 @@ func (sm *StateMachine) autoSealLocked(side string, sealNonce uint64) ([]uint64,
 			continue
 		}
 		if remaining := requiredClockSeconds - (stateClock - rec.ConfirmedAt); remaining > 0 {
-			tally.holdOnClock(remaining)
+			tally.countClockHold(remaining)
 			continue
 		}
 		eligible = append(eligible, id)

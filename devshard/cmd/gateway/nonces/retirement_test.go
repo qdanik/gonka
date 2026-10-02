@@ -1,7 +1,9 @@
 package nonces
 
 import (
+	"path/filepath"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"devshard/cmd/gateway/accounting"
@@ -110,4 +112,39 @@ func TestARecorderThatWasNeverOpenedStillAnswersARetirement(t *testing.T) {
 	retiring := ledger.EscrowRetiring
 
 	retiring(tokenEscrowID, nil)
+}
+
+// Test flow:
+//  1. Open an escrow in a ledger backed by a store, inside a synctest bubble.
+//  2. Retire it through `ledger.EscrowRetiring` and wait for the ledger's own goroutine to go idle.
+//  3. Assert the store holds the escrow marked retired, so a retirement reaches disk without the caller writing it.
+func TestARetirementIsWrittenToTheStoreByTheLedgerItself(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		store, err := accounting.OpenStore(filepath.Join(t.TempDir(), "accounting.db"))
+		if err != nil {
+			t.Fatalf("OpenStore() = %v, want nil", err)
+		}
+		service, err := accounting.NewService(accounting.Settings{Store: store, Now: func() time.Time { return time.Unix(0, 0).UTC() }})
+		if err != nil {
+			t.Fatalf("NewService() = %v, want nil", err)
+		}
+		t.Cleanup(func() { _ = service.Close() })
+		if err := service.Book.OpenEscrow(accounting.EscrowMetadata{
+			EscrowID: tokenEscrowID, Model: "llama", CreationEpoch: 7, Slots: []types.SlotAssignment{{SlotID: 0, ValidatorAddress: "gonka1validator"}},
+		}); err != nil {
+			t.Fatalf("OpenEscrow() = %v, want nil", err)
+		}
+		ledger := &Recorder{service: service}
+
+		ledger.EscrowRetiring(tokenEscrowID, nil)
+		synctest.Wait()
+
+		stored, err := store.Load(t.Context())
+		if err != nil {
+			t.Fatalf("Load() = %v, want nil", err)
+		}
+		if len(stored.Escrows) != 1 || !stored.Escrows[0].Retired {
+			t.Fatalf("stored escrows = %+v, want %s stored retired", stored.Escrows, tokenEscrowID)
+		}
+	})
 }

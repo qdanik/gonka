@@ -1,23 +1,12 @@
 package api
 
 import (
-	"cmp"
 	"context"
 	"fmt"
 	"net/http"
-	"strings"
-
-	json "github.com/goccy/go-json"
-	"golang.org/x/sync/errgroup"
 
 	"devshard/cmd/gateway/chain"
 	"devshard/cmd/gateway/escrow"
-)
-
-const (
-	defaultSettleBatchSize = 4
-	maxSettleBatchSize     = 16
-	settleBatchLimit       = 50
 )
 
 type settleOutcome struct {
@@ -31,11 +20,6 @@ type settleOutcome struct {
 type settleBatchSummary struct {
 	Settled int `json:"settled"`
 	Failed  int `json:"failed"`
-}
-
-type ndjsonStream struct {
-	writer     http.ResponseWriter
-	controller *http.ResponseController
 }
 
 func (s *Server) handleAdminDevshardSettle(w http.ResponseWriter, r *http.Request) {
@@ -97,60 +81,18 @@ func (s *Server) handleAdminDevshardsSettleBatch(w http.ResponseWriter, r *http.
 		s.writeErrorFor(w, badRequestUnlessOversized(err))
 		return
 	}
-	escrowIDs := distinctEscrowIDs(request.EscrowIDs)
-	if refusal := refuseBatch(escrowIDs, request.BatchSize); refusal != "" {
-		writeError(w, http.StatusBadRequest, refusal)
-		return
-	}
-	registered, err := s.registeredDevshards(r)
-	if writeControlFailure(w, err) {
+	escrowIDs, registered, admitted := s.admitBatch(w, r, request.EscrowIDs, request.BatchSize)
+	if !admitted {
 		return
 	}
 	forced := request.Force || isForcedSettle(r)
-	batchSize := cmp.Or(request.BatchSize, defaultSettleBatchSize)
-
 	stream := newNDJSONStream(w)
-	outcomes := make(chan settleOutcome, len(escrowIDs))
-	go func() {
-		defer close(outcomes)
-		var settling errgroup.Group
-		settling.SetLimit(batchSize)
-		for _, escrowID := range escrowIDs {
-			settling.Go(func() error {
-				outcomes <- s.settleEntry(r.Context(), escrowID, registered[escrowID], forced)
-				return nil
-			})
-		}
-		_ = settling.Wait()
-	}()
-
-	var summary settleBatchSummary
-	for outcome := range outcomes {
-		if outcome.Error == "" {
-			summary.Settled++
-		} else {
-			summary.Failed++
-		}
-		stream.send(outcome)
-	}
-	stream.send(summary)
-}
-
-func newNDJSONStream(w http.ResponseWriter) *ndjsonStream {
-	w.Header().Set("Content-Type", "application/x-ndjson")
-	w.WriteHeader(http.StatusOK)
-	stream := &ndjsonStream{writer: w, controller: http.NewResponseController(w)}
-	_ = stream.controller.Flush()
-	return stream
-}
-
-func (n *ndjsonStream) send(payload any) {
-	line, err := json.Marshal(payload)
-	if err != nil {
-		return
-	}
-	_, _ = n.writer.Write(append(line, '\n'))
-	_ = n.controller.Flush()
+	settled, failed := streamBatch(stream, escrowIDs, request.BatchSize,
+		func(escrowID string) settleOutcome {
+			return s.settleEntry(r.Context(), escrowID, registered[escrowID], forced)
+		},
+		func(outcome settleOutcome) bool { return outcome.Error != "" })
+	stream.send(settleBatchSummary{Settled: settled, Failed: failed})
 }
 
 func (s *Server) settleEntry(ctx context.Context, escrowID string, registered, forced bool) settleOutcome {
@@ -166,43 +108,4 @@ func (s *Server) settleEntry(ctx context.Context, escrowID string, registered, f
 
 func settleRefused(escrowID string, err error) settleOutcome {
 	return settleOutcome{EscrowID: escrowID, Status: statusForError(err), Error: err.Error()}
-}
-
-// refuseBatch names what makes a list unanswerable, or returns "" for one a batch route can take.
-func refuseBatch(escrowIDs []string, batchSize int) string {
-	switch {
-	case len(escrowIDs) == 0:
-		return "escrow_ids is required"
-	case len(escrowIDs) > settleBatchLimit:
-		return fmt.Sprintf("escrow_ids holds %d escrows; at most %d are taken in one call", len(escrowIDs), settleBatchLimit)
-	case batchSize < 0 || batchSize > maxSettleBatchSize:
-		return fmt.Sprintf("batch_size must be at most %d, or omitted for %d", maxSettleBatchSize, defaultSettleBatchSize)
-	}
-	return ""
-}
-
-func distinctEscrowIDs(escrowIDs []string) []string {
-	seen := make(map[string]bool, len(escrowIDs))
-	distinct := make([]string, 0, len(escrowIDs))
-	for _, escrowID := range escrowIDs {
-		escrowID = strings.TrimSpace(escrowID)
-		if escrowID == "" || seen[escrowID] {
-			continue
-		}
-		seen[escrowID] = true
-		distinct = append(distinct, escrowID)
-	}
-	return distinct
-}
-
-func (s *Server) registeredDevshards(r *http.Request) (map[string]bool, error) {
-	records, err := s.control.ListDevshards(r.Context())
-	if err != nil {
-		return nil, err
-	}
-	registered := make(map[string]bool, len(records))
-	for _, record := range records {
-		registered[record.EscrowID] = true
-	}
-	return registered, nil
 }

@@ -180,15 +180,16 @@ func (f *fakeControl) LoadRotationStatuses(context.Context) ([]store.RotationSta
 }
 
 type fakeOperations struct {
-	mu       sync.Mutex
-	calls    []string
-	err      error
-	create   chain.CreateEscrowResult
-	settle   chain.SettleEscrowResult
-	onSettle func(escrowID string)
-	created  []CreateEscrowRequest
-	added    []AddDevshardRequest
-	imported []ImportDevshardRequest
+	mu          sync.Mutex
+	calls       []string
+	err         error
+	create      chain.CreateEscrowResult
+	settle      chain.SettleEscrowResult
+	onSettle    func(escrowID string)
+	created     []CreateEscrowRequest
+	added       []AddDevshardRequest
+	imported    []ImportDevshardRequest
+	deactivated []string
 }
 
 func (f *fakeOperations) record(name string) error {
@@ -203,6 +204,13 @@ func (f *fakeOperations) recordedCalls() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return slices.Clone(f.calls)
+}
+
+// deactivatedEscrows is sorted because a batch route deactivates from several goroutines in no fixed order.
+func (f *fakeOperations) deactivatedEscrows() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Sorted(slices.Values(f.deactivated))
 }
 
 func (f *fakeOperations) CreateEscrow(_ context.Context, request CreateEscrowRequest) (chain.CreateEscrowResult, error) {
@@ -226,8 +234,13 @@ func (f *fakeOperations) ImportDevshard(_ context.Context, request ImportDevshar
 	return f.record("import")
 }
 
-func (f *fakeOperations) Activate(context.Context, string) error   { return f.record("activate") }
-func (f *fakeOperations) Deactivate(context.Context, string) error { return f.record("deactivate") }
+func (f *fakeOperations) Activate(context.Context, string) error { return f.record("activate") }
+func (f *fakeOperations) Deactivate(_ context.Context, escrowID string) error {
+	f.mu.Lock()
+	f.deactivated = append(f.deactivated, escrowID)
+	f.mu.Unlock()
+	return f.record("deactivate")
+}
 
 func (f *fakeOperations) Settle(_ context.Context, escrowID string, _ bool) (chain.SettleEscrowResult, error) {
 	f.mu.Lock()

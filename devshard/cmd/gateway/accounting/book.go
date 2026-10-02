@@ -13,11 +13,12 @@ import (
 var ErrUnknownEscrow = errors.New("accounting: unknown escrow")
 
 type Book struct {
-	mu        sync.RWMutex
-	escrows   map[string]*escrowLedger
-	unsaved   map[string]struct{}
-	updatedAt time.Time
-	now       func() time.Time
+	mu            sync.RWMutex
+	escrows       map[string]*escrowLedger
+	unsaved       map[string]struct{}
+	replaceStored bool
+	updatedAt     time.Time
+	now           func() time.Time
 }
 
 type escrowLedger struct {
@@ -302,7 +303,7 @@ func (b *Book) withEscrow(escrowID string, apply func(*escrowLedger) error) erro
 	if !known {
 		return fmt.Errorf("%w: %s", ErrUnknownEscrow, escrowID)
 	}
-	b.unsaved[escrowID] = struct{}{}
+	b.markUnsavedLocked(escrowID)
 	if err := apply(escrow); err != nil {
 		return err
 	}
@@ -310,9 +311,12 @@ func (b *Book) withEscrow(escrowID string, apply func(*escrowLedger) error) erro
 	return nil
 }
 
-// touchLocked also marks the escrow for the next save, which writes only the escrows marked since the last one.
 func (b *Book) touchLocked(escrowID string) {
 	b.updatedAt = b.now().UTC()
+	b.markUnsavedLocked(escrowID)
+}
+
+func (b *Book) markUnsavedLocked(escrowID string) {
 	b.unsaved[escrowID] = struct{}{}
 }
 

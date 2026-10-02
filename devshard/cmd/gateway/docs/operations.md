@@ -413,14 +413,14 @@ curl -sS -N -X POST "$GATEWAY/v1/admin/devshards/settle" \
   -d '{"escrow_ids": ["93033", "93040"], "batch_size": 8, "force": true}' | jq -c
 ```
 
-- **`batch_size` at a time, four by default, sixteen at most.** Building a settlement asks every host in the escrow's group for its signature, so an unbounded batch is an unbounded fan-out onto the same hosts (`api/admin_settle.go`, `defaultSettleBatchSize`, `maxSettleBatchSize`).
-- **At most fifty per call.** The batch runs on the caller's context, so a list long enough to outlive the operator's patience would be cancelled halfway, with transactions already broadcast (`settleBatchLimit`).
+- **`batch_size` at a time, four by default, sixteen at most.** Building a settlement asks every host in the escrow's group for its signature, so an unbounded batch is an unbounded fan-out onto the same hosts (`api/admin_batch.go`, `defaultBatchSize`, `maxBatchSize`).
+- **At most fifty per call.** The batch runs on the caller's context, so a list long enough to outlive the operator's patience would be cancelled halfway, with transactions already broadcast (`batchEscrowLimit`).
 
 ## Deactivating a list of escrows
 
 `POST /v1/admin/devshards/deactivate` with the body `{"escrow_ids": ["93033", "93040"], "batch_size": 8}` deactivates each escrow the way `/v1/admin/devshards/{id}/deactivate` does: routing stops first, then the row goes inactive. A repeated id is deactivated once, and an id the gateway has no row for answers `404` on its own line.
 
-The answer has the shape of the settle batch: `200` NDJSON with one line per escrow in finishing order (`{"escrow_id": "93033"}`, or its `status` and `error`), then `{"deactivated": N, "failed": M}`. The same limits apply — `batch_size` four by default and sixteen at most, fifty ids per call — and a list it refuses outright answers a plain `400` (`api/admin_deactivate.go`).
+The answer has the shape of the settle batch: `200` NDJSON with one line per escrow in finishing order (`{"escrow_id": "93033"}`, or its `status` and `error`), then `{"deactivated": N, "failed": M}`. The same limits apply — `batch_size` four by default and sixteen at most, fifty ids per call — and a list it refuses outright answers a plain `400` (`api/admin_batch.go`, `admitBatch`).
 
 ```bash
 curl -sS -N -X POST "$GATEWAY/v1/admin/devshards/deactivate" \
@@ -429,37 +429,3 @@ curl -sS -N -X POST "$GATEWAY/v1/admin/devshards/deactivate" \
 ```
 
 A deactivation does not wait on the nonce ledger: the escrow's last reading is taken in memory and the ledger's own goroutine writes it out (`accounting.Service.RequestFlush`). What it can still wait on is the escrow's last diff to its hosts, up to five seconds when the escrow holds gossiped transactions no request composed (`registry/retirement_flush.go`).
-
-
-## Load simulation
-
-`loadsim_test.go` runs the gateway exactly as `run()` composes it — engine, scheduler, nonce ledger and its sweep, journal, metrics — against escrows served by real `host.Host` instances living in the same process, and drives streaming chat traffic at it while it profiles. It is behind the `loadsim` build tag, so `go test ./...` and CI never run it: it is a measurement, and it loads the machine it runs on.
-
-```bash
-LOADSIM_ESCROWS=8 LOADSIM_RPS=30 LOADSIM_DURATION=60s LOADSIM_PROFILE_DIR=/tmp/loadsim \
-  go test -tags loadsim -run TestLoadSimulation -count=1 -timeout 10m -v ./cmd/gateway
-go tool pprof -top -cum -nodecount=40 /tmp/loadsim/cpu.pprof
-```
-
-| Variable | Default | What it sets |
-| --- | --- | --- |
-| `LOADSIM_ESCROWS` | 4 | escrows published at boot, one in-process group each |
-| `LOADSIM_GROUP_SIZE` | 4 | hosts per escrow |
-| `LOADSIM_RPS` | 30 | requests per second, sent whatever the gateway answers (about 2.6 million a day) |
-| `LOADSIM_WARMUP` | 5s | traffic before measuring, so the scheduler and the ledger reach steady state |
-| `LOADSIM_DURATION` | 30s | the measured window |
-| `LOADSIM_INFERENCE_LATENCY` | 2s | how long each host takes to answer, which is what fills the in-flight windows |
-| `LOADSIM_MAX_IN_FLIGHT` | 512 | requests open at once; an arrival past it is counted as shed, not sent |
-| `LOADSIM_REPORT_EVERY` | 1m | how often the run logs the last interval's cost beside the escrows' mean live-inference count |
-| `LOADSIM_PROFILE_DIR` | a temporary directory | where `cpu`, `mutex`, `block` and `heap` profiles land |
-
-The run reports answered requests and their statuses, latency quantiles, process CPU and allocations per answered request, and the GC cycles of the window. Every `LOADSIM_REPORT_EVERY` it also logs the interval's own cost next to the mean number of live (unsealed) inferences per escrow, which is what shows a cost growing with the window: give fewer escrows the same rate and let it run, and the window reaches a production size sooner.
-
-What it does not measure:
-
-- **Hosts and gateway share one process.** Their CPU lands in one profile, told apart by package: `devshard/host`, and the host side of `devshard/state`, are the hosts; `cmd/gateway/...` and `devshard/user` are the gateway. The host-side transport is not there at all — `user.InProcessClient` calls the host directly, so HTTP to the hosts, TLS and signature transport cost nothing here.
-- **No GPU.** The hosts answer from `stub` after a fixed delay.
-- **No heartbeat.** A height-sync turn needs a height, and the only source is the anchors hosts return through the HTTP transport, which `InProcessClient` skips: started here, every turn is skipped with `cause=no_height`. The loop is therefore not started, and heartbeat cost has to be read off a stand whose hosts carry height sync.
-- **The chain is a fake.** Epoch and participants come back empty, so weights, PoC phases, escrow creation and settlement transactions never run, and an escrow that depletes cannot be replaced. Each escrow is funded far beyond any run.
-- **A few timeout votes come up short.** A handful of speculative nonces per run end `vote_weight_short`, and the races owing those votes outlive the ten-second shutdown grace, so the run usually ends with `serve()` reporting abandoned races. The test logs it rather than failing: it happens after the measured window.
-- **Every reply logs a "not cached" warning.** `InProcessClient` streams without a `finish_reason`, so the reply cache refuses it as unfinished. Prompts are unique per request, so nothing would be served from the cache either way.

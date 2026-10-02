@@ -38,21 +38,20 @@ import (
 
 const (
 	loadSimulationModel = "loadsim-model"
-	// loadSimulationEpoch names the escrows' epoch, without which the nonce ledger opens none of them.
 	loadSimulationEpoch = 41
 )
 
-// loadSimulationSettings are the knobs of one run, read from LOADSIM_* variables. See docs/operations.md, "Load simulation".
+// loadSimulationSettings are the knobs of one run, read from LOADSIM_* variables. See CONTRIBUTING.md, "Load simulation".
 type loadSimulationSettings struct {
-	escrows          int
-	groupSize        int
-	requestsPerSec   int
-	warmup           time.Duration
-	duration         time.Duration
-	inferenceLatency time.Duration
-	maxInFlight      int
-	reportEvery      time.Duration
-	profileDir       string
+	escrows           int
+	groupSize         int
+	requestsPerSecond int
+	warmup            time.Duration
+	duration          time.Duration
+	inferenceLatency  time.Duration
+	maxInFlight       int
+	reportEvery       time.Duration
+	profileDir        string
 }
 
 func loadSimulationSettingsFromEnv(t *testing.T) loadSimulationSettings {
@@ -79,17 +78,21 @@ func loadSimulationSettingsFromEnv(t *testing.T) loadSimulationSettings {
 		}
 		return value
 	}
-	return loadSimulationSettings{
-		escrows:          readInt("LOADSIM_ESCROWS", 4),
-		groupSize:        readInt("LOADSIM_GROUP_SIZE", 4),
-		requestsPerSec:   readInt("LOADSIM_RPS", 30),
-		warmup:           readDuration("LOADSIM_WARMUP", 5*time.Second),
-		duration:         readDuration("LOADSIM_DURATION", 30*time.Second),
-		inferenceLatency: readDuration("LOADSIM_INFERENCE_LATENCY", 2*time.Second),
-		maxInFlight:      readInt("LOADSIM_MAX_IN_FLIGHT", 512),
-		reportEvery:      readDuration("LOADSIM_REPORT_EVERY", time.Minute),
-		profileDir:       os.Getenv("LOADSIM_PROFILE_DIR"),
+	settings := loadSimulationSettings{
+		escrows:           readInt("LOADSIM_ESCROWS", 4),
+		groupSize:         readInt("LOADSIM_GROUP_SIZE", 4),
+		requestsPerSecond: readInt("LOADSIM_RPS", 30),
+		warmup:            readDuration("LOADSIM_WARMUP", 5*time.Second),
+		duration:          readDuration("LOADSIM_DURATION", 30*time.Second),
+		inferenceLatency:  readDuration("LOADSIM_INFERENCE_LATENCY", 2*time.Second),
+		maxInFlight:       readInt("LOADSIM_MAX_IN_FLIGHT", 512),
+		reportEvery:       readDuration("LOADSIM_REPORT_EVERY", time.Minute),
+		profileDir:        os.Getenv("LOADSIM_PROFILE_DIR"),
 	}
+	if settings.reportEvery <= 0 {
+		t.Fatalf("LOADSIM_REPORT_EVERY=%s must be positive", settings.reportEvery)
+	}
+	return settings
 }
 
 // delayedEngine answers like the stub after a fixed latency, so in-flight windows fill the way real inferences fill them.
@@ -201,7 +204,7 @@ func (o *trafficOutcome) record(latency time.Duration, status int, failure error
 // driveTraffic sends requests at a fixed rate whatever the gateway answers, the way clients do, and sheds past maxInFlight.
 func driveTraffic(ctx context.Context, client *http.Client, baseURL string, settings loadSimulationSettings, window time.Duration, outcome *trafficOutcome) {
 	inFlight := make(chan struct{}, settings.maxInFlight)
-	ticker := time.NewTicker(time.Second / time.Duration(settings.requestsPerSec))
+	ticker := time.NewTicker(time.Second / time.Duration(settings.requestsPerSecond))
 	defer ticker.Stop()
 	deadline := time.After(window)
 	var requests sync.WaitGroup
@@ -222,7 +225,6 @@ func driveTraffic(ctx context.Context, client *http.Client, baseURL string, sett
 			outcome.mu.Unlock()
 			continue
 		}
-		// A distinct prompt per request keeps every one a cache miss that races, as unique client traffic does.
 		body := fmt.Sprintf(`{"model":%q,"stream":true,"max_tokens":64,"messages":[{"role":"user","content":"load simulation %d"}]}`,
 			loadSimulationModel, sequence)
 		requests.Go(func() {
@@ -254,14 +256,24 @@ func driveTraffic(ctx context.Context, client *http.Client, baseURL string, sett
 func reportIntervals(ctx context.Context, t *testing.T, every time.Duration, outcome *trafficOutcome, fleet *inProcessFleet) {
 	ticker := time.NewTicker(every)
 	defer ticker.Stop()
-	previous, previousAnswered, started := readRuntime(), 0, time.Now()
+	previous, err := readRuntime()
+	if err != nil {
+		t.Errorf("readRuntime() = %v, want nil", err)
+		return
+	}
+	previousAnswered, started := 0, time.Now()
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
 		}
-		current, answered := readRuntime(), outcome.answered()
+		current, err := readRuntime()
+		if err != nil {
+			t.Errorf("readRuntime() = %v, want nil", err)
+			return
+		}
+		answered := outcome.answered()
 		requests := float64(max(answered-previousAnswered, 1))
 		cpuSeconds := (current.processCPU - previous.processCPU).Seconds()
 		t.Logf("at %s: %d live inferences per escrow, %d answered, cpu %.1f%% of one core, %.2f ms cpu and %.0f KB allocated per answered request, gc %.2f s",
@@ -281,7 +293,7 @@ type runtimeReading struct {
 	goroutines     uint64
 }
 
-func readRuntime() runtimeReading {
+func readRuntime() (runtimeReading, error) {
 	samples := []metrics.Sample{
 		{Name: "/cpu/classes/gc/total:cpu-seconds"},
 		{Name: "/gc/heap/allocs:bytes"},
@@ -291,7 +303,7 @@ func readRuntime() runtimeReading {
 	metrics.Read(samples)
 	var usage syscall.Rusage
 	if err := syscall.Getrusage(syscall.RUSAGE_SELF, &usage); err != nil {
-		panic(fmt.Sprintf("getrusage: %v", err))
+		return runtimeReading{}, fmt.Errorf("getrusage: %w", err)
 	}
 	return runtimeReading{
 		processCPU:     time.Duration(usage.Utime.Nano() + usage.Stime.Nano()),
@@ -299,7 +311,7 @@ func readRuntime() runtimeReading {
 		allocatedBytes: samples[1].Value.Uint64(),
 		gcCycles:       samples[2].Value.Uint64(),
 		goroutines:     samples[3].Value.Uint64(),
-	}
+	}, nil
 }
 
 func quantile(sorted []time.Duration, fraction float64) time.Duration {
@@ -315,8 +327,7 @@ func writeProfile(t *testing.T, directory, name string) {
 	if err != nil {
 		t.Fatalf("creating the %s profile: %v", name, err)
 	}
-	defer file.Close()
-	if err := pprof.Lookup(name).WriteTo(file, 0); err != nil {
+	if err := errors.Join(pprof.Lookup(name).WriteTo(file, 0), file.Close()); err != nil {
 		t.Fatalf("writing the %s profile: %v", name, err)
 	}
 }
@@ -417,6 +428,10 @@ func TestLoadSimulation(t *testing.T) {
 	}
 	runtime.SetMutexProfileFraction(5)
 	runtime.SetBlockProfileRate(int(10 * time.Microsecond))
+	t.Cleanup(func() {
+		runtime.SetMutexProfileFraction(0)
+		runtime.SetBlockProfileRate(0)
+	})
 	cpuProfile, err := os.Create(filepath.Join(profileDir, "cpu.pprof"))
 	if err != nil {
 		t.Fatalf("creating the cpu profile: %v", err)
@@ -424,7 +439,12 @@ func TestLoadSimulation(t *testing.T) {
 	if err := pprof.StartCPUProfile(cpuProfile); err != nil {
 		t.Fatalf("StartCPUProfile() = %v, want nil", err)
 	}
-	before, started := readRuntime(), time.Now()
+	t.Cleanup(pprof.StopCPUProfile)
+	before, err := readRuntime()
+	if err != nil {
+		t.Fatalf("readRuntime() = %v, want nil", err)
+	}
+	started := time.Now()
 	measured := newTrafficOutcome()
 	reporting, stopReporting := context.WithCancel(t.Context())
 	var reporter sync.WaitGroup
@@ -432,7 +452,11 @@ func TestLoadSimulation(t *testing.T) {
 	driveTraffic(t.Context(), client, baseURL, settings, settings.duration, measured)
 	stopReporting()
 	reporter.Wait()
-	elapsed, after := time.Since(started), readRuntime()
+	elapsed := time.Since(started)
+	after, err := readRuntime()
+	if err != nil {
+		t.Fatalf("readRuntime() = %v, want nil", err)
+	}
 	pprof.StopCPUProfile()
 	if err := cpuProfile.Close(); err != nil {
 		t.Fatalf("closing the cpu profile: %v", err)
@@ -440,8 +464,6 @@ func TestLoadSimulation(t *testing.T) {
 	writeProfile(t, profileDir, "mutex")
 	writeProfile(t, profileDir, "block")
 	writeProfile(t, profileDir, "heap")
-	runtime.SetMutexProfileFraction(0)
-	runtime.SetBlockProfileRate(0)
 
 	slices.Sort(measured.latencies)
 	answered := len(measured.latencies)
@@ -453,7 +475,7 @@ func TestLoadSimulation(t *testing.T) {
 		return total / float64(answered)
 	}
 	t.Logf("window %s at %d rps: %d answered 200, statuses %v, errors %v, shed %d",
-		elapsed.Round(time.Millisecond), settings.requestsPerSec, answered, measured.statuses, measured.errors, measured.shed)
+		elapsed.Round(time.Millisecond), settings.requestsPerSecond, answered, measured.statuses, measured.errors, measured.shed)
 	t.Logf("latency p50 %s, p90 %s, p99 %s, max %s",
 		quantile(measured.latencies, 0.50), quantile(measured.latencies, 0.90),
 		quantile(measured.latencies, 0.99), quantile(measured.latencies, 1))

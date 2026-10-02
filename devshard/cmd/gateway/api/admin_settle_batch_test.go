@@ -229,7 +229,7 @@ func TestABatchSettlesItsEscrowsAtTheSameTime(t *testing.T) {
 // Test flow:
 //  1. Register 6 devshards and wire the same concurrency-tracking barrier.
 //  2. POST a batch settle naming all 6 escrows.
-//  3. Assert the response is 200 and the peak in-flight count never exceeded `defaultSettleBatchSize`.
+//  3. Assert the response is 200 and the peak in-flight count never exceeded `defaultBatchSize`.
 //  4. Assert all 6 escrows were reported settled, so the pool queues the rest rather than dropping them.
 func TestABatchKeepsItsSettlementsWithinThePool(t *testing.T) {
 	live := newHarness(t)
@@ -244,8 +244,8 @@ func TestABatchKeepsItsSettlementsWithinThePool(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("status: got %d (%s), want 200", response.Code, response.Body.String())
 	}
-	if peak := barrier.peakInFlight(); peak > defaultSettleBatchSize {
-		t.Fatalf("settles in flight at once: got %d, want at most %d", peak, defaultSettleBatchSize)
+	if peak := barrier.peakInFlight(); peak > defaultBatchSize {
+		t.Fatalf("settles in flight at once: got %d, want at most %d", peak, defaultBatchSize)
 	}
 	if answer := decodeBatchSettle(t, response.Body.Bytes()); answer.Settled != len(escrowIDs) {
 		t.Fatalf("settled: got %d, want %d -- the pool must queue the rest, not drop them", answer.Settled, len(escrowIDs))
@@ -315,13 +315,13 @@ func TestABatchSettlesARepeatedEscrowOnce(t *testing.T) {
 }
 
 // Test flow:
-//  1. Build an oversized escrow-ID list one entry past `settleBatchLimit`.
-//  2. Define a table of request bodies, varying across no body at all, an empty list, blanks only, the oversized list, and a batch size outside 0..`maxSettleBatchSize`.
+//  1. Build an oversized escrow-ID list one entry past `batchEscrowLimit`.
+//  2. Define a table of request bodies, varying across no body at all, an empty list, blanks only, the oversized list, and a batch size outside 0..`maxBatchSize`.
 //  3. For each case, POST it to the batch settle route on a fresh harness.
 //  4. Assert the response is 400.
 //  5. Assert no "settle" call was recorded, so a refused list never reaches the settle path.
 func TestABatchRefusesAListItCannotAnswerFor(t *testing.T) {
-	oversized := make([]string, settleBatchLimit+1)
+	oversized := make([]string, batchEscrowLimit+1)
 	for index := range oversized {
 		oversized[index] = strconv.Itoa(index)
 	}
@@ -337,7 +337,7 @@ func TestABatchRefusesAListItCannotAnswerFor(t *testing.T) {
 		{name: "an empty list", body: `{"escrow_ids":[]}`},
 		{name: "blanks only", body: `{"escrow_ids":["  "]}`},
 		{name: "more escrows than one call settles", body: string(oversizedBody)},
-		{name: "a batch size past the ceiling", body: `{"escrow_ids":["7"],"batch_size":` + strconv.Itoa(maxSettleBatchSize+1) + `}`},
+		{name: "a batch size past the ceiling", body: `{"escrow_ids":["7"],"batch_size":` + strconv.Itoa(maxBatchSize+1) + `}`},
 		{name: "a negative batch size", body: `{"escrow_ids":["7"],"batch_size":-1}`},
 	}
 	for _, testCase := range testCases {
@@ -451,14 +451,14 @@ func TestABatchAnswersBeforeItsFirstSettleEnds(t *testing.T) {
 
 // Test flow:
 //  1. Register escrow "7".
-//  2. POST a batch settle for it with `batch_size` at `maxSettleBatchSize`.
+//  2. POST a batch settle for it with `batch_size` at `maxBatchSize`.
 //  3. Assert the escrow was settled, so the ceiling itself is accepted.
 func TestABatchAcceptsTheLargestBatchSize(t *testing.T) {
 	live := newHarness(t)
 	live.control.devshards = registeredDevshardRows("7")
 
 	response := live.request(t, http.MethodPost, "/v1/admin/devshards/settle",
-		`{"escrow_ids":["7"],"batch_size":`+strconv.Itoa(maxSettleBatchSize)+`}`, adminHeaders())
+		`{"escrow_ids":["7"],"batch_size":`+strconv.Itoa(maxBatchSize)+`}`, adminHeaders())
 
 	if response.Code != http.StatusOK {
 		t.Fatalf("status: got %d (%s), want 200", response.Code, response.Body.String())

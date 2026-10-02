@@ -35,7 +35,6 @@ const (
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 )
 
-// rowWriters holds one prepared insert per table, so a save parses each insert once rather than once per row.
 type rowWriters struct {
 	escrow, slot, hostStats, slotActivity, money, counter, nonce *sql.Stmt
 }
@@ -47,13 +46,13 @@ func (s *Store) Save(ctx context.Context, book *Book) (err error) {
 	}
 	s.writing.Lock()
 	defer s.writing.Unlock()
-	snapshot, escrowIDs := book.takeUnsaved()
-	if len(escrowIDs) == 0 {
+	changes := book.takeUnsaved()
+	if changes.empty() {
 		return nil
 	}
 	defer func() {
 		if err != nil {
-			book.requeueUnsaved(escrowIDs)
+			book.requeueUnsaved(changes)
 		}
 	}()
 	transaction, err := s.db.BeginTx(ctx, nil)
@@ -89,24 +88,39 @@ func (s *Store) Save(ctx context.Context, book *Book) (err error) {
 	if _, err = transaction.ExecContext(ctx,
 		`INSERT OR REPLACE INTO accounting_meta (key, value) VALUES (?, ?), (?, ?)`,
 		metaSchemaVersion, strconv.Itoa(SchemaVersion),
-		metaUpdatedAt, snapshot.UpdatedAt.Format(time.RFC3339Nano),
+		metaUpdatedAt, changes.snapshot.UpdatedAt.Format(time.RFC3339Nano),
 	); err != nil {
 		return fmt.Errorf("writing accounting meta: %w", err)
 	}
-	for _, escrowID := range escrowIDs {
-		for _, table := range escrowTables {
-			if _, err = transaction.ExecContext(ctx, "DELETE FROM "+table+" WHERE escrow_id = ?", escrowID); err != nil {
-				return fmt.Errorf("clearing the stored rows of %s: %w", escrowID, err)
-			}
-		}
+	if err = clearStoredRows(ctx, transaction, changes); err != nil {
+		return err
 	}
-	for _, escrow := range snapshot.Escrows {
+	for _, escrow := range changes.snapshot.Escrows {
 		if err = writeEscrow(ctx, writers, escrow); err != nil {
 			return err
 		}
 	}
 	if err = transaction.Commit(); err != nil {
 		return fmt.Errorf("committing accounting write: %w", err)
+	}
+	return nil
+}
+
+func clearStoredRows(ctx context.Context, transaction *sql.Tx, changes unsavedChanges) error {
+	if changes.replaceStored {
+		for _, table := range escrowTables {
+			if _, err := transaction.ExecContext(ctx, "DELETE FROM "+table); err != nil {
+				return fmt.Errorf("clearing %s: %w", table, err)
+			}
+		}
+		return nil
+	}
+	for _, escrowID := range changes.escrowIDs {
+		for _, table := range escrowTables {
+			if _, err := transaction.ExecContext(ctx, "DELETE FROM "+table+" WHERE escrow_id = ?", escrowID); err != nil {
+				return fmt.Errorf("clearing the stored rows of %s: %w", escrowID, err)
+			}
+		}
 	}
 	return nil
 }

@@ -472,15 +472,14 @@ func heightSyncTraffic(tx *types.DevshardTx) bool {
 // localBestEffortLocked implements ApplyLocalBestEffort and the trial-apply core
 // of PreviewLocalBestEffort. It applies txs one by one (skipping non-mandatory
 // failures and log-plane-invalid height-sync txs) and, on success, leaves the
-// mutable state advanced to nonce. On any error it self-restores the mutable
-// state before returning. Caller must hold sm.mu. The preview/restore-on-success
-// and warm-key capture that persist-first needs are handled by the
-// PreviewLocalBestEffort wrapper.
-// localBestEffortLocked restores snap on every error path, so fee charging and root computation stay
-// atomic with respect to this nonce, matching applyCore semantics. The caller takes snap, so a preview
-// that already holds the pre-state copies the live window once rather than twice.
+// mutable state advanced to nonce. On any error it restores snap, the caller's
+// copy of the pre-state, so fee charging and root computation stay atomic with
+// respect to this nonce, matching applyCore semantics; taking snap from the
+// caller lets a preview that already holds the pre-state copy the live window
+// once. Caller must hold sm.mu. The preview/restore-on-success and warm-key
+// capture that persist-first needs are handled by the PreviewLocalBestEffort
+// wrapper.
 func (sm *StateMachine) localBestEffortLocked(nonce uint64, txs []*types.DevshardTx, snap mutableSnapshot) ([]byte, []*types.DevshardTx, error) {
-
 	expectedNonce := sm.state.LatestNonce + 1
 	if nonce != expectedNonce {
 		return nil, nil, fmt.Errorf("%w: expected %d, got %d", types.ErrInvalidNonce, expectedNonce, nonce)
@@ -1006,44 +1005,22 @@ type mutableSnapshot struct {
 }
 
 func (sm *StateMachine) snapshotMutable() mutableSnapshot {
-	infCopy := copyInferences(sm.state.Inferences)
-
-	hsCopy := make(map[uint32]*types.HostStats, len(sm.state.HostStats))
-	for k, v := range sm.state.HostStats {
-		cp := *v
-		hsCopy[k] = &cp
+	snap := sm.handOverMutable()
+	snap.Inferences = copyInferences(sm.state.Inferences)
+	snap.Committed = cloneCommittedInferenceEntries(sm.committedEntries)
+	snap.HostStats = make(map[uint32]*types.HostStats, len(sm.state.HostStats))
+	for slotID, stats := range sm.state.HostStats {
+		copied := *stats
+		snap.HostStats[slotID] = &copied
 	}
-
-	warmCopy := make(map[uint32]string, len(sm.state.WarmKeys))
-	maps.Copy(warmCopy, sm.state.WarmKeys)
-
-	sealedNoncesCopy := make(map[uint64]uint64, len(sm.sealedNonces))
-	maps.Copy(sealedNoncesCopy, sm.sealedNonces)
-
-	return mutableSnapshot{
-		Balance:                       sm.state.Balance,
-		Fees:                          sm.state.Fees,
-		Phase:                         sm.state.Phase,
-		FinalizeNonce:                 sm.state.FinalizeNonce,
-		LatestNonce:                   sm.state.LatestNonce,
-		Inferences:                    infCopy,
-		Committed:                     cloneCommittedInferenceEntries(sm.committedEntries),
-		HostStats:                     hsCopy,
-		WarmKeys:                      warmCopy,
-		SealedAcc:                     append([]byte(nil), sm.state.SealedAcc...),
-		SealedNonces:                  sealedNoncesCopy,
-		HeightSyncForcedStart:         sm.state.HeightSyncForcedStart,
-		HeightSyncForcedEnd:           sm.state.HeightSyncForcedEnd,
-		HeightSyncCadenceSwallowUntil: sm.state.HeightSyncCadenceSwallowUntil,
-		HeightSyncSwallowFe:           sm.state.HeightSyncSwallowFe,
-		HeightSyncTurnK:               sm.state.HeightSyncTurnK,
-		HeightSyncTurnSlots:           sm.state.HeightSyncTurnSlots,
-		HeightSyncTurnReason:          sm.state.HeightSyncTurnReason,
-		HeightSyncLastCompletedHeight: sm.state.HeightSyncLastCompletedHeight,
-		HeightSyncLatestTurnStart:     sm.state.HeightSyncLatestTurnStart,
-		turnTracker:                   sm.turnTracker.Clone(),
-		heightSyncFloor:               sm.heightSyncFloor.Clone(),
-	}
+	snap.WarmKeys = make(map[uint32]string, len(sm.state.WarmKeys))
+	maps.Copy(snap.WarmKeys, sm.state.WarmKeys)
+	snap.SealedAcc = append([]byte(nil), sm.state.SealedAcc...)
+	snap.SealedNonces = make(map[uint64]uint64, len(sm.sealedNonces))
+	maps.Copy(snap.SealedNonces, sm.sealedNonces)
+	snap.turnTracker = sm.turnTracker.Clone()
+	snap.heightSyncFloor = sm.heightSyncFloor.Clone()
+	return snap
 }
 
 // handOverMutable gives away the live mutable state by reference, without copying. Only for a caller
