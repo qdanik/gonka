@@ -83,7 +83,10 @@ func TestAPinnedEscrowIsRefusedWithoutBeingRetired(t *testing.T) {
 	}
 }
 
-const fullContextTokens = 180_000
+const (
+	fullContextTokens  = 180_000
+	fullContextReserve = 4 * fullContextTokens
+)
 
 // pinContextLength makes the operator pin modelA's context length, the way model_limits does.
 func pinContextLength(scheduler *Scheduler) {
@@ -94,7 +97,7 @@ func pinContextLength(scheduler *Scheduler) {
 }
 
 // Test flow:
-//  1. For each table case, build a `retirementHarness` funded for a capped answer but not for one full-context request, naming the context length by an operator pin or by the chain's --max-model-len.
+//  1. For each table case, build a `retirementHarness` funded for the model's context length in tokens but not in prompt bytes, naming the context length by an operator pin or by the chain's --max-model-len.
 //  2. Pick an escrow for a small request.
 //  3. Assert the pick fails with `types.ErrInsufficientBalance` and the escrow is reported exhausted with `ExhaustionBalanceFloor`.
 func TestAnEscrowThatCannotAffordItsModelsFloorIsRetired(t *testing.T) {
@@ -110,7 +113,7 @@ func TestAnEscrowThatCannotAffordItsModelsFloorIsRetired(t *testing.T) {
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
-			scheduler, reported := retirementHarness(t, 100_000)
+			scheduler, reported := retirementHarness(t, 200_000)
 			if testCase.pinned {
 				pinContextLength(scheduler)
 			}
@@ -157,7 +160,7 @@ func TestABusyEscrowThatCoversItsModelsFloorOnceStaysInService(t *testing.T) {
 // Test flow:
 //  1. Build a `retirementHarness` whose model the operator pins at 180 000 tokens.
 //  2. Ask for the resume floor of 32 answers.
-//  3. Assert it is the model's floor plus 31 capped answers: the same headroom over the floor an unpinned model gets.
+//  3. Assert it is the model's floor in prompt bytes plus 31 capped answers: the same headroom over the floor an unpinned model gets.
 func TestTheResumeFloorClearsTheModelsFloorByTheSameHeadroom(t *testing.T) {
 	t.Parallel()
 	scheduler, _ := retirementHarness(t, 100_000)
@@ -166,7 +169,7 @@ func TestTheResumeFloorClearsTheModelsFloorByTheSameHeadroom(t *testing.T) {
 
 	floor, priced := scheduler.ResumeFloor(scheduler.escrows.Candidates(modelA)[0], 32)
 
-	if want := uint64(fullContextTokens + 31*4_096); !priced || floor != want {
+	if want := uint64(fullContextReserve + 31*4_096); !priced || floor != want {
 		t.Fatalf("ResumeFloor(32) = %d, %v, want %d priced", floor, priced, want)
 	}
 }
@@ -182,8 +185,8 @@ func TestAHeldEscrowResumesOnlyPastItsModelsFloorAndHeadroom(t *testing.T) {
 		balance uint64
 		ready   bool
 	}{
-		{name: "above_the_floor_short_of_the_headroom", balance: 200_000},
-		{name: "past_the_floor_and_the_headroom", balance: 400_000, ready: true},
+		{name: "above_the_floor_short_of_the_headroom", balance: 800_000},
+		{name: "past_the_floor_and_the_headroom", balance: 900_000, ready: true},
 	}
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -196,6 +199,67 @@ func TestAHeldEscrowResumesOnlyPastItsModelsFloorAndHeadroom(t *testing.T) {
 
 			if ready != testCase.ready || nonceSpent {
 				t.Fatalf("ResumeReadiness(32) = %v, %v; want %v, false", ready, nonceSpent, testCase.ready)
+			}
+		})
+	}
+}
+
+// Test flow:
+//  1. For each table case, build a `retirementHarness` with the given balance, its model pinned at 180 000 tokens.
+//  2. Ask `Exhaustion` for the escrow without any request arriving.
+//  3. Assert an escrow short of one full-context request reads `ExhaustionBalanceFloor`, one that covers it reads nothing, and nothing is reported.
+func TestExhaustionPricesAnEscrowByItsModelsFloorWithoutARequest(t *testing.T) {
+	t.Parallel()
+	testCases := []struct {
+		name    string
+		balance uint64
+		want    ExhaustionReason
+	}{
+		{name: "short_of_one_full_context_request", balance: 200_000, want: ExhaustionBalanceFloor},
+		{name: "covers_one_full_context_request", balance: 800_000},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			scheduler, reported := retirementHarness(t, testCase.balance)
+			pinContextLength(scheduler)
+			scheduler.snapshots = &fakeSnapshots{}
+
+			if reason := scheduler.Exhaustion(scheduler.escrows.Candidates(modelA)[0]); reason != testCase.want {
+				t.Fatalf("Exhaustion = %q, want %q", reason, testCase.want)
+			}
+			if len(*reported) != 0 {
+				t.Fatalf("reported = %v, want nothing: Exhaustion only reads, the caller decides", *reported)
+			}
+		})
+	}
+}
+
+// Test flow:
+//  1. Build a funded escrow whose cursor sits at the fallback nonce ceiling.
+//  2. Ask `Exhaustion` before governance `max_nonce` is known, then with a known cap below the cursor.
+//  3. Assert the fallback ceiling reads nothing, since it is not the hosts' cap, and the known cap reads `ExhaustionNonceCap`.
+func TestExhaustionReportsTheHostsNonceCapButNotTheFallbackCeiling(t *testing.T) {
+	t.Parallel()
+	testCases := []struct {
+		name     string
+		maxNonce uint64
+		want     ExhaustionReason
+	}{
+		{name: "max_nonce_unknown", want: ""},
+		{name: "max_nonce_known", maxNonce: 1_000, want: ExhaustionNonceCap},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			scheduler, _, _ := newScheduler(candidate{id: "worn", weight: 100, latestNonce: fallbackNonceCeiling, balance: 1 << 30, tokenPrice: 1})
+			settings := config.Defaults()
+			settings.Limits.MaxTokensCap = 16
+			scheduler.settings = config.NewHolder(&settings)
+			scheduler.snapshots = &fakeSnapshots{snapshot: chain.PhaseSnapshot{MaxNonce: testCase.maxNonce}}
+
+			if reason := scheduler.Exhaustion(scheduler.escrows.Candidates(modelA)[0]); reason != testCase.want {
+				t.Fatalf("Exhaustion = %q, want %q", reason, testCase.want)
 			}
 		})
 	}

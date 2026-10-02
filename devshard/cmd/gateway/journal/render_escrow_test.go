@@ -174,6 +174,13 @@ func TestEscrowLifecycleTransitionsRenderTheLinesTheirProducersNarrate(t *testin
 			}},
 		},
 		{
+			name:    "a create is refused for an amount below the model's floor",
+			produce: func(events *Journal) { events.EscrowCreateBelowFloor("qwen", "regular", 1000, 180010) },
+			want: logcapture.Entry{Level: "warn", Msg: "escrow create refused: amount below the model's floor", Fields: []any{
+				"model", "qwen", "role", "regular", "have", uint64(1000), "need", uint64(180010),
+			}},
+		},
+		{
 			name:    "a reserve escrow is taken",
 			produce: func(events *Journal) { events.EscrowReserveTaken("1") },
 			want:    logcapture.Entry{Level: "info", Msg: "reserve escrow taken", Fields: []any{"escrow", "1"}},

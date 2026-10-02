@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"devshard/cmd/gateway/chain"
+	"devshard/cmd/gateway/scheduler"
 	"devshard/cmd/gateway/store"
 	"devshard/signing"
 )
@@ -76,11 +77,17 @@ type HoldGate interface {
 	ReservationsReturnBy(escrowID string) (returnBy time.Time, bounded bool)
 }
 
+// ExhaustionProbe names the reason routing would retire an escrow on, empty while it may still be picked. See README.md, "Replacing a depleted escrow".
+type ExhaustionProbe interface {
+	Exhaustion(escrowID string) scheduler.ExhaustionReason
+}
+
 // lifecycleNarrator is satisfied by *journal.Journal; each method names one transition an operator reads the log for. See README.md, "What this package expects of others".
 type lifecycleNarrator interface {
 	EscrowCreated(escrowID, model, role string, epoch uint64, txHash string)
 	EscrowRecovered(escrowID, model, role string, epoch uint64, txHash string)
 	EscrowCreateUnderfunded(model, role string, have, need uint64)
+	EscrowCreateBelowFloor(model, role string, amount, floor uint64)
 	EscrowReserveTaken(escrowID string)
 	CommitmentCleared(txHash, model, role string, epoch uint64, reason string)
 	EscrowGoneFromChain(escrowID string)

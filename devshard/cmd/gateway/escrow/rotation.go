@@ -40,8 +40,8 @@ func (m *Manager) fillToTargets(ctx context.Context, role string, models []Model
 			if fill.err != nil || fill.created >= fill.wanted {
 				continue
 			}
-			if _, err := m.createEscrow(ctx, fill.model, role, snapshot.EpochIndex, snapshot.BlockHeight); err != nil {
-				if !errors.Is(err, chain.ErrWalletUnderfunded) {
+			if _, err := m.createEscrow(ctx, fill.model, role, snapshot); err != nil {
+				if !refusedBeforeBroadcast(err) {
 					m.breaker.recordFailure(fill.model.ModelID, role)
 				}
 				fill.err = err
@@ -99,7 +99,7 @@ func (m *Manager) prepareBridge(ctx context.Context, snapshot chain.PhaseSnapsho
 			if saveErr := m.saveRotationStatus(ctx, status); saveErr != nil {
 				errs = append(errs, saveErr)
 			}
-			if !errors.Is(err, chain.ErrWalletUnderfunded) {
+			if !refusedBeforeBroadcast(err) {
 				errs = append(errs, fmt.Errorf("prepare bridge for %s: %w", model.ModelID, err))
 			}
 			continue
@@ -145,7 +145,7 @@ func (m *Manager) finishBridge(ctx context.Context, snapshot chain.PhaseSnapshot
 			if saveErr := m.saveRotationStatus(ctx, status); saveErr != nil {
 				errs = append(errs, saveErr)
 			}
-			if !errors.Is(err, chain.ErrWalletUnderfunded) {
+			if !refusedBeforeBroadcast(err) {
 				errs = append(errs, fmt.Errorf("finish bridge for %s: %w", model.ModelID, err))
 			}
 			continue
@@ -197,6 +197,10 @@ func isActiveNonTemp(record store.DevshardRecord, modelID string) bool {
 // deferredRetire reports the outcomes that mean "not yet" rather than "failed"; anything else must reach the tick.
 func deferredRetire(err error) bool {
 	return errors.Is(err, ErrDevshardBusy) || errors.Is(err, ErrSettlementInFlight)
+}
+
+func refusedBeforeBroadcast(err error) bool {
+	return errors.Is(err, chain.ErrWalletUnderfunded) || errors.Is(err, ErrAmountBelowFloor)
 }
 
 // The prepareBridge degrade path: it relabels regulars in place, and keeps going past a write failure.

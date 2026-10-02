@@ -18,6 +18,7 @@ type Deps struct {
 	Snapshots   snapshotSource
 	Settlement  SettlementSource
 	Holds       HoldGate
+	Exhaustion  ExhaustionProbe
 	Timeouts    TimeoutSweeper
 	Sweeps      SweepRecorder
 	Narrator    lifecycleNarrator
@@ -53,6 +54,7 @@ func NewManager(d Deps) (*Manager, error) {
 		config:           d.Config,
 		settlementSource: d.Settlement,
 		holds:            d.Holds,
+		exhaustion:       d.Exhaustion,
 		timeoutSweeper:   d.Timeouts,
 		sweepRecorder:    d.Sweeps,
 		narrator:         d.Narrator,
@@ -156,6 +158,7 @@ func (m *Manager) tick(ctx context.Context) error {
 	models, modelsErr := rotationModels(configuration.Rotation)
 	resumedDevshards, holdErr := m.resumeHeld(ctx, snapshot, models, devshards)
 	promotedDevshards, promoteErr := m.promoteTakenReserves(ctx, resumedDevshards)
+	m.markSpent(promotedDevshards)
 	// An exhausted escrow must stop taking traffic whatever the toggle says; models is empty unless rotation can supply a replacement.
 	depletionErr := m.checkDepletion(ctx, snapshot, models, promotedDevshards)
 	lifecycleErr := errors.Join(reconcileErr, pendingErr, missingErr, modelsErr, holdErr, promoteErr, depletionErr)

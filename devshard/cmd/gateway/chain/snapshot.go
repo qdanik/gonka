@@ -72,7 +72,10 @@ type PhaseSnapshot struct {
 	PreservedByModel      map[string][]string
 	InferenceURLs         map[string]string
 
-	MaxNonce uint64
+	MaxNonce          uint64
+	TokenPrice        uint64
+	FeePerNonce       uint64
+	CreateDevshardFee uint64
 
 	Models map[string]ModelParams
 

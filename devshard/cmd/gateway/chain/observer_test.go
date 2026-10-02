@@ -27,6 +27,9 @@ type phaseObserverStub struct {
 	preservedErr       error
 	preservedHits      int
 	maxNonce           uint64
+	tokenPrice         uint64
+	feePerNonce        uint64
+	createDevshardFee  uint64
 	maxNonceHeld       bool
 	maxNonceErr        error
 	maxNonceHits       int
@@ -93,11 +96,11 @@ func (s *phaseObserverStub) Models(context.Context) (map[string]ModelParams, err
 	return s.models, s.modelsErr
 }
 
-func (s *phaseObserverStub) MaxNonce(context.Context) (uint64, bool, error) {
+func (s *phaseObserverStub) EscrowParams(context.Context) (EscrowParams, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.maxNonceHits++
-	return s.maxNonce, s.maxNonceHeld, s.maxNonceErr
+	return EscrowParams{MaxNonce: s.maxNonce, TokenPrice: s.tokenPrice, FeePerNonce: s.feePerNonce, CreateDevshardFee: s.createDevshardFee}, s.maxNonceHeld, s.maxNonceErr
 }
 
 func (s *phaseObserverStub) setPreservedNodes(snapshot *PreservedNodes, found bool, failure error) {
@@ -110,6 +113,12 @@ func (s *phaseObserverStub) setMaxNonceValue(value uint64, held bool, failure er
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.maxNonce, s.maxNonceHeld, s.maxNonceErr = value, held, failure
+}
+
+func (s *phaseObserverStub) setEscrowPrice(tokenPrice, feePerNonce, createDevshardFee uint64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.tokenPrice, s.feePerNonce, s.createDevshardFee = tokenPrice, feePerNonce, createDevshardFee
 }
 
 func (s *phaseObserverStub) setModels(models map[string]ModelParams, failure error) {
@@ -561,7 +570,7 @@ func TestPhaseObserver_CarriesEveryParticipantDerivedFieldForward(t *testing.T) 
 	}
 	phaseDerived := []string{
 		"BlockHeight", "EpochSwitchBlockHeight", "EpochIndex", "EpochPhase", "ConfirmationPoCPhase",
-		"RequestsBlocked", "BlockReason", "MaxNonce", "Models", "LastUpdatedAt", "LastError",
+		"RequestsBlocked", "BlockReason", "MaxNonce", "TokenPrice", "FeePerNonce", "CreateDevshardFee", "Models", "LastUpdatedAt", "LastError",
 	}
 
 	previous := PhaseSnapshot{
@@ -645,9 +654,9 @@ func TestPhaseObserver_ParticipantsFetchErrorKeepsPreviousWeightsWithLastError(t
 }
 
 // Test flow:
-//  1. Configure the stub with an epoch, one participant, and a max-nonce value from the chain reader.
+//  1. Configure the stub with an epoch, one participant, and a max-nonce value, token price, fee per nonce and create fee from the chain reader.
 //  2. Create an observer with the stub as its chain reader and refresh.
-//  3. Assert LastError is empty and MaxNonce reflects the chain's reported value.
+//  3. Assert LastError is empty and MaxNonce, TokenPrice, FeePerNonce and CreateDevshardFee reflect the chain's reported values.
 func TestPhaseObserver_DecodesMaxNonceFromDevshardEscrowParams(t *testing.T) {
 	stub := newPhaseObserverStub()
 	server := httptest.NewServer(stub.handler())
@@ -655,6 +664,7 @@ func TestPhaseObserver_DecodesMaxNonceFromDevshardEscrowParams(t *testing.T) {
 	stub.setEpoch(http.StatusOK, observerEpochJSON(42, 4, EpochPhaseInference))
 	stub.setParticipants(http.StatusOK, observerParticipantsJSON("gonka1abc", server.URL, 7))
 	stub.setMaxNonceValue(19_800, true, nil)
+	stub.setEscrowPrice(7, 3, 11)
 
 	observer := newPoCPhaseObserver(t, server, stub)
 	observer.refresh(context.Background())
@@ -665,6 +675,9 @@ func TestPhaseObserver_DecodesMaxNonceFromDevshardEscrowParams(t *testing.T) {
 	}
 	if snapshot.MaxNonce != 19_800 {
 		t.Errorf("MaxNonce = %d, want 19800", snapshot.MaxNonce)
+	}
+	if snapshot.TokenPrice != 7 || snapshot.FeePerNonce != 3 || snapshot.CreateDevshardFee != 11 {
+		t.Errorf("TokenPrice, FeePerNonce, CreateDevshardFee = %d, %d, %d; want 7, 3, 11", snapshot.TokenPrice, snapshot.FeePerNonce, snapshot.CreateDevshardFee)
 	}
 }
 
@@ -700,10 +713,10 @@ func TestPhaseObserver_MaxNonceZeroBeforeFirstSuccessfulFetch(t *testing.T) {
 }
 
 // Test flow:
-//  1. Refresh once against a stub reporting a max-nonce value and capture the snapshot as the known-good baseline.
+//  1. Refresh once against a stub reporting a max-nonce value and a price and capture the snapshot as the known-good baseline.
 //  2. Make the max-nonce read fail and refresh again.
 //  3. Assert LastError is now set while MaxNonce still holds the prior value.
-//  4. Clear LastError from the new snapshot and assert it otherwise equals the known-good baseline.
+//  4. Clear LastError from the new snapshot and assert it otherwise equals the known-good baseline, price included.
 func TestPhaseObserver_MaxNonceFetchErrorKeepsPriorValueAndRestOfSnapshot(t *testing.T) {
 	stub := newPhaseObserverStub()
 	server := httptest.NewServer(stub.handler())
@@ -711,6 +724,7 @@ func TestPhaseObserver_MaxNonceFetchErrorKeepsPriorValueAndRestOfSnapshot(t *tes
 	stub.setEpoch(http.StatusOK, observerEpochJSON(42, 4, EpochPhaseInference))
 	stub.setParticipants(http.StatusOK, observerParticipantsJSON("gonka1abc", server.URL, 7))
 	stub.setMaxNonceValue(19_800, true, nil)
+	stub.setEscrowPrice(7, 3, 11)
 
 	observer := newPoCPhaseObserver(t, server, stub)
 	observer.refresh(context.Background())

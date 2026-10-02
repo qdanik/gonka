@@ -835,8 +835,8 @@ func TestARequestIsPricedTheWayTheChainChargesIt(t *testing.T) {
 
 // Test flow:
 //  1. Build a scheduler configured with a max-tokens cap of 4096.
-//  2. Call its `retirementReserve` for a model the chain registers at 180 000 tokens, for one at 1 024, and for one it does not name.
-//  3. Assert the first is priced at its context length, the other two at the answer cap, reading nothing from any arriving request.
+//  2. Call its `retirementReserve` for a model the chain registers at 180 000 tokens, for one at 512, and for one it does not name.
+//  3. Assert the first is priced at its context length in prompt bytes, the other two at the answer cap, reading nothing from any arriving request.
 //  4. Assert an unconfigured scheduler's `retirementReserve` returns 0.
 func TestTheRetirementPriceIsTheModelsContextAndNeverLessThanOneCappedAnswer(t *testing.T) {
 	t.Parallel()
@@ -844,11 +844,11 @@ func TestTheRetirementPriceIsTheModelsContextAndNeverLessThanOneCappedAnswer(t *
 	settings.Limits.MaxTokensCap = 4_096
 	priced := &Scheduler{settings: config.NewHolder(&settings)}
 	snapshot := chain.PhaseSnapshot{Models: map[string]chain.ModelParams{
-		modelA: {MaxModelLen: fullContextTokens}, "short-model": {MaxModelLen: 1_024},
+		modelA: {MaxModelLen: fullContextTokens}, "short-model": {MaxModelLen: 512},
 	}}
 
-	if got := priced.retirementReserve(modelA, snapshot); got != fullContextTokens {
-		t.Fatalf("retirementReserve(%s) = %d, want the model's context length", modelA, got)
+	if got := priced.retirementReserve(modelA, snapshot); got != fullContextReserve {
+		t.Fatalf("retirementReserve(%s) = %d, want the model's context length in prompt bytes", modelA, got)
 	}
 	if got := priced.retirementReserve("short-model", snapshot); got != 4_096 {
 		t.Fatalf("retirementReserve(short-model) = %d, want the answer cap above a shorter context", got)
@@ -1242,5 +1242,64 @@ func TestARegularPastItsNonceCapOpensTheReserve(t *testing.T) {
 
 	if err != nil || picked.ID != "reserve" {
 		t.Fatalf("picked %q, err %v; want the reserve", picked.ID, err)
+	}
+}
+
+// Test flow:
+//  1. Build a thin escrow that affords one attempt of a 200-token request and scores best, beside a busier escrow that affords every attempt.
+//  2. Pick an escrow and assert the one that affords every attempt wins despite its score.
+//  3. Build the thin escrow alone, pick again, and assert it still serves.
+func TestPickPrefersAnEscrowThatAffordsEveryAttempt(t *testing.T) {
+	t.Parallel()
+	profile := RequestProfile{Model: modelA, InputBytes: 100, OutputTokens: 100}
+	thin := candidate{id: "thin", weight: 100, latestNonce: 1, balance: 300, tokenPrice: 1}
+	funded := candidate{id: "funded", activeUsers: 1, weight: 100, latestNonce: 1, balance: 1_000, tokenPrice: 1}
+
+	both, _, _ := newScheduler(thin, funded)
+	picked, err := pickWith(both, profile, chain.PhaseSnapshot{})
+	if err != nil || picked.ID != "funded" {
+		t.Fatalf("pickEscrow = %q, %v; want the escrow that affords every attempt", picked.ID, err)
+	}
+
+	alone, _, _ := newScheduler(thin)
+	picked, err = pickWith(alone, profile, chain.PhaseSnapshot{})
+	if err != nil || picked.ID != "thin" {
+		t.Fatalf("pickEscrow = %q, %v; want the thin escrow when nothing affords more", picked.ID, err)
+	}
+}
+
+// Test flow:
+//  1. Build an idle escrow that affords two attempts of a 200-token request beside a busier one that affords three.
+//  2. For each table case, set `engine_max_attempts_per_request` and pick an escrow.
+//  3. Assert the setting decides the funded tier: at 0 and 2 both qualify and the idle one wins on score, at 3 only the busier one qualifies.
+func TestPickFundsTheConfiguredAttempts(t *testing.T) {
+	t.Parallel()
+	testCases := []struct {
+		name     string
+		attempts int64
+		want     string
+	}{
+		{name: "unbounded_counts_two", attempts: 0, want: "twice"},
+		{name: "two_attempts", attempts: 2, want: "twice"},
+		{name: "three_attempts", attempts: 3, want: "thrice"},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			scheduler, _, _ := newScheduler(
+				candidate{id: "twice", weight: 100, latestNonce: 1, balance: 400, tokenPrice: 1},
+				candidate{id: "thrice", activeUsers: 1, weight: 100, latestNonce: 1, balance: 1_000, tokenPrice: 1},
+			)
+			settings := config.Defaults()
+			settings.Limits.MaxTokensCap = 16
+			settings.Engine.MaxAttemptsPerRequest = testCase.attempts
+			scheduler.settings = config.NewHolder(&settings)
+
+			picked, err := pickWith(scheduler, RequestProfile{Model: modelA, InputBytes: 100, OutputTokens: 100}, chain.PhaseSnapshot{})
+
+			if err != nil || picked.ID != testCase.want {
+				t.Fatalf("pickEscrow = %q, %v; want %q", picked.ID, err, testCase.want)
+			}
+		})
 	}
 }

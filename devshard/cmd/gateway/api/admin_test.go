@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"devshard/cmd/gateway/chain"
+	"devshard/cmd/gateway/escrow"
 	"devshard/cmd/gateway/internal/logcapture"
 	"devshard/cmd/gateway/store"
 )
@@ -333,5 +334,16 @@ func TestAnEscrowCreateTheWalletCannotPayForAnswersPaymentRequired(t *testing.T)
 	}
 	if !strings.Contains(response.Body.String(), "gonka1wallet holds 5") {
 		t.Fatalf("body %s does not name the wallet's shortfall", response.Body.String())
+	}
+}
+
+// Test flow:
+//  1. Map a create refused below the model's floor, wrapped the way `createEscrow` returns it, through `statusForError`.
+//  2. Assert it resolves to HTTP 400: the operator's amount is the bad input, not the chain.
+func TestACreateBelowTheModelsFloorIsAnsweredAsABadRequest(t *testing.T) {
+	refused := fmt.Errorf("creating escrow for model-a/regular: %w: amount 1000, floor 191000", escrow.ErrAmountBelowFloor)
+
+	if got := statusForError(refused); got != http.StatusBadRequest {
+		t.Errorf("status = %d, want %d", got, http.StatusBadRequest)
 	}
 }

@@ -52,7 +52,7 @@ stateDiagram-v2
 
 ## The tick
 
-`escrow/manager.go`, `tick`, every **15 s** (`TickInterval`), single-threaded per process. Order matters, and the first six steps run **whatever `rotation.enabled` says**:
+`escrow/manager.go`, `tick`, every **15 s** (`TickInterval`), single-threaded per process. Order matters, and the first eight steps run **whatever `rotation.enabled` says**:
 
 | # | Step | Runs regardless of the toggle because |
 | --- | --- | --- |
@@ -62,8 +62,9 @@ stateDiagram-v2
 | 4 | `sweepTimeouts` | a nonce the chain still settles is owed a vote whether or not rotation is on |
 | 5 | `resumeHeld` | every row on hold is re-synced into the registry, resumed or parked, before this tick's own depletion pass runs against it — whatever the toggle says |
 | 6 | `promoteTakenReserves` | a reserve a request took is already a regular in routing; its row follows before depletion counts the model |
-| 7 | `checkDepletion` | so must an empty one — only *creating its replacement* is rotation's business |
-| 8 | `prepareBridge`, or `finishBridge` then `ensureReserves` | rotation proper; skipped when the toggle is off |
+| 7 | `markSpent` | a serving escrow routing would retire must leave service whether or not a request reached it; it marks through `OnBalanceExhausted`, so `checkDepletion` holds or parks it by the same rules (`escrow/depletion.go`) |
+| 8 | `checkDepletion` | so must an empty one — only *creating its replacement* is rotation's business |
+| 9 | `prepareBridge`, or `finishBridge` then `ensureReserves` | rotation proper; skipped when the toggle is off |
 
 A taken reserve also wakes the tick at once rather than at the next 15 s (`escrow/reserve.go`, `OnReserveTaken`).
 
@@ -81,6 +82,8 @@ Every step returns its error into an `errors.Join`; one failing model or escrow 
 4. On the next tick, `reconcile` resolves every commitment.
 
 Before step 2 the chain client refuses a create the wallet cannot pay for — spendable `ngonka` below `amount` plus the fee — without writing a commitment or broadcasting (`chain/txclient.go`, `CreateEscrow`). The refusal does not open the create breaker and is narrated once per (model, role) until a create succeeds (`escrow/commitments.go`, `narrateUnderfunded`).
+
+Before the chain client is asked at all, the manager refuses a create whose `amount` cannot pay one full-context request of its model: the model's retirement floor (`config.Limits.RetirementReserve`, the context length as prompt bytes the scheduler retires an escrow below) times the chain's `token_price`, plus its `fee_per_nonce` (`scheduler.RequestCost`, the price routing retires an escrow below), plus the `create_devshard_fee` the chain takes out of the amount before the escrow's first balance — all three read from the devshard escrow params the observer polls (`escrow/commitments.go`, `creationFloor`). Such an escrow would be retired by the next tick's `markSpent` and replaced by another just as short, every tick, each round paying a create and a settle. The refusal is narrated once per (model, role) as `EscrowCreateBelowFloor` until a create succeeds, it opens no breaker, so raising `amount` takes effect on the next tick, and an operator's create answers 400. A price the observer has not read yet skips the check, and a product that overflows is refused.
 
 `reconcileOne` has exactly five outcomes:
 
@@ -119,7 +122,7 @@ Failures are recorded per model in `rotation_status` (`stage`, `epoch`, `create_
 
 ## Depletion
 
-A depleted escrow is worse than a dead one: its in-flight count is low precisely because every request fails, so the load score **prefers** it. `OnBalanceExhausted` marks it (no I/O — the request path never reaches the chain), and the next tick's `checkDepletion` acts, choosing one of two paths per marked escrow (`escrow/depletion.go`, `escrow/hold.go`):
+A depleted escrow is worse than a dead one: its in-flight count is low precisely because every request fails, so the load score **prefers** it. `OnBalanceExhausted` marks it (no I/O — the request path never reaches the chain). The tick's own `markSpent` marks a serving escrow routing would retire that no request reached. The next tick's `checkDepletion` acts, choosing one of two paths per marked escrow (`escrow/depletion.go`, `escrow/hold.go`):
 
 - **hold disabled, rotation off, or the model not replaceable** — `replaceDepleted` runs: the same park-then-replace path rotation always ran, described below.
 - **otherwise** — `holdOrPark` decides among four outcomes:
@@ -146,7 +149,7 @@ An escrow put on hold rather than parked stays a different lifecycle from here o
 
 ## The reserve
 
-Each model keeps `reserve_count` (default 1) full escrows in the `reserve` role that routing takes only when no regular escrow can pay for a request — the case a large prompt against evenly drained regulars hits, which depletion never catches because each regular still covers the retirement floor — the model's context length in tokens — while the chain charges the prompt by its bytes. A reserve is funded at the model's `amount` once the model has a serving non-reserve escrow, never across the proof-of-compute bridge, and after the tick's replacements; the first request that takes it turns it into a regular escrow, and the tick it wakes rewrites the row and funds the next reserve. A reserve does not count toward `target_count`; a promoted one does. A depleted reserve is parked with no replacement, and a reserve left over from an earlier epoch or past a lowered `reserve_count` is retired on the next tick outside the bridge. See [`escrow/README.md`](../escrow/README.md), "The reserve".
+Each model keeps `reserve_count` (default 1) full escrows in the `reserve` role that routing takes only when no regular escrow can pay for a request — the case a large prompt against evenly drained regulars hits, which depletion does not catch while each regular still covers the retirement floor — the model's context length as prompt bytes at four bytes per token — and a prompt runs denser in bytes than that estimate. A reserve is funded at the model's `amount` once the model has a serving non-reserve escrow, never across the proof-of-compute bridge, and after the tick's replacements; the first request that takes it turns it into a regular escrow, and the tick it wakes rewrites the row and funds the next reserve. A reserve does not count toward `target_count`; a promoted one does. A depleted reserve is parked with no replacement, and a reserve left over from an earlier epoch or past a lowered `reserve_count` is retired on the next tick outside the bridge. See [`escrow/README.md`](../escrow/README.md), "The reserve".
 
 ## Gone from chain
 

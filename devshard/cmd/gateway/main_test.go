@@ -86,7 +86,9 @@ func gatewayEnvironment(t *testing.T) {
 // chainWithoutADial is a chain.Reader that never dials, so no test here reaches a real node.
 type chainWithoutADial struct{}
 
-func (chainWithoutADial) MaxNonce(context.Context) (uint64, bool, error) { return 0, false, nil }
+func (chainWithoutADial) EscrowParams(context.Context) (chain.EscrowParams, bool, error) {
+	return chain.EscrowParams{}, false, nil
+}
 
 func (chainWithoutADial) Models(context.Context) (map[string]chain.ModelParams, error) {
 	return nil, nil
@@ -726,6 +728,34 @@ func TestTheHoldGateMovesTheRegistryFlag(t *testing.T) {
 	}
 }
 
+// Test flow:
+//  1. For each table case, build an escrowHolds gate over a registry holding one escrow: funded, with a balance of one, or with a balance of one in a finalizing session; or ask for an escrow the registry does not hold.
+//  2. Ask its Exhaustion for the escrow.
+//  3. Assert only the live escrow with a balance of one reads `balance_floor`: an unknown or finalizing escrow is not routing's to retire.
+func TestTheHoldGatePricesALiveEscrowByTheSchedulersFloor(t *testing.T) {
+	testCases := []struct {
+		name     string
+		session  registry.EscrowSession
+		escrowID string
+		want     scheduler.ExhaustionReason
+	}{
+		{name: "funded", session: weightlessSession{participants: []string{"validator-a"}}, escrowID: "escrow-1"},
+		{name: "balance_of_one", session: poorSession{weightlessSession{participants: []string{"validator-a"}}}, escrowID: "escrow-1", want: scheduler.ExhaustionBalanceFloor},
+		{name: "finalizing", session: finalizingPoorSession{poorSession{weightlessSession{participants: []string{"validator-a"}}}}, escrowID: "escrow-1"},
+		{name: "unknown", session: poorSession{weightlessSession{participants: []string{"validator-a"}}}, escrowID: "unknown"},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			escrows, router := composedRoutingOver(t, limits.NewCapacity(func(string, string) bool { return true }), testCase.session)
+			holds := escrowHolds{escrows: escrows, router: router}
+
+			if reason := holds.Exhaustion(testCase.escrowID); reason != testCase.want {
+				t.Fatalf("Exhaustion(%s) = %q, want %q", testCase.escrowID, reason, testCase.want)
+			}
+		})
+	}
+}
+
 func assertSame(t *testing.T, label string, got, want []string) {
 	t.Helper()
 	if len(got) != len(want) {
@@ -1244,6 +1274,10 @@ type weightlessSession struct{ participants []string }
 type poorSession struct{ weightlessSession }
 
 func (poorSession) Balance() uint64 { return 1 }
+
+type finalizingPoorSession struct{ poorSession }
+
+func (finalizingPoorSession) Phase() types.SessionPhase { return types.PhaseFinalizing }
 
 func (weightlessSession) Balance() uint64     { return 1 << 40 }
 func (weightlessSession) TokenPrice() uint64  { return 1 }

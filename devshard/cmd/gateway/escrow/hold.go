@@ -106,7 +106,7 @@ func (m *Manager) replaceIfShort(ctx context.Context, model ModelConfig, snapsho
 	if counts.serving[model.ModelID] >= model.TargetCount {
 		return "", nil
 	}
-	result, err := m.createEscrow(ctx, model, roleRegular, snapshot.EpochIndex, snapshot.BlockHeight)
+	result, err := m.createEscrow(ctx, model, roleRegular, snapshot)
 	if err != nil {
 		return "", fmt.Errorf("creating replacement for model %s: %w", model.ModelID, err)
 	}

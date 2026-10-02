@@ -17,6 +17,20 @@ func (m *Manager) OnBalanceExhausted(escrowID string, reason scheduler.Exhaustio
 	}
 }
 
+func (m *Manager) markSpent(devshards []store.DevshardRecord) {
+	if m.exhaustion == nil {
+		return
+	}
+	for _, record := range devshards {
+		if !record.Active || record.OnHold {
+			continue
+		}
+		if reason := m.exhaustion.Exhaustion(record.EscrowID); reason != "" {
+			m.OnBalanceExhausted(record.EscrowID, reason)
+		}
+	}
+}
+
 func (m *Manager) checkDepletion(ctx context.Context, snapshot chain.PhaseSnapshot, models []ModelConfig, devshards []store.DevshardRecord) error {
 	marked := m.depleted.drain()
 	if len(marked) == 0 {
@@ -72,7 +86,7 @@ func (m *Manager) replaceDepleted(ctx context.Context, record store.DevshardReco
 		}
 		return routingErr
 	}
-	if _, createErr := m.createEscrow(ctx, model, roleRegular, snapshot.EpochIndex, snapshot.BlockHeight); createErr != nil {
+	if _, createErr := m.createEscrow(ctx, model, roleRegular, snapshot); createErr != nil {
 		return errors.Join(routingErr, fmt.Errorf("creating replacement for depleted escrow %s: %w", record.EscrowID, createErr))
 	}
 	return routingErr

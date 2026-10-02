@@ -22,13 +22,14 @@ Every read from the network and every transaction the gateway signs passes throu
 
 A failed poll **republishes the previous snapshot with `LastError` set** rather than an empty one: a network hiccup must not read as "the epoch has no participants". `LastUpdatedAt` is how a reader tells fresh data from a held-over view.
 
-Four fields have absent values that are load-bearing, and each fails in a chosen direction:
+Five fields have absent values that are load-bearing, and each fails in a chosen direction:
 
 | Field | Absent means | Read as |
 | --- | --- | --- |
 | `RequestsBlocked` | derived, never absent — `false` outside every PoC phase (`rawPoCBlockingState`) | requests admitted |
 | `Preserved` / `PreservedByModel` | the chain holds no snapshot for this episode | **everyone** is preserved (`scheduler`, `pocPreserved`) — fail open, so a missing snapshot never empties routing |
 | `MaxNonce` | never observed: the chain has not enabled devshard escrow params, or no read has succeeded since start | the nonce gate falls back to `fallbackNonceCeiling` rather than to "no ceiling", and routing reports no escrow exhausted against it (`scheduler`, `reportExhausted`) |
+| `TokenPrice` / `FeePerNonce` / `CreateDevshardFee` | never observed, for the same reasons as `MaxNonce`; all four come from one read of the chain's devshard escrow params (`grpc.go`, `EscrowParams`) | the escrow manager creates an escrow without checking its amount against the model's floor (`escrow`, `createEscrow`) — fail open, so a missing price never stops rotation |
 | `Models` | no read has succeeded since start. A reply naming no model counts as no observation rather than as a chain that named nobody, and a failed read keeps the previous answer, so each model holds the length it was last priced at (`observer.go`, `PhaseObserver.fetchModels`) | a model no length has ever been observed or configured for is priced at `fallback_max_model_len` by the participant limiter's input window (`limits`, `ParticipantLimiter.windowsForLocked`), which the floor would then hold for the life of the process — hence the direction |
 
 Each model carries governance's `context_window` and the `--max-model-len` parsed from its `model_args` (`grpc.go`, `maxModelLenOf`; 0 when the args carry no plain number for it); the engine reads the second as the model's context length when the operator pins none (`config/config.go`, `Limits.ContextLength`), and the scheduler prices an escrow's retirement floor on the same length ([capacity.md](../docs/capacity.md), "The balance floor").
@@ -119,7 +120,7 @@ Absence and failure are kept apart in every query that can return neither:
 | --- | --- | --- |
 | `Tx` | the node has not indexed the transaction yet, which a caller polling after a broadcast must tell apart from a failure | the query itself failed |
 | `Escrow` | the chain says the escrow is absent | the query failed — reading it as absence would retire an escrow that still holds funds, stranding them |
-| `MaxNonce` | the chain carries no devshard escrow params, i.e. it has not enabled them | the query failed |
+| `EscrowParams` | the chain carries no devshard escrow params, i.e. it has not enabled them | the query failed |
 | `PreservedNodes` | the chain holds no snapshot for the current episode, which routing reads as "no preserved set" rather than as an empty one | the query failed |
 
 `isNotFoundStatus` matches the gRPC `NotFound` code and, as a fallback, the same text in the message, because some nodes answer `Unknown` with that text rather than the typed code.

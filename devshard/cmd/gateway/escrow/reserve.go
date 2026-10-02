@@ -70,7 +70,7 @@ func (m *Manager) ensureReserves(ctx context.Context, snapshot chain.PhaseSnapsh
 			continue
 		}
 		_, err := m.ensureToTarget(ctx, RoleReserve, model.ReserveCount, model, snapshot, devshards)
-		if err != nil && !errors.Is(err, errCreateSuppressed) && !errors.Is(err, chain.ErrWalletUnderfunded) {
+		if err != nil && !errors.Is(err, errCreateSuppressed) && !refusedBeforeBroadcast(err) {
 			errs = append(errs, fmt.Errorf("funding reserve for %s: %w", model.ModelID, err))
 		}
 	}

@@ -8,11 +8,11 @@ import (
 	"devshard/types"
 )
 
-// fallbackNonceCeiling applies until governance max_nonce has been fetched. See routing.md, "Picking an escrow".
-const fallbackNonceCeiling uint64 = 19_800
-
-// nonceInFlightMargin is room left under the hosts' nonce cap for work already routed. See routing.md, "Picking an escrow".
-const nonceInFlightMargin uint64 = 200
+const (
+	fallbackNonceCeiling    uint64 = 19_800
+	nonceInFlightMargin     uint64 = 200
+	unboundedAttemptsToFund        = 2
+)
 
 // avoidReason is why one round of a pick steps over an escrow; only a busy one keeps the reserves shut.
 type avoidReason int
@@ -48,7 +48,7 @@ func (s *Scheduler) pickEscrow(profile RequestProfile, snapshot chain.PhaseSnaps
 	// Read here as well as at dispatch: an escrow whose whole group it refuses can never serve.
 	ranking := escrowRanking{
 		profile: profile, snapshot: snapshot, queued: queued, avoided: avoided,
-		retirement: retirement, request: request,
+		retirement: retirement, request: request, attempts: s.attemptsToFund(),
 		reachable: reachableByAllowlist(s.participantAllowlist(), s.unthrottledParticipants()),
 		fleet:     s.fleetGates(profile.Model, snapshot),
 		ahead:     s.queuedAhead(candidates),
@@ -80,6 +80,7 @@ type escrowRanking struct {
 	avoided    avoidedEscrows
 	retirement retirementPrice
 	request    uint64
+	attempts   int
 	reachable  func(Escrow) bool
 	fleet      availability
 	ahead      []uint64
@@ -92,10 +93,25 @@ type rankedPick struct {
 	passedOverForHosts int
 }
 
+type scoreTier struct {
+	bestScore float64
+	tied      []int
+}
+
+func newScoreTier() scoreTier { return scoreTier{bestScore: math.Inf(1)} }
+
+func (tier *scoreTier) offer(index int, score float64) {
+	switch {
+	case score < tier.bestScore:
+		tier.bestScore, tier.tied = score, append(tier.tied[:0], index)
+	case score == tier.bestScore:
+		tier.tied = append(tier.tied, index)
+	}
+}
+
 // rankCandidates scores one tier, regulars or reserves, and counts the ones it passed over for their hosts. See routing.md, "A reserve escrow".
 func (s *Scheduler) rankCandidates(candidates []Escrow, ranking escrowRanking, reserveTier bool) rankedPick {
-	bestScore := math.Inf(1)
-	var tied []int
+	funded, thin := newScoreTier(), newScoreTier()
 	result := rankedPick{picked: -1}
 	for index, candidate := range candidates {
 		if candidate.IsReserve != reserveTier {
@@ -129,14 +145,17 @@ func (s *Scheduler) rankCandidates(candidates []Escrow, ranking escrowRanking, r
 		}
 		forecast := expectedBurns(candidate, ranking.fleet.forEscrow(s.stateBlocked(candidate.ID)), ranking.queued, ranking.ahead[index])
 		score := float64(candidate.ActiveUsers+forecast) / weight
-		switch {
-		case score < bestScore:
-			bestScore, tied = score, append(tied[:0], index)
-		case score == bestScore:
-			tied = append(tied, index)
+		if reserveTier || affordsAttempts(candidate, ranking.request, ranking.attempts) {
+			funded.offer(index, score)
+		} else {
+			thin.offer(index, score)
 		}
 	}
 
+	tied := funded.tied
+	if len(tied) == 0 {
+		tied = thin.tied
+	}
 	switch len(tied) {
 	case 0:
 	case 1:
@@ -147,6 +166,15 @@ func (s *Scheduler) rankCandidates(candidates []Escrow, ranking escrowRanking, r
 	return result
 }
 
+func (s *Scheduler) attemptsToFund() int {
+	if s.settings != nil {
+		if configured := s.settings.Load().Engine.MaxAttemptsPerRequest; configured > 0 {
+			return int(configured)
+		}
+	}
+	return unboundedAttemptsToFund
+}
+
 func (s *Scheduler) reportReserveTaken(escrowID string) {
 	if s.onReserveTaken != nil {
 		s.onReserveTaken(escrowID)
@@ -155,10 +183,23 @@ func (s *Scheduler) reportReserveTaken(escrowID string) {
 
 // reportExhausted passes over the fallback ceiling: it is not the hosts' cap, and a reported escrow is parked or put on hold. See routing.md, "Picking an escrow".
 func (s *Scheduler) reportExhausted(escrowID string, reason ExhaustionReason) {
-	if s.onEscrowExhausted == nil || reason == exhaustionFallbackNonceCeiling {
+	if reason = retirable(reason); s.onEscrowExhausted == nil || reason == "" {
 		return
 	}
 	s.onEscrowExhausted(escrowID, reason)
+}
+
+// Exhaustion is the reason routing would retire the escrow on, read without a request. See routing.md, "Picking an escrow".
+func (s *Scheduler) Exhaustion(candidate Escrow) ExhaustionReason {
+	snapshot := s.snapshots.Snapshot()
+	return retirable(exhaustionReason(candidate, snapshot.MaxNonce, s.retirementPriceOf(candidate.Model, snapshot)))
+}
+
+func retirable(reason ExhaustionReason) ExhaustionReason {
+	if reason == exhaustionFallbackNonceCeiling {
+		return ""
+	}
+	return reason
 }
 
 // noCapacity carries why the last candidate was declined, so running dry is not read as a model nobody serves.
@@ -258,18 +299,22 @@ func (price retirementPrice) floorWith(escrowSession session, furtherAnswers uin
 
 // belowBalanceFloor prices each request the way the chain does, (input_length_bytes + max_tokens_cap) * token_price + fee_per_nonce.
 func belowBalanceFloor(candidate Escrow, reserveTokens uint64) bool {
+	return !affordsAttempts(candidate, reserveTokens, 1)
+}
+
+func affordsAttempts(candidate Escrow, reserveTokens uint64, attempts int) bool {
 	if candidate.Session == nil || reserveTokens == 0 {
-		return false
+		return true
 	}
 	cost, ok := requestCost(candidate.Session, reserveTokens)
 	if !ok {
-		return true
+		return false
 	}
-	floor, ok := safeMul(cost, uint64(candidate.ActiveUsers+1))
+	floor, ok := safeMul(cost, uint64(candidate.ActiveUsers+attempts))
 	if !ok {
-		return true
+		return false
 	}
-	return candidate.Session.Balance() < floor
+	return candidate.Session.Balance() >= floor
 }
 
 // ResumeReadiness prices an escrow on hold the way a pick would, with headroom so it does not flap at the floor; nonceSpent means it can never serve again. See routing.md, "An escrow on hold".
@@ -298,13 +343,17 @@ func (s *Scheduler) ResumeFloor(candidate Escrow, answers uint64) (uint64, bool)
 	return retirement.floorWith(candidate.Session, answers-1)
 }
 
-// requestCost is what the chain takes for one request: its reserve and the fee for the nonce it draws; unpriced when that overflows.
 func requestCost(escrowSession session, reserveTokens uint64) (uint64, bool) {
-	reserve, ok := safeMul(reserveTokens, escrowSession.TokenPrice())
+	return RequestCost(reserveTokens, escrowSession.TokenPrice(), escrowSession.FeePerNonce())
+}
+
+// RequestCost is what the chain takes for one request: its reserve and the fee for the nonce it draws; unpriced when that overflows. See capacity.md, "The balance floor".
+func RequestCost(reserveTokens, tokenPrice, feePerNonce uint64) (uint64, bool) {
+	reserve, ok := safeMul(reserveTokens, tokenPrice)
 	if !ok {
 		return 0, false
 	}
-	cost := reserve + escrowSession.FeePerNonce()
+	cost := reserve + feePerNonce
 	return cost, cost >= reserve
 }
 

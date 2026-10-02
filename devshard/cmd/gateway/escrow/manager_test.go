@@ -11,6 +11,7 @@ import (
 	"devshard/cmd/gateway/chain"
 	"devshard/cmd/gateway/config"
 	"devshard/cmd/gateway/internal/leakcheck"
+	"devshard/cmd/gateway/scheduler"
 	"devshard/cmd/gateway/store"
 	"devshard/signing"
 )
@@ -512,4 +513,139 @@ func mustManager(t *testing.T, deps Deps) *Manager {
 		t.Fatalf("NewManager() = %v, want a wired manager", err)
 	}
 	return manager
+}
+
+func spentProbeManager(t *testing.T, testStore *fakeStore, txClient *fakeTxClient, gate *fakeHoldGate, spent ...string) *Manager {
+	t.Helper()
+	cfg := config.Defaults()
+	cfg.Rotation.Enabled = true
+	cfg.Rotation.HoldEnabled = true
+	cfg.Rotation.ModelsJSON = `[{"model_id":"model-a","target_count":1,"reserve_count":0,"amount":1000,"private_key_env":"MODEL_A_KEY"}]`
+	snapshot := chain.PhaseSnapshot{
+		EpochIndex: 9, BlockHeight: 800, EpochSwitchBlockHeight: 100,
+		FullWeightsByModel: map[string]map[string]float64{"model-a": {"p": 1}},
+	}
+	deps := testManagerDeps(t, testStore, txClient, &fakeSnapshotSource{snapshot: snapshot}, &cfg)
+	probe := fakeExhaustionProbe{}
+	for _, escrowID := range spent {
+		probe[escrowID] = scheduler.ExhaustionBalanceFloor
+	}
+	deps.Exhaustion = probe
+	deps.Holds = gate
+	return mustManager(t, deps)
+}
+
+// Test flow:
+//  1. Store a serving regular escrow that no request has reported, with rotation off and a probe reading it below its floor.
+//  2. Call tick.
+//  3. Assert the escrow is parked in that same tick: markSpent runs before checkDepletion.
+func TestTickParksASpentEscrowNoRequestReported(t *testing.T) {
+	testStore := newFakeStore()
+	testStore.devshards["1"] = store.DevshardRecord{EscrowID: "1", Model: "model-a", Active: true, RotationRole: roleRegular, PrivateKeyEnv: "MODEL_A_KEY"}
+	cfg := config.Defaults()
+	cfg.Rotation.Enabled = false
+	deps := testManagerDeps(t, testStore, &fakeTxClient{createEscrowFn: failOnCreate(t)}, &fakeSnapshotSource{}, &cfg)
+	deps.Exhaustion = fakeExhaustionProbe{"1": scheduler.ExhaustionBalanceFloor}
+	manager := mustManager(t, deps)
+
+	if err := manager.tick(context.Background()); err != nil {
+		t.Fatalf("tick(): %v", err)
+	}
+
+	assertParked(t, testStore, "1")
+}
+
+// Test flow:
+//  1. Store a serving regular escrow at the current epoch, with hold on and a probe reading it below its floor.
+//  2. Call tick.
+//  3. Assert it is put on hold rather than parked and one replacement is funded: the tick's mark takes the same path a routing report does.
+func TestTickHoldsASpentEscrowWhenTheHoldApplies(t *testing.T) {
+	testStore := newFakeStore()
+	testStore.devshards["1"] = store.DevshardRecord{EscrowID: "1", Model: "model-a", Active: true, RotationRole: roleRegular, RotationEpoch: 9, PrivateKeyEnv: "MODEL_A_KEY"}
+	created := 0
+	createEscrow := succeedingCreateEscrowFn(800)
+	txClient := &fakeTxClient{createEscrowFn: func(ctx context.Context, signer *signing.Secp256k1Signer, amount uint64, modelID string, onPrepared func(string) error) (chain.CreateEscrowResult, error) {
+		created++
+		return createEscrow(ctx, signer, amount, modelID, onPrepared)
+	}}
+	gate := newFakeHoldGate()
+	manager := spentProbeManager(t, testStore, txClient, gate, "1")
+
+	if err := manager.tick(context.Background()); err != nil {
+		t.Fatalf("tick(): %v", err)
+	}
+
+	if record := testStore.devshards["1"]; !record.Active || !record.OnHold {
+		t.Fatalf("record = %+v, want active and on hold", record)
+	}
+	if !gate.isOnHold("1") {
+		t.Fatal("the registry was not told the escrow is on hold")
+	}
+	if created != 1 {
+		t.Fatalf("created %d escrows, want 1 replacement", created)
+	}
+}
+
+// Test flow:
+//  1. Store an escrow on hold whose hold gate keeps it, with a probe reading it below its floor.
+//  2. Call tick.
+//  3. Assert it stays on hold, unparked, and nothing is created: a hold is left to resumeHeld.
+func TestTickLeavesAHeldEscrowToItsHold(t *testing.T) {
+	testStore := newFakeStore()
+	testStore.devshards["1"] = store.DevshardRecord{EscrowID: "1", Model: "model-a", Active: true, OnHold: true, RotationRole: roleRegular, RotationEpoch: 9, PrivateKeyEnv: "MODEL_A_KEY"}
+	testStore.devshards["2"] = store.DevshardRecord{EscrowID: "2", Model: "model-a", Active: true, RotationRole: roleRegular, RotationEpoch: 9, PrivateKeyEnv: "MODEL_A_KEY"}
+	gate := newFakeHoldGate()
+	gate.onHold["1"] = true
+	gate.verdicts["1"] = HoldKeep
+	manager := spentProbeManager(t, testStore, &fakeTxClient{createEscrowFn: failOnCreate(t)}, gate, "1")
+
+	if err := manager.tick(context.Background()); err != nil {
+		t.Fatalf("tick(): %v", err)
+	}
+
+	if record := testStore.devshards["1"]; !record.Active || !record.OnHold || record.SettlementPending {
+		t.Fatalf("record = %+v, want still on hold", record)
+	}
+}
+
+// Test flow:
+//  1. Store an escrow on hold whose hold gate resumes it this tick, with a probe reading it below its floor.
+//  2. Call tick.
+//  3. Assert it ends the tick on hold again: markSpent reads the slice resumeHeld returns, so a resumed escrow is priced like any serving one.
+func TestTickPricesAnEscrowResumedInTheSameTick(t *testing.T) {
+	testStore := newFakeStore()
+	testStore.devshards["1"] = store.DevshardRecord{EscrowID: "1", Model: "model-a", Active: true, OnHold: true, RotationRole: roleRegular, RotationEpoch: 9, PrivateKeyEnv: "MODEL_A_KEY"}
+	testStore.devshards["2"] = store.DevshardRecord{EscrowID: "2", Model: "model-a", Active: true, RotationRole: roleRegular, RotationEpoch: 9, PrivateKeyEnv: "MODEL_A_KEY"}
+	gate := newFakeHoldGate()
+	gate.onHold["1"] = true
+	gate.verdicts["1"] = HoldResume
+	manager := spentProbeManager(t, testStore, &fakeTxClient{createEscrowFn: failOnCreate(t)}, gate, "1")
+
+	if err := manager.tick(context.Background()); err != nil {
+		t.Fatalf("tick(): %v", err)
+	}
+
+	if record := testStore.devshards["1"]; !record.Active || !record.OnHold {
+		t.Fatalf("record = %+v, want resumed then put back on hold in one tick", record)
+	}
+}
+
+// Test flow:
+//  1. Store an escrow on hold whose hold gate finds it unrecoverable this tick, with a probe reading it below its floor.
+//  2. Call tick.
+//  3. Assert it is parked and nothing is created: the row resumeHeld parked is not handled a second time.
+func TestTickDoesNotMarkAnEscrowItsHoldParkedInTheSameTick(t *testing.T) {
+	testStore := newFakeStore()
+	testStore.devshards["1"] = store.DevshardRecord{EscrowID: "1", Model: "model-a", Active: true, OnHold: true, RotationRole: roleRegular, RotationEpoch: 9, PrivateKeyEnv: "MODEL_A_KEY"}
+	testStore.devshards["2"] = store.DevshardRecord{EscrowID: "2", Model: "model-a", Active: true, RotationRole: roleRegular, RotationEpoch: 9, PrivateKeyEnv: "MODEL_A_KEY"}
+	gate := newFakeHoldGate()
+	gate.onHold["1"] = true
+	gate.verdicts["1"] = HoldUnrecoverable
+	manager := spentProbeManager(t, testStore, &fakeTxClient{createEscrowFn: failOnCreate(t)}, gate, "1")
+
+	if err := manager.tick(context.Background()); err != nil {
+		t.Fatalf("tick(): %v", err)
+	}
+
+	assertParked(t, testStore, "1")
 }

@@ -15,8 +15,8 @@ const (
 	// MaxBodyBytes bounds the raw request body, both at ingest and before the decode.
 	MaxBodyBytes = 10 << 20
 
-	// promptBytesPerToken is the gateway's standing estimate of a prompt's size. See README.md, "Output token limits".
-	promptBytesPerToken = 4
+	// PromptBytesPerToken is the gateway's standing estimate of a prompt's size. See README.md, "Output token limits".
+	PromptBytesPerToken = 4
 
 	// MaxStructuralNodes bounds the containers and elements the decode allocates.
 	MaxStructuralNodes = 250_000
@@ -167,5 +167,5 @@ func EstimatedPromptTokens(bodyBytes int) uint64 {
 	if bodyBytes <= 0 {
 		return 1
 	}
-	return uint64((bodyBytes + promptBytesPerToken - 1) / promptBytesPerToken)
+	return uint64((bodyBytes + PromptBytesPerToken - 1) / PromptBytesPerToken)
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"slices"
 	"strconv"
 	"sync"
@@ -12,6 +13,7 @@ import (
 
 	"devshard/cmd/gateway/chain"
 	"devshard/cmd/gateway/config"
+	"devshard/cmd/gateway/scheduler"
 	"devshard/cmd/gateway/store"
 )
 
@@ -20,6 +22,9 @@ const (
 	commitmentIndexLagMargin = 2 * time.Minute
 	commitmentReconcileGrace = chain.UnorderedTxTTL + commitmentIndexLagMargin
 )
+
+// ErrAmountBelowFloor marks a create refused before broadcast because its amount cannot pay one full-context request of its model. See README.md, "Creating an escrow".
+var ErrAmountBelowFloor = errors.New("escrow amount cannot pay one full-context request of its model")
 
 type Manager struct {
 	tx        escrowTxClient
@@ -33,12 +38,14 @@ type Manager struct {
 	routePrefix      string
 	settlementSource SettlementSource
 	holds            HoldGate
+	exhaustion       ExhaustionProbe
 	settlements      inFlightSet
 	checks           inFlightSet
 
 	depleted            depletionMarks
 	missing             markSet
 	underfundedNarrated markSet
+	belowFloorNarrated  markSet
 	reserveTaken        markSet
 	wakeup              chan struct{}
 
@@ -56,11 +63,15 @@ type Manager struct {
 // CreateEscrow creates one escrow on demand, on the same durable-intent path rotation uses. See README.md, "Creating an escrow".
 func (m *Manager) CreateEscrow(ctx context.Context, model ModelConfig) (chain.CreateEscrowResult, error) {
 	snapshot := m.snapshots.Snapshot()
-	return m.createEscrow(ctx, model, roleRegular, snapshot.EpochIndex, snapshot.BlockHeight)
+	return m.createEscrow(ctx, model, roleRegular, snapshot)
 }
 
 // A failed intent-commitment write (in onPrepared) aborts before any chain broadcast: no broadcast without durable intent.
-func (m *Manager) createEscrow(ctx context.Context, model ModelConfig, role string, epoch uint64, blockHeight int64) (chain.CreateEscrowResult, error) {
+func (m *Manager) createEscrow(ctx context.Context, model ModelConfig, role string, snapshot chain.PhaseSnapshot) (chain.CreateEscrowResult, error) {
+	if floor, priced := m.creationFloor(model.ModelID, snapshot); priced && model.Amount < floor {
+		m.narrateBelowFloor(model, role, floor)
+		return chain.CreateEscrowResult{}, fmt.Errorf("creating escrow for %s/%s: %w: amount %d, floor %d", model.ModelID, role, ErrAmountBelowFloor, model.Amount, floor)
+	}
 	signer, err := m.signer.SignerFor(model.PrivateKeyEnv)
 	if err != nil {
 		return chain.CreateEscrowResult{}, fmt.Errorf("resolving signer for %s: %w", model.PrivateKeyEnv, err)
@@ -69,9 +80,9 @@ func (m *Manager) createEscrow(ctx context.Context, model ModelConfig, role stri
 	c := store.Commitment{
 		Model:         model.ModelID,
 		Role:          role,
-		Epoch:         epoch,
+		Epoch:         snapshot.EpochIndex,
 		PrivateKeyEnv: model.PrivateKeyEnv,
-		BlockHeight:   blockHeight,
+		BlockHeight:   snapshot.BlockHeight,
 	}
 	onPrepared := func(txHash string) error {
 		c.TxHash = txHash
@@ -86,7 +97,7 @@ func (m *Manager) createEscrow(ctx context.Context, model ModelConfig, role stri
 	}
 	escrowID := strconv.FormatUint(result.EscrowID, 10)
 	if m.narrator != nil {
-		m.narrator.EscrowCreated(escrowID, model.ModelID, role, epoch, result.TxHash)
+		m.narrator.EscrowCreated(escrowID, model.ModelID, role, snapshot.EpochIndex, result.TxHash)
 	}
 	return result, m.persistEscrow(ctx, escrowID, c)
 }
@@ -117,7 +128,28 @@ func (m *Manager) persistEscrow(ctx context.Context, escrowID string, c store.Co
 	// Both paths: an escrow found already registered is a create that succeeded.
 	m.breaker.reset(c.Model, c.Role)
 	m.underfundedNarrated.forget(createBreakerKey(c.Model, c.Role))
+	m.belowFloorNarrated.forget(createBreakerKey(c.Model, c.Role))
 	return nil
+}
+
+func (m *Manager) creationFloor(modelID string, snapshot chain.PhaseSnapshot) (uint64, bool) {
+	if snapshot.TokenPrice == 0 {
+		return 0, false
+	}
+	reserve := m.config.Load().Limits.RetirementReserve(modelID, snapshot.Models[modelID].MaxModelLen)
+	cost, priced := scheduler.RequestCost(reserve, snapshot.TokenPrice, snapshot.FeePerNonce)
+	floor := cost + snapshot.CreateDevshardFee
+	if !priced || floor < cost {
+		return math.MaxUint64, true
+	}
+	return floor, true
+}
+
+func (m *Manager) narrateBelowFloor(model ModelConfig, role string, floor uint64) {
+	if !m.belowFloorNarrated.mark(createBreakerKey(model.ModelID, role)) || m.narrator == nil {
+		return
+	}
+	m.narrator.EscrowCreateBelowFloor(model.ModelID, role, model.Amount, floor)
 }
 
 // narrateUnderfunded names a wallet that cannot pay once per (model, role), until a create of it succeeds.

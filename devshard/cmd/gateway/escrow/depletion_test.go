@@ -3,10 +3,12 @@ package escrow
 import (
 	"context"
 	"errors"
+	"maps"
 	"testing"
 	"time"
 
 	"devshard/cmd/gateway/chain"
+	"devshard/cmd/gateway/scheduler"
 	"devshard/cmd/gateway/store"
 	"devshard/signing"
 )
@@ -472,5 +474,51 @@ func TestADepletedEscrowIsNotReplacedBeforeTheChainIsKnown(t *testing.T) {
 	}
 	if txClient.createCalls != 1 {
 		t.Errorf("createCalls = %d once the chain is known, want 1: the refused escrow stays marked for the next tick", txClient.createCalls)
+	}
+}
+
+type fakeExhaustionProbe map[string]scheduler.ExhaustionReason
+
+func (probe fakeExhaustionProbe) Exhaustion(escrowID string) scheduler.ExhaustionReason {
+	return probe[escrowID]
+}
+
+// Test flow:
+//  1. List a serving regular below its floor, a reserve past its nonce cap, a serving escrow above its floor, one on hold below it, and an inactive one below it.
+//  2. Run `markSpent` over them.
+//  3. Assert only the serving rows routing would retire are marked, each with the probe's reason: a hold has its own exit and a parked row is already out.
+func TestMarkSpentMarksOnlyServingEscrowsRoutingWouldRetire(t *testing.T) {
+	held := activeRecord("held", "model-a")
+	held.OnHold = true
+	parked := activeRecord("parked", "model-a")
+	parked.Active = false
+	reserve := activeRecord("reserve", "model-a")
+	reserve.RotationRole = RoleReserve
+	manager := &Manager{exhaustion: fakeExhaustionProbe{
+		"spent":   scheduler.ExhaustionBalanceFloor,
+		"reserve": scheduler.ExhaustionNonceCap,
+		"held":    scheduler.ExhaustionBalanceFloor,
+		"parked":  scheduler.ExhaustionBalanceFloor,
+	}}
+
+	manager.markSpent([]store.DevshardRecord{activeRecord("spent", "model-a"), reserve, activeRecord("funded", "model-a"), held, parked})
+
+	want := map[string]scheduler.ExhaustionReason{"spent": scheduler.ExhaustionBalanceFloor, "reserve": scheduler.ExhaustionNonceCap}
+	if !maps.Equal(manager.depleted.reasons, want) {
+		t.Fatalf("depleted = %v, want %v", manager.depleted.reasons, want)
+	}
+}
+
+// Test flow:
+//  1. Build a manager with no exhaustion probe wired.
+//  2. Run `markSpent` over a serving escrow.
+//  3. Assert nothing is marked and nothing panics.
+func TestMarkSpentWithoutAProbeMarksNothing(t *testing.T) {
+	manager := &Manager{}
+
+	manager.markSpent([]store.DevshardRecord{activeRecord("spent", "model-a")})
+
+	if len(manager.depleted.reasons) != 0 {
+		t.Fatalf("depleted = %v, want nothing without a probe", manager.depleted.reasons)
 	}
 }

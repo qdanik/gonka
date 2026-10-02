@@ -85,8 +85,7 @@ func (s *Scheduler) retirementReserve(model string, snapshot chain.PhaseSnapshot
 	if s.settings == nil {
 		return 0
 	}
-	configured := s.settings.Load().Limits
-	return max(uint64(max(configured.MaxTokensCap, 0)), configured.ContextLength(model, snapshot.Models[model].MaxModelLen))
+	return s.settings.Load().Limits.RetirementReserve(model, snapshot.Models[model].MaxModelLen)
 }
 
 // retirementPriceOf pairs the model's floor with one capped answer, the unit load and resume headroom are counted in. See capacity.md, "The balance floor".

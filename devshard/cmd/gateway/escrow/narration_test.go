@@ -91,6 +91,10 @@ func (n *recordingLifecycleNarrator) EscrowCreateUnderfunded(model, role string,
 	n.note("underfunded %s %s have %d need %d", model, role, have, need)
 }
 
+func (n *recordingLifecycleNarrator) EscrowCreateBelowFloor(model, role string, amount, floor uint64) {
+	n.note("below floor %s %s amount %d floor %d", model, role, amount, floor)
+}
+
 func (n *recordingLifecycleNarrator) EscrowReserveTaken(escrowID string) {
 	n.note("reserve taken %s", escrowID)
 }
@@ -136,7 +140,7 @@ func TestACreatedEscrowIsNarratedWithItsIDAsText(t *testing.T) {
 		narrator: narrator,
 	}
 
-	_, err := m.createEscrow(context.Background(), ModelConfig{ModelID: "model-a", Amount: 1000, PrivateKeyEnv: "MODEL_A_KEY"}, roleTemp, 7, 500)
+	_, err := m.createEscrow(context.Background(), ModelConfig{ModelID: "model-a", Amount: 1000, PrivateKeyEnv: "MODEL_A_KEY"}, roleTemp, chain.PhaseSnapshot{EpochIndex: 7, BlockHeight: 500})
 
 	require.NoError(t, err)
 	require.Equal(t, []string{"created 42 model-a temp epoch 7 tx TX-HAPPY"}, narrator.recorded())

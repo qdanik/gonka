@@ -106,6 +106,14 @@ func (h escrowHolds) unrecoverable(candidate scheduler.Escrow, answers uint64) b
 	return decided && candidate.Session.Balance()+recoverable < floor
 }
 
+func (h escrowHolds) Exhaustion(escrowID string) scheduler.ExhaustionReason {
+	candidate, live := h.escrows.ResumeCandidate(escrowID)
+	if !live {
+		return ""
+	}
+	return h.router.Exhaustion(candidate)
+}
+
 func (h escrowHolds) ReservationsReturnBy(escrowID string) (time.Time, bool) {
 	return h.escrows.ReservationsReturnBy(escrowID)
 }

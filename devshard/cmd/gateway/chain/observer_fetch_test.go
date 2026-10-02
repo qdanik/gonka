@@ -676,8 +676,8 @@ func (f fakeReader) PreservedNodes(context.Context) (*PreservedNodes, bool, erro
 	return f.preserved, f.found, f.err
 }
 
-func (f fakeReader) MaxNonce(context.Context) (uint64, bool, error) {
-	return f.maxNonce, f.nonceHeld, f.nonceErr
+func (f fakeReader) EscrowParams(context.Context) (EscrowParams, bool, error) {
+	return EscrowParams{MaxNonce: f.maxNonce}, f.nonceHeld, f.nonceErr
 }
 
 func (f fakeReader) Models(context.Context) (map[string]ModelParams, error) {

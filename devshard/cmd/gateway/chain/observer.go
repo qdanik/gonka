@@ -183,12 +183,12 @@ func (o *PhaseObserver) refresh(ctx context.Context) {
 		}
 	}
 
-	if maxNonce, fetched, maxNonceErr := o.fetchMaxNonce(ctx); fetched {
-		snapshot.MaxNonce = maxNonce
+	if params, fetched, paramsErr := o.fetchEscrowParams(ctx); fetched {
+		snapshot.MaxNonce, snapshot.TokenPrice, snapshot.FeePerNonce, snapshot.CreateDevshardFee = params.MaxNonce, params.TokenPrice, params.FeePerNonce, params.CreateDevshardFee
 	} else {
-		snapshot.MaxNonce = previous.MaxNonce
-		if maxNonceErr != nil {
-			snapshot.LastError = joinSnapshotError(snapshot.LastError, fmt.Sprintf("fetch devshard escrow params: %v", maxNonceErr))
+		snapshot.MaxNonce, snapshot.TokenPrice, snapshot.FeePerNonce, snapshot.CreateDevshardFee = previous.MaxNonce, previous.TokenPrice, previous.FeePerNonce, previous.CreateDevshardFee
+		if paramsErr != nil {
+			snapshot.LastError = joinSnapshotError(snapshot.LastError, fmt.Sprintf("fetch devshard escrow params: %v", paramsErr))
 		}
 	}
 
@@ -242,12 +242,12 @@ func (o *PhaseObserver) fetchModels(ctx context.Context) (models map[string]Mode
 	return models, err == nil && len(models) > 0, err
 }
 
-// fetchMaxNonce reads the nonce ceiling; fetched=false with a nil error means the chain carries no devshard escrow params.
-func (o *PhaseObserver) fetchMaxNonce(ctx context.Context) (maxNonce uint64, fetched bool, err error) {
+// fetchEscrowParams reads the nonce ceiling and the escrow price; fetched=false with a nil error means the chain carries no devshard escrow params.
+func (o *PhaseObserver) fetchEscrowParams(ctx context.Context) (params EscrowParams, fetched bool, err error) {
 	if o.chain == nil {
-		return 0, false, nil
+		return EscrowParams{}, false, nil
 	}
-	return o.chain.MaxNonce(ctx)
+	return o.chain.EscrowParams(ctx)
 }
 
 func (o *PhaseObserver) fetchEpochInfo(ctx context.Context) (epochInfo, error) {

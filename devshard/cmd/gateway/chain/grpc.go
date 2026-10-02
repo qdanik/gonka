@@ -25,7 +25,7 @@ const maxModelLenFlag = "--max-model-len"
 
 // Reader is the chain state the observer polls, an interface so tests answer it without a connection.
 type Reader interface {
-	MaxNonce(ctx context.Context) (uint64, bool, error)
+	EscrowParams(ctx context.Context) (EscrowParams, bool, error)
 	PreservedNodes(ctx context.Context) (*PreservedNodes, bool, error)
 	Models(ctx context.Context) (map[string]ModelParams, error)
 }
@@ -62,6 +62,14 @@ type TxEvent struct {
 type TxAttribute struct {
 	Key   string
 	Value string
+}
+
+// EscrowParams is what the chain stamps on every escrow it creates. See README.md, "What the chain observer provides".
+type EscrowParams struct {
+	MaxNonce          uint64
+	TokenPrice        uint64
+	FeePerNonce       uint64
+	CreateDevshardFee uint64
 }
 
 // PreservedNodes is the PoC preserved set, keyed the way routing reads it.
@@ -241,17 +249,17 @@ func maxModelLenOf(args []string) uint64 {
 	return 0
 }
 
-// MaxNonce reports fetched=false when the chain carries no devshard escrow params -- not enabled, rather than unread.
-func (g *GRPCChain) MaxNonce(ctx context.Context) (uint64, bool, error) {
+// EscrowParams reports fetched=false when the chain carries no devshard escrow params -- not enabled, rather than unread.
+func (g *GRPCChain) EscrowParams(ctx context.Context) (EscrowParams, bool, error) {
 	response, err := g.client.InferenceQueryClient().Params(ctx, &inferencetypes.QueryParamsRequest{})
 	if err != nil {
-		return 0, false, fmt.Errorf("fetch devshard escrow params: %w", err)
+		return EscrowParams{}, false, fmt.Errorf("fetch devshard escrow params: %w", err)
 	}
 	params := response.GetParams().DevshardEscrowParams
 	if params == nil {
-		return 0, false, nil
+		return EscrowParams{}, false, nil
 	}
-	return uint64(params.GetMaxNonce()), true, nil
+	return EscrowParams{MaxNonce: uint64(params.GetMaxNonce()), TokenPrice: params.GetTokenPrice(), FeePerNonce: params.GetFeePerNonce(), CreateDevshardFee: params.GetCreateDevshardFee()}, true, nil
 }
 
 // PreservedNodes reports found=false when the chain holds no snapshot for the current episode, which routing reads as "no preserved set".

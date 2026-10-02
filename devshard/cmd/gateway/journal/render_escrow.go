@@ -76,6 +76,13 @@ func (j *Journal) EscrowCreateUnderfunded(model, role string, have, need uint64)
 	})
 }
 
+// EscrowCreateBelowFloor renders a create refused before broadcast because the model's amount cannot pay one full-context request.
+func (j *Journal) EscrowCreateBelowFloor(model, role string, amount, floor uint64) {
+	j.emitLine(KindEscrowTransition, func(lines logSink) {
+		lines.Warn("escrow create refused: amount below the model's floor", logkey.Model, model, logkey.Role, role, logkey.Have, amount, logkey.Need, floor)
+	})
+}
+
 // EscrowReserveTaken renders a reserve escrow a request needed; it serves as a regular escrow from now on.
 func (j *Journal) EscrowReserveTaken(escrowID string) {
 	j.emitLine(KindEscrowTransition, func(lines logSink) {

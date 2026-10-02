@@ -4,12 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"devshard/cmd/gateway/chain"
+	"devshard/cmd/gateway/config"
 	"devshard/cmd/gateway/store"
 	"devshard/signing"
 )
@@ -411,7 +413,7 @@ func TestCreateEscrowAbortsWhenIntentWriteFails(t *testing.T) {
 	}
 	model := ModelConfig{ModelID: "model-a", Amount: 1000, PrivateKeyEnv: "MODEL_A_KEY"}
 
-	if _, err := m.createEscrow(context.Background(), model, "temp", 5, 100); err == nil {
+	if _, err := m.createEscrow(context.Background(), model, "temp", chain.PhaseSnapshot{EpochIndex: 5, BlockHeight: 100}); err == nil {
 		t.Fatal("createEscrow() = nil, want error when the intent write fails")
 	}
 
@@ -446,7 +448,7 @@ func TestCreateEscrowSignerResolutionFailureNeverCallsChain(t *testing.T) {
 	}
 	model := ModelConfig{ModelID: "model-a", Amount: 1000, PrivateKeyEnv: "MISSING_KEY"}
 
-	if _, err := m.createEscrow(context.Background(), model, "temp", 5, 100); err == nil {
+	if _, err := m.createEscrow(context.Background(), model, "temp", chain.PhaseSnapshot{EpochIndex: 5, BlockHeight: 100}); err == nil {
 		t.Fatal("createEscrow() = nil, want error when signer resolution fails")
 	}
 	if txClient.createCalls != 0 {
@@ -484,7 +486,7 @@ func TestCreateEscrowHappyPathPersistsDevshardAndClearsCommitment(t *testing.T) 
 	}
 	model := ModelConfig{ModelID: "model-a", Amount: 1000, PrivateKeyEnv: "MODEL_A_KEY"}
 
-	if _, err := m.createEscrow(context.Background(), model, "temp", 7, 500); err != nil {
+	if _, err := m.createEscrow(context.Background(), model, "temp", chain.PhaseSnapshot{EpochIndex: 7, BlockHeight: 500}); err != nil {
 		t.Fatalf("createEscrow(): %v", err)
 	}
 
@@ -547,7 +549,7 @@ func TestCreateEscrowPersistFailureRecoversViaReconcile(t *testing.T) {
 	}
 	model := ModelConfig{ModelID: "model-a", Amount: 1000, PrivateKeyEnv: "MODEL_A_KEY"}
 
-	if _, err := m.createEscrow(context.Background(), model, "temp", 11, 200); err == nil {
+	if _, err := m.createEscrow(context.Background(), model, "temp", chain.PhaseSnapshot{EpochIndex: 11, BlockHeight: 200}); err == nil {
 		t.Fatal("createEscrow() = nil, want error when the post-create registry write fails")
 	}
 	if devshards, _ := testStore.ListDevshards(context.Background()); len(devshards) != 0 {
@@ -802,5 +804,101 @@ func TestReconcileLeavesAnAlreadyRegisteredEscrowAlone(t *testing.T) {
 	}
 	if _, held := testStore.commitments["CREATE-TX"]; held {
 		t.Fatal("the commitment was left behind, so this repeats every tick")
+	}
+}
+
+func pricedSnapshot(tokenPrice, feePerNonce, createDevshardFee uint64) chain.PhaseSnapshot {
+	return chain.PhaseSnapshot{
+		EpochIndex: 9, BlockHeight: 100, TokenPrice: tokenPrice, FeePerNonce: feePerNonce, CreateDevshardFee: createDevshardFee,
+		Models:             map[string]chain.ModelParams{"model-a": {MaxModelLen: 180_000}},
+		FullWeightsByModel: map[string]map[string]float64{"model-a": {"p": 1}},
+	}
+}
+
+func floorManager(t *testing.T, txClient *fakeTxClient, narrator lifecycleNarrator) *Manager {
+	t.Helper()
+	gatewayConfig := config.Defaults()
+	return &Manager{
+		tx: txClient, store: newFakeStore(), signer: &fakeSignerSource{signer: testSigner(t)},
+		breaker: newCreateBreaker(), now: time.Now, config: config.NewHolder(&gatewayConfig), narrator: narrator,
+	}
+}
+
+// Test flow:
+//  1. For each table case, build a manager and a snapshot carrying the chain's price and create fee, or none.
+//  2. Create an escrow of model-a, whose floor is its context length in prompt bytes at the price, plus the fee per nonce, plus the create fee the chain takes out of the amount.
+//  3. Assert an amount below the floor or an overflowing price is refused with `ErrAmountBelowFloor` before anything reaches the chain; an amount at the floor, an unknown price, or a model priced at one capped answer for want of a known length is created.
+func TestCreateEscrowRefusesAnAmountBelowTheModelsFloor(t *testing.T) {
+	cappedAnswer := uint64(config.Defaults().Limits.MaxTokensCap)
+	unknownLength := pricedSnapshot(1, 10, 100)
+	unknownLength.Models = nil
+	testCases := []struct {
+		name            string
+		amount          uint64
+		snapshot        chain.PhaseSnapshot
+		refused         bool
+		wantCreateCalls int
+	}{
+		{name: "below_the_floor", amount: 720_109, snapshot: pricedSnapshot(1, 10, 100), refused: true},
+		{name: "at_the_floor", amount: 720_110, snapshot: pricedSnapshot(1, 10, 100), wantCreateCalls: 1},
+		{name: "price_unknown", amount: 1_000, snapshot: pricedSnapshot(0, 0, 0), wantCreateCalls: 1},
+		{name: "length_unknown", amount: cappedAnswer + 110, snapshot: unknownLength, wantCreateCalls: 1},
+		{name: "price_overflows", amount: 1 << 62, snapshot: pricedSnapshot(1<<62, 0, 0), refused: true},
+		{name: "create_fee_overflows", amount: 1 << 62, snapshot: pricedSnapshot(1, 0, ^uint64(0)), refused: true},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			txClient := &fakeTxClient{createEscrowFn: succeedingCreateEscrowFn(42)}
+			manager := floorManager(t, txClient, nil)
+
+			_, err := manager.createEscrow(context.Background(), ModelConfig{ModelID: "model-a", Amount: testCase.amount, PrivateKeyEnv: "MODEL_A_KEY"}, roleRegular, testCase.snapshot)
+
+			if refused := errors.Is(err, ErrAmountBelowFloor); refused != testCase.refused {
+				t.Fatalf("createEscrow() = %v, want refused=%v", err, testCase.refused)
+			}
+			if txClient.createCalls != testCase.wantCreateCalls {
+				t.Fatalf("createCalls = %d, want %d", txClient.createCalls, testCase.wantCreateCalls)
+			}
+		})
+	}
+}
+
+// Test flow:
+//  1. Refuse model-a twice for an amount below its floor, then create it with an amount that covers the floor, then refuse it once more.
+//  2. Assert the refusal is narrated once per run of refusals, with the amount and the floor, and again after a create succeeded in between.
+func TestABelowFloorRefusalIsNarratedOnceUntilACreateSucceeds(t *testing.T) {
+	narrator := &recordingLifecycleNarrator{}
+	manager := floorManager(t, &fakeTxClient{createEscrowFn: succeedingCreateEscrowFn(42)}, narrator)
+	short := ModelConfig{ModelID: "model-a", Amount: 1_000, PrivateKeyEnv: "MODEL_A_KEY"}
+	funded := ModelConfig{ModelID: "model-a", Amount: 800_000, PrivateKeyEnv: "MODEL_A_KEY"}
+
+	for _, model := range []ModelConfig{short, short, funded, short} {
+		_, _ = manager.createEscrow(context.Background(), model, roleRegular, pricedSnapshot(1, 10, 100))
+	}
+
+	want := []string{
+		"below floor model-a regular amount 1000 floor 720110",
+		"created 42 model-a regular epoch 9 tx TX-42",
+		"below floor model-a regular amount 1000 floor 720110",
+	}
+	if got := narrator.recorded(); !slices.Equal(got, want) {
+		t.Fatalf("narrated %q, want %q", got, want)
+	}
+}
+
+// Test flow:
+//  1. Fill model-a to its target under a priced snapshot whose floor its amount cannot cover.
+//  2. Assert the fill reports `ErrAmountBelowFloor` and the create breaker stays closed: the refusal is the operator's configuration, not a failing chain.
+func TestABelowFloorRefusalLeavesTheCreateBreakerClosed(t *testing.T) {
+	manager := floorManager(t, &fakeTxClient{createEscrowFn: failOnCreate(t)}, nil)
+	models := []ModelConfig{{ModelID: "model-a", TargetCount: 1, Amount: 1_000, PrivateKeyEnv: "MODEL_A_KEY"}}
+
+	fills := manager.fillToTargets(context.Background(), roleRegular, models, func(model ModelConfig) int { return model.TargetCount }, pricedSnapshot(1, 10, 100), nil)
+
+	if len(fills) != 1 || !errors.Is(fills[0].err, ErrAmountBelowFloor) {
+		t.Fatalf("fills = %+v, want one refused below the floor", fills)
+	}
+	if manager.breaker.gated("model-a", roleRegular) {
+		t.Fatal("the create breaker opened on a refusal no chain call made")
 	}
 }
