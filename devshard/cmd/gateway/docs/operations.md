@@ -17,7 +17,7 @@ Three tiers, and the tier decides both who may call it and whether the kill swit
 | `/v1/admin/*`, `/v1/debug/rotation`, `/v1/debug/memstats`, `/v1/debug/heightsync` | admin | yes |
 | `/debug/pprof/*` | admin | yes |
 
-The `/devshard/{id}/…` prefix pins a request to one escrow instead of letting the scheduler choose — the recovery surface for an escrow that needs attention on its own.
+The `/devshard/{id}/…` prefix pins a request to one escrow instead of letting the scheduler choose — the recovery surface for an escrow that needs attention on its own. A pinned chat to an escrow the gateway no longer routes answers 404, as an unknown devshard.
 
 `POST /devshard/{id}/v1/debug/signatures/collect?nonce=N` asks the escrow's group again for its signatures at nonce `N`, which must not be ahead of the session's own, and answers `sig_weight`, `quorum_threshold`, `total_slots` and `has_quorum` — the reply devshardctl gave. It reaches a live or draining escrow only: the signatures land in that session, which is the one a settlement builds its payload from; a settled or non-resident escrow answers 404. The call is written to the admin audit log.
 
@@ -88,9 +88,7 @@ Signing keys are addressed **by the name of the variable that holds them**, neve
 | `GATEWAY_DEFAULT_MAX_TOKENS` / `GATEWAY_MAX_TOKENS_CAP` | from `filters` | the output budget a request gets and may ask for |
 | `DEVSHARD_ESCROW_ROTATION_ENABLED` | false | whether the epoch bridge creates and retires escrows |
 | `DEVSHARD_ESCROW_ROTATION_SETTLEMENT_ENABLED` | false | whether retirement settles or only parks; a model's own `settlement_enabled` in the models JSON overrides it |
-| `GATEWAY_ROTATION_HOLD_ENABLED` | true | a balance-depleted escrow goes on hold instead of being parked; false is the rollback to parking |
-| `GATEWAY_ROTATION_HOLD_MAX_PER_MODEL` | 16 | escrows one model may keep on hold; past it a depleted escrow is parked |
-| `GATEWAY_ROTATION_HOLD_RESUME_ANSWERS` | 32 | headroom an escrow's balance must cover before it leaves hold: its model's floor and this many capped answers less one (`routing.md`, "An escrow on hold") |
+| `GATEWAY_ROTATION_SETTLE_MARGIN_BLOCKS` | 600 | blocks before an escrow's settlement deadline at which it is parked for settling; at least 1; a margin the measured block time (over at least 100 blocks) makes shorter than two settle windows is journalled as `settle margin shorter than two settle windows`, once per episode; the margin is never refused |
 | `DEVSHARD_ESCROW_ROTATION_PRE_POC_BLOCKS` | 300 | how early the bridge starts |
 | `GATEWAY_WARM_NEW_ESCROWS` | true | whether a new escrow is taught to its group before serving |
 | `GATEWAY_CHAIN_SNAPSHOT_MAX_AGE_SECONDS` | 60 | how stale the chain snapshot may be before requests are refused 503; `0` disables the gate |
@@ -152,7 +150,7 @@ These are read the same way and rarely need changing. Where a knob has a longer 
 
 ## Boot
 
-`lifecycle.go`, `bootOrder` and `startAll`. The order is a declared list rather than a sequence of calls, so a test can read it back (`boot_order_test.go`), the way the shutdown order is. It is load-bearing:
+`app/lifecycle.go`, `bootOrder` and `startAll`. The order is a declared list rather than a sequence of calls, so a test can read it back (`app/boot_order_test.go`), the way the shutdown order is. It is load-bearing:
 
 1. the chain observer starts — nothing downstream can score a host before a snapshot exists;
 2. the warmup prober starts;
@@ -168,7 +166,7 @@ These are read the same way and rarely need changing. Where a knob has a longer 
 
 ## Shutdown
 
-`lifecycle.go`, `shutdownOrder`. Twelve steps, in this order, bounded by the grace period, with up to one more second from the journal step's floor:
+`app/lifecycle.go`, `shutdownOrder`. Twelve steps, in this order, bounded by the grace period, with up to one more second from the journal step's floor:
 
 | # | Step | Why here |
 | --- | --- | --- |
@@ -259,14 +257,18 @@ The record carries no request or response body — capture files exist for that,
 | `escrow recovered from commitment` | a create landed while the gateway was down, so `escrow created` never ran; the escrow exists in no other line |
 | `commitment cleared` | a creation intent was abandoned, with the reason — one of which (`transaction created no escrow`) means the transaction *did* commit |
 | `escrow gone from chain, taken out of service` | `escrow retired` also fires for settlement parking, so this is the only line carrying the cause |
+| `escrow chain epoch and amount unresolved` | the row's `chain_epoch` and `amount` could not be read, with the reason; written once per row until it resolves, so the row's `chain_epoch: 0` in the admin JSON is the only sign it is still unresolved |
 | `escrow depleted with no replacement configured` | capacity left the fleet and nothing replaces it |
+| `regular escrows promoted to temp` | the bridge funded fewer temps than `temp_count` — no room under `max_unsettled`, a model the network does not serve, or a failed create — so the regulars keep serving as temps instead of being retired; `rotation_status.create_error` names the cause (`bridge funded fewer temps than temp_count` for a partial fill) |
+| `escrow parked at its settlement deadline` / `escrow deadline passes unsettled` / `settle margin shorter than two settle windows` / `escrow deadlines read past a stale chain height` | an escrow came within `rotation.settle_margin_blocks` of `settle_by`, the switch block by which its chain epoch must settle, and was parked; a row inside its margin that nothing is allowed to settle, or whose deadline has passed (Error, with `reason`: `settlement_disabled`, `operator_deactivated`, `key_missing`, `deadline_passed`; once per row while it lasts; `settle_by` is left out once the switch block is no longer known, as on `deadline_passed`), a margin shorter than two settle windows at the measured block time, and a chain snapshot older than `chain_snapshot_max_age_seconds` whose deadlines are read at `projected_height` (`height` plus `stale_for_ms` over the measured block time, or one block a second), once per episode |
+| `escrow funding planned` / `funding guarantee broken` / `model amount cannot fund a full escrow` / `escrow budget reached` | the funding planner's decision for a model and the start of each episode. Progress lane, so a backlog may drop them |
 | `nonce burned for nobody` (`journal/render_money.go`) | a committed nonce that will serve nobody, with the escrow and the reason, and under `burned_during_request` the request it was spent during |
 | `a host stopped mid-answer: reply served, not cached` (`journal/render_request.go`) | the reply reached the client whole and never reached a terminal `finish_reason`, so nothing replays it. The gateway writes the SSE terminator itself, so nothing else names a truncated answer — but only a reply the cache would otherwise have stored gets here: with `chat_cache_max_bytes` at 0, for a body past the per-entry bound, or when the client had already left, a truncated answer still passes unnamed |
 | `escrow stopped burning nonces at its budget` | the escrow now queues callers rather than spending on requests it cannot serve |
 | `escrow warmed` / `escrow warmup voted on its unfinished nonce` | a new escrow's group was taught the escrow, and the probe's own nonce was settled; the vote line is **Warn** when the vote failed, and `catch_up_error` appears only when the catch-up failed |
 | `host blocked for state divergence` (`journal/render_race.go`) | the block does not lift while the process runs and no metric exposes it — "why is this host never picked" is answerable only here |
 | `chain snapshot stale` / `chain snapshot recovered` | written on the **edge** only; a failed refresh keeps routing on the previous participants until the last poll that read the epoch and the participants passes `chain_snapshot_max_age_seconds`, after which requests are refused 503. The nonce-ceiling and preserved-set reads fall back within the poll and do not hold that clock back |
-| `chain epoch` / `chain blocked requests` / `chain unblocked requests` | written on the **edge** only: `phaseNarrator` (`observers.go`) decides the change and the journal writes it; a snapshot that carries no epoch — a first poll that failed — announces none |
+| `chain epoch` / `chain blocked requests` / `chain unblocked requests` | written on the **edge** only: `phaseNarrator` (`app/observers.go`) decides the change and the journal writes it; a snapshot that carries no epoch — a first poll that failed — announces none |
 | `admin request failed` / `admin request refused` (`api/errors.go`) | the operator mutation lines are written on the successful path only, so a failed operator action would otherwise be invisible |
 
 `escrow` is always the escrow id as text. The chain carries the id behind `escrow created`, `escrow recovered from commitment` and `settle tx broadcast` as a number, and `escrow/` and `chain/` convert it to text before the journal writes it, because a JSON collector reads a number as a different type from every other line's `escrow`.
@@ -275,7 +277,7 @@ Admin lines carry the action and its subject, **never the request body** — an 
 
 ## Metrics
 
-`/metrics`, Prometheus: 73 gateway families beside the Go runtime and process collectors. The nonce ledger adds none; it is served by its own JSON API (see [accounting.md](./accounting.md)). Grouped by the question they answer:
+`/metrics`, Prometheus: 77 gateway families beside the Go runtime and process collectors. The nonce ledger adds none; it is served by its own JSON API (see [accounting.md](./accounting.md)). Grouped by the question they answer:
 
 | Question | Series |
 | --- | --- |
@@ -287,6 +289,7 @@ Admin lines carry the action and its subject, **never the request body** — an 
 | are the hosts reachable and on time | `devshard_gateway_host_ping_up`, `devshard_gateway_host_ping_rtt_seconds`, `devshard_gateway_host_ping_warm_rtt_seconds`, `devshard_gateway_host_clock_divergence_seconds`, with `devshard_gateway_host_ping_targets`, `devshard_gateway_host_ping_ticks_total` and `devshard_gateway_host_ping_last_probe_timestamp_seconds` saying the probe itself runs ([`hostping/README.md`](../hostping/README.md)) |
 | is the shard behind on the votes it owes | `devshard_gateway_owed_timeout_votes`, against `engine_max_concurrent_timeout_votes` ([race.md](./race.md), "The timeout-vote queue") |
 | is the chain view healthy | `devshard_gateway_chain_snapshot_healthy`, `devshard_gateway_chain_snapshot_age_seconds`, `devshard_gateway_chain_epoch_phase`, `devshard_gateway_chain_requests_blocked` |
+| is the escrow funding planner deciding sensibly | `devshard_gateway_escrow_money{model,class}`, `devshard_gateway_escrow_count{model,state}`, `devshard_gateway_planner_decisions_total{model,action,reason}` `devshard_gateway_funding_guarantee{model}` (below zero the guarantee is short), `devshard_gateway_planner_ignored_marks_total{model,reason}` (depletion marks the planner dropped; a rising `balance_floor` count is routing reporting what the planner already plans for) and `devshard_gateway_escrow_deadline_unsettled_total{model,reason}` (escrows narrated unsettled at or past their settle margin: `settlement_disabled`, `operator_deactivated`, `key_missing`, `deadline_passed`; any `deadline_passed` is money lost); the journal lines `escrow funding planned`, `escrow starved`, `funding guarantee broken` say why. |
 | is memory bounded | `devshard_gateway_buffered_response_bytes`, `devshard_gateway_cache_bytes`, `devshard_gateway_capture_bytes_held` |
 | are the request records keeping up | `devshard_gateway_accounting_rows_written_total`, `devshard_gateway_accounting_rows_lost_total`, `devshard_gateway_accounting_retention_sweeps_failed_total` |
 | is the journal keeping up | `devshard_gateway_journal_money_refused_total`, `devshard_gateway_journal_progress_dropped_total`, `devshard_gateway_journal_late_events_total` |
@@ -339,6 +342,8 @@ Participant-labelled race series — `devshard_gateway_attempts_*`, `devshard_ga
 | hosts the gateway distrusts | `GET /v1/admin/suspicious-hosts` |
 | why one host is or is not taking work | `GET /v1/admin/hosts` |
 
+An escrow row in `GET /v1/admin/state` and `GET /v1/admin/devshards` carries, besides the gateway's own labels (`rotation_role`, `rotation_epoch`, `active`, `settlement_pending`), the chain facts the gateway resolved for it: `chain_epoch`, the epoch the chain stamped on the escrow, whose settle deadline the deadline rule reads (`0` while unresolved); `amount`, the escrow's funded amount (`0` while unresolved); and `gone_from_chain`, true once the chain no longer holds the escrow, which takes it out of service and out of the unsettled count.
+
 ### What a host answer carries
 
 `GET /v1/admin/hosts` joins the two snapshots that already exist, one row per participant and model. Nothing is computed for it: each field is a value one of the two limiters or the tracker already holds, asked for on demand rather than waited for at the next scrape. For the congestion windows it is the only surface there is — no gauge carries them.
@@ -364,6 +369,22 @@ Participant-labelled race series — `devshard_gateway_attempts_*`, `devshard_ga
 | burns climbing | `ghost_nonces_burned_total` by reason — see [accounting.md](./accounting.md) |
 | shutdown reports "abandoned with work still running" | a host stopped answering and the drain hit the grace period; the votes it owed were not paid |
 
+To reproduce an escrow lifecycle problem (create, drain, timeout votes, settle, prune) without a stand, use the scenario tests in [`scenarios/`](../scenarios/README.md); the `loadsim` test described in [CONTRIBUTING.md](../CONTRIBUTING.md#load-simulation) stays the profiling tool.
+
+## The funding planner
+
+The planner alone creates and retires escrows. An escrow whose balance falls under the model's floor keeps serving the requests it can afford: routing spends starved residue first on small requests, and a depletion mark other than the nonce cap is dropped and counted instead of retiring the escrow. At least `full_context_slots` full escrows are kept (the guarantee), capacity follows demand, and creates are bounded by `max_unsettled` and by a rate bucket of two at once, then one per refill. The epoch bridge keeps its window; the planner plans nothing inside it, and after PoC it funds the regular set and retires the old temps once the spread is met. Read `escrow funding planned` and `devshard_gateway_planner_decisions_total` to see what it decided.
+
+What to watch:
+
+| Signal | Healthy |
+| --- | --- |
+| `devshard_gateway_funding_guarantee{model}` | at or above 0; below 0 the guarantee is short, and `funding guarantee broken` says why (wallet, breaker, PoC, bridge window) |
+| `devshard_gateway_escrow_money{model,class}` | `free` follows demand; `stuck` stays near 0 |
+| `devshard_gateway_planner_decisions_total{model,action,reason}` | creates and retires track demand; a steady stream of `capacity` creates with a flat `max_unsettled` is churn against the budget |
+| `devshard_gateway_planner_ignored_marks_total{model,reason}` | balance marks dropped by design; a rising `balance_floor` count is routing reporting what the planner already plans for |
+| `devshard_gateway_escrow_deadline_unsettled_total{model,reason}` | 0; any `deadline_passed` is money lost |
+
 ## Where to change what
 
 | To change | Go to |
@@ -372,7 +393,7 @@ Participant-labelled race series — `devshard_gateway_attempts_*`, `devshard_ga
 | which variables are read | `env/env.go` — and nowhere else |
 | what an admin may override at runtime | `config.Overrides` |
 | a route or its auth tier | `api/routes.go`, `routes()` |
-| what shuts down when | `lifecycle.go`, `shutdownOrder` |
+| what shuts down when | `app/lifecycle.go`, `shutdownOrder` |
 | a metric or its labels | `metrics/` |
 
 ## The two routing lists

@@ -55,6 +55,16 @@ func (s *markSet) forget(key string) {
 	delete(s.keys, key)
 }
 
+func (s *markSet) retain(keep func(key string) bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for key := range s.keys {
+		if !keep(key) {
+			delete(s.keys, key)
+		}
+	}
+}
+
 func (s *markSet) drain() map[string]bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -81,12 +91,6 @@ func (s *depletionMarks) mark(escrowID string, reason scheduler.ExhaustionReason
 		s.reasons[escrowID] = reason
 	}
 	return !seen
-}
-
-func (s *depletionMarks) forget(escrowID string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	delete(s.reasons, escrowID)
 }
 
 func (s *depletionMarks) drain() map[string]scheduler.ExhaustionReason {

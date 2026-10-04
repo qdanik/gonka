@@ -8,7 +8,7 @@ import (
 )
 
 // Test flow:
-//  1. Build a `deliberatelyNotUpdated` map naming the columns the upsert intentionally leaves alone: `escrow_id` (the conflict key), `settlement_pending` (moved only by `SetDevshardSettlementPending`), `route_prefix` (pinned for the escrow's life), and `on_hold` (moved only by `PutOnHoldIfServing`/`ResumeFromHold`).
+//  1. Build a `deliberatelyNotUpdated` map naming the columns the upsert intentionally leaves alone: `escrow_id` (the conflict key), `settlement_pending` (moved only by `SetDevshardSettlementPending`), `route_prefix` (pinned for the escrow's life), and `chain_epoch`, `amount` and `gone_from_chain` (written only by their own statements).
 //  2. Iterate every field of `DevshardRecord` via reflection, converting each to its column name via `columnName`.
 //  3. Assert each deliberately-excluded column is indeed absent from the upsert's `column = excluded.column` clauses.
 //  4. Assert every other column is present in the upsert's update clause, so a re-registration cannot silently keep its old value.
@@ -17,7 +17,9 @@ func TestTheDevshardUpsertCarriesEveryFieldItShould(t *testing.T) {
 		"escrow_id":          "the conflict key",
 		"settlement_pending": "only SetDevshardSettlementPending moves it",
 		"route_prefix":       "the version the escrow was bound under never changes",
-		"on_hold":            "an upsert only clears it with active; otherwise only PutOnHoldIfServing/ResumeFromHold move it",
+		"chain_epoch":        "only SetDevshardChainFacts writes what the chain stamped",
+		"amount":             "only SetDevshardChainFacts writes what the chain locked",
+		"gone_from_chain":    "only MarkDevshardGoneFromChain sets it, with active = 0; an upsert only clears it with active = 1",
 	}
 
 	recordType := reflect.TypeFor[DevshardRecord]()

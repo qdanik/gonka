@@ -51,14 +51,39 @@ func (r *Recorder) Find(msg string) (Entry, bool) {
 	return Entry{}, false
 }
 
+var (
+	installedMu sync.Mutex
+	installed   *Recorder
+)
+
 // Install makes the recorder the gateway's logger for the length of the test. The logger is a package
 // global, so a test that installs one cannot run in parallel with another that reads it.
 func Install(t *testing.T) *Recorder {
 	t.Helper()
 	recorder := &Recorder{}
 	logging.SetLogger(recorder)
-	t.Cleanup(func() { logging.SetLogger(logging.NewSlogAdapter()) })
+	installedMu.Lock()
+	installed = recorder
+	installedMu.Unlock()
+	t.Cleanup(func() {
+		installedMu.Lock()
+		installed = nil
+		installedMu.Unlock()
+		logging.SetLogger(logging.NewSlogAdapter())
+	})
 	return recorder
+}
+
+// Shared returns the recorder the test already installed, or installs one, so two readers of one test's log never replace each other's.
+func Shared(t *testing.T) *Recorder {
+	t.Helper()
+	installedMu.Lock()
+	current := installed
+	installedMu.Unlock()
+	if current != nil {
+		return current
+	}
+	return Install(t)
 }
 
 // Field returns the value logged under key, or nil when the entry did not carry it.

@@ -3,11 +3,9 @@ package registry
 import (
 	"slices"
 	"sync"
-	"time"
+	"sync/atomic"
 
 	"devshard/cmd/gateway/scheduler"
-	"devshard/types"
-	"devshard/user"
 )
 
 // Candidates satisfies scheduler.escrowSource.
@@ -15,7 +13,7 @@ func (r *Registry) Candidates(model string) []scheduler.Escrow {
 	entries := r.live.Load().byModel[model]
 	candidates := make([]scheduler.Escrow, 0, len(entries))
 	for _, entry := range entries {
-		if !entry.routable() {
+		if !entry.accepting() {
 			continue
 		}
 		candidates = append(candidates, entry.candidate())
@@ -26,93 +24,10 @@ func (r *Registry) Candidates(model string) []scheduler.Escrow {
 // Routable answers for one escrow what Candidates answers for a model, by id rather than by scanning every model.
 func (r *Registry) Routable(escrowID string) (scheduler.Escrow, bool) {
 	entry, known := r.live.Load().byID[escrowID]
-	if !known || !entry.routable() {
-		return scheduler.Escrow{}, false
-	}
-	return entry.candidate(), true
-}
-
-// ResumeCandidate resolves a live, accepting escrow whether or not it is on hold, for the tick that decides when it may resume.
-func (r *Registry) ResumeCandidate(escrowID string) (scheduler.Escrow, bool) {
-	entry, known := r.live.Load().byID[escrowID]
 	if !known || !entry.accepting() {
 		return scheduler.Escrow{}, false
 	}
 	return entry.candidate(), true
-}
-
-func (r *Registry) OnHold(escrowID string) bool {
-	entry, known := r.live.Load().byID[escrowID]
-	return known && entry.onHold.Load()
-}
-
-// SetOnHold touches candidate selection alone: holds, membership, accounting and the session are unchanged.
-func (r *Registry) SetOnHold(escrowID string, onHold bool) {
-	if entry, known := r.live.Load().byID[escrowID]; known {
-		entry.onHold.Store(onHold)
-	}
-}
-
-// Funds reads the money an escrow holds for unresolved nonces; it deep-copies the state, so it is for rare events only.
-func (r *Registry) Funds(escrowID string) (balance, reserved, challenged uint64, known bool) {
-	entry, live := r.live.Load().byID[escrowID]
-	if !live {
-		return 0, 0, 0, false
-	}
-	for _, record := range entry.session.SnapshotState().Inferences {
-		switch record.Status {
-		case types.StatusPending, types.StatusStarted:
-			reserved += record.ReservedCost
-		case types.StatusChallenged:
-			challenged += record.ActualCost
-		}
-	}
-	return entry.session.Balance(), reserved, challenged, true
-}
-
-// ReservationsReturnBy: see README.md, "The published set and its readers".
-func (r *Registry) ReservationsReturnBy(escrowID string) (time.Time, bool) {
-	entry, live := r.live.Load().byID[escrowID]
-	if !live {
-		return time.Time{}, false
-	}
-	config, records := entry.session.LiveInferences()
-	refusalWindow := time.Duration(config.RefusalTimeout)*time.Second + user.TimeoutBuffer
-	var returnBy time.Time
-	for _, record := range records {
-		switch record.Status {
-		case types.StatusStarted, types.StatusChallenged:
-			return time.Time{}, false
-		case types.StatusPending:
-			if due := time.Unix(record.StartedAt, 0).Add(refusalWindow); due.After(returnBy) {
-				returnBy = due
-			}
-		}
-	}
-	return returnBy, true
-}
-
-// Recoverable: see README.md, "The published set and its readers".
-func (r *Registry) Recoverable(escrowID string, grace time.Duration) (uint64, bool) {
-	entry, live := r.live.Load().byID[escrowID]
-	if !live {
-		return 0, false
-	}
-	config, records := entry.session.LiveInferences()
-	overdueBefore := r.now().Add(-(time.Duration(config.RefusalTimeout)*time.Second + user.TimeoutBuffer + grace))
-	keepOverdue := entry.busy()
-	var recoverable uint64
-	for _, record := range records {
-		switch record.Status {
-		case types.StatusStarted, types.StatusChallenged:
-			return 0, false
-		case types.StatusPending:
-			if keepOverdue || time.Unix(record.StartedAt, 0).After(overdueBefore) {
-				recoverable += record.ReservedCost
-			}
-		}
-	}
-	return recoverable, true
 }
 
 func (e *escrowEntry) candidate() scheduler.Escrow {
@@ -131,7 +46,6 @@ type EscrowState struct {
 	ID           string
 	Model        string
 	Accepting    bool
-	OnHold       bool
 	InFlight     int64
 	Participants []string
 }
@@ -158,7 +72,6 @@ func stateOf(entry *escrowEntry, draining bool) EscrowState {
 		ID:           entry.id,
 		Model:        entry.model,
 		Accepting:    !draining && entry.accepting(),
-		OnHold:       !draining && entry.onHold.Load(),
 		InFlight:     entry.inFlight.Load(),
 		Participants: slices.Clone(entry.participants),
 	}
@@ -192,9 +105,24 @@ func (r *Registry) HoldSettlement(escrowID string) (EscrowSession, func(), bool)
 	if !known || entry.closeClaimed {
 		return nil, nil, false
 	}
-	entry.settlementHolds.Add(1)
+	return entry.session, r.countHoldLocked(entry, &entry.settlementHolds), true
+}
+
+// holdForSweep keeps a live escrow's session open and busy for a timeout vote without counting it as a request. See README.md, "The published set and its readers".
+func (r *Registry) holdForSweep(escrowID string) (EscrowSession, func(), bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	entry, known := r.live.Load().byID[escrowID]
+	if !known {
+		return nil, nil, false
+	}
+	return entry.session, r.countHoldLocked(entry, &entry.sweepHolds), true
+}
+
+func (r *Registry) countHoldLocked(entry *escrowEntry, holds *atomic.Int64) func() {
+	holds.Add(1)
 	var once sync.Once
-	return entry.session, func() { once.Do(func() { r.releaseSettlement(entry) }) }, true
+	return func() { once.Do(func() { r.releaseHold(entry, holds) }) }
 }
 
 func (r *Registry) settlementEntryLocked(escrowID string) (*escrowEntry, bool) {
@@ -249,9 +177,7 @@ func (r *Registry) holdFor(entry *escrowEntry) func() (func(), bool) {
 }
 
 func (r *Registry) holdLocked(entry *escrowEntry) func() {
-	entry.inFlight.Add(1)
-	var once sync.Once
-	return func() { once.Do(func() { r.release(entry) }) }
+	return r.countHoldLocked(entry, &entry.inFlight)
 }
 
 // HostDials is every address the live escrows can reach, once each. See README.md.

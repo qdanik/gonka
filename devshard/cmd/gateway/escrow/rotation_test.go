@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -58,10 +59,10 @@ func failOnCreate(t *testing.T) func(context.Context, *signing.Secp256k1Signer, 
 
 // Test flow:
 //  1. Seed the store with one existing active temp devshard record for model-a.
-//  2. Call `ensureToTarget` with a target of 3 against that one existing record.
+//  2. Call `fillToLabel` for temps with a target of 3 against that one existing record.
 //  3. Assert it returns nil with created=2, the shortfall between the target and what already exists.
 //  4. Assert the chain client's CreateEscrow was called exactly twice.
-func TestEnsureToTargetCreatesExactlyTheShortfall(t *testing.T) {
+func TestTheBridgeFillCreatesExactlyTheShortfall(t *testing.T) {
 	testStore := newFakeStore()
 	existing := store.DevshardRecord{EscrowID: "existing-1", Model: "model-a", Active: true, RotationRole: roleTemp, RotationEpoch: 5}
 	testStore.devshards[existing.EscrowID] = existing
@@ -70,9 +71,10 @@ func TestEnsureToTargetCreatesExactlyTheShortfall(t *testing.T) {
 	model := ModelConfig{ModelID: "model-a", Amount: 1000, PrivateKeyEnv: "MODEL_A_KEY"}
 	snapshot := servedSnapshot(5, 100, "model-a")
 
-	created, err := m.ensureToTarget(context.Background(), roleTemp, 3, model, snapshot, []store.DevshardRecord{existing})
+	fill := m.fillToLabel(context.Background(), roleTemp, snapshot.EpochIndex, []ModelConfig{model}, func(ModelConfig) int { return 3 }, snapshot, []store.DevshardRecord{existing})[0]
+	created, err := fill.created, fill.err
 	if err != nil {
-		t.Fatalf("ensureToTarget(): %v", err)
+		t.Fatalf("fillToLabel(): %v", err)
 	}
 	if created != 2 {
 		t.Fatalf("created = %d, want 2 (target 3 minus 1 existing)", created)
@@ -84,9 +86,9 @@ func TestEnsureToTargetCreatesExactlyTheShortfall(t *testing.T) {
 
 // Test flow:
 //  1. Seed a devshard record for each of the case's existing count, and build a chain client that fails the test if CreateEscrow is ever called.
-//  2. Call `ensureToTarget` with the case's target.
+//  2. Call `fillToLabel` for temps with the case's target.
 //  3. Assert it returns nil with created=0, since nothing new is needed. The table varies existing count vs target: exactly at target, and over target.
-func TestEnsureToTargetAlreadyAtOrOverTarget(t *testing.T) {
+func TestTheBridgeFillAtOrOverTargetCreatesNothing(t *testing.T) {
 	tests := []struct {
 		name     string
 		existing int
@@ -108,9 +110,10 @@ func TestEnsureToTargetAlreadyAtOrOverTarget(t *testing.T) {
 			model := ModelConfig{ModelID: "model-a", Amount: 1000, PrivateKeyEnv: "MODEL_A_KEY"}
 			snapshot := servedSnapshot(5, 100, "model-a")
 
-			created, err := m.ensureToTarget(context.Background(), roleTemp, tt.target, model, snapshot, devshards)
+			fill := m.fillToLabel(context.Background(), roleTemp, snapshot.EpochIndex, []ModelConfig{model}, func(ModelConfig) int { return tt.target }, snapshot, devshards)[0]
+			created, err := fill.created, fill.err
 			if err != nil {
-				t.Fatalf("ensureToTarget(): %v", err)
+				t.Fatalf("fillToLabel(): %v", err)
 			}
 			if created != 0 {
 				t.Fatalf("created = %d, want 0", created)
@@ -122,10 +125,10 @@ func TestEnsureToTargetAlreadyAtOrOverTarget(t *testing.T) {
 // Test flow:
 //  1. Record a create-breaker failure for model-a/temp so its cooldown is armed.
 //  2. Build a snapshot with no weights, so the model is never treated as served or unserved (a cold start).
-//  3. Call `ensureToTarget` already at target with one existing record.
+//  3. Call `fillToLabel` for temps already at target with one existing record.
 //  4. Assert it returns nil with created=0.
 //  5. Assert the breaker is still gated, since an at-target call must short-circuit before reaching the breaker and must not consume its cooldown.
-func TestEnsureToTargetAtTargetDoesNotConsumeBreakerCooldown(t *testing.T) {
+func TestTheBridgeFillAtTargetDoesNotConsumeBreakerCooldown(t *testing.T) {
 	testStore := newFakeStore()
 	m := newRotationManager(t, testStore, &fakeTxClient{createEscrowFn: failOnCreate(t)}, false)
 	m.breaker.recordFailure("model-a", roleTemp)
@@ -133,9 +136,10 @@ func TestEnsureToTargetAtTargetDoesNotConsumeBreakerCooldown(t *testing.T) {
 	snapshot := chain.PhaseSnapshot{EpochIndex: 5, BlockHeight: 100}
 	existing := []store.DevshardRecord{{EscrowID: "existing-1", Model: "model-a", Active: true, RotationRole: roleTemp, RotationEpoch: 5}}
 
-	created, err := m.ensureToTarget(context.Background(), roleTemp, 1, model, snapshot, existing)
+	fill := m.fillToLabel(context.Background(), roleTemp, snapshot.EpochIndex, []ModelConfig{model}, func(ModelConfig) int { return 1 }, snapshot, existing)[0]
+	created, err := fill.created, fill.err
 	if err != nil {
-		t.Fatalf("ensureToTarget(): %v", err)
+		t.Fatalf("fillToLabel(): %v", err)
 	}
 	if created != 0 {
 		t.Fatalf("created = %d, want 0", created)
@@ -147,17 +151,18 @@ func TestEnsureToTargetAtTargetDoesNotConsumeBreakerCooldown(t *testing.T) {
 
 // Test flow:
 //  1. Build a snapshot where the network serves only model-b, so model-a is known but not served.
-//  2. Call `ensureToTarget` for model-a against that snapshot.
+//  2. Call `fillToLabel` for model-a's temps against that snapshot.
 //  3. Assert it returns nil with created=0, since an unserved model is skipped.
-func TestEnsureToTargetSkipsWhenModelNotServedByNetwork(t *testing.T) {
+func TestTheBridgeFillSkipsAModelTheNetworkDoesNotServe(t *testing.T) {
 	testStore := newFakeStore()
 	m := newRotationManager(t, testStore, &fakeTxClient{createEscrowFn: failOnCreate(t)}, false)
 	model := ModelConfig{ModelID: "model-a", Amount: 1000, PrivateKeyEnv: "MODEL_A_KEY"}
 	snapshot := servedSnapshot(5, 100, "model-b")
 
-	created, err := m.ensureToTarget(context.Background(), roleTemp, 3, model, snapshot, nil)
+	fill := m.fillToLabel(context.Background(), roleTemp, snapshot.EpochIndex, []ModelConfig{model}, func(ModelConfig) int { return 3 }, snapshot, nil)[0]
+	created, err := fill.created, fill.err
 	if err != nil {
-		t.Fatalf("ensureToTarget(): %v", err)
+		t.Fatalf("fillToLabel(): %v", err)
 	}
 	if created != 0 {
 		t.Fatalf("created = %d, want 0", created)
@@ -166,18 +171,19 @@ func TestEnsureToTargetSkipsWhenModelNotServedByNetwork(t *testing.T) {
 
 // Test flow:
 //  1. Record a create-breaker failure for model-a/temp so it is gated.
-//  2. Call `ensureToTarget` against a served snapshot.
+//  2. Call `fillToLabel` for temps against a served snapshot.
 //  3. Assert it returns `errCreateSuppressed` with created=0.
-func TestEnsureToTargetReportsSuppressionWhenBreakerGated(t *testing.T) {
+func TestTheBridgeFillReportsSuppressionWhenTheBreakerIsGated(t *testing.T) {
 	testStore := newFakeStore()
 	m := newRotationManager(t, testStore, &fakeTxClient{createEscrowFn: failOnCreate(t)}, false)
 	m.breaker.recordFailure("model-a", roleTemp)
 	model := ModelConfig{ModelID: "model-a", Amount: 1000, PrivateKeyEnv: "MODEL_A_KEY"}
 	snapshot := servedSnapshot(5, 100, "model-a")
 
-	created, err := m.ensureToTarget(context.Background(), roleTemp, 3, model, snapshot, nil)
+	fill := m.fillToLabel(context.Background(), roleTemp, snapshot.EpochIndex, []ModelConfig{model}, func(ModelConfig) int { return 3 }, snapshot, nil)[0]
+	created, err := fill.created, fill.err
 	if !errors.Is(err, errCreateSuppressed) {
-		t.Fatalf("ensureToTarget() = %v, want errCreateSuppressed: a gated create is not a success the bridge may retire against", err)
+		t.Fatalf("fillToLabel() = %v, want errCreateSuppressed: a gated create is not a success the bridge may retire against", err)
 	}
 	if created != 0 {
 		t.Fatalf("created = %d, want 0", created)
@@ -186,9 +192,9 @@ func TestEnsureToTargetReportsSuppressionWhenBreakerGated(t *testing.T) {
 
 // Test flow:
 //  1. Build a chain client whose CreateEscrow broadcasts then fails.
-//  2. Call `ensureToTarget` and assert the broadcast failure is surfaced, created=0, and CreateEscrow was called exactly once.
-//  3. Call `ensureToTarget` again and assert it now returns `errCreateSuppressed` from the gated breaker, without any further CreateEscrow call.
-func TestEnsureToTargetStopsOnFirstErrorAndGatesBreaker(t *testing.T) {
+//  2. Call `fillToLabel` for temps and assert the broadcast failure is surfaced, created=0, and CreateEscrow was called exactly once.
+//  3. Call `fillToLabel` again and assert it now returns `errCreateSuppressed` from the gated breaker, without any further CreateEscrow call.
+func TestTheBridgeFillStopsOnTheFirstErrorAndGatesTheBreaker(t *testing.T) {
 	testStore := newFakeStore()
 	broadcastErr := errors.New("broadcast rejected")
 	txClient := &fakeTxClient{createEscrowFn: func(ctx context.Context, signer *signing.Secp256k1Signer, amount uint64, modelID string, onPrepared func(string) error) (chain.CreateEscrowResult, error) {
@@ -201,9 +207,10 @@ func TestEnsureToTargetStopsOnFirstErrorAndGatesBreaker(t *testing.T) {
 	model := ModelConfig{ModelID: "model-a", Amount: 1000, PrivateKeyEnv: "MODEL_A_KEY"}
 	snapshot := servedSnapshot(5, 100, "model-a")
 
-	created, err := m.ensureToTarget(context.Background(), roleTemp, 3, model, snapshot, nil)
+	fill := m.fillToLabel(context.Background(), roleTemp, snapshot.EpochIndex, []ModelConfig{model}, func(ModelConfig) int { return 3 }, snapshot, nil)[0]
+	created, err := fill.created, fill.err
 	if err == nil {
-		t.Fatal("ensureToTarget() error = nil, want the broadcast failure surfaced")
+		t.Fatal("fillToLabel() error = nil, want the broadcast failure surfaced")
 	}
 	if created != 0 {
 		t.Fatalf("created = %d, want 0", created)
@@ -212,9 +219,10 @@ func TestEnsureToTargetStopsOnFirstErrorAndGatesBreaker(t *testing.T) {
 		t.Fatalf("createCalls = %d, want 1 (stop at the first error)", txClient.createCalls)
 	}
 
-	created2, err2 := m.ensureToTarget(context.Background(), roleTemp, 3, model, snapshot, nil)
+	secondFill := m.fillToLabel(context.Background(), roleTemp, snapshot.EpochIndex, []ModelConfig{model}, func(ModelConfig) int { return 3 }, snapshot, nil)[0]
+	created2, err2 := secondFill.created, secondFill.err
 	if !errors.Is(err2, errCreateSuppressed) {
-		t.Fatalf("second ensureToTarget() = %v, want errCreateSuppressed (the now-gated breaker)", err2)
+		t.Fatalf("second fillToLabel() = %v, want errCreateSuppressed (the now-gated breaker)", err2)
 	}
 	if created2 != 0 {
 		t.Fatalf("created on the gated call = %d, want 0", created2)
@@ -341,33 +349,6 @@ func TestPrepareBridgeGatedBreakerPromotesRegularsInsteadOfRetiringThem(t *testi
 	}
 	if !errors.Is(err, errCreateSuppressed) {
 		t.Fatalf("prepareBridge() = %v, want the suppressed create surfaced", err)
-	}
-}
-
-// Test flow:
-//  1. Seed the store with one active temp devshard record for model-a and gate the create breaker for model-a/regular.
-//  2. Build a chain client that fails the test if CreateEscrow is ever called.
-//  3. Call `finishBridge`.
-//  4. Assert the temp is kept active, since no regular was created to take over from it.
-//  5. Assert the returned error is `errCreateSuppressed`.
-func TestFinishBridgeGatedBreakerKeepsTempsInsteadOfRetiringThem(t *testing.T) {
-	testStore := newFakeStore()
-	temp := store.DevshardRecord{EscrowID: "temp-1", Model: "model-a", Active: true, RotationRole: roleTemp, RotationEpoch: 9, PrivateKeyEnv: "MODEL_A_KEY"}
-	testStore.devshards[temp.EscrowID] = temp
-	m := newRotationManager(t, testStore, &fakeTxClient{createEscrowFn: failOnCreate(t)}, false)
-	m.breaker.recordFailure("model-a", roleRegular)
-	models := []ModelConfig{{ModelID: "model-a", TargetCount: 1, Amount: 1000, PrivateKeyEnv: "MODEL_A_KEY"}}
-	snapshot := servedSnapshot(9, 700, "model-a")
-	devshards := []store.DevshardRecord{temp}
-
-	err := m.finishBridge(context.Background(), snapshot, models, devshards)
-
-	got, ok := testStore.devshards["temp-1"]
-	if !ok || !got.Active {
-		t.Fatalf("temp-1 = %+v ok=%v, want it kept serving: no regular was created to take over from it", got, ok)
-	}
-	if !errors.Is(err, errCreateSuppressed) {
-		t.Fatalf("finishBridge() = %v, want the suppressed create surfaced", err)
 	}
 }
 
@@ -513,71 +494,6 @@ func TestPrepareBridgeSettlementEnabledSettlesRegularsBeforeRetiring(t *testing.
 }
 
 // Test flow:
-//  1. Seed the store with one active temp devshard record for model-a.
-//  2. Call `finishBridge` with a TargetCount of 2 against a snapshot that serves model-a.
-//  3. Assert it returns nil.
-//  4. Assert the temp ends up parked and exactly two regular escrows are created for model-a at the new epoch.
-//  5. Assert the saved rotation status is Completed with Stage stageFinishRegular.
-func TestFinishBridgeActiveTempPresentCreatesRegularsAndRetiresTemps(t *testing.T) {
-	testStore := newFakeStore()
-	temp := store.DevshardRecord{EscrowID: "temp-1", Model: "model-a", Active: true, RotationRole: roleTemp, RotationEpoch: 5, PrivateKeyEnv: "MODEL_A_KEY"}
-	testStore.devshards[temp.EscrowID] = temp
-	txClient := &fakeTxClient{createEscrowFn: succeedingCreateEscrowFn(300)}
-	m := newRotationManager(t, testStore, txClient, false)
-	models := []ModelConfig{{ModelID: "model-a", TargetCount: 2, Amount: 1000, PrivateKeyEnv: "MODEL_A_KEY"}}
-	snapshot := servedSnapshot(9, 700, "model-a")
-	devshards := []store.DevshardRecord{temp}
-
-	if err := m.finishBridge(context.Background(), snapshot, models, devshards); err != nil {
-		t.Fatalf("finishBridge(): %v", err)
-	}
-
-	assertParked(t, testStore, "temp-1")
-	regularCount := 0
-	for _, record := range testStore.devshards {
-		if record.Model == "model-a" && record.RotationRole == roleRegular && record.RotationEpoch == 9 {
-			regularCount++
-		}
-	}
-	if regularCount != 2 {
-		t.Fatalf("regular escrows for model-a at epoch 9 = %d, want 2 (TargetCount)", regularCount)
-	}
-	status, ok := testStore.rotationStatuses["model-a|"+roleRegular]
-	if !ok {
-		t.Fatal("no rotation status saved for model-a/regular")
-	}
-	if !status.Completed || status.Stage != stageFinishRegular {
-		t.Fatalf("rotation status = %+v, want Completed=true Stage=%q", status, stageFinishRegular)
-	}
-}
-
-// Test flow:
-//  1. Seed the store with one active regular devshard record for model-a and no temp.
-//  2. Build a chain client that fails the test if CreateEscrow is ever called.
-//  3. Call `finishBridge` and assert it returns nil.
-//  4. Assert no rotation status is saved and the regular is left untouched, since there is no temp to finish.
-func TestFinishBridgeSkipsModelWithNoActiveTemp(t *testing.T) {
-	testStore := newFakeStore()
-	regular := store.DevshardRecord{EscrowID: "reg-1", Model: "model-a", Active: true, RotationRole: roleRegular, PrivateKeyEnv: "MODEL_A_KEY"}
-	testStore.devshards[regular.EscrowID] = regular
-	m := newRotationManager(t, testStore, &fakeTxClient{createEscrowFn: failOnCreate(t)}, false)
-	models := []ModelConfig{{ModelID: "model-a", TargetCount: 2, Amount: 1000, PrivateKeyEnv: "MODEL_A_KEY"}}
-	snapshot := servedSnapshot(9, 700, "model-a")
-	devshards := []store.DevshardRecord{regular}
-
-	if err := m.finishBridge(context.Background(), snapshot, models, devshards); err != nil {
-		t.Fatalf("finishBridge(): %v", err)
-	}
-
-	if _, ok := testStore.rotationStatuses["model-a|"+roleRegular]; ok {
-		t.Fatal("rotation status saved for a model with nothing to finish, want none")
-	}
-	if _, ok := testStore.devshards["reg-1"]; !ok {
-		t.Fatal("reg-1 removed by finishBridge, want it untouched (no temp existed to finish)")
-	}
-}
-
-// Test flow:
 //  1. Seed the store with five devshard records for model-a and model-b spanning active regular, active with an empty role, already-temp, another model's regular, and an inactive regular.
 //  2. Call `promoteRegularsToTemp` for model-a.
 //  3. Assert it returns nil with promoted=2.
@@ -715,7 +631,7 @@ func TestPromotingToTempKeepsWhatTheSameTickAlreadyWrote(t *testing.T) {
 
 // Test flow:
 //  1. Build a manager whose tx client refuses every create as underfunded, with a recording narrator.
-//  2. Call ensureToTarget for a model short of one regular three times.
+//  2. Call fillToLabel for a model short of one temp three times.
 //  3. Assert every call attempted the create, since the breaker never gated it, and the underfunded refusal was narrated once.
 //  4. Let one create succeed, then refuse again; assert the refusal is narrated a second time.
 func TestAnUnderfundedCreateIsRetriedEveryTickAndNarratedOncePerEpisode(t *testing.T) {
@@ -742,23 +658,74 @@ func TestAnUnderfundedCreateIsRetriedEveryTickAndNarratedOncePerEpisode(t *testi
 	snapshot := chain.PhaseSnapshot{EpochIndex: 3, BlockHeight: 10}
 
 	for range 3 {
-		_, err := m.ensureToTarget(t.Context(), roleRegular, 1, model, snapshot, nil)
+		err := m.fillToLabel(t.Context(), roleTemp, snapshot.EpochIndex, []ModelConfig{model}, func(ModelConfig) int { return 1 }, snapshot, nil)[0].err
 		require.ErrorIs(t, err, chain.ErrWalletUnderfunded)
 	}
 	require.Equal(t, 3, txClient.createCalls, "an underfunded wallet must not open the create breaker")
 
 	underfunded = false
-	_, err := m.ensureToTarget(t.Context(), roleRegular, 1, model, snapshot, nil)
+	err := m.fillToLabel(t.Context(), roleTemp, snapshot.EpochIndex, []ModelConfig{model}, func(ModelConfig) int { return 1 }, snapshot, nil)[0].err
 	require.NoError(t, err)
 	underfunded = true
-	_, err = m.ensureToTarget(t.Context(), roleRegular, 1, model, snapshot, nil)
+	err = m.fillToLabel(t.Context(), roleTemp, snapshot.EpochIndex, []ModelConfig{model}, func(ModelConfig) int { return 1 }, snapshot, nil)[0].err
 	require.ErrorIs(t, err, chain.ErrWalletUnderfunded)
 
 	refusals := 0
 	for _, call := range narrator.recorded() {
-		if call == "underfunded model-a regular have 5 need 101" {
+		if call == "underfunded model-a temp have 5 need 101" {
 			refusals++
 		}
 	}
 	require.Equal(t, 2, refusals, "narrated: %v", narrator.recorded())
+}
+
+// Test flow:
+//  1. Table-driven: a budget of 3 already full (no room), and a model the network does not serve; each with one serving regular and a temp count of 1, and a chain client that fails the test on any create.
+//  2. Run prepareBridge.
+//  3. Assert it reports no error, the regular is relabelled temp and still active, and the rotation status names the partial fill.
+func TestABridgeShortOfItsTempsPromotesInsteadOfRetiring(t *testing.T) {
+	testCases := []struct {
+		name     string
+		model    ModelConfig
+		parked   int
+		snapshot chain.PhaseSnapshot
+	}{
+		{
+			name:     "no room under the budget",
+			model:    ModelConfig{ModelID: "model-a", TempCount: 1, TargetCount: 1, Amount: 1000, PrivateKeyEnv: "MODEL_A_KEY", MaxUnsettled: 3},
+			parked:   2,
+			snapshot: servedSnapshot(9, 500, "model-a"),
+		},
+		{
+			name:     "the network does not serve the model",
+			model:    ModelConfig{ModelID: "model-a", TempCount: 1, TargetCount: 1, Amount: 1000, PrivateKeyEnv: "MODEL_A_KEY"},
+			snapshot: servedSnapshot(9, 500, "model-b"),
+		},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			testStore := newFakeStore()
+			regular := store.DevshardRecord{EscrowID: "reg-1", Model: "model-a", Active: true, RotationRole: roleRegular, RotationEpoch: 9, PrivateKeyEnv: "MODEL_A_KEY"}
+			devshards := []store.DevshardRecord{regular}
+			for index := range testCase.parked {
+				parked := store.DevshardRecord{EscrowID: fmt.Sprintf("parked-%d", index), Model: "model-a", SettlementPending: true, PrivateKeyEnv: "MODEL_A_KEY"}
+				devshards = append(devshards, parked)
+			}
+			for _, record := range devshards {
+				testStore.devshards[record.EscrowID] = record
+			}
+			m := newRotationManager(t, testStore, &fakeTxClient{createEscrowFn: failOnCreate(t)}, false)
+
+			if err := m.prepareBridge(context.Background(), testCase.snapshot, []ModelConfig{testCase.model}, devshards); err != nil {
+				t.Fatalf("prepareBridge() = %v, want nil: a partial fill is recorded, not a failed tick", err)
+			}
+
+			if got := testStore.devshards["reg-1"]; !got.Active || got.RotationRole != roleTemp {
+				t.Fatalf("reg-1 = %+v, want still active, relabelled temp", got)
+			}
+			if status := testStore.rotationStatuses["model-a|"+roleTemp]; !strings.Contains(status.CreateError, errBridgePartialFill.Error()) {
+				t.Fatalf("rotation status create error = %q, want it to name the partial fill", status.CreateError)
+			}
+		})
+	}
 }

@@ -18,7 +18,8 @@ It does not classify. Which counter a nonce lands in is `accounting`'s decision;
 
 - **A disabled ledger is a nil `*Recorder`, not a no-op object.** Every method tolerates a nil receiver, which is what keeps the enabled and disabled paths from diverging.
 - **The sweep is the safety net, not the primary path.** Live events are recorded as they happen; the sweep exists because the gateway can miss one — a restart, a dropped diff — and the chain is the authority.
-- **The book's lock is never taken under a session's lock.** The diff observer runs under the lock of the session that composed the diff and only appends to the journal. The watcher installs itself only with the journal `Start` receives, which `lifecycle.go` passes from the composed gateway.
+- **The book's lock is never taken under a session's lock.** The diff observer runs under the lock of the session that composed the diff and only appends to the journal. The watcher installs itself only with the journal `Start` receives, which `app/lifecycle.go` passes from the composed gateway.
+- **`Start` serves the listener and sweeps; `StartSweeping` only sweeps.** The scenario harness uses `StartSweeping`, because a listener blocks in `Accept` outside a synctest bubble's control.
 
 ## The judgements it does make
 
@@ -28,7 +29,7 @@ Not classification — that is `accounting`'s — but the four readings of a raw
 
   First sighting cannot stand in for creation. The counters are restored from `accounting.db`, so "first seen" is a property of that file rather than of the escrow, and that file is dropped and rebuilt whenever `accounting.SchemaVersion` moves, silently and without an error; it is emptied for one epoch by `POST /v1/admin/accounting/reset/{epoch}`, which deletes live escrows and not only retired ones, and pruned by retention. Meanwhile the chain-side half of every escrow — its latest nonce, its lifetime `HostStats`, its chain cost — is re-read whole on every sweep whatever the ledger remembers. A re-sighted escrow would therefore file its entire history under whatever epoch the gateway happened to be running in.
 
-  The resolver asks the chain, whose `DevshardEscrow.epoch_index` is the authority, and falls back to the epoch this gateway recorded when it created the escrow (`devshards.rotation_epoch`, in a different database that a schema bump does not touch). A refusal is never memoised, so an escrow the chain could not be reached for is stamped on a later sweep rather than never.
+  The resolver reads the stored chain epoch, else the chain's answer, else the row's label: the row's `devshards.chain_epoch`, the copy of the chain's `DevshardEscrow.epoch_index` the escrow manager resolved, needs no chain call; an unresolved row asks the chain, whose `epoch_index` is the authority; and only when the chain cannot answer does it fall back to the epoch this gateway recorded when it created the escrow (`devshards.rotation_epoch`). Both columns live in a different database that a schema bump does not touch. A refusal is never memoised, so an escrow the chain could not be reached for is stamped on a later sweep rather than never.
 
   One consequence is worth knowing before using it: resetting an epoch whose escrows are still live now re-populates it on the next sweep, because they are still that epoch's escrows. The route clears what an epoch holds; it does not move an escrow out of the epoch it belongs to.
 - **A slow receipt is measured from the dispatch, and only where both stamps exist.** An attempt that never got a receipt is a refusal, which the ledger already counts; calling it slow as well would report one failure twice.

@@ -59,6 +59,7 @@ type PhaseSnapshot struct {
 	BlockHeight            int64
 	EpochSwitchBlockHeight int64
 	EpochIndex             uint64
+	EffectiveEpochIndex    uint64
 	EpochPhase             EpochPhase
 	ConfirmationPoCPhase   ConfirmationPoCPhase
 	RequestsBlocked        bool

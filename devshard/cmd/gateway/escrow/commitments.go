@@ -37,8 +37,10 @@ type Manager struct {
 	config           *config.Holder
 	routePrefix      string
 	settlementSource SettlementSource
-	holds            HoldGate
 	exhaustion       ExhaustionProbe
+	funds            FundingReader
+	chainFacts       escrowLookup
+	chainFactsAfter  string
 	settlements      inFlightSet
 	checks           inFlightSet
 
@@ -46,7 +48,13 @@ type Manager struct {
 	missing             markSet
 	underfundedNarrated markSet
 	belowFloorNarrated  markSet
+	unresolvedNarrated  markSet
 	reserveTaken        markSet
+	moneyShort          markSet
+	deadlineNarrated    map[string]bool
+	deadlineCounts      deadlineCounter
+	pace                blockPace
+	stale               staleProjection
 	wakeup              chan struct{}
 
 	timeoutSweeper TimeoutSweeper
@@ -54,6 +62,7 @@ type Manager struct {
 	narrator       lifecycleNarrator
 	sweeping       atomic.Bool
 	sweepWork      sync.WaitGroup
+	planner        fundingPlanner
 
 	lifecycleMu sync.Mutex
 	done        chan struct{}
@@ -63,11 +72,11 @@ type Manager struct {
 // CreateEscrow creates one escrow on demand, on the same durable-intent path rotation uses. See README.md, "Creating an escrow".
 func (m *Manager) CreateEscrow(ctx context.Context, model ModelConfig) (chain.CreateEscrowResult, error) {
 	snapshot := m.snapshots.Snapshot()
-	return m.createEscrow(ctx, model, roleRegular, snapshot)
+	return m.createFor(ctx, model, roleRegular, snapshot.EpochIndex, string(createdByOperator), snapshot)
 }
 
 // A failed intent-commitment write (in onPrepared) aborts before any chain broadcast: no broadcast without durable intent.
-func (m *Manager) createEscrow(ctx context.Context, model ModelConfig, role string, snapshot chain.PhaseSnapshot) (chain.CreateEscrowResult, error) {
+func (m *Manager) createFor(ctx context.Context, model ModelConfig, role string, label uint64, reason string, snapshot chain.PhaseSnapshot) (chain.CreateEscrowResult, error) {
 	if floor, priced := m.creationFloor(model.ModelID, snapshot); priced && model.Amount < floor {
 		m.narrateBelowFloor(model, role, floor)
 		return chain.CreateEscrowResult{}, fmt.Errorf("creating escrow for %s/%s: %w: amount %d, floor %d", model.ModelID, role, ErrAmountBelowFloor, model.Amount, floor)
@@ -80,7 +89,7 @@ func (m *Manager) createEscrow(ctx context.Context, model ModelConfig, role stri
 	c := store.Commitment{
 		Model:         model.ModelID,
 		Role:          role,
-		Epoch:         snapshot.EpochIndex,
+		Epoch:         label,
 		PrivateKeyEnv: model.PrivateKeyEnv,
 		BlockHeight:   snapshot.BlockHeight,
 	}
@@ -97,7 +106,7 @@ func (m *Manager) createEscrow(ctx context.Context, model ModelConfig, role stri
 	}
 	escrowID := strconv.FormatUint(result.EscrowID, 10)
 	if m.narrator != nil {
-		m.narrator.EscrowCreated(escrowID, model.ModelID, role, snapshot.EpochIndex, result.TxHash)
+		m.narrator.EscrowCreated(escrowID, model.ModelID, role, reason, label, result.TxHash)
 	}
 	return result, m.persistEscrow(ctx, escrowID, c)
 }
@@ -121,6 +130,7 @@ func (m *Manager) persistEscrow(ctx context.Context, escrowID string, c store.Co
 		if err := m.store.WithRetry(ctx, func() error { return m.store.UpsertDevshard(ctx, record) }); err != nil {
 			return fmt.Errorf("registering escrow %s: %w", escrowID, err)
 		}
+		m.readChainFacts(ctx, escrowID)
 	}
 	if err := m.clearCommitmentRow(ctx, escrowID, c.TxHash); err != nil {
 		return err

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 
 	"devshard/cmd/gateway/chain"
 	"devshard/cmd/gateway/store"
@@ -11,6 +12,8 @@ import (
 
 // errCreateSuppressed marks a create the breaker refused -- not "nothing needed". See README.md, "The bridge across proof-of-compute".
 var errCreateSuppressed = errors.New("escrow creation suppressed by the create breaker")
+
+var errBridgePartialFill = errors.New("bridge funded fewer temps than temp_count")
 
 // rotationFill is one model's share of a fill: the creates it wants, the ones that landed, and the error that stopped it.
 type rotationFill struct {
@@ -20,17 +23,10 @@ type rotationFill struct {
 	err     error
 }
 
-// ensureToTarget creates escrows up to target for (model, role, epoch), filtering the tick's own devshard slice.
-func (m *Manager) ensureToTarget(ctx context.Context, role string, target int, model ModelConfig, snapshot chain.PhaseSnapshot, devshards []store.DevshardRecord) (created int, err error) {
-	fill := m.fillToTargets(ctx, role, []ModelConfig{model}, func(ModelConfig) int { return target }, snapshot, devshards)[0]
-	return fill.created, fill.err
-}
-
-// fillToTargets funds one create per model per pass. See README.md, "The bridge across proof-of-compute".
-func (m *Manager) fillToTargets(ctx context.Context, role string, models []ModelConfig, targetOf func(ModelConfig) int, snapshot chain.PhaseSnapshot, devshards []store.DevshardRecord) []rotationFill {
+func (m *Manager) fillToLabel(ctx context.Context, role string, label uint64, models []ModelConfig, targetOf func(ModelConfig) int, snapshot chain.PhaseSnapshot, devshards []store.DevshardRecord) []rotationFill {
 	fills := make([]rotationFill, len(models))
 	for index, model := range models {
-		wanted, err := m.createsWanted(role, targetOf(model), model, snapshot, devshards)
+		wanted, err := m.createsWanted(role, label, targetOf(model), model, snapshot, devshards)
 		fills[index] = rotationFill{model: model, wanted: wanted, err: err}
 	}
 	for creating := true; creating; {
@@ -40,7 +36,7 @@ func (m *Manager) fillToTargets(ctx context.Context, role string, models []Model
 			if fill.err != nil || fill.created >= fill.wanted {
 				continue
 			}
-			if _, err := m.createEscrow(ctx, fill.model, role, snapshot); err != nil {
+			if _, err := m.createFor(ctx, fill.model, role, label, string(createdForBridge), snapshot); err != nil {
 				if !refusedBeforeBroadcast(err) {
 					m.breaker.recordFailure(fill.model.ModelID, role)
 				}
@@ -54,8 +50,8 @@ func (m *Manager) fillToTargets(ctx context.Context, role string, models []Model
 	return fills
 }
 
-func (m *Manager) createsWanted(role string, target int, model ModelConfig, snapshot chain.PhaseSnapshot, devshards []store.DevshardRecord) (int, error) {
-	existing := countActive(devshards, model.ModelID, role, int64(snapshot.EpochIndex))
+func (m *Manager) createsWanted(role string, label uint64, target int, model ModelConfig, snapshot chain.PhaseSnapshot, devshards []store.DevshardRecord) (int, error) {
+	existing := countActive(devshards, model.ModelID, role, int64(label))
 	if existing >= target {
 		return 0, nil
 	}
@@ -74,7 +70,7 @@ func (m *Manager) createsWanted(role string, target int, model ModelConfig, snap
 func countActive(devshards []store.DevshardRecord, modelID, role string, epoch int64) int {
 	count := 0
 	for _, record := range devshards {
-		if record.Active && !record.OnHold && record.RotationRole == role && record.RotationEpoch == epoch && record.Model == modelID {
+		if record.Active && record.RotationRole == role && record.RotationEpoch == epoch && record.Model == modelID {
 			count++
 		}
 	}
@@ -83,9 +79,24 @@ func countActive(devshards []store.DevshardRecord, modelID, role string, epoch i
 
 // prepareBridge swaps temp escrows in ahead of an epoch switch, one model at a time, failure-isolated.
 func (m *Manager) prepareBridge(ctx context.Context, snapshot chain.PhaseSnapshot, models []ModelConfig, devshards []store.DevshardRecord) error {
+	label := bridgeLabel(snapshot)
+	room, err := m.bridgeRoom(ctx, models, devshards)
+	if err != nil {
+		return fmt.Errorf("prepare bridge: %w", err)
+	}
+	targetOf := func(model ModelConfig) int {
+		limit, capped := room[model.ModelID]
+		if !capped {
+			return model.TempCount
+		}
+		return min(model.TempCount, countActive(devshards, model.ModelID, roleTemp, int64(label))+max(limit, 0))
+	}
 	var errs []error
-	for _, fill := range m.fillToTargets(ctx, roleTemp, models, func(model ModelConfig) int { return model.TempCount }, snapshot, devshards) {
+	for _, fill := range m.fillToLabel(ctx, roleTemp, label, models, targetOf, snapshot, devshards) {
 		model, created, err := fill.model, fill.created, fill.err
+		if funded := countActive(devshards, model.ModelID, roleTemp, int64(label)) + created; err == nil && funded < model.TempCount {
+			err = fmt.Errorf("%w: %d of %d for %s", errBridgePartialFill, funded, model.TempCount, model.ModelID)
+		}
 		if err != nil {
 			// degrade, don't abort: relabel existing regulars as temp so this epoch still has bridge coverage.
 			promoted, promoteErr := m.promoteRegularsToTemp(ctx, model, devshards)
@@ -99,7 +110,7 @@ func (m *Manager) prepareBridge(ctx context.Context, snapshot chain.PhaseSnapsho
 			if saveErr := m.saveRotationStatus(ctx, status); saveErr != nil {
 				errs = append(errs, saveErr)
 			}
-			if !refusedBeforeBroadcast(err) {
+			if !refusedBeforeBroadcast(err) && !errors.Is(err, errBridgePartialFill) {
 				errs = append(errs, fmt.Errorf("prepare bridge for %s: %w", model.ModelID, err))
 			}
 			continue
@@ -129,64 +140,25 @@ func (m *Manager) prepareBridge(ctx context.Context, snapshot chain.PhaseSnapsho
 	return errors.Join(errs...)
 }
 
-// finishBridge swaps regulars back in once PoC is over (per-model, failure-isolated like prepareBridge).
-func (m *Manager) finishBridge(ctx context.Context, snapshot chain.PhaseSnapshot, models []ModelConfig, devshards []store.DevshardRecord) error {
-	bridged := make([]ModelConfig, 0, len(models))
+func (m *Manager) bridgeRoom(ctx context.Context, models []ModelConfig, devshards []store.DevshardRecord) (map[string]int, error) {
+	room := map[string]int{}
+	if !slices.ContainsFunc(models, func(model ModelConfig) bool { return model.MaxUnsettled > 0 }) {
+		return room, nil
+	}
+	commitments, err := m.store.LoadCommitments(ctx)
+	if err != nil {
+		return nil, err
+	}
 	for _, model := range models {
-		if hasActiveTemp(devshards, model.ModelID, int64(snapshot.EpochIndex)) {
-			bridged = append(bridged, model)
+		if model.MaxUnsettled > 0 {
+			room[model.ModelID] = model.MaxUnsettled - unsettledCount(model.ModelID, devshards, commitments)
 		}
 	}
-	var errs []error
-	for _, fill := range m.fillToTargets(ctx, roleRegular, bridged, func(model ModelConfig) int { return model.TargetCount }, snapshot, devshards) {
-		model, created, err := fill.model, fill.created, fill.err
-		if err != nil {
-			status := store.RotationStatus{Model: model.ModelID, Role: roleRegular, Stage: stageFinishRegular, Epoch: snapshot.EpochIndex, CreateError: err.Error()}
-			if saveErr := m.saveRotationStatus(ctx, status); saveErr != nil {
-				errs = append(errs, saveErr)
-			}
-			if !refusedBeforeBroadcast(err) {
-				errs = append(errs, fmt.Errorf("finish bridge for %s: %w", model.ModelID, err))
-			}
-			continue
-		}
-
-		retired, settleFailed := 0, 0
-		for _, record := range devshards {
-			if isActiveTemp(record, model.ModelID, int64(snapshot.EpochIndex)) {
-				if err := m.retire(ctx, record); err != nil {
-					settleFailed++
-					if !deferredRetire(err) {
-						errs = append(errs, fmt.Errorf("retiring escrow %s while bridging %s: %w", record.EscrowID, model.ModelID, err))
-					}
-					continue
-				}
-				retired++
-			}
-		}
-		if (created > 0 || retired > 0) && m.narrator != nil {
-			m.narrator.BridgeFinished(model.ModelID, snapshot.EpochIndex, created, retired)
-		}
-		status := store.RotationStatus{Model: model.ModelID, Role: roleRegular, Stage: stageFinishRegular, Epoch: snapshot.EpochIndex, Completed: settleFailed == 0}
-		if err := m.saveRotationStatus(ctx, status); err != nil {
-			errs = append(errs, err)
-		}
-	}
-	return errors.Join(errs...)
+	return room, nil
 }
 
-// hasActiveTemp folds isActiveTemp over the set, so the gate and the retirement cannot disagree.
 func isActiveTemp(record store.DevshardRecord, modelID string, epoch int64) bool {
 	return record.Active && record.RotationRole == roleTemp && record.Model == modelID && record.RotationEpoch <= epoch
-}
-
-func hasActiveTemp(devshards []store.DevshardRecord, modelID string, epoch int64) bool {
-	for _, record := range devshards {
-		if isActiveTemp(record, modelID, epoch) {
-			return true
-		}
-	}
-	return false
 }
 
 // isActiveNonTemp is any active escrow not already in the temp role, a reserve included, whatever epoch it was created under.

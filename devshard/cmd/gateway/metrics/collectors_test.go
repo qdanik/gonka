@@ -348,22 +348,6 @@ func TestTheRegistryCollectorReportsEveryPublishedEscrow(t *testing.T) {
 }
 
 // Test flow:
-//  1. Register a `RegistryCollector` backed by `fixedEscrows` with one escrow on hold and one not.
-//  2. Assert the on-hold gauge reports 1 for the held escrow and 0 for the other.
-func TestTheRegistryCollectorReportsAnEscrowOnHold(t *testing.T) {
-	telemetry := New()
-	telemetry.Register(NewRegistryCollector(RegistrySources{
-		Escrows: fixedEscrows{states: []registry.EscrowState{
-			{ID: "7", Model: "qwen", Accepting: true, OnHold: true},
-			{ID: "9", Model: "qwen", Accepting: true},
-		}},
-	}))
-
-	expectGauge(t, telemetry, "devshard_gateway_escrow_on_hold", labels{"devshard_id": "7", "model": "qwen"}, 1)
-	expectGauge(t, telemetry, "devshard_gateway_escrow_on_hold", labels{"devshard_id": "9", "model": "qwen"}, 0)
-}
-
-// Test flow:
 //  1. Register a `RegistryCollector` backed by an empty `fixedEscrows`.
 //  2. Assert the active and escrow-weight series counts are both zero.
 func TestTheRegistryCollectorIsSilentOnAnEmptyRegistry(t *testing.T) {

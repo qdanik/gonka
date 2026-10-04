@@ -44,9 +44,9 @@ func (m *Manager) TriggerEscrowCheck(ctx context.Context, escrowID string) error
 		return fmt.Errorf("retiring escrow %s from routing: %w", escrowID, err)
 	}
 	if err := m.store.WithRetry(ctx, func() error {
-		return m.store.SetDevshardActive(ctx, escrowID, false)
+		return m.store.MarkDevshardGoneFromChain(ctx, escrowID)
 	}); err != nil {
-		return fmt.Errorf("deactivating escrow %s: %w", escrowID, err)
+		return fmt.Errorf("marking escrow %s gone from chain: %w", escrowID, err)
 	}
 	if m.narrator != nil {
 		m.narrator.EscrowGoneFromChain(escrowID)

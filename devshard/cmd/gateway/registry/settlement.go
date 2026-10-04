@@ -16,7 +16,11 @@ import (
 func (r *Registry) Finalize(ctx context.Context, escrowID string) error {
 	if session, release, held := r.HoldSettlement(escrowID); held {
 		defer release()
-		return session.Finalize(ctx)
+		if err := session.Finalize(ctx); err != nil {
+			return err
+		}
+		r.observeFinalized(escrowID, session)
+		return nil
 	}
 	if r.servingSessions == nil {
 		return fmt.Errorf("escrow %s: no serving session factory", escrowID)
@@ -25,7 +29,18 @@ func (r *Registry) Finalize(ctx context.Context, escrowID string) error {
 	if err != nil {
 		return fmt.Errorf("rehydrating serving session for escrow %s: %w", escrowID, err)
 	}
-	return errors.Join(session.Finalize(ctx), session.Close())
+	finalizeErr := session.Finalize(ctx)
+	if finalizeErr == nil {
+		r.observeFinalized(escrowID, session)
+	}
+	return errors.Join(finalizeErr, session.Close())
+}
+
+// observeFinalized hands the ledger the escrow as finalize left it: finalize pays every open record, which a reading taken at drain never saw.
+func (r *Registry) observeFinalized(escrowID string, session EscrowSession) {
+	if r.retiring != nil {
+		r.retiring(escrowID, session)
+	}
 }
 
 // BuildSettlement rehydrates a non-resident escrow read-only: the payload comes entirely from local storage.

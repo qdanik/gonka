@@ -1,6 +1,10 @@
 package journal
 
-import "devshard/cmd/gateway/internal/logkey"
+import (
+	"time"
+
+	"devshard/cmd/gateway/internal/logkey"
+)
 
 // EscrowServing renders an escrow published for routing. See README.md, "Lifecycle lines outside a race".
 func (j *Journal) EscrowServing(escrowID, model string) {
@@ -62,10 +66,10 @@ func (j *Journal) EscrowUnservable(escrowID string, err error) {
 	})
 }
 
-// EscrowCreated renders funds committed to a new escrow; the id is text like every other escrow id.
-func (j *Journal) EscrowCreated(escrowID, model, role string, epoch uint64, txHash string) {
+// EscrowCreated renders funds committed to a new escrow and why it was created; the id is text like every other escrow id.
+func (j *Journal) EscrowCreated(escrowID, model, role, reason string, epoch uint64, txHash string) {
 	j.emitLine(KindEscrowTransition, func(lines logSink) {
-		lines.Info("escrow created", logkey.Escrow, escrowID, logkey.Model, model, logkey.Role, role, logkey.Epoch, epoch, logkey.Tx, txHash)
+		lines.Info("escrow created", logkey.Escrow, escrowID, logkey.Model, model, logkey.Role, role, logkey.Reason, reason, logkey.Epoch, epoch, logkey.Tx, txHash)
 	})
 }
 
@@ -111,48 +115,55 @@ func (j *Journal) EscrowGoneFromChain(escrowID string) {
 	})
 }
 
+// EscrowDeadlineReached renders an escrow parked because its chain epoch's settlement window is closing.
+func (j *Journal) EscrowDeadlineReached(escrowID string, chainEpoch uint64, settleBy int64) {
+	j.emitLine(KindEscrowTransition, func(lines logSink) {
+		fields := withSettleBy([]any{logkey.Escrow, escrowID, logkey.ChainEpoch, chainEpoch}, settleBy)
+		lines.Warn("escrow parked at its settlement deadline", fields...)
+	})
+}
+
+// EscrowDeadlineUnsettled renders an escrow whose settlement window closes with nothing allowed to settle it.
+func (j *Journal) EscrowDeadlineUnsettled(escrowID string, settleBy int64, reason string) {
+	j.emitLine(KindEscrowTransition, func(lines logSink) {
+		fields := withSettleBy([]any{logkey.Escrow, escrowID}, settleBy)
+		lines.Error("escrow deadline passes unsettled", append(fields, logkey.Reason, reason)...)
+	})
+}
+
+// EscrowDeadlinesProjected renders the first tick of an episode in which settle deadlines are read past a chain snapshot older than its max age.
+func (j *Journal) EscrowDeadlinesProjected(height, projected int64, staleFor time.Duration) {
+	j.emitLine(KindEscrowTransition, func(lines logSink) {
+		lines.Warn("escrow deadlines read past a stale chain height", logkey.Height, height, logkey.ProjectedHeight, projected, logkey.StaleForMS, staleFor.Milliseconds())
+	})
+}
+
+func withSettleBy(fields []any, settleBy int64) []any {
+	if settleBy <= 0 {
+		return fields
+	}
+	return append(fields, logkey.SettleBy, settleBy)
+}
+
+// SettleMarginShort renders a settle margin the measured block time makes shorter than two settle-transaction windows.
+func (j *Journal) SettleMarginShort(marginBlocks int64, blockTime, need time.Duration) {
+	j.emitLine(KindEscrowTransition, func(lines logSink) {
+		lines.Warn("settle margin shorter than two settle windows",
+			logkey.MarginBlocks, marginBlocks, logkey.BlockTimeMS, blockTime.Milliseconds(), logkey.SettleWindowsMS, need.Milliseconds())
+	})
+}
+
+// EscrowChainFactsUnresolved renders the first failed read of an escrow's chain epoch and amount; it is not repeated until the row resolves.
+func (j *Journal) EscrowChainFactsUnresolved(escrowID, reason string) {
+	j.emitLine(KindEscrowTransition, func(lines logSink) {
+		lines.Warn("escrow chain epoch and amount unresolved", logkey.Escrow, escrowID, logkey.Reason, reason)
+	})
+}
+
 // EscrowMarkedForReplacement renders the first mark on an exhausted escrow.
 func (j *Journal) EscrowMarkedForReplacement(escrowID, reason string) {
 	j.emitLine(KindEscrowTransition, func(lines logSink) {
 		lines.Warn("escrow marked for replacement", logkey.Escrow, escrowID, logkey.Reason, reason)
-	})
-}
-
-// EscrowDepletedWithoutReplacement renders capacity leaving with nothing configured to replace it.
-func (j *Journal) EscrowDepletedWithoutReplacement(escrowID, model string) {
-	j.emitLine(KindEscrowTransition, func(lines logSink) {
-		lines.Warn("escrow depleted with no replacement configured", logkey.Escrow, escrowID, logkey.Model, model)
-	})
-}
-
-// EscrowPutOnHold renders a depleted escrow kept for its held money; an empty replacement means the model was not short.
-func (j *Journal) EscrowPutOnHold(escrowID, model, reason string, balance, reserved, challenged uint64, replacementID string) {
-	j.emitLine(KindEscrowTransition, func(lines logSink) {
-		lines.Warn("escrow put on hold",
-			logkey.Escrow, escrowID, logkey.Model, model, logkey.Reason, reason,
-			logkey.Balance, balance, logkey.Reserved, reserved, logkey.Challenged, challenged,
-			logkey.Replacement, replacementID)
-	})
-}
-
-// EscrowResumed renders an escrow on hold whose money came back.
-func (j *Journal) EscrowResumed(escrowID string, balance uint64) {
-	j.emitLine(KindEscrowTransition, func(lines logSink) {
-		lines.Info("escrow resumed from hold", logkey.Escrow, escrowID, logkey.Balance, balance)
-	})
-}
-
-// EscrowHoldEnded renders a hold the tick ended by parking the escrow instead of resuming it.
-func (j *Journal) EscrowHoldEnded(escrowID, reason string) {
-	j.emitLine(KindEscrowTransition, func(lines logSink) {
-		lines.Info("escrow hold ended, parked for settlement", logkey.Escrow, escrowID, logkey.Reason, reason)
-	})
-}
-
-// EscrowHoldExpired renders what an escrow still held once every reservation could have come back. See ../docs/routing.md, "An escrow on hold".
-func (j *Journal) EscrowHoldExpired(escrowID string, balance, reserved uint64) {
-	j.emitLine(KindEscrowTransition, func(lines logSink) {
-		lines.Warn("escrow hold expired with money still held", logkey.Escrow, escrowID, logkey.Balance, balance, logkey.Reserved, reserved)
 	})
 }
 

@@ -290,7 +290,16 @@ Reading the choices is what the answer costs: the walk is about 1.6 times the pr
 
 ### Capability errors
 
-`CapabilityLimits` parses vLLM's context-window refusal for the model's limit and the tokens the request needed, and `ToolChoiceUnsupportedMessage` is the tool-choice refusal verbatim. These phrases are matched here and nowhere else.
+`CapabilityLimits` parses vLLM's context-window refusal for the host's limit and the tokens the request needed, and `ToolChoiceUnsupportedMessage` is the tool-choice refusal verbatim. These phrases are matched here and nowhere else.
+
+The limit always follows `maximum context length is `. The tokens needed are read from whichever wording the host's vLLM release writes, in this order:
+
+- v0.25.1 and later (`vllm/renderers/params.py`): `for a total of {total} tokens`, with `at least ` before the number when the tokenizer cut the prompt short. The number after `you requested ` in this wording counts the output tokens alone, so it is never read when a total is present.
+- v0.25.1 and later, the character pre-check: `you requested {output} output tokens and your prompt contains {characters} characters (more than {bound} characters, which is the upper bound for {input} input tokens)`. The prompt is longer than `{input}` tokens, so the request needs at least `{input} + {output} + 1`.
+- v0.11 (`vllm/entrypoints/openai/serving_engine.py`): `your request has {input} input tokens`, plus `is too large: {output}` when `max_tokens` is what overflowed.
+- v0.9.1 (same file): `you requested {total} tokens`.
+
+A lower bound is enough for the race: it only asks whether the request could fit the model's length ([`docs/race.md`](../docs/race.md), "Escalation").
 
 `uintAfterPhrase` runs both the search and the slice on the lowered copy of the message. Lowercasing can shorten a string — U+212A KELVIN SIGN lowers to a one-byte `k` — so an index taken from one string and applied to the other lands mid-word.
 

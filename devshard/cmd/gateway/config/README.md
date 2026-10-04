@@ -28,7 +28,7 @@ Everything the gateway's behaviour depends on, in one value that is never mutate
 | `Limits.Congestion` | the factors a narrowing multiplies the blamed window by, the factor the other window takes with it, and how far above the best latency it has held a host may drift before a healthy answer counts as congestion. |
 | `Limits.ModelLimits` | the per-model override set. The two token fields are required as a pair; the pointer fields are optional, and a `nil` inherits the global limit rather than meaning zero. |
 | `Modes` | PoC mode and the disabled/redirect switches. |
-| `Rotation` | escrow rotation, its settlement switch, and how far before PoC it runs; `HoldEnabled`, `HoldMaxPerModel` and `HoldResumeAnswers` keep a depleted escrow on hold instead of parking it ([`docs/escrows.md`](../docs/escrows.md)). |
+| `Rotation` | escrow rotation, its settlement switch, and how far before PoC it runs; `SettleMarginBlocks` (default 600, at least 1) is how many blocks before an escrow's settlement deadline it is parked for settling ([`docs/escrows.md`](../docs/escrows.md)). |
 | `HeightSync` | whether the heartbeat cadence runs, whether a session chases a seeded tip, the optional mainnet follower, and the anchor cadence `AnchorK` / `AnchorSlots` ([`heights/README.md`](../heights/README.md)). |
 | `HostPing` | the reachability and clock-drift probe of the live escrows' hosts: interval and timeout in milliseconds, concurrency, and a switch to turn it off ([`hostping/README.md`](../hostping/README.md)). |
 | `Cache` | the response cache's byte ceiling. |
@@ -52,6 +52,7 @@ Most checks are ordinary range bounds. These are the ones that exist because a l
 - `engine_loser_grace_ms` must be at least `engine_inter_chunk_stall_ms`. A loser is cancelled at the grace, so a grace under the stall window kills attempts that are merely between chunks — before the gateway would even call such a stream stalled.
 - `scheduler_match_wait_ms` is capped at 5000. A long grace parks a committed-cost nonce on the chance of a co-arrival, so the ceiling is a budget guard, not a taste judgement.
 - `scheduler_max_consecutive_burns` is capped at 1000, which is past any real group size: a run longer than the group is a rung that never fires.
+- `rotation_settle_margin_blocks` below 1.
 - `chain_grpc` is checked as `host:port`, not as a URL: a gRPC target carries no scheme, so a URL check would pass anything.
 
 Every problem is collected and reported together, and the field names in the messages use the snake_case admin-API spelling rather than the Go one.
@@ -62,4 +63,4 @@ Readers call `Load` on every use and get a shared, immutable pointer. Reconfigur
 
 ## Overrides
 
-`Overrides` is the admin-tunable subset that the store persists and `Build` merges over the environment layer; a nil field means "not overridden". `ParseOverrides` rejects unknown fields, because a typo in an admin `PUT` must be reported rather than silently ignored. `ParseStoredOverrides` is the read-back path and accepts them, because the file on disk may name a knob this build does not have: a retired knob costs the operator that knob, never the boot.
+`Overrides` is the admin-tunable subset that the store persists and `Build` merges over the environment layer; a nil field means "not overridden". `ParseOverrides` rejects unknown fields, because a typo in an admin `PUT` must be reported rather than silently ignored. `ParseStoredOverrides` is the read-back path and accepts them, because the file on disk may name a knob this build does not have: a knob it does not have costs the operator that knob, never the boot.

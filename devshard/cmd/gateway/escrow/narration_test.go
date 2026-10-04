@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"sync"
 	"testing"
 	"time"
@@ -12,13 +13,15 @@ import (
 
 	"devshard/cmd/gateway/chain"
 	"devshard/cmd/gateway/config"
+	"devshard/cmd/gateway/scheduler"
 	"devshard/cmd/gateway/store"
 	"devshard/signing"
 )
 
 type recordingLifecycleNarrator struct {
-	mu    sync.Mutex
-	calls []string
+	mu      sync.Mutex
+	calls   []string
+	reasons map[string]string
 }
 
 func (n *recordingLifecycleNarrator) note(format string, values ...any) {
@@ -33,8 +36,20 @@ func (n *recordingLifecycleNarrator) recorded() []string {
 	return append([]string(nil), n.calls...)
 }
 
-func (n *recordingLifecycleNarrator) EscrowCreated(escrowID, model, role string, epoch uint64, txHash string) {
+func (n *recordingLifecycleNarrator) EscrowCreated(escrowID, model, role, reason string, epoch uint64, txHash string) {
 	n.note("created %s %s %s epoch %d tx %s", escrowID, model, role, epoch, txHash)
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if n.reasons == nil {
+		n.reasons = map[string]string{}
+	}
+	n.reasons[escrowID] = reason
+}
+
+func (n *recordingLifecycleNarrator) createdReasons() map[string]string {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return maps.Clone(n.reasons)
 }
 
 func (n *recordingLifecycleNarrator) EscrowRecovered(escrowID, model, role string, epoch uint64, txHash string) {
@@ -49,12 +64,28 @@ func (n *recordingLifecycleNarrator) EscrowGoneFromChain(escrowID string) {
 	n.note("gone from chain %s", escrowID)
 }
 
-func (n *recordingLifecycleNarrator) EscrowMarkedForReplacement(escrowID, reason string) {
-	n.note("marked for replacement %s: %s", escrowID, reason)
+func (n *recordingLifecycleNarrator) EscrowDeadlineReached(escrowID string, chainEpoch uint64, settleBy int64) {
+	n.note("deadline reached %s epoch %d settle by %d", escrowID, chainEpoch, settleBy)
 }
 
-func (n *recordingLifecycleNarrator) EscrowDepletedWithoutReplacement(escrowID, model string) {
-	n.note("depleted without replacement %s %s", escrowID, model)
+func (n *recordingLifecycleNarrator) EscrowDeadlineUnsettled(escrowID string, settleBy int64, reason string) {
+	n.note("deadline unsettled %s settle by %d: %s", escrowID, settleBy, reason)
+}
+
+func (n *recordingLifecycleNarrator) SettleMarginShort(marginBlocks int64, blockTime, need time.Duration) {
+	n.note("settle margin short %d blocks of %s, need %s", marginBlocks, blockTime, need)
+}
+
+func (n *recordingLifecycleNarrator) EscrowDeadlinesProjected(height, projected int64, staleFor time.Duration) {
+	n.note("deadlines projected from %d to %d after %s", height, projected, staleFor)
+}
+
+func (n *recordingLifecycleNarrator) EscrowChainFactsUnresolved(escrowID, reason string) {
+	n.note("chain facts unresolved %s: %s", escrowID, reason)
+}
+
+func (n *recordingLifecycleNarrator) EscrowMarkedForReplacement(escrowID, reason string) {
+	n.note("marked for replacement %s: %s", escrowID, reason)
 }
 
 func (n *recordingLifecycleNarrator) RotationSkipped(model, role string, epoch uint64) {
@@ -75,18 +106,6 @@ func (n *recordingLifecycleNarrator) BridgeFinished(model string, epoch uint64, 
 
 func (n *recordingLifecycleNarrator) EscrowParked(escrowID string) { n.note("parked %s", escrowID) }
 
-func (n *recordingLifecycleNarrator) EscrowPutOnHold(escrowID, model, reason string, balance, reserved, challenged uint64, replacementID string) {
-	n.note("on hold %s %s: %s balance %d reserved %d challenged %d replacement %q", escrowID, model, reason, balance, reserved, challenged, replacementID)
-}
-
-func (n *recordingLifecycleNarrator) EscrowResumed(escrowID string, balance uint64) {
-	n.note("resumed %s balance %d", escrowID, balance)
-}
-
-func (n *recordingLifecycleNarrator) EscrowHoldEnded(escrowID, reason string) {
-	n.note("hold ended %s: %s", escrowID, reason)
-}
-
 func (n *recordingLifecycleNarrator) EscrowCreateUnderfunded(model, role string, have, need uint64) {
 	n.note("underfunded %s %s have %d need %d", model, role, have, need)
 }
@@ -97,10 +116,6 @@ func (n *recordingLifecycleNarrator) EscrowCreateBelowFloor(model, role string, 
 
 func (n *recordingLifecycleNarrator) EscrowReserveTaken(escrowID string) {
 	n.note("reserve taken %s", escrowID)
-}
-
-func (n *recordingLifecycleNarrator) EscrowHoldExpired(escrowID string, balance, reserved uint64) {
-	n.note("hold expired %s: balance %d reserved %d", escrowID, balance, reserved)
 }
 
 func (n *recordingLifecycleNarrator) EscrowSettled(escrowID, model, txHash, settler string) {
@@ -121,6 +136,32 @@ func (n *recordingLifecycleNarrator) TimeoutsSwept(due, applied, failed int) {
 	n.note("swept due %d applied %d failed %d", due, applied, failed)
 }
 
+func (n *recordingLifecycleNarrator) EscrowPlanned(model string, creates, retires int, reasons string, moneyShort bool, need, liquid uint64, fullCount int) {
+	n.note("planned %s creates %d retires %d reasons %s", model, creates, retires, reasons)
+}
+
+func (n *recordingLifecycleNarrator) EscrowStarved(escrowID string, free uint64) {
+	n.note("starved %s free %d", escrowID, free)
+}
+
+func (n *recordingLifecycleNarrator) EscrowFull(escrowID string, free uint64) {
+	n.note("full %s free %d", escrowID, free)
+}
+
+func (n *recordingLifecycleNarrator) FundingGuaranteeBroken(model string, have, want int) {
+	n.note("guarantee broken %s have %d want %d", model, have, want)
+}
+
+func (n *recordingLifecycleNarrator) FundingMisconfigured(model string, amount, need uint64) {
+	n.note("misconfigured %s amount %d need %d", model, amount, need)
+}
+
+func (n *recordingLifecycleNarrator) EscrowBudgetReached(model string, counted, maxUnsettled int) {
+	n.note("budget reached %s counted %d max %d", model, counted, maxUnsettled)
+}
+
+func (n *recordingLifecycleNarrator) FundingPlanFailed(err error) { n.note("plan failed: %v", err) }
+
 // Test flow:
 //  1. Build a manager with a `recordingLifecycleNarrator` and a tx client whose createEscrowFn returns escrow ID 42.
 //  2. Call createEscrow for a temp role at epoch 7.
@@ -140,7 +181,7 @@ func TestACreatedEscrowIsNarratedWithItsIDAsText(t *testing.T) {
 		narrator: narrator,
 	}
 
-	_, err := m.createEscrow(context.Background(), ModelConfig{ModelID: "model-a", Amount: 1000, PrivateKeyEnv: "MODEL_A_KEY"}, roleTemp, chain.PhaseSnapshot{EpochIndex: 7, BlockHeight: 500})
+	_, err := m.createFor(context.Background(), ModelConfig{ModelID: "model-a", Amount: 1000, PrivateKeyEnv: "MODEL_A_KEY"}, roleTemp, 7, string(createdForBridge), chain.PhaseSnapshot{EpochIndex: 7, BlockHeight: 500})
 
 	require.NoError(t, err)
 	require.Equal(t, []string{"created 42 model-a temp epoch 7 tx TX-HAPPY"}, narrator.recorded())
@@ -223,39 +264,15 @@ func TestADepletedEscrowIsNarratedOnceWhenMarked(t *testing.T) {
 	narrator := &recordingLifecycleNarrator{}
 	m := &Manager{narrator: narrator}
 
-	m.OnBalanceExhausted("1", "nonce_cap")
-	m.OnBalanceExhausted("1", "nonce_cap")
+	m.OnBalanceExhausted("1", scheduler.ExhaustionNonceCap)
+	m.OnBalanceExhausted("1", scheduler.ExhaustionNonceCap)
 
 	require.Equal(t, []string{"marked for replacement 1: nonce_cap"}, narrator.recorded())
 }
 
 // Test flow:
-//  1. Build a `depletionManager` with one active record and a working createEscrowFn, then mark the record's balance exhausted.
-//  2. Call checkDepletion with a model list that excludes the depleted record's model, so no replacement can be created.
-//  3. Assert checkDepletion returns no error.
-//  4. Assert the narrator recorded, in order, the mark, the park, and the depleted-without-replacement lines.
-func TestADepletedEscrowWithNoReplacementIsNarratedAfterItIsParked(t *testing.T) {
-	testStore := newFakeStore()
-	testStore.devshards["1"] = activeRecord("1", "model-a")
-	manager := depletionManager(t, testStore, &fakeTxClient{createEscrowFn: workingCreateEscrowFn(999)})
-	narrator := &recordingLifecycleNarrator{}
-	manager.narrator = narrator
-	devshards := []store.DevshardRecord{testStore.devshards["1"]}
-	otherModelOnly := []ModelConfig{{ModelID: "model-b", TargetCount: 1, Amount: 1000, PrivateKeyEnv: "MODEL_B_KEY"}}
-
-	manager.OnBalanceExhausted("1", "test")
-	require.NoError(t, manager.checkDepletion(context.Background(), servingSnapshot(), otherModelOnly, devshards))
-
-	require.Equal(t, []string{
-		"marked for replacement 1: test",
-		"parked 1",
-		"depleted without replacement 1 model-a",
-	}, narrator.recorded())
-}
-
-// Test flow:
 //  1. Build a manager with a `recordingLifecycleNarrator` and a snapshot where the target model has no served weight.
-//  2. Call ensureToTarget for that model and role.
+//  2. Call fillToLabel for that model and role.
 //  3. Assert it returns no error and created zero escrows.
 //  4. Assert the narrator recorded the "rotation skipped" line, since that is the only record of why nothing was created.
 func TestASkippedRotationIsNarrated(t *testing.T) {
@@ -267,10 +284,10 @@ func TestASkippedRotationIsNarrated(t *testing.T) {
 		CurrentWeightsByModel: map[string]map[string]float64{"other-model": {"gonka1host": 1}},
 	}
 
-	created, err := manager.ensureToTarget(context.Background(), roleRegular, 1, ModelConfig{ModelID: "qwen"}, snapshot, nil)
+	fill := manager.fillToLabel(context.Background(), roleRegular, snapshot.EpochIndex, []ModelConfig{{ModelID: "qwen"}}, func(ModelConfig) int { return 1 }, snapshot, nil)[0]
 
-	require.NoError(t, err)
-	require.Zero(t, created)
+	require.NoError(t, fill.err)
+	require.Zero(t, fill.created)
 	require.Equal(t, []string{"rotation skipped qwen regular epoch 4"}, narrator.recorded())
 }
 
@@ -317,33 +334,10 @@ func TestAPreparedBridgeNarratesWhatItCreatedAndRetired(t *testing.T) {
 	require.NoError(t, m.prepareBridge(context.Background(), servedSnapshot(9, 500, "model-a"), models, []store.DevshardRecord{regularOne, regularTwo}))
 
 	require.Equal(t, []string{
-		"created 200 model-a temp epoch 9 tx TX-200",
+		"created 200 model-a temp epoch 10 tx TX-200",
 		"parked reg-1",
 		"parked reg-2",
 		"bridge prepared model-a epoch 9: created 1 retired 2",
-	}, narrator.recorded())
-}
-
-// Test flow:
-//  1. Build a rotation manager with one active temp record and a succeeding createEscrowFn.
-//  2. Call finishBridge for that model and assert it returns no error.
-//  3. Assert the narrator recorded, in order, the two new regular escrows' creation, the temp record being parked, and the bridge-finished summary.
-func TestAFinishedBridgeNarratesWhatItCreatedAndRetired(t *testing.T) {
-	testStore := newFakeStore()
-	temp := store.DevshardRecord{EscrowID: "temp-1", Model: "model-a", Active: true, RotationRole: roleTemp, RotationEpoch: 5, PrivateKeyEnv: "MODEL_A_KEY"}
-	testStore.devshards[temp.EscrowID] = temp
-	m := newRotationManager(t, testStore, &fakeTxClient{createEscrowFn: succeedingCreateEscrowFn(300)}, false)
-	narrator := &recordingLifecycleNarrator{}
-	m.narrator = narrator
-	models := []ModelConfig{{ModelID: "model-a", TargetCount: 2, Amount: 1000, PrivateKeyEnv: "MODEL_A_KEY"}}
-
-	require.NoError(t, m.finishBridge(context.Background(), servedSnapshot(9, 700, "model-a"), models, []store.DevshardRecord{temp}))
-
-	require.Equal(t, []string{
-		"created 300 model-a regular epoch 9 tx TX-300",
-		"created 301 model-a regular epoch 9 tx TX-301",
-		"parked temp-1",
-		"bridge finished model-a epoch 9: created 2 retired 1",
 	}, narrator.recorded())
 }
 
@@ -407,7 +401,7 @@ func TestAFailedTickIsNarratedWithItsError(t *testing.T) {
 	deps.Narrator = narrator
 	m := mustManager(t, deps)
 
-	m.runTick(context.Background())
+	m.runTick(context.Background(), true)
 
 	require.Equal(t, []string{"tick failed: store unavailable"}, narrator.recorded())
 }

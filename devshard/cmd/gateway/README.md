@@ -24,6 +24,8 @@ The hard part is not proxying. It is that **every nonce costs the escrow money w
 | [`engine/`](./engine/) | the speculative race: attempts, escalation, crowning, streaming, and the votes the losers owe |
 | [`registry/`](./registry/) | the live escrow set and the sessions that dispatch on it |
 | [`escrow/`](./escrow/) | escrow creation, rotation, depletion, settlement, retirement, crash recovery |
+| [`liquidity/`](./liquidity/) | one escrow's money by class — free, returning, late, stuck — and whether it is full, starved or idle |
+| [`funding/`](./funding/) | one model's planned creates and retires from its money, demand, budget and rate |
 | [`chain/`](./chain/) | all blockchain input and output, and the epoch phase snapshot |
 | [`limits/`](./limits/) | admission, the per-host congestion windows, and the chain-weight capacity model |
 | [`perf/`](./perf/) | per-host history, outlier ejection, capability refusal counts |
@@ -37,12 +39,14 @@ The hard part is not proxying. It is that **every nonce costs the escrow money w
 | [`config/`](./config/) | the immutable configuration snapshot and its atomic holder |
 | [`env/`](./env/) | every gateway environment variable; the runtime-params feed reads its own through `devshard/runtimeparams` |
 | [`metrics/`](./metrics/) | the Prometheus registry and every collector |
+| [`app/`](./app/) | the composition root: builds every layer into one process, boots and stops it |
+| [`scenarios/`](./scenarios/) | the scenario tests: the composed gateway against a fake chain and in-process hosts on fake time |
 
-The package root itself is the composition root: `main.go` wires the above, and its neighbours hold the escrow records this process owns and the admin operations over them.
+The composition root is [`app/`](./app/): `app/compose.go` wires the above, and its neighbours hold the escrow records this process owns and the admin operations over them. The package root holds only `main.go`, which copies the stamped version to `app.Version` and calls `app.Main`.
 
 ## The composition root
 
-Eight files, and what each is for: `main.go` wires everything, `routing.go` builds the registry, scheduler and warmup together because each needs the others, `capacity.go` reads the chain snapshot into the numbers the limiters price by, `lifecycle.go` starts and stops it all, `devshards.go` turns stored rows into live escrow sessions, `runtime_params.go` binds an escrow's heartbeat schedule to the chain's operational governance, `observers.go` adapts one event into the several readers that want it, and `operations.go` is the admin surface behind [`api`](./api/).
+Ten files in `app/`, and what each is for: `app/compose.go` wires everything, `app/routing.go` builds the registry, scheduler and warmup together because each needs the others, `app/capacity.go` reads the chain snapshot into the numbers the limiters price by, `app/lifecycle.go` starts and stops it all, `app/devshards.go` turns stored rows into live escrow sessions, `app/runtime_params.go` binds an escrow's heartbeat schedule to the chain's operational governance, `app/observers.go` adapts one event into the several readers that want it, `app/planner_wiring.go` feeds the funding planner the registry's escrow money and money-short wakeups and exports its decisions and unsettled counts as metrics, `app/operations.go` is the admin surface behind [`api`](./api/), and `app/composed.go` is the surface the [`scenarios`](./scenarios/) harness composes and boots the gateway through ([`app/README.md`](./app/README.md)).
 
 ### Wiring order, and the knots in it
 
@@ -89,7 +93,7 @@ Boot has a matching budget: the concurrent-build limit and the idle connection p
 
 - **The bridge is one object for the process.** It holds the chain client every session reads escrow state through, so building one per session would open a connection per escrow and lose the client's cache.
 - **Production does not use upstream's `NewGRPCBridgeFromURL`**, which is its test constructor. The bridge is built over a client carrying the CometBFT RPC query fallback, so an escrow read survives the gRPC query path failing. An empty RPC endpoint lets `common/chain` derive one from the gRPC host at the standard port, which is how a default deployment is laid out — a deployment that moved it has to say so, or the fallback resolves to a host nobody is listening on and dies silently.
-- **The runtime-params feed rides the same connection**, because it asks the chain the same questions the bridge does. It answers what schedule an escrow's heartbeat runs on, and it cannot starve one: a chain it cannot reach is not an error but an empty snapshot, and zero on the wire means keep the compiled schedule. It holds its own context rather than the boot one, so the shutdown step owns its lifetime and a signal does not cancel it before that step is reached — the same reason `heights` builds its block feed that way ([`runtime_params.go`](./runtime_params.go), [`docs/escrows.md`](./docs/escrows.md), "Height sync").
+- **The runtime-params feed rides the same connection**, because it asks the chain the same questions the bridge does. It answers what schedule an escrow's heartbeat runs on, and it cannot starve one: a chain it cannot reach is not an error but an empty snapshot, and zero on the wire means keep the compiled schedule. It holds its own context rather than the boot one, so the shutdown step owns its lifetime and a signal does not cancel it before that step is reached — the same reason `heights` builds its block feed that way ([`app/runtime_params.go`](./app/runtime_params.go), [`docs/escrows.md`](./docs/escrows.md), "Height sync").
 - **Seeding leaves a devshard it already knows alone**, so a restart cannot resurrect one an operator deactivated.
 - **Publication follows the store's `active` flag**, builders at a time; an escrow whose key or record is missing is marked inactive rather than failing the boot. A write to a devshard row wakes a republish, because the rotation lifecycle owns those rows and knows nothing about the registry. `depletionNotice` breaks the reverse cycle: the manager settles through the registry, so it cannot also be constructed before it.
 - **Importing an escrow copies its storage rather than referencing it**, so the gateway owns the only handle to what it serves. Only regular files are copied — session storage is a flat set of SQLite files, so a directory below it is not part of the escrow.

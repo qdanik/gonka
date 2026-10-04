@@ -9,7 +9,7 @@ import (
 	"devshard/cmd/gateway/config"
 )
 
-// TickInterval is how often the manager parks, replaces and republishes. See README.md, "The tick".
+// TickInterval is how often the manager plans, settles and republishes. See README.md, "The tick".
 const TickInterval = 15 * time.Second
 
 type Deps struct {
@@ -17,8 +17,9 @@ type Deps struct {
 	Store       escrowStore
 	Snapshots   snapshotSource
 	Settlement  SettlementSource
-	Holds       HoldGate
 	Exhaustion  ExhaustionProbe
+	Funds       FundingReader
+	ChainFacts  escrowLookup
 	Timeouts    TimeoutSweeper
 	Sweeps      SweepRecorder
 	Narrator    lifecycleNarrator
@@ -53,13 +54,15 @@ func NewManager(d Deps) (*Manager, error) {
 		now:              d.Now,
 		config:           d.Config,
 		settlementSource: d.Settlement,
-		holds:            d.Holds,
 		exhaustion:       d.Exhaustion,
+		funds:            d.Funds,
+		chainFacts:       d.ChainFacts,
 		timeoutSweeper:   d.Timeouts,
 		sweepRecorder:    d.Sweeps,
 		narrator:         d.Narrator,
 		routePrefix:      d.RoutePrefix,
 		wakeup:           make(chan struct{}, 1),
+		planner:          fundingPlanner{models: map[string]*modelFunding{}, escrows: map[string]*escrowFunding{}},
 	}, nil
 }
 
@@ -77,7 +80,7 @@ func (m *Manager) Start(ctx context.Context) {
 	go func() {
 		defer cancel()
 		defer close(done)
-		m.runTick(ctx)
+		m.runTick(ctx, true)
 		ticker := time.NewTicker(TickInterval)
 		defer ticker.Stop()
 		for {
@@ -85,16 +88,16 @@ func (m *Manager) Start(ctx context.Context) {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				m.runTick(ctx)
+				m.runTick(ctx, true)
 			case <-m.wakeup:
-				m.runTick(ctx)
+				m.runTick(ctx, false)
 			}
 		}
 	}()
 }
 
-func (m *Manager) runTick(ctx context.Context) {
-	if err := m.tick(ctx); err != nil && m.narrator != nil {
+func (m *Manager) runTick(ctx context.Context, scheduled bool) {
+	if err := m.tickWith(ctx, scheduled); err != nil && m.narrator != nil {
 		m.narrator.EscrowTickFailed(err)
 	}
 }
@@ -140,47 +143,37 @@ func (m *Manager) sweepTimeouts(ctx context.Context) {
 }
 
 func (m *Manager) tick(ctx context.Context) error {
+	return m.tickWith(ctx, true)
+}
+
+func (m *Manager) tickWith(ctx context.Context, scheduled bool) error {
+	lifecycleErr := m.runLifecycle(ctx)
+	return errors.Join(lifecycleErr, m.planFunding(ctx, scheduled))
+}
+
+func (m *Manager) runLifecycle(ctx context.Context) error {
 	reconcileErr := m.reconcile(ctx) // crash recovery must not depend on the rotation toggle
 
 	devshards, err := m.store.ListDevshards(ctx)
 	if err != nil {
 		return errors.Join(reconcileErr, err)
 	}
+	devshards = m.resolveChainFacts(ctx, devshards)
+	// Pulled, not subscribed: a 15s poll is equivalent at this cadence and avoids callback races.
+	snapshot := m.snapshots.Snapshot()
+	m.checkSettleMargin(snapshot)
+	deadlineSnapshot := m.projectStale(snapshot)
+	devshards, deadlineErr := m.parkAtDeadline(ctx, deadlineSnapshot, devshards)
 	// Parked escrows must settle whatever the rotation toggle says: nothing else will ever pick them up.
-	pendingErr := m.settlePending(ctx, devshards)
+	pendingErr := m.settlePending(ctx, deadlineSnapshot, devshards)
 	// An escrow gone from chain must stop taking traffic whatever the rotation toggle says.
 	missingErr := m.checkMissing(ctx)
 	m.sweepTimeouts(ctx)
 
 	configuration := m.config.Load()
-	// Pulled, not subscribed: a 15s poll is equivalent at this cadence and avoids callback races.
-	snapshot := m.snapshots.Snapshot()
 	models, modelsErr := rotationModels(configuration.Rotation)
-	resumedDevshards, holdErr := m.resumeHeld(ctx, snapshot, models, devshards)
-	promotedDevshards, promoteErr := m.promoteTakenReserves(ctx, resumedDevshards)
-	m.markSpent(promotedDevshards)
-	// An exhausted escrow must stop taking traffic whatever the toggle says; models is empty unless rotation can supply a replacement.
-	depletionErr := m.checkDepletion(ctx, snapshot, models, promotedDevshards)
-	lifecycleErr := errors.Join(reconcileErr, pendingErr, missingErr, modelsErr, holdErr, promoteErr, depletionErr)
-
-	if !configuration.Rotation.Enabled || modelsErr != nil {
-		return lifecycleErr
-	}
-	if snapshotHasNoEpochYet(snapshot) {
-		return lifecycleErr // cold start, no chain data yet
-	}
-
-	var bridgeErr error
-	blocksToEpochSwitch := snapshot.EpochSwitchBlockHeight - snapshot.BlockHeight
-	if blocksToEpochSwitch >= 0 && blocksToEpochSwitch <= configuration.Rotation.PrePoCBlocks {
-		bridgeErr = m.prepareBridge(ctx, snapshot, models, promotedDevshards) // wins even when PoC is also inactive
-	} else if !snapshot.RequestsBlocked {
-		bridgeErr = errors.Join(
-			m.finishBridge(ctx, snapshot, models, promotedDevshards),
-			m.ensureReserves(ctx, snapshot, models, promotedDevshards),
-		)
-	}
-	return errors.Join(lifecycleErr, bridgeErr)
+	plannedErr := m.runPlannedLifecycle(ctx, snapshot, models, devshards, configuration.Rotation)
+	return errors.Join(reconcileErr, deadlineErr, pendingErr, missingErr, modelsErr, plannedErr)
 }
 
 // rotationModels is empty when rotation is off, so no caller downstream has to re-read the toggle.
@@ -191,7 +184,7 @@ func rotationModels(rotation config.Rotation) ([]ModelConfig, error) {
 	return parseModels(rotation.ModelsJSON)
 }
 
-// snapshotHasNoEpochYet: an escrow created under it belongs to no epoch. See escrows.md, "Depletion".
+// snapshotHasNoEpochYet: an escrow created under it belongs to no epoch. See escrows.md, "The funding planner".
 func snapshotHasNoEpochYet(snapshot chain.PhaseSnapshot) bool {
 	return snapshot.EpochIndex == 0 || snapshot.BlockHeight == 0
 }

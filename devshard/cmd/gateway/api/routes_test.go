@@ -376,22 +376,16 @@ func TestThePerEscrowModelListIsScopedToThatEscrow(t *testing.T) {
 }
 
 // Test flow:
-//  1. Mark one escrow on hold.
-//  2. POST a chat completion pinned to the on-hold escrow and to an unknown escrow.
-//  3. Assert the held escrow answers 503 and the unknown one answers 404.
-//  4. Assert neither request started a race.
-func TestAPinnedChatToAnEscrowOnHoldIsUnavailable(t *testing.T) {
+//  1. Build a server whose registry routes no escrow 8.
+//  2. Send a chat pinned to escrow 8.
+//  3. Assert the answer names an unknown devshard.
+func TestAPinnedChatToAnEscrowNotRoutedIsUnknown(t *testing.T) {
 	live := newHarness(t)
-	live.escrows.onHold = map[string]bool{"8": true}
 
-	held := live.request(t, http.MethodPost, "/devshard/8/v1/chat/completions", chatBody, nil)
-	unknown := live.request(t, http.MethodPost, "/devshard/404/v1/chat/completions", chatBody, nil)
+	pinned := live.request(t, http.MethodPost, "/devshard/8/v1/chat/completions", chatBody, nil)
 
-	if held.Code != http.StatusServiceUnavailable {
-		t.Errorf("pin to an escrow on hold: got %d (%s), want 503", held.Code, held.Body.String())
-	}
-	if unknown.Code != http.StatusNotFound {
-		t.Errorf("pin to an unknown escrow: got %d (%s), want 404", unknown.Code, unknown.Body.String())
+	if pinned.Code != http.StatusNotFound {
+		t.Errorf("pin to an escrow not routed: got %d (%s), want 404", pinned.Code, pinned.Body.String())
 	}
 	if got := live.inference.runs.Load(); got != 0 {
 		t.Errorf("races started: got %d, want 0", got)

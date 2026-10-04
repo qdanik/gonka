@@ -13,6 +13,7 @@ type epochInfo struct {
 	BlockHeight                  int64
 	Phase                        EpochPhase
 	EpochIndex                   uint64
+	EffectiveEpochIndex          uint64
 	PoCStartBlockHeight          int64
 	EpochSwitchBlockHeight       int64
 	IsConfirmationPoCActive      bool
@@ -55,6 +56,7 @@ func parseEpochInfo(body []byte) (epochInfo, error) {
 		BlockHeight:             int64(payload.BlockHeight),
 		Phase:                   EpochPhase(strings.TrimSpace(payload.Phase)),
 		EpochIndex:              uint64(payload.LatestEpoch.Index),
+		EffectiveEpochIndex:     deriveEffectiveEpochIndex(payload),
 		PoCStartBlockHeight:     int64(payload.LatestEpoch.PocStartBlockHeight),
 		EpochSwitchBlockHeight:  deriveEpochSwitchBlockHeight(payload),
 		IsConfirmationPoCActive: payload.IsConfirmationPoCActive,
@@ -68,7 +70,7 @@ func parseEpochInfo(body []byte) (epochInfo, error) {
 
 func deriveEpochSwitchBlockHeight(payload chainEpochInfoResponse) int64 {
 	blockHeight := int64(payload.BlockHeight)
-	if payload.EpochStages.SetNewValidators > 0 && int64(payload.EpochStages.SetNewValidators) >= blockHeight {
+	if payload.EpochStages.SetNewValidators > 0 && int64(payload.EpochStages.SetNewValidators) > blockHeight {
 		return int64(payload.EpochStages.SetNewValidators)
 	}
 	if payload.NextEpochStages.SetNewValidators > 0 {
@@ -78,6 +80,20 @@ func deriveEpochSwitchBlockHeight(payload chainEpochInfoResponse) int64 {
 		return int64(payload.EpochStages.NextPoCStart)
 	}
 	return int64(payload.LatestEpoch.PocStartBlockHeight)
+}
+
+func deriveEffectiveEpochIndex(payload chainEpochInfoResponse) uint64 {
+	latest := uint64(payload.LatestEpoch.Index)
+	height := int64(payload.BlockHeight)
+	pocStart := int64(payload.LatestEpoch.PocStartBlockHeight)
+	switchHeight := int64(payload.EpochStages.SetNewValidators)
+	switch {
+	case latest == 0 || height <= 0 || pocStart <= 0 || switchHeight <= 0:
+		return 0
+	case height >= pocStart && height < switchHeight:
+		return latest - 1
+	}
+	return latest
 }
 
 const (

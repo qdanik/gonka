@@ -10,7 +10,7 @@ import (
 )
 
 // Test flow:
-//  1. Run parseModels against a raw JSON string, varied across cases: a valid multi-model array, a missing target_count, blank/whitespace input, malformed JSON, and each field-validation rejection (empty model_id, zero/negative target_count, zero amount).
+//  1. Run parseModels against a raw JSON string, varied across cases: a valid multi-model array, a missing target_count, blank/whitespace input, malformed JSON, and each field-validation rejection (empty model_id, zero/negative target_count, zero amount), and the funding fields: max_unsettled at and under its floor, zero and negative full_context_slots.
 //  2. For an error case, assert parseModels returns an error.
 //  3. For a success case, assert the returned models match the expected slice (or nil for blank input).
 func TestParseModels(t *testing.T) {
@@ -27,14 +27,14 @@ func TestParseModels(t *testing.T) {
 				{"model_id":"model-b","temp_count":1,"target_count":3,"amount":2000000,"private_key_env":"MODEL_B_KEY"}
 			]`,
 			want: []ModelConfig{
-				{ModelID: "model-a", TempCount: 2, TargetCount: 5, ReserveCount: 1, Amount: 1000000, PrivateKeyEnv: "MODEL_A_KEY"},
-				{ModelID: "model-b", TempCount: 1, TargetCount: 3, ReserveCount: 1, Amount: 2000000, PrivateKeyEnv: "MODEL_B_KEY"},
+				{ModelID: "model-a", TempCount: 2, TargetCount: 5, ReserveCount: 1, Amount: 1000000, PrivateKeyEnv: "MODEL_A_KEY", MaxUnsettled: 12, FullContextSlots: 2},
+				{ModelID: "model-b", TempCount: 1, TargetCount: 3, ReserveCount: 1, Amount: 2000000, PrivateKeyEnv: "MODEL_B_KEY", MaxUnsettled: 9, FullContextSlots: 2},
 			},
 		},
 		{
 			name: "missing target_count defaults to one",
 			raw:  `[{"model_id":"m","temp_count":1,"amount":1,"private_key_env":"K"}]`,
-			want: []ModelConfig{{ModelID: "m", TempCount: 1, TargetCount: 1, ReserveCount: 1, Amount: 1, PrivateKeyEnv: "K"}},
+			want: []ModelConfig{{ModelID: "m", TempCount: 1, TargetCount: 1, ReserveCount: 1, Amount: 1, PrivateKeyEnv: "K", MaxUnsettled: 7, FullContextSlots: 2}},
 		},
 		{name: "blank string returns nil", raw: "", want: nil},
 		{name: "whitespace-only returns nil", raw: "   \n\t ", want: nil},
@@ -42,6 +42,14 @@ func TestParseModels(t *testing.T) {
 		{name: "empty model_id rejected", raw: `[{"model_id":"","temp_count":1,"target_count":1,"amount":1,"private_key_env":"K"}]`, wantErr: true},
 		{name: "zero target_count rejected", raw: `[{"model_id":"m","temp_count":1,"target_count":0,"amount":1,"private_key_env":"K"}]`, wantErr: true},
 		{name: "negative target_count rejected", raw: `[{"model_id":"m","temp_count":1,"target_count":-1,"amount":1,"private_key_env":"K"}]`, wantErr: true},
+		{
+			name: "max_unsettled at its floor is kept",
+			raw:  `[{"model_id":"m","temp_count":1,"target_count":2,"reserve_count":1,"amount":1,"private_key_env":"K","max_unsettled":5,"full_context_slots":3}]`,
+			want: []ModelConfig{{ModelID: "m", TempCount: 1, TargetCount: 2, ReserveCount: 1, Amount: 1, PrivateKeyEnv: "K", MaxUnsettled: 5, FullContextSlots: 3}},
+		},
+		{name: "max_unsettled under target, temp and reserve plus one rejected", raw: `[{"model_id":"m","temp_count":1,"target_count":2,"reserve_count":1,"amount":1,"private_key_env":"K","max_unsettled":4}]`, wantErr: true},
+		{name: "zero full_context_slots rejected", raw: `[{"model_id":"m","target_count":1,"amount":1,"private_key_env":"K","full_context_slots":0}]`, wantErr: true},
+		{name: "negative full_context_slots rejected", raw: `[{"model_id":"m","target_count":1,"amount":1,"private_key_env":"K","full_context_slots":-1}]`, wantErr: true},
 		{name: "zero amount rejected", raw: `[{"model_id":"m","temp_count":1,"target_count":1,"amount":0,"private_key_env":"K"}]`, wantErr: true},
 	}
 	for _, tt := range tests {

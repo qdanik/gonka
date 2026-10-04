@@ -10,9 +10,9 @@ Seven defects the gateway runs into and cannot fix inside `cmd/gateway`. The fir
 
 The cost was money, not observability. In `settleLiveRecordLocked` ([`state/machine.go`](../../../state/machine.go)) a `StatusStarted` record settles as `ActualCost = ReservedCost`, credited to the executor slot: the escrow pays in full for an answer it never received, and the unposted vote also spares that host the `Missed` it earned.
 
-**The rule now.** Every escrow tick scans its own live records for ones started, stamped and past their execution deadline by a grace, and re-votes them through the same `HandleTimeout`: [`state/started_deadline.go`](../../../state/started_deadline.go) scans, [`user/timeout_sweep.go`](../../../user/timeout_sweep.go) votes, [`registry/timeout_sweep.go`](../registry/timeout_sweep.go) walks the published escrows, and [`escrow/manager.go`](../escrow/manager.go) drives it off the tick. See [`race.md`](./race.md), "The swept vote and the retried vote", for the three properties that keep it off the hot path.
+**The rule now.** Every escrow tick scans its own live records for ones started and past their execution deadline by a grace, counted from the executor's stamp or, when it stamped none (`ConfirmedAt` not positive), from the start, and re-votes them through the same `HandleTimeout`: [`state/started_deadline.go`](../../../state/started_deadline.go) scans, [`user/timeout_sweep.go`](../../../user/timeout_sweep.go) votes, [`registry/timeout_sweep.go`](../registry/timeout_sweep.go) walks the published escrows, and [`escrow/manager.go`](../escrow/manager.go) drives it off the tick. See [`race.md`](./race.md), "The swept vote and the retried vote", for the three properties that keep it off the hot path.
 
-**Why it is sound.** `applyTimeout` ([`state/machine.go`](../../../state/machine.go)) has no wall-clock bound: it requires only that the record is still live and that its status matches the reason. `sealEligibleStatus` ([`state/seal.go`](../../../state/seal.go)) admits only `Finished`, `Validated`, `Invalidated` and `TimedOut`, so a `StatusStarted` record never auto-seals and stays settleable until the escrow itself settles. The retry needs nothing carried over from the original request: `VerifyExecutionTimeout` ([`host/timeout.go`](../../../host/timeout.go)) decides from the verifier's own state and the executor, and takes no payload. A sweep cannot collide with a live race either: the execution deadline is `ConfirmedAt + ExecutionTimeout` (32 minutes) and no attempt outlives `streamingHardTimeout` (20 minutes), and the configured grace is added on top of that.
+**Why it is sound.** `applyTimeout` ([`state/machine.go`](../../../state/machine.go)) has no wall-clock bound: it requires only that the record is still live and that its status matches the reason. `sealEligibleStatus` ([`state/seal.go`](../../../state/seal.go)) admits only `Finished`, `Validated`, `Invalidated` and `TimedOut`, so a `StatusStarted` record never auto-seals and stays settleable until the escrow itself settles. The retry needs nothing carried over from the original request: `VerifyExecutionTimeout` ([`host/timeout.go`](../../../host/timeout.go)) decides from the verifier's own state and the executor, and takes no payload. A sweep cannot collide with a live race either: the execution deadline is `ConfirmedAt + ExecutionTimeout` (32 minutes), or `StartedAt + ExecutionTimeout` without a stamp, and no attempt outlives `streamingHardTimeout` (20 minutes), and the configured grace is added on top of that.
 
 **Scope note.** `StatusPending` is excluded. Its reserve is refunded at settlement either way, and `settleLiveRecordLocked` declines to increment `Missed` there, because state cannot distinguish user censorship from host absence. Sweeping it would assign blame the protocol chose not to assign.
 
@@ -24,9 +24,9 @@ The cost was money, not observability. In `settleLiveRecordLocked` ([`state/mach
 
 With an empty map a nonce a host already receipted yielded reason `refused`, and `applyTimeout` rejects a refused timeout against such a record — `reason=refused requires pending`. The vote was not merely missed across a restart: it could not be posted at all, and the nonce was guaranteed to settle at full reserve.
 
-**The rule now.** The committed record is the authority for the stamp and the map is a cache of it ([`user/session.go`](../../../user/session.go), `TimeoutDeadline`). A record without the stamp still reads as `refused`, which is the safe direction: the chain would decline anything else.
+**The rule now.** The committed record is the authority for the stamp and the map is a cache of it ([`user/session.go`](../../../user/session.go), `TimeoutDeadline`). A record without the stamp is still named `refused` by `TimeoutDeadline`, by design; the vote gate (`reasonTheGroupWillAccept`) switches it to an execution vote once its start-anchored deadline has passed.
 
-**Why it is sound.** `ConfirmedAt` is written in the same transition that sets `StatusStarted` ([`state/machine.go`](../../../state/machine.go)), from the executor's signed receipt, so every record the sweep enumerates carries it.
+**Why it is sound.** `ConfirmedAt` is written in the same transition that sets `StatusStarted` ([`state/machine.go`](../../../state/machine.go)), from the executor's signed receipt. A receipt that carries a zero stamp leaves `ConfirmedAt` at zero; the sweep and the session's vote gate then anchor that record on its `StartedAt`. Verifiers already accept such a timeout, since `VerifyExecutionTimeout` measures from the zero stamp and sees it as long past; the user side's start anchor is what keeps the vote off a still-running inference.
 
 ---
 
@@ -77,3 +77,18 @@ With an empty map a nonce a host already receipted yielded reason `refused`, and
 **The rule now.** The pass counts instead of listing: `candidates_count`, `waiting_nonce_gate`, `waiting_clock_gate`, `next_clock_gate_seconds` when something waits on the clock, `sealed_count` and the first and last sealed ids. The same pass costs 1.4 ms and 166 KB (`BenchmarkAutoSealEvaluationOfAWindowNotYetDue`).
 
 **Why it is sound.** The list was only ever read by the log. Which inferences are sealed is decided by the same nonce gate, terminal-status shortcut and clock gate as before, and the eligible ids are still sorted before they fold into the sealed accumulator.
+
+---
+
+## Known limitations after phase 4
+
+These are not defects the gateway can fix inside `cmd/gateway`; each is recorded so a reader does not rediscover it.
+
+- Abandoned `Pending` reservations are still paid to the host at finalize: `Finalize` pays every open record in full, so an attempt the gateway gave up on is charged when the escrow settles; the timeout sweep cannot recover it, because hosts reject a refused vote that carries no payload (`devshard/host/timeout.go`).
+- An over-context prompt costs the refusing host's attempt a reservation for the whole execution timeout and gives that honest host a miss. The host relays vLLM's 400 to the gateway as a stream event, and the race stops at a trusted refusal unless the host runs shorter than the model ([race.md](./race.md), "Escalation"), so one attempt is held, not one per host. The hold and the miss are a host defect: the engine error comes after the receipt is signed and ends in `FailReceiptOrphan` with no Finish over the refusal (`devshard/host/host.go`, `RunExecution`), so only an execution-timeout vote settles the record. The scenarios pin the miss so a host fix flips it.
+- A node that answers a frozen height with a fresh reply is not detected: only a chain API that stops answering is projected (`escrow deadlines read past a stale chain height`), and the projection moves the height, not the epoch.
+- A row recovered from a commitment, or any row with no live session, counts as full only when its stored `amount` covers the model's slot; a row whose amount never resolved is left out of the full count and can make the guard create one escrow too many.
+- A host that ends a challenge without testing the vote threshold decides whether an escrow with a challenged record stays stuck or is invalidated; the gateway handles either outcome and the scenario records which one ran.
+- The four end-to-end anchors on the docker stand are not written yet.
+- A13's measured attempt bound is logged, not enforced.
+

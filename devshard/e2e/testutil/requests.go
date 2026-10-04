@@ -350,7 +350,6 @@ func EscrowBalance(t *testing.T, client *http.Client, clientURL, escrowID, beare
 type DevshardRow struct {
 	EscrowID          string `json:"id"`
 	Active            bool   `json:"active"`
-	OnHold            bool   `json:"on_hold"`
 	SettlementPending bool   `json:"settlement_pending"`
 }
 

@@ -35,6 +35,13 @@ func (b *createBreaker) gated(model, role string) bool {
 	return true
 }
 
+func (b *createBreaker) open(model, role string) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	state, ok := b.states[createBreakerKey(model, role)]
+	return ok && state.cooldownTicks > 0
+}
+
 func (b *createBreaker) recordFailure(model, role string) {
 	b.mu.Lock()
 	defer b.mu.Unlock()

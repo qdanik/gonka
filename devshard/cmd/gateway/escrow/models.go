@@ -3,6 +3,7 @@ package escrow
 
 import (
 	"fmt"
+	"math"
 	"strings"
 
 	json "github.com/goccy/go-json"
@@ -20,11 +21,17 @@ type ModelConfig struct {
 	Amount            uint64 `json:"amount"`
 	PrivateKeyEnv     string `json:"private_key_env"`
 	SettlementEnabled *bool  `json:"settlement_enabled,omitempty"`
+	MaxUnsettled      int    `json:"max_unsettled"`
+	FullContextSlots  int    `json:"full_context_slots"`
 }
 
 const (
 	defaultTargetCount  = 1 // applies only when target_count is absent; an explicit 0 is still a mistake to reject
 	defaultReserveCount = 1 // applies only when reserve_count is absent; an explicit 0 turns reserves off
+
+	defaultFullContextSlots = 2
+	unsettledHeadroom       = 4
+	unsetMaxUnsettled       = math.MinInt
 )
 
 func parseModels(raw string) ([]ModelConfig, error) {
@@ -37,9 +44,12 @@ func parseModels(raw string) ([]ModelConfig, error) {
 	}
 	models := make([]ModelConfig, 0, len(entries))
 	for _, entry := range entries {
-		model := ModelConfig{TargetCount: defaultTargetCount, ReserveCount: defaultReserveCount}
+		model := ModelConfig{TargetCount: defaultTargetCount, ReserveCount: defaultReserveCount, MaxUnsettled: unsetMaxUnsettled, FullContextSlots: defaultFullContextSlots}
 		if err := json.Unmarshal(entry, &model); err != nil {
 			return nil, fmt.Errorf("parse rotation models: %w", err)
+		}
+		if model.MaxUnsettled == unsetMaxUnsettled {
+			model.MaxUnsettled = model.TargetCount + model.TempCount + model.ReserveCount + unsettledHeadroom
 		}
 		models = append(models, model)
 	}
@@ -55,6 +65,12 @@ func parseModels(raw string) ([]ModelConfig, error) {
 		}
 		if model.Amount == 0 {
 			return nil, fmt.Errorf("rotation model %q: amount must be > 0", model.ModelID)
+		}
+		if model.FullContextSlots < 1 {
+			return nil, fmt.Errorf("rotation model %q: full_context_slots must be >= 1", model.ModelID)
+		}
+		if floor := model.TargetCount + model.TempCount + model.ReserveCount + 1; model.MaxUnsettled < floor {
+			return nil, fmt.Errorf("rotation model %q: max_unsettled %d must be >= target_count + temp_count + reserve_count + 1 (%d)", model.ModelID, model.MaxUnsettled, floor)
 		}
 	}
 	return models, nil

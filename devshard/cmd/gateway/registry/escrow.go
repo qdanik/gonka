@@ -20,11 +20,12 @@ type escrowEntry struct {
 	participants []string
 	stream       nonceStream
 	inFlight     atomic.Int64
-	onHold       atomic.Bool
 	isReserve    atomic.Bool
 	hold         func() (func(), bool)
+	openRecords  openRecordIndex
 
 	settlementHolds atomic.Int64
+	sweepHolds      atomic.Int64
 	closeClaimed    bool
 }
 
@@ -43,10 +44,9 @@ func newEscrowEntry(escrowID, model string, sessionID uint64, session EscrowSess
 
 func (e *escrowEntry) accepting() bool { return e.session.Phase() == types.PhaseActive }
 
-// routable is what the scheduler may pick; an escrow on hold is live for everything else. See routing.md, "An escrow on hold".
-func (e *escrowEntry) routable() bool { return e.accepting() && !e.onHold.Load() }
-
 func (e *escrowEntry) busy() bool { return e.inFlight.Load() > 0 }
+
+func (e *escrowEntry) busyOrSwept() bool { return e.busy() || e.sweepHolds.Load() > 0 }
 
 // close flushes before releasing storage and reports whether the store was released. See routing.md, "The escrow registry".
 func (e *escrowEntry) close() (bool, error) {

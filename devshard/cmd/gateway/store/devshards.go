@@ -19,7 +19,7 @@ const upsertDevshardStatement = `
 			rotation_role = excluded.rotation_role,
 			rotation_epoch = excluded.rotation_epoch,
 			settle_tx_hash = excluded.settle_tx_hash,
-			on_hold = CASE WHEN excluded.active = 0 THEN 0 ELSE devshards.on_hold END,
+			gone_from_chain = CASE WHEN excluded.active = 1 THEN 0 ELSE devshards.gone_from_chain END,
 			updated_at = datetime('now')`
 
 // ErrDevshardNotFound is returned by updates/deletes that match no row.
@@ -36,10 +36,12 @@ type DevshardRecord struct {
 	SettlementPending bool   `json:"settlement_pending"`
 	SettleTxHash      string `json:"settle_tx_hash"`
 	RoutePrefix       string `json:"route_prefix"`
-	OnHold            bool   `json:"on_hold"`
+	ChainEpoch        uint64 `json:"chain_epoch"`
+	Amount            uint64 `json:"amount"`
+	GoneFromChain     bool   `json:"gone_from_chain"`
 }
 
-// UpsertDevshard replaces every field except settlement_pending, route_prefix and on_hold. See README.md, "The devshard registry".
+// UpsertDevshard replaces every field except settlement_pending, route_prefix, chain_epoch, amount and gone_from_chain. See README.md, "The devshard registry".
 func (s *Store) UpsertDevshard(ctx context.Context, record DevshardRecord) error {
 	_, err := s.db.ExecContext(ctx, upsertDevshardStatement,
 		record.EscrowID, record.PrivateKeyEnv, record.Model, record.Active,
@@ -54,7 +56,7 @@ func (s *Store) UpsertDevshard(ctx context.Context, record DevshardRecord) error
 // ListDevshards returns every record ordered by escrow id.
 func (s *Store) ListDevshards(ctx context.Context) ([]DevshardRecord, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT escrow_id, private_key_env, model, active, rotation_role, rotation_epoch, settlement_pending, settle_tx_hash, route_prefix, on_hold
+		SELECT escrow_id, private_key_env, model, active, rotation_role, rotation_epoch, settlement_pending, settle_tx_hash, route_prefix, chain_epoch, amount, gone_from_chain
 		FROM devshards ORDER BY escrow_id`)
 	if err != nil {
 		return nil, fmt.Errorf("listing devshards: %w", err)
@@ -65,7 +67,7 @@ func (s *Store) ListDevshards(ctx context.Context) ([]DevshardRecord, error) {
 		var record DevshardRecord
 		if err := rows.Scan(&record.EscrowID, &record.PrivateKeyEnv, &record.Model,
 			&record.Active, &record.RotationRole, &record.RotationEpoch, &record.SettlementPending,
-			&record.SettleTxHash, &record.RoutePrefix, &record.OnHold); err != nil {
+			&record.SettleTxHash, &record.RoutePrefix, &record.ChainEpoch, &record.Amount, &record.GoneFromChain); err != nil {
 			return nil, fmt.Errorf("scanning devshard row: %w", err)
 		}
 		records = append(records, record)
@@ -77,17 +79,35 @@ func (s *Store) ListDevshards(ctx context.Context) ([]DevshardRecord, error) {
 }
 
 func (s *Store) SetDevshardActive(ctx context.Context, escrowID string, active bool) error {
-	return s.updateDevshardField(ctx, `UPDATE devshards SET active = ?, on_hold = 0, updated_at = datetime('now') WHERE escrow_id = ?`, active, escrowID)
+	return s.updateDevshardField(ctx, `UPDATE devshards SET active = ?1, gone_from_chain = CASE WHEN ?1 THEN 0 ELSE gone_from_chain END, updated_at = datetime('now') WHERE escrow_id = ?2`, active, escrowID)
 }
 
 func (s *Store) SetDevshardSettlementPending(ctx context.Context, escrowID string, pending bool) error {
 	return s.updateDevshardField(ctx, `UPDATE devshards SET settlement_pending = ?, updated_at = datetime('now') WHERE escrow_id = ?`, pending, escrowID)
 }
 
+// SetDevshardChainFacts records the epoch the chain stamped on the escrow and the amount it locked; a zero leaves its column as it was.
+func (s *Store) SetDevshardChainFacts(ctx context.Context, escrowID string, chainEpoch, amount uint64) error {
+	result, err := s.db.ExecContext(ctx, `UPDATE devshards SET
+		chain_epoch = CASE WHEN ? > 0 THEN ? ELSE chain_epoch END,
+		amount = CASE WHEN ? > 0 THEN ? ELSE amount END,
+		updated_at = datetime('now') WHERE escrow_id = ?`,
+		chainEpoch, chainEpoch, amount, amount, escrowID)
+	if err != nil {
+		return fmt.Errorf("recording chain facts of devshard %s: %w", escrowID, err)
+	}
+	return requireOneRow(result, escrowID)
+}
+
+// MarkDevshardGoneFromChain takes a row the chain no longer holds out of service and out of the unsettled count in one statement.
+func (s *Store) MarkDevshardGoneFromChain(ctx context.Context, escrowID string) error {
+	return s.updateDevshardField(ctx, `UPDATE devshards SET active = 0, gone_from_chain = ?, updated_at = datetime('now') WHERE escrow_id = ?`, true, escrowID)
+}
+
 // ParkForSettlement deactivates and marks pending in one statement, because no recovery path picks up inactive-and-not-pending.
 func (s *Store) ParkForSettlement(ctx context.Context, escrowID string) error {
 	result, err := s.db.ExecContext(ctx,
-		`UPDATE devshards SET active = 0, settlement_pending = 1, on_hold = 0, updated_at = datetime('now') WHERE escrow_id = ?`,
+		`UPDATE devshards SET active = 0, settlement_pending = 1, updated_at = datetime('now') WHERE escrow_id = ?`,
 		escrowID)
 	if err != nil {
 		return fmt.Errorf("parking devshard %s: %w", escrowID, err)
@@ -98,32 +118,10 @@ func (s *Store) ParkForSettlement(ctx context.Context, escrowID string) error {
 // ParkForSettlementIfActive reports whether it parked a serving row. See README.md, "The devshard registry".
 func (s *Store) ParkForSettlementIfActive(ctx context.Context, escrowID string) (bool, error) {
 	result, err := s.db.ExecContext(ctx,
-		`UPDATE devshards SET active = 0, settlement_pending = 1, on_hold = 0, updated_at = datetime('now') WHERE escrow_id = ? AND active = 1`,
+		`UPDATE devshards SET active = 0, settlement_pending = 1, updated_at = datetime('now') WHERE escrow_id = ? AND active = 1`,
 		escrowID)
 	if err != nil {
 		return false, fmt.Errorf("parking devshard %s: %w", escrowID, err)
-	}
-	return matchedOneRow(result, escrowID)
-}
-
-// PutOnHoldIfServing reports whether this call moved a serving row on hold, so only one caller replaces it. See README.md, "The devshard registry".
-func (s *Store) PutOnHoldIfServing(ctx context.Context, escrowID string) (bool, error) {
-	result, err := s.db.ExecContext(ctx,
-		`UPDATE devshards SET on_hold = 1, updated_at = datetime('now') WHERE escrow_id = ? AND active = 1 AND on_hold = 0`,
-		escrowID)
-	if err != nil {
-		return false, fmt.Errorf("putting devshard %s on hold: %w", escrowID, err)
-	}
-	return matchedOneRow(result, escrowID)
-}
-
-// ResumeFromHold matches only an active row, so an escrow an operator deactivated never comes back.
-func (s *Store) ResumeFromHold(ctx context.Context, escrowID string) (bool, error) {
-	result, err := s.db.ExecContext(ctx,
-		`UPDATE devshards SET on_hold = 0, updated_at = datetime('now') WHERE escrow_id = ? AND active = 1 AND on_hold = 1`,
-		escrowID)
-	if err != nil {
-		return false, fmt.Errorf("resuming devshard %s from hold: %w", escrowID, err)
 	}
 	return matchedOneRow(result, escrowID)
 }
@@ -188,11 +186,15 @@ func (s *Store) SetDevshardRotationRole(ctx context.Context, escrowID, role stri
 		`UPDATE devshards SET rotation_role = ?, updated_at = datetime('now') WHERE escrow_id = ?`, role, escrowID)
 }
 
-// SetDevshardSettleTxHash records what a settle broadcast, so a later tick can ask the chain about it instead of building a second one.
+// SetDevshardSettleTxHash records what a settle broadcast, so a later tick can ask the chain about it instead of building a second one; the stamp is the process clock's, the one the tick reads it against.
 func (s *Store) SetDevshardSettleTxHash(ctx context.Context, escrowID, txHash string) error {
+	stamp := ""
+	if txHash != "" {
+		stamp = time.Now().UTC().Format(time.DateTime)
+	}
 	result, err := s.db.ExecContext(ctx,
-		`UPDATE devshards SET settle_tx_hash = ?, settle_tx_at = CASE WHEN ? = '' THEN '' ELSE datetime('now') END, updated_at = datetime('now') WHERE escrow_id = ?`,
-		txHash, txHash, escrowID)
+		`UPDATE devshards SET settle_tx_hash = ?, settle_tx_at = ?, updated_at = datetime('now') WHERE escrow_id = ?`,
+		txHash, stamp, escrowID)
 	if err != nil {
 		return fmt.Errorf("updating devshard %s: %w", escrowID, err)
 	}

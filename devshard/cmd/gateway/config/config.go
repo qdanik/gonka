@@ -104,13 +104,11 @@ type Modes struct {
 }
 
 type Rotation struct {
-	Enabled           bool
-	SettlementEnabled bool
-	HoldEnabled       bool
-	HoldMaxPerModel   int64
-	HoldResumeAnswers int64
-	PrePoCBlocks      int64
-	ModelsJSON        string
+	Enabled            bool
+	SettlementEnabled  bool
+	PrePoCBlocks       int64
+	ModelsJSON         string
+	SettleMarginBlocks int64
 }
 
 type Cache struct {

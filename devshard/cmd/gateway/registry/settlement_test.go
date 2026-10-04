@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"slices"
 	"testing"
 
 	"devshard/cmd/gateway/chain"
@@ -408,5 +409,42 @@ func TestSettlementPathsReportAMissingFactory(t *testing.T) {
 	}
 	if _, err := registry.BuildSettlement(context.Background(), "5"); err == nil {
 		t.Error("BuildSettlement without a read-only factory = nil, want an error")
+	}
+}
+
+// Test flow:
+//  1. Table-driven: a resident escrow and a non-resident one, each with a Retiring observer that records the finalize calls its session had when it read.
+//  2. Finalize the escrow.
+//  3. Assert the observer read it once, after its finalize.
+func TestTheLedgerReadsAnEscrowAfterItsFinalize(t *testing.T) {
+	for _, testCase := range []struct {
+		name     string
+		resident bool
+	}{
+		{name: "resident", resident: true},
+		{name: "rehydrated"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			session := settleableSession(9)
+			var finalizesWhenRead []int64
+			registry := New(Deps{
+				ServingSessions: newSessions(map[string]*fakeSession{"5": session}).open,
+				Retiring: func(_ string, retiring EscrowSession) {
+					finalizesWhenRead = append(finalizesWhenRead, session.finalizeCalls.Load())
+				},
+				Now: fixedClock(),
+			})
+			if testCase.resident {
+				mustAdd(t, registry, "5", "qwen")
+			}
+
+			if err := registry.Finalize(context.Background(), "5"); err != nil {
+				t.Fatalf("Finalize = %v, want nil", err)
+			}
+
+			if !slices.Equal(finalizesWhenRead, []int64{1}) {
+				t.Fatalf("finalize calls when the ledger read = %v, want [1]", finalizesWhenRead)
+			}
+		})
 	}
 }

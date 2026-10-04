@@ -7,7 +7,6 @@ import (
 	"slices"
 
 	"devshard/cmd/gateway/chain"
-	"devshard/cmd/gateway/scheduler"
 	"devshard/cmd/gateway/store"
 )
 
@@ -25,7 +24,7 @@ func (m *Manager) OnReserveTaken(escrowID string) {
 	}
 }
 
-// promoteTakenReserves rewrites a taken reserve's row as regular before depletion counts it; a failed write is marked again for the next tick.
+// promoteTakenReserves rewrites a taken reserve's row as regular before the planner reads it; a failed write is marked again for the next tick.
 func (m *Manager) promoteTakenReserves(ctx context.Context, devshards []store.DevshardRecord) ([]store.DevshardRecord, error) {
 	taken := m.reserveTaken.drain()
 	if len(taken) == 0 {
@@ -49,34 +48,6 @@ func (m *Manager) promoteTakenReserves(ctx context.Context, devshards []store.De
 	return promoted, errors.Join(errs...)
 }
 
-// parkReserve funds no replacement: a reserve is not counted toward target_count, and ensureReserves funds the next one.
-func (m *Manager) parkReserve(ctx context.Context, record store.DevshardRecord, reason scheduler.ExhaustionReason) error {
-	parked, err := m.parkIfServing(ctx, record.EscrowID)
-	if !parked && err != nil {
-		m.depleted.mark(record.EscrowID, reason)
-	}
-	return err
-}
-
-// ensureReserves funds each model's missing reserves once some other escrow of the model is serving. See README.md, "The reserve".
-func (m *Manager) ensureReserves(ctx context.Context, snapshot chain.PhaseSnapshot, models []ModelConfig, devshards []store.DevshardRecord) error {
-	errs := []error{m.retireSurplusReserves(ctx, snapshot, models, devshards)}
-	for _, model := range models {
-		if model.ReserveCount == 0 || !hasServingEscrow(devshards, model.ModelID) {
-			continue
-		}
-		// ensureToTarget would narrate the skip, and this step runs every tick.
-		if served, known := servedByNetwork(snapshot, model.ModelID); known && !served {
-			continue
-		}
-		_, err := m.ensureToTarget(ctx, RoleReserve, model.ReserveCount, model, snapshot, devshards)
-		if err != nil && !errors.Is(err, errCreateSuppressed) && !refusedBeforeBroadcast(err) {
-			errs = append(errs, fmt.Errorf("funding reserve for %s: %w", model.ModelID, err))
-		}
-	}
-	return errors.Join(errs...)
-}
-
 // retireSurplusReserves settles a reserve no longer wanted: one an earlier epoch funded that the bridge did not retire, or one past a lowered reserve_count. A reserve carries no traffic, so its money comes back at once.
 func (m *Manager) retireSurplusReserves(ctx context.Context, snapshot chain.PhaseSnapshot, models []ModelConfig, devshards []store.DevshardRecord) error {
 	wanted := make(map[string]int, len(models))
@@ -98,8 +69,4 @@ func (m *Manager) retireSurplusReserves(ctx context.Context, snapshot chain.Phas
 		}
 	}
 	return errors.Join(errs...)
-}
-
-func hasServingEscrow(devshards []store.DevshardRecord, modelID string) bool {
-	return newModelCounts(devshards).serving[modelID] > 0
 }

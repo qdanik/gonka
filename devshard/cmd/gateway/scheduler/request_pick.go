@@ -91,6 +91,9 @@ func (s *Scheduler) pickOnce(ctx context.Context, profile RequestProfile, avoide
 	}
 
 	claimed, err := s.claimAndSubmit(escrow, queued)
+	if errors.Is(err, ErrEscrowBusy) && profile.Escrow == "" {
+		escrow, claimed, err = s.claimPastFullQueues(ctx, profile, queued, escrow, avoided)
+	}
 	if err != nil {
 		return Assignment{}, escrow.ID, err
 	}
@@ -112,6 +115,29 @@ func (s *Scheduler) pickOnce(ctx context.Context, profile RequestProfile, avoide
 		}
 		return Assignment{}, escrow.ID, ctx.Err()
 	}
+}
+
+// claimPastFullQueues offers the request to the next escrow in the ranking while each chosen one's submit queue is full, and answers busy once none is left. See routing.md, "Past a full queue".
+func (s *Scheduler) claimPastFullQueues(ctx context.Context, profile RequestProfile, queued *waiter, refusedFirst Escrow, avoided avoidedEscrows) (Escrow, *dispatcher, error) {
+	avoidedFull := make(avoidedEscrows, len(avoided)+1)
+	maps.Copy(avoidedFull, avoided)
+	refused := refusedFirst
+	for range len(s.escrows.Candidates(profile.Model)) {
+		avoidedFull[refused.ID] = avoidedQueueFull
+		if ctx.Err() != nil {
+			break
+		}
+		next, err := s.pickEscrow(profile, s.snapshots.Snapshot(), queued, avoidedFull)
+		if err != nil {
+			break
+		}
+		claimed, err := s.claimAndSubmit(next, queued)
+		if !errors.Is(err, ErrEscrowBusy) {
+			return next, claimed, err
+		}
+		refused = next
+	}
+	return refusedFirst, nil, ErrEscrowBusy
 }
 
 // queuedAhead estimates how far each candidate's cursor will have moved before this request draws a nonce. See routing.md, "Pricing an escrow by the burns it will cost".

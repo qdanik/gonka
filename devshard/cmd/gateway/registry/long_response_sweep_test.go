@@ -118,7 +118,7 @@ func startedTwoHoursAgo(t *testing.T, escrow longResponseEscrow) uint64 {
 // Test flow:
 //  1. Publish a real escrow session whose three hosts sign accepting timeout votes, and start one inference whose executor confirmed it two hours ago and never finished.
 //  2. Judge that attempt as a race would: it streamed content for 281 seconds, stalled and never finished; assert the race posts no vote for it, skipping it as a long response.
-//  3. Assert the nonce still holds its whole reservation, which is what an escrow on hold waits for.
+//  3. Assert the nonce still holds its whole reservation.
 //  4. Run the registry's execution-timeout sweep; assert it finds the nonce due and applies the vote.
 //  5. Assert the record timed out and its reservation is back in the balance.
 func TestALongResponseTheRaceDoesNotVoteOnIsReturnedByTheSweep(t *testing.T) {

@@ -167,6 +167,7 @@ func (o *PhaseObserver) refresh(ctx context.Context) {
 		BlockHeight:            epoch.BlockHeight,
 		EpochSwitchBlockHeight: epoch.EpochSwitchBlockHeight,
 		EpochIndex:             epoch.EpochIndex,
+		EffectiveEpochIndex:    epoch.EffectiveEpochIndex,
 		EpochPhase:             epoch.Phase,
 		ConfirmationPoCPhase:   epoch.ConfirmationPoCPhase,
 		RequestsBlocked:        blocked,

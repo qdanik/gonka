@@ -55,10 +55,8 @@ func Build(values env.Values, overrides Overrides) (*Config, error) {
 	overrideIfSet(&configuration.Rotation.Enabled, values.RotationEnabled)
 	overrideIfSet(&configuration.Rotation.PrePoCBlocks, values.RotationPrePoCBlocks)
 	overrideIfSet(&configuration.Rotation.SettlementEnabled, values.RotationSettlementEnabled)
-	overrideIfSet(&configuration.Rotation.HoldEnabled, values.RotationHoldEnabled)
-	overrideIfSet(&configuration.Rotation.HoldMaxPerModel, values.RotationHoldMaxPerModel)
-	overrideIfSet(&configuration.Rotation.HoldResumeAnswers, values.RotationHoldResumeAnswers)
 	overrideIfSet(&configuration.Rotation.ModelsJSON, values.RotationModelsJSON)
+	overrideIfSet(&configuration.Rotation.SettleMarginBlocks, values.RotationSettleMarginBlocks)
 
 	overrideIfSet(&configuration.Cache.ChatCacheMaxBytes, values.ChatCacheMaxBytes)
 
@@ -165,11 +163,9 @@ func Build(values env.Values, overrides Overrides) (*Config, error) {
 	overrideIfSet(&configuration.Modes.DisabledRedirectURL, overrides.DisabledRedirectURL)
 	overrideIfSet(&configuration.Rotation.Enabled, overrides.RotationEnabled)
 	overrideIfSet(&configuration.Rotation.SettlementEnabled, overrides.RotationSettlementEnabled)
-	overrideIfSet(&configuration.Rotation.HoldEnabled, overrides.RotationHoldEnabled)
-	overrideIfSet(&configuration.Rotation.HoldMaxPerModel, overrides.RotationHoldMaxPerModel)
-	overrideIfSet(&configuration.Rotation.HoldResumeAnswers, overrides.RotationHoldResumeAnswers)
 	overrideIfSet(&configuration.Rotation.PrePoCBlocks, overrides.RotationPrePoCBlocks)
 	overrideIfSet(&configuration.Rotation.ModelsJSON, overrides.RotationModelsJSON)
+	overrideIfSet(&configuration.Rotation.SettleMarginBlocks, overrides.RotationSettleMarginBlocks)
 
 	if err := configuration.Validate(); err != nil {
 		return nil, err

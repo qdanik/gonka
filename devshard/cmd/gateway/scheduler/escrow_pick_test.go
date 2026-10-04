@@ -539,7 +539,7 @@ type exhaustionReport struct {
 //  1. For each table case of an optional pin, a chain snapshot's nonce cap, and a spent candidate's balance, pick an escrow beside a fresh one.
 //  2. Assert the picked escrow or error matches the case.
 //  3. Assert the out-of-funds classification of the error matches the case.
-//  4. Assert the exhaustion reports match the case: the chain's own cap reports `ExhaustionNonceCap` and outranks a dry balance, while past the fallback ceiling alone a dry balance reports `ExhaustionBalanceFloor` and the fallback ceiling alone reports nothing.
+//  4. Assert the exhaustion reports match the case: the chain's own cap reports `ExhaustionNonceCap` and outranks a dry balance, a dry balance alone is never reported, a pinned escrow is never reported for its balance, a pinned escrow that cannot pay this attempt is short even past the fallback ceiling, and the fallback ceiling alone reports nothing.
 func TestPickEscrowReportsAnExhaustedEscrowButNeverForTheFallbackCeilingAlone(t *testing.T) {
 	t.Parallel()
 
@@ -550,6 +550,7 @@ func TestPickEscrowReportsAnExhaustedEscrowButNeverForTheFallbackCeilingAlone(t 
 		pinned         string
 		snapshot       chain.PhaseSnapshot
 		spentBalance   uint64
+		request        RequestProfile
 		wantPicked     string
 		wantErr        error
 		wantOutOfFunds bool
@@ -579,15 +580,17 @@ func TestPickEscrowReportsAnExhaustedEscrowButNeverForTheFallbackCeilingAlone(t 
 			wantErr: ErrNoEscrowCapacity,
 		},
 		{
-			name: "past the fallback ceiling a dry candidate is reported for its balance", spentBalance: dry,
-			wantPicked:   "escrow-fresh",
-			wantReported: []exhaustionReport{{escrowID: "escrow-spent", reason: ExhaustionBalanceFloor}},
+			name: "past the fallback ceiling a dry candidate is declined unreported", spentBalance: dry,
+			wantPicked: "escrow-fresh",
 		},
 		{
-			name: "past the fallback ceiling a pinned dry escrow is refused as out of funds", pinned: "escrow-spent", spentBalance: dry,
-			wantErr:        ErrNoEscrowCapacity,
-			wantOutOfFunds: true,
-			wantReported:   []exhaustionReport{{escrowID: "escrow-spent", reason: ExhaustionBalanceFloor}},
+			name: "past the fallback ceiling a pinned dry escrow is declined unreported", pinned: "escrow-spent", spentBalance: dry,
+			wantErr: ErrNoEscrowCapacity,
+		},
+		{
+			name: "past the fallback ceiling a pinned escrow that cannot pay this attempt is short before the ceiling applies", pinned: "escrow-spent", spentBalance: dry,
+			request: RequestProfile{InputBytes: 8_192, OutputTokens: 1_000},
+			wantErr: ErrPinnedEscrowShort, wantOutOfFunds: true,
 		},
 	}
 	for _, testCase := range testCases {
@@ -605,7 +608,9 @@ func TestPickEscrowReportsAnExhaustedEscrowButNeverForTheFallbackCeilingAlone(t 
 				reported = append(reported, exhaustionReport{escrowID: escrowID, reason: reason})
 			}
 
-			picked, err := pickWith(scheduler, RequestProfile{Model: modelA, Escrow: testCase.pinned}, testCase.snapshot)
+			profile := testCase.request
+			profile.Model, profile.Escrow = modelA, testCase.pinned
+			picked, err := pickWith(scheduler, profile, testCase.snapshot)
 
 			if picked.ID != testCase.wantPicked || !errors.Is(err, testCase.wantErr) {
 				t.Fatalf("pickEscrow() = %q, %v; want %q, %v", picked.ID, err, testCase.wantPicked, testCase.wantErr)
@@ -704,19 +709,19 @@ func (f *fakeSession) TokenPrice() uint64  { return f.tokenPrice }
 func (f *fakeSession) FeePerNonce() uint64 { return f.feePerNonce }
 
 // Test flow:
-//  1. Build three escrows priced so one request reserves 200: a poor one holding 500 across 4 in-flight requests, a rich one, and an empty one that cannot afford even one.
+//  1. Build three escrows priced so one request reserves 200: a poor one holding 150 beside 4 in-flight requests, a rich one, and an empty one that cannot afford even one.
 //  2. Check `belowBalanceFloor` against a 20-token reserve for each.
 //  3. Assert the poor escrow is below the floor, the rich one is not, and the empty one is.
 func TestPickEscrowSkipsAnEscrowBelowItsBalanceFloor(t *testing.T) {
 	t.Parallel()
 	const reserveTokens, price = 20, 10
 
-	poor := Escrow{ID: "poor", Session: &fakeSession{balance: 500, tokenPrice: price}, ActiveUsers: 4}
+	poor := Escrow{ID: "poor", Session: &fakeSession{balance: 150, tokenPrice: price}, ActiveUsers: 4}
 	rich := Escrow{ID: "rich", Session: &fakeSession{balance: 1 << 30, tokenPrice: price}, ActiveUsers: 4}
 	single := Escrow{ID: "empty", Session: &fakeSession{balance: 100, tokenPrice: price}, ActiveUsers: 0}
 
 	if !belowBalanceFloor(poor, reserveTokens) {
-		t.Fatal("an escrow holding 500 with four requests in flight and 200 apiece was kept in routing")
+		t.Fatal("an escrow holding 150 against a 200 request was kept in routing")
 	}
 	if belowBalanceFloor(rich, reserveTokens) {
 		t.Fatal("a funded escrow was taken out of routing")
@@ -748,8 +753,8 @@ func TestTheBalanceFloorIsPricedByTheEscrowsOwnTokenPrice(t *testing.T) {
 
 // Test flow:
 //  1. Price one request at 200 for its reserve and 50 for the nonce it draws.
-//  2. Check `belowBalanceFloor` for an idle escrow one unit short of 250 and one holding exactly 250, then for a busy one short of two requests and one holding exactly two.
-//  3. Assert each short escrow is below the floor and each exact one is not, so the floor charges the per-nonce fee the chain charges.
+//  2. Check `belowBalanceFloor` for an idle escrow one unit short of 250 and one holding exactly 250, then for a busy one the same, its in-flight request already reserved out of its balance.
+//  3. Assert each short escrow is below the floor and each exact one is not, so the floor charges the per-nonce fee the chain charges and never the requests already on the escrow.
 func TestTheBalanceFloorCountsThePerNonceFee(t *testing.T) {
 	t.Parallel()
 	const reserveTokens, price, fee = 20, 10, 50
@@ -762,8 +767,8 @@ func TestTheBalanceFloorCountsThePerNonceFee(t *testing.T) {
 	}{
 		{name: "idle, short of the fee", balance: 249, wantBelow: true},
 		{name: "idle, covering the fee", balance: 250, wantBelow: false},
-		{name: "busy, short of the fee", balance: 499, activeUsers: 1, wantBelow: true},
-		{name: "busy, covering the fee", balance: 500, activeUsers: 1, wantBelow: false},
+		{name: "busy, short of the fee", balance: 249, activeUsers: 1, wantBelow: true},
+		{name: "busy, covering the fee", balance: 250, activeUsers: 1, wantBelow: false},
 	}
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -774,6 +779,27 @@ func TestTheBalanceFloorCountsThePerNonceFee(t *testing.T) {
 				t.Fatalf("belowBalanceFloor() = %v, want %v", below, testCase.wantBelow)
 			}
 		})
+	}
+}
+
+// Test flow:
+//  1. Build an escrow priced so one request reserves 200, holding 300 once the three requests on it have reserved theirs.
+//  2. Pick an escrow for one such request, then pin the same request to the escrow the way a hedge does.
+//  3. Assert both picks serve the escrow: its balance is already net of the requests on it, and it still pays this one.
+func TestAnEscrowServesTheRequestItsBalancePaysWhateverIsAlreadyOnIt(t *testing.T) {
+	t.Parallel()
+	scheduler, _, _ := newScheduler(candidate{id: "busy", activeUsers: 3, weight: 10, latestNonce: 1, balance: 300, tokenPrice: 10})
+	profile := RequestProfile{Model: modelA, InputBytes: 10, OutputTokens: 10}
+
+	picked, err := pickWith(scheduler, profile, chain.PhaseSnapshot{})
+	if err != nil || picked.ID != "busy" {
+		t.Fatalf("pickEscrow() = %q, %v, want the busy escrow served", picked.ID, err)
+	}
+
+	profile.Escrow = "busy"
+	picked, err = pickWith(scheduler, profile, chain.PhaseSnapshot{})
+	if err != nil || picked.ID != "busy" {
+		t.Fatalf("pickEscrow(pinned) = %q, %v, want the busy escrow served", picked.ID, err)
 	}
 }
 
@@ -934,120 +960,6 @@ func TestPickEscrowIgnoresTheAllowlistWhenItIsEmpty(t *testing.T) {
 
 	if _, err := pickWith(scheduler, RequestProfile{Model: modelA}, chain.PhaseSnapshot{}); err != nil {
 		t.Fatalf("pickEscrow() with no allowlist: %v", err)
-	}
-}
-
-// Test flow:
-//  1. For each table case of a max-tokens cap, balance, latest nonce, chain snapshot nonce and answer count, build a held escrow.
-//  2. Call `ResumeReadiness` on it.
-//  3. Assert readiness and nonce-spent both match the case: covering the headroom above the balance floor is ready, one answer short is not, a nonce past the hosts' own cutoff is refused as nonce-spent, and an unknown max nonce or an unconfigured reserve leaves the escrow held without being marked nonce-spent.
-func TestResumeReadiness(t *testing.T) {
-	t.Parallel()
-
-	const groupSize = 4
-	const knownMaxNonce = 1_000
-	cutoff := types.MaxActiveNonce(uint32(knownMaxNonce), groupSize)
-	cutoff -= min(nonceInFlightMargin, cutoff/2)
-
-	newHeldSession := func(balance, latestNonce uint64) *fakeSession {
-		return &fakeSession{balance: balance, tokenPrice: 1, latestNonce: latestNonce, slots: slotsOf("escrow-hold", groupSize)}
-	}
-
-	testCases := []struct {
-		name           string
-		maxTokensCap   int64
-		balance        uint64
-		latestNonce    uint64
-		snapshotNonce  uint64
-		answers        uint64
-		wantReady      bool
-		wantNonceSpent bool
-	}{
-		{
-			name: "covers the headroom", maxTokensCap: 100,
-			balance: 3_200, latestNonce: 10, snapshotNonce: knownMaxNonce, answers: 32,
-			wantReady: true, wantNonceSpent: false,
-		},
-		{
-			name: "one answer short", maxTokensCap: 100,
-			balance: 3_199, latestNonce: 10, snapshotNonce: knownMaxNonce, answers: 32,
-			wantReady: false, wantNonceSpent: false,
-		},
-		{
-			name: "past the hosts' nonce cutoff", maxTokensCap: 100,
-			balance: 1_000_000, latestNonce: cutoff, snapshotNonce: knownMaxNonce, answers: 32,
-			wantReady: false, wantNonceSpent: true,
-		},
-		{
-			name: "max nonce unknown, past the fallback", maxTokensCap: 100,
-			balance: 1_000_000, latestNonce: fallbackNonceCeiling, snapshotNonce: 0, answers: 32,
-			wantReady: false, wantNonceSpent: false,
-		},
-		{
-			name: "no retirement reserve configured", maxTokensCap: 0,
-			balance: 1_000_000, latestNonce: 10, snapshotNonce: knownMaxNonce, answers: 32,
-			wantReady: false, wantNonceSpent: false,
-		},
-	}
-
-	for _, testCase := range testCases {
-		t.Run(testCase.name, func(t *testing.T) {
-			t.Parallel()
-			settings := config.Defaults()
-			settings.Limits.MaxTokensCap = testCase.maxTokensCap
-			scheduler := &Scheduler{
-				settings:  config.NewHolder(&settings),
-				snapshots: &fakeSnapshots{snapshot: chain.PhaseSnapshot{MaxNonce: testCase.snapshotNonce}},
-			}
-			candidate := Escrow{ID: "escrow-hold", Session: newHeldSession(testCase.balance, testCase.latestNonce)}
-
-			ready, nonceSpent := scheduler.ResumeReadiness(candidate, testCase.answers)
-
-			if ready != testCase.wantReady || nonceSpent != testCase.wantNonceSpent {
-				t.Fatalf("ResumeReadiness() = %v, %v; want %v, %v", ready, nonceSpent, testCase.wantReady, testCase.wantNonceSpent)
-			}
-		})
-	}
-}
-
-// Test flow:
-//  1. For each table case of a max-tokens cap and token price, build a held escrow.
-//  2. Call `ResumeFloor` on it for 32 answers.
-//  3. Assert the floor is the balance ResumeReadiness waits for, and an unconfigured reserve or an overflowing price is reported unpriced.
-func TestResumeFloor(t *testing.T) {
-	t.Parallel()
-
-	testCases := []struct {
-		name         string
-		maxTokensCap int64
-		tokenPrice   uint64
-		feePerNonce  uint64
-		wantFloor    uint64
-		wantPriced   bool
-	}{
-		{name: "the resume headroom", maxTokensCap: 100, tokenPrice: 1, wantFloor: 3_200, wantPriced: true},
-		{name: "the resume headroom with the nonce fee", maxTokensCap: 100, tokenPrice: 1, feePerNonce: 10, wantFloor: 3_520, wantPriced: true},
-		{name: "no retirement reserve configured", maxTokensCap: 0, tokenPrice: 1, wantFloor: 0, wantPriced: false},
-		{name: "a price that overflows", maxTokensCap: 100, tokenPrice: 1 << 62, wantFloor: 0, wantPriced: false},
-	}
-
-	for _, testCase := range testCases {
-		t.Run(testCase.name, func(t *testing.T) {
-			t.Parallel()
-			settings := config.Defaults()
-			settings.Limits.MaxTokensCap = testCase.maxTokensCap
-			scheduler := &Scheduler{
-				settings:  config.NewHolder(&settings),
-				snapshots: &fakeSnapshots{snapshot: chain.PhaseSnapshot{MaxNonce: 1_000}},
-			}
-			candidate := Escrow{ID: "escrow-hold", Session: &fakeSession{balance: 1, tokenPrice: testCase.tokenPrice, feePerNonce: testCase.feePerNonce, slots: slotsOf("escrow-hold", 4)}}
-
-			floor, priced := scheduler.ResumeFloor(candidate, 32)
-
-			if floor != testCase.wantFloor || priced != testCase.wantPriced {
-				t.Fatalf("ResumeFloor() = %d, %v; want %d, %v", floor, priced, testCase.wantFloor, testCase.wantPriced)
-			}
-		})
 	}
 }
 
@@ -1299,6 +1211,74 @@ func TestPickFundsTheConfiguredAttempts(t *testing.T) {
 
 			if err != nil || picked.ID != testCase.want {
 				t.Fatalf("pickEscrow = %q, %v; want %q", picked.ID, err, testCase.want)
+			}
+		})
+	}
+}
+
+// moneyShortRecorder counts the models the scheduler reported as money-short.
+type moneyShortRecorder struct {
+	mu     sync.Mutex
+	models []string
+}
+
+func (recorder *moneyShortRecorder) record(model string) {
+	recorder.mu.Lock()
+	defer recorder.mu.Unlock()
+	recorder.models = append(recorder.models, model)
+}
+
+func (recorder *moneyShortRecorder) recorded() []string {
+	recorder.mu.Lock()
+	defer recorder.mu.Unlock()
+	return slices.Clone(recorder.models)
+}
+
+// Test flow:
+//  1. Table-driven: an unpinned request no escrow can pay, the same request pinned to that escrow, an unpinned request declined only by the fallback nonce ceiling, and an unpinned request a funded escrow serves.
+//  2. Pick an escrow for each with a money-short recorder installed.
+//  3. Assert only the unpinned request declined for money reported its model, once.
+func TestOnlyAnUnpinnedPickDeclinedForMoneyReportsItsModelMoneyShort(t *testing.T) {
+	t.Parallel()
+	testCases := []struct {
+		name      string
+		candidate candidate
+		profile   RequestProfile
+		want      []string
+	}{
+		{
+			name:      "an unpinned request no escrow can pay",
+			candidate: candidate{id: "poor", weight: 1, balance: 50, tokenPrice: 10},
+			profile:   RequestProfile{Model: modelA, InputBytes: 20},
+			want:      []string{modelA},
+		},
+		{
+			name:      "the same request pinned to that escrow",
+			candidate: candidate{id: "poor", weight: 1, balance: 50, tokenPrice: 10},
+			profile:   RequestProfile{Model: modelA, Escrow: "poor", InputBytes: 20},
+		},
+		{
+			name:      "an escrow past the fallback nonce ceiling",
+			candidate: candidate{id: "spent", weight: 1, balance: 1 << 30, tokenPrice: 10, latestNonce: fallbackNonceCeiling},
+			profile:   RequestProfile{Model: modelA, InputBytes: 20},
+		},
+		{
+			name:      "a funded escrow",
+			candidate: candidate{id: "rich", weight: 1, balance: 1 << 30, tokenPrice: 10},
+			profile:   RequestProfile{Model: modelA, InputBytes: 20},
+		},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			scheduler, _, _ := newScheduler(testCase.candidate)
+			recorder := &moneyShortRecorder{}
+			scheduler.onMoneyShort = recorder.record
+
+			_, _ = pickWith(scheduler, testCase.profile, chain.PhaseSnapshot{})
+
+			if got := recorder.recorded(); !slices.Equal(got, testCase.want) {
+				t.Fatalf("money-short reports = %v, want %v", got, testCase.want)
 			}
 		})
 	}

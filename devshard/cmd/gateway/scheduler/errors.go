@@ -23,6 +23,9 @@ var (
 	ErrDispatcherStopped = errors.New("escrow dispatcher stopped")
 
 	ErrEscrowGone = errors.New("pinned escrow gone")
+
+	// ErrPinnedEscrowShort is a pinned pick its escrow cannot pay; it marks nothing, because the escrow still serves what it can pay.
+	ErrPinnedEscrowShort = errors.New("pinned escrow cannot pay this attempt")
 )
 
 // EscrowsOutOfFundsError counts the escrows that refused to pay for one request before the fleet ran out. See routing.md, "Past every escrow that cannot pay".

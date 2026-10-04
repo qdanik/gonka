@@ -341,7 +341,7 @@ func (j *Journal) deliver(entry *queuedEvent) {
 		renderRequestThrottled(j.lines, entry.request)
 	case KindReplyNotCached:
 		renderReplyNotCached(j.lines, entry.request)
-	case KindHostTransition, KindExcludedHostServed, KindForcedSend, KindEscrowTransition, KindChainTransition:
+	case KindHostTransition, KindExcludedHostServed, KindForcedSend, KindEscrowTransition, KindChainTransition, KindFundingTransition:
 		entry.render(j.lines)
 	}
 }

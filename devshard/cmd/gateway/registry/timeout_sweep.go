@@ -11,7 +11,7 @@ import (
 // ceiling for the whole tick, not per escrow, so the added vote traffic has one upper bound whatever
 // the escrow count is; the walk starts one escrow further along each tick, so a long backlog on the
 // first escrow cannot starve the rest. Each escrow is held for its own sweep, so a retirement waits
-// instead of closing a session mid-vote.
+// instead of closing a session mid-vote; the hold makes the escrow busy but is not a request, so it never moves ActiveUsers.
 func (r *Registry) SweepExecutionTimeouts(ctx context.Context, grace time.Duration, budget int) (due, applied, failed int) {
 	states := r.Snapshot()
 	if budget <= 0 || len(states) == 0 {
@@ -24,7 +24,7 @@ func (r *Registry) SweepExecutionTimeouts(ctx context.Context, grace time.Durati
 			break
 		}
 		state := states[(start+offset)%len(states)]
-		session, release, held := r.Acquire(state.ID)
+		session, release, held := r.holdForSweep(state.ID)
 		if !held {
 			continue // retired between the snapshot and the hold; its own settlement owns it now
 		}

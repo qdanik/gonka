@@ -86,3 +86,38 @@ func TestSweepVotesOnlyWhileTheSessionIsActive(t *testing.T) {
 		})
 	}
 }
+
+// Test flow:
+//  1. Build a registry with one active escrow whose session runs a probe while the sweep votes on it.
+//  2. Sweep execution timeouts; inside the vote, read Routable, Candidates and IsBusy, then retire the escrow.
+//  3. Assert the sweep counted no active user but did report the escrow busy, and the retired session stayed open during the vote.
+//  4. Assert the session closes once the sweep releases its hold.
+func TestSweepHoldsTheSessionOpenAndBusyWithoutCountingAsARequest(t *testing.T) {
+	session := newFakeSession("participant-a")
+	session.sweepReport = user.SweepReport{Due: 1, Applied: 1}
+	registry := New(Deps{ServingSessions: newSessions(map[string]*fakeSession{"1": session}).open, Membership: newRecordingMembership(), Now: fixedClock()})
+	require.NoError(t, registry.Add(context.Background(), "1", "qwen"))
+	session.setPhase(types.PhaseActive)
+	var routableUsers, candidateUsers int
+	var busyDuringSweep bool
+	var closeCallsDuringSweep int64
+	session.onSweep = func() {
+		routable, _ := registry.Routable("1")
+		routableUsers = routable.ActiveUsers
+		candidates := registry.Candidates("qwen")
+		require.Len(t, candidates, 1)
+		candidateUsers = candidates[0].ActiveUsers
+		busyDuringSweep = registry.IsBusy("1")
+		require.NoError(t, registry.Retire("1"))
+		closeCallsDuringSweep = session.closeCalls.Load()
+	}
+
+	registry.SweepExecutionTimeouts(context.Background(), time.Minute, 4)
+	awaitDrainClose(t, registry, func() bool { return session.closeCalls.Load() == 1 })
+
+	require.Equal(t, 0, routableUsers, "Routable(1).ActiveUsers during the sweep")
+	require.Equal(t, 0, candidateUsers, "Candidates(qwen)[0].ActiveUsers during the sweep")
+	require.True(t, busyDuringSweep, "IsBusy(1) during the sweep")
+	require.Equal(t, int64(0), closeCallsDuringSweep, "Close calls while the sweep holds the retired escrow")
+	require.Equal(t, int64(1), session.closeCalls.Load(), "Close calls after the sweep released")
+}

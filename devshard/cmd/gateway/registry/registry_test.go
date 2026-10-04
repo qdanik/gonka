@@ -47,6 +47,7 @@ type fakeSession struct {
 
 	phase         atomic.Int32
 	sweepReport   user.SweepReport
+	onSweep       func()
 	nonce         atomic.Uint64
 	signatures    map[uint64]map[uint32][]byte
 	escrowState   types.EscrowState
@@ -146,6 +147,9 @@ func (f *fakeSession) Close() error {
 func (f *fakeSession) UserSession() *user.Session { return nil }
 
 func (f *fakeSession) SweepExecutionTimeouts(context.Context, time.Duration, int) user.SweepReport {
+	if f.onSweep != nil {
+		f.onSweep()
+	}
 	return f.sweepReport
 }
 

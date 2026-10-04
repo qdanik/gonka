@@ -2958,10 +2958,14 @@ func (s *Session) reasonTheGroupWillAccept(nonce uint64, planned types.TimeoutRe
 		if planned == types.TimeoutReason_TIMEOUT_REASON_EXECUTION {
 			return planned, true
 		}
-		executionDeadline := time.Unix(record.ConfirmedAt, 0).Add(
+		anchor := record.ConfirmedAt
+		if anchor <= 0 {
+			anchor = record.StartedAt
+		}
+		executionDeadline := time.Unix(anchor, 0).Add(
 			time.Duration(s.sm.Config().ExecutionTimeout)*time.Second + TimeoutBuffer,
 		)
-		return types.TimeoutReason_TIMEOUT_REASON_EXECUTION, record.ConfirmedAt > 0 && !now.Before(executionDeadline)
+		return types.TimeoutReason_TIMEOUT_REASON_EXECUTION, !now.Before(executionDeadline)
 	}
 	return planned, false
 }

@@ -1,0 +1,155 @@
+package app
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"slices"
+	"testing"
+
+	"devshard/bridge"
+	"devshard/cmd/gateway/chain"
+	"devshard/cmd/gateway/env"
+	"devshard/cmd/gateway/store"
+)
+
+// Test flow:
+//  1. Call escrowRoutePrefix with a pinned record naming its own route prefix.
+//  2. Assert the pinned prefix wins over the gateway's own running prefix.
+//  3. Call escrowRoutePrefix with an unpinned record.
+//  4. Assert it falls back to the gateway's own running prefix.
+func TestEscrowRoutePrefixPrefersThePinOverTheRunningGateway(t *testing.T) {
+	pinned := store.DevshardRecord{EscrowID: "58128", RoutePrefix: "/devshard/v3"}
+	if got := escrowRoutePrefix(pinned, "/devshard/v4"); got != "/devshard/v3" {
+		t.Fatalf("escrowRoutePrefix(pinned) = %q, want %q", got, "/devshard/v3")
+	}
+
+	unpinned := store.DevshardRecord{EscrowID: "58128"}
+	if got := escrowRoutePrefix(unpinned, "/devshard/v4"); got != "/devshard/v4" {
+		t.Fatalf("escrowRoutePrefix(unpinned) = %q, want the gateway's own %q", got, "/devshard/v4")
+	}
+}
+
+type recordingRegistry struct {
+	existing []store.DevshardRecord
+	upserted []store.DevshardRecord
+}
+
+func (r *recordingRegistry) ListDevshards(context.Context) ([]store.DevshardRecord, error) {
+	return r.existing, nil
+}
+
+func (r *recordingRegistry) UpsertDevshard(_ context.Context, record store.DevshardRecord) error {
+	r.upserted = append(r.upserted, record)
+	return nil
+}
+
+// Test flow:
+//  1. Call seedDevshards with a seed JSON that names no private_key_env.
+//  2. Assert it returns an error and stores nothing in the registry.
+//  3. Call seedDevshards again with the same seed plus private_key_env set.
+//  4. Assert it succeeds and stores exactly one record.
+func TestSeedDevshardsRejectsASeedThatNamesNoKeyVariable(t *testing.T) {
+	registry := &recordingRegistry{}
+	if err := seedDevshards(context.Background(), registry, `[{"id":"58128","model":"Qwen/Test"}]`); err == nil {
+		t.Fatal("seedDevshards accepted a seed with no private_key_env")
+	}
+	if len(registry.upserted) != 0 {
+		t.Fatalf("seedDevshards stored %d records, want none", len(registry.upserted))
+	}
+
+	complete := `[{"id":"58128","model":"Qwen/Test","private_key_env":"DEVSHARD_PRIVATE_KEY"}]`
+	if err := seedDevshards(context.Background(), registry, complete); err != nil {
+		t.Fatalf("seedDevshards(complete) = %v, want nil", err)
+	}
+	if len(registry.upserted) != 1 {
+		t.Fatalf("seedDevshards stored %d records, want 1", len(registry.upserted))
+	}
+}
+
+// Test flow:
+//  1. Call seedDevshards with a devshardctl-shaped seed that names a per-escrow route prefix.
+//  2. Assert the stored record carries that prefix, so the escrow's hosts are dialled under it as devshardctl did.
+func TestSeedDevshardsKeepsTheSeedsRoutePrefix(t *testing.T) {
+	registry := &recordingRegistry{}
+	seed := `[{"id":"58128","model":"Qwen/Test","private_key_env":"DEVSHARD_PRIVATE_KEY","route_prefix":"/v4"}]`
+
+	if err := seedDevshards(context.Background(), registry, seed); err != nil {
+		t.Fatalf("seedDevshards() = %v, want nil", err)
+	}
+
+	if len(registry.upserted) != 1 || registry.upserted[0].RoutePrefix != "/v4" {
+		t.Fatalf("stored %+v, want one record with route prefix /v4", registry.upserted)
+	}
+}
+
+type deactivationRecorder struct{ calls []string }
+
+func (recorder *deactivationRecorder) MarkDevshardGoneFromChain(_ context.Context, escrowID string) error {
+	recorder.calls = append(recorder.calls, "gone "+escrowID)
+	return nil
+}
+
+func (recorder *deactivationRecorder) SetDevshardActive(_ context.Context, escrowID string, active bool) error {
+	recorder.calls = append(recorder.calls, fmt.Sprintf("active %s %t", escrowID, active))
+	return nil
+}
+
+// Test flow:
+//  1. Deactivate one row boot found absent on chain and one whose key the environment lacks.
+//  2. Assert the first is marked gone from chain and the second only deactivated.
+func TestABootDeactivationMarksAnEscrowTheChainLacksGone(t *testing.T) {
+	recorder := &deactivationRecorder{}
+	deactivate := unservableDeactivation(context.Background(), recorder)
+
+	_ = deactivate("absent", fmt.Errorf("opening session: %w", bridge.ErrEscrowNotFound))
+	_ = deactivate("keyless", fmt.Errorf("opening session: %w", env.ErrPrivateKeyMissing))
+
+	if want := []string{"gone absent", "active keyless false"}; !slices.Equal(recorder.calls, want) {
+		t.Fatalf("deactivation calls = %v, want %v", recorder.calls, want)
+	}
+}
+
+type epochLookup struct {
+	info  chain.EscrowInfo
+	found bool
+	err   error
+	calls int
+}
+
+func (lookup *epochLookup) GetEscrow(context.Context, string) (chain.EscrowInfo, bool, error) {
+	lookup.calls++
+	return lookup.info, lookup.found, lookup.err
+}
+
+type rowLister []store.DevshardRecord
+
+func (rows rowLister) ListDevshards(context.Context) ([]store.DevshardRecord, error) {
+	return rows, nil
+}
+
+// Test flow:
+//  1. Table-driven: a row with a stored chain epoch, an unresolved row the chain answers for, and an unresolved row the chain cannot answer for.
+//  2. Resolve the creation epoch.
+//  3. Assert the stored chain epoch wins without a chain call, then the chain's answer, then the row label.
+func TestTheCreationEpochPrefersTheStoredChainEpoch(t *testing.T) {
+	for _, testCase := range []struct {
+		name      string
+		row       store.DevshardRecord
+		lookup    *epochLookup
+		want      uint64
+		wantCalls int
+	}{
+		{name: "stored chain epoch", row: store.DevshardRecord{EscrowID: "1", ChainEpoch: 7, RotationEpoch: 8}, lookup: &epochLookup{}, want: 7},
+		{name: "the chain answers", row: store.DevshardRecord{EscrowID: "1", RotationEpoch: 8}, lookup: &epochLookup{info: chain.EscrowInfo{EpochIndex: 7}, found: true}, want: 7, wantCalls: 1},
+		{name: "the label is the last resort", row: store.DevshardRecord{EscrowID: "1", RotationEpoch: 8}, lookup: &epochLookup{err: errors.New("unreachable")}, want: 8, wantCalls: 1},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			epoch, resolved := creationEpochOf(testCase.lookup, rowLister{testCase.row})(context.Background(), "1")
+
+			if !resolved || epoch != testCase.want || testCase.lookup.calls != testCase.wantCalls {
+				t.Fatalf("creationEpochOf(%s) = %d, %t with %d chain calls, want %d with %d", testCase.name, epoch, resolved, testCase.lookup.calls, testCase.want, testCase.wantCalls)
+			}
+		})
+	}
+}

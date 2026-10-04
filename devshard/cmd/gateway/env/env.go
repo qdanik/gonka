@@ -50,18 +50,16 @@ type Values struct {
 	DisabledMessage     *string
 	DisabledRedirectURL *string
 
-	RotationEnabled           *bool
-	RotationPrePoCBlocks      *int64
-	MatchWaitMS               *int64
-	MaxConsecutiveBurns       *int64
-	ForceUpstreamStreaming    *bool
-	MaxBufferedResponseBytes  *int64
-	WarmNewEscrows            *bool
-	RotationSettlementEnabled *bool
-	RotationHoldEnabled       *bool
-	RotationHoldMaxPerModel   *int64
-	RotationHoldResumeAnswers *int64
-	RotationModelsJSON        *string
+	RotationEnabled            *bool
+	RotationPrePoCBlocks       *int64
+	MatchWaitMS                *int64
+	MaxConsecutiveBurns        *int64
+	ForceUpstreamStreaming     *bool
+	MaxBufferedResponseBytes   *int64
+	WarmNewEscrows             *bool
+	RotationSettlementEnabled  *bool
+	RotationModelsJSON         *string
+	RotationSettleMarginBlocks *int64
 
 	ChatCacheMaxBytes *int64
 
@@ -319,9 +317,7 @@ func Load() (Values, error) {
 	readStrictBool("GATEWAY_FORCE_UPSTREAM_STREAMING", &values.ForceUpstreamStreaming)
 	readStrictInt("GATEWAY_MAX_BUFFERED_RESPONSE_BYTES", &values.MaxBufferedResponseBytes)
 	readStrictBool("GATEWAY_WARM_NEW_ESCROWS", &values.WarmNewEscrows)
-	readStrictBool("GATEWAY_ROTATION_HOLD_ENABLED", &values.RotationHoldEnabled)
-	readStrictInt("GATEWAY_ROTATION_HOLD_MAX_PER_MODEL", &values.RotationHoldMaxPerModel)
-	readStrictInt("GATEWAY_ROTATION_HOLD_RESUME_ANSWERS", &values.RotationHoldResumeAnswers)
+	readStrictInt("GATEWAY_ROTATION_SETTLE_MARGIN_BLOCKS", &values.RotationSettleMarginBlocks)
 
 	readLenientInt("DEVSHARD_CHAT_CACHE_MAX_BYTES", 1, &values.ChatCacheMaxBytes)
 

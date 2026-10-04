@@ -1510,3 +1510,93 @@ func TestAWindowEarnsOneStepPerAnswerWhetherOrNotItWasEverNarrowed(t *testing.T)
 		t.Fatalf("window = %v after congestion, want %v: the rung is the same one on the way back up", grown, narrowedInput+1)
 	}
 }
+
+// randomLimiterConfig draws every knob freshState reads, including zero and negative windows.
+func randomLimiterConfig(source *rand.Rand) ParticipantConfig {
+	limiterConfig := testConfig()
+	limiterConfig.Pricing = WindowPricing{
+		Input:                     RequestBounds{Min: source.Int63n(5) - 1, Initial: source.Int63n(9) - 1},
+		Output:                    RequestBounds{Min: source.Int63n(5) - 1, Initial: source.Int63n(9) - 1},
+		ConcurrencyPer10000Weight: float64(source.Intn(3)) * source.Float64() * 4,
+		FallbackContextTokens:     source.Int63n(8193) - 1,
+		FallbackOutputTokens:      source.Int63n(2049) - 1,
+		ContextTokensByModel:      map[string]int64{"pinned": source.Int63n(65536)},
+		OutputTokensByModel:       map[string]int64{"pinned": source.Int63n(4096)},
+	}
+	limiterConfig.AfterFailures = source.Int63n(4)
+	limiterConfig.IdleEviction = time.Duration(source.Intn(3)) * time.Minute
+	return limiterConfig
+}
+
+// Test flow:
+//  1. For many seeded random configs, build a limiter and feed it random observed weights and context lengths.
+//  2. For hosts and models it never tracked, call `Admits` and compare it with `admissionLocked` on a `freshState`.
+//  3. Assert both answers match and `Admits` left the host untracked.
+func TestAdmitsAnswersAnUntrackedHostLikeAFreshState(t *testing.T) {
+	t.Parallel()
+	models := []string{"m", "pinned", "observed"}
+	for seed := range int64(200) {
+		source := rand.New(rand.NewSource(seed))
+		limiter := newTestLimiter(randomLimiterConfig(source), fixedNow(testEpoch))
+		limiter.ObserveModels(map[string]int64{"observed": source.Int63n(32769)})
+		limiter.ObserveWeights(map[string]map[string]float64{
+			"m":        {"heavy": source.Float64() * 100000},
+			"observed": {"heavy": source.Float64() * 100},
+		})
+
+		for _, participant := range []string{"heavy", "light"} {
+			for _, model := range models {
+				want := admissionLocked(limiter.freshState(participant, model), smallestRequest, testEpoch)
+				if got := limiter.Admits(participant, model); got != want {
+					t.Fatalf("seed %d: Admits(%q, %q) = %s, want %s: an untracked host must answer as a fresh state would", seed, participant, model, got, want)
+				}
+				if _, tracked := limiter.states[key{participant: participant, model: model}]; tracked {
+					t.Fatalf("seed %d: Admits(%q, %q) started tracking the host, want it left untracked", seed, participant, model)
+				}
+			}
+		}
+	}
+}
+
+// Test flow:
+//  1. Start goroutines that call `Admits` beside goroutines that acquire, release, post faults, count idle refusals and clear quarantines on the same hosts.
+//  2. Wait for every goroutine to finish, then clear every host's quarantine.
+//  3. Assert every host is idle and admits again, since every lease was given back.
+func TestAdmitsReadsWhileAttemptsAndCutOffsWrite(t *testing.T) {
+	t.Parallel()
+	hosts := []string{"first", "second", "third", "fourth"}
+	limiter := newTestLimiter(testConfig(), fixedNow(testEpoch))
+	var workers sync.WaitGroup
+	for worker := range 8 {
+		workers.Go(func() {
+			for round := range 500 {
+				host := hosts[(worker+round)%len(hosts)]
+				for _, candidate := range hosts {
+					limiter.Admits(candidate, "m")
+				}
+				if release, admission := limiter.Acquire(host, "m", oneToken); admission == AdmissionOpen {
+					release()
+				}
+				switch round % 50 {
+				case 7:
+					limiter.answered(host, "m", UpstreamFault)
+				case 19:
+					limiter.CountRefusalIfIdle(host, "m")
+				case 41:
+					limiter.ClearQuarantine(host)
+				}
+			}
+		})
+	}
+	workers.Wait()
+
+	for _, host := range hosts {
+		limiter.ClearQuarantine(host)
+		if admission := limiter.Admits(host, "m"); admission != AdmissionOpen {
+			t.Fatalf("Admits(%q, %q) after every lease was released and the quarantine cleared = %s, want open", host, "m", admission)
+		}
+		if state := limiter.states[key{participant: host, model: "m"}]; state != nil && !state.idle() {
+			t.Fatalf("host %q in flight = (%d, %d), want both 0: every lease was released", host, state.input.inflight, state.output.inflight)
+		}
+	}
+}

@@ -30,7 +30,7 @@ type cutoffNarrator interface {
 }
 
 type ParticipantLimiter struct {
-	mu              sync.Mutex
+	mu              sync.RWMutex
 	cfg             ParticipantConfig
 	observedContext map[string]int64
 	observedWeights map[string]map[string]float64
@@ -220,12 +220,12 @@ func (l *ParticipantLimiter) Available(participant, model string) bool {
 
 // Admits peeks why a host would refuse the smallest request, mutating nothing.
 func (l *ParticipantLimiter) Admits(participant, model string) Admission {
-	l.mu.Lock()
-	defer l.mu.Unlock()
+	l.mu.RLock()
+	defer l.mu.RUnlock()
 
 	state, ok := l.states[key{participant: participant, model: model}]
 	if !ok {
-		state = l.freshState(participant, model)
+		return AdmissionOpen
 	}
 	return admissionLocked(state, smallestRequest, l.now())
 }

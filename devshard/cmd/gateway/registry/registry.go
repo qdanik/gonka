@@ -91,11 +91,6 @@ func (r *Registry) Add(ctx context.Context, escrowID, model string) error {
 	return r.add(ctx, escrowID, model, entryFlags{})
 }
 
-// AddOnHold publishes an escrow whose row is on hold, so a restart does not route it for a moment first.
-func (r *Registry) AddOnHold(ctx context.Context, escrowID, model string) error {
-	return r.add(ctx, escrowID, model, entryFlags{onHold: true})
-}
-
 // AddReserve publishes an escrow kept back until no regular escrow can take a request. See routing.md, "A reserve escrow".
 func (r *Registry) AddReserve(ctx context.Context, escrowID, model string) error {
 	return r.add(ctx, escrowID, model, entryFlags{isReserve: true})
@@ -103,7 +98,6 @@ func (r *Registry) AddReserve(ctx context.Context, escrowID, model string) error
 
 // entryFlags are what a restart reads off the row before the escrow first routes.
 type entryFlags struct {
-	onHold    bool
 	isReserve bool
 }
 
@@ -145,7 +139,6 @@ func (r *Registry) add(ctx context.Context, escrowID, model string, flags entryF
 		return session.Close()
 	}
 	entry := newEscrowEntry(escrowID, model, r.sessions.Add(1), session, r.now)
-	entry.onHold.Store(flags.onHold)
 	entry.isReserve.Store(flags.isReserve)
 	entry.hold = r.holdFor(entry)
 	r.live.Store(published.with(entry))
@@ -205,7 +198,7 @@ func (r *Registry) unpublish(escrowID string) (*escrowEntry, bool) {
 	r.pushMembershipLocked()
 	r.draining[entry] = struct{}{}
 	r.publishDrainingLocked()
-	if entry.busy() || entry.settlementHolds.Load() > 0 {
+	if entry.busyOrSwept() || entry.settlementHolds.Load() > 0 {
 		if r.narrator != nil {
 			r.narrator.EscrowRetiredDraining(escrowID, entry.inFlight.Load())
 		}
@@ -245,20 +238,10 @@ func (r *Registry) publishDrainingLocked() {
 	r.drainingView.Store(&entries)
 }
 
-// release closes a drained escrow off the request's goroutine. See README.md, "Publishing, retiring and draining".
-func (r *Registry) release(entry *escrowEntry) {
+// releaseHold closes a drained escrow off the holder's goroutine. See README.md, "Publishing, retiring and draining".
+func (r *Registry) releaseHold(entry *escrowEntry, holds *atomic.Int64) {
 	r.mu.Lock()
-	entry.inFlight.Add(-1)
-	claimed := r.claimCloseLocked(entry)
-	r.mu.Unlock()
-	if claimed {
-		r.closeInBackground(entry)
-	}
-}
-
-func (r *Registry) releaseSettlement(entry *escrowEntry) {
-	r.mu.Lock()
-	entry.settlementHolds.Add(-1)
+	holds.Add(-1)
 	claimed := r.claimCloseLocked(entry)
 	r.mu.Unlock()
 	if claimed {
@@ -280,7 +263,7 @@ func (r *Registry) closeInBackground(entry *escrowEntry) {
 }
 
 func (r *Registry) claimCloseLocked(entry *escrowEntry) bool {
-	if entry.inFlight.Load() > 0 || entry.settlementHolds.Load() > 0 || entry.closeClaimed || r.closed {
+	if entry.busyOrSwept() || entry.settlementHolds.Load() > 0 || entry.closeClaimed || r.closed {
 		return false
 	}
 	if _, isDraining := r.draining[entry]; !isDraining {
@@ -298,11 +281,11 @@ func (r *Registry) DrainCloseFailures() int64 { return r.drainCloseFailures.Load
 func (r *Registry) IsBusy(escrowID string) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if entry, known := r.live.Load().byID[escrowID]; known && entry.busy() {
+	if entry, known := r.live.Load().byID[escrowID]; known && entry.busyOrSwept() {
 		return true
 	}
 	for entry := range r.draining {
-		if entry.id == escrowID && entry.busy() {
+		if entry.id == escrowID && entry.busyOrSwept() {
 			return true
 		}
 	}

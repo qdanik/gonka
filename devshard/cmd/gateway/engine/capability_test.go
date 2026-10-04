@@ -30,7 +30,7 @@ func (r *stubCapabilityRecorder) RecordVersionUnsupported(participant string) {
 
 const (
 	vllmContextLengthMessage = "This model's maximum context length is 131072 tokens. However, you requested 140000 tokens (12000 in the messages, 128000 in the completion). Please reduce the length of the messages or completion."
-	vllmContextTotalMessage  = "This model's maximum context length is 40960 tokens. However, you requested 41200 tokens (1200 in the messages, 40000 in the completion), for a total of at least 41200 tokens."
+	vllmContextTotalMessage  = "This model's maximum context length is 40960 tokens. However, you requested 40000 output tokens and your prompt contains 1200 input tokens, for a total of 41200 tokens. Please reduce the length of the input prompt or the number of requested output tokens."
 	vllmToolChoiceMessage    = "tool choice requires --enable-auto-tool-choice and --tool-call-parser to be set"
 
 	malformedToolCallMessage   = "tool call arguments are not valid JSON: Expecting ',' delimiter: line 1 column 12 (char 11)"
@@ -38,7 +38,7 @@ const (
 )
 
 // Test flow:
-//  1. For each table case's error message (context-length phrasing, total-of-at-least phrasing, a tool-choice refusal, a rune that shrinks when lowercased, the limit at the end of the message, a case-insensitive phrase, lookalikes without a number, an unrelated error, an empty message, and an overflowing number), call `ParseCapabilityError`.
+//  1. For each table case's error message (the older vLLM phrasing, the current one with its total, a tool-choice refusal, a rune that shrinks when lowercased, the limit at the end of the message, a case-insensitive phrase, lookalikes without a number, an unrelated error, an empty message, and an overflowing number), call `ParseCapabilityError`.
 //  2. Assert the parsed `CapabilitySignal` matches the case's expectation.
 func TestParseCapabilityError(t *testing.T) {
 	testCases := []struct {
@@ -52,7 +52,7 @@ func TestParseCapabilityError(t *testing.T) {
 			want:    CapabilitySignal{ContextLimit: 131072, ContextRequested: 140000},
 		},
 		{
-			name:    "total_of_at_least",
+			name:    "total_of_tokens",
 			message: vllmContextTotalMessage,
 			want:    CapabilitySignal{ContextLimit: 40960, ContextRequested: 41200},
 		},
@@ -328,7 +328,8 @@ func TestAContextLengthRejectionRulesOutARetryOnlyWhenNoHostCouldServeTheRequest
 }
 
 func contextRejection(hostLimit, requested uint64) string {
-	return fmt.Sprintf("This model's maximum context length is %d tokens. However, you requested %d tokens (%d in the messages, 0 in the completion), for a total of at least %d tokens.", hostLimit, requested, requested, requested)
+	const outputTokens = 1000
+	return fmt.Sprintf("This model's maximum context length is %d tokens. However, you requested %d output tokens and your prompt contains %d input tokens, for a total of %d tokens. Please reduce the length of the input prompt or the number of requested output tokens.", hostLimit, outputTokens, requested-outputTokens, requested)
 }
 
 // Test flow:

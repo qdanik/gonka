@@ -36,30 +36,73 @@ func TestCapabilityLimitsReadsDigitsThatEndTheMessage(t *testing.T) {
 }
 
 // Test flow:
-//  1. Call CapabilityLimits on a message stating both the maximum context length and the requested total.
-//  2. Assert both the context limit and the requested total are parsed correctly.
-func TestCapabilityLimitsReadsTheRequestedTotal(t *testing.T) {
+//  1. Call CapabilityLimits on each context-length refusal vLLM emits, verbatim from the release named in the case.
+//  2. Assert the context limit is the host's length and the requested count is the request's whole total, or the least total the message proves.
+func TestCapabilityLimitsReadsEveryVLLMWording(t *testing.T) {
 	t.Parallel()
-	message := "This model's maximum context length is 8192 tokens. However, you requested for a total of at least 9001 tokens."
-
-	contextLimit, contextRequested := CapabilityLimits(message)
-
-	if contextLimit != 8192 || contextRequested != 9001 {
-		t.Fatalf("limits = (%d, %d), want (8192, 9001)", contextLimit, contextRequested)
+	cases := []struct {
+		name             string
+		message          string
+		contextLimit     uint64
+		contextRequested uint64
+	}{
+		{
+			name:             "v0.9.1 entrypoints/openai/serving_engine.py:562 messages only",
+			message:          "This model's maximum context length is 8192 tokens. However, you requested 9000 tokens in the messages, Please reduce the length of the messages.",
+			contextLimit:     8192,
+			contextRequested: 9000,
+		},
+		{
+			name:             "v0.9.1 entrypoints/openai/serving_engine.py:568 messages and completion",
+			message:          "This model's maximum context length is 8192 tokens. However, you requested 9064 tokens (9000 in the messages, 64 in the completion). Please reduce the length of the messages or completion.",
+			contextLimit:     8192,
+			contextRequested: 9064,
+		},
+		{
+			name:             "v0.11.0 entrypoints/openai/serving_engine.py:676 input over the length",
+			message:          "This model's maximum context length is 8192 tokens. However, your request has 9000 input tokens. Please reduce the length of the input messages.",
+			contextLimit:     8192,
+			contextRequested: 9000,
+		},
+		{
+			name:             "v0.11.0 entrypoints/openai/serving_engine.py:684 max_tokens over the rest",
+			message:          "'max_tokens' or 'max_completion_tokens' is too large: 64. This model's maximum context length is 8192 tokens and your request has 8150 input tokens (64 > 8192 - 8150).",
+			contextLimit:     8192,
+			contextRequested: 8214,
+		},
+		{
+			name:             "v0.25.1 renderers/params.py:442 exact total",
+			message:          "This model's maximum context length is 8192 tokens. However, you requested 64 output tokens and your prompt contains 10000 input tokens, for a total of 10064 tokens. Please reduce the length of the input prompt or the number of requested output tokens.",
+			contextLimit:     8192,
+			contextRequested: 10064,
+		},
+		{
+			name:             "v0.25.1 renderers/params.py:442 truncated total",
+			message:          "This model's maximum context length is 8192 tokens. However, you requested 64 output tokens and your prompt contains at least 8129 input tokens, for a total of at least 8193 tokens. Please reduce the length of the input prompt or the number of requested output tokens.",
+			contextLimit:     8192,
+			contextRequested: 8193,
+		},
+		{
+			name:             "v0.25.1 renderers/params.py:345 characters over the input bound",
+			message:          "This model's maximum context length is 8192 tokens. However, you requested 64 output tokens and your prompt contains 100000 characters (more than 81280 characters, which is the upper bound for 8128 input tokens). Please reduce the length of the input prompt or the number of requested output tokens.",
+			contextLimit:     8192,
+			contextRequested: 8193,
+		},
+		{
+			name:             "main renderers/params.py:499 exact total",
+			message:          "This model's maximum context length is 131072 tokens. However, you requested 4096 output tokens and your prompt contains 200000 input tokens, for a total of 204096 tokens. Please reduce the length of the input prompt or the number of requested output tokens.",
+			contextLimit:     131072,
+			contextRequested: 204096,
+		},
 	}
-}
-
-// Test flow:
-//  1. Call CapabilityLimits on the older vLLM phrasing, which names the request as "you requested N tokens" and carries no total phrase.
-//  2. Assert the requested count is read from that phrase.
-func TestCapabilityLimitsReadsTheOlderRequestedPhrase(t *testing.T) {
-	t.Parallel()
-	message := "This model's maximum context length is 131072 tokens. However, you requested 500000 tokens (490000 in the messages, 10000 in the completion). Please reduce the length of the messages or completion."
-
-	contextLimit, contextRequested := CapabilityLimits(message)
-
-	if contextLimit != 131072 || contextRequested != 500000 {
-		t.Fatalf("limits = (%d, %d), want (131072, 500000)", contextLimit, contextRequested)
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			contextLimit, contextRequested := CapabilityLimits(testCase.message)
+			if contextLimit != testCase.contextLimit || contextRequested != testCase.contextRequested {
+				t.Fatalf("CapabilityLimits(%q) = (%d, %d), want (%d, %d)", testCase.message, contextLimit, contextRequested, testCase.contextLimit, testCase.contextRequested)
+			}
+		})
 	}
 }
 

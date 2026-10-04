@@ -29,20 +29,33 @@ func (n *Recorder) watchDiffs(escrowID string, session registry.EscrowSession, d
 	underlying.SetDiffObserver(func(diff types.Diff) { diffs.DiffComposed(escrowID, &diff) })
 }
 
-// Start sweeps until ctx ends; every escrow the sweep watches hands its composed diffs to diffs.
+// Start serves the ledger's listener and sweeps until ctx ends; every escrow the sweep watches hands its composed diffs to diffs.
 func (n *Recorder) Start(ctx context.Context, escrows EscrowSource, diffs DiffJournal) {
 	if n == nil {
 		return
 	}
-	if n.listener != nil {
-		logging.Info("nonce accounting listening", logkey.Addr, n.listener.Addr)
-		go func() {
-			if err := n.listener.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-				logging.Error("nonce accounting listener stopped", "error", err)
-			}
-		}()
+	n.serve()
+	n.StartSweeping(ctx, escrows, diffs)
+}
+
+// StartSweeping sweeps until ctx ends without serving the listener, for a process that must not open a port.
+func (n *Recorder) StartSweeping(ctx context.Context, escrows EscrowSource, diffs DiffJournal) {
+	if n == nil {
+		return
 	}
 	go n.sweepUntil(ctx, escrows, diffs)
+}
+
+func (n *Recorder) serve() {
+	if n.listener == nil {
+		return
+	}
+	logging.Info("nonce accounting listening", logkey.Addr, n.listener.Addr)
+	go func() {
+		if err := n.listener.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			logging.Error("nonce accounting listener stopped", "error", err)
+		}
+	}()
 }
 
 func (n *Recorder) sweepUntil(ctx context.Context, escrows EscrowSource, diffs DiffJournal) {

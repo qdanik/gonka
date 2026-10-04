@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"sync"
 	"testing"
+	"time"
 
 	"devshard/types"
 )
@@ -367,5 +369,102 @@ func TestARegularThatCannotPayHandsTheRequestToTheReserve(t *testing.T) {
 	}
 	if taken := test.reserves.recorded(); !slices.Equal(taken, []string{escrowB}) {
 		t.Fatalf("reserves taken = %v, want [%s]", taken, escrowB)
+	}
+}
+
+// gatedPicks holds the picks parked behind a shared session gate and releases them once.
+type gatedPicks struct {
+	gate     chan struct{}
+	release  sync.Once
+	inFlight sync.WaitGroup
+}
+
+func (g *gatedPicks) open() {
+	g.release.Do(func() { close(g.gate) })
+	g.inFlight.Wait()
+}
+
+// fullQueueHarness stands two gated escrows with submit buffers of one, weighted so the first one wins every pick it can take.
+func fullQueueHarness(t *testing.T, preferred, spare string) (*schedulerHarness, *gatedPicks) {
+	t.Helper()
+	parked := &gatedPicks{gate: make(chan struct{})}
+	test := newSchedulerHarness(t, schedulerConfig{
+		escrows: []string{preferred, spare},
+		slotsByEscrow: map[string][]string{
+			preferred: {preferred + "-0", preferred + "-1"},
+			spare:     {spare + "-0", spare + "-1"},
+		},
+		submitBuffer: 1,
+		gate:         parked.gate,
+	})
+	t.Cleanup(parked.open)
+	test.weights.byEscrow[preferred] = 1_000
+	test.weights.byEscrow[spare] = 10
+	test.loadEscrow(t, spare, 1)
+	return test, parked
+}
+
+// fillQueue parks one pick in the escrow's session and one more in its submit buffer.
+func (h *schedulerHarness) fillQueue(t *testing.T, escrowID string, parked *gatedPicks) {
+	t.Helper()
+	parkedPick := func() {
+		if _, err := h.scheduler.Pick(context.Background(), RequestProfile{Model: modelA}); err != nil {
+			t.Errorf("Pick() = %v, want served once the gate opens", err)
+		}
+	}
+	parked.inFlight.Go(parkedPick)
+	select {
+	case <-h.session(t, escrowID).entered:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("escrow %q never reached its session", escrowID)
+	}
+	parked.inFlight.Go(parkedPick)
+	eventually(t, "the submit queue of "+escrowID+" to fill", func() bool { return h.queueDepth(escrowID) == 1 })
+}
+
+// Test flow:
+//  1. Build a `fullQueueHarness` where `escrowA` outweighs `escrowB`, then fill `escrowA`'s submit queue.
+//  2. Pick for a third request.
+//  3. Assert the pick reaches `escrowB`'s session instead of answering `ErrEscrowBusy`.
+//  4. Open the gate and assert the third request is served on `escrowB`.
+func TestARequestAFullQueueRefusesIsOfferedToAnIdleEscrow(t *testing.T) {
+	test, parked := fullQueueHarness(t, escrowA, escrowB)
+	test.fillQueue(t, escrowA, parked)
+
+	results := make(chan pickResult, 1)
+	go func() {
+		assignment, err := test.scheduler.Pick(context.Background(), RequestProfile{Model: modelA})
+		results <- pickResult{assignment: assignment, err: err}
+	}()
+
+	select {
+	case <-test.session(t, escrowB).entered:
+	case early := <-results:
+		t.Fatalf("Pick() = %v, want routed to the idle escrow %q", early.err, escrowB)
+	case <-time.After(2 * time.Second):
+		t.Fatal("the idle escrow never reached its session")
+	}
+	parked.open()
+	served := <-results
+	if served.err != nil || served.assignment.Escrow != escrowB {
+		t.Fatalf("Pick() = (%q, %v), want served on %q", served.assignment.Escrow, served.err, escrowB)
+	}
+}
+
+// Test flow:
+//  1. Build a `fullQueueHarness`, then fill `escrowA`'s submit queue and, through the next two picks, `escrowB`'s.
+//  2. Pick for a fifth request.
+//  3. Assert the pick fails with `ErrEscrowBusy`.
+//  4. Open the gate and let the four parked picks finish.
+func TestOnlyAFleetOfFullQueuesAnswersBusy(t *testing.T) {
+	test, parked := fullQueueHarness(t, escrowA, escrowB)
+	test.fillQueue(t, escrowA, parked)
+	test.fillQueue(t, escrowB, parked)
+
+	_, err := test.scheduler.Pick(context.Background(), RequestProfile{Model: modelA})
+
+	parked.open()
+	if !errors.Is(err, ErrEscrowBusy) {
+		t.Fatalf("Pick() = %v, want ErrEscrowBusy once every queue is full", err)
 	}
 }

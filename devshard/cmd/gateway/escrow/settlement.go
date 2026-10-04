@@ -1,9 +1,11 @@
 package escrow
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"time"
 
@@ -28,21 +30,39 @@ var (
 // pendingSettleBudget bounds how many parked escrows one tick settles. See escrows.md, "Settlement and retirement".
 const pendingSettleBudget = 4
 
-// settlePending drains escrows parked by retire or by depletion; a busy or failing escrow simply stays parked.
-func (m *Manager) settlePending(ctx context.Context, devshards []store.DevshardRecord) error {
+// settlePending drains escrows parked by retire or by depletion, earliest deadline first; a busy or failing escrow simply stays parked.
+func (m *Manager) settlePending(ctx context.Context, snapshot chain.PhaseSnapshot, devshards []store.DevshardRecord) error {
 	policy := newSettlementPolicy(m.config.Load().Rotation)
-	var errs []error
-	attempted := 0
+	var parked []pendingSettle
 	for _, record := range devshards {
-		if record.Active || !record.SettlementPending || attempted >= pendingSettleBudget || !policy.enabled(record.Model) {
+		if record.Active || !record.SettlementPending || goneFromChain(record) || !policy.enabled(record.Model) {
 			continue
 		}
-		attempted++
-		if _, err := m.settleAndDrop(ctx, record, false); err != nil && !errors.Is(err, ErrEscrowPruned) {
+		parked = append(parked, pendingSettle{record: record, deadline: m.deadlineOf(record, snapshot)})
+	}
+	slices.SortStableFunc(parked, func(left, right pendingSettle) int {
+		return cmp.Or(cmp.Compare(left.deadline.order(), right.deadline.order()), cmp.Compare(left.record.EscrowID, right.record.EscrowID))
+	})
+	var errs []error
+	attempted := 0
+	for _, pending := range parked {
+		urgent := pending.deadline.inMargin
+		if !urgent {
+			if attempted >= pendingSettleBudget {
+				continue
+			}
+			attempted++
+		}
+		if _, err := m.settleAndDrop(ctx, pending.record, urgent); err != nil && !errors.Is(err, ErrEscrowPruned) {
 			errs = append(errs, err)
 		}
 	}
 	return errors.Join(errs...)
+}
+
+type pendingSettle struct {
+	record   store.DevshardRecord
+	deadline settleDeadline
 }
 
 // Settle settles one escrow on demand, on the same path the rotation lifecycle uses; force crosses the busy check alone. See ../docs/operations.md.
@@ -70,7 +90,7 @@ func (m *Manager) park(ctx context.Context, escrowID string) error {
 	return m.stopRoutingParked(escrowID)
 }
 
-// parkIfServing parks only a serving escrow and reports whether this call parked it. See README.md, "Replacing a depleted escrow".
+// parkIfServing parks only a serving escrow and reports whether this call parked it. See README.md, "Depletion marks".
 func (m *Manager) parkIfServing(ctx context.Context, escrowID string) (bool, error) {
 	var parked bool
 	if err := m.store.WithRetry(ctx, func() error {

@@ -91,3 +91,19 @@ func TestAnUntrackedNonceKeepsThePlannedReason(t *testing.T) {
 	require.True(t, votable)
 	require.Equal(t, types.TimeoutReason_TIMEOUT_REASON_EXECUTION, admitted)
 }
+
+// A record whose executor stamped no confirm time is timed out from its start, the moment the sweep selects it.
+func TestAStartedRecordWithoutAStampIsVotedExecutionFromItsStart(t *testing.T) {
+	session, hosts, _ := setupSession(t, 3, 1_000_000, 0)
+	nonce := startedNonce(t, session, hosts, 0)
+	record, tracked := session.sm.GetInference(nonce)
+	require.True(t, tracked)
+	deadline := time.Unix(record.StartedAt, 0).Add(time.Duration(session.sm.Config().ExecutionTimeout)*time.Second + TimeoutBuffer)
+
+	_, votableEarly := session.reasonTheGroupWillAccept(nonce, types.TimeoutReason_TIMEOUT_REASON_REFUSED, deadline.Add(-time.Second))
+	admitted, votable := session.reasonTheGroupWillAccept(nonce, types.TimeoutReason_TIMEOUT_REASON_REFUSED, deadline)
+
+	require.False(t, votableEarly, "before its start-anchored deadline the round would be waste")
+	require.True(t, votable, "past it the group accepts an execution timeout")
+	require.Equal(t, types.TimeoutReason_TIMEOUT_REASON_EXECUTION, admitted)
+}

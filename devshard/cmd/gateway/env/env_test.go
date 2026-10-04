@@ -501,30 +501,6 @@ func TestEveryRotationKnobIsReachableFromTheEnvironment(t *testing.T) {
 }
 
 // Test flow:
-//  1. Set the rotation hold's enabled, max-per-model, and resume-answers variables.
-//  2. Call `Load`.
-//  3. Assert each field loads with its set value.
-func TestTheHoldKnobsReadTheirVariables(t *testing.T) {
-	t.Setenv("GATEWAY_ROTATION_HOLD_ENABLED", "false")
-	t.Setenv("GATEWAY_ROTATION_HOLD_MAX_PER_MODEL", "3")
-	t.Setenv("GATEWAY_ROTATION_HOLD_RESUME_ANSWERS", "64")
-
-	values, err := Load()
-	if err != nil {
-		t.Fatalf("Load() = %v, want nil", err)
-	}
-	if values.RotationHoldEnabled == nil || *values.RotationHoldEnabled {
-		t.Fatalf("RotationHoldEnabled = %v, want false from the environment", values.RotationHoldEnabled)
-	}
-	if values.RotationHoldMaxPerModel == nil || *values.RotationHoldMaxPerModel != 3 {
-		t.Fatalf("RotationHoldMaxPerModel = %v, want 3", values.RotationHoldMaxPerModel)
-	}
-	if values.RotationHoldResumeAnswers == nil || *values.RotationHoldResumeAnswers != 64 {
-		t.Fatalf("RotationHoldResumeAnswers = %v, want 64", values.RotationHoldResumeAnswers)
-	}
-}
-
-// Test flow:
 //  1. Set every engine timing and the chain snapshot max age environment variable.
 //  2. Call `Load`.
 //  3. Assert each field loads with its set value.
@@ -562,5 +538,21 @@ func TestLoadParsesEngineTimings(t *testing.T) {
 		if field.got == nil || *field.got != field.want {
 			t.Errorf("%s = %v, want %d", field.name, field.got, field.want)
 		}
+	}
+}
+
+// Test flow:
+//  1. Set the settle margin variable to 900.
+//  2. Call `Load`.
+//  3. Assert the value loads unchanged.
+func TestTheSettleMarginReadsItsVariable(t *testing.T) {
+	t.Setenv("GATEWAY_ROTATION_SETTLE_MARGIN_BLOCKS", "900")
+
+	values, err := Load()
+	if err != nil {
+		t.Fatalf("Load() = %v, want nil", err)
+	}
+	if values.RotationSettleMarginBlocks == nil || *values.RotationSettleMarginBlocks != 900 {
+		t.Fatalf("RotationSettleMarginBlocks = %v, want 900", values.RotationSettleMarginBlocks)
 	}
 }

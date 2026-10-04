@@ -8,6 +8,7 @@ import (
 	"devshard/cmd/gateway/scheduler"
 	"devshard/cmd/gateway/store"
 	"devshard/signing"
+	"devshard/types"
 )
 
 // Satisfied by *chain.TxClient. See README.md, "What this package expects of others".
@@ -19,16 +20,21 @@ type escrowTxClient interface {
 	GetEscrow(ctx context.Context, escrowID string) (chain.EscrowInfo, bool, error)
 }
 
+// Satisfied by *chain.TxClient; it turns on everything that reads chain epochs. See README.md, "Chain epochs and amounts".
+type escrowLookup interface {
+	GetEscrow(ctx context.Context, escrowID string) (chain.EscrowInfo, bool, error)
+}
+
 // Satisfied by *store.Store.
 type escrowStore interface {
 	ListDevshards(ctx context.Context) ([]store.DevshardRecord, error)
 	UpsertDevshard(ctx context.Context, record store.DevshardRecord) error
 	SetDevshardActive(ctx context.Context, escrowID string, active bool) error
+	MarkDevshardGoneFromChain(ctx context.Context, escrowID string) error
+	SetDevshardChainFacts(ctx context.Context, escrowID string, chainEpoch, amount uint64) error
 	SetDevshardSettlementPending(ctx context.Context, escrowID string, pending bool) error
 	ParkForSettlement(ctx context.Context, escrowID string) error
 	ParkForSettlementIfActive(ctx context.Context, escrowID string) (bool, error)
-	PutOnHoldIfServing(ctx context.Context, escrowID string) (bool, error)
-	ResumeFromHold(ctx context.Context, escrowID string) (bool, error)
 	DevshardSettleTxHash(ctx context.Context, escrowID string) (string, time.Time, error)
 	SetDevshardRotationRole(ctx context.Context, escrowID, role string) error
 	SetDevshardSettleTxHash(ctx context.Context, escrowID, txHash string) error
@@ -69,42 +75,55 @@ type SettlementSource interface {
 	BuildSettlement(ctx context.Context, escrowID string) (chain.SettlementInput, error)
 }
 
-// HoldGate is the registry and scheduler side of an escrow on hold; the composition root satisfies it. See README.md, "An escrow on hold".
-type HoldGate interface {
-	SetOnHold(escrowID string, onHold bool)
-	Verdict(escrowID string, answers uint64) HoldVerdict
-	Funds(escrowID string) (balance, reserved, challenged uint64, known bool)
-	ReservationsReturnBy(escrowID string) (returnBy time.Time, bounded bool)
-}
-
-// ExhaustionProbe names the reason routing would retire an escrow on, empty while it may still be picked. See README.md, "Replacing a depleted escrow".
+// ExhaustionProbe names the reason routing would retire an escrow on, empty while it may still be picked. See README.md, "Depletion marks".
 type ExhaustionProbe interface {
 	Exhaustion(escrowID string) scheduler.ExhaustionReason
 }
 
+// EscrowMoney is one live escrow's money as the funding planner reads it. See README.md, "The funding planner".
+type EscrowMoney struct {
+	Config      types.SessionConfig
+	Balance     uint64
+	TokenPrice  uint64
+	FeePerNonce uint64
+	Open        []types.InferenceRecord
+}
+
+// FundingReader reads a live escrow's money for the funding planner; the composition root satisfies it.
+type FundingReader interface {
+	EscrowMoney(escrowID string) (EscrowMoney, bool)
+}
+
 // lifecycleNarrator is satisfied by *journal.Journal; each method names one transition an operator reads the log for. See README.md, "What this package expects of others".
 type lifecycleNarrator interface {
-	EscrowCreated(escrowID, model, role string, epoch uint64, txHash string)
+	EscrowCreated(escrowID, model, role, reason string, epoch uint64, txHash string)
 	EscrowRecovered(escrowID, model, role string, epoch uint64, txHash string)
 	EscrowCreateUnderfunded(model, role string, have, need uint64)
 	EscrowCreateBelowFloor(model, role string, amount, floor uint64)
 	EscrowReserveTaken(escrowID string)
 	CommitmentCleared(txHash, model, role string, epoch uint64, reason string)
 	EscrowGoneFromChain(escrowID string)
+	EscrowDeadlineReached(escrowID string, chainEpoch uint64, settleBy int64)
+	EscrowDeadlineUnsettled(escrowID string, settleBy int64, reason string)
+	SettleMarginShort(marginBlocks int64, blockTime, need time.Duration)
+	EscrowDeadlinesProjected(height, projected int64, staleFor time.Duration)
+	EscrowChainFactsUnresolved(escrowID, reason string)
 	EscrowMarkedForReplacement(escrowID, reason string)
-	EscrowDepletedWithoutReplacement(escrowID, model string)
 	RotationSkipped(model, role string, epoch uint64)
 	RegularsPromotedToTemp(model string, epoch uint64, promoted int)
 	BridgePrepared(model string, epoch uint64, created, retired int)
 	BridgeFinished(model string, epoch uint64, created, retired int)
 	EscrowParked(escrowID string)
-	EscrowPutOnHold(escrowID, model, reason string, balance, reserved, challenged uint64, replacementID string)
-	EscrowResumed(escrowID string, balance uint64)
-	EscrowHoldEnded(escrowID, reason string)
-	EscrowHoldExpired(escrowID string, balance, reserved uint64)
 	EscrowSettled(escrowID, model, txHash, settler string)
 	SettlementReconciled(escrowID, txHash string)
 	SettledRecordDropped(escrowID string)
 	EscrowTickFailed(err error)
 	TimeoutsSwept(due, applied, failed int)
+	EscrowPlanned(model string, creates, retires int, reasons string, moneyShort bool, need, liquid uint64, fullCount int)
+	EscrowStarved(escrowID string, free uint64)
+	EscrowFull(escrowID string, free uint64)
+	FundingGuaranteeBroken(model string, have, want int)
+	FundingMisconfigured(model string, amount, need uint64)
+	EscrowBudgetReached(model string, counted, maxUnsettled int)
+	FundingPlanFailed(err error)
 }

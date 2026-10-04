@@ -2,12 +2,14 @@ package engine
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 
 	"devshard/cmd/gateway/scheduler"
+	"devshard/types"
 )
 
 // recordingJournal keeps the steps a coordinator reported.
@@ -94,4 +96,28 @@ func TestAFailedPickIsTracedUnlessTheRaceCancelledIt(t *testing.T) {
 			require.Equal(t, testCase.want, steps.recorded())
 		})
 	}
+}
+
+// Test flow:
+//  1. Start a paused coordinator with one attempt in flight and a speculative pick outstanding on its escrow.
+//  2. Apply the pick's answer: the pinned escrow cannot pay this attempt.
+//  3. Assert the race still holds its one attempt in flight, launched nothing, and traced the escalation as unfilled with that error.
+func TestAPinnedEscrowTooShortForAHedgeLeavesTheRaceRunning(t *testing.T) {
+	steps := &recordingJournal{}
+	fixture := newRaceFixture(settledPolicy(), 2)
+	fixture.deps.Journal = steps
+	running := &liveAttempt{nonce: 90, participant: "host-0", cancel: func() {}}
+	coordinator := pausedCoordinator(fixture, 2, running)
+	coordinator.escrowID = "escrow-1"
+	coordinator.pickCancel, coordinator.pickReason = func() {}, "first_token_floor"
+	short := fmt.Errorf("%w: %w", scheduler.ErrPinnedEscrowShort, types.ErrInsufficientBalance)
+
+	coordinator.applyPick(pickedHost{err: short})
+
+	require.Len(t, coordinator.attempts, 1, "a declined hedge launches nothing")
+	require.Equal(t, 1, coordinator.pending, "the attempt already running keeps the race alive")
+	require.Equal(t, []RaceStep{{
+		Kind: RaceStepEscalationUnfilled, RequestID: "request-1", EscrowID: "escrow-1",
+		Reason: "first_token_floor", Attempts: 1, Err: short,
+	}}, steps.recorded())
 }

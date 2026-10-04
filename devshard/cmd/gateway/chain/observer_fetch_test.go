@@ -141,7 +141,7 @@ func epochSwitchJSON(blockHeight, setNewValidators, nextSetNewValidators, nextPo
 }
 
 // Test flow:
-//  1. Build a table of block-height and fallback-ladder inputs: table varies which rung (current-epoch set_new_validators, next-epoch set_new_validators, next_poc_start, or latest_epoch poc_start_block_height) determines the expected switch height, including the rung-1 guard against a stale set_new_validators.
+//  1. Build a table of block-height and fallback-ladder inputs: table varies which rung (current-epoch set_new_validators, next-epoch set_new_validators, next_poc_start, or latest_epoch poc_start_block_height) determines the expected switch height, including the rung-1 guard against a set_new_validators at or behind the block height, which has already happened.
 //  2. Parse each generated epoch info body.
 //  3. Assert the decoded EpochSwitchBlockHeight matches the case's expectation.
 func TestParseEpochInfoEpochSwitchBlockHeightFallbackLadder(t *testing.T) {
@@ -154,7 +154,7 @@ func TestParseEpochInfoEpochSwitchBlockHeightFallbackLadder(t *testing.T) {
 		want                 int64
 	}{
 		{"rung1: current epoch set_new_validators ahead of block height wins", 1000, 1200, 1300, 1100, 1200},
-		{"rung1 boundary: set_new_validators exactly at block height still wins", 1000, 1000, 1300, 1100, 1000},
+		{"rung1 boundary falls to rung2: at set_new_validators the switch has happened, so the next one is named", 1000, 1000, 1300, 1100, 1300},
 		{"rung1 stale falls to rung2: set_new_validators behind block height is ignored", 1000, 500, 1300, 1100, 1300},
 		{"rung2: next epoch set_new_validators wins when rung1 is zero", 1000, 0, 1300, 1100, 1300},
 		{"rung3: next_poc_start wins when rungs 1-2 are zero", 1000, 0, 0, 1100, 1100},
@@ -706,5 +706,69 @@ func preservedFixture() *PreservedNodes {
 				{ParticipantID: "gonka1def", NodeIDs: []string{"node9"}},
 			},
 		}},
+	}
+}
+
+// Test flow:
+//  1. Table-driven: each case is an epoch info body for latest epoch 8 at one height: before its PoC, inside its PoC, at its set_new_validators, and two bodies missing a height the derivation needs.
+//  2. Parse each body.
+//  3. Assert the effective epoch is 8, 7, 8, or unknown (0), as the case says.
+func TestParseEpochInfoDerivesTheEffectiveEpoch(t *testing.T) {
+	body := func(height, pocStart, setNewValidators int64) string {
+		return fmt.Sprintf(`{"block_height": %d, "phase": "Inference", "latest_epoch": {"index": 8, "poc_start_block_height": %d}, "epoch_stages": {"set_new_validators": %d}}`,
+			height, pocStart, setNewValidators)
+	}
+	testCases := []struct {
+		name string
+		body string
+		want uint64
+	}{
+		{name: "past the switch the latest epoch is effective", body: body(3000, 2000, 2100), want: 8},
+		{name: "inside PoC the epoch before the latest is effective", body: body(2050, 2000, 2100), want: 7},
+		{name: "at set_new_validators the latest epoch is effective", body: body(2100, 2000, 2100), want: 8},
+		{name: "no PoC start reads unknown", body: body(2050, 0, 2100), want: 0},
+		{name: "no set_new_validators reads unknown", body: body(2050, 2000, 0), want: 0},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			info, err := parseEpochInfo([]byte(testCase.body))
+			if err != nil {
+				t.Fatalf("parseEpochInfo(): %v", err)
+			}
+			if info.EffectiveEpochIndex != testCase.want {
+				t.Fatalf("parseEpochInfo(%s).EffectiveEpochIndex = %d, want %d", testCase.name, info.EffectiveEpochIndex, testCase.want)
+			}
+		})
+	}
+}
+
+// Test flow:
+//  1. Table-driven: epoch info bodies for latest epoch 8 (PoC start 2000, set_new_validators 2100, the next one 3100) one block before, exactly at, and one block after set_new_validators.
+//  2. Parse each body.
+//  3. Assert the effective epoch and the switch height agree: before it, effective 7 with the switch at 2100; at and after it, effective 8 with the switch at the next one, 3100.
+func TestParseEpochInfoAgreesOnTheSwitchAroundSetNewValidators(t *testing.T) {
+	body := func(height int64) string {
+		return fmt.Sprintf(`{"block_height": %d, "phase": "Inference", "latest_epoch": {"index": 8, "poc_start_block_height": 2000}, "epoch_stages": {"set_new_validators": 2100, "next_poc_start": 2900}, "next_epoch_stages": {"set_new_validators": 3100}}`, height)
+	}
+	testCases := []struct {
+		name          string
+		height        int64
+		wantEffective uint64
+		wantSwitch    int64
+	}{
+		{name: "one block before set_new_validators", height: 2099, wantEffective: 7, wantSwitch: 2100},
+		{name: "exactly at set_new_validators", height: 2100, wantEffective: 8, wantSwitch: 3100},
+		{name: "one block after set_new_validators", height: 2101, wantEffective: 8, wantSwitch: 3100},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			info, err := parseEpochInfo([]byte(body(testCase.height)))
+			if err != nil {
+				t.Fatalf("parseEpochInfo(): %v", err)
+			}
+			if info.EffectiveEpochIndex != testCase.wantEffective || info.EpochSwitchBlockHeight != testCase.wantSwitch {
+				t.Fatalf("parseEpochInfo(height %d) = effective %d switch %d, want effective %d switch %d", testCase.height, info.EffectiveEpochIndex, info.EpochSwitchBlockHeight, testCase.wantEffective, testCase.wantSwitch)
+			}
+		})
 	}
 }

@@ -111,52 +111,6 @@ func TestBuildClonesOverridesModelLimits(t *testing.T) {
 	}
 }
 
-// Test flow:
-//  1. Build a config with no overrides.
-//  2. Assert the rotation hold defaults to enabled, sixteen per model, with 32 resume answers.
-func TestTheHoldIsOnByDefault(t *testing.T) {
-	configuration, err := Build(env.Values{}, Overrides{})
-	if err != nil {
-		t.Fatalf("Build() = %v, want nil", err)
-	}
-	rotation := configuration.Rotation
-	if !rotation.HoldEnabled || rotation.HoldMaxPerModel != 16 || rotation.HoldResumeAnswers != 32 {
-		t.Fatalf("rotation = %+v, want hold on, 16 per model, 32 answers", rotation)
-	}
-}
-
-// Test flow:
-//  1. Build a config with `RotationHoldEnabled` overridden to false.
-//  2. Assert the built rotation hold is disabled.
-func TestAnOverrideTurnsTheHoldOff(t *testing.T) {
-	disabled := false
-	configuration, err := Build(env.Values{}, Overrides{RotationHoldEnabled: &disabled})
-	if err != nil {
-		t.Fatalf("Build() = %v, want nil", err)
-	}
-	if configuration.Rotation.HoldEnabled {
-		t.Fatal("HoldEnabled = true, want the override to turn it off")
-	}
-}
-
-// Test flow:
-//  1. Table-driven: each case sets one invalid hold setting — a negative per-model cap or zero resume-answer headroom.
-//  2. For each case, call `Build`.
-//  3. Assert it returns `ErrInvalid`.
-func TestHoldSettingsAreValidated(t *testing.T) {
-	negative, zero := int64(-1), int64(0)
-	for name, overrides := range map[string]Overrides{
-		"negative cap":       {RotationHoldMaxPerModel: &negative},
-		"no resume headroom": {RotationHoldResumeAnswers: &zero},
-	} {
-		t.Run(name, func(t *testing.T) {
-			if _, err := Build(env.Values{}, overrides); !errors.Is(err, ErrInvalid) {
-				t.Fatalf("Build() = %v, want ErrInvalid", err)
-			}
-		})
-	}
-}
-
 // deployedEnvTemplates are the operator-facing deploy files Build must accept without failing.
 var deployedEnvTemplates = []string{
 	"../../../../deploy/join/config.devshard.env.template",
@@ -387,5 +341,25 @@ func TestThePoCWeightLimitFollowsThePlainOneAsDevshardctlDerivedIt(t *testing.T)
 				t.Fatalf("PoC limit = %v, want %v", got, testCase.wantPoC)
 			}
 		})
+	}
+}
+
+// Test flow:
+//  1. Build a config with no overrides, then one with the settle margin overridden to 900, then ones with 0 and -1.
+//  2. Assert the default is 600, the override sets 900, and 0 and -1 are refused as ErrInvalid.
+func TestTheSettleMarginDefaultsTo600BlocksAndRefusesLessThanOne(t *testing.T) {
+	configuration, err := Build(env.Values{}, Overrides{})
+	if err != nil || configuration.Rotation.SettleMarginBlocks != 600 {
+		t.Fatalf("Build() settle margin = %d, %v, want 600, nil", configuration.Rotation.SettleMarginBlocks, err)
+	}
+	wider := int64(900)
+	configuration, err = Build(env.Values{}, Overrides{RotationSettleMarginBlocks: &wider})
+	if err != nil || configuration.Rotation.SettleMarginBlocks != 900 {
+		t.Fatalf("Build(900) settle margin = %d, %v, want 900, nil", configuration.Rotation.SettleMarginBlocks, err)
+	}
+	for _, refused := range []int64{0, -1} {
+		if _, err := Build(env.Values{}, Overrides{RotationSettleMarginBlocks: &refused}); !errors.Is(err, ErrInvalid) {
+			t.Fatalf("Build(%d) = %v, want ErrInvalid", refused, err)
+		}
 	}
 }

@@ -15,7 +15,7 @@ import (
 //  2. Call OnEscrowMissing for that escrow ID.
 //  3. Assert GetEscrow was not called synchronously inside the hook.
 //  4. Call tick and assert it succeeds.
-//  5. Assert the stored record's Active flag is now false.
+//  5. Assert the stored record is now inactive and marked gone from chain.
 func TestOnEscrowMissingDeactivatesTheEscrowOnTheNextTick(t *testing.T) {
 	testStore := newFakeStore()
 	testStore.devshards["1"] = store.DevshardRecord{EscrowID: "1", Model: "model-a", Active: true}
@@ -39,8 +39,8 @@ func TestOnEscrowMissingDeactivatesTheEscrowOnTheNextTick(t *testing.T) {
 		t.Fatalf("tick() = %v, want nil", err)
 	}
 
-	if got := testStore.devshards["1"]; got.Active {
-		t.Fatal("devshard.Active = true, want false: a host reported the escrow gone and it still takes traffic")
+	if got := testStore.devshards["1"]; got.Active || !got.GoneFromChain {
+		t.Fatalf("devshard = %+v, want inactive and gone from chain: a host reported the escrow gone and the chain confirmed it", got)
 	}
 }
 
@@ -136,7 +136,7 @@ func TestTriggerEscrowCheckNotFoundStopsTraffic(t *testing.T) {
 //  1. Store one active devshard record and a tx client whose GetEscrow reports the escrow found with a balance.
 //  2. Call TriggerEscrowCheck for that escrow ID and assert it returns no error.
 //  3. Assert the stored record's Active flag stays true.
-//  4. Assert the call log contains no "SetDevshardActive(false)" call.
+//  4. Assert the call log contains no "MarkDevshardGoneFromChain" call.
 func TestTriggerEscrowCheckFoundKeepsActive(t *testing.T) {
 	testStore := newFakeStore()
 	testStore.devshards["1"] = store.DevshardRecord{EscrowID: "1", Model: "model-a", Active: true}
@@ -156,8 +156,8 @@ func TestTriggerEscrowCheckFoundKeepsActive(t *testing.T) {
 		t.Fatal("devshard.Active = false, want true (escrow found, no reason to deactivate)")
 	}
 	for _, name := range log.snapshot() {
-		if name == "SetDevshardActive(false)" {
-			t.Fatal("SetDevshardActive(false) called, want no deactivation when the escrow is found")
+		if name == "MarkDevshardGoneFromChain" {
+			t.Fatal("MarkDevshardGoneFromChain called, want no deactivation when the escrow is found")
 		}
 	}
 }
@@ -166,7 +166,7 @@ func TestTriggerEscrowCheckFoundKeepsActive(t *testing.T) {
 //  1. Store one active devshard record and a tx client whose GetEscrow returns an error.
 //  2. Call TriggerEscrowCheck for that escrow ID.
 //  3. Assert the returned error wraps the chain error.
-//  4. Assert the stored record's Active flag stays true and no "SetDevshardActive(false)" call was logged.
+//  4. Assert the stored record's Active flag stays true and no "MarkDevshardGoneFromChain" call was logged.
 func TestTriggerEscrowCheckChainErrorKeepsActive(t *testing.T) {
 	testStore := newFakeStore()
 	testStore.devshards["1"] = store.DevshardRecord{EscrowID: "1", Model: "model-a", Active: true}
@@ -188,8 +188,8 @@ func TestTriggerEscrowCheckChainErrorKeepsActive(t *testing.T) {
 		t.Fatal("devshard.Active = false, want true (a lookup failure is ambiguity, never a reason to deactivate)")
 	}
 	for _, name := range log.snapshot() {
-		if name == "SetDevshardActive(false)" {
-			t.Fatal("SetDevshardActive(false) called, want no deactivation on chain error")
+		if name == "MarkDevshardGoneFromChain" {
+			t.Fatal("MarkDevshardGoneFromChain called, want no deactivation on chain error")
 		}
 	}
 }
@@ -199,7 +199,7 @@ func TestTriggerEscrowCheckChainErrorKeepsActive(t *testing.T) {
 //  2. Launch 10 concurrent calls to TriggerEscrowCheck for the same escrow ID.
 //  3. Drain the 9 deduped callers that return without touching the chain, then close the release channel and drain the winner.
 //  4. Assert every call returned no error.
-//  5. Count "GetEscrow" and "SetDevshardActive(false)" in the call log and assert each happened exactly once.
+//  5. Count "GetEscrow" and "MarkDevshardGoneFromChain" in the call log and assert each happened exactly once.
 func TestTriggerEscrowCheckDedupesConcurrentCallers(t *testing.T) {
 	const callerCount = 10
 	testStore := newFakeStore()
@@ -238,7 +238,7 @@ func TestTriggerEscrowCheckDedupesConcurrentCallers(t *testing.T) {
 		switch name {
 		case "GetEscrow":
 			getEscrowCalls++
-		case "SetDevshardActive(false)":
+		case "MarkDevshardGoneFromChain":
 			deactivateCalls++
 		}
 	}
@@ -246,6 +246,6 @@ func TestTriggerEscrowCheckDedupesConcurrentCallers(t *testing.T) {
 		t.Fatalf("GetEscrow called %d times, want exactly 1", getEscrowCalls)
 	}
 	if deactivateCalls != 1 {
-		t.Fatalf("SetDevshardActive(false) called %d times, want exactly 1", deactivateCalls)
+		t.Fatalf("MarkDevshardGoneFromChain called %d times, want exactly 1", deactivateCalls)
 	}
 }

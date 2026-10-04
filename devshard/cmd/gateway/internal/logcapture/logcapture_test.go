@@ -28,3 +28,20 @@ func TestContainsComparesTheLevelTheMessageAndEveryTypedField(t *testing.T) {
 		t.Fatal("a warn line matched an info expectation")
 	}
 }
+
+// Test flow:
+//  1. Install a recorder, then ask for the shared one and log a line.
+//  2. Assert Shared returned the installed recorder and the line reached it.
+func TestSharedReturnsTheRecorderTheTestInstalled(t *testing.T) {
+	installed := Install(t)
+
+	shared := Shared(t)
+	logging.Info("one reader of two")
+
+	if shared != installed {
+		t.Fatal("Shared() returned a new recorder, want the installed one")
+	}
+	if _, found := installed.Find("one reader of two"); !found {
+		t.Fatal("the installed recorder missed a line logged after Shared()")
+	}
+}

@@ -569,7 +569,7 @@ func TestPhaseObserver_CarriesEveryParticipantDerivedFieldForward(t *testing.T) 
 		"Preserved", "PreservedByModel", "InferenceURLs",
 	}
 	phaseDerived := []string{
-		"BlockHeight", "EpochSwitchBlockHeight", "EpochIndex", "EpochPhase", "ConfirmationPoCPhase",
+		"BlockHeight", "EpochSwitchBlockHeight", "EpochIndex", "EffectiveEpochIndex", "EpochPhase", "ConfirmationPoCPhase",
 		"RequestsBlocked", "BlockReason", "MaxNonce", "TokenPrice", "FeePerNonce", "CreateDevshardFee", "Models", "LastUpdatedAt", "LastError",
 	}
 

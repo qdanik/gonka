@@ -33,13 +33,28 @@ func TestStartedInferencesPastDeadlineReturnsOnlyWhatTheChainStillSettles(t *tes
 		3: {Status: types.StatusPending, ConfirmedAt: longPast},
 		4: {Status: types.StatusFinished, ConfirmedAt: longPast},
 		5: {Status: types.StatusTimedOut, ConfirmedAt: longPast},
-		6: {Status: types.StatusStarted, ConfirmedAt: 0},
+		6: {Status: types.StatusStarted, StartedAt: justNow},
 	})
 
 	due := machine.StartedInferencesPastDeadline(now, 0, 10)
 
 	require.Equal(t, []uint64{1}, due,
 		"only a started record past its own execution deadline is still settleable and unclaimed")
+}
+
+// An executor that stamps no confirm time leaves a record verifiers already time out; the sweep anchors it on its start.
+func TestStartedInferencesPastDeadlineAnchorsAnUnstampedRecordOnItsStart(t *testing.T) {
+	now := time.Now()
+	machine := machineWithStartedRecords(t, map[uint64]*types.InferenceRecord{})
+	executionTimeout := time.Duration(machine.Config().ExecutionTimeout) * time.Second
+	machine.mu.Lock()
+	machine.state.Inferences[1] = &types.InferenceRecord{Status: types.StatusStarted, StartedAt: now.Add(-executionTimeout - time.Minute).Unix()}
+	machine.state.Inferences[2] = &types.InferenceRecord{Status: types.StatusStarted, StartedAt: now.Unix()}
+	machine.mu.Unlock()
+
+	due := machine.StartedInferencesPastDeadline(now, 0, 10)
+
+	require.Equal(t, []uint64{1}, due, "an unstamped record is due once its start is past the execution deadline, and not before")
 }
 
 func TestStartedInferencesPastDeadlineHonoursTheGrace(t *testing.T) {

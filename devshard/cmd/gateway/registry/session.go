@@ -115,6 +115,14 @@ func (h sessionHandle) LiveInferences() (types.SessionConfig, []types.InferenceR
 	return h.machine.Config(), records
 }
 
+func (h sessionHandle) SessionConfig() types.SessionConfig    { return h.machine.Config() }
+func (h sessionHandle) AppliedNonce() uint64                  { return h.machine.LatestNonce() }
+func (h sessionHandle) LiveInferenceIDs() map[uint64]struct{} { return h.machine.LiveInferenceIDs() }
+
+func (h sessionHandle) Inference(id uint64) (types.InferenceRecord, bool) {
+	return h.machine.GetInference(id)
+}
+
 type hostDialer interface {
 	BaseURL() string
 	RoutePrefix() string

@@ -24,10 +24,11 @@ const (
 	KindForcedSend
 	KindEscrowTransition
 	KindChainTransition
+	KindFundingTransition
 )
 
 // kindCount is one past the last kind, so a table indexed by kind has a slot for each.
-const kindCount = KindChainTransition + 1
+const kindCount = KindFundingTransition + 1
 
 var kindNames = [kindCount]string{
 	KindRaceReported:        "race_reported",
@@ -50,6 +51,7 @@ var kindNames = [kindCount]string{
 	KindForcedSend:          "forced_send",
 	KindEscrowTransition:    "escrow_transition",
 	KindChainTransition:     "chain_transition",
+	KindFundingTransition:   "funding_transition",
 }
 
 func (k Kind) String() string {
@@ -64,7 +66,7 @@ func (k Kind) onMoneyLane() bool {
 	switch k {
 	case KindRaceReported, KindTimeoutVote, KindNonceBurned, KindBurnBudgetExhausted, KindDiffComposed,
 		KindWarmupProbe, KindNonceStranded, KindHostDiverged, KindReplyNotCached, KindRequestFinished,
-		KindHostTransition, KindExcludedHostServed, KindForcedSend, KindEscrowTransition, KindChainTransition:
+		KindHostTransition, KindExcludedHostServed, KindForcedSend, KindEscrowTransition, KindChainTransition, KindFundingTransition:
 		return true
 	}
 	return false

@@ -34,11 +34,11 @@ A `//nolint:<linter> // reason` is a last resort and carries its reason; `nolint
 
 ## Load simulation
 
-`loadsim_test.go` runs the gateway exactly as `run()` composes it — engine, scheduler, nonce ledger and its sweep, journal, metrics — against escrows served by real `host.Host` instances living in the same process, and drives streaming chat traffic at it while it profiles. It is behind the `loadsim` build tag, so `go test ./...` and `make verify` never run it: it is a measurement, and it loads the machine it runs on. The `LOADSIM_*` variables are read by the test alone; the gateway knows none of them. A long run is heavy: two escrows at thirty requests a second reach nine cores within eight minutes, because the cost of every diff grows with the escrows' live windows, so watch the machine rather than the clock.
+`app/loadsim_test.go` runs the gateway exactly as `run()` composes it — engine, scheduler, nonce ledger and its sweep, journal, metrics — against escrows served by real `host.Host` instances living in the same process, and drives streaming chat traffic at it while it profiles. It is behind the `loadsim` build tag, so `go test ./...` and `make verify` never run it: it is a measurement, and it loads the machine it runs on. The `LOADSIM_*` variables are read by the test alone; the gateway knows none of them. A long run is heavy: two escrows at thirty requests a second reach nine cores within eight minutes, because the cost of every diff grows with the escrows' live windows, so watch the machine rather than the clock.
 
 ```bash
 LOADSIM_ESCROWS=8 LOADSIM_RPS=30 LOADSIM_DURATION=60s LOADSIM_PROFILE_DIR=/tmp/loadsim \
-  go test -tags loadsim -run TestLoadSimulation -count=1 -timeout 10m -v .
+  go test -tags loadsim -run TestLoadSimulation -count=1 -timeout 10m -v ./app
 go tool pprof -top -cum -nodecount=40 /tmp/loadsim/cpu.pprof
 ```
 
@@ -68,7 +68,7 @@ What it does not measure:
 ## Where code goes
 
 - **One concern per package.** [`README.md`](./README.md), "The layers", says which package owns what; a package's own `README.md` says what it owns, what it does not, and its boundaries. A change that does not fit an owner's description is in the wrong package, or the description changes with it.
-- **The package root is the composition root.** [`README.md`](./README.md), "The composition root", says what each of its files is for. Domain rules live in a layer package.
+- **`app` is the composition root.** [`README.md`](./README.md), "The composition root", says what each of its files is for. Domain rules live in a layer package; the package root holds only the binary's `main.go`.
 - **Changes stay inside `cmd/gateway`.** The devshard libraries (`devshard/user`, `devshard/state`, `devshard/transport`, `devshard/heightsync`) and the chain are owned upstream. When the gateway needs different behaviour from them, adapt on the gateway's side — a wrapper such as `registry.sessionHandle`, a consumer-side interface — and record a defect in the library in [`docs/findings.md`](./docs/findings.md).
 - **Wire strings live in the package's `vocabulary.go`, type and all.** A metric label value, a log field value, a reason carried between packages: a named string type and its constants, passed as that type rather than `string`.
 - **Interfaces are declared by their consumer**, as small as the consumer needs.
@@ -99,7 +99,7 @@ These rules bind new and changed code; an existing comment in a file you touch m
 ## Errors, logging, metrics, configuration
 
 - **Errors.** Sentinels are `ErrXxx` and error types `XxxError` (`errname`), declared together in the package, as in `scheduler/errors.go`. Error strings are lowercase with no trailing punctuation; a wrap names the step (`dialing chain grpc %s: %w`); a sentinel with context comes first (`%w: escrow %s is parked for settlement`). Inspect with `errors.Is` / `errors.As`, never by string. On the money path an error is returned, not logged.
-- **Logging.** The lifecycle packages — `engine`, `scheduler`, `registry`, `escrow`, `perf`, `limits`, `chain`, `warmup`, `api` and `observers.go` — never call `logging.*`; a line goes through the journal via the narrator interface the producer declares (`journal/guard_test.go` fails otherwise). Every key comes from `internal/logkey` (`journal/keys_test.go` fails on an undeclared key). [`journal/README.md`](./journal/README.md) names the files that may log directly.
+- **Logging.** The lifecycle packages — `engine`, `scheduler`, `registry`, `escrow`, `perf`, `limits`, `chain`, `warmup`, `api` and `app/observers.go` — never call `logging.*`; a line goes through the journal via the narrator interface the producer declares (`journal/guard_test.go` fails otherwise). Every key comes from `internal/logkey` (`journal/keys_test.go` fails on an undeclared key). [`journal/README.md`](./journal/README.md) names the files that may log directly.
 - **Metrics.** Families are `devshard_gateway_<noun>_<unit>` — counters end in `_total`, durations in `_seconds` — declared only in `metrics/`. No nonce or request id as a label; escrow ids only where [`docs/rules.md`](./docs/rules.md), "11. Labels, ordering and determinism", allows. A new or renamed family updates [`docs/operations.md`](./docs/operations.md), "Metrics"; a removed one gets a row in "Metric changes".
 - **A new knob.** Read the variable in `env/env.go` only, under devshardctl's name if devshardctl had it and as a strict `GATEWAY_*` otherwise; default it in `config/defaults.go`, merge it in `config/build.go`, bound it in `config/validate.go`, add it to `config.Overrides` if an admin may change it at runtime, and document it in `config/README.md` and `docs/operations.md`. The runtime-params `DEVSHARD_*` knobs are the one exception ([`env/README.md`](./env/README.md)).
 
@@ -130,6 +130,10 @@ These rules bind new and changed code; an existing comment in a file you touch m
 - **Fakes** implement the consumer-side interface; a real in-process session is preferred where the behaviour under test lives in the session.
 - **A bug fix starts with a failing test**, shown failing for the reason the bug gives. An assertion that passed before the fix is checked by mutation: break the fix, watch the test fail, restore it.
 - **End to end.** Tests that need the running stand — mock chain, real hosts, containers — live in [`devshard/e2e`](../../e2e/), named `TestE2E_Gateway…`, in the same `Test flow` format. `make -C devshard e2e` builds the images and runs them; [`devshard/e2e/README.md`](../../e2e/README.md) shows how to run one.
+
+## Scenario harness
+
+[`scenarios/`](./scenarios/) runs the composed gateway inside a `testing/synctest` bubble against a fake chain and real in-process hosts, so an escrow's whole life runs on fake time in seconds of wall time. Add a test there for every lifecycle change, named as the sentence it proves, with no catalogue ID; give it a row in [`scenarios/README.md`](./scenarios/README.md), which also says how to run them, how a known bug is pinned, and which test covers each ID of the escrow-planner design's catalogue.
 
 ## Commits
 

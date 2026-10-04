@@ -2,6 +2,8 @@ package limits
 
 import (
 	"fmt"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -90,6 +92,37 @@ func BenchmarkParticipantAvailableParallel(b *testing.B) {
 			}
 		}
 	})
+}
+
+// BenchmarkParticipantPicksBesideAttempts is a request as the gateway makes it, from many goroutines at once: one Admits per candidate escrow, then one Acquire and its release.
+func BenchmarkParticipantPicksBesideAttempts(b *testing.B) {
+	hosts := benchParticipants(benchNetwork)
+	for _, candidates := range []int{4, 16, 64} {
+		for _, requestsInFlight := range []int{1, 10, 100, 1000} {
+			b.Run(fmt.Sprintf("E=%d/N=%d", candidates, requestsInFlight), func(b *testing.B) {
+				limiter := benchLimiter(hosts)
+				var next atomic.Int64
+				total := int64(b.N)
+				b.ReportAllocs()
+				b.ResetTimer()
+				var requests sync.WaitGroup
+				for range requestsInFlight {
+					requests.Go(func() {
+						for request := next.Add(1); request <= total; request = next.Add(1) {
+							first := int(request)
+							for offset := range candidates {
+								limiter.Admits(hosts[(first+offset)%len(hosts)], benchModel)
+							}
+							if release, admitted := limiter.Acquire(hosts[first%len(hosts)], benchModel, benchCost); admitted == AdmissionOpen {
+								release()
+							}
+						}
+					})
+				}
+				requests.Wait()
+			})
+		}
+	}
 }
 
 // BenchmarkParticipantAttempt is one dispatched attempt: the slot, its release, and the verdict.

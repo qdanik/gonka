@@ -88,17 +88,6 @@ func (s *Scheduler) retirementReserve(model string, snapshot chain.PhaseSnapshot
 	return s.settings.Load().Limits.RetirementReserve(model, snapshot.Models[model].MaxModelLen)
 }
 
-// retirementPriceOf pairs the model's floor with one capped answer, the unit load and resume headroom are counted in. See capacity.md, "The balance floor".
-func (s *Scheduler) retirementPriceOf(model string, snapshot chain.PhaseSnapshot) retirementPrice {
-	if s.settings == nil {
-		return retirementPrice{}
-	}
-	return retirementPrice{
-		floorTokens:  s.retirementReserve(model, snapshot),
-		answerTokens: uint64(max(s.settings.Load().Limits.MaxTokensCap, 0)),
-	}
-}
-
 // retirementReserveFor reads the model's floor per call, so a dispatcher follows a pin or a chain length that moves.
 func (s *Scheduler) retirementReserveFor(escrow Escrow) func() uint64 {
 	return func() uint64 { return s.retirementReserve(escrow.Model, s.snapshots.Snapshot()) }

@@ -43,6 +43,8 @@ Re-opening an escrow keeps its counters and **pins the epoch at first sighting**
 
 `timeoutOutcomeOf` is where two vocabularies meet: the engine reports an action and a reason, the legacy ledger reports a single outcome, and one dashboard has to read both. `failed` alone says nothing a reader can act on; its reason is what tells a round that gathered too few votes from one that could not gather any.
 
+`MoneyTotals` reads one escrow's money as the ledger last observed it: the reserved money of its Pending and Started records, the actual cost of its Challenged ones, and the sum of its slots' `HostStats.Cost`. These are the reserved, challenged and charged money of the last observation, which the scenario harness compares with the session and the chain (its `ledger match` invariant, see [`scenarios/README.md`](../scenarios/README.md)).
+
 ## Storage
 
 The pragmas ride the connection string rather than a first statement, because the pool recreates connections and a recreated one would come back without them. One connection, because every write is a single transaction and `Store.writing` admits one at a time: two saves committing out of order would let the older copy of an escrow overwrite the newer one.

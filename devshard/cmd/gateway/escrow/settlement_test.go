@@ -98,15 +98,6 @@ func holderWithSettlementEnabled(enabled bool) *config.Holder {
 	return config.NewHolder(&cfg)
 }
 
-func holderWithHold(t *testing.T, enabled bool) *config.Holder {
-	t.Helper()
-	gatewayConfig := config.Defaults()
-	gatewayConfig.Rotation.Enabled = true
-	gatewayConfig.Rotation.HoldEnabled = enabled
-	gatewayConfig.Rotation.SettlementEnabled = false
-	return config.NewHolder(&gatewayConfig)
-}
-
 func stringsEqual(got, want []string) bool {
 	if len(got) != len(want) {
 		return false
@@ -513,7 +504,7 @@ func TestSettlePendingSettlesParkedEscrowAndDropsRow(t *testing.T) {
 		config:           holderWithSettlementEnabled(true),
 	}
 
-	if err := m.settlePending(context.Background(), []store.DevshardRecord{record}); err != nil {
+	if err := m.settlePending(context.Background(), chain.PhaseSnapshot{}, []store.DevshardRecord{record}); err != nil {
 		t.Fatalf("settlePending() = %v, want nil", err)
 	}
 	if _, ok := testStore.devshards[record.EscrowID]; ok {
@@ -549,7 +540,7 @@ func TestSettlePendingStillSettlesAfterAnUnrelatedUpsert(t *testing.T) {
 		t.Fatalf("ListDevshards(): %v", err)
 	}
 
-	if err := m.settlePending(context.Background(), devshards); err != nil {
+	if err := m.settlePending(context.Background(), chain.PhaseSnapshot{}, devshards); err != nil {
 		t.Fatalf("settlePending() = %v, want nil", err)
 	}
 	if _, ok := testStore.snapshotDevshard(record.EscrowID); ok {
@@ -575,7 +566,7 @@ func TestSettlePendingBusyEscrowStaysParkedForTheNextTick(t *testing.T) {
 		config:           holderWithSettlementEnabled(true),
 	}
 
-	if err := m.settlePending(context.Background(), []store.DevshardRecord{record}); !errors.Is(err, ErrDevshardBusy) {
+	if err := m.settlePending(context.Background(), chain.PhaseSnapshot{}, []store.DevshardRecord{record}); !errors.Is(err, ErrDevshardBusy) {
 		t.Fatalf("settlePending() = %v, want ErrDevshardBusy", err)
 	}
 	assertParked(t, testStore, record.EscrowID)
@@ -605,7 +596,7 @@ func TestSettlePendingIsNoOpWhileSettlementDisabled(t *testing.T) {
 		config:           holderWithSettlementEnabled(false),
 	}
 
-	if err := m.settlePending(context.Background(), []store.DevshardRecord{record}); err != nil {
+	if err := m.settlePending(context.Background(), chain.PhaseSnapshot{}, []store.DevshardRecord{record}); err != nil {
 		t.Fatalf("settlePending() = %v, want nil", err)
 	}
 	assertParked(t, testStore, record.EscrowID)
@@ -635,7 +626,7 @@ func TestSettlePendingIgnoresInactiveEscrowWithoutPendingMarker(t *testing.T) {
 		config:           holderWithSettlementEnabled(true),
 	}
 
-	if err := m.settlePending(context.Background(), []store.DevshardRecord{record}); err != nil {
+	if err := m.settlePending(context.Background(), chain.PhaseSnapshot{}, []store.DevshardRecord{record}); err != nil {
 		t.Fatalf("settlePending() = %v, want nil", err)
 	}
 	if _, ok := testStore.devshards[record.EscrowID]; !ok {
@@ -858,7 +849,7 @@ func TestSettlePendingDropsAnEscrowTheChainNoLongerHolds(t *testing.T) {
 		config:           holderWithSettlementEnabled(true),
 	}
 
-	if err := m.settlePending(context.Background(), []store.DevshardRecord{record}); err != nil {
+	if err := m.settlePending(context.Background(), chain.PhaseSnapshot{}, []store.DevshardRecord{record}); err != nil {
 		t.Fatalf("settlePending() = %v, want nil", err)
 	}
 	if _, ok := testStore.snapshotDevshard(record.EscrowID); ok {
@@ -895,7 +886,7 @@ func TestSettlePendingFollowsAModelsOwnSettlementFlag(t *testing.T) {
 		]`),
 	}
 
-	if err := m.settlePending(context.Background(), []store.DevshardRecord{ownFlag, inherited}); err != nil {
+	if err := m.settlePending(context.Background(), chain.PhaseSnapshot{}, []store.DevshardRecord{ownFlag, inherited}); err != nil {
 		t.Fatalf("settlePending() = %v, want nil", err)
 	}
 	if _, ok := testStore.snapshotDevshard(ownFlag.EscrowID); ok {
@@ -930,4 +921,73 @@ func TestRetireParksAModelThatTurnsSettlementOff(t *testing.T) {
 		t.Fatalf("retire() = %v, want nil", err)
 	}
 	assertParked(t, testStore, record.EscrowID)
+}
+
+// Test flow:
+//  1. Seed the store with a parked row marked gone from chain, and a chain client that fails the test if SettleEscrow is called.
+//  2. Call `settlePending` with settlement enabled.
+//  3. Assert it returns nil and the row stays as it was: a gone escrow has nothing to settle.
+func TestSettlePendingSkipsARowGoneFromChain(t *testing.T) {
+	testStore := newFakeStore()
+	record := parkedRecord("12")
+	record.GoneFromChain = true
+	testStore.devshards[record.EscrowID] = record
+	txClient := &fakeTxClient{
+		settleEscrowFn: func(ctx context.Context, signer *signing.Secp256k1Signer, input chain.SettlementInput) (chain.SettleEscrowResult, error) {
+			t.Fatal("SettleEscrow called for an escrow the chain no longer holds")
+			return chain.SettleEscrowResult{}, nil
+		},
+		getEscrowFn: func(ctx context.Context, escrowID string) (chain.EscrowInfo, bool, error) {
+			t.Fatal("GetEscrow called for an escrow the chain no longer holds")
+			return chain.EscrowInfo{}, false, nil
+		},
+	}
+	m := &Manager{
+		tx:               txClient,
+		store:            testStore,
+		signer:           &fakeSignerSource{signer: testSigner(t)},
+		settlementSource: &fakeSettlementSource{},
+		config:           holderWithSettlementEnabled(true),
+	}
+
+	if err := m.settlePending(context.Background(), chain.PhaseSnapshot{}, []store.DevshardRecord{record}); err != nil {
+		t.Fatalf("settlePending() = %v, want nil", err)
+	}
+	if got, ok := testStore.snapshotDevshard(record.EscrowID); !ok || got != record {
+		t.Fatalf("row = %+v (present %v), want %+v untouched", got, ok, record)
+	}
+}
+
+// Test flow:
+//  1. Seed the store with a serving row, mark it gone from chain, reactivate it, then park it.
+//  2. Call `settlePending` with the rows the store now lists and settlement enabled.
+//  3. Assert the row was settled and dropped: a reactivated row is no longer gone, so its later park settles.
+func TestSettlePendingSettlesARowReactivatedAfterItWasGoneFromChain(t *testing.T) {
+	testStore := newFakeStore()
+	testStore.devshards["14"] = store.DevshardRecord{EscrowID: "14", PrivateKeyEnv: "MODEL_A_KEY", Model: "model-a", Active: true}
+	ctx := context.Background()
+	if err := testStore.MarkDevshardGoneFromChain(ctx, "14"); err != nil {
+		t.Fatalf("MarkDevshardGoneFromChain() = %v, want nil", err)
+	}
+	if err := testStore.SetDevshardActive(ctx, "14", true); err != nil {
+		t.Fatalf("SetDevshardActive(true) = %v, want nil", err)
+	}
+	if err := testStore.ParkForSettlement(ctx, "14"); err != nil {
+		t.Fatalf("ParkForSettlement() = %v, want nil", err)
+	}
+	m := &Manager{
+		tx:               settlingTxClient(),
+		store:            testStore,
+		signer:           &fakeSignerSource{signer: testSigner(t)},
+		settlementSource: &fakeSettlementSource{},
+		config:           holderWithSettlementEnabled(true),
+	}
+	devshards, _ := testStore.ListDevshards(ctx)
+
+	if err := m.settlePending(ctx, chain.PhaseSnapshot{}, devshards); err != nil {
+		t.Fatalf("settlePending() = %v, want nil", err)
+	}
+	if record, ok := testStore.snapshotDevshard("14"); ok {
+		t.Fatalf("row = %+v still present, want it settled and dropped", record)
+	}
 }

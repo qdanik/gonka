@@ -36,6 +36,9 @@ type escrowLedger struct {
 	produced    map[uint32]uint64
 	events      []protocolEvent
 	retired     bool
+
+	inFlightReserved uint64
+	challengedCost   uint64
 }
 
 // The only way to build one: a second site that forgot a map would panic on a path with no error to return.
@@ -134,6 +137,28 @@ func (b *Book) RetireEscrow(escrowID string) {
 	}
 }
 
+// MoneyTotals is one escrow's money as the ledger last observed it: reserved by open records, charged on challenged ones, and charged to its slots.
+type MoneyTotals struct {
+	InFlightReserved uint64
+	Challenged       uint64
+	Charged          uint64
+}
+
+// MoneyTotals reads an escrow's totals from its last observation; known is false for an escrow the ledger never opened.
+func (b *Book) MoneyTotals(escrowID string) (MoneyTotals, bool) {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	escrow, known := b.escrows[escrowID]
+	if !known {
+		return MoneyTotals{}, false
+	}
+	totals := MoneyTotals{InFlightReserved: escrow.inFlightReserved, Challenged: escrow.challengedCost}
+	for _, stats := range escrow.hostStats {
+		totals.Charged += stats.Cost
+	}
+	return totals, true
+}
+
 func (b *Book) ObserveLatestNonce(escrowID string, nonce uint64) error {
 	return b.withEscrow(escrowID, func(escrow *escrowLedger) error {
 		if nonce > escrow.latest {
@@ -158,6 +183,7 @@ func (b *Book) ObserveInferences(escrowID string, inferences map[uint64]*types.I
 	return b.withEscrow(escrowID, func(escrow *escrowLedger) error {
 		clear(escrow.folded)
 		challenged := make(map[uint32]uint64)
+		var inFlight, challengedCost uint64
 		for nonce, record := range inferences {
 			if record == nil {
 				continue
@@ -174,8 +200,15 @@ func (b *Book) ObserveInferences(escrowID string, inferences map[uint64]*types.I
 			if record.Status == types.StatusChallenged {
 				challenged[record.ExecutorSlot]++
 			}
+			switch record.Status {
+			case types.StatusPending, types.StatusStarted:
+				inFlight += record.ReservedCost
+			case types.StatusChallenged:
+				challengedCost += record.ActualCost
+			}
 		}
 		escrow.challenged = challenged
+		escrow.inFlightReserved, escrow.challengedCost = inFlight, challengedCost
 		return nil
 	})
 }

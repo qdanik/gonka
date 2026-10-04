@@ -3,6 +3,7 @@ package journal
 import (
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -95,9 +96,9 @@ func TestEscrowLifecycleTransitionsRenderTheLinesTheirProducersNarrate(t *testin
 	}{
 		{
 			name:    "an escrow is created",
-			produce: func(events *Journal) { events.EscrowCreated("42", "model-a", "temp", 7, "TX-HAPPY") },
+			produce: func(events *Journal) { events.EscrowCreated("42", "model-a", "temp", "bridge", 7, "TX-HAPPY") },
 			want: logcapture.Entry{Level: "info", Msg: "escrow created", Fields: []any{
-				"escrow", "42", "model", "model-a", "role", "temp", "epoch", uint64(7), "tx", "TX-HAPPY",
+				"escrow", "42", "model", "model-a", "role", "temp", "reason", "bridge", "epoch", uint64(7), "tx", "TX-HAPPY",
 			}},
 		},
 		{
@@ -122,48 +123,52 @@ func TestEscrowLifecycleTransitionsRenderTheLinesTheirProducersNarrate(t *testin
 			want:    logcapture.Entry{Level: "warn", Msg: "escrow gone from chain, taken out of service", Fields: []any{"escrow", "1"}},
 		},
 		{
+			name:    "an escrow is parked at its settlement deadline",
+			produce: func(events *Journal) { events.EscrowDeadlineReached("5", 7, 3100) },
+			want: logcapture.Entry{Level: "warn", Msg: "escrow parked at its settlement deadline", Fields: []any{
+				"escrow", "5", "chain_epoch", uint64(7), "settle_by", int64(3100),
+			}},
+		},
+		{
+			name:    "an escrow's deadline passes with nothing allowed to settle it",
+			produce: func(events *Journal) { events.EscrowDeadlineUnsettled("5", 3100, "settlement_disabled") },
+			want: logcapture.Entry{Level: "error", Msg: "escrow deadline passes unsettled", Fields: []any{
+				"escrow", "5", "settle_by", int64(3100), "reason", "settlement_disabled",
+			}},
+		},
+		{
+			name:    "a passed deadline carries no settle_by",
+			produce: func(events *Journal) { events.EscrowDeadlineUnsettled("5", 0, "deadline_passed") },
+			want: logcapture.Entry{Level: "error", Msg: "escrow deadline passes unsettled", Fields: []any{
+				"escrow", "5", "reason", "deadline_passed",
+			}},
+		},
+		{
+			name:    "the settle margin is shorter than two settle windows",
+			produce: func(events *Journal) { events.SettleMarginShort(60, time.Second, 22*time.Minute) },
+			want: logcapture.Entry{Level: "warn", Msg: "settle margin shorter than two settle windows", Fields: []any{
+				"margin_blocks", int64(60), "block_time_ms", int64(1000), "settle_windows_ms", int64(1_320_000),
+			}},
+		},
+		{
+			name:    "deadlines are read past a stale chain height",
+			produce: func(events *Journal) { events.EscrowDeadlinesProjected(2_000, 2_100, 10*time.Minute) },
+			want: logcapture.Entry{Level: "warn", Msg: "escrow deadlines read past a stale chain height", Fields: []any{
+				"height", int64(2_000), "projected_height", int64(2_100), "stale_for_ms", int64(600_000),
+			}},
+		},
+		{
+			name:    "an escrow's chain epoch and amount stay unresolved",
+			produce: func(events *Journal) { events.EscrowChainFactsUnresolved("1", "lookup_failed") },
+			want: logcapture.Entry{Level: "warn", Msg: "escrow chain epoch and amount unresolved", Fields: []any{
+				"escrow", "1", "reason", "lookup_failed",
+			}},
+		},
+		{
 			name:    "an escrow is marked for replacement",
 			produce: func(events *Journal) { events.EscrowMarkedForReplacement("1", "nonce_cap") },
 			want: logcapture.Entry{Level: "warn", Msg: "escrow marked for replacement", Fields: []any{
 				"escrow", "1", "reason", "nonce_cap",
-			}},
-		},
-		{
-			name:    "a depleted escrow has no replacement",
-			produce: func(events *Journal) { events.EscrowDepletedWithoutReplacement("1", "model-a") },
-			want: logcapture.Entry{Level: "warn", Msg: "escrow depleted with no replacement configured", Fields: []any{
-				"escrow", "1", "model", "model-a",
-			}},
-		},
-		{
-			name: "an escrow is put on hold",
-			produce: func(events *Journal) {
-				events.EscrowPutOnHold("1", "model-a", "balance_floor", 50, 400, 300, "9")
-			},
-			want: logcapture.Entry{Level: "warn", Msg: "escrow put on hold", Fields: []any{
-				"escrow", "1", "model", "model-a", "reason", "balance_floor",
-				"balance", uint64(50), "reserved", uint64(400), "challenged", uint64(300), "replacement", "9",
-			}},
-		},
-		{
-			name:    "an escrow resumes from hold",
-			produce: func(events *Journal) { events.EscrowResumed("1", 3200) },
-			want: logcapture.Entry{Level: "info", Msg: "escrow resumed from hold", Fields: []any{
-				"escrow", "1", "balance", uint64(3200),
-			}},
-		},
-		{
-			name:    "a hold ends by parking for settlement",
-			produce: func(events *Journal) { events.EscrowHoldEnded("1", "epoch_passed") },
-			want: logcapture.Entry{Level: "info", Msg: "escrow hold ended, parked for settlement", Fields: []any{
-				"escrow", "1", "reason", "epoch_passed",
-			}},
-		},
-		{
-			name:    "a hold expires with money still held",
-			produce: func(events *Journal) { events.EscrowHoldExpired("1", 50, 400) },
-			want: logcapture.Entry{Level: "warn", Msg: "escrow hold expired with money still held", Fields: []any{
-				"escrow", "1", "balance", uint64(50), "reserved", uint64(400),
 			}},
 		},
 		{
