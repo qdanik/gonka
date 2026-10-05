@@ -21,6 +21,7 @@ func Build(values env.Values, overrides Overrides) (*Config, error) {
 	overrideIfSet(&configuration.Server.AdminAPIKey, values.AdminAPIKey)
 	overrideIfSet(&configuration.Server.DevshardsJSON, values.DevshardsJSON)
 	overrideIfSet(&configuration.Server.MaxConcurrentRuntimeBuilds, values.MaxConcurrentRuntimeBuilds)
+	overrideIfSet(&configuration.Server.SessionRetentionEpochs, values.SessionRetentionEpochs)
 
 	overrideIfSet(&configuration.Chain.GRPCEndpoint, values.ChainGRPC)
 	overrideIfSet(&configuration.Chain.PublicAPIBaseURL, values.PublicAPI)

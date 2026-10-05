@@ -108,7 +108,7 @@ func (j *Journal) CommitmentCleared(txHash, model, role string, epoch uint64, re
 	})
 }
 
-// EscrowGoneFromChain renders a confirmed not-found taking an escrow out of service.
+// EscrowGoneFromChain renders a confirmed not-found taking an escrow out of service, or recording a row already out of it as lost.
 func (j *Journal) EscrowGoneFromChain(escrowID string) {
 	j.emitLine(KindEscrowTransition, func(lines logSink) {
 		lines.Warn("escrow gone from chain, taken out of service", logkey.Escrow, escrowID)

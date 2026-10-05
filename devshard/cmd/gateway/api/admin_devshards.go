@@ -244,9 +244,12 @@ func badRequestUnlessOversized(err error) error {
 	return filters.WrapReject(err)
 }
 
-// DevshardStoragePath: sessions and the delete route must derive it the same way. See operations.md, "What is exposed".
+// DevshardStoragePrefix names an escrow's session directory under the base storage dir.
+const DevshardStoragePrefix = "escrow-"
+
+// DevshardStoragePath: sessions, the delete route and session retention must derive it the same way. See operations.md, "What is exposed".
 func DevshardStoragePath(baseStorageDir, escrowID string) string {
-	return filepath.Join(baseStorageDir, "escrow-"+escrowID)
+	return filepath.Join(baseStorageDir, DevshardStoragePrefix+escrowID)
 }
 
 // removeDevshardStorage guards os.RemoveAll on a client-supplied escrow id. See operations.md, "What is exposed".

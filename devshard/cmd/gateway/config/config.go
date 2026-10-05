@@ -16,6 +16,7 @@ type Server struct {
 	AdminAPIKey                string
 	DevshardsJSON              string
 	MaxConcurrentRuntimeBuilds int64
+	SessionRetentionEpochs     int64
 }
 
 // Chain addresses the network; a moved RPC port must be named, not derived. See README.md, "What each group holds".

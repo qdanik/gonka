@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"errors"
+	"fmt"
 	"maps"
 	"slices"
 	"sync"
@@ -329,5 +330,186 @@ func TestADeactivatedRowWhoseKeyIsMissingIsNarratedKeyMissing(t *testing.T) {
 
 	if recorded := narrator.recorded(); !slices.Equal(recorded, []string{"deadline unsettled 3 settle by 3100: key_missing"}) {
 		t.Fatalf("narration = %v, want key_missing", recorded)
+	}
+}
+
+var pastDeadlineSnapshot = chain.PhaseSnapshot{EpochIndex: 410, EffectiveEpochIndex: 410, BlockHeight: 1000}
+
+func lookupAnswering(found func(escrowID string) bool, calls *int) *fakeTxClient {
+	return &fakeTxClient{getEscrowFn: func(_ context.Context, escrowID string) (chain.EscrowInfo, bool, error) {
+		*calls++
+		return chain.EscrowInfo{EscrowID: escrowID, EpochIndex: 400}, found(escrowID), nil
+	}}
+}
+
+func prunedCheckManager(t *testing.T, testStore *fakeStore, configuration *config.Config, lookup *fakeTxClient, narrator *recordingLifecycleNarrator) *Manager {
+	t.Helper()
+	deps := testManagerDeps(t, testStore, &fakeTxClient{}, &fakeSnapshotSource{}, configuration)
+	deps.ChainFacts = lookup
+	if narrator != nil {
+		deps.Narrator = narrator
+	}
+	return mustManager(t, deps)
+}
+
+func storeRows(testStore *fakeStore, rows []store.DevshardRecord) {
+	for _, row := range rows {
+		testStore.devshards[row.EscrowID] = row
+	}
+}
+
+// Test flow:
+//  1. With settlement off, store rows at effective epoch 410: parked and deactivated past the deadline and pruned (the second with only its label), past the deadline but still held by the chain, inside the deadline and not found, serving past the deadline and not found, and one with no label.
+//  2. Check what the chain pruned.
+//  3. Assert only the two pruned rows out of service past the deadline are marked gone, in the store and in the rows the tick goes on with, each narrated once, and no row is dropped.
+func TestARowOutOfServiceThatTheChainPrunedPastItsDeadlineIsMarkedGone(t *testing.T) {
+	testStore := newFakeStore()
+	rows := []store.DevshardRecord{
+		{EscrowID: "parked", Model: "model-a", RotationEpoch: 401, ChainEpoch: 400, Amount: 1000, SettlementPending: true},
+		{EscrowID: "deactivated", Model: "model-a", RotationEpoch: 401},
+		{EscrowID: "held", Model: "model-a", RotationEpoch: 401, ChainEpoch: 400, Amount: 1000},
+		{EscrowID: "fresh", Model: "model-a", RotationEpoch: 410},
+		{EscrowID: "serving", Model: "model-a", Active: true, RotationEpoch: 401, ChainEpoch: 400},
+		{EscrowID: "unlabelled", Model: "model-a"},
+	}
+	storeRows(testStore, rows)
+	configuration := config.Defaults()
+	calls := 0
+	narrator := &recordingLifecycleNarrator{}
+	manager := prunedCheckManager(t, testStore, &configuration, lookupAnswering(func(escrowID string) bool { return escrowID == "held" }, &calls), narrator)
+
+	checked, err := manager.markPrunedPastDeadline(context.Background(), pastDeadlineSnapshot, rows)
+
+	if err != nil {
+		t.Fatalf("markPrunedPastDeadline: %v", err)
+	}
+	var markedInMemory, markedInStore []string
+	for _, record := range checked {
+		if record.GoneFromChain {
+			markedInMemory = append(markedInMemory, record.EscrowID)
+		}
+		if testStore.devshards[record.EscrowID].GoneFromChain {
+			markedInStore = append(markedInStore, record.EscrowID)
+		}
+	}
+	want := []string{"parked", "deactivated"}
+	if len(checked) != len(rows) || !slices.Equal(markedInMemory, want) || !slices.Equal(markedInStore, want) {
+		t.Fatalf("rows %d, marked in memory %v, in the store %v, want %d rows and %v marked in both", len(checked), markedInMemory, markedInStore, len(rows), want)
+	}
+	if got := narrator.recorded(); !slices.Equal(got, []string{"gone from chain deactivated", "gone from chain parked"}) {
+		t.Fatalf("narrated %v, want each marked row once", got)
+	}
+}
+
+// Test flow:
+//  1. With settlement on, store a parked row past the deadline whose escrow the chain pruned.
+//  2. Check what the chain pruned.
+//  3. Assert the chain was not asked and the row is untouched: settlement owns it and drops it itself.
+func TestAParkedRowSettlementStillOwnsIsLeftToSettlement(t *testing.T) {
+	testStore := newFakeStore()
+	row := store.DevshardRecord{EscrowID: "parked", Model: "model-a", RotationEpoch: 401, ChainEpoch: 400, SettlementPending: true}
+	storeRows(testStore, []store.DevshardRecord{row})
+	configuration := config.Defaults()
+	configuration.Rotation.SettlementEnabled = true
+	calls := 0
+	manager := prunedCheckManager(t, testStore, &configuration, lookupAnswering(func(string) bool { return false }, &calls), nil)
+
+	checked, err := manager.markPrunedPastDeadline(context.Background(), pastDeadlineSnapshot, []store.DevshardRecord{row})
+
+	if err != nil || calls != 0 || checked[0].GoneFromChain || testStore.devshards["parked"].GoneFromChain {
+		t.Fatalf("error %v, lookups %d, row %+v, stored %+v, want no lookup and the row untouched", err, calls, checked[0], testStore.devshards["parked"])
+	}
+}
+
+// Test flow:
+//  1. Store a row out of service past the deadline whose settlement was confirmed but whose row was never dropped, and whose escrow the chain has since pruned.
+//  2. Check what the chain pruned.
+//  3. Assert the row is dropped, from the store and from the rows the tick goes on with, and not recorded as a loss.
+func TestASettledRowTheChainPrunedIsDroppedNotRecordedAsALoss(t *testing.T) {
+	testStore := newFakeStore()
+	row := store.DevshardRecord{EscrowID: "settled", Model: "model-a", RotationEpoch: 401, ChainEpoch: 400, SettleTxHash: "ABCDEF"}
+	storeRows(testStore, []store.DevshardRecord{row})
+	configuration := config.Defaults()
+	calls := 0
+	narrator := &recordingLifecycleNarrator{}
+	manager := prunedCheckManager(t, testStore, &configuration, lookupAnswering(func(string) bool { return false }, &calls), narrator)
+
+	checked, err := manager.markPrunedPastDeadline(context.Background(), pastDeadlineSnapshot, []store.DevshardRecord{row})
+
+	if _, stored := testStore.devshards["settled"]; err != nil || len(checked) != 0 || stored {
+		t.Fatalf("error %v, rows %+v, stored %v, want the row dropped", err, checked, stored)
+	}
+	if got := narrator.recorded(); slices.Contains(got, "gone from chain settled") {
+		t.Fatalf("narrated %v, want no loss recorded for a settled escrow", got)
+	}
+}
+
+// Test flow:
+//  1. Store a pruned row out of service past the deadline, once with a lookup that fails and once with a store that refuses the mark.
+//  2. Check what the chain pruned in each.
+//  3. Assert neither marks the row, in memory or in the store, and both report the failure.
+func TestAFailedLookupOrMarkLeavesTheRowAndIsReported(t *testing.T) {
+	row := store.DevshardRecord{EscrowID: "deactivated", Model: "model-a", RotationEpoch: 401, ChainEpoch: 400}
+	testCases := []struct {
+		name     string
+		lookup   *fakeTxClient
+		writeErr error
+	}{
+		{name: "lookup fails", lookup: &fakeTxClient{getEscrowFn: func(context.Context, string) (chain.EscrowInfo, bool, error) {
+			return chain.EscrowInfo{}, false, errors.New("chain unreachable")
+		}}},
+		{name: "mark fails", lookup: lookupAnswering(func(string) bool { return false }, new(int)), writeErr: errors.New("database is locked")},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			testStore := newFakeStore()
+			storeRows(testStore, []store.DevshardRecord{row})
+			testStore.setActiveErr = testCase.writeErr
+			configuration := config.Defaults()
+			manager := prunedCheckManager(t, testStore, &configuration, testCase.lookup, nil)
+
+			checked, err := manager.markPrunedPastDeadline(context.Background(), pastDeadlineSnapshot, []store.DevshardRecord{row})
+
+			if err == nil || checked[0].GoneFromChain || testStore.devshards["deactivated"].GoneFromChain {
+				t.Fatalf("error %v, row %+v, stored %+v, want the failure reported and the row unmarked", err, checked[0], testStore.devshards["deactivated"])
+			}
+		})
+	}
+}
+
+// Test flow:
+//  1. Store twenty rows out of service past the deadline that the chain still holds, ordered before four it has pruned.
+//  2. Check what the chain pruned on two ticks.
+//  3. Assert each tick asks the chain sixteen times, and the second reaches the four pruned rows and marks them: rows the chain still holds do not starve the rest.
+func TestRowsTheChainStillHoldsDoNotStarveThePrunedBehindThem(t *testing.T) {
+	testStore := newFakeStore()
+	rows := make([]store.DevshardRecord, 0, 24)
+	for index := range 24 {
+		rows = append(rows, store.DevshardRecord{EscrowID: fmt.Sprintf("%02d", index), Model: "model-a", RotationEpoch: 401, ChainEpoch: 400})
+	}
+	storeRows(testStore, rows)
+	configuration := config.Defaults()
+	calls := 0
+	manager := prunedCheckManager(t, testStore, &configuration, lookupAnswering(func(escrowID string) bool { return escrowID < "20" }, &calls), nil)
+
+	if _, err := manager.markPrunedPastDeadline(context.Background(), pastDeadlineSnapshot, rows); err != nil {
+		t.Fatalf("first tick: %v", err)
+	}
+	if calls != prunedChecksPerTick {
+		t.Fatalf("lookups on the first tick = %d, want %d", calls, prunedChecksPerTick)
+	}
+	checked, err := manager.markPrunedPastDeadline(context.Background(), pastDeadlineSnapshot, rows)
+	if err != nil {
+		t.Fatalf("second tick: %v", err)
+	}
+
+	var marked []string
+	for _, record := range checked {
+		if record.GoneFromChain {
+			marked = append(marked, record.EscrowID)
+		}
+	}
+	if calls != 2*prunedChecksPerTick || !slices.Equal(marked, []string{"20", "21", "22", "23"}) {
+		t.Fatalf("lookups after two ticks %d, marked %v, want %d and [20 21 22 23]", calls, marked, 2*prunedChecksPerTick)
 	}
 }

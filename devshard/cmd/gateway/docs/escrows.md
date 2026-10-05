@@ -49,7 +49,7 @@ stateDiagram-v2
 
 ## The tick
 
-`escrow/manager.go`, `tick`, every **15 s** (`TickInterval`), single-threaded per process. Order matters, and the first seven steps run **whatever `rotation.enabled` says**:
+`escrow/manager.go`, `tick`, every **15 s** (`TickInterval`), single-threaded per process. Order matters, and the first eight steps run **whatever `rotation.enabled` says**:
 
 | # | Step | Runs regardless of the toggle because |
 | --- | --- | --- |
@@ -58,20 +58,21 @@ stateDiagram-v2
 | 3 | `checkSettleMargin` | the margin the deadline rule uses is only worth what the measured block time says; the check narrates and never refuses, and runs first so a stale snapshot is projected with this tick's block time |
 | 4 | `parkAtDeadline` | an escrow whose chain settlement window is closing loses its whole amount unless something parks it (see "Settlement by deadline") |
 | 5 | `settlePending` | a parked escrow's row is the only record of its key; nothing else picks it up |
-| 6 | `checkMissing` | an escrow gone from chain must stop taking traffic |
-| 7 | `sweepTimeouts` | a nonce the chain still settles is owed a vote whether or not rotation is on |
+| 6 | `markPrunedPastDeadline` | a row nothing will settle would hold its place in the unsettled count for good; it is marked gone once the chain pruned it, up to sixteen lookups a tick, after the deadline is narrated and settlement had its turn |
+| 7 | `checkMissing` | an escrow gone from chain must stop taking traffic |
+| 8 | `sweepTimeouts` | a nonce the chain still settles is owed a vote whether or not rotation is on |
 
 Then the planned lifecycle (`escrow/planned_lifecycle.go`, `runPlannedLifecycle`):
 
-8. `promoteTakenReserves`: a reserve a request took is already a regular in routing; its row follows before the planner reads the model.
-9. `markSpent`: a serving escrow routing would retire is marked through `OnBalanceExhausted` whether or not a request reached it (`escrow/depletion.go`).
-10. `drainPlannedMarks`: a nonce-cap mark retires its escrow; a balance mark is dropped and counted (see "Depletion").
-11. `prepareBridge` inside the pre-PoC window, or `retireSurplusReserves` outside it while requests are not blocked: rotation proper, skipped when the toggle is off, no model parses, or the snapshot carries no epoch yet.
-12. `planFunding`: the funding planner reads the rows, decides, narrates, counts and executes the decision (`applyPlan`; `escrow/planner.go`, see [`escrow/README.md`](../escrow/README.md), "The funding planner").
+9. `promoteTakenReserves`: a reserve a request took is already a regular in routing; its row follows before the planner reads the model.
+10. `markSpent`: a serving escrow routing would retire is marked through `OnBalanceExhausted` whether or not a request reached it (`escrow/depletion.go`).
+11. `drainPlannedMarks`: a nonce-cap mark retires its escrow; a balance mark is dropped and counted (see "Depletion").
+12. `prepareBridge` inside the pre-PoC window, or `retireSurplusReserves` outside it while requests are not blocked: rotation proper, skipped when the toggle is off, no model parses, or the snapshot carries no epoch yet.
+13. `planFunding`: the funding planner reads the rows, decides, narrates, counts and executes the decision (`applyPlan`; `escrow/planner.go`, see [`escrow/README.md`](../escrow/README.md), "The funding planner").
 
 A taken reserve also wakes the tick at once rather than at the next 15 s (`escrow/reserve.go`, `OnReserveTaken`).
 
-Steps 1–11 return their errors into an `errors.Join`; one failing model or escrow never stops the others. Step 12 returns only what executing a plan failed at: a failed read is narrated as `FundingPlanFailed` and never fails the tick. `Stop()` cancels the context and waits for the tick in flight, so shutdown never races a half-finished rotation.
+Steps 1–12 return their errors into an `errors.Join`; one failing model or escrow never stops the others. Step 13 returns only what executing a plan failed at: a failed read is narrated as `FundingPlanFailed` and never fails the tick. `Stop()` cancels the context and waits for the tick in flight, so shutdown never races a half-finished rotation.
 
 `sweepTimeouts` is the one step that does not run *on* the tick. A vote round can outlast 15 s, so it runs in its own goroutine and a second tick starts nothing while the first is still voting; `Stop()` waits for it as well. Its whole cost is bounded by `timeout_sweep.budget_per_tick` across every escrow, and the walk starts one escrow further along each tick so a backlog on one cannot starve the rest. It votes only on an escrow whose session is active, and steps over one a `Finalize` is running on instead of waiting for it: `sessionHandle.SweepExecutionTimeouts` takes the same per-escrow lock `Finalize` holds with `TryLock` and checks the phase again under it (`registry/session.go`, `registry/timeout_sweep.go`), so a stalled finalize never gets an extra diff from the sweep. Each escrow is held while it is swept so a retirement cannot close the session mid-vote, and the escrow reports `IsBusy` meanwhile so a settlement defers instead of blocking the tick on `Finalize`; the hold is not a request, though, so it never counts in `ActiveUsers` and never moves the escrow's load score (`registry/views.go`, `Registry.holdForSweep`). `devshard_gateway_timeout_sweep_total` counts what each tick applied and failed to apply, which together are what it found unless shutdown cut the round short; a tick that found nothing moves no series. See [`race.md`](./race.md), "The swept vote and the retried vote".
 
@@ -145,7 +146,7 @@ The funding planner always runs and always executes: on every tick it reads each
 
 ## Gone from chain
 
-`checker.go`. A host reporting an escrow absent only *marks* it; `TriggerEscrowCheck` confirms with the chain on the next tick. Only a confirmed not-found deactivates: a lookup error and a found escrow both leave it serving. **Ambiguity is never a reason to deactivate.** Routing stops before the row is written, so a confirmed-absent escrow takes no further request even if the write fails. A confirmed absence also marks the row `gone_from_chain`, which takes it out of the `max_unsettled` count, out of the planner's parking and out of `settlePending`, even with `settlement_pending` still set: a gone escrow has nothing left to settle. Reactivating a row (`Activate`, or a re-registration with `active = 1`) clears the mark in the same write, so a row put back by hand and later parked counts and settles again (`store/devshards.go`, `SetDevshardActive`; `escrow/budget.go`, `goneFromChain`).
+`checker.go`. A host reporting an escrow absent only *marks* it; `TriggerEscrowCheck` confirms with the chain on the next tick. Only a confirmed not-found deactivates: a lookup error and a found escrow both leave it serving. **Ambiguity is never a reason to deactivate.** Routing stops before the row is written, so a confirmed-absent escrow takes no further request even if the write fails. A confirmed absence also marks the row `gone_from_chain`, which takes it out of the `max_unsettled` count, out of the planner's parking and out of `settlePending`, even with `settlement_pending` still set: a gone escrow has nothing left to settle. Reactivating a row (`Activate`, or a re-registration with `active = 1`) clears the mark in the same write, so a row put back by hand and later parked counts and settles again (`store/devshards.go`, `SetDevshardActive`; `escrow/budget.go`, `goneFromChain`). A row already out of service needs no host report: once its settle deadline has passed and the chain answers it no longer holds the escrow, the tick marks it the same way (`escrow/deadline.go`, `markPrunedPastDeadline`; [`escrow/README.md`](../escrow/README.md), "Settlement by deadline").
 
 ## Settlement and retirement
 
@@ -195,7 +196,7 @@ At effective E+1 the escrow must settle before the switch into E+2, the snapshot
 - a serving, starved, held or standby-reserve row whose model settles is parked and narrated `escrow parked at its settlement deadline`; `settlePending` settles it;
 - a row whose model has settlement off is narrated `escrow deadline passes unsettled` with reason `settlement_disabled` and left alone: the toggle wins;
 - an operator-deactivated row (inactive, not parked, no settle hash) is narrated with reason `operator_deactivated`, or `key_missing` when the environment cannot resolve its key, and never settled automatically;
-- a row gone from chain is skipped; a passed deadline is narrated with reason `deadline_passed`, and `settlePending` finds the escrow pruned and drops the row.
+- a row gone from chain is skipped; a passed deadline is narrated with reason `deadline_passed`. Once the chain has pruned the escrow, a parked row with settlement on is dropped by `settlePending`, and any other row out of service is marked gone from chain by `markPrunedPastDeadline`, which keeps it as the record of the loss.
 
 Each reason is narrated once per row while it lasts. A settle that never commits is rebroadcast once its TTL passes, which is why the margin should cover two settle windows. The tick checks that against the block time it measures over at least 100 blocks (`escrow/settle_margin.go`): a margin shorter than two settle windows at that pace is journalled `settle margin shorter than two settle windows`, once per episode, and nothing is refused. A snapshot older than `chain_snapshot_max_age_seconds` is read at a projected height (its height plus its age over that block time, or over one second when none is measured or it measures under a second), so a frozen snapshot reads a deadline early; the episode is journalled `escrow deadlines read past a stale chain height` once. See [`escrow/README.md`](../escrow/README.md), "Settlement by deadline".
 

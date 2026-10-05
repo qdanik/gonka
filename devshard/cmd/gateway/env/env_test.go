@@ -127,6 +127,7 @@ func TestADevshardctlValueDevshardctlIgnoredIsIgnoredNotRefused(t *testing.T) {
 		"DEVSHARD_ESCROW_ROTATION_PRE_POC_BLOCKS":          "-300",
 		"GATEWAY_MAX_CONCURRENT_REQUESTS":                  "lots",
 		"DEVSHARD_MAX_CONCURRENT_RUNTIME_BUILDS":           "0",
+		"DEVSHARD_SESSION_RETENTION_EPOCHS":                "-1",
 	} {
 		t.Setenv(name, value)
 	}
@@ -153,6 +154,7 @@ func TestADevshardctlValueDevshardctlIgnoredIsIgnoredNotRefused(t *testing.T) {
 		"RotationPrePoCBlocks":                values.RotationPrePoCBlocks != nil,
 		"MaxConcurrentRequests":               values.MaxConcurrentRequests != nil,
 		"MaxConcurrentRuntimeBuilds":          values.MaxConcurrentRuntimeBuilds != nil,
+		"SessionRetentionEpochs":              values.SessionRetentionEpochs != nil,
 	} {
 		if isSet {
 			t.Errorf("%s is set, want unset so the default applies", name)

@@ -47,6 +47,9 @@ func (c *Config) Validate() error {
 	if c.Server.MaxConcurrentRuntimeBuilds < 1 {
 		complain("max_concurrent_runtime_builds: %d must be >= 1", c.Server.MaxConcurrentRuntimeBuilds)
 	}
+	if c.Server.SessionRetentionEpochs < 0 {
+		complain("session_retention_epochs: %d must be >= 0", c.Server.SessionRetentionEpochs)
+	}
 	checkBaseURL := func(name, value string) {
 		parsed, err := url.Parse(value)
 		if err != nil || parsed.Scheme == "" || parsed.Host == "" {

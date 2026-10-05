@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -319,6 +320,46 @@ func TestOpenUpgradesExistingV1Database(t *testing.T) {
 	}
 	if len(commitments) != 1 || !commitments[0].CreatedAt.Equal(created) {
 		t.Fatalf("v2 table unusable after upgrade: %+v", commitments)
+	}
+}
+
+// Test flow:
+//  1. Seed a database the build before the funding planner wrote: the first seven migrations, then its own
+//     eighth, `on_hold`, where `chain_epoch` stands now, recorded as version 8, with one devshard row.
+//  2. Open the store against that file.
+//  3. Assert the rows list: `chain_epoch`, skipped by its version number, was added anyway.
+func TestOpenAddsAColumnWhoseVersionAnEarlierBuildSpentOnAnother(t *testing.T) {
+	dir := t.TempDir()
+	seed, err := sql.Open("sqlite", filepath.Join(dir, gatewayDatabaseFileName))
+	if err != nil {
+		t.Fatalf("opening seed db: %v", err)
+	}
+	statements := slices.Concat([]string{`CREATE TABLE schema_version (version INTEGER NOT NULL)`}, migrations[:7], []string{
+		`ALTER TABLE devshards ADD COLUMN on_hold INTEGER NOT NULL DEFAULT 0`,
+		`INSERT INTO schema_version (version) VALUES (1), (2), (3), (4), (5), (6), (7), (8)`,
+		`INSERT INTO devshards (escrow_id, model) VALUES ('held-1', 'm')`,
+	})
+	for _, statement := range statements {
+		if _, err := seed.Exec(statement); err != nil {
+			t.Fatalf("seeding the pre-planner db with %q: %v", statement, err)
+		}
+	}
+	if err := seed.Close(); err != nil {
+		t.Fatalf("closing seed db: %v", err)
+	}
+
+	upgraded, err := Open(dir)
+	if err != nil {
+		t.Fatalf("Open() upgrading the pre-planner db: %v", err)
+	}
+	t.Cleanup(func() { upgraded.Close() })
+
+	devshards, err := upgraded.ListDevshards(context.Background())
+	if err != nil {
+		t.Fatalf("ListDevshards() after upgrade: %v", err)
+	}
+	if len(devshards) != 1 || devshards[0].EscrowID != "held-1" || devshards[0].ChainEpoch != 0 {
+		t.Fatalf("devshards after upgrade = %+v, want held-1 with chain_epoch 0", devshards)
 	}
 }
 

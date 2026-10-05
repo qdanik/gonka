@@ -41,6 +41,7 @@ type Manager struct {
 	funds            FundingReader
 	chainFacts       escrowLookup
 	chainFactsAfter  string
+	prunedCheckAfter string
 	settlements      inFlightSet
 	checks           inFlightSet
 

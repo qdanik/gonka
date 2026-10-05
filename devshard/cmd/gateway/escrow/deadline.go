@@ -3,6 +3,7 @@ package escrow
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math"
 	"slices"
 
@@ -120,4 +121,74 @@ func (m *Manager) deactivationReason(record store.DevshardRecord) deadlineUnsett
 		return deadlineKeyMissing
 	}
 	return deadlineOperatorDeactivated
+}
+
+// prunedChecksPerTick bounds the chain lookups markPrunedPastDeadline makes in one tick.
+const prunedChecksPerTick = 16
+
+type prunedCheck int
+
+const (
+	prunedCheckKept prunedCheck = iota
+	prunedCheckMarkedGone
+	prunedCheckDropped
+)
+
+// markPrunedPastDeadline records what settlement will never pick up: a row out of service past its deadline whose escrow the chain has pruned. See README.md, "Settlement by deadline".
+func (m *Manager) markPrunedPastDeadline(ctx context.Context, snapshot chain.PhaseSnapshot, devshards []store.DevshardRecord) ([]store.DevshardRecord, error) {
+	if m.chainFacts == nil {
+		return devshards, nil
+	}
+	policy := newSettlementPolicy(m.config.Load().Rotation)
+	checked := slices.Clone(devshards)
+	candidates := make([]int, 0, len(checked))
+	for index, record := range checked {
+		settlementOwnsIt := record.SettlementPending && policy.enabled(record.Model)
+		if record.Active || goneFromChain(record) || settlementOwnsIt || !deadlineAt(record, snapshot, 0).passed {
+			continue
+		}
+		candidates = append(candidates, index)
+	}
+	escrowIDAt := func(index int) string { return checked[index].EscrowID }
+	dropped := make(map[string]bool)
+	var errs []error
+	for _, index := range nextInTurn(candidates, escrowIDAt, m.prunedCheckAfter, prunedChecksPerTick) {
+		m.prunedCheckAfter = escrowIDAt(index)
+		outcome, err := m.checkPruned(ctx, checked[index])
+		switch {
+		case err != nil:
+			errs = append(errs, err)
+		case outcome == prunedCheckMarkedGone:
+			checked[index].GoneFromChain = true
+		case outcome == prunedCheckDropped:
+			dropped[escrowIDAt(index)] = true
+		}
+	}
+	return slices.DeleteFunc(checked, func(record store.DevshardRecord) bool { return dropped[record.EscrowID] }), errors.Join(errs...)
+}
+
+// checkPruned drops a row whose settlement was confirmed, as settlement would have, and records any other as a loss.
+func (m *Manager) checkPruned(ctx context.Context, record store.DevshardRecord) (prunedCheck, error) {
+	_, found, err := m.chainFacts.GetEscrow(ctx, record.EscrowID)
+	switch {
+	case err != nil:
+		return prunedCheckKept, fmt.Errorf("checking escrow %s past its deadline: %w", record.EscrowID, err)
+	case found:
+		return prunedCheckKept, nil
+	case record.SettleTxHash != "" && !record.SettlementPending:
+		if err := m.deleteSettled(ctx, record.EscrowID); err != nil {
+			return prunedCheckKept, err
+		}
+		return prunedCheckDropped, nil
+	}
+	if err := m.settlementSource.Retire(record.EscrowID); err != nil {
+		return prunedCheckKept, fmt.Errorf("retiring escrow %s from routing: %w", record.EscrowID, err)
+	}
+	if err := m.store.WithRetry(ctx, func() error { return m.store.MarkDevshardGoneFromChain(ctx, record.EscrowID) }); err != nil {
+		return prunedCheckKept, fmt.Errorf("marking escrow %s gone from chain: %w", record.EscrowID, err)
+	}
+	if m.narrator != nil {
+		m.narrator.EscrowGoneFromChain(record.EscrowID)
+	}
+	return prunedCheckMarkedGone, nil
 }

@@ -13,6 +13,7 @@ func Defaults() Config {
 		Server: Server{
 			Port:                       8080,
 			MaxConcurrentRuntimeBuilds: 16,
+			SessionRetentionEpochs:     2,
 		},
 		Chain: Chain{
 			GRPCEndpoint:          "localhost:9090",

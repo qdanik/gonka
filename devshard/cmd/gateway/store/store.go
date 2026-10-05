@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sync"
 	"time"
 
@@ -109,6 +110,9 @@ var (
 	legacyOnlyTables = []string{"gateway_settings", "gateway_devshards", "gateway_suspicious_hosts", "participant_throttle_state"}
 )
 
+// addColumnMigration matches a migration that only adds a column, which Open re-applies by name. See README.md, "Opening the database".
+var addColumnMigration = regexp.MustCompile(`^ALTER TABLE (\w+) ADD COLUMN (\w+) `)
+
 // connectionPragmas is appended to the database path so every connection opens with them applied.
 const connectionPragmas = "?_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=busy_timeout(5000)"
 
@@ -179,7 +183,7 @@ func migrate(db *sql.DB) error {
 		if err != nil {
 			return fmt.Errorf("beginning migration %d: %w", index+1, err)
 		}
-		if _, err := transaction.Exec(migrations[index]); err != nil {
+		if err := applyMigration(transaction, migrations[index]); err != nil {
 			transaction.Rollback()
 			return fmt.Errorf("applying migration %d: %w", index+1, err)
 		}
@@ -191,7 +195,35 @@ func migrate(db *sql.DB) error {
 			return fmt.Errorf("committing migration %d: %w", index+1, err)
 		}
 	}
+	for index, statement := range migrations[:min(currentVersion, len(migrations))] {
+		if !addColumnMigration.MatchString(statement) {
+			continue
+		}
+		if err := applyMigration(db, statement); err != nil {
+			return fmt.Errorf("re-applying migration %d: %w", index+1, err)
+		}
+	}
 	return nil
+}
+
+type statementExecutor interface {
+	Exec(query string, args ...any) (sql.Result, error)
+	QueryRow(query string, args ...any) *sql.Row
+}
+
+// applyMigration skips a column that is already there, so a version an earlier build spent on another statement cannot hide one.
+func applyMigration(executor statementExecutor, statement string) error {
+	if match := addColumnMigration.FindStringSubmatch(statement); match != nil {
+		var present bool
+		if err := executor.QueryRow(`SELECT COUNT(*) > 0 FROM pragma_table_info(?) WHERE name = ?`, match[1], match[2]).Scan(&present); err != nil {
+			return fmt.Errorf("inspecting column %s.%s: %w", match[1], match[2], err)
+		}
+		if present {
+			return nil
+		}
+	}
+	_, err := executor.Exec(statement)
+	return err
 }
 
 // Close drains the accounting ledger first, so no queued row outlives the connection it needs.

@@ -146,6 +146,8 @@ const (
 	MarginBlocks    = "margin_blocks"
 	BlockTimeMS     = "block_time_ms"
 	SettleWindowsMS = "settle_windows_ms"
+	Configured      = "configured"
+	Removed         = "removed"
 )
 
 // Process and transport.

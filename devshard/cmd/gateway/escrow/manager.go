@@ -166,6 +166,7 @@ func (m *Manager) runLifecycle(ctx context.Context) error {
 	devshards, deadlineErr := m.parkAtDeadline(ctx, deadlineSnapshot, devshards)
 	// Parked escrows must settle whatever the rotation toggle says: nothing else will ever pick them up.
 	pendingErr := m.settlePending(ctx, deadlineSnapshot, devshards)
+	devshards, prunedErr := m.markPrunedPastDeadline(ctx, snapshot, devshards)
 	// An escrow gone from chain must stop taking traffic whatever the rotation toggle says.
 	missingErr := m.checkMissing(ctx)
 	m.sweepTimeouts(ctx)
@@ -173,7 +174,7 @@ func (m *Manager) runLifecycle(ctx context.Context) error {
 	configuration := m.config.Load()
 	models, modelsErr := rotationModels(configuration.Rotation)
 	plannedErr := m.runPlannedLifecycle(ctx, snapshot, models, devshards, configuration.Rotation)
-	return errors.Join(reconcileErr, deadlineErr, pendingErr, missingErr, modelsErr, plannedErr)
+	return errors.Join(reconcileErr, deadlineErr, pendingErr, prunedErr, missingErr, modelsErr, plannedErr)
 }
 
 // rotationModels is empty when rotation is off, so no caller downstream has to re-read the toggle.

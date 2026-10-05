@@ -28,21 +28,29 @@ func (m *Manager) resolveChainFacts(ctx context.Context, devshards []store.Devsh
 		return resolved
 	}
 	escrowIDAt := func(index int) string { return resolved[index].EscrowID }
-	slices.SortFunc(unresolved, func(left, right int) int { return strings.Compare(escrowIDAt(left), escrowIDAt(right)) })
-	start, _ := slices.BinarySearchFunc(unresolved, m.chainFactsAfter, func(index int, after string) int {
-		if escrowIDAt(index) <= after {
-			return -1
-		}
-		return 1
-	})
-	for offset := range min(chainFactsPerTick, len(unresolved)) {
-		index := unresolved[(start+offset)%len(unresolved)]
+	for _, index := range nextInTurn(unresolved, escrowIDAt, m.chainFactsAfter, chainFactsPerTick) {
 		m.chainFactsAfter = escrowIDAt(index)
 		if chainEpoch, amount, read := m.readChainFacts(ctx, escrowIDAt(index)); read {
 			resolved[index].ChainEpoch, resolved[index].Amount = chainEpoch, amount
 		}
 	}
 	return resolved
+}
+
+// nextInTurn takes up to budget candidates in escrow-id order after the one the previous walk stopped at, wrapping round, so a candidate that never clears cannot starve the rest.
+func nextInTurn(candidates []int, escrowIDAt func(int) string, after string, budget int) []int {
+	slices.SortFunc(candidates, func(left, right int) int { return strings.Compare(escrowIDAt(left), escrowIDAt(right)) })
+	start, _ := slices.BinarySearchFunc(candidates, after, func(index int, after string) int {
+		if escrowIDAt(index) <= after {
+			return -1
+		}
+		return 1
+	})
+	turn := make([]int, 0, min(budget, len(candidates)))
+	for offset := range min(budget, len(candidates)) {
+		turn = append(turn, candidates[(start+offset)%len(candidates)])
+	}
+	return turn
 }
 
 func (m *Manager) readChainFacts(ctx context.Context, escrowID string) (chainEpoch, amount uint64, read bool) {
