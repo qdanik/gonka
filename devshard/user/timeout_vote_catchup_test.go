@@ -23,6 +23,7 @@ func sessionHoldingDiffs(upToNonce uint64, cursors map[int]uint64) *Session {
 		diffs:         diffs,
 		hostSyncNonce: cursors,
 		group:         make([]types.SlotAssignment, len(cursors)),
+		clients:       make([]HostClient, len(cursors)),
 	}
 }
 
@@ -30,9 +31,9 @@ func sessionHoldingDiffs(upToNonce uint64, cursors map[int]uint64) *Session {
 func TestAVoteCarriesOnlyWhatEachVerifierIsMissing(t *testing.T) {
 	session := sessionHoldingDiffs(100, map[int]uint64{0: 98, 1: 40, 2: 100})
 
-	twoBehind := session.catchUpDiffsForVerifier(0)
-	sixtyBehind := session.catchUpDiffsForVerifier(1)
-	caughtUp := session.catchUpDiffsForVerifier(2)
+	twoBehind := session.catchUpDiffsForVerifier(t.Context(), 0)
+	sixtyBehind := session.catchUpDiffsForVerifier(t.Context(), 1)
+	caughtUp := session.catchUpDiffsForVerifier(t.Context(), 2)
 
 	require.Len(t, twoBehind, 2, "a verifier two diffs behind gets two")
 	require.Equal(t, uint64(99), twoBehind[0].Nonce)
@@ -45,7 +46,7 @@ func TestAVoteCarriesOnlyWhatEachVerifierIsMissing(t *testing.T) {
 func TestAVerifierWithNoCursorIsOwedTheWholeLog(t *testing.T) {
 	session := sessionHoldingDiffs(5, map[int]uint64{0: 0})
 
-	catchUp := session.catchUpDiffsForVerifier(0)
+	catchUp := session.catchUpDiffsForVerifier(t.Context(), 0)
 
 	require.Len(t, catchUp, 5)
 	require.Equal(t, uint64(1), catchUp[0].Nonce)

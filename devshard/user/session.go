@@ -77,6 +77,12 @@ var VerifyTimeoutSlowLog = 15 * time.Second
 // timeout_vote_queue_expired. The count is still exact.
 const inflightSnapshotLimit = 8
 
+// defaultDiffsKeptInMemory is how many of the newest diffs a stored session keeps in s.diffs.
+const defaultDiffsKeptInMemory = 1024
+
+// diffPageSize is how many diffs one store read takes, for recovery and for a host caught up from the store.
+var diffPageSize uint64 = 1024
+
 // nonceOutcome tracks protocol-relevant facts observed for a single inference nonce.
 type nonceOutcome struct {
 	confirmedAt int64
@@ -250,9 +256,13 @@ type Session struct {
 	participantKeys []string
 	clients         []HostClient
 	nonce           uint64
-	diffs           []types.Diff        // append-only log
+	diffs           []types.Diff        // newest diffs; a stored session reads older ones from the store
 	hostSyncNonce   map[int]uint64      // hostIdx -> last nonce sent
 	pendingTxs      []*types.DevshardTx // from host mempools, for next diff
+	// diffsKeptInMemory is what s.diffs is trimmed back to once twice as many diffs accumulate.
+	diffsKeptInMemory int
+	// storedCatchUpLocks lets one goroutine at a time catch a host up from the store.
+	storedCatchUpLocks []sync.Mutex
 	// pendingTxKeys dedups the current pendingTxs slice by tx_type:id. It is
 	// rebuilt from what compose retained, so a tx that failed to apply frees
 	// its key again -- otherwise the first host to propose a bogus tx would
@@ -305,6 +315,9 @@ type Session struct {
 	// open turn. The heartbeat cadence is wall clock, so the producer does not
 	// wait for a block tick to collect acks.
 	heartbeatFlushLeft int
+	// heartbeatSendFailures and heartbeatRetryAt back a host off heartbeat sends while it keeps failing.
+	heartbeatSendFailures []int
+	heartbeatRetryAt      []time.Time
 	// clock drives the heartbeat cadence and is injectable for tests. It is
 	// never written into Diff: turn records stay clock-free.
 	clock func() time.Time
@@ -519,6 +532,10 @@ func NewSession(
 	cfg := sess.heartbeat.Config()
 	sess.turnTracker = heightsync.NewTurnTracker(slots, 0, cfg)
 	sess.lastContact = make([]time.Time, len(group))
+	sess.diffsKeptInMemory = defaultDiffsKeptInMemory
+	sess.storedCatchUpLocks = make([]sync.Mutex, len(group))
+	sess.heartbeatSendFailures = make([]int, len(group))
+	sess.heartbeatRetryAt = make([]time.Time, len(group))
 	sess.lastPeerSeen = make(map[uint32][]byte)
 	sess.lastSyncState = make(map[uint32]string)
 	sess.anchors = heightsync.NewAnchorTally(cfg.AckDeadlineBlocks, 0)
@@ -545,8 +562,8 @@ func txPriority(tx *types.DevshardTx) int {
 	}
 }
 
-// diffsForHost returns catch-up diffs for a host (from its last sync nonce to current).
-// Caller must hold s.mu.
+// diffsForHost returns the diffs s.diffs holds past a host's sync cursor. A cursor behind s.diffs
+// (storedGapLocked) is closed through closeStoredGap first. Caller must hold s.mu.
 func (s *Session) diffsForHost(hostIdx int) []types.Diff {
 	lastSent := s.hostSyncNonce[hostIdx]
 	var result []types.Diff
@@ -556,6 +573,115 @@ func (s *Session) diffsForHost(hostIdx int) []types.Diff {
 		}
 	}
 	return result
+}
+
+// storedGapLocked reports the nonces a host still needs that only the store holds. Caller must hold s.mu.
+func (s *Session) storedGapLocked(hostIdx int) (fromNonce, toNonce uint64, hasGap bool) {
+	if s.store == nil {
+		return 0, 0, false
+	}
+	firstInMemory := s.nonce + 1
+	if len(s.diffs) > 0 {
+		firstInMemory = s.diffs[0].Nonce
+	}
+	nextNonce := s.hostSyncNonce[hostIdx] + 1
+	if nextNonce >= firstInMemory {
+		return 0, 0, false
+	}
+	return nextNonce, firstInMemory - 1, true
+}
+
+// trimDiffsLocked keeps the newest diffsKeptInMemory diffs of a stored session; the rest stay in the store.
+func (s *Session) trimDiffsLocked() {
+	if s.store == nil || s.diffsKeptInMemory <= 0 || len(s.diffs) < 2*s.diffsKeptInMemory {
+		return
+	}
+	s.diffs = append([]types.Diff(nil), s.diffs[len(s.diffs)-s.diffsKeptInMemory:]...)
+}
+
+// readStoredDiffs reads fromNonce..toNonce from the store and checks the range is whole. Never under s.mu.
+func (s *Session) readStoredDiffs(fromNonce, toNonce uint64) ([]types.Diff, error) {
+	records, err := s.store.GetDiffs(s.escrowID, fromNonce, toNonce)
+	if err == nil {
+		err = validateDiffRange(records, fromNonce, toNonce)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read stored diffs %d..%d: %w", fromNonce, toNonce, err)
+	}
+	diffs := make([]types.Diff, 0, len(records))
+	for _, record := range records {
+		diffs = append(diffs, record.Diff)
+	}
+	return diffs, nil
+}
+
+// closeStoredGap sends a host the diffs older than s.diffs that it has not applied, one store page at a
+// time read outside s.mu and cut into wire-bounded chunks by sendCatchUpChunks. It returns nil once the
+// host's cursor reaches s.diffs, and an error, with nothing half-sent, when a read or a chunk fails.
+func (s *Session) closeStoredGap(ctx context.Context, hostIdx int, client HostClient) error {
+	s.mu.Lock()
+	_, _, hasGap := s.storedGapLocked(hostIdx)
+	s.mu.Unlock()
+	if !hasGap {
+		return nil
+	}
+	s.storedCatchUpLocks[hostIdx].Lock()
+	defer s.storedCatchUpLocks[hostIdx].Unlock()
+	for {
+		s.mu.Lock()
+		fromNonce, toNonce, hasGap := s.storedGapLocked(hostIdx)
+		s.mu.Unlock()
+		if !hasGap {
+			return nil
+		}
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("catch up host %d from the store: %w", hostIdx, err)
+		}
+		pageTo := min(toNonce, fromNonce+diffPageSize-1)
+		page, err := s.readStoredDiffs(fromNonce, pageTo)
+		if err != nil {
+			logging.Error("catch_up_store_read_failed", "subsystem", "session", "escrow", s.escrowID,
+				"host", hostIdx, "from", fromNonce, "to", pageTo, "error", err)
+			return fmt.Errorf("catch up host %d from the store: %w", hostIdx, err)
+		}
+		if err := s.sendCatchUpChunks(ctx, hostIdx, client, page); err != nil {
+			return err
+		}
+		s.mu.Lock()
+		cursor := s.hostSyncNonce[hostIdx]
+		s.mu.Unlock()
+		if cursor < pageTo {
+			return fmt.Errorf("catch up host %d from the store: cursor %d short of %d", hostIdx, cursor, pageTo)
+		}
+	}
+}
+
+// catchUpForRequest returns the catch-up a request carrying targetNonce to a host may hold inline, ending
+// at targetNonce unless it is 0. A cursor behind s.diffs is first closed from the store, and a backlog
+// past inlineCatchUpMaxBytes is drained by chunks, so the request carries at most the in-memory tail.
+func (s *Session) catchUpForRequest(ctx context.Context, hostIdx int, client HostClient, targetNonce uint64) ([]types.Diff, error) {
+	for {
+		if err := s.closeStoredGap(ctx, hostIdx, client); err != nil {
+			return nil, err
+		}
+		s.mu.Lock()
+		_, _, hasGap := s.storedGapLocked(hostIdx)
+		catchUp := s.diffsForHost(hostIdx)
+		s.mu.Unlock()
+		if hasGap {
+			continue
+		}
+		catchUp = s.drainOversizedBacklog(ctx, hostIdx, client, diffsThrough(catchUp, targetNonce), targetNonce)
+		return diffsThrough(catchUp, targetNonce), nil
+	}
+}
+
+// diffsThrough drops the diffs past lastNonce, which a concurrent compose added after the request's own; 0 keeps all.
+func diffsThrough(diffs []types.Diff, lastNonce uint64) []types.Diff {
+	if lastNonce == 0 {
+		return diffs
+	}
+	return slices.DeleteFunc(diffs, func(diff types.Diff) bool { return diff.Nonce > lastNonce })
 }
 
 // validateCatchUp warns if the catch-up diffs for a host are non-contiguous
@@ -612,12 +738,11 @@ func (s *Session) validateCatchUp(diffs []types.Diff, targetNonce uint64, hostId
 }
 
 // postStateRootForNonce returns the persisted post-state root for the given
-// nonce when it is present in s.diffs. Recovery may intentionally keep only a
-// contiguous suffix of diffs (for stranded-host catch-up), so callers must not
-// assume s.diffs is indexed from nonce 1.
+// nonce from s.diffs, or from the store for a nonce older than s.diffs holds.
+// s.diffs is a contiguous suffix, so callers must not assume it is indexed from nonce 1.
 func (s *Session) postStateRootForNonce(nonce uint64) ([]byte, bool) {
 	if len(s.diffs) == 0 {
-		return nil, false
+		return s.storedPostStateRoot(nonce)
 	}
 	firstNonce := s.diffs[0].Nonce
 	if nonce >= firstNonce {
@@ -634,6 +759,36 @@ func (s *Session) postStateRootForNonce(nonce uint64) ([]byte, bool) {
 			return diff.PostStateRoot, true
 		}
 	}
+	if nonce < firstNonce {
+		return s.storedPostStateRoot(nonce)
+	}
+	return nil, false
+}
+
+// storedPostStateRoot reads one nonce's post-state root from the store: a single-row read, the only
+// store read made under s.mu, for a response to a nonce s.diffs no longer holds.
+func (s *Session) storedPostStateRoot(nonce uint64) ([]byte, bool) {
+	if s.store == nil || nonce == 0 || nonce >= s.nonce {
+		return nil, false
+	}
+	records, err := s.store.GetDiffs(s.escrowID, nonce, nonce)
+	if err == nil && len(records) == 1 && records[0].Nonce == nonce {
+		return records[0].PostStateRoot, true
+	}
+	logging.Error("state_root_store_read_failed", "subsystem", "session", "escrow", s.escrowID,
+		"nonce", nonce, "records", len(records), "error", err)
+	return nil, false
+}
+
+// postStateRootInDiffs finds nonce's post-state root in diffs a request just carried.
+func postStateRootInDiffs(diffs []types.Diff, nonce uint64) ([]byte, bool) {
+	if len(diffs) == 0 || nonce < diffs[0].Nonce {
+		return nil, false
+	}
+	offset := nonce - diffs[0].Nonce
+	if offset < uint64(len(diffs)) && diffs[offset].Nonce == nonce {
+		return diffs[offset].PostStateRoot, true
+	}
 	return nil, false
 }
 
@@ -642,6 +797,12 @@ func (s *Session) postStateRootForNonce(nonce uint64) ([]byte, bool) {
 // resp.Nonce may differ when the host has already advanced past inferenceNonce.
 // Caller must hold s.mu.
 func (s *Session) processResponse(hostIdx int, resp *host.HostResponse, inferenceNonce uint64) error {
+	return s.processResponseAfterDiffs(hostIdx, resp, inferenceNonce, nil)
+}
+
+// processResponseAfterDiffs is processResponse for a response to a request that carried sent, which
+// answers the state root of a nonce s.diffs no longer holds without a store read. Caller must hold s.mu.
+func (s *Session) processResponseAfterDiffs(hostIdx int, resp *host.HostResponse, inferenceNonce uint64, sent []types.Diff) error {
 	if resp == nil {
 		return ErrNilHostResponse
 	}
@@ -649,7 +810,9 @@ func (s *Session) processResponse(hostIdx int, resp *host.HostResponse, inferenc
 	// verification succeeds so a bad hash cannot inflate monitoring.
 	if len(resp.StateHash) > 0 {
 		var expected []byte
-		if root, ok := s.postStateRootForNonce(resp.Nonce); ok {
+		if root, ok := postStateRootInDiffs(sent, resp.Nonce); ok {
+			expected = root
+		} else if root, ok := s.postStateRootForNonce(resp.Nonce); ok {
 			expected = root
 		} else if resp.Nonce == s.nonce {
 			// Finalize/recovery path: the nonce is beyond the diffs array
@@ -766,6 +929,8 @@ type PreparedInference struct {
 	catchUp []types.Diff
 	params  InferenceParams
 	isProbe bool
+	// needsStoredCatchUp marks a host whose cursor is behind s.diffs: SendOnly closes that gap first.
+	needsStoredCatchUp bool
 }
 
 // HostBinding describes the host slot that the next nonce will be
@@ -847,6 +1012,7 @@ func (s *Session) composeDiffLockedInclude(extraTxs []*types.DevshardTx, include
 			return types.Diff{}, 0, fmt.Errorf("commit diff nonce %d: state advanced concurrently", nonce)
 		}
 		s.diffs = append(s.diffs, diff)
+		s.trimDiffsLocked()
 		s.nonce = nonce
 		s.retainPendingLocked(held, vd.Applied)
 		s.maybeSaveSnapshotLocked()
@@ -1257,15 +1423,19 @@ func (s *Session) PrepareInferenceFn(chooser ParamsForHost) (*PreparedInference,
 
 	s.nonceStates[nonce] = &nonceOutcome{}
 
+	_, _, needsStoredCatchUp := s.storedGapLocked(hostIdx)
 	catchUp := s.diffsForHost(hostIdx)
-	// TODO: remove this when we are sure that there is no bug in CatchUp
-	s.validateCatchUp(catchUp, nonce, hostIdx)
+	if !needsStoredCatchUp {
+		// TODO: remove this when we are sure that there is no bug in CatchUp
+		s.validateCatchUp(catchUp, nonce, hostIdx)
+	}
 	return &PreparedInference{
-		diff:    diff,
-		hostIdx: hostIdx,
-		catchUp: catchUp,
-		params:  params,
-		isProbe: probe,
+		diff:               diff,
+		hostIdx:            hostIdx,
+		catchUp:            catchUp,
+		params:             params,
+		isProbe:            probe,
+		needsStoredCatchUp: needsStoredCatchUp,
 	}, nil
 }
 
@@ -1295,7 +1465,16 @@ func (p *PreparedInference) Payload() *host.InferencePayload {
 // without processing it. Use ProcessResponse separately to apply the response
 // to session state. This split allows parallel network I/O with ordered processing.
 func (s *Session) SendOnly(ctx context.Context, p *PreparedInference, stream io.Writer, receiptHandler func()) (*host.HostResponse, error) {
-	s.drainOversizedCatchUp(ctx, p)
+	if p.needsStoredCatchUp {
+		catchUp, err := s.catchUpForRequest(ctx, p.hostIdx, s.clients[p.hostIdx], p.diff.Nonce)
+		if err != nil {
+			return nil, fmt.Errorf("escrow %s nonce %d: %w", s.escrowID, p.diff.Nonce, err)
+		}
+		p.catchUp = catchUp
+		p.needsStoredCatchUp = false
+	} else {
+		s.drainOversizedCatchUp(ctx, p)
+	}
 	if payload := p.Payload(); payload != nil && !transport.InferenceRequestFits(len(payload.Prompt), p.catchUp) {
 		return nil, fmt.Errorf("escrow %s nonce %d: %w", s.escrowID, p.diff.Nonce, transport.ErrHostRequestTooLarge)
 	}
@@ -1395,12 +1574,16 @@ func (s *Session) SendInference(ctx context.Context, params InferenceParams) (*h
 func (s *Session) sendDiffRound(ctx context.Context, extraTxs []*types.DevshardTx) error {
 	s.mu.Lock()
 	diff, hostIdx, err := s.composeDiffLocked(extraTxs)
+	s.mu.Unlock()
 	if err != nil {
-		s.mu.Unlock()
 		return err
 	}
-	catchUp := s.diffsForHost(hostIdx)
-	s.mu.Unlock()
+	catchUp, err := s.catchUpForRequest(ctx, hostIdx, s.clients[hostIdx], diff.Nonce)
+	if err != nil {
+		logging.Warn("sendDiffRound catch-up failed", "subsystem", "finalize", "escrow", s.escrowID,
+			"nonce", diff.Nonce, "host", hostIdx, "error", err)
+		return nil
+	}
 
 	logging.Info("sendDiffRound sending", "subsystem", "finalize", "escrow", s.escrowID,
 		"nonce", diff.Nonce, "host", hostIdx, "catchup_count", len(catchUp))
@@ -1457,26 +1640,32 @@ const catchUpChunkTimeout = 60 * time.Second
 // This costs the request the drain: a host far behind delays its own next inference by however long the
 // chunks take, up to catchUpChunkTimeout each. Chosen over sending one body a proxy will refuse.
 func (s *Session) drainOversizedCatchUp(ctx context.Context, p *PreparedInference) {
-	backlog := p.catchUp
-	if len(backlog) > 0 && backlog[len(backlog)-1].Nonce == p.diff.Nonce {
+	p.catchUp = s.drainOversizedBacklog(ctx, p.hostIdx, s.clients[p.hostIdx], p.catchUp, p.diff.Nonce)
+}
+
+// drainOversizedBacklog is drainOversizedCatchUp for any request: it returns the catch-up the request
+// carries once a backlog past inlineCatchUpMaxBytes, everything but targetNonce, went ahead by chunks.
+func (s *Session) drainOversizedBacklog(ctx context.Context, hostIdx int, client HostClient, catchUp []types.Diff, targetNonce uint64) []types.Diff {
+	backlog := catchUp
+	if len(backlog) > 0 && backlog[len(backlog)-1].Nonce == targetNonce {
 		backlog = backlog[:len(backlog)-1]
 	}
 	if len(backlog) < inlineCatchUpMeasureFrom || !transport.DiffsExceedWireBytes(backlog, inlineCatchUpMaxBytes) {
-		return
+		return catchUp
 	}
 
 	logging.Warn("catch-up too large to ride the inference, draining it first", "subsystem", "session",
-		"escrow", s.escrowID, "host", p.hostIdx, "nonce", p.diff.Nonce,
+		"escrow", s.escrowID, "host", hostIdx, "nonce", targetNonce,
 		"backlog_diffs", len(backlog))
-	if err := s.sendCatchUpChunks(ctx, p.hostIdx, s.clients[p.hostIdx], backlog); err != nil {
+	if err := s.sendCatchUpChunks(ctx, hostIdx, client, backlog); err != nil {
 		logging.Warn("draining the catch-up failed; the request carries it after all", "subsystem", "session",
-			"escrow", s.escrowID, "host", p.hostIdx, "error", err)
-		return
+			"escrow", s.escrowID, "host", hostIdx, "error", err)
+		return catchUp
 	}
 
 	s.mu.Lock()
-	p.catchUp = s.diffsForHost(p.hostIdx)
-	s.mu.Unlock()
+	defer s.mu.Unlock()
+	return s.diffsForHost(hostIdx)
 }
 
 // sendCatchUp sends existing diffs to a host, admission-free: they are already signed by the group.
@@ -1490,6 +1679,9 @@ func (s *Session) sendCatchUp(ctx context.Context, hostIdx int) error {
 // there's no point sending later chunks if the host couldn't apply earlier ones.
 // Returns non-nil only on processResponse errors; dead hosts are silently skipped.
 func (s *Session) sendCatchUpWith(ctx context.Context, hostIdx int, client HostClient) error {
+	if err := s.closeStoredGap(ctx, hostIdx, client); err != nil {
+		return err
+	}
 	s.mu.Lock()
 	catchUp := s.diffsForHost(hostIdx)
 	s.mu.Unlock()
@@ -1550,7 +1742,7 @@ func (s *Session) sendCatchUpChunks(ctx context.Context, hostIdx int, client Hos
 			"resp_nonce", resp.Nonce, "has_sig", resp.StateSig != nil)
 
 		s.mu.Lock()
-		err = s.processResponse(hostIdx, resp, chunkNonce)
+		err = s.processResponseAfterDiffs(hostIdx, resp, chunkNonce, chunk)
 		if err == nil {
 			s.logSignatureProgress(resp.Nonce)
 		}
@@ -2173,8 +2365,9 @@ func (s *Session) forgetHostState(hostIdx int, err error) {
 	s.RewindHostCatchUp(hostIdx, "host lost the escrow")
 }
 
-// RewindHostCatchUp rewinds a host to the start of the history we still hold, so the next request
+// RewindHostCatchUp rewinds a host to the start of the history we can still send, so the next request
 // carries the whole chain instead of the tail its cursor claims it needs. Reports whether it moved.
+// A stored session rewinds to 0, and closeStoredGap sends the store's part by pages and chunks.
 func (s *Session) RewindHostCatchUp(hostIdx int, cause string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -2182,10 +2375,10 @@ func (s *Session) RewindHostCatchUp(hostIdx int, cause string) bool {
 	if hostIdx < 0 || hostIdx >= len(s.group) || !tracked || cursor == 0 {
 		return false
 	}
-	// Only as far back as the diffs actually held: after a restart the history starts at the group's
-	// lowest cursor, and rewinding past it would hand the host a chain missing its own beginning.
+	// Without a store, only as far back as s.diffs holds: rewinding past it would hand the host a chain
+	// missing its own beginning.
 	var earliest uint64
-	if len(s.diffs) > 0 {
+	if s.store == nil && len(s.diffs) > 0 {
 		earliest = s.diffs[0].Nonce - 1
 	}
 	if cursor <= earliest {
@@ -2629,9 +2822,14 @@ func (s *Session) sendPendingDiff(ctx context.Context, extraTxs []*types.Devshar
 	for offset := 0; offset < len(finalizeClients); offset++ {
 		candidateIdx := (hostIdx + offset) % len(finalizeClients)
 
-		s.mu.Lock()
-		catchUp := s.diffsForHost(candidateIdx)
-		s.mu.Unlock()
+		catchUp, catchUpErr := s.catchUpForRequest(ctx, candidateIdx, finalizeClients[candidateIdx], diff.Nonce)
+		if catchUpErr != nil {
+			lastErr = fmt.Errorf("catch up host %d for pending diff: %w", candidateIdx, catchUpErr)
+			if ctx.Err() != nil {
+				return diff, lastErr
+			}
+			continue
+		}
 
 		// Admission-free, like signature collection: this diff carries a vote the verifiers already cast, so
 		// the participant budget refusing it throws that work away and costs the host nothing.
@@ -3305,7 +3503,7 @@ func (s *Session) collectTimeoutVotes(
 				return
 			}
 
-			catchUp := mergeTimeoutCatchUpDiffs(s.catchUpDiffsForVerifier(av.idx), diffs)
+			catchUp := mergeTimeoutCatchUpDiffs(s.catchUpDiffsForVerifier(ctx, av.idx), diffs)
 			arts := firstTimeoutArtifacts(artifacts)
 
 			rec := inflightVerify{
@@ -3542,7 +3740,7 @@ func (s *Session) CollectErrorMissVotes(
 				results <- voteResult{err: err, verifierIdx: av.idx, verifierAddr: av.verifierAddr}
 				return
 			}
-			accept, sig, voterSlot, mempool, rejectCause, err := av.verifier.VerifyErrorMiss(ctx, inferenceID, mergeTimeoutCatchUpDiffs(s.catchUpDiffsForVerifier(av.idx), diffs), artifacts)
+			accept, sig, voterSlot, mempool, rejectCause, err := av.verifier.VerifyErrorMiss(ctx, inferenceID, mergeTimeoutCatchUpDiffs(s.catchUpDiffsForVerifier(ctx, av.idx), diffs), artifacts)
 			if err != nil {
 				results <- voteResult{err: err, verifierIdx: av.idx, verifierAddr: av.verifierAddr}
 				return
@@ -3615,18 +3813,16 @@ func firstTimeoutArtifacts(artifacts []host.TimeoutArtifacts) host.TimeoutArtifa
 	return artifacts[0]
 }
 
-// catchUpDiffsForVerifier returns diffs this host has not yet been sent.
-// The slice is copied under s.mu so the RPC can proceed without holding the lock.
-func (s *Session) catchUpDiffsForVerifier(hostIdx int) []types.Diff {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	src := s.diffsForHost(hostIdx)
-	if len(src) == 0 {
+// catchUpDiffsForVerifier returns diffs this host has not yet been sent. A cursor behind s.diffs or a
+// backlog past inlineCatchUpMaxBytes goes ahead by chunks first; when that fails the vote carries none.
+func (s *Session) catchUpDiffsForVerifier(ctx context.Context, hostIdx int) []types.Diff {
+	catchUp, err := s.catchUpForRequest(ctx, hostIdx, s.getFinalizeClients()[hostIdx], 0)
+	if err != nil {
+		logging.Warn("verifier catch-up failed; the vote carries none", "subsystem", "session",
+			"escrow", s.escrowID, "host", hostIdx, "error", err)
 		return nil
 	}
-	out := make([]types.Diff, len(src))
-	copy(out, src)
-	return out
+	return catchUp
 }
 
 // mergeTimeoutCatchUpDiffs prefers the per-verifier catch-up set and appends

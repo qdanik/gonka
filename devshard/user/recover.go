@@ -64,10 +64,10 @@ const snapshotInterval = 500
 //
 // Backward compatibility: older snapshots stored a bare types.EscrowState
 // JSON. On load, if the wrapper unmarshal yields State == nil, we retry
-// as a bare EscrowState and treat HostSyncNonce as unknown. The recovery
-// path then loads the entire diff history into sess.diffs so any host
-// that was stranded behind the prior snapshot self-heals via host-side
-// silent-skip (host.applyAndPersist drops diffs whose Nonce <= currentNonce).
+// as a bare EscrowState and treat HostSyncNonce as unknown. Every host then
+// starts at cursor 0 and is caught up from the store, so a host stranded
+// behind the prior snapshot self-heals via host-side silent-skip
+// (host.applyAndPersist drops diffs whose Nonce <= currentNonce).
 type sessionSnapshot struct {
 	State            *types.EscrowState     `json:"state"`
 	HostSyncNonce    map[int]uint64         `json:"host_sync_nonce,omitempty"`
@@ -218,38 +218,31 @@ func RecoverSession(
 		sess.hostSyncNonce[h] = n
 	}
 
-	// Backfill sess.diffs with pre-snapshot diffs that some host may still
-	// need. sess.diffs must contain a contiguous range covering every
-	// host's expected next-nonce, otherwise diffsForHost produces a
-	// non-contiguous slice and the host rejects (it requires sequential
-	// nonces, only silent-skipping diffs <= its currentNonce).
-	//
-	// For a fresh new-format snapshot all hosts are typically at or near
-	// snapNonce, so backfillFrom is close to snapNonce and the load is
-	// small. For a legacy snapshot (cursor unknown) min returns 0 and we
-	// load the entire pre-snapshot history once -- a one-time slow
-	// recovery that self-heals stranded hosts.
-	//
+	// Backfill the in-memory window of pre-snapshot diffs a lagging host
+	// needs; closeStoredGap reads anything older from the store by pages.
 	// Gated on snapshotRestored, not snapNonce: an ignored snapshot (future
 	// nonce, decode failure) replays from 1, which already covers the range.
 	if snapshotRestored {
 		backfillFrom := minHostSyncNonce(sess.hostSyncNonce, len(group)) + 1
+		if snapNonce >= uint64(sess.diffsKeptInMemory) {
+			backfillFrom = max(backfillFrom, snapNonce-uint64(sess.diffsKeptInMemory)+1)
+		}
 		if backfillFrom <= snapNonce {
-			backfillRecords, berr := store.GetDiffs(escrowID, backfillFrom, snapNonce)
-			if berr != nil {
-				return nil, nil, fmt.Errorf("get backfill diffs %d..%d: %w", backfillFrom, snapNonce, berr)
-			}
-			if verr := validateDiffRange(backfillRecords, backfillFrom, snapNonce); verr != nil {
-				return nil, nil, fmt.Errorf("backfill diffs %d..%d: %w", backfillFrom, snapNonce, verr)
+			backfillErr := forEachDiffPage(store, escrowID, backfillFrom, snapNonce, func(pageFrom, pageTo uint64, records []types.DiffRecord) error {
+				if err := validateDiffRange(records, pageFrom, pageTo); err != nil {
+					return err
+				}
+				for _, record := range records {
+					sess.diffs = append(sess.diffs, record.Diff)
+					restoreRecordSignatures(sess, record)
+				}
+				return nil
+			})
+			if backfillErr != nil {
+				return nil, nil, fmt.Errorf("backfill diffs %d..%d: %w", backfillFrom, snapNonce, backfillErr)
 			}
 			log.Printf("recover_session escrow=%s diff_backfill from=%d to=%d count=%d",
-				escrowID, backfillFrom, snapNonce, len(backfillRecords))
-			for _, rec := range backfillRecords {
-				sess.diffs = append(sess.diffs, rec.Diff)
-				for slotID, sig := range rec.Signatures {
-					sess.recordSignatureLocked(rec.Nonce, slotID, sig)
-				}
-			}
+				escrowID, backfillFrom, snapNonce, len(sess.diffs))
 		}
 	}
 
@@ -270,39 +263,39 @@ func RecoverSession(
 		return finishRecover(sess, sm)
 	}
 
-	records, err := store.GetDiffs(escrowID, replayFrom, meta.LatestNonce)
-	if err != nil {
-		return nil, nil, fmt.Errorf("get diffs: %w", err)
-	}
-	if err := validateDiffRange(records, replayFrom, meta.LatestNonce); err != nil {
-		return nil, nil, fmt.Errorf("replay diffs %d..%d: %w", replayFrom, meta.LatestNonce, err)
-	}
+	replayCount := meta.LatestNonce - replayFrom + 1
+	log.Printf("recover_session escrow=%s replaying diffs %d..%d (%d records)", escrowID, replayFrom, meta.LatestNonce, replayCount)
 
-	log.Printf("recover_session escrow=%s replaying diffs %d..%d (%d records)", escrowID, replayFrom, meta.LatestNonce, len(records))
-
-	for _, rec := range records {
-		sm.InjectWarmKeys(rec.WarmKeyDelta)
-		root, applyErr := sm.ApplyLocalPersisted(rec.Nonce, rec.Txs)
-		if applyErr != nil {
-			if errors.Is(applyErr, types.ErrInvalidNonce) {
-				return nil, nil, fmt.Errorf("%w: replay nonce %d: %w",
-					ErrLocalStateUnrecoverable, rec.Nonce, applyErr)
+	replayErr := forEachDiffPage(store, escrowID, replayFrom, meta.LatestNonce, func(pageFrom, pageTo uint64, records []types.DiffRecord) error {
+		if err := validateDiffRange(records, pageFrom, pageTo); err != nil {
+			return fmt.Errorf("replay diffs %d..%d: %w", replayFrom, meta.LatestNonce, err)
+		}
+		for _, rec := range records {
+			sm.InjectWarmKeys(rec.WarmKeyDelta)
+			root, applyErr := sm.ApplyLocalPersisted(rec.Nonce, rec.Txs)
+			if applyErr != nil {
+				if errors.Is(applyErr, types.ErrInvalidNonce) {
+					return fmt.Errorf("%w: replay nonce %d: %w",
+						ErrLocalStateUnrecoverable, rec.Nonce, applyErr)
+				}
+				return fmt.Errorf("replay nonce %d: %w", rec.Nonce, applyErr)
 			}
-			return nil, nil, fmt.Errorf("replay nonce %d: %w", rec.Nonce, applyErr)
-		}
-		if len(rec.StateHash) > 0 && len(root) > 0 {
-			if !bytes.Equal(root, rec.StateHash) {
-				return nil, nil, fmt.Errorf("%w: state root mismatch at nonce %d",
-					ErrLocalStateUnrecoverable, rec.Nonce)
+			if len(rec.StateHash) > 0 && len(root) > 0 {
+				if !bytes.Equal(root, rec.StateHash) {
+					return fmt.Errorf("%w: state root mismatch at nonce %d",
+						ErrLocalStateUnrecoverable, rec.Nonce)
+				}
 			}
-		}
 
-		sess.diffs = append(sess.diffs, rec.Diff)
-		sess.nonce = rec.Nonce
-
-		for slotID, sig := range rec.Signatures {
-			sess.recordSignatureLocked(rec.Nonce, slotID, sig)
+			sess.diffs = append(sess.diffs, rec.Diff)
+			sess.trimDiffsLocked()
+			sess.nonce = rec.Nonce
+			restoreRecordSignatures(sess, rec)
 		}
+		return nil
+	})
+	if replayErr != nil {
+		return nil, nil, replayErr
 	}
 
 	// Save a snapshot at the latest nonce so subsequent restarts are fast.
@@ -310,7 +303,7 @@ func RecoverSession(
 	// upgraded to the new wrapper format on the very first restart with
 	// this code, removing the "bare EscrowState" footgun without manual
 	// snapshot deletion on the server.
-	if replayFrom == 1 || uint64(len(records)) >= snapshotInterval || legacySnapshot {
+	if replayFrom == 1 || replayCount >= snapshotInterval || legacySnapshot {
 		saveSnapshot(store, sm, escrowID, meta.LatestNonce, sess.hostSyncNonce)
 	}
 
@@ -346,52 +339,74 @@ func finishRecover(sess *Session, sm *state.StateMachine) (*Session, *state.Stat
 	}
 	restoreHeartbeatProducer(sess, sm)
 	if sess.store == nil {
-		restoreAppliedTxKeys(sess, nil)
+		restoreAppliedTxKeys(sess, sess.diffs)
 		return sess, sm, nil
 	}
 	meta, err := sess.store.GetSessionMeta(sess.escrowID)
 	if err != nil {
 		return nil, nil, fmt.Errorf("get session meta for validation obs rebuild: %w", err)
 	}
-	var records []types.DiffRecord
-	if meta.LatestNonce > 0 {
-		records, err = sess.store.GetDiffs(sess.escrowID, 1, meta.LatestNonce)
-		if err != nil {
-			return nil, nil, fmt.Errorf("get diffs for validation obs rebuild: %w", err)
-		}
+	eachPage := func(add func([]types.DiffRecord) error) error {
+		return forEachDiffPage(sess.store, sess.escrowID, 1, meta.LatestNonce, func(_, _ uint64, records []types.DiffRecord) error {
+			restoreAppliedTxKeysFromRecords(sess, records)
+			return add(records)
+		})
 	}
-	restoreAppliedTxKeys(sess, records)
-	if err := storage.RebuildValidationObsFromDiffs(
-		sess.store,
-		sess.escrowID,
-		records,
-		storage.SealedInferenceIDsSorted(sm.ExportSealedNonces()),
-	); err != nil {
+	sealedInferenceIDs := storage.SealedInferenceIDsSorted(sm.ExportSealedNonces())
+	if err := storage.RebuildValidationObs(sess.store, sess.escrowID, eachPage, sealedInferenceIDs); err != nil {
 		return nil, nil, fmt.Errorf("rebuild validation obs: %w", err)
 	}
 	return sess, sm, nil
 }
 
+// restoreRecordSignatures copies a stored diff's host signatures into the session.
+func restoreRecordSignatures(sess *Session, record types.DiffRecord) {
+	for slotID, signature := range record.Signatures {
+		sess.recordSignatureLocked(record.Nonce, slotID, signature)
+	}
+}
+
+// forEachDiffPage reads diffs fromNonce..toNonce from the store one page of diffPageSize at a time.
+func forEachDiffPage(store storage.Storage, escrowID string, fromNonce, toNonce uint64, visit func(pageFrom, pageTo uint64, records []types.DiffRecord) error) error {
+	for pageFrom := fromNonce; pageFrom <= toNonce; pageFrom += diffPageSize {
+		pageTo := min(pageFrom+diffPageSize-1, toNonce)
+		records, err := store.GetDiffs(escrowID, pageFrom, pageTo)
+		if err != nil {
+			return fmt.Errorf("get diffs %d..%d: %w", pageFrom, pageTo, err)
+		}
+		if err := visit(pageFrom, pageTo, records); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // restoreAppliedTxKeys re-seeds the applied-key set from the reconstructed diff
 // log so a host mempool copy of an already-included tx is not re-queued.
-func restoreAppliedTxKeys(sess *Session, records []types.DiffRecord) {
+func restoreAppliedTxKeys(sess *Session, diffs []types.Diff) {
 	if sess == nil {
 		return
 	}
 	sess.mu.Lock()
 	defer sess.mu.Unlock()
-	for _, diff := range sess.diffs {
-		for _, tx := range diff.Txs {
-			if key := devshardTxKey(tx); key != "" {
-				sess.appliedTxKeys[key] = struct{}{}
-			}
-		}
+	for _, diff := range diffs {
+		addAppliedTxKeysLocked(sess, diff.Txs)
 	}
-	for _, rec := range records {
-		for _, tx := range rec.Diff.Txs {
-			if key := devshardTxKey(tx); key != "" {
-				sess.appliedTxKeys[key] = struct{}{}
-			}
+}
+
+// restoreAppliedTxKeysFromRecords is restoreAppliedTxKeys over one page of the store's journal.
+func restoreAppliedTxKeysFromRecords(sess *Session, records []types.DiffRecord) {
+	sess.mu.Lock()
+	defer sess.mu.Unlock()
+	for _, record := range records {
+		addAppliedTxKeysLocked(sess, record.Txs)
+	}
+}
+
+func addAppliedTxKeysLocked(sess *Session, txs []*types.DevshardTx) {
+	for _, tx := range txs {
+		if key := devshardTxKey(tx); key != "" {
+			sess.appliedTxKeys[key] = struct{}{}
 		}
 	}
 }

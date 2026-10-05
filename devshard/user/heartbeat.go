@@ -11,7 +11,11 @@ import (
 	"devshard/types"
 )
 
-const heartbeatForceReason = "heartbeat"
+const (
+	heartbeatForceReason = "heartbeat"
+	// heartbeatBackoffMaxIntervals caps how many heartbeat intervals a failing host is skipped for.
+	heartbeatBackoffMaxIntervals = 8
+)
 
 type composedDiff struct {
 	diff    types.Diff
@@ -474,17 +478,27 @@ func (s *Session) observedHeightLocked() (uint64, []byte, bool) {
 
 func (s *Session) sendComposedDiff(ctx context.Context, item composedDiff) error {
 	s.mu.Lock()
-	catchUp := s.diffsForHost(item.hostIdx)
+	backedOff := s.nowLocked().Before(s.heartbeatRetryAt[item.hostIdx])
 	s.mu.Unlock()
+	if backedOff {
+		return nil
+	}
 
-	resp, err := s.clients[item.hostIdx].Send(ctx, host.HostRequest{
-		Diffs:            catchUp,
-		Nonce:            item.diff.Nonce,
-		HeightSyncEscrow: s.heightSyncEscrowHints(),
-	}, nil, nil)
+	client := s.clients[item.hostIdx]
+	catchUp, err := s.catchUpForRequest(ctx, item.hostIdx, client, item.diff.Nonce)
+	var resp *host.HostResponse
+	if err == nil {
+		resp, err = client.Send(ctx, host.HostRequest{
+			Diffs:            catchUp,
+			Nonce:            item.diff.Nonce,
+			HeightSyncEscrow: s.heightSyncEscrowHints(),
+		}, nil, nil)
+	}
 	if err != nil {
+		backoff := s.noteHeartbeatSendFailure(item.hostIdx)
 		logging.Warn("heartbeat host dead", "subsystem", "heightsync",
-			"escrow", s.escrowID, "nonce", item.diff.Nonce, "host", item.hostIdx, "error", err)
+			"escrow", s.escrowID, "nonce", item.diff.Nonce, "host", item.hostIdx,
+			"catch_up", len(catchUp), "backoff", backoff, "error", err)
 		return nil
 	}
 	s.mu.Lock()
@@ -492,4 +506,32 @@ func (s *Session) sendComposedDiff(ctx context.Context, item composedDiff) error
 	s.mu.Unlock()
 	s.publishHeightSyncView()
 	return err
+}
+
+// noteHeartbeatSendFailure counts a failed heartbeat send and returns how long the host is skipped for.
+func (s *Session) noteHeartbeatSendFailure(hostIdx int) time.Duration {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.heartbeatSendFailures[hostIdx]++
+	backoff := heartbeatBackoff(s.heartbeatSendFailures[hostIdx], s.heartbeat.Config().Interval)
+	s.heartbeatRetryAt[hostIdx] = s.nowLocked().Add(backoff)
+	return backoff
+}
+
+// heartbeatBackoff is zero for a first failure, then doubles per failure from one interval up to the cap.
+func heartbeatBackoff(consecutiveFailures int, interval time.Duration) time.Duration {
+	if consecutiveFailures < 2 {
+		return 0
+	}
+	intervals := min(1<<min(consecutiveFailures-2, 30), heartbeatBackoffMaxIntervals)
+	return time.Duration(intervals) * interval
+}
+
+// clearHeartbeatBackoffLocked lets a host that answered be sent heartbeats again. Caller holds s.mu.
+func (s *Session) clearHeartbeatBackoffLocked(hostIdx int) {
+	if hostIdx < 0 || hostIdx >= len(s.heartbeatSendFailures) {
+		return
+	}
+	s.heartbeatSendFailures[hostIdx] = 0
+	s.heartbeatRetryAt[hostIdx] = time.Time{}
 }
