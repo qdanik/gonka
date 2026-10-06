@@ -18,15 +18,17 @@ type Snapshot struct {
 }
 
 type EscrowSnapshot struct {
-	Metadata     EscrowMetadata             `json:"metadata"`
-	LatestNonce  uint64                     `json:"latest_nonce"`
-	Retired      bool                       `json:"retired"`
-	HostStats    map[uint32]types.HostStats `json:"host_stats,omitempty"`
-	SlotActivity map[uint32]SlotActivity    `json:"slot_activity,omitempty"`
-	Money        map[uint32]SlotMoney       `json:"money,omitempty"`
-	Produced     map[uint32]uint64          `json:"produced_tokens,omitempty"`
-	Counters     []PersistedCounter         `json:"counters,omitempty"`
-	Nonces       []PersistedNonce           `json:"nonces,omitempty"`
+	Metadata      EscrowMetadata             `json:"metadata"`
+	LatestNonce   uint64                     `json:"latest_nonce"`
+	FeePerNonce   uint64                     `json:"fee_per_nonce,omitempty"`
+	Retired       bool                       `json:"retired"`
+	HostStats     map[uint32]types.HostStats `json:"host_stats,omitempty"`
+	SlotActivity  map[uint32]SlotActivity    `json:"slot_activity,omitempty"`
+	Money         map[uint32]SlotMoney       `json:"money,omitempty"`
+	Produced      map[uint32]uint64          `json:"produced_tokens,omitempty"`
+	Counters      []PersistedCounter         `json:"counters,omitempty"`
+	Nonces        []PersistedNonce           `json:"nonces,omitempty"`
+	ServiceNonces []PersistedServiceCount    `json:"service_nonces,omitempty"`
 }
 
 // The gateway's side of the counts HostStats holds the chain's side of. See README.md, "Storage".
@@ -52,6 +54,12 @@ type PersistedNonce struct {
 	ClockDrifted    bool   `json:"clock_drifted,omitempty"`
 	SlowDecode      bool   `json:"slow_decode,omitempty"`
 	LogprobsDecoded bool   `json:"logprobs_decoded,omitempty"`
+}
+
+type PersistedServiceCount struct {
+	SlotID  uint32         `json:"slot_id"`
+	Purpose ServicePurpose `json:"purpose"`
+	Count   uint64         `json:"count"`
 }
 
 type PersistedCounter struct {
@@ -126,6 +134,7 @@ func snapshotEscrow(escrow *escrowLedger) EscrowSnapshot {
 	stored := EscrowSnapshot{
 		Metadata:    escrow.metadata,
 		LatestNonce: escrow.latest,
+		FeePerNonce: escrow.feePerNonce,
 		Retired:     escrow.retired,
 		HostStats:   make(map[uint32]types.HostStats, len(escrow.hostStats)),
 		Counters:    make([]PersistedCounter, 0, len(escrow.counters)),
@@ -134,6 +143,12 @@ func snapshotEscrow(escrow *escrowLedger) EscrowSnapshot {
 	stored.SlotActivity = escrow.slotActivity()
 	stored.Money = escrow.moneyBySlot()
 	stored.Produced = maps.Clone(escrow.produced)
+	for key, count := range escrow.serviceNonces {
+		stored.ServiceNonces = append(stored.ServiceNonces, PersistedServiceCount{SlotID: key.slotID, Purpose: key.purpose, Count: count})
+	}
+	slices.SortFunc(stored.ServiceNonces, func(left, right PersistedServiceCount) int {
+		return cmp.Or(cmp.Compare(left.SlotID, right.SlotID), cmp.Compare(left.Purpose, right.Purpose))
+	})
 	for key, count := range escrow.counters {
 		stored.Counters = append(stored.Counters, PersistedCounter{CounterKey: key, Count: count})
 	}
@@ -179,6 +194,10 @@ func (b *Book) Restore(snapshot Snapshot) error {
 		}
 		escrow := newEscrowLedger(stored.Metadata)
 		escrow.latest = stored.LatestNonce
+		escrow.feePerNonce = stored.FeePerNonce
+		for _, service := range stored.ServiceNonces {
+			escrow.serviceNonces[serviceKey{slotID: service.SlotID, purpose: service.Purpose}] += service.Count
+		}
 		escrow.retired = stored.Retired
 		maps.Copy(escrow.hostStats, stored.HostStats)
 		maps.Copy(escrow.folded, stored.Money)

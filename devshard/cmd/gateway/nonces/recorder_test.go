@@ -2,6 +2,7 @@ package nonces
 
 import (
 	"errors"
+	"maps"
 	"testing"
 	"time"
 
@@ -332,6 +333,39 @@ func TestDiffFactsLandOnTheSlotsTheChainAssigns(t *testing.T) {
 			t.Fatalf("%s validations/invalid/timeouts = %d/%d/%d, want %d each", record.Participant,
 				record.ValidationsPerformed, record.CrossChecks.RecordedInvalid, record.TimeoutsApplied, want)
 		}
+	}
+}
+
+func participantRecord(t *testing.T, ledger *Recorder, participant string) accounting.ParticipantRecord {
+	t.Helper()
+	for _, record := range ledger.service.Book.Query(accounting.QueryFilter{}) {
+		if record.Participant == participant {
+			return record
+		}
+	}
+	t.Fatalf("no record for %s", participant)
+	return accounting.ParticipantRecord{}
+}
+
+// Test flow:
+//  1. Observe an escrow state frozen at a fee of 10 per nonce and finalizing from nonce 3, as a sweep reads it.
+//  2. Record a heartbeat service fact on nonce 1 and a plain round on nonce 5.
+//  3. Assert participant-1 pays 10 for the heartbeat and files the round after the chain's finalize nonce under finalize.
+func TestASweepTellsTheLedgerWhatTheChainCharges(t *testing.T) {
+	ledger := newLedgerForTest(t)
+	ledger.observeEscrowState("escrow-1", types.EscrowState{
+		LatestNonce: 5, FinalizeNonce: 3, Config: types.SessionConfig{FeePerNonce: 10},
+	})
+
+	ledger.RecordDiffFacts("escrow-1", []accounting.DiffFact{
+		{Kind: accounting.DiffFactServiceNonce, Nonce: 1, Purpose: accounting.ServiceHeartbeat},
+		{Kind: accounting.DiffFactServiceNonce, Nonce: 5, Purpose: accounting.ServiceFlush},
+	})
+
+	record := participantRecord(t, ledger, "participant-1")
+	want := map[accounting.ServicePurpose]uint64{accounting.ServiceHeartbeat: 1, accounting.ServiceFinalize: 1}
+	if !maps.Equal(record.ServiceNonces, want) || record.ServiceFee != 10 {
+		t.Fatalf("service_nonces/service_fee = %v/%d, want %v/10", record.ServiceNonces, record.ServiceFee, want)
 	}
 }
 

@@ -2,23 +2,25 @@ package accounting
 
 // The three levels are the same shape, so each is the sum of the rows below it. See README.md.
 type nonceTotals struct {
-	Assigned       uint64                 `json:"assigned_nonces"`
-	Dispositions   map[Disposition]uint64 `json:"dispositions"`
-	ChainMissed    uint32                 `json:"protocol_misses"`
-	ChainInvalid   uint32                 `json:"protocol_invalid"`
-	Pending        uint64                 `json:"pending_classification"`
-	Unobserved     uint64                 `json:"unclassified"`
-	Overcounted    uint64                 `json:"overclassified"`
-	ChainCost      uint64                 `json:"chain_cost"`
-	ReservedCost   uint64                 `json:"reserved_cost"`
-	ActualCost     uint64                 `json:"actual_cost"`
-	RefundedCost   uint64                 `json:"refunded_cost"`
-	CountedNonces  uint64                 `json:"counted_nonces"`
-	EstimatedInput uint64                 `json:"estimated_input_tokens"`
-	EstimatedError uint64                 `json:"estimated_error_tokens"`
-	MaxTokens      uint64                 `json:"max_tokens"`
-	InputTokens    uint64                 `json:"input_tokens"`
-	OutputTokens   uint64                 `json:"output_tokens"`
+	Assigned       uint64                    `json:"assigned_nonces"`
+	Dispositions   map[Disposition]uint64    `json:"dispositions"`
+	ChainMissed    uint32                    `json:"protocol_misses"`
+	ChainInvalid   uint32                    `json:"protocol_invalid"`
+	Pending        uint64                    `json:"pending_classification"`
+	Unobserved     uint64                    `json:"unclassified"`
+	Overcounted    uint64                    `json:"overclassified"`
+	ChainCost      uint64                    `json:"chain_cost"`
+	ReservedCost   uint64                    `json:"reserved_cost"`
+	ActualCost     uint64                    `json:"actual_cost"`
+	RefundedCost   uint64                    `json:"refunded_cost"`
+	CountedNonces  uint64                    `json:"counted_nonces"`
+	EstimatedInput uint64                    `json:"estimated_input_tokens"`
+	EstimatedError uint64                    `json:"estimated_error_tokens"`
+	MaxTokens      uint64                    `json:"max_tokens"`
+	InputTokens    uint64                    `json:"input_tokens"`
+	OutputTokens   uint64                    `json:"output_tokens"`
+	ServiceNonces  map[ServicePurpose]uint64 `json:"service_nonces"`
+	ServiceFee     uint64                    `json:"service_fee"`
 }
 
 func (t *nonceTotals) add(other nonceTotals) {
@@ -33,12 +35,42 @@ func (t *nonceTotals) add(other nonceTotals) {
 	t.MaxTokens += other.MaxTokens
 	t.InputTokens += other.InputTokens
 	t.OutputTokens += other.OutputTokens
+	t.ServiceFee += other.ServiceFee
 	t.ChainMissed += other.ChainMissed
 	t.ChainInvalid += other.ChainInvalid
 	t.Pending += other.Pending
 	t.Unobserved += other.Unobserved
 	t.Overcounted += other.Overcounted
 	t.Dispositions = addInto(t.Dispositions, other.Dispositions)
+	t.ServiceNonces = addInto(t.ServiceNonces, other.ServiceNonces)
+}
+
+type purposeCounts map[ServicePurpose]uint64
+
+func (e *escrowLedger) serviceBySlot(groupSize uint32) []purposeCounts {
+	bySlot := make([]purposeCounts, groupSize)
+	for slotID := range bySlot {
+		bySlot[slotID] = make(purposeCounts)
+	}
+	for key, count := range e.serviceNonces {
+		if key.slotID < groupSize {
+			bySlot[key.slotID][key.purpose] += count
+		}
+	}
+	return bySlot
+}
+
+func (counts purposeCounts) total() uint64 {
+	var sum uint64
+	for _, count := range counts {
+		sum += count
+	}
+	return sum
+}
+
+// A finalize nonce is free: the round that opens finalization leaves the session out of its active phase.
+func (counts purposeCounts) fee(feePerNonce uint64) uint64 {
+	return (counts.total() - counts[ServiceFinalize]) * feePerNonce
 }
 
 // What the host was doing rather than how its nonces came out.

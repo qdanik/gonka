@@ -22,39 +22,48 @@ type Book struct {
 }
 
 type escrowLedger struct {
-	metadata    EscrowMetadata
-	latest      uint64
-	hostStats   map[uint32]types.HostStats
-	challenged  map[uint32]uint64
-	validations map[uint32]uint64
-	timeouts    map[uint32]uint64
-	rejected    map[uint32]uint64
-	counters    map[CounterKey]uint64
-	nonces      map[uint64]*nonceRecord
-	costs       map[uint64]nonceCost
-	folded      map[uint32]SlotMoney
-	produced    map[uint32]uint64
-	events      []protocolEvent
-	retired     bool
+	metadata      EscrowMetadata
+	latest        uint64
+	hostStats     map[uint32]types.HostStats
+	challenged    map[uint32]uint64
+	validations   map[uint32]uint64
+	serviceNonces map[serviceKey]uint64
+	timeouts      map[uint32]uint64
+	rejected      map[uint32]uint64
+	counters      map[CounterKey]uint64
+	nonces        map[uint64]*nonceRecord
+	costs         map[uint64]nonceCost
+	folded        map[uint32]SlotMoney
+	produced      map[uint32]uint64
+	events        []protocolEvent
+	retired       bool
 
+	feePerNonce      uint64
+	finalizingFrom   uint64
 	inFlightReserved uint64
 	challengedCost   uint64
+}
+
+type serviceKey struct {
+	slotID  uint32
+	purpose ServicePurpose
 }
 
 // The only way to build one: a second site that forgot a map would panic on a path with no error to return.
 func newEscrowLedger(metadata EscrowMetadata) *escrowLedger {
 	return &escrowLedger{
-		metadata:    metadata,
-		hostStats:   make(map[uint32]types.HostStats),
-		challenged:  make(map[uint32]uint64),
-		validations: make(map[uint32]uint64),
-		timeouts:    make(map[uint32]uint64),
-		rejected:    make(map[uint32]uint64),
-		counters:    make(map[CounterKey]uint64),
-		nonces:      make(map[uint64]*nonceRecord),
-		costs:       make(map[uint64]nonceCost),
-		folded:      make(map[uint32]SlotMoney),
-		produced:    make(map[uint32]uint64),
+		metadata:      metadata,
+		hostStats:     make(map[uint32]types.HostStats),
+		challenged:    make(map[uint32]uint64),
+		validations:   make(map[uint32]uint64),
+		serviceNonces: make(map[serviceKey]uint64),
+		timeouts:      make(map[uint32]uint64),
+		rejected:      make(map[uint32]uint64),
+		counters:      make(map[CounterKey]uint64),
+		nonces:        make(map[uint64]*nonceRecord),
+		costs:         make(map[uint64]nonceCost),
+		folded:        make(map[uint32]SlotMoney),
+		produced:      make(map[uint32]uint64),
 	}
 }
 
@@ -161,9 +170,7 @@ func (b *Book) MoneyTotals(escrowID string) (MoneyTotals, bool) {
 
 func (b *Book) ObserveLatestNonce(escrowID string, nonce uint64) error {
 	return b.withEscrow(escrowID, func(escrow *escrowLedger) error {
-		if nonce > escrow.latest {
-			escrow.latest = nonce
-		}
+		escrow.raiseLatest(nonce)
 		return nil
 	})
 }
@@ -219,6 +226,30 @@ func (b *Book) RecordValidation(escrowID string, validatorSlot uint32) error {
 			return fmt.Errorf("slot %d out of range", validatorSlot)
 		}
 		escrow.validations[validatorSlot]++
+		return nil
+	})
+}
+
+// RecordServiceNonce files a nonce a diff with no inference spent. See README.md, "Service nonces".
+func (b *Book) RecordServiceNonce(escrowID string, nonce uint64, purpose ServicePurpose) error {
+	return b.withEscrow(escrowID, func(escrow *escrowLedger) error {
+		escrow.raiseLatest(nonce)
+		if purpose == ServiceFinalize {
+			escrow.noteFinalizeStart(nonce)
+		}
+		if escrow.finalizingFrom != 0 && nonce > escrow.finalizingFrom {
+			purpose = ServiceFinalize
+		}
+		escrow.serviceNonces[serviceKey{slotID: escrow.slotOf(nonce), purpose: purpose}]++
+		return nil
+	})
+}
+
+// ObserveCharging takes the session's frozen fee per nonce and the chain's finalize nonce, from which no nonce pays it.
+func (b *Book) ObserveCharging(escrowID string, feePerNonce, finalizeNonce uint64) error {
+	return b.withEscrow(escrowID, func(escrow *escrowLedger) error {
+		escrow.feePerNonce = feePerNonce
+		escrow.noteFinalizeStart(finalizeNonce)
 		return nil
 	})
 }
@@ -354,10 +385,21 @@ func (b *Book) markUnsavedLocked(escrowID string) {
 }
 
 // Seeing a nonce raises the assigned watermark too, or the counters outrun the range they are measured against.
-func (e *escrowLedger) record(nonce uint64) *nonceRecord {
+func (e *escrowLedger) raiseLatest(nonce uint64) {
 	if nonce > e.latest {
 		e.latest = nonce
 	}
+}
+
+// Only the first finalize round names itself, so the earliest start either source saw wins.
+func (e *escrowLedger) noteFinalizeStart(nonce uint64) {
+	if nonce != 0 && (e.finalizingFrom == 0 || nonce < e.finalizingFrom) {
+		e.finalizingFrom = nonce
+	}
+}
+
+func (e *escrowLedger) record(nonce uint64) *nonceRecord {
+	e.raiseLatest(nonce)
 	existing, known := e.nonces[nonce]
 	if known {
 		return existing

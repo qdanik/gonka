@@ -101,9 +101,10 @@ func (n *Recorder) sweep(ctx context.Context, escrows EscrowSource, diffs DiffJo
 	}
 }
 
-// What one sweep reads off an escrow: the watermark, the chain's per-slot stats, and every nonce's money.
+// What one sweep reads off an escrow: the watermark, what the chain charges per nonce, the chain's per-slot stats, and every nonce's money.
 func (n *Recorder) observeEscrowState(escrowID string, escrowState types.EscrowState) {
 	n.report(n.service.Book.ObserveLatestNonce(escrowID, escrowState.LatestNonce))
+	n.report(n.service.Book.ObserveCharging(escrowID, escrowState.Config.FeePerNonce, escrowState.FinalizeNonce))
 	for slotID, stats := range escrowState.HostStats {
 		if stats != nil {
 			n.report(n.service.Book.ObserveHostStats(escrowID, slotID, *stats))

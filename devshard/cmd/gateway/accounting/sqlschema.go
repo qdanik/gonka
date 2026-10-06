@@ -18,6 +18,7 @@ CREATE TABLE IF NOT EXISTS accounting_escrows (
 	model          TEXT    NOT NULL,
 	creation_epoch INTEGER NOT NULL,
 	latest_nonce   INTEGER NOT NULL,
+	fee_per_nonce  INTEGER NOT NULL,
 	retired        INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS accounting_slots (
@@ -44,6 +45,13 @@ CREATE TABLE IF NOT EXISTS accounting_slot_activity (
 	timeouts_applied INTEGER NOT NULL,
 	rejected         INTEGER NOT NULL,
 	PRIMARY KEY (escrow_id, slot_id)
+);
+CREATE TABLE IF NOT EXISTS accounting_service_nonces (
+	escrow_id TEXT    NOT NULL,
+	slot_id   INTEGER NOT NULL,
+	purpose   TEXT    NOT NULL,
+	count     INTEGER NOT NULL,
+	PRIMARY KEY (escrow_id, slot_id, purpose)
 );
 CREATE TABLE IF NOT EXISTS accounting_money (
 	escrow_id        TEXT    NOT NULL,
@@ -103,6 +111,7 @@ var escrowTables = []string{
 	"accounting_counters",
 	"accounting_host_stats",
 	"accounting_slot_activity",
+	"accounting_service_nonces",
 	"accounting_money",
 	"accounting_slots",
 	"accounting_escrows",

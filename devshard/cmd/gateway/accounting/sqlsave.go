@@ -12,8 +12,8 @@ import (
 )
 
 const (
-	insertEscrow = `INSERT INTO accounting_escrows (escrow_id, model, creation_epoch, latest_nonce, retired)
-		 VALUES (?, ?, ?, ?, ?)`
+	insertEscrow = `INSERT INTO accounting_escrows (escrow_id, model, creation_epoch, latest_nonce, fee_per_nonce, retired)
+		 VALUES (?, ?, ?, ?, ?, ?)`
 	insertSlot      = `INSERT INTO accounting_slots (escrow_id, slot_id, validator_address) VALUES (?, ?, ?)`
 	insertHostStats = `INSERT INTO accounting_host_stats
 		 (escrow_id, slot_id, missed, invalid, cost, required_validations, completed_validations)
@@ -21,7 +21,8 @@ const (
 	insertSlotActivity = `INSERT INTO accounting_slot_activity
 		 (escrow_id, slot_id, challenged, validations, timeouts_applied, rejected)
 		 VALUES (?, ?, ?, ?, ?, ?)`
-	insertMoney = `INSERT INTO accounting_money
+	insertServiceNonces = `INSERT INTO accounting_service_nonces (escrow_id, slot_id, purpose, count) VALUES (?, ?, ?, ?)`
+	insertMoney         = `INSERT INTO accounting_money
 		 (escrow_id, slot_id, reserved_cost, actual_cost, refunded_cost, estimated_input, estimated_error,
 		  max_tokens, input_tokens, counted_nonces, output_tokens)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
@@ -36,7 +37,7 @@ const (
 )
 
 type rowWriters struct {
-	escrow, slot, hostStats, slotActivity, money, counter, nonce *sql.Stmt
+	escrow, slot, hostStats, slotActivity, serviceNonces, money, counter, nonce *sql.Stmt
 }
 
 // Save writes only the escrows changed since the last save, and removes the ones the book dropped. See README.md, "Storage".
@@ -74,6 +75,7 @@ func (s *Store) Save(ctx context.Context, book *Book) (err error) {
 		{&writers.slot, insertSlot},
 		{&writers.hostStats, insertHostStats},
 		{&writers.slotActivity, insertSlotActivity},
+		{&writers.serviceNonces, insertServiceNonces},
 		{&writers.money, insertMoney},
 		{&writers.counter, insertCounter},
 		{&writers.nonce, insertNonce},
@@ -128,7 +130,7 @@ func clearStoredRows(ctx context.Context, transaction *sql.Tx, changes unsavedCh
 func writeEscrow(ctx context.Context, writers rowWriters, escrow EscrowSnapshot) error {
 	identity := escrow.Metadata.EscrowID
 	if _, err := writers.escrow.ExecContext(ctx,
-		identity, escrow.Metadata.Model, escrow.Metadata.CreationEpoch, escrow.LatestNonce, escrow.Retired,
+		identity, escrow.Metadata.Model, escrow.Metadata.CreationEpoch, escrow.LatestNonce, escrow.FeePerNonce, escrow.Retired,
 	); err != nil {
 		return fmt.Errorf("writing escrow %s: %w", identity, err)
 	}
@@ -153,6 +155,11 @@ func writeEscrow(ctx context.Context, writers rowWriters, escrow EscrowSnapshot)
 			activity.TimeoutsApplied, activity.Rejected,
 		); err != nil {
 			return fmt.Errorf("writing slot activity for slot %d of %s: %w", slotID, identity, err)
+		}
+	}
+	for _, service := range escrow.ServiceNonces {
+		if _, err := writers.serviceNonces.ExecContext(ctx, identity, service.SlotID, service.Purpose, service.Count); err != nil {
+			return fmt.Errorf("writing service nonces for slot %d of %s: %w", service.SlotID, identity, err)
 		}
 	}
 	for _, slotID := range slices.Sorted(maps.Keys(slotsWithTotals(escrow))) {

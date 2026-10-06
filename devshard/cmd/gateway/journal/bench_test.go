@@ -68,7 +68,9 @@ func BenchmarkDiffComposed(b *testing.B) {
 func BenchmarkDiffComposedWithoutFacts(b *testing.B) {
 	events := New(Settings{Lines: discardLines{}})
 	b.Cleanup(func() { _ = events.Close() })
-	diff := &types.Diff{Nonce: 9, Txs: []*types.DevshardTx{{Tx: &types.DevshardTx_StartInference{}}}}
+	diff := &types.Diff{Nonce: 9, Txs: []*types.DevshardTx{
+		{Tx: &types.DevshardTx_StartInference{StartInference: &types.MsgStartInference{InferenceId: 9}}},
+	}}
 
 	b.ReportAllocs()
 	for b.Loop() {

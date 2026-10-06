@@ -50,6 +50,22 @@ graph LR
 
 The kind is read from the receipt — `engine/settle.go`, `timeoutKind` — and then deferred to the verifiers' vote, which is the protocol's answer and can disagree: they judge on what they saw, and the receipt went to the gateway.
 
+### Service nonces
+
+Not every nonce carries an inference. The session composes a diff with no `StartInference` to keep the height-sync cadence, to submit a timeout or an error miss, to drain pending transactions, and to finalize the escrow. Each such diff spends a nonce and, while the session is active, pays its `FeePerNonce`. None of them has a disposition, so without a count of their own they would read as `unclassified`.
+
+`service_nonces` counts them per slot by purpose, and they count toward the slot's accounted nonces, so `unclassified` is what is left: facts the ledger lost, not nonces it could not name. The purpose is read off the diff's transactions, not off the code that composed it, so the label says what the diff carried: the first matching row wins, and a round's pending transactions can move it between `heartbeat` and `flush` without changing the total or the fee.
+
+| Purpose | The diff carries | Usually composed by |
+| --- | --- | --- |
+| `finalize` | `FinalizeRound`, or comes after it | `Session.Finalize`: the round that opens finalization and every round after it |
+| `heartbeat` | `Heartbeat` or `ForceHeightSyncTurn`; or a `HeightAck` with nothing below | the heartbeat span and the ack rounds that carry an ack |
+| `error_miss` | `ErrorMiss` | `HandleErrorMiss` |
+| `timeout` | `TimeoutInference` | `HandleTimeout` |
+| `flush` | anything else | `SyncHosts`, the pre-finalize and retirement flushes, the drain before a heartbeat span, an ack round with no ack left to carry |
+
+`service_fee` is what they cost: every service nonce but a `finalize` one, times the escrow's `FeePerNonce`, the per-diff fee the session froze at creation. The finalize round moves the session out of its active phase before the fee is charged, so neither it nor any round after it pays. Only that first round names itself, so the ledger takes the start from it or from the chain's `FinalizeNonce` on the next sweep, whichever comes first, and files every later service nonce of the escrow under `finalize`. A height ack riding an inference's diff counts nothing: that nonce was spent on the inference.
+
 ## The surface
 
 `DEVSHARD_STATS_ENABLED` builds the ledger, and the ledger serves itself only as JSON on its own port, `DEVSHARD_STATS_PORT` (9091 by default, on every interface). Nothing of it reaches Prometheus: a gauge aggregated from the ledger would walk every nonce it holds under the book's lock on every scrape.

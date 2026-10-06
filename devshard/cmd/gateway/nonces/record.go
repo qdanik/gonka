@@ -82,6 +82,8 @@ func (n *Recorder) RecordDiffFacts(escrowID string, facts []accounting.DiffFact)
 			n.report(n.service.Book.RecordInvalidVerdict(escrowID, fact.Nonce))
 		case accounting.DiffFactAppliedTimeout:
 			n.report(n.service.Book.RecordAppliedTimeout(escrowID, fact.Nonce))
+		case accounting.DiffFactServiceNonce:
+			n.report(n.service.Book.RecordServiceNonce(escrowID, fact.Nonce, fact.Purpose))
 		}
 	}
 }

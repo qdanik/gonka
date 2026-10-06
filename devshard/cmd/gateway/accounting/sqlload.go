@@ -32,7 +32,7 @@ func (s *Store) Load(ctx context.Context) (Snapshot, error) {
 		return Snapshot{}, err
 	}
 	for _, read := range []func(context.Context, map[string]*EscrowSnapshot) error{
-		s.readSlots, s.readHostStats, s.readSlotActivity, s.readMoney, s.readCounters, s.readNonces,
+		s.readSlots, s.readHostStats, s.readSlotActivity, s.readServiceNonces, s.readMoney, s.readCounters, s.readNonces,
 	} {
 		if err := read(ctx, escrows); err != nil {
 			return Snapshot{}, err
@@ -72,12 +72,12 @@ func (s *Store) readEscrows(ctx context.Context) (map[string]*EscrowSnapshot, []
 	escrows := make(map[string]*EscrowSnapshot)
 	var order []string
 	err := s.eachRow(ctx,
-		`SELECT escrow_id, model, creation_epoch, latest_nonce, retired
+		`SELECT escrow_id, model, creation_epoch, latest_nonce, fee_per_nonce, retired
 		 FROM accounting_escrows ORDER BY escrow_id`, "escrows",
 		func(rows *sql.Rows) error {
 			var stored EscrowSnapshot
 			if err := rows.Scan(&stored.Metadata.EscrowID, &stored.Metadata.Model,
-				&stored.Metadata.CreationEpoch, &stored.LatestNonce, &stored.Retired); err != nil {
+				&stored.Metadata.CreationEpoch, &stored.LatestNonce, &stored.FeePerNonce, &stored.Retired); err != nil {
 				return err
 			}
 			stored.HostStats = make(map[uint32]types.HostStats)
@@ -141,6 +141,23 @@ func (s *Store) readSlotActivity(ctx context.Context, escrows map[string]*Escrow
 			}
 			if escrow, known := escrows[escrowID]; known {
 				escrow.SlotActivity[slotID] = activity
+			}
+			return nil
+		})
+}
+
+func (s *Store) readServiceNonces(ctx context.Context, escrows map[string]*EscrowSnapshot) error {
+	return s.eachRow(ctx,
+		`SELECT escrow_id, slot_id, purpose, count FROM accounting_service_nonces ORDER BY escrow_id, slot_id, purpose`,
+		"service nonces",
+		func(rows *sql.Rows) error {
+			var escrowID string
+			var service PersistedServiceCount
+			if err := rows.Scan(&escrowID, &service.SlotID, &service.Purpose, &service.Count); err != nil {
+				return err
+			}
+			if escrow, known := escrows[escrowID]; known {
+				escrow.ServiceNonces = append(escrow.ServiceNonces, service)
 			}
 			return nil
 		})

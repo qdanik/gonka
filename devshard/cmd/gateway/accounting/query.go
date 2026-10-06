@@ -34,7 +34,7 @@ func (b *Book) query(filter QueryFilter, detailed bool) []ParticipantRecord {
 					EpochIndex:    identity.epoch,
 					Participant:   identity.participant,
 					Model:         identity.model,
-					nonceTotals:   nonceTotals{Dispositions: make(map[Disposition]uint64)},
+					nonceTotals:   nonceTotals{Dispositions: make(map[Disposition]uint64), ServiceNonces: make(map[ServicePurpose]uint64)},
 				}
 				records[identity] = record
 			}
@@ -131,7 +131,7 @@ func (b *Book) Epochs(filter QueryFilter) []EpochSummary {
 				SchemaVersion: SchemaVersion,
 				UpdatedAt:     record.UpdatedAt,
 				EpochIndex:    record.EpochIndex,
-				nonceTotals:   nonceTotals{Dispositions: make(map[Disposition]uint64)},
+				nonceTotals:   nonceTotals{Dispositions: make(map[Disposition]uint64), ServiceNonces: make(map[ServicePurpose]uint64)},
 			}
 			summaries[record.EpochIndex] = summary
 		}
@@ -259,6 +259,7 @@ func (e *escrowLedger) slots(escrowID string) []SlotRecord {
 		}
 	}
 
+	serviceBySlot := e.serviceBySlot(groupSize)
 	records := make([]SlotRecord, 0, groupSize)
 	for slotID := range groupSize {
 		aggregate := &aggregates[slotID]
@@ -283,6 +284,8 @@ func (e *escrowLedger) slots(escrowID string) []SlotRecord {
 				MaxTokens:      money[slotID].MaxTokens,
 				InputTokens:    money[slotID].Input,
 				OutputTokens:   e.produced[slotID],
+				ServiceNonces:  serviceBySlot[slotID],
+				ServiceFee:     serviceBySlot[slotID].fee(e.feePerNonce),
 			},
 			hostActivity: hostActivity{
 				InFlight:             aggregate.inFlight,
@@ -299,7 +302,7 @@ func (e *escrowLedger) slots(escrowID string) []SlotRecord {
 			slot.ChainCost = stats.Cost
 			slot.RequiredValidations, slot.CompletedValidations = stats.RequiredValidations, stats.CompletedValidations
 		}
-		accounted := aggregate.counted + slot.Pending + slot.InFlight
+		accounted := aggregate.counted + slot.Pending + slot.InFlight + serviceBySlot[slotID].total()
 		if accounted > slot.Assigned {
 			slot.Overcounted = accounted - slot.Assigned
 		} else {

@@ -86,6 +86,50 @@ func TestAChainReadingReplacesTheSavedTokensRatherThanAddingToThem(t *testing.T)
 }
 
 // Test flow:
+//  1. Observe a finished inference with 100 input tokens, then save and reload the book.
+//  2. Observe the restored escrow with no inferences, as the chain reads once auto-seal has removed the record.
+//  3. Assert the input tokens, max tokens and counted nonce the saved fold carried are still there.
+func TestTheTokensOfASealedInferenceSurviveARestart(t *testing.T) {
+	book := newTestBook(t, 4)
+	if err := book.ObserveInferences(testEscrow, finishedInference(100, 42)); err != nil {
+		t.Fatalf("ObserveInferences(): %v", err)
+	}
+	restored := saveAndReload(t, book, openTestStore(t))
+
+	if err := restored.ObserveInferences(testEscrow, map[uint64]*types.InferenceRecord{}); err != nil {
+		t.Fatalf("ObserveInferences(): %v", err)
+	}
+
+	money := moneyOf(t, restored)
+	if money.Input != 100 || money.MaxTokens != 512 || money.CountedNonces != 1 {
+		t.Fatalf("input=%d max_tokens=%d counted=%d, want 100, 512 and 1", money.Input, money.MaxTokens, money.CountedNonces)
+	}
+}
+
+// Test flow:
+//  1. Observe a finished inference with 100 input tokens, then observe the escrow again with no inferences, as auto-seal leaves it.
+//  2. Save and reload the book, and observe it once more with no inferences.
+//  3. Assert the sealed inference's tokens are counted once, before and after the restart.
+func TestASealedInferenceIsCountedOnceAcrossARestart(t *testing.T) {
+	book := newTestBook(t, 4)
+	for _, inferences := range []map[uint64]*types.InferenceRecord{finishedInference(100, 42), {}} {
+		if err := book.ObserveInferences(testEscrow, inferences); err != nil {
+			t.Fatalf("ObserveInferences(): %v", err)
+		}
+	}
+	restored := saveAndReload(t, book, openTestStore(t))
+	if err := restored.ObserveInferences(testEscrow, map[uint64]*types.InferenceRecord{}); err != nil {
+		t.Fatalf("ObserveInferences(): %v", err)
+	}
+
+	for name, money := range map[string]SlotMoney{"before": moneyOf(t, book), "after": moneyOf(t, restored)} {
+		if money.Input != 100 || money.CountedNonces != 1 {
+			t.Fatalf("%s the restart input=%d counted=%d, want 100 and 1", name, money.Input, money.CountedNonces)
+		}
+	}
+}
+
+// Test flow:
 //  1. Observe three inferences on three slots: two finished with different token counts, one timed out with a reserved cost.
 //  2. Retire the escrow and build the expected per-slot money for all four slots, including the untouched one.
 //  3. For both the live book and a saved-and-reloaded copy of it, compute slot totals.

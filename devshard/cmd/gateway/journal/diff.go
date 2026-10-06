@@ -15,12 +15,15 @@ const (
 	DiffFactValidation     = accounting.DiffFactValidation
 	DiffFactInvalidVerdict = accounting.DiffFactInvalidVerdict
 	DiffFactAppliedTimeout = accounting.DiffFactAppliedTimeout
+	DiffFactServiceNonce   = accounting.DiffFactServiceNonce
 )
 
 // diffFacts runs under the session lock, so a diff with no ledger fact allocates nothing. See README.md, "Order and the locks it takes".
 func diffFacts(diff *types.Diff) []DiffFact {
 	factCount := 0
+	startsInference := false
 	for _, tx := range diff.Txs {
+		startsInference = startsInference || tx.GetStartInference() != nil
 		if validation := tx.GetValidation(); validation != nil {
 			factCount++
 			if !validation.Valid {
@@ -29,6 +32,9 @@ func diffFacts(diff *types.Diff) []DiffFact {
 		} else if tx.GetTimeoutInference() != nil {
 			factCount++
 		}
+	}
+	if !startsInference {
+		factCount++
 	}
 	if factCount == 0 {
 		return nil
@@ -45,5 +51,34 @@ func diffFacts(diff *types.Diff) []DiffFact {
 			facts = append(facts, DiffFact{Kind: DiffFactAppliedTimeout, Nonce: timeout.InferenceId})
 		}
 	}
+	if !startsInference {
+		facts = append(facts, DiffFact{Kind: DiffFactServiceNonce, Nonce: diff.Nonce, Purpose: servicePurpose(diff)})
+	}
 	return facts
+}
+
+// servicePurpose names what a diff with no inference was composed for. See docs/accounting.md, "Service nonces".
+func servicePurpose(diff *types.Diff) accounting.ServicePurpose {
+	var carriesFinalize, carriesHeartbeat, carriesErrorMiss, carriesTimeout, carriesHeightAck bool
+	for _, tx := range diff.Txs {
+		carriesFinalize = carriesFinalize || tx.GetFinalizeRound() != nil
+		carriesHeartbeat = carriesHeartbeat || tx.GetHeartbeat() != nil || tx.GetForceHeightSyncTurn() != nil
+		carriesErrorMiss = carriesErrorMiss || tx.GetErrorMiss() != nil
+		carriesTimeout = carriesTimeout || tx.GetTimeoutInference() != nil
+		carriesHeightAck = carriesHeightAck || tx.GetHeightAck() != nil
+	}
+	switch {
+	case carriesFinalize:
+		return accounting.ServiceFinalize
+	case carriesHeartbeat:
+		return accounting.ServiceHeartbeat
+	case carriesErrorMiss:
+		return accounting.ServiceErrorMiss
+	case carriesTimeout:
+		return accounting.ServiceTimeout
+	case carriesHeightAck:
+		return accounting.ServiceHeartbeat
+	default:
+		return accounting.ServiceFlush
+	}
 }

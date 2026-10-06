@@ -15,6 +15,17 @@ const (
 	DispositionUnfinishedExecution  Disposition = "unfinished_execution"
 )
 
+// What spent a nonce that carried no inference. See docs/accounting.md, "Service nonces".
+type ServicePurpose string
+
+const (
+	ServiceHeartbeat ServicePurpose = "heartbeat"
+	ServiceTimeout   ServicePurpose = "timeout"
+	ServiceErrorMiss ServicePurpose = "error_miss"
+	ServiceFinalize  ServicePurpose = "finalize"
+	ServiceFlush     ServicePurpose = "flush"
+)
+
 // Whether the answer reached a client, and the chain phase the nonce was spent in.
 const (
 	UsageWinner  Usage = "winner"
