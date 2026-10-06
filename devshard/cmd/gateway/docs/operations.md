@@ -89,6 +89,7 @@ Signing keys are addressed **by the name of the variable that holds them**, neve
 | `GATEWAY_DEFAULT_MAX_TOKENS` / `GATEWAY_MAX_TOKENS_CAP` | from `filters` | the output budget a request gets and may ask for |
 | `DEVSHARD_ESCROW_ROTATION_ENABLED` | false | whether the epoch bridge creates and retires escrows |
 | `DEVSHARD_ESCROW_ROTATION_SETTLEMENT_ENABLED` | false | whether retirement settles or only parks; a model's own `settlement_enabled` in the models JSON overrides it |
+| `DEVSHARD_ESCROW_ROTATION_PREVIOUS_EPOCH_SETTLEMENT_ENABLED` | false | settles parked and deadline escrows once their chain epoch is over, never inside it; a model's own `previous_epoch_settlement_enabled` in the models JSON overrides it |
 | `GATEWAY_ROTATION_SETTLE_MARGIN_BLOCKS` | 600 | blocks before an escrow's settlement deadline at which it is parked for settling; at least 1; a margin the measured block time (over at least 100 blocks) makes shorter than two settle windows is journalled as `settle margin shorter than two settle windows`, once per episode; the margin is never refused |
 | `DEVSHARD_ESCROW_ROTATION_PRE_POC_BLOCKS` | 300 | how early the bridge starts |
 | `GATEWAY_WARM_NEW_ESCROWS` | true | whether a new escrow is taught to its group before serving |

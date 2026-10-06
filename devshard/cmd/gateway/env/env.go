@@ -51,16 +51,17 @@ type Values struct {
 	DisabledMessage     *string
 	DisabledRedirectURL *string
 
-	RotationEnabled            *bool
-	RotationPrePoCBlocks       *int64
-	MatchWaitMS                *int64
-	MaxConsecutiveBurns        *int64
-	ForceUpstreamStreaming     *bool
-	MaxBufferedResponseBytes   *int64
-	WarmNewEscrows             *bool
-	RotationSettlementEnabled  *bool
-	RotationModelsJSON         *string
-	RotationSettleMarginBlocks *int64
+	RotationEnabled                        *bool
+	RotationPrePoCBlocks                   *int64
+	MatchWaitMS                            *int64
+	MaxConsecutiveBurns                    *int64
+	ForceUpstreamStreaming                 *bool
+	MaxBufferedResponseBytes               *int64
+	WarmNewEscrows                         *bool
+	RotationSettlementEnabled              *bool
+	RotationPreviousEpochSettlementEnabled *bool
+	RotationModelsJSON                     *string
+	RotationSettleMarginBlocks             *int64
 
 	ChatCacheMaxBytes *int64
 
@@ -313,6 +314,7 @@ func Load() (Values, error) {
 	readLenientBool("DEVSHARD_ESCROW_ROTATION_ENABLED", &values.RotationEnabled)
 	readLenientInt("DEVSHARD_ESCROW_ROTATION_PRE_POC_BLOCKS", 0, &values.RotationPrePoCBlocks)
 	readLenientBool("DEVSHARD_ESCROW_ROTATION_SETTLEMENT_ENABLED", &values.RotationSettlementEnabled)
+	readLenientBool("DEVSHARD_ESCROW_ROTATION_PREVIOUS_EPOCH_SETTLEMENT_ENABLED", &values.RotationPreviousEpochSettlementEnabled)
 	readString("DEVSHARD_ESCROW_ROTATION_MODELS_JSON", &values.RotationModelsJSON)
 	readStrictInt("GATEWAY_MATCH_WAIT_MS", &values.MatchWaitMS)
 	readStrictInt("GATEWAY_MAX_CONSECUTIVE_BURNS", &values.MaxConsecutiveBurns)

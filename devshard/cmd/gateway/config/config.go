@@ -105,11 +105,12 @@ type Modes struct {
 }
 
 type Rotation struct {
-	Enabled            bool
-	SettlementEnabled  bool
-	PrePoCBlocks       int64
-	ModelsJSON         string
-	SettleMarginBlocks int64
+	Enabled                        bool
+	SettlementEnabled              bool
+	PreviousEpochSettlementEnabled bool
+	PrePoCBlocks                   int64
+	ModelsJSON                     string
+	SettleMarginBlocks             int64
 }
 
 type Cache struct {

@@ -28,7 +28,7 @@ Everything the gateway's behaviour depends on, in one value that is never mutate
 | `Limits.Congestion` | the factors a narrowing multiplies the blamed window by, the factor the other window takes with it, and how far above the best latency it has held a host may drift before a healthy answer counts as congestion. |
 | `Limits.ModelLimits` | the per-model override set. The two token fields are required as a pair; the pointer fields are optional, and a `nil` inherits the global limit rather than meaning zero. |
 | `Modes` | PoC mode and the disabled/redirect switches. |
-| `Rotation` | escrow rotation, its settlement switch, and how far before PoC it runs; `SettleMarginBlocks` (default 600, at least 1) is how many blocks before an escrow's settlement deadline it is parked for settling ([`docs/escrows.md`](../docs/escrows.md)). |
+| `Rotation` | escrow rotation, its settlement switches (any epoch and previous epoch only), and how far before PoC it runs; `SettleMarginBlocks` (default 600, at least 1) is how many blocks before an escrow's settlement deadline it is parked for settling ([`docs/escrows.md`](../docs/escrows.md)). |
 | `HeightSync` | whether the heartbeat cadence runs, whether a session chases a seeded tip, the optional mainnet follower, and the anchor cadence `AnchorK` / `AnchorSlots` ([`heights/README.md`](../heights/README.md)). |
 | `HostPing` | the reachability and clock-drift probe of the live escrows' hosts: interval and timeout in milliseconds, concurrency, and a switch to turn it off ([`hostping/README.md`](../hostping/README.md)). |
 | `Cache` | the response cache's byte ceiling. |

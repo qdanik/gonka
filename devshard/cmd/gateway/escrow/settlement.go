@@ -35,7 +35,10 @@ func (m *Manager) settlePending(ctx context.Context, snapshot chain.PhaseSnapsho
 	policy := newSettlementPolicy(m.config.Load().Rotation)
 	var parked []pendingSettle
 	for _, record := range devshards {
-		if record.Active || !record.SettlementPending || goneFromChain(record) || !policy.enabled(record.Model) {
+		if record.Active || !record.SettlementPending || goneFromChain(record) {
+			continue
+		}
+		if !policy.settles(record.Model, ownEpochOver(record, snapshot)) {
 			continue
 		}
 		parked = append(parked, pendingSettle{record: record, deadline: m.deadlineOf(record, snapshot)})
@@ -245,7 +248,7 @@ func numericEscrowID(escrowID string) uint64 {
 // retire honors the model's settlement policy. See README.md, "Settlement and retirement".
 func (m *Manager) retire(ctx context.Context, record store.DevshardRecord) error {
 	// Parked only: the row names the sole key that can settle this escrow later, so it outlives retirement.
-	if !newSettlementPolicy(m.config.Load().Rotation).enabled(record.Model) {
+	if !newSettlementPolicy(m.config.Load().Rotation).settlesAtRetirement(record.Model) {
 		return m.park(ctx, record.EscrowID)
 	}
 

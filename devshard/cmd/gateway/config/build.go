@@ -56,6 +56,7 @@ func Build(values env.Values, overrides Overrides) (*Config, error) {
 	overrideIfSet(&configuration.Rotation.Enabled, values.RotationEnabled)
 	overrideIfSet(&configuration.Rotation.PrePoCBlocks, values.RotationPrePoCBlocks)
 	overrideIfSet(&configuration.Rotation.SettlementEnabled, values.RotationSettlementEnabled)
+	overrideIfSet(&configuration.Rotation.PreviousEpochSettlementEnabled, values.RotationPreviousEpochSettlementEnabled)
 	overrideIfSet(&configuration.Rotation.ModelsJSON, values.RotationModelsJSON)
 	overrideIfSet(&configuration.Rotation.SettleMarginBlocks, values.RotationSettleMarginBlocks)
 
@@ -164,6 +165,7 @@ func Build(values env.Values, overrides Overrides) (*Config, error) {
 	overrideIfSet(&configuration.Modes.DisabledRedirectURL, overrides.DisabledRedirectURL)
 	overrideIfSet(&configuration.Rotation.Enabled, overrides.RotationEnabled)
 	overrideIfSet(&configuration.Rotation.SettlementEnabled, overrides.RotationSettlementEnabled)
+	overrideIfSet(&configuration.Rotation.PreviousEpochSettlementEnabled, overrides.RotationPreviousEpochSettlementEnabled)
 	overrideIfSet(&configuration.Rotation.PrePoCBlocks, overrides.RotationPrePoCBlocks)
 	overrideIfSet(&configuration.Rotation.ModelsJSON, overrides.RotationModelsJSON)
 	overrideIfSet(&configuration.Rotation.SettleMarginBlocks, overrides.RotationSettleMarginBlocks)

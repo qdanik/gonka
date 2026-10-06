@@ -14,6 +14,7 @@ import (
 	"devshard/cmd/gateway/chain"
 	"devshard/cmd/gateway/config"
 	"devshard/cmd/gateway/store"
+	"devshard/signing"
 )
 
 // Test flow:
@@ -512,4 +513,182 @@ func TestRowsTheChainStillHoldsDoNotStarveThePrunedBehindThem(t *testing.T) {
 	if calls != 2*prunedChecksPerTick || !slices.Equal(marked, []string{"20", "21", "22", "23"}) {
 		t.Fatalf("lookups after two ticks %d, marked %v, want %d and [20 21 22 23]", calls, marked, 2*prunedChecksPerTick)
 	}
+}
+
+func previousEpochSettlementConfig(modelsJSON string) config.Config {
+	configuration := config.Defaults()
+	configuration.Rotation.PreviousEpochSettlementEnabled = true
+	configuration.Rotation.ModelsJSON = modelsJSON
+	return configuration
+}
+
+// Test flow:
+//  1. With settlement off and previous-epoch settlement on, store parked rows at effective epoch 8 outside any margin: one of chain epoch 8, one of chain epoch 7, one of chain epoch 7 whose model turns previous-epoch settlement off, and one labelled 8 whose chain epoch is unresolved.
+//  2. Settle the pending rows once.
+//  3. Assert only the chain-epoch-7 row of the model that keeps the flag was settled and dropped; the others stay parked, the unresolved one because its label only bounds its chain epoch from below.
+func TestPreviousEpochSettlementSettlesAParkedRowOnlyOnceItsOwnEpochIsOver(t *testing.T) {
+	testStore := newFakeStore()
+	current := store.DevshardRecord{EscrowID: "current", PrivateKeyEnv: "MODEL_A_KEY", Model: "model-a", SettlementPending: true, ChainEpoch: 8}
+	previous := store.DevshardRecord{EscrowID: "previous", PrivateKeyEnv: "MODEL_A_KEY", Model: "model-a", SettlementPending: true, ChainEpoch: 7}
+	optedOut := store.DevshardRecord{EscrowID: "opted-out", PrivateKeyEnv: "MODEL_A_KEY", Model: "model-b", SettlementPending: true, ChainEpoch: 7}
+	unresolved := store.DevshardRecord{EscrowID: "unresolved", PrivateKeyEnv: "MODEL_A_KEY", Model: "model-a", SettlementPending: true, RotationEpoch: 8}
+	rows := []store.DevshardRecord{current, previous, optedOut, unresolved}
+	storeRows(testStore, rows)
+	configuration := previousEpochSettlementConfig(`[{"model_id":"model-b","amount":1000,"previous_epoch_settlement_enabled":false}]`)
+	manager := &Manager{
+		tx:               settlingTxClient(),
+		store:            testStore,
+		signer:           &fakeSignerSource{signer: testSigner(t)},
+		settlementSource: &fakeSettlementSource{},
+		config:           config.NewHolder(&configuration),
+		chainFacts:       &fakeTxClient{},
+		now:              time.Now,
+	}
+	snapshot := chain.PhaseSnapshot{EpochIndex: 8, EffectiveEpochIndex: 8, BlockHeight: 2100, EpochSwitchBlockHeight: 3100}
+
+	if err := manager.settlePending(context.Background(), snapshot, rows); err != nil {
+		t.Fatalf("settlePending() = %v, want nil", err)
+	}
+
+	if _, ok := testStore.snapshotDevshard(previous.EscrowID); ok {
+		t.Error("the chain-epoch-7 row is still stored, want it settled and dropped in epoch 8")
+	}
+	assertParked(t, testStore, current.EscrowID)
+	assertParked(t, testStore, optedOut.EscrowID)
+	assertParked(t, testStore, unresolved.EscrowID)
+}
+
+// Test flow:
+//  1. With settlement off and previous-epoch settlement on, store a serving row of chain epoch 7 inside the margin of the switch into epoch 9.
+//  2. Run the deadline pass.
+//  3. Assert it was parked and narrated as reached, not as settlement_disabled.
+func TestPreviousEpochSettlementParksAServingRowAtItsDeadline(t *testing.T) {
+	testStore := newFakeStore()
+	row := store.DevshardRecord{EscrowID: "1", Model: "model-a", Active: true, ChainEpoch: 7}
+	storeRows(testStore, []store.DevshardRecord{row})
+	configuration := previousEpochSettlementConfig("")
+	deps := testManagerDeps(t, testStore, &fakeTxClient{}, &fakeSnapshotSource{}, &configuration)
+	deps.ChainFacts = &fakeTxClient{}
+	narrator := &recordingLifecycleNarrator{}
+	deps.Narrator = narrator
+	manager := mustManager(t, deps)
+	snapshot := chain.PhaseSnapshot{EpochIndex: 8, EffectiveEpochIndex: 8, BlockHeight: 2600, EpochSwitchBlockHeight: 3100}
+
+	if _, err := manager.parkAtDeadline(context.Background(), snapshot, []store.DevshardRecord{row}); err != nil {
+		t.Fatalf("parkAtDeadline() = %v, want nil", err)
+	}
+
+	assertParked(t, testStore, row.EscrowID)
+	if recorded := narrator.recorded(); !slices.Contains(recorded, "deadline reached 1 epoch 7 settle by 3100") {
+		t.Fatalf("narration = %v, want the deadline reached", recorded)
+	}
+}
+
+// Test flow:
+//  1. With settlement off and previous-epoch settlement on, store a parked row past the deadline whose escrow the chain pruned.
+//  2. Check what the chain pruned.
+//  3. Assert the chain was not asked and the row is untouched: settlement owns it and drops it itself.
+func TestPrunedCheckLeavesAParkedRowToPreviousEpochSettlement(t *testing.T) {
+	testStore := newFakeStore()
+	row := store.DevshardRecord{EscrowID: "parked", Model: "model-a", RotationEpoch: 401, ChainEpoch: 400, SettlementPending: true}
+	storeRows(testStore, []store.DevshardRecord{row})
+	configuration := previousEpochSettlementConfig("")
+	calls := 0
+	manager := prunedCheckManager(t, testStore, &configuration, lookupAnswering(func(string) bool { return false }, &calls), nil)
+
+	checked, err := manager.markPrunedPastDeadline(context.Background(), pastDeadlineSnapshot, []store.DevshardRecord{row})
+
+	if err != nil || calls != 0 || checked[0].GoneFromChain {
+		t.Fatalf("error %v, lookups %d, row %+v, want no lookup and the row untouched", err, calls, checked[0])
+	}
+}
+
+// Test flow:
+//  1. Table-driven over readings that only bound the epochs: an unknown effective epoch while the latest is one ahead in PoC, and an unresolved row whose label is the effective epoch, inside the margin.
+//  2. With settlement off and previous-epoch settlement on, settle a parked row and run the deadline pass over a serving one.
+//  3. Assert neither was settled or parked: an escrow is not settled on a reading that only might be past its own epoch.
+func TestPreviousEpochSettlementNeverSettlesOnABoundOfItsOwnEpoch(t *testing.T) {
+	testCases := []struct {
+		name     string
+		epochs   store.DevshardRecord
+		snapshot chain.PhaseSnapshot
+	}{
+		{name: "an unknown effective epoch during PoC", epochs: store.DevshardRecord{ChainEpoch: 8}, snapshot: chain.PhaseSnapshot{EpochIndex: 9, BlockHeight: 2600, EpochSwitchBlockHeight: 3100}},
+		{name: "an unresolved row labelled with the effective epoch", epochs: store.DevshardRecord{RotationEpoch: 8}, snapshot: chain.PhaseSnapshot{EpochIndex: 8, EffectiveEpochIndex: 8, BlockHeight: 2600, EpochSwitchBlockHeight: 3100}},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			testStore := newFakeStore()
+			parked := store.DevshardRecord{EscrowID: "parked", PrivateKeyEnv: "MODEL_A_KEY", Model: "model-a", SettlementPending: true, ChainEpoch: testCase.epochs.ChainEpoch, RotationEpoch: testCase.epochs.RotationEpoch}
+			serving := store.DevshardRecord{EscrowID: "serving", PrivateKeyEnv: "MODEL_A_KEY", Model: "model-a", Active: true, ChainEpoch: testCase.epochs.ChainEpoch, RotationEpoch: testCase.epochs.RotationEpoch}
+			rows := []store.DevshardRecord{parked, serving}
+			storeRows(testStore, rows)
+			configuration := previousEpochSettlementConfig("")
+			deps := testManagerDeps(t, testStore, settlingTxClient(), &fakeSnapshotSource{}, &configuration)
+			deps.ChainFacts = &fakeTxClient{}
+			manager := mustManager(t, deps)
+
+			if _, err := manager.parkAtDeadline(context.Background(), testCase.snapshot, rows); err != nil {
+				t.Fatalf("parkAtDeadline() = %v, want nil", err)
+			}
+			if err := manager.settlePending(context.Background(), testCase.snapshot, rows); err != nil {
+				t.Fatalf("settlePending() = %v, want nil", err)
+			}
+
+			assertParked(t, testStore, parked.EscrowID)
+			if !testStore.devshards[serving.EscrowID].Active {
+				t.Fatalf("serving row = %+v, want it still serving", testStore.devshards[serving.EscrowID])
+			}
+		})
+	}
+}
+
+// Test flow:
+//  1. With both global settlement toggles off, store a parked row of chain epoch 7 for a model that turns previous-epoch settlement on for itself, at effective epoch 8.
+//  2. Settle the pending rows once.
+//  3. Assert it was settled and dropped.
+func TestAModelsOwnPreviousEpochSettlementOverridesTheGlobalToggle(t *testing.T) {
+	testStore := newFakeStore()
+	row := store.DevshardRecord{EscrowID: "previous", PrivateKeyEnv: "MODEL_A_KEY", Model: "model-a", SettlementPending: true, ChainEpoch: 7}
+	storeRows(testStore, []store.DevshardRecord{row})
+	configuration := config.Defaults()
+	configuration.Rotation.ModelsJSON = `[{"model_id":"model-a","amount":1000,"previous_epoch_settlement_enabled":true}]`
+	deps := testManagerDeps(t, testStore, settlingTxClient(), &fakeSnapshotSource{}, &configuration)
+	deps.ChainFacts = &fakeTxClient{}
+	manager := mustManager(t, deps)
+	snapshot := chain.PhaseSnapshot{EpochIndex: 8, EffectiveEpochIndex: 8, BlockHeight: 2100, EpochSwitchBlockHeight: 3100}
+
+	if err := manager.settlePending(context.Background(), snapshot, []store.DevshardRecord{row}); err != nil {
+		t.Fatalf("settlePending() = %v, want nil", err)
+	}
+
+	if _, ok := testStore.snapshotDevshard(row.EscrowID); ok {
+		t.Fatal("the row is still stored, want the model's own flag to settle it")
+	}
+}
+
+// Test flow:
+//  1. With settlement off and previous-epoch settlement on, store a serving row of chain epoch 7 and a chain client that fails the test if SettleEscrow is called.
+//  2. Retire it.
+//  3. Assert it was parked, not settled: retirement never settles under previous-epoch settlement alone.
+func TestRetireOnlyParksUnderPreviousEpochSettlement(t *testing.T) {
+	testStore := newFakeStore()
+	row := store.DevshardRecord{EscrowID: "serving", PrivateKeyEnv: "MODEL_A_KEY", Model: "model-a", Active: true, ChainEpoch: 7}
+	storeRows(testStore, []store.DevshardRecord{row})
+	configuration := previousEpochSettlementConfig("")
+	manager := &Manager{
+		tx: &fakeTxClient{settleEscrowFn: func(context.Context, *signing.Secp256k1Signer, chain.SettlementInput) (chain.SettleEscrowResult, error) {
+			t.Fatal("SettleEscrow must not be called at retirement under previous-epoch settlement alone")
+			return chain.SettleEscrowResult{}, nil
+		}},
+		store:            testStore,
+		signer:           &fakeSignerSource{signer: testSigner(t)},
+		settlementSource: &fakeSettlementSource{},
+		config:           config.NewHolder(&configuration),
+	}
+
+	if err := manager.retire(context.Background(), row); err != nil {
+		t.Fatalf("retire() = %v, want nil", err)
+	}
+	assertParked(t, testStore, row.EscrowID)
 }

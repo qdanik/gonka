@@ -14,15 +14,16 @@ import (
 
 // json tags are the DEVSHARD_ESCROW_ROTATION_MODELS_JSON wire contract, not renameable.
 type ModelConfig struct {
-	ModelID           string `json:"model_id"`
-	TempCount         int    `json:"temp_count"`
-	TargetCount       int    `json:"target_count"`
-	ReserveCount      int    `json:"reserve_count"`
-	Amount            uint64 `json:"amount"`
-	PrivateKeyEnv     string `json:"private_key_env"`
-	SettlementEnabled *bool  `json:"settlement_enabled,omitempty"`
-	MaxUnsettled      int    `json:"max_unsettled"`
-	FullContextSlots  int    `json:"full_context_slots"`
+	ModelID                        string `json:"model_id"`
+	TempCount                      int    `json:"temp_count"`
+	TargetCount                    int    `json:"target_count"`
+	ReserveCount                   int    `json:"reserve_count"`
+	Amount                         uint64 `json:"amount"`
+	PrivateKeyEnv                  string `json:"private_key_env"`
+	SettlementEnabled              *bool  `json:"settlement_enabled,omitempty"`
+	PreviousEpochSettlementEnabled *bool  `json:"previous_epoch_settlement_enabled,omitempty"`
+	MaxUnsettled                   int    `json:"max_unsettled"`
+	FullContextSlots               int    `json:"full_context_slots"`
 }
 
 const (
@@ -76,32 +77,51 @@ func parseModels(raw string) ([]ModelConfig, error) {
 	return models, nil
 }
 
-// settlementPolicy lets a model's own settlement_enabled win over the global toggle. See README.md, "Settlement and retirement".
+// settlementPolicy lets a model's own settlement flags win over the global toggles. See README.md, "Settlement and retirement".
 type settlementPolicy struct {
+	anyEpoch      modelToggle
+	previousEpoch modelToggle
+}
+
+type modelToggle struct {
 	global  bool
 	byModel map[string]bool
 }
 
-// newSettlementPolicy reads the models list whatever the rotation toggle says; a list that does not parse leaves every model on the global toggle.
+// newSettlementPolicy reads the models list whatever the rotation toggle says; a list that does not parse leaves every model on the global toggles.
 func newSettlementPolicy(rotation config.Rotation) settlementPolicy {
-	policy := settlementPolicy{global: rotation.SettlementEnabled, byModel: map[string]bool{}}
+	policy := settlementPolicy{
+		anyEpoch:      modelToggle{global: rotation.SettlementEnabled, byModel: map[string]bool{}},
+		previousEpoch: modelToggle{global: rotation.PreviousEpochSettlementEnabled, byModel: map[string]bool{}},
+	}
 	models, err := parseModels(rotation.ModelsJSON)
 	if err != nil {
 		return policy
 	}
 	for _, model := range models {
 		if model.SettlementEnabled != nil {
-			policy.byModel[model.ModelID] = *model.SettlementEnabled
+			policy.anyEpoch.byModel[model.ModelID] = *model.SettlementEnabled
+		}
+		if model.PreviousEpochSettlementEnabled != nil {
+			policy.previousEpoch.byModel[model.ModelID] = *model.PreviousEpochSettlementEnabled
 		}
 	}
 	return policy
 }
 
-func (p settlementPolicy) enabled(modelID string) bool {
-	if enabled, set := p.byModel[modelID]; set {
+func (p settlementPolicy) settlesAtRetirement(modelID string) bool {
+	return p.anyEpoch.enabled(modelID)
+}
+
+func (p settlementPolicy) settles(modelID string, ownEpochOver bool) bool {
+	return p.anyEpoch.enabled(modelID) || (p.previousEpoch.enabled(modelID) && ownEpochOver)
+}
+
+func (toggle modelToggle) enabled(modelID string) bool {
+	if enabled, set := toggle.byModel[modelID]; set {
 		return enabled
 	}
-	return p.global
+	return toggle.global
 }
 
 // known is false only when both weight-by-model maps are empty (cold start): callers must not skip an unknown model.

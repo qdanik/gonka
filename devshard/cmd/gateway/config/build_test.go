@@ -345,6 +345,26 @@ func TestThePoCWeightLimitFollowsThePlainOneAsDevshardctlDerivedIt(t *testing.T)
 }
 
 // Test flow:
+//  1. Build a config with no settlement knobs, then one where the environment turns both settlement toggles on, then one where overrides turn them back off.
+//  2. Assert both default off, the environment turns each on, and the overrides win over the environment.
+func TestBothSettlementTogglesFollowTheEnvironmentAndTheOverrides(t *testing.T) {
+	configuration, err := Build(env.Values{}, Overrides{})
+	if err != nil || configuration.Rotation.SettlementEnabled || configuration.Rotation.PreviousEpochSettlementEnabled {
+		t.Fatalf("Build() rotation = %+v, %v, want both settlement toggles off", configuration.Rotation, err)
+	}
+	enabled, disabled := true, false
+	values := env.Values{RotationSettlementEnabled: &enabled, RotationPreviousEpochSettlementEnabled: &enabled}
+	configuration, err = Build(values, Overrides{})
+	if err != nil || !configuration.Rotation.SettlementEnabled || !configuration.Rotation.PreviousEpochSettlementEnabled {
+		t.Fatalf("Build(environment on) rotation = %+v, %v, want both settlement toggles on", configuration.Rotation, err)
+	}
+	configuration, err = Build(values, Overrides{RotationSettlementEnabled: &disabled, RotationPreviousEpochSettlementEnabled: &disabled})
+	if err != nil || configuration.Rotation.SettlementEnabled || configuration.Rotation.PreviousEpochSettlementEnabled {
+		t.Fatalf("Build(overrides off) rotation = %+v, %v, want the overrides to turn both off", configuration.Rotation, err)
+	}
+}
+
+// Test flow:
 //  1. Build a config with no overrides, then one with the settle margin overridden to 900, then ones with 0 and -1.
 //  2. Assert the default is 600, the override sets 900, and 0 and -1 are refused as ErrInvalid.
 func TestTheSettleMarginDefaultsTo600BlocksAndRefusesLessThanOne(t *testing.T) {

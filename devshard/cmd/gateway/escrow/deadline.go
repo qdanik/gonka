@@ -92,7 +92,7 @@ func (m *Manager) parkAtDeadline(ctx context.Context, snapshot chain.PhaseSnapsh
 			narrate(record, deadline, deadlinePassed)
 		}
 		switch {
-		case !policy.enabled(record.Model):
+		case !policy.settles(record.Model, ownEpochOver(record, snapshot)):
 			narrate(record, deadline, deadlineSettlementDisabled)
 		case !record.Active && !record.SettlementPending && record.SettleTxHash == "":
 			narrate(record, deadline, m.deactivationReason(record))
@@ -143,7 +143,7 @@ func (m *Manager) markPrunedPastDeadline(ctx context.Context, snapshot chain.Pha
 	checked := slices.Clone(devshards)
 	candidates := make([]int, 0, len(checked))
 	for index, record := range checked {
-		settlementOwnsIt := record.SettlementPending && policy.enabled(record.Model)
+		settlementOwnsIt := record.SettlementPending && policy.settles(record.Model, ownEpochOver(record, snapshot))
 		if record.Active || goneFromChain(record) || settlementOwnsIt || !deadlineAt(record, snapshot, 0).passed {
 			continue
 		}

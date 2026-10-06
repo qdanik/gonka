@@ -481,12 +481,13 @@ func TestTheEscrowListIsReadFromDevshardsJSON(t *testing.T) {
 }
 
 // Test flow:
-//  1. Set all four rotation environment variables (enabled, settlement enabled, pre-PoC blocks, models JSON).
+//  1. Set all five rotation environment variables (enabled, settlement enabled, previous-epoch settlement enabled, pre-PoC blocks, models JSON).
 //  2. Call `Load`.
-//  3. Assert every one of the four knobs loaded its own variable.
+//  3. Assert every one of the five knobs loaded its own variable.
 func TestEveryRotationKnobIsReachableFromTheEnvironment(t *testing.T) {
 	t.Setenv("DEVSHARD_ESCROW_ROTATION_ENABLED", "true")
 	t.Setenv("DEVSHARD_ESCROW_ROTATION_SETTLEMENT_ENABLED", "true")
+	t.Setenv("DEVSHARD_ESCROW_ROTATION_PREVIOUS_EPOCH_SETTLEMENT_ENABLED", "true")
 	t.Setenv("DEVSHARD_ESCROW_ROTATION_PRE_POC_BLOCKS", "42")
 	t.Setenv("DEVSHARD_ESCROW_ROTATION_MODELS_JSON", "[]")
 
@@ -497,7 +498,7 @@ func TestEveryRotationKnobIsReachableFromTheEnvironment(t *testing.T) {
 	if values.RotationPrePoCBlocks == nil || *values.RotationPrePoCBlocks != 42 {
 		t.Fatalf("RotationPrePoCBlocks = %v, want the value the environment set", values.RotationPrePoCBlocks)
 	}
-	if values.RotationEnabled == nil || values.RotationSettlementEnabled == nil || values.RotationModelsJSON == nil {
+	if values.RotationEnabled == nil || values.RotationSettlementEnabled == nil || values.RotationPreviousEpochSettlementEnabled == nil || values.RotationModelsJSON == nil {
 		t.Fatal("a rotation knob stopped reading its variable")
 	}
 }
