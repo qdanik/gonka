@@ -149,6 +149,10 @@ type indexedFakeSession struct {
 	*fakeRecordReader
 }
 
+func (s indexedFakeSession) Inference(id uint64) (types.InferenceRecord, bool) {
+	return s.fakeRecordReader.Inference(id)
+}
+
 // Test flow:
 //  1. Publish one escrow whose session offers record reads and one whose session does not, both holding a Finished and a Pending record.
 //  2. Ask the registry for each escrow's open records, and for an escrow it never published.

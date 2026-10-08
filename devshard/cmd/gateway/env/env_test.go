@@ -84,20 +84,21 @@ func TestLoadWhitespaceIsTrimmedAndEmptyMeansUnset(t *testing.T) {
 }
 
 // Test flow:
-//  1. Set three gateway-only variables of different types to malformed values.
+//  1. Set four gateway-only variables of different types to malformed values.
 //  2. Call `Load`.
-//  3. Assert it returns an error naming all three variables, since errors must accumulate rather than stop at the first.
+//  3. Assert it returns an error naming all four variables, since errors must accumulate rather than stop at the first.
 func TestLoadRejectsMalformedGatewayValuesWithVariableName(t *testing.T) {
 	t.Setenv("GATEWAY_MATCH_WAIT_MS", "not-a-number")
 	t.Setenv("GATEWAY_WARM_NEW_ESCROWS", "maybe")
 	t.Setenv("GATEWAY_CAPTURE_SAMPLE_RATE", "half")
+	t.Setenv("GATEWAY_CONTENTION_PROFILES", "on")
 
 	_, err := Load()
 	if err == nil {
 		t.Fatal("Load() with malformed values: want error, got nil")
 	}
 	message := err.Error()
-	for _, name := range []string{"GATEWAY_MATCH_WAIT_MS", "GATEWAY_WARM_NEW_ESCROWS", "GATEWAY_CAPTURE_SAMPLE_RATE"} {
+	for _, name := range []string{"GATEWAY_MATCH_WAIT_MS", "GATEWAY_WARM_NEW_ESCROWS", "GATEWAY_CAPTURE_SAMPLE_RATE", "GATEWAY_CONTENTION_PROFILES"} {
 		if !strings.Contains(message, name) {
 			t.Fatalf("error %q does not name %s (errors must accumulate, not stop at first)", message, name)
 		}

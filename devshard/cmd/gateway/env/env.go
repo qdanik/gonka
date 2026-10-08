@@ -112,6 +112,8 @@ type Values struct {
 
 	EngineMaxConcurrentTimeoutVotes *int64
 	EngineHedgeFirstTokenFloorMS    *int64
+
+	ContentionProfiles *bool
 }
 
 // PoCModeOff and PoCModeRelaxed are the accepted DEVSHARD_POC_REQUEST_MODE values.
@@ -374,6 +376,8 @@ func Load() (Values, error) {
 	readStrictInt("GATEWAY_ENGINE_LOSER_GRACE_MS", &values.EngineLoserGraceMS)
 	readStrictInt("GATEWAY_ENGINE_MAX_CONCURRENT_TIMEOUT_VOTES", &values.EngineMaxConcurrentTimeoutVotes)
 	readStrictInt("GATEWAY_ENGINE_HEDGE_FIRST_TOKEN_FLOOR_MS", &values.EngineHedgeFirstTokenFloorMS)
+
+	readStrictBool("GATEWAY_CONTENTION_PROFILES", &values.ContentionProfiles)
 
 	if len(problems) > 0 {
 		return Values{}, fmt.Errorf("reading environment: %w", errors.Join(problems...))

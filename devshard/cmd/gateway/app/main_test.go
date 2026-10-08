@@ -1239,6 +1239,12 @@ func (s weightlessSession) UserSession() *user.Session              { return nil
 func (s weightlessSession) SweepExecutionTimeouts(context.Context, time.Duration, int) user.SweepReport {
 	return user.SweepReport{}
 }
+
+func (s weightlessSession) ProtocolVersion() string { return "" }
+
+func (s weightlessSession) Inference(uint64) (types.InferenceRecord, bool) {
+	return types.InferenceRecord{}, false
+}
 func (s weightlessSession) HostDials() []registry.HostDial            { return nil }
 func (s weightlessSession) HeightSyncView() heightsync.OperatorView   { return heightsync.OperatorView{} }
 func (s weightlessSession) WaitRouterCatalog(context.Context) error   { return nil }

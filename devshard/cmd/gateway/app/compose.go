@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"runtime"
 	"syscall"
 	"time"
 
@@ -44,6 +45,9 @@ var Version = "dev"
 const (
 	shutdownGracePeriod = 10 * time.Second
 	chainRequestTimeout = 10 * time.Second
+
+	contentionMutexProfileFraction = 5
+	contentionBlockProfileRate     = time.Millisecond
 )
 
 // Main runs the gateway until SIGINT or SIGTERM and exits the process with status 1 when it fails.
@@ -54,6 +58,17 @@ func Main() {
 		logging.Error("gateway exited", logkey.Error, err)
 		os.Exit(1)
 	}
+}
+
+// applyContentionProfiles samples lock contention and blocking for /debug/pprof when the operator asks. See ../docs/operations.md.
+func applyContentionProfiles(enabled *bool) {
+	if enabled == nil || !*enabled {
+		return
+	}
+	runtime.SetMutexProfileFraction(contentionMutexProfileFraction)
+	runtime.SetBlockProfileRate(int(contentionBlockProfileRate.Nanoseconds()))
+	logging.Info("lock contention and blocking are sampled for /debug/pprof",
+		logkey.Subsystem, "gateway", logkey.Used, "GATEWAY_CONTENTION_PROFILES")
 }
 
 // applyDialGuard arms the dial-time SSRF guard before anything can dial. See ../docs/operations.md.
@@ -78,6 +93,7 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	applyContentionProfiles(values.ContentionProfiles)
 	storageDir, err := resolveStorageDir(values.StorageDir)
 	if err != nil {
 		return err

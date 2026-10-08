@@ -21,7 +21,7 @@ The `/devshard/{id}/…` prefix pins a request to one escrow instead of letting 
 
 `POST /devshard/{id}/v1/debug/signatures/collect?nonce=N` asks the escrow's group again for its signatures at nonce `N`, which must not be ahead of the session's own, and answers `sig_weight`, `quorum_threshold`, `total_slots` and `has_quorum` — the reply devshardctl gave. It reaches a live or draining escrow only: the signatures land in that session, which is the one a settlement builds its payload from; a settled or non-resident escrow answers 404. The call is written to the admin audit log.
 
-`/debug/pprof/` is the Go runtime profiler (`net/http/pprof`) behind the admin key, at the paths devshardctl served it on: the index and every named profile (`goroutine`, `heap`, `allocs`, `mutex`, `block`, `threadcreate`), plus `cmdline`, `profile`, `symbol` and `trace`. It carries no route label, so profiling never shows in the request metrics. A binary profile is fetched with the admin header and read with `go tool pprof`, since the tool cannot send the header itself; `?debug=1` or `?debug=2` on a named profile answers plain text. `profile` and `trace` hold the request for their `seconds` and load the process while they run.
+`/debug/pprof/` is the Go runtime profiler (`net/http/pprof`) behind the admin key, at the paths devshardctl served it on: the index and every named profile (`goroutine`, `heap`, `allocs`, `mutex`, `block`, `threadcreate`), plus `cmdline`, `profile`, `symbol` and `trace`. It carries no route label, so profiling never shows in the request metrics. A binary profile is fetched with the admin header and read with `go tool pprof`, since the tool cannot send the header itself; `?debug=1` or `?debug=2` on a named profile answers plain text. `profile` and `trace` hold the request for their `seconds` and load the process while they run. `mutex` and `block` stay empty unless `GATEWAY_CONTENTION_PROFILES` is on.
 
 ### Who may call what
 
@@ -126,6 +126,7 @@ These are read the same way and rarely need changing. Where a knob has a longer 
 | Variable | Default | What it decides |
 | --- | --- | --- |
 | `DEVSHARD_GATEWAY_DISABLED_MESSAGE` | empty | the text of the 503 a disabled gateway answers ("The kill switch" above) |
+| `GATEWAY_CONTENTION_PROFILES` | false | whether lock contention and blocking are sampled, so `/debug/pprof/mutex` and `/debug/pprof/block` hold data; it costs a little on every contended lock, so it stays off outside a diagnosis, and turning it on is logged |
 | `DEVSHARD_GATEWAY_DISABLED_NEW_URL` | empty | the URL a disabled gateway redirects to with 308; empty means 503 |
 | `DEVSHARD_MAX_CONCURRENT_RUNTIME_BUILDS` | 16 | escrow sessions opened at once while the boot publishes the active escrows ("Boot" below) |
 | `DEVSHARD_TX_FEE_DENOM` / `DEVSHARD_TX_FEE_AMOUNT` | `ngonka` / 1 000 000 | the fee every chain transaction of the gateway carries; a fee in `ngonka` is added to what an escrow create must find in the wallet |

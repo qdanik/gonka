@@ -492,6 +492,35 @@ func TestTheStatusReportsTheSessionVersion(t *testing.T) {
 }
 
 // Test flow:
+//  1. Register an escrow session that counts full state copies, with balance 900 and protocol version v5.
+//  2. Request the escrow's status.
+//  3. Assert the status carries the balance and the protocol version.
+//  4. Assert the session was never asked for a full copy of its state.
+func TestDevshardStatusReadsBalanceAndVersionWithoutCopyingTheState(t *testing.T) {
+	live := newHarness(t)
+	session := &pointReadSession{balance: 900, version: "v5"}
+	live.escrows.sessions["7"] = session
+
+	recorder := live.request(t, http.MethodGet, "/devshard/7/v1/status", "", nil)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status code = %d, want %d: %s", recorder.Code, http.StatusOK, recorder.Body.String())
+	}
+	var answer struct {
+		Devshards []devshardStatus `json:"devshards"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &answer); err != nil {
+		t.Fatalf("decode status: %v", err)
+	}
+	if len(answer.Devshards) != 1 || answer.Devshards[0].Balance != 900 || answer.Devshards[0].SessionVersion != "v5" {
+		t.Errorf("devshards = %+v, want one escrow with balance 900 and session_version v5", answer.Devshards)
+	}
+	if copies := session.snapshots.Load(); copies != 0 {
+		t.Errorf("SnapshotState called %d times, want 0", copies)
+	}
+}
+
+// Test flow:
 //  1. Make the limiter refuse with a "too many concurrent requests" reason.
 //  2. POST a chat completion.
 //  3. Assert exactly one rejection was recorded with reason `concurrent_requests` and the model that was turned away.

@@ -51,6 +51,8 @@ type EscrowSession interface {
 	SignedSlots() map[uint64]types.Bitmap128
 	SignatureStatus() (entries []user.SignatureStatusEntry, highestQuorum uint64, hasAny bool)
 	SnapshotState() types.EscrowState
+	Inference(id uint64) (types.InferenceRecord, bool)
+	ProtocolVersion() string
 	LiveInferences() (types.SessionConfig, []types.InferenceRecord)
 	SealedInferences() int
 	PendingTxs() []*types.DevshardTx
@@ -67,12 +69,19 @@ type SessionFactory func(ctx context.Context, escrowID string) (EscrowSession, e
 
 type sessionHandle struct {
 	*user.Session
-	machine    *state.StateMachine
-	finalizing *sync.Mutex
+	machine         *state.StateMachine
+	finalizing      *sync.Mutex
+	protocolVersion string
 }
 
+// NewSessionHandle takes the protocol version once. See README.md, "The two session kinds".
 func NewSessionHandle(session *user.Session, machine *state.StateMachine) EscrowSession {
-	return sessionHandle{Session: session, machine: machine, finalizing: &sync.Mutex{}}
+	return sessionHandle{
+		Session:         session,
+		machine:         machine,
+		finalizing:      &sync.Mutex{},
+		protocolVersion: machine.SnapshotStateNoInferences().StateRootAndProtocolVersion,
+	}
 }
 
 func (h sessionHandle) Finalize(ctx context.Context) error {
@@ -101,6 +110,7 @@ func (h sessionHandle) SweepExecutionTimeouts(ctx context.Context, grace time.Du
 
 func (h sessionHandle) Phase() types.SessionPhase        { return h.machine.Phase() }
 func (h sessionHandle) SnapshotState() types.EscrowState { return h.machine.SnapshotState() }
+func (h sessionHandle) ProtocolVersion() string          { return h.protocolVersion }
 func (h sessionHandle) SealedInferences() int            { return len(h.machine.ExportSealedNonces()) }
 func (h sessionHandle) UserSession() *user.Session       { return h.Session }
 

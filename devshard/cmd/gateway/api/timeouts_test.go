@@ -46,26 +46,50 @@ func (f *fixedEscrows) SettlementSession(escrowID string) (registry.EscrowSessio
 	return f.session, true
 }
 
+// pointReadSession answers point reads and counts every full copy of the escrow state it is asked for.
+type pointReadSession struct {
+	registry.EscrowSession
+	balance   uint64
+	version   string
+	records   map[uint64]types.InferenceRecord
+	snapshots atomic.Int64
+}
+
+func (s *pointReadSession) SnapshotState() types.EscrowState {
+	s.snapshots.Add(1)
+	return types.EscrowState{}
+}
+
+func (s *pointReadSession) Nonce() uint64             { return 12 }
+func (s *pointReadSession) Phase() types.SessionPhase { return types.PhaseActive }
+func (s *pointReadSession) Balance() uint64           { return s.balance }
+func (s *pointReadSession) ProtocolVersion() string   { return s.version }
+
+func (s *pointReadSession) Inference(nonce uint64) (types.InferenceRecord, bool) {
+	record, committed := s.records[nonce]
+	return record, committed
+}
+
 // Test flow:
-//  1. Build an escrow state with one committed inference record for nonce 4.
-//  2. Define a table of nonces to look up, varying across a committed nonce, a nonce the escrow never committed, and an empty escrow state.
-//  3. For each case, call `timeoutPayload` with the state, nonce and prompt.
-//  4. Assert the resulting payload matches the case's expectation: the record's own numbers for the committed case, nil otherwise.
+//  1. Build an escrow session holding one committed inference record for nonce 4 that counts every full copy of its state.
+//  2. Define a table of nonces to look up, varying across a committed nonce, a nonce the escrow never committed, and an empty escrow.
+//  3. For each case, build the timeout payload for the nonce through the session's votes.
+//  4. Assert the payload matches the case's expectation, the record's own numbers for the committed case and nil otherwise, and that no full copy was taken.
 func TestTimeoutPayloadIsRebuiltFromTheCommittedRecord(t *testing.T) {
 	t.Parallel()
-	committed := types.EscrowState{Inferences: map[uint64]*types.InferenceRecord{
+	committed := map[uint64]types.InferenceRecord{
 		4: {Model: liveModel, InputLength: 512, MaxTokens: 64, StartedAt: 1_700_000_000},
-	}}
+	}
 	cases := []struct {
-		name  string
-		state types.EscrowState
-		nonce uint64
-		want  *host.InferencePayload
+		name    string
+		records map[uint64]types.InferenceRecord
+		nonce   uint64
+		want    *host.InferencePayload
 	}{
 		{
-			name:  "a committed nonce carries the record's own numbers",
-			state: committed,
-			nonce: 4,
+			name:    "a committed nonce carries the record's own numbers",
+			records: committed,
+			nonce:   4,
 			want: &host.InferencePayload{
 				Prompt:      livePrompt,
 				Model:       liveModel,
@@ -75,13 +99,12 @@ func TestTimeoutPayloadIsRebuiltFromTheCommittedRecord(t *testing.T) {
 			},
 		},
 		{
-			name:  "a nonce the escrow never committed has no payload to verify",
-			state: committed,
-			nonce: 5,
+			name:    "a nonce the escrow never committed has no payload to verify",
+			records: committed,
+			nonce:   5,
 		},
 		{
 			name:  "an empty escrow has none either",
-			state: types.EscrowState{},
 			nonce: 4,
 		},
 	}
@@ -89,11 +112,16 @@ func TestTimeoutPayloadIsRebuiltFromTheCommittedRecord(t *testing.T) {
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
+			session := &pointReadSession{records: testCase.records}
+			votes := escrowVotes{session: session, prompt: livePrompt}
 
-			payload := timeoutPayload(testCase.state, testCase.nonce, livePrompt)
+			payload := votes.payload(testCase.nonce)
 
 			if !reflect.DeepEqual(payload, testCase.want) {
-				t.Errorf("timeoutPayload = %+v, want %+v", payload, testCase.want)
+				t.Errorf("payload = %+v, want %+v", payload, testCase.want)
+			}
+			if copies := session.snapshots.Load(); copies != 0 {
+				t.Errorf("SnapshotState called %d times, want 0", copies)
 			}
 		})
 	}
