@@ -32,7 +32,7 @@ func newChatRequestCost(body []byte, req chatRequest, promptTokens int64) chatRe
 }
 
 func (cost chatRequestCost) startChargeOn(config types.SessionConfig) (uint64, error) {
-	reserved, err := state.ReservedCost(cost.inputLengthBytes, cost.maxTokens, config.TokenPrice)
+	reserved, err := state.ReservedCost(cost.inputLengthBytes, cost.maxTokens, config.MaxModelLen, config.TokenPrice)
 	if err != nil {
 		return 0, err
 	}

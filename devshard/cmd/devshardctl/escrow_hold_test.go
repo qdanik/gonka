@@ -490,3 +490,17 @@ func TestGatewayCheckBalancesDoesNotHoldAnEscrowItCannotReplace(t *testing.T) {
 	require.True(t, accepts, "an escrow rotation cannot replace must keep serving instead of being held forever")
 	require.Empty(t, devshardIDs(t, gateway.store)[runtime.id].OnHoldSince)
 }
+
+// A full-context request reserves at most the escrow's frozen context length, so the replacement floor follows it; without one the byte estimate stays.
+func TestEscrowMinimumBalanceFollowsTheEscrowContextLength(t *testing.T) {
+	// Test flow:
+	// 1. Take a model with a known 180000-token context at token price 100.
+	// 2. Compute the replacement floor with and without a frozen MaxModelLen.
+	// 3. Expect 180000×100 with it and the 4-bytes-per-token estimate without it.
+	const model = "MiniMaxAI/MiniMax-M2.7"
+	config := types.SessionConfig{TokenPrice: 100}
+	require.Equal(t, uint64(180_000*estimatedPromptBytesPerToken*100), escrowMinimumBalance(model, config))
+
+	config.MaxModelLen = 180_000
+	require.Equal(t, uint64(180_000*100), escrowMinimumBalance(model, config))
+}

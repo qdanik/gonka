@@ -30,7 +30,7 @@ func TestReservedCostIsWhatStartInferenceTakesOffTheBalance(t *testing.T) {
 	require.NoError(t, err)
 
 	const inputLength = 100
-	predicted, err := ReservedCost(inputLength, testutil.TestMaxTokens, config.TokenPrice)
+	predicted, err := ReservedCost(inputLength, testutil.TestMaxTokens, config.MaxModelLen, config.TokenPrice)
 	require.NoError(t, err)
 
 	_, err = sm.ApplyDiff(testutil.SignDiff(t, user, "escrow-1", 1, []*types.DevshardTx{txStart(&types.MsgStartInference{
@@ -48,9 +48,9 @@ func TestReservedCostIsWhatStartInferenceTakesOffTheBalance(t *testing.T) {
 }
 
 func TestReservedCostReportsOverflowInsteadOfWrapping(t *testing.T) {
-	_, err := ReservedCost(math.MaxUint64, 1, 1)
+	_, err := ReservedCost(math.MaxUint64, 1, 0, 1)
 	require.ErrorIs(t, err, types.ErrCostOverflow)
 
-	_, err = ReservedCost(math.MaxUint64/2, 0, 3)
+	_, err = ReservedCost(math.MaxUint64/2, 0, 0, 3)
 	require.ErrorIs(t, err, types.ErrCostOverflow)
 }

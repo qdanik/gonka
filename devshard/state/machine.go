@@ -52,8 +52,16 @@ func tokenCost(a, b, price uint64) (uint64, error) {
 	return cost, nil
 }
 
-func ReservedCost(inputLength, maxTokens, tokenPrice uint64) (uint64, error) {
-	return tokenCost(inputLength, maxTokens, tokenPrice)
+// ReservedCost is min(inputLength+maxTokens, maxModelLen) × tokenPrice; maxModelLen 0 leaves it uncapped.
+func ReservedCost(inputLength, maxTokens, maxModelLen, tokenPrice uint64) (uint64, error) {
+	tokens, ok := safeAdd(inputLength, maxTokens)
+	if !ok {
+		return 0, types.ErrCostOverflow
+	}
+	if maxModelLen > 0 {
+		tokens = min(tokens, maxModelLen)
+	}
+	return tokenCost(tokens, 0, tokenPrice)
 }
 
 func copyInferenceRecord(v *types.InferenceRecord) *types.InferenceRecord {
@@ -1179,7 +1187,7 @@ func (sm *StateMachine) applyStartInference(msg *types.MsgStartInference) error 
 	// Executor slot: group[inference_id % len(group)].SlotID
 	executorSlot := sm.state.Group[msg.InferenceId%uint64(len(sm.state.Group))].SlotID
 
-	reservedCost, err := ReservedCost(msg.InputLength, msg.MaxTokens, sm.state.Config.TokenPrice)
+	reservedCost, err := ReservedCost(msg.InputLength, msg.MaxTokens, sm.state.Config.MaxModelLen, sm.state.Config.TokenPrice)
 	if err != nil {
 		return err
 	}

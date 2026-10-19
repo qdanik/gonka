@@ -124,6 +124,7 @@ func EscrowCacheFromInfo(e *bridge.EscrowInfo) storage.EscrowCacheInfo {
 		RefusalTimeout:            e.RefusalTimeout,
 		ExecutionTimeout:          e.ExecutionTimeout,
 		EpochID:                   e.EpochID,
+		MaxModelLen:               e.MaxModelLen,
 	}
 }
 
@@ -146,5 +147,6 @@ func EscrowInfoFromCache(c *storage.EscrowCacheInfo) *bridge.EscrowInfo {
 		RefusalTimeout:            c.RefusalTimeout,
 		ExecutionTimeout:          c.ExecutionTimeout,
 		EpochID:                   c.EpochID,
+		MaxModelLen:               c.MaxModelLen,
 	}
 }

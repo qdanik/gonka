@@ -73,6 +73,26 @@ func TestChatRequestCostIsExactlyWhatTheStartNonceCharges(t *testing.T) {
 		"an escrow holding the predicted cost refused the request, so the prediction undercharges")
 }
 
+// An escrow that froze the model's context length reserves no more than that context, so the gateway's prediction stops there too.
+func TestChatRequestCostStopsAtTheEscrowContextLength(t *testing.T) {
+	// Test flow:
+	// 1. Price a request whose bytes plus max_tokens exceed the escrow's 150-token context.
+	// 2. Start it on a real escrow funded one below the prediction, then at the prediction.
+	// 3. The prediction is the capped reservation plus the fee, and the escrow agrees to the unit.
+	config := testutil.DefaultConfig(3)
+	config.TokenPrice = 3
+	config.FeePerNonce = 1_000
+	config.MaxModelLen = 150
+	cost := chatRequestCost{inputLengthBytes: 400, maxTokens: testutil.TestMaxTokens}
+
+	predicted, err := cost.startChargeOn(config)
+	require.NoError(t, err)
+
+	require.Equal(t, uint64(150*3+1_000), predicted)
+	require.ErrorIs(t, applyStartInferenceWithBalance(t, config, cost, predicted-1), types.ErrInsufficientBalance)
+	require.NoError(t, applyStartInferenceWithBalance(t, config, cost, predicted))
+}
+
 func TestChatRequestCostReportsOverflowInsteadOfWrapping(t *testing.T) {
 	// Test flow:
 	// 1. Price a request whose reservation overflows, and one whose reservation fits but not with the fee.

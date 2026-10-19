@@ -906,6 +906,7 @@ func (sm *StateMachine) RebuildSealedInferenceIndexFromDiffs(store storage.Stora
 	escrowID := sm.state.EscrowID
 	group := append([]types.SlotAssignment(nil), sm.state.Group...)
 	price := sm.state.Config.TokenPrice
+	maxModelLen := sm.state.Config.MaxModelLen
 	threshold := sm.state.Config.VoteThreshold
 	sealedNonces := maps.Clone(sm.sealedNonces)
 	live := make(map[uint64]*types.InferenceRecord, len(sm.state.Inferences))
@@ -919,7 +920,7 @@ func (sm *StateMachine) RebuildSealedInferenceIndexFromDiffs(store storage.Stora
 	// of an already-published session for the length of the replay. The fold
 	// needs only the group and config captured above plus the slot lookup maps,
 	// which are immutable after construction.
-	folded := sm.foldInferenceRecordsFromDiffs(group, price, threshold, records)
+	folded := sm.foldInferenceRecordsFromDiffs(group, price, maxModelLen, threshold, records)
 	return writeFoldedSealedIndex(store, escrowID, sealedNonces, live, folded)
 }
 
@@ -936,6 +937,7 @@ func (sm *StateMachine) RebuildSealedInferenceIndexFromRange(store storage.Stora
 	escrowID := sm.state.EscrowID
 	group := append([]types.SlotAssignment(nil), sm.state.Group...)
 	price := sm.state.Config.TokenPrice
+	maxModelLen := sm.state.Config.MaxModelLen
 	threshold := sm.state.Config.VoteThreshold
 	sealedNonces := maps.Clone(sm.sealedNonces)
 	live := make(map[uint64]*types.InferenceRecord, len(sm.state.Inferences))
@@ -947,7 +949,7 @@ func (sm *StateMachine) RebuildSealedInferenceIndexFromRange(store storage.Stora
 	folded := make(map[uint64]*types.InferenceRecord)
 	if len(group) > 0 && from <= to {
 		if err := storage.ReadDiffPages(store, escrowID, from, to, func(page []types.DiffRecord) error {
-			sm.foldInferenceRecordsInto(group, price, threshold, page, folded)
+			sm.foldInferenceRecordsInto(group, price, maxModelLen, threshold, page, folded)
 			return nil
 		}); err != nil {
 			return err
@@ -993,17 +995,17 @@ func writeFoldedSealedIndex(store storage.Storage, escrowID string, sealedNonces
 }
 
 // foldInferenceRecordsFromDiffs replays the journal into inference records.
-// group, price and threshold are passed in so the caller can release sm.mu
+// group, price, maxModelLen and threshold are passed in so the caller can release sm.mu
 // before the walk; everything else it reads is immutable after construction.
-func (sm *StateMachine) foldInferenceRecordsFromDiffs(group []types.SlotAssignment, price uint64, threshold uint32, records []types.DiffRecord) map[uint64]*types.InferenceRecord {
+func (sm *StateMachine) foldInferenceRecordsFromDiffs(group []types.SlotAssignment, price, maxModelLen uint64, threshold uint32, records []types.DiffRecord) map[uint64]*types.InferenceRecord {
 	out := make(map[uint64]*types.InferenceRecord)
-	sm.foldInferenceRecordsInto(group, price, threshold, records, out)
+	sm.foldInferenceRecordsInto(group, price, maxModelLen, threshold, records, out)
 	return out
 }
 
 // foldInferenceRecordsInto replays records into out. A later page continues
 // the same map, so a paged walk matches one pass over the whole journal.
-func (sm *StateMachine) foldInferenceRecordsInto(group []types.SlotAssignment, price uint64, threshold uint32, records []types.DiffRecord, out map[uint64]*types.InferenceRecord) {
+func (sm *StateMachine) foldInferenceRecordsInto(group []types.SlotAssignment, price, maxModelLen uint64, threshold uint32, records []types.DiffRecord, out map[uint64]*types.InferenceRecord) {
 	if len(group) == 0 || out == nil {
 		return
 	}
@@ -1019,7 +1021,7 @@ func (sm *StateMachine) foldInferenceRecordsInto(group []types.SlotAssignment, p
 				if _, exists := out[msg.InferenceId]; exists {
 					continue
 				}
-				reserved, err := tokenCost(msg.InputLength, msg.MaxTokens, price)
+				reserved, err := ReservedCost(msg.InputLength, msg.MaxTokens, maxModelLen, price)
 				if err != nil {
 					continue
 				}

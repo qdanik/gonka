@@ -18,10 +18,14 @@ func newSealTestSM(t *testing.T, escrowID string, hosts []*signing.Secp256k1Sign
 
 func newSealTestSMVersion(t *testing.T, escrowID string, hosts []*signing.Secp256k1Signer, withStore bool, sessionVersion string) (*StateMachine, *storage.Memory, *signing.Secp256k1Signer, []types.SlotAssignment) {
 	t.Helper()
+	return newSealTestSMWithConfig(t, escrowID, hosts, testutil.DefaultConfig(len(hosts)), sessionVersion)
+}
+
+func newSealTestSMWithConfig(t *testing.T, escrowID string, hosts []*signing.Secp256k1Signer, config types.SessionConfig, sessionVersion string) (*StateMachine, *storage.Memory, *signing.Secp256k1Signer, []types.SlotAssignment) {
+	t.Helper()
 
 	user := testutil.MustGenerateKey(t)
 	group := testutil.MakeGroup(hosts)
-	config := testutil.DefaultConfig(len(hosts))
 	verifier := signing.NewSecp256k1Verifier()
 
 	store := testutil.MustMemoryStore(t, escrowID, user.Address(), config, group, 100000)
@@ -594,7 +598,7 @@ func TestFoldInferenceRecords_LateValidationOnChallengedMatchesLive(t *testing.T
 	require.Equal(t, wantBits, live.ValidatedBy)
 
 	st := sm.SnapshotState()
-	folded := sm.foldInferenceRecordsFromDiffs(st.Group, st.Config.TokenPrice, st.Config.VoteThreshold, journal)
+	folded := sm.foldInferenceRecordsFromDiffs(st.Group, st.Config.TokenPrice, st.Config.MaxModelLen, st.Config.VoteThreshold, journal)
 	got := folded[inferenceID]
 	require.NotNil(t, got)
 	require.Equal(t, live.Status, got.Status)
@@ -612,4 +616,32 @@ func TestFoldInferenceRecords_LateValidationOnChallengedMatchesLive(t *testing.T
 	require.Equal(t, live.VotesValid, rebuilt.VotesValid)
 	require.Equal(t, live.VotesInvalid, rebuilt.VotesInvalid)
 	require.Equal(t, live.ValidatedBy, rebuilt.ValidatedBy)
+}
+
+// A sealed inference rebuilt from the journal keeps the reservation stopped at the model's context length, as the live record had it.
+func TestRebuildSealedInferenceIndexFromDiffs_KeepsTheReservationStoppedAtTheModelContextLength(t *testing.T) {
+	// Test flow:
+	// 1. Drive an inference to Finished and seal it under a 120-token context.
+	// 2. Rebuild the sealed index from the diff journal.
+	// 3. Expect the rebuilt row to keep the reservation stopped at 120 tokens.
+	hosts := []*signing.Secp256k1Signer{
+		testutil.MustGenerateKey(t),
+		testutil.MustGenerateKey(t),
+		testutil.MustGenerateKey(t),
+		testutil.MustGenerateKey(t),
+		testutil.MustGenerateKey(t),
+	}
+	escrowID := "escrow-capped-from-diffs"
+	config := testutil.DefaultConfig(len(hosts))
+	config.MaxModelLen = 120
+	sm, store, _, _ := newSealTestSMWithConfig(t, escrowID, hosts, config, types.DevshardStateRootAndProtocolVersion)
+	driveSealInferenceToFinished(t, sm, escrowID, hosts)
+	require.NoError(t, sm.SealInference(1))
+
+	require.NoError(t, sm.RebuildSealedInferenceIndexFromDiffs(store, finishedInferenceDiffs(escrowID)))
+
+	row, ok, err := store.GetSealedInference(escrowID, 1)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, uint64(120), row.SealedReservedCost, "the journal's (100+50)*1 must stop at the 120-token context")
 }

@@ -26,6 +26,7 @@ func TestEscrowInfoFromQuery_MapsSessionTimeouts(t *testing.T) {
 		VoteThresholdFactor:       67,
 		RefusalTimeout:            5,
 		ExecutionTimeout:          17,
+		MaxModelLen:               32_768,
 		EpochIndex:                3,
 		Settled:                   true,
 	})
@@ -46,6 +47,7 @@ func TestEscrowInfoFromQuery_MapsSessionTimeouts(t *testing.T) {
 	require.Equal(t, uint32(67), got.VoteThresholdFactor)
 	require.Equal(t, int64(5), got.RefusalTimeout)
 	require.Equal(t, int64(17), got.ExecutionTimeout)
+	require.Equal(t, uint64(32_768), got.MaxModelLen)
 	require.Equal(t, uint64(3), got.EpochID)
 	require.True(t, got.Settled)
 }
