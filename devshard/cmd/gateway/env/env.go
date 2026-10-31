@@ -29,6 +29,13 @@ type Values struct {
 	StatsTokenizerEnabled      *bool
 	SessionRetentionEpochs     *int64
 
+	PeerEnabled          *bool
+	PeerRegistryContract *string
+	PeerInstanceID       *string
+	PeerListen           *string
+	PeerAdvertiseURL     *string
+	PeerIdentityKeyEnv   *string
+
 	ChainGRPC        *string
 	PublicAPI        *string
 	ChainID          *string
@@ -287,6 +294,13 @@ func Load() (Values, error) {
 	readLenientInt("DEVSHARD_MAX_CONCURRENT_PROMPT_COUNTS", 1, &values.MaxConcurrentPromptCounts)
 	readLenientBool("DEVSHARD_STATS_TOKENIZER", &values.StatsTokenizerEnabled)
 	readLenientInt("DEVSHARD_SESSION_RETENTION_EPOCHS", 0, &values.SessionRetentionEpochs)
+
+	readLenientBool("DEVSHARD_PEER_ENABLED", &values.PeerEnabled)
+	readString("DEVSHARD_PEER_REGISTRY_CONTRACT", &values.PeerRegistryContract)
+	readString("DEVSHARD_PEER_INSTANCE_ID", &values.PeerInstanceID)
+	readString("DEVSHARD_PEER_LISTEN", &values.PeerListen)
+	readString("DEVSHARD_PEER_ADVERTISE_URL", &values.PeerAdvertiseURL)
+	readString("DEVSHARD_PEER_IDENTITY_KEY_ENV", &values.PeerIdentityKeyEnv)
 
 	readString("DEVSHARD_CHAIN_GRPC", &values.ChainGRPC, "NODE_GRPC_URL")
 	readString("DEVSHARD_PUBLIC_API", &values.PublicAPI)
