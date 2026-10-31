@@ -333,6 +333,7 @@ func (s forgedSigner) Sign(io.Reader, []byte, crypto.SignerOpts) ([]byte, error)
 //  1. Open a TLS client to one instance presenting another instance's public certificate with a forged signature.
 //  2. Assert the connection is refused and the accepted count did not move.
 //  3. Poll once from every instance and assert each counts one accepted handshake per connection on each side.
+//  4. Poll again over the same connections and assert no instance counts more.
 func TestAcceptedCountsOnlyCompletedHandshakes(t *testing.T) {
 	cluster := newLoopbackCluster(t, oneHostLoad(3), fixedConcurrency(10))
 	victim := cluster.replicaB.plugin.identity.Certificate
@@ -359,6 +360,14 @@ func TestAcceptedCountsOnlyCompletedHandshakes(t *testing.T) {
 	for _, instance := range cluster.all {
 		if got := instance.plugin.HandshakeCounts()[HandshakeAccepted]; got != 4 {
 			t.Errorf("%s accepted = %d, want 4: two peers dialled and two dialling", instance.id, got)
+		}
+	}
+
+	cluster.pollAll(context.Background())
+
+	for _, instance := range cluster.all {
+		if got := instance.plugin.HandshakeCounts()[HandshakeAccepted]; got != 4 {
+			t.Errorf("%s accepted = %d after a second poll, want 4: a connection counts once", instance.id, got)
 		}
 	}
 }
