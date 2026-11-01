@@ -209,8 +209,12 @@ func (p *Plugin) announce(ctx context.Context) error {
 	if !p.members.Allowed(self.Address) {
 		return nil
 	}
-	if entry, found := p.members.Lookup(self); found && p.entryCurrent(entry) {
+	entry, found := p.members.Lookup(self)
+	if found && p.entryCurrent(entry) {
 		p.clearWriteBackoff()
+		return nil
+	}
+	if found && p.withinUpdateInterval(entry) {
 		return nil
 	}
 	if !p.writeDue() {
@@ -229,9 +233,15 @@ func (p *Plugin) announce(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("register instance %s: %w", self, err)
 	}
-	err = p.members.Refresh(ctx)
+	if err := p.members.Refresh(ctx); err != nil {
+		p.deps.Report("peer registry read failed", err)
+	}
 	p.dropRemoved()
-	return err
+	return nil
+}
+
+func (p *Plugin) withinUpdateInterval(entry peerInstance) bool {
+	return p.members.Height()-int64(entry.UpdatedHeight) < minUpdateIntervalBlocks
 }
 
 func (p *Plugin) writeDue() bool {

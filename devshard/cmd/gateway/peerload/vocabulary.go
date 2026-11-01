@@ -60,6 +60,7 @@ const (
 	maxInstancesPerAddress  = 16
 	instanceTTLBlocks       = 16200
 	reannounceBlocks        = 4050
+	minUpdateIntervalBlocks = 100
 	instanceIDLimit         = 32
 
 	pollRequestTimeout  = 5 * time.Second
