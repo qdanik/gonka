@@ -142,13 +142,13 @@ func (p *Plugin) refreshRegistry(ctx context.Context) {
 	if err != nil {
 		p.deps.Report("peer registry read failed", err)
 	}
+	p.server.CloseRemoved()
+	p.poller.Sync()
 	if err == nil || errors.Is(err, errPartialRead) {
 		if err := p.announce(ctx); err != nil {
 			p.deps.Report("peer registration failed", err)
 		}
 	}
-	p.server.CloseRemoved()
-	p.poller.Sync()
 }
 
 func (p *Plugin) pollPeers(ctx context.Context) { p.poller.Round(ctx, p.topic) }
@@ -174,25 +174,28 @@ func (p *Plugin) pollLoop(ctx context.Context) {
 
 func (p *Plugin) registryLoop(ctx context.Context) {
 	p.refreshRegistry(ctx)
-	ticker := time.NewTicker(p.nextRegistryRead())
+	wait := p.nextRegistryRead(firstReadRetryInterval)
+	ticker := time.NewTicker(wait)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			wait = min(wait*retryWaitFactor, registryRefreshInterval)
 		case <-p.nudge:
 		}
 		p.refreshRegistry(ctx)
-		ticker.Reset(p.nextRegistryRead())
+		wait = p.nextRegistryRead(wait)
+		ticker.Reset(wait)
 	}
 }
 
-func (p *Plugin) nextRegistryRead() time.Duration {
+func (p *Plugin) nextRegistryRead(wait time.Duration) time.Duration {
 	if p.members.HasRead() {
 		return registryRefreshInterval
 	}
-	return firstReadRetryInterval
+	return wait
 }
 
 func (p *Plugin) announce(ctx context.Context) error {
@@ -201,6 +204,7 @@ func (p *Plugin) announce(ctx context.Context) error {
 		return nil
 	}
 	if entry, found := p.members.Lookup(self); found && p.entryCurrent(entry) {
+		p.clearWriteWait()
 		return nil
 	}
 	if !p.writeDue() {
@@ -232,12 +236,22 @@ func (p *Plugin) recordWrite(err error) {
 	p.writeMu.Lock()
 	defer p.writeMu.Unlock()
 	if err == nil {
-		p.writeBackoff = noWriteBackoff
-		p.nextWrite = time.Time{}
+		p.clearWriteWaitLocked()
 		return
 	}
 	p.writeBackoff = min(max(p.writeBackoff*2, registryRefreshInterval), reregisterInterval)
 	p.nextWrite = p.deps.Now().Add(p.writeBackoff)
+}
+
+func (p *Plugin) clearWriteWait() {
+	p.writeMu.Lock()
+	defer p.writeMu.Unlock()
+	p.clearWriteWaitLocked()
+}
+
+func (p *Plugin) clearWriteWaitLocked() {
+	p.writeBackoff = noWriteBackoff
+	p.nextWrite = time.Time{}
 }
 
 func (p *Plugin) entryCurrent(entry peerInstance) bool {

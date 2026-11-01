@@ -3,6 +3,7 @@ package peerload
 import (
 	"context"
 	"errors"
+	"net/http"
 	"slices"
 	"strings"
 	"sync"
@@ -152,9 +153,9 @@ func TestRefusedWriteBacksOffUpToTheCapAndResetsOnSuccess(t *testing.T) {
 
 // Test flow:
 //  1. Start the registry loop with the registry failing.
-//  2. Assert the read is retried on the short interval.
-//  3. Let the registry answer; assert the next read lands on the short interval and the one after waits for the refresh interval.
-func TestFirstRegistryReadRetriesOnTheShortInterval(t *testing.T) {
+//  2. Assert each retry waits twice as long as the one before, from the short interval up to the refresh interval, and stays there.
+//  3. Let the registry answer; assert the next read lands when the wait ends and the one after waits for the refresh interval.
+func TestFirstRegistryReadBacksOffToTheRefreshInterval(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		registry := newFakeRegistry()
 		registry.setFailure(errors.New("node down"))
@@ -165,15 +166,22 @@ func TestFirstRegistryReadRetriesOnTheShortInterval(t *testing.T) {
 		go plugin.registryLoop(ctx)
 		synctest.Wait()
 
-		before := registry.callCount()
-		time.Sleep(firstReadRetryInterval)
-		synctest.Wait()
-		if registry.callCount() == before {
-			t.Fatal("no retry after a failed first read")
+		for _, wait := range []time.Duration{firstReadRetryInterval, 2 * firstReadRetryInterval, 4 * firstReadRetryInterval, 8 * firstReadRetryInterval, 16 * firstReadRetryInterval, registryRefreshInterval, registryRefreshInterval} {
+			before := registry.callCount()
+			time.Sleep(wait - time.Second)
+			synctest.Wait()
+			if got := registry.callCount(); got != before {
+				t.Fatalf("reads = %d, want %d one second before the %v wait ends", got, before, wait)
+			}
+			time.Sleep(time.Second)
+			synctest.Wait()
+			if registry.callCount() == before {
+				t.Fatalf("no retry when the %v wait ended", wait)
+			}
 		}
 
 		registry.setFailure(nil)
-		time.Sleep(firstReadRetryInterval)
+		time.Sleep(registryRefreshInterval)
 		synctest.Wait()
 		answered := registry.callCount()
 		time.Sleep(registryRefreshInterval - time.Second)
@@ -263,5 +271,85 @@ func TestOneBadAllowlistEntryDoesNotStopRegistration(t *testing.T) {
 
 	if got := registry.registrationCount(); got != 1 {
 		t.Fatalf("registrations = %d, want 1", got)
+	}
+}
+
+type gatedRegistrar struct {
+	inner   Registrar
+	armed   bool
+	reached chan struct{}
+	release chan struct{}
+}
+
+func (r *gatedRegistrar) RegisterInstance(ctx context.Context, registration chain.RegistryRegistration) error {
+	if r.armed {
+		r.armed = false
+		close(r.reached)
+		<-r.release
+	}
+	return r.inner.RegisterInstance(ctx, registration)
+}
+
+// Test flow:
+//  1. Connect a peer and refresh once so this instance has registered.
+//  2. Drop the peer from the allowlist, make this instance's entry stale and hold its next write open.
+//  3. Run a refresh and assert the peer's connection is closed while the write is still open.
+func TestRemovedPeerIsClosedBeforeAnOpenRegistryWriteFinishes(t *testing.T) {
+	registry := newFakeRegistry()
+	registrar := &gatedRegistrar{inner: registry.registrar(firstAddress), reached: make(chan struct{}), release: make(chan struct{})}
+	plugin := newTestPlugin(t, registry, registrar, newFakeClock().now)
+	peerID := PeerID{Address: secondAddress, Instance: "other"}
+	peer := newIdentity(t, peerID)
+	registry.put(secondAddress, registryEntry("other", peer, "https://other.example:8443"))
+	plugin.ObserveChain([]string{firstAddress, secondAddress}, testHeight)
+	plugin.refreshRegistry(context.Background())
+	connection, raw := connectOverPipe(t, plugin.server, peer)
+	plugin.server.trackConn(connection, http.StateActive)
+	plugin.ObserveChain([]string{firstAddress}, testHeight+reannounceBlocks)
+	registrar.armed = true
+	var finished sync.WaitGroup
+	finished.Go(func() { plugin.refreshRegistry(context.Background()) })
+	defer finished.Wait()
+	defer close(registrar.release)
+
+	<-registrar.reached
+
+	if !raw.closed.Load() {
+		t.Fatal("the removed peer's connection is still open while the registry write is open")
+	}
+}
+
+// Test flow:
+//  1. Let a write fail after it landed on chain, so a wait starts.
+//  2. Refresh, which finds the entry current and clears the wait.
+//  3. Let the entry age until it needs a write again and refuse that write.
+//  4. Assert the wait after that refusal is the first one, the refresh interval.
+func TestWaitClearsWhenAnUnconfirmedWriteLaterLands(t *testing.T) {
+	clock := newFakeClock()
+	registry := newFakeRegistry()
+	landing := registry.registrar(firstAddress)
+	writes := 0
+	registrar := registrarFunc(func(ctx context.Context, registration chain.RegistryRegistration) error {
+		writes++
+		if writes == 1 {
+			_ = landing.RegisterInstance(ctx, registration)
+		}
+		return errors.New("confirmation timed out")
+	})
+	plugin := newTestPlugin(t, registry, registrar, clock.now)
+	plugin.ObserveChain([]string{firstAddress}, testHeight)
+	ctx := context.Background()
+	plugin.refreshRegistry(ctx)
+	clock.advance(time.Second)
+	plugin.refreshRegistry(ctx)
+	plugin.ObserveChain([]string{firstAddress}, testHeight+reannounceBlocks)
+	clock.advance(registryRefreshInterval)
+
+	plugin.refreshRegistry(ctx)
+	clock.advance(registryRefreshInterval)
+	plugin.refreshRegistry(ctx)
+
+	if writes != 3 {
+		t.Fatalf("writes = %d, want 3: the second refusal waits the refresh interval, not twice it", writes)
 	}
 }

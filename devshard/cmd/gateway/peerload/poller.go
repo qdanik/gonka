@@ -34,8 +34,9 @@ type poller struct {
 	now      func() time.Time
 	report   func(string, error)
 
-	mu    sync.Mutex
-	links map[PeerID]*peerLink
+	mu     sync.Mutex
+	links  map[PeerID]*peerLink
+	closed bool
 }
 
 func newPoller(members *membership, verifier *verifier, identity transportIdentity, view *View, dial DialFunc, now func() time.Time, report func(string, error)) *poller {
@@ -68,16 +69,20 @@ func (p *poller) Sync() {
 	p.syncLocked()
 }
 
-// Close drops every link.
+// Close drops every link; a closed poller links no peer again.
 func (p *poller) Close() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	p.closed = true
 	for id, link := range p.links {
 		p.dropLocked(id, link)
 	}
 }
 
 func (p *poller) syncLocked() {
+	if p.closed {
+		return
+	}
 	wanted := make(map[PeerID]peerInstance)
 	for _, instance := range p.members.Peers() {
 		wanted[instance.ID] = instance

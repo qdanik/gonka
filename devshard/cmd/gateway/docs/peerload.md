@@ -20,11 +20,11 @@ The allowlist is the chain parameter `DevshardEscrowParams.allowed_creator_addre
 
 The peers are the registry entries of allowlisted addresses, unexpired, minus this instance. An entry expires 16200 blocks after its `updated_height`; the contract hides an expired entry from its queries, and the gateway applies the same rule itself because it keeps serving from its last good read when the contract cannot be reached.
 
-Replicas of this gateway's address are peers. This instance is never one: an entry is excluded when it has the same address and instance id, the same key fingerprint, or the same endpoint as `DEVSHARD_PEER_ADVERTISE_URL`. So a stale entry left under an old instance id cannot make an instance dial itself.
+Replicas of this gateway's address are peers. This instance is never one: an entry is excluded when it has the same address and instance id, the same key fingerprint, or the same endpoint as `DEVSHARD_PEER_ADVERTISE_URL`. So a stale entry left under an old instance id cannot make an instance dial itself. Replicas that advertise one shared URL, such as a load balancer's, exclude each other, so each replica needs an advertise URL of its own.
 
-The registry is read at start, every 300 s, and on any change of the allowlist, at most 100 addresses per call, each read within 10 s and one refresh within 60 s. Until a read of the allowlist has returned once, the next attempt comes after 10 s instead of 300 s. The chain does not validate allowlist addresses, and one the contract cannot parse fails its whole batch, so a failed batch is read again per address: an address that still fails keeps its last good entries and the others follow the chain, and registration goes on. If every address fails the whole last good read stays and nothing is written. An unknown instance or fingerprint at a handshake rereads that one address, at most once per 30 s per address.
+The registry is read at start, every 300 s, and on any change of the allowlist, at most 100 addresses per call, each read within 10 s and one refresh within 60 s. Until a read of the allowlist has returned once, the next attempt comes after 10 s instead of 300 s, and each failed attempt doubles that wait up to 300 s, so a mistyped or dead contract is not read every 10 s. The chain does not validate allowlist addresses, and one the contract cannot parse fails its whole batch, so a failed batch is read again per address: an address that still fails keeps its last good entries and the others follow the chain, and registration goes on. If every address fails the whole last good read stays and nothing is written. An unknown instance or fingerprint at a handshake rereads that one address, at most once per 30 s per address.
 
-Each instance writes its own entry with `RegisterInstance`, an unordered transaction signed by the key `DEVSHARD_PEER_IDENTITY_KEY_ENV` names: when it is missing or differs, and after 4050 blocks (about 6 h) to keep it from expiring. The write has the commit poll plus 15 s to finish. After a failed write the next waits 300 s, doubling up to 6 h, and a success clears the wait; a write that a failed transaction refuses still pays its fee, so it must not repeat at every read.
+Each instance writes its own entry with `RegisterInstance`, an unordered transaction signed by the key `DEVSHARD_PEER_IDENTITY_KEY_ENV` names: when it is missing or differs, and after 4050 blocks (about 6 h) to keep it from expiring. The write has the longer of the commit poll and 45 s, plus 15 s, to finish. After a failed write the next waits 300 s, doubling up to 6 h, and a success clears the wait; a write that a failed transaction refuses still pays its fee, so it must not repeat at every read.
 
 ## The order of the checks
 
@@ -44,7 +44,7 @@ Every request repeats steps 1 to 5 from the connection's state, without touching
 
 ### Removal
 
-Each registry refresh, which an allowlist change triggers at once, closes server connections whose peer no longer passes and drops the poller's link to it, along with its snapshot. A new key under the same instance id is a new link.
+Each registry refresh, which an allowlist change triggers at once, closes server connections whose peer no longer passes and drops the poller's link to it, along with its snapshot, before this instance's own registry write, so a slow write does not hold it back. A new key under the same instance id is a new link.
 
 ## Limits on the listener
 
@@ -70,7 +70,7 @@ The listener holds at most 1024 connections, room for 64 addresses of 16 instanc
 
 A new topic is a `Topic` in the gateway release, and needs no contract change. Each sets its name, version, byte cap, interval and maximum age.
 
-Topic `load@1` serves this instance's own state: at most 64 KiB, 512 rows, 32 models and 128-byte strings, every 10 s, for at most 30 s. A row past a cap is dropped, the least busy first. A received payload past a cap is refused whole. In-flight counts round up to a multiple, 2 requests and 2048 tokens by default, so a peer sees less of the sender's volume, and saturate at the largest multiple a uint32 holds.
+Topic `load@1` serves this instance's own state: at most 64 KiB, 512 rows, 32 models and 128-byte strings, every 10 s, for at most 30 s. Rows are taken busiest first and a row that does not fit a cap is skipped, so a smaller row after it can still fit. A received payload past a cap is refused whole. In-flight counts round up to a multiple, 2 requests and 2048 tokens by default, so a peer sees less of the sender's volume, and saturate at the largest multiple a uint32 holds.
 
 ### Wire schema
 
@@ -108,6 +108,6 @@ foreign(p,m) = sum over addresses a  min(load(a,p,m), conc(p,m))
 d(p,m)       = clamp(1 - foreign(p,m) / conc(p,m), 0.25, 1)
 ```
 
-`conc(p,m)` is what this gateway itself computes the host earns: `limits.EarnedConcurrency` of `Limits.Concurrency.RequestsPer10000Weight` and `Capacity.ParticipantWeight`. An address is summed before it is clamped, so replicas give it no extra weight. A pair with no known concurrency, or no fresh peer, is 1. A snapshot stops counting 30 s after the earlier of its `issued_at_ms` and its arrival. The view holds one snapshot per peer, and a peer's rows only produce a metric series for a pair this gateway has a concurrency for, which needs a model its chain view names, so a peer cannot grow the label set.
+`conc(p,m)` is what this gateway itself computes the host earns: `limits.EarnedConcurrency` of `Limits.Concurrency.RequestsPer10000Weight` and `Capacity.ParticipantWeight`. An address is summed before it is clamped, so replicas give it no extra weight. A pair with no known concurrency, or no fresh peer, is 1 and has no metric series. A snapshot stops counting 30 s after the earlier of its `issued_at_ms` and its arrival. The view holds one snapshot per peer, and a peer's rows only produce a metric series for a pair this gateway has a concurrency for, which needs a model its chain view names, so a peer cannot grow the label set.
 
-`inflight_requests` comes from `perf.HostState.ModelInflight`, the requests in flight to that host on that model. A pair `perf` has no sample of yet has no row.
+`inflight_requests` comes from `perf.Tracker.InflightPairs`, the requests in flight to that host on that model, so a host with requests in flight has a row before `perf` holds a sample of it.

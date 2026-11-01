@@ -107,8 +107,12 @@ func TestJoinLoadSamplesJoinsTheLimiterAndTheTracker(t *testing.T) {
 			{Participant: "windows", Model: peerTestModel, Cutoff: limits.CutoffHalfOpen},
 		},
 		[]perf.HostState{
-			{Participant: "both", Model: peerTestModel, ModelInflight: 3, Ejected: true},
-			{Participant: "hosts", Model: peerTestModel, ModelInflight: 4},
+			{Participant: "both", Model: peerTestModel, Ejected: true},
+			{Participant: "hosts", Model: peerTestModel},
+		},
+		[]perf.PairInflight{
+			{Participant: "both", Model: peerTestModel, Requests: 3},
+			{Participant: "hosts", Model: peerTestModel, Requests: 4},
 		},
 		func(participant, _ string) perf.Pressure {
 			if participant == "both" {
@@ -215,7 +219,7 @@ func TestLocalSamplesCountInFlightRequestsPerModel(t *testing.T) {
 	tracker.Acquire(peerTestHost, "model-b")
 	defer tracker.Release(peerTestHost, "model-b")
 
-	samples := joinLoadSamples(nil, tracker.Snapshot(), tracker.Pressure)
+	samples := joinLoadSamples(nil, tracker.Snapshot(), tracker.InflightPairs(), tracker.Pressure)
 
 	if len(samples) != 2 {
 		t.Fatalf("samples = %+v, want two rows", samples)
@@ -228,5 +232,29 @@ func TestLocalSamplesCountInFlightRequestsPerModel(t *testing.T) {
 		if sample.InflightRequests != want {
 			t.Errorf("%s in flight = %d, want %d", sample.Model, sample.InflightRequests, want)
 		}
+	}
+}
+
+// Test flow:
+//  1. Admit a request on a host the limiter windows know and put a request in flight on it in the tracker, which has no sample of the host.
+//  2. Join the samples the channel publishes.
+//  3. Assert the host's row carries both its window tokens and the request in flight.
+func TestLocalSamplesCountInFlightRequestsOfAHostWithoutASample(t *testing.T) {
+	now := time.UnixMilli(1_800_000_000_000)
+	holder := config.NewHolder(&config.Config{Perf: config.Perf{HostStalenessSeconds: 60, MinAvailableHosts: 1, MaxEjectionFraction: 0.5}})
+	tracker := perf.NewTracker(holder, func() time.Time { return now })
+	participants := limits.NewParticipantLimiter(limits.ParticipantConfigFromLimits(config.Defaults().Limits), func() time.Time { return now })
+	release, _ := participants.Acquire(peerTestHost, peerTestModel, limits.TokenCost{Input: 7, Output: 9})
+	defer release()
+	tracker.Acquire(peerTestHost, peerTestModel)
+	defer tracker.Release(peerTestHost, peerTestModel)
+
+	samples := localLoadSamples(peerChannelSources{participants: participants, hosts: tracker})
+
+	if len(samples) != 1 {
+		t.Fatalf("samples = %+v, want one row", samples)
+	}
+	if samples[0].InflightInputTokens != 7 || samples[0].InflightRequests != 1 {
+		t.Errorf("row = %+v, want 7 input tokens and 1 request in flight", samples[0])
 	}
 }

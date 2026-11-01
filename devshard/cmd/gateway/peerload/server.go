@@ -160,9 +160,12 @@ func (s *peerServer) identify(conn net.Conn) bool {
 		return true
 	}
 	address := s.peerAddress(conn)
+	if address == emptyAddress {
+		return false
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if address != emptyAddress && s.connectionsOf(address) >= s.maxConnectionsPerAddress {
+	if s.connectionsOf(address) >= s.maxConnectionsPerAddress {
 		s.connectionAddresses[conn] = emptyAddress
 		return false
 	}

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"sync"
 	"testing"
 	"time"
 
@@ -297,5 +298,53 @@ func TestRefreshOneDropsAnEntryGoneFromTheChain(t *testing.T) {
 
 	if _, found := members.Lookup(id); found {
 		t.Fatal("the entry stayed after it left the chain")
+	}
+}
+
+type gatedRegistry struct {
+	*fakeRegistry
+	armed   bool
+	reached chan struct{}
+	release chan struct{}
+}
+
+func (r *gatedRegistry) MembersOf(ctx context.Context, addresses []string) ([]chain.RegistryMember, error) {
+	members, err := r.fakeRegistry.MembersOf(ctx, addresses)
+	if r.armed {
+		r.armed = false
+		close(r.reached)
+		<-r.release
+	}
+	return members, err
+}
+
+// Test flow:
+//  1. Hold a peer's entry and start a full refresh that has read it and waits to return.
+//  2. Change the peer's key on chain and reread that one address, which lands the new key.
+//  3. Let the full refresh finish.
+//  4. Assert the peer still has the new key.
+func TestFullRefreshStartedEarlierDoesNotOverwriteARereadOfOneAddress(t *testing.T) {
+	registry := &gatedRegistry{fakeRegistry: newFakeRegistry(), reached: make(chan struct{}), release: make(chan struct{})}
+	members, _ := newTestMembership(t, registry.fakeRegistry, newFakeClock())
+	members.registry = registry
+	id := PeerID{Address: secondAddress, Instance: "other"}
+	registry.put(secondAddress, registryEntry("other", newIdentity(t, id), "https://other.example:8443"))
+	members.ObserveChain([]string{firstAddress, secondAddress}, testHeight)
+	registry.armed = true
+	var finished sync.WaitGroup
+	finished.Go(func() { _ = members.Refresh(context.Background()) })
+	<-registry.reached
+	rotated := newIdentity(t, id)
+	registry.put(secondAddress, registryEntry("other", rotated, "https://other.example:8443"))
+	if err := members.RefreshOne(context.Background(), secondAddress); err != nil {
+		t.Fatalf("RefreshOne() = %v", err)
+	}
+
+	close(registry.release)
+	finished.Wait()
+
+	entry, found := members.Lookup(id)
+	if !found || entry.Fingerprint != rotated.Fingerprint {
+		t.Fatalf("Lookup() = %+v, %v, want the entry with the rotated key", entry, found)
 	}
 }
