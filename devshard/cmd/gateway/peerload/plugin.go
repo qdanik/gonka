@@ -142,13 +142,17 @@ func (p *Plugin) refreshRegistry(ctx context.Context) {
 	if err != nil {
 		p.deps.Report("peer registry read failed", err)
 	}
-	p.server.CloseRemoved()
-	p.poller.Sync()
+	p.dropRemoved()
 	if err == nil || errors.Is(err, errPartialRead) {
 		if err := p.announce(ctx); err != nil {
 			p.deps.Report("peer registration failed", err)
 		}
 	}
+}
+
+func (p *Plugin) dropRemoved() {
+	p.server.CloseRemoved()
+	p.poller.Sync()
 }
 
 func (p *Plugin) pollPeers(ctx context.Context) { p.poller.Round(ctx, p.topic) }
@@ -182,7 +186,9 @@ func (p *Plugin) registryLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			wait = min(wait*retryWaitFactor, registryRefreshInterval)
+			if p.members.HasAddresses() {
+				wait = min(wait*retryWaitFactor, registryRefreshInterval)
+			}
 		case <-p.nudge:
 		}
 		p.refreshRegistry(ctx)
@@ -204,7 +210,7 @@ func (p *Plugin) announce(ctx context.Context) error {
 		return nil
 	}
 	if entry, found := p.members.Lookup(self); found && p.entryCurrent(entry) {
-		p.clearWriteWait()
+		p.clearWriteBackoff()
 		return nil
 	}
 	if !p.writeDue() {
@@ -223,7 +229,9 @@ func (p *Plugin) announce(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("register instance %s: %w", self, err)
 	}
-	return p.members.Refresh(ctx)
+	err = p.members.Refresh(ctx)
+	p.dropRemoved()
+	return err
 }
 
 func (p *Plugin) writeDue() bool {
@@ -236,20 +244,20 @@ func (p *Plugin) recordWrite(err error) {
 	p.writeMu.Lock()
 	defer p.writeMu.Unlock()
 	if err == nil {
-		p.clearWriteWaitLocked()
+		p.clearWriteBackoffLocked()
 		return
 	}
-	p.writeBackoff = min(max(p.writeBackoff*2, registryRefreshInterval), reregisterInterval)
+	p.writeBackoff = min(max(p.writeBackoff*retryWaitFactor, registryRefreshInterval), reregisterInterval)
 	p.nextWrite = p.deps.Now().Add(p.writeBackoff)
 }
 
-func (p *Plugin) clearWriteWait() {
+func (p *Plugin) clearWriteBackoff() {
 	p.writeMu.Lock()
 	defer p.writeMu.Unlock()
-	p.clearWriteWaitLocked()
+	p.clearWriteBackoffLocked()
 }
 
-func (p *Plugin) clearWriteWaitLocked() {
+func (p *Plugin) clearWriteBackoffLocked() {
 	p.writeBackoff = noWriteBackoff
 	p.nextWrite = time.Time{}
 }

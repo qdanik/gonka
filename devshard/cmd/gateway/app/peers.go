@@ -119,7 +119,7 @@ func localLoadSamples(sources peerChannelSources) []peerload.LoadSample {
 	return joinLoadSamples(sources.participants.Snapshot(), sources.hosts.Snapshot(), sources.hosts.InflightPairs(), sources.hosts.Pressure)
 }
 
-func joinLoadSamples(windows []limits.HostWindow, hosts []perf.HostState, inflight []perf.PairInflight, pressure func(participant, model string) perf.Pressure) []peerload.LoadSample {
+func joinLoadSamples(windows []limits.HostWindow, hosts []perf.HostState, inflightPairs []perf.InflightPair, pressure func(participant, model string) perf.Pressure) []peerload.LoadSample {
 	type hostPair struct{ participant, model string }
 	samples := make(map[hostPair]*peerload.LoadSample, len(windows))
 	sampleOf := func(participant, model string) *peerload.LoadSample {
@@ -141,7 +141,7 @@ func joinLoadSamples(windows []limits.HostWindow, hosts []perf.HostState, inflig
 		sample := sampleOf(host.Participant, host.Model)
 		sample.Ejected = host.Ejected
 	}
-	for _, pair := range inflight {
+	for _, pair := range inflightPairs {
 		sampleOf(pair.Participant, pair.Model).InflightRequests = int64(pair.Requests)
 	}
 	joined := make([]peerload.LoadSample, 0, len(samples))

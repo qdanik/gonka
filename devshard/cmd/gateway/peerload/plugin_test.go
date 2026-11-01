@@ -200,6 +200,35 @@ func TestFirstRegistryReadBacksOffToTheRefreshInterval(t *testing.T) {
 }
 
 // Test flow:
+//  1. Start the registry loop with an empty allowlist and a registry that fails, and let it run past the refresh interval.
+//  2. Change the allowlist, so a read happens and fails.
+//  3. Assert the retry comes after the first retry interval, since no earlier attempt read anything.
+func TestEmptyAllowlistDoesNotLengthenTheFirstReadRetry(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		registry := newFakeRegistry()
+		registry.setFailure(errors.New("node down"))
+		plugin := newTestPlugin(t, registry, registry.registrar(secondAddress), time.Now)
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		go plugin.registryLoop(ctx)
+		time.Sleep(registryRefreshInterval + firstReadRetryInterval)
+		synctest.Wait()
+
+		plugin.ObserveChain([]string{secondAddress}, testHeight)
+		synctest.Wait()
+		failed := registry.callCount()
+		time.Sleep(firstReadRetryInterval)
+		synctest.Wait()
+
+		if registry.callCount() == failed {
+			t.Fatalf("no retry %v after the failed read", firstReadRetryInterval)
+		}
+		cancel()
+		synctest.Wait()
+	})
+}
+
+// Test flow:
 //  1. Start the registry loop with an empty allowlist.
 //  2. Change the allowlist without moving the clock.
 //  3. Assert the loop read the registry at once.
@@ -275,18 +304,12 @@ func TestOneBadAllowlistEntryDoesNotStopRegistration(t *testing.T) {
 }
 
 type gatedRegistrar struct {
-	inner   Registrar
-	armed   bool
-	reached chan struct{}
-	release chan struct{}
+	*callGate
+	inner Registrar
 }
 
 func (r *gatedRegistrar) RegisterInstance(ctx context.Context, registration chain.RegistryRegistration) error {
-	if r.armed {
-		r.armed = false
-		close(r.reached)
-		<-r.release
-	}
+	r.hold()
 	return r.inner.RegisterInstance(ctx, registration)
 }
 
@@ -296,7 +319,7 @@ func (r *gatedRegistrar) RegisterInstance(ctx context.Context, registration chai
 //  3. Run a refresh and assert the peer's connection is closed while the write is still open.
 func TestRemovedPeerIsClosedBeforeAnOpenRegistryWriteFinishes(t *testing.T) {
 	registry := newFakeRegistry()
-	registrar := &gatedRegistrar{inner: registry.registrar(firstAddress), reached: make(chan struct{}), release: make(chan struct{})}
+	registrar := &gatedRegistrar{callGate: newCallGate(), inner: registry.registrar(firstAddress)}
 	plugin := newTestPlugin(t, registry, registrar, newFakeClock().now)
 	peerID := PeerID{Address: secondAddress, Instance: "other"}
 	peer := newIdentity(t, peerID)
@@ -316,6 +339,33 @@ func TestRemovedPeerIsClosedBeforeAnOpenRegistryWriteFinishes(t *testing.T) {
 
 	if !raw.closed.Load() {
 		t.Fatal("the removed peer's connection is still open while the registry write is open")
+	}
+}
+
+// Test flow:
+//  1. Read a peer's entry and connect it, with this instance not yet registered.
+//  2. Refresh, with a write that removes the peer from the chain as it lands, so only the reread after the write sees the removal.
+//  3. Assert the peer's connection is closed when the refresh returns.
+func TestRemovalSeenByTheRereadAfterTheWriteClosesTheConnection(t *testing.T) {
+	registry := newFakeRegistry()
+	landing := registry.registrar(firstAddress)
+	registrar := registrarFunc(func(ctx context.Context, registration chain.RegistryRegistration) error {
+		registry.remove(secondAddress)
+		return landing.RegisterInstance(ctx, registration)
+	})
+	plugin := newTestPlugin(t, registry, registrar, newFakeClock().now)
+	peerID := PeerID{Address: secondAddress, Instance: "other"}
+	peer := newIdentity(t, peerID)
+	registry.put(secondAddress, registryEntry("other", peer, "https://other.example:8443"))
+	plugin.ObserveChain([]string{firstAddress, secondAddress}, testHeight)
+	refreshed(t, plugin.members)
+	connection, raw := connectOverPipe(t, plugin.server, peer)
+	plugin.server.trackConn(connection, http.StateActive)
+
+	plugin.refreshRegistry(context.Background())
+
+	if !raw.closed.Load() {
+		t.Fatal("the connection of a peer the reread after the write found gone is still open")
 	}
 }
 
