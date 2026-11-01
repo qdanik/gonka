@@ -91,6 +91,12 @@ func (c *Config) Validate() error {
 	if c.Tx.GasLimit < 1 {
 		complain("tx_gas_limit: %d must be >= 1", c.Tx.GasLimit)
 	}
+	if c.Tx.RegistryFeeAmount < 0 {
+		complain("registry_tx_fee_amount: %d must be >= 0", c.Tx.RegistryFeeAmount)
+	}
+	if c.Tx.RegistryGasLimit < 1 {
+		complain("registry_tx_gas_limit: %d must be >= 1", c.Tx.RegistryGasLimit)
+	}
 	if c.Tx.PollIntervalMS < 1 {
 		complain("tx_poll_interval_ms: %d must be >= 1", c.Tx.PollIntervalMS)
 	}

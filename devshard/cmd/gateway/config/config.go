@@ -51,11 +51,13 @@ func (p Peer) Active() bool {
 }
 
 type Tx struct {
-	FeeDenom       string
-	FeeAmount      int64
-	GasLimit       int64
-	PollIntervalMS int64
-	PollTimeoutMS  int64
+	FeeDenom          string
+	FeeAmount         int64
+	GasLimit          int64
+	RegistryFeeAmount int64
+	RegistryGasLimit  int64
+	PollIntervalMS    int64
+	PollTimeoutMS     int64
 }
 
 // Concurrency caps requests in flight; a zero MaxRequests leaves only the per-weight limit.

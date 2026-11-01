@@ -16,12 +16,14 @@ import (
 
 // See README.md, "Transaction encoding".
 const (
-	DefaultFeeDenom     = EscrowDenom
-	DefaultFeeAmount    = uint64(1_000_000)
-	DefaultGasLimit     = uint64(700_000)
-	DefaultPollInterval = 2 * time.Second
-	DefaultPollTimeout  = 45 * time.Second
-	UnorderedTxTTL      = 9 * time.Minute
+	DefaultFeeDenom          = EscrowDenom
+	DefaultFeeAmount         = uint64(1_000_000)
+	DefaultGasLimit          = uint64(700_000)
+	DefaultRegistryFeeAmount = uint64(250_000)
+	DefaultRegistryGasLimit  = uint64(250_000)
+	DefaultPollInterval      = 2 * time.Second
+	DefaultPollTimeout       = 45 * time.Second
+	UnorderedTxTTL           = 9 * time.Minute
 
 	EscrowDenom = "ngonka"
 )
@@ -50,26 +52,30 @@ var (
 
 // TxClient owns the transaction envelope and the intent hook; the transport underneath is interchangeable, which keeps its tests off a connection.
 type TxClient struct {
-	transport    Transport
-	feeDenom     string
-	feeAmount    uint64
-	gasLimit     uint64
-	pollInterval time.Duration
-	pollTimeout  time.Duration
-	now          func() time.Time
-	narrator     settlementNarrator
+	transport         Transport
+	feeDenom          string
+	feeAmount         uint64
+	gasLimit          uint64
+	registryFeeAmount uint64
+	registryGasLimit  uint64
+	pollInterval      time.Duration
+	pollTimeout       time.Duration
+	now               func() time.Time
+	narrator          settlementNarrator
 }
 
 // Config configures a TxClient. Zero-value fee/gas/poll/clock fields take package defaults; Transport is required.
 type Config struct {
-	Transport    Transport
-	FeeDenom     string
-	FeeAmount    uint64
-	GasLimit     uint64
-	PollInterval time.Duration
-	PollTimeout  time.Duration
-	Now          func() time.Time
-	Narrator     settlementNarrator
+	Transport         Transport
+	FeeDenom          string
+	FeeAmount         uint64
+	GasLimit          uint64
+	RegistryFeeAmount uint64
+	RegistryGasLimit  uint64
+	PollInterval      time.Duration
+	PollTimeout       time.Duration
+	Now               func() time.Time
+	Narrator          settlementNarrator
 }
 
 // settlementNarrator is satisfied by *journal.Journal; chain never imports it. See README.md, "Boundaries".
@@ -107,6 +113,14 @@ func NewTxClient(cfg Config) (*TxClient, error) {
 	if gasLimit == 0 {
 		gasLimit = DefaultGasLimit
 	}
+	registryFeeAmount := cfg.RegistryFeeAmount
+	if registryFeeAmount == 0 {
+		registryFeeAmount = DefaultRegistryFeeAmount
+	}
+	registryGasLimit := cfg.RegistryGasLimit
+	if registryGasLimit == 0 {
+		registryGasLimit = DefaultRegistryGasLimit
+	}
 	pollInterval := cfg.PollInterval
 	if pollInterval <= 0 {
 		pollInterval = DefaultPollInterval
@@ -120,14 +134,16 @@ func NewTxClient(cfg Config) (*TxClient, error) {
 		now = time.Now
 	}
 	return &TxClient{
-		transport:    cfg.Transport,
-		feeDenom:     feeDenom,
-		feeAmount:    feeAmount,
-		gasLimit:     gasLimit,
-		pollInterval: pollInterval,
-		pollTimeout:  pollTimeout,
-		now:          now,
-		narrator:     cfg.Narrator,
+		transport:         cfg.Transport,
+		feeDenom:          feeDenom,
+		feeAmount:         feeAmount,
+		gasLimit:          gasLimit,
+		registryFeeAmount: registryFeeAmount,
+		registryGasLimit:  registryGasLimit,
+		pollInterval:      pollInterval,
+		pollTimeout:       pollTimeout,
+		now:               now,
+		narrator:          cfg.Narrator,
 	}, nil
 }
 

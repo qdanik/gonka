@@ -14,11 +14,13 @@ import (
 )
 
 const (
-	fixedContract          = "gonka1contract"
-	sharedFeeDenomForTest  = "ushared"
-	sharedFeeAmountForTest = 900_000
-	sharedGasLimitForTest  = 800_000
-	escrowDeadlineForTest  = 5 * time.Second
+	fixedContract            = "gonka1contract"
+	sharedFeeDenomForTest    = "ushared"
+	sharedFeeAmountForTest   = 900_000
+	sharedGasLimitForTest    = 800_000
+	registryFeeAmountForTest = 600_000
+	registryGasLimitForTest  = 300_000
+	escrowDeadlineForTest    = 5 * time.Second
 )
 
 func assertFee(t *testing.T, txBytes []byte, denom string, amount, gasLimit uint64) {
@@ -140,22 +142,24 @@ func TestRegisterInstanceBroadcastsTheExecuteMessage(t *testing.T) {
 }
 
 // Test flow:
-//  1. Build a client whose shared fee and gas limit differ from the registry write's.
+//  1. Build a client with a configured registry fee and gas limit that differ from the shared ones.
 //  2. Register an instance, create an escrow and settle one through it.
 //  3. Decode the fee of each broadcast tx.
-//  4. Assert the registry write carries gas limit 250000 and fee 250000 in the client's denom.
+//  4. Assert the registry write carries the configured registry fee and gas limit in the client's denom.
 //  5. Assert the escrow create and settle carry the shared fee and gas limit.
 func TestRegisterInstancePaysItsOwnFeeAndTheEscrowTxsTheShared(t *testing.T) {
 	transport := newFakeTransport()
 	answerEveryBroadcast(transport, TxResult{})
 	client, err := NewTxClient(Config{
-		Transport:    transport,
-		FeeDenom:     sharedFeeDenomForTest,
-		FeeAmount:    sharedFeeAmountForTest,
-		GasLimit:     sharedGasLimitForTest,
-		PollInterval: time.Millisecond,
-		PollTimeout:  time.Second,
-		Now:          func() time.Time { return time.Unix(1_800_000_000, 0).UTC() },
+		Transport:         transport,
+		FeeDenom:          sharedFeeDenomForTest,
+		FeeAmount:         sharedFeeAmountForTest,
+		GasLimit:          sharedGasLimitForTest,
+		RegistryFeeAmount: registryFeeAmountForTest,
+		RegistryGasLimit:  registryGasLimitForTest,
+		PollInterval:      time.Millisecond,
+		PollTimeout:       time.Second,
+		Now:               func() time.Time { return time.Unix(1_800_000_000, 0).UTC() },
 	})
 	if err != nil {
 		t.Fatalf("NewTxClient: %v", err)
@@ -165,7 +169,7 @@ func TestRegisterInstancePaysItsOwnFeeAndTheEscrowTxsTheShared(t *testing.T) {
 	if err := client.RegisterInstance(t.Context(), signer, fixedContract, fixedRegistration()); err != nil {
 		t.Fatalf("RegisterInstance() = %v", err)
 	}
-	assertFee(t, transport.broadcast[0], sharedFeeDenomForTest, registryWriteFeeAmount, registryWriteGasLimit)
+	assertFee(t, transport.broadcast[0], sharedFeeDenomForTest, registryFeeAmountForTest, registryGasLimitForTest)
 
 	ctx, cancel := context.WithTimeout(t.Context(), escrowDeadlineForTest)
 	defer cancel()
