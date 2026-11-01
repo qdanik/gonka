@@ -13,7 +13,32 @@ import (
 	sdktx "github.com/cosmos/cosmos-sdk/types/tx"
 )
 
-const fixedContract = "gonka1contract"
+const (
+	fixedContract          = "gonka1contract"
+	sharedFeeDenomForTest  = "ushared"
+	sharedFeeAmountForTest = 900_000
+	sharedGasLimitForTest  = 800_000
+	escrowDeadlineForTest  = 5 * time.Second
+)
+
+func assertFee(t *testing.T, txBytes []byte, denom string, amount, gasLimit uint64) {
+	t.Helper()
+	var raw sdktx.TxRaw
+	if err := raw.Unmarshal(txBytes); err != nil {
+		t.Fatalf("unmarshal tx: %v", err)
+	}
+	var authInfo sdktx.AuthInfo
+	if err := authInfo.Unmarshal(raw.AuthInfoBytes); err != nil {
+		t.Fatalf("unmarshal auth info: %v", err)
+	}
+	fee := authInfo.Fee
+	if len(fee.Amount) != 1 || fee.Amount[0].Denom != denom || fee.Amount[0].Amount.Uint64() != amount {
+		t.Fatalf("fee = %v, want %d%s", fee.Amount, amount, denom)
+	}
+	if fee.GasLimit != gasLimit {
+		t.Fatalf("gas limit = %d, want %d", fee.GasLimit, gasLimit)
+	}
+}
 
 func fixedRegistration() RegistryRegistration {
 	return RegistryRegistration{InstanceID: "instance-a", Endpoint: "https://a.example:8443", SPKISHA256: strings.Repeat("ab", 32), Protocol: 1, Topics: []string{"load@1"}}
@@ -112,6 +137,56 @@ func TestRegisterInstanceBroadcastsTheExecuteMessage(t *testing.T) {
 	if string(message.Msg) != want {
 		t.Fatalf("msg = %s, want %s", message.Msg, want)
 	}
+}
+
+// Test flow:
+//  1. Build a client whose shared fee and gas limit differ from the registry write's.
+//  2. Register an instance, create an escrow and settle one through it.
+//  3. Decode the fee of each broadcast tx.
+//  4. Assert the registry write carries gas limit 250000 and fee 250000 in the client's denom.
+//  5. Assert the escrow create and settle carry the shared fee and gas limit.
+func TestRegisterInstancePaysItsOwnFeeAndTheEscrowTxsTheShared(t *testing.T) {
+	transport := newFakeTransport()
+	answerEveryBroadcast(transport, TxResult{})
+	client, err := NewTxClient(Config{
+		Transport:    transport,
+		FeeDenom:     sharedFeeDenomForTest,
+		FeeAmount:    sharedFeeAmountForTest,
+		GasLimit:     sharedGasLimitForTest,
+		PollInterval: time.Millisecond,
+		PollTimeout:  time.Second,
+		Now:          func() time.Time { return time.Unix(1_800_000_000, 0).UTC() },
+	})
+	if err != nil {
+		t.Fatalf("NewTxClient: %v", err)
+	}
+	signer := fixedSigner(t)
+
+	if err := client.RegisterInstance(t.Context(), signer, fixedContract, fixedRegistration()); err != nil {
+		t.Fatalf("RegisterInstance() = %v", err)
+	}
+	assertFee(t, transport.broadcast[0], sharedFeeDenomForTest, registryWriteFeeAmount, registryWriteGasLimit)
+
+	ctx, cancel := context.WithTimeout(t.Context(), escrowDeadlineForTest)
+	defer cancel()
+
+	transport.onTx = nil
+	onPrepared := func(txHash string) error {
+		transport.setTx(txHash, escrowCreatedResult("42"))
+		return nil
+	}
+	if _, err := client.CreateEscrow(ctx, signer, 1_000_000, fixedModelID, onPrepared); err != nil {
+		t.Fatalf("CreateEscrow() = %v", err)
+	}
+	assertFee(t, transport.broadcast[1], sharedFeeDenomForTest, sharedFeeAmountForTest, sharedGasLimitForTest)
+
+	if _, err := client.SettleEscrow(ctx, signer, fixedSettlementFull(), func(txHash string) error {
+		transport.setTx(txHash, TxResult{})
+		return nil
+	}); err != nil {
+		t.Fatalf("SettleEscrow() = %v", err)
+	}
+	assertFee(t, transport.broadcast[2], sharedFeeDenomForTest, sharedFeeAmountForTest, sharedGasLimitForTest)
 }
 
 // Test flow:
