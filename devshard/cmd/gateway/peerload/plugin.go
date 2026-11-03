@@ -12,6 +12,8 @@ import (
 	"devshard/cmd/gateway/chain"
 )
 
+var noScheduledWrite time.Time
+
 // Registrar writes this instance's own registry entry.
 type Registrar interface {
 	RegisterInstance(ctx context.Context, registration chain.RegistryRegistration) error
@@ -53,10 +55,13 @@ type Plugin struct {
 
 	nudge    chan struct{}
 	finished sync.WaitGroup
+	writes   writeSchedule
+}
 
-	writeMu      sync.Mutex
-	writeBackoff time.Duration
-	nextWrite    time.Time
+type writeSchedule struct {
+	mu      sync.Mutex
+	backoff time.Duration
+	next    time.Time
 }
 
 // New validates the settings and builds the plugin; it reads and dials nothing.
@@ -216,13 +221,13 @@ func (p *Plugin) announce(ctx context.Context) error {
 	}
 	entry, found := p.members.Lookup(self)
 	if found && p.entryCurrent(entry) {
-		p.clearWriteBackoff()
+		p.writes.reset()
 		return nil
 	}
 	if found && p.withinUpdateInterval(entry) {
 		return nil
 	}
-	if !p.writeDue() {
+	if !p.writes.due(p.deps.Now()) {
 		return nil
 	}
 	writeCtx, cancel := context.WithTimeout(ctx, max(p.settings.CommitPoll, chain.DefaultPollTimeout)+registerBroadcastMargin)
@@ -234,7 +239,7 @@ func (p *Plugin) announce(ctx context.Context) error {
 		Protocol:   protocolVersion,
 		Topics:     []string{topicLabel(p.topic)},
 	})
-	p.recordWrite(err)
+	p.writes.record(err, p.deps.Now())
 	if err != nil {
 		return fmt.Errorf("register instance %s: %w", self, err)
 	}
@@ -250,34 +255,32 @@ func (p *Plugin) entryAgeBlocks(entry peerInstance) int64 {
 	return p.members.Height() - int64(entry.UpdatedHeight)
 }
 
-var noScheduledWrite time.Time
-
-func (p *Plugin) writeDue() bool {
-	p.writeMu.Lock()
-	defer p.writeMu.Unlock()
-	return !p.deps.Now().Before(p.nextWrite)
+func (s *writeSchedule) due(now time.Time) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return !now.Before(s.next)
 }
 
-func (p *Plugin) recordWrite(err error) {
-	p.writeMu.Lock()
-	defer p.writeMu.Unlock()
+func (s *writeSchedule) record(err error, now time.Time) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if err == nil {
-		p.clearWriteBackoffLocked()
+		s.resetLocked()
 		return
 	}
-	p.writeBackoff = min(max(p.writeBackoff*retryWaitFactor, registryRefreshInterval), reregisterInterval)
-	p.nextWrite = p.deps.Now().Add(p.writeBackoff)
+	s.backoff = min(max(s.backoff*retryWaitFactor, registryRefreshInterval), reregisterInterval)
+	s.next = now.Add(s.backoff)
 }
 
-func (p *Plugin) clearWriteBackoff() {
-	p.writeMu.Lock()
-	defer p.writeMu.Unlock()
-	p.clearWriteBackoffLocked()
+func (s *writeSchedule) reset() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.resetLocked()
 }
 
-func (p *Plugin) clearWriteBackoffLocked() {
-	p.writeBackoff = noWriteBackoff
-	p.nextWrite = noScheduledWrite
+func (s *writeSchedule) resetLocked() {
+	s.backoff = noWriteBackoff
+	s.next = noScheduledWrite
 }
 
 func (p *Plugin) entryCurrent(entry peerInstance) bool {
