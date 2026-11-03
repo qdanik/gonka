@@ -70,7 +70,7 @@ func TestVerifierAcceptsThePinnedKeyOfAnAllowlistedInstance(t *testing.T) {
 // Test flow:
 //  1. Dial the pinned instance and present a certificate under its name carrying another key.
 //  2. Assert it is refused as a fingerprint mismatch after one registry reread.
-func TestDialRefusesTheWrongKeyAfterOneReread(t *testing.T) {
+func TestClientRefusesTheWrongKeyAfterOneReread(t *testing.T) {
 	fixture := newVerifierFixture(t)
 	before := fixture.registry.callCount()
 	config := fixture.verifier.ClientTLSConfig(fixture.selfID, fixture.peerID)
