@@ -33,7 +33,7 @@ Both sides run the same check once per connection, as `tls.Config.VerifyConnecti
 1. Exactly one certificate, carrying exactly one URI SAN `gonka:<address>/<instance_id>`.
 2. It is not this instance, by name or by key.
 3. The address is in the allowlist now.
-4. SHA-256 of the certificate's `RawSubjectPublicKeyInfo` equals the registry entry of exactly that instance. On a miss the dialling side rereads the address once, under the rate limit, and the check repeats; a reread never turns into an accept by itself. The listener never rereads, because it runs the check before the client has proven its key: an instance it has not read yet is refused until the next registry refresh and gets in at its next poll after it.
+4. SHA-256 of the certificate's `RawSubjectPublicKeyInfo` equals the registry entry of exactly that instance. On a miss the dialling side rereads the address once, under the rate limit, and the check repeats; a reread never turns into an accept by itself. The listener never rereads, because it runs the check before the client has proven its key: an instance it has not read yet is refused until this gateway's next registry refresh and gets in at its first poll after that refresh.
 5. The entry's protocol is supported.
 
 The dialling side also requires the certificate to name the instance it dialled. The registry accepts any host, so a peer's address goes through the dial guard that refuses private and link-local addresses, unless `DEVSHARD_ALLOW_PRIVATE_ADDRESSES` lifts it.
