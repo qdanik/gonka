@@ -370,6 +370,34 @@ func TestRemovalSeenByTheRereadAfterTheWriteClosesTheConnection(t *testing.T) {
 }
 
 // Test flow:
+//  1. Read two peers' entries and connect one of them, with this instance not yet registered.
+//  2. Refresh, with a write that removes the connected peer from the chain and makes the other peer's address fail as it lands, so only a partial reread after the write sees the removal.
+//  3. Assert the removed peer's connection is closed when the refresh returns.
+func TestRemovalSeenByAPartialRereadAfterTheWriteClosesTheConnection(t *testing.T) {
+	registry := newFakeRegistry()
+	landing := registry.registrar(firstAddress)
+	registrar := registrarFunc(func(ctx context.Context, registration chain.RegistryRegistration) error {
+		registry.remove(secondAddress)
+		registry.failAddress(thirdAddress, errors.New("node down"))
+		return landing.RegisterInstance(ctx, registration)
+	})
+	plugin := newTestPlugin(t, registry, registrar, newFakeClock().now)
+	peerID := PeerID{Address: secondAddress, Instance: "other"}
+	peer := newIdentity(t, peerID)
+	registry.put(secondAddress, registryEntry("other", peer, "https://other.example:8443"))
+	plugin.ObserveChain([]string{firstAddress, secondAddress, thirdAddress}, testHeight)
+	refreshed(t, plugin.members)
+	connection, raw := connectOverPipe(t, plugin.server, peer)
+	plugin.server.trackConn(connection, http.StateActive)
+
+	plugin.refreshRegistry(context.Background())
+
+	if !raw.closed.Load() {
+		t.Fatal("the connection of a peer the partial reread after the write found gone is still open")
+	}
+}
+
+// Test flow:
 //  1. Let a write fail after it landed on chain, so a wait starts.
 //  2. Refresh, which finds the entry current and clears the wait.
 //  3. Let the entry age until it needs a write again and refuse that write.
@@ -407,8 +435,8 @@ func TestWaitClearsWhenAnUnconfirmedWriteLaterLands(t *testing.T) {
 // Test flow:
 //  1. Hold this instance's entry with another endpoint, written a block ago, and a registrar that refuses as the contract does until the interval has passed.
 //  2. Refresh at each refresh interval, with the blocks that pass in it, until well past the interval.
-//  3. Assert at most one write was refused and the new endpoint was written.
-func TestAnEntryWrittenRecentlyCostsAtMostOneRefusedWrite(t *testing.T) {
+//  3. Assert no write was refused and the new endpoint was written.
+func TestAnEntryWrittenRecentlyIsNotRewrittenInsideTheUpdateInterval(t *testing.T) {
 	const blocksPerRefresh = 56
 	clock := newFakeClock()
 	registry := newFakeRegistry()
@@ -431,11 +459,42 @@ func TestAnEntryWrittenRecentlyCostsAtMostOneRefusedWrite(t *testing.T) {
 		clock.advance(registryRefreshInterval)
 	}
 
-	if refused > 1 {
-		t.Fatalf("refused writes = %d, want at most 1", refused)
+	if refused != 0 {
+		t.Fatalf("refused writes = %d, want 0", refused)
 	}
 	if got := registry.registrationCount(); got != 1 {
 		t.Fatalf("registrations = %d, want 1", got)
+	}
+}
+
+// Test flow:
+//  1. Hold this instance's entry with another endpoint, and observe a height at the given distance from its updated height.
+//  2. Refresh.
+//  3. Assert a write goes out only when the distance has reached the update interval.
+func TestADifferingEntryIsWrittenOnlyOnceItsAgeReachesTheUpdateInterval(t *testing.T) {
+	cases := []struct {
+		name       string
+		blocksAged int64
+		wantWrites int
+	}{
+		{name: "half the interval", blocksAged: 50, wantWrites: 0},
+		{name: "height moved back", blocksAged: -50, wantWrites: 0},
+		{name: "one block short", blocksAged: 99, wantWrites: 0},
+		{name: "exactly the interval", blocksAged: 100, wantWrites: 1},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			registry := newFakeRegistry()
+			plugin := newTestPlugin(t, registry, registry.registrar(firstAddress), newFakeClock().now)
+			registry.put(firstAddress, registryEntry("self", plugin.identity, "https://moved.example:8443"))
+			plugin.ObserveChain([]string{firstAddress}, testHeight+testCase.blocksAged)
+
+			plugin.refreshRegistry(context.Background())
+
+			if got := registry.registrationCount(); got != testCase.wantWrites {
+				t.Fatalf("registrations = %d, want %d", got, testCase.wantWrites)
+			}
+		})
 	}
 }
 

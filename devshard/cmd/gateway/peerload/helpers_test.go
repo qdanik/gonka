@@ -57,12 +57,13 @@ type fakeRegistry struct {
 	members    map[string][]chain.RegistryInstance
 	calls      [][]string
 	failure    error
+	failures   map[string]error
 	refusal    error
 	registered []chain.RegistryRegistration
 }
 
 func newFakeRegistry() *fakeRegistry {
-	return &fakeRegistry{members: map[string][]chain.RegistryInstance{}}
+	return &fakeRegistry{members: map[string][]chain.RegistryInstance{}, failures: map[string]error{}}
 }
 
 func (r *fakeRegistry) MembersOf(_ context.Context, addresses []string) ([]chain.RegistryMember, error) {
@@ -71,6 +72,11 @@ func (r *fakeRegistry) MembersOf(_ context.Context, addresses []string) ([]chain
 	r.calls = append(r.calls, addresses)
 	if r.failure != nil {
 		return nil, r.failure
+	}
+	for _, address := range addresses {
+		if failure, failing := r.failures[address]; failing {
+			return nil, failure
+		}
 	}
 	members := make([]chain.RegistryMember, 0, len(addresses))
 	for _, address := range addresses {
@@ -112,6 +118,12 @@ func (r *fakeRegistry) setFailure(failure error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.failure = failure
+}
+
+func (r *fakeRegistry) failAddress(address string, failure error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.failures[address] = failure
 }
 
 func (r *fakeRegistry) callCount() int {

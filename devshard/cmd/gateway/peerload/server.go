@@ -158,7 +158,6 @@ func (s *peerServer) identify(conn net.Conn) bool {
 	if _, known := s.connectionAddresses[conn]; known {
 		return true
 	}
-	// Authorized under the lock, so a removal either refuses here or finds the record in CloseRemoved.
 	address := s.peerAddress(conn)
 	if address == emptyAddress {
 		return false

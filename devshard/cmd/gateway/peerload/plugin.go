@@ -138,16 +138,21 @@ func (p *Plugin) Wait() {
 }
 
 func (p *Plugin) refreshRegistry(ctx context.Context) {
-	err := p.members.Refresh(ctx)
-	if err != nil {
-		p.deps.Report("peer registry read failed", err)
-	}
-	p.dropRemoved()
+	err := p.refreshMembers(ctx)
 	if err == nil || errors.Is(err, errPartialRead) {
 		if err := p.announce(ctx); err != nil {
 			p.deps.Report("peer registration failed", err)
 		}
 	}
+}
+
+func (p *Plugin) refreshMembers(ctx context.Context) error {
+	err := p.members.Refresh(ctx)
+	if err != nil {
+		p.deps.Report("peer registry read failed", err)
+	}
+	p.dropRemoved()
+	return err
 }
 
 func (p *Plugin) dropRemoved() {
@@ -233,16 +238,19 @@ func (p *Plugin) announce(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("register instance %s: %w", self, err)
 	}
-	if err := p.members.Refresh(ctx); err != nil {
-		p.deps.Report("peer registry read failed", err)
-	}
-	p.dropRemoved()
+	_ = p.refreshMembers(ctx)
 	return nil
 }
 
 func (p *Plugin) withinUpdateInterval(entry peerInstance) bool {
-	return p.members.Height()-int64(entry.UpdatedHeight) < minUpdateIntervalBlocks
+	return p.entryAgeBlocks(entry) < minUpdateIntervalBlocks
 }
+
+func (p *Plugin) entryAgeBlocks(entry peerInstance) int64 {
+	return p.members.Height() - int64(entry.UpdatedHeight)
+}
+
+var noScheduledWrite time.Time
 
 func (p *Plugin) writeDue() bool {
 	p.writeMu.Lock()
@@ -269,12 +277,12 @@ func (p *Plugin) clearWriteBackoff() {
 
 func (p *Plugin) clearWriteBackoffLocked() {
 	p.writeBackoff = noWriteBackoff
-	p.nextWrite = time.Time{}
+	p.nextWrite = noScheduledWrite
 }
 
 func (p *Plugin) entryCurrent(entry peerInstance) bool {
 	return entry.Endpoint == p.settings.AdvertiseURL &&
 		entry.Fingerprint == p.identity.Fingerprint &&
 		entry.SupportsTopic(p.topic.Name(), p.topic.Version()) &&
-		p.members.Height()-int64(entry.UpdatedHeight) < reannounceBlocks
+		p.entryAgeBlocks(entry) < reannounceBlocks
 }
