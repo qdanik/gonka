@@ -12,11 +12,11 @@ type verifier struct {
 	members *membership
 
 	mu         sync.Mutex
-	handshakes map[string]uint64
+	handshakes map[HandshakeResult]uint64
 }
 
 func newVerifier(members *membership) *verifier {
-	return &verifier{members: members, handshakes: map[string]uint64{}}
+	return &verifier{members: members, handshakes: map[HandshakeResult]uint64{}}
 }
 
 // VerifyConnection refuses a peer that fails the check and counts the refusal; an unknown instance or fingerprint rereads the registry first, rate limited.
@@ -48,7 +48,7 @@ func (v *verifier) Listed(id PeerID) bool {
 }
 
 // HandshakeCounts copies the handshake results so far, by result.
-func (v *verifier) HandshakeCounts() map[string]uint64 {
+func (v *verifier) HandshakeCounts() map[HandshakeResult]uint64 {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	return maps.Clone(v.handshakes)
@@ -132,7 +132,7 @@ func (v *verifier) count(err error) {
 	v.handshakes[handshakeResultOf(err)]++
 }
 
-func handshakeResultOf(err error) string {
+func handshakeResultOf(err error) HandshakeResult {
 	switch {
 	case err == nil:
 		return HandshakeAccepted

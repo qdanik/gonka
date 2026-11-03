@@ -13,8 +13,8 @@ type fakePeerLoadSource struct {
 
 func (f fakePeerLoadSource) View() *peerload.View { return f.view }
 
-func (f fakePeerLoadSource) HandshakeCounts() map[string]uint64 {
-	return map[string]uint64{peerload.HandshakeFingerprint: 2}
+func (f fakePeerLoadSource) HandshakeCounts() map[peerload.HandshakeResult]uint64 {
+	return map[peerload.HandshakeResult]uint64{peerload.HandshakeFingerprint: 2}
 }
 
 // Test flow:
@@ -41,7 +41,7 @@ func TestPeerLoadCollectorExportsTheShadowDiscount(t *testing.T) {
 	if lastSeen == nil || lastSeen.GetGauge().GetValue() != 0 {
 		t.Fatalf("last seen = %v, want 0", lastSeen)
 	}
-	handshakes := matching(family(t, telemetry, "devshard_gateway_peer_handshakes_total").GetMetric(), labels{"result": peerload.HandshakeFingerprint})
+	handshakes := matching(family(t, telemetry, "devshard_gateway_peer_handshakes_total").GetMetric(), labels{"result": string(peerload.HandshakeFingerprint)})
 	if handshakes == nil || handshakes.GetCounter().GetValue() != 2 {
 		t.Fatalf("handshakes = %v, want 2", handshakes)
 	}

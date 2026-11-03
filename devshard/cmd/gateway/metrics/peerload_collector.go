@@ -9,7 +9,7 @@ import (
 // PeerLoadSource is the channel's state the collector reads at each scrape.
 type PeerLoadSource interface {
 	View() *peerload.View
-	HandshakeCounts() map[string]uint64
+	HandshakeCounts() map[peerload.HandshakeResult]uint64
 }
 
 // PeerLoadCollector exports the peer channel; it is registered only when the channel is active.
@@ -44,7 +44,7 @@ func (c *PeerLoadCollector) Collect(ch chan<- prometheus.Metric) {
 		gauge(ch, c.lastSeen, seconds, peer.Address, peer.Instance)
 	}
 	for result, count := range c.source.HandshakeCounts() {
-		counter(ch, c.handshakes, float64(count), result)
+		counter(ch, c.handshakes, float64(count), string(result))
 	}
 	for _, row := range view.Rows() {
 		gauge(ch, c.foreign, row.Foreign, row.Participant, row.Model)

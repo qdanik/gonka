@@ -171,7 +171,7 @@ func (p *Plugin) pollPeers(ctx context.Context) { p.poller.Round(ctx, p.topic) }
 func (p *Plugin) View() *View { return p.view }
 
 // HandshakeCounts copies the handshake results so far, by result.
-func (p *Plugin) HandshakeCounts() map[string]uint64 { return p.verifier.HandshakeCounts() }
+func (p *Plugin) HandshakeCounts() map[HandshakeResult]uint64 { return p.verifier.HandshakeCounts() }
 
 func (p *Plugin) pollLoop(ctx context.Context) {
 	ticker := time.NewTicker(p.topic.Interval())

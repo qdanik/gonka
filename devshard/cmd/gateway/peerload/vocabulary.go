@@ -82,13 +82,19 @@ const (
 	discountNeutral = 1.0
 
 	concurrencyUnknown int64 = 0
+)
 
-	HandshakeAccepted    = "accepted"
-	HandshakeSelf        = "self"
-	HandshakeIdentity    = "identity"
-	HandshakeNotAllowed  = "not_allowed"
-	HandshakeFingerprint = "fingerprint"
-	HandshakeProtocol    = "protocol"
+// HandshakeResult is the verifier's verdict on one handshake, as the handshake counter labels it.
+type HandshakeResult string
+
+// The values of HandshakeResult.
+const (
+	HandshakeAccepted    HandshakeResult = "accepted"
+	HandshakeSelf        HandshakeResult = "self"
+	HandshakeIdentity    HandshakeResult = "identity"
+	HandshakeNotAllowed  HandshakeResult = "not_allowed"
+	HandshakeFingerprint HandshakeResult = "fingerprint"
+	HandshakeProtocol    HandshakeResult = "protocol"
 )
 
 // Cutoff is the wire form of a host's cut-off state.
