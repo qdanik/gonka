@@ -112,18 +112,18 @@ func TestTheRegistrySettingsReachTheSignedRegistryWrite(t *testing.T) {
 		t.Fatalf("building signer: %v", err)
 	}
 	for name, value := range map[string]string{
-		"DEVSHARD_REGISTRY_TX_FEE_AMOUNT": strconv.FormatUint(registryWriteFeeAmount, decimalBase),
-		"DEVSHARD_REGISTRY_TX_GAS_LIMIT":  strconv.FormatUint(registryWriteGasLimit, decimalBase),
-		"DEVSHARD_TX_FEE_AMOUNT":          strconv.FormatUint(sharedFeeAmount, decimalBase),
-		"DEVSHARD_TX_GAS_LIMIT":           strconv.FormatUint(sharedGasLimit, decimalBase),
-		"DEVSHARD_TX_FEE_DENOM":           sharedFeeDenom,
-		"DEVSHARD_PEER_ENABLED":           "true",
-		"DEVSHARD_PEER_REGISTRY_CONTRACT": "gonka1contract",
-		"DEVSHARD_PEER_INSTANCE_ID":       "instance-a",
-		"DEVSHARD_PEER_LISTEN":            "127.0.0.1:0",
-		"DEVSHARD_PEER_ADVERTISE_URL":     "https://peer.example:8443",
-		"DEVSHARD_PEER_IDENTITY_KEY_ENV":  identityKeyVariable,
-		identityKeyVariable:               signer.PrivateKeyHex(),
+		"GATEWAY_REGISTRY_TX_FEE_AMOUNT": strconv.FormatUint(registryWriteFeeAmount, decimalBase),
+		"GATEWAY_REGISTRY_TX_GAS_LIMIT":  strconv.FormatUint(registryWriteGasLimit, decimalBase),
+		"DEVSHARD_TX_FEE_AMOUNT":         strconv.FormatUint(sharedFeeAmount, decimalBase),
+		"DEVSHARD_TX_GAS_LIMIT":          strconv.FormatUint(sharedGasLimit, decimalBase),
+		"DEVSHARD_TX_FEE_DENOM":          sharedFeeDenom,
+		"GATEWAY_PEER_ENABLED":           "true",
+		"GATEWAY_PEER_REGISTRY_CONTRACT": "gonka1contract",
+		"GATEWAY_PEER_INSTANCE_ID":       "instance-a",
+		"GATEWAY_PEER_LISTEN":            "127.0.0.1:0",
+		"GATEWAY_PEER_ADVERTISE_URL":     "https://peer.example:8443",
+		"GATEWAY_PEER_IDENTITY_KEY_ENV":  identityKeyVariable,
+		identityKeyVariable:              signer.PrivateKeyHex(),
 	} {
 		t.Setenv(name, value)
 	}

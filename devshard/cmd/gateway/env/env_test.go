@@ -32,8 +32,8 @@ func TestLoadParsesTypedValues(t *testing.T) {
 	t.Setenv("DEVSHARD_ESCROW_ROTATION_ENABLED", "true")
 	t.Setenv("DEVSHARD_GATEWAY_DISABLED", "true")
 	t.Setenv("DEVSHARD_TX_FEE_AMOUNT", "500")
-	t.Setenv("DEVSHARD_REGISTRY_TX_FEE_AMOUNT", "600")
-	t.Setenv("DEVSHARD_REGISTRY_TX_GAS_LIMIT", "700")
+	t.Setenv("GATEWAY_REGISTRY_TX_FEE_AMOUNT", "600")
+	t.Setenv("GATEWAY_REGISTRY_TX_GAS_LIMIT", "700")
 	t.Setenv("GATEWAY_PERF_EWMA_HALFLIFE_SECONDS", "900")
 	t.Setenv("GATEWAY_CAPTURE_SAMPLE_RATE", "0.25")
 	t.Setenv("GATEWAY_CAPTURE_MAX_BYTES", "4096")
@@ -114,6 +114,26 @@ func TestLoadRejectsMalformedGatewayValuesWithVariableName(t *testing.T) {
 }
 
 // Test flow:
+//  1. Set the peer switch and both registry write variables to malformed values.
+//  2. Call `Load`.
+//  3. Assert it returns an error naming all three, so the boot is refused instead of falling back to a default.
+func TestThePeerAndRegistryWriteVariablesAreReadStrictly(t *testing.T) {
+	t.Setenv("GATEWAY_PEER_ENABLED", "yes")
+	t.Setenv("GATEWAY_REGISTRY_TX_FEE_AMOUNT", "250k")
+	t.Setenv("GATEWAY_REGISTRY_TX_GAS_LIMIT", "300k")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("Load() with malformed peer and registry write values: want error, got nil")
+	}
+	for _, name := range []string{"GATEWAY_PEER_ENABLED", "GATEWAY_REGISTRY_TX_FEE_AMOUNT", "GATEWAY_REGISTRY_TX_GAS_LIMIT"} {
+		if !strings.Contains(err.Error(), name) {
+			t.Fatalf("error %q does not name %s", err, name)
+		}
+	}
+}
+
+// Test flow:
 //  1. Set deployed variables to values that are ignored or read as "use the default": unparsable, zero, or negative.
 //  2. Call `Load`.
 //  3. Assert `Load` succeeds and leaves each field unset, so the gateway's default applies as it always has.
@@ -122,8 +142,6 @@ func TestAnUnusableValueIsIgnoredNotRefused(t *testing.T) {
 		"DEVSHARD_PORT":                                    "eighty",
 		"DEVSHARD_GATEWAY_DISABLED":                        "maybe",
 		"DEVSHARD_TX_FEE_AMOUNT":                           "0",
-		"DEVSHARD_REGISTRY_TX_FEE_AMOUNT":                  "0",
-		"DEVSHARD_REGISTRY_TX_GAS_LIMIT":                   "0",
 		"DEVSHARD_TX_POLL_INTERVAL_MS":                     "-5",
 		"DEVSHARD_STATS_SNAPSHOT_SECONDS":                  "0",
 		"DEVSHARD_STATS_RETENTION_EPOCHS":                  "-1",
@@ -155,8 +173,6 @@ func TestAnUnusableValueIsIgnoredNotRefused(t *testing.T) {
 		"Port":                                values.Port != nil,
 		"Disabled":                            values.Disabled != nil,
 		"TxFeeAmount":                         values.TxFeeAmount != nil,
-		"RegistryTxFeeAmount":                 values.RegistryTxFeeAmount != nil,
-		"RegistryTxGasLimit":                  values.RegistryTxGasLimit != nil,
 		"TxPollIntervalMS":                    values.TxPollIntervalMS != nil,
 		"NonceAccountingSnapshotSeconds":      values.NonceAccountingSnapshotSeconds != nil,
 		"NonceAccountingRetentionEpochs":      values.NonceAccountingRetentionEpochs != nil,
@@ -643,12 +659,12 @@ func TestTheDispatchQueueDepthIsReadStrictly(t *testing.T) {
 //  2. Call `Load`.
 //  3. Assert each variable reaches its value.
 func TestEveryPeerVariableIsReachableFromTheEnvironment(t *testing.T) {
-	t.Setenv("DEVSHARD_PEER_ENABLED", "on")
-	t.Setenv("DEVSHARD_PEER_REGISTRY_CONTRACT", "gonka1contract")
-	t.Setenv("DEVSHARD_PEER_INSTANCE_ID", "instance-a")
-	t.Setenv("DEVSHARD_PEER_LISTEN", ":9443")
-	t.Setenv("DEVSHARD_PEER_ADVERTISE_URL", "https://a.example:8443")
-	t.Setenv("DEVSHARD_PEER_IDENTITY_KEY_ENV", "PEER_KEY")
+	t.Setenv("GATEWAY_PEER_ENABLED", "true")
+	t.Setenv("GATEWAY_PEER_REGISTRY_CONTRACT", "gonka1contract")
+	t.Setenv("GATEWAY_PEER_INSTANCE_ID", "instance-a")
+	t.Setenv("GATEWAY_PEER_LISTEN", ":9443")
+	t.Setenv("GATEWAY_PEER_ADVERTISE_URL", "https://a.example:8443")
+	t.Setenv("GATEWAY_PEER_IDENTITY_KEY_ENV", "PEER_KEY")
 
 	values, err := Load()
 	if err != nil {
