@@ -16,8 +16,9 @@ import (
 
 // See README.md, "Transaction encoding".
 const (
-	intentEscrowCreate = "escrow create"
-	intentSettle       = "settle"
+	intentEscrowCreate     = "escrow create"
+	intentSettle           = "settle"
+	intentRegisterInstance = "register instance"
 
 	DefaultFeeDenom          = EscrowDenom
 	DefaultFeeAmount         = uint64(1_000_000)

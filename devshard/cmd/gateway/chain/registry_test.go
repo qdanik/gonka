@@ -215,7 +215,7 @@ func TestRegisterInstanceReportsARefusal(t *testing.T) {
 //  1. Build the tx with an empty chain id.
 //  2. Assert it is refused before signing.
 func TestBuildExecuteContractTxNeedsAChainID(t *testing.T) {
-	if _, err := buildExecuteContractTx(fixedSigner(t), " ", 1, "ngonka", 0, 1, fixedContract, []byte("{}"), time.Unix(1, 0)); err == nil {
+	if _, err := buildExecuteContractTx(txSigning{signer: fixedSigner(t), chainID: " ", accountNumber: 1, feeDenom: "ngonka", gasLimit: 1, ttl: time.Unix(1, 0)}, fixedContract, []byte("{}")); err == nil {
 		t.Fatal("empty chain id: want an error")
 	}
 }

@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strings"
 
 	wasmtypes "github.com/CosmWasm/wasmd/x/wasm/types"
 
@@ -90,29 +89,22 @@ func (c *TxClient) RegisterInstance(ctx context.Context, signer *signing.Secp256
 	if signer == nil {
 		return fmt.Errorf("signer is required")
 	}
-	chainID, err := c.resolveChainID(ctx)
+	parameters, err := c.signingFor(ctx, signer)
 	if err != nil {
 		return err
 	}
-	account, err := c.transport.Account(ctx, signer.Address())
-	if err != nil {
-		return err
-	}
+	parameters.feeAmount, parameters.gasLimit = c.registryFeeAmount, c.registryGasLimit
 	execute, err := json.Marshal(registerInstanceExecute{RegisterInstance: registration})
 	if err != nil {
 		return fmt.Errorf("encode register_instance: %w", err)
 	}
-	txBytes, err := buildExecuteContractTx(signer, chainID, account.Number, c.feeDenom, c.registryFeeAmount, c.registryGasLimit, contract, execute, c.now().Add(UnorderedTxTTL))
+	txBytes, err := buildExecuteContractTx(parameters, contract, execute)
 	if err != nil {
 		return err
 	}
-	txHash := txHashFromBytes(txBytes)
-	nodeHash, err := c.transport.Broadcast(ctx, txBytes)
+	txHash, err := c.broadcastPrepared(ctx, txBytes, intentRegisterInstance, nil)
 	if err != nil {
 		return err
-	}
-	if !strings.EqualFold(nodeHash, txHash) {
-		return fmt.Errorf("tx hash mismatch: precomputed %s, node returned %s", txHash, nodeHash)
 	}
 	if err := c.waitForCommit(ctx, txHash); err != nil {
 		return fmt.Errorf("awaiting registration commit for tx %s: %w", txHash, err)

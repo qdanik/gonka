@@ -64,8 +64,9 @@ func truncateSignature(sig []byte) ([]byte, error) {
 }
 
 const (
-	actionCreateEscrow = "create-escrow"
-	actionSettleEscrow = "settle-escrow"
+	actionCreateEscrow    = "create-escrow"
+	actionSettleEscrow    = "settle-escrow"
+	actionExecuteContract = "execute-contract"
 )
 
 type txSigning struct {
@@ -113,25 +114,9 @@ func buildSettleEscrowTx(parameters txSigning, settler string, input SettlementI
 	})
 }
 
-func buildExecuteContractTx(signer *signing.Secp256k1Signer, chainID string, accountNumber uint64, feeDenom string, feeAmount, gasLimit uint64, contract string, execute []byte, ttl time.Time) ([]byte, error) {
-	if strings.TrimSpace(chainID) == "" {
-		return nil, fmt.Errorf("chain id is required")
-	}
-	message := &wasmtypes.MsgExecuteContract{Sender: signer.Address(), Contract: contract, Msg: execute}
-	msg, err := message.Marshal()
-	if err != nil {
-		return nil, fmt.Errorf("encode execute-contract message: %w", err)
-	}
-	bodyBytes := encodeUnorderedTxBody(encodeAny(executeContractMsgTypeURL, msg), ttl)
-	pubKeyAny := encodeAny(secp256k1PubKeyTypeURL, encodeSecp256k1PubKey(signer.CompressedPublicKeyBytes()))
-	authInfoBytes := encodeAuthInfo(pubKeyAny, 0, feeDenom, feeAmount, gasLimit)
-	sig, err := signer.Sign(encodeSignDoc(bodyBytes, authInfoBytes, chainID, accountNumber))
-	if err != nil {
-		return nil, fmt.Errorf("sign execute-contract tx: %w", err)
-	}
-	truncated, err := truncateSignature(sig)
-	if err != nil {
-		return nil, err
-	}
-	return encodeTxRaw(bodyBytes, authInfoBytes, truncated), nil
+func buildExecuteContractTx(parameters txSigning, contract string, execute []byte) ([]byte, error) {
+	return parameters.signMessage(actionExecuteContract, executeContractMsgTypeURL, func() ([]byte, error) {
+		message := &wasmtypes.MsgExecuteContract{Sender: parameters.signer.Address(), Contract: contract, Msg: execute}
+		return message.Marshal()
+	})
 }
