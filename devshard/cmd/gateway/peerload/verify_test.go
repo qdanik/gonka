@@ -68,13 +68,14 @@ func TestVerifierAcceptsThePinnedKeyOfAnAllowlistedInstance(t *testing.T) {
 }
 
 // Test flow:
-//  1. Present a certificate under the pinned instance's name carrying another key.
+//  1. Dial the pinned instance and present a certificate under its name carrying another key.
 //  2. Assert it is refused as a fingerprint mismatch after one registry reread.
-func TestVerifierRefusesTheWrongKeyAfterOneReread(t *testing.T) {
+func TestDialRefusesTheWrongKeyAfterOneReread(t *testing.T) {
 	fixture := newVerifierFixture(t)
 	before := fixture.registry.callCount()
+	config := fixture.verifier.ClientTLSConfig(fixture.selfID, fixture.peerID)
 
-	err := fixture.verifier.VerifyConnection(stateOf(newIdentity(t, fixture.peerID)))
+	err := config.VerifyConnection(stateOf(newIdentity(t, fixture.peerID)))
 
 	if !errors.Is(err, errFingerprint) {
 		t.Fatalf("VerifyConnection() = %v, want errFingerprint", err)
@@ -148,24 +149,51 @@ func TestVerifierRefusesAnotherInstancesKeyUnderTheSameAddress(t *testing.T) {
 
 // Test flow:
 //  1. A new instance connects before this gateway has read its entry; the entry is already on chain.
-//  2. A second unknown instance connects within the rate limit.
-//  3. Assert the first is accepted through the reread, and the second is refused without another read.
-func TestVerifierRereadsTheRegistryForAnUnknownInstanceUnderTheRateLimit(t *testing.T) {
+//  2. Assert it is refused without a registry read.
+//  3. Run a full registry refresh and let it connect again.
+//  4. Assert it is accepted.
+func TestListenerAdmitsANewInstanceAfterTheNextRefresh(t *testing.T) {
 	fixture := newVerifierFixture(t)
 	newcomerID := PeerID{Address: secondAddress, Instance: "newcomer"}
 	newcomer := newIdentity(t, newcomerID)
 	fixture.registry.put(secondAddress, registryEntry("newcomer", newcomer, "https://newcomer.example:8443"))
 	before := fixture.registry.callCount()
 
+	if err := fixture.verifier.VerifyConnection(stateOf(newcomer)); !errors.Is(err, errFingerprint) {
+		t.Fatalf("VerifyConnection(newcomer) before the refresh = %v, want errFingerprint", err)
+	}
+	if got := fixture.registry.callCount() - before; got != 0 {
+		t.Fatalf("registry reads during the handshake = %d, want 0", got)
+	}
+	refreshed(t, fixture.members)
+
 	if err := fixture.verifier.VerifyConnection(stateOf(newcomer)); err != nil {
-		t.Fatalf("VerifyConnection(newcomer) = %v", err)
+		t.Fatalf("VerifyConnection(newcomer) after the refresh = %v, want nil", err)
 	}
-	unknown := newIdentity(t, PeerID{Address: secondAddress, Instance: "unknown"})
-	if err := fixture.verifier.VerifyConnection(stateOf(unknown)); !errors.Is(err, errFingerprint) {
-		t.Fatalf("VerifyConnection(unknown) = %v, want errFingerprint", err)
+}
+
+// Test flow:
+//  1. Present the listener a certificate naming an unknown instance of a pinned peer's address, under a key that proves nothing.
+//  2. Rotate the pinned peer's key on chain.
+//  3. Dial the pinned peer and present its rotated certificate within the reread limit.
+//  4. Assert the listener refused without reading the registry, and the dial is accepted through its own reread.
+func TestAnUnprovenListenerHandshakeLeavesTheRereadToTheDial(t *testing.T) {
+	fixture := newVerifierFixture(t)
+	before := fixture.registry.callCount()
+	forged := newIdentity(t, PeerID{Address: secondAddress, Instance: "forged"})
+
+	if err := fixture.verifier.VerifyConnection(stateOf(forged)); !errors.Is(err, errFingerprint) {
+		t.Fatalf("VerifyConnection(forged) = %v, want errFingerprint", err)
 	}
-	if got := fixture.registry.callCount() - before; got != 1 {
-		t.Fatalf("registry rereads = %d, want 1", got)
+	if got := fixture.registry.callCount() - before; got != 0 {
+		t.Fatalf("registry reads after the listener handshake = %d, want 0", got)
+	}
+	rotated := newIdentity(t, fixture.peerID)
+	fixture.registry.put(secondAddress, registryEntry("other", rotated, "https://other.example:8443"))
+	config := fixture.verifier.ClientTLSConfig(fixture.selfID, fixture.peerID)
+
+	if err := config.VerifyConnection(stateOf(rotated)); err != nil {
+		t.Fatalf("dial VerifyConnection(rotated) = %v, want it accepted through its own reread", err)
 	}
 }
 
@@ -264,7 +292,7 @@ func TestClientRefusesTLS12(t *testing.T) {
 }
 
 // Test flow:
-//  1. Hold a peer's old key and let a handshake with its new key start a reread that has read the old key and waits to return.
+//  1. Hold a peer's old key and let a dial that meets its new key start a reread that has read the old key and waits to return.
 //  2. Put the new key on chain and run a full refresh to the end, so the reread is dropped when it lands.
 //  3. Let the reread finish.
 //  4. Assert the handshake passes against the newer read and the new key stays held.
@@ -276,7 +304,8 @@ func TestHandshakeRepeatsItsCheckAgainstTheReadThatDroppedItsReread(t *testing.T
 	registry.armed = true
 	reread := registry.callGate
 	handshake := make(chan error, 1)
-	go func() { handshake <- verifier.VerifyConnection(stateOf(rotated)) }()
+	config := verifier.ClientTLSConfig(transportIdentity{}, id)
+	go func() { handshake <- config.VerifyConnection(stateOf(rotated)) }()
 	<-reread.reached
 	registry.put(secondAddress, registryEntry("other", rotated, "https://other.example:8443"))
 	registry.callGate = newCallGate()

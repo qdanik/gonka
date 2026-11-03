@@ -19,9 +19,9 @@ func newVerifier(members *membership) *verifier {
 	return &verifier{members: members, handshakes: map[HandshakeResult]uint64{}}
 }
 
-// VerifyConnection refuses a peer that fails the check and counts the refusal; an unknown instance or fingerprint rereads the registry first, rate limited.
+// VerifyConnection refuses a peer that fails the check and counts the refusal; it never rereads the registry, since TLS 1.3 runs it before the client proves its key.
 func (v *verifier) VerifyConnection(state tls.ConnectionState) error {
-	_, err := v.verify(state)
+	_, err := v.check(state)
 	if err != nil {
 		v.count(err)
 	}
