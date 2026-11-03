@@ -33,8 +33,6 @@ type Chain struct {
 	VersionsPollIntervalSeconds int64
 }
 
-const noRegistryContract = ""
-
 // Peer configures the gateway-to-gateway channel; the channel does nothing unless Active. See docs/peerload.md.
 type Peer struct {
 	Enabled          bool
@@ -267,6 +265,7 @@ const (
 	ModelAccessAdminOnly = "admin_only"
 
 	minAdminAPIKeyLength = 16
+	noRegistryContract   = ""
 )
 
 // AdminEnabled is what callers must gate on: comparing against AdminAPIKey would authenticate an empty key.
