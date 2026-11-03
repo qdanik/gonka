@@ -344,7 +344,7 @@ func TestAConnectionInItsHandshakeSurvivesTheCloseOfRemovedPeers(t *testing.T) {
 //  1. Set the total cap two above the limit on unidentified connections per source.
 //  2. Offer the limit from one source and assert all stay open, then one more and assert it is closed at accept.
 //  3. Offer one from another source and assert it stays open, so the first source did not fill the listener.
-//  4. Identify one connection of the first source and assert that source can connect again.
+//  4. Identify one connection of the first source, which has no verified peer and is closed, and assert that source can connect again.
 func TestOneSourceCannotFillTheListenerWithUnidentifiedConnections(t *testing.T) {
 	server, _ := newServerFixture(t)
 	server.maxConnections = maxUnidentifiedPerSource + 2
@@ -370,6 +370,7 @@ func TestOneSourceCannotFillTheListenerWithUnidentifiedConnections(t *testing.T)
 	}
 
 	server.trackConn(flood[0], http.StateActive)
+	server.trackConn(flood[0], http.StateClosed)
 	identifiedSource := &recordingConn{source: floodSource}
 	server.trackConn(identifiedSource, http.StateNew)
 	if identifiedSource.closed.Load() {
@@ -428,5 +429,24 @@ func TestConnectionsPastTheAddressCapAreClosedOnceIdentified(t *testing.T) {
 	server.trackConn(first, http.StateClosed)
 	if got := server.connectionsOf(secondAddress); got != 0 {
 		t.Fatalf("connectionsOf(capped address) = %d after the first closed, want 0", got)
+	}
+}
+
+// Test flow:
+//  1. Connect a peer, then drop its address from the allowlist before its first request.
+//  2. Identify the connection.
+//  3. Assert it is closed, holds no place under its address and is not counted as accepted.
+func TestAConnectionOfAPeerRemovedBeforeItsPrefaceIsClosedAndNotCounted(t *testing.T) {
+	server, fixture := newServerFixture(t)
+	connection, raw := connectOverPipe(t, server, fixture.peer)
+	fixture.members.ObserveChain([]string{firstAddress}, testHeight)
+
+	server.trackConn(connection, http.StateActive)
+
+	if !raw.closed.Load() {
+		t.Fatal("trackConn(StateActive) left the connection open, want it closed")
+	}
+	if got := server.verifier.HandshakeCounts()[HandshakeAccepted]; got != 0 {
+		t.Fatalf("HandshakeCounts()[accepted] = %d, want 0", got)
 	}
 }

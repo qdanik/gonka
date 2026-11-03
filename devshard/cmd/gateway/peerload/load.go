@@ -225,7 +225,7 @@ func decodeLoadPayload(raw []byte) ([]HostLoad, error) {
 	}
 	rows := make([]HostLoad, 0, len(hosts))
 	for _, host := range hosts {
-		if int(host.modelIndex) >= len(models) {
+		if uint64(host.modelIndex) >= uint64(len(models)) {
 			return nil, errMalformed
 		}
 		host.row.Model = models[host.modelIndex]

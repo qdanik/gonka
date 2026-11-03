@@ -1,6 +1,9 @@
 package perf
 
-import "sync"
+import (
+	"maps"
+	"sync"
+)
 
 type inflightGauge[K comparable] struct {
 	mu     sync.Mutex
@@ -25,6 +28,12 @@ func (g *inflightGauge[K]) release(key K) {
 	} else {
 		delete(g.counts, key)
 	}
+}
+
+func (g *inflightGauge[K]) snapshot() map[K]int {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return maps.Clone(g.counts)
 }
 
 func (g *inflightGauge[K]) count(key K) int {

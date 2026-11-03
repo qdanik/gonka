@@ -448,3 +448,19 @@ func TestSnapshotStampedInTheFutureAgesFromItsArrival(t *testing.T) {
 		t.Fatalf("freshPeers() = %v, want none", got)
 	}
 }
+
+// Test flow:
+//  1. Encode a payload with one model and one row whose model index is 0xFFFFFFFF.
+//  2. Decode it.
+//  3. Assert errMalformed, on any word size.
+func TestRowNamingAModelIndexPastTheTableIsMalformed(t *testing.T) {
+	host := appendVarintField(nil, hostFieldModel, math.MaxUint32)
+	payload := protowire.AppendTag(nil, payloadFieldModels, protowire.BytesType)
+	payload = protowire.AppendString(payload, "model-a")
+	payload = protowire.AppendTag(payload, payloadFieldHosts, protowire.BytesType)
+	payload = protowire.AppendBytes(payload, host)
+
+	if _, err := decodeLoadPayload(payload); !errors.Is(err, errMalformed) {
+		t.Fatalf("decodeLoadPayload() = %v, want errMalformed", err)
+	}
+}

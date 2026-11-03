@@ -53,6 +53,8 @@ type membership struct {
 	instances     map[PeerID]peerInstance
 	lastRefreshed map[string]time.Time
 	hasRead       bool
+	rereads       uint64
+	rereadAt      map[string]uint64
 }
 
 func newMembership(self ownIdentity, registry Registry, now func() time.Time) *membership {
@@ -63,6 +65,7 @@ func newMembership(self ownIdentity, registry Registry, now func() time.Time) *m
 		allowed:       map[string]struct{}{},
 		instances:     map[PeerID]peerInstance{},
 		lastRefreshed: map[string]time.Time{},
+		rereadAt:      map[string]uint64{},
 	}
 }
 
@@ -85,6 +88,11 @@ func (m *membership) ObserveChain(allowed []string, height int64) bool {
 	for address := range m.lastRefreshed {
 		if _, known := next[address]; !known {
 			delete(m.lastRefreshed, address)
+		}
+	}
+	for address := range m.rereadAt {
+		if _, known := next[address]; !known {
+			delete(m.rereadAt, address)
 		}
 	}
 	return changed
@@ -137,13 +145,14 @@ func (m *membership) HasRead() bool {
 	return m.hasRead
 }
 
-// Refresh rereads the registry for the whole allowlist, per address after a failed batch; an address that fails keeps its last good entries, and errPartialRead reports that others still answered.
+// Refresh rereads the registry for the whole allowlist, per address after a failed batch; an address that fails, or that RefreshOne reread while this call was reading, keeps its current entries, and errPartialRead reports that others still answered.
 func (m *membership) Refresh(ctx context.Context) error {
 	m.mu.RLock()
 	addresses := make([]string, 0, len(m.allowed))
 	for address := range m.allowed {
 		addresses = append(addresses, address)
 	}
+	started := m.rereads
 	m.mu.RUnlock()
 	slices.Sort(addresses)
 
@@ -173,8 +182,10 @@ func (m *membership) Refresh(ctx context.Context) error {
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	keepsCurrent := func(address string) bool { return slices.Contains(failed, address) || m.rereadAt[address] > started }
+	maps.DeleteFunc(read, func(id PeerID, _ peerInstance) bool { return keepsCurrent(id.Address) })
 	for id, instance := range m.instances {
-		if slices.Contains(failed, id.Address) {
+		if keepsCurrent(id.Address) {
 			read[id] = instance
 		}
 	}
@@ -218,6 +229,8 @@ func (m *membership) RefreshOne(ctx context.Context, address string) error {
 		}
 	}
 	maps.Copy(m.instances, read)
+	m.rereads++
+	m.rereadAt[address] = m.rereads
 	return nil
 }
 

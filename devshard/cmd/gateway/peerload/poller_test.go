@@ -188,3 +188,27 @@ func TestPollDoesNotCountAHandshakeTheListenerRefused(t *testing.T) {
 		t.Errorf("last seen = %v, want none", seen)
 	}
 }
+
+// Test flow:
+//  1. Register one peer that declares the load topic and close the poller.
+//  2. Run a registry refresh and a poll round, the way the loops still may after the context ends.
+//  3. Assert nothing was dialled.
+func TestClosedPollerLinksNoPeerAgain(t *testing.T) {
+	registry := newFakeRegistry()
+	plugin := newTestPlugin(t, registry, registry.registrar(firstAddress), newFakeClock().now)
+	registry.put(secondAddress, registryEntry("other", newIdentity(t, PeerID{Address: secondAddress, Instance: "other"}), "https://other.example:8443"))
+	dials := 0
+	plugin.poller.dial = func(context.Context, string, string) (net.Conn, error) {
+		dials++
+		return nil, errors.New("no dial")
+	}
+	plugin.ObserveChain([]string{secondAddress}, testHeight)
+	plugin.poller.Close()
+
+	plugin.refreshRegistry(context.Background())
+	plugin.pollPeers(context.Background())
+
+	if dials != 0 {
+		t.Fatalf("dials = %d after the poller closed, want 0", dials)
+	}
+}

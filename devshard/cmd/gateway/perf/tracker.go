@@ -271,8 +271,24 @@ type HostState struct {
 	Model              string
 	Ejected            bool
 	Inflight           int
-	ModelInflight      int
 	TimePerOutputToken time.Duration
+}
+
+// PairInflight is the requests in flight to one participant on one model.
+type PairInflight struct {
+	Participant string
+	Model       string
+	Requests    int
+}
+
+// InflightPairs returns every pair with a request in flight, order unspecified, whether or not the tracker holds a sample of it.
+func (t *Tracker) InflightPairs() []PairInflight {
+	counts := t.modelInflight.snapshot()
+	pairs := make([]PairInflight, 0, len(counts))
+	for key, requests := range counts {
+		pairs = append(pairs, PairInflight{Participant: key.participant, Model: key.model, Requests: requests})
+	}
+	return pairs
 }
 
 // Snapshot returns every tracked pair, order unspecified; the decode quantile and in-flight count are read after the host lock releases.
@@ -299,7 +315,6 @@ func (t *Tracker) Snapshot() []HostState {
 			Model:              host.key.model,
 			Ejected:            view != nil && now.Before((*view)[host.key].ejectedUntil),
 			Inflight:           t.inflight.count(host.key.participant),
-			ModelInflight:      t.modelInflight.count(host.key),
 			TimePerOutputToken: decode,
 		})
 	}

@@ -51,6 +51,7 @@ const (
 	registryReadTimeout     = 10 * time.Second
 	registryRefreshBudget   = 60 * time.Second
 	firstReadRetryInterval  = 10 * time.Second
+	retryWaitFactor         = 2
 	registerBroadcastMargin = 15 * time.Second
 	reregisterInterval      = 6 * time.Hour
 	noWriteBackoff          = time.Duration(0)
