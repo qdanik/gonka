@@ -262,3 +262,32 @@ func TestClientRefusesTLS12(t *testing.T) {
 		t.Fatal("the client completed a TLS 1.2 handshake")
 	}
 }
+
+// Test flow:
+//  1. Hold a peer's old key and let a handshake with its new key start a reread that has read the old key and waits to return.
+//  2. Put the new key on chain and run a full refresh to the end, so the reread is dropped when it lands.
+//  3. Let the reread finish.
+//  4. Assert the handshake passes against the newer read and the new key stays held.
+func TestHandshakeRepeatsItsCheckAgainstTheReadThatDroppedItsReread(t *testing.T) {
+	registry, members, id := newGatedMembership(t)
+	refreshed(t, members)
+	verifier := newVerifier(members)
+	rotated := newIdentity(t, id)
+	registry.armed = true
+	reread := registry.callGate
+	handshake := make(chan error, 1)
+	go func() { handshake <- verifier.VerifyConnection(stateOf(rotated)) }()
+	<-reread.reached
+	registry.put(secondAddress, registryEntry("other", rotated, "https://other.example:8443"))
+	registry.callGate = newCallGate()
+	refreshed(t, members)
+
+	close(reread.release)
+
+	if err := <-handshake; err != nil {
+		t.Fatalf("VerifyConnection(new key) = %v, want it to pass against the newer read", err)
+	}
+	if instance, found := members.Lookup(id); !found || instance.Fingerprint != rotated.Fingerprint {
+		t.Fatalf("Lookup = %+v, %v, want the new key", instance, found)
+	}
+}

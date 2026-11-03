@@ -154,17 +154,15 @@ func (s *peerServer) admit(conn net.Conn) bool {
 
 func (s *peerServer) identify(conn net.Conn) bool {
 	s.mu.Lock()
-	_, known := s.connectionAddresses[conn]
-	s.mu.Unlock()
-	if known {
+	defer s.mu.Unlock()
+	if _, known := s.connectionAddresses[conn]; known {
 		return true
 	}
+	// Authorized under the lock, so a removal either refuses here or finds the record in CloseRemoved.
 	address := s.peerAddress(conn)
 	if address == emptyAddress {
 		return false
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.connectionsOf(address) >= s.maxConnectionsPerAddress {
 		s.connectionAddresses[conn] = emptyAddress
 		return false

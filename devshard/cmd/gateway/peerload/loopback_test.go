@@ -312,7 +312,7 @@ func TestAnnounceWritesOnlyWhenTheEntryNeedsIt(t *testing.T) {
 		t.Fatalf("registrations = %d, want a second once aged", got)
 	}
 
-	plugin.members.ObserveChain(allowed, testHeight)
+	plugin.members.ObserveChain(allowed, testHeight+minUpdateIntervalBlocks)
 	entry := registryEntry("self", newIdentity(t, instance.id), "https://"+instance.address)
 	registry.put(firstAddress, entry)
 	plugin.refreshRegistry(ctx)
