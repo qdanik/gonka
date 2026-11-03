@@ -11,7 +11,11 @@ import (
 	"devshard/signing"
 )
 
-const registryMemberTupleLength = 2
+const (
+	registryMemberTupleLength = 2
+	registryWriteFeeAmount    = uint64(250_000)
+	registryWriteGasLimit     = uint64(250_000)
+)
 
 // RegistryInstance is one entry of the gateway-registry contract, in the contract's JSON.
 type RegistryInstance struct {
@@ -102,7 +106,7 @@ func (c *TxClient) RegisterInstance(ctx context.Context, signer *signing.Secp256
 	if err != nil {
 		return fmt.Errorf("encode register_instance: %w", err)
 	}
-	txBytes, err := buildExecuteContractTx(signer, chainID, account.Number, c.feeDenom, c.feeAmount, c.gasLimit, contract, execute, c.now().Add(UnorderedTxTTL))
+	txBytes, err := buildExecuteContractTx(signer, chainID, account.Number, c.feeDenom, registryWriteFeeAmount, registryWriteGasLimit, contract, execute, c.now().Add(UnorderedTxTTL))
 	if err != nil {
 		return err
 	}
