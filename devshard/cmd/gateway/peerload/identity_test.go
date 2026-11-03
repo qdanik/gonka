@@ -6,6 +6,7 @@ import (
 	"crypto/x509"
 	"encoding/hex"
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -135,6 +136,35 @@ func TestTransportKeyRefusesAChainKeyOfTheWrongLength(t *testing.T) {
 		t.Run(testCase.name, func(t *testing.T) {
 			if _, err := deriveTransportIdentity(testCase.chainKey, PeerID{Address: firstAddress, Instance: "self"}); !errors.Is(err, ErrBadSettings) {
 				t.Fatalf("deriveTransportIdentity(%d bytes) = %v, want ErrBadSettings", len(testCase.chainKey), err)
+			}
+		})
+	}
+}
+
+// Test flow:
+//  1. Build a plugin whose instance id is empty, exactly at the byte limit, and one byte past it.
+//  2. Assert New accepts the id at the limit and refuses the other two with ErrBadSettings.
+func TestNewBoundsTheInstanceIDLength(t *testing.T) {
+	registry := newFakeRegistry()
+	deps := Deps{Registry: registry, Registrar: registry.registrar(firstAddress), Now: newFakeClock().now}
+	testCases := []struct {
+		name     string
+		instance string
+		accepted bool
+	}{
+		{"empty", "", false},
+		{"at the limit", strings.Repeat("a", instanceIDLimit), true},
+		{"one byte past the limit", strings.Repeat("a", instanceIDLimit+1), false},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			settings := Settings{Self: PeerID{Address: firstAddress, Instance: testCase.instance}, AdvertiseURL: "https://good.example:8443", ChainKey: newChainKey(t)}
+			_, err := New(settings, deps)
+			if testCase.accepted && err != nil {
+				t.Fatalf("New(%d-byte instance id) = %v, want nil", len(testCase.instance), err)
+			}
+			if !testCase.accepted && !errors.Is(err, ErrBadSettings) {
+				t.Fatalf("New(%d-byte instance id) = %v, want ErrBadSettings", len(testCase.instance), err)
 			}
 		})
 	}
