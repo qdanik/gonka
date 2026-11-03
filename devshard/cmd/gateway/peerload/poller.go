@@ -131,27 +131,7 @@ func (p *poller) newLink(instance peerInstance) *peerLink {
 }
 
 func (p *poller) poll(ctx context.Context, link *peerLink, topic peerTopic) error {
-	traced := httptrace.WithClientTrace(ctx, &httptrace.ClientTrace{TLSHandshakeDone: link.noteHandshake})
-	request, err := http.NewRequestWithContext(traced, http.MethodGet, link.instance.Endpoint+peerPathPrefix+topic.Name(), http.NoBody)
-	if err != nil {
-		return fmt.Errorf("peer %s: %w", link.instance.ID, err)
-	}
-	response, err := link.client.Do(request)
-	if err != nil {
-		return fmt.Errorf("peer %s: %w", link.instance.ID, err)
-	}
-	defer func() { _ = response.Body.Close() }()
-	if link.handshakeUncounted.Swap(false) {
-		p.verifier.countAccepted()
-	}
-	if response.StatusCode != http.StatusOK {
-		return fmt.Errorf("peer %s: status %d", link.instance.ID, response.StatusCode)
-	}
-	body, err := readCapped(response.Body, topic.MaxBytes())
-	if err != nil {
-		return fmt.Errorf("peer %s: %w", link.instance.ID, err)
-	}
-	envelope, err := decodeEnvelope(body)
+	envelope, err := p.fetch(ctx, link, topic)
 	if err != nil {
 		return fmt.Errorf("peer %s: %w", link.instance.ID, err)
 	}
@@ -161,6 +141,30 @@ func (p *poller) poll(ctx context.Context, link *peerLink, topic peerTopic) erro
 	}
 	link.lastSeq[topic.Name()] = envelope.Seq
 	return topic.Accept(link.instance.ID, envelope, now)
+}
+
+func (p *poller) fetch(ctx context.Context, link *peerLink, topic peerTopic) (peerEnvelope, error) {
+	traced := httptrace.WithClientTrace(ctx, &httptrace.ClientTrace{TLSHandshakeDone: link.noteHandshake})
+	request, err := http.NewRequestWithContext(traced, http.MethodGet, link.instance.Endpoint+peerPathPrefix+topic.Name(), http.NoBody)
+	if err != nil {
+		return peerEnvelope{}, err
+	}
+	response, err := link.client.Do(request)
+	if err != nil {
+		return peerEnvelope{}, err
+	}
+	defer func() { _ = response.Body.Close() }()
+	if link.handshakeUncounted.Swap(false) {
+		p.verifier.countAccepted()
+	}
+	if response.StatusCode != http.StatusOK {
+		return peerEnvelope{}, fmt.Errorf("status %d", response.StatusCode)
+	}
+	body, err := readCapped(response.Body, topic.MaxBytes())
+	if err != nil {
+		return peerEnvelope{}, err
+	}
+	return decodeEnvelope(body)
 }
 
 func (l *peerLink) noteHandshake(_ tls.ConnectionState, err error) {
