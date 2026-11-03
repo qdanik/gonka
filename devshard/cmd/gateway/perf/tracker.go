@@ -274,19 +274,19 @@ type HostState struct {
 	TimePerOutputToken time.Duration
 }
 
-// PairInflight is the requests in flight to one participant on one model.
-type PairInflight struct {
+// InflightPair is the requests in flight to one participant on one model.
+type InflightPair struct {
 	Participant string
 	Model       string
 	Requests    int
 }
 
 // InflightPairs returns every pair with a request in flight, order unspecified, whether or not the tracker holds a sample of it.
-func (t *Tracker) InflightPairs() []PairInflight {
+func (t *Tracker) InflightPairs() []InflightPair {
 	counts := t.modelInflight.snapshot()
-	pairs := make([]PairInflight, 0, len(counts))
+	pairs := make([]InflightPair, 0, len(counts))
 	for key, requests := range counts {
-		pairs = append(pairs, PairInflight{Participant: key.participant, Model: key.model, Requests: requests})
+		pairs = append(pairs, InflightPair{Participant: key.participant, Model: key.model, Requests: requests})
 	}
 	return pairs
 }

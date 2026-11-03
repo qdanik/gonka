@@ -302,20 +302,25 @@ func TestRefreshOneDropsAnEntryGoneFromTheChain(t *testing.T) {
 }
 
 type gatedRegistry struct {
+	*callGate
 	*fakeRegistry
-	armed   bool
-	reached chan struct{}
-	release chan struct{}
 }
 
 func (r *gatedRegistry) MembersOf(ctx context.Context, addresses []string) ([]chain.RegistryMember, error) {
 	members, err := r.fakeRegistry.MembersOf(ctx, addresses)
-	if r.armed {
-		r.armed = false
-		close(r.reached)
-		<-r.release
-	}
+	r.hold()
 	return members, err
+}
+
+func newGatedMembership(t *testing.T) (*gatedRegistry, *membership, PeerID) {
+	t.Helper()
+	registry := &gatedRegistry{callGate: newCallGate(), fakeRegistry: newFakeRegistry()}
+	members, _ := newTestMembership(t, registry.fakeRegistry, newFakeClock())
+	members.registry = registry
+	id := PeerID{Address: secondAddress, Instance: "other"}
+	registry.put(secondAddress, registryEntry("other", newIdentity(t, id), "https://other.example:8443"))
+	members.ObserveChain([]string{firstAddress, secondAddress}, testHeight)
+	return registry, members, id
 }
 
 // Test flow:
@@ -324,12 +329,7 @@ func (r *gatedRegistry) MembersOf(ctx context.Context, addresses []string) ([]ch
 //  3. Let the full refresh finish.
 //  4. Assert the peer still has the new key.
 func TestFullRefreshStartedEarlierDoesNotOverwriteARereadOfOneAddress(t *testing.T) {
-	registry := &gatedRegistry{fakeRegistry: newFakeRegistry(), reached: make(chan struct{}), release: make(chan struct{})}
-	members, _ := newTestMembership(t, registry.fakeRegistry, newFakeClock())
-	members.registry = registry
-	id := PeerID{Address: secondAddress, Instance: "other"}
-	registry.put(secondAddress, registryEntry("other", newIdentity(t, id), "https://other.example:8443"))
-	members.ObserveChain([]string{firstAddress, secondAddress}, testHeight)
+	registry, members, id := newGatedMembership(t)
 	registry.armed = true
 	var finished sync.WaitGroup
 	finished.Go(func() { _ = members.Refresh(context.Background()) })
@@ -346,5 +346,90 @@ func TestFullRefreshStartedEarlierDoesNotOverwriteARereadOfOneAddress(t *testing
 	entry, found := members.Lookup(id)
 	if !found || entry.Fingerprint != rotated.Fingerprint {
 		t.Fatalf("Lookup() = %+v, %v, want the entry with the rotated key", entry, found)
+	}
+}
+
+// Test flow:
+//  1. Start a full refresh that has read a peer's instance and waits to return.
+//  2. Replace that instance on chain with another and reread the address.
+//  3. Let the full refresh finish.
+//  4. Assert the replaced instance is gone and the new one is listed.
+func TestFullRefreshStartedEarlierDoesNotBringBackAnInstanceTheRereadDropped(t *testing.T) {
+	registry, members, id := newGatedMembership(t)
+	refreshed(t, members)
+	registry.armed = true
+	var finished sync.WaitGroup
+	finished.Go(func() { _ = members.Refresh(context.Background()) })
+	<-registry.reached
+	registry.remove(secondAddress)
+	replacement := PeerID{Address: secondAddress, Instance: "replacement"}
+	registry.put(secondAddress, registryEntry("replacement", newIdentity(t, replacement), "https://replacement.example:8443"))
+	if err := members.RefreshOne(context.Background(), secondAddress); err != nil {
+		t.Fatalf("RefreshOne() = %v", err)
+	}
+
+	close(registry.release)
+	finished.Wait()
+
+	if _, found := members.Lookup(id); found {
+		t.Fatal("the full refresh brought back the instance the reread dropped")
+	}
+	if _, found := members.Lookup(replacement); !found {
+		t.Fatal("the full refresh dropped the instance the reread found")
+	}
+}
+
+// Test flow:
+//  1. Hold a peer's entry and start a reread of its address that has read it and waits to return.
+//  2. Remove the entry on chain and start a full refresh that reads the absence and waits to return.
+//  3. Let the reread finish, then the full refresh.
+//  4. Assert the entry is gone, because the full refresh began later.
+func TestFullRefreshStartedLaterOverwritesARereadThatLandedFirst(t *testing.T) {
+	registry, members, id := newGatedMembership(t)
+	refreshed(t, members)
+	registry.armed = true
+	reread := registry.callGate
+	var rereadFinished, fullFinished sync.WaitGroup
+	rereadFinished.Go(func() { _ = members.RefreshOne(context.Background(), secondAddress) })
+	<-reread.reached
+	registry.remove(secondAddress)
+	full := newCallGate()
+	full.armed = true
+	registry.callGate = full
+	fullFinished.Go(func() { _ = members.Refresh(context.Background()) })
+	<-full.reached
+
+	close(reread.release)
+	rereadFinished.Wait()
+	close(full.release)
+	fullFinished.Wait()
+
+	if _, found := members.Lookup(id); found {
+		t.Fatal("the entry stayed after a full refresh that began after the reread found it gone")
+	}
+}
+
+// Test flow:
+//  1. Hold a peer's entry and start a reread of its address that has read it and waits to return.
+//  2. Remove the entry on chain and run a full refresh to the end.
+//  3. Let the reread finish.
+//  4. Assert the entry is gone, because the full refresh began later.
+func TestRereadStartedBeforeAFullRefreshDoesNotOverwriteIt(t *testing.T) {
+	registry, members, id := newGatedMembership(t)
+	refreshed(t, members)
+	registry.armed = true
+	reread := registry.callGate
+	var finished sync.WaitGroup
+	finished.Go(func() { _ = members.RefreshOne(context.Background(), secondAddress) })
+	<-reread.reached
+	registry.remove(secondAddress)
+	registry.callGate = newCallGate()
+	refreshed(t, members)
+
+	close(reread.release)
+	finished.Wait()
+
+	if _, found := members.Lookup(id); found {
+		t.Fatal("a reread that began before the full refresh brought the entry back")
 	}
 }

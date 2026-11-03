@@ -146,6 +146,24 @@ func (r *fakeRegistry) registrationCount() int {
 	return len(r.registered)
 }
 
+type callGate struct {
+	armed   bool
+	reached chan struct{}
+	release chan struct{}
+}
+
+func newCallGate() *callGate {
+	return &callGate{reached: make(chan struct{}), release: make(chan struct{})}
+}
+
+func (g *callGate) hold() {
+	if g.armed {
+		g.armed = false
+		close(g.reached)
+		<-g.release
+	}
+}
+
 type registrarFunc func(context.Context, chain.RegistryRegistration) error
 
 func (f registrarFunc) RegisterInstance(ctx context.Context, registration chain.RegistryRegistration) error {

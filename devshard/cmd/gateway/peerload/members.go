@@ -53,8 +53,8 @@ type membership struct {
 	instances     map[PeerID]peerInstance
 	lastRefreshed map[string]time.Time
 	hasRead       bool
-	rereads       uint64
-	rereadAt      map[string]uint64
+	readsStarted  uint64
+	landedReads   map[string]uint64
 }
 
 func newMembership(self ownIdentity, registry Registry, now func() time.Time) *membership {
@@ -65,7 +65,7 @@ func newMembership(self ownIdentity, registry Registry, now func() time.Time) *m
 		allowed:       map[string]struct{}{},
 		instances:     map[PeerID]peerInstance{},
 		lastRefreshed: map[string]time.Time{},
-		rereadAt:      map[string]uint64{},
+		landedReads:   map[string]uint64{},
 	}
 }
 
@@ -85,17 +85,16 @@ func (m *membership) ObserveChain(allowed []string, height int64) bool {
 	}
 	m.allowed = next
 	m.height = height
-	for address := range m.lastRefreshed {
-		if _, known := next[address]; !known {
-			delete(m.lastRefreshed, address)
-		}
-	}
-	for address := range m.rereadAt {
-		if _, known := next[address]; !known {
-			delete(m.rereadAt, address)
-		}
-	}
+	keepListed(m.lastRefreshed, next)
+	keepListed(m.landedReads, next)
 	return changed
+}
+
+func keepListed[V any](byAddress map[string]V, listed map[string]struct{}) {
+	maps.DeleteFunc(byAddress, func(address string, _ V) bool {
+		_, known := listed[address]
+		return !known
+	})
 }
 
 // Height is the chain height of the last observation.
@@ -103,6 +102,13 @@ func (m *membership) Height() int64 {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.height
+}
+
+// HasAddresses reports whether the live allowlist holds any address.
+func (m *membership) HasAddresses() bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return len(m.allowed) > 0
 }
 
 // Allowed reports whether the address is in the live allowlist.
@@ -145,15 +151,16 @@ func (m *membership) HasRead() bool {
 	return m.hasRead
 }
 
-// Refresh rereads the registry for the whole allowlist, per address after a failed batch; an address that fails, or that RefreshOne reread while this call was reading, keeps its current entries, and errPartialRead reports that others still answered.
+// Refresh rereads the registry for the whole allowlist, per address after a failed batch; an address that fails keeps its current entries, and errPartialRead reports that others still answered.
 func (m *membership) Refresh(ctx context.Context) error {
-	m.mu.RLock()
+	m.mu.Lock()
 	addresses := make([]string, 0, len(m.allowed))
 	for address := range m.allowed {
 		addresses = append(addresses, address)
 	}
-	started := m.rereads
-	m.mu.RUnlock()
+	m.readsStarted++
+	sequence := m.readsStarted
+	m.mu.Unlock()
 	slices.Sort(addresses)
 
 	budgeted, cancel := context.WithTimeout(ctx, registryRefreshBudget)
@@ -182,11 +189,18 @@ func (m *membership) Refresh(ctx context.Context) error {
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	keepsCurrent := func(address string) bool { return slices.Contains(failed, address) || m.rereadAt[address] > started }
+	keepsCurrent := func(address string) bool {
+		return slices.Contains(failed, address) || m.landedReads[address] > sequence
+	}
 	maps.DeleteFunc(read, func(id PeerID, _ peerInstance) bool { return keepsCurrent(id.Address) })
 	for id, instance := range m.instances {
 		if keepsCurrent(id.Address) {
 			read[id] = instance
+		}
+	}
+	for _, address := range addresses {
+		if !keepsCurrent(address) {
+			m.landedReads[address] = sequence
 		}
 	}
 	m.instances = read
@@ -213,6 +227,8 @@ func (m *membership) RefreshOne(ctx context.Context, address string) error {
 		return nil
 	}
 	m.lastRefreshed[address] = m.now()
+	m.readsStarted++
+	sequence := m.readsStarted
 	m.mu.Unlock()
 
 	members, err := m.readMembers(ctx, []string{address})
@@ -223,14 +239,16 @@ func (m *membership) RefreshOne(ctx context.Context, address string) error {
 	mergeMembers(read, members, []string{address})
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.landedReads[address] > sequence {
+		return nil
+	}
 	for id := range m.instances {
 		if id.Address == address {
 			delete(m.instances, id)
 		}
 	}
 	maps.Copy(m.instances, read)
-	m.rereads++
-	m.rereadAt[address] = m.rereads
+	m.landedReads[address] = sequence
 	return nil
 }
 

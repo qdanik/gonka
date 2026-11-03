@@ -344,7 +344,7 @@ func TestAConnectionInItsHandshakeSurvivesTheCloseOfRemovedPeers(t *testing.T) {
 //  1. Set the total cap two above the limit on unidentified connections per source.
 //  2. Offer the limit from one source and assert all stay open, then one more and assert it is closed at accept.
 //  3. Offer one from another source and assert it stays open, so the first source did not fill the listener.
-//  4. Identify one connection of the first source, which has no verified peer and is closed, and assert that source can connect again.
+//  4. Close one connection of the first source and assert that source can connect again.
 func TestOneSourceCannotFillTheListenerWithUnidentifiedConnections(t *testing.T) {
 	server, _ := newServerFixture(t)
 	server.maxConnections = maxUnidentifiedPerSource + 2
@@ -369,12 +369,32 @@ func TestOneSourceCannotFillTheListenerWithUnidentifiedConnections(t *testing.T)
 		t.Fatal("trackConn(StateNew) closed another source's connection, want it open")
 	}
 
-	server.trackConn(flood[0], http.StateActive)
 	server.trackConn(flood[0], http.StateClosed)
-	identifiedSource := &recordingConn{source: floodSource}
-	server.trackConn(identifiedSource, http.StateNew)
-	if identifiedSource.closed.Load() {
-		t.Fatal("trackConn(StateNew) closed a connection after the source's first was identified, want it open")
+	afterClose := &recordingConn{source: floodSource}
+	server.trackConn(afterClose, http.StateNew)
+	if afterClose.closed.Load() {
+		t.Fatal("trackConn(StateNew) closed a connection after the source's first closed, want it open")
+	}
+}
+
+// Test flow:
+//  1. Complete a verified peer's handshake and identify its connection, which stays open.
+//  2. Offer the limit of unidentified connections from the same source.
+//  3. Assert all stay open, because the identified connection holds no slot of its source.
+func TestIdentifiedConnectionFreesItsSourcesUnidentifiedSlot(t *testing.T) {
+	server, fixture := newServerFixture(t)
+	connection, raw := connectOverPipe(t, server, fixture.peer)
+	server.trackConn(connection, http.StateActive)
+	if raw.closed.Load() {
+		t.Fatal("trackConn(StateActive) closed a verified peer's connection, want it open")
+	}
+
+	for index := range maxUnidentifiedPerSource {
+		unidentified := &recordingConn{source: raw.source}
+		server.trackConn(unidentified, http.StateNew)
+		if unidentified.closed.Load() {
+			t.Fatalf("trackConn(StateNew) closed unidentified connection %d, want the identified one not to count", index)
+		}
 	}
 }
 

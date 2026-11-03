@@ -98,7 +98,7 @@ func TestPeerChannelRefusesAnIncompleteConfiguration(t *testing.T) {
 }
 
 // Test flow:
-//  1. Join limiter windows and tracker hosts with one pair on each side and one on both.
+//  1. Join limiter windows, tracker hosts and in-flight pairs, with one pair known only to the windows, one to the hosts and in-flight counts, and one to all.
 //  2. Assert each pair carries the fields of the sides that know it, and the cut-off state maps to the wire.
 func TestJoinLoadSamplesJoinsTheLimiterAndTheTracker(t *testing.T) {
 	samples := joinLoadSamples(
@@ -110,7 +110,7 @@ func TestJoinLoadSamplesJoinsTheLimiterAndTheTracker(t *testing.T) {
 			{Participant: "both", Model: peerTestModel, Ejected: true},
 			{Participant: "hosts", Model: peerTestModel},
 		},
-		[]perf.PairInflight{
+		[]perf.InflightPair{
 			{Participant: "both", Model: peerTestModel, Requests: 3},
 			{Participant: "hosts", Model: peerTestModel, Requests: 4},
 		},
