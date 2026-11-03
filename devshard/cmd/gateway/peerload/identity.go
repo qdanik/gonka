@@ -86,15 +86,5 @@ func peerIDFromCertificate(certificate *x509.Certificate) (PeerID, error) {
 }
 
 func validInstanceID(instance string) bool {
-	if instance == "" || len(instance) > instanceIDLimit {
-		return false
-	}
-	for _, character := range instance {
-		isLetter := character >= 'a' && character <= 'z'
-		isDigit := character >= '0' && character <= '9'
-		if !isLetter && !isDigit && character != '-' {
-			return false
-		}
-	}
-	return true
+	return instance != "" && len(instance) <= instanceIDLimit && allBytes(instance, func(b byte) bool { return (b >= 'a' && b <= 'z') || isDigit(b) || b == '-' })
 }
