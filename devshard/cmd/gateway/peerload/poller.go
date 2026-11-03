@@ -89,7 +89,7 @@ func (p *poller) syncLocked() {
 	}
 	for id, link := range p.links {
 		instance, stays := wanted[id]
-		if !stays || instance.Endpoint != link.instance.Endpoint || instance.Fingerprint != link.instance.Fingerprint || instance.Protocol != link.instance.Protocol {
+		if !stays || !link.connectsTo(instance) {
 			p.dropLocked(id, link)
 		}
 	}
@@ -165,6 +165,10 @@ func (p *poller) fetch(ctx context.Context, link *peerLink, topic peerTopic) (pe
 		return peerEnvelope{}, err
 	}
 	return decodeEnvelope(body)
+}
+
+func (l *peerLink) connectsTo(instance peerInstance) bool {
+	return instance.Endpoint == l.instance.Endpoint && instance.Fingerprint == l.instance.Fingerprint && instance.Protocol == l.instance.Protocol
 }
 
 func (l *peerLink) noteHandshake(_ tls.ConnectionState, err error) {
