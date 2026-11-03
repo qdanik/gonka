@@ -209,14 +209,16 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 		}
 	}()
 	txClient, err := chain.NewTxClient(chain.Config{
-		Transport:    sources.Transport,
-		FeeDenom:     configuration.Tx.FeeDenom,
-		FeeAmount:    uint64(configuration.Tx.FeeAmount),
-		GasLimit:     uint64(configuration.Tx.GasLimit),
-		PollInterval: time.Duration(configuration.Tx.PollIntervalMS) * time.Millisecond,
-		PollTimeout:  time.Duration(configuration.Tx.PollTimeoutMS) * time.Millisecond,
-		Now:          clock,
-		Narrator:     events,
+		Transport:         sources.Transport,
+		FeeDenom:          configuration.Tx.FeeDenom,
+		FeeAmount:         uint64(configuration.Tx.FeeAmount),
+		GasLimit:          uint64(configuration.Tx.GasLimit),
+		RegistryFeeAmount: uint64(configuration.Tx.RegistryFeeAmount),
+		RegistryGasLimit:  uint64(configuration.Tx.RegistryGasLimit),
+		PollInterval:      time.Duration(configuration.Tx.PollIntervalMS) * time.Millisecond,
+		PollTimeout:       time.Duration(configuration.Tx.PollTimeoutMS) * time.Millisecond,
+		Now:               clock,
+		Narrator:          events,
 	})
 	if err != nil {
 		return nil, err

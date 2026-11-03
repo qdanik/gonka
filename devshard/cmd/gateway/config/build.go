@@ -41,6 +41,8 @@ func Build(values env.Values, overrides Overrides) (*Config, error) {
 	overrideIfSet(&configuration.Chain.VersionsPollIntervalSeconds, values.ChainVersionsPollIntervalSeconds)
 	overrideIfSet(&configuration.Tx.FeeAmount, values.TxFeeAmount)
 	overrideIfSet(&configuration.Tx.GasLimit, values.TxGasLimit)
+	overrideIfSet(&configuration.Tx.RegistryFeeAmount, values.RegistryTxFeeAmount)
+	overrideIfSet(&configuration.Tx.RegistryGasLimit, values.RegistryTxGasLimit)
 	overrideIfSet(&configuration.Tx.FeeDenom, values.TxFeeDenom)
 	overrideIfSet(&configuration.Tx.PollIntervalMS, values.TxPollIntervalMS)
 	overrideIfSet(&configuration.Tx.PollTimeoutMS, values.TxPollTimeoutMS)

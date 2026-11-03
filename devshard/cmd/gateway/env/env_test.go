@@ -32,6 +32,8 @@ func TestLoadParsesTypedValues(t *testing.T) {
 	t.Setenv("DEVSHARD_ESCROW_ROTATION_ENABLED", "true")
 	t.Setenv("DEVSHARD_GATEWAY_DISABLED", "true")
 	t.Setenv("DEVSHARD_TX_FEE_AMOUNT", "500")
+	t.Setenv("DEVSHARD_REGISTRY_TX_FEE_AMOUNT", "600")
+	t.Setenv("DEVSHARD_REGISTRY_TX_GAS_LIMIT", "700")
 	t.Setenv("GATEWAY_PERF_EWMA_HALFLIFE_SECONDS", "900")
 	t.Setenv("GATEWAY_CAPTURE_SAMPLE_RATE", "0.25")
 	t.Setenv("GATEWAY_CAPTURE_MAX_BYTES", "4096")
@@ -51,6 +53,12 @@ func TestLoadParsesTypedValues(t *testing.T) {
 	}
 	if values.TxFeeAmount == nil || *values.TxFeeAmount != 500 {
 		t.Fatalf("TxFeeAmount = %v, want 500", values.TxFeeAmount)
+	}
+	if values.RegistryTxFeeAmount == nil || *values.RegistryTxFeeAmount != 600 {
+		t.Fatalf("RegistryTxFeeAmount = %v, want 600", values.RegistryTxFeeAmount)
+	}
+	if values.RegistryTxGasLimit == nil || *values.RegistryTxGasLimit != 700 {
+		t.Fatalf("RegistryTxGasLimit = %v, want 700", values.RegistryTxGasLimit)
 	}
 	if values.PerfEWMAHalfLifeSeconds == nil || *values.PerfEWMAHalfLifeSeconds != 900 {
 		t.Fatalf("PerfEWMAHalfLifeSeconds = %v, want 900", values.PerfEWMAHalfLifeSeconds)
@@ -114,6 +122,8 @@ func TestAnUnusableValueIsIgnoredNotRefused(t *testing.T) {
 		"DEVSHARD_PORT":                                    "eighty",
 		"DEVSHARD_GATEWAY_DISABLED":                        "maybe",
 		"DEVSHARD_TX_FEE_AMOUNT":                           "0",
+		"DEVSHARD_REGISTRY_TX_FEE_AMOUNT":                  "0",
+		"DEVSHARD_REGISTRY_TX_GAS_LIMIT":                   "0",
 		"DEVSHARD_TX_POLL_INTERVAL_MS":                     "-5",
 		"DEVSHARD_STATS_SNAPSHOT_SECONDS":                  "0",
 		"DEVSHARD_STATS_RETENTION_EPOCHS":                  "-1",
@@ -145,6 +155,8 @@ func TestAnUnusableValueIsIgnoredNotRefused(t *testing.T) {
 		"Port":                                values.Port != nil,
 		"Disabled":                            values.Disabled != nil,
 		"TxFeeAmount":                         values.TxFeeAmount != nil,
+		"RegistryTxFeeAmount":                 values.RegistryTxFeeAmount != nil,
+		"RegistryTxGasLimit":                  values.RegistryTxGasLimit != nil,
 		"TxPollIntervalMS":                    values.TxPollIntervalMS != nil,
 		"NonceAccountingSnapshotSeconds":      values.NonceAccountingSnapshotSeconds != nil,
 		"NonceAccountingRetentionEpochs":      values.NonceAccountingRetentionEpochs != nil,
