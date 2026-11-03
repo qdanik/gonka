@@ -63,6 +63,7 @@ The listener holds at most 1024 connections, room for 64 addresses of 16 instanc
 | 200, `application/x-protobuf`, an Envelope | the topic is known |
 | 403, `Gonka-Peer-Error: refused` | the connection does not pass the check |
 | 404, `Gonka-Peer-Error: unknown_topic`, empty body | the topic is unknown |
+| 404, no `Gonka-Peer-Error`, a plain-text body | the path is not `/v1/peer/{topic}`, such as one with a second segment after the topic |
 | 400, `Gonka-Peer-Error: body_forbidden` | the request carries a body |
 | 405 | any other method |
 | 429, `Gonka-Peer-Error: rate_limited` | the peer is over its request allowance |
