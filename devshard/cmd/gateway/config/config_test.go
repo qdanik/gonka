@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"devshard/cmd/gateway/env"
 	"devshard/user"
 )
 
@@ -36,6 +37,8 @@ func TestDefaultsMatchSpec(t *testing.T) {
 		{"Tx.FeeDenom", configuration.Tx.FeeDenom, "ngonka"},
 		{"Tx.FeeAmount", configuration.Tx.FeeAmount, int64(1_000_000)},
 		{"Tx.GasLimit", configuration.Tx.GasLimit, int64(700_000)},
+		{"Tx.RegistryFeeAmount", configuration.Tx.RegistryFeeAmount, int64(250_000)},
+		{"Tx.RegistryGasLimit", configuration.Tx.RegistryGasLimit, int64(250_000)},
 		{"Tx.PollIntervalMS", configuration.Tx.PollIntervalMS, int64(2_000)},
 		{"Tx.PollTimeoutMS", configuration.Tx.PollTimeoutMS, int64(45_000)},
 		{"Limits.DefaultMaxTokens", configuration.Limits.DefaultMaxTokens, int64(4096)},
@@ -65,6 +68,9 @@ func TestDefaultsMatchSpec(t *testing.T) {
 		{"Server.MaxConcurrentPromptCounts", configuration.Server.MaxConcurrentPromptCounts, max(int64(runtime.GOMAXPROCS(0))/processorsPerPromptCount, 1)},
 		{"Server.StatsTokenizerEnabled", configuration.Server.StatsTokenizerEnabled, false},
 		{"Server.SessionRetentionEpochs", configuration.Server.SessionRetentionEpochs, int64(2)},
+		{"Peer.Enabled", configuration.Peer.Enabled, false},
+		{"Peer.Listen", configuration.Peer.Listen, ":8443"},
+		{"Peer.Active", configuration.Peer.Active(), false},
 		{"Stream.DrainTimeoutSeconds", configuration.Stream.DrainTimeoutSeconds, int64(2_400)},
 		{"Stream.ClassifyMaxAttemptBytes", configuration.Stream.ClassifyMaxAttemptBytes, int64(1_048_576)},
 		{"Stream.ClassifyMaxParticipantBytes", configuration.Stream.ClassifyMaxParticipantBytes, int64(10_485_760)},
@@ -149,6 +155,8 @@ func TestValidateCatchesEveryRuleBreach(t *testing.T) {
 		{"chain_versions_poll_interval_seconds too high", func(c *Config) { c.Chain.VersionsPollIntervalSeconds = maxVersionsPollIntervalSeconds + 1 }, "chain_versions_poll_interval_seconds"},
 		{"tx_fee_amount negative", func(c *Config) { c.Tx.FeeAmount = -1 }, "tx_fee_amount"},
 		{"tx_gas_limit too low", func(c *Config) { c.Tx.GasLimit = 0 }, "tx_gas_limit"},
+		{"registry_tx_fee_amount negative", func(c *Config) { c.Tx.RegistryFeeAmount = -1 }, "registry_tx_fee_amount"},
+		{"registry_tx_gas_limit too low", func(c *Config) { c.Tx.RegistryGasLimit = 0 }, "registry_tx_gas_limit"},
 		{"tx_poll_interval_ms too low", func(c *Config) { c.Tx.PollIntervalMS = 0 }, "tx_poll_interval_ms"},
 		{"tx_poll_timeout_ms below interval", func(c *Config) { c.Tx.PollTimeoutMS = 100 }, "tx_poll_timeout_ms"},
 		{"default_max_tokens too low", func(c *Config) { c.Limits.DefaultMaxTokens = 0 }, "default_max_tokens"},
@@ -456,6 +464,34 @@ func TestValidateAcceptsTheDispatchQueueDepthEdges(t *testing.T) {
 
 		if err := configuration.Validate(); err != nil {
 			t.Fatalf("Validate() with scheduler_dispatch_queue_depth %d = %v, want nil", depth, err)
+		}
+	}
+}
+
+// Test flow:
+//  1. Build the config from peer values with the switch alone, the contract alone, and both.
+//  2. Assert the channel is active only with both, and every value reaches the config.
+func TestPeerChannelNeedsTheSwitchAndTheContract(t *testing.T) {
+	enabled, contract, instance, listen, advertise, identityKey := true, "gonka1contract", "instance-a", ":9443", "https://a.example:8443", "PEER_KEY"
+	cases := []struct {
+		name   string
+		values env.Values
+		want   bool
+	}{
+		{"switch alone", env.Values{PeerEnabled: &enabled}, false},
+		{"contract alone", env.Values{PeerRegistryContract: &contract}, false},
+		{"both", env.Values{PeerEnabled: &enabled, PeerRegistryContract: &contract, PeerInstanceID: &instance, PeerListen: &listen, PeerAdvertiseURL: &advertise, PeerIdentityKeyEnv: &identityKey}, true},
+	}
+	for _, testCase := range cases {
+		configuration, err := Build(testCase.values, Overrides{})
+		if err != nil {
+			t.Fatalf("%s: Build() = %v", testCase.name, err)
+		}
+		if configuration.Peer.Active() != testCase.want {
+			t.Fatalf("%s: Active() = %v, want %v", testCase.name, configuration.Peer.Active(), testCase.want)
+		}
+		if testCase.want && configuration.Peer != (Peer{Enabled: enabled, RegistryContract: contract, InstanceID: instance, Listen: listen, AdvertiseURL: advertise, IdentityKeyEnv: identityKey}) {
+			t.Fatalf("Peer = %+v", configuration.Peer)
 		}
 	}
 }

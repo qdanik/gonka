@@ -33,12 +33,29 @@ type Chain struct {
 	VersionsPollIntervalSeconds int64
 }
 
+// Peer configures the gateway-to-gateway channel; the channel does nothing unless Active. See docs/peerload.md.
+type Peer struct {
+	Enabled          bool
+	RegistryContract string
+	InstanceID       string
+	Listen           string
+	AdvertiseURL     string
+	IdentityKeyEnv   string
+}
+
+// Active reports whether the channel was switched on and given a registry to read.
+func (p Peer) Active() bool {
+	return p.Enabled && p.RegistryContract != noRegistryContract
+}
+
 type Tx struct {
-	FeeDenom       string
-	FeeAmount      int64
-	GasLimit       int64
-	PollIntervalMS int64
-	PollTimeoutMS  int64
+	FeeDenom          string
+	FeeAmount         int64
+	GasLimit          int64
+	RegistryFeeAmount int64
+	RegistryGasLimit  int64
+	PollIntervalMS    int64
+	PollTimeoutMS     int64
 }
 
 // Concurrency caps requests in flight; a zero MaxRequests leaves only the per-weight limit.
@@ -229,6 +246,7 @@ type Config struct {
 	HeightSync HeightSync
 	Engine     Engine
 	Scheduler  Scheduler
+	Peer       Peer
 
 	TimeoutSweep TimeoutSweep
 
@@ -247,6 +265,7 @@ const (
 	ModelAccessAdminOnly = "admin_only"
 
 	minAdminAPIKeyLength = 16
+	noRegistryContract   = ""
 )
 
 // AdminEnabled is what callers must gate on: comparing against AdminAPIKey would authenticate an empty key.

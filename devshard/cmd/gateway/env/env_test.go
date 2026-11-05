@@ -32,6 +32,8 @@ func TestLoadParsesTypedValues(t *testing.T) {
 	t.Setenv("DEVSHARD_ESCROW_ROTATION_ENABLED", "true")
 	t.Setenv("DEVSHARD_GATEWAY_DISABLED", "true")
 	t.Setenv("DEVSHARD_TX_FEE_AMOUNT", "500")
+	t.Setenv("GATEWAY_REGISTRY_TX_FEE_AMOUNT", "600")
+	t.Setenv("GATEWAY_REGISTRY_TX_GAS_LIMIT", "700")
 	t.Setenv("GATEWAY_PERF_EWMA_HALFLIFE_SECONDS", "900")
 	t.Setenv("GATEWAY_CAPTURE_SAMPLE_RATE", "0.25")
 	t.Setenv("GATEWAY_CAPTURE_MAX_BYTES", "4096")
@@ -51,6 +53,12 @@ func TestLoadParsesTypedValues(t *testing.T) {
 	}
 	if values.TxFeeAmount == nil || *values.TxFeeAmount != 500 {
 		t.Fatalf("TxFeeAmount = %v, want 500", values.TxFeeAmount)
+	}
+	if values.RegistryTxFeeAmount == nil || *values.RegistryTxFeeAmount != 600 {
+		t.Fatalf("RegistryTxFeeAmount = %v, want 600", values.RegistryTxFeeAmount)
+	}
+	if values.RegistryTxGasLimit == nil || *values.RegistryTxGasLimit != 700 {
+		t.Fatalf("RegistryTxGasLimit = %v, want 700", values.RegistryTxGasLimit)
 	}
 	if values.PerfEWMAHalfLifeSeconds == nil || *values.PerfEWMAHalfLifeSeconds != 900 {
 		t.Fatalf("PerfEWMAHalfLifeSeconds = %v, want 900", values.PerfEWMAHalfLifeSeconds)
@@ -101,6 +109,26 @@ func TestLoadRejectsMalformedGatewayValuesWithVariableName(t *testing.T) {
 	for _, name := range []string{"GATEWAY_MATCH_WAIT_MS", "GATEWAY_WARM_NEW_ESCROWS", "GATEWAY_CAPTURE_SAMPLE_RATE", "GATEWAY_FORCE_UPSTREAM_STREAMING"} {
 		if !strings.Contains(message, name) {
 			t.Fatalf("error %q does not name %s (errors must accumulate, not stop at first)", message, name)
+		}
+	}
+}
+
+// Test flow:
+//  1. Set the peer switch and both registry write variables to malformed values.
+//  2. Call `Load`.
+//  3. Assert it returns an error naming all three, so the boot is refused instead of falling back to a default.
+func TestThePeerAndRegistryWriteVariablesAreReadStrictly(t *testing.T) {
+	t.Setenv("GATEWAY_PEER_ENABLED", "yes")
+	t.Setenv("GATEWAY_REGISTRY_TX_FEE_AMOUNT", "250k")
+	t.Setenv("GATEWAY_REGISTRY_TX_GAS_LIMIT", "300k")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("Load() with malformed peer and registry write values: want error, got nil")
+	}
+	for _, name := range []string{"GATEWAY_PEER_ENABLED", "GATEWAY_REGISTRY_TX_FEE_AMOUNT", "GATEWAY_REGISTRY_TX_GAS_LIMIT"} {
+		if !strings.Contains(err.Error(), name) {
+			t.Fatalf("error %q does not name %s", err, name)
 		}
 	}
 }
@@ -623,5 +651,31 @@ func TestTheDispatchQueueDepthIsReadStrictly(t *testing.T) {
 
 	if err == nil || !strings.Contains(err.Error(), "GATEWAY_DISPATCH_QUEUE_DEPTH") {
 		t.Fatalf("Load() with GATEWAY_DISPATCH_QUEUE_DEPTH=deep = %v, want an error naming the variable", err)
+	}
+}
+
+// Test flow:
+//  1. Set every peer variable.
+//  2. Call `Load`.
+//  3. Assert each variable reaches its value.
+func TestEveryPeerVariableIsReachableFromTheEnvironment(t *testing.T) {
+	t.Setenv("GATEWAY_PEER_ENABLED", "true")
+	t.Setenv("GATEWAY_PEER_REGISTRY_CONTRACT", "gonka1contract")
+	t.Setenv("GATEWAY_PEER_INSTANCE_ID", "instance-a")
+	t.Setenv("GATEWAY_PEER_LISTEN", ":9443")
+	t.Setenv("GATEWAY_PEER_ADVERTISE_URL", "https://a.example:8443")
+	t.Setenv("GATEWAY_PEER_IDENTITY_KEY_ENV", "PEER_KEY")
+
+	values, err := Load()
+	if err != nil {
+		t.Fatalf("Load() = %v, want nil", err)
+	}
+	if values.PeerEnabled == nil || !*values.PeerEnabled {
+		t.Fatalf("PeerEnabled = %v", values.PeerEnabled)
+	}
+	for name, got := range map[string]*string{"gonka1contract": values.PeerRegistryContract, "instance-a": values.PeerInstanceID, ":9443": values.PeerListen, "https://a.example:8443": values.PeerAdvertiseURL, "PEER_KEY": values.PeerIdentityKeyEnv} {
+		if got == nil || *got != name {
+			t.Fatalf("a peer variable did not reach %q: %v", name, got)
+		}
 	}
 }

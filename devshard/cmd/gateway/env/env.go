@@ -30,15 +30,24 @@ type Values struct {
 	StatsTokenizerEnabled      *bool
 	SessionRetentionEpochs     *int64
 
-	ChainGRPC        *string
-	PublicAPI        *string
-	ChainID          *string
-	ChainRPC         *string
-	TxFeeDenom       *string
-	TxFeeAmount      *int64
-	TxGasLimit       *int64
-	TxPollIntervalMS *int64
-	TxPollTimeoutMS  *int64
+	PeerEnabled          *bool
+	PeerRegistryContract *string
+	PeerInstanceID       *string
+	PeerListen           *string
+	PeerAdvertiseURL     *string
+	PeerIdentityKeyEnv   *string
+
+	ChainGRPC           *string
+	PublicAPI           *string
+	ChainID             *string
+	ChainRPC            *string
+	TxFeeDenom          *string
+	TxFeeAmount         *int64
+	TxGasLimit          *int64
+	RegistryTxFeeAmount *int64
+	RegistryTxGasLimit  *int64
+	TxPollIntervalMS    *int64
+	TxPollTimeoutMS     *int64
 
 	PoCMode *string
 
@@ -245,6 +254,13 @@ func Load() (Values, error) {
 	readLenientBool("DEVSHARD_STATS_TOKENIZER", &values.StatsTokenizerEnabled)
 	readLenientInt("DEVSHARD_SESSION_RETENTION_EPOCHS", 0, &values.SessionRetentionEpochs)
 
+	readStrictBool("GATEWAY_PEER_ENABLED", &values.PeerEnabled)
+	readString("GATEWAY_PEER_REGISTRY_CONTRACT", &values.PeerRegistryContract)
+	readString("GATEWAY_PEER_INSTANCE_ID", &values.PeerInstanceID)
+	readString("GATEWAY_PEER_LISTEN", &values.PeerListen)
+	readString("GATEWAY_PEER_ADVERTISE_URL", &values.PeerAdvertiseURL)
+	readString("GATEWAY_PEER_IDENTITY_KEY_ENV", &values.PeerIdentityKeyEnv)
+
 	readString("DEVSHARD_CHAIN_GRPC", &values.ChainGRPC, "NODE_GRPC_URL")
 	readString("DEVSHARD_PUBLIC_API", &values.PublicAPI)
 	readString("DEVSHARD_CHAIN_ID", &values.ChainID)
@@ -252,6 +268,8 @@ func Load() (Values, error) {
 	readString("DEVSHARD_TX_FEE_DENOM", &values.TxFeeDenom)
 	readLenientInt("DEVSHARD_TX_FEE_AMOUNT", 1, &values.TxFeeAmount)
 	readLenientInt("DEVSHARD_TX_GAS_LIMIT", 1, &values.TxGasLimit)
+	readStrictInt("GATEWAY_REGISTRY_TX_FEE_AMOUNT", &values.RegistryTxFeeAmount)
+	readStrictInt("GATEWAY_REGISTRY_TX_GAS_LIMIT", &values.RegistryTxGasLimit)
 	readLenientInt("DEVSHARD_TX_POLL_INTERVAL_MS", 1, &values.TxPollIntervalMS)
 	readLenientInt("DEVSHARD_TX_POLL_TIMEOUT_MS", 1, &values.TxPollTimeoutMS)
 

@@ -27,12 +27,17 @@ func Defaults() Config {
 			SnapshotMaxAgeSeconds:       60,
 			VersionsPollIntervalSeconds: int64(chain.DefaultVersionsPollInterval.Seconds()),
 		},
+		Peer: Peer{
+			Listen: ":8443",
+		},
 		Tx: Tx{
-			FeeDenom:       chain.DefaultFeeDenom,
-			FeeAmount:      int64(chain.DefaultFeeAmount),
-			GasLimit:       int64(chain.DefaultGasLimit),
-			PollIntervalMS: chain.DefaultPollInterval.Milliseconds(),
-			PollTimeoutMS:  chain.DefaultPollTimeout.Milliseconds(),
+			FeeDenom:          chain.DefaultFeeDenom,
+			FeeAmount:         int64(chain.DefaultFeeAmount),
+			GasLimit:          int64(chain.DefaultGasLimit),
+			RegistryFeeAmount: int64(chain.DefaultRegistryFeeAmount),
+			RegistryGasLimit:  int64(chain.DefaultRegistryGasLimit),
+			PollIntervalMS:    chain.DefaultPollInterval.Milliseconds(),
+			PollTimeoutMS:     chain.DefaultPollTimeout.Milliseconds(),
 		},
 		Limits: Limits{
 			DefaultMaxTokens:         int64(filters.DefaultRequestMaxTokens),
