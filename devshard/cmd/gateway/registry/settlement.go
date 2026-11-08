@@ -8,6 +8,7 @@ import (
 	"strconv"
 
 	"devshard/cmd/gateway/chain"
+	"devshard/gatewayprotocol/settlement"
 	"devshard/signing"
 	"devshard/state"
 	"devshard/types"
@@ -72,17 +73,17 @@ func (r *Registry) observeFinalized(escrowID string, session EscrowSession) {
 }
 
 // BuildSettlement rehydrates a non-resident escrow read-only: the payload comes entirely from local storage.
-func (r *Registry) BuildSettlement(ctx context.Context, escrowID string) (chain.SettlementInput, error) {
+func (r *Registry) BuildSettlement(ctx context.Context, escrowID string) (settlement.Message, error) {
 	if session, release, held := r.HoldSettlement(escrowID); held {
 		defer release()
 		return r.buildSettlement(escrowID, session)
 	}
 	if r.readOnlySessions == nil {
-		return chain.SettlementInput{}, fmt.Errorf("escrow %s: no read-only session factory", escrowID)
+		return settlement.Message{}, fmt.Errorf("escrow %s: no read-only session factory", escrowID)
 	}
 	session, err := r.readOnlySessions(ctx, escrowID)
 	if err != nil {
-		return chain.SettlementInput{}, fmt.Errorf("rehydrating read-only session for escrow %s: %w", escrowID, err)
+		return settlement.Message{}, fmt.Errorf("rehydrating read-only session for escrow %s: %w", escrowID, err)
 	}
 	input, buildErr := r.buildSettlement(escrowID, session)
 	return input, errors.Join(buildErr, session.Close())
@@ -103,10 +104,10 @@ func (r *Registry) Inspect(ctx context.Context, escrowID string) (EscrowSession,
 	return session, func() { _ = session.Close() }, nil
 }
 
-func (r *Registry) buildSettlement(escrowID string, session EscrowSession) (chain.SettlementInput, error) {
+func (r *Registry) buildSettlement(escrowID string, session EscrowSession) (settlement.Message, error) {
 	numericID, err := strconv.ParseUint(escrowID, 10, 64)
 	if err != nil {
-		return chain.SettlementInput{}, fmt.Errorf("escrow id %q is not numeric: %w", escrowID, err)
+		return settlement.Message{}, fmt.Errorf("escrow id %q is not numeric: %w", escrowID, err)
 	}
 	nonce := session.Nonce()
 	snapshot := session.SnapshotState()
@@ -116,64 +117,28 @@ func (r *Registry) buildSettlement(escrowID string, session EscrowSession) (chai
 	}
 	payload, err := state.BuildSettlement(escrowID, snapshot, signatures, nonce)
 	if err != nil {
-		return chain.SettlementInput{}, fmt.Errorf("building settlement for escrow %s: %w", escrowID, err)
+		return settlement.Message{}, fmt.Errorf("building settlement for escrow %s: %w", escrowID, err)
 	}
-	hostStats := statsPerPresentSlot(payload.HostStats)
+	hostStats := settlement.PresentStats(payload.HostStats)
 	verified := *payload
 	verified.HostStats = hostStats
 	if unverifiable := cmp.Or(settlementUnverifiable(verified, snapshot), shortfall); unverifiable != nil && r.narrator != nil {
 		r.narrator.SettlementUnverifiable(escrowID, nonce, unverifiable)
 	}
-	hostStatsHash, err := state.ComputeHostStatsHash(hostStats)
+	root, err := settlement.Root(verified)
 	if err != nil {
-		return chain.SettlementInput{}, fmt.Errorf("hashing host stats for escrow %s: %w", escrowID, err)
+		return settlement.Message{}, fmt.Errorf("hashing host stats for escrow %s: %w", escrowID, err)
 	}
-	return chain.SettlementInput{
-		EscrowID: numericID,
-		StateRoot: state.ComputeStateRootFromRestHash(
-			hostStatsHash, payload.RestHash, payload.Fees, types.PhaseSettlement, payload.StateRootAndProtocolVersion),
-		Nonce:     payload.Nonce,
-		RestHash:  payload.RestHash,
-		HostStats: settlementHostStats(hostStats),
-		SlotSigs:  settlementSlotSigs(payload.Signatures),
-		Fees:      payload.Fees,
-		Version:   payload.StateRootAndProtocolVersion,
+	return settlement.Message{
+		EscrowID:       numericID,
+		StateRoot:      root,
+		Nonce:          payload.Nonce,
+		RestHash:       payload.RestHash,
+		HostStats:      settlement.HostStatsBySlot(hostStats),
+		SlotSignatures: settlement.SignaturesBySlot(payload.Signatures),
+		Fees:           payload.Fees,
+		Version:        payload.StateRootAndProtocolVersion,
 	}, nil
-}
-
-func statsPerPresentSlot(perSlot map[uint32]*types.HostStats) map[uint32]*types.HostStats {
-	present := make(map[uint32]*types.HostStats, len(perSlot))
-	for slotID, hostStats := range perSlot {
-		if hostStats == nil {
-			continue
-		}
-		present[slotID] = hostStats
-	}
-	return present
-}
-
-func settlementHostStats(perSlot map[uint32]*types.HostStats) []chain.SettlementHostStat {
-	stats := make([]chain.SettlementHostStat, 0, len(perSlot))
-	for _, slotID := range sortedKeys(perSlot) {
-		hostStats := perSlot[slotID]
-		stats = append(stats, chain.SettlementHostStat{
-			SlotID:               slotID,
-			Missed:               hostStats.Missed,
-			Invalid:              hostStats.Invalid,
-			Cost:                 hostStats.Cost,
-			RequiredValidations:  hostStats.RequiredValidations,
-			CompletedValidations: hostStats.CompletedValidations,
-		})
-	}
-	return stats
-}
-
-func settlementSlotSigs(perSlot map[uint32][]byte) []chain.SettlementSlotSig {
-	sigs := make([]chain.SettlementSlotSig, 0, len(perSlot))
-	for _, slotID := range sortedKeys(perSlot) {
-		sigs = append(sigs, chain.SettlementSlotSig{SlotID: uint64(slotID), Signature: perSlot[slotID]})
-	}
-	return sigs
 }
 
 // settlementUnverifiable reports what the chain would refuse. See README.md, "Settlement and inspection".

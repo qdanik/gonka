@@ -19,6 +19,7 @@ import (
 	"common/httpguard"
 	"devshard/accounting"
 	"devshard/bridge"
+	"devshard/gatewayprotocol/settlement"
 	"devshard/internal/boolvalue"
 	"devshard/observability"
 	"devshard/profiling"
@@ -885,11 +886,10 @@ func readBoolEnv(name string, fallback bool) bool {
 }
 
 func buildSettlementJSON(p *state.SettlementPayload) (SettlementJSON, error) {
-	hsHash, err := state.ComputeHostStatsHash(p.HostStats)
+	root, err := settlement.Root(*p)
 	if err != nil {
 		return SettlementJSON{}, err
 	}
-	root := state.ComputeStateRootFromRestHash(hsHash, p.RestHash, p.Fees, types.PhaseSettlement, p.StateRootAndProtocolVersion)
 
 	stats := make([]HostStatsJSON, 0, len(p.HostStats))
 	for slot, hs := range p.HostStats {
