@@ -17,6 +17,8 @@ type LockAvailableNode struct {
 	Model       string
 	Response    chan *Node
 	SkipNodeIDs []string
+	// SessionKey, when non-empty, makes the choice sticky to one node per key.
+	SessionKey string
 }
 
 func (g LockAvailableNode) GetResponseChannelCapacity() int {

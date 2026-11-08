@@ -16,12 +16,14 @@ import (
 
 // mockBroker implements brokerAcquirer for testing.
 type mockBroker struct {
-	acquireFunc  func(ctx context.Context, model string, skipNodeIDs []string) (string, string, string, error)
-	releaseFunc  func(lockID string, outcome broker.InferenceResult) error
-	getNodesFunc func() ([]broker.NodeResponse, error)
+	acquireFunc   func(ctx context.Context, model string, skipNodeIDs []string) (string, string, string, error)
+	releaseFunc   func(lockID string, outcome broker.InferenceResult) error
+	getNodesFunc  func() ([]broker.NodeResponse, error)
+	gotSessionKey string
 }
 
-func (m *mockBroker) AcquireMLNode(ctx context.Context, model string, skipNodeIDs []string) (string, string, string, error) {
+func (m *mockBroker) AcquireMLNode(ctx context.Context, model string, skipNodeIDs []string, sessionKey string) (string, string, string, error) {
+	m.gotSessionKey = sessionKey
 	return m.acquireFunc(ctx, model, skipNodeIDs)
 }
 func (m *mockBroker) ReleaseMLNode(lockID string, outcome broker.InferenceResult) error {
@@ -33,6 +35,28 @@ func (m *mockBroker) GetNodes() ([]broker.NodeResponse, error) {
 		return nil, nil
 	}
 	return m.getNodesFunc()
+}
+
+// Test flow:
+// 1. Send AcquireMLNode with a session_key and an escrow id to a server over a recording broker.
+// 2. Assert the broker received the same session key and the response carries the broker's node.
+// 3. Send the same request without a session_key and assert the broker received an empty key.
+func TestAcquireMLNode_PassesSessionKeyToBroker(t *testing.T) {
+	mb := &mockBroker{
+		acquireFunc: func(_ context.Context, _ string, _ []string) (string, string, string, error) {
+			return "lock-1", "http://node", "node-1", nil
+		},
+	}
+	srv := NewServer(mb, nil, nil)
+
+	resp, err := srv.AcquireMLNode(context.Background(), &gen.AcquireMLNodeRequest{Model: "gpt4", EscrowId: "7", SessionKey: "conv-42"})
+	require.NoError(t, err)
+	require.Equal(t, "conv-42", mb.gotSessionKey)
+	require.Equal(t, "node-1", resp.NodeId)
+
+	_, err = srv.AcquireMLNode(context.Background(), &gen.AcquireMLNodeRequest{Model: "gpt4"})
+	require.NoError(t, err)
+	require.Equal(t, "", mb.gotSessionKey)
 }
 
 func TestAcquireMLNode_Success(t *testing.T) {

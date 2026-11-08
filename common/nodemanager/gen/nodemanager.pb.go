@@ -136,7 +136,10 @@ type AcquireMLNodeRequest struct {
 	ExcludedNodes []string               `protobuf:"bytes,2,rep,name=excluded_nodes,json=excludedNodes,proto3" json:"excluded_nodes,omitempty"`
 	// Escrow that triggered this acquire (optional). Used by dapi to attribute
 	// per-escrow mlnode load for the capacity-fallback divisor.
-	EscrowId      string `protobuf:"bytes,3,opt,name=escrow_id,json=escrowId,proto3" json:"escrow_id,omitempty"`
+	EscrowId string `protobuf:"bytes,3,opt,name=escrow_id,json=escrowId,proto3" json:"escrow_id,omitempty"`
+	// Conversation key (optional). Non-empty: dapi prefers the same mlnode for
+	// the same key so vLLM prefix-cache is reused. Empty: least-busy choice.
+	SessionKey    string `protobuf:"bytes,4,opt,name=session_key,json=sessionKey,proto3" json:"session_key,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -188,6 +191,13 @@ func (x *AcquireMLNodeRequest) GetExcludedNodes() []string {
 func (x *AcquireMLNodeRequest) GetEscrowId() string {
 	if x != nil {
 		return x.EscrowId
+	}
+	return ""
+}
+
+func (x *AcquireMLNodeRequest) GetSessionKey() string {
+	if x != nil {
+		return x.SessionKey
 	}
 	return ""
 }
@@ -1898,11 +1908,13 @@ var File_nodemanager_proto protoreflect.FileDescriptor
 
 const file_nodemanager_proto_rawDesc = "" +
 	"\n" +
-	"\x11nodemanager.proto\x12\vnodemanager\"p\n" +
+	"\x11nodemanager.proto\x12\vnodemanager\"\x91\x01\n" +
 	"\x14AcquireMLNodeRequest\x12\x14\n" +
 	"\x05model\x18\x01 \x01(\tR\x05model\x12%\n" +
 	"\x0eexcluded_nodes\x18\x02 \x03(\tR\rexcludedNodes\x12\x1b\n" +
-	"\tescrow_id\x18\x03 \x01(\tR\bescrowId\"e\n" +
+	"\tescrow_id\x18\x03 \x01(\tR\bescrowId\x12\x1f\n" +
+	"\vsession_key\x18\x04 \x01(\tR\n" +
+	"sessionKey\"e\n" +
 	"\x15AcquireMLNodeResponse\x12\x17\n" +
 	"\alock_id\x18\x01 \x01(\tR\x06lockId\x12\x1a\n" +
 	"\bendpoint\x18\x02 \x01(\tR\bendpoint\x12\x17\n" +

@@ -3,11 +3,13 @@ package broker
 import (
 	"common/logging"
 	"context"
+	"crypto/sha256"
 	"decentralized-api/apiconfig"
 	"decentralized-api/chainphase"
 	"decentralized-api/cosmosclient"
 	"decentralized-api/mlnodeclient"
 	"decentralized-api/participant"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -581,27 +583,63 @@ func (b *Broker) getLeastBusyNode(command LockAvailableNode) *NodeWithState {
 	}
 
 	var leastBusyNode *NodeWithState = nil
+	var stickyNode *NodeWithState = nil
+	var stickyScore uint64
 	for _, node := range b.nodes {
 		if _, shouldSkip := skip[node.Node.Id]; shouldSkip {
 			logging.Info("Node skipped by LockAvailableNode skip list", types.Nodes, "node_id", node.Node.Id)
 			continue
 		}
 		// TODO: log some kind of a reason as to why the node is not available
-		if available, reason := b.nodeAvailable(node, command.Model, epochState.LatestEpoch.EpochIndex, epochState.CurrentPhase); available {
-			if leastBusyNode == nil || node.State.LockCount < leastBusyNode.State.LockCount {
-				leastBusyNode = node
-			}
-		} else {
+		eligible, reason := b.nodeEligible(node, command.Model, epochState.LatestEpoch.EpochIndex, epochState.CurrentPhase)
+		if !eligible {
 			logging.Info("Node not available", types.Nodes, "node_id", node.Node.Id, "reason", reason)
+			continue
+		}
+		if command.SessionKey != "" {
+			score := rendezvousScore(command.SessionKey, node.Node.Id)
+			if stickyNode == nil || score > stickyScore || (score == stickyScore && node.Node.Id < stickyNode.Node.Id) {
+				stickyNode, stickyScore = node, score
+			}
+		}
+		if reason := nodeCapacityReason(node); reason != "" {
+			logging.Info("Node not available", types.Nodes, "node_id", node.Node.Id, "reason", reason)
+			continue
+		}
+		if leastBusyNode == nil || node.State.LockCount < leastBusyNode.State.LockCount {
+			leastBusyNode = node
 		}
 	}
 
+	// A full sticky node falls back to least busy; stickiness never queues or refuses.
+	if stickyNode != nil && nodeCapacityReason(stickyNode) == "" {
+		return stickyNode
+	}
 	return leastBusyNode
+}
+
+// rendezvousScore ranks a node for a session key (highest random weight hashing). It is
+// stateless, so the same key ranks the same eligible nodes the same way after a restart.
+func rendezvousScore(sessionKey, nodeID string) uint64 {
+	h := sha256.New()
+	h.Write([]byte(sessionKey))
+	h.Write([]byte{0})
+	h.Write([]byte(nodeID))
+	return binary.BigEndian.Uint64(h.Sum(nil))
 }
 
 type NodeNotAvailableReason = string
 
-func (b *Broker) nodeAvailable(node *NodeWithState, neededModel string, currentEpoch uint64, currentPhase types.EpochPhase) (bool, NodeNotAvailableReason) {
+// nodeCapacityReason is empty when the node has a free lock slot.
+func nodeCapacityReason(node *NodeWithState) NodeNotAvailableReason {
+	if node.State.LockCount >= node.Node.MaxConcurrent {
+		return fmt.Sprintf("Node is locked too many times: lockCount=%d, maxConcurrent=%d", node.State.LockCount, node.Node.MaxConcurrent)
+	}
+	return ""
+}
+
+// nodeEligible reports whether the node can serve the model now, ignoring its lock count.
+func (b *Broker) nodeEligible(node *NodeWithState, neededModel string, currentEpoch uint64, currentPhase types.EpochPhase) (bool, NodeNotAvailableReason) {
 	servesInferenceDuringValidation := node.State.ServesInferenceDuringValidation()
 	if servesInferenceDuringValidation {
 		logging.Info("nodeAvailable. Node can serve INFERENCE during PoC validation", types.Nodes, "nodeId", node.Node.Id, "intendedStatus", node.State.IntendedStatus, "PoCValidationInference", node.State.PoCValidationInference)
@@ -621,11 +659,6 @@ func (b *Broker) nodeAvailable(node *NodeWithState, neededModel string, currentE
 		return false, fmt.Sprintf("Node is currently reconciling: %s", node.State.ReconcileInfo.Status)
 	}
 	logging.Info("nodeAvailable. Node is not being reconciled, ReconcileInfo == nil", types.Nodes, "nodeId", node.Node.Id)
-
-	if node.State.LockCount >= node.Node.MaxConcurrent {
-		return false, fmt.Sprintf("Node is locked too many times: lockCount=%d, maxConcurrent=%d", node.State.LockCount, node.Node.MaxConcurrent)
-	}
-	logging.Info("nodeAvailable. Node is not locked too many times", types.Nodes, "nodeId", node.Node.Id, "lockCount", node.State.LockCount, "maxConcurrent", node.Node.MaxConcurrent)
 
 	// Check admin state using provided epoch and phase
 	if !node.State.ShouldBeOperational(currentEpoch, currentPhase) {
