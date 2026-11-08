@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/pprof"
+	"sync"
 
 	"devshard/cmd/gateway/config"
 	"devshard/cmd/gateway/engine"
@@ -105,7 +106,7 @@ func (s *Server) buildHandler() http.Handler {
 		}
 		mux.Handle(registered.pattern, wrapped)
 	}
-	return mux
+	return s.boundClientWrites(mux)
 }
 
 func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
@@ -196,13 +197,20 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request, escrowPin string) 
 	configuration := s.config.Load()
 	identity := s.resolveCredentials(r)
 	requestID := s.requestIDs()
+	if !reachesAnyModel(configuration.Limits, identity) {
+		s.writeErrorFor(w, &AccessDeniedError{Message: "no model is open to this request's credentials"})
+		return
+	}
 
-	body, err := readBody(w, r, chatIngestLimit)
+	body, err := readBody(w, r, chatIngestLimit, s.requestBodies)
 	if err != nil {
 		s.writeErrorFor(w, err)
 		return
 	}
+	releaseBody := sync.OnceFunc(func() { s.requestBodies.release(int64(len(body))) })
+	defer releaseBody()
 	normalized, err := filters.NormalizeRequest(body, filterOptions(configuration.Limits, identity.admin, s.servedModelVocabulary, s.modelFilters.Profiles()))
+	releaseBody()
 	if err != nil {
 		s.capture.filterRejected(r, requestID, body, err)
 		s.writeErrorFor(w, err)
@@ -220,7 +228,7 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request, escrowPin string) 
 		s.writeErrorFor(w, err)
 		return
 	}
-	prompt, err := s.checkContext(configuration.Limits, normalized)
+	prompt, err := s.checkContext(r.Context(), configuration.Limits, normalized)
 	if err != nil {
 		s.writeErrorFor(w, err)
 		return
@@ -238,7 +246,7 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request, escrowPin string) 
 			written := serveCached(w, requestID, entry)
 			hitCount := prompt.countSoFar()
 			s.events.RequestFinished(journal.RequestLine{
-				RequestID: requestID, Model: normalized.Model, EscrowID: entry.escrowID,
+				RequestID: requestID, Model: normalized.Model, APIKeyID: identity.caller(), EscrowID: entry.escrowID,
 				ClientStream: entry.stream, Bytes: written, CacheHit: true,
 				Outcome: engine.RaceOutcome{InputTokens: hitCount.tokens, InputTokensSource: hitCount.source},
 			})
@@ -255,7 +263,7 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request, escrowPin string) 
 		if throttled, ours := rateLimited(err); ours && s.rejections != nil {
 			s.rejections.Rejected(normalized.Model, throttled.Label())
 			s.events.RequestThrottled(journal.RequestLine{
-				RequestID: requestID, Model: normalized.Model, LimiterReason: throttled.Label(),
+				RequestID: requestID, Model: normalized.Model, APIKeyID: identity.caller(), LimiterReason: throttled.Label(),
 			})
 		}
 		s.writeErrorFor(w, err)
@@ -272,12 +280,12 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request, escrowPin string) 
 
 	if s.cache == nil {
 		// Nothing to store, so the outcome and the hidden failure the cache path reads are both moot.
-		_, _ = s.race(w, r, requestID, normalized, counted, escrowPin, configuration.Limits.LogprobsOptimization, slot)
+		_, _ = s.race(w, r, requestID, identity.caller(), normalized, counted, escrowPin, configuration.Limits.LogprobsOptimization, slot)
 		return
 	}
 	recorder := newCacheRecorder(w, s.cache.entryLimit(), normalized.ClientStream, s.buffers)
 	defer recorder.releaseBudget()
-	outcome, hiddenFailure := s.race(recorder, r, requestID, normalized, counted, escrowPin, configuration.Limits.LogprobsOptimization, slot)
+	outcome, hiddenFailure := s.race(recorder, r, requestID, identity.caller(), normalized, counted, escrowPin, configuration.Limits.LogprobsOptimization, slot)
 	unstorable := cmp.Or(r.Context().Err(), hiddenFailure)
 	entry, storable := recorder.entry(outcome.EscrowID, normalized.ClientStream, unstorable)
 	if !storable {
@@ -321,6 +329,18 @@ func (s *Server) routableModel(configured config.Limits, model string) error {
 	return &UnsupportedModelError{Model: model, Supported: served}
 }
 
+func reachesAnyModel(configured config.Limits, identity credentials) bool {
+	if identity.admin {
+		return true
+	}
+	for _, access := range configured.ModelAccess {
+		if access == config.ModelAccessOpen || (access == config.ModelAccessAPIKey && identity.apiKey) {
+			return true
+		}
+	}
+	return false
+}
+
 func authorizeModel(configured config.Limits, model string, identity credentials) error {
 	if model == "" {
 		return filters.Reject("model is required")
@@ -342,7 +362,7 @@ func authorizeModel(configured config.Limits, model string, identity credentials
 }
 
 // race returns the outcome and the failure the reply's status could not carry. See README.md, "Streaming the reply".
-func (s *Server) race(w http.ResponseWriter, r *http.Request, requestID string, normalized filters.Result, prompt promptCount, escrowPin string, logprobsOptimization *bool, slot *limiterSlot) (engine.RaceOutcome, error) {
+func (s *Server) race(w http.ResponseWriter, r *http.Request, requestID, apiKeyID string, normalized filters.Result, prompt promptCount, escrowPin string, logprobsOptimization *bool, slot *limiterSlot) (engine.RaceOutcome, error) {
 	startedAt := s.now()
 	client := newClientStream(w, requestID, normalized.ClientStream, normalized.ClientUsage, normalized.Logprobs, s.buffers)
 	defer client.discard()
@@ -373,10 +393,10 @@ func (s *Server) race(w http.ResponseWriter, r *http.Request, requestID string, 
 	if err != nil {
 		s.capture.attemptsFailed(r, requestID, normalized, err)
 		if !client.closeUnstarted() {
-			s.finishRequest(requestID, normalized, outcome, deliveryFailedMidStream, client, s.now().Sub(startedAt), err, client.Fail(err))
+			s.finishRequest(requestID, apiKeyID, normalized, outcome, deliveryFailedMidStream, client, s.now().Sub(startedAt), err, client.Fail(err))
 			return outcome, err
 		}
-		s.finishRequest(requestID, normalized, outcome, deliveryFailedBeforeFirstByte, client, s.now().Sub(startedAt), err, nil)
+		s.finishRequest(requestID, apiKeyID, normalized, outcome, deliveryFailedBeforeFirstByte, client, s.now().Sub(startedAt), err, nil)
 		w.Header().Set(RequestIDHeader, requestID)
 		s.writeErrorFor(w, err)
 		return outcome, nil
@@ -391,6 +411,6 @@ func (s *Server) race(w http.ResponseWriter, r *http.Request, requestID string, 
 	if closeErr != nil {
 		delivery = deliveryFailedMidStream
 	}
-	s.finishRequest(requestID, normalized, outcome, delivery, client, s.now().Sub(startedAt), nil, closeErr)
-	return outcome, closeErr
+	s.finishRequest(requestID, apiKeyID, normalized, outcome, delivery, client, s.now().Sub(startedAt), client.answeredHostFailure(), closeErr)
+	return outcome, cmp.Or(closeErr, client.replayRefusal())
 }

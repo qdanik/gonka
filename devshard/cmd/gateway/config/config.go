@@ -39,6 +39,7 @@ type Tx struct {
 	GasLimit       int64
 	PollIntervalMS int64
 	PollTimeoutMS  int64
+	CallTimeoutMS  int64
 }
 
 // Concurrency caps requests in flight; a zero MaxRequests leaves only the per-weight limit.
@@ -86,21 +87,23 @@ type ModelLimits struct {
 
 // Limits groups admission tuning; several zeroes mean unlimited. See README.md, "What each group holds".
 type Limits struct {
-	DefaultMaxTokens         int64
-	ForceUpstreamStreaming   bool
-	LogprobsOptimization     *bool
-	MaxBufferedResponseBytes int64
-	MaxTokensCap             int64
-	FallbackMaxModelLen      int64
-	Concurrency              Concurrency
-	MaxInputTokensInFlight   int64
-	AdmissionQueueWaitMS     int64
-	AdmissionQueuePerSlot    int64
-	HostWindows              HostWindows
-	Congestion               Congestion
-	HostCutoff               HostCutoff
-	ModelLimits              map[string]ModelLimits
-	ModelAccess              map[string]string
+	DefaultMaxTokens            int64
+	ForceUpstreamStreaming      bool
+	LogprobsOptimization        *bool
+	MaxBufferedResponseBytes    int64
+	MaxBufferedRequestBytes     int64
+	MinClientReadBytesPerSecond int64
+	MaxTokensCap                int64
+	FallbackMaxModelLen         int64
+	Concurrency                 Concurrency
+	MaxInputTokensInFlight      int64
+	AdmissionQueueWaitMS        int64
+	AdmissionQueuePerSlot       int64
+	HostWindows                 HostWindows
+	Congestion                  Congestion
+	HostCutoff                  HostCutoff
+	ModelLimits                 map[string]ModelLimits
+	ModelAccess                 map[string]string
 }
 
 type Modes struct {
@@ -246,7 +249,7 @@ const (
 	ModelAccessAPIKey    = "api_key"
 	ModelAccessAdminOnly = "admin_only"
 
-	minAdminAPIKeyLength = 16
+	minAPIKeyLength = 16
 )
 
 // AdminEnabled is what callers must gate on: comparing against AdminAPIKey would authenticate an empty key.
