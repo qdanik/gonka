@@ -20,6 +20,7 @@ import (
 
 	"devshard/accounting"
 	"devshard/gatewayprotocol/probe"
+	"devshard/gatewayprotocol/streamevidence"
 	"devshard/gatewayprotocol/timeoutclaim"
 	"devshard/host"
 	"devshard/logging"
@@ -28,8 +29,6 @@ import (
 	"devshard/types"
 	"devshard/user"
 	"go.opentelemetry.io/otel/trace"
-
-	"common/completionapi"
 )
 
 // errEmptyStream marks an attempt that completed successfully at the transport
@@ -2012,7 +2011,7 @@ func (rw *raceWriter) retainErrorStreamLines(parseable []byte) {
 	if inf == nil || inf.errorStreamTruncated {
 		return
 	}
-	rw.appendErrorStreamLines(ssePayloadDataLines(parseable))
+	rw.appendErrorStreamLines(streamevidence.DataLines(parseable))
 }
 
 func (rw *raceWriter) clearErrorStreamRetention() {
@@ -2042,7 +2041,7 @@ func (rw *raceWriter) appendErrorStreamLines(lines []string) {
 		}
 		inf.errorStreamLines = append(inf.errorStreamLines, line)
 		inf.errorStreamBytes += n
-		if strings.TrimSpace(strings.TrimPrefix(line, "data: ")) == "[DONE]" {
+		if streamevidence.IsDoneLine(line) {
 			inf.errorStreamComplete = true
 		}
 	}
@@ -2115,29 +2114,6 @@ func (inf *inflight) releaseErrorStreamRetention() {
 	inf.errorStreamTruncated = false
 }
 
-func ssePayloadDataLines(p []byte) []string {
-	if len(p) == 0 {
-		return nil
-	}
-	var lines []string
-	for raw := range bytes.SplitSeq(p, []byte("\n")) {
-		line := strings.TrimRight(string(raw), "\r")
-		if !strings.HasPrefix(line, "data: ") {
-			continue
-		}
-		if isDevshardProtocolDataLine(line) {
-			continue
-		}
-		lines = append(lines, line)
-	}
-	return lines
-}
-
-func isDevshardProtocolDataLine(line string) bool {
-	data := strings.TrimPrefix(line, "data: ")
-	return strings.Contains(data, `"devshard_receipt"`) || strings.Contains(data, `"devshard_meta"`)
-}
-
 func errorMissRejectLabel(inf *inflight) string {
 	if inf == nil {
 		return "drift"
@@ -2162,7 +2138,7 @@ func errorMissArtifacts(inf *inflight, session *user.Session) (finishTx, respons
 		finishTx = session.FinishTxFor(inf.nonce)
 	}
 	if len(inf.errorStreamLines) > 0 {
-		responsePayload, _ = json.Marshal(completionapi.SerializedStreamedResponse{Events: inf.errorStreamLines})
+		responsePayload, _ = streamevidence.Payload(inf.errorStreamLines)
 	}
 	return finishTx, responsePayload
 }

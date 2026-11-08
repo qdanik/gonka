@@ -1,6 +1,6 @@
 # Gateway protocol library — design
 
-**Status:** Implemented in `devshard/gatewayprotocol` for settlement (`settlement`, `settlementwire`), the timeout claim (`timeoutclaim`) and the probe budget (`probe`).
+**Status:** Implemented in `devshard/gatewayprotocol` for settlement (`settlement`, `settlementwire`), the timeout claim (`timeoutclaim`), the probe budget (`probe`) and the evidence of an error stream (`streamevidence`).
 
 **Audience:** Engineers changing what either gateway, `devshard/cmd/devshardctl` or `devshard/cmd/gateway`, sends to hosts, verifiers or the chain.
 
@@ -24,6 +24,7 @@ devshard/gatewayprotocol/       README.md, guard_test.go
   probe/                        README.md, budget.go, budget_test.go
   settlement/                   README.md, message.go, order.go, root.go, tests
   settlementwire/               README.md, marshal.go, marshal_test.go, testdata/ (settle goldens)
+  streamevidence/               README.md, lines.go, payload.go, vocabulary.go, tests, testdata/ (error stream golden)
   timeoutclaim/                 README.md, claim.go, payload.go, tests
 ```
 
@@ -49,6 +50,12 @@ It does not own when a miss claim is attempted or where its Finish comes from, n
 
 Owns the token budget of a probe: `MaxTokens`, the reservation floor `state.MinReservationTokens`, and `Params`, which builds a probe's params with that reservation and the prompt's byte length as its input length. devshardctl's probes, the new gateway's warm-up probe and its ghost burn all use it. The probe prompt is not owned: a host accepts any prompt that parses and asks for no more than `MaxTokens`, so each gateway keeps its own literal and formats `MaxTokens` into it.
 
+### 3.5 `streamevidence`
+
+Owns which lines of an error stream are evidence (`DataLines`: `data: ` lines with a trailing carriage return trimmed, without the devshard receipt and meta envelopes), the `[DONE]` test that marks a retained stream complete (`IsDoneLine`), and the error-miss payload those lines serialize into (`Payload`, the JSON of `completionapi.SerializedStreamedResponse`). A verifier hashes the payload and compares it with the Finish transaction's hashes, so a line kept or dropped differently by one gateway turns an accepted claim into a rejected one. The envelope keys and the terminator marker sit in its `vocabulary.go`.
+
+It does not own the retainer: how many bytes of evidence a gateway keeps, what it does when that bound is hit, and how the retained lines are released. The gateways differ on the bound (devshardctl reads it from `GATEWAY_ERROR_STREAM_MAX_ATTEMPT_BYTES` and charges its participant classify budget per line, the new gateway keeps a fixed bound) and each keeps its own retainer.
+
 ## 4. Allowed imports and the guard
 
 | Package | May import |
@@ -56,6 +63,7 @@ Owns the token budget of a probe: `MaxTokens`, the reservation floor `state.MinR
 | `probe` | `devshard/state`, `devshard/user`, standard library |
 | `settlement` | `devshard/state`, `devshard/types`, standard library |
 | `settlementwire` | `settlement`, `github.com/productscience/inference/x/inference/types`, standard library |
+| `streamevidence` | `common/completionapi`, standard library |
 | `timeoutclaim` | `devshard/host`, `devshard/types`, `devshard/user`, standard library |
 
 Forbidden everywhere in the tree: `devshard/cmd/...`, `sync`, `sync/atomic`, `net/http`, `os`, `log`, `log/slog`, `devshard/logging`, `devshard/observability`, `github.com/prometheus/...`.
@@ -69,4 +77,4 @@ The reverse check keeps host packages from importing the tree directly. It does 
 
 ## 5. Changing a rule
 
-A protocol change is made in the tree, with a test that pins the bytes or the decision. A gateway picks it up for the parts it calls: today devshardctl calls `settlement.Root`, `timeoutclaim` and `probe`, and `devshard/cmd/gateway` calls every function of the tree except `timeoutclaim.PayloadFromParams`. Where the two gateways still apply a rule differently, each keeps its own version until a change of its own chooses one, with the test that decides it.
+A protocol change is made in the tree, with a test that pins the bytes or the decision. A gateway picks it up for the parts it calls: today devshardctl calls `settlement.Root`, `timeoutclaim`, `probe` and `streamevidence`, and `devshard/cmd/gateway` calls every function of the tree except `timeoutclaim.PayloadFromParams`. Where the two gateways still apply a rule differently, each keeps its own version until a change of its own chooses one, with the test that decides it.

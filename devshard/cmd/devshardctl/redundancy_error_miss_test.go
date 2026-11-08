@@ -13,6 +13,7 @@ import (
 
 	"common/completionapi"
 
+	"devshard/gatewayprotocol/streamevidence"
 	"devshard/host"
 	"devshard/internal/testutil"
 	"devshard/types"
@@ -259,7 +260,7 @@ func TestSsePayloadDataLines_SkipsProtocolEnvelopes(t *testing.T) {
 		"data: {\"error\":{\"code\":500,\"message\":\"x\",\"type\":\"InternalServerError\"}}\n\n" +
 		"data: {\"devshard_meta\":{}}\n\n" +
 		"data: [DONE]\n\n")
-	got := ssePayloadDataLines(raw)
+	got := streamevidence.DataLines(raw)
 	require.Equal(t, []string{
 		`data: {"error":{"code":500,"message":"x","type":"InternalServerError"}}`,
 		`data: [DONE]`,
