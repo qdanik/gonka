@@ -1,6 +1,6 @@
 # Gateway protocol library — design
 
-**Status:** Implemented in `devshard/gatewayprotocol` for settlement (`settlement`, `settlementwire`).
+**Status:** Implemented in `devshard/gatewayprotocol` for settlement (`settlement`, `settlementwire`), the timeout claim (`timeoutclaim`) and the probe budget (`probe`).
 
 **Audience:** Engineers changing what either gateway, `devshard/cmd/devshardctl` or `devshard/cmd/gateway`, sends to hosts, verifiers or the chain.
 
@@ -13,16 +13,18 @@ Code is protocol when a host, a verifier or the chain would reject, pay differen
 Two consequences follow.
 
 - The settle wire encoding is not protocol by the test. devshardctl encodes its settle message through `common/chain/tx`, which writes zero-valued fields; the new gateway marshals the chain's generated type, which omits them. The chain decodes both to the same message. `settlementwire` is still shared because it owns the mapping from the settle message onto `MsgSettleDevshardEscrow`; devshardctl keeps its encoder until it moves onto `settlementwire` in a change of its own.
-- Content that is already decided in a shared package gets no package here. The timeout reason a host sees is chosen in `devshard/user`, the state-root mismatch errors are defined in `devshard/types` and `devshard/state`, and the probe's token floor is `state.MinReservationTokens`, enforced by the host's state machine.
+- Content that is already decided in a shared package gets no package here. The timeout reason a host sees is chosen in `devshard/user`, and the state-root mismatch errors are defined in `devshard/types` and `devshard/state`. The probe's token floor is `state.MinReservationTokens`, enforced by the host's state machine; what lives here is only how a probe applies it, in `probe`.
 
 ## 2. Module location
 
-One package tree inside the `devshard` module. A separate module does not pay: the tree needs `devshard/state` and `devshard/types`, and both gateways need the tree, so a second `go.mod` would form a `replace` cycle; [`spool-shared-library.md`](./spool-shared-library.md) §2 reached the same answer for `spool`. `common` is a separate module that does not require `devshard`, so nothing in `common` can import the tree. Inside `devshard`, the shared packages the tree imports import nothing under `devshard/cmd`, and the guard keeps them from importing the tree.
+One package tree inside the `devshard` module. A separate module does not pay: the tree needs `devshard/state`, `devshard/types`, `devshard/host` and `devshard/user`, and both gateways need the tree, so a second `go.mod` would form a `replace` cycle; [`spool-shared-library.md`](./spool-shared-library.md) §2 reached the same answer for `spool`. `common` is a separate module that does not require `devshard`, so nothing in `common` can import the tree. Inside `devshard`, the shared packages the tree imports import nothing under `devshard/cmd`, and the guard keeps them from importing the tree.
 
 ```
 devshard/gatewayprotocol/       README.md, guard_test.go
+  probe/                        README.md, budget.go, budget_test.go
   settlement/                   README.md, message.go, order.go, root.go, tests
   settlementwire/               README.md, marshal.go, marshal_test.go, testdata/ (settle goldens)
+  timeoutclaim/                 README.md, claim.go, payload.go, tests
 ```
 
 ## 3. Packages
@@ -37,12 +39,24 @@ It does not own escrow-id parsing, signature collection or what to post when the
 
 Owns `Marshal(settler, message)`: the mapping from `settlement.Message` onto `MsgSettleDevshardEscrow` and its marshalling through the chain's generated type. It does not own the transaction envelope, signing or broadcasting, which stay in `devshard/cmd/gateway/chain` and `common/chain/tx`, nor the create-escrow message. It is the only package in the tree allowed to import chain types.
 
+### 3.3 `timeoutclaim`
+
+Owns the choice between an error-miss claim and a timeout vote for a nonce left unfinished (`Resolve` over a `Handler`, which `*user.Session` satisfies): a non-empty Finish transaction claims the miss, otherwise the timeout is voted. It also owns the timeout vote's payload, built from the dispatched params (`PayloadFromParams`, devshardctl) or from the committed record and the dispatched prompt (`PayloadFromRecord`, the new gateway); the record is built from those params, so the two agree for a committed nonce.
+
+It does not own when a miss claim is attempted or where its Finish comes from, nor the payload for a nonce that never committed (devshardctl builds it from params, the new gateway sends none). The gateways differ on all three and each keeps its own. Deadlines and waiting stay in the gateways too.
+
+### 3.4 `probe`
+
+Owns the token budget of a probe: `MaxTokens`, the reservation floor `state.MinReservationTokens`, and `Params`, which builds a probe's params with that reservation and the prompt's byte length as its input length. devshardctl's probes, the new gateway's warm-up probe and its ghost burn all use it. The probe prompt is not owned: a host accepts any prompt that parses and asks for no more than `MaxTokens`, so each gateway keeps its own literal and formats `MaxTokens` into it.
+
 ## 4. Allowed imports and the guard
 
 | Package | May import |
 | --- | --- |
+| `probe` | `devshard/state`, `devshard/user`, standard library |
 | `settlement` | `devshard/state`, `devshard/types`, standard library |
 | `settlementwire` | `settlement`, `github.com/productscience/inference/x/inference/types`, standard library |
+| `timeoutclaim` | `devshard/host`, `devshard/types`, `devshard/user`, standard library |
 
 Forbidden everywhere in the tree: `devshard/cmd/...`, `sync`, `sync/atomic`, `net/http`, `os`, `log`, `log/slog`, `devshard/logging`, `devshard/observability`, `github.com/prometheus/...`.
 
@@ -55,4 +69,4 @@ The reverse check keeps host packages from importing the tree directly. It does 
 
 ## 5. Changing a rule
 
-A protocol change is made in the tree, with a test that pins the bytes or the decision. A gateway picks it up for the parts it calls: today devshardctl calls `settlement.Root`, and `devshard/cmd/gateway` calls every function of both packages. Where the two gateways still apply a rule differently, each keeps its own version until a change of its own chooses one, with the test that decides it.
+A protocol change is made in the tree, with a test that pins the bytes or the decision. A gateway picks it up for the parts it calls: today devshardctl calls `settlement.Root`, `timeoutclaim` and `probe`, and `devshard/cmd/gateway` calls every function of the tree except `timeoutclaim.PayloadFromParams`. Where the two gateways still apply a rule differently, each keeps its own version until a change of its own chooses one, with the test that decides it.

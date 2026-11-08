@@ -89,7 +89,7 @@ Three `EscrowSession` methods have non-obvious contracts. `SealedInferences` cou
 
 `errNonceDeclined` leaves the bound nonce unconsumed, so the next caller sees the same nonce.
 
-`ghostPrompt` is the synthetic `MsgStart` a burned nonce commits: composed into the diff, never sent to a host ([routing.md](../docs/routing.md), "Ghost burns"). It has to be exactly what the record carries, because a verifier checks a vote raised for that nonce against the record's own prompt hash.
+`ghostPrompt` is the synthetic `MsgStart` a burned nonce commits: composed into the diff, never sent to a host ([routing.md](../docs/routing.md), "Ghost burns"). It has to be exactly what the record carries, because a verifier checks a vote raised for that nonce against the record's own prompt hash. Its reservation and input length come from [`devshard/gatewayprotocol/probe`](../../../gatewayprotocol/probe/README.md), as the warm-up probe's and devshardctl's probes do.
 
 A ghost's `StartedAt` is seconds, like every other `StartedAt`: a verifier measures the refusal deadline as now-in-seconds minus this, so a millisecond stamp would keep that difference negative and the timeout on a burned nonce would be rejected every time. See `host/timeout.go`, `VerifyRefusedTimeout`.
 

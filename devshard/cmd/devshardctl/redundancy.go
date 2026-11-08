@@ -19,6 +19,8 @@ import (
 	"time"
 
 	"devshard/accounting"
+	"devshard/gatewayprotocol/probe"
+	"devshard/gatewayprotocol/timeoutclaim"
 	"devshard/host"
 	"devshard/logging"
 	"devshard/observability"
@@ -2165,30 +2167,18 @@ func errorMissArtifacts(inf *inflight, session *user.Session) (finishTx, respons
 	return finishTx, responsePayload
 }
 
-func (e *Redundancy) inferenceTimeoutPayload(params user.InferenceParams) *host.InferencePayload {
-	return &host.InferencePayload{
-		Prompt:      params.Prompt,
-		Model:       params.Model,
-		InputLength: params.InputLength,
-		MaxTokens:   params.MaxTokens,
-		StartedAt:   params.StartedAt,
-	}
-}
-
 func (e *Redundancy) runHandleTimeout(ctx context.Context, inf *inflight, params user.InferenceParams, errorMiss bool) (user.TimeoutResult, error) {
+	var finishTx, responsePayload []byte
 	if errorMiss {
-		finishTx, responsePayload := errorMissArtifacts(inf, e.session)
-		if len(finishTx) > 0 {
-			return e.session.HandleErrorMiss(ctx, inf.nonce, finishTx, responsePayload)
-		}
+		finishTx, responsePayload = errorMissArtifacts(inf, e.session)
 	}
-	return e.session.HandleTimeout(ctx, inf.nonce, inf.sendTime, e.inferenceTimeoutPayload(params))
+	return timeoutclaim.Resolve(ctx, e.session, inf.nonce, inf.sendTime, timeoutclaim.PayloadFromParams(params), finishTx, responsePayload)
 }
 
 // runVoteTimeout votes an already-due protocol timeout without sleeping. When
 // needsWait is true the caller must wait off the drain barrier and retry.
 func (e *Redundancy) runVoteTimeout(ctx context.Context, inf *inflight, params user.InferenceParams, reason types.TimeoutReason) (result user.TimeoutResult, needsWait bool, err error) {
-	return e.session.VoteTimeout(ctx, inf.nonce, inf.sendTime, e.inferenceTimeoutPayload(params), reason)
+	return e.session.VoteTimeout(ctx, inf.nonce, inf.sendTime, timeoutclaim.PayloadFromParams(params), reason)
 }
 
 func (rw *raceWriter) Flush() {
@@ -2422,7 +2412,7 @@ func (e *Redundancy) startInflight(ctx context.Context, inf *inflight, race *rac
 	}
 	logInferenceStage(ctx, inf.escrowID, inf.nonce, "prepared", "host", inf.hostID)
 	if inf.probe {
-		logInferenceStage(ctx, inf.escrowID, inf.nonce, "poc_probe_prepared", "host", inf.hostID, "max_tokens", pocProbeMaxTokens, "poc_reason", currentPoCPhaseReason())
+		logInferenceStage(ctx, inf.escrowID, inf.nonce, "poc_probe_prepared", "host", inf.hostID, "max_tokens", probe.MaxTokens, "poc_reason", currentPoCPhaseReason())
 	}
 	// Stamp sendTime synchronously, BEFORE spawning the send goroutine, so
 	// that awaitRace's first iteration is guaranteed to see a non-zero
@@ -4175,7 +4165,7 @@ func (e *Redundancy) scheduleDeadlineHandleTimeout(
 	)
 	e.recordGatewayTimeoutAction(inf, params, kind, "scheduled", "deadline_not_due")
 	if reasonLabel == "refused" {
-		e.rememberRefusalPayload(inf.nonce, e.inferenceTimeoutPayload(params))
+		e.rememberRefusalPayload(inf.nonce, timeoutclaim.PayloadFromParams(params))
 	}
 
 	unpinFinish := errorMissEnabledFor(inf)
@@ -5287,25 +5277,15 @@ func (e *Redundancy) recordSample(inf *inflight, params user.InferenceParams, re
 	}
 }
 
-func probeParams(params user.InferenceParams) user.InferenceParams {
-	params.Prompt = pocProbePromptBody
-	params.InputLength = uint64(len(pocProbePromptBody))
-	params.MaxTokens = pocProbeMaxTokens
-	return params
-}
-
 // ghostProbeParams returns the params for a synthetic probe that is not
 // tied to any user request. The model is taken from the escrow
 // registration (passed into NewRedundancy) so the host receives a
 // well-formed inference for the configured model.
 func ghostProbeParams(model string) user.InferenceParams {
-	return probeParams(user.InferenceParams{
-		Model: model,
-		// Seconds, like every other StartedAt: a verifier measures the refusal deadline as
-		// now-in-seconds minus this, and a millisecond stamp makes that difference permanently
-		// negative, so the deadline never passes and the timeout is rejected every time.
-		StartedAt: time.Now().Unix(),
-	})
+	// Seconds, like every other StartedAt: a verifier measures the refusal deadline as
+	// now-in-seconds minus this, and a millisecond stamp makes that difference permanently
+	// negative, so the deadline never passes and the timeout is rejected every time.
+	return probe.Params(model, time.Now().Unix(), pocProbePromptBody)
 }
 
 // runGhostProbe spends a nonce the picker must consume but no user request should ride: the host is

@@ -16,8 +16,10 @@ const treeImportPath = "devshard/gatewayprotocol"
 
 func layerImports() map[string][]string {
 	return map[string][]string{
+		"probe":          {"devshard/state", "devshard/user"},
 		"settlement":     {"devshard/state", "devshard/types"},
 		"settlementwire": {"devshard/gatewayprotocol/settlement", "github.com/productscience/inference/x/inference/types"},
+		"timeoutclaim":   {"devshard/host", "devshard/types", "devshard/user"},
 	}
 }
 

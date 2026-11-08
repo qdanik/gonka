@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 
+	"devshard/gatewayprotocol/timeoutclaim"
 	"devshard/host"
 	"devshard/types"
 )
@@ -266,7 +267,7 @@ func pendingRefusalStartedAt(t *testing.T, env *testProxyEnv, startedAt time.Tim
 	params := defaultParams()
 	params.StartedAt = startedAt.Unix()
 	nonce := pendingInferenceStartedAt(t, env, startedAt)
-	return nonce, env.proxy.redundancy.inferenceTimeoutPayload(params)
+	return nonce, timeoutclaim.PayloadFromParams(params)
 }
 
 // Test flow:
