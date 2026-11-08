@@ -196,12 +196,15 @@ type Engine struct {
 	HedgeFirstTokenFloorMS    int64
 }
 
-// Scheduler groups nonce-holding tuning; MatchWaitMS of 0 burns an unmatched nonce immediately, and MaxConsecutiveBurns of 0 never forces a send. See routing.md, "The forced send".
+// Scheduler groups nonce-holding tuning; MatchWaitMS of 0 burns an unmatched nonce immediately, and MaxConsecutiveBurns of 0 never forces a send. See routing.md, "The forced send". The Affinity fields bound the host-affinity mode, see routing.md, "Host affinity".
 type Scheduler struct {
 	MatchWaitMS             int64
 	MaxConsecutiveBurns     int64
 	DispatchQueueDepth      int64
 	WarmNewEscrows          bool
+	AffinityEnabled         bool
+	AffinityTTLMS           int64
+	AffinityMaxEntries      int64
 	ParticipantAllowlist    []string
 	UnthrottledParticipants []string
 }

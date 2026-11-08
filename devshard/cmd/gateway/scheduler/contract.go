@@ -17,6 +17,9 @@ type RequestProfile struct {
 	OutputTokens      int
 	Exclude           []string
 	Params            any
+	// Target is the participant the request must execute on; AffinityMiss says why it has none. Both are empty for an escalation. See routing.md, "Host affinity".
+	Target       string
+	AffinityMiss AffinityException
 	// Escalation marks a speculative attempt of a race that already holds Escrow. See routing.md, "Picking an escrow".
 	Escalation bool
 }

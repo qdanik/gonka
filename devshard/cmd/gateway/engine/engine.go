@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"devshard/cmd/gateway/affinity"
 	"devshard/cmd/gateway/config"
 	"devshard/cmd/gateway/filters"
 	"devshard/cmd/gateway/limits"
@@ -75,6 +76,7 @@ type Deps struct {
 	Ledger    raceLedger
 	Lifecycle escrowLifecycle
 	Journal   raceJournal
+	Affinity  hostMemory
 
 	Suspicious func(participant string) bool
 
@@ -98,6 +100,7 @@ type Request struct {
 	OutputTokens            uint64
 	ClientStream            bool
 	EmptyAnswerCountsTokens bool
+	AffinityKey             affinity.Key
 
 	Params any
 
@@ -305,6 +308,7 @@ func (e *Engine) raceDeps(settings *config.Config, request Request, registration
 		Now:          e.deps.Now,
 		Timer:        e.deps.Timer,
 		Journal:      e.deps.Journal,
+		Affinity:     e.deps.Affinity,
 
 		ModelContextLength: settings.Limits.ContextLength(request.Model, e.deps.Snapshots.Snapshot().Models[request.Model].MaxModelLen),
 

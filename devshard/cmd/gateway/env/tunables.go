@@ -16,6 +16,9 @@ type Tunables struct {
 	LogprobsOptimization                   *bool    `json:"logprobs_optimization,omitempty"`
 	MaxBufferedResponseBytes               *int64   `json:"max_buffered_response_bytes,omitempty"`
 	WarmNewEscrows                         *bool    `json:"warm_new_escrows,omitempty"`
+	AffinityEnabled                        *bool    `json:"affinity_enabled,omitempty"`
+	AffinityTTLMS                          *int64   `json:"affinity_ttl_ms,omitempty"`
+	AffinityMaxEntries                     *int64   `json:"affinity_max_entries,omitempty"`
 	Disabled                               *bool    `json:"disabled,omitempty"`
 	DisabledMessage                        *string  `json:"disabled_message,omitempty"`
 	DisabledRedirectURL                    *string  `json:"disabled_redirect_url,omitempty"`

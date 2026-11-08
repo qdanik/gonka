@@ -287,6 +287,9 @@ func Load() (Values, error) {
 	readStrictBool("GATEWAY_LOGPROBS_OPTIMIZATION_OVERRIDE", &values.LogprobsOptimization)
 	readStrictInt("GATEWAY_MAX_BUFFERED_RESPONSE_BYTES", &values.MaxBufferedResponseBytes)
 	readStrictBool("GATEWAY_WARM_NEW_ESCROWS", &values.WarmNewEscrows)
+	readStrictBool("GATEWAY_AFFINITY_ENABLED", &values.AffinityEnabled)
+	readStrictInt("GATEWAY_AFFINITY_TTL_MS", &values.AffinityTTLMS)
+	readStrictInt("GATEWAY_AFFINITY_MAX_ENTRIES", &values.AffinityMaxEntries)
 	readStrictInt("GATEWAY_ROTATION_SETTLE_MARGIN_BLOCKS", &values.RotationSettleMarginBlocks)
 
 	readLenientInt("DEVSHARD_CHAT_CACHE_MAX_BYTES", 1, &values.ChatCacheMaxBytes)

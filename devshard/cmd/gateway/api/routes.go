@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/pprof"
 
+	"devshard/cmd/gateway/affinity"
 	"devshard/cmd/gateway/config"
 	"devshard/cmd/gateway/engine"
 	"devshard/cmd/gateway/filters"
@@ -202,7 +203,9 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request, escrowPin string) 
 		s.writeErrorFor(w, err)
 		return
 	}
-	normalized, err := filters.NormalizeRequest(body, filterOptions(configuration.Limits, identity.admin, s.servedModelVocabulary, s.modelFilters.Profiles()))
+	options := filterOptions(configuration.Limits, identity.admin, s.servedModelVocabulary, s.modelFilters.Profiles())
+	options.Affinity = configuration.Scheduler.AffinityEnabled
+	normalized, err := filters.NormalizeRequest(body, options)
 	if err != nil {
 		s.capture.filterRejected(r, requestID, body, err)
 		s.writeErrorFor(w, err)
@@ -272,12 +275,12 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request, escrowPin string) 
 
 	if s.cache == nil {
 		// Nothing to store, so the outcome and the hidden failure the cache path reads are both moot.
-		_, _ = s.race(w, r, requestID, normalized, counted, escrowPin, configuration.Limits.LogprobsOptimization, slot)
+		_, _ = s.race(w, r, identity, requestID, normalized, counted, escrowPin, configuration.Limits.LogprobsOptimization, slot)
 		return
 	}
 	recorder := newCacheRecorder(w, s.cache.entryLimit(), normalized.ClientStream, s.buffers)
 	defer recorder.releaseBudget()
-	outcome, hiddenFailure := s.race(recorder, r, requestID, normalized, counted, escrowPin, configuration.Limits.LogprobsOptimization, slot)
+	outcome, hiddenFailure := s.race(recorder, r, identity, requestID, normalized, counted, escrowPin, configuration.Limits.LogprobsOptimization, slot)
 	unstorable := cmp.Or(r.Context().Err(), hiddenFailure)
 	entry, storable := recorder.entry(outcome.EscrowID, normalized.ClientStream, unstorable)
 	if !storable {
@@ -342,7 +345,7 @@ func authorizeModel(configured config.Limits, model string, identity credentials
 }
 
 // race returns the outcome and the failure the reply's status could not carry. See README.md, "Streaming the reply".
-func (s *Server) race(w http.ResponseWriter, r *http.Request, requestID string, normalized filters.Result, prompt promptCount, escrowPin string, logprobsOptimization *bool, slot *limiterSlot) (engine.RaceOutcome, error) {
+func (s *Server) race(w http.ResponseWriter, r *http.Request, identity credentials, requestID string, normalized filters.Result, prompt promptCount, escrowPin string, logprobsOptimization *bool, slot *limiterSlot) (engine.RaceOutcome, error) {
 	startedAt := s.now()
 	client := newClientStream(w, requestID, normalized.ClientStream, normalized.ClientUsage, normalized.Logprobs, s.buffers)
 	defer client.discard()
@@ -358,6 +361,7 @@ func (s *Server) race(w http.ResponseWriter, r *http.Request, requestID string, 
 		OutputTokens:            outputTokens,
 		ClientStream:            normalized.ClientStream,
 		EmptyAnswerCountsTokens: normalized.EmptyAnswerCountsTokens,
+		AffinityKey:             affinityKey(r, identity, normalized),
 		OnEscrow:                func(escrowID string) { client.Header().Set(EscrowHeader, escrowID) },
 		OnFinished:              slot.share(),
 
@@ -393,4 +397,12 @@ func (s *Server) race(w http.ResponseWriter, r *http.Request, requestID string, 
 	}
 	s.finishRequest(requestID, normalized, outcome, delivery, client, s.now().Sub(startedAt), nil, closeErr)
 	return outcome, closeErr
+}
+
+func affinityKey(r *http.Request, identity credentials, normalized filters.Result) affinity.Key {
+	if !identity.apiKey && !identity.admin {
+		return affinity.NoKey
+	}
+	bearer, _ := bearerKey(r.Header.Get("Authorization"))
+	return affinity.KeyFor(bearer, normalized.Model, normalized.Affinity.PromptCacheKey, normalized.Affinity.LeadingMessages)
 }

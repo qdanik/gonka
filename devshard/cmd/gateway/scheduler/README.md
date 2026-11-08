@@ -7,6 +7,7 @@ A chat request needs a nonce, and a nonce is bound to a host by `nonce % groupSi
 - **Escrow choice** (`request_pick.go`, `escrow_pick.go`) — a load score over the live escrows, scaled by the chain's own host weights and carrying the burns each escrow's nonce cursor is about to cost.
 - **One actor per escrow** (`dispatcher.go`, `dispatcher_queue.go`) — the only goroutine that advances that escrow's nonce stream, so two requests can never take the same nonce.
 - **The match decision** (`match.go`, `decision.go`) — for the nonce just offered, either serve a waiting request, hold it briefly for a compatible one, burn it, or decline.
+- **Host affinity** (`target_reach.go`, `match.go`) — for a request bound for a participant, the escrow that reaches its slot in the fewest nonces, and the order in which waiters take the slots in between.
 - **Burns** (`ghost.go`) — a nonce that will serve nobody, named by the reason it was burned, because an operator reads the reason to decide what to do.
 - **Divergence blocks** (`divergence.go`) — a host whose post-state-root disagrees with the escrow gets one catch-up replay; after that it is blocked for that escrow.
 
@@ -17,6 +18,7 @@ It does not dispatch. It hands out an assignment and the [`engine`](../engine/) 
 ## Boundaries
 
 - **Seven host gates, in this order**: outside the allowlist, proof-of-compute-required, congestion windows full (or the host's advertised chat budget spent, see routing.md, "A host with no chat budget"), cut off, ejected, state-diverged, then excluded by this waiter. A participant named by `scheduler_unthrottled_participants` is not asked the first, third and fifth of those; the other four hold for everybody. See routing.md, "Unthrottled participants". The first six need no waiter and are memoised once per drain; only the seventh depends on who is asking, which is why `match`, `servable` and the escrow pick's burn forecast read the same `blocks` definition rather than three ladders. The forecast reads it unmemoised and across escrows, because the memo is keyed by participant alone and one escrow's state block is not another's. A capability refusal is counted, never routed on.
+- **A request bound for a host is never given another.** With `scheduler_affinity_enabled` the nonces between the cursor and its host go to waiters that can use them, else they are burned as `affinity_skip`, which never counts toward the forced send. See [routing.md](../docs/routing.md), "Host affinity".
 - **A full window is the one gate a burn run may cross.** After `scheduler_max_consecutive_burns` burns in a row the next binding is sent over it rather than burned; a cut-off, which holds a host already found broken, is never crossed. See [routing.md](../docs/routing.md), "The forced send".
 - **Predicates are frozen for the whole drain.** Reading them live lets a host look usable to the sweep that kept a waiter and unusable to the binding that would serve it — which burns a nonce every turn, forever.
 - **The divergence block and the spent replay outlive the escrow's actor.** Reaping an idle dispatcher is idleness, not resolution.

@@ -69,6 +69,7 @@ func (s *Scheduler) pickEscrow(profile RequestProfile, snapshot chain.PhaseSnaps
 			if ceiling != ExhaustionNone {
 				return Escrow{}, noCapacity(ceiling)
 			}
+			settleTarget(queued, profile, s.pinnedTargetFound(candidate, profile, snapshot, queued))
 			return candidate, nil
 		}
 		if retired, ok := s.retiredForEscalation(profile, snapshot.MaxNonce); ok {
@@ -86,13 +87,16 @@ func (s *Scheduler) pickEscrow(profile RequestProfile, snapshot chain.PhaseSnaps
 		reachable: reachableByAllowlist(s.participantAllowlist(), s.unthrottledParticipants()),
 		fleet:     s.fleetGates(profile.Model, snapshot),
 		ahead:     s.queuedAhead(candidates),
+		targeted:  s.targetLoads(candidates, profile),
 	}
 	regular := s.rankCandidates(candidates, ranking, false)
 	picked, admitted, declined := regular.picked, regular.admitted, regular.declined
 	moneyDeclined := regular.moneyDeclined
+	found := regular.target
 	if picked < 0 && regular.passedOverForHosts == 0 {
 		reserve := s.rankCandidates(candidates, ranking, true)
 		picked, admitted = reserve.picked, admitted+reserve.admitted
+		found = max(found, reserve.target)
 		moneyDeclined = moneyDeclined || reserve.moneyDeclined
 		if reserve.declined != ExhaustionNone {
 			declined = reserve.declined
@@ -108,7 +112,32 @@ func (s *Scheduler) pickEscrow(profile RequestProfile, snapshot chain.PhaseSnaps
 		}
 		return Escrow{}, noCapacity(declined)
 	}
+	settleTarget(queued, profile, found)
 	return candidates[picked], nil
+}
+
+func (s *Scheduler) pinnedTargetFound(candidate Escrow, profile RequestProfile, snapshot chain.PhaseSnapshot, queued *waiter) targetFound {
+	if profile.Target == NoTarget || profile.Escalation {
+		return targetAbsent
+	}
+	gates := s.fleetGates(profile.Model, snapshot).forEscrow(s.stateBlocked(candidate.ID), s.absentFromChain(candidate.ID), chatBudgetSpent(candidate))
+	ranking := escrowRanking{profile: profile, queued: queued, ahead: []uint64{0}, targeted: []targetLoad{{}}}
+	_, found := stepsToTarget(candidate, gates, ranking, 0)
+	return found
+}
+
+func settleTarget(queued *waiter, profile RequestProfile, found targetFound) {
+	if queued == nil || profile.Target == NoTarget || profile.Escalation {
+		return
+	}
+	switch found {
+	case targetReached:
+		queued.homeTo(profile.Target)
+	case targetBlocked:
+		queued.unhome(AffinityExceptionGateBlocked)
+	default:
+		queued.unhome(AffinityExceptionNotInGroup)
+	}
 }
 
 // escrowRanking is what one pick reads for every candidate it ranks.
@@ -123,6 +152,7 @@ type escrowRanking struct {
 	reachable  func(Escrow) bool
 	fleet      availability
 	ahead      []uint64
+	targeted   []targetLoad
 }
 
 type rankedPick struct {
@@ -131,6 +161,7 @@ type rankedPick struct {
 	declined           ExhaustionReason
 	passedOverForHosts int
 	moneyDeclined      bool
+	target             targetFound
 }
 
 type scoreTier struct {
@@ -152,6 +183,7 @@ func (tier *scoreTier) offer(index int, score float64) {
 // rankCandidates scores one tier, regulars or reserves, and counts the ones it passed over for their hosts. See routing.md, "A reserve escrow".
 func (s *Scheduler) rankCandidates(candidates []Escrow, ranking escrowRanking, reserveTier bool) rankedPick {
 	residue, funded, thin := newScoreTier(), newScoreTier(), newScoreTier()
+	reaching, reachingThin := newReachTier(), newReachTier()
 	result := rankedPick{picked: -1}
 	for index, candidate := range candidates {
 		if candidate.IsReserve != reserveTier {
@@ -186,8 +218,20 @@ func (s *Scheduler) rankCandidates(candidates []Escrow, ranking escrowRanking, r
 			result.passedOverForHosts++
 			continue
 		}
-		forecast := expectedBurns(candidate, ranking.fleet.forEscrow(s.stateBlocked(candidate.ID), s.absentFromChain(candidate.ID), chatBudgetSpent(candidate)), ranking.queued, ranking.ahead[index])
+		gates := ranking.fleet.forEscrow(s.stateBlocked(candidate.ID), s.absentFromChain(candidate.ID), chatBudgetSpent(candidate))
+		forecast := expectedBurns(candidate, gates, ranking.queued, ranking.ahead[index])
 		score := (float64(candidate.ActiveUsers+forecast) + float64(ranking.ahead[index])) / weight
+		if ranking.targeted != nil {
+			steps, found := stepsToTarget(candidate, gates, ranking, index)
+			result.target = max(result.target, found)
+			switch {
+			case found != targetReached:
+			case !reserveTier && !affordsAttempts(candidate, ranking.request, ranking.attempts):
+				reachingThin.offer(index, steps, score)
+			default:
+				reaching.offer(index, steps, score)
+			}
+		}
 		switch {
 		case !reserveTier && !affordsAttempts(candidate, ranking.request, ranking.attempts):
 			thin.offer(index, score)
@@ -204,6 +248,11 @@ func (s *Scheduler) rankCandidates(candidates []Escrow, ranking escrowRanking, r
 	}
 	if len(tied) == 0 {
 		tied = thin.tied
+	}
+	if len(reaching.tied) > 0 {
+		tied = reaching.tied
+	} else if len(reachingThin.tied) > 0 {
+		tied = reachingThin.tied
 	}
 	switch len(tied) {
 	case 0:

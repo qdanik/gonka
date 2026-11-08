@@ -14,6 +14,20 @@ const (
 	GhostReasonAbandoned           = "request_abandoned_before_dispatch"
 	GhostReasonPrepareFailed       = "nonce_spent_on_failed_prepare"
 	GhostReasonAbsentFromChain     = "participant_absent_from_chain_no_send"
+	GhostReasonAffinitySkip        = "affinity_skip"
+)
+
+// AffinityException is why a request was dispatched without the host guarantee; AffinityExceptionNone is a request that kept it or never had a key. See routing.md, "Host affinity".
+type AffinityException string
+
+const (
+	AffinityExceptionNone        AffinityException = ""
+	AffinityExceptionNewKey      AffinityException = "new_key"
+	AffinityExceptionExpired     AffinityException = "expired"
+	AffinityExceptionGateBlocked AffinityException = "gate_blocked"
+	AffinityExceptionNotInGroup  AffinityException = "not_in_group"
+
+	NoTarget = ""
 )
 
 // ExhaustionReason is why routing will no longer pick an escrow, reported to the lifecycle that replaces it; ExhaustionNone is an escrow it may still pick, and the fallback nonce ceiling is never reported, so it never leaves this package. See routing.md, "Picking an escrow".

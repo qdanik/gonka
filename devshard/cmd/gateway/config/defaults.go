@@ -132,6 +132,9 @@ func Defaults() Config {
 			MaxConsecutiveBurns: 2,
 			DispatchQueueDepth:  1_024,
 			WarmNewEscrows:      true,
+			AffinityEnabled:     false,
+			AffinityTTLMS:       600_000,
+			AffinityMaxEntries:  100_000,
 		},
 		TimeoutSweep: TimeoutSweep{
 			BudgetPerTick: 8,

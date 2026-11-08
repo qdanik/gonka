@@ -48,7 +48,11 @@ func (d *dispatcher) drain() (time.Time, bool) {
 		if forcingDue {
 			gates = avail.servingOverFullWindows()
 		}
+		d.lapseTargets(participants, gates)
 		offered.decision = match(binding, d.waiting, participants, gates, d.now(), d.matchWait)
+		if skipped, skipping := offered.decision.(burn); skipping && skipped.waiter != nil {
+			offered.refusedWaiter = skipped.waiter
+		}
 		switch decided := offered.decision.(type) {
 		case serve:
 			cost := slotCost(decided.waiter.profile)
@@ -131,7 +135,9 @@ func (d *dispatcher) drain() (time.Time, bool) {
 			}
 			d.recordGhost(burned)
 			offered.taken.releaseHold()
-			d.burnsInARow++
+			if outcome.kind != ghostAffinitySkip {
+				d.burnsInARow++
+			}
 			if d.spendBurnBudget(&burnBudget) {
 				return time.Time{}, false
 			}
@@ -144,6 +150,20 @@ func (d *dispatcher) drain() (time.Time, bool) {
 		default:
 			d.failWaiting(fmt.Errorf("escrow %s: session offered no binding", d.escrowID))
 			return time.Time{}, false
+		}
+	}
+}
+
+func (d *dispatcher) lapseTargets(participants []string, gates availability) {
+	for _, queued := range d.waiting {
+		if queued.target == NoTarget || queued.abandoned.Load() {
+			continue
+		}
+		switch {
+		case !slices.Contains(participants, queued.target):
+			queued.lapse(AffinityExceptionNotInGroup)
+		case gates.blocks(queued.target, queued) != blockNone:
+			queued.lapse(AffinityExceptionGateBlocked)
 		}
 	}
 }
@@ -301,6 +321,7 @@ func (d *dispatcher) handOff(served *waiter, taken reservation, prepared Prepare
 	assignment := Assignment{Escrow: d.escrowID, Host: taken.participant, Nonce: prepared, EscrowHold: taken.escrowHold, HostSlot: taken.hostSlot}
 	if served.deliver(pickResult{assignment: assignment}) {
 		d.recordAssigned(prepared.Nonce(), served.profile, served.enqueued)
+		d.recordAffinity(served, taken.participant)
 		return true
 	}
 	d.giveBack(taken)

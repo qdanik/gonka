@@ -13,7 +13,11 @@ type serve struct {
 	waiter           *waiter
 	despiteExclusion bool
 }
-type burn struct{ kind GhostKind }
+
+type burn struct {
+	kind   GhostKind
+	waiter *waiter
+}
 
 // hold leaves the bound nonce uncommitted until then, giving a compatible waiter a chance. See README, "The match decision".
 type hold struct{ until time.Time }
@@ -35,15 +39,20 @@ type waiter struct {
 	abandoned atomic.Bool
 	bound     bool
 
+	homedTo   string
+	target    string
+	exception AffinityException
+
 	handoff sync.Mutex
 }
 
 // newWaiter buffers replyCh so the dispatcher's handoff never blocks on the caller.
 func newWaiter(profile RequestProfile, enqueued time.Time) *waiter {
 	queued := &waiter{
-		profile:  profile,
-		enqueued: enqueued,
-		replyCh:  make(chan pickResult, 1),
+		profile:   profile,
+		enqueued:  enqueued,
+		replyCh:   make(chan pickResult, 1),
+		exception: profile.AffinityMiss,
 	}
 	if len(profile.Exclude) > 0 {
 		queued.exclude = make(map[string]bool, len(profile.Exclude))
@@ -52,6 +61,18 @@ func newWaiter(profile RequestProfile, enqueued time.Time) *waiter {
 		}
 	}
 	return queued
+}
+
+func (w *waiter) homeTo(participant string) {
+	w.homedTo, w.target, w.exception = participant, participant, AffinityExceptionNone
+}
+
+func (w *waiter) unhome(reason AffinityException) {
+	w.homedTo, w.target, w.exception = NoTarget, NoTarget, reason
+}
+
+func (w *waiter) lapse(reason AffinityException) {
+	w.target, w.exception = NoTarget, reason
 }
 
 // deliver never blocks: a full or abandoned reply channel means the caller is gone.

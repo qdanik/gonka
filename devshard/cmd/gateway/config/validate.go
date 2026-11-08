@@ -29,6 +29,8 @@ const (
 
 	maxConsecutiveBurns   = 1_000
 	maxDispatchQueueDepth = 65_536
+	maxAffinityTTLMS      = 86_400_000
+	maxAffinityEntries    = 10_000_000
 
 	maxSnapshotAgeSeconds          = 86_400
 	maxVersionsPollIntervalSeconds = 86_400
@@ -355,6 +357,12 @@ func (c *Config) validateScheduler(complain func(format string, args ...any)) {
 	}
 	if c.Scheduler.DispatchQueueDepth < 1 || c.Scheduler.DispatchQueueDepth > maxDispatchQueueDepth {
 		complain("scheduler_dispatch_queue_depth: %d must be in [1, %d]", c.Scheduler.DispatchQueueDepth, maxDispatchQueueDepth)
+	}
+	if c.Scheduler.AffinityTTLMS < 1 || c.Scheduler.AffinityTTLMS > maxAffinityTTLMS {
+		complain("scheduler_affinity_ttl_ms: %d must be in [1, %d]", c.Scheduler.AffinityTTLMS, maxAffinityTTLMS)
+	}
+	if c.Scheduler.AffinityMaxEntries < 1 || c.Scheduler.AffinityMaxEntries > maxAffinityEntries {
+		complain("scheduler_affinity_max_entries: %d must be in [1, %d]", c.Scheduler.AffinityMaxEntries, maxAffinityEntries)
 	}
 	for index, participant := range c.Scheduler.ParticipantAllowlist {
 		if problem := participantEntryProblem(participant); problem != "" {

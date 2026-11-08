@@ -7,6 +7,9 @@ type DispatchRecorder struct {
 	ghostBurns          *prometheus.CounterVec
 	nonceHolds          *prometheus.CounterVec
 	burnBudgetExhausted *prometheus.CounterVec
+	affinityHits        *prometheus.CounterVec
+	affinityExceptions  *prometheus.CounterVec
+	affinityBurns       prometheus.Counter
 }
 
 func NewDispatchRecorder(telemetry *Metrics) *DispatchRecorder {
@@ -23,8 +26,20 @@ func NewDispatchRecorder(telemetry *Metrics) *DispatchRecorder {
 			Name: "devshard_gateway_burn_budget_exhausted_total",
 			Help: "Total drains that stopped because an escrow's per-drain burn budget ran out.",
 		}, []string{"devshard_id"}),
+		affinityHits: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "devshard_gateway_affinity_hits_total",
+			Help: "Total requests that executed on the participant that served their conversation's previous turn.",
+		}, []string{"model"}),
+		affinityExceptions: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "devshard_gateway_affinity_exceptions_total",
+			Help: "Total requests of an affinity-keyed conversation dispatched without the host guarantee, by reason.",
+		}, []string{"model", "reason"}),
+		affinityBurns: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "devshard_gateway_affinity_burns_total",
+			Help: "Total nonces burned to reach a request's host; also counted in the ghost burns under reason affinity_skip.",
+		}),
 	}
-	telemetry.Register(recorder.ghostBurns, recorder.nonceHolds, recorder.burnBudgetExhausted)
+	telemetry.Register(recorder.ghostBurns, recorder.nonceHolds, recorder.burnBudgetExhausted, recorder.affinityHits, recorder.affinityExceptions, recorder.affinityBurns)
 	return recorder
 }
 
@@ -35,6 +50,16 @@ func (r *DispatchRecorder) GhostBurned(escrowID, participant, reason string) {
 		metricLabel(reason, labelUnknown),
 	).Inc()
 }
+
+func (r *DispatchRecorder) AffinityLanded(model string) {
+	r.affinityHits.WithLabelValues(metricLabel(model, labelUnknown)).Inc()
+}
+
+func (r *DispatchRecorder) AffinityException(model, reason string) {
+	r.affinityExceptions.WithLabelValues(metricLabel(model, labelUnknown), metricLabel(reason, labelUnknown)).Inc()
+}
+
+func (r *DispatchRecorder) AffinityBurned() { r.affinityBurns.Inc() }
 
 func (r *DispatchRecorder) NonceHeld(escrowID string) {
 	r.nonceHolds.WithLabelValues(metricLabel(escrowID, labelUnknown)).Inc()

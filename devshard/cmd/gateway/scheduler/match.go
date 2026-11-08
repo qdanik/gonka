@@ -168,7 +168,8 @@ func match(binding HostBinding, waiting []*waiter, participants []string, avail 
 		return burn{kind: ghostFor[reason]}
 	}
 
-	var oldestLive, excludedOnly *waiter
+	var candidates compatibleWaiters
+	var oldestLive, excludedOnly, skippedForTarget *waiter
 	for _, queued := range waiting {
 		if queued.abandoned.Load() {
 			continue
@@ -176,20 +177,37 @@ func match(binding HostBinding, waiting []*waiter, participants []string, avail 
 		if oldestLive == nil {
 			oldestLive = queued
 		}
+		if queued.target != NoTarget && queued.target != participant {
+			if skippedForTarget == nil {
+				skippedForTarget = queued
+			}
+			continue
+		}
 		switch avail.blocks(participant, queued) {
 		case blockNone:
-			return serve{waiter: queued}
+			candidates.offer(queued, participant)
 		case blockExcluded:
-			if excludedOnly == nil && avail.onlyThisHostIsLeft(participant, participants, queued) {
+			if excludedOnly == nil && !candidates.any() && avail.onlyThisHostIsLeft(participant, participants, queued) {
 				excludedOnly = queued
 			}
 		}
+	}
+	if chosen := candidates.next(); chosen != nil {
+		return serve{waiter: chosen}
 	}
 
 	if oldestLive == nil {
 		return decline{}
 	}
-	if until := oldestLive.enqueued.Add(matchWait); now.Before(until) {
+	until := oldestLive.enqueued.Add(matchWait)
+	staleWindowOpen := now.Before(until)
+	if skippedForTarget != nil {
+		if !staleWindowOpen && excludedOnly != nil {
+			return serve{waiter: excludedOnly, despiteExclusion: true}
+		}
+		return burn{kind: ghostAffinitySkip, waiter: skippedForTarget}
+	}
+	if staleWindowOpen {
 		return hold{until: until}
 	}
 	// See routing.md, "Serving a host the request excluded".
@@ -197,4 +215,31 @@ func match(binding HostBinding, waiting []*waiter, participants []string, avail 
 		return serve{waiter: excludedOnly, despiteExclusion: true}
 	}
 	return burn{kind: ghostExclude}
+}
+
+type compatibleWaiters struct {
+	free     *waiter
+	targeted *waiter
+}
+
+func (c *compatibleWaiters) any() bool { return c.free != nil || c.targeted != nil }
+
+func (c *compatibleWaiters) offer(queued *waiter, participant string) {
+	switch queued.target {
+	case participant:
+		if c.targeted == nil {
+			c.targeted = queued
+		}
+	default:
+		if c.free == nil {
+			c.free = queued
+		}
+	}
+}
+
+func (c *compatibleWaiters) next() *waiter {
+	if c.targeted != nil {
+		return c.targeted
+	}
+	return c.free
 }
