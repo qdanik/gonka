@@ -45,7 +45,8 @@ func TestAnErrorSharingAReadWithContentEndsTheAttemptAsAnErrorStream(t *testing.
 			attempt := streamAttemptToItsFinish(t, delivery.reads)
 
 			require.True(t, isErrorStreamAttempt(attempt), "error stream attempt")
-			require.True(t, errorMissClaimable(attempt, nil), "error miss claimable")
+			_, claimable := errorMissOutcome(attempt, nil)
+			require.True(t, claimable, "error miss claimable")
 			clientError := hostApplicationErrorFromInflight(attempt)
 			require.NotNil(t, clientError, "client-facing error")
 			require.JSONEq(t, string(errorPayload), string(clientError.jsonPayload()))

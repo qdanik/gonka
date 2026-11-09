@@ -11,7 +11,7 @@
 
 ## How the gateways use it
 
-`devshard/cmd/devshardctl` takes `DataLines` of every streamed read of a non-probe attempt while the attempt is still speculative (`retainErrorStreamLines`) and drops them once the attempt shows no error, marks the attempt complete on `IsDoneLine`, builds the claim's payload with `Payload` (`errorMissArtifacts`), and claims only when `ProvesErrorMiss` passes on it (`errorMissClaimable`). `devshard/cmd/gateway` does the same in its error-stream retainer (`engine/miss_proof.go`): `DataLines` on each read, `IsDoneLine` for completeness, `Payload` for the proof, which exists only when `ProvesErrorMiss` passes. Both bound their retainer with `MaxRetainedBytes`.
+`devshard/cmd/devshardctl` takes `DataLines` of every streamed read of a non-probe attempt while the attempt is still speculative (`retainErrorStreamLines`) and drops them once the attempt shows no error, marks the attempt complete on `IsDoneLine`, builds the claim's payload with `Payload` (`errorMissArtifacts`), and claims only when `ProvesErrorMiss` passes on it (`errorMissOutcome`). `devshard/cmd/gateway` does the same in its error-stream retainer (`engine/miss_proof.go`): `DataLines` on each read, `IsDoneLine` for completeness, `Payload` for the proof, which exists only when `ProvesErrorMiss` passes. Both bound their retainer with `MaxRetainedBytes`.
 
 ## The retention bound
 

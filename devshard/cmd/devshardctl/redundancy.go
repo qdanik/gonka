@@ -4075,14 +4075,10 @@ func inflightStillSending(inf *inflight) bool {
 	return inf != nil && inf.done != nil && !inflightDone(inf)
 }
 
-// shouldRunHandleTimeout reports whether HandleTimeout should be invoked for a
+// shouldRunHandleTimeoutOn reports whether HandleTimeout should be invoked for a
 // failed attempt. Some empty-stream attempts still post MsgFinishInference, but
 // others can fail before that finish marker exists, so the protocol outcome is
 // the only safe gate for timeout voting.
-func shouldRunHandleTimeout(inf *inflight, session *user.Session) bool {
-	return shouldRunHandleTimeoutOn(inf, session, errorMissClaimable(inf, session))
-}
-
 func shouldRunHandleTimeoutOn(inf *inflight, session nonceFinishedChecker, errorMiss bool) bool {
 	if inf == nil || session == nil {
 		return false
@@ -4214,27 +4210,21 @@ func errorMissEnabledFor(inf *inflight) bool {
 	return inf != nil && inf.errorTerminal
 }
 
-// errorMissRunnable is true when a terminal OpenAI error envelope was observed
-// AND the gateway holds a signed MsgFinishInference. Verifiers reject with
-// no_finish_tx if that artifact is missing. An SSE body that ends at EOF
-// after [DONE] with no devshard_meta Finish is not a miss: HandleTimeout waits
-// for the ordinary refusal/execution deadline instead. Stream chunks themselves
-// are not host-signed.
-func errorMissRunnable(inf *inflight, session *user.Session) bool {
+// errorMissOutcome reports, from one read of the attempt, whether a terminal
+// OpenAI error envelope was observed AND the gateway holds a signed
+// MsgFinishInference (hasFinish), and whether the retained stream also proves
+// the error (claimable). Verifiers reject with no_finish_tx if the Finish is
+// missing. An SSE body that ends at EOF after [DONE] with no devshard_meta
+// Finish is not a miss: HandleTimeout waits for the ordinary refusal/execution
+// deadline instead. Stream chunks themselves are not host-signed.
+func errorMissOutcome(inf *inflight, session *user.Session) (hasFinish, claimable bool) {
 	if inflightStillSending(inf) || !errorMissEnabledFor(inf) {
 		// Finish bytes live on resp; do not read them while SendOnly may still write.
-		return false
+		return false, false
 	}
-	finishTx, _ := errorMissArtifacts(inf, session)
-	return len(finishTx) > 0
-}
-
-func errorMissClaimable(inf *inflight, session *user.Session) bool {
-	if !errorMissRunnable(inf, session) {
-		return false
-	}
-	_, responsePayload := errorMissArtifacts(inf, session)
-	return streamevidence.ProvesErrorMiss(responsePayload)
+	finishTx, responsePayload := errorMissArtifacts(inf, session)
+	hasFinish = len(finishTx) > 0
+	return hasFinish, hasFinish && streamevidence.ProvesErrorMiss(responsePayload)
 }
 
 func emptyStreamWithoutWinnerTimeoutSkipReason(inf *inflight, session nonceFinishedChecker) (string, bool) {
@@ -5050,8 +5040,7 @@ func (e *Redundancy) voteTimeoutForFailedInflight(ctx context.Context, inf *infl
 		logInferenceStage(ctx, inf.escrowID, inf.nonce, "poc_probe_failed_no_timeout", "host", inf.hostID, "poc_reason", currentPoCPhaseReason())
 		return
 	}
-	errorMissHasFinish := errorMissRunnable(inf, e.session)
-	errorMiss := errorMissHasFinish && errorMissClaimable(inf, e.session)
+	errorMissHasFinish, errorMiss := errorMissOutcome(inf, e.session)
 	kind := timeoutKindForInflight(inf, errorMiss)
 	if errorMissEnabledFor(inf) && !errorMiss {
 		skipReason := "no_finish_artifact"

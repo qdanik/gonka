@@ -21,7 +21,7 @@ const errorStreamFixtures = "../../gatewayprotocol/streamevidence/testdata"
 //  1. For each error stream fixture in `gatewayprotocol/streamevidence/testdata`, ask `streamevidence.ProvesErrorMiss` whether the payload of the leading evidence lines that fit in `streamevidence.MaxRetainedBytes` proves the error.
 //  2. Write the fixture through a fresh `raceWriter` once as one read per SSE event and once as two reads split inside its error event, then flush the final event.
 //  3. End the send and give the attempt a Finish in its response mempool.
-//  4. Assert `errorMissClaimable` claims the miss exactly when the shared rule proves it over those retained lines.
+//  4. Assert the `claimable` result of `errorMissOutcome` is true exactly when the shared rule proves it over those retained lines.
 func TestErrorMissClaimableFollowsTheSharedEvidenceRule(t *testing.T) {
 	paths, err := filepath.Glob(filepath.Join(errorStreamFixtures, "*.sse"))
 	require.NoError(t, err)
@@ -44,7 +44,8 @@ func TestErrorMissClaimableFollowsTheSharedEvidenceRule(t *testing.T) {
 			t.Run(filepath.Base(path)+"/"+delivery.name, func(t *testing.T) {
 				attempt := streamAttemptToItsFinish(t, delivery.reads)
 
-				require.Equal(t, wantClaim, errorMissClaimable(attempt, nil))
+				_, claimable := errorMissOutcome(attempt, nil)
+				require.Equal(t, wantClaim, claimable)
 			})
 		}
 	}
@@ -52,7 +53,7 @@ func TestErrorMissClaimableFollowsTheSharedEvidenceRule(t *testing.T) {
 
 // Test flow:
 //  1. Build a finished attempt that saw a terminal error and holds a Finish in its response mempool but retained no evidence lines.
-//  2. Assert `errorMissRunnable` still reports it runnable and `errorMissClaimable` does not claim it, since its payload is empty.
+//  2. Assert `errorMissOutcome` still reports `hasFinish` but not `claimable`, since its payload is empty.
 func TestErrorMissClaimableRefusesAFinishWithoutEvidence(t *testing.T) {
 	const nonce = 7
 	inf := &inflight{
@@ -64,8 +65,9 @@ func TestErrorMissClaimableRefusesAFinishWithoutEvidence(t *testing.T) {
 		}},
 	}
 
-	require.True(t, errorMissRunnable(inf, nil))
-	require.False(t, errorMissClaimable(inf, nil))
+	hasFinish, claimable := errorMissOutcome(inf, nil)
+	require.True(t, hasFinish)
+	require.False(t, claimable)
 }
 
 func streamAttemptToItsFinish(t *testing.T, reads [][]byte) *inflight {
