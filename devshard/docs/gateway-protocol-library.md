@@ -24,7 +24,7 @@ devshard/gatewayprotocol/       README.md, guard_test.go
   probe/                        README.md, budget.go, budget_test.go
   settlement/                   README.md, message.go, order.go, root.go, tests
   settlementwire/               README.md, marshal.go, marshal_test.go, testdata/ (settle goldens)
-  streamevidence/               README.md, lines.go, payload.go, vocabulary.go, tests, testdata/ (error stream golden)
+  streamevidence/               README.md, lines.go, payload.go, vocabulary.go, tests, testdata/ (error stream golden, long error stream fixture)
   timeoutclaim/                 README.md, claim.go, payload.go, tests
 ```
 
@@ -52,9 +52,9 @@ Owns the token budget of a probe: `MaxTokens`, the reservation floor `state.MinR
 
 ### 3.5 `streamevidence`
 
-Owns which lines of an error stream are evidence (`DataLines`: `data: ` lines with a trailing carriage return trimmed, without the devshard receipt and meta envelopes), the `[DONE]` test that marks a retained stream complete (`IsDoneLine`), and the error-miss payload those lines serialize into (`Payload`, the JSON of `completionapi.SerializedStreamedResponse`). A verifier hashes the payload and compares it with the Finish transaction's hashes, so a line kept or dropped differently by one gateway turns an accepted claim into a rejected one. The envelope keys and the terminator marker sit in its `vocabulary.go`.
+Owns which lines of an error stream are evidence (`DataLines`: `data: ` lines with a trailing carriage return trimmed, without the devshard receipt and meta envelopes), the `[DONE]` test that marks a retained stream complete (`IsDoneLine`), and the error-miss payload those lines serialize into (`Payload`, the JSON of `completionapi.SerializedStreamedResponse`). It also owns the most evidence a gateway retains of one attempt (`MaxRetainedBytes`). A verifier hashes the payload and compares it with the Finish transaction's hashes, so a line kept or dropped differently by one gateway turns an accepted claim into a rejected one, and a stream cut by the bound is never accepted. The bound's value, how lines count against it and why are in the package README, "The retention bound". The envelope keys and the terminator marker sit in its `vocabulary.go`.
 
-It does not own the retainer: how many bytes of evidence a gateway keeps, what it does when that bound is hit, and how the retained lines are released. The gateways differ on the bound (devshardctl reads it from `GATEWAY_ERROR_STREAM_MAX_ATTEMPT_BYTES` and charges its participant classify budget per line, the new gateway keeps a fixed bound) and each keeps its own retainer.
+It does not own the retainer: what a gateway does when the bound is hit, the memory budget it charges retained lines to, and how they are released. Each gateway keeps its own retainer and may stop below the bound when that budget refuses (devshardctl's participant or global classify budget, the new gateway's reassembly budget).
 
 ## 4. Allowed imports and the guard
 

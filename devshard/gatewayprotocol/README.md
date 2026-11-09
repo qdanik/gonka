@@ -2,7 +2,7 @@
 
 Two gateways talk to the same hosts and the same chain: `devshard/cmd/devshardctl` and `devshard/cmd/gateway`. A rule lives in this tree when a host, a verifier or the chain would reject, pay differently or judge differently if it received the other gateway's result. Everything else is gateway-local and stays in its gateway: locking, memory ownership, panic recovery, HTTP, logging, metrics, and choices no other party can tell apart, such as a byte layout the chain decodes to the same message.
 
-A protocol change is made here, once. Today devshardctl takes its settlement root from `settlement.Root` and the slot order of its settle lists from `settlement.HostStatsBySlot` and `settlement.SignaturesBySlot`, and both gateways take the claim-or-vote choice from `timeoutclaim`, the probe budget from `probe` and the evidence of an error stream from `streamevidence`; `settlementwire` is used by `devshard/cmd/gateway` alone, and devshardctl keeps its own encoder until a change of its own moves it onto it. A gateway that needs a rule to behave differently changes the rule here or argues that it is local and moves it out.
+A protocol change is made here, once. Today devshardctl takes its settlement root from `settlement.Root` and the slot order of its settle lists from `settlement.HostStatsBySlot` and `settlement.SignaturesBySlot`, and both gateways take the claim-or-vote choice from `timeoutclaim`, the probe budget from `probe` and the evidence of an error stream and its retention bound from `streamevidence`; `settlementwire` is used by `devshard/cmd/gateway` alone, and devshardctl keeps its own encoder until a change of its own moves it onto it. A gateway that needs a rule to behave differently changes the rule here or argues that it is local and moves it out.
 
 ## Layers
 
@@ -11,7 +11,7 @@ A protocol change is made here, once. Today devshardctl takes its settlement roo
 | [`probe`](./probe/README.md) | the token budget of a probe: its reservation and its declared input length | `devshard/state`, `devshard/user`, standard library |
 | [`settlement`](./settlement/README.md) | the settle message, the slot order of its lists, the settlement root | `devshard/state`, `devshard/types`, standard library |
 | [`settlementwire`](./settlementwire/README.md) | the mapping from the settle message to `MsgSettleDevshardEscrow` and its marshalling | `settlement`, `github.com/productscience/inference/x/inference/types`, standard library |
-| [`streamevidence`](./streamevidence/README.md) | which lines of an error stream are evidence, the `[DONE]` test, and the error-miss payload they serialize into | `common/completionapi`, standard library |
+| [`streamevidence`](./streamevidence/README.md) | which lines of an error stream are evidence, the `[DONE]` test, the error-miss payload they serialize into, and the most of them a gateway retains | `common/completionapi`, standard library |
 | [`timeoutclaim`](./timeoutclaim/README.md) | the choice between an error-miss claim and a timeout vote, and the timeout vote's payload | `devshard/host`, `devshard/types`, `devshard/user`, standard library |
 
 Forbidden in every package of the tree: `devshard/cmd/...`, `sync`, `sync/atomic`, `net/http`, `os`, `log`, `log/slog`, `devshard/logging`, `devshard/observability`, `github.com/prometheus/...`. The tree holds rules, not runtime: state, transport and observability belong to the gateway that calls it.
