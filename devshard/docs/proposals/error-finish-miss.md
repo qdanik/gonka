@@ -250,7 +250,7 @@ work:
    - `HostStats.Cost += ActualCost` — this is the settlement payout accumulator
    - status becomes `StatusFinished`
 
-`HostStats.Cost` is what settlement pays the executor (`chain_tx_encode.go`). If
+`HostStats.Cost` is what settlement pays the executor (`common/chain/tx/encode.go`). If
 `MsgErrorMiss` then only flipped status to timed-out and incremented
 `Missed`, the host would be **paid and marked missed** for the same inference,
 and the client would keep paying `ActualCost`.
@@ -328,7 +328,7 @@ its pre-finish value.
 | Not validated | `collectValidationJobs` only samples `rec.Status == StatusFinished` (`host/host.go:1160`); `StatusTimedOut` is skipped. |
 | Not counted as finished | Status is `StatusTimedOut`; cost unwound above. |
 | Sealing | `StatusTimedOut` is already in `sealEligibleStatus` and `terminalAutoSealStatus` (`state/seal.go:256`, `:268`). |
-| Settlement | `HostStats.Missed` is already serialized to chain (`chain_tx_encode.go:89`, `state.proto` field 2). |
+| Settlement | `HostStats.Missed` is already serialized to chain (`common/chain/tx/encode.go:86`, `state.proto` field 2). |
 | Late validation votes | `applyValidation` / `applyValidationVote` status gates already reject or no-op post-terminal records. |
 | State root | Vote content is not part of the root, so `ErrorMissVoteContent.response_hash` moves no hash. New sessions get different roots only because they carry a new protocol tag (see rollout), which is inherent to shipping under a new approved name. |
 
