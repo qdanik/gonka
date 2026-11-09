@@ -22,6 +22,7 @@ type MissProof struct {
 	Complete        bool
 	Truncated       bool
 
+	finishTx        []byte
 	releaseFinish   func()
 	finishOwnership atomic.Int32
 }

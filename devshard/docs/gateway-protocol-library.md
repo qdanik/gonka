@@ -42,9 +42,9 @@ Owns `Marshal(settler, message)`: the mapping from `settlement.Message` onto `Ms
 
 ### 3.3 `timeoutclaim`
 
-Owns the choice between an error-miss claim and a timeout vote for a nonce left unfinished (`Resolve` over a `Handler`, which `*user.Session` satisfies): a non-empty Finish transaction claims the miss, otherwise the timeout is voted. It also owns the timeout vote's payload, built from the dispatched params (`PayloadFromParams`, devshardctl) or from the committed record and the dispatched prompt (`PayloadFromRecord`, the new gateway); the record is built from those params, so the two agree for a committed nonce.
+Owns the choice between an error-miss claim and a timeout vote for a nonce left unfinished (`Resolve` over a `Handler`, which `*user.Session` satisfies): a non-empty Finish transaction claims the miss, otherwise the timeout is voted. It owns the Finish the claim carries (`FinishTx`); `devshard/gatewayprotocol/timeoutclaim/README.md` gives the rule and its reason. It also owns the timeout vote's payload, built from the dispatched params (`PayloadFromParams`, devshardctl) or from the committed record and the dispatched prompt (`PayloadFromRecord`, the new gateway); the record is built from those params, so the two agree for a committed nonce.
 
-It does not own when a miss claim is attempted or where its Finish comes from, nor the payload for a nonce that never committed (devshardctl builds it from params, the new gateway sends none). The gateways differ on all three and each keeps its own. Deadlines and waiting stay in the gateways too.
+It does not own when a miss claim is attempted, nor the payload for a nonce that never committed (devshardctl builds it from params, the new gateway sends none). The gateways differ on both and each keeps its own. Deadlines and waiting stay in the gateways too.
 
 ### 3.4 `probe`
 
