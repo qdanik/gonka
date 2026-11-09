@@ -2143,18 +2143,22 @@ func errorMissArtifacts(inf *inflight, session *user.Session) (finishTx, respons
 	return finishTx, responsePayload
 }
 
+func timeoutVotePayload(session *user.Session, nonce uint64, prompt []byte) *host.InferencePayload {
+	return timeoutclaim.Payload(session.StateMachine().GetInference, nonce, prompt)
+}
+
 func (e *Redundancy) runHandleTimeout(ctx context.Context, inf *inflight, params user.InferenceParams, errorMiss bool) (user.TimeoutResult, error) {
 	var finishTx, responsePayload []byte
 	if errorMiss {
 		finishTx, responsePayload = errorMissArtifacts(inf, e.session)
 	}
-	return timeoutclaim.Resolve(ctx, e.session, inf.nonce, inf.sendTime, timeoutclaim.PayloadFromParams(params), finishTx, responsePayload)
+	return timeoutclaim.Resolve(ctx, e.session, inf.nonce, inf.sendTime, timeoutVotePayload(e.session, inf.nonce, params.Prompt), finishTx, responsePayload)
 }
 
 // runVoteTimeout votes an already-due protocol timeout without sleeping. When
 // needsWait is true the caller must wait off the drain barrier and retry.
 func (e *Redundancy) runVoteTimeout(ctx context.Context, inf *inflight, params user.InferenceParams, reason types.TimeoutReason) (result user.TimeoutResult, needsWait bool, err error) {
-	return e.session.VoteTimeout(ctx, inf.nonce, inf.sendTime, timeoutclaim.PayloadFromParams(params), reason)
+	return e.session.VoteTimeout(ctx, inf.nonce, inf.sendTime, timeoutVotePayload(e.session, inf.nonce, params.Prompt), reason)
 }
 
 func (rw *raceWriter) Flush() {
@@ -4141,7 +4145,7 @@ func (e *Redundancy) scheduleDeadlineHandleTimeout(
 	)
 	e.recordGatewayTimeoutAction(inf, params, kind, "scheduled", "deadline_not_due")
 	if reasonLabel == "refused" {
-		e.rememberRefusalPayload(inf.nonce, timeoutclaim.PayloadFromParams(params))
+		e.rememberRefusalPayload(inf.nonce, timeoutVotePayload(e.session, inf.nonce, params.Prompt))
 	}
 
 	unpinFinish := errorMissEnabledFor(inf)
