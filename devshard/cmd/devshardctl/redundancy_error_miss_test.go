@@ -6,6 +6,8 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -213,6 +215,41 @@ func TestRaceWriter_ErrorStreamCappedAndTruncated(t *testing.T) {
 	require.True(t, inf.errorStreamTruncated)
 	require.Equal(t, "truncated", errorMissRejectLabel(inf))
 	require.Less(t, inf.errorStreamBytes, 150+len(auditErrLine))
+}
+
+// Test flow:
+//  1. Read the shared terminal-error fixture `long_error_stream.sse` from `gatewayprotocol/streamevidence/testdata`: about 100 KiB of 255-byte content lines, then an error line and `[DONE]`.
+//  2. Take the fixture's evidence lines, keep the leading ones whose bytes plus one separator each fit in `streamevidence.MaxRetainedBytes`, and assert the error line is not among them.
+//  3. Write the fixture one event at a time through a race writer of an error attempt, with the evidence cap at `streamevidence.MaxRetainedBytes`, and flush it.
+//  4. Assert the attempt retained exactly those leading lines, is marked truncated and not complete, and labels a rejected claim as truncated.
+func TestRaceWriter_LongErrorStreamStopsAtTheSharedEvidenceCap(t *testing.T) {
+	fixture, err := os.ReadFile(filepath.Join("..", "..", "gatewayprotocol", "streamevidence", "testdata", "long_error_stream.sse"))
+	require.NoError(t, err)
+	lines := streamevidence.DataLines(fixture)
+	var want []string
+	heldBytes := 0
+	for _, line := range lines {
+		heldBytes += len(line) + 1
+		if heldBytes > streamevidence.MaxRetainedBytes {
+			break
+		}
+		want = append(want, line)
+	}
+	require.Less(t, len(want), len(lines)-1, "the fixture's error line must lie past the cap")
+	ctx := context.Background()
+	var sink bytes.Buffer
+	rw, inf := newErrorRaceWriter(t, newRaceGroup(ctx, ctx, "escrow-x", &sink), 1)
+
+	for _, event := range bytes.SplitAfter(fixture, []byte("\n\n")) {
+		_, err = rw.Write(event)
+		require.NoError(t, err)
+	}
+	rw.flushClassify()
+
+	require.Equal(t, want, inf.errorStreamLines)
+	require.True(t, inf.errorStreamTruncated)
+	require.False(t, inf.errorStreamComplete)
+	require.Equal(t, "truncated", errorMissRejectLabel(inf))
 }
 
 func TestRaceWriter_CancelledErrorAttemptIsPrefixNotDrift(t *testing.T) {

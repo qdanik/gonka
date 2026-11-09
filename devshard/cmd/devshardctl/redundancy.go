@@ -1446,7 +1446,6 @@ const (
 	defaultMaxClassifyPartial            = 1 << 20   // 1 MiB per attempt
 	defaultMaxClassifyPartialParticipant = 10 << 20  // 10 MiB per participant
 	defaultMaxClassifyPartialGlobal      = 100 << 20 // 100 MiB process-wide
-	defaultMaxErrorStreamBytes           = 1 << 20   // 1 MiB per error attempt
 	defaultMaxPendingPreludeBytes        = 1 << 20
 	defaultMaxPendingPreludeParticipant  = 10 << 20
 	defaultMaxPendingPreludeGlobal       = 100 << 20
@@ -1461,7 +1460,6 @@ var (
 	maxClassifyPartial                  = defaultMaxClassifyPartial
 	maxClassifyPartialParticipant int64 = defaultMaxClassifyPartialParticipant
 	maxClassifyPartialGlobal      int64 = defaultMaxClassifyPartialGlobal
-	maxErrorStreamBytes                 = defaultMaxErrorStreamBytes
 	maxPendingPreludeBytes              = defaultMaxPendingPreludeBytes
 	maxPendingPreludeParticipant  int64 = defaultMaxPendingPreludeParticipant
 	maxPendingPreludeGlobal       int64 = defaultMaxPendingPreludeGlobal
@@ -1476,7 +1474,6 @@ func configureClassifyCapsFromEnv() {
 	maxClassifyPartial = int(readInt64Env("GATEWAY_CLASSIFY_MAX_ATTEMPT_BYTES", int64(defaultMaxClassifyPartial)))
 	maxClassifyPartialParticipant = readInt64Env("GATEWAY_CLASSIFY_MAX_PARTICIPANT_BYTES", defaultMaxClassifyPartialParticipant)
 	maxClassifyPartialGlobal = readInt64Env("GATEWAY_CLASSIFY_MAX_GLOBAL_BYTES", defaultMaxClassifyPartialGlobal)
-	maxErrorStreamBytes = int(readInt64Env("GATEWAY_ERROR_STREAM_MAX_ATTEMPT_BYTES", int64(defaultMaxErrorStreamBytes)))
 	maxPendingPreludeBytes = int(readInt64Env("GATEWAY_PENDING_PRELUDE_MAX_ATTEMPT_BYTES", int64(defaultMaxPendingPreludeBytes)))
 	maxPendingPreludeParticipant = readInt64Env("GATEWAY_PENDING_PRELUDE_MAX_PARTICIPANT_BYTES", defaultMaxPendingPreludeParticipant)
 	maxPendingPreludeGlobal = readInt64Env("GATEWAY_PENDING_PRELUDE_MAX_GLOBAL_BYTES", defaultMaxPendingPreludeGlobal)
@@ -2022,6 +2019,8 @@ func (rw *raceWriter) clearErrorStreamRetention() {
 	inf.releaseErrorStreamRetention()
 }
 
+var maxErrorStreamBytes = streamevidence.MaxRetainedBytes
+
 func (rw *raceWriter) appendErrorStreamLines(lines []string) {
 	inf := rw.inf
 	if inf == nil || inf.errorStreamTruncated {
@@ -2131,12 +2130,15 @@ func errorMissArtifacts(inf *inflight, session *user.Session) (finishTx, respons
 	if inf == nil {
 		return nil, nil
 	}
+	var replyFinishTx []byte
 	if inf.resp != nil {
-		finishTx = user.MarshalFinishTx(inf.resp.Mempool, inf.nonce)
+		replyFinishTx = user.MarshalFinishTx(inf.resp.Mempool, inf.nonce)
 	}
-	if len(finishTx) == 0 && session != nil {
-		finishTx = session.FinishTxFor(inf.nonce)
+	var queued timeoutclaim.FinishSource
+	if session != nil {
+		queued = session
 	}
+	finishTx = timeoutclaim.FinishTx(replyFinishTx, inf.nonce, queued)
 	if len(inf.errorStreamLines) > 0 {
 		responsePayload, _ = streamevidence.Payload(inf.errorStreamLines)
 	}
