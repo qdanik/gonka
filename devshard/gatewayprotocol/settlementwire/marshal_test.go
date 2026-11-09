@@ -43,6 +43,27 @@ func fixedMessageEmptyOptional() settlement.Message {
 	}
 }
 
+func fixedMessageZeroScalars() settlement.Message {
+	return settlement.Message{
+		EscrowID:  125,
+		StateRoot: []byte("fixed-state-root-32-bytes-long!"),
+		Nonce:     456,
+		RestHash:  []byte("fixed-rest-hash-bytes"),
+		HostStats: []settlement.HostStat{
+			{SlotID: 0},
+			{SlotID: 1, Cost: 400},
+			{SlotID: 2, Missed: 3, Invalid: 1, Cost: 555, RequiredValidations: 10, CompletedValidations: 9},
+		},
+		SlotSignatures: []settlement.SlotSignature{
+			{SlotID: 0, Signature: []byte("fixed-signature-zero")},
+			{SlotID: 1, Signature: []byte("fixed-signature-one")},
+			{SlotID: 2, Signature: []byte("fixed-signature-two")},
+		},
+		Fees:    789,
+		Version: "v1.2.3",
+	}
+}
+
 func loadGolden(t *testing.T, name string) []byte {
 	t.Helper()
 	raw, err := os.ReadFile(filepath.Join("testdata", name+".b64"))
@@ -66,12 +87,13 @@ func mustEncode(t *testing.T, encode func() ([]byte, error)) []byte {
 }
 
 // Test flow:
-//  1. Marshal a full settle message and one with empty host stats and signatures through `Marshal`.
+//  1. Marshal a full settle message, one with empty host stats and signatures, and one whose slot 0 and counters are zero through `Marshal`.
 //  2. Map one host stat and one slot signature through the package's mappings and marshal each chain entry alone.
 //  3. For each case, load its golden fixture and assert the bytes match exactly.
 func TestMarshalMatchesGoldens(t *testing.T) {
 	settleFull := mustEncode(t, func() ([]byte, error) { return Marshal(fixedSettler, fixedMessageFull()) })
 	settleEmptyOptional := mustEncode(t, func() ([]byte, error) { return Marshal(fixedSettler, fixedMessageEmptyOptional()) })
+	settleZeroScalars := mustEncode(t, func() ([]byte, error) { return Marshal(fixedSettler, fixedMessageZeroScalars()) })
 	hostStats := mustEncode(t, chainHostStats([]settlement.HostStat{
 		{SlotID: 42, Missed: 3, Invalid: 1, Cost: 555, RequiredValidations: 10, CompletedValidations: 9},
 	})[0].Marshal)
@@ -85,6 +107,7 @@ func TestMarshalMatchesGoldens(t *testing.T) {
 	}{
 		{"settle_msg_full", settleFull},
 		{"settle_msg_empty_optional", settleEmptyOptional},
+		{"settle_msg_zero_scalars", settleZeroScalars},
 		{"settlement_host_stats", hostStats},
 		{"slot_signature", slotSignature},
 	}
