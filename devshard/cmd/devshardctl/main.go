@@ -25,7 +25,6 @@ import (
 	"devshard/profiling"
 	"devshard/runtimeparams"
 	"devshard/state"
-	"devshard/types"
 	"devshard/user"
 )
 
@@ -66,22 +65,6 @@ type HostStatsJSON struct {
 	Cost                 uint64 `json:"cost"`
 	RequiredValidations  uint32 `json:"required_validations,omitempty"`
 	CompletedValidations uint32 `json:"completed_validations,omitempty"`
-}
-
-func hostStatsJSONFromDomain(slot uint32, hs *types.HostStats) HostStatsJSON {
-	entry := HostStatsJSON{
-		SlotID:  slot,
-		Missed:  hs.Missed,
-		Invalid: hs.Invalid,
-		Cost:    hs.Cost,
-	}
-	if hs.RequiredValidations != 0 {
-		entry.RequiredValidations = hs.RequiredValidations
-	}
-	if hs.CompletedValidations != 0 {
-		entry.CompletedValidations = hs.CompletedValidations
-	}
-	return entry
 }
 
 type SlotSignatureJSON struct {
@@ -892,13 +875,13 @@ func buildSettlementJSON(p *state.SettlementPayload) (SettlementJSON, error) {
 	}
 
 	stats := make([]HostStatsJSON, 0, len(p.HostStats))
-	for slot, hs := range p.HostStats {
-		stats = append(stats, hostStatsJSONFromDomain(slot, hs))
+	for _, hostStat := range settlement.HostStatsBySlot(p.HostStats) {
+		stats = append(stats, HostStatsJSON(hostStat))
 	}
 
 	sigs := make([]SlotSignatureJSON, 0, len(p.Signatures))
-	for slot, sig := range p.Signatures {
-		sigs = append(sigs, SlotSignatureJSON{SlotID: slot, Signature: base64.StdEncoding.EncodeToString(sig)})
+	for _, signature := range settlement.SignaturesBySlot(p.Signatures) {
+		sigs = append(sigs, SlotSignatureJSON{SlotID: signature.SlotID, Signature: base64.StdEncoding.EncodeToString(signature.Signature)})
 	}
 
 	return SettlementJSON{

@@ -113,7 +113,7 @@ After a successful `Finalize`, the registry hands the session to the `Retiring` 
 
 The payload carries `user.Session.SettlementSignatures`: each signature checked against the gateway's own state root, spread over every slot its validator owns and copied under the session lock. Short of a checked quorum it carries every signature the session holds, copied under the same lock (`SignaturesAt`), and the shortfall is narrated as unverifiable: a read-only session has no warm-key resolver, so a signature by a warm key the state has not cached yet fails here and passes on chain. Before a payload leaves, `settlementUnverifiable` runs the chain's own check over it — recomputed state root, recovered signers, and weight against 2/3+1 — using the snapshot's group and warm keys, and against the same host stats the transaction will carry rather than the raw map, which may hold nil slots. It **warns and never blocks**: warm keys are populated lazily, so a refusal here can freeze a settlement the chain would have accepted.
 
-The message itself, its slot order, the dropping of nil host stats and the state root come from [`devshard/gatewayprotocol/settlement`](../../../gatewayprotocol/settlement/README.md), which devshardctl computes its root with too; the registry keeps the escrow-id parsing, the signature choice and the narration.
+The message itself, its slot order, the dropping of nil host stats and the state root come from [`devshard/gatewayprotocol/settlement`](../../../gatewayprotocol/settlement/README.md), which devshardctl takes its root and its list order from too; the registry keeps the escrow-id parsing, the signature choice and the narration.
 
 ## Read next
 

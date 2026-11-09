@@ -2,7 +2,7 @@
 
 Two gateways talk to the same hosts and the same chain: `devshard/cmd/devshardctl` and `devshard/cmd/gateway`. A rule lives in this tree when a host, a verifier or the chain would reject, pay differently or judge differently if it received the other gateway's result. Everything else is gateway-local and stays in its gateway: locking, memory ownership, panic recovery, HTTP, logging, metrics, and choices no other party can tell apart, such as a byte layout the chain decodes to the same message.
 
-A protocol change is made here, once. Today devshardctl takes its settlement root from `settlement.Root`, and both gateways take the claim-or-vote choice from `timeoutclaim`, the probe budget from `probe` and the evidence of an error stream from `streamevidence`; the slot order and `settlementwire` are used by `devshard/cmd/gateway` alone, and devshardctl keeps its own list order and encoder until a change of its own moves it onto them. A gateway that needs a rule to behave differently changes the rule here or argues that it is local and moves it out.
+A protocol change is made here, once. Today devshardctl takes its settlement root from `settlement.Root` and the slot order of its settle lists from `settlement.HostStatsBySlot` and `settlement.SignaturesBySlot`, and both gateways take the claim-or-vote choice from `timeoutclaim`, the probe budget from `probe` and the evidence of an error stream from `streamevidence`; `settlementwire` is used by `devshard/cmd/gateway` alone, and devshardctl keeps its own encoder until a change of its own moves it onto it. A gateway that needs a rule to behave differently changes the rule here or argues that it is local and moves it out.
 
 ## Layers
 
