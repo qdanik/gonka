@@ -350,6 +350,10 @@ func (s *Server) race(w http.ResponseWriter, r *http.Request, identity credentia
 	client := newClientStream(w, requestID, normalized.ClientStream, normalized.ClientUsage, normalized.Logprobs, s.buffers)
 	defer client.discard()
 	outputTokens := outputTokenBudget(normalized)
+	session := s.conversation(r, identity, normalized)
+	if session.issued != affinity.NoSession {
+		client.Header().Set(SessionKeyHeader, session.issued)
+	}
 	outcome, err := s.inference.Run(r.Context(), engine.Request{
 		RequestID:               requestID,
 		Model:                   normalized.Model,
@@ -361,7 +365,9 @@ func (s *Server) race(w http.ResponseWriter, r *http.Request, identity credentia
 		OutputTokens:            outputTokens,
 		ClientStream:            normalized.ClientStream,
 		EmptyAnswerCountsTokens: normalized.EmptyAnswerCountsTokens,
-		AffinityKey:             affinityKey(r, identity, normalized),
+		AffinityKey:             session.lookup,
+		SessionDigest:           session.digest,
+		IssuedSession:           session.issued,
 		OnEscrow:                func(escrowID string) { client.Header().Set(EscrowHeader, escrowID) },
 		OnFinished:              slot.share(),
 
@@ -372,6 +378,7 @@ func (s *Server) race(w http.ResponseWriter, r *http.Request, identity credentia
 			MaxTokens:                    outputTokens,
 			StartedAt:                    s.now().Unix(),
 			LogprobsOptimizationOverride: logprobsOptimization,
+			SessionKey:                   session.digest.Hex(),
 		},
 	}, client)
 	if err != nil {
@@ -405,4 +412,29 @@ func affinityKey(r *http.Request, identity credentials, normalized filters.Resul
 	}
 	bearer, _ := bearerKey(r.Header.Get("Authorization"))
 	return affinity.KeyFor(bearer, normalized.Model, normalized.Affinity.PromptCacheKey, normalized.Affinity.LeadingMessages)
+}
+
+type conversation struct {
+	lookup affinity.Key
+	digest affinity.Key
+	issued string
+}
+
+func (s *Server) conversation(r *http.Request, identity credentials, normalized filters.Result) conversation {
+	lookup := affinityKey(r, identity, normalized)
+	if lookup == affinity.NoKey || normalized.Affinity.PromptCacheKey != filters.NoPromptCacheKey {
+		return conversation{lookup: lookup, digest: lookup, issued: affinity.NoSession}
+	}
+	issued := s.issuedSession(lookup)
+	bearer, _ := bearerKey(r.Header.Get("Authorization"))
+	return conversation{lookup: lookup, digest: affinity.KeyFor(bearer, normalized.Model, issued, nil), issued: issued}
+}
+
+func (s *Server) issuedSession(lookup affinity.Key) string {
+	if s.issuedSessions != nil {
+		if issued := s.issuedSessions.Session(lookup); issued != affinity.NoSession {
+			return issued
+		}
+	}
+	return affinity.NewSession()
 }

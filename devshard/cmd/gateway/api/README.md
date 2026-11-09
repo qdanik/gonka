@@ -28,7 +28,7 @@ The only package that speaks HTTP to a client, and the one that decides what a f
 
 ## What the server is given
 
-`Deps` is everything the boundary reads or calls. `New` requires every field except `Version`, `RequestIDs`, `StopTokenVocabulary` and `PromptTokens`. The first two default to empty and to a random id generator; a nil `StopTokenVocabulary` refuses every request that carries `stop_token_ids`, since no id can be proven inside the model's vocabulary without it (see [`filters/README.md`](../filters/README.md), "Stop token ids"); a nil `PromptTokens` checks no prompt against its model's context length, which is what the composition root wires without a chain to read a tokenizer pin from.
+`Deps` is everything the boundary reads or calls. `New` requires every field except `Version`, `RequestIDs`, `StopTokenVocabulary`, `PromptTokens` and `IssuedSessions`. The first two default to empty and to a random id generator; a nil `StopTokenVocabulary` refuses every request that carries `stop_token_ids`, since no id can be proven inside the model's vocabulary without it (see [`filters/README.md`](../filters/README.md), "Stop token ids"); a nil `PromptTokens` checks no prompt against its model's context length, which is what the composition root wires without a chain to read a tokenizer pin from; a nil `IssuedSessions` mints a new session key for every request that sends none, so a client that never echoes its key gets a different one each turn.
 
 `Operations` holds the lifecycle actions the operator routes trigger. They span the chain client, the escrow manager and the registry, so the composition root implements them and this package only calls them.
 

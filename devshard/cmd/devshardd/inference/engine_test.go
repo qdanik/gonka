@@ -104,7 +104,7 @@ func TestDoWithLockedNode_GRPCSuccessObserves(t *testing.T) {
 	mgr := mlnodeclient.NewManager(time.Hour)
 	eng := newTestEngine(ml, mgr, nil)
 
-	resp, err := eng.doWithLockedNode(context.Background(), observability.PathExecute, "model-a", "42",
+	resp, err := eng.doWithLockedNode(context.Background(), observability.PathExecute, "model-a", "42", noSessionKey,
 		func(endpoint string) (*http.Response, error) {
 			return http.Get(endpoint)
 		})
@@ -172,7 +172,7 @@ func TestDoWithLockedNode_EmitsMLNodeSpans(t *testing.T) {
 	eng := newTestEngine(ml, mlnodeclient.NewManager(time.Hour), nil)
 
 	ctx, caller := otel.Tracer("test").Start(context.Background(), "caller")
-	resp, err := eng.doWithLockedNode(ctx, observability.PathExecute, "model-a", "42",
+	resp, err := eng.doWithLockedNode(ctx, observability.PathExecute, "model-a", "42", noSessionKey,
 		func(endpoint string) (*http.Response, error) { return http.Get(endpoint) })
 	require.NoError(t, err)
 	_, _ = io.Copy(io.Discard, resp.Body)
@@ -209,7 +209,7 @@ func TestDoWithLockedNode_AcquireFailureMarksSpan(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
-	_, err := eng.doWithLockedNode(ctx, observability.PathExecute, "model-a", "",
+	_, err := eng.doWithLockedNode(ctx, observability.PathExecute, "model-a", "", noSessionKey,
 		func(endpoint string) (*http.Response, error) { return http.Get(endpoint) })
 	require.Error(t, err)
 
@@ -246,7 +246,7 @@ func TestDoWithLockedNode_UnavailableFallsBack(t *testing.T) {
 	mgr.Observe("model-a", "node-1", mlSrv.URL)
 	eng := newTestEngine(ml, mgr, nil)
 
-	resp, err := eng.doWithLockedNode(context.Background(), observability.PathExecute, "model-a", "",
+	resp, err := eng.doWithLockedNode(context.Background(), observability.PathExecute, "model-a", "", noSessionKey,
 		func(endpoint string) (*http.Response, error) {
 			return http.Get(endpoint)
 		})
@@ -285,7 +285,7 @@ func TestDoWithLockedNode_ResourceExhaustedDoesNotFallback(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
 
-	resp, err := eng.doWithLockedNode(ctx, observability.PathExecute, "model-a", "",
+	resp, err := eng.doWithLockedNode(ctx, observability.PathExecute, "model-a", "", noSessionKey,
 		func(endpoint string) (*http.Response, error) {
 			return http.Get(endpoint)
 		})
@@ -322,7 +322,7 @@ func TestDoWithLockedNode_FallbackRotatesOn5xx(t *testing.T) {
 	mgr.Observe("model-a", "node-good", good.URL)
 	eng := newTestEngine(ml, mgr, nil)
 
-	resp, err := eng.doWithLockedNode(context.Background(), observability.PathExecute, "model-a", "",
+	resp, err := eng.doWithLockedNode(context.Background(), observability.PathExecute, "model-a", "", noSessionKey,
 		func(endpoint string) (*http.Response, error) {
 			return http.Get(endpoint)
 		})
@@ -345,7 +345,7 @@ func TestDoWithLockedNode_FallbackEmptyCacheFails(t *testing.T) {
 	mgr := mlnodeclient.NewManager(time.Hour)
 	eng := newTestEngine(ml, mgr, nil)
 
-	resp, err := eng.doWithLockedNode(context.Background(), observability.PathExecute, "model-a", "",
+	resp, err := eng.doWithLockedNode(context.Background(), observability.PathExecute, "model-a", "", noSessionKey,
 		func(endpoint string) (*http.Response, error) {
 			return http.Get(endpoint)
 		})
@@ -411,7 +411,7 @@ func TestFallback_RespectsLocalInFlight(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			resp, err := eng.doWithLockedNode(context.Background(), observability.PathExecute, "model-a", "",
+			resp, err := eng.doWithLockedNode(context.Background(), observability.PathExecute, "model-a", "", noSessionKey,
 				func(endpoint string) (*http.Response, error) {
 					return http.Get(endpoint)
 				})
@@ -475,7 +475,7 @@ func TestFallback_NoCapacityUnbounded(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			resp, err := eng.doWithLockedNode(context.Background(), observability.PathExecute, "model-a", "",
+			resp, err := eng.doWithLockedNode(context.Background(), observability.PathExecute, "model-a", "", noSessionKey,
 				func(endpoint string) (*http.Response, error) {
 					return http.Get(endpoint)
 				})
@@ -556,7 +556,7 @@ func TestFallback_UnknownNodeBounded(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			resp, err := eng.doWithLockedNode(context.Background(), observability.PathExecute, "model-a", "",
+			resp, err := eng.doWithLockedNode(context.Background(), observability.PathExecute, "model-a", "", noSessionKey,
 				func(endpoint string) (*http.Response, error) {
 					return http.Get(endpoint)
 				})

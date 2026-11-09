@@ -250,6 +250,7 @@ type InferenceParams struct {
 	Stream                       bool
 	ForceHeightSyncAnchor        bool
 	LogprobsOptimizationOverride *bool
+	SessionKey                   string
 }
 
 type warmCheckKey struct {
@@ -1962,6 +1963,7 @@ func (s *Session) SendOnly(ctx context.Context, p *PreparedInference, stream io.
 		HeightSyncEscrow:             s.heightSyncEscrowHints(),
 		Payload:                      p.Payload(),
 		LogprobsOptimizationOverride: p.params.LogprobsOptimizationOverride,
+		SessionKey:                   p.params.SessionKey,
 	}, stream, func(partial *host.HostResponse) {
 		s.confirmStartOnReceipt(p.hostIdx, p.diff.Nonce, partial)
 		if receiptHandler != nil {

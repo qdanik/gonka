@@ -51,7 +51,7 @@ func TestAnEntryIsHeldForItsTTL(t *testing.T) {
 	_, status := tracker.Lookup("key")
 	require.Equal(t, StatusNew, status)
 
-	tracker.Record("key", "host-a")
+	tracker.Record("key", "host-a", NoSession)
 	participant, status := tracker.Lookup("key")
 	require.Equal(t, StatusHit, status)
 	require.Equal(t, "host-a", participant)
@@ -78,12 +78,12 @@ func TestTheOldestEntriesGoPastTheCap(t *testing.T) {
 	limits := &Limits{TTL: time.Hour, MaxEntries: 3}
 	tracker, clock := newTestTracker(limits)
 	for _, key := range []Key{"a", "b", "c"} {
-		tracker.Record(key, "host")
+		tracker.Record(key, "host", NoSession)
 		clock.advance(time.Second)
 	}
-	tracker.Record("a", "host-2")
+	tracker.Record("a", "host-2", NoSession)
 	clock.advance(time.Second)
-	tracker.Record("d", "host")
+	tracker.Record("d", "host", NoSession)
 
 	_, evicted := tracker.Lookup("b")
 	require.Equal(t, StatusNew, evicted)
@@ -94,7 +94,7 @@ func TestTheOldestEntriesGoPastTheCap(t *testing.T) {
 
 	limits.MaxEntries = 1
 	clock.advance(time.Second)
-	tracker.Record("e", "host")
+	tracker.Record("e", "host", NoSession)
 	require.Equal(t, 1, tracker.Len())
 	_, status = tracker.Lookup("e")
 	require.Equal(t, StatusHit, status)
@@ -106,11 +106,31 @@ func TestTheOldestEntriesGoPastTheCap(t *testing.T) {
 func TestRecordingShedsWhatHasExpired(t *testing.T) {
 	limits := &Limits{TTL: time.Minute, MaxEntries: 10}
 	tracker, clock := newTestTracker(limits)
-	tracker.Record("a", "host")
-	tracker.Record("b", "host")
+	tracker.Record("a", "host", NoSession)
+	tracker.Record("b", "host", NoSession)
 	clock.advance(2 * time.Minute)
 
-	tracker.Record("c", "host")
+	tracker.Record("c", "host", NoSession)
 
 	require.Equal(t, 1, tracker.Len())
+}
+
+// Test flow:
+//  1. Record a winner under an issued session key and assert Session hands the key back.
+//  2. Advance the clock past the TTL and assert Session answers NoSession.
+//  3. Assert a Lookup after it still counts the entry `StatusExpired`, then `StatusNew`.
+func TestSessionLeavesAnExpiredEntryForLookupToCount(t *testing.T) {
+	limits := &Limits{TTL: time.Minute, MaxEntries: 10}
+	tracker, clock := newTestTracker(limits)
+
+	tracker.Record("key", "host-a", "issued")
+	require.Equal(t, "issued", tracker.Session("key"))
+
+	clock.advance(time.Minute + time.Nanosecond)
+	require.Equal(t, NoSession, tracker.Session("key"))
+
+	_, status := tracker.Lookup("key")
+	require.Equal(t, StatusExpired, status)
+	_, status = tracker.Lookup("key")
+	require.Equal(t, StatusNew, status)
 }

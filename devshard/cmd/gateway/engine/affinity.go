@@ -7,7 +7,7 @@ import (
 
 type hostMemory interface {
 	Lookup(key affinity.Key) (participant string, status affinity.Status)
-	Record(key affinity.Key, participant string)
+	Record(key affinity.Key, participant, session string)
 }
 
 func (c *raceCoordinator) affinityIntent() (target string, miss scheduler.AffinityException) {
@@ -28,5 +28,8 @@ func (c *raceCoordinator) rememberWinner(participant string) {
 	if c.deps.Affinity == nil || c.request.AffinityKey == affinity.NoKey {
 		return
 	}
-	c.deps.Affinity.Record(c.request.AffinityKey, participant)
+	c.deps.Affinity.Record(c.request.AffinityKey, participant, c.request.IssuedSession)
+	if c.request.SessionDigest != affinity.NoKey && c.request.SessionDigest != c.request.AffinityKey {
+		c.deps.Affinity.Record(c.request.SessionDigest, participant, c.request.IssuedSession)
+	}
 }

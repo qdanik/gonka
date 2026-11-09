@@ -188,7 +188,7 @@ Signing keys are addressed **by the name of the variable that holds them**, neve
 | `DEVSHARD_ESCROW_ROTATION_PRE_POC_BLOCKS` | 300 | how early the bridge starts |
 | `DEVSHARD_ESCROW_ROTATION_MODELS_JSON` | empty | the models rotation keeps escrows for, each with `model_id`, `temp_count`, `amount` and `private_key_env`; optional are `target_count` (1), `reserve_count` (1, `0` turns reserves off), `max_unsettled` (the target, temp and reserve counts plus 4), `full_context_slots` (2) and the model's own `settlement_enabled` and `previous_epoch_settlement_enabled`; empty rotates no model |
 | `GATEWAY_WARM_NEW_ESCROWS` | true | whether a new escrow is taught to its group before serving |
-| `GATEWAY_AFFINITY_ENABLED` | false | whether the next turn of a conversation is guaranteed to execute on the participant that served the previous turn, at the cost of nonces burned to reach it ([`routing.md`](routing.md), "Host affinity") |
+| `GATEWAY_AFFINITY_ENABLED` | false | whether the next turn of a conversation is guaranteed to execute on the participant that served the previous turn, at the cost of nonces burned to reach it, and whether an authenticated caller that sends no `prompt_cache_key` is handed a session key in `X-Session-Key` that keeps the conversation on one ML node of that host ([`routing.md`](routing.md), "Host affinity") |
 | `GATEWAY_AFFINITY_TTL_MS` | 600000 | how long after its last win a conversation keeps its host; 1 to 86 400 000 |
 | `GATEWAY_AFFINITY_MAX_ENTRIES` | 100000 | how many conversations are remembered; the least recently won go first; 1 to 10 000 000 |
 | `GATEWAY_CHAIN_SNAPSHOT_MAX_AGE_SECONDS` | 60 | how stale the chain snapshot may be before requests are refused 503; `0` disables the gate |

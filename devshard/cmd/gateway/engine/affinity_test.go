@@ -2,6 +2,7 @@ package engine
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -22,7 +23,7 @@ type spyMemory struct {
 
 func (s *spyMemory) Lookup(affinity.Key) (string, affinity.Status) { return s.participant, s.status }
 
-func (s *spyMemory) Record(key affinity.Key, participant string) {
+func (s *spyMemory) Record(key affinity.Key, participant, _ string) {
 	s.recorded = append(s.recorded, recordedWinner{key: key, participant: participant})
 }
 
@@ -77,4 +78,35 @@ func TestTheCrownedHostBecomesTheKeysLastWinner(t *testing.T) {
 	unkeyed := &spyMemory{}
 	affinityCoordinator(unkeyed, affinity.NoKey).crownWinner(&liveAttempt{participant: "host-b"}, crownFirstClaim)
 	require.Empty(t, unkeyed.recorded)
+}
+
+// Test flow:
+//  1. Crown host-a for a request the gateway issued session key K, looked up by its derived key and reconnecting under K's digest, over a real tracker.
+//  2. Assert a request that echoes K, keyed by K's digest alone, asks for host-a with no miss.
+//  3. Assert a repeat that never echoed, keyed by the derived key, asks for host-a too and the tracker hands back K for it.
+//  4. Assert a session digest nobody won is a new key that names no host, and that its winner is recorded under it.
+func TestAWinUnderAnIssuedSessionBringsItsEchoAndItsRepeatBackToTheHost(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	tracker := affinity.NewTracker(func() affinity.Limits { return affinity.Limits{TTL: time.Minute, MaxEntries: 16} }, func() time.Time { return now })
+	derived, session := affinity.Key("derived"), affinity.Key("session")
+	first := &raceCoordinator{deps: raceDeps{Affinity: tracker}, request: raceRequest{Request: Request{AffinityKey: derived, SessionDigest: session, IssuedSession: "K"}}}
+
+	first.crownWinner(&liveAttempt{participant: "host-a"}, crownFirstClaim)
+
+	target, miss := affinityCoordinator(tracker, session).affinityIntent()
+	require.Equal(t, "host-a", target)
+	require.Equal(t, scheduler.AffinityExceptionNone, miss)
+	target, miss = affinityCoordinator(tracker, derived).affinityIntent()
+	require.Equal(t, "host-a", target)
+	require.Equal(t, scheduler.AffinityExceptionNone, miss)
+	require.Equal(t, "K", tracker.Session(derived))
+
+	unknown := affinityCoordinator(tracker, "unknown-session")
+	target, miss = unknown.affinityIntent()
+	require.Equal(t, scheduler.NoTarget, target)
+	require.Equal(t, scheduler.AffinityExceptionNewKey, miss)
+	unknown.crownWinner(&liveAttempt{participant: "host-b"}, crownFirstClaim)
+	participant, status := tracker.Lookup("unknown-session")
+	require.Equal(t, "host-b", participant)
+	require.Equal(t, affinity.StatusHit, status)
 }

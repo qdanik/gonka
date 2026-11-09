@@ -1,8 +1,10 @@
 package affinity
 
 import (
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/binary"
+	"encoding/hex"
 )
 
 const (
@@ -20,6 +22,16 @@ func KeyFor(namespace, model, promptCacheKey string, leadingMessages []byte) Key
 		return digest(namespace, model, kindLeadingPrompt, leadingMessages)
 	}
 	return NoKey
+}
+
+// NewSession mints a session key for a client that sent none: crypto/rand.Text, at least 128 bits. See routing.md, "Host affinity".
+func NewSession() string {
+	return rand.Text()
+}
+
+// Hex is the key as a host is told it: the digest in hex, never a client string.
+func (k Key) Hex() string {
+	return hex.EncodeToString([]byte(k))
 }
 
 func digest(namespace, model string, kind byte, content []byte) Key {

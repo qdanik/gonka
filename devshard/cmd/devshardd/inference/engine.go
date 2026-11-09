@@ -34,6 +34,8 @@ const maxAcquireAttempts = 10
 // local capacity bound before retrying PickNode.
 const fallbackSlotWait = 100 * time.Millisecond
 
+const noSessionKey = ""
+
 // Engine implements devshard.InferenceEngine for the standalone devshardd binary.
 // It acquires a locked ML node via NodeManager gRPC, POSTs directly, and releases
 // with an outcome reflecting the result.
@@ -105,7 +107,7 @@ func NewEngine(
 func (e *Engine) Execute(ctx context.Context, req devshard.ExecuteRequest) (*devshard.ExecuteResult, error) {
 	return executeWithRecovery(ctx, req, e.payloadRead, e.phase.EpochID(), func(ctx context.Context) (*devshard.ExecuteResult, error) {
 		result, err := executeInference(ctx, req, e.payloadStore, e.phase.EpochID(), func(ctx context.Context, model string, body []byte) (*http.Response, error) {
-			return e.executeMLRequest(ctx, model, req.EscrowID, body)
+			return e.executeMLRequest(ctx, model, req.EscrowID, req.SessionKey, body)
 		}, e.chainParams, e.logprobsOptimizationEnabled, func() int {
 			return e.vocabularySize(ctx, req.Model)
 		})
@@ -148,8 +150,8 @@ func executeWithRecovery(
 	return run(ctx)
 }
 
-func (e *Engine) executeMLRequest(ctx context.Context, model, escrowID string, body []byte) (*http.Response, error) {
-	resp, err := e.doWithLockedNode(ctx, observability.PathExecute, model, escrowID, func(endpoint string) (_ *http.Response, err error) {
+func (e *Engine) executeMLRequest(ctx context.Context, model, escrowID, sessionKey string, body []byte) (*http.Response, error) {
+	resp, err := e.doWithLockedNode(ctx, observability.PathExecute, model, escrowID, sessionKey, func(endpoint string) (_ *http.Response, err error) {
 		callCtx, op := observability.Request.StartMLNodeCall(ctx, model, endpoint)
 		defer op.FinishErr(&err)
 
@@ -182,6 +184,7 @@ func (e *Engine) doWithLockedNode(
 	path observability.Path,
 	model string,
 	escrowID string,
+	sessionKey string,
 	fn func(endpoint string) (*http.Response, error),
 ) (*http.Response, error) {
 	credit, err := e.reserveValidationCredit(ctx, path, model)
@@ -200,7 +203,7 @@ func (e *Engine) doWithLockedNode(
 			lastReason = observability.ReasonTimeout
 			return nil, observability.Classify(lastReason, observability.WhereEngineMLNodeCall, ctx.Err())
 		}
-		acq, err := e.acquireNode(ctx, model, excluded, escrowID)
+		acq, err := e.acquireNode(ctx, model, excluded, escrowID, sessionKey)
 
 		if err != nil {
 			if ctx.Err() != nil {
@@ -289,13 +292,14 @@ func (e *Engine) acquireNode(
 	model string,
 	excluded []string,
 	escrowID string,
+	sessionKey string,
 ) (_ *mlnodegen.AcquireMLNodeResponse, err error) {
 	spanCtx, op := observability.Request.StartMLNodeAcquire(ctx, model, len(excluded))
 	defer op.FinishErr(&err)
 
 	acqCtx, cancel := context.WithTimeout(spanCtx, acquireTimeout)
 	defer cancel()
-	acq, err := e.mlClient.Acquire(acqCtx, model, excluded, escrowID)
+	acq, err := e.mlClient.Acquire(acqCtx, model, excluded, escrowID, sessionKey)
 	if err != nil {
 		return nil, err
 	}

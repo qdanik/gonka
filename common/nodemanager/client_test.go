@@ -60,12 +60,33 @@ func TestClient_Acquire_Success(t *testing.T) {
 	}
 
 	c := startMockServer(t, srv)
-	resp, err := c.Acquire(context.Background(), "model-a", []string{"bad-node"}, "99")
+	resp, err := c.Acquire(context.Background(), "model-a", []string{"bad-node"}, "99", "")
 
 	require.NoError(t, err)
 	assert.Equal(t, "http://node1:8080", resp.Endpoint)
 	assert.Equal(t, "lock-1", resp.LockId)
 	assert.Equal(t, "node-1", resp.NodeId)
+}
+
+// Test flow:
+//  1. Acquire a node once with a session key and once without one, against a node manager that records each request.
+//  2. Expect the first request to carry the key as session_key and the second to carry none.
+func TestClient_Acquire_ForwardsSessionKey(t *testing.T) {
+	var sessionKeys []string
+	srv := &mockServer{
+		acquireFunc: func(_ context.Context, req *gen.AcquireMLNodeRequest) (*gen.AcquireMLNodeResponse, error) {
+			sessionKeys = append(sessionKeys, req.SessionKey)
+			return &gen.AcquireMLNodeResponse{LockId: "lock-1", Endpoint: "http://node1:8080", NodeId: "node-1"}, nil
+		},
+	}
+
+	c := startMockServer(t, srv)
+	_, err := c.Acquire(context.Background(), "model-a", nil, "99", "session-digest")
+	require.NoError(t, err)
+	_, err = c.Acquire(context.Background(), "model-a", nil, "99", "")
+	require.NoError(t, err)
+
+	assert.Equal(t, []string{"session-digest", ""}, sessionKeys)
 }
 
 func TestClient_Acquire_NoNodesAvailable(t *testing.T) {
@@ -76,7 +97,7 @@ func TestClient_Acquire_NoNodesAvailable(t *testing.T) {
 	}
 
 	c := startMockServer(t, srv)
-	_, err := c.Acquire(context.Background(), "model-a", nil, "")
+	_, err := c.Acquire(context.Background(), "model-a", nil, "", "")
 
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, ErrNoNodesAvailable))
@@ -94,7 +115,7 @@ func TestClient_Acquire_Unavailable(t *testing.T) {
 	}
 
 	c := startMockServer(t, srv)
-	_, err := c.Acquire(context.Background(), "model-a", nil, "")
+	_, err := c.Acquire(context.Background(), "model-a", nil, "", "")
 
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, ErrUnavailable))
@@ -111,7 +132,7 @@ func TestClient_Acquire_OtherStatusPreserved(t *testing.T) {
 	}
 
 	c := startMockServer(t, srv)
-	_, err := c.Acquire(context.Background(), "model-a", nil, "")
+	_, err := c.Acquire(context.Background(), "model-a", nil, "", "")
 
 	require.Error(t, err)
 	assert.False(t, IsNoNodesAvailable(err))

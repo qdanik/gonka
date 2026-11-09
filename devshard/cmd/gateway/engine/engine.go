@@ -101,6 +101,8 @@ type Request struct {
 	ClientStream            bool
 	EmptyAnswerCountsTokens bool
 	AffinityKey             affinity.Key
+	SessionDigest           affinity.Key
+	IssuedSession           string
 
 	Params any
 
