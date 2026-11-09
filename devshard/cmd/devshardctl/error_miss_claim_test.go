@@ -42,21 +42,9 @@ func TestErrorMissClaimableFollowsTheSharedEvidenceRule(t *testing.T) {
 			{name: "error_event_split_across_reads", reads: readsSplitInsideTheErrorEvent(t, stream)},
 		} {
 			t.Run(filepath.Base(path)+"/"+delivery.name, func(t *testing.T) {
-				ctx := context.Background()
-				var sink bytes.Buffer
-				const nonce = 7
-				rw, inf := newErrorRaceWriter(t, newRaceGroup(ctx, ctx, "escrow-x", &sink), nonce)
-				for _, read := range delivery.reads {
-					_, err := rw.Write(read)
-					require.NoError(t, err)
-				}
-				rw.flushClassify()
-				close(inf.done)
-				inf.resp = &host.HostResponse{Mempool: []*types.DevshardTx{
-					{Tx: &types.DevshardTx_FinishInference{FinishInference: &types.MsgFinishInference{ServedHash: testutil.TestServedHash, InferenceId: nonce}}},
-				}}
+				attempt := streamAttemptToItsFinish(t, delivery.reads)
 
-				require.Equal(t, wantClaim, errorMissClaimable(inf, nil))
+				require.Equal(t, wantClaim, errorMissClaimable(attempt, nil))
 			})
 		}
 	}
@@ -78,6 +66,24 @@ func TestErrorMissClaimableRefusesAFinishWithoutEvidence(t *testing.T) {
 
 	require.True(t, errorMissRunnable(inf, nil))
 	require.False(t, errorMissClaimable(inf, nil))
+}
+
+func streamAttemptToItsFinish(t *testing.T, reads [][]byte) *inflight {
+	t.Helper()
+	ctx := context.Background()
+	var sink bytes.Buffer
+	const nonce = 7
+	writer, attempt := newErrorRaceWriter(t, newRaceGroup(ctx, ctx, "escrow-x", &sink), nonce)
+	for _, read := range reads {
+		_, err := writer.Write(read)
+		require.NoError(t, err)
+	}
+	writer.flushClassify()
+	close(attempt.done)
+	attempt.resp = &host.HostResponse{Mempool: []*types.DevshardTx{
+		{Tx: &types.DevshardTx_FinishInference{FinishInference: &types.MsgFinishInference{ServedHash: testutil.TestServedHash, InferenceId: nonce}}},
+	}}
+	return attempt
 }
 
 func readsSplitInsideTheErrorEvent(t *testing.T, stream []byte) [][]byte {

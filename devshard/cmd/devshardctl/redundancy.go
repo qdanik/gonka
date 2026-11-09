@@ -206,13 +206,9 @@ func sseChunkErrorPayload(p []byte) (sseErrorDetails, []byte, bool) {
 	if len(p) == 0 {
 		return sseErrorDetails{}, nil, false
 	}
-	for _, line := range bytes.Split(p, []byte("\n")) {
-		line = bytes.TrimRight(line, "\r")
-		if !bytes.HasPrefix(line, []byte("data:")) {
-			continue
-		}
-		payload := bytes.TrimSpace(line[len("data:"):])
-		if len(payload) == 0 || bytes.Equal(payload, []byte("[DONE]")) {
+	for line := range bytes.SplitSeq(p, []byte("\n")) {
+		payload, ok := sseEventData(line)
+		if !ok {
 			continue
 		}
 		var evt struct {
@@ -1546,7 +1542,7 @@ func (rw *raceWriter) takeParseable(p []byte) []byte {
 	return parseable
 }
 
-// classifyParseable records the attempt's first content or error, marks the race on a trusted deterministic rejection, and reports whether the buffer carried content or a non-retriable error.
+// classifyParseable records the attempt's first content and first error, marks the race on a trusted deterministic rejection, and reports whether the buffer carried content or a non-retriable error.
 func (rw *raceWriter) classifyParseable(parseable []byte) (hasContent, hasError bool) {
 	if len(parseable) == 0 {
 		return false, false
@@ -1562,7 +1558,8 @@ func (rw *raceWriter) classifyParseable(parseable []byte) (hasContent, hasError 
 		if rw.inf.contentSource == "" {
 			rw.inf.contentSource = scan.ContentSource
 		}
-	} else if details, ok := sseChunkErrorDetails(parseable); ok {
+	}
+	if details, ok := sseChunkErrorDetails(parseable); ok {
 		src := "error"
 		if details.Type != "" {
 			src = "error." + details.Type
