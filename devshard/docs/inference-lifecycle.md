@@ -313,6 +313,8 @@ the ordinary timeout path runs instead. A probe, a phase-transition
 abort, or an escrow-state block also skips the vote. Content before
 the error does not by itself suppress the miss.
 
+The payload the gateway would send must also pass `streamevidence.ProvesErrorMiss` (`devshard/gatewayprotocol/streamevidence`, whose README gives the reason); a payload that fails it is logged as `error_miss_skipped` (`no_error_proof`), its held Finish is released at once, and the ordinary timeout path runs.
+
 `VerifyErrorMiss` is local. It accepts only when the record exists and
 is `StatusStarted` or `StatusFinished`, the finish matches the
 inference id, escrow, and executor slot, and the proposer signature

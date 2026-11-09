@@ -4077,7 +4077,7 @@ func inflightStillSending(inf *inflight) bool {
 // others can fail before that finish marker exists, so the protocol outcome is
 // the only safe gate for timeout voting.
 func shouldRunHandleTimeout(inf *inflight, session *user.Session) bool {
-	return shouldRunHandleTimeoutOn(inf, session, errorMissRunnable(inf, session))
+	return shouldRunHandleTimeoutOn(inf, session, errorMissClaimable(inf, session))
 }
 
 func shouldRunHandleTimeoutOn(inf *inflight, session nonceFinishedChecker, errorMiss bool) bool {
@@ -4144,15 +4144,11 @@ func (e *Redundancy) scheduleDeadlineHandleTimeout(
 		e.rememberRefusalPayload(inf.nonce, timeoutclaim.PayloadFromParams(params))
 	}
 
-	unpinFinish := errorMissEnabledFor(inf)
 	e.raceCleanupWG.Add(1)
 	go func() {
 		defer e.raceCleanupWG.Done()
 		defer inf.endAttemptSpan()
 		defer inf.releaseErrorStreamRetention()
-		if unpinFinish {
-			defer e.session.UnpinPendingFinish(inf.nonce)
-		}
 
 		waitCtx := e.raceCleanupRoot()
 		for {
@@ -4228,6 +4224,14 @@ func errorMissRunnable(inf *inflight, session *user.Session) bool {
 	}
 	finishTx, _ := errorMissArtifacts(inf, session)
 	return len(finishTx) > 0
+}
+
+func errorMissClaimable(inf *inflight, session *user.Session) bool {
+	if !errorMissRunnable(inf, session) {
+		return false
+	}
+	_, responsePayload := errorMissArtifacts(inf, session)
+	return streamevidence.ProvesErrorMiss(responsePayload)
 }
 
 func emptyStreamWithoutWinnerTimeoutSkipReason(inf *inflight, session nonceFinishedChecker) (string, bool) {
@@ -5028,13 +5032,14 @@ func (e *Redundancy) voteTimeoutForFailedInflight(ctx context.Context, inf *infl
 		return
 	}
 	callerOwnsCleanup := true
+	finishPinned := errorMissEnabledFor(inf)
 	defer func() {
 		if !callerOwnsCleanup {
 			return
 		}
 		inf.endAttemptSpan()
 		inf.releaseErrorStreamRetention()
-		if errorMissEnabledFor(inf) {
+		if finishPinned {
 			e.session.UnpinPendingFinish(inf.nonce)
 		}
 	}()
@@ -5042,11 +5047,18 @@ func (e *Redundancy) voteTimeoutForFailedInflight(ctx context.Context, inf *infl
 		logInferenceStage(ctx, inf.escrowID, inf.nonce, "poc_probe_failed_no_timeout", "host", inf.hostID, "poc_reason", currentPoCPhaseReason())
 		return
 	}
-	errorMiss := errorMissRunnable(inf, e.session)
+	errorMissHasFinish := errorMissRunnable(inf, e.session)
+	errorMiss := errorMissHasFinish && errorMissClaimable(inf, e.session)
 	kind := timeoutKindForInflight(inf, errorMiss)
 	if errorMissEnabledFor(inf) && !errorMiss {
+		skipReason := "no_finish_artifact"
+		if errorMissHasFinish {
+			skipReason = "no_error_proof"
+		}
 		logInferenceStage(ctx, inf.escrowID, inf.nonce, "error_miss_skipped",
-			"host", inf.hostID, "reason", "no_finish_artifact")
+			"host", inf.hostID, "reason", skipReason)
+		e.session.UnpinPendingFinish(inf.nonce)
+		finishPinned = false
 	}
 	if inf.phaseTransitionAborted {
 		logInferenceStage(ctx, inf.escrowID, inf.nonce, "timeout_skipped",

@@ -3,8 +3,6 @@ package engine
 import (
 	"sync/atomic"
 
-	"common/completionapi"
-
 	"devshard/gatewayprotocol/streamevidence"
 )
 
@@ -113,7 +111,7 @@ func (r *errorStreamRetainer) proof() (MissProof, bool) {
 	if err != nil {
 		return MissProof{}, false
 	}
-	if _, isError := completionapi.IsTerminalErrorResponse(payload); !isError {
+	if !streamevidence.ProvesErrorMiss(payload) {
 		return MissProof{}, false
 	}
 	return MissProof{ResponsePayload: payload, Complete: r.complete, Truncated: r.truncated}, true

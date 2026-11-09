@@ -12,7 +12,7 @@
 
 ## What it does not own
 
-When a miss claim is attempted and where its Finish comes from: the two gateways decide both differently and keep them. What the payload is for a nonce that never committed, which differs between the gateways too. Deadlines and the wait before a vote.
+When a miss claim is attempted: whether the payload proves the error is `streamevidence.ProvesErrorMiss`, which both gateways apply before they get here. Where the Finish comes from, which the two gateways decide differently and keep. What the payload is for a nonce that never committed, which differs between the gateways too. Deadlines and the wait before a vote.
 
 ## Imports
 
