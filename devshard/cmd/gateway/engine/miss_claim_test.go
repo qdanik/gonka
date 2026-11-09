@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -15,10 +16,10 @@ import (
 const errorStreamFixtures = "../../../gatewayprotocol/streamevidence/testdata"
 
 // Test flow:
-//  1. For each error stream fixture in `gatewayprotocol/streamevidence/testdata`, ask `streamevidence.ProvesErrorMiss` whether the payload of its evidence lines proves the error.
-//  2. Run an attempt whose host streams the fixture through the real `sseClassifier`, once as one read per SSE event and once as two reads split inside its error event.
+//  1. For each error stream fixture in `gatewayprotocol/streamevidence/testdata`, ask `streamevidence.ProvesErrorMiss` whether the payload of the leading evidence lines that fit in `streamevidence.MaxRetainedBytes` proves the error.
+//  2. Run an attempt whose host streams the fixture through the real `sseClassifier`, once as one read per SSE event and once as two reads split inside its error event, while a goroutine collects the attempt's events so a long fixture cannot fill the channel.
 //  3. Plan the race's timeout steps from the attempt's outcome.
-//  4. Assert the one step settles by a miss claim exactly when the shared rule proves it.
+//  4. Assert the one step settles by a miss claim exactly when the shared rule proves it over those retained lines.
 func TestAnErrorStreamIsClaimedExactlyWhenTheSharedEvidenceRuleProvesIt(t *testing.T) {
 	paths, err := filepath.Glob(filepath.Join(errorStreamFixtures, "*.sse"))
 	require.NoError(t, err)
@@ -27,7 +28,7 @@ func TestAnErrorStreamIsClaimedExactlyWhenTheSharedEvidenceRuleProvesIt(t *testi
 	for _, path := range paths {
 		stream, err := os.ReadFile(path)
 		require.NoError(t, err)
-		payload, err := streamevidence.Payload(streamevidence.DataLines(stream))
+		payload, err := streamevidence.Payload(retainedLines(streamevidence.DataLines(stream)))
 		require.NoError(t, err)
 		wantClaim := streamevidence.ProvesErrorMiss(payload)
 
@@ -43,8 +44,7 @@ func TestAnErrorStreamIsClaimedExactlyWhenTheSharedEvidenceRuleProvesIt(t *testi
 				fixture := newAttemptFixture(dispatch, &fakeClassifier{})
 				fixture.spec.Classifier = newTestClassifier(false, nil)
 
-				runAttempt(context.Background(), fixture.spec)
-				outcome := *doneEvent(t, fixture.drain()).Outcome
+				outcome := *doneEvent(t, runAttemptCollectingEvents(t, fixture)).Outcome
 				steps := RaceOutcome{Attempts: []AttemptOutcome{outcome}}.TimeoutPlan()
 
 				require.Len(t, steps, 1)
@@ -69,4 +69,39 @@ func readsOnePerEvent(stream []byte) []string {
 		}
 	}
 	return reads
+}
+
+func retainedLines(lines []string) []string {
+	var kept []string
+	heldBytes := 0
+	for _, line := range lines {
+		heldBytes += len(line) + 1
+		if heldBytes > streamevidence.MaxRetainedBytes {
+			break
+		}
+		kept = append(kept, line)
+	}
+	return kept
+}
+
+func runAttemptCollectingEvents(t *testing.T, fixture *attemptFixture) []AttemptEvent {
+	t.Helper()
+	var collected []AttemptEvent
+	collectorDone := make(chan struct{})
+	go func() {
+		defer close(collectorDone)
+		for event := range fixture.events {
+			collected = append(collected, event)
+		}
+	}()
+
+	runAttempt(context.Background(), fixture.spec)
+	close(fixture.events)
+
+	select {
+	case <-collectorDone:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the event collector did not finish within 10s after the attempt closed its events channel")
+	}
+	return collected
 }

@@ -18,10 +18,10 @@ import (
 const errorStreamFixtures = "../../gatewayprotocol/streamevidence/testdata"
 
 // Test flow:
-//  1. For each error stream fixture in `gatewayprotocol/streamevidence/testdata`, ask `streamevidence.ProvesErrorMiss` whether the payload of its evidence lines proves the error.
+//  1. For each error stream fixture in `gatewayprotocol/streamevidence/testdata`, ask `streamevidence.ProvesErrorMiss` whether the payload of the leading evidence lines that fit in `streamevidence.MaxRetainedBytes` proves the error.
 //  2. Write the fixture through a fresh `raceWriter` once as one read per SSE event and once as two reads split inside its error event, then flush the final event.
 //  3. End the send and give the attempt a Finish in its response mempool.
-//  4. Assert `errorMissClaimable` claims the miss exactly when the shared rule proves it.
+//  4. Assert `errorMissClaimable` claims the miss exactly when the shared rule proves it over those retained lines.
 func TestErrorMissClaimableFollowsTheSharedEvidenceRule(t *testing.T) {
 	paths, err := filepath.Glob(filepath.Join(errorStreamFixtures, "*.sse"))
 	require.NoError(t, err)
@@ -30,7 +30,7 @@ func TestErrorMissClaimableFollowsTheSharedEvidenceRule(t *testing.T) {
 	for _, path := range paths {
 		stream, err := os.ReadFile(path)
 		require.NoError(t, err)
-		payload, err := streamevidence.Payload(streamevidence.DataLines(stream))
+		payload, err := streamevidence.Payload(retainedLines(streamevidence.DataLines(stream)))
 		require.NoError(t, err)
 		wantClaim := streamevidence.ProvesErrorMiss(payload)
 
@@ -101,4 +101,17 @@ func readsOnePerEvent(stream []byte) [][]byte {
 		}
 	}
 	return reads
+}
+
+func retainedLines(lines []string) []string {
+	var kept []string
+	heldBytes := 0
+	for _, line := range lines {
+		heldBytes += len(line) + 1
+		if heldBytes > streamevidence.MaxRetainedBytes {
+			break
+		}
+		kept = append(kept, line)
+	}
+	return kept
 }

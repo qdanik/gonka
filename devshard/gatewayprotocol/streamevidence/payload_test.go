@@ -49,7 +49,7 @@ func TestPayloadKeepsTheLinesVerbatimInOrder(t *testing.T) {
 
 // Test flow:
 //  1. List the error stream fixtures `testdata/*.sse` and assert the table below names each of them once.
-//  2. For each table case, read the fixture, take its `DataLines` and serialize them with `Payload`.
+//  2. For each table case, read the fixture, take the leading `DataLines` that fit in `MaxRetainedBytes` as a gateway retains them, and serialize them with `Payload`.
 //  3. Assert `ProvesErrorMiss` of the payload matches whether a verifier reads an error in it.
 //  4. Assert `ProvesErrorMiss` refuses an empty payload.
 func TestProvesErrorMissOnlyForEvidenceThatCarriesAnError(t *testing.T) {
@@ -64,6 +64,7 @@ func TestProvesErrorMissOnlyForEvidenceThatCarriesAnError(t *testing.T) {
 		{fixture: "object_error.sse", wantProves: true},
 		{fixture: "error_without_space.sse", wantProves: false},
 		{fixture: "error_as_string.sse", wantProves: false},
+		{fixture: "long_error_stream.sse", wantProves: false},
 	}
 	paths, err := filepath.Glob(filepath.Join("testdata", "*.sse"))
 	if err != nil {
@@ -87,7 +88,7 @@ func TestProvesErrorMissOnlyForEvidenceThatCarriesAnError(t *testing.T) {
 		if err != nil {
 			t.Fatalf("reading fixture: %v", err)
 		}
-		payload, err := Payload(DataLines(events))
+		payload, err := Payload(retainedLines(DataLines(events)))
 		if err != nil {
 			t.Fatalf("Payload(%s): %v", testCase.fixture, err)
 		}
@@ -99,4 +100,17 @@ func TestProvesErrorMissOnlyForEvidenceThatCarriesAnError(t *testing.T) {
 	if ProvesErrorMiss(nil) {
 		t.Error("ProvesErrorMiss(nil) = true, want false: a verifier rejects an empty payload")
 	}
+}
+
+func retainedLines(lines []string) []string {
+	var kept []string
+	heldBytes := 0
+	for _, line := range lines {
+		heldBytes += len(line) + 1
+		if heldBytes > MaxRetainedBytes {
+			break
+		}
+		kept = append(kept, line)
+	}
+	return kept
 }
