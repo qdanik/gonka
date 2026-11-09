@@ -36,11 +36,7 @@ func (v escrowVotes) SettleTimeout(ctx context.Context, step engine.TimeoutStep)
 }
 
 func (v escrowVotes) payload(nonce uint64) *host.InferencePayload {
-	record, committed := v.session.Inference(nonce)
-	if !committed {
-		return nil
-	}
-	return timeoutclaim.PayloadFromRecord(record, v.prompt)
+	return timeoutclaim.Payload(v.session.Inference, nonce, v.prompt)
 }
 
 // VoteDeadline reads the escrow's own deadline for this nonce, which is what the settle queue holds it by.

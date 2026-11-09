@@ -536,6 +536,7 @@ type verifierClient struct {
 	slotIdx  int
 	voteGate <-chan struct{}
 	failWith error
+	payloads []*host.InferencePayload
 }
 
 type delayedResultClient struct {
@@ -559,6 +560,9 @@ func (c *delayedResultClient) Send(ctx context.Context, req host.HostRequest, _ 
 }
 
 func (c *verifierClient) VerifyTimeout(ctx context.Context, inferenceID uint64, reason types.TimeoutReason, payload *host.InferencePayload, _ []types.Diff, _ host.TimeoutArtifacts) (bool, []byte, uint32, []*types.DevshardTx, string, error) {
+	c.mu.Lock()
+	c.payloads = append(c.payloads, payload)
+	c.mu.Unlock()
 	if c.voteGate != nil {
 		select {
 		case <-c.voteGate:
@@ -588,6 +592,12 @@ func (c *verifierClient) VerifyTimeout(ctx context.Context, inferenceID uint64, 
 		return false, nil, 0, nil, "", err
 	}
 	return true, sig, voterSlot, nil, "", nil
+}
+
+func (c *verifierClient) timeoutPayloads() []*host.InferencePayload {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]*host.InferencePayload(nil), c.payloads...)
 }
 
 func (c *verifierClient) VerifyErrorMiss(_ context.Context, inferenceID uint64, _ []types.Diff, artifacts host.TimeoutArtifacts) (bool, []byte, uint32, []*types.DevshardTx, string, error) {

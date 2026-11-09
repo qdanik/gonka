@@ -1442,7 +1442,6 @@ const (
 	defaultMaxClassifyPartial            = 1 << 20   // 1 MiB per attempt
 	defaultMaxClassifyPartialParticipant = 10 << 20  // 10 MiB per participant
 	defaultMaxClassifyPartialGlobal      = 100 << 20 // 100 MiB process-wide
-	defaultMaxErrorStreamBytes           = 1 << 20   // 1 MiB per error attempt
 	defaultMaxPendingPreludeBytes        = 1 << 20
 	defaultMaxPendingPreludeParticipant  = 10 << 20
 	defaultMaxPendingPreludeGlobal       = 100 << 20
@@ -1457,7 +1456,6 @@ var (
 	maxClassifyPartial                  = defaultMaxClassifyPartial
 	maxClassifyPartialParticipant int64 = defaultMaxClassifyPartialParticipant
 	maxClassifyPartialGlobal      int64 = defaultMaxClassifyPartialGlobal
-	maxErrorStreamBytes                 = defaultMaxErrorStreamBytes
 	maxPendingPreludeBytes              = defaultMaxPendingPreludeBytes
 	maxPendingPreludeParticipant  int64 = defaultMaxPendingPreludeParticipant
 	maxPendingPreludeGlobal       int64 = defaultMaxPendingPreludeGlobal
@@ -1472,7 +1470,6 @@ func configureClassifyCapsFromEnv() {
 	maxClassifyPartial = int(readInt64Env("GATEWAY_CLASSIFY_MAX_ATTEMPT_BYTES", int64(defaultMaxClassifyPartial)))
 	maxClassifyPartialParticipant = readInt64Env("GATEWAY_CLASSIFY_MAX_PARTICIPANT_BYTES", defaultMaxClassifyPartialParticipant)
 	maxClassifyPartialGlobal = readInt64Env("GATEWAY_CLASSIFY_MAX_GLOBAL_BYTES", defaultMaxClassifyPartialGlobal)
-	maxErrorStreamBytes = int(readInt64Env("GATEWAY_ERROR_STREAM_MAX_ATTEMPT_BYTES", int64(defaultMaxErrorStreamBytes)))
 	maxPendingPreludeBytes = int(readInt64Env("GATEWAY_PENDING_PRELUDE_MAX_ATTEMPT_BYTES", int64(defaultMaxPendingPreludeBytes)))
 	maxPendingPreludeParticipant = readInt64Env("GATEWAY_PENDING_PRELUDE_MAX_PARTICIPANT_BYTES", defaultMaxPendingPreludeParticipant)
 	maxPendingPreludeGlobal = readInt64Env("GATEWAY_PENDING_PRELUDE_MAX_GLOBAL_BYTES", defaultMaxPendingPreludeGlobal)
@@ -2019,6 +2016,8 @@ func (rw *raceWriter) clearErrorStreamRetention() {
 	inf.releaseErrorStreamRetention()
 }
 
+var maxErrorStreamBytes = streamevidence.MaxRetainedBytes
+
 func (rw *raceWriter) appendErrorStreamLines(lines []string) {
 	inf := rw.inf
 	if inf == nil || inf.errorStreamTruncated {
@@ -2128,16 +2127,23 @@ func errorMissArtifacts(inf *inflight, session *user.Session) (finishTx, respons
 	if inf == nil {
 		return nil, nil
 	}
+	var replyFinishTx []byte
 	if inf.resp != nil {
-		finishTx = user.MarshalFinishTx(inf.resp.Mempool, inf.nonce)
+		replyFinishTx = user.MarshalFinishTx(inf.resp.Mempool, inf.nonce)
 	}
-	if len(finishTx) == 0 && session != nil {
-		finishTx = session.FinishTxFor(inf.nonce)
+	var queued timeoutclaim.FinishSource
+	if session != nil {
+		queued = session
 	}
+	finishTx = timeoutclaim.FinishTx(replyFinishTx, inf.nonce, queued)
 	if len(inf.errorStreamLines) > 0 {
 		responsePayload, _ = streamevidence.Payload(inf.errorStreamLines)
 	}
 	return finishTx, responsePayload
+}
+
+func timeoutVotePayload(session *user.Session, nonce uint64, prompt []byte) *host.InferencePayload {
+	return timeoutclaim.Payload(session.StateMachine().GetInference, nonce, prompt)
 }
 
 func (e *Redundancy) runHandleTimeout(ctx context.Context, inf *inflight, params user.InferenceParams, errorMiss bool) (user.TimeoutResult, error) {
@@ -2145,13 +2151,13 @@ func (e *Redundancy) runHandleTimeout(ctx context.Context, inf *inflight, params
 	if errorMiss {
 		finishTx, responsePayload = errorMissArtifacts(inf, e.session)
 	}
-	return timeoutclaim.Resolve(ctx, e.session, inf.nonce, inf.sendTime, timeoutclaim.PayloadFromParams(params), finishTx, responsePayload)
+	return timeoutclaim.Resolve(ctx, e.session, inf.nonce, inf.sendTime, timeoutVotePayload(e.session, inf.nonce, params.Prompt), finishTx, responsePayload)
 }
 
 // runVoteTimeout votes an already-due protocol timeout without sleeping. When
 // needsWait is true the caller must wait off the drain barrier and retry.
 func (e *Redundancy) runVoteTimeout(ctx context.Context, inf *inflight, params user.InferenceParams, reason types.TimeoutReason) (result user.TimeoutResult, needsWait bool, err error) {
-	return e.session.VoteTimeout(ctx, inf.nonce, inf.sendTime, timeoutclaim.PayloadFromParams(params), reason)
+	return e.session.VoteTimeout(ctx, inf.nonce, inf.sendTime, timeoutVotePayload(e.session, inf.nonce, params.Prompt), reason)
 }
 
 func (rw *raceWriter) Flush() {
@@ -4138,7 +4144,7 @@ func (e *Redundancy) scheduleDeadlineHandleTimeout(
 	)
 	e.recordGatewayTimeoutAction(inf, params, kind, "scheduled", "deadline_not_due")
 	if reasonLabel == "refused" {
-		e.rememberRefusalPayload(inf.nonce, timeoutclaim.PayloadFromParams(params))
+		e.rememberRefusalPayload(inf.nonce, timeoutVotePayload(e.session, inf.nonce, params.Prompt))
 	}
 
 	e.raceCleanupWG.Add(1)

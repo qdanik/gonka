@@ -6,8 +6,6 @@ import (
 	"devshard/gatewayprotocol/streamevidence"
 )
 
-const maxMissProofBytes = 64 * 1024
-
 const (
 	heldFinishUntaken int32 = iota
 	heldFinishTaken
@@ -20,6 +18,7 @@ type MissProof struct {
 	Complete        bool
 	Truncated       bool
 
+	finishTx        []byte
 	releaseFinish   func()
 	finishOwnership atomic.Int32
 }

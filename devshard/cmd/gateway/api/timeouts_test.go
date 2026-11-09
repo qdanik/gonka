@@ -133,6 +133,46 @@ func TestTimeoutPayloadIsRebuiltFromTheCommittedRecord(t *testing.T) {
 }
 
 // Test flow:
+//  1. Define a table of a nonce left live and a nonce sealed out of the escrow's live state, as the settlement drain does.
+//  2. For each case, commit one real nonce through a live session, seal it when the case says so, and build its timeout payload through the session's votes.
+//  3. Assert the live nonce carries the payload it was dispatched with and the sealed one carries none.
+func TestTimeoutPayloadOfALiveSessionFollowsItsLiveRecord(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name        string
+		seal        bool
+		wantPayload bool
+	}{
+		{name: "a live nonce carries its dispatched payload", wantPayload: true},
+		{name: "a sealed nonce carries none", seal: true},
+	}
+
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			session, machine := newLiveSession(t)
+			prepared := prepareNonce(t, session)
+			if testCase.seal {
+				if err := machine.SealInference(prepared.Nonce()); err != nil {
+					t.Fatalf("SealInference = %v, want nil", err)
+				}
+			}
+			var want *host.InferencePayload
+			if testCase.wantPayload {
+				want = prepared.Payload()
+			}
+			votes := escrowVotes{session: registry.NewSessionHandle(session, machine), prompt: livePrompt}
+
+			payload := votes.payload(prepared.Nonce())
+
+			if !reflect.DeepEqual(payload, want) {
+				t.Errorf("payload = %+v, want %+v", payload, want)
+			}
+		})
+	}
+}
+
+// Test flow:
 //  1. Build a live session and a `fixedEscrows` publishing only that escrow.
 //  2. Ask `sessions.Poster` for an escrow ID it does not hold.
 //  3. Assert it reports not found.

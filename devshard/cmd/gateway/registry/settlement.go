@@ -111,18 +111,18 @@ func (r *Registry) buildSettlement(escrowID string, session EscrowSession) (sett
 	}
 	nonce := session.Nonce()
 	snapshot := session.SnapshotState()
-	signatures, shortfall := session.SettlementSignatures(nonce)
-	if shortfall != nil {
-		signatures = session.SignaturesAt(nonce)
+	signatures, err := settlement.ChooseSignatures(session, nonce, len(snapshot.Group))
+	if err != nil {
+		return settlement.Message{}, fmt.Errorf("choosing settlement signatures for escrow %s: %w", escrowID, err)
 	}
-	payload, err := state.BuildSettlement(escrowID, snapshot, signatures, nonce)
+	payload, err := state.BuildSettlement(escrowID, snapshot, signatures.BySlot, nonce)
 	if err != nil {
 		return settlement.Message{}, fmt.Errorf("building settlement for escrow %s: %w", escrowID, err)
 	}
 	hostStats := settlement.PresentStats(payload.HostStats)
 	verified := *payload
 	verified.HostStats = hostStats
-	if unverifiable := cmp.Or(settlementUnverifiable(verified, snapshot), shortfall); unverifiable != nil && r.narrator != nil {
+	if unverifiable := cmp.Or(settlementUnverifiable(verified, snapshot), signatures.Shortfall); unverifiable != nil && r.narrator != nil {
 		r.narrator.SettlementUnverifiable(escrowID, nonce, unverifiable)
 	}
 	root, err := settlement.Root(verified)

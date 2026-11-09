@@ -12,7 +12,7 @@ Code is protocol when a host, a verifier or the chain would reject, pay differen
 
 Two consequences follow.
 
-- The settle wire encoding is not protocol by the test. devshardctl encodes its settle message through `common/chain/tx`, which writes zero-valued fields; the new gateway marshals the chain's generated type, which omits them. The chain decodes both to the same message. `settlementwire` is still shared because it owns the mapping from the settle message onto `MsgSettleDevshardEscrow`; devshardctl keeps its encoder until it moves onto `settlementwire` in a change of its own.
+- The settle wire encoding is not protocol by the test. devshardctl encodes its settle message through `common/chain/tx`, which writes zero-valued fields; the new gateway marshals the chain's generated type, which omits them. The chain decodes both to the same message. `settlementwire` is still shared because it owns the mapping from the settle message onto `MsgSettleDevshardEscrow`; devshardctl builds its settle transaction through `common/chain/tx`, which `devshardd` links too, and a devshardctl test pins the message that `settleParamsFromJSON` and `common/chain/tx` build from a settlement JSON to the same decoded chain message `settlementwire` marshals.
 - Content that is already decided in a shared package gets no package here. The timeout reason a host sees is chosen in `devshard/user`, and the state-root mismatch errors are defined in `devshard/types` and `devshard/state`. The probe's token floor is `state.MinReservationTokens`, enforced by the host's state machine; what lives here is only how a probe applies it, in `probe`.
 
 ## 2. Module location
@@ -24,7 +24,7 @@ devshard/gatewayprotocol/       README.md, guard_test.go
   probe/                        README.md, budget.go, budget_test.go
   settlement/                   README.md, message.go, order.go, root.go, tests
   settlementwire/               README.md, marshal.go, marshal_test.go, testdata/ (settle goldens)
-  streamevidence/               README.md, lines.go, payload.go, vocabulary.go, tests, testdata/ (error stream golden and shapes)
+  streamevidence/               README.md, lines.go, payload.go, vocabulary.go, tests, testdata/ (error stream golden and shapes, long error stream fixture)
   timeoutclaim/                 README.md, claim.go, payload.go, tests
 ```
 
@@ -32,9 +32,9 @@ devshard/gatewayprotocol/       README.md, guard_test.go
 
 ### 3.1 `settlement`
 
-Owns the settle message (`Message`, `HostStat`, `SlotSignature`), the slot order of its lists (`HostStatsBySlot`, `SignaturesBySlot`) and the settlement root (`Root`, with `PresentStats` to drop nil entries first). `Root` hashes the host stats exactly as given and never filters, so devshardctl's root is the same expression it always computed and the new gateway takes the root of its already-filtered copy.
+Owns the settle message (`Message`, `HostStat`, `SlotSignature`), the slot order of its lists (`HostStatsBySlot`, `SignaturesBySlot`), the signatures a settle posts (`ChooseSignatures`: the checked set at quorum, otherwise every held signature when they reach the chain's count of more than two thirds of the slots, otherwise nothing) and the settlement root (`Root`, with `PresentStats` to drop nil entries first). `Root` hashes the host stats exactly as given and never filters, so devshardctl's root is the same expression it always computed and the new gateway takes the root of its already-filtered copy.
 
-It does not own escrow-id parsing, signature collection or what to post when the checked signatures fall short of quorum, narration of a settlement the chain would refuse, or the devshardctl admin JSON. Each gateway keeps those.
+It does not own escrow-id parsing, signature collection, narration of a settlement the chain would refuse, or the devshardctl admin JSON. Each gateway keeps those.
 
 ### 3.2 `settlementwire`
 
@@ -42,9 +42,9 @@ Owns `Marshal(settler, message)`: the mapping from `settlement.Message` onto `Ms
 
 ### 3.3 `timeoutclaim`
 
-Owns the choice between an error-miss claim and a timeout vote for a nonce left unfinished (`Resolve` over a `Handler`, which `*user.Session` satisfies): a non-empty Finish transaction claims the miss, otherwise the timeout is voted. It also owns the timeout vote's payload, built from the dispatched params (`PayloadFromParams`, devshardctl) or from the committed record and the dispatched prompt (`PayloadFromRecord`, the new gateway); the record is built from those params, so the two agree for a committed nonce.
+Owns the choice between an error-miss claim and a timeout vote for a nonce left unfinished (`Resolve` over a `Handler`, which `*user.Session` satisfies): a non-empty Finish transaction claims the miss, otherwise the timeout is voted. It owns the Finish the claim carries (`FinishTx`) and the timeout vote's payload (`Payload`), the one rule each that both gateways follow; `devshard/gatewayprotocol/timeoutclaim/README.md` gives the rules and their reasons.
 
-It does not own whether the claim's payload proves the error, which is `streamevidence.ProvesErrorMiss` (§3.5), nor where its Finish comes from or the payload for a nonce that never committed (devshardctl builds it from params, the new gateway sends none). The gateways differ on those two and each keeps its own. Deadlines and waiting stay in the gateways too.
+It does not own whether the claim's payload proves the error, which is `streamevidence.ProvesErrorMiss` (§3.5). Deadlines and waiting stay in the gateways too.
 
 ### 3.4 `probe`
 
@@ -52,11 +52,11 @@ Owns the token budget of a probe: `MaxTokens`, the reservation floor `state.MinR
 
 ### 3.5 `streamevidence`
 
-Owns which lines of an error stream are evidence (`DataLines`: `data: ` lines with a trailing carriage return trimmed, without the devshard receipt and meta envelopes), the `[DONE]` test that marks a retained stream complete (`IsDoneLine`), and the error-miss payload those lines serialize into (`Payload`, the JSON of `completionapi.SerializedStreamedResponse`). A verifier hashes the payload and compares it with the Finish transaction's hashes, so a line kept or dropped differently by one gateway turns an accepted claim into a rejected one. The envelope keys and the terminator marker sit in its `vocabulary.go`.
+Owns which lines of an error stream are evidence (`DataLines`: `data: ` lines with a trailing carriage return trimmed, without the devshard receipt and meta envelopes), the `[DONE]` test that marks a retained stream complete (`IsDoneLine`), and the error-miss payload those lines serialize into (`Payload`, the JSON of `completionapi.SerializedStreamedResponse`). It also owns the most evidence a gateway retains of one attempt (`MaxRetainedBytes`). A verifier hashes the payload and compares it with the Finish transaction's hashes, so a line kept or dropped differently by one gateway turns an accepted claim into a rejected one, and a stream cut by the bound is never accepted. The bound's value, how lines count against it and why are in the package README, "The retention bound". The envelope keys and the terminator marker sit in its `vocabulary.go`.
 
-It also owns whether the claim's payload proves the error (`ProvesErrorMiss`): an attempt a gateway read as ending in a terminal error is claimed only when its payload passes, and is otherwise voted or skipped like any other unfinished nonce; the package README gives the reason. Which error events count as terminal, and where the Finish comes from, stay in each gateway.
+It also owns whether the claim's payload proves the error (`ProvesErrorMiss`): an attempt a gateway read as ending in a terminal error is claimed only when its payload passes, and is otherwise voted or skipped like any other unfinished nonce; the package README gives the reason. Which error events count as terminal stays in each gateway.
 
-It does not own the retainer: how many bytes of evidence a gateway keeps, what it does when that bound is hit, and how the retained lines are released. The gateways differ on the bound (devshardctl reads it from `GATEWAY_ERROR_STREAM_MAX_ATTEMPT_BYTES` and charges its participant classify budget per line, the new gateway keeps a fixed bound) and each keeps its own retainer.
+It does not own the retainer: what a gateway does when the bound is hit, the memory budget it charges retained lines to, and how they are released. Each gateway keeps its own retainer and may stop below the bound when that budget refuses (devshardctl's participant or global classify budget, the new gateway's reassembly budget).
 
 ## 4. Allowed imports and the guard
 
@@ -79,4 +79,4 @@ The reverse check keeps host packages from importing the tree directly. It does 
 
 ## 5. Changing a rule
 
-A protocol change is made in the tree, with a test that pins the bytes or the decision. A gateway picks it up for the parts it calls: today devshardctl calls `settlement.Root`, `settlement.HostStatsBySlot`, `settlement.SignaturesBySlot`, `timeoutclaim`, `probe` and `streamevidence`, and `devshard/cmd/gateway` calls every function of the tree except `timeoutclaim.PayloadFromParams`. Where the two gateways still apply a rule differently, each keeps its own version until a change of its own chooses one, with the test that decides it.
+A protocol change is made in the tree, with a test that pins the bytes or the decision. A gateway picks it up for the parts it calls: today devshardctl calls `settlement.Root`, `settlement.HostStatsBySlot`, `settlement.SignaturesBySlot`, `settlement.ChooseSignatures`, `timeoutclaim`, `probe` and `streamevidence`, and `devshard/cmd/gateway` calls every function of the tree. Where the two gateways still apply a rule differently, each keeps its own version until a change of its own chooses one, with the test that decides it.
