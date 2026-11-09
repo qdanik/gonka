@@ -63,15 +63,17 @@ func ClientForTest(client gen.NodeManagerClient) *Client {
 // Acquire reserves an available ML node for the given model.
 // excludedNodeIDs contains node IDs that failed earlier in the same retry loop.
 // escrowID (optional) is forwarded so dapi can attribute per-escrow load.
+// sessionKey (optional) lets dapi prefer one node for requests that share the key.
 //
 // On failure the returned error wraps a sentinel and preserves the gRPC status
 // code so callers can branch with IsNoNodesAvailable / IsUnavailable (or
 // errors.Is / status.Code).
-func (c *Client) Acquire(ctx context.Context, model string, excludedNodeIDs []string, escrowID string) (*gen.AcquireMLNodeResponse, error) {
+func (c *Client) Acquire(ctx context.Context, model string, excludedNodeIDs []string, escrowID, sessionKey string) (*gen.AcquireMLNodeResponse, error) {
 	resp, err := c.client.AcquireMLNode(ctx, &gen.AcquireMLNodeRequest{
 		Model:         model,
 		ExcludedNodes: excludedNodeIDs,
 		EscrowId:      escrowID,
+		SessionKey:    sessionKey,
 	})
 	if err != nil {
 		return nil, classifyAcquireError(model, err)

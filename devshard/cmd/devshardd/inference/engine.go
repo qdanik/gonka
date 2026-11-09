@@ -84,7 +84,7 @@ func (e *Engine) Execute(ctx context.Context, req devshard.ExecuteRequest) (*dev
 }
 
 func (e *Engine) executeMLRequest(ctx context.Context, model, escrowID string, body []byte) (*http.Response, error) {
-	resp, err := e.doWithLockedNode(ctx, observability.PathExecute, model, escrowID, func(endpoint string) (*http.Response, error) {
+	resp, err := e.doWithLockedNode(ctx, observability.PathExecute, model, escrowID, sessionKey(body), func(endpoint string) (*http.Response, error) {
 		url := endpoint + "/v1/chat/completions"
 		httpReq, reqErr := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 		if reqErr != nil {
@@ -111,6 +111,7 @@ func (e *Engine) doWithLockedNode(
 	path observability.Path,
 	model string,
 	escrowID string,
+	key string,
 	fn func(endpoint string) (*http.Response, error),
 ) (*http.Response, error) {
 	var excluded []string
@@ -120,7 +121,7 @@ func (e *Engine) doWithLockedNode(
 
 	for attempt := 0; attempt < maxAcquireAttempts; attempt++ {
 		acqCtx, cancel := context.WithTimeout(ctx, acquireTimeout)
-		acq, err := e.mlClient.Acquire(acqCtx, model, excluded, escrowID)
+		acq, err := e.mlClient.Acquire(acqCtx, model, excluded, escrowID, key)
 		cancel()
 
 		if err != nil {
