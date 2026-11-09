@@ -32,9 +32,9 @@ devshard/gatewayprotocol/       README.md, guard_test.go
 
 ### 3.1 `settlement`
 
-Owns the settle message (`Message`, `HostStat`, `SlotSignature`), the slot order of its lists (`HostStatsBySlot`, `SignaturesBySlot`) and the settlement root (`Root`, with `PresentStats` to drop nil entries first). `Root` hashes the host stats exactly as given and never filters, so devshardctl's root is the same expression it always computed and the new gateway takes the root of its already-filtered copy.
+Owns the settle message (`Message`, `HostStat`, `SlotSignature`), the slot order of its lists (`HostStatsBySlot`, `SignaturesBySlot`), the signatures a settle posts (`ChooseSignatures`: the checked set at quorum, otherwise every held signature when they reach the chain's count of more than two thirds of the slots, otherwise nothing) and the settlement root (`Root`, with `PresentStats` to drop nil entries first). `Root` hashes the host stats exactly as given and never filters, so devshardctl's root is the same expression it always computed and the new gateway takes the root of its already-filtered copy.
 
-It does not own escrow-id parsing, signature collection or what to post when the checked signatures fall short of quorum, narration of a settlement the chain would refuse, or the devshardctl admin JSON. Each gateway keeps those.
+It does not own escrow-id parsing, signature collection, narration of a settlement the chain would refuse, or the devshardctl admin JSON. Each gateway keeps those.
 
 ### 3.2 `settlementwire`
 
@@ -77,4 +77,4 @@ The reverse check keeps host packages from importing the tree directly. It does 
 
 ## 5. Changing a rule
 
-A protocol change is made in the tree, with a test that pins the bytes or the decision. A gateway picks it up for the parts it calls: today devshardctl calls `settlement.Root`, `settlement.HostStatsBySlot`, `settlement.SignaturesBySlot`, `timeoutclaim`, `probe` and `streamevidence`, and `devshard/cmd/gateway` calls every function of the tree except `timeoutclaim.PayloadFromParams`. Where the two gateways still apply a rule differently, each keeps its own version until a change of its own chooses one, with the test that decides it.
+A protocol change is made in the tree, with a test that pins the bytes or the decision. A gateway picks it up for the parts it calls: today devshardctl calls `settlement.Root`, `settlement.HostStatsBySlot`, `settlement.SignaturesBySlot`, `settlement.ChooseSignatures`, `timeoutclaim`, `probe` and `streamevidence`, and `devshard/cmd/gateway` calls every function of the tree except `timeoutclaim.PayloadFromParams`. Where the two gateways still apply a rule differently, each keeps its own version until a change of its own chooses one, with the test that decides it.

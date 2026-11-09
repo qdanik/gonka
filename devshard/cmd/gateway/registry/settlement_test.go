@@ -498,6 +498,58 @@ func TestBuildSettlementSignsWithTheCheckedSettlementSignatures(t *testing.T) {
 }
 
 // Test flow:
+//  1. Build a registry around a settleable session of a 3-slot escrow whose re-check falls short of quorum, holding signatures for all 3 slots; then one holding 2.
+//  2. Call `BuildSettlement` for each.
+//  3. Assert the payload carries the 3 held signatures in slot order and the shortfall is narrated once.
+//  4. Assert the 2-signature escrow yields an error wrapping the shortfall and no payload: the chain counts one vote per slot entry and needs 3.
+func TestBuildSettlementPostsTheHeldSignaturesOnlyAtTheChainQuorum(t *testing.T) {
+	t.Parallel()
+	shortfall := errors.New("insufficient valid signatures: 0/3 weight")
+	for _, testCase := range []struct {
+		name           string
+		held           map[uint32][]byte
+		wantSigs       []settlement.SlotSignature
+		wantNarrations int
+		wantRefusal    bool
+	}{
+		{name: "held quorum", held: map[uint32][]byte{2: []byte("sig-2"), 0: []byte("sig-0"), 1: []byte("sig-1")},
+			wantSigs:       []settlement.SlotSignature{{SlotID: 0, Signature: []byte("sig-0")}, {SlotID: 1, Signature: []byte("sig-1")}, {SlotID: 2, Signature: []byte("sig-2")}},
+			wantNarrations: 1},
+		{name: "held short", held: map[uint32][]byte{2: []byte("sig-2"), 0: []byte("sig-0")}, wantRefusal: true},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			session := settleableSession(9)
+			session.escrowState.Group = []types.SlotAssignment{
+				{SlotID: 0, ValidatorAddress: "gonka1aaa"},
+				{SlotID: 1, ValidatorAddress: "gonka1bbb"},
+				{SlotID: 2, ValidatorAddress: "gonka1ccc"},
+			}
+			session.signatures[9], session.settlementShortfall = testCase.held, shortfall
+			narrator := &recordingEscrowNarrator{}
+			registry := New(Deps{ReadOnlySessions: newSessions(map[string]*fakeSession{"5": session}).open, Narrator: narrator, Now: fixedClock()})
+
+			input, err := registry.BuildSettlement(context.Background(), "5")
+
+			if testCase.wantRefusal {
+				if !errors.Is(err, shortfall) || input.SlotSignatures != nil {
+					t.Fatalf("BuildSettlement = %+v, %v; want no payload and an error wrapping %v", input, err, shortfall)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("BuildSettlement = %v, want nil", err)
+			}
+			if !reflect.DeepEqual(input.SlotSignatures, testCase.wantSigs) {
+				t.Fatalf("slot signatures = %v, want %v", input.SlotSignatures, testCase.wantSigs)
+			}
+			if recorded := narrator.recorded(); len(recorded) != testCase.wantNarrations {
+				t.Fatalf("narrated %v, want %d unverifiable lines", recorded, testCase.wantNarrations)
+			}
+		})
+	}
+}
+
+// Test flow:
 //  1. Build a registry with one escrow, acquire and retire it, and arm the session's onFlush hook to block until signaled.
 //  2. Release the request so the drain starts flushing, then call `Finalize` while the flush is blocked.
 //  3. Let the flush finish and wait for the close to complete.
