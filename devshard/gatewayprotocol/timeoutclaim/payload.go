@@ -3,22 +3,14 @@ package timeoutclaim
 import (
 	"devshard/host"
 	"devshard/types"
-	"devshard/user"
 )
 
-// PayloadFromParams builds the timeout vote payload from the params the nonce was dispatched with.
-func PayloadFromParams(params user.InferenceParams) *host.InferencePayload {
-	return &host.InferencePayload{
-		Prompt:      params.Prompt,
-		Model:       params.Model,
-		InputLength: params.InputLength,
-		MaxTokens:   params.MaxTokens,
-		StartedAt:   params.StartedAt,
+// Payload builds the timeout vote payload of nonce from its live record and the prompt it was dispatched with, and returns nil when lookUpRecord finds no live record.
+func Payload(lookUpRecord func(nonce uint64) (types.InferenceRecord, bool), nonce uint64, prompt []byte) *host.InferencePayload {
+	record, live := lookUpRecord(nonce)
+	if !live {
+		return nil
 	}
-}
-
-// PayloadFromRecord builds the timeout vote payload from the nonce's committed record and the prompt it was dispatched with.
-func PayloadFromRecord(record types.InferenceRecord, prompt []byte) *host.InferencePayload {
 	return &host.InferencePayload{
 		Prompt:      prompt,
 		Model:       record.Model,

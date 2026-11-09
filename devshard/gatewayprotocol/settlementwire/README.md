@@ -6,11 +6,11 @@
 
 ## What it does not own
 
-The transaction around the message (the `Any` wrapper, body, auth info, sign doc), signing and broadcasting stay in `devshard/cmd/gateway/chain`; the create-escrow message too. `devshard/cmd/devshardctl` encodes its settle transaction through `common/chain/tx` and does not call this package.
+The transaction around the message (the `Any` wrapper, body, auth info, sign doc), signing and broadcasting stay in `devshard/cmd/gateway/chain`; the create-escrow message too. `devshard/cmd/devshardctl` builds its settle transaction through `common/chain/tx` and calls this package only from tests. Its `settle_wire_equivalence_test.go` sends the full, empty-optional and zero-scalar messages as settlement JSON through `settleParamsFromJSON` and `common/chain/tx` to the in-process mock chain, decodes the broadcast `MsgSettleDevshardEscrow` and asserts it equals `Marshal`'s output decoded the same way. The raw bytes are equal for the full and empty-optional messages; for the zero-scalar message they differ, because `common/chain/tx` writes the zero `slot_id` and zero counters of a host-stats entry and the zero `slot_id` of a slot signature that `Marshal` omits.
 
 ## The goldens
 
-`testdata/` holds four base64 goldens: two whole messages (`settle_msg_full`, `settle_msg_empty_optional`) checked through `Marshal`, and one host-stats entry and one slot-signature entry checked through the package's mappings. They were written by `devshard/cmd/devshardctl/chain_txgold_test.go` (build tag `txgold`) from the fixed inputs `marshal_test.go` repeats. That generator writes into `devshard/cmd/gateway/chain/testdata/txgold` and does not compile today, so a golden here changes only by hand and with a reason.
+`testdata/` holds five base64 goldens: three whole messages (`settle_msg_full`, `settle_msg_empty_optional`, and `settle_msg_zero_scalars`, whose slot 0 and counters are zero) checked through `Marshal`, and one host-stats entry and one slot-signature entry checked through the package's mappings, all from the fixed inputs `marshal_test.go` repeats. `settle_msg_zero_scalars` was written once from `Marshal`. No generator writes them, so a golden here changes only by hand and with a reason.
 
 ## Imports
 

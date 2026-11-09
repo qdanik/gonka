@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 )
 
@@ -43,5 +44,59 @@ func TestPayloadKeepsTheLinesVerbatimInOrder(t *testing.T) {
 	want := `{"events":["data: {\"error\":{\"message\":\"\u003cthink\u003e \u0026 boom\"}}","data: [DONE]"]}`
 	if string(payload) != want {
 		t.Fatalf("Payload = %s, want %s", payload, want)
+	}
+}
+
+// Test flow:
+//  1. List the error stream fixtures `testdata/*.sse` and assert the table below names each of them once.
+//  2. For each table case, read the fixture, take its `DataLines` and serialize them with `Payload`.
+//  3. Assert `ProvesErrorMiss` of the payload matches whether a verifier reads an error in it.
+//  4. Assert `ProvesErrorMiss` refuses an empty payload.
+func TestProvesErrorMissOnlyForEvidenceThatCarriesAnError(t *testing.T) {
+	testCases := []struct {
+		fixture    string
+		wantProves bool
+	}{
+		{fixture: "error_envelope_done.sse", wantProves: true},
+		{fixture: "error_envelope_no_done.sse", wantProves: true},
+		{fixture: "newlineless_final_error.sse", wantProves: true},
+		{fixture: "content_then_error.sse", wantProves: true},
+		{fixture: "object_error.sse", wantProves: true},
+		{fixture: "error_without_space.sse", wantProves: false},
+		{fixture: "error_as_string.sse", wantProves: false},
+	}
+	paths, err := filepath.Glob(filepath.Join("testdata", "*.sse"))
+	if err != nil {
+		t.Fatalf("listing fixtures: %v", err)
+	}
+	fixtures := make([]string, 0, len(paths))
+	for _, path := range paths {
+		fixtures = append(fixtures, filepath.Base(path))
+	}
+	tableFixtures := make([]string, 0, len(testCases))
+	for _, testCase := range testCases {
+		tableFixtures = append(tableFixtures, testCase.fixture)
+	}
+	slices.Sort(tableFixtures)
+	if !slices.Equal(fixtures, tableFixtures) {
+		t.Fatalf("testdata holds %q, the table names %q", fixtures, tableFixtures)
+	}
+
+	for _, testCase := range testCases {
+		events, err := os.ReadFile(filepath.Join("testdata", testCase.fixture))
+		if err != nil {
+			t.Fatalf("reading fixture: %v", err)
+		}
+		payload, err := Payload(DataLines(events))
+		if err != nil {
+			t.Fatalf("Payload(%s): %v", testCase.fixture, err)
+		}
+
+		if proves := ProvesErrorMiss(payload); proves != testCase.wantProves {
+			t.Errorf("ProvesErrorMiss(%s) = %v, want %v", testCase.fixture, proves, testCase.wantProves)
+		}
+	}
+	if ProvesErrorMiss(nil) {
+		t.Error("ProvesErrorMiss(nil) = true, want false: a verifier rejects an empty payload")
 	}
 }

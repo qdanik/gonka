@@ -3,6 +3,7 @@ package timeoutclaim
 import (
 	"context"
 	"reflect"
+	"strings"
 	"testing"
 
 	"devshard/internal/testutil"
@@ -46,29 +47,96 @@ func newSession(t *testing.T) (*user.Session, *state.StateMachine) {
 }
 
 // Test flow:
-//  1. Build a real session over an in-memory state machine and prepare one inference with params whose every field is distinct and non-zero.
-//  2. Read the record the state machine committed for the prepared nonce.
-//  3. Assert `PayloadFromParams` of the params equals `PayloadFromRecord` of that record with the params' prompt, and that both equal the prepared inference's own payload.
-func TestPayloadFromParamsEqualsPayloadFromTheCommittedRecord(t *testing.T) {
+//  1. Define a table of dispatch params varying across every payload field distinct and non-zero, the fields the payload does not carry (context hint, stream, height-sync anchor, logprobs override) set and unset, a long prompt and a prompt with tools and tool calls.
+//  2. For each case, prepare one inference with those params through a real session over an in-memory state machine.
+//  3. Assert `Payload` over the machine's live records and the params' prompt equals the payload the prepared inference was dispatched with, which is built from the params alone.
+func TestPayloadOfANonceWithALiveRecordEqualsItsDispatchedPayload(t *testing.T) {
+	logprobsOverride := true
+	cases := []struct {
+		name   string
+		params func() user.InferenceParams
+	}{
+		{name: "every payload field distinct and non-zero", params: preparedParams},
+		{
+			name: "fields the payload does not carry all unset",
+			params: func() user.InferenceParams {
+				params := preparedParams()
+				params.ContextTotalHint, params.Stream = 0, false
+				return params
+			},
+		},
+		{
+			name: "fields the payload does not carry all set",
+			params: func() user.InferenceParams {
+				params := preparedParams()
+				params.ForceHeightSyncAnchor, params.LogprobsOptimizationOverride = true, &logprobsOverride
+				return params
+			},
+		},
+		{
+			name: "a long prompt",
+			params: func() user.InferenceParams {
+				params := preparedParams()
+				params.Prompt = []byte(`{"messages":[{"role":"user","content":"` + strings.Repeat("token ", 1<<16) + `"}],"max_tokens":64}`)
+				params.InputLength = uint64(len(params.Prompt))
+				return params
+			},
+		},
+		{
+			name: "a prompt with tools and tool calls",
+			params: func() user.InferenceParams {
+				params := preparedParams()
+				params.Prompt = []byte(`{"messages":[{"role":"user","content":"weather?"},{"role":"assistant","content":null,"tool_calls":[{"id":"call_1","type":"function","function":{"name":"weather","arguments":"{\"city\":\"Oslo\"}"}}]},{"role":"tool","tool_call_id":"call_1","content":"sunny"}],"tools":[{"type":"function","function":{"name":"weather","parameters":{"type":"object","properties":{"city":{"type":"string"}}}}}],"max_tokens":64}`)
+				return params
+			},
+		},
+	}
+
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			session, machine := newSession(t)
+			params := testCase.params()
+			prepared, err := session.PrepareInference(context.Background(), params)
+			if err != nil {
+				t.Fatalf("PrepareInference = %v, want nil", err)
+			}
+
+			payload := Payload(machine.GetInference, prepared.Nonce(), params.Prompt)
+
+			if want := prepared.Payload(); !reflect.DeepEqual(payload, want) {
+				t.Errorf("Payload = %+v, want the dispatched payload %+v", payload, want)
+			}
+		})
+	}
+}
+
+// Test flow:
+//  1. Prepare one inference through a real session over an in-memory state machine and seal its record out of the live state, as the settlement drain does.
+//  2. Define a table of nonces with no live record: the sealed one and one never prepared.
+//  3. Assert `Payload` returns none for each.
+func TestPayloadOfANonceWithoutALiveRecordIsNone(t *testing.T) {
 	session, machine := newSession(t)
 	params := preparedParams()
 	prepared, err := session.PrepareInference(context.Background(), params)
 	if err != nil {
 		t.Fatalf("PrepareInference = %v, want nil", err)
 	}
-	record, committed := machine.SnapshotState().Inferences[prepared.Nonce()]
-	if !committed {
-		t.Fatalf("nonce %d has no committed record", prepared.Nonce())
+	if err := machine.SealInference(prepared.Nonce()); err != nil {
+		t.Fatalf("SealInference = %v, want nil", err)
+	}
+	cases := []struct {
+		name  string
+		nonce uint64
+	}{
+		{name: "a sealed nonce", nonce: prepared.Nonce()},
+		{name: "a nonce never prepared", nonce: prepared.Nonce() + 1},
 	}
 
-	fromParams := PayloadFromParams(params)
-	fromRecord := PayloadFromRecord(*record, params.Prompt)
-
-	if !reflect.DeepEqual(fromParams, fromRecord) {
-		t.Errorf("PayloadFromParams = %+v, PayloadFromRecord = %+v, want equal", fromParams, fromRecord)
-	}
-	want := prepared.Payload()
-	if !reflect.DeepEqual(fromParams, want) {
-		t.Errorf("PayloadFromParams = %+v, want the prepared inference's payload %+v", fromParams, want)
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			if payload := Payload(machine.GetInference, testCase.nonce, params.Prompt); payload != nil {
+				t.Errorf("Payload = %+v, want nil", payload)
+			}
+		})
 	}
 }

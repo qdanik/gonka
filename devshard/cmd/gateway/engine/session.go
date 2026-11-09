@@ -12,7 +12,7 @@ import (
 // timeoutHandler is the session's protocol-timeout entry point; *user.Session satisfies it.
 type timeoutHandler interface {
 	timeoutclaim.Handler
-	FinishTxFor(inferenceID uint64) []byte
+	timeoutclaim.FinishSource
 	TimeoutDeadline(nonce uint64, sendTime time.Time) (string, time.Time)
 }
 
@@ -51,7 +51,7 @@ func (s *SessionTimeouts) SettleTimeout(ctx context.Context, step TimeoutStep) (
 func (s *SessionTimeouts) settle(ctx context.Context, step TimeoutStep) (user.TimeoutResult, error) {
 	var finishTx, responsePayload []byte
 	if step.Kind == SettleByMissClaim && step.Proof != nil {
-		finishTx, responsePayload = s.handler.FinishTxFor(step.Nonce), step.Proof.ResponsePayload
+		finishTx, responsePayload = timeoutclaim.FinishTx(step.Proof.finishTx, step.Nonce, s.handler), step.Proof.ResponsePayload
 	}
 	return timeoutclaim.Resolve(ctx, s.handler, step.Nonce, step.StartedAt, s.payload, finishTx, responsePayload)
 }

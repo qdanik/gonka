@@ -3,12 +3,8 @@ package engine
 import (
 	"sync/atomic"
 
-	"common/completionapi"
-
 	"devshard/gatewayprotocol/streamevidence"
 )
-
-const maxMissProofBytes = 64 * 1024
 
 const (
 	heldFinishUntaken int32 = iota
@@ -22,6 +18,7 @@ type MissProof struct {
 	Complete        bool
 	Truncated       bool
 
+	finishTx        []byte
 	releaseFinish   func()
 	finishOwnership atomic.Int32
 }
@@ -113,7 +110,7 @@ func (r *errorStreamRetainer) proof() (MissProof, bool) {
 	if err != nil {
 		return MissProof{}, false
 	}
-	if _, isError := completionapi.IsTerminalErrorResponse(payload); !isError {
+	if !streamevidence.ProvesErrorMiss(payload) {
 		return MissProof{}, false
 	}
 	return MissProof{ResponsePayload: payload, Complete: r.complete, Truncated: r.truncated}, true
