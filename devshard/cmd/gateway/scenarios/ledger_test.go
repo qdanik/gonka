@@ -15,6 +15,7 @@ import (
 //  4. Assert the escrow settled with costs above zero, the ledger's charged total equals the chain's, and `ledger match` compared at least one ledger total (`ledger match` at every step).
 func TestAForcedSettleLeavesTheLedgerChargedAsTheChain(t *testing.T) {
 	spec := lastEpochSpec()
+	spec.armedFloor = true
 	spec.steps = []harnessStep{
 		advance{by: 30 * time.Second},
 		changeParticipants{change: func(behaviour *participantBehaviour) { behaviour.stall = true }},

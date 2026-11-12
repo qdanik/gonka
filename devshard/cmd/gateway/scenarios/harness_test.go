@@ -68,6 +68,7 @@ type testSpec struct {
 	otherModels    []modelSpec
 	slotOwners     []int
 	violationSink  *string
+	armedFloor     bool
 }
 
 // gatewayHarness runs one gateway, its chain and its fleet inside a bubble, and remembers what it saw for the invariants.
@@ -307,7 +308,7 @@ func setGatewayEnvironment(t *testing.T, spec testSpec, creator *signing.Secp256
 		"DEVSHARD_TX_FEE_AMOUNT":                      "1000",
 		"DEVSHARD_TX_POLL_INTERVAL_MS":                "500",
 		"DEVSHARD_GATEWAY_HOST_PING_DISABLED":         "true",
-		"GATEWAY_WARM_NEW_ESCROWS":                    "false",
+		"GATEWAY_WARM_NEW_ESCROWS":                    strconv.FormatBool(spec.armedFloor),
 		"DEVSHARD_STATS_ENABLED":                      "true",
 		"DEVSHARD_STATS_PORT":                         "9091",
 		"GATEWAY_HEIGHT_SYNC_ENABLED":                 "false",
@@ -341,6 +342,7 @@ func newGatewayHarness(t *testing.T, spec testSpec, creator *signing.Secp256k1Si
 		slotOwners:   spec.slotOwners,
 	})
 	fleet := newHostFleet(t, blockchain, creator, participants, spec.validationRate)
+	fleet.armedFloor = spec.armedFloor
 	for index, behaviour := range spec.behaviours {
 		fleet.changeBehaviour([]int{index}, func(current *participantBehaviour) { *current = behaviour })
 	}
@@ -683,6 +685,7 @@ func TestAQuietEscrowSequencesItsReceipts(t *testing.T) {
 	startedExecutorSlots := map[uint64]uint32{}
 	missedBefore := map[uint32]uint32{}
 	spec := defaultSpec()
+	spec.armedFloor = true
 	spec.steps = []harnessStep{
 		changeParticipants{change: func(behaviour *participantBehaviour) { behaviour.stall = true }},
 		sendRequests{promptBytes: 200, maxTokens: 64, count: 1},

@@ -41,6 +41,7 @@ func requestRounds(rounds, requestsPerRound int, gap time.Duration) []harnessSte
 //  3. Assert slot 0 was charged a miss: its refusal was voted through and the reservation returned (`money identity` holds every step).
 func TestARefusedNonceIsRefundedByTheVote(t *testing.T) {
 	spec := defaultSpec()
+	spec.armedFloor = true
 	spec.behaviours = map[int]participantBehaviour{0: {offline: true}}
 	spec.steps = []harnessStep{
 		sendRequests{promptBytes: 200, maxTokens: 64, count: 8, sequential: true},
