@@ -257,12 +257,13 @@ func TestAChallengedRecordIsStuckMoney(t *testing.T) {
 }
 
 // Test flow:
-//  1. Boot with three escrows of 78 500 under a guarantee of two, full but holding little above it: their money past one full-context request each (about 133 500) covers the two slots the model needs (131 112) with about two thousand to spare, while participant 1 validates everything and votes it invalid.
+//  1. Boot with the warm-up probe armed and three escrows of 79 000 under a guarantee of two, full but holding little above it: their money past one full-context request each (about 134 300) covers the two slots the model needs (about 132 900 with the probe armed, 131 112 without) with about 1 400 to spare, less than the challenged money, while participant 1 validates everything and votes it invalid.
 //  2. Send six rounds of four small requests ten seconds apart and advance two minutes.
 //  3. Assert the escrows hold Challenged records, nothing was created although their reservations would push the model's need past its money if they counted as demand, and the report counts the challenged money stuck (`create reason` at every step).
 func TestChallengedMoneyDrivesNoCreate(t *testing.T) {
 	spec := plannerSpec()
-	spec.seeded = repeatSeeded(3, 78_500, regularRole)
+	spec.armedFloor = true
+	spec.seeded = repeatSeeded(3, 79_000, regularRole)
 	spec.validationRate = everyValidatorChecks
 	spec.behaviours = map[int]participantBehaviour{1: {votesInvalid: true}}
 	spec.steps = append(requestRounds(6, 4, 10*time.Second),
