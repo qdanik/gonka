@@ -24,7 +24,7 @@ func voteThroughTheWarmup(t *testing.T, env *testProxyEnv, nonce uint64, params 
 
 // Test flow:
 //  1. Define a table crossing the two vote paths, the race's due refusal vote and the warmup's vote for an unserved probe, with a nonce left live and a nonce sealed out of the escrow's live state, as the settlement drain does.
-//  2. For each case, prepare an inference whose refusal deadline passed an hour ago, against verifiers that record the payload of every timeout vote they are asked to judge, and seal it when the case says so.
+//  2. For each case, prepare an inference on a manually armed chain against verifiers that record the payload of every timeout vote they are asked to judge, raise the floor past its refusal deadline, and seal it when the case says so.
 //  3. Vote the refusal through the case's path.
 //  4. Expect every verifier to receive the payload the host was dispatched with for a live nonce, and no payload for a sealed one.
 func TestATimeoutVoteCarriesThePayloadOfTheLiveRecordOnly(t *testing.T) {
@@ -41,13 +41,16 @@ func TestATimeoutVoteCarriesThePayloadOfTheLiveRecordOnly(t *testing.T) {
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
-			env := setupTestProxy(t, 3, nil, false)
+			env := setupManualFloorProxy(t, 3, nil, false)
 			startedAt := time.Now().Add(-time.Hour)
 			params := defaultParams()
 			params.StartedAt = startedAt.Unix()
 			prepared, err := env.session.PrepareInference(t.Context(), params)
 			require.NoError(t, err)
 			nonce := prepared.Nonce()
+			armed, tracked := env.sm.GetInference(nonce)
+			require.True(t, tracked)
+			env.raiseFloor(t, armed.StartedAtHeight+100_000)
 			if testCase.seal {
 				require.NoError(t, env.sm.SealInference(nonce))
 				_, live := env.sm.GetInference(nonce)
