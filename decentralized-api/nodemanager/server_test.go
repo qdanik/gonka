@@ -3,6 +3,7 @@ package nodemanager
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"common/nodemanager/gen"
@@ -57,6 +58,31 @@ func TestAcquireMLNode_PassesSessionKeyToBroker(t *testing.T) {
 	_, err = srv.AcquireMLNode(context.Background(), &gen.AcquireMLNodeRequest{Model: "gpt4"})
 	require.NoError(t, err)
 	require.Equal(t, "", mb.gotSessionKey)
+}
+
+// Test flow:
+// 1. Send AcquireMLNode with a session_key of exactly maxSessionKeyLen bytes and assert the broker received it unchanged.
+// 2. Send one with a key one byte longer and assert the broker received an empty key and the acquire still succeeded.
+// 3. Send one with a 1 MiB key and assert the same.
+func TestAcquireMLNode_DropsSessionKeyLongerThanCap(t *testing.T) {
+	mb := &mockBroker{
+		acquireFunc: func(_ context.Context, _ string, _ []string) (string, string, string, error) {
+			return "lock-1", "http://node", "node-1", nil
+		},
+	}
+	srv := NewServer(mb, nil, nil)
+
+	atCap := strings.Repeat("k", maxSessionKeyLen)
+	_, err := srv.AcquireMLNode(context.Background(), &gen.AcquireMLNodeRequest{Model: "gpt4", SessionKey: atCap})
+	require.NoError(t, err)
+	require.Equal(t, atCap, mb.gotSessionKey)
+
+	for _, tooLong := range []string{atCap + "k", strings.Repeat("k", 1<<20)} {
+		resp, err := srv.AcquireMLNode(context.Background(), &gen.AcquireMLNodeRequest{Model: "gpt4", SessionKey: tooLong})
+		require.NoError(t, err)
+		require.Equal(t, "node-1", resp.NodeId)
+		require.Equal(t, "", mb.gotSessionKey)
+	}
 }
 
 func TestAcquireMLNode_Success(t *testing.T) {

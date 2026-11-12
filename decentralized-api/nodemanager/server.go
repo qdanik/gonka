@@ -79,8 +79,16 @@ func NewServer(b brokerAcquirer, configManager *apiconfig.ConfigManager, phaseTr
 	return s
 }
 
+// maxSessionKeyLen is twice the 64 hex characters of the digest a gateway sends; a longer key
+// is treated as absent so one request cannot make the broker hash megabytes per node.
+const maxSessionKeyLen = 128
+
 func (s *Server) AcquireMLNode(ctx context.Context, req *gen.AcquireMLNodeRequest) (*gen.AcquireMLNodeResponse, error) {
-	lockID, endpoint, nodeID, err := s.broker.AcquireMLNode(ctx, req.Model, req.ExcludedNodes, req.GetSessionKey())
+	sessionKey := req.GetSessionKey()
+	if len(sessionKey) > maxSessionKeyLen {
+		sessionKey = ""
+	}
+	lockID, endpoint, nodeID, err := s.broker.AcquireMLNode(ctx, req.Model, req.ExcludedNodes, sessionKey)
 	if err == nil {
 		if s.escrowLoad != nil {
 			s.escrowLoad.Record(req.GetEscrowId())
