@@ -59,27 +59,6 @@ func TestStorageBackendPostgresNeedsAnInstanceIDAndAHost(t *testing.T) {
 }
 
 // Test flow:
-//  1. Select postgres with an instance id and a host, leaving the fresh-start variable unset, then true, then garbage.
-//  2. Assert the backend does not allow a fresh start when unset, allows it when true, and refuses the garbage naming the variable.
-func TestStorageBackendReadsTheFreshStartOverride(t *testing.T) {
-	t.Setenv(mode.EnvStorageMode, "postgres")
-	t.Setenv(InstanceIDVariable, "gw-1")
-	t.Setenv("PGHOST", "localhost")
-	t.Setenv(AllowFreshPostgresVariable, "")
-	if backend, err := ResolveStorageBackend(); err != nil || backend.AllowFreshStart {
-		t.Fatalf("unset: %+v, %v; want a refusal of fresh starts", backend, err)
-	}
-	t.Setenv(AllowFreshPostgresVariable, "true")
-	if backend, err := ResolveStorageBackend(); err != nil || !backend.AllowFreshStart {
-		t.Fatalf("true: %+v, %v; want fresh starts allowed", backend, err)
-	}
-	t.Setenv(AllowFreshPostgresVariable, "maybe")
-	if _, err := ResolveStorageBackend(); err == nil || !strings.Contains(err.Error(), AllowFreshPostgresVariable) {
-		t.Fatalf("garbage: %v, want an error naming %s", err, AllowFreshPostgresVariable)
-	}
-}
-
-// Test flow:
 //  1. Set two Postgres variables, leaving the rest unset.
 //  2. Assert exactly those two are reported, so an operator who set them while the store is SQLite is told they have no effect.
 func TestIgnoredPostgresVariablesAreReported(t *testing.T) {

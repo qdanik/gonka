@@ -550,7 +550,7 @@ jobs:
           GATEWAY_TEST_REQUIRE_POSTGRES: '1'
         run: |
           go test -count=1 ./cmd/gateway/store/...
-          go test -count=1 -run TestPostgresBeside ./cmd/gateway/app/
+          go test -count=1 -run TestPostgresChoice ./cmd/gateway/app/
 
       - name: Install golangci-lint
         uses: golangci/golangci-lint-action@v9

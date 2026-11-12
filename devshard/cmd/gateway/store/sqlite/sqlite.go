@@ -37,12 +37,6 @@ func DatabasePath(storageDir string) string {
 	return filepath.Join(storageDir, gatewayDatabaseFileName)
 }
 
-// DatabaseExists reports whether storageDir already holds a gateway.db.
-func DatabaseExists(storageDir string) bool {
-	_, err := os.Stat(DatabasePath(storageDir))
-	return err == nil
-}
-
 func openBackend(storageDir string) (*Backend, error) {
 	if err := os.MkdirAll(storageDir, storageDirectoryMode); err != nil {
 		return nil, fmt.Errorf("creating storage dir: %w", err)

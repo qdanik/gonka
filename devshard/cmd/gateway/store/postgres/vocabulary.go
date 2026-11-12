@@ -22,10 +22,9 @@ const (
 	unixSocketHostPrefix   = "/"
 )
 
-// The errors Open returns for a database that is not the gateway's, an empty one it was told to refuse, a remote host without TLS and a server that does not flush commits.
+// The errors Open returns for a database that is not the gateway's, a remote host without TLS and a server that does not flush commits.
 var (
-	ErrForeignDatabase      = errors.New("postgres database holds tables this gateway did not create; point the gateway at a dedicated, empty database")
-	ErrEmptyDatabaseRefused = errors.New("postgres database is empty")
-	ErrPlaintextRemoteHost  = errors.New("postgres connection to a remote host would not use TLS; set sslmode to require, verify-ca or verify-full")
-	ErrDurabilityOff        = errors.New("postgres server does not flush commits to disk; a saved commitment would not survive a crash")
+	ErrForeignDatabase     = errors.New("postgres database holds tables this gateway did not create; point the gateway at a dedicated, empty database")
+	ErrPlaintextRemoteHost = errors.New("postgres connection to a remote host would not use TLS; set sslmode to require, verify-ca or verify-full")
+	ErrDurabilityOff       = errors.New("postgres server does not flush commits to disk; a saved commitment would not survive a crash")
 )

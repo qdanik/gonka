@@ -21,10 +21,9 @@ import (
 
 var _ store.Backend = (*Backend)(nil)
 
-// Options tunes one Open: ConnectionString is a libpq URL or keyword string (empty reads the PG* variables), and RefuseEmptyDatabase makes Open return ErrEmptyDatabaseRefused instead of initialising an empty database.
+// Options tunes one Open: ConnectionString is a libpq URL or keyword string (empty reads the PG* variables).
 type Options struct {
-	ConnectionString    string
-	RefuseEmptyDatabase bool
+	ConnectionString string
 }
 
 // Backend is the Postgres backend; Open wraps it with the ledger and owed-vote writers.
@@ -56,7 +55,7 @@ func openBackend(ctx context.Context, options Options) (*Backend, error) {
 		pool.Close()
 		return nil, fmt.Errorf("connecting to the gateway Postgres database: %w", err)
 	}
-	if err := boot(bootCtx, pool, options); err != nil {
+	if err := boot(bootCtx, pool); err != nil {
 		pool.Close()
 		return nil, err
 	}

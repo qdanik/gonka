@@ -98,26 +98,6 @@ func TestARefusedForeignDatabaseIsLeftAlone(t *testing.T) {
 }
 
 // Test flow:
-//  1. Open an empty schema with RefuseEmptyDatabase set.
-//  2. Assert the open is refused with ErrEmptyDatabaseRefused and nothing, the marker included, was created.
-//  3. Open it without the option and assert that succeeds.
-func TestAnEmptyDatabaseCanBeRefusedWithoutLeavingAMarker(t *testing.T) {
-	dsn := freshDSN(t)
-	admin := adminConnection(t, dsn)
-	if _, err := Open(context.Background(), Options{ConnectionString: dsn, RefuseEmptyDatabase: true}); !errors.Is(err, ErrEmptyDatabaseRefused) {
-		t.Fatalf("Open() = %v, want ErrEmptyDatabaseRefused", err)
-	}
-	if tables := countRows(t, admin, `SELECT count(*) FROM pg_catalog.pg_tables WHERE schemaname = current_schema()`); tables != 0 {
-		t.Fatalf("tables after the refusal = %d, want none", tables)
-	}
-	opened, err := Open(context.Background(), Options{ConnectionString: dsn})
-	if err != nil {
-		t.Fatalf("Open() without the option = %v, want nil", err)
-	}
-	opened.Close()
-}
-
-// Test flow:
 //  1. Start several opens of one empty schema at the same time.
 //  2. Assert every open succeeds and the schema holds one row per migration version.
 func TestConcurrentBootsSerialize(t *testing.T) {

@@ -104,17 +104,21 @@ func run(ctx context.Context) error {
 		return err
 	}
 	applyContentionProfiles(values.ContentionProfiles)
-	storageDir, err := resolveStorageDir(values.StorageDir)
+	choice, err := chooseStore(values)
 	if err != nil {
 		return err
 	}
-	values.StorageDir = &storageDir
+	sessionStorageDir, err := resolveStorageDir(values.StorageDir)
+	if err != nil {
+		return err
+	}
+	values.StorageDir = &sessionStorageDir
 
-	gatewayStore, err := openStore(ctx, storageDir)
+	gatewayStore, err := choice.open(ctx)
 	if err != nil {
 		return err
 	}
-	gateway, err := compose(ctx, values, storageDir, gatewayStore, chainBackedSessions(gatewayStore, storageDir))
+	gateway, err := compose(ctx, values, sessionStorageDir, gatewayStore, chainBackedSessions(gatewayStore, sessionStorageDir))
 	if err != nil {
 		return errors.Join(err, gatewayStore.Close())
 	}

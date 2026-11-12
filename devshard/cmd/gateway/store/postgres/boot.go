@@ -6,7 +6,7 @@ import (
 	"fmt"
 )
 
-func boot(ctx context.Context, pool *sql.DB, options Options) error {
+func boot(ctx context.Context, pool *sql.DB) error {
 	tx, err := pool.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("beginning the Postgres boot: %w", err)
@@ -23,7 +23,7 @@ func boot(ctx context.Context, pool *sql.DB, options Options) error {
 	if err := requireDurableCommits(ctx, tx); err != nil {
 		return err
 	}
-	if err := claimDatabase(ctx, tx, options.RefuseEmptyDatabase); err != nil {
+	if err := claimDatabase(ctx, tx); err != nil {
 		return err
 	}
 	found, err := migrate(ctx, tx)
@@ -50,7 +50,7 @@ func requireDurableCommits(ctx context.Context, tx *sql.Tx) error {
 	return nil
 }
 
-func claimDatabase(ctx context.Context, tx *sql.Tx, refuseEmpty bool) error {
+func claimDatabase(ctx context.Context, tx *sql.Tx) error {
 	var marked bool
 	if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM pg_catalog.pg_tables WHERE schemaname = current_schema() AND tablename = $1::text)`, markerTable).Scan(&marked); err != nil {
 		return fmt.Errorf("looking for the gateway marker table: %w", err)
@@ -64,9 +64,6 @@ func claimDatabase(ctx context.Context, tx *sql.Tx, refuseEmpty bool) error {
 	}
 	if tables > 0 {
 		return ErrForeignDatabase
-	}
-	if refuseEmpty {
-		return ErrEmptyDatabaseRefused
 	}
 	if _, err := tx.ExecContext(ctx, `CREATE TABLE `+markerTable+` (
 		id BIGINT PRIMARY KEY CHECK (id = 1),

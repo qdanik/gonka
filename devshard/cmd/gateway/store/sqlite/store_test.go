@@ -309,24 +309,6 @@ func TestTheSettleStampFollowsTheProcessClock(t *testing.T) {
 }
 
 // Test flow:
-//  1. Ask whether an empty directory holds a database, then open a store in it.
-//  2. Assert the answer was no before the open and is yes after.
-func TestDatabaseExistsReportsTheFileTheStoreCreates(t *testing.T) {
-	storageDir := t.TempDir()
-	if DatabaseExists(storageDir) {
-		t.Fatal("DatabaseExists() = true for an empty directory, want false")
-	}
-	opened, err := openBackend(storageDir)
-	if err != nil {
-		t.Fatalf("openBackend() = %v, want nil", err)
-	}
-	defer opened.Close()
-	if !DatabaseExists(storageDir) {
-		t.Fatal("DatabaseExists() = false after the store was opened, want true")
-	}
-}
-
-// Test flow:
 //  1. Provoke a constraint violation from the driver and build a plain error.
 //  2. Assert neither is retryable.
 func TestAConstraintViolationIsNotRetried(t *testing.T) {

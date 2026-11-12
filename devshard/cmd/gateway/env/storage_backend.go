@@ -8,15 +8,12 @@ import (
 
 	"common/storage/mode"
 	"common/storage/pgtimeouts"
-
-	"devshard/internal/boolvalue"
 )
 
-// InstanceIDVariable names this process in the boot log, and AllowFreshPostgresVariable lets a gateway start on an empty Postgres database although a SQLite gateway database sits in the storage directory.
+// InstanceIDVariable names this process in the boot log.
 const (
-	InstanceIDVariable         = "GATEWAY_INSTANCE_ID"
-	AllowFreshPostgresVariable = "GATEWAY_POSTGRES_ALLOW_FRESH_START"
-	postgresHostVariable       = "PGHOST"
+	InstanceIDVariable   = "GATEWAY_INSTANCE_ID"
+	postgresHostVariable = "PGHOST"
 )
 
 var postgresVariables = []string{
@@ -27,9 +24,8 @@ var postgresVariables = []string{
 
 // StorageBackend is where the gateway keeps its control-plane state. See ../docs/operations.md, "Storing state in Postgres".
 type StorageBackend struct {
-	Mode            mode.Mode
-	InstanceID      string
-	AllowFreshStart bool
+	Mode       mode.Mode
+	InstanceID string
 }
 
 // ResolveStorageBackend reads DEVSHARD_STORAGE_MODE: unset or sqlite is the local store, postgres is a shared one, anything else is refused, hybrid and auto included. The connection comes from the libpq PG* variables.
@@ -54,14 +50,10 @@ func resolvePostgres() (StorageBackend, error) {
 	if strings.TrimSpace(os.Getenv(postgresHostVariable)) == "" {
 		problems = append(problems, fmt.Errorf("%s is required when %s=postgres", postgresHostVariable, mode.EnvStorageMode))
 	}
-	allowFresh, err := boolvalue.Parse(strings.TrimSpace(os.Getenv(AllowFreshPostgresVariable)))
-	if err != nil {
-		problems = append(problems, fmt.Errorf("%s: %w", AllowFreshPostgresVariable, err))
-	}
 	if err := errors.Join(problems...); err != nil {
 		return StorageBackend{}, err
 	}
-	return StorageBackend{Mode: mode.Postgres, InstanceID: instanceID, AllowFreshStart: allowFresh}, nil
+	return StorageBackend{Mode: mode.Postgres, InstanceID: instanceID}, nil
 }
 
 // IgnoredPostgresVariables names the PG* variables set while the store is SQLite, so an operator who set them hears they have no effect.

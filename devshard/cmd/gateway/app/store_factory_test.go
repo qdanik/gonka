@@ -2,7 +2,6 @@ package app
 
 import (
 	"context"
-	"errors"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -11,7 +10,6 @@ import (
 	"common/storage/mode"
 
 	"devshard/cmd/gateway/env"
-	"devshard/cmd/gateway/store/postgres"
 	"devshard/cmd/gateway/store/sqlite"
 	"devshard/cmd/gateway/store/storetest"
 )
@@ -32,56 +30,75 @@ func selectPostgres(t *testing.T) {
 	t.Setenv("PGDATABASE", dsn.Path[1:])
 	t.Setenv("PGSSLMODE", "disable")
 	t.Setenv("PGOPTIONS", "-c search_path="+dsn.Query().Get("search_path"))
-	t.Setenv(env.AllowFreshPostgresVariable, "")
 }
 
 // Test flow:
-//  1. Leave the storage mode unset and open the store on a directory that does not exist yet.
-//  2. Assert the SQLite database is created under it.
+//  1. Leave the storage mode unset and choose the store with an explicit storage directory that does not exist yet.
+//  2. Assert the choice is SQLite carrying that directory, and opening it creates the database there.
 func TestTheStoreIsSQLiteWhenTheModeIsUnset(t *testing.T) {
 	t.Setenv(mode.EnvStorageMode, "")
 	storageDir := filepath.Join(t.TempDir(), "state")
-	opened, err := openStore(context.Background(), storageDir)
+	choice, err := chooseStore(env.Values{StorageDir: &storageDir})
+	if err != nil || choice != (sqliteChoice{directory: storageDir}) {
+		t.Fatalf("chooseStore() = %+v, %v, want SQLite on %s", choice, err, storageDir)
+	}
+	opened, err := choice.open(context.Background())
 	if err != nil {
-		t.Fatalf("openStore() = %v, want nil", err)
+		t.Fatalf("open() = %v, want nil", err)
 	}
 	defer opened.Close()
-	if !sqlite.DatabaseExists(storageDir) {
-		t.Fatal("no gateway database under the storage directory, want the SQLite one")
+	if _, err := os.Stat(sqlite.DatabasePath(storageDir)); err != nil {
+		t.Fatalf("no gateway database under the storage directory: %v", err)
 	}
 }
 
 // Test flow:
-//  1. Select hybrid mode and open the store.
-//  2. Assert the open is refused and no database is created.
-func TestAModeTheGatewayDoesNotSupportOpensNoStore(t *testing.T) {
+//  1. Leave the storage mode and the storage directory unset.
+//  2. Assert the SQLite choice carries the default directory the sessions use.
+func TestTheSQLiteChoiceDefaultsToTheSessionStorageDirectory(t *testing.T) {
+	t.Setenv(mode.EnvStorageMode, "")
+	choice, err := chooseStore(env.Values{})
+	if err != nil {
+		t.Fatalf("chooseStore() = %v, want nil", err)
+	}
+	want, err := resolveStorageDir(nil)
+	if err != nil || choice != (sqliteChoice{directory: want}) {
+		t.Fatalf("chooseStore() = %+v, want SQLite on %q (%v)", choice, want, err)
+	}
+}
+
+// Test flow:
+//  1. Select hybrid mode and choose the store.
+//  2. Assert the choice is refused.
+func TestAModeTheGatewayDoesNotSupportChoosesNoStore(t *testing.T) {
 	t.Setenv(mode.EnvStorageMode, "hybrid")
 	storageDir := t.TempDir()
-	if _, err := openStore(context.Background(), storageDir); err == nil {
-		t.Fatal("openStore() = nil, want a refusal")
-	}
-	if sqlite.DatabaseExists(storageDir) {
-		t.Fatal("a database was created for a refused mode")
+	if _, err := chooseStore(env.Values{StorageDir: &storageDir}); err == nil {
+		t.Fatal("chooseStore() = nil, want a refusal")
 	}
 }
 
 // Test flow:
-//  1. Select Postgres on an empty database while the storage directory holds a SQLite gateway database.
-//  2. Assert the open is refused, naming the file, and succeeds once the override variable is set.
-func TestPostgresBesideASQLiteDatabaseNeedsTheFreshStartOverride(t *testing.T) {
+//  1. Select Postgres while the storage directory holds a SQLite gateway database.
+//  2. Assert the choice is Postgres for the instance, and the store opens on the empty Postgres database.
+//  3. Assert the storage directory still holds only the file it started with.
+func TestPostgresChoiceOpensItsOwnDatabaseAndLeavesTheDirectoryAlone(t *testing.T) {
 	selectPostgres(t)
 	storageDir := t.TempDir()
 	if err := os.WriteFile(sqlite.DatabasePath(storageDir), nil, 0o600); err != nil {
 		t.Fatalf("writing the SQLite database: %v", err)
 	}
-	_, err := openStore(context.Background(), storageDir)
-	if !errors.Is(err, postgres.ErrEmptyDatabaseRefused) {
-		t.Fatalf("openStore() = %v, want ErrEmptyDatabaseRefused", err)
+	choice, err := chooseStore(env.Values{StorageDir: &storageDir})
+	if err != nil || choice != (postgresChoice{instanceID: "gw-test"}) {
+		t.Fatalf("chooseStore() = %+v, %v, want Postgres for gw-test", choice, err)
 	}
-	t.Setenv(env.AllowFreshPostgresVariable, "true")
-	opened, err := openStore(context.Background(), storageDir)
+	opened, err := choice.open(context.Background())
 	if err != nil {
-		t.Fatalf("openStore() with the override = %v, want nil", err)
+		t.Fatalf("open() = %v, want nil", err)
 	}
 	opened.Close()
+	entries, err := os.ReadDir(storageDir)
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("storage directory = %v, %v, want only the SQLite file it started with", entries, err)
+	}
 }
