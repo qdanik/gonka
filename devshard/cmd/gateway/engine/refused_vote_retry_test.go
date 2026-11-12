@@ -264,6 +264,8 @@ func (outcomeHandler) HandleErrorMiss(context.Context, uint64, []byte, []byte) (
 
 func (outcomeHandler) FinishTxFor(uint64) []byte { return nil }
 
+func (outcomeHandler) IsNonceCanonicalFinished(uint64) bool { return false }
+
 func (outcomeHandler) TimeoutDeadline(uint64, time.Time) (string, time.Time) { return "", time.Time{} }
 
 // Test flow:
