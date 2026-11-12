@@ -133,6 +133,46 @@ func TestTimeoutPayloadIsRebuiltFromTheCommittedRecord(t *testing.T) {
 }
 
 // Test flow:
+//  1. Define a table of a nonce left live and a nonce sealed out of the escrow's live state, as the settlement drain does.
+//  2. For each case, commit one real nonce through a live session, seal it when the case says so, and build its timeout payload through the session's votes carrying the dispatched start time.
+//  3. Assert the live nonce carries the payload it was dispatched with and the sealed one carries none.
+func TestTimeoutPayloadOfALiveSessionFollowsItsLiveRecord(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name        string
+		seal        bool
+		wantPayload bool
+	}{
+		{name: "a live nonce carries its dispatched payload", wantPayload: true},
+		{name: "a sealed nonce carries none", seal: true},
+	}
+
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			session, machine := newLiveSession(t)
+			prepared := prepareNonce(t, session)
+			if testCase.seal {
+				if err := machine.SealInference(prepared.Nonce()); err != nil {
+					t.Fatalf("SealInference = %v, want nil", err)
+				}
+			}
+			var want *host.InferencePayload
+			if testCase.wantPayload {
+				want = prepared.Payload()
+			}
+			votes := escrowVotes{session: registry.NewSessionHandle(session, machine), prompt: livePrompt, startedAt: liveParams().StartedAt}
+
+			payload := votes.payload(prepared.Nonce())
+
+			if !reflect.DeepEqual(payload, want) {
+				t.Errorf("payload = %+v, want %+v", payload, want)
+			}
+		})
+	}
+}
+
+// Test flow:
 //  1. Build a live session and a `fixedEscrows` publishing only that escrow.
 //  2. Ask `sessions.Poster` for an escrow ID it does not hold.
 //  3. Assert it reports not found.
@@ -188,15 +228,14 @@ func TestPosterRefusesParamsNoNonceCouldHaveCommitted(t *testing.T) {
 }
 
 // Test flow:
-//  1. Prepare a live session with one committed nonce and resolve its poster.
+//  1. Prepare a live session with one committed nonce whose refusal deadline the height floor has passed, and resolve its poster.
 //  2. Cancel the context up front.
 //  3. Call `SettleTimeout` with the cancelled context.
 //  4. Assert the error matches `context.Canceled`.
-//  5. Assert the returned vote is empty, since the protocol deadline was never reached.
+//  5. Assert the returned vote is empty, since the cancelled wait ends before any vote is cast.
 func TestSettleTimeoutReportsACancelledWaitAsNoVote(t *testing.T) {
 	t.Parallel()
-	session, machine := newLiveSession(t)
-	prepared := prepareNonce(t, session)
+	session, machine, nonce := newDueLiveSession(t)
 	sessions := NewSessions(&fixedEscrows{escrowID: liveEscrowID, session: registry.NewSessionHandle(session, machine)})
 	poster, ok := sessions.Poster(liveEscrowID, liveParams())
 	if !ok {
@@ -205,25 +244,24 @@ func TestSettleTimeoutReportsACancelledWaitAsNoVote(t *testing.T) {
 	cancelled, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	vote, err := poster.SettleTimeout(cancelled, engine.TimeoutStep{Nonce: prepared.Nonce(), StartedAt: time.Now()})
+	vote, err := poster.SettleTimeout(cancelled, engine.TimeoutStep{Nonce: nonce, StartedAt: time.Now()})
 
 	if !errors.Is(err, context.Canceled) {
 		t.Errorf("SettleTimeout error = %v, want it to match context.Canceled", err)
 	}
 	if vote.Kind != "" {
-		t.Errorf("vote = %+v, want empty: the protocol deadline was never reached", vote)
+		t.Errorf("vote = %+v, want empty: the cancelled wait ends before any vote is cast", vote)
 	}
 }
 
 // Test flow:
-//  1. Prepare a live session with one committed nonce and resolve its poster.
+//  1. Prepare a live session with one committed nonce whose refusal deadline the height floor has passed, and resolve its poster.
 //  2. Call `SettleTimeout` with a deadline 24 hours in the past, with no host client registered as a verifier so the tally stays empty.
 //  3. Assert the error matches `user.ErrTimeoutNotApplied`.
 //  4. Assert the returned vote kind is "refused".
 func TestSettleTimeoutReportsAnInsufficientVoteTallyAsAFailure(t *testing.T) {
 	t.Parallel()
-	session, machine := newLiveSession(t)
-	prepared := prepareNonce(t, session)
+	session, machine, nonce := newDueLiveSession(t)
 	sessions := NewSessions(&fixedEscrows{escrowID: liveEscrowID, session: registry.NewSessionHandle(session, machine)})
 	poster, ok := sessions.Poster(liveEscrowID, liveParams())
 	if !ok {
@@ -231,7 +269,7 @@ func TestSettleTimeoutReportsAnInsufficientVoteTallyAsAFailure(t *testing.T) {
 	}
 	elapsedDeadline := time.Now().Add(-24 * time.Hour)
 
-	vote, err := poster.SettleTimeout(context.Background(), engine.TimeoutStep{Nonce: prepared.Nonce(), StartedAt: elapsedDeadline})
+	vote, err := poster.SettleTimeout(context.Background(), engine.TimeoutStep{Nonce: nonce, StartedAt: elapsedDeadline})
 
 	if !errors.Is(err, user.ErrTimeoutNotApplied) {
 		t.Errorf("SettleTimeout error = %v, want it to match user.ErrTimeoutNotApplied", err)
