@@ -14,10 +14,21 @@ import (
 	"devshard/user"
 )
 
+const (
+	floorChainID          = "fake-chain"
+	floorBlockTimeSecond  = 1
+	floorBlockHashMarker  = 0xaa
+	floorClockEpochSecond = 1_000_000
+	floorHeartbeatCadence = 10
+	floorRaiseAttempts    = 4
+	floorBootstrapStarted = 1000
+	floorBootstrapInput   = 100
+)
+
 type floorOracle struct{ height atomic.Int64 }
 
 func (o *floorOracle) Latest(context.Context) (*blocks.Header, error) {
-	return blocks.HashOnlyHeader(o.height.Load(), time.Unix(1, 0).UTC(), "fake-chain", []byte{0xaa}), nil
+	return blocks.HashOnlyHeader(o.height.Load(), time.Unix(floorBlockTimeSecond, 0).UTC(), floorChainID, []byte{floorBlockHashMarker}), nil
 }
 
 func (o *floorOracle) At(ctx context.Context, _ int64) (*blocks.Header, error) { return o.Latest(ctx) }
@@ -32,10 +43,6 @@ func (o *floorOracle) Subscribe(context.Context, int64) (<-chan *blocks.Header, 
 	return closed, nil
 }
 
-const floorRaiseRounds = 4
-
-var floorRigClockStart = time.Unix(1_700_000_000, 0)
-
 type floorRig struct {
 	height  atomic.Uint64
 	clock   atomic.Int64
@@ -45,7 +52,7 @@ type floorRig struct {
 func newFloorRig(hosts int, height uint64) *floorRig {
 	rig := &floorRig{oracles: make([]*floorOracle, hosts)}
 	rig.height.Store(height)
-	rig.clock.Store(floorRigClockStart.UnixNano())
+	rig.clock.Store(time.Unix(floorClockEpochSecond, 0).UnixNano())
 	for index := range rig.oracles {
 		rig.oracles[index] = &floorOracle{}
 		rig.oracles[index].height.Store(int64(height))
@@ -55,16 +62,16 @@ func newFloorRig(hosts int, height uint64) *floorRig {
 
 func (r *floorRig) sessionOptions(hosts int) []user.SessionOption {
 	return []user.SessionOption{
-		user.WithHeightSyncCadence(10, uint64(hosts)),
+		user.WithHeightSyncCadence(floorHeartbeatCadence, uint64(hosts)),
 		user.WithHeartbeatClock(func() time.Time { return time.Unix(0, r.clock.Load()) }),
-		user.WithObservedHeight(func() (uint64, []byte, bool) { return r.height.Load(), []byte{0xaa}, true }),
+		user.WithObservedHeight(func() (uint64, []byte, bool) { return r.height.Load(), []byte{floorBlockHashMarker}, true }),
 	}
 }
 
 func (r *floorRig) seedFloor(t *testing.T, session *user.Session) {
 	t.Helper()
 	_, err := session.SendInference(context.Background(), user.InferenceParams{
-		Model: "llama", Prompt: testutil.TestPrompt, InputLength: 100, MaxTokens: testutil.TestMaxTokens, StartedAt: 1000,
+		Model: "llama", Prompt: testutil.TestPrompt, InputLength: floorBootstrapInput, MaxTokens: testutil.TestMaxTokens, StartedAt: floorBootstrapStarted,
 	})
 	require.NoError(t, err)
 	require.NoError(t, session.SendPendingDiff(context.Background()))
@@ -79,7 +86,7 @@ func (r *floorRig) raise(t *testing.T, session *user.Session, height uint64) {
 	for _, oracle := range r.oracles {
 		oracle.height.Store(int64(height))
 	}
-	for attempt := 0; attempt < floorRaiseRounds; attempt++ {
+	for attempt := 0; attempt < floorRaiseAttempts; attempt++ {
 		r.clock.Add(int64(time.Hour))
 		require.NoError(t, session.MaybeHeartbeat(context.Background()))
 		require.NoError(t, session.SendPendingDiff(context.Background()))
