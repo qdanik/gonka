@@ -697,7 +697,7 @@ func TestAQuietEscrowSequencesItsReceipts(t *testing.T) {
 				switch {
 				case inference.Status == types.StatusPending:
 					pending++
-				case inference.Status == types.StatusStarted && inference.ConfirmedAt > 0:
+				case inference.Status == types.StatusStarted && inference.ConfirmedAtTimeMs > 0:
 					started++
 					startedExecutorSlots[inferenceID] = inference.ExecutorSlot
 				}

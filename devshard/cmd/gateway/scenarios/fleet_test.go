@@ -559,14 +559,13 @@ func (c *fleetClient) VerifyTimeout(ctx context.Context, inferenceID uint64, rea
 	}
 	mempool := verifier.MempoolTxs()
 	executor := c.executorFor(inferenceID)
-	nowUnix := time.Now().Unix()
 	var accept bool
 	var err error
 	switch reason {
 	case types.TimeoutReason_TIMEOUT_REASON_REFUSED:
-		accept, err = host.VerifyRefusedTimeout(ctx, snapshot, inferenceID, record, payload, mempool, executor, verifier, verifier, snapshot.Config, nowUnix)
+		accept, err = host.VerifyRefusedTimeout(ctx, snapshot, inferenceID, record, payload, mempool, executor, verifier, verifier)
 	case types.TimeoutReason_TIMEOUT_REASON_EXECUTION:
-		accept, err = host.VerifyExecutionTimeout(ctx, snapshot, inferenceID, record, mempool, executor, verifier, verifier, snapshot.Config, nowUnix)
+		accept, err = host.VerifyExecutionTimeout(ctx, snapshot, inferenceID, record, mempool, executor, verifier, verifier)
 	default:
 		return false, nil, 0, nil, "", errReasonNotModelled
 	}

@@ -76,14 +76,14 @@ func (s *pointReadSession) SealedInference(uint64) (types.InferenceRecord, bool)
 }
 
 // Test flow:
-//  1. Build an escrow session holding one committed inference record for nonce 4 that counts every full copy of its state.
+//  1. Build an escrow session holding one committed inference record for nonce 4 that counts every full copy of its state, and votes carrying the dispatched start time.
 //  2. Define a table of nonces to look up, varying across a committed nonce, a nonce the escrow never committed, and an empty escrow.
 //  3. For each case, build the timeout payload for the nonce through the session's votes.
-//  4. Assert the payload matches the case's expectation, the record's own numbers for the committed case and nil otherwise, and that no full copy was taken.
+//  4. Assert the payload matches the case's expectation, the record's own numbers and the dispatched start time for the committed case and nil otherwise, and that no full copy was taken.
 func TestTimeoutPayloadIsRebuiltFromTheCommittedRecord(t *testing.T) {
 	t.Parallel()
 	committed := map[uint64]types.InferenceRecord{
-		4: {Model: liveModel, InputLength: 512, MaxTokens: 64, StartedAt: 1_700_000_000},
+		4: {Model: liveModel, InputLength: 512, MaxTokens: 64},
 	}
 	cases := []struct {
 		name    string
@@ -118,7 +118,7 @@ func TestTimeoutPayloadIsRebuiltFromTheCommittedRecord(t *testing.T) {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
 			session := &pointReadSession{records: testCase.records}
-			votes := escrowVotes{session: session, prompt: livePrompt}
+			votes := escrowVotes{session: session, prompt: livePrompt, startedAt: 1_700_000_000}
 
 			payload := votes.payload(testCase.nonce)
 

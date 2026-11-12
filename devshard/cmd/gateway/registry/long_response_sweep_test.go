@@ -7,9 +7,9 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
-	"google.golang.org/protobuf/proto"
 
 	"devshard/cmd/gateway/engine"
+	"devshard/heightsync"
 	"devshard/host"
 	"devshard/internal/statetest"
 	"devshard/internal/testutil"
@@ -100,6 +100,25 @@ func newVotingEscrow(t *testing.T, client func(acceptingVoter) user.HostClient, 
 	return longResponseEscrow{handle: handle, session: session, machine: machine, signers: signers}
 }
 
+const floorStartHeight = 100
+
+func raiseFloor(t *testing.T, escrow longResponseEscrow, height uint64) {
+	t.Helper()
+	slots := uint64(len(escrow.signers))
+	ref := escrow.machine.LatestNonce() + 1
+	_, applied, err := escrow.machine.ApplyLocalBestEffort(ref, []*types.DevshardTx{{Tx: &types.DevshardTx_Heartbeat{Heartbeat: &types.MsgHeartbeat{
+		SlotsNum: slots, Reason: string(heightsync.ReasonQuietSession),
+	}}}})
+	require.NoError(t, err)
+	require.Len(t, applied, 1)
+	ack := &types.MsgHeightAck{RefNonce: ref, SlotId: 0, ObservedHeight: height, ObservedBlockHash: []byte{0xaa},
+		SyncState: types.SyncState_SYNCED, PeerSeen: []byte{0xff}}
+	require.NoError(t, heightsync.SignAck(escrow.signers[0], ack))
+	_, applied, err = escrow.machine.ApplyLocalBestEffort(ref+1, []*types.DevshardTx{{Tx: &types.DevshardTx_HeightAck{HeightAck: ack}}})
+	require.NoError(t, err)
+	require.Len(t, applied, 1)
+}
+
 func startedTwoHoursAgo(t *testing.T, escrow longResponseEscrow) uint64 {
 	t.Helper()
 	return startedConfirmedAt(t, escrow, time.Now().Add(-2*time.Hour).Unix(), false)
@@ -107,6 +126,11 @@ func startedTwoHoursAgo(t *testing.T, escrow longResponseEscrow) uint64 {
 
 func startedConfirmedAt(t *testing.T, escrow longResponseEscrow, confirmedAt int64, delivered bool) uint64 {
 	t.Helper()
+	baseHeight, _, _ := escrow.machine.HeightSyncFloorAsOf(escrow.machine.LatestNonce() + 1)
+	if baseHeight == 0 {
+		baseHeight = floorStartHeight
+		raiseFloor(t, escrow, baseHeight)
+	}
 	prepared, err := escrow.session.PrepareInferenceFn(func(user.HostBinding) (user.InferenceParams, bool, context.Context, error) {
 		return user.InferenceParams{Model: "llama", Prompt: testutil.TestPrompt, InputLength: 100, MaxTokens: testutil.TestMaxTokens, StartedAt: 1000}, false, nil, nil
 	})
@@ -118,21 +142,13 @@ func startedConfirmedAt(t *testing.T, escrow longResponseEscrow, confirmedAt int
 	nonce := prepared.Nonce()
 	record, tracked := escrow.machine.GetInference(nonce)
 	require.True(t, tracked)
-	receipt, err := proto.MarshalOptions{Deterministic: true}.Marshal(&types.ExecutorReceiptContent{
-		InferenceId: nonce,
-		PromptHash:  record.PromptHash,
-		Model:       record.Model,
-		InputLength: record.InputLength,
-		MaxTokens:   record.MaxTokens,
-		StartedAt:   record.StartedAt,
-		EscrowId:    longResponseEscrowID,
-		ConfirmedAt: confirmedAt,
-	})
-	require.NoError(t, err)
-	signature, err := escrow.signers[record.ExecutorSlot].Sign(receipt)
-	require.NoError(t, err)
-	require.NoError(t, escrow.session.ProcessResponse(prepared.HostIdx(), &host.HostResponse{Nonce: nonce, Receipt: signature, ConfirmedAt: confirmedAt}, nonce))
+	stamp := testutil.ReceiptStamp{Height: record.StartedAtHeight, Hash: []byte{0xaa}}
+	signature := testutil.SignExecutorReceipt(t, escrow.signers[record.ExecutorSlot], longResponseEscrowID, nonce, record.PromptHash, record.Model, record.InputLength, record.MaxTokens, stamp)
+	require.NoError(t, escrow.session.ProcessResponse(prepared.HostIdx(), &host.HostResponse{Nonce: nonce, Receipt: signature, ConfirmedAt: confirmedAt, ObservedHeight: stamp.Height, ObservedBlockHash: stamp.Hash}, nonce))
 	require.NoError(t, escrow.session.SendPendingDiff(context.Background()))
+	if age := time.Now().Unix() - confirmedAt; age > 0 {
+		raiseFloor(t, escrow, baseHeight+uint64(age))
+	}
 	started, tracked := escrow.machine.GetInference(nonce)
 	require.True(t, tracked)
 	require.Equal(t, types.StatusStarted, started.Status, "the fixture must leave the nonce started with its reserve held")
