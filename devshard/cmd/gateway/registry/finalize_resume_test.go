@@ -15,14 +15,18 @@ import (
 	"devshard/user"
 )
 
-type hashBreakingClient struct {
+type cancellingClient struct {
 	user.HostClient
-	armed *atomic.Bool
+	armed  *atomic.Bool
+	cancel context.CancelFunc
 }
 
-func (c hashBreakingClient) Send(ctx context.Context, request host.HostRequest, stream io.Writer, onReceipt func(*host.HostResponse)) (*host.HostResponse, error) {
+func (c cancellingClient) Send(ctx context.Context, request host.HostRequest, stream io.Writer, onReceipt func(*host.HostResponse)) (*host.HostResponse, error) {
 	if c.armed.Load() {
-		return &host.HostResponse{Nonce: request.Nonce, StateHash: []byte{0xff}}, nil
+		c.cancel()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 	return c.HostClient.Send(ctx, request, stream, onReceipt)
 }
@@ -37,6 +41,8 @@ func interruptedFinalizeSession(t *testing.T) (EscrowSession, *user.Session) {
 	verifier := signing.NewSecp256k1Verifier()
 
 	armed := &atomic.Bool{}
+	cutCtx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
 	clients := make([]user.HostClient, len(hostSigners))
 	for index, signer := range hostSigners {
 		machine := statetest.MustStateMachine(t, escrowID, config, group, 100_000, creator.Address(), verifier)
@@ -44,7 +50,7 @@ func interruptedFinalizeSession(t *testing.T) (EscrowSession, *user.Session) {
 		if err != nil {
 			t.Fatalf("NewHost = %v, want nil", err)
 		}
-		clients[index] = hashBreakingClient{HostClient: &user.InProcessClient{Host: hostNode}, armed: armed}
+		clients[index] = cancellingClient{HostClient: &user.InProcessClient{Host: hostNode}, armed: armed, cancel: cancel}
 	}
 	machine := statetest.MustStateMachine(t, escrowID, config, group, 100_000, creator.Address(), verifier)
 	session, err := user.NewSession(machine, creator, escrowID, group, clients, verifier)
@@ -60,8 +66,8 @@ func interruptedFinalizeSession(t *testing.T) (EscrowSession, *user.Session) {
 	}
 
 	armed.Store(true)
-	if err := session.Finalize(context.Background()); err == nil {
-		t.Fatal("Finalize = nil, want the broken hash to cut it short")
+	if err := session.Finalize(cutCtx); err == nil {
+		t.Fatal("Finalize = nil, want the cancelled context to cut it short")
 	}
 	armed.Store(false)
 	if phase := machine.Phase(); phase != types.PhaseFinalizing {
@@ -71,7 +77,7 @@ func interruptedFinalizeSession(t *testing.T) (EscrowSession, *user.Session) {
 }
 
 // Test flow:
-//  1. Build an interrupted finalize session via `interruptedFinalizeSession`, whose finalize was cut short by a broken state hash and left mid-finalizing.
+//  1. Build an interrupted finalize session via `interruptedFinalizeSession`, whose finalize was cut short by a cancelled context and left mid-finalizing.
 //  2. Resume finalize on the session handle.
 //  3. Assert it completes with no error and the phase reaches settlement.
 //  4. Assert the session has a signature quorum at its own nonce.
