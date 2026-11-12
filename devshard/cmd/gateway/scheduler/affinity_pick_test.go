@@ -7,6 +7,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"devshard/cmd/gateway/chain"
+	"devshard/cmd/gateway/config"
 )
 
 var affinityHosts = []string{"h0", "h1", "h2", "h3"}
@@ -146,4 +147,102 @@ func TestAWaiterStartsWithTheMissItsProfileCarries(t *testing.T) {
 	queued.homeTo("h1")
 	require.Equal(t, AffinityExceptionNone, queued.exception)
 	require.Equal(t, "h1", queued.target)
+}
+
+func withMaxBurns(scheduler *Scheduler, burns int64) *Scheduler {
+	settings := config.Defaults()
+	settings.Scheduler.AffinityMaxBurns = burns
+	scheduler.settings = config.NewHolder(&settings)
+	return scheduler
+}
+
+// Test flow:
+//  1. Build one escrow whose next nonce is two steps before an h2 slot.
+//  2. Pick for a request bound for h2 under a burn cap of one.
+//  3. Assert the escrow is still chosen, but the waiter is unbound with a `max_burns` exception.
+//  4. Raise the budget to two and pick again.
+//  5. Assert the waiter is bound to h2 with no exception.
+func TestARequestWhoseHostIsBeyondTheBurnCapIsPickedUnbound(t *testing.T) {
+	scheduler, _, _ := newScheduler(candidate{id: "far", weight: 10, latestNonce: 3, slots: affinityHosts})
+	profile := RequestProfile{Model: modelA, Target: "h2"}
+
+	picked, queued, err := pickBound(withMaxBurns(scheduler, 1), profile)
+	require.NoError(t, err)
+	require.Equal(t, "far", picked.ID)
+	require.Equal(t, NoTarget, queued.target)
+	require.Equal(t, NoTarget, queued.homedTo)
+	require.Equal(t, AffinityExceptionMaxBurns, queued.exception)
+
+	_, queued, err = pickBound(withMaxBurns(scheduler, 2), profile)
+	require.NoError(t, err)
+	require.Equal(t, "h2", queued.target)
+	require.Equal(t, AffinityExceptionNone, queued.exception)
+}
+
+// Test flow:
+//  1. Build three escrows whose next nonces sit 1, 2 and 0 steps before an h2 slot.
+//  2. Pick for a request bound for h2 under a burn cap of zero.
+//  3. Assert the escrow with no intervening nonce is chosen and the waiter is bound.
+//  4. Drop that escrow from the model and pick again.
+//  5. Assert the waiter is unbound with a `max_burns` exception, then bound once the budget is one.
+func TestABurnCapOfZeroReachesOnlyAHostWhoseSlotIsNext(t *testing.T) {
+	scheduler, escrows, _ := newScheduler(
+		candidate{id: "near", weight: 10, latestNonce: 0, slots: affinityHosts},
+		candidate{id: "far", weight: 10, latestNonce: 3, slots: affinityHosts},
+		candidate{id: "next", weight: 10, latestNonce: 1, slots: affinityHosts},
+	)
+	profile := RequestProfile{Model: modelA, Target: "h2"}
+
+	picked, queued, err := pickBound(withMaxBurns(scheduler, 0), profile)
+	require.NoError(t, err)
+	require.Equal(t, "next", picked.ID)
+	require.Equal(t, "h2", queued.target)
+
+	escrows.byModel[modelA] = escrows.byModel[modelA][:2]
+	_, queued, err = pickBound(scheduler, profile)
+	require.NoError(t, err)
+	require.Equal(t, NoTarget, queued.target)
+	require.Equal(t, AffinityExceptionMaxBurns, queued.exception)
+
+	_, queued, err = pickBound(withMaxBurns(scheduler, 1), profile)
+	require.NoError(t, err)
+	require.Equal(t, "h2", queued.target)
+}
+
+// Test flow:
+//  1. Build one escrow whose next nonce is an h2 slot, under a burn cap of one.
+//  2. Pick for h2 and assert the waiter is bound.
+//  3. Load the escrow with a request already pending for h2 and pick again.
+//  4. Assert the waiter is unbound with a `max_burns` exception, since the pending request takes the slot and a second would wait a full cycle.
+func TestRequestsPendingForTheHostCountAgainstTheBurnCap(t *testing.T) {
+	scheduler, _, _ := newScheduler(candidate{id: "next", weight: 10, latestNonce: 1, slots: affinityHosts})
+	withMaxBurns(scheduler, 1)
+	profile := RequestProfile{Model: modelA, Target: "h2"}
+
+	_, queued, err := pickBound(scheduler, profile)
+	require.NoError(t, err)
+	require.Equal(t, "h2", queued.target)
+
+	scheduler.dispatchers["next"] = &dispatcher{}
+	scheduler.dispatchers["next"].targets.add("h2")
+	_, queued, err = pickBound(scheduler, profile)
+	require.NoError(t, err)
+	require.Equal(t, NoTarget, queued.target)
+	require.Equal(t, AffinityExceptionMaxBurns, queued.exception)
+}
+
+// Test flow:
+//  1. Build one escrow whose next nonce is two steps before an h2 slot, under a burn cap of one.
+//  2. Pick for a request bound for h2 and pinned to that escrow.
+//  3. Assert the escrow is returned, the waiter unbound and the exception `max_burns`.
+func TestAPinnedEscrowIsHeldToTheBurnCapToo(t *testing.T) {
+	scheduler, _, _ := newScheduler(candidate{id: "far", weight: 10, latestNonce: 3, slots: affinityHosts})
+	withMaxBurns(scheduler, 1)
+
+	picked, queued, err := pickBound(scheduler, RequestProfile{Model: modelA, Target: "h2", Escrow: "far"})
+
+	require.NoError(t, err)
+	require.Equal(t, "far", picked.ID)
+	require.Equal(t, NoTarget, queued.target)
+	require.Equal(t, AffinityExceptionMaxBurns, queued.exception)
 }

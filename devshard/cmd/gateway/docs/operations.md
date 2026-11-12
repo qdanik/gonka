@@ -191,6 +191,9 @@ Signing keys are addressed **by the name of the variable that holds them**, neve
 | `GATEWAY_AFFINITY_ENABLED` | false | whether the next turn of a conversation is guaranteed to execute on the participant that served the previous turn, at the cost of nonces burned to reach it ([`routing.md`](routing.md), "Host affinity") |
 | `GATEWAY_AFFINITY_TTL_MS` | 600000 | how long after its last win a conversation keeps its host; 1 to 86 400 000 |
 | `GATEWAY_AFFINITY_MAX_ENTRIES` | 100000 | how many conversations are remembered; the least recently won go first; 1 to 10 000 000 |
+| `GATEWAY_AFFINITY_MAX_PIN_AGE_MS` | 3600000 | how long after its first win on a host a conversation keeps that host, however active it is; the next turn then dispatches as any request does and pins where it wins; 1 to 604 800 000 |
+| `GATEWAY_AFFINITY_SHARE_CAP` | 2 | the multiple of its fair share of the pins, by its slots in the escrow groups, one participant may hold; a win past it is served and not pinned; 1 to 1000 |
+| `GATEWAY_AFFINITY_MAX_BURNS` | 1 | the most `affinity_skip` burns one request may be charged to reach its host: the pick binds a request only when its escrow is priced at no more than this many, and a queued request is released unbound once this many are charged to it; 0 pins only when the next nonce is the host's; 0 to 1000 |
 | `GATEWAY_CHAIN_SNAPSHOT_MAX_AGE_SECONDS` | 60 | how stale the chain snapshot may be before requests are refused 503; `0` disables the gate |
 | `GATEWAY_CHAIN_VERSIONS_POLL_INTERVAL_SECONDS` | 15 | how often each candidate host's `/v1/versions` is polled for PoC-validation capability; 1 to 86 400; a host's last good answer lives three intervals |
 | `GATEWAY_ENGINE_RECEIPT_TIMEOUT_MS` | 5 000 | receipt deadline; doubled above 100 000 input tokens |

@@ -6,11 +6,13 @@ type Key string
 // Status is what a lookup found.
 type Status int
 
-// StatusHit, StatusNew and StatusExpired are what a lookup found; NoKey is what a request with nothing to key on gets, NoParticipant what a lookup answers when it holds no host.
+// StatusHit, StatusNew, StatusExpired, StatusPinAged and StatusShareCapped are what a lookup found; NoKey is what a request with nothing to key on gets, NoParticipant what a lookup answers when it holds no host.
 const (
 	StatusHit Status = iota
 	StatusNew
 	StatusExpired
+	StatusPinAged
+	StatusShareCapped
 	NoKey         Key    = ""
 	NoParticipant string = ""
 )

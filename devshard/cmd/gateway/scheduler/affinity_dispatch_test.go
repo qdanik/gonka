@@ -236,3 +236,116 @@ func TestWaitersBoundForOneHostAreServedOnePerCycleWithBoundedBurns(t *testing.T
 	require.Zero(t, holds)
 	require.Zero(t, trips)
 }
+
+func maxBurnsOf(burns int64) func() int64 { return func() int64 { return burns } }
+
+// Test flow:
+//  1. Build a 16-host harness with an affinity burn cap of one and queue a waiter bound for host 3.
+//  2. Drain the queue.
+//  3. Assert one nonce was burned as an `affinity_skip` for the request, and the waiter was then served unbound on host 2 at nonce 2.
+//  4. Assert no hit was counted and the exception is `max_burns`.
+func TestAWaiterThatHasCostItsBurnCapIsServedUnbound(t *testing.T) {
+	group := groupOf(affinityGroupSize)
+	test := newHarness(t, harnessConfig{slots: group, holdStart: true, affinityMaxBurns: maxBurnsOf(1)})
+	queued := test.boundFor("request-1", group[3])
+
+	test.drainWaiters(queued)
+
+	wantAssignment(t, awaitReply(t, queued), group[2], 2)
+	require.Equal(t, []string{GhostReasonAffinitySkip}, test.observer.burns())
+	require.Equal(t, []string{"request-1"}, test.observer.burnRequests())
+	landed, exceptions := test.observer.affinity()
+	require.Zero(t, landed)
+	require.Equal(t, []AffinityException{AffinityExceptionMaxBurns}, exceptions)
+}
+
+// Test flow:
+//  1. Build a 16-host harness with a burn cap of zero and queue a waiter bound for host 3.
+//  2. Drain the queue and assert it is served unbound on host 1 at nonce 1 with nothing burned and a `max_burns` exception.
+//  3. Queue a waiter bound for host 2, whose slot is the next nonce, and drain.
+//  4. Assert it lands on host 2 at nonce 2 with nothing burned and no exception.
+func TestABurnCapOfZeroPinsOnlyAHostWhoseSlotIsNext(t *testing.T) {
+	group := groupOf(affinityGroupSize)
+	test := newHarness(t, harnessConfig{slots: group, holdStart: true, affinityMaxBurns: maxBurnsOf(0)})
+	away := test.boundFor("away", group[3])
+
+	test.drainWaiters(away)
+
+	wantAssignment(t, awaitReply(t, away), group[1], 1)
+	require.Empty(t, test.observer.burns())
+	landed, exceptions := test.observer.affinity()
+	require.Zero(t, landed)
+	require.Equal(t, []AffinityException{AffinityExceptionMaxBurns}, exceptions)
+
+	next := test.boundFor("next", group[2])
+	test.drainWaiters(next)
+
+	wantAssignment(t, awaitReply(t, next), group[2], 2)
+	require.Empty(t, test.observer.burns())
+	landed, exceptions = test.observer.affinity()
+	require.Equal(t, 1, landed)
+	require.Len(t, exceptions, 1)
+}
+
+// Test flow:
+//  1. Build a 16-host harness with a burn cap of one and queue a waiter bound for host 5 ahead of one bound for host 7.
+//  2. Drain the queue.
+//  3. Assert two nonces were burned, the first charged to the older waiter and the second to the other, so neither paid more than the budget.
+//  4. Assert the older waiter was served on host 2 at nonce 2 and the other on host 4 at nonce 4, both with a `max_burns` exception.
+func TestEveryQueuedWaiterIsChargedAtMostTheBurnCap(t *testing.T) {
+	group := groupOf(affinityGroupSize)
+	test := newHarness(t, harnessConfig{slots: group, holdStart: true, affinityMaxBurns: maxBurnsOf(1)})
+	older := test.boundFor("older", group[5])
+	younger := test.boundFor("younger", group[7])
+
+	test.drainWaiters(older, younger)
+
+	wantAssignment(t, awaitReply(t, older), group[2], 2)
+	wantAssignment(t, awaitReply(t, younger), group[4], 4)
+	require.Equal(t, slices.Repeat([]string{GhostReasonAffinitySkip}, 2), test.observer.burns())
+	require.Equal(t, []string{"older", "younger"}, test.observer.burnRequests())
+	_, exceptions := test.observer.affinity()
+	require.Equal(t, []AffinityException{AffinityExceptionMaxBurns, AffinityExceptionMaxBurns}, exceptions)
+}
+
+// Test flow:
+//  1. Build a 16-host harness with a burn cap of zero and queue a waiter with no target ahead of one bound for host 2.
+//  2. Drain the queue.
+//  3. Assert the free waiter takes host 1 at nonce 1 and the bound one lands on host 2 at nonce 2, so no nonce is burned.
+//  4. Assert one hit is counted and no exception, since the bound waiter was never released.
+func TestAWaiterWhoseHostIsNextAfterAFreeOneIsNotReleasedByAZeroBurnCap(t *testing.T) {
+	group := groupOf(affinityGroupSize)
+	test := newHarness(t, harnessConfig{slots: group, holdStart: true, affinityMaxBurns: maxBurnsOf(0)})
+	free := newWaiter(RequestProfile{RequestID: "free", Model: modelA, Params: "payload"}, test.clock.Now())
+	bound := test.boundFor("bound", group[2])
+
+	test.drainWaiters(free, bound)
+
+	wantAssignment(t, awaitReply(t, free), group[1], 1)
+	wantAssignment(t, awaitReply(t, bound), group[2], 2)
+	require.Empty(t, test.observer.burns())
+	landed, exceptions := test.observer.affinity()
+	require.Equal(t, 1, landed)
+	require.Empty(t, exceptions)
+}
+
+// Test flow:
+//  1. Build a 16-host harness with a burn cap of one and queue a waiter bound for host 5 that has already been charged one burn, ahead of a free waiter.
+//  2. Drain the queue.
+//  3. Assert the free waiter takes host 1 at nonce 1, since that offer burns nothing for the bound waiter.
+//  4. Assert the bound waiter is released at the next offer and served unbound on host 2 at nonce 2, with nothing burned and a `max_burns` exception.
+func TestAWaiterAtItsBurnCapKeepsItsPlaceUntilAnOfferWouldBurnForIt(t *testing.T) {
+	group := groupOf(affinityGroupSize)
+	test := newHarness(t, harnessConfig{slots: group, holdStart: true, affinityMaxBurns: maxBurnsOf(1)})
+	bound := test.boundFor("bound", group[5])
+	bound.skipped = 1
+	free := newWaiter(RequestProfile{RequestID: "free", Model: modelA, Params: "payload"}, test.clock.Now())
+
+	test.drainWaiters(bound, free)
+
+	wantAssignment(t, awaitReply(t, free), group[1], 1)
+	wantAssignment(t, awaitReply(t, bound), group[2], 2)
+	require.Empty(t, test.observer.burns())
+	_, exceptions := test.observer.affinity()
+	require.Equal(t, []AffinityException{AffinityExceptionMaxBurns}, exceptions)
+}

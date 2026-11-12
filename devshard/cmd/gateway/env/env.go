@@ -290,6 +290,9 @@ func Load() (Values, error) {
 	readStrictBool("GATEWAY_AFFINITY_ENABLED", &values.AffinityEnabled)
 	readStrictInt("GATEWAY_AFFINITY_TTL_MS", &values.AffinityTTLMS)
 	readStrictInt("GATEWAY_AFFINITY_MAX_ENTRIES", &values.AffinityMaxEntries)
+	readStrictInt("GATEWAY_AFFINITY_MAX_PIN_AGE_MS", &values.AffinityMaxPinAgeMS)
+	readStrictInt("GATEWAY_AFFINITY_SHARE_CAP", &values.AffinityShareCap)
+	readStrictInt("GATEWAY_AFFINITY_MAX_BURNS", &values.AffinityMaxBurns)
 	readStrictInt("GATEWAY_ROTATION_SETTLE_MARGIN_BLOCKS", &values.RotationSettleMarginBlocks)
 
 	readLenientInt("DEVSHARD_CHAT_CACHE_MAX_BYTES", 1, &values.ChatCacheMaxBytes)

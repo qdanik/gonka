@@ -20,6 +20,10 @@ func (c *raceCoordinator) affinityIntent() (target string, miss scheduler.Affini
 		return participant, scheduler.AffinityExceptionNone
 	case affinity.StatusExpired:
 		return scheduler.NoTarget, scheduler.AffinityExceptionExpired
+	case affinity.StatusPinAged:
+		return scheduler.NoTarget, scheduler.AffinityExceptionPinAged
+	case affinity.StatusShareCapped:
+		return scheduler.NoTarget, scheduler.AffinityExceptionShareCapped
 	}
 	return scheduler.NoTarget, scheduler.AffinityExceptionNewKey
 }

@@ -318,7 +318,7 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 	raceObserver := nonceAccountedRaces{recorder: raceRecorder, events: events}
 	prober.Settle(sessions.Poster, probeVotes{recorder: raceRecorder, events: events}, events)
 	e2e := env.LoadE2E()
-	hostMemory := affinity.NewTracker(affinityLimits(configHolder), clock)
+	hostMemory := affinity.NewTracker(affinityLimits(configHolder), escrows.SlotsByParticipant, clock)
 	races, err := engine.NewEngine(engine.Deps{
 		Affinity:   hostMemory,
 		Picker:     router,
@@ -476,6 +476,11 @@ func (environmentSigner) SignerFor(privateKeyEnv string) (*signing.Secp256k1Sign
 func affinityLimits(holder *config.Holder) func() affinity.Limits {
 	return func() affinity.Limits {
 		scheduling := holder.Load().Scheduler
-		return affinity.Limits{TTL: time.Duration(scheduling.AffinityTTLMS) * time.Millisecond, MaxEntries: int(scheduling.AffinityMaxEntries)}
+		return affinity.Limits{
+			TTL:        time.Duration(scheduling.AffinityTTLMS) * time.Millisecond,
+			MaxEntries: int(scheduling.AffinityMaxEntries),
+			MaxPinAge:  time.Duration(scheduling.AffinityMaxPinAgeMS) * time.Millisecond,
+			ShareCap:   int(scheduling.AffinityShareCap),
+		}
 	}
 }

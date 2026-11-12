@@ -40,6 +40,7 @@ type dispatcherDeps struct {
 	now                 func() time.Time
 	matchWait           time.Duration
 	maxConsecutiveBurns func() int64
+	affinityMaxBurns    func() int64
 	retirementReserve   func() uint64
 	newTimer            func(time.Duration) (<-chan time.Time, func())
 	retire              func(*dispatcher) bool
@@ -86,6 +87,9 @@ func newDispatcher(deps dispatcherDeps) *dispatcher {
 	}
 	if deps.maxConsecutiveBurns == nil {
 		deps.maxConsecutiveBurns = func() int64 { return 0 }
+	}
+	if deps.affinityMaxBurns == nil {
+		deps.affinityMaxBurns = func() int64 { return noBurnCap }
 	}
 	if deps.retirementReserve == nil {
 		deps.retirementReserve = func() uint64 { return 0 }

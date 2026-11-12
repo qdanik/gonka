@@ -42,6 +42,7 @@ type waiter struct {
 	homedTo   string
 	target    string
 	exception AffinityException
+	skipped   int64
 
 	handoff sync.Mutex
 }

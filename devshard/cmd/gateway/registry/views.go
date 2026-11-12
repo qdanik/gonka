@@ -24,6 +24,22 @@ func (r *Registry) Candidates(model string) []scheduler.Escrow {
 	return candidates
 }
 
+// SlotsByParticipant counts each participant's slots over the groups of every accepting escrow.
+func (r *Registry) SlotsByParticipant() map[string]int {
+	slots := map[string]int{}
+	for _, entries := range r.live.Load().byModel {
+		for _, entry := range entries {
+			if !entry.accepting() {
+				continue
+			}
+			for _, participant := range entry.stream.SlotParticipants() {
+				slots[participant]++
+			}
+		}
+	}
+	return slots
+}
+
 // Routable answers for one escrow what Candidates answers for a model, by id rather than by scanning every model.
 func (r *Registry) Routable(escrowID string) (scheduler.Escrow, bool) {
 	entry, known := r.live.Load().byID[escrowID]

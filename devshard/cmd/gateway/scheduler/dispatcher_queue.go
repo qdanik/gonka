@@ -39,6 +39,7 @@ func (d *dispatcher) drain() (time.Time, bool) {
 	// Read before Advance: decide runs under the session's lock.
 	escalationBound := escalationNonceBound(snapshot.MaxNonce, groupSize)
 	burnLimit := d.maxConsecutiveBurns()
+	maxBurns := d.affinityMaxBurns()
 
 	var offered offer
 	decide := func(binding HostBinding) NonceIntent {
@@ -49,7 +50,7 @@ func (d *dispatcher) drain() (time.Time, bool) {
 			gates = avail.servingOverFullWindows()
 		}
 		d.lapseTargets(participants, gates)
-		offered.decision = match(binding, d.waiting, participants, gates, d.now(), d.matchWait)
+		offered.decision = d.matchWithinBurnCap(binding, participants, gates, maxBurns)
 		if skipped, skipping := offered.decision.(burn); skipping && skipped.waiter != nil {
 			offered.refusedWaiter = skipped.waiter
 		}
@@ -137,6 +138,8 @@ func (d *dispatcher) drain() (time.Time, bool) {
 			offered.taken.releaseHold()
 			if outcome.kind != ghostAffinitySkip {
 				d.burnsInARow++
+			} else if outcome.waiter != nil {
+				outcome.waiter.skipped++
 			}
 			if d.spendBurnBudget(&burnBudget) {
 				return time.Time{}, false
@@ -152,6 +155,18 @@ func (d *dispatcher) drain() (time.Time, bool) {
 			return time.Time{}, false
 		}
 	}
+}
+
+func (d *dispatcher) matchWithinBurnCap(binding HostBinding, participants []string, gates availability, maxBurns int64) Decision {
+	for range len(d.waiting) {
+		decision := match(binding, d.waiting, participants, gates, d.now(), d.matchWait)
+		skipped, skipping := decision.(burn)
+		if !skipping || skipped.kind != ghostAffinitySkip || skipped.waiter.skipped < maxBurns {
+			return decision
+		}
+		skipped.waiter.lapse(AffinityExceptionMaxBurns)
+	}
+	return match(binding, d.waiting, participants, gates, d.now(), d.matchWait)
 }
 
 func (d *dispatcher) lapseTargets(participants []string, gates availability) {

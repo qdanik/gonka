@@ -10,6 +10,7 @@ type targetFound int
 const (
 	targetAbsent targetFound = iota
 	targetBlocked
+	targetOverBurnCap
 	targetReached
 )
 
@@ -98,7 +99,11 @@ func stepsToTarget(candidate Escrow, gates availability, ranking escrowRanking, 
 			continue
 		}
 		if wanted == 0 {
-			return cycles*len(slots) + step, targetReached
+			steps := cycles*len(slots) + step
+			if int64(steps) > ranking.maxBurns {
+				return steps, targetOverBurnCap
+			}
+			return steps, targetReached
 		}
 		wanted--
 	}

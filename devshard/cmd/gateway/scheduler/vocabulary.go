@@ -26,6 +26,9 @@ const (
 	AffinityExceptionExpired     AffinityException = "expired"
 	AffinityExceptionGateBlocked AffinityException = "gate_blocked"
 	AffinityExceptionNotInGroup  AffinityException = "not_in_group"
+	AffinityExceptionPinAged     AffinityException = "pin_aged"
+	AffinityExceptionShareCapped AffinityException = "share_capped"
+	AffinityExceptionMaxBurns    AffinityException = "max_burns"
 
 	NoTarget = ""
 )

@@ -31,9 +31,9 @@ func affinityCoordinator(memory hostMemory, key affinity.Key) *raceCoordinator {
 }
 
 // Test flow:
-//  1. Build coordinators over a memory that answers a hit, an expired entry and an unknown key.
+//  1. Build coordinators over a memory that answers a hit, an expired entry, an aged-out pin, a share-capped win and an unknown key.
 //  2. Ask each for the first attempt's affinity intent.
-//  3. Assert a hit names its host with no miss, an expired entry and an unknown key name no host and say why.
+//  3. Assert a hit names its host with no miss, every other answer names no host and says why.
 //  4. Assert a request with no key, and a coordinator with no memory at all, ask for nothing and report no miss.
 func TestTheFirstAttemptAsksForTheHostTheKeyLastWon(t *testing.T) {
 	cases := []struct {
@@ -45,6 +45,8 @@ func TestTheFirstAttemptAsksForTheHostTheKeyLastWon(t *testing.T) {
 	}{
 		{"a hit", &spyMemory{participant: "host-a", status: affinity.StatusHit}, "key", "host-a", scheduler.AffinityExceptionNone},
 		{"an expired entry", &spyMemory{status: affinity.StatusExpired}, "key", scheduler.NoTarget, scheduler.AffinityExceptionExpired},
+		{"an aged-out pin", &spyMemory{status: affinity.StatusPinAged}, "key", scheduler.NoTarget, scheduler.AffinityExceptionPinAged},
+		{"a share-capped win", &spyMemory{status: affinity.StatusShareCapped}, "key", scheduler.NoTarget, scheduler.AffinityExceptionShareCapped},
 		{"an unknown key", &spyMemory{status: affinity.StatusNew}, "key", scheduler.NoTarget, scheduler.AffinityExceptionNewKey},
 		{"a request with no key", &spyMemory{participant: "host-a", status: affinity.StatusHit}, affinity.NoKey, scheduler.NoTarget, scheduler.AffinityExceptionNone},
 	}

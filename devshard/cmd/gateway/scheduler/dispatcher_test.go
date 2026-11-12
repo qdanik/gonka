@@ -402,6 +402,7 @@ type harnessConfig struct {
 	balance             uint64
 	feePerNonce         uint64
 	retirementReserve   uint64
+	affinityMaxBurns    func() int64
 }
 
 type harness struct {
@@ -485,6 +486,7 @@ func newHarness(t *testing.T, cfg harnessConfig) *harness {
 		now:                 clock.Now,
 		matchWait:           matchWaitWindow,
 		maxConsecutiveBurns: burnLimit.Load,
+		affinityMaxBurns:    cfg.affinityMaxBurns,
 		retirementReserve:   func() uint64 { return cfg.retirementReserve },
 		newTimer:            clock.newTimer,
 		submitBuffer:        cmp.Or(cfg.submitBuffer, int(config.Defaults().Scheduler.DispatchQueueDepth)),
