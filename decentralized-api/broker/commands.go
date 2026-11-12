@@ -17,7 +17,7 @@ type LockAvailableNode struct {
 	Model       string
 	Response    chan *Node
 	SkipNodeIDs []string
-	// SessionKey, when non-empty, makes the choice sticky to one node per key.
+	// SessionKey, when non-empty, ranks nodes per key and takes the best-ranked one within stickyMaxLead locks of the least busy.
 	SessionKey string
 }
 

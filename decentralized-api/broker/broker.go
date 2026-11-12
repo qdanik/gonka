@@ -583,8 +583,7 @@ func (b *Broker) getLeastBusyNode(command LockAvailableNode) *NodeWithState {
 	}
 
 	var leastBusyNode *NodeWithState = nil
-	var stickyNode *NodeWithState = nil
-	var stickyScore uint64
+	var candidates []rankedNode
 	for _, node := range b.nodes {
 		if _, shouldSkip := skip[node.Node.Id]; shouldSkip {
 			logging.Info("Node skipped by LockAvailableNode skip list", types.Nodes, "node_id", node.Node.Id)
@@ -596,12 +595,6 @@ func (b *Broker) getLeastBusyNode(command LockAvailableNode) *NodeWithState {
 			logging.Info("Node not available", types.Nodes, "node_id", node.Node.Id, "reason", reason)
 			continue
 		}
-		if command.SessionKey != "" {
-			score := rendezvousScore(command.SessionKey, node.Node.Id)
-			if stickyNode == nil || score > stickyScore || (score == stickyScore && node.Node.Id < stickyNode.Node.Id) {
-				stickyNode, stickyScore = node, score
-			}
-		}
 		if reason := nodeCapacityReason(node); reason != "" {
 			logging.Info("Node not available", types.Nodes, "node_id", node.Node.Id, "reason", reason)
 			continue
@@ -609,13 +602,40 @@ func (b *Broker) getLeastBusyNode(command LockAvailableNode) *NodeWithState {
 		if leastBusyNode == nil || node.State.LockCount < leastBusyNode.State.LockCount {
 			leastBusyNode = node
 		}
+		if command.SessionKey != "" {
+			candidates = append(candidates, rankedNode{node, rendezvousScore(command.SessionKey, node.Node.Id)})
+		}
 	}
 
-	// A full sticky node falls back to least busy; stickiness never queues or refuses.
-	if stickyNode != nil && nodeCapacityReason(stickyNode) == "" {
-		return stickyNode
+	if command.SessionKey == "" || leastBusyNode == nil {
+		return leastBusyNode
 	}
-	return leastBusyNode
+	return highestRankedWithinLead(candidates, leastBusyNode.State.LockCount+stickyMaxLead)
+}
+
+// stickyMaxLead is how many locks a key's chosen node may hold above the least busy node. Without
+// it a hot key would fill one node up to MaxConcurrent (500 in shipped configs) while others idle.
+const stickyMaxLead = 8
+
+type rankedNode struct {
+	node  *NodeWithState
+	score uint64
+}
+
+// highestRankedWithinLead returns the best-ranked candidate whose lock count is at most maxLockCount,
+// ties to the smaller node id. The least busy node is always a candidate, so the result is never nil.
+func highestRankedWithinLead(candidates []rankedNode, maxLockCount int) *NodeWithState {
+	var best *rankedNode
+	for i := range candidates {
+		c := &candidates[i]
+		if c.node.State.LockCount > maxLockCount {
+			continue
+		}
+		if best == nil || c.score > best.score || (c.score == best.score && c.node.Node.Id < best.node.Node.Id) {
+			best = c
+		}
+	}
+	return best.node
 }
 
 // rendezvousScore ranks a node for a session key (highest random weight hashing). It is

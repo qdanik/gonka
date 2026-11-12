@@ -3,6 +3,8 @@ package broker
 import (
 	"context"
 	"fmt"
+	"sort"
+	"sync"
 	"testing"
 	"time"
 
@@ -136,15 +138,45 @@ func TestStickySession_SameKeyLandsOnSameNode(t *testing.T) {
 	}
 }
 
+func rankedNodeIDs(b *Broker, sessionKey string) []string {
+	ids := make([]string, 0)
+	for id := range lockCounts(b) {
+		ids = append(ids, id)
+	}
+	sort.Slice(ids, func(i, j int) bool {
+		si, sj := rendezvousScore(sessionKey, ids[i]), rendezvousScore(sessionKey, ids[j])
+		if si != sj {
+			return si > sj
+		}
+		return ids[i] < ids[j]
+	})
+	return ids
+}
+
+func spread(counts map[string]int) (lowest, highest, total int) {
+	lowest = -1
+	for _, c := range counts {
+		if lowest < 0 || c < lowest {
+			lowest = c
+		}
+		if c > highest {
+			highest = c
+		}
+		total += c
+	}
+	return lowest, highest, total
+}
+
 // Test flow:
-// 1. Register three nodes with three slots each and find the home node of a key.
+// 1. Register three nodes with three slots each and rank them for a key.
 // 2. Fill the home node with three acquires of the key and assert each lock count rose by exactly one.
-// 3. Give the runner-up node by rendezvous rank a lock and acquire the key again with the home node full.
-// 4. Assert the answer is the idle other node, which is the least-busy choice.
+// 3. Give the runner-up a lock and acquire the key again with the home node full.
+// 4. Assert the answer is the runner-up, not the idle third node, and the home count is unchanged.
 // 5. Release one home lock and assert the key returns to its home node.
-func TestStickySession_FallsBackToLeastBusyWhenHomeIsFull(t *testing.T) {
+func TestStickySession_FullHomeOverflowsToNextRankedNode(t *testing.T) {
 	b := newStickyTestBroker(t, 3, 3)
-	home := acquireAndRelease(t, b, "busy-conversation")
+	ranked := rankedNodeIDs(b, "busy-conversation")
+	home, runnerUp := ranked[0], ranked[1]
 
 	var homeLockID string
 	for i := 1; i <= 3; i++ {
@@ -154,20 +186,10 @@ func TestStickySession_FallsBackToLeastBusyWhenHomeIsFull(t *testing.T) {
 		homeLockID = lockID
 	}
 
-	var others []string
-	for id := range lockCounts(b) {
-		if id != home {
-			others = append(others, id)
-		}
-	}
-	require.Len(t, others, 2)
-	if rendezvousScore("busy-conversation", others[1]) > rendezvousScore("busy-conversation", others[0]) {
-		others[0], others[1] = others[1], others[0]
-	}
-	setLockCount(b, others[0], 1)
+	setLockCount(b, runnerUp, 1)
 
-	_, fallbackNodeID := acquireNode(t, b, "busy-conversation")
-	require.Equal(t, others[1], fallbackNodeID)
+	_, overflowNodeID := acquireNode(t, b, "busy-conversation")
+	require.Equal(t, runnerUp, overflowNodeID)
 	require.Equal(t, 3, lockCounts(b)[home])
 
 	require.NoError(t, b.ReleaseMLNode(homeLockID, InferenceSuccess{}))
@@ -185,11 +207,24 @@ func TestStickySession_NoCapacityStillRefusesWithoutQueueing(t *testing.T) {
 	require.ErrorIs(t, err, ErrNoNodesAvailable)
 }
 
+func setReconcileInfo(b *Broker, nodeID string, info *ReconcileInfo) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.nodes[nodeID].State.ReconcileInfo = info
+}
+
+func setNodeStatus(b *Broker, nodeID string, status types.HardwareNodeStatus) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.nodes[nodeID].State.IntendedStatus = status
+	b.nodes[nodeID].State.CurrentStatus = status
+}
+
 // Test flow:
-// 1. Register four nodes and find the home node of a key.
-// 2. Exclude the home node, then disable it, and in each case acquire the key several times.
+// 1. Register four nodes with MaxConcurrent 500 and find the home node of a key.
+// 2. Exclude the home node, disable it, set it reconciling, or move it out of the inference state, and in each case acquire the key several times.
 // 3. Assert the answer is never the home node and is the same node every time.
-// 4. Lift the exclusion or re-enable the node and assert the key returns to its home node.
+// 4. Lift the exclusion or restore the node and assert the key returns to its home node.
 func TestStickySession_MovesWhenHomeIsExcludedOrDisabled(t *testing.T) {
 	cases := []struct {
 		name  string
@@ -209,10 +244,26 @@ func TestStickySession_MovesWhenHomeIsExcludedOrDisabled(t *testing.T) {
 			},
 			end: func(b *Broker, home string) { setNodeEnabled(b, home, true) },
 		},
+		{
+			name: "reconciling",
+			start: func(b *Broker, home string) []string {
+				setReconcileInfo(b, home, &ReconcileInfo{Status: types.HardwareNodeStatus_STOPPED})
+				return nil
+			},
+			end: func(b *Broker, home string) { setReconcileInfo(b, home, nil) },
+		},
+		{
+			name: "left inference state",
+			start: func(b *Broker, home string) []string {
+				setNodeStatus(b, home, types.HardwareNodeStatus_POC)
+				return nil
+			},
+			end: func(b *Broker, home string) { setNodeStatus(b, home, types.HardwareNodeStatus_INFERENCE) },
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			b := newStickyTestBroker(t, 4, 2)
+			b := newStickyTestBroker(t, 4, 500)
 			home := acquireAndRelease(t, b, "conversation-a")
 
 			skip := tc.start(b, home)
@@ -259,4 +310,116 @@ func TestStickySession_EmptyKeyKeepsLeastBusyDistribution(t *testing.T) {
 	_, second := acquireNode(t, b, "conversation")
 	require.Equal(t, first, second)
 	require.Equal(t, 2, lockCounts(b)[first])
+}
+
+// Test flow:
+// 1. Register four nodes with MaxConcurrent 500 and acquire one key two hundred times without releasing.
+// 2. Assert the locks add up to two hundred and no node trails another by more than the lead plus one.
+// 3. Assert every node took part, so one hot key does not sit on one node.
+func TestStickySession_OneHotKeySpreadsAcrossNodes(t *testing.T) {
+	b := newStickyTestBroker(t, 4, 500)
+
+	for i := 0; i < 200; i++ {
+		acquireNode(t, b, "hot-conversation")
+	}
+
+	lowest, highest, total := spread(lockCounts(b))
+	require.Equal(t, 200, total)
+	require.LessOrEqual(t, highest-lowest, stickyMaxLead+1, "locks: %v", lockCounts(b))
+	require.Greater(t, lowest, 0, "locks: %v", lockCounts(b))
+}
+
+// Test flow:
+// 1. Register four nodes with MaxConcurrent 500 and start two hundred goroutines that each acquire one hot key without releasing.
+// 2. Wait for all of them and assert every acquire succeeded.
+// 3. Assert the locks add up to two hundred and no node trails another by more than the lead plus one.
+func TestStickySession_ConcurrentAcquiresOfOneKeySpread(t *testing.T) {
+	b := newStickyTestBroker(t, 4, 500)
+
+	var wg sync.WaitGroup
+	errs := make(chan error, 200)
+	for i := 0; i < 200; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, _, _, err := b.AcquireMLNode(context.Background(), stickyTestModel, nil, "hot-conversation")
+			errs <- err
+		}()
+	}
+	wg.Wait()
+	close(errs)
+
+	for err := range errs {
+		require.NoError(t, err)
+	}
+	lowest, highest, total := spread(lockCounts(b))
+	require.Equal(t, 200, total)
+	require.LessOrEqual(t, highest-lowest, stickyMaxLead+1, "locks: %v", lockCounts(b))
+}
+
+// Test flow:
+// 1. Register four nodes with MaxConcurrent 500 and find the home node of forty session keys.
+// 2. Acquire the keys in order for five rounds, keeping the last ten locks in flight and releasing the oldest.
+// 3. Assert every acquire returned the key's home node.
+func TestStickySession_OrdinarySessionsStayOnHomeNodes(t *testing.T) {
+	b := newStickyTestBroker(t, 4, 500)
+
+	var keys, homes []string
+	for k := 0; k < 40; k++ {
+		keys = append(keys, fmt.Sprintf("conversation-%d", k))
+		homes = append(homes, rankedNodeIDs(b, keys[k])[0])
+	}
+	var inFlight []string
+	for i := 0; i < 5*len(keys); i++ {
+		lockID, nodeID := acquireNode(t, b, keys[i%len(keys)])
+		require.Equal(t, homes[i%len(keys)], nodeID, "acquire %d left the home node, locks: %v", i, lockCounts(b))
+		inFlight = append(inFlight, lockID)
+		if len(inFlight) > 10 {
+			require.NoError(t, b.ReleaseMLNode(inFlight[0], InferenceSuccess{}))
+			inFlight = inFlight[1:]
+		}
+	}
+}
+
+// Test flow:
+// 1. Register four nodes with MaxConcurrent 500 and rank them for a key.
+// 2. Put the lead on the home node and assert the key still lands on it.
+// 3. Put one more lock on the home node and assert the key goes to the runner-up for nine acquires in a row.
+// 4. Give the runner-up the same excess and assert the key goes to the third-ranked node.
+func TestStickySession_OverflowFollowsRendezvousRanking(t *testing.T) {
+	b := newStickyTestBroker(t, 4, 500)
+	ranked := rankedNodeIDs(b, "hot-conversation")
+
+	setLockCount(b, ranked[0], stickyMaxLead)
+	_, nodeID := acquireNode(t, b, "hot-conversation")
+	require.Equal(t, ranked[0], nodeID)
+
+	setLockCount(b, ranked[0], stickyMaxLead+1)
+	for i := 0; i < stickyMaxLead+1; i++ {
+		_, nodeID := acquireNode(t, b, "hot-conversation")
+		require.Equal(t, ranked[1], nodeID, "acquire %d, locks: %v", i, lockCounts(b))
+	}
+
+	setLockCount(b, ranked[1], stickyMaxLead+1)
+	_, nodeID = acquireNode(t, b, "hot-conversation")
+	require.Equal(t, ranked[2], nodeID, "locks: %v", lockCounts(b))
+}
+
+// Test flow:
+// 1. Register three nodes with MaxConcurrent 500, rank them for a key and give the two higher-ranked nodes twenty locks each.
+// 2. Shrink the lowest-ranked node to one slot and fill it, so it is full with a lock count far below the others.
+// 3. Acquire the key and assert the home node is still used, so a full node does not set the lead baseline.
+func TestStickySession_FullNodeDoesNotSetLeadBaseline(t *testing.T) {
+	b := newStickyTestBroker(t, 3, 500)
+	ranked := rankedNodeIDs(b, "conversation")
+	setLockCount(b, ranked[0], 20)
+	setLockCount(b, ranked[1], 20)
+	b.mu.Lock()
+	b.nodes[ranked[2]].Node.MaxConcurrent = 1
+	b.nodes[ranked[2]].State.LockCount = 1
+	b.mu.Unlock()
+
+	_, nodeID := acquireNode(t, b, "conversation")
+
+	require.Equal(t, ranked[0], nodeID)
 }
