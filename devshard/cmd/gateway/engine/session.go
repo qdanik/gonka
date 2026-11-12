@@ -9,6 +9,12 @@ import (
 	"devshard/user"
 )
 
+// The session's own words for a skip: the shared package exports no constant for either.
+const (
+	sessionOutcomeSkipped    = "skipped"
+	sessionDetailNonceClosed = "nonce_closed"
+)
+
 // timeoutHandler is the session's protocol-timeout entry point; *user.Session satisfies it.
 type timeoutHandler interface {
 	timeoutclaim.Handler
@@ -42,6 +48,7 @@ func (s *SessionTimeouts) SettleTimeout(ctx context.Context, step TimeoutStep) (
 	vote := TimeoutVote{
 		Kind:          TimeoutKind(result.Reason),
 		Detail:        result.DetailReason,
+		Skipped:       result.Outcome == sessionOutcomeSkipped,
 		Unjudged:      result.Outcome == user.TimeoutOutcomeVoteCollectionFailed,
 		VerifyRejects: result.VerifyRejects,
 		Completeness:  step.Proof.completeness(),

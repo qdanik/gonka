@@ -21,6 +21,7 @@ type TimeoutPoster interface {
 type TimeoutVote struct {
 	Kind          TimeoutKind
 	Detail        string
+	Skipped       bool
 	Unjudged      bool
 	VerifyRejects []string
 	Completeness  MissProofCompleteness
@@ -239,8 +240,18 @@ func TimeoutOutcome(vote TimeoutVote, err error, escrowMissing bool) (action Tim
 		return TimeoutActionFailed, TimeoutReasonEscrowGone
 	case err != nil:
 		return TimeoutActionFailed, firstNamed(vote.Detail, TimeoutReasonCollectionError)
+	case vote.Skipped:
+		return TimeoutActionSkipped, skippedReason(vote.Detail)
 	}
 	return TimeoutActionCompleted, TimeoutReasonNone
+}
+
+// skippedReason names a session skip; a closed nonce reads as a finished one, as in devshardctl.
+func skippedReason(detail string) TimeoutReason {
+	if detail == sessionDetailNonceClosed {
+		return TimeoutReasonNonceFinished
+	}
+	return firstNamed(detail, TimeoutReasonNonceFinished)
 }
 
 func firstNamed(detail string, fallback TimeoutReason) TimeoutReason {
