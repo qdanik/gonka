@@ -1,10 +1,13 @@
 package nonces
 
 import (
+	"testing"
+
 	"devshard/internal/testutil"
 	"devshard/state"
 )
 
-func init() {
+func TestMain(m *testing.M) {
 	state.SetFallbackHeaderTimes(testutil.HeightClock{})
+	m.Run()
 }
