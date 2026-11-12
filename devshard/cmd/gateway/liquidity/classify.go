@@ -77,13 +77,13 @@ func Classify(input Input) Escrow {
 	return result
 }
 
-// ExecutionAnchor clamps an executor clock that runs ahead to the latest moment a receipt could land, and falls back to the start without a stamp.
+// ExecutionAnchor clamps an executor clock that runs ahead to the latest moment a receipt could land, and falls back to the start without a confirm time. Both times are the block times the record carries; a record without a start time reads as long overdue.
 func ExecutionAnchor(record types.InferenceRecord, refusalWindow time.Duration) time.Time {
-	startedAt := time.Unix(record.StartedAt, 0)
-	if record.ConfirmedAt <= 0 {
+	startedAt := time.UnixMilli(record.StartedAtTimeMs)
+	if record.ConfirmedAtTimeMs <= 0 {
 		return startedAt
 	}
-	confirmedAt, latestReceipt := time.Unix(record.ConfirmedAt, 0), startedAt.Add(refusalWindow)
+	confirmedAt, latestReceipt := time.UnixMilli(record.ConfirmedAtTimeMs), startedAt.Add(refusalWindow)
 	if confirmedAt.After(latestReceipt) {
 		return latestReceipt
 	}
@@ -91,8 +91,8 @@ func ExecutionAnchor(record types.InferenceRecord, refusalWindow time.Duration) 
 }
 
 func classOf(record types.InferenceRecord, input Input, refusalWindow, executionWindow time.Duration) (Class, uint64, bool) {
-	startedAt := time.Unix(record.StartedAt, 0)
-	young := input.Now.Before(startedAt.Add(returningSoon))
+	startedAt := time.UnixMilli(record.StartedAtTimeMs)
+	young :=input.Now.Before(startedAt.Add(returningSoon))
 	switch record.Status {
 	case types.StatusPending:
 		switch {
