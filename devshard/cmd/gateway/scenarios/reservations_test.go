@@ -72,12 +72,13 @@ func TestAPendingRecordWhoseLadderARestartCutIsStuckNotWaitedOn(t *testing.T) {
 }
 
 // Test flow:
-//  1. Boot with a guarantee of one and make every participant stall after its receipt.
+//  1. Boot with the warm-up probe armed and a guarantee of one, and make every participant stall after its receipt.
 //  2. Send one request and advance six minutes; assert the report counts the Started reservations as late and the escrow serves, never held.
-//  3. Advance thirty-five minutes; assert no Started record is left and the escrow was charged nothing for them: swept after the deadline and refunded (`money identity`, `active escrow routes` at every step).
+//  3. Advance thirty-five minutes; assert no Started record is left and the escrow was charged only the finished warm-up probe's cost: swept after the deadline and refunded (`money identity`, `active escrow routes` at every step).
 func TestAStalledExecutorIsLateThenSwept(t *testing.T) {
 	spec := plannerSpec()
 	spec.model.fullContextSlots = 1
+	spec.armedFloor = true
 	spec.steps = []harnessStep{
 		changeParticipants{change: func(behaviour *participantBehaviour) { behaviour.stall = true }},
 		sendRequests{promptBytes: 200, maxTokens: 64, count: 1},
@@ -92,8 +93,8 @@ func TestAStalledExecutorIsLateThenSwept(t *testing.T) {
 		advance{by: 35 * time.Minute},
 		expectThat{label: "swept and refunded", verify: func(harness *gatewayHarness) error {
 			costs, _, _, _ := machineMoney(harness, harness.seededIDs[0])
-			if hasRecord(harness, harness.seededIDs[0], types.StatusStarted) || costs != 0 {
-				return fmt.Errorf("Started left %v, costs %d, want swept and nothing charged", hasRecord(harness, harness.seededIDs[0], types.StatusStarted), costs)
+			if hasRecord(harness, harness.seededIDs[0], types.StatusStarted) || costs != warmUpProbeCost {
+				return fmt.Errorf("Started left %v, costs %d, want swept and only the warm-up probe's %d charged", hasRecord(harness, harness.seededIDs[0], types.StatusStarted), costs, warmUpProbeCost)
 			}
 			return nil
 		}},

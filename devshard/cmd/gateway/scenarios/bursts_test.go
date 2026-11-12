@@ -458,6 +458,7 @@ const (
 	contextRefusalMissLabel = "defect: the refusing host is charged a miss for an engine error after the receipt is signed"
 	refusingExecutorSlot    = 2
 	warmUpRecords           = 1
+	warmUpProbeCost         = 60
 	refusedRecordID         = warmUpRecords + 1
 	shorterHostContext      = 4_096
 )
