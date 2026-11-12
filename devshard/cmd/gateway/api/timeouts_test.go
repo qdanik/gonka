@@ -232,7 +232,7 @@ func TestPosterRefusesParamsNoNonceCouldHaveCommitted(t *testing.T) {
 //  2. Cancel the context up front.
 //  3. Call `SettleTimeout` with the cancelled context.
 //  4. Assert the error matches `context.Canceled`.
-//  5. Assert the returned vote is empty, since the protocol deadline was never reached.
+//  5. Assert the returned vote is empty, since the cancelled wait ends before any vote is cast.
 func TestSettleTimeoutReportsACancelledWaitAsNoVote(t *testing.T) {
 	t.Parallel()
 	session, machine, nonce := newDueLiveSession(t)
@@ -250,7 +250,7 @@ func TestSettleTimeoutReportsACancelledWaitAsNoVote(t *testing.T) {
 		t.Errorf("SettleTimeout error = %v, want it to match context.Canceled", err)
 	}
 	if vote.Kind != "" {
-		t.Errorf("vote = %+v, want empty: the protocol deadline was never reached", vote)
+		t.Errorf("vote = %+v, want empty: the cancelled wait ends before any vote is cast", vote)
 	}
 }
 

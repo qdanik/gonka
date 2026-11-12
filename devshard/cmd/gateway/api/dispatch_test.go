@@ -32,8 +32,10 @@ func TestMain(m *testing.M) {
 }
 
 const (
-	liveEscrowID = "7"
-	liveModel    = "qwen"
+	liveEscrowID   = "7"
+	liveModel      = "qwen"
+	dueFloorHeight = 100
+	dueFloorHash   = 0xaa
 )
 
 var (
@@ -93,15 +95,6 @@ func prepareNonce(t *testing.T, session *user.Session) *user.PreparedInference {
 	return prepared
 }
 
-const (
-	dueFloorHeight      = 100
-	dueFloorHash        = 0xaa
-	dueFloorPastRefusal = 1_000
-	dueNonceFloorArmed  = 1
-	dueNonceStarted     = 2
-	dueNonceFloorRaised = 3
-)
-
 func newDueLiveSession(t *testing.T) (*user.Session, *state.StateMachine, uint64) {
 	t.Helper()
 	signers := []*signing.Secp256k1Signer{testutil.MustGenerateKey(t), testutil.MustGenerateKey(t)}
@@ -139,8 +132,9 @@ func newDueLiveSession(t *testing.T) (*user.Session, *state.StateMachine, uint64
 	}
 	raiseFloor(dueFloorHeight)
 	params := liveParams()
+	startedNonce := composer.LatestNonce() + 1
 	appendDiff(&types.DevshardTx{Tx: &types.DevshardTx_StartInference{StartInference: &types.MsgStartInference{
-		InferenceId:       dueNonceStarted,
+		InferenceId:       startedNonce,
 		PromptHash:        testutil.TestPromptHash[:],
 		Model:             params.Model,
 		InputLength:       params.InputLength,
@@ -148,14 +142,14 @@ func newDueLiveSession(t *testing.T) (*user.Session, *state.StateMachine, uint64
 		ObservedHeight:    dueFloorHeight,
 		ObservedBlockHash: []byte{dueFloorHash},
 	}}})
-	raiseFloor(dueFloorHeight + dueFloorPastRefusal)
+	raiseFloor(dueFloorHeight + uint64(config.RefusalTimeout) + 1)
 	session, machine, err := user.RecoverSession(store, creator, verifier, liveEscrowID, testutil.RuntimeTestVersion, group, make([]user.HostClient, len(group)))
 	if err != nil {
 		t.Fatalf("RecoverSession = %v, want nil", err)
 	}
 	session.SetQuietSettleDelay(user.TestQuietSettleDelay)
 	t.Cleanup(func() { _ = session.Close() })
-	return session, machine, dueNonceStarted
+	return session, machine, startedNonce
 }
 
 type appliedReply struct {

@@ -78,7 +78,10 @@ func (e *liveEscrow) executorSlot(inferenceID uint64) int {
 func (e *liveEscrow) start(t *testing.T, inputLength, maxTokens uint64) uint64 {
 	t.Helper()
 	inferenceID := e.nonce + 1
-	floorHeight, floorHash, _ := e.machine.HeightSyncFloorAsOf(inferenceID)
+	floorHeight, floorHash, known := e.machine.HeightSyncFloorAsOf(inferenceID)
+	if !known {
+		t.Fatalf("HeightSyncFloorAsOf(%d) known = false, want true", inferenceID)
+	}
 	e.apply(t, &types.DevshardTx{Tx: &types.DevshardTx_StartInference{StartInference: &types.MsgStartInference{
 		InferenceId:       inferenceID,
 		PromptHash:        testutil.TestPromptHash[:],
@@ -94,7 +97,10 @@ func (e *liveEscrow) start(t *testing.T, inputLength, maxTokens uint64) uint64 {
 func (e *liveEscrow) confirm(t *testing.T, inferenceID, inputLength, maxTokens uint64) {
 	t.Helper()
 	slot := e.executorSlot(inferenceID)
-	started, _ := e.machine.GetInference(inferenceID)
+	started, found := e.machine.GetInference(inferenceID)
+	if !found {
+		t.Fatalf("GetInference(%d) found = false, want true", inferenceID)
+	}
 	receipt := testutil.SignExecutorReceipt(t, e.hosts[slot], tokenEscrowID, inferenceID,
 		testutil.TestPromptHash[:], "llama", inputLength, maxTokens,
 		testutil.ReceiptStamp{Height: started.StartedAtHeight, Hash: started.StartedAtBlockHash})
@@ -250,7 +256,7 @@ func TestTheGivenAndCountedTokensCoverTheSameNonces(t *testing.T) {
 	escrow.finish(t, finished, 200_000, 4_096, 27_438, 4_096)
 	escrow.confirm(t, stillRunning, 200_000, 4_096)
 	escrow.confirm(t, timedOut, 200_000, 4_096)
-	escrow.raiseFloor(t, tokenFloorHeight+uint64(escrow.machine.Config().ExecutionTimeout))
+	escrow.raiseFloor(t, tokenFloorHeight+uint64(escrow.machine.Config().ExecutionTimeout)+1)
 	escrow.timeOut(t, timedOut)
 
 	totals := observedBy(t, escrow, streamed(t, finished, 4_096))
