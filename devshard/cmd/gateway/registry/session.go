@@ -106,7 +106,7 @@ func (h sessionHandle) SweepExecutionTimeouts(ctx context.Context, grace time.Du
 		return user.SweepReport{}
 	}
 	defer h.finalizing.Unlock()
-	if h.machine.Phase() != types.PhaseActive || h.Session.NonceCapReached() {
+	if h.machine.Phase() != types.PhaseActive || h.NonceCapReached() {
 		return user.SweepReport{}
 	}
 	return h.Session.SweepExecutionTimeouts(ctx, grace, budget)
