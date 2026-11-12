@@ -8,13 +8,19 @@ import (
 
 	"devshard/cmd/gateway/accounting"
 	"devshard/cmd/gateway/engine"
+	"devshard/heightsync"
 	"devshard/internal/testutil"
 	"devshard/signing"
 	"devshard/state"
 	"devshard/types"
 )
 
-const tokenEscrowID = "escrow-tokens"
+const (
+	tokenEscrowID    = "escrow-tokens"
+	tokenFloorHeight = 100
+)
+
+var tokenFloorHash = []byte{0xaa}
 
 type liveEscrow struct {
 	machine *state.StateMachine
@@ -51,6 +57,20 @@ func (e *liveEscrow) apply(t *testing.T, txs ...*types.DevshardTx) {
 	}
 }
 
+func (e *liveEscrow) raiseFloor(t *testing.T, height uint64) {
+	t.Helper()
+	reference := e.nonce + 1
+	e.apply(t, &types.DevshardTx{Tx: &types.DevshardTx_Heartbeat{Heartbeat: &types.MsgHeartbeat{
+		SlotsNum: uint64(len(e.hosts)), Reason: string(heightsync.ReasonQuietSession),
+	}}})
+	acknowledgement := &types.MsgHeightAck{RefNonce: reference, SlotId: 0, ObservedHeight: height, ObservedBlockHash: tokenFloorHash,
+		SyncState: types.SyncState_SYNCED, PeerSeen: []byte{0xff}}
+	if err := heightsync.SignAck(e.hosts[0], acknowledgement); err != nil {
+		t.Fatalf("SignAck = %v, want nil", err)
+	}
+	e.apply(t, &types.DevshardTx{Tx: &types.DevshardTx_HeightAck{HeightAck: acknowledgement}})
+}
+
 func (e *liveEscrow) executorSlot(inferenceID uint64) int {
 	return int(inferenceID % uint64(len(e.group)))
 }
@@ -58,12 +78,15 @@ func (e *liveEscrow) executorSlot(inferenceID uint64) int {
 func (e *liveEscrow) start(t *testing.T, inputLength, maxTokens uint64) uint64 {
 	t.Helper()
 	inferenceID := e.nonce + 1
+	floorHeight, floorHash, _ := e.machine.HeightSyncFloorAsOf(inferenceID)
 	e.apply(t, &types.DevshardTx{Tx: &types.DevshardTx_StartInference{StartInference: &types.MsgStartInference{
-		InferenceId: inferenceID,
-		PromptHash:  testutil.TestPromptHash[:],
-		Model:       "llama",
-		InputLength: inputLength,
-		MaxTokens:   maxTokens,
+		InferenceId:       inferenceID,
+		PromptHash:        testutil.TestPromptHash[:],
+		Model:             "llama",
+		InputLength:       inputLength,
+		MaxTokens:         maxTokens,
+		ObservedHeight:    floorHeight,
+		ObservedBlockHash: floorHash,
 	}}})
 	return inferenceID
 }
@@ -71,11 +94,15 @@ func (e *liveEscrow) start(t *testing.T, inputLength, maxTokens uint64) uint64 {
 func (e *liveEscrow) confirm(t *testing.T, inferenceID, inputLength, maxTokens uint64) {
 	t.Helper()
 	slot := e.executorSlot(inferenceID)
+	started, _ := e.machine.GetInference(inferenceID)
 	receipt := testutil.SignExecutorReceipt(t, e.hosts[slot], tokenEscrowID, inferenceID,
-		testutil.TestPromptHash[:], "llama", inputLength, maxTokens)
+		testutil.TestPromptHash[:], "llama", inputLength, maxTokens,
+		testutil.ReceiptStamp{Height: started.StartedAtHeight, Hash: started.StartedAtBlockHash})
 	e.apply(t, &types.DevshardTx{Tx: &types.DevshardTx_ConfirmStart{ConfirmStart: &types.MsgConfirmStart{
-		InferenceId: inferenceID,
-		ExecutorSig: receipt,
+		InferenceId:       inferenceID,
+		ExecutorSig:       receipt,
+		ObservedHeight:    started.StartedAtHeight,
+		ObservedBlockHash: started.StartedAtBlockHash,
 	}}})
 }
 
@@ -215,6 +242,7 @@ func foldRecords(records []accounting.ParticipantRecord) accounting.ParticipantR
 func TestTheGivenAndCountedTokensCoverTheSameNonces(t *testing.T) {
 	t.Parallel()
 	escrow := newLiveEscrow(t, 3)
+	escrow.raiseFloor(t, tokenFloorHeight)
 
 	finished := escrow.start(t, 200_000, 4_096)
 	stillRunning := escrow.start(t, 200_000, 4_096)
@@ -222,6 +250,7 @@ func TestTheGivenAndCountedTokensCoverTheSameNonces(t *testing.T) {
 	escrow.finish(t, finished, 200_000, 4_096, 27_438, 4_096)
 	escrow.confirm(t, stillRunning, 200_000, 4_096)
 	escrow.confirm(t, timedOut, 200_000, 4_096)
+	escrow.raiseFloor(t, tokenFloorHeight+uint64(escrow.machine.Config().ExecutionTimeout))
 	escrow.timeOut(t, timedOut)
 
 	totals := observedBy(t, escrow, streamed(t, finished, 4_096))
