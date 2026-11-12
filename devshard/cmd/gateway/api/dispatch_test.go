@@ -28,6 +28,7 @@ import (
 )
 
 func TestMain(m *testing.M) {
+	state.SetFallbackHeaderTimes(testutil.HeightClock{})
 	leakcheck.VerifyTestMain(m)
 }
 

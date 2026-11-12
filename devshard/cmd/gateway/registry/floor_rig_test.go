@@ -6,9 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/require"
-
 	"common/chainoracle/blocks"
+	"github.com/stretchr/testify/require"
 
 	"devshard/internal/testutil"
 	"devshard/user"
@@ -86,7 +85,7 @@ func (r *floorRig) raise(t *testing.T, session *user.Session, height uint64) {
 	for _, oracle := range r.oracles {
 		oracle.height.Store(int64(height))
 	}
-	for attempt := 0; attempt < floorRaiseAttempts; attempt++ {
+	for range floorRaiseAttempts {
 		r.clock.Add(int64(time.Hour))
 		require.NoError(t, session.MaybeHeartbeat(context.Background()))
 		require.NoError(t, session.SendPendingDiff(context.Background()))
