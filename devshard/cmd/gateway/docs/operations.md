@@ -177,7 +177,6 @@ Signing keys are addressed **by the name of the variable that holds them**, neve
 | `DEVSHARD_STORAGE_DIR` | `$HOME/.cache/gonka-gateway` | where `gateway.db` and the escrow storage live |
 | `DEVSHARD_STORAGE_MODE` | `sqlite` | where the control-plane store lives, `sqlite` or `postgres`; read outside `env.Load`, see "Storing state in Postgres" |
 | `GATEWAY_INSTANCE_ID` | empty | required in `postgres` mode; a stable name for this process, written to the boot log |
-| `GATEWAY_POSTGRES_ALLOW_FRESH_START` | `false` | lets `postgres` mode start on an empty database although a SQLite `gateway.db` sits in the storage directory |
 | `DEVSHARD_SESSION_RETENTION_EPOCHS` | 2 | how many epochs before the effective one an escrow's session directory stays on disk; `0` keeps every one, and `1` is raised to 2, the hosts' own horizon ("Session storage" below) |
 | `GATEWAY_MAX_CONCURRENT_REQUESTS` | 2048 | the hard admission ceiling; `0` sets no static cap and lets the weight model decide alone |
 | `GATEWAY_ADMISSION_QUEUE_WAIT_MS` | 300000 | how long a request waits for a slot before 429 |
@@ -688,7 +687,21 @@ The gateway is one process per set of escrows. It keeps its state in its own SQL
 
 ### Storing state in Postgres
 
-`DEVSHARD_STORAGE_MODE` selects where the control-plane store lives: unset or `sqlite` keeps `gateway.db` under `DEVSHARD_STORAGE_DIR`; `postgres` uses a database of its own, and `hybrid` or `auto` are refused at boot. The connection comes from libpq's `PG*` variables, with `PG_CONNECT_TIMEOUT`, `PG_OPERATION_TIMEOUT` and `PG_POOL_MAX_CONNS` as for the hosts. In `postgres` mode `GATEWAY_INSTANCE_ID` (a stable name for this process, written to the boot log) and `PGHOST` are required, and a host that is not a loopback address or a unix socket must be reached over TLS (`sslmode` `require`, `verify-ca` or `verify-full`); the check runs on the connection the driver will dial, a service file or a fallback host included. Every connection must be read-write and commit with `synchronous_commit=on`, and boot fails when the server runs with `fsync` or `synchronous_commit` off, because a saved commitment would not survive a crash. Boot fails when Postgres is unreachable: there is no SQLite fallback. The first boot of an empty database writes the `gateway_database_marker` table; a database that holds tables and no marker is refused, so give the gateway a database nobody else uses. Sessions and the epoch accounting database stay SQLite under `DEVSHARD_STORAGE_DIR`, so the directory must be writable in `postgres` mode too (each escrow's session creates its own subdirectory, but the nonce accounting database does not create the directory it sits in), and an existing `gateway.db` is not copied into Postgres: while one sits in the directory, an empty Postgres database is refused unless `GATEWAY_POSTGRES_ALLOW_FRESH_START` is true, so a switch of mode never silently drops the registry. Connect directly or through a session-level pooler: the pool sends `statement_timeout` and `lock_timeout` as startup parameters and uses prepared statements, which transaction pooling breaks and some poolers reject. `sslmode=require` encrypts but does not check the server's certificate, so a remote database should use `verify-full` with `PGSSLROOTCERT`. Running one gateway on a Postgres database that an older build of this gateway also uses is not supported: boot logs a schema newer than the build knows but does not stop. While the mode is `sqlite`, any of the `PG*` variables that is set is ignored and named in the log at boot.
+`DEVSHARD_STORAGE_MODE` selects the control-plane store: unset or `sqlite` keeps `gateway.db` under `DEVSHARD_STORAGE_DIR`, `postgres` uses a database of its own, and any other value, `hybrid` and `auto` included, is refused at boot.
+Switching modes is an operator action: each store starts from its own data and nothing is copied between them.
+
+In `postgres` mode `GATEWAY_INSTANCE_ID` (a stable name for this process, written to the boot log) and `PGHOST` are required; the connection comes from the libpq `PG*` variables, with `PG_CONNECT_TIMEOUT`, `PG_OPERATION_TIMEOUT` and `PG_POOL_MAX_CONNS` as for the hosts.
+
+Boot refuses, with no SQLite fallback:
+
+- a host that is not loopback or a unix socket reached without TLS (`sslmode` `require`, `verify-ca` or `verify-full`; `require` does not check the certificate, so prefer `verify-full` with `PGSSLROOTCERT`);
+- a server with `fsync` or `synchronous_commit` off;
+- a database that holds tables and no `gateway_database_marker`, so give the gateway a database nobody else uses.
+
+Sessions and nonce accounting stay in SQLite under `DEVSHARD_STORAGE_DIR` in both modes, so the directory must be writable in `postgres` mode too.
+
+Connect directly or through a session-level pooler: the pool uses prepared statements and startup parameters, which transaction pooling breaks.
+While the mode is `sqlite`, any `PG*` variable that is set is ignored and named in the boot log.
 
 ## Release and rollback
 

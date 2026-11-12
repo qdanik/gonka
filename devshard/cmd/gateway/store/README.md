@@ -1,6 +1,6 @@
 # `store` — the control plane on disk
 
-One contract, two backends: SQLite at `<storageDir>/gateway.db` or a dedicated Postgres database, holding what must survive a restart. Callers depend on the interfaces in `contract.go`, never on a backend; `app.openStore` picks the backend from `DEVSHARD_STORAGE_MODE`.
+One contract, two backends: SQLite at `<storageDir>/gateway.db` or a dedicated Postgres database, holding what must survive a restart. Callers depend on the interfaces in `contract.go`, never on a backend; `app/store_factory.go` picks the backend from `DEVSHARD_STORAGE_MODE`.
 
 ## Layout
 
@@ -42,11 +42,13 @@ The guard is declared apart from the migrations list because it decides whether 
 
 ## Postgres
 
-`postgres.Open` takes its connection from the libpq `PG*` variables (or `Options.ConnectionString`) and runs the whole boot in one transaction under an advisory lock, with the pool's statement and lock timeouts lifted so the boot is bounded only by its own deadline. It first reads `synchronous_commit` and `fsync` and fails with `ErrDurabilityOff` when either is off, because `SaveCommitment` promises a row that survives a crash and the pool pins `synchronous_commit=on` for every connection. It then requires the `gateway_database_marker` table, writes it into an empty database, and refuses a database that holds tables and no marker (`ErrForeignDatabase`), so any later table that shares the database must be created after the store opens. `Options.RefuseEmptyDatabase` turns the empty-database case into `ErrEmptyDatabaseRefused`; the factory sets it while a SQLite `gateway.db` sits in the storage dir. A schema newer than this build knows is logged, not refused. Nothing falls back to SQLite.
+`postgres.Open` reads the libpq `PG*` variables (or `Options.ConnectionString`) and boots in one transaction under an advisory lock, with the pool's timeouts lifted.
 
-`migrations` is its own hand-written list, with the same versions as the SQLite list and the same columns, whose result `parity/` compares; ordered or compared text is `COLLATE "C"`, the byte order SQLite uses. The flag columns are `BIGINT`, as on SQLite.
+The boot fails with `ErrDurabilityOff` when `synchronous_commit` or `fsync` is off, with `ErrPlaintextRemoteHost` for a remote host without TLS, and with `ErrForeignDatabase` for a database that holds tables and no `gateway_database_marker`; an empty database gets the marker. A schema newer than this build knows is logged, not refused.
 
-The TLS rule runs on the parsed connection config, fallbacks included: a host that is neither loopback nor a unix socket must have TLS configured, whether it came from a variable, a connection string or a service file. Every statement runs under `PG_OPERATION_TIMEOUT`, and connections must be read-write, so a standby is skipped.
+Connections must be read-write, so a standby is skipped, and every statement runs under `PG_OPERATION_TIMEOUT`.
+
+`migrations` is its own list, with the same versions and columns as the SQLite one, which `parity/` compares; ordered or compared text is `COLLATE "C"`, and the flag columns are `BIGINT`.
 
 ## Writing under a lock
 
