@@ -21,6 +21,8 @@ type HostStat struct {
 	Cost                 uint64
 	RequiredValidations  uint32
 	CompletedValidations uint32
+	Validated            uint32
+	Finished             uint32
 }
 
 // SlotSignature is one slot's settlement signature, already decoded.

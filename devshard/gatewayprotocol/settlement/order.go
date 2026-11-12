@@ -19,6 +19,8 @@ func HostStatsBySlot(perSlot map[uint32]*types.HostStats) []HostStat {
 			Cost:                 hostStats.Cost,
 			RequiredValidations:  hostStats.RequiredValidations,
 			CompletedValidations: hostStats.CompletedValidations,
+			Validated:            hostStats.Validated,
+			Finished:             hostStats.Finished,
 		})
 	}
 	return stats

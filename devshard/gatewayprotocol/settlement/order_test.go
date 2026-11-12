@@ -13,17 +13,17 @@ import (
 //  3. Assert the list is in ascending slot order and every counter is carried.
 func TestHostStatsBySlotListsAscendingSlots(t *testing.T) {
 	perSlot := map[uint32]*types.HostStats{
-		7: {Missed: 1, Invalid: 2, Cost: 700, RequiredValidations: 3, CompletedValidations: 4},
-		0: {Missed: 5, Invalid: 6, Cost: 100, RequiredValidations: 7, CompletedValidations: 8},
-		3: {Missed: 9, Invalid: 10, Cost: 300, RequiredValidations: 11, CompletedValidations: 12},
+		7: {Missed: 1, Invalid: 2, Cost: 700, RequiredValidations: 3, CompletedValidations: 4, Validated: 13, Finished: 14},
+		0: {Missed: 5, Invalid: 6, Cost: 100, RequiredValidations: 7, CompletedValidations: 8, Validated: 15, Finished: 16},
+		3: {Missed: 9, Invalid: 10, Cost: 300, RequiredValidations: 11, CompletedValidations: 12, Validated: 17, Finished: 18},
 	}
 
 	stats := HostStatsBySlot(perSlot)
 
 	want := []HostStat{
-		{SlotID: 0, Missed: 5, Invalid: 6, Cost: 100, RequiredValidations: 7, CompletedValidations: 8},
-		{SlotID: 3, Missed: 9, Invalid: 10, Cost: 300, RequiredValidations: 11, CompletedValidations: 12},
-		{SlotID: 7, Missed: 1, Invalid: 2, Cost: 700, RequiredValidations: 3, CompletedValidations: 4},
+		{SlotID: 0, Missed: 5, Invalid: 6, Cost: 100, RequiredValidations: 7, CompletedValidations: 8, Validated: 15, Finished: 16},
+		{SlotID: 3, Missed: 9, Invalid: 10, Cost: 300, RequiredValidations: 11, CompletedValidations: 12, Validated: 17, Finished: 18},
+		{SlotID: 7, Missed: 1, Invalid: 2, Cost: 700, RequiredValidations: 3, CompletedValidations: 4, Validated: 13, Finished: 14},
 	}
 	if !reflect.DeepEqual(stats, want) {
 		t.Fatalf("host stats = %+v, want %+v", stats, want)

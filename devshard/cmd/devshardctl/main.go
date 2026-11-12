@@ -65,6 +65,8 @@ type HostStatsJSON struct {
 	Cost                 uint64 `json:"cost"`
 	RequiredValidations  uint32 `json:"required_validations,omitempty"`
 	CompletedValidations uint32 `json:"completed_validations,omitempty"`
+	Validated            uint32 `json:"validated,omitempty"`
+	Finished             uint32 `json:"finished,omitempty"`
 }
 
 type SlotSignatureJSON struct {
@@ -444,6 +446,9 @@ func mustBuildGateway(ctx context.Context, gatewayStore GatewayStore, gatewaySta
 	}
 	if err := initGatewayHeightSync(chainClient, cometRPCForHeightSync(gatewayState.Settings.ChainGRPC)); err != nil {
 		log.Fatalf("height sync oracle: %v", err)
+	}
+	if gatewayHeaderTimes() == nil {
+		log.Printf("header_times_unwired: no chain source for block times; inferences cannot start once hosts stamp a height-sync floor")
 	}
 
 	perfStore, err := NewPerfStore(ctx, baseStorageDir)
