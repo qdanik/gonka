@@ -33,7 +33,7 @@ const (
 var (
 	castSuffix     = regexp.MustCompile(`::[a-z ]+`)
 	sqliteNow      = regexp.MustCompile(`^\(?datetime\('now'\)\)?$`)
-	postgresNow    = regexp.MustCompile(`^\(?to_char\(now\(\).*\)\)?$`)
+	postgresNow    = regexp.MustCompile(`^\(?to_char\(\(?now\(\).*\)\)?$`)
 	normalizedType = map[string]string{"INTEGER": "integer", "bigint": "integer", "TEXT": "text", "text": "text", "BLOB": "bytes", "bytea": "bytes"}
 )
 
