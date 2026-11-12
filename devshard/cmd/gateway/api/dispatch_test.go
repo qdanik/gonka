@@ -521,9 +521,9 @@ func (h *flushingHost) executorProof(nonce uint64) ([]byte, int64, *types.MsgFin
 		return nil, 0, nil
 	}
 	executor := h.signers[record.ExecutorSlot]
-	confirmedAt := record.StartedAt + 1
+	confirmedAt := liveParams().StartedAt + 1
 	receipt := testutil.SignExecutorReceipt(h.t, executor, liveEscrowID, nonce, record.PromptHash, record.Model,
-		record.InputLength, record.MaxTokens, record.StartedAt, confirmedAt)
+		record.InputLength, record.MaxTokens)
 	finish := &types.MsgFinishInference{
 		InferenceId:  nonce,
 		ResponseHash: bytes.Repeat([]byte{1}, sha256.Size),

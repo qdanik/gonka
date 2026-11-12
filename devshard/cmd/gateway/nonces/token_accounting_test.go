@@ -64,7 +64,6 @@ func (e *liveEscrow) start(t *testing.T, inputLength, maxTokens uint64) uint64 {
 		Model:       "llama",
 		InputLength: inputLength,
 		MaxTokens:   maxTokens,
-		StartedAt:   int64(inferenceID) * 1000,
 	}}})
 	return inferenceID
 }
@@ -73,11 +72,10 @@ func (e *liveEscrow) confirm(t *testing.T, inferenceID, inputLength, maxTokens u
 	t.Helper()
 	slot := e.executorSlot(inferenceID)
 	receipt := testutil.SignExecutorReceipt(t, e.hosts[slot], tokenEscrowID, inferenceID,
-		testutil.TestPromptHash[:], "llama", inputLength, maxTokens, int64(inferenceID)*1000, int64(inferenceID)*1000)
+		testutil.TestPromptHash[:], "llama", inputLength, maxTokens)
 	e.apply(t, &types.DevshardTx{Tx: &types.DevshardTx_ConfirmStart{ConfirmStart: &types.MsgConfirmStart{
 		InferenceId: inferenceID,
 		ExecutorSig: receipt,
-		ConfirmedAt: int64(inferenceID) * 1000,
 	}}})
 }
 

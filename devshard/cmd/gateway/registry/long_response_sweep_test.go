@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
-	"google.golang.org/protobuf/proto"
 
 	"devshard/cmd/gateway/engine"
 	"devshard/host"
@@ -118,20 +117,9 @@ func startedConfirmedAt(t *testing.T, escrow longResponseEscrow, confirmedAt int
 	nonce := prepared.Nonce()
 	record, tracked := escrow.machine.GetInference(nonce)
 	require.True(t, tracked)
-	receipt, err := proto.MarshalOptions{Deterministic: true}.Marshal(&types.ExecutorReceiptContent{
-		InferenceId: nonce,
-		PromptHash:  record.PromptHash,
-		Model:       record.Model,
-		InputLength: record.InputLength,
-		MaxTokens:   record.MaxTokens,
-		StartedAt:   record.StartedAt,
-		EscrowId:    longResponseEscrowID,
-		ConfirmedAt: confirmedAt,
-	})
-	require.NoError(t, err)
-	signature, err := escrow.signers[record.ExecutorSlot].Sign(receipt)
-	require.NoError(t, err)
-	require.NoError(t, escrow.session.ProcessResponse(prepared.HostIdx(), &host.HostResponse{Nonce: nonce, Receipt: signature, ConfirmedAt: confirmedAt}, nonce))
+	stamp := testutil.ReceiptStamp{Height: record.StartedAtHeight, Hash: []byte{0xaa}}
+	signature := testutil.SignExecutorReceipt(t, escrow.signers[record.ExecutorSlot], longResponseEscrowID, nonce, record.PromptHash, record.Model, record.InputLength, record.MaxTokens, stamp)
+	require.NoError(t, escrow.session.ProcessResponse(prepared.HostIdx(), &host.HostResponse{Nonce: nonce, Receipt: signature, ConfirmedAt: confirmedAt, ObservedHeight: stamp.Height, ObservedBlockHash: stamp.Hash}, nonce))
 	require.NoError(t, escrow.session.SendPendingDiff(context.Background()))
 	started, tracked := escrow.machine.GetInference(nonce)
 	require.True(t, tracked)
