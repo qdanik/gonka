@@ -10,15 +10,18 @@ import (
 	"testing"
 	"time"
 
-	"devshard/cmd/gateway/chain"
 	"devshard/cmd/gateway/internal/leakcheck"
 	"devshard/cmd/gateway/scheduler"
+	"devshard/gatewayprotocol/settlement"
 	"devshard/heightsync"
+	"devshard/internal/testutil"
+	"devshard/state"
 	"devshard/types"
 	"devshard/user"
 )
 
 func TestMain(m *testing.M) {
+	state.SetFallbackHeaderTimes(testutil.HeightClock{})
 	leakcheck.VerifyTestMain(m)
 }
 
@@ -27,7 +30,7 @@ func TestMain(m *testing.M) {
 type settlementSource interface {
 	IsBusy(escrowID string) bool
 	Finalize(ctx context.Context, escrowID string) error
-	BuildSettlement(ctx context.Context, escrowID string) (chain.SettlementInput, error)
+	BuildSettlement(ctx context.Context, escrowID string) (settlement.Message, error)
 }
 
 var (
@@ -481,8 +484,8 @@ func TestSnapshotOrdersEveryEscrowByIDAcrossModels(t *testing.T) {
 
 	states := registry.Snapshot()
 	ordered := make([]string, 0, len(states))
-	for _, state := range states {
-		ordered = append(ordered, state.ID)
+	for _, snapshot := range states {
+		ordered = append(ordered, snapshot.ID)
 	}
 	if want := []string{"1", "2", "3"}; !reflect.DeepEqual(ordered, want) {
 		t.Fatalf("Snapshot() escrow order = %v, want %v", ordered, want)

@@ -161,7 +161,8 @@ Four defaults shape a first deployment: the nonce ledger (`DEVSHARD_STATS_ENABLE
 - `DEVSHARD_ROUTE_PREFIX` — a prefix is set per escrow, through `route_prefix` in `DEVSHARDS_JSON`;
 - `DEVSHARD_ESCROW_ID`, `DEVSHARD_MODEL`, `DEVSHARD_STORAGE_PATH` and a raw `DEVSHARD_PRIVATE_KEY` — escrows come from `DEVSHARDS_JSON`, whose entries also need `model` and `private_key_env`;
 - `LOG_FORMAT` (only `DEVSHARD_LOG_FORMAT` is), `DEVSHARD_LOG_LEVEL`, `DEVSHARD_HEIGHTSYNC_PROBE_INTERVAL`, `DEVSHARD_GATEWAY_HEIGHTSYNC_PEER_MATRIX`, `DEVSHARD_META_DRAIN_TIMEOUT_SECONDS`, `DEVSHARD_CAPTURE_SHORT_CONTENT_*`;
-- `GATEWAY_AGGREGATE_*`, `GATEWAY_CLASSIFY_*` and `GATEWAY_ERROR_STREAM_MAX_ATTEMPT_BYTES` — buffered replies are bounded by `GATEWAY_MAX_BUFFERED_RESPONSE_BYTES`.
+- `GATEWAY_AGGREGATE_*` and `GATEWAY_CLASSIFY_*` — buffered replies are bounded by `GATEWAY_MAX_BUFFERED_RESPONSE_BYTES`;
+- `GATEWAY_ERROR_STREAM_MAX_ATTEMPT_BYTES` — the error-miss evidence bound is a protocol value both gateways share, not a setting ([race.md](./race.md), "Error misses").
 
 `DEVSHARD_PUBLIC_API=none` is refused: the phase observer needs the public API.
 
