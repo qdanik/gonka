@@ -92,7 +92,7 @@ func ExecutionAnchor(record types.InferenceRecord, refusalWindow time.Duration) 
 
 func classOf(record types.InferenceRecord, input Input, refusalWindow, executionWindow time.Duration) (Class, uint64, bool) {
 	startedAt := time.UnixMilli(record.StartedAtTimeMs)
-	young :=input.Now.Before(startedAt.Add(returningSoon))
+	young := input.Now.Before(startedAt.Add(returningSoon))
 	switch record.Status {
 	case types.StatusPending:
 		switch {
