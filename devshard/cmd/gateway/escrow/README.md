@@ -241,7 +241,7 @@ Two hooks are called from the request path — `OnEscrowMissing` and `OnBalanceE
 ## What this package expects of others
 
 - `escrowTxClient`, satisfied by `*chain.TxClient`. `TxCommitted` is what tells a row still marked pending apart from one whose settle genuinely failed: the settle may have reached the chain after the wait gave up.
-- `escrowStore`, satisfied by `*store.Store`; `snapshotSource`, satisfied by `*chain.PhaseObserver`.
+- `escrowStore`, satisfied by `store.Store`; `snapshotSource`, satisfied by `*chain.PhaseObserver`.
 - `escrowLookup` (`Deps.ChainFacts`), satisfied by `*chain.TxClient`: the `GetEscrow` that resolves a row's chain epoch and amount. Without it nothing is resolved (see "Chain epochs and amounts").
 - `FundingReader` (`Deps.Funds`), satisfied by `escrowFunds` in the composition root (`app/planner_wiring.go`) over the registry. Without it the planner reads nothing and executes nothing.
 - `SettlementSource`, satisfied by `*registry.Registry` and wired by the composition root (`app/compose.go`). `Retire` is synchronous — no nonce can be committed on the escrow after it returns — and that is what makes `IsBusy` monotone, so an idle answer stays true until the settlement it gates is broadcast. `Finalize` is idempotent.
