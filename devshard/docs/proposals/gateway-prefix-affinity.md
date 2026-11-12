@@ -4,7 +4,7 @@
 
 Affinity is off by default (`scheduler_affinity_enabled` false). With it on, a conversation key is pinned to the participant that last won it, and the next turn waits for that participant's nonce.
 
-`scheduler_affinity_max_burns` (default 2): the number of nonces a waiting request lets other hosts take before it drops its target. Each skipped nonce is a burned nonce and costs `fee_per_nonce`.
+`scheduler_affinity_max_burns` (default 2): the most `affinity_skip` burns one request may be charged to reach its host. The escrow pick binds a request only when its host is at most this many nonces from the cursor, and a queued request charged this many is released unbound at the next offer that would burn another for it. A burn takes 60 times the token price plus `fee_per_nonce` from the escrow.
 
 `scheduler_affinity_share_cap` (default 125): a pin is refused when its participant would hold more than this percent of its slot share of all pins. It applies only to a participant holding at least 8 pins, and only when slot weights are known.
 
@@ -60,7 +60,7 @@ TTFT and latency are measured on a machine under other load; the hit rate, same-
 
 ## Cost of each bound
 
-`max_burns`: at most that many skipped nonces per waiting request. Burned nonces per request: 0.227 at 1, 0.577 at 2, 1.10 at 1000. Escrow spend per request over A: +1.4% at 1, +3.2% at 2, +4.6% at 1000.
+`max_burns`: at most that many `affinity_skip` burns per request. Burned nonces per request: 0.227 at 1, 0.577 at 2, 1.10 at 1000. Escrow spend per request over A: +1.4% at 1, +3.2% at 2, +4.6% at 1000.
 
 `share_cap`: no burn cost. Scenario `unequal` (host 0 holds 4 of the 8 slots per escrow and has 4 times the workers and cache), seed 1 only, 5 hosts, same load. F is D without the share cap.
 
@@ -90,7 +90,7 @@ SEEDS="1 2 3" SCENARIOS=equal testenv/scripts/run-affinity-local.sh OUT_DIR
 SEEDS="1" SCENARIOS=unequal testenv/scripts/run-affinity-local.sh OUT_DIR
 ```
 
-The script builds the binaries into `OUT_DIR/bin`, runs the matrix of `testenv/scripts/run-affinity-local.sh` (scenario `equal`: A B C D; `unequal`: D F G100 G110 G150; `noreplay`: A D; `pinage`: D P), and writes `OUT_DIR/tables.md`.
+The script builds the binaries into `OUT_DIR/bin`, runs the matrix in the script, with the settings and scenarios from `testenv/cmd/affinityrun/spec.go` (scenario `equal`: A B C D; `unequal`: D F G100 G110 G150; `noreplay`: A D; `pinage`: D P), and writes `OUT_DIR/tables.md`.
 
 One run: `OUT_DIR/bin/affinityrun -bin OUT_DIR/bin -out RUN_DIR -config D -scenario equal -seed 1`.
 
