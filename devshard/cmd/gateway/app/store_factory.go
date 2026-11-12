@@ -22,7 +22,8 @@ type sqliteChoice struct{ directory string }
 
 type postgresChoice struct{ instanceID string }
 
-func chooseStore(values env.Values) (storeChoice, error) {
+// chooseStore calls sqliteDirectory only when the SQLite backend is selected.
+func chooseStore(sqliteDirectory func() (string, error)) (storeChoice, error) {
 	backend, err := env.ResolveStorageBackend()
 	if err != nil {
 		return nil, err
@@ -30,7 +31,7 @@ func chooseStore(values env.Values) (storeChoice, error) {
 	if backend.Mode == mode.Postgres {
 		return postgresChoice{instanceID: backend.InstanceID}, nil
 	}
-	directory, err := resolveStorageDir(values.StorageDir)
+	directory, err := sqliteDirectory()
 	if err != nil {
 		return nil, err
 	}

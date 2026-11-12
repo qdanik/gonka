@@ -698,7 +698,7 @@ Boot refuses, with no SQLite fallback:
 - a server with `fsync` or `synchronous_commit` off;
 - a database that holds tables and no `gateway_database_marker`, so give the gateway a database nobody else uses.
 
-Sessions and nonce accounting stay in SQLite under `DEVSHARD_STORAGE_DIR` in both modes, so the directory must be writable in `postgres` mode too.
+Sessions and nonce accounting stay in SQLite under `DEVSHARD_STORAGE_DIR` in both modes, so the directory must exist and be writable in `postgres` mode too; only the SQLite store creates it.
 
 Connect directly or through a session-level pooler: the pool uses prepared statements and startup parameters, which transaction pooling breaks.
 While the mode is `sqlite`, any `PG*` variable that is set is ignored and named in the boot log.

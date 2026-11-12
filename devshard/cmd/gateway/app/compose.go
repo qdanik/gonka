@@ -104,7 +104,7 @@ func run(ctx context.Context) error {
 		return err
 	}
 	applyContentionProfiles(values.ContentionProfiles)
-	choice, err := chooseStore(values)
+	choice, err := chooseStore(func() (string, error) { return resolveStorageDir(values.StorageDir) })
 	if err != nil {
 		return err
 	}
