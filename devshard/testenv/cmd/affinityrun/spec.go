@@ -21,18 +21,26 @@ type gatewayConfig struct {
 // The three bounds at their largest accepted values are the closest this build gets to PR 34, which has no bounds.
 const (
 	boundsOffPinAgeMS = 604_800_000
-	boundsOffShareCap = 1000
+	boundsOffShareCap = 10_000
 	boundsOffBurns    = 1000
 )
 
+// affinityOn builds one affinity-on setting; only the burns and the share cap vary between most of them.
+func affinityOn(name string, burns, shareCap int64, describe string) gatewayConfig {
+	return gatewayConfig{Name: name, Affinity: true, MaxPinAge: 3_600_000, ShareCap: shareCap, MaxBurns: burns, TTLMS: 600_000, Describe: describe}
+}
+
 var gatewayConfigs = map[string]gatewayConfig{
-	"A":  {Name: "A", Affinity: false, MaxPinAge: 3_600_000, ShareCap: 2, MaxBurns: 1, TTLMS: 600_000, Describe: "affinity off"},
-	"B":  {Name: "B", Affinity: true, MaxPinAge: boundsOffPinAgeMS, ShareCap: boundsOffShareCap, MaxBurns: boundsOffBurns, TTLMS: 600_000, Describe: "affinity on, the three bounds at their largest values (PR 34 behaviour)"},
-	"B0": {Name: "B0", Affinity: true, MaxPinAge: 3_600_000, ShareCap: 2, MaxBurns: 1, TTLMS: 600_000, Describe: "gateway built from d6c01d74 (PR 34 tip), which has no bounds", Binary: "gateway-pr34"},
-	"C":  {Name: "C", Affinity: true, MaxPinAge: 3_600_000, ShareCap: 2, MaxBurns: 1, TTLMS: 600_000, Describe: "42324340 defaults, max_burns 1"},
-	"D":  {Name: "D", Affinity: true, MaxPinAge: 3_600_000, ShareCap: 2, MaxBurns: 2, TTLMS: 600_000, Describe: "42324340 with max_burns 2"},
-	"E":  {Name: "E", Affinity: true, MaxPinAge: 3_600_000, ShareCap: 1, MaxBurns: 1, TTLMS: 600_000, Describe: "C with share_cap 1, to make the cap fire"},
-	"P":  {Name: "P", Affinity: true, MaxPinAge: 4_000, ShareCap: 2, MaxBurns: 1, TTLMS: 600_000, Describe: "C with max_pin_age 4 s, the pin-age check"},
+	"A":    {Name: "A", Affinity: false, MaxPinAge: 3_600_000, ShareCap: 125, MaxBurns: 2, TTLMS: 600_000, Describe: "affinity off"},
+	"B":    {Name: "B", Affinity: true, MaxPinAge: boundsOffPinAgeMS, ShareCap: boundsOffShareCap, MaxBurns: boundsOffBurns, TTLMS: 600_000, Describe: "affinity on, the three bounds at their largest values (PR 34 behaviour)"},
+	"B0":   {Name: "B0", Affinity: true, MaxPinAge: 3_600_000, ShareCap: 125, MaxBurns: 2, TTLMS: 600_000, Describe: "gateway built from d6c01d74 (PR 34 tip), which has no bounds", Binary: "gateway-pr34"},
+	"C":    affinityOn("C", 1, 125, "max_burns 1, share cap 125 percent"),
+	"D":    affinityOn("D", 2, 125, "final defaults: max_burns 2, share cap 125 percent, pin age 1 h"),
+	"F":    affinityOn("F", 2, boundsOffShareCap, "D without the share cap"),
+	"G100": affinityOn("G100", 2, 100, "D with share cap 100 percent"),
+	"G110": affinityOn("G110", 2, 110, "D with share cap 110 percent"),
+	"G150": affinityOn("G150", 2, 150, "D with share cap 150 percent"),
+	"P":    {Name: "P", Affinity: true, MaxPinAge: 4_000, ShareCap: 125, MaxBurns: 2, TTLMS: 600_000, Describe: "D with max_pin_age 4 s, the pin-age check"},
 }
 
 func (g gatewayConfig) env() []string {

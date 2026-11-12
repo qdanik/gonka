@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Measures gateway session affinity on a GPU-free local stack: every process is native, nothing needs Docker.
-# Usage: run-affinity-local.sh OUT_DIR   (env: SEEDS="1 2 3", SKIP_BUILD=1 to reuse OUT_DIR/bin, PR34_SRC=a checkout of d6c01d74 to build config B0's gateway)
+# Usage: run-affinity-local.sh OUT_DIR   (env: SEEDS="1 2 3", SKIP_BUILD=1 to reuse OUT_DIR/bin, SCENARIOS="equal unequal noreplay pinage" to pick scenarios, PR34_SRC=a checkout of d6c01d74 to build config B0's gateway)
 # Each run is a fresh stack; affinityrun stops every process it started. Failed runs are listed, not retried.
 set -uo pipefail
 
@@ -22,16 +22,13 @@ if [ -z "${SKIP_BUILD:-}" ] && [ -n "${PR34_SRC:-}" ]; then
 fi
 
 # scenario:configs. Seeds are the outer loop and the config order rotates with the seed, so slow drift on the machine does not always land on the same config.
-matrix=("equal:A B0 B C D" "unequal:A B C D E" "busy:A B C D" "noreplay:A C" "pinage:C P")
-if [ ! -x "$out/bin/gateway-pr34" ]; then
-  echo "no gateway-pr34 in $out/bin (set PR34_SRC): skipping config B0" >&2
-  matrix[0]="equal:A B C D"
-fi
+matrix=("equal:A B C D" "unequal:D F G100 G110 G150" "noreplay:A D" "pinage:D P")
 failed=()
 seed_index=0
 for seed in $seeds; do
   for entry in "${matrix[@]}"; do
     scenario=${entry%%:*}
+    case " ${SCENARIOS:-equal unequal noreplay pinage} " in *" $scenario "*) ;; *) continue ;; esac
     read -r -a configs <<< "${entry#*:}"
     shift_by=$((seed_index % ${#configs[@]}))
     ordered=("${configs[@]:shift_by}" "${configs[@]:0:shift_by}")

@@ -15,7 +15,7 @@ func main() {
 	var (
 		binDir   = flag.String("bin", "", "directory with the built binaries")
 		outDir   = flag.String("out", "", "directory for this run's logs and result.json")
-		cfgName  = flag.String("config", "C", "gateway config: A off, B bounds at their largest, B0 PR 34 binary, C defaults, D max_burns 2, E share_cap 1, P short pin age")
+		cfgName  = flag.String("config", "C", "gateway config: A off, B bounds at their largest, B0 PR 34 binary, C max_burns 1, D final defaults, F D without the share cap, G100 G110 G150 D with that share cap, P short pin age")
 		scenName = flag.String("scenario", "equal", "equal, unequal, busy, noreplay or pinage")
 		seed     = flag.Uint64("seed", 1, "load seed")
 		duration = flag.Duration("duration", 0, "override the scenario duration")
