@@ -10,7 +10,7 @@ import (
 
 // Test flow:
 //  1. Build a served winner whose Finish is only queued, plan its timeout votes and assert the plan posts one.
-//  2. Apply the Finish on the handler's session before the votes are settled, as it would be during the deadline wait.
+//  2. Build a scripted handler that reports the nonce's Finish as applied, as it would be after the deadline wait.
 //  3. Settle the plan through a `SessionTimeouts` over the scripted handler.
 //  4. Assert the vote handler never ran and the reported events are one started and one skipped for the finished nonce.
 func TestAFinishAppliedWhileTheVoteWaitedIsNotVoted(t *testing.T) {
