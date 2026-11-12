@@ -9,11 +9,7 @@ import (
 	"devshard/cmd/gateway/store"
 )
 
-// Test flow:
-//  1. Name the columns the upsert intentionally leaves alone: the conflict key and the columns only their own statements write.
-//  2. Walk every field of `store.DevshardRecord`, converting it to its column name.
-//  3. Assert each deliberately-excluded column is absent from the statement's `column = excluded.column` clauses.
-//  4. Assert every other column is updated, so a re-registration cannot silently keep its old value.
+// CheckUpsertStatement fails t when the upsert leaves a column out of its update, or updates one that only its own statement may write.
 func CheckUpsertStatement(t *testing.T, statement string) {
 	deliberatelyNotUpdated := map[string]string{
 		"escrow_id":          "the conflict key",

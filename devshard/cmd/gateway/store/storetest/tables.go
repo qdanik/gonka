@@ -323,3 +323,23 @@ func smallTables(t *testing.T, open Opener) {
 		t.Fatalf("after removal filters = %+v, hosts = %v, want none", filters, hosts)
 	}
 }
+
+// Test flow:
+//  1. Pin two hosts whose keys differ only by case, the lower-case one first.
+//  2. Assert `ListSuspiciousHosts` returns the upper-case key first, the byte order, whatever collation the database defaults to.
+func suspiciousHostsListInByteOrder(t *testing.T, open Opener) {
+	testStore := open()
+	ctx := context.Background()
+	for _, key := range []string{"validator-a", "validator-B"} {
+		if err := testStore.AddSuspiciousHost(ctx, key); err != nil {
+			t.Fatalf("AddSuspiciousHost(%s): %v", key, err)
+		}
+	}
+	pinned, err := testStore.ListSuspiciousHosts(ctx)
+	if err != nil {
+		t.Fatalf("ListSuspiciousHosts(): %v", err)
+	}
+	if want := []string{"validator-B", "validator-a"}; !slices.Equal(pinned, want) {
+		t.Fatalf("ListSuspiciousHosts() = %v, want %v", pinned, want)
+	}
+}

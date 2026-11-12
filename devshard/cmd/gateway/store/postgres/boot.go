@@ -12,13 +12,12 @@ func boot(ctx context.Context, pool *sql.DB, options Options) error {
 		return fmt.Errorf("beginning the Postgres boot: %w", err)
 	}
 	defer tx.Rollback()
-	// The boot may take longer than the pool's statement and lock bounds; the boot context is its only limit.
 	for _, statement := range []string{`SET LOCAL statement_timeout = 0`, `SET LOCAL lock_timeout = 0`} {
 		if _, err := tx.ExecContext(ctx, statement); err != nil {
 			return fmt.Errorf("lifting the Postgres timeouts for the boot: %w", err)
 		}
 	}
-	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtext($1))`, bootLockName); err != nil {
+	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtext($1::text || current_schema()))`, bootLockName); err != nil {
 		return fmt.Errorf("locking the Postgres boot: %w", err)
 	}
 	if err := requireDurableCommits(ctx, tx); err != nil {

@@ -2,6 +2,7 @@ package store
 
 import (
 	"bytes"
+	"slices"
 	"testing"
 	"time"
 )
@@ -87,7 +88,7 @@ func TestAFailedOrLateOwedVoteWriteIsCounted(t *testing.T) {
 
 // Test flow:
 //  1. Open the writer, owe a vote and pay another, then close the store.
-//  2. Assert both writes reached the backend before it closed.
+//  2. Assert both writes reached the backend, in order, before it closed.
 //  3. Assert a second writer is refused while the first is open.
 func TestStoreCloseDrainsTheOwedVotesAndRefusesASecondWriter(t *testing.T) {
 	backend := &fakeBackend{}
@@ -106,5 +107,8 @@ func TestStoreCloseDrainsTheOwedVotesAndRefusesASecondWriter(t *testing.T) {
 	}
 	if len(backend.savedVotes) != 1 || backend.deletedVotes != 1 {
 		t.Fatalf("backend saw %d saves and %d deletes, want 1 and 1", len(backend.savedVotes), backend.deletedVotes)
+	}
+	if want := []string{"save vote", "delete vote", "close"}; !slices.Equal(backend.recorded(), want) {
+		t.Fatalf("backend events = %v, want %v", backend.recorded(), want)
 	}
 }

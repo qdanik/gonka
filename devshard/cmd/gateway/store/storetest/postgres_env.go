@@ -11,10 +11,9 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
+// PostgresDSNVariable names the URL of a throwaway Postgres database whose role may create schemas; RequirePostgresVariable makes a missing one fail the run instead of skipping it.
 const (
-	// PostgresDSNVariable names the URL of a throwaway Postgres database whose role may create schemas.
-	PostgresDSNVariable = "GATEWAY_TEST_POSTGRES_DSN"
-	// RequirePostgresVariable makes a missing PostgresDSNVariable fail the run instead of skipping it.
+	PostgresDSNVariable     = "GATEWAY_TEST_POSTGRES_DSN"
 	RequirePostgresVariable = "GATEWAY_TEST_REQUIRE_POSTGRES"
 	schemaPrefix            = "gateway_test_"
 	schemaSuffixBytes       = 6
@@ -48,6 +47,7 @@ func FreshPostgresSchema(tb testing.TB, dsn string) string {
 	if err != nil {
 		tb.Fatalf("connecting to the test database: %v", err)
 	}
+	tb.Cleanup(func() { _ = admin.Close(ctx) })
 	if _, err := admin.Exec(ctx, `CREATE SCHEMA `+schema); err != nil {
 		tb.Fatalf("creating schema %s: %v", schema, err)
 	}
@@ -55,7 +55,6 @@ func FreshPostgresSchema(tb testing.TB, dsn string) string {
 		if _, err := admin.Exec(ctx, `DROP SCHEMA `+schema+` CASCADE`); err != nil {
 			tb.Errorf("dropping schema %s: %v", schema, err)
 		}
-		_ = admin.Close(ctx)
 	})
 	return WithSearchPath(tb, dsn, schema)
 }

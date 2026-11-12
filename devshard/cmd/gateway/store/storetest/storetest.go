@@ -60,6 +60,7 @@ var contractCases = []contractCase{
 	{"RotationStatusDistinguishesRoleWithinSameModel", rotationStatusDistinguishesRoleWithinSameModel},
 	{"LoadRotationStatusesDeterministicOrder", loadRotationStatusesDeterministicOrder},
 	{"SuspiciousHostsSurviveAReopen", suspiciousHostsSurviveAReopen},
+	{"SuspiciousHostsListInByteOrder", suspiciousHostsListInByteOrder},
 	{"SuspiciousHostsToleratesRepeatedPinsAndUnknownUnpins", suspiciousHostsToleratesRepeatedPinsAndUnknownUnpins},
 	{"SmallTables", smallTables},
 }

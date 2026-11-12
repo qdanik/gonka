@@ -11,7 +11,7 @@ import (
 )
 
 // InsertRequest stores one ledger row; a repeated request id is a no-op.
-func (s *Store) InsertRequest(ctx context.Context, record store.RequestRecord) error {
+func (s *Backend) InsertRequest(ctx context.Context, record store.RequestRecord) error {
 	_, err := s.database.exec(ctx, `
 		INSERT INTO request_accounting (
 			request_id, escrow_id, model, outcome, decision, stream,
@@ -32,13 +32,13 @@ func (s *Store) InsertRequest(ctx context.Context, record store.RequestRecord) e
 }
 
 // DeleteRequestsBefore drops the rows recorded before cutoff.
-func (s *Store) DeleteRequestsBefore(ctx context.Context, cutoff time.Time) error {
+func (s *Backend) DeleteRequestsBefore(ctx context.Context, cutoff time.Time) error {
 	_, err := s.database.exec(ctx, `DELETE FROM request_accounting WHERE recorded_at < $1`, store.FormatTime(cutoff))
 	return err
 }
 
 // DeleteRequestsBeyond keeps the newest keepRows rows and drops the rest.
-func (s *Store) DeleteRequestsBeyond(ctx context.Context, keepRows int64) error {
+func (s *Backend) DeleteRequestsBeyond(ctx context.Context, keepRows int64) error {
 	_, err := s.database.exec(ctx, `
 		DELETE FROM request_accounting WHERE request_id IN (
 			SELECT request_id FROM request_accounting
@@ -47,7 +47,7 @@ func (s *Store) DeleteRequestsBeyond(ctx context.Context, keepRows int64) error 
 }
 
 // FindRequest reads one ledger row and whether it exists.
-func (s *Store) FindRequest(ctx context.Context, requestID string) (store.RequestRecord, bool, error) {
+func (s *Backend) FindRequest(ctx context.Context, requestID string) (store.RequestRecord, bool, error) {
 	var record store.RequestRecord
 	var outcome, startedAt, completedAt, recordedAt string
 	err := s.database.scanRow(ctx, `

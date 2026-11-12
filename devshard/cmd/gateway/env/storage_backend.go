@@ -7,21 +7,22 @@ import (
 	"strings"
 
 	"common/storage/mode"
+	"common/storage/pgtimeouts"
 
 	"devshard/internal/boolvalue"
 )
 
+// InstanceIDVariable names this process in the boot log, and AllowFreshPostgresVariable lets a gateway start on an empty Postgres database although a SQLite gateway database sits in the storage directory.
 const (
-	// InstanceIDVariable names this process in a shared Postgres database; it must be stable and unique per process.
-	InstanceIDVariable = "GATEWAY_INSTANCE_ID"
-	// AllowFreshPostgresVariable lets a gateway start on an empty Postgres database although a SQLite gateway database sits in the storage directory.
+	InstanceIDVariable         = "GATEWAY_INSTANCE_ID"
 	AllowFreshPostgresVariable = "GATEWAY_POSTGRES_ALLOW_FRESH_START"
 	postgresHostVariable       = "PGHOST"
 )
 
 var postgresVariables = []string{
-	"PGHOST", "PGPORT", "PGUSER", "PGPASSWORD", "PGDATABASE", "PGSSLMODE", "PGSERVICE", "PGSERVICEFILE", "PGPASSFILE",
-	"PG_CONNECT_TIMEOUT", "PG_OPERATION_TIMEOUT", "PG_POOL_MAX_CONNS",
+	postgresHostVariable, "PGPORT", "PGUSER", "PGPASSWORD", "PGDATABASE", "PGSSLMODE", "PGSERVICE", "PGSERVICEFILE", "PGPASSFILE",
+	pgtimeouts.EnvConnectTimeout, pgtimeouts.EnvOperationTimeout, "PG_POOL_MAX_CONNS",
+	"PGSSLROOTCERT", "PGSSLCERT", "PGSSLKEY", "PGAPPNAME", "PGOPTIONS", "PGTARGETSESSIONATTRS",
 }
 
 // StorageBackend is where the gateway keeps its control-plane state. See ../docs/operations.md, "Storing state in Postgres".

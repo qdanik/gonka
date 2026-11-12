@@ -9,7 +9,7 @@ import (
 )
 
 // SaveOwedVote stores the vote's row; a repeated (escrow, nonce) is a no-op.
-func (s *Store) SaveOwedVote(ctx context.Context, vote store.OwedVote) error {
+func (s *Backend) SaveOwedVote(ctx context.Context, vote store.OwedVote) error {
 	_, err := s.database.exec(ctx, `
 		INSERT INTO owed_refusal_votes (escrow_id, nonce, started_at, request_id, participant, model, prompt)
 		VALUES ($1, $2, $3, $4, $5, $6, $7)
@@ -19,13 +19,13 @@ func (s *Store) SaveOwedVote(ctx context.Context, vote store.OwedVote) error {
 }
 
 // DeleteOwedVote removes the vote's row; an absent one is a no-op.
-func (s *Store) DeleteOwedVote(ctx context.Context, escrowID string, nonce uint64) error {
+func (s *Backend) DeleteOwedVote(ctx context.Context, escrowID string, nonce uint64) error {
 	_, err := s.database.exec(ctx, `DELETE FROM owed_refusal_votes WHERE escrow_id = $1 AND nonce = $2`, escrowID, nonce)
 	return err
 }
 
 // LoadOwedVotes returns every stored vote ordered by (escrow_id, nonce).
-func (s *Store) LoadOwedVotes(ctx context.Context) ([]store.OwedVote, error) {
+func (s *Backend) LoadOwedVotes(ctx context.Context) ([]store.OwedVote, error) {
 	var votes []store.OwedVote
 	err := s.database.forEachRow(ctx, `
 		SELECT escrow_id, nonce, started_at, request_id, participant, model, prompt

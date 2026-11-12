@@ -8,7 +8,7 @@ import (
 )
 
 // SaveOwedVote stores the vote's row; a repeated (escrow, nonce) is a no-op.
-func (s *Store) SaveOwedVote(ctx context.Context, vote store.OwedVote) error {
+func (s *Backend) SaveOwedVote(ctx context.Context, vote store.OwedVote) error {
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO owed_refusal_votes (escrow_id, nonce, started_at, request_id, participant, model, prompt)
 		VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -18,13 +18,13 @@ func (s *Store) SaveOwedVote(ctx context.Context, vote store.OwedVote) error {
 }
 
 // DeleteOwedVote removes the vote's row; an absent one is a no-op.
-func (s *Store) DeleteOwedVote(ctx context.Context, escrowID string, nonce uint64) error {
+func (s *Backend) DeleteOwedVote(ctx context.Context, escrowID string, nonce uint64) error {
 	_, err := s.db.ExecContext(ctx, `DELETE FROM owed_refusal_votes WHERE escrow_id = ? AND nonce = ?`, escrowID, nonce)
 	return err
 }
 
 // LoadOwedVotes returns every stored vote ordered by (escrow_id, nonce).
-func (s *Store) LoadOwedVotes(ctx context.Context) ([]store.OwedVote, error) {
+func (s *Backend) LoadOwedVotes(ctx context.Context) ([]store.OwedVote, error) {
 	result, err := s.db.QueryContext(ctx, `
 		SELECT escrow_id, nonce, started_at, request_id, participant, model, prompt
 		FROM owed_refusal_votes ORDER BY escrow_id, nonce`)

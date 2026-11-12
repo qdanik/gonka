@@ -10,7 +10,7 @@ import (
 )
 
 // SaveInferenceCompletion records a started nonce before it is sent. Saving the same payload again is a no-op; a different one at the same nonce is user.ErrInferenceCompletionConflict. See ../README.md, "The completion journal".
-func (s *Store) SaveInferenceCompletion(escrowID string, entry user.InferenceCompletion) error {
+func (s *Backend) SaveInferenceCompletion(escrowID string, entry user.InferenceCompletion) error {
 	data, err := json.Marshal(entry)
 	if err != nil {
 		return fmt.Errorf("encoding completion %s/%d: %w", escrowID, entry.Nonce, err)
@@ -34,7 +34,7 @@ func (s *Store) SaveInferenceCompletion(escrowID string, entry user.InferenceCom
 }
 
 // HasInferenceCompletion reports whether the escrow has an entry at the nonce.
-func (s *Store) HasInferenceCompletion(escrowID string, nonce uint64) (bool, error) {
+func (s *Backend) HasInferenceCompletion(escrowID string, nonce uint64) (bool, error) {
 	ctx := context.Background()
 	var present bool
 	err := s.WithRetry(ctx, func() error {
@@ -48,7 +48,7 @@ func (s *Store) HasInferenceCompletion(escrowID string, nonce uint64) (bool, err
 }
 
 // ListInferenceCompletions returns the escrow's entries ordered by nonce.
-func (s *Store) ListInferenceCompletions(escrowID string) ([]user.InferenceCompletion, error) {
+func (s *Backend) ListInferenceCompletions(escrowID string) ([]user.InferenceCompletion, error) {
 	ctx := context.Background()
 	var entries []user.InferenceCompletion
 	err := s.WithRetry(ctx, func() error {
@@ -76,7 +76,7 @@ func (s *Store) ListInferenceCompletions(escrowID string) ([]user.InferenceCompl
 }
 
 // DeleteInferenceCompletion removes a finished or timed-out entry; an absent one is a no-op.
-func (s *Store) DeleteInferenceCompletion(escrowID string, nonce uint64) error {
+func (s *Backend) DeleteInferenceCompletion(escrowID string, nonce uint64) error {
 	ctx := context.Background()
 	return s.WithRetry(ctx, func() error {
 		if _, err := s.db.ExecContext(ctx, `DELETE FROM inference_completions WHERE escrow_id = ? AND nonce = ?`, escrowID, nonce); err != nil {

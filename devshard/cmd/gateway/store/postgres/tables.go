@@ -11,7 +11,7 @@ import (
 )
 
 // LoadOverrides returns the persisted admin overrides, or the zero value when none were ever saved.
-func (s *Store) LoadOverrides(ctx context.Context) (config.Overrides, error) {
+func (s *Backend) LoadOverrides(ctx context.Context) (config.Overrides, error) {
 	var raw string
 	if err := s.database.scanRow(ctx, `SELECT overrides_json FROM config_overrides WHERE id = 1`, nil, &raw); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -27,7 +27,7 @@ func (s *Store) LoadOverrides(ctx context.Context) (config.Overrides, error) {
 }
 
 // SaveOverrides replaces the persisted overrides.
-func (s *Store) SaveOverrides(ctx context.Context, overrides config.Overrides) error {
+func (s *Backend) SaveOverrides(ctx context.Context, overrides config.Overrides) error {
 	encoded, err := overrides.EncodeOverrides()
 	if err != nil {
 		return fmt.Errorf("saving overrides: %w", err)
@@ -43,7 +43,7 @@ func (s *Store) SaveOverrides(ctx context.Context, overrides config.Overrides) e
 }
 
 // UpsertModelFilter replaces the model's setting, or adds it.
-func (s *Store) UpsertModelFilter(ctx context.Context, row store.ModelFilterRow) error {
+func (s *Backend) UpsertModelFilter(ctx context.Context, row store.ModelFilterRow) error {
 	_, err := s.database.exec(ctx, `
 		INSERT INTO model_filters (model, preset, filters_json, updated_at) VALUES ($1, $2, $3, $4)
 		ON CONFLICT (model) DO UPDATE SET preset = excluded.preset, filters_json = excluded.filters_json, updated_at = excluded.updated_at`,
@@ -55,7 +55,7 @@ func (s *Store) UpsertModelFilter(ctx context.Context, row store.ModelFilterRow)
 }
 
 // DeleteModelFilter succeeds when the model had no setting.
-func (s *Store) DeleteModelFilter(ctx context.Context, model string) error {
+func (s *Backend) DeleteModelFilter(ctx context.Context, model string) error {
 	if _, err := s.database.exec(ctx, `DELETE FROM model_filters WHERE model = $1`, model); err != nil {
 		return fmt.Errorf("deleting filter setting for %s: %w", model, err)
 	}
@@ -63,7 +63,7 @@ func (s *Store) DeleteModelFilter(ctx context.Context, model string) error {
 }
 
 // ListModelFilters returns every stored setting, ordered by model.
-func (s *Store) ListModelFilters(ctx context.Context) ([]store.ModelFilterRow, error) {
+func (s *Backend) ListModelFilters(ctx context.Context) ([]store.ModelFilterRow, error) {
 	var settings []store.ModelFilterRow
 	err := s.database.forEachRow(ctx, `SELECT model, preset, filters_json, updated_at FROM model_filters ORDER BY model`, nil, func(result *sql.Rows) error {
 		var row store.ModelFilterRow
@@ -80,7 +80,7 @@ func (s *Store) ListModelFilters(ctx context.Context) ([]store.ModelFilterRow, e
 }
 
 // SaveRotationStatus replaces the latest outcome of the status's (model, role) stage.
-func (s *Store) SaveRotationStatus(ctx context.Context, status store.RotationStatus) error {
+func (s *Backend) SaveRotationStatus(ctx context.Context, status store.RotationStatus) error {
 	_, err := s.database.exec(ctx, `
 		INSERT INTO gateway_rotation_status (model, role, stage, epoch, completed, create_error, updated_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7)
@@ -99,7 +99,7 @@ func (s *Store) SaveRotationStatus(ctx context.Context, status store.RotationSta
 }
 
 // LoadRotationStatuses returns every status ordered by (model, role).
-func (s *Store) LoadRotationStatuses(ctx context.Context) ([]store.RotationStatus, error) {
+func (s *Backend) LoadRotationStatuses(ctx context.Context) ([]store.RotationStatus, error) {
 	var statuses []store.RotationStatus
 	err := s.database.forEachRow(ctx, `
 		SELECT model, role, stage, epoch, completed, create_error, updated_at
@@ -124,7 +124,7 @@ func (s *Store) LoadRotationStatuses(ctx context.Context) ([]store.RotationStatu
 }
 
 // AddSuspiciousHost pins a participant as never-to-be-trusted; re-pinning keeps the original timestamp.
-func (s *Store) AddSuspiciousHost(ctx context.Context, participantKey string) error {
+func (s *Backend) AddSuspiciousHost(ctx context.Context, participantKey string) error {
 	_, err := s.database.exec(ctx, `
 		INSERT INTO suspicious_hosts (participant_key) VALUES ($1)
 		ON CONFLICT (participant_key) DO NOTHING`, participantKey)
@@ -135,7 +135,7 @@ func (s *Store) AddSuspiciousHost(ctx context.Context, participantKey string) er
 }
 
 // RemoveSuspiciousHost unpins a participant, and succeeds when it was never pinned.
-func (s *Store) RemoveSuspiciousHost(ctx context.Context, participantKey string) error {
+func (s *Backend) RemoveSuspiciousHost(ctx context.Context, participantKey string) error {
 	if _, err := s.database.exec(ctx, `DELETE FROM suspicious_hosts WHERE participant_key = $1`, participantKey); err != nil {
 		return fmt.Errorf("unpinning suspicious host %s: %w", participantKey, err)
 	}
@@ -143,7 +143,7 @@ func (s *Store) RemoveSuspiciousHost(ctx context.Context, participantKey string)
 }
 
 // ListSuspiciousHosts returns every pinned participant key, ordered by key.
-func (s *Store) ListSuspiciousHosts(ctx context.Context) ([]string, error) {
+func (s *Backend) ListSuspiciousHosts(ctx context.Context) ([]string, error) {
 	var participantKeys []string
 	err := s.database.forEachRow(ctx, `SELECT participant_key FROM suspicious_hosts ORDER BY participant_key`, nil, func(result *sql.Rows) error {
 		var participantKey string

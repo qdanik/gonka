@@ -72,6 +72,7 @@ func (f *fakeBackend) DeleteRequestsBeyond(_ context.Context, keepRows int64) er
 
 func (f *fakeBackend) SaveOwedVote(_ context.Context, vote OwedVote) error {
 	f.wait()
+	f.log("save vote")
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.voteErr != nil {
@@ -83,6 +84,7 @@ func (f *fakeBackend) SaveOwedVote(_ context.Context, vote OwedVote) error {
 
 func (f *fakeBackend) DeleteOwedVote(_ context.Context, _ string, _ uint64) error {
 	f.wait()
+	f.log("delete vote")
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.voteErr != nil {

@@ -19,18 +19,16 @@ import (
 	"devshard/logging"
 )
 
-var _ store.Backend = (*Store)(nil)
+var _ store.Backend = (*Backend)(nil)
 
-// Options tunes one Open.
+// Options tunes one Open: ConnectionString is a libpq URL or keyword string (empty reads the PG* variables), and RefuseEmptyDatabase makes Open return ErrEmptyDatabaseRefused instead of initialising an empty database.
 type Options struct {
-	// ConnectionString is a libpq URL or keyword string; empty reads the PG* variables.
-	ConnectionString string
-	// RefuseEmptyDatabase makes Open return ErrEmptyDatabaseRefused instead of initialising a database that holds nothing.
+	ConnectionString    string
 	RefuseEmptyDatabase bool
 }
 
-// Store is the Postgres backend; Open wraps it with the ledger and owed-vote writers.
-type Store struct {
+// Backend is the Postgres backend; Open wraps it with the ledger and owed-vote writers.
+type Backend struct {
 	database database
 	retrier  rows.Retrier
 }
@@ -44,7 +42,7 @@ func Open(ctx context.Context, options Options) (store.Store, error) {
 	return store.New(backend), nil
 }
 
-func openBackend(ctx context.Context, options Options) (*Store, error) {
+func openBackend(ctx context.Context, options Options) (*Backend, error) {
 	cfg, err := connectionConfig(options.ConnectionString)
 	if err != nil {
 		return nil, err
@@ -62,7 +60,7 @@ func openBackend(ctx context.Context, options Options) (*Store, error) {
 		pool.Close()
 		return nil, err
 	}
-	return &Store{
+	return &Backend{
 		database: database{pool: pool, operationTimeout: pgtimeouts.OperationTimeout()},
 		retrier:  rows.Retrier{Retryable: isRetryable, Backoff: rows.DefaultRetryBackoff},
 	}, nil
@@ -86,12 +84,12 @@ func connectionConfig(connectionString string) (*pgxpool.Config, error) {
 }
 
 // WithRetry retries a serialization failure, a deadlock or an error raised before anything reached the server. See ../README.md, "Writing under a lock".
-func (s *Store) WithRetry(ctx context.Context, operation func() error) error {
+func (s *Backend) WithRetry(ctx context.Context, operation func() error) error {
 	return s.retrier.Do(ctx, operation)
 }
 
 // Close closes the connection pool.
-func (s *Store) Close() error {
+func (s *Backend) Close() error {
 	if err := s.database.pool.Close(); err != nil {
 		return fmt.Errorf("closing gateway store: %w", err)
 	}

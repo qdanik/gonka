@@ -13,7 +13,7 @@ One contract, two backends: SQLite at `<storageDir>/gateway.db` or a dedicated P
 | `postgres/` | the Postgres backend: its SQL, its migrations, the advisory-lock boot, the marker table, the pool, `PG_OPERATION_TIMEOUT`, the TLS rule and the retry classifier |
 | `internal/rows` | the Go helpers both backends share: the retry ladder, completion decoding and row-count checks |
 | `storetest/` | the contract suite and the benchmarks, run against each backend |
-| `parity/` | the check that both migration lists carry the same versions and columns |
+| `parity/` | the check that the schemas both migration lists produce match in columns, types, keys, defaults and indexes |
 
 ## Boundaries
 
@@ -44,7 +44,7 @@ The guard is declared apart from the migrations list because it decides whether 
 
 `postgres.Open` takes its connection from the libpq `PG*` variables (or `Options.ConnectionString`) and runs the whole boot in one transaction under an advisory lock, with the pool's statement and lock timeouts lifted so the boot is bounded only by its own deadline. It first reads `synchronous_commit` and `fsync` and fails with `ErrDurabilityOff` when either is off, because `SaveCommitment` promises a row that survives a crash and the pool pins `synchronous_commit=on` for every connection. It then requires the `gateway_database_marker` table, writes it into an empty database, and refuses a database that holds tables and no marker (`ErrForeignDatabase`), so any later table that shares the database must be created after the store opens. `Options.RefuseEmptyDatabase` turns the empty-database case into `ErrEmptyDatabaseRefused`; the factory sets it while a SQLite `gateway.db` sits in the storage dir. A schema newer than this build knows is logged, not refused. Nothing falls back to SQLite.
 
-`migrations` is its own hand-written list, with the same versions as the SQLite list and the same columns, which `parity/` checks; ordered or compared text is `COLLATE "C"`, the byte order SQLite uses. The flag columns are `BIGINT`, as on SQLite.
+`migrations` is its own hand-written list, with the same versions as the SQLite list and the same columns, whose result `parity/` compares; ordered or compared text is `COLLATE "C"`, the byte order SQLite uses. The flag columns are `BIGINT`, as on SQLite.
 
 The TLS rule runs on the parsed connection config, fallbacks included: a host that is neither loopback nor a unix socket must have TLS configured, whether it came from a variable, a connection string or a service file. Every statement runs under `PG_OPERATION_TIMEOUT`, and connections must be read-write, so a standby is skipped.
 
@@ -80,7 +80,7 @@ Its statement is a named constant so a test can read which columns the update ca
 
 Everything else is a targeted single-column update rather than a whole-record upsert, for one reason: a tick loads its escrows once and several steps act on that one slice, so the caller's copy predates whatever an earlier step in the same tick wrote. `SetDevshardRotationRole` moves the role without carrying a stale `active` or `settle_tx_hash` back into the row, and `DevshardSettleTxHash` reads the hash from the row rather than from the record the caller is holding.
 
-`SetDevshardSettleTxHash` stamps `settle_tx_at` alongside the hash, and clears the stamp when the hash is cleared. That stamp is what lets a later tick tell a settle that may still land from one that no longer can, instead of building a second transaction for a settle already on its way. The stamp comes from the process clock, not SQLite's: the tick compares it with its own clock, and the two must be one.
+`SetDevshardSettleTxHash` stamps `settle_tx_at` alongside the hash, and clears the stamp when the hash is cleared. That stamp is what lets a later tick tell a settle that may still land from one that no longer can, instead of building a second transaction for a settle already on its way. The stamp comes from the process clock, not the database's: the tick compares it with its own clock, and the two must be one.
 
 ## The commitment row
 
@@ -106,7 +106,7 @@ It runs whatever the insert before it did: a persistently failing insert is exac
 
 `FormatTime` renders every timestamp this package stores, and the accounting API renders with the same function, so the retention cutoff and the rows it is compared against can never drift in precision or zone.
 
-Its layout is fixed-width where `RFC3339Nano` is not. Retention compares and orders timestamps as text, and `RFC3339Nano` trims trailing zeros, so a whole second would sort after the same second plus a tenth and the sweep would prune by the wrong order. `parseTime` is the only reader of what `FormatTime` writes, the empty zero timestamp included.
+Its layout is fixed-width where `RFC3339Nano` is not. Retention compares and orders timestamps as text, and `RFC3339Nano` trims trailing zeros, so a whole second would sort after the same second plus a tenth and the sweep would prune by the wrong order. `ParseTime` is the only reader of what `FormatTime` writes, the empty zero timestamp included.
 
 ## Owed refusal votes
 
@@ -116,4 +116,4 @@ Like the ledger, the writer sits behind a queue of `owedVoteQueueDepth` (1024) a
 
 ## The completion journal
 
-`inference_completions` holds one row per started nonce, `(escrow_id, nonce)`, with the entry as JSON, and the store implements `user.InferenceCompletionStore`. The caller saves an entry before it sends the nonce: saving the same payload again succeeds, and a different payload at the same nonce is `user.ErrInferenceCompletionConflict`. `DeleteInferenceCompletion` removes an entry once it has finished or timed out. A save is one `INSERT ... ON CONFLICT DO NOTHING`: the row count says whether the entry was new, and only a duplicate reads the stored entry back to tell a repeat from a conflict. `HasInferenceCompletion` answers whether a nonce is journaled without decoding it. The gateway's `Finalize` does not read the journal yet.
+`inference_completions` holds one row per started nonce, `(escrow_id, nonce)`, with the entry as JSON, and the store implements `user.InferenceCompletionStore`. Nothing in the gateway writes the journal yet; the caller will save an entry before it sends the nonce: saving the same payload again succeeds, and a different payload at the same nonce is `user.ErrInferenceCompletionConflict`. `DeleteInferenceCompletion` removes an entry once it has finished or timed out. A save is one `INSERT ... ON CONFLICT DO NOTHING`: the row count says whether the entry was new, and only a duplicate reads the stored entry back to tell a repeat from a conflict. `HasInferenceCompletion` answers whether a nonce is journaled without decoding it. The gateway's `Finalize` does not read the journal yet.

@@ -221,7 +221,7 @@ func TestADeleteHoldsTheEscrowsLockWhileRemovingTheRowAndTheStorage(t *testing.T
 
 	deleted := make(chan error, 1)
 	go func() { deleted <- operator.DeleteDevshard(ctx, "42") }()
-	awaitRunningIn(t, "(*Store).DeleteDevshard", deleted, release)
+	awaitRunningIn(t, "(*Backend).DeleteDevshard", deleted, release)
 	lock, _ := operator.writes.Load("42")
 	writes := lock.(*sync.Mutex)
 	lockHeld := !writes.TryLock()

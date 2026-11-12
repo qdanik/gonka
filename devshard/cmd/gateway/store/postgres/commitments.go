@@ -9,7 +9,7 @@ import (
 )
 
 // SaveCommitment returns once Postgres has committed the row; the commit is flushed to disk before the server answers, which boot checks and the session setting keeps on. See ../README.md, "The commitment row".
-func (s *Store) SaveCommitment(ctx context.Context, commitment store.Commitment) error {
+func (s *Backend) SaveCommitment(ctx context.Context, commitment store.Commitment) error {
 	_, err := s.database.exec(ctx, `
 		INSERT INTO escrow_rotation_commitments (tx_hash, model, role, private_key_env, epoch, block_height, created_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7)
@@ -29,7 +29,7 @@ func (s *Store) SaveCommitment(ctx context.Context, commitment store.Commitment)
 }
 
 // LoadCommitments returns every commitment ordered by (created_at, tx_hash).
-func (s *Store) LoadCommitments(ctx context.Context) ([]store.Commitment, error) {
+func (s *Backend) LoadCommitments(ctx context.Context) ([]store.Commitment, error) {
 	var commitments []store.Commitment
 	err := s.database.forEachRow(ctx, `
 		SELECT tx_hash, model, role, private_key_env, epoch, block_height, created_at
@@ -55,7 +55,7 @@ func (s *Store) LoadCommitments(ctx context.Context) ([]store.Commitment, error)
 }
 
 // DeleteCommitment removes the commitment for txHash; an absent hash is a no-op.
-func (s *Store) DeleteCommitment(ctx context.Context, txHash string) error {
+func (s *Backend) DeleteCommitment(ctx context.Context, txHash string) error {
 	if _, err := s.database.exec(ctx, `DELETE FROM escrow_rotation_commitments WHERE tx_hash = $1`, txHash); err != nil {
 		return fmt.Errorf("deleting commitment %s: %w", txHash, err)
 	}

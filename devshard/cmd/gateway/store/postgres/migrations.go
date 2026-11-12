@@ -4,7 +4,7 @@ var migrations = []string{
 	`CREATE TABLE IF NOT EXISTS config_overrides (
 		id BIGINT PRIMARY KEY CHECK (id = 1),
 		overrides_json TEXT NOT NULL,
-		updated_at TEXT NOT NULL DEFAULT (to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS'))
+		updated_at TEXT NOT NULL DEFAULT (` + nowExpression + `)
 	);
 	CREATE TABLE IF NOT EXISTS devshards (
 		escrow_id TEXT COLLATE "C" PRIMARY KEY,
@@ -15,8 +15,8 @@ var migrations = []string{
 		rotation_epoch BIGINT NOT NULL DEFAULT 0,
 		settlement_pending BIGINT NOT NULL DEFAULT 0,
 		settle_tx_hash TEXT NOT NULL DEFAULT '',
-		created_at TEXT NOT NULL DEFAULT (to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS')),
-		updated_at TEXT NOT NULL DEFAULT (to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS'))
+		created_at TEXT NOT NULL DEFAULT (` + nowExpression + `),
+		updated_at TEXT NOT NULL DEFAULT (` + nowExpression + `)
 	);`,
 	`CREATE TABLE IF NOT EXISTS escrow_rotation_commitments (
 		tx_hash TEXT COLLATE "C" PRIMARY KEY,
@@ -63,7 +63,7 @@ var migrations = []string{
 	CREATE INDEX IF NOT EXISTS request_accounting_recorded_at ON request_accounting (recorded_at);`,
 	`CREATE TABLE IF NOT EXISTS suspicious_hosts (
 		participant_key TEXT COLLATE "C" PRIMARY KEY,
-		created_at TEXT NOT NULL DEFAULT (to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS'))
+		created_at TEXT NOT NULL DEFAULT (` + nowExpression + `)
 	);`,
 	`ALTER TABLE devshards ADD COLUMN IF NOT EXISTS route_prefix TEXT NOT NULL DEFAULT ''`,
 	`ALTER TABLE devshards ADD COLUMN IF NOT EXISTS settle_tx_at TEXT NOT NULL DEFAULT ''`,

@@ -38,8 +38,14 @@ func CheckCompletionConflict(escrowID string, entry user.InferenceCompletion, st
 	if err := json.Unmarshal(stored, &previous); err != nil {
 		return fmt.Errorf("decoding stored completion %s/%d: %w", escrowID, entry.Nonce, err)
 	}
-	want, _ := json.Marshal(entry.Payload)
-	got, _ := json.Marshal(previous.Payload)
+	want, err := json.Marshal(entry.Payload)
+	if err != nil {
+		return fmt.Errorf("encoding completion %s/%d: %w", escrowID, entry.Nonce, err)
+	}
+	got, err := json.Marshal(previous.Payload)
+	if err != nil {
+		return fmt.Errorf("encoding stored completion %s/%d: %w", escrowID, entry.Nonce, err)
+	}
 	if !bytes.Equal(want, got) {
 		return fmt.Errorf("%w: escrow %s nonce %d", user.ErrInferenceCompletionConflict, escrowID, entry.Nonce)
 	}

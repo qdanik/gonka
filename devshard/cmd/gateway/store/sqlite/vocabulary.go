@@ -11,8 +11,10 @@ const (
 )
 
 // ErrLegacyDatabase reports a gateway.db this gateway did not create. See ../README.md, "The devshardctl-database guard".
-var ErrLegacyDatabase = errors.New("storage dir holds a gateway.db this gateway did not create; point the gateway at an empty storage dir")
+var (
+	ErrLegacyDatabase = errors.New("storage dir holds a gateway.db this gateway did not create; point the gateway at an empty storage dir")
 
-var errCheckpointBusy = errors.New("checkpoint could not move the whole log into the main database file")
+	errCheckpointBusy = errors.New("checkpoint could not move the whole log into the main database file")
 
-var legacyOnlyTables = []string{"gateway_settings", "gateway_devshards", "gateway_suspicious_hosts", "participant_throttle_state"}
+	legacyOnlyTables = []string{"gateway_settings", "gateway_devshards", "gateway_suspicious_hosts", "participant_throttle_state"}
+)

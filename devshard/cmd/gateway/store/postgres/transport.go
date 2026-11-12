@@ -9,7 +9,6 @@ import (
 )
 
 func requireTLSForRemoteHosts(cfg *pgxpool.Config) error {
-	// Checked on what pgx will dial, fallbacks included, so a service file cannot slip past a check on the variables.
 	primary := cfg.ConnConfig
 	if !isLoopbackHost(primary.Host) && primary.TLSConfig == nil {
 		return fmt.Errorf("%w: host %s", ErrPlaintextRemoteHost, primary.Host)

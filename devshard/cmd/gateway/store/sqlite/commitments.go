@@ -8,7 +8,7 @@ import (
 )
 
 // SaveCommitment returns nil only once the row is in the main database file, which a machine crash cannot take back. See ../README.md, "The commitment row".
-func (s *Store) SaveCommitment(ctx context.Context, commitment store.Commitment) error {
+func (s *Backend) SaveCommitment(ctx context.Context, commitment store.Commitment) error {
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO escrow_rotation_commitments (tx_hash, model, role, private_key_env, epoch, block_height, created_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -30,7 +30,7 @@ func (s *Store) SaveCommitment(ctx context.Context, commitment store.Commitment)
 	return nil
 }
 
-func (s *Store) checkpoint(ctx context.Context) error {
+func (s *Backend) checkpoint(ctx context.Context) error {
 	var busy, logFrames, checkpointedFrames int
 	if err := s.db.QueryRowContext(ctx, `PRAGMA wal_checkpoint(FULL)`).Scan(&busy, &logFrames, &checkpointedFrames); err != nil {
 		return fmt.Errorf("checkpointing: %w", err)
@@ -42,7 +42,7 @@ func (s *Store) checkpoint(ctx context.Context) error {
 }
 
 // LoadCommitments returns every commitment ordered by (created_at, tx_hash).
-func (s *Store) LoadCommitments(ctx context.Context) ([]store.Commitment, error) {
+func (s *Backend) LoadCommitments(ctx context.Context) ([]store.Commitment, error) {
 	result, err := s.db.QueryContext(ctx, `
 		SELECT tx_hash, model, role, private_key_env, epoch, block_height, created_at
 		FROM escrow_rotation_commitments ORDER BY created_at, tx_hash`)
@@ -72,7 +72,7 @@ func (s *Store) LoadCommitments(ctx context.Context) ([]store.Commitment, error)
 }
 
 // DeleteCommitment removes the commitment for txHash; an absent hash is a no-op.
-func (s *Store) DeleteCommitment(ctx context.Context, txHash string) error {
+func (s *Backend) DeleteCommitment(ctx context.Context, txHash string) error {
 	if _, err := s.db.ExecContext(ctx, `DELETE FROM escrow_rotation_commitments WHERE tx_hash = ?`, txHash); err != nil {
 		return fmt.Errorf("deleting commitment %s: %w", txHash, err)
 	}

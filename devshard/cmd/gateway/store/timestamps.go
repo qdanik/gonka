@@ -2,11 +2,6 @@ package store
 
 import "time"
 
-const (
-	storedTimeLayout  = "2006-01-02T15:04:05.000000000Z07:00"
-	settleStampLayout = time.DateTime
-)
-
 // FormatTime renders every stored timestamp and the accounting API's, so the retention cutoff cannot drift from the rows it compares. See README.md, "Timestamps".
 func FormatTime(value time.Time) string {
 	if value.IsZero() {

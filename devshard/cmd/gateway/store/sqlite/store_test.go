@@ -17,7 +17,7 @@ import (
 	"devshard/cmd/gateway/store"
 )
 
-func openTestStore(t *testing.T) *Store {
+func openTestStore(t *testing.T) *Backend {
 	t.Helper()
 	testStore, err := openBackend(t.TempDir())
 	if err != nil {

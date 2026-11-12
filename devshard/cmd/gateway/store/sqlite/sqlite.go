@@ -15,10 +15,10 @@ import (
 	"devshard/cmd/gateway/store/internal/rows"
 )
 
-var _ store.Backend = (*Store)(nil)
+var _ store.Backend = (*Backend)(nil)
 
-// Store is the SQLite backend; Open wraps it with the ledger and owed-vote writers.
-type Store struct {
+// Backend is the SQLite backend; Open wraps it with the ledger and owed-vote writers.
+type Backend struct {
 	db      *sql.DB
 	retrier rows.Retrier
 }
@@ -43,7 +43,7 @@ func DatabaseExists(storageDir string) bool {
 	return err == nil
 }
 
-func openBackend(storageDir string) (*Store, error) {
+func openBackend(storageDir string) (*Backend, error) {
 	if err := os.MkdirAll(storageDir, storageDirectoryMode); err != nil {
 		return nil, fmt.Errorf("creating storage dir: %w", err)
 	}
@@ -63,16 +63,16 @@ func openBackend(storageDir string) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
-	return &Store{db: db, retrier: rows.Retrier{Retryable: isLockedError, Backoff: rows.DefaultRetryBackoff}}, nil
+	return &Backend{db: db, retrier: rows.Retrier{Retryable: isLockedError, Backoff: rows.DefaultRetryBackoff}}, nil
 }
 
 // WithRetry retries only a locked database. See ../README.md, "Writing under a lock".
-func (s *Store) WithRetry(ctx context.Context, operation func() error) error {
+func (s *Backend) WithRetry(ctx context.Context, operation func() error) error {
 	return s.retrier.Do(ctx, operation)
 }
 
 // Close closes the database handle.
-func (s *Store) Close() error {
+func (s *Backend) Close() error {
 	if err := s.db.Close(); err != nil {
 		return fmt.Errorf("closing gateway store: %w", err)
 	}

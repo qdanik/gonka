@@ -13,15 +13,14 @@ const (
 	RoleTemp    Role = "temp"
 	RoleRegular Role = "regular"
 	RoleReserve Role = "reserve"
-)
 
-const (
 	RequestSettled  RequestOutcome = "settled"
 	RequestFailed   RequestOutcome = "failed"
 	RequestNoEscrow RequestOutcome = "no_escrow"
-)
 
-const (
+	storedTimeLayout  = "2006-01-02T15:04:05.000000000Z07:00"
+	settleStampLayout = time.DateTime
+
 	ledgerQueueDepth       = 1024
 	retentionSweepEvery    = time.Minute
 	owedVoteQueueDepth     = 1024

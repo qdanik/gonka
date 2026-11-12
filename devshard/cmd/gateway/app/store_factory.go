@@ -16,7 +16,6 @@ import (
 )
 
 func openStore(ctx context.Context, storageDir string) (store.Store, error) {
-	// Sessions and the nonce accounting stay on SQLite under storageDir in either mode. See ../docs/operations.md, "Storing state in Postgres".
 	backend, err := env.ResolveStorageBackend()
 	if err != nil {
 		return nil, err
