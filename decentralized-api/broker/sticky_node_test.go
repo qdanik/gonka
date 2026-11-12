@@ -19,19 +19,19 @@ const stickyTestModel = "model1"
 
 func registerInferenceNode(t *testing.T, b *Broker, node apiconfig.InferenceNodeConfig) {
 	t.Helper()
-	register := NewRegisterNodeCommand(node)
-	queueMessage(t, b, register)
-	<-register.Response
-
-	mlNode := types.MLNodeInfo{NodeId: node.Id, PocWeight: 10, TimeslotAllocation: []bool{true, false}}
-	b.UpdateNodeEpochData([]*types.MLNodeInfo{&mlNode}, stickyTestModel, types.Model{Id: stickyTestModel})
-
 	factory := b.mlNodeClientFactory.(*mlnodeclient.MockClientFactory)
 	client := factory.CreateClient(fmt.Sprintf("http://%s:%d", node.Host, node.PoCPort), fmt.Sprintf("http://%s:%d", node.Host, node.InferencePort)).(*mlnodeclient.MockClient)
 	client.Mu.Lock()
 	client.CurrentState = mlnodeclient.MlNodeState_INFERENCE
 	client.InferenceIsHealthy = true
 	client.Mu.Unlock()
+
+	register := NewRegisterNodeCommand(node)
+	queueMessage(t, b, register)
+	<-register.Response
+
+	mlNode := types.MLNodeInfo{NodeId: node.Id, PocWeight: 10, TimeslotAllocation: []bool{true, false}}
+	b.UpdateNodeEpochData([]*types.MLNodeInfo{&mlNode}, stickyTestModel, types.Model{Id: stickyTestModel})
 
 	inferenceUp := NewInferenceUpAllCommand()
 	queueMessage(t, b, inferenceUp)
