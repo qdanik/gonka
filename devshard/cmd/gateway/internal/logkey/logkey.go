@@ -167,6 +167,8 @@ const (
 	RoutePrefix      = "route_prefix"
 	Subsystem        = "subsystem"
 	IgnoredVariables = "ignored_variables"
+	StorageMode      = "storage_mode"
+	InstanceID       = "instance_id"
 	Route            = "route"
 	Method           = "method"
 	Status           = "status"

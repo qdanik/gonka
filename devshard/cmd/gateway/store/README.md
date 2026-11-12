@@ -1,6 +1,6 @@
 # `store` — the control plane on disk
 
-One SQLite database at `<storageDir>/gateway.db`, holding what must survive a restart.
+One database, SQLite at `<storageDir>/gateway.db` or a dedicated Postgres database, holding what must survive a restart.
 
 ## What it owns
 
@@ -13,7 +13,9 @@ One SQLite database at `<storageDir>/gateway.db`, holding what must survive a re
 | `model_filters.go` | the operator's per-model filter settings, one row per model, so a settings write never touches them |
 | `accounting.go` | the asynchronous per-request ledger, with its own retention |
 | `owed_votes.go` | the refusal votes a race owes, with their prompts, until they are posted |
-| `retry.go` | the retry policy for a locked database |
+| `retry.go` | the retry policy for a locked database, a serialization failure or a deadlock |
+| `dialect.go`, `postgres.go`, `postgres_migrations.go` | the SQLite and Postgres spellings, and opening and migrating Postgres |
+| `completions.go` | the completion journal: each started nonce, until it finishes or times out |
 
 ## Boundaries
 
@@ -39,11 +41,19 @@ A `gateway.db` of a different schema can share two table names with this one at 
 
 The guard is declared apart from the migrations list because it decides whether the storage dir may be migrated at all, and because the migration entries are raw SQL whose indentation is part of the literal.
 
+## Postgres
+
+Every statement is written once, in SQLite's spelling, and `database` rewrites it for the backend: Postgres gets `$n` placeholders, a UTC `to_char` for `datetime('now')`, `OFFSET` without `LIMIT -1`, and flag arguments as 0 or 1, because the flag columns are `BIGINT` on both backends. A transaction opened on `database` is not rewritten, so one written for Postgres uses `$n`.
+
+`postgresMigrations` is its own list, hand-written, with the same versions as `migrations` and the same columns; ordered or compared text is `COLLATE "C"`, the byte order SQLite uses. `OpenPostgres` takes its connection from the libpq `PG*` variables and runs the whole boot in one transaction under an advisory lock: it requires the `gateway_database_marker` table, writes it into an empty database, and refuses a database that holds tables and no marker (`ErrForeignDatabase`), so any later table that shares the database must be created after the store opens. Nothing falls back to SQLite.
+
 ## Writing under a lock
 
 `WithRetry` runs a write up to `retryAttempts` (10) times, waiting `retryBackoff` between attempts, to ride out a transient write lock. It returns immediately on success, aborts with `ctx.Err()` without sleeping past a cancellation, and otherwise returns the last error once every attempt is exhausted.
 
 Only a locked database is retried. Everything else — a missing row, a constraint — fails the same way on every attempt, so retrying it spends the whole ladder to return the error the first call already had, and the caller waits seconds for an answer it could have had at once.
+
+On Postgres `isRetryablePostgresError` matches SQLSTATE `40001` and `40P01` and an error pgx marks safe to retry; a connection lost mid-statement is not retried, because the write may have committed.
 
 `isLockedError` matches `SQLITE_BUSY` and `SQLITE_LOCKED`, masked to the primary code: with one connection a lock surfaces in its primary form, but the driver enables extended codes, and a comparison that only matched the primary would stop retrying the moment the connection model changed. The driver's own `busy_timeout` absorbs the short waits, so seeing one of these codes here means the lock outlived it. It is a field on `Store` rather than a direct call because the driver's error type cannot be constructed outside its own package, and the ladder's own mechanics — backoff, cancellation, attempt count — have to be testable without provoking a real cross-process lock.
 
@@ -104,3 +114,7 @@ Its layout is fixed-width where `RFC3339Nano` is not. Retention compares and ord
 `NewOwedVotes` registers a single writer with the store, and `Store.Close` drains it, so a vote still owed when the gateway stops is on disk when the store closes. A row holds what a refusal vote needs and the session cannot rebuild — escrow, nonce, start stamp and the prompt — plus the request, participant and model its events carry; the table is keyed by `(escrow_id, nonce)`.
 
 Like the ledger, the writer sits behind a queue of `owedVoteQueueDepth` (1024) and sheds rather than blocks; saves and deletes share the queue, so a delete never runs ahead of its save. A prompt over `maxOwedVotePromptBytes` (1 MiB; a request body may be 10 MiB) is not kept. A shed or failed save, and a prompt over the bound, leave the vote owed in memory only, as it was before the book existed: a restart loses it and finalize pays the nonce in full. A shed or failed delete leaves a row the next boot replays, which the session skips as closed and the engine then deletes. `Stats` counts every shed write, a write after the drain included, as `Dropped` and every write the database refused as `Failed`; a prompt over the bound is not counted. The table holds roughly the refusals of the last minute and a bit, since a vote is deleted once it posts.
+
+## The completion journal
+
+`inference_completions` holds one row per started nonce, `(escrow_id, nonce)`, with the entry as JSON, and the store implements `user.InferenceCompletionStore`. The caller saves an entry before it sends the nonce: saving the same payload again succeeds, and a different payload at the same nonce is `user.ErrInferenceCompletionConflict`. `DeleteInferenceCompletion` removes an entry once it has finished or timed out. The gateway's `Finalize` does not read the journal yet.

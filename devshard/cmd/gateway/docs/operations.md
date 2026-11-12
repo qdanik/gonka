@@ -681,7 +681,11 @@ A chat request whose prompt and `max_tokens` its model's context cannot hold is 
 
 ## One process per escrow set
 
-The gateway is one process per set of escrows. It keeps its state in its own SQLite store under `DEVSHARD_STORAGE_DIR` and shares it with no other process: two gateways given the same escrows, through `DEVSHARDS_JSON` or the admin API, would each sequence their nonces and each ledger would see only its own share, which the chain rejects as diverged state. The devshardctl gateway's Postgres settings (`PGHOST`, `PGPORT`, `PGUSER`, `PGPASSWORD`, `PGDATABASE`, `PG_CONNECT_TIMEOUT`) are not read; when any is set the gateway logs `legacy Postgres settings are ignored` at boot, naming them (`env.LegacyPostgresVariablesSet`).
+The gateway is one process per set of escrows. It keeps its state in its own SQLite store under `DEVSHARD_STORAGE_DIR` and shares it with no other process: two gateways given the same escrows, through `DEVSHARDS_JSON` or the admin API, would each sequence their nonces and each ledger would see only its own share, which the chain rejects as diverged state. Pointing two gateways at one Postgres database does not change that: nothing yet elects a leader, so the rule stands.
+
+### Storing state in Postgres
+
+`DEVSHARD_STORAGE_MODE` selects where the control-plane store lives: unset or `sqlite` keeps `gateway.db` under `DEVSHARD_STORAGE_DIR`; `postgres` uses a database of its own, and `hybrid` or `auto` are refused at boot. The connection comes from libpq's `PG*` variables, with `PG_CONNECT_TIMEOUT`, `PG_OPERATION_TIMEOUT` and `PG_POOL_MAX_CONNS` as for the hosts. In `postgres` mode `GATEWAY_INSTANCE_ID` (stable, unique per process) and `PGHOST` are required, and when `PGHOST` is not a loopback address or a unix socket `PGSSLMODE` must be `require` or `verify-full`. Boot fails when Postgres is unreachable: there is no SQLite fallback. The first boot of an empty database writes the `gateway_database_marker` table; a database that holds tables and no marker is refused, so give the gateway a database nobody else uses. Sessions and the epoch accounting database stay SQLite under `DEVSHARD_STORAGE_DIR`, and an existing `gateway.db` is not copied into Postgres. While the mode is `sqlite`, any `PG*` variable that is set is ignored and named in the log at boot.
 
 ## Release and rollback
 

@@ -39,6 +39,9 @@ func (s *Store) SaveCommitment(ctx context.Context, c Commitment) error {
 	if err != nil {
 		return fmt.Errorf("saving commitment %s: %w", c.TxHash, err)
 	}
+	if !s.db.dialect.walCheckpointOnCommit() {
+		return nil
+	}
 	if err := s.checkpoint(ctx); err != nil {
 		return fmt.Errorf("saving commitment %s: %w", c.TxHash, err)
 	}

@@ -106,7 +106,7 @@ func scanDevshard(row interface {
 }
 
 func (s *Store) SetDevshardActive(ctx context.Context, escrowID string, active bool) error {
-	return s.updateDevshardField(ctx, `UPDATE devshards SET active = ?1, gone_from_chain = CASE WHEN ?1 THEN 0 ELSE gone_from_chain END, updated_at = datetime('now') WHERE escrow_id = ?2`, active, escrowID)
+	return s.updateDevshardField(ctx, `UPDATE devshards SET active = ?1, gone_from_chain = CASE WHEN ?1 = 1 THEN 0 ELSE gone_from_chain END, updated_at = datetime('now') WHERE escrow_id = ?2`, active, escrowID)
 }
 
 func (s *Store) SetDevshardSettlementPending(ctx context.Context, escrowID string, pending bool) error {
@@ -116,8 +116,8 @@ func (s *Store) SetDevshardSettlementPending(ctx context.Context, escrowID strin
 // SetDevshardChainFacts records the epoch the chain stamped on the escrow and the amount it locked; a zero leaves its column as it was.
 func (s *Store) SetDevshardChainFacts(ctx context.Context, escrowID string, chainEpoch, amount uint64) error {
 	result, err := s.db.ExecContext(ctx, `UPDATE devshards SET
-		chain_epoch = CASE WHEN ? > 0 THEN ? ELSE chain_epoch END,
-		amount = CASE WHEN ? > 0 THEN ? ELSE amount END,
+		chain_epoch = CASE WHEN CAST(? AS BIGINT) > 0 THEN ? ELSE chain_epoch END,
+		amount = CASE WHEN CAST(? AS BIGINT) > 0 THEN ? ELSE amount END,
 		updated_at = datetime('now') WHERE escrow_id = ?`,
 		chainEpoch, chainEpoch, amount, amount, escrowID)
 	if err != nil {

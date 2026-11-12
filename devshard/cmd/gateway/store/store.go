@@ -1,5 +1,5 @@
 // Package store persists gateway control-plane state in SQLite
-// (<storageDir>/gateway.db). See README.md, "What it owns".
+// (<storageDir>/gateway.db) or, when selected, in a dedicated Postgres database. See README.md, "What it owns".
 package store
 
 import (
@@ -15,11 +15,13 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-// Store wraps the gateway.db handle; access is serialized via a single connection. See README.md, "What it owns".
+// Store wraps the database handle; on SQLite access is serialized via a single connection. See README.md, "What it owns".
 type Store struct {
-	db           *sql.DB
+	db           *database
 	retryBackoff time.Duration
 	retryable    func(error) bool
+	// operationTimeout bounds the calls that take no context; zero means unbounded.
+	operationTimeout time.Duration
 
 	mu        sync.Mutex
 	ledger    *Ledger
@@ -120,6 +122,12 @@ var migrations = []string{
 		prompt BLOB NOT NULL,
 		PRIMARY KEY (escrow_id, nonce)
 	);`,
+	`CREATE TABLE IF NOT EXISTS inference_completions (
+		escrow_id TEXT NOT NULL,
+		nonce INTEGER NOT NULL,
+		entry_json BLOB NOT NULL,
+		PRIMARY KEY (escrow_id, nonce)
+	);`,
 }
 
 // ErrLegacyDatabase reports a gateway.db this gateway did not create, and legacyOnlyTables are the tables that prove it; both are kept out of the migrations block. See README.md, "The devshardctl-database guard".
@@ -156,7 +164,16 @@ func Open(storageDir string) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
-	return &Store{db: db, retryBackoff: defaultRetryBackoff, retryable: isLockedError}, nil
+	return newStore(db, sqliteDialect{}, 0), nil
+}
+
+func newStore(db *sql.DB, dialect dialect, operationTimeout time.Duration) *Store {
+	return &Store{
+		db:               &database{DB: db, dialect: dialect},
+		retryBackoff:     defaultRetryBackoff,
+		retryable:        dialect.retryable,
+		operationTimeout: operationTimeout,
+	}
 }
 
 func refuseLegacyDatabase(db *sql.DB, databasePath string) error {

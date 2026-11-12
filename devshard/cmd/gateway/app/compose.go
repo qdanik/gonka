@@ -14,6 +14,7 @@ import (
 
 	"common/httpguard"
 	"common/observability"
+	"common/storage/mode"
 
 	devshardpkg "devshard"
 	"devshard/cmd/gateway/accounting"
@@ -55,7 +56,6 @@ const (
 func Main() {
 	observability.InstallLogger(env.LogFormat())
 	applyDialGuard()
-	warnIgnoredLegacyStore()
 	if err := serve(); err != nil {
 		logging.Error("gateway exited", logkey.Error, err)
 		os.Exit(1)
@@ -80,11 +80,22 @@ func warnOpenModels(configured config.Limits) {
 	}
 }
 
-func warnIgnoredLegacyStore() {
-	if ignored := env.LegacyPostgresVariablesSet(); len(ignored) > 0 {
-		logging.Warn("legacy Postgres settings are ignored: the gateway keeps its own store and runs as one process per escrow set",
-			logkey.Subsystem, "gateway", logkey.IgnoredVariables, ignored)
+// openStore picks the control-plane store from DEVSHARD_STORAGE_MODE; the sessions and the accounting database stay under the storage directory. See ../docs/operations.md, "Storing state in Postgres".
+func openStore(ctx context.Context, storageDir string) (*store.Store, error) {
+	backend, err := env.ResolveStorageBackend()
+	if err != nil {
+		return nil, err
 	}
+	if backend.Mode != mode.Postgres {
+		if ignored := env.IgnoredPostgresVariables(); len(ignored) > 0 {
+			logging.Warn("Postgres settings are ignored: the gateway store is SQLite unless DEVSHARD_STORAGE_MODE is postgres",
+				logkey.Subsystem, "gateway", logkey.IgnoredVariables, ignored)
+		}
+		return store.Open(storageDir)
+	}
+	logging.Info("the gateway store is Postgres",
+		logkey.Subsystem, "gateway", logkey.StorageMode, string(backend.Mode), logkey.InstanceID, backend.InstanceID)
+	return store.OpenPostgres(ctx)
 }
 
 // applyDialGuard arms the dial-time SSRF guard before anything can dial. See ../docs/operations.md.
@@ -118,7 +129,7 @@ func run(ctx context.Context) error {
 	}
 	values.StorageDir = &storageDir
 
-	gatewayStore, err := store.Open(storageDir)
+	gatewayStore, err := openStore(ctx, storageDir)
 	if err != nil {
 		return err
 	}

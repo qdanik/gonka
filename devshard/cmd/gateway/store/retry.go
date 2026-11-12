@@ -5,6 +5,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	sqlite "modernc.org/sqlite"
 	sqlite3 "modernc.org/sqlite/lib"
 )
@@ -50,4 +51,13 @@ func isLockedError(err error) bool {
 	// Masked to the primary code, because the driver enables extended codes.
 	code := sqliteErr.Code() & sqlitePrimaryCodeMask
 	return code == sqlite3.SQLITE_BUSY || code == sqlite3.SQLITE_LOCKED
+}
+
+// isRetryablePostgresError is a serialization failure, a deadlock or an error pgx marks as raised before anything reached the server. A connection lost mid-statement is not retried: the write may have committed, and a statement or lock timeout only repeats the wait.
+func isRetryablePostgresError(err error) bool {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		return pgErr.Code == "40001" || pgErr.Code == "40P01"
+	}
+	return pgconn.SafeToRetry(err)
 }
