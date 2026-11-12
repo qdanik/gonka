@@ -1,4 +1,5 @@
 // Package affinity remembers which participant last won each conversation, so its next turn can be sent back to the host whose prefix cache holds it.
+// See devshard/docs/proposals/gateway-prefix-affinity.md
 package affinity
 
 import (
@@ -10,6 +11,7 @@ import (
 const shareFloor = 8
 
 // Limits bound the tracker; all are read on every use, so a change reaches a running tracker.
+// ShareCap is a percentage of a participant's slot share of the pins.
 type Limits struct {
 	TTL        time.Duration
 	MaxEntries int
