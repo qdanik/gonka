@@ -2,6 +2,8 @@ package api
 
 import (
 	"cmp"
+	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/pprof"
@@ -265,6 +267,10 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request, escrowPin string) 
 			s.events.RequestThrottled(journal.RequestLine{
 				RequestID: requestID, Model: normalized.Model, APIKeyID: identity.caller(), LimiterReason: label,
 			})
+		}
+		if errors.Is(err, context.Canceled) {
+			writeError(w, statusClientClosedRequest, "client closed the request")
+			return
 		}
 		s.writeErrorFor(w, err)
 		return

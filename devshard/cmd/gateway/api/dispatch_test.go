@@ -146,9 +146,10 @@ func (s *recordingSession) UnpinPendingFinish(uint64) {
 	s.calls = append(s.calls, "UnpinPendingFinish")
 }
 
-func (s *recordingSession) IsNonceFinished(uint64) bool        { return true }
-func (s *recordingSession) HostParticipantKeyList() []string   { return []string{"hostA", "hostB"} }
-func (s *recordingSession) RewindHostCatchUp(int, string) bool { return true }
+func (s *recordingSession) IsNonceFinished(uint64) bool          { return true }
+func (s *recordingSession) IsNonceCanonicalFinished(uint64) bool { return false }
+func (s *recordingSession) HostParticipantKeyList() []string     { return []string{"hostA", "hostB"} }
+func (s *recordingSession) RewindHostCatchUp(int, string) bool   { return true }
 
 func (s *recordingSession) HostLabel(hostIdx int) string { return fmt.Sprintf("host-%d", hostIdx) }
 
@@ -535,6 +536,18 @@ func (h *flushingHost) executorProof(nonce uint64) ([]byte, int64, *types.MsgFin
 	}
 	finish.ProposerSig = testutil.SignProposerTx(h.t, executor, finish)
 	return receipt, confirmedAt, finish
+}
+
+// Test flow:
+//  1. Build an `escrowTarget` over a session that reports every nonce as finished but none as canonically finished.
+//  2. Ask the target whether nonce 3 is canonically finished.
+//  3. Assert it answers false, so the timeout gate does not read the queued Finish.
+func TestTheTargetsTimeoutGateReadsTheCanonicalFinish(t *testing.T) {
+	target := escrowTarget{session: &recordingSession{}}
+
+	if target.NonceCanonicalFinished(3) {
+		t.Fatal("NonceCanonicalFinished = true for a session with no applied Finish, want false")
+	}
 }
 
 // Test flow:

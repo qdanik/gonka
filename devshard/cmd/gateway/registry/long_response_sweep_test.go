@@ -9,7 +9,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"devshard/cmd/gateway/engine"
-	"devshard/heightsync"
 	"devshard/host"
 	"devshard/internal/statetest"
 	"devshard/internal/testutil"
@@ -56,6 +55,7 @@ type longResponseEscrow struct {
 	session  *user.Session
 	machine  *state.StateMachine
 	signers  []*signing.Secp256k1Signer
+	rig      *floorRig
 }
 
 func publishLongResponseEscrow(t *testing.T, servedBindings ...servedBindingObserver) longResponseEscrow {
@@ -85,38 +85,28 @@ func newVotingEscrow(t *testing.T, client func(acceptingVoter) user.HostClient, 
 	config := testutil.DefaultConfig(len(group))
 	creator := testutil.MustGenerateKey(t)
 	verifier := signing.NewSecp256k1Verifier()
+	rig := newFloorRig(len(signers), floorStartHeight)
 	clients := make([]user.HostClient, len(signers))
 	for index, signer := range signers {
 		hostMachine := statetest.MustStateMachine(t, longResponseEscrowID, config, group, 1_000_000, creator.Address(), verifier)
-		hostNode, err := host.NewHost(hostMachine, signer, stub.NewInferenceEngine(), longResponseEscrowID, group, nil, append([]host.HostOption{host.WithGrace(100)}, hostOptions...)...)
+		hostNode, err := host.NewHost(hostMachine, signer, stub.NewInferenceEngine(), longResponseEscrowID, group, nil, append([]host.HostOption{host.WithGrace(100), host.WithChainOracle(rig.oracles[index])}, hostOptions...)...)
 		require.NoError(t, err)
 		clients[index] = client(acceptingVoter{HostClient: &user.InProcessClient{Host: hostNode}, signer: signer, slot: group[index].SlotID})
 	}
 	machine := statetest.MustStateMachine(t, longResponseEscrowID, config, group, 1_000_000, creator.Address(), verifier)
-	session, err := user.NewSession(machine, creator, longResponseEscrowID, group, clients, verifier)
+	session, err := user.NewSession(machine, creator, longResponseEscrowID, group, clients, verifier, rig.sessionOptions(len(signers))...)
 	require.NoError(t, err)
+	rig.seedFloor(t, session)
 	t.Cleanup(func() { _ = session.Close() })
 	handle := NewSessionHandle(session, machine).(sessionHandle)
-	return longResponseEscrow{handle: handle, session: session, machine: machine, signers: signers}
+	return longResponseEscrow{handle: handle, session: session, machine: machine, signers: signers, rig: rig}
 }
 
 const floorStartHeight = 100
 
 func raiseFloor(t *testing.T, escrow longResponseEscrow, height uint64) {
 	t.Helper()
-	slots := uint64(len(escrow.signers))
-	ref := escrow.machine.LatestNonce() + 1
-	_, applied, err := escrow.machine.ApplyLocalBestEffort(ref, []*types.DevshardTx{{Tx: &types.DevshardTx_Heartbeat{Heartbeat: &types.MsgHeartbeat{
-		SlotsNum: slots, Reason: string(heightsync.ReasonQuietSession),
-	}}}})
-	require.NoError(t, err)
-	require.Len(t, applied, 1)
-	ack := &types.MsgHeightAck{RefNonce: ref, SlotId: 0, ObservedHeight: height, ObservedBlockHash: []byte{0xaa},
-		SyncState: types.SyncState_SYNCED, PeerSeen: []byte{0xff}}
-	require.NoError(t, heightsync.SignAck(escrow.signers[0], ack))
-	_, applied, err = escrow.machine.ApplyLocalBestEffort(ref+1, []*types.DevshardTx{{Tx: &types.DevshardTx_HeightAck{HeightAck: ack}}})
-	require.NoError(t, err)
-	require.Len(t, applied, 1)
+	escrow.rig.raise(t, escrow.session, height)
 }
 
 func startedTwoHoursAgo(t *testing.T, escrow longResponseEscrow) uint64 {
@@ -127,10 +117,6 @@ func startedTwoHoursAgo(t *testing.T, escrow longResponseEscrow) uint64 {
 func startedConfirmedAt(t *testing.T, escrow longResponseEscrow, confirmedAt int64, delivered bool) uint64 {
 	t.Helper()
 	baseHeight, _, _ := escrow.machine.HeightSyncFloorAsOf(escrow.machine.LatestNonce() + 1)
-	if baseHeight == 0 {
-		baseHeight = floorStartHeight
-		raiseFloor(t, escrow, baseHeight)
-	}
 	prepared, err := escrow.session.PrepareInferenceFn(func(user.HostBinding) (user.InferenceParams, bool, context.Context, error) {
 		return user.InferenceParams{Model: "llama", Prompt: testutil.TestPrompt, InputLength: 100, MaxTokens: testutil.TestMaxTokens, StartedAt: 1000}, false, nil, nil
 	})
@@ -157,11 +143,11 @@ func startedConfirmedAt(t *testing.T, escrow longResponseEscrow, confirmedAt int
 
 // Test flow:
 //  1. Publish a real escrow session whose three hosts sign accepting timeout votes, and start one inference whose executor confirmed it two hours ago and never finished; share the chain's max_nonce.
-//  2. Judge that attempt as a race would: it streamed content for 281 seconds, stalled and never finished; assert the race posts no vote for it, skipping it as a long response.
+//  2. Judge that attempt as a race would: it streamed content for 281 seconds, stalled and never finished; assert the race plans a vote for it.
 //  3. Assert the nonce still holds its whole reservation.
-//  4. Run the registry's execution-timeout sweep; assert it finds the nonce due and applies the vote.
+//  4. Run the registry's execution-timeout sweep, as the backstop for a vote the race failed to land; assert it finds the nonce due and applies the vote.
 //  5. Assert the record timed out and its reservation is back in the balance.
-func TestALongResponseTheRaceDoesNotVoteOnIsReturnedByTheSweep(t *testing.T) {
+func TestALongResponseWithoutAFinishIsVotedByTheRaceAndBackstoppedByTheSweep(t *testing.T) {
 	escrow := publishLongResponseEscrow(t)
 	escrow.registry.ShareChainMaxNonce(1_700)
 	nonce := startedTwoHoursAgo(t, escrow)
@@ -181,8 +167,7 @@ func TestALongResponseTheRaceDoesNotVoteOnIsReturnedByTheSweep(t *testing.T) {
 
 	plan := outcome.TimeoutPlan()
 	require.Len(t, plan, 1)
-	require.False(t, plan[0].Post, "the race must not vote on a long response that streamed content")
-	require.Equal(t, engine.TimeoutReasonLongResponse, plan[0].Event.Reason)
+	require.True(t, plan[0].Post, "the race must vote on a long response that never finished")
 	record, tracked := escrow.machine.GetInference(nonce)
 	require.True(t, tracked)
 	balanceWhileHeld := escrow.machine.Balance()

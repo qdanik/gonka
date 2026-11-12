@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"math"
@@ -27,6 +28,9 @@ import (
 	"devshard/transport"
 	"devshard/types"
 )
+
+// statusClientClosedRequest is the non-standard status for a request whose client left before the gateway answered.
+const statusClientClosedRequest = 499
 
 // The Retry-After a shard without room answers with, and how a host's text is cut down for a client. See README.md, "Errors and statuses".
 const (
@@ -236,6 +240,9 @@ func writeControlFailure(w http.ResponseWriter, err error) bool {
 func limiterRefusal(err error) (label string, refused bool) {
 	if noLiveWeight(err) {
 		return limits.RejectionNoLiveWeight, true
+	}
+	if errors.Is(err, context.Canceled) {
+		return limits.RejectionClientGone, true
 	}
 	if throttled, ours := rateLimited(err); ours {
 		return throttled.Label(), true

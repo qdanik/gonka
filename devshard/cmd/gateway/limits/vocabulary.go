@@ -39,5 +39,6 @@ const (
 	RejectionInputTokens        = "input_tokens"
 	RejectionQueueDepth         = "queue_depth"
 	RejectionNoLiveWeight       = "no_live_weight"
+	RejectionClientGone         = "client_gone"
 	RejectionUnnamed            = "unnamed"
 )
