@@ -26,7 +26,7 @@ type escrowLookup interface {
 	GetEscrow(ctx context.Context, escrowID string) (chain.EscrowInfo, bool, error)
 }
 
-// Satisfied by *store.Store.
+// Satisfied by store.Store.
 type escrowStore interface {
 	ListDevshards(ctx context.Context) ([]store.DevshardRecord, error)
 	Devshard(ctx context.Context, escrowID string) (store.DevshardRecord, bool, error)

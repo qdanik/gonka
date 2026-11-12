@@ -14,7 +14,6 @@ import (
 
 	"common/httpguard"
 	"common/observability"
-	"common/storage/mode"
 
 	devshardpkg "devshard"
 	"devshard/cmd/gateway/accounting"
@@ -80,24 +79,6 @@ func warnOpenModels(configured config.Limits) {
 	}
 }
 
-// openStore picks the control-plane store from DEVSHARD_STORAGE_MODE; the sessions and the accounting database stay under the storage directory. See ../docs/operations.md, "Storing state in Postgres".
-func openStore(ctx context.Context, storageDir string) (*store.Store, error) {
-	backend, err := env.ResolveStorageBackend()
-	if err != nil {
-		return nil, err
-	}
-	if backend.Mode != mode.Postgres {
-		if ignored := env.IgnoredPostgresVariables(); len(ignored) > 0 {
-			logging.Warn("Postgres settings are ignored: the gateway store is SQLite unless DEVSHARD_STORAGE_MODE is postgres",
-				logkey.Subsystem, "gateway", logkey.IgnoredVariables, ignored)
-		}
-		return store.Open(storageDir)
-	}
-	logging.Info("the gateway store is Postgres",
-		logkey.Subsystem, "gateway", logkey.StorageMode, string(backend.Mode), logkey.InstanceID, backend.InstanceID)
-	return store.OpenPostgres(ctx)
-}
-
 // applyDialGuard arms the dial-time SSRF guard before anything can dial. See ../docs/operations.md.
 func applyDialGuard() {
 	allowed := env.AllowPrivateAddresses()
@@ -142,7 +123,7 @@ func run(ctx context.Context) error {
 
 type gateway struct {
 	config       *config.Holder
-	store        *store.Store
+	store        store.Store
 	observer     *chain.PhaseObserver
 	escrows      *registry.Registry
 	manager      *escrow.Manager
@@ -169,7 +150,7 @@ type gateway struct {
 	bootSteps    func(g *gateway, ctx, backgroundCtx context.Context, settings *config.Config, started *bootState) []bootStep
 }
 
-func compose(ctx context.Context, values env.Values, storageDir string, gatewayStore *store.Store, openSessions sessionSources) (*gateway, error) {
+func compose(ctx context.Context, values env.Values, storageDir string, gatewayStore store.Store, openSessions sessionSources) (*gateway, error) {
 	overrides, err := gatewayStore.LoadOverrides(ctx)
 	if err != nil {
 		return nil, err

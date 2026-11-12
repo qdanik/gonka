@@ -169,6 +169,8 @@ const (
 	IgnoredVariables = "ignored_variables"
 	StorageMode      = "storage_mode"
 	InstanceID       = "instance_id"
+	SchemaVersion    = "schema_version"
+	SupportedVersion = "supported_schema_version"
 	Route            = "route"
 	Method           = "method"
 	Status           = "status"

@@ -476,7 +476,7 @@ jobs:
         working-directory: ./devshard
     services:
       postgres:
-        image: postgres:16
+        image: postgres:18.1-bookworm
         env:
           # The superuser of this throwaway database may create the per-test schemas.
           POSTGRES_USER: gateway
@@ -543,15 +543,14 @@ jobs:
           go test -race -count=1 -timeout 30m $packages
 
       - name: Run gateway store tests against Postgres
-        # Without PGHOST the Postgres half of these tests skips. Loopback needs no TLS, see cmd/gateway/env/storage_backend.go.
+        # Runs after a red earlier step too, and a skipped Postgres half fails the step: loopback needs no TLS, see cmd/gateway/store/postgres.
+        if: ${{ !cancelled() }}
         env:
-          PGHOST: 127.0.0.1
-          PGPORT: '5432'
-          PGUSER: gateway
-          PGPASSWORD: gateway
-          PGDATABASE: gateway
-          PGSSLMODE: disable
-        run: go test -count=1 ./cmd/gateway/store/
+          GATEWAY_TEST_POSTGRES_DSN: postgres://gateway:gateway@127.0.0.1:5432/gateway?sslmode=disable
+          GATEWAY_TEST_REQUIRE_POSTGRES: '1'
+        run: |
+          go test -count=1 ./cmd/gateway/store/...
+          go test -count=1 -run TestPostgresBeside ./cmd/gateway/app/
 
       - name: Install golangci-lint
         uses: golangci/golangci-lint-action@v9

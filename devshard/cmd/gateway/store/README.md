@@ -1,31 +1,30 @@
 # `store` — the control plane on disk
 
-One database, SQLite at `<storageDir>/gateway.db` or a dedicated Postgres database, holding what must survive a restart.
+One contract, two backends: SQLite at `<storageDir>/gateway.db` or a dedicated Postgres database, holding what must survive a restart. Callers depend on the interfaces in `contract.go`, never on a backend; `app.openStore` picks the backend from `DEVSHARD_STORAGE_MODE`.
 
-## What it owns
+## Layout
 
-| File | What it holds |
+| Path | What it holds |
 | --- | --- |
-| `devshards.go` | the escrow registry: which escrows this gateway owns and their state |
-| `overrides.go` | the operator's runtime configuration overrides |
-| `commitments.go`, `rotation_status.go` | rotation intent recorded before the transaction, and where each rotation got to |
-| `suspicious.go` | hosts the operator pinned as suspect |
-| `model_filters.go` | the operator's per-model filter settings, one row per model, so a settings write never touches them |
-| `accounting.go` | the asynchronous per-request ledger, with its own retention |
-| `owed_votes.go` | the refusal votes a race owes, with their prompts, until they are posted |
-| `retry.go` | the retry policy for a locked database, a serialization failure or a deadlock |
-| `dialect.go`, `postgres.go`, `postgres_migrations.go` | the SQLite and Postgres spellings, and opening and migrating Postgres |
-| `completions.go` | the completion journal: each started nonce, until it finishes or times out |
+| `contract.go` | the interfaces by area (devshards, commitments, overrides, model filters, rotation statuses, suspicious hosts, completions, request ledger, owed votes) and `Store`, which adds `NewLedger`, `NewOwedVotes` and `Close` |
+| `records.go`, `vocabulary.go`, `timestamps.go` | the domain types, the shared terms and the one timestamp format |
+| `ledger.go`, `owed_votes.go` | the asynchronous writers over the backend's insert, delete and sweep statements; `store.New` wraps a backend with them |
+| `sqlite/` | the SQLite backend: its SQL, its migrations, directory creation, the WAL checkpoint and the devshardctl-database guard |
+| `postgres/` | the Postgres backend: its SQL, its migrations, the advisory-lock boot, the marker table, the pool, `PG_OPERATION_TIMEOUT`, the TLS rule and the retry classifier |
+| `internal/rows` | the Go helpers both backends share: the retry ladder, completion decoding and row-count checks |
+| `storetest/` | the contract suite and the benchmarks, run against each backend |
+| `parity/` | the check that both migration lists carry the same versions and columns |
 
 ## Boundaries
 
 - **This is control-plane state, not inference data.** Payloads and the nonce ledger live elsewhere.
 - **Retention is enforced on both age and row count**, and a zero on either is rejected at construction, so an unbounded ledger cannot be configured.
 - **A write that must survive a crash is one statement**, not a read-modify-write.
+- **No SQL is shared.** Each backend writes its own statements; nothing is rewritten at run time, and no code outside the factory asks which backend it is running on.
 
-## Opening the database
+## SQLite
 
-`Open` creates the storage dir, opens `gateway.db`, refuses a devshardctl database, and migrates.
+`sqlite.Open` creates the storage dir, opens `gateway.db`, refuses a devshardctl database, and migrates.
 
 The connection pragmas — `journal_mode(WAL)`, `synchronous(NORMAL)`, `busy_timeout(5000)` — travel in the DSN rather than as statements issued after the open. They are per-connection, and a connection the pool recreates would come back without them, silently, with `busy_timeout` at 0 and `synchronous` back at FULL. In the DSN every connection carries them by construction.
 
@@ -43,23 +42,23 @@ The guard is declared apart from the migrations list because it decides whether 
 
 ## Postgres
 
-Every statement is written once, in SQLite's spelling, and `database` rewrites it for the backend: Postgres gets `$n` placeholders, a UTC `to_char` for `datetime('now')`, `OFFSET` without `LIMIT -1`, and flag arguments as 0 or 1, because the flag columns are `BIGINT` on both backends. A transaction opened on `database` is not rewritten, so one written for Postgres uses `$n`.
+`postgres.Open` takes its connection from the libpq `PG*` variables (or `Options.ConnectionString`) and runs the whole boot in one transaction under an advisory lock, with the pool's statement and lock timeouts lifted so the boot is bounded only by its own deadline. It first reads `synchronous_commit` and `fsync` and fails with `ErrDurabilityOff` when either is off, because `SaveCommitment` promises a row that survives a crash and the pool pins `synchronous_commit=on` for every connection. It then requires the `gateway_database_marker` table, writes it into an empty database, and refuses a database that holds tables and no marker (`ErrForeignDatabase`), so any later table that shares the database must be created after the store opens. `Options.RefuseEmptyDatabase` turns the empty-database case into `ErrEmptyDatabaseRefused`; the factory sets it while a SQLite `gateway.db` sits in the storage dir. A schema newer than this build knows is logged, not refused. Nothing falls back to SQLite.
 
-`postgresMigrations` is its own list, hand-written, with the same versions as `migrations` and the same columns; ordered or compared text is `COLLATE "C"`, the byte order SQLite uses. `OpenPostgres` takes its connection from the libpq `PG*` variables and runs the whole boot in one transaction under an advisory lock: it requires the `gateway_database_marker` table, writes it into an empty database, and refuses a database that holds tables and no marker (`ErrForeignDatabase`), so any later table that shares the database must be created after the store opens. Nothing falls back to SQLite.
+`migrations` is its own hand-written list, with the same versions as the SQLite list and the same columns, which `parity/` checks; ordered or compared text is `COLLATE "C"`, the byte order SQLite uses. The flag columns are `BIGINT`, as on SQLite.
+
+The TLS rule runs on the parsed connection config, fallbacks included: a host that is neither loopback nor a unix socket must have TLS configured, whether it came from a variable, a connection string or a service file. Every statement runs under `PG_OPERATION_TIMEOUT`, and connections must be read-write, so a standby is skipped.
 
 ## Writing under a lock
 
-`WithRetry` runs a write up to `retryAttempts` (10) times, waiting `retryBackoff` between attempts, to ride out a transient write lock. It returns immediately on success, aborts with `ctx.Err()` without sleeping past a cancellation, and otherwise returns the last error once every attempt is exhausted.
+`WithRetry` runs a write up to `retryAttempts` (10) times, waiting a backoff between attempts, to ride out a transient failure. It returns immediately on success, aborts with `ctx.Err()` without sleeping past a cancellation, and otherwise returns the last error once every attempt is exhausted.
 
-Only a locked database is retried. Everything else — a missing row, a constraint — fails the same way on every attempt, so retrying it spends the whole ladder to return the error the first call already had, and the caller waits seconds for an answer it could have had at once.
+Only a transient failure is retried. Everything else — a missing row, a constraint — fails the same way on every attempt, so retrying it spends the whole ladder to return the error the first call already had, and the caller waits seconds for an answer it could have had at once.
 
-On Postgres `isRetryablePostgresError` matches SQLSTATE `40001` and `40P01` and an error pgx marks safe to retry; a connection lost mid-statement is not retried, because the write may have committed.
-
-`isLockedError` matches `SQLITE_BUSY` and `SQLITE_LOCKED`, masked to the primary code: with one connection a lock surfaces in its primary form, but the driver enables extended codes, and a comparison that only matched the primary would stop retrying the moment the connection model changed. The driver's own `busy_timeout` absorbs the short waits, so seeing one of these codes here means the lock outlived it. It is a field on `Store` rather than a direct call because the driver's error type cannot be constructed outside its own package, and the ladder's own mechanics — backoff, cancellation, attempt count — have to be testable without provoking a real cross-process lock.
+On Postgres the classifier matches SQLSTATE `40001` and `40P01` and an error pgx marks safe to retry; a connection lost mid-statement is not retried, because the write may have committed. On SQLite `isLockedError` matches `SQLITE_BUSY` and `SQLITE_LOCKED`, masked to the primary code: with one connection a lock surfaces in its primary form, but the driver enables extended codes, and a comparison that only matched the primary would stop retrying the moment the connection model changed. The driver's own `busy_timeout` absorbs the short waits, so seeing one of these codes here means the lock outlived it. Each backend hands its classifier to the shared `rows.Retrier`, so the ladder's own mechanics — backoff, cancellation, attempt count — are tested without provoking a real cross-process lock.
 
 ## The devshard registry
 
-The upsert, the condition that leaves a parked row alone and the columns a row is scanned from are constants in `devshards.go` (`upsertDevshardStatement`, `unparkedCondition`, `devshardColumns`), each shared by two statements; the upsert is kept apart so a test can read which columns it carries.
+The upsert, the condition that leaves a parked row alone and the columns a row is scanned from are constants in each backend's `devshards.go` (`upsertDevshardStatement`, `unparkedCondition`, `devshardColumns`), each shared by two statements; the upsert is kept apart so the contract suite can read which columns it carries (`storetest.CheckUpsertStatement`).
 
 A row names the escrow, the environment variable holding the key that can act on it — never the key itself — its model, whether it is active, its rotation role and epoch, whether a settlement is queued, the hash and time of the settle transaction it last broadcast, the route prefix it was created under, the epoch the chain stamped on the escrow and the amount it locked (both 0 until read), and whether the chain answered that it no longer holds the escrow. An update or delete matching no row returns `ErrDevshardNotFound`, except `ParkForSettlementIfActive` below, which reports a boolean instead.
 
@@ -87,7 +86,7 @@ Everything else is a targeted single-column update rather than a whole-record up
 
 A `Commitment` is the durable intent for one escrow create, written before the transaction broadcasts so that a crash before the escrow id is known can be recovered by resolving its `TxHash` on chain. It carries what the create would have to be repeated with — model, role, key env, epoch, block height — and the creation time the reconciler measures its grace window from. Commitments load ordered by `(created_at, tx_hash)`, and deleting one that is already gone is a no-op.
 
-`SaveCommitment` returns only once the row is in the main database file: it runs `PRAGMA wal_checkpoint(FULL)` after the insert, which syncs the log, copies it into the main file and syncs that. Under the connection's `synchronous(NORMAL)` a commit alone leaves the row in a log that is synced only at a checkpoint, so a machine crash could take back a row the create already broadcast behind. The checkpoint costs one copy of the log's pages and two syncs per escrow create, every other write keeps `NORMAL`. It waits up to `busy_timeout` for a reader of another process on an older snapshot, and a checkpoint that still cannot move the whole log fails the save, so the create does not broadcast and the next tick tries again.
+`SaveCommitment` returns only once the row survives a machine crash. On SQLite that means the row is in the main database file: it runs `PRAGMA wal_checkpoint(FULL)` after the insert, which syncs the log, copies it into the main file and syncs that. Under the connection's `synchronous(NORMAL)` a commit alone leaves the row in a log that is synced only at a checkpoint, so a machine crash could take back a row the create already broadcast behind. The checkpoint costs one copy of the log's pages and two syncs per escrow create, every other write keeps `NORMAL`. It waits up to `busy_timeout` for a reader of another process on an older snapshot, and a checkpoint that still cannot move the whole log fails the save, so the create does not broadcast and the next tick tries again. On Postgres a commit is that durable by itself, because the pool pins `synchronous_commit=on` and the boot refuses a server with `fsync` off.
 
 `RotationStatus` beside it is the latest observed outcome of one (model, role) rotation stage, kept for admin-debug visibility only.
 
@@ -117,4 +116,4 @@ Like the ledger, the writer sits behind a queue of `owedVoteQueueDepth` (1024) a
 
 ## The completion journal
 
-`inference_completions` holds one row per started nonce, `(escrow_id, nonce)`, with the entry as JSON, and the store implements `user.InferenceCompletionStore`. The caller saves an entry before it sends the nonce: saving the same payload again succeeds, and a different payload at the same nonce is `user.ErrInferenceCompletionConflict`. `DeleteInferenceCompletion` removes an entry once it has finished or timed out. The gateway's `Finalize` does not read the journal yet.
+`inference_completions` holds one row per started nonce, `(escrow_id, nonce)`, with the entry as JSON, and the store implements `user.InferenceCompletionStore`. The caller saves an entry before it sends the nonce: saving the same payload again succeeds, and a different payload at the same nonce is `user.ErrInferenceCompletionConflict`. `DeleteInferenceCompletion` removes an entry once it has finished or timed out. A save is one `INSERT ... ON CONFLICT DO NOTHING`: the row count says whether the entry was new, and only a duplicate reads the stored entry back to tell a repeat from a conflict. `HasInferenceCompletion` answers whether a nonce is journaled without decoding it. The gateway's `Finalize` does not read the journal yet.

@@ -59,36 +59,23 @@ func TestStorageBackendPostgresNeedsAnInstanceIDAndAHost(t *testing.T) {
 }
 
 // Test flow:
-//  1. Select postgres with a host and an sslmode for each case below.
-//  2. Assert loopback hosts, a unix socket and a list of them pass without TLS.
-//  3. Assert any remote host fails unless sslmode is require or verify-full, including the libpq default and prefer.
-func TestStorageBackendRequiresTLSForRemoteHosts(t *testing.T) {
-	cases := []struct {
-		host, sslMode string
-		ok            bool
-	}{
-		{"localhost", "", true},
-		{"127.0.0.1", "", true},
-		{"::1", "disable", true},
-		{"/var/run/postgresql", "", true},
-		{"127.0.0.1,localhost", "", true},
-		{"db.internal", "", false},
-		{"db.internal", "prefer", false},
-		{"db.internal", "disable", false},
-		{"db.internal", "require", true},
-		{"db.internal", "verify-full", true},
-		{"127.0.0.1,db.internal", "", false},
-		{"10.0.0.5", "", false},
-	}
+//  1. Select postgres with an instance id and a host, leaving the fresh-start variable unset, then true, then garbage.
+//  2. Assert the backend does not allow a fresh start when unset, allows it when true, and refuses the garbage naming the variable.
+func TestStorageBackendReadsTheFreshStartOverride(t *testing.T) {
 	t.Setenv(mode.EnvStorageMode, "postgres")
 	t.Setenv(InstanceIDVariable, "gw-1")
-	for _, tc := range cases {
-		t.Setenv("PGHOST", tc.host)
-		t.Setenv("PGSSLMODE", tc.sslMode)
-		_, err := ResolveStorageBackend()
-		if (err == nil) != tc.ok {
-			t.Errorf("host %q sslmode %q: err = %v, want ok = %v", tc.host, tc.sslMode, err, tc.ok)
-		}
+	t.Setenv("PGHOST", "localhost")
+	t.Setenv(AllowFreshPostgresVariable, "")
+	if backend, err := ResolveStorageBackend(); err != nil || backend.AllowFreshStart {
+		t.Fatalf("unset: %+v, %v; want a refusal of fresh starts", backend, err)
+	}
+	t.Setenv(AllowFreshPostgresVariable, "true")
+	if backend, err := ResolveStorageBackend(); err != nil || !backend.AllowFreshStart {
+		t.Fatalf("true: %+v, %v; want fresh starts allowed", backend, err)
+	}
+	t.Setenv(AllowFreshPostgresVariable, "maybe")
+	if _, err := ResolveStorageBackend(); err == nil || !strings.Contains(err.Error(), AllowFreshPostgresVariable) {
+		t.Fatalf("garbage: %v, want an error naming %s", err, AllowFreshPostgresVariable)
 	}
 }
 
