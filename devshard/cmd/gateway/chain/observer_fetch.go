@@ -17,9 +17,9 @@ type epochInfo struct {
 	PoCStartBlockHeight          int64
 	NextPoCStartBlockHeight      int64
 	EpochSwitchBlockHeight       int64
-	IsConfirmationPoCActive      bool
 	ConfirmationPoCPhase         ConfirmationPoCPhase
 	ConfirmationPoCTriggerHeight int64
+	InPoCLeadWindow              bool
 }
 
 type chainEpochInfoResponse struct {
@@ -52,7 +52,10 @@ func parseEpochInfo(body []byte) (epochInfo, error) {
 	if err := json.Unmarshal(body, &payload); err != nil {
 		return epochInfo{}, fmt.Errorf("parse epoch info: %w", err)
 	}
+	return epochInfoFromPayload(payload), nil
+}
 
+func epochInfoFromPayload(payload chainEpochInfoResponse) epochInfo {
 	info := epochInfo{
 		BlockHeight:             int64(payload.BlockHeight),
 		Phase:                   EpochPhase(strings.TrimSpace(payload.Phase)),
@@ -61,13 +64,12 @@ func parseEpochInfo(body []byte) (epochInfo, error) {
 		PoCStartBlockHeight:     int64(payload.LatestEpoch.PocStartBlockHeight),
 		NextPoCStartBlockHeight: int64(payload.EpochStages.NextPoCStart),
 		EpochSwitchBlockHeight:  deriveEpochSwitchBlockHeight(payload),
-		IsConfirmationPoCActive: payload.IsConfirmationPoCActive,
 	}
 	if payload.ActiveConfirmationPoC != nil {
 		info.ConfirmationPoCPhase = ConfirmationPoCPhase(payload.ActiveConfirmationPoC.Phase)
 		info.ConfirmationPoCTriggerHeight = int64(payload.ActiveConfirmationPoC.TriggerHeight)
 	}
-	return info, nil
+	return info
 }
 
 func deriveEpochSwitchBlockHeight(payload chainEpochInfoResponse) int64 {
