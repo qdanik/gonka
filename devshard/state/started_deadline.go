@@ -8,7 +8,7 @@ import (
 
 // StartedInferencesPastDeadline returns the ids of records the chain still settles and no race has
 // claimed: started and past their own execution deadline by buffer, measured in block time from the
-// executor's confirm stamp as TimeoutRemaining does. A record without a confirm stamp, and every record
+// record's ConfirmedAtTimeMs as TimeoutRemaining does. A record without one, and every record
 // while the block time of the session's floor is unknown, is not due. A record from racesFrom on also
 // waits out raceGrace, the time its own race may still take to vote; one below it has no race left to
 // wait for. At most budget ids come back, the longest overdue first, so a backlog larger than the budget

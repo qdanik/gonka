@@ -1,7 +1,7 @@
 // Package settlement holds the settle message both gateways post, the slot order of its lists, the signatures it posts and the settlement root. See README.md.
 package settlement
 
-// Message is a settle payload with binary fields already decoded; with the settler it maps 1:1 onto MsgSettleDevshardEscrow.
+// Message is a settle payload with binary fields already decoded; with the settler it maps onto MsgSettleDevshardEscrow field for field, except that HostStat carries Validated and Finished, which settlementwire does not marshal.
 type Message struct {
 	EscrowID       uint64
 	StateRoot      []byte
