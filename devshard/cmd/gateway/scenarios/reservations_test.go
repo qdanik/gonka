@@ -163,11 +163,12 @@ func TestTwoHundredOverdueRecordsDrainWithinTheSweepBudget(t *testing.T) {
 }
 
 // Test flow:
-//  1. Boot over sixteen participants and a group of sixteen, take participant 0 offline and seven others' votes offline, so a refusal vote reaches 8 of the 11 it needs.
+//  1. Boot with the warm-up probe armed over sixteen participants and a group of sixteen, take participant 0 offline and seven others' votes offline, so a refusal vote reaches 8 of the 11 it needs.
 //  2. Send sixteen requests one after another and advance ten minutes; assert a Pending record outlived the ladder, the report counts it stuck, and the escrow serves.
 //  3. Cross into epoch 8, move inside the margin, advance three minutes, and assert the escrow settled: the loss is accounted, not waited on (`settlement match` at every step).
 func TestARefusalVoteShortOfQuorumIsAccountedStuck(t *testing.T) {
 	spec := plannerSpec()
+	spec.armedFloor = true
 	spec.participants, spec.groupSize, spec.model.fullContextSlots = 16, 16, 1
 	spec.behaviours = map[int]participantBehaviour{0: {offline: true}}
 	for participant := 1; participant <= 7; participant++ {
