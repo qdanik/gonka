@@ -765,12 +765,13 @@ func TestHarnessRestartsTheGatewayOnTheSameStore(t *testing.T) {
 }
 
 // Test flow:
-//  1. Boot with a guarantee of one, take participant 0 offline, send eight requests one after another and assert the seeded escrow holds a Pending record, whose refusal vote the gateway owes at +65 s.
-//  2. Restart the gateway at once and assert the restart severed the session the abandoned shutdown left open.
+//  1. Boot with the warm-up probe armed and a guarantee of one, take participant 0 offline, send eight requests one after another and assert the seeded escrow holds a Pending record, whose refusal vote the gateway owes at +65 s.
+//  2. Restart the gateway at once and assert its Stop returned without posting the vote early (the Pending record is still there) and the gateway closed its escrow sessions (none was left to sever).
 //  3. Send one more request, advance two minutes, and assert every request was answered 200 and no record is still Pending: the restart did not wait for the owed vote, and the restarted gateway posted it.
 func TestHarnessRestartLeavesTheOwedVotesToTheNextGateway(t *testing.T) {
 	spec := plannerSpec()
 	spec.model.fullContextSlots = 1
+	spec.armedFloor = true
 	spec.behaviours = map[int]participantBehaviour{0: {offline: true}}
 	pendingOwed := expectThat{label: "a Pending record whose refusal vote is owed", verify: func(harness *gatewayHarness) error {
 		if !hasRecord(harness, harness.seededIDs[0], types.StatusPending) {
@@ -782,9 +783,10 @@ func TestHarnessRestartLeavesTheOwedVotesToTheNextGateway(t *testing.T) {
 		sendRequests{promptBytes: 200, maxTokens: 64, count: 8, sequential: true},
 		pendingOwed,
 		restartGateway{},
-		expectThat{label: "the restart severed the open session", verify: func(harness *gatewayHarness) error {
-			if harness.severedSessions == 0 {
-				return fmt.Errorf("severedSessions = 0, want the session the abandoned shutdown left open")
+		pendingOwed,
+		expectThat{label: "the stopped gateway closed its escrow sessions", verify: func(harness *gatewayHarness) error {
+			if harness.severedSessions != 0 {
+				return fmt.Errorf("severedSessions = %d, want 0: Stop returned, so the escrow-session step ran", harness.severedSessions)
 			}
 			return nil
 		}},
