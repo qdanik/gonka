@@ -4,6 +4,7 @@ import (
 	"common/logging"
 	"context"
 	"decentralized-api/apiconfig"
+	"maps"
 	"time"
 
 	"github.com/productscience/inference/x/inference/types"
@@ -84,6 +85,9 @@ func (c GetNodesCommand) Execute(b *Broker) {
 
 		// Nil out internal-only fields
 		stateCopy.cancelInFlightTask = nil
+
+		stateCopy.EpochModels = maps.Clone(nodeWithState.State.EpochModels)
+		stateCopy.EpochMLNodes = maps.Clone(nodeWithState.State.EpochMLNodes)
 
 		// Deep copy pointer fields
 		if nodeWithState.State.ReconcileInfo != nil {
