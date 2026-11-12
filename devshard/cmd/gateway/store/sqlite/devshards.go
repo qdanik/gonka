@@ -40,20 +40,20 @@ func (s *Store) UpsertDevshard(ctx context.Context, record store.DevshardRecord)
 
 // ListDevshards returns every record ordered by escrow id.
 func (s *Store) ListDevshards(ctx context.Context) ([]store.DevshardRecord, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT `+devshardColumns+` FROM devshards ORDER BY escrow_id`)
+	result, err := s.db.QueryContext(ctx, `SELECT `+devshardColumns+` FROM devshards ORDER BY escrow_id`)
 	if err != nil {
 		return nil, fmt.Errorf("listing devshards: %w", err)
 	}
-	defer rows.Close()
+	defer result.Close()
 	var records []store.DevshardRecord
-	for rows.Next() {
-		record, err := scanDevshard(rows)
+	for result.Next() {
+		record, err := scanDevshard(result)
 		if err != nil {
 			return nil, err
 		}
 		records = append(records, record)
 	}
-	if err := rows.Err(); err != nil {
+	if err := result.Err(); err != nil {
 		return nil, fmt.Errorf("iterating devshards: %w", err)
 	}
 	return records, nil

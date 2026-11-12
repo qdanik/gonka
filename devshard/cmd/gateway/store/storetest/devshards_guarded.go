@@ -194,7 +194,7 @@ func devshardRegistry(t *testing.T, open Opener) {
 	if err != nil {
 		t.Fatalf("ListDevshards(): %v", err)
 	}
-	var ids []string
+	ids := make([]string, 0, len(listed))
 	for _, record := range listed {
 		ids = append(ids, record.EscrowID)
 	}

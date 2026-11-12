@@ -9,10 +9,10 @@ import (
 	"os"
 	"path/filepath"
 
+	_ "modernc.org/sqlite"
+
 	"devshard/cmd/gateway/store"
 	"devshard/cmd/gateway/store/internal/rows"
-
-	_ "modernc.org/sqlite"
 )
 
 var _ store.Backend = (*Store)(nil)

@@ -9,15 +9,14 @@ import (
 
 	"common/storage/pgpool"
 	"common/storage/pgtimeouts"
+	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/jackc/pgx/v5/stdlib"
 
 	"devshard/cmd/gateway/internal/logkey"
 	"devshard/cmd/gateway/store"
 	"devshard/cmd/gateway/store/internal/rows"
 	"devshard/logging"
-
-	"github.com/jackc/pgx/v5/pgconn"
-	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/jackc/pgx/v5/stdlib"
 )
 
 var _ store.Backend = (*Store)(nil)

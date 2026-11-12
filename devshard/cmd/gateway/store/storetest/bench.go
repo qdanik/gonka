@@ -52,11 +52,9 @@ func runConcurrently(b *testing.B, goroutines int, work func(worker, iterations 
 	var group sync.WaitGroup
 	b.ResetTimer()
 	for worker := range goroutines {
-		group.Add(1)
-		go func() {
-			defer group.Done()
+		group.Go(func() {
 			work(worker, perWorker)
-		}()
+		})
 	}
 	group.Wait()
 	b.StopTimer()

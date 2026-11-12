@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"devshard/cmd/gateway/store/storetest"
-
 	"github.com/jackc/pgx/v5"
+
+	"devshard/cmd/gateway/store/storetest"
 )
 
 const (
@@ -125,15 +125,13 @@ func TestConcurrentBootsSerialize(t *testing.T) {
 	var group sync.WaitGroup
 	errs := make(chan error, concurrentBoots)
 	for range concurrentBoots {
-		group.Add(1)
-		go func() {
-			defer group.Done()
+		group.Go(func() {
 			opened, err := Open(context.Background(), Options{ConnectionString: dsn})
 			if err == nil {
 				err = opened.Close()
 			}
 			errs <- err
-		}()
+		})
 	}
 	group.Wait()
 	close(errs)

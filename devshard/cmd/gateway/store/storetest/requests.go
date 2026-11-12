@@ -154,7 +154,7 @@ func ledgerFindReportsUnknownAndBlankIDs(t *testing.T, open Opener) {
 	testStore := open()
 	clock := newTestClock(time.Unix(1700000010, 0).UTC())
 	ledger := openLedger(t, testStore, generousRetention(), clock)
-	t.Cleanup(func() { ledger.Close() })
+	t.Cleanup(func() { _ = ledger.Close() })
 
 	ledger.Record(store.RequestRecord{Outcome: store.RequestFailed})
 
@@ -187,7 +187,7 @@ func retentionEvictsRowsPastTheMaxAge(t *testing.T, open Opener) {
 	}
 
 	second := open()
-	defer second.Close()
+	defer func() { _ = second.Close() }()
 	freshClock := newTestClock(time.Unix(1700000000, 0).UTC().Add(48 * time.Hour))
 	freshLedger := openLedger(t, second, retention, freshClock)
 	freshLedger.Record(sampleRecord("fresh"))
@@ -264,8 +264,9 @@ func ledgerKeepsTheNewestRows(t *testing.T, open Opener) {
 	gatewayStore := open()
 	clock := newTestClock(time.Unix(1_700_000_010, 0).UTC())
 	ledger := openLedger(t, gatewayStore, store.Retention{MaxAge: 24 * time.Hour, MaxRows: 2}, clock)
-	var written []store.RequestRecord
-	for _, id := range []string{"request-1", "request-2", "request-3"} {
+	ids := []string{"request-1", "request-2", "request-3"}
+	written := make([]store.RequestRecord, 0, len(ids))
+	for _, id := range ids {
 		record := sampleRecord(id)
 		ledger.Record(record)
 		record.RecordedAt = clock.Now()

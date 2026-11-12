@@ -55,7 +55,7 @@ func FreshPostgresSchema(tb testing.TB, dsn string) string {
 		if _, err := admin.Exec(ctx, `DROP SCHEMA `+schema+` CASCADE`); err != nil {
 			tb.Errorf("dropping schema %s: %v", schema, err)
 		}
-		admin.Close(ctx)
+		_ = admin.Close(ctx)
 	})
 	return WithSearchPath(tb, dsn, schema)
 }

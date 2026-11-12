@@ -8,12 +8,12 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jackc/pgx/v5"
+	_ "modernc.org/sqlite"
+
 	"devshard/cmd/gateway/store/postgres"
 	"devshard/cmd/gateway/store/sqlite"
 	"devshard/cmd/gateway/store/storetest"
-
-	"github.com/jackc/pgx/v5"
-	_ "modernc.org/sqlite"
 )
 
 const (
@@ -111,6 +111,9 @@ func TestBackendSchemasMatch(t *testing.T) {
 			}
 			yield(table, column, kind, notNull, primaryKey, fallback)
 		}
+		if err := rows.Err(); err != nil {
+			t.Fatalf("iterating the columns: %v", err)
+		}
 	})
 	serverColumns := columnFacts(t, func(yield func(string, string, string, bool, bool, string)) {
 		rows, err := catalog.Query(context.Background(), postgresColumnSQL)
@@ -125,6 +128,9 @@ func TestBackendSchemasMatch(t *testing.T) {
 				t.Fatalf("scanning a Postgres column: %v", err)
 			}
 			yield(table, column, kind, notNull, primaryKey, fallback)
+		}
+		if err := rows.Err(); err != nil {
+			t.Fatalf("iterating the columns: %v", err)
 		}
 	})
 	if len(liteColumns) == 0 {
@@ -146,6 +152,7 @@ func TestBackendSchemasMatch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reading the SQLite indexes: %v", err)
 	}
+	defer indexRows.Close()
 	for indexRows.Next() {
 		var table, name string
 		if err := indexRows.Scan(&table, &name); err != nil {
@@ -153,7 +160,9 @@ func TestBackendSchemasMatch(t *testing.T) {
 		}
 		liteIndexes[table+"."+name] = true
 	}
-	indexRows.Close()
+	if err := indexRows.Err(); err != nil {
+		t.Fatalf("iterating the SQLite indexes: %v", err)
+	}
 	serverIndexes := map[string]bool{}
 	pgRows, err := catalog.Query(context.Background(), postgresIndexSQL)
 	if err != nil {
