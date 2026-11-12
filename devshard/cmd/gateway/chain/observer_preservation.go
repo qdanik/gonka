@@ -29,7 +29,6 @@ func (o *PhaseObserver) resolvePreservation(ctx context.Context, epoch epochInfo
 	case status == preservedSnapshotMissingCurrent && allowAllParticipantsUntilSnapshot(epoch, reason):
 		return preservationModeAll, preservedSnapshotState{}, nil
 	case status == preservedSnapshotUnavailable && err != nil && reason == BlockReasonPoC && epoch.InPoCLeadWindow:
-		// A failed read must not zero every escrow for the one poll before the PoC starts; the error is still reported.
 		return preservationModeAll, preservedSnapshotState{}, err
 	default:
 		return preservationModeLegacy, preservedSnapshotState{}, err

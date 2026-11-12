@@ -32,6 +32,10 @@ func (o *floorOracle) Subscribe(context.Context, int64) (<-chan *blocks.Header, 
 	return closed, nil
 }
 
+const floorRaiseRounds = 4
+
+var floorRigClockStart = time.Unix(1_700_000_000, 0)
+
 type floorRig struct {
 	height  atomic.Uint64
 	clock   atomic.Int64
@@ -41,7 +45,7 @@ type floorRig struct {
 func newFloorRig(hosts int, height uint64) *floorRig {
 	rig := &floorRig{oracles: make([]*floorOracle, hosts)}
 	rig.height.Store(height)
-	rig.clock.Store(time.Now().UnixNano())
+	rig.clock.Store(floorRigClockStart.UnixNano())
 	for index := range rig.oracles {
 		rig.oracles[index] = &floorOracle{}
 		rig.oracles[index].height.Store(int64(height))
@@ -75,7 +79,7 @@ func (r *floorRig) raise(t *testing.T, session *user.Session, height uint64) {
 	for _, oracle := range r.oracles {
 		oracle.height.Store(int64(height))
 	}
-	for attempt := 0; attempt < 4; attempt++ {
+	for attempt := 0; attempt < floorRaiseRounds; attempt++ {
 		r.clock.Add(int64(time.Hour))
 		require.NoError(t, session.MaybeHeartbeat(context.Background()))
 		require.NoError(t, session.SendPendingDiff(context.Background()))

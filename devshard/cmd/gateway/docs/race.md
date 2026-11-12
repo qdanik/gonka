@@ -228,7 +228,7 @@ Rung 10 is the same shape for a different cause. A host-bound body carries the e
 
 ### Timeout votes
 
-Every attempt whose nonce the host did not finish gets a vote posted, with one of four recorded skip reasons where it must not be (`engine/settle.go`, `RaceOutcome.timeoutSkipReason` and `RaceOutcome.TimeoutPlan`): the attempt was aborted by a phase transition, the stream was empty and the nonce already finished, the nonce is already finished, or the response ran long after producing content.
+Every attempt whose nonce the host did not finish gets a vote posted, with one of three recorded skip reasons where it must not be (`engine/settle.go`, `RaceOutcome.timeoutSkipReason` and `RaceOutcome.TimeoutPlan`): the attempt was aborted by a phase transition, the stream was empty and the nonce's Finish was applied, or the nonce's Finish was applied. A Finish still queued does not skip the vote, and a long response is not a skip.
 
 A host whose escrow state diverged still gets its vote posted. Divergence is a routing fact — the scheduler blocks the host permanently — while an unposted vote leaves an orphaned start message that settlement can never resolve (`engine/settle.go`, `RaceOutcome.timeoutSkipReason`).
 

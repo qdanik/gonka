@@ -390,7 +390,6 @@ func (c *raceCoordinator) release() bool {
 	return true
 }
 
-// nonceFinish is what the escrow says about a nonce's Finish: queued is any Finish, applied is the one the state machine accepted.
 type nonceFinish struct{ queued, applied bool }
 
 func readNonceFinish(target DispatchTarget, nonce uint64) nonceFinish {
