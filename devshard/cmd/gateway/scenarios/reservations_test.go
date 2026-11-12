@@ -258,7 +258,7 @@ func TestAChallengedRecordIsStuckMoney(t *testing.T) {
 }
 
 // Test flow:
-//  1. Boot with the warm-up probe armed and three escrows of 79 000 under a guarantee of two, full but holding little above it: their money past one full-context request each (about 134 300) covers the two slots the model needs (about 132 900 with the probe armed, 131 112 without) with about 1 400 to spare, less than the challenged money, while participant 1 validates everything and votes it invalid.
+//  1. Boot with the warm-up probe armed and three escrows of 79 000 under a guarantee of two, full but holding little above it: their money past one full-context request each (about 134 300: 132 786 measured at 78 500, plus 1 500) covers the two slots the model needs (about 132 900 with the probe armed, 131 112 without) with about 1 400 to spare, less than the challenged money, while participant 1 validates everything and votes it invalid.
 //  2. Send six rounds of four small requests ten seconds apart and advance two minutes.
 //  3. Assert the escrows hold Challenged records, nothing was created although their reservations would push the model's need past its money if they counted as demand, and the report counts the challenged money stuck (`create reason` at every step).
 func TestChallengedMoneyDrivesNoCreate(t *testing.T) {

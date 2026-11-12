@@ -676,7 +676,7 @@ func TestHarnessBootsAndAnswersInsideABubble(t *testing.T) {
 }
 
 // Test flow:
-//  1. Make every participant stall after its receipt, so no answer and no further request composes a diff on the seeded escrow.
+//  1. Boot with the warm-up probe armed and make every participant stall after its receipt, so no answer and no further request composes a diff on the seeded escrow.
 //  2. Send one request and advance one minute.
 //  3. Assert every attempt the session started is Started with its executor's stamp: the heartbeat's drain sequenced the last confirm-start, as production's heartbeat does on a quiet escrow.
 //  4. Advance past the execution timeout, so both attempts' timeout votes post while the gateway still runs.

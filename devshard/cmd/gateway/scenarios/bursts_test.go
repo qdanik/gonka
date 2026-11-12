@@ -521,7 +521,7 @@ func contextRefusalSpec(behaviours map[int]participantBehaviour, promptBytes, wa
 			}
 			refused, recorded := state.Inferences[refusedRecordID]
 			if !recorded || refused.ExecutorSlot != refusingExecutorSlot || refused.Status != types.StatusStarted || reserved != refused.ReservedCost {
-				return fmt.Errorf("first record %+v with %d reserved, want it Started on slot %d holding the only reservation", refused, reserved, refusingExecutorSlot)
+				return fmt.Errorf("refused record %+v with %d reserved, want it Started on slot %d holding the only reservation", refused, reserved, refusingExecutorSlot)
 			}
 			return nil
 		}},
