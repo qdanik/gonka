@@ -2,6 +2,8 @@ package app
 
 import (
 	"context"
+	"errors"
+	"io/fs"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -32,17 +34,13 @@ func selectPostgres(t *testing.T) {
 	t.Setenv("PGOPTIONS", "-c search_path="+dsn.Query().Get("search_path"))
 }
 
-func directoryAt(directory string) func() (string, error) {
-	return func() (string, error) { return directory, nil }
-}
-
 // Test flow:
 //  1. Leave the storage mode unset and choose the store on a directory that does not exist yet.
 //  2. Assert the choice is SQLite carrying that directory, and opening it creates the database there.
 func TestTheStoreIsSQLiteWhenTheModeIsUnset(t *testing.T) {
 	t.Setenv(mode.EnvStorageMode, "")
 	storageDir := filepath.Join(t.TempDir(), "state")
-	choice, err := chooseStore(directoryAt(storageDir))
+	choice, err := chooseStore(&storageDir)
 	if err != nil || choice != (sqliteChoice{directory: storageDir}) {
 		t.Fatalf("chooseStore() = %+v, %v, want SQLite on %s", choice, err, storageDir)
 	}
@@ -61,25 +59,20 @@ func TestTheStoreIsSQLiteWhenTheModeIsUnset(t *testing.T) {
 //  2. Assert the choice is refused.
 func TestAModeTheGatewayDoesNotSupportChoosesNoStore(t *testing.T) {
 	t.Setenv(mode.EnvStorageMode, "hybrid")
-	if _, err := chooseStore(directoryAt(t.TempDir())); err == nil {
+	storageDir := t.TempDir()
+	if _, err := chooseStore(&storageDir); err == nil {
 		t.Fatal("chooseStore() = nil, want a refusal")
 	}
 }
 
 // Test flow:
-//  1. Select Postgres while a directory holding a SQLite gateway database is on offer.
-//  2. Assert the choice is Postgres for the instance and the directory was never asked for.
-//  3. Assert the store opens on the empty Postgres database and the directory still holds only the file it started with.
-func TestPostgresChoiceNeverAsksForADirectory(t *testing.T) {
+//  1. Select Postgres and point the storage directory at a path that does not exist.
+//  2. Assert the choice is Postgres for the instance.
+//  3. Assert the store opens on the empty Postgres database and the storage path was never created.
+func TestPostgresChoiceNeverTouchesTheStorageDirectory(t *testing.T) {
 	selectPostgres(t)
-	storageDir := t.TempDir()
-	if err := os.WriteFile(sqlite.DatabasePath(storageDir), nil, 0o600); err != nil {
-		t.Fatalf("writing the SQLite database: %v", err)
-	}
-	choice, err := chooseStore(func() (string, error) {
-		t.Error("the directory was resolved for a Postgres store")
-		return storageDir, nil
-	})
+	storageDir := filepath.Join(t.TempDir(), "state")
+	choice, err := chooseStore(&storageDir)
 	if err != nil || choice != (postgresChoice{instanceID: "gw-test"}) {
 		t.Fatalf("chooseStore() = %+v, %v, want Postgres for gw-test", choice, err)
 	}
@@ -88,8 +81,21 @@ func TestPostgresChoiceNeverAsksForADirectory(t *testing.T) {
 		t.Fatalf("open() = %v, want nil", err)
 	}
 	opened.Close()
-	entries, err := os.ReadDir(storageDir)
-	if err != nil || len(entries) != 1 {
-		t.Fatalf("storage directory = %v, %v, want only the SQLite file it started with", entries, err)
+	if _, err := os.Stat(storageDir); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("stat(storage directory) = %v, want it not to exist", err)
+	}
+}
+
+// Test flow:
+//  1. Prepare a storage directory nested under two directories that do not exist yet.
+//  2. Assert the path comes back unchanged and the directory exists afterwards.
+func TestPrepareStorageDirCreatesTheDirectory(t *testing.T) {
+	storageDir := filepath.Join(t.TempDir(), "a", "state")
+	got, err := prepareStorageDir(&storageDir)
+	if err != nil || got != storageDir {
+		t.Fatalf("prepareStorageDir() = %q, %v, want %q", got, err, storageDir)
+	}
+	if info, err := os.Stat(storageDir); err != nil || !info.IsDir() {
+		t.Fatalf("stat(storage directory) = %v, %v, want a directory", info, err)
 	}
 }
