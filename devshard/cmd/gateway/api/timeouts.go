@@ -21,12 +21,13 @@ func (s Sessions) Poster(escrowID string, params any) (engine.TimeoutPoster, boo
 	if !held {
 		return nil, false
 	}
-	return escrowVotes{session: session, prompt: dispatched.Prompt}, true
+	return escrowVotes{session: session, prompt: dispatched.Prompt, startedAt: dispatched.StartedAt}, true
 }
 
 type escrowVotes struct {
-	session registry.EscrowSession
-	prompt  []byte
+	session   registry.EscrowSession
+	prompt    []byte
+	startedAt int64
 }
 
 var _ engine.TimeoutPoster = escrowVotes{}
@@ -36,7 +37,7 @@ func (v escrowVotes) SettleTimeout(ctx context.Context, step engine.TimeoutStep)
 }
 
 func (v escrowVotes) payload(nonce uint64) *host.InferencePayload {
-	return timeoutclaim.Payload(v.session.Inference, nonce, v.prompt)
+	return timeoutclaim.Payload(v.session.Inference, nonce, v.prompt, v.startedAt)
 }
 
 // VoteDeadline reads the escrow's own deadline for this nonce, which is what the settle queue holds it by.
