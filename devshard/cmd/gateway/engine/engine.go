@@ -80,7 +80,8 @@ type Deps struct {
 
 	Suspicious func(participant string) bool
 
-	Timeouts func(escrowID string, params any) (TimeoutPoster, bool)
+	Timeouts  func(escrowID string, params any) (TimeoutPoster, bool)
+	OwedVotes owedVoteBook
 
 	Now   func() time.Time
 	Timer func() raceTimer
@@ -195,7 +196,7 @@ func finishOnce(finished func()) func() {
 // OwedTimeoutVotes reports the votes taken and not yet posted. See race.md, "The timeout-vote queue".
 func (e *Engine) OwedTimeoutVotes() int64 { return e.settles.Owed() }
 
-// Stop returns once every race it admitted has posted the vote that settles its nonces. See race.md, "Stop".
+// Stop returns once every race it admitted has posted its due votes and handed the rest on. See race.md, "Stop".
 func (e *Engine) Stop() {
 	e.mu.Lock()
 	e.stopped = true
@@ -390,31 +391,71 @@ func (e *Engine) settle(outcome RaceOutcome, params any, registration *raceRegis
 		registration.release()
 		return
 	}
-	var poster TimeoutPoster
-	if e.deps.Timeouts != nil {
-		if resolved, ok := e.deps.Timeouts(outcome.EscrowID, params); ok {
-			poster = resolved
-		}
-	}
+	poster := e.poster(outcome.EscrowID, params)
 	groups := voteGroups(outcome.TimeoutPlan(), poster)
 	markPosted := afterAll(len(groups), outcome.releaseHeldFinishes)
 	markSettled := afterAll(len(groups), registration.release)
 	for _, group := range groups {
-		task := settleTask{
-			deadline: func() time.Time { return earliestDue(group.steps, poster) },
-			post: func() {
-				retries := settleSteps(settleContext(outcome.RequestID), poster, group.steps, outcome.Lifecycle.EscrowMissing, e.reportTimeout)
-				e.decideHeldWinners(outcome.EscrowID, group.steps, registration)
-				markPosted()
-				e.retryRefusedVotes(outcome, poster, retries, markSettled, 0)
-			},
-		}
-		e.settles.Add(task, int(e.deps.Config.Load().Engine.MaxConcurrentTimeoutVotes))
+		e.oweRefusals(outcome, params, poster, group.steps)
+		e.queueVotes(outcome, poster, group.steps, func() {
+			e.decideHeldWinners(outcome.EscrowID, group.steps, registration)
+			markPosted()
+		}, markSettled)
 	}
+}
+
+func (e *Engine) poster(escrowID string, params any) TimeoutPoster {
+	if e.deps.Timeouts == nil {
+		return nil
+	}
+	if resolved, ok := e.deps.Timeouts(escrowID, params); ok {
+		return resolved
+	}
+	return nil
+}
+
+func (e *Engine) queueVotes(outcome RaceOutcome, poster TimeoutPoster, steps []TimeoutStep, afterPost, markSettled func()) {
+	due := func() time.Time { return earliestDue(steps, poster) }
+	unripe := func() bool { return due().After(e.settles.now()) }
+	task := settleTask{
+		deadline: due,
+		wake:     e.stopping,
+		post: func() {
+			// A vote not yet due at Stop is left owed in the store or to the next boot's sweep.
+			if e.stopping.Err() != nil && unripe() {
+				markSettled()
+				return
+			}
+			ctx, release := e.cancelUnripeOnStop(settleContext(outcome.RequestID), unripe)
+			defer release()
+			retries := settleSteps(ctx, poster, steps, outcome.Lifecycle.EscrowMissing, e.reportTimeout)
+			if ctx.Err() != nil {
+				markSettled()
+				return
+			}
+			e.payRefusals(outcome.EscrowID, steps, retries)
+			afterPost()
+			e.retryRefusedVotes(outcome, poster, retries, markSettled, 0)
+		},
+	}
+	e.settles.Add(task, int(e.deps.Config.Load().Engine.MaxConcurrentTimeoutVotes))
+}
+
+func (e *Engine) cancelUnripeOnStop(ctx context.Context, unripe func() bool) (context.Context, func()) {
+	ctx, cancel := context.WithCancel(ctx)
+	stop := context.AfterFunc(e.stopping, func() {
+		if unripe() {
+			cancel()
+		}
+	})
+	return ctx, func() { stop(); cancel() }
 }
 
 func (e *Engine) retryRefusedVotes(outcome RaceOutcome, poster TimeoutPoster, steps []TimeoutStep, markSettled func(), round int) {
 	if len(steps) == 0 || round >= refusedVoteRetries || e.stopping.Err() != nil {
+		if e.stopping.Err() == nil {
+			e.payRefusals(outcome.EscrowID, steps, nil)
+		}
 		markSettled()
 		return
 	}
@@ -424,6 +465,7 @@ func (e *Engine) retryRefusedVotes(outcome RaceOutcome, poster TimeoutPoster, st
 		wake:     e.stopping,
 		post: func() {
 			remaining := postTimeouts(settleContext(outcome.RequestID), poster, steps, outcome.Lifecycle.EscrowMissing, e.reportTimeout)
+			e.payRefusals(outcome.EscrowID, steps, remaining)
 			e.retryRefusedVotes(outcome, poster, remaining, markSettled, round+1)
 		},
 	}

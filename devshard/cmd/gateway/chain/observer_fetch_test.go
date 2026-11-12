@@ -67,7 +67,6 @@ func TestParseEpochInfoStringTypedScalars(t *testing.T) {
 		EpochIndex:                   7,
 		PoCStartBlockHeight:          950,
 		EpochSwitchBlockHeight:       950,
-		IsConfirmationPoCActive:      true,
 		ConfirmationPoCPhase:         ConfirmationPoCValidation,
 		ConfirmationPoCTriggerHeight: 555,
 	}
@@ -771,4 +770,12 @@ func TestParseEpochInfoAgreesOnTheSwitchAroundSetNewValidators(t *testing.T) {
 			}
 		})
 	}
+}
+
+func parseParticipants(body []byte, preservation preservationMode, preservedNodes preservedSnapshotState) (participantsState, error) {
+	payload, err := decodeParticipants(body)
+	if err != nil {
+		return participantsState{}, err
+	}
+	return foldParticipants(payload, preservation, preservedNodes), nil
 }

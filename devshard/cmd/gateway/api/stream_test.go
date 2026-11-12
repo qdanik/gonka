@@ -4,20 +4,76 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
+	"devshard/cmd/gateway/engine"
 	"devshard/cmd/gateway/filters"
 )
+
+type failingSocket struct{ *httptest.ResponseRecorder }
+
+func (failingSocket) Write([]byte) (int, error) { return 0, io.ErrClosedPipe }
+
+// Test flow:
+//  1. Drive a `clientStream` into each of the gateway's own refusals: a reply buffer too small for the reply, written and then closed; an event past the carry bound, folded and streamed.
+//  2. Drive a streamed `clientStream` over a socket whose write fails.
+//  3. Assert every refusal wraps `engine.ErrReplyRefused` and keeps its own cause.
+//  4. Assert the socket's failure is passed on as it is, not as a refusal.
+func TestTheGatewaysOwnRefusalsAreMarkedAndASocketFailureIsNot(t *testing.T) {
+	oversizedEvent := bytes.Repeat([]byte("x"), maxBufferedResponseBytes+1)
+	for _, testCase := range []struct {
+		name      string
+		refuse    func() error
+		wantCause error
+		refused   bool
+	}{
+		{"the reply buffer is full", func() error {
+			_, err := newClientStream(httptest.NewRecorder(), "req-1", false, false, filters.LogprobIntent{}, 0, NewBufferBudget(1<<10)).Write(bytes.Repeat([]byte("y"), 2<<10))
+			return err
+		}, ErrResponseBufferFull, true},
+		{"a reply closed after its buffer refused it", func() error {
+			stream := newClientStream(httptest.NewRecorder(), "req-1", false, false, filters.LogprobIntent{}, 0, NewBufferBudget(1<<10))
+			_, _ = stream.Write(bytes.Repeat([]byte("y"), 2<<10))
+			return stream.Close()
+		}, ErrResponseBufferFull, true},
+		{"a folded event past the carry bound", func() error {
+			_, err := newClientStream(httptest.NewRecorder(), "req-1", false, false, filters.LogprobIntent{}, 0, nil).Write(oversizedEvent)
+			return err
+		}, filters.ErrStreamCarryOverflow, true},
+		{"a streamed event past the carry bound", func() error {
+			_, err := newClientStream(httptest.NewRecorder(), "req-1", true, false, filters.LogprobIntent{}, 0, nil).Write(oversizedEvent)
+			return err
+		}, filters.ErrStreamCarryOverflow, true},
+		{"a socket whose write fails", func() error {
+			_, err := newClientStream(failingSocket{httptest.NewRecorder()}, "req-1", true, false, filters.LogprobIntent{}, 0, nil).Write([]byte(`data: {"choices":[{"index":0,"delta":{"content":"a"}}]}` + "\n\n"))
+			return err
+		}, io.ErrClosedPipe, false},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			err := testCase.refuse()
+			if err == nil {
+				t.Fatal("no error, want one")
+			}
+			if !errors.Is(err, testCase.wantCause) {
+				t.Errorf("error = %v, want it to wrap %v", err, testCase.wantCause)
+			}
+			if refused := errors.Is(err, engine.ErrReplyRefused); refused != testCase.refused {
+				t.Errorf("error %v is a refusal = %t, want %t", err, refused, testCase.refused)
+			}
+		})
+	}
+}
 
 // Test flow:
 //  1. Create a non-streaming `clientStream` and write 1MB chunks to it in a loop, past `maxBufferedResponseBytes`.
 //  2. Assert the loop eventually fails with `filters.ErrStreamCarryOverflow`.
 //  3. Assert the bytes written before the refusal never exceeded `maxBufferedResponseBytes`.
 func TestAnUnterminatedEventIsBoundedInMemory(t *testing.T) {
-	stream := newClientStream(httptest.NewRecorder(), "req-1", false, true, filters.LogprobIntent{}, nil)
+	stream := newClientStream(httptest.NewRecorder(), "req-1", false, true, filters.LogprobIntent{}, 0, nil)
 	chunk := bytes.Repeat([]byte("x"), 1<<20)
 
 	written := 0
@@ -47,7 +103,7 @@ func TestAnUnterminatedEventIsBoundedInMemory(t *testing.T) {
 //  2. Read the folder's held byte count.
 //  3. Assert it stays well below a quarter of the raw bytes written, so the discarded logprobs are not retained.
 func TestAFoldedReplyHoldsTheAnswerRatherThanTheStream(t *testing.T) {
-	stream := newClientStream(httptest.NewRecorder(), "req-1", false, true, filters.LogprobIntent{}, nil)
+	stream := newClientStream(httptest.NewRecorder(), "req-1", false, true, filters.LogprobIntent{}, 0, nil)
 
 	raw := 0
 	for token := range 200 {
@@ -69,7 +125,7 @@ func TestAFoldedReplyHoldsTheAnswerRatherThanTheStream(t *testing.T) {
 //  2. Assert the recorded body contains the assembled reply's content.
 func TestNonStreamingRepliesUnderTheBoundAreKept(t *testing.T) {
 	recorder := httptest.NewRecorder()
-	stream := newClientStream(recorder, "req-1", false, true, filters.LogprobIntent{}, nil)
+	stream := newClientStream(recorder, "req-1", false, true, filters.LogprobIntent{}, 0, nil)
 
 	if _, err := stream.Write([]byte(`data: {"choices":[{"message":{"content":"ok"}}]}` + "\n\n")); err != nil {
 		t.Fatalf("Write(): %v", err)
@@ -90,7 +146,7 @@ func TestNonStreamingRepliesUnderTheBoundAreKept(t *testing.T) {
 //  4. Assert the recorded status is 503 and the oversized content never reached the body.
 func TestAReplyPastTheBufferBudgetIsRefused(t *testing.T) {
 	recorder := httptest.NewRecorder()
-	stream := newClientStream(recorder, "req-1", false, true, filters.LogprobIntent{}, NewBufferBudget(1))
+	stream := newClientStream(recorder, "req-1", false, true, filters.LogprobIntent{}, 0, NewBufferBudget(1))
 
 	oversized := `data: {"choices":[{"delta":{"content":"` + strings.Repeat("x", 512<<10) + `"}}]}` + "\n\n"
 	if _, err := stream.Write([]byte(oversized)); !errors.Is(err, ErrResponseBufferFull) {
@@ -114,7 +170,7 @@ func TestAReplyPastTheBufferBudgetIsRefused(t *testing.T) {
 //  4. Assert the stream reports terminated.
 func TestAStreamCountsWhatReachedTheClient(t *testing.T) {
 	recorder := httptest.NewRecorder()
-	stream := newClientStream(recorder, "req-1", true, true, filters.LogprobIntent{}, nil)
+	stream := newClientStream(recorder, "req-1", true, true, filters.LogprobIntent{}, 0, nil)
 
 	if _, err := stream.Write([]byte(`data: {"choices":[{"delta":{"content":"ok"}}]}` + "\n\n")); err != nil {
 		t.Fatalf("Write(): %v", err)
@@ -137,7 +193,7 @@ func TestAStreamCountsWhatReachedTheClient(t *testing.T) {
 //  2. Assert delivered bytes match what the recorder received and are non-zero.
 func TestANonStreamingReplyCountsItsBody(t *testing.T) {
 	recorder := httptest.NewRecorder()
-	stream := newClientStream(recorder, "req-1", false, true, filters.LogprobIntent{}, nil)
+	stream := newClientStream(recorder, "req-1", false, true, filters.LogprobIntent{}, 0, nil)
 
 	if _, err := stream.Write([]byte(`data: {"choices":[{"message":{"content":"ok"}}]}` + "\n\n")); err != nil {
 		t.Fatalf("Write(): %v", err)
@@ -182,7 +238,7 @@ func TestABodyTheAssemblerCouldNotFoldIsNotServedAsSuccess(t *testing.T) {
 	for _, testCase := range tests {
 		t.Run(testCase.name, func(t *testing.T) {
 			recorder := httptest.NewRecorder()
-			stream := newClientStream(recorder, "req-1", false, true, filters.LogprobIntent{}, nil)
+			stream := newClientStream(recorder, "req-1", false, true, filters.LogprobIntent{}, 0, nil)
 			if _, err := stream.Write([]byte(testCase.events)); err != nil {
 				t.Fatalf("Write(): %v", err)
 			}

@@ -27,7 +27,7 @@ A test starts from `defaultSpec()` (four participants, one model, one funded esc
 
 A known bug is pinned, not skipped: the test lists the invariant key or expectation label the bug violates in `pins`, passes while the bug reproduces, and fails with "remove the pin" the day it stops. The fix removes the pin in the same change, which turns the test into its regression test. Never add a pin to make a red run green without naming the bug and the code line it lives on.
 
-The fleet's serving sessions run the heartbeat's drain cadence: every 24 s a session with queued host transactions sends them, as production's heartbeat does on a quiet escrow; the heartbeat's own height stamps are not modelled, because the harness runs without height sync.
+The fleet's serving sessions drain the queued host transactions every 24 s, as production's heartbeat does on a quiet escrow. A spec with `armedFloor` also runs the session's heartbeat on that cadence, turns the gateway's warm-up probe on, and gives the hosts a fake chain oracle, so a timeout is armed and can fire as in production: the probe takes nonce 1 and stamps the floor before the first request, and the heartbeat keeps raising it. The hosts stamp receipts with the oracle whose height grows one block per second of bubble time, and `testutil.HeightClock` turns that height into block time, so a record's refusal and execution deadlines run out with the bubble clock. The fake chain's own epoch heights are not involved.
 
 A fleet host hands the attempt's stream to its engine, as `transport/server.go` does over HTTP. A participant given a `contextLimit` refuses a prompt over it the way `devshardd` relays vLLM's 400 (`cmd/devshardd/inference/execute.go`): one data event carrying current vLLM's message with the host's limit and the request's token counts, then `[DONE]`, and its execution then fails after the signed receipt.
 
@@ -59,7 +59,7 @@ Checked after every step by `invariants_test.go`. A test that legitimately break
 | `TestHarnessBootsAndAnswersInsideABubble` | every other test assumes the composed gateway boots and serves inside a bubble | one request over a funded escrow is answered 200 and the shutdown leaves nothing running |
 | `TestAQuietEscrowSequencesItsReceipts` | the harness must sequence a quiet escrow's receipts as production's heartbeat does, or timeouts are never voted | stalled attempts become Started with their executor's stamp, then TimedOut with one Missed per attempt on their executor |
 | `TestHarnessRestartsTheGatewayOnTheSameStore` | restart tests rely on a second boot over the same store, chain and hosts | requests before and after a restart are answered 200 and the seeded row stays active |
-| `TestHarnessRestartCutsTheVotesTheOldGatewayOwed` | a restart must sever the old process's sessions, as an exit does | the open session is severed and the refusal vote the old gateway owed dies with it |
+| `TestHarnessRestartLeavesTheOwedVotesToTheNextGateway` | a restart must sever the old process's sessions, as an exit does, without waiting for the votes the old process owed | the open session is severed, and the refusal vote the old gateway owed is posted by the restarted one |
 | `TestHarnessOperatorStepsActOnTheRunningGateway` | operator steps must reach the running gateway, not a copy | wallet funding, the operator's create, deactivate and settle, and a contradicted missing report each take effect |
 
 ### Assertions — `assertions_test.go`
@@ -246,6 +246,7 @@ Checked after every step by `invariants_test.go`. A test that legitimately break
 | `TestNoSurplusRetireBeforeTheDemandWindowFills` | after a restart demand is unknown; surplus must wait for the window | nothing retires before the window fills, and surplus retires after |
 | `TestAColdStartWithoutAnEpochCreatesNothing` | without an epoch no deadline or create decision is sound | with no epoch index, and with epoch 8 named but no block height while the escrow of chain epoch 7 would sit inside its margin, nothing is parked, settled, narrated or created and the escrow keeps serving |
 | `TestARestartKeepsTheLedgersTokenCounts` | the nonce ledger's token counts are history the tracker reads; a restart must neither lose nor repeat them | with finishes no sweep read when the restart begins, the ledger the shutdown saved counts them, and the restarted ledger holds the same input tokens, output tokens, counted nonces and estimated error after its first sweep and thirty seconds later |
+| `TestARefusalVoteOwedAtARestartIsPostedByTheNextGateway` | a refusal vote still owed at a restart is kept in the store with its prompt and replayed by the next gateway (operations.md, "Boot", step 7) | the owed nonces leave Pending with one miss each on the refusing slot, and settlement pays that slot none of their reserve |
 
 ### Seeds — `seeds_test.go`
 
