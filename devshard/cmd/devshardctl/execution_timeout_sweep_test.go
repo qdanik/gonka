@@ -252,7 +252,7 @@ func TestSweepExecutionTimeoutsRetriesAPendingRefusalTheGroupCouldNotJudge(t *te
 func pendingRefusalStartedAt(t *testing.T, env *testProxyEnv, startedAt time.Time) (uint64, *host.InferencePayload) {
 	t.Helper()
 	nonce := pendingInferenceStartedAt(t, env, startedAt)
-	return nonce, timeoutclaim.Payload(env.sm.GetInference, nonce, defaultParams().Prompt)
+	return nonce, timeoutclaim.Payload(env.sm.GetInference, nonce, defaultParams().Prompt, defaultParams().StartedAt)
 }
 
 // Test flow:

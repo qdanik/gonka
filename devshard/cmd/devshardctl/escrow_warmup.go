@@ -74,8 +74,9 @@ type sessionProbeSender struct {
 }
 
 type unservedProbe struct {
-	prompt []byte
-	sentAt time.Time
+	prompt    []byte
+	startedAt int64
+	sentAt    time.Time
 }
 
 func (s *sessionProbeSender) sendProbe(ctx context.Context, params user.InferenceParams, nonceCommitted func()) (uint64, int, error) {
@@ -96,7 +97,7 @@ func (s *sessionProbeSender) sendProbe(ctx context.Context, params user.Inferenc
 		if s.unserved == nil {
 			s.unserved = make(map[uint64]unservedProbe)
 		}
-		s.unserved[nonce] = unservedProbe{prompt: params.Prompt, sentAt: sentAt}
+		s.unserved[nonce] = unservedProbe{prompt: params.Prompt, startedAt: params.StartedAt, sentAt: sentAt}
 		s.mu.Unlock()
 	}
 	return nonce, hostIdx, sendErr
@@ -118,7 +119,7 @@ func (s *sessionProbeSender) resolveUnserved(ctx context.Context, nonce uint64) 
 	}
 	resolveCtx, cancelResolve := context.WithTimeout(ctx, warmupResolveTimeout)
 	defer cancelResolve()
-	_, err := s.session.HandleTimeout(resolveCtx, nonce, probe.sentAt, timeoutVotePayload(s.session, nonce, probe.prompt))
+	_, err := s.session.HandleTimeout(resolveCtx, nonce, probe.sentAt, timeoutVotePayload(s.session, nonce, probe.prompt, probe.startedAt))
 	return err
 }
 

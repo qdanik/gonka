@@ -2142,8 +2142,8 @@ func errorMissArtifacts(inf *inflight, session *user.Session) (finishTx, respons
 	return finishTx, responsePayload
 }
 
-func timeoutVotePayload(session *user.Session, nonce uint64, prompt []byte) *host.InferencePayload {
-	return timeoutclaim.Payload(session.StateMachine().GetInference, nonce, prompt)
+func timeoutVotePayload(session *user.Session, nonce uint64, prompt []byte, startedAt int64) *host.InferencePayload {
+	return timeoutclaim.Payload(session.StateMachine().GetInference, nonce, prompt, startedAt)
 }
 
 func (e *Redundancy) runHandleTimeout(ctx context.Context, inf *inflight, params user.InferenceParams, errorMiss bool) (user.TimeoutResult, error) {
@@ -2151,13 +2151,13 @@ func (e *Redundancy) runHandleTimeout(ctx context.Context, inf *inflight, params
 	if errorMiss {
 		finishTx, responsePayload = errorMissArtifacts(inf, e.session)
 	}
-	return timeoutclaim.Resolve(ctx, e.session, inf.nonce, inf.sendTime, timeoutVotePayload(e.session, inf.nonce, params.Prompt), finishTx, responsePayload)
+	return timeoutclaim.Resolve(ctx, e.session, inf.nonce, inf.sendTime, timeoutVotePayload(e.session, inf.nonce, params.Prompt, params.StartedAt), finishTx, responsePayload)
 }
 
 // runVoteTimeout votes an already-due protocol timeout without sleeping. When
 // needsWait is true the caller must wait off the drain barrier and retry.
 func (e *Redundancy) runVoteTimeout(ctx context.Context, inf *inflight, params user.InferenceParams, reason types.TimeoutReason) (result user.TimeoutResult, needsWait bool, err error) {
-	return e.session.VoteTimeout(ctx, inf.nonce, inf.sendTime, timeoutVotePayload(e.session, inf.nonce, params.Prompt), reason)
+	return e.session.VoteTimeout(ctx, inf.nonce, inf.sendTime, timeoutVotePayload(e.session, inf.nonce, params.Prompt, params.StartedAt), reason)
 }
 
 func (rw *raceWriter) Flush() {
@@ -4143,7 +4143,7 @@ func (e *Redundancy) scheduleDeadlineHandleTimeout(
 	)
 	e.recordGatewayTimeoutAction(inf, params, kind, "scheduled", "deadline_not_due")
 	if reasonLabel == "refused" {
-		e.rememberRefusalPayload(inf.nonce, timeoutVotePayload(e.session, inf.nonce, params.Prompt))
+		e.rememberRefusalPayload(inf.nonce, timeoutVotePayload(e.session, inf.nonce, params.Prompt, params.StartedAt))
 	}
 
 	e.raceCleanupWG.Add(1)

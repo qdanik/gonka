@@ -101,7 +101,7 @@ func TestPayloadOfANonceWithALiveRecordEqualsItsDispatchedPayload(t *testing.T) 
 				t.Fatalf("PrepareInference = %v, want nil", err)
 			}
 
-			payload := Payload(machine.GetInference, prepared.Nonce(), params.Prompt)
+			payload := Payload(machine.GetInference, prepared.Nonce(), params.Prompt, params.StartedAt)
 
 			if want := prepared.Payload(); !reflect.DeepEqual(payload, want) {
 				t.Errorf("Payload = %+v, want the dispatched payload %+v", payload, want)
@@ -134,7 +134,7 @@ func TestPayloadOfANonceWithoutALiveRecordIsNone(t *testing.T) {
 
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
-			if payload := Payload(machine.GetInference, testCase.nonce, params.Prompt); payload != nil {
+			if payload := Payload(machine.GetInference, testCase.nonce, params.Prompt, params.StartedAt); payload != nil {
 				t.Errorf("Payload = %+v, want nil", payload)
 			}
 		})

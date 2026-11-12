@@ -18,7 +18,7 @@ func voteThroughTheRace(t *testing.T, env *testProxyEnv, nonce uint64, params us
 
 func voteThroughTheWarmup(t *testing.T, env *testProxyEnv, nonce uint64, params user.InferenceParams, sentAt time.Time) {
 	t.Helper()
-	sender := &sessionProbeSender{session: env.session, unserved: map[uint64]unservedProbe{nonce: {prompt: params.Prompt, sentAt: sentAt}}}
+	sender := &sessionProbeSender{session: env.session, unserved: map[uint64]unservedProbe{nonce: {prompt: params.Prompt, startedAt: params.StartedAt, sentAt: sentAt}}}
 	_ = sender.resolveUnserved(t.Context(), nonce)
 }
 
