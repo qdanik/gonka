@@ -14,6 +14,7 @@ type timeoutHandler interface {
 	timeoutclaim.Handler
 	timeoutclaim.FinishSource
 	TimeoutDeadline(nonce uint64, sendTime time.Time) (string, time.Time)
+	IsNonceCanonicalFinished(nonce uint64) bool
 }
 
 // SessionTimeouts posts the chain vote that settles one escrow's unfinished nonces.
@@ -32,8 +33,11 @@ func (s *SessionTimeouts) VoteDeadline(nonce uint64, startedAt time.Time) time.T
 	return deadline
 }
 
-// SettleTimeout reads the handler's own record of whether the vote landed: the error alone cannot tell. See README, "Timeout votes".
+// SettleTimeout reads the handler's own record of whether the vote landed: the error alone cannot tell. A vote whose nonce had its Finish applied while it waited is not sent. See README, "Timeout votes".
 func (s *SessionTimeouts) SettleTimeout(ctx context.Context, step TimeoutStep) (TimeoutVote, error) {
+	if step.Kind == SettleByVote && s.handler.IsNonceCanonicalFinished(step.Nonce) {
+		return TimeoutVote{Completeness: step.Proof.completeness()}, user.ErrNonceFinishedWhileWaiting
+	}
 	result, err := s.settle(ctx, step)
 	vote := TimeoutVote{
 		Kind:          TimeoutKind(result.Reason),
