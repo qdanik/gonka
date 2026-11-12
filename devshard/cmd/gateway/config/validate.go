@@ -32,7 +32,8 @@ const (
 	maxAffinityTTLMS      = 86_400_000
 	maxAffinityEntries    = 10_000_000
 	maxAffinityPinAgeMS   = 604_800_000
-	maxAffinityShareCap   = 1_000
+	minAffinityShareCap   = 100
+	maxAffinityShareCap   = 10_000
 	maxAffinityMaxBurns   = 1_000
 
 	maxSnapshotAgeSeconds          = 86_400
@@ -370,8 +371,8 @@ func (c *Config) validateScheduler(complain func(format string, args ...any)) {
 	if c.Scheduler.AffinityMaxPinAgeMS < 1 || c.Scheduler.AffinityMaxPinAgeMS > maxAffinityPinAgeMS {
 		complain("scheduler_affinity_max_pin_age_ms: %d must be in [1, %d]", c.Scheduler.AffinityMaxPinAgeMS, maxAffinityPinAgeMS)
 	}
-	if c.Scheduler.AffinityShareCap < 1 || c.Scheduler.AffinityShareCap > maxAffinityShareCap {
-		complain("scheduler_affinity_share_cap: %d must be in [1, %d]", c.Scheduler.AffinityShareCap, maxAffinityShareCap)
+	if c.Scheduler.AffinityShareCap < minAffinityShareCap || c.Scheduler.AffinityShareCap > maxAffinityShareCap {
+		complain("scheduler_affinity_share_cap: %d must be in [%d, %d]", c.Scheduler.AffinityShareCap, minAffinityShareCap, maxAffinityShareCap)
 	}
 	if c.Scheduler.AffinityMaxBurns < 0 || c.Scheduler.AffinityMaxBurns > maxAffinityMaxBurns {
 		complain("scheduler_affinity_max_burns: %d must be in [0, %d]", c.Scheduler.AffinityMaxBurns, maxAffinityMaxBurns)

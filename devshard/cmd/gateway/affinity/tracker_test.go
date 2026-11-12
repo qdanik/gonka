@@ -203,13 +203,13 @@ func TestAWinAfterTheMaximumAgeRepins(t *testing.T) {
 }
 
 // Test flow:
-//  1. Under a cap of two and four equal participants, record eight keys for host-0, the floor every participant may always hold.
+//  1. Under a cap of 200 percent and four equal participants, record eight keys for host-0, the floor every participant may always hold.
 //  2. Record a ninth and assert its lookup answers `StatusShareCapped`, and the next lookup `StatusNew`.
 //  3. Assert host-0 still holds eight pins and an existing key it wins again stays a hit.
 //  4. Give each of the other three participants eight keys, so host-0's share of live entries has fallen below the cap.
 //  5. Record the ninth key for host-0 again and assert it is a hit.
 func TestAParticipantCannotHoldMoreThanItsShareOfTheEntries(t *testing.T) {
-	limits := &Limits{TTL: time.Hour, MaxEntries: 1000, ShareCap: 2}
+	limits := &Limits{TTL: time.Hour, MaxEntries: 1000, ShareCap: 200}
 	tracker, _ := newTestTracker(limits, equalWeights("host-0", "host-1", "host-2", "host-3"))
 	recordMany(tracker, "k", 8, "host-0")
 
@@ -232,13 +232,13 @@ func TestAParticipantCannotHoldMoreThanItsShareOfTheEntries(t *testing.T) {
 }
 
 // Test flow:
-//  1. Under a cap of two, weigh a big participant nine slots and a small one a single slot, and record eight keys for the small one, its floor.
+//  1. Under a cap of 200 percent, weigh a big participant nine slots and a small one a single slot, and record eight keys for the small one, its floor.
 //  2. Record a ninth for the small one and assert `StatusShareCapped`.
 //  3. Give the big participant 40 keys, so the small one holds 8 of 48 against a fair share of a tenth.
 //  4. Record the ninth again and assert it is a hit, and that the big participant's 41st is a hit too.
 func TestTheShareFollowsTheSlotsAParticipantHolds(t *testing.T) {
 	weights := func() map[string]int { return map[string]int{"big": 9, "small": 1} }
-	limits := &Limits{TTL: time.Hour, MaxEntries: 1000, ShareCap: 2}
+	limits := &Limits{TTL: time.Hour, MaxEntries: 1000, ShareCap: 200}
 	tracker, _ := newTestTracker(limits, weights)
 	recordMany(tracker, "small", 8, "small")
 
@@ -256,12 +256,43 @@ func TestTheShareFollowsTheSlotsAParticipantHolds(t *testing.T) {
 }
 
 // Test flow:
+//  1. Under a cap of 125 percent, weigh two participants three slots each, so each one's fair share is half the pins.
+//  2. Give host-b eight keys and host-a eight keys, then record five more for host-a and assert each is a hit, since 13 of 21 is under 62.5 percent.
+//  3. Record a 14th for host-a and assert `StatusShareCapped`, since 14 of 22 is over it.
+//  4. Assert host-b can still pin, and that after the cap is raised to 200 percent host-a's next pin is a hit.
+func TestACapOverFairShareBindsBetweenTwoParticipants(t *testing.T) {
+	weights := func() map[string]int { return map[string]int{"host-a": 3, "host-b": 3} }
+	limits := &Limits{TTL: time.Hour, MaxEntries: 1000, ShareCap: 125}
+	tracker, _ := newTestTracker(limits, weights)
+	recordMany(tracker, "b", 8, "host-b")
+	recordMany(tracker, "a", 8, "host-a")
+
+	for _, key := range []Key{"a-8", "a-9", "a-10", "a-11", "a-12"} {
+		tracker.Record(key, "host-a")
+		_, status := tracker.Lookup(key)
+		require.Equal(t, StatusHit, status)
+	}
+	tracker.Record("a-13", "host-a")
+	_, status := tracker.Lookup("a-13")
+	require.Equal(t, StatusShareCapped, status)
+
+	tracker.Record("b-8", "host-b")
+	_, status = tracker.Lookup("b-8")
+	require.Equal(t, StatusHit, status)
+
+	limits.ShareCap = 200
+	tracker.Record("a-14", "host-a")
+	_, status = tracker.Lookup("a-14")
+	require.Equal(t, StatusHit, status)
+}
+
+// Test flow:
 //  1. Build a tracker with no weights and record 50 keys for one participant.
 //  2. Assert every key is a hit, since the share cap needs the fleet's weights.
 //  3. Build one whose weights answer nothing and assert the same.
 func TestWithoutWeightsNoShareCapApplies(t *testing.T) {
 	for _, weights := range []Weights{nil, func() map[string]int { return nil }} {
-		limits := &Limits{TTL: time.Hour, MaxEntries: 1000, ShareCap: 1}
+		limits := &Limits{TTL: time.Hour, MaxEntries: 1000, ShareCap: 100}
 		tracker, _ := newTestTracker(limits, weights)
 
 		recordMany(tracker, "k", 50, "host-0")
@@ -274,12 +305,12 @@ func TestWithoutWeightsNoShareCapApplies(t *testing.T) {
 }
 
 // Test flow:
-//  1. Fill host-0 with eight pins under a cap of two and four equal participants.
+//  1. Fill host-0 with eight pins under a cap of 200 percent and four equal participants.
 //  2. Move one of its keys to host-1, and record a new key for host-0.
 //  3. Assert the new key is a hit, since the moved key freed one of host-0's pins.
 //  4. Remove host-0's entries by the TTL and assert it can hold eight again.
 func TestAPinThatMovesOrExpiresFreesTheShare(t *testing.T) {
-	limits := &Limits{TTL: time.Minute, MaxEntries: 1000, ShareCap: 2}
+	limits := &Limits{TTL: time.Minute, MaxEntries: 1000, ShareCap: 200}
 	tracker, clock := newTestTracker(limits, equalWeights("host-0", "host-1", "host-2", "host-3"))
 	recordMany(tracker, "k", 8, "host-0")
 	tracker.Record("k-0", "host-1")

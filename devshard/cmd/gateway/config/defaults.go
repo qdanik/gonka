@@ -136,8 +136,8 @@ func Defaults() Config {
 			AffinityTTLMS:       600_000,
 			AffinityMaxEntries:  100_000,
 			AffinityMaxPinAgeMS: 3_600_000,
-			AffinityShareCap:    2,
-			AffinityMaxBurns:    1,
+			AffinityShareCap:    125,
+			AffinityMaxBurns:    2,
 		},
 		TimeoutSweep: TimeoutSweep{
 			BudgetPerTick: 8,

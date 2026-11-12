@@ -106,7 +106,7 @@ func (t *Tracker) pin(key Key, previous *list.Element, participant string, now t
 	t.entries[key] = t.order.PushFront(&entry{key: key, participant: participant, pinnedAt: now, recordedAt: now, capped: capped})
 }
 
-func (t *Tracker) pastShare(participant string, shareCap int) bool {
+func (t *Tracker) pastShare(participant string, sharePercent int) bool {
 	if t.weights == nil || t.held[participant]+1 <= shareFloor {
 		return false
 	}
@@ -118,7 +118,7 @@ func (t *Tracker) pastShare(participant string, shareCap int) bool {
 	if total == 0 {
 		return false
 	}
-	return (t.held[participant]+1)*total > shareCap*(t.pinned+1)*slots[participant]
+	return (t.held[participant]+1)*total*100 > sharePercent*(t.pinned+1)*slots[participant]
 }
 
 func (t *Tracker) remove(element *list.Element) {

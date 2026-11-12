@@ -25,7 +25,7 @@ const (
 	simBurnReserveToken = 60.0
 	simBaselineLabel    = "today, no affinity"
 	simUnboundedPinAge  = 1000 * time.Hour
-	simUnboundedShare   = 1_000
+	simUnboundedShare   = 10_000
 )
 
 type simEvent struct {
