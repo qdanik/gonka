@@ -49,11 +49,24 @@ func setupSweepSession(t *testing.T, accept bool) (*Session, []*signing.Secp256k
 	return session, hosts
 }
 
+const sweepStartHeight = 100
+
+func startedNonceAged(t *testing.T, session *Session, hosts []*signing.Secp256k1Signer, age time.Duration) uint64 {
+	t.Helper()
+	slots := uint64(len(hosts))
+	raiseRawFloor(t, session.sm, hosts[0], slots, sweepStartHeight)
+	nonce := startedNonce(t, session, hosts, 0)
+	if age > 0 {
+		raiseRawFloor(t, session.sm, hosts[0], slots, sweepStartHeight+uint64(age/(testutil.HeightClockBlockMs*time.Millisecond)))
+	}
+	return nonce
+}
+
 // The vote the race never posted is the whole point: without it the record settles at full reserve in
 // the executor's favour, and the host keeps none of the miss it earned.
 func TestSweepVotesAStartedNonceNoRaceIsLeftToRetry(t *testing.T) {
 	session, hosts := setupSweepSession(t, true)
-	nonce := startedNonce(t, session, hosts, time.Now().Add(-2*time.Hour).Unix())
+	nonce := startedNonceAged(t, session, hosts, 2*time.Hour)
 
 	report := session.SweepExecutionTimeouts(context.Background(), 0, 4)
 
@@ -66,7 +79,7 @@ func TestSweepVotesAStartedNonceNoRaceIsLeftToRetry(t *testing.T) {
 // A round that collects nothing must leave the nonce where the next sweep can find it again.
 func TestSweepKeepsANonceItsVerifiersRefusedToDecide(t *testing.T) {
 	session, hosts := setupSweepSession(t, false)
-	nonce := startedNonce(t, session, hosts, time.Now().Add(-2*time.Hour).Unix())
+	nonce := startedNonceAged(t, session, hosts, 2*time.Hour)
 
 	first := session.SweepExecutionTimeouts(context.Background(), 0, 4)
 	second := session.SweepExecutionTimeouts(context.Background(), 0, 4)
@@ -81,7 +94,7 @@ func TestSweepKeepsANonceItsVerifiersRefusedToDecide(t *testing.T) {
 // A record inside its deadline belongs to the race that owns it, and a second vote is pure waste.
 func TestSweepLeavesANonceInsideItsDeadlineAlone(t *testing.T) {
 	session, hosts := setupSweepSession(t, true)
-	startedNonce(t, session, hosts, time.Now().Unix())
+	startedNonceAged(t, session, hosts, 0)
 
 	report := session.SweepExecutionTimeouts(context.Background(), 0, 4)
 
@@ -92,7 +105,7 @@ func TestSweepLeavesANonceInsideItsDeadlineAlone(t *testing.T) {
 func TestSweepHonoursTheGraceBeforeClaimingANonce(t *testing.T) {
 	session, hosts := setupSweepSession(t, true)
 	executionTimeout := time.Duration(session.sm.Config().ExecutionTimeout) * time.Second
-	startedNonce(t, session, hosts, time.Now().Add(-executionTimeout-time.Minute).Unix())
+	startedNonceAged(t, session, hosts, executionTimeout+time.Minute)
 
 	report := session.SweepExecutionTimeouts(context.Background(), time.Hour, 4)
 
@@ -103,7 +116,7 @@ func TestSweepHonoursTheGraceBeforeClaimingANonce(t *testing.T) {
 func TestSweepClaimsANonceFromBeforeTheRestartWithoutWaitingOutTheGrace(t *testing.T) {
 	session, hosts := setupSweepSession(t, true)
 	executionTimeout := time.Duration(session.sm.Config().ExecutionTimeout) * time.Second
-	nonce := startedNonce(t, session, hosts, time.Now().Add(-executionTimeout-time.Minute).Unix())
+	nonce := startedNonceAged(t, session, hosts, executionTimeout+time.Minute)
 	session.adoptRecoveredNonces()
 
 	report := session.SweepExecutionTimeouts(context.Background(), time.Hour, 4)
@@ -117,7 +130,7 @@ func TestSweepClaimsANonceFromBeforeTheRestartWithoutWaitingOutTheGrace(t *testi
 // A cancelled context stops the sweep where it stands: shutdown must not wait out a vote round.
 func TestSweepStopsOnACancelledContext(t *testing.T) {
 	session, hosts := setupSweepSession(t, true)
-	startedNonce(t, session, hosts, time.Now().Add(-2*time.Hour).Unix())
+	startedNonceAged(t, session, hosts, 2*time.Hour)
 	cancelled, cancel := context.WithCancel(context.Background())
 	cancel()
 
@@ -129,7 +142,7 @@ func TestSweepStopsOnACancelledContext(t *testing.T) {
 // A zero budget is the off switch, and it must cost nothing at all.
 func TestSweepWithoutABudgetDoesNothing(t *testing.T) {
 	session, hosts := setupSweepSession(t, true)
-	startedNonce(t, session, hosts, time.Now().Add(-2*time.Hour).Unix())
+	startedNonceAged(t, session, hosts, 2*time.Hour)
 
 	require.Equal(t, SweepReport{}, session.SweepExecutionTimeouts(context.Background(), 0, 0))
 }
