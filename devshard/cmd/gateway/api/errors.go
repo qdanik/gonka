@@ -29,16 +29,14 @@ import (
 	"devshard/types"
 )
 
-// statusClientClosedRequest is the non-standard status for a request whose client left before the gateway answered.
-const statusClientClosedRequest = 499
-
-// The Retry-After a shard without room answers with, and how a host's text is cut down for a client. See README.md, "Errors and statuses".
+// The Retry-After a shard without room answers with, the non-standard status for a request whose client left before the gateway answered, and how a host's text is cut down for a client. See README.md, "Errors and statuses".
 const (
-	noHostRetryAfter       = time.Second
-	maxHostExcerptBytes    = 512
-	noHostExcerpt          = ""
-	invalidUTF8Replacement = ""
-	unprintableReplacement = ' '
+	statusClientClosedRequest = 499
+	noHostRetryAfter          = time.Second
+	maxHostExcerptBytes       = 512
+	noHostExcerpt             = ""
+	invalidUTF8Replacement    = ""
+	unprintableReplacement    = ' '
 )
 
 var (
@@ -53,6 +51,8 @@ var (
 	ErrDevshardNotActivatable = errors.New("devshard cannot be activated")
 
 	ErrInvalidEscrowID = errors.New("escrow id is not a chain escrow id")
+
+	errGatewayStopping = errors.New("gateway is stopping")
 )
 
 type hostBodyRefusedError struct{ refusal string }

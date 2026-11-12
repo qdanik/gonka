@@ -262,6 +262,10 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request, escrowPin string) 
 
 	counted := s.countPrompt(normalized.Model, prompt)
 	if err := s.limiter.AcquireForModel(r.Context(), normalized.Model, int64(counted.tokens), s.capacity.ForModel(normalized.Model)); err != nil {
+		if errors.Is(err, context.Canceled) && errors.Is(context.Cause(r.Context()), errGatewayStopping) {
+			s.writeErrorFor(w, err)
+			return
+		}
 		if label, refused := limiterRefusal(err); refused && s.rejections != nil {
 			s.rejections.Rejected(normalized.Model, label)
 			s.events.RequestThrottled(journal.RequestLine{

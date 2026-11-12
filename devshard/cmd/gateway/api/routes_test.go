@@ -650,6 +650,26 @@ func TestAZeroLiveWeightRefusalIsCountedAndAnswered503(t *testing.T) {
 }
 
 // Test flow:
+//  1. Make the limiter refuse with `context.Canceled`, and cancel the request context with the gateway-stopping cause the server's base context carries.
+//  2. POST a chat completion with that context.
+//  3. Assert the response is not 499 and no `client_gone` rejection was recorded, because the gateway ended the wait, not the client.
+func TestARequestCancelledByTheGatewayStoppingIsNotCountedAsAClientGone(t *testing.T) {
+	live := newHarness(t)
+	live.limiter.err = context.Canceled
+	stopping, cancel := context.WithCancelCause(context.Background())
+	cancel(errGatewayStopping)
+
+	recorder := live.requestWithContext(t, stopping, http.MethodPost, "/v1/chat/completions", chatBody, nil)
+
+	if recorder.Code == statusClientClosedRequest {
+		t.Fatalf("status = %d, want anything but %d for a wait the gateway ended: %s", recorder.Code, statusClientClosedRequest, recorder.Body.String())
+	}
+	if reasons := live.rejections.reasons(); len(reasons) != 0 {
+		t.Fatalf("recorded %v, want no rejection for a wait the gateway ended", reasons)
+	}
+}
+
+// Test flow:
 //  1. Make the limiter refuse with `context.Canceled`, as it does for a request whose context is already cancelled.
 //  2. POST a chat completion with an already-cancelled context.
 //  3. Assert the response is 499, and exactly one rejection was recorded with reason `client_gone` and the model that was turned away.
@@ -661,11 +681,11 @@ func TestARequestCancelledAtTheLimiterIsCountedAndAnswered499(t *testing.T) {
 
 	recorder := live.requestWithContext(t, cancelled, http.MethodPost, "/v1/chat/completions", chatBody, nil)
 
-	if recorder.Code != 499 {
-		t.Fatalf("status = %d, want 499: %s", recorder.Code, recorder.Body.String())
+	if recorder.Code != statusClientClosedRequest {
+		t.Fatalf("status = %d, want %d: %s", recorder.Code, statusClientClosedRequest, recorder.Body.String())
 	}
 	reasons := live.rejections.reasons()
-	if len(reasons) != 1 || reasons[0] != "client_gone" {
+	if len(reasons) != 1 || reasons[0] != limits.RejectionClientGone {
 		t.Fatalf("recorded %v, want the client_gone reason", reasons)
 	}
 	if live.rejections.model != "qwen" {
