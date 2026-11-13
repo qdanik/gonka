@@ -36,7 +36,7 @@ func equalWeights(participants ...string) Weights {
 
 func recordMany(tracker *Tracker, prefix string, count int, participant string) {
 	for index := range count {
-		tracker.Record(Key(fmt.Sprintf("%s-%d", prefix, index)), participant)
+		tracker.Record(Key(fmt.Sprintf("%s-%d", prefix, index)), participant, 0)
 	}
 }
 
@@ -70,24 +70,24 @@ func TestAnEntryIsHeldForItsTTL(t *testing.T) {
 	limits := &Limits{TTL: time.Minute, MaxEntries: 10}
 	tracker, clock := newTestTracker(limits, nil)
 
-	_, status := tracker.Lookup("key")
+	_, status := tracker.Lookup("key", 0)
 	require.Equal(t, StatusNew, status)
 
-	tracker.Record("key", "host-a")
-	participant, status := tracker.Lookup("key")
+	tracker.Record("key", "host-a", 0)
+	participant, status := tracker.Lookup("key", 0)
 	require.Equal(t, StatusHit, status)
 	require.Equal(t, "host-a", participant)
 
 	clock.advance(time.Minute)
-	_, status = tracker.Lookup("key")
+	_, status = tracker.Lookup("key", 0)
 	require.Equal(t, StatusHit, status)
 
 	clock.advance(time.Nanosecond)
-	participant, status = tracker.Lookup("key")
+	participant, status = tracker.Lookup("key", 0)
 	require.Equal(t, StatusExpired, status)
 	require.Equal(t, NoParticipant, participant)
 	require.Zero(t, tracker.Len())
-	_, status = tracker.Lookup("key")
+	_, status = tracker.Lookup("key", 0)
 	require.Equal(t, StatusNew, status)
 }
 
@@ -100,25 +100,25 @@ func TestTheOldestEntriesGoPastTheCap(t *testing.T) {
 	limits := &Limits{TTL: time.Hour, MaxEntries: 3}
 	tracker, clock := newTestTracker(limits, nil)
 	for _, key := range []Key{"a", "b", "c"} {
-		tracker.Record(key, "host")
+		tracker.Record(key, "host", 0)
 		clock.advance(time.Second)
 	}
-	tracker.Record("a", "host-2")
+	tracker.Record("a", "host-2", 0)
 	clock.advance(time.Second)
-	tracker.Record("d", "host")
+	tracker.Record("d", "host", 0)
 
-	_, evicted := tracker.Lookup("b")
+	_, evicted := tracker.Lookup("b", 0)
 	require.Equal(t, StatusNew, evicted)
-	refreshed, status := tracker.Lookup("a")
+	refreshed, status := tracker.Lookup("a", 0)
 	require.Equal(t, StatusHit, status)
 	require.Equal(t, "host-2", refreshed)
 	require.Equal(t, 3, tracker.Len())
 
 	limits.MaxEntries = 1
 	clock.advance(time.Second)
-	tracker.Record("e", "host")
+	tracker.Record("e", "host", 0)
 	require.Equal(t, 1, tracker.Len())
-	_, status = tracker.Lookup("e")
+	_, status = tracker.Lookup("e", 0)
 	require.Equal(t, StatusHit, status)
 }
 
@@ -128,11 +128,11 @@ func TestTheOldestEntriesGoPastTheCap(t *testing.T) {
 func TestRecordingShedsWhatHasExpired(t *testing.T) {
 	limits := &Limits{TTL: time.Minute, MaxEntries: 10}
 	tracker, clock := newTestTracker(limits, nil)
-	tracker.Record("a", "host")
-	tracker.Record("b", "host")
+	tracker.Record("a", "host", 0)
+	tracker.Record("b", "host", 0)
 	clock.advance(2 * time.Minute)
 
-	tracker.Record("c", "host")
+	tracker.Record("c", "host", 0)
 
 	require.Equal(t, 1, tracker.Len())
 }
@@ -144,21 +144,21 @@ func TestRecordingShedsWhatHasExpired(t *testing.T) {
 func TestAPinEndsAtItsMaximumAgeWhateverTheActivity(t *testing.T) {
 	limits := &Limits{TTL: 2 * time.Hour, MaxEntries: 10, MaxPinAge: time.Hour}
 	tracker, clock := newTestTracker(limits, nil)
-	tracker.Record("key", "host-a")
+	tracker.Record("key", "host-a", 0)
 	clock.advance(30 * time.Minute)
-	tracker.Record("key", "host-a")
+	tracker.Record("key", "host-a", 0)
 	clock.advance(31 * time.Minute)
 
-	participant, status := tracker.Lookup("key")
+	participant, status := tracker.Lookup("key", 0)
 	require.Equal(t, StatusPinAged, status)
 	require.Equal(t, NoParticipant, participant)
 	require.Zero(t, tracker.Len())
-	_, status = tracker.Lookup("key")
+	_, status = tracker.Lookup("key", 0)
 	require.Equal(t, StatusNew, status)
 
-	tracker.Record("key", "host-a")
+	tracker.Record("key", "host-a", 0)
 	clock.advance(45 * time.Minute)
-	participant, status = tracker.Lookup("key")
+	participant, status = tracker.Lookup("key", 0)
 	require.Equal(t, StatusHit, status)
 	require.Equal(t, "host-a", participant)
 }
@@ -171,17 +171,17 @@ func TestAPinEndsAtItsMaximumAgeWhateverTheActivity(t *testing.T) {
 func TestAMovedConversationStartsANewPin(t *testing.T) {
 	limits := &Limits{TTL: 2 * time.Hour, MaxEntries: 10, MaxPinAge: time.Hour}
 	tracker, clock := newTestTracker(limits, nil)
-	tracker.Record("key", "host-a")
+	tracker.Record("key", "host-a", 0)
 	clock.advance(50 * time.Minute)
-	tracker.Record("key", "host-b")
+	tracker.Record("key", "host-b", 0)
 	clock.advance(50 * time.Minute)
 
-	participant, status := tracker.Lookup("key")
+	participant, status := tracker.Lookup("key", 0)
 	require.Equal(t, StatusHit, status)
 	require.Equal(t, "host-b", participant)
 
 	clock.advance(11 * time.Minute)
-	_, status = tracker.Lookup("key")
+	_, status = tracker.Lookup("key", 0)
 	require.Equal(t, StatusPinAged, status)
 }
 
@@ -192,12 +192,12 @@ func TestAMovedConversationStartsANewPin(t *testing.T) {
 func TestAWinAfterTheMaximumAgeRepins(t *testing.T) {
 	limits := &Limits{TTL: 2 * time.Hour, MaxEntries: 10, MaxPinAge: time.Hour}
 	tracker, clock := newTestTracker(limits, nil)
-	tracker.Record("key", "host-a")
+	tracker.Record("key", "host-a", 0)
 	clock.advance(61 * time.Minute)
-	tracker.Record("key", "host-a")
+	tracker.Record("key", "host-a", 0)
 	clock.advance(45 * time.Minute)
 
-	_, status := tracker.Lookup("key")
+	_, status := tracker.Lookup("key", 0)
 
 	require.Equal(t, StatusHit, status)
 }
@@ -213,21 +213,21 @@ func TestAParticipantCannotHoldMoreThanItsShareOfTheEntries(t *testing.T) {
 	tracker, _ := newTestTracker(limits, equalWeights("host-0", "host-1", "host-2", "host-3"))
 	recordMany(tracker, "k", 8, "host-0")
 
-	tracker.Record("ninth", "host-0")
-	_, status := tracker.Lookup("ninth")
+	tracker.Record("ninth", "host-0", 0)
+	_, status := tracker.Lookup("ninth", 0)
 	require.Equal(t, StatusShareCapped, status)
-	_, status = tracker.Lookup("ninth")
+	_, status = tracker.Lookup("ninth", 0)
 	require.Equal(t, StatusNew, status)
 	require.Equal(t, 8, tracker.Len())
-	tracker.Record("k-0", "host-0")
-	_, status = tracker.Lookup("k-0")
+	tracker.Record("k-0", "host-0", 0)
+	_, status = tracker.Lookup("k-0", 0)
 	require.Equal(t, StatusHit, status)
 
 	for _, other := range []string{"host-1", "host-2", "host-3"} {
 		recordMany(tracker, other, 8, other)
 	}
-	tracker.Record("ninth", "host-0")
-	_, status = tracker.Lookup("ninth")
+	tracker.Record("ninth", "host-0", 0)
+	_, status = tracker.Lookup("ninth", 0)
 	require.Equal(t, StatusHit, status)
 }
 
@@ -242,16 +242,16 @@ func TestTheShareFollowsTheSlotsAParticipantHolds(t *testing.T) {
 	tracker, _ := newTestTracker(limits, weights)
 	recordMany(tracker, "small", 8, "small")
 
-	tracker.Record("ninth", "small")
-	_, status := tracker.Lookup("ninth")
+	tracker.Record("ninth", "small", 0)
+	_, status := tracker.Lookup("ninth", 0)
 	require.Equal(t, StatusShareCapped, status)
 
 	recordMany(tracker, "big", 40, "big")
-	tracker.Record("ninth", "small")
-	_, status = tracker.Lookup("ninth")
+	tracker.Record("ninth", "small", 0)
+	_, status = tracker.Lookup("ninth", 0)
 	require.Equal(t, StatusHit, status)
-	tracker.Record("big-last", "big")
-	_, status = tracker.Lookup("big-last")
+	tracker.Record("big-last", "big", 0)
+	_, status = tracker.Lookup("big-last", 0)
 	require.Equal(t, StatusHit, status)
 }
 
@@ -268,21 +268,21 @@ func TestACapOverFairShareBindsBetweenTwoParticipants(t *testing.T) {
 	recordMany(tracker, "a", 8, "host-a")
 
 	for _, key := range []Key{"a-8", "a-9", "a-10", "a-11", "a-12"} {
-		tracker.Record(key, "host-a")
-		_, status := tracker.Lookup(key)
+		tracker.Record(key, "host-a", 0)
+		_, status := tracker.Lookup(key, 0)
 		require.Equal(t, StatusHit, status)
 	}
-	tracker.Record("a-13", "host-a")
-	_, status := tracker.Lookup("a-13")
+	tracker.Record("a-13", "host-a", 0)
+	_, status := tracker.Lookup("a-13", 0)
 	require.Equal(t, StatusShareCapped, status)
 
-	tracker.Record("b-8", "host-b")
-	_, status = tracker.Lookup("b-8")
+	tracker.Record("b-8", "host-b", 0)
+	_, status = tracker.Lookup("b-8", 0)
 	require.Equal(t, StatusHit, status)
 
 	limits.ShareCap = 200
-	tracker.Record("a-14", "host-a")
-	_, status = tracker.Lookup("a-14")
+	tracker.Record("a-14", "host-a", 0)
+	_, status = tracker.Lookup("a-14", 0)
 	require.Equal(t, StatusHit, status)
 }
 
@@ -298,7 +298,7 @@ func TestWithoutWeightsNoShareCapApplies(t *testing.T) {
 		recordMany(tracker, "k", 50, "host-0")
 
 		for index := range 50 {
-			_, status := tracker.Lookup(Key(fmt.Sprintf("k-%d", index)))
+			_, status := tracker.Lookup(Key(fmt.Sprintf("k-%d", index)), 0)
 			require.Equal(t, StatusHit, status)
 		}
 	}
@@ -313,17 +313,188 @@ func TestAPinThatMovesOrExpiresFreesTheShare(t *testing.T) {
 	limits := &Limits{TTL: time.Minute, MaxEntries: 1000, ShareCap: 200}
 	tracker, clock := newTestTracker(limits, equalWeights("host-0", "host-1", "host-2", "host-3"))
 	recordMany(tracker, "k", 8, "host-0")
-	tracker.Record("k-0", "host-1")
+	tracker.Record("k-0", "host-1", 0)
 
-	tracker.Record("fresh", "host-0")
-	_, status := tracker.Lookup("fresh")
+	tracker.Record("fresh", "host-0", 0)
+	_, status := tracker.Lookup("fresh", 0)
 	require.Equal(t, StatusHit, status)
 
 	clock.advance(2 * time.Minute)
-	tracker.Record("later", "host-1")
+	tracker.Record("later", "host-1", 0)
 	recordMany(tracker, "again", 8, "host-0")
 	for index := range 8 {
-		_, status = tracker.Lookup(Key(fmt.Sprintf("again-%d", index)))
+		_, status = tracker.Lookup(Key(fmt.Sprintf("again-%d", index)), 0)
 		require.Equal(t, StatusHit, status)
 	}
+}
+
+// Test flow:
+//  1. Record a key won with 8000 prompt tokens under a minimum of 4096.
+//  2. Look it up with 3000, 4095, 4096 and 20000 current tokens.
+//  3. Assert the expected prefix is the smaller of the two counts: below 4096 answers `StatusBelowMinCached` and no host, 4096 and above is a `StatusHit`.
+//  4. Assert the below-minimum lookups left the entry in place.
+//  5. Record a key with 4095 and one with 4096 tokens and assert that a 50000-token lookup is below the minimum for the first and a hit for the second at 4096.
+func TestAHitIsOnlyWorthAHostWhenTheSmallerPromptReachesTheMinimum(t *testing.T) {
+	tracker, _ := newTestTracker(&Limits{TTL: time.Minute, MaxEntries: 10, MinCachedTokens: 4096}, nil)
+	tracker.Record("key", "host-a", 8000)
+
+	for _, current := range []uint64{3000, 4095} {
+		participant, status := tracker.Lookup("key", current)
+		require.Equal(t, StatusBelowMinCached, status, "current %d", current)
+		require.Equal(t, NoParticipant, participant)
+		require.Equal(t, 1, tracker.Len())
+	}
+	for _, current := range []uint64{4096, 20000} {
+		participant, status := tracker.Lookup("key", current)
+		require.Equal(t, StatusHit, status, "current %d", current)
+		require.Equal(t, "host-a", participant)
+	}
+
+	tracker.Record("short", "host-a", 4095)
+	_, status := tracker.Lookup("short", 50000)
+	require.Equal(t, StatusBelowMinCached, status, "the last prompt bounds the expected prefix")
+	tracker.Record("exact", "host-a", 4096)
+	_, status = tracker.Lookup("exact", 4096)
+	require.Equal(t, StatusHit, status)
+}
+
+// Test flow:
+//  1. Record the same keys under a minimum of zero, with counts of zero and 10.
+//  2. Look them up with counts of zero and 10.
+//  3. Assert every lookup is a `StatusHit`, since 0 disables the minimum.
+func TestAZeroMinimumDisablesTheThreshold(t *testing.T) {
+	tracker, _ := newTestTracker(&Limits{TTL: time.Minute, MaxEntries: 10}, nil)
+	tracker.Record("empty", "host-a", 0)
+	tracker.Record("small", "host-a", 10)
+
+	for _, key := range []Key{"empty", "small"} {
+		for _, current := range []uint64{0, 10} {
+			_, status := tracker.Lookup(key, current)
+			require.Equal(t, StatusHit, status, "%s with %d", key, current)
+		}
+	}
+}
+
+// Test flow:
+//  1. Record a key on a host with 2000 tokens and assert a 6000-token lookup is below the minimum.
+//  2. Record the same host again with 6000 tokens, as a growing conversation does.
+//  3. Assert the next lookup is a `StatusHit`.
+func TestAGrowingConversationCrossesTheMinimumOnItsOwnHost(t *testing.T) {
+	tracker, _ := newTestTracker(&Limits{TTL: time.Minute, MaxEntries: 10, MinCachedTokens: 4096}, nil)
+	tracker.Record("key", "host-a", 2000)
+	_, status := tracker.Lookup("key", 6000)
+	require.Equal(t, StatusBelowMinCached, status)
+
+	tracker.Record("key", "host-a", 6000)
+
+	participant, status := tracker.Lookup("key", 7000)
+	require.Equal(t, StatusHit, status)
+	require.Equal(t, "host-a", participant)
+}
+
+// Test flow:
+//  1. Record a key on host-a with 20000 tokens, then record a 500-token turn that won on host-b.
+//  2. Assert the key still answers host-a for a long turn.
+//  3. Record a 30000-token win on host-b and assert the key moves to host-b.
+//  4. Let the pin outlive its TTL, record a short win on host-a, switch the minimum off and assert the short win is pinned to host-a, so an expired pin is not held by the long prompt it carried.
+//  5. With the minimum off, record a long win on host-a and a short one on host-b and assert the short one moves the pin.
+func TestAShortTurnDoesNotMoveAPinWorthRoutingTo(t *testing.T) {
+	limits := &Limits{TTL: time.Minute, MaxEntries: 10, MinCachedTokens: 4096}
+	tracker, clock := newTestTracker(limits, nil)
+	tracker.Record("key", "host-a", 20000)
+
+	tracker.Record("key", "host-b", 500)
+	participant, status := tracker.Lookup("key", 20000)
+	require.Equal(t, StatusHit, status)
+	require.Equal(t, "host-a", participant)
+
+	tracker.Record("key", "host-b", 30000)
+	participant, _ = tracker.Lookup("key", 30000)
+	require.Equal(t, "host-b", participant)
+
+	clock.advance(2 * time.Minute)
+	tracker.Record("key", "host-a", 500)
+	limits.MinCachedTokens = 0
+	participant, status = tracker.Lookup("key", 500)
+	require.Equal(t, StatusHit, status)
+	require.Equal(t, "host-a", participant)
+
+	tracker.Record("key", "host-a", 20000)
+	tracker.Record("key", "host-b", 100)
+	participant, _ = tracker.Lookup("key", 100)
+	require.Equal(t, "host-b", participant)
+}
+
+// Test flow:
+//  1. Record a key on host-a with 20000 tokens, then record a 500-token turn that also won on host-a.
+//  2. Assert a 21000-token lookup is a `StatusHit` on host-a, the long prefix still being held.
+//  3. Record a 30000-token turn on host-a and assert the count follows it upward.
+func TestAShortTurnOnThePinnedHostKeepsTheLongPrefix(t *testing.T) {
+	tracker, _ := newTestTracker(&Limits{TTL: time.Minute, MaxEntries: 10, MinCachedTokens: 4096}, nil)
+	tracker.Record("key", "host-a", 20000)
+
+	tracker.Record("key", "host-a", 500)
+
+	participant, status := tracker.Lookup("key", 21000)
+	require.Equal(t, StatusHit, status)
+	require.Equal(t, "host-a", participant)
+
+	tracker.Record("key", "host-a", 30000)
+	_, status = tracker.Lookup("key", 30000)
+	require.Equal(t, StatusHit, status)
+	tracker.Record("key", "host-a", 500)
+	_, status = tracker.Lookup("key", 40000)
+	require.Equal(t, StatusHit, status)
+}
+
+// Test flow:
+//  1. Record a key on host-a with 3000 tokens, below the 4096 minimum, then record a 500-token win on host-b.
+//  2. Switch the minimum off and assert the pin moved to host-b, because a pin below the minimum is not held.
+func TestAPinBelowTheMinimumFollowsAShorterWin(t *testing.T) {
+	limits := &Limits{TTL: time.Minute, MaxEntries: 10, MinCachedTokens: 4096}
+	tracker, _ := newTestTracker(limits, nil)
+	tracker.Record("key", "host-a", 3000)
+
+	tracker.Record("key", "host-b", 500)
+
+	limits.MinCachedTokens = 0
+	participant, status := tracker.Lookup("key", 500)
+	require.Equal(t, StatusHit, status)
+	require.Equal(t, "host-b", participant)
+}
+
+// Test flow:
+//  1. Record a key on host-a with 20000 tokens under a pin age of five minutes and let six minutes pass.
+//  2. Record a 500-token win on host-b and switch the minimum off.
+//  3. Assert the aged pin did not hold the key and it now answers host-b.
+func TestAnAgedPinIsNotHeldByItsLongPrefix(t *testing.T) {
+	limits := &Limits{TTL: time.Hour, MaxEntries: 10, MaxPinAge: 5 * time.Minute, MinCachedTokens: 4096}
+	tracker, clock := newTestTracker(limits, nil)
+	tracker.Record("key", "host-a", 20000)
+	clock.advance(6 * time.Minute)
+
+	tracker.Record("key", "host-b", 500)
+
+	limits.MinCachedTokens = 0
+	participant, status := tracker.Lookup("key", 500)
+	require.Equal(t, StatusHit, status)
+	require.Equal(t, "host-b", participant)
+}
+
+// Test flow:
+//  1. Under a cap of 200 percent and four equal participants, record eight keys for host-0 and a ninth with 20000 tokens that is share capped.
+//  2. Record a 500-token win for the ninth on host-1 and switch the minimum off.
+//  3. Assert the capped placeholder did not hold the key and it now answers host-1.
+func TestAShareCappedEntryIsNotHeldByItsLongPrefix(t *testing.T) {
+	limits := &Limits{TTL: time.Hour, MaxEntries: 1000, ShareCap: 200, MinCachedTokens: 4096}
+	tracker, _ := newTestTracker(limits, equalWeights("host-0", "host-1", "host-2", "host-3"))
+	recordMany(tracker, "k", 8, "host-0")
+	tracker.Record("ninth", "host-0", 20000)
+
+	tracker.Record("ninth", "host-1", 500)
+
+	limits.MinCachedTokens = 0
+	participant, status := tracker.Lookup("ninth", 500)
+	require.Equal(t, StatusHit, status)
+	require.Equal(t, "host-1", participant)
 }

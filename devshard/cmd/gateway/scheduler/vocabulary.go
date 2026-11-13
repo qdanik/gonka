@@ -21,14 +21,15 @@ const (
 type AffinityException string
 
 const (
-	AffinityExceptionNone        AffinityException = ""
-	AffinityExceptionNewKey      AffinityException = "new_key"
-	AffinityExceptionExpired     AffinityException = "expired"
-	AffinityExceptionGateBlocked AffinityException = "gate_blocked"
-	AffinityExceptionNotInGroup  AffinityException = "not_in_group"
-	AffinityExceptionPinAged     AffinityException = "pin_aged"
-	AffinityExceptionShareCapped AffinityException = "share_capped"
-	AffinityExceptionMaxBurns    AffinityException = "max_burns"
+	AffinityExceptionNone           AffinityException = ""
+	AffinityExceptionNewKey         AffinityException = "new_key"
+	AffinityExceptionExpired        AffinityException = "expired"
+	AffinityExceptionGateBlocked    AffinityException = "gate_blocked"
+	AffinityExceptionNotInGroup     AffinityException = "not_in_group"
+	AffinityExceptionPinAged        AffinityException = "pin_aged"
+	AffinityExceptionShareCapped    AffinityException = "share_capped"
+	AffinityExceptionMaxBurns       AffinityException = "max_burns"
+	AffinityExceptionBelowMinCached AffinityException = "below_min_cached"
 
 	NoTarget = ""
 )

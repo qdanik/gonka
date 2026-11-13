@@ -11,23 +11,25 @@ import (
 const shareFloor = 8
 
 // Limits bound the tracker; all are read on every use, so a change reaches a running tracker.
-// ShareCap is a percentage of a participant's slot share of the pins.
+// ShareCap is a percentage of a participant's slot share of the pins; MinCachedTokens is the expected cached prefix below which a hit is not worth burning nonces for, and 0 turns it off.
 type Limits struct {
-	TTL        time.Duration
-	MaxEntries int
-	MaxPinAge  time.Duration
-	ShareCap   int
+	TTL             time.Duration
+	MaxEntries      int
+	MaxPinAge       time.Duration
+	ShareCap        int
+	MinCachedTokens uint64
 }
 
 // Weights answers how many slots each participant holds in the groups the gateway routes over, read-only.
 type Weights func() map[string]int
 
 type entry struct {
-	key         Key
-	participant string
-	pinnedAt    time.Time
-	recordedAt  time.Time
-	capped      bool
+	key          Key
+	participant  string
+	pinnedAt     time.Time
+	recordedAt   time.Time
+	promptTokens uint64
+	capped       bool
 }
 
 // Tracker maps a key to the participant that last won it, newest first, within the bounds of Limits. See routing.md, "Host affinity".
@@ -49,7 +51,7 @@ func NewTracker(limits func() Limits, weights Weights, now func() time.Time) *Tr
 }
 
 // Lookup answers the participant that last won the key; an entry that is expired, aged out or a tombstone is dropped on the way.
-func (t *Tracker) Lookup(key Key) (string, Status) {
+func (t *Tracker) Lookup(key Key, promptTokens uint64) (string, Status) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	element, known := t.entries[key]
@@ -69,24 +71,29 @@ func (t *Tracker) Lookup(key Key) (string, Status) {
 	case now.Sub(found.pinnedAt) > bounds.MaxPinAge:
 		t.remove(element)
 		return NoParticipant, StatusPinAged
+	case min(found.promptTokens, promptTokens) < bounds.MinCachedTokens:
+		return NoParticipant, StatusBelowMinCached
 	}
 	return found.participant, StatusHit
 }
 
-// Record makes the participant the key's last winner, unless that would take it past its share, and sheds what has expired or no longer fits.
-func (t *Tracker) Record(key Key, participant string) {
+// Record makes the participant the key's last winner and remembers the prompt it won with, unless that would take it past its share, and sheds what has expired or no longer fits.
+func (t *Tracker) Record(key Key, participant string, promptTokens uint64) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	now := t.now()
 	bounds := t.limits()
 	element := t.entries[key]
 	if element == nil {
-		t.pin(key, nil, participant, now, bounds)
+		t.pin(key, nil, participant, now, promptTokens, bounds)
 	} else if found := element.Value.(*entry); found.participant == participant && now.Sub(found.pinnedAt) <= bounds.MaxPinAge {
 		found.recordedAt = now
+		if !found.holdsLongerPrefix(promptTokens, bounds) {
+			found.promptTokens = promptTokens
+		}
 		t.order.MoveToFront(element)
-	} else {
-		t.pin(key, element, participant, now, bounds)
+	} else if !found.outweighs(participant, promptTokens, now, bounds) {
+		t.pin(key, element, participant, now, promptTokens, bounds)
 	}
 	for oldest := t.order.Back(); oldest != nil; oldest = t.order.Back() {
 		if t.order.Len() <= bounds.MaxEntries && now.Sub(oldest.Value.(*entry).recordedAt) <= bounds.TTL {
@@ -96,7 +103,16 @@ func (t *Tracker) Record(key Key, participant string) {
 	}
 }
 
-func (t *Tracker) pin(key Key, previous *list.Element, participant string, now time.Time, bounds Limits) {
+func (e *entry) outweighs(participant string, promptTokens uint64, now time.Time, bounds Limits) bool {
+	return !e.capped && e.participant != participant && e.holdsLongerPrefix(promptTokens, bounds) &&
+		now.Sub(e.recordedAt) <= bounds.TTL && now.Sub(e.pinnedAt) <= bounds.MaxPinAge
+}
+
+func (e *entry) holdsLongerPrefix(promptTokens uint64, bounds Limits) bool {
+	return bounds.MinCachedTokens > 0 && e.promptTokens >= bounds.MinCachedTokens && e.promptTokens > promptTokens
+}
+
+func (t *Tracker) pin(key Key, previous *list.Element, participant string, now time.Time, promptTokens uint64, bounds Limits) {
 	if previous != nil {
 		t.remove(previous)
 	}
@@ -105,7 +121,7 @@ func (t *Tracker) pin(key Key, previous *list.Element, participant string, now t
 		t.held[participant]++
 		t.pinned++
 	}
-	t.entries[key] = t.order.PushFront(&entry{key: key, participant: participant, pinnedAt: now, recordedAt: now, capped: capped})
+	t.entries[key] = t.order.PushFront(&entry{key: key, participant: participant, pinnedAt: now, recordedAt: now, promptTokens: promptTokens, capped: capped})
 }
 
 func (t *Tracker) pastShare(participant string, sharePercent int) bool {

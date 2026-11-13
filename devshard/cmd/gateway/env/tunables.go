@@ -24,6 +24,7 @@ type Tunables struct {
 	AffinityMaxPinAgeMS                    *int64   `json:"affinity_max_pin_age_ms,omitempty"`
 	AffinityShareCap                       *int64   `json:"affinity_share_cap,omitempty"`
 	AffinityMaxBurns                       *int64   `json:"affinity_max_burns,omitempty"`
+	AffinityMinCachedTokens                *int64   `json:"affinity_min_cached_tokens,omitempty"`
 	Disabled                               *bool    `json:"disabled,omitempty"`
 	DisabledMessage                        *string  `json:"disabled_message,omitempty"`
 	DisabledRedirectURL                    *string  `json:"disabled_redirect_url,omitempty"`

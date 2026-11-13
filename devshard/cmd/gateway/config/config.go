@@ -211,6 +211,7 @@ type Scheduler struct {
 	AffinityMaxPinAgeMS     int64
 	AffinityShareCap        int64
 	AffinityMaxBurns        int64
+	AffinityMinCachedTokens int64
 	ParticipantAllowlist    []string
 	UnthrottledParticipants []string
 }

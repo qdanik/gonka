@@ -150,6 +150,7 @@ func applyTunables(configuration *Config, tunables env.Tunables) {
 	overrideIfSet(&configuration.Scheduler.AffinityMaxPinAgeMS, tunables.AffinityMaxPinAgeMS)
 	overrideIfSet(&configuration.Scheduler.AffinityShareCap, tunables.AffinityShareCap)
 	overrideIfSet(&configuration.Scheduler.AffinityMaxBurns, tunables.AffinityMaxBurns)
+	overrideIfSet(&configuration.Scheduler.AffinityMinCachedTokens, tunables.AffinityMinCachedTokens)
 	overrideIfSet(&configuration.Chain.SnapshotMaxAgeSeconds, tunables.ChainSnapshotMaxAgeSeconds)
 	overrideIfSet(&configuration.Engine.ReceiptTimeoutMS, tunables.EngineReceiptTimeoutMS)
 	overrideIfSet(&configuration.Engine.FirstTokenFloorMS, tunables.EngineFirstTokenFloorMS)

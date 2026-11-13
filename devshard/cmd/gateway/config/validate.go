@@ -30,14 +30,15 @@ const (
 
 	maxMinClientReadBytesPerSecond = 1 << 30
 
-	maxConsecutiveBurns   = 1_000
-	maxDispatchQueueDepth = 65_536
-	maxAffinityTTLMS      = 86_400_000
-	maxAffinityEntries    = 10_000_000
-	maxAffinityPinAgeMS   = 604_800_000
-	minAffinityShareCap   = 100
-	maxAffinityShareCap   = 10_000
-	maxAffinityMaxBurns   = 1_000
+	maxConsecutiveBurns        = 1_000
+	maxDispatchQueueDepth      = 65_536
+	maxAffinityTTLMS           = 86_400_000
+	maxAffinityEntries         = 10_000_000
+	maxAffinityPinAgeMS        = 604_800_000
+	minAffinityShareCap        = 100
+	maxAffinityShareCap        = 10_000
+	maxAffinityMaxBurns        = 1_000
+	maxAffinityMinCachedTokens = 10_000_000
 
 	maxSnapshotAgeSeconds          = 86_400
 	maxVersionsPollIntervalSeconds = 86_400
@@ -393,6 +394,9 @@ func (c *Config) validateScheduler(complain func(format string, args ...any)) {
 	}
 	if c.Scheduler.AffinityMaxBurns < 0 || c.Scheduler.AffinityMaxBurns > maxAffinityMaxBurns {
 		complain("scheduler_affinity_max_burns: %d must be in [0, %d]", c.Scheduler.AffinityMaxBurns, maxAffinityMaxBurns)
+	}
+	if c.Scheduler.AffinityMinCachedTokens < 0 || c.Scheduler.AffinityMinCachedTokens > maxAffinityMinCachedTokens {
+		complain("scheduler_affinity_min_cached_tokens: %d must be in [0, %d]", c.Scheduler.AffinityMinCachedTokens, maxAffinityMinCachedTokens)
 	}
 	for index, participant := range c.Scheduler.ParticipantAllowlist {
 		if problem := participantEntryProblem(participant); problem != "" {

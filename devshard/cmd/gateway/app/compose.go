@@ -486,15 +486,3 @@ func (environmentSigner) SignerFor(privateKeyEnv string) (*signing.Secp256k1Sign
 	}
 	return signing.SignerFromHex(keyHex)
 }
-
-func affinityLimits(holder *config.Holder) func() affinity.Limits {
-	return func() affinity.Limits {
-		scheduling := holder.Load().Scheduler
-		return affinity.Limits{
-			TTL:        time.Duration(scheduling.AffinityTTLMS) * time.Millisecond,
-			MaxEntries: int(scheduling.AffinityMaxEntries),
-			MaxPinAge:  time.Duration(scheduling.AffinityMaxPinAgeMS) * time.Millisecond,
-			ShareCap:   int(scheduling.AffinityShareCap),
-		}
-	}
-}

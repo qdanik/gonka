@@ -158,7 +158,7 @@ func runSimulation(t *testing.T, policy simPolicy, escrowCount int, coarrival bo
 			if !policy.affinity {
 				continue
 			}
-			host, status := memory.Lookup(affinity.Key(fmt.Sprintf("s%d", event.session)))
+			host, status := memory.Lookup(affinity.Key(fmt.Sprintf("s%d", event.session)), 0)
 			jobs[index].target = host
 			switch status {
 			case affinity.StatusShareCapped:
@@ -172,7 +172,7 @@ func runSimulation(t *testing.T, policy simPolicy, escrowCount int, coarrival bo
 			require.NoError(t, outcomes[index].err, "pick of %s did not finish within %s", jobs[index].requestID, affinityPickDeadline)
 			run.requests++
 			if policy.affinity {
-				memory.Record(affinity.Key(fmt.Sprintf("s%d", event.session)), outcomes[index].host)
+				memory.Record(affinity.Key(fmt.Sprintf("s%d", event.session)), outcomes[index].host, 0)
 			}
 			previous, followUp := lastHost[event.session]
 			lastHost[event.session] = outcomes[index].host
