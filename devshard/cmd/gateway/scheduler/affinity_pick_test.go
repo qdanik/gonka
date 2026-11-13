@@ -6,6 +6,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"devshard/cmd/gateway/affinity"
 	"devshard/cmd/gateway/chain"
 	"devshard/cmd/gateway/config"
 )
@@ -97,7 +98,7 @@ func TestAffinityNeverOpensAReserveEscrow(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "regular", picked.ID)
 	require.Equal(t, NoTarget, queued.target)
-	require.Equal(t, AffinityExceptionNotInGroup, queued.exception)
+	require.Equal(t, affinity.ExceptionNotInGroup, queued.exception)
 }
 
 // Test flow:
@@ -111,19 +112,19 @@ func TestARequestWhoseTargetCannotBeReachedIsDispatchedAsAnyOther(t *testing.T) 
 
 	_, absent, err := pickBound(scheduler, RequestProfile{Model: modelA, Target: "elsewhere"})
 	require.NoError(t, err)
-	require.Equal(t, AffinityExceptionNotInGroup, absent.exception)
+	require.Equal(t, affinity.ExceptionNotInGroup, absent.exception)
 	require.Equal(t, NoTarget, absent.homedTo)
 
 	scheduler.limiter.(*fakeLimiter).block("h2")
 	_, blocked, err := pickBound(scheduler, RequestProfile{Model: modelA, Target: "h2"})
 	require.NoError(t, err)
-	require.Equal(t, AffinityExceptionGateBlocked, blocked.exception)
+	require.Equal(t, affinity.ExceptionGateBlocked, blocked.exception)
 	require.Equal(t, NoTarget, blocked.target)
 
 	_, escalation, err := pickBound(scheduler, RequestProfile{Model: modelA, Target: "h0", Escalation: true})
 	require.NoError(t, err)
 	require.Equal(t, NoTarget, escalation.target, "an escalation wants another host, never its target")
-	require.Equal(t, AffinityExceptionNone, escalation.exception)
+	require.Equal(t, affinity.ExceptionNone, escalation.exception)
 
 	_, pinned, err := pickBound(scheduler, RequestProfile{Model: modelA, Target: "h0", Escrow: "only"})
 	require.NoError(t, err)
@@ -131,7 +132,7 @@ func TestARequestWhoseTargetCannotBeReachedIsDispatchedAsAnyOther(t *testing.T) 
 
 	_, pinnedAway, err := pickBound(scheduler, RequestProfile{Model: modelA, Target: "elsewhere", Escrow: "only"})
 	require.NoError(t, err)
-	require.Equal(t, AffinityExceptionNotInGroup, pinnedAway.exception)
+	require.Equal(t, affinity.ExceptionNotInGroup, pinnedAway.exception)
 }
 
 // Test flow:
@@ -139,20 +140,20 @@ func TestARequestWhoseTargetCannotBeReachedIsDispatchedAsAnyOther(t *testing.T) 
 //  2. Assert the waiter starts with that exception and no target.
 //  3. Bind the waiter to a host and assert the exception clears.
 func TestAWaiterStartsWithTheMissItsProfileCarries(t *testing.T) {
-	queued := newWaiter(RequestProfile{Model: modelA, AffinityMiss: AffinityExceptionNewKey}, time.Time{})
+	queued := newWaiter(RequestProfile{Model: modelA, AffinityMiss: affinity.ExceptionNewKey}, time.Time{})
 
-	require.Equal(t, AffinityExceptionNewKey, queued.exception)
+	require.Equal(t, affinity.ExceptionNewKey, queued.exception)
 	require.Equal(t, NoTarget, queued.target)
 
 	queued.homeTo("h1")
-	require.Equal(t, AffinityExceptionNone, queued.exception)
+	require.Equal(t, affinity.ExceptionNone, queued.exception)
 	require.Equal(t, "h1", queued.target)
 }
 
 func withMaxBurns(scheduler *Scheduler, burns int64) *Scheduler {
 	settings := config.Defaults()
-	settings.Scheduler.AffinityMaxBurns = burns
 	scheduler.settings = config.NewHolder(&settings)
+	scheduler.affinityBurnBudget = func() int64 { return burns }
 	return scheduler
 }
 
@@ -171,12 +172,12 @@ func TestARequestWhoseHostIsBeyondTheBurnCapIsPickedUnbound(t *testing.T) {
 	require.Equal(t, "far", picked.ID)
 	require.Equal(t, NoTarget, queued.target)
 	require.Equal(t, NoTarget, queued.homedTo)
-	require.Equal(t, AffinityExceptionMaxBurns, queued.exception)
+	require.Equal(t, affinity.ExceptionMaxBurns, queued.exception)
 
 	_, queued, err = pickBound(withMaxBurns(scheduler, 2), profile)
 	require.NoError(t, err)
 	require.Equal(t, "h2", queued.target)
-	require.Equal(t, AffinityExceptionNone, queued.exception)
+	require.Equal(t, affinity.ExceptionNone, queued.exception)
 }
 
 // Test flow:
@@ -202,7 +203,7 @@ func TestABurnCapOfZeroReachesOnlyAHostWhoseSlotIsNext(t *testing.T) {
 	_, queued, err = pickBound(scheduler, profile)
 	require.NoError(t, err)
 	require.Equal(t, NoTarget, queued.target)
-	require.Equal(t, AffinityExceptionMaxBurns, queued.exception)
+	require.Equal(t, affinity.ExceptionMaxBurns, queued.exception)
 
 	_, queued, err = pickBound(withMaxBurns(scheduler, 1), profile)
 	require.NoError(t, err)
@@ -228,7 +229,7 @@ func TestRequestsPendingForTheHostCountAgainstTheBurnCap(t *testing.T) {
 	_, queued, err = pickBound(scheduler, profile)
 	require.NoError(t, err)
 	require.Equal(t, NoTarget, queued.target)
-	require.Equal(t, AffinityExceptionMaxBurns, queued.exception)
+	require.Equal(t, affinity.ExceptionMaxBurns, queued.exception)
 }
 
 // Test flow:
@@ -244,5 +245,5 @@ func TestAPinnedEscrowIsHeldToTheBurnCapToo(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "far", picked.ID)
 	require.Equal(t, NoTarget, queued.target)
-	require.Equal(t, AffinityExceptionMaxBurns, queued.exception)
+	require.Equal(t, affinity.ExceptionMaxBurns, queued.exception)
 }

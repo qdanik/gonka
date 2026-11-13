@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 
+	"devshard/cmd/gateway/affinity"
 	"devshard/cmd/gateway/chain"
 	"devshard/cmd/gateway/internal/safemath"
 	"devshard/types"
@@ -135,11 +136,11 @@ func settleTarget(queued *waiter, profile RequestProfile, found targetFound) {
 	case targetReached:
 		queued.homeTo(profile.Target)
 	case targetBlocked:
-		queued.unhome(AffinityExceptionGateBlocked)
+		queued.unhome(affinity.ExceptionGateBlocked)
 	case targetOverBurnCap:
-		queued.unhome(AffinityExceptionMaxBurns)
+		queued.unhome(affinity.ExceptionMaxBurns)
 	default:
-		queued.unhome(AffinityExceptionNotInGroup)
+		queued.unhome(affinity.ExceptionNotInGroup)
 	}
 }
 

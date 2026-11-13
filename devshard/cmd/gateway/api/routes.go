@@ -211,7 +211,7 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request, escrowPin string) 
 	releaseBody := sync.OnceFunc(func() { s.requestBodies.release(int64(len(body))) })
 	defer releaseBody()
 	options := filterOptions(configuration.Limits, identity.admin, s.servedModelVocabulary, s.modelFilters.Profiles())
-	options.Affinity = configuration.Scheduler.AffinityEnabled
+	options.Affinity = configuration.Affinity.Enabled
 	normalized, err := filters.NormalizeRequest(body, options)
 	releaseBody()
 	if err != nil {

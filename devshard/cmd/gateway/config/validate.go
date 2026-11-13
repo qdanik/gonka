@@ -69,6 +69,7 @@ func (c *Config) Validate() error {
 	c.validatePerf(complain)
 	c.validateEngine(complain)
 	c.validateScheduler(complain)
+	c.validateAffinity(complain)
 
 	if len(problems) > 0 {
 		return fmt.Errorf("%w: %w", ErrInvalid, errors.Join(problems...))
@@ -380,24 +381,6 @@ func (c *Config) validateScheduler(complain func(format string, args ...any)) {
 	if c.Scheduler.DispatchQueueDepth < 1 || c.Scheduler.DispatchQueueDepth > maxDispatchQueueDepth {
 		complain("scheduler_dispatch_queue_depth: %d must be in [1, %d]", c.Scheduler.DispatchQueueDepth, maxDispatchQueueDepth)
 	}
-	if c.Scheduler.AffinityTTLMS < 1 || c.Scheduler.AffinityTTLMS > maxAffinityTTLMS {
-		complain("scheduler_affinity_ttl_ms: %d must be in [1, %d]", c.Scheduler.AffinityTTLMS, maxAffinityTTLMS)
-	}
-	if c.Scheduler.AffinityMaxEntries < 1 || c.Scheduler.AffinityMaxEntries > maxAffinityEntries {
-		complain("scheduler_affinity_max_entries: %d must be in [1, %d]", c.Scheduler.AffinityMaxEntries, maxAffinityEntries)
-	}
-	if c.Scheduler.AffinityMaxPinAgeMS < 1 || c.Scheduler.AffinityMaxPinAgeMS > maxAffinityPinAgeMS {
-		complain("scheduler_affinity_max_pin_age_ms: %d must be in [1, %d]", c.Scheduler.AffinityMaxPinAgeMS, maxAffinityPinAgeMS)
-	}
-	if c.Scheduler.AffinityShareCap < minAffinityShareCap || c.Scheduler.AffinityShareCap > maxAffinityShareCap {
-		complain("scheduler_affinity_share_cap: %d must be in [%d, %d]", c.Scheduler.AffinityShareCap, minAffinityShareCap, maxAffinityShareCap)
-	}
-	if c.Scheduler.AffinityMaxBurns < 0 || c.Scheduler.AffinityMaxBurns > maxAffinityMaxBurns {
-		complain("scheduler_affinity_max_burns: %d must be in [0, %d]", c.Scheduler.AffinityMaxBurns, maxAffinityMaxBurns)
-	}
-	if c.Scheduler.AffinityMinCachedTokens < 0 || c.Scheduler.AffinityMinCachedTokens > maxAffinityMinCachedTokens {
-		complain("scheduler_affinity_min_cached_tokens: %d must be in [0, %d]", c.Scheduler.AffinityMinCachedTokens, maxAffinityMinCachedTokens)
-	}
 	for index, participant := range c.Scheduler.ParticipantAllowlist {
 		if problem := participantEntryProblem(participant); problem != "" {
 			complain("scheduler_participant_allowlist[%d]: %s", index, problem)
@@ -407,6 +390,27 @@ func (c *Config) validateScheduler(complain func(format string, args ...any)) {
 		if problem := participantEntryProblem(participant); problem != "" {
 			complain("scheduler_unthrottled_participants[%d]: %s", index, problem)
 		}
+	}
+}
+
+func (c *Config) validateAffinity(complain func(format string, args ...any)) {
+	if c.Affinity.TTLMS < 1 || c.Affinity.TTLMS > maxAffinityTTLMS {
+		complain("affinity_ttl_ms: %d must be in [1, %d]", c.Affinity.TTLMS, maxAffinityTTLMS)
+	}
+	if c.Affinity.MaxEntries < 1 || c.Affinity.MaxEntries > maxAffinityEntries {
+		complain("affinity_max_entries: %d must be in [1, %d]", c.Affinity.MaxEntries, maxAffinityEntries)
+	}
+	if c.Affinity.MaxPinAgeMS < 1 || c.Affinity.MaxPinAgeMS > maxAffinityPinAgeMS {
+		complain("affinity_max_pin_age_ms: %d must be in [1, %d]", c.Affinity.MaxPinAgeMS, maxAffinityPinAgeMS)
+	}
+	if c.Affinity.ShareCap < minAffinityShareCap || c.Affinity.ShareCap > maxAffinityShareCap {
+		complain("affinity_share_cap: %d must be in [%d, %d]", c.Affinity.ShareCap, minAffinityShareCap, maxAffinityShareCap)
+	}
+	if c.Affinity.MaxBurns < 0 || c.Affinity.MaxBurns > maxAffinityMaxBurns {
+		complain("affinity_max_burns: %d must be in [0, %d]", c.Affinity.MaxBurns, maxAffinityMaxBurns)
+	}
+	if c.Affinity.MinCachedTokens < 0 || c.Affinity.MinCachedTokens > maxAffinityMinCachedTokens {
+		complain("affinity_min_cached_tokens: %d must be in [0, %d]", c.Affinity.MinCachedTokens, maxAffinityMinCachedTokens)
 	}
 }
 

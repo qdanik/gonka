@@ -46,15 +46,15 @@ func TestTheFirstAttemptAsksForTheHostTheKeyLastWon(t *testing.T) {
 		memory     *spyMemory
 		key        affinity.Key
 		wantTarget string
-		wantMiss   scheduler.AffinityException
+		wantMiss   affinity.Exception
 	}{
-		{"a hit", &spyMemory{participant: "host-a", status: affinity.StatusHit}, "key", "host-a", scheduler.AffinityExceptionNone},
-		{"an expired entry", &spyMemory{status: affinity.StatusExpired}, "key", scheduler.NoTarget, scheduler.AffinityExceptionExpired},
-		{"an aged-out pin", &spyMemory{status: affinity.StatusPinAged}, "key", scheduler.NoTarget, scheduler.AffinityExceptionPinAged},
-		{"a share-capped win", &spyMemory{status: affinity.StatusShareCapped}, "key", scheduler.NoTarget, scheduler.AffinityExceptionShareCapped},
-		{"an unknown key", &spyMemory{status: affinity.StatusNew}, "key", scheduler.NoTarget, scheduler.AffinityExceptionNewKey},
-		{"a hit whose prefix is below the minimum", &spyMemory{status: affinity.StatusBelowMinCached}, "key", scheduler.NoTarget, scheduler.AffinityExceptionBelowMinCached},
-		{"a request with no key", &spyMemory{participant: "host-a", status: affinity.StatusHit}, affinity.NoKey, scheduler.NoTarget, scheduler.AffinityExceptionNone},
+		{"a hit", &spyMemory{participant: "host-a", status: affinity.StatusHit}, "key", "host-a", affinity.ExceptionNone},
+		{"an expired entry", &spyMemory{status: affinity.StatusExpired}, "key", scheduler.NoTarget, affinity.ExceptionExpired},
+		{"an aged-out pin", &spyMemory{status: affinity.StatusPinAged}, "key", scheduler.NoTarget, affinity.ExceptionPinAged},
+		{"a share-capped win", &spyMemory{status: affinity.StatusShareCapped}, "key", scheduler.NoTarget, affinity.ExceptionShareCapped},
+		{"an unknown key", &spyMemory{status: affinity.StatusNew}, "key", scheduler.NoTarget, affinity.ExceptionNewKey},
+		{"a hit whose prefix is below the minimum", &spyMemory{status: affinity.StatusBelowMinCached}, "key", scheduler.NoTarget, affinity.ExceptionBelowMinCached},
+		{"a request with no key", &spyMemory{participant: "host-a", status: affinity.StatusHit}, affinity.NoKey, scheduler.NoTarget, affinity.ExceptionNone},
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -67,7 +67,7 @@ func TestTheFirstAttemptAsksForTheHostTheKeyLastWon(t *testing.T) {
 
 	target, miss := affinityCoordinator(nil, "key").affinityIntent()
 	require.Equal(t, scheduler.NoTarget, target)
-	require.Equal(t, scheduler.AffinityExceptionNone, miss)
+	require.Equal(t, affinity.ExceptionNone, miss)
 }
 
 // Test flow:

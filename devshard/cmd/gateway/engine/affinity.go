@@ -10,24 +10,24 @@ type hostMemory interface {
 	Record(key affinity.Key, participant string, promptTokens uint64)
 }
 
-func (c *raceCoordinator) affinityIntent() (target string, miss scheduler.AffinityException) {
+func (c *raceCoordinator) affinityIntent() (target string, miss affinity.Exception) {
 	if c.deps.Affinity == nil || c.request.AffinityKey == affinity.NoKey {
-		return scheduler.NoTarget, scheduler.AffinityExceptionNone
+		return scheduler.NoTarget, affinity.ExceptionNone
 	}
 	participant, status := c.deps.Affinity.Lookup(c.request.AffinityKey, c.request.InputTokens)
 	switch status {
 	case affinity.StatusHit:
-		return participant, scheduler.AffinityExceptionNone
+		return participant, affinity.ExceptionNone
 	case affinity.StatusExpired:
-		return scheduler.NoTarget, scheduler.AffinityExceptionExpired
+		return scheduler.NoTarget, affinity.ExceptionExpired
 	case affinity.StatusPinAged:
-		return scheduler.NoTarget, scheduler.AffinityExceptionPinAged
+		return scheduler.NoTarget, affinity.ExceptionPinAged
 	case affinity.StatusShareCapped:
-		return scheduler.NoTarget, scheduler.AffinityExceptionShareCapped
+		return scheduler.NoTarget, affinity.ExceptionShareCapped
 	case affinity.StatusBelowMinCached:
-		return scheduler.NoTarget, scheduler.AffinityExceptionBelowMinCached
+		return scheduler.NoTarget, affinity.ExceptionBelowMinCached
 	}
-	return scheduler.NoTarget, scheduler.AffinityExceptionNewKey
+	return scheduler.NoTarget, affinity.ExceptionNewKey
 }
 
 func (c *raceCoordinator) rememberWinner(participant string) {

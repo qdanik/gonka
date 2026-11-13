@@ -95,10 +95,10 @@ func (s *Scheduler) maxConsecutiveBurns() int64 {
 }
 
 func (s *Scheduler) affinityMaxBurns() int64 {
-	if s.settings == nil {
+	if s.affinityBurnBudget == nil {
 		return noBurnCap
 	}
-	return s.settings.Load().Scheduler.AffinityMaxBurns
+	return s.affinityBurnBudget()
 }
 
 // requestReserve prices this one request the way the chain will charge it. See capacity.md, "The balance floor".

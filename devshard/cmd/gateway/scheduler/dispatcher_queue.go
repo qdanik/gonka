@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"slices"
 	"time"
+
+	"devshard/cmd/gateway/affinity"
 )
 
 type armedTimer struct {
@@ -164,7 +166,7 @@ func (d *dispatcher) matchWithinBurnCap(binding HostBinding, participants []stri
 		if !skipping || skipped.kind != ghostAffinitySkip || skipped.waiter.skipped < maxBurns {
 			return decision
 		}
-		skipped.waiter.lapse(AffinityExceptionMaxBurns)
+		skipped.waiter.lapse(affinity.ExceptionMaxBurns)
 	}
 	return match(binding, d.waiting, participants, gates, d.now(), d.matchWait)
 }
@@ -176,9 +178,9 @@ func (d *dispatcher) lapseTargets(participants []string, gates availability) {
 		}
 		switch {
 		case !slices.Contains(participants, queued.target):
-			queued.lapse(AffinityExceptionNotInGroup)
+			queued.lapse(affinity.ExceptionNotInGroup)
 		case gates.blocks(queued.target, queued) != blockNone:
-			queued.lapse(AffinityExceptionGateBlocked)
+			queued.lapse(affinity.ExceptionGateBlocked)
 		}
 	}
 }

@@ -299,6 +299,7 @@ func newSchedulerHarness(t *testing.T, cfg schedulerConfig) *schedulerHarness {
 		Config:            config.NewHolder(&settings),
 		Observer:          test.observer,
 		Now:               test.clock.Now,
+		AffinityMaxBurns:  func() int64 { return settings.Affinity.MaxBurns },
 		OnEscrowExhausted: test.exhausted.record,
 		OnReserveTaken:    test.reserves.record,
 	})

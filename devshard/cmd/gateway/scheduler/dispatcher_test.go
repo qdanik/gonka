@@ -11,6 +11,7 @@ import (
 
 	"go.uber.org/goleak"
 
+	"devshard/cmd/gateway/affinity"
 	"devshard/cmd/gateway/chain"
 	"devshard/cmd/gateway/config"
 	"devshard/cmd/gateway/limits"
@@ -173,7 +174,7 @@ type recordingObserver struct {
 	assigned       []assignedNonce
 	queueWaits     []time.Duration
 	landed         int
-	exceptions     []AffinityException
+	exceptions     []affinity.Exception
 }
 
 type assignedNonce struct {
@@ -285,16 +286,16 @@ func (o *recordingObserver) AffinityLanded(string, string) {
 	o.landed++
 }
 
-func (o *recordingObserver) AffinityException(_, _ string, reason AffinityException) {
+func (o *recordingObserver) AffinityException(_, _ string, reason affinity.Exception) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	o.exceptions = append(o.exceptions, reason)
 }
 
-func (o *recordingObserver) affinity() (landed int, exceptions []AffinityException) {
+func (o *recordingObserver) affinity() (landed int, exceptions []affinity.Exception) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	return o.landed, append([]AffinityException(nil), o.exceptions...)
+	return o.landed, append([]affinity.Exception(nil), o.exceptions...)
 }
 
 func (o *recordingObserver) forcedSends() []forcedSend {

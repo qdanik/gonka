@@ -4,6 +4,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"devshard/cmd/gateway/affinity"
 )
 
 // Decision is match's total outcome for one nonce: exactly one of serve, burn, hold, or decline. See rules.md, "1. A committed nonce is always settled".
@@ -41,7 +43,7 @@ type waiter struct {
 
 	homedTo   string
 	target    string
-	exception AffinityException
+	exception affinity.Exception
 	skipped   int64
 
 	handoff sync.Mutex
@@ -65,14 +67,14 @@ func newWaiter(profile RequestProfile, enqueued time.Time) *waiter {
 }
 
 func (w *waiter) homeTo(participant string) {
-	w.homedTo, w.target, w.exception = participant, participant, AffinityExceptionNone
+	w.homedTo, w.target, w.exception = participant, participant, affinity.ExceptionNone
 }
 
-func (w *waiter) unhome(reason AffinityException) {
+func (w *waiter) unhome(reason affinity.Exception) {
 	w.homedTo, w.target, w.exception = NoTarget, NoTarget, reason
 }
 
-func (w *waiter) lapse(reason AffinityException) {
+func (w *waiter) lapse(reason affinity.Exception) {
 	w.target, w.exception = NoTarget, reason
 }
 

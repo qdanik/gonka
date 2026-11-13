@@ -58,10 +58,10 @@ type simPolicy struct {
 }
 
 func simDefaults(label string) simPolicy {
-	scheduling := config.Defaults().Scheduler
+	settings := config.Defaults().Affinity
 	return simPolicy{
-		label: label, affinity: true, maxBurns: scheduling.AffinityMaxBurns,
-		maxPinAge: time.Duration(scheduling.AffinityMaxPinAgeMS) * time.Millisecond, shareCap: int(scheduling.AffinityShareCap),
+		label: label, affinity: true, maxBurns: settings.MaxBurns,
+		maxPinAge: time.Duration(settings.MaxPinAgeMS) * time.Millisecond, shareCap: int(settings.ShareCap),
 	}
 }
 
@@ -131,14 +131,14 @@ func runSimulation(t *testing.T, policy simPolicy, escrowCount int, coarrival bo
 		cfg.escrows = append(cfg.escrows, escrowID)
 		cfg.slotsByEscrow[escrowID] = groups[index]
 	}
-	cfg.tune = func(c *config.Config) { c.Scheduler.AffinityMaxBurns = policy.maxBurns }
+	cfg.tune = func(c *config.Config) { c.Affinity.MaxBurns = policy.maxBurns }
 	test := newSchedulerHarness(t, cfg)
 	reachable := func(host string) bool {
 		return slices.ContainsFunc(groups, func(group []string) bool { return slices.Contains(group, host) })
 	}
-	scheduling := config.Defaults().Scheduler
+	settings := config.Defaults().Affinity
 	limits := affinity.Limits{
-		TTL: time.Duration(scheduling.AffinityTTLMS) * time.Millisecond, MaxEntries: int(scheduling.AffinityMaxEntries),
+		TTL: time.Duration(settings.TTLMS) * time.Millisecond, MaxEntries: int(settings.MaxEntries),
 		MaxPinAge: policy.maxPinAge, ShareCap: policy.shareCap,
 	}
 	var elapsed time.Duration
@@ -200,7 +200,7 @@ func runSimulation(t *testing.T, policy simPolicy, escrowCount int, coarrival bo
 	}
 	_, exceptions := test.observer.affinity()
 	for _, reason := range exceptions {
-		if reason == AffinityExceptionMaxBurns {
+		if reason == affinity.ExceptionMaxBurns {
 			run.budgetExceptions++
 		}
 	}

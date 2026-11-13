@@ -5,6 +5,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	"devshard/cmd/gateway/affinity"
 )
 
 const affinityGroupSize = 16
@@ -146,7 +148,7 @@ func TestATargetThatRefusesAdmissionLapsesToNormalDispatch(t *testing.T) {
 	require.Equal(t, append(slices.Repeat([]string{GhostReasonAffinitySkip}, 4), GhostReasonWindowFull), test.observer.burns())
 	landed, exceptions := test.observer.affinity()
 	require.Zero(t, landed)
-	require.Equal(t, []AffinityException{AffinityExceptionGateBlocked}, exceptions)
+	require.Equal(t, []affinity.Exception{affinity.ExceptionGateBlocked}, exceptions)
 }
 
 // Test flow:
@@ -163,7 +165,7 @@ func TestATargetOutsideTheGroupLapsesToNormalDispatch(t *testing.T) {
 	wantAssignment(t, awaitReply(t, queued), group[1], 1)
 	require.Empty(t, test.observer.burns())
 	_, exceptions := test.observer.affinity()
-	require.Equal(t, []AffinityException{AffinityExceptionNotInGroup}, exceptions)
+	require.Equal(t, []affinity.Exception{affinity.ExceptionNotInGroup}, exceptions)
 }
 
 // Test flow:
@@ -173,14 +175,14 @@ func TestATargetOutsideTheGroupLapsesToNormalDispatch(t *testing.T) {
 func TestAKeyWithoutAHostIsServedNormallyAndCounted(t *testing.T) {
 	group := groupOf(affinityGroupSize)
 	test := newHarness(t, harnessConfig{slots: group, holdStart: true})
-	queued := newWaiter(RequestProfile{RequestID: "request-1", Model: modelA, Params: "payload", AffinityMiss: AffinityExceptionNewKey}, test.clock.Now())
+	queued := newWaiter(RequestProfile{RequestID: "request-1", Model: modelA, Params: "payload", AffinityMiss: affinity.ExceptionNewKey}, test.clock.Now())
 
 	test.drainWaiters(queued)
 
 	wantAssignment(t, awaitReply(t, queued), group[1], 1)
 	require.Empty(t, test.observer.burns())
 	_, exceptions := test.observer.affinity()
-	require.Equal(t, []AffinityException{AffinityExceptionNewKey}, exceptions)
+	require.Equal(t, []affinity.Exception{affinity.ExceptionNewKey}, exceptions)
 }
 
 // Test flow:
@@ -256,7 +258,7 @@ func TestAWaiterThatHasCostItsBurnCapIsServedUnbound(t *testing.T) {
 	require.Equal(t, []string{"request-1"}, test.observer.burnRequests())
 	landed, exceptions := test.observer.affinity()
 	require.Zero(t, landed)
-	require.Equal(t, []AffinityException{AffinityExceptionMaxBurns}, exceptions)
+	require.Equal(t, []affinity.Exception{affinity.ExceptionMaxBurns}, exceptions)
 }
 
 // Test flow:
@@ -275,7 +277,7 @@ func TestABurnCapOfZeroPinsOnlyAHostWhoseSlotIsNext(t *testing.T) {
 	require.Empty(t, test.observer.burns())
 	landed, exceptions := test.observer.affinity()
 	require.Zero(t, landed)
-	require.Equal(t, []AffinityException{AffinityExceptionMaxBurns}, exceptions)
+	require.Equal(t, []affinity.Exception{affinity.ExceptionMaxBurns}, exceptions)
 
 	next := test.boundFor("next", group[2])
 	test.drainWaiters(next)
@@ -305,7 +307,7 @@ func TestEveryQueuedWaiterIsChargedAtMostTheBurnCap(t *testing.T) {
 	require.Equal(t, slices.Repeat([]string{GhostReasonAffinitySkip}, 2), test.observer.burns())
 	require.Equal(t, []string{"older", "younger"}, test.observer.burnRequests())
 	_, exceptions := test.observer.affinity()
-	require.Equal(t, []AffinityException{AffinityExceptionMaxBurns, AffinityExceptionMaxBurns}, exceptions)
+	require.Equal(t, []affinity.Exception{affinity.ExceptionMaxBurns, affinity.ExceptionMaxBurns}, exceptions)
 }
 
 // Test flow:
@@ -347,5 +349,5 @@ func TestAWaiterAtItsBurnCapKeepsItsPlaceUntilAnOfferWouldBurnForIt(t *testing.T
 	wantAssignment(t, awaitReply(t, bound), group[2], 2)
 	require.Empty(t, test.observer.burns())
 	_, exceptions := test.observer.affinity()
-	require.Equal(t, []AffinityException{AffinityExceptionMaxBurns}, exceptions)
+	require.Equal(t, []affinity.Exception{affinity.ExceptionMaxBurns}, exceptions)
 }

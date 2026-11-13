@@ -2,15 +2,15 @@
 
 ## Bounds
 
-Affinity is off by default (`scheduler_affinity_enabled` false). With it on, a conversation key is pinned to the participant that last won it, and the next turn waits for that participant's nonce.
+Affinity is off by default (`affinity_enabled` false). With it on, a conversation key is pinned to the participant that last won it, and the next turn waits for that participant's nonce.
 
-`scheduler_affinity_max_burns` (default 2): the most `affinity_skip` burns one request may be charged to reach its host. The escrow pick binds a request only when its host is at most this many nonces from the cursor, and a queued request charged this many is released unbound at the next offer that would burn another for it. A burn takes 60 times the token price plus `fee_per_nonce` from the escrow.
+`affinity_max_burns` (default 2): the most `affinity_skip` burns one request may be charged to reach its host. The escrow pick binds a request only when its host is at most this many nonces from the cursor, and a queued request charged this many is released unbound at the next offer that would burn another for it. A burn takes 60 times the token price plus `fee_per_nonce` from the escrow.
 
-`scheduler_affinity_share_cap` (default 125): a pin is refused when its participant would hold more than this percent of its slot share of all pins. It applies only to a participant holding at least 8 pins, and only when slot weights are known.
+`affinity_share_cap` (default 125): a pin is refused when its participant would hold more than this percent of its slot share of all pins. It applies only to a participant holding at least 8 pins, and only when slot weights are known.
 
-`scheduler_affinity_max_pin_age_ms` (default 3 600 000): a pin older than this is dropped at lookup and the key is routed as new.
+`affinity_max_pin_age_ms` (default 3 600 000): a pin older than this is dropped at lookup and the key is routed as new.
 
-`scheduler_affinity_ttl_ms` (default 600 000) and `scheduler_affinity_max_entries` (default 100 000) bound the map.
+`affinity_ttl_ms` (default 600 000) and `affinity_max_entries` (default 100 000) bound the map.
 
 ## Method
 

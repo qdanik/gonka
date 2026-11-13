@@ -4,6 +4,7 @@ import (
 	"sync"
 	"time"
 
+	"devshard/cmd/gateway/affinity"
 	"devshard/cmd/gateway/chain"
 	"devshard/cmd/gateway/engine"
 	"devshard/cmd/gateway/journal"
@@ -32,7 +33,7 @@ func (t tracedDispatches) GhostBurned(escrowID string, burned scheduler.Burn) {
 // AffinityLanded and AffinityException are counted by model and reason only: a key, a caller or a host would grow without end.
 func (t tracedDispatches) AffinityLanded(_, model string) { t.recorder.AffinityLanded(model) }
 
-func (t tracedDispatches) AffinityException(_, model string, reason scheduler.AffinityException) {
+func (t tracedDispatches) AffinityException(_, model string, reason affinity.Exception) {
 	t.recorder.AffinityException(model, string(reason))
 }
 

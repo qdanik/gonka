@@ -17,3 +17,18 @@ const (
 	NoKey         Key    = ""
 	NoParticipant string = ""
 )
+
+// Exception is why a request was dispatched without the host guarantee; ExceptionNone is a request that kept it or never had a key. See routing.md, "Host affinity".
+type Exception string
+
+const (
+	ExceptionNone           Exception = ""
+	ExceptionNewKey         Exception = "new_key"
+	ExceptionExpired        Exception = "expired"
+	ExceptionGateBlocked    Exception = "gate_blocked"
+	ExceptionNotInGroup     Exception = "not_in_group"
+	ExceptionPinAged        Exception = "pin_aged"
+	ExceptionShareCapped    Exception = "share_capped"
+	ExceptionMaxBurns       Exception = "max_burns"
+	ExceptionBelowMinCached Exception = "below_min_cached"
+)

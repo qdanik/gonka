@@ -199,21 +199,25 @@ type Engine struct {
 	HedgeFirstTokenFloorMS    int64
 }
 
-// Scheduler groups nonce-holding tuning; MatchWaitMS of 0 burns an unmatched nonce immediately, and MaxConsecutiveBurns of 0 never forces a send. See routing.md, "The forced send". The Affinity fields bound the host-affinity mode, see routing.md, "Host affinity".
+// Scheduler groups nonce-holding tuning; MatchWaitMS of 0 burns an unmatched nonce immediately, and MaxConsecutiveBurns of 0 never forces a send. See routing.md, "The forced send".
 type Scheduler struct {
 	MatchWaitMS             int64
 	MaxConsecutiveBurns     int64
 	DispatchQueueDepth      int64
 	WarmNewEscrows          bool
-	AffinityEnabled         bool
-	AffinityTTLMS           int64
-	AffinityMaxEntries      int64
-	AffinityMaxPinAgeMS     int64
-	AffinityShareCap        int64
-	AffinityMaxBurns        int64
-	AffinityMinCachedTokens int64
 	ParticipantAllowlist    []string
 	UnthrottledParticipants []string
+}
+
+// Affinity bounds the host-affinity mode; MaxBurns caps the nonces a targeted request may burn on its host, and a MinCachedTokens of 0 turns the threshold off. See routing.md, "Host affinity".
+type Affinity struct {
+	Enabled         bool
+	TTLMS           int64
+	MaxEntries      int64
+	MaxPinAgeMS     int64
+	ShareCap        int64
+	MaxBurns        int64
+	MinCachedTokens int64
 }
 
 // TimeoutSweep bounds the retry of execution timeouts no race is left to post; a zero BudgetPerTick turns the sweep off.
@@ -239,6 +243,7 @@ type Config struct {
 	HeightSync HeightSync
 	Engine     Engine
 	Scheduler  Scheduler
+	Affinity   Affinity
 
 	TimeoutSweep TimeoutSweep
 

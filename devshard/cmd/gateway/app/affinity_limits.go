@@ -9,13 +9,17 @@ import (
 
 func affinityLimits(holder *config.Holder) func() affinity.Limits {
 	return func() affinity.Limits {
-		scheduling := holder.Load().Scheduler
+		settings := holder.Load().Affinity
 		return affinity.Limits{
-			TTL:             time.Duration(scheduling.AffinityTTLMS) * time.Millisecond,
-			MaxEntries:      int(scheduling.AffinityMaxEntries),
-			MaxPinAge:       time.Duration(scheduling.AffinityMaxPinAgeMS) * time.Millisecond,
-			ShareCap:        int(scheduling.AffinityShareCap),
-			MinCachedTokens: uint64(scheduling.AffinityMinCachedTokens),
+			TTL:             time.Duration(settings.TTLMS) * time.Millisecond,
+			MaxEntries:      int(settings.MaxEntries),
+			MaxPinAge:       time.Duration(settings.MaxPinAgeMS) * time.Millisecond,
+			ShareCap:        int(settings.ShareCap),
+			MinCachedTokens: uint64(settings.MinCachedTokens),
 		}
 	}
+}
+
+func affinityMaxBurns(holder *config.Holder) func() int64 {
+	return func() int64 { return holder.Load().Affinity.MaxBurns }
 }

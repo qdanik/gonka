@@ -9,6 +9,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"devshard/cmd/gateway/affinity"
 	"devshard/cmd/gateway/config"
 )
 
@@ -96,7 +97,7 @@ func TestEveryRequestBoundForAHostLandsOnItAcrossEscrowsAndQueueMixes(t *testing
 					cfg.escrows = append(cfg.escrows, escrowID)
 					cfg.slotsByEscrow[escrowID] = permutedGroup(index)
 				}
-				cfg.tune = func(c *config.Config) { c.Scheduler.AffinityMaxBurns = unboundedMaxBurns }
+				cfg.tune = func(c *config.Config) { c.Affinity.MaxBurns = unboundedMaxBurns }
 				test := newSchedulerHarness(t, cfg)
 
 				outcomes := test.pickAll(jobs)
@@ -137,7 +138,7 @@ func TestNoRequestIsChargedMoreThanTheBurnCapAcrossEscrowsAndQueueMixes(t *testi
 						cfg.escrows = append(cfg.escrows, escrowID)
 						cfg.slotsByEscrow[escrowID] = permutedGroup(index)
 					}
-					cfg.tune = func(c *config.Config) { c.Scheduler.AffinityMaxBurns = budget }
+					cfg.tune = func(c *config.Config) { c.Affinity.MaxBurns = budget }
 					test := newSchedulerHarness(t, cfg)
 
 					outcomes := test.pickAll(jobs)
@@ -157,7 +158,7 @@ func TestNoRequestIsChargedMoreThanTheBurnCapAcrossEscrowsAndQueueMixes(t *testi
 					require.LessOrEqual(t, landed, landedOnHost, "a hit is a request that landed on its host")
 					require.Equal(t, bound, landed+len(exceptions))
 					for _, reason := range exceptions {
-						require.Equal(t, AffinityExceptionMaxBurns, reason)
+						require.Equal(t, affinity.ExceptionMaxBurns, reason)
 					}
 					charged := map[string]int64{}
 					for _, requestID := range test.observer.burnRequests() {
