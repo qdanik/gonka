@@ -30,8 +30,15 @@ const (
 
 	maxMinClientReadBytesPerSecond = 1 << 30
 
-	maxConsecutiveBurns   = 1_000
-	maxDispatchQueueDepth = 65_536
+	maxConsecutiveBurns        = 1_000
+	maxDispatchQueueDepth      = 65_536
+	maxAffinityTTLMS           = defaultAffinityTTLMS
+	maxAffinityEntries         = defaultAffinityMaxEntries
+	maxAffinityPinAgeMS        = defaultAffinityMaxPinAgeMS
+	minAffinityShareCap        = 100
+	maxAffinityShareCap        = defaultAffinityShareCap
+	maxAffinityMaxBurns        = 8
+	maxAffinityMinCachedTokens = 16_384
 
 	maxSnapshotAgeSeconds          = 86_400
 	maxVersionsPollIntervalSeconds = 86_400
@@ -62,6 +69,7 @@ func (c *Config) Validate() error {
 	c.validatePerf(complain)
 	c.validateEngine(complain)
 	c.validateScheduler(complain)
+	c.validateAffinity(complain)
 
 	if len(problems) > 0 {
 		return fmt.Errorf("%w: %w", ErrInvalid, errors.Join(problems...))
@@ -382,6 +390,27 @@ func (c *Config) validateScheduler(complain func(format string, args ...any)) {
 		if problem := participantEntryProblem(participant); problem != "" {
 			complain("scheduler_unthrottled_participants[%d]: %s", index, problem)
 		}
+	}
+}
+
+func (c *Config) validateAffinity(complain func(format string, args ...any)) {
+	if c.Affinity.TTLMS < 1 || c.Affinity.TTLMS > maxAffinityTTLMS {
+		complain("affinity_ttl_ms: %d must be in [1, %d]", c.Affinity.TTLMS, maxAffinityTTLMS)
+	}
+	if c.Affinity.MaxEntries < 1 || c.Affinity.MaxEntries > maxAffinityEntries {
+		complain("affinity_max_entries: %d must be in [1, %d]", c.Affinity.MaxEntries, maxAffinityEntries)
+	}
+	if c.Affinity.MaxPinAgeMS < 1 || c.Affinity.MaxPinAgeMS > maxAffinityPinAgeMS {
+		complain("affinity_max_pin_age_ms: %d must be in [1, %d]", c.Affinity.MaxPinAgeMS, maxAffinityPinAgeMS)
+	}
+	if c.Affinity.ShareCap < minAffinityShareCap || c.Affinity.ShareCap > maxAffinityShareCap {
+		complain("affinity_share_cap: %d must be in [%d, %d]", c.Affinity.ShareCap, minAffinityShareCap, maxAffinityShareCap)
+	}
+	if c.Affinity.MaxBurns < 0 || c.Affinity.MaxBurns > maxAffinityMaxBurns {
+		complain("affinity_max_burns: %d must be in [0, %d]", c.Affinity.MaxBurns, maxAffinityMaxBurns)
+	}
+	if c.Affinity.MinCachedTokens < 0 || c.Affinity.MinCachedTokens > maxAffinityMinCachedTokens {
+		complain("affinity_min_cached_tokens: %d must be in [0, %d]", c.Affinity.MinCachedTokens, maxAffinityMinCachedTokens)
 	}
 }
 

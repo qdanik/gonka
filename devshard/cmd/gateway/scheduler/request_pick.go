@@ -110,7 +110,7 @@ func (s *Scheduler) pickOnce(ctx context.Context, profile RequestProfile, avoide
 	if err != nil {
 		return Assignment{}, escrow.ID, err
 	}
-	defer claimed.pendingSubmits.Add(-1)
+	defer claimed.finish(queued)
 
 	var result pickResult
 	select {
@@ -169,6 +169,21 @@ func (s *Scheduler) queuedAhead(candidates []Escrow) []uint64 {
 	return ahead
 }
 
+func (s *Scheduler) targetLoads(candidates []Escrow, profile RequestProfile) []targetLoad {
+	if profile.Target == NoTarget || profile.Escalation {
+		return nil
+	}
+	loads := make([]targetLoad, len(candidates))
+	s.registryMu.Lock()
+	defer s.registryMu.Unlock()
+	for index, candidate := range candidates {
+		if running := s.dispatchers[candidate.ID]; running != nil && running.sessionID == candidate.SessionID {
+			loads[index] = running.targets.load(profile.Target)
+		}
+	}
+	return loads
+}
+
 // claimAndSubmit returns the dispatcher that accepted the waiter, still claimed; a stopped one is replaced by the next get-or-create, so this retries at most once more.
 func (s *Scheduler) claimAndSubmit(escrow Escrow, queued *waiter) (*dispatcher, error) {
 	for {
@@ -178,6 +193,9 @@ func (s *Scheduler) claimAndSubmit(escrow Escrow, queued *waiter) (*dispatcher, 
 		}
 		outcome := target.submitWaiter(queued)
 		if outcome == submitAccepted {
+			if queued.homedTo != NoTarget {
+				target.targets.add(queued.homedTo)
+			}
 			return target, nil
 		}
 		target.pendingSubmits.Add(-1)

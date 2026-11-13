@@ -4,10 +4,11 @@ package api
 // the verdict a finished request is logged under, and the trigger a capture file is named for. Declared
 // here so a rename reaches the log, the tests and the docs through the compiler.
 
-// Headers a client can read off any chat reply.
+// Headers a client can read off a chat reply; the session key only on a reply the gateway issued one for.
 const (
-	EscrowHeader    = "X-Devshard-ID"
-	RequestIDHeader = "X-Request-Id"
+	EscrowHeader     = "X-Devshard-ID"
+	RequestIDHeader  = "X-Request-Id"
+	SessionKeyHeader = "X-Session-Key"
 )
 
 // How a finished request was delivered. A stream commits 200 on its first byte, so this is the only

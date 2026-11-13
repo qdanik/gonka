@@ -89,7 +89,7 @@ func TestMockDapiNodeManagerJoinsCallerTrace(t *testing.T) {
 	ctx = commonobs.SetRequestID(ctx, "req-mockdapi")
 	traceID := span.SpanContext().TraceID().String()
 
-	acq, err := client.Acquire(ctx, "Qwen/Test", nil, "12")
+	acq, err := client.Acquire(ctx, "Qwen/Test", nil, "12", "", nil)
 	require.NoError(t, err)
 	require.NotEmpty(t, acq.NodeId)
 	require.NoError(t, client.Release(ctx, acq.LockId, gen.ReleaseOutcome_SUCCESS))
@@ -149,7 +149,7 @@ func TestMockDapiPoolAcquireLogsStage(t *testing.T) {
 	ctx = commonobs.SetRequestID(ctx, "req-pool")
 	traceID := span.SpanContext().TraceID().String()
 
-	acq, err := client.Acquire(ctx, "Qwen/Test", nil, "12")
+	acq, err := client.Acquire(ctx, "Qwen/Test", nil, "12", "", nil)
 	require.NoError(t, err)
 	require.NotEmpty(t, acq.NodeId)
 	require.NoError(t, client.Release(ctx, acq.LockId, gen.ReleaseOutcome_SUCCESS))

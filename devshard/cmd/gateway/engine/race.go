@@ -76,6 +76,7 @@ type raceDeps struct {
 	Now          func() time.Time
 	Timer        func() raceTimer
 	Journal      raceJournal
+	Affinity     hostMemory
 
 	ModelContextLength uint64
 

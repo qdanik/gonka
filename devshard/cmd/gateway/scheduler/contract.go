@@ -1,10 +1,14 @@
 package scheduler
 
 import (
+	"devshard/cmd/gateway/affinity"
 	"devshard/cmd/gateway/chain"
 	"devshard/cmd/gateway/internal/tokensource"
 	"devshard/cmd/gateway/limits"
 )
+
+// NoTarget is the Target of a request that is not pinned to a host.
+const NoTarget = ""
 
 // RequestProfile is one request as routing reads it; RequestID only names it on the burns it causes, and Params must be exactly devshard/user.InferenceParams. See README, "The boundary types".
 type RequestProfile struct {
@@ -17,6 +21,9 @@ type RequestProfile struct {
 	OutputTokens      int
 	Exclude           []string
 	Params            any
+	// Target is the participant the request must execute on; AffinityMiss says why it has none. Both are empty for an escalation. See routing.md, "Host affinity".
+	Target       string
+	AffinityMiss affinity.Exception
 	// Escalation marks a speculative attempt of a race that already holds Escrow. See routing.md, "Picking an escrow".
 	Escalation bool
 }

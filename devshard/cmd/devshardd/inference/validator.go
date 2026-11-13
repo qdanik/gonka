@@ -403,7 +403,7 @@ func (v *Validator) executeMLRequest(ctx context.Context, model, escrowID string
 	if v.executeML != nil {
 		return v.executeML(ctx, model, escrowID, body)
 	}
-	resp, err := v.engine.doWithLockedNode(ctx, observability.PathValidate, model, escrowID, func(endpoint string) (*http.Response, error) {
+	resp, err := v.engine.doWithLockedNode(ctx, observability.PathValidate, model, escrowID, noRoute, func(endpoint string) (*http.Response, error) {
 		url := endpoint + "/v1/chat/completions"
 		httpReq, reqErr := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 		// NewRequest also accepts URLs that the HTTP transport cannot dispatch.

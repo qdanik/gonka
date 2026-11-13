@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"hash/fnv"
+	"io"
 	"math"
 	"math/rand/v2"
 	"strconv"
@@ -16,11 +17,14 @@ import (
 
 // Config wires the mock OpenAI HTTP server.
 type Config struct {
-	Addr       string
-	Faults     FaultConfig
-	Workers    int
-	Queue      int
-	ReplayFile string
+	Addr        string
+	Faults      FaultConfig
+	Workers     int
+	Queue       int
+	ReplayFile  string
+	PrefixCache PrefixCacheConfig
+	// RequestLog receives one JSON line per execution when the prefix cache is on: conversation fingerprint, message count and cache result.
+	RequestLog io.Writer
 }
 
 // Stats is the test-only request outcome snapshot exposed by a Mock ML node.
@@ -31,6 +35,9 @@ type Stats struct {
 	Timeouts            uint64 `json:"timeouts"`
 	ReplayHits          uint64 `json:"replay_hits"`
 	ReplayMisses        uint64 `json:"replay_misses"`
+	PromptTokens        uint64 `json:"prompt_tokens"`
+	CachedPromptTokens  uint64 `json:"cached_prompt_tokens"`
+	ValidationReplays   uint64 `json:"validation_replays"`
 }
 
 // DefaultConfig returns local dev defaults.

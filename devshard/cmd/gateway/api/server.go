@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"devshard/cmd/gateway/affinity"
 	"devshard/cmd/gateway/chain"
 	"devshard/cmd/gateway/config"
 	"devshard/cmd/gateway/engine"
@@ -200,6 +201,11 @@ type RequestJournal interface {
 	ReplyNotCached(line journal.RequestLine)
 }
 
+// IssuedSessions answers the session key issued with a conversation's last win; *affinity.Tracker satisfies it.
+type IssuedSessions interface {
+	Session(key affinity.Key) string
+}
+
 // Deps is everything the HTTP boundary reads or calls. See README.md, "What the server is given".
 type Deps struct {
 	Config                  *config.Holder
@@ -228,6 +234,7 @@ type Deps struct {
 	RequestIDs              func() string
 	StopTokenVocabulary     func(model string) int
 	PromptTokens            PromptTokens
+	IssuedSessions          IssuedSessions
 }
 
 type Server struct {
@@ -258,6 +265,7 @@ type Server struct {
 
 	stopTokenVocabulary     func(model string) int
 	promptTokens            PromptTokens
+	issuedSessions          IssuedSessions
 	promptCounts            promptCountGate
 	requestBodies           *BufferBudget
 	statsTokenizerFallbacks StatsTokenizerFallbacks
@@ -328,6 +336,7 @@ func New(deps Deps) (*Server, error) {
 
 		stopTokenVocabulary:     deps.StopTokenVocabulary,
 		promptTokens:            deps.PromptTokens,
+		issuedSessions:          deps.IssuedSessions,
 		statsTokenizerFallbacks: deps.StatsTokenizerFallbacks,
 	}
 	if server.requestIDs == nil {

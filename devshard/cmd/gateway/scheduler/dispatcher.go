@@ -7,6 +7,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"devshard/cmd/gateway/affinity"
 	"devshard/cmd/gateway/chain"
 	"devshard/cmd/gateway/limits"
 	"devshard/types"
@@ -22,6 +23,8 @@ type dispatchObserver interface {
 	NonceQueued(escrowID string, waited time.Duration)
 	ExcludedHostServed(escrowID, participant string)
 	ForcedSend(escrowID, participant string, burnsInARow int64)
+	AffinityLanded(escrowID, model string)
+	AffinityException(escrowID, model string, reason affinity.Exception)
 }
 
 // dispatcherDeps wires one escrow's actor. See README, "Where the nonce, the slot and the hold are taken".
@@ -38,6 +41,7 @@ type dispatcherDeps struct {
 	now                 func() time.Time
 	matchWait           time.Duration
 	maxConsecutiveBurns func() int64
+	affinityMaxBurns    func() int64
 	retirementReserve   func() uint64
 	newTimer            func(time.Duration) (<-chan time.Time, func())
 	retire              func(*dispatcher) bool
@@ -65,6 +69,7 @@ type dispatcher struct {
 
 	burnsInARow    int64
 	pendingSubmits atomic.Int64
+	targets        targetLedger
 
 	lifecycleMu sync.RWMutex
 	started     bool
@@ -83,6 +88,9 @@ func newDispatcher(deps dispatcherDeps) *dispatcher {
 	}
 	if deps.maxConsecutiveBurns == nil {
 		deps.maxConsecutiveBurns = func() int64 { return 0 }
+	}
+	if deps.affinityMaxBurns == nil {
+		deps.affinityMaxBurns = func() int64 { return noBurnCap }
 	}
 	if deps.retirementReserve == nil {
 		deps.retirementReserve = func() uint64 { return 0 }
@@ -141,6 +149,13 @@ func (d *dispatcher) submitWaiter(queued *waiter) submitOutcome {
 		return submitAccepted
 	default:
 		return submitFull
+	}
+}
+
+func (d *dispatcher) finish(queued *waiter) {
+	d.pendingSubmits.Add(-1)
+	if queued.homedTo != NoTarget {
+		d.targets.remove(queued.homedTo)
 	}
 }
 
@@ -286,6 +301,18 @@ func (d *dispatcher) recordAssigned(nonce uint64, profile RequestProfile, enqueu
 func (d *dispatcher) recordExcludedServe(participant string) {
 	if d.observer != nil {
 		d.observer.ExcludedHostServed(d.escrowID, participant)
+	}
+}
+
+func (d *dispatcher) recordAffinity(served *waiter, landedOn string) {
+	if d.observer == nil {
+		return
+	}
+	switch {
+	case served.target != NoTarget && served.target == landedOn:
+		d.observer.AffinityLanded(d.escrowID, served.profile.Model)
+	case served.exception != affinity.ExceptionNone:
+		d.observer.AffinityException(d.escrowID, served.profile.Model, served.exception)
 	}
 }
 

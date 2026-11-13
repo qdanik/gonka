@@ -45,6 +45,7 @@ type ExecuteRequest struct {
 	ResponseWriter http.ResponseWriter
 
 	LogprobsOptimizationOverride *bool
+	SessionKey                   string
 
 	// ResponseEnvelopeHeight and ResponseEnvelopeHash are the response-leg
 	// HeightSyncSection already attached to this hop. When the hash is

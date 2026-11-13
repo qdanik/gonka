@@ -20,9 +20,23 @@ func main() {
 	cfg.Faults = faultsFromEnv()
 	cfg.Workers = intFromEnv("MOCK_OPENAI_WORKERS")
 	cfg.Queue = intFromEnv("MOCK_OPENAI_QUEUE")
+	cfg.PrefixCache.CapacityTokens = intFromEnv("MOCK_OPENAI_CACHE_TOKENS")
+	cfg.PrefixCache.IgnoreReplays = envTruthy("MOCK_OPENAI_CACHE_IGNORE_REPLAYS")
+	if d, err := time.ParseDuration(os.Getenv("MOCK_OPENAI_PREFILL_PER_TOKEN")); err == nil {
+		cfg.PrefixCache.PrefillPerToken = d
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+
+	if path := os.Getenv("MOCK_OPENAI_REQUEST_LOG"); path != "" {
+		logFile, err := os.Create(path)
+		if err != nil {
+			log.Fatalf("mock-openai: %v", err)
+		}
+		defer logFile.Close()
+		cfg.RequestLog = logFile
+	}
 
 	srv, err := mockopenai.NewServerWithError(cfg)
 	if err != nil {

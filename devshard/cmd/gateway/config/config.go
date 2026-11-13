@@ -209,6 +209,17 @@ type Scheduler struct {
 	UnthrottledParticipants []string
 }
 
+// Affinity bounds the host-affinity mode; MaxBurns caps the nonces a targeted request may burn on its host, and a MinCachedTokens of 0 turns the threshold off. See routing.md, "Host affinity".
+type Affinity struct {
+	Enabled         bool
+	TTLMS           int64
+	MaxEntries      int64
+	MaxPinAgeMS     int64
+	ShareCap        int64
+	MaxBurns        int64
+	MinCachedTokens int64
+}
+
 // TimeoutSweep bounds the retry of execution timeouts no race is left to post; a zero BudgetPerTick turns the sweep off.
 type TimeoutSweep struct {
 	BudgetPerTick int64
@@ -232,6 +243,7 @@ type Config struct {
 	HeightSync HeightSync
 	Engine     Engine
 	Scheduler  Scheduler
+	Affinity   Affinity
 
 	TimeoutSweep TimeoutSweep
 
