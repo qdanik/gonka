@@ -40,7 +40,7 @@ func TestAffinityKeyIsPerAuthenticatedKeyAndAbsentOtherwise(t *testing.T) {
 // 4. Expect a key for the client and the admin bearer, and still none for `Bearer EMPTY`.
 func TestAffinityKeyOnlyForAuthenticatedCallers(t *testing.T) {
 	live := newHarness(t, func(configuration *config.Config) {
-		configuration.Scheduler.AffinityEnabled = true
+		configuration.Affinity.Enabled = true
 		configuration.Cache.ChatCacheMaxBytes = 0
 		configuration.Server.APIKeys = nil
 		configuration.Server.AdminAPIKey = ""

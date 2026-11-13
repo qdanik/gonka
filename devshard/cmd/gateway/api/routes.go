@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/pprof"
+	"sync"
 
 	"devshard/cmd/gateway/affinity"
 	"devshard/cmd/gateway/config"
@@ -106,7 +107,7 @@ func (s *Server) buildHandler() http.Handler {
 		}
 		mux.Handle(registered.pattern, wrapped)
 	}
-	return mux
+	return s.boundClientWrites(mux)
 }
 
 func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
@@ -197,15 +198,22 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request, escrowPin string) 
 	configuration := s.config.Load()
 	identity := s.resolveCredentials(r)
 	requestID := s.requestIDs()
-
-	body, err := readBody(w, r, chatIngestLimit)
-	if err != nil {
-		s.writeErrorFor(w, err)
+	if !reachesAnyModel(configuration.Limits, identity) {
+		s.writeErrorFor(w, &AccessDeniedError{Message: "no model is open to this request's credentials"})
 		return
 	}
+
+	body, err := readBody(w, r, chatIngestLimit, s.requestBodies)
+	if err != nil {
+		s.refuseBody(w, requestID, err)
+		return
+	}
+	releaseBody := sync.OnceFunc(func() { s.requestBodies.release(int64(len(body))) })
+	defer releaseBody()
 	options := filterOptions(configuration.Limits, identity.admin, s.servedModelVocabulary, s.modelFilters.Profiles())
-	options.Affinity = configuration.Scheduler.AffinityEnabled
+	options.Affinity = configuration.Affinity.Enabled
 	normalized, err := filters.NormalizeRequest(body, options)
+	releaseBody()
 	if err != nil {
 		s.capture.filterRejected(r, requestID, body, err)
 		s.writeErrorFor(w, err)
@@ -223,7 +231,7 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request, escrowPin string) 
 		s.writeErrorFor(w, err)
 		return
 	}
-	prompt, err := s.checkContext(configuration.Limits, normalized)
+	prompt, err := s.checkContext(r.Context(), configuration.Limits, normalized)
 	if err != nil {
 		s.writeErrorFor(w, err)
 		return
@@ -241,7 +249,7 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request, escrowPin string) 
 			written := serveCached(w, requestID, entry)
 			hitCount := prompt.countSoFar()
 			s.events.RequestFinished(journal.RequestLine{
-				RequestID: requestID, Model: normalized.Model, EscrowID: entry.escrowID,
+				RequestID: requestID, Model: normalized.Model, APIKeyID: identity.caller(), EscrowID: entry.escrowID,
 				ClientStream: entry.stream, Bytes: written, CacheHit: true,
 				Outcome: engine.RaceOutcome{InputTokens: hitCount.tokens, InputTokensSource: hitCount.source},
 			})
@@ -255,10 +263,10 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request, escrowPin string) 
 
 	counted := s.countPrompt(normalized.Model, prompt)
 	if err := s.limiter.AcquireForModel(r.Context(), normalized.Model, int64(counted.tokens), s.capacity.ForModel(normalized.Model)); err != nil {
-		if throttled, ours := rateLimited(err); ours && s.rejections != nil {
-			s.rejections.Rejected(normalized.Model, throttled.Label())
+		if label, refused := limiterRefusal(err); refused && s.rejections != nil {
+			s.rejections.Rejected(normalized.Model, label)
 			s.events.RequestThrottled(journal.RequestLine{
-				RequestID: requestID, Model: normalized.Model, LimiterReason: throttled.Label(),
+				RequestID: requestID, Model: normalized.Model, APIKeyID: identity.caller(), LimiterReason: label,
 			})
 		}
 		s.writeErrorFor(w, err)
@@ -324,6 +332,18 @@ func (s *Server) routableModel(configured config.Limits, model string) error {
 	return &UnsupportedModelError{Model: model, Supported: served}
 }
 
+func reachesAnyModel(configured config.Limits, identity credentials) bool {
+	if identity.admin {
+		return true
+	}
+	for _, access := range configured.ModelAccess {
+		if access == config.ModelAccessOpen || (access == config.ModelAccessAPIKey && identity.apiKey) {
+			return true
+		}
+	}
+	return false
+}
+
 func authorizeModel(configured config.Limits, model string, identity credentials) error {
 	if model == "" {
 		return filters.Reject("model is required")
@@ -346,8 +366,9 @@ func authorizeModel(configured config.Limits, model string, identity credentials
 
 // race returns the outcome and the failure the reply's status could not carry. See README.md, "Streaming the reply".
 func (s *Server) race(w http.ResponseWriter, r *http.Request, identity credentials, requestID string, normalized filters.Result, prompt promptCount, escrowPin string, logprobsOptimization *bool, slot *limiterSlot) (engine.RaceOutcome, error) {
+	apiKeyID := identity.caller()
 	startedAt := s.now()
-	client := newClientStream(w, requestID, normalized.ClientStream, normalized.ClientUsage, normalized.Logprobs, s.buffers)
+	client := newClientStream(w, requestID, normalized.ClientStream, normalized.ClientUsage, normalized.Logprobs, prompt.tokens, s.buffers)
 	defer client.discard()
 	outputTokens := outputTokenBudget(normalized)
 	session := s.conversation(r, identity, normalized)
@@ -384,10 +405,10 @@ func (s *Server) race(w http.ResponseWriter, r *http.Request, identity credentia
 	if err != nil {
 		s.capture.attemptsFailed(r, requestID, normalized, err)
 		if !client.closeUnstarted() {
-			s.finishRequest(requestID, normalized, outcome, deliveryFailedMidStream, client, s.now().Sub(startedAt), err, client.Fail(err))
+			s.finishRequest(requestID, apiKeyID, normalized, outcome, deliveryFailedMidStream, client, s.now().Sub(startedAt), err, client.Fail(err))
 			return outcome, err
 		}
-		s.finishRequest(requestID, normalized, outcome, deliveryFailedBeforeFirstByte, client, s.now().Sub(startedAt), err, nil)
+		s.finishRequest(requestID, apiKeyID, normalized, outcome, deliveryFailedBeforeFirstByte, client, s.now().Sub(startedAt), err, nil)
 		w.Header().Set(RequestIDHeader, requestID)
 		s.writeErrorFor(w, err)
 		return outcome, nil
@@ -402,8 +423,8 @@ func (s *Server) race(w http.ResponseWriter, r *http.Request, identity credentia
 	if closeErr != nil {
 		delivery = deliveryFailedMidStream
 	}
-	s.finishRequest(requestID, normalized, outcome, delivery, client, s.now().Sub(startedAt), nil, closeErr)
-	return outcome, closeErr
+	s.finishRequest(requestID, apiKeyID, normalized, outcome, delivery, client, s.now().Sub(startedAt), client.answeredHostFailure(), closeErr)
+	return outcome, cmp.Or(closeErr, client.replayRefusal())
 }
 
 func affinityKey(r *http.Request, identity credentials, normalized filters.Result) affinity.Key {

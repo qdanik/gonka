@@ -21,7 +21,7 @@ const echoedChatBody = `{"model":"qwen","prompt_cache_key":"%s","messages":[{"ro
 func sessionHarness(t *testing.T) *harness {
 	t.Helper()
 	return newHarness(t, func(configuration *config.Config) {
-		configuration.Scheduler.AffinityEnabled = true
+		configuration.Affinity.Enabled = true
 		configuration.Cache.ChatCacheMaxBytes = 0
 	})
 }
@@ -95,7 +95,7 @@ func TestTwoCallersEchoingOneSessionKeyDoNotShareIt(t *testing.T) {
 //  4. Expect the repeat to get the first turn's session key back, keyed by the same digest, and the other conversation a different key.
 func TestAnUnknownKeyIsANewSessionAndARepeatWithoutOneGetsItsSessionBack(t *testing.T) {
 	live := sessionHarness(t)
-	tracker := affinity.NewTracker(func() affinity.Limits { return affinity.Limits{TTL: time.Minute, MaxEntries: 16} }, func() time.Time { return harnessClock })
+	tracker := affinity.NewTracker(func() affinity.Limits { return affinity.Limits{TTL: time.Minute, MaxEntries: 16} }, nil, func() time.Time { return harnessClock })
 	live.server.issuedSessions = tracker
 
 	unknown, header := sendChat(t, live, fmt.Sprintf(echoedChatBody, "never-issued"), clientKey)
@@ -106,7 +106,7 @@ func TestAnUnknownKeyIsANewSessionAndARepeatWithoutOneGetsItsSessionBack(t *test
 	require.Equal(t, affinity.NoSession, unknown.IssuedSession)
 
 	first, issued := sendChat(t, live, chatBody, clientKey)
-	tracker.Record(first.AffinityKey, "host-a", first.IssuedSession)
+	tracker.Record(first.AffinityKey, "host-a", first.IssuedSession, 0)
 	repeat, reissued := sendChat(t, live, chatBody, clientKey)
 	_, other := sendChat(t, live, `{"model":"qwen","messages":[{"role":"user","content":"another conversation"}]}`, clientKey)
 

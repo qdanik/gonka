@@ -7,6 +7,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"devshard/cmd/gateway/affinity"
 	"devshard/cmd/gateway/chain"
 	"devshard/cmd/gateway/limits"
 	"devshard/types"
@@ -23,7 +24,7 @@ type dispatchObserver interface {
 	ExcludedHostServed(escrowID, participant string)
 	ForcedSend(escrowID, participant string, burnsInARow int64)
 	AffinityLanded(escrowID, model string)
-	AffinityException(escrowID, model string, reason AffinityException)
+	AffinityException(escrowID, model string, reason affinity.Exception)
 }
 
 // dispatcherDeps wires one escrow's actor. See README, "Where the nonce, the slot and the hold are taken".
@@ -40,6 +41,7 @@ type dispatcherDeps struct {
 	now                 func() time.Time
 	matchWait           time.Duration
 	maxConsecutiveBurns func() int64
+	affinityMaxBurns    func() int64
 	retirementReserve   func() uint64
 	newTimer            func(time.Duration) (<-chan time.Time, func())
 	retire              func(*dispatcher) bool
@@ -86,6 +88,9 @@ func newDispatcher(deps dispatcherDeps) *dispatcher {
 	}
 	if deps.maxConsecutiveBurns == nil {
 		deps.maxConsecutiveBurns = func() int64 { return 0 }
+	}
+	if deps.affinityMaxBurns == nil {
+		deps.affinityMaxBurns = func() int64 { return noBurnCap }
 	}
 	if deps.retirementReserve == nil {
 		deps.retirementReserve = func() uint64 { return 0 }
@@ -306,7 +311,7 @@ func (d *dispatcher) recordAffinity(served *waiter, landedOn string) {
 	switch {
 	case served.target != NoTarget && served.target == landedOn:
 		d.observer.AffinityLanded(d.escrowID, served.profile.Model)
-	case served.exception != AffinityExceptionNone:
+	case served.exception != affinity.ExceptionNone:
 		d.observer.AffinityException(d.escrowID, served.profile.Model, served.exception)
 	}
 }

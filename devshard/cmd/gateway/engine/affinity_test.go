@@ -11,20 +11,25 @@ import (
 )
 
 type recordedWinner struct {
-	key         affinity.Key
-	participant string
+	key          affinity.Key
+	participant  string
+	promptTokens uint64
 }
 
 type spyMemory struct {
 	participant string
 	status      affinity.Status
 	recorded    []recordedWinner
+	lookedUp    []uint64
 }
 
-func (s *spyMemory) Lookup(affinity.Key) (string, affinity.Status) { return s.participant, s.status }
+func (s *spyMemory) Lookup(_ affinity.Key, promptTokens uint64) (string, affinity.Status) {
+	s.lookedUp = append(s.lookedUp, promptTokens)
+	return s.participant, s.status
+}
 
-func (s *spyMemory) Record(key affinity.Key, participant, _ string) {
-	s.recorded = append(s.recorded, recordedWinner{key: key, participant: participant})
+func (s *spyMemory) Record(key affinity.Key, participant, _ string, promptTokens uint64) {
+	s.recorded = append(s.recorded, recordedWinner{key: key, participant: participant, promptTokens: promptTokens})
 }
 
 func affinityCoordinator(memory hostMemory, key affinity.Key) *raceCoordinator {
@@ -32,9 +37,9 @@ func affinityCoordinator(memory hostMemory, key affinity.Key) *raceCoordinator {
 }
 
 // Test flow:
-//  1. Build coordinators over a memory that answers a hit, an expired entry and an unknown key.
+//  1. Build coordinators over a memory that answers a hit, an expired entry, an aged-out pin, a share-capped win, a hit below the minimum cached prefix and an unknown key.
 //  2. Ask each for the first attempt's affinity intent.
-//  3. Assert a hit names its host with no miss, an expired entry and an unknown key name no host and say why.
+//  3. Assert a hit names its host with no miss, every other answer names no host and says why.
 //  4. Assert a request with no key, and a coordinator with no memory at all, ask for nothing and report no miss.
 func TestTheFirstAttemptAsksForTheHostTheKeyLastWon(t *testing.T) {
 	cases := []struct {
@@ -42,12 +47,15 @@ func TestTheFirstAttemptAsksForTheHostTheKeyLastWon(t *testing.T) {
 		memory     *spyMemory
 		key        affinity.Key
 		wantTarget string
-		wantMiss   scheduler.AffinityException
+		wantMiss   affinity.Exception
 	}{
-		{"a hit", &spyMemory{participant: "host-a", status: affinity.StatusHit}, "key", "host-a", scheduler.AffinityExceptionNone},
-		{"an expired entry", &spyMemory{status: affinity.StatusExpired}, "key", scheduler.NoTarget, scheduler.AffinityExceptionExpired},
-		{"an unknown key", &spyMemory{status: affinity.StatusNew}, "key", scheduler.NoTarget, scheduler.AffinityExceptionNewKey},
-		{"a request with no key", &spyMemory{participant: "host-a", status: affinity.StatusHit}, affinity.NoKey, scheduler.NoTarget, scheduler.AffinityExceptionNone},
+		{"a hit", &spyMemory{participant: "host-a", status: affinity.StatusHit}, "key", "host-a", affinity.ExceptionNone},
+		{"an expired entry", &spyMemory{status: affinity.StatusExpired}, "key", scheduler.NoTarget, affinity.ExceptionExpired},
+		{"an aged-out pin", &spyMemory{status: affinity.StatusPinAged}, "key", scheduler.NoTarget, affinity.ExceptionPinAged},
+		{"a share-capped win", &spyMemory{status: affinity.StatusShareCapped}, "key", scheduler.NoTarget, affinity.ExceptionShareCapped},
+		{"an unknown key", &spyMemory{status: affinity.StatusNew}, "key", scheduler.NoTarget, affinity.ExceptionNewKey},
+		{"a hit whose prefix is below the minimum", &spyMemory{status: affinity.StatusBelowMinCached}, "key", scheduler.NoTarget, affinity.ExceptionBelowMinCached},
+		{"a request with no key", &spyMemory{participant: "host-a", status: affinity.StatusHit}, affinity.NoKey, scheduler.NoTarget, affinity.ExceptionNone},
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -60,7 +68,7 @@ func TestTheFirstAttemptAsksForTheHostTheKeyLastWon(t *testing.T) {
 
 	target, miss := affinityCoordinator(nil, "key").affinityIntent()
 	require.Equal(t, scheduler.NoTarget, target)
-	require.Equal(t, scheduler.AffinityExceptionNone, miss)
+	require.Equal(t, affinity.ExceptionNone, miss)
 }
 
 // Test flow:
@@ -70,14 +78,31 @@ func TestTheFirstAttemptAsksForTheHostTheKeyLastWon(t *testing.T) {
 func TestTheCrownedHostBecomesTheKeysLastWinner(t *testing.T) {
 	memory := &spyMemory{}
 	coordinator := affinityCoordinator(memory, "key")
+	coordinator.request.InputTokens = 5_000
 
 	coordinator.crownWinner(&liveAttempt{participant: "host-b"}, crownFirstClaim)
 
-	require.Equal(t, []recordedWinner{{key: "key", participant: "host-b"}}, memory.recorded)
+	require.Equal(t, []recordedWinner{{key: "key", participant: "host-b", promptTokens: 5_000}}, memory.recorded)
 
 	unkeyed := &spyMemory{}
 	affinityCoordinator(unkeyed, affinity.NoKey).crownWinner(&liveAttempt{participant: "host-b"}, crownFirstClaim)
 	require.Empty(t, unkeyed.recorded)
+}
+
+// Test flow:
+//  1. Build a coordinator whose request carries the admission count.
+//  2. Ask for the affinity intent and crown a winner.
+//  3. Assert the lookup and the record both got that one count.
+func TestTheAdmissionCountReachesTheMemory(t *testing.T) {
+	memory := &spyMemory{participant: "host-a", status: affinity.StatusHit}
+	coordinator := affinityCoordinator(memory, "key")
+	coordinator.request.InputTokens = 6_144
+
+	coordinator.affinityIntent()
+	coordinator.crownWinner(&liveAttempt{participant: "host-a"}, crownFirstClaim)
+
+	require.Equal(t, []uint64{6_144}, memory.lookedUp)
+	require.Equal(t, []recordedWinner{{key: "key", participant: "host-a", promptTokens: 6_144}}, memory.recorded)
 }
 
 // Test flow:
@@ -87,7 +112,7 @@ func TestTheCrownedHostBecomesTheKeysLastWinner(t *testing.T) {
 //  4. Assert a session digest nobody won is a new key that names no host, and that its winner is recorded under it.
 func TestAWinUnderAnIssuedSessionBringsItsEchoAndItsRepeatBackToTheHost(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
-	tracker := affinity.NewTracker(func() affinity.Limits { return affinity.Limits{TTL: time.Minute, MaxEntries: 16} }, func() time.Time { return now })
+	tracker := affinity.NewTracker(func() affinity.Limits { return affinity.Limits{TTL: time.Minute, MaxEntries: 16} }, nil, func() time.Time { return now })
 	derived, session := affinity.Key("derived"), affinity.Key("session")
 	first := &raceCoordinator{deps: raceDeps{Affinity: tracker}, request: raceRequest{Request: Request{AffinityKey: derived, SessionDigest: session, IssuedSession: "K"}}}
 
@@ -95,18 +120,18 @@ func TestAWinUnderAnIssuedSessionBringsItsEchoAndItsRepeatBackToTheHost(t *testi
 
 	target, miss := affinityCoordinator(tracker, session).affinityIntent()
 	require.Equal(t, "host-a", target)
-	require.Equal(t, scheduler.AffinityExceptionNone, miss)
+	require.Equal(t, affinity.ExceptionNone, miss)
 	target, miss = affinityCoordinator(tracker, derived).affinityIntent()
 	require.Equal(t, "host-a", target)
-	require.Equal(t, scheduler.AffinityExceptionNone, miss)
+	require.Equal(t, affinity.ExceptionNone, miss)
 	require.Equal(t, "K", tracker.Session(derived))
 
 	unknown := affinityCoordinator(tracker, "unknown-session")
 	target, miss = unknown.affinityIntent()
 	require.Equal(t, scheduler.NoTarget, target)
-	require.Equal(t, scheduler.AffinityExceptionNewKey, miss)
+	require.Equal(t, affinity.ExceptionNewKey, miss)
 	unknown.crownWinner(&liveAttempt{participant: "host-b"}, crownFirstClaim)
-	participant, status := tracker.Lookup("unknown-session")
+	participant, status := tracker.Lookup("unknown-session", 0)
 	require.Equal(t, "host-b", participant)
 	require.Equal(t, affinity.StatusHit, status)
 }

@@ -13,12 +13,13 @@ func preservationEpoch(epoch epochInfo, blocked bool, reason BlockReason) (epoch
 	}
 	upcoming := epoch
 	upcoming.PoCStartBlockHeight = epoch.NextPoCStartBlockHeight
+	upcoming.InPoCLeadWindow = true
 	return upcoming, true, BlockReasonPoC
 }
 
 // resolvePreservation picks the node-preservation rule for this poll. See README.md, "Which nodes count as preserved".
 func (o *PhaseObserver) resolvePreservation(ctx context.Context, epoch epochInfo, blocked bool, reason BlockReason) (preservationMode, preservedSnapshotState, error) {
-	if !blocked && !epoch.IsConfirmationPoCActive {
+	if !blocked {
 		return preservationModeAll, preservedSnapshotState{}, nil
 	}
 	preservedNodes, status, err := o.fetchPreservedSnapshot(ctx, preservedSnapshotAnchor(epoch, reason))
@@ -40,15 +41,18 @@ func preservedSnapshotAnchor(epoch epochInfo, reason BlockReason) int64 {
 	case BlockReasonPoC:
 		return epoch.PoCStartBlockHeight
 	}
-	if epoch.IsConfirmationPoCActive {
-		return epoch.ConfirmationPoCTriggerHeight
-	}
 	return 0
 }
 
-// allowAllParticipantsUntilSnapshot reports the grace period, when the matching preserved snapshot intentionally does not exist yet.
+// allowAllParticipantsUntilSnapshot reports the periods when the matching preserved snapshot intentionally does not exist yet: the confirmation-PoC grace period and the lead window before a PoC start.
 func allowAllParticipantsUntilSnapshot(epoch epochInfo, reason BlockReason) bool {
-	return reason == BlockReasonConfirmationPoC && epoch.ConfirmationPoCPhase == ConfirmationPoCGracePeriod
+	switch reason {
+	case BlockReasonConfirmationPoC:
+		return epoch.ConfirmationPoCPhase == ConfirmationPoCGracePeriod
+	case BlockReasonPoC:
+		return epoch.InPoCLeadWindow
+	}
+	return false
 }
 
 // fetchPreservedSnapshot separates "no snapshot for this episode" from "could not be reached"; only the second is an error.
@@ -56,7 +60,9 @@ func (o *PhaseObserver) fetchPreservedSnapshot(ctx context.Context, expectedAnch
 	if o.chain == nil {
 		return preservedSnapshotState{}, preservedSnapshotUnavailable, nil
 	}
-	snapshot, found, err := o.chain.PreservedNodes(ctx)
+	readContext, cancel := o.chainReadContext(ctx)
+	defer cancel()
+	snapshot, found, err := o.chain.PreservedNodes(readContext)
 	if err != nil {
 		return preservedSnapshotState{}, preservedSnapshotUnavailable, err
 	}

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"devshard/cmd/gateway/filters"
 	"devshard/user"
 )
 
@@ -38,6 +39,7 @@ func TestDefaultsMatchSpec(t *testing.T) {
 		{"Tx.GasLimit", configuration.Tx.GasLimit, int64(700_000)},
 		{"Tx.PollIntervalMS", configuration.Tx.PollIntervalMS, int64(2_000)},
 		{"Tx.PollTimeoutMS", configuration.Tx.PollTimeoutMS, int64(45_000)},
+		{"Tx.CallTimeoutMS", configuration.Tx.CallTimeoutMS, int64(10_000)},
 		{"Limits.DefaultMaxTokens", configuration.Limits.DefaultMaxTokens, int64(4096)},
 		{"Limits.MaxTokensCap", configuration.Limits.MaxTokensCap, int64(4096)},
 		{"Limits.Concurrency.MaxRequests", configuration.Limits.Concurrency.MaxRequests, int64(2_048)},
@@ -45,6 +47,7 @@ func TestDefaultsMatchSpec(t *testing.T) {
 		{"Limits.Concurrency.PoCRequestsPer10000Weight", configuration.Limits.Concurrency.PoCRequestsPer10000Weight, 10.0},
 		{"Limits.MaxInputTokensInFlight", configuration.Limits.MaxInputTokensInFlight, int64(0)},
 		{"Limits.AdmissionQueueWaitMS", configuration.Limits.AdmissionQueueWaitMS, int64(300_000)},
+		{"Limits.MinClientReadBytesPerSecond", configuration.Limits.MinClientReadBytesPerSecond, int64(65_536)},
 		{"Limits.FallbackMaxModelLen", configuration.Limits.FallbackMaxModelLen, int64(1_000_000)},
 		{"Limits.HostWindows.Input.MinRequests", configuration.Limits.HostWindows.Input.MinRequests, int64(16)},
 		{"Limits.HostWindows.Input.InitialRequests", configuration.Limits.HostWindows.Input.InitialRequests, int64(32)},
@@ -81,9 +84,13 @@ func TestDefaultsMatchSpec(t *testing.T) {
 		{"Scheduler.MatchWaitMS", configuration.Scheduler.MatchWaitMS, int64(2_000)},
 		{"Scheduler.MaxConsecutiveBurns", configuration.Scheduler.MaxConsecutiveBurns, int64(2)},
 		{"Scheduler.DispatchQueueDepth", configuration.Scheduler.DispatchQueueDepth, int64(1_024)},
-		{"Scheduler.AffinityEnabled", configuration.Scheduler.AffinityEnabled, false},
-		{"Scheduler.AffinityTTLMS", configuration.Scheduler.AffinityTTLMS, int64(600_000)},
-		{"Scheduler.AffinityMaxEntries", configuration.Scheduler.AffinityMaxEntries, int64(100_000)},
+		{"Affinity.Enabled", configuration.Affinity.Enabled, false},
+		{"Affinity.TTLMS", configuration.Affinity.TTLMS, int64(600_000)},
+		{"Affinity.MaxEntries", configuration.Affinity.MaxEntries, int64(100_000)},
+		{"Affinity.MaxPinAgeMS", configuration.Affinity.MaxPinAgeMS, int64(3_600_000)},
+		{"Affinity.ShareCap", configuration.Affinity.ShareCap, int64(125)},
+		{"Affinity.MaxBurns", configuration.Affinity.MaxBurns, int64(2)},
+		{"Affinity.MinCachedTokens", configuration.Affinity.MinCachedTokens, int64(4_096)},
 		{"Engine.ReceiptTimeoutMS", configuration.Engine.ReceiptTimeoutMS, int64(5_000)},
 		{"Engine.FirstTokenFloorMS", configuration.Engine.FirstTokenFloorMS, int64(6_000)},
 		{"Engine.InterChunkStallMS", configuration.Engine.InterChunkStallMS, int64(30_000)},
@@ -154,6 +161,8 @@ func TestValidateCatchesEveryRuleBreach(t *testing.T) {
 		{"tx_gas_limit too low", func(c *Config) { c.Tx.GasLimit = 0 }, "tx_gas_limit"},
 		{"tx_poll_interval_ms too low", func(c *Config) { c.Tx.PollIntervalMS = 0 }, "tx_poll_interval_ms"},
 		{"tx_poll_timeout_ms below interval", func(c *Config) { c.Tx.PollTimeoutMS = 100 }, "tx_poll_timeout_ms"},
+		{"tx_call_timeout_ms too low", func(c *Config) { c.Tx.CallTimeoutMS = 0 }, "tx_call_timeout_ms"},
+		{"tx_call_timeout_ms above the poll timeout", func(c *Config) { c.Tx.CallTimeoutMS = c.Tx.PollTimeoutMS + 1 }, "tx_call_timeout_ms"},
 		{"default_max_tokens too low", func(c *Config) { c.Limits.DefaultMaxTokens = 0 }, "default_max_tokens"},
 		{"max_tokens_cap too low", func(c *Config) { c.Limits.MaxTokensCap = 0 }, "max_tokens_cap"},
 		{"max_concurrent_requests negative", func(c *Config) { c.Limits.Concurrency.MaxRequests = -1 }, "max_concurrent_requests"},
@@ -162,7 +171,10 @@ func TestValidateCatchesEveryRuleBreach(t *testing.T) {
 		{"max_concurrent_requests_per_10000_weight above the request cap", func(c *Config) { c.Limits.Concurrency.RequestsPer10000Weight = maxConcurrentRequests + 1 }, "max_concurrent_requests_per_10000_weight"},
 		{"poc_max_concurrent_requests_per_10000_weight above the request cap", func(c *Config) { c.Limits.Concurrency.PoCRequestsPer10000Weight = maxConcurrentRequests + 1 }, "poc_max_concurrent_requests_per_10000_weight"},
 		{"max_input_tokens_in_flight negative", func(c *Config) { c.Limits.MaxInputTokensInFlight = -1 }, "max_input_tokens_in_flight"},
+		{"max_buffered_request_bytes below one body", func(c *Config) { c.Limits.MaxBufferedRequestBytes = filters.MaxBodyBytes - 1 }, "max_buffered_request_bytes"},
 		{"admission_queue_wait_ms negative", func(c *Config) { c.Limits.AdmissionQueueWaitMS = -1 }, "admission_queue_wait_ms"},
+		{"min_client_read_bytes_per_second too low", func(c *Config) { c.Limits.MinClientReadBytesPerSecond = 0 }, "min_client_read_bytes_per_second"},
+		{"min_client_read_bytes_per_second too high", func(c *Config) { c.Limits.MinClientReadBytesPerSecond = maxMinClientReadBytesPerSecond + 1 }, "min_client_read_bytes_per_second"},
 		{"host_input_window_min_requests too low", func(c *Config) { c.Limits.HostWindows.Input.MinRequests = 0 }, "host_input_window_min_requests"},
 		{"host_input_window_initial_requests below min", func(c *Config) {
 			c.Limits.HostWindows.Input.InitialRequests = c.Limits.HostWindows.Input.MinRequests - 1
@@ -237,10 +249,18 @@ func TestValidateCatchesEveryRuleBreach(t *testing.T) {
 		{"scheduler_max_consecutive_burns above ceiling", func(c *Config) { c.Scheduler.MaxConsecutiveBurns = 1_001 }, "scheduler_max_consecutive_burns"},
 		{"scheduler_dispatch_queue_depth zero", func(c *Config) { c.Scheduler.DispatchQueueDepth = 0 }, "scheduler_dispatch_queue_depth"},
 		{"scheduler_dispatch_queue_depth above ceiling", func(c *Config) { c.Scheduler.DispatchQueueDepth = 65_537 }, "scheduler_dispatch_queue_depth"},
-		{"scheduler_affinity_ttl_ms zero", func(c *Config) { c.Scheduler.AffinityTTLMS = 0 }, "scheduler_affinity_ttl_ms"},
-		{"scheduler_affinity_ttl_ms above ceiling", func(c *Config) { c.Scheduler.AffinityTTLMS = 86_400_001 }, "scheduler_affinity_ttl_ms"},
-		{"scheduler_affinity_max_entries zero", func(c *Config) { c.Scheduler.AffinityMaxEntries = 0 }, "scheduler_affinity_max_entries"},
-		{"scheduler_affinity_max_entries above ceiling", func(c *Config) { c.Scheduler.AffinityMaxEntries = 10_000_001 }, "scheduler_affinity_max_entries"},
+		{"affinity_ttl_ms zero", func(c *Config) { c.Affinity.TTLMS = 0 }, "affinity_ttl_ms"},
+		{"affinity_ttl_ms above ceiling", func(c *Config) { c.Affinity.TTLMS = 86_400_001 }, "affinity_ttl_ms"},
+		{"affinity_max_entries zero", func(c *Config) { c.Affinity.MaxEntries = 0 }, "affinity_max_entries"},
+		{"affinity_max_entries above ceiling", func(c *Config) { c.Affinity.MaxEntries = 10_000_001 }, "affinity_max_entries"},
+		{"affinity_max_pin_age_ms zero", func(c *Config) { c.Affinity.MaxPinAgeMS = 0 }, "affinity_max_pin_age_ms"},
+		{"affinity_max_pin_age_ms above ceiling", func(c *Config) { c.Affinity.MaxPinAgeMS = 604_800_001 }, "affinity_max_pin_age_ms"},
+		{"affinity_share_cap below fair share", func(c *Config) { c.Affinity.ShareCap = 99 }, "affinity_share_cap"},
+		{"affinity_share_cap above ceiling", func(c *Config) { c.Affinity.ShareCap = 10_001 }, "affinity_share_cap"},
+		{"affinity_max_burns negative", func(c *Config) { c.Affinity.MaxBurns = -1 }, "affinity_max_burns"},
+		{"affinity_max_burns above ceiling", func(c *Config) { c.Affinity.MaxBurns = 1_001 }, "affinity_max_burns"},
+		{"affinity_min_cached_tokens negative", func(c *Config) { c.Affinity.MinCachedTokens = -1 }, "affinity_min_cached_tokens"},
+		{"affinity_min_cached_tokens above ceiling", func(c *Config) { c.Affinity.MinCachedTokens = 10_000_001 }, "affinity_min_cached_tokens"},
 		{"engine_receipt_timeout_ms too low", func(c *Config) { c.Engine.ReceiptTimeoutMS = 0 }, "engine_receipt_timeout_ms"},
 		{"engine_first_token_floor_ms too low", func(c *Config) { c.Engine.FirstTokenFloorMS = 0 }, "engine_first_token_floor_ms"},
 		{"engine_inter_chunk_stall_ms too low", func(c *Config) { c.Engine.InterChunkStallMS = 0 }, "engine_inter_chunk_stall_ms"},

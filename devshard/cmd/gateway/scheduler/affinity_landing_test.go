@@ -8,9 +8,15 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+
+	"devshard/cmd/gateway/affinity"
+	"devshard/cmd/gateway/config"
 )
 
-const affinityPickDeadline = 10 * time.Second
+const (
+	affinityPickDeadline = 10 * time.Second
+	unboundedMaxBurns    = 1_000
+)
 
 type affinityJob struct {
 	requestID string
@@ -77,7 +83,7 @@ func affinityMixes() map[string][]affinityJob {
 }
 
 // Test flow:
-//  1. For one, two and four escrows whose groups hold the same 16 hosts in different orders, build a scheduler.
+//  1. For one, two and four escrows whose groups hold the same 16 hosts in different orders, build a scheduler whose burn cap is too large to bind.
 //  2. For each queue mix (one at a time, every host at once beside free requests, ten requests for one host, a shuffled mixture) pick every request concurrently.
 //  3. Assert every request bound for a host lands on that host, and every free request is served.
 //  4. Assert the hits counted equal the bound requests, no exception was counted, and every burn is an `affinity_skip`.
@@ -91,6 +97,7 @@ func TestEveryRequestBoundForAHostLandsOnItAcrossEscrowsAndQueueMixes(t *testing
 					cfg.escrows = append(cfg.escrows, escrowID)
 					cfg.slotsByEscrow[escrowID] = permutedGroup(index)
 				}
+				cfg.tune = func(c *config.Config) { c.Affinity.MaxBurns = unboundedMaxBurns }
 				test := newSchedulerHarness(t, cfg)
 
 				outcomes := test.pickAll(jobs)
@@ -111,6 +118,57 @@ func TestEveryRequestBoundForAHostLandsOnItAcrossEscrowsAndQueueMixes(t *testing
 					require.Equal(t, GhostReasonAffinitySkip, reason)
 				}
 			})
+		}
+	}
+}
+
+// Test flow:
+//  1. For burn caps of zero, one and two, and one and four escrows over the same 16 hosts, build a scheduler.
+//  2. For each queue mix, pick every request concurrently.
+//  3. Assert every request is served, and every bound request either landed on its host or was counted as a `max_burns` exception.
+//  4. Assert no request was charged more `affinity_skip` burns than the cap, and every hit was counted.
+func TestNoRequestIsChargedMoreThanTheBurnCapAcrossEscrowsAndQueueMixes(t *testing.T) {
+	for _, budget := range []int64{0, 1, 2} {
+		for _, escrowCount := range []int{1, 4} {
+			for name, jobs := range affinityMixes() {
+				t.Run(fmt.Sprintf("budget %d/%d escrows/%s", budget, escrowCount, name), func(t *testing.T) {
+					cfg := schedulerConfig{slotsByEscrow: map[string][]string{}}
+					for index := range escrowCount {
+						escrowID := fmt.Sprintf("escrow-%d", index)
+						cfg.escrows = append(cfg.escrows, escrowID)
+						cfg.slotsByEscrow[escrowID] = permutedGroup(index)
+					}
+					cfg.tune = func(c *config.Config) { c.Affinity.MaxBurns = budget }
+					test := newSchedulerHarness(t, cfg)
+
+					outcomes := test.pickAll(jobs)
+
+					bound, landedOnHost := 0, 0
+					for index, job := range jobs {
+						require.NoError(t, outcomes[index].err, "pick of %s did not finish within %s", job.requestID, affinityPickDeadline)
+						if job.target == NoTarget {
+							continue
+						}
+						bound++
+						if outcomes[index].host == job.target {
+							landedOnHost++
+						}
+					}
+					landed, exceptions := test.observer.affinity()
+					require.LessOrEqual(t, landed, landedOnHost, "a hit is a request that landed on its host")
+					require.Equal(t, bound, landed+len(exceptions))
+					for _, reason := range exceptions {
+						require.Equal(t, affinity.ExceptionMaxBurns, reason)
+					}
+					charged := map[string]int64{}
+					for _, requestID := range test.observer.burnRequests() {
+						charged[requestID]++
+					}
+					for requestID, burns := range charged {
+						require.LessOrEqual(t, burns, budget, "request %s was charged more than the burn cap", requestID)
+					}
+				})
+			}
 		}
 	}
 }

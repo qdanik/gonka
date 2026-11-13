@@ -138,6 +138,7 @@ type gateway struct {
 	manager      *escrow.Manager
 	router       *scheduler.Scheduler
 	races        *engine.Engine
+	owedVotes    *api.OwedVotes
 	finishes     *finishNotice
 	limiter      *limits.GatewayLimiter
 	participants *limits.ParticipantLimiter
@@ -214,6 +215,7 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 		GasLimit:     uint64(configuration.Tx.GasLimit),
 		PollInterval: time.Duration(configuration.Tx.PollIntervalMS) * time.Millisecond,
 		PollTimeout:  time.Duration(configuration.Tx.PollTimeoutMS) * time.Millisecond,
+		CallTimeout:  time.Duration(configuration.Tx.CallTimeoutMS) * time.Millisecond,
 		Now:          clock,
 		Narrator:     events,
 	})
@@ -234,10 +236,12 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 	observer.Subscribe((&phaseNarrator{events: events}).observe)
 	gatewayLimiter := limits.NewGatewayLimiter(limits.GatewayConfigFromLimits(configuration.Limits))
 	buffers := api.NewBufferBudget(configuration.Limits.MaxBufferedResponseBytes)
+	requestBodies := api.NewBufferBudget(configuration.Limits.MaxBufferedRequestBytes)
 	configHolder.Subscribe(func(next *config.Config) {
 		gatewayLimiter.Reconfigure(limits.GatewayConfigFromLimits(next.Limits))
 		participants.Reconfigure(limits.ParticipantConfigFromConfig(next))
 		buffers.Retune(next.Limits.MaxBufferedResponseBytes)
+		requestBodies.Retune(next.Limits.MaxBufferedRequestBytes)
 		warnOpenModels(next.Limits)
 	})
 	hosts := perf.NewTracker(configHolder, clock)
@@ -305,6 +309,12 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 		return nil, err
 	}
 
+	owedVoteBook, err := gatewayStore.NewOwedVotes()
+	if err != nil {
+		return nil, err
+	}
+	owedVotes := api.NewOwedVotes(owedVoteBook)
+
 	suspicious, err := newSuspiciousHosts(ctx, gatewayStore)
 	if err != nil {
 		return nil, err
@@ -318,7 +328,7 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 	raceObserver := nonceAccountedRaces{recorder: raceRecorder, events: events}
 	prober.Settle(sessions.Poster, probeVotes{recorder: raceRecorder, events: events}, events)
 	e2e := env.LoadE2E()
-	hostMemory := affinity.NewTracker(affinityLimits(configHolder), clock)
+	hostMemory := affinity.NewTracker(affinityLimits(configHolder), escrows.SlotsByParticipant, clock)
 	races, err := engine.NewEngine(engine.Deps{
 		Affinity:   hostMemory,
 		Picker:     router,
@@ -333,6 +343,7 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 		Journal:    events,
 		Suspicious: suspicious.Suspicious,
 		Timeouts:   sessions.Poster,
+		OwedVotes:  owedVotes,
 		Now:        clock,
 		E2E:        engine.E2EOverrides{HardTimeout: e2e.StreamingHardTimeout},
 	})
@@ -361,6 +372,7 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 		metrics.NewChainCollector(observer, clock),
 		metrics.NewTransportCollector(transport.DefaultHostConnectionTracker()),
 		metrics.NewAccountingCollector(ledger),
+		metrics.NewOwedVotesCollector(owedVoteBook),
 		metrics.NewJournalCollector(journalCounts(events)),
 		metrics.NewNonceLedgerCollector(recorder.UnknownEscrowFacts),
 		metrics.NewFundingCollector(fundingModels(manager), deadlineCounts(manager)),
@@ -402,6 +414,7 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 		PromptTokens:            promptTokens(sources.ModelSnapshots, observer),
 		StatsTokenizerFallbacks: metrics.NewStatsTokenizerRecorder(telemetry),
 		IssuedSessions:          hostMemory,
+		RequestBodies:           requestBodies,
 	})
 	if err != nil {
 		return nil, err
@@ -420,6 +433,7 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 		manager:      manager,
 		router:       router,
 		races:        races,
+		owedVotes:    owedVotes,
 		finishes:     finishes,
 		limiter:      gatewayLimiter,
 		participants: participants,
@@ -472,11 +486,4 @@ func (environmentSigner) SignerFor(privateKeyEnv string) (*signing.Secp256k1Sign
 		return nil, err
 	}
 	return signing.SignerFromHex(keyHex)
-}
-
-func affinityLimits(holder *config.Holder) func() affinity.Limits {
-	return func() affinity.Limits {
-		scheduling := holder.Load().Scheduler
-		return affinity.Limits{TTL: time.Duration(scheduling.AffinityTTLMS) * time.Millisecond, MaxEntries: int(scheduling.AffinityMaxEntries)}
-	}
 }

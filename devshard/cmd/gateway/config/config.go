@@ -39,6 +39,7 @@ type Tx struct {
 	GasLimit       int64
 	PollIntervalMS int64
 	PollTimeoutMS  int64
+	CallTimeoutMS  int64
 }
 
 // Concurrency caps requests in flight; a zero MaxRequests leaves only the per-weight limit.
@@ -86,21 +87,23 @@ type ModelLimits struct {
 
 // Limits groups admission tuning; several zeroes mean unlimited. See README.md, "What each group holds".
 type Limits struct {
-	DefaultMaxTokens         int64
-	ForceUpstreamStreaming   bool
-	LogprobsOptimization     *bool
-	MaxBufferedResponseBytes int64
-	MaxTokensCap             int64
-	FallbackMaxModelLen      int64
-	Concurrency              Concurrency
-	MaxInputTokensInFlight   int64
-	AdmissionQueueWaitMS     int64
-	AdmissionQueuePerSlot    int64
-	HostWindows              HostWindows
-	Congestion               Congestion
-	HostCutoff               HostCutoff
-	ModelLimits              map[string]ModelLimits
-	ModelAccess              map[string]string
+	DefaultMaxTokens            int64
+	ForceUpstreamStreaming      bool
+	LogprobsOptimization        *bool
+	MaxBufferedResponseBytes    int64
+	MaxBufferedRequestBytes     int64
+	MinClientReadBytesPerSecond int64
+	MaxTokensCap                int64
+	FallbackMaxModelLen         int64
+	Concurrency                 Concurrency
+	MaxInputTokensInFlight      int64
+	AdmissionQueueWaitMS        int64
+	AdmissionQueuePerSlot       int64
+	HostWindows                 HostWindows
+	Congestion                  Congestion
+	HostCutoff                  HostCutoff
+	ModelLimits                 map[string]ModelLimits
+	ModelAccess                 map[string]string
 }
 
 type Modes struct {
@@ -196,17 +199,25 @@ type Engine struct {
 	HedgeFirstTokenFloorMS    int64
 }
 
-// Scheduler groups nonce-holding tuning; MatchWaitMS of 0 burns an unmatched nonce immediately, and MaxConsecutiveBurns of 0 never forces a send. See routing.md, "The forced send". The Affinity fields bound the host-affinity mode, see routing.md, "Host affinity".
+// Scheduler groups nonce-holding tuning; MatchWaitMS of 0 burns an unmatched nonce immediately, and MaxConsecutiveBurns of 0 never forces a send. See routing.md, "The forced send".
 type Scheduler struct {
 	MatchWaitMS             int64
 	MaxConsecutiveBurns     int64
 	DispatchQueueDepth      int64
 	WarmNewEscrows          bool
-	AffinityEnabled         bool
-	AffinityTTLMS           int64
-	AffinityMaxEntries      int64
 	ParticipantAllowlist    []string
 	UnthrottledParticipants []string
+}
+
+// Affinity bounds the host-affinity mode; MaxBurns caps the nonces a targeted request may burn on its host, and a MinCachedTokens of 0 turns the threshold off. See routing.md, "Host affinity".
+type Affinity struct {
+	Enabled         bool
+	TTLMS           int64
+	MaxEntries      int64
+	MaxPinAgeMS     int64
+	ShareCap        int64
+	MaxBurns        int64
+	MinCachedTokens int64
 }
 
 // TimeoutSweep bounds the retry of execution timeouts no race is left to post; a zero BudgetPerTick turns the sweep off.
@@ -232,6 +243,7 @@ type Config struct {
 	HeightSync HeightSync
 	Engine     Engine
 	Scheduler  Scheduler
+	Affinity   Affinity
 
 	TimeoutSweep TimeoutSweep
 
@@ -249,7 +261,7 @@ const (
 	ModelAccessAPIKey    = "api_key"
 	ModelAccessAdminOnly = "admin_only"
 
-	minAdminAPIKeyLength = 16
+	minAPIKeyLength = 16
 )
 
 // AdminEnabled is what callers must gate on: comparing against AdminAPIKey would authenticate an empty key.

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 
+	"devshard/cmd/gateway/affinity"
 	"devshard/cmd/gateway/chain"
 	"devshard/cmd/gateway/internal/safemath"
 	"devshard/types"
@@ -15,6 +16,7 @@ const (
 	nonceInFlightMargin      uint64 = 200
 	nonceCeilingPerMaxMargin uint64 = 2
 	unboundedAttemptsToFund         = 2
+	noBurnCap                int64  = math.MaxInt64
 )
 
 // avoidReason is why one round of a pick steps over an escrow; only one that could not pay opens the reserves.
@@ -83,7 +85,7 @@ func (s *Scheduler) pickEscrow(profile RequestProfile, snapshot chain.PhaseSnaps
 	// Read here as well as at dispatch: an escrow whose whole group it refuses can never serve.
 	ranking := escrowRanking{
 		profile: profile, snapshot: snapshot, queued: queued, avoided: avoided,
-		retirement: retirement, request: request, attempts: s.attemptsToFund(),
+		retirement: retirement, request: request, attempts: s.attemptsToFund(), maxBurns: s.affinityMaxBurns(),
 		reachable: reachableByAllowlist(s.participantAllowlist(), s.unthrottledParticipants()),
 		fleet:     s.fleetGates(profile.Model, snapshot),
 		ahead:     s.queuedAhead(candidates),
@@ -121,7 +123,7 @@ func (s *Scheduler) pinnedTargetFound(candidate Escrow, profile RequestProfile, 
 		return targetAbsent
 	}
 	gates := s.fleetGates(profile.Model, snapshot).forEscrow(s.stateBlocked(candidate.ID), s.absentFromChain(candidate.ID), chatBudgetSpent(candidate))
-	ranking := escrowRanking{profile: profile, queued: queued, ahead: []uint64{0}, targeted: []targetLoad{{}}}
+	ranking := escrowRanking{profile: profile, queued: queued, ahead: []uint64{0}, targeted: []targetLoad{{}}, maxBurns: s.affinityMaxBurns()}
 	_, found := stepsToTarget(candidate, gates, ranking, 0)
 	return found
 }
@@ -134,9 +136,11 @@ func settleTarget(queued *waiter, profile RequestProfile, found targetFound) {
 	case targetReached:
 		queued.homeTo(profile.Target)
 	case targetBlocked:
-		queued.unhome(AffinityExceptionGateBlocked)
+		queued.unhome(affinity.ExceptionGateBlocked)
+	case targetOverBurnCap:
+		queued.unhome(affinity.ExceptionMaxBurns)
 	default:
-		queued.unhome(AffinityExceptionNotInGroup)
+		queued.unhome(affinity.ExceptionNotInGroup)
 	}
 }
 
@@ -149,6 +153,7 @@ type escrowRanking struct {
 	retirement uint64
 	request    uint64
 	attempts   int
+	maxBurns   int64
 	reachable  func(Escrow) bool
 	fleet      availability
 	ahead      []uint64

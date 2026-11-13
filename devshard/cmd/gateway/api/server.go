@@ -197,6 +197,7 @@ type TokenizedPrompt struct {
 type RequestJournal interface {
 	RequestFinished(line journal.RequestLine)
 	RequestThrottled(line journal.RequestLine)
+	RequestBodyUnread(line journal.RequestLine)
 	ReplyNotCached(line journal.RequestLine)
 }
 
@@ -222,6 +223,7 @@ type Deps struct {
 	HostWindows             HostWindows
 	Telemetry               Telemetry
 	Buffers                 *BufferBudget
+	RequestBodies           *BufferBudget
 	Rejections              LimitRejections
 	CacheResults            CacheResults
 	StatsTokenizerFallbacks StatsTokenizerFallbacks
@@ -265,6 +267,7 @@ type Server struct {
 	promptTokens            PromptTokens
 	issuedSessions          IssuedSessions
 	promptCounts            promptCountGate
+	requestBodies           *BufferBudget
 	statsTokenizerFallbacks StatsTokenizerFallbacks
 	statsTokenizerEnabled   bool
 	settingsWrites          sync.Mutex
@@ -348,12 +351,13 @@ func New(deps Deps) (*Server, error) {
 		return nil, err
 	}
 	server.capture = capture
+	server.requestBodies = deps.RequestBodies
 	server.verify = server.compareKeys
 	server.handler = server.buildHandler()
 	return server, nil
 }
 
-// Handler is the process handler: one mux, no wrapper above it.
+// Handler is the process handler: one mux behind the client write bound, so the mux's own replies carry it too.
 func (s *Server) Handler() http.Handler { return s.handler }
 
 // HTTPServer sets neither ReadTimeout nor WriteTimeout, which would cut an SSE stream, and returns the cancel of every request context, which Shutdown alone never calls. See README.md, "Reading a body" and "Streaming the reply".

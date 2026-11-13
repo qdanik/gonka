@@ -6,6 +6,12 @@ const (
 	sweepOutcomeFailed  = "failed"
 )
 
+// Why a store writer lost a row: shed on a full queue or a closed writer, or refused by the database.
+const (
+	lostCauseShed        = "shed"
+	lostCauseWriteFailed = "write_failed"
+)
+
 // What a probe wave did.
 const (
 	HostPingTickStarted = "started"
@@ -22,4 +28,5 @@ const (
 	reasonNoAttempts       = "no_attempts"
 	reasonEscrowMissing    = "escrow_missing"
 	reasonBalanceExhausted = "balance_exhausted"
+	reasonReplyRefused     = "reply_refused"
 )

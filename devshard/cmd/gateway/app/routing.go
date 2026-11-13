@@ -75,6 +75,7 @@ func newRouting(deps routingDeps) (*registry.Registry, *scheduler.Scheduler, *wa
 		Config:            deps.Config,
 		Observer:          tracedDispatches{recorder: deps.Dispatches, steps: deps.Steps, events: deps.Journal, ledger: deps.Ledger},
 		Now:               deps.Now,
+		AffinityMaxBurns:  affinityMaxBurns(deps.Config),
 		OnEscrowExhausted: escrows.Exhausted,
 		OnReserveTaken:    escrows.ReserveTaken,
 		OnMoneyShort:      deps.Depletion.OnMoneyShort,

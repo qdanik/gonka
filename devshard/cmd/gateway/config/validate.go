@@ -19,18 +19,26 @@ func outsideWeightRateRange(requestsPer10000Weight float64) bool {
 	return notFinite(requestsPer10000Weight) || requestsPer10000Weight < 0 || requestsPer10000Weight > maxConcurrentRequests
 }
 
-// MaxContextTokens is the longest context a model may be priced at. See capacity.md, "The participant limiter: IOCW".
+// MaxContextTokens is the longest context a model may be priced at, and MinDrainTimeoutSeconds the shortest drain. See capacity.md, "The participant limiter: IOCW", and race.md, "Client departure and the drain".
 const (
-	MaxContextTokens = 100_000_000
+	MaxContextTokens       = 100_000_000
+	MinDrainTimeoutSeconds = 1_200
 
 	maxWindowRequests        = 1_000_000
 	maxConcurrentRequests    = 10_000_000
 	maxAdmissionQueuePerSlot = 10_000
 
-	maxConsecutiveBurns   = 1_000
-	maxDispatchQueueDepth = 65_536
-	maxAffinityTTLMS      = 86_400_000
-	maxAffinityEntries    = 10_000_000
+	maxMinClientReadBytesPerSecond = 1 << 30
+
+	maxConsecutiveBurns        = 1_000
+	maxDispatchQueueDepth      = 65_536
+	maxAffinityTTLMS           = 86_400_000
+	maxAffinityEntries         = 10_000_000
+	maxAffinityPinAgeMS        = 604_800_000
+	minAffinityShareCap        = 100
+	maxAffinityShareCap        = 10_000
+	maxAffinityMaxBurns        = 1_000
+	maxAffinityMinCachedTokens = 10_000_000
 
 	maxSnapshotAgeSeconds          = 86_400
 	maxVersionsPollIntervalSeconds = 86_400
@@ -61,6 +69,7 @@ func (c *Config) Validate() error {
 	c.validatePerf(complain)
 	c.validateEngine(complain)
 	c.validateScheduler(complain)
+	c.validateAffinity(complain)
 
 	if len(problems) > 0 {
 		return fmt.Errorf("%w: %w", ErrInvalid, errors.Join(problems...))
@@ -119,6 +128,9 @@ func (c *Config) validateChain(complain func(format string, args ...any)) {
 	if c.Tx.PollTimeoutMS < c.Tx.PollIntervalMS {
 		complain("tx_poll_timeout_ms: %d must be >= tx_poll_interval_ms %d", c.Tx.PollTimeoutMS, c.Tx.PollIntervalMS)
 	}
+	if c.Tx.CallTimeoutMS < 1 || c.Tx.CallTimeoutMS > c.Tx.PollTimeoutMS {
+		complain("tx_call_timeout_ms: %d must be between 1 and tx_poll_timeout_ms %d", c.Tx.CallTimeoutMS, c.Tx.PollTimeoutMS)
+	}
 }
 
 func (c *Config) validateLimits(complain func(format string, args ...any)) {
@@ -145,6 +157,12 @@ func (c *Config) validateLimits(complain func(format string, args ...any)) {
 	}
 	if c.Limits.AdmissionQueueWaitMS < 0 {
 		complain("admission_queue_wait_ms: %d must be >= 0", c.Limits.AdmissionQueueWaitMS)
+	}
+	if c.Limits.MaxBufferedRequestBytes < filters.MaxBodyBytes {
+		complain("max_buffered_request_bytes: %d must be >= %d, the largest body one request may send", c.Limits.MaxBufferedRequestBytes, filters.MaxBodyBytes)
+	}
+	if c.Limits.MinClientReadBytesPerSecond < 1 || c.Limits.MinClientReadBytesPerSecond > maxMinClientReadBytesPerSecond {
+		complain("min_client_read_bytes_per_second: %d must be between 1 and %d", c.Limits.MinClientReadBytesPerSecond, maxMinClientReadBytesPerSecond)
 	}
 	validateRequestWindow("host_input_window", c.Limits.HostWindows.Input, complain)
 	validateRequestWindow("host_output_window", c.Limits.HostWindows.Output, complain)
@@ -182,8 +200,13 @@ func (c *Config) validateLimits(complain func(format string, args ...any)) {
 
 func (c *Config) validateAccess(complain func(format string, args ...any)) {
 	// A guessable key is worse than none: "none" disables admin entirely, a weak one authenticates.
-	if c.Server.AdminAPIKey != "" && len(c.Server.AdminAPIKey) < minAdminAPIKeyLength {
-		complain("admin_api_key: must be at least %d characters when set (empty disables admin routes)", minAdminAPIKeyLength)
+	if c.Server.AdminAPIKey != "" && len(c.Server.AdminAPIKey) < minAPIKeyLength {
+		complain("admin_api_key: must be at least %d characters when set (empty disables admin routes)", minAPIKeyLength)
+	}
+	for index, key := range c.Server.APIKeys {
+		if len(key) < minAPIKeyLength {
+			complain("api_keys[%d]: must be at least %d characters", index, minAPIKeyLength)
+		}
 	}
 	requiresAPIKey := false
 	for model, access := range c.Limits.ModelAccess {
@@ -256,8 +279,8 @@ func (c *Config) validateOperations(complain func(format string, args ...any)) {
 	if c.Capture.MaxBytes < 1 {
 		complain("capture_max_bytes: %d must be >= 1", c.Capture.MaxBytes)
 	}
-	if c.Stream.DrainTimeoutSeconds < 1 {
-		complain("drain_timeout_seconds: %d must be >= 1", c.Stream.DrainTimeoutSeconds)
+	if c.Stream.DrainTimeoutSeconds < MinDrainTimeoutSeconds {
+		complain("drain_timeout_seconds: %d must be >= %d", c.Stream.DrainTimeoutSeconds, MinDrainTimeoutSeconds)
 	}
 	if c.Stream.ClassifyMaxAttemptBytes < 1 {
 		complain("classify_max_attempt_bytes: %d must be >= 1", c.Stream.ClassifyMaxAttemptBytes)
@@ -358,12 +381,6 @@ func (c *Config) validateScheduler(complain func(format string, args ...any)) {
 	if c.Scheduler.DispatchQueueDepth < 1 || c.Scheduler.DispatchQueueDepth > maxDispatchQueueDepth {
 		complain("scheduler_dispatch_queue_depth: %d must be in [1, %d]", c.Scheduler.DispatchQueueDepth, maxDispatchQueueDepth)
 	}
-	if c.Scheduler.AffinityTTLMS < 1 || c.Scheduler.AffinityTTLMS > maxAffinityTTLMS {
-		complain("scheduler_affinity_ttl_ms: %d must be in [1, %d]", c.Scheduler.AffinityTTLMS, maxAffinityTTLMS)
-	}
-	if c.Scheduler.AffinityMaxEntries < 1 || c.Scheduler.AffinityMaxEntries > maxAffinityEntries {
-		complain("scheduler_affinity_max_entries: %d must be in [1, %d]", c.Scheduler.AffinityMaxEntries, maxAffinityEntries)
-	}
 	for index, participant := range c.Scheduler.ParticipantAllowlist {
 		if problem := participantEntryProblem(participant); problem != "" {
 			complain("scheduler_participant_allowlist[%d]: %s", index, problem)
@@ -373,6 +390,27 @@ func (c *Config) validateScheduler(complain func(format string, args ...any)) {
 		if problem := participantEntryProblem(participant); problem != "" {
 			complain("scheduler_unthrottled_participants[%d]: %s", index, problem)
 		}
+	}
+}
+
+func (c *Config) validateAffinity(complain func(format string, args ...any)) {
+	if c.Affinity.TTLMS < 1 || c.Affinity.TTLMS > maxAffinityTTLMS {
+		complain("affinity_ttl_ms: %d must be in [1, %d]", c.Affinity.TTLMS, maxAffinityTTLMS)
+	}
+	if c.Affinity.MaxEntries < 1 || c.Affinity.MaxEntries > maxAffinityEntries {
+		complain("affinity_max_entries: %d must be in [1, %d]", c.Affinity.MaxEntries, maxAffinityEntries)
+	}
+	if c.Affinity.MaxPinAgeMS < 1 || c.Affinity.MaxPinAgeMS > maxAffinityPinAgeMS {
+		complain("affinity_max_pin_age_ms: %d must be in [1, %d]", c.Affinity.MaxPinAgeMS, maxAffinityPinAgeMS)
+	}
+	if c.Affinity.ShareCap < minAffinityShareCap || c.Affinity.ShareCap > maxAffinityShareCap {
+		complain("affinity_share_cap: %d must be in [%d, %d]", c.Affinity.ShareCap, minAffinityShareCap, maxAffinityShareCap)
+	}
+	if c.Affinity.MaxBurns < 0 || c.Affinity.MaxBurns > maxAffinityMaxBurns {
+		complain("affinity_max_burns: %d must be in [0, %d]", c.Affinity.MaxBurns, maxAffinityMaxBurns)
+	}
+	if c.Affinity.MinCachedTokens < 0 || c.Affinity.MinCachedTokens > maxAffinityMinCachedTokens {
+		complain("affinity_min_cached_tokens: %d must be in [0, %d]", c.Affinity.MinCachedTokens, maxAffinityMinCachedTokens)
 	}
 }
 
