@@ -18,6 +18,7 @@ from abc import abstractmethod
 from common.logger import create_logger
 from common.trackable_task import ITrackableTask
 from api.proxy import setup_vllm_proxy
+from api.kv_events import kv_events_config_json, kv_events_enabled
 
 
 TERMINATION_TIMEOUT = 20
@@ -243,7 +244,9 @@ class VLLMRunner(IVLLMRunner):
                 "--dtype", self.dtype,
                 "--port", str(port),
                 "--host", self.VLLM_HOST
-            ] + self.additional_args
+            ] + (
+                ["--kv-events-config", kv_events_config_json(i)] if kv_events_enabled() else []
+            ) + self.additional_args
 
             vllm_command_str = " ".join(shlex.quote(arg) for arg in vllm_command)
             

@@ -14,6 +14,7 @@ from fastapi.responses import StreamingResponse
 from starlette.background import BackgroundTask
 from starlette.middleware.base import BaseHTTPMiddleware
 
+from api import kv_events
 from common.logger import create_logger
 
 logger = create_logger(__name__)
@@ -96,10 +97,15 @@ async def _proxy_request_to_backend(request: Request, backend_path: str) -> Resp
     if shutdown_event.is_set():
         return Response(status_code=503, content=b"Service is shutting down")
     
+    request_keys = await kv_events.request_prefix_keys(
+        request, backend_path, vllm_client, vllm_healthy, vllm_counts
+    )
+    
     try:
         port = await _pick_vllm_backend(
             _parse_session_key(request.headers.get("x-session-key")),
             _parse_prefix_hashes(request.headers.get("x-prefix-hashes")),
+            request_keys,
         )
     except RuntimeError:
         return Response(status_code=503, content=b"No vLLM backend available")
@@ -224,21 +230,24 @@ def _remember_prefix(port: int, hashes: Sequence[bytes]) -> None:
 async def _pick_vllm_backend(
     session_key: Optional[str] = None,
     prefix_hashes: Optional[Sequence[bytes]] = None,
+    request_keys: Optional[Dict[int, List[bytes]]] = None,
 ) -> int:
     """Least-connections picker; with a session key and/or prefix hashes it prefers, among
     instances within PREFIX_MAX_LEAD of the least loaded, the longest prefix match, then the
-    rendezvous winner for the key."""
+    rendezvous winner for the key. request_keys (KV events on) replaces the approximate
+    match with the prefix each instance reports holding."""
     async with vllm_pick_lock:
         live = [p for p, ok in vllm_healthy.items() if ok]
         if not live:
             raise RuntimeError("no vLLM backend")
-        if not session_key and not prefix_hashes:
+        if not session_key and not prefix_hashes and request_keys is None:
             port = min(live, key=lambda p: vllm_counts.get(p, 0))
         else:
             bound = min(vllm_counts.get(p, 0) for p in live) + PREFIX_MAX_LEAD
             candidates = [p for p in live if vllm_counts.get(p, 0) <= bound]
             port = min(candidates, key=lambda p: (
-                -(_prefix_match_len(p, prefix_hashes) if prefix_hashes else 0),
+                -(kv_events.indexes.match_tokens(p, request_keys) if request_keys is not None
+                  else _prefix_match_len(p, prefix_hashes) if prefix_hashes else 0),
                 -(_rendezvous_score(session_key, p) if session_key else 0),
                 vllm_counts.get(p, 0),
                 p,
@@ -308,6 +317,9 @@ async def _health_check_vllm(interval: float = 2.0):
             logger.debug("No backend ports configured yet, waiting...")
             await asyncio.sleep(interval)
             continue
+        
+        if kv_events.kv_events_enabled():
+            kv_events.indexes.sync(vllm_backend_ports, vllm_setup_generation)
             
         for p in vllm_backend_ports:
             ok = False
@@ -322,6 +334,8 @@ async def _health_check_vllm(interval: float = 2.0):
                 logger.debug("Health check for port %d failed: %s", p, e)
 
             ok = _apply_health_damping(p, ok)
+            if not ok:
+                kv_events.indexes.reset(p)
 
             prev = vllm_healthy.get(p)
             if prev != ok:
@@ -391,6 +405,8 @@ async def stop_vllm_proxy():
         except asyncio.CancelledError:
             pass
         health_check_task = None
+    
+    await kv_events.indexes.stop()
     
     # Stop compatibility server
     await stop_backward_compatibility()
