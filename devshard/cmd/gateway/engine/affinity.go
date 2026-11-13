@@ -8,6 +8,7 @@ import (
 type hostMemory interface {
 	Lookup(key affinity.Key, promptTokens uint64) (participant string, status affinity.Status)
 	Record(key affinity.Key, participant, session string, promptTokens uint64)
+	RecordAlias(key affinity.Key, participant, session string, promptTokens uint64)
 }
 
 func (c *raceCoordinator) affinityIntent() (target string, miss affinity.Exception) {
@@ -36,6 +37,6 @@ func (c *raceCoordinator) rememberWinner(participant string) {
 	}
 	c.deps.Affinity.Record(c.request.AffinityKey, participant, c.request.IssuedSession, c.request.InputTokens)
 	if c.request.SessionDigest != affinity.NoKey && c.request.SessionDigest != c.request.AffinityKey {
-		c.deps.Affinity.Record(c.request.SessionDigest, participant, c.request.IssuedSession, c.request.InputTokens)
+		c.deps.Affinity.RecordAlias(c.request.SessionDigest, participant, c.request.IssuedSession, c.request.InputTokens)
 	}
 }

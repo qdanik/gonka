@@ -13,7 +13,9 @@ import (
 type recordedWinner struct {
 	key          affinity.Key
 	participant  string
+	session      string
 	promptTokens uint64
+	alias        bool
 }
 
 type spyMemory struct {
@@ -28,8 +30,12 @@ func (s *spyMemory) Lookup(_ affinity.Key, promptTokens uint64) (string, affinit
 	return s.participant, s.status
 }
 
-func (s *spyMemory) Record(key affinity.Key, participant, _ string, promptTokens uint64) {
-	s.recorded = append(s.recorded, recordedWinner{key: key, participant: participant, promptTokens: promptTokens})
+func (s *spyMemory) Record(key affinity.Key, participant, session string, promptTokens uint64) {
+	s.recorded = append(s.recorded, recordedWinner{key: key, participant: participant, session: session, promptTokens: promptTokens})
+}
+
+func (s *spyMemory) RecordAlias(key affinity.Key, participant, session string, promptTokens uint64) {
+	s.recorded = append(s.recorded, recordedWinner{key: key, participant: participant, session: session, promptTokens: promptTokens, alias: true})
 }
 
 func affinityCoordinator(memory hostMemory, key affinity.Key) *raceCoordinator {
@@ -134,4 +140,28 @@ func TestAWinUnderAnIssuedSessionBringsItsEchoAndItsRepeatBackToTheHost(t *testi
 	participant, status := tracker.Lookup("unknown-session", 0)
 	require.Equal(t, "host-b", participant)
 	require.Equal(t, affinity.StatusHit, status)
+}
+
+// Test flow:
+//  1. Build a coordinator whose request carries an affinity key, a different session digest, an issued session key and an admission count.
+//  2. Crown a winner.
+//  3. Assert the key was recorded with the session key and the count, and the digest was recorded as an alias with the same two.
+//  4. Repeat with a digest equal to the key and assert only the one record is made.
+func TestTheSessionDigestIsRecordedAsAnAliasOfTheKey(t *testing.T) {
+	memory := &spyMemory{}
+	coordinator := affinityCoordinator(memory, "derived")
+	coordinator.request.SessionDigest, coordinator.request.IssuedSession, coordinator.request.InputTokens = "digest", "K", 7_000
+
+	coordinator.crownWinner(&liveAttempt{participant: "host-a"}, crownFirstClaim)
+
+	require.Equal(t, []recordedWinner{
+		{key: "derived", participant: "host-a", session: "K", promptTokens: 7_000},
+		{key: "digest", participant: "host-a", session: "K", promptTokens: 7_000, alias: true},
+	}, memory.recorded)
+
+	echoed := &spyMemory{}
+	echo := affinityCoordinator(echoed, "digest")
+	echo.request.SessionDigest = "digest"
+	echo.crownWinner(&liveAttempt{participant: "host-a"}, crownFirstClaim)
+	require.Len(t, echoed.recorded, 1)
 }
