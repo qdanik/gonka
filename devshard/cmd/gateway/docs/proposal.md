@@ -41,7 +41,6 @@ Structural evidence:
 ## 4. Non-goals
 
 - Changing the external HTTP API. Broker- and participant-facing routes and schemas stay.
-- Building KV-cache affinity. It is closed as unreachable, not deferred (section 10).
 - Preserving single-escrow mode, its top-level route aliases, or devshardctl's state layout.
 - A latency or throughput target. Both are set by hosts and the chain, not by this code.
 
@@ -64,7 +63,7 @@ Old tests and fixtures become behavioural contracts; a golden-parity harness cov
 | # | question | decision |
 |---|---|---|
 | 1 | compatibility | external HTTP API preserved; environment, configuration and state layout redesigned |
-| 2 | KV-cache affinity | closed as unreachable |
+| 2 | KV-cache affinity | opt-in, off by default; guarantees the participant, never the node |
 | 3 | single-escrow mode | dropped; one escrow is a pool of one, reachable at `/devshard/{id}/…` |
 | 4 | configuration | immutable snapshot from `defaults ← environment ← admin overrides`, swapped atomically; no mutable globals |
 | 5 | approach | full rewrite including the race engine |
@@ -128,6 +127,6 @@ Equivalence was proven before the numbers were read: 84 body-and-intent combinat
 
 ## 10. Open items
 
-- **KV-cache affinity.** Closed as unreachable, not deferred. The protocol addresses a *participant*, never a node behind it, so the most a gateway can promise is affinity to the participant; which of that participant's nodes serves the request is decided by its own router, which this side neither sees nor addresses.
+- **KV-cache affinity.** Available as an opt-in mode, `affinity_enabled`. The protocol addresses a *participant*, never a node behind it, so the most a gateway can promise is affinity to the participant; which of that participant's nodes serves the request is decided by its own node manager, which this side neither sees nor addresses, though the session key it is handed asks it to keep one session on one node. Within that limit the next turn of a conversation is guaranteed to execute on the participant that served the previous one, at the price of nonces burned in between and within a pin age, a participant's share of the pins and a burn cap per request; see [routing.md](./routing.md), "Host affinity".
 - **Cross-shard coordination of the network concurrency share.** Closed as a protocol limit, not deferred. A shard sees its own escrows and nothing else, so no gateway can divide a network-wide concurrency share without the protocol carrying one; measurement also shows it is not the binding constraint at current load.
 - **`encoding/json/v2` for the response strip.** Measured, not adopted — see section 8. Revisit when the package ships without `GOEXPERIMENT`.

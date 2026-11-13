@@ -11,7 +11,9 @@ import (
 )
 
 func (c *raceCoordinator) pick(ctx context.Context) (scheduler.Assignment, error) {
-	return c.observePick(c.deps.Picker.Pick(ctx, c.requestProfile(c.request.Params)))
+	profile := c.requestProfile(c.request.Params)
+	profile.Target, profile.AffinityMiss = c.affinityIntent()
+	return c.observePick(c.deps.Picker.Pick(ctx, profile))
 }
 
 // observePick latches the out-of-funds fact a declined nonce carries, except a pinned escrow's own shortfall; no host ever reports it.

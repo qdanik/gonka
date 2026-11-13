@@ -10,6 +10,10 @@ func runPipeline(document *Document, options Options) (Result, error) {
 	if err := rejectUnknownParameters(document); err != nil {
 		return Result{}, err
 	}
+	var affinity AffinityMaterial
+	if options.Affinity {
+		affinity.PromptCacheKey = readPromptCacheKey(document)
+	}
 	if err := applyStage(StagePreValidation, document, profile); err != nil {
 		return Result{}, err
 	}
@@ -21,6 +25,9 @@ func runPipeline(document *Document, options Options) (Result, error) {
 	}
 	if err := validateMessages(document); err != nil {
 		return Result{}, err
+	}
+	if options.Affinity && affinity.PromptCacheKey == NoPromptCacheKey {
+		affinity.LeadingMessages = leadingMessages(document)
 	}
 	view, err := decodeRequestView(document)
 	if err != nil {
@@ -52,6 +59,7 @@ func runPipeline(document *Document, options Options) (Result, error) {
 		MaxCompletionTokens:     view.MaxCompletionTokens,
 		Logprobs:                logprobs,
 		EmptyAnswerCountsTokens: profile.emptyAnswerCountsTokens(),
+		Affinity:                affinity,
 	}, nil
 }
 

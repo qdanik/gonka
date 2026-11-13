@@ -4,6 +4,7 @@ import (
 	"sync"
 	"time"
 
+	"devshard/cmd/gateway/affinity"
 	"devshard/cmd/gateway/chain"
 	"devshard/cmd/gateway/engine"
 	"devshard/cmd/gateway/journal"
@@ -23,7 +24,17 @@ type tracedDispatches struct {
 // GhostBurned is counted by escrow and reason, never by nonce: a counter keyed by nonce would grow without end.
 func (t tracedDispatches) GhostBurned(escrowID string, burned scheduler.Burn) {
 	t.recorder.GhostBurned(escrowID, burned.Participant, burned.Reason)
+	if burned.Reason == scheduler.GhostReasonAffinitySkip {
+		t.recorder.AffinityBurned()
+	}
 	t.events.GhostBurned(escrowID, burned)
+}
+
+// AffinityLanded and AffinityException are counted by model and reason only: a key, a caller or a host would grow without end.
+func (t tracedDispatches) AffinityLanded(_, model string) { t.recorder.AffinityLanded(model) }
+
+func (t tracedDispatches) AffinityException(_, model string, reason affinity.Exception) {
+	t.recorder.AffinityException(model, string(reason))
 }
 
 // BurnBudgetExhausted is rare and changes what the escrow does: queued callers now wait rather than spend.

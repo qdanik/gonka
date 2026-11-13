@@ -57,6 +57,7 @@ type HostRequest struct {
 	// (legacy single-message override when escrow state does not carry a forced turn).
 	ForceHeightSyncAnchor        bool
 	LogprobsOptimizationOverride *bool
+	SessionKey                   string
 	// HeightSyncEscrow carries MsgForceHeightSyncTurn-derived state (not serialized on HTTP JSON).
 	HeightSyncEscrow *heightsync.EscrowHeightSyncHints
 }
@@ -1140,6 +1141,7 @@ func (h *Host) signReceipt(ctx context.Context, req HostRequest, hdr *blocks.Hea
 
 	job := h.newExecuteRequest(inferenceID, rec, req.Payload)
 	job.LogprobsOptimizationOverride = req.LogprobsOptimizationOverride
+	job.SessionKey = req.SessionKey
 	if !startedHere && h.storedResponse != nil {
 		job.Recovery = devshard.RecoveryStoredFirst
 	}
