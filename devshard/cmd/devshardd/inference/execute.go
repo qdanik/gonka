@@ -3,7 +3,6 @@ package inference
 import (
 	"context"
 	"crypto/sha256"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -42,11 +41,12 @@ func executeInference(
 		return nil, observability.Classify(observability.ReasonModifyRequestErr, observability.WhereRuntimeExecute, fmt.Errorf("modify request body: %w", err))
 	}
 	// The executor does not trust the gateway's check: an out-of-range stop id crashes the node.
-	if err := checkStopTokenIDs(modified.NewBody, vocabularySize); err != nil {
+	if err := checkStopTokenIDs(modified.RequestMap, vocabularySize); err != nil {
 		return nil, observability.Classify(observability.ReasonModifyRequestErr, observability.WhereRuntimeExecute, err)
 	}
 
-	resp, err := execute(ctx, req.Model, modified.NewBody)
+	// The prefix hashes come from the map the modify step built, so the request is parsed once.
+	resp, err := execute(withPrefixHashes(ctx, messagesPrefixHashes(modified.RequestMap)), req.Model, modified.NewBody)
 	if err != nil {
 		return nil, err
 	}
@@ -150,11 +150,7 @@ func processExecutionHTTPResponse(
 }
 
 // checkStopTokenIDs resolves vocabularySize only for a request with stop ids: the lookup can block on the chain.
-func checkStopTokenIDs(body []byte, vocabularySize func() int) error {
-	var requestMap map[string]interface{}
-	if err := json.Unmarshal(body, &requestMap); err != nil {
-		return fmt.Errorf("modify request body: %w", err)
-	}
+func checkStopTokenIDs(requestMap map[string]interface{}, vocabularySize func() int) error {
 	if !completionapi.HasStopTokenIDs(requestMap) {
 		return nil
 	}
