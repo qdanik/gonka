@@ -182,8 +182,6 @@ Signing keys are addressed **by the name of the variable that holds them**, neve
 | `GATEWAY_MAX_BUFFERED_REQUEST_BYTES` | 128 MiB | **every** chat body being read and normalised, at once; a body past it is answered 503; at least 10 MiB ([`request.md`](request.md), "Order of operations") |
 | `GATEWAY_MIN_CLIENT_READ_BYTES_PER_SECOND` | 64 KiB/s | the slowest average a client may read one reply at, after a 30-second allowance, before its write fails; between 1 B/s and 1 GiB/s ([`api/README.md`](../api/README.md), "Streaming the reply") |
 | `DEVSHARD_CHAT_CACHE_MAX_BYTES` | 256 MiB | the response cache |
-| `GATEWAY_MAX_ORPHAN_STREAM_BYTES` | 128 MiB | the bytes of all streams whose client left and that nobody is reading, kept so the client can resume them; past it an orphan is dropped; `0` keeps none ([`api/README.md`](../api/README.md), "Resuming a stream") |
-| `GATEWAY_MAX_ORPHAN_STREAMS_PER_KEY` | 4 | the orphans of one caller, body and escrow; one past it drops the oldest |
 | `GATEWAY_DEFAULT_MAX_TOKENS` / `GATEWAY_MAX_TOKENS_CAP` | from `filters` | the output budget a request gets and may ask for |
 | `DEVSHARD_ESCROW_ROTATION_ENABLED` | false | whether the epoch bridge creates and retires escrows |
 | `DEVSHARD_ESCROW_ROTATION_SETTLEMENT_ENABLED` | false | whether retirement settles or only parks; a model's own `settlement_enabled` in the models JSON overrides it |

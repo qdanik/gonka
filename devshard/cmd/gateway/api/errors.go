@@ -49,12 +49,6 @@ var (
 	ErrDevshardNotActivatable = errors.New("devshard cannot be activated")
 
 	ErrInvalidEscrowID = errors.New("escrow id is not a chain escrow id")
-
-	ErrInvalidResumeCursor = errors.New("invalid resume cursor")
-
-	ErrResumeUnavailable = errors.New("the stream to resume is not available")
-
-	ErrStreamDropped = errors.New("the stream was dropped before it finished")
 )
 
 type hostBodyRefusedError struct{ refusal string }
@@ -193,13 +187,13 @@ func statusForError(err error) int {
 		return http.StatusConflict
 	case errors.Is(err, engine.ErrStopped), errors.Is(err, registry.ErrClosed):
 		return http.StatusServiceUnavailable
-	case errors.Is(err, ErrPrivateKeyEnvRequired), errors.Is(err, ErrInvalidEscrowID), errors.Is(err, config.ErrInvalid), errors.Is(err, escrow.ErrAmountBelowFloor), errors.Is(err, ErrInvalidResumeCursor):
+	case errors.Is(err, ErrPrivateKeyEnvRequired), errors.Is(err, ErrInvalidEscrowID), errors.Is(err, config.ErrInvalid), errors.Is(err, escrow.ErrAmountBelowFloor):
 		return http.StatusBadRequest
 	case errors.Is(err, ErrDevshardNotActivatable):
 		return http.StatusConflict
 	case errors.Is(err, ErrUnknownDevshard), errors.Is(err, ErrUnknownParticipant):
 		return http.StatusNotFound
-	case errors.Is(err, escrow.ErrEscrowPruned), errors.Is(err, escrow.ErrEscrowSettledOnChain), errors.Is(err, ErrResumeUnavailable):
+	case errors.Is(err, escrow.ErrEscrowPruned), errors.Is(err, escrow.ErrEscrowSettledOnChain):
 		return http.StatusGone
 	case errors.Is(err, chain.ErrWalletUnderfunded):
 		return http.StatusPaymentRequired
@@ -319,12 +313,6 @@ func detailForError(err error) errorDetail {
 	var hostErr *engine.HostApplicationError
 	if errors.As(err, &hostErr) {
 		return errorDetail{Message: hostErrorMessage(hostErr)}
-	}
-	switch {
-	case errors.Is(err, ErrInvalidResumeCursor):
-		return errorDetail{Message: err.Error(), Type: errorTypeInvalidRequest, Code: errorCodeInvalidResumeCursor}
-	case errors.Is(err, ErrResumeUnavailable):
-		return errorDetail{Message: err.Error(), Code: errorCodeResumeUnavailable}
 	}
 	return errorDetail{Message: err.Error()}
 }

@@ -1,9 +1,7 @@
 package engine
 
 // Failure names why the race did not serve a whole answer, or is nil when it did.
-func (o RaceOutcome) Failure() error { return o.failure() }
-
-func (o RaceOutcome) failure() error {
+func (o RaceOutcome) Failure() error {
 	switch {
 	case o.Succeeded:
 		return nil

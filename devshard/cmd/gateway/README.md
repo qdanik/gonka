@@ -113,19 +113,6 @@ Boot has a matching budget: the concurrent-build limit and the idle connection p
 - **`Activate` refuses an escrow parked for settlement.** Its balance is already committed to a settlement that is either on chain or on its way, and serving from it again spends nonces that settlement does not account for.
 - **Every key is named, never carried.** `CreateEscrow` takes the name of the variable holding the signing key. See [`docs/operations.md`](./docs/operations.md), "What is exposed".
 
-## Resuming a stream
-
-A client whose streamed `POST /v1/chat/completions` broke can get the rest of the same reply without a second nonce. While the response cache is configured, every streamed reply carries `X-Devshard-Stream-ID`. The client counts the SSE events it received (events end at a blank line; the closing `[DONE]` is one) and repeats the same `POST` (same body, same `Authorization`, same escrow pin) with `X-Devshard-Resume: <stream-id>/<n>`. The answer is 200 with the events from `n` on, then the live tail; `X-Devshard-Resume-From` confirms `n` and `X-Devshard-Resume-Source` says `live` or `cache`; `X-Request-Id` is new and `X-Devshard-Stream-ID` is the original. A header that does not parse, or an `n` past the events the gateway holds, is 400 `invalid_resume_cursor`. A stream the caller has no log of under this body (another key, another body, an expired reply, a restarted gateway) is 410 `resume_unavailable` with no nonce spent: an explicit resume never starts a race. The body of a stream carries no `id:` lines and is byte-identical to a stream without the feature.
-
-Without the header, an identical request from the same caller is answered from the cache, or, while the first race still runs with nobody reading it, adopted from event 0. Two identical requests that are both being read stay two races. Logs live in the process's memory only, so a resume after a restart is a 410, and a load balancer over several gateways has to pin a caller to one.
-
-| Setting | Environment variable | Default | What it bounds |
-| --- | --- | --- | --- |
-| `max_orphan_stream_bytes` | `GATEWAY_MAX_ORPHAN_STREAM_BYTES` | 128 MiB | the bytes of all streams whose client left and that nobody is reading; an orphan that would pass it is dropped and cannot be resumed; `0` keeps no orphan, not even an empty one |
-| `max_orphan_streams_per_key` | `GATEWAY_MAX_ORPHAN_STREAMS_PER_KEY` | 4 | the orphans of one caller, body and escrow; one past it drops the oldest |
-
-An orphan lives until its race ends, which `drain_timeout_seconds` bounds, and a finished reply stays resumable for the response cache's hour (`DEVSHARD_CHAT_CACHE_MAX_BYTES` sizes it). A reply is also bounded by the cache's entry limit and the shared `max_buffered_response_bytes` budget. The mechanism is in [`api/README.md`](./api/README.md), "Resuming a stream".
-
 ## Working on it
 
 [`CONTRIBUTING.md`](./CONTRIBUTING.md) is the checklist every change is reviewed against: how to run the gate (`make verify`, from this directory, so the linter reads `.golangci.yml`), where code goes, how files are laid out, naming, comments, and the `Test flow` format every test carries.

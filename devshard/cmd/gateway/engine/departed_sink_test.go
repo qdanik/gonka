@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"slices"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -126,48 +125,6 @@ func TestRunRaceFeedsTheSinkTheWinnersBytesAfterTheClientLeft(t *testing.T) {
 	}
 	if got := recorder.departedBytes(); got != "data: tail\n\n" {
 		t.Fatalf("sink received %q, want the tail sent after the client left", got)
-	}
-}
-
-// Test flow:
-//  1. Start a race whose host sends a role chunk and then a content chunk that claims the crown, paused before the claim resolves, over a client that takes departed bytes.
-//  2. Disconnect the client before the claim is answered and let the host finish.
-//  3. Assert the client received nothing and the sink received the crowned winner's content.
-func TestRunRaceFeedsTheSinkACrownClaimedAfterTheClientLeft(t *testing.T) {
-	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
-
-	fixture := newRaceFixture(settledPolicy(), 1)
-	fixture.deps.DrainTimeout = time.Hour
-	recorder := &departedRecorder{}
-	fixture.request.Client = recorder
-	streaming := make(chan uint64, 1)
-	resume := make(chan struct{})
-	fixture.host(210, 0, "host-0", &hostScript{
-		receipt:   true,
-		chunks:    []string{"data: role\n\n", contentChunk(210)},
-		streaming: streaming,
-		resume:    resume,
-		confirmed: true,
-		finished:  true,
-	})
-
-	clientCtx, disconnect := context.WithCancel(context.Background())
-	returned := make(chan error, 1)
-	go func() {
-		_, err := fixture.run(clientCtx)
-		returned <- err
-	}()
-	<-streaming
-	disconnect()
-	<-returned
-	close(resume)
-	<-fixture.reported
-
-	if got := recorder.forwarded(); len(got) != 0 {
-		t.Fatalf("client received %q after leaving", got)
-	}
-	if got := recorder.departedBytes(); !strings.Contains(got, contentChunk(210)) {
-		t.Fatalf("sink received %q, want the crowned winner's content", got)
 	}
 }
 

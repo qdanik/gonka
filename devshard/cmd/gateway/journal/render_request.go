@@ -14,24 +14,14 @@ const (
 	MaxLoggedErrorBytes = 256
 
 	cacheHitOutcome = "cache_hit"
-	resumedOutcome  = "resumed"
-	noResumeOf      = ""
 )
 
 // renderRequestFinished writes both shapes: the short one of a cache hit, and the record of a raced request.
 func renderRequestFinished(lines logSink, line *RequestLine) {
-	if line.CacheHit || line.ResumeOf != noResumeOf {
-		outcome := resumedOutcome
-		if line.CacheHit {
-			outcome = cacheHitOutcome
-		}
-		fields := []any{logkey.Request, line.RequestID, logkey.Model, line.Model, logkey.APIKeyID, line.APIKeyID,
+	if line.CacheHit {
+		lines.Info("request finished", logkey.Request, line.RequestID, logkey.Model, line.Model, logkey.APIKeyID, line.APIKeyID,
 			logkey.Escrow, line.EscrowID, logkey.Stream, line.ClientStream, logkey.InputTokens, line.Outcome.InputTokens,
-			logkey.InputTokensSource, string(line.Outcome.InputTokensSource), logkey.Outcome, outcome, logkey.Bytes, line.Bytes}
-		if line.ResumeOf != noResumeOf {
-			fields = append(fields, logkey.Resumed, line.Resumed, logkey.ResumeOf, line.ResumeOf)
-		}
-		lines.Info("request finished", fields...)
+			logkey.InputTokensSource, string(line.Outcome.InputTokensSource), logkey.Outcome, cacheHitOutcome, logkey.Bytes, line.Bytes)
 		return
 	}
 	fields := requestFinishedFields(line)

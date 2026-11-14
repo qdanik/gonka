@@ -181,7 +181,7 @@ func (e *Engine) Run(ctx context.Context, request Request, client io.Writer) (Ra
 	if err != nil {
 		return outcome, err
 	}
-	return outcome, outcome.failure()
+	return outcome, outcome.Failure()
 }
 
 func finishOnce(finished func()) func() {

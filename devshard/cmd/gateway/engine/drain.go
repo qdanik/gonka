@@ -64,7 +64,6 @@ func (d drain) gate(client io.Writer) io.Writer {
 	return clientStream{client: client, gone: d.clientGone(), depart: d.depart, departed: departed}
 }
 
-// clientStream reports every write as done; a failed write departs the client, and a departed client's bytes go to its DepartedSink, or are dropped when it has none. See race.md, "Client departure and the drain".
 type clientStream struct {
 	client   io.Writer
 	gone     <-chan struct{}

@@ -45,14 +45,6 @@ type clientStream struct {
 
 	log        *streamLog
 	rewriteErr error
-
-	handoff  sync.Mutex
-	settle   func(engine.RaceOutcome)
-	final    engine.RaceOutcome
-	reported bool
-	finished bool
-	orphaned bool
-	settled  bool
 }
 
 func newClientStream(w http.ResponseWriter, requestID string, streaming, usage bool, logprobs filters.LogprobIntent, promptTokens uint64, budget *BufferBudget) *clientStream {
@@ -113,7 +105,7 @@ func (c *clientStream) writeStreamLocked(chunk []byte) (int, error) {
 func (c *clientStream) WriteDeparted(chunk []byte) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.closed || c.log == nil {
+	if c.closed || c.log == nil || c.rewriteErr != nil {
 		return
 	}
 	c.log.detachSocket()
@@ -194,9 +186,6 @@ func (c *clientStream) closeStreamLocked() error {
 }
 
 func (c *clientStream) discard() {
-	if c.handedOff() {
-		return
-	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.closed = true
@@ -277,16 +266,16 @@ func (c *clientStream) terminateLocked() error {
 }
 
 func (c *clientStream) emitLocked(events []byte) (int, error) {
-	c.beginLocked("text/event-stream")
+	c.beginLocked(contentTypeEventStream)
 	// A host's last event without its blank line would otherwise have the next one glued onto it.
+	var separatorErr error
 	if c.pendingEvent {
-		if _, err := c.sendLocked(sseEventSeparator); err != nil {
-			return 0, err
-		}
+		_, separatorErr = c.sendLocked(sseEventSeparator)
 	}
 	c.terminated = c.terminated || filters.HasSSEDone(events)
 	c.pendingEvent = !filters.SSEEventTerminated(events)
-	return c.sendLocked(events)
+	written, err := c.sendLocked(events)
+	return written, cmp.Or(separatorErr, err)
 }
 
 func (c *clientStream) sendLocked(data []byte) (int, error) {

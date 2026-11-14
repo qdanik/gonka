@@ -21,8 +21,6 @@ type RequestLine struct {
 	RaceErr       error
 	DeliverErr    error
 	CacheHit      bool
-	Resumed       bool
-	ResumeOf      string
 	LimiterReason string
 	BodyErr       error
 }

@@ -42,7 +42,6 @@ type cachedResponse struct {
 	contentType string
 	body        []byte
 	bounds      []int
-	streamID    string
 	expiresAt   time.Time
 }
 
@@ -181,7 +180,7 @@ func (c *responseCache) evictToFitLocked(keep cacheKey) {
 }
 
 func entrySize(entry cachedResponse) int64 {
-	return int64(len(entry.body)+len(entry.contentType)+len(entry.escrowID)+len(entry.streamID)+8*len(entry.bounds)) + cacheEntryOverhead
+	return int64(len(entry.body)+len(entry.contentType)+len(entry.escrowID)+8*len(entry.bounds)) + cacheEntryOverhead
 }
 
 // Reports what it managed to write, so a cache hit carries the same delivery record as a race.
@@ -287,16 +286,18 @@ func (w *cacheRecorder) cannotBuildEntry(unstorable error, escrowID string) bool
 }
 
 func (w *cacheRecorder) entryRefusal(unstorable error, escrowID string) string {
-	return replayRefusal(w.overflowed, w.writeErr, unstorable, w.body.Len(), escrowID)
+	switch {
+	case w.overflowed:
+		return cacheRefusedTooLarge
+	case w.writeErr != nil:
+		return cacheRefusedWriteFailed
+	}
+	return replayRefusal(unstorable, w.body.Len(), escrowID)
 }
 
-func replayRefusal(overflowed bool, writeErr, unstorable error, bodyBytes int, escrowID string) string {
+func replayRefusal(unstorable error, bodyBytes int, escrowID string) string {
 	var refusedByHostBody hostBodyRefusedError
 	switch {
-	case overflowed:
-		return cacheRefusedTooLarge
-	case writeErr != nil:
-		return cacheRefusedWriteFailed
 	case errors.As(unstorable, &refusedByHostBody):
 		return refusedByHostBody.refusal
 	case unstorable != nil:
