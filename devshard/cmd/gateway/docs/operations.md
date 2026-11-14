@@ -99,7 +99,7 @@ Within one setting: a knob the setting sets beats the preset it names; a setting
 
 A filter entry lists `warnings` when the settings' limits override its filters — a cap below the floor, a cap below the budget's `force_zero_below`, or a default budget below it — so the conflict is visible where the filters are edited. Neither PUT refuses it: the two are edited separately and either order must be possible.
 
-A cached reply is keyed on the normalized body, the model and the empty-answer exemption, so a filter change never serves a reply produced under the old filters; entries also expire within the cache TTL.
+A cached reply is keyed on the normalized body, the model and the empty-answer exemption, so a filter change never serves a reply produced under the old filters; entries also expire within the cache TTL. A cached reply is also removed when its nonce is voted invalid, when the chain's effective epoch changes, and when its participant is marked suspicious; a client can skip it per request with `Cache-Control: no-cache` or `no-store` ([`api/README.md`](../api/README.md), "What the client controls"). A hit carries `X-Devshard-Cache: hit` and `Age`.
 
 ### When a release changes the presets
 
@@ -468,8 +468,14 @@ The families no question above needs, with the help text each one exports.
 
 | family | what it reports |
 | --- | --- |
+| `devshard_gateway_cache_bypass_total` | Requests whose `Cache-Control` header skipped the response cache, by `model` and `directive` (`no-cache`, `no-store`). |
 | `devshard_gateway_cache_entries` | Replies the response cache currently holds. |
+| `devshard_gateway_cache_hit_age_seconds` | Seconds a cached reply had been stored when it was served. |
+| `devshard_gateway_cache_invalidated_replays_total` | Times the replies removed by an invalidation had already been served from the cache. |
+| `devshard_gateway_cache_invalidations_total` | Cached replies removed, by `reason` (`invalid_verdict`, `record_invalidated`, `served_mismatch`, `host_pinned`, `epoch`) and `effect` (`dropped`, `revoked`, `absent`). The first two reasons need `nonce_accounting` enabled. |
+| `devshard_gateway_cache_lookups_total` | Response cache lookups by `model` and `result` (`hit`, `miss`); a request that skipped the lookup is in the bypass counter. |
 | `devshard_gateway_cache_misses_total` | Requests the response cache could not serve. Against hits this is the only measure of whether the cache earns its memory. |
+| `devshard_gateway_cache_revoked_overflow_total` | Verdicts the response cache forgot because the set of verdicts awaiting their reply was full. |
 | `devshard_gateway_capacity_weights_unobserved_by_model` | 1 while escrow scoring for a model runs on the membership-share fallback because the chain has reported no weights. |
 | `devshard_gateway_captured_requests_failed_total` | Captures the sink could not write: the directory is unwritable, out of space, or gone. Distinct from refused, which is the byte cap doing its job. |
 | `devshard_gateway_captured_requests_refused_total` | Captures refused because the directory is at its byte cap. Nothing evicts capture files, so a rising count means capture is off until an operator empties the directory. |

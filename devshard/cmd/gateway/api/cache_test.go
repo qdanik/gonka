@@ -341,7 +341,7 @@ func TestTheCapEvictsUntilTheCacheFits(t *testing.T) {
 // Test flow:
 //  1. For both a non-streaming and a streaming reply, begin a live `clientStream` and set its headers.
 //  2. Serve a cached entry with the same escrow, content type and streaming flag through `serveCached`.
-//  3. Assert the live and replayed responses carry identical headers.
+//  3. Assert the replay carries the two cache-hit headers and, once they are set aside, the same headers as the live response.
 func TestCachedReplayAndLiveStreamAgreeOnHeaders(t *testing.T) {
 	for _, streaming := range []bool{false, true} {
 		name := "non_streaming"
@@ -361,8 +361,13 @@ func TestCachedReplayAndLiveStreamAgreeOnHeaders(t *testing.T) {
 				contentType: contentType,
 				stream:      streaming,
 				status:      http.StatusOK,
-			})
+			}, 90*time.Second)
 
+			if replay.Header().Get(CacheStatusHeader) != "hit" || replay.Header().Get(AgeHeader) != "90" {
+				t.Fatalf("replay headers %v, want %s: hit and %s: 90", replay.Header(), CacheStatusHeader, AgeHeader)
+			}
+			replay.Header().Del(CacheStatusHeader)
+			replay.Header().Del(AgeHeader)
 			if !reflect.DeepEqual(live.Header(), replay.Header()) {
 				t.Fatalf("live headers %v != replayed headers %v", live.Header(), replay.Header())
 			}

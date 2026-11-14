@@ -17,7 +17,8 @@ import (
 const (
 	cacheEntryTTL      = time.Hour
 	cacheSweepInterval = time.Minute
-	cacheEntryOverhead = 256
+	cacheEntryOverhead = 512
+	revokedLimit       = 1 << 16
 
 	expectedStreamEvents = 64
 )
@@ -37,6 +38,11 @@ type cacheKey struct {
 
 type cachedResponse struct {
 	escrowID    string
+	nonce       uint64
+	participant string
+	storedAt    time.Time
+	hits        uint32
+	generation  uint64
 	stream      bool
 	status      int
 	contentType string
@@ -50,6 +56,10 @@ type responseCache struct {
 	ttl        time.Duration
 	maxBytes   int64
 	entries    map[cacheKey]cachedResponse
+	byNonce    map[nonceRef]cacheKey
+	revoked    *revokedSet
+	epoch      uint64
+	generation uint64
 	totalBytes int64
 	lastSweep  time.Time
 	hits       atomic.Int64
@@ -81,6 +91,8 @@ func newResponseCache(maxBytes int64) *responseCache {
 		ttl:      cacheEntryTTL,
 		maxBytes: maxBytes,
 		entries:  make(map[cacheKey]cachedResponse),
+		byNonce:  make(map[nonceRef]cacheKey),
+		revoked:  newRevokedSet(),
 	}
 }
 
@@ -118,6 +130,8 @@ func (c *responseCache) get(key cacheKey, now time.Time) (cachedResponse, bool) 
 		c.misses.Add(1)
 		return cachedResponse{}, false
 	}
+	entry.hits++
+	c.entries[key] = entry
 	c.hits.Add(1)
 	return entry, true
 }
@@ -131,6 +145,7 @@ func (c *responseCache) put(key cacheKey, entry cachedResponse, now time.Time) s
 	if refusal := filters.CacheRefusal(entry.status, entry.body); refusal != filters.CacheStorable {
 		return refusal
 	}
+	entry.storedAt = now
 	entry.expiresAt = now.Add(c.ttl)
 	size := entrySize(entry)
 	if size > c.maxBytes {
@@ -139,9 +154,15 @@ func (c *responseCache) put(key cacheKey, entry cachedResponse, now time.Time) s
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if entry.generation != c.generation || (entry.indexed() && c.revoked.has(entry.servedRef())) {
+		return cacheRefusedInvalidated
+	}
 	c.sweepLocked(now)
 	c.dropLocked(key)
 	c.entries[key] = entry
+	if entry.indexed() {
+		c.byNonce[entry.servedRef()] = key
+	}
 	c.totalBytes += size
 	c.evictToFitLocked(key)
 	return filters.CacheStorable
@@ -153,6 +174,9 @@ func (c *responseCache) dropLocked(key cacheKey) {
 		return
 	}
 	delete(c.entries, key)
+	if entry.indexed() {
+		delete(c.byNonce, entry.servedRef())
+	}
 	c.totalBytes = max(0, c.totalBytes-entrySize(entry))
 }
 
@@ -180,12 +204,13 @@ func (c *responseCache) evictToFitLocked(keep cacheKey) {
 }
 
 func entrySize(entry cachedResponse) int64 {
-	return int64(len(entry.body)+len(entry.contentType)+len(entry.escrowID)+8*len(entry.bounds)) + cacheEntryOverhead
+	return int64(len(entry.body)+len(entry.contentType)+len(entry.escrowID)+len(entry.participant)+8*len(entry.bounds)) + cacheEntryOverhead
 }
 
 // Reports what it managed to write, so a cache hit carries the same delivery record as a race.
-func serveCached(w http.ResponseWriter, requestID string, entry cachedResponse) (written int64) {
+func serveCached(w http.ResponseWriter, requestID string, entry cachedResponse, age time.Duration) (written int64) {
 	writeChatHeaders(w.Header(), requestID, entry.escrowID, entry.contentType, entry.stream)
+	writeCacheHitHeaders(w.Header(), age)
 	w.WriteHeader(entry.status)
 
 	controller := http.NewResponseController(w)

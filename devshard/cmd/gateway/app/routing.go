@@ -30,6 +30,7 @@ type routingDeps struct {
 	Steps        *metrics.StepRecorder
 	Served       *metrics.ServedBindingRecorder
 	Finishes     *finishNotice
+	Replies      *cacheInvalidation
 	PeerRPC      *transport.PeerRPCAdoption
 	Ledger       *nonces.Recorder
 	Journal      *journal.Journal
@@ -53,7 +54,7 @@ func newRouting(deps routingDeps) (*registry.Registry, *scheduler.Scheduler, *wa
 		Retiring:         deps.Ledger.EscrowRetiring,
 		Closing:          deps.Ledger.EscrowClosing,
 		Rehydrated:       deps.Ledger.EscrowRehydrated,
-		ServedBindings:   servedBindingStrikes(deps.Hosts, deps.Journal, deps.Served, deps.Finishes),
+		ServedBindings:   servedBindingStrikes(deps.Hosts, deps.Journal, deps.Served, deps.Finishes, deps.Replies),
 		PeerRPC:          deps.PeerRPC,
 		Now:              deps.Now,
 	}

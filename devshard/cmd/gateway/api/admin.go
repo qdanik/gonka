@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"runtime"
@@ -146,7 +147,7 @@ func (s *Server) handleAdminSuspiciousHosts(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusBadRequest, "participant_key is required")
 		return
 	}
-	apply, action := s.suspicious.Add, "participant added to the never-trust list"
+	apply, action := s.markSuspicious, "participant added to the never-trust list"
 	if r.Method == http.MethodDelete {
 		apply, action = s.suspicious.Remove, "participant removed from the never-trust list"
 	}
@@ -155,6 +156,14 @@ func (s *Server) handleAdminSuspiciousHosts(w http.ResponseWriter, r *http.Reque
 	}
 	auditAdmin(action, "participant", participantKey)
 	writeJSON(w, http.StatusOK, map[string]any{"suspicious_hosts": s.suspicious.List()})
+}
+
+func (s *Server) markSuspicious(ctx context.Context, participantKey string) error {
+	if err := s.suspicious.Add(ctx, participantKey); err != nil {
+		return err
+	}
+	s.dropCachedParticipant(participantKey)
+	return nil
 }
 
 func (s *Server) handleAdminUnquarantine(w http.ResponseWriter, r *http.Request) {

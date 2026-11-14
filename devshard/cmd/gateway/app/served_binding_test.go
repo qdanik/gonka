@@ -35,7 +35,7 @@ func (r *recordedMismatches) HostServedUnsigned(_, _, _ string, nonce uint64) {
 func TestAMismatchedServedStreamStrikesItsHost(t *testing.T) {
 	mismatches := &recordedMismatches{}
 	telemetry := metrics.New()
-	observe := servedBindingStrikes(mismatches, mismatches, metrics.NewServedBindingRecorder(telemetry), mismatches)
+	observe := servedBindingStrikes(mismatches, mismatches, metrics.NewServedBindingRecorder(telemetry), mismatches, (*cacheInvalidation)(nil))
 
 	observe("escrow-1", "llama", "host-a", 7, user.ServedBindingBound)
 	observe("escrow-1", "llama", "host-a", 8, user.ServedBindingMismatch)
@@ -59,7 +59,7 @@ devshard_gateway_served_bindings_total{model="llama",verdict="mismatch"} 1
 //  2. Assert both nonces reach the engine as applied finishes, in the order their bindings were reported.
 func TestEveryServedBindingReportsItsFinishApplied(t *testing.T) {
 	observed := &recordedMismatches{}
-	observe := servedBindingStrikes(observed, observed, metrics.NewServedBindingRecorder(metrics.New()), observed)
+	observe := servedBindingStrikes(observed, observed, metrics.NewServedBindingRecorder(metrics.New()), observed, (*cacheInvalidation)(nil))
 
 	observe("escrow-1", "llama", "host-a", 7, user.ServedBindingBound)
 	observe("escrow-1", "llama", "host-a", 8, user.ServedBindingMismatch)
@@ -78,8 +78,8 @@ func TestAServedBindingBeforeTheEngineExistsOnlyCountsItsVerdict(t *testing.T) {
 	mismatches := &recordedMismatches{}
 	var missing *finishNotice
 
-	servedBindingStrikes(mismatches, mismatches, recorder, missing)("escrow-1", "llama", "host-a", 7, user.ServedBindingBound)
-	servedBindingStrikes(mismatches, mismatches, recorder, &finishNotice{})("escrow-1", "llama", "host-a", 8, user.ServedBindingBound)
+	servedBindingStrikes(mismatches, mismatches, recorder, missing, (*cacheInvalidation)(nil))("escrow-1", "llama", "host-a", 7, user.ServedBindingBound)
+	servedBindingStrikes(mismatches, mismatches, recorder, &finishNotice{}, (*cacheInvalidation)(nil))("escrow-1", "llama", "host-a", 8, user.ServedBindingBound)
 
 	expected := `
 # HELP devshard_gateway_served_bindings_total Total served streams checked against the Finish their host signed, by verdict.

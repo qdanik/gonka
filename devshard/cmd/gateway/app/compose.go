@@ -139,6 +139,7 @@ type gateway struct {
 	races        *engine.Engine
 	owedVotes    *api.OwedVotes
 	finishes     *finishNotice
+	replies      *cacheInvalidation
 	limiter      *limits.GatewayLimiter
 	participants *limits.ParticipantLimiter
 	telemetry    *metrics.Metrics
@@ -250,6 +251,8 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 	devshardWork := make(chan struct{}, 1)
 	depletion := &depletionNotice{}
 	finishes := &finishNotice{}
+	replies := &cacheInvalidation{}
+	recorder.SetInvalidatedRecords(replies)
 	escrows, router, prober, err := newRouting(routingDeps{
 		Sessions:     sources.Serving,
 		ReadOnly:     sources.ReadOnly,
@@ -263,6 +266,7 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 		Steps:        steps,
 		Served:       metrics.NewServedBindingRecorder(telemetry),
 		Finishes:     finishes,
+		Replies:      replies,
 		PeerRPC:      adoption,
 		Ledger:       recorder,
 		Journal:      events,
@@ -402,6 +406,7 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 		Buffers:      buffers,
 		Rejections:   metrics.NewLimitRecorder(telemetry),
 		CacheResults: metrics.NewCacheResultRecorder(telemetry),
+		CacheEvents:  metrics.NewCacheEventRecorder(telemetry),
 		Journal:      events,
 		StorageDir:   storageDir,
 		Version:      Version,
@@ -418,6 +423,8 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 	// Registered after the server, which owns both sinks. See ../README.md, "Wiring order, and the knots in it".
 	telemetry.Register(metrics.NewCaptureCollector(server))
 	telemetry.Register(metrics.NewCacheCollector(server))
+	replies.attach(server)
+	observer.Subscribe(server.ObservePhase)
 	httpServer, endRequests := server.HTTPServer(fmt.Sprintf(":%d", configuration.Server.Port))
 
 	built = true
@@ -431,6 +438,7 @@ func compose(ctx context.Context, values env.Values, storageDir string, gatewayS
 		races:        races,
 		owedVotes:    owedVotes,
 		finishes:     finishes,
+		replies:      replies,
 		limiter:      gatewayLimiter,
 		participants: participants,
 		telemetry:    telemetry,

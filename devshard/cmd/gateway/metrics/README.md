@@ -5,7 +5,7 @@ The only package that knows Prometheus exists.
 ## What it owns
 
 - **The registry** (`metrics.go`) and every collector: limits, capacity, perf, registry, chain, funding (`funding_collector.go`: per-model escrow money, counts, planner decisions and guarantee, read from plain `FundingModel` values), cache, capture, transport, accounting, owed votes, journal, nonce ledger.
-- **Recorders** (`race.go`, `dispatch_recorder.go`, `limit_recorder.go`, `stats_tokenizer_recorder.go`) — the write side, called by the subsystems that produce the facts.
+- **Recorders** (`race.go`, `dispatch_recorder.go`, `limit_recorder.go`, `stats_tokenizer_recorder.go`, `cache_event_recorder.go`) — the write side, called by the subsystems that produce the facts.
 - **Label discipline** (`labels.go`) — what may become a label and what may not.
 
 ## Boundaries
@@ -27,10 +27,11 @@ The five places an unbounded label could get in, and what stops it:
 
 ## Histogram buckets
 
-Two ladders, and both are sized by what they must be able to *report*, not by what they expect:
+Three ladders, and each is sized by what it must be able to *report*, not by what it expects:
 
 - **`latencyBuckets`** — nineteen exponential buckets from 10 ms reach 2621 s, past the 2400 s drain timeout. A quantile cannot report above the highest finite bound, so a short ladder would silently pin p95 there instead of showing the slowest attempt the engine actually permits.
 - **`chunkGapBuckets`** — fifteen exponential buckets from 5 ms reach 81.92 s, past the 30 s default stall timeout (`engine_inter_chunk_stall_ms`), so a stall still lands in a finite bucket. `latencyBuckets` would reach that far as well; this ladder starts one doubling lower and stops four buckets sooner, and both inter-chunk histograms are written per participant and model, so each pair carries four fewer bucket series in each of them.
+- **`cacheHitAgeBuckets`** — thirteen exponential buckets from 1 s reach 4096 s, past the one-hour cache TTL, so the age of any reply the cache can still hold lands in a finite bucket.
 
 ## Race labels
 

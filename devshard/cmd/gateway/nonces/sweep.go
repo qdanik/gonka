@@ -188,6 +188,7 @@ func (n *Recorder) observeEscrowState(escrowID string, escrowState types.EscrowS
 		}
 	}
 	n.report(n.service.Book.ObserveInferences(escrowID, escrowState.Inferences))
+	n.announceInvalidated(escrowID, escrowState.Inferences)
 }
 
 // EscrowRetiring takes the reading the sweep will never take again, and asks the ledger's own goroutine to write it out.
@@ -209,6 +210,7 @@ func (n *Recorder) forgetEscrow(escrowID string) {
 	n.readingLock <- struct{}{}
 	defer func() { <-n.readingLock }()
 	delete(n.timedOutAtSeal, escrowID)
+	delete(n.announcedInvalid, escrowID)
 }
 
 // EscrowRehydrated watches a session opened to settle an escrow the sweep no longer reads, whose finalize and pre-finalize nonces would otherwise never reach the ledger.

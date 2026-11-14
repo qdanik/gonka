@@ -163,6 +163,16 @@ type CacheResults interface {
 	CacheResult(model, result string)
 }
 
+// CacheEvents counts what the cache's client contract and its invalidation did; *metrics.CacheEventRecorder satisfies it.
+type CacheEvents interface {
+	Lookup(model, result string)
+	Bypassed(model, directive string)
+	HitAge(age time.Duration)
+	Invalidated(reason, effect string, count int)
+	InvalidatedReplays(count uint64)
+	RevokedOverflow()
+}
+
 // LimitRejections counts what the gateway's own limiter turned away; *metrics.LimitRecorder satisfies it.
 type LimitRejections interface {
 	Rejected(model, reason string)
@@ -220,6 +230,7 @@ type Deps struct {
 	RequestBodies           *BufferBudget
 	Rejections              LimitRejections
 	CacheResults            CacheResults
+	CacheEvents             CacheEvents
 	StatsTokenizerFallbacks StatsTokenizerFallbacks
 	Journal                 RequestJournal
 	StorageDir              string
@@ -247,6 +258,7 @@ type Server struct {
 	telemetry    Telemetry
 	rejections   LimitRejections
 	cacheResults CacheResults
+	cacheEvents  CacheEvents
 	events       RequestJournal
 	storageDir   string
 	version      string
@@ -320,6 +332,7 @@ func New(deps Deps) (*Server, error) {
 		telemetry:    deps.Telemetry,
 		rejections:   deps.Rejections,
 		cacheResults: deps.CacheResults,
+		cacheEvents:  deps.CacheEvents,
 		events:       deps.Journal,
 		storageDir:   deps.StorageDir,
 		version:      deps.Version,
