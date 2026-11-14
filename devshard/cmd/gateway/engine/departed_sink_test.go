@@ -12,8 +12,6 @@ import (
 	"go.uber.org/goleak"
 )
 
-const finishedWait = 10 * time.Second
-
 type departedRecorder struct {
 	recordingSink
 	departedMu sync.Mutex
@@ -220,11 +218,7 @@ func TestRunReportsTheOutcomeOfARaceThatOutlivedItsClient(t *testing.T) {
 	}
 
 	close(resume)
-	select {
-	case <-finished:
-	case <-time.After(finishedWait):
-		t.Fatal("OnFinished never ran after the race reported")
-	}
+	waitForValue(t, finished, "OnFinished after the race reported")
 	sim.settleAll()
 
 	mu.Lock()

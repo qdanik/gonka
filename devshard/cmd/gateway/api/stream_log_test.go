@@ -1,6 +1,8 @@
 package api
 
 import (
+	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"devshard/cmd/gateway/engine"
@@ -36,6 +38,31 @@ func TestALogPastItsLimitIsDroppedAndReturnsItsBudget(t *testing.T) {
 	}
 	if _, refusal := log.conclude("7", nil); refusal != cacheRefusedTooLarge {
 		t.Fatalf("conclude refusal = %q, want %q", refusal, cacheRefusedTooLarge)
+	}
+}
+
+// Test flow:
+//  1. Let a reader take the first event of a log, then append past the log's limit so it drops while the reader follows.
+//  2. Pump the reader into a recorder.
+//  3. Assert the reader ends on an error event and not on a clean end or a terminator.
+func TestAReaderOfALogDroppedMidReplyEndsOnAnErrorEvent(t *testing.T) {
+	index := newStreamIndex()
+	log := testLog(index, nil, 16)
+	log.append([]byte("data: 1\n\n"))
+	log.detachSocket()
+	reader, adopted := index.adopt(log.key)
+	if !adopted {
+		t.Fatal("a detached log was not adopted")
+	}
+	reader.next()
+	log.append([]byte("data: 2\n\n"))
+	recorder := httptest.NewRecorder()
+
+	written := pumpLog(t.Context(), recorder, reader)
+
+	body := recorder.Body.String()
+	if !strings.HasPrefix(body, "data: {\"error\"") || strings.Contains(body, "[DONE]") || written != int64(len(body)) {
+		t.Fatalf("reply after the drop = %q (%d bytes counted), want one error event and no terminator", body, written)
 	}
 }
 

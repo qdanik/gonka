@@ -3,9 +3,6 @@ package api
 import (
 	"context"
 	"net/http"
-
-	"devshard/cmd/gateway/filters"
-	"devshard/cmd/gateway/journal"
 )
 
 func serveLog(w http.ResponseWriter, r *http.Request, requestID string, reader *logReader) (escrowID string, written int64) {
@@ -30,6 +27,11 @@ func pumpLog(ctx context.Context, w http.ResponseWriter, reader *logReader) (wri
 			continue
 		}
 		if finished {
+			if reader.dropped() {
+				sent, _ := w.Write(errorEvent(ErrResponseBufferFull))
+				written += int64(sent)
+				_ = controller.Flush()
+			}
 			return written
 		}
 		select {
@@ -42,12 +44,6 @@ func pumpLog(ctx context.Context, w http.ResponseWriter, reader *logReader) (wri
 
 func (s *Server) concludeStream(log *streamLog, requestID, model, escrowID string, unstorable error) {
 	entry, refusal := log.conclude(escrowID, unstorable)
-	if refusal == filters.CacheStorable {
-		refusal = s.cache.put(log.key, entry, s.now())
-	}
+	s.offerToCache(log.key, entry, refusal, requestID, model)
 	s.streams.remove(log)
-	s.countCacheResult(model, refusal)
-	if refusal == filters.CacheRefusedUnfinished {
-		s.events.ReplyNotCached(journal.RequestLine{RequestID: requestID, Model: model, EscrowID: entry.escrowID})
-	}
 }

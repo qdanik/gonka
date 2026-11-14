@@ -193,12 +193,16 @@ func TestARepeatedRequestAfterTheRaceEndedIsServedTheWholeReplyFromTheCache(t *t
 // Test flow:
 //  1. Start a streamed request whose client leaves after the first event, and report the race's outcome before the handler returns.
 //  2. Repeat the identical request.
-//  3. Assert the reply is the whole stream and no second race ran.
+//  3. Assert the first reply holds only its first event, the repeat is the whole stream and no second race ran.
 func TestAnOutcomeReportedBeforeTheHandlerReturnsStillStoresTheStream(t *testing.T) {
 	fixture := newAdoptionFixture(t, 1, succeeded())
 	fixture.engine.reportFirst = true
-	fixture.startAndLeave(t, "caller-a")
+	first := fixture.startAndLeave(t, "caller-a")
 	<-fixture.engine.finished
+
+	if first.Body.String() != firstEvent {
+		t.Fatalf("first reply = %q, want only %q: bytes after the client left must not reach its socket", first.Body.String(), firstEvent)
+	}
 
 	repeated := fixture.live.request(t, http.MethodPost, chatPath, streamChatBody, callerHeaders("caller-a"))
 

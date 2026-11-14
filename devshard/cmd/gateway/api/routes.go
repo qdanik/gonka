@@ -298,10 +298,16 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request, escrowPin string) 
 		return
 	}
 	// The client keeps every byte that arrived; only the replay stops, and only this refusal is news.
-	cacheRefusal := s.cache.put(key, entry, s.now())
-	s.countCacheResult(normalized.Model, cacheRefusal)
-	if cacheRefusal == filters.CacheRefusedUnfinished {
-		s.events.ReplyNotCached(journal.RequestLine{RequestID: requestID, Model: normalized.Model, EscrowID: outcome.EscrowID})
+	s.offerToCache(key, entry, filters.CacheStorable, requestID, normalized.Model)
+}
+
+func (s *Server) offerToCache(key cacheKey, entry cachedResponse, refusal, requestID, model string) {
+	if refusal == filters.CacheStorable {
+		refusal = s.cache.put(key, entry, s.now())
+	}
+	s.countCacheResult(model, refusal)
+	if refusal == filters.CacheRefusedUnfinished {
+		s.events.ReplyNotCached(journal.RequestLine{RequestID: requestID, Model: model, EscrowID: entry.escrowID})
 	}
 }
 

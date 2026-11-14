@@ -98,10 +98,14 @@ func (l *streamLog) appendLocked(data []byte) {
 func (l *streamLog) dropLocked() {
 	l.done, l.dropped = true, true
 	l.body, l.bounds = nil, nil
-	l.budget.release(l.charged)
-	l.charged = 0
+	l.releaseBudgetLocked()
 	l.index.remove(l)
 	l.wakeLocked()
+}
+
+func (l *streamLog) releaseBudgetLocked() {
+	l.budget.release(l.charged)
+	l.charged = 0
 }
 
 func (l *streamLog) wakeLocked() {
@@ -117,8 +121,7 @@ func (l *streamLog) conclude(escrowID string, unstorable error) (cachedResponse,
 	}
 	escrowID = cmp.Or(escrowID, l.escrowID)
 	l.done = true
-	l.budget.release(l.charged)
-	l.charged = 0
+	l.releaseBudgetLocked()
 	l.wakeLocked()
 	if refusal := replayRefusal(unstorable, len(l.body), escrowID); refusal != filters.CacheStorable {
 		return cachedResponse{}, refusal
@@ -160,6 +163,12 @@ func (r *logReader) next() (events []byte, finished bool, changed <-chan struct{
 	return nil, l.done, l.changed
 }
 
+func (r *logReader) dropped() bool {
+	r.log.mu.Lock()
+	defer r.log.mu.Unlock()
+	return r.log.dropped
+}
+
 func (r *logReader) release() {
 	r.log.mu.Lock()
 	defer r.log.mu.Unlock()
@@ -173,27 +182,27 @@ type streamIndex struct {
 
 func newStreamIndex() *streamIndex { return &streamIndex{logs: make(map[cacheKey][]*streamLog)} }
 
-func (x *streamIndex) add(log *streamLog) {
-	x.mu.Lock()
-	defer x.mu.Unlock()
-	x.logs[log.key] = append(x.logs[log.key], log)
+func (index *streamIndex) add(log *streamLog) {
+	index.mu.Lock()
+	defer index.mu.Unlock()
+	index.logs[log.key] = append(index.logs[log.key], log)
 }
 
-func (x *streamIndex) remove(log *streamLog) {
-	x.mu.Lock()
-	defer x.mu.Unlock()
-	remaining := slices.DeleteFunc(x.logs[log.key], func(held *streamLog) bool { return held == log })
+func (index *streamIndex) remove(log *streamLog) {
+	index.mu.Lock()
+	defer index.mu.Unlock()
+	remaining := slices.DeleteFunc(index.logs[log.key], func(held *streamLog) bool { return held == log })
 	if len(remaining) == 0 {
-		delete(x.logs, log.key)
+		delete(index.logs, log.key)
 		return
 	}
-	x.logs[log.key] = remaining
+	index.logs[log.key] = remaining
 }
 
-func (x *streamIndex) adopt(key cacheKey) (*logReader, bool) {
-	x.mu.Lock()
-	candidates := slices.Clone(x.logs[key])
-	x.mu.Unlock()
+func (index *streamIndex) adopt(key cacheKey) (*logReader, bool) {
+	index.mu.Lock()
+	candidates := slices.Clone(index.logs[key])
+	index.mu.Unlock()
 	for _, log := range candidates {
 		if reader, adopted := log.adopt(); adopted {
 			return reader, true
