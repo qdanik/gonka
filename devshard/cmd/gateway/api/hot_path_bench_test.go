@@ -279,7 +279,7 @@ func BenchmarkServeCached(b *testing.B) {
 	b.ReportAllocs()
 	for b.Loop() {
 		writer.reset()
-		serveCached(writer, "request-1", entry, time.Second)
+		serveCached(writer, "request-1", entry)
 	}
 }
 

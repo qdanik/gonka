@@ -272,7 +272,7 @@ func writeChatHeaders(header http.Header, requestID, escrowID, contentType strin
 	}
 	header.Set("Content-Type", cmp.Or(contentType, "application/json"))
 	if streaming {
-		header.Set(CacheControlHeader, string(cacheDirectiveNoCache))
+		header.Set("Cache-Control", "no-cache")
 		header.Set("Connection", "keep-alive")
 	}
 }

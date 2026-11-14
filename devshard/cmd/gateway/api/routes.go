@@ -240,17 +240,21 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request, escrowPin string) 
 	}
 
 	directive := requestedCacheDirective(r.Header)
-	lookup := s.lookupCached(r, normalized, directive)
-	if lookup.hit {
-		entry := lookup.entry
-		written := serveCached(w, requestID, entry, lookup.age)
-		hitCount := prompt.countSoFar()
-		s.events.RequestFinished(journal.RequestLine{
-			RequestID: requestID, Model: normalized.Model, APIKeyID: identity.caller(), EscrowID: entry.escrowID,
-			ClientStream: entry.stream, Bytes: written, CacheHit: true,
-			Outcome: engine.RaceOutcome{InputTokens: hitCount.tokens, InputTokensSource: hitCount.source},
-		})
-		return
+	var key cacheKey
+	if s.cache != nil {
+		key = cacheKeyFor(r, normalized)
+		if directive.looksUp() {
+			if entry, hit := s.cache.get(key, s.now()); hit {
+				written := serveCached(w, requestID, entry)
+				hitCount := prompt.countSoFar()
+				s.events.RequestFinished(journal.RequestLine{
+					RequestID: requestID, Model: normalized.Model, APIKeyID: identity.caller(), EscrowID: entry.escrowID,
+					ClientStream: entry.stream, Bytes: written, CacheHit: true,
+					Outcome: engine.RaceOutcome{InputTokens: hitCount.tokens, InputTokensSource: hitCount.source},
+				})
+				return
+			}
+		}
 	}
 	if refusal != nil {
 		s.writeErrorFor(w, refusal)
@@ -280,9 +284,6 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request, escrowPin string) 
 	if s.cache == nil || !directive.stores() {
 		// Nothing to store, so the outcome and the hidden failure the cache path reads are both moot.
 		_, _ = s.race(w, r, requestID, identity.caller(), normalized, counted, escrowPin, configuration.Limits.LogprobsOptimization, slot)
-		if s.cache != nil {
-			s.countCacheResult(normalized.Model, cacheResultBypassed)
-		}
 		return
 	}
 	generation := s.cache.currentGeneration()
@@ -298,10 +299,14 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request, escrowPin string) 
 	entry.nonce = outcome.WinnerNonce
 	entry.generation = generation
 	if winner := outcome.Winner(); winner != nil {
+		if winner.Suspicious {
+			s.countCacheResult(normalized.Model, cacheRefusedInvalidated)
+			return
+		}
 		entry.participant = winner.Participant
 	}
 	// The client keeps every byte that arrived; only the replay stops, and only this refusal is news.
-	cacheRefusal := s.cache.put(lookup.key, entry, s.now())
+	cacheRefusal := s.cache.put(key, entry, s.now())
 	s.countCacheResult(normalized.Model, cacheRefusal)
 	if cacheRefusal == filters.CacheRefusedUnfinished {
 		s.events.ReplyNotCached(journal.RequestLine{RequestID: requestID, Model: normalized.Model, EscrowID: outcome.EscrowID})

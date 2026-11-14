@@ -27,16 +27,11 @@ const (
 	cacheRefusedInvalidated = "invalidated"
 )
 
-const (
-	cacheResultStored   = "stored"
-	cacheResultBypassed = "bypassed"
-)
+const cacheResultStored = "stored"
 
-// The headers of the client's cache contract and the grammar of Cache-Control. See README.md, "What the client controls".
+// The Cache-Control request header and the grammar of its value. See README.md, "What the client controls".
 const (
-	CacheControlHeader      = "Cache-Control"
-	CacheStatusHeader       = "X-Devshard-Cache"
-	AgeHeader               = "Age"
+	cacheControlHeader      = "Cache-Control"
 	directiveListSeparator  = ","
 	directiveValueSeparator = "="
 )
@@ -50,34 +45,6 @@ const (
 	cacheDirectiveNoStore cacheDirective = "no-store"
 )
 
-// CacheInvalidationReason names the signal that removed a cached reply.
-type CacheInvalidationReason string
-
-// The reasons a cached reply is removed, as devshard_gateway_cache_invalidations_total labels them.
-const (
-	CacheReasonInvalidVerdict    CacheInvalidationReason = "invalid_verdict"
-	CacheReasonRecordInvalidated CacheInvalidationReason = "record_invalidated"
-	CacheReasonServedMismatch    CacheInvalidationReason = "served_mismatch"
-	cacheReasonHostPinned        CacheInvalidationReason = "host_pinned"
-	cacheReasonEpoch             CacheInvalidationReason = "epoch"
-)
-
-type cacheEffect string
-
-// What a removal did: dropped a stored reply, recorded the verdict for a reply not yet stored, or found the verdict already recorded.
-const (
-	cacheEffectDropped cacheEffect = "dropped"
-	cacheEffectRevoked cacheEffect = "revoked"
-	cacheEffectAbsent  cacheEffect = "absent"
-)
-
-// How a cache lookup ended; a hit is also the value of the reply header that says so.
-const (
-	cacheHit  = "hit"
-	cacheMiss = "miss"
-)
-
-// A reply with no winning nonce, which the cache stores but cannot index.
 const servedNonceNone uint64 = 0
 
 // Why a request was captured. Capture has these two triggers and no others.

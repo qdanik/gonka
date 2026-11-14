@@ -68,9 +68,6 @@ type Recorder struct {
 	stopSweeping   context.CancelFunc
 	swept          chan struct{}
 
-	invalidated      atomic.Pointer[InvalidatedRecords]
-	announcedInvalid map[string]map[uint64]struct{}
-
 	unknownEscrowFacts atomic.Uint64
 }
 
@@ -126,7 +123,7 @@ func (n *Recorder) hostCapability(participant, model string) accounting.HostCapa
 }
 
 func newRecorder(service *accounting.Service, epochs EpochSource) *Recorder {
-	return &Recorder{service: service, epochs: epochs, wake: make(chan struct{}, 1), readingLock: make(chan struct{}, 1), timedOutAtSeal: make(map[string]map[uint64]struct{}), announcedInvalid: make(map[string]map[uint64]struct{})}
+	return &Recorder{service: service, epochs: epochs, wake: make(chan struct{}, 1), readingLock: make(chan struct{}, 1), timedOutAtSeal: make(map[string]map[uint64]struct{})}
 }
 
 func Open(settings config.NonceAccounting, storageDir string, epochs EpochSource, now func() time.Time) *Recorder {

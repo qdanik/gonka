@@ -162,7 +162,7 @@ func (s *Server) markSuspicious(ctx context.Context, participantKey string) erro
 	if err := s.suspicious.Add(ctx, participantKey); err != nil {
 		return err
 	}
-	s.dropCachedParticipant(participantKey)
+	s.cache.invalidateParticipant(participantKey)
 	return nil
 }
 

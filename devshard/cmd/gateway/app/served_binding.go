@@ -33,14 +33,13 @@ func (n *finishNotice) OnFinishApplied(escrowID string, nonce uint64) {
 	}
 }
 
-func servedBindingStrikes(hosts servedStreamHosts, narrator servedStreamNarrator, recorder *metrics.ServedBindingRecorder, finishes appliedFinishes, replies servedReplies) func(escrowID, model, participant string, nonce uint64, verdict user.ServedBinding) {
+func servedBindingStrikes(hosts servedStreamHosts, narrator servedStreamNarrator, recorder *metrics.ServedBindingRecorder, finishes appliedFinishes) func(escrowID, model, participant string, nonce uint64, verdict user.ServedBinding) {
 	return func(escrowID, model, participant string, nonce uint64, verdict user.ServedBinding) {
 		finishes.OnFinishApplied(escrowID, nonce)
 		recorder.Observed(model, string(verdict))
 		if verdict != user.ServedBindingMismatch {
 			return
 		}
-		replies.ServedMismatch(escrowID, nonce)
 		narrator.HostServedUnsigned(escrowID, model, participant, nonce)
 		hosts.RecordServedMismatch(participant, model)
 	}

@@ -2,7 +2,7 @@ package api
 
 import (
 	"net/http"
-	"sync"
+	"slices"
 	"testing"
 	"time"
 
@@ -15,56 +15,6 @@ const (
 	winningNonce       = 5
 	winningParticipant = "host-a"
 )
-
-type cacheEventsSpy struct {
-	mu            sync.Mutex
-	lookups       []string
-	bypasses      []string
-	ages          []time.Duration
-	invalidations map[string]int
-	replays       uint64
-	overflows     int
-}
-
-func newCacheEventsSpy() *cacheEventsSpy {
-	return &cacheEventsSpy{invalidations: map[string]int{}}
-}
-
-func (s *cacheEventsSpy) Lookup(model, result string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.lookups = append(s.lookups, model+"/"+result)
-}
-
-func (s *cacheEventsSpy) Bypassed(model, directive string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.bypasses = append(s.bypasses, model+"/"+directive)
-}
-
-func (s *cacheEventsSpy) HitAge(age time.Duration) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.ages = append(s.ages, age)
-}
-
-func (s *cacheEventsSpy) Invalidated(reason, effect string, count int) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.invalidations[reason+"/"+effect] += count
-}
-
-func (s *cacheEventsSpy) InvalidatedReplays(count uint64) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.replays += count
-}
-
-func (s *cacheEventsSpy) RevokedOverflow() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.overflows++
-}
 
 func winnerOutcome() engine.RaceOutcome {
 	return engine.RaceOutcome{
@@ -98,7 +48,7 @@ func assertIndexMatchesEntries(t *testing.T, cache *responseCache) {
 			continue
 		}
 		indexed++
-		if cache.byNonce[entry.servedRef()] != key {
+		if cache.byNonce[entry.servedReference()] != key {
 			t.Fatalf("entry for nonce %d is not reachable through the index", entry.nonce)
 		}
 	}
@@ -120,11 +70,8 @@ func TestAnEntryIsRemovedByTheEscrowAndNonceThatWonItsRace(t *testing.T) {
 	cache.put(keyedByBody("a"), storedEntry(winningNonce, winningParticipant), now)
 	cache.put(keyedByBody("b"), storedEntry(winningNonce+1, winningParticipant), now)
 
-	result := cache.invalidate(nonceRef{escrowID: invalidationEscrow, nonce: winningNonce})
+	cache.invalidate(nonceReference{escrowID: invalidationEscrow, nonce: winningNonce})
 
-	if result.effect != cacheEffectDropped {
-		t.Fatalf("effect = %q, want %q", result.effect, cacheEffectDropped)
-	}
 	if _, hit := cache.get(keyedByBody("a"), now); hit {
 		t.Fatal("the invalidated entry was still served")
 	}
@@ -155,7 +102,7 @@ func TestExpiryEvictionAndReplacementKeepTheIndexClean(t *testing.T) {
 
 	cache.put(keyedByBody("c"), storedEntry(4, winningParticipant), now)
 	assertIndexMatchesEntries(t, cache)
-	if _, stale := cache.byNonce[nonceRef{escrowID: invalidationEscrow, nonce: 3}]; stale {
+	if _, stale := cache.byNonce[nonceReference{escrowID: invalidationEscrow, nonce: 3}]; stale {
 		t.Fatal("a replaced entry left its index row behind")
 	}
 
@@ -173,19 +120,15 @@ func TestExpiryEvictionAndReplacementKeepTheIndexClean(t *testing.T) {
 // Test flow:
 //  1. Invalidate a nonce whose reply has not been stored yet.
 //  2. Offer that reply to the cache.
-//  3. Assert the cache refuses it as invalidated and stores nothing, and a repeated verdict reports it already kept.
+//  3. Assert the cache refuses it as invalidated and stores nothing.
 func TestAVerdictThatArrivesBeforeThePutStopsTheEntryBeingStored(t *testing.T) {
 	cache := newResponseCache(1 << 20)
 	now := time.Unix(1700000000, 0)
-	ref := nonceRef{escrowID: invalidationEscrow, nonce: winningNonce}
+	ref := nonceReference{escrowID: invalidationEscrow, nonce: winningNonce}
 
-	first := cache.invalidate(ref)
+	cache.invalidate(ref)
 	refusal := cache.put(keyedByBody("a"), storedEntry(winningNonce, winningParticipant), now)
-	second := cache.invalidate(ref)
 
-	if first.effect != cacheEffectRevoked || second.effect != cacheEffectAbsent {
-		t.Fatalf("effects = %q then %q, want %q then %q", first.effect, second.effect, cacheEffectRevoked, cacheEffectAbsent)
-	}
 	if refusal != cacheRefusedInvalidated || len(cache.entries) != 0 {
 		t.Fatalf("put = %q with %d entries, want %q and none", refusal, len(cache.entries), cacheRefusedInvalidated)
 	}
@@ -193,21 +136,14 @@ func TestAVerdictThatArrivesBeforeThePutStopsTheEntryBeingStored(t *testing.T) {
 
 // Test flow:
 //  1. Record one verdict more than the revoked set holds, each for a different nonce.
-//  2. Assert the overflow was reported once.
-//  3. Assert the oldest verdict was forgotten, so its reply is stored, and the newest still refuses its reply.
+//  2. Assert the oldest verdict was forgotten, so its reply is stored, and the newest still refuses its reply.
 func TestTheSetOfVerdictsAwaitingTheirReplyIsBounded(t *testing.T) {
 	cache := newResponseCache(1 << 20)
 	now := time.Unix(1700000000, 0)
-	var overflows int
 	for nonce := uint64(1); nonce <= revokedLimit+1; nonce++ {
-		if cache.invalidate(nonceRef{escrowID: invalidationEscrow, nonce: nonce}).evicted {
-			overflows++
-		}
+		cache.invalidate(nonceReference{escrowID: invalidationEscrow, nonce: nonce})
 	}
 
-	if overflows != 1 {
-		t.Fatalf("overflows = %d, want 1", overflows)
-	}
 	if refusal := cache.put(keyedByBody("a"), storedEntry(1, winningParticipant), now); refusal == cacheRefusedInvalidated {
 		t.Fatal("the oldest verdict outlived the limit")
 	}
@@ -227,10 +163,10 @@ func TestRemovingAParticipantDropsOnlyItsEntries(t *testing.T) {
 	cache.put(keyedByBody("b"), storedEntry(2, "host-a"), now)
 	cache.put(keyedByBody("c"), storedEntry(3, "host-b"), now)
 
-	removed := cache.invalidateParticipant("host-a")
+	cache.invalidateParticipant("host-a")
 
-	if removed.dropped != 2 || len(cache.entries) != 1 {
-		t.Fatalf("dropped %d leaving %d entries, want 2 dropped and 1 left", removed.dropped, len(cache.entries))
+	if len(cache.entries) != 1 {
+		t.Fatalf("entries = %d, want only the other participant's", len(cache.entries))
 	}
 	if _, hit := cache.get(keyedByBody("c"), now); !hit {
 		t.Fatal("the other participant's entry was removed")
@@ -239,29 +175,11 @@ func TestRemovingAParticipantDropsOnlyItsEntries(t *testing.T) {
 }
 
 // Test flow:
-//  1. Serve an entry twice from the cache, then invalidate it.
-//  2. Assert the removal reports the two replays it had already served.
-func TestAnInvalidationReportsHowOftenTheEntryWasAlreadyServed(t *testing.T) {
-	cache := newResponseCache(1 << 20)
-	now := time.Unix(1700000000, 0)
-	cache.put(keyedByBody("a"), storedEntry(winningNonce, winningParticipant), now)
-	cache.get(keyedByBody("a"), now)
-	cache.get(keyedByBody("a"), now)
-
-	result := cache.invalidate(nonceRef{escrowID: invalidationEscrow, nonce: winningNonce})
-
-	if result.replays != 2 {
-		t.Fatalf("replays = %d, want 2", result.replays)
-	}
-}
-
-// Test flow:
 //  1. Observe an effective epoch, fill the cache, and observe the same epoch again, an unknown epoch, and a later one.
-//  2. Assert the cache keeps its entry for the first three and is cleared by the last, with the removal counted under the epoch reason.
+//  2. Assert the cache keeps its entry for the first three and is cleared by the last.
+//  3. Send the chat once more and assert the reply raced after the clear is served from the cache.
 func TestAnEpochChangeClearsTheCache(t *testing.T) {
 	live := newHarness(t)
-	events := newCacheEventsSpy()
-	live.server.cacheEvents = events
 	live.inference.outcome = winnerOutcome()
 	live.server.ObservePhase(chain.PhaseSnapshot{EffectiveEpochIndex: 10})
 	live.request(t, http.MethodPost, "/v1/chat/completions", chatBody, callerHeaders("caller-a"))
@@ -279,19 +197,19 @@ func TestAnEpochChangeClearsTheCache(t *testing.T) {
 	if got := live.inference.runs.Load(); got != 2 {
 		t.Fatalf("races = %d, want 2: a new epoch must clear the cache", got)
 	}
-	if got := events.invalidations["epoch/dropped"]; got != 1 {
-		t.Fatalf("epoch removals counted = %d, want 1", got)
+	live.request(t, http.MethodPost, "/v1/chat/completions", chatBody, callerHeaders("caller-a"))
+	if got := live.inference.runs.Load(); got != 2 {
+		t.Fatalf("races = %d, want 2: the reply raced after the clear must be stored", got)
 	}
 }
 
 // Test flow:
 //  1. Fill the cache with a reply won by one participant, then add that participant to the never-trust list through the admin route.
 //  2. Send the same request again.
-//  3. Assert the admin call succeeded, a second race ran, and the removal was counted under the host_pinned reason.
+//  3. Assert the admin call succeeded and a second race ran.
+//  4. Send the chat once more and assert the reply raced after the mark is served from the cache.
 func TestMarkingAHostSuspiciousRemovesItsCachedReplies(t *testing.T) {
 	live := newHarness(t)
-	events := newCacheEventsSpy()
-	live.server.cacheEvents = events
 	live.inference.outcome = winnerOutcome()
 	live.request(t, http.MethodPost, "/v1/chat/completions", chatBody, callerHeaders("caller-a"))
 
@@ -304,42 +222,38 @@ func TestMarkingAHostSuspiciousRemovesItsCachedReplies(t *testing.T) {
 	if got := live.inference.runs.Load(); got != 2 {
 		t.Fatalf("races = %d, want 2: a marked host's reply must not be replayed", got)
 	}
-	if got := events.invalidations["host_pinned/dropped"]; got != 1 {
-		t.Fatalf("host_pinned removals counted = %d, want 1", got)
+	live.request(t, http.MethodPost, "/v1/chat/completions", chatBody, callerHeaders("caller-a"))
+	if got := live.inference.runs.Load(); got != 2 {
+		t.Fatalf("races = %d, want 2: the reply raced after the mark must be stored", got)
 	}
 }
 
 // Test flow:
 //  1. Send a chat, serve it once from the cache, then invalidate the nonce that won its race.
 //  2. Send the same chat a third time.
-//  3. Assert the third request ran a race and the removal reported the one replay already served.
+//  3. Assert the third request ran a race.
 func TestAReplyWhoseNonceWasVotedInvalidIsRacedAgain(t *testing.T) {
 	live := newHarness(t)
-	events := newCacheEventsSpy()
-	live.server.cacheEvents = events
 	live.inference.outcome = winnerOutcome()
 	live.request(t, http.MethodPost, "/v1/chat/completions", chatBody, callerHeaders("caller-a"))
 	live.request(t, http.MethodPost, "/v1/chat/completions", chatBody, callerHeaders("caller-a"))
 
-	live.server.InvalidateCachedReply(invalidationEscrow, winningNonce, CacheReasonInvalidVerdict)
+	live.server.InvalidateCachedReply(invalidationEscrow, winningNonce)
 	live.request(t, http.MethodPost, "/v1/chat/completions", chatBody, callerHeaders("caller-a"))
 
 	if got := live.inference.runs.Load(); got != 2 {
 		t.Fatalf("races = %d, want 2: the invalidated reply must not be served", got)
-	}
-	if events.invalidations["invalid_verdict/dropped"] != 1 || events.replays != 1 {
-		t.Fatalf("invalidations = %v, replays = %d, want one dropped and one replay", events.invalidations, events.replays)
 	}
 }
 
 // Test flow:
 //  1. Deliver a verdict for the nonce a reply is about to win.
 //  2. Send the chat, then send it again.
-//  3. Assert the first reply reached its caller, the second request ran its own race, and the cache counted the refusal as invalidated.
+//  3. Assert the first reply reached its caller, the second request ran its own race, and the cache counted both replies, which carry the revoked nonce, as invalidated.
 func TestAVerdictBeforeTheReplyIsStoredStopsItBeingCached(t *testing.T) {
 	live := newHarness(t)
 	live.inference.outcome = winnerOutcome()
-	live.server.InvalidateCachedReply(invalidationEscrow, winningNonce, CacheReasonInvalidVerdict)
+	live.server.InvalidateCachedReply(invalidationEscrow, winningNonce)
 
 	first := live.request(t, http.MethodPost, "/v1/chat/completions", chatBody, callerHeaders("caller-a"))
 	live.request(t, http.MethodPost, "/v1/chat/completions", chatBody, callerHeaders("caller-a"))
@@ -352,20 +266,21 @@ func TestAVerdictBeforeTheReplyIsStoredStopsItBeingCached(t *testing.T) {
 	}
 	live.cached.mu.Lock()
 	defer live.cached.mu.Unlock()
-	if live.cached.results[0] != "qwen/"+cacheRefusedInvalidated {
-		t.Fatalf("cache results = %v, want the first counted as %q", live.cached.results, cacheRefusedInvalidated)
+	if want := []string{"qwen/" + cacheRefusedInvalidated, "qwen/" + cacheRefusedInvalidated}; !slices.Equal(live.cached.results, want) {
+		t.Fatalf("cache results = %v, want %v", live.cached.results, want)
 	}
 }
 
 // Test flow:
-//  1. Read the cache's generation as a request does before its race, then clear the cache and mark a participant.
+//  1. Read the cache's generation as a request does before its race, then change the epoch and mark a participant.
 //  2. Offer the reply the earlier race produced.
 //  3. Assert the cache refuses it as invalidated, and accepts a reply from a race that began after the removals.
 func TestAReplyFromARaceThatBeganBeforeAClearIsNotStored(t *testing.T) {
 	cache := newResponseCache(1 << 20)
 	now := time.Unix(1700000000, 0)
 	before := cache.currentGeneration()
-	cache.flush()
+	cache.observeEpoch(1)
+	cache.observeEpoch(2)
 	cache.invalidateParticipant("host-a")
 
 	stale := storedEntry(1, "host-a")
@@ -378,5 +293,28 @@ func TestAReplyFromARaceThatBeganBeforeAClearIsNotStored(t *testing.T) {
 	}
 	if refusal := cache.put(keyedByBody("b"), fresh, now); refusal == cacheRefusedInvalidated {
 		t.Fatal("a race begun after the removals was refused")
+	}
+}
+
+// Test flow:
+//  1. Let a suspicious host win the race, then send the same chat again.
+//  2. Assert the second request ran its own race, so the suspicious host's reply was not stored.
+//  3. Assert the cache counted the first reply as invalidated.
+func TestASuspiciousHostsReplyIsNotCached(t *testing.T) {
+	live := newHarness(t)
+	suspicious := winnerOutcome()
+	suspicious.Attempts[0].Suspicious = true
+	live.inference.outcome = suspicious
+
+	live.request(t, http.MethodPost, "/v1/chat/completions", chatBody, callerHeaders("caller-a"))
+	live.request(t, http.MethodPost, "/v1/chat/completions", chatBody, callerHeaders("caller-a"))
+
+	if got := live.inference.runs.Load(); got != 2 {
+		t.Fatalf("races = %d, want 2: a suspicious host's reply must not be replayed", got)
+	}
+	live.cached.mu.Lock()
+	defer live.cached.mu.Unlock()
+	if want := []string{"qwen/" + cacheRefusedInvalidated, "qwen/" + cacheRefusedInvalidated}; !slices.Equal(live.cached.results, want) {
+		t.Fatalf("cache results = %v, want %v", live.cached.results, want)
 	}
 }
